@@ -192,7 +192,10 @@ A refusal before the domain-4 request releases the PCK lease, the rail
 token and the clock token, and returns RETAINED with nothing written. Any
 failure after the request returns RETAINED and keeps the tokens, the row with
 its request, and the register lock if a table stopped midway. A domain that
-does not reach ON keeps every NPU clock, reset and the routing untouched. A
+does not reach ON keeps every NPU clock, reset and the routing untouched,
+except that a domain the pass read ON has already started PLL_NPU: a refused
+or failed row then leaves PLL_NPU enabled, possibly locked, with its output
+gate closed. A
 LOCK that never appears leaves PLL_NPU enabled with its output gate closed.
 A routing word that already reads NPU refuses in the pass; one that does not
 read back at the open stage retains before any reset is released. Further calls return RETAINED without

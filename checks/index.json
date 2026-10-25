@@ -6899,6 +6899,7 @@
  "npu-finite-client.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/npu-irq-completion.md",
    "docs/designs/npu-platform-measurements.md"
   ],
   "library": false,
@@ -6984,6 +6985,7 @@
  "npu-interrupt-client.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/npu-irq-completion.md",
    "docs/designs/npu-platform-measurements.md"
   ],
   "library": false,
@@ -7011,7 +7013,9 @@
  },
  "npu-irq-route.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/npu-irq-completion.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [

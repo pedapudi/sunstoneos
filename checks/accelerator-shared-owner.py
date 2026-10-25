@@ -9,7 +9,7 @@ import subprocess
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("output", type=Path)
 parser.add_argument("--compiler", default="/usr/bin/clang-21")
-parser.add_argument("--case", type=int, choices=range(4), action="append", dest="cases")
+parser.add_argument("--case", type=int, choices=range(5), action="append", dest="cases")
 args = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
 output = args.output.resolve()
@@ -37,7 +37,7 @@ inputs += [root / "checks" / p for p in ("npu-startup-host.c", "power-domains-mo
 inputs += list((root / "checks/npu-startup-host").glob("*.h")) + [Path(__file__).resolve()]
 identities = {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs}
 (output / "sources.json").write_text(json.dumps(identities, indent=2) + "\n")
-cases = args.cases if args.cases is not None else range(4)
+cases = args.cases if args.cases is not None else range(5)
 results = []
 for case in cases:
     command = [str(output / "composition"), str(case)]

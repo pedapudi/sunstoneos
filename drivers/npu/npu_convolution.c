@@ -327,6 +327,8 @@ static void delay(void *cookie,unsigned us)
 {struct npu_convolution *c=cookie;a733_npu_native_operations.delay(&c->native,us);}
 static void barrier(void *cookie)
 {struct npu_convolution *c=cookie;a733_npu_native_operations.barrier(&c->native);}
+static uint64_t ticks(void)
+{uint64_t v;__asm__ volatile("isb\n mrs %0, cntpct_el0" : "=r"(v) :: "memory");return v;}
 static int same_command(const struct a733_npu_command *a,const struct a733_npu_command *b)
 {return a->device==b->device && a->readable_bytes==b->readable_bytes && a->token==b->token;}
 static int publish(void *cookie,const struct a733_npu_mmu_image *image,
@@ -336,14 +338,28 @@ static int publish(void *cookie,const struct a733_npu_mmu_image *image,
     if((bootstrap!=0 && bootstrap!=1) || !same_command(command,&c->commands[bootstrap ? 0 : 1]) ||
        !unchanged(c,!bootstrap))return fault(c);
     if(!a733_npu_native_operations.publish(&c->native,image,command,bootstrap))return 0;
-    if(!bootstrap)c->job_published_us=a733_npu_native_operations.microseconds(&c->native);
+    if(!bootstrap) {
+        c->job_finished_us=c->job_done_ticks=0;c->job_cycles[0]=c->job_cycles[1]=0;
+        /* A failed counter read is reported as such (A733_NPU_COUNTER). */
+        if(!read_reg(c,0x078,&c->job_start_cycles[0]) || !read_reg(c,0x07c,&c->job_start_cycles[1]))return -1;
+        c->job_start_ticks=ticks();
+        c->job_published_us=a733_npu_native_operations.microseconds(&c->native);
+    }
     return 1;
 }
+/* The controller passes its own copy of the command (a733_npu_controller.c:162,
+ * :231), so the job is recognized by content, as at publication. */
 static int finish(void *cookie,const struct a733_npu_command *command,int canceled)
 {
     struct npu_convolution *c=cookie;
     if(!good(c))return 0;
-    if(command==&c->commands[1])c->job_finished_us=a733_npu_native_operations.microseconds(&c->native);
+    if(!canceled && same_command(command,&c->commands[1])) {
+        uint32_t total,idle;
+        c->job_done_ticks=ticks();
+        c->job_finished_us=a733_npu_native_operations.microseconds(&c->native);
+        if(!read_reg(c,0x07c,&idle) || !read_reg(c,0x078,&total))return -1;
+        c->job_cycles[0]=total-c->job_start_cycles[0];c->job_cycles[1]=idle-c->job_start_cycles[1];
+    }
     return a733_npu_native_operations.finish(&c->native,command,canceled);
 }
 static const struct a733_npu_ops operations={read_reg,write_reg,now,delay,barrier,publish,finish};

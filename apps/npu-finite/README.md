@@ -82,4 +82,6 @@ unchanged 800 mV; its register pass refuses a speed bin whose operating-point
 column does not list 800 mV for that rate
 ([design](../../docs/designs/npu-852mhz-plan.md)). Check it with
 `sram-route-check.py --rate 852`. The client logs startup and job times in
-counter microseconds as `NPU_TIME_US`, which the host reports as `timing`.
+counter microseconds as `NPU_TIME_US`, and each job's system-counter times and
+NPU total and idle cycles as `NPU_JOB_COUNTERS`; the host reports both as
+`timing` ([design](../../docs/designs/npu-irq-completion.md)).

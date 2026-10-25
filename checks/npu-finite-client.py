@@ -46,7 +46,7 @@ for variant in ('matched','mismatch','close-fault','stop-never-ready','quiesce-f
         elif name=='npu_convolution_collect':
             op=state['operation'];out=args[2];u.mem_write(out,bytes(40));put(out+reply['ticket'],args[1])
             result=4 if op==5 and variant=='close-fault' else 0
-            st=9 if op==5 else 3 if op==2 else 6 if op==0 else 2
+            st=9 if op==5 else 3 if op==2 else 6 if op==6 else 2
             for key,value in [('job_ticket',0 if op in (1,5) else state['job']),('result',result),('state',st),('owns_session',0 if op==5 and not result else 1)]:put(out+reply[key],value,8 if key=='job_ticket' else 4)
             if op==5 and not result:state['closed']=True
             ret(1)
@@ -76,7 +76,7 @@ for variant in ('matched','mismatch','close-fault','stop-never-ready','quiesce-f
     if variant in ('matched','mismatch'):assert state['exit']==(variant=='mismatch') and not state['retained'],state
     else:assert state['retained'] and state['exit'] is None and not state['critical'],state
     assert state['submits']==2 and state['copied']==2 and state['reaps']==2,state
-    assert state['operations']==[1,2,0,4,2,0,4,5],state
+    assert state['operations']==[1,2,6,4,2,6,4,5],state
     cases.append({'name':variant,'passed':True,**state})
 a.evidence.mkdir(parents=True,exist_ok=True)
 (a.evidence/'client-result.json').write_text(json.dumps({'elf_sha256':hashlib.sha256(a.elf.read_bytes()).hexdigest(),'cases':cases,'scope':'Actual finite client/request/output comparison/logging instructions. Service, scheduler, counter and bootstrap stop replies modeled. No native provider, hardware inference or ROM-return qualification.'},indent=2)+'\n')

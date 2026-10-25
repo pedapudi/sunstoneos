@@ -164,7 +164,9 @@ an off-to-on enable and its ramp delay only to a selector change
 `2ac08e8c`, SHA-256 `65b39b20…`, cached under
 `~/.cache/sunstoneos/sources/linux-orangepi-2ac08e8c-regulator/`). A settled
 owner also publishes each rail's verified bit as soon as that rail is
-verified, and admits a row whose rail is verified before the done bit. The service
+verified, and admits a row whose rail is verified before the done bit. A
+later failure of the other rail sets the done bit without that rail's bit
+and leaves the published one in place. The service
 acquires one shared DCDC2 and DCDC4 rail token and snapshots both outputs
 through the PMIC provider, 12 single-register transactions. After success it
 releases the token, so verification holds a rail-ledger slot for a few
@@ -355,9 +357,10 @@ the cost model.
 
 The [live accelerator composition check](../checks/accelerator-shared-owner.py)
 exercises the actual NPU startup, GPU power and resource manager, PMIC consumers,
-rail ledger, clock registry and domain owner together. Four focused sanitizer
+rail ledger, clock registry and domain owner together. Five focused sanitizer
 cases cover overlapping domain-4/domain-5 admission, each domain's local timeout,
-and shared PMIC transport failure. They also verify that local NPU stop retains
+shared PMIC transport failure, and, with the PMIC bus at 100 kHz, domain-4
+admission on DCDC2 verified while the owner still reads DCDC4. They also verify that local NPU stop retains
 its domain, PLL and rail ownership while the GPU shuts down. Domain-local failure
 can leave the other admitted consumer progressing; global transport uncertainty
 retains ownership and prevents further device access.

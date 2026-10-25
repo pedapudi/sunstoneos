@@ -11,7 +11,13 @@ p=argparse.ArgumentParser(description=__doc__)
 for name in ('elf','evidence'):p.add_argument('--'+name,type=Path,required=True)
 a=p.parse_args();r=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('layout',r/'checks/storage-read-native.py');layout=importlib.util.module_from_spec(spec);spec.loader.exec_module(layout)
-image=layout.Image(a.elf);cases=[]
+spec=importlib.util.spec_from_file_location('host',r/'apps/npu-finite/host.py');host=importlib.util.module_from_spec(spec);spec.loader.exec_module(host)
+# Per job: adapter microseconds and system counter ticks at publication and
+# completion observation, the ISR's delivery ticks, and total and idle cycles.
+JOB_RECORD=[{'job_published_us':7000,'job_finished_us':7020,'job_start_ticks':2400,'job_done_ticks':2880},
+            {'job_published_us':9000,'job_finished_us':9020,'job_start_ticks':4800,'job_done_ticks':5280}]
+JOB_IRQ_TICKS=[2640,5040];JOB_CYCLES=[(49200,1200),(49300,1300)]
+image=layout.Image(a.elf,layout_names=('npu_convolution','npu_service','a733_observe_identity','npu_service_reply'));cases=[]
 for variant in ('matched','mismatch','missing-IRQ-completion','missing-IRQ-stop'):
     u=Uc(UC_ARCH_ARM64,UC_MODE_ARM);u.mem_map(0x40000000,0x04000000)
     for at,data in image.parts:
@@ -33,6 +39,8 @@ for variant in ('matched','mismatch','missing-IRQ-completion','missing-IRQ-stop'
         if word&0xffffffe0==0xd53be020:
             u.reg_write(UC_ARM64_REG_X0+(word&31),state['ticks']);state['ticks']+=24
             u.reg_write(UC_ARM64_REG_PC,at+4);return
+        if word&0xffffffe0==0xd53be000: # CNTFRQ_EL0
+            u.reg_write(UC_ARM64_REG_X0+(word&31),24000000);u.reg_write(UC_ARM64_REG_PC,at+4);return
         name=hooks.get(at)
         if name is None:return
         args=[u.reg_read(UC_ARM64_REG_X0+i) for i in range(7)]
@@ -54,13 +62,19 @@ for variant in ('matched','mismatch','missing-IRQ-completion','missing-IRQ-stop'
         elif name=='npu_convolution_collect':
             op=state['operation'];out=args[2];u.mem_write(out,bytes(40));put(out+reply['ticket'],args[1])
             result=4 if op==5 and variant=='close-fault' else 0
-            st=9 if op==5 else 3 if op==2 else 6 if op==0 else 2
+            st=9 if op==5 else 3 if op==2 else 6 if op==6 else 2
             for key,value in [('job_ticket',0 if op in (1,5) else state['job']),('result',result),('state',st),('owns_session',0 if op==5 and not result else 1)]:put(out+reply[key],value,8 if key=='job_ticket' else 4)
             if op==5 and not result:
                 state['closed']=True;put(service+sl['irq_stopped'],0 if variant=='missing-IRQ-stop' else 1,4)
             ret(1)
         elif name=='npu_convolution_output':
             assert args[0]==c and state['job'];state['copied']+=1
+            # The worker's record of this job and the ISR's delivery time,
+            # which the client logs after copying the output.
+            k=state['copied']-1;cl=image.layouts['npu_convolution']
+            for key,value in JOB_RECORD[k].items():put(c+cl[key],value)
+            for i in range(2):put(c+cl['job_cycles']+4*i,JOB_CYCLES[k][i],4)
+            put(image.address('delivered_ticks',unit='/apps/npu-interrupt/irq.c'),JOB_IRQ_TICKS[k])
             data=bytes(u.mem_read(image.address('a733_npu_application_reference'),args[2]))
             if variant=='mismatch' and state['copied']==1:data=bytes([data[0]^1])+data[1:]
             u.mem_write(args[1],data);ret(1)
@@ -85,7 +99,11 @@ for variant in ('matched','mismatch','missing-IRQ-completion','missing-IRQ-stop'
     if variant in ('matched','mismatch'):assert state['exit']==(variant=='mismatch') and not state['retained'],state
     else:assert state['retained'] and state['exit'] is None and not state['critical'],state
     assert state['submits']==2 and state['copied']==2 and state['reaps']==2,state
-    assert state['operations']==[1,2,0,4,2,0,4]+([] if variant=='missing-IRQ-completion' else [5]),state
+    assert state['operations']==[1,2,6,4,2,6,4]+([] if variant=='missing-IRQ-completion' else [5]),state
+    if variant!='missing-IRQ-completion':
+        timing=host.timing(state['log'])
+        assert timing['job_us']==[20,20] and timing['publication_gap_us']==2000,timing
+        assert [(j['start_to_irq_us'],j['start_to_done_us'],j['active_cycles']) for j in timing['counters']['jobs']]==[(10.0,20.0,48000),(10.0,20.0,48000)],timing
     a.evidence.mkdir(parents=True,exist_ok=True);(a.evidence/(variant+'.log')).write_text(state['log'])
     cases.append({'name':variant,'passed':True,**state})
 a.evidence.mkdir(parents=True,exist_ok=True)

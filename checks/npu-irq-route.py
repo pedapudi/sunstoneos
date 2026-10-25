@@ -60,7 +60,11 @@ def main():
     a.output.mkdir(parents=True,exist_ok=True)
     for case in a.case or CASES:
         cpu=Uc(UC_ARCH_ARM64,UC_MODE_ARM)
-        for base,size in [(D,0x10000),(0x03460000,0x20000),(0x07050000,0x10000),(0x41000000,0x1200000),(0x50000000,0x1000000)]:cpu.mem_map(base,size)
+        # The CCU and SYSCTRL pages read zero: the NPU resets held, its module
+        # gate closed and the shared SRAM routed to the NPU, which the monitor
+        # routes back to the CPU before its return (apps/npu-finite/monitor.c).
+        for base,size in [(D,0x10000),(0x03460000,0x20000),(0x07050000,0x10000),(0x41000000,0x1200000),(0x50000000,0x1000000),
+                          (0x02000000,0x1000000),(0x03000000,0x1000)]:cpu.mem_map(base,size)
         for base,data in parts:
             assert 0x41000000<=base and base+len(data)<=0x42200000
             if data:cpu.mem_write(base,data)

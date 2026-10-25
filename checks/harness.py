@@ -78,6 +78,14 @@ class Image:
             for cu in dwarf.iter_CUs():
                 unit = cu.get_top_DIE().attributes['DW_AT_name'].value.decode()
                 for d in cu.iter_DIEs():
+                    # An out-of-line copy of a function that is also inlined
+                    # carries its name on the abstract instance it points to.
+                    if (d.tag == 'DW_TAG_subprogram' and 'DW_AT_name' not in d.attributes and
+                            'DW_AT_low_pc' in d.attributes and 'DW_AT_abstract_origin' in d.attributes):
+                        origin = d.get_DIE_from_attribute('DW_AT_abstract_origin')
+                        if 'DW_AT_name' in origin.attributes:
+                            self.functions.setdefault((unit, origin.attributes['DW_AT_name'].value.decode()), set()).add(
+                                int(d.attributes['DW_AT_low_pc'].value))
                     if 'DW_AT_name' not in d.attributes:
                         continue
                     n = d.attributes['DW_AT_name'].value.decode()

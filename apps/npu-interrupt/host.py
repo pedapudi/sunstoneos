@@ -7,6 +7,7 @@ spec=importlib.util.spec_from_file_location('npu_irq_finite_host',ROOT/'apps/npu
 finite=importlib.util.module_from_spec(spec);spec.loader.exec_module(finite)
 finite.PROFILE='npu-interrupt-finite-return-v1'
 finite.SCHEMA='a733-npu-interrupt-finite-entry-v1'
+finite.PROFILES=(*finite.PROFILES,finite.PROFILE)
 finite.HOST_SOURCES=(*finite.HOST_SOURCES,'apps/npu-interrupt/host.py')
 PROFILE,SCHEMA,HOST_SOURCES=finite.PROFILE,finite.SCHEMA,finite.HOST_SOURCES
 base=finite.base
@@ -23,8 +24,8 @@ def image_profile(data,manifest):
         'npu_service_irq_stopped'}<=symbols,'Missing native NPU interrupt path.')
     return result
 
-def validate_admission(admission,raw,build,layout,image_hash,cache=None):
-    profile,collected=_original_admission(admission,raw,build,layout,image_hash,cache)
+def validate_admission(admission,raw,build,layout,image_hash,cache=None,*,execution_profile=PROFILE):
+    profile,collected=_original_admission(admission,raw,build,layout,image_hash,cache,execution_profile=execution_profile)
     record=json.loads(admission);ref=record['interrupt'];data=finite.evidence_ref(ref,cache)
     collected[ref['path']]=data;facts=json.loads(data)
     finite.require(facts.get('schema')=='a733-npu-interrupt-entry-v1' and

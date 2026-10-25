@@ -201,6 +201,11 @@ digest, translation, copy, queue round trip or cache operation is added.
 
 - Register pass refusal, including every unadoptable PLL state: nothing
   written, every token released.
+- Domain 4 read ON by the pass but its row refused or failed by the owner:
+  PLL_NPU already started, so the startup retains with PLL_NPU enabled,
+  possibly locked, and its output gate closed; the NPU resets stay asserted
+  and the SRAM stays with the CPU. Recovery is the power removal, as for
+  every retention.
 - Domain 4 not ON within the bound: tokens and row retained; no NPU clock,
   reset or routing write has happened.
 - Bit 1 already clear on entry: refused in the register pass, nothing

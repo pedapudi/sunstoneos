@@ -59,12 +59,29 @@ for variant in ('success','numerical-mismatch','not-quiescent','clean-deadline')
 # EL3 receipt/refusal + bounded GIC/secondary cleanup. Reuse the actual successful receipt.
 # SYSCTRL 0x03000008 reads 0 (shared SRAM routed to the NPU) unless a case sets it.
 SRAM_ROUTING=0x03000008;REPORT=0x42000000  # A733_SMP_RESULT_ADDRESS, the monitor report.
+# An interrupt image (apps/npu-interrupt) restores INTID97's saved route
+# before the SPI enables (npu_irq_route_restore). Model an installed route:
+# the saved snapshot, an EL3 boot CPU and a distributor with affinity routing.
+interrupt=bool(im.symbols.get('npu_application_irq'));IRQ_SNAPSHOT=None
+if interrupt:
+ from elftools.elf.elffile import ELFFile
+ with (e/'image.elf').open('rb') as stream:
+  for cu in ELFFile(stream).get_dwarf_info().iter_CUs():
+   for die in cu.iter_DIEs():
+    if die.tag=='DW_TAG_structure_type':
+     members={c.attributes['DW_AT_name'].value.decode():c.attributes['DW_AT_data_member_location'].value for c in die.iter_children() if c.tag=='DW_TAG_member' and 'DW_AT_name' in c.attributes and 'DW_AT_data_member_location' in c.attributes}
+     if 'npu_irq' in members and 'spi_enabled' in members:IRQ_SNAPSHOT=members['npu_irq']
+ assert IRQ_SNAPSHOT is not None
 variants=['success','numerical-mismatch','SRAM-already-CPU','SRAM-restore-ignored','SRAM-reset-released','SRAM-module-gate-open','wrong-magic','wrong-epoch','wrong-generation','wrong-lease','wrong-status','wrong-complete','wrong-start','wrong-end','wrong-lines','wrong-deadline','long-log','unexpected-SMC','recovery-IRQ','late','EL1-cache-live','secondary-on','GICD-timeout','GICR-timeout']
 for variant in variants:
  u=machine();status=int(variant=='numerical-mismatch');u.mem_write(receipt,receipts[status]);admission=im.address('admission');c=im.layouts['a733_smp_contract'];state={'time':24000000,'return':False,'retained':False,'writes':[]}
  for name,v in [('epoch',7),('generation',8),('lease',9),('diagnostic_deadline',480000000)]:put(u,admission+c[name],v)
  # Original saved GIC record has eight uint32 fields followed by 32 enable words.
  saved=im.address('saved');u.mem_write(saved,struct.pack('<8I',1,4,0x33,0x123,0x456,0,0,0))
+ if interrupt:
+  # Route 0x10000 and fields within each owned mask; phase 2 is installed.
+  u.mem_write(saved+IRQ_SNAPSHOT,struct.pack('<Q5I',0x10000,2,0,8,0x5800,2))
+  put(u,0x03400000,0x30,4);put(u,0x03400004,7,4)
  change={'wrong-magic':('magic',1),'wrong-epoch':('epoch',10),'wrong-generation':('generation',10),'wrong-lease':('lease',10),'wrong-status':('status',10),'wrong-complete':('complete',10),'wrong-start':('clean_start',start+4096),'wrong-end':('clean_end',end+4096),'wrong-lines':('clean_lines',1),'wrong-deadline':('deadline',1),'long-log':('log_length',16384)}
  if variant in change:name,v=change[variant];put(u,receipt+rl[name],v)
  if variant=='secondary-on':put(u,0x07053008,8,4)
@@ -83,6 +100,8 @@ for variant in variants:
   if kind==0xd53be020:value=state['time'];state['time']+=240000
   elif kind==0xd53e5200:value=0x17<<26
   elif kind==0xd5381000:value=4 if variant=='EL1-cache-live' else 0
+  elif interrupt and kind==0xd5384240:value=12 # CurrentEL: EL3.
+  elif interrupt and kind==0xd53800a0:value=0  # MPIDR_EL1: CPU0.
   if value is not None:u.reg_write(UC_ARM64_REG_X0+reg,value);u.reg_write(UC_ARM64_REG_PC,at+4)
  def writes(cpu,access,at,size,value,cookie):state['writes'].append([at,value])
  def reads(cpu,access,at,size,value,cookie):
@@ -99,6 +118,11 @@ for variant in variants:
   print('monitor failure',variant,hex(u.reg_read(UC_ARM64_REG_PC)),hex(get(u,u.reg_read(UC_ARM64_REG_PC),4)));raise
  normal=variant in ('success','numerical-mismatch','SRAM-already-CPU');assert state['return']==normal and state['retained']!=normal,(variant,state)
  assert not any(at in (0x08001004,0x08001008) for at,v in state['writes'])
+ if interrupt and normal:
+  # The saved INTID97 route is written back before any SPI enable.
+  route=[i for i,(at,v) in enumerate(state['writes']) if at==0x03406308 and v==0x10000]
+  enables=[i for i,(at,v) in enumerate(state['writes']) if 0x03400104<=at<=0x0340017c]
+  assert route and enables and route[0]<enables[0],(variant,state['writes'])
  # The shared SRAM goes back to the CPU before the report and the ROM return;
  # a refused receipt or a failed cleanup parks before that step.
  routing=[i for i,(at,v) in enumerate(state['writes']) if at==SRAM_ROUTING]

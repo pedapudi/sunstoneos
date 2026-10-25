@@ -55,7 +55,7 @@ for variant in ('matched','never-started','startup-then-refused','one-job','one-
             if variant=='monitor-freeze' and state['operation']==2:state['ticks']+=24000000;ret(0);return
             op=state['operation'];out=args[2];u.mem_write(out,bytes(40));put(out+reply['ticket'],args[1])
             result=4 if op==5 and variant=='close-fault' else 0
-            st=9 if op==5 else 3 if op==2 else 6 if op==0 else 2
+            st=9 if op==5 else 3 if op==2 else 6 if op==6 else 2
             for key,value in [('job_ticket',0 if op in (1,5) else state['job']),('result',result),('state',st),('owns_session',0 if op==5 and not result else 1)]:put(out+reply[key],value,8 if key=='job_ticket' else 4)
             if op==5 and not result:state['closed']=True
             ret(1)
@@ -89,7 +89,7 @@ for variant in ('matched','never-started','startup-then-refused','one-job','one-
         status=0 if variant=='matched' else 1 if variant=='one-mismatch' else 2
         assert state['exit']==status and not state['retained'],state
         assert state['copied']==state['reaps']==expected_jobs,state
-        assert state['operations']==([] if variant=='never-started' else [1]+[2,0,4]*expected_jobs+[5]),state
+        assert state['operations']==([] if variant=='never-started' else [1]+[2,6,4]*expected_jobs+[5]),state
         result=image.address('a733_npu_application_result');rl=image.layouts['a733_npu_application_result']
         assert get(result+rl['jobs'],4)==expected_jobs and get(result+rl['complete'],4)==status+1
         a.evidence.mkdir(parents=True,exist_ok=True)

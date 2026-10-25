@@ -72,10 +72,16 @@ struct npu_convolution {
     enum npu_service_operation pending_operation;
     atomic_uint failed, closed;
     unsigned prepared, bound, opened, ready, output_ready;
-    /* Counter microseconds of the latest job's publication, just before its
-     * trigger, and of the worker's first completion observation. Written by
-     * the service worker before the DONE reply that a client then reads. */
-    uint64_t job_published_us, job_finished_us;
+    /* The latest job's timing, written by the service worker before the DONE
+     * reply that a client then reads. At publication, just before the
+     * trigger, and at the worker's completion observation: the NPU adapter's
+     * counter microseconds, the system counter in ticks, and the NPU's total
+     * and idle cycle counters (+0x078, +0x07C) in the order of the vendor's
+     * profiling build (vip_drv_task_debug.c:267-268, :332-333). job_cycles
+     * holds the total and idle differences, modulo 2^32. A canceled job and
+     * the bootstrap record nothing; publication clears the completion values. */
+    uint64_t job_published_us, job_finished_us, job_start_ticks, job_done_ticks;
+    uint32_t job_start_cycles[2], job_cycles[2];
 };
 
 /* EL1, before scheduling, zero once. Copies then hashes the complete model;

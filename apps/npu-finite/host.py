@@ -228,16 +228,34 @@ def output_pattern(first_digest,second):
   'first_unwritten':bytes(first_digest)==hashlib.sha256(pattern).digest()}
 
 def timing(text):
- """Startup entry to READY and each job's publication to completion
- observation, in counter microseconds, from the image's NPU_TIME_US block;
- None for an image that prints none."""
+ """Startup entry to READY, in the startup's counter clock, and each job's
+ publication to completion observation, in the NPU adapter's clock, from the
+ image's NPU_TIME_US block; None for an image that prints none. A job whose
+ completion reads 0 or precedes its publication has no time; this never
+ refuses an otherwise valid report."""
  found=re.findall(r'NPU_TIME_US=\n((?:0x[0-9a-f]{16}\n){6})',text)
  if len(found)!=1:return None
  entry,ready,*jobs=[int(v,16) for v in found[0].split()]
- require(entry<=ready and all(jobs[i]<=jobs[i+1] for i in (0,2)),'Timing values out of order.')
- return {'startup_us':ready-entry,'job_us':[jobs[1]-jobs[0],jobs[3]-jobs[2]],
-  'entry_us':entry,'ready_us':ready,'jobs_raw_us':jobs,
-  'resolution':'Completion is observed at the service worker\'s next poll, once per 1 ms tick.'}
+ return {'startup_us':ready-entry if ready>=entry else None,
+  'job_us':[jobs[i+1]-jobs[i] if jobs[i] and jobs[i+1]>=jobs[i] else None for i in (0,2)],
+  'publication_gap_us':jobs[2]-jobs[0] if jobs[2]>=jobs[0]>0 else None,
+  'entry_us':entry,'ready_us':ready,'jobs_raw_us':jobs,'counters':job_counters(text),
+  'resolution':'Completion is observed at the service worker\'s next poll, once per 1 ms tick, or on INTID97.'}
+
+def job_counters(text):
+ """Each job's system-counter and NPU cycle-counter record from the image's
+ NPU_JOB_COUNTERS block, or None for an image that prints none. Values that
+ are 0 or out of order give no time; this never refuses a report."""
+ found=re.findall(r'NPU_JOB_COUNTERS=\n((?:0x[0-9a-f]{16}\n){11})',text)
+ if len(found)!=1:return None
+ frequency,*values=[int(v,16) for v in found[0].split()]
+ span=lambda a,b:(b-a)*1000000/frequency if frequency and a and b>=a else None
+ jobs=[]
+ for start,irq,done,total,idle in (values[0:5],values[5:10]):
+  jobs.append({'start_ticks':start,'irq_ticks':irq,'done_ticks':done,
+   'start_to_irq_us':span(start,irq),'start_to_done_us':span(start,done),
+   'total_cycles':total,'idle_cycles':idle,'active_cycles':total-idle if total>=idle else None})
+ return {'frequency':frequency,'jobs':jobs}
 
 
 def validate_reports(monitor,platform,receipt,p):

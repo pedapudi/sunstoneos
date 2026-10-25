@@ -88,14 +88,15 @@ static int publish(void *cookie, const struct a733_npu_mmu_image *selected,
     ++d->published;
     memcpy(d->device_input, d->cpu_input, 64);
     memcpy(d->device_output, d->cpu_output, 64);
-    return !d->publish_fail;
+    /* 1 is a memory failure, 2 a cycle-counter read failure. */
+    return d->publish_fail ? (d->publish_fail == 2 ? -1 : 0) : 1;
 }
 static int finish(void *cookie, const struct a733_npu_command *cmd, int canceled)
 {
     struct device *d = cookie;
     assert(cmd->token && d->reg[1] == IDLE);
     assert(canceled ? d->cancel_done : d->event_sent);
-    if (d->finish_fail) return 0;
+    if (d->finish_fail) return d->finish_fail == 2 ? -1 : 0;
     ++d->finished; memcpy(d->cpu_output, d->device_output, 64); return 1;
 }
 static const struct a733_npu_ops ops = {read32, write32, clock_us, delay_us, barrier, publish, finish};
@@ -282,9 +283,14 @@ int main(int argc, char **argv)
     assert(c.fault == A733_NPU_IO); retained(&d, &c);
     started(&d, &c); assert(a733_npu_submit(&c, &task, 1000));
     d.finish_fail = 1; d.now += 40;
-    assert(a733_npu_poll(&c) == A733_NPU_FAULT && d.finished == 1); retained(&d, &c);
+    assert(a733_npu_poll(&c) == A733_NPU_FAULT && d.finished == 1 && c.fault == A733_NPU_MEMORY); retained(&d, &c);
+    started(&d, &c); assert(a733_npu_submit(&c, &task, 1000));
+    d.finish_fail = 2; d.now += 40;
+    assert(a733_npu_poll(&c) == A733_NPU_FAULT && d.finished == 1 && c.fault == A733_NPU_COUNTER); retained(&d, &c);
     started(&d, &c); d.publish_fail = 1;
-    assert(!a733_npu_submit(&c, &task, 1000) && d.triggers == 1); retained(&d, &c);
+    assert(!a733_npu_submit(&c, &task, 1000) && d.triggers == 1 && c.fault == A733_NPU_MEMORY); retained(&d, &c);
+    started(&d, &c); d.publish_fail = 2;
+    assert(!a733_npu_submit(&c, &task, 1000) && d.triggers == 1 && c.fault == A733_NPU_COUNTER); retained(&d, &c);
     started(&d, &c); d.ignore_write = 0x388;
     assert(!a733_npu_close(&c) && c.fault == A733_NPU_REGISTER); retained(&d, &c);
 

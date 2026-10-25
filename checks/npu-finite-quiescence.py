@@ -24,6 +24,10 @@ with a.elf.open('rb') as stream:
 assert len(objects)==1;app,f=objects[0];pmic=app+f['pmic'];pl=image.layouts['a733_pmic'];slot=image.layouts['a733_pmic_slot'];locks=app+f['locks'];ll=image.layouts['a733_platform_locks'];conv=app+f['reserved']+image.layouts['a733_npu_reserved']['convolution'];cl=image.layouts['npu_convolution'];service=conv+cl['service'];sl=image.layouts['npu_service'];startup=app+f['startup'];deadline=startup+image.layouts['a733_npu_startup']['config']+image.layouts['a733_npu_startup_config']['deadline_us'];cases=[]
 variants=['success','closed-missing','stopped-missing','wrong-client','provider-held','provider-busy','active-request','slot-live','borrow-live','mutex-held','park-timeout','irq-enabled','irq-pending','irq-active','irq-RWP','mapping-failure','checkpoint-idle','checkpoint-active-finishes','checkpoint-unreaped-slot']
 if a.thermal:variants=['success','thermal-never-started','thermal-not-stopped','thermal-park-deadline','thermal-late-IRQ']
+# An interrupt image (apps/npu-interrupt) also requires the service's stopped
+# receipt for INTID97 before it observes the GIC state.
+interrupt=bool(image.symbols.get('npu_application_irq'))
+if interrupt:variants+=['irq-service-not-stopped','irq-service-pending']
 if a.case:
     assert set(a.case)<=set(variants),a.case
     variants=a.case
@@ -36,6 +40,10 @@ for variant in variants:
     def ret(v=0):u.reg_write(UC_ARM64_REG_X0,v);u.reg_write(UC_ARM64_REG_PC,u.reg_read(UC_ARM64_REG_LR))
     client,worker,bootstrap,provider=0x43000000,0x43000100,0x43000200,0x43000300
     for name,v in [('client',client),('bootstrap_task',bootstrap),('pmic_task',provider),('used',1),('stopped',int(variant!='stopped-missing'))]:put(app+f[name],v,4 if name in ('used','stopped') else 8)
+    if interrupt:
+        put(image.address('instance',unit='/drivers/npu/npu_service.c'),service);put(service+sl['irq_bound'],1,4)
+        put(service+sl['irq_stopped'],int(variant!='irq-service-not-stopped'),4)
+        put(service+sl['irq_pending'],int(variant=='irq-service-pending'),4)
     put(conv+cl['closed'],int(variant!='closed-missing'),4);put(service+sl['worker'],worker);put(pmic+pl['active'],8,4);put(deadline,3000000)
     put(locks+ll['mutex'],0x43001000);put(locks+ll['mutex']+8,0x43001100)
     if a.thermal:

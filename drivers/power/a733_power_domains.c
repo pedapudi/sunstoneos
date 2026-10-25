@@ -233,8 +233,11 @@ static int release(struct a733_power_domains *d,struct a733_power_domain_row *r,
  * that step for a settled supply, and its
  * A733_POWER_SUPPLY_BUDGET_US starts when it may start and the provider is
  * READY; before READY the provider's startup deadline bounds it. Any failure
- * sets the done bit with no verified bit at once, so waiting rows are
- * refused within a bounded time. A request whose result is certain (complete
+ * sets the done bit at once, so waiting rows are refused within a bounded
+ * time. Without a settled supply no verified bit is set then. With one, a
+ * rail verified before the failure keeps its published bit, because its own
+ * snapshot was correct, and rows on that rail stay admissible; a PMIC
+ * transfer fault still refuses every row through its own bit. A request whose result is certain (complete
  * or expired) is then reaped; the token is released after success, or after
  * a failure that leaves no request outstanding. An uncertain request keeps
  * its request and the token, which it may still borrow. Returns 1 while it
