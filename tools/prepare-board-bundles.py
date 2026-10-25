@@ -211,7 +211,9 @@ def returning_row(name, position, component, overlay, expect, controlled, expect
 
 
 GPU_SOURCES = ['apps/gpu-power-id/prepare.py', 'apps/gpu-power-id/build.py', 'apps/gpu-power-id/check.py',
-               'apps/gpu-power-id/main.c', 'apps/gpu-power-id/wrapper.c', 'apps/gpu-provider-ready/main.c', 'apps/gpu-provider-ready/build.py',
+               'apps/gpu-power-id/main.c', 'apps/gpu-power-id/wrapper.c', 'apps/gpu-power-id/probe-read.c',
+               'apps/gpu-power-id/vendor-clk.c', 'apps/gpu-power-id/vendor-clk-power.c',
+               'apps/gpu-provider-ready/main.c', 'apps/gpu-provider-ready/build.py',
                'apps/gpu-provider-ready/check.py', 'drivers/gpu/a733_gpu_power.c', 'drivers/gpu/a733_gpu_platform.c',
                'drivers/gpu/a733_gpu_platform_native.c', 'drivers/gpu/a733_gpu_resources.c',
                'drivers/gpu/a733_gpu_resources_native.c', 'drivers/power/a733_power_domains.c',
@@ -558,6 +560,96 @@ ROWS = [
                       'monitor does not return, nothing reaches the host and only a power removal recovers the board. '
                       'A non-return is itself the result that the wrapper is unreachable in this state; the progress '
                       'record and log, which name each read before it is issued, survive only on a return.'),
+    gpu_row('gpu-probe-read', 17, "GPU core identity read as the vendor's probe makes it, then after its secure configuration",
+            'probe-read', 'COMPLETE GPU probe read: identity 36.56.104.183 before and after the secure configuration, '
+            'restored, GPU left powered',
+            'Status 0 with both GPU PROBE identity lines matches=1, GPU PROBE window serror_pending=0, GPU PROBE result '
+            'restored=1 and COMPLETE GPU probe read: identity 36.56.104.183 before and after the secure configuration, '
+            'restored, GPU left powered; or status 1 with FAIL GPU probe read: identity or restore not as expected, GPU '
+            'left powered after those lines; or a fault line from a synchronous abort in the write window; or no '
+            'return. A return is followed by a responsive ROM. Record every line of kernel.log and the progress record '
+            'at result.bin offset 128, which holds the row in flight and every completed value.',
+            'apps/gpu-power-id, probe-read variant (apps/gpu-power-id/probe-read.c): the power-only ON sequence through '
+            'its delay-row writes, CORE6 PWCR 0 and policy 8, GPU clock, bus gate and reset release; the CORE6 status '
+            'poll for 8 runs at most 200 ms as an observation only. Then snapshot 1, the controller and CORE6 lines, '
+            'identity Device-nGnRnE mapping checks of the wrapper, SMC0 and GPU core pages, and these 32-bit accesses '
+            'in order: reads of 0x01880014 (drm_ctrl), 0x01880010 (irq_ctrl) and 0x0a0000b0 (SMC0); the core identity '
+            'as the vendor reads it at probe time, 0x01800024 and then 0x01800020; then, with D, A, I and F masked and '
+            'restore vectors installed, 2 to 0x0a0000b0 and 0 to 0x01880014 (the vendor sunxi_secure_config, in its '
+            'order), each read back, the identity again, and both words written back to their entry values, each read '
+            'back. It makes no OFF and no provider park: CORE6 and TOP5 stay ON and the GPU clocked until the power '
+            'removal that ends the lifetime. Before each access the image writes the row number into the progress '
+            'record at result offset 128 and prints a GPU PROBE reading or writing line. docs/gpu-power.md, "The '
+            'probe-read probe makes the vendor\'s probe-time read, then the secure configuration", maps each result '
+            'to its meaning. It is the last step of its lifetime, after the cold DDR start and the provider-readiness '
+            'row.',
+            after=['gpu-provider-ready'],
+            failures=['`FAIL GPU probe read: identity or restore not as expected, GPU left powered`, after the GPU PROBE '
+                      'identity, window and result lines: record them',
+                      'a fault line after a `GPU PROBE reading` line of rows 10 or 11: a synchronous abort on the '
+                      'second identity read; the restore vectors wrote both words back before the fault report',
+                      '`FAIL GPU probe read refused before clock and reset progress`, `GPU probe read mapping` or `GPU '
+                      'probe read time budget`: no wrapper, SMC0 or core word was accessed',
+                      '`FAIL GPU probe read vector table` after the GPU PROBE identity before line: VBAR_EL1 was not '
+                      'the image\'s table, so nothing was written',
+                      'status 7 with `FAIL GPU probe read window refused: monitor deadline too near, nothing written`: '
+                      'the write window would have ended less than 500 ms before the monitor\'s 2 s deadline'],
+            admission='GPU-window and SMC0 exception: this row alone, with TOP5 ON, the GPU clock open, its reset '
+                      'released and CORE6 not acknowledged, reads the GPU core identity as the vendor probe does '
+                      '(rgxbvnc.c:119 through OSReadHWReg64, two 32-bit reads of 0x01800024 and 0x01800020, '
+                      'osfunc.h:1086-1095), then makes the two writes of the vendor sunxi_secure_config '
+                      '(sunxi_platform.c:964-979) in its order and with its values, 2 to SMC0 0x0a0000b0 and 0 to the '
+                      'GPU wrapper drm_ctrl 0x01880014, reads the identity again, and writes both words back to the '
+                      'values it read before them. It also reads 0x01880010 and, before the writes, the two written '
+                      'words; these reads and the readbacks are the probe\'s own. Each access is a 32-bit '
+                      'Device-nGnRnE access after an identity mapping check of its page. The coordinator accepted the '
+                      'SMC0 write as part of the GPU grant for this row, because the vendor driver makes it on every '
+                      'GPU power-on. The A733 user manual places SMC0 at 0x0A000000-0x0A00FFFF in the memory '
+                      'controller block (MEMC0, interrupt 213, MEMC0_SMC0) and describes none of its registers; the '
+                      'name SMC_DRM_GPU_HW_RST of offset 0xb0 comes only from the vendor source. The GPU stays at the '
+                      'existing 400 MHz from PERI0 and 800 mV. Risk: a GPU core read that never completes stops the '
+                      'CPU without an exception, the monitor does not return and only a power removal recovers the '
+                      'board; after the writes such a stall leaves SMC0 at 2 and drm_ctrl at 0 until that removal. A '
+                      'synchronous abort in the write window restores both words before the fault report; an '
+                      'asynchronous abort stays pending until both are restored and is reported. The monitor\'s 2 s '
+                      'recovery is an EL3 FIQ that the restores do not cover; the window starts only while at least '
+                      '500 ms remain before it, and a recovery inside the window would leave both words written until '
+                      'the power removal. What SMC0 +0xb0 = 2 does is unknown; if it cut non-secure DRAM access the '
+                      'run would not return. The progress record survives only on a return.'),
+    gpu_row('gpu-vendor-clk', 18, 'GPU core identity read after a power-only ON in the vendor clock and reset order',
+            'vendor-clk', 'COMPLETE GPU vendor-clk: identity 36.56.104.183 with the vendor clock and reset order, GPU left powered',
+            'Status 0 with GPU VCLK identity matches=1 and COMPLETE GPU vendor-clk: identity 36.56.104.183 with the '
+            'vendor clock and reset order, GPU left powered; or status 1 with a GPU VCLK identity line of another '
+            'value and FAIL GPU vendor-clk: identity not 36.56.104.183, GPU left powered; or no return. A return is '
+            'followed by a responsive ROM. Record every line of kernel.log and the progress record at result.bin '
+            'offset 128, which holds the read in flight and each completed value.',
+            'apps/gpu-power-id, vendor-clk variant (apps/gpu-power-id/vendor-clk.c), which links the reordered '
+            'controller apps/gpu-power-id/vendor-clk-power.c in place of drivers/gpu/a733_gpu_power.c. The power-only '
+            'ON runs as in the wrapper-read run that returned (set board-bundles-20261024-14), with the same CORE6 '
+            'PWCR 0 and policy 8 writes, 400 MHz from PERI0 and DCDC4 at 800 mV, with two changes: the GPU bus reset '
+            '(0xb24 bit 16) is deasserted before the bus gate (0xb24 bit 0) and the core clock (0xb20 bit 31), as '
+            'sunxi_enable_clks_wrap (sunxi_platform.c:167-223) does; and the CORE6 delay row is not written, because '
+            'the vendor does not write it and the set-14 snapshot showed CORE6 already holds those values. The CORE6 '
+            'status poll runs at most 200 ms as an observation only. Then the GPU core identity is read as the vendor '
+            'reads it, two 32-bit loads of 0x01800024 and then 0x01800020. The image makes no write and no OFF; CORE6 '
+            'and TOP5 stay ON until the power removal. docs/gpu-power.md, "The vendor-clk probe reorders the clock and '
+            'reset", maps each result to its meaning. It is the last step of its lifetime.',
+            after=['gpu-provider-ready'],
+            failures=['`FAIL GPU vendor-clk: identity not 36.56.104.183, GPU left powered`, after the GPU VCLK '
+                      'identity line: the core answered with another value; record it',
+                      '`FAIL GPU vendor-clk refused before clock and reset progress`, `GPU vendor-clk mapping` or `GPU '
+                      'vendor-clk time budget`: no identity word was read',
+                      '`FAIL GPU ON poll` after the GPU VCLK core6 line: the controller failed during ON'],
+            admission='GPU-window read exception: this row alone reads the GPU core identity as two 32-bit '
+                      'Device-nGnRnE loads, 0x01800024 then 0x01800020, with TOP5 ON and CORE6 not acknowledged, after '
+                      'an identity mapping check of the GPU core page. It makes no GPU-window write and no SMC0 '
+                      'access. Its controller releases the GPU bus reset (0xb24 bit 16) before the bus gate (0xb24 '
+                      'bit 0) and the core clock (0xb20 bit 31), the vendor order, and does not write the CORE6 delay '
+                      'row; every other CCU, R_CCU and CORE6 access is the one the accepted power-only sequence '
+                      'makes. The GPU stays at 400 MHz from PERI0 and 800 mV. Risk: a core read that never completes '
+                      'stops the CPU without an exception, the monitor does not return and only a power removal '
+                      'recovers the board; the progress record survives only on a return.'),
+
     # `admission` maps fields of the value prepare() returns to the values that
     # identify this row's build. None refuses the row: no owning package has
     # named those values yet.

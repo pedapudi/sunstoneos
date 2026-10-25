@@ -186,6 +186,35 @@ preparation (`prepare.py`) requires the image's `wrapper_words` table to
 hold exactly the four words in order and every host-check case to read only
 a prefix of them.
 
+## The probe-read variant reads the core identity as the vendor's probe does
+
+`probe-read.c` builds the probe-read variant the way `wrapper.c` builds the
+wrapper-read variant. After the power-only ON sequence through the reset
+release, with the CORE6 status poll kept only as a 200 ms observation, it
+reads `drm_ctrl` (`0x01880014`), `irq_ctrl` (`0x01880010`) and the SMC0
+word `0x0a0000b0`, then the core identity as the vendor's probe reads it:
+two 32-bit reads, `0x01800024` and then `0x01800020`. It then writes 2 to
+`0x0a0000b0` and 0 to `0x01880014`, as the vendor `sunxi_secure_config`
+does, each read back, reads the identity again, and writes both words back
+to their entry values, each read back. From the first write to the last
+restore readback it masks D, A, I and F, makes no failure call, and points
+`VBAR_EL1` at restore vectors that write both words back before the
+image's own exception handler runs; it starts that window only while at
+least 500 ms remain before the monitor's 2 s deadline, and otherwise
+returns status 7 with nothing written. It makes no OFF and no provider park;
+the lifetime ends with a power removal. The fifteen accesses are the rows
+of `probe_steps`; the progress record at result offset 128 (magic
+`GPUPRD01`) holds the row in flight and every completed value. The
+completion text is `COMPLETE GPU probe read: identity 36.56.104.183 before
+and after the secure configuration, restored, GPU left powered`.
+[gpu-power.md](../../docs/gpu-power.md#the-probe-read-probe-makes-the-vendors-probe-time-read-then-the-secure-configuration)
+gives the vendor trace, the write exception and the meaning of each
+result. `check.py --probe-read` runs thirteen cases, and bundle preparation
+requires the image's table to hold exactly the fifteen rows.
+
+A wrapper-write variant was refused before any board run and removed
+([gpu-power.md](../../docs/gpu-power.md#the-wrapper-write-probe-was-refused)).
+
 ## Build and evidence
 
 Run with the existing host Python environment containing pyelftools and Unicorn:
@@ -196,10 +225,11 @@ Run with the existing host Python environment containing pyelftools and Unicorn:
   --image /absolute/new/build/image.elf --output /absolute/new/client-results.json
 ```
 
-Add `--power-only` to both commands for the power-only variant, or
-`--wrapper-read` for the wrapper-read variant.
+Add `--power-only` to both commands for the power-only variant,
+`--wrapper-read` for the wrapper-read variant or `--probe-read` for the
+probe-read variant.
 `prepare.py` turns a build and its check result into a board bundle for
-`tools/prepare-board-bundles.py` (rows 11 to 14 of
+`tools/prepare-board-bundles.py` (rows 11 to 13, 16 and 17 of
 [board-bundles-next.md](../../docs/designs/board-bundles-next.md)). For both
 power variants it reads `on_steps` and `off_steps` from the image and
 requires the domain-5 (TOP5) ON request before the first CORE6 access and
