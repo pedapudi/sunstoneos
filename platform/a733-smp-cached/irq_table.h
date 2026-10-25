@@ -35,6 +35,12 @@ int a733_irq_table_dispatch(unsigned intid, unsigned core);
  * the distributor groups are re-enabled. Programs each entry as a level-
  * sensitive nonsecure Group 1 SPI routed to its core and verifies the result
  * before the deadline (counter ticks). Enabling stays with the device owner.
- * Returns 1 on success and 0 on any refusal; nothing is partially enabled. */
+ * It waits for GICD_CTLR.RWP before reading the distributor state and after
+ * the route writes. Returns A733_IRQ_TABLE_ROUTED on success,
+ * A733_IRQ_TABLE_RWP_TIMEOUT if RWP stays set until the deadline, and
+ * A733_IRQ_TABLE_REFUSED on any other refusal; nothing is partially enabled. */
+#define A733_IRQ_TABLE_REFUSED 0
+#define A733_IRQ_TABLE_ROUTED 1
+#define A733_IRQ_TABLE_RWP_TIMEOUT 2
 int a733_irq_table_route(uint64_t deadline, uint64_t (*counter)(void));
 #endif

@@ -7,7 +7,7 @@ struct model {
     uint64_t now;
     uint32_t control,waker,enabled,pending,active,group,modifier,config,priority;
     unsigned accesses,calls,fail_at,late_at,stuck,bad_frame,bad_distributor,hotplug_writes;
-    unsigned busy,wake_wait,sleep_wait;
+    unsigned busy,wake_wait,sleep_wait,distributor_busy,distributor_stuck;
     uint32_t pwrr,implemented_group;
     unsigned power_writes,group_wait,group_stuck,power_stuck,reject_once;
     unsigned power_access[3];
@@ -33,7 +33,10 @@ static int read32(void *ctx,uintptr_t address,uint32_t *out)
 {
     struct model *m=ctx;uintptr_t c=0x07050200+m->cpu.core*4,r=frame(m->cpu.core),g=r+0x10000;
     if(address>=r && address<r+0x20000 && address!=r+0x24)assert(!(m->pwrr&1));
-    if(address==0x03400000)*out=m->bad_distributor?0x73:0x33;
+    if(address==0x03400000) {
+        *out=(m->bad_distributor?0x73:0x33)|(m->distributor_busy?UINT32_C(0x80000000):0);
+        if(m->distributor_busy && !m->distributor_stuck)--m->distributor_busy;
+    }
     else if(address==c)*out=m->control;
     else if(address==c+0x20)*out=0x40;
     else if(address==r+0x24) {
@@ -157,6 +160,12 @@ int main(int argc,char **argv)
     setup(&m,5);m.bad_frame=1;assert(run(&m)==A733_CONTINUE_RETAINED && !m.cpu.writes_attempted);quiet(&m);
     setup(&m,5);m.bad_distributor=1;assert(run(&m)==A733_CONTINUE_RETAINED && !m.cpu.writes_attempted);
     setup(&m,5);m.control|=1;assert(run(&m)==A733_CONTINUE_RETAINED && !m.cpu.writes_attempted);
+    /* GICD_CTLR.RWP: a write in progress is waited for; one that never
+     * completes ends at the deadline with a time error in phase 0. */
+    setup(&m,5);m.distributor_busy=3;assert(run(&m)==A733_CONTINUE_GIC_READY && !m.distributor_busy);quiet(&m);
+    setup(&m,5);m.distributor_busy=1;m.distributor_stuck=1;assert(run(&m)==A733_CONTINUE_PENDING && !m.cpu.phase);
+    m.now=1000;assert(run(&m)==A733_CONTINUE_RETAINED && m.cpu.error==2 && !m.cpu.phase && !m.cpu.writes_attempted);quiet(&m);
+    setup(&m,5);m.bad_distributor=1;m.distributor_busy=1;assert(run(&m)==A733_CONTINUE_RETAINED && m.cpu.error==3);
     setup(&m,5);m.stuck=1;assert(run(&m)==A733_CONTINUE_PENDING);m.now=1000;
     assert(run(&m)==A733_CONTINUE_RETAINED && m.cpu.error==2);quiet(&m);
     setup(&m,5);assert(a733_cpu_continue_poll(&m.cpu)==A733_CONTINUE_PENDING);m.now=0;
@@ -175,5 +184,5 @@ int main(int argc,char **argv)
     uint64_t old=l1[0];assert(!a733_cpu_continue_tables(l1,l1,0x42001000) && l1[0]==old);
     assert(!a733_cpu_continue_tables(l1,l2,0x41001000) && l1[0]==old);
     assert(!a733_cpu_continue_tables(l1+1,l2,0x42001000) && l1[0]==old);
-    printf("PASS eight local GIC interfaces, %u uncertain/late operation positions, NC table permissions and Aff1 SGIs\n",operations);
+    printf("PASS eight local GIC interfaces, %u uncertain/late operation positions, distributor write-pending wait and timeout, NC table permissions and Aff1 SGIs\n",operations);
 }

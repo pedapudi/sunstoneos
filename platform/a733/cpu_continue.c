@@ -63,8 +63,11 @@ unsigned a733_cpu_continue_poll(struct a733_cpu_continue *s)
     uintptr_t r=s->redistributor,g=r+0x10000,control=0x07050200+s->core*4;
     uint32_t v=0;int advance=1;
     switch(s->phase) {
+    /* Wait for GICD_CTLR.RWP (bit 31) to clear, as Linux gic_do_wait_for_rwp
+     * and TF-A gicd_wait_for_pending_write do; another core's distributor
+     * write may be in progress. A timeout is ERROR_TIME at this phase. */
     case DISTRIBUTOR:
-        if(read32(s,0x03400000,&v) && ((v&0x73)!=0x33 || (v&(1u<<31))))fail(s,ERROR_INITIAL);
+        if(read32(s,0x03400000,&v)) {if((v&0x73)!=0x33)fail(s,ERROR_INITIAL);advance=!(v&(1u<<31));}
         break;
     case SCAN: {
         uint64_t typer=0;

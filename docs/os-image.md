@@ -143,7 +143,9 @@ It has one entry: the thermal sensor interrupt, INTID 71, on CPU0 with GIC
 priority `0xd8`. The microphone build adds the DMA0 interrupt, INTID 143, on
 CPU0 with the same priority; CPU0 runs the DMA service worker. The OS boot patch ([boot.patch](../apps/os/boot.patch)) calls
 `a733_irq_table_route` after common boot has disabled every SPI and both
-groups, and stops with status 3, detail `0x310`, if routing is refused. The
+groups, and stops with status 3, detail `0x310`, if routing is refused, or
+detail `0x311` if the distributor's write-pending bit stays set until the
+startup deadline. The
 thermal service enables and masks its own source.
 
 The GPU linear build adds the GPU interrupt, INTID 95, with the same
