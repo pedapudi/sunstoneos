@@ -110,10 +110,11 @@ clears. The backsolve ranks the refusal second among the divergences most
 likely to stop a core: in the cached image a refusal parks the core, the
 other cores then fail their arrival barrier, and the image stops without a
 report. No board record shows this failure; it needs a concurrent
-distributor writer. The same holds for the waits in `irq_table.c`: the
-primary boot waits for RWP after its own distributor writes just before
-routing, and no secondary runs yet, so those waits can fire only if
-another writer is added.
+distributor writer. In the current images the two waits in `irq_table.c`
+cannot find RWP set: the primary boot waits for RWP after its own
+distributor writes immediately before routing, no secondary runs yet, and
+the route writes do not set RWP (IHI 0069G 12.9.4). They are kept so that
+the routing stays correct if another distributor writer is added.
 
 **Blast radius.** `cpu_continue.c` is linked into every image built from
 the cached sources (among them the supervised, observer,

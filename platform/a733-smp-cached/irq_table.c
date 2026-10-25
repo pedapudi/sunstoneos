@@ -37,7 +37,12 @@ int a733_irq_table_dispatch(unsigned intid,unsigned core)
 /* A733 numbers cores in MPIDR affinity level 1, so core c routes to Aff1=c. */
 static uint64_t affinity(unsigned core){return (uint64_t)core<<8;}
 /* Bounded wait for GICD_CTLR.RWP, as Linux gic_do_wait_for_rwp and TF-A
- * gicd_wait_for_pending_write poll it. */
+ * gicd_wait_for_pending_write poll it. In the current images neither wait
+ * can find RWP set: the primary boot waits for RWP after its own GICD_CTLR
+ * and GICD_ICENABLER writes immediately before routing, no secondary runs
+ * yet, and the route writes (group, modifier, configuration, priority and
+ * IROUTER) do not set RWP (IHI 0069G 12.9.4). The waits keep the routing
+ * correct if another distributor writer is added. */
 static int write_settled(uint64_t deadline,uint64_t (*counter)(void))
 {
     while(gicd_read(0)&(1u<<31))if(counter()>=deadline)return 0;
