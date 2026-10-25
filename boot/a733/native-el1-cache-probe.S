@@ -95,6 +95,12 @@ el1_smc_return:
     b el1_smc_return
 
 el1_return_checkpoint:
+#ifdef SUNSTONE_WORKLOAD_DEADLINE
+    // CPU0's SMCs first pass the return-deadline unit (workload-deadline-probe.S).
+    b identity_deadline_smc
+.global el1_return_checkpoint_continue
+el1_return_checkpoint_continue:
+#endif
     msr daifset, #15
     // Match the production BHB/Speculative-AT exception-entry ordering.
     // AArch64 EL1 translation controls have one copy, not security banks.
@@ -310,6 +316,11 @@ el1_return_checkpoint:
     mov x16, #1
     str x16, [x19, #232]
     dsb sy
+#ifdef SUNSTONE_WORKLOAD_DEADLINE
+    mrs x16, mpidr_el1
+    ubfx x16, x16, #8, #3
+    cbz x16, identity_deadline_refused
+#endif
 .Lel1_park:
     wfi
     b .Lel1_park

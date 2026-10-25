@@ -5,7 +5,11 @@
 identity_primary_gate:
     bl identity_primary_run
     cmp w0, #1
+#ifdef SUNSTONE_WORKLOAD_DEADLINE
+    b.ne identity_deadline_gate
+#else
     b.ne identity_park
+#endif
     // Displaced first instruction of the physically exercised return sequence.
     ldr x0, =0x08001004
     ldr x17, =identity_original_return_next

@@ -179,8 +179,15 @@ regenerating.
     42.3 °C, below the 90 °C admission limit for the workload. The capture
     after it is unchanged.
   - **Full returning workload (`u2-tw-prepare`): did not return.** This is
-    the first board execution of the workload (32 floating-point rounds per
-    core, tick and SGI handlers, background tasks). The launcher started at
+    the first board execution of the workload on port 3-3 (32
+    floating-point rounds per core, tick and SGI handlers, background
+    tasks). The same overlay and native image returned on port 3-1 on
+    2026-10-24 (`processor-completion-20261024/port-3-1/task-workload`);
+    only the contract and request differ. Two returning bisection profiles
+    return CPU0 to the ROM with a record at the startup deadline plus 0.5 s
+    or at any earlier CPU0 stop ([design](designs/workload-bisect.md),
+    [runbook](board-runbooks/rank-8-workload-bisect.md)); their return path
+    has not run on a board. The launcher started at
     00:47:55 on 2026-10-25, and no new FEL instance appeared in the
     following 6.7 hours; the USB device kept its pre-launch number. The
     journal records `launch_attempted` with no transport failure. Nothing

@@ -162,7 +162,9 @@ def main():
         if name=='cleanup-readback':
             assert machine.retained and not machine.returned and machine.target_parked=={6}
             assert machine.started==list(range(1,7)) and machine.stopped==list(range(1,6))
-            assert local[5][11]==4 and local[5][0]==2
+            # The final snapshot comparison (cleanup error 6) now covers the
+            # restored priority word; the separate readback (error 4) is gone.
+            assert local[5][11]==6 and local[5][0]==2
             assert machine.q(DISTRIBUTOR)==2
         else:
             assert machine.returned and not machine.retained

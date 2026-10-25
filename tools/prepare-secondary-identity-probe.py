@@ -32,8 +32,31 @@ def cached_patch_points(native):
             (vector,branch(vector,native['a733_cached_el3_fault']),'el1_return_checkpoint'))
 
 
+# Return-deadline bisection profiles (docs/designs/workload-bisect.md).
+DEADLINE_RECORD=(0x4201b200,512)
+DEADLINE_TICKS=12000000
+
+
+def deadline_patch_points(native,quiet):
+    # Exact words of the frozen native ELF; each displaced word is checked.
+    entry=native['a733_cached_enter_el1']+0x34  # MSR ICC_IGRPEN0_EL1, XZR
+    fiq=native['a733_cached_el3_vectors']+0x500  # Lower-EL AArch64 FIQ: MOV X18, #0xa
+    points=[(entry,0xd518ccdf,'identity_deadline_arm',True),(fiq,0xd2800152,'identity_deadline_fiq',False)]
+    if quiet:
+        # The background loop's per-increment BL ucPortGetCoreID becomes an EL0
+        # WFE (SCTLR_EL1.nTWE is set); W0 keeps the core index from the first call.
+        at=native['background']+0x40
+        require(native['ucPortGetCoreID']-at==0x3d61*4,'Background core-index call differs.')
+        points.append((at,0x94003d61,None,False))
+    return points
+
+
 def prepare(args):
     task_workload=getattr(args,"task_workload",False)
+    return_deadline=getattr(args,"return_deadline",False)
+    quiet=getattr(args,"quiet_background",False)
+    require(not quiet or return_deadline,'The quiet-background profile requires the return deadline.')
+    require(not return_deadline or task_workload,'The return deadline applies to the task workload only.')
     task_switch=getattr(args,"task_switch",False) or task_workload
     first_task=getattr(args,"first_task",False) or task_switch
     pre_scheduler=getattr(args,"pre_scheduler",False) or first_task
@@ -66,6 +89,7 @@ def prepare(args):
                               'FreeRTOS_SWI_Handler','pxCurrentTCBs','xIdleTaskHandles')
         if task_switch:names+=('worker','tasks','stacks','vTaskSwitchContext','a733_observe_service_start')
         if task_workload:names+=('a733_smp_core_results','vTaskDelay')
+        if quiet:names+=('background','ucPortGetCoreID')
         native={n:address(n) for n in names}
         if task_switch:
             for name,expected in {'worker':(0x41001280,372),
@@ -111,6 +135,7 @@ def prepare(args):
                   ('boot/a733/primary-local-cache-probe.c','primary-local.o')]
     elif coherent:units += [('boot/a733/secondary-coherence-probe.S','coherence.o')]
     if interrupts:units += [('boot/a733/secondary-interrupt-probe.S','interrupt.o')]
+    if return_deadline:units += [('boot/a733/workload-deadline-probe.S','deadline.o')]
     for unit,object_name in units:
         commands.append([args.clang,'--target=aarch64-none-elf','-march=armv8-a','-mgeneral-regs-only',
             '-O2','-ffreestanding','-fno-builtin','-fno-stack-protector','-ffunction-sections','-fdata-sections',
@@ -121,6 +146,7 @@ def prepare(args):
             *(['-DSUNSTONE_FIRST_TASK=1'] if first_task else []),
             *(['-DSUNSTONE_TASK_SWITCH=1'] if task_switch else []),
             *(['-DSUNSTONE_TASK_WORKLOAD=1'] if task_workload else []),
+            *(['-DSUNSTONE_WORKLOAD_DEADLINE=1'] if return_deadline else []),
             *(['-DSUNSTONE_SECONDARY_INTERRUPTS=1'] if interrupts else []),'-I',ROOT/'include','-I',ROOT/'platform/a733-smp-cached',
             '-I',ROOT/'boot/a733','-c',ROOT/unit,'-o',args.output/object_name])
     symbols=[f'--defsym={name}={value:#x}' for name,value in native.items()]
@@ -194,6 +220,10 @@ def prepare(args):
                                           native['a733_smp_primary_el1'])]
             at=native['worker']+0x6c
             first_patches.append((at,0x35000513,branch(at,hooks['identity_workload_complete'])))
+        if return_deadline:
+            for address,original,hook,link in deadline_patch_points(native,quiet):
+                replacement=0xd503205f if hook is None else branch(address,hooks[hook])|(0x80000000 if link else 0)
+                first_patches.append((address,original,replacement))
     for item in base['payloads']:
         data=bytearray(frozen[item['name']]);start=item['address']
         if start<=target<start+len(data):
@@ -227,6 +257,7 @@ def prepare(args):
     if pre_scheduler:names+=('boot/a733/all-core-first-task-probe.S' if first_task else 'boot/a733/all-core-pre-scheduler-probe.S','boot/a733/primary-local-cache-probe.c')
     elif coherent:names+=('boot/a733/secondary-coherence-probe.S',)
     if interrupts:names+=('boot/a733/secondary-interrupt-probe.S',)
+    if return_deadline:names+=('boot/a733/workload-deadline-probe.S',)
     manifest={'schema':'a733-all-core-first-task-probe-v1' if first_task else 'a733-all-core-pre-scheduler-probe-v1' if pre_scheduler else 'a733-secondary-interrupt-probe-v1' if interrupts else 'a733-secondary-coherence-probe-v1' if coherent else 'a733-secondary-cache-probe-v1' if cached else 'a733-secondary-local-probe-v1' if local else 'a733-secondary-identity-probe-v1','physical_access':False,'native_sha256':primary.probe.NATIVE,
         'primary_manifest':{'path':str((args.primary/'manifest.json').resolve()),'sha256':digest(args.primary/'manifest.json')},
         'sources':{n:digest(ROOT/n) for n in names},'native_symbols':native,'hooks':hooks,'patches':patches,
@@ -250,6 +281,12 @@ def prepare(args):
         manifest['task_workload']={'physical_eligible':False,'rounds_per_core':32,
             'completion_patch':native['worker']+0x6c,
             'pending':'Returning workload instruction checks, host validation and root review required.'}
+    if return_deadline:
+        manifest['workload_bisect']={
+            'profile':'all-core-task-workload-quiet-deadline-v1' if quiet else 'all-core-task-workload-deadline-v1',
+            'quiet_background':quiet,'deadline_ticks_after_startup':DEADLINE_TICKS,'deadline_interrupt':29,
+            'record':{'address':DEADLINE_RECORD[0],'bytes':DEADLINE_RECORD[1]},
+            'pending':'Instruction cases, host validation and root review required before physical use.'}
     (args.output/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
     print('Prepared '+('first FreeRTOS task entry for all eight cores' if first_task else 'production pre-scheduler for all eight cores' if pre_scheduler else 'timer and peer IRQs for cores1..7' if interrupts else 'concurrent cached exchange for cores1..7' if coherent else 'cached EL1 entry for cores1..7' if cached else 'local initialization for cores1..7' if local else 'identity survey for cores2..7')+'; no board access.')
 
@@ -266,4 +303,6 @@ if __name__=='__main__':
     parser.add_argument("--first-task",action="store_true",help="Offline-only actual task creation/context entry followed by matched cleanup")
     parser.add_argument("--task-switch",action="store_true",help="Offline-only idle yield and worker selection before matched cleanup")
     parser.add_argument("--task-workload",action="store_true",help="Offline-only complete FP/timer/SGI workload before coordinated return")
+    parser.add_argument("--return-deadline",action="store_true",help="With --task-workload: CPU0 returns to the ROM with a record at a fixed deadline or on any CPU0 stop")
+    parser.add_argument("--quiet-background",action="store_true",help="With --return-deadline: background tasks wait in WFE between increments")
     prepare(parser.parse_args())

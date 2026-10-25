@@ -28,7 +28,7 @@ class Retained(Exception):
     pass
 
 
-def run_case(args, case, software, report_transform=None):
+def run_case(args, case, software, report_transform=None, final=None, quarantine_fails=False):
     directory = args.output/case
     directory.mkdir()
     survey = json.loads(args.survey.read_text())
@@ -112,6 +112,8 @@ def run_case(args, case, software, report_transform=None):
 
     def quarantine(*unused):
         state['quarantined'] = True
+        if quarantine_fails:
+            raise OSError('Modeled quarantine record failure')
 
     def monotonic():
         state['clock'] += 2
@@ -130,7 +132,7 @@ def run_case(args, case, software, report_transform=None):
          patch.object(host.subprocess, 'run', fake_run), patch.dict(sys.modules, {'usb_guard': guard}), \
          patch.object(host.time, 'monotonic', monotonic), patch.object(host.time, 'sleep', lambda n: None), \
          patch.object(host.base, 'hold_ownership', held), \
-         patch.object(host.base, 'stop_after_failure', lambda r, s, q, e: stop(r, s, q, e, hold=held)):
+         patch.object(host.base, 'stop_after_failure', lambda r, s, q, e, hold=None: stop(r, s, q, e, hold=held if hold is None else hold)):
         try:
             host.run(a)
         except (ValueError, Retained):
@@ -138,6 +140,10 @@ def run_case(args, case, software, report_transform=None):
         else:
             assert case == 'complete-return'
     record = json.loads((a.evidence/'session.json').read_text())
+    if final is not None:
+        # A caller-specific outcome, such as a deadline return that restores nothing.
+        final(state, record, bytes(dram), originals)
+        return True
     if case in ('complete-return', 'invalid-report-restored'):
         assert bytes(dram) == originals and sram[0x52000:0x52008] == b'NEW-ROM!'
         assert record['dram_restored'] and record['rom_usable']

@@ -126,11 +126,11 @@ probe = SimpleNamespace(NATIVE=base.probe.NATIVE, REPORT=base.probe.REPORT, deco
 initial_report = base.initial_report
 
 
-def load(build, image, manifest, task_switch=False, task_workload=False):
+def load(build, image, manifest, task_switch=False, task_workload=False, **deadline):
     task_switch = task_switch or task_workload
     frozen, dram = base.cache.local.identity.load(build, image, manifest,
                                                   first_task=True, task_switch=task_switch,
-                                                  task_workload=task_workload)
+                                                  task_workload=task_workload, **deadline)
     require(manifest.get('first_task') == {
         'physical_eligible': False, 'writable_interval': [0x41200000, 0x41291000],
         'cache_lines_per_core': 9280, 'task_bodies': task_workload, 'timer_and_sgi_workload': task_workload,

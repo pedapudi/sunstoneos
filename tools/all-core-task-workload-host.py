@@ -37,7 +37,7 @@ probe = SimpleNamespace(NATIVE=base.probe.NATIVE, REPORT=base.probe.REPORT, deco
 initial_report = base.initial_report
 
 
-def load(build, image, manifest):
+def load(build, image, manifest, **deadline):
     require(manifest.get('task_switch') == {
         'physical_eligible': False, 'worker_body': True, 'idle_body': True,
         'timer_and_sgi_workload': True,
@@ -49,7 +49,7 @@ def load(build, image, manifest):
         'Workload scope or completion patch changed.')
     require(manifest['native_symbols'].get('a733_smp_core_results') == 0x41201080,
             'Worker result location changed.')
-    return base.load(build, image, manifest, task_workload=True)
+    return base.load(build, image, manifest, task_workload=True, **deadline)
 
 
 def validate_software(software, manifest_hash):

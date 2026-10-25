@@ -317,6 +317,7 @@ def run(a):
     a.build=a.build.resolve();raw=(a.build/'manifest.json').read_bytes();m=json.loads(raw);manifest_hash=hashlib.sha256(raw).hexdigest()
     primary = None
     is_task_workload = m.get('schema') == 'a733-all-core-task-workload-probe-v1'
+    is_workload_bisect = is_task_workload and 'workload_bisect' in m
     is_task_switch = is_task_workload or m.get('schema') == 'a733-all-core-task-switch-probe-v1'
     is_first_task = is_task_switch or m.get('schema') == 'a733-all-core-first-task-probe-v1'
     is_pre_scheduler = is_first_task or m.get('schema') == 'a733-all-core-pre-scheduler-probe-v1'
@@ -329,9 +330,9 @@ def run(a):
     is_primary = is_identity or is_primary_cache or m.get('schema') == 'a733-primary-publication-probe-v1'
     prepared=supervised.validate_bundle(a.bundle)
     if is_primary:
-        primary=module('returning_cpu_host',ROOT/'tools'/('primary-cache-host.py' if is_primary_cache else 'all-core-task-workload-host.py' if is_task_workload else 'all-core-task-switch-host.py' if is_task_switch else 'all-core-first-task-host.py' if is_first_task else 'all-core-pre-scheduler-host.py' if is_pre_scheduler else 'secondary-interrupt-host.py' if is_interrupts else 'secondary-coherence-host.py' if is_coherent else 'secondary-cache-host.py' if is_cached else 'secondary-local-host.py' if is_local else 'secondary-identity-host.py' if is_identity else 'primary-publication-host.py'))
+        primary=module('returning_cpu_host',ROOT/'tools'/('primary-cache-host.py' if is_primary_cache else 'workload-bisect-host.py' if is_workload_bisect else 'all-core-task-workload-host.py' if is_task_workload else 'all-core-task-switch-host.py' if is_task_switch else 'all-core-first-task-host.py' if is_first_task else 'all-core-pre-scheduler-host.py' if is_pre_scheduler else 'secondary-interrupt-host.py' if is_interrupts else 'secondary-coherence-host.py' if is_coherent else 'secondary-cache-host.py' if is_cached else 'secondary-local-host.py' if is_local else 'secondary-identity-host.py' if is_identity else 'primary-publication-host.py'))
         frozen,dram=primary.load(a.build,a.bundle/'image.elf',m)
-        native=primary.probe.NATIVE;profile=primary.PROFILE
+        native=primary.probe.NATIVE;profile=primary.profile(m) if is_workload_bisect else primary.PROFILE
         primary_report = primary.probe.report_spec(m) if is_primary_cache else primary.probe.REPORT
     else:
         profile=manifest_profile(m)
@@ -505,6 +506,13 @@ def run(a):
                         record['wake_sleep_observed']=init['state']==4 and init['stopped_after_wake']==1
                         record['local_initialization_observed']=init['state']==3
                         record['controller_refusal_observed']=init['state']==4 and init['controller_refusal_restored']==1
+            except getattr(primary,'DeadlineReturn',()) as returned:
+                # CPU0 returned through the deadline unit; secondaries may still
+                # run from the owned memory. Read, restore nothing, keep the board.
+                name,address,size=primary.SNAPSHOT
+                transaction('read',hex(address),str(size),a.evidence/(name+'.bin'));base.sync_file(a.evidence/(name+'.bin'))
+                record.update(deadline_return=returned.record,rom_usable=True,dram_restored=False);journal()
+                raise primary.DeadlineRetained(str(returned)+' Secondaries were not stopped and DRAM was not restored; remove power before the next run.')
             except (ValueError,struct.error) as e:error=e
             for name,address,size in dram:transfer(address,backups[name],a.evidence/(name+'-restored.bin'))
             dirty=False;record.update(rom_usable=True,dram_restored=True,complete=error is None);journal()
@@ -512,7 +520,16 @@ def run(a):
         except BaseException as error:
             record.update(failure=str(error),transport_failed=failed)
             if dirty or failed:
-                try:base.stop_after_failure(record,journal,lambda:access.quarantine_instance(node,'Native startup diagnostic stopped; no retry; coordinator recovery required.',identity),error)
+                # A deadline return is a known outcome: once the journal is saved and the
+                # quarantine is recorded, exit with the claim held. If either raises, or
+                # for any other post-launch failure, hold the lock until recovery.
+                known=isinstance(error,getattr(primary,'DeadlineRetained',()));quarantined=[]
+                def quarantine():
+                    access.quarantine_instance(node,'Native startup diagnostic stopped; no retry; coordinator recovery required.',identity)
+                    quarantined.append(True)
+                def hold():
+                    if not (known and quarantined):base.hold_ownership()
+                try:base.stop_after_failure(record,journal,quarantine,error,hold=hold)
                 finally:
                     if dirty and not record['launch_attempted']:base.hold_ownership()
             else:journal()

@@ -48,7 +48,7 @@ static int write32(void *context,uintptr_t address,uint32_t value)
     store(c,address,value);return 1;
 }
 static int now_us(void *context,uint64_t *out) {(void)context;*out=ticks()/24;return 1;}
-static int wait_bits(struct context *c,uintptr_t address,uint32_t mask,uint32_t expected)
+static __attribute__((noinline)) int wait_bits(struct context *c,uintptr_t address,uint32_t mask,uint32_t expected)
 {
     uint64_t previous=ticks();
     do {
@@ -64,10 +64,16 @@ static void snapshot(struct context *c,volatile struct secondary_local_state *s)
     s->group=load(c,g+0x80);s->modifier=load(c,g+0xd00);
     s->configuration=load(c,g+0xc04);s->priority=load(c,g+0x400);s->pwrr=load(c,r+0x24);
 }
+/* GICR_CTLR.UWP (bit 31) and RWP (bit 3) are read-only status (IHI 0069G
+ * 12.11.2). The board has read RWP set after a completed wait with no write
+ * by this core in between, for a reason not yet explained. Linux and TF-A
+ * poll these bits and never compare GICR_CTLR, so comparisons and baselines
+ * ignore them. */
+#define CTLR_STATUS UINT64_C(0x80000008)
 static int same(const volatile struct secondary_local_state *a,const volatile struct secondary_local_state *b)
 {
     const volatile uint64_t *x=(const volatile uint64_t *)a,*y=(const volatile uint64_t *)b;
-    for(unsigned i=0;i<sizeof(*a)/8;++i)if(x[i]!=y[i])return 0;
+    for(unsigned i=0;i<sizeof(*a)/8;++i)if((x[i]^y[i])&(i?UINT64_MAX:~CTLR_STATUS))return 0;
     return 1;
 }
 static int cleanup(struct context *c)
@@ -85,7 +91,11 @@ static int cleanup(struct context *c)
     const uint32_t values[]={(uint32_t)b->group,(uint32_t)b->modifier,
                             (uint32_t)b->configuration,(uint32_t)b->priority};
     for(unsigned i=0;i<4;++i) {++r->cleanup_writes;store(c,addresses[i],values[i]);}
-    for(unsigned i=0;i<4;++i)if(load(c,addresses[i])!=values[i]) {r->cleanup_error=4;return 0;}
+    /* GICR_CTLR.RWP is read-only status and part of the final comparison.
+     * Wait for it after the restoring writes, as Linux gic_cpu_init does. */
+    if(!wait_bits(c,base,8,0)) {r->cleanup_error=7;return 0;}
+    /* The final snapshot comparison (error 6) covers these four words; the
+     * separate readback (former error 4) was removed to fit the overlay. */
     ++r->cleanup_writes;store(c,base+0x14,(uint32_t)b->waker);
     if(!wait_bits(c,base+0x14,4,4)) {r->cleanup_error=5;return 0;}
     ++r->cleanup_writes;store(c,0x07050200+c->core*4,(uint32_t)r->control_before);
@@ -112,7 +122,7 @@ int secondary_local_probe(unsigned core,uint64_t epoch,uint64_t deadline,
     if((power&1) || (((power>>2)^(power>>3))&1))return 0;
     snapshot(&c,&r->before);
     const volatile struct secondary_local_state *b=&r->before;
-    if(b->ctlr || b->waker!=6 || b->enable || b->pending || b->active ||
+    if((b->ctlr&~CTLR_STATUS) || b->waker!=6 || b->enable || b->pending || b->active ||
        b->pwrr!=power || ticks()>=deadline)return 0;
     r->control_before=load(&c,0x07050200+core*4);
     if((r->control_before|load(&c,0x07050220+core*4))&1)return 0;
