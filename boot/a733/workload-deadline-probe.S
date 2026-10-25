@@ -236,8 +236,16 @@ identity_deadline_finish:
     // Fall through.
 
 identity_deadline_return:
-    // x15 holds RECORD on both paths here.
-    mov x2, #1
+    // x15 holds RECORD on both paths here. Request the warm reset with the
+    // SCR_EL3 that native_el3_cache_probe saved (CPU0 EL3 record + 64), as
+    // the exercised return does; zero means it never left the ROM value.
+    mov x3, #0xa040
+    movk x3, #0x4201, lsl #16
+    ldr x2, [x3]
+    cbz x2, 7f
+    msr scr_el3, x2
+    isb
+7:  mov x2, #1
     str x2, [x15, #496]
     dsb sy
     // Displaced first instruction of the physically exercised return sequence.

@@ -22,7 +22,8 @@ SOFTWARE_SCHEMA = 'a733-workload-bisect-software-v1'
 HOST_SOURCES = base.HOST_SOURCES+('tools/workload-bisect-host.py', 'tools/secondary-identity-host.py')
 MODEL_SOURCES = base.MODEL_SOURCES+('checks/workload-bisect-probe.py',)
 CASES = ('complete-return', 'transport-failure-retained', 'invalid-report-restored',
-         'deadline-return-retained', 'deadline-record-checked', 'changed-input-refused')
+         'deadline-return-retained', 'damaged-deadline-retained', 'deadline-record-checked',
+         'changed-input-refused')
 INSTRUCTION_CASES = {False: ('success', 'stalled-core', 'stalled-no-tick'), True: ('success',)}
 RECORD = (0x4201b200, 512)
 RECORD_OFFSET = RECORD[0]-0x42018000
@@ -42,33 +43,49 @@ FIELDS = ('magic', 'version', 'reason', 'stage', 'counter', 'deadline', 'elr_el3
 
 
 class DeadlineReturn(ValueError):
-    """CPU0 returned through the deadline unit; record holds the decoded fields."""
+    """CPU0 returned through the deadline unit; record holds the decoded fields.
+
+    Raised for every report that carries the record's magic number, including
+    a damaged or foreign one: the secondaries may still run from the owned
+    memory, so the runner must never restore DRAM after such a report."""
     def __init__(self, record):
         self.record = record
-        super().__init__('CPU0 returned through the deadline unit after {}; stage {:#x}.'.format(
-            REASONS[record['reason']], record['stage']))
+        reason = REASONS.get(record.get('reason'), 'an unknown reason {}'.format(record.get('reason')))
+        text = 'CPU0 returned through the deadline unit after {}; stage {:#x}.'.format(reason, record.get('stage', 0))
+        if record.get('inconsistent'):
+            text += ' The record is inconsistent: '+record['inconsistent']
+        super().__init__(text)
 
 
-def deadline_record(raw, nonce):
-    """Return the decoded deadline record of a returned report, or None."""
-    if len(raw) != 0x5200 or struct.unpack_from('<Q', raw, RECORD_OFFSET)[0] != RECORD_MAGIC:
-        return None
+def check_record(raw, nonce, record, words):
     base.base.base.cache.local.identity.primary.probe.decode(raw[:256], nonce)
-    words = struct.unpack_from('<64Q', raw, RECORD_OFFSET)
-    record = dict(zip(FIELDS, words))
-    record['cores'] = [dict(zip(('pending', 'active', 'enabled', 'power'), words[29+4*c:33+4*c])) for c in range(8)]
-    record['returned'] = words[62]
     require(record['version'] == 1 and record['reason'] in REASONS and record['returned'] == 1 and
             record['stage'] in ((3,) if record['reason'] in (1, 2) else (1,)) and
             not words[24] and not words[61] and not words[63],
             'Deadline record is inconsistent.')
     require(record['reason'] != 1 or record['fiq_intid'] == 29, 'Deadline interrupt differs.')
     require(record['stage'] != 3 or record['cleaned_lines'] == 9280, 'Deadline cleaning incomplete.')
-    epoch, deadline = struct.unpack_from('<2Q', raw, 0x100+24)
-    require(record['reason'] == 3 or record['deadline'] == deadline+DEADLINE_TICKS,
+    require(record['reason'] == 3 or record['deadline'] == record['survey_deadline']+DEADLINE_TICKS,
             'Deadline differs from the startup contract.')
-    record['epoch'] = epoch
-    record['survey_deadline'] = deadline
+
+
+def deadline_record(raw, nonce):
+    """Return the decoded deadline record of a returned report, or None.
+
+    A record whose checks fail is still returned, with the failed check in
+    'inconsistent'. ESR_EL3 is meaningful only for an SMC (reasons 2 and 4)."""
+    if len(raw) != 0x5200 or struct.unpack_from('<Q', raw, RECORD_OFFSET)[0] != RECORD_MAGIC:
+        return None
+    words = struct.unpack_from('<64Q', raw, RECORD_OFFSET)
+    record = dict(zip(FIELDS, words))
+    record['cores'] = [dict(zip(('pending', 'active', 'enabled', 'power'), words[29+4*c:33+4*c])) for c in range(8)]
+    record['returned'] = words[62]
+    record['epoch'], record['survey_deadline'] = struct.unpack_from('<2Q', raw, 0x100+24)
+    try:
+        check_record(raw, nonce, record, words)
+        record['inconsistent'] = None
+    except ValueError as error:
+        record['inconsistent'] = str(error)
     return record
 
 
@@ -132,5 +149,6 @@ def validate_software(software, manifest_hash):
                     'Completed workload results differ.')
         else:
             record = deadline_record(raw, raw[32:48])
-            require(record and record['reason'] == (1 if case == 'stalled-no-tick' else 2) and
+            require(record and not record['inconsistent'] and
+                    record['reason'] == (1 if case == 'stalled-no-tick' else 2) and
                     record['stage'] == 3 and result.get('off') == [], 'Deadline return case differs.')

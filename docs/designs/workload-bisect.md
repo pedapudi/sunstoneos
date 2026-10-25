@@ -113,8 +113,9 @@ deadline. The builder option `--return-deadline` of
   timer, turns the EL3 MMU off and writes the record below. It then returns
   to CPU0 EL1 with interrupts masked, where a helper cleans the owned
   writable interval (9,280 lines) through the Nonsecure mapping that the
-  writers used, and issues `SMC #0x736`. EL3 then returns to the ROM through
-  the base overlay's RVBAR/RMR sequence.
+  writers used, and issues `SMC #0x736`. EL3 restores the SCR_EL3 value that
+  `native_el3_cache_probe` saved, as the exercised return does, and returns
+  to the ROM through the base overlay's RVBAR/RMR sequence.
 
 | Profile | Added to the workload | What it separates | Deadline |
 | --- | --- | --- | --- |
@@ -144,7 +145,7 @@ completed run. Fields are 64-bit words at the byte offsets given.
 | 16 | Reason: 1 deadline interrupt, 2 CPU0 exit SMC before completion, 3 failed survey at EL3, 4 refused completion SMC |
 | 24 | Stage: 1 captured, 3 captured and cleaned |
 | 32, 40 | Counter at capture; armed deadline |
-| 48, 56, 64 | ELR_EL3, SPSR_EL3, ESR_EL3 |
+| 48, 56, 64 | ELR_EL3, SPSR_EL3, ESR_EL3 (meaningful only for an SMC, reasons 2 and 4) |
 | 72, 80 | x0 and x1 at entry (status and detail of an exit SMC) |
 | 88–128 | ELR_EL1, SPSR_EL1, ESR_EL1, FAR_EL1, SP_EL0, SP_EL1 |
 | 136, 144 | x29 and x30 at entry |
@@ -159,8 +160,11 @@ completed run. Fields are 64-bit words at the byte offsets given.
 ### Host behaviour after a deadline return
 
 `tools/workload-bisect-host.py` checks the record (nonce, version, reason,
-stage, interrupt, cleaned lines, deadline against the contract). The runner
-then reads the owned writable interval (`0x91000` bytes) into
+stage, interrupt, cleaned lines, deadline against the contract) and reports a
+failed check in the record's `inconsistent` field. Any report that carries
+the magic number, consistent or not, is treated as a deadline return: a
+fault in the cleaning helper re-enters the capture and returns at stage 1,
+with the secondaries still running. The runner then reads the owned writable interval (`0x91000` bytes) into
 `owned-writable-after.bin`, writes nothing, keeps the claim and quarantines
 the instance. The secondaries were not stopped: they may still run FreeRTOS
 from DRAM with their GIC and power state unrestored, so the board needs a
@@ -171,7 +175,17 @@ the workload, and the runner restores DRAM as before.
 
 - **Exclusion of other interrupts.** Only CPU0's PPI 29 is Group 0; no SPI
   is enabled. Nonsecure reads of Group 0 bits return zero, so the workload's
-  own drain checks do not see PPI 29.
+  own drain checks do not see PPI 29. GIC-600 erratum 2384374 concerns SPI
+  and LPI packets; SPIs and LPIs stay disabled, so the added Group 0 PPI
+  does not meet its conditions.
+- **Snapshot timing.** The cleaning reaches every core's dirty lines through
+  the Inner Shareable mapping, but the secondaries keep writing afterwards;
+  the ROM's uncached reads see the cleaned values plus any later eviction,
+  not one instant.
+- **Return with running secondaries.** CPU0 warm-resets while the
+  secondaries are coherent, may still send SGIs and keep entry addresses in
+  DRAM. No architectural statement covers the ROM's behaviour in that state;
+  the host reads only, and power removal ends it.
 - **Restoration on the completed path.** The completion SMC disables CNTPS
   and Group 0 before the unchanged restoration; `native_el3_cache_probe`
   restores the saved IPRIORITYR7 word, and `restore_local` disables all
@@ -190,7 +204,7 @@ the workload, and the runner restores DRAM as before.
   task-switch and task-workload builds of this tree equal the builds of
   `79b54841` in all 24 compared files (overlay, three payload segments,
   `identity.bin`, `identity.elf`).
-- **Overlay space.** The extension uses 12,248 of its 12,288 bytes.
+- **Overlay space.** The extension uses 12,272 of its 12,288 bytes.
 - **Completed-path cost (counted).** CPU0 executes 22 more instructions once
   at EL1 entry and 17 more at its completion SMC; each secondary executes 3
   more at entry and 4 more per SMC. The workload loops are unchanged.
@@ -208,7 +222,8 @@ the workload, and the runner restores DRAM as before.
   quiet profile's fall from 1,069–1,864 to 279–490 per secondary is the
   intended reduction. The model runs take 105 s (default), 120 s (deadline)
   and 113 s (quiet); the two stall cases, resumed from the completed-worker
-  checkpoint, take 8 s and 10 s. Host cases (`checks/workload-bisect-host.py`) run the
-  actual runner with modeled FEL for a completed return, a transport
-  failure, an invalid report, a deadline return that restores nothing,
-  damaged records and changed inputs.
+  checkpoint, take 8 s and 10 s. Host cases
+  (`checks/workload-bisect-host.py`) run the actual runner with a modeled
+  FEL for a completed return, a transport failure, an invalid report, and a
+  deadline return and a damaged deadline record that both restore nothing;
+  further cases damage records and change inputs.

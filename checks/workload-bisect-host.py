@@ -27,11 +27,14 @@ first = module('first_task_check', ROOT/'checks/all-core-first-task-host.py')
 host = module('workload_bisect_host', ROOT/'tools/workload-bisect-host.py')
 
 
-def deadline_transform(model_report):
+def deadline_transform(model_report, damage=None):
     def report(data, dram, case):
         raw = bytearray(model_report)
         raw[32:48] = data[32:48]
         struct.pack_into('<Q', raw, 280, struct.unpack_from('<Q', dram, 0x1004000+24)[0])
+        if damage:
+            # A capture re-entered from a fault in the cleaning helper: stage 1.
+            struct.pack_into('<Q', raw, host.RECORD_OFFSET+24, 1)
         return bytes(raw)
     return report
 
@@ -39,7 +42,7 @@ def deadline_transform(model_report):
 def check_deadline_return(state, record, dram, originals):
     assert state['quarantined'] and state['retained'] and not record['complete']
     assert record['dram_restored'] is False and record['rom_usable'] is True
-    assert record['deadline_return']['reason'] in host.REASONS and record['deadline_return']['stage'] == 3
+    assert record['deadline_return']['reason'] in host.REASONS
     assert record['failure'].startswith('CPU0 returned through the deadline unit'), record['failure']
     commands = state['commands']
     launch = commands.index(['exe', '0x52000'])
@@ -86,9 +89,15 @@ def main():
             assert shared.run_case(a, case, fixture, first.transform(success, True))
         elif case == 'deadline-return-retained':
             assert shared.run_case(a, case, fixture, deadline_transform(stalled), final=check_deadline_return)
+            record = json.loads((a.output/case/'runtime/session.json').read_text())
+            assert record['deadline_return']['stage'] == 3 and not record['deadline_return']['inconsistent']
+        elif case == 'damaged-deadline-retained':
+            assert shared.run_case(a, case, fixture, deadline_transform(stalled, damage=True), final=check_deadline_return)
+            record = json.loads((a.output/case/'runtime/session.json').read_text())
+            assert record['deadline_return']['inconsistent'] == 'Deadline record is inconsistent.'
         elif case == 'deadline-record-checked':
             record = host.deadline_record(stalled, stalled[32:48])
-            assert record and record['reason'] == 2
+            assert record and record['reason'] == 2 and not record['inconsistent']
             try:
                 host.decode(stalled, stalled[32:48], manifest)
             except host.DeadlineReturn as returned:
@@ -98,17 +107,15 @@ def main():
             offset = host.RECORD_OFFSET
             for field, value in ((8, 2), (16, 9), (24, 1), (24, 7), (40, 0), (200, 9279), (496, 0), (192, 1)):
                 bad = bytearray(stalled); struct.pack_into('<Q', bad, offset+field, value)
-                try: host.deadline_record(bytes(bad), stalled[32:48])
-                except ValueError: pass
-                else: raise AssertionError(f'Damaged deadline record accepted at {field}')
-            try: host.deadline_record(stalled, bytes(16))
-            except ValueError: pass
-            else: raise AssertionError('Deadline record with a foreign nonce accepted')
+                assert host.deadline_record(bytes(bad), stalled[32:48])['inconsistent'], field
+                # Damaged or not, a report with the magic number is never restored over.
+                try: host.decode(bytes(bad), stalled[32:48], manifest)
+                except host.DeadlineReturn: pass
+                else: raise AssertionError(f'Damaged deadline record decoded at {field}')
+            assert host.deadline_record(stalled, bytes(16))['inconsistent'], 'Foreign nonce accepted'
             bad = bytearray(stalled); struct.pack_into('<QQ', bad, offset+16, 1, 3)
             struct.pack_into('<Q', bad, offset+152, 30)
-            try: host.deadline_record(bytes(bad), stalled[32:48])
-            except ValueError: pass
-            else: raise AssertionError('Deadline interrupt other than PPI 29 accepted')
+            assert host.deadline_record(bytes(bad), stalled[32:48])['inconsistent'], 'Interrupt other than PPI 29 accepted'
         elif case == 'changed-input-refused':
             for field in ('deadline', 'quiet', 'patches', 'sources'):
                 changed = json.loads((a.build/'manifest.json').read_text())
