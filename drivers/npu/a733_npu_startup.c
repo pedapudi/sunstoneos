@@ -357,8 +357,11 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
     case A733_NPU_STARTUP_SUPPLY: {
         const unsigned w=a733_power_authority_load(&s->providers.rails->authority);
         if(w&SUPPLY_FAULTS)return refuse(s);
-        if(!(w&A733_POWER_SUPPLY_DONE))return t<s->wait_until ? PENDING : refuse(s);
-        if(!(w&A733_POWER_DCDC2_VERIFIED))return refuse(s);
+        /* DCDC2 verified is enough; the owner may still be reading DCDC4. */
+        if(!(w&A733_POWER_DCDC2_VERIFIED)) {
+            if(!(w&A733_POWER_SUPPLY_DONE))return t<s->wait_until ? PENDING : refuse(s);
+            return refuse(s);
+        }
         s->stage=A733_NPU_STARTUP_PASS;
         break;
     }
@@ -382,6 +385,11 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
          * earlier request is unanswered. */
         if(!a733_power_domain_request(&s->row,1) || !now(s,&t) ||
            !a733_deadline_after(t,A733_POWER_PCK_BOUND_US+2*TICK_US,&s->wait_until))return fault(s);
+        /* A domain that the pass read ON is already powered, so PLL_NPU,
+         * which lies outside it, starts while the owner adopts the domain.
+         * An OFF domain is powered first. The local open table waits for
+         * the row's ON answer in both cases. */
+        if(domain==8){s->stage=A733_NPU_STARTUP_ENABLE;break;}
         s->stage=A733_NPU_STARTUP_ROW;
         return PENDING;
     }
@@ -389,7 +397,7 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
         const enum a733_power_row_state r=a733_power_domain_state(&s->row);
         if(r==A733_POWER_ROW_PENDING)return t<s->wait_until ? PENDING : fault(s);
         if(r!=A733_POWER_ROW_ON)return fault(s);
-        s->stage=A733_NPU_STARTUP_ENABLE;
+        s->stage=s->pll_locked ? A733_NPU_STARTUP_OPEN : A733_NPU_STARTUP_ENABLE;
         break;
     }
     case A733_NPU_STARTUP_ENABLE: {
@@ -401,7 +409,7 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
         if(!now(s,0) || (s->pll_adopted ? !rd(s,PLL,&v) || v!=(pll_word(s)|PLL_LOCK) :
            !apply(s,pll_enable,STEPS(pll_enable))))return fault(s);
         if(!leave(s) || !lock_wait(s))return fault(s);
-        s->stage=A733_NPU_STARTUP_OPEN;
+        s->pll_locked=1;s->stage=A733_NPU_STARTUP_ROW;
         break;
     }
     case A733_NPU_STARTUP_OPEN: {

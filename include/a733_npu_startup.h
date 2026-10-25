@@ -71,6 +71,8 @@ struct a733_npu_startup {
     /* 1 when the register pass found PLL_NPU locked at the profile with its
      * output gate open, as an earlier startup in this power lifetime left it. */
     unsigned pll_adopted;
+    /* 1 once PLL_NPU has passed its LOCK samples. Bootstrap task only. */
+    unsigned pll_locked;
     /* 1 from the readback that shows the shared SRAM routed to the NPU until
      * local stop routes it back. Bootstrap task only. */
     unsigned sram_routed;

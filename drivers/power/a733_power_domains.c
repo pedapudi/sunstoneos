@@ -179,7 +179,10 @@ static int admit(struct a733_power_domains *d,struct a733_power_domain_row *r,un
     if(d->failed || m->state==A733_POWER_DOMAIN_FAILED){publish(r,g,A733_POWER_ROW_REFUSED);return 0;}
     if(m->state==A733_POWER_DOMAIN_OFF_WAIT)return 1;
     const unsigned w=a733_power_authority_load(word(d));
-    if(!(w&A733_POWER_SUPPLY_DONE))return 0; /* The step waits for verification. */
+    /* The step waits for verification: the done bit, or for a settled supply
+     * the domain's own verified bit, which is published as soon as its rail
+     * is verified. */
+    if(!(w&(A733_POWER_SUPPLY_DONE|f->verified)))return 0;
     const struct a733_rail_token *t=r->rail;
     if((w&(A733_POWER_PMIC_TRANSFER|f->fault)) || !(w&f->verified) || !t || t->owner!=r->owner ||
        !((t->shared|t->exclusive)&A733_RAIL_BIT(f->rail)) || !level(d,f)){publish(r,g,A733_POWER_ROW_REFUSED);return 0;}
@@ -294,6 +297,12 @@ static int verify(struct a733_power_domains *d,uint64_t now)
         if(correct(&s,rail)) {
             if(rail4)d->dcdc4=s;
             d->supply_verified|=rail4 ? A733_POWER_DCDC4_VERIFIED : A733_POWER_DCDC2_VERIFIED;
+            /* A settled supply publishes each verified rail at once, so its
+             * consumers need not wait for the other rail's snapshot. */
+            if(d->settled_supply) {
+                a733_power_authority_set(word(d),rail4 ? A733_POWER_DCDC4_VERIFIED : A733_POWER_DCDC2_VERIFIED);
+                wake_rows(d);
+            }
         }
         r=a733_pmic_reap(p,&d->supply_request);
         if(r==A733_PMIC_BUSY)return 1;
