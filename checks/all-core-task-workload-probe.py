@@ -6,13 +6,15 @@ Timing, interrupt delivery and coherent cache effects remain modeled.
 
 The modeled counter advances COUNTER_STEP ticks (24 MHz) per scheduling
 quantum, in which each core executes 211 to 887 instructions, so a 1 ms tick
-period gives CPU0 about 25,000 instructions. The image reprograms its tick as
+period gives CPU0 about 50,000 instructions. The image reprograms its tick as
 the previous compare value plus the period, so a tick handled later than one
 period fires again at once. At 1,000 ticks per quantum (about 12,500
 instructions per period) CPU0's tick, SGI and context-switch work came close
 to the whole period: inserting four or more instructions before EL1 entry
 left CPU0's worker starved by back-to-back ticks. A core on the board
-executes roughly a million instructions per tick period.
+executes roughly a million instructions per tick period. The run therefore
+fails at once, naming the model, if CPU0's enabled tick compare value falls
+more than one period behind the modeled counter.
 """
 import argparse
 import importlib.util
@@ -24,7 +26,8 @@ from unicorn import UC_MEM_WRITE
 from unicorn.arm64_const import UC_ARM64_REG_PC, UC_ARM64_REG_SP
 
 ROOT = Path(__file__).resolve().parents[1]
-COUNTER_STEP = 500
+COUNTER_STEP = 250
+TICK_PERIOD = 24000  # Counter ticks per FreeRTOS tick: 24 MHz at configTICK_RATE_HZ 1000.
 spec = importlib.util.spec_from_file_location('first_task', ROOT/'checks/all-core-first-task-probe.py')
 first = importlib.util.module_from_spec(spec); spec.loader.exec_module(first)
 base = first.barrier.model
@@ -140,6 +143,16 @@ class Workload(first.FirstTask):
             u.mem_write(at, struct.pack('<Q', 31)); self.changed(at, 8)
         return super().instruction(u, address, size, core)
 
+    def check_tick_lag(self):
+        """Fail if CPU0's tick has fallen more than one period behind the
+        modeled counter: the model is saturated, and the run says so instead
+        of reporting starved workers."""
+        r = self.regs[0]
+        lag = self.clock - r['cntp_cval_el0']
+        if r['cntp_ctl_el0'] & 3 == 1 and lag > TICK_PERIOD:
+            raise AssertionError(('Model saturated: CPU0 tick compare value is more than one period '
+                                  'behind the modeled counter; reduce COUNTER_STEP', self.clock, lag))
+
     def execute(self):
         for quantum in range(100000):
             for index in range(8):
@@ -161,6 +174,7 @@ class Workload(first.FirstTask):
                     self.last_announced_rounds = rounds
                 elif ticks-self.last_progress_tick >= 256:
                     raise AssertionError(('No worker progress for 256 ticks', rounds, ticks))
+            self.check_tick_lag()
             self.clock += COUNTER_STEP
         raise AssertionError(('Returning workload instruction budget', self.last_rounds))
 

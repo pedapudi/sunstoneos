@@ -246,6 +246,9 @@ class Bisect(workload.Workload):
                 u.emu_start(u.reg_read(UC_ARM64_REG_PC), 0, count=(211, 347, 509, 673, 887)[(quantum+core) % 5])
                 if self.returned or self.retained:
                     return
+            if self.clock_step == workload.COUNTER_STEP:
+                # Until a stall case advances the clock in large steps.
+                self.check_tick_lag()
             self.clock += self.clock_step
         raise AssertionError(('Return-deadline instruction budget', self.clock,
                               [hex(u.reg_read(UC_ARM64_REG_PC)) for u in self.cpus]))
