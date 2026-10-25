@@ -493,8 +493,10 @@ def check_survey(work):
     tool.check_survey(build, ROOT, software)
     # The hand-written runbooks name the same survey build and never the bundle's survey.py.
     books = sorted((ROOT / 'docs/board-runbooks').glob('*.md'))
-    stale = [b.name for b in books if '$V/common/survey.py' in b.read_text()]
-    assert not stale, f'runbooks still call $V/common/survey.py: {stale}'
+    # $R names a rank's bundle in rank-9-usb.md, so the survey runner's repository is $SR.
+    stale = [b.name for b in books if '$V/common/survey.py' in b.read_text()
+             or '$R/tools/run-launch-survey.py' in b.read_text()]
+    assert not stale, f'runbooks still call $V/common/survey.py or name the runner through $R: {stale}'
     named = {b.name for b in books if 'SB=~/.cache/sunstoneos/evidence/' in b.read_text()}
     for b in named:
         build = re.search(r'^SB=~/\.cache/sunstoneos/evidence/(\S+)$', (ROOT / 'docs/board-runbooks' / b).read_text(), re.M)
