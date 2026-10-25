@@ -172,9 +172,12 @@ static struct a733_npu_startup_config config(void)
         .owner=31,.deadline_us=3000000,.pck_client=4};
 }
 static unsigned setup_mhz=492; /* The profile that setup() selects. */
+static unsigned setup_bus_100khz; /* 1: setup() runs the PMIC bus at 100 kHz. */
 static void setup(void)
 {
-    domains_model_setup(0x28,23);m.now_ns=40;m.access_ns=200;m.edge_us=5;
+    /* S_TWI0 at 400 kHz, or at 100 kHz as checks/power-domains-service.c models it. */
+    if(setup_bus_100khz){domains_model_setup(0x2a,90);m.now_ns=40;m.access_ns=200;m.edge_us=20;}
+    else{domains_model_setup(0x28,23);m.now_ns=40;m.access_ns=200;m.edge_us=5;}
     npu_registers();memset(&s,0,sizeof(s));scheduler_running=0;
     static const struct a733_gpu_resource_ops gpu={gpu_now,gpu_read,gpu_update,gpu_rail};
     m.gpu=(struct a733_gpu_resource_manager){0};assert(a733_gpu_resources_init(&m.gpu,&gpu,&r));
@@ -195,7 +198,7 @@ static enum a733_npu_platform_result step(void)
     r.owner_reads+=d.level_reads+d.ppu_reads-r.pck_reads-owner; /* The owner's domain check. */
     return x;
 }
-struct run { enum a733_npu_platform_result result; unsigned calls,advancing,ticks,pending_clock_reads; uint64_t elapsed_us,stage_us[A733_NPU_STARTUP_STOPPED+1],supply_done_us; };
+struct run { enum a733_npu_platform_result result; unsigned calls,advancing,ticks,pending_clock_reads; uint64_t elapsed_us,stage_us[A733_NPU_STARTUP_STOPPED+1],supply_done_us,row_on_us; };
 /* Boot: the bootstrap calls the step, and after PENDING blocks for the ticks
  * that a733_npu_startup_wait_ticks gives (0: at once), or until the power
  * service notifies it; the service runs after it whenever notified or due,
@@ -224,6 +227,8 @@ static struct run boot(unsigned limit,unsigned service,uint64_t service_from_us)
         if(service && m.now>=t0+service_from_us && (d.notified || m.now>=d.wake_at)){
             service_step();
             if(!x.supply_done_us && (a733_power_authority_load(&m.rails.authority)&A733_POWER_SUPPLY_DONE))x.supply_done_us=m.now-t0;
+            /* The end of the service step that answered the domain-4 row ON. */
+            if(!x.row_on_us && a733_power_domain_state(&s.row)==A733_POWER_ROW_ON)x.row_on_us=m.now-t0;
             continue;
         }
         uint64_t until=next;

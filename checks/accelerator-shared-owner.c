@@ -189,9 +189,36 @@ static void shared_fault(void)
     /* No consumer hardware polls, local stop, or resource release after the
      * global fault. The board supervisor must retain the whole session. */
 }
+/* Case 4: the NPU startup alone, ungated, while the owner still reads DCDC4,
+ * with the PMIC bus at 100 kHz.
+ * The owner publishes DCDC2 verified first, admits the domain-4 row on it
+ * before the done bit and DCDC4 verified, and the NPU reaches READY; the
+ * owner then completes and publishes DCDC4. */
+static int dcdc2_first(void)
+{
+    /* At 100 kHz the DCDC4 snapshot spans several service steps. */
+    setup_bus_100khz=1;composed_setup(0);
+    /* The startup model's event-driven boot: the bootstrap runs when the
+     * service notifies it. The service step that answers the row ON ends
+     * before the one that sets the done bit. */
+    struct run b=boot(200,1,0);
+    assert(b.result==A733_NPU_PLATFORM_READY && s.row.counted && tokens_held());
+    assert(b.row_on_us && (!b.supply_done_us || b.row_on_us<b.supply_done_us));
+    unsigned w=a733_power_authority_load(&m.rails.authority);
+    const unsigned done_at_ready=!!(w&A733_POWER_SUPPLY_DONE);
+    for(unsigned i=0;i<200 && !(w&A733_POWER_SUPPLY_DONE);++i) {
+        if(d.wake_at>m.now)m.now=d.wake_at;
+        service_step();w=a733_power_authority_load(&m.rails.authority);
+    }
+    assert((w&A733_POWER_SUPPLY_DONE) && (w&A733_POWER_DCDC4_VERIFIED) && (w&A733_POWER_DCDC2_VERIFIED));
+    printf("{\"case\":4,\"bus\":\"100kHz\",\"row_on_us\":%llu,\"ready_us\":%llu,\"done_before_ready\":%u,\"pass\":true}\n",
+        (unsigned long long)b.row_on_us,(unsigned long long)b.elapsed_us,done_at_ready);
+    return 0;
+}
 int main(int argc,char **argv)
 {
-    assert(argc==2);unsigned mode=(unsigned)strtoul(argv[1],0,10);assert(mode<4);
+    assert(argc==2);unsigned mode=(unsigned)strtoul(argv[1],0,10);assert(mode<5);
+    if(mode==4)return dcdc2_first();
     composed_setup(mode);unsigned ticks=boot_pair(mode);
     const unsigned wire=m.writes;const uint32_t ahb=d.ccu_5c0,mbus=d.ccu_5e0,pck=d.rccu_1ac;
     if(mode==0){local_stop();gpu_stop();}

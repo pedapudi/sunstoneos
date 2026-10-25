@@ -433,7 +433,10 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
         /* A domain that the pass read ON is already powered, so PLL_NPU,
          * which lies outside it, starts while the owner adopts the domain.
          * An OFF domain is powered first. The local open table waits for
-         * the row's ON answer in both cases. */
+         * the row's ON answer in both cases. If the owner then refuses or
+         * fails the row of an ON domain, the startup retains with PLL_NPU
+         * enabled, possibly locked, and its output gate closed; the NPU
+         * resets stay asserted and nothing is routed. */
         if(domain==8){s->stage=A733_NPU_STARTUP_ENABLE;break;}
         s->stage=A733_NPU_STARTUP_ROW;
         return PENDING;
