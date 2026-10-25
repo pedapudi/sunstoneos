@@ -16,7 +16,12 @@ under Unicorn with the registers modeled here. It covers:
   itself, and the resource manager (vendor-state-resources.c) admits a
   LOCAL lease only with DCDC4 at selector 0x2e and reports 960 mV;
 - the approval record (vendor-state-approval.json) names the selector,
-  voltage, entry value and PLL words that vendor-state.h defines.
+  voltage, entry value and PLL words that vendor-state.h defines;
+- the monitor copy's EL3 security setup (vendor-state-monitor.c), compiled
+  with the monitor's own flags: BL31's 28 writes in order, each read
+  before and after, the EL3 record they leave, and no other access; and
+  the same record when the clock-controller security switch ignores its
+  write, which the monitor records without refusing.
 
 Each copy is also compared with the file it was copied from: the unified
 diff must hash to the value pinned in COPIES, so a change to either file
@@ -29,6 +34,7 @@ import difflib
 import hashlib
 import json
 from pathlib import Path
+import struct
 import subprocess
 import sys
 
@@ -36,14 +42,21 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'checks'))
 import harness
 from elftools.elf.elffile import ELFFile
-from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE
+from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE, UC_MEM_WRITE
 from unicorn.arm64_const import UC_ARM64_REG_PC, UC_ARM64_REG_SP, UC_ARM64_REG_X0, UC_ARM64_REG_LR
 
 HERE = 'apps/gpu-power-id/'
 UNITS = [HERE + 'vendor-state-units.c', HERE + 'vendor-state-power.c', HERE + 'vendor-state-native.c',
          HERE + 'vendor-state-resources.c', HERE + 'vendor-state-units-pmic.c', HERE + 'vendor-state-units-supply.c']
 # vendor-state-units-pmic.c and vendor-state-units-supply.c include these copies.
-INCLUDED = [HERE + 'vendor-state-pmic.c', HERE + 'vendor-state-consumer.c', HERE + 'vendor-state-units-supply.h']
+INCLUDED = [HERE + 'vendor-state-pmic.c', HERE + 'vendor-state-consumer.c', HERE + 'vendor-state-units-supply.h',
+            HERE + 'vendor-state-monitor.c', HERE + 'vendor-state.h']
+# Compiled with the monitor's flags; it includes the monitor copy.
+MONITOR_UNIT = HERE + 'vendor-state-units-monitor.c'
+# The accepted monitor source that the provider-readiness image's monitor
+# object was compiled from, preserved with its review evidence.
+MONITOR_SOURCE = harness.CACHE / 'evidence/cpu-monitor-cleanup-20261024/snapshot/sources/platform/a733/monitor.c'
+MONITOR_SOURCE_SHA256 = '08c3a6adfd85c6125dfdba37635f2dc690318ee3614b6eb4d83424f5c812ab82'
 # Each copy, the file it was copied from and the SHA-256 of their unified
 # diff (original first, three lines of context).
 COPIES = {
@@ -55,6 +68,8 @@ COPIES = {
         '7805ee6de8da41d6e7fea1d05361283ff3b0ad28d951bde6aadfc65effda5795'),
     HERE + 'vendor-state-resources.c': ('drivers/gpu/a733_gpu_resources.c',
         'ccf22ba67b87a7ffcda240293e83d0ee6230bed8ce153d667b35c54c459e1eef'),
+    HERE + 'vendor-state-monitor.c': (str(MONITOR_SOURCE),
+        '6bbe6a5142a9123d535f30578aaccfc09a2d7c0056aec41c000dc17f6e85d6cd'),
     HERE + 'vendor-state-native.c': ('drivers/gpu/a733_gpu_platform_native.c',
         'e8ccf5a76cb0428c07995ac88bd1e0f2b3b12c56895deaefea869032cecee517'),
 }
@@ -65,6 +80,14 @@ SENTINEL = 0x401ff000
 
 BIT = lambda n: 1 << n
 PLL, B20, B24 = 0x020020e0, 0x02002b20, 0x02002b24
+SPC, R_SPC, R_PRCM, CCU_SWITCH, EL3_RECORD = 0x02054000, 0x07002000, 0x07010290, 0x02003f00, 0x42010000
+EL3_MAGIC = 0x3130455356555047
+# BL31's sunxi_security_setup writes that the monitor copy makes, in order:
+# address, value, OR (1) or store (0).
+EL3_WRITES = ([(SPC + 4 + 0x10 * n, 0xffffffff, 0) for n in range(14)] +
+              [(SPC + 0x104 + 0x10 * n, 0xffffffff, 0) for n in range(8)] +
+              [(R_SPC + 4, 0xffffffff, 0), (R_SPC + 0x14, 0xffffffff, 0), (R_SPC + 0x24, 0xffffffff, 0),
+               (R_PRCM, 7, 1), (CCU_SWITCH, 7, 0), (SPC + 0xe0, 0xfffffbff, 0)])
 CORE = 0x07066000
 ENTRY = 0x41104500
 
@@ -74,9 +97,12 @@ def sha(data):
 
 
 def diff_hash(copy, original):
+    if original == str(MONITOR_SOURCE):
+        assert sha(MONITOR_SOURCE.read_bytes()) == MONITOR_SOURCE_SHA256, 'the accepted monitor source changed'
     a = (ROOT / original).read_text().splitlines(keepends=True)
     b = (ROOT / copy).read_text().splitlines(keepends=True)
-    text = ''.join(difflib.unified_diff(a, b, original, copy, n=3))
+    label = 'platform/a733/monitor.c@08c3a6ad' if original == str(MONITOR_SOURCE) else original
+    text = ''.join(difflib.unified_diff(a, b, label, copy, n=3))
     return sha(text.encode()), text
 
 
@@ -84,10 +110,12 @@ def build(out):
     base = json.loads(BASE.read_text())
     flags = base['compile'][0][:base['compile'][0].index('-MD')]
     flags = [v.replace(OLDROOT, str(ROOT)) for v in flags] + ['-I', str(ROOT / HERE)]
+    monitor = base['compile'][1][:base['compile'][1].index('-MD')]
+    monitor = [v.replace(OLDROOT, str(ROOT)) for v in monitor] + ['-I', str(ROOT / HERE)]
     objects, commands = [], []
-    for unit in UNITS:
+    for unit in UNITS + [MONITOR_UNIT]:
         obj = out / (Path(unit).stem + '.o')
-        command = flags + ['-c', str(ROOT / unit), '-o', str(obj)]
+        command = (monitor if unit == MONITOR_UNIT else flags) + ['-c', str(ROOT / unit), '-o', str(obj)]
         subprocess.run(command, check=True, cwd=ROOT)
         objects.append(str(obj))
         commands.append(command)
@@ -175,7 +203,7 @@ def load(elf):
 def machine(segments, symbols, case):
     u = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
     for address, size in [(0x40000000, 0x200000), (0x02002000, 0x2000), (0x07010000, 0x1000), (CORE, 0x1000),
-                          (0x07090000, 0x1000)]:
+                          (0x07090000, 0x1000), (SPC, 0x1000), (R_SPC, 0x1000), (EL3_RECORD, 0x1000)]:
         u.mem_map(address, size)
     for address, data, _ in segments:
         u.mem_write(address, data)
@@ -322,6 +350,53 @@ def approval_case():
     return {'case': 'approval-record', 'selector': v['selector'], 'value_uv': v['value_uv'], 'pll': c['word']}
 
 
+def el3_case(segments, symbols, ignored):
+    """The monitor copy's security writes on modeled entry words: word i of
+    the SPC and R_SPC pages holds 0x5a000000 + i, R_PRCM 0x10 and the switch 0.
+    With ignored, the switch keeps 0 after its write."""
+    u, board = machine(segments, symbols, {})
+    accesses, record_writes = [], []
+    entry = {}
+    for i, (address, _, _) in enumerate(EL3_WRITES):
+        entry[address] = 0x10 if address == R_PRCM else 0 if address == CCU_SWITCH else 0x5a000000 + i
+        board.put(address, entry[address])
+
+    def device(uc, access, address, size, value, arg):
+        assert size == 4, (hex(address), size)
+        write = access == UC_MEM_WRITE
+        accesses.append([hex(address), int(write), hex(value) if write else None])
+    for page in (SPC, R_SPC):
+        u.hook_add(UC_HOOK_MEM_READ | UC_HOOK_MEM_WRITE, device, begin=page, end=page + 0xfff)
+    u.hook_add(UC_HOOK_MEM_READ | UC_HOOK_MEM_WRITE, device, begin=R_PRCM, end=R_PRCM + 3)
+    u.hook_add(UC_HOOK_MEM_READ | UC_HOOK_MEM_WRITE, device, begin=CCU_SWITCH, end=CCU_SWITCH + 3)
+    if ignored:
+        # The switch reads 0 whatever was written.
+        u.hook_add(UC_HOOK_MEM_READ, lambda uc, a, addr, sz, v, arg: board.put(CCU_SWITCH, 0),
+                   begin=CCU_SWITCH, end=CCU_SWITCH + 3)
+    u.hook_add(UC_HOOK_MEM_WRITE, lambda uc, a, addr, sz, v, arg: record_writes.append(addr - EL3_RECORD),
+               begin=EL3_RECORD, end=EL3_RECORD + 0xfff)
+    call(u, symbols, 'vsu_el3')
+    expected = []
+    for address, value, kind in EL3_WRITES:
+        written = entry[address] | value if kind else value
+        expected += [[hex(address), 0, None], [hex(address), 1, hex(written)], [hex(address), 0, None]]
+    assert accesses == expected, ('el3 accesses', accesses[:6], expected[:6])
+    # The modeled CCU and R_CCU pages hold the switch and R_PRCM; nothing else there was touched.
+    assert {int(a, 16) for a, _ in board.writes} | set(board.reads) == {CCU_SWITCH, R_PRCM}, 'another device word'
+    magic, done = struct.unpack('<QI', bytes(u.mem_read(EL3_RECORD, 12)))
+    n = len(EL3_WRITES)
+    addresses, entries, afters = (words(u, EL3_RECORD + 16 + 4 * n * k, n) for k in range(3))
+    assert magic == EL3_MAGIC and done == n and record_writes[-1] == 0, (hex(magic), done, record_writes[-3:])
+    assert addresses == [a for a, _, _ in EL3_WRITES] and entries == [entry[a] for a, _, _ in EL3_WRITES]
+    want = [entry[a] | v if k else v for a, v, k in EL3_WRITES]
+    if ignored:
+        want[[a for a, _, _ in EL3_WRITES].index(CCU_SWITCH)] = 0
+    assert afters == want, ('el3 after', [hex(x) for x in afters])
+    return {'case': 'el3-switch-ignored' if ignored else 'el3-setup', 'writes': n,
+            'switch_after': hex(afters[[a for a, _, _ in EL3_WRITES].index(CCU_SWITCH)]),
+            'prcm_after': hex(afters[[a for a, _, _ in EL3_WRITES].index(R_PRCM)])}
+
+
 def supply_cases(segments, symbols):
     cases = [approval_case()]
     for rail, target, admitted in WRITABLE:
@@ -371,7 +446,9 @@ def main():
         copies[copy] = {'original': original, 'diff_sha256': digest, 'pinned': pinned}
     elf, commands = build(out)
     segments, symbols = load(elf)
-    result = {'physical_access': False, 'units': {u: sha((ROOT / u).read_bytes()) for u in UNITS + INCLUDED},
+    result = {'physical_access': False,
+              'units': {u: sha((ROOT / u).read_bytes()) for u in UNITS + [MONITOR_UNIT] + INCLUDED},
+              'monitor_source': {'path': str(MONITOR_SOURCE), 'sha256': MONITOR_SOURCE_SHA256},
               'copies': copies, 'elf_sha256': sha(elf.read_bytes()), 'commands': commands, 'cases': []}
     for name, (model, expect) in CASES.items():
         result['cases'].append(run_case(segments, symbols, name, model, expect))
@@ -382,6 +459,7 @@ def main():
     assert board.writes == [['0x20020e0', hex(ENTRY | BIT(30))]], board.writes
     result['cases'].append({'case': 'native-allowlist', 'bits': hex(bits), 'writes': board.writes})
     result['cases'] += supply_cases(segments, symbols)
+    result['cases'] += [el3_case(segments, symbols, False), el3_case(segments, symbols, True)]
     (out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
     print(f'{len(result["cases"])} vendor-state unit cases passed; no physical access')
 
