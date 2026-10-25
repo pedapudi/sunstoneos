@@ -16,10 +16,17 @@ pointer. This is a supported [newlib integration mechanism](https://sourceware.o
 
 FreeRTOS initializes a separate reentrancy structure in each task's control
 block. The usual hook that updates the global pointer is disabled for this
-target. Supervisor call 118 returns the running task's structure with IRQs
-masked throughout the lookup. Once returned, the pointer remains valid if the
-task moves to another core. Before scheduler startup, the lookup returns the
-library's global initialization state.
+target. Once a core has resumed a task, `__getreent` reads that task's
+control block from `TPIDRRO_EL0`, which the port keeps current for each core
+and which EL0 can read, and returns the structure inside it. A task's own
+control block does not change when the task moves to another core, so the
+lookup needs no interrupt mask, as for `xTaskGetCurrentTaskHandle` in the
+[SMP port](smp.md#port-operations-avoid-supervisor-calls-and-shared-lines).
+The structure's offset comes from `StaticTask_t`, and the kernel additions
+assert that it equals the control block's. Until the core resumes its first
+task the register's task field reads zero, and supervisor call 118 returns
+the library's global initialization state, which the primary core uses
+before scheduler startup.
 
 The supervisor-call handler preserves the caller's general registers except
 the return value. Its C helpers compile with general registers only, so the
