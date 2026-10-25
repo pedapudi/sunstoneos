@@ -791,7 +791,7 @@ target; the DSI panel is undecided. Use recorded audio for mimus meanwhile.
 
 | Board | Power and access facts | Continuation requirement |
 | --- | --- | --- |
-| Original, host port `3-1` | Corrected rank 7 did not return on 2026-10-24. Separate 5 V/3 A supply; removing USB alone can leave power applied. The 2026-10-18 all-core pass is historical evidence. | Remove every power source and reconnect in FEL. Then follow the cold DDR and narrower pre-scheduler plan at the top of this document; do not repeat the failed launch. |
+| Original, host port `3-1` | Corrected rank 7 did not return on 2026-10-24. USB-C is its only power source; unplugging the cable removes power. The 2026-10-18 all-core pass is historical evidence. | Remove every power source and reconnect in FEL. Then follow the cold DDR and narrower pre-scheduler plan at the top of this document; do not repeat the failed launch. |
 | Second, host port `3-3` | Latest recorded run `set5-r9-v6-usb/` completed the native USB exchange, quiesced and returned to a responsive ROM on 2026-10-24. USB is its only power source. | Continue eligible independent device work with current admission and frozen inputs. Reuse the passing thermal, kernel and USB evidence while its relevant inputs match. |
 
 Per-port permissions, locks, queues and failure records remain independent.
