@@ -640,6 +640,13 @@ ROWS = [
                       '500 ms remain before it, and a recovery inside the window would leave both words written until '
                       'the power removal. What SMC0 +0xb0 = 2 does is unknown; if it cut non-secure DRAM access the '
                       'run would not return. The progress record survives only on a return.'),
+    read_row('el3-security-switches', 18, 'The two security switches that every EL3 entry sets',
+             'Board evidence of the EL3 security setup (include/a733_el3_security.h): CCMU_SEC_SWITCH_REG and '
+             'PRCM_SEC_SWITCH_REG, written by cold-boot writes 14 and 13 and never restored. Each reads 0 after a '
+             'power removal and 7 once any image of the lifetime has entered EL1 through a SunstoneOS EL3 entry',
+             [word(0x02003f00, 'ccu', note='CCMU_SEC_SWITCH_REG: 7 after write 14'),
+              word(0x07010290, 'r_ccu', note='PRCM_SEC_SWITCH_REG: bits 2:0 set after write 13')],
+             'Both words are read and the 128 scratch bytes are restored and equal.'),
     # `admission` maps fields of the value prepare() returns to the values that
     # identify this row's build. None refuses the row: no owning package has
     # named those values yet.
