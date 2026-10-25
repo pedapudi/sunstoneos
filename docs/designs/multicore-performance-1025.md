@@ -7,8 +7,12 @@ clock and the cached eight-core platform. Each follows the reference
 implementation named in its section. The newlib lookup and the counter clock
 are on `work/mc-perf-a-1025` and can merge on their own. The lock
 bookkeeping, IRQ exit, wake placement and late-tick changes build on that
-branch and merge only after the board session in
-[the multicore performance runbook](../board-runbooks/multicore-performance-session.md).
+branch and merge only after a board session passes. The first session, on
+port 3-3 on 2026-10-25, ran cleanly but failed its cycle criterion because
+its measurement timed lock contention (below); they stay off `bringup` until
+the revised measurement of
+[the multicore performance runbook](../board-runbooks/multicore-performance-session.md)
+passes.
 Fair spinlocks, cache-line relayout, a different `-march` and an IRQ entry
 without the floating-point save also need a supervised board session and are
 not part of this design.
@@ -352,6 +356,63 @@ it ran:
 | USB observer | `1887b8c94d89b97d8a338831f14778482a1ba89f4c9b9c5c92b72fa91405c4f3` | `269ecc3deb5d28366ff25a262559d5a4f9cde97447c37dafa76f38c5a55385b4` |
 | Supervised observer | `5db6b0b64d0bc0b25274ccc2595563bed7ef8a7b7139dd33b1a8693466eb6410` | `8f3f3fa9c7ad5076374e3b90ab2dd4666fc5fd0bbb9e79dddc2d67878afc6e1b` |
 | Cached device image | `7eb74ccb183ce6baf2df88c3c91568563b38bc0451228c014e7599148bc703cd` | `585f19991e4020bce3f5b11a1fa5a09b2841a115e2186ce8b19cdbc328a38c33` |
+
+## First board session: clean runs, a cycle measurement dominated by lock contention
+
+The session ran on port 3-3 in one lifetime on 2026-10-25
+(`~/.cache/sunstoneos/evidence/board-session-20261025-10/port-3-3/`, records
+`mp1` to `mp6`, results in `mp*-results.json`). It alternated the control
+image `9d1ed411…` and the changed image `5d240e3e…`, three runs each, built
+on bringup `c4eadf9f` with the measurement phase.
+
+- All six runs completed, with 32 rounds, background progress and SGIs on
+  every core and no failure; all seven 91-word captures equal the clean one.
+- The counter skew between core 0 and every other core was 3 to 8 ticks in
+  each direction, far inside the 2,400-tick bound of the lock-free counter
+  clock.
+- The forced late tick behaved as predicted: the control took 5 tick IRQs for
+  5 kernel ticks, and the changed image 2 tick IRQs for 5 kernel ticks.
+- The cycle criterion failed. In the three pairs of runs the changed image was
+  lower on 6, 5 and 6 of the 8 cores.
+
+Cycles per critical-section pair, from the least of 16 samples of 64 pairs:
+
+| Core | Type | Control runs 1, 3, 5 | Changed runs 2, 4, 6 | Median change |
+| --- | --- | --- | --- | --- |
+| 0 | A55 | 7,595, 5,066, 4,998 | 4,706, 4,927, 4,457 | −7% |
+| 1 | A55 | 5,772, 3,864, 3,525 | 3,407, 3,407, 3,568 | −12% |
+| 2 | A55 | 5,609, 2,450, 2,977 | 2,710, 3,042, 1,962 | −9% |
+| 3 | A55 | 6,160, 3,191, 1,778 | 2,640, 3,422, 2,176 | −17% |
+| 4 | A55 | 6,280, 2,705, 3,121 | 3,177, 1,104, 1,753 | −44% |
+| 5 | A55 | 7,488, 4,579, 4,380 | 3,315, 2,804, 3,297 | −28% |
+| 6 | A76 | 1,996, 7,795, 7,870 | 5,076, 3,078, 2,256 | −61% |
+| 7 | A76 | 1,996, 9,056, 10,014 | 9,204, 9,544, 9,056 | +2% |
+
+These figures measure lock contention rather than barrier cost:
+
+- All eight measurement tasks timed their pairs at the same time, and every
+  pair takes the same two kernel locks. The least of 16 samples cannot remove
+  that, because the other cores were in their own loops for nearly every
+  sample.
+- One core running identical code varied up to five times between runs of
+  the same image: core 7 took 1,996 cycles per pair in run 1 and 9,056 and
+  10,014 in runs 3 and 5. In run 1 both A76 cores read 1,996 cycles, as if
+  they finished before the A55 cores began to contend; in runs 3 and 5 they
+  were the slowest cores.
+- A pair cost 1,104 to 10,014 cycles. The 22 removed `DSB SY` per pair, at
+  10 to 40 cycles each, account for 220 to 880 cycles, well below the
+  differences between runs of one image.
+
+The SGI timing was also wrong. It read 221 cycles on both A76 cores in every
+run of both images, too little for an IRQ entry, context switch and exception
+return, because the region ended once the supervisor call had sent the SGI
+and before the interrupt arrived.
+
+The revised measurement in the runbook times one core at a time while the
+other measurement tasks wait in WFE, takes 32 samples of 64 pairs per core
+and records each core's median and its 95% confidence interval, and ends the
+SGI timing when the core's handler has counted the SGI. It predicts a saving
+of 220 to 880 cycles per pair, 10 to 40 cycles per removed `DSB SY`.
 
 ## Board evidence still needed
 
