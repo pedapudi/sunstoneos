@@ -331,20 +331,27 @@ same check fails identically on the base image, and the
 [handoff](../handoff.md) already lists these checks as failing on current
 images.
 
-The integration gate `sd-uhs-1025-5213c6ef` passed on the clean tree at
-`5213c6ef`: the storage-maintenance, board, mimus-native, GPU render, HDMI,
+The integration gate `sd-uhs-1025-b4bc04d0` passed on the clean tree at
+`b4bc04d0`: the storage-maintenance, board, mimus-native, GPU render, HDMI,
 camera and storage-probe images, the supervised OS image and the check index.
-Evidence is under `~/.cache/sunstoneos/build/gate-sd-uhs-1025-5213c6ef/`.
+Evidence is under `~/.cache/sunstoneos/build/gate-sd-uhs-1025-b4bc04d0/`.
 
-Images built from clean archives of `3c17aeca` and `5213c6ef` at one shared
+Images built from clean archives of `3c17aeca` and `b4bc04d0` at one shared
 path differ as follows:
 
 | Image | Change |
 | --- | --- |
-| Read-only SD service (`sunstone-a733-storage-read`) | `.text` +7,248 B, `.rodata` +296 B, `.bss` +192 B: the UHS-I core and platform functions, the filters and the record |
+| Read-only SD service (`sunstone-a733-storage-read`) | `.text` +7,380 B, `.rodata` +296 B, `.bss` +192 B: the UHS-I core and platform functions, the filters and the record |
 | Storage maintenance | `.text` +6,144 B, `.rodata` +296 B, `.bss` +128 B: the same core and platform code |
-| Stage-2 slot loader (`a733-stage2`) | `.text` +5,392 B, `.bss` +128 B: the core's UHS-I code, unreachable at its profile 0; code now 29,576 of the 32,768 B the link script allows |
+| Stage-2 slot loader (`a733-stage2`) | `.text` +152 B and `.bss` +128 B with `SUNXI_MMC_NO_UHS`: larger `protocol`, `command_step` and `sunxi_mmc_init` from the shared structure and the high-speed refactor; no UHS-I function remains |
 | Board, mimus-native, GPU render, HDMI, camera, supervised and resident OS | Only the 32-byte build identity in `.rodata`; `.text` identical, because their links discard the MMC code |
 
-Evidence: `~/.cache/sunstoneos/evidence/sd-uhs-20261025/`, with the image
-comparison in `image-comparison/` and the host checks beside it.
+The standalone single-core SD and eMMC read projects fail to link on both
+revisions in the board application's TinyUSB sources, as the handoff records.
+Their storage objects compile on both; against the base, the eMMC build's
+`native.c` grows from 7,324 to 7,436 B and its `sunxi_mmc.c` from 11,758 to
+17,248 B, and the single-core SD build's `native.c` from 7,348 to 7,704 B.
+
+Evidence: `~/.cache/sunstoneos/evidence/sd-uhs-20261025/`, with the host
+checks, the image comparison and the standalone objects of the reviewed
+revision in `review-fixes/`.
