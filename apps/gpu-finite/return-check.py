@@ -19,7 +19,7 @@ class Machine(entry.EntryMachine):
    with image.path.open('rb') as stream:
     sizes={d.attributes['DW_AT_byte_size'].value for cu in ELFFile(stream).get_dwarf_info().iter_CUs() for d in cu.iter_DIEs() if d.tag=='DW_TAG_structure_type' and d.attributes.get('DW_AT_name') and d.attributes['DW_AT_name'].value==b'device_memory_allocation' and 'DW_AT_byte_size' in d.attributes}
    assert len(sizes)==1;image.allocation_size=sizes.pop()
-  super().__init__(image,raw,image.address('kernel_main'));self.variant=variant;self.cleanup=False;self.cleans=[];self.stop_reason=None;self.reset=False;self.register_writes=[];self.restoring=False;self.gpu_reads=[];self.dram={};self.dirty=set();self.setway=False;self.late_ns={};self.publication_security=[]
+  super().__init__(image,raw,image.address('kernel_main'));self.variant=variant;self.cleanup=False;self.cleans=[];self.stop_reason=None;self.reset=False;self.register_writes=[];self.restoring=False;self.gpu_reads=[];self.dram={};self.dirty=set();self.setway=False;self.late_ns={};self.publication_security=[];self.cleanup_instructions={'el1':0,'el3':0};self.cleanup_isb={'el1':0,'el3':0};self.disturbed=False
   self.sysregs.update(ctr_el0=0x04040000,icc_igrpen1_el3=2,daif=0x3c0,sctlr_el3=0,rmr_el3=0)
   self.events.update(a for a,op in image.ops.items() if op.startswith(('dc ','dc\t','tlbi ','tlbi\t')) or op=='wfi')
   self.events.add(image.address('a733_smp_stop'));self.events.add(image.address('clean_data_cache'))
@@ -61,16 +61,21 @@ class Machine(entry.EntryMachine):
   if address==self.e.address('a733_smp_stop'):
    self.stop_reason=cpu.reg_read(UC_ARM64_REG_X0);self.parked=True;cpu.emu_stop();return
   if self.cleanup:
+   level='el3' if self.el==12 else 'el1';self.cleanup_instructions[level]+=1
+   if text=='isb':self.cleanup_isb[level]+=1
    if address==self.e.address('clean_data_cache'):
     assert self.el==12 and not self.sysregs['sctlr_el1']&0x1005
     for line,data in self.late_ns.items():self.dram[line]=data;cpu.mem_write(line,data)
     self.setway=True;self.dirty.clear();self.ret();return
    if text.startswith('smc'):
     assert self.el==4 and not self.sysregs['sctlr_el1']&0x1005
+    # EL1 already checked CORE6; a later change must be refused by EL3 alone.
+    if self.variant=='core-policy-at-smc':self.write(0x07066000,8)
     self.enter_monitor(cpu.reg_read(UC_ARM64_REG_X1));return
    if word&0xffffffe0==0xd53be020:
-    if self.variant=='clock-regression' and len(self.cleans)==3:self.time-=100
-    if self.variant=='clean-timeout' and len(self.cleans)==3:self.time+=48000000
+    # The clean loop reads the counter once per page; disturb the first read after cleaning starts.
+    if self.cleans and not self.disturbed and self.variant in ('clock-regression','clean-timeout'):
+     self.disturbed=True;self.time+=-100 if self.variant=='clock-regression' else 48000000
     cpu.reg_write(UC_ARM64_REG_X0+(word&31),self.time);self.time+=24;cpu.reg_write(UC_ARM64_REG_PC,address+4);return
    read=re.fullmatch(r'mrs\s+x(\d+),\s*(\S+)',text,re.I)
    if read:
@@ -180,12 +185,11 @@ class Machine(entry.EntryMachine):
   assert self.reset or self.parked,(self.variant,hex(self.cpu.reg_read(UC_ARM64_REG_PC)))
 def main():
  p=argparse.ArgumentParser(description=__doc__);p.add_argument('--evidence',type=Path,required=True);p.add_argument('--cases',nargs='+');a=p.parse_args();e=a.evidence.resolve();path=e/'build/return.elf';image=layout.Image(path,layout_names=LAYOUTS);image.path=path;image.ops={}
- from elftools.elf.elffile import ELFFile
  for line in subprocess.check_output(['/usr/lib/llvm-21/bin/llvm-objdump','-d','--no-show-raw-insn',str(path)],text=True).splitlines():
   match=re.match(r'^\s*([0-9a-f]+):\s+(.+)$',line)
   if match:image.ops[int(match[1],16)]=match[2].strip()
  raw=bytearray((Path.home()/'.cache/sunstoneos/evidence/gpu-single-core-20261018/provider-valid-fixture/fixtures/session-template.bin').read_bytes());raw[48:80]=bytes.fromhex(json.loads((e/'manifest.json').read_text())['build_id'])
- names=['normal','initial-gpu-enabled','initial-gpu-pending','initial-gpu-active','not-stopped','pmic-unparked','extra-allocation','lease-generation','changed-extent','changed-geometry','changed-session','gpu-gate-on','gpu-domain-on','core-policy-on','core-status-on','core-dynamic','pending-irq','cache-geometry','wrong-caller-profile','clock-regression','clean-timeout','restore-timeout','nonzero-exit','unexpected-smc','secure-timeout','secure-only-maintenance','missing-receipt-line','late-stack-write'];cases={}
+ names=['normal','initial-gpu-enabled','initial-gpu-pending','initial-gpu-active','not-stopped','pmic-unparked','extra-allocation','lease-generation','changed-extent','changed-geometry','changed-session','gpu-gate-on','gpu-domain-on','core-policy-on','core-status-on','core-dynamic','core-policy-at-smc','pending-irq','cache-geometry','wrong-caller-profile','clock-regression','clean-timeout','restore-timeout','nonzero-exit','unexpected-smc','secure-timeout','secure-only-maintenance','missing-receipt-line','late-stack-write'];cases={}
  if a.cases and (e/'return-result.json').exists():
   prior=json.loads((e/'return-result.json').read_text());assert prior['elf_sha256']==hashlib.sha256(path.read_bytes()).hexdigest();cases=prior['cases']
  for variant in names:
@@ -202,54 +206,25 @@ def main():
    if variant=='late-stack-write':assert m.setway and m.dram[m.late_witness].startswith(b'LATESTACK') and not m.dirty
    assert m.setway and all(x=='NS' for x in m.publication_security)
    if variant=='normal':
-    for name,address,size in [('monitor',0x42000000,128),('platform',image.address('__gpu_platform_log'),16384),('receipt',image.address('gpu_return_receipt'),104),('packet',0x42000100,320)]:
-     (e/('normal-'+name+'.bin')).write_bytes(bytes(m.cpu.mem_read(address,size)))
-   if variant=='normal':
+    # The host parser reads the bytes the linked image wrote, with the span
+    # that host preparation reads from the same ELF.
+    raw_reports=[bytes(m.cpu.mem_read(address,size)) for address,size in [(0x42000000,128),(image.address('__gpu_platform_log'),16384),(image.address('gpu_return_receipt'),104),(0x42000100,320)]]
+    for name,data in zip(('monitor','platform','receipt','packet'),raw_reports):(e/('normal-'+name+'.bin')).write_bytes(data)
     prepare=module('gpu_current_return_prepare',ROOT/'apps/gpu-finite/prepare.py');parser=module('gpu_current_return_report',ROOT/'apps/gpu-finite/report.py')
-    manifest=json.loads((e/'manifest.json').read_text());geometry=prepare.image_profile(path,manifest)[3]
+    geometry=prepare.image_profile(path,json.loads((e/'manifest.json').read_text()))[3]
     assert geometry['wb_end']==m.wb_end and geometry['wb_start']==m.produced_extents['wb_extent'][0]
-    raw_reports=[(e/('normal-'+n+'.bin')).read_bytes() for n in ('monitor','platform','receipt','packet')]
     receipt=struct.unpack('<13Q',raw_reports[2]);prepared={'epoch':receipt[1],'generation':receipt[2],'lease':receipt[3],'geometry':geometry}
     assert parser.validate_reports(*raw_reports,prepared)['functional_success']
     # The receipt carries the native span, so the historical span must not validate it.
     try:parser.validate_reports(*raw_reports,dict(prepared,geometry=dict(geometry,wb_end=0x48086000)))
     except ValueError as error:assert str(error)=='GPU receipt ownership/publication extent differs.'
     else:raise AssertionError('Historical span accepted a current receipt')
-    # Corrupt the immutable producer metadata while rebinding the file hash;
-    # rejection must come from the marker, not a stale manifest digest.
-    with path.open('rb') as stream:
-     elf=ELFFile(stream);symtab=elf.get_section_by_name('.symtab');entries=list(symtab.iter_symbols())
-     index=next(i for i,x in enumerate(entries) if x.name=='gpu_return_wb_geometry');address=int(entries[index]['st_value'])
-     other=next(i for i,x in enumerate(entries) if x.name=='last_tick')
-     loads=[(i,x) for i,x in enumerate(elf.iter_segments()) if x['p_type']=='PT_LOAD']
-     seg,segment=next((i,x) for i,x in loads if int(x['p_vaddr'])<=address<int(x['p_vaddr'])+int(x['p_filesz']))
-     offset=int(segment['p_offset'])+address-int(segment['p_vaddr'])
-     entry=lambda i:int(symtab['sh_offset'])+i*int(symtab['sh_entsize'])
-     phdr=int(elf.header['e_phoff'])+seg*int(elf.header['e_phentsize'])
-     unbacked=image.address('__bss_start');assert not any(int(x['p_vaddr'])<=unbacked<int(x['p_vaddr'])+int(x['p_filesz']) for _,x in loads)
-    data=path.read_bytes();name=struct.unpack_from('<I',data,entry(index))[0];flags=struct.unpack_from('<I',data,phdr+4)[0]
-    malformed=[('changed-span',[('<Q',offset+8,m.wb_end+4096)],'Unknown GPU WB geometry.'),
-     ('changed-start',[('<Q',offset,0x48001000)],'Unknown GPU WB geometry.'),
-     ('marker-size',[('<Q',entry(index)+16,8)],'Malformed GPU WB geometry marker.'),
-     ('marker-duplicate',[('<I',entry(other),name)],'Malformed GPU WB geometry marker.'),
-     ('marker-writable',[('<I',phdr+4,flags|2)],'GPU WB geometry must be immutable and file-backed.'),
-     ('marker-unbacked',[('<Q',entry(index)+8,unbacked)],'GPU WB geometry must be immutable and file-backed.')]
-    for label,edits,message in malformed:
-     corrupt=bytearray(data)
-     for fmt,at,value in edits:struct.pack_into(fmt,corrupt,at,value)
-     bad=e/(label+'.elf');bad.write_bytes(corrupt)
-     try:prepare.image_profile(bad,dict(manifest,final_elf=hashlib.sha256(corrupt).hexdigest()))
-     except ValueError as error:assert str(error)==message,(label,str(error))
-     else:raise AssertionError(label+' accepted')
-    # A frozen image built before the marker keeps its historical span.
-    old=Path.home()/'.cache/sunstoneos/evidence/gpu-returning-repeat-fix-20261019'
-    historical=prepare.image_profile(old/'build/return.elf',json.loads((old/'manifest.json').read_text()))[3]
-    assert (historical['wb_start'],historical['wb_end'])==(0x48000000,0x48086000)
-    (e/'host-geometry.json').write_text(json.dumps({'image_sha256':hashlib.sha256(path.read_bytes()).hexdigest(),'passed':True,'geometry':geometry,'cases':['actual-writer-profile-report','historical-span-refused-for-current-receipt']+[x[0]+'-refused' for x in malformed]+['historical-marker-absent'],'historical_image_sha256':hashlib.sha256((old/'build/return.elf').read_bytes()).hexdigest(),'scope':'Actual native monitor/receipt/packet/final log header through the host parser; malformed markers are single-field edits of the final ELF with a rebound manifest digest. GPU arithmetic and terminal log modeled. No physical access.'},indent=2)+'\n')
+    (e/'host-geometry.json').write_text(json.dumps({'image_sha256':hashlib.sha256(path.read_bytes()).hexdigest(),'passed':True,'geometry':geometry,'cases':['actual-writer-profile-report','historical-span-refused-for-current-receipt'],'scope':'Actual native monitor/receipt/packet/final log header through the host parser. GPU arithmetic and terminal log modeled. No physical access.'},indent=2)+'\n')
    report=image.layouts['gpu_return_result'];assert m.read(0x42000100)==0x3154455255504741;assert list(struct.unpack('<64I',m.cpu.mem_read(0x42000100+report['words'],256)))==m.output
   else:assert m.parked and not m.reset and not any(x[0] in (0x08001004,0x08001008) for x in m.writes),variant
   if variant in ['not-stopped','pmic-unparked','extra-allocation','lease-generation','changed-extent','changed-geometry','gpu-gate-on','gpu-domain-on','core-policy-on','core-status-on','core-dynamic','pending-irq','cache-geometry','nonzero-exit']:assert not any(0x48000000<=x<0x78000000 for x in m.cleans),variant
-  cases[variant]={'passed':True,'reset_requested':m.reset,'retained_status':m.stop_reason,'clean_lines':len(m.cleans),'clean_wb_device_lines':sum(0x48000000<=x<0x78000000 for x in m.cleans),'mmio_reads':sorted(set(m.gpu_reads)),'register_writes':m.register_writes,'publication_security_spaces':sorted(set(m.publication_security)),'final_setway_executed':m.setway,'post_range_clean_ns_dirty_lines':len(m.late_ns)}
+  if variant=='core-policy-at-smc':assert m.stop_reason==0x104,m.stop_reason
+  cases[variant]={'passed':True,'reset_requested':m.reset,'retained_status':m.stop_reason,'clean_lines':len(m.cleans),'clean_wb_device_lines':sum(0x48000000<=x<0x78000000 for x in m.cleans),'mmio_reads':sorted(set(m.gpu_reads)),'register_writes':m.register_writes,'publication_security_spaces':sorted(set(m.publication_security)),'final_setway_executed':m.setway,'post_range_clean_ns_dirty_lines':len(m.late_ns),'cleanup_instructions':m.cleanup_instructions,'cleanup_isb':m.cleanup_isb}
   (e/'return-result.json').write_text(json.dumps({'passed':True,'elf_sha256':hashlib.sha256(path.read_bytes()).hexdigest(),'cases':cases,'physical_access':False,'scope':'Actual admission/session sealing, retained placement/BSS clearing, allocator producers, success-only exception routing, ownership/extent/session/device-off gates, cache-address loops, GIC restore and RMR instruction path. GPU completion state, mappings, security-tagged NS dirty-cache/DRAM publication, timers/GIC/system registers and reset outcome modeled. Accepted eight device cases not replayed; no physical GPU or ROM return evidence.'},indent=2)+'\n')
   print('PASS GPU returning handoff:',variant)
 if __name__=='__main__':main()

@@ -123,6 +123,6 @@ for case in (('retire', 'close-busy', 'critical-during-close') if a.profile == '
         assert get(field(gpu, 'a733_gpu_backend', 'identity_step')) == 0
         assert get(field(gpu, 'a733_gpu_backend', 'error')) == (7 if case == 'power-failed' else 0)
     results.append(dict(case=case, passed=True, model=state))
-    a.output.write_text(json.dumps(dict(image_sha256=identity, profile=a.profile, cases=results, physical_access=False,
-        scope='Actual linked caller/backend boundaries; service replies, platform progress, lifetime and scheduler modeled. Device MMIO is unmapped and forbidden. No firmware or numerical execution.'), indent=2) + '\n')
+a.output.write_text(json.dumps(dict(passed=True, image_sha256=identity, profile=a.profile, cases=results, physical_access=False,
+    scope='Actual linked caller/backend boundaries; service replies, platform progress, lifetime and scheduler modeled. Device MMIO is unmapped and forbidden. No firmware or numerical execution.'), indent=2) + '\n')
 print(f'PASS {len(results)} focused {a.profile} full-image boundary cases')

@@ -17,19 +17,22 @@ def save(path,value):path.write_text(json.dumps(value,indent=2)+'\n')
 def image_profile(path,manifest):
  data=path.read_bytes();parts,address,build=original.image_parts(path)
  require(manifest.get('target')=='sunstone-a733-gpu-finite-returning' and manifest.get('execution_profile')==PROFILE and manifest.get('workload')=='fixed-arithmetic-repeat-return' and manifest.get('final_elf')==sha(data) and manifest.get('build_id')==build.hex(),'Distinct returning GPU image required.')
- elf=ELFFile(io.BytesIO(data));symbols={s.name:(int(s['st_value']),int(s['st_size'])) for s in elf.get_section_by_name('.symtab').iter_symbols()}
+ elf=ELFFile(io.BytesIO(data));symbols={};markers=[]
+ for s in elf.get_section_by_name('.symtab').iter_symbols():
+  symbols[s.name]=(int(s['st_value']),int(s['st_size']))
+  if s.name=='gpu_return_wb_geometry':markers.append(symbols[s.name])
  def at(n):require(n in symbols,'Missing GPU return symbol: '+n);return symbols[n][0]
  for n in ('gpu_return_finish','gpu_return_reset','gpu_finite_smc','gpu_finite_return_ready','gpu_return_allocations','gpu_return_device_quiet'):require(at(n),'Missing returning implementation.')
  require(at('sd_single_core_entry')==0x41000000 and not any(n in symbols for n in ('a733_cpu_start_init','a733_cpu_primary_continue','a733_smp_pre_scheduler','FreeRTOS_SGI_Handler','gpu_transport_only_marker')),'Wrong GPU startup/workload.')
  lo,hi=at('__gpu_private_start'),(at('__gpu_private_end')+63)&~63;receipt=at('gpu_return_receipt');log=at('__gpu_platform_log')
  require(lo==0x41200000 and lo<hi<=0x41f00000 and at('__gpu_retained_start')<=receipt<receipt+104<=at('__gpu_retained_end') and symbols['gpu_return_receipt'][1]==104 and lo<=log<log+16384<=hi,'GPU return layout differs.')
- # Historical frozen images have no marker. A present marker is never allowed
- # to fall back: it must be unique, immutable, file-backed and exactly known.
+ # Only images built before the typed write-back allocator lack the marker and
+ # use the historical span. Every typed image needs exactly one valid marker.
  wb=(0x48000000,0x48086000)
- markers=[s for s in elf.get_section_by_name('.symtab').iter_symbols() if s.name=='gpu_return_wb_geometry']
+ require(bool(markers)==('device_memory_pool_init_typed' in symbols),'GPU WB geometry marker does not match the allocator.')
  if markers:
-  require(len(markers)==1 and int(markers[0]['st_size'])==16,'Malformed GPU WB geometry marker.')
-  start=int(markers[0]['st_value'])
+  require(len(markers)==1 and markers[0][1]==16,'Malformed GPU WB geometry marker.')
+  start=markers[0][0]
   loads=[s for s in elf.iter_segments() if s['p_type']=='PT_LOAD' and int(s['p_vaddr'])<=start and start+16<=int(s['p_vaddr'])+int(s['p_filesz'])]
   require(len(loads)==1 and not int(loads[0]['p_flags'])&2,'GPU WB geometry must be immutable and file-backed.')
   offset=int(loads[0]['p_offset'])+start-int(loads[0]['p_vaddr']);wb=struct.unpack_from('<2Q',data,offset)
