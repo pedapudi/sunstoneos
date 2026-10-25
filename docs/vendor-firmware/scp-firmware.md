@@ -35,7 +35,7 @@ The register names below come from the A733 User Manual V1.00 (cached as
 `~/.cache/sunstoneos/sources/camera-research/A733_User_Manual_V1.00.txt`).
 Names in quotation marks are the firmware's own log strings.
 
-## Terms
+## Definitions
 
 - **CPUS domain.** The always-on subsystem at `0x07000000`: E902, PRCM (also
   called R_CCU), RTC, S_TIMER, S_UART, S_TWI, S_MBOX and the PCK-600 power
@@ -73,7 +73,8 @@ outside Git under `~/.cache/sunstoneos/evidence/vendor-firmware-20261025/scp/`
 
 | Property | Value | Label and evidence |
 | --- | --- | --- |
-| File | `scp.fex`, 105,912 bytes, SHA-256 `07e6b97628101963e7944e012948c4bdf721f914bad347acd7dfbde89db42749` | observed; source in the [README](README.md) |
+| Source | `https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/packages/pack-uboot/sun60iw2/bin/scp.fex` (orangepi-build revision `a95129bf30ea11886cc35f08ebb3e69695a26656`) | observed; fetching is described in the [README](README.md) |
+| File | `scp.fex`, 105,912 bytes, SHA-256 `07e6b97628101963e7944e012948c4bdf721f914bad347acd7dfbde89db42749` | observed |
 | Core | T-Head E902 (A733 User Manual section 5.2, "Single E902, up to 200 MHz") | inferred from the manual and the start address that BL31 writes |
 | Instruction set | RV32EMC with Zicsr: only registers x0–x15 occur, the trap entry saves the ten RV32E caller-saved registers, frames are 4-byte aligned, `mul`/`divu`/`remu` and compressed instructions occur | observed, `07e6b976+0x0`–`0x40`, `+0xc2`–`+0xfe` |
 | Custom CSRs | Reads of `0x7c0` and `0x7e1` (T-Head machine CSRs); `0x307` written as `mtvt` | observed, `07e6b976+0x1d4`–`+0x1f0`, `+0x4c` |
@@ -81,25 +82,6 @@ outside Git under `~/.cache/sunstoneos/evidence/vendor-firmware-20261025/scp/`
 | Physical location | SRAM A2 offset `0x4000` (CPUX address `0x00044000`); the E902 maps SRAM A2 at `0x40000000` | inferred from the manual's E902 memory map; BL31 copies `0x28000` bytes from DRAM `0x48100000` to `0x44000` (`monitor.fex@0xaeb0`–`0xaebc`) |
 | Version string | Empty: the 51 bytes copied into the start-up message and printed as "ar100 firmware version" begin with zero | observed, `07e6b976+0xc67c` |
 | Origin | Derived from Allwinner's "arisc"/AR100 firmware and built for the E902; the log calls the application processors "AC327" | inferred from strings |
-
-### License and terms
-
-No license or term found applies specifically to `scp.fex`, and none forbids
-disassembly or reverse engineering. The search on 2026-10-25 covered:
-
-- **The binary.** It contains no copyright, license or usage string (search
-  of all printable strings).
-- **The directory.** `external/packages/pack-uboot/` in orangepi-build
-  `a95129bf` holds binaries, device trees and configuration files, and no
-  license, notice or README file (repository tree listing,
-  `~/.cache/sunstoneos/sources/orangepi-build-tree.txt`).
-- **The repository.** Its root `LICENSE` is the GNU GPL version 2; neither it
-  nor the root `README.md` mentions binary blobs. The file history on GitHub
-  shows commit `b90483b` "Support Orange Pi 4 Pro", which states no terms.
-- **Allwinner.** No published Allwinner license for this firmware was found.
-  Secondhand reports describe Chinese-language terms for registering on
-  Allwinner's SDK download site; they do not govern this copy, which comes
-  from the Orange Pi repository, and their text was not available.
 
 Some function listings from the CPU reference comparison
 (`~/.cache/sunstoneos/evidence/reference-backsolve-20261025/cpu/vendor-power/scp/f_*.dis`)
@@ -483,6 +465,12 @@ Each item changes or extends a SunstoneOS record:
   provider's board run admitted the inherited APBS0/APBS1 routes
   (`pmic-provider-probe-20261018`). The firmware's cold start would have set
   APBS0 to source 3 (inferred).
+- **A board run confirmed the vendor GPU state that the GPU reference
+  comparison derived.** With that state applied, CORE6 reached ON and the GPU
+  core identity read `36.56.104.183` (confirmed on a board,
+  `~/.cache/sunstoneos/evidence/board-session-20261025-4/port-3-1/s10-gvs-run/`).
+  The firmware's cold start touches no GPU state, which is consistent with
+  that result: the state that produced the identity read needs no SCP action.
 - **The firmware gives the system counter continuity across suspend.** It
   rewrites `CNT_CTRL` from the RTC. SunstoneOS images rely on a continuous
   24 MHz counter ([a733-smp.md](../a733-smp.md)); a SunstoneOS suspend design
