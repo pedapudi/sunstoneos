@@ -629,7 +629,8 @@
  "a733-monitor-are.py": {
   "cache_areas": [],
   "docs": [
-   "docs/a733-kernel.md"
+   "docs/a733-kernel.md",
+   "docs/designs/gpu-vendor-default-measurements.md"
   ],
   "library": false,
   "pure_host": false,
