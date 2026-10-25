@@ -171,7 +171,9 @@ records still hold the raw values.
 Other snapshot words also mix configuration with status that hardware can
 change: GICR_PWRR's group-power status bits (2 and 3), GICR_WAKER's
 ChildrenAsleep, and GICR_ISPENDR0, which shows any asserted level PPI.
-None has differed in any board record so far; they remain exact.
+None has differed in any board record so far. The comparisons now ignore
+them as well ([multicore correctness](multicore-correctness-1025.md),
+item 1).
 
 The instruction model injects RWP at the second GICR_CTLR read after the
 priority write (`restore-rwp-late`, on CPU0 and on core 3). The corrected
@@ -446,11 +448,11 @@ returning bundles fail their source checks against the merged tree. Each
 frozen bundle still runs from its own source copy; a refreeze of the rank 7
 and rank 8 bundles is planned at merge.
 
-Follow-up work, deferred to a later change: the replacement-word
-computation for the deadline patches exists in both the builder and
-`tools/secondary-identity-host.py`, and the record address, magic number
-and deadline constant are repeated in the assembly, the builder, the host
-module and the model. Both should move to one definition.
+The builder's `patch_plan` defines the replacement words of every
+profile, and the host module reapplies that plan to the frozen inputs. The
+record address, magic number and deadline constant are defined once, in
+`boot/a733/secondary-local-probe.h`
+([multicore correctness](multicore-correctness-1025.md), item 4).
 
 ## Budgets and measurements
 

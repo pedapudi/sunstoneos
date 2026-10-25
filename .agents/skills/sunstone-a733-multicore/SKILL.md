@@ -146,7 +146,10 @@ converting deadlines. The cached secondary entry writes CNTFRQ before calling C;
 a model must execute that write rather than reuse the ROM's initial declaration.
 Keep raw ticks and microseconds distinct. Model read-only status bits separately
 from writable controls, including GICR_WAKER.ChildrenAsleep; a write value is not
-the resulting hardware status.
+the resulting hardware status. Native code likewise waits for write-pending bits
+(GICR_CTLR.RWP, GICD_CTLR.RWP) with a bound and never compares them: the board has
+read GICR_CTLR.RWP set after a completed wait. Snapshot equalities apply the
+per-field status masks in `boot/a733/secondary-local-probe.h`.
 
 Before extending execution, list newly attempted writes and their restoration
 requirements. Capture original state before the first write. Restore a target's
