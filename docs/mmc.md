@@ -87,7 +87,8 @@ four-bit default-speed signaling at a configured rate no greater than the CSD
 `TRAN_SPEED` limit or 25 MHz. Profile two requires positive high-speed support
 and selection, using four-bit 50 MHz signaling at the existing 3.3 V.
 Unsupported capabilities retain a clear refusal. No uncertain command permits
-fallback, another CMD0, voltage switching or a media write.
+fallback, another CMD0 or a media write. Profile three, UHS-I SDR104, is
+described [below](#uhs-i-sdr104-switches-the-pf-bank-to-18-v-and-tunes-the-sample-delay).
 
 After normal identification and transfer-state confirmation, profiles one and
 two issue CMD55 with the assigned RCA and read the eight-byte SCR through
@@ -284,34 +285,53 @@ buffer to `sunxi_mmc_read`, polls until DONE or FAULT and copies data out only
 after success. A fault keeps that buffer borrowed and stops the port. The core
 itself is unchanged and has no filesystem knowledge.
 
-## UHS-I modes need a signaling-voltage writer and board qualification
+## UHS-I SDR104 switches the PF bank to 1.8 V and tunes the sample delay
 
-The board's device tree (`sun60i-a733-orangepi-zero3w.dts` at the reference
-kernel revision listed under sources and evidence) enables SDR50, DDR50 and
-SDR104 on SDC0, with a 150 MHz limit. It names DC1SW2 as the card supply and the
-3.3 V signaling supply, and CLDO5 as the 1.8 V signaling supply. The SoC tree
-gives SDC0 a `mmc_1v8` pin state that sets PF0–PF5 to 1.8 V. The pinned Linux
-`sunxi-mmc.c` switches signaling by selecting that pin state in
-`sunxi_mmc_signal_voltage_switch`, and `sunxi_mmc_execute_tuning` sweeps sample
-delays with CMD19.
+Profile three requests 1.8 V signalling and runs the card in SDR104 at
+150 MHz. [The UHS-I design](designs/sd-uhs.md) derives the sequence from the
+SD physical layer specification, the pinned Linux MMC core and the board
+kernel's `sunxi-mmc`, pin-control and clock drivers, with file and line
+citations. It is implemented and host-checked; no board has run it.
 
-These modes are not implemented. The following conditions block them:
+The board has no 1.8 V card regulator. SDC0's pins are the PF bank, which the
+SoC powers from either `VCC-IO` (DC1SW2, 3.3 V) or `VCC18-PF` (CLDO5, 1.8 V).
+Bit 0 of `GPIO_POW_VAL_SET_CTL` (`0x02000070`) selects the supply, and
+`GPIO_POW_VAL` bits 11:10 report it. The card's VDD stays at 3.3 V.
 
-- Switching to 1.8 V writes the PF bank voltage setting. The same bank carries
-  the PF6 card-detect input and the UART0 and JTAG functions on PF0–PF5, and the
-  [platform binding](mmc-platform.md) excludes every bank-voltage writer.
-- After CMD11 the card keeps 1.8 V signaling until its supply is removed.
-  DC1SW2 also feeds the board's shared 3.3 V distribution, so a failed switch
-  can be recovered only by removing board power.
-- Tuning chooses a sample delay from CMD19 results on the physical bus. A host
-  model cannot establish a valid delay window.
-- No SD command has yet run on either board, so the existing default-speed and
-  high-speed profiles are themselves unqualified.
+After CMD8, the core asks the platform whether the switch is available. The
+platform offers it only in adaptive PF mode with sensed and selected 3.3 V and
+CLDO5 programmed to 1.8 V, and reports whether the PERI0_300M parent is
+stable. With the switch available, every ACMD41 carries S18R. A ready
+response with S18A leads to CMD11 before CMD2:
 
-Adding SDR50 or SDR104 requires physical qualification of the existing
-profiles, a reviewed bank-voltage writer that excludes the debug functions, a
-recovery procedure for a card left at 1.8 V and a tuning procedure validated on
-the board.
+1. CMD11 with the controller's voltage-switch flag; its R1 must be clean.
+2. At least 1 ms later, DAT3 must read low.
+3. The card clock stops through a voltage-switch update with DAT0 masked.
+4. The platform writes the selector once, then polls until PF reports 1.8 V,
+   within 10 ms.
+5. After 10 ms the clock restarts the same way. Within a further 1–11 ms,
+   DAT3 must read high and the switch-done bit, `RINTSTS` bit 10, must be set.
+
+After ACMD6, CMD6 checks and selects SDR104. The module clock becomes
+PERI0_300M / 1 (150 MHz card clock), or PERI0_400M / 2 (100 MHz) without that
+parent. The controller moves to the old sample mode with 180-degree drive and
+a 512-byte read threshold. It then sweeps the 64 sample delays with CMD19: a
+delay passes after 20 matching tuning blocks, a failed block resets the FIFO
+and state machines, and the core selects the midpoint of the first longest
+passing run of at least 12 delays.
+
+A failure before CMD11 leaves high speed at 3.3 V. Without SDR104 or a
+usable window, the card runs SDR25 at 50 MHz and 1.8 V. Failures between
+CMD11 and the restarted clock are terminal and retained, because the
+specification then requires a card power cycle; whole-board power removal is
+the only card power cycle here. The card keeps 1.8 V signalling until it loses
+power, so the boot ROM and every later SD lifetime need that power removal
+first. The card record reports the outcome, the capability bits, the passing
+window and the chosen delay.
+
+`checks/sunxi-mmc-uhs.py` pins the references, asserts the cited facts and
+runs the core and platform models under AddressSanitizer and
+UndefinedBehaviorSanitizer.
 
 ## Remaining storage coverage
 
@@ -322,12 +342,12 @@ identification/read attempt. Only the read-only SD service permits its explicit
 first CMD0 policy in place of cold card history. SDC0 card voltage and PF6 configuration must be observed. SDC2 population and the existing
 CMD1 timeout require new evidence before another physical attempt.
 
-SD v1 identification, SDUC, eight-bit buses, UHS rates and their voltage
-switching and tuning, DMA, interrupts, multiple-block write/erase modes, eMMC boot/alternate partitions,
+SD v1 identification, SDUC, eight-bit buses, SDR50 and DDR50, DMA,
+interrupts, multiple-block write/erase modes, eMMC boot/alternate partitions,
 4 KiB sectors, command queuing, hotplug/recovery and power management remain
-outside the implemented profile. Four-bit default-speed and high-speed SD reads
-are implemented but physically unqualified, as is the update-bound writer at
-every profile. UFS remains tracked separately in
+outside the implemented profile. Four-bit default-speed, high-speed and UHS-I
+SDR104 SD reads are implemented but physically unqualified, as is the
+update-bound writer at every profile. UFS remains tracked separately in
 [storage.md](storage.md). Completing this component does not complete board
 storage support or the full OS goal. Performance qualification follows
 functional hardware coverage under the [validation policy](validation.md).

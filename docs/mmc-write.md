@@ -141,7 +141,7 @@ checks, executed write/read cases and compiler-derived dependencies.
 The successful write/read cases were reused after that fixture-only correction.
 
 For the recorded native build, compiler stack reports give direct frames of
-864 bytes for core initialization and 672 bytes for platform initialization.
+992 bytes for core initialization and 672 bytes for platform initialization.
 In the clang-21 AArch64 -O2 build, the command step that polls status and moves
 FIFO data has a direct frame of 560 bytes; 512 of them hold the one-sector burst
 buffer. These exclude callees and callbacks; task stack admission must cover the full
