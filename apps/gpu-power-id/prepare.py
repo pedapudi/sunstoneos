@@ -48,15 +48,33 @@ SCHEMA = 'board-gpu-returning-bundle-v1'
 # The image each build reuses objects of, by its build record's identity.
 PROVIDER_READY = '3adfa4ad6ba386ce8d39f76646f540107c2a5d02ce42db6c1c35c90de68a75ed'
 FAILED_POWER_ID = 'fd3d5839f700b5e0f569b0ce722e186c33beba65512815b136d9c969a7341afe'
-CASES = {'provider-ready': 11, 'power-only': 11, 'identity': 13, 'wrapper-read': 7, 'probe-read': 13}
+CASES = {'provider-ready': 11, 'power-only': 11, 'identity': 13, 'wrapper-read': 7, 'probe-read': 13, 'vendor-clk': 7}
 # ON/OFF cycles of the client's normal run: the power-only variant powers
 # CORE6 on twice, so the second ON shows whether TOP5 OFF returned CORE6 to
 # its power-up state.
-CYCLES = {'power-only': 2, 'identity': 1, 'wrapper-read': 1, 'probe-read': 0}
+CYCLES = {'power-only': 2, 'identity': 1, 'wrapper-read': 1, 'probe-read': 0, 'vendor-clk': 0}
 # The host-check case that completes ON and OFF in each variant.
-NORMAL = {'power-only': 'normal', 'identity': 'normal', 'wrapper-read': 'wrapper-on', 'probe-read': 'pr-board'}
+NORMAL = {'power-only': 'normal', 'identity': 'normal', 'wrapper-read': 'wrapper-on', 'probe-read': 'pr-board', 'vendor-clk': 'vc-board'}
 # The only GPU-window addresses of the wrapper-read image, in read order.
 WRAPPER_WORDS = [0x01880104, 0x01880100, 0x01880018, 0x0188001c]
+# The vendor-clk image's reordered ON steps (on_steps in vendor-clk-power.c):
+# kind, bank, offset, mask, value. The CORE6 delay row is dropped and the GPU
+# bus reset (0xb24 bit16) is released before the bus gate (0xb24 bit0) and the
+# core clock (0xb20 bit31), as sunxi_enable_clks_wrap does.
+CORE, CCU = 2, 0
+VENDOR_CLK_ON_STEPS = [
+    (0, CCU, 0x05c0, 1 << 7, 1 << 7), (0, CCU, 0x05e0, 1 << 16, 1 << 16), (0, 1, 0x01ac, 1, 1),
+    (0, CCU, 0x0b20, 1 << 31, 0), (0, CCU, 0x0b24, (1 << 16) | 1, 0),
+    (3, CCU, 0, 0, 1), (4, CORE, 0, 0, 0), (5, CORE, 8, 0, 0),
+    (8, CORE, 0xfb0, 0, 0), (8, CORE, 0x14, 0, 1), (6, CORE, 0x20, 0, 0),
+    (1, CORE, 0x20, 0xffffffff, 0), (0, CORE, 0x20, 0xffffffff, 0), (9, CORE, 8, 0, 3),
+    (1, CORE, 0, 0xffffffff, 8), (0, CORE, 0, 0xffffffff, 8), (9, CORE, 8, 0, 4),
+    (1, CCU, 0x0b24, 0, 1 << 16), (0, CCU, 0x0b24, (1 << 16) | 1, 1 << 16),
+    (1, CCU, 0x0b24, 0, 1), (0, CCU, 0x0b24, (1 << 16) | 1, (1 << 16) | 1),
+    (1, CCU, 0x0b20, 0x8700000f, 0x0b000000), (0, CCU, 0x0b20, 0x8700000f, 0x03000000),
+    (1, CCU, 0x0b20, 0, (1 << 31) | (1 << 27)), (0, CCU, 0x0b20, 0x8700000f, 0x83000000),
+    (8, CORE, 0x14, 0, 5), (7, CORE, 8, 0xffffffff, 8)]
+# enum kind: CHECK0 UPDATE1 DELAY2 DOMAIN3 CORE_POLICY4 CORE_STATUS5 CORE_CONFIG6 POLL7 NOTE8 SETTLE9.
 # The probe-read image's access table: address, value, kind (0 read32, 1
 # write32, 2 write32 of the value read by the row named in value).
 PROBE_STEPS = [(0x01880014, 0, 0), (0x01880010, 0, 0), (0x0a0000b0, 0, 0), (0x01800024, 0, 0), (0x01800020, 0, 0),
@@ -232,6 +250,19 @@ def validate(row, output):
                 require('refused' in case or restored, 'A host-check case left a vendor write unrestored.')
                 require('a733_gpu_platform_off_begin' not in case['calls'], 'A host-check case powered the GPU OFF.')
             value['probe_steps'] = [[hex(a), hex(v), k] for a, v, k in PROBE_STEPS]
+        vclk = 'identity_words' in names
+        require(vclk == (variant == 'vendor-clk'), 'The image\'s vendor-clk client does not match its variant.')
+        if variant == 'vendor-clk':
+            steps = step_table(output / 'image.elf', 'on_steps')
+            require(steps == VENDOR_CLK_ON_STEPS, 'on_steps is not the vendor clock and reset order.')
+            require(not any(s[1] == BANK_CORE and s[2] in (0x170, 0x174, 0xc00, 0xc04, 0xc10) for s in steps),
+                    'The vendor-clk ON steps still write the CORE6 delay row.')
+            for case in checked['cases']:
+                reads = [[hex(a), 4] for a in (0x01800024, 0x01800020)]
+                require(case['gpu_reads'] == reads[:len(case['gpu_reads'])],
+                        'A host-check case read a GPU address other than the identity words in order.')
+                require('a733_gpu_platform_off_begin' not in case['calls'], 'A host-check case powered the GPU OFF.')
+            value['on_steps_order'] = 'vendor clock and reset; CORE6 delay row dropped'
         require(all(not case['gpu_writes'] for case in checked['cases']), 'A host-check case wrote the GPU window.')
         if variant == 'power-only':
             require(all(not case['gpu_reads'] for case in checked['cases']), 'A host-check case read the GPU window.')

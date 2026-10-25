@@ -941,7 +941,77 @@ A DMA-read probe would therefore make the first board run of DMA0 and its
 first device-register source in the same run as the unknown stall. No
 DMA-read variant was built.
 
-### Next localization: one access class per returning image
+### Localization folded into one returning variable
+
+A three-image scheme, one read class per returning image, was considered:
+wrapper `+0x14`/`+0x10`, then SMC0 `0x0a0000b0`, then the identity. Each
+image would end a lifetime, and each lifetime costs the user a reconnect,
+so the coordinator rejected it. The chosen step changes one variable, the
+clock and reset order, and reads only the identity, the one access that
+localizes the stall against the returning wrapper-read run.
+
+### The vendor-clk probe reorders the clock and reset
+
+The vendor-clk variant (`apps/gpu-power-id/vendor-clk.c`, build and check
+option `--vendor-clk`, bundle row 18) runs the power-only ON exactly as the
+returning wrapper-read run did (set `board-bundles-20261024-14`): the same
+CORE6 PWCR 0 and policy 8 writes, 400 MHz from PERI0, DCDC4 at 800 mV. It
+changes the clock and reset order to the vendor's and reads the identity.
+It is implemented and host-checked; it has not run on a board.
+
+The controller is a copy of the shared one, `vendor-clk-power.c`, compiled
+only for this variant in place of `a733_gpu_power.c`, so no other image
+changes. Its ON step table differs from the shared one in two places,
+`apps/gpu-power-id/prepare.py` pins the exact table:
+
+- **Clock and reset order.** `sunxi_enable_clks_wrap`
+  (`sunxi_platform.c:167–223`) deasserts the GPU bus reset (`0xb24` bit 16)
+  first, then opens the bus gate (`0xb24` bit 0), then the core clock
+  (`0xb20` bit 31) and the update bit. Our returning sequence selected and
+  gated the core clock on, opened the bus gate, waited 1 µs and released
+  the reset last. The variant uses the vendor order; the 1 µs delay is
+  dropped, since no gate is opened before the reset.
+- **CORE6 delay row dropped.** The vendor never writes the CORE6 delay row
+  (`pck600_domains.c` leaves the CORE6 node out), and the set-14 snapshot
+  showed CORE6 already holds those values at reset, so writing them was
+  inert. Dropping the five writes and their readbacks is therefore not a
+  second behavioural variable; it only removes accesses that changed
+  nothing.
+
+After the reset release the variant waits at most 200 ms for CORE6 status
+8 as an observation, maps the GPU core page, reads `0x01800024` then
+`0x01800020` (the two 32-bit halves of the vendor's `OSReadHWReg64`), and
+exits through `platform_exit` with no OFF. CORE6 and TOP5 stay ON until
+the power removal. It makes no wrapper, SMC0 or `drm_ctrl` access and no
+write.
+
+What each result means:
+
+- **The identity `36.56.104.183` comes back.** The clock and reset order
+  was the blocker: the earlier probe-read stall at this read came from
+  opening the gates before releasing the reset. GPU core reads work in
+  this state, with CORE6 not acknowledged.
+- **Another value comes back.** The core answers but not with its
+  identity, as in the probe-read outcomes: 0 or all ones for a block held
+  in reset or unpowered, or a branch-0 legacy format.
+- **No return.** The identity read stalls even with the vendor's clock and
+  reset order. The order was not the blocker, and the next variable is the
+  vendor operating point below: 1008 MHz from the GPU PLL with DCDC4 at
+  the default-bin voltage.
+
+**Performance design note.** The probe runs once per lifetime and has no
+hot path. Its cost is two reads, one translation walk, two 35-word
+snapshots and at most 200 ms of observation in one-tick pauses, inside the
+client deadline (the probe refuses to start unless 200 ms plus a 100 ms
+reserve remain). `DSB SY` on both sides of each read orders the progress
+record against the read (performance architecture section 1.2). A
+controller or deadline fault before the reads retains the claim.
+
+The host check (`check.py --vendor-clk`, seven cases) models the platform
+poll and covers the board's state, CORE6 ON during the observation, an
+identity of 0, a controller fault, an ON before the reset release, a wrong
+GPU-page translation and a short client deadline. `prepare.py` pins the
+reordered `on_steps` and refuses any CORE6 delay-row write.
 
 The next-best localization uses the fact that a returning image keeps the
 lifetime alive. Three images, each with one class of reads, run in one
@@ -969,16 +1039,6 @@ bounded watch and reports which read the secondary announced. Secondary
 cores have started only on port 3-3 and only in the SMP platform, without
 the GPU provider; and a stalled read on one core may still block CPU0 on
 a shared interconnect path. It needs its own design.
-
-### The next variable after localization
-
-If the identity read is the one that stalls, the first variable is the
-vendor's reset order: deassert the GPU bus reset (`0xb24` bit 16) before
-opening the bus gate (`0xb24` bit 0) and the core clock (`0xb20` bit 31),
-at the unchanged 400 MHz and 800 mV. The vendor operating point below
-follows only if that read still stalls. If a wrapper or SMC0 read stalls
-instead, the identity question stays open, and that read leaves the next
-image.
 
 ### The vendor operating point is the next variable
 

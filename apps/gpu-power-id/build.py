@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Build the GPU identity consumer, or with --power-only the power-only
 variant that never accesses the GPU register window, with --wrapper-read the
-wrapper-read variant or with --probe-read the probe-read variant, on the
+wrapper-read variant, with --probe-read the probe-read variant or with
+--vendor-clk the vendor-clk variant, on the
 qualified returning PMIC platform."""
 import argparse
 import hashlib
@@ -50,6 +51,8 @@ def shared_layouts(path, names):
     return layouts
 
 
+VCLK_EXPECT = ('COMPLETE GPU vendor-clk: identity 36.56.104.183 with the vendor clock and reset order, '
+               'GPU left powered')
 PROBE_EXPECT = ('COMPLETE GPU probe read: identity 36.56.104.183 before and after the secure configuration, '
                 'restored, GPU left powered')
 
@@ -63,8 +66,10 @@ def main():
                         help='one ON, then four reads of GPU wrapper words; no other GPU register access')
     parser.add_argument('--probe-read', action='store_true',
                         help="one ON, the vendor's probe-time identity read, its secure configuration, the read again")
+    parser.add_argument('--vendor-clk', action='store_true',
+                        help="one ON in the vendor clock and reset order, then the identity read; no OFF")
     args = parser.parse_args()
-    if args.power_only + args.wrapper_read + args.probe_read > 1:
+    if args.power_only + args.wrapper_read + args.probe_read + args.vendor_clk > 1:
         parser.error('choose one variant')
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
@@ -106,6 +111,12 @@ def main():
         # The probe-read variant compiles probe-read.c the same way.
         if source == 'apps/gpu-power-id/main.c' and args.probe_read:
             source = 'apps/gpu-power-id/probe-read.c'
+        # The vendor-clk variant compiles vendor-clk.c in place of main.c and
+        # the reordered controller vendor-clk-power.c in place of the shared
+        # one; the platform and every other object are unchanged.
+        if args.vendor_clk:
+            source = {'apps/gpu-power-id/main.c': 'apps/gpu-power-id/vendor-clk.c',
+                      'drivers/gpu/a733_gpu_power.c': 'apps/gpu-power-id/vendor-clk-power.c'}.get(source, source)
         variant = ['-DGPU_POWER_ONLY=1'] if args.power_only and source == 'apps/gpu-power-id/main.c' else []
         command = flags + variant + ['-MD', '-MF', str(obj) + '.d', '-c', str(ROOT / source), '-o', str(obj)]
         subprocess.run(command, check=True, cwd=ROOT)
@@ -173,10 +184,11 @@ def main():
               'shared_layouts_equal': names, 'image_sha256': sha(out / 'image.elf'),
               'binary_sha256': sha(out / 'probe.bin'), 'binary_bytes': (out / 'probe.bin').stat().st_size,
               'variant': ('power-only' if args.power_only else 'wrapper-read' if args.wrapper_read
-                          else 'probe-read' if args.probe_read else 'identity'),
+                          else 'probe-read' if args.probe_read else 'vendor-clk' if args.vendor_clk else 'identity'),
               'expect': ('COMPLETE GPU power only: CORE status 8, OFF and provider parked' if args.power_only
                          else 'COMPLETE GPU wrapper read: CORE status 8, four wrapper words, OFF and provider parked'
                          if args.wrapper_read else PROBE_EXPECT if args.probe_read
+                         else VCLK_EXPECT if args.vendor_clk
                          else 'COMPLETE GPU power identity: OFF and provider parked'),
               'local_authority_required': 'Exclusive GPU CCU and PCK CORE6 policy/PWCR; TOP5 remains shared row' }
     (out / 'build.json').write_text(json.dumps(record, indent=2) + '\n')

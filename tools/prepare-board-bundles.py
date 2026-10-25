@@ -212,6 +212,7 @@ def returning_row(name, position, component, overlay, expect, controlled, expect
 
 GPU_SOURCES = ['apps/gpu-power-id/prepare.py', 'apps/gpu-power-id/build.py', 'apps/gpu-power-id/check.py',
                'apps/gpu-power-id/main.c', 'apps/gpu-power-id/wrapper.c', 'apps/gpu-power-id/probe-read.c',
+               'apps/gpu-power-id/vendor-clk.c', 'apps/gpu-power-id/vendor-clk-power.c',
                'apps/gpu-provider-ready/main.c', 'apps/gpu-provider-ready/build.py',
                'apps/gpu-provider-ready/check.py', 'drivers/gpu/a733_gpu_power.c', 'drivers/gpu/a733_gpu_platform.c',
                'drivers/gpu/a733_gpu_platform_native.c', 'drivers/gpu/a733_gpu_resources.c',
@@ -615,6 +616,40 @@ ROWS = [
                       '500 ms remain before it, and a recovery inside the window would leave both words written until '
                       'the power removal. What SMC0 +0xb0 = 2 does is unknown; if it cut non-secure DRAM access the '
                       'run would not return. The progress record survives only on a return.'),
+    gpu_row('gpu-vendor-clk', 18, 'GPU core identity read after a power-only ON in the vendor clock and reset order',
+            'vendor-clk', 'COMPLETE GPU vendor-clk: identity 36.56.104.183 with the vendor clock and reset order, GPU left powered',
+            'Status 0 with GPU VCLK identity matches=1 and COMPLETE GPU vendor-clk: identity 36.56.104.183 with the '
+            'vendor clock and reset order, GPU left powered; or status 1 with a GPU VCLK identity line of another '
+            'value and FAIL GPU vendor-clk: identity not 36.56.104.183, GPU left powered; or no return. A return is '
+            'followed by a responsive ROM. Record every line of kernel.log and the progress record at result.bin '
+            'offset 128, which holds the read in flight and each completed value.',
+            'apps/gpu-power-id, vendor-clk variant (apps/gpu-power-id/vendor-clk.c), which links the reordered '
+            'controller apps/gpu-power-id/vendor-clk-power.c in place of drivers/gpu/a733_gpu_power.c. The power-only '
+            'ON runs as in the wrapper-read run that returned (set board-bundles-20261024-14), with the same CORE6 '
+            'PWCR 0 and policy 8 writes, 400 MHz from PERI0 and DCDC4 at 800 mV, with two changes: the GPU bus reset '
+            '(0xb24 bit 16) is deasserted before the bus gate (0xb24 bit 0) and the core clock (0xb20 bit 31), as '
+            'sunxi_enable_clks_wrap (sunxi_platform.c:167-223) does; and the CORE6 delay row is not written, because '
+            'the vendor does not write it and the set-14 snapshot showed CORE6 already holds those values. The CORE6 '
+            'status poll runs at most 200 ms as an observation only. Then the GPU core identity is read as the vendor '
+            'reads it, two 32-bit loads of 0x01800024 and then 0x01800020. The image makes no write and no OFF; CORE6 '
+            'and TOP5 stay ON until the power removal. docs/gpu-power.md, "The vendor-clk probe reorders the clock and '
+            'reset", maps each result to its meaning. It is the last step of its lifetime.',
+            after=['gpu-provider-ready'],
+            failures=['`FAIL GPU vendor-clk: identity not 36.56.104.183, GPU left powered`, after the GPU VCLK '
+                      'identity line: the core answered with another value; record it',
+                      '`FAIL GPU vendor-clk refused before clock and reset progress`, `GPU vendor-clk mapping` or `GPU '
+                      'vendor-clk time budget`: no identity word was read',
+                      '`FAIL GPU ON poll` after the GPU VCLK core6 line: the controller failed during ON'],
+            admission='GPU-window read exception: this row alone reads the GPU core identity as two 32-bit '
+                      'Device-nGnRnE loads, 0x01800024 then 0x01800020, with TOP5 ON and CORE6 not acknowledged, after '
+                      'an identity mapping check of the GPU core page. It makes no GPU-window write and no SMC0 '
+                      'access. Its controller releases the GPU bus reset (0xb24 bit 16) before the bus gate (0xb24 '
+                      'bit 0) and the core clock (0xb20 bit 31), the vendor order, and does not write the CORE6 delay '
+                      'row; every other CCU, R_CCU and CORE6 access is the one the accepted power-only sequence '
+                      'makes. The GPU stays at 400 MHz from PERI0 and 800 mV. Risk: a core read that never completes '
+                      'stops the CPU without an exception, the monitor does not return and only a power removal '
+                      'recovers the board; the progress record survives only on a return.'),
+
     # `admission` maps fields of the value prepare() returns to the values that
     # identify this row's build. None refuses the row: no owning package has
     # named those values yet.
