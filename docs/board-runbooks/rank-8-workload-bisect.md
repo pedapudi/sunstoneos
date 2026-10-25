@@ -1,6 +1,9 @@
 # Rank 8 bisection: the returning workload with a CPU0 return deadline
 
-Status: **prepared offline**; nothing here has run on a board. The design,
+Status: profile 1 completed normally once on port 3-3, in a fresh lifetime
+on 2026-10-25 (`board-session-20261025-1/port-3-3/tw-deadline-prepare`);
+repeats in that lifetime follow. Its deadline return path has not run on a
+board. The design,
 the reference comparison and the candidate causes are in
 [docs/designs/workload-bisect.md](../designs/workload-bisect.md).
 
@@ -15,10 +18,28 @@ plus 0.5 s, or at any earlier CPU0 stop:
 | 1 | `all-core-task-workload-deadline-v1` | `$B/bundle-deadline/` | The unchanged workload, observable when it fails |
 | 2 | `all-core-task-workload-quiet-deadline-v1` | `$B/bundle-quiet/` | The same with background tasks waiting in `WFE` between increments: much less sustained load |
 
-Run profile 1 first, in a new port 3-3 lifetime. Run profile 2 only when
-profile 1 gives no return at all, or returns with several cores stopped at
-unrelated addresses; both outcomes point at the supply. A completed profile 1
-run means the failure did not reproduce; record it and stop.
+Run profile 1 first. The failing run came after about twelve returning
+images in one lifetime, so repeat profile 1 in the same lifetime, with a
+91-word capture after each run: a failure that appears only as the lifetime
+grows points at state left by earlier images, and an isolated failure at a
+race. Both boards take power and data from one USB-C cable, so the supply
+is not a difference between them.
+
+The deadline return path, a CPU0 warm reset through RVBAR and RMR while
+seven coherent secondaries keep running, has never run on a board. After
+CPU0 leaves, the secondaries take no deadline exit of their own, and in
+profile 1 their background loops keep running at full load. A run without
+a return is therefore inconclusive: CPU0 could not take the deadline
+interrupt, or the reset and return themselves hung. The follow-up for that
+outcome is a forced-stall proof variant (profile 1 with one secondary
+stopped before its completion record, expected to return with reason 2),
+described in the design.
+
+Profile 2 lowers the sustained load but does not isolate it: removing the
+background loop's `SVC #0x6d` also changes interrupt timing and lock
+traffic on all eight cores, and drops the check that a background task
+stayed on its core. A completed profile 2 run is consistent with the tick
+and WFE candidates as well as with the load.
 
 ## Outcomes of one launch
 
@@ -28,14 +49,16 @@ run means the failure did not reproduce; record it and stop.
   unit after …`, saves `report.bin` and `owned-writable-after.bin`, writes
   nothing to the board, keeps the claim and quarantines the instance.
   `session.json` holds the decoded record under `deadline_return`. The
-  secondaries were not stopped, so remove every power source from port 3-3
-  before its next run. Reason 2 with `x0` 3 is the IRQ handler's deadline
+  secondaries were not stopped, and the return leaves EL3 translation
+  controls, VBAR_EL3 and CPU0's PPI 29 configuration changed (listed in the
+  design), so remove every power source from port 3-3 before its next run. Reason 2 with `x0` 3 is the IRQ handler's deadline
   exit and `x1` its interrupt (30 for the tick, 0 for an SGI); reason 1 means
   CPU0 took no interrupt after the startup deadline, and `elr_el3`,
   `elr_el1` and `spsr_el3` locate it.
-- **No return within the runner's 10 s.** CPU0 could not take an EL3
-  interrupt: a hard stop, a stalled access or an EL3 park outside the unit.
-  Remove power and do not retry.
+- **No return within the runner's 10 s.** Inconclusive: CPU0 could not take
+  an EL3 interrupt (a hard stop, a stalled access or an EL3 park outside the
+  unit), or the unproven warm reset and return hung. Remove power and do
+  not retry.
 
 ## Names
 

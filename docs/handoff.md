@@ -149,19 +149,15 @@ regenerating.
     floating-point rounds per core, tick and SGI handlers, background
     tasks). The same overlay and native image returned on port 3-1 on
     2026-10-24 (`processor-completion-20261024/port-3-1/task-workload`);
-    only the contract and request differ. The launcher started at
+    only the contract and request differ. Two returning bisection profiles
+    return CPU0 to the ROM with a record at the startup deadline plus 0.5 s
+    or at any earlier CPU0 stop ([design](designs/workload-bisect.md),
+    [runbook](board-runbooks/rank-8-workload-bisect.md)); their return path
+    has not run on a board. The launcher started at
     00:47:55 on 2026-10-25, and no new FEL instance appeared in the
     following 6.7 hours; the USB device kept its pre-launch number. The
     journal records `launch_attempted` with no transport failure. Nothing
     after the launch was read, so the stopping point is unknown.
-  - **Next run on port 3-3:** two returning bisection profiles return CPU0
-    to the ROM with a record at the startup deadline plus 0.5 s or at any
-    earlier CPU0 stop ([design](designs/workload-bisect.md),
-    [runbook](board-runbooks/rank-8-workload-bisect.md)). They are on
-    `work/workload-bisect-1025`, not yet merged. The reference comparison
-    finds no difference that explains a failure of bytes that returned on
-    port 3-1; the leading candidate is the first sustained eight-core load
-    on a board powered from USB alone.
   - The claim (`31032df3…`) is held. The timer step and rank 8 did not run.
     B1 and the CPU clock and voltage runs stay blocked behind this result.
   - **Needed from the user:** remove every power source from port 3-3, then
