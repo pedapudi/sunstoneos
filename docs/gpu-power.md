@@ -1,100 +1,120 @@
-# GPU power control still needs physical qualification
+# GPU power control runs in the vendor's clock, supply and secure state
 
-The A733 GPU power controller prepares the GPU at 400 MHz and requests power
-for its top-level domain (PCK600 domain 5) through a row of the
-[power-domain owner](power-domains.md). The exclusive GPU owner also controls
-CORE (domain 6). It supports bounded startup, shutdown, and reopening.
-The native platform integrates the shared clock and rail owners and the FreeRTOS
-GPU service. Host checks and an AArch64 compilation pass. A physical power/identity
-attempt on 2026-10-24 did not return; no startup, identity or shutdown phase was
-observed. A later power-only run returned after refusing the power-up state
-of CORE6, which the controller now admits
-([CORE6 starts with an unfinished ON transition](#core6-starts-with-an-unfinished-on-transition)).
-Every image that has read the GPU core identity has since stalled the board.
-The vendor-state probe, checked in software only, reads it after applying
-the vendor's GPU PLL clock, DCDC4 voltage and BL31 secure setup
-([The vendor-state probe applies the vendor's clock, supply and secure state](#the-vendor-state-probe-applies-the-vendors-clock-supply-and-secure-state)).
+The A733 GPU power controller powers the GPU top-level domain (PCK600 domain
+5) through a row of the [power-domain owner](power-domains.md) and the GPU
+core domain (domain 6, CORE6) itself, with the GPU core clocked from PLL_GPU0
+at 1008 MHz and DCDC4 at 960 mV. It follows the vendor order of
+[the default GPU power design](designs/gpu-vendor-default.md), which states
+each decision with its reference. The ON sequence is board-proven: on
+2026-10-25 an image that applied the same EL3 security writes, supply and
+clock read the GPU core identity `36.56.104.183` on port 3-1
+([the vendor-state probe](#the-vendor-state-probe-applied-the-vendors-clock-supply-and-secure-state)).
+Every earlier image that read the identity without them stalled. An OFF that
+follows an ON, and a second ON in one lifetime, have run in host models only.
 GPU operation remains unqualified.
 
 The implementation is [a733_gpu_power.c](../drivers/gpu/a733_gpu_power.c), with
 its callback contract in [a733_gpu_power.h](../include/a733_gpu_power.h).
 A privileged owner polls the controller. One poll runs the resource and
-register steps back to back, with monotonic clock reads. It waits on the clock
-for the one-microsecond clock-settling delay. The board clock reports whole
-microseconds rounded down, so the delay ends only when the clock passes the
-sample taken after the clock-gate write by more than one microsecond. The
-domain step requests the row once and returns to the owner until the service
-task answers; each later poll reads the answer with one acquire load. A
-delay whose clock shows no advance for 1,024 consecutive samples
-(`A733_GPU_SPIN_STALLED_READS`) returns to the owner without advancing the
-step, and the next poll restarts the delay. Clock settling and the domain
-answer share one absolute deadline. A refused row fails with
-`A733_GPU_POWER_STATE`, a failed domain with `A733_GPU_POWER_DOMAIN`. An expired deadline, clock
-regression, callback failure, or unexpected register value stops further I/O.
-The controller performs no automatic rollback after a failure.
+register steps back to back, with monotonic clock reads. The domain step
+requests the row once and returns to the owner until the service task
+answers; each later poll reads the answer with one acquire load. The two
+PLL_GPU0 lock waits (at most 100 reads, 3 µs apart) and the two GPU clock
+update-bit waits (at most 100 reads) run inside one poll; the two 20 µs waits
+after each lock wait on the clock. A wait whose clock shows no advance for
+1,024 consecutive samples (`A733_GPU_SPIN_STALLED_READS`) returns to the
+owner without advancing the step, and the next poll restarts it. Every wait
+ends at one absolute deadline. A refused row fails with
+`A733_GPU_POWER_STATE`, a failed domain with `A733_GPU_POWER_DOMAIN`, a
+PLL_GPU0 write that does not read back with `A733_GPU_POWER_PLL`, a lock
+wait that ends unlocked with `A733_GPU_POWER_LOCK` and an update bit that
+stays set with `A733_GPU_POWER_UPDATE`. An expired deadline, clock
+regression, callback failure, or unexpected register value stops further
+I/O. The controller performs no automatic rollback after a failure.
 
 ## Shared resources require an explicit owner
 
 The resource manager must acquire the following before register preparation:
 
-- Exclusive GPU LOCAL authority over the local clock, external reset and CORE6
-  policy/PWCR, with TOP5 controlled only through the shared owner’s row.
-- A stable 400 MHz peripheral-clock output and an established 800 mV DCDC4 rail.
+- Exclusive GPU LOCAL authority over the local clock, external reset,
+  PLL_GPU0 (which no other device uses) and CORE6 policy/PWCR, with TOP5
+  controlled only through the shared owner's row.
+- A stable 400 MHz PERI0 output, which the vendor driver also enables, and
+  DCDC4 at 960 mV.
 - Shared leases for the oscillator, power-controller clock, and GPU AHB and
   memory-bus gates.
 
-The board operating-point table specifies 400 MHz at 800 mV. This configuration
-is a bring-up setting; it is not a measured frequency or a performance target.
-The manager must complete regulator settling and parent-clock preparation before
-its acquisition callback returns. It must arbitrate concurrent users and prevent
-changes while this controller holds its leases. The board marks DCDC4 as always
-on, so releasing the GPU lease must preserve that rail.
+The operating point is the vendor device tree's `opp@1008000000` at its
+`opp-microvolt-vfdefault`, 960 mV ([a733_gpu_opp.h](../include/a733_gpu_opp.h),
+which also holds the node's 21 speed-bin voltages, 860–960 mV). Before the
+GPU's first ON the [GPU platform](../drivers/gpu/a733_gpu_platform.c) takes an
+exclusive DCDC4 lease, reads the selector and, at the power-on 800 mV, writes
+960 mV through the PMIC provider with a readback, releases the lease and waits
+1.2 ms: the regulator's 1 ms ramp for 160 mV at 250 µV/µs plus the vendor's
+200 µs. The provider admits a DCDC4 write only to a voltage of the speed-bin
+row. The supply consumer then samples DCDC4 through the provider and holds it
+shared; the resource manager requires 960 mV. DCDC4 stays at 960 mV after OFF,
+as in the vendor driver, and the board marks it always-on.
 
 The controller checks that the shared bus gates and power-controller clock are
-enabled. It refuses an inherited GPU whose core clock, bus clock, or external
-reset indicates possible execution. It does not attempt to take over a running
-GPU. Resource acquisition can have effects before that refusal; the failed
-controller retains its diagnostics and does not release resources automatically.
+enabled. It refuses an inherited GPU whose core clock, bus clock or external
+reset indicates possible execution, or whose PLL_GPU0 is enabled. It does not
+attempt to take over a running GPU. Resource acquisition can have effects
+before that refusal; the failed controller retains its diagnostics and does
+not release resources automatically.
 
 Register operations use these address spaces:
 
 | Register bank | Physical base | Fields used |
 | --- | --- | --- |
-| Main clock controller | `0x02002000` | AHB gate `0x5c0[7]`, memory-bus gate `0x5e0[16]`, GPU clock `0xb20`, bus gate/reset `0xb24[0,16]` |
+| Main clock controller | `0x02002000` | PLL_GPU0 `0x0e0`, AHB gate `0x5c0[7]`, memory-bus gate `0x5e0[16]`, GPU clock `0xb20`, bus gate/reset `0xb24[0,16]` |
 | Always-on clock controller | `0x07010000` | Power-controller gate `0x1ac[0]` |
 | Shared TOP power controller | `0x07060000` | Domain 5 policy `0x5000`, status `0x5008`, sequencing delays, through its row |
-| GPU-owned CORE power controller | `0x07066000` | Policy `0`, status `8`, PWCR `0x20`; ordered 32-bit accesses |
+| GPU-owned CORE power controller | `0x07066000` | Policy `0`, status `8`, PWCR `0x20`; MISR `0x14` and IDR0 `0xfb0` read only |
 
 Shared gates are read-only in this controller. The platform's register-update
 callback must preserve unrelated fields atomically under the shared register
-lock. GPU clock writes include the update bit at bit 27, which the manual says clears
-when the configuration becomes valid. The controller checks the configured
-fields, not an explicit update-bit completion poll.
-No parent PLL or PMIC register is written by the controller.
+lock. GPU clock writes include the update bit at bit 27, which clears when the
+configuration becomes valid; ON waits for it to clear.
 
-## Startup and shutdown preserve explicit limits
+## Startup and shutdown follow the vendor order
 
-Startup checks the MBUS gates, the power-controller clock, a closed GPU clock
-gate and an asserted reset, then requests the domain-5 row ON. The owner
-adopts a coherent inherited ON domain without a command. From OFF it programs
-the source-defined power-controller delays, requests domain state 8 and waits
-for that exact status. After the row reads ON, the controller captures CORE
-policy, status and PWCR once. Whole policy/status words must match exactly at
-0 or 8 before it writes PWCR zero and policy 8, with exact readbacks. It then
-selects the 400 MHz peripheral parent with divisor one, enables core and bus
-clocks, waits at least one microsecond and releases external reset. Only then
-does it check CORE status 8, before permitting GPU register access. Relevant writes receive readback
-checks. The selected clock requires only 80 ns for 32 cycles, so the one
-microsecond delay covers the reference driver's settling requirement.
+ON checks the MBUS gates, the power-controller clock, the GPU clock word at
+gate closed, source 0 (PLL_GPU0) and divider 1, the bus gate and reset closed
+and PLL_GPU0 disabled, then requests the domain-5 row ON. After the row reads
+ON, the controller captures CORE6 policy, status and PWCR once. Whole
+policy/status words must match exactly at 0 or 8, or be the power-up state
+(policy 8, status 0, PWCR `0x101`). It then:
 
-Shutdown requires stopped firmware, closed job admission, and masked GPU
-interrupts. It writes CORE policy zero and checks CORE status zero while TOP
-and local clocks remain available. It then asserts external reset, disables
-the local bus and core clocks, and requests the TOP row OFF. The owner rereads the gate and reset closed, initializes
-the delay row if needed, requests domain state zero and waits for that exact status. It then releases
-shared-resource leases through the resource manager, which also verifies whole
-CORE policy/status words are zero. The controller allows no
-new operation after a failed transition.
+1. writes PWCR 0;
+2. enables PLL_GPU0 as `ccu_pll_gate_helper_enable` does: output gate
+   cleared, LDO, enable and lock enable set, the lock wait, 20 µs, output
+   gate set;
+3. releases the GPU bus reset, opens the bus gate, opens the core clock gate
+   with the update bit and writes the update bit again, as
+   `sunxi_enable_clks_wrap` does;
+4. sets PLL_GPU0 to 1008 MHz (N 84, P0 2) as `ccu_nm_set_rate` does: output
+   gate cleared, factors written, lock enable cleared and set, the lock
+   wait, 20 µs, output gate set;
+5. writes CORE6 policy 8 and polls CORE6 status until it reads 8, before
+   permitting GPU register access.
+
+Every write is read back. At power-up the CORE6 policy already reads 8 with
+its transition outstanding; the board showed the transition completes once
+the GPU is clocked. The vendor never reads CORE6 status; the poll is this
+controller's check.
+
+OFF requires stopped firmware, closed job admission, and masked GPU
+interrupts. It writes CORE6 policy 0 and polls status 0 while the GPU is
+still clocked, closes the bus gate and the core clock gate, disables PLL_GPU0
+as `ccu_pll_gate_helper_disable` does (output gate, lock enable, enable, LDO,
+each read back), asserts the reset and requests the TOP row OFF. The owner
+rereads the gate and reset closed and waits for domain status 0. The
+controller then releases its shared-resource leases through the resource
+manager, which also verifies CORE6 policy and status zero and PLL_GPU0
+disabled. The vendor powers TOP5 off before it closes the clocks; the owner
+here requires the GPU clocks closed whenever domain 5 changes, so TOP5 goes
+off last. OFF from ON has not run on a board.
 
 A successful power-off result does not establish that outstanding memory
 transactions have drained. This controller cannot supply the isolation callback
@@ -109,66 +129,55 @@ Platform recovery must reconcile that state before reuse.
 
 ## Focused checks and source identities
 
-The changed behavior is clock, reset, and power-domain sequencing. The relevant
-risks are accessing a live device, changing shared fields, releasing resources
-prematurely, accepting a transient domain state, or continuing after failure.
-One host model and one reference comparison cover those risks without accessing
-the board or running performance measurements.
-
 The [native check](../checks/a733-gpu-power.c) runs under AddressSanitizer and
-UndefinedBehaviorSanitizer. Successful startup, shutdown, and reopening preserve
-unrelated fields and shared gates. Reset release follows the clock gate by at
-least the settling delay. A second clock model counts one 24 MHz tick per
-clock read and callback and reports whole microseconds rounded down; under it,
-reset release followed the clock gate by 50 counter ticks, at least the 24 that
-one microsecond requires. A stand-in for the owner answers the row from the
-modeled power-controller words. The first poll checks the preconditions and
-requests the row without waiting; the poll after the answer runs every
-remaining step, including 10 µs register updates. An unanswered row keeps the
-controller at the domain step with no register write, and with a stopped
-clock the settling delay returns without advancing and completes once the
-clock runs. The check covers 101 retained faults, including every callback
-failure on a successful startup/shutdown path, stalled transitions, invalid
-prerequisites, a refused and a failed row, a partially applied write, and a
-late resource release. The owner itself is covered by
-`checks/power-domains-pck.c`.
+UndefinedBehaviorSanitizer with a modeled PLL_GPU0 whose lock bit follows its
+enable bits. Two ON/OFF cycles preserve unrelated fields and shared gates and
+leave PLL_GPU0 at `0xf9105300` after ON and `0x01105300` after OFF. The model
+requires the vendor order: the reset released before the bus gate, the bus
+gate before the core gate, the PLL output gate opened at least 20 µs after
+each lock, PLL_GPU0 disabled only after the core gate closes, the reset
+asserted after both gates close, and the GPU clocked at both CORE6 policy
+writes. It covers 252 retained faults, including every callback failure on a
+successful ON/OFF, each of the eight PLL_GPU0 writes that change the word
+being ignored, a lock that never sets, a late and a dropped lock, an update
+bit that stays set, refusals of a GPU clock off its PLL source and of a
+running PLL, stalled transitions, and a stopped clock, which returns at the
+first lock wait without advancing. `--core` covers the CORE6 entry states:
+four inherited TOP/CORE pairs with reopening, eight refused entries, ten
+partial samples, three power-up completions, two invalid observed statuses
+and eight bounded acknowledgement cases.
 
 The [reference check](../checks/a733-gpu-power-reference.py) compiles the original
 power-domain initialization and transition functions with a register model. All
-emitted power-controller writes match the trace of one GPU power-on and
-power-off through the real owner, which `checks/power-domains-pck.c` writes. It derives GPU mux,
-divisor, update key, gate, and reset expectations from the clock definitions.
-It also verifies register bases, the selected operating point, the board's GPU
-supply assignment, and the always-on rail requirement.
+emitted TOP writes match the trace of one GPU power-on and power-off through
+the real owner, which `checks/power-domains-pck.c` writes. It reads the BXM
+`sunxi_platform.c` (identified by its Git blob) and the pinned CCU helpers, and
+requires the CORE6 writes, the GPU clock and reset order, the PLL_GPU0 bits
+and the 1008 MHz factors of every native CCU write to follow them. It also
+verifies register bases, the board's GPU supply assignment, the always-on rail
+requirement and the 22-entry voltage row of `a733_gpu_opp.h` against the
+device tree's `opp@1008000000`.
 
 References come from the [pinned board kernel](https://github.com/orangepi-xunlong/linux-orangepi/tree/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f):
 
 - `bsp/drivers/pm_domain/pck600_domains.c` and
   `bsp/include/dt-bindings/power/sun60iw2-power.h` define domain identifiers,
   sequencing delays, policy requests, and acknowledgement fields.
-- `bsp/drivers/clk/sunxi-ng/ccu-sun60iw2.c` and `ccu-sun60iw2-r.c` define clocks,
-  gates, reset, the divisor table, and the update key.
+- `bsp/drivers/clk/sunxi-ng/ccu-sun60iw2.c`, `ccu_gate.c`, `ccu_nm.c` and
+  `ccu_common.c` define clocks, gates, the PLL helpers, the reset, the
+  divisor table and the update key.
 - `arch/arm64/boot/dts/allwinner/sun60iw2p1.dtsi` and
   `sun60i-a733-orangepi-zero3w.dts` define addresses, supply wiring, and operating
   points.
-- `bsp/drivers/gpu/imagination/pvr_power.c` enables parent, core, and bus clocks,
-  waits one microsecond, and deasserts reset. Its shutdown reverses reset and
-  clock enablement.
+- The BXM DDK `services/system/rogue/rgx_sunxi/sunxi_platform.c` powers CORE6
+  and orders the clocks at first power-on, later power-ons and power-off.
 
 Downloaded files retain their original license notices. The native controller
 uses independently written state transitions and source-derived register facts.
 The reference checker preserves the original power-domain source notice in its
 compiled extraction. Its off transition requires status zero; the original
-helper accepts any status other than eight as off.
-
-Raw evidence is `~/.cache/sunstoneos/evidence/gpu-power-20261016/`. It contains
-native and reference register traces, compiled artifacts, source hashes,
-commands, and results. Source files and their provenance manifest are cached in
-`~/.cache/sunstoneos/sources/gpu-power/`. An initial reference-shim compilation
-failed because its disabled logging macro left a local variable unused. The
-corrected shim passed; native controller evidence did not require repeating.
-The later native check adds partial-write and late-release coverage. Its
-successful register trace is unchanged, so the reference result remains valid.
+helper accepts any status other than eight as off. The evidence of the default
+path's checks is in `~/.cache/sunstoneos/evidence/gpu-vendor-default-20261025/`.
 
 ## Audit of the nonreturning identity probe
 
@@ -960,8 +969,9 @@ localizes the stall against the returning wrapper-read run.
 
 ### The vendor-clk probe reorders the clock and reset
 
-The vendor-clk variant (`apps/gpu-power-id/vendor-clk.c`, build and check
-option `--vendor-clk`, bundle row 18) keeps the returning wrapper-read run's
+The vendor-clk variant (bundle row 18 of set `board-bundles-20261025-4`,
+whose snapshot holds its sources; removed from the tree once the default path
+adopted the vendor order) kept the returning wrapper-read run's
 power and clock setting (set `board-bundles-20261024-14`): the same CORE6
 PWCR 0 and policy 8 writes, 400 MHz from PERI0 and DCDC4 at 800 mV. Its
 intended variable is the clock and reset order; it then reads the
@@ -970,9 +980,8 @@ identity. It ran once on port 3-1 (set `board-bundles-20261025-4`, session
 provider-readiness run passed) and did not return: the host recorded "FEL
 did not return with access before the deadline" at 10:40:22.
 
-The controller is a copy of the shared one, `vendor-clk-power.c`, compiled
-only for this variant in place of `a733_gpu_power.c`, so no other image
-changes. `apps/gpu-power-id/prepare.py` pins its exact ON table. Every
+The controller was a copy of the shared one, compiled only for this
+variant in place of `a733_gpu_power.c`, so no other image changed. Every
 difference from the set-14 run is listed here; only the first is meant to
 change the outcome.
 
@@ -1062,182 +1071,52 @@ cores have started only on port 3-3 and only in the SMP platform, without
 the GPU provider; and a stalled read on one core may still block CPU0 on
 a shared interconnect path. It needs its own design.
 
-### The vendor-state probe applies the vendor's clock, supply and secure state
+### The vendor-state probe applied the vendor's clock, supply and secure state
 
-The vendor-clk probe stalled as well. The reference
-backsolve (`docs/reference-backsolve-gpu.md` on branch
-`work/backsolve-gpu-1025`) then derived the vendor's complete sequence from
-cold boot to the identity read and found three differences that every
-SunstoneOS image still had:
+The vendor-clk probe stalled as well. The reference backsolve
+(`docs/reference-backsolve-gpu.md` on branch `work/backsolve-gpu-1025`) then
+derived the vendor's sequence from cold boot to the identity read and found
+three differences that every earlier SunstoneOS image had: the GPU core ran
+from PERI0 400 MHz with PLL_GPU0 disabled, DCDC4 stayed at its power-on
+800 mV, and no EL3 code made BL31's cold-boot security writes. The user
+approved the GPU clock and voltage changes on 2026-10-25.
 
-- **Clock.** The vendor runs the GPU core from PLL_GPU0 at 1008 MHz; every
-  board run left PLL_GPU0 disabled (`0x0e0` read `0x41104500`) and ran the
-  core from PERI0 400 MHz.
-- **Supply.** The vendor raises DCDC4 to 960 mV before it powers the GPU;
-  every board run kept the power-on 800 mV.
-- **Secure setup.** The vendor's BL31 opens the peripheral security
-  controller (SPC) ports and makes the clock controller's PLL, bus and MBUS
-  registers non-secure at cold boot; SunstoneOS enters through FEL with its
-  own EL3 monitor and never makes those writes. The manual marks
-  `PLL_GPU0_CTRL_REG` secure by default, so the PLL writes of the first
-  difference may be ignored without the third.
+The vendor-state image applied all three in the vendor's order, from copies
+of the monitor, PMIC provider, supply consumer, resource manager, controller
+and native adapter: 28 of BL31's security writes at EL3, DCDC4 to 960 mV with
+1.2 ms of settling, CORE6 PWCR 0 and policy 8, PLL_GPU0 enabled, the GPU
+reset, bus gate and core gate opened on PLL_GPU0, PLL_GPU0 at 1008 MHz, and
+then the identity as two 32-bit loads, with no OFF. Set
+`~/.cache/sunstoneos/evidence/board-bundles-20261025-5` froze it (bundle 19,
+image `69dc042f…`).
 
-Reset order, access width and the reads before the identity are ruled out
-by the probe-read and vendor-clk runs. The vendor never brings the GPU up
-at 1008 MHz below 960 mV, so the coordinator accepted one image that applies
-all three in the vendor's order. The user approved GPU clock and voltage
-changes on 2026-10-25.
+It ran on port 3-1 in session `board-session-20261025-4` after cold DDR and
+provider readiness, and returned:
 
-The vendor-state variant (`apps/gpu-power-id/vendor-state.c`, build and
-check option `--vendor-state`, bundle row 19) is implemented and checked in
-software only; it has not run on a board. Its steps, in order:
+- The 22 SPC and three S_SPC words read 0 before and after their writes;
+  SPC port 14 changed from `0x1060` to `0xfffffbff`; the PRCM and CCU
+  security switches changed from 0 to 7.
+- DCDC4's selector read `0xae` after the write (boot `0x9e`; 960 mV).
+- Both PLL_GPU0 lock waits ended after four reads, both GPU clock update bits
+  cleared on the first read, all ten PLL read-backs passed and PLL_GPU0 read
+  `0xf9105300`.
+- CORE6 stayed at status 0 after its PWCR and policy writes and read 8 once
+  the clocks ran; its MISR then showed the device accept (`0x100`).
+- The identity loads returned `0x00240038` and `0x006800b7`, BVNC
+  `36.56.104.183`, and the run ended `COMPLETE GPU vendor-state`.
 
-1. **EL3 security writes**, in the monitor copy
-   `apps/gpu-power-id/vendor-state-monitor.c`, last before the eret into
-   EL1. These are the writes of BL31's `sunxi_security_setup` (`monitor.fex`
-   SHA-256 `8af16b86…5b2632`, file offsets `0xc3b8`–`0xc470`) in its order:
-   SPC ports 0–13 and 16–23 (`0xffffffff` at `0x02054004` + `0x10`·n),
-   R_SPC `0x07002004`, `+0x10` and `+0x20`, R_PRCM `0x07010290 |= 7`, CCU
-   `0x02003f00` = 7 and SPC port 14 (`0xfffffbff` at `0x020540e0`). BL31's
-   R_TZMA, DMA, unidentified CCU `0x2800`/`0x2850` and timer writes are left
-   out: the image uses no secure memory, no DMA channel and no timer there.
-   The monitor reads each word before and after its write into a record at
-   `0x42010000`, which the client prints as `GPU VST el3` lines. Apart from
-   this function the copy is the accepted monitor (`platform/a733/monitor.c`
-   at `08c3a6ad`) that the provider-readiness image links. It restores none
-   of the writes before the ROM return, for three reasons:
-   - the writes only open devices to non-secure software, which the
-     Secure-state ROM does not need;
-   - the SPC register layout is undocumented, so writing back the word read
-     at a write offset might not restore the earlier state;
-   - the image ends its lifetime, whose power removal resets the SPC,
-     R_PRCM and the clock controller.
-2. **DCDC4 to 960 mV.** Under an exclusive DCDC4 token the provider copy
-   writes AXP8191 register `0x15` from `0x1e` (800 mV) to `0x2e` (960 mV),
-   keeping bit 7, and reads it back. The client then waits 1.2 ms: the
-   regulator's ramp delay for 160 mV at 250 µV/µs, rounded up to 1 ms
-   (`axp2101-regulator.c:383–410`), plus the vendor's 200 µs
-   (`sunxi_platform.c:473–485`). 960 mV is `opp-microvolt-vfdefault` of
-   `opp@1008000000` (`sun60iw2p1.dtsi:4736–4739`). The kernel tree has no
-   `vf_mapping_table`, and the u-boot tree's entries are all 960 mV, so no
-   speed-bin read changes the value on this board.
-   `apps/gpu-power-id/vendor-state-approval.json` records the rail,
-   register, entry and written selectors, the voltage and the approval.
-3. **CORE6 PWCR 0 and policy 8**, after TOP5 is adopted ON, as in the
-   vendor-clk run.
-4. **PLL and clocks**, in the controller copy
-   `apps/gpu-power-id/vendor-state-power.c`:
-   - PLL_GPU0 enabled at the factors boot0 left (840 MHz) as
-     `ccu_pll_gate_helper_enable` does (`ccu_gate.c:157–203`): output gate
-     bit 27 cleared, LDO bit 30, enable bit 31 and lock enable bit 29 set;
-     the lock bit 28 read every 3 µs until three reads in a row show it, at
-     most 100 reads (`ccu_common.c:47–61`); 20 µs; the output gate set;
-   - the GPU bus reset released, the bus gate opened, and the core clock
-     gate opened on its reset source 0 (PLL_GPU0) with the update bit, then
-     the word written again with the update bit, as
-     `sunxi_enable_clks_wrap` does (`sunxi_platform.c:202–220`); each update
-     bit must clear within 100 reads;
-   - PLL_GPU0 set to 1008 MHz as `ccu_nm_set_rate` does with
-     `AW_STANDARD_CCU` (`ccu_nm.c:250–345`): output gate cleared, N 84 and
-     P0 2 written, lock enable cleared and set, the lock wait, 20 µs, the
-     output gate set. The word must read `0xe9105300` with the lock bit
-     left out.
+This was the first GPU core register access on a board. Which of the three
+differences is necessary is not separated. The default path now applies the
+state ([the default design](designs/gpu-vendor-default.md)), and the copies
+and the variant were removed.
 
-   Admission requires PLL_GPU0 at `0x41104500`, the GPU clock word at
-   source 0 and divider 1, and DCDC4 at 960 mV; the supply consumer and
-   resource manager copies sample DCDC4 again after the write rather than
-   use the power-domain owner's 800 mV boot record. Every PLL_GPU0 write is
-   read back. A word that did not take fails the controller with error 8, a
-   lock wait that ends unlocked with error 9, and an update bit that stays
-   set with error 10; each stops the run before the identity read. CORE6
-   status is then observed for at most 200 ms.
-5. **The identity**, `0x01800024` then `0x01800020`, only after the
-   controller read PLL_GPU0 at 1008 MHz with all ten PLL read-backs passed;
-   then `platform_exit` with no OFF.
+### The CORE6 delay-row writes are removed
 
-Before each step the progress record at result offset 128 (magic
-`GPUVST01`) holds the step number (1 EL3 record, 2 DCDC4 token, 3 DCDC4
-write, 4 settling wait, 5 ON, 6 and 7 the identity reads, 8 exit) and a
-counter stamp.
-
-What each result means:
-
-- **The identity `36.56.104.183` comes back.** The vendor's state is enough
-  for a GPU core read. The run becomes a returning baseline: later images
-  remove one change at a time (the EL3 writes, the 960 mV supply, the PLL
-  clock), each in a lifetime that this image's success makes low-risk, until
-  the change that a core read needs is isolated.
-- **Another value comes back.** The core answers but not with its identity,
-  as in the probe-read outcomes: 0 or all ones for a block held in reset or
-  unpowered, or a branch-0 legacy format.
-- **A refusal before the identity read.** A `FAIL GPU vendor-state` line or
-  controller error 8, 9 or 10 names the step that did not take. The
-  candidates are an incomplete EL3 record or a security switch that does
-  not read 7, a DCDC4 write that the provider refused or that did not read
-  back 960 mV, and a PLL_GPU0 write, lock or clock update that did not
-  complete. The GPU window was not read.
-- **No return.** The identity read stalls even in the vendor's clock,
-  supply and secure state. The cause then lies outside the GPU sequence,
-  in state that SunstoneOS still does not reproduce: the BL31 writes left
-  out above, the NSI writes that the normal boot path makes after DRAM
-  initialization and FEL skips (boot0 `0x1f38`), or the vendor's
-  DRAM-controller configuration. A stall at EL3 or in a PLL access also
-  gives no return, and nothing distinguishes it from a stalled identity
-  read.
-
-**Performance design note.** The probe runs once per lifetime and has no
-hot path. Its additions are 28 EL3 read-write-read triples, one PMIC write
-and readback, two lock waits of at most 100 reads 3 µs apart, two
-update-bit waits of at most 100 reads and the 1.2 ms settling wait. With the
-existing 200 ms CORE6 observation they fit the client's 1.5 s deadline: the
-client refuses to start unless 1.2 ms, 200 ms and a 100 ms reserve remain.
-
-`apps/gpu-power-id/vendor-state-units.py` compiles each copy with the
-image's flags and runs 22 cases under Unicorn with modeled registers:
-
-- **Controller and native operations:** the ON writes in order on the
-  board's state, CORE6 reaching ON, and late and flickering locks;
-  refusals for an 800 mV supply, a wrong parent, a PLL or clock word off
-  its entry value and a refused domain row; an ignored PLL enable or factor
-  write, a first or second lock that never sets and an update bit that
-  never clears, after each of which a further poll makes no access; and the
-  native allowlist's refusals.
-- **Supply:** the provider's, consumer's and resource manager's DCDC4
-  admission, and the approval record against `vendor-state.h`.
-- **Monitor:** the 28 EL3 writes, each read before and after, with the
-  record they leave, also when the security switch ignores its write.
-
-The check also pins each copy's diff from its original. `check.py
---vendor-state` runs twelve client cases on the linked image: the board's
-state, CORE6 ON, an identity of 0, an incomplete EL3 record, a security
-switch of 0, a refused, failed or wrong DCDC4 write, a controller PLL fault,
-a clock not at 1008 MHz when the observation ends, a wrong GPU-page
-translation and a short client deadline.
-
-Set `~/.cache/sunstoneos/evidence/board-bundles-20261025-5` freezes the
-probe for port 3-1 at `b603d523`, in a new lifetime
-`board-session-20261025-4/port-3-1`: a power removal and the cold DDR start
-`s7-ddr`, then the provider-readiness checkpoint (`s10-gpr-*`), then this
-probe (`s10-gvs-*`, image `69dc042f…`, binary `fabb1df3…`). The bundle
-carries `approval.json` and the unit-check result. Its offline checks pass:
-the client and unit checks, the shared GPU checks, the board-bundle fixture
-check with row 19, the kernel admission cases, the frozen-bundle
-validation and the integration gate `gpu-vendor-state-20261025`. The
-identity, power-only, wrapper-read, probe-read and vendor-clk images built
-from clean archives of `d4c79c59` and `b603d523` are byte-identical
-(`~/.cache/sunstoneos/evidence/gpu-vendor-state-20261025/default-images/`).
-
-
-### The delay-row writes stay
-
-The controller keeps the vendor delay-row writes. The board read back the
-vendor values at reset in both CORE6's and TOP5's rows, so each write
-stores the value its register already holds, and all five passed their
-readbacks on the board. Keeping them costs five writes and five reads per
-ON. Removing them would change the controller, its native adapter, six
-model checks, the reference check and the source-tree check, and would
-rebuild both images. They leave with the other diagnostic steps once a
-board run selects an explanation.
+The vendor never writes CORE6's delay row: its CORE6 node is commented out,
+so `sunxi_pd_init` does not run for it. The board read the vendor values at
+reset in both CORE6's and TOP5's rows, and the vendor-state image, which left
+the row unwritten, reached CORE6 ON. The default controller therefore writes
+no CORE6 delay word, and its native adapter neither reads nor writes one.
 
 ### What each failed lifetime left
 
@@ -1346,21 +1225,19 @@ neither eventual acknowledgement nor actual inherited state. Its existing
 provenance and decoded bytes are preserved in
 `~/.cache/sunstoneos/evidence/npu-low-power-source-20261024/source-search.json`.
 
-With immediate acknowledgement, CORE control costs seven CORE writes and
-seventeen reads on ON, then one write and two reads on OFF, plus two
-release reads. Five of the ON writes and five of the reads are the delay
-row and its readbacks. Six of the ON reads are diagnostic: identification
-(`PPU_IDR0`, `0xfb0`), the accept and deny inputs (`PPU_MISR`, `0x14`)
-before any write and after reset release, and the status after the delay
-row, after the PWCR write and after the policy write. The native adapter
-permits the two diagnostic offsets for reads only. A waiting poll adds
-at most 50 µs of status reads, one controller clock sample per read. An
-acknowledgement inside that window completes the step in the same poll
-instead of one scheduler tick later. Native writes use the existing shared
+With immediate acknowledgement, CORE control costs two CORE writes and
+eleven reads on ON, then one write and two reads on OFF, plus two release
+reads. Five of the ON reads are diagnostic: identification (`PPU_IDR0`,
+`0xfb0`), the accept and deny inputs (`PPU_MISR`, `0x14`) before any write
+and before the final status poll, and the status after the PWCR write and
+after the policy write. The native adapter permits the two diagnostic
+offsets for reads only. A waiting poll adds at most 50 µs of status reads,
+one controller clock sample per read. Native writes use the existing shared
 register lock. The power structure holds the cached policy, status and PWCR,
-the six diagnostic words, the three observation waits and a seen mask; the
-mask records completed reads, including a read followed by deadline
-rejection, and is not admission authority. The power/identity diagnostic
+the five diagnostic words, the PLL lock and clock update read counts, the
+last PLL_GPU0 word and a seen mask; the mask records completed reads,
+including a read followed by deadline rejection, and is not admission
+authority. The power/identity diagnostic
 prints those cached values and the failure step without accessing hardware
 again.
 
@@ -1375,8 +1252,10 @@ checks, not physical qualification or a location for the failed `fd3d5839` run.
 The earlier provider-readiness image remains unchanged and is still the first
 proposed board test.
 
-The power-up admission, the CORE6 delay row and the CORE6 observations
-have focused results in `~/.cache/sunstoneos/build/gpu-core6-b-1024/checks-1/`.
+The controller before the default path, which wrote the CORE6 delay row and
+ran from PERI0, has focused results for the power-up admission, the delay
+row and the CORE6 observations in
+`~/.cache/sunstoneos/build/gpu-core6-b-1024/checks-1/`.
 
 - **Controller model.** It completes the power-up state at each of five
   points: after the delay row, after the PWCR write, after the policy
