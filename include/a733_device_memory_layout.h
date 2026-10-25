@@ -4,12 +4,14 @@
 #include <stddef.h>
 #include "a733_dram.h"
 /* The large NPU graph uses existing identity-mapped image RAM. This fixed
- * exception grants no external-memory, cache, device or physical authority. */
+ * exception grants no external-memory, cache, device or physical authority.
+ * Either the retained runtime (USB input) or the finite returning image
+ * (embedded input, ROM return) owns it, never both. */
 #if defined(SUNSTONE_NPU_LARGE_GRAPH)
-#if !defined(SUNSTONE_NPU_SINGLE_CORE) || !defined(SUNSTONE_NPU_RUNTIME_INPUT) || \
-    !defined(SUNSTONE_NPU_INTERRUPT) || !defined(SUNSTONE_NPU_SUPERVISED) || \
-    defined(SUNSTONE_NPU_FINITE_RETURN) || defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
-#error Large NPU graphs require the retained single-core IRQ runtime memory profile
+#if !defined(SUNSTONE_NPU_SINGLE_CORE) || !defined(SUNSTONE_NPU_INTERRUPT) || \
+    !defined(SUNSTONE_NPU_SUPERVISED) || defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY) || \
+    defined(SUNSTONE_NPU_RUNTIME_INPUT) == defined(SUNSTONE_NPU_FINITE_RETURN)
+#error Large NPU graphs require the single-core IRQ runtime or finite returning memory profile
 #endif
 #define A733_NPU_GRAPH_POOL_START UINT64_C(0x41600000)
 #define A733_NPU_GRAPH_POOL_END UINT64_C(0x41a00000)

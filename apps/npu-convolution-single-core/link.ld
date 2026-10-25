@@ -40,13 +40,14 @@ SECTIONS {
     .exception_stack (NOLOAD) : ALIGN(16) {
         . += 32768; __exception_stack_top = .;
     } > RAM
-    .npu_graph_input (DEFINED(__npu_large_graph) ? 0x41400000 : .) (NOLOAD) : {
+    .npu_graph_input (DEFINED(__npu_graph_staging) ? 0x41400000 : .) (NOLOAD) : {
         __npu_graph_input_start = .; KEEP(*(.npu_graph_input)) __npu_graph_input_end = .;
     } > RAM
-    .npu_graph_output (DEFINED(__npu_large_graph) ? 0x41480000 : .) (NOLOAD) : {
+    .npu_graph_output (DEFINED(__npu_graph_staging) ? 0x41480000 : .) (NOLOAD) : {
         __npu_graph_output_start = .; KEEP(*(.npu_graph_output)) __npu_graph_output_end = .;
     } > RAM
-    ASSERT(!DEFINED(__npu_large_graph) ||
+    /* USB staging exists only in the retained runtime's large profile. */
+    ASSERT(!DEFINED(__npu_graph_staging) ||
         (__exception_stack_top <= 0x41400000 && __npu_graph_input_start == 0x41400000 &&
          __npu_graph_input_end == 0x41480000 && __npu_graph_output_start == 0x41480000 &&
          __npu_graph_output_end == 0x414c0000), "large graph staging overlaps ordinary state")

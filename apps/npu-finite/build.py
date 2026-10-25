@@ -2,7 +2,9 @@
 """Build the NPU-local returning monitor around the accepted finite client.
 
 With --interrupt, build the optional interrupt-driven finite NPU application
-instead; apps/npu-interrupt/build.py selects it.
+instead; apps/npu-interrupt/build.py selects it. With --shufflenet (interrupt
+only), the image runs the published 125-operation ShuffleNetV2 graph with its
+published input and recorded SDK output instead of the trusted convolution.
 """
 import argparse,hashlib,json,shlex,shutil,subprocess
 from pathlib import Path
@@ -13,7 +15,11 @@ p.add_argument('--entry-checkpoint',action='store_true',help='return before any 
 p.add_argument('--thermal',action='store_true',help='poll THS before and during finite execution')
 p.add_argument('--interrupt',action='store_true',help='build the interrupt-driven variant')
 p.add_argument('--rate-852',action='store_true',help='PLL_NPU at 852 MHz, admitted only for a speed bin that lists 800 mV for it')
+p.add_argument('--shufflenet',action='store_true',help='the published ShuffleNetV2 graph in the large NN-pool profile (needs --interrupt)')
+p.add_argument('--sdk-reference',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/npu-complete-graph-proposal-20261019/sdk-reference',
+ help='directory with network_binary.nb, published-input.dat and output0_2_1.dat')
 a=p.parse_args()
+if a.shufflenet and not a.interrupt:p.error('The large graph profile requires --interrupt')
 if sum((a.interrupt,a.entry_checkpoint,a.thermal))>1:p.error('Checkpoint, interrupt and thermal profiles are separate')
 if a.rate_852 and a.entry_checkpoint:p.error('The entry checkpoint starts no NPU; it has no rate')
 root=Path(__file__).resolve().parents[2];e=a.evidence.resolve();base=a.baseline.resolve();e.mkdir(parents=True,exist_ok=True)
@@ -26,6 +32,12 @@ def run(name,c,cwd=None):
 old=json.loads((base/'configure-command.json').read_text());old_root=next(v[:-len('/apps/npu-convolution-single-core')] for v in old if v.endswith('/apps/npu-convolution-single-core'))
 config=[v.replace(old_root,str(root)).replace(str(base/'native'),str(e/'native')) for v in old]
 if a.interrupt:config+=['-DA733_NPU_INTERRUPT=ON']
+if a.shufflenet:
+ # artifacts.py admits these only by their catalogue hashes (tools/npu-models.json).
+ sdk=a.sdk_reference.resolve();files={'MODEL':sdk/'network_binary.nb','INPUT':sdk/'published-input.dat','REFERENCE':sdk/'output0_2_1.dat'}
+ config=[next((f'-DA733_NPU_{k}={v}' for k,v in files.items() if x.startswith(f'-DA733_NPU_{k}=')),x) for x in config]
+ assert all(f'-DA733_NPU_{k}={v}' in config for k,v in files.items())
+ config+=['-DA733_NPU_LARGE_GRAPH=ON','-DA733_NPU_NN_POOL_GRAPH=ON']
 if a.thermal:config+=['-DA733_NPU_FINITE_THERMAL=ON']
 save('configure-command.json',config);run('configure',config)
 run('base-build',['cmake','--build',str(e/'native'),'--target','a733-npu-convolution-single-core','-j6'])
@@ -63,6 +75,8 @@ if a.thermal:
  identity['thermal_sources']={str(x.relative_to(root)):sha(x) for x in (root/'apps/npu-finite/thermal.c',root/'apps/npu-finite/thermal.h')}
 if a.rate_852:
  identity['npu_rate_mhz']=852
+if a.shufflenet:
+ identity['model']='shufflenet-v2-published';identity['large_graph']=True
 if a.entry_checkpoint:
  identity['profile']='npu-entry-memory-checkpoint-v1'
  identity['checkpoint_sources']={str(x.relative_to(root)):sha(x) for x in (root/'apps/npu-finite/checkpoint.c',root/'apps/npu-finite/checkpoint.h')}

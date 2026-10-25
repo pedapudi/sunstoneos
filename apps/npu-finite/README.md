@@ -84,4 +84,8 @@ column does not list 800 mV for that rate
 `sram-route-check.py --rate 852`. The client logs startup and job times in
 counter microseconds as `NPU_TIME_US`, and each job's system-counter times and
 NPU total and idle cycles as `NPU_JOB_COUNTERS`; the host reports both as
-`timing` ([design](../../docs/designs/npu-irq-completion.md)).
+`timing` ([design](../../docs/designs/npu-irq-completion.md)), and each job's
+SUBMIT, publication and doorbell times as `NPU_JOB_PHASES`.
+`build.py --interrupt --shufflenet` runs the published ShuffleNetV2 graph
+instead of the trusted convolution
+([design](../../docs/designs/npu-full-model.md)).

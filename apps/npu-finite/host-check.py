@@ -39,6 +39,7 @@ def ref(path):return {'path':str(path.resolve()),'sha256':sha(path.read_bytes())
 results=[]
 with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
  t=Path(temporary);native=a.native.resolve();image=native/'image.elf';manifest=native/'manifest.json';data=image.read_bytes();parts,address,build,layout,g=h.image_profile(data,json.loads(manifest.read_bytes()));checkpoint=bool(g.get('checkpoint'));thermal=bool(g.get('thermal'));execution=h.geometry_profile(g)
+ TAIL=min(100,len(bytes.fromhex(g['reference']))//2)
  # The reviewed 608-byte page, converted to the image's reduced record.
  spec=importlib.util.spec_from_file_location('finite_images',r/'checks/npu-image-checks.py');images=importlib.util.module_from_spec(spec);spec.loader.exec_module(images)
  base_layout=(456,224,232,*layout[3:]) if thermal else layout
@@ -195,10 +196,11 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
   status=int(variant in ('mismatch','unwritten-second','unwritten-tail') or variant.startswith('capture-') or thermal and variant=='restore-readback-failure');reference=bytes.fromhex(g['reference']);first=hashlib.sha256(reference).digest();second=reference
   if status:first=bytes([first[0]^1])+first[1:]
   if variant=='false-success':second=bytes([second[0]^1])+second[1:]
-  # The second job wrote nothing, or only its first 100 bytes, after a
+  # The second job wrote nothing, or only its first TAIL bytes (100, or half
+  # of a shorter reference such as ShuffleNetV2's two bytes), after a
   # matching first job; the copy holds the SUBMIT pattern there.
   if variant=='unwritten-second':first=hashlib.sha256(reference).digest();second=h.output_poison(len(reference))
-  if variant=='unwritten-tail':first=hashlib.sha256(reference).digest();second=reference[:100]+h.output_poison(len(reference))[100:]
+  if variant=='unwritten-tail':first=hashlib.sha256(reference).digest();second=reference[:TAIL]+h.output_poison(len(reference))[TAIL:]
   jobs=2;reason=0
   if thermal and variant in ('thermal-zero','thermal-one','thermal-one-mismatch'):
    jobs=int(variant!='thermal-zero');reason=2;status=1 if variant=='thermal-one-mismatch' else 2
@@ -313,8 +315,8 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
     assert not pattern['first_unwritten']
     if variant=='unwritten-second':assert pattern['second_unwritten'] and pattern['second_pattern_ranges']==[[0,size]],pattern
     elif variant=='unwritten-tail':
-     assert not pattern['second_unwritten'] and pattern['second_pattern_ranges'][-1]==[100,size],pattern
-     assert pattern['second_pattern_bytes']-(size-100)<=4,pattern
+     assert not pattern['second_unwritten'] and pattern['second_pattern_ranges'][-1]==[TAIL,size],pattern
+     assert pattern['second_pattern_bytes']-(size-TAIL)<=4,pattern
     else:assert not pattern['second_unwritten'],pattern
    assert state['restore_writes']==1
    if result['status']:

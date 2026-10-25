@@ -68,7 +68,7 @@ static void client(void *unused)
     /* Each job's publication and completion observation, counter microseconds;
      * and per job the system counter at publication, INTID97 delivery and
      * completion observation, then the NPU's total and idle cycles. */
-    uint64_t job_us[4]={0},job_counters[2][5]={{0}};
+    uint64_t job_us[4]={0},job_counters[2][5]={{0}},job_phases[2][3]={{0}};
 #endif
 #ifdef SUNSTONE_NPU_FINITE_RETURN
     platform_puts("NPU_STAGE=OPEN\n");
@@ -104,6 +104,8 @@ static void client(void *unused)
     job_counters[iteration][1]=npu_application_irq_ticks();
 #endif
     job_counters[iteration][3]=c->job_cycles[0];job_counters[iteration][4]=c->job_cycles[1];
+    job_phases[iteration][0]=c->job_submit_ticks;job_phases[iteration][1]=c->job_publish_ticks;
+    job_phases[iteration][2]=c->job_doorbell_ticks;
 #endif
     for(unsigned i=0;i<a733_npu_application_reference_bytes;++i)
         mismatch|=a733_npu_application_result.output[i]^a733_npu_application_reference[i];
@@ -136,6 +138,10 @@ static void client(void *unused)
     uint64_t frequency;__asm__ volatile("mrs %0, cntfrq_el0" : "=r"(frequency));
     platform_puts("NPU_JOB_COUNTERS=\n");platform_hex(frequency);platform_puts("\n");
     for(unsigned i=0;i<10;++i){platform_hex(job_counters[i/5][i%5]);platform_puts("\n");}
+    /* Per job, system counter at SUBMIT send, at publication entry and just
+     * after the doorbell write (docs/designs/npu-full-model.md). */
+    platform_puts("NPU_JOB_PHASES=\n");
+    for(unsigned i=0;i<6;++i){platform_hex(job_phases[i/3][i%3]);platform_puts("\n");}
     platform_puts("NPU_STAGE=CLOSE\n");
     reply=request(c,NPU_SERVICE_CLOSE,NULL,0,0);
     platform_puts("NPU_STAGE=WAIT_LOCAL_STOP\n");

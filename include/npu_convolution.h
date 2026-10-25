@@ -82,6 +82,10 @@ struct npu_convolution {
      * the bootstrap record nothing; publication clears the completion values. */
     uint64_t job_published_us, job_finished_us, job_start_ticks, job_done_ticks;
     uint32_t job_start_cycles[2], job_cycles[2];
+    /* System counter at the client's SUBMIT send, at the job publication's
+     * entry (before its integrity hashes and cache maintenance) and just after
+     * the doorbell write (+0x3A4) that starts the job. */
+    uint64_t job_submit_ticks, job_publish_ticks, job_doorbell_ticks;
 };
 
 /* EL1, before scheduling, zero once. Copies then hashes the complete model;

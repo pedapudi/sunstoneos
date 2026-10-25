@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Execute new IRQ receipt gates and logs in the actual finite client."""
 import argparse
+import re
 import hashlib
 import importlib.util
 import json
@@ -14,8 +15,10 @@ spec=importlib.util.spec_from_file_location('layout',r/'checks/storage-read-nati
 spec=importlib.util.spec_from_file_location('host',r/'apps/npu-finite/host.py');host=importlib.util.module_from_spec(spec);spec.loader.exec_module(host)
 # Per job: adapter microseconds and system counter ticks at publication and
 # completion observation, the ISR's delivery ticks, and total and idle cycles.
-JOB_RECORD=[{'job_published_us':7000,'job_finished_us':7020,'job_start_ticks':2400,'job_done_ticks':2880},
-            {'job_published_us':9000,'job_finished_us':9020,'job_start_ticks':4800,'job_done_ticks':5280}]
+JOB_RECORD=[{'job_published_us':7000,'job_finished_us':7020,'job_start_ticks':2400,'job_done_ticks':2880,
+             'job_submit_ticks':1200,'job_publish_ticks':2000,'job_doorbell_ticks':2500},
+            {'job_published_us':9000,'job_finished_us':9020,'job_start_ticks':4800,'job_done_ticks':5280,
+             'job_submit_ticks':3600,'job_publish_ticks':4400,'job_doorbell_ticks':4900}]
 JOB_IRQ_TICKS=[2640,5040];JOB_CYCLES=[(49200,1200),(49300,1300)]
 image=layout.Image(a.elf,layout_names=('npu_convolution','npu_service','a733_observe_identity','npu_service_reply'));cases=[]
 for variant in ('matched','mismatch','missing-IRQ-completion','missing-IRQ-stop'):
@@ -104,6 +107,8 @@ for variant in ('matched','mismatch','missing-IRQ-completion','missing-IRQ-stop'
         timing=host.timing(state['log'])
         assert timing['job_us']==[20,20] and timing['publication_gap_us']==2000,timing
         assert [(j['start_to_irq_us'],j['start_to_done_us'],j['active_cycles']) for j in timing['counters']['jobs']]==[(10.0,20.0,48000),(10.0,20.0,48000)],timing
+        phases=re.findall(r'NPU_JOB_PHASES=\n((?:0x[0-9a-f]{16}\n){6})',state['log'])
+        assert len(phases)==1 and [int(v,16) for v in phases[0].split()]==[1200,2000,2500,3600,4400,4900],phases
     a.evidence.mkdir(parents=True,exist_ok=True);(a.evidence/(variant+'.log')).write_text(state['log'])
     cases.append({'name':variant,'passed':True,**state})
 a.evidence.mkdir(parents=True,exist_ok=True)

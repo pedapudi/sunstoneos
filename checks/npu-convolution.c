@@ -124,6 +124,11 @@ static void check_job_timing(void)
 {
     configASSERT(convolution.job_published_us && convolution.job_finished_us>=convolution.job_published_us);
     configASSERT(convolution.job_start_ticks && convolution.job_done_ticks>=convolution.job_start_ticks);
+    /* SUBMIT, publication entry, counters, doorbell, completion: in order. */
+    configASSERT(convolution.job_submit_ticks && convolution.job_submit_ticks<=convolution.job_publish_ticks &&
+        convolution.job_publish_ticks<=convolution.job_start_ticks &&
+        convolution.job_start_ticks<=convolution.job_doorbell_ticks &&
+        convolution.job_doorbell_ticks<=convolution.job_done_ticks);
     configASSERT(convolution.job_cycles[0]==CHECK_ACTIVE_CYCLES+CHECK_IDLE_CYCLES &&
         convolution.job_cycles[1]==CHECK_IDLE_CYCLES);
 }
