@@ -1,7 +1,8 @@
 #ifndef SUNSTONE_OS_NPU_H
 #define SUNSTONE_OS_NPU_H
 #include "npu_runtime.h"
-#define OS_NPU_MODELS 5u
+/* The linked catalogue: only the client's entry (apps/os/npu-catalogue.py). */
+#define OS_NPU_MODELS 1u
 #define OS_NPU_CORE 1u
 #define OS_NPU_POOL_START UINT64_C(0x47400000)
 #define OS_NPU_POOL_BYTES UINT64_C(0x800000)
@@ -25,7 +26,8 @@ extern const unsigned os_npu_client_model,os_npu_input_count,os_npu_output_count
 /* One application task, bound before scheduling. These finite calls refuse
  * every other task. 1 is operation completion, 0 is a refused call and -1 is
  * retained failure. Completion says nothing about numerical correctness.
- * LOAD selects any linked catalogue entry. Tensor windows remain owned by
+ * LOAD selects a linked entry; entry 0 is os_npu_client_model of the
+ * catalogue in tools/npu-session-models.json. Tensor windows remain owned by
  * this caller until its next LOAD, SUBMIT or CLOSE; thermal STOP cannot
  * reclaim them. SUBMIT temporarily transfers both windows to the runtime.
  * After SUBMIT returns1, outputs may be read in place. No tensor copy occurs
@@ -33,7 +35,7 @@ extern const unsigned os_npu_client_model,os_npu_input_count,os_npu_output_count
  * After thermal STOP, only OPEN (for accepted startup) and CLOSE remain.
  * An abandoned caller retains all resources at the fixed drain deadline. */
 int os_npu_open(void);
-int os_npu_load(unsigned model);
+int os_npu_load(unsigned entry);
 int os_npu_tensor(enum nbg_section_id,unsigned index,struct npu_runtime_tensor *);
 int os_npu_submit(uint64_t timeout_us);
 int os_npu_close(void);
@@ -61,8 +63,10 @@ void os_npu_thermal(int allow,int stop,uint64_t until,uint64_t now);
  * that, operation 6 returns the header and session identities with
  * finished=0 and every other field zero. A completed job counts in jobs;
  * a job whose outputs differ from the linked reference also counts in
- * mismatches. retained=1 is a runtime, transport or hardware failure that
- * kept every NPU resource. refused=1 means a thermal stop or the lifetime
+ * mismatches. retained=1 is a runtime, transport or hardware failure, or the
+ * end of the lifetime, that kept every NPU resource; the board has failed and
+ * USB0 sends no further frame, so that report is readable only from RAM.
+ * refused=1 means a thermal stop, including one for stale thermal data,
  * ended the work before the selected number of jobs. */
 #define OS_NPU_REPORT_OP 6u
 #define OS_NPU_REPORT_MAGIC UINT32_C(0x5255504e) /* "NPUR" */

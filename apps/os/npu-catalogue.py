@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Embed the authenticated NPU catalogue and one explicit application vector."""
+"""Embed the client's authenticated NPU model and its input and reference vectors.
+
+Only the catalogue entry that the application client loads is linked; the
+other entries have no caller. os_npu_catalogue_digest is the SHA-256 of the
+linked model's SHA-256 digest, the value the session extension binds.
+"""
 import argparse
 import hashlib
 import json
@@ -20,13 +25,12 @@ def generate(artifacts, output, model=0):
             raise ValueError(f'{name}: reviewed artifact differs')
         text += f'static const uint8_t {name}[{len(data)}] __attribute__((aligned(64)))={{' + ','.join(map(str, data)) + '};\n'
         return data
-    for i, entry in enumerate(catalogue):
-        data = blob(f'model_{i}', paths[entry['name']]['model'], entry['model'])
-        rows.append(f'{{model_{i},sizeof(model_{i})}}')
-        digests += hashlib.sha256(data).digest()
+    selected = catalogue[model]
+    data = blob('model_0', paths[selected['name']]['model'], selected['model'])
+    rows.append('{model_0,sizeof(model_0)}')
+    digests += hashlib.sha256(data).digest()
     text += 'const struct npu_runtime_model os_npu_models[OS_NPU_MODELS]={' + ','.join(rows) + '};\n'
     text += 'const uint8_t os_npu_catalogue_digest[32]={' + ','.join(map(str, hashlib.sha256(digests).digest())) + '};\n'
-    selected = catalogue[model]
     for section, field in [('inputs', 'inputs'), ('references', 'outputs')]:
         rows = []
         for i, tensor in enumerate(selected[field]):

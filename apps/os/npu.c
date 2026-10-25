@@ -46,6 +46,8 @@ void os_npu_thermal(int allow,int stop,uint64_t until,uint64_t now)
         if(end>UINT64_MAX>>3)return;
         next=(end<<3)|(old&ACCEPTED)|(stop?STOP:allow?ALLOW:0);
     } while(!atomic_compare_exchange_weak_explicit(&npu.gate,&old,next,memory_order_acq_rel,memory_order_acquire));
+    /* A freshness update alone wakes no task; the waits are bounded. */
+    if(!((old^next)&(STOP|ALLOW)))return;
     if(stop&&npu.client)xTaskNotifyGive(npu.client);
     if(npu.bootstrap)xTaskNotifyGive(npu.bootstrap);
 }
@@ -106,10 +108,10 @@ int os_npu_open(void)
     if(call(NPU_SERVICE_OPEN,0,1000000)!=1)return -1;
     npu.opened=1;return 1;
 }
-int os_npu_load(unsigned model)
+int os_npu_load(unsigned entry)
 {
-    if(!caller()||!npu.opened||model>=OS_NPU_MODELS||os_npu_stopping())return 0;
-    return call(NPU_SERVICE_LOAD,model,0);
+    if(!caller()||!npu.opened||entry>=OS_NPU_MODELS||os_npu_stopping())return 0;
+    return call(NPU_SERVICE_LOAD,entry,0);
 }
 int os_npu_tensor(enum nbg_section_id section,unsigned index,struct npu_runtime_tensor *tensor)
 {
@@ -188,12 +190,14 @@ int os_npu_start(void)
     const struct os_npu_session *g=&s->npu;
     static const struct a733_mapping_rule wb={A733_MAPPING_WRITE,1,{{A733_MAIR_NORMAL_WB,A733_SH_INNER}},0,1};
     uintptr_t start=(uintptr_t)__os_npu_pool_start,end=(uintptr_t)__os_npu_pool_end;
-    if(start!=OS_NPU_POOL_START||end-start!=OS_NPU_POOL_BYTES||
+    /* The reservation fits any one catalogue entry; the runtime takes the
+     * linked entry's exact requirement from its start. */
+    const size_t need=npu_runtime_requirements(os_npu_models,OS_NPU_MODELS,1);
+    if(start!=OS_NPU_POOL_START||end-start!=OS_NPU_POOL_BYTES||!need||need>OS_NPU_POOL_BYTES||
        !a733_mapping_check_stride(aarch64_device_translate,start,start,end-start,0x200000,&wb)||
-       npu_runtime_requirements(os_npu_models,OS_NPU_MODELS,1)!=OS_NPU_POOL_BYTES||
        !device_memory_pool_init_typed(&npu.pool,start,start,end-start,DEVICE_MEMORY_CLASS_DMA32,DEVICE_MEMORY_WRITE_BACK)||
-       !device_memory_acquire(&npu.pool,g->owner,OS_NPU_POOL_BYTES,&npu.lease,&npu.extent)||
-       npu.extent.cpu!=start||npu.extent.physical!=start||npu.extent.bytes!=end-start)return 0;
+       !device_memory_acquire(&npu.pool,g->owner,need,&npu.lease,&npu.extent)||
+       npu.extent.cpu!=start||npu.extent.physical!=start||npu.extent.bytes!=need)return 0;
     struct npu_runtime_config config={.count=OS_NPU_MODELS,.slots=1,.cpu=npu.extent.cpu,
         .physical=npu.extent.physical,.bytes=npu.extent.bytes,.register_cpu=0x03600000,
         .register_physical=0x03600000,.fatal=fatal};

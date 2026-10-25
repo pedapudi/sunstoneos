@@ -7160,7 +7160,8 @@
    "docs/handoff.md",
    "docs/npu-conformance.md",
    "docs/npu-service.md",
-   "docs/npu-session.md"
+   "docs/npu-session.md",
+   "docs/os-image.md"
   ],
   "library": false,
   "pure_host": false,

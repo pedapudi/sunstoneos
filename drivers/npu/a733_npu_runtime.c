@@ -536,7 +536,12 @@ static int load_work(struct npu_runtime *rt)
 
 /* P: clean the inputs; while the interim lasts, clean and invalidate the
  * output lines so a dirty client line cannot be evicted over NPU output;
- * then zero the working pool with DC ZVA and clean and invalidate it. */
+ * then zero the working pool with DC ZVA and clean and invalidate it.
+ * Output preparation must stay clean and invalidate: the OS NPU client
+ * (apps/os/npu-client.c) writes a fill pattern to the outputs before SUBMIT
+ * and detects a job that writes nothing by the bytes that keep it. An
+ * invalidate alone would discard that pattern and expose stale memory.
+ * checks/npu-session-runtime.c requires the whole output span flushed. */
 static void prepare_work(struct npu_runtime *rt, struct npu_runtime_slot *s);
 static void prepare_step(struct npu_runtime *rt, struct npu_runtime_slot *s)
 {

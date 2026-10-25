@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Request and decode the OS NPU client's report from a claimed device.
+"""Decode and classify the OS NPU client's report.
 
 USB0 operation 6 of an integrated OS image built with SUNSTONE_A733_OS_NPU
 answers with the 104-byte report of apps/os/npu.h and no frame header. Other
-OS images stop USB0 on this operation. fetch() runs that one exchange on a
-device that a supervised launcher has already claimed; this module opens no
-device and has no command line.
+OS images stop USB0 on this operation. This module opens no device; no
+launcher requests operation 6 yet.
 
 classify() keeps the outcomes apart:
 
@@ -13,58 +12,20 @@ classify() keeps the outcomes apart:
 - 'matched': every completed job's outputs equal the linked reference;
 - 'mismatch': at least one completed job's outputs differ from the reference,
   with the bytes that kept the SUBMIT fill pattern in the last job reported;
-- 'refused': a thermal stop or the lifetime ended the work early, with no
-  mismatch among the completed jobs;
-- 'retained': a runtime, transport or hardware failure kept every NPU resource.
-
-A transport error during fetch() raises ValueError and yields no report.
+- 'refused': a thermal stop, including one for stale thermal data, ended the
+  work early, with no mismatch among the completed jobs;
+- 'retained': a runtime, transport or hardware failure, or the end of the
+  lifetime, kept every NPU resource. The board has failed by then and USB0
+  sends no frame, so a retained report is readable only from RAM.
 """
 import struct
-import time
 
-REPORT_OP = 6
 REPORT_BYTES = 104
 MAGIC = 0x5255504e
 PATTERN = 0xc35a3ca5
-REQUEST = struct.pack('<BBHIQ', REPORT_OP, 0, 0, 0, 0)
 FIELDS = ('magic', 'version', 'bytes', 'finished', 'epoch', 'generation', 'model', 'jobs_selected', 'jobs',
           'mismatches', 'refused', 'retained', 'stopped', 'output_bytes', 'pattern_bytes', 'pattern')
 LAYOUT = '<4I2Q10I'
-
-
-def fetch(device, same, deadline, retain, now=time.monotonic):
-    """Send one operation 6 request and return the raw report as a read-only view.
-
-    The exchange follows fetch() in tools/fault-report.py: same() runs before
-    every transfer, each timeout is the time left before the deadline (at most
-    500 ms, at least 1 ms), and retain(raw) must save the report durably. An
-    empty fragment, more than REPORT_BYTES, an expired deadline or a transport
-    error raises; there is no retry.
-    """
-    def timeout():
-        remaining = deadline - now()
-        if remaining <= 0:
-            raise ValueError('NPU report deadline expired.')
-        return min(500, max(1, int(remaining * 1000)))
-
-    same()
-    if device.write(0x02, REQUEST, timeout=timeout()) != len(REQUEST):
-        raise ValueError('Incomplete NPU report request.')
-    report = bytearray()
-    while len(report) < REPORT_BYTES:
-        same()
-        part = device.read(0x81, 512, timeout=timeout())
-        if not part:
-            raise ValueError('Empty NPU report fragment.')
-        report += part
-        if len(report) > REPORT_BYTES:
-            raise ValueError('NPU report too large.')
-    same()
-    if now() >= deadline:
-        raise ValueError('NPU report expired.')
-    raw = memoryview(report).toreadonly()
-    retain(raw)
-    return raw
 
 
 def decode(raw, epoch, generation):

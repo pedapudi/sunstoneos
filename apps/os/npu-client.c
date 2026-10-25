@@ -40,7 +40,10 @@ void os_npu_client_task(void *unused)
         (void)ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(25));
     }
     if(os_npu_stopping()){r->refused=1;goto close;}
-    if(os_npu_load(r->model)!=1)goto retained;
+    /* A thermal stop after the check above makes LOAD refuse. */
+    const int loaded=os_npu_load(0);
+    if(!loaded){r->refused=1;goto close;}
+    if(loaded<0)goto retained;
     for(unsigned job=0;job<s->npu.jobs;++job) {
         if(os_npu_stopping()){r->refused=1;break;}
         for(unsigned i=0;i<os_npu_input_count;++i) {
