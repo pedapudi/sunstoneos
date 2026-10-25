@@ -298,6 +298,12 @@ DCDC3 selector write, each still gated on its own prerequisites.
 On 2026-10-25 the user also approved GPU clock and voltage changes, such as
 the vendor operating point of 1008 MHz from the GPU PLL at 960 mV. Each needs
 its own design, review and approval record naming the rail and values.
+Approval record for the GPU vendor-state probe (set `board-bundles-20261025-5`,
+bundle 19, 2026-10-25): AXP8191 DCDC4 selector `0x15` = `0x2e` (960 mV) from
+the 800 mV power-on value, then GPU PLL word `0xe9105300` (1008 MHz). This is
+the first board use of the PMIC selector-write path; only the snapshot path has
+run before. The coordinator accepted it after an independent review found the
+write bounded to DCDC4 with that code and an exact read-back.
 
 ## Review of the paused tranche (2026-10-24 evening)
 
