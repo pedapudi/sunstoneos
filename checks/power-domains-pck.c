@@ -308,6 +308,22 @@ static void transition_delays(void)
         ++faults;
     }
     printf("delay initialization: %u injected failures retain row/pin without policy write or revival\n",faults);
+    /* After a domain-5 OFF, 0xc10 reads bits 23:16 set, 0x00ff0008, and a
+     * write keeps them (board-session-20261025-9, s12-gpo-run). The next ON
+     * compares the low 16 bits of its readback and powers the domain on. */
+    setup();d.ack_us=0;d.top5_gates=1;d.ppu[5][0]|=8;d.ppu[5][2]|=8;
+    struct a733_rail_token token={0};struct a733_power_domain_row row={0};
+    assert(a733_power_domain_row_init(&row,&d.owner,5,79,&token));
+    domains_boot();token=domains_rail(79,A733_RAIL_DCDC4);
+    assert(a733_power_domain_request(&row,1));service_step();
+    assert(a733_power_domain_state(&row)==A733_POWER_ROW_ON);
+    assert(a733_power_domain_request(&row,0));
+    for(unsigned i=0;i<8 && a733_power_domain_state(&row)!=A733_POWER_ROW_OFF;++i)service_step();
+    assert(a733_power_domain_state(&row)==A733_POWER_ROW_OFF && d.ppu[5][0xc10/4]==0x00ff0008);
+    assert(a733_power_domain_request(&row,1));
+    for(unsigned i=0;i<8 && a733_power_domain_state(&row)!=A733_POWER_ROW_ON;++i)service_step();
+    assert(a733_power_domain_state(&row)==A733_POWER_ROW_ON && (d.ppu[5][2]&15)==8 && d.ppu[5][0xc10/4]==0x00ff0008);
+    puts("delay initialization: an ON after a domain-5 OFF admits 0xc10 bits 23:16");
 }
 
 int main(int argc,char **argv)

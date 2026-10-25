@@ -154,14 +154,19 @@ static void command(struct a733_power_domains *d,struct a733_power_domain *m,uin
     if(on || !m->delays_ready) {
         /* The pinned delay row, each word read back (pck600_domains.c lines
          * 126-142 and 547-569). The reference initializes it at registration
-         * (line 269), even for an inherited ON domain. Initialize before its
-         * first OFF too, while keeping adoption read-only and the existing
-         * per-ON writes. 0xc00-0xc10 are absent from the PCK-600 TRM. */
+         * (line 269), even for an inherited ON domain, and never reads it
+         * back. Initialize before its first OFF too, while keeping adoption
+         * read-only and the existing per-ON writes. 0xc00-0xc10 are absent
+         * from the PCK-600 TRM. After a domain OFF, 0xc10 reads bits 23:16
+         * set, 0x00ff0008, in TOP5's and CORE6's rows alike, and a write
+         * does not clear them (board-session-20261025-9, s12-gpo-run), so
+         * its readback compares the low 16 bits that hold the delay. */
         static const unsigned offsets[]={0x170,0x174,0xc00,0xc04,0xc10};
         static const uint32_t values[]={0x1f1f1f,0x1f1f,0x08080808,0x0808,8};
+        static const uint32_t masks[]={UINT32_MAX,UINT32_MAX,UINT32_MAX,UINT32_MAX,0xffff};
         for(unsigned i=0;i<5;++i) {
             uint32_t v;
-            if(!wr(d,base+offsets[i],values[i]) || !rd(d,base+offsets[i],&v) || v!=values[i]){fail_domain(d,m);return;}
+            if(!wr(d,base+offsets[i],values[i]) || !rd(d,base+offsets[i],&v) || (v&masks[i])!=values[i]){fail_domain(d,m);return;}
         }
         m->delays_ready=1;
         if(!clock(d,&now)){fail_service(d);fail_domain(d,m);return;}

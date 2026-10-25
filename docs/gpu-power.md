@@ -179,14 +179,53 @@ power-domain owner each required the gates open before TOP5 ON. Now the
 manager leaves them alone while TOP5 is OFF, and the owner admits a
 domain-5 ON from OFF with them closed. The controller requires them after
 TOP5 ON and records both words at ON entry, after TOP5 ON, after TOP5 OFF
-and at the end of OFF (`GPU gates` lines). Whether TOP5 OFF also closes the MBUS gate,
-and whether TOP5 ON reopens them, has not run on a board: if TOP5 ON reopens
-them, the second ON completes; if not, it fails after TOP5 ON with error
+and at the end of OFF (`GPU gates` lines). The second run showed that TOP5 OFF closes
+the MBUS gate too. Whether TOP5 ON reopens them has not run on a board: if
+it does, the second ON completes; if not, it fails after TOP5 ON with error
 STATE and the gate word.
 `checks/a733-gpu-second-on.c` runs both cycles through the actual platform,
 resource manager, controller and owner with this gate behaviour; built
 against the tree before the fix (`-DBOARD_RUN`) it reproduces the board's
 values exactly.
+
+### The second run failed at the delay row, not at the gates
+
+The images with the gate check after TOP5 ON ran on port 3-1
+(`board-session-20261025-9/port-3-1/s12-gpo-run`). Cycle 1 ON and OFF passed
+again, and the `GPU gates` line showed that TOP5 OFF closes both master
+gates: AHB `0x1101037f` and MBUS `0xf1045803`, bit 16 cleared. Cycle 2's
+acquisition passed with TOP5 OFF (`stage=6`, its TOP5 status read), and the
+ON relocked PLL_GPU0 (four reads per lock wait) and requested domain 5. The
+owner then failed the domain, so the controller stopped with
+`phase=5 error=7 step=48`: error DOMAIN at the domain-5 request.
+
+The owner rewrites the domain's delay row before each ON from OFF and reads
+each word back. After a domain OFF, `+0xc10` reads `0x00ff0008` in TOP5's
+and in CORE6's rows (snapshots 1 and 2 of both runs; nothing writes CORE6's
+row), and a write of 8 keeps bits 23:16. The readback mismatch failed the
+domain before its policy write: snapshot 2 shows TOP5 policy 0. TOP5 ON did
+not time out; it was never requested, and the gate check after it never ran
+(`ahb_on=0x0`).
+
+The vendor never reads the row back. `sunxi_pd_init`
+(`pck600_domains.c:126–142`) writes it once at registration (line 269), and
+the power-on callback (`sunxi_pd_power_on`, lines 157–166, through
+`sunxi_do_pmu_set_power_domain`, lines 104–122) writes only the policy bits
+and polls the status. No genpd callback, clock enable or Q-channel step
+touches the master gates: they are `CLK_IS_CRITICAL`
+(`ccu-sun60iw2.c:587–590, 658–661`), `ccu_gate_init` skips critical gates
+(`ccu_gate.c:129`), and the domain driver attaches the device clocks without
+`GENPD_FLAG_PM_CLK` (lines 185–211). The GPU's TOP5 node has no
+`ppu-always-on` (`sun60iw2p1.dtsi:766–768`), so `sunxiPostPowerState`
+(`sunxi_platform.c:361`, `pm_runtime_put_sync` at 379) does power the
+domain off once the NSI's GPU master device, which shares the domain, has
+autosuspended (`sunxi-nsi.c:1203–1215`). The vendor's power-on after an OFF
+is therefore a bare policy write with the gates closed, and the gates must
+reopen with the domain, which has not yet run on a board.
+
+The owner now compares the low 16 bits of the `+0xc10` readback.
+`checks/a733-gpu-second-on.c` built against `e1300fef` (`-DBOARD_RUN_2`)
+reproduces this run's values.
 
 A successful power-off result does not establish that outstanding memory
 transactions have drained. This controller cannot supply the isolation callback

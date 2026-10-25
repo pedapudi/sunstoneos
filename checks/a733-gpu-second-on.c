@@ -7,13 +7,17 @@
  * is OFF. A TOP5 ON reopens what the OFF closed, unless the case keeps them
  * closed; neither has run on a board.
  *
- * Built against the tree before the fix (-DBOARD_RUN), the run reproduces
+ * Built against bringup 9fd7fced (-DBOARD_RUN), the run reproduces
  * the board's log of s11-gpo-run: cycle 1 ON reaches CORE6 status 8, the OFF
  * completes with its release, and the cycle 2 resource acquisition opens the
  * AHB gate, reads it back closed and fails: platform resource_result 3
  * (FAULT), manager error 7 (GATE), stage 8, last 0x1101037f, with the
  * controller still in its cycle 1 state (phase 4 OFF, error 0, step 18).
- * Built against the fixed tree, cycle 2 completes when TOP5 ON reopens the
+ * Built against e1300fef (-DBOARD_RUN_2), it reproduces board-session-
+ * 20261025-9 s12-gpo-run: the domain-5 owner rewrites TOP5's delay row
+ * before the ON and fails the domain on the 0xc10 readback, whose bits
+ * 23:16 a domain OFF sets. Built against the current tree, cycle 2
+ * completes when TOP5 ON reopens the
  * gates, and fails at the controller's gate check after TOP5 ON, with TOP5
  * ON and the GPU clocked, when they stay closed.
  *
@@ -62,9 +66,14 @@ static uint32_t core_read(uint32_t off)
 static uint32_t *ccu_word(uintptr_t a)
 {
     uint32_t *w = level_word(a); assert(w);
-    /* PLL_GPU0 locks once enabled with its LDO and lock enable. */
-    if (a == CCU_BASE + 0xe0)
-        *w = (*w & 0xe0000000) == 0xe0000000 ? *w | (1u << 28) : *w & ~(1u << 28);
+    /* PLL_GPU0 locks at the third read after it is enabled with its LDO and
+     * lock enable: the controller's read-back and one unlocked lock read,
+     * so each lock wait takes four reads, as on the board. */
+    static unsigned enabled_reads;
+    if (a == CCU_BASE + 0xe0) {
+        if ((*w & 0xe0000000) != 0xe0000000) { enabled_reads = 0; *w &= ~(1u << 28); }
+        else if (++enabled_reads >= 3) *w |= 1u << 28;
+    }
     return w;
 }
 /* A master-gate write takes only while TOP5 is ON. */
@@ -179,6 +188,27 @@ int main(void)
            "GPU resources result=%u error=%u stage=%u last=0x%x; pll=0x%x\n",
            p->phase, p->error, p->index, p->last_value, gpu.resource_result, m.gpu.error, m.gpu.stage,
            m.gpu.last_value, p->pll_word);
+#elif defined(BOARD_RUN_2)
+    /* The tree at e1300fef: the log of board-session-20261025-9 s12-gpo-run.
+     * The acquisition passes with TOP5 OFF (stage 6, the TOP5 status read);
+     * the ON relocks PLL_GPU0 and requests domain 5, whose owner rewrites
+     * the delay row and fails the domain on the 0xc10 readback 0x00ff0008
+     * before any policy write: error DOMAIN at step 48, TOP5 policy 0, and
+     * no gate word read after TOP5 ON. */
+    assert(run(0) == -1);
+    const struct a733_gpu_power *p = &gpu.power;
+    assert(p->phase == A733_GPU_POWER_FAILED && p->error == A733_GPU_POWER_DOMAIN && p->index == 48 &&
+           p->last_value == 0xf9105300);
+    assert(gpu.resource_result == A733_GPU_RESOURCE_OK && !m.gpu.error && m.gpu.stage == 6 && !gate_writes);
+    assert(p->core_policy == 0 && !p->core_status && !p->core_config && p->pll_lock_reads[0] == 4 &&
+           p->pll_lock_reads[1] == 4 && p->clock_update_reads[0] == 1 && p->clock_update_reads[1] == 1);
+    assert(p->core_note[A733_GPU_NOTE_AHB_ENTRY] == 0x1101037f && p->core_note[A733_GPU_NOTE_MBUS_ENTRY] == 0xf1045803 &&
+           !p->core_note[A733_GPU_NOTE_AHB_TOP5_ON] && !p->core_note[A733_GPU_NOTE_MBUS_TOP5_ON] &&
+           p->core_note[A733_GPU_NOTE_AHB_TOP5_OFF] == 0x1101037f);
+    assert(!(d.ppu[5][0] & 15) && !(d.ppu[5][2] & 15) && d.ppu[5][0xc10/4] == 0x00ff0008);
+    printf("PASS board run 2 reproduced: GPU power phase=%u error=%u step=%u last=0x%x; GPU resources result=%u "
+           "error=%u stage=%u; TOP5 policy %u, 0xc10 0x%x\n", p->phase, p->error, p->index, p->last_value,
+           gpu.resource_result, m.gpu.error, m.gpu.stage, d.ppu[5][0] & 15, d.ppu[5][0xc10/4]);
 #else
     /* The fix: the acquisition leaves the closed gates to the controller,
      * TOP5 ON reopens them, and cycle 2 completes with no gate write. */

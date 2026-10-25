@@ -73,7 +73,10 @@ Admission of an ON request, in order:
    is counted (`a733_rail_pin`, [docs/rail-leases.md](rail-leases.md)).
 
 If the domain is OFF, the service writes the delay row, reading each word
-back, and then writes the policy word with bits 3:0 set to 8 and the other
+back (for `+0xc10` its low 16 bits: after a domain OFF that word reads bits
+23:16 set, `0x00ff0008`, and a write keeps them, as
+`board-session-20261025-9` showed in TOP5's and CORE6's rows), and then
+writes the policy word with bits 3:0 set to 8 and the other
 bits preserved. The write accessor completes with `DSB SY`, so the bound is
 timed from the command reaching the PPU. The service reads status for up to
 50 µs after the command, then once per step with a one-tick block between

@@ -40,10 +40,11 @@ struct domains_model {
     struct access trace[512];unsigned trace_n;
     void (*written)(uintptr_t,uint32_t); /* optional observer of owner writes */
     /* With top5_gates set, the GPU master gates (CCU 0x5c0 bit 7, 0x5e0 bit
-     * 16) follow TOP5 as board-session-20261025-7 s11-gpo-run showed: a
-     * domain-5 OFF closes them; a domain-5 ON reopens what the OFF closed,
-     * unless top5_gates_stuck. */
-    unsigned top5_gates,top5_gates_stuck,top5_reopens;
+     * 16) follow TOP5 as board-sessions 20261025-7 and -9 showed: a domain-5
+     * OFF closes them; a domain-5 ON reopens what the OFF closed, unless
+     * top5_gates_stuck (the reopening has not run on a board). The OFF also
+     * sets bits 23:16 of TOP5's 0xc10, which later writes keep. */
+    unsigned top5_gates,top5_gates_stuck,top5_reopens,top5_c10_marked;
     uint32_t top5_closed[2];
 };
 static struct domains_model d;
@@ -82,6 +83,8 @@ static int owner_read(void *v,uintptr_t a,uint32_t *out)
         if(id==5 && d.top5_gates && was_on && !d.target[id]) {
             d.top5_closed[0]=d.ccu_5c0&(1u<<7);d.top5_closed[1]=d.ccu_5e0&(1u<<16);
             d.ccu_5c0&=~(1u<<7);d.ccu_5e0&=~(1u<<16);
+            /* The OFF also sets 0xc10 bits 23:16, which a write keeps. */
+            d.ppu[5][0xc10/4]|=0x00ff0000;d.top5_c10_marked=1;
         } else if(id==5 && d.top5_gates && !was_on && d.target[id]==8 && !d.top5_gates_stuck &&
                   (d.top5_closed[0]|d.top5_closed[1])) {
             d.ccu_5c0|=d.top5_closed[0];d.ccu_5e0|=d.top5_closed[1];
@@ -98,6 +101,7 @@ static int owner_write(void *v,uintptr_t a,uint32_t value)
     assert(ppu_block(a,&id,&offset) && offset!=8);++d.ppu_writes;trace(1,a,value);
     if(m.access_ns)pmic_model_cost(&m,m.access_ns);
     d.ppu[id][offset/4]=value;
+    if(id==5 && d.top5_gates && offset==0xc10 && d.top5_c10_marked)d.ppu[5][0xc10/4]|=0x00ff0000;
     if(d.written)d.written(a,value);
     if(!offset){d.target[id]=value&15;d.pending[id]=1;d.ack_at[id]=m.now+d.ack_us;}
     return 1;
