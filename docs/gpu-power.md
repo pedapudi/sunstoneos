@@ -39,8 +39,8 @@ The resource manager must acquire the following before register preparation:
 - Exclusive GPU LOCAL authority over the local clock, external reset,
   PLL_GPU0 (which no other device uses) and CORE6 policy/PWCR, with TOP5
   controlled only through the shared owner's row.
-- A stable 400 MHz PERI0 output, which the vendor driver also enables, and
-  DCDC4 at 960 mV.
+- DCDC4 at 960 mV. The GPU core clock runs from PLL_GPU0 alone, so the GPU
+  takes no PERI0 lease.
 - Shared leases for the oscillator, power-controller clock, and GPU AHB and
   memory-bus gates.
 
@@ -81,10 +81,10 @@ configuration becomes valid; ON waits for it to clear.
 
 ON checks the MBUS gates, the power-controller clock, the GPU clock word at
 gate closed, source 0 (PLL_GPU0) and divider 1, the bus gate and reset closed
-and PLL_GPU0 disabled, then requests the domain-5 row ON. After the row reads
-ON, the controller captures CORE6 policy, status and PWCR once. Whole
-policy/status words must match exactly at 0 or 8, or be the power-up state
-(policy 8, status 0, PWCR `0x101`). It then:
+and PLL_GPU0 disabled. It then captures CORE6 policy, status and PWCR once.
+Whole policy/status words must match exactly at 0 or 8, or be the power-up
+state (policy 8, status 0, PWCR `0x101`). TOP5 is ON from reset, so these
+reads reach CORE6's PPU before any domain request. It then:
 
 1. writes PWCR 0;
 2. enables PLL_GPU0 as `ccu_pll_gate_helper_enable` does: output gate
@@ -96,7 +96,9 @@ policy/status words must match exactly at 0 or 8, or be the power-up state
 4. sets PLL_GPU0 to 1008 MHz (N 84, P0 2) as `ccu_nm_set_rate` does: output
    gate cleared, factors written, lock enable cleared and set, the lock
    wait, 20 µs, output gate set;
-5. writes CORE6 policy 8 and polls CORE6 status until it reads 8, before
+5. requests the domain-5 (TOP5) row ON with the GPU clocked, as
+   `sunxiPrePowerState` does after `sunxi_enable_clks_wrap`;
+6. writes CORE6 policy 8 and polls CORE6 status until it reads 8, before
    permitting GPU register access.
 
 Every write is read back. At power-up the CORE6 policy already reads 8 with
@@ -105,16 +107,33 @@ the GPU is clocked. The vendor never reads CORE6 status; the poll is this
 controller's check.
 
 OFF requires stopped firmware, closed job admission, and masked GPU
-interrupts. It writes CORE6 policy 0 and polls status 0 while the GPU is
-still clocked, closes the bus gate and the core clock gate, disables PLL_GPU0
-as `ccu_pll_gate_helper_disable` does (output gate, lock enable, enable, LDO,
-each read back), asserts the reset and requests the TOP row OFF. The owner
-rereads the gate and reset closed and waits for domain status 0. The
+interrupts. It runs `sunxiPostPowerState`'s order: CORE6 policy 0 and a poll
+for status 0, then the TOP row OFF, both while the GPU is still clocked; the
+owner waits for domain status 0. It then closes the bus gate and the core
+clock gate, disables PLL_GPU0 as `ccu_pll_gate_helper_disable` does (output
+gate, lock enable, enable, LDO, each read back) and asserts the reset. The
 controller then releases its shared-resource leases through the resource
 manager, which also verifies CORE6 policy and status zero and PLL_GPU0
-disabled. The vendor powers TOP5 off before it closes the clocks; the owner
-here requires the GPU clocks closed whenever domain 5 changes, so TOP5 goes
-off last. OFF from ON has not run on a board.
+disabled. The owner admits a domain-5 transition whatever the GPU clock
+state, as the vendor makes both with the GPU clocked. OFF from ON has not
+run on a board.
+
+A failure stops at its step and leaves the state that step left, which the
+controller reports as its error and step:
+
+- an ON failure before step 2 leaves the GPU gated, in reset and PLL_GPU0
+  disabled, with at most PWCR 0 written;
+- an ON failure in steps 2 to 4 leaves the clocks and PLL_GPU0 as far as
+  they got, with TOP5 untouched (ON from reset);
+- an ON failure at step 5 or 6 leaves the GPU clocked at 1008 MHz, with the
+  TOP5 row as the owner answered it;
+- an OFF failure at CORE6 or TOP5 leaves the GPU clocked, so the handshakes
+  that need the clock can still complete in a later attempt;
+- an OFF failure in the clock steps leaves CORE6 and TOP5 OFF and the
+  clocks as far as they got.
+
+Every failure retains the leases and the TOP5 row and makes no further
+access.
 
 A successful power-off result does not establish that outstanding memory
 transactions have drained. This controller cannot supply the isolation callback
@@ -1047,11 +1066,14 @@ reserve remain). `DSB SY` on both sides of each read orders the progress
 record against the read (performance architecture section 1.2). A
 controller or deadline fault before the reads retains the claim.
 
-The host check (`check.py --vendor-clk`, seven cases) models the platform
-poll and covers the board's state, CORE6 ON during the observation, an
+The diagnostic had a host check of seven cases, which modelled the platform
+poll and covered the board's state, CORE6 ON during the observation, an
 identity of 0, a controller fault, an ON before the reset release, a wrong
-GPU-page translation and a short client deadline. `prepare.py` pins the
-reordered `on_steps` and refuses any CORE6 delay-row write.
+GPU-page translation and a short client deadline. The diagnostic and its
+check mode were removed when the vendor order became the default
+([the design](designs/gpu-vendor-default.md)); `prepare.py` now checks the
+vendor order in the default `on_steps` and `off_steps` and refuses any
+CORE6 delay-row write.
 
 The next-best localization uses the fact that a returning image keeps the
 lifetime alive. Three images, each with one class of reads, run in one

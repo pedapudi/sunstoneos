@@ -25,10 +25,9 @@ struct step { enum kind kind; enum a733_gpu_power_bank bank;
 _Static_assert(UINT64_C(24000000) * 84 / 2 == A733_GPU_CORE_HZ, "PLL_GPU0 factors give the operating point");
 /* The vendor's order (sunxi_platform.c at kernel 2ac08e8c7;
  * docs/designs/gpu-vendor-default.md). The GPU_TOP domain is PCK domain 5,
- * which the power-domain owner powers through the GPU's row; the owner
- * requires the GPU clock gate, bus gate and reset closed whenever domain 5
- * changes, so TOP5 is ON before any GPU clock and OFF after the last. The
- * MBUS gates, PPU clock, closed clock gate on its reset source 0 (PLL_GPU0)
+ * which the power-domain owner powers through the GPU's row, with the GPU
+ * clocked in both directions as the vendor's later power-ons and power-offs
+ * do (sunxiPrePowerState, sunxiPostPowerState). The MBUS gates, PPU clock, closed clock gate on its reset source 0 (PLL_GPU0)
  * and divider 1, asserted reset and a disabled PLL_GPU0 with input divider M1
  * 1, which the factor write keeps, are checked first.
  * The selected BXM rgx_sunxi adapter controls CORE6 directly; its
@@ -47,9 +46,10 @@ _Static_assert(UINT64_C(24000000) * 84 / 2 == A733_GPU_CORE_HZ, "PLL_GPU0 factor
  *   bit; each update bit must clear;
  * - PLL_GPU0 set to 1008 MHz as ccu_nm_set_rate does with AW_STANDARD_CCU
  *   (ccu_nm.c:250-345).
- * CORE6 policy 8 comes last, as in the vendor's later power-ons
- * (sunxiPrePowerState); at power-up the policy already reads 8, so the first
- * ON's transition completes when the clocks run, as the board showed. NOTE
+ * TOP5 ON and CORE6 policy 8 come last, as in the vendor's later power-ons;
+ * at power-up TOP5 is ON and the CORE6 policy already reads 8, so the first
+ * ON's CORE6 transition completes when the clocks run, as the board showed,
+ * and PWCR 0 precedes the clocks as in the vendor's first power-on. NOTE
  * and SETTLE steps record CORE6 words for diagnosis and require no
  * particular value; a SETTLE status other than 0 or 8 still fails. */
 static const struct step on_steps[] = {
@@ -59,7 +59,7 @@ static const struct step on_steps[] = {
     {CHECK, A733_GPU_CCU, 0x0b20, 0x8700000f, 0},
     {CHECK, A733_GPU_CCU, 0x0b24, BIT(16) | BIT(0), 0},
     {CHECK, A733_GPU_CCU, 0x00e0, BIT(31) | BIT(29) | BIT(27) | BIT(1), 0},
-    {DOMAIN, A733_GPU_CCU, 0, 0, 1},
+    /* CORE6's PPU lies in the always-on PCK block, readable with TOP5 OFF. */
     {CORE_POLICY, A733_GPU_CORE, 0, 0, 0},
     {CORE_STATUS, A733_GPU_CORE, 8, 0, 0},
     {NOTE, A733_GPU_CORE, 0xfb0, 0, A733_GPU_NOTE_IDR0},
@@ -108,6 +108,10 @@ static const struct step on_steps[] = {
     {DELAY, A733_GPU_CCU, 0, 0, 20},
     {UPDATE, A733_GPU_CCU, 0x00e0, 0, BIT(27)},
     {PLL, A733_GPU_CCU, 0x00e0, PLL_CONTROL | PLL_FACTORS, PLL_1008},
+    /* sunxiPrePowerState: TOP5 ON (pm_runtime_get_sync) once the GPU is
+     * clocked, then CORE6 policy 8. TOP5 is ON from reset at the first ON,
+     * which the owner adopts without a command. */
+    {DOMAIN, A733_GPU_CCU, 0, 0, 1},
     {UPDATE, A733_GPU_CORE, 0, UINT32_MAX, 8},
     {CHECK, A733_GPU_CORE, 0, UINT32_MAX, 8},
     {SETTLE, A733_GPU_CORE, 8, 0, A733_GPU_NOTE_AFTER_POLICY},
@@ -116,17 +120,17 @@ static const struct step on_steps[] = {
      * the clocks run, before any engine access. */
     {POLL, A733_GPU_CORE, 8, UINT32_MAX, 8},
 };
-/* Complete firmware stop is the caller's prerequisite. The vendor's
- * sunxiPostPowerState writes CORE6 policy 0, powers TOP5 off and then
- * disables the clocks (sunxi_disable_clks_wrap): bus gate, core gate,
- * PLL_GPU0 as ccu_pll_gate_helper_disable does (ccu_gate.c:40-69), then the
- * reset. This controller keeps that clock order, waits for CORE6 OFF while
- * the GPU is still clocked, and powers TOP5 off last, as the owner
- * requires. */
+/* Complete firmware stop is the caller's prerequisite. The vendor's order
+ * (sunxiPostPowerState): CORE6 policy 0, TOP5 OFF (pm_runtime_put_sync),
+ * then the clocks (sunxi_disable_clks_wrap): bus gate, core gate, PLL_GPU0
+ * as ccu_pll_gate_helper_disable does (ccu_gate.c:40-69), then the reset.
+ * This controller adds a wait for CORE6 OFF before TOP5 OFF; both happen
+ * with the GPU still clocked. */
 static const struct step off_steps[] = {
     {UPDATE, A733_GPU_CORE, 0, UINT32_MAX, 0},
     {CHECK, A733_GPU_CORE, 0, UINT32_MAX, 0},
     {POLL, A733_GPU_CORE, 8, UINT32_MAX, 0},
+    {DOMAIN, A733_GPU_CCU, 0, 0, 0},
     {UPDATE, A733_GPU_CCU, 0x0b24, BIT(0), 0},
     {CHECK, A733_GPU_CCU, 0x0b24, BIT(16) | BIT(0), BIT(16)},
     {UPDATE, A733_GPU_CCU, 0x0b20, BIT(31), BIT(27)},
@@ -141,7 +145,6 @@ static const struct step off_steps[] = {
     {PLL, A733_GPU_CCU, 0x00e0, PLL_CONTROL, 0},
     {UPDATE, A733_GPU_CCU, 0x0b24, BIT(16), 0},
     {CHECK, A733_GPU_CCU, 0x0b24, BIT(16) | BIT(0), 0},
-    {DOMAIN, A733_GPU_CCU, 0, 0, 0},
 };
 static enum a733_gpu_power_result fail(struct a733_gpu_power *s,
                                        enum a733_gpu_power_error error)
@@ -222,7 +225,9 @@ enum a733_gpu_power_result a733_gpu_power_poll(struct a733_gpu_power *s)
         s->lease_attempted = 1;
         if (!s->ops.acquire(s->context, &r)) return fail(s, A733_GPU_POWER_IO);
         s->lease_held = 1;
-        if (r.parent_hz != A733_GPU_INITIAL_HZ || r.supply_uv != A733_GPU_SUPPLY_UV)
+        /* The GPU core runs from PLL_GPU0 under the LOCAL lease; no PERI0
+         * parent is held, so only the supply is required. */
+        if (r.supply_uv != A733_GPU_SUPPLY_UV)
             return fail(s, A733_GPU_POWER_RESOURCES);
         if (!clock_read(s)) return A733_GPU_POWER_FAULT;
     }

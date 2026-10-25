@@ -5,10 +5,11 @@
 #include "a733_power_domain_row.h"
 #include "a733_gpu_opp.h"
 
-/* The PERI0 400 MHz output that the resource manager holds as a shared
- * parent lease. The GPU core runs from PLL_GPU0 at A733_GPU_CORE_HZ
- * (a733_gpu_opp.h). The firmware configuration of the GPU service still
- * states this rate until firmware start adopts A733_GPU_CORE_HZ. */
+/* The PERI0 400 MHz output that the resource manager verifies for its PERI0
+ * users (A733_GPU_RESOURCE_PARENT). The GPU core runs from PLL_GPU0 at
+ * A733_GPU_CORE_HZ (a733_gpu_opp.h) and holds no PERI0 parent. The firmware
+ * configuration of the GPU service still states this rate until firmware
+ * start adopts A733_GPU_CORE_HZ. */
 #define A733_GPU_INITIAL_HZ 400000000u
 /* PWCR reset value of a PPU with one device Q-Channel (DEN0051E Table 5-10):
  * DEVQACTIVE 0 and the channel's handshake enabled. CORE6 reads this with
@@ -43,9 +44,9 @@ struct a733_gpu_power_resources { uint32_t parent_hz, supply_uv; };
  * now uses monotonic microseconds without wrap during an operation; it may
  * round down to whole microseconds.
  * acquire owns the GPU-local clock, reset, PLL_GPU0 and GPU_TOP/CORE domains
- * exclusively. It also holds shared leases for stable pll-peri0-400m, DCDC4 at
- * A733_GPU_SUPPLY_UV, dcxo, the PCK clock, and GPU AHB/MBUS gates. Return the
- * established parent rate and rail setting.
+ * exclusively. It also holds shared leases for DCDC4 at A733_GPU_SUPPLY_UV,
+ * dcxo, the PCK clock, and GPU AHB/MBUS gates. Return the established rail
+ * setting; parent_hz is 0, as no PERI0 parent is held.
  * These resources remain stable until release; failures retain any partial lease.
  * Neither callback changes GPU-local clock/reset or GPU power policies. The manager
  * must arbitrate shared clocks, rail changes and other devices' power requests.
@@ -111,19 +112,22 @@ enum a733_gpu_power_result a733_gpu_power_off(struct a733_gpu_power *, uint64_t 
 /* Runs the resource and register steps back to back, with clock reads, in
  * the vendor's order (docs/designs/gpu-vendor-default.md). Power-on checks the
  * MBUS gates, the PPU clock, a closed GPU clock gate on PLL_GPU0 at divider
- * 1, an asserted reset and a disabled PLL_GPU0, then requests the row ON and
- * returns AGAIN until the service answers. It admits settled static CORE
- * policy/status, or the power-up state of policy 8, status 0 and
+ * 1, an asserted reset and a disabled PLL_GPU0 with M1 1. It admits settled
+ * static CORE policy/status, or the power-up state of policy 8, status 0 and
  * A733_GPU_CORE_RESET_PWCR, and writes PWCR 0. It enables PLL_GPU0, releases
- * the GPU reset, opens the bus and core clock gates, sets PLL_GPU0 to
- * A733_GPU_CORE_HZ, writes CORE policy 8 and polls CORE status until 8.
+ * the GPU reset, opens the bus and core clock gates and sets PLL_GPU0 to
+ * A733_GPU_CORE_HZ, then requests the row ON and returns AGAIN until the
+ * service answers, writes CORE policy 8 and polls CORE status until 8.
  * Every PLL_GPU0 write is read back (error PLL); each lock wait reads at most
  * 100 times 3 us apart (error LOCK) and each GPU clock update bit must clear
  * within 100 reads (error UPDATE); these waits run inside one poll. Status
  * observations after the PWCR and policy writes require 0 or 8.
- * Power-off commands and checks CORE OFF while the GPU is still clocked, then
- * closes the bus and core gates, disables PLL_GPU0, asserts reset and requests
- * the TOP row OFF. A refused row fails with STATE, a failed domain with
+ * Power-off commands and checks CORE OFF and requests the TOP row OFF while
+ * the GPU is still clocked, then closes the bus and core gates, disables
+ * PLL_GPU0 and asserts reset. Each failure stops at its step with the
+ * clocks, PLL_GPU0, TOP5 and CORE6 as that step left them, listed in
+ * docs/designs/gpu-vendor-default.md, and reports the error and step. A
+ * refused row fails with STATE, a failed domain with
  * DOMAIN. A wait whose clock stops advancing for A733_GPU_SPIN_STALLED_READS
  * samples returns AGAIN without advancing the step. Every wait ends at the
  * absolute deadline. Failure retains diagnostics and disables further I/O; no

@@ -46,8 +46,10 @@ static void answer(void)
         if ((*policy & 15) != (*status & 15) || ((*status & 15) != 0 && (*status & 15) != 8)) {
             atomic_store(&r->state, g << 3 | A733_POWER_ROW_REFUSED); return;
         }
-        /* The owner rereads the GPU gate and reset closed before any command. */
-        assert(!(m.regs[0][0xb24/4] & 0x10001) && !(m.regs[0][0xb20/4] & 0x80000000));
+        /* The vendor order: domain 5 changes with the GPU clocked and out of
+         * reset, PLL_GPU0 running, in both directions. */
+        assert((m.regs[0][0xb24/4] & 0x10001) == 0x10001 && (m.regs[0][0xb20/4] & 0x80000000) &&
+               (m.regs[0][0xe0/4] & 0xe8000000) == 0xe8000000);
         *policy = (*policy & ~15u) | (on ? 8 : 0); m.pending = 1;
     }
     if (m.stalled) return;
@@ -79,7 +81,7 @@ static int acquire(void *ctx, struct a733_gpu_power_resources *out)
     if (!call()) return 0;
     m.held = 1;
     *out = (struct a733_gpu_power_resources){
-        m.bad_rate ? 399999999u : A733_GPU_INITIAL_HZ,
+        m.bad_rate ? 399999999u : 0,
         m.bad_supply ? A733_GPU_BOOT_UV : A733_GPU_SUPPLY_UV};
     return 1;
 }
@@ -101,7 +103,6 @@ static int read_reg(void *ctx, enum a733_gpu_power_bank bank, uint32_t off, uint
     if (!call()) return 0;
     if (bank == A733_GPU_CORE) {
         assert(off == 0 || off == 8 || off == 0x14 || off == 0x20 || off == 0xfb0);
-        assert((m.regs[2][0x5008/4] & 15) == 8);
         /* Each ON starts with its policy read. */
         if (off == 0 && s.phase == A733_GPU_POWER_STARTING && !(s.core_seen & 1))
             m.core_rewritten = 0;
@@ -157,7 +158,8 @@ static int update(void *ctx, enum a733_gpu_power_bank bank, uint32_t off,
     assert(ctx == &m && (bank == A733_GPU_CCU || bank == A733_GPU_CORE) && off % 4 == 0 && off < 0x6000);
     if (!call()) return 0;
     if (bank == A733_GPU_CORE) {
-        assert((m.regs[2][0x5008/4] & 15) == 8 && m.held);
+        /* CORE6 policy changes only with TOP5 ON; PWCR is written before it. */
+        assert(m.held && (off == 0x20 || (m.regs[2][0x5008/4] & 15) == 8));
         assert(clear == UINT32_MAX && ((off == 0 && (set == 0 || set == 8)) || (off == 0x20 && set == 0)));
         /* PWCR changes only in a settled state or the power-up state. */
         if (off == 0x20) assert(((m.regs[2][0x6000/4] == 0 || m.regs[2][0x6000/4] == 8) &&
@@ -192,6 +194,8 @@ static int update(void *ctx, enum a733_gpu_power_bank bank, uint32_t off,
     }
     /* The vendor order: reset released before the bus gate, the bus gate
      * before the core gate, and the reset asserted after both gates close. */
+    /* OFF closes the clocks only after TOP5 is OFF, as the vendor does. */
+    if (bank == A733_GPU_CCU && s.phase == A733_GPU_POWER_STOPPING) assert(!(m.regs[2][0x5008/4] & 15));
     if (bank == A733_GPU_CCU && off == 0xb24 && set == 1) assert(m.regs[0][0xb24/4] & 0x10000);
     if (bank == A733_GPU_CCU && off == 0xb24 && clear == 0x10000) assert(!(m.regs[0][0xb24/4] & 1));
     if (bank == A733_GPU_CCU && off == 0xb20 && (set & 0x80000000)) assert(m.regs[0][0xb24/4] & 1);
@@ -269,7 +273,7 @@ static void core_cases(void)
         m.regs[2][0x6020/4] = bad[i][2];
         assert(a733_gpu_power_on(&s,10000) == A733_GPU_POWER_AGAIN);
         assert(drain() == A733_GPU_POWER_FAULT && s.error == A733_GPU_POWER_STATE);
-        assert(!m.writes && m.held && !m.releases && s.core_seen == 0x1f && s.index == 11 &&
+        assert(!m.writes && m.held && !m.releases && s.core_seen == 0x1f && s.index == 10 &&
                s.core_policy == bad[i][0] && s.core_status == bad[i][1] && s.core_config == bad[i][2] &&
                s.core_note[A733_GPU_NOTE_IDR0] == 0x00031001 && s.core_note[A733_GPU_NOTE_MISR] == 0x100);
         terminal();
@@ -360,7 +364,7 @@ static void core_cases(void)
         }
         assert(a733_gpu_power_on(&s, 10000) == A733_GPU_POWER_AGAIN);
         assert(drain() == A733_GPU_POWER_FAULT && s.error == A733_GPU_POWER_STATE);
-        assert(s.index == 14 && s.core_power_up == power_up && s.last_value == 4 &&
+        assert(s.index == 13 && s.core_power_up == power_up && s.last_value == 4 &&
                s.core_note[A733_GPU_NOTE_AFTER_PWCR] == 4 && (s.core_seen & 0x20));
         /* PWCR 0 only: no clock or policy write. */
         assert(m.writes == 1 && m.held && !m.releases && m.regs[2][0x6000/4] == power_up*8);
@@ -421,9 +425,8 @@ int main(int argc, char **argv)
         assert(drain() == A733_GPU_POWER_FAULT && s.error == A733_GPU_POWER_TIMEOUT);
         assert(!m.releases && s.lease_held); terminal(); ++faults;
     }
-    fresh(); m.bad_rate = 1; assert(a733_gpu_power_on(&s, 10000) == A733_GPU_POWER_AGAIN);
-    assert(drain() == A733_GPU_POWER_FAULT && s.error == A733_GPU_POWER_RESOURCES);
-    assert(m.writes == 0 && s.lease_held); terminal(); ++faults;
+    /* No PERI0 parent is held or required: any reported parent rate passes. */
+    fresh(); m.bad_rate = 1; on(); off();
     fresh(); m.bad_supply = 1; assert(a733_gpu_power_on(&s, 10000) == A733_GPU_POWER_AGAIN);
     assert(drain() == A733_GPU_POWER_FAULT && s.error == A733_GPU_POWER_RESOURCES);
     assert(m.writes == 0 && s.lease_held); terminal(); ++faults;
@@ -437,7 +440,14 @@ int main(int argc, char **argv)
         fresh(); m.regs[bad_banks[i]][bad_offsets[i]/4] ^= bad_bits[i];
         assert(a733_gpu_power_on(&s, 10000) == A733_GPU_POWER_AGAIN);
         assert(drain() == A733_GPU_POWER_FAULT && s.error == A733_GPU_POWER_STATE);
-        assert(m.writes == 0); terminal(); ++faults;
+        /* An incoherent TOP5, which the owner refuses, stops at the row step
+         * with the GPU clocked and CORE6 unchanged; every other refusal comes
+         * before any write. */
+        if (bad_offsets[i] == 0x5008)
+            assert(s.index == 48 && m.writes == 15 && (m.regs[0][0xb24/4] & 0x10001) == 0x10001 &&
+                   !(m.regs[2][0x6000/4] & 8));
+        else assert(m.writes == 0);
+        terminal(); ++faults;
     }
     fresh(); m.corrupt = 0xb20; assert(a733_gpu_power_on(&s, 10000) == A733_GPU_POWER_AGAIN);
     assert(drain() == A733_GPU_POWER_FAULT && s.error == A733_GPU_POWER_STATE);
@@ -458,7 +468,7 @@ int main(int argc, char **argv)
      * and a lock that drops once complete, counting the reads. */
     fresh(); m.lock_after = UINT32_MAX; assert(a733_gpu_power_on(&s, 100000) == A733_GPU_POWER_AGAIN);
     assert(drain() == A733_GPU_POWER_FAULT && s.error == A733_GPU_POWER_LOCK && s.pll_lock_reads[0] == 100 &&
-           s.index == 23 && !(m.regs[0][0xb24/4] & 0x10001)); terminal(); ++faults;
+           s.index == 22 && !(m.regs[0][0xb24/4] & 0x10001) && !(m.regs[2][0x5000/4] & 15)); terminal(); ++faults;
     fresh(); m.lock_after = 10; on();
     assert(s.pll_lock_reads[0] == 12 && s.pll_lock_reads[1] == 12); off();
     fresh(); m.lock_flicker = 1; on();
@@ -466,7 +476,7 @@ int main(int argc, char **argv)
     /* A GPU clock update bit that stays set fails with UPDATE. */
     fresh(); m.update_stuck = 1; assert(a733_gpu_power_on(&s, 100000) == A733_GPU_POWER_AGAIN);
     assert(drain() == A733_GPU_POWER_FAULT && s.error == A733_GPU_POWER_UPDATE &&
-           s.clock_update_reads[0] == 100 && s.index == 32); terminal(); ++faults;
+           s.clock_update_reads[0] == 100 && s.index == 31 && !(m.regs[2][0x5000/4] & 15)); terminal(); ++faults;
     fresh(); m.late_at = 4; assert(a733_gpu_power_on(&s, 10000) == A733_GPU_POWER_AGAIN);
     assert(drain() == A733_GPU_POWER_FAULT && s.error == A733_GPU_POWER_TIMEOUT);
     assert(s.lease_held && m.writes == 0); terminal(); ++faults;
@@ -477,24 +487,24 @@ int main(int argc, char **argv)
     assert(a733_gpu_power_cancel(&s) == A733_GPU_POWER_FAULT); terminal(); ++faults;
     fresh(); m.partial = 1; assert(a733_gpu_power_on(&s, 10000) == A733_GPU_POWER_AGAIN);
     assert(drain() == A733_GPU_POWER_FAULT && s.error == A733_GPU_POWER_IO);
-    assert((m.regs[2][0x5000/4] & 15) == 8 && s.lease_held);
+    /* The first write, PWCR 0, reports failure before TOP5 or any clock. */
+    assert(s.index == 11 && !(m.regs[2][0x5000/4] & 15) && s.lease_held);
     terminal(); ++faults;
     fresh(); on(); m.late_at = all_calls - 1;
     assert(a733_gpu_power_off(&s, 10000) == A733_GPU_POWER_AGAIN);
     assert(drain() == A733_GPU_POWER_FAULT && s.error == A733_GPU_POWER_TIMEOUT);
     assert(!s.lease_held && m.releases == 1); terminal(); ++faults;
-    /* The first poll checks the preconditions and requests the row; it does
-     * not wait. The poll after the owner's answer runs every remaining step
-     * back to back, including 10 us register updates. A domain that has not
-     * answered keeps the controller at the row step without spinning. */
+    /* The first poll runs the admission, PWCR 0 and the 15 clock writes, then
+     * requests the row; it does not wait for it. The poll after the owner's
+     * answer runs the remaining steps. A domain that has not answered keeps
+     * the controller at the row step, with the GPU clocked, without
+     * spinning. */
     fresh(); m.slow = 10; assert(a733_gpu_power_on(&s, 10000) == A733_GPU_POWER_AGAIN);
-    uint64_t entered = m.now;
-    assert(a733_gpu_power_poll(&s) == A733_GPU_POWER_AGAIN && s.index == 6 && s.requested && !m.writes);
-    assert(m.now - entered < A733_GPU_SPIN_US);
-    answer(); assert(a733_gpu_power_poll(&s) == A733_GPU_POWER_OK && m.now - 100 >= 4 * 10); off();
+    assert(a733_gpu_power_poll(&s) == A733_GPU_POWER_AGAIN && s.index == 48 && s.requested && m.writes == 15);
+    answer(); assert(a733_gpu_power_poll(&s) == A733_GPU_POWER_OK && m.writes == 16); off();
     fresh(); m.stalled = 1; assert(a733_gpu_power_on(&s, 10000) == A733_GPU_POWER_AGAIN);
-    assert(poll() == A733_GPU_POWER_AGAIN && s.index == 6);
-    assert(poll() == A733_GPU_POWER_AGAIN && s.index == 6 && !m.writes);
+    assert(poll() == A733_GPU_POWER_AGAIN && s.index == 48);
+    assert(poll() == A733_GPU_POWER_AGAIN && s.index == 48 && m.writes == 15);
     m.stalled = 0; assert(drain() == A733_GPU_POWER_OK); off();
     /* A clock that rounds counter ticks down to microseconds still opens the
      * PLL_GPU0 output at least 20 us after the lock. */
@@ -504,12 +514,11 @@ int main(int argc, char **argv)
      * advancing the step or shortening the delay, and completes once the
      * clock runs again. */
     fresh(); m.tick = 0; assert(a733_gpu_power_on(&s, 10000) == A733_GPU_POWER_AGAIN);
-    assert(poll() == A733_GPU_POWER_AGAIN && s.index == 6);
-    assert(poll() == A733_GPU_POWER_AGAIN && s.index == 23);
-    assert(!(m.regs[0][0xb24/4] & 0x10000) && poll() == A733_GPU_POWER_AGAIN);
+    assert(poll() == A733_GPU_POWER_AGAIN && s.index == 22);
+    assert(!(m.regs[0][0xb24/4] & 0x10000) && poll() == A733_GPU_POWER_AGAIN && s.index == 22);
     m.tick = 1; assert(drain() == A733_GPU_POWER_OK); off();
     fresh(); m.tick = 0; m.stalled = 1; assert(a733_gpu_power_on(&s, 10000) == A733_GPU_POWER_AGAIN);
-    assert(poll() == A733_GPU_POWER_AGAIN && s.index == 6);
+    assert(poll() == A733_GPU_POWER_AGAIN && s.index == 22);
     m.tick = 1; m.stalled = 0; assert(drain() == A733_GPU_POWER_OK); off();
     /* An initially powered domain is acceptable only while reset/gates are safe. */
     fresh(); m.regs[2][0x5000/4] |= 8; m.regs[2][0x5008/4] |= 8; on(); off();

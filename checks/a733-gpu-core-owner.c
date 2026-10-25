@@ -16,7 +16,7 @@ static int read_reg(void *context, enum a733_gpu_power_bank bank, uint32_t off, 
 {
     (void)context;
     if (bank == A733_GPU_CORE) {
-        assert((d.ppu[5][2] & 15) == 8 && gpu.row.counted);
+        /* CORE6's PPU is in the always-on PCK block: read with TOP5 in any state. */
         assert(off == 0 || off == 8 || off == 0x14 || off == 0x20 || off == 0xfb0);
         /* A pending transition completes at a status read after GPU
          * clock/reset progress; earlier ON reads are observations. */
@@ -38,12 +38,14 @@ static int update(void *context, enum a733_gpu_power_bank bank, uint32_t off, ui
 {
     (void)context;
     if (bank == A733_GPU_CORE) {
-        assert(gpu.row.counted && a733_power_domain_state(&gpu.row) == A733_POWER_ROW_ON);
+        /* Policy changes with TOP5 ON; PWCR 0 precedes the TOP5 request. */
+        assert(off == 0x20 || (gpu.row.counted && a733_power_domain_state(&gpu.row) == A733_POWER_ROW_ON));
         assert(clear == UINT32_MAX && ((off == 0 && (set == 0 || set == 8)) || (off == 0x20 && !set)));
         core[off/4] = set; if (!off) pending = 1; return 1;
     }
     assert(bank == A733_GPU_CCU && (off == 0xb20 || off == 0xb24 || off == 0xe0));
-    if (gpu.phase == A733_GPU_POWER_STOPPING) assert(!core[0] && !core[2] && !pending);
+    /* OFF closes the clocks after CORE6 and TOP5 are OFF, as the vendor does. */
+    if (gpu.phase == A733_GPU_POWER_STOPPING) assert(!core[0] && !core[2] && !pending && !(d.ppu[5][2] & 15));
     uint32_t *word = level_word(CCU_BASE + off); *word = (*word & ~clear) | set;
     if (off == 0xb20) *word &= ~(1u << 27);
     return 1;

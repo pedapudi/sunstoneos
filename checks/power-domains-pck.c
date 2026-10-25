@@ -47,7 +47,7 @@ static int gpu_read(void *v,enum a733_gpu_power_bank bank,uint32_t off,uint32_t 
 {
     (void)v;
     if(bank==A733_GPU_CORE) {
-        assert((d.ppu[5][2]&15)==8 && (off==0 || off==8 || off==0x14 || off==0x20 || off==0xfb0));
+        assert(off==0 || off==8 || off==0x14 || off==0x20 || off==0xfb0);
         if(off==8 && gpu_core_pending && (d.ccu_b20&0x80000000) && (d.ccu_b24&0x10001)==0x10001) {
             gpu_core[2]=gpu_core[0];gpu_core_pending=0;
         }
@@ -394,18 +394,22 @@ int main(int argc,char **argv)
     assert(a733_power_domain_request(&b2,1));service_step();assert(a733_power_domain_state(&b2)==A733_POWER_ROW_REFUSED);
     assert(a733_rail_release(&m.rails,&t3,m.now+1000)==A733_RAIL_READY);
 
-    /* Domain-level refusals: no PPU write, nothing retained. */
+    /* Domain-level refusals: no PPU write, nothing retained. A GPU clocked
+     * and out of reset is no refusal: domain 5 changes with the GPU clocked,
+     * as the vendor does. */
     for(unsigned c=0;c<5;++c) {
         setup();
         uint32_t *words[]={&d.ccu_5c0,&d.ccu_5e0,&d.rccu_1ac,&d.ccu_b20,&d.ccu_b24};
-        const uint32_t flip[]={1u<<7,1u<<16,1,1u<<31,1u<<16};
+        const uint32_t flip[]={1u<<7,1u<<16,1,1u<<31,0x10001};
         *words[c]^=flip[c];
         struct a733_rail_token t={0};struct a733_power_domain_row r={0};
         assert(a733_power_domain_row_init(&r,&d.owner,5,63,&t));
         domains_boot();t=domains_rail(63,A733_RAIL_DCDC4);
         from=d.trace_n;assert(a733_power_domain_request(&r,1));service_step();
-        assert(a733_power_domain_state(&r)==A733_POWER_ROW_REFUSED && !writes_since(from));
-        assert(a733_rail_release(&m.rails,&t,m.now+1000)==A733_RAIL_READY);
+        if(c<3) {
+            assert(a733_power_domain_state(&r)==A733_POWER_ROW_REFUSED && !writes_since(from));
+            assert(a733_rail_release(&m.rails,&t,m.now+1000)==A733_RAIL_READY);
+        } else assert(a733_power_domain_state(&r)==A733_POWER_ROW_ON && writes_since(from));
     }
     /* A token of another owner, or without the domain's supply, is refused. */
     setup();
@@ -524,8 +528,9 @@ int main(int argc,char **argv)
     domains_boot();v4=domains_rail(70,A733_RAIL_DCDC4);assert(a733_power_domain_request(&ua,1));
     from=d.trace_n;service_step();assert(a733_power_domain_state(&ua)==A733_POWER_ROW_REFUSED && !writes_since(from));
 
-    /* Domain 5 power-off: refused while the GPU reset is deasserted (retained),
-     * otherwise the domain reaches OFF and the pin is dropped. */
+    /* Domain 5 power-off reaches OFF and drops the pin whether or not the GPU
+     * reset is deasserted: the vendor powers TOP5 off before it stops the
+     * GPU clocks. */
     for(unsigned open=0;open<2;++open) {
         setup();
         struct a733_rail_token o4={0};struct a733_power_domain_row off={0};
@@ -534,10 +539,7 @@ int main(int argc,char **argv)
         service_step();assert(a733_power_domain_state(&off)==A733_POWER_ROW_ON);
         if(open)d.ccu_b24|=1u<<16;
         from=d.trace_n;assert(a733_power_domain_request(&off,0));service_step();
-        if(open) {
-            assert(a733_power_domain_state(&off)==A733_POWER_ROW_FAILED && !writes_since(from));
-            assert(a733_rail_release(&m.rails,&o4,m.now+1000)==A733_RAIL_BUSY);
-        } else {
+        {
             assert(a733_power_domain_state(&off)==A733_POWER_ROW_OFF && writes_since(from)==1);
             assert((d.ppu[5][0]&15)==0 && (d.ppu[5][2]&15)==0 && d.ppu[5][0]==0xa5a50000);
             assert(a733_rail_release(&m.rails,&o4,m.now+1000)==A733_RAIL_READY);

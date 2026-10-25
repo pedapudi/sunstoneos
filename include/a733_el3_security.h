@@ -20,8 +20,10 @@
  *    (0xc458);
  * 16 DMAC1 DMA_SEC_REG 0x04024020 = 0xffff, all DMA1 channels non-secure
  *    (0xc460);
- * 17 SPC port 14 set register 0x020540e0 = 0xfffffbff, bit 10 left secure;
- *    port 15 is never written (0xc470).
+ * 17 SPC word 0x020540e0 = 0xfffffbff (0xc470). It is port 14's status
+ *    word, not its set register (0x020540e4), and BL31 writes it directly;
+ *    the board read it change from 0x1060 to 0xfffffbff. Bit 10 stays 0,
+ *    and port 15 is never written.
  * BL31 makes them on every cold boot and every resume, whatever device the
  * OS uses. Writes 15 and 16 are made only when the controller's bus gate is
  * open and its reset released (CCU 0x704 and 0x70c, bits 0 and 16): a

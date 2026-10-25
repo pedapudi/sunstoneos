@@ -60,8 +60,11 @@ Admission of an ON request, in order:
    and no provider, clock-registry, ledger or domain fault bit is set.
 2. The rail token belongs to the row's owner and holds the supply.
 3. Domain-level reads: both MBUS gates of the domain (CCU `0x5c0` and `0x5e0`
-   bits 5 and 11, 6 and 18, 7 and 16 for domains 1, 4 and 5), the PPU clock,
-   and for domain 5 the closed GPU clock gate and asserted reset.
+   bits 5 and 11, 6 and 18, 7 and 16 for domains 1, 4 and 5) and the PPU
+   clock. Domain 5 changes whatever the GPU clock gate and reset read: the
+   vendor powers it on after the GPU clocks open and off before they close
+   (`sunxiPrePowerState`, `sunxiPostPowerState`;
+   [docs/designs/gpu-vendor-default.md](designs/gpu-vendor-default.md)).
 4. Policy and status agree at OFF or ON. The first admission adopts that
    state; later admissions require it unchanged.
 5. The ledger pins the rail token, so its release returns BUSY while the row
@@ -141,7 +144,6 @@ records the primary-source anchors and missing physical evidence.
 | Supply not verified, fault bit set, wrong token, domain-level read wrong | REFUSED, before any write | Nothing |
 | Policy and status disagree at adoption | REFUSED, domain FAILED, fault bit set, no write | Nothing; later rows refused |
 | Delay-row readback wrong, unexpected status or acknowledgement at/after the transition deadline | FAILED, fault bit set | The domain, its rows and their rail pins |
-| GPU gate or reset open at domain-5 power-off | FAILED, fault bit set, no write | The domain, the row and its pin |
 | Rail unpin fails after domain-5 power-off | FAILED; a later ON request from the row is answered FAILED | The row, counted, and its pin |
 | A service time read fails | Transitions FAILED; later requests REFUSED | As above |
 

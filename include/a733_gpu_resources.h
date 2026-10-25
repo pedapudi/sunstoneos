@@ -15,6 +15,10 @@
 #define A733_GPU_RESOURCE_MBUS      (1u << 5)
 #define A733_GPU_RESOURCE_LOCAL     (1u << 6)
 #define A733_GPU_RESOURCE_ALL       127u
+/* The GPU controller's LOCAL set: its core runs from PLL_GPU0 under the LOCAL
+ * lease, so it holds no PERI0 parent (docs/designs/gpu-vendor-default.md).
+ * PARENT stays for the NPU and other PERI0 users. */
+#define A733_GPU_RESOURCE_GPU       (A733_GPU_RESOURCE_ALL & ~A733_GPU_RESOURCE_PARENT)
 
 enum a733_gpu_resource_result { A733_GPU_RESOURCE_OK, A733_GPU_RESOURCE_INVALID,
     A733_GPU_RESOURCE_BUSY, A733_GPU_RESOURCE_FAULT };
@@ -72,9 +76,10 @@ struct a733_gpu_resource_manager {
 int a733_gpu_resources_init(struct a733_gpu_resource_manager *,
                            const struct a733_gpu_resource_ops *, void *);
 /* Reserve requested resources, adding oscillator dependencies. LOCAL requires
- * ALL and is exclusive. Other stable leases may share matching resources.
- * Verify inherited clocks/rail and enable requested PCK/AHB/MBUS gates. The
- * parent must already be integer-mode 400 MHz and DCDC4 enabled at the GPU
+ * ALL or A733_GPU_RESOURCE_GPU and is exclusive. Other stable leases may share
+ * matching resources. Verify inherited clocks/rail and enable requested
+ * PCK/AHB/MBUS gates. A requested parent must already be integer-mode
+ * 400 MHz, and a requested rail DCDC4 enabled at the GPU
  * operating point's 960 mV (a733_gpu_opp.h), which the GPU platform sets.
  * Only LOCAL ownership permits enabling GPU bus gates; shared requests may
  * adopt them when already enabled. PCK can be enabled by a shared lease.

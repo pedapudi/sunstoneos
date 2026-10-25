@@ -185,7 +185,7 @@ def run(image, case, power_only=False, wrapper=False, probe=False):
             field(power, 'a733_gpu_power', 'core_seen', 0x1f if case in ('pr-early-stop', 'pr-pending-early') else 0xff)
             field(power, 'a733_gpu_power', 'core_policy', 8)
             field(power, 'a733_gpu_power', 'core_config', 0x101)
-            field(power, 'a733_gpu_power', 'index', 11 if early else 6 if case == 'pr-pending-early' else 53)
+            field(power, 'a733_gpu_power', 'index', 10 if early else 6 if case == 'pr-pending-early' else 53)
             notes(0x10130101, 0, 0, 0, 0)
             field(gpu, 'a733_gpu_platform', 'phase', 7 if early else 3 if case == 'pr-core-on' else 2)
             field(gpu, 'a733_gpu_platform', 'token', 17, 8)
@@ -216,7 +216,7 @@ def run(image, case, power_only=False, wrapper=False, probe=False):
             field(power, 'a733_gpu_power', 'core_seen', 0x1f if early else 0xff)
             field(power, 'a733_gpu_power', 'core_policy', 8)
             field(power, 'a733_gpu_power', 'core_config', 0x101)
-            field(power, 'a733_gpu_power', 'index', 11 if early else 53)
+            field(power, 'a733_gpu_power', 'index', 10 if early else 53)
             notes(0x10130101, 0, 0, 0, 0)
             if case == 'wrapper-client-deadline':
                 # The client's own 200 ms bound ends the wait.
@@ -240,12 +240,12 @@ def run(image, case, power_only=False, wrapper=False, probe=False):
             if case in ['on-fault', 'core-refused', 'core-partial'] or (case == 'second-on-fault' and state['on_polls'] == 2):
                 if case != 'on-fault':
                     # A refused entry has the policy, status, IDR0, MISR and
-                    # PWCR reads (seen 0x1f) and stops at the admission step 11.
+                    # PWCR reads (seen 0x1f) and stops at the admission step 10.
                     field(power, 'a733_gpu_power', 'core_seen', 0x1f if case == 'core-refused' else 1)
                     field(power, 'a733_gpu_power', 'core_policy', 8)
                     field(power, 'a733_gpu_power', 'core_config', 0x010101ff if case == 'core-refused' else 0)
                     field(power, 'a733_gpu_power', 'error', 5 if case == 'core-refused' else 1)
-                    field(power, 'a733_gpu_power', 'index', 11 if case == 'core-refused' else 7)
+                    field(power, 'a733_gpu_power', 'index', 10 if case == 'core-refused' else 7)
                     field(power, 'a733_gpu_power', 'phase', 5)
                     if case == 'core-refused':
                         notes(0x00031001, 0x100, 0, 0, 0)
@@ -555,7 +555,7 @@ def run(image, case, power_only=False, wrapper=False, probe=False):
         assert 'GPU CORE entry' in output and f'seen={31 if case == "core-refused" else 1}' in output
         assert 'GPU CORE after' in output and 'GPU CORE inputs' in output
         if case == 'core-refused':
-            assert 'GPU power phase=5 error=5 step=11' in output and 'idr0=0x31001 misr=0x100' in output, output
+            assert 'GPU power phase=5 error=5 step=10' in output and 'idr0=0x31001 misr=0x100' in output, output
         assert 'policy=0x8 status=0x0' in output, output
         assert 'GPU power' in output and 'a733_gpu_platform_off_begin' not in state['calls']
     assert not state['gpu_writes']

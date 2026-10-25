@@ -201,16 +201,17 @@ int main(void) {
     pll_disable = [(1, 0, 0xe0, out, 0), (1, 0, 0xe0, lock_en, 0), (1, 0, 0xe0, en, 0), (1, 0, 0xe0, ldo, 0)]
     assert [x for x in native if x[1] == 0] == (pll_enable + clocks_on + set_rate + clocks_off + pll_disable +
                                                 [(1, 0, 0xb24, 1 << 16, 0)])
-    # TOP5 ON precedes every GPU clock write and CORE6 PWCR 0; CORE6 policy 8
-    # follows the last clock write of ON; policy 0 precedes the first of OFF;
-    # TOP5 OFF follows the last.
+    # The vendor order in both directions: ON writes PWCR 0 (first power-on),
+    # then every GPU clock write, then TOP5 ON and CORE6 policy 8
+    # (sunxiPrePowerState); OFF writes CORE6 policy 0, then TOP5 OFF, then
+    # every clock write (sunxiPostPowerState).
     top_on, top_off = native.index((1, 2, 0x5000, 0xf, 8)), native.index((1, 2, 0x5000, 0xf, 0))
     ccu_at = [i for i, x in enumerate(native) if x[1] == 0]
     pwcr, on8, off0 = (native.index((1, 3, 0x20, 0xffffffff, 0)), native.index((1, 3, 0, 0xffffffff, 8)),
                        native.index((1, 3, 0, 0xffffffff, 0)))
     on_ccu = [i for i in ccu_at if i < on8]
-    assert top_on < pwcr < on_ccu[0] and on_ccu[-1] < on8 < off0 < min(i for i in ccu_at if i > on8)
-    assert max(ccu_at) < top_off
+    off_ccu = [i for i in ccu_at if i > on8]
+    assert pwcr < on_ccu[0] and on_ccu[-1] < top_on < on8 < off0 < top_off < off_ccu[0]
     assert 'reg = <0x0 0x02002000 0x0 0x2000>' in dtsi
     assert 'reg = <0x0 0x07010000 0x0 0x340>' in dtsi
     assert 'reg = <0x0 0x07060000 0x0 0xB000>' in dtsi

@@ -40,7 +40,7 @@ static int power_read(void *v,enum a733_gpu_power_bank bank,uint32_t off,uint32_
 {
     (void)v;assert(gpu_token && delegated);
     if(bank==A733_GPU_CORE) {
-        assert(gpu.row.counted && (d.ppu[5][2]&15)==8);
+        /* CORE6's PPU is always on; reads come before and after TOP5 ON. */
         assert(off==0 || off==8 || off==0x14 || off==0x20 || off==0xfb0);
         if(off==8 && core_pending){core[2]=core[0];core_pending=0;}
         *out=off==0xfb0 ? 0 : core[off/4];return 1;
@@ -55,7 +55,7 @@ static int power_update(void *v,enum a733_gpu_power_bank bank,uint32_t off,uint3
 {
     (void)v;assert(gpu_token && delegated && !r.held);
     if(bank==A733_GPU_CORE) {
-        assert(gpu.row.counted && a733_power_domain_state(&gpu.row)==A733_POWER_ROW_ON);
+        assert(off==0x20 || (gpu.row.counted && a733_power_domain_state(&gpu.row)==A733_POWER_ROW_ON));
         assert(clear==UINT32_MAX && ((off==0 && (set==0 || set==8)) || (off==0x20 && !set)));
         core[off/4]=set;if(!off)core_pending=1;return 1;
     }

@@ -137,36 +137,37 @@ def probe_steps(elf):
 
 
 def power_order(elf, cycles):
-    """TOP5 before CORE6 at ON, CORE6 before TOP5 at OFF, in the image's own step tables, which
-    every one of the client's cycles runs."""
+    """The vendor order in the image's own step tables, which every one of the client's cycles runs.
+    ON (sunxi_platform_init, then sunxiPrePowerState): CORE6 PWCR 0, PLL_GPU0 at 1008 MHz and the GPU
+    clocks, then the domain-5 (TOP5) ON request, then CORE6 policy 8 and its status poll. OFF
+    (sunxiPostPowerState): CORE6 policy 0, then the domain-5 OFF request, then the GPU clocks and
+    PLL_GPU0 off."""
     on, off = step_table(elf, 'on_steps'), step_table(elf, 'off_steps')
     on_domain = [i for i, s in enumerate(on) if s[0] == KIND_DOMAIN]
     off_domain = [i for i, s in enumerate(off) if s[0] == KIND_DOMAIN]
-    on_core = [i for i, s in enumerate(on) if s[1] == BANK_CORE and s[0] != KIND_DOMAIN]
-    off_core = [i for i, s in enumerate(off) if s[1] == BANK_CORE and s[0] != KIND_DOMAIN]
     require(len(on_domain) == 1 and on[on_domain[0]][4] == 1, 'ON has no single domain-5 ON step')
     require(len(off_domain) == 1 and off[off_domain[0]][4] == 0, 'OFF has no single domain-5 OFF step')
-    require(on_core and min(on_core) > on_domain[0], 'A CORE6 access precedes the domain-5 ON request')
-    require(off_core and max(off_core) < off_domain[0], 'A CORE6 access follows the domain-5 OFF request')
     require(on[-1][1] == BANK_CORE and on[-1][2] == 8 and on[-1][4] == 8, 'ON does not end with the CORE6 status poll')
     require(not any(s[1] == BANK_CORE and s[2] in CORE6_DELAY_ROW for s in on + off),
             'A step touches the CORE6 delay row, which no reference writes.')
-    # The vendor order: the PLL_GPU0 locks and the 1008 MHz read-back precede
-    # the CORE6 policy 8 write; OFF writes CORE6 policy 0 before any clock
-    # write and disables PLL_GPU0 before the domain-5 OFF request.
+    pwcr = [i for i, s in enumerate(on) if s[:3] == (KIND_UPDATE, BANK_CORE, 0x20) and s[4] == 0]
     policy8 = [i for i, s in enumerate(on) if s[:3] == (KIND_UPDATE, BANK_CORE, 0) and s[4] == 8]
     locks = [i for i, s in enumerate(on) if s[0] == KIND_LOCK and s[2] == PLL_GPU0]
+    ccu_on = [i for i, s in enumerate(on) if s[1] == BANK_CCU and s[0] in (KIND_UPDATE, KIND_PLL)]
+    require(len(pwcr) == 1 and ccu_on and pwcr[0] < min(ccu_on), 'ON does not write CORE6 PWCR 0 before the GPU clocks.')
     require(len(policy8) == 1 and len(locks) == 2 and PLL_1008 in on and
-            max(locks) < on.index(PLL_1008) < policy8[0], 'ON does not set PLL_GPU0 to 1008 MHz before CORE6 policy 8.')
+            max(locks) < on.index(PLL_1008) < on_domain[0] and max(ccu_on) < on_domain[0] < policy8[0],
+            'ON does not set PLL_GPU0 to 1008 MHz and open the GPU clocks before domain 5 ON and CORE6 policy 8.')
     policy0 = [i for i, s in enumerate(off) if s[:3] == (KIND_UPDATE, BANK_CORE, 0) and s[4] == 0]
     ccu_off = [i for i, s in enumerate(off) if s[1] == BANK_CCU and s[0] == KIND_UPDATE]
     pll_off = [i for i, s in enumerate(off) if s[:3] == (KIND_UPDATE, BANK_CCU, PLL_GPU0)]
-    require(len(policy0) == 1 and ccu_off and policy0[0] < min(ccu_off) and len(pll_off) == 4 and
-            max(ccu_off) < off_domain[0], 'OFF does not close the GPU clocks and PLL_GPU0 after CORE6 OFF.')
-    return {'cycles': cycles, 'on_steps': len(on), 'off_steps': len(off), 'on_domain_step': on_domain[0],
-            'on_first_core_step': min(on_core),
-            'on_last_step': 'CORE6 status poll for 8', 'off_last_core_step': max(off_core),
-            'off_domain_step': off_domain[0], 'on_pll_1008_step': on.index(PLL_1008), 'on_policy8_step': policy8[0]}
+    off_core = [i for i, s in enumerate(off) if s[1] == BANK_CORE]
+    require(len(policy0) == 1 and ccu_off and len(pll_off) == 4 and max(off_core) < off_domain[0] < min(ccu_off),
+            'OFF does not write CORE6 policy 0, then domain 5 OFF, then close the GPU clocks and PLL_GPU0.')
+    return {'cycles': cycles, 'on_steps': len(on), 'off_steps': len(off), 'on_pwcr_step': pwcr[0],
+            'on_pll_1008_step': on.index(PLL_1008), 'on_domain_step': on_domain[0], 'on_policy8_step': policy8[0],
+            'on_last_step': 'CORE6 status poll for 8', 'off_policy0_step': policy0[0],
+            'off_domain_step': off_domain[0], 'off_first_clock_step': min(ccu_off)}
 
 
 def prepare_bundle(row, build, check, output):

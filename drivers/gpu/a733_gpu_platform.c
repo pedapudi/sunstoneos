@@ -226,7 +226,7 @@ int a733_gpu_platform_poll(void *context)
             if(r<0)return fail(p);
             if(!r)return 0;
         }
-        p->resource_result = a733_gpu_resources_acquire(p->manager, p->client, A733_GPU_RESOURCE_ALL,
+        p->resource_result = a733_gpu_resources_acquire(p->manager, p->client, A733_GPU_RESOURCE_GPU,
                                                        p->deadline, &p->token, &p->ready);
         if(p->pmic_native)p->pmic.armed=0;
         if (!clock_ok(p)) return -1;

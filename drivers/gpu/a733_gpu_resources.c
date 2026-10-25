@@ -17,7 +17,7 @@ static uint32_t expand(uint32_t mask)
 static int valid(unsigned client, uint32_t mask)
 {
     return client < A733_GPU_RESOURCE_CLIENTS && mask && !(mask & ~A733_GPU_RESOURCE_ALL) &&
-        (!(mask & A733_GPU_RESOURCE_LOCAL) || mask == A733_GPU_RESOURCE_ALL);
+        (!(mask & A733_GPU_RESOURCE_LOCAL) || mask == A733_GPU_RESOURCE_ALL || mask == A733_GPU_RESOURCE_GPU);
 }
 static enum a733_gpu_resource_result enter(struct a733_gpu_resource_manager *m)
 {

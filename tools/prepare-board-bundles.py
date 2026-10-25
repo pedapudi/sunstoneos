@@ -395,7 +395,7 @@ ROWS = [
                   'in eight sub-windows of 32, beside 256 samples of the stamp pair alone. Those snapshots leave '
                   'the step records: of the 34 snapshots, the wire-time spin step is excluded and the poll window '
                   'normally takes one, so STEPS normally reads recorded=32 and excluded=1, one fewer recorded for '
-                  'each further snapshot the window takes. Pass: both supplies verified, every snapshot 0xff9e, 34 snapshots counted, and the '
+                  'each further snapshot the window takes. Pass: both supplies verified, every DCDC2 snapshot 0xff9e, every DCDC4 snapshot 0xff9e, or 0xffae (960 mV) when a GPU image of the same lifetime raised it, all equal, 34 snapshots counted, and the '
                   'provisional empirical bound of docs/designs/pmic-access.md: at CPU-L 494 MHz, the median step at most '
                   '1268 permille of its measured wire time and the first step at most that limit plus 40 us. A missed '
                   'bound, or a measured byte that is missing or above 110%, is the controlled outcome; a supply, '
@@ -1036,10 +1036,13 @@ def runbook(row, bundle, value, artifacts, prerequisites, timeout, lifetime=None
         if value.get('power_order'):
             o = value['power_order']
             lines += [f'Power order, read from the image\'s `on_steps` ({o["on_steps"]} steps) and `off_steps` '
-                      f'({o["off_steps"]} steps): domain 5 (TOP5) ON is step {o["on_domain_step"] + 1} and the first '
-                      f'CORE6 access step {o["on_first_core_step"] + 1}; ON ends with the CORE6 status poll for 8. '
-                      f'At OFF the last CORE6 access is step {o["off_last_core_step"] + 1} and domain 5 OFF step '
-                      f'{o["off_domain_step"] + 1}.', '']
+                      f'({o["off_steps"]} steps), which is the vendor order: ON writes CORE6 PWCR 0 at step '
+                      f'{o["on_pwcr_step"] + 1}, reads PLL_GPU0 back at 1008 MHz at step {o["on_pll_1008_step"] + 1}, '
+                      f'requests domain 5 (TOP5) ON at step {o["on_domain_step"] + 1} with the GPU clocked, writes '
+                      f'CORE6 policy 8 at step {o["on_policy8_step"] + 1} and ends with the CORE6 status poll for 8. '
+                      f'OFF writes CORE6 policy 0 at step {o["off_policy0_step"] + 1}, requests domain 5 OFF at step '
+                      f'{o["off_domain_step"] + 1} and stops the first GPU clock at step '
+                      f'{o["off_first_clock_step"] + 1}.', '']
     elif row['class'] == 'monitor':
         origins = sorted({o['origin'] for o in json.loads((bundle / 'equivalence.json').read_text())['objects'].values()}
                          - {'new'})

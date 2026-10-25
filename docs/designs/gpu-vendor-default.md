@@ -27,7 +27,9 @@ it:
 - The 22 SPC words at `0x02054004 + 0x10·n` and the three R_SPC words read 0
   before and after their `0xffffffff` writes. They behave as write-only
   "set" registers, so a readback cannot confirm them.
-- SPC `0x020540e0` (port 14) changed from `0x1060` to `0xfffffbff`.
+- SPC `0x020540e0`, port 14's status word, changed from `0x1060` to
+  `0xfffffbff`. BL31 writes this word directly; port 14's set register is
+  `0x020540e4`, which BL31 does not write.
 - `PRCM_SEC_SWITCH_REG` (`0x07010290`) and `CCMU_SEC_SWITCH_REG`
   (`0x02003f00`) changed from 0 to 7.
 - DCDC4's selector changed from `0x9e` to `0xae` (bit 7, set by boot0, kept;
@@ -96,7 +98,7 @@ writes, because the QEMU machine has none of these blocks. This is rank 1 of the
 | 14 | `CCMU_SEC_SWITCH_REG` `0x02003f00` = 7 | `0xc448` | PLL, bus and MBUS clock registers, including `PLL_GPU0_CTRL_REG` and `NSI_CLK_REG` | Clock drivers already wrote PLL_NPU and the display PLLs from EL1. Board: 0 to 7 |
 | 15 | DMAC0 `DMA_SEC_REG` `0x04601020` = `0xffff` | `0xc458` | All 16 DMA0 channels | DMA0 is SunstoneOS's DMA controller, used from non-secure EL1, so non-secure channels are what it needs. `0xffff` is the register's reset value (manual 13.1.7.1) |
 | 16 | DMAC1 `DMA_SEC_REG` `0x04024020` = `0xffff` | `0xc460` | All 16 DMA1 channels | SunstoneOS does not use DMA1; its ownership stays unresolved (`docs/dma.md`). The NPU uses neither controller |
-| 17 | SPC port 14 set register `0x020540e0` = `0xfffffbff` | `0xc470` | Port 14 except bit 10; port 15 is never written | Board: `0x1060` to `0xfffffbff` |
+| 17 | SPC port 14 status word `0x020540e0` = `0xfffffbff`, written directly (the set register is `0x020540e4`) | `0xc470` | Port 14 except bit 10; port 15 is never written | Board: `0x1060` to `0xfffffbff` |
 
 The two DMA writes are made only when the controller's bus gate and reset
 (CCU `0x704` for DMA0, `0x70c` for DMA1, bits 0 and 16) are both open. A
@@ -126,9 +128,10 @@ and are left out; no SunstoneOS code uses TIMER0.
   registers that were secure-only. A driver that relies on such a register
   faulting or reading zero would change behaviour; the documents name one,
   DMA0 `+0x20`, which the DMA startup keeps outside its allowlist.
-- **Board-bundle supply snapshot (row 6).** It expects DCDC4 at 800 mV. In
-  a lifetime where a GPU image has run, DCDC4 reads 960 mV (next section),
-  so row 6 must run before the first GPU image of a lifetime.
+- **Board-bundle supply snapshot (row 6).** In a lifetime where a GPU image
+  has run, DCDC4 reads 960 mV (next section). Row 6 accepts DCDC4 at
+  `0xff9e` (800 mV) or `0xffae` (960 mV), with every DCDC4 snapshot equal to
+  the first, so it can run before or after a GPU image.
 
 ## DCDC4 960 mV is a GPU operating point of the shared PMIC path
 
@@ -169,51 +172,79 @@ its later power-ons (`sunxiPrePowerState`) and power-offs
    gate closed, source 0 (PLL_GPU0), divider 1, GPU bus gate and reset
    closed, PLL_GPU0 disabled with input divider M1 1, which the factor write
    keeps.
-2. TOP5 ON through the power-domain owner's row. TOP5 is ON from reset; the
-   owner adopts it.
-3. CORE6 entry words read and admitted (ours only), then PWCR 0. The vendor
-   writes PWCR 0 at its first power-on only; it stays 0 afterwards.
-4. PLL_GPU0 enabled as `ccu_pll_gate_helper_enable` does (`ccu_gate.c:157–203`):
+2. CORE6 entry words read and admitted (ours only), then PWCR 0. The vendor
+   writes PWCR 0 at its first power-on only; it stays 0 afterwards. TOP5 is
+   ON from reset, so CORE6's PPU answers before any domain request.
+3. PLL_GPU0 enabled as `ccu_pll_gate_helper_enable` does (`ccu_gate.c:157–203`):
    output gate cleared, LDO, enable and lock enable set, lock read every 3 µs
    until three consecutive reads show it (at most 100,
    `ccu_common.c:47–61`), 20 µs, output gate set.
-5. GPU bus reset released, bus gate opened, core clock gate opened with the
+4. GPU bus reset released, bus gate opened, core clock gate opened with the
    update bit, then the update bit written again (`sunxi_enable_clks_wrap`).
-6. PLL_GPU0 set to 1008 MHz as `ccu_nm_set_rate` does (`ccu_nm.c:250–345`):
+5. PLL_GPU0 set to 1008 MHz as `ccu_nm_set_rate` does (`ccu_nm.c:250–345`):
    output gate cleared, N 84 and P0 2, lock enable cleared and set, the lock
    wait, 20 µs, output gate set.
+6. TOP5 ON through the power-domain owner's row, with the GPU clocked, as
+   `sunxiPrePowerState` requests the domain after `sunxi_enable_clks_wrap`.
+   On the first ON the owner adopts TOP5, which is ON from reset.
 7. CORE6 policy 8, then status polled until 8.
 
 The vendor's first power-on writes policy 8 before the clocks; its later
 power-ons write it after them. At power-up CORE6's policy already reads 8
 with its transition outstanding, so on the first ON the write in step 7
 changes no request: the transition completes when the clocks run, as on the
-board. On a later ON, from policy 0, the write comes after the clocks, as
-in the vendor's later power-ons. The status poll is our check; the vendor
-never reads CORE6 status. Every PLL_GPU0 write is read back (ours only),
-and the controller fails with `PLL`, `LOCK` or `UPDATE` when a write does not
-take, the PLL does not lock, or an update bit stays set. The CORE6 delay-row
-writes are removed: no reference writes them, and the board read the same
-values at reset.
+board. On a later ON, from policy 0, the write comes after the clocks and
+TOP5, as in the vendor's later power-ons. The status poll is our check; the
+vendor never reads CORE6 status. Every PLL_GPU0 write is read back (ours
+only), and the controller fails with `PLL`, `LOCK` or `UPDATE` when a write
+does not take, the PLL does not lock, or an update bit stays set. The CORE6
+delay-row writes are removed: no reference writes them, and the board read
+the same values at reset.
 
-**OFF.** The vendor's order is CORE6 policy 0, TOP5 OFF, bus gate, core
-gate, PLL_GPU0 disabled, reset asserted. The default controller runs:
+**OFF.** The controller runs `sunxiPostPowerState`'s order:
 
 1. CORE6 policy 0, then status polled until 0 (the poll is ours only).
-2. GPU bus gate closed.
-3. Core clock gate closed with the update bit, as `ccu_gate_helper_disable`
+2. TOP5 OFF through the row; the owner waits for domain status 0.
+3. GPU bus gate closed.
+4. Core clock gate closed with the update bit, as `ccu_gate_helper_disable`
    writes it for a key-field clock.
-4. PLL_GPU0 disabled as `ccu_pll_gate_helper_disable` does (`ccu_gate.c:40–69`):
+5. PLL_GPU0 disabled as `ccu_pll_gate_helper_disable` does (`ccu_gate.c:40–69`):
    output gate, lock enable, enable, then LDO cleared, each read back.
-5. GPU bus reset asserted.
-6. TOP5 OFF through the row, then the resource release.
+6. GPU bus reset asserted, then the resource release.
 
-TOP5 goes OFF last because the power-domain owner requires the GPU clock
-gate, bus gate and reset closed whenever domain 5 changes. That order
-keeps the GPU clocked through the CORE6 OFF handshake, which the board run
-showed depends on the GPU clock. TOP5 reached ON at power-up with the GPU
-gated and in reset, so its handshake does not depend on that clock.
-The OFF sequence has not run on a board.
+Both domain-5 transitions run with the GPU clocked, as the vendor runs them,
+and the power-domain owner admits a domain-5 transition whatever the GPU
+clock, bus gate and reset read. The owner used to require them closed. That
+rule rested on TOP5 having reached ON at power-up with the GPU gated and in
+reset, which shows nothing: TOP5 is ON from reset, so no TOP5 power-up
+handshake has ever run without the GPU clock, and none has run with it. The
+board run showed that CORE6's handshake depends on the GPU clock; TOP5's
+may too, and the vendor order keeps the clock running through both. The
+OFF sequence and a TOP5 transition from OFF have not run on a board.
+
+**Failure states.** A failure stops the controller at its step, leaves the
+state below, retains the leases and the TOP5 row, and makes no further
+access. The controller reports the error and the step index, and the GPU
+platform prints them with the CORE6 and clock snapshots.
+
+| Failed step | GPU clocks and PLL_GPU0 | TOP5 | CORE6 |
+| --- | --- | --- | --- |
+| ON 1–2 (admission, PWCR) | Gated, reset asserted, PLL disabled | ON from reset, untouched | Entry state; PWCR 0 if written |
+| ON 3–5 (PLL, clocks, rate) | As far as the step got; the gate and reset as written | ON from reset, untouched | PWCR 0, policy unchanged |
+| ON 6 (TOP5 refused, failed or timed out) | Clocked at 1008 MHz | The owner's answer: refused rows write nothing, a failed row keeps its rail pin | PWCR 0, policy unchanged |
+| ON 7 (policy 8 or status poll) | Clocked at 1008 MHz | ON | Policy 8, status as last read |
+| OFF 1 (policy 0 or status poll) | Clocked at 1008 MHz | ON | Policy 0, status as last read |
+| OFF 2 (TOP5 OFF) | Clocked at 1008 MHz | The owner's answer, row retained | OFF |
+| OFF 3–6 (clocks, PLL, reset) | As far as the step got | OFF | OFF |
+
+Each state keeps the GPU clocked while a power handshake is outstanding, so
+a later attempt or a reset can complete it; no state leaves the GPU
+unclocked with a domain transition outstanding.
+
+**PERI0.** The GPU core clock runs from PLL_GPU0, so the GPU no longer
+leases the PERI0 400 MHz output or checks its rate. The resource manager
+keeps the PERI0 lease for the NPU and its other users, and the GPU platform
+acquires every resource except that one.
 
 ## The diagnostic copies are removed
 
@@ -255,8 +286,8 @@ form is the bounded busy wait, which the reference's `udelay(3)` loop also
 uses; it runs once per transition.
 
 Failure classes are unchanged: a refused or failed step stops the
-controller, retains the leases and the TOP5 row, and makes no further
-access. A failed DCDC4 write retains the exclusive lease and the PMIC
+controller in one of the states of the failure table above, retains the
+leases and the TOP5 row, and makes no further access. A failed DCDC4 write retains the exclusive lease and the PMIC
 request, so the programmed voltage stays uncertain until recovery. A DCDC4
 snapshot that completes at a voltage other than 800 or 960 mV made no
 write: the platform reaps it, releases the lease and fails, so the power
@@ -287,10 +318,12 @@ Predictions, per image:
 - Cycle 1 ON: CORE6 entry policy 8, status 0, PWCR `0x101`; `GPU clock`
   `pll=0xf9105300`, about four reads per lock wait, one read per update
   bit; CORE6 status 8 before the ON deadline, `misr_late=0x100`.
-- Cycle 1 OFF: CORE6 status 0 within the first poll, as the GPU is still
-  clocked; PLL_GPU0 then reads `0x01105300` (bit 24 kept, control bits
-  clear); TOP5 status 0 within the owner's 10 ms; the resource release
-  passes.
+- Cycle 1 OFF: CORE6 status 0 within the first poll and TOP5 status 0
+  within the owner's 10 ms, both with the GPU still clocked; PLL_GPU0 then
+  reads `0x01105300` (bit 24 kept, control bits clear); the resource
+  release passes. This is the first TOP5 transition from ON on a board.
+- Cycle 2 ON: TOP5 goes from OFF to ON with the GPU clocked, the first TOP5
+  power-up handshake on a board.
 - Cycle 2 ON: CORE6 entry policy 0, status 0, PWCR 0, which admission
   accepts as settled OFF; PLL_GPU0 locks directly at 1008 MHz; CORE6
   reaches 8 after the policy write; snapshot 2 shows `0x07066008` = 8.
@@ -300,12 +333,12 @@ Predictions, per image:
 
 What each departure would mean:
 
-- **Cycle 1 OFF times out at the CORE6 status poll** (OFF step 2): CORE6
+- **Cycle 1 OFF times out at the CORE6 status poll** (OFF step 1): CORE6
   does not complete OFF even while clocked. TOP5 and the clocks stay on, as
   in the vendor-state image.
-- **TOP5 OFF fails or times out**: TOP5's handshake needs the GPU clock,
-  so the vendor order, TOP5 OFF before the clocks close, is required. That
-  needs the owner to admit a domain-5 transition with the GPU clocked.
+- **TOP5 OFF fails or times out** (OFF step 2): TOP5 does not complete OFF
+  even while clocked. The GPU stays clocked and CORE6 OFF, which the
+  snapshot after the failed OFF shows.
 - **Cycle 2 ON fails**: the first OFF left the GPU in a state from which
   this ON order does not recover; the controller's error, step and the
   snapshot after the failed ON name the step and the CORE6 and PLL words.

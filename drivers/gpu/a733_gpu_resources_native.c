@@ -55,7 +55,7 @@ static int native_rail(void *context, struct a733_gpu_resource_rail *out, uint64
         const struct a733_gpu_resource_lease *lease=n->pmic_manager && n->pmic_client<A733_GPU_RESOURCE_CLIENTS ?
             &n->pmic_manager->leases[n->pmic_client] : 0;
         return now < deadline && n->pmic_view && lease && lease->token &&
-            lease->mode==A733_GPU_RESOURCE_STABLE && lease->mask==A733_GPU_RESOURCE_ALL &&
+            lease->mode==A733_GPU_RESOURCE_STABLE && (lease->mask==A733_GPU_RESOURCE_ALL || lease->mask==A733_GPU_RESOURCE_GPU) &&
             atomic_load_explicit(&n->pmic_manager->busy,memory_order_relaxed)==1 &&
             n->pmic_view->config.provider == n->pmic &&
             a733_pmic_consumer_take(n->pmic_view,n,deadline,out);

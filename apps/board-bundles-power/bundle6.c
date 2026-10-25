@@ -23,7 +23,9 @@
  * STOP, and per byte the byte time of bb_byte_ns(): nine bit times, or the
  * measured byte when that is longer and at most 110% of nine bit times.
  * Success is status 0 with "COMPLETE board bundle 6": both supplies verified,
- * every snapshot 0xff9e (enabled, 800 mV), 34 snapshots counted and the
+ * every DCDC2 snapshot 0xff9e (enabled, 800 mV), every DCDC4 snapshot 0xff9e
+ * or, after a GPU image of the same lifetime raised it, 0xffae (enabled,
+ * 960 mV) and all equal, 34 snapshots counted and the
  * provisional bound of docs/designs/pmic-access.md met (trace.h,
  * bb_steps_evaluate). Re-spins are reported, not bounded. A missed bound, or
  * a measured byte that is missing or above 110%, ends with status 1 after
@@ -54,8 +56,11 @@
 
 #define SNAPSHOTS 32u
 /* Enable byte 0xff and selector 0x9e: DCDC2 and DCDC4 enabled at 800 mV, as
- * port 3-3 read them on 2026-10-24. */
+ * port 3-3 read them on 2026-10-24. A GPU image raises DCDC4 to 960 mV
+ * (selector 0xae) and leaves it there for the rest of the lifetime
+ * (docs/designs/gpu-vendor-default.md), so DCDC4 may also read 0xffae. */
 #define SNAPSHOT_EXPECTED 0xff9eu
+#define SNAPSHOT_GPU_RAISED 0xffaeu
 static struct a733_pmic_snapshot snapshots[SNAPSHOTS];
 
 static void snapshot(unsigned i)
@@ -124,12 +129,14 @@ static void client(void *unused)
     s.bit_ns = bb_power.pmic.bit_ns;
     s.dcdc2 = !!(s.state & A733_POWER_DCDC2_VERIFIED);
     s.dcdc4 = !!(s.state & A733_POWER_DCDC4_VERIFIED);
+    s.dcdc2_first = enable_selector(&snapshots[0]);
+    s.dcdc4_first = enable_selector(&snapshots[1]);
+    const uint32_t dcdc4_uv = s.dcdc4_first == SNAPSHOT_GPU_RAISED ? 960000 : 800000;
     s.unchanged = 1;
     for (unsigned i = 0; i < SNAPSHOTS; ++i)
         s.unchanged &= enable_selector(&snapshots[i]) == enable_selector(&snapshots[i & 1]) &&
-            snapshots[i].enabled == 1 && snapshots[i].decoded == 1 && snapshots[i].programmed_uv == 800000;
-    s.dcdc2_first = enable_selector(&snapshots[0]);
-    s.dcdc4_first = enable_selector(&snapshots[1]);
+            snapshots[i].enabled == 1 && snapshots[i].decoded == 1 &&
+            snapshots[i].programmed_uv == (i & 1 ? dcdc4_uv : 800000);
     s.steps = bb_power.stepped;
     s.dropped = bb_power.steps_dropped;
     s.twi_reads = bb_power.twi.reads;
@@ -145,7 +152,7 @@ static void client(void *unused)
     for (unsigned i = 0; i < n; ++i)
         bb_power_print(&lines[i]);
     if (!s.dcdc2 || !s.dcdc4 || !s.unchanged || s.dcdc2_first != SNAPSHOT_EXPECTED ||
-        s.dcdc4_first != SNAPSHOT_EXPECTED)
+        (s.dcdc4_first != SNAPSHOT_EXPECTED && s.dcdc4_first != SNAPSHOT_GPU_RAISED))
         bb_power_fail("board bundle 6: supply verification or snapshot mismatch");
     /* The two verification snapshots and the 32 client snapshots each end in
      * six STOPs. Another count, or no recorded step, means the record itself
