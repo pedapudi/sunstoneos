@@ -109,7 +109,7 @@ regenerating.
   merged adapter. The image links the board-qualified base monitor object
   (`3eaf49b9`) in place of the central one (`probe.bin` `d474710c`). It passed
   with complete OUT/IN observation, quiescence and a responsive ROM return
-  (`s13-r9-run`). This qualifies the plain S_TWI0 placement in the native USB
+  (`s13-r9-usb`). This qualifies the plain S_TWI0 placement in the native USB
   image. The port 3-3 lifetime now holds six warm returns.
 
 The mimus branch `port/sunstoneos` (`9c57286b7`) was pushed to
