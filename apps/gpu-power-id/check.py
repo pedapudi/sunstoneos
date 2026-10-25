@@ -55,12 +55,13 @@ PROBE_ENTRY = {0x01880014: 1, 0x01880010: 0, 0x0a0000b0: 5}
 PROBE_ALL = list(range(15))
 PROBE_PATHS = {'pr-board': PROBE_ALL, 'pr-core-on': PROBE_ALL, 'pr-bad-id': PROBE_ALL, 'pr-after-differs': PROBE_ALL,
                'pr-restore-ignored': PROBE_ALL, 'pr-sync-abort': list(range(10)), 'pr-early-stop': [],
-               'pr-pending-early': [], 'pr-mapping': [], 'pr-time-budget': []}
+               'pr-pending-early': [], 'pr-mapping': [], 'pr-time-budget': [], 'pr-window-refused': list(range(5))}
 PROBE_FAIL = 'GPU probe read: identity or restore not as expected, GPU left powered'
 PROBE_REASONS = {'pr-board': None, 'pr-core-on': None, 'pr-bad-id': PROBE_FAIL, 'pr-after-differs': PROBE_FAIL,
                  'pr-restore-ignored': PROBE_FAIL, 'pr-sync-abort': None, 'pr-early-stop': 'GPU ON poll',
                  'pr-pending-early': 'GPU probe read refused before clock and reset progress',
-                 'pr-mapping': 'GPU probe read mapping', 'pr-time-budget': 'GPU probe read time budget'}
+                 'pr-mapping': 'GPU probe read mapping', 'pr-time-budget': 'GPU probe read time budget',
+                 'pr-window-refused': None}
 PROBE_COMPLETE = ('COMPLETE GPU probe read: identity 36.56.104.183 before and after the secure configuration, '
                   'restored, GPU left powered')
 NAMES = ['bb_power', 'a733_gpu_platform', 'a733_gpu_power', 'a733_pmic_consumer',
@@ -108,7 +109,8 @@ def run(image, case, power_only=False, wrapper=False, probe=False):
     domains = bb + L['bb_power']['domains']
     domain5 = domains + L['a733_power_domains']['domain'] + 2 * 32
     # The wrapper-read client keeps 200 ms for ON and 100 ms after it.
-    deadline = 250000 if case == 'pr-time-budget' else 10**6 if wrapper or probe else 10000
+    deadline = 250000 if case == 'pr-time-budget' else 3 * 10**6 if case == 'pr-window-refused' else \
+        10**6 if wrapper or probe else 10000
     state = {'case': case, 'calls': [], 'gpu_reads': [], 'gpu_writes': [], 'clock_reads': 0, 'on_polls': 0,
              'snapshot_reads': [], 'translated': [], 'wrapper_reads': [], 'progress': [],
              'time': 100, 'messages': [], 'exit_status': None, 'failure': None,
@@ -167,6 +169,10 @@ def run(image, case, power_only=False, wrapper=False, probe=False):
                 state['time'] = 99
             if case == 'on-deadline' and state['on_polls'] >= 3:
                 state['time'] = deadline
+            if case == 'pr-window-refused' and len(state['pr']) == 5:
+                # 1.6 s after monitor entry (start_counter 0): the window would
+                # end less than 500 ms before the monitor's 2 s deadline.
+                state['time'] = max(state['time'], 1600000)
             ret(state['time'])
         elif name == 'a733_gpu_platform_poll' and probe:
             state['on_polls'] += 1
@@ -572,7 +578,7 @@ def check_probe(u, state, case, output):
         assert int.from_bytes(u.mem_read(0x0a0000b0, 4), 'little') == 5
         assert state['exit_status'] is None and 'COMPLETE' not in output
         return state
-    if rows:
+    if rows and case != 'pr-window-refused':
         read = state['pr_values']
         after_low = 0 if case == 'pr-after-differs' else low
         restored_drm = 0 if case == 'pr-restore-ignored' else 1
@@ -586,7 +592,11 @@ def check_probe(u, state, case, output):
                f'restored={int(case != "pr-restore-ignored")} accesses=15' in output, output
     snapshots = 1 if case == 'pr-time-budget' else 2
     assert state['snapshot_reads'] == SNAPSHOT * snapshots, len(state['snapshot_reads'])
-    if case in ('pr-board', 'pr-core-on'):
+    if case == 'pr-window-refused':
+        # Refused after the first identity read, before any write.
+        assert state['exit_status'] == 7 and 'FAIL GPU probe read window refused' in output, output
+        assert 'GPU PROBE window refused now_us=1600' in output and 'monitor_deadline_us=2000000' in output, output
+    elif case in ('pr-board', 'pr-core-on'):
         assert state['exit_status'] == 0 and PROBE_COMPLETE in output, output
     else:
         assert state['exit_status'] is None and 'COMPLETE' not in output

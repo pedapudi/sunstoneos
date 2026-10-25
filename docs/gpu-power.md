@@ -720,11 +720,11 @@ and turning it and TOP5 off from that state has no board evidence; the
 run ends after the restore, and the lifetime ends with the power removal
 that the runbook requires anyway.
 
-**The write window restores on every way out.** From the first write
-(row 6) to the last restore readback (row 15) the client:
+**The write window restores on every exception the image takes.** From
+the first write (row 6) to the last restore readback (row 15) the client:
 
-- masks D, A, I and F, so no interrupt, task switch or asynchronous abort
-  is taken;
+- masks D, A, I and F at EL1, so no EL1 interrupt, task switch or
+  asynchronous abort is taken;
 - makes no deadline or clock check and has no failure call, so no
   `bb_power_fail` or `platform_exit` can run;
 - points `VBAR_EL1` at `probe_restore_vectors`, sixteen slots that each
@@ -739,11 +739,29 @@ words before the image's fault report returns to the monitor. After the
 last restore readback the client restores `VBAR_EL1`, reads `ISR_EL1` and
 prints `GPU PROBE window serror_pending`, and only then restores DAIF. An
 asynchronous abort signalled during the window is thus taken, if at all,
-after both words hold their entry values. The monitor's 2 s recovery
-cannot fall inside the window: the window takes microseconds and begins
-about 200 ms after monitor entry. The only path that leaves the words
-written is an access that never completes, which no software can follow;
-then the lifetime ends with the power removal.
+after both words hold their entry values.
+
+The restores do not cover the monitor's 2 s recovery. That timer is a FIQ
+routed to EL3 (`SCR_EL3` = `0x505`, `monitor.c:96–97`) and taken through
+the monitor's EL3 vectors, never through `VBAR_EL1`; the EL1 FIQ mask has
+no effect on it. A recovery inside the window would return to the ROM with
+SMC0 at 2 and `drm_ctrl` at 0, and both would stay so until the power
+removal that ends the lifetime. The client therefore starts the window
+only if, after a 10 ms bound for the window, at least 500 ms remain before
+the monitor's deadline, `RESULT->start_counter` plus 2 s. The bound
+follows the wrapper-read run on port 3-1, which finished its last wrapper
+read, its log lines and its exit within 15 µs; the window's ten accesses
+and their log lines take well under 1 ms at that rate. A refusal prints
+`GPU PROBE window refused` and `FAIL GPU probe read window refused:
+monitor deadline too near, nothing written` and returns status 7, which
+no other path of this image uses. A recovery inside the window, or an
+access that never completes, leaves both words written until the power
+removal.
+
+What SMC0 `+0xb0` = 2 does is unknown: no manual describes the register,
+and only the vendor's name `SMC_DRM_GPU_HW_RST` hints at it. If it cut
+non-secure CPU access to DRAM, the client, its log and the restore stubs,
+which all run from DRAM, would stop, and the run would not return.
 
 What each result means:
 
@@ -796,7 +814,7 @@ against the device access, and each write against its readback
 ten accesses and their log lines. A controller, provider or deadline
 fault before the window retains the claim, as in section 1.8.
 
-The host check (`check.py --probe-read`, twelve cases) runs the linked
+The host check (`check.py --probe-read`, thirteen cases) runs the linked
 client against modeled controller results. It requires:
 
 - the three pages checked before the first access;
@@ -811,7 +829,8 @@ The cases are the board's state, CORE6 ON during the observation, a first
 identity of 0, a second identity that differs, a restore that the
 register ignores, a synchronous abort on the second identity read, a
 controller refusal, an ON before the reset release, a wrong SMC0
-translation and a short client deadline. In the abort case the check
+translation, a short client deadline, and a window refused because it
+would start 1.6 s after monitor entry. In the abort case the check
 enters the restore vectors as the exception would, and requires both
 words written back, `drm_ctrl` first, before the image's handler runs.
 Two seeded table mutants, an SMC0 write of 3 and an SMC0 restore that

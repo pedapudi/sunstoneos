@@ -590,7 +590,9 @@ ROWS = [
                       '`FAIL GPU probe read refused before clock and reset progress`, `GPU probe read mapping` or `GPU '
                       'probe read time budget`: no wrapper, SMC0 or core word was accessed',
                       '`FAIL GPU probe read vector table` after the GPU PROBE identity before line: VBAR_EL1 was not '
-                      'the image\'s table, so nothing was written'],
+                      'the image\'s table, so nothing was written',
+                      'status 7 with `FAIL GPU probe read window refused: monitor deadline too near, nothing written`: '
+                      'the write window would have ended less than 500 ms before the monitor\'s 2 s deadline'],
             admission='GPU-window and SMC0 exception: this row alone, with TOP5 ON, the GPU clock open, its reset '
                       'released and CORE6 not acknowledged, reads the GPU core identity as the vendor probe does '
                       '(rgxbvnc.c:119 through OSReadHWReg64, two 32-bit reads of 0x01800024 and 0x01800020, '
@@ -608,8 +610,11 @@ ROWS = [
                       'CPU without an exception, the monitor does not return and only a power removal recovers the '
                       'board; after the writes such a stall leaves SMC0 at 2 and drm_ctrl at 0 until that removal. A '
                       'synchronous abort in the write window restores both words before the fault report; an '
-                      'asynchronous abort stays pending until both are restored and is reported. The progress record '
-                      'survives only on a return.'),
+                      'asynchronous abort stays pending until both are restored and is reported. The monitor\'s 2 s '
+                      'recovery is an EL3 FIQ that the restores do not cover; the window starts only while at least '
+                      '500 ms remain before it, and a recovery inside the window would leave both words written until '
+                      'the power removal. What SMC0 +0xb0 = 2 does is unknown; if it cut non-secure DRAM access the '
+                      'run would not return. The progress record survives only on a return.'),
     # `admission` maps fields of the value prepare() returns to the values that
     # identify this row's build. None refuses the row: no owning package has
     # named those values yet.

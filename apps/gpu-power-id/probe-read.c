@@ -32,12 +32,26 @@ void gpu_power_id_client(void *unused);
  * D, A, I and F, makes no deadline check and has no failure path, and
  * VBAR_EL1 points at probe_restore_vectors, whose every slot writes both
  * words back to their entry values before it enters the image's own slot.
- * Every way out of that window therefore restores both words, except an
- * access that never completes, which nothing can follow. The progress
+ * Those slots cover a synchronous exception; an SError stays masked until
+ * both words are restored. The monitor's 2 s recovery timer is a FIQ taken
+ * at EL3 through the monitor's own vectors, which the EL1 FIQ mask does not
+ * stop and the restore slots never see; the client therefore starts the
+ * window only while at least 500 ms remain before that deadline after a
+ * 10 ms window bound. A recovery inside the window, or an access that never
+ * completes, would leave both words written until the power removal. The progress
  * record between the result header and the log holds the row in flight
  * and each completed value. There is no OFF: the run ends after the
  * restore, and the lifetime ends with a power removal. */
 #define PROBE_ON_US 200000u
+/* The monitor returns to the ROM 2 s after its entry (start_counter). The
+ * window must end at least 500 ms before that. The wrapper-read run on port
+ * 3-1 finished its last read, two log lines and its exit within 15 us, so
+ * 10 ms bounds the window's ten accesses and their log lines. A refusal
+ * returns status 7, which no other path of this image uses. */
+#define MONITOR_DEADLINE_US 2000000u
+#define WINDOW_BOUND_US 10000u
+#define WINDOW_SLACK_US 500000u
+#define PROBE_WINDOW_REFUSED 7u
 #define PROBE_RESERVE_US 100000u
 #define PROBE_MAGIC UINT64_C(0x3130445250555047) /* "GPUPRD01" */
 #define WRAPPER_PAGE UINT32_C(0x01880000)
@@ -225,6 +239,14 @@ void gpu_power_id_client(void *unused)
     uint64_t vbar;
     __asm__ volatile("mrs %0, vbar_el1" : "=r"(vbar));
     if (vbar != (uintptr_t)_freertos_vector_table) bb_power_fail("GPU probe read vector table");
+    const uint64_t now = bb_power_now(), monitor_deadline = RESULT->start_counter / 24 + MONITOR_DEADLINE_US;
+    if (now + WINDOW_BOUND_US + WINDOW_SLACK_US > monitor_deadline) {
+        bb_line_start(&line, "GPU PROBE window refused");
+        bb_line_dec(&line, "now_us", now); bb_line_dec(&line, "monitor_deadline_us", monitor_deadline);
+        bb_line_end(&line); bb_power_print(&line);
+        platform_puts("FAIL GPU probe read window refused: monitor deadline too near, nothing written\n");
+        platform_exit(PROBE_WINDOW_REFUSED);
+    }
     probe_restore.drm_ctrl = probe_value[0];
     probe_restore.smc0 = probe_value[2];
     uint64_t daif, isr;

@@ -199,7 +199,9 @@ does, each read back, reads the identity again, and writes both words back
 to their entry values, each read back. From the first write to the last
 restore readback it masks D, A, I and F, makes no failure call, and points
 `VBAR_EL1` at restore vectors that write both words back before the
-image's own exception handler runs. It makes no OFF and no provider park;
+image's own exception handler runs; it starts that window only while at
+least 500 ms remain before the monitor's 2 s deadline, and otherwise
+returns status 7 with nothing written. It makes no OFF and no provider park;
 the lifetime ends with a power removal. The fifteen accesses are the rows
 of `probe_steps`; the progress record at result offset 128 (magic
 `GPUPRD01`) holds the row in flight and every completed value. The
@@ -207,7 +209,7 @@ completion text is `COMPLETE GPU probe read: identity 36.56.104.183 before
 and after the secure configuration, restored, GPU left powered`.
 [gpu-power.md](../../docs/gpu-power.md#the-probe-read-probe-makes-the-vendors-probe-time-read-then-the-secure-configuration)
 gives the vendor trace, the write exception and the meaning of each
-result. `check.py --probe-read` runs twelve cases, and bundle preparation
+result. `check.py --probe-read` runs thirteen cases, and bundle preparation
 requires the image's table to hold exactly the fifteen rows.
 
 A wrapper-write variant was refused before any board run and removed
