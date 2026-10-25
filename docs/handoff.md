@@ -123,8 +123,14 @@ further board run of each. Board runs test only predictions from those diffs.
   [three-start runbook](board-runbooks/npu-starts.md): one cold port 3-3
   lifetime, starts at 492 MHz cold, 492 MHz adopted and 852 MHz by rate
   change, two jobs each, all six outputs predicted to match, startup times
-  of about 4.6, 4.4 and 4.6 ms. The set is being frozen as
-  `board-bundles-20261025-8`.
+  of about 4.6, 4.4 and 4.6 ms. **Board result** (set `board-bundles-20261025-8`,
+  `board-session-20261025-7/port-3-3`): all three starts passed, and all six
+  outputs matched the reference. The four state reads matched every predicted
+  word, including PLL_NPU at 852 MHz after start 3. Measured startup times
+  were 4,024 µs (492 MHz cold), 4,023 µs (492 MHz, PLL adopted) and 4,023 µs
+  (852 MHz). Each job took about 75–77 ms at both rates (`jobs_raw_us`;
+  `timing.py` prints them with the wrong sign), so job time is not set by NPU
+  compute. The cause is under investigation.
 - CPU (`work/backsolve-cpu-1025`, `docs/reference-backsolve-cpu.md`): the
   leading divergences are checks that the reference never performs, such as the
   GICR_CTLR status compare (now masked on `bringup`), GICD_CTLR.RWP treated
