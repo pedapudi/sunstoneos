@@ -287,7 +287,7 @@ static void identify(void)
     field(m.csd, 48, 22, (uint32_t)(image_sectors / 1024 - 1));
     for (unsigned i = 0; i < 4; ++i) m.cid[i] = 0x12345678u + i;
     struct sunxi_mmc_config c = {{read32, write32, barrier, now_us, admit, retained, NULL,
-        read_fifo, write_fifo}, &m, 0xa733, SUNXI_MMC_SD, 800000, 0x00300000, SUNXI_MMC_SD_LEGACY};
+        read_fifo, write_fifo, NULL}, &m, 0xa733, SUNXI_MMC_SD, 800000, 0x00300000, SUNXI_MMC_SD_LEGACY};
     struct fatfs_port_device d;
     binding = (struct fatfs_port_mmc){&core, idle, &m, {0}};
     assert(sunxi_mmc_init(&core, &c) && sunxi_mmc_open(&core, 1000000));

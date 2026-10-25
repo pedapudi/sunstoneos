@@ -191,7 +191,7 @@ static void record(void)
 static int card_open(void)
 {
     struct sunxi_mmc_config config = {
-        .ops = {read32, write32, barrier, now_us, admit, retained, 0, read_fifo, write_fifo},
+        .ops = {read32, write32, barrier, now_us, admit, retained, 0, read_fifo, write_fifo, 0},
         .token = (uintptr_t)&card, .kind = SUNXI_MMC_SD,
         .module_hz = 400000, .voltage_mask = 0x00300000,
     };

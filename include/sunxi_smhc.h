@@ -20,6 +20,7 @@
 #define SUNXI_SMHC_NTSR 0x5cu
 #define SUNXI_SMHC_DMAC 0x80u
 #define SUNXI_SMHC_IDIE 0x8cu
+#define SUNXI_SMHC_THLD 0x100u
 #define SUNXI_SMHC_EDSD 0x104u
 #define SUNXI_SMHC_DRIVE 0x140u
 #define SUNXI_SMHC_SAMPLE 0x144u
@@ -28,6 +29,7 @@
 
 /* Command register fields; the low six bits hold the command index. */
 #define SUNXI_SMHC_CMD_START (1u << 31)
+#define SUNXI_SMHC_CMD_VOLTAGE_SWITCH (1u << 28) /* CMD11 and its clock updates only. */
 #define SUNXI_SMHC_CMD_UPDATE_CLOCK (1u << 21)
 #define SUNXI_SMHC_CMD_INIT (1u << 15)
 #define SUNXI_SMHC_CMD_WAIT (1u << 13)
@@ -43,6 +45,7 @@
 /* Raw interrupt status. */
 #define SUNXI_SMHC_INT_CMD_DONE (1u << 2)
 #define SUNXI_SMHC_INT_DATA_DONE (1u << 3)
+#define SUNXI_SMHC_INT_VOLTAGE_DONE (1u << 10) /* 1.8 V switch done; data starvation otherwise. */
 #define SUNXI_SMHC_INT_AUTO_STOP_DONE (1u << 14)
 #define SUNXI_SMHC_INT_SDIO (1u << 16)
 /* Terminal errors of the pinned BSP (SDXC_INTERRUPT_ERROR_BIT): response error
@@ -58,6 +61,7 @@
 /* Status register. FIFO level counts filled 32-bit locations. */
 #define SUNXI_SMHC_STATUS_FIFO_EMPTY (1u << 2)
 #define SUNXI_SMHC_STATUS_FIFO_FULL (1u << 3)
+#define SUNXI_SMHC_STATUS_DAT3 (1u << 8) /* Level of DAT3 (manual 11.3.8.16 CARD_PRESENT). */
 #define SUNXI_SMHC_STATUS_BUSY ((1u << 10) | (1u << 9) | (15u << 4)) /* Data FSM, card DAT0, command FSM. */
 #define SUNXI_SMHC_STATUS_FIFO_LEVEL(status) (((status) >> 17) & 0x7ffu)
 #define SUNXI_SMHC_FIFO_DEPTH 256u /* Words; FIFOTH documents 256 x 32 bits. */

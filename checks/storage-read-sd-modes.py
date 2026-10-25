@@ -79,11 +79,11 @@ def run(image,sessions,out,early_only=False,layout_only=False,board_live_only=Fa
    continue
   if early_only:
    m.prepare_only();pending=m.frame();value=decoder.decode(pending,raw)
-   assert value['status']==0 and struct.unpack_from('<I',pending,4)[0]==3 and m.field('initialized')==0
+   assert value['status']==0 and struct.unpack_from('<I',pending,4)[0]==4 and m.field('initialized')==0
    (dest/'pending-frame.bin').write_bytes(pending)
    m.reject_mapping=True;m.owner();retained=m.frame();value=decoder.decode(retained,raw)
    assert value['status']==2 and m.field('reason')==2 and not m.commands
-   assert struct.unpack_from('<I',retained,4)[0]==3
+   assert struct.unpack_from('<I',retained,4)[0]==4
    (dest/'retained-frame.bin').write_bytes(retained)
    results[str(profile)]={'preconstruction_pending':True,'early_mapping_failure_retained':True,'physical_access':False}
    continue

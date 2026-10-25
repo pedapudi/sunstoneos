@@ -93,7 +93,7 @@ static int writer_write_fifo(void *v,const uint32_t *words,unsigned count)
 static void setup(unsigned kind,unsigned sector)
 {
     memset(&m,0,sizeof(m));seed(&m.card,&h,kind,sector);
-    const struct sunxi_mmc_config c={{read32,write32,barrier,clock_now,admit,retained,NULL,writer_read_fifo,writer_write_fifo},&m,77,
+    const struct sunxi_mmc_config c={{read32,write32,barrier,clock_now,admit,retained,NULL,writer_read_fifo,writer_write_fifo,NULL},&m,77,
         (enum sunxi_mmc_kind)kind,800000,0x00300000,SUNXI_MMC_SD_LEGACY};
     assert(sunxi_mmc_init(&h,&c));
     field(m.card.csd,84,12,21);field(m.card.csd,22,4,9);

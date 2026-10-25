@@ -32,7 +32,7 @@ int a733_mmc_platform_scopes(const struct a733_mmc_platform_config *c,a733_clock
        (c->kind!=SUNXI_MMC_SD&&c->kind!=SUNXI_MMC_EMMC)||
        (unsigned)c->emmc_host>A733_MMC_EMMC_SDC3||
        (c->kind==SUNXI_MMC_SD&&c->emmc_host!=A733_MMC_EMMC_SDC2)||
-       (unsigned)c->sd_profile>SUNXI_MMC_SD_HIGH_SPEED4||(c->kind!=SUNXI_MMC_SD&&c->sd_profile)||
+       (unsigned)c->sd_profile>SUNXI_MMC_SD_UHS_SDR104||(c->kind!=SUNXI_MMC_SD&&c->sd_profile)||
        !c->voltage_mask||(c->voltage_mask&~UINT32_C(0x00300000)))return 0;
     a733_clock_mask_t shared=A733_CLOCK_FABRIC|A733_CLOCK_REF|A733_CLOCK_OSC;
     for(unsigned i=0;i<3;++i) {
@@ -89,6 +89,16 @@ static int update(struct a733_mmc_platform *p,uintptr_t a,uint32_t mask,uint32_t
     uint32_t v=(old&~mask)|bits;
     return v==old||(wr(p,a,v)&&rd(p,a,&got)&&got==v);
 }
+/* PERI0_300M is PERI0_2X/4 (ccu-sun60iw2.c pll_peri0_600m and 300m); its
+ * auto gates are 0x1908 bits 11, 9, 5 and 4. 1 stable, 0 absent, -1 failure. */
+static int peri300(struct a733_mmc_platform *p)
+{
+    uint32_t pll,gate,status,required=BIT(11)|BIT(9)|BIT(5)|BIT(4);
+    if(!rd(p,CCU+0xa0,&pll)||!rd(p,CCU+0x1908,&gate)||!rd(p,CCU+0x1988,&status))return -1;
+    unsigned n=((pll>>8)&255)+1,div=(((pll>>20)&7)+1)*4;
+    return (pll&0xfe000002u)==0xfe000000u&&(gate&(required|(required<<16)))==(required|(required<<16))&&
+        (status&(required<<16))==(required<<16)&&24u*n==300u*div;
+}
 static int profile(struct a733_mmc_platform *p)
 {
     uint32_t osc,ref,pll,a,b,gate,status;
@@ -110,6 +120,7 @@ static int profile(struct a733_mmc_platform *p)
         if((gate&(required|(required<<16)))!=(required|(required<<16))||
            (status&(required<<16))!=(required<<16)||24u*n!=400u*div)return 0;
     }
+    if(((p->running_module>>24)&7)==2&&peri300(p)!=1)return 0;
     for(unsigned i=0;i<3;++i) {
         unsigned mhz=parent_mhz[i][(p->config.fabric[i]>>24)&7],div,branches;
         switch(mhz) {
@@ -132,7 +143,10 @@ static int voltage(struct a733_mmc_platform *p,unsigned initial)
     if(!rd(p,PIO+0x40,&mode)||!rd(p,PIO+0x48,&value))return 0;
     mode=(mode>>shift)&3;value=(value>>shift)&3;
     if(p->config.kind==SUNXI_MMC_SD) {
-        if(mode>2||value!=2||!rd(p,PIO+0x70,&select)||!(select&1))return 0;
+        /* Manual 18.14.6.2-3: PF value 2 is 3.3 V and 3 is 1.8 V; selector bit
+         * 0 chooses 3.3 V. Only the UHS-I switch clears it, once. */
+        if(mode>2||!rd(p,PIO+0x70,&select))return 0;
+        if(!p->signal?(value!=2||!(select&1)):((select&1)||value<2||(p->signal==2&&value!=3)))return 0;
     } else if(mode!=3||value!=0)return 0; /* PC status uses a different encoding. */
     if(initial)p->voltage_mode=mode;
     return mode==p->voltage_mode;
@@ -232,15 +246,25 @@ static int core_retained(void *v,uintptr_t token)
 {struct a733_mmc_platform *p=v;return token==(uintptr_t)p&&core_guard(p);}
 static int core_admit(void *v,uintptr_t token,enum sunxi_mmc_kind kind,uint32_t hz)
 {struct a733_mmc_platform *p=v;return kind==p->config.kind&&hz==800000&&core_retained(v,token);}
+/* Profiles 1-2 use PERI0_400M/4..32. UHS-I adds 400M/2 (100 MHz card clock)
+ * and PERI0_300M/1 (150 MHz, the board tree's SDC0 limit). */
+static int module_setting(const struct a733_mmc_platform *p,unsigned divisor,uint32_t *out)
+{
+    unsigned m=divisor&0xffu,source=(divisor&SUNXI_MMC_MODULE_300M)?2u:1u;
+    int ok=!(divisor&~(0xffu|SUNXI_MMC_MODULE_300M))&&(p->config.sd_profile==SUNXI_MMC_SD_UHS_SDR104?
+        ((source==2&&m==1)||(source==1&&(m==2||m==4))):(source==1&&m>=4&&m<=32));
+    if(ok)*out=UINT32_C(0x80000000)|((uint32_t)source<<24)|(m-1);
+    return ok;
+}
 static int core_sd_module(void *v,uintptr_t token,unsigned divisor)
 {
-    struct a733_mmc_platform *p=v;uint32_t ctrl,command,status;
+    struct a733_mmc_platform *p=v;uint32_t ctrl,command,status,next=0;
     if(token!=(uintptr_t)p||p->config.kind!=SUNXI_MMC_SD||!p->config.sd_profile||
-       divisor<4||divisor>32||!core_guard(p)||!profile(p)||!voltage(p,0)||masked(p)!=1||
+       !module_setting(p,divisor,&next)||(((next>>24)&7)==2&&peri300(p)!=1)||
+       !core_guard(p)||!profile(p)||!voltage(p,0)||masked(p)!=1||
        atomic_load_explicit(&p->clocks->failed,memory_order_acquire)||p->pins->failed||
        !rd(p,p->base+4,&ctrl)||ctrl||!rd(p,p->base+0x18,&command)||(command&BIT(31))||
        !rd(p,p->base+0x3c,&status)||(status&((1u<<10)|(1u<<9)|(15u<<4)))){fail(p);return 0;}
-    uint32_t next=UINT32_C(0x81000000)|(divisor-1);
     /* No parent or shared gate write. The selected module is gated while its
      * source/divider changes, and every successful readback becomes live state. */
     uint32_t old=p->running_module;
@@ -250,6 +274,39 @@ static int core_sd_module(void *v,uintptr_t token,unsigned divisor)
        !core_guard(p)||!profile(p)||!voltage(p,0)||
        atomic_load_explicit(&p->clocks->failed,memory_order_acquire)){fail(p);return 0;}
     p->running_module=next;return 1;
+}
+/* UHS-I only. QUERY reports the 1.8 V switch only in the adaptive PF mode that
+ * the board kernel's A733 path relies on (pinctrl-sunxi.c
+ * sunxi_power_auto_switch_pf writes only GPIO_POW_VAL_SET_CTL), with CLDO5
+ * programmed to 1.8 V for VCC18-PF. SET clears that selector once, with the
+ * card clock stopped; POLL reads GPIO_POW_VAL until PF reports 1.8 V. */
+static int core_sd_signal(void *v,uintptr_t token,unsigned operation,unsigned *state)
+{
+    struct a733_mmc_platform *p=v;uint32_t ctrl,value,select;
+    if(token!=(uintptr_t)p||p->config.kind!=SUNXI_MMC_SD||p->config.sd_profile!=SUNXI_MMC_SD_UHS_SDR104||
+       !state||!core_guard(p)||!profile(p)||!voltage(p,0))goto fault;
+    if(operation==SUNXI_MMC_SIGNAL_QUERY) {
+        int fast=peri300(p);
+        if(fast<0||!core_guard(p))goto fault;
+        *state=(!p->signal&&p->voltage_mode==1&&p->snapshots[2].programmed_uv==1800000u?SUNXI_MMC_SIGNAL_1V8:0u)|
+            (fast?SUNXI_MMC_SIGNAL_300M:0u);
+        return 1;
+    }
+    if(operation==SUNXI_MMC_SIGNAL_SET) {
+        if(p->signal||p->voltage_mode!=1||!rd(p,p->base+4,&ctrl)||ctrl||masked(p)!=1||
+           !update(p,PIO+0x70,1,1,0))goto fault;
+        p->signal=1;*state=0;
+        if(!core_guard(p)||!voltage(p,0))goto fault;
+        return 1;
+    }
+    if(operation==SUNXI_MMC_SIGNAL_POLL) {
+        if(!p->signal||!rd(p,PIO+0x48,&value)||!rd(p,PIO+0x70,&select)||(select&1))goto fault;
+        value=(value>>10)&3;if(value==3)p->signal=2;
+        *state=value==3;
+        if(!core_guard(p)||!voltage(p,0))goto fault;
+        return 1;
+    }
+fault:fail(p);return 0;
 }
 int a733_mmc_platform_init(struct a733_mmc_platform *p,const struct a733_mmc_platform_config *c,
     const struct a733_mmc_platform_ops *o,void *cookie,struct a733_clock_leases *clocks,
@@ -283,7 +340,7 @@ int a733_mmc_platform_init(struct a733_mmc_platform *p,const struct a733_mmc_pla
         .rails=rails,.pmic=pmic,.power=identity,.shared=shared,.deadline=c->deadline_us,
         .base=A733_MMC_BASE(slot),.module=A733_MMC_MODULE(slot),.bus=A733_MMC_BUS(slot),.running_module=0x8000001d};
     struct sunxi_mmc_config cfg={{core_read,core_write,core_barrier,core_now,core_admit,core_retained,core_sd_module,
-        core_read_fifo,core_write_fifo},
+        core_read_fifo,core_write_fifo,c->sd_profile==SUNXI_MMC_SD_UHS_SDR104?core_sd_signal:NULL},
         p,(uintptr_t)p,c->kind,800000,c->voltage_mask,c->sd_profile};
     if(!sunxi_mmc_init(&p->core,&cfg))return 0;
     atomic_init(&p->busy,0);p->initialized=1;return 1;
@@ -393,8 +450,8 @@ static enum a733_mmc_platform_result controller(struct a733_mmc_platform *p)
          * core steps only while a transfer advances without a timed wait. Each
          * step still checks owner, shared-clock failure, service and deadline. */
         sunxi_mmc_poll(&p->core);
-        if(p->fault||(p->core.state!=SUNXI_MMC_READING&&p->core.state!=SUNXI_MMC_WRITING)||
-           p->core.last_us<p->core.retry_us)break;
+        if(p->fault||(p->core.state!=SUNXI_MMC_READING&&p->core.state!=SUNXI_MMC_WRITING&&
+           !(p->core.state==SUNXI_MMC_IDENTIFY&&p->core.tuning))||p->core.last_us<p->core.retry_us)break;
     }
     p->core_call=0;
     if(p->fault||p->core.state==SUNXI_MMC_FAULT||!timely(p))return fail(p);

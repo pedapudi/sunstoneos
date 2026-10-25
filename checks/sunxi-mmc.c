@@ -223,7 +223,7 @@ static void init(struct model *m, struct sunxi_mmc *h, unsigned kind, unsigned s
 {
     seed(m, h, kind, sector);
     struct sunxi_mmc_config c = {{read32, write32, barrier, now_us, admit, retained, NULL,
-        model_read_fifo, model_write_fifo},
+        model_read_fifo, model_write_fifo, NULL},
         m, 0xa733, (enum sunxi_mmc_kind)kind, 800000, 0x00300000, SUNXI_MMC_SD_LEGACY};
     assert(sunxi_mmc_init(h, &c)); assert(!m->calls);
     assert(!sunxi_mmc_init(h, &c));

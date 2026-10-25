@@ -47,7 +47,7 @@ def session_check(raw):
     require(all(any(raw[o:o+32]) for o in (632,664,696,728,760)),'Missing SD0 physical authority.')
     require(raw[834:840]==bytes(6),'Reserved SD0 fields must be zero.')
     profile=struct.unpack_from('<I',raw,860)[0]
-    require(profile in (0,1,2),'Unsupported SD0 bus profile.')
+    require(profile in (0,1,2,3),'Unsupported SD0 bus profile.')
     first,blocks,reserved=struct.unpack_from('<QII',raw,864)
     require(1<=blocks<=8 and not reserved and first<=0xffffffff and blocks-1<=0xffffffff-first,'Invalid native application range.')
     identify,read,voltage=struct.unpack_from('<QQI',raw,840)
@@ -68,7 +68,7 @@ def embedded_reference(image,session):
     expected=struct.pack('<5Q',SESSION_MAGIC,SESSION_BYTES,288,4096,2)
     markers=[('storage_read_geometry',expected)]
     if struct.unpack_from('<I',session,860)[0]:
-        markers.append(('storage_read_sd_modes',struct.pack('<4Q',0x4153373353444d31,1,7,400000000)))
+        markers.append(('storage_read_sd_modes',struct.pack('<4Q',0x4153373353444d31,2,15,400000000)))
     for name,body in markers:
         require(name in symbols,'Missing immutable SD0 geometry.')
         first,size=symbols[name];require(size==len(body),'Wrong SD0 geometry size.')
@@ -199,6 +199,13 @@ def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=Fal
                 authority.get('read_only_bus_negotiation_authorized') is True and
                 authority.get('peri0_400m_stable_owned') is True and
                 authority.get('sd_profile')==profile,'Missing negotiated SD0 mode authority.')
+        if profile==3:
+            # The 1.8 V switch persists until the board loses power: the card,
+            # the boot ROM and every later SD lifetime see 1.8 V signalling.
+            require(all(authority.get(key) is True for key in (
+                'uhs_1v8_signalling_approved','pf_bank_voltage_writer_exclusive',
+                'pf_adaptive_withstand_observed','board_power_removal_after_lifetime')),
+                'Missing UHS-I 1.8 V signalling authority.')
     return cache
 
 def prepare(image,manifest,admission,template,output,clang,lld):
