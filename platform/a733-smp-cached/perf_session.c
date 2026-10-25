@@ -18,10 +18,9 @@
  * counter value below one that the other core had already published.
  *
  * Only the workers wait for the measurements; the background tasks run
- * throughout, so no core ever runs its idle task. The returning profile ends
- * a core's run when its idle task first starts, so the measurements cannot
- * use idle cores, and wake placement between idle cores is measured in the
- * emulators only.
+ * throughout, so no core runs its idle task, as in the returning profile's
+ * qualified runs. Wake placement acts only between idle cores, so these
+ * measurements leave it to the emulators.
  *
  * The returning-profile machinery owns the writable interval that ends at
  * 0x41291000, a few hundred bytes after the workload's data. The measurement
