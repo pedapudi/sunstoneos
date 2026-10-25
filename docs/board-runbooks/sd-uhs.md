@@ -43,9 +43,14 @@ export PYTHONDONTWRITEBYTECODE=1
   is version 2 with profile mask 15, and its records are version 4.
 - **Prepared set:** `~/.cache/sunstoneos/evidence/board-bundles-20261025-14/`
   holds the image, the software evidence, the session specification, the
-  draft records, the approval request and `tools/bind-lifetime.py`, which
-  binds each bundle to its live lifetime after the cold DDR start. Its
-  `runbook.md` gives every command.
+  draft records, one approval per lifetime (`approval-A.json`,
+  `approval-B.json`), the host tools pinned as an archive of one revision
+  (`host-src/`), `tools/sign-approval.py` and `tools/bind-lifetime.py`. After
+  each lifetime's cold DDR start and survey, the coordinator signs that
+  lifetime's approval, and `bind-lifetime.py` binds the bundle; it refuses an
+  approval signed before the DDR session or for another one, and a survey
+  that failed or ran on another port, node or ROM identity. Its `runbook.md`
+  gives every command.
 - **Session templates:** the existing 880-byte storage-read session for this
   port, with offset 860 (`sd_profile`) set to 2 for A and 3 for B,
   `identify_us` 5,000,000, `read_us` 1,000,000, the wide PF0–PF5 route and a
