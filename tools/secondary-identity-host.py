@@ -62,7 +62,8 @@ def initial_report(nonce):
     return primary.initial_report(nonce)+bytes(0x900)
 
 
-def load(build, image, manifest, local=False, cached=False, coherent=False, interrupts=False, pre_scheduler=False, first_task=False, task_switch=False, task_workload=False):
+def load(build, image, manifest, local=False, cached=False, coherent=False, interrupts=False, pre_scheduler=False, first_task=False, task_switch=False, task_workload=False,
+         return_deadline=False, quiet=False):
     task_switch = task_switch or task_workload
     first_task = first_task or task_switch
     pre_scheduler = pre_scheduler or first_task
@@ -82,6 +83,7 @@ def load(build, image, manifest, local=False, cached=False, coherent=False, inte
     if pre_scheduler:names+=('boot/a733/all-core-first-task-probe.S' if first_task else 'boot/a733/all-core-pre-scheduler-probe.S','boot/a733/primary-local-cache-probe.c')
     elif coherent:names+=('boot/a733/secondary-coherence-probe.S',)
     if interrupts:names+=('boot/a733/secondary-interrupt-probe.S',)
+    if return_deadline:names+=('boot/a733/workload-deadline-probe.S',)
     require(manifest['sources'] == {n:digest(ROOT/n) for n in names}, 'Identity source changed.')
     base_path = Path(manifest['primary_manifest']['path'])
     require(base_path.is_absolute() and digest(base_path) == manifest['primary_manifest']['sha256'],
@@ -142,6 +144,11 @@ def load(build, image, manifest, local=False, cached=False, coherent=False, inte
                 n['platform_tick_setup'], n['worker'], n['a733_smp_primary_el1'])]
             at = n['worker']+0x6c
             first_patches.append((at, 0x35000513, builder.branch(at, hooks['identity_workload_complete'])))
+        if return_deadline:
+            require(task_workload, 'The return deadline applies to the task workload only.')
+            for address, original, hook, link in builder.deadline_patch_points(n, quiet):
+                first_patches.append((address, original, 0xd503205f if hook is None else
+                                      builder.branch(address, hooks[hook]) | (0x80000000 if link else 0)))
     for item in base['payloads']:
         data = bytearray(frozen[item['name']])
         if item['address'] <= target < item['address']+len(data):
@@ -167,7 +174,7 @@ def load(build, image, manifest, local=False, cached=False, coherent=False, inte
         require(bytes(data) == (build/item['name']).read_bytes(), 'Native payload has an unreviewed change.')
         frozen[item['name']] = bytes(data)
         payloads.append(dict(item,sha256=hashlib.sha256(data).hexdigest()))
-    require(len(patches) == (8 if task_workload else 10 if first_task else 4 if cached else 2) and manifest['patches'] == patches and manifest['payloads'] == payloads,
+    require(len(patches) == (8+(3 if quiet else 2 if return_deadline else 0) if task_workload else 10 if first_task else 4 if cached else 2) and manifest['patches'] == patches and manifest['payloads'] == payloads,
             'Patch or payload inventory differs.')
     return frozen, dram+[('identity-report',*report)]
 
