@@ -177,6 +177,16 @@ routing, task profile, reference-clock and interrupt host checks on it. The
 convolution model checks the order of the new timestamps, and the interrupt
 client check checks the logged `NPU_JOB_PHASES` block.
 
+## Image comparison
+
+Against `bringup` `c4eadf9f`, 21 of 68 default images change. The NPU
+images that link the convolution backend change in code, for the new
+timestamps: the accelerator composition, the convolution model and the four
+finite profiles. The others differ only in their build identity and debug
+information. The retained large-graph image keeps its layout: USB staging at
+`0x41400000..0x414c0000`, the pool at `0x41600000..0x41a00000` and an equal
+text size; it gains the `__npu_graph_staging` symbol and the timestamps.
+
 ## Limits
 
 - The predictions of C and M rest on an estimated MAC count and an assumed
