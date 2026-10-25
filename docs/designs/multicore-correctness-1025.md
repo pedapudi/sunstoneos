@@ -347,6 +347,17 @@ no hot path changes, and each added step runs once per core per launch.
   routines, and `a733_smp_build_id`, which digests the sources
   (`image-comparison.md` in the evidence directory).
 
+- **Integration gate** `mc-correct-1025-38b6e0f9` on `38b6e0f9` (clean
+  tree): the supervised, cached diagnostic, uncached diagnostic, observer,
+  storage-maintenance and devices images, the SMP kernel and context
+  models, the supervised OS variant (which applies the OS boot patch), and
+  the kernel, eight-core soak and check-index checks pass. The SMP kernel
+  and context models then pass under QEMU
+  (`tools/check-smp.py --case kernel`, `--case context`). The I2S image
+  built with its changed boot patch at `1428f1a9`; the patch has not changed
+  since. The NPU board image was not built: no reviewed NPU catalogue is
+  configured on the build host.
+
 ## Frozen bundles that need a refreeze
 
 Each frozen bundle runs from its own source copy, so none changes. These
