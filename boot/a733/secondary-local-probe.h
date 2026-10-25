@@ -10,15 +10,16 @@
  * (Linux irq-gic-v3.c gic_redist_wait_for_rwp; TF-A gicv3_helpers.c).
  * - GICR_CTLR: UWP (31) and RWP (3) report writes in progress (IHI 0069G
  *   12.11.2). The board has read RWP set after a completed wait.
- * - GICR_WAKER: ChildrenAsleep (2) follows ProcessorSleep. Each handshake
- *   waits for it; a later comparison does not.
+ * - GICR_WAKER: Quiescent (31, GIC-600 TRM table 4-24) and ChildrenAsleep (2)
+ *   follow ProcessorSleep. Each handshake waits for ChildrenAsleep; a later
+ *   comparison does not.
  * - GICR_ISPENDR0: pending state that a level-sensitive PPI can assert while
  *   disabled. The explicit drain checks still require their sources clear.
  * - GICR_PWRR: RDGPO (3) and RDGPD (2) report the power state of the
  *   redistributor group that all eight frames share (GIC-600 TRM 4.4.5). The
  *   power handshake still requires them equal before it writes RDPD. */
 #define GICR_CTLR_STATUS 0x80000008
-#define GICR_WAKER_STATUS 0x4
+#define GICR_WAKER_STATUS 0x80000004
 #define GICR_ISPENDR0_STATUS 0xffffffff
 #define GICR_PWRR_STATUS 0xc
 /* GICD_CTLR.RWP (31): a distributor write in progress. Waited for, as Linux

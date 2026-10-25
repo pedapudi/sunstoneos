@@ -42,6 +42,7 @@ native_el1_cache_probe:
     msr scr_el3, x3
     isb
     msr icc_ap0r0_el1, xzr
+    isb
     msr icc_ap1r0_el1, xzr
     orr x3, x2, #1
     msr scr_el3, x3

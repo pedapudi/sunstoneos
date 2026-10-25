@@ -92,6 +92,7 @@ a733_cached_enter_el1:
     msr scr_el3, x2
     isb
     msr icc_ap0r0_el1, xzr
+    isb
     msr icc_ap1r0_el1, xzr
     // Architectural RES1 bits4/5 accompany NS, FIQ routing, HCE and RW.
     mov x2, #0x535
