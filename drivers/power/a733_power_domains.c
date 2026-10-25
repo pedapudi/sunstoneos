@@ -216,7 +216,8 @@ static int release(struct a733_power_domains *d,struct a733_power_domain_row *r,
 }
 
 /* Supply verification once per boot: snapshots of DCDC2 and DCDC4. It may
- * start A733_POWER_SUPPLY_SETTLE_US after the service's first step, and its
+ * start A733_POWER_SUPPLY_SETTLE_US after the service's first step, or at
+ * that step for a settled supply, and its
  * A733_POWER_SUPPLY_BUDGET_US starts when it may start and the provider is
  * READY; before READY the provider's startup deadline bounds it. Any failure
  * sets the done bit with no verified bit at once, so waiting rows are
@@ -332,7 +333,8 @@ uint32_t a733_power_service_step(struct a733_power_domains *d)
     if(!d->running) {
         /* An image with no row needs no supply record and makes no bus read. */
         d->running=1;
-        if(!d->rows || !a733_deadline_after(now,A733_POWER_SUPPLY_SETTLE_US,&d->verify_at))verified(d,0);
+        if(!d->rows || !a733_deadline_after(now,d->settled_supply ? 0 : A733_POWER_SUPPLY_SETTLE_US,
+           &d->verify_at))verified(d,0);
     }
     const uint64_t start=now;
     int tick=0;
@@ -382,6 +384,11 @@ int a733_power_domains_init(struct a733_power_domains *d,struct a733_pmic *p,
     for(unsigned i=0;i<A733_POWER_DOMAINS;++i)d->domain[i].id=profiles[i].id;
     if(!a733_pmic_bind_service(p,ops.notify,context,d))return 0;
     d->self=d;return 1;
+}
+int a733_power_domains_settled_supply(struct a733_power_domains *d)
+{
+    if(!d || d->self!=d || d->running)return 0;
+    d->settled_supply=1;return 1;
 }
 int a733_power_service_idle(const struct a733_power_domains *d)
 {

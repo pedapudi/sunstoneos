@@ -382,6 +382,10 @@ int main(int argc,char **argv)
      * write. The SRAM is routed to the NPU after the PLL output gate opens and
      * before the first write of the bus and reset word. */
     assert(r.ppu_before_first_write && !s.pll_adopted && r.sysctrl==0 && s.sram_routed);
+    /* Startup init marks the supply settled: verification ends before the
+     * 5,160 us settle would, and the mark is refused once the service ran. */
+    assert(d.owner.settled_supply && b.supply_done_us<A733_POWER_SUPPLY_SETTLE_US &&
+        !a733_power_domains_settled_supply(&d.owner));
     assert(r.pll_open_at && r.pll_open_at<r.route_at && r.route_at+1==r.first_b04_at);
     /* register_reads: the sequencer's reads without the LOCK samples, plus the
      * owner's domain-check reads, as the base counted its own domain reads.

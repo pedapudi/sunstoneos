@@ -26,7 +26,8 @@ _Static_assert(((A733_POWER_SUPPLY_DONE | A733_POWER_DCDC2_VERIFIED | A733_POWER
 
 #define A733_POWER_PCK_DOMAIN(domain) (UINT32_C(0x07060000) + UINT32_C(0x1000) * (domain))
 /* Provider start to supply verification: the 1,000 us enable delay plus a
- * 1,040 mV ramp at 250 uV/us (board device tree lines 2123-2146). */
+ * 1,040 mV ramp at 250 uV/us (board device tree lines 2123-2146). An owner
+ * marked with a733_power_domains_settled_supply() verifies at once instead. */
 #define A733_POWER_SUPPLY_SETTLE_US 5160u
 /* Verification ends within this time after the settle time has passed and
  * the provider is READY; the provider's startup deadline bounds the wait for
@@ -84,6 +85,7 @@ struct a733_power_domains {
     struct a733_pmic_snapshot dcdc4;
     uint64_t verify_at, verify_deadline, last_now;
     unsigned running, supply_stage, supply_verified, failed;
+    unsigned settled_supply; /* Before the service runs only; then read-only. */
 };
 
 /* Before the scheduler: bind zeroed storage to the PMIC provider, whose
@@ -91,6 +93,14 @@ struct a733_power_domains {
  * verification record. No hardware access. */
 int a733_power_domains_init(struct a733_power_domains *, struct a733_pmic *,
     const struct a733_power_domain_ops *, void *context, const struct a733_power_service_config *);
+/* Before the service task first runs: verify the supplies at the service's
+ * first step, with no A733_POWER_SUPPLY_SETTLE_US wait. The owner never
+ * enables a rail or changes its voltage, and verification passes only for a
+ * rail found enabled at its target selector. The Linux regulator core applies
+ * its enable delay only to an off-to-on enable and its ramp delay only to a
+ * selector change (drivers/regulator/core.c lines 2905-2930 and 3660-3713,
+ * linux-orangepi 2ac08e8c). Returns 0 once the service has run. */
+int a733_power_domains_settled_supply(struct a733_power_domains *);
 /* Register a zeroed row before the service task first runs: domain 1, 4 or 5,
  * the consumer's owner identity and its rail token, which must hold the
  * domain's supply (DCDC2 for domains 1 and 4, DCDC4 for domain 5) by the time

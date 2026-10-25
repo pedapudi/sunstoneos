@@ -476,7 +476,10 @@ int a733_npu_startup_init(struct a733_npu_startup *s,const struct a733_npu_start
     const struct a733_npu_startup_ops native={{native_read,native_write},native_now,native_spin_us,
         native_enter,native_leave,native_retain};
     s->config=*c;s->providers=*p;s->ops=o ? *o : native;s->cookie=o ? cookie : s;s->shared=shared;
-    if(!a733_power_domain_row_init(&s->row,p->domains,4,c->owner,&s->rail))return 0;
+    /* No NPU image makes a supply transition, so the owner verifies DCDC2 at
+     * its first step instead of after the 5,160 us settle. */
+    if(!a733_power_domain_row_init(&s->row,p->domains,4,c->owner,&s->rail) ||
+       !a733_power_domains_settled_supply(p->domains))return 0;
     s->initialized=1;return 1;
 }
 int a733_npu_startup_bind_task(struct a733_npu_startup *s,TaskHandle_t task)
