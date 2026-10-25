@@ -6,6 +6,38 @@ active reviewers. Do not resume development, builds, tests or hardware work
 until the user asks. No board access occurred during this board-free tranche.
 There is no active goal object to update.
 
+## Review of the paused tranche (2026-10-24 evening)
+
+A four-area review (CPU, NPU, GPU and power, integration) of `f03060ee..b4d0eadb`
+found no blocking defect. Its fixes merged at `019b26f6` after a three-lens
+review and a selected integration gate (`gate-review-fixes-1024`). They
+change behaviour that the paused GPU and NPU work must account for when it
+resumes:
+
+- Resident images no longer accept staged workload 2 (`OS_STAGED_WORKLOAD`
+  in `apps/os/os.h`).
+- NPU SUBMIT fills the output buffer with `0xc35a3ca5`, and the host reports
+  which bytes kept it, so a job that writes nothing is detected.
+- `apps/gpu-power-id` has a power-only variant (`build.py --power-only`) that
+  never reads the GPU register window; run it before any identity probe.
+- The GPU CORE status poll spins up to 50 µs before returning AGAIN; the
+  monitor publishes an overridden status in `replaced_status`; a CPU
+  qualification drained-barrier timeout is reason 9; an inherited CPU
+  cluster spends its grant change at the first clock write.
+- Configure refuses a `MIMUS_DIR` that is not the pinned `9c57286b7` or has
+  changes; `tools/integration-gate.py` builds per checkout, locks, and
+  refuses a dirty tree unless `--allow-dirty`.
+
+The paused `gpu-provider-ready-1024` work may also edit
+`drivers/gpu/a733_gpu_power.c` and this file; merge `bringup` into it first.
+Remaining minor review items, not yet fixed: the unreachable CORE-status check
+and the unused `gpu_register_window_access` field in `apps/gpu-power-id`;
+hashing untracked files into the gate's dirty-tree identity and re-checking
+status under the lock; an `#error` when `OS_STAGED_WORKLOAD` is undefined in an
+OS build; checking report identity before decoding the CPU qualification
+reason; repeated statements of the workload-2 rule, the SDIO four-bit caveat
+and the GPU deadline argument across documents.
+
 ## Resume checkpoint
 
 Main worktree: `/home/sunil/git/sunstoneos-worktrees/bringup`.
