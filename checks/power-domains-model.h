@@ -39,6 +39,12 @@ struct domains_model {
     uint64_t ack_us,wake_at,longest_step_us;
     struct access trace[512];unsigned trace_n;
     void (*written)(uintptr_t,uint32_t); /* optional observer of owner writes */
+    /* With top5_gates set, the GPU master gates (CCU 0x5c0 bit 7, 0x5e0 bit
+     * 16) follow TOP5 as board-session-20261025-7 s11-gpo-run showed: a
+     * domain-5 OFF closes them; a domain-5 ON reopens what the OFF closed,
+     * unless top5_gates_stuck. */
+    unsigned top5_gates,top5_gates_stuck,top5_reopens;
+    uint32_t top5_closed[2];
 };
 static struct domains_model d;
 static void trace(unsigned write,uintptr_t a,uint32_t v)
@@ -71,7 +77,16 @@ static int owner_read(void *v,uintptr_t a,uint32_t *out)
     if(w){++d.level_reads;*out=*w;trace(0,a,*out);return 1;}
     assert(ppu_block(a,&id,&offset) && !(offset&3));++d.ppu_reads;
     if(offset==8 && d.pending[id] && !d.stall[id] && m.now>=d.ack_at[id]) {
+        const unsigned was_on=(d.ppu[id][2]&15)==8;
         d.ppu[id][2]=(d.ppu[id][2]&~15u)|d.target[id];d.pending[id]=0;
+        if(id==5 && d.top5_gates && was_on && !d.target[id]) {
+            d.top5_closed[0]=d.ccu_5c0&(1u<<7);d.top5_closed[1]=d.ccu_5e0&(1u<<16);
+            d.ccu_5c0&=~(1u<<7);d.ccu_5e0&=~(1u<<16);
+        } else if(id==5 && d.top5_gates && !was_on && d.target[id]==8 && !d.top5_gates_stuck &&
+                  (d.top5_closed[0]|d.top5_closed[1])) {
+            d.ccu_5c0|=d.top5_closed[0];d.ccu_5e0|=d.top5_closed[1];
+            d.top5_closed[0]=d.top5_closed[1]=0;++d.top5_reopens;
+        }
     }
     *out=d.ppu[id][offset/4];
     if(offset==8 && d.status_override[id])*out=(*out&~15u)|(d.status_override[id]&15);

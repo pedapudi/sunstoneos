@@ -168,7 +168,8 @@ its later power-ons (`sunxiPrePowerState`) and power-offs
 
 **ON.** The controller runs one sequence for every ON:
 
-1. Admission (ours only): AHB and MBUS gates, PPU clock, GPU clock word at
+1. Admission (ours only): the AHB and MBUS master gate words recorded,
+   PPU clock, GPU clock word at
    gate closed, source 0 (PLL_GPU0), divider 1, GPU bus gate and reset
    closed, PLL_GPU0 disabled with input divider M1 1, which the factor write
    keeps.
@@ -187,11 +188,14 @@ its later power-ons (`sunxiPrePowerState`) and power-offs
 6. TOP5 ON through the power-domain owner's row, with the GPU clocked, as
    `sunxiPrePowerState` requests the domain after `sunxi_enable_clks_wrap`.
    On the first ON the owner adopts TOP5, which is ON from reset.
-7. CORE6 policy 8, then status polled until 8.
+7. The master gates recorded again and required open (ours only): a TOP5
+   OFF closed the AHB gate on a board (`docs/gpu-power.md`, "The first
+   OFF on a board closed the GPU master gates").
+8. CORE6 policy 8, then status polled until 8.
 
 The vendor's first power-on writes policy 8 before the clocks; its later
 power-ons write it after them. At power-up CORE6's policy already reads 8
-with its transition outstanding, so on the first ON the write in step 7
+with its transition outstanding, so on the first ON the write in step 8
 changes no request: the transition completes when the clocks run, as on the
 board. On a later ON, from policy 0, the write comes after the clocks and
 TOP5, as in the vendor's later power-ons. The status poll is our check; the
@@ -232,7 +236,8 @@ platform prints them with the CORE6 and clock snapshots.
 | ON 1–2 (admission, PWCR) | Gated, reset asserted, PLL disabled | ON from reset, untouched | Entry state; PWCR 0 if written |
 | ON 3–5 (PLL, clocks, rate) | As far as the step got; the gate and reset as written | ON from reset, untouched | PWCR 0, policy unchanged |
 | ON 6 (TOP5 refused, failed or timed out) | Clocked at 1008 MHz | The owner's answer: refused rows write nothing, a failed row keeps its rail pin | PWCR 0, policy unchanged |
-| ON 7 (policy 8 or status poll) | Clocked at 1008 MHz | ON | Policy 8, status as last read |
+| ON 7 (master gates closed after TOP5 ON) | Clocked at 1008 MHz | ON | PWCR 0, policy unchanged |
+| ON 8 (policy 8 or status poll) | Clocked at 1008 MHz | ON | Policy 8, status as last read |
 | OFF 1 (policy 0 or status poll) | Clocked at 1008 MHz | ON | Policy 0, status as last read |
 | OFF 2 (TOP5 OFF) | Clocked at 1008 MHz | The owner's answer, row retained | OFF |
 | OFF 3–6 (clocks, PLL, reset) | As far as the step got | OFF | OFF |

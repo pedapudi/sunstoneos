@@ -79,9 +79,10 @@ configuration becomes valid; ON waits for it to clear.
 
 ## Startup and shutdown follow the vendor order
 
-ON checks the MBUS gates, the power-controller clock, the GPU clock word at
-gate closed, source 0 (PLL_GPU0) and divider 1, the bus gate and reset closed
-and PLL_GPU0 disabled. It then captures CORE6 policy, status and PWCR once.
+ON records the GPU AHB and MBUS master gate words (CCU `0x5c0` and `0x5e0`)
+and checks the power-controller clock, the GPU clock word at gate closed,
+source 0 (PLL_GPU0) and divider 1, the bus gate and reset closed and PLL_GPU0
+disabled. It then captures CORE6 policy, status and PWCR once.
 Whole policy/status words must match exactly at 0 or 8, or be the power-up
 state (policy 8, status 0, PWCR `0x101`). TOP5 is ON from reset, so these
 reads reach CORE6's PPU before any domain request. It then:
@@ -98,8 +99,17 @@ reads reach CORE6's PPU before any domain request. It then:
    wait, 20 µs, output gate set;
 5. requests the domain-5 (TOP5) row ON with the GPU clocked, as
    `sunxiPrePowerState` does after `sunxi_enable_clks_wrap`;
-6. writes CORE6 policy 8 and polls CORE6 status until it reads 8, before
+6. records both master gate words again and requires the AHB gate (bit 7)
+   and the MBUS gate (bit 16) open;
+7. writes CORE6 policy 8 and polls CORE6 status until it reads 8, before
    permitting GPU register access.
+
+The master gates are checked only after TOP5 ON because a TOP5 OFF closed
+the AHB gate on a board, which then took no write while TOP5 was OFF; the
+MBUS gate was not read and is treated the same way
+([the first OFF on a board](#the-first-off-on-a-board-closed-the-gpu-master-gates)).
+The vendor never reads or writes them after boot (`CLK_IS_CRITICAL`,
+`ccu-sun60iw2.c:587–590, 658–661`).
 
 Every write is read back. At power-up the CORE6 policy already reads 8 with
 its transition outstanding; the board showed the transition completes once
@@ -109,14 +119,15 @@ controller's check.
 OFF requires stopped firmware, closed job admission, and masked GPU
 interrupts. It runs `sunxiPostPowerState`'s order: CORE6 policy 0 and a poll
 for status 0, then the TOP row OFF, both while the GPU is still clocked; the
-owner waits for domain status 0. It then closes the bus gate and the core
-clock gate, disables PLL_GPU0 as `ccu_pll_gate_helper_disable` does (output
-gate, lock enable, enable, LDO, each read back) and asserts the reset. The
+owner waits for domain status 0. It records both master gate words, then
+closes the bus gate and the core clock gate, disables PLL_GPU0 as
+`ccu_pll_gate_helper_disable` does (output gate, lock enable, enable, LDO,
+each read back), asserts the reset and records the gate words again. The
 controller then releases its shared-resource leases through the resource
 manager, which also verifies CORE6 policy and status zero and PLL_GPU0
 disabled. The owner admits a domain-5 transition whatever the GPU clock
-state, as the vendor makes both with the GPU clocked. OFF from ON has not
-run on a board.
+state, as the vendor makes both with the GPU clocked, and admits a domain-5
+ON from OFF with the master gates closed.
 
 A failure stops at its step and leaves the state that step left, which the
 controller reports as its error and step:
@@ -125,8 +136,9 @@ controller reports as its error and step:
   disabled, with at most PWCR 0 written;
 - an ON failure in steps 2 to 4 leaves the clocks and PLL_GPU0 as far as
   they got, with TOP5 untouched (ON from reset);
-- an ON failure at step 5 or 6 leaves the GPU clocked at 1008 MHz, with the
-  TOP5 row as the owner answered it;
+- an ON failure at step 5, 6 or 7 leaves the GPU clocked at 1008 MHz, with
+  the TOP5 row as the owner answered it; a gate that stays closed after TOP5
+  ON fails at step 6 with error STATE and the word it read;
 - an OFF failure at CORE6 or TOP5 leaves the GPU clocked, so the handshakes
   that need the clock can still complete in a later attempt;
 - an OFF failure in the clock steps leaves CORE6 and TOP5 OFF and the
@@ -134,6 +146,47 @@ controller reports as its error and step:
 
 Every failure retains the leases and the TOP5 row and makes no further
 access.
+
+## The first OFF on a board closed the GPU master gates
+
+The power-only diagnostic ran its two ON/OFF cycles once on port 3-1
+(`board-session-20261025-7/port-3-1/s11-gpo-run`). Its log and its three
+35-word snapshots show what happened:
+
+- **Cycle 1 completed.** ON reached CORE6 status 8 (`policy_status=0x8`,
+  `misr_late=0x100`) with PLL_GPU0 locked at 1008 MHz. OFF completed all 18
+  of its steps and the resource release passed: the controller's
+  `phase=4 error=0 step=18` is OFF, and snapshot 2 shows TOP5 and CORE6
+  policy and status 0, the GPU clock word and bus gate 0 and PLL_GPU0
+  `0x01105300`. This was the first TOP5 transition from ON on a board.
+- **Cycle 2's resource acquisition failed, not the release.** The line
+  `GPU resources result=3 error=7 stage=8 last=0x1101037f` is the manager's
+  FAULT with error GATE at its eighth read. It had read CCU `0x5c0`
+  (`AHB_MAT_CLK_GATING_REG`) with bit 7, the GPU0 AHB gate, clear, wrote it
+  open with the register's key, and read it back still clear. `0x1101037f`
+  is the reset value `0x110103ff` without bit 7. No GPU code writes that
+  word; TOP5 OFF closed the gate, and the gate does not take a write while
+  TOP5 is OFF.
+- **Cycle 2's controller never started.** The acquisition precedes the
+  controller's ON, so PLL_GPU0 was not enabled, no lock or update read was
+  made, and the cycle 2 CORE lines repeat cycle 1's cached values;
+  `pll=0x1105300` is the last word OFF read.
+
+The vendor's OFF (`sunxiPostPowerState`) makes the same TOP5 OFF before the
+clocks close, and its next ON never reads the master gates, so the vendor
+cannot observe this. The controller, the resource manager and the
+power-domain owner each required the gates open before TOP5 ON. Now the
+manager leaves them alone while TOP5 is OFF, and the owner admits a
+domain-5 ON from OFF with them closed. The controller requires them after
+TOP5 ON and records both words at ON entry, after TOP5 ON, after TOP5 OFF
+and at the end of OFF (`GPU gates` lines). Whether TOP5 OFF also closes the MBUS gate,
+and whether TOP5 ON reopens them, has not run on a board: if TOP5 ON reopens
+them, the second ON completes; if not, it fails after TOP5 ON with error
+STATE and the gate word.
+`checks/a733-gpu-second-on.c` runs both cycles through the actual platform,
+resource manager, controller and owner with this gate behaviour; built
+against the tree before the fix (`-DBOARD_RUN`) it reproduces the board's
+values exactly.
 
 A successful power-off result does not establish that outstanding memory
 transactions have drained. This controller cannot supply the isolation callback

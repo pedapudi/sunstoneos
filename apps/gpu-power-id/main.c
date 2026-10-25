@@ -63,6 +63,7 @@ static void snapshot(unsigned which)
  * from 1: CORE6 entry words, identification and accept/deny inputs, the
  * status after the PWCR and policy writes, and the PLL_GPU0 lock and GPU
  * clock update reads with the last PLL_GPU0 word. */
+static void gates_report(void);
 static void core_report(void)
 {
     const struct a733_gpu_power *p = &gpu.power;
@@ -89,6 +90,26 @@ static void core_report(void)
     bb_line_dec(&line, "lock1_reads", p->pll_lock_reads[0]); bb_line_dec(&line, "lock2_reads", p->pll_lock_reads[1]);
     bb_line_dec(&line, "update1_reads", p->clock_update_reads[0]);
     bb_line_dec(&line, "update2_reads", p->clock_update_reads[1]);
+    bb_line_end(&line); bb_power_print(&line);
+    gates_report();
+}
+/* The GPU AHB and MBUS master gate words (CCU 0x5c0 and 0x5e0) that the
+ * controller recorded: at the last ON's entry and after its TOP5 ON, and
+ * after the last OFF's TOP5 OFF and at its end. */
+static void gates_report(void)
+{
+    const uint32_t *n = gpu.power.core_note;
+    struct bb_line line;
+    bb_line_start(&line, "GPU gates");
+    bb_line_dec(&line, "cycle", cycle);
+    bb_line_hex(&line, "ahb_entry", n[A733_GPU_NOTE_AHB_ENTRY]);
+    bb_line_hex(&line, "mbus_entry", n[A733_GPU_NOTE_MBUS_ENTRY]);
+    bb_line_hex(&line, "ahb_on", n[A733_GPU_NOTE_AHB_TOP5_ON]);
+    bb_line_hex(&line, "mbus_on", n[A733_GPU_NOTE_MBUS_TOP5_ON]);
+    bb_line_hex(&line, "ahb_top5_off", n[A733_GPU_NOTE_AHB_TOP5_OFF]);
+    bb_line_hex(&line, "mbus_top5_off", n[A733_GPU_NOTE_MBUS_TOP5_OFF]);
+    bb_line_hex(&line, "ahb_off", n[A733_GPU_NOTE_AHB_OFF_END]);
+    bb_line_hex(&line, "mbus_off", n[A733_GPU_NOTE_MBUS_OFF_END]);
     bb_line_end(&line); bb_power_print(&line);
 }
 static _Noreturn void gpu_fail(const char *reason)
@@ -199,6 +220,7 @@ void gpu_power_id_client(void *unused)
         if (!a733_gpu_platform_off_begin(&gpu, bb_power.deadline)) gpu_fail("GPU OFF begin");
         while ((result = a733_gpu_platform_off_poll(&gpu)) == 0) gpu_pause("GPU OFF deadline");
         if (result != 1) gpu_fail("GPU OFF poll");
+        gates_report();
         off_proof();
     }
     cycle = GPU_CYCLES;

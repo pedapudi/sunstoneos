@@ -53,8 +53,13 @@ _Static_assert(UINT64_C(24000000) * 84 / 2 == A733_GPU_CORE_HZ, "PLL_GPU0 factor
  * and SETTLE steps record CORE6 words for diagnosis and require no
  * particular value; a SETTLE status other than 0 or 8 still fails. */
 static const struct step on_steps[] = {
-    {CHECK, A733_GPU_CCU, 0x05c0, BIT(7), BIT(7)},
-    {CHECK, A733_GPU_CCU, 0x05e0, BIT(16), BIT(16)},
+    /* The GPU AHB master gate read 0 after a TOP5 OFF and took no write
+     * while TOP5 was OFF (board-session-20261025-7, s11-gpo-run); the MBUS
+     * gate was not read and is treated the same way. ON records both here
+     * and requires them after TOP5 ON. The vendor never reads or writes them after boot: they are
+     * CLK_IS_CRITICAL (ccu-sun60iw2.c:587-590, 658-661). */
+    {NOTE, A733_GPU_CCU, 0x05c0, 0, A733_GPU_NOTE_AHB_ENTRY},
+    {NOTE, A733_GPU_CCU, 0x05e0, 0, A733_GPU_NOTE_MBUS_ENTRY},
     {CHECK, A733_GPU_R_CCU, 0x01ac, BIT(0), BIT(0)},
     {CHECK, A733_GPU_CCU, 0x0b20, 0x8700000f, 0},
     {CHECK, A733_GPU_CCU, 0x0b24, BIT(16) | BIT(0), 0},
@@ -112,6 +117,10 @@ static const struct step on_steps[] = {
      * clocked, then CORE6 policy 8. TOP5 is ON from reset at the first ON,
      * which the owner adopts without a command. */
     {DOMAIN, A733_GPU_CCU, 0, 0, 1},
+    {NOTE, A733_GPU_CCU, 0x05c0, 0, A733_GPU_NOTE_AHB_TOP5_ON},
+    {NOTE, A733_GPU_CCU, 0x05e0, 0, A733_GPU_NOTE_MBUS_TOP5_ON},
+    {CHECK, A733_GPU_CCU, 0x05c0, BIT(7), BIT(7)},
+    {CHECK, A733_GPU_CCU, 0x05e0, BIT(16), BIT(16)},
     {UPDATE, A733_GPU_CORE, 0, UINT32_MAX, 8},
     {CHECK, A733_GPU_CORE, 0, UINT32_MAX, 8},
     {SETTLE, A733_GPU_CORE, 8, 0, A733_GPU_NOTE_AFTER_POLICY},
@@ -131,6 +140,8 @@ static const struct step off_steps[] = {
     {CHECK, A733_GPU_CORE, 0, UINT32_MAX, 0},
     {POLL, A733_GPU_CORE, 8, UINT32_MAX, 0},
     {DOMAIN, A733_GPU_CCU, 0, 0, 0},
+    {NOTE, A733_GPU_CCU, 0x05c0, 0, A733_GPU_NOTE_AHB_TOP5_OFF},
+    {NOTE, A733_GPU_CCU, 0x05e0, 0, A733_GPU_NOTE_MBUS_TOP5_OFF},
     {UPDATE, A733_GPU_CCU, 0x0b24, BIT(0), 0},
     {CHECK, A733_GPU_CCU, 0x0b24, BIT(16) | BIT(0), BIT(16)},
     {UPDATE, A733_GPU_CCU, 0x0b20, BIT(31), BIT(27)},
@@ -145,6 +156,8 @@ static const struct step off_steps[] = {
     {PLL, A733_GPU_CCU, 0x00e0, PLL_CONTROL, 0},
     {UPDATE, A733_GPU_CCU, 0x0b24, BIT(16), 0},
     {CHECK, A733_GPU_CCU, 0x0b24, BIT(16) | BIT(0), 0},
+    {NOTE, A733_GPU_CCU, 0x05c0, 0, A733_GPU_NOTE_AHB_OFF_END},
+    {NOTE, A733_GPU_CCU, 0x05e0, 0, A733_GPU_NOTE_MBUS_OFF_END},
 };
 static enum a733_gpu_power_result fail(struct a733_gpu_power *s,
                                        enum a733_gpu_power_error error)
@@ -196,10 +209,18 @@ static enum a733_gpu_power_result begin(struct a733_gpu_power *s,
     s->index = 0;
     s->requested = 0;
     s->phase = on ? A733_GPU_POWER_STARTING : A733_GPU_POWER_STOPPING;
+    /* ON clears its own notes and keeps those of the OFF before it; OFF
+     * clears its notes. core_seen bit 3 + n follows note n. */
+    const unsigned first = on ? 0 : A733_GPU_NOTE_AHB_TOP5_OFF;
+    const unsigned end = on ? A733_GPU_NOTE_AHB_TOP5_OFF : A733_GPU_CORE_NOTES;
+    for (unsigned i = first; i < end; ++i) {
+        s->core_note[i] = 0;
+        s->core_seen &= ~(UINT32_C(8) << i);
+    }
     if (on) {
         s->lease_attempted = 0;
-        s->core_policy = s->core_status = s->core_config = s->core_seen = 0;
-        for (unsigned i = 0; i < A733_GPU_CORE_NOTES; ++i) s->core_note[i] = 0;
+        s->core_policy = s->core_status = s->core_config = 0;
+        s->core_seen &= ~UINT32_C(7);
         s->core_power_up = 0;
     }
     s->pll_lock_reads[0] = s->pll_lock_reads[1] = s->clock_update_reads[0] = s->clock_update_reads[1] = 0;

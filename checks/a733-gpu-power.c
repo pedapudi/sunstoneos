@@ -30,6 +30,11 @@ struct model {
     /* A status read after the PWCR write and before the policy write
      * returns this value when it is nonzero. */
     uint32_t core_after_pwcr_value;
+    /* The GPU master gates (CCU 0x5c0 bit 7, 0x5e0 bit 16) as the board
+     * showed them: a TOP5 OFF closes them; a TOP5 ON reopens what the OFF
+     * closed unless gates_stuck. gates_closed holds the closed bits. */
+    unsigned gates_stuck, gate_reopens;
+    uint32_t gates_closed[2];
     uint64_t now, tick, counter;
 };
 static struct model m;
@@ -53,7 +58,16 @@ static void answer(void)
         *policy = (*policy & ~15u) | (on ? 8 : 0); m.pending = 1;
     }
     if (m.stalled) return;
+    const unsigned was_on = (*status & 15) == 8;
     *status = (*status & ~15u) | (*policy & 15); m.pending = 0;
+    uint32_t *ahb = &m.regs[0][0x5c0/4], *mbus = &m.regs[0][0x5e0/4];
+    if (was_on && !on) {
+        m.gates_closed[0] = *ahb & 0x80; m.gates_closed[1] = *mbus & 0x10000;
+        *ahb &= ~0x80u; *mbus &= ~0x10000u;
+    } else if (!was_on && on && !m.gates_stuck && (m.gates_closed[0] | m.gates_closed[1])) {
+        *ahb |= m.gates_closed[0]; *mbus |= m.gates_closed[1];
+        m.gates_closed[0] = m.gates_closed[1] = 0; ++m.gate_reopens;
+    }
     atomic_store(&r->state, g << 3 | (on ? A733_POWER_ROW_ON : A733_POWER_ROW_OFF));
 }
 static enum a733_gpu_power_result poll(void) { answer(); return a733_gpu_power_poll(&s); }
@@ -251,7 +265,7 @@ static void core_cases(void)
         m.regs[2][0x6000/4] = m.regs[2][0x6008/4] = core*8;
         m.regs[2][0x4000/4] = 0x12345678; m.regs[2][0x4008/4] = 0xabcdef08;
         on();
-        assert(s.core_seen == 0xff && s.core_policy == core*8 && s.core_status == core*8 &&
+        assert(s.core_seen == 0xfff && s.core_policy == core*8 && s.core_status == core*8 &&
                s.core_config == 0x010101ff && m.core_reads == 1);
         /* A settled entry reads each observation once. The policy write
          * follows the clocks, so the transition completes at its first
@@ -262,7 +276,7 @@ static void core_cases(void)
         assert(!m.regs[2][0x6170/4] && !m.regs[2][0x6c10/4]);
         off(); on(); off();
         assert(m.releases == 2 && m.regs[2][0x4000/4] == 0x12345678 &&
-               m.regs[2][0x4008/4] == 0xabcdef08 && m.regs[0][0x5e0/4] == 0x50000);
+               m.regs[2][0x4008/4] == 0xabcdef08 && m.regs[0][0x5e0/4] == 0x40000 && m.gate_reopens == 1);
     }
     /* Unsettled or unexpected entries, including policy 8 and status 0
      * with a PWCR other than the reset value, are refused before any write. */
@@ -273,13 +287,13 @@ static void core_cases(void)
         m.regs[2][0x6020/4] = bad[i][2];
         assert(a733_gpu_power_on(&s,10000) == A733_GPU_POWER_AGAIN);
         assert(drain() == A733_GPU_POWER_FAULT && s.error == A733_GPU_POWER_STATE);
-        assert(!m.writes && m.held && !m.releases && s.core_seen == 0x1f && s.index == 10 &&
+        assert(!m.writes && m.held && !m.releases && s.core_seen == 0x31f && s.index == 10 &&
                s.core_policy == bad[i][0] && s.core_status == bad[i][1] && s.core_config == bad[i][2] &&
                s.core_note[A733_GPU_NOTE_IDR0] == 0x00031001 && s.core_note[A733_GPU_NOTE_MISR] == 0x100);
         terminal();
     }
     /* Seen masks after each entry read: policy, status, IDR0, MISR, PWCR. */
-    const uint32_t seen[] = {0, 1, 3, 0xb, 0x1b, 0x1f};
+    const uint32_t seen[] = {0x300, 0x301, 0x303, 0x30b, 0x31b, 0x31f};
     for (unsigned late = 0; late < 2; ++late) for (unsigned sample = 1; sample <= 5; ++sample) {
         fresh(); if (late) m.core_entry_late = sample; else m.core_entry_fail = sample;
         assert(a733_gpu_power_on(&s,10000) == A733_GPU_POWER_AGAIN);
@@ -303,7 +317,7 @@ static void core_cases(void)
         assert(s.core_note[A733_GPU_NOTE_MISR_LATE] == 0x100);
         assert(!m.regs[2][0x6020/4] && m.regs[2][0x6000/4] == 8 && m.regs[0][0xe0/4] == 0xf9105300);
         if (mode < 2) {
-            assert(r == A733_GPU_POWER_OK && s.core_seen == 0xff && m.regs[2][0x6008/4] == 8);
+            assert(r == A733_GPU_POWER_OK && s.core_seen == 0xfff && m.regs[2][0x6008/4] == 8);
             assert(m.core_reads == 1);
             off(); assert(!m.regs[2][0x6000/4] && !m.regs[2][0x6008/4] && m.releases == 1 &&
                           m.regs[0][0xe0/4] == 0x01105300);
@@ -313,7 +327,7 @@ static void core_cases(void)
                          m.regs[0][0xe0/4] == 0xf9105300); off();
         } else {
             assert(r == A733_GPU_POWER_FAULT && s.error == A733_GPU_POWER_TIMEOUT && m.held && !m.releases);
-            assert(s.index == 53 && !m.regs[2][0x6008/4]); /* the final status poll */
+            assert(s.index == 57 && !m.regs[2][0x6008/4]); /* the final status poll */
             terminal();
         }
     }
@@ -394,7 +408,8 @@ int main(int argc, char **argv)
     assert(m.regs[0][0xb24/4] == 0x24680000);
     assert(m.regs[0][0xe0/4] == 0x01105300);
     assert(m.regs[2][0x5000/4] == 0xa5a50000);
-    assert(m.regs[0][0x5c0/4] == 0x04000080 && m.regs[0][0x5e0/4] == 0x00050000);
+    /* The controller writes neither master gate; the modeled TOP5 OFF closed both. */
+    assert(m.regs[0][0x5c0/4] == 0x04000000 && m.regs[0][0x5e0/4] == 0x00040000);
     assert(m.regs[1][0x1ac/4] == 0x00400001);
     unsigned all_calls = m.calls;
     FILE *f = fopen(argv[1], "w"); assert(f);
@@ -446,6 +461,13 @@ int main(int argc, char **argv)
         if (bad_offsets[i] == 0x5008)
             assert(s.index == 48 && m.writes == 15 && (m.regs[0][0xb24/4] & 0x10001) == 0x10001 &&
                    !(m.regs[2][0x6000/4] & 8));
+        /* A master gate closed by software stays closed after TOP5 ON: the
+         * check after TOP5 ON fails, with the GPU clocked, TOP5 ON and CORE6
+         * unchanged, and the word it read. */
+        else if (bad_offsets[i] == 0x5c0 || bad_offsets[i] == 0x5e0)
+            assert(s.index == (bad_offsets[i] == 0x5c0 ? 51u : 52u) && m.writes == 15 &&
+                   (m.regs[2][0x5008/4] & 15) == 8 && (m.regs[0][0xb24/4] & 0x10001) == 0x10001 &&
+                   !(m.regs[2][0x6000/4] & 8) && s.last_value == m.regs[0][bad_offsets[i]/4]);
         else assert(m.writes == 0);
         terminal(); ++faults;
     }
@@ -527,6 +549,32 @@ int main(int argc, char **argv)
     assert(a733_gpu_power_poll(&s) == A733_GPU_POWER_AGAIN);
     atomic_store(&s.row.state, (atomic_load(&s.row.request) >> 1) << 3 | A733_POWER_ROW_FAILED);
     assert(a733_gpu_power_poll(&s) == A733_GPU_POWER_FAULT && s.error == A733_GPU_POWER_DOMAIN);
+    terminal(); ++faults;
+    /* The board's sequence (board-session-20261025-7, s11-gpo-run): TOP5 ON
+     * from reset, ON, OFF, ON, OFF. The OFF's TOP5 OFF closes both master
+     * gates; the second ON records them closed at entry, TOP5 ON reopens
+     * them and the ON completes. */
+    fresh(); m.regs[2][0x5000/4] |= 8; m.regs[2][0x5008/4] |= 8;
+    m.regs[0][0x5c0/4] = 0x110103ff; m.regs[0][0x5e0/4] = 0xf1055803;
+    on(); assert(s.core_note[A733_GPU_NOTE_AHB_ENTRY] == 0x110103ff && s.core_note[A733_GPU_NOTE_AHB_TOP5_ON] == 0x110103ff);
+    off();
+    assert(s.core_note[A733_GPU_NOTE_AHB_TOP5_OFF] == 0x1101037f && s.core_note[A733_GPU_NOTE_MBUS_TOP5_OFF] == 0xf1045803 &&
+           s.core_note[A733_GPU_NOTE_AHB_OFF_END] == 0x1101037f && s.core_note[A733_GPU_NOTE_MBUS_OFF_END] == 0xf1045803);
+    on();
+    assert(s.core_note[A733_GPU_NOTE_AHB_ENTRY] == 0x1101037f && s.core_note[A733_GPU_NOTE_MBUS_ENTRY] == 0xf1045803 &&
+           s.core_note[A733_GPU_NOTE_AHB_TOP5_ON] == 0x110103ff && s.core_note[A733_GPU_NOTE_MBUS_TOP5_ON] == 0xf1055803);
+    /* The OFF notes of the OFF before survive the ON. */
+    assert(s.core_note[A733_GPU_NOTE_AHB_TOP5_OFF] == 0x1101037f && s.core_seen == 0xffff);
+    off(); assert(m.gate_reopens == 1 && m.releases == 2);
+    /* Gates that stay closed after TOP5 ON fail the second ON at the AHB
+     * check, with TOP5 ON, the GPU clocked and CORE6 policy unchanged. */
+    fresh(); m.regs[2][0x5000/4] |= 8; m.regs[2][0x5008/4] |= 8; m.gates_stuck = 1;
+    m.regs[0][0x5c0/4] = 0x110103ff; m.regs[0][0x5e0/4] = 0xf1055803;
+    on(); off();
+    assert(a733_gpu_power_on(&s, 10000) == A733_GPU_POWER_AGAIN);
+    assert(drain() == A733_GPU_POWER_FAULT && s.error == A733_GPU_POWER_STATE && s.index == 51 &&
+           s.last_value == 0x1101037f && (m.regs[2][0x5008/4] & 15) == 8 && !m.regs[2][0x6000/4] &&
+           (m.regs[0][0xb24/4] & 0x10001) == 0x10001 && s.lease_held);
     terminal(); ++faults;
     /* Without a bound row the controller refuses to start. */
     fresh(); s.row.domains = 0; assert(a733_gpu_power_on(&s, 10000) == A733_GPU_POWER_INVALID);

@@ -181,8 +181,22 @@ enum a733_gpu_resource_result a733_gpu_resources_acquire(
         ok = check(m, CCU + 0xb20, 0x80000000, 0, A733_GPU_RESOURCE_LIVE) &&
              check(m, CCU + 0xb24, 0x10001, 0, A733_GPU_RESOURCE_LIVE);
     if (ok && (mask & A733_GPU_RESOURCE_PCK)) ok = gate(m, RCCU + 0x1ac, 1, 0, 1);
-    if (ok && (mask & A733_GPU_RESOURCE_AHB)) ok = gate(m, CCU + 0x5c0, 0x80, 0x010000ff, mask & A733_GPU_RESOURCE_LOCAL);
-    if (ok && (mask & A733_GPU_RESOURCE_MBUS)) ok = gate(m, CCU + 0x5e0, 0x10000, 0x41055800, mask & A733_GPU_RESOURCE_LOCAL);
+    /* A TOP5 OFF closed the GPU AHB master gate, and it took no write while
+     * TOP5 was OFF (board-session-20261025-7, s11-gpo-run: 0x5c0 read
+     * 0x1101037f after the write); the MBUS gate was not read and is treated
+     * the same way. With TOP5 OFF the
+     * GPU owner leaves them to the controller, which requires them after
+     * TOP5 ON; the shared leases still keep every other client off them. */
+    uint32_t top5 = 8;
+    if (ok && (mask & A733_GPU_RESOURCE_LOCAL)) {
+        ok = read32(m, PCK + 0x5008, &top5);
+        if (ok && (top5 & 15) != 0 && (top5 & 15) != 8) ok = fail(m, A733_GPU_RESOURCE_LIVE);
+    }
+    const int gates = (top5 & 15) == 8;
+    if (ok && gates && (mask & A733_GPU_RESOURCE_AHB))
+        ok = gate(m, CCU + 0x5c0, 0x80, 0x010000ff, mask & A733_GPU_RESOURCE_LOCAL);
+    if (ok && gates && (mask & A733_GPU_RESOURCE_MBUS))
+        ok = gate(m, CCU + 0x5e0, 0x10000, 0x41055800, mask & A733_GPU_RESOURCE_LOCAL);
     if (!ok) {
         m->leases[client].mode = A733_GPU_RESOURCE_RETAINED;
         return leave(m, A733_GPU_RESOURCE_FAULT);

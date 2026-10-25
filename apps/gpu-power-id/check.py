@@ -182,10 +182,10 @@ def run(image, case, power_only=False, wrapper=False, probe=False):
             state['on_polls'] += 1
             state['time'] += 5000
             early = case == 'pr-early-stop'
-            field(power, 'a733_gpu_power', 'core_seen', 0x1f if case in ('pr-early-stop', 'pr-pending-early') else 0xff)
+            field(power, 'a733_gpu_power', 'core_seen', 0x31f if case in ('pr-early-stop', 'pr-pending-early') else 0xfff)
             field(power, 'a733_gpu_power', 'core_policy', 8)
             field(power, 'a733_gpu_power', 'core_config', 0x101)
-            field(power, 'a733_gpu_power', 'index', 10 if early else 6 if case == 'pr-pending-early' else 53)
+            field(power, 'a733_gpu_power', 'index', 10 if early else 6 if case == 'pr-pending-early' else 57)
             notes(0x10130101, 0, 0, 0, 0)
             field(gpu, 'a733_gpu_platform', 'phase', 7 if early else 3 if case == 'pr-core-on' else 2)
             field(gpu, 'a733_gpu_platform', 'token', 17, 8)
@@ -199,7 +199,7 @@ def run(image, case, power_only=False, wrapper=False, probe=False):
         elif name == 'a733_gpu_platform_poll' and wrapper:
             state['on_polls'] += 1
             if case in ('wrapper-on', 'wrapper-off-fault'):
-                field(power, 'a733_gpu_power', 'core_seen', 0xff)
+                field(power, 'a733_gpu_power', 'core_seen', 0xfff)
                 field(power, 'a733_gpu_power', 'core_policy', 8)
                 field(power, 'a733_gpu_power', 'core_config', 0x101)
                 notes(0x10130101, 0, 0, 8, 0x100)
@@ -211,12 +211,12 @@ def run(image, case, power_only=False, wrapper=False, probe=False):
                 ret()
                 return
             # The board's state: the power-up entry, every step through the
-            # clock steps (seen 0xff) and a final poll that reads 0.
+            # clock steps (seen 0xfff) and a final poll that reads 0.
             early = case == 'wrapper-early-stop'
-            field(power, 'a733_gpu_power', 'core_seen', 0x1f if early else 0xff)
+            field(power, 'a733_gpu_power', 'core_seen', 0x31f if early else 0xfff)
             field(power, 'a733_gpu_power', 'core_policy', 8)
             field(power, 'a733_gpu_power', 'core_config', 0x101)
-            field(power, 'a733_gpu_power', 'index', 10 if early else 53)
+            field(power, 'a733_gpu_power', 'index', 10 if early else 57)
             notes(0x10130101, 0, 0, 0, 0)
             if case == 'wrapper-client-deadline':
                 # The client's own 200 ms bound ends the wait.
@@ -240,8 +240,8 @@ def run(image, case, power_only=False, wrapper=False, probe=False):
             if case in ['on-fault', 'core-refused', 'core-partial'] or (case == 'second-on-fault' and state['on_polls'] == 2):
                 if case != 'on-fault':
                     # A refused entry has the policy, status, IDR0, MISR and
-                    # PWCR reads (seen 0x1f) and stops at the admission step 10.
-                    field(power, 'a733_gpu_power', 'core_seen', 0x1f if case == 'core-refused' else 1)
+                    # PWCR reads and the two gate notes (seen 0x31f) and stops at the admission step 10.
+                    field(power, 'a733_gpu_power', 'core_seen', 0x31f if case == 'core-refused' else 1)
                     field(power, 'a733_gpu_power', 'core_policy', 8)
                     field(power, 'a733_gpu_power', 'core_config', 0x010101ff if case == 'core-refused' else 0)
                     field(power, 'a733_gpu_power', 'error', 5 if case == 'core-refused' else 1)
@@ -254,7 +254,7 @@ def run(image, case, power_only=False, wrapper=False, probe=False):
             # The first ON enters from the power-up state, the second from
             # settled OFF with PWCR 0; each reaches status 8 once the GPU is
             # clocked, as the board run of 2026-10-25 showed for the first.
-            field(power, 'a733_gpu_power', 'core_seen', 0xff)
+            field(power, 'a733_gpu_power', 'core_seen', 0xfff)
             if state['on_polls'] == 1:
                 field(power, 'a733_gpu_power', 'core_policy', 8)
                 field(power, 'a733_gpu_power', 'core_config', 0x101)
@@ -483,12 +483,12 @@ def run(image, case, power_only=False, wrapper=False, probe=False):
             assert 'COMPLETE GPU power only: CORE status 8, OFF and provider parked' in output
             assert 'identity' not in output, output
             # Two full cycles, each reported, then one park and the completion text.
-            for line in ['GPU CORE entry cycle=1 seen=255 policy=0x8 status=0x0 pwcr=0x101',
+            for line in ['GPU CORE entry cycle=1 seen=4095 policy=0x8 status=0x0 pwcr=0x101',
                          'GPU CORE inputs cycle=1 idr0=0x31001 misr=0x0 misr_late=0x100',
                          'GPU CORE after cycle=1 pwcr_status=0x0 policy_status=0x8',
                          'GPU clock cycle=1 pll=0xf9105300 lock1_reads=3 lock2_reads=3 update1_reads=1 '
                          'update2_reads=1',
-                         'GPU CORE entry cycle=2 seen=255 policy=0x0 status=0x0 pwcr=0x0',
+                         'GPU CORE entry cycle=2 seen=4095 policy=0x0 status=0x0 pwcr=0x0',
                          'GPU CORE inputs cycle=2 idr0=0x31001 misr=0x0 misr_late=0x100',
                          'GPU CORE after cycle=2 pwcr_status=0x0 policy_status=0x8',
                          'GPU clock cycle=2 pll=0xf9105300 lock1_reads=3 lock2_reads=3 update1_reads=1 '
@@ -552,7 +552,7 @@ def run(image, case, power_only=False, wrapper=False, probe=False):
         if case in ['on-fault', 'core-refused', 'core-partial', 'bad-mapping', 'read-crosses-deadline', 'clock-regresses']:
             assert 'a733_gpu_platform_off_begin' not in state['calls']
     if case in ['core-refused', 'core-partial']:
-        assert 'GPU CORE entry' in output and f'seen={31 if case == "core-refused" else 1}' in output
+        assert 'GPU CORE entry' in output and f'seen={799 if case == "core-refused" else 1}' in output
         assert 'GPU CORE after' in output and 'GPU CORE inputs' in output
         if case == 'core-refused':
             assert 'GPU power phase=5 error=5 step=10' in output and 'idr0=0x31001 misr=0x100' in output, output

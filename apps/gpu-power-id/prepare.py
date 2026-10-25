@@ -72,7 +72,8 @@ PROBE_STEPS = [(0x01880014, 0, 0), (0x01880010, 0, 0), (0x0a0000b0, 0, 0), (0x01
 STEP = struct.Struct('<5I')
 # enum kind: CHECK0 UPDATE1 DELAY2 DOMAIN3 CORE_POLICY4 CORE_STATUS5 CORE_CONFIG6 POLL7 NOTE8 SETTLE9 PLL10
 # LOCK11 UPDATED12.
-KIND_UPDATE, KIND_DOMAIN, KIND_PLL, KIND_LOCK = 1, 3, 10, 11
+KIND_CHECK, KIND_UPDATE, KIND_DOMAIN, KIND_NOTE, KIND_PLL, KIND_LOCK = 0, 1, 3, 8, 10, 11
+MASTER_GATES = (0x5c0, 0x5e0)  # CCU AHB and MBUS master gate words
 BANK_CCU, BANK_CORE = 0, 2  # enum a733_gpu_power_bank: A733_GPU_CCU, A733_GPU_R_CCU, A733_GPU_CORE
 PLL_GPU0 = 0x0e0
 CORE6_DELAY_ROW = (0x170, 0x174, 0xc00, 0xc04, 0xc10)
@@ -158,6 +159,13 @@ def power_order(elf, cycles):
     require(len(policy8) == 1 and len(locks) == 2 and PLL_1008 in on and
             max(locks) < on.index(PLL_1008) < on_domain[0] and max(ccu_on) < on_domain[0] < policy8[0],
             'ON does not set PLL_GPU0 to 1008 MHz and open the GPU clocks before domain 5 ON and CORE6 policy 8.')
+    # A TOP5 OFF closed the GPU AHB master gate (board-session-20261025-7,
+    # s11-gpo-run), and the MBUS gate is treated the same way: ON may only record them
+    # before the domain-5 ON request and must require both after it.
+    gates = [(i, s) for i, s in enumerate(on) if s[1] == BANK_CCU and s[2] in MASTER_GATES]
+    require(all(s[0] == KIND_NOTE for i, s in gates if i < on_domain[0]) and
+            sorted(s[2] for i, s in gates if on_domain[0] < i < policy8[0] and s[0] == KIND_CHECK) ==
+            sorted(MASTER_GATES), 'ON does not require the GPU master gates after domain 5 ON alone.')
     policy0 = [i for i, s in enumerate(off) if s[:3] == (KIND_UPDATE, BANK_CORE, 0) and s[4] == 0]
     ccu_off = [i for i, s in enumerate(off) if s[1] == BANK_CCU and s[0] == KIND_UPDATE]
     pll_off = [i for i, s in enumerate(off) if s[:3] == (KIND_UPDATE, BANK_CCU, PLL_GPU0)]
@@ -166,6 +174,7 @@ def power_order(elf, cycles):
             'OFF does not write CORE6 policy 0, then domain 5 OFF, then close the GPU clocks and PLL_GPU0.')
     return {'cycles': cycles, 'on_steps': len(on), 'off_steps': len(off), 'on_pwcr_step': pwcr[0],
             'on_pll_1008_step': on.index(PLL_1008), 'on_domain_step': on_domain[0], 'on_policy8_step': policy8[0],
+            'on_gate_checks': [i for i, s in gates if s[0] == KIND_CHECK],
             'on_last_step': 'CORE6 status poll for 8', 'off_policy0_step': policy0[0],
             'off_domain_step': off_domain[0], 'off_first_clock_step': min(ccu_off)}
 

@@ -78,11 +78,18 @@ static int fresh(void)
 unsigned native_check(void)
 {
     uint64_t token; struct a733_gpu_power_resources ready;
-    int r = fresh(); CHECK(!r);
+    /* With TOP5 ON the GPU owner opens the closed master gates through the
+     * adapter; with TOP5 OFF it leaves them (the next acquisition). */
+    int r = fresh(); CHECK(!r); *mmio(0x07065008) = 8;
     CHECK(a733_gpu_resources_acquire(&manager, 0, A733_GPU_RESOURCE_ALL, 1000000, &token, &ready) == A733_GPU_RESOURCE_OK);
     CHECK(ready.parent_hz == 400000000 && ready.supply_uv == 960000);
     CHECK(reads == 6 && opens == 1 && closes == 1 && !bus_lock && !register_lock && !issue);
     CHECK(*mmio(0x070101ac) == 0x41 && *mmio(0x020025c0) == 0x110000ff && *mmio(0x020025e0) == 0x61055802);
+    *mmio(0x07065008) = 0;
+    CHECK(a733_gpu_resources_release(&manager, 0, token, 1000000) == A733_GPU_RESOURCE_OK);
+    CHECK(!fresh());
+    CHECK(a733_gpu_resources_acquire(&manager, 0, A733_GPU_RESOURCE_ALL, 1000000, &token, &ready) == A733_GPU_RESOURCE_OK);
+    CHECK(*mmio(0x070101ac) == 0x41 && *mmio(0x020025c0) == 0x1100007f && *mmio(0x020025e0) == 0x61045802);
     CHECK(a733_gpu_resources_release(&manager, 0, token, 1000000) == A733_GPU_RESOURCE_OK);
     /* The LOCAL release reads PLL_GPU0 through the adapter and refuses it enabled. */
     CHECK(!fresh());
