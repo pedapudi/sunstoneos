@@ -6,7 +6,7 @@ cores and on the linked instructions of the finite numerical image. The
 routing ran on port 3-3 on 2026-10-25 in a separate variant of the finite
 image, which this change replaces. The production sequence, the power-first
 order and the adoption of a running PLL_NPU have not run on a board; the
-[two-start runbook](../board-runbooks/npu-two-starts.md) tests them.
+[three-start runbook](../board-runbooks/npu-starts.md) tests them.
 
 ## Problem and reference
 
@@ -100,9 +100,10 @@ adopted by the owner.
 
 The startup structure holds one atomic word, `window_open`. The bootstrap
 task stores 1 with release order when it reaches READY, and 0 at the start of
-local stop and on any failure. Both NPU backends,
-[`npu_convolution.c`](../../drivers/npu/npu_convolution.c) and
-[`a733_npu_runtime.c`](../../drivers/npu/a733_npu_runtime.c), load it with
+local stop and on any failure. The three NPU backends that bind a startup,
+[`npu_convolution.c`](../../drivers/npu/npu_convolution.c),
+[`a733_npu_runtime.c`](../../drivers/npu/a733_npu_runtime.c) and
+[`npu_session.c`](../../drivers/npu/npu_session.c), load it with
 acquire order before every register read and write and refuse the access
 while it is 0. A refusal makes no bus access; the controller then faults with
 an I/O failure and retains its resources. READY requires the routing, so an
@@ -115,8 +116,11 @@ startup and keeps no window. Only host models call it directly.
 
 The finite image's EL3 receipt path ([`monitor.c`](../../apps/npu-finite/monitor.c))
 reads `0x03000008` after the GIC and secondary-core cleanup and before it
-publishes the report. It sets bit 1 if it reads clear and parks with
-`a733_smp_stop(7, 0x03000008)` if the readback still shows the NPU routing.
+publishes the report. If bit 1 reads clear, it first requires CCU `+0xb04`
+to hold the NPU's AHB, AXI and core resets asserted with the bus gate closed
+and the `+0xb00` module gate closed, as the EL1 adapter does, then sets bit 1.
+It parks with `a733_smp_stop(7, 0x03000008)` if that check fails or the
+readback still shows the NPU routing.
 Only then does it call `npu_finite_rom_return`, which holds the image's only
 `RMR_EL3` write. This step does not depend on the EL1 restore at local stop.
 The default, thermal, interrupt and entry-checkpoint profiles of the finite
@@ -178,17 +182,17 @@ and on the linked finite image; the before column is `37502c21`.
 
 | Quantity | Before | After |
 | --- | --- | --- |
-| Boot to READY, domain 4 OFF at entry | 11 ticks, 11,000 µs, 12 calls | 13 ticks, 12,001 µs, 13 calls |
+| Boot to READY, domain 4 OFF at entry | 11 ticks, 11,000 µs, 12 calls | 12,001 µs, 13 calls, with routing and the power-first order alone; 4,628 µs, 4 calls, with the [latency changes](npu-board-measurements.md#startup-latency-change-by-change) |
 | Register reads besides LOCK samples, writes, lock acquisitions | 57, 12, 3 | 61, 13, 4 |
 | Local stop: reads, writes | 12, 5 | 15, 6 |
-| Second start, PLL_NPU and domain 4 adopted | refused; power removal | 12,001 µs, 6 writes, 3 LOCK samples, no PLL, gate-control or PCK600 write |
+| Second start, PLL_NPU and domain 4 adopted | refused; power removal | 4,414 µs, 6 writes, 3 LOCK samples, no PLL, gate-control or PCK600 write |
 | Instructions from the convolution backend's register read to the adapter call | 33 | 39, one of them an acquire load |
 | EL3 return | — | one to three SYSCTRL accesses |
 | Finite default image: functions, `.text` section | 139,564 and 148,520 bytes | 140,512 and 150,568 bytes |
 
-The extra tick comes from the order: the 2 ms settle now starts after the
-PLL LOCK wait inside a tick instead of at a tick boundary. It is paid once per
-startup. The register window costs one acquire load and one compare per
+With routing and the power-first order alone, the 2 ms settle started after
+the PLL LOCK wait inside a tick, which cost one tick once per startup; the
+event-driven settle end removes it. The register window costs one acquire load and one compare per
 register access, at most a few hundred per job. Section 3 of
 [performance architecture](../performance-architecture.md) is unchanged: no
 digest, translation, copy, queue round trip or cache operation is added.
@@ -226,7 +230,9 @@ digest, translation, copy, queue round trip or cache operation is added.
 - `apps/npu-finite/sram-route-check.py` runs the linked sequencer and
   allowlist adapter of the finite image from the register pass through local
   stop, a second start, the two routing refusals, the convolution backend's
-  window and the reachability of the only `RMR_EL3` write: 10 cases.
+  window, a rate change from the other profile and the reachability of the
+  only `RMR_EL3` write: 11 cases, and 12 for the 852 MHz image, which adds
+  the speed-bin refusal.
 - `apps/npu-finite/check.py` runs the EL3 return path with SYSCTRL modeled:
   the restore precedes the report on both normal returns, an already-set bit
   is not written, a word that ignores the write parks with status 7, and every

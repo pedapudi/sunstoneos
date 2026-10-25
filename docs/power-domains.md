@@ -151,7 +151,18 @@ the power-authority state word ([docs/power.md](power.md)).
 ## Supplies are verified once per boot
 
 Verification starts 5,160 µs after the service's first step: the board device
-tree's 1,000 µs enable delay plus a 1,040 mV ramp at 250 µV/µs. The service
+tree's 1,000 µs enable delay plus a 1,040 mV ramp at 250 µV/µs. An owner
+marked settled with `a733_power_domains_settled_supply` before its service
+first runs verifies at that first step instead. NPU startup init sets that
+mark. No image enables DCDC2 or DCDC4 or changes their voltage, and
+verification passes only for a rail found enabled at its target selector.
+The board kernel's regulator core likewise applies its enable delay only to
+an off-to-on enable and its ramp delay only to a selector change
+(`drivers/regulator/core.c` lines 2905–2930 and 3660–3713, linux-orangepi
+`2ac08e8c`, SHA-256 `65b39b20…`, cached under
+`~/.cache/sunstoneos/sources/linux-orangepi-2ac08e8c-regulator/`). A settled
+owner also publishes each rail's verified bit as soon as that rail is
+verified, and admits a row whose rail is verified before the done bit. The service
 acquires one shared DCDC2 and DCDC4 rail token and snapshots both outputs
 through the PMIC provider, 12 single-register transactions. After success it
 releases the token, so verification holds a rail-ledger slot for a few
@@ -161,7 +172,7 @@ verified bit (`A733_POWER_DCDC2_VERIFIED`, `A733_POWER_DCDC4_VERIFIED`), and
 then the done bit is set.
 
 Verification has a budget of 100 ms, which starts at the first step in which
-the settle time has passed and the provider is READY; before READY the
+the settle time has passed, or at once for a settled supply, and the provider is READY; before READY the
 provider's startup deadline bounds the wait, and a provider fault ends it. Any
 terminal failure sets the done bit with no verified bit at once, so
 rows waiting for verification are refused within that bound. A verification
@@ -177,6 +188,12 @@ slot. The DCDC2 reading is not kept: domain-1 and domain-4 admission needs
 only its verified bit. Only
 selector writes to DCDC3 and DCDC5 are accepted; that no firmware writes DCDC2
 or DCDC4 after boot is established only by board evidence.
+
+A row may carry a consumer wake (`wake`, `wake_context` in
+`a733_power_domain_row.h`), set before the service first runs. The service
+calls it after it publishes an answer to that row and after it publishes a
+supply result, from the service task. NPU startup uses it to notify its
+bootstrap task.
 
 ## One service task per image
 

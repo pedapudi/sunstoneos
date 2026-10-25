@@ -76,3 +76,10 @@ unless the startup is READY. The design, exit paths and checks are in
 python3 apps/npu-finite/build.py --evidence OUTPUT
 python3 apps/npu-finite/sram-route-check.py --evidence OUTPUT --output OUTPUT/sram-route-check.json
 ```
+
+`build.py --rate-852` builds the image with PLL_NPU at 852 MHz at the
+unchanged 800 mV; its register pass refuses a speed bin whose operating-point
+column does not list 800 mV for that rate
+([design](../../docs/designs/npu-852mhz-plan.md)). Check it with
+`sram-route-check.py --rate 852`. The client logs startup and job times in
+counter microseconds as `NPU_TIME_US`, which the host reports as `timing`.

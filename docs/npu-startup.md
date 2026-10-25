@@ -51,35 +51,42 @@ wait. A waiting stage returns PENDING; every wait has a counter deadline.
    fabric clock selects it. One shared DCDC2 rail token from the ledger. One
    stable OSC and PCK lease from the GPU/PCK manager, with its parent lease
    when PERI0 is selected. A busy provider returns PENDING.
-2. **Supply.** One acquire load of the power-authority word. While the owner's
-   supply-done bit is clear the step returns PENDING. The deadline is the later
-   of the token step and the PMIC provider's startup deadline, plus the owner's
-   5,160 µs settle, its 100 ms verification budget and one tick. A PMIC
-   transfer or domain-4 fault bit, a done bit without DCDC2 verified, or an
-   expired deadline refuses.
+2. **Supply.** One acquire load of the power-authority word. DCDC2 verified
+   ends the wait; the owner may still be reading DCDC4. Startup init marks
+   the owner's supply settled, so the owner verifies at its first step
+   ([power domains](power-domains.md#supplies-are-verified-once-per-boot)).
+   The deadline is the later of the token step and the PMIC provider's
+   startup deadline, plus 5,160 µs, the owner's 100 ms verification budget
+   and one tick. A PMIC transfer or domain-4 fault bit, a done bit without
+   DCDC2 verified, or an expired deadline refuses.
 3. **Register pass and domain 4.** Under one register-lock acquisition: the
    owner's domain-4 check, which reads the PCK600 words once and returns the
    coherent domain state (OFF or ON), and the register pass below. Both only
    read. The lock is released, and the step requests domain 4 ON with
-   `a733_power_domain_request(row, 1)` and returns PENDING.
+   `a733_power_domain_request(row, 1)`. A domain the pass read OFF must
+   reach ON before anything else: the step returns PENDING. A domain the
+   pass read ON is already powered, so the step goes on to the PLL while the
+   owner adopts the row.
 4. **Row.** The power service answers the row; the step returns PENDING
    while it is pending. The deadline is the request plus
-   `A733_POWER_PCK_BOUND_US` (10 ms) plus two ticks of service latency.
-5. **PLL enable.** When the row reads ON, under a second acquisition, the
-   PLL_NPU method-2 enable table ([PLL table](npu-pll.md)), or for an adopted
-   PLL one read that must show it unchanged. The lock is released, and LOCK
-   is read without it: at most 100 observations 3 µs apart until three in a
-   row read locked, then 20 µs. The worst case is about 320 µs, so the spin
-   does not yield.
+   `A733_POWER_PCK_BOUND_US` (10 ms) plus two ticks of service latency. The
+   open stage follows only after the ON answer.
+5. **PLL enable.** Under a second acquisition, the PLL_NPU method-2 enable
+   table ([PLL table](npu-pll.md)); for an adopted PLL one read that must show
+   it unchanged; for a PLL locked at the other profile, the vendor's rate
+   change. The lock is released, and LOCK is read without it: at most 100
+   observations 3 µs apart until three in a row read locked, then 20 µs. The
+   worst case is about 320 µs, so the spin does not yield.
 6. **Open.** Under a third acquisition, the step requires PLL_NPU locked with
    its gate controls set and opens its output gate. It then routes the shared
    SRAM to the NPU, clearing SYSCTRL `0x03000008` bit 1 with readback while
    the NPU resets are still asserted. The local open table follows, with a
    readback of each write.
 7. **Settle.** A counter sample at the end of the open stage sets the settle
-   end 2,000 µs later; the step returns PENDING until a later sample reaches
-   it. The vendor platform waits 2 ms after its power and clock hook
-   (`vip_drv_device_platform.c:1386-1387`).
+   end 2,000 µs later. The vendor platform waits 2 ms after its power and
+   clock hook (`vip_drv_device_platform.c:1386-1387`). The step returns
+   PENDING while more than one tick remains, and otherwise spins the rest on
+   the raw counter, so the settle ends at its counter time.
 8. **Final readback.** Under a fourth acquisition, domain-4 policy and
    status ON, the routing bit clear, the bus and reset word, the module word
    and the PLL_NPU control word. The step then opens the register window and
@@ -91,12 +98,36 @@ management, and the platform bus attaches the device to its domain with
 power-on before probe ([reference backsolve](reference-backsolve-npu.md#the-vendor-build-compiles-out-npu-power-management)). The sequencer writes no PCK600
 register and issues no PMIC transaction; the power-domain owner does both.
 
+### The bootstrap waits on notifications
+
+The sequencer's power-domain row carries a wake, which the power service
+calls after it answers the row and after it publishes a supply result. The
+native wake notifies the bound bootstrap task. After a PENDING step, the
+bootstrap blocks in `ulTaskNotifyTake` for the ticks that
+`a733_npu_startup_wait_ticks` gives: up to the deadline for the supply and
+row waits, which the notification ends early, and up to the last tick before
+the settle ends. The NPU bootstrap loops of the convolution, finite thermal,
+NPU board and OS images wait that way; a host model that passes no wake
+callback polls once per tick and gets the same results.
+
 In the host model with the PMIC at 400 kHz and domain 4 initially OFF, the
-sequencer reaches READY 13 ticks (12,001 modeled microseconds) after the
-scheduler starts, in 13 calls of which 4 advance a stage. It makes 61
-register reads besides the LOCK samples (56 by the sequencer and 5 by the
-owner's domain check), 13 writes and 4 lock acquisitions. The inherited-ON
-case takes the same time and the same 13 local writes, with no PCK600 writes.
+sequencer reaches READY 4,628 modeled microseconds after the scheduler
+starts, in 4 calls, each advancing a stage. It makes 61 register reads besides
+the LOCK samples (56 by the sequencer and 5 by the owner's domain check), 13
+writes and 4 lock acquisitions. With domain 4 ON at entry, as both boards
+read it at boot, READY follows at 4,615 µs with the same 13 writes and no
+PCK600 write. [The measurements](designs/npu-board-measurements.md#startup-latency-change-by-change)
+list each change's effect.
+
+### Two operating points
+
+`a733_npu_startup_rate`, after init and before the scheduler, selects 492 MHz
+(the default) or 852 MHz. Both run at the inherited 800 mV; nothing writes
+DCDC2. The register pass admits 852 MHz only for a SID speed bin whose
+operating-point column lists 800 mV for it and refuses every other bin before
+any write ([PLL table](npu-pll.md#two-profiles-and-the-rate-change)). The
+finite image selects 852 MHz when built with `apps/npu-finite/build.py
+--rate-852`.
 
 ## The register pass refuses before any write
 
@@ -192,7 +223,7 @@ The ordinary numerical image has no thermal integration, and the OS has no
 NPU service entry. Frequency/voltage transitions, in-place recovery and
 thermal qualification remain open; repeated startup across images is
 implemented and not yet run on a board
-([two-start runbook](board-runbooks/npu-two-starts.md)).
+([three-start runbook](board-runbooks/npu-starts.md)).
 
 ### CLOSE and power-off establish different boundaries
 

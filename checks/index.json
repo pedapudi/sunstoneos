@@ -7112,7 +7112,6 @@
    "sources"
   ],
   "docs": [
-   "docs/designs/npu-852mhz-plan.md",
    "docs/npu-pll.md"
   ],
   "library": false,

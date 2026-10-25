@@ -113,12 +113,17 @@ further board run of each. Board runs test only predictions from those diffs.
   routes the SRAM back at local stop; the finite image also sets the bit at
   EL3 before its ROM return. The register pass adopts a PLL_NPU that an
   earlier start in the same power lifetime left locked, so a second start
-  needs no power removal. The board qualification is the
-  [two-start runbook](board-runbooks/npu-two-starts.md): one cold port 3-3
-  lifetime, two starts of two jobs each, all four outputs predicted to match
-  and the second start to adopt the PLL and domain 4. No set is frozen. The
-  852 MHz rate at 800 mV is a [plan](designs/npu-852mhz-plan.md) that needs
-  the coordinator's approval and its own design.
+  needs no power removal. Modelled boot to READY is 4.6 ms (was 12.0 ms):
+  the owner verifies DCDC2 at its first step without the 5,160 µs settle, the
+  bootstrap waits on power-service notifications and ends the 2 ms vendor
+  settle exactly, and PLL_NPU starts at once when domain 4 is already ON. An
+  852 MHz profile at the unchanged 800 mV is admitted only for speed bins
+  whose column lists 800 mV, with the vendor's rate-change order
+  ([design](designs/npu-852mhz-plan.md)). The board qualification is the
+  [three-start runbook](board-runbooks/npu-starts.md): one cold port 3-3
+  lifetime, starts at 492 MHz cold, 492 MHz adopted and 852 MHz by rate
+  change, two jobs each, all six outputs predicted to match, startup times
+  of about 4.6, 4.4 and 4.6 ms. No set is frozen.
 - CPU (`work/backsolve-cpu-1025`, `docs/reference-backsolve-cpu.md`): the
   leading divergences are checks that the reference never performs, such as the
   GICR_CTLR status compare (now masked on `bringup`), GICD_CTLR.RWP treated

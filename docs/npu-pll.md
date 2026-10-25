@@ -89,6 +89,42 @@ enable, LDO and output gate bits are already set (`ccu_gate.c:171-174`).
 Other factors, a closed output gate, a clear gate-control bit or a missing
 LOCK refuse before any write; the pinned profile has no rate-change step.
 
+## Two profiles and the rate change
+
+`a733_npu_startup_rate` selects one of two profiles before the scheduler.
+Both come from the 24 MHz reference, inside the board source's N range of
+53–105, and both run at the inherited 800 mV:
+
+| Rate | N | P0 | Oscillator | Factor field |
+| --- | --- | --- | --- | --- |
+| 492 MHz (default) | 82 | 4 | 1,968 MHz | `0x00305100` |
+| 852 MHz | 71 | 2 | 1,704 MHz | `0x00104600` |
+
+The 852 MHz profile is admitted only for a speed bin whose column lists
+800 mV for it. The register pass reads SID word `0x0300624c`: the code is
+bits 23:16 (`dvfs_bak`) when nonzero, else bits 15:8 (`dvfs_ori`), and
+`vf_mapping_table` maps it to a column (`sun60iw2p1-cpu-vf.dtsi` lines 3–17).
+The 852 MHz row (lines 2069–2091) lists 800 mV in both oscillator columns of
+vf0200, vf0201, vf0400, vf0500 and vf0501, codes `0x02`, `0x12`, `0x04`,
+`0x05` and `0x15`. Every other code refuses before any write: an
+unprogrammed 0, a code without a column in the NPU table (vf0100, vf0101,
+vf0300, vf0600), and vf0401, which lists 820 mV. Port 3-3 reads `0x496`,
+code 4, column vf0400.
+
+A PLL that an earlier start left locked at the other profile, with its
+output gate open and its gate controls set, is retuned in the order of the
+board kernel's `ccu_nm_set_rate` with `CONFIG_AW_STANDARD_CCU`, which both
+shipped board kernel configurations set (`ccu_nm.c` lines 250–344):
+
+1. output gate off (line 264);
+2. the N and output-divider factors in one write (314);
+3. lock enable cleared, then set (329–334);
+4. LOCK, three consecutive observations (339);
+5. output gate on, at the start of the open stage (342).
+
+Each write is read back. The rate changes only while the NPU module gate is
+closed and the NPU's resets are asserted, which the register pass requires.
+
 ## Enabling the PLL while DRAM runs
 
 The sequencer enables PLL_NPU from a DRAM-resident FreeRTOS task. The board's
@@ -119,7 +155,8 @@ rules:
 
 - LOCK is never written;
 - the PLL and its LDO are never disabled;
-- the factors change only to `0x00305100`, and only with the output closed;
+- the factors change only to `0x00305100` or `0x00104600`, and only with the
+  output closed;
 - the output opens only with the PLL, LDO, lock enable and LOCK set;
 - the two gate-control bits never clear.
 

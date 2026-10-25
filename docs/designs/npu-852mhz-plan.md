@@ -1,20 +1,19 @@
-# Plan: run the NPU at 852 MHz at the inherited 800 mV
+# Run the NPU at 852 MHz at the inherited 800 mV
 
-Status: **plan**. Nothing here is built. The change needs the coordinator's
-approval and its own performance design, reviewed under section 4 of
-[performance architecture](../performance-architecture.md), before any code.
-A board run of it also needs the user's approval for that clock change, as
-every clock or voltage change does
-([CPU clocks](../cpu-clock.md#a-session-must-grant-each-change)). This plan
-is rank 6 of the [vendor action plan](../vendor-firmware/action-plan.md) and
-follows rank 2, the [SRAM routing in every NPU startup](npu-sram-route.md).
+Status: implemented as a second PLL_NPU profile, checked in the host model
+and on the linked instructions of the finite image built with `--rate-852`.
+It has not run on a board. The user approved NPU clock changes on
+2026-10-25, 852 MHz first at the current 800 mV, as the `bringup` handoff
+records (`3c17aeca`);
+NPU voltage changes are not approved, and nothing writes DCDC2. The
+[three-start runbook](../board-runbooks/npu-starts.md) runs it last in a
+lifetime. This is rank 6 of the [vendor action plan](../vendor-firmware/action-plan.md).
 
 ## What the vendor table allows
 
-Every SunstoneOS NPU image runs PLL_NPU at 492 MHz: N=82, P0=4, M1=1, factor
-word `0x00305100` (`drivers/npu/a733_npu_startup.c`; [npu-pll.md](../npu-pll.md)).
-DCDC2, the NPU supply, stays at the 800 mV that boot firmware leaves; the
-power-domain owner verifies it and nothing writes it.
+Every earlier SunstoneOS NPU image runs PLL_NPU at 492 MHz. DCDC2, the NPU
+supply, stays at the 800 mV that boot firmware leaves; the power-domain owner
+verifies it and nothing writes it.
 
 The board kernel's NPU operating-point table (`sun60iw2p1-cpu-vf.dtsi`
 lines 2069–2091, linux-orangepi `2ac08e8c`, SHA-256 `d5535630…`) lists
@@ -26,47 +25,49 @@ lines 2069–2091, linux-orangepi `2ac08e8c`, SHA-256 `d5535630…`) lists
 | vf0401 | 820 mV |
 | vf0202, vf0203; 24 MHz vf0204 | 880 mV |
 
-Port 3-3's SID speed-bin word reads `0x496`, code 4, column vf0400, which
-lists 800 mV in both oscillator columns. Port 3-1's bin is not recorded.
-
 The vendor driver itself selects 1,008 MHz and never changes DCDC2
 ([NPU backsolve](../reference-backsolve-npu.md#npu-driver-probe), step 11).
 Its own table lists 1,008 MHz at 900 mV or more, so that setting runs outside
-the table, and SunstoneOS does not copy it. Raising DCDC2 is out of scope:
-boot0 programs it in its DRAM supply setup, and it also supplies `vdd-edp`.
+the table, and SunstoneOS does not copy it.
 
-## Planned change
+## Change
 
-1. **A second PLL profile.** 852 MHz = 24 MHz × 71 ÷ 2: N=71 and P0=2, factor
-   word `0x00104600`, a 1,704 MHz oscillator inside the board source's
-   N range of 53–105. The dedicated design confirms the oscillator range
-   and the P0 encoding against manual section 4.1.6.56 before use.
-2. **Admission by speed bin and grant.** The session names the profile. The
-   startup admits 852 MHz only when the SID speed-bin code maps to a column
-   that lists 800 mV, and with a reviewed approval record bound to one
-   board and one image, as the CPU clock grants do.
-3. **The rules that name the factor word.** The allowlist adapter accepts
-   only `0x00305100` as a factor write
-   (`drivers/npu/a733_npu_platform_native.c`); the register pass, the LOCK
-   check and the adoption predicate compare with that word. Each takes the
-   selected profile's word. Adoption admits a PLL only at the selected
-   profile, so an image at the other rate refuses a PLL that an earlier image
-   left running, until a reviewed rate-change step exists.
-4. **Checks.** `checks/npu-pll.py` compares the second profile with the
-   pinned sources; the host model and the linked-instruction check run the
-   sequencer at both profiles, including the cross-profile adoption refusal.
-
-No voltage, supply, domain or routing step changes.
+- **Profile.** 852 MHz = 24 MHz × 71 ÷ 2: N=71 and P0=2, factor field
+  `0x00104600`, a 1,704 MHz oscillator inside the board source's N range of
+  53–105. `a733_npu_startup_rate(s, 852)` selects it after init and before the
+  scheduler; the finite image calls it when built with
+  `apps/npu-finite/build.py --rate-852`, which gives the image its own build
+  identity.
+- **Admission by speed bin.** The register pass reads SID word `0x0300624c`
+  and admits 852 MHz only for the codes whose columns list 800 mV in both
+  oscillator columns: `0x02`, `0x12`, `0x04`, `0x05` and `0x15`
+  ([PLL table](../npu-pll.md#two-profiles-and-the-rate-change)). Every other
+  code, including an unprogrammed 0, refuses before any write. Port 3-3 reads
+  code 4 (vf0400). Port 3-1's bin is not recorded, so that board needs the
+  read of action plan rank 4 first.
+- **Rate change.** A PLL left locked at the other profile is retuned in the
+  vendor's order: output gate off, factors, lock enable off and on, LOCK,
+  output gate on. Each write is read back.
+- **Adapter.** The allowlist adapter accepts the 852 MHz factor field with the
+  output closed, besides the 492 MHz one.
 
 ## Measurement and prediction
 
-Before and after, on the same board, image sources and model, with the
-[two-start runbook](../board-runbooks/npu-two-starts.md)'s numerical image:
+The host models execute no NPU arithmetic, so they give startup times but no
+job time.
 
-- both outputs byte-identical to the 492 MHz run;
-- the job time, from the finite image's start and end counters, falls toward
-  492/852 = 0.58 of its 492 MHz value, less where memory bounds the work;
-- the thermal profile of the finite image reports no new thermal stop.
+| Quantity | 492 MHz | 852 MHz |
+| --- | --- | --- |
+| Modelled boot to READY, cold enable, domain 4 OFF | 4,628 µs | 4,628 µs |
+| Modelled boot to READY, rate change of a running PLL from the other profile | 4,615 µs (from 852) | 4,615 µs (from 492) |
+| PLL writes in a rate change | 5 | 5 |
+| Predicted job time on the board, publication to completion observation | one poll period, under 1 ms | one poll period, under 1 ms |
 
-Port 3-3 runs it first. Port 3-1 runs it only after the read-only row of
-action plan rank 4 records its speed bin.
+The finite client logs each job's publication and completion observation in
+counter microseconds, and the host reports them. The service worker polls
+for completion once per 1 ms tick in this polled profile, so a job shorter
+than a tick reads as the time to the next poll at either rate. The NPU's
+compute time is predicted to scale by 492/852 = 0.58, less where memory bounds
+the work; resolving that on the board needs a finer completion measurement
+than the tick poll. The outputs are predicted to be byte-identical at both
+rates.
