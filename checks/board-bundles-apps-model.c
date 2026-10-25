@@ -299,16 +299,24 @@ static void bins_case(void)
     struct bb_bound bound;
     bb_steps_evaluate(steps, 3, 2500, 22500, &b, &bound);
     assert(b.bins[0] == 1 && b.bins[2] == 1 && b.bins[3] == 0 && b.bins[4] == 1 && b.over_ms == 1 &&
-           b.worst == 1984 && bound.median == 1100);
-    /* 22,019 counter ticks, the board's median step: 1,456, within 1,550. */
+           b.worst == 1985 && bound.median == 1100);
+    /* The earlier provider's median exceeds the revised bound at either byte. */
     const struct bb_step board = {22019, 1, 12, 24, 6, 0, 36, 2, 0};
     bb_steps_evaluate(&board, 1, 2500, 22500, &b, &bound);
-    assert(b.bins[3] == 1 && b.worst == 1456);
-    /* A byte of 24,750 ns, the largest that bb_byte_ns() admits: the snapshot
-     * wire is 36 x 2,500 + 24 x 24,750 = 684,000 ns, so the same step is
-     * 1,341 thousandths. */
+    assert(b.bins[4] == 1 && b.worst == 1457 && !bound.pass);
     bb_steps_evaluate(&board, 1, 2500, 24750, &b, &bound);
-    assert(b.bins[3] == 1 && b.worst == 1341);
+    assert(b.bins[4] == 1 && b.worst == 1342 && !bound.pass);
+    /* Counter ticks immediately below and above each distribution threshold. */
+    const unsigned limits[] = {1000, 1050, 1100, BB_BOUND_PERMILLE};
+    for (unsigned i = 0; i < 4; ++i) {
+        struct bb_step edge = {0, 0, 12, 24, 6, 0, 36, 2, 0};
+        edge.ticks = 630000ull * limits[i] * 3 / 125000;
+        bb_steps_evaluate(&edge, 1, 2500, 22500, &b, &bound);
+        assert(b.bins[i] == 1);
+        ++edge.ticks;
+        bb_steps_evaluate(&edge, 1, 2500, 22500, &b, &bound);
+        assert(b.bins[i + 1] == 1);
+    }
     /* The byte rule: nine bit times (22,500 ns) up to the measured lower
      * bracket; at most 110% (24,750 ns, 594 ticks); refused when the flag was
      * never seen. */
@@ -351,36 +359,51 @@ static void bound_case(void)
 {
     struct bb_step_bins bins;
     struct bb_bound b;
-    /* The board's 34 steps of 2026-10-24 (first 22,590 ticks, the others
-     * 22,011 to 22,166): median about 1,456 and first 941,250 ns against
-     * 976,500 + 40,000 ns, so the run would pass the provisional bound.
-     * Re-spins do not enter it. */
+    /* Preserved bundle 6 result: first 19,417 ticks, median 18,703.
+     * Model the remaining steps at the median; raw evidence retains all 33. */
     struct bb_step board[34];
     for (unsigned i = 0; i < 34; ++i)
-        board[i] = (struct bb_step){i ? 22011u + (i * 7) % 156 : 22590u, 1, 12, 24, 6, 0, 36, 2, 24};
-    bb_steps_evaluate(board, 34, 2500, 22500, &bins, &b);
-    assert(b.pass && b.first_ns == 941250 && b.first_limit_ns == 1016500 && b.median >= 1456 && b.median <= 1470);
-    /* A first step above its own bound fails it: 1,016,500 ns is 24,396
-     * ticks. */
-    board[0].ticks = 24400;
-    bb_steps_evaluate(board, 34, 2500, 22500, &bins, &b);
-    assert(!b.pass && b.first_ns == 1016666);
-    board[0].ticks = 24395;
-    bb_steps_evaluate(board, 34, 2500, 22500, &bins, &b);
+        board[i] = (struct bb_step){i ? 18703u : 19417u, 1, 12, 24, 6, 0, 36, 2, 0};
+    bb_steps_evaluate(board, 33, 2500, 22500, &bins, &b);
+    assert(b.pass && b.first_ns == 809041 && b.first_limit_ns == 838840 && b.median == 1237);
+    /* First-step admission: 20,132 ticks is below 838,840 ns; 20,133 is above. */
+    board[0].ticks = 20132;
+    bb_steps_evaluate(board, 33, 2500, 22500, &bins, &b);
     assert(b.pass);
-    /* The median is the larger middle value: 17 steps at 1,600 thousandths
-     * of 34 fail it, 16 do not. */
-    board[0].ticks = 22590;
-    for (unsigned i = 1; i < 34; ++i)
-        board[i].ticks = i <= 17 ? 24192 : 22019; /* 1,008,000 ns: 1,600 */
+    board[0].ticks = 20133;
+    bb_steps_evaluate(board, 33, 2500, 22500, &bins, &b);
+    assert(!b.pass);
+    /* Median admission preserves fractions: 19,173 ticks exceeds 1268
+     * permille although the old floor-rounded ratio would admit it. */
+    board[0].ticks = 19417;
+    for (unsigned i = 1; i < 34; ++i) board[i].ticks = 19172;
     bb_steps_evaluate(board, 34, 2500, 22500, &bins, &b);
-    assert(!b.pass && b.median == 1600);
-    board[17].ticks = 22019;
+    assert(b.pass && b.median == 1268);
+    for (unsigned i = 1; i <= 16; ++i) board[i].ticks = 19173;
     bb_steps_evaluate(board, 34, 2500, 22500, &bins, &b);
-    assert(b.pass && b.median == 1494); /* the first step, 941,250 ns */
+    assert(!b.pass && b.median == 1269); /* 17 above, including the first. */
+    board[16].ticks = 19172;
+    bb_steps_evaluate(board, 34, 2500, 22500, &bins, &b);
+    assert(b.pass && b.median == 1268); /* 16 above: larger middle is within. */
+    /* A longer measured byte scales the limit; 799 us is not universal. */
+    for (unsigned i = 0; i < 34; ++i) board[i].ticks = i ? 20815 : 21775;
+    bb_steps_evaluate(board, 34, 2500, 24750, &bins, &b);
+    assert(b.pass && b.first_limit_ns == 907312 && b.median == 1268);
+    ++board[0].ticks;
+    bb_steps_evaluate(board, 34, 2500, 24750, &bins, &b);
+    assert(!b.pass);
+    board[0].ticks = 21775;
+    for (unsigned i = 1; i < 34; ++i) ++board[i].ticks;
+    bb_steps_evaluate(board, 34, 2500, 24750, &bins, &b);
+    assert(!b.pass && b.median == 1269);
+    /* Both displayed nanoseconds truncate to 842,583, but this first step
+     * exceeds its fractional limit by 592/3000 ns and must fail. */
+    for (unsigned i = 0; i < 34; ++i) board[i].ticks = i ? 18703 : 20222;
+    bb_steps_evaluate(board, 34, 2500, 22623, &bins, &b);
+    assert(!b.pass && b.first_ns == 842583 && b.first_limit_ns == 842583);
     bb_steps_evaluate(board, 0, 2500, 22500, &bins, &b);
     assert(!b.pass);
-    printf("\"provisional bound: median 155%%, first step 155%% plus 40 us; byte at most 110%% of nine bit times\",");
+    printf("\"provisional bound: median 1268 permille, first plus 40 us; exact tick comparison and measured wire time\",");
 }
 
 static size_t length(const struct bb_line *l)

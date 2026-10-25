@@ -5,21 +5,31 @@
  * radio station, an optional Bluetooth headset, one fixed interrupt table and
  * one fixed start list. */
 #include "a733_board_application.h"
+/* EL0-safe load hint. True before thermal policy initialization and while
+ * throttled or failed. It grants no clock or voltage change. */
+int os_thermal_throttled(void);
 #if defined(SUNSTONE_A733_OS_HEADSET) && defined(SUNSTONE_A733_OS_AUDIO)
 #error The recognizer takes one capture source: the I2S microphone or the headset
 #endif
 #if defined(SUNSTONE_A733_OS_MSBC) && !defined(SUNSTONE_A733_OS_HEADSET)
 #error Wideband speech is a headset option
 #endif
-/* Board workloads the image admits: the mimus board's 0 (storage) and 4
- * (keyboard and storage) or, in the radio build, only 1, in which the board
- * adds its radio station to storage. */
+/* Workloads 0/4 require storage; the radio build selects 1. The supervised
+ * recorded-audio image alone also admits the storage-free USB0-only workload
+ * 2 (staged mode). Resident builds also define SUNSTONE_BOARD_SUPERVISED, so
+ * the lifetime test names SUNSTONE_BOARD_RESIDENT. */
+#if defined(SUNSTONE_BOARD_SUPERVISED) && !defined(SUNSTONE_BOARD_RESIDENT) && \
+    !defined(SUNSTONE_A733_OS_AUDIO) && !defined(SUNSTONE_A733_OS_HEADSET) && !defined(SUNSTONE_A733_OS_RADIO)
+#define OS_STAGED_WORKLOAD 1
+#else
+#define OS_STAGED_WORKLOAD 0
+#endif
 static inline int os_workload_valid(unsigned workload)
 {
 #ifdef SUNSTONE_A733_OS_RADIO
     return workload==1;
 #else
-    return workload==0||workload==4;
+    return workload==0||workload==4||(OS_STAGED_WORKLOAD&&workload==2);
 #endif
 }
 /* The microphone build appends 184 bytes of I2S receive facts to the

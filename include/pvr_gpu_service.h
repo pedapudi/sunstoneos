@@ -13,6 +13,7 @@ struct pvr_gpu_service;
 struct pvr_render_service;
 struct a733_gpu_graphics_memory;
 struct a733_gpu_disposal;
+struct a733_gpu_mimus;
 struct pvr_render_texture_request;
 struct pvr_render_texture_frame;
 
@@ -145,6 +146,8 @@ struct pvr_gpu_service_config {
     struct a733_gpu_disposal *disposal;
     /* Optional mimus session (pvr_mimus_service.h); excludes compute. */
     struct pvr_mimus_service *mimus;
+    /* Concrete retained native owner; permits healthy STOPPED reopen only. */
+    struct a733_gpu_mimus *mimus_owner;
 };
 struct pvr_gpu_service_request {
     enum pvr_gpu_service_operation operation;

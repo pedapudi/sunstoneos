@@ -1,13 +1,11 @@
 #ifndef SUNSTONE_NPU_BOARD_TUSB_CONFIG_H
 #define SUNSTONE_NPU_BOARD_TUSB_CONFIG_H
-/* TinyUSB configuration of the NPU board image. apps/npu-board comes first in
- * the image's include path, so this file replaces the board's storage-update
- * configuration for every source of the image. It differs from that file only
- * in the vendor transmit FIFO, 4 KiB instead of 2 KiB, so that a READ response
- * of the catalogue's largest output (2,816 bytes plus the 64-byte header)
- * enters the empty FIFO in one write (apps/npu-board/usb.c). The 2 KiB
- * increase is .bss. checks/npu-session-runtime.c, case 5, models USB0 with
- * this file. */
+/* Private configuration for the NPU board image. The dedicated hardware-FIFO
+ * path transfers directly between the MUSB FIFO and each vendor class FIFO,
+ * removing the endpoint staging copy. The 4 KiB transmit FIFO admits the
+ * catalogue's largest READ response (2,816 payload bytes plus 64 header bytes)
+ * before the USB task handles completion. */
+#define CFG_TUD_EDPT_DEDICATED_HWFIFO 1
 #define CFG_TUSB_MCU OPT_MCU_NONE
 #define CFG_TUSB_OS OPT_OS_NONE
 #define CFG_TUSB_DEBUG 0

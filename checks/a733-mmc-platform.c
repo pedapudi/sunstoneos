@@ -149,7 +149,7 @@ int main(int argc,char **argv)
         assert(m.power.trace_count<=512);
         assert(!alias->initialized);
         assert(storage_outside(&m,alias,sizeof(*alias))==1);
-        assert(m.power.provider.ops.outside(m.power.provider.cookie,alias,sizeof(*alias))==0);
+        assert(a733_pmic_outside(&m.power.provider,alias,sizeof(*alias))==0);
         assert(!a733_mmc_platform_init(alias,&m.platform.config,&m.platform.ops,&m,
             &m.power.clocks,&m.power.pins,&m.power.rails,&m.power.provider));
         assert(!alias->initialized&&!m.accesses);

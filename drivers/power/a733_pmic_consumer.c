@@ -58,7 +58,7 @@ int a733_pmic_consumer_storage(struct a733_pmic *p,const void *v,size_t n)
         a733_ranges_disjoint(v,n,p,sizeof(*p)) && a733_ranges_disjoint(v,n,p->rails,sizeof(*p->rails)) &&
         a733_ranges_disjoint(v,n,p->clocks,sizeof(*p->clocks)) && a733_ranges_disjoint(v,n,p->pins,sizeof(*p->pins)) &&
         a733_ranges_disjoint(v,n,p->rails->binding.gpu,sizeof(*p->rails->binding.gpu)) &&
-        p->ops.outside(p->cookie,v,n)==1;
+        a733_pmic_outside(p,v,n)==1;
 }
 int a733_pmic_consumer_init(struct a733_pmic_consumer *c,const struct a733_pmic_consumer_config *v)
 {

@@ -60,10 +60,23 @@ def main():
                'supervision':{'supervisor':supervisor,'one_attempt':True}}.get(key,{})
         facts[key]=record('npu-'+key+'.json',dict(**target,schema='a733-npu-board-'+key+'-v1',reviewed=True,
             conditions={c:note for c in sorted(conditions)},**extra))
-    raw=bytearray(board)+bytearray(216)
-    struct.pack_into('<6Q',raw,592,prep.SESSION_MAGIC,1,808,owner,command,supervisor)
+    raw=bytearray(board)+bytearray(prep.SESSION_BYTES-592)
+    struct.pack_into('<6Q',raw,592,prep.SESSION_MAGIC,prep.SESSION_VERSION,prep.SESSION_BYTES,owner,command,supervisor)
     struct.pack_into('<2I',raw,640,pck,0);raw[648:680]=catalogue
     for key,offset in prep.DIGESTS.items():raw[offset:offset+32]=bytes.fromhex(facts[key]['sha256'])
+    thermal_facts={
+        'initial':['exclusive_ths_and_irq71','remote_writers_excluded','no_inherited_thermal_service','security_access_authorized','gic_route_owned','boot_lineage_reviewed'],
+        'electrical':['avcc_adc_digital_supplies_stable','sid_shadows_readable','device_mappings_verified','no_physical_aliases'],
+        'clocks':['stable_apb1_ref_osc','no_clock_reset_writers','gpadc_consumers_excluded'],
+        'supervision':['whole_board_power_removal','permanent_retention','no_reuse','one_attempt']}
+    thermal={}
+    struct.pack_into('<2Q',raw,808,0x544853,91)
+    for i,(key,required) in enumerate(thermal_facts.items()):
+        thermal[key]=record('thermal-'+key+'.json',dict(**target,schema='a733-thermal-'+key+'-v1',
+            reviewed=True,**{k:True for k in required}))
+        raw[824+32*i:856+32*i]=bytes.fromhex(thermal[key]['sha256'])
+    struct.pack_into('<2I4B',raw,952,1,12000000,1,31,31,0)
+    for i in range(5):struct.pack_into('<3H',raw,964+6*i,1400,1600,1000)
     raw=bytes(raw);th=hashlib.sha256(raw).hexdigest()
     prep.session_check(raw);prep.embedded_reference(image,raw)
     conditions=('source-backed-cpu-dsu-transition','cold-cache-and-dirty-alias-exclusion','dual-pas-dram','exclusive-cpus-memory-dma',
@@ -71,7 +84,7 @@ def main():
     platform=record('platform.json',dict(**target,schema='a733-smp-observer-platform-v1',entry_conditions_established=True,
         physical_coherence_result='under-test',conditions={k:note for k in conditions}))
     admission=dict(**target,schema='a733-npu-board-supervised-entry-v1',reservation=struct.unpack_from('<Q',raw,200)[0],
-        session_template_sha256=th,ddr=ddr('ddr.json',[[0x41000000,0x42200000]]),npu_ddr=npu_ddr,platform=platform,**facts,
+        session_template_sha256=th,ddr=ddr('ddr.json',[[0x41000000,0x42200000]]),npu_ddr=npu_ddr,platform=platform,thermal=thermal,**facts,
         whole_board_power_removal=True,no_resource_reuse_before_power_removal=True,
         recovery=dict(mode='manual-usb-reconnect',demonstrated_fel=True,explicit_reconnect_before_resumption=True,
             preserve_microsd=True,one_attempt=True,evidence=[note]))
@@ -143,7 +156,16 @@ def main():
         ('zero-supervision-digest',patched(776,bytes(32)),0),
         ('zero-command-admission',patched(624,bytes(8)),0),
         ('nonzero-reserved',patched(644,struct.pack('<I',1)),0),
-        ('fabric-NSI-disabled',patched(492,struct.pack('<I',0)),0)]
+        ('fabric-NSI-disabled',patched(492,struct.pack('<I',0)),0),
+        ('old-session-version',patched(600,struct.pack('<Q',1)),0),
+        ('thermal-owner-equals-npu',patched(808,struct.pack('<Q',owner)),0),
+        ('thermal-owner-equals-board',patched(808,struct.pack('<Q',owners[3])),0),
+        ('thermal-authority-absent',patched(816,bytes(8)),0),
+        ('thermal-evidence-absent',patched(824,bytes(32)),0),
+        ('thermal-clock-wrong',patched(956,struct.pack('<I',24000000)),0),
+        ('thermal-alarm-mask-wrong',patched(961,bytes(1)),0),
+        ('thermal-threshold-wrong',patched(964,bytes(2)),0),
+        ('thermal-reserved-nonzero',patched(994,bytes([1])),0)]
     m=Machine()
     for name,raw,want in variants:
         m.u.mem_write(UPLOAD,raw)
@@ -154,7 +176,7 @@ def main():
     assert m.call('npu_board_session_prepare',m.record)==0 and m.call('npu_board_admitted_session')==0
     cases['failed-publication-never-exposes-session']=True
     board_pck_bytes=struct.pack('<I',board_pck)
-    launcher=sram_launcher.check_bundle(bundle,a.output/'launcher',(prep.SESSION_MAGIC,1,808),(prep.CONTRACT_MAGIC,288),20,
+    launcher=sram_launcher.check_bundle(bundle,a.output/'launcher',(prep.SESSION_MAGIC,prep.SESSION_VERSION,prep.SESSION_BYTES),(prep.CONTRACT_MAGIC,288),20,
         [('bounded-handoff',12,None,None),('owner-zero',14,(616,bytes(8)),None),
          ('pck-client-collision',14,(640,board_pck_bytes),None),('memory-authority-mismatch',14,(200,bytes(8)),None)],
         'Actual prepared AArch32 entry, NPU record predicates, fixed 20-second contract publication and refusal restoration. '

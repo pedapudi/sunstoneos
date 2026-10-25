@@ -32,6 +32,9 @@ extern "C" void vTaskSuspend(TaskHandle_t){throw TaskStopped{};}
 extern "C" void fixture_task_yield(){}
 extern "C" void runtime_smp_init(){}
 extern "C" void runtime_init(){}
+/* These fixtures retain their storage-overlap contract. */
+extern "C" int mimus_board_staged(){return 0;}
+extern "C" void mimus_board_progress(){}
 extern "C" int mimus_board_live(){return live.load();}
 extern "C" int mimus_board_session_live(){return live.load();}
 extern "C" int mimus_board_keyboard(){return 1;}

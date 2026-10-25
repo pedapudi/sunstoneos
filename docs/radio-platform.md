@@ -49,8 +49,17 @@ before the platform becomes READY. Any failure retains the platform, including
 the changed module register. A low-speed card stays at one bit and 400 kHz.
 
 No board image requests this profile yet. Physical qualification requires a
-coordinator-owned identity read at four bits and 25 MHz that matches the
-one-bit result.
+coordinator-owned CMD53 debug identity exchange at four bits and 25 MHz that
+matches the one-bit result. CMD52 uses the command line, so the final CCCR
+readback alone does not exercise the data lines. The
+[qualification prerequisites](radio-sdio-qualification.md) identify the remaining
+application and board inputs.
+
+The native write filter admits only the two implemented module-clock encodings:
+`29` for SYS24M divided by 30 and `0x01000007` for PERI0 divided by eight.
+Either gate state is permitted during the platform's transition. The adapter
+still requires the owner task and its register mutex, and preserves every bit
+outside the module field mask. Parent PLL and shared-gate writes are refused.
 
 Shared storage access depends on STORE AHB gate bit 24 at CCU offset `0x5c0`,
 STORE MBUS gate bit 30 at `0x5e0`, and MSI_LITE1 gate/reset bits 0, 16 and 17
@@ -143,8 +152,10 @@ Register and host callbacks check monotonic time around hardware work. A late or
 uncertain access retains clock, rail and pin tokens, card state, pending request
 and borrowed buffers. A fault inside the common mutex retains that mutex.
 Subsequent fault polling performs no MMIO or automatic recovery.
-Independent watchdog recovery remains mandatory because a software deadline
-cannot interrupt a stalled bus transaction.
+A software deadline cannot interrupt a stalled bus transaction. The platform
+admission therefore requires independent recovery. Its supervised RAM-only PIO
+mode permits confirmed whole-board power removal while all radio resources
+remain retained; it grants no retry or reuse after uncertainty.
 
 The current radio transport has no complete shutdown and disposal protocol.
 Accordingly, this binding offers no resource-release API after handoff.

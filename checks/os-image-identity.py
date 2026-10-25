@@ -8,7 +8,8 @@ does not run. The build's link check names its options:
 
 - every build publishes the three recognition inputs, and a second call
   publishes nothing;
-- the base and microphone builds admit workloads 0 and 4 only;
+- supervised recorded audio admits workloads 0, 2 and 4; microphone and
+  resident builds admit 0 and 4;
 - the radio build admits workload 1 only, publishes the radio profile and
   firmware span, reads the four chip-ID words and publishes them with the
   session's SID authority;
@@ -138,7 +139,7 @@ def main():
         assert authority == 0x5151 and tuple(words) == SID_WORDS, (authority, words)
 
     cases = []
-    admitted = (1,) if radio else (0, 4)
+    admitted = (1,) if radio else (0, 2, 4) if config['lifetime'] == 'supervised' and not config['audio'] and not headset else (0, 4)
     for workload in (0, 1, 2, 3, 4, 6, 8):
         cpu, calls, returned, checked, profile = run(workload)
         accepted = workload in admitted

@@ -100,7 +100,7 @@ static void probe(void *unused)
     REQUIRE((before[0]&0xff)==0x22,"PL0/PL1 function");
     for(unsigned i=0;i<2;++i)
         config.pins[i]=(struct a733_pin_config){2,(before[2]>>(2*i))&3,(before[1]>>(4*i))&15};
-    REQUIRE(a733_pmic_init(&provider,&config,&native.operations,&native,&clocks,&rails,&pins),"PMIC init");
+    REQUIRE(a733_pmic_native_bind(&provider,&config,&native,&clocks,&rails,&pins),"PMIC init");
     REQUIRE(a733_gpu_resources_native_use_pmic(&gpu_native,&gpu,&provider),"PMIC metadata bind");
     REQUIRE(a733_pmic_identity(&provider,&lifetime)==A733_PMIC_READY,"PMIC identity");
     step=1;

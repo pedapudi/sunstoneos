@@ -34,7 +34,7 @@ def validate_assets(output):
         require(len(data)==item['bytes'] and hashlib.sha256(data).hexdigest()==item['sha256'],'Frozen input changed.')
     return value
 
-def capture(exchange,epoch,generation,deadline,now=time.monotonic,pause=time.sleep,*,keyboard=False,recognition_generation=1):
+def capture(exchange,epoch,generation,deadline,now=time.monotonic,pause=time.sleep,*,keyboard=False,recognition_generation=1,staged=False):
     """Exchange must preserve USB identity and never retry failed transport.
 
     It writes each complete request and assembles exactly one complete response.
@@ -42,6 +42,8 @@ def capture(exchange,epoch,generation,deadline,now=time.monotonic,pause=time.sle
     A final status query follows sector and transcript collection. The result is
     an observation within the session, not physical qualification of later time.
     """
+    require(not staged or not keyboard and recognition_generation==1,
+            'Staged capture permits one recorded recognition only.')
     frames=[]
     def query(op,offset=0,count=0):
         require(now()<deadline,'Capture expired.')
@@ -52,7 +54,7 @@ def capture(exchange,epoch,generation,deadline,now=time.monotonic,pause=time.sle
         require((magic,version,reply,position)==(0x424d494d,3 if keyboard else 1,op,offset),'Response identity differs.')
         require(struct.unpack_from('<QQ',frame,32)==(epoch,generation),'Session identity differs.')
         require(state in (0,1,2) and size<=1024 and len(frame)==64+size,'Invalid result extent.')
-        require(storage in (0,1),'Storage failed or invalid.')
+        require(storage == 3 if staged else storage in (0,1),'Storage mode failed or differs.')
         if keyboard:
             observed,limit,reserved=struct.unpack_from('<QII',frame,48)
             require(limit==0xffffffff and not reserved and 1<=recognition_generation<=limit,'Recognition bounds differ.')
@@ -62,7 +64,7 @@ def capture(exchange,epoch,generation,deadline,now=time.monotonic,pause=time.sle
             require(observed==recognition_generation,'Recognition generation differs.')
         else:require(not any(frame[48:64]),'Reserved response bytes differ.')
         require(state!=2,'Native combined workload refused result.')
-        require(state!=1 or storage==1,'Storage incomplete.')
+        require(state!=1 or storage==(3 if staged else 1),'Storage incomplete or mode differs.')
         require(state==1 or size==0,'Pending payload refused.')
         return state,total,frame[64:]
     budget=240
@@ -81,8 +83,10 @@ def capture(exchange,epoch,generation,deadline,now=time.monotonic,pause=time.sle
         count=min(1024,total-len(text));state,current,data=ready(1,len(text),count)
         require(state==1 and current==total and len(data)==count,'Transcript changed or incomplete.')
         text.extend(data)
-    state,current,sector=ready(2,0,512)
-    require(state==1 and current==total and len(sector)==512,'Copied sector incomplete.')
+    sector=None
+    if not staged:
+        state,current,sector=ready(2,0,512)
+        require(state==1 and current==total and len(sector)==512,'Copied sector incomplete.')
     trigger=None
     if keyboard:
         state,current,data=ready(3,0,128)

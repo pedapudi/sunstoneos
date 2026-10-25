@@ -1,7 +1,7 @@
 --- continue.S
 +++ continue.S
-@@ -336,10 +336,15 @@
-     b.ne .Lsync_fault
+@@ -424,10 +424,15 @@
+     stp x0, x1, [sp, #-16]!
      mrs x0, esr_el1
      and x0, x0, #0xffff
 +    cmp x0, #120

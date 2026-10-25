@@ -11,6 +11,7 @@ p.add_argument('elf', type=Path)
 mode = p.add_mutually_exclusive_group()
 mode.add_argument('--clock-only', action='store_true')
 mode.add_argument('--event-only', action='store_true')
+mode.add_argument('--lifetime-only', action='store_true')
 a = p.parse_args()
 u = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
 for address, size in [(0x40000000, 0x400000), (0x00200000, 0x1000),
@@ -99,7 +100,7 @@ u.hook_add(UC_HOOK_CODE, instruction)
 u.hook_add(UC_HOOK_MEM_READ | UC_HOOK_MEM_WRITE, access)
 u.reg_write(UC_ARM64_REG_SP, 0x40400000 - 16)
 u.reg_write(UC_ARM64_REG_LR, 0x403ff000)
-u.emu_start(symbols['backend_clock_check' if a.clock_only else 'backend_event_check' if a.event_only else 'backend_check'], 0x403ff000, timeout=20000000, count=5000000)
+u.emu_start(symbols['backend_lifetime_check' if a.lifetime_only else 'backend_clock_check' if a.clock_only else 'backend_event_check' if a.event_only else 'backend_check'], 0x403ff000, timeout=20000000, count=5000000)
 assert u.reg_read(UC_ARM64_REG_PC) == 0x403ff000, 'execution budget exhausted'
 assert u.reg_read(UC_ARM64_REG_X0) == 0, f"backend check failed at line {u.reg_read(UC_ARM64_REG_X0)}"
-print('PASS native GPU backend: actual firmware event receive and restricted queue-owned destination' if a.event_only else 'PASS native GPU backend: private platform/controller clock regression refusal' if a.clock_only else 'PASS native GPU backend: identity, MMIO trace widths, memory/GIC composition, mapping refusal and retained isolation failures')
+print('PASS native GPU backend: expired lifetime permanently refuses later access' if a.lifetime_only else 'PASS native GPU backend: actual firmware event receive and restricted queue-owned destination' if a.event_only else 'PASS native GPU backend: private platform/controller clock regression refusal' if a.clock_only else 'PASS native GPU backend: identity, MMIO trace widths, memory/GIC composition, mapping refusal and retained isolation failures')

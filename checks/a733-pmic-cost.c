@@ -73,8 +73,8 @@ int main(int argc,char **argv)
     for(unsigned i=0;i<64 && a733_pmic_live(&m.provider,&m.lifetime)!=A733_PMIC_READY;++i)
         assert(pmic_model_step(&m)!=A733_PMIC_RETAINED);
     assert(a733_pmic_live(&m.provider,&m.lifetime)==A733_PMIC_READY);
-    m.provider.ops.read=counted_read;m.provider.ops.write=counted_write;
-    m.provider.ops.now=counted_now;m.provider.ops.enter=counted_enter;
+    m.provider.pmic_bus_ops.read=counted_read;m.provider.pmic_bus_ops.write=counted_write;
+    m.provider.pmic_bus_ops.now=counted_now;m.provider.pmic_bus_ops.enter=counted_enter;
     m.now_step=1;m.wire_us=90;
     /* DCDC3 starts at selector 0; the write programs 800 mV (selector 30). */
     const struct count snapshot=request("DCDC2 snapshot",A733_RAIL_DCDC2,0,6);

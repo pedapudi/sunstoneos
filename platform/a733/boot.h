@@ -21,7 +21,10 @@ struct boot_result {
     uint64_t magic, stage, status, log_length;
     uint64_t esr, elr, far, interrupt;
     uint64_t start_counter, end_counter, mode;
-    uint64_t gicd_ctlr, gicd_typer, gicr_typer, priority_mask, reserved;
+    uint64_t gicd_ctlr, gicd_typer, gicr_typer, priority_mask;
+    // With status 6, the status that failed interrupt cleanup replaced,
+    // including a failure status; zero otherwise.
+    uint64_t replaced_status;
 };
 #define RESULT ((volatile struct boot_result *)RESULT_BASE)
 static inline uint32_t mmio_read(uintptr_t address)

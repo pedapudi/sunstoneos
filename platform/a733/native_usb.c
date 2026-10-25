@@ -167,7 +167,7 @@ int a733_native_usb_bind(struct a733_native_usb *n,TaskHandle_t pmic,TaskHandle_
     if(!n||!n->used||!pmic||!usb||pmic==usb||n->pmic_task||n->usb_task)return 0;
     n->pmic_task=pmic;n->usb_task=usb;
     if(!a733_pmic_native_init(&n->pmic_native,&n->locks,pmic)||
-       !a733_pmic_init(&n->pmic,&n->boot.pmic,&n->pmic_native.operations,&n->pmic_native,&n->clocks,&n->rails,&n->pins)||
+       !a733_pmic_native_bind(&n->pmic,&n->boot.pmic,&n->pmic_native,&n->clocks,&n->rails,&n->pins)||
        !a733_gpu_resources_native_use_pmic(&n->gpu_native,&n->gpu,&n->pmic))return 0;
     struct a733_usb_platform_ops ops={now,usb_authorize,enter,leave,retain,usb_read,usb_write};
     return a733_usb_platform_init(&n->usb,&n->boot.usb,&ops,n,&n->clocks);

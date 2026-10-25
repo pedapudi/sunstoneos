@@ -110,7 +110,9 @@ struct a733_cpu_clock {
     unsigned state, after, cluster, n, p, selector, raise, thermal, failed, result, retained, critical;
     unsigned throttled;       /* Cluster bits lowered by THROTTLE, to restore at NORMAL. */
     unsigned throttle_failed; /* Cluster bits whose throttle lowering did not complete. */
+    unsigned inherited;       /* Inspected cluster bits; thermal changes keep voltage and require grants. */
     unsigned inspect_only;    /* The active transition only reads (a733_cpu_clock_inspect). */
+    unsigned spend;           /* The active transition consumes a change at its first clock write. */
     uint32_t rail_uv[2];      /* Last read or confirmed voltage of DCDC5 and DCDC3; 0 unread. */
     uint32_t words[2][3];     /* Last pattern 0, pattern 1 and LFM words read per cluster. */
     uint64_t park_at, parked_max_us; /* Park write time; longest park write to select readback, us. */
@@ -147,15 +149,23 @@ enum a733_cpu_clock_status a733_cpu_clock_request(struct a733_cpu_clock *,
  * the hardware state are kept and every later call returns RETAINED.
  * While idle the thermal level selects operating points. Under THROTTLE, a
  * cluster this driver raised above the ceiling is lowered to it without
- * consuming a change and without lowering its voltage; a lowering that is
- * refused or expires is not retried in the same THROTTLE episode. At NORMAL,
+ * consuming a change and without lowering its voltage. An inspected inherited
+ * point needs a grant covering the ceiling and consumes one change when its
+ * first clock write begins; a lowering refused or expired before then consumes
+ * none. Its
+ * source point, bin and voltage are rechecked; thermal transitions of inherited
+ * points never write voltage. A lowering that is refused or expires is not
+ * retried in the same THROTTLE episode. At NORMAL,
  * a cluster that THROTTLE lowered returns to its earlier point once, which
- * consumes a change; without a change it stays at the ceiling. Idle with
+ * needs the grant to cover that point and consumes a change; otherwise it
+ * stays at the ceiling. Idle with
  * nothing to do: READY. */
 enum a733_cpu_clock_status a733_cpu_clock_poll(struct a733_cpu_clock *);
 /* Owner task. A read-only pass over one cluster that needs no grant: the
  * leases, the inspection reads and one PMIC snapshot, whose voltage it keeps
- * in rail_uv and which records the rail's boot floor. It writes no clock or
+ * in rail_uv and which records the rail's boot floor. A supported source point
+ * with adequate CPU/DSU voltage becomes eligible for granted thermal lowering;
+ * other inherited rates remain reportable without becoming eligible. It writes no clock or
  * PMIC register and consumes no change. PENDING starts it; poll completes it
  * with COMPLETE, or REFUSED for a disabled or undecodable rail. */
 enum a733_cpu_clock_status a733_cpu_clock_inspect(struct a733_cpu_clock *,enum a733_cpu_domain,uint64_t deadline);

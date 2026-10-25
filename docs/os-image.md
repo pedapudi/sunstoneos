@@ -229,10 +229,83 @@ entry reads it through `board_session_sealed`.
 policy for the session lifetime. It reads all five channels every 25 ms, or
 sooner after the thermal interrupt, and passes each result to the policy. A
 CRITICAL level, a driver fault, a lost owner or an unexpected result ends the
-session through `board_fail`. The service then masks its interrupt and keeps
-its clock token and register mutex. THROTTLE and NORMAL are load hints; the
-image has no reduced-load mode, so it ignores them. USB0 output does not carry
-thermal readings; the mimus result frame has no free field for them.
+session through `board_fail`. The service then masks its interrupt and retains
+its clock token and any mutex held across an uncertain operation. A sensor
+without a valid reading for one second triggers THROTTLE; five seconds without
+a reading triggers terminal CRITICAL.
+
+Before every sensor has supplied a valid reading and during THROTTLE, both
+recognition tasks sleep for one scheduler tick at each existing checkpoint.
+Driver readiness alone does not permit full load. The thermal owner releases
+this startup delay only when all five channels have been seen and the policy
+is NORMAL; a stale, hot or critical earlier reading prevents that release.
+It republishes the effective load level after each successful policy update,
+because the final missing channel can arrive without a policy-level change.
+The thermal task continues sampling independently while recognition backs off. Each checkpoint checks
+board liveness before and after that sleep and reports progress only after
+it completes. NORMAL removes the delay. There is no waiting loop that could
+keep watchdog progress current while inference is stuck. The normal path adds
+one thermal getter call, whose only shared-state access is one acquire load.
+
+The GPU dispatcher selects the CPU for new layers during THROTTLE. An already
+admitted layer can finish its remaining GPU batches under the existing job
+deadlines. NORMAL restores placement only for a still-open session; GPU
+failure or incomplete output remains disabled. CPU fallback can shift heat
+to the CPU, so the checkpoint delay and critical stop remain necessary.
+This policy changes no clock, voltage or device power setting.
+
+The focused [thermal integration check](../checks/os-thermal-throttle.py)
+executes the actual AArch64 thermal policy, publication callback, CPU and GPU
+recognition checkpoints, and dispatcher. Twenty-four cases cover startup,
+repeated throttle/recovery, owner and worker calls, liveness loss before or
+during a sleep, stale/critical sensors, and disabled GPU sessions. The startup
+cases include no data, partial sets, final-channel release, an earlier stale
+channel, and early critical retention with no further sensor reads.
+Sensor reads, scheduler delays and GPU device operations are modeled.
+Evidence for the startup gate is in
+`~/.cache/sunstoneos/evidence/os-thermal-startup-20261024/checked/`.
+The change adds no state, MMIO or interrupt operations. A normal publication
+adds one acquire load of the policy channel mask; a transition to NORMAL can
+perform that load in both the callback and post-update publication. The
+consumer still performs its existing single acquire load. Sampling deadlines,
+critical retention and CPU clock/voltage permission checks are unchanged.
+No physical temperature reduction, scheduling latency or thermal recovery
+has been qualified. USB0 output does not carry thermal readings; the mimus
+result frame has no free field for them.
+
+Power and thermal integration remains incomplete:
+
+- **CPU operating points.** The optional supervised CPU clock build uses
+  the pinned 26 MHz tables, speed-bin limits and session grant. The tables
+  extend to 1,794 MHz for CPU-L and 2,002 MHz for CPU-B, subject to the bin.
+  The driver lowers clusters that it raised above **1,014 MHz** to that
+  thermal ceiling, preserving voltage. It can also lower an inspected,
+  supported inherited point when the session grants that cluster and ceiling;
+  each inherited lowering consumes an authorized change. Source-rate and
+  voltage checks precede the transition. The driver checks thermal permission
+  again after any voltage ramp, before its first clock write, so a late
+  THROTTLE cannot raise a cluster above the ceiling. Refusal preserves the
+  old frequency and confirmed voltage and releases the leases.
+  Restoration needs authority for the
+  original point and another change. Inherited thermal transitions never
+  change voltage. Missing or exhausted grants leave inherited rates unchanged.
+  The ordinary OS build changes neither CPU clocks nor voltage.
+- **GPU lifetime.** Critical thermal failure revokes the GPU backend through
+  `board.fatal`. The resident supervisor ends renewal on a stalled GPU wait
+  or failed recognition. The OS has no dynamic GPU operating-point control
+  or reusable recovery after an uncertain job; resources remain retained
+  until the prescribed reset or power removal.
+- **NPU integration.** The OS start list has no NPU service. Separate NPU
+  images use a fixed 492 MHz clock and 800 mV supply configuration. The
+  [finite board profile](designs/npu-board.md#thermal-admission-and-orderly-stop)
+  integrates thermal admission and orderly stop; the other NPU images have
+  no thermal-policy callback. Their healthy CLOSE disables local clocks and asserts engine
+  resets while retaining the power-domain and PLL ownership; it does not
+  establish reusable whole-device power recovery.
+
+CPU clock and PMIC voltage board changes still need their existing individual
+approvals. Supervised manual recovery, resident watchdog recovery and physical
+thermal qualification remain separate prerequisites and evidence gaps.
 
 ## Microphone recognition
 
@@ -703,7 +776,9 @@ bundle and record, requires the `supervised-ram-recovery` and
 `os-supervised-software` prerequisites, and uses the shared supervised
 transport, which holds the `tools/usb-access.py` board lock and makes one
 attempt. Capture is the mimus board protocol over USB0; the microphone build
-allows at most two recognitions in the 59-second capture window.
+allows at most two recognitions in the 59-second capture window. Recorded
+workload 2 permits one recognition and requests only its transcript and final
+status. The mode comes from the frozen session; missing storage never selects it.
 
 [os-image-launch.py](../checks/os-image-launch.py) checks both tools on a
 linked image with labeled synthetic records. The image's admission, compiled
@@ -720,6 +795,104 @@ In the CPU clock build it also prepares an A2 grant for a modeled board
 bin tops at 1,508 MHz, a grant above the approval, the A1 step at 2,002 MHz,
 a missing approval, a second change, the other cluster and an approval
 without a grant. No device, queue database or FEL program is opened.
+
+### First bounded launch with recorded audio
+
+The smallest OS launch uses the supervised lifetime, staged recorded audio
+and explicit board workload 2. Only that configuration admits workload 2:
+`OS_STAGED_WORKLOAD` in `apps/os/os.h` excludes the resident lifetime and the
+microphone, headset and radio options, and both the workload rule and the
+staged USB0 mode use it. The USB0 owner must first finish its provider
+and device-stack startup. Recognition then authenticates the staged models
+and WAV and produces one transcript without an external USB disk.
+
+Workload 0 still requires storage attachment and a sector-zero read completed
+during recognition. Workload 4 additionally requires a boot keyboard and its
+neutral-to-Enter trigger. Both storage modes retain their Type-C freshness,
+attachment identity, copied-sector and recognition/storage overlap checks.
+These profiles remain required for storage integration; workload 2 establishes
+no storage or keyboard coverage. All three call whole-recording recognition.
+Paced replay is a separate mimus service operation.
+
+Select `SUNSTONE_A733_OS=ON`, with `SUNSTONE_A733_OS_RESIDENT`,
+`SUNSTONE_A733_OS_AUDIO`, `SUNSTONE_A733_OS_RADIO`,
+`SUNSTONE_A733_OS_HEADSET`, `SUNSTONE_A733_OS_GPU_LINEAR`,
+`SUNSTONE_A733_OS_CPU_CLOCK` and `A733_A76_ADMITTED` all `OFF`.
+The resulting image uses the 808-byte session and requests no CPU operating-point
+change. Its recognition task and inference worker run on A55 cores 2 and 3.
+
+This configuration still starts all eight CPUs through
+[cached boot](../platform/a733-smp-cached/boot.c) before the shared scheduler
+runs. Disabling A76 recognition changes task placement; it does not remove
+secondary startup, coherence, interrupt delivery or scheduling from the image.
+The current CPU qualification image has physically completed its finite
+all-eight workload and per-core timer checks, as recorded in the
+[handoff](handoff.md). That evidence establishes the tested CPU path; the
+integrated OS composition still needs its own supervised execution.
+
+Offline preparation requires these inputs for the selected board and image:
+
+- A passed [OS link check](../checks/os-image-link.py) of the exact ELF and a
+  reviewed workload-2 session template. Workload 2 occupies the existing board
+  field at byte 400. Its latch, Type-C and USB2 owner, pin, source and host-supply
+  fields must be zero. The separate USB reference field at byte 532 must remain
+  mode 1 (cold initialization); single-core ROM-takeover mode 2 is refused.
+- A reviewed `a733-os-supervised-entry-v1` record binding the image, template,
+  USB identity and port, session epoch, generation and lease. Its board DDR
+  reservation covers `0x41000000..0x42200000`.
+- Platform evidence for the CPU/DSU transition, cache and dirty-alias exclusion,
+  Secure and Nonsecure DRAM access, exclusive CPU/memory/DMA ownership,
+  exclusion of remote writers, USB clocks/power/reset ownership and device
+  mappings, and physical counter continuity. The inherited
+  [validator](../tools/check-a733-smp-observe.py) requires evidence for each
+  condition. A record labeled `physical_coherence_result=under-test` does
+  not qualify coherence or resolve a failed startup.
+- Thermal initial-state, electrical, clock and supervision records bound to
+  the image and board. These authorize the sensor and interrupt owner,
+  supplies, SID shadows, mappings, APB1/ADC clock profile and permanent
+  resource retention. The session carries each record's hash.
+- The exact base model, overlay and 16 kHz mono WAV declared by
+  [the model manifest](../apps/bluetooth/recognition-models.json) and
+  [the recorded-input manifest](../apps/mimus-board/inputs.json). Their separate
+  DDR reservation covers `0x44000000..0x45000000`, `0x45000000..0x45100000`
+  and the recognition arena at `0x46000000..0x47000000`.
+- A reviewed one-attempt recovery plan: demonstrated FEL access, explicit
+  reconnection before resumption, microSD preservation and whole-board power
+  removal before any retained resource is reused.
+
+The coordinator must then bind the frozen bundle to its existing claim and
+the two prerequisites `supervised-ram-recovery` and `os-supervised-software`.
+The software record must cover the exact image, SRAM launcher, host sources,
+admission cases, launcher cases, capture and lifecycle checks.
+[The launcher](../tools/check-a733-os-supervised.py) validates these bindings
+before device access. It captures one workload-2 result within 59 seconds;
+the native contract expires after 60 seconds. Success requires the complete
+transcript and a final live status with matching session identities. The USB
+frame retains version 1 and reports storage state 3, meaning no host workload
+was requested. Recognition uses status and text operations; a sector request
+ends the session. The existing prior-boot fault-report operation remains
+available. Workloads 0 and 4 continue to require the copied sector and
+recognition/storage overlap evidence.
+The image ends at a terminal halt, so recovery requires whole-board power
+removal even after successful capture. Stop at the first transport failure.
+
+The physical entry record is still missing. Synthetic records used by host
+checks establish validation behavior and cannot authorize this launch.
+The current CPU results do not supply USB, thermal, RAM or recovery authority
+for this image. This supervised configuration keeps WDT0 disabled; resident
+watchdog-expiry qualification is not its prerequisite.
+
+The recorded-audio build and link check pass with the options above.
+[The focused check](../checks/os-staged-recorded.py) passes 26 cases using the
+compiled AArch64 readiness, recognizer copy and USB frame producer with the
+actual host capture. It covers startup and later failure, zero Type-C/USB2
+accesses in workload 2, and storage overlap, freshness, sector export and
+keyboard acknowledgment in workloads 0 and 4. USB providers, scheduling and
+inference completion are modeled. The staged preparation check passes 27
+cases, including native admission with cold USB reference mode 1 and refusal
+of host authority or ROM takeover. The linked publication hook passes eight
+cases. Evidence is under `os-staged-recorded-20261024/` in the local cache.
+No integrated OS physical execution is established by these checks.
 
 ## Not yet integrated
 
@@ -738,8 +911,9 @@ without a grant. No device, queue database or FEL program is opened.
   needs a connected, reviewed microphone. The radio and headset builds need
   supervised preparation that stages their profile and firmware, and a
   reachable access point or paired headset. The supervised radio and headset
-  builds also need a faster SDIO mode, because firmware loading cannot finish
-  within their 40 s and 30 s bootstrap bounds. The build with both needs a
+  builds also need selection and physical qualification of the existing optional
+  four-bit 25 MHz SDIO mode. Their default one-bit 400 kHz firmware loading
+  cannot finish within the 40 s and 30 s bootstrap bounds. The build with both needs a
   staged span that holds both profiles and the shared firmware. The resident image needs every
   stage-2 entry prerequisite, a qualified watchdog-expiry recovery, and
   measured service windows; the resident microphone build also needs a

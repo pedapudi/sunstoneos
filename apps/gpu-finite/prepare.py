@@ -10,6 +10,7 @@ original=module('gpu_finite_original',ROOT/'apps/gpu-render/prepare.py');base=or
 require=original.require
 PROFILE='gpu-single-core-returning-v1';SCHEMA='a733-gpu-finite-bundle-v1'
 RANGES=((0x41000000,0x42200000),(0x48000000,0x79000000))
+FINITE_PLATFORM_CONDITIONS={'primary-cache-transition-and-secondary-off','cold-cache-and-dirty-alias-exclusion','dual-pas-dram','exclusive-cpus-memory-dma','remote-writers-excluded','physical-code-publication','physical-counter-continuity','usb-clock-power-reset-ownership','usb-supplies-stable-and-writers-excluded'}
 HOST_SOURCES=('apps/gpu-finite/prepare.py','apps/gpu-finite/report.py','apps/gpu-finite/host.py','tools/a733-returning-host.py','apps/gpu-render/prepare.py','apps/gpu-render/observe.py','apps/gpu-render/launch.c','apps/board/prepare.py','tools/check-a733-smp.py','tools/check-a733-smp-supervised.py','tools/check-a733-smp-observe.py','tools/check-a733-kernel.py','tools/usb-access.py','platform/a733-smp-supervised/launch.c','platform/a733-smp-observe/launch.S','platform/a733-smp-observe/launch.ld','platform/a733-smp-cached/boot.h','include/a733_board_application.h')
 def sha(data):return hashlib.sha256(data).hexdigest()
 def save(path,value):path.write_text(json.dumps(value,indent=2)+'\n')
@@ -31,22 +32,35 @@ def validate_admission(record,image_hash,template,build,cache=None,frozen=False)
   name=ref['path']
   if name not in cache:require(not frozen,'Missing frozen evidence.');cache[name]=Path(name).read_bytes()
   require(sha(cache[name])==ref['sha256'],'Changed returning evidence.');return cache[name]
+ # The fixed returning image retains only the base session, even when the
+ # shared renderer admits larger program or texture envelopes.
+ require(len(template)==592,'Returning GPU requires exactly 592 session bytes.')
  original.session_check(template)
  require(record.get('schema')=='a733-gpu-finite-entry-v1' and record.get('execution_profile')==PROFILE and record.get('image_sha256')==image_hash and record.get('session_template_sha256')==sha(template) and type(record.get('reservation')) is int and 0<record['reservation']<2**64,'Distinct returning admission required.')
+ disposition=record.get('ram_disposition','restore')
+ require(disposition in ('restore','discard'),'Unknown GPU RAM disposition.')
  identity,port,supervisor=(record.get(k) for k in ('identity','port','supervisor'));require(identity and port and supervisor,'Target and supervisor required.')
  for key,ranges in [('ddr',[[0x41000000,0x42200000]]),('gpu_ddr',[[0x48000000,0x79000000]])]:
   ddr=json.loads(evidence(record[key]));require(ddr.get('schema')=='a733-ddr-reservation-v1' and ddr.get('identity')==identity and ddr.get('port')==port and ddr.get('image_sha256')==image_hash and ddr.get('ranges')==ranges and all(ddr.get(k) is True for k in ('exclusive','published_cache_disabled','remote_writers_excluded')) and ddr.get('evidence'),'Full returning DDR ownership required.')
+  if disposition=='discard':require(ddr.get('contents_discardable') is True,'Both full DDR reservations must permit discarding their contents.')
   for ref in ddr['evidence']:evidence(ref)
- platform=json.loads(evidence(record['platform']));fn=original.board.single_core_platform
- types.FunctionType(fn.__code__,{**fn.__globals__,'artifact':evidence})(platform,{'image_sha256':image_hash},identity,port)
+ platform=json.loads(evidence(record['platform']))
+ if platform.get('schema')=='a733-gpu-finite-platform-v1':
+  require(platform.get('identity')==identity and platform.get('port')==port and platform.get('image_sha256')==image_hash and set(platform.get('conditions',{}))==FINITE_PLATFORM_CONDITIONS and platform.get('entry_conditions_established') is True and platform.get('physical_coherence_result')=='under-test','GPU finite platform admission differs.')
+  for ref in platform['conditions'].values():evidence(ref)
+ else:
+  fn=original.board.single_core_platform
+  types.FunctionType(fn.__code__,{**fn.__globals__,'artifact':evidence})(platform,{'image_sha256':image_hash},identity,port)
  gpu=json.loads(evidence(record['gpu']));require(gpu.get('schema')=='a733-gpu-initial-entry-v1' and gpu.get('identity')==identity and gpu.get('port')==port and gpu.get('image_sha256')==image_hash and gpu.get('reservation')==record['reservation'] and gpu.get('entry_conditions_established') is True and gpu.get('no_gpu_activity_since_initial_isolation') is True and set(gpu.get('conditions',{}))==original.GPU_CONDITIONS and gpu.get('cold_master'),'Actual initial GPU state required.')
  for ref in gpu['conditions'].values():evidence(ref)
  require(template[80:112]==bytes.fromhex(record['gpu']['sha256']) and struct.unpack_from('<Q',template,192)[0]==gpu['cold_master'] and not record.get('payloads') and record.get('radio_ddr') is None,'GPU session/entry binding differs.')
  review=json.loads(evidence(record['root_review']));conditions={'architecture-reset-reviewed','software-handoff-reviewed','normal-return-retirement-reviewed','failure-retention-reviewed'}
  require(review.get('schema')=='a733-gpu-finite-return-review-v1' and review.get('reviewed') is True and review.get('execution_profile')==PROFILE and review.get('image_sha256')==image_hash and review.get('build_id')==build.hex() and review.get('identity')==identity and review.get('port')==port and review.get('supervisor')==supervisor and set(review.get('conditions',{}))==conditions,'Exact root returning-lifetime review required.')
+ require(review.get('ram_disposition','restore')==disposition,'Root review covers another RAM disposition.')
  for ref in review['conditions'].values():evidence(ref)
  require(review.get('host_sources')=={n:sha((ROOT/n).read_bytes()) for n in HOST_SOURCES},'Root review covers different host sources.')
  required={'successful-close-stop-quiescence-ROM-retirement','failure-retain-until-whole-power-removal','DRAM-restore-only-after-validated-normal-return','no-old-SRAM-restore','manual-whole-board-power-removal','stop-after-first-failure'}
+ if disposition=='discard':required=(required-{'DRAM-restore-only-after-validated-normal-return'})|{'discardable-DRAM-release-only-after-validated-normal-return'}
  require(record.get('one_attempt') is True and set(record.get('supervision',{}))==required,'Explicit returning supervision required.')
  for ref in record['supervision'].values():evidence(ref)
  return cache

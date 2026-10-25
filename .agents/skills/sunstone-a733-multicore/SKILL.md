@@ -74,6 +74,14 @@ attempt to restore them from one to zero. The returning monitor's admission and
 the [kernel evidence](../../../docs/a733-kernel.md) explain the applicable
 security-state and interrupt-group requirements.
 
+Preserve enabled GIC system-register interfaces during cleanup. Arm IHI 0069G
+section 12.1.6, pages 12-193 and 12-194, makes a one-to-zero transition of
+`ICC_SRE_EL3.SRE`, `ICC_SRE_EL2.SRE` or Secure `ICC_SRE_EL1.SRE`
+unpredictable. Saving an earlier zero does not authorize restoring it after
+startup enables the interface. The Nonsecure EL1 exception does not apply to
+these other banks. Existing returning helpers record the earlier SRE value
+and keep the enables set; qualify permitted restoration fields separately.
+
 Treat CPU-interface access, interrupt delivery and redistributor wake as separate
 operations. Compare their ordering with the pinned
 [TF-A CPU-interface implementation](https://github.com/ARM-software/arm-trusted-firmware/blob/0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e/drivers/arm/gic/v3/gicv3_main.c).
@@ -150,6 +158,25 @@ A synchronous-exception handler cannot recover an MMIO load that never completes
 If no report returns, mark the location unknown. Choose a narrower observation or
 a source-backed correction; do not declare a suspected instruction the cause.
 Keep proven entry/return evidence and test only the newly crossed boundary.
+
+## Keep the global scheduler tick separate from local timer delivery
+
+The cached port routes CPU0 PPI30 to `FreeRTOS_Tick_Handler`, which advances
+FreeRTOS global time. Routing every secondary timer through that same callback
+would advance global time multiple times. Keep one global tick owner unless
+changing the scheduler's timekeeping contract with corresponding evidence.
+A secondary hardware timer may use a separate local callback.
+
+The finite qualification now demonstrates one timer interrupt on each secondary
+through the actual IRQ entry, task frame restoration and EOI path. It publishes
+armed state while interrupts are masked, before the first-task `SVC 106`.
+The timer can become pending before that SVC restores task interrupt state.
+Check that ordering, integer and floating-point frame preservation, effective
+priority, status before disabling the timer, and final masked delivery counts.
+Missing or duplicate delivery must prevent successful cleanup. Restore the
+saved Secure PPI30 priority while the redistributor remains accessible.
+The current physical result is in the hardware matrix; it does not qualify
+periodic local preemption, idle wakeup or sustained scheduling by itself.
 
 ## Check warm-image visibility across security mappings
 

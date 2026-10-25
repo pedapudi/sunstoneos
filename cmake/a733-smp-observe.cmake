@@ -24,7 +24,7 @@ function(a733_smp_observer target tag)
   file(SHA256 "${cached}/boot.c" boot_hash)
   file(SHA256 "${cached}/continue.S" vector_hash)
   if(NOT boot_hash STREQUAL "2e7401667a2d320a268734f489722aedbb620bf8b2d96a8c791d2635136dcbe0" OR
-     NOT vector_hash STREQUAL "02a60481a4373b4709cc3dc1f21b7806f3409fadf1a0b1ea3936a373f7e79210")
+     NOT vector_hash STREQUAL "253a25fd1f495d34ea79d2cfc220cdd8c2aeeb27771025b115901e7149539c3d")
     message(FATAL_ERROR "Observer hooks require review against changed cached boot/vector inputs")
   endif()
   set(inputs "${cached}/boot.c" "${cached}/continue.S" "${usb}/dcd_sunxi_musb.c" "${usb}/musb_def.h")

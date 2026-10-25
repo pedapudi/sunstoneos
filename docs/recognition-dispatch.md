@@ -132,11 +132,25 @@ engine's streamed row ring and its internal-arena codes.
 ## The dispatcher
 
 `os_dispatch_place(ordinal)` returns the tensor's row while the session is
-open and a zero row otherwise. It compiles for AArch64 to two loads (the
-active row count and the row) and one compare. The active count is the
+open and thermal throttling is clear, and a zero row otherwise. Its table
+lookup retains two table loads and adds one thermal getter call, an ordinal
+stack save/restore and one conditional test. The getter performs one acquire
+load; it never sleeps. The active count is the
 table's length after a successful OPEN and zero before OPEN, after a refused
 OPEN and after a GPU fault. The recognizer task runs the hook, so the count
 and the dispatch record need no atomic operations or locks.
+
+The thermal gate applies at each layer's `Begin`, after the preceding call's
+output has been consumed. A layer already admitted can finish its remaining
+batches through `Finish`. THROTTLE then closes the healthy GPU session;
+NORMAL reopens its retained allocations before another job. If throttle
+arrives during reopen, the client closes again before admitting work.
+This boundary performs at most two transitions and cannot reopen faulted or
+incomplete dispatch admission. The [GPU component](gpu-mimus-service.md#lifecycle-and-power-limits)
+defines the bounded waits and retained-failure behavior. Physical cooling
+remains unqualified. The OS also delays recognition checkpoints during
+THROTTLE and closes admission on CRITICAL, as described in
+[the thermal service](os-image.md#thermal-service).
 
 The dispatch record, `os_dispatch_record`, counts calls placed on the GPU and
 jobs refused before device access, and holds whether OPEN succeeded or failed,
@@ -148,10 +162,14 @@ recognizer is its only writer.
 Before every model hash matches there is no OPEN and every row reads as
 CPU-only. A refused or failed OPEN keeps the CPU for the boot and is not
 retried. A refused job runs on the CPU and the session stays open. A missing
-tag or a sum that differs from the CPU's makes `os_dispatch_incomplete`
-clear the active count at once, and the hook removes itself from the engine
-(`SetExactSumHook(nullptr)`), so every later call runs on the engine's CPU
-paths as it does without a hook. A lost
+tag, unexpected sequence or sum that differs from the CPU's makes
+`os_dispatch_incomplete` clear the active count at once. Before removing itself
+from the engine, the hook requires acknowledged terminal shutdown through the
+existing CLOSE/STATUS protocol. The current job lends no output, and previous
+output has already been consumed. Only same-epoch STOPPED with live authority
+permits CPU fallback; a refused or uncertain close takes LOST. Successful
+retirement keeps all backing and permanently closes GPU admission, so later
+calls use the engine's CPU paths without a reopen. A lost
 job makes `os_dispatch_failed` record it, clear the active count and take the
 recognizer's failure path (`board_fail`, then suspension) before any CPU row
 of the failed job; the watchdog resets the board. A reply that never comes

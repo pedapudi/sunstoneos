@@ -17,7 +17,7 @@
      vector .Lsync_bhb
      vector .Lirq_bhb
 @@ -336,10 +337,15 @@
-     b.ne .Lsync_fault
+     stp x0, x1, [sp, #-16]!
      mrs x0, esr_el1
      and x0, x0, #0xffff
 +    cmp x0, #120

@@ -78,7 +78,7 @@ static int core_outside(void *cookie,const void *p,size_t z)
         a733_ranges_disjoint(n->platform.pmic,sizeof(*n->platform.pmic),p,z)&&
         a733_ranges_disjoint(n->platform.pck,sizeof(*n->platform.pck),p,z)&&
         a733_ranges_disjoint(n->platform.typec,sizeof(*n->platform.typec),p,z)&&
-        n->platform.pmic->ops.outside(n->platform.pmic->cookie,p,z)==1&&
+        a733_pmic_outside(n->platform.pmic,p,z)==1&&
         n->platform.typec->config.ops.outside(n->platform.typec->config.context,p,z)==1;
 }
 static int live(void *cookie,uint64_t generation,uint64_t d)
@@ -138,7 +138,7 @@ int a733_usb2_native_init(struct a733_usb2_native *n,const struct a733_usb2_plat
         !a733_ranges_disjoint(n,sizeof(*n),clocks,sizeof(*clocks))||!a733_ranges_disjoint(n,sizeof(*n),rails,sizeof(*rails))||
         !a733_ranges_disjoint(n,sizeof(*n),pmic,sizeof(*pmic))||!a733_ranges_disjoint(n,sizeof(*n),pck,sizeof(*pck))||
         !a733_ranges_disjoint(n,sizeof(*n),typec,sizeof(*typec))||
-        pmic->ops.outside(pmic->cookie,n,sizeof(*n))!=1||
+        a733_pmic_outside(pmic,n,sizeof(*n))!=1||
         typec->config.ops.outside(typec->config.context,n,sizeof(*n))!=1)return 0;
     static const uintptr_t pages[]={0x02002000,0x02003000,0x03400000,0x06b00000,0x06c00000,
         0x07010000,0x07067000,0x07068000,0x07090000,0x06a0c000};

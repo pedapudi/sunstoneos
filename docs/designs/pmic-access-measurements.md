@@ -47,12 +47,13 @@ selector write. The model's bytes take 23 µs, so its own snapshot wire is
 | Division in the time read `now()` | One `UDIV` per read | No `UDIV`; one `UMULH` per read, the reciprocal set by the first read | Same disassembly; `checks/a733-pmic-time.c` passes 3,200,890 comparisons |
 | Snapshot step, 400 kHz, 200 ns per access, 40 ns per time read | 712 µs (113%) | 685 µs (109%) | `checks/power-domains-service.c` |
 | Selector write, same costs | 920 µs (113%), one step | 883 µs (109%), one step | Same |
-| Snapshot step, 400 kHz, bundle 6's measured costs: 529 ns per read, 1,026 ns per write, 81 ns per poll, 150 ns per time read | 848 µs (135%) | 756 µs (120%) | Same, board-cost table |
-| Snapshot step, same costs with 380 ns per poll | 853 µs (135%) | 779 µs (123.6%), the board's median | Same |
-| Snapshot step, same costs with 2,340 ns per poll, the base fit's remainder | 941 µs (149%) | 850 µs (135%) | Same |
-| Snapshot step, 1,300 ns per access, 40 ns per time read, no poll cost: the fit to the base run's median | 915 µs (145%) | Not run | Base-tree copy of the check |
-| Selector write at the measured costs with 81 ns; 380 ns; 2,340 ns per poll | Two steps, one tick wait, at each | One step of 973 µs; one step of 1,001 µs; two steps, one tick wait | Same |
-| Snapshot step, every access at the bare S_TWI0 read of 379 ns; at 300 ns; no poll cost, 40 ns per time read | Not run | 712 µs (113%); 687 µs (109%) | Same |
+| Snapshot step, 400 kHz, illustrative component means: 506 ns per read, 402 ns per write, 77 ns per poll, 144 ns per time read | Not rerun | 731 µs (116%); incomplete cost model | Same, board-cost table |
+| Snapshot step, historical mixed-cost fit: 529 ns per read, 1,026 ns per write, 380 ns per poll, 150 ns per time read | 853 µs (135%) | 779 µs (123.7%), fitted to the board median | Preserved base evidence; current sensitivity row |
+| Snapshot step, same historical inputs with 2,340 ns per poll | 941 µs (149%), above the base run's 917 µs | 850 µs (135%), above the changed run's 779 µs | Same |
+| Snapshot step, same historical inputs with 250 ns per poll | Not rerun | 757 µs | Same |
+| Selector write at the historical inputs, with 380 ns; 386 ns per poll | Not rerun | One step of 1,001 µs; two steps with one tick wait | Same |
+| Snapshot step, read 379 ns / write 1 ns; read 1 ns / write 379 ns, no poll cost, 40 ns per time read | Not rerun | 688 µs; 685 µs; the 1 ns access is an assumption | Same, separate access floors |
+| Snapshot step, both accesses assumed at 379 ns, 22 µs; 23 µs bytes | Not rerun | 694 µs; 712 µs; neither establishes a hardware floor | Same |
 | Flags 10% later than the 400 kHz divisor implies (25 µs bytes, 6 µs conditions), 200 ns per access | Snapshot and selector write each two steps with one tick wait | Snapshot one step of 751 µs, selector write one step of 968 µs (708 µs and 913 µs of wire) | Same, slow-bus case |
 | Tick waits, 100 kHz, snapshot and selector write | 2 and 3 | 2 and 3 | Same |
 | BUSY results per other-core caller; from `a733_pmic_live` | At most 1; 0 | At most 1; 0 | Same |
@@ -66,12 +67,12 @@ at sub-microsecond times (712 µs and 920 µs); the head provider passes
 (685 µs and 883 µs). With whole-microsecond flags, as before this change,
 the base gave 687 µs and 885 µs.
 
-The service check asserts the head figures that set or test the bound: one
-snapshot step at each board cost; at 81 ns and 380 ns per poll a step
-within the median bound of 799 µs less its 20 µs margin; the selector-write
-step counts of the table; a step above 110% of the bit-time wire at 379 ns
-per access and within it at 300 ns; and one step within 110% of the slow
-bus's own wire time.
+The service check asserts the modeled snapshot times and selector-write
+step counts in its board-cost rows. The mixed-cost rows retain the rejected
+calibration for comparison; they do not derive a board bound. The current
+component-mean row also omits callback and service work. Bundle 6's separate
+host fixture checks the provisional empirical limit of 1,268 permille
+against each run's measured wire time, including counter-tick boundaries.
 
 The focused model check, `checks/a733-pmic.c`, also covers the changed
 error and recovery paths. Each of these provider mutants fails it:
@@ -160,5 +161,32 @@ the comparison objects are under `$P`.
 
 Bundle 6 has measured the access-cost windows and the step times of the
 changed provider, and the rank 9 native USB image has passed again on it
-(both on port 3-3 on 2026-10-24). A DCDC3 selector write in one step still
-needs a board run with a PMIC write.
+(both on port 3-3 on 2026-10-24). A DCDC3 selector write still needs a board run with a PMIC write. Its
+acceptance bound is at most two steps with one tick wait.
+
+## Focused review corrections
+
+The bound review changes the empirical limit, its evaluator and its host
+fixtures; PMIC production instructions and accepted board evidence are
+unchanged. With Clang 21, AddressSanitizer and non-recovering
+UndefinedBehaviorSanitizer, the following focused checks pass:
+
+- `checks/power-domains-service.c --board-costs`: independent read/write
+  assumptions, component means and the historical calibration sensitivities.
+- `checks/board-bundles-apps-model.c`: nominal and slower-wire limits,
+  tick-straddling distribution/median/first-step thresholds, larger-middle
+  median, empty-sample refusal and bounded summary lines.
+
+The `pmic-tree` and `power-domains-tree` selections pass through the
+integration gate. The changed trace unit compiles for AArch64 with the
+accepted central target flags; the controlled-outcome helper uses 1,268
+permille, and the check index verifies.
+
+Raw logs, commands and executables are under
+`~/.cache/sunstoneos/build/pmic-completion/`. The first service-model attempt
+used an incorrect expected 779 µs at the 386 ns poll row; the actual result
+is 781 µs. The corrected run selected only the board-cost rows. The
+successful bundle model was not repeated. A later fractional-nanosecond
+first-step case ran through a wrapper that calls only `bound_case()`. The
+service rows also passed with their final reporting text. These checks
+establish software arithmetic and model behavior; they do not qualify a new board image.

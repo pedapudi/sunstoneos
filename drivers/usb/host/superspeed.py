@@ -15,6 +15,18 @@ def prepare(source,out):
     change('common/tusb_types.h',lambda s:replace(s,'TUSB_SPEED_HIGH = 2,','TUSB_SPEED_HIGH = 2,\n  TUSB_SPEED_SUPER = 3,'))
     change('tusb.c',lambda s:replace(replace(s,'{"Full", "Low", "High"}','{"Full", "Low", "High", "Super"}'),'if (speed == TUSB_SPEED_HIGH) {\n        // Bulk highspeed', 'if (speed == TUSB_SPEED_SUPER) {\n        TU_ASSERT(max_packet_size == 1024);\n      } else if (speed == TUSB_SPEED_HIGH) {\n        // Bulk highspeed'))
     def msc(s):
+        s=replace(s,'bool msch_xfer_cb(uint8_t dev_addr,','''extern bool a733_tinyusb_bot_recover(uint8_t daddr);
+/* Called only after the board adapter completes its bounded reset sequence. */
+bool a733_tinyusb_msc_retry(uint8_t daddr) {
+  msch_interface_t *p_msc=get_itf(daddr);
+  msch_epbuf_t *epbuf=get_epbuf(daddr);
+  p_msc->stage=MSC_STAGE_CMD;
+  p_msc->data_xferred=0;
+  return usbh_edpt_xfer(daddr,p_msc->ep_out,(uint8_t *)&epbuf->cbw,sizeof(msc_cbw_t));
+}
+bool msch_xfer_cb(uint8_t dev_addr,''')
+        s=replace(s,'  switch (p_msc->stage) {','''  if(event==XFER_RESULT_STALLED)return a733_tinyusb_bot_recover(dev_addr);
+  switch (p_msc->stage) {''')
         s=replace(s,'(uint16_t)(sizeof(tusb_desc_interface_t) + desc_itf->bNumEndpoints * sizeof(tusb_desc_endpoint_t));','(uint16_t)(sizeof(tusb_desc_interface_t) + desc_itf->bNumEndpoints * (sizeof(tusb_desc_endpoint_t) + (tuh_speed_get(dev_addr)==TUSB_SPEED_SUPER?6:0)));')
         return replace(s,'ep_desc = (tusb_desc_endpoint_t const*) tu_desc_next(ep_desc);','''ep_desc = (tusb_desc_endpoint_t const*) tu_desc_next(ep_desc);
     if(tuh_speed_get(dev_addr)==TUSB_SPEED_SUPER){

@@ -17,6 +17,9 @@
  * 492 MHz (docs/npu-pll.md). */
 #define PLL (CCU+0x2a0)
 #define PLL_LOCK BIT(28)
+/* The board kernel preserves this inherited reserved bit with every PLL RMW.
+ * Its function is unspecified; it is not a writable factor or SDM control. */
+#define PLL_INHERITED BIT(24)
 #define PLL_ENABLED UINT32_C(0xe0305100) /* After the enable table, LOCK clear. */
 #define PLL_OPEN UINT32_C(0xe8305100)    /* With the output gate open. */
 /* LOCK sampling (manual §4.1.4.2 and the lock helper of the pinned board
@@ -112,7 +115,8 @@ static int apply(struct a733_npu_startup *s,const struct step *t,unsigned count)
     for(unsigned i=0;i<count;++i) {
         uint32_t actual,keep=~t[i].status;
         if(t[i].address!=at) {
-            if(!rd(s,t[i].address,&old))return 0;
+            if(!rd(s,t[i].address,&old) ||
+               (t[i].address==PLL && (old&PLL_INHERITED)!=s->pll_inherited))return 0;
             at=t[i].address;
         }
         uint32_t next=((old&~t[i].mask)|(t[i].value&t[i].mask))&keep;
@@ -182,7 +186,8 @@ static int peri0(struct a733_npu_startup *s)
 /* The register pass before the first write (npu-platform.md): the reference
  * clock, the fabric words against the record, PERI0 when selected, every
  * PLL_NPU consumer under its mask, and PLL_NPU disabled with its tuning words
- * at reset. The owner's domain check has read domain 4 OFF. */
+ * at reset. The owner has checked coherent domain-4 policy and status;
+ * an inherited ON domain still requires the same local reset/gate state. */
 static int pass(struct a733_npu_startup *s)
 {
     uint32_t osc,ref,v;
@@ -192,7 +197,7 @@ static int pass(struct a733_npu_startup *s)
            (i && (v&(BIT(28)|BIT(27)))))return 0;
     }
     if((s->shared&A733_CLOCK_PERI0) && !peri0(s))return 0;
-    return
+    if(!(
         /* Video encode and decode gates closed, selector at most 6; bus word
          * gates closed and resets asserted. */
         rd(s,CCU+0xa80,&v) && !(v&BIT(31)) && ((v>>24)&7)<=6 &&
@@ -208,9 +213,11 @@ static int pass(struct a733_npu_startup *s)
         check(s,CCU+0xc0c,BIT(16),BIT(16)) &&
         check(s,CCU+0x1b10,1,0) && check(s,CCU+0x1b14,1,0) && check(s,CCU+0x1b1c,1,0) &&
         /* PLL_NPU disabled: enable, lock enable, LOCK and output gate clear,
-         * and no bit outside the documented fields. */
-        rd(s,PLL,&v) && !(v&UINT32_C(0xb8000000)) && !(v&~UINT32_C(0xf870ff02)) &&
-        check(s,CCU+0x2a4,1,0) && check(s,CCU+0x2a8,BIT(31),0) &&
+         * with only the preserved inherited reserved bit outside documented fields. */
+        rd(s,PLL,&v) && !(v&UINT32_C(0xb8000000)) &&
+        !(v&~(UINT32_C(0xf870ff02)|PLL_INHERITED))))return 0;
+    s->pll_inherited=v&PLL_INHERITED;
+    return check(s,CCU+0x2a4,1,0) && check(s,CCU+0x2a8,BIT(31),0) &&
         check(s,CCU+0x2ac,UINT32_C(0xff100000),UINT32_C(0x30000000)) &&
         check(s,CCU+0x2b0,UINT32_C(0x1f0000),UINT32_C(0xb0000));
 }
@@ -224,7 +231,7 @@ static int lock_wait(struct a733_npu_startup *s)
     for(unsigned samples=0;samples<PLL_SAMPLES;++samples) {
         while(s->ops.spin_us(s->cookie)<next){}
         uint32_t v;
-        if(!rd(s,PLL,&v) || (v&~PLL_LOCK)!=PLL_ENABLED)return 0;
+        if(!rd(s,PLL,&v) || (v&~PLL_LOCK)!=(PLL_ENABLED|s->pll_inherited))return 0;
         consecutive=(v&PLL_LOCK) ? consecutive+1 : 0;
         next+=PLL_SAMPLE_US;
         if(consecutive==3) {
@@ -243,7 +250,7 @@ static int opened(struct a733_npu_startup *s)
     uint32_t v;
     return check(s,PCK,0xf,8) && check(s,PCK+8,0xf,8) &&
         check(s,CCU+0xb04,0xf0001,0xf0001) && check(s,CCU+0xb00,0x8700001f,BIT(31)) &&
-        rd(s,PLL,&v) && v==(PLL_OPEN|PLL_LOCK);
+        rd(s,PLL,&v) && v==(PLL_OPEN|PLL_LOCK|s->pll_inherited);
 }
 static int owner_task(const struct a733_npu_startup *s)
 {
@@ -305,7 +312,8 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
         if(held==0)return now(s,0) ? PENDING : refuse(s);
         if(held!=1)return fault(s);
         unsigned domain=8;
-        if(!now(s,0) || a733_power_domain_check(s->providers.domains,4,&domain)!=1 || domain || !pass(s)) {
+        if(!now(s,0) || a733_power_domain_check(s->providers.domains,4,&domain)!=1 ||
+           (domain!=0 && domain!=8) || !pass(s)) {
             (void)leave(s);return refuse(s);
         }
         if(!now(s,0) || !apply(s,pll_enable,STEPS(pll_enable)))return fault(s);
@@ -317,7 +325,7 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
         int held=enter(s);
         if(held!=1)return held==0 && now(s,0) ? PENDING : fault(s);
         uint32_t v;
-        if(!now(s,0) || !rd(s,PLL,&v) || v!=(PLL_ENABLED|PLL_LOCK) ||
+        if(!now(s,0) || !rd(s,PLL,&v) || v!=(PLL_ENABLED|PLL_LOCK|s->pll_inherited) ||
            !check(s,CCU+0x1920,0x10001,0x10001) || !check(s,CCU+0x19a0,BIT(16),BIT(16)) ||
            !apply(s,local_open,STEPS(local_open)) ||
            !now(s,0))return fault(s);

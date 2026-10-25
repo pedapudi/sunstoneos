@@ -56,7 +56,7 @@ wait. A waiting stage returns PENDING; every wait has a counter deadline.
    expired deadline refuses.
 3. **Register pass and PLL enable.** Under one register-lock acquisition: the
    owner's domain-4 check, which reads the PCK600 words once and returns the
-   domain state (startup requires OFF), the register pass below, and the
+   coherent domain state (OFF or ON), the register pass below, and the
    PLL_NPU method-2 enable table ([PLL table](npu-pll.md)). The lock is released, and LOCK is
    read without it: at most 100 observations 3 µs apart until three in a row
    read locked, then 20 µs. The worst case is about 320 µs, so the spin does
@@ -78,11 +78,14 @@ Steps 4 and 5 keep the clock-before-power order of the pinned VIPLite
 `vip_drv_device_platform.c` (lines 419–428). The sequencer writes no PCK600
 register and issues no PMIC transaction; the power-domain owner does both.
 
-In the host model with the PMIC at 400 kHz, the sequencer reaches READY 11
-ticks after the scheduler starts, in 12 calls of which 4 advance a stage. It
+In the host model with the PMIC at 400 kHz and domain 4 initially OFF, the
+sequencer reaches READY 11 ticks after the scheduler starts, in 12 calls of
+which 4 advance a stage. It
 makes 57 register reads besides the LOCK samples (52 by the sequencer and 5
 by the owner's domain check), 12 writes and 3 lock
-acquisitions.
+acquisitions. The inherited-ON case takes 11,001 modeled microseconds and
+the same 12 local writes, with no PCK600 writes. Its reported tick count
+rounds elapsed time up to 12; it does not take another scheduler tick.
 
 ## The register pass refuses before any write
 
@@ -101,11 +104,27 @@ The pass reads each word and compares it under a mask with a constant:
   asserted and SRAM reset released;
 - DRAM0 enabled from DDRPLL with no update pending and its PHY on the
   separate PHY PLL; video and NPU clock-management modes disabled;
-- PLL_NPU disabled, with its pattern and bias words (`+0x2a4`–`+0x2b0`) at
+- PLL_NPU disabled, preserving its initially observed reserved bit 24 under
+  the [PLL rules](npu-pll.md), with its pattern and bias words (`+0x2a4`–`+0x2b0`) at
   their reset values.
 
 The domain-4 policy and status come from the owner's check, which precedes
 the pass. The pass takes 20 reads, or 25 when PERI0 is selected.
+
+An inherited ON domain passes only with the same closed gates, asserted
+engine resets and disabled PLL. The later ON request lets the existing
+power-domain owner adopt the domain and pin its rail without a PCK600 write.
+An OFF domain follows the owner's normal power-on sequence. A mismatched or
+transitioning policy/status pair refuses before any NPU write. Neither
+state establishes exclusive ownership: the supervised image still needs
+the startup confinement, drain and ownership admissions.
+
+The physical read session at
+`~/.cache/sunstoneos/evidence/board-session-20261023/port-3-3/bb5-read/session.json`
+records domain-4 policy and status as `0x8`. It establishes an observed ON
+state, with no launch or transition; it does not establish the remaining
+startup conditions. Requiring OFF would refuse that observed state even
+if the remaining conditions passed.
 
 ## Failure keeps everything after the first write
 
@@ -125,6 +144,81 @@ applies the local stop table: module gate off, bus gate off, then the AHB, AXI
 and core resets asserted, in the order of `npu_clk_uninit` in the pinned
 VIPLite platform. Each write is read back. PLL_NPU, the SRAM reset, domain 4
 and every token stay held.
+
+Domain 4 rejects an OFF request before publishing it to the owner. Local
+stop therefore preserves the admitted row, its rail pin and every lease.
+The supported operating point remains fixed at 492 MHz and 800 mV; there
+is no NPU frequency or voltage transition API. A stopped or faulted startup
+cannot restart in place, and faults retain resources until whole-board
+power removal. The board image supplies
+[thermal admission and orderly stop](designs/npu-board.md#thermal-admission-and-orderly-stop),
+and the optional [finite thermal image](../apps/npu-finite/ENTRY.md) supplies
+polling admission and bounded cleanup through the same sensor policy.
+The ordinary numerical image has no thermal integration, and the OS has no
+NPU service entry. Frequency/voltage transitions, in-place recovery, repeated
+physical startup and thermal qualification remain open.
+
+### CLOSE and power-off establish different boundaries
+
+The controller requires completed work, full idle `0x7fffffff`, no pending
+interrupt, and readback of disabled interrupt and MMU controls. It checks idle
+again after a barrier. The service requires result reap and, when IRQ-bound, route retirement before
+publishing CLOSE. The polling finite consumer independently checks GIC IRQ97
+quiet before normal return, after local stop gates the engine and asserts its
+resets. These checks do not expose a separate A733 interconnect-drain or
+power-isolation acknowledgement. PCK policy/status equality establishes the
+selected domain state; its interpretation as complete fabric isolation depends
+on the SoC's low-power-interface wiring. The generic PCK-600 description does
+not identify that wiring for the NPU.
+
+The pinned VIPLite PM state machine waits for all-module idle in its default
+parallel-synchronous profile. Its optional asynchronous profile first excludes
+the command frontend from the idle mask, then ends the wait/link loop and waits
+for full idle. `Kbuild` permits a task-profile override; these source branches
+are not evidence of a deployed Linux configuration. The native finite stream
+already ends with END and has no wait/link loop. The Linux platform enables
+its power wrapper only with `CONFIG_AW_PM_DOMAINS` and a `power-domains`
+device-tree property.
+
+The platform calls `pm_runtime_put()` before `npu_clk_uninit()`. In the
+[pinned kernel helper](https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/include/linux/pm_runtime.h#L454),
+that call drops a usage reference and requests asynchronous idle processing
+when the usage count reaches zero. An eventual generic-domain suspend may
+attempt domain power-off. This establishes no synchronous order between
+OFF completion and local clock/reset teardown, and proves neither order unsafe.
+
+The manual's shared SRAM range is `0x00074000`–`0x000f3fff`, the CPU alias of
+the NPU's 512 KiB internal SRAM. The launcher and stack lie below that range.
+The FEL scratchpad does not: the boot ROM reports it at `0x000ee800`
+([boot.md](boot.md)), inside the range and `0x7a800` bytes (501,760) above its
+base. The approved numerical lifetime granted exclusive NPU SRAM/drain
+ownership and excluded other CPU, DMA and auxiliary-firmware writers. Its
+12×12 model uses the first 101,376 bytes, ending at `0x8cc00`, below the
+scratchpad, so that lifetime has no known conflict with it. A future lifetime must carry its own ownership grant.
+
+The ROM scratchpad inside the NPU SRAM alias constrains two later changes:
+
+- **Domain-4 OFF before ROM return.** An image that powers the NPU domain off
+  and then returns to the FEL ROM may remove power from the SRAM that holds the
+  ROM's scratchpad. It must first establish that the shared SRAM stays powered
+  or that the ROM does not depend on the scratchpad contents it left there.
+- **NPU SRAM footprints above about `0x7a800` bytes.** A footprint measured from
+  the start of the range that exceeds `0x7a800` bytes overwrites the scratchpad.
+  The NN pool model needs 518,144 bytes, 16 KiB more than that. An image that
+  uses it and returns to the FEL ROM must preserve or restore the scratchpad,
+  or must show that the ROM tolerates its loss.
+
+A normal OFF implementation still needs the A733-specific quiescence/isolation
+contract and permitted ordering of local clocks/resets against PCK completion.
+An observed full-idle value or PCK state alone cannot supply that contract.
+A documented interface description or qualified trace exposing those handshake
+boundaries would decide the sequence. Until then, keep the row, DCDC2 rail pin,
+PLL/local/fabric/reference clock leases and SRAM state retained. Restart also
+requires a consumer that retires and reconstructs terminal backend, service,
+startup and IRQ ownership; calling OPEN again does not do that. The immediate
+bounded observation remains the already prepared stopped-RAM capture for the
+numerical failure. This audit adds no runtime code or device operations; its
+source identities are in `npu-lifecycle-audit-20261024`.
 
 ## Service activation
 
@@ -152,7 +246,10 @@ Integration follows this order:
   sequencer with the actual PMIC provider, rail ledger, clock registry,
   GPU/PCK manager and power-domain owner over a register model. It checks
   boot to READY with its counts, local stop, three refusals before any write,
-  three retentions and seven reference-clock cases.
+  three retentions and seven reference-clock cases. Its `--inherited-on`
+  cases check owner adoption without PCK600 writes, six unsafe local-state
+  refusals, two incoherent-state refusals, retention after a failed write,
+  and retained ownership after local stop and a refused OFF request.
 - [`checks/npu-startup.c`](../checks/npu-startup.c) runs it on two QEMU cores
   with real FreeRTOS tasks and the real counter, registry, ledger and register
   lock. The success mode reaches service activation; the readback mode shows a

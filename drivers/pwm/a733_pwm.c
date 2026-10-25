@@ -115,7 +115,7 @@ int a733_pwm_init(struct a733_pwm *p,const struct a733_pwm_config *c,const struc
  if(!p||p->initialized||!a733_pwm_plan(c,&plan,&shared)||!o||!o->now_us||!o->current||!o->admit||!o->enter||
  !o->leave||!o->retain||!o->read||!o->write||!o->outside||!clocks||!clocks->initialized||!pins||!pins->initialized||
  !rails||rails->self!=rails||rails->binding.clocks!=clocks||!rails->binding.gpu||!pmic||pmic->clocks!=clocks||pmic->pins!=pins||
- pmic->rails!=rails||!pmic->ops.outside||pmic->ops.outside(pmic->cookie,p,sizeof(*p))!=1||o->outside(cookie,p,sizeof(*p))!=1||
+ pmic->rails!=rails||a733_pmic_outside(pmic,p,sizeof(*p))!=1||o->outside(cookie,p,sizeof(*p))!=1||
  !a733_ranges_disjoint(p,sizeof(*p),c,sizeof(*c))||!a733_ranges_disjoint(p,sizeof(*p),o,sizeof(*o))||
  !a733_ranges_disjoint(p,sizeof(*p),clocks,sizeof(*clocks))||!a733_ranges_disjoint(p,sizeof(*p),pins,sizeof(*pins))||
  !a733_ranges_disjoint(p,sizeof(*p),rails,sizeof(*rails))||!a733_ranges_disjoint(p,sizeof(*p),pmic,sizeof(*pmic))||

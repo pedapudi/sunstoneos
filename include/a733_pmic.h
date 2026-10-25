@@ -54,7 +54,10 @@ struct a733_pmic_slot {
 struct a733_pmic {
     struct a733_pmic *self;
     struct a733_pmic_config config;
-    struct a733_pmic_ops ops;
+    /* The adapter's operations. Only the provider and the two consumer
+     * queries below use them; checks/pmic-tree.py keeps the member's name
+     * out of every other source. */
+    struct a733_pmic_ops pmic_bus_ops;
     void *cookie;
     struct a733_clock_leases *clocks;
     struct a733_rail_leases *rails;
@@ -87,6 +90,14 @@ struct a733_pmic {
 int a733_pmic_init(struct a733_pmic *,const struct a733_pmic_config *,
     const struct a733_pmic_ops *,void *,struct a733_clock_leases *,
     struct a733_rail_leases *,struct a733_pins *);
+/* The two adapter queries that consumers make on any task: the provider
+ * clock in microseconds, and whether [v, v+n) excludes the adapter, lock and
+ * clock backing. Each returns the adapter's result: 1 on success. Outside
+ * returns 0 for a provider whose operations are not set. */
+static inline int a733_pmic_now(const struct a733_pmic *p,uint64_t *out)
+{return p->pmic_bus_ops.now(p->cookie,out);}
+static inline int a733_pmic_outside(const struct a733_pmic *p,const void *v,size_t n)
+{return p->pmic_bus_ops.outside ? p->pmic_bus_ops.outside(p->cookie,v,n) : 0;}
 /* Before concurrency, once: submit calls kick(context) after queuing a
  * request, and domains names the power-domain owner whose supply record the
  * GPU supply consumer reads and on which the GPU platform registers its

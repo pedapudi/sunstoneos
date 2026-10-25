@@ -168,3 +168,54 @@ contains the secure-emulator run. These checks establish ARE admission/preservat
 they do not qualify the monitor's other timeout or redistributor cleanup behavior.
 The corrected physical monitor has not been run on the board. Earlier physical
 results above remain evidence for their recorded image.
+
+## A successful return requires verified monitor interrupt cleanup
+
+The monitor publishes status 6 if its interrupt cleanup times out or a restored
+register differs from the saved readable value. This overrides both normal
+success and the controlled recovery status 2. The status it replaces, which
+can itself be a failure status 3, 4 or 5, is published in the result's
+`replaced_status` word at offset 120; the word is zero otherwise.
+`tools/check-a733-kernel.py` decodes it and names it in the status-6 refusal. The monitor still requests the
+existing ROM return; the host rejects the unsuccessful result and retains
+ownership. A responsive ROM does not make the affected interrupt state reusable.
+
+Cleanup retains three 100 ms windows: disable distributor delivery, restore
+CPU0's private interrupts, and restore SPI enables and distributor control.
+Readbacks share the corresponding window. A read that completes at or beyond
+its deadline fails. Before changing interrupt configuration, cleanup verifies
+that distributor groups and CPU0's local enables are clear. It clears and
+checks the owned timer PPIs 29 and 30, then verifies the saved group, modifier,
+configuration, priority and enable words. It verifies every SPI enable word and
+the final distributor control value before publishing success.
+
+Arm IHI 0069G sections 12.9.4 and 12.11.8 explain why RWP alone is insufficient:
+it tracks only specified writes, and changing interrupt configuration while the
+interrupt is enabled is unpredictable. Comparisons use the values read before
+initialization, so unimplemented PPI bits and priority bits do not need an
+assumed all-ones mask. Section 12.11.12 defines the unimplemented group bits.
+Cleanup preserves enabled ARE bits and does not restore SRE to zero; sections
+12.9.4 and 12.2.24 prohibit those enabled-to-disabled transitions. CPU0 remains
+awake under the existing return policy.
+
+`checks/a733-monitor-are.py` executes the compiled monitor in 32 focused cases.
+The model includes write-one-to-set/clear registers, unimplemented PPIs,
+implemented priority bits, delayed or stuck RWP, dropped restore writes,
+changed bank counts and reads that reach the deadline. It checks rejection
+before unsafe configuration writes and cleanup failure overriding statuses 0,
+2 and 4, and requires `replaced_status` to hold the overridden status. The
+previous monitor reproduces the defect: a dropped priority restore
+still returns status 0. The changed monitor returns status 6.
+
+For the nine-bank nominal fixture, cleanup grows from 162 to 445 executed
+instructions and from 5 to 33 MMIO reads; the 26 MMIO writes are unchanged.
+The added reads verify completion once during shutdown. These are instruction
+and transaction counts, not board timing. Evidence is under
+`~/.cache/sunstoneos/build/cpu-monitor-cleanup-1024/`, with the final passing
+cases in `model-2.json` and the reproduced old failure in `baseline.json`.
+
+This verifies only the monitor's restored registers and owned timer sources.
+It does not establish arbitrary peripheral quiescence, undo lost inherited
+pending events, recover a stalled bus access or qualify the new image on a
+board. The October 24 thermal and CPU observations remain attributed to their
+older frozen images; their cleanup claims still need their recorded captures.

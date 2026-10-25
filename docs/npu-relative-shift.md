@@ -140,3 +140,13 @@ This SDK execution does not establish native inference. Root owns the separate
 EL3 table-preparation and linked architecture audit. Existing unchanged
 controller, IRQ and mailbox evidence is reused. Board execution, physical shader
 and cache ordering, confinement and larger mimus shapes remain pending.
+
+The large-native constructor check requires the linked `relative-shift128`
+model identity. The published ShuffleNet image has a different pool layout
+and uses `checks/npu-nn-pool-native.py`. The constructor fixture runs the real
+local-pool preparation before allocating, matching boot's publication order.
+Constructor and corrupted-model cases pass against the rebuilt relative-shift
+profile in `~/.cache/sunstoneos/build/npu-resume-1024/relative-shift/`.
+The wrong-profile refusal is recorded separately in `large-fixture-checks.json`
+under that build's parent directory. Existing runtime-copy results retain
+their original image identities and modeled-output scope.

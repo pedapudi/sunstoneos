@@ -32,7 +32,15 @@ The coordinator must supply fresh physical admission and review the changed norm
 
 Before uploading, the host must save and hash the complete exclusive DRAM reservation `0x41000000..0x42200000`. After one bounded launch, it must confirm a responsive new ROM instance and copy the monitor report, platform log and return receipt. Only a validated normal completion permits restoring and comparing saved DRAM. Old SRAM must never overwrite the newly running ROM. Missing or uncertain completion retains ownership and requires explicit recovery.
 
-This software image has modeled handoff evidence and completed root source review of its architecture/reset sequence and host capture path. Review records are `npu-finite-return-20261018/root-return-source-review.json` and `npu-finite-host-20261018/root-host-source-review.json`. Target-specific admission, physical inference and physical ROM return remain outstanding. Neither source review nor instruction checks establish those physical results.
+On 2026-10-24 the coordinator ran the frozen numerical image `9e4adabf` on
+port 3-1. Both jobs completed and were reaped, but both copied outputs failed the
+reference comparison. CLOSE, local stop, provider parking and normal ROM return
+completed; the host restored all 18 MiB of saved DRAM. The immutable session is
+`processor-completion-20261024/port-3-1/npu-numerical/runtime/session.json` in the
+evidence cache. It records status 1 and `functional_success=false`. Numerical
+correctness remains unresolved, and retained PLL/domain/rail state forbids an
+unreviewed repeat startup. This result does not qualify the separate thermal
+profile, whose software evidence is described in [ENTRY.md](ENTRY.md).
 
 The application-local `host.py` implements the returned-RAM host path. `prepare` requires explicit image, manifest, session, admission, compiler, linker and objcopy paths. It reuses the original NPU image/session/request producers and protected SRAM launcher. `validate --bundle PATH` verifies all copied evidence, current host source hashes, exact ELF load bytes, request packets and launcher hash without accessing hardware. The prepared bundle includes evidence and source snapshots; it creates no qualified defaults.
 
@@ -42,10 +50,17 @@ A separate `a733-npu-finite-return-review-v1` record must bind the exact image h
 
 The `run` command requires a validated bundle, the pinned FEL executable, an evidence directory, current DDR evidence, a platform survey and an existing root-owned claim. Repeat `--warm-return` for the accepted continuity chain. The root wrapper must verify and manage that claim; this program neither accesses queues nor closes claims. Under the existing exclusive board lock, the runner revalidates target identity and evidence, saves all 18 MiB of DRAM, reuses protected upload/readback, and launches once. A transport failure forbids further requests. ROM enumeration is passive and bounded to 30 seconds; subsequent report reads require a new accessible A733 ROM instance.
 
-The monitor report, platform log and receipt must agree on completion status, epoch, generation, lease, time bounds and exact cleanup extent. The host independently checks both copied outputs against the ELF reference. Status zero permits a successful result. Status one permits DRAM restoration only when the reports demonstrate normal shutdown and the copied output demonstrates a numerical mismatch; it returns command exit code two. Missing, malformed or conflicting reports retain ownership. Restoration hashes the exact saved bytes passed to a sealed upload, writes only DRAM and verifies every byte. Old SRAM is never restored after ROM return. A restore failure also retains ownership.
+The monitor report, platform log and receipt must agree on completion status, epoch, generation, lease, time bounds and exact cleanup extent. The host independently checks both copied outputs against the ELF reference. Its result also records, under `output_pattern`, the ranges of the second copied output that still hold the SUBMIT pattern `NPU_CONVOLUTION_OUTPUT_POISON`, whether the pattern covers every byte of that output, and whether the first job's digest is the digest of an output that kept the pattern in every byte. A short range can match by chance; a range covering the output means that job wrote nothing. The fields have this meaning only for images whose SUBMIT fills the pattern, which the frozen image `9e4adabf` predates. Status zero permits a successful result. Status one permits DRAM restoration only when the reports demonstrate normal shutdown and the copied output demonstrates a numerical mismatch; it returns command exit code two. Missing, malformed or conflicting reports retain ownership. Restoration hashes the exact saved bytes passed to a sealed upload, writes only DRAM and verifies every byte. Old SRAM is never restored after ROM return. A restore failure also retains ownership.
 
 `host-check.py` uses the exact frozen native ELF, original producers and protected upload helpers with modeled FEL operations and ROM enumeration. Its fixtures cover packaging, admission, both numerical statuses and changed failure paths. They never discover a board, create a queue record or establish live admission. The shared transport loop is exercised separately with mocked port metadata, subprocesses and time. Real lock, permission, enumeration and subprocess behavior remain unobserved by these fixtures. The native image is not rebuilt by host checks.
 
 `tools/a733-returning-host.py` owns the shared live transport loop. The NPU adapter supplies its admission callback and finite execution callback; the helper imports no device model or admission schema. The board lock uses the selected A733 physical port, and the USB churn record names that same port. Every request rechecks instance identity and physical port. The returning-ROM lookup stays on the original sysfs path. The existing USB guard still enforces its host-controller health and shared churn spacing policy.
 
 `transport-check.py` exercises only the extracted loop and NPU callback composition. It checks terminal transport failure, changed identity, missing or inaccessible new ROM, wrong return port, dirty-state retention and numerical-status propagation. It does not repeat native handoff or pure report validation cases. The helper is part of the host source hashes required by root review, so extraction requires a freshly bound host review record.
+
+The [entry procedure](ENTRY.md) describes explicit session construction, the
+forced-ROM instruction check and the missing physical authority. The host
+constructs session bytes only from a supplied typed boot payload and complete
+admission, validates them before writing, and refuses existing output files.
+The return/profile/client fixtures select only their consumed DWARF layouts,
+so unrelated private structure names cannot block those checks.

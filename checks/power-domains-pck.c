@@ -24,6 +24,8 @@
 #include "power-domains-model.h"
 
 static FILE *gpu_trace;
+static uint32_t gpu_core[9];
+static unsigned gpu_core_pending;
 static uint32_t policy_before;
 static void owner_written(uintptr_t a,uint32_t v)
 {
@@ -40,11 +42,26 @@ static int gpu_release(void *v){(void)v;return 1;}
 static int gpu_read(void *v,enum a733_gpu_power_bank bank,uint32_t off,uint32_t *out)
 {
     (void)v;
+    if(bank==A733_GPU_CORE) {
+        assert(off==0 || off==8 || off==0x20);
+        if(off==8 && gpu_core_pending) {
+            assert((d.ppu[5][2]&15)==8 && (d.ccu_b20&0x80000000) && (d.ccu_b24&0x10001)==0x10001);
+            gpu_core[2]=gpu_core[0];gpu_core_pending=0;
+        }
+        *out=gpu_core[off/4];return 1;
+    }
     uint32_t *w=level_word((bank==A733_GPU_CCU ? CCU_BASE : RCCU_BASE)+off);assert(w);*out=*w;return 1;
 }
 static int gpu_update(void *v,enum a733_gpu_power_bank bank,uint32_t off,uint32_t clear,uint32_t set)
 {
-    (void)v;assert(bank==A733_GPU_CCU && (off==0xb20 || off==0xb24));
+    (void)v;
+    if(bank==A733_GPU_CORE) {
+        assert(clear==UINT32_MAX && ((off==0 && (set==0 || set==8)) || (off==0x20 && !set)));
+        gpu_core[off/4]=set;if(!off)gpu_core_pending=1;
+        if(gpu_trace)fprintf(gpu_trace,"1 3 %x %x %x\n",off,clear,set);
+        return 1;
+    }
+    assert(bank==A733_GPU_CCU && (off==0xb20 || off==0xb24));
     uint32_t *w=level_word(CCU_BASE+off);*w=(*w&~clear)|set;
     if(off==0xb20)*w&=~(1u<<27); /* the update key reads as zero */
     if(gpu_trace)fprintf(gpu_trace,"1 0 %x %x %x\n",off,clear,set);
@@ -61,7 +78,8 @@ static void gpu_trace_run(const char *path)
 {
     static const struct a733_gpu_power_ops ops={gpu_now,gpu_acquire,gpu_release,gpu_read,gpu_update};
     static struct a733_gpu_power g;struct a733_rail_token t={0};
-    domains_model_setup(0x28,23);d.ack_us=0;
+    domains_model_setup(0x28,23);d.ack_us=0;memset(&g,0,sizeof(g));
+    memset(gpu_core,0,sizeof(gpu_core));gpu_core_pending=0;
     assert(a733_gpu_power_init(&g,&ops,0) && a733_power_domain_row_init(&g.row,&d.owner,5,9,&t));
     domains_boot();t=domains_rail(9,A733_RAIL_DCDC4);
     gpu_trace=fopen(path,"w");assert(gpu_trace);policy_before=d.ppu[5][0];d.written=owner_written;
@@ -99,9 +117,199 @@ static void ledger_hook(struct pmic_model *p)
         atomic_store(&m.rails.busy,0);hold_ledger=3;
     }
 }
+/* Inject elapsed time or one clock failure after a real target-status read.
+ * These callbacks retain the ordinary register/clock model everywhere else. */
+static uint64_t target_read_finish;
+static unsigned target_clock_fault,target_injected,clock_fault_pending;
+static int deadline_read(void *v,uintptr_t address,uint32_t *out)
+{
+    const int result=owner_read(v,address,out);
+    if(address==A733_POWER_PCK_DOMAIN(5)+8 && !target_injected) {
+        ++target_injected;
+        if(target_read_finish)m.now=target_read_finish;
+        clock_fault_pending=target_clock_fault;
+    }
+    return result;
+}
+static int deadline_clock(void *v,uint64_t *out)
+{
+    const unsigned fault=clock_fault_pending;clock_fault_pending=0;
+    if(fault==1)return 0;
+    if(fault==2){*out=0;return 1;}
+    return pmic_model_now(v,out);
+}
+static void transition_deadlines(void)
+{
+    /* Complete a genuine ON or OFF request just before, at or after its
+     * deadline. Later acknowledgements keep the actual row/rail pin. */
+    for(unsigned on=0;on<2;++on)for(unsigned mode=0;mode<7;++mode) {
+        setup();
+        struct a733_rail_token token={0};struct a733_power_domain_row row={0};
+        assert(a733_power_domain_row_init(&row,&d.owner,5,76,&token));
+        domains_boot();token=domains_rail(76,A733_RAIL_DCDC4);
+        if(!on) {
+            assert(a733_power_domain_request(&row,1));service_step();
+            assert(a733_power_domain_state(&row)==A733_POWER_ROW_ON);
+        }
+        d.stall[5]=1;
+        assert(a733_power_domain_request(&row,on));service_step();
+        assert(a733_power_domain_state(&row)==A733_POWER_ROW_PENDING && row.counted);
+        const uint64_t deadline=d.owner.domain[2].deadline;
+        m.now=mode==1 ? deadline : mode==2 ? deadline+1 : deadline-1;
+        m.now_step=0;d.stall[5]=0;d.ack_at[5]=0;
+        target_read_finish=mode==3 ? deadline : mode==4 ? deadline+1 : 0;
+        target_clock_fault=mode==5 ? 1 : mode==6 ? 2 : 0;
+        target_injected=clock_fault_pending=0;
+        d.owner.ops.read=deadline_read;m.provider.pmic_bus_ops.now=deadline_clock;
+        const unsigned from=d.trace_n,reads=d.ppu_reads;
+        service_step();
+        assert(!writes_since(from));
+        assert(target_injected==(mode==1 || mode==2 ? 0u : 1u));
+        assert(d.ppu_reads-reads==target_injected);
+        if(!mode) {
+            assert(a733_power_domain_state(&row)==(on ? A733_POWER_ROW_ON : A733_POWER_ROW_OFF));
+            assert(row.counted==on && d.owner.domain[2].count==on && !d.owner.failed);
+        } else {
+            assert(a733_power_domain_state(&row)==A733_POWER_ROW_FAILED && row.counted && d.owner.domain[2].count==1);
+            assert(a733_power_authority_load(&m.rails.authority)&A733_POWER_DOMAIN5_FAULT);
+            assert(a733_rail_release(&m.rails,&token,m.now+1000)==A733_RAIL_BUSY);
+            assert(d.owner.failed==(mode>=5));
+        }
+    }
+    /* An earlier session deadline bounds both directions. A session that
+     * already expired cannot write a delay row or a power policy. */
+    for(unsigned on=0;on<2;++on)for(unsigned expired=0;expired<2;++expired) {
+        setup();
+        struct a733_rail_token token={0};struct a733_power_domain_row row={0};
+        assert(a733_power_domain_row_init(&row,&d.owner,5,77,&token));
+        domains_boot();token=domains_rail(77,A733_RAIL_DCDC4);
+        if(!on) {
+            assert(a733_power_domain_request(&row,1));service_step();
+            assert(a733_power_domain_state(&row)==A733_POWER_ROW_ON);
+        }
+        d.owner.config.deadline=m.now+(expired ? 0 : 1000);
+        const unsigned from=d.trace_n;
+        d.stall[5]=1;assert(a733_power_domain_request(&row,on));service_step();
+        if(!expired) {
+            assert(a733_power_domain_state(&row)==A733_POWER_ROW_PENDING);
+            assert(d.owner.domain[2].deadline==d.owner.config.deadline);
+            m.now=d.owner.config.deadline;m.now_step=0;d.stall[5]=0;d.ack_at[5]=0;
+            const unsigned reads=d.ppu_reads;service_step();assert(d.ppu_reads==reads);
+        } else assert(!writes_since(from));
+        assert(a733_power_domain_state(&row)==A733_POWER_ROW_FAILED && row.counted);
+        assert(a733_rail_release(&m.rails,&token,m.now+1000)==A733_RAIL_BUSY);
+    }
+}
+static const unsigned delay_offsets[]={0x170,0x174,0xc00,0xc04,0xc10};
+static const uint32_t delay_values[]={0x1f1f1f,0x1f1f,0x08080808,0x0808,8};
+static unsigned delay_fault,delay_index,delay_hits;
+static int delay_write(void *v,uintptr_t a,uint32_t value)
+{
+    const int result=owner_write(v,a,value);
+    if(delay_fault==1 && a==A733_POWER_PCK_DOMAIN(5)+delay_offsets[delay_index]) {
+        ++delay_hits;return 0; /* the write may already have reached the device */
+    }
+    return result;
+}
+static int delay_read(void *v,uintptr_t a,uint32_t *out)
+{
+    const int result=owner_read(v,a,out);
+    if(delay_fault>=2 && a==A733_POWER_PCK_DOMAIN(5)+delay_offsets[delay_index]) {
+        ++delay_hits;
+        if(delay_fault==2)return 0;
+        if(delay_fault==3)*out^=1;
+        if(delay_fault==4)m.now=d.owner.config.deadline;
+        if(delay_fault>=5)clock_fault_pending=delay_fault-4;
+    }
+    return result;
+}
+static void delay_trace(unsigned from,unsigned initialized,unsigned on)
+{
+    unsigned n=0;
+    for(unsigned i=from;i<d.trace_n;++i) {
+        const struct access *a=&d.trace[i];
+        assert(a->address<A733_POWER_PCK_DOMAIN(4) || a->address>=A733_POWER_PCK_DOMAIN(5));
+        if(!a->write)continue;
+        if(initialized && n<5) {
+            assert(a->address==A733_POWER_PCK_DOMAIN(5)+delay_offsets[n] && a->value==delay_values[n]);
+            assert(i+1<d.trace_n && !d.trace[i+1].write && d.trace[i+1].address==a->address &&
+                   d.trace[i+1].value==a->value);
+        } else assert(n==(initialized ? 5u : 0u) && a->address==A733_POWER_PCK_DOMAIN(5) &&
+                      a->value==(0xa5a50000u|(on ? 8u : 0u)));
+        ++n;
+    }
+    assert(n==(initialized ? 6u : 1u));
+}
+static void transition_delays(void)
+{
+    /* The new flag uses existing padding, preserving every old field offset. */
+    _Static_assert(sizeof(struct a733_power_domain)==32 && offsetof(struct a733_power_domain,id)==0 &&
+        offsetof(struct a733_power_domain,state)==4 && offsetof(struct a733_power_domain,count)==8 &&
+        offsetof(struct a733_power_domain,delays_ready)==12 &&
+        offsetof(struct a733_power_domain,command_at)==16 && offsetof(struct a733_power_domain,deadline)==24,
+        "power-domain layout is unchanged");
+    for(unsigned inherited=0;inherited<2;++inherited) {
+        setup();d.ack_us=0;d.ppu[5][0]|=inherited*8;d.ppu[5][2]|=inherited*8;
+        d.ppu[4][0]|=8;d.ppu[4][2]|=8;d.ppu[4][0x170/4]=0x12345678;
+        uint32_t npu[0x1000/4];memcpy(npu,d.ppu[4],sizeof(npu));
+        struct a733_rail_token token={0};struct a733_power_domain_row row={0};
+        assert(a733_power_domain_row_init(&row,&d.owner,5,77,&token));
+        domains_boot();token=domains_rail(77,A733_RAIL_DCDC4);
+        for(unsigned cycle=0;cycle<2;++cycle) {
+            unsigned from=d.trace_n;
+            assert(a733_power_domain_request(&row,1));service_step();
+            assert(a733_power_domain_state(&row)==A733_POWER_ROW_ON && row.counted);
+            if(inherited && !cycle)assert(!writes_since(from) && !d.owner.domain[2].delays_ready);
+            else delay_trace(from,1,1);
+            from=d.trace_n;
+            assert(a733_power_domain_request(&row,0));service_step();
+            assert(a733_power_domain_state(&row)==A733_POWER_ROW_OFF && !row.counted &&
+                   d.owner.domain[2].delays_ready);
+            delay_trace(from,inherited && !cycle,0);
+        }
+        assert(!memcmp(npu,d.ppu[4],sizeof(npu)) && d.owner.domain[1].state==A733_POWER_DOMAIN_UNKNOWN);
+        assert(a733_rail_release(&m.rails,&token,m.now+1000)==A733_RAIL_READY);
+        printf("delay initialization: inherited %s, two ON/OFF cycles, retained NPU untouched\n",inherited ? "ON" : "OFF");
+    }
+    /* Fault each first-OFF delay write/read/readback. Also cross the deadline
+     * or fail/regress time after the last readback, before the policy write. */
+    unsigned faults=0;
+    for(unsigned fault=1;fault<=6;++fault)for(unsigned index=0;index<(fault<=3 ? 5u : 1u);++index) {
+        setup();d.ack_us=0;d.ppu[5][0]|=8;d.ppu[5][2]|=8;
+        struct a733_rail_token token={0};struct a733_power_domain_row row={0};
+        assert(a733_power_domain_row_init(&row,&d.owner,5,78,&token));
+        domains_boot();token=domains_rail(78,A733_RAIL_DCDC4);
+        assert(a733_power_domain_request(&row,1));service_step();
+        assert(a733_power_domain_state(&row)==A733_POWER_ROW_ON && !d.owner.domain[2].delays_ready);
+        delay_fault=fault;delay_index=fault<=3 ? index : 4;delay_hits=clock_fault_pending=0;
+        d.owner.ops.read=delay_read;d.owner.ops.write=delay_write;m.provider.pmic_bus_ops.now=deadline_clock;
+        const unsigned from=d.trace_n;
+        assert(a733_power_domain_request(&row,0));service_step();
+        assert(delay_hits==1 && a733_power_domain_state(&row)==A733_POWER_ROW_FAILED && row.counted);
+        assert(d.owner.domain[2].delays_ready==(fault>=4));
+        assert(a733_power_authority_load(&m.rails.authority)&A733_POWER_DOMAIN5_FAULT);
+        assert(d.ppu[5][0]==0xa5a50008 && d.ppu[5][2]==0x42000008);
+        for(unsigned i=from;i<d.trace_n;++i)assert(!d.trace[i].write ||
+            (d.trace[i].address>A733_POWER_PCK_DOMAIN(5) && d.trace[i].address<A733_POWER_PCK_DOMAIN(5)+0x1000));
+        assert(a733_rail_release(&m.rails,&token,m.now+1000)==A733_RAIL_BUSY);
+        delay_fault=0;const unsigned retained=d.trace_n;
+        assert(a733_power_domain_request(&row,1));service_step();
+        assert(a733_power_domain_state(&row)==A733_POWER_ROW_FAILED && !writes_since(retained));
+        ++faults;
+    }
+    printf("delay initialization: %u injected failures retain row/pin without policy write or revival\n",faults);
+}
+
 int main(int argc,char **argv)
 {
-    assert(argc<=2);
+    assert(argc<=3);
+    if(argc==3 && !strcmp(argv[1],"--gpu-trace")){gpu_trace_run(argv[2]);puts("PASS focused GPU TOP/CORE write trace");return 0;}
+    if(argc==2 && !strcmp(argv[1],"--delays")) {
+        transition_delays();puts("PASS first-transition delay initialization and retained failures");return 0;
+    }
+    if(argc==2 && !strcmp(argv[1],"--deadlines")) {
+        transition_deadlines();puts("PASS power-domain transition deadline boundaries and retained pins");return 0;
+    }
     if(argc==2)gpu_trace_run(argv[1]);
     /* An image with no row verifies nothing and reads no PMIC register. */
     setup();domains_boot();
@@ -270,7 +478,7 @@ int main(int argc,char **argv)
     }
     const uint64_t failed_after=m.now-commanded;
     assert(a733_power_domain_state(&slow)==A733_POWER_ROW_FAILED);
-    assert(failed_after<=A733_POWER_PCK_BOUND_US+TICK_US+100 && d.ppu_reads-reads==retries);
+    assert(failed_after<=A733_POWER_PCK_BOUND_US+TICK_US+100 && d.ppu_reads-reads==retries-1);
     assert(a733_power_authority_load(&m.rails.authority)&A733_POWER_DOMAIN5_FAULT);
     assert(a733_rail_release(&m.rails,&s4,m.now+1000)==A733_RAIL_BUSY);
     /* A later acknowledgement does not revive the failed domain. */
@@ -342,6 +550,8 @@ int main(int argc,char **argv)
     assert(!a733_power_domain_request(&npu,0));
     /* Registration closes once the service runs. */
     struct a733_power_domain_row late={0};assert(!a733_power_domain_row_init(&late,&d.owner,4,72,&n2));
+
+    transition_deadlines();
 
     printf("{\"boot_transactions\":%u,\"row_transactions\":0,\"ppu_accesses_per_on\":%u,"
         "\"level_reads_per_admission\":%u,\"slow_ack\":{\"spin_us\":%llu,\"retries\":%u,\"failed_after_us\":%llu}}\n",

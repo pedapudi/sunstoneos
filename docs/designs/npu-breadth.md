@@ -1,7 +1,8 @@
 # Design: loading, switching and sharing compiled NPU models at runtime
 
-Status: **implemented and host-modeled**; physical behavior is pending, and
-no board image links the runtime yet. The section
+Status: **implemented and host-modeled**; physical behavior is pending. The
+[supervised NPU board image](npu-board.md) links this runtime with one slot
+and one client. The section
 [Implementation, measurements and remaining work](#implementation-measurements-and-remaining-work)
 records how the code differs from this design and what the emulator counts.
 Section numbers refer to
@@ -15,8 +16,8 @@ a time. A client can switch its slot's model while other slots run jobs,
 which share the NPU with round-robin starts. Each slot has a **read-only region** (NN descriptors, coefficients, shader instructions
 and a 524,288-byte command allocation), a **read window** (inputs) and a
 **write window** (working pool and outputs). The image fixes the slot count
-and region sizes. The first consumer is `apps/npu-runtime-large`
-with one slot. Times are estimated worst cases at Boot0's 494 MHz
+and region sizes. The board consumer is `apps/npu-board` with one slot.
+`apps/npu-runtime-large` still uses the earlier single-model registration. Times are estimated worst cases at Boot0's 494 MHz
 core 0 clock ([docs/cpu-clock.md](../cpu-clock.md)).
 
 ## Data flow and ownership
@@ -501,7 +502,7 @@ and H.
 
 ### Remaining work
 
-- **First consumer.** `apps/npu-convolution/native.c` must construct the
+- **Large-graph consumer.** `apps/npu-convolution/native.c` must construct the
   runtime for `apps/npu-runtime-large`, and the client in
   `apps/npu-runtime/main.c` then sends one LOAD and one SUBMIT per inference and
   blocks on a USB0 notification instead of `vTaskDelay(1)`.

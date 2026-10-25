@@ -277,7 +277,8 @@ implementation is **planned**. Partial results apply only to the stated scope:
   floating-point context rounds on every core, with timer and inter-core
   interrupts. Focused checks cover inherited SIF clearing and terminal faults.
   The central image also links; it has a distinct build identity. Physical
-  cache coherence, entry, interrupts and secondary scheduling remain unqualified.
+  qualification remains limited to the frozen returning workloads below;
+  those results do not qualify every current image or sustained operation.
   The cached single-core images walk their EL1 translation tables through the
   data caches; the eight-core images keep noncacheable walks until a core-6
   walk measurement passes. In both, every core flushes the EL1 tables and
@@ -334,26 +335,51 @@ implementation is **planned**. Partial results apply only to the stated scope:
   Cached stack/nesting writes and cleaning of all 192 lines in the three owned
   pages pass, followed by restored controls, DRAM and ROM return. Evidence:
   `primary-context-probe-20261018/physical-005/runtime/session.json`.
-  Its bounded application callback does not request a task switch; task selection
-  and eight-core scheduling remain unqualified.
-  All eight CPUs also pass the production pre-scheduler barrier and 256 atomic
-  lock-protected increments. All participants finish before cleaning both shared
+  Its bounded application callback does not request a task switch. The later
+  returning workload below supplies bounded physical scheduling evidence.
+  On 2026-10-18, all eight CPUs also passed the production pre-scheduler
+  barrier and 256 atomic lock-protected increments. All participants finish before cleaning both shared
   pages and their own stack page. CPU0 restores awake interrupt state; every
   secondary restores local state and reaches observed OFF. Exact physical page
   contents, saved DRAM restoration and responsive ROM return pass under
   `all-core-pre-scheduler-20261018/entry-corrected/physical-008/runtime/`.
-  All eight CPUs physically execute FreeRTOS task construction and initial
-  context restoration through idle-task entry. Task pointers, arguments, stacks
+  On that date, all eight CPUs physically executed FreeRTOS task construction
+  and initial context restoration through idle-task entry. Task pointers, arguments, stacks
   and exception state match. Every core cleans the complete 145-page writable
   interval before CPU0 restoration and acknowledged, independently observed
   secondary shutdown. Saved DRAM restoration and responsive ROM return pass.
   Evidence: `all-core-first-task-20261018/physical-010/runtime/session.json`.
-  This diagnostic stops before task bodies; task switching and sustained
-  eight-core scheduling remain physically unqualified. The complete returning
-  workload passes instruction checks through 32 floating-point rounds per core,
-  background progress, production timer/SGI handlers and FreeRTOS switching.
-  Thirteen host cases validate copied results, context and interrupt restoration,
-  saved RAM and failure retention. Evidence: `all-core-task-workload-20261019/`.
+  On 2026-10-24, port `3-1` passed CPU0 preparation, the all-core
+  pre-scheduler diagnostic, first-task entry, task switching and the full
+  returning workload. The workload covers 32 floating-point rounds per core,
+  background progress, CPU0 timer delivery and application SGIs, with restored
+  state and ROM return. Records are under
+  `processor-completion-20261024/port-3-1/`: `primary`, `pre-scheduler`,
+  `first-task`, `task-switch` and `task-workload`, each at `runtime/session.json`.
+  Before the workload, `thermal-before-workload/` recorded all sensors below
+  40 °C, and `state-after-thermal/` passed its 24-word state comparison.
+  These results apply to that prepared lifetime and the frozen CPU image
+  `762237cd0f023a2c6895167b347352bb383e1012b5c39d1f8f0139278a68dba3`,
+  which predates the new fault-capture code. The earlier failed rank 7 launch
+  remains unresolved across cold starts. The current-source finite image
+  `9d90b6f9…` subsequently passed 32 rounds per core, background scheduling,
+  SGIs on every core and 32 CPU0 timer ticks in the same prepared lifetime.
+  Its successful retirement exercised the current stackless capture hooks,
+  drained interrupts, restored controls and confirmed seven CPUs OFF. ROM
+  returned as `003/042`; all 18 MiB of saved DRAM was restored and verified.
+  Evidence: `processor-completion-20261024/port-3-1/current-cpu-root-review/runtime/session.json`.
+  This did not induce an exception or qualify fault recovery. A subsequent
+  revision (`f5ba965d…`) passed the same workload with one physical timer
+  interrupt on each secondary and 32 CPU0 ticks. CPU0 remains the sole global
+  FreeRTOS tick owner. Matching cleanup, seven CPUs OFF, distinct ROM return
+  and 18 MiB restoration all passed. Evidence:
+  `processor-completion-20261024/port-3-1/cpu-local-timer/runtime/session.json`.
+  The optional CPU clock driver now rechecks thermal permission immediately
+  before clock writes. This closes a reproduced increase after THROTTLE began
+  during asynchronous PMIC/ramp work. Fourteen focused software cases pass;
+  no physical clock or voltage changes ran. Evidence: `cpu-late-thermal-20261024/`.
+  Cold repeatability, sustained operation, actual idle wakeup, induced-fault
+  recovery and thermal transitions remain unqualified.
   Cores 2–7 now also pass production entry, identity observation, matching shutdown
   acknowledgment, independent OFF observation and configuration restoration under
   `secondary-identity-probe-20261018/physical-109/`. Cores 2–5 are A55 r2p0;
@@ -421,7 +447,7 @@ implementation is **planned**. Partial results apply only to the stated scope:
   control restoration, local cleanup, observed OFF and ROM return pass under
   `native-ns-publication-20261018/`. Four affected modeled cases pass. This executes
   immutable code without EL1 data stores; mutable cached memory, interrupt
-  delivery, other cores and scheduling remain unqualified. The earlier empty EL1
+  delivery, other cores and scheduling are outside this probe's scope. The earlier empty EL1
   report remains preserved as a failed observation, not a successful entry.
   The complete supervised eight-core image now includes this publication path
   for code and initial data together with the corrected interrupt mask. Four
@@ -520,16 +546,20 @@ implementation is **planned**. Partial results apply only to the stated scope:
   places mimus linear layers on the CPU or the GPU from a generated table,
   with INTID 95 and the GPU worker on the recognition core; it is
   **implemented** and host-modeled, with exact sums equal to a CPU-only
-  reference on the bench call list. It does not build until the mimus port
-  shrinks its arena to 12 MiB and the GPU runtime and the page-table owner
-  provide five functions and two build constants.
+  reference on the bench call list. The option configures, links and passes
+  its link check. The local mimus revision `9c57286b7` supplies the exact-sum
+  hook; publishing that revision still requires user approval. Physical GPU
+  execution and end-to-end recognition qualification remain outstanding.
   A supervised launcher and session preparation exist; preparation needs a reviewed entry record from physical evidence and
   refuses the radio and headset builds until it stages their profile and
-  firmware. The supervised radio and headset builds cannot finish firmware
-  loading within their 40 s and 30 s bootstrap bounds at the admitted SDIO
-  clock, and the resident image depends on the stage-2 entry prerequisites.
-  No board has run any variant. Display, camera, GPU and NPU are not part of
-  the image.
+  firmware. Only the supervised build admits board workload 2, staged
+  recorded recognition after USB0 startup without a USB disk. The supervised
+  radio and headset builds cannot finish firmware loading within their 40 s
+  and 30 s bootstrap bounds at the default one-bit 400 kHz clock; the four-bit
+  mode is admitted but unselected and physically unqualified. The resident
+  image depends on the stage-2 entry prerequisites.
+  No board has run any variant. Display, camera and NPU remain separate
+  images; GPU linear execution is an optional OS build.
 - Timers and recovery: **tested** for the nonsecure tick and an EL3 secure-timer
   timeout that returns a stalled EL1 to FEL. This does not qualify the independent
   hardware watchdog, every interrupt source, or arbitrary failure recovery.
@@ -602,9 +632,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   that count cycles, instructions, cache refills, bus accesses and TLB walks
   per core for an EL1 task pinned to that core. An instruction model and
   two-core QEMU runs on Cortex-A55 and Cortex-A76 models pass; an empty region
-  counts 20 instructions. No image links the module. Event counting first
-  needs both EL3 continuation paths to copy `PMCR_EL0.N` into
-  `MDCR_EL2.HPMN`. Physical PMU access is unqualified.
+  counts 20 instructions. The single-core bundle physically verified empty
+  and fixed instruction regions, table-walk counts and WFI counter behavior
+  on port `3-3` on 2026-10-24. Evidence is under
+  `board-session-20261023/port-3-3/set5-bb4-run/`. Broader per-core event
+  validation remains outstanding.
 - Thermal and frequency control: **implemented** [controller](thermal.md) and
   [native application](thermal-application.md). The controller
   implements calibrated sampling for CPU, DDR, NPU and GPU sensors, alarm and
@@ -635,27 +667,35 @@ implementation is **planned**. Partial results apply only to the stated scope:
   channel without a valid reading throttles after 1 s and is critical after
   5 s. The thermal application and the thermal service of the
   [integrated OS image](os-image.md) end their session at the critical level;
-  no image reduces load at the throttle level yet. Host checks pass. The
-  policy reads temperatures whose physical acquisition is unqualified.
+  recognition checkpoints pace CPU work at THROTTLE, the GPU caller parks
+  healthy sessions, and the NPU board image blocks new submissions. Host and
+  instruction checks cover these paths. Physical acquisition and return pass
+  in the finite thermal image; physical thermal transitions remain unqualified.
   A [CPU clock driver](cpu-clock.md) is **implemented** and host-modeled. It
   changes CPU-L and CPU-B among the pinned operating points. It raises the
   DCDC5 or DCDC3 voltage before a frequency increase and lowers it after a
   decrease. Its thermal coupling
   admits a raise only at NORMAL after a reading from that cluster's sensor,
   lowers raised clusters to 1014 MHz at THROTTLE and returns them at NORMAL.
-  Every transition needs a grant, which a defined session record carries with
-  the hash of the user's approval; no image carries one or calls the driver.
+  It also admits supported inherited points after inspection, with a session
+  grant and a remaining change. Inherited lowering and restoration reread the
+  source and voltage and issue no PMIC selector writes. Unsupported inherited
+  rates, including 494 MHz, remain ineligible for automatic transitions.
+  The OS image integrates the driver; each physical transition still needs
+  an explicit session grant backed by the user's approval.
   Its cycle timing reports the measured and configured rate of the core that
   ran timed work. Host and instruction models pass. Physical rate changes,
-  rail settling, lock time and PMU access remain unqualified. The user reviewed
+  rail settling and lock time remain unqualified. The user reviewed
   the CPU clock plan and agreed with the design on 2026-10-21. Each physical
-  clock or voltage change still needs the user's approval, and none can run
-  until the board can be reconnected.
+  clock or voltage change still needs the user's approval.
   A separate [finite returning application](../apps/thermal-returning/README.md)
   gathers two sets with the actual driver and disables configured acquisition.
   Thirteen linked cases and Astra review pass; all 46 compiled inputs match
   integration under `thermal-returning-final-20261018/`. Clocks and configuration
-  remain retained. Physical acquisition and return remain untested.
+  remain retained. Physical acquisition and ROM return passed on both boards
+  on 2026-10-23 and on port `3-1` before the 2026-10-24 CPU workload.
+  The latter evidence is under
+  `processor-completion-20261024/port-3-1/thermal-before-workload/`.
 - Storage: **implemented** [SD/eMMC identification and bounded reads](mmc.md)
   for the one-bit legacy-speed profile and negotiated read-only SD profiles.
   Host checks and source comparisons cover capacity, full-range
@@ -762,8 +802,15 @@ implementation is **planned**. Partial results apply only to the stated scope:
   is the only writer of PCK600 domains 1 and 5 and verifies DCDC2 and DCDC4
   once per boot; the framebuffer, G2D and the GPU hold rows, and one service
   task per image runs every PMIC transaction and domain transition. It is
-  **host-modeled**; no board run has used it. Domain 4 moves onto a row in
-  the NPU startup's next stage. CPU rail lowering stops at the boot baseline.
+  **physically exercised** on port `3-3` on 2026-10-24 for supply verification
+  and adoption of domain 1 already ON; no domain switch-on time was measured.
+  The 155% PMIC step bound remains provisional, and the proposed replacement
+  remains under review ([current evidence](handoff.md#board-state-and-recovery)).
+  NPU startup now uses the owner's domain-4 row. CPU rail lowering stops at
+  the boot baseline. The owner retains a domain after a transition
+  acknowledgement arrives at or after its deadline; it does not publish the
+  late result as success. Focused host cases cover this boundary. Physical
+  transition timing and recovery remain unqualified.
   The [shared PMIC provider](pmic-runtime.md) owns the actual bus, pins and
   asynchronous read-only rail snapshots. Host checks, original getter comparisons
   and native compilation pass. A physical returning test now completes production
@@ -1277,7 +1324,62 @@ implementation is **planned**. Partial results apply only to the stated scope:
   model under `gpu-returning-repeat-fix-20261019/`. It reuses 86 of 88 objects
   with unchanged return objects and structure layouts. Root source/binary review
   passes under `root-review.json`, verifying 88 objects, 218 frozen inputs and
-  eight unchanged linked return functions. Physical admission remains false.
+  eight unchanged linked return functions. Its host adapter permits 90 seconds
+  for ROM return, checks the direct forced-FEL entry, and supports explicitly
+  authorized discard of both RAM reservations after a validated normal return
+  ([host procedure](../apps/gpu-finite/HOST.md)). Failure retains ownership.
+  The corrected finite candidate `2ab2cb1b…` launched on port `3-3` on
+  2026-10-24 after 27 successful FEL transactions, but no ROM instance appeared
+  within 90 seconds. Evidence:
+  `processor-completion-20261024/port-3-3/gpu-corrected-guard/runtime/session.json`.
+  The session remains retained, with no further device requests permitted
+  until recovery. No computation, shutdown or return result was captured.
+  A narrower entry checkpoint subsequently passed on port `3-1`, using image
+  `8974f81a…`. It completed CPU startup and local memory preparation, proved
+  providers had never been constructed, and returned to ROM as `003/043`.
+  The matched receipt reports zero GPU jobs. Its explicitly discardable RAM
+  reservation was released after validation. Evidence:
+  `processor-completion-20261024/port-3-1/gpu-entry-checkpoint/runtime/session.json`.
+  No GPU-engine or GPU clock/power register access occurred. GPU computation remains
+  unqualified; this result localizes progress in the checkpoint variant.
+  The DCDC4-only snapshot then passed, reporting the GPU rail enabled and
+  programmed to 800 mV. It reaped the request, parked the PMIC provider and
+  returned normally; no voltage was changed. Evidence:
+  `processor-completion-20261024/port-3-1/gpu-supply/`. A targeted comparison
+  verified the interrupt state affected by that returning probe.
+  The later power/identity/OFF probe (`fd3d5839…`) launched from port `3-1`
+  but did not return within 30 seconds. All six FEL transactions succeeded;
+  no native result identifies the failed stage. The session remains retained
+  pending USB power removal. Evidence:
+  `processor-completion-20261024/port-3-1/gpu-power-id-corrected/session.json`.
+  Exact upload checks and an instruction-model constructor run found no static
+  mismatch. A reviewed candidate verifies actual provider readiness and both
+  supplies, then parks before any GPU power request. Its software checks pass;
+  physical qualification is pending. GPU identity,
+  power transitions and numerical execution remain physically unqualified.
+  The shared owner now initializes and verifies the five source-defined PCK
+  delay words before its first OFF request after adopting an already-ON GPU
+  domain. Repeated transitions and eighteen injected-failure cases pass in
+  software; physical shutdown remains unqualified. This correction does not
+  establish the failed probe's location. Evidence: `gpu-first-off-delays-20261024/`.
+  The OS GPU caller now closes its session before removing the recognition
+  hook after rejecting a completed result. A matching stopped result permits
+  CPU fallback; failed or uncertain shutdown retains ownership. Focused native
+  caller and hook checks pass under `gpu-terminal-retire-20261024/`, with no
+  physical shutdown claim. The official Zero 3W current build selects BXM.
+  Its internal CORE6 sequence is now implemented under the GPU's exclusive
+  local resource ownership, while the shared service retains TOP5 control.
+  Static entry checks, bounded ON/OFF acknowledgement, strict native access and
+  retained failures pass focused software checks. Thirteen linked-client cases
+  cover corrected power/identity image `20726f8b…`; evidence is under
+  `gpu-core-power-20261024/`. Physical CORE acknowledgement, GPU identity and
+  numerical operation remain unqualified. Fresh operating admission must cover
+  both domains; the earlier TOP-only grant is insufficient.
+  The earlier wrong-guard refusal was recovered through reviewed restoration
+  of five SRAM regions on the same instance; that recovery does not qualify
+  GPU execution. The preceding entry capture remains configuration evidence
+  only: eleven clock/reset predicates and seven CPUs OFF passed under
+  `gpu-entry-capture-20261024/physical-3-3/` and `entry-settings.json`.
   Evidence for the preceding finite/publication paths is
   preserved under `gpu-finite-adapter-20261018/layout-correction/` and
   `gpu-returning-application-20261019/ns-publication/`.
@@ -1432,7 +1534,7 @@ implementation is **planned**. Partial results apply only to the stated scope:
   matches complete reference allocations. The [fixed numerical job](gpu-compute-job.md)
   constructs a real compiled shader and command stream, then requires timeline
   advancement and correct guarded output. Source-byte and host lifecycle checks
-  pass; no GPU instructions executed. The [compute service](gpu-compute-service.md)
+  pass with GPU execution modeled. The [compute service](gpu-compute-service.md)
   publishes native workload memory and firmware records before startup, then
   runs owner-only jobs with timeline and guarded-output checks. Focused FreeRTOS
   emulator cases pass; central compute, lifecycle and IRQ targets link.
@@ -1499,8 +1601,13 @@ implementation is **planned**. Partial results apply only to the stated scope:
   stage takes at least 0.535 s on the A76 pair against 0.396 s, and 0.664 s
   if GPU loads take 200 clocks
   ([measurements](designs/gpu-mimus-compute-measurements.md)). The GPU
-  runtime's session, worker and interrupt, the mimus port's hook and GPU
-  execution remain required.
+  runtime's session, worker and interrupt are implemented in
+  [the GPU service](gpu-mimus-service.md), and local mimus `9c57286b7` supplies
+  the exact-sum hook. Healthy thermal CLOSE and reopen retain the allocated
+  pages and create a fresh session; the OS caller parks at THROTTLE, reopens
+  at NORMAL and stops at CRITICAL. Faults remain retained and cannot reopen.
+  Host and AArch64 caller checks pass. Physical GPU execution, thermal
+  shutdown and reopen remain unqualified.
   Wider dispatch geometry, shape/program replacement, graphics, concurrency
   and physical computation remain required. The accepted
   fixed-workload returning profile is preserved separately.
@@ -1960,10 +2067,9 @@ implementation is **planned**. Partial results apply only to the stated scope:
   exact only while consecutive DMA status reads lie within the status
   interval, which keeps a margin under half a frame period; after a longer
   gap the stream delivers nothing more until the owner stops it. The first
-  interval spans the OV5640 stream-on sequence, so a slow start can make a
-  stream deliver nothing while every slot stays owned
-  ([camera capture](camera-capture.md)); whether a real start fits is
-  unmeasured. Address latching at frame start and frame-done timing need a
+  interval now opens immediately before the OV5640 frame-enable write.
+  Focused host checks cover delayed setup, uncertain enable and callback
+  reentry ([camera capture](camera-capture.md)). Address latching at frame start and frame-done timing need a
   module; the native application does not stream yet. Live sensor frames do not reach ISP0: raw receiver input,
   parser-to-ISP0 routing and live ISP0 operation remain required.
   A separate [recorded-image ISP0 application](camera-isp0.md) now accepts one
@@ -2077,6 +2183,49 @@ implementation is **planned**. Partial results apply only to the stated scope:
   [Shared-provider admission](pmic-consumers.md) retains two actual observations
   around the required settling interval and checks their ownership before readiness.
   Focused native instruction checks pass with modeled scheduling and hardware.
+  On port `3-1`, a guarded configuration capture and a separate returning
+  DCDC2 snapshot now establish the current pin/fabric configuration, coherent
+  domain 4 ON, and an enabled supply programmed to 800 mV. The PMIC request
+  completed and was reaped before provider park and ROM return. No voltage
+  change or NPU access occurred. Evidence: `processor-completion-20261024/port-3-1/`
+  under `npu-entry`, `pmic-access` and `pmic-supply`.
+  Observed PLL_NPU bit 24 is now preserved and checked for drift during startup,
+  following the pinned clock-driver implementation. Focused checks preserve
+  MMIO counts and reject drift and other unsupported bits. Neither the capture
+  nor the startup correction establishes physical NPU execution.
+  The separate pre-provider checkpoint (`9afb6738…`) subsequently passed
+  CPU/platform startup and local-memory preparation on port `3-1`. Its matched
+  receipt reports zero jobs and no functional NPU success. ROM returned as
+  `003/044`, and all 18 MiB of saved DRAM was restored and verified. Evidence:
+  `processor-completion-20261024/port-3-1/npu-entry-checkpoint/runtime/session.json`.
+  A subsequent guarded GIC capture found interrupt 97 disabled, clear and
+  inactive. The finite numerical image (`9e4adabf…`) then completed two jobs,
+  copied and reaped their outputs, reached local CLOSE/stop and provider
+  quiescence, returned to ROM and restored 18 MiB. Numerical comparison failed:
+  the captured 400-byte output has 100 zeros followed by 300 `ff` bytes, and
+  its digest matches the first job's digest. Evidence:
+  `processor-completion-20261024/port-3-1/npu-numerical/runtime/session.json`.
+  This establishes the checked job and retirement path, not correct inference.
+  A reviewed derived record supplies ROM continuity without changing status 1
+  or the original capture. PLL_NPU, domain 4, DCDC2 and SRAM remain powered;
+  another startup requires a separately valid disabled-PLL lifetime. Offline
+  audit found no compiler-artifact mismatch or justified register correction.
+  The reviewed host now preserves the stopped runtime allocation and metadata
+  before restoration for this exact numerical image. Four fixed reads capture
+  1,085,880 bytes only after validated failure retirement; capture failures
+  retain ownership. This diagnostic has not run on hardware.
+  The accompanying offline analyzer compares commands, tensors, address
+  mappings and output copies against the accepted preparation artifacts.
+  Nineteen synthetic cases pass; the physical numerical cause remains unknown.
+  Correct numerical execution, power-off/restart and thermal
+  management remain unqualified.
+  The separate finite thermal profile is now implemented and software-checked.
+  It requires fresh observations from all five sensors before work, stops new
+  submissions on refusal, drains accepted work within a fixed deadline, and
+  verifies THS disable, interrupt quiet and final cleanup before normal return.
+  A synchronized fault latch and post-restoration checks preserve that deadline
+  through provider parking, cache cleaning and GIC restoration. It has not
+  run on hardware and does not resolve the observed numerical mismatch.
   Earlier two-core checks pass with modeled device registers and real FreeRTOS locks; the central
   target links. Uncertain register operations retain mutex ownership before
   release. [Trusted convolution registration](npu-convolution.md) authenticates
@@ -2154,9 +2303,8 @@ implementation is **planned**. Partial results apply only to the stated scope:
   pass; modeled output does not establish numerical inference. The supervised
   image runs the power service and the startup sequencer; focused checks pass
   with modeled device responses. Its host path passes 33 packaging/capture
-  cases and five frozen-input binding regressions. Startup admits only a
-  disabled PLL_NPU and an OFF domain 4; unsuitable supply voltage remains
-  unsupported. Concrete boot
+  cases and five frozen-input binding regressions. Startup requires a disabled PLL_NPU and admits coherent OFF or ON domain 4
+  through the shared owner; unsuitable supply voltage remains unsupported. Concrete boot
   authority, physical rail/PCK qualification, effective memory confinement,
   numerical execution and physical qualification remain outstanding.
 
@@ -2173,12 +2321,7 @@ implementation is **planned**. Partial results apply only to the stated scope:
   catalogue graph. Sessions reserve memory from the platform pool by model
   size, which is DDR in the extended cached profile. QEMU checks with modeled
   device output pass for polled, interrupt, integrity-fault and 6.2 MiB
-  reserved cases. No board image links the runtime. An image derived from the
-  board image would construct a second GPU/PCK resource manager beside the
-  board's, and its 2 MiB device pool is smaller than the 2,195,456 bytes that
-  the three small catalogue models need. An image derived from the single-core
-  NPU images needs their provider setup to select the session runtime
-  ([remaining work](npu-session.md#remaining-work)).
+  reserved cases. This earlier session API is superseded by the runtime below.
   The [NPU runtime](designs/npu-breadth.md) replaces the session code: up to
   eight client tasks each load any catalogue model into a fixed slot at
   runtime, switch it, and run it with inputs and outputs in place, one request
@@ -2186,9 +2329,19 @@ implementation is **planned**. Partial results apply only to the stated scope:
   round-robin starts with interrupt completion. QEMU checks with modeled
   device output pass for model switching, refused loads, concurrent loading,
   late and dropped interrupts and interim integrity faults, and a host check
-  bounds start and reply latency per image. No board image links it; the
-  single-core provider must construct it for the large-graph image, and
-  shader graphs cannot yet be loaded. Physical execution remains unqualified.
+  bounds start and reply latency per image. The supervised
+  [NPU board image](designs/npu-board.md), `sunstone-a733-npu-board`, links
+  this runtime with one slot, the five-model catalogue, shared board providers
+  and extended memory. It is implemented and host-modeled; the FIFO-direct
+  USB path and physical inference qualification remain outstanding. Native
+  thermal supervision now requires fresh readings from all five channels and
+  NORMAL policy before startup or SUBMIT. THROTTLE blocks new jobs; CRITICAL
+  drains accepted work under a fixed five-second stop bound, capped by the
+  session deadline. Faults retain resources. The version-2, 1,000-byte session
+  requires physical thermal authority; older sessions are refused. Focused
+  host, native-provider and runtime checks pass. No physical attempt of this
+  board image has run; thermal stop and inference remain unqualified. Shader
+  graphs cannot yet be loaded.
   The NPU startup and
   clock-handoff QEMU models pass again now that their fixtures report the
   enabled, stable 24 MHz DCXO that the drivers require. A

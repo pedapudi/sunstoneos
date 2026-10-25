@@ -100,7 +100,7 @@ void hdmi_check_run(unsigned mode)
 {
  locks.initialized=1;locks.now=a733_counter_clock_now;locks.context=&counter;
  clocks.now=locks.now;clocks.context=&counter;rails.binding.clocks=&clocks;rails.binding.gpu=&pck;
- pmic.self=&pmic;pmic.clocks=&clocks;pmic.rails=&rails;pmic.ops.outside=outside;
+ pmic.self=&pmic;pmic.clocks=&clocks;pmic.rails=&rails;pmic.pmic_bus_ops.outside=outside;
  c=(struct a733_hdmi_native_config){.clocks=&clocks,.rails=&rails,.pmic=&pmic,.locks=&locks,
   .pck=&pck,.task=(void *)1,.owner=1,.epoch=2,.recovery=mode==0||mode==2?3:0,
   .request={.mode=mode==4?A733_HDMI_1080P60:A733_HDMI_720P60,.range=A733_HDMI_LIMITED,.phy_reference_hz=24000000,

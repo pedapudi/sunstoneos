@@ -142,20 +142,43 @@ While idle, the owner's poll applies the level:
 - Under THROTTLE, the driver lowers a cluster that it raised above 1014 MHz
   back to 1014 MHz. The lowering needs no sensor reading, because a channel
   without readings is itself a reason to throttle. It consumes no change and
-  keeps the voltage. If it ends REFUSED or EXPIRED, the driver does not start
-  it again in the same THROTTLE episode.
+  keeps the voltage. It can also lower an inspected inherited point when the
+  session grants that cluster, permits at least 1014 MHz and has a remaining
+  change. An inherited lowering consumes one change when its first clock
+  write, the park on the oscillator, begins; one refused or expired before
+  that write consumes none. If it ends REFUSED or EXPIRED, the driver does
+  not start it again in the same THROTTLE episode.
 - At NORMAL, the driver raises a cluster that THROTTLE lowered back to the
   point it ran before, once. The raise needs the cluster's sensor reading and
-  consumes a change, as a request does. Without a remaining change, the
-  cluster stays at 1014 MHz. A NORMAL level also ends the THROTTLE episode,
-  so a failed lowering is tried again when THROTTLE returns.
+  consumes a change, as a request does. The grant must also cover the original
+  point. Without that authority, the cluster stays at 1014 MHz. A NORMAL
+  level also ends the THROTTLE episode, so a failed lowering is tried again
+  when THROTTLE returns.
 - An owner request for a cluster cancels any pending raise of that cluster.
 
 The policy's hysteresis is 2 °C for the CPU channels and none for the GPU, so
 a GPU near 90 °C can alternate the level at successive readings. Each return
 to NORMAL then consumes a change, so the grant's change count bounds the
-number of raises. Inherited rates above 1014 MHz that this driver did not set
-are not lowered.
+number of raises. An inherited point must be an exact row supported by the
+chip's bin. Inspection checks the oscillator, PLL, mux, modulation enables
+and voltage before admitting it for thermal control. Unsupported rates,
+including the recorded 494 MHz boot rate, remain readable without becoming
+eligible for automatic transitions.
+
+Before an inherited lowering or restoration, the driver acquires the clock
+and rail leases and rereads the source. The source must still match the
+tracked rate; a lowering also requires a source above 1014 MHz. The observed
+voltage must cover the source point, target point, shared DSU requirement and
+recorded rail floor. Insufficient voltage refuses the transition. These
+inherited thermal transitions never write a PMIC selector, including during
+restoration. A completed explicit owner request returns the cluster to the
+ordinary requested-transition policy.
+
+Inspection alone grants no clock change. Sessions without a grant, or with
+an exhausted grant, leave inherited high rates unchanged. The recognition
+checkpoint pacing and critical-temperature stop remain active independently
+of CPU clock authority. Physical clock changes still require approval for
+each transition; this software path does not establish thermal qualification.
 
 The first physical trial should be CPU-L at 1196 MHz. That point needs
 800 mV on every bin except vf0100, and 850 mV on vf0100 or under the code 0
@@ -188,7 +211,12 @@ step and never waits in a loop:
 6. When raising the rate, write a higher voltage first, then wait for the
    ramp of `|ΔV| ÷ 250 µV/µs`, the board device tree's ramp delay. No write
    is made when the present voltage is already enough.
-7. Change the frequency. The remaining time before the caller's deadline
+7. Recheck the current thermal policy before the first mux or PLL write.
+   A policy change during the PMIC read or voltage ramp can now refuse the
+   target. Refusal preserves the old frequency and any confirmed higher
+   voltage, then releases both leases; it makes no rollback write. Once the
+   mux has switched, the bounded update and unpark sequence completes.
+   The remaining time before the caller's deadline
    must cover both PLL waits and a 10 ms margin for the owner polls that
    follow lock, 90 ms in total; otherwise the transition ends EXPIRED here,
    before any PLL or mux write. Then park the mux on the DCXO, write N, set
@@ -231,7 +259,8 @@ completes without writes.
 `a733_cpu_clock_inspect` runs a read-only pass over one cluster without a
 grant: the leases, the report and the cluster's pattern and LFM words, and
 one PMIC snapshot, whose voltage it keeps and which records the rail's boot
-floor. It writes no clock or PMIC register and consumes no change.
+floor. It also records supported inherited points for granted thermal control.
+The inspection writes no clock or PMIC register and consumes no change.
 `a733_cpu_clock_burst` polls once and then keeps polling while the cluster
 is parked, up to a time budget and a bounded number of polls, so an owner that
 polls once per tick does not leave a cluster on the oscillator across ticks
@@ -246,9 +275,9 @@ task, which runs every tick, calls the driver after each thermal step, so a
 CRITICAL reading ends the session before any clock step. It inspects CPU-L
 and CPU-B, requests each granted cluster's highest point once with a 120 ms
 deadline when that cluster's sensor has a reading, and then lets the driver
-follow the thermal level. Each pass is one burst with a 200 µs budget. The
-register adapter in `apps/os/cpu.c` issues `DSB SY` after each mux write. The
-recognizer prints a `CLOCK` line before and after each recognition with the
+follow the thermal level. Each pass is one burst with a 200 µs budget.
+Automatic thermal transitions have a 500 ms deadline. The register adapter in
+`apps/os/cpu.c` issues `DSB SY` after each mux write. The recognizer prints a `CLOCK` line before and after each recognition with the
 applied points, the rail voltages, the transition count and the largest
 parked time ([design](designs/cpu-a76-dvfs.md)).
 
@@ -313,6 +342,23 @@ It also confirms that 1014 MHz needs 800 mV in every column and that the
 driver's sensor channels match the thermal driver's channel order. It then
 builds `checks/cpu-clock-model.c` with AddressSanitizer and
 UndefinedBehaviorSanitizer and compiles the changed units for AArch64.
+
+The focused `cpu-clock-model --late-policy-only` run covers fourteen cases
+at the last boundary before clock writes. Both clusters refuse late THROTTLE
+and CRITICAL after either sufficient inherited voltage or a completed upward
+ramp. Inherited restoration is also refused; requests at the thermal ceiling
+and safe lowerings still complete. The pre-fix driver reproduced a raise from
+1,014 to 1,404 MHz with five clock writes after THROTTLE. The corrected cases
+require zero subsequent clock or voltage writes, the old rate, the confirmed
+voltage and complete lease release. Raw results and frozen inputs are in
+`~/.cache/sunstoneos/evidence/cpu-late-thermal-20261024/`.
+
+The additional permission check executes once per attempted clock transition:
+two existing policy acquire loads, no additional state, MMIO, task wake or
+poll. Clang 21 at AArch64 `-O2` grows the driver object text from 12,956 to
+12,992 bytes. The existing PLL completion sequence and deadlines are unchanged.
+This model evidence does not qualify physical thermal response, clock changes,
+voltage changes or sustained multicore operation.
 
 The model runs the actual driver, PMIC provider, rail ledger, clock registry
 and thermal policy against modeled CPU PLL words, modeled temperature samples
@@ -394,6 +440,21 @@ lock the owner sleeps one tick while parked.
 
 Altered native cycle code failed the instruction model when it restored DAIF
 after all reads, ignored the filter, wrote a counter reset or kept `D` set.
-The check passed on 2026-10-24.
+The check passed on 2026-10-24. Its inherited-rate cases cover both clusters,
+repeated lowering and restoration, missing or exhausted authority, unsupported
+source points and bins, changed source rates, insufficient rail voltage,
+stale sensors, critical temperature and one attempt per throttle episode.
+Three successive thermal transitions per cluster issue 15 clock writes and
+zero PMIC writes. The existing requested raise still issues five clock
+writes and one PMIC write in its voltage-raising case.
+
+`checks/os-cpu-clock-native.py --build BUILD --output OUTPUT` uses a configured
+CPU-clock-enabled OS build to compile and execute the actual OS register
+adapter under AArch64 emulation. It verifies the admission report, all 14
+allowed reads, four allowed writes, the barrier after each mux write, and
+refusals for other addresses or owners. The CPU-clock-enabled supervised OS
+also builds and passes its link check. Existing recognition thermal-checkpoint
+evidence remains applicable because this change does not alter that code.
+
 These are software results only. Physical lock time, settling, rail
 accuracy, frequency, PMU access and thermal behavior remain unmeasured.

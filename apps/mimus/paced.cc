@@ -37,15 +37,19 @@ bool consume(void *context, std::span<const int16_t> pcm,
     if (!result) return error(asr::ErrorName(result.error()));
     const uint64_t compute_us = (asr::platform::MonotonicNanos() - start) / 1000;
     auto words = pipeline::SplitWords(result->text);
-    if (words.size() != result->words.size()) return error("word alignment differs");
     std::string marks, capitals;
-    for (size_t i = 0; i < words.size(); ++i) {
-        const auto &word = result->words[i];
-        words[i].scored = word.scored;
-        words[i].mark = static_cast<uint8_t>(word.mark);
-        words[i].capital = word.capital;
-        marks += word.scored ? char('0' + unsigned(word.mark)) : '9';
-        capitals += word.capital ? '1' : '0';
+    // As in whole-recording recognition, absent punctuation leaves the
+    // formatter's plain words intact and emits no score records.
+    if (result->punct) {
+        if (words.size() != result->words.size()) return error("word alignment differs");
+        for (size_t i = 0; i < words.size(); ++i) {
+            const auto &word = result->words[i];
+            words[i].scored = word.scored;
+            words[i].mark = static_cast<uint8_t>(word.mark);
+            words[i].capital = word.capital;
+            marks += word.scored ? char('0' + unsigned(word.mark)) : '9';
+            capitals += word.capital ? '1' : '0';
+        }
     }
     const pipeline::SegmentTiming timing{segment.speech_begin, segment.speech_end, 0};
     std::optional<pipeline::BoundaryDecision> boundary;
@@ -87,9 +91,12 @@ bool consume(void *context, std::span<const int16_t> pcm,
              result->feature_crc, result->log_prob_crc, unsigned(result->frames), unsigned(pcm.size()),
              static_cast<unsigned long long>(compute_us));
     platform_puts(line);
-    platform_puts("TEXT "); platform_puts(result->text.c_str()); platform_puts("\nMARKS ");
-    platform_puts(marks.c_str()); platform_puts("\nCAPS "); platform_puts(capitals.c_str());
-    platform_puts("\nFORMATTED "); platform_puts(formatted.c_str()); platform_puts("\n");
+    platform_puts("TEXT "); platform_puts(result->text.c_str()); platform_puts("\n");
+    if (result->punct) {
+        platform_puts("MARKS "); platform_puts(marks.c_str()); platform_puts("\nCAPS ");
+        platform_puts(capitals.c_str()); platform_puts("\n");
+    }
+    platform_puts("FORMATTED "); platform_puts(formatted.c_str()); platform_puts("\n");
     return true;
 }
 }

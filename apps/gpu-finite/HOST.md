@@ -1,20 +1,25 @@
-# Returned-RAM GPU capture
+# Finite GPU return and RAM disposition
 
 The GPU host adapter is for the coordinator operating one reviewed returning single-core image. It prepares immutable launch inputs and captures copied GPU output through the newly returned ROM service. Preparation and modeled checks require no board access. A runnable physical admission is not supplied, and neither the image manifest nor successful software checks grant physical eligibility.
 
-`prepare.py` requires the distinct `gpu-single-core-returning-v1` profile and `a733-gpu-finite-entry-v1` admission. It preserves the existing GPU session, launch request, contract and launcher producers. Admission requires current CPU and GPU DDR reservations, the existing single-core platform facts, initial GPU isolation/power/mapping facts, and an explicit supervisor. The `a733-gpu-finite-return-review-v1` record must bind the exact image, build identity, target instance, physical port, supervisor, launcher hash and all host source hashes. Its evidence must cover architectural reset, software handoff, successful normal-return retirement and failure retention. Old retained-only admission records are rejected.
+`prepare.py` requires the distinct `gpu-single-core-returning-v1` profile and `a733-gpu-finite-entry-v1` admission. It preserves the existing GPU session, launch request, contract and launcher producers. Admission requires current CPU and GPU DDR reservations, finite single-core platform facts, initial GPU isolation/power/mapping facts, and an explicit supervisor. The `a733-gpu-finite-return-review-v1` record must bind the exact image, build identity, target instance, physical port, supervisor, launcher hash and all host source hashes. Its evidence must cover architectural reset, software handoff, successful normal-return retirement and failure retention. Old retained-only admission records are rejected.
 
-The supervision record must explicitly cover successful CLOSE/stop/quiescence followed by ROM retirement, failure retention until complete power removal, DRAM restoration only after validated normal return, no restoration of old SRAM, manual whole-board power removal and stopping after the first failure. These are input requirements; preparation never invents evidence or fills them with successful defaults. Root must review these lifetime semantics before any execution.
+The fixed returning image seals exactly 592 session bytes. Preparation rejects
+larger program and texture envelopes before reading admission evidence or
+creating a bundle. The shared renderer accepts those envelopes for other images;
+its acceptance does not change the fixed returning image's session layout.
 
-The exact save and restoration envelopes are `0x41000000..0x42200000` and `0x48000000..0x79000000`. The first 18 MiB covers code, writable image data, retained session and receipt, BSS, stacks, uploaded session, protected contract/result, monitor state/log and translation tables. The second 784 MiB preserves the complete authenticated 768 MiB WB and 16 MiB NC geometry. The five allocated GPU parents occupy smaller intervals, but that fact does not establish confinement or permit a smaller snapshot.
+The supervision record must cover successful CLOSE/stop/quiescence followed by ROM retirement, failure retention until complete power removal, no restoration of old SRAM, manual whole-board power removal and stopping after the first failure. Its RAM condition requires either restoration or authorized discard only after validated normal return. These are input requirements; preparation never invents evidence or fills them with successful defaults. Root must review these lifetime semantics before any execution.
 
-`host.py` divides these envelopes into 201 chunks, each at most 4 MiB. The last CPU chunk is 2 MiB; the GPU chunks end at `0x79000000`. Each snapshot is size-checked, synchronized and SHA-256 bound before launch. The shared protected preload helper separately snapshots SRAM and uploads the immutable ELF segments, session, request and launcher with readback. The adapter requires four low protected-pin samples and a disabled watchdog before the sole execution request.
+The default mode restores the original RAM contents. Its save and restoration envelopes are `0x41000000..0x42200000` and `0x48000000..0x79000000`. The first 18 MiB covers code, writable image data, retained session and receipt, BSS, stacks, uploaded session, protected contract/result, monitor state/log and translation tables. The second 784 MiB preserves the complete authenticated 768 MiB WB and 16 MiB NC geometry. The five allocated GPU parents occupy smaller intervals, but that fact does not establish confinement or permit a smaller snapshot.
+
+In restoration mode, `host.py` divides these envelopes into 201 chunks, each at most 4 MiB. The last CPU chunk is 2 MiB; the GPU chunks end at `0x79000000`. Each snapshot is size-checked, synchronized and SHA-256 bound before launch. The shared protected preload helper separately snapshots SRAM and uploads the immutable ELF segments, session, request and launcher with readback. After preload has saved the helper scratch, the adapter checks the five pinned ROM instructions at the direct forced-FEL entry. It requires a disabled watchdog before the sole execution request.
 
 The live lock, transport failure latch, passive new-ROM lookup and failure retention come from `tools/a733-returning-host.py`. The coordinator supplies an existing root-owned claim; the adapter creates no queue authority. The shared helper uses the existing per-port lock and guard, validates live identity before requests and stops all further transport after failure. GPU admission and report interpretation remain local to this application.
 
 After a new A733 ROM instance appears, the adapter reads the protected monitor result, private platform log, retained receipt and copied-output packet. `report.py` requires matched epoch, generation, lease, successful terminal states, sequences 1 and 2, exact publication bounds and bounded counter ordering. Both sets of 32 numerical words must equal the fixed workload's expected arithmetic and agree between log and packet. An incomplete, ambiguous, negative or mismatched report cannot authorize restoration.
 
-Before the first restoration, every saved chunk is rehashed. Each chunk is then loaded from those same saved bytes, checked again, sealed for transfer and compared byte-for-byte with its readback. Success permits ownership release only after all 201 readbacks match. Any intermediate failure retains ownership and prevents success or automatic retry. The returned ROM owns SRAM; the adapter never restores the prior SRAM snapshot.
+In restoration mode, every saved chunk is rehashed before the first restoration. Each chunk is then loaded from those same saved bytes, checked again, sealed for transfer and compared byte-for-byte with its readback. Restoration mode permits ownership release only after all 201 readbacks match. Any intermediate failure retains ownership and prevents success or automatic retry. The returned ROM owns SRAM; the adapter never restores the prior SRAM snapshot.
 
 Use the existing preparation interface with the new application-local producer:
 
@@ -29,3 +34,214 @@ The coordinator can invoke `host.py` with `--bundle`, `--fel`, `--evidence`, `--
 Root source review found no new blocker in admission, copied-result validation or full DRAM restoration. All 18 host sources match the preserved preparation bundle. Evidence is recorded in `gpu-returning-host-20261019/root-host-source-review.json`; the 93 accepted host cases and shared transport checks were reused. Target-specific admission and physical GPU operation remain outstanding.
 
 `host-check.py` exercises the exact image/profile layout, report mutations and actual GPU capture callback with modeled transport/files. The file model preserves the full declared lengths without allocating 802 MiB per case. It checks all chunk addresses, the CPU/GPU boundary, final extent and failures midway through backup or restoration. `prepare-check.py` runs the actual launcher and bundle producers using explicitly synthetic software-only evidence, then checks admission, root-review and bundle rejection. Its fixtures name no physical port and provide no physical authority. The accepted 25 native handoff cases and separately reviewed shared transport checks are reused.
+
+## Failed physical attempt and input audit
+
+The corrected two-job candidate was attempted on 2026-10-24. Evidence is under
+`~/.cache/sunstoneos/evidence/processor-completion-20261024/port-3-3/gpu-corrected-guard/`.
+Its `runtime/session.json` records 27 successful FEL transactions, including
+`exe 0x52000`, followed by no distinct ROM instance within 90 seconds. The host
+retained ownership on that outcome. This establishes execution request delivery; launcher
+admission, AArch64 entry, provider construction and GPU execution remain
+unobserved.
+
+The offline audit compared the frozen host, preload and launcher with the
+candidate's source closure in
+`gpu-returning-repeat-fix-20261019/object-source-closure.json`. All nine uploaded
+regions matched their frozen bytes on readback. The 592-byte session, 288-byte
+contract ABI within its 4,096-byte buffer, and 128-byte request agree on image,
+entry digest, epoch, generation, lease and reservation. No binding mismatch was
+found. The session SHA-256 is
+`a4e48a555995ee49ef3e4f1279e98939fe8a91e016792c6e79badc1b04d6a5ec`;
+the bundle records the candidate image and launcher hashes.
+
+The candidate's frozen monitor parks on faults or deadline expiry with timers
+disabled. Absence of a ROM return therefore cannot identify the failing native
+stage. Its normal return uses RVBAR `0x20` and `RMR_EL3=2`; the
+[boot-input guard classification](../../docs/watchdog.md#choose-the-boot-input-guard-from-the-reset-path)
+explains why that path has no low-input requirement. The ROM instruction check
+runs after preload snapshots SRAM because FEL `readl` executes a helper in
+scratch RAM. A raw ROM read is not a verified replacement; the captured-ROM
+procedure records its rejection.
+
+The frozen monitor writes result magic `0x4153373347535232`, selected by its
+`A733_SMP_RESULT_MAGIC` build definition in `commands.json`. The normal host
+parser requires that magic and completion detail `0`. A checkpoint with detail
+`1` or a zero-job packet cannot satisfy the normal two-job result contract.
+The focused `host-check.py --writer-only` check connects the actual frozen
+monitor writer to the host parser. It preserves the unchanged monitor bytes
+and labels its arithmetic/log/receipt companions as synthetic.
+Evidence is under `~/.cache/sunstoneos/evidence/gpu-monitor-parser-20261024/`.
+This corrects a future capture rejection; it cannot explain absence of ROM
+before any result capture.
+
+## Candidate and bounded physical procedure
+
+Use the corrected two-job image under
+`~/.cache/sunstoneos/evidence/gpu-returning-repeat-fix-20261019/`:
+
+- Image: `build/return.elf`, SHA-256
+  `2ab2cb1b3bac150d5eb695793ab0eb39bb453afc7fbd7ecb2f595ebfca3fd08d`.
+- Manifest: `manifest.json`, build identity
+  `34572150354cb042d46a5cc9c5830c93f5c60eaae973a5e449f27033b32de5e2`.
+- Reused evidence: `root-review.json`, `changed-path-result.json`,
+  `client-result.json` and `host/result.json`. The earlier publication and
+  host evidence retain the limits described in [RETURN.md](RETURN.md).
+
+The preparation and capture checks default to this corrected image. The older
+publication image has a callback that rejects the second submission; its
+publication results remain useful, but it is not the two-job candidate.
+
+The candidate starts at `sd_single_core_entry` on the boot CPU, checks that
+the seven secondary CPUs remain OFF, and enters the single-core FreeRTOS SRE
+port at Nonsecure EL1. Its tasks run at EL1t. It creates no native USB task.
+After two jobs, healthy CLOSE and provider quiescence, the EL1 exit shim
+publishes the output before SMC enters the GPU return monitor.
+The monitor restores interrupts and requests the reviewed ROM reset.
+This path has no dependency on the all-core boot barrier. Single-core kernel
+and USB results from another image do not establish this candidate's GPU
+startup, computation, stop or return.
+
+Each job uses one workgroup of 32 lanes, with unsigned input words `seed=17`
+and `factor=3`. The expected words follow the [fixed shader](../../docs/gpu-compute-job.md).
+An independent host calculation gives first word `0x9e3779ad`, last word
+`0x9e5679c8`, and SHA-256
+`a7d48e5bff0ccbb3d2f7557f5b2ba5db5014a958e2fa11a9599c2f7b8b6bd4ef`
+for one 128-byte little-endian result. Both jobs produce the same words,
+with completion sequences 1 and 2. Concatenating their 256 result bytes gives
+SHA-256 `30f134071ed2090211b1e1a68949480afb56a960768775e30cdbba27a54d02c8`.
+The return packet, log and receipt must also pass `report.py` before restoration.
+
+Before a physical attempt, the coordinator must bind the candidate to the
+current target and establish the [GPU entry facts](../../docs/gpu-application.md).
+These include initial isolation and drain, the complete RAM reservations, seven CPUs OFF,
+supported settled DCDC4 power, the 400 MHz parent, shared-provider ownership,
+remote-master exclusion and the required mappings. The entry records must
+also cover the platform validator's ROM USB ownership conditions.
+Current ROM continuity requires its recorded cache-off preparation and fresh
+survey. A board's earlier observations cannot supply another powered lifetime's
+admission. No physical admission is present in the software fixtures.
+
+The port `3-3` records under
+`~/.cache/sunstoneos/evidence/board-session-20261023/port-3-3/` provide reusable
+facts when the coordinator establishes continuity from their powered lifetime:
+
+| Record | Fact available for admission |
+| --- | --- |
+| `ddr-2/session.json` | Successful cold training of 12,288 MiB after the recorded power removal. It does not establish exclusive ownership of the GPU reservations. |
+| `set5-bb2-run/session.json` | The current single-core kernel completes and returns. The GPU candidate has its own frozen monitor and memory geometry. |
+| `set5-r9-v6-usb/session.json` | Native USB takeover, exchange, quiescence and ROM return work with the changed PMIC provider. The finite GPU candidate creates no USB task. |
+| `bb6-run/` and `set5-bb6-run/` | PMIC service and DCDC4 supply verification work in this lifetime. Reuse the configured 800 mV evidence with settling and subsequent writer exclusion. |
+| `bb8-run/` | NSI priority changes persist. The session must describe those fields and the observed 400 MHz MBUS clock. |
+
+These records avoid repeating kernel, USB, DDR or PMIC checks merely to prepare
+the candidate. They do not yet bind its GPU PLL, initial reset/drain, complete
+RAM ownership or current launch instance. Those are the remaining physical
+admission facts; full multicore operation and watchdog qualification are not
+dependencies of this image.
+The [entry capture procedure](ENTRY.md) gives the remaining register addresses,
+native predicates, access widths and scratch-restoration steps.
+
+The current host closure adds the session-size guard and changes ten inherited
+files, including the shared returning transport and launcher inputs. An old
+root-review record cannot authorize the current bytes. Freeze and review the
+current 18-file host closure, launcher and target-specific admission together
+through the existing `prepare.py` interface. Reuse unchanged component evidence;
+check only affected launcher or host behavior identified by that review.
+
+Once those conditions are satisfied, the coordinator can reserve one attempt
+on an available, qualified board using the existing queue and per-port lock.
+`host.py` preserves RAM according to the admitted disposition, launches once,
+and allows 90 seconds for a new
+ROM instance after the execution request returns. The launcher grants a
+60-second native deadline; the host adds the shared transport's existing
+30-second ROM discovery allowance. This allowance does not extend native
+execution authority. The host records the selected window and rejects a node
+observed at or after expiry, retaining ownership for recovery. Other shared
+transport callers retain their default 30-second window.
+Individual memory transfers have 120-second limits and other FEL requests
+have 15-second limits. These limits do not bound the total snapshot time.
+Success requires both numerical results, normal stop, validated return and
+the admitted RAM disposition. Restoration additionally requires all 201
+readbacks. The first transport failure or invalid return
+retains ownership for supervised recovery and forbids another attempt.
+Invoke the runner directly in a persistent process and observe its progress
+without a process-killing timeout. Its failure path holds the board lock until
+coordinator recovery. A wrapper that kills the runner after 300 seconds would
+release that lock despite unresolved device ownership.
+
+Offline evidence for the session-size change is under
+`~/.cache/sunstoneos/evidence/gpu-resume-20261024/`: `session-envelope/result.json`
+records two larger-envelope refusals and `producer/result.json` records the
+actual corrected-image producer and validator. Its newly built launcher has
+SHA-256 `7af33010ca810084a5b5dee8f23aa0d16f461f7c34ebcc0bad8f50e779aa18c8`.
+That successful producer check models admission; it grants no board authority
+and does not execute launcher instructions. Earlier host and native behavioral
+checks were reused. No physical test or performance measurement ran.
+
+The return-window change adds no FEL requests or copies. Passive discovery
+keeps its 50 ms polling interval: at most 1,800 sleeps over the GPU window,
+compared with 600 over the default window. The fake-clock selection in
+`apps/npu-finite/transport-check.py --return-window-only` covers late success,
+strict expiry, retained failure, invalid configuration and GPU adapter selection.
+
+The default restoration budget remains 802 MiB read, 802 MiB restored and 802 MiB read
+back: 2,406 MiB total. At assumed payload rates of 570,000 and 250,000 bytes
+per second, transfers take approximately 74 and 168 minutes before overhead.
+These estimates are not new physical measurements. Saved and restored files
+need at least 1,604 MiB of disk space. The five allocated GPU parents and
+cache-publication bounds do not prove complete firmware or device write
+confinement, so they do not justify reducing the preservation envelopes.
+
+Focused evidence for the host window is preserved under
+`~/.cache/sunstoneos/evidence/gpu-launch-readiness-20261024/`.
+`return-window-final/transport-result.json` records fifteen passing cases;
+`producer/result.json` records preparation and validation with the unchanged
+native image and launcher. The producer uses modeled ownership records and
+does not grant physical admission. The prior target history and unresolved
+coordinator facts remain in `gpu-finite-admission-20261024/`.
+
+A supervisor may explicitly authorize discarding both complete RAM reservations
+when they have no other owner and contain no data that must survive. Set
+`ram_disposition` to `discard` in admission and its source-bound return review.
+Both exact-range DDR records must set `contents_discardable` to true; this means
+that no original contents require retention. Use the supervision reference
+`discardable-DRAM-release-only-after-validated-normal-return` in place of
+`DRAM-restore-only-after-validated-normal-return`. Missing or `restore` mode
+keeps the existing full-preservation path; unknown modes are refused.
+
+Discard mode skips the 201 parent backups and 201 restoration transactions.
+The saved transfer is 2,406 MiB, with at least 1,604 MiB less evidence storage.
+Protected SRAM capture, immutable upload/readback, both numerical results,
+native stop/drain and validated normal ROM return remain required. No old SRAM
+is restored. Success records `ram_disposition: discarded`, `dram_restored: false`
+and permits ownership release; restoration records `restored` and true.
+Failures retain ownership and leave disposition unresolved. Storage is untouched.
+
+The GPU-specific platform schema is `a733-gpu-finite-platform-v1`. It retains
+the seven CPU, memory and counter conditions, plus USB clock/power/reset
+ownership and stable supplies with excluded writers for ROM transport.
+The frozen image skips its native USB task and binds only the shared PMIC
+providers. It therefore needs no native USB device-mapping, controller-takeover
+or IRQ188/189/190 condition. GPU mappings, isolation and shared-resource ownership
+remain required by the separate GPU-entry record. The older twelve-condition
+platform schema remains accepted for compatible restoration admissions.
+
+Focused evidence under `~/.cache/sunstoneos/evidence/gpu-discardable-20261024/`
+records eight host cases and eleven admission/producer cases. The modeled
+capture makes 410 transport calls in restoration mode and eight in discard
+mode, excluding unchanged protected preload. Both producers retain the same
+native image and launcher. Model ownership records grant no physical authority.
+
+Normal return writes RVBAR `0x20` and requests `RMR_EL3 = 2`. The pinned ROM
+entry sets `r6 = 0x5c` and branches to the FEL dispatcher, bypassing the normal
+boot-input sampler. The host checks the same five instruction words as the
+physically exercised CPU return runner. A high boot-input sample does not
+refuse this finite profile. Native failures still retain ownership and require
+coordinator recovery; this correction supplies no watchdog recovery guarantee.
+
+The instruction check uses the existing FEL `readl` helper, which writes SRAM
+scratch. It therefore follows the protected preload and retains ownership on
+any refusal. Direct ROM reads are not substituted: the captured board ROM
+rejected that access. Recovery from a known pre-launch refusal needs separate
+coordinator review; the runner neither restores automatically nor retries.

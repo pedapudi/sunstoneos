@@ -22,7 +22,7 @@ int gpu_finite_bind_pmic(void)
     /* Reuse the existing provider constructors without constructing USB0. */
     n->pmic_task=app.handles[0];
     return a733_pmic_native_init(&n->pmic_native,&n->locks,n->pmic_task)&&
-        a733_pmic_init(&n->pmic,&n->boot.pmic,&n->pmic_native.operations,&n->pmic_native,
+        a733_pmic_native_bind(&n->pmic,&n->boot.pmic,&n->pmic_native,
             &n->clocks,&n->rails,&n->pins)&&
         a733_gpu_resources_native_use_pmic(&n->gpu_native,&n->gpu,&n->pmic);
 }

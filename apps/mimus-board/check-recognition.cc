@@ -30,6 +30,9 @@ extern "C" size_t runtime_heap_peak(){return 0;}
 extern "C" int mimus_board_keyboard(){return 0;}
 extern "C" int mimus_board_rearm(){return 0;}
 extern "C" int mimus_board_trigger_step(){return live?1:-1;}
+/* These fixtures retain their storage-overlap contract. */
+extern "C" int mimus_board_staged(){return 0;}
+extern "C" void mimus_board_progress(){}
 extern "C" int mimus_board_live(){return live;}
 extern "C" int mimus_board_session_live(){return live;}
 extern "C" void mimus_board_fail(){failed=true;live=false;}

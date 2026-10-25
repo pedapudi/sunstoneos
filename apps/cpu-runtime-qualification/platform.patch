@@ -1,0 +1,19 @@
+--- a/input
++++ b/output
+@@ -3,6 +3,7 @@
+ #include "platform.h"
+ #include "a733_cpu_continue.h"
+ #include "cached.h"
++#include "runtime.h"
+ #ifdef SUNSTONE_A733_CACHED_DEVICES
+ #include "a733_cached_devices.h"
+ #endif
+@@ -132,6 +133,8 @@
+     if(a733_smp_counter()>=diagnostic_deadline)a733_smp_exit_privileged(3,interrupt);
+     if(interrupt==30 && !c) {
+         ++a733_smp_core_results[c].ticks;FreeRTOS_Tick_Handler();
++    } else if(interrupt==30 && c<8) {
++        a733_qualification_timer_irq(c);
+     } else if(interrupt==0 && c<8) {
+         __atomic_add_fetch(&a733_smp_core_results[c].sgis,1,__ATOMIC_RELAXED);
+         FreeRTOS_SGI_Handler();

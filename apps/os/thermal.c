@@ -25,6 +25,11 @@ static struct {
     unsigned active,retaining,masked,rearm_wait;
     uint64_t next_read;
 } thermal;
+/* Recognition may run before the thermal task or the first complete sensor
+ * set. Keep load reduced until all channels have valid, nonstale readings. */
+static atomic_uint load_level=A733_THERMAL_THROTTLE;
+int os_thermal_throttled(void)
+{return atomic_load_explicit(&load_level,memory_order_acquire)!=A733_THERMAL_NORMAL;}
 static uint64_t deadline(void){return board.session.deadline_us-10000;}
 static int live(void)
 {return board_live(NULL)&&!atomic_load_explicit(&providers.shared.clocks.failed,memory_order_acquire)&&
@@ -71,11 +76,25 @@ static int authorize(void *v,const struct a733_thermal_config *c,const struct a7
         a733_clock_token_status(&providers.shared.clocks,&thermal.token)==A733_CLOCK_OK;
 }
 static void cancel(void)
-{atomic_store_explicit(&thermal.failed,1,memory_order_release);board_fail(NULL);}
-/* CRITICAL: refuse new work by closing board admission. THROTTLE and NORMAL
- * are load hints; this image has no reduced-load mode, so they are ignored. */
+{atomic_store_explicit(&load_level,A733_THERMAL_CRITICAL,memory_order_release);
+ atomic_store_explicit(&thermal.failed,1,memory_order_release);board_fail(NULL);}
+static void publish_load(enum a733_thermal_level level)
+{
+    if(level==A733_THERMAL_NORMAL&&a733_thermal_policy_seen(&thermal.policy)!=31)
+        level=A733_THERMAL_THROTTLE;
+    atomic_store_explicit(&load_level,level,memory_order_release);
+}
+/* The recognizer backs off at its checkpoints during THROTTLE, and new GPU
+ * placements use the CPU. CRITICAL closes admission through board_fail.
+ * The policy calls this only from a733_thermal_policy_update, after which
+ * step() publishes the returned level, so this callback publishes only
+ * CRITICAL. */
 static int policy(void *v,enum a733_thermal_level level)
-{if(v!=&thermal)return -1;if(level==A733_THERMAL_CRITICAL)cancel();return 1;}
+{
+    if(v!=&thermal)return -1;
+    if(level==A733_THERMAL_CRITICAL)cancel();
+    return 1;
+}
 /* IRQ callbacks share the SMP kernel critical section with task rearm. They
  * never inspect driver fields, touch THS status or enter the platform mutex. */
 void os_thermal_irq(void)
@@ -127,9 +146,13 @@ static int step(void)
         struct a733_thermal_sample sample;
         enum a733_thermal_result r=a733_thermal_read(&thermal.driver,deadline(),&sample);
         uint64_t t;
+        enum a733_thermal_level level;
         if(thermal.driver.fault||!a733_counter_clock_now(&providers.shared.counter,&t)||
-           a733_thermal_policy_update(&thermal.policy,t,r,&sample)==A733_THERMAL_CRITICAL||
+           (level=a733_thermal_policy_update(&thermal.policy,t,r,&sample))==A733_THERMAL_CRITICAL||
            (r!=A733_THERMAL_SAMPLE&&r!=A733_THERMAL_AGAIN&&r!=A733_THERMAL_BUSY))return fault();
+        /* The final missing channel may arrive without changing policy level,
+         * so the transition callback alone cannot release startup throttling. */
+        publish_load(level);
         thermal.next_read=n+25000;
     }
     if(!rearm())return fault();

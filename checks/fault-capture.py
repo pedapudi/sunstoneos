@@ -149,7 +149,7 @@ def el3_model(core, mpidr=None):
             'esr_el1': 0x96000045, 'elr_el1': 0x41012340 + core, 'far_el1': 0xdead0000 + core * 8,
             'spsr_el1': 0x3c5, 'esr_el3': 0, 'far_el3': 0xfa3, 'elr_el3': 0, 'tcr_el1': 0x80803519,
             'sctlr_el1': 0x30d01805, 'sctlr_el3': 0, 'tcr_el3': 0, 'mair_el3': 0, 'scr_el3': 0x535,
-            'ttbr0_el3': 0, 'currentel': 12, 'daif': 0x3c0}
+            'ttbr0_el3': 0, 'currentel': 12, 'daif': 0x3c0, 'tpidr_el1': core}
 
 
 def prepare(image, uc, core, state=3, name=b'mimus-board\0'):
@@ -251,6 +251,49 @@ def check_case(image, r):
         assert not capture and slot['state'] == 'empty', (core, kind, slot['state'])
         assert r['stop'] == 'park', (core, kind, r['stop'])
     return row
+
+
+def synchronous_entry(image, faults=True):
+    """Fatal entry never accesses SP; returning SVC preserves its input state."""
+    rows = []
+    for core in range(8):
+        for vector, mode in ((4, 5), (8, 0)):
+            for stack in ((0x40000000, EL1_STACK + 3) if faults else ()):
+                uc = image.machine()
+                epoch = prepare(image, uc, core)
+                model = el3_model(core)
+                model.update(spsr_el1=mode, esr_el1=0x96000045 if mode else 0x92000045)
+                r = run(image, uc, image.symbols['a733_cached_el1_vectors'] + vector * 128,
+                        {UC_ARM64_REG_SP: stack}, model,
+                        ['a733_smp_stop', 'a733_storage_maintenance_stop'])
+                assert not [w for w in r['writes'] if w[4] == 1], ('EL1 store', core, vector, stack)
+                assert not [v for v in r['reads'] if v[3] == 1], ('EL1 load', core, vector, stack)
+                slot = decode.decode_slot(bytes(uc.mem_read(SLOTS + core * 128, 128)))
+                assert slot['state'] == 'valid' and slot['kind'] == 'vector fault', slot
+                assert slot['epoch'] == epoch and slot['core'] == core and slot['vector_slot'] == vector, slot
+                assert (slot['esr'], slot['elr'], slot['far'], slot['spsr']) == tuple(
+                    model[n] for n in ('esr_el1', 'elr_el1', 'far_el1', 'spsr_el1')), slot
+                rows.append(dict(core=core, vector=vector, stack=stack, kind='fault',
+                                 el1_memory_accesses=0, instructions_to_smc=r['smc_at'] + 1))
+            calls = [(0, 'FreeRTOS_SWI_Handler'), (119, 'a733_smp_exit_privileged')]
+            if 'a733_observe_exception' in image.symbols:
+                calls.append((120, 'a733_observe_exception'))
+            for immediate, stop in calls:
+                uc = image.machine()
+                model = el3_model(core)
+                model.update(esr_el1=(0x15 << 26) | immediate, spsr_el1=mode)
+                registers = {reg: 0x1020304050600000 + n for n, reg in enumerate(REGS)}
+                registers[UC_ARM64_REG_SP] = EL1_STACK
+                r = run(image, uc, image.symbols['a733_cached_el1_vectors'] + vector * 128,
+                        registers, model, [stop])
+                assert r['stop'] == stop, r['stop']
+                for reg, value in registers.items():
+                    assert uc.reg_read(reg) == value, ('SVC register', core, vector, immediate, reg)
+                assert model['tpidr_el1'] == core, ('SVC core index', core, model['tpidr_el1'])
+                assert len(r['writes']) == 4 and len(r['reads']) == 4, ('SVC stack cost', r)
+                rows.append(dict(core=core, vector=vector, kind='svc', immediate=immediate,
+                                 instructions=len(r['trace']), loads=len(r['reads']), stores=len(r['writes'])))
+    return rows
 
 
 def name_bounds(image):
@@ -432,7 +475,8 @@ def main():
         max_decode_to_pending_store=max(r['decode_to_pending_store'] for r in rows),
         max_capture_instructions=max(r['capture_instructions'] for r in rows),
         max_entry_to_publication=max(r['entry_to_publication'] for r in rows if r['entry_to_publication']),
-        cases=rows, name_bounds=name_bounds(image), rotation=rotation(image, captured),
+        cases=rows, synchronous_entry=synchronous_entry(image), name_bounds=name_bounds(image),
+        rotation=rotation(image, captured),
         supervisor=supervisor(image, baseline), line=None, sources=sources(),
         sizes={n: image.sizes.get(n) for n in ('a733_fault_capture', 'a733_fault_boot', 'a733_fault_previous',
                                               'a733_fault_pending', 'board_resident_renew')},

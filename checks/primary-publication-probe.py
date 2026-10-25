@@ -119,13 +119,34 @@ def main():
         raise AssertionError('Host accepted incomplete restoration')
     cases.append({'case': 'restoration-readback-failure-retains-without-reset', 'pass': True,
                   'prefix_reused': True})
+    # Reset and earlier ROM returns do not establish the values of inactive
+    # translation controls. Exercise the same actual boot from distinct values;
+    # these are model inputs, not observations of either board's failing run.
+    inherited = []
+    for name, controls in (
+        ('inactive-el1-controls', {'sctlr_el1': 0x30d00800, 'tcr_el1': 0x200803519}),
+        ('inactive-el3-controls', {'tcr_el3': 0x80823519,
+                                  'ttbr0_el3': 0x421e0000, 'mair_el3': 0xff4400}),
+    ):
+        variant = Probe(args.image, args.bundle)
+        variant.regs[0].update(controls)
+        variant.cpus[0].emu_start(variant.symbols['a733_smp_entry'], 0, count=3000000)
+        assert variant.returned and not variant.retained, name
+        assert not any(variant.active[1:]), name
+        assert variant.mmio_writes == [(0x08001004, 4, 0x20), (0x08001008, 4, 0)], name
+        assert all(variant.regs[0][key] == value for key, value in controls.items()), name
+        report = probe.decode(variant.read(probe.REPORT[0], probe.REPORT[1]), variant.nonce)
+        assert variant.maintained == variant.expected and variant.invalidated_instructions, name
+        inherited.append({'case': name, 'pass': True, 'initial_controls': controls,
+                          'report': report, 'maintained_lines': len(variant.maintained),
+                          'device_writes': variant.mmio_writes})
     args.output.write_text(json.dumps({'native_sha256': probe.digest(args.image),
         'manifest_sha256': probe.digest(args.bundle/'manifest.json'), 'physical_access': False,
         'sources': {name: probe.digest(ROOT/name) for name in (
             'checks/primary-publication-probe.py', 'checks/a733-supervised-publication.py',
-            'checks/a733-smp-cached.py')}, 'cases': cases,
+            'checks/a733-smp-cached.py')}, 'cases': cases, 'inherited_controls': inherited,
         'limits': 'Instruction execution and modeled controls only; no physical cache visibility, reset, or USB qualification.'}, indent=2)+'\n')
-    print('PASS actual primary setup/return and retained restoration failure; prefix executed once')
+    print('PASS primary setup/return; baseline checkpoint reused for restoration failure; two inherited-control variants')
 
 
 if __name__ == '__main__':

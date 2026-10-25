@@ -37,7 +37,7 @@ int sunstone_net_poll_owned(struct sunstone_net *s){assert(s==&subject.sockets);
 int main(void)
 {
     platform.clocks=&clocks;platform.pins=&pins;platform.rails=&rails;platform.pmic=&pmic;
-    platform.ops.current=current;pmic.ops.outside=provider_outside;rails.binding.gpu=&gpu;
+    platform.ops.current=current;pmic.pmic_bus_ops.outside=provider_outside;rails.binding.gpu=&gpu;
     subject.self=&subject;subject.platform=&platform;subject.stage=MANAGEMENT;subject.deadline=900;
     subject.config.owner_task=task;atomic_init(&subject.busy,0);
     for(unsigned i=0;i<4;++i){subject.config.firmware.blobs[i].data=blobs[i];subject.config.firmware.blobs[i].bytes=1;}

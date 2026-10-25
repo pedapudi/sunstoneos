@@ -51,7 +51,7 @@ static int outside(struct a733_pmic *p,const void *v,size_t n)
 {
     return a733_ranges_disjoint(v,n,p,sizeof(*p)) && a733_ranges_disjoint(v,n,p->clocks,sizeof(*p->clocks)) &&
         a733_ranges_disjoint(v,n,p->rails,sizeof(*p->rails)) && a733_ranges_disjoint(v,n,p->pins,sizeof(*p->pins)) &&
-        a733_ranges_disjoint(v,n,p->rails->binding.gpu,sizeof(*p->rails->binding.gpu)) && p->ops.outside(p->cookie,v,n)==1;
+        a733_ranges_disjoint(v,n,p->rails->binding.gpu,sizeof(*p->rails->binding.gpu)) && p->pmic_bus_ops.outside(p->cookie,v,n)==1;
 }
 static int enter(struct a733_pmic *p)
 {
@@ -63,13 +63,13 @@ static enum a733_pmic_status leave(struct a733_pmic *p,enum a733_pmic_status r)
 {atomic_store_explicit(&p->busy,0,memory_order_release);return r;}
 static enum a733_pmic_status fault(struct a733_pmic *p)
 {
-    if(p->held && !p->retained && p->ops.current(p->cookie)==1) {
-        p->ops.retain(p->cookie);p->retained=1;
+    if(p->held && !p->retained && p->pmic_bus_ops.current(p->cookie)==1) {
+        p->pmic_bus_ops.retain(p->cookie);p->retained=1;
     }
     p->failed=1;a733_power_authority_set(&p->rails->authority,A733_POWER_PROVIDER_FAULT);
     return A733_PMIC_RETAINED;
 }
-/* Revocation check before each bus transaction and at publication: one
+/* Revocation check at poll entry and before each further bus phase: one
  * acquire load of the state word, which carries provider, clock registry and
  * rail ledger faults, plus the provider's own latch that a client can set.
  * The provider holds its S_TWI0 lease and the request's borrow until reap, so
@@ -79,7 +79,7 @@ static int authorized(const struct a733_pmic *p)
 static int time_now(struct a733_pmic *p)
 {
     uint64_t now;
-    if(p->ops.now(p->cookie,&now)!=1 || !a733_monotonic_advance(now,&p->last_now)){fault(p);return 0;}
+    if(p->pmic_bus_ops.now(p->cookie,&now)!=1 || !a733_monotonic_advance(now,&p->last_now)){fault(p);return 0;}
     return 1;
 }
 static int timely(struct a733_pmic *p)
@@ -87,9 +87,9 @@ static int timely(struct a733_pmic *p)
 /* Register accesses make no time read: transfer() checks the deadline once
  * per bus phase, and admission and startup once after their reads. */
 static int rd(struct a733_pmic *p,uintptr_t a,uint32_t *v)
-{return p->ops.read(p->cookie,a,v)==1;}
+{return p->pmic_bus_ops.read(p->cookie,a,v)==1;}
 static int wr(struct a733_pmic *p,uintptr_t a,uint32_t v)
-{return p->ops.write(p->cookie,a,v)==1;}
+{return p->pmic_bus_ops.write(p->cookie,a,v)==1;}
 static int match(struct a733_pmic *p,uintptr_t a,uint32_t mask,uint32_t expected)
 {uint32_t v;return rd(p,a,&v) && (v&mask)==expected;}
 static struct a733_pmic_lifetime identity(struct a733_pmic *p)
@@ -177,7 +177,7 @@ int a733_pmic_init(struct a733_pmic *p,const struct a733_pmic_config *c,
        o->outside(cookie,p,sizeof(*p))!=1)return 0;
     for(unsigned i=0;i<2;++i)if(c->pins[i].function!=2 ||
         !a733_pin_config_valid_banked(A733_PIN_L,i,c->pins[i]))return 0;
-    *p=(struct a733_pmic){.self=p,.config=*c,.ops=*o,.cookie=cookie,.clocks=clocks,.rails=rails,
+    *p=(struct a733_pmic){.self=p,.config=*c,.pmic_bus_ops=*o,.cookie=cookie,.clocks=clocks,.rails=rails,
         .pins=pins,.next_id=1,.deadline=c->startup_deadline,.active=A733_PMIC_REQUESTS};
     atomic_init(&p->busy,0);atomic_init(&p->queued,0);return 1;
 }
@@ -368,7 +368,7 @@ static enum a733_pmic_status phase(struct a733_pmic *p)
         struct a733_pmic_snapshot snapshot;
         a733_pmic_decode(s->snapshot.rail,p->values[3],p->values[s->write ? 7 : 4],&snapshot);
         snapshot.page_before=p->values[0];snapshot.chip=p->values[1];snapshot.revision=p->values[2];snapshot.page_after=p->values[5];
-        p->ops.leave(p->cookie);p->held=0;
+        p->pmic_bus_ops.leave(p->cookie);p->held=0;
         if(!timely(p))return fault(p);
         s->snapshot=snapshot;s->state=DONE;p->active=A733_PMIC_REQUESTS;return A733_PMIC_READY;
     }
@@ -407,7 +407,7 @@ static enum a733_pmic_status transfer(struct a733_pmic *p)
 }
 enum a733_pmic_status a733_pmic_poll(struct a733_pmic *p)
 {
-    if(!p || p->self!=p || p->ops.current(p->cookie)!=1)return A733_PMIC_INVALID;
+    if(!p || p->self!=p || p->pmic_bus_ops.current(p->cookie)!=1)return A733_PMIC_INVALID;
     if(!enter(p))return A733_PMIC_BUSY;
     p->waiting=0;
     if(p->failed)return leave(p,fault(p));
@@ -433,9 +433,9 @@ enum a733_pmic_status a733_pmic_poll(struct a733_pmic *p)
         if(r!=A733_PINS_OK)return leave(p,fault(p));p->stage=S_VERIFY;return leave(p,A733_PMIC_PENDING);
     }
     if(p->stage==S_BASELINE || p->stage==S_VERIFY) {
-        if(p->ops.enter(p->cookie,p->deadline)!=1)return leave(p,A733_PMIC_BUSY);p->held=1;
+        if(p->pmic_bus_ops.enter(p->cookie,p->deadline)!=1)return leave(p,A733_PMIC_BUSY);p->held=1;
         if(!baseline(p))return leave(p,fault(p));
-        p->ops.leave(p->cookie);p->held=0;
+        p->pmic_bus_ops.leave(p->cookie);p->held=0;
         if(!timely(p))return leave(p,fault(p));
         p->stage=p->stage==S_BASELINE ? S_PINS : S_READY;
         if(p->stage==S_READY)a733_power_authority_set(&p->rails->authority,A733_POWER_PROVIDER_READY);
@@ -463,9 +463,9 @@ enum a733_pmic_status a733_pmic_poll(struct a733_pmic *p)
      * poll releases the untouched mutex and returns BUSY. */
     const uint64_t deadline=p->deadline;leave(p,A733_PMIC_BUSY);
     int held=0;enum a733_pins_result pins=a733_pins_held_banked(p->pins,&p->pin,&held,deadline);
-    int bus=pins==A733_PINS_OK && held && p->ops.enter(p->cookie,deadline)==1;
-    if(!enter(p)){if(bus)p->ops.leave(p->cookie);return A733_PMIC_BUSY;}
-    if(bus && !authorized(p)){p->ops.leave(p->cookie);bus=0;}
+    int bus=pins==A733_PINS_OK && held && p->pmic_bus_ops.enter(p->cookie,deadline)==1;
+    if(!enter(p)){if(bus)p->pmic_bus_ops.leave(p->cookie);return A733_PMIC_BUSY;}
+    if(bus && !authorized(p)){p->pmic_bus_ops.leave(p->cookie);bus=0;}
     if(!authorized(p))return leave(p,fault(p));
     if(pins==A733_PINS_BUSY)return leave(p,A733_PMIC_BUSY);
     if(pins!=A733_PINS_OK || !held)return leave(p,fault(p));

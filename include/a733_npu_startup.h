@@ -60,6 +60,7 @@ struct a733_npu_startup {
     a733_clock_mask_t shared;
     uint64_t last_now, wait_until;
     unsigned initialized, stage, failed, register_held;
+    uint32_t pll_inherited; /* Reserved BIT24 captured once before any write; never programmed. */
 };
 /* EL1, before the scheduler starts and before the power service first runs:
  * copies the configuration and providers and registers the domain-4 row. */

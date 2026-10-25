@@ -1,0 +1,30 @@
+--- a/input
++++ b/output
+@@ -3,4 +3,5 @@
+ #endif
+ #include "cached.h"
++#include "runtime.h"
+ #include "a733_cached_memory.h"
+ #include "a733_memory_local.h"
+@@ -79,5 +80,6 @@
+ #if defined(SUNSTONE_A733_FAULT_PAGE)
+     /* Previous-boot records move to EL1 .bss before image RAM is published. */
+-    a733_fault_boot();
++    /* This supervised image has no resident stage2 report. Its authenticated
++     * launcher clears the complete result/fault-slot page before entry. */
+ #endif
+     boot_values[0]=epoch;boot_values[1]=startup;boot_values[2]=diagnostic;boot_values[3]=token;
+@@ -102,4 +104,5 @@
+ {
+     if(c>=8 || native_core()!=c || epoch!=boot_values[0] || !epoch)park();
++    if(!a733_qualification_local(c,epoch))failed(c,0x735);
+     if(c)prepare_core(c);
+     uint64_t mpidr;__asm__ volatile("mrs %0,mpidr_el1":"=r"(mpidr));
+@@ -160,6 +163,7 @@
+         if(now<last || now>=startup)a733_cached_smc(3,0x203);
+         last=now;__asm__ volatile("yield");
+     }
++    a733_qualification_timer_arm(c);
+     __atomic_store_n(&ucSecondaryCoresReadyFlags[c-1],1,__ATOMIC_RELEASE);
+     __asm__ volatile("dsb sy\n sev\n svc #106":::"memory");
+     a733_cached_smc(4,0x204);

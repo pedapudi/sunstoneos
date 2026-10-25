@@ -4,8 +4,8 @@
 /* The power-domain owner and the PMIC service task (docs/power-domains.md,
  * docs/designs/power-domains.md).
  *
- * One owner per image is the only writer of PCK600 domains 1 (DE_SYS) and
- * 5 (GPU_TOP); domain 4 (NPU) joins when the NPU startup moves onto a row.
+ * One owner per image is the only writer of PCK600 domains 1 (DE_SYS),
+ * 4 (NPU) and 5 (GPU_TOP). Only domain 5 supports a healthy OFF request.
  * One service task per image runs a733_power_service_step(): every PMIC
  * transaction, the once-per-boot supply verification and every domain
  * transition. The task must be the PMIC provider's designated task. */
@@ -34,7 +34,8 @@ _Static_assert(((A733_POWER_SUPPLY_DONE | A733_POWER_DCDC2_VERIFIED | A733_POWER
 #define A733_POWER_SUPPLY_BUDGET_US 100000u
 /* Provisional spin after a PCK600 command; board evidence replaces it. */
 #define A733_POWER_PCK_SPIN_US 50u
-/* Vendor bound for a PCK600 transition (pck600_domains.c lines 112-121). */
+/* Bound from pck600_domains.c lines 112-121, capped by the service deadline.
+ * Target status must be observed and checked strictly before that bound. */
 #define A733_POWER_PCK_BOUND_US 10000u
 /* Longest PMIC byte-phase spin in one service step. */
 #define A733_POWER_PMIC_SPIN_US 1000u
@@ -49,7 +50,9 @@ struct a733_power_domain_ops {
     void (*notify)(void *);
 };
 /* owner: rail-ledger owner of the supply-verification token. deadline: the
- * session end in the PMIC clock's microseconds. tick_us: one scheduler tick.
+ * session end in the PMIC clock's microseconds; no new PCK command is admitted
+ * at or after it, and pending PCK completion must precede it.
+ * tick_us: one scheduler tick.
  * idle_us: the longest idle block, for images whose service reports progress
  * to a watchdog; 0 blocks until the deadline. */
 struct a733_power_service_config {
@@ -61,6 +64,7 @@ enum { A733_POWER_DOMAIN_UNKNOWN, A733_POWER_DOMAIN_OFF, A733_POWER_DOMAIN_ON_WA
        A733_POWER_DOMAIN_ON, A733_POWER_DOMAIN_OFF_WAIT, A733_POWER_DOMAIN_FAILED };
 struct a733_power_domain {
     unsigned id, state, count;
+    unsigned delays_ready; /* all five delay words written and read back */
     uint64_t command_at, deadline;
 };
 #define A733_POWER_DOMAINS 3u /* 1, 4 and 5 */
@@ -93,8 +97,7 @@ int a733_power_domains_init(struct a733_power_domains *, struct a733_pmic *,
  * of the first request. The token storage stays at this address and is not
  * changed while the row is counted. Returns 1 on success, no hardware access.
  * Inline, so that the GPU platform registers its row without linking the
- * owner. Until the NPU startup moves onto its row, checks/power-domains-tree.py
- * fails on a domain-4 registration outside the checks. */
+ * owner. The NPU startup uses a domain-4 row and retains it at local CLOSE. */
 static inline int a733_power_domain_row_init(struct a733_power_domain_row *r, struct a733_power_domains *d,
     unsigned domain, uint64_t owner, const struct a733_rail_token *rail)
 {

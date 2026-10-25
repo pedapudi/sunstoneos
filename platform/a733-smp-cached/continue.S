@@ -406,14 +406,22 @@ a733_cached_el1_vectors:
     ldp x16, x17, [sp], #16
     b FreeRTOS_IRQ_Handler
 .Lsync_bhb:
+    // Classify without touching a possibly invalid SP. Exception entry masks
+    // DAIF. TPIDR_EL1 holds only the core index, recoverable from MPIDR, so it
+    // can preserve x16 until an SVC takes the normal stack-using path.
+    msr tpidr_el1, x16
+    mrs x16, esr_el1
+    lsr x16, x16, #26
+    cmp x16, #0x15
+    b.ne .Lsync_fault
+    mrs x16, tpidr_el1
     stp x16, x17, [sp, #-16]!
+    mrs x16, mpidr_el1
+    ubfx x16, x16, #8, #3
+    msr tpidr_el1, x16
     clear_bhb
     ldp x16, x17, [sp], #16
     stp x0, x1, [sp, #-16]!
-    mrs x0, esr_el1
-    lsr x0, x0, #26
-    cmp x0, #0x15
-    b.ne .Lsync_fault
     mrs x0, esr_el1
     and x0, x0, #0xffff
     cmp x0, #119
@@ -424,7 +432,6 @@ a733_cached_el1_vectors:
     ldp x0, x1, [sp], #16
     b a733_smp_exit_privileged
 .Lsync_fault:
-    ldp x0, x1, [sp], #16
 #ifdef SUNSTONE_A733_FAULT_PAGE
     // The vector slot from SPSR_EL1.M: 8 from EL0t, 0 from EL1t (images
     // whose private tasks run on SP_EL0), 4 from EL1h.

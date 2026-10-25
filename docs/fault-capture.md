@@ -16,8 +16,8 @@ design and its budgets are in
 ## Entry, pending byte and capture
 
 `SUNSTONE_A733_FAULT_PAGE`, which only `cmake/a733-os.cmake` defines, enables
-the following path. Images built without it assemble byte-identical vectors and
-handlers.
+the retained records below. Other cached images use the same synchronous
+exception entry without retained slots.
 
 1. **Marker.** Each EL1 vector entry that reports a fault, in the cold table and
    in the runtime table, sets `x2 = 0x100 | slot` before branching to
@@ -44,6 +44,67 @@ write-back alias of image RAM. It accepts a TCB pointer only when it is
 nonzero and 8-byte aligned, and reads the 16 name bytes only when they lie
 inside `0x41200000`–`0x42000000`. The FreeRTOS task additions export the name
 offset as `a733_fault_task_name_offset` and assert that it is 8-byte aligned.
+
+## Synchronous faults do not require a working EL1 stack
+
+The runtime synchronous vector classifies the exception before accessing the
+interrupted stack. A translation or alignment fault with an invalid stack
+pointer therefore reaches the stackless EL3 report path. Saving registers on
+that stack before classification caused another exception at the first store,
+preventing capture.
+
+While exception entry masks interrupts, the vector temporarily saves `x16` in
+`TPIDR_EL1`. This register normally contains only the validated core index,
+which can be recovered from MPIDR affinity level 1. A supervisor call (SVC)
+restores `x16`, saves the normal register pair on the stack, and restores the
+core index before dispatch. A fatal exception never returns; its EL3 handler
+derives the core independently from MPIDR. Both paths retain the existing
+branch-history clearing sequence. No emergency stack or additional memory
+reservation is introduced.
+
+The [Arm Cortex-A55 r2p0 manual](https://documentation-service.arm.com/static/5e7e09f6a3736a0d2e862d2f),
+revision `100442_0200_00_en`, section B2, identifies `TPIDR_EL1` as a software
+thread-ID register. The pinned
+[Linux v6.17 entry code](https://github.com/torvalds/linux/blob/e5f0a698b34ed76002dc5cff3804a61c80233a7a/arch/arm64/kernel/entry.S)
+checks for stack overflow before saving general registers and uses thread-ID
+registers as temporary storage on its fatal path. SunstoneOS needs only terminal
+capture, so it reuses its existing stackless report path.
+
+The budget for this change is zero EL1 data accesses on a synchronous fault
+and at most eight additional instructions per SVC. The linked OS image takes
+94 instructions from the vector to SVC dispatch, versus 89 before the change.
+Its four loads and four stores are unchanged; it adds no lock, barrier,
+translation, copy or wait. The interrupt path and idle hook are unchanged.
+
+The extended [fault model](../checks/fault-capture.py) checks unmapped and
+misaligned stack pointers on all eight cores from both EL1h and EL0 vectors.
+All 32 cases capture the original syndrome, return address and fault address
+without an EL1 data access. Another 32 cases preserve every general register,
+the stack pointer and core index at normal SVC and exit dispatch. The observer
+image passes 48 cases including its private SVC 120. The existing 72 park and
+capture cases and the eight-core scheduler model also pass. The original image
+fails the unmapped-stack case at its first store. Evidence, image identities,
+instruction counts and source pins are under
+`~/.cache/sunstoneos/build/cpu-runtime-robustness-1024/`.
+
+These checks model exception entry and system registers. They do not establish
+physical sustained scheduling, A55/A76 cache coherence, all-core idle wake-up,
+fault retention across reset, or cleanup after active peripheral interrupts.
+Runtime stop continues to retain CPUs, device state and memory until the
+externally owned recovery path completes; it does not prove quiescence or
+authorize reuse. A stalled memory access can still prevent capture.
+
+Complete CPU power and thermal support remains outstanding. Idle uses `WFI`
+with caches powered; runtime core removal, restart, retention and cluster
+power-down are unimplemented. The [clock driver](cpu-clock.md) supports the
+pinned 26 MHz operating-point tables, up to 1794 MHz for the A55 cluster and
+2002 MHz for the A76 cluster where the speed bin permits them. Voltage follows
+the selected bin and retains the inherited rail floor; the shared A55/DSU rail
+also constrains changes. Thermal throttling targets at most 1014 MHz, whose
+table voltage is 800 mV in every bin. Physical transitions still require a
+session grant and approval for the specific change. Sustained eight-core load,
+voltage/frequency transitions, thermal response and recovery require physical
+qualification; this fault correction qualifies none of them.
 
 ## Slot layout
 

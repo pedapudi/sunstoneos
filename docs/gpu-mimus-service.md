@@ -11,9 +11,10 @@ The [design](designs/gpu-recognition.md) states the budgets and
 result with them.
 
 Status: **implemented** and host-modeled. The GPU option's image links and
-passes its link check and host checks. No board has run it, and no call
-reaches the GPU until the image build's pinned mimus engine has the
-exact-sum hook (the design's "Changes needed in the mimus engine").
+passes its link check and host checks. The local mimus engine at `9c57286b7`
+provides the exact-sum hook consumed by `apps/os/gpu_hook.cc`. No board has
+executed the GPU path; the engine hook's availability establishes source
+integration only.
 
 ## Parts
 
@@ -76,9 +77,11 @@ uncached pages. Nothing is released; a failure retains every page.
    further step until the next wake.
 3. On INTID 95, or at the 4 ms bound of each wait while the job runs, the
    worker drains firmware events. When the kick's return is collected and the
-   timeline reaches the sequence, it calls `pvr_mimus_complete` (`DC CIVAC`
-   over the job's tags and sums), sets the slot IDLE and posts an 8-byte
-   record (sequence, OK) to the one-entry completion queue.
+   timeline reaches the sequence, it requires a clock sample before the job
+   deadline, then calls `pvr_mimus_complete` (`DC CIVAC` over the job's tags
+   and sums). A second monotonic clock sample must still precede the deadline
+   before it sets the slot IDLE and posts an 8-byte record (sequence, OK)
+   to the one-entry completion queue.
 4. The hook receives the record, requires the sequence after the previous
    OK record's, checks every tag with `pvr_mimus_tags_complete` and compares
    every sum with an int64 sum that a scalar CPU loop computes from the same
@@ -95,6 +98,59 @@ previous sequence before a submit or other than the previous or current one
 while a job runs, a failed completion maintenance, or any service failure
 posts LOST for an owed record and sets the lost flag, which makes later
 submits return -1.
+Completion at the deadline is late, including when output cache maintenance
+consumes the remaining time. A failed or backward final clock sample also
+faults. These checks retain the slot until output acquisition succeeds within
+the deadline; they cannot interrupt a CPU instruction or hardware access that
+does not return.
+
+CLOSE requires an idle mimus session with no owed record and an idle slot.
+It atomically changes that slot to CLOSED before changing interrupt, deadline
+or shutdown state. Pending and running jobs return BUSY without changing the
+slot. A submit atomically reserves an idle slot before copying its request,
+so CLOSE also refuses while the producer writes. Once CLOSE seals the slot,
+later submits return 0. A lost session returns a CLOSE fault and keeps its
+retained slot.
+
+Healthy CLOSE permits an explicit OPEN by the same client and closed epoch.
+The native owner requires the backend's complete stopped proof, an empty
+completion queue and unchanged allocation generations and extents before
+rewriting backing. It retains all allocations and the published GPU page
+tables. It rebuilds mutable firmware contexts and context-switch storage,
+then restages firmware through the existing OPEN path.
+The service publishes a new epoch and preserves increasing job sequences;
+the new timeline starts at the last completed sequence. Older request epochs
+are refused. The slot remains CLOSED until the new OPEN result is published
+with the slot ready. Failed reconstruction, startup or result publication
+latches loss and retains backing.
+
+A completed job whose sequence, tags or numerical sums fail validation retires
+the session permanently. Previously this rejection removed the hook while the
+GPU stayed open; removing the hook also removed the only caller of thermal
+parking. The recognizer now clears dispatch admission and latches terminal
+retirement before requesting CLOSE. It consumes the rejected record first and
+hands none of that job's output to the engine. The engine has finished reading
+previous output before its next `Finish` call, so no accepted output borrow
+crosses this close.
+
+The caller waits through the existing CLOSE/STATUS protocol for same-epoch
+STOPPED, with live board authority, before removing the hook and continuing on
+the CPU. CLOSE acceptance alone is insufficient: STOPPED follows the firmware
+acknowledgements, hardware idle checks and platform power-off of the existing
+[healthy stop contract](gpu-stop.md). A stale record does not prove the worker
+is idle; a pending job or request can refuse CLOSE and must take the LOST path.
+Timeout, failed reply or revoked authority also ends the boot through LOST,
+with no silent CPU fallback. Successful retirement retains all allocations and
+permanently refuses OPEN and job submission, even after temperature returns to
+normal. It introduces no hard-fault reset or new drain claim.
+
+Reconstruction uses the existing [compute-context builder](gpu-compute-context.md)
+and [acknowledged stop sequence](gpu-stop.md). Their pinned board source is
+`linux-orangepi` revision `2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f`:
+`pvr_queue.c:init_fw_context` initializes queue pointers and saved state,
+`pvr_context.c` zeroes context storage, and `pvr_vm.c:fw_mem_context_init`
+sets the page-table root and unallocated catalogue marker.
+The evidence snapshot preserves those source files and `pvr_fw_startstop.c`.
 
 ## Failure classes
 
@@ -106,7 +162,8 @@ Classes follow section 1.8 of
 | Start refused: previous-boot GPU loss, owner or client collision, tensor admission, pools, firmware | 1 | OPEN refused; CPU for the boot | Acquired pool pages |
 | OPEN fails after power or firmware access | 3 | CPU for the boot | Everything the service holds; the GPU can write only the output region and firmware memory |
 | Job refused before the first client-ring write, including a failed wake send | 1 | REFUSED; slot IDLE; the engine computes the rows | Nothing |
-| Tag missing, or a sum that differs from the CPU's | 2 | `os_dispatch_incomplete` closes placement at once; the hook returns no rows for that job and the rest of the call, and the engine computes channels `[0, n_gpu)` of every row no job returned | The session and the output region for the boot; the GPU stays powered and idle |
+| Completed record has an unexpected sequence, missing tag or incorrect sum | 2 only after acknowledged shutdown | `os_dispatch_incomplete` closes placement; the recognizer retires the session before removing the hook and allowing CPU fallback | All backing remains allocated; no reopen for this boot |
+| Terminal retirement refuses CLOSE, misses its deadline, loses authority or lacks same-epoch STOPPED | 3 | LOST and the existing board-failure path before CPU fallback | Everything uncertain, including pending replies and backing |
 | After the client ring is published: deadline missed, context reset, timeline mismatch, failed maintenance, service failure | 3 | LOST; `os_dispatch_failed`, `board_fail`, watchdog reset; the supervisor records a GPU loss and the next boot keeps OPEN refused | Everything |
 | No record | Unknown | The recognizer's 3 s service window expires; watchdog reset; a GPU loss when it was waiting for OPEN or a job's record | Everything |
 
@@ -121,6 +178,110 @@ Classes follow section 1.8 of
 - `checks/os-image-dispatch.py` and `checks/os-image-link.py` cover the
   dispatcher, the mapping checks, the pool replay, the supervisor's GPU-loss
   detail and the linked image.
+
+The focused completion checks run one job each through the actual service
+clock sampler and caller abort path. They cover completion at the deadline,
+output acquisition reaching the deadline, completion one microsecond before
+the deadline, a failed final clock read and a backward final sample.
+The four fault cases require one LOST record, a retained TAKEN slot, refusal
+of later submits and unchanged pool ownership. The successful case checks
+the tags and sums. Successful completion adds one clock read and no extra
+output cache maintenance.
+
+The five cases passed under QEMU with the software firmware model on
+2026-10-24. The evidence directory is
+`~/.cache/sunstoneos/evidence/gpu-deadline-20261024/`; its `snapshot/manifest.json`
+preserves selected sources, executables and records. The unmodified service
+fails the deadline-equality assertion in `before-fixture-fixed/`.
+The earlier `before/` attempt failed fixture initialization and provides no
+deadline result. Existing 204-job arithmetic and startup evidence was reused;
+these five cases provide no physical GPU execution or timing qualification.
+
+Three focused CLOSE cases passed under the same QEMU firmware model on
+2026-10-24. One submits a job, checks BUSY while pending and running, completes
+the job, then reaches STOPPED through CLOSE and refuses later submits.
+Another injects the RESERVED slot state, checks BUSY and invokes the actual
+abort path; it verifies retention without resuming an interrupted producer.
+The third checks CLOSE fault refusal after an actual late completion produces
+LOST. Each preserves the pool allocations. Records and selected source and
+image identities are in
+`~/.cache/sunstoneos/evidence/gpu-close-20261024/snapshot/manifest.json`.
+The checks establish service admission and model shutdown behavior; physical
+shutdown and thermal qualification remain outstanding.
+
+The retained-reopen checks cover two healthy power cycles, increasing job
+sequences, stale epochs, missing stop proof, unread completions, changed
+allocation generations, failed cache publication and failed OPEN-result
+publication. They use the actual native reconstruction and service, with the
+backend stop proof supplied by the firmware model. All four focused cases
+pass; physical stop proof remains required by the native backend.
+
+The native thermal-caller check executes `apps/os/gpu.c` as AArch64 code
+with modeled service replies, clock and RTOS waits. Seven cases cover repeated
+park/reopen, throttle and critical arrival during reopen, observation timeout,
+wrong client, expired lifetime and a stale OPEN record. Three focused
+follow-up cases also verify that renewed lifetime or a direct OPEN cannot
+revive a latched failure. The hook's focused sanitizer check covers its actual
+call boundary and preserves disabled placement after incomplete output or loss.
+A native backend check verifies permanent access refusal after lifetime expiry.
+Evidence is preserved under
+`~/.cache/sunstoneos/evidence/gpu-power-runtime-20261024/`;
+`snapshot/manifest.json` binds selected final sources, executables and records.
+
+The first reopen performs 3,520 cache-line operations, compared with 5,056 at
+cold OPEN. Keeping 24 immutable table pages published avoids 1,536 cleans.
+Reconstruction clears 35,136 bytes of context-switch storage before the
+existing program builder writes its instructions, and initializes 268 bytes
+of firmware context. It allocates no pages: 79 write-back and 51 uncached
+pages remain owned. These are software operation counts, not board timings.
+
+The terminal-retirement checks exercise the actual AArch64 caller with modeled
+service replies: successful STOPPED, BUSY, timeout, critical revocation, wrong
+client, an outstanding ticket and a stale STOPPED epoch. The engine-hook check
+rejects tags, sums and a stale sequence after consuming one prior output job;
+it permits CPU fallback only after retirement and takes LOST when retirement
+fails. The unchanged hook fails this new assertion. These focused checks passed
+on 2026-10-24; sources, objects, results and engine ownership references are in
+`~/.cache/sunstoneos/evidence/gpu-terminal-retire-20261024/snapshot/manifest.json`.
+They model shutdown replies and do not qualify physical power-off or drain.
+
+Retirement runs once on rejected output, using the existing one-second close
+target and bounded queue observation. Healthy jobs add one caller retirement
+flag check; the compiled AArch64 submission wrapper uses three instructions
+for its address, load and branch. OPEN and thermal reconciliation also check
+the flag. No normal-path queue transaction, cache operation or device access
+is added. The source of the engine borrow boundary is mimus `9c57286b7`,
+`kernels.cc:HookedSums` and `parallel.h:ForRowRanges`. The installed
+`apps/mimus/parallel_runtime.cc:dispatch` waits for the second worker's matching
+completion before returning. These sources are preserved with the evidence.
+
+## Lifecycle and power limits
+
+The current image fixes the GPU at 400 MHz and 800 mV. The
+[runtime design](designs/gpu-runtime.md) reserves 600 MHz and thermal rate
+fallback for later board qualification. Startup and acknowledged shutdown
+exist, including explicit healthy thermal park and reopen. Automatic idle
+parking and full fault recovery remain
+[unimplemented designs](gpu-recovery.md). Deadline failure retains resources;
+it does not establish that the GPU stopped or cooled.
+
+At the next recognizer `Begin` after prior output consumption, THROTTLE closes
+the healthy session and waits for STOPPED. NORMAL reopens a parked session.
+Throttle arriving during OPEN causes one CLOSE before new work is admitted;
+each boundary performs at most two transitions. Failed or incomplete dispatch
+admission remains closed. No idle timer or frequency change is involved.
+
+Each transition targets a one-second absolute bound, clamped below the board
+session and current lifetime limits. The client checks expiry after each
+queue wait of at most ten ticks; STATUS observation also waits one tick.
+These waits add observation latency and never renew service progress.
+The backend checks permanent revocation and current `board_live` admission
+before normal operations. Lifetime expiry latches failure even if renewed
+later. Each admitted `board_live` call adds two architectural counter reads;
+the recognizer also calls it at each thermal boundary. Fault-safe interrupt
+masking remains possible after revocation. Revocation does not establish
+power-off or cooling. Physical shutdown, thermal response, automatic idle
+parking and hard-fault recovery remain outstanding.
 
 ## Board evidence that would confirm it
 

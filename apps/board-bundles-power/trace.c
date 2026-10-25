@@ -65,17 +65,22 @@ void bb_steps_evaluate(const struct bb_step *s, unsigned count, uint32_t bit_ns,
     if (count > BB_BOUND_STEPS)
         count = BB_BOUND_STEPS;
     uint64_t sorted[BB_BOUND_STEPS];
+    uint64_t first_limit_scaled = 0;
     for (unsigned i = 0; i < count; ++i) {
         const uint64_t ns = s[i].ticks * 125 / 3; /* 24 MHz counter ticks */
         const uint64_t wire = bb_twi_wire_ns(s[i].conditions, s[i].bytes, s[i].stops, bit_ns, byte_ns);
-        const uint64_t ratio = wire ? ns * 1000 / wire : UINT64_MAX;
-        b->bins[ratio <= 1000 ? 0 : ratio <= 1050 ? 1 : ratio <= 1100 ? 2 : ratio <= 1550 ? 3 : 4]++;
+        /* A counter tick is 125/3 ns. Keep that fraction for admission. */
+        const uint64_t scaled = s[i].ticks * 125000;
+        const uint64_t divisor = wire * 3;
+        const uint64_t ratio = divisor ? scaled / divisor + (scaled % divisor != 0) : UINT64_MAX;
+        b->bins[ratio <= 1000 ? 0 : ratio <= 1050 ? 1 : ratio <= 1100 ? 2 : ratio <= BB_BOUND_PERMILLE ? 3 : 4]++;
         b->over_ms += ns > 1100000;
         if (ratio > b->worst)
             b->worst = ratio;
         if (!i) {
             bound->first_ns = ns;
             bound->first_limit_ns = wire * BB_BOUND_PERMILLE / 1000 + BB_BOUND_FIRST_EXTRA_NS;
+            first_limit_scaled = wire * BB_BOUND_PERMILLE * 3 + (uint64_t)BB_BOUND_FIRST_EXTRA_NS * 3000;
         }
         unsigned j = i;
         for (; j && sorted[j - 1] > ratio; --j)
@@ -85,7 +90,7 @@ void bb_steps_evaluate(const struct bb_step *s, unsigned count, uint32_t bit_ns,
     if (!count)
         return;
     bound->median = sorted[count / 2] < UINT32_MAX ? (uint32_t)sorted[count / 2] : UINT32_MAX;
-    bound->pass = bound->median <= BB_BOUND_PERMILLE && bound->first_ns <= bound->first_limit_ns;
+    bound->pass = bound->median <= BB_BOUND_PERMILLE && s[0].ticks * 125000 <= first_limit_scaled;
 }
 
 unsigned bb_byte_ns(uint32_t bit_ns, unsigned seen, uint64_t clear_ticks, uint32_t *byte_ns)
@@ -233,12 +238,12 @@ unsigned bb6_summary_lines(const struct bb6_summary *s, struct bb_line *out)
     bb_line_dec(l, "snapshot_max", s->snapshot_respins_max);
     bb_line_dec(l, "snapshots", s->snapshots);
     bb_line_end(l++);
-    bb_line_start(l, "STEPS of wire time");
-    bb_line_dec(l, "le100", s->bins.bins[0]);
-    bb_line_dec(l, "le105", s->bins.bins[1]);
-    bb_line_dec(l, "le110", s->bins.bins[2]);
-    bb_line_dec(l, "le155", s->bins.bins[3]);
-    bb_line_dec(l, "gt155", s->bins.bins[4]);
+    bb_line_start(l, "STEPS permille");
+    bb_line_dec(l, "le1000", s->bins.bins[0]);
+    bb_line_dec(l, "le1050", s->bins.bins[1]);
+    bb_line_dec(l, "le1100", s->bins.bins[2]);
+    bb_line_dec(l, "le1268", s->bins.bins[3]);
+    bb_line_dec(l, "gt1268", s->bins.bins[4]);
     bb_line_dec(l, "gt1100us", s->bins.over_ms);
     bb_line_end(l++);
     bb_line_start(l, "TWI_COST");

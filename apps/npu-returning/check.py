@@ -21,18 +21,21 @@ for variant in ['complete-snapshot','wrong-voltage','changed-voltage','disabled-
  regs={0x07090160:0x10000002,0x02002000:0xf8636300,0x0701000c:0,0x07010010:0x04000000,0x0701019c:0x10001,0x07025000:0x22,0x07025014:0x11,0x07025024:0x5,0x0708300c:0x40,0x07083010:0xf8,0x07083014:0x28,0x07083020:0x30,0x07083200:0x00f81000,0x07083210:0x80c0,0x07083218:0x100010}
  if variant=='baseline-refusal':regs[0x07083210]=0
  for a,v in regs.items():u.mem_write(a,struct.pack('<I',v))
- names=['a733_counter_clock_init','a733_counter_clock_now','xTaskGetCurrentTaskHandle','xTaskGetSchedulerState','xQueueCreateMutexStatic','xQueueGetMutexHolder','xQueueSemaphoreTake','xQueueGenericSend','vTaskDelay','platform_exit']
+ names=['xTaskGetCurrentTaskHandle','xTaskGetSchedulerState','xQueueCreateMutexStatic','xQueueGetMutexHolder','xQueueSemaphoreTake','xQueueGenericSend','vTaskDelay','platform_exit']
  hooks={image.address(n):n for n in names}
  def read(a,n=8):return int.from_bytes(u.mem_read(a,n),'little')
  def write(a,v,n=8):u.mem_write(a,int(v).to_bytes(n,'little'))
  def ret(v=0):u.reg_write(UC_ARM64_REG_X0,v);u.reg_write(UC_ARM64_REG_PC,u.reg_read(UC_ARM64_REG_LR))
  def code(cpu,a,size,cookie):
+  # The native PMIC adapter reads CNTPCT directly. Execute the counter
+  # constructor/clock code and give both users the same modeled counter.
+  instruction=read(a,4)
+  if instruction&0xffffffe0==0xd53be020:
+   u.reg_write(UC_ARM64_REG_X0+(instruction&31),state['time']*24);u.reg_write(UC_ARM64_REG_PC,a+4);return
   name=hooks.get(a)
   if name is None:return
   args=[u.reg_read(UC_ARM64_REG_X0+i) for i in range(4)]
-  if name=='a733_counter_clock_init':ret(1)
-  elif name=='a733_counter_clock_now':write(args[1],state['time']);ret(1)
-  elif name=='xTaskGetCurrentTaskHandle':ret(0x43000000)
+  if name=='xTaskGetCurrentTaskHandle':ret(0x43000000)
   elif name=='xTaskGetSchedulerState':ret(2)
   elif name=='xQueueCreateMutexStatic':
    q=state['next_mutex'];state['next_mutex']+=0x100;state['holders'][q]=0;ret(q)

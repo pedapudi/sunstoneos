@@ -31,6 +31,13 @@ struct npu_board_client {
     TickType_t wait;
     /* The client task, and the bootstrap task it notifies after CLOSE. */
     TaskHandle_t task, bootstrap;
+    /* One coherent thermal publication: timestamp in microseconds << 3,
+     * ALLOW/ACCEPTED/STOP below. STOP changes timestamp to the first drain
+     * deadline and is never cleared. Only the client claims ACCEPTED. */
+    atomic_uint_fast64_t admission;
+    int (*now)(void *,uint64_t *);
+    void *clock;
+    uint64_t session_end;
     /* USB0 writes request with release order: sequence<<8 | operation, and
      * argument before it; the client writes answer and the rest. */
     _Alignas(64) atomic_uint request;
@@ -63,4 +70,19 @@ int npu_board_client_post(struct npu_board_client *, unsigned sequence, enum npu
 unsigned npu_board_client_answer(const struct npu_board_client *, unsigned sequence);
 /* USB0: hand a lent window back. */
 void npu_board_client_return(struct npu_board_client *);
+#define NPU_BOARD_ALLOW UINT64_C(1)
+#define NPU_BOARD_ACCEPTED UINT64_C(2)
+#define NPU_BOARD_STOP UINT64_C(4)
+/* Thermal owner publishes after every policy update, including unchanged
+ * NORMAL. until is the oldest channel's freshness deadline; zero cannot
+ * admit. stop latches a five-second drain bounded by session_end. */
+void npu_board_client_thermal(struct npu_board_client *,int allow,int stop,uint64_t until,uint64_t now);
+/* Independent bootstrap supervision. Lost monitoring latches STOP after
+ * five seconds without readings. Returns the coherent admission word. */
+uint64_t npu_board_client_watch(struct npu_board_client *,uint64_t now);
+int npu_board_client_stopping(const struct npu_board_client *);
+/* Bootstrap before starting the client, then client before SUBMIT. A claim
+ * atomically orders admission against STOP and rechecks freshness after it. */
+int npu_board_client_claim(struct npu_board_client *);
+void npu_board_client_complete(struct npu_board_client *);
 #endif

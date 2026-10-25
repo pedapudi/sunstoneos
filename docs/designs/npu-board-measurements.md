@@ -43,12 +43,12 @@ budgets are the ones in [npu-board.md](npu-board.md).
 | Runtime parent, board image | No board image | 8,388,608 bytes at `0x48000000`, 2 MiB aligned | 8,388,608 bytes | Yes |
 | Largest free extent after admission | Not modeled | 796,917,760 bytes; the only pool callers are the CE session, USB2 and `board_application_start`, so LOAD and CLOSE leave the extents unchanged | ≥ 8,388,608 bytes; unchanged | Yes |
 | Requests, replies and client tick waits per inference | 1, 1; one `vTaskDelay(1)` per tick of waiting | 3 jobs: 3 requests, 3 replies, 0 tick waits; a STATUS and a LOAD before ready are answered not-ready | 1, 1, 0 | Yes |
-| Copies per tensor byte | No board image | Input 2 memory copies plus PIO, output 2 memory copies plus PIO, counted through `apps/npu-board/usb.c` over 451,584 input bytes; a READ of mimus-linear-q's 2,816-byte output fits the image's 4 KiB transmit FIFO, which `npu-board-providers.py` reads from the linked TinyUSB class | 2 plus PIO each way with the image's TinyUSB configuration | Yes |
+| Copies per tensor byte | No board image | Input 1 memory copy plus PIO, output 1 memory copy plus PIO, counted through `apps/npu-board/usb.c` over 451,584 input bytes; a READ of mimus-linear-q's 2,816-byte output fits the image's 4 KiB transmit FIFO, which `npu-board-providers.py` reads from the linked TinyUSB class | 1 plus PIO each way with the image's TinyUSB configuration | Yes |
 | Cache lines maintained per job | 19,442 | 19,442 | 19,442 | Yes |
 | Bytes zeroed per job | 1,093,632 | 1,093,632 | 1,093,632 | Yes |
 | Integrity-check bytes read per job | 1,509,856 | 1,509,856 | 1,509,856 | Yes |
 | G, P, H, W, ShuffleNetV2 slot | 1.44, 5.41, 2.52, 8.22 ms | 1.15, 4.33, 2.01, 6.58 ms | 1.15, 4.33, 2.02, 6.58 ms | Yes |
-| Wakes while idle | Service worker one per 1,000 ms | Bootstrap 0 and client 0, both wait on notifications without a timeout; service worker one per 1,000 ms | Bootstrap and client 0 | Yes |
+| Wakes while idle | Service worker one per 1,000 ms; bootstrap and client 0 | Bootstrap and thermal monitor each wait at most 25 ms; client 0; service worker one per 1,000 ms | Independent supervision of a frozen monitor; client 0 | Yes |
 | Worker steps and idle-register reads, four running jobs | 1,040 steps, 1,060 reads over 12 ticks | 1,014 steps, 1,034 reads over 11 ticks; bound 1,070 | Reads ≤ steps + 4 × (ticks + 1) + 8 | Yes |
 | USB0, 64 KiB response | 13 ticks | 13 ticks, 128 packets, at most 10 packets and 189 µs per tick | 13 ticks | Yes |
 | One ShuffleNetV2 inference over USB0, upload to output read | No board image | About 40 ticks, estimated: 150,528 input bytes are 294 high-speed packets, 30 ticks at 10 packets per tick; the 6.58 ms slot, 7 ticks; one tick for each of SUBMIT, READ and RETURN | No target; measured on the board | Not measured |
@@ -86,3 +86,28 @@ their fixes.
 
 Boot to READY on the board, the PLL_NPU LOCK time, the INTID 97 delivery per
 job and the USB0 transfer rate need the board, and are planned board steps.
+
+## Direct FIFO validation on 2026-10-24
+
+The previous board-client result counted two memory copies per tensor byte
+in either direction. The dedicated hardware-FIFO configuration reduces this
+to one copy plus PIO, with the same three runtime requests, three replies and
+zero client tick waits over 451,584 uploaded bytes. The transmit FIFO remains
+4 KiB and the largest catalogue response remains 2,880 bytes.
+
+Evidence is under `~/.cache/sunstoneos/build/npu-resume-1024/`:
+
+- `board-client/result.json`: the runtime and protocol case in two-core QEMU.
+- `usb-high-final-2/result.json` and `usb-full-final/result.json`: the final
+  linked image's MUSB PIO, RX/TX ring wrap, odd addresses, aggregate completion,
+  terminal zero-length packets and early RETURN ordering.
+- `providers/result.json`: provider construction and linked FIFO sizes. This
+  result predates only the final PIO word-assembly edit; the provider and
+  vendor-class code are unchanged.
+- `dcd-staging-command.json`, `dcd-staging.log` and `pio-word-emission.txt`:
+  compilation with the ordinary endpoint-staging configuration and inspection
+  of the final PIO word and byte loops.
+
+The image builds as `root/sunstone-a733-npu-board.elf`; the native USB records
+bind its SHA-256. These checks model hardware and establish no physical USB
+rate, NPU arithmetic, interrupt delivery, cache visibility or recovery.

@@ -175,7 +175,8 @@ def validate_admission(admission_raw,raw,build,layout,image_hash,cache=None,froz
     platform=json.loads(evidence(record['platform']));original=protocol.validate_platform
     validate=types.FunctionType(original.__code__,{**original.__globals__,'artifact':evidence})
     validate(platform,{**profile,'image_sha256':image_hash,'execution_profile':('npu-single-core-supervised-v1' if struct.unpack_from('<Q',raw,8)[0]==SINGLE_CORE_VERSION else 'npu-supervised-v1')},identity,port)
-    # Startup admits only PLL_NPU disabled and domain 4 OFF, and always enables
+    # Startup requires PLL_NPU disabled and coherent domain 4 OFF or ON, with
+    # local gates closed and engine resets asserted. It always enables
     # the PLL with method 2, which the manual warns can disturb other PLLs.
     required={
         'clock':{'independent-dram-phy-sources','exclusive-pll-npu-consumers-and-writers',

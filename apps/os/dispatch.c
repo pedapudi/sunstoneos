@@ -6,6 +6,7 @@
 #include "a733_mapping_check.h"
 #include "placement.h"
 #include <stdatomic.h>
+int os_thermal_throttled(void);
 
 struct os_dispatch_record os_dispatch_record;
 /* checks/os-image-link.py compares the INTID 95 route's core with this. */
@@ -36,7 +37,7 @@ int os_dispatch_open(void)
 }
 struct os_placement os_dispatch_place(uint32_t ordinal)
 {
-    return ordinal<os_dispatch_active?os_placement_table[ordinal]:(struct os_placement){0,0};
+    return ordinal<os_dispatch_active&&!os_thermal_throttled()?os_placement_table[ordinal]:(struct os_placement){0,0};
 }
 void os_dispatch_placed(void){++os_dispatch_record.placed;}
 void os_dispatch_refused(void){++os_dispatch_record.refused;}

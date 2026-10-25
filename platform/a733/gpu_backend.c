@@ -22,6 +22,8 @@ static int healthy(struct a733_gpu_backend *b)
         atomic_load_explicit(&b->error, memory_order_acquire)) return 0;
     if (b->external.revoked && atomic_load_explicit(b->external.revoked, memory_order_acquire))
         return fail(b, A733_GPU_BACKEND_REVOKED);
+    if (b->external.live && b->external.live(b->external.context) != 1)
+        return fail(b, A733_GPU_BACKEND_REVOKED);
     return 1;
 }
 static int device_page(uintptr_t address)

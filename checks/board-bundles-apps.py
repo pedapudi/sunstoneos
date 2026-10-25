@@ -490,7 +490,7 @@ def bundle4_outcome():
 def bundle6_outcomes():
     """A missed provisional bound returns to the ROM with status 1 after the summary."""
     return [dict(name='provisional-step-bound-missed', status=1, interrupt=None, fail_lines=0, fault=None,
-                 log_contains=['BOUND permille=1550', 'FAILED board bundle 6: provisional step bound'])]
+                 log_contains=['BOUND permille=1268', 'FAILED board bundle 6: provisional step bound'])]
 
 
 def bundle7_outcomes():

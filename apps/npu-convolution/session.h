@@ -15,7 +15,7 @@ int npu_single_core_seal(const struct a733_smp_contract *);
 /* Authenticated immutable page. The evidence digests bind reviewed records of
  * admission (platform and DDR), clock, power and supervision conditions;
  * nonzero fields do not prove them. Startup admits only PLL_NPU disabled and
- * domain 4 OFF, which its register pass reads. */
+ * coherent domain 4 OFF or ON, with local gates closed and engine resets asserted. */
 struct npu_session {
     uint64_t magic,version,bytes,epoch,generation,lease;
     uint8_t image[32],evidence[32],clock[32],power[32],supervision[32];

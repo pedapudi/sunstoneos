@@ -25,6 +25,11 @@
 #define NPU_CONVOLUTION_INPUT_BYTES 192u
 #define NPU_CONVOLUTION_OUTPUT_BYTES 72u
 #define NPU_CONVOLUTION_COMMAND_BYTES 524288u
+/* SUBMIT fills the job's output bytes with this word, little-endian and
+ * repeated from offset zero, before the job publication cleans them to
+ * memory. A byte the job does not write keeps its pattern byte, so a job
+ * that writes nothing cannot return the previous job's output. */
+#define NPU_CONVOLUTION_OUTPUT_POISON UINT32_C(0xc35a3ca5)
 enum npu_convolution_buffer {
     NPU_CONVOLUTION_NN, NPU_CONVOLUTION_COEFF, NPU_CONVOLUTION_COMMAND,
     NPU_CONVOLUTION_INPUT, NPU_CONVOLUTION_OUTPUT, NPU_CONVOLUTION_BOOTSTRAP,

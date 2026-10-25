@@ -2,7 +2,10 @@
 
 Status: **partly implemented**. Worker pacing (the "Interrupts and worker
 pacing" section) is implemented and host-modeled, except park;
-[gpu-service.md](../gpu-service.md) records its measurements. The other sections remain design. Each item ends at implemented
+[gpu-service.md](../gpu-service.md) records its measurements. Explicit healthy
+mimus CLOSE/reopen and its thermal caller are implemented and model-checked
+in [gpu-mimus-service.md](../gpu-mimus-service.md). Automatic idle parking,
+concurrent sessions and full fault recovery remain design. Each item ends at implemented
 and host-modeled; physical behavior stays pending until the board evidence at
 the end exists. Firmware events and failure classes are in
 [gpu-recovery.md](../gpu-recovery.md).

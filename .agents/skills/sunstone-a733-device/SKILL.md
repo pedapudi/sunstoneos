@@ -32,6 +32,16 @@ For example, the generic TF-A redistributor power hooks have GIC-600 overrides
 in the [implementation-specific driver](https://github.com/ARM-software/arm-trusted-firmware/blob/0892ad4db8f8f4c95775cc7d0505b6c12dda1f9e/drivers/arm/gic/v3/gic-x00.c).
 Copying only the generic call sequence can omit the hardware power protocol.
 
+Resolve the board build recipe, external-module selection and source-local
+preprocessor definitions before treating a driver as the effective reference.
+The official Zero 3W current recipe selects BXM, whose local `USE_FPGA`
+definition enables GPU core-domain control despite `CONFIG_AW_FPGA` being off.
+Checking only that configuration or the separate open-PVR path misses the
+additional power sequence. Use the [GPU reference audit](../../../docs/gpu-power.md#audit-of-the-nonreturning-identity-probe)
+for the pinned selection chain; preserve its distinction between a default build
+recipe and an identified installed image. A source sequence does not establish
+that the corresponding instructions executed on a failed board.
+
 Trace normal completion through the effective interrupt handler, waiter and
 caller before defining output ownership. Retained buffers do not by themselves
 justify omitting an upstream reset or stop: G2D pulses mixer reset before waking
@@ -236,11 +246,19 @@ Prevent recurring fixture failures at setup:
   invocations; copying compiler flags alone does not reproduce the configuration.
   Resolving a linker symlink can change invocation behavior; system Python may
   lack the native tooling's packages. Keep builds and downloads in the cache.
+  For a small target with a shared-layout change, prefer rebuilding its
+  dependent objects through the accepted build graph or compile commands when
+  that costs less than proving partial reuse. Mixing old and new debug-type
+  definitions caused avoidable GPU fixture setup repairs. Reserve manual object
+  reuse for material savings, and bind type lookups to the defining current unit.
 
 If setup fails, preserve completed cases, fix the cause and resume only affected
 or unexecuted work. Model hardware effects explicitly; do not present injected
 GPU outputs, simulated NPU results or emulated interrupts as physical operation.
 Host capture must match the frozen native producer's mode and result layout.
+Derive report magic, field widths and status meanings from the frozen native
+writer. A fixture assembled from the parser's own constants cannot establish
+that the native writer and host parser agree.
 For a new supervised caller, check its actual `run_session` entry policy as well
 as its capture callback. Direct callback fixtures missed unsupported result keys
 for H.264, DSI and UART. Reuse `checks/h264-supervisor-entry.py --caller <path> --case actual`

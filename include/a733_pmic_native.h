@@ -24,12 +24,14 @@ static inline uint64_t a733_pmic_divide(uint64_t n,const struct a733_pmic_diviso
     return (t+((n-t)>>d->s1))>>d->s2;
 }
 struct a733_pmic_native {
-    struct a733_pmic_ops operations;
+    struct a733_pmic_ops pmic_bus_ops; /* Reached only through a733_pmic_native_bind(). */
     struct a733_platform_locks *locks;
     void *task;
     unsigned initialized, holding; /* holding: the provider task entered the I2C mutex. */
-    /* Ticks per microsecond of the counter clock, set by the first time read
-     * on the provider task, the only caller. */
+    /* Ticks per microsecond of the counter clock, set by the first time
+     * read, which the provider task makes during startup. submit() also
+     * reads the time, on client tasks under the provider object lock, and
+     * only after startup has reached READY. */
     struct a733_pmic_divisor ticks_per_us;
 };
 /* Pure allowlist: only legacy TWI DATA/CNTR can be written. All engine, clock,
@@ -54,4 +56,10 @@ static inline int a733_pmic_native_address(uintptr_t a,unsigned writing)
  * Subsequent I/O requires EL1 task context and actual I2C mutex ownership.
  */
 int a733_pmic_native_init(struct a733_pmic_native *,struct a733_platform_locks *,void *task);
+/* a733_pmic_init() with the native adapter's operations and the adapter as
+ * their context: the one hand-off of those operations outside the adapter. */
+static inline int a733_pmic_native_bind(struct a733_pmic *p,const struct a733_pmic_config *c,
+    struct a733_pmic_native *n,struct a733_clock_leases *clocks,struct a733_rail_leases *rails,
+    struct a733_pins *pins)
+{return a733_pmic_init(p,c,&n->pmic_bus_ops,n,clocks,rails,pins);}
 #endif

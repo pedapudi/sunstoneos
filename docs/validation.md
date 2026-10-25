@@ -5,6 +5,64 @@ smallest check that resolves that risk. Run focused checks during iteration.
 Broaden testing when a shared dependency changes, a failure reveals wider impact,
 or a milestone lacks integration evidence.
 
+## Select the integration gate explicitly
+
+[tools/integration-gate.py](../tools/integration-gate.py) runs the selected
+central build targets, OS variants and regression checks. The coordinator names
+the changed behavior and its risk with `--reason`. A call without a selection
+is refused before any build or check runs. For example, a PMIC source-ownership
+change selects its two source checks:
+
+```sh
+python3 tools/integration-gate.py "$PWD" pmic-ownership \
+  --reason 'PMIC adapter ownership changed; check the provider boundaries' \
+  --check pmic-tree --check power-domains-tree
+```
+
+Add `--target TARGET` for each affected central build, `--variant NAME` for
+an affected OS configuration, and `--check NAME` for each needed regression
+check. The kernel, eight-core soak and mimus checks automatically build their
+required images. A source-only check configures no build. Duplicate selections
+run once. `--help` lists the supported variants and checks; other component
+checks continue to run directly with their required inputs.
+
+Use `checks/check-index.py --changed PATH...` to help find component coverage.
+Its textual search cannot prove that an empty selection is sufficient. The
+owner chooses coverage from the changed behavior and shared dependencies;
+the gate does not infer it from filenames or launch every matching check.
+
+`--full` explicitly requests all central targets, the nine OS variants of
+[the integrated OS image](handoff.md#integrated-os-image) and all gate checks.
+The optional GPU linear, mSBC, Cortex-A76 and CPU clock options are not
+variants of the gate; build them directly with `cfg.sh` when a change
+affects them. Reserve it for a shared change or milestone whose missing
+integration evidence justifies that scope, and state why in `--reason`.
+An integration commit alone does not justify it.
+
+Each invocation uses a new label under `~/.cache/sunstoneos/build/gate-LABEL`.
+It records the selection, reason, revision, commands and logs, and stops at the
+first failure. The builds use one directory per source checkout,
+`gate-central-NAME-HASH` and `gate-os-VARIANT-NAME-HASH`, where NAME is the
+checkout's directory name and HASH is the first ten hexadecimal digits of the
+SHA-256 of its resolved path. A gate on another worktree therefore never meets
+a CMake cache configured for a different source. A lock file,
+`gate-NAME-HASH.lock`, refuses a second gate on the same checkout while one
+runs. The gate refuses a source with uncommitted or untracked changes unless
+`--allow-dirty` is given. It records `git status --porcelain` in `status.txt`
+and the SHA-256 of `git diff --binary HEAD` in the summary, so evidence from a
+dirty tree names the changes it built. There are no automatic retries, including for emulator timeouts.
+Diagnose a failure and run only the affected work with a new label; reuse the
+successful evidence from the earlier invocation. The soak defaults to one
+trial; `--trials N` declares a repeatability sample in advance and needs a
+reason for that sample count. It does not retry failures.
+
+The host's existing `~/.cache/sunstoneos/bin/integration-gate.sh SOURCE LABEL`
+command delegates to this repository tool and accepts the same selection
+options. Host dependency configuration remains in `~/.cache/sunstoneos/bin/cfg.sh`.
+The gate builds and checks software only; board runs remain separately queued.
+
+## Match coverage to the change
+
 | Change | Initial verification | Broaden when |
 | --- | --- | --- |
 | Documentation | Review changed statements and links | Commands or build instructions changed |

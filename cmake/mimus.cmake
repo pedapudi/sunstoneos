@@ -5,6 +5,21 @@ endif()
 if(NOT NEWLIB_ROOT)
   message(FATAL_ERROR "Mimus requires NEWLIB_ROOT")
 endif()
+# The engine must be the revision pinned in apps/mimus/source.json, with no
+# changes under firmware/ or host/, the directories the build reads; the same
+# test as checks/mimus-paced-optional.py. It runs at configure time only.
+file(READ "${CMAKE_CURRENT_LIST_DIR}/../apps/mimus/source.json" mimus_source_record)
+string(JSON mimus_pinned_revision GET "${mimus_source_record}" revision)
+execute_process(COMMAND git -C "${MIMUS_DIR}" rev-parse HEAD RESULT_VARIABLE mimus_head_result
+  OUTPUT_VARIABLE mimus_head OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+if(NOT mimus_head_result EQUAL 0 OR NOT mimus_head STREQUAL mimus_pinned_revision)
+  message(FATAL_ERROR "MIMUS_DIR is at '${mimus_head}', not the pinned revision ${mimus_pinned_revision}")
+endif()
+execute_process(COMMAND git -C "${MIMUS_DIR}" status --porcelain -- firmware host
+  RESULT_VARIABLE mimus_status_result OUTPUT_VARIABLE mimus_changes ERROR_QUIET)
+if(NOT mimus_status_result EQUAL 0 OR NOT mimus_changes STREQUAL "")
+  message(FATAL_ERROR "MIMUS_DIR has uncommitted changes under firmware/ or host/:\n${mimus_changes}")
+endif()
 option(MIMUS_AARCH64_NEON "Use AArch64 NEON integer dot products" ON)
 add_subdirectory("${MIMUS_DIR}/firmware/components/asr" mimus-asr)
 # Recognition compute options, placed after the shared kernel options so they

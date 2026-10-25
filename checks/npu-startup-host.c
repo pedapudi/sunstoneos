@@ -47,6 +47,7 @@ static struct {
     uint64_t lock_us,locked_at;
     uint32_t osc;
     unsigned held,retained,enters,writes,never_lock,flip_b04,pmic_reads_before;
+    unsigned flip_pll,open_pll_reads;
     /* Counted in the callbacks: sequencer register reads, LOCK samples among
      * them (PLL_NPU reads without the register lock), the owner's register
      * reads during a step, and counter reads. */
@@ -61,6 +62,18 @@ static int reg_read(void *v,uintptr_t a,uint32_t *out)
     ++r.reads;if(a==CCU+0x2a0 && !r.held)++r.lock_samples;
     if(a==0x07090160){*out=r.osc;return 1;}
     if(a==PCK || a==PCK+8){++r.pck_reads;return owner_read(&d,a,out);} /* The owner model's PPU words. */
+    if(a==CCU+0x2a0) {
+        if(s.stage==A733_NPU_STARTUP_OPEN)++r.open_pll_reads;
+        const unsigned flip=r.flip_pll;
+        if((flip==1 && s.stage==A733_NPU_STARTUP_ENABLE && r.writes==2) ||
+           (flip==2 && !r.held && r.writes) ||
+           (flip==3 && s.stage==A733_NPU_STARTUP_OPEN && r.open_pll_reads==1) ||
+           (flip==4 && s.stage==A733_NPU_STARTUP_OPEN && r.open_pll_reads==2) ||
+           (flip==5 && s.stage==A733_NPU_STARTUP_FINAL) ||
+           (flip==6 && s.stage==A733_NPU_STARTUP_READY)) {
+            *word(a)^=1u<<24;r.flip_pll=0;
+        }
+    }
     *out=*word(a);
     if(a==CCU+0x2a0) {
         if((*out&0xa0000000)==0xa0000000 && !r.never_lock) {
@@ -79,6 +92,7 @@ static int reg_write(void *v,uintptr_t a,uint32_t value)
     assert(v==&r && bootstrap_running && r.held);
     assert(a==CCU+0xb00 || a==CCU+0xb04 || a==CCU+0x1920 || a==CCU+0x2a0);
     assert(a!=CCU+0x2a0 || !(value&(1u<<28)));
+    if(a==CCU+0x2a0)assert(!((*word(a)^value)&(1u<<24)));
     ++r.writes;r.last_write=a;*word(a)=value;return 1;
 }
 static int now_us(void *v,uint64_t *out){assert(v==&r);++r.clock_reads;return pmic_model_now(&m,out);}
@@ -187,9 +201,101 @@ static int tokens_held(void)
         a733_rail_status(&m.rails,&s.rail)==A733_RAIL_READY &&
         a733_gpu_resources_status(&m.gpu,s.config.pck_client,&s.pck)==A733_GPU_RESOURCE_OK;
 }
-int main(void)
+/* The inherited ON state still requires exclusive external ownership, closed
+ * local gates, asserted engine resets and a disabled PLL. The register model
+ * supplies those facts; physical PCK reads alone cannot establish them. */
+static int inherited_on(void)
+{
+    setup();d.ppu[4][0]|=8;d.ppu[4][2]|=8;
+    struct run b=boot(200,1,0);
+    assert(b.result==A733_NPU_PLATFORM_READY && tokens_held());
+    assert(!d.ppu_writes && s.row.counted==1 && d.owner.domain[1].count==1);
+    assert(m.rails.pins[s.rail.id&(A733_RAIL_CLIENTS-1)]==1);
+    assert(b.ticks<=12 && r.writes<=12 && !r.pmic_reads_before);
+    printf("{\"inherited_on\":{\"ticks\":%u,\"elapsed_us\":%llu,\"settle_us\":%llu,\"local_writes\":%u,\"pck_writes\":%u},",
+        b.ticks,(unsigned long long)b.elapsed_us,
+        (unsigned long long)b.stage_us[A733_NPU_STARTUP_SETTLE],r.writes,d.ppu_writes);
+    /* Local CLOSE keeps the power-domain row and rail pin. The actual owner
+     * refuses a later OFF request for domain 4, without releasing its pin. */
+    bootstrap_running=1;assert(a733_npu_startup_stop(&s)==A733_NPU_PLATFORM_READY);bootstrap_running=0;
+    assert(tokens_held() && s.row.counted==1 && d.owner.domain[1].count==1 && !d.ppu_writes);
+    const unsigned request=atomic_load(&s.row.request),state=atomic_load(&s.row.state);
+    assert(!a733_power_domain_request(&s.row,0));service_step();
+    assert(atomic_load(&s.row.request)==request && atomic_load(&s.row.state)==state &&
+        a733_power_domain_state(&s.row)==A733_POWER_ROW_ON);
+    assert(s.row.counted==1 && d.owner.domain[1].count==1 && !d.ppu_writes && tokens_held());
+    assert(m.rails.pins[s.rail.id&(A733_RAIL_CLIENTS-1)]==1);
+    /* Each field below invalidates the inherited-state precheck separately. */
+    static const struct { unsigned offset,bit; } unsafe[]={
+        {0xb00,31},{0xb04,0},{0xb04,16},{0xb04,17},{0xb04,18},{0x2a0,31}};
+    for(unsigned i=0;i<sizeof(unsafe)/sizeof(*unsafe);++i) {
+        setup();d.ppu[4][0]|=8;d.ppu[4][2]|=8;
+        r.ccu[unsafe[i].offset/4]|=1u<<unsafe[i].bit;
+        b=boot(200,1,0);
+        assert(b.result==A733_NPU_PLATFORM_RETAINED && !r.writes && !d.ppu_writes &&
+            !s.row.counted && !r.held && tokens_released());
+    }
+    /* Policy/status mismatch and a transitioning status are not adoption. */
+    for(unsigned status=0;status<2;++status) {
+        setup();d.ppu[4][0]|=8;d.ppu[4][2]|=status ? 1 : 0;
+        b=boot(200,1,0);
+        assert(b.result==A733_NPU_PLATFORM_RETAINED && !r.writes && !d.ppu_writes && tokens_released());
+    }
+    /* A later failed write has changed hardware and retains resources. */
+    setup();d.ppu[4][0]|=8;d.ppu[4][2]|=8;r.flip_b04=7;
+    b=boot(200,1,0);
+    assert(b.result==A733_NPU_PLATFORM_RETAINED && r.writes && r.held && r.retained &&
+        tokens_held() && !d.ppu_writes);
+    puts("\"unsafe_local_refusals\":6,\"incoherent_refusals\":2,\"postwrite_retention\":true,\"domain_off_refused\":true}");
+    puts("PASS inherited NPU domain ownership, local-state refusal, retention and release policy");
+    return 0;
+}
+static int inherited_pll(void)
+{
+    struct {unsigned reads,writes,clocks,locks;uint64_t elapsed;} baseline={0};
+    unsigned drift_refusals=0;
+    for(unsigned inherited=0;inherited<2;++inherited) {
+        const uint32_t keep=inherited<<24;
+        setup();d.ppu[4][0]|=8;d.ppu[4][2]|=8;r.ccu[0x2a0/4]=0x40104500|keep;
+        struct run b=boot(200,1,0);
+        assert(b.result==A733_NPU_PLATFORM_READY && s.pll_inherited==keep &&
+            r.ccu[0x2a0/4]==(0xe8305100|keep) && !d.ppu_writes && tokens_held());
+        if(!inherited){baseline.reads=r.reads;baseline.writes=r.writes;baseline.clocks=r.clock_reads;baseline.locks=r.enters;baseline.elapsed=b.elapsed_us;}
+        else assert(r.reads==baseline.reads && r.writes==baseline.writes &&
+            r.clock_reads==baseline.clocks && r.enters==baseline.locks && b.elapsed_us==baseline.elapsed);
+        bootstrap_running=1;assert(a733_npu_startup_stop(&s)==A733_NPU_PLATFORM_READY);bootstrap_running=0;
+        assert(r.ccu[0x2a0/4]==(0xe8305100|keep) && tokens_held());
+        for(unsigned boundary=1;boundary<=6;++boundary) {
+            setup();d.ppu[4][0]|=8;d.ppu[4][2]|=8;r.ccu[0x2a0/4]=0x40104500|keep;
+            r.flip_pll=boundary==6 ? 0 : boundary;b=boot(200,1,0);
+            if(boundary==6) {
+                assert(b.result==A733_NPU_PLATFORM_READY);r.flip_pll=6;
+                bootstrap_running=1;b.result=a733_npu_startup_stop(&s);bootstrap_running=0;
+            }
+            assert(b.result==A733_NPU_PLATFORM_RETAINED && !r.flip_pll && s.pll_inherited==keep &&
+                r.writes && tokens_held() && !d.ppu_writes);
+            if(boundary==1)assert(r.writes==2); /* No PLL programming after drift. */
+            ++drift_refusals;
+        }
+    }
+    const unsigned unknown[]={23,25,26};
+    for(unsigned i=0;i<sizeof(unknown)/sizeof(*unknown);++i) {
+        setup();d.ppu[4][0]|=8;d.ppu[4][2]|=8;r.ccu[0x2a0/4]=0x41104500|(1u<<unknown[i]);
+        struct run b=boot(200,1,0);
+        assert(b.result==A733_NPU_PLATFORM_RETAINED && !r.writes && !d.ppu_writes && tokens_released());
+    }
+    printf("{\"inherited_pll\":{\"control\":\"0x41104500\",\"elapsed_us\":%llu,\"reads\":%u,\"writes\":%u,"
+        "\"counter_reads\":%u,\"locks\":%u,\"same_as_bit24_clear\":true,\"drift_refusals\":%u,\"other_reserved_refusals\":3}}\n",
+        (unsigned long long)baseline.elapsed,baseline.reads,baseline.writes,baseline.clocks,baseline.locks,drift_refusals);
+    puts("PASS inherited PLL reserved bit preservation and drift retention");return 0;
+}
+int main(int argc,char **argv)
+
 {
     (void)unused_boot;
+    if(argc==2 && !strcmp(argv[1],"--inherited-on"))return inherited_on();
+    if(argc==2 && !strcmp(argv[1],"--inherited-pll"))return inherited_pll();
+    assert(argc==1);
     /* Boot to READY. */
     setup();
     struct run b=boot(200,1,0);

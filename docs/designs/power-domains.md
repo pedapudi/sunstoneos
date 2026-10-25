@@ -10,10 +10,11 @@ lock-free PMIC time reads exist. Section numbers refer to
 design's baselines were counted on commit `b3b1289` with the host models in
 the budget table. One set of figures comes from the board: the service steps
 of a read-only run on port 3-3, in section "Board result of the service
-steps". They exceed the 110% wire-time target; this design sets a
-provisional bound of 155% for a snapshot step at 400 kHz under that run's
-conditions and records the provider follow-up, which shortens the step and
-leaves 110% to a lighter barrier placement.
+steps". They exceed the 110% wire-time target. The provider follow-up
+shortened the step, and a second run with it measured the register access
+costs. The provisional median limit for a 400 kHz snapshot is 1,268 permille of
+its measured wire time, with another 40 µs for the first step. The 110%
+target remains open because plain write cost has not been measured.
 
 ## Ownership and data flow
 
@@ -25,8 +26,7 @@ platform (domain 4), the video platform (domains 2 and 3), HDMI and DisplayPort
 display image links the GPU, framebuffer and HDMI copies.
 
 - **Domain owner.** `drivers/power/a733_power_domains.c` replaces
-  `a733_de_sys_power.c` and becomes the only writer of domains 1 and 5;
-  domain 4 joins in the NPU stage. A tree check fails if another file writes a
+  `a733_de_sys_power.c` and is the only writer of domains 1, 4 and 5. A tree check fails if another file writes a
   block the owner holds.
 - **Rows.** A consumer registers one static row before the scheduler starts:
   domain and rail token. This package's rows are the framebuffer and G2D
@@ -40,9 +40,8 @@ display image links the GPU, framebuffer and HDMI copies.
   state with release order. The consumer reads that state with one acquire
   load from its existing per-tick state machine: the GPU through
   `a733_gpu_power_poll`, the framebuffer and G2D through
-  `a733_power_domain_state`. A blocking `a733_power_domain_wait` and its row
-  semaphore are added together with their first blocking caller, the NPU
-  startup.
+  `a733_power_domain_state`. The NPU startup also polls its row state;
+  it has no additional blocking row API or semaphore.
 - **Service task.** One task per image runs every PMIC transaction and every
   domain transition. The image's PMIC loop body becomes
   `a733_power_service_step()`, which advances all queued work and returns the
@@ -145,7 +144,9 @@ step and shares the core in turns with the GPU service worker.
 Sources are pinned in `sources.lock.json`: `pck600_domains.c` (SHA-256
 `2d9c2b60…`), `ccu-sun60iw2.c` (`1d32bb85…`), `ccu-sun60iw2-r.c` (`9285e1b3…`),
 `sun60iw2p1.dtsi` (`1c7313f6…`), `sun60i-a733-orangepi-zero3w.dts`
-(`31145367…`) and `vip_drv_device_platform.c` (`a47f85f2…`).
+(`31145367…`). The cached NPU platform source,
+`vip_drv_device_platform.c` (`a47f85f2…`), comes from the same pinned board
+kernel revision; [npu-platform.md](../npu-platform.md) records its use.
 
 | Step | Registers | Source | Status |
 | --- | --- | --- | --- |
@@ -165,19 +166,14 @@ PPU.
 
 ## Interface for the NPU startup
 
-1. `a733_power_domain_row_init(row, 4, owner, rail_token)` before the
-   scheduler starts.
-2. `a733_power_domain_check(4)`, which reads and never writes, before the
-   first NPU reset or clock write.
-3. Resets, module rate and clocks, then the NPU's existing `DSB SY`.
-4. `a733_power_domain_request(row)` and `a733_power_domain_wait(row, deadline)`,
-   followed by the NPU's existing 2,000 µs settle and readback. The wait takes
-   a row semaphore that the service gives after it publishes the row state;
-   both are added to the owner in the same change as this caller.
-
-The NPU package removes its delay-row and ON writes, the PCK write offsets in
-`a733_npu_platform_native.c`, its DCDC2 snapshot and the direct S_TWI0 path in
-`a733_npu_startup.c`.
+The startup sequencer registers its domain-4 row before the service starts.
+It calls `a733_power_domain_check(domains, 4, &state)` before local reset or
+clock writes, then configures PLL_NPU and the local clocks/resets. It requests
+ON with `a733_power_domain_request(row, 1)` and polls
+`a733_power_domain_state(row)` under its own deadline. A coherent inherited
+ON state is adopted without a PCK write. The existing 2,000 µs settle and
+readback follow ON. The sequencer writes no PCK register and retains the
+row, rail pin and PLL after healthy local CLOSE.
 
 ## Code reused and removed
 
@@ -216,7 +212,7 @@ and with two, and with S_TWI0 divisors for 400 kHz and 100 kHz.
 
 | Metric | Baseline | Target | Measured by |
 | --- | --- | --- | --- |
-| Tick waits per snapshot; per selector write | 44 and 56 polls, up to one tick each | 400 kHz: snapshot 0, one step of at most 155% of its wire time (provisional, from one board run; replaced after the next bundle 6 measures the access cost, section "Board result of the service steps"); selector write at most 1 tick wait in 2 steps; 100 kHz: ≤ 1 ms spin per step, 2 and 3 tick waits | `checks/a733-pmic-cost.c`; `power-domains-service.c`; bundle 6 on the board |
+| Tick waits per snapshot; per selector write | 44 and 56 polls, up to one tick each | 400 kHz: snapshot 0, one step; median at most 1,268 permille of measured wire time, first at most that limit plus 40 µs (bundle 6, section "Board result of the service steps"); selector write at most 1 tick wait in 2 steps; 100 kHz: ≤ 1 ms spin per step, 2 and 3 tick waits | `checks/a733-pmic-cost.c`; `power-domains-service.c`; bundle 6 on the board |
 | BUSY results seen by other cores during one snapshot | `a733_pmic_live`: BUSY whenever it meets a poll | `a733_pmic_live` 0; `a733_pmic_result` and `a733_pmic_reap` ≤ 1 per caller | `power-domains-service.c`, concurrent caller on the second core |
 | CPU time USB0 waits behind the service | PMIC task at or above USB0 priority in every image in the table | 0 on one core and on two | `power-domains-service.c` |
 | Service wakes per second with no work | 1,000 | 0 until the session deadline; park, stop and revocation notify | `power-domains-service.c` |
@@ -226,7 +222,7 @@ and with two, and with S_TWI0 divisors for 400 kHz and 100 kHz.
 | PMIC transactions per row request | GPU: 6 per start (one DCDC4 snapshot) | 0; 12 per boot | `checks/power-domains-pck.c` |
 | Slow acknowledgement | One caller poll per tick | ≤ 1 tick per retry; FAILED by 10 ms plus 1 tick | `checks/power-domains-pck.c` |
 | Register accesses per domain-5 ON | 14 (counted from the GPU steps) | 14, once per transition | `checks/a733-gpu-power.c` trace |
-| Files that write the delay row | 6, plus 2 native allowlists | 5 after this package; 4 after the NPU stage | New `checks/power-domains-tree.py` |
+| Files that write the delay row | 6, plus 2 native allowlists | 4; no native delay-row allowlist | New `checks/power-domains-tree.py` |
 
 The service check also covers the park paths. A park request in the GPU
 display image completes only when the PMIC is idle and every domain is ON, OFF
@@ -262,10 +258,6 @@ GPU liveness park complete before their deadlines.
   400 kHz the host model at the board's fitted register-access cost predicts
   two steps with one tick wait. DCDC2 and DCDC4 snapshot steps were measured
   (section "Board result of the service steps").
-- The cost of a provider register access, divided into the bus access with
-  its barriers, the time reads and the provider's software, from the next
-  bundle 6, which runs the provider follow-up; then the bound that replaces
-  155%.
 - Qualified delivery of the S_TWI0 interrupt, GIC SPI 203, for each bus
   phase. It is the condition under which the service blocks on the
   interrupt instead of spinning for each bus phase.
@@ -322,7 +314,7 @@ repeated START or STOP two; a time read costs 40 ns and a register access
 
 | Metric | Merge base | Now | Target |
 | --- | --- | --- | --- |
-| Tick waits per snapshot; per selector write | 44 and 56 polls, up to one tick each | Model at 200 ns per register access, 400 kHz: 0 and 0, one step of 687 µs and 885 µs (wire time 642 µs and 828 µs, so 107%). Model at the board's fitted 1,300 ns: snapshot 0, one step of 915 µs (145% of the 630 µs bit-time wire time); selector write 1, in 2 steps. Board, snapshot: one step of 917 µs, 146% of 630 µs (median of 34). 100 kHz model: 2 and 3, at most 1,000 µs spin per step | 400 kHz: snapshot 0, one step of at most 155% of wire time (provisional); selector write at most 1 in 2 steps; 100 kHz: ≤ 1 ms per step, 2 and 3 |
+| Tick waits per snapshot; per selector write | 44 and 56 polls, up to one tick each | Model at 200 ns per register access, 400 kHz: 0 and 0, one step of 687 µs and 885 µs (wire time 642 µs and 828 µs, so 107%). Model at the board's fitted 1,300 ns: snapshot 0, one step of 915 µs (145% of the 630 µs bit-time wire time); selector write 1, in 2 steps. Board, snapshot: one step of 917 µs, 146% of 630 µs (median of 34); with the provider follow-up, 779 µs, 123.7% (median of 33). 100 kHz model: 2 and 3, at most 1,000 µs spin per step | 400 kHz: snapshot 0, one step with a provisional median limit of 1,268 permille of measured wire time; selector write at most 1 in 2 steps; 100 kHz: ≤ 1 ms per step, 2 and 3 |
 | BUSY results seen by another caller during one snapshot | `a733_pmic_live`: 211 per snapshot | `a733_pmic_live` 0; `a733_pmic_result` at most 1 with two cores, 0 with one; `a733_pmic_reap` 0 | `a733_pmic_live` 0; result and reap ≤ 1 per caller |
 | CPU time USB0 waits behind the service | PMIC task at or above USB0 priority in all five images | 0: the service runs below USB0 in all five images, and the owner's code has no critical section or scheduler suspension; the provider's lock waits at activation are one-tick blocks, which USB0 preempts | 0 on one core and on two |
 | Service wakes per second with no work | 1,000 | 0; 2 in the resident board image, which caps the block at 500 ms; one wake per park, stop or row notification | 0 until the session deadline |
@@ -332,7 +324,7 @@ repeated START or STOP two; a time read costs 40 ns and a register access
 | PMIC transactions per row request | GPU: 6 per start (one DCDC4 snapshot) | 0; 12 per boot | 0; 12 per boot |
 | Slow acknowledgement | DE_SYS: one caller poll per tick; GPU: a 50 µs spin per poll | 54 µs spin after the command, then one status read per one-tick step; FAILED 10,092 µs after the command, after 10 retries | ≤ 1 tick per retry; FAILED by 10 ms plus 1 tick |
 | Register accesses per domain-5 ON | 13 PPU operations by the GPU (14 with the native read-modify-write of the policy word) | 14 PPU accesses by the owner (2 adoption reads, 5 delay-row writes and 5 readbacks, the command, 1 status read), plus 5 domain-level reads | 14, once per transition |
-| Files that write the delay row | 6, plus 2 native allowlists | 5, plus 1 native allowlist (the NPU's) | 5 after this package; 4 after the NPU stage |
+| Files that write the delay row | 6, plus 2 native allowlists | 4, with no native allowlist | 4; no native delay-row allowlist |
 
 At 400 kHz and 200 ns per register access each request takes one step of
 107% of the model's wire time: the step adds polls and time reads to the bus
@@ -340,7 +332,7 @@ phases. The design's first estimate of 240 and 320 bit times (0.6 ms and
 0.8 ms) is below the model's wire time, which counts nine bit times per byte
 and two per condition, so the target is stated relative to wire time. The
 board's register accesses cost more, and section "Board result of the service
-steps" sets a provisional bound of 155% for a snapshot step;
+steps" gives the bound for a snapshot step;
 `checks/power-domains-service.c` checks both access costs. Supply verification
 ends 8.4 ms after the service's first step at 400 kHz and 15.0 ms at 100 kHz, with flags set at sub-microsecond times,
 in the model.
@@ -417,35 +409,41 @@ accesses of the next poll before its phase-start write, add to the wire
 time. The provider follow-up, [pmic-access.md](pmic-access.md), times each
 spin from the provider's time of the phase-start write with a minimum re-spin
 of a quarter bit time, and reads the time once per bus phase instead of twice
-per access. With flags set at sub-microsecond times,
-`checks/power-domains-service.c` then gives a 400 kHz snapshot step of
-846 µs at 1,300 ns per access (134% of the 630 µs bit-time wire), 758 µs at
-800 ns and 782 µs at 850 ns, and a DCDC3 selector write in one step at
-800 ns and in two at 850 ns, with 200 ns per provider poll and 100 ns per
-time read. A step within 110%
-would still need about 0.3 µs per access in the model. The owner's fastest
-measured interval, 0.42 µs between CCU reads with recording, exceeds that,
-so 110% needs a lighter barrier placement, which needs board
-qualification.
+per access.
 
-The next bundle 6 times the parts of a provider register access in the
-service task, which gives the split, and counts its steps against the bound
-below (section "Records of bundles 6, 7 and 8" of
-[board-bundles-next.md](board-bundles-next.md)).
+A second bundle 6 ran the follow-up on port 3-3 on 2026-10-24, with CPU-L at
+494 MHz in the same lifetime and the bundle's trace observer and write
+stamps active. Its median snapshot step was 779 µs, 123.7% of the 630 µs
+wire time (33 steps, 777 to 788 µs after the first), and its first step
+809 µs, 128.4%. The byte measured the nominal 22.5 µs, and no phase needed a
+re-spin. Timed in the service task, a bare S_TWI0 read takes about 378 ns,
+the `DSB SY` pair adds about 41 ns, the adapter's read takes 462 ns on
+average, a time read 144 ns and a write about 358 ns. Section "Board result"
+of [pmic-access.md](pmic-access.md) gives the windows, the model at those
+costs and explains why the model does not independently derive the bound.
+Interrupts landed in 24 of the 33 recorded steps.
 
-**Provisional bound.** At 400 kHz a snapshot completes in one step of at most
-155% of its wire time. The bound holds only for this run's conditions: CPU-L
-at 494 MHz, one core, the bundle 6 trace hook active, port 3-3 and one
-lifetime. Its headroom is judged against step 1, the slowest step at
-149.4%, which is 5.6 points below the bound. A step above about 159% (1,000 µs for a 630 µs
-snapshot) would reach the service's 1 ms spin limit and split the snapshot
-across a tick wait. The bound is replaced after the access-cost
-measurement, by the model's step at the measured access cost plus a margin
-for the median step and a separate bound for the first step
-([pmic-access.md](pmic-access.md)). At 1,300 ns per access, a
-selector write, wire time 828 µs in the model, takes two steps with one tick
-wait. Until a DCDC3 write is measured on the board or the follow-up lands,
-its bound is at most one tick wait in two steps.
+The 110% target remains open. A plain read costs about 379 ns, but plain
+write cost has not been measured. Assuming 379 ns for every access gives
+694–712 µs depending on whether model bytes take 22 or 23 µs. Separate
+read/write assumptions give different results; these rows establish no
+hardware floor. The optional write-throughput window is specified in
+[pmic-access.md](pmic-access.md) pending safe-register review.
+
+**Provisional empirical bound.** At 400 kHz a snapshot completes in one
+step. Its median limit is 1,268 permille of its measured wire time; the
+first-step limit adds 40 µs. At the nominal 22.5 µs byte, these limits are
+798.840 µs and 838.840 µs, approximately 799 µs and 839 µs. They come from
+the observed median plus approximately 20 µs and hold for bundle 6 at
+CPU-L 494 MHz on one service core with its trace observer and write stamps.
+The fitted 299 ns per-poll remainder does not measure software overhead.
+
+At a step near 1 ms, the service can split a snapshot across a tick wait.
+The DCDC3 selector-write bound remains at most two steps with one tick
+wait, pending a board run. The historical mixed-cost model takes one
+1,001 µs step at 380 ns per poll and splits at 386 ns; the 250 ns poll row
+gives a 757 µs snapshot. These are sensitivity results from a rejected
+calibration, not independent hardware limits.
 
 Differences from the design, each with its reason:
 
@@ -491,10 +489,9 @@ Differences from the design, each with its reason:
   provider is READY after the settle time; a certain failed result is reaped
   and the token released; only the DCDC4 reading is kept, for the GPU supply
   consumer, which reads it after its verified bit.
-- **Domain-4 rows are accepted and checked.** The owner accepts domain-4 rows
-  for the NPU startup's next stage, and `checks/power-domains-tree.py` fails
-  on a domain-4 row outside `checks/` while the NPU platform still writes the
-  domain.
+- **The NPU startup uses its domain-4 row.** Its sequencer makes no PCK
+  write. `checks/power-domains-tree.py` rejects a return to direct NPU
+  delay-row writes while a domain-4 row consumer exists.
 - **Merge-base branches in two checks.** `checks/rail-leases-cost-row.c` and
   `checks/power-domains-tree.py` keep a branch for a tree with the DE_SYS
   provider; it serves only their `--root` measurement of the merge base,
@@ -506,8 +503,9 @@ Differences from the design, each with its reason:
   keeps it only after a failure, when an uncertain request may still borrow
   it. An image that registers no row, such as the integrated OS image,
   verifies nothing and makes no PMIC read at boot.
-- **Domain 1 and 4 OFF requests are refused** at the request call, since no
-  caller needs those domains off.
+- **Domain 1 and 4 OFF requests are refused** at the request call. No
+  concrete consumer supplies the required quiescence and ownership proof;
+  the accelerator assessment below details the NPU dependencies.
 - **The GPU check models the owner.** `checks/a733-gpu-power.c` keeps its
   GPU-local cases with a stand-in that answers the row; the real owner's
   trace for `checks/a733-gpu-power-reference.py` comes from
@@ -515,9 +513,83 @@ Differences from the design, each with its reason:
 
 Not implemented, with the dependency that blocks each:
 
-- The NPU on domain 4, the blocking `a733_power_domain_wait` and its row
-  semaphore: they land with the NPU startup's next stage
-  ([docs/power-domains.md](../power-domains.md) lists the NPU owner's
-  changes).
 - The deinterlace consumer of domain 1 still requires the domain already ON
   and reads its policy and status; it moves onto a row in its own package.
+
+## Accelerator lifecycle assessment
+
+Status: GPU healthy OFF/ON has a software contract and host evidence; its
+physical lifecycle remains unqualified. NPU startup and local CLOSE use a
+retained ON domain. This assessment adds deadline enforcement to the shared
+owner and does not introduce another transition API.
+
+The primary references establish different responsibilities:
+
+| Reference | Established behavior | Limit |
+| --- | --- | --- |
+| A733 board kernel `pck600_domains.c`, lines 104–142 and 547–569, revision `2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f` | Masked OFF/ON request, completion barrier, 10 ms polling bound and domain-specific delay words | Register status alone does not prove accelerator drain |
+| Same revision, `pvr_power.c`, lines 94–111, 256–311 and 353–376; [GPU isolation contract](../gpu-isolation.md) | Firmware idle/OFF handshakes and local drain precede reset/gate teardown and platform power-off | Applies to healthy firmware and owned memory; failed-device recovery retains resources |
+| Same revision, `vip_drv_device_platform.c`, lines 419–438 | NPU clock/reset initialization precedes runtime power-on; `pm_runtime_put()` is called before clock uninitialization | The call order does not establish when runtime PM completes the OFF transition; GPU prerequisites cannot simply be copied |
+| Arm PCK-600 TRM `101150_0005_01_en`, pages 34–35 and 40 | Configurable low-power interfaces coordinate quiescence, clock/reset/isolation control and the power-control state machine | A733 signal connections are implementation-specific; the generic TRM supplies no A733 software isolation register |
+| A733 User Manual V1.00, section 2, printed page 4 | Shared SRAM `0x00074000`–`0x000f3fff` requires NPU power while in use | Closing NPU command admission does not exclude other CPU or DMA SRAM users |
+
+The power-controller source, GPU source and both manuals match their
+`sources.lock.json` hashes. The cached NPU platform source has SHA-256
+`a47f85f2266ec5a9e7ed27dbd948c325a1a169b05c79e2389d3d071f55bf89d9`.
+All source adaptations preserve their existing license notices.
+
+**Concrete consumers.** The GPU stop controller closes admission, obtains
+fresh firmware acknowledgements and independent power states, retires
+queues and checks BIF/MMU/cache/wrapper idle before reset readback. Its
+platform controller then asserts external reset, closes local gates and
+requests domain 5 OFF. The shared owner must acknowledge OFF before that
+platform releases resources. Healthy reopening uses the existing ON row
+request with gates closed and reset asserted.
+
+NPU orderly CLOSE drains accepted work through its existing controller
+bounds, stops interrupts, closes local module/bus gates and asserts its
+local engine resets. It retains domain 4, the SRAM reset state, PLL and
+leases. Implementing full NPU OFF requires a concrete caller that proves
+no outstanding device work and no shared-SRAM users, plus a source-backed ordering between
+power completion and clock teardown. The present thermal consumer supplies
+no such contract. Retaining the domain is required until those conditions
+are established.
+
+**Deadline correction.** Previously, the owner accepted a target status
+before testing whether its 10 ms transition deadline had expired. A late
+OFF could therefore unpin a rail. Now it rejects a status observation at
+or after the deadline and checks time again after a target read. A failed
+or regressed completion clock fails the service and every pending domain;
+an expired transition fails its domain and retains counted rows and pins.
+
+A transition's deadline is the earlier of the service session deadline and
+10 ms after the completed policy write. Before programming delays or the
+policy, the owner checks that the session remains open. This check governs
+new commands; it does not erase an adopted ON state or reclaim retained
+resources. The consumer's own earlier deadline remains its responsibility;
+the row API does not carry a per-consumer deadline.
+
+**Budget and focused evidence.** The correction adds two time reads per
+successful command: one at command admission and one after target status.
+Pending polls gain no time or register read; an expired poll now omits its
+status read. The host model still counts 14 PPU accesses for ON, five
+level reads per GPU admission and zero PMIC transactions per row request.
+The slow-acknowledgement case fails after 10,092 µs, within the existing
+10 ms plus one-tick observation allowance. The 50 µs initial spin and
+one-tick pending retry remain unchanged.
+
+`checks/power-domains-pck.c` passes with AddressSanitizer and non-recovering
+UndefinedBehaviorSanitizer, including ON/OFF before/equality/after cases,
+status callbacks that cross the bound, failed/regressed completion clocks,
+shorter session deadlines and expired command admission. The existing
+service model also passes its timing, wake and retention assertions. Raw
+artifacts are under `~/.cache/sunstoneos/build/accelerator-power-1024/`.
+
+**Physical evidence still required.** The GPU needs one complete healthy
+start, numerical operation, shutdown and reopen with owned memory and
+recovery intact. Record fresh firmware states, local idle/reset readbacks,
+PPU policy/status transitions and retained ownership on failure. The NPU
+needs a separate source-reviewed OFF/ON procedure that excludes every
+shared-SRAM user and establishes power-completion/clock ordering. Both domains
+still need measured PPU completion latency and the intermediate status
+trace described above; host models do not establish the board wiring.

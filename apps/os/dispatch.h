@@ -39,7 +39,7 @@ struct os_dispatch_record {
     uint32_t opened;      /* 1 after OPEN succeeded */
     uint32_t open_failed; /* 1 after OPEN was refused or failed */
     uint32_t failure;     /* OS_DISPATCH_RESET or OS_DISPATCH_LOST, recorded before board_fail */
-    uint32_t incomplete;  /* 1 after a job completed without every tag */
+    uint32_t incomplete;  /* 1 after a completed job fails output validation */
 };
 extern struct os_dispatch_record os_dispatch_record;
 /* Active table rows; read through os_dispatch_place only. */
@@ -49,22 +49,22 @@ extern uint32_t os_dispatch_active;
  * to OPEN the session; on success every table row becomes active, otherwise
  * every tensor stays on the CPU for the boot. Returns 1 when opened. */
 int os_dispatch_open(void);
-/* Hook, per call: the tensor's row while the session is open, else a row
- * with n_gpu = 0. Two loads (the active count and the row) and one compare. */
+/* Hook, per layer: the tensor's row while the session is open and thermal
+ * throttling is clear, else n_gpu = 0. An admitted layer may finish its
+ * remaining GPU batches; NORMAL never reopens a disabled session. */
 struct os_placement os_dispatch_place(uint32_t ordinal);
 /* Hook, per placed call and per job refused before device access. */
 void os_dispatch_placed(void);
 void os_dispatch_refused(void);
-/* Hook, after a job reported OK without every lane's tag or with a sum that
- * differs from the CPU's: records it and puts every later call on the CPU for
- * the boot at once. The session stays open and idle; the engine then
- * computes the job's rows on the CPU. */
+/* Hook, after an OK record has a wrong sequence, missing tag or incorrect sum:
+ * records the rejection and closes dispatch admission for the boot. This is
+ * bookkeeping only; the caller must complete terminal retirement before
+ * removing the hook or allowing CPU fallback. */
 void os_dispatch_incomplete(void);
-/* Hook, around each wait for a job's record: the recognizer is waiting on
- * the GPU from the job's submission until its record arrives. */
+/* Recognizer waiting for a job record or a lifecycle transition. */
 void os_dispatch_waiting(int waiting);
-/* Any task: OS_DISPATCH_GPU_WAITING while OPEN runs or the recognizer waits
- * for a job's record, so a silent recognizer means a silent GPU;
+/* Any task: OS_DISPATCH_GPU_WAITING during OPEN, CLOSE or a job-record wait,
+ * so a silent recognizer means a silent GPU;
  * OS_DISPATCH_GPU_FAULT once a GPU fault ends the boot; otherwise
  * OS_DISPATCH_GPU_IDLE. */
 enum { OS_DISPATCH_GPU_IDLE, OS_DISPATCH_GPU_WAITING, OS_DISPATCH_GPU_FAULT };
@@ -83,11 +83,21 @@ extern struct tskTaskControlBlock *os_recognizer;
  * firmware and session memory and creates the service worker on `core`, with
  * no device access; a refusal (pool, owners, tensor admission, a GPU loss in
  * the previous-boot report) keeps OPEN refused for the boot and returns 1.
- * open: the recognizer, once; the worker powers the GPU, starts the firmware,
+ * open: the recognizer, initially and after healthy thermal park; the worker
+ * powers the GPU, starts the firmware,
  * publishes the session and formats its client ring. 1 when the session is
  * ready. Its waits record no service progress. */
 int a733_gpu_mimus_start(unsigned core);
 int a733_gpu_mimus_open(void);
+/* Recognizer only, between complete matmul calls after all output reads.
+ * THROTTLE closes the healthy session; NORMAL reopens its retained backing.
+ * 1 ready, 0 parked, -1 retained failure. No automatic idle timer or reset. */
+int a733_gpu_mimus_thermal(void);
+/* Recognizer only after receiving a rejected job's record, before returning
+ * any output from that job; previous output must already be consumed. Close
+ * admission permanently and wait for acknowledged STOPPED, retaining backing.
+ * 1 permits CPU fallback; 0 requires LOST/board failure, never silent fallback. */
+int a733_gpu_mimus_retire(void);
 /* One job of a placed call. begin writes the slot and wakes the worker
  * without waiting: 1 submitted (finish returns its record), 0 refused before
  * any device access (the caller computes the rows), -1 the session is lost.

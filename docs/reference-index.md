@@ -13,8 +13,11 @@ Reuse prior reading and inspect relevant changes on subsequent visits.
 | Current board state and next work | [Handoff](handoff.md): “Board state and recovery” and “Continuation and evidence reuse” |
 | Device coverage | [Hardware matrix](hardware.md): the relevant device bullet |
 | Physical access and recovery | [Board skill](../.agents/skills/sunstone-a733-board/SKILL.md) |
+| Boot-input admission versus forced-FEL normal return | [Reset-path guard classification](watchdog.md#choose-the-boot-input-guard-from-the-reset-path) and [captured ROM proof](watchdog.md#captured-board-rom-and-reset-ownership); [GPU actual-input audit](../apps/gpu-finite/HOST.md#failed-physical-attempt-and-input-audit) separates accepted inputs from unobserved native execution |
 | Multicore implementation | [CPU skill](../.agents/skills/sunstone-a733-multicore/SKILL.md), then its boundary-specific source table |
 | Peripheral implementation | [Device skill](../.agents/skills/sunstone-a733-device/SKILL.md) |
+| Effective GPU reference selection and power sequencing | [GPU source audit](gpu-power.md#audit-of-the-nonreturning-identity-probe): default Zero 3W BXM build selection, source-local branches and limits of failed-launch evidence |
+| NPU local shutdown versus domain power-off | [NPU CLOSE contract](npu-startup.md#local-stop-after-close): established scoped ownership, observed retirement and missing A733 power-transition guarantees |
 | Architectural constraints | [Arm/Linux audit](a733-multicore-reference-audit.md): the relevant named section |
 | Boot0 monitor header, cleanup and guarded cold entry | [Cold-entry recorder](cold-entry.md): mutable header/loadword, independent reset-state model and parked report; [parser cache cleanup](cold-entry.md#the-parser-cleans-cpu-caches-before-returning) precedes the main-tail cleanup and has separate instruction-model evidence. [Boot evidence](boot.md) and [ordinary-file packaging](microsd-boot-package.md) retain separate limits |
 | CPU diagnostic result | [Supervised startup](a733-smp-supervised.md): the matching checkpoint heading |

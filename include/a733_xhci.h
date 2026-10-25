@@ -42,7 +42,7 @@ struct a733_xhci_endpoint {
     uint8_t *bounce,*caller;
     uint64_t ring_pa,bounce_pa,pending_trb,deadline;
     unsigned number,address,packet,index,cycle,opened,configured,pending;
-    unsigned kind,direction,length,aborted,transfer_type,interval,burst; /* pending:0 idle,1 queued,2 on ring,3 reset recovery,4 dequeue recovery,5 halted by transaction error,6 isochronous TDs on ring. */
+    unsigned kind,direction,length,aborted,transfer_type,interval,burst; /* pending:0 idle,1 queued,2 on ring,3 reset recovery,4 dequeue recovery,5 halted by transaction error,6 isochronous TDs on ring,7 awaiting bulk clear,8 stop idle bulk,9 configure idle bulk. */
 };
 /* One root device and up to two hub children retain own EP0, contexts and
  * data rings; command/event rings remain controller-owned. A child of a
@@ -55,6 +55,8 @@ struct a733_xhci_device {
     unsigned control_stage,control_length,control_in,evaluate_pending,address_status;
     unsigned configure_pending,command_mask,zero_retired,parent,parent_port,route,tier;
     unsigned hub,hub_ports,hub_ttt,hub_mtt,hub_configured;
+    unsigned read_recovery; /* One bulk STALL admitted by a mounted READ10 owner. */
+    unsigned recovering; /* Endpoint index+1 while reset/clear/dequeue is serialized. */
     unsigned detach,stopping; /* detach:1 stopping endpoints,2 disabling slot; stopping:endpoint index+1. */
     uint8_t setup[8];
     struct a733_xhci_endpoint endpoints[A733_XHCI_ENDPOINTS];
@@ -164,6 +166,13 @@ int a733_xhci_isoch_take(struct a733_xhci *,unsigned address,unsigned endpoint,
 int a733_xhci_setup(struct a733_xhci *,unsigned address,const uint8_t[8],uint64_t deadline);
 int a733_xhci_transfer(struct a733_xhci *,unsigned address,unsigned endpoint,
     uint8_t *,unsigned bytes,uint64_t deadline);
+/* Arm one matched bulk STALL for the mounted read-only storage consumer.
+ * Requires an idle configured bulk pair; a second stall is not armed by retry. */
+int a733_xhci_read_recovery(struct a733_xhci *,unsigned address);
+/* After successful device CLEAR_FEATURE, restore one known idle/stalled bulk
+ * endpoint. Completion is asynchronous; its pending/recovering state clears only
+ * after validated command completions. No allocation or DMA release occurs. */
+int a733_xhci_clear_bulk(struct a733_xhci *,unsigned address,unsigned endpoint,uint64_t deadline);
 /* Immediately revoke caller destinations. Aborting an actual pending operation
  * permanently retains the complete session; use detach to end a device.
  * Absent, idle or detaching endpoints have nothing to cancel and return1.

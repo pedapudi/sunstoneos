@@ -4,7 +4,8 @@
  * resource manager, PMIC and locks, the firmware instance, the mimus session
  * as the service's component and the native backend. start runs in the
  * gpu-linear start entry before the scheduler; the recognizer calls open
- * once and then begin and finish per job; INTID 95 calls irq. */
+ * initially, reconciles thermal state between calls, and begins and finishes
+ * each job; INTID 95 calls irq. */
 #include "os.h"
 #include "../board/application.h"
 #include "a733_fault.h"
@@ -12,6 +13,7 @@
 #include "a733_gpu_mimus.h"
 #include "a733_gpu_platform_native.h"
 #include "pvr_gpu_service.h"
+#include "boot.h"
 #include <string.h>
 
 extern const unsigned char gpu_firmware[], gpu_firmware_end[];
@@ -54,6 +56,9 @@ static struct {
     uint16_t channels[OS_GPU_TENSORS];
     /* Set once in start; read by the recognizer after the scheduler starts. */
     unsigned started;
+    /* Recognizer-owned lifecycle, separate from permanent dispatch admission. */
+    unsigned opened, parked, failed, retired;
+    uint64_t epoch;
 } gpu;
 
 /* A GPU loss recorded by the previous boot's supervisor exit
@@ -104,7 +109,7 @@ int a733_gpu_mimus_start(unsigned core)
     /* Each refusal below leaves OPEN refused and the boot on the CPU; pages
      * acquired before it stay retained. */
     struct a733_pmic_lifetime lifetime;
-    static const struct a733_gpu_backend_external external = {.revoked = &board.fatal};
+    static const struct a733_gpu_backend_external external = {.revoked = &board.fatal, .live = board_live};
     const struct a733_gpu_mimus_layout layout = {{OS_DISPATCH_MODELS, OS_DISPATCH_MODELS + OS_DISPATCH_MODEL_BYTES},
         OS_DISPATCH_ARENA, OS_DISPATCH_OUTPUT, gpu.tensors, os_placement_rows, OS_GPU_MAX_JOB_US};
     if (previous_gpu_loss() || !session_owners_distinct() || !admit_tensors() ||
@@ -130,21 +135,96 @@ int a733_gpu_mimus_start(unsigned core)
     return 1;
 }
 
+static int runtime_window(uint64_t *end)
+{
+    if (!board_live(NULL)) return 0;
+    uint64_t limit = atomic_load_explicit(&board.live_until, memory_order_acquire);
+    if (board.session.deadline_us < limit) limit = board.session.deadline_us;
+    const uint64_t now = a733_smp_counter() / 24;
+    if (limit <= 10000 || now >= limit - 10000) return 0;
+    limit -= 10000;
+    *end = limit - now > OS_GPU_OPEN_US ? now + OS_GPU_OPEN_US : limit;
+    return 1;
+}
+static int runtime_live(uint64_t end)
+{ return board_live(NULL) && a733_smp_counter() / 24 < end; }
+static int runtime_request(enum pvr_gpu_service_operation operation, uint64_t end,
+                           struct pvr_gpu_service_reply *reply)
+{
+    if (!runtime_live(end)) return 0;
+    const uint64_t now = a733_smp_counter() / 24;
+    if (now >= end) return 0;
+    const struct pvr_gpu_service_request request = {operation,
+        operation == PVR_GPU_SERVICE_STATUS ? 0 : end - now};
+    uint64_t ticket;
+    if (!pvr_gpu_service_send_epoch(&gpu.service, gpu.epoch, &request, OS_GPU_WAIT_TICKS, &ticket)) return 0;
+    while (!pvr_gpu_service_collect(&gpu.service, ticket, reply, OS_GPU_WAIT_TICKS))
+        if (!runtime_live(end)) return 0;
+    return runtime_live(end) && reply->result == PVR_GPU_SERVICE_OK;
+}
 int a733_gpu_mimus_open(void)
 {
-    if (!gpu.started) return 0;
-    const struct pvr_gpu_service_request request = {PVR_GPU_SERVICE_OPEN, OS_GPU_OPEN_US};
+    uint64_t end;
+    if (!gpu.started || gpu.failed || gpu.retired || gpu.opened || !runtime_window(&end)) return 0;
     struct pvr_gpu_service_reply reply;
-    uint64_t ticket;
-    if (!pvr_gpu_service_send(&gpu.service, &request, OS_GPU_WAIT_TICKS, &ticket)) return 0;
-    while (!pvr_gpu_service_collect(&gpu.service, ticket, &reply, OS_GPU_WAIT_TICKS)) {}
-    if (reply.result != PVR_GPU_SERVICE_OK) return 0;
+    if (!runtime_request(PVR_GPU_SERVICE_OPEN, end, &reply) || reply.epoch != gpu.epoch + 1) return 0;
+    gpu.epoch = reply.epoch;
     struct pvr_mimus_record record;
-    while (!pvr_mimus_service_receive(gpu.component, &record, OS_GPU_WAIT_TICKS)) {}
-    return record.result == PVR_MIMUS_OK;
+    while (!pvr_mimus_service_receive(gpu.component, &record, OS_GPU_WAIT_TICKS))
+        if (!runtime_live(end)) return 0;
+    if (!runtime_live(end) || record.result != PVR_MIMUS_OK || record.sequence) return 0;
+    gpu.opened = 1; gpu.parked = 0;
+    return 1;
+}
+static int runtime_close(void)
+{
+    uint64_t end;
+    struct pvr_gpu_service_reply reply;
+    if (!gpu.opened || !runtime_window(&end) || !runtime_request(PVR_GPU_SERVICE_CLOSE, end, &reply)) return 0;
+    while (reply.phase != PVR_GPU_SERVICE_STOPPED) {
+        /* The worker owns firmware, drain and platform waits. Observation
+         * renews neither service progress nor this absolute bound. */
+        vTaskDelay(1);
+        if (!runtime_request(PVR_GPU_SERVICE_STATUS, end, &reply)) return 0;
+    }
+    if (reply.epoch != gpu.epoch) return 0;
+    gpu.opened = 0; gpu.parked = 1;
+    return 1;
+}
+int a733_gpu_mimus_thermal(void)
+{
+    if (!gpu.started || gpu.failed || xTaskGetCurrentTaskHandle() != os_recognizer) return -1;
+    if (gpu.retired) return 0;
+    if (!board_live(NULL)) { gpu.failed = 1; return -1; }
+    int throttled = os_thermal_throttled();
+    if ((!throttled && gpu.opened) || (throttled && gpu.parked)) return !throttled;
+    os_dispatch_waiting(1);
+    int ok = throttled ? runtime_close() : gpu.parked && a733_gpu_mimus_open();
+    /* At most OPEN then CLOSE: a changed thermal level never admits a job
+     * during the reopen. CRITICAL is permanent board revocation. */
+    if (ok && !throttled && os_thermal_throttled()) {
+        throttled = 1;
+        ok = runtime_close();
+    }
+    if (!ok || !board_live(NULL)) { gpu.failed = 1; return -1; }
+    os_dispatch_waiting(0);
+    return !throttled;
+}
+int a733_gpu_mimus_retire(void)
+{
+    if (!gpu.started || gpu.failed || xTaskGetCurrentTaskHandle() != os_recognizer) return 0;
+    if (gpu.retired) return gpu.parked && !gpu.opened;
+    /* The recognizer has consumed the record but rejected the output. Close
+     * admission before shutdown; no result from this job was lent to the
+     * engine. Only acknowledged STOPPED permits continued CPU inference. */
+    gpu.retired = 1;
+    os_dispatch_waiting(1);
+    if (!runtime_close() || !board_live(NULL)) { gpu.failed = 1; return 0; }
+    os_dispatch_waiting(0);
+    return 1;
 }
 int a733_gpu_mimus_begin(const struct pvr_mimus_request *job)
-{ return pvr_mimus_service_submit(gpu.component, job); }
+{ return gpu.failed ? -1 : gpu.retired ? 0 : pvr_mimus_service_submit(gpu.component, job); }
 void a733_gpu_mimus_finish(struct pvr_mimus_record *record)
 { while (!pvr_mimus_service_receive(gpu.component, record, OS_GPU_WAIT_TICKS)) {} }
 int a733_gpu_mimus_tensor(uint32_t ordinal, struct os_gpu_tensor *out)

@@ -19,16 +19,19 @@ check fails when:
   must not call current() or an a733_task_context_ predicate, because
   a733_pmic_poll() checks the provider task at entry and the adapter's
   enter() when it takes the I2C mutex;
-- outside the adapter itself and the board-bundle forwarders and cost
-  windows (apps/board-bundles-power/power.c), a source uses the operations of
-  a struct a733_pmic_native other than as the &...operations argument of
-  a733_pmic_init(), names struct a733_pmic_ops, or uses the register,
-  mutex or retention operations among the ops of a struct a733_pmic. Any
-  such use could reach the accessors without the
-  poll's task check: a call, a copy of the table, or a function pointer
-  passed on. The rule is keyed on the declared type: it collects the names
-  that each translation unit, with the project headers it includes, declares
-  as struct a733_pmic_native or struct a733_pmic.
+- a source other than the provider, its native adapter and the board-bundle
+  forwarders and cost windows (apps/board-bundles-power/power.c and
+  power.h) names pmic_bus_ops, struct a733_pmic_ops or a733_pmic_init.
+  pmic_bus_ops is the member that holds the adapter operations in both
+  struct a733_pmic_native and struct a733_pmic, and no other code uses the
+  name. Any use of it could reach the register accessors without the poll's
+  task check: a call, a copy of the table, or a function pointer passed on.
+  Other sources reach the operations only through three helpers in the
+  headers: a733_pmic_native_bind() hands the native adapter to
+  a733_pmic_init(), and a733_pmic_now() and a733_pmic_outside() make the two
+  queries that consumers need. Text in comments is ignored. A name built
+  by token pasting, or an access through a pointer cast to the struct's
+  first member, is not caught.
 
 It reads source text only and runs no build.
 """
@@ -62,60 +65,20 @@ def strip_comments(text):
     return re.sub(r'//[^\n]*', '', text)
 
 
-def unit_text(root, path, seen):
-    """The comment-free text of a source and of the project headers it includes, recursively."""
-    if path in seen or not path.is_file():
-        return ''
-    seen.add(path)
-    text = strip_comments(path.read_text(errors='replace'))
-    parts = [text]
-    for name in re.findall(r'#\s*include\s+"([^"]+)"', text):
-        for base in (path.parent, root / 'include', root / 'platform/a733'):
-            if (base / name).is_file():
-                parts.append(unit_text(root, (base / name).resolve(), seen))
-                break
-    return '\n'.join(parts)
-
-
-def statement(text, start, end):
-    """The statement around text[start:end]: from the previous ';', '{' or '}' to the next ';'."""
-    left = max(text.rfind(c, 0, start) for c in ';{}') + 1
-    right = text.find(';', end)
-    return text[left:right if right >= 0 else len(text)]
+GUARDED = re.compile(r'\b(pmic_bus_ops|a733_pmic_ops|a733_pmic_init)\b')
 
 
 def adapter_uses(root):
-    """Uses of the native adapter's operations, keyed on the declared type."""
+    """Uses of the adapter operations' member, their type or the provider's init outside the adapter files."""
     problems = []
     for path in files(root):
         rel = path.relative_to(root)
         if rel in ADAPTER_FILES:
             continue
         own = strip_comments(path.read_text(errors='replace'))
-        if not re.search(r'\b(a733_pmic_native|a733_pmic|a733_pmic_ops)\b', own):
-            continue
-        unit = unit_text(root, path.resolve(), set())
-        natives = set(re.findall(r'struct\s+a733_pmic_native\s*\*?\s*(?:const\s+)?(\w+)', unit))
-        providers = set(re.findall(r'struct\s+a733_pmic\s*\*?\s*(?:const\s+)?(\w+)\s*[;,=)\[]', unit))
-        for m in re.finditer(r'\bstruct\s+a733_pmic_ops\b', own):
+        for m in GUARDED.finditer(own):
             line = own.count('\n', 0, m.start()) + 1
-            problems.append(f'{rel}:{line}: names struct a733_pmic_ops outside the provider and its adapter')
-        for m in re.finditer(r'\b(\w+)\s*(?:\.|->)\s*operations\b', own):
-            if m.group(1) not in natives:
-                continue
-            line = own.count('\n', 0, m.start()) + 1
-            text = statement(own, m.start(), m.end())
-            argument = re.search(r'a733_pmic_init\s*\([^;]*&\s*[\w.\->]*\b' + m.group(1) +
-                                 r'\s*(?:\.|->)\s*operations\s*,', text)
-            if not argument:
-                problems.append(f'{rel}:{line}: uses the native PMIC adapter\'s operations other than as '
-                                'a733_pmic_init()\'s argument')
-        # The register, mutex and retention operations; now and outside are
-        # read-only queries that the power service and consumers make.
-        for m in re.finditer(r'\b(\w+)\s*(?:\.|->)\s*ops\s*\.\s*(?:read|write|enter|leave|retain)\b', own):
-            if m.group(1) in providers:
-                line = own.count('\n', 0, m.start()) + 1
-                problems.append(f'{rel}:{line}: uses the PMIC provider\'s copy of the adapter operations')
+            problems.append(f'{rel}:{line}: names {m[1]} outside the PMIC provider and its adapter')
     return problems
 
 
@@ -169,8 +132,8 @@ def main():
     assert not problems, f'{len(problems)} problem(s)'
     print(f'PASS PMIC tree facts: no PSCI CPU_OFF or suspend in {scanned} sources, selector writes '
           'only to DCDC3 and DCDC5, INTID 235 only in the provider, no lock in the native adapter\'s '
-          'per-phase time read or per-access ownership check, no task check per access, adapter register '
-          'operations called only by the provider and the bundle forwarders')
+          'per-phase time read or per-access ownership check, no task check per access, adapter '
+          'operations named only by the provider, its adapter and the bundle forwarders')
 
 
 if __name__ == '__main__':

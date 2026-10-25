@@ -6,6 +6,8 @@
 extern "C" {
 #endif
 int mimus_board_live(void);
+int mimus_board_staged(void);
+void mimus_board_usb0_started(void);
 int mimus_board_session_live(void);
 void mimus_board_host_observed(int);
 int mimus_board_export_live(void);

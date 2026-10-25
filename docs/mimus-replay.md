@@ -54,7 +54,11 @@ request that loads the model logs `LOAD load_us=<time> verify_crc=1` before the
 first segment. A later USB request that reuses the retained model and recognizer
 has no `LOAD` record; [the USB application](mimus-usb.md#task-ownership-and-recovery)
 defines when they are reloaded.
-`RESULT`, `TEXT`, `MARKS`, `CAPS`, and `FORMATTED` describe that utterance.
+`RESULT`, `TEXT`, and `FORMATTED` describe that utterance. `MARKS` and `CAPS`
+appear only when the punctuation head ran, matching whole-recording recognition
+and the host CLI. Without punctuation scores, the formatter applies its rules
+to the plain words. A result with punctuation scores but mismatched word
+alignment fails before formatting or publishing that segment.
 `FLUSH` contains the held punctuation released after the final utterance.
 
 The final `REPLAY` record reports processed samples, published and consumed
@@ -122,9 +126,21 @@ parity checker; the checker also accepts existing whole-recording evidence.
 Raw evidence, commands, fixture provenance, source hashes, and image hashes are
 under `~/.cache/sunstoneos/evidence/mimus-paced-20261016/`. The final emulator
 record is `model.json`; `parity.json` records its reference comparison.
-The native image compiles but has not run on the board. No physical device
-requests were issued for this work because the failed USB instance remains
-quarantined. [Watchdog recovery](watchdog.md) remains the hardware prerequisite.
+The optional-punctuation adapter check
+([mimus-paced-optional.py](../checks/mimus-paced-optional.py)) uses the pinned
+engine's types, model loader and formatter with deterministic recognition
+results. It covers absent and conflicting scores, scored and unscored words,
+empty text, short and long pauses, final flush, and malformed alignment.
+It also checks that the native parity checker refuses added or missing score
+records and changed formatting. Recognition arithmetic and scheduling are
+modeled in this check; the arithmetic evidence is separate. The adapter
+passes all eight cases, including the no-punctuation alignment case; the
+result is
+`~/.cache/sunstoneos/evidence/mimus-paced-optional-20261024/after/result.json`.
+Each segment makes one recognition call. A no-punctuation segment skips the
+score-copy loop and score records, with no synchronization or allocation.
+
+The native image compiles but has not run on the board. [Watchdog recovery](watchdog.md) remains the hardware prerequisite.
 
 This work does not qualify I2S, Bluetooth audio, DMA, microphone buffering,
 physical capture timing, or sustained real-time throughput. Those requirements

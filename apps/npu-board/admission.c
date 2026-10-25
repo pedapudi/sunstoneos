@@ -22,6 +22,18 @@ int npu_board_session_valid(const struct npu_board_session *s)
        s->pck_client>=16||s->pck_client==s->board.pck_client||
        memcmp(s->catalogue,npu_board_catalogue_digest,32)||
        !present(s->admission,32)||!present(s->clock,32)||!present(s->power,32)||!present(s->supervision,32))return 0;
+    if(!s->thermal_owner||!s->thermal_authority||s->thermal_owner==s->owner||
+       !present(s->thermal_initial,32)||!present(s->thermal_electrical,32)||
+       !present(s->thermal_clocks,32)||!present(s->thermal_supervision,32)||
+       s->configure_adc_clock>1||s->alarm_mask!=31||s->critical_mask!=31||s->reserved0||
+       present(s->thermal_reserved,6)||(s->apb1&~UINT32_C(0x0300001f)))return 0;
+    const uint64_t owners[]={s->board.pmic_owner,s->board.usb0_owner,s->board.typec_owner,s->board.usb2_owner};
+    for(unsigned i=0;i<4;++i)if(s->thermal_owner==owners[i])return 0;
+    const unsigned parent=s->apb1>>24,div=(s->apb1&31)+1;
+    const uint32_t hz=parent==0?24000000u:parent==3?600000000u:0;
+    if(!hz||hz%div||s->apb1_hz!=hz/div)return 0;
+    for(unsigned i=0;i<5;++i)if(!s->limits[i][2]||s->limits[i][2]>s->limits[i][0]||
+        s->limits[i][0]>=s->limits[i][1]||s->limits[i][1]>4095)return 0;
     const struct a733_npu_platform_config fabric={{s->board.fabric[0],s->board.fabric[1],s->board.fabric[2]},
         {s->board.fabric_hz[0],s->board.fabric_hz[1],s->board.fabric_hz[2]}};
     return a733_npu_platform_scopes(&fabric,&shared);

@@ -57,6 +57,8 @@ static int check_write(void *cookie,unsigned offset,uint32_t value)
 }
 static uint64_t check_now(void *cookie){check_privileged();return check_native->microseconds(cookie);}
 static void check_delay(void *cookie,unsigned us){check_privileged();check_native->delay(cookie,us);}
+static unsigned char check_poison(unsigned i)
+{return (unsigned char)(NPU_CONVOLUTION_OUTPUT_POISON>>8*(i&3));}
 static void check_barrier(void *cookie){check_privileged();check_native->barrier(cookie);}
 static int check_publish(void *cookie,const struct a733_npu_mmu_image *image,
     const struct a733_npu_command *command,int boot)
@@ -66,6 +68,8 @@ static int check_publish(void *cookie,const struct a733_npu_mmu_image *image,
         ++check_job;
         for(unsigned i=0;i<192;++i)configASSERT(check_small[2][i]==
             (check_job==1 ? fixture_input[i] : (unsigned char)(fixture_input[i]^0xff)));
+        /* SUBMIT has filled the output before this publication cleans it. */
+        for(unsigned i=0;i<72;++i)configASSERT(check_small[3][i]==check_poison(i));
     }
     return check_native->publish(cookie,image,command,boot);
 }
@@ -74,8 +78,10 @@ static int check_finish(void *cookie,const struct a733_npu_command *command,int 
     check_privileged();configASSERT(!check_running && !canceled);
     /* Device stand-in, not a numerical implementation or inference result. */
     if(!check_is_bootstrap) {
+        /* The second job writes only its first 36 bytes; the rest must
+         * read back as the SUBMIT pattern, not as the first job's output. */
         if(check_job==1)memcpy(check_small[3],fixture_output,72);
-        else memset(check_small[3],0x5a,72);
+        else memset(check_small[3],0x5a,36);
     }
     int ok=check_native->finish(cookie,command,canceled);
     if(ok)atomic_fetch_add(&check_finishes,1);
@@ -171,7 +177,7 @@ static void check_client_run(void *unused)
     check_request(NPU_SERVICE_SUBMIT,input);check_wait(A733_NPU_DONE);
     convolution.model[0]^=1;check_commands[1][524287]^=1;
     configASSERT(npu_convolution_output(&convolution,output,sizeof(output)));
-    for(unsigned i=0;i<sizeof(output);++i)configASSERT(output[i]==0x5a);
+    for(unsigned i=0;i<sizeof(output);++i)configASSERT(output[i]==(i<36 ? 0x5a : check_poison(i)));
     check_request(NPU_SERVICE_REAP,NULL);
     if(check_activation_mutation>=3) {
         configASSERT(!npu_convolution_send(&convolution,NPU_SERVICE_CLOSE,NULL,0,1,0,&ignored));

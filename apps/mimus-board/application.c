@@ -7,19 +7,35 @@
 #include "class/hid/hid_host.h"
 #include "boot.h"
 #include "a733_mapping_check.h"
-static atomic_uint attached;
+static atomic_uint attached,usb0_started;
+int mimus_board_staged(void)
+{
+#if defined(SUNSTONE_A733_OS) && OS_STAGED_WORKLOAD /* os.h, which the OS build includes */
+    return board.session.workload==2;
+#else
+    return 0;
+#endif
+}
+/* The USB0 owner publishes only after provider and device-stack startup. */
+void mimus_board_usb0_started(void)
+{atomic_store_explicit(&usb0_started,1,memory_order_release);}
 static atomic_uint_fast64_t observed_until;
 static struct a733_typec_token attachment;
 int mimus_board_session_live(void)
 {return board_live(NULL)&&atomic_load_explicit(&board.result,memory_order_acquire)!=2;}
 /* EL0-safe: no provider calls, MMIO, locks or privileged register accesses. */
 int mimus_board_live(void)
-{return board_live(NULL)&&atomic_load_explicit(&board.result,memory_order_acquire)!=2&&
-    a733_smp_counter()/24<atomic_load_explicit(&observed_until,memory_order_acquire);}
+{
+    if(!mimus_board_session_live())return 0;
+    if(mimus_board_staged())return atomic_load_explicit(&board.result,memory_order_acquire)==3&&
+        atomic_load_explicit(&usb0_started,memory_order_acquire);
+    return a733_smp_counter()/24<atomic_load_explicit(&observed_until,memory_order_acquire);
+}
 /* Called only by the privileged USB0 owner. */
 int mimus_board_export_live(void)
 {
     if(!board_live(NULL)||atomic_load_explicit(&board.result,memory_order_acquire)==2)return -1;
+    if(mimus_board_staged())return mimus_board_live()?1:0;
     if(atomic_load_explicit(&attached,memory_order_acquire)!=1)return 0;
     if(!mimus_board_live())return -1;
     struct a733_typec_token fresh;

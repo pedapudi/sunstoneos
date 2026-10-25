@@ -37,11 +37,21 @@ the board source's supported 53–105 range and the documented oscillator range.
 ## Entry state, table and LOCK
 
 The register pass admits this entry state: PLL enable, lock enable, LOCK
-and output gate clear, and every bit outside the documented fields clear. The
+and output gate clear. Reserved bit 24 may be clear or set; every other bit
+outside the documented fields must be clear. The initial register read captures
+bit 24 once, and every later PLL check requires that inherited value. The
 LDO and factor fields may hold any value, because the table writes them. The
 register pass also requires the PLL_NPU pattern and bias words
 (`+0x2a4`–`+0x2b0`) at their reset values, and the video encode, video decode,
 NPU and DRAM0 consumers idle or on other sources ([npu-startup.md](npu-startup.md)).
+
+The manual marks bits 26:23 reserved and gives no requirement to clear them.
+The pinned kernel's `ccu_nm.c` factor updates and `ccu_gate.c` control updates
+preserve bit 24. Its NPU descriptor uses SDM controls in separate pattern
+registers; it does not establish a function for control bit 24. Startup therefore
+preserves the observed value without treating it as a frequency or SDM setting.
+A change at an existing table read, LOCK sample, pre-open check, final check or
+local-stop check retains the resources. Bit 24 is never in a writable mask.
 
 The enable table has six entries, each read back:
 
@@ -59,8 +69,9 @@ After the register lock is released, the sequencer reads the control word at
 least 3 µs apart until three consecutive reads show LOCK, at most 100 times,
 then waits 20 µs. Only the PLL_NPU token's holder writes this word, so the
 sampling needs no lock. The local open table requires the control word
-`0xe0305100` with LOCK set. The local open table then opens the output gate,
-and the final readback requires `0xe8305100` with LOCK set. A LOCK that never
+`0xe0305100` with LOCK and the captured bit 24 set as applicable. The local
+open table then opens the output gate. The final readback requires
+`0xe8305100` with those same bits. A LOCK that never
 appears leaves the PLL enabled with its output closed and retains every token.
 
 ## Enabling the PLL while DRAM runs
@@ -107,3 +118,14 @@ PLL that never locks. `checks/npu-stop-native.py` exercises the adapter's PLL
 rules in the linked images, and `checks/npu-application-clock-reference.py`
 shows that an admitted reference case writes the gate enable at
 `CCU+0x1920` first.
+
+The sanitizer check `checks/npu-startup-host.c --inherited-pll` covers the
+observed disabled word `0x41104500` and the equal-LDO word `0x40104500`.
+Both use 11 writes, 24 counter reads and three register-lock acquisitions.
+The captured field adds 16 bytes to the native startup structure, including
+alignment padding, and 60 bytes to the compiled startup functions.
+It also covers both drift directions at six existing validation boundaries and
+refuses entry with reserved bits 23, 25 or 26 set. The original 15-case baseline
+has identical counts. These are modeled register results, not physical PLL
+qualification. Evidence is in
+`~/.cache/sunstoneos/evidence/npu-pll-inherited-20261024/`.

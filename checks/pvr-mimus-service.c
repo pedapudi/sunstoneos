@@ -32,6 +32,7 @@
 #undef irq_write
 #include "pvr_mimus_service.h"
 #include "a733_gpu_mimus.h"
+#include "a733_gpu_backend.h"
 #include "gicv3_spi.h"
 #include "mimus-fixture.h"
 
@@ -39,7 +40,10 @@
  * 3 as 2 with jobs that complete at once; 4 as 3 with one firmware event per
  * job; 5 refused jobs; 6 failed wake send; 7 missing tag; 8 hang; 9 context
  * reset; 10 OPEN only; 11 an unexpected timeline value before a submit; 12 the
- * completion's clean and invalidate fails. */
+ * completion's clean and invalidate fails; 13 completion at its deadline;
+ * 14 output acquisition reaches the deadline; 15 completion just before it;
+ * 16 failed final clock read; 17 backward final clock sample; 18 pending,
+ * active and drained CLOSE; 19 reserved-slot CLOSE and abort; 20 lost CLOSE. */
 volatile uint32_t mimus_service_case = 1;
 /* Nonzero in the runner's instrumented runs, which execute many times slower
  * against wall-clock deadlines: OPEN then gets 60 s instead of 1 s. */
@@ -57,6 +61,62 @@ static const struct gicv3_spi spi = {0x08000000, 95};
 static uint32_t kicked, run, gpu_status, irq_count, hook_wakes, kick_step_count;
 static uint64_t kick_us;
 static uint32_t last_sequence;
+static atomic_uint hold_slot, hold_completion;
+static unsigned refuse_stopped, fail_reopen_cache, fail_reopen_post, stopped_proofs;
+BaseType_t __real_xQueueGenericSend(QueueHandle_t, const void *, TickType_t, BaseType_t);
+BaseType_t __wrap_xQueueGenericSend(QueueHandle_t queue, const void *item, TickType_t wait, BaseType_t position)
+{
+    if (fail_reopen_post && service.epoch == 2 && queue == mimus->completions) {
+        const struct pvr_mimus_record *record = item;
+        configASSERT(!record->sequence && record->result == PVR_MIMUS_OK);
+        fail_reopen_post = 0;
+        return pdFALSE;
+    }
+    return __real_xQueueGenericSend(queue, item, wait, position);
+}
+/* The firmware fixture models the native stop proof. Physical register and
+ * platform verification remain covered by the native backend's own checks. */
+int __wrap_a733_gpu_backend_stopped(struct a733_gpu_backend *backend, struct pvr_gpu_service *s)
+{
+    (void)backend;
+    ++stopped_proofs;
+    return !refuse_stopped && s == &service && s->phase == PVR_GPU_SERVICE_STOPPED &&
+        s->stop.phase == PVR_GPU_STOP_STOPPED && s->stop.isolation_observed &&
+        s->stop.acknowledgement[0] == 1 && s->stop.acknowledgement[1] == 1 &&
+        s->queue.phase == PVR_CCB_RETIRED && s->control.phase == PVR_GPU_CONTROL_RETIRED &&
+        memory.phase == A733_GPU_MEMORY_OFFLINE && s->irq_masked && !s->irq_fault;
+}
+int __real_pvr_mimus_service_poll(struct pvr_mimus_service *);
+int __wrap_pvr_mimus_service_poll(struct pvr_mimus_service *m)
+{
+    if (atomic_load(&hold_slot) && m->phase == PVR_MIMUS_SERVICE_IDLE) return 0;
+    return __real_pvr_mimus_service_poll(m);
+}
+/* Selected boundary cases advance the actual service clock callback only
+ * after the client ring retired and the modeled timeline completed. The
+ * normal service clock wrapper still enforces monotonicity. */
+static unsigned completion_clock, completion_clock_samples;
+static int boundary_now(void *ctx, uint64_t *out)
+{
+    if (!completion_clock) return now(ctx, out);
+    callback(ctx);
+    if (completion_clock == 3) return 0;
+    *out = completion_clock == 2 ? mimus->deadline :
+           completion_clock == 4 ? mimus->deadline - 2 : mimus->deadline - 1;
+    return 1;
+}
+int __real_pvr_gpu_service_now(struct pvr_gpu_service *, uint64_t *);
+int __wrap_pvr_gpu_service_now(struct pvr_gpu_service *s, uint64_t *out)
+{
+    unsigned c = mimus_service_case;
+    if (((c >= 13 && c <= 17) || c == 20) && mimus && s == &service &&
+        mimus->phase == PVR_MIMUS_SERVICE_IN_FLIGHT && mimus->client.phase == PVR_CCCB_IDLE &&
+        *(const volatile uint32_t *)mimus->config->firmware[5].storage.cpu == mimus->sequence) {
+        if (!completion_clock) completion_clock = c == 13 || c == 20 ? 2 : 1;
+        ++completion_clock_samples;
+    }
+    return __real_pvr_gpu_service_now(s, out);
+}
 
 static uint64_t now_us(void)
 {
@@ -157,6 +217,7 @@ static void model(void *unused)
         for (uint32_t i = 0; i < tags; ++i) tag[i] = (c == 7 && i == 0) ? sequence - 1 : sequence;
         uint64_t duration = c == 3 || c == 4 ? 0 : fixture_jobs[job].duration_us;
         while (now_us() < started + duration) {}
+        while (atomic_load(&hold_completion)) {}
         __asm__ volatile("dsb sy" ::: "memory");
         if (c == 4 || c == 9) {
             unsigned write = get((uint32_t *)resource(PVR_FW_EVENT_CONTROL));
@@ -261,6 +322,7 @@ int __real_aarch64_device_cache(enum aarch64_cache_op, uintptr_t, size_t);
 int __wrap_aarch64_device_cache(enum aarch64_cache_op op, uintptr_t address, size_t bytes)
 {
     ++cache_calls; cache_lines += (bytes + 63) / 64;
+    if (fail_reopen_cache && service.epoch == 2) { fail_reopen_cache = 0; return 0; }
     if (address < PVR_MIMUS_OUTPUT_GPU + PVR_MIMUS_OUTPUT_BYTES && address + bytes > PVR_MIMUS_OUTPUT_GPU) {
         configASSERT(op == AARCH64_CACHE_CLEAN_INVALIDATE && address >= PVR_MIMUS_OUTPUT_GPU &&
                      address + bytes <= PVR_MIMUS_OUTPUT_GPU + PVR_MIMUS_OUTPUT_BYTES);
@@ -273,7 +335,18 @@ int __real_pvr_mimus_submit(struct pvr_mimus_session *, const struct pvr_mimus_t
 int __wrap_pvr_mimus_submit(struct pvr_mimus_session *s, const struct pvr_mimus_tensor *t, const struct pvr_mimus_job *j)
 { ++submit_calls; return __real_pvr_mimus_submit(s, t, j); }
 int __real_pvr_mimus_complete(struct pvr_mimus_session *);
-int __wrap_pvr_mimus_complete(struct pvr_mimus_session *s) { ++complete_calls; return __real_pvr_mimus_complete(s); }
+int __wrap_pvr_mimus_complete(struct pvr_mimus_session *s)
+{
+    ++complete_calls;
+    int result = __real_pvr_mimus_complete(s);
+    if (mimus_service_case >= 14 && mimus_service_case <= 17) {
+        configASSERT(completion_clock == 1 && completion_clock_samples == 1);
+        if (mimus_service_case == 14) completion_clock = 2;
+        if (mimus_service_case == 16) completion_clock = 3;
+        if (mimus_service_case == 17) completion_clock = 4;
+    }
+    return result;
+}
 enum pvr_cccb_result __real_pvr_cccb_poll(struct pvr_cccb *);
 enum pvr_cccb_result __wrap_pvr_cccb_poll(struct pvr_cccb *c) { ++ring_polls; return __real_pvr_cccb_poll(c); }
 int __real_aarch64_device_translate(uintptr_t, int, struct aarch64_translation *);
@@ -281,6 +354,38 @@ int __wrap_aarch64_device_translate(uintptr_t a, int w, struct aarch64_translati
 { ++translations; return __real_aarch64_device_translate(a, w, t); }
 /* Marker the runner's instruction trace splits job windows by. */
 __attribute__((noinline)) void fixture_mark(uint32_t what) { __asm__ volatile("" :: "r"(what) : "memory"); }
+
+static struct pvr_gpu_service_reply close_reply(void)
+{
+    const struct pvr_gpu_service_request close = {PVR_GPU_SERVICE_CLOSE, 1000000};
+    struct pvr_gpu_service_reply reply;
+    uint64_t ticket;
+    configASSERT(pvr_gpu_service_send(&service, &close, 10, &ticket));
+    TickType_t start = xTaskGetTickCount();
+    while (!pvr_gpu_service_collect(&service, ticket, &reply, 10))
+        configASSERT(xTaskGetTickCount() - start < 3000);
+    return reply;
+}
+static struct pvr_gpu_service_reply reopen_reply(uint64_t epoch)
+{
+    const struct pvr_gpu_service_request open = {PVR_GPU_SERVICE_OPEN, 1000000};
+    struct pvr_gpu_service_reply reply;
+    uint64_t ticket;
+    configASSERT(pvr_gpu_service_send_epoch(&service, epoch, &open, 10, &ticket));
+    TickType_t start = xTaskGetTickCount();
+    while (!pvr_gpu_service_collect(&service, ticket, &reply, 10))
+        configASSERT(xTaskGetTickCount() - start < 3000);
+    return reply;
+}
+static void closed(void)
+{
+    configASSERT(close_reply().result == PVR_GPU_SERVICE_OK);
+    TickType_t start = xTaskGetTickCount();
+    while (service.phase != PVR_GPU_SERVICE_STOPPED) {
+        configASSERT(service.phase != PVR_GPU_SERVICE_FAILED && xTaskGetTickCount() - start < 3000);
+        vTaskDelay(1);
+    }
+}
 
 static void client(void *unused)
 {
@@ -301,9 +406,159 @@ static void client(void *unused)
     metric("pool-wb-pages", wb); metric("pool-nc-pages", nc);
     metric("table-pages", session.requirements.table_pages);
     configASSERT(wb <= 80 && nc <= 52);
+    if (c >= 21 && c <= 24) {
+        configASSERT(bench_job(0));
+        closed();
+        const uint64_t old_epoch = service.epoch;
+        const struct device_memory_lease payload = session.payload_lease, tables = session.table_lease;
+        unsigned wb_before, nc_before; pool_pages(&wb_before, &nc_before);
+        uint64_t cache_before = cache_lines;
+        if (c == 22) {
+            refuse_stopped = 1;
+            configASSERT(reopen_reply(old_epoch).result == PVR_GPU_SERVICE_BUSY);
+            refuse_stopped = 0;
+            struct pvr_mimus_record stale = {1, PVR_MIMUS_OK};
+            configASSERT(xQueueSend(mimus->completions, &stale, 0) == pdTRUE);
+            configASSERT(reopen_reply(old_epoch).result == PVR_GPU_SERVICE_BUSY);
+            configASSERT(pvr_mimus_service_receive(mimus, &stale, 0));
+            ++session.payload_lease.generation;
+            configASSERT(reopen_reply(old_epoch).result == PVR_GPU_SERVICE_BUSY);
+            session.payload_lease = payload;
+            configASSERT(cache_lines == cache_before && service.epoch == old_epoch &&
+                         atomic_load(&mimus->slot_state) == PVR_MIMUS_SLOT_CLOSED);
+        }
+        if (c == 23) fail_reopen_cache = 1;
+        if (c == 24) fail_reopen_post = 1;
+        reply = reopen_reply(old_epoch);
+        if (c == 23 || c == 24) {
+            configASSERT(reply.result == (c == 23 ? PVR_GPU_SERVICE_FAULT : PVR_GPU_SERVICE_OK));
+            r = receive();
+            configASSERT(r.result == PVR_MIMUS_LOST && !fail_reopen_cache && !fail_reopen_post &&
+                         service.phase == PVR_GPU_SERVICE_FAILED && atomic_load(&mimus->lost) &&
+                         !pvr_mimus_service_receive(mimus, &r, 0));
+            configASSERT(reopen_reply(service.epoch).result == PVR_GPU_SERVICE_FAULT);
+        } else {
+            configASSERT(reply.result == PVR_GPU_SERVICE_OK && reply.epoch == old_epoch + 1);
+            r = receive();
+            configASSERT(r.result == PVR_MIMUS_OK && r.sequence == 0 && mimus->sequence == 1 &&
+                         atomic_load(&mimus->slot_state) == PVR_MIMUS_SLOT_IDLE);
+            metric("first-reopen-cache-lines", cache_lines - cache_before);
+            configASSERT(reopen_reply(old_epoch).result == PVR_GPU_SERVICE_INVALID);
+            configASSERT(bench_job(1) && mimus->sequence == 2);
+            if (c == 21) {
+                closed();
+                configASSERT(reopen_reply(service.epoch).result == PVR_GPU_SERVICE_OK);
+                r = receive();
+                configASSERT(r.result == PVR_MIMUS_OK && r.sequence == 0);
+                configASSERT(bench_job(2) && mimus->sequence == 3);
+            }
+        }
+        unsigned wb_after, nc_after; pool_pages(&wb_after, &nc_after);
+        configASSERT(wb_after == wb_before && nc_after == nc_before &&
+                     !memcmp(&payload, &session.payload_lease, sizeof(payload)) &&
+                     !memcmp(&tables, &session.table_lease, sizeof(tables)) &&
+                     session.vm.phase == A733_GPU_VM_MEMORY_PUBLISHED);
+        metric("stopped-proofs", stopped_proofs);
+        metric("restart-cache-lines", cache_lines - cache_before);
+        metric("session-epoch", service.epoch);
+        metric("job-sequence", mimus->sequence);
+        platform_puts("PASS mimus service case "); platform_hex(c);
+        platform_puts("; retained healthy reopen with monotonic job sequence\n"); platform_exit(0);
+    }
+    if (c >= 18 && c <= 20) {
+        const struct pvr_mimus_request job = {0, fixture_jobs[0].ordinal,
+            fixture_jobs[0].rows, 2 * fixture_jobs[0].k};
+        if (c == 18) {
+            atomic_store(&hold_slot, 1);
+            atomic_store(&hold_completion, 1);
+            configASSERT(pvr_mimus_service_submit(mimus, &job) == 1);
+            configASSERT(close_reply().result == PVR_GPU_SERVICE_BUSY);
+            configASSERT(service.phase == PVR_GPU_SERVICE_READY && !stopping && !kick_step_count &&
+                         atomic_load(&mimus->slot_state) == PVR_MIMUS_SLOT_SUBMITTED);
+            atomic_store(&hold_slot, 0);
+            const struct pvr_gpu_service_message wake = {.client = PVR_GPU_SERVICE_CLIENTS,
+                                                         .ticket = PVR_GPU_SERVICE_MIMUS_WAKE};
+            configASSERT(xQueueSend(service.requests, &wake, 0) == pdTRUE);
+            TickType_t wait_start = xTaskGetTickCount();
+            while (mimus->phase != PVR_MIMUS_SERVICE_IN_FLIGHT) {
+                configASSERT(xTaskGetTickCount() - wait_start < 3000);
+                vTaskDelay(1);
+            }
+            configASSERT(close_reply().result == PVR_GPU_SERVICE_BUSY);
+            configASSERT(service.phase == PVR_GPU_SERVICE_READY && !stopping && kick_step_count == 1 &&
+                         mimus->phase == PVR_MIMUS_SERVICE_IN_FLIGHT &&
+                         atomic_load(&mimus->slot_state) == PVR_MIMUS_SLOT_TAKEN);
+            atomic_store(&hold_completion, 0);
+            r = receive();
+            configASSERT(r.result == PVR_MIMUS_OK && r.sequence == 1 && complete_calls == 1);
+            configASSERT(close_reply().result == PVR_GPU_SERVICE_OK);
+            configASSERT(atomic_load(&mimus->slot_state) == PVR_MIMUS_SLOT_CLOSED &&
+                         pvr_mimus_service_submit(mimus, &job) == 0);
+            TickType_t start = xTaskGetTickCount();
+            while (service.phase != PVR_GPU_SERVICE_STOPPED) {
+                configASSERT(service.phase != PVR_GPU_SERVICE_FAILED && xTaskGetTickCount() - start < 3000);
+                vTaskDelay(1);
+            }
+            configASSERT(pvr_mimus_service_submit(mimus, &job) == 0 && !mimus->owed &&
+                         !pvr_mimus_service_receive(mimus, &r, 0) && kick_step_count == 1);
+        } else if (c == 19) {
+            /* State injection models a producer paused after reservation.
+             * It does not resume an interrupted submit stack. */
+            atomic_store(&mimus->slot_state, PVR_MIMUS_SLOT_RESERVED);
+            configASSERT(close_reply().result == PVR_GPU_SERVICE_BUSY);
+            configASSERT(service.phase == PVR_GPU_SERVICE_READY && !stopping && !kick_step_count &&
+                         atomic_load(&mimus->slot_state) == PVR_MIMUS_SLOT_RESERVED);
+            pvr_mimus_service_abort(mimus);
+            configASSERT(atomic_load(&mimus->lost) && !mimus->owed &&
+                         atomic_load(&mimus->slot_state) == PVR_MIMUS_SLOT_RESERVED &&
+                         pvr_mimus_service_submit(mimus, &job) == -1 &&
+                         !pvr_mimus_service_receive(mimus, &r, 0));
+        } else {
+            configASSERT(pvr_mimus_service_submit(mimus, &job) == 1);
+            r = receive();
+            configASSERT(r.result == PVR_MIMUS_LOST && r.sequence == 1 &&
+                         service.phase == PVR_GPU_SERVICE_FAILED);
+            configASSERT(close_reply().result == PVR_GPU_SERVICE_FAULT);
+            configASSERT(atomic_load(&mimus->slot_state) == PVR_MIMUS_SLOT_TAKEN &&
+                         pvr_mimus_service_submit(mimus, &job) == -1 && !stopping &&
+                         !pvr_mimus_service_receive(mimus, &r, 0));
+        }
+        unsigned wb_after, nc_after; pool_pages(&wb_after, &nc_after);
+        configASSERT(wb_after == wb && nc_after == nc);
+        platform_puts("PASS mimus service case "); platform_hex(c);
+        platform_puts("; checked CLOSE admission and retained slot ownership\n"); platform_exit(0);
+    }
     if (c == 10) { fixture_mark(3); platform_puts("PASS mimus service case "); platform_hex(c); platform_puts("; OPEN only\n"); platform_exit(0); }
     uint32_t waits0 = service.ready_timed_waits, expiries0 = service.ready_wait_expiries;
     uint64_t jobs_lines = cache_lines, jobs_translations = translations, jobs_cache = cache_calls;
+    if (c >= 13 && c <= 17) {
+        if (c == 15) {
+            configASSERT(bench_job(0));
+            configASSERT(completion_clock_samples == 2 && complete_calls == 1 &&
+                         mimus->phase == PVR_MIMUS_SERVICE_IDLE && !atomic_load(&mimus->lost));
+        } else {
+            const struct pvr_mimus_request job = {0, fixture_jobs[0].ordinal,
+                fixture_jobs[0].rows, 2 * fixture_jobs[0].k};
+            configASSERT(pvr_mimus_service_submit(mimus, &job) == 1);
+            r = receive();
+            configASSERT(r.result == PVR_MIMUS_LOST && r.sequence == 1 &&
+                         service.phase == PVR_GPU_SERVICE_FAILED &&
+                         mimus->phase == PVR_MIMUS_SERVICE_FAILED && atomic_load(&mimus->lost));
+            configASSERT(mimus->error == (c >= 16 ? PVR_MIMUS_SERVICE_CLOCK : PVR_MIMUS_SERVICE_DEADLINE));
+            configASSERT(completion_clock_samples == (c == 13 ? 1u : 2u) &&
+                         complete_calls == (c == 13 ? 0u : 1u));
+            configASSERT(atomic_load(&mimus->slot_state) == PVR_MIMUS_SLOT_TAKEN &&
+                         !pvr_mimus_service_receive(mimus, &r, 0) &&
+                         pvr_mimus_service_submit(mimus, &job) == -1);
+            unsigned wb_after, nc_after; pool_pages(&wb_after, &nc_after);
+            configASSERT(wb_after == wb && nc_after == nc);
+        }
+        configASSERT(kick_step_count == 1 && submit_calls == 1);
+        metric("completion-clock-samples", completion_clock_samples);
+        metric("completion-cache-acquires", complete_calls);
+        platform_puts("PASS mimus service case "); platform_hex(c);
+        platform_puts("; one job with checked completion clock boundary\n"); platform_exit(0);
+    }
     if (c <= 4) {
         fixture_mark(1);
         for (unsigned j = 0; j < FIXTURE_JOBS; ++j) { fixture_mark(2); configASSERT(bench_job(j)); }
@@ -399,7 +654,7 @@ void fixture_unused(void)
 void kernel_main(void)
 {
     platform_init(); first_publish = 0;
-    configASSERT(mimus_service_case >= 1 && mimus_service_case <= 12);
+    configASSERT(mimus_service_case >= 1 && mimus_service_case <= 24);
     /* Synthetic weights over both 8 MiB model regions. */
     uint64_t *weights = (uint64_t *)(uintptr_t)0x44000000u;
     if (mimus_service_case == 1) for (size_t i = 0; i < (16u << 20) / 8; ++i) weights[i] = next_random();
@@ -426,9 +681,9 @@ void kernel_main(void)
     configASSERT(mimus && mimus->phase == PVR_MIMUS_SERVICE_BOUND && firmware.config.mimus == mimus);
     config = firmware.config;
     config.queue = (struct pvr_ccb_ops){read_mem, write_mem, barrier, kick};
-    config.start = (struct pvr_gpu_start_ops){now, read_reg, write_reg, started, publish};
-    config.control = (struct pvr_gpu_control_ops){now, irq_read, irq_write, compat, event};
-    config.stop = (struct pvr_gpu_stop_ops){now, read_reg, write_reg, sync_write, sync_read, isolate, NULL};
+    config.start = (struct pvr_gpu_start_ops){boundary_now, read_reg, write_reg, started, publish};
+    config.control = (struct pvr_gpu_control_ops){boundary_now, irq_read, irq_write, compat, event};
+    config.stop = (struct pvr_gpu_stop_ops){boundary_now, read_reg, write_reg, sync_write, sync_read, isolate, NULL};
     config.enable = enable; config.context = &config; config.compute_mode = mode;
     config.irq = (struct pvr_gpu_service_irq_ops){mask, rearm};
     configASSERT(a733_gpu_memory_init(&memory, config.firmware_buffers, config.resources));

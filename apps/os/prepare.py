@@ -139,8 +139,13 @@ def image_manifest_check(manifest, raw):
 def session_check(raw, audio):
     """Python statement of apps/os/admission.c os_session_valid for the bundle."""
     require(session_layout(raw)[0] is audio, 'OS session size differs from the image.')
-    require(board.session_check(raw[:BOARD_BYTES], usb_reference_modes=(1,)) in (0, 4),
-            'The OS image admits board workloads 0 and 4 only.')
+    workload = board.session_check(raw[:BOARD_BYTES], usb_reference_modes=(1,))
+    require(workload in ((0, 4) if audio else (0, 2, 4)),
+            'Workload 2 requires supervised recorded audio; storage modes are 0 and 4.')
+    if workload == 2:
+        # Native a733_board_session_valid requires no host/latch/Type-C authority.
+        require(not any(raw[408:432] + raw[472:488] + raw[528:532] + raw[536:564] + raw[570:582]),
+                'USB0-only recognition must carry no USB-host authority or supply.')
     epoch, generation, lease = struct.unpack_from('<3Q', raw, 24)
     require(epoch and generation and lease, 'Reviewed session identities required.')
     require(struct.unpack_from('<3Q', raw, BOARD_BYTES) == (SESSION_MAGIC, 1, len(raw)), 'Invalid OS session header.')

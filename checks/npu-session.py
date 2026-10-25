@@ -81,6 +81,8 @@ SESSION_NAMES = {'session': ('conv8', 'dual-u8', 'dual-i8'),
                  'reserved': ('conv8', 'dual-u8', 'dual-i8', 'shufflenet-v2-published', 'mimus-linear-q'),
                  'runtime': ('conv8', 'dual-u8', 'dual-i8', 'shufflenet-v2-published', 'mimus-linear-q'),
                  'board-client': ('conv8', 'dual-u8', 'dual-i8', 'shufflenet-v2-published', 'mimus-linear-q')}
+MODES['board-thermal']={**MODES['board-client'],'cases':[6]}
+SESSION_NAMES['board-thermal']=SESSION_NAMES['board-client']
 
 
 def flags(build):

@@ -540,8 +540,8 @@ adds no probes for either absent device.
 An admitted high-speed or Gen1 storage device may stall the exact one-byte
 GET_MAX_LUN request on interface 0. The controller matches the transfer event
 against the pending slot, EP0 and TRB, revokes the caller destination, and
-preserves the original deadline. It copies no stalled payload. Other requests
-and non-control endpoint stalls retain the session.
+preserves the original deadline. It copies no stalled payload. Other control
+requests retain the session. Bulk recovery has the narrower READ10 contract below.
 
 The owner polls two commands through the existing command/event rings: Reset
 Endpoint with Transfer State Preserve cleared, then Set TR Dequeue Pointer.
@@ -556,8 +556,8 @@ Only after both commands complete does the adapter discard its old control
 buffer and publish one STALLED completion. The pinned TinyUSB control callback
 then invokes its MSC fallback, selects LUN 0 and sends Test Unit Ready. Capacity
 and copied READ10 use the existing read-only path. TinyUSB does not call
-`hcd_edpt_clear_stall` for this EP0 failure; that hook continues to refuse generic
-bulk recovery. A software timeout, stale event, failed command or lost generation
+`hcd_edpt_clear_stall` for this EP0 failure. Generic callers of that hook still
+retain the session; the bounded BOT owner uses its asynchronous core operation. A software timeout, stale event, failed command or lost generation
 never authorizes a new transfer or resource reuse.
 
 The sequence follows xHCI 1.2 sections 4.6.8, 4.6.10 and 4.10.2.1. The pinned
@@ -573,6 +573,68 @@ recovery commands, producer wrap and cycle, one interrupt-driven event path,
 and retention for failed/stale commands, stale transfer events, deadline expiry,
 wrong dequeue readback and generation loss. Device and register behavior is
 modeled. Physical endpoint recovery and storage reads remain unqualified.
+
+## A mounted sector read can recover one matched bulk stall
+
+The read-only storage consumer implements one Bulk-Only Transport reset and
+READ10 retry when a high-speed or Gen1 device stalls its command, data or status
+transfer. The caller's original deadline and attachment generation cover the
+entire sequence. Enumeration stalls on bulk endpoints, malformed status blocks,
+phase errors and unknown transport state retain the session. A second stall
+also retains it before another reset command can be issued.
+
+The core matches the stall against the outstanding slot, endpoint and transfer
+TRB, revokes its CPU destination and checks the endpoint's Halted context. Reset
+Endpoint with Transfer State Preserve cleared restores the host toggle or
+sequence number and must leave the endpoint Stopped. The core then reports
+STALLED to the pinned TinyUSB MSC class. Its narrow adaptation preserves the
+command block and completion callback while the adapter performs these requests:
+
+1. Bulk-Only Mass Storage Reset on interface 0.
+2. Clear Feature ENDPOINT_HALT on bulk IN.
+3. Clear Feature ENDPOINT_HALT on bulk OUT.
+
+Each successful clear is followed by restoration of that endpoint's controller
+state before the next step. The stalled endpoint receives Set TR Dequeue Pointer
+at the next unpublished producer position and cycle. The other endpoint must be
+Running with no pending TD or caller. Stop Endpoint must publish that same empty
+dequeue position before Configure Endpoint with both Drop and Add resets its
+toggle. Every command requires a matching successful completion and the expected
+output context. Bulk doorbells remain blocked through this sequence, including
+when OUT stalled and IN must be cleared first.
+
+Only after both endpoints are reusable does the adapter erase the private sector
+and retry the saved READ10 once. A complete data transfer and validated status
+block are required before the existing result API copies a sector to the caller.
+The controller retains its 128 KiB DMA parent throughout recovery. A failed
+control request, command error, stale event, unexpected dequeue, deadline expiry
+or generation loss retains the complete session and refuses caller output.
+
+The request order follows [USB Mass Storage Bulk-Only Transport 1.0, section
+5.3.4](https://www.usb.org/sites/default/files/usbmassbulk_10.pdf), also implemented
+by `usb_stor_BBB_reset` in the pinned U-Boot source. The endpoint operations
+follow xHCI 1.2 sections 4.6.8, 4.6.10 and 4.10.2.1, and the pinned Linux
+`xhci_endpoint_reset`. High-speed and Gen1 devices need no transaction-translator
+buffer clear. The pinned TinyUSB no-data control callback reports eight SETUP
+bytes in `actual_len`; the core independently verifies a zero-byte STATUS stage.
+
+The normal-read budget remains four controller commands and 31 transfers in the
+existing composition. Arming recovery scans the fixed three endpoint records
+once per read, with no added MMIO, allocation, lock or copy. Recovery adds at most
+four controller commands, three control requests and one read attempt. Its only
+extra sector write is a 512-byte erase of private storage before retry.
+No polling interval or deadline is extended.
+
+Software evidence under `usb-bot-recovery-20261024/callback` executes the actual
+TinyUSB class, adapter and core under ASan/UBSan. It covers successful stalls at
+all three BOT stages, the Gen1 and interrupt-driven paths, and retention after
+repeated stalls, failed reset or clear requests, command failure, stale commands,
+dequeue mismatch, deadline expiry and generation loss. The preserved nominal
+case under `first` has the same four commands and 31 transfers as the accepted
+pre-change composition. AArch64 compiles cover the core, adapter and adapted MSC
+class. The supervised `sunstone-a733-board` image also links with both USB
+roles; its compiler inputs and ELF are preserved in the same evidence directory.
+No board test ran; physical endpoint recovery remains unqualified.
 
 ## Direct Gen1 keyboard reports use an explicit workload
 
@@ -769,8 +831,9 @@ which the TinyUSB stack started.
 
 Other closes still end the session. The core refuses to detach the root device
 while its port reports a connection, so a TinyUSB close of that device retains
-the session, for example after a failed enumeration. Endpoint close and bulk
-clear-halt requests also retain it.
+the session, for example after a failed enumeration. Endpoint close and generic bulk
+clear-halt requests also retain it. The bounded READ10 owner has the recovery
+sequence described above.
 
 On the supervised board, a single-device workload that loses its device before
 publishing a result issues its request again after a later attachment mounts.
@@ -781,10 +844,9 @@ Unplugging a device from the board's Type-C connector also ends the Type-C
 attachment, and Type-C attachment loss still retains the session. The root
 disconnect path therefore serves a device unplugged behind an adapter or hub
 that keeps the Type-C attachment. Adopting a new Type-C attachment generation
-after VBUS removal and BOT reset recovery for storage remain required work.
-The pinned TinyUSB storage class never requests a bulk clear-halt, so BOT reset
-recovery would need a change to that class as well as bulk-endpoint recovery
-in the core. VBUS removal alone does not establish that a self-powered hub lost
+after VBUS removal remains required work. The bounded BOT reset applies only
+within the existing attachment generation. VBUS removal alone does not establish
+that a self-powered hub lost
 power, so hub topologies need separate evidence before reuse.
 
 `checks/a733-xhci-detach.py` runs the actual core against a modeled controller
@@ -987,9 +1049,10 @@ profiles above. It refuses:
 - Gen2, streams, nonstandard speed-ID tables and more than eight scratchpads.
 
 GET_MAX_LUN protocol-stall recovery is implemented for the admitted storage
-profile. Bulk stalls, other control stalls and uncertain recovery retain the
-session; generic clear-halt and BOT reset recovery remain unsupported. These are implementation limits, not claims that the board
-cannot support those modes.
+profile. Mounted READ10 supports one matched bulk stall through the bounded BOT
+reset sequence. Other bulk stalls, control stalls and uncertain recovery retain
+the session. Generic clear-halt and recovery from invalid or phase-error status
+blocks remain unsupported. These are implementation limits.
 
 Further required work includes more device records and endpoints per device
 for additional leaves and classes such as CDC-ACM, simultaneous enumeration on
@@ -998,7 +1061,7 @@ audio, wider xHCI endpoint modes, physical interrupt
 qualification,
 USB2 device/OTG roles, wider SuperSpeed classes and topology, Type-C role/PD
 negotiation where electrically supported, safe shutdown/drain, adoption of a
-new Type-C attachment generation and BOT reset recovery for storage. DisplayPort lane ownership must be coordinated with display users.
+new Type-C attachment generation and wider BOT error recovery for storage. DisplayPort lane ownership must be coordinated with display users.
 USB0 host capability requires an electrically valid route; USB1 needs a physical
 route before it can be considered usable on this board revision.
 

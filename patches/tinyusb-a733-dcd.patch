@@ -101,7 +101,51 @@
  #else
  #error "Unsupported MCU"
  #endif
-@@ -533,6 +475,7 @@
+@@ -448,6 +390,21 @@
+ 
+ static void pipe_write_packet(void *buff, volatile void *fifo, unsigned cnt)
+ {
++  /* A class FIFO can start at any byte after a short or wrapped packet.
++   * Keep word-wide controller accesses without misaligned C RAM accesses. */
++  if ((uintptr_t)buff & (sizeof(uint32_t) - 1)) {
++    uint8_t *bytes = buff;
++    while (cnt >= sizeof(uint32_t)) {
++      uint32_t word;
++      word = (uint32_t)bytes[0] | (uint32_t)bytes[1] << 8 |
++             (uint32_t)bytes[2] << 16 | (uint32_t)bytes[3] << 24;
++      USBC_Writel(word, fifo);
++      bytes += sizeof(word);
++      cnt -= sizeof(word);
++    }
++    while (cnt--) { USBC_Writeb(*bytes++, fifo); }
++    return;
++  }
+  	u32 len = 0;
+ 	u32 i32 = 0;
+ 	u32 i8  = 0;
+@@ -475,6 +432,21 @@
+ 
+ static void pipe_read_packet(void *buff, volatile void *fifo, unsigned cnt)
+ {
++  /* A class FIFO can start at any byte after a short or wrapped packet.
++   * Keep word-wide controller accesses without misaligned C RAM accesses. */
++  if ((uintptr_t)buff & (sizeof(uint32_t) - 1)) {
++    uint8_t *bytes = buff;
++    while (cnt >= sizeof(uint32_t)) {
++      uint32_t word;
++      word = USBC_Readl(fifo);
++      bytes[0] = (uint8_t)word; bytes[1] = (uint8_t)(word >> 8);
++      bytes[2] = (uint8_t)(word >> 16); bytes[3] = (uint8_t)(word >> 24);
++      bytes += sizeof(word);
++      cnt -= sizeof(word);
++    }
++    while (cnt--) { *bytes++ = USBC_Readb(fifo); }
++    return;
++  }
+ 	u32 len = 0;
+ 	u32 i32 = 0;
+ 	u32 i8  = 0;
+@@ -533,6 +505,7 @@
    uint32_t *p = (uint32_t*)(uintptr_t) &_dcd.setup_packet;
    p[0]        = USBC_Readl(USBC_REG_EPFIFO0(USBC0_BASE));
    p[1]        = USBC_Readl(USBC_REG_EPFIFO0(USBC0_BASE));
@@ -109,7 +153,7 @@
  
    _dcd.pipe0.buf       = NULL;
    _dcd.pipe0.length    = 0;
-@@ -542,6 +485,9 @@
+@@ -542,6 +515,9 @@
    const unsigned len    = _dcd.setup_packet.wLength;
    _dcd.remaining_ctrl   = len;
    const unsigned dir_in = tu_edpt_dir(_dcd.setup_packet.bmRequestType);
@@ -119,7 +163,7 @@
    /* Clear RX FIFO and reverse the transaction direction */
    if (len && dir_in) __USBC_Dev_ep0_ReadDataHalf();
  }
-@@ -562,7 +508,7 @@
+@@ -562,7 +538,7 @@
    uint8_t          *buf = pipe->buf;
    // TU_LOG1("   %p mps %d len %d rem %d\r\n", buf, mps, len, rem);
    if (len) {
@@ -128,7 +172,7 @@
      if (_dcd.pipe_buf_is_fifo[TUSB_DIR_IN] & TU_BIT(epnum_minus1)) {
        pipe_read_write_packet_ff((tu_fifo_t *)(uintptr_t) buf, addr, len, TUSB_DIR_IN);
      } else {
-@@ -587,10 +533,11 @@
+@@ -587,10 +563,11 @@
    const unsigned mps = USBC_Readw(USBC_REG_RXMAXP(USBC0_BASE));
    const unsigned rem = pipe->remaining;
    const unsigned vld = USBC_Readw(USBC_REG_RXCOUNT(USBC0_BASE));
@@ -141,7 +185,7 @@
      if (_dcd.pipe_buf_is_fifo[TUSB_DIR_OUT] & TU_BIT(epnum_minus1)) {
        pipe_read_write_packet_ff((tu_fifo_t *)(uintptr_t )buf, addr, len, TUSB_DIR_OUT);
      } else {
-@@ -615,6 +562,7 @@
+@@ -615,6 +592,7 @@
    unsigned dir_in       = tu_edpt_dir(ep_addr);
  
    pipe_state_t *pipe = &_dcd.pipe[dir_in][epnum_minus1];
@@ -149,7 +193,7 @@
    pipe->buf          = buffer;
    pipe->length       = total_bytes;
    pipe->remaining    = total_bytes;
-@@ -622,7 +570,10 @@
+@@ -622,7 +600,10 @@
    USBC_SelectActiveEp(tu_edpt_number(ep_addr));
  
    if (dir_in) {
@@ -161,7 +205,7 @@
    } else {
      if (__USBC_Dev_Rx_IsReadDataReady())
        __USBC_Dev_Rx_ReadDataComplete();
-@@ -636,6 +587,7 @@
+@@ -636,6 +617,7 @@
    TU_ASSERT(total_bytes <= 64); /* Current implementation supports for only up to 64 bytes. */
  
    const unsigned req = _dcd.setup_packet.bmRequestType;
@@ -169,7 +213,7 @@
    TU_ASSERT(req != REQUEST_TYPE_INVALID || total_bytes == 0);
  
    USBC_SelectActiveEp(0);
-@@ -712,6 +664,7 @@
+@@ -712,6 +694,7 @@
    }
  
    unsigned req = _dcd.setup_packet.bmRequestType;
@@ -177,7 +221,7 @@
    if (csrl & USB_CSRL0_SETEND) {
      // TU_LOG1("   ABORT by the next packets\r\n");
      USBC_Dev_Ctrl_ClearSetupEnd();
-@@ -728,6 +681,15 @@
+@@ -728,6 +711,15 @@
      if (!(csrl & USB_CSRL0_RXRDY)) return; /* Received SETUP packet */
    }
  
@@ -193,7 +237,7 @@
    if (csrl & USB_CSRL0_RXRDY) {
      /* Received SETUP or DATA OUT packet */
      if (req == REQUEST_TYPE_INVALID) {
-@@ -830,10 +792,6 @@
+@@ -830,10 +822,6 @@
  /*------------------------------------------------------------------
   * Device API
   *------------------------------------------------------------------*/
@@ -204,7 +248,7 @@
  
  bool dcd_init(uint8_t rhport, const tusb_rhport_init_t* rh_init) {
    (void) rh_init;
-@@ -860,8 +818,9 @@
+@@ -860,8 +848,9 @@
      | (1 << USBC_BP_INTUSBE_EN_SOF)
      | (1 << USBC_BP_INTUSBE_EN_DISCONNECT)
      , USBC_REG_INTUSBE(USBC0_BASE));
@@ -216,7 +260,7 @@
  
    dcd_connect(rhport);
  
-@@ -893,23 +852,23 @@
+@@ -893,23 +882,23 @@
  void dcd_int_enable(uint8_t rhport)
  {
    (void)rhport;
@@ -244,7 +288,7 @@
  }
  
  // Receive Set Address request, mcu port must also include status IN response
-@@ -1176,6 +1135,7 @@
+@@ -1176,6 +1165,7 @@
      /* ep0 FADDR must be 0 when (re)entering peripheral mode */
      USBC_SelectActiveEp(0);
      USBC_Dev_SetAddress(0);

@@ -14,7 +14,11 @@ struct a733_npu_application_result a733_npu_application_result;
 
 static int live(void)
 {
-    return !atomic_load_explicit(&a733_npu_application_failed,memory_order_acquire) &&
+    return
+#ifdef SUNSTONE_NPU_FINITE_THERMAL
+        a733_npu_application_thermal_live() &&
+#endif
+        !atomic_load_explicit(&a733_npu_application_failed,memory_order_acquire) &&
         a733_smp_counter()<a733_observe_identity.deadline;
 }
 static _Noreturn void retained(unsigned reason)
@@ -41,10 +45,17 @@ static struct npu_service_reply request(struct npu_convolution *c,enum npu_servi
 static void client(void *unused)
 {
     (void)unused;
+#ifdef SUNSTONE_NPU_FINITE_THERMAL
+    unsigned mismatch=0,jobs=0;uint64_t previous=0,job=0;
+    a733_npu_application_result.start=a733_smp_counter();
+#endif
 #ifdef SUNSTONE_NPU_FINITE_RETURN
     platform_puts("NPU_STAGE=WAIT_STARTUP\n");
 #endif
     while(!a733_npu_application_ready()) {
+#ifdef SUNSTONE_NPU_FINITE_THERMAL
+        if(a733_npu_application_never_started())goto finished_engine;
+#endif
         if(!live())retained(9);
         vTaskDelay(1);
     }
@@ -58,9 +69,14 @@ static void client(void *unused)
         if(reply.state!=A733_NPU_BOOTING)retained(11);
         vTaskDelay(1);reply=request(c,NPU_SERVICE_STATUS,NULL,0,0);
     }
+#ifndef SUNSTONE_NPU_FINITE_THERMAL
     a733_npu_application_result.start=a733_smp_counter();
     unsigned mismatch=0;uint64_t previous=0,job=0;
+#endif
     for(unsigned iteration=0;iteration<2;++iteration) {
+#ifdef SUNSTONE_NPU_FINITE_THERMAL
+    if(!a733_npu_application_thermal_claim())break;
+#endif
 #ifdef SUNSTONE_NPU_FINITE_RETURN
     platform_puts("NPU_STAGE=SUBMIT job=");platform_hex(iteration+1);platform_puts("\n");
 #endif
@@ -78,6 +94,9 @@ static void client(void *unused)
         mismatch|=a733_npu_application_result.output[i]^a733_npu_application_reference[i];
     reply=request(c,NPU_SERVICE_REAP,NULL,0,0);
     if(reply.state!=A733_NPU_READY || !live())retained(15);
+#ifdef SUNSTONE_NPU_FINITE_THERMAL
+    ++jobs;a733_npu_application_thermal_complete();
+#endif
     if(iteration==0) {previous=job;
         a733_observe_digest(a733_npu_application_result.output,a733_npu_application_reference_bytes,
             a733_npu_application_result.first_digest);
@@ -87,6 +106,9 @@ static void client(void *unused)
 #ifdef SUNSTONE_NPU_INTERRUPT
     if(npu_service_irq_completions(&c->service)!=3)retained(21);
 #endif
+#ifdef SUNSTONE_NPU_FINITE_THERMAL
+    a733_npu_application_thermal_close();
+#endif
     platform_puts("NPU_STAGE=CLOSE\n");
     reply=request(c,NPU_SERVICE_CLOSE,NULL,0,0);
     platform_puts("NPU_STAGE=WAIT_LOCAL_STOP\n");
@@ -95,11 +117,20 @@ static void client(void *unused)
         vTaskDelay(1);
     }
 #endif
-    a733_npu_application_result.previous_job=previous;
+#ifdef SUNSTONE_NPU_FINITE_THERMAL
+finished_engine:
+    a733_npu_application_result.jobs=jobs;
+    a733_npu_application_result.thermal_reason=a733_npu_application_thermal_reason();
+    unsigned status=mismatch?1:jobs<2?2:0;
+    if(status==2 && !a733_npu_application_result.thermal_reason)retained(22);
+#else
+    unsigned status=mismatch?1:0;
     a733_npu_application_result.jobs=2;
+#endif
+    a733_npu_application_result.previous_job=previous;
     a733_npu_application_result.job=job;
     a733_npu_application_result.end=a733_smp_counter();
-    atomic_store_explicit(&a733_npu_application_result.complete,mismatch ? 2 : 1,memory_order_release);
+    atomic_store_explicit(&a733_npu_application_result.complete,status+1,memory_order_release);
 #ifdef SUNSTONE_NPU_FINITE_RETURN
     if(!a733_npu_application_quiesce())retained(20);
 #ifdef SUNSTONE_NPU_INTERRUPT
@@ -107,16 +138,22 @@ static void client(void *unused)
     platform_puts("NPU_IRQ_COMPLETIONS=");platform_hex(npu_service_irq_completions(&c->service));
     platform_puts("\nNPU_IRQ_STOPPED=");platform_hex(1);platform_puts("\n");
 #endif
+#ifdef SUNSTONE_NPU_FINITE_THERMAL
+    platform_puts("NPU_THERMAL_REASON=");platform_hex(a733_npu_application_result.thermal_reason);
+    platform_puts("\nNPU_JOBS=");platform_hex(jobs);platform_puts("\n");
+#endif
     platform_puts("NPU_STAGE=QUIESCENT\nNPU_FIRST_DIGEST=\n");
     for(unsigned i=0;i<32;++i){platform_hex(a733_npu_application_result.first_digest[i]);platform_puts("\n");}
     platform_puts("NPU_SECOND_OUTPUT=\n");
     for(unsigned i=0;i<a733_npu_application_reference_bytes;++i){platform_hex(a733_npu_application_result.output[i]);platform_puts("\n");}
     if(!live() || !a733_npu_application_quiescent())retained(19);
     taskENTER_CRITICAL();
-    platform_puts(mismatch?"FAIL NPU numerical comparison\n":"PASS NPU two matched jobs, copied output, REAP, CLOSE, local stop and parked providers\n");
+    platform_puts(status==1?"FAIL NPU numerical comparison\n":status==2?
+        "REFUSED NPU thermal admission; configured sensor disabled and providers parked\n":
+        "PASS NPU two matched jobs, copied output, REAP, CLOSE, local stop and parked providers\n");
     /* The returning platform must keep all reservations and restore RAM only
      * after this successful stop; a retained failure never takes this path. */
-    platform_exit(mismatch?1:0);
+    platform_exit(status);
 #endif
     /* Results, requests, service, tasks and the full parent stay alive. */
     vTaskSuspend(NULL);retained(16);

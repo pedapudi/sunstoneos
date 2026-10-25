@@ -103,6 +103,15 @@ The optional synchronous override must return one and satisfy those same final
 state checks. Compute/free-list allocation parents remain owned, preventing
 another OPEN. Physical orderly shutdown remains unqualified.
 
+The mimus native owner can reopen its retained allocations after the complete
+healthy stopped proof; [gpu-mimus-service.md](gpu-mimus-service.md) defines its
+context reconstruction and epoch rules. The optional nonblocking `live`
+callback requires exactly 1 before normal backend access. The OS binds
+`board_live`, so expiration of a mutable board lifetime permanently latches
+REVOKED even if that lifetime is later renewed. This adds two architectural
+counter reads to each admitted OS backend check. Fault-safe GIC masking is
+still allowed; it does not establish GPU shutdown.
+
 ## Focused evidence covers register and callback composition
 
 The identity reference check compiles the published decoding function and

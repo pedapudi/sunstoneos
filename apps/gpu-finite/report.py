@@ -11,7 +11,7 @@ def validate_reports(monitor,platform,receipt,packet,p):
  magic,version,size,epoch,generation,first,second,count,lines=struct.unpack_from('<QIIQQ4I',packet)
  words=struct.unpack_from('<64I',packet,48);start,end=struct.unpack_from('<2Q',packet,304);g=p['geometry']
  expected=tuple(((17+(i+1)*3)^(0x9e3779b9+(i<<16)))&0xffffffff for i in range(32))*2
- require(m[:3]==(0x4153373343525331,p['epoch'],p['generation']) and m[3:6]==(5,0,0) and m[7]==1,'No matched healthy GPU monitor completion.')
+ require(m[:3]==(0x4153373347535232,p['epoch'],p['generation']) and m[3:6]==(5,0,0) and m[7]==1,'No matched healthy GPU monitor completion.')
  require((magic,version,size,epoch,generation,first,second,count)==(PACKET_MAGIC,1,320,p['epoch'],p['generation'],1,2,64) and words==expected,'GPU packet identity/sequence/arithmetic differs.')
  clean_lines=(g['clean_end']-g['clean_start']+g['wb_end']-g['wb_start'])//64
  require(r[:6]==(RECEIPT_MAGIC,p['epoch'],p['generation'],p['lease'],0,1) and r[6:11]==(g['clean_start'],g['clean_end'],g['wb_start'],g['wb_end'],clean_lines) and lines==clean_lines,'GPU receipt ownership/publication extent differs.')

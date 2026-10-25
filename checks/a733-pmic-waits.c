@@ -50,7 +50,7 @@ static void setup(void)
         assert(pmic_model_step(&m)!=A733_PMIC_RETAINED);
     assert(a733_pmic_live(&m.provider,&m.lifetime)==A733_PMIC_READY);
     pin_enter=m.pins.operations.enter;m.pins.operations.enter=pin_wait;
-    i2c_enter=m.provider.ops.enter;m.provider.ops.enter=i2c_wait;
+    i2c_enter=m.provider.pmic_bus_ops.enter;m.provider.pmic_bus_ops.enter=i2c_wait;
     pin_waits=i2c_waits=busy_seen=0;
 }
 int main(void)

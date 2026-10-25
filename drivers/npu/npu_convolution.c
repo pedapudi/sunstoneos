@@ -408,6 +408,14 @@ int npu_convolution_send(struct npu_convolution *c,enum npu_service_operation op
         memset((void *)c->buffers[NPU_CONVOLUTION_POOL].cpu,0,c->buffers[NPU_CONVOLUTION_POOL].bytes);
 #endif
         memcpy((void *)c->buffers[NPU_CONVOLUTION_INPUT].cpu,input,bytes);r.command=1;
+        /* The WRITE-role output is cleaned and invalidated by the job
+         * publication, so the device starts from this pattern. The buffer is
+         * page aligned: whole 64-bit words, then the tail bytes. */
+        const uintptr_t output=c->buffers[NPU_CONVOLUTION_OUTPUT].cpu;
+        const size_t size=c->output_bytes;
+        size_t i=0;
+        for(;i+8<=size;i+=8)*(uint64_t *)(output+i)=NPU_CONVOLUTION_OUTPUT_POISON*UINT64_C(0x100000001);
+        for(;i<size;++i)*(unsigned char *)(output+i)=(unsigned char)(NPU_CONVOLUTION_OUTPUT_POISON>>8*(i&3));
         break;
     case NPU_SERVICE_REAP:
         if(!c->output_ready || !c->job || timeout)return 0;

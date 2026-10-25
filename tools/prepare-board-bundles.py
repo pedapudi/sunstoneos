@@ -270,7 +270,7 @@ ROWS = [
                   'COMPLETE board bundle 6: PMIC service and domain adoption reads', True,
                   'Monitor status 0 with the summary (S_TWI0 divisor and bit time, supply verification bits, the '
                   'provisional bound and its verdict, the byte time and the wire-time spin, the re-spins, the step '
-                  'distribution against 100%, 105%, 110% and 155% of wire time, the access-cost windows with their '
+                  'distribution against 1000, 1050, 1100 and 1268 permille of measured wire time, the access-cost windows with their '
                   'fastest and slowest sub-windows, the domain-1 mapping and the adoption '
                   'reads of domains 1, 4 and 5), COMPLETE board bundle 6, and then, while they fit in the log, the '
                   'STEP lines, the 32 snapshots and the owner accesses; or the controlled outcome '
@@ -296,10 +296,10 @@ ROWS = [
                   '(latency), the adapter\'s time and read operations, the task check with IRQs unmasked, and the '
                   'TWI observer, and prints each total with its fastest and slowest sub-window; it names its '
                   'core. Pass: both supplies verified, every snapshot 0xff9e, 34 snapshots counted, and the '
-                  'provisional bound of docs/designs/pmic-access.md: the median step at most 155% of its wire time '
-                  'and the first step at most 155% plus 40 us. A missed bound, or a measured byte that is missing '
-                  'or above 110%, is the controlled outcome; a supply, snapshot or record mismatch is not. The '
-                  'summary and outcome print before the detail lines, which stop '
+                  'provisional empirical bound of docs/designs/pmic-access.md: at CPU-L 494 MHz, the median step at most '
+                  '1268 permille of its measured wire time and the first step at most that limit plus 40 us. A missed '
+                  'bound, or a measured byte that is missing or above 110%, is the controlled outcome; a supply, '
+                  'snapshot or record mismatch is not. The summary and outcome print before the detail lines, which stop '
                   'while 256 log bytes remain. No GIC register is read for the record, and no PPU or PMIC register '
                   'is written.',
                   sources=POWER_SOURCES + ['apps/board-bundles-power/bundle6.c'], base=BASE_ROW),

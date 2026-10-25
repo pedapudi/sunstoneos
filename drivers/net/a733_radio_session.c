@@ -11,7 +11,7 @@ static int platform_outside(struct a733_radio_platform *b,const void *p,size_t n
         a733_ranges_disjoint(b->pins,sizeof(*b->pins),p,n)&&a733_ranges_disjoint(b->rails,sizeof(*b->rails),p,n)&&
         a733_ranges_disjoint(b->pmic,sizeof(*b->pmic),p,n)&&
         a733_ranges_disjoint(b->rails->binding.gpu,sizeof(*b->rails->binding.gpu),p,n)&&
-        b->pmic->ops.outside(b->pmic->cookie,p,n)==1;
+        a733_pmic_outside(b->pmic,p,n)==1;
 }
 static int outside(struct a733_radio_session *s,const void *p,size_t n)
 {
