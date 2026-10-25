@@ -82,14 +82,24 @@ static int check_configuration(struct a733_npu_controller *c)
     return verify(c, 0x3b4, c->mmu.pd_entry, UINT32_MAX) &&
            verify(c, 0x388, 0x21, UINT32_MAX) && verify(c, 0x14, IRQ_ENABLE, UINT32_MAX);
 }
+/* The vendor starts a job with the command address, a full barrier and the
+ * fetch-size word, reading nothing (vip2/vip_drv_hardware.c:882-893). The
+ * configuration, full idle and a clear event word are proved at open (before
+ * the bootstrap) and at every completion, and the NPU is idle between a
+ * completion and the next trigger. */
 static int trigger(struct a733_npu_controller *c)
 {
-    uint32_t pending;
-    if (!check_configuration(c) || !idle(c) || !read_reg(c, 0x10, &pending)) return 0;
-    if (pending) return fail(c, A733_NPU_IRQ);
     if (!deadline(c) || !write_reg(c, 0x654, c->job.device)) return 0;
     c->ops.barrier(c->cookie);
     return write_reg(c, 0x3a4, 0x1ffff);
+}
+/* Before the bootstrap trigger only: the programmed configuration, full idle
+ * and no pending event. */
+static int ready_to_start(struct a733_npu_controller *c)
+{
+    uint32_t pending;
+    if (!check_configuration(c) || !idle(c) || !read_reg(c, 0x10, &pending)) return 0;
+    return pending ? fail(c, A733_NPU_IRQ) : 1;
 }
 
 static int reset(struct a733_npu_controller *c)
@@ -150,9 +160,9 @@ int a733_npu_open(struct a733_npu_controller *c, const struct a733_npu_ops *ops,
         !read_reg(c, 0x90, &value) || !write_reg(c, 0x90, value | 64u) ||
         !read_reg(c, 0x414, &value) || !write_reg(c, 0x414, value & ~1u) ||
         !write_reg(c, 0x14, IRQ_ENABLE) || !read_reg(c, 0x10, &value)) return 0;
-    /* Drain reset-era status once. trigger requires a subsequent clear read. */
+    /* Drain reset-era status once; the start check requires a later clear read. */
     c->ops.delay(cookie, 10);
-    return trigger(c);
+    return ready_to_start(c) && trigger(c);
 }
 
 int a733_npu_submit(struct a733_npu_controller *c, const struct a733_npu_command *cmd,
@@ -208,7 +218,8 @@ enum a733_npu_state a733_npu_advance(struct a733_npu_controller *c, int sample_e
     if (elapsed >= (canceled ? c->cancel_timeout : c->timeout)) {
         fail(c, A733_NPU_TIMEOUT); return c->state;
     }
-    if (!check_configuration(c)) return c->state;
+    /* The configuration is checked at open and at close
+     * (a733_npu_close), not on every poll or completion. */
     uint32_t value;
     if (sample_events) {
         if (!read_reg(c, 0x10, &value)) return c->state;
@@ -224,10 +235,12 @@ enum a733_npu_state a733_npu_advance(struct a733_npu_controller *c, int sample_e
     if (canceled) {
         if (!read_reg(c, 0x3a8, &value) || !(value & 16u)) return c->state;
     } else if (!(c->irq_seen & EVENT_DONE)) return c->state;
+    /* One event read per completion, as the vendor's handler reads +0x010
+     * once (vip_drv_device_driver.c:382), then full idle before the caches
+     * are invalidated. A later event stays pending in +0x010: the interrupt
+     * profile samples it between jobs, the next completion's read attributes
+     * it, and close refuses it. */
     if (!read_reg(c, 4, &c->last_idle) || c->last_idle != IDLE_ALL) return c->state;
-    if (!read_reg(c, 0x10, &value)) return c->state;
-    c->irq_seen |= value;
-    if (c->irq_seen & ~EVENT_DONE) { fail(c, A733_NPU_IRQ); return c->state; }
     c->ops.barrier(c->cookie);
     int finished = c->ops.finish(c->cookie, &c->job, canceled);
     if (finished != 1) {

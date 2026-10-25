@@ -29,7 +29,13 @@ static const struct npu_convolution_slot npu_convolution_layout[NPU_CONVOLUTION_
     [NPU_CONVOLUTION_INPUT]={0x26b000,151552,0xe026f000,A733_NPU_BUFFER_READ},
     [NPU_CONVOLUTION_OUTPUT]={0x290000,4096,0xe0295000,A733_NPU_BUFFER_WRITE},
     [NPU_CONVOLUTION_BOOTSTRAP]={0x291000,524288,0xe0297000,A733_NPU_BUFFER_BOOTSTRAP},
+    /* The finite image clears the pool once and leaves it to the device; the
+     * retained runtime clears it for every job (npu_convolution_send). */
+#if defined(SUNSTONE_NPU_FINITE_RETURN)
+    [NPU_CONVOLUTION_POOL]={0xe0000,1093632,0xe00e2000,A733_NPU_BUFFER_SCRATCH},
+#else
     [NPU_CONVOLUTION_POOL]={0xe0000,1093632,0xe00e2000,A733_NPU_BUFFER_WRITE},
+#endif
     [NPU_CONVOLUTION_PPU]={0,0,0,A733_NPU_BUFFER_READ}};
 /* Assembly plan allocation order (enum nbg_allocation_id) to buffer slot. */
 static const unsigned npu_convolution_allocation[NBG_ALLOCATION_COUNT]={
