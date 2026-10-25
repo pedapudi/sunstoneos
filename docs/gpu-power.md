@@ -787,8 +787,12 @@ What each result means:
   wrapper refused a write. The asynchronous abort is taken after the
   restore and ends the run through the image's fault report.
 
-**Write exception for coordinator acceptance.** The state is TOP5 ON, the
-GPU clock open at 400 MHz from PERI0, DCDC4 at 800 mV, the reset released
+**Write exception, accepted.** The coordinator accepted this exception on
+2026-10-25 for the image at `3e188e6a`: SMC0 `0x0a0000b0` = 2 and
+`drm_ctrl` `0x01880014` = 0, only after the first identity read returns,
+within the bounded window and restored as described above. Board set
+`board-bundles-20261025-3` carries it as bundle row 17. The state is TOP5
+ON, the GPU clock open at 400 MHz from PERI0, DCDC4 at 800 mV, the reset released
 and CORE6 not acknowledged. The image writes 2 to SMC0 `0x0a0000b0` and
 then 0 to the wrapper's `drm_ctrl` `0x01880014`: the two writes of
 `sunxi_secure_config`, in its order and with its values. After the second
