@@ -39,13 +39,6 @@ resumes:
 
 The paused `gpu-provider-ready-1024` work may also edit
 `drivers/gpu/a733_gpu_power.c` and this file; merge `bringup` into it first.
-Remaining minor review items, not yet fixed: the unreachable CORE-status check
-and the unused `gpu_register_window_access` field in `apps/gpu-power-id`;
-hashing untracked files into the gate's dirty-tree identity and re-checking
-status under the lock; an `#error` when `OS_STAGED_WORKLOAD` is undefined in an
-OS build; checking report identity before decoding the CPU qualification
-reason; repeated statements of the workload-2 rule, the SDIO four-bit caveat
-and the GPU deadline argument across documents.
 
 ## Resume checkpoint
 
@@ -76,8 +69,10 @@ one job and returns builds from current objects; the shared monitor and
 
 The image is not physically eligible. Running it needs a single-core admission
 record granting exclusive CORE6 and TOP5 control, confirmed supply, clock and
-isolation, and a reviewed return and recovery plan. The default GPU single-core
-profile also patches `platform.c` without listing it as a configure input.
+isolation, and a reviewed return and recovery plan. Every GPU single-core
+profile, including the default one, lists `platform/a733/platform.c` as a
+configure input, so editing it re-runs configuration and changes the build
+identity.
 
 **NPU profile of the resident OS image (merged 2026-10-24):** an optional,
 feature-gated supervised profile runs one NPU application client. It reserves
@@ -98,21 +93,29 @@ feature-gated supervised profile runs one NPU application client. It reserves
 - **Checks:** all 32 `checks/os-npu.py` cases pass. Evidence:
   `os-npu-20261024/check-8/`.
 
+- **Launcher:** for an image whose link check records the NPU profile,
+  `tools/check-a733-os-supervised.py` requests operation 6 once after a
+  completed capture with at least 100 ms of the window left, and records the
+  decoded report and its classification. This is host-checked only
+  (`checks/os-image-launch.py`).
+
 Open items:
-- No launcher requests operation 6 yet.
+- The `os-supervised-software` evidence must be regenerated before the next
+  OS launch: the launcher's hash and its source set, which now includes
+  `apps/os/npu-report.py`, changed.
 - `npu_admission` in `apps/os/prepare.py` is untested against real NPU entry
   records.
-- The `client` task in `apps/npu-board/main.c` still starts at EL0, though it
-  reads the counter clock.
 - No NPU job of this image has run on a board.
 
 The latest reviewer finding is a concrete privilege requirement:
 `a733_counter_clock_now` masks DAIF, so the registered NPU application client
 must execute at EL1. Verify/finalize the narrow
 `os_npu_client_task(NULL)` privilege-hook correction and test the actual task
-frame SPSR. Unregistered tasks must remain refused. The older
-`apps/npu-board/main.c` client appears to share this problem; inspect it as a
-separate source issue, without assuming its unqualified image works.
+frame SPSR. Unregistered tasks must remain refused. The older NPU board image
+had the same problem; its `apps/npu-board/main.c` bootstrap and client now
+start at EL1t only while `board_application_start` creates them, which
+`checks/npu-board-providers.py` checks against the linked first-frame SPSR.
+That image remains unqualified.
 A proposed read-only vendor opcode 6 exposes a separate fixed 104-byte NPU
 report; its implementation/review is not complete. Verify actual framed USB
 length, immutable completion publication and preservation of mimus protocol
