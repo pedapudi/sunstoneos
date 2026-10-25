@@ -425,9 +425,13 @@ read 144 ns. A fenced write in a transfer takes about 360 ns with its stamp,
 a plain write 198 ns, and a whole provider poll that finds the flag clear
 1,176 ns.
 Section "Board result" of [pmic-access.md](pmic-access.md) gives the
-windows. At those costs the model gives 739 µs; the 45 µs that it lacks lie
-in work that no window times, and the step moves in whole microseconds per
-bus phase, so 45 µs corresponds to about 1 µs in each of the 42 phases.
+windows. At those costs the model gives 739 µs; the step moves in whole
+microseconds per bus phase, so the 45 µs it lacks corresponds to about 1 µs
+in each of the 42 phases. A third run timed each completing poll and had a
+median of 796.4 µs with that window. Its byte polls take 3.10 µs against
+the model's 2.72 µs, and the completing polls account for about 12 µs of
+the per-step difference; about 38 µs lies in step work outside them, such as
+the admission's lock waits and the publication.
 
 The 110% target, 693 µs, is out of reach of a provider that polls each bus
 phase. Charging the register accesses alone, with no software cost, the

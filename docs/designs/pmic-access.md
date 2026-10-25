@@ -1,7 +1,7 @@
 # PMIC register access and service spin timing
 
 Status: **implemented and measured on the board.** Bundle 6 ran the changed
-provider twice on port 3-3 on 2026-10-24, read-only. Section "Board result"
+provider three times on port 3-3 on 2026-10-24, read-only. Section "Board result"
 gives the steps, the access costs, the provisional empirical bound and what
 the measured costs predict. The modeled step times come from the host model
 of the power service, `checks/power-domains-service.c`, which sets each bus
@@ -158,7 +158,7 @@ and flag read.
 | Serial accesses between a flag and the next phase-start write | 27 per transaction | 25 per transaction, about 150 per snapshot | Counted from the phase sequence |
 | Snapshot step, 400 kHz, 200 ns per access | 712 µs (113%) | 685 µs (109%) | `checks/power-domains-service.c` |
 | Snapshot step, 400 kHz, measured costs | Not rerun | 739 µs (117%) | Same, board-cost table |
-| Snapshot step on the board, median; first step | 917 µs (146%); 941 µs | 779 µs (123.7%) and 784 µs (124.4%); 809 µs and 807 µs | Bundle 6 `STEP` lines of the two runs, port 3-3 |
+| Snapshot step on the board, median; first step | 917 µs (146%); 941 µs | 779 µs (123.7%) and 784 µs (124.4%); 809 µs and 807 µs; 796 µs (126.4%) and 824 µs with the completing-poll window | Bundle 6 `STEP` lines of the three runs, port 3-3 |
 | Selector write, 400 kHz, measured costs | Not rerun | One step of 950 µs; not measured on the board | Same |
 | Snapshot, 400 kHz, flags 10% later than the divisor implies, 200 ns | Two steps, one tick wait | One step of 751 µs for 708 µs of model wire | Same, slow-bus case |
 | Tick waits per snapshot and selector write, 100 kHz | 2 and 3 | 2 and 3 | Same |
@@ -240,8 +240,9 @@ Committed checks, added with the implementation:
 
 - `checks/power-domains-service.c`: independent read, write, poll and time
   costs. The board-cost rows charge the measured costs with the present and
-  the lighter barrier placement, the poll cost fitted to the board median
-  with both placements, and the register accesses alone with both
+  the lighter barrier placement, the poll cost fitted to the second run's
+  median with both placements, the poll cost matched to the third run's
+  completing-poll spans, and the register accesses alone with both
   placements; each asserts its snapshot step. `--board-costs` selects only
   those rows. The slow-bus case remains in the default check. Every
   service case runs with sub-microsecond flags.
@@ -348,8 +349,7 @@ that the earlier adapter made per access:
      step is excluded and the poll window takes one, so the summary normally
      reads `STEPS recorded=32` and `excluded=1`; each further snapshot the
      window takes lowers the recorded count by one.
-6. **Completing polls in the recorded steps**, built after the second run
-   and not yet run. The bundle's wrapper of the poll's task check stamps the
+6. **Completing polls in the recorded steps**, added for the third run. The bundle's wrapper of the poll's task check stamps the
    counter at the entry of every `a733_pmic_poll()`; that is one counter read
    per poll, about 35 ns, inside the step times. A poll that completes a bus
    phase (a flag or a STOP wait, as the trace observer counts them) ends its
@@ -396,34 +396,39 @@ image built from it. None of them is board-qualified.
 
 ## Board result
 
-Both runs used port 3-3 on 2026-10-24 and the read-only bundle 6 built from
-the changed provider. The service ran on core 0, S_TWI0 at 400 kHz (divisor
+Three runs used port 3-3 on 2026-10-24 and the read-only bundle 6 built from
+the changed provider, each with a `DSB SY` pair around every S_TWI0 access. The service ran on core 0, S_TWI0 at 400 kHz (divisor
 `0x28`, bit time 2,500 ns), with the trace observer and write stamps active.
 CPU-L ran at its boot rate of 494 MHz; bundle 4 measured 493,989,502 Hz in
-the first run's lifetime, and the second lifetime did not measure it. Raw
-logs:
+the first run's lifetime, and the second and third runs' lifetime did not
+measure it. Raw logs:
 
 - first run, step 3 of the fifth prepared set:
   `~/.cache/sunstoneos/evidence/board-session-20261023/port-3-3/set5-bb6-run/kernel.log`;
 - second run, with the windows added in the eighth set:
   `~/.cache/sunstoneos/evidence/board-session-20261024-8/port-3-3/s7-bb6-run/kernel.log`,
   from the frozen bundle
-  `~/.cache/sunstoneos/evidence/board-bundles-20261024-8/port-3-3/pmic-power-domain-reads/`.
+  `~/.cache/sunstoneos/evidence/board-bundles-20261024-8/port-3-3/pmic-power-domain-reads/`;
+- third run, with the completing-poll window, in the same lifetime:
+  `~/.cache/sunstoneos/evidence/board-session-20261024-8/port-3-3/s10-bb6-dsb-run/kernel.log`,
+  from the frozen bundle
+  `~/.cache/sunstoneos/evidence/board-bundles-20261024-10/port-3-3/step-1-dsb/pmic-power-domain-reads/`.
 
 **Steps.** Each recorded step completed one snapshot: 12 conditions,
 24 bytes and 6 STOPs, 630 µs of wire time.
 
-| Metric | First run | Second run |
-| --- | --- | --- |
-| Steps recorded | 33; the wire-time spin step excluded | 32; the wire-time spin step excluded, one snapshot taken by the poll window |
-| Median step | 779 µs (18,703 counter ticks), 123.7% | 784 µs (18,815.5 ticks), 124.4%; 1,243 permille of the measured wire time |
-| Steps after the first | 777 to 788 µs | 779 to 793 µs |
-| First step | 809 µs, 128.4% | 807 µs (19,376 ticks), limit 840 µs |
-| Re-spins | 0 | 0 |
-| Steps containing an interrupt | 24 of 33 | 24 of 32 |
-| Byte | 22.5 µs | 22.541 µs |
-| Snapshots | All `0xff9e`; no fault | All `0xff9e`; no fault |
-| Image's own verdict | Pass against 155% | Pass against 1,268 permille |
+| Metric | First run | Second run | Third run, with the completing-poll window |
+| --- | --- | --- | --- |
+| Steps recorded | 33; the wire-time spin step excluded | 32; the wire-time spin step excluded, one snapshot taken by the poll window | 32; as the second run |
+| Median step | 779 µs (18,703 counter ticks), 123.7% | 784 µs (18,815.5 ticks), 124.4%; 1,243 permille of the measured wire time | 796.4 µs (19,114.5 ticks), 126.4%; 1,265 permille |
+| Steps after the first | 777 to 788 µs | 779 to 793 µs | 795 to 805 µs |
+| Steps above 1,268 permille | Not evaluated | 1 of 32 | 2 of 32 |
+| First step | 809 µs, 128.4% | 807 µs (19,376 ticks), limit 840 µs | 823.6 µs, limit 838.8 µs |
+| Re-spins | 0 | 0 | 0 |
+| Steps containing an interrupt | 24 of 33 | 24 of 32 | 24 of 32 |
+| Byte | 22.5 µs | 22.541 µs | 22.5 µs |
+| Snapshots | All `0xff9e`; no fault | All `0xff9e`; no fault | All `0xff9e`; no fault |
+| Image's own verdict | Pass against 155% | Pass against 1,268 permille | Pass against 1,268 permille |
 
 **Access costs.** Each window ran 256 iterations in eight sub-windows of 32,
 timed by the 24 MHz counter (41.67 ns per tick), with IRQs masked except in
@@ -498,8 +503,7 @@ phase-start writes to that time read. In the model at the measured costs
 that work spans 2 µs in each of the 42 phases. A poll cost of 1,500 ns, about
 970 ns per phase more than the measured costs, brings the model to 783 µs,
 within 1 µs of the board's median. The board therefore spends about 41 µs
-per step on work that the model does not charge, and no window isolates it.
-Its candidates:
+per step on work that the model does not charge. The candidates are:
 
 - the two further phase passes, revocation loads and time-read bookkeeping
   of a completing poll, which a flag-clear poll does once;
@@ -510,14 +514,51 @@ Its candidates:
 - per-step work outside the phases, such as the admission's two lock
   waits.
 
-The completing-poll window (item 6 under "Measurement") times each
-completing poll from its entry to the return of its phase-start write
-inside the recorded steps. At the measured costs the model charges such a
-span 2.63 µs for a byte, 2.23 µs for a receive, a repeated START or a START
-after a STOP wait, and 2.88 µs for a STOP, which also reads `DATA`. The
-window's own stamp adds about 35 ns to each. Spans about
-970 ns longer than those point to the first three candidates; spans that
-match them point to the fourth.
+**Completing polls, measured.** The third run carries the completing-poll
+window (item 6 under "Measurement"). Each span runs from the stamp at a
+completing poll's entry to the return of its phase-start `CNTR` write. The
+model column charges the measured costs above plus the window's own stamp,
+87 ns, by which the whole flag-clear poll grew between the second and third
+runs (1,175.8 ns to 1,262.9 ns).
+
+| Kind | Spans | Mean measured span | Model, measured costs and stamp | Measured less model |
+| --- | --- | --- | --- | --- |
+| Byte (`DATA` then `CNTR`) | 575 | 3.10 µs | 2.72 µs | 0.38 µs |
+| Receive (`CNTR` alone) | 192 | 2.52 µs | 2.32 µs | 0.20 µs |
+| Repeated START | 192 | 2.49 µs | 2.32 µs | 0.17 µs |
+| START after a STOP wait | 160 | 2.56 µs | 2.32 µs | 0.25 µs |
+| STOP, after the `DATA` read | 192 | 3.29 µs | 2.97 µs | 0.32 µs |
+
+The counts are those of 32 recorded steps: 18 byte phases, 6 receives,
+6 repeated STARTs, 5 STARTs after a STOP wait and 6 STOPs per snapshot,
+less one byte. The first START of a request follows admission and completes
+no phase, so it is not a span.
+
+The difference grows with the accesses a poll makes after its first read:
+0.17 to 0.25 µs for the polls with two reads and one write, 0.32 µs with a
+third read, and 0.38 µs with a second write. Inside a poll each fenced
+access therefore costs more than the isolated windows, where no
+provider-state stores precede the leading `DSB SY`, and each write also
+carries the wrapper's second counter stamp, atomic exchange and observer
+call. The flag-clear poll, with one read and no write, holds none of that
+difference.
+
+Per step, the spans total 118.2 µs against the model's 106.2 µs with the
+stamp. With the poll cost set to 919 ns, so that the model's span total
+matches the measured one at this run's 505 ns per read and 395 ns per write,
+the model gives 758 µs. That is 38 µs below the run's 796 µs median. The
+completing polls therefore account for about 12 µs of the per-step
+difference between model and board, and about 38 µs lies outside them. That
+remainder is step work other than completing polls: the admission with its
+two lock waits, the first START, the final STOP's line-control read and the
+publication that releases the I2C mutex. No window times that work yet.
+
+**The window's own cost.** The stamp at every poll entry adds 87 ns to each
+phase's serial work. The third run's median, 796.4 µs (1,265 permille), is
+12.5 µs above the second run's, and 10 µs above the 786 to 787 µs predicted
+with 2 to 3 µs for the window. The 87 ns moves most phases across a whole
+microsecond, so the window costs about 12 µs per step although its stamps
+spend about 3.6 µs.
 
 **Lighter barrier placement, predicted.** The placement under "Left out"
 reads S_TWI0 plainly, writes `DATA` plainly and completes the `CNTR` write
@@ -527,17 +568,10 @@ write overlaps the `CNTR` write, and a phase with one `CNTR` write costs 20 to
 40 ns less. Over the 18 two-write and 24 one-write phases of a snapshot, the
 writes save 2.4 to 3.2 µs, 39 to 53 ns per write on average. The model at
 465 ns per read and 364 ns per write gives 732 µs at the measured poll cost
-(7 µs shorter) and 775 µs at the 1,500 ns poll cost (8 µs shorter). Without
-the completing-poll window the predicted median of bundle 6 is therefore
-about 776 µs against 784 µs. The window's stamp at every poll entry and its
-per-write bookkeeping add about 2 to 3 µs to each snapshot step, so a
-bundle 6 that carries the window is predicted at about 786 to 787 µs
-(1,246 to 1,248 permille of a 631 µs measured wire time) with `DSB SY`
-pairs and about 778 to 779 µs (1,233 to 1,235 permille) with the lighter
-placement. Both lie below the 1,268-permille limit. Because steps move in whole microseconds per
-phase, the board can differ from that by a few microseconds. If `DSB SY`
-waiting for stores makes up much of the 970 ns per phase, the step falls by
-more.
+(7 µs shorter) and 775 µs at the 1,500 ns poll cost (8 µs shorter). Because
+steps move in whole microseconds per phase, a saving of a fraction of a
+microsecond per phase shortens the step only where it moves a phase across
+a microsecond boundary, so the board can save less than the model.
 
 **Bound selection.** The first run's median is 18,703 counter ticks,
 779.292 µs, or 123.7% of wire time. Its image printed 1,236 permille because
@@ -548,7 +582,20 @@ The first-step allowance adds 40 µs. The model is not used to claim an
 independently measured margin. Reuse this provisional limit only under the
 stated bundle conditions; changed clock rates, instrumentation or bus
 timing require a new assessment. The second run's median, 784 µs, is 16 µs
-below the limit at its measured byte, 800 µs.
+below the limit at its measured byte, 800 µs. The third run, with the
+completing-poll window, passed at 1,265 permille, 3 permille (about 2 µs)
+below the limit, and 2 of its 32 steps exceeded 1,268 permille; the second
+run had 1.
+
+**The completing-poll window in later runs.** The window has made its
+measurement, and with it present the median lies within 3 permille of the
+limit. Two remedies exist: compile the window out of the default bundle 6
+image and keep it as an option for diagnosis, or derive a new limit from
+the runs that carry it. The first is recommended. The limit describes the
+provider under bundle 6's standing instrumentation, and raising it to
+absorb a diagnostic window would loosen it for every later run without a
+change in the provider. The default bundle 6 image of this tree still
+carries the window.
 
 The windows give no authority for a PMIC rail write.
 

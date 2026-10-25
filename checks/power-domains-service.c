@@ -34,7 +34,10 @@
  * CNTR write) takes 41 ns from each read and, from the plain-write window,
  * averages at most 364 ns per write. The 1,500 ns poll rows charge the
  * remainder that brings the present placement to 783 us, within 1 us of the
- * board's median; it is a fit and measures nothing. The register-access rows
+ * second run's median; it is a fit and measures nothing. The 919 ns poll row
+ * matches the model's completing-poll spans to the third run's measured span
+ * total per step (118.2 us) at that run's 395 ns per write; its step, 758 us
+ * against the run's 796 us, leaves the work outside the completing polls. The register-access rows
  * charge only the accesses and a 35 ns counter read: 419 ns per read and
  * 281 ns per write with a DSB SY pair, or 378 ns per plain read and 235 ns
  * per write in the lighter placement. No row is a floor of another design.
@@ -329,6 +332,7 @@ int main(int argc,char **argv)
             {"measured costs, lighter barriers",465,364,527,145,23,1,732},
             {"poll term fitted to the board median",505,403,1500,145,23,2,783},
             {"fitted poll term, lighter barriers",465,364,1500,145,23,1,775},
+            {"poll term matched to the measured completing-poll spans",505,395,919,145,23,1,758},
             {"register accesses only, DSB SY pairs",419,281,0,35,23,1,712},
             {"register accesses only, lighter barriers",378,235,0,35,23,1,694}};
         const uint64_t wire_snapshot_ns=6*(3*2+4*9)*UINT64_C(2500);

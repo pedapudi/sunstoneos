@@ -51,6 +51,7 @@ selector write. The model's bytes take 23 µs, so its own snapshot wire is
 | Same, lighter barrier placement: 465 ns per read, 364 ns per write | Not rerun | 732 µs (116%); selector write one step of 942 µs | Same |
 | Measured costs with 1,500 ns per poll, a fit to the board median | Not rerun | 783 µs (124%); selector write two steps with one tick wait | Same |
 | Same fit, lighter barrier placement | Not rerun | 775 µs (123%); selector write one step of 997 µs | Same |
+| Measured costs with 919 ns per poll and 395 ns per write, matched to the third board run's completing-poll spans | Not rerun | 758 µs (120%), against that run's 796 µs median | Same |
 | Register accesses only, 419 ns per read and 281 ns per write with `DSB SY` pairs, 35 ns per time read, no poll cost | Not rerun | 712 µs (113%) | Same |
 | Register accesses only, lighter placement: 378 ns per read, 235 ns per write | Not rerun | 694 µs (110.2%) | Same |
 | Flags 10% later than the 400 kHz divisor implies (25 µs bytes, 6 µs conditions), 200 ns per access | Snapshot and selector write each two steps with one tick wait | Snapshot one step of 751 µs, selector write one step of 968 µs (708 µs and 913 µs of wire) | Same, slow-bus case |
