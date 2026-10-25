@@ -1,0 +1,692 @@
+{
+ "binary": "monitor.fex",
+ "sha256": "8af16b86ae8e2eff634a3ebca76a8cdf3c10b3540387573d46c3d785545b2632",
+ "bytes": 78609,
+ "source": "orangepi-build a95129bf30ea11886cc35f08ebb3e69695a26656, external/packages/pack-uboot/sun60iw2/bin/monitor.fex",
+ "load_address": "0x48000000",
+ "offsets": "file offsets; address = 0x48000000 + offset",
+ "fetch_reference": "docs/vendor-firmware/README.md",
+ "kind": "tables",
+ "boot0_header": [
+  {
+   "offset": "0x0",
+   "meaning": "branch to 0x108"
+  },
+  {
+   "offset": "0x4",
+   "meaning": "magic 'monitor'"
+  },
+  {
+   "offset": "0x10",
+   "meaning": "BL33 (U-Boot) entry address",
+   "consumer": "0x3f78"
+  },
+  {
+   "offset": "0x14",
+   "meaning": "nonzero: pass the DTB address at +0xb0 in BL33 x0",
+   "consumer": "0x3f78"
+  },
+  {
+   "offset": "0x18",
+   "meaning": "BL32 (OP-TEE) entry address, 0 when absent",
+   "consumer": "0x3f78, 0xb20c"
+  },
+  {
+   "offset": "0x1c",
+   "meaning": "'CHKv1.0'"
+  },
+  {
+   "offset": "0x24",
+   "meaning": "name field; bytes 1-7 used by the chip check 0x4418"
+  },
+  {
+   "offset": "0x2c",
+   "meaning": "load address 0x48000000"
+  },
+  {
+   "offset": "0xb0",
+   "meaning": "DTB address for BL33",
+   "consumer": "0x3f78"
+  },
+  {
+   "offset": "0xb8",
+   "meaning": "AMP entry address",
+   "consumer": "0x40f0"
+  },
+  {
+   "offset": "0xc0",
+   "meaning": "AMP target CPU",
+   "consumer": "0x40f0"
+  },
+  {
+   "offset": "0xc4",
+   "meaning": "AMP flags: any bit of 0x616d70 enables the AMP start; bit 31 sets SCR_EL3.RW",
+   "consumer": "0x40f0"
+  },
+  {
+   "offset": "0xc8",
+   "meaning": "version string 'v2.5(debug):7dddb263a-dirty'"
+  }
+ ],
+ "memory_sections": [
+  {
+   "name": "boot0 header",
+   "start": "0x48000000",
+   "end": "0x48000108",
+   "label": "observed",
+   "evidence": "0x0 branch to 0x108; magic 'monitor' at 0x4; 'CHKv1.0' at 0x1c; load word 0x48000000 at 0x2c; version string at 0xc8; header fields read by C code at 0x10, 0x14, 0x18, 0xb0, 0xb8, 0xc0, 0xc4"
+  },
+  {
+   "name": ".text (bl31_entrypoint first, then SORT_BY_ALIGNMENT(SORT(.text*)))",
+   "start": "0x48000108",
+   "end": "0x4800e0d4",
+   "label": "observed",
+   "evidence": "functions.raw.json; C functions in name order"
+  },
+  {
+   "name": "runtime_exceptions vectors",
+   "start": "0x4800e800",
+   "end": "0x4800f000",
+   "label": "observed",
+   "evidence": "VBAR_EL3 written 0x4800e800 at 0x12c and 0x23c"
+  },
+  {
+   "name": ".rodata",
+   "start": "0x4800f000",
+   "end": "0x48013000",
+   "label": "observed",
+   "evidence": "mmap_add_region(0x4800f000, 0x48013000-0x4800f000, MT_RO_DATA) at 0xb25c; contains psci lib args 0xf000, gicv3 driver data 0xf010, plat_psci_ops 0xf040, sunxi_mmap 0xf158, jump tables, strings, rt_svc_descs 0x127a0-0x12820, cpu_ops 0x12820-0x128d0"
+  },
+  {
+   "name": ".data",
+   "start": "0x48013000",
+   "end": "0x48013311",
+   "label": "observed",
+   "evidence": "clean_dcache_range(0x48013000, 0x311) at 0x208; contents: vendor USB ops pointers 0x13000-0x13040, tf_xlat_ctx 0x13040, USB0 base 0x04100000 at 0x130a8, max_log_level=20 at 0x132fc, cpu_ops errata-report lock/flags 0x13300-0x1330f, console_state=1 at 0x13310"
+  },
+  {
+   "name": "stacks (platform_normal_stacks)",
+   "start": "0x48013340",
+   "end": "0x4801b340",
+   "label": "observed",
+   "evidence": "plat_get_my_stack 0x3684: top = 0x48014340 + core*0x1000; 8 cores x 4 KiB"
+  },
+  {
+   "name": ".bss",
+   "start": "0x4801b380",
+   "end": "0x48041380",
+   "label": "observed",
+   "evidence": "zeromem(0x4801b380, 0x26000) at 0x1c0; clean_dcache_range at 0x220"
+  },
+  {
+   "name": "percpu_data (cpu_data_t[8])",
+   "start": "0x4801b380",
+   "end": "0x4801b780",
+   "label": "observed",
+   "evidence": "_cpu_data_by_index 0x26d8: stride 0x80; cpu_ops_ptr at +0x10 (init_cpu_ops 0x35a0); crash buffer at +0x28 (report_unhandled_exception 0x37a0)"
+  },
+  {
+   "name": "base translation table (level 1, 16 entries)",
+   "start": "0x48041300",
+   "end": "0x48041380",
+   "label": "observed",
+   "evidence": "tf_xlat_ctx.base_table = 0x48041300, base_table_entries = 16, base_level = 1 (.data 0x13070..0x13088)"
+  },
+  {
+   "name": "xlat_table section (6 x 4 KiB level-2/3 tables)",
+   "start": "0x48042000",
+   "end": "0x48048000",
+   "label": "observed",
+   "evidence": "tf_xlat_ctx.tables = 0x48042000, tables_num = 6"
+  },
+  {
+   "name": "coherent memory",
+   "start": null,
+   "end": null,
+   "label": "inferred",
+   "evidence": "no section between the tables (end 0x48048000) and BL31 end; USE_COHERENT_MEM appears off"
+  },
+  {
+   "name": "BL31 RW limit",
+   "start": "0x48048000",
+   "end": null,
+   "label": "observed",
+   "evidence": "inv_dcache_range(0x48013000, 0x48048000-0x48013000) at 0x1a8"
+  }
+ ],
+ "el3_mmap_static": "0xf158",
+ "el3_mmap": [
+  {
+   "pa": "0x0",
+   "size": "0x40000000",
+   "attr": "device RW secure XN"
+  },
+  {
+   "pa": "0x40000000",
+   "size": "0x200000000",
+   "attr": "memory RW nonsecure XN"
+  },
+  {
+   "pa": "0x48000000",
+   "size": "0x200000",
+   "attr": "memory RW secure XN"
+  },
+  {
+   "pa": "0x48200000",
+   "size": "0x4000",
+   "attr": "device RW secure"
+  },
+  {
+   "pa": "0x48000000",
+   "size": "0xf000",
+   "attr": "code RO executable (added by 0xb20c)"
+  },
+  {
+   "pa": "0x4800f000",
+   "size": "0x4000",
+   "attr": "rodata RO (added by 0xb20c)"
+  },
+  {
+   "pa": "0x48200000",
+   "size": "0xe00000",
+   "attr": "secure RW, only when header +0x18 is nonzero"
+  }
+ ],
+ "plat_psci_ops": {
+  "cpu_standby": "0x8284",
+  "pwr_domain_on": "0x854c",
+  "pwr_domain_off": "0x84bc",
+  "pwr_domain_suspend_pwrdown_early": null,
+  "pwr_domain_suspend": "0x864c",
+  "pwr_domain_on_finish": "0x85c8",
+  "pwr_domain_on_finish_late": null,
+  "pwr_domain_suspend_finish": "0x8790",
+  "pwr_domain_pwr_down_wfi": null,
+  "system_off": "0x80bc",
+  "system_reset": "0x8110",
+  "validate_power_state": "0x8920",
+  "validate_ns_entrypoint": null,
+  "get_sys_suspend_power_state": "0x8324",
+  "get_pwr_lvl_state_idx": null,
+  "translate_power_state_by_mpidr": null,
+  "get_node_hw_state": null,
+  "mem_protect_chk": null,
+  "read_mem_protect": null,
+  "write_mem_protect": null,
+  "system_reset2": null
+ },
+ "power_domain_tree": {
+  "bytes": [
+   1,
+   1,
+   8
+  ],
+  "meaning": "1 system node, 1 cluster, 8 cores",
+  "PLAT_MAX_PWR_LVL": 2,
+  "local_states": {
+   "0": "RUN",
+   "1": "RETENTION",
+   "2": "OFF"
+  },
+  "PLAT_MAX_OFF_STATE": 2
+ },
+ "validate_power_state": {
+  "format": "original (non-extended): StateID bits 15:0 must be 0, type bit 16, power level bits 25:24",
+  "accepted": {
+   "0x00000000": "core standby (cpu_standby)",
+   "0x01000000": "core+cluster retention",
+   "0x00010000": "core power-down",
+   "0x01010000": "core+cluster power-down",
+   "0x02010000": "system power-down (same path as SYSTEM_SUSPEND)"
+  },
+  "rejected": "level 3, any nonzero StateID, standby at level 2 -> PSCI_E_INVALID_PARAMS"
+ },
+ "cpu_ops": [
+  {
+   "offset": "0x12820",
+   "midr": "0x410fd050",
+   "core": "Cortex-A55",
+   "reset": "0x2bc8",
+   "pwr_dwn": "0x2aa0",
+   "errata_report": "0x2ac0"
+  },
+  {
+   "offset": "0x12878",
+   "midr": "0x410fd0b0",
+   "core": "Cortex-A76",
+   "reset": "0x2db4",
+   "extra2": "0x2bf8",
+   "pwr_dwn": "0x2bd8",
+   "errata_report": "0x2c0c"
+  }
+ ],
+ "cpu_errata": {
+  "A55 (r2p0, rev_var 0x20)": {
+   "compiled": [
+    "1530923"
+   ],
+   "reported_not_compiled": [
+    "dsu_798953",
+    "dsu_936184",
+    "768277",
+    "778703",
+    "798797",
+    "846532",
+    "903758",
+    "1221012"
+   ],
+   "apply_at_r2p0": [
+    "1530923 (always reports applies)",
+    "dsu_798953 only if CLUSTERIDR rev/var == 0",
+    "dsu_936184 if DSU present, CLUSTERCFR bit11 set and DSU rev < 0x20"
+   ],
+   "newer_upstream_extra": []
+  },
+  "A76 (r4p1, rev_var 0x41)": {
+   "compiled": [
+    "1946160 (range r3p0-r4p1, applied in reset)",
+    "CVE-2018-3639 (static: SSBS asserted, no CPUACTLR2 write at reset)"
+   ],
+   "reported_not_compiled": [
+    "1073348",
+    "1130799",
+    "1220197",
+    "1257314",
+    "1262606",
+    "1262888",
+    "1275112",
+    "1286807",
+    "1791580",
+    "1165522",
+    "1868343",
+    "dsu_798953",
+    "dsu_936184"
+   ],
+   "apply_at_r4p1_among_reported": "none (all limited to r4p0 or earlier)",
+   "absent_vs_0892ad4d_that_apply_at_r4p1": [
+    "2743102 (<= r4p1, DSB before ISB in power-down)",
+    "2356586 (chosen erratum, no revision limit in that file)",
+    "3888013 (chosen)",
+    "CVE-2022-23960 (Spectre-BHB)",
+    "CVE-2025-10263"
+   ]
+  },
+  "A733 port 5bc9605c": "WORKAROUND_CVE_2017_5715/2018_3639/2022_23960 = 0 and no errata selected"
+ },
+ "gic": {
+  "driver_data@0xf010": {
+   "gicd_base": "0x03400000",
+   "gicr_base": "0x03460000",
+   "interrupt_props": null,
+   "interrupt_props_num": 0,
+   "rdistif_num": 8,
+   "rdistif_base_addrs": "0x48020750",
+   "mpidr_to_core_pos": null
+  },
+  "secure_interrupts": "none; GICD_CTLR after init = ARE_S|ARE_NS (0x30) with no group enabled",
+  "spi_defaults": "Group 1 Nonsecure, priority 0x80, level",
+  "sgi_ppi_defaults_cold": "ICENABLER0=all, RWP poll, IGROUPR0=all ones, IPRIORITYR0-1 only (upstream v2.5 indexing bug), ICFGR1=0",
+  "sgi_ppi_defaults_warm": "vendor 0x3c54 writes all eight IPRIORITYR words",
+  "errata": {
+   "2384374 (GIC-600 r1p6 DPG toggle)": "absent; v2.5 predates the workaround",
+   "other GIC-600 errata": "no workaround code present"
+  }
+ },
+ "gicv3_driver_data": {
+  "offset": "0xf010",
+  "gicd_base": "0x3400000",
+  "gicr_base": "0x3460000",
+  "interrupt_props": 0,
+  "rdistif_num": 8
+ },
+ "psci_lib_args": {
+  "offset": "0xf000",
+  "mailbox_ep": "0x48000228"
+ },
+ "jump_tables": [
+  {
+   "br": "0x594",
+   "base": "0x598",
+   "table": "0xf2c8",
+   "entries": 4,
+   "entry_width": 1,
+   "targets": [
+    "0x598",
+    "0x5c0",
+    "0x5d4",
+    "0x5dc"
+   ]
+  },
+  {
+   "br": "0x1054",
+   "base": "0x1058",
+   "table": "0xf264",
+   "entries": 33,
+   "entry_width": 2,
+   "targets": [
+    "0x11cc",
+    "0x101c",
+    "0x101c",
+    "0x101c",
+    "0x101c",
+    "0x123c",
+    "0x12b8",
+    "0x101c",
+    "0x1384",
+    "0x1090",
+    "0x1090",
+    "0x101c",
+    "0x101c",
+    "0x1090",
+    "0x13ac",
+    "0x141c",
+    "0x1448",
+    "0x148c",
+    "0x101c",
+    "0x101c",
+    "0x101c",
+    "0x101c",
+    "0x101c",
+    "0x101c",
+    "0x101c",
+    "0x101c",
+    "0x101c",
+    "0x101c",
+    "0x101c",
+    "0x101c",
+    "0x101c",
+    "0x14cc",
+    "0x14e8"
+   ]
+  },
+  {
+   "br": "0x1078",
+   "base": "0x107c",
+   "table": "0xf2a8",
+   "entries": 3,
+   "entry_width": 1,
+   "targets": [
+    "0x1084",
+    "0x1184",
+    "0x11b0"
+   ]
+  },
+  {
+   "br": "0x229c",
+   "base": "0x22a0",
+   "table": "0xf2f8",
+   "entries": 5,
+   "entry_width": 2,
+   "targets": [
+    "0x268c",
+    "0x226c",
+    "0x2500",
+    "0x250c",
+    "0x2558"
+   ]
+  },
+  {
+   "br": "0x22e4",
+   "base": "0x22e8",
+   "table": "0xf304",
+   "entries": 5,
+   "entry_width": 2,
+   "targets": [
+    "0x2518",
+    "0x2530",
+    "0x2524",
+    "0x226c",
+    "0x2538"
+   ]
+  },
+  {
+   "br": "0x25bc",
+   "base": "0x25c0",
+   "table": "0xf310",
+   "entries": 7,
+   "entry_width": 2,
+   "targets": [
+    "0x2688",
+    "0x226c",
+    "0x2500",
+    "0x250c",
+    "0x2558",
+    "0x226c",
+    "0x2694"
+   ]
+  },
+  {
+   "br": "0x5644",
+   "base": "0x5648",
+   "table": "0xf370",
+   "entries": 9,
+   "entry_width": 1,
+   "targets": [
+    "0x5648",
+    "0x5668",
+    "0x5694",
+    "0x5668",
+    "0x55f0",
+    "0x55f0",
+    "0x55f0",
+    "0x55f0",
+    "0x5668"
+   ]
+  },
+  {
+   "br": "0x7d64",
+   "base": "0x7d68",
+   "table": "0xf348",
+   "entries": 9,
+   "entry_width": 1,
+   "targets": [
+    "0x7d68",
+    "0x7de0",
+    "0x7de0",
+    "0x7de0",
+    "0x7de0",
+    "0x7dec",
+    "0x7e50",
+    "0x7de0",
+    "0x7de0"
+   ]
+  },
+  {
+   "br": "0xa10c",
+   "base": "0xa110",
+   "table": "0xf2cc",
+   "entries": 21,
+   "entry_width": 1,
+   "targets": [
+    "0xa110",
+    "0xa128",
+    "0xa11c",
+    "0xa138",
+    "0xa14c",
+    "0xa158",
+    "0xa164",
+    "0xa16c",
+    "0xa190",
+    "0xa194",
+    "0xa198",
+    "0xa1f4",
+    "0xa1f4",
+    "0xa174",
+    "0xa180",
+    "0xa1f4",
+    "0xa1f4",
+    "0xa1f4",
+    "0xa1b8",
+    "0xa1a0",
+    "0xa1a8"
+   ]
+  },
+  {
+   "br": "0xa1e8",
+   "base": "0xa1ec",
+   "table": "0xf2e4",
+   "entries": 20,
+   "entry_width": 1,
+   "targets": [
+    "0xa130",
+    "0xa1f4",
+    "0xa144",
+    "0xa150",
+    "0xa15c",
+    "0xa1f4",
+    "0xa16c",
+    "0xa1f4",
+    "0xa1f4",
+    "0xa1f4",
+    "0xa1f4",
+    "0xa1f4",
+    "0xa178",
+    "0xa188",
+    "0xa1f4",
+    "0xa1f4",
+    "0xa1f4",
+    "0xa1bc",
+    "0xa1f4",
+    "0xa1b0"
+   ]
+  },
+  {
+   "br": "0xb560",
+   "base": "0xb564",
+   "table": "0xf258",
+   "entries": 12,
+   "entry_width": 1,
+   "targets": [
+    "0xb564",
+    "0xb74c",
+    "0xb74c",
+    "0xb74c",
+    "0xb74c",
+    "0xb5c0",
+    "0xb5e8",
+    "0xb74c",
+    "0xb5e8",
+    "0xb6dc",
+    "0xb74c",
+    "0xb714"
+   ]
+  },
+  {
+   "br": "0xb798",
+   "base": "0xb79c",
+   "table": "0xf2ac",
+   "entries": 14,
+   "entry_width": 2,
+   "targets": [
+    "0xb79c",
+    "0xb7e8",
+    "0xba74",
+    "0xbafc",
+    "0xbd08",
+    "0xbd24",
+    "0xb7c0",
+    "0xb7c0",
+    "0xb7c0",
+    "0xb7c0",
+    "0xb7c0",
+    "0xbbb0",
+    "0xbcb4",
+    "0xbcd0"
+   ]
+  },
+  {
+   "br": "0xcef4",
+   "base": "0xcef8",
+   "table": "0xf248",
+   "entries": 13,
+   "entry_width": 1,
+   "targets": [
+    "0xcef8",
+    "0xcf1c",
+    "0xd0a4",
+    "0xcf38",
+    "0xd0a4",
+    "0xcf54",
+    "0xcf78",
+    "0xcf9c",
+    "0xcfc4",
+    "0xcfec",
+    "0xd010",
+    "0xd038",
+    "0xd060"
+   ]
+  },
+  {
+   "br": "0xd8d4",
+   "base": "0xd8d8",
+   "table": "0xf37c",
+   "entries": 23,
+   "entry_width": 2,
+   "targets": [
+    "0xd8e4",
+    "0xd8b4",
+    "0xd8b4",
+    "0xd8b4",
+    "0xd8b4",
+    "0xd8e4",
+    "0xd8b4",
+    "0xd8b4",
+    "0xdb60",
+    "0xd8b4",
+    "0xd8b4",
+    "0xd8b4",
+    "0xda1c",
+    "0xd8b4",
+    "0xd8b4",
+    "0xd998",
+    "0xd8b4",
+    "0xdb6c",
+    "0xd8b4",
+    "0xd8b4",
+    "0xdab4",
+    "0xd8b4",
+    "0xdb54"
+   ]
+  }
+ ],
+ "efuse_key_names": {
+  "offset": "0x130b8",
+  "names_seen": [
+   "chipid",
+   "customer_reserved",
+   "npu_status",
+   "hdcp_edp_l128"
+  ],
+  "note": "table continues; see SID map"
+ },
+ "scp": {
+  "image_copy": {
+   "src": "0x48100000",
+   "dst": "0x00044000 (SRAM A2)",
+   "bytes": "0x28000"
+  },
+  "second_copy": {
+   "src": "0x4812c000",
+   "dst": "0x48100000",
+   "bytes": "0x8000"
+  },
+  "start_address_register": "0x07032204 = 0x40004000",
+  "send": "S_MBOX 0x0709407c (status 0x0709406c)",
+  "receive": "CPUX_MSGBOX 0x0300407c (status 0x0300406c, ack 0x03004024 = 0x40)",
+  "startup_message_type": "0x90",
+  "reply_timeout": "0xfa0",
+  "wakeup_source_store": "0x48020798",
+  "message_types": {
+   "0x11": "resume query",
+   "0x22": "CPU operation (system suspend)",
+   "0x24": "system off (0) / reset (1)",
+   "0x25": "SMC 0x80000025",
+   "0x26": "SMC 0x80000026",
+   "0x60": "SMC 0x80000060",
+   "0x61": "SMC 0x80000061",
+   "0x62": "SMC 0x80000062",
+   "0x64": "SMC 0x80000064",
+   "0x96": "SMC 0x80000096"
+  }
+ }
+}
