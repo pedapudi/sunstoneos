@@ -259,7 +259,8 @@
   "cache_areas": [],
   "docs": [
    "docs/cpu-start.md",
-   "docs/vendor-firmware/README.md"
+   "docs/vendor-firmware/README.md",
+   "docs/vendor-firmware/tf-a-monitor.md"
   ],
   "library": false,
   "pure_host": false,
@@ -6581,7 +6582,6 @@
   "required_arguments": [
    "model",
    "inspector",
-   "compiler_library",
    "output"
   ],
   "summary": "Record the pinned convolution's directory layout and checksum evidence.",
@@ -6591,7 +6591,8 @@
   "cache_areas": [],
   "docs": [
    "docs/npu.md",
-   "docs/vendor-firmware/README.md"
+   "docs/vendor-firmware/README.md",
+   "docs/vendor-firmware/gpu-and-npu-binaries.md"
   ],
   "library": false,
   "pure_host": false,
@@ -8052,7 +8053,8 @@
   "cache_areas": [],
   "docs": [
    "docs/gpu.md",
-   "docs/vendor-firmware/README.md"
+   "docs/vendor-firmware/README.md",
+   "docs/vendor-firmware/gpu-and-npu-binaries.md"
   ],
   "library": false,
   "pure_host": false,
@@ -8205,7 +8207,8 @@
  "pvr-gpu-start-reference.py": {
   "cache_areas": [],
   "docs": [
-   "docs/gpu-start.md"
+   "docs/gpu-start.md",
+   "docs/vendor-firmware/gpu-and-npu-binaries.md"
   ],
   "library": false,
   "pure_host": false,
@@ -8220,7 +8223,8 @@
  "pvr-gpu-stop-reference.py": {
   "cache_areas": [],
   "docs": [
-   "docs/gpu-stop.md"
+   "docs/gpu-stop.md",
+   "docs/vendor-firmware/gpu-and-npu-binaries.md"
   ],
   "library": false,
   "pure_host": false,
@@ -8274,7 +8278,8 @@
  "pvr-mips-reference.py": {
   "cache_areas": [],
   "docs": [
-   "docs/gpu-mips.md"
+   "docs/gpu-mips.md",
+   "docs/vendor-firmware/gpu-and-npu-binaries.md"
   ],
   "library": false,
   "pure_host": false,

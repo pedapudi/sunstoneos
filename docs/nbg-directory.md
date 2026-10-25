@@ -69,20 +69,14 @@ the checksum-value words at bytes 860, 868, and 876 are treated as zero.
 The checksum records' section-type words remain included. Computing the CRC
 over the complete file with the header checksum zeroed does not match.
 
-The compiler's writer initializes a running CRC, writes the header and directory
-without updating it, then updates it as section payloads are emitted. It stores
-that accumulated value in the header before filling the section-checksum values.
-This ordering explains the observed normalization. The section writer at
-`0x2229e0` loads the declared file offset at `0x222a2b`, then writes and checksums
-only the declared payload length at `0x222b48`–`0x222b74`. Seeking past an
-alignment gap does not include that gap in the CRC.
-
-The compiled two-stage graph supplies a padded artifact: bytes 2084–2111 are
-zero padding before its 64-byte-aligned coefficients. Concatenating declared
-payloads in emitted directory order, with checksum values normalized, gives
-its stored CRC `0xe864f719`. Including the gap gives `0xa44bd11c` and does not
-match. All three independent section CRCs also match. Its full identity and
-SDK preparation are recorded in [the graph support document](npu-two-stage.md).
+This fixture has no gap between payloads. The compiled two-stage graph shows
+how a gap is treated: in that file, bytes 2084–2111 are zero
+padding before its 64-byte-aligned coefficients. Concatenating the declared
+payloads in directory order, with checksum values normalized, gives its stored
+CRC `0xe864f719`. Including the gap gives `0xa44bd11c` and does not match, so
+alignment gaps are excluded. All three independent section CRCs also match. Its
+full identity and SDK preparation are recorded in
+[the graph support document](npu-two-stage.md).
 
 The section checksums independently match their payloads:
 
@@ -100,28 +94,25 @@ requirements. CRC also supplies no authentication for the payloads it covers.
 ## The focused comparison reuses the numerical fixture
 
 [nbg-directory-reference.py](../checks/nbg-directory-reference.py) accepts the
-pinned model, SDK inspector, compiler library, and a new output directory.
-It extracts relevant DWARF type definitions, records directory and tensor data,
-and compares Python zlib with the compiler's isolated CRC routine in Unicorn.
-The check is specific to the pinned fixture; it is not a general container validator.
+pinned model, the SDK inspector and a new output directory. It extracts the
+relevant DWARF type definitions from the inspector, records directory and tensor
+data, and computes every checksum with Python zlib. No vendor code executes.
+The check is specific to the pinned fixture and does not validate other
+containers.
 
-One invocation passed all three section checksums and the normalized payload
-checksum. It also matched incremental CRC calculation across all thirteen
-sections. Seventeen isolated calls used a one-second and 100,000-instruction
-limit per call. The compiler, loader, simulator, and device interfaces did not
-execute. Existing numerical comparisons were reused; no target rebuild was needed.
+The check passes all three section checksums and the normalized payload
+checksum. The CRC computed incrementally across the thirteen payloads in
+directory order equals the CRC of their concatenation. Both mutation cases
+behave as described above: a changed target ID leaves the payload CRC unchanged,
+and a changed payload byte changes it.
 
 The inspected files have these SHA-256 identities:
 
 - SDK inspector: `5ef6bb4f1590e0d1b9603506574bee09321d6159e32a6b3aaef66148085b2639`.
-- Compiler `libOpenVX.so`: `0d2ee44aaf78e0f2a7e4470ad5f24ea2094c8c7d772b2b050e2f7f81361bcd12`.
 - Compiled model: `db42d815100417f4b8913896462ed031beafae35fb4ee1c28569ac950a9e8fca`.
 
-The compiler CRC routine occupies offsets `0x21e830` through `0x21e8b2`.
-Its accumulator helper starts at `0x21fb80`; the section writer starts at
-`0x22d210`. The SDK inspector's network and patch readers start at `0x40d82d`
-and `0x40ea8c`. Original binaries, disassembly, extracted types, comparison
-results, and identities remain under
+The SDK inspector's network and patch readers start at `0x40d82d` and
+`0x40ea8c`. The extracted types and the inspector's reader listings are under
 `~/.cache/sunstoneos/evidence/nbg-directory-20261016/`.
 
 Bounded native directory decoding and version-specific record accessors now
