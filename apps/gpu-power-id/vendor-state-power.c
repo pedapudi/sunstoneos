@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT
+/* SPDX-License-Identifier: Apache-2.0
  * Vendor-state controller for the vendor-state diagnostic only. It is
  * apps/gpu-power-id/vendor-clk-power.c, itself drivers/gpu/a733_gpu_power.c
  * with the vendor clock and reset order, with these changes:

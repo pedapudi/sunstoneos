@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT
+/* SPDX-License-Identifier: Apache-2.0
  * Declarations shared by the units of the vendor-state diagnostic only
  * (apps/gpu-power-id/vendor-state*.c). No default image includes this file.
  */

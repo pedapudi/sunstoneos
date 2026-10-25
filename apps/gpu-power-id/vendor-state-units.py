@@ -36,9 +36,9 @@ UNITS = [HERE + 'vendor-state-units.c', HERE + 'vendor-state-power.c', HERE + 'v
 # diff (original first, three lines of context).
 COPIES = {
     HERE + 'vendor-state-power.c': (HERE + 'vendor-clk-power.c',
-                                     'aed91a14ad7bdb9fa6436d7e59125c129cd4bea39979dafe68a2b6dcd77e79bf'),
+                                     '9fcaada279c64d04d5c7ffe9414f6052d09e21eb6debd2cf3e82ab1e7cb99971'),
     HERE + 'vendor-state-native.c': ('drivers/gpu/a733_gpu_platform_native.c',
-                                      '49b8fc5ab15da2829f63111fb4e4f66576a926704b1deede21cc21af908bb9fa'),
+                                      'e8ccf5a76cb0428c07995ac88bd1e0f2b3b12c56895deaefea869032cecee517'),
 }
 BASE = harness.CACHE / 'evidence/gpu-provider-ready-20261024/image-1/build.json'
 OLDROOT = '/home/sunil/git/sunstoneos-worktrees/gpu-provider-ready-1024'

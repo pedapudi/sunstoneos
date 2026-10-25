@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT
+/* SPDX-License-Identifier: Apache-2.0
  * Unit harness of the vendor-state diagnostic's own copies, compiled for
  * AArch64 and run under Unicorn by vendor-state-units.py, which models the
  * registers. It links the copies themselves, so each case runs the code

@@ -1,11 +1,12 @@
-/* SPDX-License-Identifier: MIT
+/* SPDX-License-Identifier: Apache-2.0
  * Native GPU power operations for the vendor-state diagnostic only. It is
  * drivers/gpu/a733_gpu_platform_native.c with the PLL_GPU0 word (CCU 0x0e0)
  * added to the readable words and the writes of apps/gpu-power-id/
  * vendor-state-power.c added to the allowlist: the seven PLL_GPU0 updates
  * of its enable and 1008 MHz set-rate sequences, and the 0xb20 rewrite of
- * the update bit alone. Every other entry is unchanged, and no default
- * image compiles this file.
+ * the update bit alone. The CORE6 delay row, which that controller does
+ * not write, is removed from both lists. Every other entry is unchanged,
+ * and no default image compiles this file.
  */
 #include "a733_gpu_platform_native.h"
 #include "a733_mmio.h"
@@ -18,8 +19,8 @@ static uintptr_t address(enum a733_gpu_power_bank bank, uint32_t off)
     if (bank == A733_GPU_CCU && (off == 0x0e0 || off == 0x5c0 || off == 0x5e0 || off == 0xb20 || off == 0xb24))
         return 0x02002000u + off;
     if (bank == A733_GPU_R_CCU && off == 0x1ac) return 0x07010000u + off;
-    if (bank == A733_GPU_CORE && (off == 0 || off == 8 || off == 0x14 || off == 0x20 || off == 0xfb0 ||
-                                  off == 0x170 || off == 0x174 || off == 0xc00 || off == 0xc04 || off == 0xc10))
+    /* VENDOR-STATE VARIANT: no CORE6 delay-row word; the controller does not write it. */
+    if (bank == A733_GPU_CORE && (off == 0 || off == 8 || off == 0x14 || off == 0x20 || off == 0xfb0))
         return 0x07066000u + off;
     /* GPU_TOP (PCK domain 5) belongs to the power-domain owner. */
     return 0;
@@ -61,10 +62,7 @@ static int update_reg(void *context, enum a733_gpu_power_bank bank, uint32_t off
         (bank == A733_GPU_CCU && off == 0xb24 &&
          ((clear == 0 && (set == 1 || set == 0x10000)) || (set == 0 && (clear == 1 || clear == 0x10000)))) ||
         (bank == A733_GPU_CORE && clear == UINT32_MAX &&
-         ((off == 0 && (set == 0 || set == 8)) || (off == 0x20 && set == 0) ||
-          (off == 0x170 && set == 0x1f1f1f) || (off == 0x174 && set == 0x1f1f) ||
-          (off == 0xc00 && set == 0x08080808) || (off == 0xc04 && set == 0x0808) ||
-          (off == 0xc10 && set == 8)));
+         ((off == 0 && (set == 0 || set == 8)) || (off == 0x20 && set == 0)));
     if (!allowed || !enter(n, deadline)) return 0;
     uint32_t old = 0;
     if (clear != UINT32_MAX) (void)read_reg(n, bank, off, &old);
