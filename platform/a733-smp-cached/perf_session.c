@@ -3,16 +3,23 @@
  * SUNSTONE_A733_PERF_SESSION. They run before the unchanged workload and
  * write only the reserved words of each core's a733_smp_core_results record:
  *
- *   reserved[0]  PMU cycles of 64 critical-section pairs, least of 16 samples
- *   reserved[1]  PMU cycles of one SGI to the own core, least of 16 samples
+ *   reserved[0]  PMU cycles of 64 critical-section pairs: median of 32 samples
+ *   reserved[1]  PMU cycles of one SGI to the own core until its handler has
+ *                counted it: median of 32 samples
  *   reserved[2]  cores 1-7: least CNTPCT difference, this core minus core 0
  *   reserved[3]  cores 1-7: least CNTPCT difference, core 0 minus this core
  *   reserved[4]  core 0: tick IRQs across the forced late tick
  *   reserved[5]  core 0: kernel ticks across the forced late tick
  *   reserved[6]  core 0: tick IRQs taken
- *   reserved[7], reserved[8]  zero
- *   reserved[9]  PMU cycles of an empty region, already subtracted above
+ *   reserved[7], reserved[8]  the 11th and 22nd smallest of the 32 pair
+ *                samples: a 95% confidence interval of their median
+ *   reserved[9]  PMU cycles of an empty region (median), subtracted above
  *   reserved[10] the record version, PERF_SESSION_VERSION, once complete
+ *
+ * The cores time their pairs one at a time, in core order, while every other
+ * measurement task waits in WFE, so no other core takes the kernel locks
+ * except the tick on core 0. Timing all cores at once measured lock
+ * contention instead of the critical section itself.
  *
  * Differences 2 and 3 are signed: a negative value means that a core read a
  * counter value below one that the other core had already published.
@@ -33,12 +40,14 @@
 #include "boot.h"
 #include "perf_session.h"
 
-#define SAMPLES 16u
+#define SAMPLES 32u
+#define CI_LOW 10u  /* 0-based 11th smallest */
+#define CI_HIGH 21u /* 0-based 22nd smallest */
 #define PAIRS 64u
 #define SKEW_EXCHANGES 1024u
 #define LATE_TICKS 132000u /* 5.5 periods of the 24 MHz counter at 1 kHz */
 #define SETTLE_TICKS 1000u
-#define PERF_SESSION_VERSION 0x5045524631u /* "PERF1" */
+#define PERF_SESSION_VERSION 0x5045524632u /* "PERF2" */
 
 static inline uint64_t counter(void)
 {uint64_t v;__asm__ volatile("isb\n mrs %0, cntpct_el0":"=r"(v)::"memory");return v;}
@@ -54,7 +63,7 @@ struct __attribute__((aligned(64))) a733_perf_shared {
     volatile uint64_t value;uint32_t sequence,turn;
     uint8_t pad[48];
     volatile uint64_t value1;uint32_t sequence1,measured;
-    StaticTask_t *workload;TaskHandle_t perf0;uint64_t unused[2];
+    StaticTask_t *workload;TaskHandle_t perf0;uint32_t timing,unused0;uint64_t unused1;
 };
 extern struct a733_perf_shared a733_perf_shared;
 __attribute__((common)) struct a733_perf_shared a733_perf_shared;
@@ -106,16 +115,24 @@ int a733_perf_pre_scheduler(unsigned c,uint64_t deadline)
 void a733_perf_tick_irq(void)
 {++a733_smp_core_results[0].reserved[6];}
 
-#define LEAST(result,body) do {                                  \
-        uint64_t least_=UINT64_MAX;                              \
+/* SAMPLES timings of BODY into SAMPLE, sorted ascending. */
+#define TIME(sample,body) do {                                   \
         for(unsigned i_=0;i_<SAMPLES;++i_) {                     \
             const uint64_t start_=cycles();                      \
             body;                                                \
-            const uint64_t cost_=cycles()-start_;                \
-            if(cost_<least_)least_=cost_;                        \
+            (sample)[i_]=cycles()-start_;                        \
         }                                                        \
-        (result)=least_;                                         \
+        sort(sample);                                            \
     } while(0)
+
+static void sort(uint64_t *v)
+{
+    for(unsigned i=1;i<SAMPLES;++i)
+        for(unsigned j=i;j && v[j-1]>v[j];--j){const uint64_t t=v[j];v[j]=v[j-1];v[j-1]=t;}
+}
+
+static uint64_t sgis_now(unsigned c)
+{return __atomic_load_n(&a733_smp_core_results[c].sgis,__ATOMIC_RELAXED);}
 
 /* A measurement task's control block and stack, in the lower half of a
  * borrowed workload stack of 2,048 words. The region starts BORROW_OFFSET
@@ -133,11 +150,19 @@ static void perf(void *argument)
     const unsigned c=(unsigned)(uintptr_t)argument;
     configASSERT(portGET_CORE_ID()==c);
     struct a733_smp_core_result *const r=&a733_smp_core_results[c];
-    uint64_t empty,pairs,sgi;
-    LEAST(empty,(void)0);
-    LEAST(pairs,for(unsigned p=0;p<PAIRS;++p){taskENTER_CRITICAL();taskEXIT_CRITICAL();});
-    LEAST(sgi,vInterruptCore(portYIELD_CORE_INT_ID,(uint8_t)c));
-    r->reserved[9]=empty;r->reserved[0]=pairs-empty;r->reserved[1]=sgi-empty;
+    /* Wait for this core's turn; the measuring core sends SEV when done. */
+    while(__atomic_load_n(&shared.timing,__ATOMIC_ACQUIRE)!=c)__asm__ volatile("wfe":::"memory");
+    uint64_t empty[SAMPLES],pairs[SAMPLES],sgi[SAMPLES];
+    TIME(empty,(void)0);
+    TIME(pairs,for(unsigned p=0;p<PAIRS;++p){taskENTER_CRITICAL();taskEXIT_CRITICAL();});
+    /* The region ends once this core's SGI handler has counted the SGI. */
+    TIME(sgi,{const uint64_t before_=sgis_now(c);vInterruptCore(portYIELD_CORE_INT_ID,(uint8_t)c);
+              while(sgis_now(c)==before_){}});
+    const uint64_t e=empty[SAMPLES/2-1];
+    r->reserved[9]=e;r->reserved[0]=pairs[SAMPLES/2-1]-e;r->reserved[1]=sgi[SAMPLES/2-1]-e;
+    r->reserved[7]=pairs[CI_LOW]-e;r->reserved[8]=pairs[CI_HIGH]-e;
+    __atomic_store_n(&shared.timing,c+1u,__ATOMIC_RELEASE);
+    __asm__ volatile("dsb ish\n sev":::"memory");
     if(c) {
         __atomic_or_fetch(&shared.measured,1u<<c,__ATOMIC_RELEASE);
         vTaskSuspend(NULL);platform_panic("perf task resumed",5);
