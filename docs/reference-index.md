@@ -33,6 +33,7 @@ Reuse prior reading and inspect relevant changes on subsequent visits.
 | DI301 field processing and source selection | [Native deinterlacing](deinterlace-native.md): effective SUN60IW2 DI301 selection, GPL configuration adaptation, masked register publication and retained master-9 lifetime; [host preparation](deinterlace-preparation.md) |
 | Evidence reuse | [Validation](validation.md): “Reuse valid evidence” |
 | Dependency provenance | [Sources](sources.md) and the component's source manifest |
+| Vendor binaries, ROM images and models: download, SHA-256, license and board-only captures | [Vendor firmware](vendor-firmware/README.md): the item's table row; fetch or verify with `tools/fetch-vendor-firmware.py --check --only NAME` |
 
 Find a heading with `rg -n '^## ' path`, then read the needed line interval with
 `sed -n 'START,ENDp' path`. For a known document, search its relevant phrase or
