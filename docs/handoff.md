@@ -76,6 +76,24 @@ It also shows that CORE6 does power with the vendor state; the earlier
 failures to reach status 8 came from the missing vendor state, not from the PPU.
 Which of the three differences is necessary is not yet separated.
 
+**Vendor EL3 security setup in every image, qualified on port 3-3**
+(set `board-bundles-20261025-10`, session `board-session-20261025-8/port-3-3`).
+`work/gpu-vendor-default-1025` is merged: every EL3 entry makes BL31's
+cold-boot security writes 9 to 17 (`include/a733_el3_security.h`). The
+vendor GPU state (PLL at 1008 MHz, DCDC4 at the OPP voltage, the vendor ON and
+OFF order) is the default GPU path. After a cold DDR start:
+- the kernel check passed its 100 rounds;
+- the read-back matched every prediction: CCU and PRCM security switches 7,
+  S_TZMA `0x07003000`/`+4`/`+8` all 0, SPC `0x020540e0` `0xfffffbff`;
+- on the native image refrozen with these writes (`6fd7af86`,
+  `refreeze-el3-20261025/bundles-22501205`), the pre-scheduler, first task,
+  task switch and three deadline-workload runs all returned with DRAM
+  restored, and all seven 91-word captures equal the clean capture.
+GPU OFF from ON and the second ON have not yet run; the port 3-1 set is
+`board-bundles-20261025-9/port-3-1`. `work/sd-uhs-1025` (read-only UHS-I
+SDR104 with 1.8 V PF-bank signalling) is merged after two review rounds; its
+board run is `docs/board-runbooks/sd-uhs.md`.
+
 **Reference backsolves (2026-10-25).** At the user's request, CPU, GPU and
 NPU bring-up are being derived from the vendor sources and blobs before any
 further board run of each. Board runs test only predictions from those diffs.
