@@ -16,9 +16,7 @@ EL3 and GIC setup are in
 [the multicore reference audit](../a733-multicore-reference-audit.md). The
 step-by-step comparisons of CPU and GPU bring-up with this image are in
 [the CPU backsolve](../reference-backsolve-cpu.md) and
-[the GPU backsolve](../reference-backsolve-gpu.md). The CPU, GPU and NPU
-backsolve documents linked here are in preparation on their own branches;
-their links resolve once they merge. The SunstoneOS thermal and GPADC service
+[the GPU backsolve](../reference-backsolve-gpu.md). The SunstoneOS thermal and GPADC service
 described in [`monitor-application.md`](../monitor-application.md) is
 unrelated; it shares only the word "monitor".
 

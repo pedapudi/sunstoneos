@@ -23,9 +23,7 @@ of its SHA-256 and a byte offset into the file; a bare `@0x5e9a` cites the same
 blob, and `8af16b86@…` cites BL31. The offset is the E902 address minus
 `0x40004000`. Each fact is labelled observed, inferred or confirmed on a board.
 Here, inferred facts come from strings, register names in the A733 User Manual
-V1.00 or vendor kernel sources, or data flow. The CPU, GPU and NPU backsolve
-documents linked here are in preparation on their own branches; their links
-resolve once they merge.
+V1.00 or vendor kernel sources, or data flow.
 
 No SCP behaviour is confirmed on a board, because no SunstoneOS image starts
 the E902. The section on SunstoneOS names the board readings that are

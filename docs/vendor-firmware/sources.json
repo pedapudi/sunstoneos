@@ -1,11 +1,7 @@
 {
   "schema": "sunstoneos-vendor-firmware-sources-v1",
   "cache_root": "~/.cache/sunstoneos",
-  "pending_documents": [
-    "../reference-backsolve-cpu.md",
-    "../reference-backsolve-gpu.md",
-    "../reference-backsolve-npu.md"
-  ],
+  "pending_documents": [],
   "items": [
     {
       "name": "fixs-brom-hex",

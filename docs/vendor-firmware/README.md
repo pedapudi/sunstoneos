@@ -90,9 +90,9 @@ Three backsolve documents derive each bring-up sequence from these binaries,
 the vendor sources and the manuals, and compare it with SunstoneOS. Each is on
 its own branch, and its link resolves once that branch merges:
 
-- [CPU backsolve](../reference-backsolve-cpu.md), in preparation: secondary-core power-up, EL3 and GIC setup, idle and DVFS.
-- [GPU backsolve](../reference-backsolve-gpu.md), in preparation: the vendor GPU state from cold boot to firmware start.
-- [NPU backsolve](../reference-backsolve-npu.md), in preparation: NPU power, clocks, reset, shared-SRAM routing and initialisation.
+- [CPU backsolve](../reference-backsolve-cpu.md): secondary-core power-up, EL3 and GIC setup, idle and DVFS.
+- [GPU backsolve](../reference-backsolve-gpu.md): the vendor GPU state from cold boot to firmware start.
+- [NPU backsolve](../reference-backsolve-npu.md): NPU power, clocks, reset, shared-SRAM routing and initialisation.
 
 ### Terms used across the documents
 

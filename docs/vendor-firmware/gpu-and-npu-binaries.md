@@ -49,9 +49,6 @@ carries a citation and one of these labels:
   evidence directory.
 - **inferred**: a conclusion that the cited sources alone do not prove.
 
-The GPU and NPU backsolve documents linked here are in preparation on their
-own branches; their links resolve once they merge.
-
 The complete inventories are JSON files outside Git, under
 `~/.cache/sunstoneos/evidence/vendor-firmware-20261025/accel/`.
 

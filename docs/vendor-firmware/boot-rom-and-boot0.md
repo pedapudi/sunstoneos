@@ -18,9 +18,6 @@ offset + `0x47000`). The full inventories are outside Git under
 extracts are the JSON files under [`data/`](data/), linked from each section.
 Register tables give the address, the value, the order, any delay and the
 purpose. No disassembly listing or binary byte sequence is reproduced here.
-The CPU, GPU and NPU backsolve documents linked here are in preparation on
-their own branches; their links resolve once they merge.
-
 Related SunstoneOS records cover the surrounding boot path:
 
 - [boot.md](../boot.md): the cold-start sequence and the physical bring-up
