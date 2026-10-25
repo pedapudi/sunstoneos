@@ -21,6 +21,8 @@ execution remains pending. The storage profiles retain their overlap checks.
 ## Engine and model
 
 The companion mimus port is pinned in [apps/mimus/source.json](../apps/mimus/source.json).
+Configuration with `MIMUS_DIR` refuses an engine checkout whose `HEAD` is not
+that revision or that has uncommitted changes under `firmware/` or `host/`.
 It adds external monotonic-clock and task-identity providers. The sunstoneos
 adapter uses the architectural counter and the current FreeRTOS task handle.
 The AArch64 backend replaces integer dot and packed matrix products with NEON
