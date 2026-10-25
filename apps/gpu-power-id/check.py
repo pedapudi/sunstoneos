@@ -2,7 +2,11 @@
 """Focused actual-ELF consumer checks; device transitions are explicit models.
 
 With --power-only the image must be the power-only variant: every case also
-requires that no load or store reaches the GPU register window."""
+requires that no load or store reaches the GPU register window. With
+--wrapper-read the image must be the wrapper-read variant: its only
+GPU-window accesses are 32-bit loads of the four wrapper words, in their
+order, each after its progress record and log line, and there is no store
+to the window."""
 import argparse
 import hashlib
 import json
@@ -24,6 +28,13 @@ SNAPSHOT = [0x07066000 + o for o in (0, 4, 8, 0x10, 0x14, 0x18, 0x20, 0x24, 0x30
            [0x07065000 + o for o in (0, 8, 0x10, 0x14, 0x20, 0x170, 0x174, 0xc00, 0xc04, 0xc10)] + \
            [0x070101ac, 0x07010250, 0x020020e0, 0x02002b20, 0x02002b24]
 SNAPSHOT_PAGES = (0x07066000, 0x07065000, 0x07010000, 0x02002000)
+# The wrapper-read variant's four GPU wrapper words (wrapper_words in
+# wrapper.c), their order, modeled values and its progress record.
+WRAPPER = [0x01880104, 0x01880100, 0x01880018, 0x0188001c]
+WRAPPER_VALUES = {0x01880104: 0x2, 0x01880100: 0x00200010, 0x01880018: 0x1, 0x0188001c: 0x10}
+WRAPPER_PAGE = 0x01880000
+WRAPPER_MAGIC = 0x3130505257555047
+PROGRESS = 0x42000080
 NAMES = ['bb_power', 'a733_gpu_platform', 'a733_gpu_power', 'a733_pmic_consumer',
          'a733_power_domains', 'a733_power_domain', 'a733_power_domain_row']
 
@@ -33,16 +44,23 @@ def last_put(state):
     return len(state['calls']) - 1 - state['calls'][::-1].index('platform_puts')
 
 
-def run(image, case, power_only=False):
+def run(image, case, power_only=False, wrapper=False):
     u = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
     u.mem_map(0x41000000, 0x1200000)
     u.mem_map(0x1800000, 0x1000)
+    u.mem_map(WRAPPER_PAGE, 0x1000)
+    for address, value in WRAPPER_VALUES.items():
+        u.mem_write(address, value.to_bytes(4, 'little'))
     for page in SNAPSHOT_PAGES:
         u.mem_map(page, 0x1000)
     for address in SNAPSHOT:
         u.mem_write(address, (address ^ 0x5a5a0000).to_bytes(4, 'little'))
     for address, data in image.parts:
         u.mem_write(address, data)
+    if case == 'wrapper-table-mutant':
+        # A seeded mutant of the image: the second table entry names another
+        # wrapper word, which the check must refuse at that read.
+        u.mem_write(image.address('wrapper_words') + 4, (0x01880108).to_bytes(4, 'little'))
     u.reg_write(UC_ARM64_REG_SP, 0x421f0000)
     L = image.layouts
     gpu, bb = image.address('gpu'), image.address('bb_power')
@@ -51,9 +69,10 @@ def run(image, case, power_only=False):
     consumer = gpu + L['a733_gpu_platform']['pmic']
     domains = bb + L['bb_power']['domains']
     domain5 = domains + L['a733_power_domains']['domain'] + 2 * 32
-    deadline = 10000
+    # The wrapper-read client keeps 200 ms for ON and 100 ms after it.
+    deadline = 10**6 if wrapper else 10000
     state = {'case': case, 'calls': [], 'gpu_reads': [], 'gpu_writes': [], 'clock_reads': 0, 'on_polls': 0,
-             'snapshot_reads': [], 'translated': [],
+             'snapshot_reads': [], 'translated': [], 'wrapper_reads': [], 'progress': [],
              'time': 100, 'messages': [], 'exit_status': None, 'failure': None}
 
     def put(address, value, size=4):
@@ -94,6 +113,9 @@ def run(image, case, power_only=False):
         state['calls'].append(name)
         if name == 'aarch64_device_translate' and power_only and u.reg_read(UC_ARM64_REG_X0) not in SNAPSHOT_PAGES:
             raise AssertionError('power-only variant translated a GPU address')
+        if name == 'aarch64_device_translate' and wrapper and \
+                u.reg_read(UC_ARM64_REG_X0) not in SNAPSHOT_PAGES + (WRAPPER_PAGE,):
+            raise AssertionError('wrapper-read variant translated another GPU address')
         if name == 'bb_power_now':
             state['clock_reads'] += 1
             state['time'] += 1
@@ -104,6 +126,42 @@ def run(image, case, power_only=False):
             if case == 'on-deadline' and state['on_polls'] >= 3:
                 state['time'] = deadline
             ret(state['time'])
+        elif name == 'a733_gpu_platform_poll' and wrapper:
+            state['on_polls'] += 1
+            if case in ('wrapper-on', 'wrapper-off-fault'):
+                field(power, 'a733_gpu_power', 'core_seen', 0x1ff)
+                field(power, 'a733_gpu_power', 'core_policy', 8)
+                field(power, 'a733_gpu_power', 'core_config', 0x101)
+                notes(0x10130101, 0, 0, 0, 8, 0x100, (51, 51, 1))
+                field(gpu, 'a733_gpu_platform', 'phase', 3)
+                field(gpu, 'a733_gpu_platform', 'token', 17, 8)
+                field(gpu, 'a733_gpu_platform', 'delegated', 1)
+                field(power, 'a733_gpu_power', 'phase', 2)
+                field(power, 'a733_gpu_power', 'last_value', 8)
+                ret()
+                return
+            # The board's state: the power-up entry, every step through the
+            # reset release (seen 0x1ff) and a final poll that reads 0.
+            early = case == 'wrapper-early-stop'
+            field(power, 'a733_gpu_power', 'core_seen', 0x1f if early else 0x1ff)
+            field(power, 'a733_gpu_power', 'core_policy', 8)
+            field(power, 'a733_gpu_power', 'core_config', 0x101)
+            field(power, 'a733_gpu_power', 'index', 10 if early else 38)
+            notes(0x10130101, 0, 0, 0, 0, 0, (51, 51, 51))
+            if case == 'wrapper-client-deadline':
+                # The client's own 200 ms bound ends the wait.
+                state['time'] += 50000
+                ret(0)
+                return
+            if state['on_polls'] < 2 and not early:
+                ret(0)
+                return
+            # The platform's deadline cancelled the controller (error 6), or
+            # admission refused the entry (error 5).
+            field(power, 'a733_gpu_power', 'phase', 5)
+            field(power, 'a733_gpu_power', 'error', 5 if early else 6)
+            ret((1 << 64) - 1)
+            return
         elif name == 'a733_gpu_platform_poll':
             state['on_polls'] += 1
             if case == 'on-deadline':
@@ -144,18 +202,19 @@ def run(image, case, power_only=False):
             ret()
         elif name == 'aarch64_device_translate':
             address = u.reg_read(UC_ARM64_REG_X0)
-            assert address in (0x1800020, 0x1800018) + SNAPSHOT_PAGES
+            assert address in (0x1800020, 0x1800018, WRAPPER_PAGE) + SNAPSHOT_PAGES
             assert u.reg_read(UC_ARM64_REG_X1) == 0
             state['translated'].append(address)
             # The compiled mapping predicate consumes this native translation
             # result; wrong physical address must refuse before the MMIO read.
             target = u.reg_read(UC_ARM64_REG_X2)
             wrong = (case == 'bad-mapping' and address < 0x2000000) or \
-                    (case == 'snapshot-mapping' and address == 0x07065000)
+                    (case == 'snapshot-mapping' and address == 0x07065000) or \
+                    (case == 'wrapper-mapping' and address == WRAPPER_PAGE)
             u.mem_write(target, struct.pack('<QII', address + (4096 if wrong else 0), 0, 0))
             ret()
         elif name == 'a733_gpu_platform_off_poll':
-            if case == 'off-fault':
+            if case in ('off-fault', 'wrapper-off-fault'):
                 ret((1 << 64) - 1)
                 return
             field(gpu, 'a733_gpu_platform', 'phase', 6)
@@ -188,9 +247,32 @@ def run(image, case, power_only=False):
     hooks = {image.address(name): name for name in modeled}
     u.hook_add(UC_HOOK_CODE, lambda uc, address, size, arg: call(hooks[address]) if address in hooks else None)
 
+    def wrapper_read(uc, access, address, size, value, arg):
+        state['gpu_reads'].append([hex(address), size])
+        assert wrapper, f'a GPU wrapper read at {address:#x} outside the wrapper-read variant'
+        n = len(state['wrapper_reads']) + 1
+        if not (size == 4 and n <= 4 and address == WRAPPER[n - 1]):
+            state['refused'] = [hex(address), size, n]
+            uc.emu_stop()
+            return
+        output = ''.join(state['messages'])
+        if n == 1:
+            # Everything already known is printed before the first wrapper read.
+            assert len(state['snapshot_reads']) == 2 * len(SNAPSHOT), state['snapshot_reads']
+            for text in ('GPU SNAP n=1 a=0x2002b24', 'GPU power phase=', 'GPU resources result=',
+                         'GPU CORE entry cycle=1', 'GPU CORE inputs cycle=1', 'GPU CORE after cycle=1'):
+                assert text in output, (text, output)
+        # The progress record and the log name this read before it is issued.
+        magic, stage, count, stamp = struct.unpack('<4Q', bytes(u.mem_read(PROGRESS, 32)))
+        assert magic == WRAPPER_MAGIC and stage == n and count == n - 1 and stamp, (magic, stage, count)
+        assert state['messages'][-1] == f'GPU WRAPPER reading n={n} a={address:#x}\n', state['messages'][-1]
+        state['wrapper_reads'].append(address)
+        state['progress'].append([stage, count])
+
     def read(uc, access, address, size, value, arg):
         state['gpu_reads'].append([hex(address), size])
         assert not power_only, 'power-only variant read the GPU register window'
+        assert not wrapper, 'wrapper-read variant read the GPU core window'
         assert (address, size) in [(0x1800020, 8), (0x1800020, 4), (0x1800018, 4)]
 
     def snapshot_read(uc, access, address, size, value, arg):
@@ -210,8 +292,44 @@ def run(image, case, power_only=False):
 
     u.hook_add(UC_HOOK_MEM_READ, read, begin=0x1800000, end=0x1800fff)
     u.hook_add(UC_HOOK_MEM_WRITE, write, begin=0x1800000, end=0x1800fff)
+    u.hook_add(UC_HOOK_MEM_READ, wrapper_read, begin=WRAPPER_PAGE, end=WRAPPER_PAGE + 0xfff)
+    u.hook_add(UC_HOOK_MEM_WRITE, write, begin=WRAPPER_PAGE, end=WRAPPER_PAGE + 0xfff)
     u.emu_start(image.address('gpu_power_id_client'), 0, count=100000)
     output = ''.join(state['messages'])
+    if wrapper and case == 'wrapper-table-mutant':
+        assert state.get('refused') == ['0x1880108', 4, 2] and state['wrapper_reads'] == WRAPPER[:1], state
+        state['gpu_reads'] = state['gpu_reads'][:1]
+        return state
+    assert 'refused' not in state, state['refused']
+    if wrapper:
+        assert not state['gpu_writes']
+        reasons = {'wrapper-platform-deadline': 'GPU wrapper read: CORE6 not ON, four wrapper words read',
+                   'wrapper-client-deadline': 'GPU wrapper read: CORE6 not ON, four wrapper words read',
+                   'wrapper-early-stop': 'GPU wrapper read refused before clock and reset progress',
+                   'wrapper-mapping': 'GPU wrapper mapping', 'wrapper-off-fault': 'GPU OFF poll', 'wrapper-on': None}
+        assert state['failure'] == reasons[case], state['failure']
+        reads = WRAPPER if case not in ('wrapper-early-stop', 'wrapper-mapping') else []
+        assert state['wrapper_reads'] == reads and state['gpu_reads'] == [[hex(a), 4] for a in reads], state['gpu_reads']
+        assert len(state['snapshot_reads']) == 2 * len(SNAPSHOT)
+        if reads:
+            for a in reads:
+                assert f'GPU WRAPPER n={reads.index(a) + 1} a={a:#x} v={WRAPPER_VALUES[a]:#x}' in output, output
+            assert 'GPU WRAPPER qchan core0_sw=0 core0_active=1 core0_accept=0 core0_deny=0 core1_sw=0 ' \
+                   'core0_clk_en=0' in output, output
+            assert 'GPU WRAPPER delay up=0x10 down=0x20 cores=1 primary=0x0 secondary=0x1' in output, output
+        magic, stage, count, _ = struct.unpack('<4Q', bytes(u.mem_read(PROGRESS, 32)))
+        assert magic == WRAPPER_MAGIC and stage == len(reads) and count == len(reads), (stage, count)
+        if case == 'wrapper-on':
+            assert state['exit_status'] == 0
+            assert 'COMPLETE GPU wrapper read: CORE status 8, four wrapper words, OFF and provider parked' in output
+            calls = state['calls']
+            assert calls.index('a733_gpu_platform_off_begin') < calls.index('bb_power_park')
+        else:
+            assert state['exit_status'] is None and 'COMPLETE' not in output
+        if case in ('wrapper-platform-deadline', 'wrapper-client-deadline', 'wrapper-early-stop', 'wrapper-mapping'):
+            assert 'a733_gpu_platform_off_begin' not in state['calls']
+        state['cycles'] = state['calls'].count('a733_gpu_platform_off_begin')
+        return state
     if power_only:
         assert not state['gpu_reads'] and not state['gpu_writes']
         if case == 'normal':
@@ -297,7 +415,9 @@ def main():
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--cases', nargs='+', help='Resume selected cases after a fixture-only failure')
     p.add_argument('--power-only', action='store_true', help='check the power-only variant')
+    p.add_argument('--wrapper-read', action='store_true', help='check the wrapper-read variant')
     a = p.parse_args()
+    assert not (a.power_only and a.wrapper_read), 'choose one variant'
     # The shared owner added delays_ready in existing padding. Reused objects
     # retain the old DWARF member list; consume the actual replacement owner's
     # layout, and verify every old member and the total size still agree.
@@ -305,7 +425,9 @@ def main():
     # The variant is a compile option of main.c: only the identity variant
     # defines the identity read counter.
     identity = bool(image.symbols.get('id_reads', set()) - {0})
-    assert identity != a.power_only, 'image variant does not match --power-only'
+    wrapper_image = bool(image.symbols.get('wrapper_words', set()) - {0})
+    assert identity == (not a.power_only and not a.wrapper_read), 'image variant does not match the options'
+    assert wrapper_image == a.wrapper_read, 'image variant does not match --wrapper-read'
     from elftools.elf.elffile import ELFFile
     layouts = []
     with a.image.open('rb') as stream:
@@ -328,16 +450,20 @@ def main():
     if a.power_only:
         cases = ['normal', 'on-fault', 'second-on-fault', 'on-deadline', 'snapshot-mapping', 'core-refused', 'core-partial',
                  'off-fault', 'retained-token', 'counted-row', 'unparked']
+    if a.wrapper_read:
+        cases = ['wrapper-platform-deadline', 'wrapper-client-deadline', 'wrapper-on', 'wrapper-early-stop',
+                 'wrapper-mapping', 'wrapper-off-fault', 'wrapper-table-mutant']
     if a.cases:
         assert set(a.cases) <= set(cases)
         cases = a.cases
-    result = {'physical_access': False, 'variant': 'power-only' if a.power_only else 'identity',
+    result = {'physical_access': False,
+              'variant': 'power-only' if a.power_only else 'wrapper-read' if a.wrapper_read else 'identity',
               'scope': 'actual ELF client and ID access; modeled provider/power transitions',
               'image_sha256': hashlib.sha256(a.image.read_bytes()).hexdigest(),
               'cases': []}
     for case in cases:
         try:
-            result['cases'].append(run(image, case, a.power_only))
+            result['cases'].append(run(image, case, a.power_only, a.wrapper_read))
         except Exception as error:
             result['failed_case'] = case
             result['fixture_error'] = repr(error)

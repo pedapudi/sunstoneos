@@ -509,9 +509,10 @@ Q-Channel and power-switch handshakes.
 ### The next step reads the GPU wrapper, inside the GPU register window
 
 No register outside the GPU register window that the documentation names
-can decide between these explanations. The narrowest next step therefore
-needs a decision to relax the power-only rule for four reads of the GPU
-wrapper, with TOP5 ON and no CORE6 acknowledgement:
+can decide between these explanations. The coordinator accepted an
+exception to the power-only rule for four reads of the GPU wrapper, with
+TOP5 ON and no CORE6 acknowledgement, and the wrapper-read variant of the
+diagnostic makes them:
 
 | Address | Vendor name | What it shows |
 | --- | --- | --- |
@@ -520,10 +521,16 @@ wrapper, with TOP5 ON and no CORE6 acknowledgement:
 | `0x01880018` | `mult_core_cnt` | The GPU core count, which ties core 0 to CORE6 |
 | `0x0188001c` | `mult_core_id` | The primary and secondary core identifiers |
 
-Each read would be one ordered 32-bit Device-nGnRnE load after an identity
-mapping check and a deadline check, taken where the power-only image now
-waits for status 8: after the CORE6 PWCR and policy writes, the GPU clock
-and the reset release. The image would make no write in the window.
+Each read is one ordered 32-bit Device-nGnRnE load after an identity
+mapping check and a deadline check. The variant runs the power-only ON
+sequence and waits at most 200 ms for status 8, so the reads come after the
+CORE6 PWCR and policy writes, the GPU clock and the reset release; it
+refuses them if the controller stopped before those steps. Before the first
+read it prints both snapshots, the controller's failure state and the
+CORE6 lines. Before each read it writes the read's number and a counter
+stamp into the progress record between the result header and the log, and
+prints a `GPU WRAPPER reading` line. The image makes no write in the window
+([wrapper-read variant](../apps/gpu-power-id/README.md#the-wrapper-read-variant-reads-four-gpu-wrapper-words)).
 
 The risk is a read that never completes. Both earlier images that did not
 return were built to read the GPU register window with TOP5 ON and CORE6

@@ -139,6 +139,53 @@ has the lower recovery risk. On a recovered board it runs after the frozen
 provider-readiness checkpoint and before any identity probe; the identity
 variant runs only after the power-only variant has returned on that board. Admission is the same for both variants.
 
+## The wrapper-read variant reads four GPU wrapper words
+
+`wrapper.c` builds the wrapper-read variant. It compiles `main.c` as the
+power-only variant with that variant's client and entry renamed, so the
+power-only source and binary stay unchanged, and adds its own client and
+entry. Its client:
+
+1. takes snapshot 0 and runs one ON of the power-only sequence, waiting at
+   most 200 ms for CORE6 status 8; at least 100 ms of the client deadline
+   must remain after that bound;
+2. takes snapshot 1 and prints the controller's phase, error, step and last
+   read, the resource manager's record and the CORE6 lines, without ending
+   the run;
+3. refuses the wrapper reads unless the controller completed the GPU clock,
+   bus gate and reset steps, shown by its MISR read after reset release;
+4. reads `0x01880104` (`pwr_qchan_cfg`), `0x01880100` (`pwr_cmp_dly`),
+   `0x01880018` (`mult_core_cnt`) and `0x0188001c` (`mult_core_id`) in that
+   order, each a 32-bit load after an identity mapping check of the page and
+   a deadline check. Before each load it writes the read number and a
+   counter stamp into the progress record at result offset 128 (magic
+   `GPUWRP01`, stage, completed reads, stamp) and prints `GPU WRAPPER
+   reading n=<k> a=<address>`; after it, `GPU WRAPPER n=<k> a=<address>
+   v=<value>`;
+5. prints the decoded `GPU WRAPPER qchan` and `GPU WRAPPER delay` lines;
+6. with CORE6 not ON, ends with `FAIL GPU wrapper read: CORE6 not ON, four
+   wrapper words read` (status 1); with CORE6 ON, powers OFF, parks the
+   provider and prints `COMPLETE GPU wrapper read: CORE status 8, four
+   wrapper words, OFF and provider parked`.
+
+The four addresses are the `wrapper_words` table; the variant makes no
+other GPU-window access and no GPU-window write. A read that never
+completes stops the CPU: the run then does not return, and only a power
+removal recovers the board.
+
+`check.py --wrapper-read` runs seven cases on the linked image: the board's
+state with the platform deadline and with the client's own bound, CORE6 ON
+with OFF and park, a stop before the clock and reset steps, a wrong
+wrapper-page translation, an OFF failure after the reads, and a seeded
+mutant whose second table entry names another word, which the check
+refuses at that read. In every case the only GPU-window accesses are 32-bit
+loads of a prefix of the four words, in order, each preceded by its
+progress record and its log line, with both snapshots and the CORE6 lines
+printed before the first. A store to the window fails the check. Bundle
+preparation (`prepare.py`) requires the image's `wrapper_words` table to
+hold exactly the four words in order and every host-check case to read only
+a prefix of them.
+
 ## Build and evidence
 
 Run with the existing host Python environment containing pyelftools and Unicorn:
@@ -149,9 +196,10 @@ Run with the existing host Python environment containing pyelftools and Unicorn:
   --image /absolute/new/build/image.elf --output /absolute/new/client-results.json
 ```
 
-Add `--power-only` to both commands for the power-only variant.
+Add `--power-only` to both commands for the power-only variant, or
+`--wrapper-read` for the wrapper-read variant.
 `prepare.py` turns a build and its check result into a board bundle for
-`tools/prepare-board-bundles.py` (rows 11 to 13 of
+`tools/prepare-board-bundles.py` (rows 11 to 14 of
 [board-bundles-next.md](../../docs/designs/board-bundles-next.md)). For both
 power variants it reads `on_steps` and `off_steps` from the image and
 requires the domain-5 (TOP5) ON request before the first CORE6 access and

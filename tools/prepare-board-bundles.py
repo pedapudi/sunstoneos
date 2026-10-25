@@ -211,7 +211,7 @@ def returning_row(name, position, component, overlay, expect, controlled, expect
 
 
 GPU_SOURCES = ['apps/gpu-power-id/prepare.py', 'apps/gpu-power-id/build.py', 'apps/gpu-power-id/check.py',
-               'apps/gpu-power-id/main.c', 'apps/gpu-provider-ready/main.c', 'apps/gpu-provider-ready/build.py',
+               'apps/gpu-power-id/main.c', 'apps/gpu-power-id/wrapper.c', 'apps/gpu-provider-ready/main.c', 'apps/gpu-provider-ready/build.py',
                'apps/gpu-provider-ready/check.py', 'drivers/gpu/a733_gpu_power.c', 'drivers/gpu/a733_gpu_platform.c',
                'drivers/gpu/a733_gpu_platform_native.c', 'drivers/gpu/a733_gpu_resources.c',
                'drivers/gpu/a733_gpu_resources_native.c', 'drivers/power/a733_power_domains.c',
@@ -245,13 +245,14 @@ GPU_FAILURES = ['`FAIL GPU ON begin`, `GPU ON deadline` or `GPU ON poll`, after 
                 'verification deadline`, `service park deadline`, `provider not quiescent at park`, `PMIC clock`)']
 
 
-def gpu_row(name, position, component, variant, expect, expected, intro, after=(), failures=()):
-    """A returning GPU image of port 3-1, prepared by apps/gpu-power-id/prepare.py from its own build record."""
+def gpu_row(name, position, component, variant, expect, expected, intro, after=(), failures=(), admission=''):
+    """A returning GPU image of port 3-1, prepared by apps/gpu-power-id/prepare.py from its own build record.
+    admission: text added to the shared GPU admission, such as a row's own exception."""
     row = returning_row(name, position, component, [], expect, False, expected, intro, after=after,
                         failures=list(failures) + GPU_FAILURES)
     row.update(module='apps/gpu-power-id/prepare.py', function='prepare_bundle', variant=variant,
                admission={'schema': 'board-gpu-returning-bundle-v1', 'row': name}, sources=list(GPU_SOURCES),
-               admission_text=GPU_PREREQUISITES)
+               admission_text=GPU_PREREQUISITES + (' ' + admission if admission else ''))
     return row
 
 
@@ -498,6 +499,38 @@ ROWS = [
             after=['gpu-power-only'],
             failures=['`FAIL GPU identity mapping`, `GPU identity ownership/access` or `GPU identity '
                       'deadline/clock`']),
+    gpu_row('gpu-wrapper-read', 14, 'GPU wrapper reads with TOP5 ON and CORE6 not acknowledged', 'wrapper-read',
+            'COMPLETE GPU wrapper read: CORE status 8, four wrapper words, OFF and provider parked',
+            'Either monitor status 1 with the four GPU WRAPPER n=1 to n=4 lines, the decoded GPU WRAPPER qchan and '
+            'delay lines and FAIL GPU wrapper read: CORE6 not ON, four wrapper words read, the expected result '
+            'while CORE6 never reports ON; or status 0 with COMPLETE GPU wrapper read: CORE status 8, four wrapper '
+            'words, OFF and provider parked. Either is followed by a responsive ROM. Record every line of kernel.log '
+            'and the progress record at result.bin offset 128.',
+            'apps/gpu-power-id, wrapper-read variant (apps/gpu-power-id/wrapper.c): the power-only ON sequence, with '
+            'its delay-row writes, CORE6 PWCR 0 and policy 8, GPU clock, bus gate and reset release, waited for at '
+            'most 200 ms; then the read-only snapshot, the controller and CORE6 report lines, and only then four '
+            '32-bit reads of the GPU wrapper in this order: 0x01880104 (pwr_qchan_cfg), 0x01880100 (pwr_cmp_dly), '
+            '0x01880018 (mult_core_cnt) and 0x0188001c (mult_core_id), names from the vendor sunxi_dvfs_ctrl.c. '
+            'Before each read the image writes the read number into the progress record at result offset 128 and '
+            'prints a GPU WRAPPER reading line. The reads are refused unless the controller completed the clock and '
+            'reset steps. No other GPU-window address is read and nothing in the window is written. It is the last '
+            'step of its lifetime.',
+            after=['gpu-provider-ready'],
+            failures=['`FAIL GPU wrapper read: CORE6 not ON, four wrapper words read`, after the four `GPU WRAPPER '
+                      'n=... a=... v=...` lines and the decoded `GPU WRAPPER qchan` and `delay` lines: the expected '
+                      'result while CORE6 never reports ON; record it',
+                      '`FAIL GPU wrapper read refused before clock and reset progress`, `GPU wrapper mapping` or `GPU '
+                      'wrapper read time budget`: no wrapper word was read',
+                      '`FAIL GPU wrapper read order`: an internal refusal before the read it names'],
+            admission='GPU-window read exception: this row alone reads four words of the GPU wrapper, 0x01880104, '
+                      '0x01880100, 0x01880018 and 0x0188001c, in that order, each a 32-bit Device-nGnRnE load after '
+                      'an identity mapping check and a deadline check, with TOP5 ON and CORE6 not acknowledged; it '
+                      'makes no other GPU-window access and no GPU-window write. Risk: the two earlier GPU images '
+                      'that did not return (fd3d5839 and 2ab2cb1b) read the GPU window with CORE6 in the same '
+                      'power-up state; a wrapper read that never completes stops the CPU without an exception, the '
+                      'monitor does not return, nothing reaches the host and only a power removal recovers the board. '
+                      'A non-return is itself the result that the wrapper is unreachable in this state; the progress '
+                      'record and log, which name each read before it is issued, survive only on a return.'),
     # `admission` maps fields of the value prepare() returns to the values that
     # identify this row's build. None refuses the row: no owning package has
     # named those values yet.
