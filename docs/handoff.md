@@ -72,7 +72,27 @@ further board run of each. Board runs test only predictions from those diffs.
   boot ROM routes shared SRAM away from the NPU (SYSCTRL `0x03000008` bit 1)
   and U-Boot routes it back; FEL-loaded images never do. This best explains
   the wrong NPU outputs of the earlier two-job run.
-- CPU: in progress.
+- CPU (`work/backsolve-cpu-1025`, `docs/reference-backsolve-cpu.md`): the
+  leading divergences are checks that the reference never performs, such as the
+  GICR_CTLR status compare (now masked on `bringup`), GICD_CTLR.RWP treated
+  as a failure, and exact compares of GICR_PWRR, WAKER and ISPENDR0. Missing
+  steps include clearing CNTHP_CTL_EL2, writing VPIDR/VMPIDR_EL2, a timer
+  event stream and the GIC-600 erratum 2384374 workaround. The recommended run
+  order starts with read-only captures, then port 3-1 rank 7 with the masked
+  comparison.
+
+**Multicore quality and performance (2026-10-25).** A design panel
+(performance, quality and the CPU backsolve) chose two board-free tranches:
+- `work/mc-correct-1025` covers the status-bit masks, the RWP waits, the
+  missing EL2 and GIC steps, a single definition per constant, the patch-plan
+  de-duplication and the magic collision.
+- `work/mc-perf-1025` covers the lock-bookkeeping DSBs, `__getreent` without
+  an SVC, lock-free time reads, interrupt-exit barriers, wake placement and
+  missed-tick handling, each measured by instruction counts and the
+  eight-core soak.
+
+Fair spinlocks, cache-line relayout, `-march` and the IRQ FP save wait for a
+supervised eight-core board session.
 
 **Board runs of 2026-10-24 night** (set `board-bundles-20261024-8`, sessions
 `~/.cache/sunstoneos/evidence/board-session-20261024-8/port-<PORT>`). The user
