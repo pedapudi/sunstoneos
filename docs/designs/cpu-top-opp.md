@@ -181,7 +181,12 @@ cluster; it relies on modulation, under which N alone does not define the
 rate, so SunstoneOS keeps boot0's park instead. boot0 parks CPU-L while CPU0
 executes, which is the only vendor precedent for parking a running cluster.
 The kernel's DSU floor for a fast CPU-B and its automatic DSU lowering are
-left to the owner: the driver changes the DSU only on request.
+left to the owner: the driver changes the DSU only on request, and it checks
+the three-quarters cap only on a DSU request, so the owner lowers the DSU
+before a cluster. Step 4 below applies the floor: the vendor raises the DSU
+to 910 MHz, the fastest DSU point at 800 mV, just before CPU-B reaches
+1488 MHz or more; the driver's cap admits 910 MHz only once CPU-B runs above
+1214 MHz, so step 4 raises the DSU right after CPU-B.
 
 ## The default path
 
@@ -251,7 +256,7 @@ changed is the last of its lifetime, because later images assume CPU-L at
 | 1 | CPU-B 1014 → 1404 → 1014 MHz at 800 mV, cores 6 and 7 off (bundle 20) | CPU-B PLL `0xf8803600`, then `0xf8802700`; mux `0x03000000` throughout; DCDC3 800 mV before and after; parked under 1 ms per change; CPU-L and DSU words unchanged |
 | 2 | CPU-L 494 → 1196 MHz at 800 mV, then the DSU 494 → 780 MHz | CPU-L PLL `0xf8802e00`, mux `0x03000000`; CPU0's cycle counter measures 1196 MHz ± 1% (494 MHz before); DSU PLL `0xf8801e00`, mux `0x03000105` |
 | 3 | DCDC3 800 → 1050 mV and back, CPU-B held at 1014 MHz | DCDC3 selector `0xb7`, then `0x9e`; temperatures within 1 °C |
-| 4 | DCDC3 to 1050 mV, CPU-B 1014 → 2002 MHz, then back to 1014 MHz and 800 mV, cores 6 and 7 off | CPU-B PLL `0xf8804d00`, DCDC3 `0xb7`; then `0xf8802700` and `0x9e` |
+| 4 | DCDC3 to 1050 mV, CPU-B 1014 → 2002 MHz, then the DSU to 910 MHz; then the DSU to 598 MHz (the 800 mV row under three quarters of 1014 MHz), CPU-B to 1014 MHz and DCDC3 to 800 mV, cores 6 and 7 off; the DSU stays changed, so the step ends its lifetime | CPU-B PLL `0xf8804d00`, DCDC3 `0xb7`, DSU PLL `0xf8802300`, mux `0x03000105`; then DSU PLL `0xf8802e00`, mux `0x03010105`, CPU-B `0xf8802700`, DCDC3 `0x9e` |
 | 5 | DCDC5 to 1000 mV, CPU-L 494 → 1794 MHz, then the DSU → 1274 MHz | DCDC5 `0xb2`; CPU-L PLL `0xf8804500`, CPU0 measures 1794 MHz ± 1%; DSU PLL `0xf8803100`, mux `0x03000105` |
 | 6 | The all-core workload with the top point applied before the tasks start | Workload passes with the status-masked capture; core 6 measures 2002 MHz and core 0 1794 MHz; the hottest sensor stays below 90 °C |
 | 7 | B1, then the OS image with both clusters and the DSU at their top points | Recognition on the A76 pair at about 1.2 s for the bench recording ([cpu-a76-dvfs.md](cpu-a76-dvfs.md), A2) |
@@ -287,8 +292,15 @@ binding added (`checks/board-bundles-apps.py`). The grant names CPU-B up to
    return;
 4. requests 1404 MHz, then 1014 MHz, each with a 120 ms deadline, driving the
    driver in 200 µs bursts once per tick;
-5. inspects CPU-B again, reads the second sensor set, disables the converter,
-   parks the provider and prints `COMPLETE board bundle 20`.
+5. requires after each transition that DCDC3 kept 800 mV, so no selector
+   write was planned;
+6. inspects the three domains again and requires every PLL and mux word and
+   both rails to read as before the step, reads the second sensor set,
+   disables the converter, parks the provider and prints
+   `COMPLETE board bundle 20`.
+
+Every request deadline is clamped to the session's 1.5 s, so a park cannot
+start after the session ends.
 
 A fault after the park ends with a `FAIL` line and leaves CPU-B on the
 oscillator or its PLL; cores 6 and 7 are off, so CPU0 keeps running and the

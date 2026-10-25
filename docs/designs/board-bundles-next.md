@@ -466,7 +466,8 @@ binding (`apps/board-bundles-power/cpu-opp-step.c`). With cores 6 and 7
 powered off, it raises CPU-B from 1,014 to 1,404 MHz and lowers it to
 1,014 MHz again, both points at the 800 mV of bin vf0400, so it writes no
 PMIC register. It reads a temperature set and the CPU-L, DSU and CPU-B words
-before the change and CPU-B and a second set after it. Its admission refuses,
+before the change, and after it requires every PLL and mux word and both
+rails to read as before and reads a second set. Its admission refuses,
 before any write and with a controlled warm return, a board that is not at
 the NORMAL thermal level, not on vf0400, not at 800 mV on DCDC3 and DCDC5,
 not at 1,014 MHz on CPU-B or with a pattern or LFM enable set. The row

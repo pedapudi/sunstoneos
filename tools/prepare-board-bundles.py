@@ -580,8 +580,9 @@ ROWS = [
                   'CPU-B to 1,404 MHz and lowers it to 1,014 MHz. Each change parks the CPU-B mux on the 26 MHz '
                   'oscillator for 20 us, writes N with the update bit, waits for update and for three lock reads 3 us '
                   'apart, waits 20 us, selects the PLL and waits 20 us. Both points need 800 mV in vf0400, so no PMIC '
-                  'register is written. A second inspection and sensor set follow, then the thermal converter is '
-                  'disabled and the PMIC service parked. Approved by the user on 2026-10-24 (CPU clock and voltage); '
+                  'register is written; after each change the image requires DCDC3 to have kept 800 mV. A second inspection of '
+                  'the three domains must read every PLL and mux word and both rails as before, then a second sensor set '
+                  'follows, the thermal converter is disabled and the PMIC service parked. Approved by the user on 2026-10-24 (CPU clock and voltage); '
                   'bundle/approval.json binds the values to port 3-3 and this image.',
                   sources=POWER_SOURCES + ['apps/board-bundles-power/cpu-opp-step.c', 'drivers/clock/a733_cpu_clock.c',
                                            'include/a733_cpu_clock.h', 'drivers/thermal/a733_thermal.c',

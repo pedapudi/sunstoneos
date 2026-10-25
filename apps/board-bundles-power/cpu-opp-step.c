@@ -12,7 +12,8 @@
  * with DCDC3 and DCDC5 at 800 mV, CPU-B at 1,014 MHz and clear pattern and
  * LFM enables, and otherwise returns with a REFUSED line before any write. It
  * runs the two transitions with 200 us bursts,
- * inspects CPU-B again, reads a second sensor set, disables the thermal
+ * requires all three domains' PLL and mux words and both rails to read as
+ * before, reads a second sensor set, disables the thermal
  * converter, parks the PMIC service and returns. */
 #include "power.h"
 #include "platform.h"
@@ -234,6 +235,13 @@ static void words(const char *label, enum a733_cpu_domain d)
     bb_power_print(&l);
 }
 
+/* A request deadline that never passes the session's. */
+static uint64_t request_deadline(void)
+{
+    const uint64_t end = bb_power_now() + REQUEST_US;
+    return end < bb_power.deadline ? end : bb_power.deadline;
+}
+
 static enum a733_cpu_clock_status finish(enum a733_cpu_clock_status r)
 {
     while (r == A733_CPU_CLOCK_PENDING) {
@@ -245,7 +253,7 @@ static enum a733_cpu_clock_status finish(enum a733_cpu_clock_status r)
 
 static void inspect(enum a733_cpu_domain d, const char *label)
 {
-    REQUIRE(a733_cpu_clock_inspect(&cpu, d, bb_power_now() + REQUEST_US) == A733_CPU_CLOCK_PENDING,
+    REQUIRE(a733_cpu_clock_inspect(&cpu, d, request_deadline()) == A733_CPU_CLOCK_PENDING,
             "inspection start");
     REQUIRE(finish(A733_CPU_CLOCK_PENDING) == A733_CPU_CLOCK_COMPLETE, "inspection");
     words(label, d);
@@ -254,9 +262,11 @@ static void inspect(enum a733_cpu_domain d, const char *label)
 static void transition(uint32_t mhz, const char *label)
 {
     const uint64_t start = bb_power_now();
-    REQUIRE(a733_cpu_clock_request(&cpu, A733_CPU_BIG, mhz, start + REQUEST_US) == A733_CPU_CLOCK_PENDING,
+    REQUIRE(a733_cpu_clock_request(&cpu, A733_CPU_BIG, mhz, request_deadline()) == A733_CPU_CLOCK_PENDING,
             "transition admission");
     REQUIRE(finish(A733_CPU_CLOCK_PENDING) == A733_CPU_CLOCK_COMPLETE, "transition");
+    /* The transition kept DCDC3's voltage, so it made no selector write. */
+    REQUIRE(cpu.from_uv == STEP_UV && cpu.to_uv == STEP_UV, "voltage write planned");
     const uint64_t end = bb_power_now();
     words(label, A733_CPU_BIG);
     struct bb_line l;
@@ -293,6 +303,7 @@ static void client(void *unused)
     inspect(A733_CPU_LITTLE, "CPU-L before");
     inspect(A733_CPU_DSU, "DSU before");
     inspect(A733_CPU_BIG, "CPU-B before");
+    const struct a733_cpu_clock_report before = cpu.report;
     struct bb_line l;
     bb_line_start(&l, "SUPPLY");
     bb_line_dec(&l, "dcdc5_uv", cpu.rail_uv[0]);
@@ -319,6 +330,12 @@ static void client(void *unused)
     transition(BASE_MHZ, "CPU-B restored");
     inspect(A733_CPU_BIG, "CPU-B after");
     REQUIRE(cpu.rail_uv[1] == STEP_UV, "DCDC3 changed");
+    inspect(A733_CPU_LITTLE, "CPU-L after");
+    inspect(A733_CPU_DSU, "DSU after");
+    REQUIRE(cpu.rail_uv[0] == STEP_UV, "DCDC5 changed");
+    for (unsigned d = 0; d < A733_CPU_DOMAINS; ++d)
+        REQUIRE(cpu.report.domain[d].pll == before.domain[d].pll &&
+                cpu.report.domain[d].select == before.domain[d].select, "clock words changed");
     REQUIRE(sensor_set() == A733_THERMAL_NORMAL, "thermal level after the step");
     thermal_stop();
     bb_power_park();
