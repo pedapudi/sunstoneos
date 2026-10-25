@@ -267,7 +267,9 @@ def validate(row, output):
                 restored = case.get('handler_writes') == [['0x1880014', '0x1'], ['0xa0000b0', '0x5']] or (
                     (5 not in rows or {13, 14} <= set(rows)) and (7 not in rows or {11, 12} <= set(rows)))
                 require('refused' in case or restored, 'A host-check case left a vendor write unrestored.')
-                require('a733_gpu_platform_off_begin' not in case['calls'], 'A host-check case powered the GPU OFF.')
+                # The OFF comes only after every access, both restores included.
+                require('a733_gpu_platform_off_begin' not in case['calls'] or rows == list(range(len(PROBE_STEPS))),
+                        'A host-check case powered the GPU OFF before both words were restored.')
             value['probe_steps'] = [[hex(a), hex(v), k] for a, v, k in PROBE_STEPS]
         if variant == 'identity':
             for case in checked['cases']:
