@@ -2038,6 +2038,7 @@
   "docs": [
    "apps/gpu-power-id/README.md",
    "docs/board-runbooks/README.md",
+   "docs/clock-audit.md",
    "docs/designs/board-bundles-measurements.md",
    "docs/designs/board-bundles-next.md",
    "docs/designs/board-bundles.md",
