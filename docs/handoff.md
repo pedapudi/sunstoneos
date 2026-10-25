@@ -79,17 +79,32 @@ record granting exclusive CORE6 and TOP5 control, confirmed supply, clock and
 isolation, and a reviewed return and recovery plan. The default GPU single-core
 profile also patches `platform.c` without listing it as a configure input.
 
-**Uncommitted NPU OS integration:** preserve
-`/home/sunil/git/sunstoneos-worktrees/npu-thermal-1024`, branch
-`work/npu-thermal-1024`, based on merge `925f143e`.
-The optional supervised profile links the existing five-model runtime and a
-trusted task-bound application API. It reserves `0x47400000..0x47c00000` after
-the cold/stage-2 monitor, uses existing WB/ISH mappings and shared power owners,
-and leaves mimus inputs/output unchanged. The complete catalogue fits in CODE:
-text plus rodata measured 1,998,889 bytes, with roughly 98 KiB spare. Private
-static state is 140,224 bytes including three task stacks. Build succeeded;
-constructor, API, session and actual allocator/runtime preparation checks are
-in progress under `os-npu-20261024/`.
+**NPU profile of the resident OS image (merged 2026-10-24):** an optional,
+feature-gated supervised profile runs one NPU application client. It reserves
+`0x47400000..0x47c00000` and links only the model the client loads.
+- **Client privilege:** the bootstrap and client entries run at EL1t only
+  when `os_npu_start` creates them; unregistered tasks are refused.
+- **Report:** read-only USB vendor operation 6 returns a fixed 104-byte report,
+  decoded by `apps/os/npu-report.py`. It distinguishes pending, matched,
+  mismatch (the `0xc35a3ca5` fill shows bytes the job never wrote), refused
+  (thermal stop) and retained. A retained report stays in RAM, because USB0
+  sends nothing after a board failure.
+- **Faults and defaults:** critical faults retain every NPU resource. A
+  manifest without an `npu` field means OFF.
+- **Budget:** CODE use is 995,209 bytes, with 1,100,912 free; static state is
+  140,329 bytes.
+- **Default images:** the default `sup` and `res` `.text` is identical to
+  builds without the profile.
+- **Checks:** all 32 `checks/os-npu.py` cases pass. Evidence:
+  `os-npu-20261024/check-8/`.
+
+Open items:
+- No launcher requests operation 6 yet.
+- `npu_admission` in `apps/os/prepare.py` is untested against real NPU entry
+  records.
+- The `client` task in `apps/npu-board/main.c` still starts at EL0, though it
+  reads the counter clock.
+- No NPU job of this image has run on a board.
 
 The latest reviewer finding is a concrete privilege requirement:
 `a733_counter_clock_now` masks DAIF, so the registered NPU application client
