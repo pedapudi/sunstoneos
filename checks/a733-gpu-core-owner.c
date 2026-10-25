@@ -66,7 +66,7 @@ int main(void)
      * stall; 6 and 7: the power-up CORE state (policy 8, status 0, reset
      * PWCR, transition pending) with TOP OFF or ON. */
     for (unsigned mode = 0; mode < 8; ++mode) {
-        domains_model_setup(0x28,23); d.ack_us = 0;
+        domains_model_setup(0x28,23); d.ack_us = 0; d.top5_gates = 1;
         memset(&gpu,0,sizeof(gpu)); memset(core,0,sizeof(core));
         core[0] = core[2] = (mode & 1) ? 8 : 0; core[8] = 0x010101ff;
         const unsigned top = mode < 6 ? (mode & 2) : mode == 7;
@@ -84,7 +84,7 @@ int main(void)
         if (mode != 4) {
             assert(result == A733_GPU_POWER_OK); stalled = mode == 5; result = run(0);
         }
-        if (mode >= 6) assert(gpu.core_policy == 8 && !gpu.core_status && gpu.core_seen == 0xff && !core[8]);
+        if (mode >= 6) assert(gpu.core_policy == 8 && !gpu.core_status && gpu.core_seen == 0xffff && !core[8]);
         if (mode != 4 && mode != 5) assert(d.ccu_e0 == 0x01105300);
         if (mode == 4 || mode == 5) {
             assert(result == A733_GPU_POWER_FAULT && gpu.error == A733_GPU_POWER_TIMEOUT);
@@ -97,7 +97,10 @@ int main(void)
             assert(a733_rail_release(&m.rails,&token,m.now+100000) == A733_RAIL_READY);
         }
         assert(!memcmp(npu,d.ppu[4],sizeof(npu)) && m.writes == twi_writes);
-        assert(d.ccu_5c0 == ahb && d.ccu_5e0 == mbus && m.pmic[0x13] == 30);
+        /* Nothing writes the master gates; an OFF from ON closed them. */
+        const unsigned closed = mode != 4 && mode != 5;
+        assert(d.ccu_5c0 == (closed ? ahb & ~(1u << 7) : ahb) && d.ccu_5e0 == (closed ? mbus & ~(1u << 16) : mbus) &&
+               m.pmic[0x13] == 30);
         for (unsigned i = 0; i < d.trace_n; ++i)
             assert(d.trace[i].address < 0x07066000 || d.trace[i].address >= 0x07067000);
     }

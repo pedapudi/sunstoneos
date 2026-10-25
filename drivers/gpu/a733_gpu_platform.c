@@ -278,3 +278,14 @@ int a733_gpu_platform_off_poll(struct a733_gpu_platform *p)
     p->phase = A733_GPU_PLATFORM_OFF;
     return 1;
 }
+int a733_gpu_platform_supply_end(struct a733_gpu_platform *p)
+{
+    if (!p || !p->initialized || p->phase != A733_GPU_PLATFORM_OFF) return -1;
+    if (!p->pmic_native || !p->pmic_observed) return 1;
+    if (!clock_ok(p)) return -1;
+    const int r = a733_pmic_consumer_refresh(&p->pmic, p->deadline);
+    if (r < 0) return fail(p);
+    if (!r) return 0;
+    p->pmic_observed = 0;
+    return 1;
+}

@@ -19,9 +19,17 @@
  * PCSM accept/deny inputs before any write, CORE status after the PWCR write
  * and after the policy write, and the inputs again before the final status
  * poll. */
+/* Notes of the CORE6 words and of the GPU AHB and MBUS master gate words
+ * (CCU 0x5c0 and 0x5e0): at ON entry and after TOP5 ON, then after TOP5 OFF
+ * and at the end of OFF. ON clears the notes before A733_GPU_NOTE_AHB_TOP5_OFF
+ * and OFF clears the rest, so a report after an ON still shows the OFF before
+ * it. */
 enum a733_gpu_core_note { A733_GPU_NOTE_IDR0, A733_GPU_NOTE_MISR,
     A733_GPU_NOTE_AFTER_PWCR, A733_GPU_NOTE_AFTER_POLICY,
-    A733_GPU_NOTE_MISR_LATE, A733_GPU_CORE_NOTES };
+    A733_GPU_NOTE_MISR_LATE, A733_GPU_NOTE_AHB_ENTRY, A733_GPU_NOTE_MBUS_ENTRY,
+    A733_GPU_NOTE_AHB_TOP5_ON, A733_GPU_NOTE_MBUS_TOP5_ON,
+    A733_GPU_NOTE_AHB_TOP5_OFF, A733_GPU_NOTE_MBUS_TOP5_OFF,
+    A733_GPU_NOTE_AHB_OFF_END, A733_GPU_NOTE_MBUS_OFF_END, A733_GPU_CORE_NOTES };
 
 /* GPU_TOP (PCK domain 5) remains behind the shared owner's row. CORE6 is
  * private to the GPU controller under its exclusive LOCAL lease. */
@@ -110,14 +118,16 @@ enum a733_gpu_power_result a733_gpu_power_on(struct a733_gpu_power *, uint64_t d
  */
 enum a733_gpu_power_result a733_gpu_power_off(struct a733_gpu_power *, uint64_t deadline);
 /* Runs the resource and register steps back to back, with clock reads, in
- * the vendor's order (docs/designs/gpu-vendor-default.md). Power-on checks the
- * MBUS gates, the PPU clock, a closed GPU clock gate on PLL_GPU0 at divider
+ * the vendor's order (docs/designs/gpu-vendor-default.md). Power-on records
+ * the GPU AHB and MBUS master gates, checks the PPU clock, a closed GPU clock gate on PLL_GPU0 at divider
  * 1, an asserted reset and a disabled PLL_GPU0 with M1 1. It admits settled
  * static CORE policy/status, or the power-up state of policy 8, status 0 and
  * A733_GPU_CORE_RESET_PWCR, and writes PWCR 0. It enables PLL_GPU0, releases
  * the GPU reset, opens the bus and core clock gates and sets PLL_GPU0 to
  * A733_GPU_CORE_HZ, then requests the row ON and returns AGAIN until the
- * service answers, writes CORE policy 8 and polls CORE status until 8.
+ * service answers, requires both master gates open, writes CORE policy 8
+ * and polls CORE status until 8. A TOP5 OFF closes the master gates until
+ * the next TOP5 ON, so they are checked only after it.
  * Every PLL_GPU0 write is read back (error PLL); each lock wait reads at most
  * 100 times 3 us apart (error LOCK) and each GPU clock update bit must clear
  * within 100 reads (error UPDATE); these waits run inside one poll. Status

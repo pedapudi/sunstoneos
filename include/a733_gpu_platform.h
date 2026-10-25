@@ -71,4 +71,10 @@ int a733_gpu_platform_poll(void *);
  * implementation. During release contention, the platform still owns token. */
 int a733_gpu_platform_off_begin(struct a733_gpu_platform *, uint64_t absolute_deadline);
 int a733_gpu_platform_off_poll(struct a733_gpu_platform *);
+/* OFF only: end the supply consumer's completed DCDC4 sample, which keeps a
+ * provider request slot and its borrow for as long as the platform may
+ * power the GPU on (a733_pmic_consumer.h), so that the provider can park.
+ * The consumer keeps its shared DCDC4 token; a later begin samples again.
+ * Returns 1 done (or nothing to end), 0 pending, -1 fault. */
+int a733_gpu_platform_supply_end(struct a733_gpu_platform *);
 #endif

@@ -63,11 +63,18 @@ static unsigned answered(const struct a733_power_domain_row *r)
  * vendor's later power-ons and power-offs do (BXM rgx_sunxi
  * sunxiPrePowerState and sunxiPostPowerState); its GPU-local clock and reset
  * belong to the GPU controller (docs/designs/gpu-vendor-default.md). */
+static int gates(const struct a733_power_domains *d,const struct profile *f)
+{return bits(d,CCU+0x5c0,BIT(f->ahb),BIT(f->ahb)) && bits(d,CCU+0x5e0,BIT(f->mbus),BIT(f->mbus));}
 static int level(const struct a733_power_domains *d,const struct profile *f)
-{
-    return bits(d,CCU+0x5c0,BIT(f->ahb),BIT(f->ahb)) && bits(d,CCU+0x5e0,BIT(f->mbus),BIT(f->mbus)) &&
-        bits(d,R_CCU+0x1ac,1,1);
-}
+{return gates(d,f) && bits(d,R_CCU+0x1ac,1,1);}
+/* A TOP5 OFF closed the GPU AHB master gate, which took no write while
+ * TOP5 was OFF (board-session-20261025-7, s11-gpo-run), and the vendor
+ * never reads it or the MBUS gate. Domain 5 therefore requires them only while it is ON; an ON from
+ * OFF reads the PPU clock alone, and the GPU controller requires the gates
+ * after TOP5 ON. Domains 1 and 4 have not been switched off on a board and
+ * keep the full domain-level reads. */
+static int level_before(const struct a733_power_domains *d,const struct profile *f)
+{return f->id==5 ? bits(d,R_CCU+0x1ac,1,1) : level(d,f);}
 /* Policy (+0x0) and status (+0x8) bits 3:0 must agree at OFF (0) or ON (8). */
 static int coherent(const struct a733_power_domains *d,unsigned id,uint32_t *policy)
 {
@@ -147,14 +154,19 @@ static void command(struct a733_power_domains *d,struct a733_power_domain *m,uin
     if(on || !m->delays_ready) {
         /* The pinned delay row, each word read back (pck600_domains.c lines
          * 126-142 and 547-569). The reference initializes it at registration
-         * (line 269), even for an inherited ON domain. Initialize before its
-         * first OFF too, while keeping adoption read-only and the existing
-         * per-ON writes. 0xc00-0xc10 are absent from the PCK-600 TRM. */
+         * (line 269), even for an inherited ON domain, and never reads it
+         * back. Initialize before its first OFF too, while keeping adoption
+         * read-only and the existing per-ON writes. 0xc00-0xc10 are absent
+         * from the PCK-600 TRM. After a domain OFF, 0xc10 reads bits 23:16
+         * set, 0x00ff0008, in TOP5's and CORE6's rows alike, and a write
+         * does not clear them (board-session-20261025-9, s12-gpo-run), so
+         * its readback compares the low 16 bits that hold the delay. */
         static const unsigned offsets[]={0x170,0x174,0xc00,0xc04,0xc10};
         static const uint32_t values[]={0x1f1f1f,0x1f1f,0x08080808,0x0808,8};
+        static const uint32_t masks[]={UINT32_MAX,UINT32_MAX,UINT32_MAX,UINT32_MAX,0xffff};
         for(unsigned i=0;i<5;++i) {
             uint32_t v;
-            if(!wr(d,base+offsets[i],values[i]) || !rd(d,base+offsets[i],&v) || v!=values[i]){fail_domain(d,m);return;}
+            if(!wr(d,base+offsets[i],values[i]) || !rd(d,base+offsets[i],&v) || (v&masks[i])!=values[i]){fail_domain(d,m);return;}
         }
         m->delays_ready=1;
         if(!clock(d,&now)){fail_service(d);fail_domain(d,m);return;}
@@ -186,7 +198,7 @@ static int admit(struct a733_power_domains *d,struct a733_power_domain_row *r,un
     if(!(w&(A733_POWER_SUPPLY_DONE|f->verified)))return 0;
     const struct a733_rail_token *t=r->rail;
     if((w&(A733_POWER_PMIC_TRANSFER|f->fault)) || !(w&f->verified) || !t || t->owner!=r->owner ||
-       !((t->shared|t->exclusive)&A733_RAIL_BIT(f->rail)) || !level(d,f)){publish(r,g,A733_POWER_ROW_REFUSED);return 0;}
+       !((t->shared|t->exclusive)&A733_RAIL_BIT(f->rail)) || !level_before(d,f)){publish(r,g,A733_POWER_ROW_REFUSED);return 0;}
     uint32_t policy=0;
     if(m->state!=A733_POWER_DOMAIN_ON_WAIT) {
         const int ppu=coherent(d,m->id,&policy);
@@ -198,6 +210,8 @@ static int admit(struct a733_power_domains *d,struct a733_power_domain_row *r,un
             publish(r,g,A733_POWER_ROW_REFUSED);return 0;
         }
     }
+    /* Domain 5 found ON still needs its master gates open. */
+    if(f->id==5 && m->state==A733_POWER_DOMAIN_ON && !gates(d,f)){publish(r,g,A733_POWER_ROW_REFUSED);return 0;}
     enum a733_rail_result p=a733_rail_pin(d->pmic->rails,t,A733_RAIL_BIT(f->rail));
     if(p==A733_RAIL_BUSY)return 1;
     if(p!=A733_RAIL_READY){publish(r,g,A733_POWER_ROW_REFUSED);return 0;}

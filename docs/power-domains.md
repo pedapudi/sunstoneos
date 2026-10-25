@@ -61,7 +61,9 @@ Admission of an ON request, in order:
 2. The rail token belongs to the row's owner and holds the supply.
 3. Domain-level reads: both MBUS gates of the domain (CCU `0x5c0` and `0x5e0`
    bits 5 and 11, 6 and 18, 7 and 16 for domains 1, 4 and 5) and the PPU
-   clock. Domain 5 changes whatever the GPU clock gate and reset read: the
+   clock. A domain-5 ON from OFF reads the PPU clock alone: a TOP5 OFF
+   closed the GPU AHB master gate on a board, and the GPU controller
+   requires both gates after TOP5 ON. Domain 5 found ON still requires them. Domain 5 changes whatever the GPU clock gate and reset read: the
    vendor powers it on after the GPU clocks open and off before they close
    (`sunxiPrePowerState`, `sunxiPostPowerState`;
    [docs/designs/gpu-vendor-default.md](designs/gpu-vendor-default.md)).
@@ -71,7 +73,10 @@ Admission of an ON request, in order:
    is counted (`a733_rail_pin`, [docs/rail-leases.md](rail-leases.md)).
 
 If the domain is OFF, the service writes the delay row, reading each word
-back, and then writes the policy word with bits 3:0 set to 8 and the other
+back (for `+0xc10` its low 16 bits: after a domain OFF that word reads bits
+23:16 set, `0x00ff0008`, and a write keeps them, as
+`board-session-20261025-9` showed in TOP5's and CORE6's rows), and then
+writes the policy word with bits 3:0 set to 8 and the other
 bits preserved. The write accessor completes with `DSB SY`, so the bound is
 timed from the command reaching the PPU. The service reads status for up to
 50 µs after the command, then once per step with a one-tick block between

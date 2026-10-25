@@ -92,7 +92,7 @@ static void gpu_trace_run(const char *path)
     gpu_trace=fopen(path,"w");assert(gpu_trace);policy_before=d.ppu[5][0];d.written=owner_written;
     gpu_run(&g,1);
     assert((d.ppu[5][2]&15)==8 && d.ccu_b20==0x90200100 && d.ccu_b24==0x24690001 && d.ccu_e0==0xf9105300);
-    assert(g.core_policy==8 && !g.core_status && g.core_config==A733_GPU_CORE_RESET_PWCR && g.core_seen==0xff &&
+    assert(g.core_policy==8 && !g.core_status && g.core_config==A733_GPU_CORE_RESET_PWCR && g.core_seen==0xfff &&
            g.core_note[A733_GPU_NOTE_IDR0]==GPU_CORE_IDR0 && gpu_core[2]==8 && !gpu_core[8]);
     gpu_run(&g,0);
     assert((d.ppu[5][2]&15)==0 && d.ccu_b20==0x10200100 && d.ccu_b24==0x24680000 && d.ccu_e0==0x01105300 &&
@@ -308,6 +308,22 @@ static void transition_delays(void)
         ++faults;
     }
     printf("delay initialization: %u injected failures retain row/pin without policy write or revival\n",faults);
+    /* After a domain-5 OFF, 0xc10 reads bits 23:16 set, 0x00ff0008, and a
+     * write keeps them (board-session-20261025-9, s12-gpo-run). The next ON
+     * compares the low 16 bits of its readback and powers the domain on. */
+    setup();d.ack_us=0;d.top5_gates=1;d.ppu[5][0]|=8;d.ppu[5][2]|=8;
+    struct a733_rail_token token={0};struct a733_power_domain_row row={0};
+    assert(a733_power_domain_row_init(&row,&d.owner,5,79,&token));
+    domains_boot();token=domains_rail(79,A733_RAIL_DCDC4);
+    assert(a733_power_domain_request(&row,1));service_step();
+    assert(a733_power_domain_state(&row)==A733_POWER_ROW_ON);
+    assert(a733_power_domain_request(&row,0));
+    for(unsigned i=0;i<8 && a733_power_domain_state(&row)!=A733_POWER_ROW_OFF;++i)service_step();
+    assert(a733_power_domain_state(&row)==A733_POWER_ROW_OFF && d.ppu[5][0xc10/4]==0x00ff0008);
+    assert(a733_power_domain_request(&row,1));
+    for(unsigned i=0;i<8 && a733_power_domain_state(&row)!=A733_POWER_ROW_ON;++i)service_step();
+    assert(a733_power_domain_state(&row)==A733_POWER_ROW_ON && (d.ppu[5][2]&15)==8 && d.ppu[5][0xc10/4]==0x00ff0008);
+    puts("delay initialization: an ON after a domain-5 OFF admits 0xc10 bits 23:16");
 }
 
 int main(int argc,char **argv)
@@ -396,7 +412,9 @@ int main(int argc,char **argv)
 
     /* Domain-level refusals: no PPU write, nothing retained. A GPU clocked
      * and out of reset is no refusal: domain 5 changes with the GPU clocked,
-     * as the vendor does. */
+     * as the vendor does. A closed GPU master gate is no refusal for domain 5
+     * from OFF either: a TOP5 OFF closes both until the next TOP5 ON, and the
+     * GPU controller requires them after it. */
     for(unsigned c=0;c<5;++c) {
         setup();
         uint32_t *words[]={&d.ccu_5c0,&d.ccu_5e0,&d.rccu_1ac,&d.ccu_b20,&d.ccu_b24};
@@ -406,10 +424,24 @@ int main(int argc,char **argv)
         assert(a733_power_domain_row_init(&r,&d.owner,5,63,&t));
         domains_boot();t=domains_rail(63,A733_RAIL_DCDC4);
         from=d.trace_n;assert(a733_power_domain_request(&r,1));service_step();
-        if(c<3) {
+        if(c==2) {
             assert(a733_power_domain_state(&r)==A733_POWER_ROW_REFUSED && !writes_since(from));
             assert(a733_rail_release(&m.rails,&t,m.now+1000)==A733_RAIL_READY);
         } else assert(a733_power_domain_state(&r)==A733_POWER_ROW_ON && writes_since(from));
+    }
+    /* Domain 5 found ON, and domain 1 from OFF, still refuse a closed master
+     * gate, with no PPU write. */
+    for(unsigned c=0;c<4;++c) {
+        setup();
+        const unsigned id=c<2 ? 5 : 1;
+        if(id==5){d.ppu[5][0]|=8;d.ppu[5][2]|=8;}
+        if(c&1)d.ccu_5e0&=~(1u<<(id==5 ? 16 : 11));else d.ccu_5c0&=~(1u<<(id==5 ? 7 : 5));
+        struct a733_rail_token t={0};struct a733_power_domain_row r={0};
+        assert(a733_power_domain_row_init(&r,&d.owner,id,64,&t));
+        domains_boot();t=domains_rail(64,id==5 ? A733_RAIL_DCDC4 : A733_RAIL_DCDC2);
+        from=d.trace_n;assert(a733_power_domain_request(&r,1));service_step();
+        assert(a733_power_domain_state(&r)==A733_POWER_ROW_REFUSED && !writes_since(from));
+        assert(a733_rail_release(&m.rails,&t,m.now+1000)==A733_RAIL_READY);
     }
     /* A token of another owner, or without the domain's supply, is refused. */
     setup();

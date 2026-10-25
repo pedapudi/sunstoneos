@@ -173,12 +173,15 @@ int main(int argc, char **argv)
         return 0;
     }
     assert(!a733_gpu_resources_init(&manager, &ops, &model));
+    /* With TOP5 ON the GPU owner opens closed master gates. */
+    *reg(&model, 0x07065008) = 8;
     assert(acquire(0, A733_GPU_RESOURCE_ALL, &token) == A733_GPU_RESOURCE_OK);
     assert(token == 1 && model.updates == 3);
     assert(*reg(&model, 0x070101ac) == 0x41);
     assert(*reg(&model, 0x020025c0) == 0x110000ff);
     assert(*reg(&model, 0x020025e0) == 0x61055802);
     unsigned acquire_calls = model.calls;
+    *reg(&model, 0x07065008) = 0;
     assert(a733_gpu_resources_release(&manager, 0, token, 10000) == A733_GPU_RESOURCE_OK);
     unsigned total_calls = model.calls;
     FILE *f = fopen(argv[1], "w"); assert(f);
@@ -203,8 +206,9 @@ int main(int argc, char **argv)
     assert(a733_gpu_resources_release(&manager, 1, shared, 10000) == A733_GPU_RESOURCE_OK);
     unsigned faults = 0;
     for (unsigned i = 1; i <= total_calls; ++i) {
-        fresh(); model.fail_at = i;
+        fresh(); model.fail_at = i; *reg(&model, 0x07065008) = 8;
         enum a733_gpu_resource_result r = acquire(0, A733_GPU_RESOURCE_ALL, &token);
+        *reg(&model, 0x07065008) = 0;
         if (r == A733_GPU_RESOURCE_OK) r = a733_gpu_resources_release(&manager, 0, token, 10000);
         assert(r == A733_GPU_RESOURCE_FAULT && manager.error == A733_GPU_RESOURCE_IO);
         assert(manager.leases[0].mode == A733_GPU_RESOURCE_RETAINED);
@@ -225,6 +229,7 @@ int main(int argc, char **argv)
     };
     for (unsigned i = 0; i < sizeof(bad)/sizeof(*bad); ++i) {
         fresh(); *reg(&model, bad[i].address) ^= bad[i].xor;
+        if (bad[i].error == A733_GPU_RESOURCE_GATE) *reg(&model, 0x07065008) = 8;
         assert(acquire(0, A733_GPU_RESOURCE_ALL, &token) == A733_GPU_RESOURCE_FAULT);
         assert(manager.error == bad[i].error);
         if (bad[i].error == A733_GPU_RESOURCE_LIVE) assert(!model.updates);
@@ -252,12 +257,22 @@ int main(int argc, char **argv)
     assert(acquire(0, A733_GPU_RESOURCE_ALL, &token) == A733_GPU_RESOURCE_FAULT);
     assert(*reg(&model, 0x070101ac) == 0x41 && manager.leases[0].mask == A733_GPU_RESOURCE_ALL);
     terminal(); ++faults;
-    fresh(); model.corrupt = 1;
+    fresh(); model.corrupt = 1; *reg(&model, 0x07065008) = 8;
     assert(acquire(0, A733_GPU_RESOURCE_ALL, &token) == A733_GPU_RESOURCE_FAULT);
     assert(manager.error == A733_GPU_RESOURCE_GATE); terminal(); ++faults;
     fresh(); model.late_at = 3;
     assert(acquire(0, A733_GPU_RESOURCE_ALL, &token) == A733_GPU_RESOURCE_FAULT);
     assert(manager.error == A733_GPU_RESOURCE_TIMEOUT); terminal(); ++faults;
+    /* With TOP5 OFF, as after a GPU OFF, the master gates read closed and
+     * take no write (board-session-20261025-7, s11-gpo-run): the GPU owner
+     * neither checks nor writes them, and the controller requires them
+     * after TOP5 ON. A TOP5 status other than OFF or ON is LIVE. */
+    fresh(); assert(acquire(0, A733_GPU_RESOURCE_ALL, &token) == A733_GPU_RESOURCE_OK && model.updates == 1);
+    assert(*reg(&model, 0x020025c0) == 0x1100007f && *reg(&model, 0x020025e0) == 0x61045802);
+    assert(a733_gpu_resources_release(&manager, 0, token, 10000) == A733_GPU_RESOURCE_OK);
+    fresh(); *reg(&model, 0x07065008) = 4;
+    assert(acquire(0, A733_GPU_RESOURCE_ALL, &token) == A733_GPU_RESOURCE_FAULT);
+    assert(manager.error == A733_GPU_RESOURCE_LIVE && model.updates == 1); terminal(); ++faults;
     fresh(); manager.last_now = 200;
     assert(acquire(0, A733_GPU_RESOURCE_ALL, &token) == A733_GPU_RESOURCE_FAULT);
     assert(manager.error == A733_GPU_RESOURCE_CLOCK); terminal(); ++faults;

@@ -248,7 +248,9 @@ GPU_FAILURES = ['`FAIL GPU ON begin`, `GPU ON deadline` or `GPU ON poll`, after 
                 'only; `GPU ON poll` or `GPU ON deadline` also ends a CORE6 status poll that never read 8, and `GPU '
                 'ON poll` an entry state that admission refuses, a DCDC4 raise that failed, or controller error 8 (a '
                 'PLL_GPU0 write that did not read back), 9 (a lock wait that ended unlocked) or 10 (a GPU clock '
-                'update bit that did not clear); `GPU SNAP` lines of the failed ON precede it',
+                'update bit that did not clear); `GPU ON poll` with `GPU power phase=5 error=5 step=51` or '
+                '`step=52` and the gate word in `last` is a master gate that TOP5 ON did not reopen; `GPU SNAP` '
+                'lines of the failed ON precede it',
                 '`FAIL GPU snapshot mapping`: a snapshot page is not an identity Device-nGnRnE mapping; no snapshot '
                 'word was read',
                 '`FAIL GPU OFF begin`, `GPU OFF deadline`, `GPU OFF poll` or `GPU OFF ownership proof`',
@@ -502,12 +504,14 @@ ROWS = [
             'raised to 960 mV. Each ON, under the exclusive LOCAL lease, captures CORE6 policy, status, IDR0, MISR '
             'and PWCR, admits settled OFF or ON or the power-up state (policy 8, status 0, PWCR 0x101), writes PWCR '
             '0, enables PLL_GPU0, releases the GPU reset, opens the bus and core clock gates, sets PLL_GPU0 to '
-            '1008 MHz, then requests domain 5 (TOP5) ON through the shared row with the GPU clocked, writes CORE6 '
-            'policy 8 and requires the CORE6 status poll to read 8; OFF writes CORE6 policy 0 and requires status '
+            '1008 MHz, then requests domain 5 (TOP5) ON through the shared row with the GPU clocked, requires the GPU '
+            'AHB and MBUS master gates (CCU 0x5c0 bit 7, 0x5e0 bit 16) open, writes CORE6 policy 8 and requires the '
+            'CORE6 status poll to read 8; OFF writes CORE6 policy 0 and requires status '
             '0, powers domain 5 OFF with the GPU still clocked, then closes the bus and core gates, disables '
             'PLL_GPU0 and asserts the reset: the vendor order of drivers/gpu/a733_gpu_power.c. The first OFF is '
-            'the first TOP5 transition from ON on a board, and the second ON the first TOP5 power-up and the first '
-            'ON after an OFF. The '
+            'a TOP5 OFF, which on board-session-20261025-7 closed the AHB master gate; the second ON is the first TOP5 '
+            'power-up on a board and shows whether TOP5 ON reopens it and whether the MBUS gate was closed too. A GPU gates line after each ON and OFF '
+            'gives both gate words at ON entry, after TOP5 ON, after TOP5 OFF and at the end of OFF. The '
             'preparation reads that order from the image\'s own on_steps and '
             'off_steps tables. A read-only snapshot of 35 CORE6, TOP5, R_CCU and CCU words precedes the first ON '
             'and follows each ON attempt. The image never reads or writes the GPU register window at 0x01800000: '
