@@ -2024,7 +2024,8 @@
    "docs/board-runbooks/README.md",
    "docs/designs/board-bundles-measurements.md",
    "docs/designs/board-bundles-next.md",
-   "docs/designs/board-bundles.md"
+   "docs/designs/board-bundles.md",
+   "docs/reference-backsolve-npu.md"
   ],
   "library": false,
   "pure_host": false,
