@@ -22,7 +22,8 @@ SOFTWARE_SCHEMA = 'a733-workload-bisect-software-v1'
 HOST_SOURCES = base.HOST_SOURCES+('tools/workload-bisect-host.py', 'tools/secondary-identity-host.py')
 MODEL_SOURCES = base.MODEL_SOURCES+('checks/workload-bisect-probe.py',)
 CASES = ('complete-return', 'transport-failure-retained', 'invalid-report-restored',
-         'deadline-return-retained', 'damaged-deadline-retained', 'deadline-record-checked',
+         'deadline-return-retained', 'damaged-deadline-retained', 'deadline-quarantine-failure-held',
+         'deadline-record-checked',
          'changed-input-refused')
 RWP_CASES = ('restore-rwp', 'restore-rwp-secondary', 'restore-rwp-late', 'restore-rwp-late-secondary')
 INSTRUCTION_CASES = {False: ('success', 'stalled-core', 'stalled-no-tick', *RWP_CASES),

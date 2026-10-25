@@ -64,9 +64,11 @@ static void snapshot(struct context *c,volatile struct secondary_local_state *s)
     s->group=load(c,g+0x80);s->modifier=load(c,g+0xd00);
     s->configuration=load(c,g+0xc04);s->priority=load(c,g+0x400);s->pwrr=load(c,r+0x24);
 }
-/* GICR_CTLR.UWP (bit 31) and RWP (bit 3) are read-only status that other
- * agents' writes can set at any time (IHI 0069G 12.11.2); the board has shown
- * RWP set after a completed wait. Comparisons and baselines ignore them. */
+/* GICR_CTLR.UWP (bit 31) and RWP (bit 3) are read-only status (IHI 0069G
+ * 12.11.2). The board has read RWP set after a completed wait with no write
+ * by this core in between, for a reason not yet explained. Linux and TF-A
+ * poll these bits and never compare GICR_CTLR, so comparisons and baselines
+ * ignore them. */
 #define CTLR_STATUS UINT64_C(0x80000008)
 static int same(const volatile struct secondary_local_state *a,const volatile struct secondary_local_state *b)
 {

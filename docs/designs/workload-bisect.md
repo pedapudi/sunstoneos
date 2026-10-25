@@ -151,14 +151,14 @@ the wait: `restore_local` calls `wait_rwp`, which returned with RWP clear,
 and the snapshot's next read of GICR_CTLR found RWP set again, with no
 CPU0 write between the two reads.
 
-RWP therefore does not only track CPU0's own writes. The architecture
-defines it as read-only write-pending status for writes in the current
-Security state (IHI 0069G 12.11.2, page 12-622). The most likely source of
-the second assertion is the secondaries' concurrent cleanup writes to their
-own redistributors, but the record cannot show which agent set it. In
-either case GICR_CTLR's RWP and UWP (bit 31) are status bits that no
-restoration controls, and Linux and TF-A only poll them; they never
-compare them.
+Why RWP reads set again is unexplained. The architecture defines it as
+read-only status for writes in progress to this redistributor's
+GICR_ICENABLER0, its DPG bits and a clear of EnableLPIs (IHI 0069G
+12.11.2, page 12-622); none of those happened between the two reads, and
+the secondaries write only their own frames. The masking does not depend on
+an explanation: RWP and UWP (bit 31) are volatile status bits that no
+restoration controls, and Linux and TF-A poll them but never compare
+GICR_CTLR.
 
 All three comparisons of GICR_CTLR now ignore bits 31 and 3: CPU0's
 baseline check and restoration comparison in
@@ -190,9 +190,13 @@ and quarantined the instance, and nothing more can be learned from the
 board. The runner now raises `DeadlineRetained` for that outcome and passes
 a no-op hold, so it journals, quarantines and exits nonzero, releasing the
 lock; the queue claim stays held because the run failed, and the quarantine
-refuses the instance until a power removal. Every other post-launch
+refuses the instance until a power removal. The hold is skipped only after
+the quarantine has been recorded: if the journal save or the quarantine
+write raises, the runner holds the lock as before. Every other post-launch
 failure keeps the indefinite hold. The host case
-`deadline-return-retained` now requires quarantine without the hold.
+`deadline-return-retained` requires quarantine without the hold, and
+`deadline-quarantine-failure-held` requires the hold when the quarantine
+write fails.
 
 ## Every failure parks CPU0, so a non-return carries no information
 

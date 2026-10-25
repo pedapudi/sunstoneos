@@ -97,6 +97,14 @@ def main():
             assert shared.run_case(a, case, fixture, deadline_transform(stalled, damage=True), final=check_deadline_return)
             record = json.loads((a.output/case/'runtime/session.json').read_text())
             assert record['deadline_return']['inconsistent'] == 'Deadline record is inconsistent.'
+        elif case == 'deadline-quarantine-failure-held':
+            # A quarantine record that cannot be written leaves the outcome
+            # unsettled: the runner keeps holding the lock, as before the change.
+            def held_after_failed_quarantine(state, record, dram, originals):
+                assert state['quarantined'] and state['retained'] and not record['complete']
+                assert record['dram_restored'] is False and record['deadline_return']['reason'] in host.REASONS
+            assert shared.run_case(a, case, fixture, deadline_transform(stalled),
+                                   final=held_after_failed_quarantine, quarantine_fails=True)
         elif case == 'deadline-record-checked':
             record = host.deadline_record(stalled, stalled[32:48])
             assert record and record['reason'] == 2 and not record['inconsistent']

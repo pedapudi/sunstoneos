@@ -28,7 +28,7 @@ class Retained(Exception):
     pass
 
 
-def run_case(args, case, software, report_transform=None, final=None):
+def run_case(args, case, software, report_transform=None, final=None, quarantine_fails=False):
     directory = args.output/case
     directory.mkdir()
     survey = json.loads(args.survey.read_text())
@@ -112,6 +112,8 @@ def run_case(args, case, software, report_transform=None, final=None):
 
     def quarantine(*unused):
         state['quarantined'] = True
+        if quarantine_fails:
+            raise OSError('Modeled quarantine record failure')
 
     def monotonic():
         state['clock'] += 2

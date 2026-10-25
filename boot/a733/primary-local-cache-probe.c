@@ -5,9 +5,11 @@
 
 #define RDIST UINT32_C(0x03460000)
 #define SGI (RDIST + UINT32_C(0x10000))
-/* GICR_CTLR.UWP (bit 31) and RWP (bit 3) are read-only status that other
- * agents' writes can set at any time (IHI 0069G 12.11.2); the board has shown
- * RWP set after a completed wait. Comparisons and baselines ignore them. */
+/* GICR_CTLR.UWP (bit 31) and RWP (bit 3) are read-only status (IHI 0069G
+ * 12.11.2). The board has read RWP set after a completed wait with no write
+ * by this core in between, for a reason not yet explained. Linux and TF-A
+ * poll these bits and never compare GICR_CTLR, so comparisons and baselines
+ * ignore them. */
 #define CTLR_STATUS UINT32_C(0x80000008)
 struct primary_local_record {
     uint64_t state, epoch, deadline, phase, error, writes;

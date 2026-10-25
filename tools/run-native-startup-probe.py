@@ -520,11 +520,16 @@ def run(a):
         except BaseException as error:
             record.update(failure=str(error),transport_failed=failed)
             if dirty or failed:
-                # A deadline return is a known outcome: quarantine and exit with the claim
-                # held. Every other post-launch failure holds the lock until recovery.
-                known=isinstance(error,getattr(primary,'DeadlineRetained',()))
-                try:base.stop_after_failure(record,journal,lambda:access.quarantine_instance(node,'Native startup diagnostic stopped; no retry; coordinator recovery required.',identity),error,
-                                            **({'hold':lambda:None} if known else {}))
+                # A deadline return is a known outcome: once the journal is saved and the
+                # quarantine is recorded, exit with the claim held. If either raises, or
+                # for any other post-launch failure, hold the lock until recovery.
+                known=isinstance(error,getattr(primary,'DeadlineRetained',()));quarantined=[]
+                def quarantine():
+                    access.quarantine_instance(node,'Native startup diagnostic stopped; no retry; coordinator recovery required.',identity)
+                    quarantined.append(True)
+                def hold():
+                    if not (known and quarantined):base.hold_ownership()
+                try:base.stop_after_failure(record,journal,quarantine,error,hold=hold)
                 finally:
                     if dirty and not record['launch_attempted']:base.hold_ownership()
             else:journal()
