@@ -143,6 +143,9 @@ class Machine:
         self.samples={name:[] for name in COUNTED}
         self.entries={self.symbols[n]:n for n in COUNTED if n in self.symbols}
         self.trace=[];self.sticky_sif=None;self.sif_cleared=set();self.el3_enabled=set();self.el1_enabled=set();self.first_task=set()
+        # Zeroed active-priority copies per core, and those zeroed when the
+        # core first enabled Nonsecure Group 1 at EL1.
+        self.active_priorities=[set() for _ in range(8)];self.group1_priorities={}
         self.mmio={0x02050014:0x41,0x02050010:1,0x02050018:2,0x07090108:0x5aa5a55a,
             0x070501c0:0xfa50392f,0x070501c4:0x20,0x070501d4:0,0x03000024:0,
             0x03400000:0,0x03400004:1}
@@ -182,6 +185,15 @@ class Machine:
         contract=contract[:16]+struct.pack('<Q',len(contract))+contract[24:]
         ctypes.memmove(self.ram_pointer+0x1004000,contract,len(contract))
     def read(self,a,n):return ctypes.string_at(self.ram_pointer+a-0x41000000,n)
+    def active_priority(self,c,name,value):
+        """Record a zeroed ICC_AP0R0_EL1 or ICC_AP1R0_EL1. At EL3 SCR_EL3.NS
+        selects the ICC_AP1R0_EL1 copy; below EL3 the Nonsecure copy is
+        accessed. With SCR_EL3.FIQ set, Group 0 registers trap below EL3."""
+        m=self.regs[c];assert value==0,(c,name,value)
+        if name=='icc_ap0r0_el1':
+            assert m['currentel']==12 or not m['scr_el3']&4,('Group 0 access traps to EL3',c)
+            self.active_priorities[c].add('ap0r0')
+        else:self.active_priorities[c].add('ap1r0_ns' if m['currentel']<12 or m['scr_el3']&1 else 'ap1r0_s')
     def q(self,a):return struct.unpack('<Q',self.read(a,8))[0]
     def reg(self,c,s):
         if s in ('xzr','wzr'):return 0
@@ -296,6 +308,7 @@ class Machine:
                 self.save_sp(c);m['spsel']=v;u.reg_write(UC_ARM64_REG_SP,m[self.spname(c)])
             elif name=='s3_0_c15_c3_3':
                 assert c==0 and not any(self.active[1:]);self.clusteractlr=v
+            elif name in ('icc_ap0r0_el1','icc_ap1r0_el1'):self.active_priority(c,name,v)
             else:
                 m[name]=v|0x200 if name=='scr_el3' and c==self.sticky_sif else v
             if name=='scr_el3' and not m[name]&0x200:self.sif_cleared.add(c)
@@ -307,6 +320,8 @@ class Machine:
             if name=='sctlr_el1' and v&0x1005==0x1005:
                 assert len(self.el3_enabled)==8
                 self.el1_enabled.add(c);self.trace.append(('EL1 cached',c,self.clock))
+            if name=='icc_igrpen1_el1' and v&1 and m['currentel']<12:
+                self.group1_priorities.setdefault(c,sorted(self.active_priorities[c]))
             if name=='icc_sgi1r_el1':
                 target=(v>>16)&255;assert target<8 and v&0xffff==1
                 self.pending[target].add(0)
@@ -442,6 +457,7 @@ class Machine:
     def summary(self):
         return {'report':struct.unpack('<9Q',self.read(0x42000000,72)),
             'steps':self.steps,'clock':self.clock,'trace':self.trace,'sif_cleared':sorted(self.sif_cleared),
+            'group1_active_priorities':{c:v for c,v in sorted(self.group1_priorities.items())},
             'EL3':sorted(self.el3_enabled),'EL1':sorted(self.el1_enabled),'task_cores':sorted(self.first_task),
             'pcs':[hex(u.reg_read(UC_ARM64_REG_PC)) for u in self.cpus],
             'registers':self.regs,'pending':[list(p) for p in self.pending],'active_irq':self.irq_active,
@@ -488,6 +504,9 @@ def execute(image,e,stop_clock=None,resume=None,count=False,late_ticks=0):
     assert success['report'][4]==0,success
     assert success['EL3']==success['EL1']==success['task_cores']==list(range(8)),success
     assert success['report'][7]==255
+    # Every core zeroed Group 0 and both Group 1 active-priority copies
+    # before it enabled Group 1 (Linux gic_cpu_sys_reg_init).
+    assert success['group1_active_priorities']=={c:['ap0r0','ap1r0_ns','ap1r0_s'] for c in range(8)},success['group1_active_priorities']
     for c,r in enumerate(success['core_records']):
         assert r[0]==32 and r[1]>0 and r[2]>0 and r[3]==0,(c,r)
     failed=Machine(image,missing=7).run()

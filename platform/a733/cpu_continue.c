@@ -6,7 +6,9 @@ enum { DISTRIBUTOR, SCAN, CONTROL, MODE, WAKE_ENABLE, WAKE_CHECK,
     CONFIG_WRITE, PRIORITY, PRIORITY_WRITE, ENABLE, ENABLE_WAIT,
     VERIFY_GROUP, VERIFY_MODIFIER, VERIFY_ENABLE, VERIFY_PRIORITY,
     POWER_GROUP_WAIT, POWER_REQUEST, POWER_VERIFY };
-enum { ERROR_IO=1, ERROR_TIME, ERROR_INITIAL, ERROR_VERIFY };
+/* ERROR_DISTRIBUTOR_BUSY: the deadline passed in phase 0 while GICD_CTLR.RWP
+ * last read set; the value is kept in distributor. */
+enum { ERROR_IO=1, ERROR_TIME, ERROR_INITIAL, ERROR_VERIFY, ERROR_DISTRIBUTOR_BUSY };
 static int separate(const void *a,size_t an,const void *b,size_t bn)
 {
     uintptr_t x=(uintptr_t)a,y=(uintptr_t)b;
@@ -47,7 +49,8 @@ static int time_ok(struct a733_cpu_continue *s)
 {
     uint64_t now;
     if(s->config.ops.now_us(s->config.context,&now)!=1 || now<s->last_now || now>=s->config.deadline_us) {
-        fail(s,ERROR_TIME);return 0;
+        int busy=s->phase==DISTRIBUTOR && (s->distributor&(1u<<31)) && now>=s->last_now;
+        fail(s,busy?ERROR_DISTRIBUTOR_BUSY:ERROR_TIME);return 0;
     }
     s->last_now=now;return 1;
 }
@@ -63,8 +66,15 @@ unsigned a733_cpu_continue_poll(struct a733_cpu_continue *s)
     uintptr_t r=s->redistributor,g=r+0x10000,control=0x07050200+s->core*4;
     uint32_t v=0;int advance=1;
     switch(s->phase) {
+    /* Wait for GICD_CTLR.RWP (bit 31) to clear, as Linux gic_do_wait_for_rwp
+     * and TF-A gicd_wait_for_pending_write do; another core's distributor
+     * write may be in progress. A timeout is ERROR_DISTRIBUTOR_BUSY. */
     case DISTRIBUTOR:
-        if(read32(s,0x03400000,&v) && ((v&0x73)!=0x33 || (v&(1u<<31))))fail(s,ERROR_INITIAL);
+        if(read32(s,0x03400000,&v)) {
+            s->distributor=v;
+            if((v&0x73)!=0x33)fail(s,ERROR_INITIAL);
+            advance=!(v&(1u<<31));
+        }
         break;
     case SCAN: {
         uint64_t typer=0;

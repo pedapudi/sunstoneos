@@ -42,12 +42,14 @@ int main(void)
     REFUSE(c.fel_flag=0x5aa5a55a);
     REFUSE(c.redirect_flag=0xfa50392f;c.redirect_entry=0x20);
     REFUSE(c.magic=UINT64_C(0x4153373343414331));
+    /* Nor can the uncached image's result record (platform/a733-smp/boot.h). */
+    REFUSE(c.magic=UINT64_C(0x4153373352455331));
     printf("PASS resident contract: nominal admitted, %u refusals\n",refused);
 #else
     /* A resident contract cannot admit a FEL-launched image. */
     REFUSE(c.diagnostic_deadline=A733_SMP_NO_DEADLINE);
     REFUSE(c.fel_flag=0);
-    REFUSE(c.magic=UINT64_C(0x4153373352455331));
+    REFUSE(c.magic=UINT64_C(0x4153373352434e31));
     printf("PASS FEL contract: nominal admitted, %u refusals\n",refused);
 #endif
     return 0;

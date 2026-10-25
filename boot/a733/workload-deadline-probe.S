@@ -28,10 +28,8 @@
  * the record and memory only, restore nothing and request a power removal.
  * No stack is used. EL3 record stores are Device stores. */
 #include "secondary-identity-probe.h"
+#include "secondary-local-probe.h"
 
-#define RECORD 0x4201b200
-#define RECORD_MAGIC 0x413733444c4e5231
-#define DEADLINE_TICKS 12000000 // 0.5 s at 24 MHz after the startup deadline.
 #define SMC_COMPLETE 0x5e000733
 #define SMC_CLEANED 0x5e000736
 
@@ -131,9 +129,9 @@ identity_deadline_capture:
     tlbi alle3
     dsb sy
     isb
-    ldr x15, =RECORD
+    ldr x15, =DEADLINE_RECORD
     ldr x14, [x15]
-    ldr x13, =RECORD_MAGIC
+    ldr x13, =DEADLINE_RECORD_MAGIC
     cmp x14, x13
     // A second entry (a fault in the cleaning helper) returns at once.
     b.eq identity_deadline_return
@@ -222,7 +220,7 @@ identity_deadline_el1:
 
 identity_deadline_finish:
     // EL3 MMU is off since the capture; x1 holds the cleaned line count.
-    ldr x15, =RECORD
+    ldr x15, =DEADLINE_RECORD
     mrs x2, cntpct_el0
     stp x1, x2, [x15, #200]
     mov x2, #3
@@ -230,7 +228,7 @@ identity_deadline_finish:
     // Fall through.
 
 identity_deadline_return:
-    // x15 holds RECORD on both paths here. Request the warm reset with the
+    // x15 holds DEADLINE_RECORD on both paths here. Request the warm reset with the
     // SCR_EL3 that native_el3_cache_probe saved (CPU0 EL3 record + 64), as
     // the exercised return does; zero means it never left the ROM value.
     mov x3, #0xa040

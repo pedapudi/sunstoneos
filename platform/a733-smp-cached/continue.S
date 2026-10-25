@@ -84,6 +84,16 @@ a733_cached_enter_el1:
     isb
     mrs x3, icc_pmr_el1
     tbz x3, #7, a733_cached_el3_fault
+    // Zero the active priorities before any group is enabled, Group 0 first
+    // (Linux gic_cpu_sys_reg_init). SCR_EL3.NS selects the ICC_AP1R0_EL1
+    // copy: the Secure copy here, the Nonsecure copy at EL1. The CPU
+    // interface has five priority bits, so only the APxR0 registers exist.
+    mov x2, #0x534
+    msr scr_el3, x2
+    isb
+    msr icc_ap0r0_el1, xzr
+    isb
+    msr icc_ap1r0_el1, xzr
     // Architectural RES1 bits4/5 accompany NS, FIQ routing, HCE and RW.
     mov x2, #0x535
     msr scr_el3, x2
@@ -112,6 +122,14 @@ a733_cached_enter_el1:
     mov x2, #3
     msr cnthctl_el2, x2
     msr cntvoff_el2, xzr
+    // EL2 stays unused: EL1 reads of MIDR and MPIDR return VPIDR_EL2 and
+    // VMPIDR_EL2, and the EL2 physical timer (PPI 26) is disabled; all three
+    // are UNKNOWN after reset (TF-A init_nonsecure_el2_unused).
+    mrs x2, midr_el1
+    msr vpidr_el2, x2
+    mrs x2, mpidr_el1
+    msr vmpidr_el2, x2
+    msr cnthp_ctl_el2, xzr
     mov x2, #0x0830
     movk x2, #0x30c5, lsl #16
     msr sctlr_el2, x2
@@ -173,6 +191,8 @@ a733_cached_enter_el1:
     msr icc_bpr1_el1, xzr
     mov x2, #255
     msr icc_pmr_el1, x2
+    msr icc_ap1r0_el1, xzr
+    isb
     mov x2, #1
     msr icc_igrpen1_el1, x2
     isb

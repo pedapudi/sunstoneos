@@ -41,7 +41,9 @@ finite period's queue end wakes the worker at once instead of at its next
 one-millisecond tick. The image's interrupt table (`apps/i2s/irq.c`) has this
 one entry, routed to core 0, where the DMA worker runs, at GIC priority `0xd8`.
 The EL3 boot patch programs the route while both distributor groups are
-disabled and stops with status 3, detail `0x310`, if routing is refused. The
+disabled and stops with status 3, detail `0x310`, if routing is refused, or
+detail `0x311` if the distributor's write-pending bit stays set until the
+startup deadline. The
 handler, `drivers/audio/dma_service_i2s_irq.c`, masks the SPI and notifies the
 worker; the worker acknowledges the DMA events by polling and only then
 re-enables the SPI. The worker's fallback wait is one tick, so a late, missing

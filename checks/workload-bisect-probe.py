@@ -12,14 +12,16 @@ cleaning SMC. Cases:
 - stalled-core: resumes from the hash-checked point where all eight workers
   finished their rounds and no core has stopped its writers, then stops
   executing core 5, which therefore never publishes its completion record. The others wait for
-  it until the startup deadline and park. CPU0's next tick then
+  it until the startup deadline and park, at EL0 in the arrival barrier or,
+  if core 5 had already arrived, at EL1 in identity_park. CPU0's next tick then
   takes the production IRQ-handler deadline exit, an SMC that the deadline
   unit captures: CPU0 records its state, cleans the owned writable interval
   from EL1 and returns to the ROM. Secondaries that take an interrupt after
   the deadline make the same exit and park in EL3, as on the board.
 - stalled-no-tick: as stalled-core, and CPU0's tick timer also stops, so
   CPU0 takes no interrupt. The EL3 deadline interrupt then takes CPU0 from
-  its EL0 wait to the same capture, cleaning and return.
+  its wait, at EL0 or in identity_park at EL1, to the same capture, cleaning
+  and return.
 - restore-rwp: resumes from the same checkpoint with every core running.
   After CPU0's EL3 restoration rewrites its SGI/PPI priorities, the next
   read of its GICR_CTLR returns RWP set, as port 3-3 recorded on
@@ -40,15 +42,23 @@ cleaning SMC. Cases:
   the cleanup waits for RWP and the run returns normally; uncorrected, its
   final comparison fails (cleanup error 6), core 3 parks, CPU0's survey
   times out waiting for it and CPU0 returns with reason 3.
+- restore-pwrr and restore-pwrr-secondary (with -unfixed variants): the
+  first GICR_PWRR read after the restoring priority write, on CPU0 or on
+  core 3, returns both group power bits (RDGPO, RDGPD) flipped, as when the
+  shared redistributor group changes power state. The corrected comparisons
+  ignore those status bits and the run returns normally; an overlay that
+  compares the whole word fails as in the matching RWP cases.
 
-Timing, cache visibility and interrupt delivery remain modeled. After the
-stall the modeled clock advances 20,000 ticks per scheduling quantum instead
-of 1,000, so that the 0.5 s deadline is reached in a bounded run time.
+Timing, cache visibility and interrupt delivery remain modeled. The modeled
+clock advances as in the workload model (its COUNTER_STEP, with the reason
+there); after the stall it advances 20,000 ticks per scheduling quantum, so
+that the 0.5 s deadline is reached in a bounded run time.
 """
 import argparse
 import importlib.util
 import json
 import pickle
+import re
 import struct
 from pathlib import Path
 from unicorn.arm64_const import UC_ARM64_REG_PC
@@ -60,16 +70,23 @@ first = workload.first
 base = workload.base
 digest = workload.digest
 MASK = (1 << 64)-1
-RECORD = 0x4201b200
-RECORD_MAGIC = 0x413733444c4e5231
-DEADLINE_TICKS = 12000000
+# The overlay's own definitions (boot/a733/secondary-local-probe.h).
+PROBE = {name: int(value, 0) for name, value in re.findall(
+    r'^#define (\w+) (0x[0-9a-fA-F]+|\d+)\b', (ROOT/'boot/a733/secondary-local-probe.h').read_text(), re.M)}
+RECORD = PROBE['DEADLINE_RECORD']
+RECORD_MAGIC = PROBE['DEADLINE_RECORD_MAGIC']
+DEADLINE_TICKS = PROBE['DEADLINE_TICKS']
 STALLED_CORE = 5
-# Fault: (core whose GICR_CTLR reads RWP set, index of that read after the
-# core's priority write: 0 the first read, 1 the second).
-RWP_TARGET = {'restore-rwp': (0, 0), 'restore-rwp-unfixed': (0, 0),
-              'restore-rwp-secondary': (3, 0), 'restore-rwp-secondary-unfixed': (3, 0),
-              'restore-rwp-late': (0, 1), 'restore-rwp-late-unfixed': (0, 1),
-              'restore-rwp-late-secondary': (3, 1), 'restore-rwp-late-secondary-unfixed': (3, 1)}
+# Fault: (core, redistributor register, bits changed, index of the read of
+# that register after the core's priority write: 0 the first, 1 the second).
+# GICR_CTLR reads RWP set; GICR_PWRR reads RDGPO and RDGPD inverted.
+RWP, PWRR = (0, 8), (0x24, PROBE['GICR_PWRR_STATUS'])
+RWP_TARGET = {'restore-rwp': (0, *RWP, 0), 'restore-rwp-unfixed': (0, *RWP, 0),
+              'restore-rwp-secondary': (3, *RWP, 0), 'restore-rwp-secondary-unfixed': (3, *RWP, 0),
+              'restore-rwp-late': (0, *RWP, 1), 'restore-rwp-late-unfixed': (0, *RWP, 1),
+              'restore-rwp-late-secondary': (3, *RWP, 1), 'restore-rwp-late-secondary-unfixed': (3, *RWP, 1),
+              'restore-pwrr': (0, *PWRR, 0), 'restore-pwrr-unfixed': (0, *PWRR, 0),
+              'restore-pwrr-secondary': (3, *PWRR, 0), 'restore-pwrr-secondary-unfixed': (3, *PWRR, 0)}
 COMPLETIONS = 0x41243000  # CPU0 EL1 stack page: one 64-byte completion record per core.
 SOURCES = (*first.barrier.SOURCES, 'checks/all-core-first-task-probe.py',
            'checks/all-core-task-workload-probe.py', 'checks/workload-bisect-probe.py')
@@ -87,7 +104,7 @@ class Bisect(workload.Workload):
         self.armed = []
         self.disarmed_at_completion = False
         self.helper_lines = 0
-        self.clock_step = 1000
+        self.clock_step = workload.COUNTER_STEP
         self.rwp_injected = False
         self.rwp_reads = self.rwp_seen = 0
 
@@ -105,15 +122,17 @@ class Bisect(workload.Workload):
                 not self.mmio[g+0x80] & (1 << 29) and self.mmio[g+0x100] & (1 << 29))
 
     def memory(self, u, access, address, size, value, core):
-        target, skip = RWP_TARGET.get(self.fault, (None, 0))
+        target, register, bits, skip = RWP_TARGET.get(self.fault, (None, 0, 0, 0))
         if core == target and self.regs[core]['currentel'] == 12:
+            watched = self.rdist[core]+register
             if access == workload.UC_MEM_WRITE and address == self.rdist[core]+0x10400 and not self.rwp_injected:
                 self.rwp_injected = True; self.rwp_reads = 1; self.rwp_skip = skip
-            elif access != workload.UC_MEM_WRITE and address == self.rdist[core] and self.rwp_reads and self.rwp_skip:
+            elif access != workload.UC_MEM_WRITE and address == watched and self.rwp_reads and self.rwp_skip:
                 self.rwp_skip -= 1
-            elif access != workload.UC_MEM_WRITE and address == self.rdist[core] and self.rwp_reads:
+            elif access != workload.UC_MEM_WRITE and address == watched and self.rwp_reads:
                 self.rwp_reads -= 1; self.rwp_seen += 1
-                u.mem_write(address, (self.mmio[address] | 8).to_bytes(4, 'little'))
+                changed = self.mmio[address] ^ bits if register else self.mmio[address] | bits
+                u.mem_write(address, changed.to_bytes(4, 'little'))
                 return
         # The capture reads every redistributor's pending, active and enable
         # words and every core's power status; nothing else changes there.
@@ -146,6 +165,15 @@ class Bisect(workload.Workload):
         if address not in self.decoded:
             self.decoded[address] = next(self.decoder.disasm(bytes(u.mem_read(address, 4)), address))
         ins = self.decoded[address]; op, args = ins.mnemonic, ins.op_str.split(', ')
+        if address == self.survey_hooks['identity_park'] and self.fault in ('stalled-core', 'stalled-no-tick'):
+            # identity_park waits in WFI with interrupts masked. A secondary
+            # stays there. CPU0 waits too: SCR_EL3.FIQ routes the deadline
+            # interrupt to EL3, which takes it whatever the EL1 masks (the
+            # check above), from this wait as from an EL0 one.
+            assert r['currentel'] == 4 and r['daif'] & 0x40
+            if core:
+                self.target_parked.add(core); self.active[core] = False
+            u.emu_stop(); return
         if self.in_hook('identity_deadline_arm', address, 0x58):
             assert r['currentel'] == 12
             if op == 'msr' and args[0] in ('icc_igrpen0_el1', 'cntps_cval_el1', 'cntps_ctl_el1'):
@@ -218,6 +246,9 @@ class Bisect(workload.Workload):
                 u.emu_start(u.reg_read(UC_ARM64_REG_PC), 0, count=(211, 347, 509, 673, 887)[(quantum+core) % 5])
                 if self.returned or self.retained:
                     return
+            if self.clock_step == workload.COUNTER_STEP:
+                # Until a stall case advances the clock in large steps.
+                self.check_tick_lag()
             self.clock += self.clock_step
         raise AssertionError(('Return-deadline instruction budget', self.clock,
                               [hex(u.reg_read(UC_ARM64_REG_PC)) for u in self.cpus]))
@@ -274,20 +305,30 @@ def main():
         assert machine.returned and not machine.retained
         if a.case in RWP_TARGET:
             assert machine.rwp_injected and machine.rwp_seen == 1
-        if a.case in ('restore-rwp-secondary-unfixed', 'restore-rwp-late-secondary-unfixed'):
+        if a.case in ('restore-rwp-secondary-unfixed', 'restore-rwp-late-secondary-unfixed',
+                      'restore-pwrr-secondary-unfixed'):
             local = struct.unpack_from('<37Q', raw, 0xa00+3*512)  # Words 17-26 before, 27-36 after.
             assert record[:4] == (RECORD_MAGIC, 1, 3, 1) and record[62] == 1, record[:4]
-            assert local[11] == 6 and local[27] == 8 and local[17] == 0, local
-            assert 3 in machine.target_parked and not machine.stopped
+            if 'pwrr' in a.case:
+                assert local[11] == 6 and local[36] ^ local[26] == PWRR[1] and local[17:26] == local[27:36], local
+            else:
+                assert local[11] == 6 and local[27] == 8 and local[17] == 0, local
+            # CPU0 may have powered off earlier secondaries before core 3 parked.
+            assert 3 in machine.target_parked and 3 not in machine.stopped
             results = [struct.unpack_from('<5Q', machine.read(0x41201080+c*128, 40)) for c in range(8)]
-        elif a.case in ('restore-rwp-unfixed', 'restore-rwp-late-unfixed'):
-            primary_record = struct.unpack_from('<34Q', raw, 0xa00)
+        elif a.case in ('restore-rwp-unfixed', 'restore-rwp-late-unfixed', 'restore-pwrr-unfixed'):
+            primary_record = struct.unpack_from('<34Q', raw, 0xa00)  # Words 10-19 before, 20-29 after.
             assert record[:4] == (RECORD_MAGIC, 1, 3, 1) and record[62] == 1, record[:4]
-            assert primary_record[30] == 3 and primary_record[20] == 8, primary_record
+            if 'pwrr' in a.case:
+                assert primary_record[30] == 3 and primary_record[29] ^ primary_record[19] == PWRR[1], primary_record
+                assert primary_record[10:19] == primary_record[20:29], primary_record
+            else:
+                assert primary_record[30] == 3 and primary_record[20] == 8, primary_record
             assert machine.started == list(range(1, 8)) and not machine.stopped
             results = [struct.unpack_from('<5Q', machine.read(0x41201080+c*128, 40)) for c in range(8)]
         elif a.case in ('success', 'restore-rwp', 'restore-rwp-secondary',
-                        'restore-rwp-late', 'restore-rwp-late-secondary'):
+                        'restore-rwp-late', 'restore-rwp-late-secondary',
+                        'restore-pwrr', 'restore-pwrr-secondary'):
             assert machine.armed == [machine.deadline+DEADLINE_TICKS] and machine.disarmed_at_completion
             # The completed survey copies CPU0's EL1 record page over this area.
             assert not machine.fiq_taken and record[0] != RECORD_MAGIC
@@ -330,7 +371,7 @@ def main():
         'report_sha256': digest(report), 'sources': {name: digest(ROOT/name) for name in SOURCES},
         'workload_checkpoint': str(a.resume_workload) if a.resume_workload else None,
         'deadline': machine.deadline+DEADLINE_TICKS, 'fiq_taken': machine.fiq_taken,
-        'stalled_core': getattr(machine, 'stalled', None), 'rwp_reads_injected': machine.rwp_seen, 'parked_secondaries': sorted(getattr(machine, 'target_parked', ())),
+        'stalled_core': getattr(machine, 'stalled', None), 'injected_reads': machine.rwp_seen, 'parked_secondaries': sorted(getattr(machine, 'target_parked', ())),
         'workload_results': results, 'off': machine.stopped,
         'clean_complete': sorted(machine.clean_complete), 'helper_lines': machine.helper_lines,
         'limits': __doc__}, indent=2)+'\n')

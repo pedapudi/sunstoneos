@@ -17,9 +17,6 @@ CASES = ('complete-return', 'transport-failure-retained', 'invalid-report-restor
          'wrong-memory-result-refused')
 
 
-# GICR_CTLR.UWP (bit 31) and RWP (bit 3): read-only status, ignored in comparisons.
-CTLR_STATUS = 0x80000008
-
 
 def expected_memory(epoch):
     page = bytearray(4096)
@@ -36,12 +33,11 @@ def decode(raw, nonce, smc_return, first_task=False, task_workload=False):
     clean_lines = 9280 if first_task else 192
     binding = (result['epoch'], result['startup_deadline'])
     local = struct.unpack_from('<64Q', raw, 0xa00)
-    # GICR_CTLR.UWP and RWP (word 10 and word 20) are read-only status.
-    stable = lambda words: (words[0] & ~CTLR_STATUS, *words[1:])
+    stable = cache.local.stable  # Ignores the snapshot words' read-only status bits.
     require(local[:3] == (3, *binding) and local[3] == 26 and not local[4] and local[5] > 0 and
             stable(local[10:20]) == stable(local[20:30]) and not local[30] and not any(local[34:]),
             'Primary GIC initialization or restoration incomplete.')
-    require(not any(stable(local[10:15])) and not local[19] & 1 and
+    require(not local[10] & ~cache.local.STATUS[0] and not any(local[11:15]) and not local[19] & 1 and
             ((local[19] >> 2) & 1) == ((local[19] >> 3) & 1) and
             local[7:10] == local[31:34], 'Primary GIC baseline or restored interface differs.')
     el3 = struct.unpack_from('<20Q', raw, 0x2000)

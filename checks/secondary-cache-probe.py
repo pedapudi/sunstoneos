@@ -47,6 +47,8 @@ class Cached(local.Local):
             self.put(core,args[0],7);u.reg_write(UC_ARM64_REG_PC,address+4);return
         if core and op=='msr':
             name,src=args;value=self.reg(core,src)
+            if name in ('icc_ap0r0_el1','icc_ap1r0_el1'):
+                self.active_priority(core,name,value);u.reg_write(UC_ARM64_REG_PC,address+4);return
             if name in ('sctlr_el3','sctlr_el1','tcr_el3') or name.startswith('icc_'):
                 if name=='sctlr_el3':
                     if value&0x1005==0x1005:
@@ -60,6 +62,8 @@ class Cached(local.Local):
                 elif name=='sctlr_el1':
                     if value&0x1005==0x1005:
                         assert core in self.el3_enabled and m['ttbr0_el1']==self.symbols['a733_cached_el1_l1']
+                        # The overlay zeroed every active-priority copy before EL1 entry.
+                        assert self.active_priorities[core]=={'ap0r0','ap1r0_s','ap1r0_ns'},(core,self.active_priorities[core])
                         self.el1_seen.add(core);self.el1_enabled.add(core)
                     else:self.el1_enabled.discard(core)
                 elif name.startswith('icc_'):

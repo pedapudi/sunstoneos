@@ -144,10 +144,14 @@ class AllCore(cached.Cached):
             if name == 'sctlr_el1':
                 if value & 0x1005 == 0x1005:
                     assert 0 in self.el3_enabled and m['ttbr0_el1'] == self.symbols['a733_cached_el1_l1']
+                    # The overlay zeroed every active-priority copy before EL1 entry.
+                    assert self.active_priorities[0] == {'ap0r0', 'ap1r0_s', 'ap1r0_ns'}, self.active_priorities[0]
                     self.el1_seen.add(0); self.el1_enabled.add(0)
                 else: self.el1_enabled.discard(0)
                 m[name] = value; u.reg_write(UC_ARM64_REG_PC, address+4); return
             if name == 'tcr_el3' or name.startswith('icc_'):
+                if name in ('icc_ap0r0_el1', 'icc_ap1r0_el1'):
+                    self.active_priority(0, name, value); u.reg_write(UC_ARM64_REG_PC, address+4); return
                 if name.startswith('icc_'):
                     assert name in ('icc_sre_el3', 'icc_ctlr_el3', 'icc_igrpen0_el1', 'icc_igrpen1_el3', 'icc_sre_el2', 'icc_sre_el1', 'icc_pmr_el1')
                     if name in ('icc_igrpen0_el1', 'icc_igrpen1_el3', 'icc_pmr_el1'): assert value == 0

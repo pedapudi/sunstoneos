@@ -7,10 +7,16 @@
 
 static uint8_t gicd[0x10000] __attribute__((aligned(8)));
 static uint64_t now, deadline_step;
-static unsigned writes_after_refusal;
+static unsigned writes_after_refusal, rwp_reads;
 #define A733_IRQ_TABLE_MMIO_DEFINED 1
 #define A733_IRQ_TABLE_CONST
-static uint32_t gicd_read(uint64_t o){uint32_t v;memcpy(&v,gicd+o,4);return v;}
+/* GICD_CTLR.RWP reads set for rwp_reads reads, then clears. */
+static uint32_t gicd_read(uint64_t o)
+{
+    uint32_t v;memcpy(&v,gicd+o,4);
+    if(!o && rwp_reads && !--rwp_reads)v&=~(1u<<31),memcpy(gicd,&v,4);
+    return v;
+}
 static void gicd_write(uint64_t o,uint32_t v){memcpy(gicd+o,&v,4);++writes_after_refusal;}
 static uint64_t gicd_read64(uint64_t o){uint64_t v;memcpy(&v,gicd+o,8);return v;}
 static void gicd_write64(uint64_t o,uint64_t v){memcpy(gicd+o,&v,8);++writes_after_refusal;}
@@ -31,7 +37,7 @@ static void reset_gic(void)
     gicd_write(0,0x30);          /* affinity routing for both states, groups off */
     gicd_write(4,10);            /* ITLinesNumber 10: 352 interrupt lines */
     for(unsigned i=0;i<11;++i)gicd_write(0x80+4*i,0);
-    now=0;deadline_step=1;writes_after_refusal=0;
+    now=0;deadline_step=1;writes_after_refusal=0;rwp_reads=0;
 }
 static void table(unsigned n)
 {
@@ -49,16 +55,20 @@ int main(void)
     assert(!a733_irq_table_dispatch(90,0));
     /* Routing writes group, level mode, priority and Aff1 core. */
     reset_gic();
-    assert(a733_irq_table_route(1000,counter));
+    assert(a733_irq_table_route(1000,counter)==A733_IRQ_TABLE_ROUTED);
     assert(gicd_read(0x80+4*5)&(1u<<27));
     assert(((gicd_read(0x400+4*(187/4))>>24)&0xff)==0xd8);
     assert(gicd_read64(0x6000+8*187)==0);
     assert(gicd_read64(0x6000+8*82)==UINT64_C(0x100));
     assert(gicd_read64(0x6000+8*105)==UINT64_C(0x600));
     assert(!(gicd_read(0xc00+4*(82/16))&(3u<<(2*(82%16)))));
+    /* A distributor write still in progress is waited for, not refused. */
+    reset_gic();gicd_write(0,0x30|(1u<<31));rwp_reads=5;
+    assert(a733_irq_table_route(1000,counter)==A733_IRQ_TABLE_ROUTED && !rwp_reads);
+    assert(gicd_read64(0x6000+8*105)==UINT64_C(0x600));
     /* Refusals: each changes one condition and writes no route register. */
     struct { const char *name; void (*prepare)(void); } cases[]={
-        {"enabled groups",0},{"pending write",0},{"enabled source",0},{"line beyond ITLines",0},
+        {"enabled groups",0},{"write pending until the deadline",0},{"enabled source",0},{"line beyond ITLines",0},
         {"expired deadline",0},{"duplicate intid",0},{"api priority",0},{"bad core",0},{"sgi",0},
     };
     for(unsigned k=0;k<sizeof(cases)/sizeof(cases[0]);++k) {
@@ -76,11 +86,11 @@ int main(void)
         case 8: a733_irq_routes[1].intid=1;break;
         }
         writes_after_refusal=0;
-        assert(!a733_irq_table_route(deadline,counter));
+        assert(a733_irq_table_route(deadline,counter)==(k==1?A733_IRQ_TABLE_RWP_TIMEOUT:A733_IRQ_TABLE_REFUSED));
         assert(writes_after_refusal==0);
         printf("refused: %s\n",cases[k].name);
     }
     table(0);assert(!a733_irq_table_valid());
-    puts("PASS irq table: validation, per-core dispatch, EL3 route programming and nine refusals");
+    puts("PASS irq table: validation, per-core dispatch, EL3 route programming after a pending distributor write, and nine refusals");
     return 0;
 }

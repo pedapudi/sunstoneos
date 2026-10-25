@@ -5,12 +5,6 @@
 
 #define RDIST UINT32_C(0x03460000)
 #define SGI (RDIST + UINT32_C(0x10000))
-/* GICR_CTLR.UWP (bit 31) and RWP (bit 3) are read-only status (IHI 0069G
- * 12.11.2). The board has read RWP set after a completed wait with no write
- * by this core in between, for a reason not yet explained. Linux and TF-A
- * poll these bits and never compare GICR_CTLR, so comparisons and baselines
- * ignore them. */
-#define CTLR_STATUS UINT32_C(0x80000008)
 struct primary_local_record {
     uint64_t state, epoch, deadline, phase, error, writes;
     uint64_t sre_before, group0, group1, pmr;
@@ -85,18 +79,12 @@ static int restore_local(void)
     const volatile struct secondary_local_state *b = &report->before;
     write_word(SGI + 0x80, b->group); write_word(SGI + 0xd00, b->modifier);
     write_word(SGI + 0xc04, b->configuration); write_word(SGI + 0x400, b->priority);
-    /* GICR_CTLR.RWP is read-only status, and the board has shown it still set
-     * here (port 3-3, 2026-10-25). Wait for it, as Linux gic_cpu_init does
-     * after configuring the SGI/PPI groups and priorities, before comparing. */
+    /* Wait for GICR_CTLR.RWP, as Linux gic_cpu_init does after configuring
+     * the SGI/PPI groups and priorities. The comparison ignores it. */
     if (!wait_rwp()) { report->cleanup_error = 4; return 0; }
     /* CPU0 was awake and remains awake. Do not apply secondary sleep/OFF cleanup. */
     snapshot(&report->after);
-    const volatile uint64_t *before = (const volatile uint64_t *)b;
-    const volatile uint64_t *after = (const volatile uint64_t *)&report->after;
-    for (unsigned i = 0; i < sizeof(*b) / 8; ++i)
-        if ((before[i] ^ after[i]) & (i ? UINT64_MAX : ~(uint64_t)CTLR_STATUS)) {
-            report->cleanup_error = 3; return 0;
-        }
+    if (!secondary_local_same(b, &report->after)) { report->cleanup_error = 3; return 0; }
     return 1;
 }
 int primary_local_cache_probe(uint64_t epoch, uint64_t deadline)
@@ -115,8 +103,9 @@ int primary_local_cache_probe(uint64_t epoch, uint64_t deadline)
         barrier(); report->state = 4; barrier(); return 2;
     }
     snapshot(&report->before);
-    if ((report->before.ctlr & ~CTLR_STATUS) || report->before.waker || report->before.enable ||
-        report->before.pending || report->before.active || report->before.pwrr != power) {
+    if ((report->before.ctlr & ~(uint64_t)GICR_CTLR_STATUS) || report->before.waker ||
+        report->before.enable || report->before.pending || report->before.active ||
+        ((report->before.pwrr ^ power) & ~(uint64_t)GICR_PWRR_STATUS)) {
         report->error = 0x1002; barrier(); report->state = 4; barrier(); return 2;
     }
     uint64_t sre, g0, g1, pmr;

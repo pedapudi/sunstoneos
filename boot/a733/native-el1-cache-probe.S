@@ -27,6 +27,29 @@ native_el1_cache_probe:
     stp x25, x26, [sp, #48]
     stp x27, x28, [sp, #64]
     stp x29, x30, [sp, #80]
+    // The frozen production entry also predates these steps of the corrected
+    // entry (platform/a733-smp-cached/continue.S): the EL2 identity registers,
+    // the disabled EL2 physical timer and zeroed active priorities. All three
+    // ICC_AP*R0_EL1 copies are zeroed here, before any group is enabled;
+    // SCR_EL3.NS selects the ICC_AP1R0_EL1 copy and is then restored.
+    mrs x2, midr_el1
+    msr vpidr_el2, x2
+    mrs x2, mpidr_el1
+    msr vmpidr_el2, x2
+    msr cnthp_ctl_el2, xzr
+    mrs x2, scr_el3
+    bic x3, x2, #1
+    msr scr_el3, x3
+    isb
+    msr icc_ap0r0_el1, xzr
+    isb
+    msr icc_ap1r0_el1, xzr
+    orr x3, x2, #1
+    msr scr_el3, x3
+    isb
+    msr icc_ap1r0_el1, xzr
+    msr scr_el3, x2
+    isb
 #ifdef SUNSTONE_SECONDARY_CACHE
     mrs x2, mpidr_el1
     ubfx x2, x2, #8, #3

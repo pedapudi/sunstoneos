@@ -230,7 +230,8 @@
    "docs/cpu-continue.md",
    "docs/cpu-pmu.md",
    "docs/designs/cpu-pmu.md",
-   "docs/designs/cpu-table-walks.md"
+   "docs/designs/cpu-table-walks.md",
+   "docs/designs/multicore-correctness-1025.md"
   ],
   "library": false,
   "pure_host": false,
@@ -820,6 +821,7 @@
    "docs/designs/cpu-power-states-measurements.md",
    "docs/designs/cpu-power-states.md",
    "docs/designs/cpu-table-walks.md",
+   "docs/designs/multicore-correctness-1025.md",
    "docs/designs/multicore-performance-1025.md",
    "docs/designs/smp-heterogeneous-measurements.md",
    "docs/designs/smp-heterogeneous.md",
@@ -1579,6 +1581,7 @@
   "cache_areas": [],
   "docs": [
    "docs/designs/cpu-table-walks.md",
+   "docs/designs/multicore-correctness-1025.md",
    "docs/designs/workload-bisect.md"
   ],
   "library": false,
@@ -1610,7 +1613,9 @@
  },
  "all-core-task-workload-probe.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/multicore-correctness-1025.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -6262,6 +6267,7 @@
   "cache_areas": [],
   "docs": [
    "docs/designs/memory-qualification-measurements.md",
+   "docs/designs/multicore-correctness-1025.md",
    "docs/memory-qualification.md"
   ],
   "library": false,
@@ -7785,7 +7791,8 @@
  "primary-cache-host.py": {
   "cache_areas": [],
   "docs": [
-   "docs/a733-smp-supervised.md"
+   "docs/a733-smp-supervised.md",
+   "docs/designs/multicore-correctness-1025.md"
   ],
   "library": false,
   "pure_host": false,
@@ -7805,6 +7812,7 @@
   "docs": [
    "docs/a733-smp-supervised.md",
    "docs/designs/cpu-table-walks.md",
+   "docs/designs/multicore-correctness-1025.md",
    "docs/designs/smp-heterogeneous.md"
   ],
   "library": false,
@@ -9038,6 +9046,7 @@
  "secondary-identity-host.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/multicore-correctness-1025.md",
    "docs/designs/workload-bisect.md"
   ],
   "library": false,
@@ -9060,6 +9069,7 @@
    "docs/board-runbooks/rank-7-diagnosis.md",
    "docs/board-runbooks/rank-7-first-task.md",
    "docs/board-runbooks/rank-8-workload.md",
+   "docs/designs/multicore-correctness-1025.md",
    "docs/designs/workload-bisect.md"
   ],
   "library": false,
@@ -9105,6 +9115,7 @@
  "secondary-local-host.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/multicore-correctness-1025.md",
    "docs/designs/workload-bisect.md"
   ],
   "library": false,
@@ -10029,6 +10040,7 @@
  "workload-bisect-host.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/multicore-correctness-1025.md",
    "docs/designs/workload-bisect.md"
   ],
   "library": false,
@@ -10047,6 +10059,7 @@
  "workload-bisect-probe.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/multicore-correctness-1025.md",
    "docs/designs/workload-bisect.md"
   ],
   "library": false,

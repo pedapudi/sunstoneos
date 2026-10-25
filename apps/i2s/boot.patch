@@ -23,7 +23,7 @@
      write32(0x03400000,(ctlr&~7u)|0x30);wait_clear(0x03400000,1u<<31);
 +    /* The image's fixed SPI table, configured while both groups are disabled.
 +     * The DMA service enables its source through the first rearm. */
-+    if(!a733_irq_table_route(admission.startup_deadline,a733_smp_counter))a733_smp_stop(3,0x310);
++    int routed=a733_irq_table_route(admission.startup_deadline,a733_smp_counter);if(routed!=A733_IRQ_TABLE_ROUTED)a733_smp_stop(3,routed==A733_IRQ_TABLE_RWP_TIMEOUT?0x311:0x310);
      write32(0x03400000,(ctlr&~7u)|0x33);wait_clear(0x03400000,1u<<31);
      if((read32(0x03400000)&0x73)!=0x33)a733_smp_stop(2,3);
      uint64_t mpidr;__asm__ volatile("mrs %0, mpidr_el1":"=r"(mpidr));

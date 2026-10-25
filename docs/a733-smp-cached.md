@@ -129,9 +129,9 @@ A software deadline cannot bound an instruction blocked by the interconnect.
 
 Defining `SUNSTONE_A733_RESIDENT` selects a contract for an image that runs
 after a cold boot from the microSD card instead of under the FEL host. Its
-contract magic is `0x4153373352455331` and its result magic is
+contract magic is `0x4153373352434e31` and its result magic is
 `0x4153373352525331`, so neither kind of contract admits the other kind of
-image. The stage-2 loader is its intended producer. It must arm the watchdog
+image. No other contract or result record in the tree uses either value. The stage-2 loader is its intended producer. It must arm the watchdog
 before it publishes the contract.
 
 | Field | FEL-launched contract | Resident contract |
@@ -169,10 +169,13 @@ handler. [irq_table.c](../platform/a733-smp-cached/irq_table.c) provides:
   FreeRTOS API ceiling in the secure-monitor configuration.
 - `a733_irq_table_route`: run once at EL3 by the primary boot, before groups
   are re-enabled. It programs each entry as a level-sensitive nonsecure
-  Group 1 SPI routed to its core, then reads every register back. It refuses
-  before writing anything if the groups are enabled, a write is pending, an
-  entry is already enabled, pending or active, or the deadline has passed.
-  Enabling each source stays with its device owner.
+  Group 1 SPI routed to its core, then reads every register back. It waits
+  for the distributor's write-pending bit (`GICD_CTLR.RWP`) to clear before
+  it reads the distributor state and again after the route writes, as Linux
+  and TF-A do; if the bit stays set until the deadline it returns
+  `A733_IRQ_TABLE_RWP_TIMEOUT`. It refuses before writing anything if the
+  groups are enabled, an entry is already enabled, pending or active, or the
+  deadline has passed. Enabling each source stays with its device owner.
 - `a733_irq_table_dispatch`: runs the handler routed to the interrupt and
   core. An interrupt outside the table, or delivered to another core, keeps
   the existing status-4 stop.

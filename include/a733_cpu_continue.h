@@ -31,6 +31,9 @@ struct a733_cpu_continue {
     uint64_t last_now, redistributor;
     uint32_t control, waker, configuration, priority, seen;
     unsigned core, frame, phase, state, error, initialized, entered, writes_attempted;
+    /* Appended so that the fields above keep the frozen native layout: the
+     * last GICD_CTLR value read in phase 0. */
+    uint32_t distributor;
 };
 /* Called by a released secondary or primary core0, under its CPU/register lease.
  * Primary GIC distributor security/routing setup has completed; all SGI/PPI
