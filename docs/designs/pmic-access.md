@@ -360,9 +360,15 @@ that the earlier adapter made per access:
      step is excluded and the poll window takes one, so the summary normally
      reads `STEPS recorded=32` and `excluded=1`; each further snapshot the
      window takes lowers the recorded count by one.
-6. **Completing polls in the recorded steps**, added for the third run. The bundle's wrapper of the poll's task check stamps the
-   counter at the entry of every `a733_pmic_poll()`; that is one counter read
-   per poll, about 35 ns, inside the step times. A poll that completes a bus
+6. **Completing polls in the recorded steps**, a diagnostic build option.
+   `checks/board-bundles-apps.py --complete-window` compiles bundle 6 with
+   `BB6_COMPLETE_WINDOW=1`; the default image omits the window, and its
+   `TWI_COMPLETE` lines print `window=0` with empty records. The window's
+   stamp lengthened each snapshot step by about 12 µs in the third and
+   fourth runs (section "Board result"). With the window, the bundle's
+   wrapper of the poll's task check stamps the counter at the entry of
+   every `a733_pmic_poll()`; that is one counter read per poll, inside the
+   step times. A poll that completes a bus
    phase (a flag or a STOP wait, as the trace observer counts them) ends its
    span at the stamp after its first phase-start `CNTR` write returns. The
    spans of a recorded step join five records by that write: a byte whose
@@ -414,6 +420,21 @@ run with `DSB SY` pairs (section "Board result"). That qualifies the
 placement for snapshots. The native USB image of rank 9 needs a rerun on
 this adapter before it relies on it, and a DCDC3 selector write, under its
 own gate, covers the write of the selector byte.
+
+Rank 9 cannot yet be rebuilt for that rerun.
+`apps/usb-returning/build.py --platform-build` links the central
+`monitor.c` object, compiled without the monitor's counter option. Since
+`rank-9-usb-v4/`, `monitor.c` gained the interrupt-cleanup readbacks and the
+replaced status, so that object's instructions differ from every monitor
+object that ran on a board. The board-qualified monitor of this tree is the
+base image's, compiled with the counter option, which ran as
+`s7-bb2-run` and inside every bundle 6 run since.
+`checks/board-bundles-apps.py --usb` therefore refuses the rebuilt image
+("The native USB image's monitor.c changes rank-9-usb-v4 monitor
+instructions"). Two routes remain: link the base image's monitor object
+into the native USB image, which needs the USB runner to accept the
+counter option's record, or qualify the plain monitor object in its own
+run.
 
 ## Board result
 
@@ -652,15 +673,13 @@ completing-poll window, passed at 1,265 permille, 3 permille (about 2 µs)
 below the limit, and 2 of its 32 steps exceeded 1,268 permille; the second
 run had 1.
 
-**The completing-poll window in later runs.** The window has made its
-measurement, and with it present the median lies within 3 permille of the
-limit. Two remedies exist: compile the window out of the default bundle 6
-image and keep it as an option for diagnosis, or derive a new limit from
-the runs that carry it. The first is recommended. The limit describes the
-provider under bundle 6's standing instrumentation, and raising it to
-absorb a diagnostic window would loosen it for every later run without a
-change in the provider. The default bundle 6 image of this tree still
-carries the window.
+**The completing-poll window in later runs.** With the window present, the
+median lies within 3 to 6 permille of the limit. The default bundle 6 image
+therefore omits the window, and `checks/board-bundles-apps.py
+--complete-window` builds it in for diagnosis. The limit stays at 1,268
+permille: it describes the provider under bundle 6's standing
+instrumentation, and raising it to absorb a diagnostic window would loosen
+it for every later run without a change in the provider.
 
 The windows give no authority for a PMIC rail write.
 

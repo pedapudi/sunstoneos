@@ -82,7 +82,7 @@ The board is on the instance that rank 6 returned.
      "Nonce-bound launcher controls, restored SRAM and a responsive same ROM." \
      --prerequisite launch-survey-software=$SW \
      --artifact $SB/manifest.json --artifact $SB/launch-survey.bin \
-     -- $PY -B $R/tools/run-launch-survey.py run --fel $FEL --build $SB \
+     -- $PY -B $SR/tools/run-launch-survey.py run --fel $FEL --build $SB \
         --software $SW --database {database} --evidence $S/r7-survey \
         --claim {claim} --owner {owner}
    ```

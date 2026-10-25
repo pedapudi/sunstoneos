@@ -208,6 +208,7 @@ struct bb_cost_next {
      * phase and then wrote a phase-start CNTR value, from the stamp before
      * its task check to the stamp after that write returned. */
     struct bb_span complete[BB_COMPLETE_KINDS];
+    unsigned complete_window;          /* 1: the image was built with BB6_COMPLETE_WINDOW=1 */
 };
 #define BB_POLL_WINDOW_POLLS 4096u     /* a back-to-back snapshot needs about 500 */
 

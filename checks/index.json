@@ -1994,7 +1994,8 @@
    "sources"
   ],
   "docs": [
-   "docs/designs/board-bundles-next.md"
+   "docs/designs/board-bundles-next.md",
+   "docs/designs/pmic-access.md"
   ],
   "library": false,
   "pure_host": false,

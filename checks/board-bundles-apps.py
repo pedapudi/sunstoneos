@@ -16,7 +16,8 @@ image, which runs first, and its declared new units:
 - bundles 6 and 7 (apps/board-bundles-power/) on rank-9-usb-v4 and the
   base: the 13 returning platform objects and 14 provider objects, without
   the USB units, plus the bundle's main file, power.c, trace.c, the
-  power-domain owner, its native adapter and device_memory.c. The PMIC
+  power-domain owner, its native adapter and device_memory.c, with bundle
+  6's completing-poll window compiled in only under --complete-window. The PMIC
   provider, its native adapter and its consumer changed with the PMIC access
   path (docs/designs/pmic-access.md). They and the GPU resource adapter are
   declared new units of both images; the adapter, declared new for its
@@ -598,6 +599,9 @@ def main():
     parser.add_argument('--tree', type=Path, required=True,
                         help='Source tree whose tools/check-a733-kernel.py carries the controlled-outcome progress record')
     parser.add_argument('--usb', type=Path, help='Evidence of apps/usb-returning/build.py --platform-build from this tree')
+    parser.add_argument('--complete-window', action='store_true',
+                        help='Build bundle 6 with the completing-poll window (BB6_COMPLETE_WINDOW=1), a diagnostic '
+                        'that lengthens each snapshot step; the default image omits it')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     # The provider objects record the compile directory: it must be this
@@ -616,7 +620,7 @@ def main():
     out.mkdir(parents=True, exist_ok=False)
     runner = load('apps_runner', tree / 'tools/check-a733-kernel.py')
     result = {'physical_access': False, 'central': str(central), 'tree': str(tree), 'qemu_sha256': sha(QEMU),
-              'reproduced': {}, 'images': {}}
+              'reproduced': {}, 'images': {}, 'complete_window': args.complete_window}
 
     platform, provider, v4_linked = v4_parts(v4)
     origins = Origins(rank4, bundle2, v4_linked)
@@ -640,7 +644,8 @@ def main():
     entry['expect'] = EXPECT['cpu']
     builds['cpu'] = (directory, entry)
     for name, units, flags, keep in (
-            ('pmic', POWER_UNITS + ['apps/board-bundles-power/bundle6.c'], (), None),
+            ('pmic', POWER_UNITS + ['apps/board-bundles-power/bundle6.c'],
+             ('-DBB6_COMPLETE_WINDOW=1',) if args.complete_window else (), None),
             ('domain', POWER_UNITS + ['apps/board-bundles-power/bundle7.c'], (), None),
             ('dram', DRAM_UNITS, ('-DSUNSTONE_DRAM_PRIORITY=2',), ('FREERTOS/tasks.c', 'FREERTOS/queue.c'))):
         units_provider = {u: p for u, p in provider.items() if keep is None or u in keep}
