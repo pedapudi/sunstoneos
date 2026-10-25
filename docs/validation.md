@@ -48,9 +48,11 @@ SHA-256 of its resolved path. A gate on another worktree therefore never meets
 a CMake cache configured for a different source. A lock file,
 `gate-NAME-HASH.lock`, refuses a second gate on the same checkout while one
 runs. The gate refuses a source with uncommitted or untracked changes unless
-`--allow-dirty` is given. It records `git status --porcelain` in `status.txt`
-and the SHA-256 of `git diff --binary HEAD` in the summary, so evidence from a
-dirty tree names the changes it built. There are no automatic retries, including for emulator timeouts.
+`--allow-dirty` is given. It records `git status --porcelain` in `status.txt`,
+and in the summary the SHA-256 of `git diff --binary HEAD` and a SHA-256 over
+the name and content digest of every untracked file that Git does not ignore,
+so evidence from a dirty tree names the changes it built. After taking the
+lock the gate reads this state again and stops if it changed. There are no automatic retries, including for emulator timeouts.
 Diagnose a failure and run only the affected work with a new label; reuse the
 successful evidence from the earlier invocation. The soak defaults to one
 trial; `--trials N` declares a repeatability sample in advance and needs a

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-"""Check integration selection, failure handling, evidence preservation and
-per-checkout build directories with fake tools and a scratch Git checkout."""
+"""Check the integration gate with fake tools and a scratch Git checkout.
+
+The cases cover selection, failure handling, evidence preservation,
+per-checkout build directories and the dirty-tree identity."""
 import hashlib
 import json
 import os
@@ -120,11 +122,60 @@ if os.environ.get('GATE_TEST_FAIL') in args:
         self.assertIn('status: 2 changed paths', summary)
         self.assertIn('?? new.c', (self.sandbox / 'build/gate-dirty/status.txt').read_text())
 
+    def untracked_identity(self, *names):
+        """The gate's untracked-file digest, computed independently."""
+        digest = hashlib.sha256()
+        for name in sorted(names):
+            digest.update(name.encode() + b'\0' + hashlib.sha256((self.source / name).read_bytes()).digest())
+        return '%s (%d files)' % (digest.hexdigest(), len(names))
+
+    def test_dirty_identity_names_untracked_files(self):
+        (self.source / '.gitignore').write_text('ignored.o\n')
+        (self.source / 'ignored.o').write_text('first')
+        (self.source / 'sub').mkdir()
+        (self.source / 'sub/new.c').write_text('int first;\n')
+        summaries = []
+        for label, content in (('first', 'int first;\n'), ('second', 'int second;\n')):
+            (self.source / 'sub/new.c').write_text(content)
+            (self.source / 'ignored.o').write_text(label)
+            result = self.run_gate('--reason', 'Dashboard edit', '--check', 'progress', '--allow-dirty', label=label)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            summary = (self.sandbox / 'build' / ('gate-' + label) / 'summary.txt').read_text()
+            # The tracked diff is empty; only the untracked files distinguish the two trees.
+            self.assertIn('diff-sha256: ' + hashlib.sha256(b'').hexdigest(), summary)
+            self.assertIn('untracked-sha256: ' + self.untracked_identity('.gitignore', 'sub/new.c'), summary)
+            summaries.append(summary)
+        self.assertNotEqual(summaries[0], summaries[1])
+
+    def test_change_before_the_lock_stops_the_gate(self):
+        # A git wrapper adds an untracked file just before the status check
+        # that the gate repeats after taking the lock.
+        real = subprocess.run(['sh', '-c', 'command -v git'], capture_output=True, text=True, check=True).stdout.strip()
+        wrapper = self.sandbox / 'wrapper/git'
+        wrapper.parent.mkdir()
+        wrapper.write_text(f'''#!/bin/sh
+if [ "$1" = status ]; then
+  count=$(cat "{self.sandbox}/status-count" 2>/dev/null || echo 0)
+  echo $((count + 1)) > "{self.sandbox}/status-count"
+  [ "$count" = 1 ] && echo late > late.c
+fi
+exec {real} "$@"
+''')
+        wrapper.chmod(0o755)
+        self.env['PATH'] = str(wrapper.parent) + os.pathsep + self.env['PATH']
+        result = self.run_gate('--reason', 'Kernel build', '--target', 'kernel-check')
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertTrue((self.source / 'late.c').exists())
+        self.assertIn('FAIL the source changed between its status check and the lock',
+                      (self.sandbox / 'build/gate-case/summary.txt').read_text())
+        self.assertEqual(self.records(), [])
+
     def test_clean_source_records_its_state(self):
         self.assertEqual(self.run_gate('--reason', 'Dashboard edit', '--check', 'progress').returncode, 0)
         summary = (self.sandbox / 'build/gate-case/summary.txt').read_text()
         self.assertIn('status: clean', summary)
         self.assertIn('diff-sha256: ' + hashlib.sha256(b'').hexdigest(), summary)
+        self.assertIn('untracked-sha256: ' + self.untracked_identity(), summary)
         self.assertFalse((self.sandbox / 'build/gate-case/status.txt').exists())
 
     def test_failure_is_not_retried_and_later_checks_do_not_run(self):
