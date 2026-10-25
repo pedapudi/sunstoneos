@@ -1,13 +1,14 @@
 # Why the all-core first-task diagnostic does not return
 
-Status: the cause is not established. The first-task diagnostic returned once,
-on 2026-10-18, and did not return on port 3-1 on 2026-10-23 or, in its
-corrected form and in a clean lifetime, on 2026-10-24. The narrower
-[CPU0 preparation proposal](rank-7-primary-publication.md) now precedes a
-decision about the separately preserved all-eight-core pre-scheduler
-(`cpu-diagnosis-20261024/pre-scheduler/`; runbook
-[rank-7-pre-scheduler.md](rank-7-pre-scheduler.md)). No board was accessed to
-produce this document.
+Status: the cause is not established, but the order that returns is. The
+first-task diagnostic has returned twice, each time after the all-eight-core
+pre-scheduler had returned earlier in the same powered lifetime: on 2026-10-18
+and, in its corrected form, on port 3-1 on 2026-10-24. It has failed twice,
+each time as the first launch of its lifetime to power up a secondary: on
+2026-10-23, and in its corrected form in a clean lifetime on 2026-10-24.
+Section "The 2026-10-24 sequence on port 3-1 returned" gives the passing
+sequence; section "Next board steps" gives the narrowest next diagnostic for
+port 3-3. No board was accessed to produce this document.
 
 ## Summary
 
@@ -423,6 +424,43 @@ establishes the sampled register values at capture time; admission execution
 and secondary release remain unobserved. CPU0 can park before admission,
 stall within a read, or fail later during execution or cleanup.
 
+## The 2026-10-24 sequence on port 3-1 returned
+
+After a power removal, port 3-1 ran in one clean lifetime, in this order and
+all with the frozen native ELF `762237cd…`
+(`processor-completion-20261024/port-3-1/`, each at `runtime/session.json`):
+
+| Time (UTC−7) | Run | Result |
+| --- | --- | --- |
+| before 09:22 | Cold DDR (`ddr`), 21-word secondary-power capture (`cpu-off`) | Seven secondaries OFF |
+| 09:22 | CPU0-only preparation (`primary`), package `cpu-startup-resolution-20261024/` | Returned |
+| 09:26 | 91-word CPU power, CPU configuration and GIC-600 capture (`state-after-primary`) | Recorded |
+| 09:30 | All-eight-core pre-scheduler (`pre-scheduler`), package `cpu-diagnosis-20261024/pre-scheduler/` | Returned: eight participants, 256 increments, cleanup, seven secondaries OFF |
+| 09:44 | Corrected first-task diagnostic (`first-task`), package `cpu-next-20261024/first-task/` | Returned |
+| 09:52 | Task switching (`task-switch`) | Returned |
+| 09:58 | A 24-word capture of the GIC clock and resets, the distributor and CPU0's redistributor (`state-after-thermal`) | Every word as expected; one record-only word, `0x0347041c` |
+| 09:59 | Full returning workload (`task-workload`) | Passed: 32 floating-point rounds per core, background tasks, SGIs on all cores, CPU0 ticks |
+| 10:57, 11:17 | Current-source CPU workload (`9d90b6f9…`), then with one physical timer interrupt on each secondary (`f5ba965d…`) | Passed |
+
+The first-task run of this lifetime is the corrected overlay that did not
+return in the clean lifetime of `r7c-prepare`. Its only identified difference
+from that launch is the order: here it followed the CPU0-only preparation and
+the pre-scheduler.
+
+The two captures bracket the pre-scheduler, the first-task run and task
+switching. Thirteen words are common to both, the GIC clock and resets, the
+distributor and CPU0's redistributor, and all 13 match. The 78 other words of
+the first capture, the secondaries' power-controller words and their
+redistributor frames, were not read again after the pre-scheduler. The state
+that the pre-scheduler could leave for the first-task run is therefore
+unobserved: those 78 words, system registers that FEL cannot read (the DSU
+cluster registers and CPU0's registers whose warm-reset value is UNKNOWN),
+the secondaries' SGI and PPI enable, pending and active words, and cache
+contents. Two passes after the pre-scheduler and two failures without it do
+not distinguish an ordering dependence from intermittency. The offline
+diagnosis owed is that comparison: the 91 words before and after the first
+secondary power-up of a lifetime, which the next diagnostic records.
+
 ## Primary-source constraints on the next diagnostic
 
 The pinned [Arm/Linux comparison](../a733-multicore-reference-audit.md)
@@ -455,6 +493,10 @@ The cached Linux sources are pinned by `sources.json` in
 ### 1. The first-task run depends on state that an earlier native diagnostic establishes
 
 For:
+
+- On port 3-1 on 2026-10-24 the corrected first-task diagnostic returned
+  after the CPU0-only preparation and the pre-scheduler, in a clean lifetime
+  in which the same overlay had not returned as the first secondary power-up.
 
 - The only passing run followed five native diagnostics in its powered
   lifetime, the last of them the all-eight-core pre-scheduler, which ran the
@@ -614,36 +656,33 @@ evidence are regenerated.
 
 ## Next board steps
 
-The [CPU0-only preparation proposal](rank-7-primary-publication.md) first
-isolates the still-unobserved prefix before GIC initialization or secondary
-release. Review its result before deciding on an all-core launch.
+Port 3-1 has run the full sequence in one lifetime (section "The 2026-10-24
+sequence on port 3-1 returned"). Port 3-3 has never powered up a secondary.
+The narrowest next diagnostic there repeats the start of that sequence, in
+the same order and with the same frozen packages, and records the state
+around the first secondary power-up:
 
-The preserved all-eight-core pre-scheduler proposal uses port 3-1 after
-recovery and a new cold DDR initialization
-([rank-7-pre-scheduler.md](rank-7-pre-scheduler.md)). It is
-the 2026-10-18 step that immediately preceded the passing first-task run. It
-runs the shared native startup, secondary power-up, cached EL1 entry and
-production barrier on all eight cores, stops before task creation and
-returns. Its overlay is byte-identical to the build that returned on
-2026-10-18. The returned report is the observation boundary. Interpret one attempt as
-follows:
+1. The 21-word secondary-power capture and the CPU0-only preparation
+   (`cpu-startup-resolution-20261024/`). It writes no GIC or secondary-power
+   register.
+2. The 91-word capture, the all-eight-core pre-scheduler
+   (`cpu-diagnosis-20261024/pre-scheduler/`), which is the first secondary
+   power-up of the lifetime, and the same capture again, compared word for
+   word with the first. Port 3-1's lifetime did not repeat the secondaries'
+   78 words after its pre-scheduler, so this comparison is new.
 
-- **It does not return.** Startup, the barrier, cleanup and return remain
-  indistinguishable stop locations. Preserve the failed instance and request
-  power removal. Review a smaller returning CPU0 boundary before proposing
-  another launch; the result does not justify an automatic retry.
-- **It returns.** The report establishes all eight participants, the barrier,
-  owned-line cleaning, restored controls and seven OFF secondaries in that
-  lifetime. Review that report before a separate first-task proposal.
-  Success of a later first-task run would be consistent with dependence on
-  prior state, but one sequence cannot distinguish causation from intermittency.
-
-A stop marker that the host can read after a failure is not available
-without changing the runner: after release CPU0 can return only with the
-secondaries still running, and the runner restores DRAM after every return.
-Run on port 3-1 only, preserving the board identity of the historical
-comparison. Port 3-3 remains outside this proposal. The unchanged bundle `rank-7-first-task/` is superseded and is
-not run again.
+Both packages bind only to port 3-1. Port 3-3 bindings, with admission
+conditions that state port 3-3's lifetime, are frozen with set
+`board-bundles-20261025-1`. That lifetime has run returning CPU0 images (the
+base kernel check, bundle 6 four times and rank 9) since its cold DDR start,
+unlike the clean lifetime that passed on port 3-1, so a pass there would
+extend the sequence to that history and a non-return would not separate it
+from the first power-up. A pre-scheduler that does not return leaves the
+stop location unknown and needs a power removal; it is not retried. After
+both return, the first-task, task-switch and task-workload profiles of
+`cpu-next-20261024/` complete ranks 7 and 8 on port 3-3 in the same order as
+on port 3-1; their port 3-3 bindings follow the same pattern and are not yet
+prepared.
 
 ## Evidence
 

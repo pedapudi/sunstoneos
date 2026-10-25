@@ -499,6 +499,7 @@ ROWS = [
             after=['gpu-power-only'],
             failures=['`FAIL GPU identity mapping`, `GPU identity ownership/access` or `GPU identity '
                       'deadline/clock`']),
+<<<<<<< HEAD
     gpu_row('gpu-wrapper-read', 14, 'GPU wrapper reads with TOP5 ON and CORE6 not acknowledged', 'wrapper-read',
             'COMPLETE GPU wrapper read: CORE status 8, four wrapper words, OFF and provider parked',
             'Either monitor status 1 with the four GPU WRAPPER n=1 to n=4 lines, the decoded GPU WRAPPER qchan and '
@@ -531,6 +532,35 @@ ROWS = [
                       'monitor does not return, nothing reaches the host and only a power removal recovers the board. '
                       'A non-return is itself the result that the wrapper is unreachable in this state; the progress '
                       'record and log, which name each read before it is issued, survive only on a return.'),
+=======
+    read_row('cpu-b1-words', 14, 'Speed-bin word and the CPU-L, CPU-B and DSU clock words of the A76 record',
+             'The read-only clock part of the B1 record of docs/designs/cpu-a76-dvfs.md: the SID speed-bin word, '
+             'the oscillator, and the PLL, mux/P, pattern and LFM words that boot0 leaves',
+             [word(0x0300624c, 'sid', note='SID speed-bin word'),
+              word(R_CCU_RTC[0], 'r_ccu', note='RTC bus gate 0 and reset 16'),
+              word(0x07090160, condition=R_CCU_RTC, note='DCXO register of the RTC clock driver')] +
+             [word(base + o, 'cpu_pll', note=f'{name} {what}') for base, name in ((0x08871000, 'CPU-L'),
+                                                                                  (0x08872000, 'CPU-B'))
+              for o, what in ((0, 'PLL'), (0x4, 'pattern 0'), (0x8, 'pattern 1'), (0x18, 'LFM'), (0x1c, 'mux/P'))] +
+             [word(0x08873000, 'cpu_pll', note='DSU PLL'), word(0x0887301c, 'cpu_pll', note='DSU mux/P')],
+             'Every word is read, the oscillator word only after its R_CCU gate reads open and its reset released, '
+             'and the 128 scratch bytes are restored and equal.'),
+    returning_row('cpu-supply-reads', 15, 'DCDC3 and DCDC5 snapshots through the PMIC provider, read-only',
+                  POWER_OVERLAY + ['apps/board-bundles-power/cpu-supply.c.obj'],
+                  'COMPLETE board bundle 15: DCDC3 and DCDC5 snapshots, reaped and provider parked', False,
+                  'Monitor status 0 with the raw and decoded DCDC3 and DCDC5 snapshot lines (page, chip, revision, '
+                  'enable, selector, enabled, decoded and programmed microvolts) and COMPLETE board bundle 15, then '
+                  'a responsive ROM.',
+                  'The image of bundle 6 with apps/board-bundles-power/cpu-supply.c in place of bundle6.c and no '
+                  'domain row, so the service makes no DCDC2 or DCDC4 verification and no PPU access. After provider '
+                  'readiness and the 5,160 us supply settle, a client takes one shared token of DCDC3 and DCDC5, '
+                  'submits one snapshot of each in turn, reaps it, parks the service and prints the values: the '
+                  'supply part of the B1 record of docs/designs/cpu-a76-dvfs.md, whose DCDC3 selector is the value '
+                  'that a DCDC3 selector write must find. No voltage, clock, PMIC or PPU register is written.',
+                  sources=POWER_SOURCES + ['apps/board-bundles-power/cpu-supply.c'], base=BASE_ROW,
+                  failures=['a `FAIL` line of the provider or service (`snapshot submit`, `snapshot result`, '
+                            '`snapshot reap`, a deadline, `provider fault`, `provider not quiescent at park`)']),
+>>>>>>> work/rank7-b1-1025
     # `admission` maps fields of the value prepare() returns to the values that
     # identify this row's build. None refuses the row: no owning package has
     # named those values yet.

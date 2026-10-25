@@ -326,9 +326,12 @@ source proves:
 Each step schedules sustained work on cores 6 and 7, which no physical run
 has shown. Every step therefore requires, on the same board, that rank 7 (the
 all-core first-task diagnostic) has returned and that rank 8 (task bodies,
-floating point, SGIs and the timer on all cores) has then passed. Rank 7 did
-not return on 2026-10-23 or 2026-10-24, so every step below waits for an
-offline diagnosis, a returning rank 7 and a passing rank 8. The OS image is a
+floating point, SGIs and the timer on all cores) has then passed. On port 3-1, in one lifetime on 2026-10-24, the corrected rank 7
+diagnostic returned and the rank 8 workload passed, after the CPU0-only
+preparation and the all-eight-core pre-scheduler; a later image of that
+lifetime also delivered one timer interrupt to each secondary
+([rank-7-diagnosis.md](../board-runbooks/rank-7-diagnosis.md)). Port 3-3
+has run neither. The OS image is a
 Terminal test, so each step also needs ranks 1 to 5 and rank 9 earlier in the
 same power cycle ([board test plan](../audit/board-test-plan.md)). Every
 supervised session ends in whole-board power removal, so no raised point
@@ -343,6 +346,17 @@ Without a clock or voltage change:
   the recognition time from counter ticks at boot0's CPU-B rate, the `CLOCK`
   lines before and after it, the fuse code, the CPU-B PLL, mux, pattern and
   LFM words, and the DCDC3 and DCDC5 readings. This time is A2's baseline.
+
+B1 has a read-only part that needs no core 6 or 7: the fuse (bin) code, the
+CPU-L, CPU-B and DSU PLL and mux/P words, the CPU-L and CPU-B pattern and LFM
+words, and the DCDC3 and DCDC5 readings. Board bundles 14 and 15 of
+[board-bundles-next.md](board-bundles-next.md) read them: bundle 14 through
+FEL `readl` and bundle 15 through the qualified PMIC provider in a returning
+CPU0 image. They can run before ranks 7 and 8, and their records supply the
+bin column of the approval record and the DCDC3 selector that a selector write
+must find. They are not B1: B1 is the supervised A76 run with the recognizer
+on core 6 and the worker on core 7, which still needs ranks 7 and 8 on the
+same board.
 
 Each of the following needs the user's explicit approval before the run,
 runs last in a connection window after B1 has passed on that board, and is

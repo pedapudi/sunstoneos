@@ -112,6 +112,29 @@ regenerating.
   (`s13-r9-usb`). This qualifies the plain S_TWI0 placement in the native USB
   image. The port 3-3 lifetime now holds six warm returns.
 
+- **Port 3-3, set `board-bundles-20261025-1`** (same lifetime): all steps
+  passed.
+  - **Bundle 14 (`bb14-read`):** 15 FEL words, none skipped. SID bin word
+    `0x0300624c` = `0x496`; CPU-B PLL `0xf8802700`, CPU-B mux `0x03000000`;
+    CPU-L PLL `0xf8802600` as before; DSU PLL `0xf8802600`, mux `0x03010105`.
+  - **Bundle 15 (`u1-bb15-run`):** DCDC3 and DCDC5 both enabled at selector
+    `0x9e`, 800 mV, read through the qualified provider with no write.
+  - **Rank 7 on port 3-3, the first secondary power-up of a lifetime:**
+    - The 91-word state before the run matched every clean value.
+    - The CPU0-only preparation returned (`u1-r7p-prepare`), and all 91 words
+      were unchanged after it.
+    - The all-eight-core pre-scheduler then returned (`u1-r7s-prepare`):
+      completed mask `0xfe`, restored controls, secondaries OFF, DRAM
+      restored.
+    - The capture after it equals the capture before it in all 91 words
+      (`u1-r7-state-comparison.json`). So the first secondary power-up
+      leaves no residue in the captured power, CPU configuration and GIC
+      words.
+    - The coordinator accepted the rewritten port 3-3 admission conditions,
+      with this lifetime's earlier cached DRAM images named as a confound.
+    - The hold on ranks 7 and 8 is lifted. The first-task, task-switch and
+      workload profiles for port 3-3 come next.
+
 The mimus branch `port/sunstoneos` (`9c57286b7`) was pushed to
 `github.com/pedapudi/mimus` on 2026-10-24 with the user's approval; mimus
 `main` is unchanged.
