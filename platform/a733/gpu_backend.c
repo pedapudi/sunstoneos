@@ -174,7 +174,7 @@ static int compute_mode(void *context)
 static int read_allowed(uint32_t off, uint32_t width, int stopping)
 {
     if (off == 0x100 && width == 8) return 1;
-    if (!stopping) return (off == 0x108 && width == 8) || ((off == 0xa100 || off == 0x3800) && width == 4);
+    if (!stopping) return (off == 0xa100 || off == 0x3800) && width == 4;
     return (off == 0x3870 && width == 8) || (width == 4 && (off == 0x3c8 || off == 0x1358 ||
         off == 0x1350 || off == 0x1320 || off == 0x1338 || off == 0x3898));
 }
@@ -198,7 +198,6 @@ static int write_allowed(uint32_t off, uint32_t width, uint64_t value)
     case 0xa100: return width == 4 && value == 0;
     case 0x100: return width == 8 && (value == UINT64_C(0xffeffffffffffc3d) || value == UINT64_C(0x00e7fffffffffc3d) ||
         value == UINT64_C(0xffeffe071ffffc3d) || value == UINT64_C(0x00e7fe071ffffc3d) || value == UINT64_C(0x100000000) || value == 0);
-    case 0x108: return width == 8 && (value == 0 || value == 0x1fffff);
     case 0x3800: return width == 4 && (value & ~UINT64_C(0x1000003)) == 0x200000;
     case 0x38c0: return width == 8 && value == 0x8882af00;
     case 0x810: return width == 4 && value == 0x1cf80;
