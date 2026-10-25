@@ -204,6 +204,9 @@ The mimus branch `port/sunstoneos` (`9c57286b7`) was pushed to
 The user approved physical CPU clock and voltage changes on 2026-10-24: the A76
 operating-point runs A1, A2 and A3 of `docs/designs/cpu-a76-dvfs.md` and the
 DCDC3 selector write, each still gated on its own prerequisites.
+On 2026-10-25 the user also approved GPU clock and voltage changes, such as
+the vendor operating point of 1008 MHz from the GPU PLL at 960 mV. Each needs
+its own design, review and approval record naming the rail and values.
 
 ## Review of the paused tranche (2026-10-24 evening)
 
