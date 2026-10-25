@@ -105,6 +105,13 @@ regenerating.
     route is to link the board-qualified base monitor object (the
     counter-option build) into the native USB image.
 
+- **Port 3-3, set `board-bundles-20261024-13`:** rank 9 (native USB) on the
+  merged adapter. The image links the board-qualified base monitor object
+  (`3eaf49b9`) in place of the central one (`probe.bin` `d474710c`). It passed
+  with complete OUT/IN observation, quiescence and a responsive ROM return
+  (`s13-r9-run`). This qualifies the plain S_TWI0 placement in the native USB
+  image. The port 3-3 lifetime now holds six warm returns.
+
 The mimus branch `port/sunstoneos` (`9c57286b7`) was pushed to
 `github.com/pedapudi/mimus` on 2026-10-24 with the user's approval; mimus
 `main` is unchanged.
