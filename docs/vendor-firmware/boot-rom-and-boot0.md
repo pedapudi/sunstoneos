@@ -7,7 +7,7 @@ but does not otherwise run. This document records what those binaries do, so
 that a future developer can rely on them, reimplement a part, or decide an
 ownership question without disassembling them again. It describes present
 behaviour; the acquisition history and running record stay in the evidence
-directories cited here and in the [vendor-firmware provenance
+directories cited here, and the fetch commands are in the [vendor-firmware
 README](README.md).
 
 Every fact below is cited as a blob SHA-256 prefix and an offset, and labelled:
@@ -49,51 +49,18 @@ capture (`a8e31821…`) are the same 68 KiB region; thirteen words in their firs
 1 KiB differ, and the reset and redirect code through offset `0x228` is
 identical, so the board runs a close revision of the published ROM
 (*confirmed on a board*, `~/.cache/sunstoneos/evidence/rom-copy-20261016-084055/`).
-The HS-BROM and the secure BROM Monitor are not in either dump.
+The board capture was read through the FEL tool's `memmove` command, which
+copies ROM through SRAM, because a direct FEL read at address zero is refused
+([watchdog.md](../watchdog.md#captured-board-rom-and-reset-ownership)). The
+HS-BROM and the secure BROM Monitor are not in either dump.
 
 boot0 comes from the Orange Pi build repository
 `orangepi-xunlong/orangepi-build` at revision
 `a95129bf30ea11886cc35f08ebb3e69695a26656`, path
-`external/packages/pack-uboot/sun60iw2/bin/`.
+`external/packages/pack-uboot/sun60iw2/bin/`. The fetch commands for every
+binary here are in the [vendor-firmware README](README.md).
 
-No term found in the applicable sources forbids reverse engineering or
-disassembly of these four binaries. The licenses and terms that apply, with
-their sources, are:
-
-- **The Orange Pi build repository (boot0 and both images).** The repository's
-  only repository-level license is its root `LICENSE`, the GNU General Public
-  License version 2 (cached copy
-  `~/.cache/sunstoneos/evidence/microsd-boot-package-20261020/references/orangepi-build/LICENSE`).
-  There is no `LICENSE` or terms file inside
-  `external/packages/pack-uboot/sun60iw2/bin/` (observed in the repository tree
-  listing `~/.cache/sunstoneos/sources/orangepi-build-tree.txt`). GPL-2.0
-  permits studying and disassembling the covered work; it imposes no
-  reverse-engineering prohibition.
-- **Notices inside the binaries.** The BROM dumps and both boot0 images carry no
-  embedded copyright, license, or reverse-engineering notice. NS-BROM contains
-  the device-descriptor strings `Allwinner USB GADGET` and `Allwinner`, which are
-  USB identifiers, not license terms (observed in the binaries `3a2a7d28…`,
-  `95be69c9…`, `829ea8e3…`, `d2a9bccc…`; string scan finds no
-  copyright/license/reverse-engineering text).
-- **The BROM dump source.** The two BROM images are redistributed by the
-  community `smaeul/sunxi-blobs` repository as extracted on-chip ROM for
-  interoperability; the dump files themselves carry no license text. The code is
-  Allwinner's on-chip boot ROM.
-- **Allwinner's published terms.** Allwinner publishes no public license grant
-  for these boot binaries, and none was found that forbids reverse engineering
-  or disassembly. The A733 User Manual used for register names is marked
-  Confidential, which governs that document, not these binaries, and is not a
-  disassembly prohibition on the firmware.
-
-This assessment covers only the BROM dumps and the two boot0 images. It does not
-extend to the separate TOC packer (`dragonsecboot` and the
-`allwinner-bsp-tools` source), whose files carry All-Rights-Reserved notices and
-whose individual licensing is unresolved
-([microsd-boot-package.md](../microsd-boot-package.md)), nor to the GPU firmware,
-whose license forbids disassembly and whose analysis is withdrawn.
-
-boot0's header is an eGON.BT0 block:
-a branch at offset 0, the magic `eGON.BT0` at `0x4`, an additive 32-bit
+boot0's header is an eGON.BT0 block: a branch at offset 0, the magic `eGON.BT0` at `0x4`, an additive 32-bit
 checksum at `0xc` (stock value `0x2fce7bb3`), the length `0x3c000` at `0x10`,
 the run address `0x47000` at `0x18`, and a 128-byte DRAM parameter block at
 `0x38` that the loader overwrites at runtime (observed in the binary, boot0
