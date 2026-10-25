@@ -64,3 +64,17 @@ constructs session bytes only from a supplied typed boot payload and complete
 admission, validates them before writing, and refuses existing output files.
 The return/profile/client fixtures select only their consumed DWARF layouts,
 so unrelated private structure names cannot block those checks.
+
+`build-sram-route.py` builds a separate variant of the numerical image that
+routes the shared SRAM to the NPU from just before the NPU resets are
+released until local stop, restores it again at EL3 before the ROM return,
+and refuses NPU register access unless the SRAM is routed and startup is
+READY. It links two new objects
+into the default image's link with linker redirections and changes no
+existing object; the design, exit paths and checks are in
+[docs/designs/npu-sram-route.md](../../docs/designs/npu-sram-route.md).
+
+```sh
+python3 apps/npu-finite/build-sram-route.py --evidence OUTPUT
+python3 apps/npu-finite/sram-route-check.py --evidence OUTPUT --output OUTPUT/sram-route-check.json
+```
