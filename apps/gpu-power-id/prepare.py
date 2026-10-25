@@ -4,9 +4,11 @@
 tools/prepare-board-bundles.py calls prepare_bundle(row, build, check,
 output) inside its sandbox for the GPU rows: the provider-readiness checkpoint
 (apps/gpu-provider-ready/build.py), and the power-only, identity,
-wrapper-read and probe-read variants of apps/gpu-power-id/build.py. The function copies the image, its binary,
+wrapper-read, probe-read, vendor-clk and vendor-state variants of
+apps/gpu-power-id/build.py. The function copies the image, its binary,
 its build record and its focused host-check result into the bundle with the
-kernel runner's host tools, and validate() checks the copy:
+kernel runner's host tools, and for the vendor-state variant its unit-check
+result and approval record, and validate() checks the copy:
 
 - probe.bin is the loadable segments of image.elf, and both match the build
   record, whose variant and success text are the row's;
@@ -28,7 +30,12 @@ kernel runner's host tools, and validate() checks the copy:
 - the probe-read image's probe_steps table holds exactly its fifteen
   accesses, every host-check case made only accesses of that table, in its
   order, and each vendor write was restored, by the client or, after a
-  synchronous abort, by its restore vectors.
+  synchronous abort, by its restore vectors;
+- the vendor-state image's ON steps and EL3 security writes are the pinned
+  tables, every host-check case read only a prefix of the two identity
+  words and powered nothing OFF, the bundle's unit-check result passed all
+  its cases on the sources the build compiled, and its approval record is
+  the one the build names, for DCDC4 selector 0x2e (960 mV) from 0x1e.
 
 Nothing here contacts a device.
 """
@@ -48,13 +55,17 @@ SCHEMA = 'board-gpu-returning-bundle-v1'
 # The image each build reuses objects of, by its build record's identity.
 PROVIDER_READY = '3adfa4ad6ba386ce8d39f76646f540107c2a5d02ce42db6c1c35c90de68a75ed'
 FAILED_POWER_ID = 'fd3d5839f700b5e0f569b0ce722e186c33beba65512815b136d9c969a7341afe'
-CASES = {'provider-ready': 11, 'power-only': 11, 'identity': 13, 'wrapper-read': 7, 'probe-read': 13, 'vendor-clk': 7}
+CASES = {'provider-ready': 11, 'power-only': 11, 'identity': 13, 'wrapper-read': 7, 'probe-read': 13, 'vendor-clk': 7,
+         'vendor-state': 12}
+# Cases of apps/gpu-power-id/vendor-state-units.py.
+UNIT_CASES = 22
 # ON/OFF cycles of the client's normal run: the power-only variant powers
 # CORE6 on twice, so the second ON shows whether TOP5 OFF returned CORE6 to
 # its power-up state.
-CYCLES = {'power-only': 2, 'identity': 1, 'wrapper-read': 1, 'probe-read': 0, 'vendor-clk': 0}
+CYCLES = {'power-only': 2, 'identity': 1, 'wrapper-read': 1, 'probe-read': 0, 'vendor-clk': 0, 'vendor-state': 0}
 # The host-check case that completes ON and OFF in each variant.
-NORMAL = {'power-only': 'normal', 'identity': 'normal', 'wrapper-read': 'wrapper-on', 'probe-read': 'pr-board', 'vendor-clk': 'vc-board'}
+NORMAL = {'power-only': 'normal', 'identity': 'normal', 'wrapper-read': 'wrapper-on', 'probe-read': 'pr-board',
+          'vendor-clk': 'vc-board', 'vendor-state': 'vs-board'}
 # The only GPU-window addresses of the wrapper-read image, in read order.
 WRAPPER_WORDS = [0x01880104, 0x01880100, 0x01880018, 0x0188001c]
 # The vendor-clk image's reordered ON steps (on_steps in vendor-clk-power.c):
@@ -75,6 +86,44 @@ VENDOR_CLK_ON_STEPS = [
     (1, CCU, 0x0b20, 0, (1 << 31) | (1 << 27)), (0, CCU, 0x0b20, 0x8700000f, 0x83000000),
     (8, CORE, 0x14, 0, 5), (7, CORE, 8, 0xffffffff, 8)]
 # enum kind: CHECK0 UPDATE1 DELAY2 DOMAIN3 CORE_POLICY4 CORE_STATUS5 CORE_CONFIG6 POLL7 NOTE8 SETTLE9.
+# The vendor-state image's ON steps (on_steps in vendor-state-power.c), which
+# add PLL10 (a PLL_GPU0 read-back), LOCK11 and UPDATED12: admission adds
+# PLL_GPU0 at 0x41104500 and the GPU clock word at source 0; after CORE6
+# PWCR 0 and policy 8, PLL_GPU0 is enabled, the reset, bus gate and core
+# clock opened on PLL_GPU0, and PLL_GPU0 set to 1008 MHz (0xe9105300).
+NOLOCK = 0xefffffff  # every bit but the read-only lock bit 28
+VENDOR_STATE_ON_STEPS = [
+    (0, CCU, 0x05c0, 1 << 7, 1 << 7), (0, CCU, 0x05e0, 1 << 16, 1 << 16), (0, 1, 0x01ac, 1, 1),
+    (0, CCU, 0x0b20, 0x8f00000f, 0), (0, CCU, 0x0b24, (1 << 16) | 1, 0), (0, CCU, 0x0e0, NOLOCK, 0x41104500),
+    (3, CCU, 0, 0, 1), (4, CORE, 0, 0, 0), (5, CORE, 8, 0, 0),
+    (8, CORE, 0xfb0, 0, 0), (8, CORE, 0x14, 0, 1), (6, CORE, 0x20, 0, 0),
+    (1, CORE, 0x20, 0xffffffff, 0), (0, CORE, 0x20, 0xffffffff, 0), (9, CORE, 8, 0, 3),
+    (1, CORE, 0, 0xffffffff, 8), (0, CORE, 0, 0xffffffff, 8), (9, CORE, 8, 0, 4),
+    (1, CCU, 0x0e0, 1 << 27, 0), (10, CCU, 0x0e0, NOLOCK, 0x41104500),
+    (1, CCU, 0x0e0, 0, 1 << 30), (10, CCU, 0x0e0, NOLOCK, 0x41104500),
+    (1, CCU, 0x0e0, 0, 1 << 31), (10, CCU, 0x0e0, NOLOCK, 0xc1104500),
+    (1, CCU, 0x0e0, 0, 1 << 29), (10, CCU, 0x0e0, NOLOCK, 0xe1104500),
+    (11, CCU, 0x0e0, 1 << 28, 100), (2, CCU, 0, 0, 20),
+    (1, CCU, 0x0e0, 0, 1 << 27), (10, CCU, 0x0e0, NOLOCK, 0xe9104500),
+    (1, CCU, 0x0b24, 0, 1 << 16), (0, CCU, 0x0b24, (1 << 16) | 1, 1 << 16),
+    (1, CCU, 0x0b24, 0, 1), (0, CCU, 0x0b24, (1 << 16) | 1, (1 << 16) | 1),
+    (1, CCU, 0x0b20, 0, (1 << 31) | (1 << 27)), (12, CCU, 0x0b20, 1 << 27, 100), (0, CCU, 0x0b20, 0x8f00000f, 1 << 31),
+    (1, CCU, 0x0b20, 0, 1 << 27), (12, CCU, 0x0b20, 1 << 27, 100), (0, CCU, 0x0b20, 0x8f00000f, 1 << 31),
+    (1, CCU, 0x0e0, 1 << 27, 0), (10, CCU, 0x0e0, NOLOCK, 0xe1104500),
+    (1, CCU, 0x0e0, 0x0070ff00, 0x00105300), (10, CCU, 0x0e0, NOLOCK, 0xe1105300),
+    (1, CCU, 0x0e0, 1 << 29, 0), (10, CCU, 0x0e0, NOLOCK, 0xc1105300),
+    (1, CCU, 0x0e0, 0, 1 << 29), (10, CCU, 0x0e0, NOLOCK, 0xe1105300),
+    (11, CCU, 0x0e0, 1 << 28, 100), (2, CCU, 0, 0, 20),
+    (1, CCU, 0x0e0, 0, 1 << 27), (10, CCU, 0x0e0, NOLOCK, 0xe9105300),
+    (8, CORE, 0x14, 0, 5), (7, CORE, 8, 0xffffffff, 8)]
+# The vendor-state monitor's EL3 writes (vendor_state_el3_writes in
+# vendor-state-monitor.c): BL31 sunxi_security_setup's SPC, R_SPC, R_PRCM
+# and clock-controller security writes in its order; kind 1 ORs the value in.
+VENDOR_STATE_EL3 = ([(0x02054004 + 0x10 * n, 0xffffffff, 0) for n in range(14)] +
+                    [(0x02054104 + 0x10 * n, 0xffffffff, 0) for n in range(8)] +
+                    [(0x07002004, 0xffffffff, 0), (0x07002014, 0xffffffff, 0), (0x07002024, 0xffffffff, 0),
+                     (0x07010290, 7, 1), (0x02003f00, 7, 0), (0x020540e0, 0xfffffbff, 0)])
+VENDOR_STATE_IDENTITY = [0x01800024, 0x01800020]
 # The probe-read image's access table: address, value, kind (0 read32, 1
 # write32, 2 write32 of the value read by the row named in value).
 PROBE_STEPS = [(0x01880014, 0, 0), (0x01880010, 0, 0), (0x0a0000b0, 0, 0), (0x01800024, 0, 0), (0x01800020, 0, 0),
@@ -141,6 +190,19 @@ def probe_steps(elf):
     return [struct.unpack_from('<3I', data, 12 * i) for i in range(len(PROBE_STEPS))]
 
 
+def object_table(elf, name, row_size):
+    """The rows of one static table of 32-bit words in a linked image."""
+    from elftools.elf.elffile import ELFFile
+    with Path(elf).open('rb') as stream:
+        image = ELFFile(stream)
+        found = [s for s in image.get_section_by_name('.symtab').iter_symbols()
+                 if s.name == name and s['st_info']['type'] == 'STT_OBJECT']
+        require(len(found) == 1 and found[0]['st_size'] % row_size == 0, f'{elf} has no single table {name}')
+        section = image.get_section(found[0]['st_shndx'])
+        data = section.data()[found[0]['st_value'] - section['sh_addr']:][:found[0]['st_size']]
+    return [struct.unpack_from(f'<{row_size // 4}I', data, i) for i in range(0, len(data), row_size)]
+
+
 def power_order(elf, cycles):
     """TOP5 before CORE6 at ON, CORE6 before TOP5 at OFF, in the image's own step tables, which
     every one of the client's cycles runs."""
@@ -160,10 +222,13 @@ def power_order(elf, cycles):
             'off_domain_step': off_domain[0]}
 
 
-def prepare_bundle(row, build, check, output):
-    """Copy one GPU image and its records into the bundle directory output, then validate it."""
+def prepare_bundle(row, build, check, output, units=None):
+    """Copy one GPU image and its records into the bundle directory output, then validate it.
+    units: the vendor-state variant's unit-check result, which its bundle carries with the approval record."""
     build, check = Path(build), Path(check)
     record = json.loads(build.read_text())
+    require((units is not None) == (variant_of(record) == 'vendor-state'),
+            'A unit-check result belongs to the vendor-state variant alone.')
     directory = build.parent
     binary = directory / ('probe.bin' if (directory / 'probe.bin').is_file() else 'checkpoint.bin')
     output.mkdir()
@@ -175,6 +240,9 @@ def prepare_bundle(row, build, check, output):
     tools.mkdir(parents=True)
     for name, rel in HOST_TOOLS.items():
         shutil.copyfile(ROOT / rel, tools / name)
+    if units is not None:
+        shutil.copyfile(units, output / 'unit-check.json')
+        shutil.copyfile(record['vendor_state']['approval']['path'], output / 'approval.json')
     source = PROVIDER_READY if variant_of(record) != 'provider-ready' else record.get('base_image_sha256')
     origin = {PROVIDER_READY: 'gpu-provider-ready', FAILED_POWER_ID: 'gpu-power-id-fd3d5839'}.get(source)
     require(origin is not None, 'The build reuses objects of an unrecorded image.')
@@ -263,7 +331,49 @@ def validate(row, output):
                         'A host-check case read a GPU address other than the identity words in order.')
                 require('a733_gpu_platform_off_begin' not in case['calls'], 'A host-check case powered the GPU OFF.')
             value['on_steps_order'] = 'vendor clock and reset; CORE6 delay row dropped'
+        vst = 'vendor_state_identity' in names
+        require(vst == (variant == 'vendor-state'), 'The image\'s vendor-state client does not match its variant.')
+        if variant == 'vendor-state':
+            value['vendor_state'] = vendor_state(output, record, checked)
         require(all(not case['gpu_writes'] for case in checked['cases']), 'A host-check case wrote the GPU window.')
         if variant == 'power-only':
             require(all(not case['gpu_reads'] for case in checked['cases']), 'A host-check case read the GPU window.')
     return value
+
+
+def vendor_state(output, record, checked):
+    """The vendor-state bundle's pinned tables, unit check and approval record."""
+    elf = output / 'image.elf'
+    steps = step_table(elf, 'on_steps')
+    require(steps == VENDOR_STATE_ON_STEPS, 'on_steps is not the vendor-state clock, reset and PLL sequence.')
+    require(not any(s[1] == BANK_CORE and s[2] in (0x170, 0x174, 0xc00, 0xc04, 0xc10) for s in steps),
+            'The vendor-state ON steps write the CORE6 delay row.')
+    require(object_table(elf, 'vendor_state_el3_writes', 12) == VENDOR_STATE_EL3,
+            'The EL3 table is not BL31\'s security writes in their order.')
+    require([w for (w,) in object_table(elf, 'vendor_state_identity', 4)] == VENDOR_STATE_IDENTITY,
+            'The identity table is not 0x01800024 then 0x01800020.')
+    for case in checked['cases']:
+        reads = [[hex(a), 4] for a in VENDOR_STATE_IDENTITY]
+        require(case['gpu_reads'] == reads[:len(case['gpu_reads'])],
+                'A host-check case read a GPU address other than the identity words in order.')
+        require('a733_gpu_platform_off_begin' not in case['calls'], 'A host-check case powered the GPU OFF.')
+    units = json.loads((output / 'unit-check.json').read_text())
+    compiled = {item['source']: item['source_sha256'] for item in record['new_objects']}
+    copies = record['vendor_state']['copies']
+    require(units.get('physical_access') is False and len(units.get('cases', [])) == UNIT_CASES and
+            'failed_case' not in units, f'The unit check did not pass its {UNIT_CASES} cases.')
+    require(all(units['units'].get(c) == compiled[c] for c in copies.values() if c != 'apps/gpu-power-id/vendor-state.c'),
+            'The unit check ran on other sources than the build compiled.')
+    require(set(units['copies']) == set(copies.values()) - {'apps/gpu-power-id/vendor-state.c'},
+            'The unit check does not cover every copy.')
+    approval = json.loads((output / 'approval.json').read_text())
+    require(sha256(output / 'approval.json') == record['vendor_state']['approval']['sha256'],
+            'approval.json is not the record the build names.')
+    v = approval['voltage']
+    require(approval['schema'] == 'gpu-vendor-state-approval-v1' and approval['approval']['date'] == '2026-10-25' and
+            v['rail'] == 'DCDC4' and v['register'] == '0x15' and v['selector'] == '0x2e' and v['value_uv'] == 960000 and
+            v['entry_selector'] == '0x1e' and v['entry_uv'] == 800000 and approval['clock']['word'] == '0xe9105300',
+            'The approval record does not name DCDC4 0x2e (960 mV) from 0x1e and PLL_GPU0 0xe9105300.')
+    return {'on_steps': len(steps), 'el3_writes': len(VENDOR_STATE_EL3), 'unit_cases': len(units['cases']),
+            'approval': {'rail': v['rail'], 'selector': v['selector'], 'value_uv': v['value_uv'],
+                         'entry_selector': v['entry_selector'], 'date': approval['approval']['date']}}
