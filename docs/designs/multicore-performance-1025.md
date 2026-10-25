@@ -361,6 +361,8 @@ cores with the lock bookkeeping and IRQ exit changes, PMU cycle counts for the
 removed barriers, the skew between A55 and A76 counter reads and a forced late
 tick on core 0. The compile definition `SUNSTONE_A733_PERF_SESSION` adds those
 measurements to the cached images (`platform/a733-smp-cached/perf_session.c`).
-The returning profile keeps every core busy, so the board session cannot
-measure wake placement, which acts only between idle cores; its evidence is
-the QEMU and model figures above.
+The measurements keep every core busy, as the profile's qualified runs did,
+so the board session does not measure wake placement, which acts only
+between idle cores; its evidence is the QEMU and model figures above. The
+runbook proposes, and the profile's models pass, a variant of the
+measurement phase that idles the cores to measure it.
