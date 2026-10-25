@@ -25,7 +25,9 @@ set, `board-bundles-20261024-4/`, is superseded and must not run.
 The eighth set, `~/.cache/sunstoneos/evidence/board-bundles-20261024-8/`, is
 prepared for the next lifetimes of both boards and is not run (section "The
 eighth set"). It supersedes the seventh set, `board-bundles-20261024-7/`,
-which must not run. Bundle 10 stays refused until its runner declares completion
+which must not run. Port 3-1 ran the eighth set's provider-readiness step in
+a new lifetime; the ninth set, `board-bundles-20261024-9/`, replaces that
+set's two GPU power steps (section "The ninth set"). Bundle 10 stays refused until its runner declares completion
 counts and its owner names admission values.
 It extends [the bundle tool design](board-bundles.md) and follows
 [performance-architecture.md](../performance-architecture.md). Board state
@@ -373,6 +375,27 @@ which bundle 7 and the native USB image also run. A controlled outcome is
 not a pass for any gate, and the operator applies the gates: the runner
 does not check them. Bundle 8 is not in the set; its NSI priority writes of
 `bb8-run` persist until power removal.
+
+## The ninth set
+
+`board-bundles-20261024-9/port-3-1/` continues the port 3-1 lifetime of
+`board-session-20261024-9/port-3-1/`, which already holds the cold DDR start
+`s7-ddr` and the eighth set's provider-readiness step (`s7-gpr-cache-off`,
+`s7-gpr-survey`, `s7-gpr-run`, all passed). Its runbook names those records
+and asks for no new cold start. The lifetime file lists the earlier pass in
+`passed`, so bundle 12's gate on bundle 11 refers to `s7-gpr-run`, and the
+warm-return chain starts with it.
+
+- **Bundle 12** is the power-only image with two ON/OFF cycles and the
+  CORE6 admission of the power-up state (policy 8, status 0, PWCR `0x101`).
+- **Bundle 13**, the identity image, runs only after bundle 12 returned
+  status 0 with `core_status=0x8` in both cycles.
+
+Both images equal the GPU owner's builds byte for byte. Each returning step
+runs the returning SRAM survey of `bootstrap-retention-20261024/survey-build`
+with `tools/run-launch-survey.py`, whose manifest names that runner, and each
+bundle carries the kernel runner that exits once a failed image has returned
+to the ROM.
 
 ## The eighth set
 

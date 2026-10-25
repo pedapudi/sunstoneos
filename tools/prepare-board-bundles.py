@@ -221,11 +221,17 @@ GPU_PREREQUISITES = ('Admission (apps/gpu-power-id/README.md, "Physical admissio
                      'of this lifetime; no GPU firmware or command has run since power was applied; the coordinator '
                      'grants the 18 MiB RAM interval [0x41000000, 0x42200000), the PMIC inputs (S_TWI0 gate and '
                      'reset, APBS route, PL0/PL1, settled supplies, no other PMU writer) and, for the power rows, '
-                     'exclusive GPU-local authority over the GPU CCU words and CORE6 policy and PWCR at 0x07066000, '
-                     'with TOP5 through the shared domain-5 row. No NPU image runs in this lifetime.')
-GPU_FAILURES = ['`FAIL GPU ON begin`, `GPU ON deadline` or `GPU ON poll`, after `GPU power phase=...` and `GPU CORE '
-                'entry seen=... policy=... status=... pwcr=...` lines that hold cached values only; `GPU ON poll` '
-                'or `GPU ON deadline` also ends a CORE6 status poll that never read 8',
+                     'exclusive GPU-local authority over the GPU CCU words and the CORE6 power policy unit at '
+                     '0x07066000: its policy (+0x00) and PWCR (+0x20) writes, and reads of its status (+0x08), '
+                     'MISR (+0x14) and IDR0 (+0xfb0). The grant covers each CORE6 entry state the controller admits: '
+                     'settled OFF (policy and status 0), settled ON (both 8) and the power-up state (policy 8, status '
+                     '0, PWCR 0x101, the reset value), from which ON writes PWCR 0 and then policy 8. Any other entry '
+                     'is refused before a write. TOP5 is reached only through the shared domain-5 row. No NPU image '
+                     'runs in this lifetime.')
+GPU_FAILURES = ['`FAIL GPU ON begin`, `GPU ON deadline` or `GPU ON poll`, after the `GPU power phase=...` and `GPU '
+                'CORE entry`, `inputs` and `after` lines of the failing cycle, which hold cached values only; `GPU '
+                'ON poll` or `GPU ON deadline` also ends a CORE6 status poll that never read 8, and `GPU ON poll` an '
+                'entry state that admission refuses',
                 '`FAIL GPU OFF begin`, `GPU OFF deadline`, `GPU OFF poll` or `GPU OFF ownership proof`',
                 '`FAIL GPU provider park proof` or `GPU provider request retained`',
                 'a `FAIL` line of the provider or service (`provider fault`, `provider startup and supply '
@@ -480,7 +486,8 @@ ROWS = [
             'apps/gpu-power-id, identity variant: the power-only sequence with one 64-bit read of 0x01800020 (and, '
             'only when its branch field is zero, the legacy 32-bit reads of 0x01800020 and 0x01800018) between ON '
             'and OFF, each after an identity Device-nGnRnE mapping check and a deadline check. No GPU register '
-            'write. It runs only after gpu-power-only of this set returned with status 0 in the same lifetime.',
+            'write. It runs only after gpu-power-only of this set returned with status 0 in the same lifetime and '
+            'printed GPU power cycle=1 core_status=0x8 and GPU power cycle=2 core_status=0x8.',
             after=['gpu-power-only'],
             failures=['`FAIL GPU identity mapping`, `GPU identity ownership/access` or `GPU identity '
                       'deadline/clock`']),
@@ -845,8 +852,11 @@ def runbook(row, bundle, value, artifacts, prerequisites, timeout, lifetime=None
     required, stopped = gates(row), stops(entry)
     if required or stopped:
         lines += ['## Run only after', '']
-        lines += [f'- `{name}` of this set passed in this lifetime ({reason}): status 0 with its success text. A '
-                  'controlled outcome of that row is not a pass.' for name, reason in required]
+        passed = (lifetime or {}).get('passed', {})
+        lines += [(f'- `{name}` passed earlier in this lifetime as `$S/{passed[name]}` ({reason}), from an earlier '
+                   'set: status 0 with its success text.' if name in passed else
+                   f'- `{name}` of this set passed in this lifetime ({reason}): status 0 with its success text. A '
+                   'controlled outcome of that row is not a pass.') for name, reason in required]
         lines += [f'- Do not run it when {text}.' for text in stopped]
         lines += ['', 'The operator applies these gates; the runner does not check them.', '']
     lines += ['## Bundle', '', '| File | SHA-256 |', '| --- | --- |']
@@ -984,7 +994,9 @@ def set_runbook(run_dir, lifetime, rows, table):
         else:
             what = f'`{entry["external"]}`, `{entry["runbook"]}`'
             after = entry.get('after', [])
-        gate = [f'`{a}` passed' for a in after] + [f'not if {text}' for text in stops(entry)]
+        passed = lifetime.get('passed', {})
+        gate = [f'`{a}` passed' + (f' (`{passed[a]}`, already in the chain)' if a in passed else '') for a in after]
+        gate += [f'not if {text}' for text in stops(entry)]
         lines.append(f'| {i} | {what} | `$S/{entry["stem"]}-*`; link `{entry["run"]}` | '
                      + ('; '.join(gate) or 'none') + ' |')
     lines += ['', '## Warm-return chain', '',
@@ -1276,12 +1288,15 @@ def check_lifetime(lifetime, names, inputs):
     """A lifetime file names its port, DDR record, warm-return chain and an order of distinct record stems in
     which every gate names a row placed earlier."""
     require(isinstance(lifetime, dict) and {'port', 'ddr', 'chain', 'order'} <= set(lifetime)
-            and set(lifetime) <= {'port', 'ddr', 'chain', 'order', 'state', 'start'},
-            'The lifetime names port, ddr, chain and order, and optionally state and start.')
+            and set(lifetime) <= {'port', 'ddr', 'chain', 'order', 'state', 'start', 'passed'},
+            'The lifetime names port, ddr, chain and order, and optionally state, start and passed.')
+    passed = lifetime.get('passed', {})
+    require(isinstance(passed, dict) and all(name in names and run in lifetime['chain'] for name, run in passed.items()),
+            'passed maps a row of the table to the chain record of its earlier pass in this lifetime.')
     require(all(isinstance(x, str) for x in lifetime.get('start', [])), 'start is a list of runbook lines.')
     require(all(isinstance(x, str) and x and '/' not in x for x in [lifetime['ddr'], *lifetime['chain']]),
             'The DDR record and the chain are record directory names of the session directory.')
-    stems, runs, placed = set(), set(lifetime['chain']), []
+    stems, runs, placed = set(), set(lifetime['chain']), list(lifetime.get('passed', {}))
     for entry in lifetime['order']:
         require(isinstance(entry, dict) and ('row' in entry) != ('external' in entry), 'Each order entry names a row '
                 'or an external bundle.')
