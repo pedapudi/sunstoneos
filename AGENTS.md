@@ -39,6 +39,9 @@ do not copy each run's status into it.
   Defer replacement of opaque firmware and development tools until complete
   hardware functionality and performance tuning; existing dependencies may serve
   both stages. This does not defer driver integration needed for FreeRTOS operation.
+- Default every hardware block to the highest operating point the vendor uses
+  for the chip's speed bin, with the vendor's voltage. Lower clocks are
+  optional modes (power saving, thermal limits), never the default or a cap.
 - Complete onboard hardware support and local mimus execution are separate
   completion requirements. A CPU fallback does not satisfy accelerator support.
 - Work on isolated branches or worktrees. Preserve other workers' changes.
