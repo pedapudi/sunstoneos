@@ -116,8 +116,17 @@ matched their predictions.
   vendor driver runs it at 852 MHz with DCDC2 at 800 mV, so 852 MHz is the
   vendor's top operating point on these boards. `work/npu-full-model-1025` is
   merged. `work/npu-job-overhead-1025` makes 852 MHz the default, moves the
-  fixed-buffer hashing to open and close, and simplifies the register path; it
-  is in review.
+  fixed-buffer hashing to open and close, and simplifies the register path.
+  **Qualified and merged** (set `board-bundles-20261025-19`,
+  `board-session-20261025-15/port-3-3`). All four ShuffleNetV2 outputs
+  matched, and all three state reads matched their predictions.
+  - Publication to start: 231–239 µs, down from about 56 ms.
+  - Before the trigger: 4.9–5.3 µs, down from 13–14 µs.
+  - IRQ to recorded completion: 10.1–12.4 µs, down from about 17 µs.
+  - Inference: unchanged, 3.69 ms at 492 MHz and 2.91 ms at 852 MHz.
+  - Startup: 4.0 ms.
+  A job at the 852 MHz default now costs about 3.3 ms end to end, down from
+  about 59 ms.
 
 **NPU interrupt completion and job timing, qualified on port 3-3**
 (set `board-bundles-20261025-13`, `board-session-20261025-9/port-3-3`;
