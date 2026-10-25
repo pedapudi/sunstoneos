@@ -1,10 +1,19 @@
 # Current work
 
-**Paused at the user's request on 2026-10-24 because the weekly limit is near.**
-The coordinator interrupted the GPU and NPU implementation agents and their
-active reviewers. Do not resume development, builds, tests or hardware work
-until the user asks. No board access occurred during this board-free tranche.
-There is no active goal object to update.
+**Development resumed on 2026-10-24 at the user's request.** The Claude
+coordinator session now owns the GPU work in `gpu-provider-ready-1024` and the
+NPU OS work in `npu-thermal-1024`; each first commits its saved edits as is and
+merges `bringup`. The boards stay untouched until the user reports both
+reconnected. The PMIC step-bound review fixes merged at `b41460e6`: the bound is
+the board median plus about 20 µs (799 µs, and 839 µs for the first step),
+1,268 permille of the step's own wire time, and 110% stays open for writes.
+`checks/power-domains-service.c` now models the GPU CORE register bank; it had
+aborted on `a0f79c3d` after the CORE6 power commits.
+
+The user approved physical CPU clock and voltage changes on 2026-10-24: the A76
+operating-point runs A1, A2 and A3 of `docs/designs/cpu-a76-dvfs.md` and the
+DCDC3 selector write, each still gated on its own prerequisites. Publishing the
+mimus branch `port/sunstoneos` (`9c57286b7`) awaits the user's answer.
 
 ## Review of the paused tranche (2026-10-24 evening)
 
@@ -49,24 +58,26 @@ and global PMIC transport retention. No production defect was found. Reuse
 this pause or documentation commit. The associated power-domain documentation
 is saved with this handoff. Check-index aggregation remains pending.
 
-**Uncommitted GPU integration:** preserve
-`/home/sunil/git/sunstoneos-worktrees/gpu-provider-ready-1024`, branch
-`work/gpu-provider-ready-1024`, based on merge `50db83c6`.
-The finite returning GPU and resident OS GPU-linear profiles both build using
-current dependency objects. The GPU-specific CMake option and current-monitor
-patch remove historical application-object mixing. Return admission now checks
-CORE6 OFF as well as TOP5. Actual typed allocator output exposed a further
-legacy-geometry defect: payload starts at `0x48030000`, the first-fit table fills
-`0x48022000..0x4802e000`, and the WB span ends at `0x48088000`. Earlier estimates
-of table/end addresses were superseded by these producer results.
-Six affected linked return cases passed; three OS caller cases and three finite
-backend cases were preserved. Evidence: `gpu-full-integration-20261024/`.
-Final review still needs the immutable ELF span marker, native-report-to-host
-round trip, malformed-span refusal and final dependency/artifact closure.
-The marker must preserve the historical `0x86000` span only when absent and
-refuse malformed present values. Do not replay unchanged successful cases.
-Untracked files include `apps/gpu-finite/current-monitor.patch` and
-`checks/gpu-linked-lifecycle.py`; preserve them with all tracked edits.
+**Returning GPU image (merged 2026-10-24):** the finite GPU image that runs
+one job and returns builds from current objects; the shared monitor and
+`platform/a733/platform.c` are configure inputs. The image is `9005499a…`.
+- **Return quiet check:** it requires TOP5 and CORE6 policy and status 0, at EL1
+  and again at EL3.
+- **Write-back span:** a read-only ELF marker holds the span
+  `0x48000000..0x48088000`. A malformed marker is refused. An image without the
+  marker is accepted with the historical `0x86000` span only if it lacks the
+  typed allocator.
+- **Clean deadline:** it is checked once per 4 KiB page, so the normal case
+  issues 312 ISBs rather than about 19,600.
+- **Checks:** all 29 return cases, the 9 marker cases and the linked lifecycle
+  cases pass.
+- **Evidence:** `gpu-full-integration-20261024/merged/`, with closure snapshot
+  `snapshot-2`.
+
+The image is not physically eligible. Running it needs a single-core admission
+record granting exclusive CORE6 and TOP5 control, confirmed supply, clock and
+isolation, and a reviewed return and recovery plan. The default GPU single-core
+profile also patches `platform.c` without listing it as a configure input.
 
 **Uncommitted NPU OS integration:** preserve
 `/home/sunil/git/sunstoneos-worktrees/npu-thermal-1024`, branch
@@ -307,9 +318,9 @@ defect was found. Evidence: `accelerator-shared-owner-20261024/`.
    permille of measured wire time, with 40 µs extra for the first step. Exact
    comparisons and focused checks pass; the 110% target remains open. Refreeze
    the revised trace and row text before the next physical timing measurement.
-6. Publishing mimus `9c57286b7` and each physical CPU clock or PMIC voltage
-   change still require their specific approvals. Independent implementation
-   and modeling continue without those operations.
+6. Physical CPU clock and DCDC3 voltage changes are approved within
+   `docs/designs/cpu-a76-dvfs.md`; other PMIC rails are not. Publishing mimus
+   `9c57286b7` still requires the user's approval.
 
 Both finite accelerator host parsers now use their actual native monitor
 identifiers, with producer-derived regression evidence. The earlier fixtures

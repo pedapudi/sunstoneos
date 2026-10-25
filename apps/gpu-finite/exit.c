@@ -23,15 +23,19 @@ _Noreturn void platform_exit(unsigned status)
     if(deadline>admitted)deadline=admitted;
     gpu_return_receipt=(struct gpu_return_receipt){GPU_RETURN_RECEIPT_MAGIC,
         app.session.epoch,app.session.generation,app.session.lease,0,1,
-        start,end,0x48000000,0x48086000,(end-start+0x86000)/64,deadline,RESULT->log_length};
+        start,end,GPU_RETURN_WB_START,GPU_RETURN_WB_END,(end-start+GPU_RETURN_WB_BYTES)/64,deadline,RESULT->log_length};
     __asm__ volatile("dsb sy":::"memory");
     /* Both intervals are accessed through the existing Nonsecure EL1 mapping.
-     * The five exact DEVICE parents are checked before touching their contents. */
+     * The five exact DEVICE parents are checked before touching their contents.
+     * The deadline is checked before each 4 KiB page (at most 64 lines), not
+     * before each line; the counter read carries an ISB. */
     for(unsigned interval=0;interval<2;++interval){
-        uintptr_t lo=interval?0x48000000:start,hi=interval?0x48086000:end;
-        for(uintptr_t p=lo;p<hi;p+=64){
+        uintptr_t lo=interval?GPU_RETURN_WB_START:start,hi=interval?GPU_RETURN_WB_END:end;
+        for(uintptr_t page=lo;page<hi;){
+            uintptr_t next=(page|4095)+1;if(next>hi)next=hi;
             now=counter();if(!a733_deadline_admit(now,&last,deadline))retain();
-            __asm__ volatile("dc cvac,%0"::"r"(p):"memory");
+            for(uintptr_t p=page;p<next;p+=64)__asm__ volatile("dc cvac,%0"::"r"(p):"memory");
+            page=next;
         }
     }
     __asm__ volatile("dsb sy":::"memory");

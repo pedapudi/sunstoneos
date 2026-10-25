@@ -7,6 +7,51 @@ ROOT=Path(__file__).resolve().parents[2]
 def module(name,path):
  spec=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
 prep=module('gpu_finite_prepare_check',ROOT/'apps/gpu-finite/prepare.py')
+def marker_cases(current,historical,e):
+ """Refuse every malformed write-back span marker, keeping the historical span only for untyped images."""
+ from elftools.elf.elffile import ELFFile
+ def sha(data):return hashlib.sha256(data).hexdigest()
+ def load(directory):
+  path=directory/'build/return.elf';data=path.read_bytes();manifest=json.loads((directory/'manifest.json').read_text())
+  with path.open('rb') as stream:
+   elf=ELFFile(stream);symtab=elf.get_section_by_name('.symtab');entries=list(symtab.iter_symbols())
+   loads=[(i,x) for i,x in enumerate(elf.iter_segments()) if x['p_type']=='PT_LOAD']
+   layout={'names':{x.name:i for i,x in enumerate(entries)},'values':[int(x['st_value']) for x in entries],
+    'symtab':(int(symtab['sh_offset']),int(symtab['sh_entsize'])),'loads':[(i,int(x['p_vaddr']),int(x['p_filesz']),int(x['p_offset'])) for i,x in loads],
+    'phdr':(int(elf.header['e_phoff']),int(elf.header['e_phentsize']))}
+  return data,manifest,layout
+ def entry(layout,name):base,size=layout['symtab'];return base+layout['names'][name]*size
+ def refused(label,data,manifest,edits,message):
+  corrupt=bytearray(data)
+  for fmt,at,value in edits:struct.pack_into(fmt,corrupt,at,value)
+  bad=e/(label+'.elf');bad.write_bytes(corrupt)
+  try:prep.image_profile(bad,dict(manifest,final_elf=sha(corrupt)))
+  except ValueError as error:assert str(error)==message,(label,str(error))
+  else:raise AssertionError(label+' accepted')
+  cases[label+'-refused']=True
+ cases={}
+ data,manifest,layout=load(current);path=current/'build/return.elf'
+ geometry=prep.image_profile(path,manifest)[3];assert (geometry['wb_start'],geometry['wb_end'])==(0x48000000,0x48088000);cases['current-marker-accepted']=True
+ old=(historical/'build/return.elf').read_bytes();old_manifest=json.loads((historical/'manifest.json').read_text())
+ span=prep.image_profile(historical/'build/return.elf',old_manifest)[3];assert (span['wb_start'],span['wb_end'])==(0x48000000,0x48086000);cases['historical-marker-absent-accepted']=True
+ marker=entry(layout,'gpu_return_wb_geometry');address=layout['values'][layout['names']['gpu_return_wb_geometry']]
+ seg,vaddr,filesz,base=next(x for x in layout['loads'] if x[1]<=address<x[1]+x[2]);offset=base+address-vaddr
+ phdr=layout['phdr'][0]+seg*layout['phdr'][1];flags=struct.unpack_from('<I',data,phdr+4)[0]
+ name=struct.unpack_from('<I',data,marker)[0];other=struct.unpack_from('<I',data,entry(layout,'last_tick'))[0]
+ unbacked=layout['values'][layout['names']['__bss_start']];assert not any(v<=unbacked<v+f for _,v,f,_ in layout['loads'])
+ for label,edits,message in [
+  ('changed-span',[('<Q',offset+8,0x48089000)],'Unknown GPU WB geometry.'),
+  ('changed-start',[('<Q',offset,0x48001000)],'Unknown GPU WB geometry.'),
+  ('marker-size',[('<Q',marker+16,8)],'Malformed GPU WB geometry marker.'),
+  ('marker-duplicate',[('<I',entry(layout,'last_tick'),name)],'Malformed GPU WB geometry marker.'),
+  ('marker-writable',[('<I',phdr+4,flags|2)],'GPU WB geometry must be immutable and file-backed.'),
+  ('marker-unbacked',[('<Q',marker+8,unbacked)],'GPU WB geometry must be immutable and file-backed.'),
+  ('typed-marker-renamed',[('<I',marker,other)],'GPU WB geometry marker does not match the allocator.')]:
+  refused(label,data,manifest,edits,message)
+ (e/'marker-result.json').write_text(json.dumps({'passed':True,'physical_access':False,'image_sha256':sha(data),'historical_image_sha256':sha(old),'cases':cases,
+  'scope':'Host preparation of the final ELF and of a frozen image built before the marker; each refusal is a single-field ELF edit with a rebound manifest digest.',
+  'source_sha256':{str(x.relative_to(ROOT)):hashlib.sha256(x.read_bytes()).hexdigest() for x in [ROOT/'apps/gpu-finite/prepare.py',Path(__file__).resolve()]}},indent=2)+'\n')
+ print('PASS GPU write-back span marker:',len(cases),'cases')
 def main():
  parser=argparse.ArgumentParser(description=__doc__)
  parser.add_argument('--evidence',type=Path,required=True)
@@ -15,11 +60,15 @@ def main():
  selection.add_argument('--producer-only',action='store_true')
  selection.add_argument('--session-envelope-only',action='store_true')
  selection.add_argument('--disposition-only',action='store_true')
+ selection.add_argument('--marker-only',action='store_true')
  parser.add_argument('--image-evidence',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/gpu-returning-repeat-fix-20261019')
+ parser.add_argument('--historical-evidence',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/gpu-returning-repeat-fix-20261019')
  a=parser.parse_args();e=a.evidence.resolve();e.mkdir(parents=True,exist_ok=True)
  def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
  def dump(name,value):path=e/name;path.write_text(json.dumps(value,indent=2)+'\n');return {'path':str(path),'sha256':sha(path)}
  assert (ROOT/'tools/a733-returning-host.py').read_bytes()==a.shared_helper.read_bytes()
+ if a.marker_only:
+  marker_cases(a.image_evidence,a.historical_evidence,e);return
  image=a.image_evidence/'build/return.elf';manifest=a.image_evidence/'manifest.json';parts,address,build,geometry=prep.image_profile(image,json.loads(manifest.read_bytes()));h=sha(image)
  model=e/'MODEL-ONLY.txt';model.write_text('Synthetic test evidence. No physical admission or qualified hardware fact.\n');ref={'path':str(model),'sha256':sha(model)}
  def fact(schema,**fields):return {'schema':schema,'identity':'software-only-model','port':'no-physical-port','image_sha256':h,**fields}
