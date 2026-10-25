@@ -2025,6 +2025,7 @@
    "docs/designs/board-bundles-measurements.md",
    "docs/designs/board-bundles-next.md",
    "docs/designs/board-bundles.md",
+   "docs/designs/npu-sram-route.md",
    "docs/reference-backsolve-npu.md"
   ],
   "library": false,
