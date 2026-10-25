@@ -12,7 +12,8 @@ enum a733_npu_state {
 };
 enum a733_npu_fault {
     A733_NPU_NO_FAULT, A733_NPU_IO, A733_NPU_IDENTITY, A733_NPU_NOT_IDLE,
-    A733_NPU_REGISTER, A733_NPU_IRQ, A733_NPU_TIMEOUT, A733_NPU_MEMORY
+    A733_NPU_REGISTER, A733_NPU_IRQ, A733_NPU_TIMEOUT, A733_NPU_MEMORY,
+    A733_NPU_COUNTER /* A job's cycle-counter read failed at publish or finish. */
 };
 struct a733_npu_command {
     uint32_t device;
@@ -30,7 +31,10 @@ struct a733_npu_ops {
     /* Validate command/table/payload reservations and mappings, clean device
      * reads, and clean+invalidate device writes. Bootstrap includes the MMU
      * image. The prepared image is immutable until close; all job buffers stay
-     * pinned until reap. No cache line may overlap another CPU owner's data. */
+     * pinned until reap. No cache line may overlap another CPU owner's data.
+     * publish and finish return 1 on success, 0 on a memory failure
+     * (A733_NPU_MEMORY) and -1 when a job's cycle-counter read failed
+     * (A733_NPU_COUNTER). */
     int (*publish)(void *, const struct a733_npu_mmu_image *,
                    const struct a733_npu_command *, int bootstrap);
     /* After event AND full idle (or confirmed cancel AND full idle), invalidate

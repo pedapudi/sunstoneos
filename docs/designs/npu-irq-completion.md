@@ -88,6 +88,11 @@ trigger and at the worker's completion observation (`npu_convolution.c:334`,
   counters before each job (`vip_drv_task_debug.c:390-395`); SunstoneOS
   takes differences and writes nothing;
 - the system counter `CNTPCT_EL0`, 24 MHz on the A733;
+- a failed counter read faults the job with `A733_NPU_COUNTER`, which the
+  callbacks report by returning -1, distinct from a memory failure
+  (`A733_NPU_MEMORY`, a return of 0; `include/a733_npu_controller.h`). The
+  convolution model's `counter-fault` mode and `checks/npu-controller.c`
+  check both codes;
 - the NPU adapter's counter microseconds, as before.
 
 The interrupt handler also records the system counter at each delivery

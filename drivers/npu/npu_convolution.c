@@ -340,7 +340,8 @@ static int publish(void *cookie,const struct a733_npu_mmu_image *image,
     if(!a733_npu_native_operations.publish(&c->native,image,command,bootstrap))return 0;
     if(!bootstrap) {
         c->job_finished_us=c->job_done_ticks=0;c->job_cycles[0]=c->job_cycles[1]=0;
-        if(!read_reg(c,0x078,&c->job_start_cycles[0]) || !read_reg(c,0x07c,&c->job_start_cycles[1]))return 0;
+        /* A failed counter read is reported as such (A733_NPU_COUNTER). */
+        if(!read_reg(c,0x078,&c->job_start_cycles[0]) || !read_reg(c,0x07c,&c->job_start_cycles[1]))return -1;
         c->job_start_ticks=ticks();
         c->job_published_us=a733_npu_native_operations.microseconds(&c->native);
     }
@@ -356,7 +357,7 @@ static int finish(void *cookie,const struct a733_npu_command *command,int cancel
         uint32_t total,idle;
         c->job_done_ticks=ticks();
         c->job_finished_us=a733_npu_native_operations.microseconds(&c->native);
-        if(!read_reg(c,0x07c,&idle) || !read_reg(c,0x078,&total))return 0;
+        if(!read_reg(c,0x07c,&idle) || !read_reg(c,0x078,&total))return -1;
         c->job_cycles[0]=total-c->job_start_cycles[0];c->job_cycles[1]=idle-c->job_start_cycles[1];
     }
     return a733_npu_native_operations.finish(&c->native,command,canceled);

@@ -137,7 +137,7 @@ int a733_npu_open(struct a733_npu_controller *c, const struct a733_npu_ops *ops,
         !read_reg(c, 0x28, &c->chip_date)) return 0;
     if (c->chip_product != 0x1000003b || c->chip_revision != 0x9202)
         return fail(c, A733_NPU_IDENTITY);
-    if (!c->ops.publish(cookie, &c->mmu, &c->job, 1)) return fail(c, A733_NPU_MEMORY);
+    if (c->ops.publish(cookie, &c->mmu, &c->job, 1) != 1) return fail(c, A733_NPU_MEMORY);
     c->ops.barrier(cookie);
     if (!reset(c)) return 0;
     uint32_t value;
@@ -162,7 +162,8 @@ int a733_npu_submit(struct a733_npu_controller *c, const struct a733_npu_command
     c->job = *cmd; c->bootstrap = 0; c->irq_seen = 0;
     c->start = c->ops.microseconds(c->cookie); c->timeout = timeout;
     c->state = A733_NPU_RUNNING;
-    if (!c->ops.publish(c->cookie, &c->mmu, &c->job, 0)) return fail(c, A733_NPU_MEMORY);
+    int published = c->ops.publish(c->cookie, &c->mmu, &c->job, 0);
+    if (published != 1) return fail(c, published < 0 ? A733_NPU_COUNTER : A733_NPU_MEMORY);
     c->ops.barrier(c->cookie);
     return trigger(c);
 }
@@ -228,8 +229,9 @@ enum a733_npu_state a733_npu_advance(struct a733_npu_controller *c, int sample_e
     c->irq_seen |= value;
     if (c->irq_seen & ~EVENT_DONE) { fail(c, A733_NPU_IRQ); return c->state; }
     c->ops.barrier(c->cookie);
-    if (!c->ops.finish(c->cookie, &c->job, canceled)) {
-        fail(c, A733_NPU_MEMORY); return c->state;
+    int finished = c->ops.finish(c->cookie, &c->job, canceled);
+    if (finished != 1) {
+        fail(c, finished < 0 ? A733_NPU_COUNTER : A733_NPU_MEMORY); return c->state;
     }
     if (canceled) c->state = A733_NPU_CANCELED;
     else if (c->bootstrap) { c->job.token = 0; c->state = A733_NPU_READY; }

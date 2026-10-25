@@ -41,6 +41,7 @@ static void check_fatal(void *unused){(void)unused;platform_panic("convolution n
 static int check_read(void *cookie,unsigned offset,uint32_t *out)
 {
     configASSERT(cookie==&convolution.native);check_privileged();atomic_fetch_add(&check_accesses,1);
+    if(check_activation_mutation==6 && offset==0x78 && check_job)return 0; /* Job cycle counter unreadable. */
     if(check_running && (check_is_bootstrap || atomic_load(&check_allow))) {
         check_registers[0x10/4]=1;check_registers[1]=0x7fffffff;check_running=0;
         if(!check_is_bootstrap) {
@@ -170,6 +171,15 @@ static void check_client_run(void *unused)
     configASSERT(!npu_convolution_collect(&convolution,ticket+1,&reply,0));
     configASSERT(npu_convolution_collect(&convolution,ticket,&reply,2000));
     configASSERT(reply.result==NPU_SERVICE_OK);check_wait(A733_NPU_READY);
+    if(check_activation_mutation==6) {
+        /* A failed cycle-counter read at publication is its own fault. */
+        memcpy(input,fixture_input,sizeof(input));
+        reply=check_request(NPU_SERVICE_SUBMIT,input);
+        configASSERT(reply.result==NPU_SERVICE_FAULT && reply.fault==A733_NPU_COUNTER && reply.owns_session);
+        configASSERT(atomic_load(&check_publishes)==2 && !npu_convolution_output(&convolution,output,sizeof(output)));
+        platform_puts("PASS convolution cycle-counter read failure: SUBMIT faults with A733_NPU_COUNTER, not a memory fault\n");
+        platform_exit(0);
+    }
     configASSERT(!npu_convolution_output(&convolution,output,sizeof(output)));
     memcpy(input,fixture_input,sizeof(input));
     configASSERT(!npu_convolution_send(&convolution,NPU_SERVICE_SUBMIT,input,191,5000000,0,&ignored));
@@ -267,6 +277,7 @@ static unsigned check_mode(void)
     char command[128]={0};uintptr_t params[2]={(uintptr_t)command,sizeof(command)};
     register uintptr_t op __asm__("x0")=0x15,args __asm__("x1")=(uintptr_t)params;
     __asm__ volatile("hlt #0xf000":"+r"(op):"r"(args):"memory");configASSERT(!op);
+    for(unsigned i=0;i+13<sizeof(command);++i)if(!memcmp(command+i,"counter-fault",13))return 6;
     for(unsigned i=0;i+11<sizeof(command);++i)if(!memcmp(command+i,"job-command",11))return 5;
     for(unsigned i=0;i+11<sizeof(command);++i)if(!memcmp(command+i,"close-fault",11))return 4;
     for(unsigned i=0;i+5<sizeof(command);++i)if(!memcmp(command+i,"close",5))return 3;
