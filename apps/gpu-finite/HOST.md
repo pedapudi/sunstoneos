@@ -4,6 +4,8 @@ The GPU host adapter is for the coordinator operating one reviewed returning sin
 
 `prepare.py` requires the distinct `gpu-single-core-returning-v1` profile and `a733-gpu-finite-entry-v1` admission. It preserves the existing GPU session, launch request, contract and launcher producers. Admission requires current CPU and GPU DDR reservations, finite single-core platform facts, initial GPU isolation/power/mapping facts, and an explicit supervisor. The `a733-gpu-finite-return-review-v1` record must bind the exact image, build identity, target instance, physical port, supervisor, launcher hash and all host source hashes. Its evidence must cover architectural reset, software handoff, successful normal-return retirement and failure retention. Old retained-only admission records are rejected.
 
+The current complete build is recorded in `gpu-full-integration-20261024/profiles.json`; its finite image and manifest replace historical partial-object candidates for new integration work. Its shared CCU/PCK/PMIC ownership evidence must explicitly grant exclusive GPU LOCAL control of CORE6 in addition to shared TOP5 service ownership. An old record granting only TOP5 cannot authorize this image. Supported DCDC4 supply, 400 MHz parent, initial isolation, all-master exclusion and the complete RAM reservations remain required. No current physical admission accompanies the build.
+
 The fixed returning image seals exactly 592 session bytes. Preparation rejects
 larger program and texture envelopes before reading admission evidence or
 creating a bundle. The shared renderer accepts those envelopes for other images;
@@ -75,9 +77,9 @@ Evidence is under `~/.cache/sunstoneos/evidence/gpu-monitor-parser-20261024/`.
 This corrects a future capture rejection; it cannot explain absence of ROM
 before any result capture.
 
-## Candidate and bounded physical procedure
+## Historical candidate and bounded physical procedure
 
-Use the corrected two-job image under
+The attempted two-job image is preserved under
 `~/.cache/sunstoneos/evidence/gpu-returning-repeat-fix-20261019/`:
 
 - Image: `build/return.elf`, SHA-256

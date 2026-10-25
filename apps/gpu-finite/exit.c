@@ -23,12 +23,12 @@ _Noreturn void platform_exit(unsigned status)
     if(deadline>admitted)deadline=admitted;
     gpu_return_receipt=(struct gpu_return_receipt){GPU_RETURN_RECEIPT_MAGIC,
         app.session.epoch,app.session.generation,app.session.lease,0,1,
-        start,end,0x48000000,0x48086000,(end-start+0x86000)/64,deadline,RESULT->log_length};
+        start,end,GPU_RETURN_WB_START,GPU_RETURN_WB_END,(end-start+GPU_RETURN_WB_BYTES)/64,deadline,RESULT->log_length};
     __asm__ volatile("dsb sy":::"memory");
     /* Both intervals are accessed through the existing Nonsecure EL1 mapping.
      * The five exact DEVICE parents are checked before touching their contents. */
     for(unsigned interval=0;interval<2;++interval){
-        uintptr_t lo=interval?0x48000000:start,hi=interval?0x48086000:end;
+        uintptr_t lo=interval?GPU_RETURN_WB_START:start,hi=interval?GPU_RETURN_WB_END:end;
         for(uintptr_t p=lo;p<hi;p+=64){
             now=counter();if(!a733_deadline_admit(now,&last,deadline))retain();
             __asm__ volatile("dc cvac,%0"::"r"(p):"memory");

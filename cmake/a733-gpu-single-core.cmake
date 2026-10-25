@@ -8,6 +8,12 @@ option(SUNSTONE_GPU_LIFECYCLE "Allow exclusive standalone GPU child disposal and
 option(SUNSTONE_GPU_RUNTIME_INPUT "Accept copied runtime input within a sealed GPU program session" OFF)
 option(SUNSTONE_GPU_PROGRAM_APPLICATION "Accept a sealed trusted compiled-program session" OFF)
 option(SUNSTONE_GPU_TRANSPORT_ONLY "Observe the native shared USB transport without GPU construction or OPEN" OFF)
+option(SUNSTONE_GPU_FINITE_RETURN "Return after two fixed GPU arithmetic jobs and verified shutdown" OFF)
+if(SUNSTONE_GPU_FINITE_RETURN AND (NOT SUNSTONE_GPU_SUPERVISED OR NOT SUNSTONE_GPU_COMPUTE_APPLICATION OR
+    SUNSTONE_GPU_PROGRAM_APPLICATION OR SUNSTONE_GPU_RUNTIME_INPUT OR SUNSTONE_GPU_RUNTIME_DRAW OR
+    SUNSTONE_GPU_RUNTIME_TEXTURE OR SUNSTONE_GPU_LIFECYCLE OR SUNSTONE_GPU_TRANSPORT_ONLY))
+  message(FATAL_ERROR "Finite GPU return requires the supervised fixed-arithmetic profile only")
+endif()
 file(MAKE_DIRECTORY "${gpsc_build}")
 get_target_property(gpsc_sources sunstone-a733-gpu-render SOURCES)
 list(FILTER gpsc_sources EXCLUDE REGEX "(/platform/a733-smp-|/platform/a733/cpu_|/freertos-a733-smp-cached/|/storage-maintenance/(boot|platform|continue|port|build-id)\\.|/gpu-application/(boot[^/]*|platform|build-id)\\.)")
@@ -23,6 +29,17 @@ apply_build_patch("${gpsc_build}/link.ld" "${gpsc_shared}/link.ld" "${gpsc_app}/
 list(APPEND gpsc_sources "${gpsc_shared}/start.S" "${gpsc_shared}/monitor.c" "${gpsc_shared}/runtime.c"
  "${gpsc_build}/platform.c" "${gpsc_build}/port.c" "${gpsc_port}/portASM.S"
  "${gpsc_root}/arch/aarch64/start.S" "${gpsc_root}/arch/aarch64/vectors.S" "${gpsc_root}/arch/aarch64/cache.S")
+set(gpsc_link "${gpsc_build}/link.ld")
+if(SUNSTONE_GPU_FINITE_RETURN)
+  apply_build_patch("${gpsc_build}/return-monitor.c" "${gpsc_shared}/monitor.c"
+    "${gpsc_root}/apps/gpu-finite/current-monitor.patch")
+  apply_build_patch("${gpsc_build}/return-link.ld" "${gpsc_link}"
+    "${gpsc_root}/apps/gpu-finite/link.patch")
+  set(gpsc_link "${gpsc_build}/return-link.ld")
+  list(REMOVE_ITEM gpsc_sources "${gpsc_shared}/monitor.c")
+  list(APPEND gpsc_sources "${gpsc_build}/return-monitor.c" "${gpsc_root}/apps/gpu-finite/finite.c"
+    "${gpsc_root}/apps/gpu-finite/exit.c" "${gpsc_root}/apps/gpu-finite/return.c" "${gpsc_root}/apps/gpu-finite/return.S")
+endif()
 list(REMOVE_DUPLICATES gpsc_sources)
 set(gpsc_target sunstone-a733-gpu-compute-single-core)
 if(SUNSTONE_GPU_RUNTIME_DRAW)
@@ -40,6 +57,17 @@ get_target_property(gpsc_includes sunstone-a733-gpu-render INCLUDE_DIRECTORIES)
 get_target_property(gpsc_definitions sunstone-a733-gpu-render COMPILE_DEFINITIONS)
 list(FILTER gpsc_definitions EXCLUDE REGEX "^SUNSTONE_A733_SMP_DIAGNOSTIC=")
 set(gpsc_workload "fixed-arithmetic-repeat")
+set(gpsc_manifest_target "${gpsc_target}")
+set(gpsc_profile "gpu-single-core-supervised-v2")
+if(SUNSTONE_GPU_FINITE_RETURN)
+  list(APPEND gpsc_definitions SUNSTONE_GPU_FINITE_RETURN=1)
+  set(gpsc_workload "fixed-arithmetic-repeat-return")
+  set(gpsc_manifest_target "sunstone-a733-gpu-finite-returning")
+  set(gpsc_profile "gpu-single-core-returning-v1")
+  target_include_directories(${gpsc_target} PRIVATE "${gpsc_root}/apps/gpu-finite")
+  set_property(SOURCE "${gpsc_build}/platform.c" APPEND PROPERTY COMPILE_DEFINITIONS
+    "$<$<STREQUAL:$<TARGET_PROPERTY:NAME>,${gpsc_target}>:platform_exit=gpu_previous_platform_exit>")
+endif()
 if(SUNSTONE_GPU_RUNTIME_DRAW)
   if(SUNSTONE_GPU_PROGRAM_APPLICATION OR SUNSTONE_GPU_RUNTIME_INPUT OR SUNSTONE_GPU_TRANSPORT_ONLY)
     message(FATAL_ERROR "Copied draw is a separate GPU application profile")
@@ -93,6 +121,11 @@ set(gpsc_inputs ${gpu_app_inputs} ${gpsc_sources} ${gpsc_headers}
  "${gpsc_port}/portmacro.h" "${gpsc_port}/port.c" "${gpsc_shared}/boot.h" "${gpsc_shared}/cached.h"
  "${gpsc_shared}/FreeRTOSConfig.h" "${gpsc_shared}/link.ld" "${gpsc_shared}/platform.patch"
  "${gpsc_app}/link.patch" "${CMAKE_CURRENT_LIST_FILE}" "${gpsc_root}/patches/freertos-aarch64-clang.patch")
+if(SUNSTONE_GPU_FINITE_RETURN)
+  list(APPEND gpsc_inputs "${gpsc_root}/apps/gpu-finite/current-monitor.patch"
+    "${gpsc_root}/apps/gpu-finite/link.patch" "${gpsc_root}/apps/gpu-finite/return.h"
+    "${gpsc_root}/apps/gpu-finite/finite.h" "${gpsc_link}")
+endif()
 list(REMOVE_DUPLICATES gpsc_inputs)
 set(gpsc_identity "gpu-fixed-arithmetic;single-boot-cpu;SRE;supervised60;retained;${gpu_app_cc_hash};${gpu_app_ld_hash};${gpsc_options};${gpsc_definitions};${CMAKE_C_FLAGS};${CMAKE_ASM_FLAGS}")
 foreach(input IN LISTS gpsc_inputs)
@@ -107,11 +140,11 @@ file(WRITE "${gpsc_build}/build-id.txt" "${gpsc_build_id}\n")
 target_sources(${gpsc_target} PRIVATE "${gpsc_build}/build-id.c")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${gpsc_inputs})
 target_link_options(${gpsc_target} PRIVATE -nostdlib -static -Wl,--gc-sections
- "-Wl,-T,${gpsc_build}/link.ld" "-Wl,-Map,${gpsc_build}/image.map")
-set_target_properties(${gpsc_target} PROPERTIES SUFFIX ".elf" LINK_DEPENDS "${gpsc_build}/link.ld")
+ "-Wl,-T,${gpsc_link}" "-Wl,-Map,${gpsc_build}/image.map")
+set_target_properties(${gpsc_target} PROPERTIES SUFFIX ".elf" LINK_DEPENDS "${gpsc_link}")
 set(gpsc_manifest_script [=[
 file(SHA256 "${IMAGE}" digest)
-file(WRITE "@gpsc_build@/manifest.json" "{\"target\":\"@gpsc_target@\",\"execution_profile\":\"gpu-single-core-supervised-v2\",\"workload\":\"@gpsc_workload@\",\"runtime_input\":@gpsc_runtime_input@,\"build_id\":\"@gpsc_build_id@\",\"final_elf\":\"${digest}\"}\n")
+file(WRITE "@gpsc_build@/manifest.json" "{\"target\":\"@gpsc_manifest_target@\",\"execution_profile\":\"@gpsc_profile@\",\"workload\":\"@gpsc_workload@\",\"runtime_input\":@gpsc_runtime_input@,\"build_id\":\"@gpsc_build_id@\",\"final_elf\":\"${digest}\"}\n")
 ]=])
 string(CONFIGURE "${gpsc_manifest_script}" gpsc_manifest_script @ONLY)
 file(WRITE "${gpsc_build}/finish-manifest.cmake" "${gpsc_manifest_script}")

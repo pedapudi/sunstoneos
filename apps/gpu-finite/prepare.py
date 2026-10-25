@@ -23,7 +23,18 @@ def image_profile(path,manifest):
  require(at('sd_single_core_entry')==0x41000000 and not any(n in symbols for n in ('a733_cpu_start_init','a733_cpu_primary_continue','a733_smp_pre_scheduler','FreeRTOS_SGI_Handler','gpu_transport_only_marker')),'Wrong GPU startup/workload.')
  lo,hi=at('__gpu_private_start'),(at('__gpu_private_end')+63)&~63;receipt=at('gpu_return_receipt');log=at('__gpu_platform_log')
  require(lo==0x41200000 and lo<hi<=0x41f00000 and at('__gpu_retained_start')<=receipt<receipt+104<=at('__gpu_retained_end') and symbols['gpu_return_receipt'][1]==104 and lo<=log<log+16384<=hi,'GPU return layout differs.')
- return parts,address,build,{'clean_start':lo,'clean_end':hi,'receipt':receipt,'log':log,'wb_start':0x48000000,'wb_end':0x48086000,'packet':0x42000100}
+ # Historical frozen images have no marker. A present marker is never allowed
+ # to fall back: it must be unique, immutable, file-backed and exactly known.
+ wb=(0x48000000,0x48086000)
+ markers=[s for s in elf.get_section_by_name('.symtab').iter_symbols() if s.name=='gpu_return_wb_geometry']
+ if markers:
+  require(len(markers)==1 and int(markers[0]['st_size'])==16,'Malformed GPU WB geometry marker.')
+  start=int(markers[0]['st_value'])
+  loads=[s for s in elf.iter_segments() if s['p_type']=='PT_LOAD' and int(s['p_vaddr'])<=start and start+16<=int(s['p_vaddr'])+int(s['p_filesz'])]
+  require(len(loads)==1 and not int(loads[0]['p_flags'])&2,'GPU WB geometry must be immutable and file-backed.')
+  offset=int(loads[0]['p_offset'])+start-int(loads[0]['p_vaddr']);wb=struct.unpack_from('<2Q',data,offset)
+  require(wb==(0x48000000,0x48088000),'Unknown GPU WB geometry.')
+ return parts,address,build,{'clean_start':lo,'clean_end':hi,'receipt':receipt,'log':log,'wb_start':wb[0],'wb_end':wb[1],'packet':0x42000100}
 
 def validate_admission(record,image_hash,template,build,cache=None,frozen=False):
  cache={} if cache is None else cache

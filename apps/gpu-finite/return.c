@@ -7,6 +7,10 @@
 extern const struct a733_smp_contract *sd_single_core_contract(void);
 extern unsigned char __gpu_private_start[],__gpu_private_end[];
 extern unsigned char __tables_start[],__tables_end[];
+/* File-backed immutable metadata for the host; never inferred from its headers. */
+const uint64_t gpu_return_wb_geometry[2] __attribute__((used,retain)) = {
+    GPU_RETURN_WB_START,GPU_RETURN_WB_END
+};
 static uint64_t last_tick __attribute__((section(".monitor_state")));
 
 #define REPORT ((volatile struct a733_smp_result *)A733_SMP_RESULT_ADDRESS)
@@ -44,13 +48,13 @@ int gpu_return_allocations(void)
     const struct a733_gpu_reserved *f=&app.firmware;
     const struct a733_gpu_compute_reserved *c=&app.compute;
     const struct device_memory_pool *wb=f->wb_pool,*nc=f->nc_pool;
-    if(wb==nc||!pool(wb,0x48000000,0x30000000)||!pool(nc,0x78000000,0x01000000)||
+    if(wb==nc||!pool(wb,GPU_RETURN_WB_START,0x30000000)||!pool(nc,0x78000000,0x01000000)||
        c->binding.firmware!=f||c->binding.session!=c||c->binding.service!=&app.service||
        c->binding.wb!=wb||c->binding.nc!=nc||c->binding.owner!=10)return 0;
     unsigned ws=0,ns=0;
-    if(!parent(wb,&f->wb_lease,&f->wb_extent,9,0x48000000,34,&ws)||
-       !parent(wb,&c->payload_lease,&c->payload_extent,10,0x48022000,88,&ws)||
-       !parent(wb,&c->table_lease,&c->table_extent,10,0x4807a000,12,&ws)||
+    if(!parent(wb,&f->wb_lease,&f->wb_extent,9,GPU_RETURN_WB_START,34,&ws)||
+       !parent(wb,&c->payload_lease,&c->payload_extent,10,GPU_RETURN_PAYLOAD_START,88,&ws)||
+       !parent(wb,&c->table_lease,&c->table_extent,10,GPU_RETURN_TABLE_START,12,&ws)||
        !parent(nc,&f->nc_lease,&f->nc_extent,9,0x78000000,45,&ns)||
        !parent(nc,&c->firmware_lease,&c->firmware_extent,10,0x7802d000,6,&ns))return 0;
     for(unsigned i=0;i<DEVICE_MEMORY_MAX_ALLOCATIONS;++i){
@@ -80,6 +84,7 @@ int gpu_return_device_quiet(void)
     __asm__ volatile("dsb sy":::"memory");
     return !(mmio_read(0x02002b20)&0x80000000)&&!(mmio_read(0x02002b24)&0x10001)&&
         !(mmio_read(0x07065000)&15)&&!(mmio_read(0x07065008)&15)&&
+        mmio_read(0x07066000)==0&&mmio_read(0x07066008)==0&&
         !(mmio_read(GICD_BASE)&0x80000000)&&
         !((mmio_read(GICD_BASE+0x108)|mmio_read(GICD_BASE+0x208)|mmio_read(GICD_BASE+0x308))&0x80000000);
 }
@@ -129,8 +134,8 @@ _Noreturn void gpu_return_finish(const struct gpu_boot_contract *c,const struct 
     if(receipt->magic!=GPU_RETURN_RECEIPT_MAGIC||receipt->epoch!=c->base.epoch||
        receipt->generation!=c->base.generation||receipt->lease!=app.session.lease||
        receipt->status||receipt->complete!=1||receipt->clean_start!=private_start||
-       receipt->clean_end!=private_end||receipt->wb_start!=0x48000000||receipt->wb_end!=0x48086000||
-       receipt->clean_lines!=(private_end-private_start+0x86000)/64||
+       receipt->clean_end!=private_end||receipt->wb_start!=GPU_RETURN_WB_START||receipt->wb_end!=GPU_RETURN_WB_END||
+       receipt->clean_lines!=(private_end-private_start+GPU_RETURN_WB_BYTES)/64||
        receipt->deadline<=start||receipt->deadline>c->base.diagnostic_deadline||
        receipt->log_length!=RESULT->log_length)fail(3);
     if(deadline>receipt->deadline)deadline=receipt->deadline;

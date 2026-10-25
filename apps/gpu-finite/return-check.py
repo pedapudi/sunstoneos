@@ -8,8 +8,17 @@ ROOT=Path(__file__).resolve().parents[2]
 def module(name,path):
  s=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 entry=module('gpu_return_entry',ROOT/'checks/gpu-single-core-entry.py');layout=module('gpu_return_layout',ROOT/'checks/storage-read-native.py')
+LAYOUTS = ['gpu_application', 'a733_board_session', 'pvr_gpu_service', 'pvr_gpu_stop',
+ 'a733_gpu_backend', 'a733_gpu_platform', 'a733_gpu_memory', 'a733_gpu_reserved',
+ 'a733_gpu_compute_reserved', 'a733_gpu_compute_binding', 'a733_native_usb', 'a733_pmic',
+ 'device_memory_pool', 'device_memory_allocation', 'device_memory_lease', 'device_memory_extent', 'gpu_return_result']
 class Machine(entry.EntryMachine):
  def __init__(self,image,raw,variant):
+  if not hasattr(image,'allocation_size'):
+   from elftools.elf.elffile import ELFFile
+   with image.path.open('rb') as stream:
+    sizes={d.attributes['DW_AT_byte_size'].value for cu in ELFFile(stream).get_dwarf_info().iter_CUs() for d in cu.iter_DIEs() if d.tag=='DW_TAG_structure_type' and d.attributes.get('DW_AT_name') and d.attributes['DW_AT_name'].value==b'device_memory_allocation' and 'DW_AT_byte_size' in d.attributes}
+   assert len(sizes)==1;image.allocation_size=sizes.pop()
   super().__init__(image,raw,image.address('kernel_main'));self.variant=variant;self.cleanup=False;self.cleans=[];self.stop_reason=None;self.reset=False;self.register_writes=[];self.restoring=False;self.gpu_reads=[];self.dram={};self.dirty=set();self.setway=False;self.late_ns={};self.publication_security=[]
   self.sysregs.update(ctr_el0=0x04040000,icc_igrpen1_el3=2,daif=0x3c0,sctlr_el3=0,rmr_el3=0)
   self.events.update(a for a,op in image.ops.items() if op.startswith(('dc ','dc\t','tlbi ','tlbi\t')) or op=='wfi')
@@ -115,18 +124,31 @@ class Machine(entry.EntryMachine):
   self.write(app+g['result'],1);self.write(self.e.address('pmic_parked'),1)
   pmic=app+g['shared']+self.e.layouts['a733_native_usb']['pmic'];put(pmic,'a733_pmic','active',8)
   self.write(app+g['compute_sequence'],1);self.write(app+g['compute_sequence']+4,2)
-  self.output=[0x12340000+i for i in range(64)];self.cpu.mem_write(app+g['compute_words'],struct.pack('<64I',*self.output))
+  self.output=[((17+(i+1)*3)^(0x9e3779b9+(i<<16)))&0xffffffff for i in range(32)]*2;self.cpu.mem_write(app+g['compute_words'],struct.pack('<64I',*self.output))
+  terminal='GPU_STAGE=STOPPED\nGPU_COMPUTE_WORDS=\n'
+  for n in range(2):terminal+='GPU_SEQUENCE=0x%016x\n'%(n+1)+''.join('0x%016x\n'%v for v in self.output[n*32:n*32+32])
+  terminal+='PASS GPU two copied results, CLOSE and parked providers\n'
+  log=self.e.address('__gpu_platform_log');self.cpu.mem_write(log+256,terminal.encode()+b'\0');self.write(log+24,len(terminal),8)
   self.write(0x03400108,0);self.write(0x03400208,0);self.write(0x03400308,0);self.write(0x02002b20,0);self.write(0x02002b24,0);self.write(0x07065000,0);self.write(0x07065008,0)
   # Construct each allocator ledger and lease with the actual portable producer.
   wb=self.e.address('boot_pool');nc=self.e.address('uncached_pool')
-  assert self.call('device_memory_pool_init',wb,0x48000000,0x48000000,0x30000000)==1
-  assert self.call('device_memory_pool_init',nc,0x78000000,0x78000000,0x1000000)==1
+  if 'device_memory_pool_init_typed' in self.e.symbols:
+   assert self.call('device_memory_pool_init_typed',wb,0x48000000,0x48000000,0x30000000,1,0)==1
+   assert self.call('device_memory_pool_init_typed',nc,0x78000000,0x78000000,0x1000000,0,1)==1
+  else:
+   # Historical frozen images expose the earlier untyped producer only.
+   assert self.call('device_memory_pool_init',wb,0x48000000,0x48000000,0x30000000)==1
+   assert self.call('device_memory_pool_init',nc,0x78000000,0x78000000,0x1000000)==1
   put(firmware,'a733_gpu_reserved','wb_pool',wb,8);put(firmware,'a733_gpu_reserved','nc_pool',nc,8)
   binding=compute+cl['binding']
   for key,value in [('session',compute),('firmware',firmware),('service',s),('wb',wb),('nc',nc),('owner',10)]:put(binding,'a733_gpu_compute_binding',key,value,8)
   for pool,owner,pages,obj,typ,lease,extent in [(wb,9,34,firmware,'a733_gpu_reserved','wb_lease','wb_extent'),(nc,9,45,firmware,'a733_gpu_reserved','nc_lease','nc_extent'),(wb,10,88,compute,'a733_gpu_compute_reserved','payload_lease','payload_extent'),(nc,10,6,compute,'a733_gpu_compute_reserved','firmware_lease','firmware_extent'),(wb,10,12,compute,'a733_gpu_compute_reserved','table_lease','table_extent')]:
    fields=self.e.layouts[typ];assert self.call('device_memory_acquire',pool,owner,pages*4096,obj+fields[lease],obj+fields[extent])==1
-   token=obj+fields[lease];slot=self.read(token+self.e.layouts['device_memory_lease']['slot'],4);allocation=pool+self.e.layouts['device_memory_pool']['allocations']+slot*32;put(allocation,'device_memory_allocation','state',2)
+   token=obj+fields[lease];slot=self.read(token+self.e.layouts['device_memory_lease']['slot'],4);allocation=pool+self.e.layouts['device_memory_pool']['allocations']+slot*self.e.allocation_size;put(allocation,'device_memory_allocation','state',2)
+  self.produced_extents={name:list(struct.unpack('<3Q',self.cpu.mem_read(base+self.e.layouts[typ][name],24)))
+      for base,typ,names in [(firmware,'a733_gpu_reserved',['wb_extent','nc_extent']),(compute,'a733_gpu_compute_reserved',['payload_extent','table_extent','firmware_extent'])] for name in names}
+  self.wb_end=max(self.produced_extents[n][0]+self.produced_extents[n][2] for n in ['wb_extent','payload_extent','table_extent'])
+  assert self.call('gpu_return_allocations')==1, self.produced_extents
   if self.variant=='extra-allocation':assert self.call('device_memory_acquire',wb,99,4096,0x43001000,0x43001040)==1
   if self.variant=='lease-generation':self.write(compute+cl['table_lease']+self.e.layouts['device_memory_lease']['generation'],99,8)
   if self.variant=='changed-extent':self.write(compute+cl['table_extent']+self.e.layouts['device_memory_extent']['bytes'],13*4096,8)
@@ -136,11 +158,14 @@ class Machine(entry.EntryMachine):
   if self.variant=='changed-session':self.write(app+g['session']+bl['lease'],99,8)
   if self.variant=='gpu-gate-on':self.write(0x02002b20,0x80000000)
   if self.variant=='gpu-domain-on':self.write(0x07065008,8)
+  if self.variant=='core-policy-on':self.write(0x07066000,8)
+  if self.variant=='core-status-on':self.write(0x07066008,8)
+  if self.variant=='core-dynamic':self.write(0x07066000,0x100)
   if self.variant=='pending-irq':self.write(0x03400208,0x80000000)
   if self.variant=='cache-geometry':self.sysregs['ctr_el0']=0x03040000
-  assert self.sysregs['tcr_el1']==0x200803019,self.sysregs;self.cleanup=True;self.el=4;self.sysregs['spsr_el3']=0x85 if self.variant=='wrong-caller-profile' else 0x84;self.sysregs.update(sctlr_el1=0x30d01805,sctlr_el3=0,scr_el3=0x505,esr_el3=0x17<<26)
+  assert self.sysregs['tcr_el1']==entry.shared.TCR,self.sysregs;self.cleanup=True;self.el=4;self.sysregs['spsr_el3']=0x85 if self.variant=='wrong-caller-profile' else 0x84;self.sysregs.update(sctlr_el1=0x30d01805,sctlr_el3=0,scr_el3=0x505,esr_el3=0x17<<26)
   lo=self.e.address('__gpu_private_start');hi=(self.e.address('__gpu_private_end')+63)&~63
-  for line in list(range(lo,hi,64))+list(range(0x48000000,0x48086000,64)):
+  for line in list(range(lo,hi,64))+list(range(0x48000000,self.wb_end,64)):
    self.dram[line]=bytes(64);self.dirty.add(line)
  def finish(self):
   self.finished=False;self.parked=False;self.stop_at=None
@@ -154,28 +179,53 @@ class Machine(entry.EntryMachine):
   self.cpu.emu_start(target,0,count=6000000)
   assert self.reset or self.parked,(self.variant,hex(self.cpu.reg_read(UC_ARM64_REG_PC)))
 def main():
- p=argparse.ArgumentParser(description=__doc__);p.add_argument('--evidence',type=Path,required=True);p.add_argument('--cases',nargs='+');a=p.parse_args();e=a.evidence.resolve();path=e/'build/return.elf';image=layout.Image(path);image.path=path;image.ops={}
+ p=argparse.ArgumentParser(description=__doc__);p.add_argument('--evidence',type=Path,required=True);p.add_argument('--cases',nargs='+');a=p.parse_args();e=a.evidence.resolve();path=e/'build/return.elf';image=layout.Image(path,layout_names=LAYOUTS);image.path=path;image.ops={}
+ from elftools.elf.elffile import ELFFile
  for line in subprocess.check_output(['/usr/lib/llvm-21/bin/llvm-objdump','-d','--no-show-raw-insn',str(path)],text=True).splitlines():
   match=re.match(r'^\s*([0-9a-f]+):\s+(.+)$',line)
   if match:image.ops[int(match[1],16)]=match[2].strip()
  raw=bytearray((Path.home()/'.cache/sunstoneos/evidence/gpu-single-core-20261018/provider-valid-fixture/fixtures/session-template.bin').read_bytes());raw[48:80]=bytes.fromhex(json.loads((e/'manifest.json').read_text())['build_id'])
- names=['normal','initial-gpu-enabled','initial-gpu-pending','initial-gpu-active','not-stopped','pmic-unparked','extra-allocation','lease-generation','changed-extent','changed-geometry','changed-session','gpu-gate-on','gpu-domain-on','pending-irq','cache-geometry','wrong-caller-profile','clock-regression','clean-timeout','restore-timeout','nonzero-exit','unexpected-smc','secure-timeout','secure-only-maintenance','missing-receipt-line','late-stack-write'];cases={}
+ names=['normal','initial-gpu-enabled','initial-gpu-pending','initial-gpu-active','not-stopped','pmic-unparked','extra-allocation','lease-generation','changed-extent','changed-geometry','changed-session','gpu-gate-on','gpu-domain-on','core-policy-on','core-status-on','core-dynamic','pending-irq','cache-geometry','wrong-caller-profile','clock-regression','clean-timeout','restore-timeout','nonzero-exit','unexpected-smc','secure-timeout','secure-only-maintenance','missing-receipt-line','late-stack-write'];cases={}
  if a.cases and (e/'return-result.json').exists():
   prior=json.loads((e/'return-result.json').read_text());assert prior['elf_sha256']==hashlib.sha256(path.read_bytes()).hexdigest();cases=prior['cases']
  for variant in names:
   if a.cases and variant not in a.cases:continue
   m=Machine(image,bytes(raw),variant);m.prepare()
-  if not variant.startswith('initial-gpu-'):m.finish()
+  if not variant.startswith('initial-gpu-'):
+   (e/(variant+'-producers.json')).write_text(json.dumps({'elf_sha256':hashlib.sha256(path.read_bytes()).hexdigest(),'extents':m.produced_extents,'pool_types':'actual DMA32/write-back WB and NONE/noncacheable NC producers'},indent=2)+'\n')
+   m.finish()
   if variant in ('normal','late-stack-write'):
    assert m.reset and not m.parked and m.read(0x08001004,4)==0x20 and m.read(0x08001008,4)==0
    assert not m.sysregs['sctlr_el1']&0x1005
    for n in ['cntps_ctl_el1','cntp_ctl_el0','cntv_ctl_el0','icc_igrpen0_el1','icc_igrpen1_el3']:assert m.sysregs[n]==0,n
-   lo=image.address('__gpu_private_start');hi=(image.address('__gpu_private_end')+63)&~63;expected=list(range(lo,hi,64))+list(range(0x48000000,0x48086000,64));assert m.cleans==expected;
+   lo=image.address('__gpu_private_start');hi=(image.address('__gpu_private_end')+63)&~63;expected=list(range(lo,hi,64))+list(range(0x48000000,m.wb_end,64));assert m.cleans==expected;
    if variant=='late-stack-write':assert m.setway and m.dram[m.late_witness].startswith(b'LATESTACK') and not m.dirty
    assert m.setway and all(x=='NS' for x in m.publication_security)
+   if variant=='normal':
+    for name,address,size in [('monitor',0x42000000,128),('platform',image.address('__gpu_platform_log'),16384),('receipt',image.address('gpu_return_receipt'),104),('packet',0x42000100,320)]:
+     (e/('normal-'+name+'.bin')).write_bytes(bytes(m.cpu.mem_read(address,size)))
+   if variant=='normal':
+    prepare=module('gpu_current_return_prepare',ROOT/'apps/gpu-finite/prepare.py');parser=module('gpu_current_return_report',ROOT/'apps/gpu-finite/report.py')
+    manifest=json.loads((e/'manifest.json').read_text());geometry=prepare.image_profile(path,manifest)[3]
+    assert geometry['wb_end']==m.wb_end and geometry['wb_start']==m.produced_extents['wb_extent'][0]
+    raw_reports=[(e/('normal-'+n+'.bin')).read_bytes() for n in ('monitor','platform','receipt','packet')]
+    receipt=struct.unpack('<13Q',raw_reports[2]);prepared={'epoch':receipt[1],'generation':receipt[2],'lease':receipt[3],'geometry':geometry}
+    assert parser.validate_reports(*raw_reports,prepared)['functional_success']
+    # Corrupt the immutable producer metadata while rebinding the file hash;
+    # rejection must come from geometry, not a stale manifest digest.
+    with path.open('rb') as stream:
+     elf=ELFFile(stream);symbol=next(x for x in elf.get_section_by_name('.symtab').iter_symbols() if x.name=='gpu_return_wb_geometry');address=int(symbol['st_value'])
+     segment=next(x for x in elf.iter_segments() if x['p_type']=='PT_LOAD' and int(x['p_vaddr'])<=address< int(x['p_vaddr'])+int(x['p_filesz']))
+     offset=int(segment['p_offset'])+address-int(segment['p_vaddr'])
+    corrupt=bytearray(path.read_bytes());struct.pack_into('<Q',corrupt,offset+8,m.wb_end+4096);bad=e/'changed-span.elf';bad.write_bytes(corrupt)
+    changed=dict(manifest,final_elf=hashlib.sha256(corrupt).hexdigest())
+    try:prepare.image_profile(bad,changed)
+    except ValueError as error:assert str(error)=='Unknown GPU WB geometry.'
+    else:raise AssertionError('Changed WB span accepted')
+    (e/'host-geometry.json').write_text(json.dumps({'image_sha256':hashlib.sha256(path.read_bytes()).hexdigest(),'passed':True,'geometry':geometry,'cases':['actual-writer-profile-report','changed-span-refused'],'scope':'Actual native monitor/receipt/packet/final log header; GPU arithmetic and terminal log modeled. No physical access.'},indent=2)+'\n')
    report=image.layouts['gpu_return_result'];assert m.read(0x42000100)==0x3154455255504741;assert list(struct.unpack('<64I',m.cpu.mem_read(0x42000100+report['words'],256)))==m.output
   else:assert m.parked and not m.reset and not any(x[0] in (0x08001004,0x08001008) for x in m.writes),variant
-  if variant in ['not-stopped','pmic-unparked','extra-allocation','lease-generation','changed-extent','changed-geometry','gpu-gate-on','gpu-domain-on','pending-irq','cache-geometry','nonzero-exit']:assert not any(0x48000000<=x<0x78000000 for x in m.cleans),variant
+  if variant in ['not-stopped','pmic-unparked','extra-allocation','lease-generation','changed-extent','changed-geometry','gpu-gate-on','gpu-domain-on','core-policy-on','core-status-on','core-dynamic','pending-irq','cache-geometry','nonzero-exit']:assert not any(0x48000000<=x<0x78000000 for x in m.cleans),variant
   cases[variant]={'passed':True,'reset_requested':m.reset,'retained_status':m.stop_reason,'clean_lines':len(m.cleans),'clean_wb_device_lines':sum(0x48000000<=x<0x78000000 for x in m.cleans),'mmio_reads':sorted(set(m.gpu_reads)),'register_writes':m.register_writes,'publication_security_spaces':sorted(set(m.publication_security)),'final_setway_executed':m.setway,'post_range_clean_ns_dirty_lines':len(m.late_ns)}
   (e/'return-result.json').write_text(json.dumps({'passed':True,'elf_sha256':hashlib.sha256(path.read_bytes()).hexdigest(),'cases':cases,'physical_access':False,'scope':'Actual admission/session sealing, retained placement/BSS clearing, allocator producers, success-only exception routing, ownership/extent/session/device-off gates, cache-address loops, GIC restore and RMR instruction path. GPU completion state, mappings, security-tagged NS dirty-cache/DRAM publication, timers/GIC/system registers and reset outcome modeled. Accepted eight device cases not replayed; no physical GPU or ROM return evidence.'},indent=2)+'\n')
   print('PASS GPU returning handoff:',variant)

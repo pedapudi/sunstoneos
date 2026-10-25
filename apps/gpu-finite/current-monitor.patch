@@ -1,0 +1,67 @@
+--- monitor.c
++++ gpu-return-monitor.c
+@@ -1,4 +1,5 @@
+ #include "boot.h"
++#include "return.h"
+ #ifdef SUNSTONE_CACHED_SINGLE_CORE
+ #include "session.h"
+ #include "a733_device_memory_layout.h"
+@@ -53,13 +54,7 @@
+ static struct a733_smp_contract admission __attribute__((section(".monitor_state")));
+ #endif
+ static unsigned secondary_off_admitted __attribute__((section(".monitor_state")));
+-static struct {
+-    uint32_t ready,banks,ctlr,group,modifier,enabled,configuration;
+-    uint32_t priorities,spi_enabled[32];
+-#ifdef SUNSTONE_NPU_INTERRUPT
+-    struct npu_irq_route_snapshot npu_irq;
+-#endif
+-} saved __attribute__((section(".monitor_state")));
++static struct gpu_return_gic saved __attribute__((section(".monitor_state")));
+ uint64_t a733_smp_counter(void){return counter();}
+ _Noreturn void a733_smp_stop(unsigned status,uint64_t detail)
+ {
+@@ -138,6 +133,7 @@
+     REPORT->magic=A733_SMP_RESULT_MAGIC;REPORT->epoch=admission.epoch;
+     REPORT->generation=admission.generation;REPORT->status=UINT64_MAX;
+     REPORT->stage=1;REPORT->start_counter=counter();
++    *(volatile uint64_t *)GPU_RETURN_RESULT_ADDRESS=0;
+ #ifdef SUNSTONE_GPU_SINGLE_CORE
+     if(!gpu_application_seal_session(&admission)||!secondaries_off()||
+        !a733_device_memory_boot_admit(&admission)||!a733_cached_memory_prepare())finish(1);
+@@ -272,6 +268,13 @@
+     value = 0x33ff;
+     __asm__ volatile("msr cptr_el2, %0" :: "r"(value));
+ #if defined(SUNSTONE_GPU_SINGLE_CORE) || defined(SUNSTONE_ACCELERATORS)
++    /* A returning GPU lifetime cannot discard an inherited interrupt. */
++    if((saved.spi_enabled[2]|mmio_read(GICD_BASE+0x208)|mmio_read(GICD_BASE+0x308))&(1U<<31))finish(4);
++    saved.gpu_group=mmio_read(GICD_BASE+0x88);
++    saved.gpu_modifier=mmio_read(GICD_BASE+0xd08);
++    saved.gpu_configuration=mmio_read(GICD_BASE+0xc14);
++    saved.gpu_priority=mmio_read(GICD_BASE+0x45c);
++    saved.gpu_route=*(volatile uint64_t *)(GICD_BASE+0x62f8);
+     /* SPI95 stays disabled until the real service owns its interrupt binding. */
+     mmio_write(GICD_BASE+0x88,mmio_read(GICD_BASE+0x88)|(1U<<31));
+     mmio_write(GICD_BASE+0xd08,mmio_read(GICD_BASE+0xd08)&~(1U<<31));
+@@ -324,15 +327,18 @@
+ 
+ _Noreturn void sd_single_core_exception(uint64_t operation,uint64_t status,uint64_t kind)
+ {
++    uint64_t esr,elr,far;
+     __asm__ volatile("mrs %0,esr_el3\n mrs %1,elr_el3\n mrs %2,far_el3"
+-      :"=r"(RESULT->esr),"=r"(RESULT->elr),"=r"(RESULT->far));
++      :"=r"(esr),"=r"(elr),"=r"(far));
++    if(kind==1&&(esr>>26)==0x17&&operation==0x733&&status==0)
++        gpu_return_finish(&gpu_admission,&saved);
+     if(kind==2){
+         uint64_t irq;__asm__ volatile("mrs %0,ICC_IAR0_EL1":"=r"(irq));
+-        RESULT->interrupt=irq;
++        (void)elr;(void)far;
+         if(irq<1020)__asm__ volatile("msr ICC_EOIR0_EL1,%0\n isb"::"r"(irq):"memory");
+         a733_smp_stop(irq==RECOVERY_IRQ?2:5,irq);
+     }
+-    a733_smp_stop(kind==1&&(RESULT->esr>>26)==0x17&&operation==0x733?(unsigned)status:3,operation);
++    a733_smp_stop(kind==1&&(esr>>26)==0x17&&operation==0x733?(unsigned)status:3,operation);
+ }
+ const struct a733_smp_contract *sd_single_core_contract(void)
+ {
