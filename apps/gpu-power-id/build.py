@@ -57,6 +57,22 @@ def shared_layouts(path, names):
 # admission of DCDC4 at 960 mV. The monitor compiles with the monitor's flags.
 SHARED_UNITS = [('platform/a733/monitor.c', 'monitor_init'), ('drivers/power/a733_pmic.c', 'a733_pmic_init'),
                 ('drivers/power/a733_pmic_consumer.c', 'a733_pmic_consumer_init')]
+# Units that hold a structure whose layout changed after the checkpoint and
+# so must compile with the new units: struct bb_power (power.c, the only
+# other object that names bb_power) embeds struct a733_counter_clock and
+# struct a733_power_domains with its rows, and the lock-free counter clock
+# (8431f4b0) and the power service's row wake and settled supply changed
+# all three. counter_clock.c and a733_pmic_native.c define the counter
+# clock's structure.
+LAYOUT_UNITS = [('apps/board-bundles-power/power.c', 'bb_power'),
+                ('platform/a733/counter_clock.c', 'a733_counter_clock_init'),
+                ('drivers/power/a733_pmic_native.c', 'a733_pmic_native_init'),
+                # The current power.c calls trace.c's sample and XADDR helpers.
+                ('apps/board-bundles-power/trace.c', 'bb_twi_observe')]
+# Structures the reused objects may not define: every checkpoint object
+# whose DWARF defines one is replaced by a new compile.
+CHANGED_LAYOUTS = ('a733_gpu_power', 'a733_gpu_platform', 'a733_power_domains', 'a733_power_domain_row',
+                   'a733_counter_clock', 'bb_power')
 PROBE_EXPECT = ('COMPLETE GPU probe read: identity 36.56.104.183 before and after the secure configuration, '
                 'restored, GPU left powered')
 
@@ -95,7 +111,7 @@ def main():
         ('drivers/gpu/a733_gpu_resources.c', 'a733_gpu_resources_init'),
         ('drivers/gpu/a733_gpu_resources_native.c', 'a733_gpu_resources_native_init'),
         ('drivers/power/a733_power_domains.c', 'a733_power_domains_init'),
-    ] + SHARED_UNITS
+    ] + SHARED_UNITS + LAYOUT_UNITS
     from elftools.elf.elffile import ELFFile
     replacements = {}
     commands, new = [], []
@@ -141,10 +157,10 @@ def main():
         elif value.startswith('-Wl,-Map,'):
             value = '-Wl,-Map,' + str(out / 'image.map')
         link.append(value.replace(oldroot, str(ROOT)))
-    assert (len(reused), len(new)) == (27, 10), (len(reused), len(new))
+    assert (len(reused), len(new)) == (23, 14), (len(reused), len(new))
     # Audit every input object, not a guessed list of layout consumers. A
-    # complete power/platform DWARF declaration identifies the three objects
-    # using the enlarged structures; all must be replaced in this candidate.
+    # complete DWARF declaration of a changed structure identifies the eight
+    # objects that use one; all must be replaced in this candidate.
     layout_users = []
     for item in old_objects:
         with Path(item['object']).open('rb') as stream:
@@ -154,17 +170,17 @@ def main():
                     attrs = die.attributes
                     if die.tag == 'DW_TAG_structure_type' and 'DW_AT_name' in attrs and 'DW_AT_byte_size' in attrs:
                         name = attrs['DW_AT_name'].value.decode()
-                        if name in ('a733_gpu_power', 'a733_gpu_platform'):
+                        if name in CHANGED_LAYOUTS:
                             types[name] = attrs['DW_AT_byte_size'].value
                 if types:
                     assert item['object'] in replacements, item
                     original = item.get('original', item['object'])
                     depfile = Path(original + '.d')
-                    assert depfile.is_file() and 'a733_gpu_power.h' in depfile.read_text(), depfile
                     layout_users.append({'object': item['object'], 'unit': cu.get_top_DIE().attributes['DW_AT_name'].value.decode(),
                         'old_layouts': types, 'replacement': replacements[item['object']],
-                        'depfile': str(depfile), 'depfile_sha256': sha(depfile)})
-    assert len(layout_users) == 3
+                        'depfile': str(depfile) if depfile.is_file() else None,
+                        'depfile_sha256': sha(depfile) if depfile.is_file() else None})
+    assert len(layout_users) == 8, [u['unit'] for u in layout_users]
     subprocess.run(link, check=True, cwd=ROOT)
     subprocess.run(['/usr/lib/llvm-21/bin/llvm-objcopy', '-O', 'binary', str(out / 'image.elf'), str(out / 'probe.bin')], check=True)
     # These shared layouts cross old/new object boundaries. The reused image
@@ -173,16 +189,20 @@ def main():
              'a733_pmic', 'a733_rail_leases', 'a733_platform_locks', 'a733_power_domains',
              'a733_power_domain_row', 'a733_pmic_lifetime', 'a733_pmic_consumer',
              'a733_pmic_consumer_config']
-    old = shared_layouts(baseline / 'image.elf', names)
+    # Every compile unit of the new image agrees on each layout; the ones
+    # that reused objects still define equal the checkpoint's.
     current = shared_layouts(out / 'image.elf', names)
-    assert old == current, 'Shared old/new object layouts differ'
+    kept = [n for n in names if n not in CHANGED_LAYOUTS]
+    old = shared_layouts(baseline / 'image.elf', names)
+    assert {n: old[n] for n in kept} == {n: current[n] for n in kept}, 'Shared old/new object layouts differ'
     record = {'physical_access': False, 'execution_admitted': False,
               'base_build': {'path': str(baseline / 'build.json'), 'sha256': sha(baseline / 'build.json')},
               'monitor_evidence': base['monitor_evidence'],
               'monitor_evidence_sha256': base['monitor_evidence_sha256'],
               'compile': commands, 'link': link, 'new_objects': new, 'reused_objects': reused,
               'layout_users_rebuilt': layout_users,
-              'shared_layouts_equal': names, 'image_sha256': sha(out / 'image.elf'),
+              'shared_layouts_equal': [n for n in names if n not in CHANGED_LAYOUTS],
+              'layouts_rebuilt': list(CHANGED_LAYOUTS), 'image_sha256': sha(out / 'image.elf'),
               'binary_sha256': sha(out / 'probe.bin'), 'binary_bytes': (out / 'probe.bin').stat().st_size,
               'variant': ('power-only' if args.power_only else 'wrapper-read' if args.wrapper_read
                           else 'probe-read' if args.probe_read else 'identity'),

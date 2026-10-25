@@ -250,15 +250,23 @@ words. Board-bundle preparation requires the normal case to have run two
 cycles for the power-only and identity variants. Every case requires that no load,
 store or address translation reaches the GPU register window.
 
-The build reuses 27 objects from the frozen provider-readiness candidate. Ten
-replacements compile the client, GPU platform/native adapter, power
+The build reuses 23 objects from the frozen provider-readiness candidate.
+Fourteen replacements compile the client, GPU platform/native adapter, power
 controller, resource manager/native adapter, the current shared TOP owner,
-the CPU monitor with its EL3 security setup, and the PMIC provider and supply
-consumer that admit DCDC4 at 960 mV. The input-object audit checks every power/platform
-layout user and its actual dependency file; all three layout users are rebuilt.
-The power structure holds the cached CORE6 diagnostics. Eleven shared structure sizes and member offsets must match across
-old and new objects. The recorded private PMIC callback-member rename does not
-change its offset or callback order.
+the CPU monitor with its EL3 security setup, the PMIC provider and supply
+consumer that admit DCDC4 at 960 mV, and the units whose structures changed
+after the candidate was built: the board-bundle power service and its trace
+helpers, the counter clock and the PMIC native adapter. The input-object
+audit replaces every candidate object whose DWARF defines struct
+a733_gpu_power, a733_gpu_platform, a733_power_domains,
+a733_power_domain_row, a733_counter_clock or bb_power: eight objects. The
+power structure holds the cached CORE6 diagnostics. Every compile unit of
+the image must agree on the sizes and member offsets of eleven shared
+structures, and those the reused objects still define must equal the
+candidate's. A unit that only declares a structure emits no DWARF for it,
+so the audit cannot see it; the client's main.c is such a unit for
+bb_power, which is why power.c is rebuilt with it. The recorded private PMIC
+callback-member rename does not change its offset or callback order.
 
 Twelve focused cases execute the linked client, mapping predicate and identity
 loads. They cover two cycles of two 32-bit identity loads, unexpected identity, ON/OFF faults,
