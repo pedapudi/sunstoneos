@@ -853,8 +853,9 @@ def runbook(row, bundle, value, artifacts, prerequisites, timeout, lifetime=None
     if required or stopped:
         lines += ['## Run only after', '']
         passed = (lifetime or {}).get('passed', {})
-        lines += [(f'- `{name}` passed earlier in this lifetime as `$S/{passed[name]}` ({reason}), from an earlier '
-                   'set: status 0 with its success text.' if name in passed else
+        lines += [(f'- `{name}` passed earlier in this lifetime, from an earlier set, as `$S/{passed[name]}`: '
+                   'status 0 with its success text. That run is the first link of the warm-return chain.'
+                   if name in passed else
                    f'- `{name}` of this set passed in this lifetime ({reason}): status 0 with its success text. A '
                    'controlled outcome of that row is not a pass.') for name, reason in required]
         lines += [f'- Do not run it when {text}.' for text in stopped]

@@ -848,7 +848,7 @@ def main():
     status, gated = tool.run({'returning-after-refused': inputs['returning-after-refused']}, rows, evidence, repo,
                              lifetime=seeded, run_dir=evidence / 'named-set' / 'port-seeded')
     book = (gated / 'returning-after-refused/runbook.md').read_text()
-    assert status == 0 and '`returning-sync` passed earlier in this lifetime as `$S/p-sync-run`' in book, book
+    assert status == 0 and '`returning-sync` passed earlier in this lifetime, from an earlier set, as `$S/p-sync-run`' in book, book
     assert '--warm-return $S/p-sync-run/session.json' in book, book
     assert '`returning-sync` passed (`p-sync-run`, already in the chain)' in (gated / 'runbook.md').read_text()
     status, second = tool.run({}, rows, evidence, repo)
