@@ -1,6 +1,15 @@
 #ifndef SUNSTONE_GPU_RETURN_H
 #define SUNSTONE_GPU_RETURN_H
 #include <stdint.h>
+/* Fixed two-job profile, produced by the extended DMA32 write-back pool.
+ * Firmware occupies 34 pages; the 88-page payload needs 64 KiB alignment.
+ * The later 12-page table fits in the gap, leaving two free pages before the
+ * payload. The coordinator owns the whole pool through publication/return. */
+#define GPU_RETURN_WB_START UINT64_C(0x48000000)
+#define GPU_RETURN_PAYLOAD_START UINT64_C(0x48030000)
+#define GPU_RETURN_TABLE_START UINT64_C(0x48022000)
+#define GPU_RETURN_WB_END UINT64_C(0x48088000)
+#define GPU_RETURN_WB_BYTES (GPU_RETURN_WB_END - GPU_RETURN_WB_START)
 struct gpu_boot_contract;
 /* Same inherited timer/GIC snapshot used by the accepted single-core monitor,
  * extended only for the GPU interrupt fields changed by this application. */

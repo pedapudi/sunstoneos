@@ -292,3 +292,12 @@ writes and retention of the fault slots across a WDT0 reset. The compute
 command names no border-colour table (address zero); if the firmware or the
 GPU reads it, the read faults on an unmapped address and every job ends
 LOST, which a board run of the bench jobs shows at once.
+
+The complete resident OS GPU-linear image is built and preserved in
+`~/.cache/sunstoneos/evidence/gpu-full-integration-20261024/merged/`. Its normal
+dependency build includes the current CORE6 controller and terminal retirement
+caller; all 263 linked objects and compiler dependencies are bound. Three
+selected cases execute that image's actual caller for healthy retirement,
+CLOSE refusal and lifetime loss during CLOSE. They model service replies and
+scheduling, and do not establish physical firmware execution or drain. The
+existing OS link check also passes for the GPU start list and INT95 route.
