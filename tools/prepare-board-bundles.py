@@ -270,10 +270,12 @@ def gpu_row(name, position, component, variant, expect, expected, intro, after=(
 
 # The PMIC provider, its native adapter and consumer, and the GPU resource
 # adapter, which recompile differently since the PMIC access path
-# (docs/designs/pmic-access.md); checks/board-bundles-apps.py declares them.
+# (docs/designs/pmic-access.md), and the counter clock, new since the
+# lock-free clock (8431f4b0); checks/board-bundles-apps.py declares them.
 PROVIDER_OVERLAY = ['drivers/gpu/a733_gpu_resources.c.obj', 'drivers/gpu/a733_gpu_resources_native.c.obj',
                     'drivers/power/a733_pmic.c.obj',
-                    'drivers/power/a733_pmic_consumer.c.obj', 'drivers/power/a733_pmic_native.c.obj']
+                    'drivers/power/a733_pmic_consumer.c.obj', 'drivers/power/a733_pmic_native.c.obj',
+                    'platform/a733/counter_clock.c.obj']
 POWER_OVERLAY = ['apps/board-bundles-power/power.c.obj', 'apps/board-bundles-power/trace.c.obj',
                  'arch/aarch64/device_memory.c.obj', 'drivers/power/a733_power_domains.c.obj',
                  'drivers/power/a733_power_domains_native.c.obj'] + PROVIDER_OVERLAY
