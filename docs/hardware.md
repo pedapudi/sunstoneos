@@ -552,11 +552,11 @@ implementation is **planned**. Partial results apply only to the stated scope:
   execution and end-to-end recognition qualification remain outstanding.
   A supervised launcher and session preparation exist; preparation needs a reviewed entry record from physical evidence and
   refuses the radio and headset builds until it stages their profile and
-  firmware. Only the supervised build admits board workload 2, staged
-  recorded recognition after USB0 startup without a USB disk. The supervised
-  radio and headset builds cannot finish firmware loading within their 40 s
-  and 30 s bootstrap bounds at the default one-bit 400 kHz clock; the four-bit
-  mode is admitted but unselected and physically unqualified. The resident
+  firmware. [The recorded-audio launch](os-image.md#first-bounded-launch-with-recorded-audio)
+  states which build admits board workload 2, staged recorded recognition
+  without a USB disk. The supervised radio and headset builds also need a
+  qualified faster SDIO mode for firmware loading
+  ([remaining OS work](os-image.md#not-yet-integrated)). The resident
   image depends on the stage-2 entry prerequisites.
   No board has run any variant. Display, camera and NPU remain separate
   images; GPU linear execution is an optional OS build.

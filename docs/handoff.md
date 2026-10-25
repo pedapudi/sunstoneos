@@ -185,9 +185,7 @@ runner and wrapper PIDs `3974830` and `3974825` have ended. The queue retains cl
 Evidence: `processor-completion-20261024/port-3-1/gpu-power-id-corrected/`.
 All six FEL transactions succeeded, including launch; no native report locates
 the failure. This image also predates CORE6 power control, and the same
-unproven hypothesis applies: the client's 1.5-second deadline and the
-monitor's 2-second deadline would have ended an ordinary bounded failure well
-inside 30 seconds. After recovery, the
+unproven hypothesis applies. After recovery, the
 [power-only GPU diagnostic](../apps/gpu-power-id/README.md#the-power-only-variant-runs-before-any-identity-probe)
 runs before any identity probe; it is built and host-checked, and no board bundle is frozen. A preceding command-path error stopped before board access and
 was closed as blocked; it did not require physical recovery. USB is the only
@@ -665,9 +663,10 @@ board's radio owner owns the AIC8800 module and loads its firmware once, and
 the Bluetooth application attaches to that session as a second client with
 its own UART1, H4/HCI and wake-pin leases. The `SUNSTONE_A733_OS_MSBC` option,
 with `SUNSTONE_BT_SBC_DIR` naming the pinned libsbc sources, adds wideband
-speech to any headset build. Only the supervised variant admits board
-workload 2, staged recorded recognition after USB0 startup without a USB disk;
-every other variant refuses it. The image builds in nine variants:
+speech to any headset build.
+[The recorded-audio launch](os-image.md#first-bounded-launch-with-recorded-audio)
+states which variant admits board workload 2, staged recorded recognition
+without a USB disk. The image builds in nine variants:
 
 | Variant | Options added to `SUNSTONE_A733_OS=ON` | Needed before a board run |
 | --- | --- | --- |
@@ -676,9 +675,9 @@ every other variant refuses it. The image builds in nine variants:
 | Resident with I2S audio | `SUNSTONE_A733_OS_RESIDENT`, `SUNSTONE_A733_OS_AUDIO` | As resident, plus a connected microphone and a reviewed audio entry record with the resident DMA facts |
 | Resident with radio | `SUNSTONE_A733_OS_RESIDENT`, `SUNSTONE_A733_OS_RADIO` | As resident, plus the radio profile and firmware as a slot asset at `0x43000000` and a reachable access point; any radio failure, including an absent access point, resets the board |
 | Resident with radio and audio | `SUNSTONE_A733_OS_RESIDENT`, `SUNSTONE_A733_OS_RADIO`, `SUNSTONE_A733_OS_AUDIO` | The requirements of resident with I2S audio and of resident with radio |
-| Supervised headset | `SUNSTONE_A733_OS_HEADSET`, with `SUNSTONE_BT_SECURITY_DIR` naming the pinned Zephyr security sources | Preparation that stages the Bluetooth profile and firmware, a paired, reviewed headset, and a qualified faster SDIO mode, because firmware loading cannot finish within the 30 s bound at the default one-bit 400 kHz clock; the four-bit mode is admitted but unselected and physically unqualified |
+| Supervised headset | `SUNSTONE_A733_OS_HEADSET`, with `SUNSTONE_BT_SECURITY_DIR` naming the pinned Zephyr security sources | Preparation that stages the Bluetooth profile and firmware, a paired, reviewed headset, and a qualified faster SDIO mode for firmware loading ([remaining OS work](os-image.md#not-yet-integrated)) |
 | Resident headset | `SUNSTONE_A733_OS_RESIDENT`, `SUNSTONE_A733_OS_HEADSET` | As resident, plus the Bluetooth profile and firmware as a slot asset and a paired, reviewed headset; any headset failure resets the board |
-| Radio with headset | `SUNSTONE_A733_OS_RADIO`, `SUNSTONE_A733_OS_HEADSET` | Preparation that stages both profiles and the shared firmware in one span, a reachable access point, a paired headset, and a qualified faster SDIO mode, because firmware loading needs at least 46.7 s at the default one-bit 400 kHz clock; the four-bit mode is admitted but unselected and physically unqualified, and the bootstrap bound is 40 s |
+| Radio with headset | `SUNSTONE_A733_OS_RADIO`, `SUNSTONE_A733_OS_HEADSET` | Preparation that stages both profiles and the shared firmware in one span, a reachable access point, a paired headset, and a qualified faster SDIO mode for firmware loading ([remaining OS work](os-image.md#not-yet-integrated)) |
 | Resident radio with headset | `SUNSTONE_A733_OS_RESIDENT`, `SUNSTONE_A733_OS_RADIO`, `SUNSTONE_A733_OS_HEADSET` | As resident with radio, plus the Bluetooth profile at `0x43008000` and a paired headset; a radio or headset failure resets the board |
 
 A Bluetooth failure retains only the Bluetooth client's resources at the
@@ -874,9 +873,9 @@ functions and modes beyond these bounded applications.
   The DSI image also requires PCK domains 0, 1, 2, 3, 8 and 9 to be ON at
   entry and powers none of them; the power-domain owner can power domain 1
   for a registered row, but the DSI image registers none, and the owner has
-  no entry for the other five domains. Radio bootstrap needs at least 46.7 s at one
-  data line and 400 kHz, more than the 40 s supervised bound, so the radio
-  board test waits for a physically qualified four-bit SDIO profile.
+  no entry for the other five domains. The radio board test waits for a
+  physically qualified four-bit SDIO profile
+  ([remaining OS work](os-image.md#not-yet-integrated)).
 - **Shared-helper migration:** the consolidation round kept every barrier
   and the order of interrupt-mask and scheduler calls, but three code
   differences are covered only by emulation. Register reads that return
