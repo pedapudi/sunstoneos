@@ -287,10 +287,10 @@ never ran.
   reset values.
 
 In that reset-time transition, and in any OFF-to-ON transition of a
-Q-Channel PPU, the PPU powers the domain, releases isolation and its own
-reset, and then raises the device Q-Channel request and waits for the
-device to accept (DEN0051E Figures 4-18 and 4-21). The device on CORE6's
-channel is the GPU. With its core clock gated
+Q-Channel PPU, the PPU powers the domain and raises the device Q-Channel
+request. It releases the domain's reset only after raising that request,
+and the transition completes when the device accepts (DEN0051E Figures
+4-18 and 4-21). The device on CORE6's channel is the GPU. With its core clock gated
 (`0xb20[31]` clear) and its bus reset asserted (`0xb24[16]` clear), the
 GPU's Q-Channel logic is not running and cannot accept. A Q-Channel
 transition to a higher-power mode cannot be denied (DEN0051E section 4.2.9),
@@ -345,13 +345,33 @@ evidence above.
 4. **A prerequisite outside the PCK row and the GPU's CCU bits is
    missing.** Examples are a power switch elsewhere in the PRCM or a PCK
    field outside DEN0051E. Prediction: status never 8, and the final poll
-   times out and retains the TOP row and leases. The MISR words then show
-   whether the power switch accepted (`PCSMPACCEPT`, bit 0) and whether the
-   GPU accepted (bit 8).
+   times out and retains the TOP row and leases. Of the MISR bits, only bit
+   8 (the GPU's Q-Channel accept) separates these cases. Bit 0
+   (`PCSMPACCEPT`, the power switch accept) is high only during the power
+   switch handshake, so after a timeout it does not show whether the switch
+   accepted; bit 0 set means only that a handshake stuck after the accept.
 
 Outcomes 1 to 3 continue to the OFF path and return with the power-only
-completion text, which qualifies CORE6 power control on that board. Outcome 4 returns status 1 with the
-timeout and needs a power removal before the next run.
+completion text, which qualifies CORE6 power control on that board.
+Outcome 4 returns status 1 with the timeout and needs a power removal
+before the next run.
+
+The power-only image runs two ON/OFF cycles. The second ON separates where
+the CORE6 PPU lives:
+
+- **Always-on PPU.** The second entry is settled OFF (policy 0, status 0,
+  PWCR 0) and both observations are single reads.
+- **PPU inside TOP5, reset with it.** The second entry is the power-up state
+  again and the observations wait as in the first cycle. In this case the
+  resource release after the first TOP5 OFF reads CORE6 policy 8 and
+  refuses with `A733_GPU_RESOURCE_LIVE`. The run then stops with `FAIL GPU
+  OFF poll` before the second ON, and its `GPU resources` line names that
+  error and the word read.
+
+The CORE6 observations are diagnostic and stay in the controller only until
+a board run selects one of these explanations. The controller then keeps
+the admission rule that the run supports and drops the identification and
+input reads and the waiting observations.
 
 ### The failed lifetime and the next one
 
@@ -391,7 +411,7 @@ stage at which each stopped is unknown, and a stop before the GPU access
 
 The [power-only variant](../apps/gpu-power-id/README.md#the-power-only-variant-runs-before-any-identity-probe)
 of the diagnostic separates the two explanations. It powers TOP and CORE,
-checks CORE status 8, powers both OFF and releases them, and never accesses
+checks CORE status 8, powers both OFF and releases them, twice, and never accesses
 the GPU register window. Following the lowest-recovery-risk order of
 AGENTS.md, it runs before any identity probe. If it returns, CORE power
 control works on that board and a later identity probe tests the register
@@ -470,13 +490,14 @@ The earlier provider-readiness image remains unchanged and is still the first
 proposed board test.
 
 The power-up admission and the CORE6 observations have focused results in
-`~/.cache/sunstoneos/build/gpu-core6-1024/checks-1/`. The controller model
+`~/.cache/sunstoneos/build/gpu-core6-1024/checks-2/`. The controller model
 completes the power-up state at each of the four points that the hypotheses
 name: after the PWCR write, after the policy write, after clock/reset
 progress, and never. For each, it checks the recorded status, the wait and
 the final result; the last case times out and retains its leases. The model
 refuses policy 8 and status 0 with PWCR `0x010101ff`, 0 or `0x100` before
-any write. The owner composition adds the power-up state with TOP5 inherited
+any write. An observed status of 4 after the PWCR write fails with STATE,
+both from the power-up state and from settled OFF. The owner composition adds the power-up state with TOP5 inherited
 OFF and ON. The PCK trace starts from the power-up state, and the reference
 check confirms the BXM order: PWCR 0 and policy 8 follow the TOP5 request
 and precede the first CCU write. The native check reads the two diagnostic

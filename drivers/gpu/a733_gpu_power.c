@@ -80,12 +80,17 @@ static enum a733_gpu_power_result fail(struct a733_gpu_power *s,
     s->phase = A733_GPU_POWER_FAILED;
     return A733_GPU_POWER_FAULT;
 }
-/* Settled static OFF or ON, with whole words, or the power-up state with the
- * reset PWCR; nothing else has written CORE6 in that state. */
+/* The power-up state: default ON policy, its transition outstanding, and the
+ * reset PWCR, so nothing has written CORE6. */
+static int core_power_up(const struct a733_gpu_power *s)
+{
+    return s->core_policy == 8 && s->core_status == 0 && s->core_config == A733_GPU_CORE_RESET_PWCR;
+}
+/* Settled static OFF or ON, with whole words, or the power-up state. */
 static int core_admitted(const struct a733_gpu_power *s)
 {
     return ((s->core_policy == 0 || s->core_policy == 8) && s->core_status == s->core_policy) ||
-        (s->core_policy == 8 && s->core_status == 0 && s->core_config == A733_GPU_CORE_RESET_PWCR);
+        core_power_up(s);
 }
 static int clock_read(struct a733_gpu_power *s)
 {
@@ -122,7 +127,7 @@ static enum a733_gpu_power_result begin(struct a733_gpu_power *s,
         s->lease_attempted = 0;
         s->core_policy = s->core_status = s->core_config = s->core_seen = 0;
         for (unsigned i = 0; i < A733_GPU_CORE_NOTES; ++i) s->core_note[i] = 0;
-        s->core_wait_us[0] = s->core_wait_us[1] = 0;
+        s->core_wait_us[0] = s->core_wait_us[1] = s->core_power_up = 0;
     }
     return clock_read(s) ? A733_GPU_POWER_AGAIN : A733_GPU_POWER_FAULT;
 }
@@ -204,8 +209,7 @@ enum a733_gpu_power_result a733_gpu_power_poll(struct a733_gpu_power *s)
                 if (!clock_read(s)) return A733_GPU_POWER_FAULT;
                 s->core_wait_us[p->value - A733_GPU_NOTE_AFTER_PWCR] = (uint32_t)(s->last_now - start);
                 if (value != 0 && value != 8) return fail(s, A733_GPU_POWER_STATE);
-            } while (value != 8 && s->core_status != s->core_policy &&
-                     a733_gpu_spin_again(&wait, s->last_now));
+            } while (value != 8 && s->core_power_up && a733_gpu_spin_again(&wait, s->last_now));
             ++s->index;
             continue;
         }
@@ -224,7 +228,10 @@ enum a733_gpu_power_result a733_gpu_power_poll(struct a733_gpu_power *s)
         if (p->kind == NOTE) { s->core_note[p->value] = value; s->core_seen |= UINT32_C(8) << p->value; }
         if (!clock_read(s)) return A733_GPU_POWER_FAULT;
         if (p->kind == CHECK && (value & p->mask) != p->value) return fail(s, A733_GPU_POWER_STATE);
-        if (p->kind == CORE_CONFIG && !core_admitted(s)) return fail(s, A733_GPU_POWER_STATE);
+        if (p->kind == CORE_CONFIG) {
+            if (!core_admitted(s)) return fail(s, A733_GPU_POWER_STATE);
+            s->core_power_up = (uint32_t)core_power_up(s);
+        }
         if (p->kind == POLL) {
             if (value != 0 && value != 8) return fail(s, A733_GPU_POWER_STATE);
             if (value != p->value) {

@@ -440,15 +440,18 @@ ROWS = [
             'as apps/gpu-power-id/README.md orders it.'),
     gpu_row('gpu-power-only', 12, 'GPU TOP5 and CORE6 power without a GPU register access', 'power-only',
             'COMPLETE GPU power only: CORE status 8, OFF and provider parked',
-            'Monitor status 0 with GPU power core_status=0x8 and COMPLETE GPU power only: CORE status 8, OFF and '
-            'provider parked, then a responsive ROM.',
-            'apps/gpu-power-id built with --power-only. The GPU platform requests domain 5 (TOP5) ON through the '
-            'shared row, then, under the exclusive LOCAL lease, captures CORE6 policy, status and PWCR, writes PWCR '
-            '0 and policy 8 with readbacks, opens the GPU clock and reset, and requires the CORE6 status poll to '
-            'read 8; OFF writes CORE6 policy 0 and requires status 0 before the clock and reset close and domain 5 '
-            'goes OFF, in the order of drivers/gpu/a733_gpu_power.c. The preparation reads that order from the '
-            'image\'s own on_steps and off_steps tables. The image never reads or writes the GPU register window at '
-            '0x01800000: the identity reads and their mapping check are compiled out.',
+            'Monitor status 0 with GPU power cycle=1 core_status=0x8, GPU power cycle=2 core_status=0x8 and '
+            'COMPLETE GPU power only: CORE status 8, OFF and provider parked, then a responsive ROM. Record the '
+            'GPU CORE entry, inputs and after lines of both cycles.',
+            'apps/gpu-power-id built with --power-only. Two ON/OFF cycles run before the provider park. Each ON '
+            'requests domain 5 (TOP5) ON through the shared row, then, under the exclusive LOCAL lease, captures '
+            'CORE6 policy, status, IDR0, MISR and PWCR, admits settled OFF or ON or the power-up state (policy 8, '
+            'status 0, PWCR 0x101), writes PWCR 0 and policy 8 with readbacks and a status observation after '
+            'each, opens the GPU clock and reset, and requires the CORE6 status poll to read 8; OFF writes CORE6 '
+            'policy 0 and requires status 0 before the clock and reset close and domain 5 goes OFF, in the order '
+            'of drivers/gpu/a733_gpu_power.c. The preparation reads that order from the image\'s own on_steps and '
+            'off_steps tables. The image never reads or writes the GPU register window at 0x01800000: the '
+            'identity reads and their mapping check are compiled out.',
             after=['gpu-provider-ready']),
     gpu_row('gpu-power-identity', 13, 'GPU power and hardware identity', 'identity',
             'COMPLETE GPU power identity: OFF and provider parked',

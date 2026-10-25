@@ -72,9 +72,11 @@ struct a733_gpu_power {
      * seen bits0/1/2 identify successful policy/status/PWCR reads, and bit
      * 3 + n a successful read of core_note[n] (enum a733_gpu_core_note).
      * core_wait_us holds the microseconds each status observation after a
-     * write waited, AFTER_PWCR first. */
+     * write waited, AFTER_PWCR first. core_power_up is set at admission when
+     * the entry words are the power-up state; only then do the observations
+     * wait. */
     uint32_t core_policy, core_status, core_config, core_seen;
-    uint32_t core_note[A733_GPU_CORE_NOTES], core_wait_us[2];
+    uint32_t core_note[A733_GPU_CORE_NOTES], core_wait_us[2], core_power_up;
     /* GPU_TOP: registered before the scheduler on the owner bound to the
      * PMIC provider, by a733_gpu_platform_bind_pmic in the images. */
     struct a733_power_domain_row row;

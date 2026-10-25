@@ -21,6 +21,9 @@ struct model {
      * progress: 0 never (only after progress), 1 at a status read once PWCR
      * is 0, 2 at a status read after a policy write with PWCR 0. */
     unsigned core_early, core_rewritten;
+    /* A status read after the PWCR write and before the policy write
+     * returns this value when it is nonzero. */
+    uint32_t core_after_pwcr_value;
     uint64_t now, tick, gated, counter, gated_counter, settle_counts;
 };
 static struct model m;
@@ -118,6 +121,10 @@ static int read_reg(void *ctx, enum a733_gpu_power_bank bank, uint32_t off, uint
                 if (early) { m.regs[2][0x6008/4] = m.regs[2][0x6000/4]; m.core_pending = 0; }
             }
         }
+        if (off == 8 && m.core_after_pwcr_value && !m.regs[2][0x6020/4] && !m.core_rewritten &&
+            s.phase == A733_GPU_POWER_STARTING) {
+            *out = m.core_after_pwcr_value; return 1;
+        }
         off += 0x6000;
     }
     *out = m.regs[bank][off/4];
@@ -207,7 +214,7 @@ static void core_cases(void)
         /* A settled entry reads each observation once, without a wait. */
         assert(s.core_note[A733_GPU_NOTE_IDR0] == 0x00031001 && s.core_note[A733_GPU_NOTE_MISR] == 0x100 &&
                s.core_note[A733_GPU_NOTE_AFTER_PWCR] == core*8 && s.core_note[A733_GPU_NOTE_AFTER_POLICY] == core*8 &&
-               s.core_wait_us[0] <= 1 && s.core_wait_us[1] <= 1);
+               s.core_wait_us[0] <= 1 && s.core_wait_us[1] <= 1 && !s.core_power_up);
         off(); on(); off();
         assert(m.releases == 2 && m.regs[2][0x4000/4] == 0x12345678 &&
                m.regs[2][0x4008/4] == 0xabcdef08 && m.regs[0][0x5e0/4] == 0x50000);
@@ -246,7 +253,8 @@ static void core_cases(void)
         assert(a733_gpu_power_on(&s, m.now + 1000) == A733_GPU_POWER_AGAIN);
         const enum a733_gpu_power_result r = drain();
         const uint32_t after_pwcr = mode == 0 ? 8 : 0, after_policy = mode <= 1 ? 8 : 0;
-        assert(s.core_policy == 8 && s.core_status == 0 && s.core_config == A733_GPU_CORE_RESET_PWCR);
+        assert(s.core_policy == 8 && s.core_status == 0 && s.core_config == A733_GPU_CORE_RESET_PWCR &&
+               s.core_power_up);
         assert(s.core_note[A733_GPU_NOTE_AFTER_PWCR] == after_pwcr &&
                s.core_note[A733_GPU_NOTE_AFTER_POLICY] == after_policy &&
                s.core_note[A733_GPU_NOTE_MISR_LATE] == 0x100);
@@ -259,7 +267,7 @@ static void core_cases(void)
             assert(m.core_reads == (mode == 2));
             off(); assert(!m.regs[2][0x6000/4] && !m.regs[2][0x6008/4] && m.releases == 1);
             /* Reopening starts from settled OFF with PWCR 0. */
-            on(); assert(s.core_policy == 0 && !s.core_config && s.core_wait_us[0] <= 1); off();
+            on(); assert(s.core_policy == 0 && !s.core_config && s.core_wait_us[0] <= 1 && !s.core_power_up); off();
         } else {
             assert(r == A733_GPU_POWER_FAULT && s.error == A733_GPU_POWER_TIMEOUT && m.held && !m.releases);
             assert(s.index == 27 && !m.regs[2][0x6008/4]); /* the final status poll */
@@ -300,7 +308,22 @@ static void core_cases(void)
             terminal();
         }
     }
-    puts("PASS CORE6: four inherited pairs/reopen, eight entry refusals, ten partial samples, four power-up completions, eight bounded acknowledgement cases; NPU/shared gates retained");
+    /* A status other than 0 or 8 at an observation fails with STATE, from
+     * the power-up state (waiting observation) and from settled OFF (single
+     * read), after the PWCR write and before any further write. */
+    for (unsigned power_up = 0; power_up < 2; ++power_up) {
+        fresh(); m.core_after_pwcr_value = 4;
+        if (power_up) {
+            m.regs[2][0x6000/4] = 8; m.regs[2][0x6020/4] = A733_GPU_CORE_RESET_PWCR; m.core_pending = 1;
+        }
+        assert(a733_gpu_power_on(&s, 10000) == A733_GPU_POWER_AGAIN);
+        assert(drain() == A733_GPU_POWER_FAULT && s.error == A733_GPU_POWER_STATE);
+        assert(s.index == 13 && s.core_power_up == power_up && s.last_value == 4 &&
+               s.core_note[A733_GPU_NOTE_AFTER_PWCR] == 4 && (s.core_seen & 0x20));
+        assert(m.writes == 1 && m.held && !m.releases && m.regs[2][0x6000/4] == power_up*8);
+        terminal();
+    }
+    puts("PASS CORE6: four inherited pairs/reopen, eight entry refusals, ten partial samples, four power-up completions, two invalid observed statuses, eight bounded acknowledgement cases; NPU/shared gates retained");
 }
 int main(int argc, char **argv)
 {

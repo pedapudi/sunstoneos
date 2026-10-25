@@ -8,9 +8,10 @@
 #include "a733_mapping_check.h"
 #include "a733_mmio.h"
 
-/* GPU_POWER_ONLY builds the power-only variant: TOP and CORE ON with CORE
- * status 8, then OFF and provider park, with no access to the GPU register
- * window at 0x01800000 (README.md). */
+/* GPU_POWER_ONLY builds the power-only variant: two cycles of TOP and CORE
+ * ON with CORE status 8 and then OFF, then provider park, with no access to
+ * the GPU register window at 0x01800000 (README.md). The second cycle shows
+ * whether CORE6 enters ON from its power-up state again after TOP5 OFF. */
 #define GPU_CLIENT 7u
 #define GPU_BASE UINT32_C(0x01800000)
 #define EXPECTED_BVNC (UINT64_C(36) << 48 | UINT64_C(56) << 32 | UINT64_C(104) << 16 | 183)
@@ -18,11 +19,18 @@
 static struct a733_gpu_platform_native native;
 static struct a733_gpu_platform gpu;
 static uint64_t last_now;
+#ifdef GPU_POWER_ONLY
+#define GPU_CYCLES 2u
+#else
+#define GPU_CYCLES 1u
+#endif
+static unsigned cycle;
 #ifndef GPU_POWER_ONLY
 static unsigned id_reads;
 #endif
 
-/* The controller's cached CORE6 observations of the last ON: entry words,
+/* The controller's cached CORE6 observations of the last ON, with its cycle
+ * number from 1: entry words,
  * identification and accept/deny inputs, and the status after the PWCR and
  * policy writes with the microseconds each observation waited. */
 static void core_report(void)
@@ -30,15 +38,18 @@ static void core_report(void)
     const struct a733_gpu_power *p = &gpu.power;
     struct bb_line line;
     bb_line_start(&line, "GPU CORE entry");
+    bb_line_dec(&line, "cycle", cycle);
     bb_line_dec(&line, "seen", p->core_seen); bb_line_hex(&line, "policy", p->core_policy);
     bb_line_hex(&line, "status", p->core_status); bb_line_hex(&line, "pwcr", p->core_config);
     bb_line_end(&line); bb_power_print(&line);
     bb_line_start(&line, "GPU CORE inputs");
+    bb_line_dec(&line, "cycle", cycle);
     bb_line_hex(&line, "idr0", p->core_note[A733_GPU_NOTE_IDR0]);
     bb_line_hex(&line, "misr", p->core_note[A733_GPU_NOTE_MISR]);
     bb_line_hex(&line, "misr_late", p->core_note[A733_GPU_NOTE_MISR_LATE]);
     bb_line_end(&line); bb_power_print(&line);
     bb_line_start(&line, "GPU CORE after");
+    bb_line_dec(&line, "cycle", cycle);
     bb_line_hex(&line, "pwcr_status", p->core_note[A733_GPU_NOTE_AFTER_PWCR]);
     bb_line_dec(&line, "pwcr_us", p->core_wait_us[0]);
     bb_line_hex(&line, "policy_status", p->core_note[A733_GPU_NOTE_AFTER_POLICY]);
@@ -53,6 +64,12 @@ static _Noreturn void gpu_fail(const char *reason)
     bb_line_start(&line, "GPU power");
     bb_line_dec(&line, "phase", p->phase); bb_line_dec(&line, "error", p->error);
     bb_line_dec(&line, "step", p->index); bb_line_hex(&line, "last", p->last_value);
+    bb_line_end(&line); bb_power_print(&line);
+    /* A release that finds CORE6 policy or status nonzero after TOP5 OFF
+     * fails here with error LIVE and the word it read. */
+    bb_line_start(&line, "GPU resources");
+    bb_line_dec(&line, "result", gpu.resource_result); bb_line_dec(&line, "error", bb_power.gpu.error);
+    bb_line_dec(&line, "stage", bb_power.gpu.stage); bb_line_hex(&line, "last", bb_power.gpu.last_value);
     bb_line_end(&line); bb_power_print(&line);
     core_report();
     bb_power_fail(reason);
@@ -113,36 +130,43 @@ void gpu_power_id_client(void *unused)
 {
     (void)unused;
     bb_power_wait_ready();
-    before();
-    if (!a733_gpu_platform_begin(&gpu, bb_power.deadline)) gpu_fail("GPU ON begin");
     int result;
-    while ((result = a733_gpu_platform_poll(&gpu)) == 0) gpu_pause("GPU ON deadline");
-    if (result != 1) gpu_fail("GPU ON poll");
-    core_report();
-
 #ifdef GPU_POWER_ONLY
-    /* The controller's last ON step polls CORE status until it reads 8, so a
-     * successful poll leaves that value as its last read. */
-    const uint32_t core_status = gpu.power.last_value;
+    uint32_t core_status[GPU_CYCLES] = {0};
 #else
-    uint64_t raw = id_read(0x20, 8), bvnc = raw;
+    uint64_t raw = 0, bvnc = 0;
     uint32_t revision = 0, core = 0;
-    if (!(raw >> 48)) {
-        revision = (uint32_t)id_read(0x20, 4);
-        core = (uint32_t)id_read(0x18, 4);
-        bvnc = (uint64_t)((revision >> 16) & 255) << 48 |
-               (uint64_t)((revision >> 8) & 255) << 32 |
-               (uint64_t)((core >> 8) & 255) << 16 | (core & 255);
-    }
+#endif
+    for (cycle = 1; cycle <= GPU_CYCLES; ++cycle) {
+        before();
+        if (!a733_gpu_platform_begin(&gpu, bb_power.deadline)) gpu_fail("GPU ON begin");
+        while ((result = a733_gpu_platform_poll(&gpu)) == 0) gpu_pause("GPU ON deadline");
+        if (result != 1) gpu_fail("GPU ON poll");
+        core_report();
+#ifdef GPU_POWER_ONLY
+        /* The controller's last ON step polls CORE status until it reads 8,
+         * so a successful poll leaves that value as its last read. */
+        core_status[cycle - 1] = gpu.power.last_value;
+#else
+        raw = id_read(0x20, 8); bvnc = raw;
+        if (!(raw >> 48)) {
+            revision = (uint32_t)id_read(0x20, 4);
+            core = (uint32_t)id_read(0x18, 4);
+            bvnc = (uint64_t)((revision >> 16) & 255) << 48 |
+                   (uint64_t)((revision >> 8) & 255) << 32 |
+                   (uint64_t)((core >> 8) & 255) << 16 | (core & 255);
+        }
 #endif
 
-    /* No firmware was constructed or booted, and no GPU command/DMA backing
-     * exists. The admitted clean initial state is required for this unwind. */
-    before();
-    if (!a733_gpu_platform_off_begin(&gpu, bb_power.deadline)) gpu_fail("GPU OFF begin");
-    while ((result = a733_gpu_platform_off_poll(&gpu)) == 0) gpu_pause("GPU OFF deadline");
-    if (result != 1) gpu_fail("GPU OFF poll");
-    off_proof();
+        /* No firmware was constructed or booted, and no GPU command/DMA backing
+         * exists. The admitted clean initial state is required for this unwind. */
+        before();
+        if (!a733_gpu_platform_off_begin(&gpu, bb_power.deadline)) gpu_fail("GPU OFF begin");
+        while ((result = a733_gpu_platform_off_poll(&gpu)) == 0) gpu_pause("GPU OFF deadline");
+        if (result != 1) gpu_fail("GPU OFF poll");
+        off_proof();
+    }
+    cycle = GPU_CYCLES;
     bb_power_park();
     off_proof();
     if (!atomic_load_explicit(&bb_power.parked, memory_order_acquire) ||
@@ -154,9 +178,12 @@ void gpu_power_id_client(void *unused)
 
     struct bb_line line;
 #ifdef GPU_POWER_ONLY
-    bb_line_start(&line, "GPU power");
-    bb_line_hex(&line, "core_status", core_status);
-    bb_line_end(&line); bb_power_print(&line);
+    for (unsigned i = 0; i < GPU_CYCLES; ++i) {
+        bb_line_start(&line, "GPU power");
+        bb_line_dec(&line, "cycle", i + 1);
+        bb_line_hex(&line, "core_status", core_status[i]);
+        bb_line_end(&line); bb_power_print(&line);
+    }
     platform_puts("COMPLETE GPU power only: CORE status 8, OFF and provider parked\n");
 #else
     bb_line_start(&line, "GPU identity");

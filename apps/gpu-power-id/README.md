@@ -89,16 +89,21 @@ owned RAM for coordinator recovery; ROM visibility alone does not authorize reus
 
 ## The power-only variant runs before any identity probe
 
-`GPU_POWER_ONLY` builds a variant of the same client that powers TOP and
-CORE, prints the controller's final CORE status read, which ON completion
-requires to be 8, then powers CORE and TOP OFF, releases the platform token and parks the provider. It
-makes no access to the GPU register window at `0x01800000`: the identity
-reads and their mapping check are compiled out. Its completion text is
-`COMPLETE GPU power only: CORE status 8, OFF and provider parked`, after a
-`GPU power core_status=0x8` line.
+`GPU_POWER_ONLY` builds a variant of the same client that runs two full
+cycles. Each cycle powers TOP and CORE, records the controller's final CORE
+status read, which ON completion requires to be 8, then powers CORE and TOP
+OFF and releases the platform token. After the second cycle the client parks
+the provider. The second ON shows whether TOP5 OFF returned CORE6 to its
+power-up state. The variant makes no access to the GPU register window at
+`0x01800000`: the identity reads and their mapping check are compiled out.
+Its completion text is
+`COMPLETE GPU power only: CORE status 8, OFF and provider parked`, after the
+lines `GPU power cycle=1 core_status=0x8` and `GPU power cycle=2
+core_status=0x8`. The identity variant runs one cycle.
 
-Both variants print the controller's cached CORE6 observations after ON and
-on any failure, without another device read:
+Both variants print the controller's cached CORE6 observations after each
+ON and on any failure, without another device read. Each line carries the
+cycle number, starting at 1:
 
 - `GPU CORE entry`: the seen mask (255 when every observation completed)
   and the policy, status and PWCR words before any write.
@@ -106,6 +111,11 @@ on any failure, without another device read:
   reset release.
 - `GPU CORE after`: the status after the PWCR write and after the policy
   write, each with the microseconds its observation waited.
+
+A failure also prints a `GPU resources` line: the platform's last resource
+result and the resource manager's error, stage and last value. A release
+that finds CORE6 policy or status nonzero after TOP5 OFF fails there with
+error `A733_GPU_RESOURCE_LIVE`.
 
 [gpu-power.md](../../docs/gpu-power.md#hypotheses-for-the-next-run) maps
 these values to the explanations for the power-only run that stopped at
@@ -139,9 +149,11 @@ requires the domain-5 (TOP5) ON request before the first CORE6 access and
 the last CORE6 access before domain-5 OFF. The build
 records `"variant": "power-only"` and its completion text in `build.json`.
 The check refuses an image of the other variant: only the identity variant
-defines the identity read counter. Its eight cases cover the normal path, the
-ON, CORE-refusal, partial CORE capture, OFF, retained token, counted row and
-unparked failures. Every case requires that no load,
+defines the identity read counter. Its nine cases cover the normal path of
+two cycles, the ON failure in the first and in the second cycle, the
+CORE-refusal, partial CORE capture, OFF, retained token, counted row and
+unparked failures. Board-bundle preparation requires the normal case to have
+run two cycles for the power-only variant and one for the identity variant. Every case requires that no load,
 store or address translation reaches the GPU register window.
 
 The build reuses 30 objects from the frozen provider-readiness candidate,
