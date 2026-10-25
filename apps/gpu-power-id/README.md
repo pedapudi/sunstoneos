@@ -48,7 +48,8 @@ AHB and MBUS gates. The [power owner](../../docs/power-domains.md) adopts cohere
 GPU_TOP policy/status 0 or 8. When ON needs a transition, it programs the pinned
 PCK600 delay row and requests ON. Under the exclusive LOCAL lease, the GPU controller then captures CORE6
 policy/status/PWCR. It requires whole policy/status words to match at 0 or 8,
-writes PWCR zero and policy 8 with readbacks, and progresses local clocks/reset.
+or the power-up state of policy 8, status 0 and PWCR `0x101`. It writes PWCR
+zero and policy 8 with readbacks, and progresses local clocks/reset.
 After that progress it checks CORE status 8 before identity access. It selects
 the existing 400 MHz parent, opens local clock/bus gates, waits for settling
 and releases external reset in the existing order. No PLL retuning or voltage programming occurs.
@@ -88,13 +89,37 @@ owned RAM for coordinator recovery; ROM visibility alone does not authorize reus
 
 ## The power-only variant runs before any identity probe
 
-`GPU_POWER_ONLY` builds a variant of the same client that powers TOP and
-CORE, prints the controller's final CORE status read, which ON completion
-requires to be 8, then powers CORE and TOP OFF, releases the platform token and parks the provider. It
-makes no access to the GPU register window at `0x01800000`: the identity
-reads and their mapping check are compiled out. Its completion text is
-`COMPLETE GPU power only: CORE status 8, OFF and provider parked`, after a
-`GPU power core_status=0x8` line.
+`GPU_POWER_ONLY` builds a variant of the same client that runs two full
+cycles. Each cycle powers TOP and CORE, records the controller's final CORE
+status read, which ON completion requires to be 8, then powers CORE and TOP
+OFF and releases the platform token. After the second cycle the client parks
+the provider. The second ON shows whether TOP5 OFF returned CORE6 to its
+power-up state. The variant makes no access to the GPU register window at
+`0x01800000`: the identity reads and their mapping check are compiled out.
+Its completion text is
+`COMPLETE GPU power only: CORE status 8, OFF and provider parked`, after the
+lines `GPU power cycle=1 core_status=0x8` and `GPU power cycle=2
+core_status=0x8`. The identity variant runs one cycle.
+
+Both variants print the controller's cached CORE6 observations after each
+ON and on any failure, without another device read. Each line carries the
+cycle number, starting at 1:
+
+- `GPU CORE entry`: the seen mask (255 when every observation completed)
+  and the policy, status and PWCR words before any write.
+- `GPU CORE inputs`: `PPU_IDR0`, and `PPU_MISR` before any write and after
+  reset release.
+- `GPU CORE after`: the status after the PWCR write and after the policy
+  write, each with the microseconds its observation waited.
+
+A failure also prints a `GPU resources` line: the platform's last resource
+result and the resource manager's error, stage and last value. A release
+that finds CORE6 policy or status nonzero after TOP5 OFF fails there with
+error `A733_GPU_RESOURCE_LIVE`.
+
+[gpu-power.md](../../docs/gpu-power.md#hypotheses-for-the-next-run) maps
+these values to the explanations for the power-only run that stopped at
+CORE6 admission.
 
 Both GPU images that failed to return on a board predate CORE6 control. The
 leading, unproven hypothesis is that their first GPU register read stalled
@@ -124,9 +149,11 @@ requires the domain-5 (TOP5) ON request before the first CORE6 access and
 the last CORE6 access before domain-5 OFF. The build
 records `"variant": "power-only"` and its completion text in `build.json`.
 The check refuses an image of the other variant: only the identity variant
-defines the identity read counter. Its eight cases cover the normal path, the
-ON, CORE-refusal, partial CORE capture, OFF, retained token, counted row and
-unparked failures. Every case requires that no load,
+defines the identity read counter. Its nine cases cover the normal path of
+two cycles, the ON failure in the first and in the second cycle, the
+CORE-refusal, partial CORE capture, OFF, retained token, counted row and
+unparked failures. Board-bundle preparation requires the normal case to have
+run two cycles for the power-only variant and one for the identity variant. Every case requires that no load,
 store or address translation reaches the GPU register window.
 
 The build reuses 30 objects from the frozen provider-readiness candidate,
@@ -134,7 +161,7 @@ including its accepted CPU monitor. Seven replacements compile the consumer,
 GPU platform/native adapter, power controller, resource manager/native adapter,
 and current shared TOP owner. The input-object audit checks every power/platform
 layout user and its actual dependency file; all three layout users are rebuilt.
-The power structure grows by 16 bytes for cached diagnostics. Eleven shared structure sizes and member offsets must match across
+The power structure holds the cached CORE6 diagnostics. Eleven shared structure sizes and member offsets must match across
 old and new objects. The recorded private PMIC callback-member rename does not
 change its offset or callback order.
 
@@ -196,8 +223,9 @@ classifying BVNC. A draft proposal or a model pass grants no device access.
 The selected BXM source and the architectural PWCR restriction are documented in
 [gpu-power.md](../../docs/gpu-power.md). BXM writes CORE without polling it; this
 candidate's bounded exact status check is a conservative acceptance condition,
-not a promise that hardware will acknowledge. Inherited policy 8/status 0 is
-refused before PWCR or local clock writes. No CORE delay values are invented.
+not a promise that hardware will acknowledge. Policy 8 and status 0 with any
+PWCR other than the reset value `0x101` is refused before PWCR or local clock
+writes. No CORE delay values are invented.
 The pinned SCP fragment is a host-inspected source clue, not a runtime dependency
 or evidence that its boot path executed on either board.
 

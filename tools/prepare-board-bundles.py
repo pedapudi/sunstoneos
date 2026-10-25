@@ -138,9 +138,10 @@ RETURNING_SOURCES = ['tools/prepare-board-bundles.py', 'checks/board-bundles-app
                      *HOST_TOOLS, 'platform/a733/monitor.S', 'platform/a733/monitor.c', 'platform/a733/platform.c',
                      'platform/a733/link.ld', 'arch/aarch64/vectors.S', 'include/a733_fault.h', 'checks/kernel.c',
                      'checks/board-bundles-fault.c']
-RETURNING_STOP = ('Stop at any nonzero exit. The runner keeps the A733 port lock and quarantines the instance after '
-                  'any outcome that its bundle does not list as controlled; a hang ends at the monitor\'s 2 s '
-                  'deadline, and a stalled bus access needs a power removal. Do not retry.')
+RETURNING_STOP = ('Stop at any nonzero exit. The runner quarantines the instance after any outcome that its bundle '
+                  'does not list as controlled. After a return to the ROM it then exits with the recorded result; '
+                  'without a return it keeps the A733 port lock. A hang ends at the monitor\'s 2 s deadline, and a '
+                  'stalled bus access needs a power removal. Do not retry.')
 READ_STOP = ('Stop at any nonzero exit. The reader keeps the A733 port lock and quarantines the instance after a '
              'failed FEL command; a stalled or aborted read needs a power removal. Do not retry.')
 
@@ -439,15 +440,18 @@ ROWS = [
             'as apps/gpu-power-id/README.md orders it.'),
     gpu_row('gpu-power-only', 12, 'GPU TOP5 and CORE6 power without a GPU register access', 'power-only',
             'COMPLETE GPU power only: CORE status 8, OFF and provider parked',
-            'Monitor status 0 with GPU power core_status=0x8 and COMPLETE GPU power only: CORE status 8, OFF and '
-            'provider parked, then a responsive ROM.',
-            'apps/gpu-power-id built with --power-only. The GPU platform requests domain 5 (TOP5) ON through the '
-            'shared row, then, under the exclusive LOCAL lease, captures CORE6 policy, status and PWCR, writes PWCR '
-            '0 and policy 8 with readbacks, opens the GPU clock and reset, and requires the CORE6 status poll to '
-            'read 8; OFF writes CORE6 policy 0 and requires status 0 before the clock and reset close and domain 5 '
-            'goes OFF, in the order of drivers/gpu/a733_gpu_power.c. The preparation reads that order from the '
-            'image\'s own on_steps and off_steps tables. The image never reads or writes the GPU register window at '
-            '0x01800000: the identity reads and their mapping check are compiled out.',
+            'Monitor status 0 with GPU power cycle=1 core_status=0x8, GPU power cycle=2 core_status=0x8 and '
+            'COMPLETE GPU power only: CORE status 8, OFF and provider parked, then a responsive ROM. Record the '
+            'GPU CORE entry, inputs and after lines of both cycles.',
+            'apps/gpu-power-id built with --power-only. Two ON/OFF cycles run before the provider park. Each ON '
+            'requests domain 5 (TOP5) ON through the shared row, then, under the exclusive LOCAL lease, captures '
+            'CORE6 policy, status, IDR0, MISR and PWCR, admits settled OFF or ON or the power-up state (policy 8, '
+            'status 0, PWCR 0x101), writes PWCR 0 and policy 8 with readbacks and a status observation after '
+            'each, opens the GPU clock and reset, and requires the CORE6 status poll to read 8; OFF writes CORE6 '
+            'policy 0 and requires status 0 before the clock and reset close and domain 5 goes OFF, in the order '
+            'of drivers/gpu/a733_gpu_power.c. The preparation reads that order from the image\'s own on_steps and '
+            'off_steps tables. The image never reads or writes the GPU register window at 0x01800000: the '
+            'identity reads and their mapping check are compiled out.',
             after=['gpu-provider-ready']),
     gpu_row('gpu-power-identity', 13, 'GPU power and hardware identity', 'identity',
             'COMPLETE GPU power identity: OFF and provider parked',
@@ -981,9 +985,11 @@ def outcome_paths(row, bundle):
               'unknown: treat it as a quarantine and run nothing more on this board until power removal |', '',
               'Quarantine: the runner records the failure in `session.json` and writes '
               '`~/.cache/sunstoneos/recovery-required-<port>-<identity>.json` for the instance, which refuses '
-              'further FEL requests to it. It keeps the port lock and the queue claim, and `bundle-run.py` prints '
-              '`"result": "failed", "claim": "held"`. No later step of this lifetime runs, and the board waits '
-              'for power removal.', '']
+              'further FEL requests to it. When the image returned to the ROM and its result was read, the '
+              'runner then exits at once with that result; otherwise it keeps the port lock until recovery and '
+              '`bundle-run.py` ends it at the queue timeout. The queue claim stays held, and `bundle-run.py` '
+              'prints `"result": "failed", "claim": "held"`. No later step of this lifetime runs, and the board '
+              'waits for power removal.', '']
     return lines
 
 

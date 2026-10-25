@@ -18,7 +18,9 @@ kernel runner's host tools, and validate() checks the copy:
 - in both power variants, the GPU controller's step tables in image.elf
   (on_steps and off_steps of drivers/gpu/a733_gpu_power.c) power TOP5
   through the domain-5 row before the first CORE6 access and remove it
-  only after the last; the power-only image defines no identity reader.
+  only after the last; the power-only image defines no identity reader;
+- the host check's normal case ran the variant's number of ON/OFF cycles:
+  two for the power-only variant, one for the identity variant.
 
 Nothing here contacts a device.
 """
@@ -38,7 +40,11 @@ SCHEMA = 'board-gpu-returning-bundle-v1'
 # The image each build reuses objects of, by its build record's identity.
 PROVIDER_READY = '3adfa4ad6ba386ce8d39f76646f540107c2a5d02ce42db6c1c35c90de68a75ed'
 FAILED_POWER_ID = 'fd3d5839f700b5e0f569b0ce722e186c33beba65512815b136d9c969a7341afe'
-CASES = {'provider-ready': 11, 'power-only': 8, 'identity': 13}
+CASES = {'provider-ready': 11, 'power-only': 9, 'identity': 13}
+# ON/OFF cycles of the client's normal run: the power-only variant powers
+# CORE6 on twice, so the second ON shows whether TOP5 OFF returned CORE6 to
+# its power-up state.
+CYCLES = {'power-only': 2, 'identity': 1}
 # struct step of drivers/gpu/a733_gpu_power.c: kind, bank, offset, mask, value.
 STEP = struct.Struct('<5I')
 KIND_DOMAIN = 3        # enum kind: CHECK, UPDATE, DELAY, DOMAIN, CORE_POLICY, ...
@@ -73,8 +79,9 @@ def step_table(elf, name):
     return [STEP.unpack_from(data, i) for i in range(0, len(data), STEP.size)]
 
 
-def power_order(elf):
-    """TOP5 before CORE6 at ON, CORE6 before TOP5 at OFF, in the image's own step tables."""
+def power_order(elf, cycles):
+    """TOP5 before CORE6 at ON, CORE6 before TOP5 at OFF, in the image's own step tables, which
+    every one of the client's cycles runs."""
     on, off = step_table(elf, 'on_steps'), step_table(elf, 'off_steps')
     on_domain = [i for i, s in enumerate(on) if s[0] == KIND_DOMAIN]
     off_domain = [i for i, s in enumerate(off) if s[0] == KIND_DOMAIN]
@@ -85,7 +92,8 @@ def power_order(elf):
     require(on_core and min(on_core) > on_domain[0], 'A CORE6 access precedes the domain-5 ON request')
     require(off_core and max(off_core) < off_domain[0], 'A CORE6 access follows the domain-5 OFF request')
     require(on[-1][1] == BANK_CORE and on[-1][2] == 8 and on[-1][4] == 8, 'ON does not end with the CORE6 status poll')
-    return {'on_steps': len(on), 'off_steps': len(off), 'on_domain_step': on_domain[0], 'on_first_core_step': min(on_core),
+    return {'cycles': cycles, 'on_steps': len(on), 'off_steps': len(off), 'on_domain_step': on_domain[0],
+            'on_first_core_step': min(on_core),
             'on_last_step': 'CORE6 status poll for 8', 'off_last_core_step': max(off_core),
             'off_domain_step': off_domain[0]}
 
@@ -146,7 +154,10 @@ def validate(row, output):
              'reused_from': sorted({o['origin'] for o in equivalence['objects'].values()} - {'new'}),
              'check_cases': len(checked['cases']), 'power_order': None}
     if variant != 'provider-ready':
-        value['power_order'] = power_order(output / 'image.elf')
+        normal = [case for case in checked['cases'] if case.get('case') == 'normal']
+        require(len(normal) == 1 and normal[0].get('cycles') == CYCLES[variant],
+                f'The host check\'s normal case did not run {CYCLES[variant]} ON/OFF cycles.')
+        value['power_order'] = power_order(output / 'image.elf', CYCLES[variant])
         names = subprocess.run(['/usr/lib/llvm-21/bin/llvm-nm', '-P', str(output / 'image.elf')], capture_output=True,
                                text=True, check=True).stdout.split()
         identity = 'id_read' in names or 'id_reads' in names

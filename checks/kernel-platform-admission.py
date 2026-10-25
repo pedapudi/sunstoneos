@@ -263,7 +263,7 @@ def main():
     modes = ('success-new-admission', 'legacy-signature-refusal', 'prelaunch-transport-loss', 'launch-transport-loss', 'prelaunch-interruption')
     if args.warm_return: modes += ('success-warm-admission',)
     modes += ('controlled-outcome-match', 'controlled-outcome-unlisted', 'controlled-progress-match',
-              'controlled-progress-unlisted')
+              'controlled-progress-unlisted', 'returned-status-failure', 'returned-quarantine-failure')
     for mode in modes:
         if args.case and mode != args.case:
             continue
@@ -282,10 +282,13 @@ def main():
             def retain():
                 assert held[0], 'Lock released before retention'
                 raise Held()
+            def quarantine_instance(*a):
+                assert held[0], 'Lock released before quarantine'
+                if mode == 'returned-quarantine-failure': raise OSError('modeled quarantine failure')
+                quarantine.append(a)
             access = SimpleNamespace(board_lock=lock, require_session=lambda n: None,
                 require_rom=lambda n: None, identity=lambda n: active[0], target=lambda n: Path('/mock')/port,
-                session_node=lambda config: run_node,
-                quarantine_instance=lambda *a: quarantine.append(a))
+                session_node=lambda config: run_node, quarantine_instance=quarantine_instance)
             def transact(command, **kwargs):
                 assert held[0]
                 parts = command[3:]; requests.append(parts)
@@ -304,6 +307,9 @@ def main():
                         # The unlisted case woke one tick before the forced return.
                         age = 24000 if mode == 'controlled-progress-unlisted' else 100000
                         struct.pack_into('<4Q', data, 128, 0x3130535342344242, 3, 412, PROGRESS_END - age)
+                    elif mode.startswith('returned-'):
+                        # The 2026-10-24 port 3-1 return: a bounded refusal, status 1.
+                        log, status = b'GPU power phase=5 error=5 step=8 last=0x101\nFAIL GPU ON poll\n', 1
                     elif mode.startswith('controlled-'):
                         log, status = FAULT_LOG, 1
                         if mode == 'controlled-outcome-unlisted': log = log.replace(b'FAR=0x0000000400000000',
@@ -339,15 +345,30 @@ def main():
                 try:
                     runner.main(argv)
                 except Held:
-                    if mode in ('controlled-outcome-unlisted', 'controlled-progress-unlisted'):
-                        # An unlisted nonzero status keeps ownership and quarantines.
-                        assert len(quarantine)==1 and requests[-1][0] == 'read'
+                    if mode == 'returned-quarantine-failure':
+                        # A returned instance that could not be quarantined keeps the port lock.
+                        assert not quarantine and requests[-1][0] == 'read'
                     else:
                         assert (mode.endswith('transport-loss') or mode == 'prelaunch-interruption') and len(quarantine)==1
                         assert requests[-1][0] == ('reset64' if mode.startswith('launch-') else 'version')
-                except SystemExit:
-                    assert mode == 'legacy-signature-refusal' and not quarantine
-                    assert not any(r[0] in ('write','reset64') for r in requests)
+                except SystemExit as stop:
+                    if mode == 'legacy-signature-refusal':
+                        assert not quarantine
+                        assert not any(r[0] in ('write','reset64') for r in requests)
+                    else:
+                        # An unlisted nonzero status after a ROM return quarantines the
+                        # returned instance and exits with the recorded result, without
+                        # holding the port lock.
+                        assert mode in ('controlled-outcome-unlisted', 'controlled-progress-unlisted',
+                                        'returned-status-failure'), mode
+                        assert len(quarantine)==1 and quarantine[0][2] == run_identity[:-1]+[1]
+                        assert requests[-1][0] == 'read' and sum(r[0]=='reset64' for r in requests)==1
+                        saved = json.loads((tmp/'run/session.json').read_text())
+                        assert saved['complete'] is False and saved['transport_failed'] is False
+                        assert 'Unexpected kernel result' in saved['failure'] and saved['result']['status'] in (1, 2)
+                        assert str(stop.code).startswith('Stopped: Unexpected kernel result')
+                        if mode == 'returned-status-failure':
+                            assert (tmp/'run/kernel.log').read_text().endswith('FAIL GPU ON poll\n')
                 else:
                     assert mode in ('success-new-admission', 'success-warm-admission', 'controlled-outcome-match',
                                     'controlled-progress-match')
@@ -386,6 +407,28 @@ def main():
             except Held: pass
         assert calls==['held']
     passed('journal-failure-retains-before-and-after-launch')
+    # A returned record exits only after its quarantine succeeds; a launch
+    # without a read result, or with a transport failure, still holds.
+    returned = dict(launch_attempted=True, transport_failed=False, automatic_access=True,
+                    returned_node='/dev/bus/usb/003/052', result=dict(status=1))
+    for name, record, quarantine_ok, holds in [
+            ('returned', returned, True, False),
+            ('returned-quarantine-failure', returned, False, True),
+            ('no-result', dict(returned, result=None), True, True),
+            ('no-returned-node', {k: v for k, v in returned.items() if k != 'returned_node'}, True, True),
+            ('transport-failed-after-return', dict(returned, transport_failed=True), True, True),
+            ('no-access', dict(returned, automatic_access=False), True, True)]:
+        calls=[]
+        def hold(): calls.append('held'); raise Held()
+        def quarantine():
+            if not quarantine_ok: raise OSError('modeled quarantine failure')
+            calls.append('quarantined')
+        with patch.object(helper,'hold_ownership',hold), patch.object(helper.stop_after_failure,'__defaults__',(hold,)):
+            try:
+                runner.retain_failure(dict(record),lambda: None,quarantine,RuntimeError('status 1'),helper)
+            except (Held, OSError): pass
+        assert ('held' in calls) == holds and ('quarantined' in calls) == quarantine_ok, (name, calls)
+    passed('returned-failure-exits-after-quarantine')
     print(json.dumps({'passed':len(results),'evidence':str(args.output),'physical_access':False}))
 
 if __name__ == '__main__': main()

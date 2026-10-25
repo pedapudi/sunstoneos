@@ -24,8 +24,12 @@
 #include "power-domains-model.h"
 
 static FILE *gpu_trace;
+/* CORE6 PPU words 0..0x20 and IDR0; a policy write, or the power-up state,
+ * leaves a transition pending that completes at the first status read
+ * after GPU clock/reset progress. */
 static uint32_t gpu_core[9];
 static unsigned gpu_core_pending;
+#define GPU_CORE_IDR0 UINT32_C(0x00031001)
 static uint32_t policy_before;
 static void owner_written(uintptr_t a,uint32_t v)
 {
@@ -43,12 +47,11 @@ static int gpu_read(void *v,enum a733_gpu_power_bank bank,uint32_t off,uint32_t 
 {
     (void)v;
     if(bank==A733_GPU_CORE) {
-        assert(off==0 || off==8 || off==0x20);
-        if(off==8 && gpu_core_pending) {
-            assert((d.ppu[5][2]&15)==8 && (d.ccu_b20&0x80000000) && (d.ccu_b24&0x10001)==0x10001);
+        assert((d.ppu[5][2]&15)==8 && (off==0 || off==8 || off==0x14 || off==0x20 || off==0xfb0));
+        if(off==8 && gpu_core_pending && (d.ccu_b20&0x80000000) && (d.ccu_b24&0x10001)==0x10001) {
             gpu_core[2]=gpu_core[0];gpu_core_pending=0;
         }
-        *out=gpu_core[off/4];return 1;
+        *out=off==0xfb0 ? GPU_CORE_IDR0 : gpu_core[off/4];return 1;
     }
     uint32_t *w=level_word((bank==A733_GPU_CCU ? CCU_BASE : RCCU_BASE)+off);assert(w);*out=*w;return 1;
 }
@@ -79,12 +82,15 @@ static void gpu_trace_run(const char *path)
     static const struct a733_gpu_power_ops ops={gpu_now,gpu_acquire,gpu_release,gpu_read,gpu_update};
     static struct a733_gpu_power g;struct a733_rail_token t={0};
     domains_model_setup(0x28,23);d.ack_us=0;memset(&g,0,sizeof(g));
-    memset(gpu_core,0,sizeof(gpu_core));gpu_core_pending=0;
+    /* The board's power-up CORE6 state: policy 8, status 0, reset PWCR. */
+    memset(gpu_core,0,sizeof(gpu_core));gpu_core[0]=8;gpu_core[8]=A733_GPU_CORE_RESET_PWCR;gpu_core_pending=1;
     assert(a733_gpu_power_init(&g,&ops,0) && a733_power_domain_row_init(&g.row,&d.owner,5,9,&t));
     domains_boot();t=domains_rail(9,A733_RAIL_DCDC4);
     gpu_trace=fopen(path,"w");assert(gpu_trace);policy_before=d.ppu[5][0];d.written=owner_written;
     gpu_run(&g,1);
     assert((d.ppu[5][2]&15)==8 && d.ccu_b20==0x93200100 && d.ccu_b24==0x24690001);
+    assert(g.core_policy==8 && !g.core_status && g.core_config==A733_GPU_CORE_RESET_PWCR && g.core_seen==0xff &&
+           g.core_note[A733_GPU_NOTE_IDR0]==GPU_CORE_IDR0 && gpu_core[2]==8 && !gpu_core[8]);
     gpu_run(&g,0);
     assert((d.ppu[5][2]&15)==0 && d.ccu_b20==0x13200100 && d.ccu_b24==0x24680000 && d.ppu[5][0]==0xa5a50000);
     d.written=0;assert(!fclose(gpu_trace));gpu_trace=0;

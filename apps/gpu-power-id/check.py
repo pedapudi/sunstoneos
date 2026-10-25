@@ -21,6 +21,11 @@ NAMES = ['bb_power', 'a733_gpu_platform', 'a733_gpu_power', 'a733_pmic_consumer'
          'a733_power_domains', 'a733_power_domain', 'a733_power_domain_row']
 
 
+def last_put(state):
+    """Index of the last platform_puts call: the completion text follows the park."""
+    return len(state['calls']) - 1 - state['calls'][::-1].index('platform_puts')
+
+
 def run(image, case, power_only=False):
     u = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
     u.mem_map(0x41000000, 0x1200000)
@@ -36,7 +41,7 @@ def run(image, case, power_only=False):
     domains = bb + L['bb_power']['domains']
     domain5 = domains + L['a733_power_domains']['domain'] + 2 * 32
     deadline = 10000
-    state = {'case': case, 'calls': [], 'gpu_reads': [], 'gpu_writes': [], 'clock_reads': 0,
+    state = {'case': case, 'calls': [], 'gpu_reads': [], 'gpu_writes': [], 'clock_reads': 0, 'on_polls': 0,
              'time': 100, 'messages': [], 'exit_status': None, 'failure': None}
 
     def put(address, value, size=4):
@@ -44,6 +49,13 @@ def run(image, case, power_only=False):
 
     def field(base, typ, name, value, size=4):
         put(base + L[typ][name], value, size)
+
+    def notes(idr0, misr, after_pwcr, after_policy, misr_late, waits=(0, 0)):
+        base = power + L['a733_gpu_power']['core_note']
+        for i, value in enumerate((idr0, misr, after_pwcr, after_policy, misr_late)):
+            put(base + 4 * i, value)
+        for i, value in enumerate(waits):
+            put(power + L['a733_gpu_power']['core_wait_us'] + 4 * i, value)
 
     def ret(value=1):
         u.reg_write(UC_ARM64_REG_X0, value)
@@ -79,15 +91,33 @@ def run(image, case, power_only=False):
                 state['time'] = 99
             ret(state['time'])
         elif name == 'a733_gpu_platform_poll':
-            if case in ['on-fault', 'core-refused', 'core-partial']:
+            state['on_polls'] += 1
+            if case in ['on-fault', 'core-refused', 'core-partial'] or (case == 'second-on-fault' and state['on_polls'] == 2):
                 if case != 'on-fault':
-                    field(power, 'a733_gpu_power', 'core_seen', 7 if case == 'core-refused' else 1)
+                    # A refused entry has the policy, status, IDR0, MISR and
+                    # PWCR reads (seen 0x1f) and stops at the admission step 10.
+                    field(power, 'a733_gpu_power', 'core_seen', 0x1f if case == 'core-refused' else 1)
                     field(power, 'a733_gpu_power', 'core_policy', 8)
                     field(power, 'a733_gpu_power', 'core_config', 0x010101ff if case == 'core-refused' else 0)
                     field(power, 'a733_gpu_power', 'error', 5 if case == 'core-refused' else 1)
-                    field(power, 'a733_gpu_power', 'index', 8 if case == 'core-refused' else 7)
+                    field(power, 'a733_gpu_power', 'index', 10 if case == 'core-refused' else 7)
+                    field(power, 'a733_gpu_power', 'phase', 5)
+                    if case == 'core-refused':
+                        notes(0x00031001, 0x100, 0, 0, 0)
                 ret((1 << 64) - 1)
                 return
+            # The first ON enters from the power-up state and completes after
+            # the PWCR write; the second enters from settled OFF with PWCR 0
+            # and completes at the final poll.
+            field(power, 'a733_gpu_power', 'core_seen', 0xff)
+            if state['on_polls'] == 1:
+                field(power, 'a733_gpu_power', 'core_policy', 8)
+                field(power, 'a733_gpu_power', 'core_config', 0x101)
+                notes(0x00031001, 0x100, 8, 8, 0x100, (3, 1))
+            else:
+                field(power, 'a733_gpu_power', 'core_policy', 0)
+                field(power, 'a733_gpu_power', 'core_config', 0)
+                notes(0x00031001, 0, 0, 0, 0x100, (0, 0))
             field(gpu, 'a733_gpu_platform', 'phase', 3)
             field(gpu, 'a733_gpu_platform', 'token', 17, 8)
             field(gpu, 'a733_gpu_platform', 'delegated', 1)
@@ -156,23 +186,41 @@ def run(image, case, power_only=False):
         if case == 'normal':
             assert state['exit_status'] == 0 and state['failure'] is None, state
             assert 'COMPLETE GPU power only: CORE status 8, OFF and provider parked' in output
-            assert 'GPU power core_status=0x8' in output and 'identity' not in output, output
-            assert state['calls'].index('a733_gpu_platform_off_poll') < state['calls'].index('bb_power_park') < state['calls'].index('platform_puts')
+            assert 'identity' not in output, output
+            # Two full cycles, each reported, then one park and the completion text.
+            for line in ['GPU CORE entry cycle=1 seen=255 policy=0x8 status=0x0 pwcr=0x101',
+                         'GPU CORE inputs cycle=1 idr0=0x31001 misr=0x100 misr_late=0x100',
+                         'GPU CORE after cycle=1 pwcr_status=0x8 pwcr_us=3 policy_status=0x8 policy_us=1',
+                         'GPU CORE entry cycle=2 seen=255 policy=0x0 status=0x0 pwcr=0x0',
+                         'GPU CORE inputs cycle=2 idr0=0x31001 misr=0x0 misr_late=0x100',
+                         'GPU CORE after cycle=2 pwcr_status=0x0 pwcr_us=0 policy_status=0x0 policy_us=0',
+                         'GPU power cycle=1 core_status=0x8', 'GPU power cycle=2 core_status=0x8']:
+                assert line in output, (line, output)
+            calls = state['calls']
+            starts = [i for i, c in enumerate(calls) if c == 'a733_gpu_platform_begin']
+            stops = [i for i, c in enumerate(calls) if c == 'a733_gpu_platform_off_begin']
+            assert len(starts) == len(stops) == 2 and starts[0] < stops[0] < starts[1] < stops[1], calls
+            assert stops[1] < calls.index('bb_power_park') < last_put(state) and calls.count('bb_power_park') == 1
         else:
             reasons = {'core-refused': 'GPU ON poll', 'core-partial': 'GPU ON poll', 'on-fault': 'GPU ON poll',
-                       'off-fault': 'GPU OFF poll',
+                       'second-on-fault': 'GPU ON poll', 'off-fault': 'GPU OFF poll',
                        'retained-token': 'GPU OFF ownership proof', 'counted-row': 'GPU OFF ownership proof',
                        'unparked': 'GPU provider park proof'}
             assert state['failure'] == reasons[case], state
             assert state['exit_status'] is None and 'COMPLETE' not in output
             if case in ['on-fault', 'core-refused', 'core-partial']:
                 assert 'a733_gpu_platform_off_begin' not in state['calls']
+            if case == 'second-on-fault':
+                # The first cycle completed; the failed second ON reports its cycle.
+                assert state['calls'].count('a733_gpu_platform_off_begin') == 1, state['calls']
+                assert 'GPU CORE entry cycle=2' in output and 'bb_power_park' not in state['calls'], output
+        state['cycles'] = state['calls'].count('a733_gpu_platform_off_begin')
         return state
     if case in ['normal', 'legacy-id', 'unexpected-id']:
         assert state['exit_status'] == 0 and state['failure'] is None
         assert 'COMPLETE GPU power identity: OFF and provider parked' in output
         assert f'matches={0 if case == "unexpected-id" else 1}' in output
-        assert state['calls'].index('a733_gpu_platform_off_poll') < state['calls'].index('bb_power_park') < state['calls'].index('platform_puts')
+        assert state['calls'].index('a733_gpu_platform_off_poll') < state['calls'].index('bb_power_park') < last_put(state)
         assert state['gpu_reads'] == ([['0x1800020', 8], ['0x1800020', 4], ['0x1800018', 4]] if case == 'legacy-id' else [['0x1800020', 8]])
     else:
         reasons = {'core-refused': 'GPU ON poll', 'core-partial': 'GPU ON poll', 'on-fault': 'GPU ON poll', 'bad-mapping': 'GPU identity mapping',
@@ -186,10 +234,16 @@ def run(image, case, power_only=False):
         if case in ['on-fault', 'core-refused', 'core-partial', 'bad-mapping', 'read-crosses-deadline', 'clock-regresses']:
             assert 'a733_gpu_platform_off_begin' not in state['calls']
     if case in ['core-refused', 'core-partial']:
-        assert 'GPU CORE entry' in output and f'seen={7 if case == "core-refused" else 1}' in output
+        assert 'GPU CORE entry' in output and f'seen={31 if case == "core-refused" else 1}' in output
+        assert 'GPU CORE after' in output and 'GPU CORE inputs' in output
+        if case == 'core-refused':
+            assert 'GPU power phase=5 error=5 step=10' in output and 'idr0=0x31001 misr=0x100' in output, output
         assert 'policy=0x8 status=0x0' in output, output
         assert 'GPU power' in output and 'a733_gpu_platform_off_begin' not in state['calls']
     assert not state['gpu_writes']
+    state['cycles'] = state['calls'].count('a733_gpu_platform_off_begin')
+    if case == 'normal':
+        assert state['cycles'] == 1
     return state
 
 
@@ -228,7 +282,7 @@ def main():
     cases = ['normal', 'legacy-id', 'unexpected-id', 'on-fault', 'bad-mapping',
              'read-crosses-deadline', 'clock-regresses', 'off-fault', 'retained-token', 'counted-row', 'unparked', 'core-refused', 'core-partial']
     if a.power_only:
-        cases = ['normal', 'on-fault', 'core-refused', 'core-partial',
+        cases = ['normal', 'on-fault', 'second-on-fault', 'core-refused', 'core-partial',
                  'off-fault', 'retained-token', 'counted-row', 'unparked']
     if a.cases:
         assert set(a.cases) <= set(cases)

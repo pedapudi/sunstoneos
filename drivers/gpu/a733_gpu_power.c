@@ -3,7 +3,11 @@
 #include <stddef.h>
 
 #define BIT(n) (UINT32_C(1) << (n))
-enum kind { CHECK, UPDATE, DELAY, DOMAIN, CORE_POLICY, CORE_STATUS, CORE_CONFIG, POLL };
+/* apps/gpu-power-id/prepare.py reads the step tables of a linked image and
+ * relies on the values of DOMAIN and of the CORE bank. NOTE and SETTLE carry
+ * their enum a733_gpu_core_note slot in value. */
+enum kind { CHECK, UPDATE, DELAY, DOMAIN, CORE_POLICY, CORE_STATUS, CORE_CONFIG, POLL,
+            NOTE, SETTLE };
 struct step { enum kind kind; enum a733_gpu_power_bank bank;
     uint32_t offset, mask, value; };
 /* The GPU_TOP domain is PCK domain 5, which the power-domain owner powers
@@ -13,6 +17,13 @@ struct step { enum kind kind; enum a733_gpu_power_bank bank;
  * its device-tree node is commented out. CORE configuration/policy writes
  * follow sunxi_platform.c:70-102,911-922 at kernel 2ac08e8c7. DEN0051E5.2.8
  * requires settled static policy before changing PWCR device request enables.
+ * After power-up CORE6 reads policy 8, status 0 and the one-Q-Channel reset
+ * PWCR: its default ON policy has a transition outstanding that the GPU's
+ * Q-Channel cannot accept while the GPU is gated and in reset. The BXM
+ * adapter writes PWCR 0 and policy 8 in that state, before any GPU clock,
+ * and this controller admits it as the one unsettled exception. NOTE and
+ * SETTLE steps record CORE6 words for diagnosis and require no particular
+ * value; a SETTLE status other than 0 or 8 still fails.
  * GPU local clock selects pll-peri0-400m / 1.
  */
 static const struct step on_steps[] = {
@@ -24,11 +35,15 @@ static const struct step on_steps[] = {
     {DOMAIN, A733_GPU_CCU, 0, 0, 1},
     {CORE_POLICY, A733_GPU_CORE, 0, 0, 0},
     {CORE_STATUS, A733_GPU_CORE, 8, 0, 0},
+    {NOTE, A733_GPU_CORE, 0xfb0, 0, A733_GPU_NOTE_IDR0},
+    {NOTE, A733_GPU_CORE, 0x14, 0, A733_GPU_NOTE_MISR},
     {CORE_CONFIG, A733_GPU_CORE, 0x20, 0, 0},
     {UPDATE, A733_GPU_CORE, 0x20, UINT32_MAX, 0},
     {CHECK, A733_GPU_CORE, 0x20, UINT32_MAX, 0},
+    {SETTLE, A733_GPU_CORE, 8, 0, A733_GPU_NOTE_AFTER_PWCR},
     {UPDATE, A733_GPU_CORE, 0, UINT32_MAX, 8},
     {CHECK, A733_GPU_CORE, 0, UINT32_MAX, 8},
+    {SETTLE, A733_GPU_CORE, 8, 0, A733_GPU_NOTE_AFTER_POLICY},
     {UPDATE, A733_GPU_CCU, 0x0b20, 0x8700000f, 0x0b000000},
     {CHECK, A733_GPU_CCU, 0x0b20, 0x8700000f, 0x03000000},
     {UPDATE, A733_GPU_CCU, 0x0b20, 0, BIT(31) | BIT(27)},
@@ -38,6 +53,7 @@ static const struct step on_steps[] = {
     {DELAY, A733_GPU_CCU, 0, 0, 1},
     {UPDATE, A733_GPU_CCU, 0x0b24, 0, BIT(16)},
     {CHECK, A733_GPU_CCU, 0x0b24, BIT(16) | BIT(0), BIT(16) | BIT(0)},
+    {NOTE, A733_GPU_CORE, 0x14, 0, A733_GPU_NOTE_MISR_LATE},
     /* The reference does not wait before enabling clocks/reset. Validate
      * acknowledgement only after that progress, before any engine access. */
     {POLL, A733_GPU_CORE, 8, UINT32_MAX, 8},
@@ -63,6 +79,18 @@ static enum a733_gpu_power_result fail(struct a733_gpu_power *s,
     s->error = error;
     s->phase = A733_GPU_POWER_FAILED;
     return A733_GPU_POWER_FAULT;
+}
+/* The power-up state: default ON policy, its transition outstanding, and the
+ * reset PWCR, so nothing has written CORE6. */
+static int core_power_up(const struct a733_gpu_power *s)
+{
+    return s->core_policy == 8 && s->core_status == 0 && s->core_config == A733_GPU_CORE_RESET_PWCR;
+}
+/* Settled static OFF or ON, with whole words, or the power-up state. */
+static int core_admitted(const struct a733_gpu_power *s)
+{
+    return ((s->core_policy == 0 || s->core_policy == 8) && s->core_status == s->core_policy) ||
+        core_power_up(s);
 }
 static int clock_read(struct a733_gpu_power *s)
 {
@@ -98,6 +126,8 @@ static enum a733_gpu_power_result begin(struct a733_gpu_power *s,
     if (on) {
         s->lease_attempted = 0;
         s->core_policy = s->core_status = s->core_config = s->core_seen = 0;
+        for (unsigned i = 0; i < A733_GPU_CORE_NOTES; ++i) s->core_note[i] = 0;
+        s->core_wait_us[0] = s->core_wait_us[1] = s->core_power_up = 0;
     }
     return clock_read(s) ? A733_GPU_POWER_AGAIN : A733_GPU_POWER_FAULT;
 }
@@ -132,7 +162,9 @@ enum a733_gpu_power_result a733_gpu_power_poll(struct a733_gpu_power *s)
      * returns AGAIN without advancing the step. Every wait ends at the
      * deadline. A CORE status poll re-reads for up to A733_GPU_SPIN_US
      * within one call, with the clock advancing, before it returns AGAIN;
-     * each step list has one poll. */
+     * each step list has one poll. A SETTLE observation reads CORE status
+     * once; after the power-up entry state it re-reads the same way while
+     * the status is 0. It then continues with the status it saw. */
     struct a733_gpu_spin spin = {0};
     while (s->index < count) {
         const struct step *p = &(on ? on_steps : off_steps)[s->index];
@@ -166,6 +198,21 @@ enum a733_gpu_power_result a733_gpu_power_poll(struct a733_gpu_power *s)
             ++s->index;
             continue;
         }
+        if (p->kind == SETTLE) {
+            struct a733_gpu_spin wait = {0};
+            const uint64_t start = s->last_now;
+            uint32_t value;
+            do {
+                if (!s->ops.read(s->context, p->bank, p->offset, &value)) return fail(s, A733_GPU_POWER_IO);
+                s->last_value = s->core_note[p->value] = value;
+                s->core_seen |= UINT32_C(8) << p->value;
+                if (!clock_read(s)) return A733_GPU_POWER_FAULT;
+                s->core_wait_us[p->value - A733_GPU_NOTE_AFTER_PWCR] = (uint32_t)(s->last_now - start);
+                if (value != 0 && value != 8) return fail(s, A733_GPU_POWER_STATE);
+            } while (value != 8 && s->core_power_up && a733_gpu_spin_again(&wait, s->last_now));
+            ++s->index;
+            continue;
+        }
         uint32_t value = 0;
         int ok;
         if (p->kind == UPDATE)
@@ -178,10 +225,13 @@ enum a733_gpu_power_result a733_gpu_power_poll(struct a733_gpu_power *s)
         if (p->kind == CORE_POLICY) { s->core_policy = value; s->core_seen |= 1; }
         if (p->kind == CORE_STATUS) { s->core_status = value; s->core_seen |= 2; }
         if (p->kind == CORE_CONFIG) { s->core_config = value; s->core_seen |= 4; }
+        if (p->kind == NOTE) { s->core_note[p->value] = value; s->core_seen |= UINT32_C(8) << p->value; }
         if (!clock_read(s)) return A733_GPU_POWER_FAULT;
         if (p->kind == CHECK && (value & p->mask) != p->value) return fail(s, A733_GPU_POWER_STATE);
-        if (p->kind == CORE_CONFIG && ((s->core_policy != 0 && s->core_policy != 8) ||
-                                      s->core_status != s->core_policy)) return fail(s, A733_GPU_POWER_STATE);
+        if (p->kind == CORE_CONFIG) {
+            if (!core_admitted(s)) return fail(s, A733_GPU_POWER_STATE);
+            s->core_power_up = (uint32_t)core_power_up(s);
+        }
         if (p->kind == POLL) {
             if (value != 0 && value != 8) return fail(s, A733_GPU_POWER_STATE);
             if (value != p->value) {
