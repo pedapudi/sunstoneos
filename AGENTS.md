@@ -42,8 +42,22 @@ do not copy each run's status into it.
 - Complete onboard hardware support and local mimus execution are separate
   completion requirements. A CPU fallback does not satisfy accelerator support.
 - Work on isolated branches or worktrees. Preserve other workers' changes.
-- Keep downloaded sources, models, firmware blobs, builds, and raw logs outside
-  tracked source. Pin dependencies and record their provenance and hashes.
+- Keep downloaded sources, models, firmware blobs, builds, raw logs and full
+  disassembly listings outside tracked source. Pin each one and record where it
+  can be obtained (URL and revision), its SHA-256 and its license in
+  [the vendor firmware sources](docs/vendor-firmware/README.md) or the
+  component's own sources record, so that another developer can fetch the same
+  bytes.
+- Facts derived from vendor binaries may be tracked: function, register-access,
+  message-ID and table inventories, with the binary's SHA-256 and offsets. Put
+  them under `docs/vendor-firmware/data/` and describe behaviour in your own
+  words. Do not commit vendor code, verbatim disassembly or extracted log text
+  beyond short identifiers.
+- Derive a hardware sequence from the references before running it on a board:
+  vendor source, the vendor binaries, upstream Linux and TF-A, and the manuals.
+  Diff SunstoneOS against that sequence, including checks the reference does not
+  perform. A board run tests a prediction from that diff; it does not search for
+  the cause one guess at a time.
 - Preserve third-party license notices. Never add generated-by notices, vendor
   attribution tags, or assistant co-author tags to project files or Git metadata.
 - Use the writing skill for all communication and documentation.
