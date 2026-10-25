@@ -77,11 +77,14 @@ python3 apps/npu-finite/build.py --evidence OUTPUT
 python3 apps/npu-finite/sram-route-check.py --evidence OUTPUT --output OUTPUT/sram-route-check.json
 ```
 
-`build.py --rate-852` builds the image with PLL_NPU at 852 MHz at the
-unchanged 800 mV; its register pass refuses a speed bin whose operating-point
-column does not list 800 mV for that rate
-([design](../../docs/designs/npu-852mhz-plan.md)). Check it with
-`sram-route-check.py --rate 852`. The client logs startup and job times in
+By default the image runs the NPU at the vendor's operating point for the
+chip's speed bin, 852 MHz at 800 mV on both boards, and refuses a bin whose
+point needs another DCDC2 voltage
+([design](../../docs/designs/npu-job-overhead.md#default-operating-point)).
+`build.py --rate-492` builds the optional 492 MHz mode, and `--rate-852`
+selects 852 MHz explicitly ([852 MHz design](../../docs/designs/npu-852mhz-plan.md)).
+Check them with `sram-route-check.py --rate 492` or `--rate 852`; the default
+needs no option. The client logs startup and job times in
 counter microseconds as `NPU_TIME_US`, and each job's system-counter times and
 NPU total and idle cycles as `NPU_JOB_COUNTERS`; the host reports both as
 `timing` ([design](../../docs/designs/npu-irq-completion.md)), and each job's

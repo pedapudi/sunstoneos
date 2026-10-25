@@ -569,10 +569,14 @@ int a733_npu_application_init(TaskHandle_t client)
     const struct a733_npu_startup_providers providers={&app.clock,&app.registry,&app.locks,
         &app.gpu,&app.rails,&app.domains};
     if(!a733_npu_startup_init(&app.startup,&startup,&providers,NULL,NULL) ||
-#ifdef SUNSTONE_NPU_RATE_852
+#if defined(SUNSTONE_NPU_RATE_852)
        /* The 852 MHz profile, admitted by the register pass only for a speed
         * bin that lists 800 mV for it. */
        !a733_npu_startup_rate(&app.startup,852) ||
+#elif defined(SUNSTONE_NPU_RATE_492)
+       /* The optional lower mode; the default is the vendor's point for the
+        * speed bin (a733_npu_startup_rate). */
+       !a733_npu_startup_rate(&app.startup,492) ||
 #endif
        !a733_npu_startup_bind_task(&app.startup,app.bootstrap_task) ||
        !npu_convolution_bind(&app.reserved.convolution,&app.startup,client,4,

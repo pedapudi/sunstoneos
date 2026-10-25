@@ -36,7 +36,8 @@ from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_PC, UC_ARM64_REG_S
 p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 p.add_argument('--evidence', type=Path, required=True)
 p.add_argument('--output', type=Path, required=True)
-p.add_argument('--rate', type=int, choices=(492, 852), default=492, help='the image profile: build.py --rate-852 selects 852')
+p.add_argument('--rate', choices=('vendor', '492', '852'), default='vendor',
+               help="the image's profile: the vendor point for the speed bin (default), or build.py --rate-492 or --rate-852")
 a = p.parse_args()
 root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(root / 'checks'))
@@ -129,9 +130,10 @@ class Machine:
         u.hook_add(UC_HOOK_MEM_WRITE, self.write, begin=0x02000000, end=0x08ffffff)
         u.hook_add(UC_HOOK_MEM_READ, self.read, begin=0x02000000, end=0x08ffffff)
         assert self.call('a733_npu_startup_init', self.s, cfg, prov, 0, 0) == 1
-        # The 492 MHz image links no rate selection; 852 is selected as its application does.
-        if a.rate == 852:
-            assert self.call('a733_npu_startup_rate', self.s, 852) == 1
+        # The default image links no rate selection; an optional mode is
+        # selected as its application does.
+        if a.rate != 'vendor':
+            assert self.call('a733_npu_startup_rate', self.s, int(a.rate)) == 1
         assert self.call('a733_npu_startup_bind_task', self.s, self.task) == 1
         self.put(self.s + L['a733_npu_startup']['stage'], STAGE['A733_NPU_STARTUP_PASS'], 4)
         self.running = True
@@ -295,8 +297,9 @@ case('routing-refused-when-the-word-ignores-the-write',
 # A rate change: the earlier start left PLL_NPU running at the other profile.
 # The vendor order: output gate off, factors, lock enable off then on, LOCK,
 # then the output gate on in the open stage.
-other = 0xf8104600 if a.rate == 492 else 0xf8305100
-factors = 0x00305100 if a.rate == 492 else 0x00104600
+# The vendor point for the modeled speed bin, code 4 (vf0400), is 852 MHz.
+other = 0xf8104600 if a.rate == '492' else 0xf8305100
+factors = 0x00305100 if a.rate == '492' else 0x00104600
 m = Machine({**COLD, **left, PLL: other | (left[PLL] & 1 << 24), SYSCTRL: 2}, domain=8)
 first, after_pass, second, after_open, third = boot(m)
 pll_writes = [v & ~(1 << 24) for at, v in m.writes if at == PLL]
@@ -305,12 +308,20 @@ case('rate-change-from-the-other-profile-in-the-vendor-order',
      pll_writes == [(other & ~(1 << 28)) & ~(1 << 27), 0xe0000000 | factors, 0xc0000000 | factors,
                     0xe0000000 | factors, 0xe8000000 | factors] and
      not [w for w in m.writes if w[0] == GATES], pll_writes=[hex(v) for v in pll_writes])
-if a.rate == 852:
-    # 852 MHz only for a speed bin whose column lists 800 mV for it.
+if a.rate != '492':
+    # 852 MHz only for a speed bin whose column lists 800 mV for it; the
+    # vendor point of vf0300 is 1,008 MHz at 900 mV, which needs a DCDC2 write.
     m = Machine({**COLD, 0x0300624c: 0x300}, domain=0)
     first = m.step()
     case('852-refused-for-a-speed-bin-without-an-800-mV-point',
          first == RESULT['A733_NPU_PLATFORM_RETAINED'] and not m.writes, sid='0x300')
+if a.rate == 'vendor':
+    # vf0401's vendor point is 1,008 MHz at 960 mV, and vf0600 has no row.
+    for sid in (0x140000, 0x600):
+        m = Machine({**COLD, 0x0300624c: sid}, domain=0)
+        first = m.step()
+        case('vendor-point-refused-for-speed-bin-' + hex(sid),
+             first == RESULT['A733_NPU_PLATFORM_RETAINED'] and not m.writes, sid=hex(sid))
 
 # The convolution backend's register callbacks on the linked instructions.
 # A prepared backend for the first catalogue model; the application register
