@@ -6093,7 +6093,8 @@
   "docs": [
    ".agents/skills/sunstone-a733-board/SKILL.md",
    "docs/a733-smp-supervised.md",
-   "docs/board-test-queue.md"
+   "docs/board-test-queue.md",
+   "docs/designs/board-bundles-next.md"
   ],
   "library": false,
   "pure_host": false,
