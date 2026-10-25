@@ -128,7 +128,22 @@ record `s13-gpo-run`) got further:
 - cycle 2 powered TOP5 up from OFF with both gates closed;
 - TOP5 ON reopened both gates (AHB `0x110103ff`, MBUS `0xf1055803`);
 - the run then failed with `GPU provider request retained`, and the image
-  returned to the ROM. Decoding is in progress. `work/sd-uhs-1025` (read-only UHS-I
+  returned to the ROM. The decode found one remaining cause: the supply
+  consumer kept its DCDC4 sample in a provider request slot, while the vendor
+  reads the voltage once and keeps nothing open. The fix ends the sample after
+  the last OFF (`a733_gpu_platform_supply_end`).
+- **The fourth attempt passed** (set `board-bundles-20261025-17`,
+  `board-session-20261025-12/port-3-1`). Readiness passed. The power-only
+  image completed two full ON/OFF cycles (`COMPLETE GPU power only: CORE
+  status 8, OFF and provider parked`). The identity image then read
+  `36.56.104.183` in both of its cycles (four reads) and parked the provider.
+  Every step returned to a responsive ROM. GPU power-on, power-off and
+  re-power-on now work in the vendor order. The four fixes on
+  `work/gpu-second-on-1025`:
+  - no master-gate requirement before TOP5 ON;
+  - the delay-row read-back limited to the delay bits;
+  - the supply sample released after OFF;
+  - TOP5 ON reopening the gates by itself. `work/sd-uhs-1025` (read-only UHS-I
 SDR104 with 1.8 V PF-bank signalling) is merged after two review rounds; its
 board run is `docs/board-runbooks/sd-uhs.md`.
 
