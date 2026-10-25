@@ -76,6 +76,16 @@ It also shows that CORE6 does power with the vendor state; the earlier
 failures to reach status 8 came from the missing vendor state, not from the PPU.
 Which of the three differences is necessary is not yet separated.
 
+**microSD lifetime A, first SD board run** (set `board-bundles-20261025-14`,
+`board-session-20261025-14/port-3-3`). DDR, cache-off, survey, signing and
+binding passed. The first launch was refused before launch, because the
+runbook's `sd()` gave no `--artifact` and the checker requires
+`prepared.json`, `image.elf` and `launch.bin`. The rerun (`sd-uhs-a-hs-2`)
+launched, but the host reported `FEL request failed` and then timed out after
+180 s with the result unobserved. No new USB device enumerated. The image's
+recovery mode is a manual USB reconnect, which on these boards is a power
+removal. Under investigation; port 3-3 needs a power removal.
+
 **ShuffleNetV2 on the NPU, timed on port 3-3** (set `board-bundles-20261025-16`,
 `board-session-20261025-12/port-3-3`, branch `work/npu-full-model-1025`).
 Both starts passed: all four outputs matched, and all three state reads
