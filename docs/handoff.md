@@ -8,25 +8,47 @@ and 839 µs for the first step), 1,268 permille of the step's own wire time; 110
 stays open for writes. The boards stay untouched until the user reports both
 reconnected.
 
-**Next board runs:** use the frozen set
-`~/.cache/sunstoneos/evidence/board-bundles-20261024-8/`, starting with its
-`runbook.md`. It supersedes `-7`. Both ports start with power removal and a
-cold DDR start.
-- **Port 3-1:** `gpu-provider-ready` (`3adfa4ad`), then `gpu-power-only`
-  (`81d4a728`). Only if power-only returns status 0 does `gpu-power-identity`
-  (`8a73e945`) run. Power-only never reads the GPU register window.
-- **Port 3-3:** the base kernel check (`88bce618`), which must pass again
-  because the monitor and platform sources changed. Then bundle 6 (`2291f78e`),
-  with the plain-write window on S_TWI0 XADDR and the whole-poll window.
+**Board runs of 2026-10-24 night** (set `board-bundles-20261024-8`, sessions
+`~/.cache/sunstoneos/evidence/board-session-20261024-8/port-<PORT>`). The user
+reported both boards reconnected after power removal. The two claims held from
+the earlier GPU non-returns were closed as failed and both queues resumed.
+Cold DDR passed on both boards (12,288 MiB). The set's survey step refused
+before device access: its frozen build named the survey runner from before
+`575565f8`. `~/.cache/sunstoneos/bin/survey-retention.py` uses the matching
+build in `bootstrap-retention-20261024/survey-build` (same binary), and the
+surveys then passed. The set's runbooks still call the old survey and need
+regenerating.
+- **Port 3-1, GPU provider readiness (`3adfa4ad`): passed.** Supplies
+  verified, provider parked, no GPU power request, warm return.
+- **Port 3-1, GPU power only (`81d4a728`): failed.** TOP5 came on, and the
+  CORE6 policy write of 8 was seen, but CORE6 status stayed 0 and the image
+  reported `FAIL GPU ON poll`. The log shows `phase=5 error=5 step=8
+  last=0x101`, `policy=0x8 status=0x0 pwcr=0x101`, and PMIC `state_word=0xf`.
+  The monitor returned status 1 to the ROM about 2 s after launch. The host
+  runner then waited until the 925 s queue timeout before exiting, which is a
+  host defect. The claim is held and the lifetime has ended: the identity probe
+  does not run. The next port 3-1 run needs another power removal.
+- **Port 3-3, base kernel check (`88bce618`): passed** all 100 rounds.
+- **Port 3-3, bundle 6 (`2291f78e`): passed.**
+  - **Step bound:** median 1,243 permille against the 1,268 bound; the first
+    step took 807 µs against an 840 µs limit.
+  - **XADDR write:** read back unchanged.
+  - **New windows (24 MHz counter ticks, 41.7 ns each):**
+    - 256 plain XADDR writes, with one DSB per 32: 1,233 ticks, about 200 ns
+      per write.
+    - 256 whole provider polls with the flag clear: 7,652 ticks, about
+      1.25 µs per poll.
+    - Service-loop work between polls: 1,687 ticks per window.
+  - **Domains:** 1, 4 and 5 are all policy 8 and status 8.
+  - The port 3-3 lifetime continues; its last warm return is `s7-bb6-run`.
 
-A board-safety review found nothing blocking. A host timeout counts as a
-quarantine. Regenerate the `os-supervised-software` evidence before the next
-OS launch.
+The mimus branch `port/sunstoneos` (`9c57286b7`) was pushed to
+`github.com/pedapudi/mimus` on 2026-10-24 with the user's approval; mimus
+`main` is unchanged.
 
 The user approved physical CPU clock and voltage changes on 2026-10-24: the A76
 operating-point runs A1, A2 and A3 of `docs/designs/cpu-a76-dvfs.md` and the
-DCDC3 selector write, each still gated on its own prerequisites. Publishing the
-mimus branch `port/sunstoneos` (`9c57286b7`) awaits the user's answer.
+DCDC3 selector write, each still gated on its own prerequisites.
 
 ## Review of the paused tranche (2026-10-24 evening)
 
@@ -348,8 +370,8 @@ defect was found. Evidence: `accelerator-shared-owner-20261024/`.
    comparisons and focused checks pass; the 110% target remains open. Refreeze
    the revised trace and row text before the next physical timing measurement.
 6. Physical CPU clock and DCDC3 voltage changes are approved within
-   `docs/designs/cpu-a76-dvfs.md`; other PMIC rails are not. Publishing mimus
-   `9c57286b7` still requires the user's approval.
+   `docs/designs/cpu-a76-dvfs.md`; other PMIC rails are not. The mimus branch
+   `port/sunstoneos` at `9c57286b7` is published.
 
 Both finite accelerator host parsers now use their actual native monitor
 identifiers, with producer-derived regression evidence. The earlier fixtures
