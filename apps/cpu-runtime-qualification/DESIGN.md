@@ -63,6 +63,11 @@ transition with an initial count of zero. Disabling the timer and completing
 its barriers precede the real port's EOI. An unarmed, repeated or inconsistent
 interrupt enters retained failure.
 
+A retained failure publishes a reason code in the report's error word and in
+the failing CPU's error word; `REASONS` in `host.py` names each code, and the
+host decoder reports it. Missing idle/wake proof is reason 8, and a timeout or
+peer failure at the drained barrier after timer quiescence is reason 9.
+
 CPU0's setup, compare advancement and FreeRTOS tick call remain unchanged.
 Secondary callbacks never invoke `FreeRTOS_Tick_Handler` or change the shared
 `next_tick`. The kernel has one global tick count; calling its tick handler on

@@ -46,7 +46,7 @@ void a733_qualification_idle_stage(unsigned core)
     workers[core]=xTaskGetCurrentTaskHandle();
     sgi_before[core]=__atomic_load_n(&a733_smp_core_results[core].sgis,__ATOMIC_ACQUIRE);
     if(!core){
-        uint64_t end=a733_smp_counter()+UINT64_C(16000)*24;
+        uint64_t end=a733_smp_counter()+A733_SMP_COUNTER_HZ*16/1000; /* 16 ms */
         if(end>a733_cached_runtime[0].diagnostic_deadline)end=a733_cached_runtime[0].diagnostic_deadline;
         __atomic_store_n(&phase_deadline,end,__ATOMIC_RELEASE);
     }
@@ -67,7 +67,8 @@ void a733_qualification_idle_stage(unsigned core)
          * 16 ms phase only when its own worker reaches this stage. */
         uint64_t now=a733_smp_counter(),limit=a733_cached_runtime[core].diagnostic_deadline;
         configASSERT(now<limit);
-        TickType_t ticks=(TickType_t)((limit-now+23999)/24000);
+        const uint64_t per_tick=A733_SMP_COUNTER_HZ/configTICK_RATE_HZ;
+        TickType_t ticks=(TickType_t)((limit-now+per_tick-1)/per_tick);
         configASSERT(ticks && ulTaskNotifyTake(pdTRUE,ticks)==1);
         end=__atomic_load_n(&phase_deadline,__ATOMIC_ACQUIRE);
         before(end);configASSERT(portGET_CORE_ID()==core);

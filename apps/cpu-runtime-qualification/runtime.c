@@ -118,7 +118,7 @@ _Noreturn void a733_qualification_captured(unsigned core)
     if(rd(g+0x200) || rd(g+0x100))retained(core,7);
     c->drained_epoch=r->epoch;barrier();
     for(unsigned i=0;i<8;++i)while(r->cpu[i].drained_epoch!=r->epoch){
-        if(!before() || r->error)retained(core,8);barrier();
+        if(!before() || r->error)retained(core,9);barrier();
     }
     /* Implemented in assembly: validate current NS translations and clean
      * with no further Normal-memory stores, then restore permitted controls. */
