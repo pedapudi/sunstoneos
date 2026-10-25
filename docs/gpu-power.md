@@ -843,10 +843,147 @@ takes `drm_ctrl`'s entry value, are each refused at that write.
 The probe is the last step of its lifetime, after the cold DDR start and
 the provider-readiness row (bundle row 11).
 
+### The probe-read run stalled at a read that no record names
+
+Set `board-bundles-20261025-3` ran on port 3-1 in session
+`board-session-20261025-1/port-3-1`. Provider readiness passed. The
+probe-read image (bundle 17) did not return within the queue's 925 s, and
+it made no write. It therefore stopped at one of its first five reads:
+
+- wrapper `+0x14` (`drm_ctrl`) or `+0x10` (`irq_ctrl`), neither read
+  before; the wrapper words `+0x104`, `+0x100`, `+0x18` and `+0x1c`
+  returned in the wrapper-read run;
+- SMC0 `0x0a0000b0`, never read before;
+- the identity, `0x01800024` then `0x01800020`.
+
+The progress record names each read before it is issued, but it lies in
+DRAM, which the host can read only after the monitor returns to the ROM.
+A CPU load that never completes prevents that return, and the power
+removal that recovers the board clears the record.
+
+### The vendor's probe-time GPU state differs from ours in order, clock and voltage
+
+What the vendor has done when it reads the identity at probe time, in
+order (`sunxi_platform.c` unless named):
+
+1. **Power domain.** The kernel's platform probe attaches the GPU to its
+   power domain, which in Linux 6.6 powers it on before the driver's probe
+   runs (`drivers/base/platform.c`, upstream behaviour, not in the pinned
+   cache). `sunxi_platform_init` then calls `pm_runtime_get_sync` (912):
+   TOP5 policy 8 with a status poll of at most 10 ms
+   (`pck600_domains.c:104–124`). The A733 PCK has no reset or clock of its
+   own in this driver (`has_rst_clk` false, `pck600_domains.c:570`).
+2. **Supply.** `regulator_enable` (899) and `sunxiSetVoltage` (901) set
+   DCDC4 to the highest operating point's voltage, then wait 200 µs
+   (473–485). The voltage comes from the SID speed bin through
+   `vf_mapping_table` (`sunxi_get_opp`, 694–760): 960 mV for the default
+   bin, 860–960 mV across bins. This precedes TOP5.
+3. **CORE6.** PWCR 0 and policy 8 (915–916), with no status poll.
+4. **Clocks and reset** (`sunxi_enable_clks_wrap`, 920, body 167–223):
+   - the GPU PLL `pll-gpu` (CCU `0x0e0`, `ccu-sun60iw2.c:171–192`) enabled
+     (173);
+   - the PERI0 800, 600, 400, 300 and 200 MHz outputs enabled (177–198);
+   - the GPU bus reset (`0xb24` bit 16, `ccu-sun60iw2.c:2105`) deasserted
+     (203);
+   - the bus gate (`0xb24` bit 0, `ccu-sun60iw2.c:1045–1047`) opened (208);
+   - the core clock (`0xb20` bit 31, parents in
+     `ccu-sun60iw2.c:1021–1043`) enabled with its boot parent (213);
+   - `0xb20` bit 27, the update bit, set (220).
+5. **Rate.** `sunxi_set_device_clk_rate` (922) calls `sunxiSetFrequency`,
+   which above 800 MHz reparents the core clock to `pll-gpu` and sets it
+   to 1008 MHz (405–416).
+6. **The identity read**, through `RGXRegisterDevice` (as traced above).
+
+The GPU AHB gate (`0x5c0` bit 7) and MBUS gate (`0x5e0` bit 16) are
+`CLK_IS_CRITICAL` (`ccu-sun60iw2.c:587–590, 658–661`): always on, as our
+sequence also requires before TOP5. No SCP, PSCI or other trusted-firmware
+call appears in the GPU path.
+
+Differences from our power-only ON through the reset release:
+
+| Step | Vendor | Ours |
+| --- | --- | --- |
+| Supply | DCDC4 at the highest operating point's voltage, 960 mV for the default bin, set before TOP5, then 200 µs | DCDC4 at 800 mV, checked, unchanged |
+| Reset against clocks | Reset deasserted first, then bus gate, then core clock gate | Core clock selected and gated on, bus gate on, 1 µs, then reset deasserted |
+| Core clock | Boot parent at enable, then `pll-gpu` at 1008 MHz | PERI0 400 MHz, divisor 1, from the start |
+| GPU PLL | Enabled | Disabled (`0x0e0` reads `0x41104500`) |
+| PERI0 outputs | 800, 600, 400, 300 and 200 MHz enabled | 400 MHz only, through the shared lease |
+| CORE6 delay row | Not written | Written with the vendor row, which it already holds |
+| Wait for CORE6 | None | None in the probe-read image (200 ms observation only) |
+
+The reset order is the one clear step difference: the vendor releases the
+GPU bus reset before it opens the bus and core clocks, and we release it
+after. Either order is common on Allwinner blocks, so it is a candidate,
+not a proven cause. The operating point and supply are the other
+differences, both now approved by the user.
+
+### No DMA engine can localize the stall
+
+The coordinator asked for a DMA engine to copy each target word into DRAM
+while the CPU polls with a bound, so that a stalled read leaves the CPU
+free to report. No DMA engine on this board is suitable:
+
+- **DMA0** has a native encoder, controller, service and platform
+  startup, all checked on the host and in emulation only
+  ([dma.md](dma.md)): "The controller has not executed on physical
+  hardware." The hardware matrix records physical DMA visibility as
+  unqualified for every image that uses it (UART2, I2S, HDMI audio).
+- **DMA1** request routing is unresolved
+  ([dma.md](dma.md#dma1-request-routing-remains-unresolved)).
+- No source shows a DMA master reading device registers on this SoC, or
+  whether the GPU window at `0x01800000`, the wrapper or SMC0 is reachable
+  from the DMA0 master. The vendor never uses DMA for GPU registers.
+- A DMA read that never completes could still hold the interconnect path
+  that the CPU's poll of the DMA status register uses; then the CPU would
+  stall as well.
+
+A DMA-read probe would therefore make the first board run of DMA0 and its
+first device-register source in the same run as the unknown stall. No
+DMA-read variant was built.
+
+### Next localization: one access class per returning image
+
+The next-best localization uses the fact that a returning image keeps the
+lifetime alive. Three images, each with one class of reads, run in one
+lifetime in order of risk; the image that does not return names the class:
+
+1. **Wrapper reads.** The power-only ON through the reset release, the
+   200 ms CORE6 observation, then wrapper `+0x14` and `+0x10`. The wrapper
+   answered four other words in this state.
+2. **SMC0 read.** `0x0a0000b0` alone.
+3. **Identity read.** `0x01800024`, then `0x01800020`.
+
+Each image leaves the GPU powered, as the probe-read image does. Images 2
+and 3 therefore start from the state that image 1 left: TOP5 ON, CORE6
+policy 8 with PWCR 0, the GPU clock open and the reset released. The
+controller's admission refuses that state, so images 2 and 3 would make
+no power write at all. They would take the 35-word snapshot, require each
+power, clock and reset word to equal the value that image 1's second
+snapshot recorded, and only then make their reads. That admission of an
+inherited powered GPU is new and needs the coordinator's decision. If
+image 3 stalls, a fourth image in the next lifetime repeats it after the
+next variable below.
+
+A second option runs the read on a secondary core while CPU0 keeps a
+bounded watch and reports which read the secondary announced. Secondary
+cores have started only on port 3-3 and only in the SMP platform, without
+the GPU provider; and a stalled read on one core may still block CPU0 on
+a shared interconnect path. It needs its own design.
+
+### The next variable after localization
+
+If the identity read is the one that stalls, the first variable is the
+vendor's reset order: deassert the GPU bus reset (`0xb24` bit 16) before
+opening the bus gate (`0xb24` bit 0) and the core clock (`0xb20` bit 31),
+at the unchanged 400 MHz and 800 mV. The vendor operating point below
+follows only if that read still stalls. If a wrapper or SMC0 read stalls
+instead, the identity question stays open, and that read leaves the next
+image.
+
 ### The vendor operating point is the next variable
 
-If the identity read still stalls after both stages, the vendor's
-operating point is the next difference to test: 1008 MHz from the GPU PLL
+If the identity read still stalls with the vendor's reset order, the
+vendor's operating point is the next difference to test: 1008 MHz from the GPU PLL
 at the highest operating point's voltage. This is a plan; no image sets
 it.
 
