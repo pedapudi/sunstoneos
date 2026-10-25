@@ -54,6 +54,10 @@ class Local(survey.Survey):
 
     def memory(self,u,access,address,size,value,core):
         write=access==UC_MEM_WRITE
+        if address in model.EL3_SECURITY_ADDRESSES:
+            # The native EL3 security setup, which the pre-scheduler profiles
+            # call; the base model checks and records it.
+            return model.Machine.memory(self,u,access,address,size,value,core)
         if address<0x41000000:
             if write:self.mmio_writes.append((address,size,value))
             if 0x03400000<=address<0x03600000:

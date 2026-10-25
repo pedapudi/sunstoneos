@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Execute monitor ARE admission and bounded GIC restoration with injected faults."""
+"""Execute monitor ARE admission, the EL3 security setup and bounded GIC restoration with injected faults.
+
+The physical build must make the vendor BL31's cold-boot security writes
+(include/a733_el3_security.h) in their order before EL1 entry, the DMA
+security words only when the controller's bus gate and reset are open; the
+QEMU build makes none."""
 import argparse
 import hashlib
 import json
@@ -30,12 +35,21 @@ def command(args):
 (a.build / 'reset.S').write_text('.text\n.global monitor_reset\nmonitor_reset:\n brk #0\n')
 command([a.clang, '--target=aarch64-none-elf', '-c', a.build / 'reset.S', '-o', a.build / 'reset.o'])
 results = []
+# BL31 sunxi_security_setup, cold-boot writes 9 to 17 (docs/designs/gpu-vendor-default.md).
+SECURITY_PAGES = (0x02054000, 0x07002000, 0x07003000, 0x07010000, 0x02003000, 0x02002000, 0x04601000, 0x04024000)
+def security_writes(dma_open):
+    rows = [(0x02054004 + 0x10 * n, 0xffffffff) for n in list(range(14)) + list(range(16, 24))]
+    rows += [(0x07003000 + 4 * n, 0) for n in range(3)] + [(0x07002004 + 0x10 * n, 0xffffffff) for n in range(3)]
+    rows += [(0x07010290, 0x17), (0x02003f00, 7)]
+    rows += [(0x04601020, 0xffff), (0x04024020, 0xffff)] if dma_open else []
+    return rows + [(0x020540e0, 0xfffffbff)]
 for model in (False, True):
     name = 'qemu' if model else 'physical'
     flags = ['-DMONITOR_QEMU=1'] if model else []
     command([a.clang, '--target=aarch64-none-elf', '-march=armv8-a', '-mgeneral-regs-only', '-ffreestanding',
              '-fno-stack-protector', '-fno-unwind-tables', '-O2', '-g', '-Wall', '-Wextra', *flags,
-             '-I' + str(ROOT / 'platform/a733'), '-c', a.monitor_source, '-o', a.build / (name + '.o')])
+             '-I' + str(ROOT / 'platform/a733'), '-I' + str(ROOT / 'include'), '-c', a.monitor_source,
+             '-o', a.build / (name + '.o')])
     elfpath = a.build / (name + '.elf')
     command([a.lld, '-Ttext=0x41000000', '-e', 'monitor_init', a.build / (name + '.o'), a.build / 'reset.o', '-o', elfpath])
     with elfpath.open('rb') as stream:
@@ -74,6 +88,21 @@ for model in (False, True):
             if address < 0x41000000:
                 cpu.mem_map(address & ~4095, 4096)
             cpu.mem_write(address, data)
+        for page in SECURITY_PAGES:
+            cpu.mem_map(page, 4096)
+        # PRCM_SEC_SWITCH_REG holds 0x10 to show the OR keeps other bits; the
+        # DMA controllers are gated and in reset, as FEL leaves them, except
+        # in are-37, where an earlier image left both running.
+        dma_open = case == 'are-37'
+        cpu.mem_write(0x07010290, (0x10).to_bytes(4, 'little'))
+        for bgr in (0x02002704, 0x0200270c):
+            cpu.mem_write(bgr, (0x10001 if dma_open else 0).to_bytes(4, 'little'))
+        security = []
+        def write_security(uc, access, address, size, value, unused):
+            assert size == 4 and phase[0] == 'init', (hex(address), size, phase[0])
+            security.append((address, value))
+        for page in SECURITY_PAGES:
+            cpu.hook_add(UC_HOOK_MEM_WRITE, write_security, None, page, page + 4095)
         cpu.reg_write(UC_ARM64_REG_SP, 0x42010000)
         cpu.reg_write(UC_ARM64_REG_LR, 0x410f0000)
         implemented = 0xfff0ffff  # A733 has unimplemented PPIs 16..19.
@@ -225,12 +254,17 @@ for model in (False, True):
             cpu.reg_write(UC_ARM64_REG_X0 + 2, 1)
             cpu.emu_start(symbols['monitor_exception'], 0, count=100000)
         assert stopped[-1] == ('semihost-exit' if model else 'reset'), (case, stopped)
+        # Every admitted physical start makes the security writes, after the GIC
+        # setup; a refused start and the QEMU build make none.
+        expected_security = [] if model or refused or early_timeout else security_writes(dma_open)
+        assert security == expected_security, (case, [(hex(a), hex(v)) for a, v in security])
         status = int.from_bytes(cpu.mem_read(0x42000010, 8), 'little')
         replaced = int.from_bytes(cpu.mem_read(0x42000078, 8), 'little')
         failed_cleanup = bool(fault and fault != 'delayed-rwp') or early_timeout
         expected_status = 4 if refused else 6 if failed_cleanup else requested_status
         assert not fault or fault_applied, (case, 'fault not reached')
         row = {'case': case, 'mode': name, 'initial_ctlr': original, 'status': status, 'replaced_status': replaced,
+               'security_writes': len(security), 'dma_open': dma_open,
                'expected_status': expected_status, 'fault_applied': bool(fault_applied), 'final_ctlr': registers[gicd],
                'cleanup_ticks': ticks[0]-cleanup_started,
                'cleanup_instructions': instructions[1],
@@ -253,8 +287,9 @@ for model in (False, True):
         print('PASS', name, case, flush=True)
 assert results, 'No selected case matched'
 a.output.write_text(json.dumps({'physical_access': False, 'passed': True, 'cases': results,
-    'sources': {name: digest(ROOT / name) for name in ('platform/a733/boot.h', 'checks/a733-monitor-are.py')},
+    'sources': {name: digest(ROOT / name) for name in ('platform/a733/boot.h', 'include/a733_el3_security.h',
+                                                       'checks/a733-monitor-are.py')},
     'monitor_source': {'path': str(a.monitor_source.resolve()), 'sha256': digest(a.monitor_source)},
     'tools': {str(path): digest(path) for path in (a.clang, a.lld, a.objdump)},
     'limits': 'Actual monitor instructions; system-register/MMIO completion and time modeled. No physical GIC timing, bus-stall recovery, arbitrary peripheral quiescence or ROM-reset qualification.'}, indent=2) + '\n')
-print('PASS', len(results), 'monitor admission/cleanup instruction cases.')
+print('PASS', len(results), 'monitor admission/cleanup instruction cases, with the BL31 security writes in order.')

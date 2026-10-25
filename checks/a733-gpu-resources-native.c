@@ -10,6 +10,11 @@ static const uint8_t registers[6] = {0xff, 0x0e, 0x0f, 0x10, 0x15, 0xff};
 static int issue;
 static unsigned bad_close;
 #define CHECK(x) do { if (!(x)) return __LINE__; } while (0)
+/* The adapter's shared-provider rail path, which this legacy-bus harness
+ * does not bind; the call must never happen here. */
+int a733_pmic_consumer_take(struct a733_pmic_consumer *c, const void *r, uint64_t d,
+    struct a733_gpu_resource_rail *o)
+{ (void)c; (void)r; (void)d; (void)o; issue = 1; return 0; }
 static uint32_t *mmio(uintptr_t address) { return (uint32_t *)address; }
 static int register_enter(void *ctx, uint64_t deadline)
 {
@@ -29,7 +34,8 @@ enum i2c_result a733_i2c_open(struct a733_i2c *bus)
 enum i2c_result a733_i2c_read8(struct a733_i2c *bus, uint8_t address, uint8_t reg, uint8_t *out)
 {
     if (!bus_lock || !bus->opened || address != 0x36 || reads >= 6 || reg != registers[reads]) issue = 1;
-    static const uint8_t values[6] = {0, 3, 0, 0xff, 0x9e, 0};
+    /* DCDC4 at the GPU operating point's 960 mV, boot0's bit 7 kept. */
+    static const uint8_t values[6] = {0, 3, 0, 0xff, 0xae, 0};
     ++reads;
     *mmio(0x0708300c) = 0x40;
     if (reads == fail_read) return I2C_STATUS;
@@ -59,6 +65,7 @@ static int fresh(void)
     *mmio(0x020025e0) = 0x61045802;
     *mmio(0x02002b20) = 0x10200100;
     *mmio(0x02002b24) = 0x24680000;
+    *mmio(0x020020e0) = 0x01105300; /* PLL_GPU0 disabled at its 1008 MHz factors */
     *mmio(0x07065008) = 0;
     *mmio(0x0708300c) = 0x44;
     *mmio(0x07083010) = 0xf8;
@@ -73,10 +80,16 @@ unsigned native_check(void)
     uint64_t token; struct a733_gpu_power_resources ready;
     int r = fresh(); CHECK(!r);
     CHECK(a733_gpu_resources_acquire(&manager, 0, A733_GPU_RESOURCE_ALL, 1000000, &token, &ready) == A733_GPU_RESOURCE_OK);
-    CHECK(ready.parent_hz == 400000000 && ready.supply_uv == 800000);
+    CHECK(ready.parent_hz == 400000000 && ready.supply_uv == 960000);
     CHECK(reads == 6 && opens == 1 && closes == 1 && !bus_lock && !register_lock && !issue);
     CHECK(*mmio(0x070101ac) == 0x41 && *mmio(0x020025c0) == 0x110000ff && *mmio(0x020025e0) == 0x61055802);
     CHECK(a733_gpu_resources_release(&manager, 0, token, 1000000) == A733_GPU_RESOURCE_OK);
+    /* The LOCAL release reads PLL_GPU0 through the adapter and refuses it enabled. */
+    CHECK(!fresh());
+    CHECK(a733_gpu_resources_acquire(&manager, 0, A733_GPU_RESOURCE_ALL, 1000000, &token, &ready) == A733_GPU_RESOURCE_OK);
+    *mmio(0x020020e0) |= 0x80000000;
+    CHECK(a733_gpu_resources_release(&manager, 0, token, 1000000) == A733_GPU_RESOURCE_FAULT);
+    CHECK(manager.error == A733_GPU_RESOURCE_LIVE && manager.leases[0].mode == A733_GPU_RESOURCE_RETAINED);
     CHECK(!native.operations.read32(&native, 0x100, (uint32_t *)&r));
     CHECK(!native.operations.update32(&native, 0x070101ac, 1, 1, 1000000));
     for (unsigned i = 1; i <= 6; ++i) {

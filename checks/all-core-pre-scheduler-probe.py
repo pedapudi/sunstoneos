@@ -44,12 +44,17 @@ class AllCore(cached.Cached):
         self.clean_complete, self.called = set(), set()
         self.highest_active = 0
         self.fault_injected = False
+        self.security = []
 
     def pages(self, core):
         return (SHARED, SHARED+core*32768+0x7000, STATE)
 
     def memory(self, u, access, address, size, value, core):
         write = access == UC_MEM_WRITE
+        if address in model.EL3_SECURITY_ADDRESSES:
+            # The native order: every secondary released, CPU0 still at EL3.
+            assert self.started == list(range(1, 8)) and 0 not in self.el1_seen, (
+                'EL3 security setup out of order', self.started, sorted(self.el1_seen))
         if 0x07050204 <= address <= 0x0705021c and write and value & 1:
             target = (address-0x07050200)//4
             assert core == 0 and target == len(self.started)+1
@@ -189,6 +194,7 @@ def main():
         report = a.output.parent/('report-'+name+'.bin'); report.write_bytes(raw)
         if name == 'success':
             assert machine.returned and not machine.retained
+            assert machine.security == model.el3_security_writes(), machine.security
             assert machine.started == machine.stopped == list(range(1, 8)) and machine.highest_active == 8
             assert machine.el3_seen == machine.el1_seen == machine.smc_seen == machine.clean_complete == set(range(8))
             assert raw[0x3200:0x4200] == machine.read(SHARED, 4096)

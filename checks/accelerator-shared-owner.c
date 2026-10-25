@@ -40,26 +40,26 @@ static int power_read(void *v,enum a733_gpu_power_bank bank,uint32_t off,uint32_
 {
     (void)v;assert(gpu_token && delegated);
     if(bank==A733_GPU_CORE) {
-        assert(gpu.row.counted && (d.ppu[5][2]&15)==8);
-        assert(off==0 || off==8 || off==0x14 || off==0x20 || off==0xfb0 ||
-               off==0x170 || off==0x174 || off==0xc00 || off==0xc04 || off==0xc10);
+        /* CORE6's PPU is always on; reads come before and after TOP5 ON. */
+        assert(off==0 || off==8 || off==0x14 || off==0x20 || off==0xfb0);
         if(off==8 && core_pending){core[2]=core[0];core_pending=0;}
         *out=off==0xfb0 ? 0 : core[off/4];return 1;
     }
     uint32_t *w=level_word((bank==A733_GPU_CCU ? CCU_BASE : RCCU_BASE)+off);
-    assert(w);*out=*w;return 1;
+    assert(w);
+    /* PLL_GPU0 locks once enabled with its LDO and lock enable. */
+    if(bank==A733_GPU_CCU && off==0xe0)*w=(*w&0xe0000000)==0xe0000000 ? *w|(1u<<28) : *w&~(1u<<28);
+    *out=*w;return 1;
 }
 static int power_update(void *v,enum a733_gpu_power_bank bank,uint32_t off,uint32_t clear,uint32_t set)
 {
     (void)v;assert(gpu_token && delegated && !r.held);
     if(bank==A733_GPU_CORE) {
-        assert(gpu.row.counted && a733_power_domain_state(&gpu.row)==A733_POWER_ROW_ON);
-        assert(clear==UINT32_MAX && ((off==0 && (set==0 || set==8)) || (off==0x20 && !set) ||
-               (off==0x170 && set==0x1f1f1f) || (off==0x174 && set==0x1f1f)
-               || (off==0xc00 && set==0x08080808) || (off==0xc04 && set==0x0808) || (off==0xc10 && set==8)));
+        assert(off==0x20 || (gpu.row.counted && a733_power_domain_state(&gpu.row)==A733_POWER_ROW_ON));
+        assert(clear==UINT32_MAX && ((off==0 && (set==0 || set==8)) || (off==0x20 && !set)));
         core[off/4]=set;if(!off)core_pending=1;return 1;
     }
-    assert(bank==A733_GPU_CCU && (off==0xb20 || off==0xb24));
+    assert(bank==A733_GPU_CCU && (off==0xb20 || off==0xb24 || off==0xe0));
     if(gpu.phase==A733_GPU_POWER_STOPPING)assert(!core[0] && !core[2]);
     uint32_t *w=level_word(CCU_BASE+off);*w=(*w&~clear)|set;
     if(off==0xb20)*w&=~(1u<<27);
@@ -68,6 +68,7 @@ static int power_update(void *v,enum a733_gpu_power_bank bank,uint32_t off,uint3
 static void composed_setup(unsigned mode)
 {
     setup();memset(&gpu,0,sizeof(gpu));memset(&supply,0,sizeof(supply));
+    m.pmic[0x15]=0x2e; /* DCDC4 at 960 mV, as the GPU platform raises it */
     memset(core,0,sizeof(core));core[8]=0x010101ff;
     gpu_token=0;delegated=core_pending=both_pending=0;gpu_deadline=100000;
     /* Only the callbacks change; all callers retain the same manager address. */
@@ -76,11 +77,16 @@ static void composed_setup(unsigned mode)
     assert(a733_pmic_consumer_init(&supply,&c));
     supply.recipient=&gpu;supply.destination=&m.gpu.rail;
     /* The first sample reserves the ledger token and yields, as the native
-     * platform does; the later sample observes completed verification. */
+     * platform does; the later samples read DCDC4 through the provider,
+     * which completes before the NPU starts so that both rows are later
+     * pending together. */
     assert(a733_pmic_consumer_sample(&supply,gpu_deadline)==0);
     const struct a733_gpu_power_ops ops={gpu_now,delegate,undelegate,power_read,power_update};
     assert(a733_gpu_power_init(&gpu,&ops,&r));
     assert(a733_power_domain_row_init(&gpu.row,&d.owner,5,9,&supply.rail));
+    int sampled;unsigned n=0;
+    while((sampled=a733_pmic_consumer_sample(&supply,gpu_deadline))==0){assert(++n<40);service_step();m.now+=TICK_US;}
+    assert(sampled==1);
     if(mode==1)d.stall[5]=1;
     if(mode==2)d.stall[4]=1;
 }
@@ -91,7 +97,7 @@ static void begin_gpu(void)
     assert(a733_pmic_consumer_arm(&supply,gpu_deadline)==1);
     assert(a733_gpu_resources_acquire(&m.gpu,9,A733_GPU_RESOURCE_ALL,gpu_deadline,
         &gpu_token,&ready_gpu)==A733_GPU_RESOURCE_OK);
-    assert(!supply.armed && !supply.request.id);
+    assert(!supply.armed && supply.request.id);
     assert(a733_gpu_power_on(&gpu,gpu_deadline)==A733_GPU_POWER_AGAIN);
     assert(a733_gpu_power_poll(&gpu)==A733_GPU_POWER_AGAIN);
     assert(a733_power_domain_state(&gpu.row)==A733_POWER_ROW_PENDING);
@@ -131,7 +137,8 @@ static unsigned boot_pair(unsigned mode)
     assert(gr==(mode==1 ? A733_GPU_POWER_FAULT : A733_GPU_POWER_OK));
     assert(s.row.counted && gpu.row.counted && delegated && gpu_token);
     assert(m.rails.pins[s.rail.id&(A733_RAIL_CLIENTS-1)]==1);
-    assert(m.rails.pins[supply.rail.id&(A733_RAIL_CLIENTS-1)]==1);
+    /* The row's pin and the consumer's completed sample. */
+    assert(m.rails.pins[supply.rail.id&(A733_RAIL_CLIENTS-1)]==2);
     const unsigned faults=a733_power_authority_load(&m.rails.authority);
     assert(!(faults&A733_POWER_PMIC_TRANSFER) && !d.owner.failed && !m.gpu.failed);
     assert(!!(faults&A733_POWER_DOMAIN4_FAULT)==(mode==2));
@@ -180,7 +187,7 @@ static void shared_fault(void)
         assert(a733_pmic_reap(&m.provider,&q[j])==A733_PMIC_RETAINED);
     }
     assert(m.rails.pins[s.rail.id&(A733_RAIL_CLIENTS-1)]==2);
-    assert(m.rails.pins[supply.rail.id&(A733_RAIL_CLIENTS-1)]==2);
+    assert(m.rails.pins[supply.rail.id&(A733_RAIL_CLIENTS-1)]==3);
     assert(a733_pmic_consumer_health(&supply)==-1);
     struct a733_pmic_request refused={0};
     assert(a733_pmic_submit(&m.provider,9,&supply.rail,A733_RAIL_DCDC4,m.now+10000,&refused)==A733_PMIC_RETAINED);
@@ -198,7 +205,7 @@ int main(int argc,char **argv)
     if(mode==1)local_stop(); /* Local domain failure, not board-fatal policy. */
     if(mode==3)shared_fault();
     assert(d.ccu_5c0==ahb && d.ccu_5e0==mbus && d.rccu_1ac==pck);
-    assert(m.pmic[0x13]==30 && m.pmic[0x15]==30);
+    assert(m.pmic[0x13]==30 && m.pmic[0x15]==0x2e);
     if(mode!=3)assert(m.writes==wire);
     printf("{\"case\":%u,\"startup_ticks\":%u,\"service_steps\":%u,\"ppu_reads\":%u,\"ppu_writes\":%u,"
         "\"pmic_bus_writes\":%u,\"simultaneous_pending_rows\":%u,\"pass\":true}\n",

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Build the GPU identity consumer, or with --power-only the power-only
 variant that never accesses the GPU register window, with --wrapper-read the
-wrapper-read variant, with --probe-read the probe-read variant or with
---vendor-clk the vendor-clk variant, on the
-qualified returning PMIC platform."""
+wrapper-read variant or with --probe-read the probe-read variant, on the
+qualified returning PMIC platform. Every variant runs the default GPU power
+path (docs/designs/gpu-vendor-default.md), so the build compiles the current
+monitor, PMIC provider and supply consumer with the GPU units."""
 import argparse
 import hashlib
 import json
@@ -51,8 +52,71 @@ def shared_layouts(path, names):
     return layouts
 
 
-VCLK_EXPECT = ('COMPLETE GPU vendor-clk: identity 36.56.104.183 with the vendor clock and reset order, '
-               'GPU left powered')
+def consistent_types(path):
+    """Every named structure, union and enumeration that two compile units of
+    the image define in a header must agree: size and member offsets, or enumerator
+    names and values. Reused and new objects meet in one image, so this
+    compares each definition a reused object makes with every new object's.
+    A renamed member at the same offset, such as boot_result's reserved
+    word that became replaced_status, is not a layout change. A type that a
+    .c file defines is private to that unit and two units may reuse its
+    name (struct profile in the power owner and the PMIC provider). Returns the
+    number of names defined in more than one unit."""
+    from elftools.elf.elffile import ELFFile
+    seen, shared = {}, set()
+    tags = {'DW_TAG_structure_type': 'struct', 'DW_TAG_union_type': 'union', 'DW_TAG_enumeration_type': 'enum'}
+    with path.open('rb') as stream:
+        dwarf = ELFFile(stream).get_dwarf_info()
+        for cu in dwarf.iter_CUs():
+            unit = cu.get_top_DIE().attributes['DW_AT_name'].value.decode()
+            program = dwarf.line_program_for_CU(cu)
+            files = program['file_entry']
+            base = 0 if program.header['version'] >= 5 else 1
+            for die in cu.iter_DIEs():
+                attrs = die.attributes
+                if die.tag not in tags or 'DW_AT_name' not in attrs or 'DW_AT_declaration' in attrs:
+                    continue
+                if 'DW_AT_decl_file' not in attrs or \
+                        not files[attrs['DW_AT_decl_file'].value - base].name.decode().endswith('.h'):
+                    continue
+                if die.tag == 'DW_TAG_enumeration_type':
+                    value = tuple((c.attributes['DW_AT_name'].value.decode(), c.attributes['DW_AT_const_value'].value)
+                                  for c in die.iter_children() if c.tag == 'DW_TAG_enumerator')
+                else:
+                    value = (attrs['DW_AT_byte_size'].value if 'DW_AT_byte_size' in attrs else None,
+                             tuple(c.attributes['DW_AT_data_member_location'].value
+                                   if 'DW_AT_data_member_location' in c.attributes else 0
+                                   for c in die.iter_children() if c.tag == 'DW_TAG_member'))
+                key = (tags[die.tag], attrs['DW_AT_name'].value.decode())
+                if key in seen:
+                    shared.add(key)
+                    assert seen[key][0] == value, (key, seen[key][1], unit)
+                else:
+                    seen[key] = (value, unit)
+    return len(shared)
+
+
+# Units the default GPU power path changed beyond the GPU units: the
+# monitor's EL3 security setup, and the PMIC provider and supply consumer's
+# admission of DCDC4 at 960 mV. The monitor compiles with the monitor's flags.
+SHARED_UNITS = [('platform/a733/monitor.c', 'monitor_init'), ('drivers/power/a733_pmic.c', 'a733_pmic_init'),
+                ('drivers/power/a733_pmic_consumer.c', 'a733_pmic_consumer_init')]
+# Units that hold a structure whose layout changed after the checkpoint and
+# so must compile with the new units: struct bb_power (power.c, the only
+# other object that names bb_power) embeds struct a733_counter_clock and
+# struct a733_power_domains with its rows, and the lock-free counter clock
+# (8431f4b0) and the power service's row wake and settled supply changed
+# all three. counter_clock.c and a733_pmic_native.c define the counter
+# clock's structure.
+LAYOUT_UNITS = [('apps/board-bundles-power/power.c', 'bb_power'),
+                ('platform/a733/counter_clock.c', 'a733_counter_clock_init'),
+                ('drivers/power/a733_pmic_native.c', 'a733_pmic_native_init'),
+                # The current power.c calls trace.c's sample and XADDR helpers.
+                ('apps/board-bundles-power/trace.c', 'bb_twi_observe')]
+# Structures the reused objects may not define: every checkpoint object
+# whose DWARF defines one is replaced by a new compile.
+CHANGED_LAYOUTS = ('a733_gpu_power', 'a733_gpu_platform', 'a733_power_domains', 'a733_power_domain_row',
+                   'a733_counter_clock', 'bb_power')
 PROBE_EXPECT = ('COMPLETE GPU probe read: identity 36.56.104.183 before and after the secure configuration, '
                 'restored, GPU left powered')
 
@@ -66,10 +130,8 @@ def main():
                         help='one ON, then four reads of GPU wrapper words; no other GPU register access')
     parser.add_argument('--probe-read', action='store_true',
                         help="one ON, the vendor's probe-time identity read, its secure configuration, the read again")
-    parser.add_argument('--vendor-clk', action='store_true',
-                        help="one ON in the vendor clock and reset order, then the identity read; no OFF")
     args = parser.parse_args()
-    if args.power_only + args.wrapper_read + args.probe_read + args.vendor_clk > 1:
+    if args.power_only + args.wrapper_read + args.probe_read > 1:
         parser.error('choose one variant')
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
@@ -81,6 +143,10 @@ def main():
     oldroot = '/home/sunil/git/sunstoneos-worktrees/gpu-provider-ready-1024'
     flags = base['compile'][0][:base['compile'][0].index('-MD')]
     flags = [v.replace(oldroot, str(ROOT)) for v in flags]
+    # The monitor's own flags (-mgeneral-regs-only).
+    monitor_flags = base['compile'][1][:base['compile'][1].index('-MD')]
+    assert base['compile'][1][-1].endswith('/monitor.obj') and '-mgeneral-regs-only' in monitor_flags
+    monitor_flags = [v.replace(oldroot, str(ROOT)) for v in monitor_flags]
     units = [
         ('apps/gpu-power-id/main.c', 'kernel_main'),
         ('drivers/gpu/a733_gpu_platform.c', 'a733_gpu_platform_init'),
@@ -89,7 +155,7 @@ def main():
         ('drivers/gpu/a733_gpu_resources.c', 'a733_gpu_resources_init'),
         ('drivers/gpu/a733_gpu_resources_native.c', 'a733_gpu_resources_native_init'),
         ('drivers/power/a733_power_domains.c', 'a733_power_domains_init'),
-    ]
+    ] + SHARED_UNITS + LAYOUT_UNITS
     from elftools.elf.elffile import ELFFile
     replacements = {}
     commands, new = [], []
@@ -111,14 +177,9 @@ def main():
         # The probe-read variant compiles probe-read.c the same way.
         if source == 'apps/gpu-power-id/main.c' and args.probe_read:
             source = 'apps/gpu-power-id/probe-read.c'
-        # The vendor-clk variant compiles vendor-clk.c in place of main.c and
-        # the reordered controller vendor-clk-power.c in place of the shared
-        # one; the platform and every other object are unchanged.
-        if args.vendor_clk:
-            source = {'apps/gpu-power-id/main.c': 'apps/gpu-power-id/vendor-clk.c',
-                      'drivers/gpu/a733_gpu_power.c': 'apps/gpu-power-id/vendor-clk-power.c'}.get(source, source)
+        unit_flags = monitor_flags if source == 'platform/a733/monitor.c' else flags
         variant = ['-DGPU_POWER_ONLY=1'] if args.power_only and source == 'apps/gpu-power-id/main.c' else []
-        command = flags + variant + ['-MD', '-MF', str(obj) + '.d', '-c', str(ROOT / source), '-o', str(obj)]
+        command = unit_flags + variant + ['-MD', '-MF', str(obj) + '.d', '-c', str(ROOT / source), '-o', str(obj)]
         subprocess.run(command, check=True, cwd=ROOT)
         commands.append(command)
         replacements[matches[0]['object']] = str(obj)
@@ -140,10 +201,10 @@ def main():
         elif value.startswith('-Wl,-Map,'):
             value = '-Wl,-Map,' + str(out / 'image.map')
         link.append(value.replace(oldroot, str(ROOT)))
-    assert len(reused) == 30 and len(new) == 7
+    assert (len(reused), len(new)) == (23, 14), (len(reused), len(new))
     # Audit every input object, not a guessed list of layout consumers. A
-    # complete power/platform DWARF declaration identifies the three objects
-    # using the enlarged structures; all must be replaced in this candidate.
+    # complete DWARF declaration of a changed structure identifies the eight
+    # objects that use one; all must be replaced in this candidate.
     layout_users = []
     for item in old_objects:
         with Path(item['object']).open('rb') as stream:
@@ -153,17 +214,17 @@ def main():
                     attrs = die.attributes
                     if die.tag == 'DW_TAG_structure_type' and 'DW_AT_name' in attrs and 'DW_AT_byte_size' in attrs:
                         name = attrs['DW_AT_name'].value.decode()
-                        if name in ('a733_gpu_power', 'a733_gpu_platform'):
+                        if name in CHANGED_LAYOUTS:
                             types[name] = attrs['DW_AT_byte_size'].value
                 if types:
                     assert item['object'] in replacements, item
                     original = item.get('original', item['object'])
                     depfile = Path(original + '.d')
-                    assert depfile.is_file() and 'a733_gpu_power.h' in depfile.read_text(), depfile
                     layout_users.append({'object': item['object'], 'unit': cu.get_top_DIE().attributes['DW_AT_name'].value.decode(),
                         'old_layouts': types, 'replacement': replacements[item['object']],
-                        'depfile': str(depfile), 'depfile_sha256': sha(depfile)})
-    assert len(layout_users) == 3
+                        'depfile': str(depfile) if depfile.is_file() else None,
+                        'depfile_sha256': sha(depfile) if depfile.is_file() else None})
+    assert len(layout_users) == 8, [u['unit'] for u in layout_users]
     subprocess.run(link, check=True, cwd=ROOT)
     subprocess.run(['/usr/lib/llvm-21/bin/llvm-objcopy', '-O', 'binary', str(out / 'image.elf'), str(out / 'probe.bin')], check=True)
     # These shared layouts cross old/new object boundaries. The reused image
@@ -172,25 +233,31 @@ def main():
              'a733_pmic', 'a733_rail_leases', 'a733_platform_locks', 'a733_power_domains',
              'a733_power_domain_row', 'a733_pmic_lifetime', 'a733_pmic_consumer',
              'a733_pmic_consumer_config']
-    old = shared_layouts(baseline / 'image.elf', names)
+    # Every compile unit of the new image agrees on each layout; the ones
+    # that reused objects still define equal the checkpoint's.
     current = shared_layouts(out / 'image.elf', names)
-    assert old == current, 'Shared old/new object layouts differ'
+    consistent = consistent_types(out / 'image.elf')
+    kept = [n for n in names if n not in CHANGED_LAYOUTS]
+    old = shared_layouts(baseline / 'image.elf', names)
+    assert {n: old[n] for n in kept} == {n: current[n] for n in kept}, 'Shared old/new object layouts differ'
     record = {'physical_access': False, 'execution_admitted': False,
               'base_build': {'path': str(baseline / 'build.json'), 'sha256': sha(baseline / 'build.json')},
               'monitor_evidence': base['monitor_evidence'],
               'monitor_evidence_sha256': base['monitor_evidence_sha256'],
               'compile': commands, 'link': link, 'new_objects': new, 'reused_objects': reused,
               'layout_users_rebuilt': layout_users,
-              'shared_layouts_equal': names, 'image_sha256': sha(out / 'image.elf'),
+              'shared_layouts_equal': [n for n in names if n not in CHANGED_LAYOUTS],
+              'layouts_rebuilt': list(CHANGED_LAYOUTS), 'types_consistent_across_units': consistent, 'image_sha256': sha(out / 'image.elf'),
               'binary_sha256': sha(out / 'probe.bin'), 'binary_bytes': (out / 'probe.bin').stat().st_size,
               'variant': ('power-only' if args.power_only else 'wrapper-read' if args.wrapper_read
-                          else 'probe-read' if args.probe_read else 'vendor-clk' if args.vendor_clk else 'identity'),
+                          else 'probe-read' if args.probe_read else 'identity'),
               'expect': ('COMPLETE GPU power only: CORE status 8, OFF and provider parked' if args.power_only
                          else 'COMPLETE GPU wrapper read: CORE status 8, four wrapper words, OFF and provider parked'
                          if args.wrapper_read else PROBE_EXPECT if args.probe_read
-                         else VCLK_EXPECT if args.vendor_clk
-                         else 'COMPLETE GPU power identity: OFF and provider parked'),
-              'local_authority_required': 'Exclusive GPU CCU and PCK CORE6 policy/PWCR; TOP5 remains shared row' }
+                         else 'COMPLETE GPU power identity: 36.56.104.183 in two ON/OFF cycles, provider parked'),
+              'local_authority_required': ('Exclusive GPU CCU, PLL_GPU0 (CCU 0x0e0) and PCK CORE6 policy/PWCR; TOP5 '
+                                           'remains shared row; DCDC4 selector 0x15 to 0x2e (960 mV); at EL3, the '
+                                           'vendor BL31 cold-boot security writes')}
     (out / 'build.json').write_text(json.dumps(record, indent=2) + '\n')
     print(json.dumps({k: record[k] for k in ['image_sha256', 'binary_sha256', 'binary_bytes']}))
 

@@ -4,9 +4,10 @@
 tools/prepare-board-bundles.py calls prepare_bundle(row, build, check,
 output) inside its sandbox for the GPU rows: the provider-readiness checkpoint
 (apps/gpu-provider-ready/build.py), and the power-only, identity,
-wrapper-read and probe-read variants of apps/gpu-power-id/build.py. The function copies the image, its binary,
-its build record and its focused host-check result into the bundle with the
-kernel runner's host tools, and validate() checks the copy:
+wrapper-read and probe-read variants of apps/gpu-power-id/build.py. The
+function copies the image, its binary, its build record and its focused
+host-check result into the bundle with the kernel runner's host tools, and
+validate() checks the copy:
 
 - probe.bin is the loadable segments of image.elf, and both match the build
   record, whose variant and success text are the row's;
@@ -15,13 +16,18 @@ kernel runner's host tools, and validate() checks the copy:
 - equivalence.json lists every linked object with its origin: compiled by
   the build ("new") or reused from the image the build names, none of which
   has run on a board to completion;
-- in both power variants, the GPU controller's step tables in image.elf
+- in every power variant, the GPU controller's step tables in image.elf
   (on_steps and off_steps of drivers/gpu/a733_gpu_power.c) power TOP5
   through the domain-5 row before the first CORE6 access and remove it
-  only after the last; the power-only image defines no identity reader;
+  only after the last, follow the vendor order of
+  docs/designs/gpu-vendor-default.md (PLL_GPU0 enabled, the GPU clocks
+  opened, PLL_GPU0 at 1008 MHz, then CORE6 policy 8; OFF closes the clocks
+  and disables PLL_GPU0 after CORE6 OFF) and never touch the CORE6 delay
+  row; the power-only image defines no identity reader;
 - the host check's normal case ran the variant's number of ON/OFF cycles:
-  two for the power-only variant, one for the identity and wrapper-read
-  variants;
+  two for the power-only and identity variants, one for the wrapper-read
+  variant, and every identity case read only the two identity words, high
+  word first, in each cycle;
 - the wrapper-read image's wrapper_words table holds exactly the four GPU
   wrapper words, in their order, and every host-check case read only a
   prefix of them, with 32-bit loads and no GPU-window store;
@@ -48,33 +54,15 @@ SCHEMA = 'board-gpu-returning-bundle-v1'
 # The image each build reuses objects of, by its build record's identity.
 PROVIDER_READY = '3adfa4ad6ba386ce8d39f76646f540107c2a5d02ce42db6c1c35c90de68a75ed'
 FAILED_POWER_ID = 'fd3d5839f700b5e0f569b0ce722e186c33beba65512815b136d9c969a7341afe'
-CASES = {'provider-ready': 11, 'power-only': 11, 'identity': 13, 'wrapper-read': 7, 'probe-read': 13, 'vendor-clk': 7}
-# ON/OFF cycles of the client's normal run: the power-only variant powers
-# CORE6 on twice, so the second ON shows whether TOP5 OFF returned CORE6 to
-# its power-up state.
-CYCLES = {'power-only': 2, 'identity': 1, 'wrapper-read': 1, 'probe-read': 0, 'vendor-clk': 0}
+CASES = {'provider-ready': 11, 'power-only': 11, 'identity': 12, 'wrapper-read': 7, 'probe-read': 13}
+# ON/OFF cycles of the client's normal run: the power-only and identity
+# variants power the GPU on twice, so the second ON shows that OFF left a
+# state from which ON succeeds again.
+CYCLES = {'power-only': 2, 'identity': 2, 'wrapper-read': 1, 'probe-read': 0}
 # The host-check case that completes ON and OFF in each variant.
-NORMAL = {'power-only': 'normal', 'identity': 'normal', 'wrapper-read': 'wrapper-on', 'probe-read': 'pr-board', 'vendor-clk': 'vc-board'}
+NORMAL = {'power-only': 'normal', 'identity': 'normal', 'wrapper-read': 'wrapper-on', 'probe-read': 'pr-board'}
 # The only GPU-window addresses of the wrapper-read image, in read order.
 WRAPPER_WORDS = [0x01880104, 0x01880100, 0x01880018, 0x0188001c]
-# The vendor-clk image's reordered ON steps (on_steps in vendor-clk-power.c):
-# kind, bank, offset, mask, value. The CORE6 delay row is dropped and the GPU
-# bus reset (0xb24 bit16) is released before the bus gate (0xb24 bit0) and the
-# core clock (0xb20 bit31), as sunxi_enable_clks_wrap does.
-CORE, CCU = 2, 0
-VENDOR_CLK_ON_STEPS = [
-    (0, CCU, 0x05c0, 1 << 7, 1 << 7), (0, CCU, 0x05e0, 1 << 16, 1 << 16), (0, 1, 0x01ac, 1, 1),
-    (0, CCU, 0x0b20, 1 << 31, 0), (0, CCU, 0x0b24, (1 << 16) | 1, 0),
-    (3, CCU, 0, 0, 1), (4, CORE, 0, 0, 0), (5, CORE, 8, 0, 0),
-    (8, CORE, 0xfb0, 0, 0), (8, CORE, 0x14, 0, 1), (6, CORE, 0x20, 0, 0),
-    (1, CORE, 0x20, 0xffffffff, 0), (0, CORE, 0x20, 0xffffffff, 0), (9, CORE, 8, 0, 3),
-    (1, CORE, 0, 0xffffffff, 8), (0, CORE, 0, 0xffffffff, 8), (9, CORE, 8, 0, 4),
-    (1, CCU, 0x0b24, 0, 1 << 16), (0, CCU, 0x0b24, (1 << 16) | 1, 1 << 16),
-    (1, CCU, 0x0b24, 0, 1), (0, CCU, 0x0b24, (1 << 16) | 1, (1 << 16) | 1),
-    (1, CCU, 0x0b20, 0x8700000f, 0x0b000000), (0, CCU, 0x0b20, 0x8700000f, 0x03000000),
-    (1, CCU, 0x0b20, 0, (1 << 31) | (1 << 27)), (0, CCU, 0x0b20, 0x8700000f, 0x83000000),
-    (8, CORE, 0x14, 0, 5), (7, CORE, 8, 0xffffffff, 8)]
-# enum kind: CHECK0 UPDATE1 DELAY2 DOMAIN3 CORE_POLICY4 CORE_STATUS5 CORE_CONFIG6 POLL7 NOTE8 SETTLE9.
 # The probe-read image's access table: address, value, kind (0 read32, 1
 # write32, 2 write32 of the value read by the row named in value).
 PROBE_STEPS = [(0x01880014, 0, 0), (0x01880010, 0, 0), (0x0a0000b0, 0, 0), (0x01800024, 0, 0), (0x01800020, 0, 0),
@@ -82,8 +70,15 @@ PROBE_STEPS = [(0x01880014, 0, 0), (0x01880010, 0, 0), (0x0a0000b0, 0, 0), (0x01
                (0x01800020, 0, 0), (0x01880014, 0, 2), (0x01880014, 0, 0), (0x0a0000b0, 2, 2), (0x0a0000b0, 0, 0)]
 # struct step of drivers/gpu/a733_gpu_power.c: kind, bank, offset, mask, value.
 STEP = struct.Struct('<5I')
-KIND_DOMAIN = 3        # enum kind: CHECK, UPDATE, DELAY, DOMAIN, CORE_POLICY, ...
-BANK_CORE = 2          # enum a733_gpu_power_bank: A733_GPU_CCU, A733_GPU_R_CCU, A733_GPU_CORE
+# enum kind: CHECK0 UPDATE1 DELAY2 DOMAIN3 CORE_POLICY4 CORE_STATUS5 CORE_CONFIG6 POLL7 NOTE8 SETTLE9 PLL10
+# LOCK11 UPDATED12.
+KIND_UPDATE, KIND_DOMAIN, KIND_PLL, KIND_LOCK = 1, 3, 10, 11
+BANK_CCU, BANK_CORE = 0, 2  # enum a733_gpu_power_bank: A733_GPU_CCU, A733_GPU_R_CCU, A733_GPU_CORE
+PLL_GPU0 = 0x0e0
+CORE6_DELAY_ROW = (0x170, 0x174, 0xc00, 0xc04, 0xc10)
+# The last PLL_GPU0 read-back of ON: enable, LDO, lock enable and output gate
+# set, P0 2 and N 84 (1008 MHz), M1 1.
+PLL_1008 = (KIND_PLL, BANK_CCU, PLL_GPU0, 0xe870ff02, 0xe8105300)
 
 
 def require(condition, message):
@@ -142,22 +137,37 @@ def probe_steps(elf):
 
 
 def power_order(elf, cycles):
-    """TOP5 before CORE6 at ON, CORE6 before TOP5 at OFF, in the image's own step tables, which
-    every one of the client's cycles runs."""
+    """The vendor order in the image's own step tables, which every one of the client's cycles runs.
+    ON (sunxi_platform_init, then sunxiPrePowerState): CORE6 PWCR 0, PLL_GPU0 at 1008 MHz and the GPU
+    clocks, then the domain-5 (TOP5) ON request, then CORE6 policy 8 and its status poll. OFF
+    (sunxiPostPowerState): CORE6 policy 0, then the domain-5 OFF request, then the GPU clocks and
+    PLL_GPU0 off."""
     on, off = step_table(elf, 'on_steps'), step_table(elf, 'off_steps')
     on_domain = [i for i, s in enumerate(on) if s[0] == KIND_DOMAIN]
     off_domain = [i for i, s in enumerate(off) if s[0] == KIND_DOMAIN]
-    on_core = [i for i, s in enumerate(on) if s[1] == BANK_CORE and s[0] != KIND_DOMAIN]
-    off_core = [i for i, s in enumerate(off) if s[1] == BANK_CORE and s[0] != KIND_DOMAIN]
     require(len(on_domain) == 1 and on[on_domain[0]][4] == 1, 'ON has no single domain-5 ON step')
     require(len(off_domain) == 1 and off[off_domain[0]][4] == 0, 'OFF has no single domain-5 OFF step')
-    require(on_core and min(on_core) > on_domain[0], 'A CORE6 access precedes the domain-5 ON request')
-    require(off_core and max(off_core) < off_domain[0], 'A CORE6 access follows the domain-5 OFF request')
     require(on[-1][1] == BANK_CORE and on[-1][2] == 8 and on[-1][4] == 8, 'ON does not end with the CORE6 status poll')
-    return {'cycles': cycles, 'on_steps': len(on), 'off_steps': len(off), 'on_domain_step': on_domain[0],
-            'on_first_core_step': min(on_core),
-            'on_last_step': 'CORE6 status poll for 8', 'off_last_core_step': max(off_core),
-            'off_domain_step': off_domain[0]}
+    require(not any(s[1] == BANK_CORE and s[2] in CORE6_DELAY_ROW for s in on + off),
+            'A step touches the CORE6 delay row, which no reference writes.')
+    pwcr = [i for i, s in enumerate(on) if s[:3] == (KIND_UPDATE, BANK_CORE, 0x20) and s[4] == 0]
+    policy8 = [i for i, s in enumerate(on) if s[:3] == (KIND_UPDATE, BANK_CORE, 0) and s[4] == 8]
+    locks = [i for i, s in enumerate(on) if s[0] == KIND_LOCK and s[2] == PLL_GPU0]
+    ccu_on = [i for i, s in enumerate(on) if s[1] == BANK_CCU and s[0] in (KIND_UPDATE, KIND_PLL)]
+    require(len(pwcr) == 1 and ccu_on and pwcr[0] < min(ccu_on), 'ON does not write CORE6 PWCR 0 before the GPU clocks.')
+    require(len(policy8) == 1 and len(locks) == 2 and PLL_1008 in on and
+            max(locks) < on.index(PLL_1008) < on_domain[0] and max(ccu_on) < on_domain[0] < policy8[0],
+            'ON does not set PLL_GPU0 to 1008 MHz and open the GPU clocks before domain 5 ON and CORE6 policy 8.')
+    policy0 = [i for i, s in enumerate(off) if s[:3] == (KIND_UPDATE, BANK_CORE, 0) and s[4] == 0]
+    ccu_off = [i for i, s in enumerate(off) if s[1] == BANK_CCU and s[0] == KIND_UPDATE]
+    pll_off = [i for i, s in enumerate(off) if s[:3] == (KIND_UPDATE, BANK_CCU, PLL_GPU0)]
+    off_core = [i for i, s in enumerate(off) if s[1] == BANK_CORE]
+    require(len(policy0) == 1 and ccu_off and len(pll_off) == 4 and max(off_core) < off_domain[0] < min(ccu_off),
+            'OFF does not write CORE6 policy 0, then domain 5 OFF, then close the GPU clocks and PLL_GPU0.')
+    return {'cycles': cycles, 'on_steps': len(on), 'off_steps': len(off), 'on_pwcr_step': pwcr[0],
+            'on_pll_1008_step': on.index(PLL_1008), 'on_domain_step': on_domain[0], 'on_policy8_step': policy8[0],
+            'on_last_step': 'CORE6 status poll for 8', 'off_policy0_step': policy0[0],
+            'off_domain_step': off_domain[0], 'off_first_clock_step': min(ccu_off)}
 
 
 def prepare_bundle(row, build, check, output):
@@ -250,20 +260,13 @@ def validate(row, output):
                 require('refused' in case or restored, 'A host-check case left a vendor write unrestored.')
                 require('a733_gpu_platform_off_begin' not in case['calls'], 'A host-check case powered the GPU OFF.')
             value['probe_steps'] = [[hex(a), hex(v), k] for a, v, k in PROBE_STEPS]
-        vclk = 'identity_words' in names
-        require(vclk == (variant == 'vendor-clk'), 'The image\'s vendor-clk client does not match its variant.')
-        if variant == 'vendor-clk':
-            steps = step_table(output / 'image.elf', 'on_steps')
-            require(steps == VENDOR_CLK_ON_STEPS, 'on_steps is not the vendor clock and reset order.')
-            require(not any(s[1] == BANK_CORE and s[2] in (0x170, 0x174, 0xc00, 0xc04, 0xc10) for s in steps),
-                    'The vendor-clk ON steps still write the CORE6 delay row.')
+        if variant == 'identity':
             for case in checked['cases']:
-                reads = [[hex(a), 4] for a in (0x01800024, 0x01800020)]
+                reads = [[hex(a), 4] for a in (0x01800024, 0x01800020)] * 2
                 require(case['gpu_reads'] == reads[:len(case['gpu_reads'])],
                         'A host-check case read a GPU address other than the identity words in order.')
-                require('a733_gpu_platform_off_begin' not in case['calls'], 'A host-check case powered the GPU OFF.')
-            value['on_steps_order'] = 'vendor clock and reset; CORE6 delay row dropped'
         require(all(not case['gpu_writes'] for case in checked['cases']), 'A host-check case wrote the GPU window.')
         if variant == 'power-only':
             require(all(not case['gpu_reads'] for case in checked['cases']), 'A host-check case read the GPU window.')
     return value
+

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check actual CORE native access widths, allowlists and shared-lock refusal."""
+"""Check actual CORE and PLL_GPU0 native access widths, allowlists and shared-lock refusal."""
 import argparse
 import hashlib
 import json
@@ -36,7 +36,8 @@ for mode, name in enumerate(('exact-access', 'allowlist-refusal', 'lock-refusal'
             for page in range(base & ~4095, (base + size + 4095) & ~4095, 4096):
                 if page not in pages: uc.mem_map(page, 4096); pages.add(page)
             uc.mem_write(base, segment.data())
-    uc.mem_map(0x80000000, 0x10000); uc.mem_map(0x07066000, 4096)
+    uc.mem_map(0x80000000, 0x10000); uc.mem_map(0x07066000, 4096); uc.mem_map(0x02002000, 4096)
+    uc.mem_write(0x020020e0, (0x41104500).to_bytes(4, 'little'))
     for offset, value in ((0, 8), (8, 8), (0x14, 0x100), (0x20, 0x010101ff), (0xfb0, 0x00031001)):
         uc.mem_write(0x07066000 + offset, value.to_bytes(4, 'little'))
     uc.cpr_write(3, 3, 14, 0, 0, 24000000)
@@ -59,10 +60,11 @@ for mode, name in enumerate(('exact-access', 'allowlist-refusal', 'lock-refusal'
     uc.emu_start(image.address('core_native_check'), 0x80000000, count=100000)
     assert uc.reg_read(UC_ARM64_REG_PC) == 0x80000000, 'instruction budget exhausted'
     assert uc.reg_read(UC_ARM64_REG_X0) == 0, (name, uc.reg_read(UC_ARM64_REG_X0))
-    expected = [(False, 0), (False, 8), (False, 0x20), (False, 0x14), (False, 0xfb0), (True, 0xc10), (False, 0xc10), (True, 0x20),
+    expected = [(False, 0), (False, 8), (False, 0x20), (False, 0x14), (False, 0xfb0), (True, 0x20),
                 (True, 0), (True, 0), (False, 0), (False, 8)] if mode == 0 else []
     assert [(v['write'], v['address'] - 0x07066000) for v in accesses] == expected
     results.append(dict(case=name, accesses=accesses, passed=True))
 (out / 'results.json').write_text(json.dumps(dict(cases=results,
     elf_sha256=hashlib.sha256(elf.read_bytes()).hexdigest(), physical_access=False), indent=2) + '\n')
-print('PASS four actual AArch64 CORE native cases: exact 32-bit accesses including the read-only MISR and IDR0 and a pinned delay-row word, write locks, allowlists and refusals')
+print('PASS four actual AArch64 CORE native cases: exact 32-bit accesses including the read-only MISR and IDR0, '
+      'PLL_GPU0 control and 1008 MHz factor writes, write locks, allowlists and refusals of the delay row and other PLL writes')

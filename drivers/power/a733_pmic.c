@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "a733_pmic.h"
 #include "a733_clock_reference.h"
+#include "a733_gpu_opp.h"
 #include "a733_range.h"
 #define TWI UINT32_C(0x07083000)
 #define BIT(n) (UINT32_C(1)<<(n))
@@ -223,13 +224,16 @@ enum a733_pmic_status a733_pmic_live(struct a733_pmic *p,const struct a733_pmic_
     if(word&A733_POWER_PMIC_TRANSFER)return A733_PMIC_RETAINED;
     return word&A733_POWER_PROVIDER_READY ? A733_PMIC_READY : A733_PMIC_PENDING;
 }
-/* Only the CPU rails accept writes, and only within the pinned CPU operating
- * points' 800-1050 mV, so a wrong caller value cannot leave that range. */
+/* The CPU rails accept writes within the pinned CPU operating points'
+ * 800-1050 mV, and DCDC4, the GPU supply, only to a voltage of the GPU
+ * operating point's speed-bin row (a733_gpu_opp.h, 860-960 mV), so a wrong
+ * caller value cannot leave those ranges. */
 static int writable(enum a733_rail which,uint8_t target)
 {
     struct a733_pmic_snapshot s;
-    return (which==A733_RAIL_DCDC3 || which==A733_RAIL_DCDC5) && target<=127 &&
-        a733_pmic_decode(which,0,target,&s) && s.decoded &&
+    if(target>127 || !a733_pmic_decode(which,0,target,&s) || !s.decoded)return 0;
+    if(which==A733_RAIL_DCDC4)return a733_gpu_opp_voltage(s.programmed_uv);
+    return (which==A733_RAIL_DCDC3 || which==A733_RAIL_DCDC5) &&
         s.programmed_uv>=800000 && s.programmed_uv<=1050000;
 }
 static enum a733_pmic_status submit(struct a733_pmic *p,uint64_t owner,

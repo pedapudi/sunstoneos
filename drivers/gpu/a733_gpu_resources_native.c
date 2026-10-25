@@ -12,7 +12,7 @@ static int allowed(uintptr_t address)
 {
     switch (address) {
     case 0x07090160: case 0x02002000: case 0x020020a0:
-    case 0x020020a8: case 0x020020ac: case 0x02003908: case 0x02003988: case 0x070101ac:
+    case 0x020020a8: case 0x020020ac: case 0x020020e0: case 0x02003908: case 0x02003988: case 0x070101ac:
     case 0x020025c0: case 0x020025e0: case 0x02002b20:
     case 0x02002b24: case 0x07065008: case 0x07066000: case 0x07066008: case 0x0708300c:
     case 0x07083010: case 0x07083020: return 1;
@@ -55,7 +55,7 @@ static int native_rail(void *context, struct a733_gpu_resource_rail *out, uint64
         const struct a733_gpu_resource_lease *lease=n->pmic_manager && n->pmic_client<A733_GPU_RESOURCE_CLIENTS ?
             &n->pmic_manager->leases[n->pmic_client] : 0;
         return now < deadline && n->pmic_view && lease && lease->token &&
-            lease->mode==A733_GPU_RESOURCE_STABLE && lease->mask==A733_GPU_RESOURCE_ALL &&
+            lease->mode==A733_GPU_RESOURCE_STABLE && (lease->mask==A733_GPU_RESOURCE_ALL || lease->mask==A733_GPU_RESOURCE_GPU) &&
             atomic_load_explicit(&n->pmic_manager->busy,memory_order_relaxed)==1 &&
             n->pmic_view->config.provider == n->pmic &&
             a733_pmic_consumer_take(n->pmic_view,n,deadline,out);

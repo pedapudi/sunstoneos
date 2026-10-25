@@ -140,7 +140,7 @@ def load(build, image, manifest, task_switch=False, task_workload=False, **deadl
     with image.open('rb') as stream:
         elf = ELFFile(stream)
         symbols = list(elf.get_section_by_name('.symtab').iter_symbols())
-        geometry = {'worker': (0x4100123c,372), 'tasks': (0x41241498,2688),
+        geometry = {'worker': (0x41001244,372), 'tasks': (0x41241498,2688),
                     'stacks': (0x41201498,262144)} if task_switch else GEOMETRY
         for name, expected in geometry.items():
             require([(s['st_value'], s['st_size']) for s in symbols if s.name == name] == [expected],

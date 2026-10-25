@@ -86,6 +86,116 @@ int a733_gpu_platform_bind_pmic(struct a733_gpu_platform *p,struct a733_gpu_reso
     if(provider->domains && !a733_power_domain_row_init(&p->power.row,provider->domains,5,owner,&p->pmic.rail))return 0;
     p->pmic_native=n;return 1;
 }
+/* DCDC4 to the GPU operating point, once, before the supply consumer's first
+ * sample: 1 done, 0 pending, -1 failed. A failed write retains its lease and
+ * request, since the programmed voltage is then uncertain; a snapshot that
+ * completed with an unexpected value made no write, so the platform reaps
+ * it and releases the lease before failing. */
+enum { RAISE_LEASE, RAISE_LEASED, RAISE_SNAPSHOT, RAISE_READ, RAISE_SUBMIT, RAISE_WRITE, RAISE_RELEASE,
+       RAISE_SETTLE, RAISE_DONE, RAISE_ABANDON };
+/* 0 pending, -1 uncertain, -2 complete with an unexpected value, 1 DCDC4 at
+ * the operating point, 2 at its power-on voltage; 1 and 2 reap the request. */
+static int raise_result(struct a733_gpu_platform *p, unsigned written)
+{
+    struct a733_pmic *provider = p->pmic.config.provider;
+    struct a733_pmic_snapshot snap = {0};
+    enum a733_pmic_status r = a733_pmic_result(provider, &p->supply_request, &snap);
+    if (r == A733_PMIC_BUSY || r == A733_PMIC_PENDING) return 0;
+    if (r != A733_PMIC_COMPLETE) return -1;
+    const unsigned code = snap.selector & 127;
+    if (snap.rail != A733_RAIL_DCDC4 || snap.page_before || snap.page_after ||
+        snap.chip != 3 || snap.revision || !snap.enabled || !snap.decoded || !(snap.enable & 8) ||
+        (written ? code != A733_GPU_DCDC4_SELECTOR || snap.programmed_uv != A733_GPU_SUPPLY_UV :
+                   code != A733_GPU_DCDC4_SELECTOR && code != A733_GPU_DCDC4_BOOT)) return written ? -1 : -2;
+    r = a733_pmic_reap(provider, &p->supply_request);
+    if (r == A733_PMIC_BUSY) return 0;
+    if (r != A733_PMIC_COMPLETE) return -1;
+    p->supply_request = (struct a733_pmic_request){0};
+    return code == A733_GPU_DCDC4_SELECTOR ? 1 : 2;
+}
+static int supply_raise(struct a733_gpu_platform *p)
+{
+    struct a733_pmic *provider = p->pmic.config.provider;
+    struct a733_rail_leases *rails = provider->rails;
+    const uint64_t owner = p->pmic.config.owner;
+    enum a733_rail_result lease;
+    enum a733_pmic_status status;
+    int r;
+    switch (p->supply_stage) {
+    case RAISE_LEASE: {
+        /* A boot verification that ended without DCDC4 refuses domain 5, so
+         * no raise is made. While it runs it holds DCDC4 shared. */
+        const unsigned w = a733_power_authority_load(&rails->authority);
+        if (provider->domains && (w & A733_POWER_SUPPLY_DONE) && !(w & A733_POWER_DCDC4_VERIFIED)) return -1;
+        lease = a733_rail_acquire(rails, owner, 0, A733_RAIL_BIT(A733_RAIL_DCDC4), p->deadline, &p->supply_token);
+        if (lease == A733_RAIL_BUSY) return 0;
+        if ((lease != A733_RAIL_PENDING && lease != A733_RAIL_READY) || !p->supply_token.id) return -1;
+        p->supply_stage = RAISE_LEASED;
+        return 0;
+    }
+    case RAISE_LEASED:
+        lease = a733_rail_poll(rails, &p->supply_token);
+        if (lease == A733_RAIL_BUSY || lease == A733_RAIL_PENDING) return 0;
+        if (lease != A733_RAIL_READY) return -1;
+        p->supply_stage = RAISE_SNAPSHOT;
+        return 0;
+    case RAISE_SNAPSHOT:
+        status = a733_pmic_submit(provider, owner, &p->supply_token, A733_RAIL_DCDC4, p->deadline,
+                                  &p->supply_request);
+        if (status == A733_PMIC_BUSY || (status == A733_PMIC_PENDING && !p->supply_request.id)) return 0;
+        if (status != A733_PMIC_PENDING) return -1;
+        p->supply_stage = RAISE_READ;
+        return 0;
+    case RAISE_READ:
+        r = raise_result(p, 0);
+        if (r == -2) { p->supply_stage = RAISE_ABANDON; return 0; }
+        if (r <= 0) return r;
+        p->supply_stage = r == 1 ? RAISE_RELEASE : RAISE_SUBMIT;
+        return 0;
+    case RAISE_SUBMIT:
+        status = a733_pmic_submit_write(provider, owner, &p->supply_token, A733_RAIL_DCDC4,
+            A733_GPU_DCDC4_BOOT, A733_GPU_DCDC4_SELECTOR, p->deadline, &p->supply_request);
+        if (status == A733_PMIC_BUSY || (status == A733_PMIC_PENDING && !p->supply_request.id)) return 0;
+        if (status != A733_PMIC_PENDING) return -1;
+        p->supply_stage = RAISE_WRITE;
+        return 0;
+    case RAISE_WRITE:
+        r = raise_result(p, 1);
+        if (r <= 0) return r;
+        if (!a733_deadline_after(p->last_now, A733_GPU_SUPPLY_SETTLE_US, &p->supply_settled)) return -1;
+        p->supply_written = 1;
+        p->supply_stage = RAISE_RELEASE;
+        return 0;
+    case RAISE_RELEASE:
+        lease = a733_rail_release(rails, &p->supply_token, p->deadline);
+        if (lease == A733_RAIL_BUSY) return 0;
+        if (lease != A733_RAIL_READY) return -1;
+        p->supply_token = (struct a733_rail_token){0};
+        p->supply_stage = p->supply_written ? RAISE_SETTLE : RAISE_DONE;
+        return p->supply_written ? 0 : 1;
+    case RAISE_SETTLE:
+        /* The clock may round down; passing the time by more than the
+         * settling interval guarantees it. */
+        if (p->last_now <= p->supply_settled) return 0;
+        p->supply_stage = RAISE_DONE;
+        return 1;
+    case RAISE_DONE:
+        return 1;
+    case RAISE_ABANDON:
+        /* No write was made: end the snapshot and the lease, then fail. */
+        if (p->supply_request.id) {
+            status = a733_pmic_reap(provider, &p->supply_request);
+            if (status == A733_PMIC_BUSY) return 0;
+            if (status != A733_PMIC_COMPLETE) return -1;
+            p->supply_request = (struct a733_pmic_request){0};
+        }
+        lease = a733_rail_release(rails, &p->supply_token, p->deadline);
+        if (lease == A733_RAIL_BUSY) return 0;
+        if (lease == A733_RAIL_READY) p->supply_token = (struct a733_rail_token){0};
+        return -1;
+    }
+    return -1;
+}
 static int pmic_health(struct a733_gpu_platform *p)
 {
     if(!p->pmic_native)return 1;
@@ -104,7 +214,11 @@ int a733_gpu_platform_poll(void *context)
     if (!clock_ok(p)) return -1;
     if (p->phase == A733_GPU_PLATFORM_ADMIT) {
         if(p->pmic_native) {
-            int r=p->pmic_observed ? pmic_health(p) : a733_pmic_consumer_sample(&p->pmic,p->deadline);
+            int r=p->pmic_observed ? 1 : supply_raise(p);
+            if(r<0)return fail(p);
+            if(!r)return 0;
+            if(!clock_ok(p))return -1;
+            r=p->pmic_observed ? pmic_health(p) : a733_pmic_consumer_sample(&p->pmic,p->deadline);
             if(r<0)return fail(p);
             if(!r)return 0;
             p->pmic_observed=1;
@@ -112,7 +226,7 @@ int a733_gpu_platform_poll(void *context)
             if(r<0)return fail(p);
             if(!r)return 0;
         }
-        p->resource_result = a733_gpu_resources_acquire(p->manager, p->client, A733_GPU_RESOURCE_ALL,
+        p->resource_result = a733_gpu_resources_acquire(p->manager, p->client, A733_GPU_RESOURCE_GPU,
                                                        p->deadline, &p->token, &p->ready);
         if(p->pmic_native)p->pmic.armed=0;
         if (!clock_ok(p)) return -1;

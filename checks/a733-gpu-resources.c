@@ -6,7 +6,7 @@
 
 struct reg { uintptr_t address; uint32_t value; };
 struct model {
-    struct reg regs[15];
+    struct reg regs[16];
     struct a733_gpu_resource_rail rail;
     uint64_t now;
     uintptr_t fail_address, late_address;
@@ -25,7 +25,7 @@ static int now(void *context, uint64_t *out)
 { struct model *m = context; if (!callback(m)) return 0; *out = m->now; return 1; }
 static uint32_t *reg(struct model *m, uintptr_t address)
 {
-    for (unsigned i = 0; i < 15; ++i) if (m->regs[i].address == address) return &m->regs[i].value;
+    for (unsigned i = 0; i < 16; ++i) if (m->regs[i].address == address) return &m->regs[i].value;
     assert(0); return 0;
 }
 static int read32(void *context, uintptr_t address, uint32_t *out)
@@ -71,9 +71,11 @@ static void fresh(void)
         {0x020020a8, 0}, {0x020020ac, 0}, {0x070101ac, 0x40},
         {0x020025c0, 0x1100007f}, {0x020025e0, 0x61045802},
         {0x02002b20, 0x10200100}, {0x02002b24, 0x24680000}, {0x07065008, 0}, {0x07066000, 0}, {0x07066008, 0},
+        {0x020020e0, 0x01105300},
     };
     memcpy(model.regs, regs, sizeof(regs));
-    model.rail = (struct a733_gpu_resource_rail){0, 3, 0, 0xff, 0x9e, 0};
+    /* DCDC4 at the GPU operating point's 960 mV, boot0's bit 7 kept. */
+    model.rail = (struct a733_gpu_resource_rail){0, 3, 0, 0xff, 0x80 | A733_GPU_DCDC4_SELECTOR, 0};
     model.now = 100;
     assert(a733_gpu_resources_init(&manager, &ops, &model));
 }
@@ -93,7 +95,7 @@ static enum a733_gpu_resource_result acquire(unsigned client, uint32_t mask, uin
     enum a733_gpu_resource_result r = a733_gpu_resources_acquire(&manager, client, mask, 10000, token, &ready);
     if (r == A733_GPU_RESOURCE_OK) {
         assert(ready.parent_hz == ((mask & A733_GPU_RESOURCE_PARENT) ? 400000000 : 0));
-        assert(ready.supply_uv == ((mask & A733_GPU_RESOURCE_RAIL) ? 800000 : 0));
+        assert(ready.supply_uv == ((mask & A733_GPU_RESOURCE_RAIL) ? A733_GPU_SUPPLY_UV : 0));
     } else assert(ready.parent_hz == 7 && ready.supply_uv == 9);
     return r;
 }
@@ -126,7 +128,13 @@ int main(int argc, char **argv)
                 terminal();
             }
         }
-        puts("PASS CORE release: exact policy/status OFF, eight live/dynamic/failed/late refusals, full lease retained and no release writes");
+        /* PLL_GPU0 left enabled refuses the release as well. */
+        fresh(); assert(acquire(0, A733_GPU_RESOURCE_ALL, &token) == A733_GPU_RESOURCE_OK);
+        *reg(&model, 0x020020e0) |= 0x80000000;
+        assert(a733_gpu_resources_release(&manager, 0, token, 10000) == A733_GPU_RESOURCE_FAULT);
+        assert(manager.error == A733_GPU_RESOURCE_LIVE && manager.leases[0].mode == A733_GPU_RESOURCE_RETAINED);
+        terminal();
+        puts("PASS CORE release: exact policy/status OFF and PLL_GPU0 disabled, nine live/dynamic/failed/late refusals, full lease retained and no release writes");
         return 0;
     }
     if (!strcmp(argv[1], "--parent-gates-only")) {
@@ -227,6 +235,10 @@ int main(int argc, char **argv)
         assert(acquire(0, A733_GPU_RESOURCE_ALL, &token) == A733_GPU_RESOURCE_FAULT);
         assert(manager.error == A733_GPU_RESOURCE_SUPPLY && !model.updates); terminal(); ++faults;
     }
+    /* DCDC4 still at its power-on 800 mV: the GPU platform has not raised it. */
+    fresh(); model.rail.voltage = 0x9e;
+    assert(acquire(0, A733_GPU_RESOURCE_ALL, &token) == A733_GPU_RESOURCE_FAULT);
+    assert(manager.error == A733_GPU_RESOURCE_SUPPLY && !model.updates); terminal(); ++faults;
     fresh();
     assert(acquire(0, A733_GPU_RESOURCE_AHB, &token) == A733_GPU_RESOURCE_FAULT);
     assert(manager.error == A733_GPU_RESOURCE_GATE && !model.updates); terminal(); ++faults;

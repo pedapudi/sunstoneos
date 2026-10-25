@@ -48,6 +48,18 @@ COUNTED=('vTaskEnterCritical','vTaskExitCritical','xTaskGetCurrentTaskHandle','u
 # TPIDRRO_EL0 is UNKNOWN at reset. The scheduler run seeds a value whose task
 # field is nonzero and whose core field is 0xff; the entry code must clear it.
 TPIDRRO_RESET=(0xff<<48)|0x41ff0000
+# The EL3 security setup of include/a733_el3_security.h. Its three reads see
+# a FEL-booted lifetime: the PRCM switch 0 and both DMA controllers gated and
+# in reset, so the two DMA_SEC_REG writes are skipped.
+EL3_SECURITY_READS={0x07010290:0,0x02002704:0,0x0200270c:0}
+def el3_security_writes(prcm=0,dma=(False,False)):
+    """The setup's writes, in order, as (address, value)."""
+    writes=[(0x02054004+0x10*n,0xffffffff) for n in (*range(14),*range(16,24))]
+    writes+=[(0x07003000+4*n,0) for n in range(3)]+[(0x07002004+0x10*n,0xffffffff) for n in range(3)]
+    writes+=[(0x07010290,prcm|7),(0x02003f00,7)]
+    writes+=[(a,0xffff) for a,open_ in zip((0x04601020,0x04024020),dma) if open_]
+    return writes+[(0x020540e0,0xfffffbff)]
+EL3_SECURITY_ADDRESSES=frozenset(a for a,_ in el3_security_writes(dma=(True,True)))|frozenset(EL3_SECURITY_READS)
 
 def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
 
@@ -150,7 +162,8 @@ class Machine:
         self.wfi_waiting=[None]*8
         self.mmio={0x02050014:0x41,0x02050010:1,0x02050018:2,0x07090108:0x5aa5a55a,
             0x070501c0:0xfa50392f,0x070501c4:0x20,0x070501d4:0,0x03000024:0,
-            0x03400000:0,0x03400004:1}
+            0x03400000:0,0x03400004:1,**EL3_SECURITY_READS}
+        self.security=[]
         self.rdist=[0x03460000+c*0x20000 for c in range(8)]
         for c,r in enumerate(self.rdist):
             self.mmio[r+8]=(c<<40)|(16 if c==7 else 0)
@@ -250,6 +263,10 @@ class Machine:
         from unicorn import UC_MEM_WRITE
         write=access==UC_MEM_WRITE;m=self.regs[c]
         if a<0x41000000:
+            if a in EL3_SECURITY_ADDRESSES:
+                # Only CPU0 at EL3 makes the setup's accesses, as 32-bit words.
+                assert c==0 and m['currentel']==12 and size==4,('EL3 security access',c,hex(a))
+                if write:getattr(self,'security',[]).append((a,value))
             if write:
                 if 0x07050204<=a<=0x0705021c and not (a&3):
                     target=(a-0x07050200)//4

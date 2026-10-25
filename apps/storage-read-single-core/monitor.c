@@ -93,6 +93,7 @@ static int secondaries_off(void)
     }
     return counter()<admission.startup_deadline;
 }
+#include "a733_el3_security.h"
 void sd_single_core_monitor_init(void)
 {
     volatile const struct a733_smp_contract *source=(void *)A733_SMP_CONTRACT_ADDRESS;
@@ -318,6 +319,8 @@ void sd_single_core_monitor_init(void)
     __asm__ volatile("msr cntps_cval_el1, %0" :: "r"(value));
     value = 1;
     __asm__ volatile("msr cntps_ctl_el1, %0\n isb" :: "r"(value) : "memory");
+    /* The vendor's cold-boot security setup, the last step before EL1. */
+    a733_el3_security_setup();
     RESULT->stage = 2;
     REPORT->stage = 2;
 }

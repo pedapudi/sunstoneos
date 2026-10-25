@@ -81,6 +81,11 @@ int identity_primary_run(void)
 #ifdef SUNSTONE_SECONDARY_COHERENCE
     }
 #ifdef SUNSTONE_ALL_CORE_PRE_SCHEDULER
+    // The native image's EL3 security setup (include/a733_el3_security.h),
+    // at its native place: after every secondary is released and before
+    // CPU0 enters EL1. The writes are not restored at the return.
+    extern void a733_el3_security_setup(void);
+    a733_el3_security_setup();
     // The primary joins only after all seven targets have been released. The
     // outer owner retains the distributor until CPU0 restores and targets are OFF.
     extern int primary_local_cache_probe(uint64_t epoch, uint64_t deadline);

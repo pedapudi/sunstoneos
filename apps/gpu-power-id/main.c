@@ -8,10 +8,13 @@
 #include "a733_mapping_check.h"
 #include "a733_mmio.h"
 
-/* GPU_POWER_ONLY builds the power-only variant: two cycles of TOP and CORE
- * ON with CORE status 8 and then OFF, then provider park, with no access to
- * the GPU register window at 0x01800000 (README.md). The second cycle shows
- * whether CORE6 enters ON from its power-up state again after TOP5 OFF. */
+/* Both variants run two cycles of the default GPU power path
+ * (docs/designs/gpu-vendor-default.md): ON with CORE status 8, then OFF,
+ * then provider park. The identity variant reads the GPU core identity in
+ * each cycle as the vendor's probe does, two 32-bit loads. GPU_POWER_ONLY
+ * builds the power-only variant, with no access to the GPU register window
+ * at 0x01800000 (README.md). The second cycle shows that OFF returns the GPU
+ * to a state from which ON succeeds again. */
 #define GPU_CLIENT 7u
 #define GPU_BASE UINT32_C(0x01800000)
 #define EXPECTED_BVNC (UINT64_C(36) << 48 | UINT64_C(56) << 32 | UINT64_C(104) << 16 | 183)
@@ -19,11 +22,7 @@
 static struct a733_gpu_platform_native native;
 static struct a733_gpu_platform gpu;
 static uint64_t last_now;
-#ifdef GPU_POWER_ONLY
 #define GPU_CYCLES 2u
-#else
-#define GPU_CYCLES 1u
-#endif
 static unsigned cycle;
 #ifndef GPU_POWER_ONLY
 static unsigned id_reads;
@@ -60,10 +59,10 @@ static void snapshot(unsigned which)
     }
 }
 
-/* The controller's cached CORE6 observations of the last ON, with its cycle
- * number from 1: entry words, identification and accept/deny inputs, and
- * the status after the delay-row, PWCR and policy writes with the
- * microseconds each observation waited. */
+/* The controller's cached observations of the last ON, with its cycle number
+ * from 1: CORE6 entry words, identification and accept/deny inputs, the
+ * status after the PWCR and policy writes, and the PLL_GPU0 lock and GPU
+ * clock update reads with the last PLL_GPU0 word. */
 static void core_report(void)
 {
     const struct a733_gpu_power *p = &gpu.power;
@@ -81,12 +80,15 @@ static void core_report(void)
     bb_line_end(&line); bb_power_print(&line);
     bb_line_start(&line, "GPU CORE after");
     bb_line_dec(&line, "cycle", cycle);
-    bb_line_hex(&line, "delays_status", p->core_note[A733_GPU_NOTE_AFTER_DELAYS]);
-    bb_line_dec(&line, "delays_us", p->core_wait_us[0]);
     bb_line_hex(&line, "pwcr_status", p->core_note[A733_GPU_NOTE_AFTER_PWCR]);
-    bb_line_dec(&line, "pwcr_us", p->core_wait_us[1]);
     bb_line_hex(&line, "policy_status", p->core_note[A733_GPU_NOTE_AFTER_POLICY]);
-    bb_line_dec(&line, "policy_us", p->core_wait_us[2]);
+    bb_line_end(&line); bb_power_print(&line);
+    bb_line_start(&line, "GPU clock");
+    bb_line_dec(&line, "cycle", cycle);
+    bb_line_hex(&line, "pll", p->pll_word);
+    bb_line_dec(&line, "lock1_reads", p->pll_lock_reads[0]); bb_line_dec(&line, "lock2_reads", p->pll_lock_reads[1]);
+    bb_line_dec(&line, "update1_reads", p->clock_update_reads[0]);
+    bb_line_dec(&line, "update2_reads", p->clock_update_reads[1]);
     bb_line_end(&line); bb_power_print(&line);
 }
 static _Noreturn void gpu_fail(const char *reason)
@@ -122,22 +124,22 @@ static void before(void)
 }
 
 #ifndef GPU_POWER_ONLY
-/* Only the identity registers are accessible to this consumer. The actual
- * native translation and access width are checked before each ordered read. */
-static uint64_t id_read(unsigned offset, unsigned width)
+/* Only the identity registers are accessible to this consumer:
+ * RGX_CR_CORE_ID__PBVNC, read as the vendor's probe reads it (rgxbvnc.c:119;
+ * OSReadHWReg64 is two 32-bit loads, +0x24 then +0x20, osfunc.h:1086-1095).
+ * The actual native translation is checked before each ordered read. */
+static uint32_t id_read(unsigned offset)
 {
     static const struct a733_mapping_rule device = {A733_MAPPING_READ, 1,
         {{A733_MAIR_DEVICE_NGNRNE, A733_SH_ANY}}, 0, 1};
-    if (gpu.phase != A733_GPU_PLATFORM_ON || !gpu.token || !gpu.delegated ||
-        !((offset == 0x20 && (width == 8 || width == 4)) || (offset == 0x18 && width == 4)))
+    if (gpu.phase != A733_GPU_PLATFORM_ON || !gpu.token || !gpu.delegated || (offset != 0x24 && offset != 0x20))
         bb_power_fail("GPU identity ownership/access");
     before();
     uintptr_t address = GPU_BASE + offset;
     if (!a733_mapping_check(aarch64_device_translate, address, address, &device))
         bb_power_fail("GPU identity mapping");
     before();
-    uint64_t value = width == 8 ? a733_mmio_read64_dsb_sy_both(address) :
-                                 a733_mmio_read32_dsb_sy_both(address);
+    const uint32_t value = a733_mmio_read32_dsb_sy_both(address);
     ++id_reads;
     before();
     return value;
@@ -167,8 +169,7 @@ void gpu_power_id_client(void *unused)
 #ifdef GPU_POWER_ONLY
     uint32_t core_status[GPU_CYCLES] = {0};
 #else
-    uint64_t raw = 0, bvnc = 0;
-    uint32_t revision = 0, core = 0;
+    uint64_t bvnc[GPU_CYCLES] = {0};
 #endif
     snapshot(0);
     for (cycle = 1; cycle <= GPU_CYCLES; ++cycle) {
@@ -188,14 +189,8 @@ void gpu_power_id_client(void *unused)
          * so a successful poll leaves that value as its last read. */
         core_status[cycle - 1] = gpu.power.last_value;
 #else
-        raw = id_read(0x20, 8); bvnc = raw;
-        if (!(raw >> 48)) {
-            revision = (uint32_t)id_read(0x20, 4);
-            core = (uint32_t)id_read(0x18, 4);
-            bvnc = (uint64_t)((revision >> 16) & 255) << 48 |
-                   (uint64_t)((revision >> 8) & 255) << 32 |
-                   (uint64_t)((core >> 8) & 255) << 16 | (core & 255);
-        }
+        bvnc[cycle - 1] = (uint64_t)id_read(0x24) << 32;
+        bvnc[cycle - 1] |= id_read(0x20);
 #endif
 
         /* No firmware was constructed or booted, and no GPU command/DMA backing
@@ -226,17 +221,22 @@ void gpu_power_id_client(void *unused)
     }
     platform_puts("COMPLETE GPU power only: CORE status 8, OFF and provider parked\n");
 #else
+    unsigned matches = 0;
+    for (unsigned i = 0; i < GPU_CYCLES; ++i) {
+        bb_line_start(&line, "GPU identity");
+        bb_line_dec(&line, "cycle", i + 1);
+        bb_line_hex(&line, "raw", bvnc[i]);
+        bb_line_dec(&line, "b", bvnc[i] >> 48); bb_line_dec(&line, "v", (bvnc[i] >> 32) & 0xffff);
+        bb_line_dec(&line, "n", (bvnc[i] >> 16) & 0xffff); bb_line_dec(&line, "c", bvnc[i] & 0xffff);
+        bb_line_dec(&line, "matches", bvnc[i] == EXPECTED_BVNC);
+        bb_line_end(&line); bb_power_print(&line);
+        matches += bvnc[i] == EXPECTED_BVNC;
+    }
     bb_line_start(&line, "GPU identity");
-    bb_line_hex(&line, "raw", raw);
-    bb_line_hex(&line, "bvnc", bvnc);
-    bb_line_dec(&line, "matches", bvnc == EXPECTED_BVNC);
-    bb_line_end(&line); bb_power_print(&line);
-    bb_line_start(&line, "GPU identity");
-    bb_line_hex(&line, "revision", revision);
-    bb_line_hex(&line, "core", core);
     bb_line_dec(&line, "reads", id_reads);
     bb_line_end(&line); bb_power_print(&line);
-    platform_puts("COMPLETE GPU power identity: OFF and provider parked\n");
+    if (matches != GPU_CYCLES) bb_power_fail("GPU identity not 36.56.104.183");
+    platform_puts("COMPLETE GPU power identity: 36.56.104.183 in two ON/OFF cycles, provider parked\n");
 #endif
     platform_exit(0);
 }

@@ -109,8 +109,10 @@ BASE_OVERLAY = ['platform/a733/monitor.c.obj', 'platform/a733/platform.c.obj']
 # policy and status zero, and its adapter, whose read allowlist adds those two
 # words. No bundle takes a LOCAL lease. Any other provider unit must recompile
 # byte-identical to rank-9-usb-v4's, or identical apart from debug sections.
+# platform/a733/counter_clock.c is new since the lock-free counter clock (8431f4b0).
 PROVIDER_NEW = ('drivers/power/a733_pmic.c', 'drivers/power/a733_pmic_native.c', 'drivers/power/a733_pmic_consumer.c',
-                'drivers/gpu/a733_gpu_resources_native.c', 'drivers/gpu/a733_gpu_resources.c')
+                'drivers/gpu/a733_gpu_resources_native.c', 'drivers/gpu/a733_gpu_resources.c',
+                'platform/a733/counter_clock.c')
 # Declared new for their debug information only: their instructions must equal rank-9-usb-v4's.
 PROVIDER_SAME_INSTRUCTIONS = ()
 EXPECT = {

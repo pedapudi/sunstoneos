@@ -84,7 +84,7 @@ static void ccu_common_helper_enable(struct ccu_common *c) { assert(c->features=
 static int pmic_bus_read(unsigned address,unsigned reg,u8 *out) {
     assert(address==0x36);
     assert(reg==0x10 || reg==0x15);
-    *out=reg==0x10 ? 0xff : 0x9e; return 0;
+    *out=reg==0x10 ? 0xff : 0xae; return 0; /* DCDC4 raised to the GPU operating point */
 }
 '''
 code += pmic_header + '\n'
@@ -108,7 +108,7 @@ int main(void) {
     u64 ref=ccu_nm_calc_rate(24000000,100,100);
     u64 peri=ccu_nm_calc_rate(ref,100,1);
     assert(ref==24000000 && peri/2/3==400000000);
-    assert(pmu_axp8191_get_voltage("dcdc4")==800);
+    assert(pmu_axp8191_get_voltage("dcdc4")==960);
 }
 '''
 (a.evidence / 'reference.c').write_text(code)
@@ -123,4 +123,4 @@ for line in output.splitlines():
     assert native[address] == value
 (a.evidence / 'reference-inputs.json').write_text(json.dumps(inputs, indent=2) + '\n')
 (a.evidence / 'reference-command.json').write_text(json.dumps(command) + '\n')
-print('PASS original shared-gate writes, PLL integer rate calculation and AXP8191 DCDC4 voltage decode')
+print('PASS original shared-gate writes, PLL integer rate calculation and AXP8191 DCDC4 960 mV voltage decode')

@@ -426,7 +426,7 @@
    "--output",
    "--libc-include"
   ],
-  "summary": "Check actual CORE native access widths, allowlists and shared-lock refusal.",
+  "summary": "Check actual CORE and PLL_GPU0 native access widths, allowlists and shared-lock refusal.",
   "usb": false
  },
  "a733-gpu-isolation.py": {
@@ -464,9 +464,10 @@
   "pure_host": false,
   "required_arguments": [
    "sources",
-   "evidence"
+   "evidence",
+   "ddk"
   ],
-  "summary": "Compare native TOP/CCU writes with pinned functions; CORE has a separate BXM audit.",
+  "summary": "Compare native TOP, CORE and CCU writes with the pinned vendor functions and operating point.",
   "usb": false
  },
  "a733-gpu-resources-emulate.py": {
@@ -628,7 +629,8 @@
  "a733-monitor-are.py": {
   "cache_areas": [],
   "docs": [
-   "docs/a733-kernel.md"
+   "docs/a733-kernel.md",
+   "docs/designs/gpu-vendor-default-measurements.md"
   ],
   "library": false,
   "pure_host": false,
@@ -639,7 +641,7 @@
    "--lld",
    "--objdump"
   ],
-  "summary": "Execute monitor ARE admission and bounded GIC restoration with injected faults.",
+  "summary": "Execute monitor ARE admission, the EL3 security setup and bounded GIC restoration with injected faults.",
   "usb": false
  },
  "a733-pcie-reference.py": {

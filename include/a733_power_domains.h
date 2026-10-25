@@ -16,7 +16,7 @@
 /* State-word bits set by the owner, beside those of a733_power_authority.h. */
 #define A733_POWER_SUPPLY_DONE    (1u << 1)  /* supply verification ended */
 #define A733_POWER_DCDC2_VERIFIED (1u << 2)  /* DCDC2 enabled at 800 mV at boot */
-#define A733_POWER_DCDC4_VERIFIED (1u << 3)  /* DCDC4 enabled at 800 mV at boot */
+#define A733_POWER_DCDC4_VERIFIED (1u << 3)  /* DCDC4 enabled at 800 or 960 mV at boot */
 #define A733_POWER_DOMAIN1_FAULT  (1u << 11)
 #define A733_POWER_DOMAIN4_FAULT  (1u << 12)
 #define A733_POWER_DOMAIN5_FAULT  (1u << 13)
@@ -80,8 +80,9 @@ struct a733_power_domains {
     /* Supply verification, service task only until the done bit. */
     struct a733_rail_token supply_token;
     struct a733_pmic_request supply_request;
-    /* The boot reading of DCDC4, which the GPU supply consumer copies. Valid
-     * once A733_POWER_DCDC4_VERIFIED is set, which publishes it. */
+    /* The boot reading of DCDC4, for diagnostics. Valid once
+     * A733_POWER_DCDC4_VERIFIED is set, which publishes it. The GPU platform
+     * may raise DCDC4 afterwards, so its supply consumer samples it again. */
     struct a733_pmic_snapshot dcdc4;
     uint64_t verify_at, verify_deadline, last_now;
     unsigned running, supply_stage, supply_verified, failed;

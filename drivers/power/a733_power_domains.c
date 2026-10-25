@@ -8,6 +8,7 @@
  */
 #include "a733_power_domains.h"
 #include "a733_range.h"
+#include "a733_gpu_opp.h"
 
 #define BIT(n) (UINT32_C(1)<<(n))
 #define CCU UINT32_C(0x02002000)
@@ -58,14 +59,14 @@ static unsigned answered(const struct a733_power_domain_row *r)
 {return atomic_load_explicit(&r->state,memory_order_relaxed)>>3;}
 
 /* Domain-level reads: both MBUS gates and the PPU bus clock (R_CCU 0x1ac
- * bit 0). For domain 5 also the GPU clock gate (0x0b20 bit 31) and the GPU
- * bus gate and reset (0x0b24 bits 0 and 16), which must be closed whenever
- * the domain changes. */
+ * bit 0). Domain 5 changes with the GPU clocked and out of reset, as the
+ * vendor's later power-ons and power-offs do (BXM rgx_sunxi
+ * sunxiPrePowerState and sunxiPostPowerState); its GPU-local clock and reset
+ * belong to the GPU controller (docs/designs/gpu-vendor-default.md). */
 static int level(const struct a733_power_domains *d,const struct profile *f)
 {
     return bits(d,CCU+0x5c0,BIT(f->ahb),BIT(f->ahb)) && bits(d,CCU+0x5e0,BIT(f->mbus),BIT(f->mbus)) &&
-        bits(d,R_CCU+0x1ac,1,1) &&
-        (f->id!=5 || (bits(d,CCU+0xb20,BIT(31),0) && bits(d,CCU+0xb24,BIT(16)|BIT(0),0)));
+        bits(d,R_CCU+0x1ac,1,1);
 }
 /* Policy (+0x0) and status (+0x8) bits 3:0 must agree at OFF (0) or ON (8). */
 static int coherent(const struct a733_power_domains *d,unsigned id,uint32_t *policy)
@@ -205,8 +206,8 @@ static int admit(struct a733_power_domains *d,struct a733_power_domain_row *r,un
     else if(m->state==A733_POWER_DOMAIN_OFF)command(d,m,policy,1);
     return m->state==A733_POWER_DOMAIN_ON_WAIT;
 }
-/* Domain 5 release: power-off at count zero, after the GPU gate and reset are
- * reread closed; the pin is dropped once the domain is OFF. */
+/* Domain 5 release: power-off at count zero, after the domain-level reads;
+ * the pin is dropped once the domain is OFF. */
 static int release(struct a733_power_domains *d,struct a733_power_domain_row *r,unsigned g)
 {
     struct a733_power_domain *m=&d->domain[slot(r->domain)];const struct profile *f=&profiles[slot(r->domain)];
@@ -245,10 +246,15 @@ static void verified(struct a733_power_domains *d,unsigned ok)
     wake_rows(d);
     d->supply_stage=ok ? V_RELEASE : d->supply_request.id ? V_REAP : d->supply_stage>V_TOKEN ? V_RELEASE : V_DONE;
 }
+/* DCDC2 at its power-on 800 mV. DCDC4 at its power-on 800 mV or at the GPU
+ * operating point's 960 mV, which the GPU platform sets before the GPU's
+ * first ON and an earlier image of the same power lifetime may have left. */
 static int correct(const struct a733_pmic_snapshot *s,enum a733_rail rail)
 {
+    const unsigned code=s->selector&127;
     return s->rail==rail && !s->page_before && s->chip==3 && !s->revision && !s->page_after &&
-        s->enabled==1 && s->decoded==1 && s->programmed_uv==800000 && (s->selector&127)==30;
+        s->enabled==1 && s->decoded==1 && ((s->programmed_uv==800000 && code==30) ||
+        (rail==A733_RAIL_DCDC4 && s->programmed_uv==A733_GPU_SUPPLY_UV && code==A733_GPU_DCDC4_SELECTOR));
 }
 static int verify(struct a733_power_domains *d,uint64_t now)
 {

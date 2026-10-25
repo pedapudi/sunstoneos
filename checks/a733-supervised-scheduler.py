@@ -162,6 +162,8 @@ def main():
         (a.output/'failure-state.json').write_text(json.dumps(machine.summary(),indent=2)+'\n');raise
     assert state['EL3']==state['EL1']==state['task_cores']==list(range(8))
     assert machine.secure_mask_initialized==set(range(8)) and machine.priority_probed
+    # a733_smp_boot made the EL3 security setup once, at EL3 on CPU0.
+    assert machine.security==model.el3_security_writes(),machine.security
     assert machine.q(machine.symbols['ready'])&0xffffffff==1
     snapshot=struct.unpack('<42Q',machine.read(machine.symbols['snapshot'],336))
     assert snapshot[1]>snapshot[0]
@@ -174,7 +176,7 @@ def main():
         'sources':{n:model.sha(ROOT/n) for n in ('checks/a733-supervised-scheduler.py','checks/a733-smp-cached.py')},
         'secure_pmr_initialized':sorted(machine.secure_mask_initialized),'priority_probe_observed':machine.priority_probed,
         'snapshot':snapshot,'usb_stubs':machine.usb_calls,'cases':{'secure-mask-refusal':True,'eight-core-scheduler':True},
-        'el0_wfe_permitted_cores':sorted(machine.el0_wait_cores),
+        'el0_wfe_permitted_cores':sorted(machine.el0_wait_cores),'el3_security_writes':len(machine.security),
         'limits':__doc__},indent=2)+'\n')
     print('PASS eight-core FreeRTOS FP/background/SGI/tick workload and copied snapshot',flush=True)
 if __name__=='__main__':main()

@@ -11,7 +11,10 @@ its only wrapper, SMC0 and GPU core accesses are 32-bit accesses of the rows
 of its access table in their order, each after its progress record and log
 line; the writes and the restore run with exceptions masked and with the
 restore vectors installed, and a synchronous abort inside that window
-restores both written words before the image's own handler runs."""
+restores both written words before the image's own handler runs. Without a
+variant option the image must be the identity variant: in each of two ON/OFF
+cycles its only GPU-window accesses are two 32-bit loads, 0x01800024 and
+then 0x01800020. The PMIC, rail and GPU platform calls are modeled."""
 import argparse
 import hashlib
 import json
@@ -64,18 +67,9 @@ PROBE_REASONS = {'pr-board': None, 'pr-core-on': None, 'pr-bad-id': PROBE_FAIL, 
                  'pr-window-refused': None}
 PROBE_COMPLETE = ('COMPLETE GPU probe read: identity 36.56.104.183 before and after the secure configuration, '
                   'restored, GPU left powered')
-# The vendor-clk variant's two identity reads, high word (+0x24) first.
-VCLK_WORDS = [0x01800024, 0x01800020]
-VCLK_MAGIC = 0x31304b4c43555047
-VCLK_PATHS = {'vc-board': 2, 'vc-core-on': 2, 'vc-bad-id': 2, 'vc-early-stop': 0, 'vc-pending-early': 0,
-              'vc-mapping': 0, 'vc-time-budget': 0}
-VCLK_REASONS = {'vc-board': None, 'vc-core-on': None,
-                'vc-bad-id': 'GPU vendor-clk: identity not 36.56.104.183, GPU left powered',
-                'vc-early-stop': 'GPU ON poll', 'vc-pending-early': 'GPU vendor-clk refused before clock and reset progress',
-                'vc-mapping': 'GPU vendor-clk mapping', 'vc-time-budget': 'GPU vendor-clk time budget'}
-VCLK_COMPLETE = 'COMPLETE GPU vendor-clk: identity 36.56.104.183 with the vendor clock and reset order, GPU left powered'
 NAMES = ['bb_power', 'a733_gpu_platform', 'a733_gpu_power', 'a733_pmic_consumer',
          'a733_power_domains', 'a733_power_domain', 'a733_power_domain_row']
+
 
 
 def last_put(state):
@@ -83,7 +77,7 @@ def last_put(state):
     return len(state['calls']) - 1 - state['calls'][::-1].index('platform_puts')
 
 
-def run(image, case, power_only=False, wrapper=False, probe=False, vclk=False):
+def run(image, case, power_only=False, wrapper=False, probe=False):
     u = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
     u.mem_map(0x41000000, 0x1200000)
     u.mem_map(0x1800000, 0x1000)
@@ -119,25 +113,28 @@ def run(image, case, power_only=False, wrapper=False, probe=False, vclk=False):
     domains = bb + L['bb_power']['domains']
     domain5 = domains + L['a733_power_domains']['domain'] + 2 * 32
     # The wrapper-read client keeps 200 ms for ON and 100 ms after it.
-    deadline = 250000 if case in ('pr-time-budget', 'vc-time-budget') else 3 * 10**6 if case == 'pr-window-refused' else \
-        10**6 if wrapper or probe or vclk else 10000
+    deadline = 250000 if case == 'pr-time-budget' else \
+        3 * 10**6 if case == 'pr-window-refused' else 10**6 if wrapper or probe else 10000
     state = {'case': case, 'calls': [], 'gpu_reads': [], 'gpu_writes': [], 'clock_reads': 0, 'on_polls': 0,
              'snapshot_reads': [], 'translated': [], 'wrapper_reads': [], 'progress': [],
              'time': 100, 'messages': [], 'exit_status': None, 'failure': None,
-             'pr': [], 'pr_values': {}, 'pr_accesses': [], 'rw_translated': [], 'vc': []}
-
+             'pr': [], 'pr_values': {}, 'pr_accesses': [], 'rw_translated': []}
     def put(address, value, size=4):
         u.mem_write(address, value.to_bytes(size, 'little'))
 
     def field(base, typ, name, value, size=4):
         put(base + L[typ][name], value, size)
 
-    def notes(idr0, misr, after_delays, after_pwcr, after_policy, misr_late, waits=(0, 0, 0)):
+    def notes(idr0, misr, after_pwcr, after_policy, misr_late):
         base = power + L['a733_gpu_power']['core_note']
-        for i, value in enumerate((idr0, misr, after_delays, after_pwcr, after_policy, misr_late)):
+        for i, value in enumerate((idr0, misr, after_pwcr, after_policy, misr_late)):
             put(base + 4 * i, value)
-        for i, value in enumerate(waits):
-            put(power + L['a733_gpu_power']['core_wait_us'] + 4 * i, value)
+
+    def clock_notes(pll=0xf9105300, locks=(3, 3), updates=(1, 1)):
+        put(power + L['a733_gpu_power']['pll_word'], pll)
+        for i in range(2):
+            put(power + L['a733_gpu_power']['pll_lock_reads'] + 4 * i, locks[i])
+            put(power + L['a733_gpu_power']['clock_update_reads'] + 4 * i, updates[i])
 
     def ret(value=1):
         u.reg_write(UC_ARM64_REG_X0, value)
@@ -155,10 +152,7 @@ def run(image, case, power_only=False, wrapper=False, probe=False, vclk=False):
     field(consumer, 'a733_pmic_consumer', 'rail', 32, 8)
     field(domain5, 'a733_power_domain', 'id', 5)
     raw = EXPECTED if case != 'unexpected-id' else EXPECTED + 1
-    if case == 'legacy-id':
-        raw = 36 << 16 | 56 << 8
-        put(0x1800018, 104 << 8 | 183)
-    put(0x1800020, 0 if case in ('pr-bad-id', 'vc-bad-id') else raw, 8)
+    put(0x1800020, 0 if case == 'pr-bad-id' else raw, 8)
 
     def call(name):
         state['calls'].append(name)
@@ -170,9 +164,6 @@ def run(image, case, power_only=False, wrapper=False, probe=False, vclk=False):
         if name == 'aarch64_device_translate' and probe and \
                 u.reg_read(UC_ARM64_REG_X0) not in SNAPSHOT_PAGES + (WRAPPER_PAGE, SMC0_PAGE, 0x1800000):
             raise AssertionError('probe-read variant translated another address')
-        if name == 'aarch64_device_translate' and vclk and \
-                u.reg_read(UC_ARM64_REG_X0) not in SNAPSHOT_PAGES + (0x1800000,):
-            raise AssertionError('vendor-clk variant translated another address')
         if name == 'bb_power_now':
             state['clock_reads'] += 1
             state['time'] += 1
@@ -187,28 +178,15 @@ def run(image, case, power_only=False, wrapper=False, probe=False, vclk=False):
                 # end less than 500 ms before the monitor's 2 s deadline.
                 state['time'] = max(state['time'], 1600000)
             ret(state['time'])
-        elif name == 'a733_gpu_platform_poll' and vclk:
-            state['on_polls'] += 1
-            state['time'] += 5000
-            early = case == 'vc-early-stop'
-            field(power, 'a733_gpu_power', 'core_seen', 0x1f if case in ('vc-early-stop', 'vc-pending-early') else 0x1ff)
-            field(power, 'a733_gpu_power', 'core_policy', 8)
-            field(power, 'a733_gpu_power', 'core_config', 0x101)
-            field(power, 'a733_gpu_power', 'index', 10 if early else 3 if case == 'vc-pending-early' else 34)
-            notes(0x10130101, 0, 0, 0, 0, 0, (0, 51, 51))
-            field(gpu, 'a733_gpu_platform', 'phase', 7 if early else 3 if case == 'vc-core-on' else 2)
-            field(power, 'a733_gpu_power', 'phase', 5 if early else 2 if case == 'vc-core-on' else 1)
-            field(power, 'a733_gpu_power', 'last_value', 8 if case == 'vc-core-on' else 0)
-            ret((1 << 64) - 1 if early else 1 if case == 'vc-core-on' else 0)
         elif name == 'a733_gpu_platform_poll' and probe:
             state['on_polls'] += 1
             state['time'] += 5000
             early = case == 'pr-early-stop'
-            field(power, 'a733_gpu_power', 'core_seen', 0x1f if case in ('pr-early-stop', 'pr-pending-early') else 0x1ff)
+            field(power, 'a733_gpu_power', 'core_seen', 0x1f if case in ('pr-early-stop', 'pr-pending-early') else 0xff)
             field(power, 'a733_gpu_power', 'core_policy', 8)
             field(power, 'a733_gpu_power', 'core_config', 0x101)
-            field(power, 'a733_gpu_power', 'index', 10 if early else 5 if case == 'pr-pending-early' else 38)
-            notes(0x10130101, 0, 0, 0, 0, 0, (51, 51, 51))
+            field(power, 'a733_gpu_power', 'index', 10 if early else 6 if case == 'pr-pending-early' else 53)
+            notes(0x10130101, 0, 0, 0, 0)
             field(gpu, 'a733_gpu_platform', 'phase', 7 if early else 3 if case == 'pr-core-on' else 2)
             field(gpu, 'a733_gpu_platform', 'token', 17, 8)
             field(gpu, 'a733_gpu_platform', 'delegated', 1)
@@ -221,10 +199,10 @@ def run(image, case, power_only=False, wrapper=False, probe=False, vclk=False):
         elif name == 'a733_gpu_platform_poll' and wrapper:
             state['on_polls'] += 1
             if case in ('wrapper-on', 'wrapper-off-fault'):
-                field(power, 'a733_gpu_power', 'core_seen', 0x1ff)
+                field(power, 'a733_gpu_power', 'core_seen', 0xff)
                 field(power, 'a733_gpu_power', 'core_policy', 8)
                 field(power, 'a733_gpu_power', 'core_config', 0x101)
-                notes(0x10130101, 0, 0, 0, 8, 0x100, (51, 51, 1))
+                notes(0x10130101, 0, 0, 8, 0x100)
                 field(gpu, 'a733_gpu_platform', 'phase', 3)
                 field(gpu, 'a733_gpu_platform', 'token', 17, 8)
                 field(gpu, 'a733_gpu_platform', 'delegated', 1)
@@ -233,13 +211,13 @@ def run(image, case, power_only=False, wrapper=False, probe=False, vclk=False):
                 ret()
                 return
             # The board's state: the power-up entry, every step through the
-            # reset release (seen 0x1ff) and a final poll that reads 0.
+            # clock steps (seen 0xff) and a final poll that reads 0.
             early = case == 'wrapper-early-stop'
-            field(power, 'a733_gpu_power', 'core_seen', 0x1f if early else 0x1ff)
+            field(power, 'a733_gpu_power', 'core_seen', 0x1f if early else 0xff)
             field(power, 'a733_gpu_power', 'core_policy', 8)
             field(power, 'a733_gpu_power', 'core_config', 0x101)
-            field(power, 'a733_gpu_power', 'index', 10 if early else 38)
-            notes(0x10130101, 0, 0, 0, 0, 0, (51, 51, 51))
+            field(power, 'a733_gpu_power', 'index', 10 if early else 53)
+            notes(0x10130101, 0, 0, 0, 0)
             if case == 'wrapper-client-deadline':
                 # The client's own 200 ms bound ends the wait.
                 state['time'] += 50000
@@ -270,21 +248,21 @@ def run(image, case, power_only=False, wrapper=False, probe=False, vclk=False):
                     field(power, 'a733_gpu_power', 'index', 10 if case == 'core-refused' else 7)
                     field(power, 'a733_gpu_power', 'phase', 5)
                     if case == 'core-refused':
-                        notes(0x00031001, 0x100, 0, 0, 0, 0)
+                        notes(0x00031001, 0x100, 0, 0, 0)
                 ret((1 << 64) - 1)
                 return
-            # The first ON enters from the power-up state and completes after
-            # the PWCR write; the second enters from settled OFF with PWCR 0
-            # and completes at the final poll.
-            field(power, 'a733_gpu_power', 'core_seen', 0x1ff)
+            # The first ON enters from the power-up state, the second from
+            # settled OFF with PWCR 0; each reaches status 8 once the GPU is
+            # clocked, as the board run of 2026-10-25 showed for the first.
+            field(power, 'a733_gpu_power', 'core_seen', 0xff)
             if state['on_polls'] == 1:
                 field(power, 'a733_gpu_power', 'core_policy', 8)
                 field(power, 'a733_gpu_power', 'core_config', 0x101)
-                notes(0x00031001, 0x100, 8, 8, 8, 0x100, (3, 1, 1))
             else:
                 field(power, 'a733_gpu_power', 'core_policy', 0)
                 field(power, 'a733_gpu_power', 'core_config', 0)
-                notes(0x00031001, 0, 0, 0, 0, 0x100, (0, 0, 0))
+            notes(0x00031001, 0, 0, 8, 0x100)
+            clock_notes()
             field(gpu, 'a733_gpu_platform', 'phase', 3)
             field(gpu, 'a733_gpu_platform', 'token', 17, 8)
             field(gpu, 'a733_gpu_platform', 'delegated', 1)
@@ -294,8 +272,8 @@ def run(image, case, power_only=False, wrapper=False, probe=False, vclk=False):
             ret()
         elif name == 'aarch64_device_translate':
             address = u.reg_read(UC_ARM64_REG_X0)
-            assert address in (0x1800020, 0x1800018, WRAPPER_PAGE) + SNAPSHOT_PAGES or \
-                (probe and address in (SMC0_PAGE, 0x1800000)) or (vclk and address == 0x1800000)
+            assert address in (0x1800024, 0x1800020, WRAPPER_PAGE) + SNAPSHOT_PAGES or \
+                (probe and address in (SMC0_PAGE, 0x1800000))
             # Only the probe-read variant translates for a store, of the wrapper and SMC0 pages.
             assert u.reg_read(UC_ARM64_REG_X1) == 0 or (probe and address in (WRAPPER_PAGE, SMC0_PAGE) and
                                                         u.reg_read(UC_ARM64_REG_X1) == 1)
@@ -305,7 +283,6 @@ def run(image, case, power_only=False, wrapper=False, probe=False, vclk=False):
             # result; wrong physical address must refuse before the MMIO read.
             target = u.reg_read(UC_ARM64_REG_X2)
             wrong = (case == 'bad-mapping' and address < 0x2000000) or \
-                    (case == 'vc-mapping' and address == 0x1800000) or \
                     (case == 'snapshot-mapping' and address == 0x07065000) or \
                     (case == 'wrapper-mapping' and address == WRAPPER_PAGE) or \
                     (case == 'pr-mapping' and address == SMC0_PAGE)
@@ -345,9 +322,6 @@ def run(image, case, power_only=False, wrapper=False, probe=False, vclk=False):
     if probe:
         # The probe-read image makes no OFF, so its link drops the OFF calls.
         modeled = [n for n in modeled if image.symbols.get(n, set()) - {0}] + ['platform_exception']
-    if vclk:
-        # The vendor-clk image makes no OFF either; drop the absent OFF calls.
-        modeled = [n for n in modeled if image.symbols.get(n, set()) - {0}]
     hooks = {image.address(name): name for name in modeled}
     u.hook_add(UC_HOOK_CODE, lambda uc, address, size, arg: call(hooks[address]) if address in hooks else None)
 
@@ -429,7 +403,9 @@ def run(image, case, power_only=False, wrapper=False, probe=False, vclk=False):
         state['gpu_reads'].append([hex(address), size])
         assert not power_only, 'power-only variant read the GPU register window'
         assert not wrapper, 'wrapper-read variant read the GPU core window'
-        assert (address, size) in [(0x1800020, 8), (0x1800020, 4), (0x1800018, 4)]
+        # Two 32-bit loads per cycle, the high word first, as the vendor reads it.
+        assert size == 4 and address == (0x1800024, 0x1800020)[(len(state['gpu_reads']) - 1) % 2], \
+            (hex(address), size, state['gpu_reads'])
 
     def snapshot_read(uc, access, address, size, value, arg):
         assert size == 4 and address in SNAPSHOT, (hex(address), size)
@@ -446,26 +422,6 @@ def run(image, case, power_only=False, wrapper=False, probe=False, vclk=False):
         state['gpu_writes'].append([address, size, value])
         raise AssertionError('GPU write in never-booted identity consumer')
 
-    def vc_read(uc, access, address, size, value, arg):
-        state['gpu_reads'].append([hex(address), size])
-        n = len(state['vc']) + 1
-        if not (size == 4 and n <= 2 and address == VCLK_WORDS[n - 1]):
-            state['refused'] = [hex(address), size, n]; uc.emu_stop(); return
-        magic, stage, count, stamp = struct.unpack('<4Q', bytes(u.mem_read(PROGRESS, 32)))
-        assert magic == VCLK_MAGIC and stage == n and count == n - 1 and stamp, (magic, stage, count)
-        assert state['messages'][-1] == f'GPU VCLK reading n={n} a={address:#x}\n', state['messages'][-1]
-        if n == 1:
-            out = ''.join(state['messages'])
-            assert len(state['snapshot_reads']) == 2 * len(SNAPSHOT), state['snapshot_reads']
-            for text in ('GPU SNAP n=1 a=0x2002b24', 'GPU power phase=', 'GPU CORE entry cycle=1', 'GPU VCLK core6 on='):
-                assert text in out, (text, out)
-        state['vc'].append(address)
-
-    if vclk:
-        u.hook_add(UC_HOOK_MEM_READ, vc_read, begin=0x1800000, end=0x1800fff)
-        u.hook_add(UC_HOOK_MEM_WRITE, write, begin=0x1800000, end=0x1800fff)
-        u.emu_start(image.address('gpu_power_id_client'), 0, count=200000)
-        return check_vclk(u, state, case, ''.join(state['messages']))
     if probe:
         for page in (WRAPPER_PAGE, SMC0_PAGE, 0x1800000):
             u.hook_add(UC_HOOK_MEM_READ, pr_access, begin=page, end=page + 0xfff)
@@ -527,14 +483,16 @@ def run(image, case, power_only=False, wrapper=False, probe=False, vclk=False):
             assert 'COMPLETE GPU power only: CORE status 8, OFF and provider parked' in output
             assert 'identity' not in output, output
             # Two full cycles, each reported, then one park and the completion text.
-            for line in ['GPU CORE entry cycle=1 seen=511 policy=0x8 status=0x0 pwcr=0x101',
-                         'GPU CORE inputs cycle=1 idr0=0x31001 misr=0x100 misr_late=0x100',
-                         'GPU CORE after cycle=1 delays_status=0x8 delays_us=3 pwcr_status=0x8 pwcr_us=1 '
-                         'policy_status=0x8 policy_us=1',
-                         'GPU CORE entry cycle=2 seen=511 policy=0x0 status=0x0 pwcr=0x0',
+            for line in ['GPU CORE entry cycle=1 seen=255 policy=0x8 status=0x0 pwcr=0x101',
+                         'GPU CORE inputs cycle=1 idr0=0x31001 misr=0x0 misr_late=0x100',
+                         'GPU CORE after cycle=1 pwcr_status=0x0 policy_status=0x8',
+                         'GPU clock cycle=1 pll=0xf9105300 lock1_reads=3 lock2_reads=3 update1_reads=1 '
+                         'update2_reads=1',
+                         'GPU CORE entry cycle=2 seen=255 policy=0x0 status=0x0 pwcr=0x0',
                          'GPU CORE inputs cycle=2 idr0=0x31001 misr=0x0 misr_late=0x100',
-                         'GPU CORE after cycle=2 delays_status=0x0 delays_us=0 pwcr_status=0x0 pwcr_us=0 '
-                         'policy_status=0x0 policy_us=0',
+                         'GPU CORE after cycle=2 pwcr_status=0x0 policy_status=0x8',
+                         'GPU clock cycle=2 pll=0xf9105300 lock1_reads=3 lock2_reads=3 update1_reads=1 '
+                         'update2_reads=1',
                          'GPU power cycle=1 core_status=0x8', 'GPU power cycle=2 core_status=0x8']:
                 assert line in output, (line, output)
             # Snapshots 0, 1 and 2, each of every word once, in order.
@@ -568,12 +526,20 @@ def run(image, case, power_only=False, wrapper=False, probe=False, vclk=False):
                 assert 'GPU CORE entry cycle=2' in output and 'bb_power_park' not in state['calls'], output
         state['cycles'] = state['calls'].count('a733_gpu_platform_off_begin')
         return state
-    if case in ['normal', 'legacy-id', 'unexpected-id']:
-        assert state['exit_status'] == 0 and state['failure'] is None
-        assert 'COMPLETE GPU power identity: OFF and provider parked' in output
+    if case in ['normal', 'unexpected-id']:
+        # Two cycles, each reading the identity as two 32-bit loads, high word first.
+        assert state['gpu_reads'] == [['0x1800024', 4], ['0x1800020', 4]] * 2, state['gpu_reads']
+        for n in (1, 2):
+            assert f'GPU identity cycle={n} raw={(EXPECTED + (case == "unexpected-id")):#x} ' in output, output
         assert f'matches={0 if case == "unexpected-id" else 1}' in output
-        assert state['calls'].index('a733_gpu_platform_off_poll') < state['calls'].index('bb_power_park') < last_put(state)
-        assert state['gpu_reads'] == ([['0x1800020', 8], ['0x1800020', 4], ['0x1800018', 4]] if case == 'legacy-id' else [['0x1800020', 8]])
+        assert state['calls'].index('bb_power_park') < len(state['calls']) - 1
+        if case == 'normal':
+            assert state['exit_status'] == 0 and state['failure'] is None
+            assert 'COMPLETE GPU power identity: 36.56.104.183 in two ON/OFF cycles, provider parked' in output
+            assert state['calls'].index('a733_gpu_platform_off_poll') < state['calls'].index('bb_power_park') < \
+                last_put(state)
+        else:
+            assert state['failure'] == 'GPU identity not 36.56.104.183' and 'COMPLETE' not in output, state
     else:
         reasons = {'core-refused': 'GPU ON poll', 'core-partial': 'GPU ON poll', 'on-fault': 'GPU ON poll', 'bad-mapping': 'GPU identity mapping',
                    'read-crosses-deadline': 'GPU identity deadline/clock', 'clock-regresses': 'GPU identity deadline/clock',
@@ -595,32 +561,7 @@ def run(image, case, power_only=False, wrapper=False, probe=False, vclk=False):
     assert not state['gpu_writes']
     state['cycles'] = state['calls'].count('a733_gpu_platform_off_begin')
     if case == 'normal':
-        assert state['cycles'] == 1
-    return state
-
-
-def check_vclk(u, state, case, output):
-    """The vendor-clk variant's outcome for one case."""
-    calls = state['calls']
-    assert not state['gpu_writes'], state['gpu_writes']
-    assert 'a733_gpu_platform_off_begin' not in calls and 'bb_power_park' not in calls, calls
-    assert 'refused' not in state, state['refused']
-    assert state['failure'] == VCLK_REASONS[case], (state['failure'], output)
-    reads = VCLK_WORDS[:VCLK_PATHS[case]]
-    assert state['vc'] == reads and state['gpu_reads'] == [[hex(a), 4] for a in reads], state['gpu_reads']
-    magic, stage, count, _ = struct.unpack('<4Q', bytes(u.mem_read(PROGRESS, 32)))
-    if case != 'vc-time-budget':
-        assert magic == VCLK_MAGIC and stage == len(reads) and count == len(reads), (stage, count)
-    if reads:
-        identity = 0 if case == 'vc-bad-id' else EXPECTED
-        assert f'GPU VCLK identity raw={identity:#x} ' in output and f'matches={int(identity == EXPECTED)}' in output, output
-    if case in ('vc-board', 'vc-core-on'):
-        assert state['exit_status'] == 0 and VCLK_COMPLETE in output, output
-    else:
-        assert state['exit_status'] is None and 'COMPLETE' not in output
-    if case == 'vc-time-budget':
-        assert 'a733_gpu_platform_begin' not in calls
-    state['cycles'] = 0
+        assert state['cycles'] == 2
     return state
 
 
@@ -689,9 +630,8 @@ def main():
     p.add_argument('--power-only', action='store_true', help='check the power-only variant')
     p.add_argument('--wrapper-read', action='store_true', help='check the wrapper-read variant')
     p.add_argument('--probe-read', action='store_true', help='check the probe-read variant')
-    p.add_argument('--vendor-clk', action='store_true', help='check the vendor-clk variant')
     a = p.parse_args()
-    assert a.power_only + a.wrapper_read + a.probe_read + a.vendor_clk <= 1, 'choose one variant'
+    assert a.power_only + a.wrapper_read + a.probe_read <= 1, 'choose one variant'
     # The shared owner added delays_ready in existing padding. Reused objects
     # retain the old DWARF member list; consume the actual replacement owner's
     # layout, and verify every old member and the total size still agree.
@@ -702,9 +642,7 @@ def main():
     wrapper_image = bool(image.symbols.get('wrapper_words', set()) - {0})
     probe_image = bool(image.symbols.get('probe_steps', set()) - {0})
     assert probe_image == a.probe_read, 'image variant does not match --probe-read'
-    vclk_image = bool(image.symbols.get('identity_words', set()) - {0})
-    assert vclk_image == a.vendor_clk, 'image variant does not match --vendor-clk'
-    assert identity == (not a.power_only and not a.wrapper_read and not a.probe_read and not a.vendor_clk), \
+    assert identity == (not a.power_only and not a.wrapper_read and not a.probe_read), \
         'image variant does not match the options'
     assert wrapper_image == a.wrapper_read, 'image variant does not match --wrapper-read'
     from elftools.elf.elffile import ELFFile
@@ -724,7 +662,7 @@ def main():
     old_fields = {k: v for k, v in current.items() if k != 'delays_ready'}
     assert all({k: v for k, v in x.items() if k != 'delays_ready'} == old_fields for x in layouts)
     image.layouts['a733_power_domain'] = current
-    cases = ['normal', 'legacy-id', 'unexpected-id', 'on-fault', 'bad-mapping',
+    cases = ['normal', 'unexpected-id', 'on-fault', 'bad-mapping',
              'read-crosses-deadline', 'clock-regresses', 'off-fault', 'retained-token', 'counted-row', 'unparked', 'core-refused', 'core-partial']
     if a.power_only:
         cases = ['normal', 'on-fault', 'second-on-fault', 'on-deadline', 'snapshot-mapping', 'core-refused', 'core-partial',
@@ -734,20 +672,18 @@ def main():
                  'wrapper-mapping', 'wrapper-off-fault', 'wrapper-table-mutant']
     if a.probe_read:
         cases = [*PROBE_PATHS, 'pr-table-mutant', 'pr-restore-mutant']
-    if a.vendor_clk:
-        cases = list(VCLK_PATHS)
     if a.cases:
         assert set(a.cases) <= set(cases)
         cases = a.cases
     result = {'physical_access': False,
               'variant': ('power-only' if a.power_only else 'wrapper-read' if a.wrapper_read
-                          else 'probe-read' if a.probe_read else 'vendor-clk' if a.vendor_clk else 'identity'),
+                          else 'probe-read' if a.probe_read else 'identity'),
               'scope': 'actual ELF client and ID access; modeled provider/power transitions',
               'image_sha256': hashlib.sha256(a.image.read_bytes()).hexdigest(),
               'cases': []}
     for case in cases:
         try:
-            result['cases'].append(run(image, case, a.power_only, a.wrapper_read, a.probe_read, a.vendor_clk))
+            result['cases'].append(run(image, case, a.power_only, a.wrapper_read, a.probe_read))
         except Exception as error:
             result['failed_case'] = case
             result['fixture_error'] = repr(error)

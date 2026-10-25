@@ -27,7 +27,7 @@ static FILE *gpu_trace;
 /* CORE6 PPU words 0..0x20 and IDR0; a policy write, or the power-up state,
  * leaves a transition pending that completes at the first status read
  * after GPU clock/reset progress. */
-static uint32_t gpu_core[0xc14/4]; /* policy..PWCR and the delay row, by word */
+static uint32_t gpu_core[0x24/4]; /* policy..PWCR, by word */
 static unsigned gpu_core_pending;
 #define GPU_CORE_IDR0 UINT32_C(0x00031001)
 static uint32_t policy_before;
@@ -41,33 +41,33 @@ static void owner_written(uintptr_t a,uint32_t v)
 }
 static int gpu_now(void *v,uint64_t *out){(void)v;return pmic_model_now(&m,out);}
 static int gpu_acquire(void *v,struct a733_gpu_power_resources *out)
-{(void)v;*out=(struct a733_gpu_power_resources){A733_GPU_INITIAL_HZ,A733_GPU_INITIAL_UV};return 1;}
+{(void)v;*out=(struct a733_gpu_power_resources){A733_GPU_INITIAL_HZ,A733_GPU_SUPPLY_UV};return 1;}
 static int gpu_release(void *v){(void)v;return 1;}
 static int gpu_read(void *v,enum a733_gpu_power_bank bank,uint32_t off,uint32_t *out)
 {
     (void)v;
     if(bank==A733_GPU_CORE) {
-        assert((d.ppu[5][2]&15)==8 && (off==0 || off==8 || off==0x14 || off==0x20 || off==0xfb0 ||
-               off==0x170 || off==0x174 || off==0xc00 || off==0xc04 || off==0xc10));
+        assert(off==0 || off==8 || off==0x14 || off==0x20 || off==0xfb0);
         if(off==8 && gpu_core_pending && (d.ccu_b20&0x80000000) && (d.ccu_b24&0x10001)==0x10001) {
             gpu_core[2]=gpu_core[0];gpu_core_pending=0;
         }
         *out=off==0xfb0 ? GPU_CORE_IDR0 : gpu_core[off/4];return 1;
     }
-    uint32_t *w=level_word((bank==A733_GPU_CCU ? CCU_BASE : RCCU_BASE)+off);assert(w);*out=*w;return 1;
+    uint32_t *w=level_word((bank==A733_GPU_CCU ? CCU_BASE : RCCU_BASE)+off);assert(w);
+    /* PLL_GPU0 locks once enabled with its LDO and lock enable. */
+    if(bank==A733_GPU_CCU && off==0xe0)*w=(*w&0xe0000000)==0xe0000000 ? *w|(1u<<28) : *w&~(1u<<28);
+    *out=*w;return 1;
 }
 static int gpu_update(void *v,enum a733_gpu_power_bank bank,uint32_t off,uint32_t clear,uint32_t set)
 {
     (void)v;
     if(bank==A733_GPU_CORE) {
-        assert(clear==UINT32_MAX && ((off==0 && (set==0 || set==8)) || (off==0x20 && !set) ||
-               (off==0x170 && set==0x1f1f1f) || (off==0x174 && set==0x1f1f)
-               || (off==0xc00 && set==0x08080808) || (off==0xc04 && set==0x0808) || (off==0xc10 && set==8)));
+        assert(clear==UINT32_MAX && ((off==0 && (set==0 || set==8)) || (off==0x20 && !set)));
         gpu_core[off/4]=set;if(!off)gpu_core_pending=1;
         if(gpu_trace)fprintf(gpu_trace,"1 3 %x %x %x\n",off,clear,set);
         return 1;
     }
-    assert(bank==A733_GPU_CCU && (off==0xb20 || off==0xb24));
+    assert(bank==A733_GPU_CCU && (off==0xb20 || off==0xb24 || off==0xe0));
     uint32_t *w=level_word(CCU_BASE+off);*w=(*w&~clear)|set;
     if(off==0xb20)*w&=~(1u<<27); /* the update key reads as zero */
     if(gpu_trace)fprintf(gpu_trace,"1 0 %x %x %x\n",off,clear,set);
@@ -91,11 +91,12 @@ static void gpu_trace_run(const char *path)
     domains_boot();t=domains_rail(9,A733_RAIL_DCDC4);
     gpu_trace=fopen(path,"w");assert(gpu_trace);policy_before=d.ppu[5][0];d.written=owner_written;
     gpu_run(&g,1);
-    assert((d.ppu[5][2]&15)==8 && d.ccu_b20==0x93200100 && d.ccu_b24==0x24690001);
-    assert(g.core_policy==8 && !g.core_status && g.core_config==A733_GPU_CORE_RESET_PWCR && g.core_seen==0x1ff && gpu_core[0x170/4]==0x1f1f1f && gpu_core[0xc10/4]==8 &&
+    assert((d.ppu[5][2]&15)==8 && d.ccu_b20==0x90200100 && d.ccu_b24==0x24690001 && d.ccu_e0==0xf9105300);
+    assert(g.core_policy==8 && !g.core_status && g.core_config==A733_GPU_CORE_RESET_PWCR && g.core_seen==0xff &&
            g.core_note[A733_GPU_NOTE_IDR0]==GPU_CORE_IDR0 && gpu_core[2]==8 && !gpu_core[8]);
     gpu_run(&g,0);
-    assert((d.ppu[5][2]&15)==0 && d.ccu_b20==0x13200100 && d.ccu_b24==0x24680000 && d.ppu[5][0]==0xa5a50000);
+    assert((d.ppu[5][2]&15)==0 && d.ccu_b20==0x10200100 && d.ccu_b24==0x24680000 && d.ccu_e0==0x01105300 &&
+           d.ppu[5][0]==0xa5a50000);
     d.written=0;assert(!fclose(gpu_trace));gpu_trace=0;
 }
 
@@ -393,18 +394,22 @@ int main(int argc,char **argv)
     assert(a733_power_domain_request(&b2,1));service_step();assert(a733_power_domain_state(&b2)==A733_POWER_ROW_REFUSED);
     assert(a733_rail_release(&m.rails,&t3,m.now+1000)==A733_RAIL_READY);
 
-    /* Domain-level refusals: no PPU write, nothing retained. */
+    /* Domain-level refusals: no PPU write, nothing retained. A GPU clocked
+     * and out of reset is no refusal: domain 5 changes with the GPU clocked,
+     * as the vendor does. */
     for(unsigned c=0;c<5;++c) {
         setup();
         uint32_t *words[]={&d.ccu_5c0,&d.ccu_5e0,&d.rccu_1ac,&d.ccu_b20,&d.ccu_b24};
-        const uint32_t flip[]={1u<<7,1u<<16,1,1u<<31,1u<<16};
+        const uint32_t flip[]={1u<<7,1u<<16,1,1u<<31,0x10001};
         *words[c]^=flip[c];
         struct a733_rail_token t={0};struct a733_power_domain_row r={0};
         assert(a733_power_domain_row_init(&r,&d.owner,5,63,&t));
         domains_boot();t=domains_rail(63,A733_RAIL_DCDC4);
         from=d.trace_n;assert(a733_power_domain_request(&r,1));service_step();
-        assert(a733_power_domain_state(&r)==A733_POWER_ROW_REFUSED && !writes_since(from));
-        assert(a733_rail_release(&m.rails,&t,m.now+1000)==A733_RAIL_READY);
+        if(c<3) {
+            assert(a733_power_domain_state(&r)==A733_POWER_ROW_REFUSED && !writes_since(from));
+            assert(a733_rail_release(&m.rails,&t,m.now+1000)==A733_RAIL_READY);
+        } else assert(a733_power_domain_state(&r)==A733_POWER_ROW_ON && writes_since(from));
     }
     /* A token of another owner, or without the domain's supply, is refused. */
     setup();
@@ -413,8 +418,22 @@ int main(int argc,char **argv)
     domains_boot();wrong=domains_rail(64,A733_RAIL_DCDC2);
     assert(a733_power_domain_request(&r5,1));service_step();assert(a733_power_domain_state(&r5)==A733_POWER_ROW_REFUSED);
 
-    /* A DCDC4 selector other than 800 mV leaves its verified bit clear: the
-     * GPU row is refused, domain 1 still powers on. */
+    /* DCDC4 at the GPU operating point's 960 mV, which an earlier GPU image
+     * of the lifetime leaves, is verified; DCDC2 at that selector is not. */
+    for(unsigned rail=0;rail<2;++rail) {
+        setup();m.pmic[rail ? 0x13 : 0x15]=0x2e;
+        struct a733_rail_token t960={0};struct a733_power_domain_row r960={0};
+        assert(a733_power_domain_row_init(&r960,&d.owner,5,67,&t960));
+        domains_boot();
+        const unsigned verified=a733_power_authority_load(&m.rails.authority)&
+            (A733_POWER_DCDC2_VERIFIED|A733_POWER_DCDC4_VERIFIED);
+        assert(rail ? verified==A733_POWER_DCDC4_VERIFIED :
+               verified==(A733_POWER_DCDC2_VERIFIED|A733_POWER_DCDC4_VERIFIED) &&
+               d.owner.dcdc4.programmed_uv==A733_GPU_SUPPLY_UV);
+    }
+
+    /* A DCDC4 selector other than 800 or 960 mV leaves its verified bit
+     * clear: the GPU row is refused, domain 1 still powers on. */
     setup();m.pmic[0x15]=31;
     struct a733_rail_token g4={0},g2={0};struct a733_power_domain_row gpu={0},de={0};
     assert(a733_power_domain_row_init(&gpu,&d.owner,5,65,&g4) && a733_power_domain_row_init(&de,&d.owner,1,66,&g2));
@@ -509,8 +528,9 @@ int main(int argc,char **argv)
     domains_boot();v4=domains_rail(70,A733_RAIL_DCDC4);assert(a733_power_domain_request(&ua,1));
     from=d.trace_n;service_step();assert(a733_power_domain_state(&ua)==A733_POWER_ROW_REFUSED && !writes_since(from));
 
-    /* Domain 5 power-off: refused while the GPU reset is deasserted (retained),
-     * otherwise the domain reaches OFF and the pin is dropped. */
+    /* Domain 5 power-off reaches OFF and drops the pin whether or not the GPU
+     * reset is deasserted: the vendor powers TOP5 off before it stops the
+     * GPU clocks. */
     for(unsigned open=0;open<2;++open) {
         setup();
         struct a733_rail_token o4={0};struct a733_power_domain_row off={0};
@@ -519,10 +539,7 @@ int main(int argc,char **argv)
         service_step();assert(a733_power_domain_state(&off)==A733_POWER_ROW_ON);
         if(open)d.ccu_b24|=1u<<16;
         from=d.trace_n;assert(a733_power_domain_request(&off,0));service_step();
-        if(open) {
-            assert(a733_power_domain_state(&off)==A733_POWER_ROW_FAILED && !writes_since(from));
-            assert(a733_rail_release(&m.rails,&o4,m.now+1000)==A733_RAIL_BUSY);
-        } else {
+        {
             assert(a733_power_domain_state(&off)==A733_POWER_ROW_OFF && writes_since(from)==1);
             assert((d.ppu[5][0]&15)==0 && (d.ppu[5][2]&15)==0 && d.ppu[5][0]==0xa5a50000);
             assert(a733_rail_release(&m.rails,&o4,m.now+1000)==A733_RAIL_READY);

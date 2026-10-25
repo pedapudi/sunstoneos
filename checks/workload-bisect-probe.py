@@ -309,6 +309,7 @@ def main():
         raw = machine.read(0x42018000, 0x5200)
         record = struct.unpack_from('<64Q', raw, RECORD-0x42018000)
         assert machine.returned and not machine.retained
+        assert machine.security == workload.base.el3_security_writes(), machine.security
         if a.case in RWP_TARGET:
             assert machine.rwp_injected and machine.rwp_seen == 1
         if a.case in ('restore-rwp-secondary-unfixed', 'restore-rwp-late-secondary-unfixed',
