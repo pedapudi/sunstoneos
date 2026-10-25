@@ -159,6 +159,15 @@ model and `checks/npu-nn-pool-native.py` cover the mutation refused at CLOSE;
 the startup, clock-reference, routing and supervised models read the boards'
 speed-bin word.
 
+## Image comparison
+
+Against `11f00ff9`, 42 of 68 default images change. Code changes are limited
+to the images that link the NPU controller, adapter or convolution backend:
+the accelerator composition, the NPU board image, the OS NPU profile, the
+five NPU models and the finite profiles. The other 26 differ only in their
+build identity and debug information, because `include/a733_mmio.h` gained
+the two DMB accessors.
+
 ## Limits
 
 - A change to a device-read byte between OPEN and CLOSE runs in the jobs in
