@@ -143,6 +143,15 @@ Merged on 2026-10-25:
   the refrozen image then qualifies it. The rank 7 and rank 8 bundles and the
   `cpu-next-20261024` and CPU0 bundles need the refreeze listed in
   `docs/designs/multicore-correctness-1025.md`.
+- `work/refreeze-1025`: the native image refrozen from d502f8ea as
+  `a8228eaa…`, with twelve returning bundles rebuilt
+  (`~/.cache/sunstoneos/evidence/refreeze-20261025/bundles-6cd9d008/`).
+  Qualified in a fresh port 3-3 lifetime (`board-session-20261025-6/port-3-3`):
+  pre-scheduler, first task, task switch and three deadline-workload runs all
+  returned with controls and DRAM restored, and all seven 91-word captures
+  equal the clean capture. The new EL1 entry (VPIDR/VMPIDR_EL2, CNTHP_CTL_EL2,
+  zeroed active priorities, nTWE/nTWI) and the RWP-waiting controller have
+  now run on all eight cores.
 - `work/mc-perf-1025` (lock DSBs, IRQ-exit barriers, wake placement,
   missed-tick catch-up) stays held for the board session in
   `docs/board-runbooks/multicore-performance-session.md`.
