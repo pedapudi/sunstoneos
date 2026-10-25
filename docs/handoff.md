@@ -176,9 +176,26 @@ regenerating.
   - The claim (`ac52d411…`) was held until the reconnect of 2026-10-25 and
     then closed as failed. The timer step and rank 8 did not run.
     B1 and the CPU clock and voltage runs stay blocked behind this result.
-  - The user power-cycled port 3-3 on 2026-10-25. Its next lifetime waits
-    for the workload diagnosis, which starts with a comparison against the
-    Linux, TF-A and Allwinner reference sources.
+- **Port 3-3, 2026-10-25 lifetime** (session
+  `board-session-20261025-1/port-3-3`, USB power only, bundles from
+  `workload-bisect-20261025`): the workload with a CPU0 return deadline
+  (`all-core-task-workload-deadline-v1`, same native image `762237cd…`).
+  - Cold DDR, then the 91-word capture, equal to the clean one.
+  - Runs 1 to 4 (`tw-deadline-prepare`, `tw2`–`tw4`) completed normally, with
+    DRAM restored. Each capture after them equals the clean one.
+  - **Run 5 (`tw5-prepare/runtime`) failed and returned through the
+    deadline unit,** about 12 s after launch. This is the first board
+    return of that path. Reason 3, stage 1: a failed survey at EL3 before
+    the workload proper. `elr_el3` was `0x41022f10`, `elr_el1` `0x41023328`
+    and `x30` `0x4102175c`. Every core reported power `0x108` with no
+    pending, active or enabled SGI/PPI. The secondaries were not stopped and
+    DRAM was not restored. The record, `report.bin` and
+    `owned-writable-after.bin` are saved.
+  - So the failure is intermittent within one lifetime (one in five) and
+    occurs during startup, not in the floating-point rounds. Decoding is in
+    progress on `work/workload-bisect-1025`.
+  - The claim `5a49569e…` is held. **Needed from the user:** unplug port
+    3-3's USB-C cable and reconnect it in FEL mode.
 
 The mimus branch `port/sunstoneos` (`9c57286b7`) was pushed to
 `github.com/pedapudi/mimus` on 2026-10-24 with the user's approval; mimus
