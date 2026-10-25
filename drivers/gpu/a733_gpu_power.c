@@ -130,7 +130,10 @@ enum a733_gpu_power_result a733_gpu_power_poll(struct a733_gpu_power *s)
      * domain step requests the row once and returns AGAIN until the service
      * answers, one acquire load per poll. A delay whose clock stops advancing
      * returns AGAIN without advancing the step. Every wait ends at the
-     * deadline. */
+     * deadline. A CORE status poll re-reads for up to A733_GPU_SPIN_US
+     * within one call, with the clock advancing, before it returns AGAIN;
+     * each step list has one poll. */
+    struct a733_gpu_spin spin = {0};
     while (s->index < count) {
         const struct step *p = &(on ? on_steps : off_steps)[s->index];
         if (p->kind == DOMAIN) {
@@ -181,7 +184,10 @@ enum a733_gpu_power_result a733_gpu_power_poll(struct a733_gpu_power *s)
                                       s->core_status != s->core_policy)) return fail(s, A733_GPU_POWER_STATE);
         if (p->kind == POLL) {
             if (value != 0 && value != 8) return fail(s, A733_GPU_POWER_STATE);
-            if (value != p->value) return A733_GPU_POWER_AGAIN;
+            if (value != p->value) {
+                if (a733_gpu_spin_again(&spin, s->last_now)) continue;
+                return A733_GPU_POWER_AGAIN;
+            }
         }
         ++s->index;
     }

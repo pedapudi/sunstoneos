@@ -207,12 +207,17 @@ static void core_cases(void)
         assert(m.core_entry_reads == sample && s.core_seen == (1u << (sample - !late)) - 1);
         terminal();
     }
-    for (unsigned stopping = 0; stopping < 2; ++stopping) for (unsigned mode = 0; mode < 3; ++mode) {
+    /* Modes: acknowledgement on the third status read, inside one call's
+     * spin; on the 81st read, after the first call's spin ends; never; and a
+     * read that reaches the deadline. The clock advances 1 us per sample,
+     * so one call makes at most A733_GPU_SPIN_US + 1 status reads. */
+    for (unsigned stopping = 0; stopping < 2; ++stopping) for (unsigned mode = 0; mode < 4; ++mode) {
         fresh(); if (stopping) on();
         m.core_reads = 0;
         if (mode == 0) m.core_delayed = 2;
-        if (mode == 1) m.core_stalled = 1;
-        if (mode == 2) m.core_late = 1;
+        if (mode == 1) m.core_delayed = 80;
+        if (mode == 2) m.core_stalled = 1;
+        if (mode == 3) m.core_late = 1;
         assert((stopping ? a733_gpu_power_off(&s,m.now+150) : a733_gpu_power_on(&s,m.now+150)) ==
                A733_GPU_POWER_AGAIN);
         enum a733_gpu_power_result r;
@@ -220,10 +225,14 @@ static void core_cases(void)
         do {
             const unsigned reads = m.core_reads;
             r = poll(); ++polls;
-            assert(m.core_reads - reads <= 1 && polls < 200);
+            assert(m.core_reads - reads <= A733_GPU_SPIN_US + 1 && polls < 200);
         } while (r == A733_GPU_POWER_AGAIN);
-        if (mode == 0) {
-            assert(r == A733_GPU_POWER_OK && m.core_reads == 3);
+        if (mode < 2) {
+            assert(r == A733_GPU_POWER_OK && m.core_reads == (mode ? 81 : 3));
+            /* Each direction has one poll that waits for the TOP row. An
+             * acknowledgement inside the spin adds no poll; a later one adds
+             * one. */
+            assert(polls == 2 + mode);
             if (!stopping) off();
         } else {
             assert(r == A733_GPU_POWER_FAULT && s.error == A733_GPU_POWER_TIMEOUT && m.held && !m.releases);
@@ -232,7 +241,7 @@ static void core_cases(void)
             terminal();
         }
     }
-    puts("PASS CORE6: four inherited pairs/reopen, six static-state refusals, six partial samples, six bounded acknowledgement cases; NPU/shared gates retained");
+    puts("PASS CORE6: four inherited pairs/reopen, six static-state refusals, six partial samples, eight bounded acknowledgement cases; NPU/shared gates retained");
 }
 int main(int argc, char **argv)
 {

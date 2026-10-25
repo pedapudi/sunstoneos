@@ -267,8 +267,9 @@ transaction drain. The existing firmware-stop or admitted never-booted
 prerequisite remains necessary for OFF.
 
 The reference helpers do not await CORE acknowledgement. Native code adds a
-conservative completion check: one status read per poll, with a fresh monotonic
-deadline check before accepting its value. A delayed or unavailable CORE status
+conservative completion check. Each poll re-reads CORE status for up to
+`A733_GPU_SPIN_US` (50 µs) while the clock advances, with a fresh monotonic
+deadline check after every read, and then returns AGAIN. A delayed or unavailable CORE status
 may fail this criterion on hardware. ON is checked after local clock/reset
 progress; OFF is checked before teardown. Timeout, failed access or unexpected
 status retains the TOP row, rail pin and GPU leases without rollback.
@@ -285,8 +286,10 @@ provenance and decoded bytes are preserved in
 `~/.cache/sunstoneos/evidence/npu-low-power-source-20261024/source-search.json`.
 
 With immediate acknowledgement, this change adds two CORE writes and six reads
-on ON, then one write and two reads on OFF, plus two release reads. Each waiting
-poll adds one status read and two controller clock samples. Native writes use
+on ON, then one write and two reads on OFF, plus two release reads. A waiting
+poll adds at most 50 µs of status reads, one controller clock sample per read.
+An acknowledgement inside that window completes the step in the same poll
+instead of one scheduler tick later. Native writes use
 the existing shared register lock. The power structure grows by 16 bytes for
 cached policy/status/PWCR and a seen mask; the mask records completed reads,
 including a read followed by deadline rejection, and is not admission authority.
