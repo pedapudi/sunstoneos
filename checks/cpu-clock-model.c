@@ -16,7 +16,12 @@ struct event { uint64_t at; unsigned pmic; uint32_t address, value; };
 struct cpu_model {
     unsigned bin, stuck_update, stuck_lock, ignore_pmic, reads, writes, count, read_ns, frac_ns;
     uint64_t update_at[3], lock_at[3], lock_us; /* lock_us 0: lock 20 us after the update. */
-    uint64_t park_ns[2]; /* Time of each cluster's latest park write, in nanoseconds. */
+    uint64_t park_ns[3]; /* Time of each domain's latest park write, in nanoseconds. */
+    /* Lock reads while parked: consecutive set reads counted at least 3 us
+     * apart, the time of the last counted one and of the third. glitch makes
+     * that many lock reads after the first set one read clear. */
+    unsigned lock_run[3], glitch, max_lock_run;
+    uint64_t lock_seen_ns[3], lock_third_ns[3];
     struct { uint32_t from_uv, to_uv; uint64_t at; } ramp[2]; /* DCDC5, DCDC3. */
     struct event events[64];
 };
@@ -93,23 +98,41 @@ static void advance(unsigned d)
 static int cpu_read(void *v,uintptr_t a,uint32_t *out)
 {
     (void)v;assert(a733_cpu_clock_address(a,0));++cm.reads;
-    for(unsigned d=0;d<3;++d)if(a==PLL(d))advance(d);
-    *out=*word(a);return 1;
+    *out=*word(a);
+    for(unsigned d=0;d<3;++d) {
+        if(a!=PLL(d))continue;
+        advance(d);*out=*word(a);
+        if(((*word(SEL(d))>>24)&7) || (*out&(1u<<26)))continue;
+        if((*out&(1u<<28)) && cm.glitch && cm.lock_run[d]){--cm.glitch;*out&=~(1u<<28);}
+        if(!(*out&(1u<<28))){cm.lock_run[d]=0;continue;}
+        if(!cm.lock_run[d] || model_ns()>=cm.lock_seen_ns[d]+3000u){
+            cm.lock_seen_ns[d]=model_ns();
+            if(++cm.lock_run[d]==3)cm.lock_third_ns[d]=model_ns();
+            if(cm.lock_run[d]>cm.max_lock_run)cm.max_lock_run=cm.lock_run[d];
+        }
+    }
+    return 1;
 }
 static int cpu_write(void *v,uintptr_t a,uint32_t value)
 {
     (void)v;assert(a733_cpu_clock_address(a,1));++cm.writes;record(0,(uint32_t)a,value);
-    for(unsigned d=0;d<2;++d) {
+    for(unsigned d=0;d<3;++d) {
         if(a==PLL(d)) {
-            /* The PLL changes only while its cluster runs from the DCXO, and
-             * at least the driver's 2 us settle after the park (twice the
-             * mainline mux notifier delay). */
+            /* The PLL changes only while its domain runs from the DCXO, and
+             * at least boot0's 20 us after the park. */
             assert(((*word(SEL(d))>>24)&7)==0);
-            assert(model_ns()>=cm.park_ns[d]+2000u);
-            *word(a)=value&~(1u<<28);
+            assert(model_ns()>=cm.park_ns[d]+20000u);
+            *word(a)=value&~(1u<<28);cm.lock_run[d]=0;
             if(value&(1u<<26)){cm.update_at[d]=pm.now+10;cm.lock_at[d]=pm.now+(cm.lock_us ? cm.lock_us : 20);}
         }
-        if(a==SEL(d)){if(!((value>>24)&7))cm.park_ns[d]=model_ns();*word(a)=value;covered();}
+        if(a==SEL(d)) {
+            unsigned was=(*word(a)>>24)&7,now=(value>>24)&7;
+            if(!now && was)cm.park_ns[d]=model_ns();
+            /* Selecting the PLL again needs three lock reads at least 3 us
+             * apart and then 20 us, as the vendor CCU helper and boot0 wait. */
+            if(now==3 && !was)assert(cm.lock_run[d]>=3 && model_ns()>=cm.lock_third_ns[d]+20000u);
+            *word(a)=value;covered();
+        }
     }
     return 1;
 }
@@ -334,6 +357,87 @@ static void late_policy_cases(int reproduce)
     printf("PASS late thermal policy: %u cases, both clusters, sufficient voltage and completed ramp, "
         "critical, inherited restore, ceiling request and safe lowering\n",cases);
 }
+/* Port 3-3's recorded state: fuse word 0x496 (vf0400), DCDC3 and DCDC5 at
+ * selector 30 (800 mV), CPU-L and the DSU at 494 MHz, CPU-B at 1,014 MHz. */
+static void board33(const struct a733_cpu_clock_grant *grant)
+{
+    setup(0x00000496,4,30,30,38,grant);
+    *word(SEL(2))=0x03010105;
+    assert(heat(50000)==A733_THERMAL_NORMAL);
+}
+static enum a733_cpu_clock_status settle_run(enum a733_cpu_domain d,uint32_t mhz)
+{
+    enum a733_cpu_clock_status r=a733_cpu_clock_request(&cpu,d,mhz,pm.now+120000);
+    return r==A733_CPU_CLOCK_PENDING ? run(400) : r;
+}
+static unsigned pmic_writes(void){unsigned n=0;for(unsigned i=0;i<cm.count;++i)n+=cm.events[i].pmic;return n;}
+/* The steps of docs/designs/cpu-top-opp.md on a modeled port 3-3. */
+static void top_cases(void)
+{
+    /* Step 1: CPU-B 1,014 -> 1,404 -> 1,014 MHz at the inherited 800 mV, with
+     * a lock that reads clear twice after it first sets: the driver selects
+     * the PLL only after three consecutive lock reads and 20 us. */
+    const struct a733_cpu_clock_grant step1={77,2,{0,1404},2};
+    board33(&step1);cm.glitch=2;
+    assert(a733_cpu_clock_inspect(&cpu,A733_CPU_BIG,pm.now+120000)==A733_CPU_CLOCK_PENDING);
+    assert(run(400)==A733_CPU_CLOCK_COMPLETE && cpu.rail_uv[1]==800000 && !cm.writes);
+    assert(settle_run(A733_CPU_BIG,1404)==A733_CPU_CLOCK_COMPLETE && released() && !cm.glitch);
+    assert(*word(PLL(1))==(LOCKED|(54u<<8)) && *word(SEL(1))==0x03000000 && cm.max_lock_run>=3);
+    const uint64_t parked=cpu.parked_max_us;
+    assert(settle_run(A733_CPU_BIG,1014)==A733_CPU_CLOCK_COMPLETE && released() && !cpu.changes);
+    assert(*word(PLL(1))==(LOCKED|(39u<<8)) && !pmic_writes() && cm.writes==10 && pm.pmic[REG_DCDC3]==30);
+    assert(*word(PLL(0))==0xf8802600 && *word(SEL(0))==0x03010000 && *word(SEL(2))==0x03010105);
+    printf("BUDGET step1 clock_writes=%u pmic_writes=%u model_parked_us=%llu,%llu\n",cm.writes,pmic_writes(),
+        (unsigned long long)parked,(unsigned long long)cpu.parked_max_us);
+    /* A 10 mV raise still waits the vendor's whole millisecond. */
+    const struct a733_cpu_clock_grant ten={77,2,{0,1508},1};
+    board33(&ten);pm.pmic[REG_DCDC3]=31;cm.ramp[1].from_uv=cm.ramp[1].to_uv=810000;
+    assert(settle_run(A733_CPU_BIG,1508)==A733_CPU_CLOCK_COMPLETE && pm.pmic[REG_DCDC3]==32);
+    assert(first(1)<first(0) && cm.events[first(0)].at-cm.events[first(1)].at>=1000);
+    /* The top point: DCDC3 to 1,050 mV, CPU-B to 2,002 MHz; DCDC5 to 1,000 mV,
+     * CPU-L to 1,794 MHz; then the DSU to 1,274 MHz with no voltage write. The
+     * DSU is refused first, while three quarters of the faster cluster is
+     * below it, and while DCDC5 does not cover it. */
+    const struct a733_cpu_clock_grant top={77,3,{1794,2002},8};
+    board33(&top);
+    /* 910 MHz needs only 800 mV, but three quarters of 1,014 MHz is 754 MHz. */
+    assert(settle_run(A733_CPU_DSU,910)==A733_CPU_CLOCK_REFUSED && !cm.writes && !pmic_writes() && released());
+    assert(settle_run(A733_CPU_DSU,1274)==A733_CPU_CLOCK_REFUSED && !cm.writes && !pmic_writes() && released());
+    assert(settle_run(A733_CPU_BIG,2002)==A733_CPU_CLOCK_COMPLETE && pm.pmic[REG_DCDC3]==55);
+    unsigned events=cm.count;
+    assert(settle_run(A733_CPU_DSU,1274)==A733_CPU_CLOCK_REFUSED && cm.count==events && released());
+    assert(settle_run(A733_CPU_LITTLE,1794)==A733_CPU_CLOCK_COMPLETE && pm.pmic[REG_DCDC5]==50);
+    events=cm.count;
+    assert(settle_run(A733_CPU_DSU,1274)==A733_CPU_CLOCK_COMPLETE && released() && cpu.applied_mhz[2]==1274);
+    assert(*word(PLL(2))==(LOCKED|(49u<<8)) && *word(SEL(2))==0x03000105 && cm.count-events==5);
+    for(unsigned i=events;i<cm.count;++i)assert(!cm.events[i].pmic);
+    assert(rate(0)==1794000000 && rate(1)==2002000000 && rate(2)==1274000000 && cpu.changes==2); /* Refused requests consume changes too. */
+    printf("BUDGET top clock_writes=%u pmic_writes=%u changes_used=%u\n",cm.writes,pmic_writes(),8-cpu.changes);
+    /* CPU-L lowered under the raised DSU keeps the DSU's 1,000 mV. */
+    events=cm.count;
+    assert(settle_run(A733_CPU_LITTLE,1014)==A733_CPU_CLOCK_COMPLETE && pm.pmic[REG_DCDC5]==50);
+    for(unsigned i=events;i<cm.count;++i)assert(!cm.events[i].pmic);
+    /* DSU lowering writes no voltage either. */
+    assert(settle_run(A733_CPU_DSU,780)==A733_CPU_CLOCK_COMPLETE && pm.pmic[REG_DCDC5]==50 && rate(2)==780000000);
+    /* A CPU-L grant at 800 mV bounds the DSU at 800 mV points even with a
+     * higher DCDC5; without a CPU-L grant the DSU is refused before access. */
+    const struct a733_cpu_clock_grant low={77,3,{1196,2002},4};
+    board33(&low);pm.pmic[REG_DCDC5]=50;cm.ramp[0].from_uv=cm.ramp[0].to_uv=1000000;
+    assert(settle_run(A733_CPU_BIG,2002)==A733_CPU_CLOCK_COMPLETE);
+    events=cm.count;
+    assert(settle_run(A733_CPU_DSU,1066)==A733_CPU_CLOCK_REFUSED && cm.count==events);
+    assert(settle_run(A733_CPU_DSU,910)==A733_CPU_CLOCK_COMPLETE && rate(2)==910000000 && cm.count-events==5);
+    const struct a733_cpu_clock_grant big_only={77,2,{0,2002},4};
+    board33(&big_only);
+    assert(a733_cpu_clock_request(&cpu,A733_CPU_DSU,598,pm.now+120000)==A733_CPU_CLOCK_REFUSED && !cm.reads);
+    /* At THROTTLE the DSU is held to 780 MHz. */
+    board33(&top);
+    assert(settle_run(A733_CPU_BIG,2002)==A733_CPU_CLOCK_COMPLETE && heat(95000)==A733_THERMAL_THROTTLE);
+    assert(run(400)==A733_CPU_CLOCK_COMPLETE && rate(1)==1014000000);
+    assert(a733_cpu_clock_request(&cpu,A733_CPU_DSU,910,pm.now+120000)==A733_CPU_CLOCK_REFUSED);
+    puts("PASS top operating points: step 1 at 800 mV with a flickering lock, whole-millisecond settle, "
+         "CPU-B 2002 and CPU-L 1794 MHz, DSU 1274 MHz after both with no voltage write, DSU refusals");
+}
 int main(int argc,char **argv)
 {
     if(argc==2 && !strcmp(argv[1],"--late-policy-reproduce")){late_policy_cases(1);return 0;}
@@ -358,10 +462,13 @@ int main(int argc,char **argv)
     assert(!a733_cpu_clock_bin(0x1100,&bin) && !a733_cpu_clock_bin(0x120000,&bin) && !a733_cpu_clock_bin(0x0700,&bin));
     unsigned count;const struct a733_cpu_opp *t=a733_cpu_clock_opps(A733_CPU_LITTLE,&count);
     assert(a733_cpu_clock_opp_mv(&t[5],A733_CPU_VF_ENVELOPE)==850 && !a733_cpu_clock_opp_mv(&t[12],A733_CPU_VF_ENVELOPE));
-    /* Access policy: the DSU and every other word are never written. */
-    assert(!a733_cpu_clock_address(SEL(2),1) && !a733_cpu_clock_address(PLL(2),1) &&
+    /* Access policy: the three domains' PLL and mux words are written;
+     * PLL_CPU_BACK and every other word are not. */
+    assert(a733_cpu_clock_address(SEL(2),1) && a733_cpu_clock_address(PLL(2),1) &&
+        a733_cpu_clock_address(PLL(2)+0x18,0) && !a733_cpu_clock_address(PLL(2)+0x18,1) &&
         a733_cpu_clock_address(SEL(2),0) && !a733_cpu_clock_address(0x08870000,0) &&
-        !a733_cpu_clock_address(0x0300624c,1) && !a733_cpu_clock_address(0x07090160,1));
+        !a733_cpu_clock_address(0x08870000,1) && !a733_cpu_clock_address(0x0300624c,1) &&
+        !a733_cpu_clock_address(0x07090160,1));
 
     /* No grant, no CPUL reading, ungranted cluster or point: refused, no access.
      * The policy is NORMAL before its first reading. A CPUB reading alone does
@@ -380,7 +487,7 @@ int main(int argc,char **argv)
     assert(a733_cpu_clock_request(&cpu,A733_CPU_BIG,1014,pm.now+1000000)==A733_CPU_CLOCK_REFUSED);
     assert(a733_cpu_clock_request(&cpu,A733_CPU_LITTLE,1404,pm.now+1000000)==A733_CPU_CLOCK_REFUSED);
     assert(a733_cpu_clock_request(&cpu,A733_CPU_LITTLE,1100,pm.now+1000000)==A733_CPU_CLOCK_REFUSED);
-    assert(a733_cpu_clock_request(&cpu,A733_CPU_DSU,780,pm.now+1000000)==A733_CPU_CLOCK_INVALID);
+    assert(a733_cpu_clock_request(&cpu,A733_CPU_DOMAINS,780,pm.now+1000000)==A733_CPU_CLOCK_INVALID);
     assert(!cm.reads && !cm.writes && !cm.count);
 
     /* Raise, vf0100: DCDC5 800 -> 850 mV, a 200 us ramp, then 494 -> 1196 MHz. */
@@ -390,7 +497,8 @@ int main(int argc,char **argv)
     assert(run(400)==A733_CPU_CLOCK_COMPLETE && released());
     assert(pm.pmic[REG_DCDC5]==(0x80|35) && *word(PLL(0))==L0(46) && *word(SEL(0))==0x03000000);
     unsigned v=first(1),f=first(0);
-    assert(v<f && cm.events[f].at-cm.events[v].at>=200 && cm.events[v].address==REG_DCDC5);
+    /* 50 mV ramps in 200 us; the vendor driver rounds the wait up to 1 ms. */
+    assert(v<f && cm.events[f].at-cm.events[v].at>=1000 && cm.events[v].address==REG_DCDC5);
     assert(cm.events[f].address==SEL(0) && cm.events[f].value==0x00010000);
     assert(cm.events[cm.count-1].address==SEL(0) && cm.events[cm.count-1].value==0x03000000);
     assert(cpu.applied_mhz[0]==1196 && cpu.changes==1);
@@ -413,7 +521,7 @@ int main(int argc,char **argv)
     assert(run(400)==A733_CPU_CLOCK_COMPLETE && released());
     assert(pm.pmic[REG_DCDC3]==40 && pm.pmic[REG_DCDC5]==30 && *word(PLL(1))==(LOCKED|(58u<<8)));
     assert(cm.events[first(1)].address==REG_DCDC3 && first(1)<first(0));
-    assert(cm.events[first(0)].at-cm.events[first(1)].at>=400); /* 100 mV at 250 uV/us. */
+    assert(cm.events[first(0)].at-cm.events[first(1)].at>=1000); /* 100 mV: 400 us, rounded to 1 ms. */
 
     /* DCDC5 also covers the DSU, whose rate the driver never changes, so a
      * valid boot voltage already covers it and the boot baseline below keeps
@@ -713,9 +821,11 @@ int main(int argc,char **argv)
     }
     assert(a733_cpu_clock_parked(&cpu));cm.read_ns=0;cm.stuck_update=1;
     assert(a733_cpu_clock_burst(&cpu,200)==A733_CPU_CLOCK_RETAINED && cpu.failed);
+    top_cases();
     puts("PASS CPU clock: report, bins, grant records, grant and thermal-policy admission, "
          "voltage-before-frequency raise, frequency-before-voltage lowering, DSU rail share, throttle and "
          "restore, refusals, expiry before the PLL waits, retained faults, cycle timing, settle after "
-         "each mux switch, read-only inspection, parked bursts and a stopped time source");
+         "each mux switch, read-only inspection, parked bursts, a stopped time source, the vendor lock "
+         "confirmation and voltage settle, and DSU points");
     return 0;
 }
