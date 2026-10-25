@@ -67,8 +67,9 @@ access.
 
 **Cost.** Counted from the code, one HDMI 32-bit register read performs:
 
-- six counter-clock reads, each through the global ticket lock in
-  [platform/a733/counter_clock.c](../platform/a733/counter_clock.c);
+- six counter-clock reads, each a load of the one shared history word in
+  [platform/a733/counter_clock.c](../platform/a733/counter_clock.c) and, when
+  the read advances it, a compare-and-swap;
 - six task-context checks, each masking and restoring DAIF;
 - seven provider status queries, each a try-lock; the clock query also scans
   up to 128 slots (`a733_clock_token_status` in
@@ -291,9 +292,12 @@ and states the consumer latency that forces it.
 **Where.**
 
 - [platform/a733/counter_clock.c](../platform/a733/counter_clock.c)
-  `a733_counter_clock_now`: every time read on every core takes one global
-  ticket lock with interrupts masked. Locks, the clock registry, DMA, USB, the
-  NPU, the PMIC and the watchdog all read time through it.
+  `a733_counter_clock_now`: every time read on every core that advances the
+  shared history writes one cache line with a compare-and-swap. The read takes
+  no lock and no interrupt mask
+  ([multicore-performance-1025.md](designs/multicore-performance-1025.md)).
+  Locks, the clock registry, DMA, USB, the NPU, the PMIC and the watchdog all
+  read time through it.
 - [drivers/clock/a733_clock_leases.c](../drivers/clock/a733_clock_leases.c)
   `a733_clock_token_status` and
   [drivers/power/a733_pmic.c](../drivers/power/a733_pmic.c) `a733_pmic_live`
@@ -303,7 +307,7 @@ and states the consumer latency that forces it.
   `a733_platform_lock_enter` scans the holder of every platform lock, and one
   register mutex serializes all shared-register access.
 
-**Cost.** Eight cores contend for one cache line on every time read. Under
+**Cost.** Eight cores contend for the history's cache line on time reads. Under
 contention a status query returns BUSY, which callers turn into a failure or a
 retry (section 1.8). Section 1.1 shows these calls multiplied per register
 access.
