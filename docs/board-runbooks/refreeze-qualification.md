@@ -15,11 +15,11 @@ Prediction: every run returns normally, with controls and saved DRAM
 restored, and every 91-word capture equals the capture taken after the
 cold DDR start.
 
-| Order | Diagnostic | Bundle (`$N/bundles/…`) | What it adds |
+| Order | Diagnostic | Bundle (`$N/bundles-6cd9d008/…`) | What it adds |
 | --- | --- | --- | --- |
 | 1 | All-core pre-scheduler | `rank-7-pre-scheduler/` | Power-up of seven secondaries, the corrected entry on all eight cores, the production barrier and 256 atomic increments |
 | 2 | All-core first task | `rank-7-corrected/` | The pre-release admission and first FreeRTOS task entry on all eight cores |
-| 3 | All-core task switch | `cpu-next-task-switch/` | Native idle yields and worker selection |
+| 3 | All-core task switch | `cpu-next-task-switch/` | Native idle yields and worker selection; with the tick stopped, the idle loops yield in place of their WFI |
 | 4–6 | Deadline workload, three times | `bundle-deadline/` | The full 32-round workload with ticks and SGIs; CPU0 returns with a record at any stop |
 
 ## Outcomes of one launch
@@ -32,7 +32,10 @@ cold DDR start.
 - **Deadline return** (rows 4–6). The runner saves the record and the owned
   memory, restores nothing, quarantines the instance and keeps the claim.
   Decode the record as in [rank 8 bisection](rank-8-workload-bisect.md) and
-  remove every power source; do not continue in this lifetime.
+  remove every power source; do not continue in this lifetime. For reason 1
+  the runner's message says whether the deadline interrupt found CPU0 in
+  `identity_park` (a completion barrier that timed out) or elsewhere, from
+  ELR_EL3.
 - **No return, or any capture that differs from the first.** Stop, remove
   every power source and do not retry.
 
@@ -49,10 +52,11 @@ S=<the session directory of the new lifetime>
 Every bundle holds `build/`, `host/software.json`, `template/` (the
 admission records and prepared bundle of the refrozen image, see
 `$N/template/README.txt`), `root-review-draft.json` and `cpu-prepare.py`.
-The script loads the runner and host modules from `$N/source/`, the tree
-of `work/refreeze-1025` at `89dc4d4c` that built and checked the bundles;
-`$N/bundles/index.json` names each bundle's profile and the bundle it
-replaces. Write session records only under `$S`.
+The script loads the runner and host modules from `$N/source-6cd9d008/`,
+the tree of `work/refreeze-1025` at `6cd9d008` that built and checked the
+bundles; `$N/bundles-6cd9d008/index.json` names each bundle's profile and
+the bundle it replaces. `$N/bundles/` holds the superseded first set,
+kept unchanged. Write session records only under `$S`.
 
 ## Commands
 
@@ -61,13 +65,13 @@ replaces. Write session records only under `$S`.
    (`$S/ddr`, `$S/state-0`, `$S/r1-cache-off`, `$S/r1-survey`). The capture's
    secondary-power words must equal the clean capture.
 2. For run *k* of the table (`r1` to `r6`), with `X` its bundle directory:
-   1. write `$S/rk-root-review.json` from `$N/bundles/X/root-review-draft.json`;
+   1. write `$S/rk-root-review.json` from `$N/bundles-6cd9d008/X/root-review-draft.json`;
    2. bind it, listing every record of this lifetime from the DDR start in
       order (for `r1`: `$S/ddr`, `$S/state-0`, `$S/r1-cache-off`,
       `$S/r1-survey`):
 
       ```sh
-      $PY -B $N/bundles/X/cpu-prepare.py --bundle $N/bundles/X --port 3-3 \
+      $PY -B $N/bundles-6cd9d008/X/cpu-prepare.py --bundle $N/bundles-6cd9d008/X --port 3-3 \
         --survey $S/rk-survey/session.json --root-review $S/rk-root-review.json \
         --continuity $S/ddr/session.json --continuity $S/state-0/session.json \
         ... --continuity $S/rk-survey/session.json --output $S/rk-prepare
@@ -82,10 +86,11 @@ replaces. Write session records only under `$S`.
       the continuity list.
 
 The bundles were bound offline against the first survey of the
-`board-session-20261025-5` port 3-3 lifetime (`$N/offline-binding/`,
-never deployed); a binding for the new lifetime replaces those records.
+`board-session-20261025-5` port 3-3 lifetime
+(`$N/offline-binding-6cd9d008/`, never deployed); a binding for the new
+lifetime replaces those records.
 
-The other bundles in `$N/bundles/` refreeze the remaining frozen profiles
+The other bundles in `$N/bundles-6cd9d008/` refreeze the remaining frozen profiles
 (rank 8, the first-task and task-workload profiles of 2026-10-24, the
 quiet deadline profile and the three CPU0 profiles). They bind the same
 way and are not part of this sequence.
