@@ -54,7 +54,11 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--power-only', action='store_true',
                         help='TOP and CORE ON, CORE status 8, OFF and release; no GPU register access')
+    parser.add_argument('--wrapper-read', action='store_true',
+                        help='one ON, then four reads of GPU wrapper words; no other GPU register access')
     args = parser.parse_args()
+    if args.power_only and args.wrapper_read:
+        parser.error('choose one variant')
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
     baseline = harness.CACHE / 'evidence/gpu-provider-ready-20261024/image-1'
@@ -88,6 +92,10 @@ def main():
                     matches.append(item)
         assert len(matches) == 1, (source, symbol, matches)
         obj = out / f'new-{i}.obj'
+        # The wrapper-read variant compiles wrapper.c, which includes main.c
+        # as the power-only variant, in place of main.c.
+        if source == 'apps/gpu-power-id/main.c' and args.wrapper_read:
+            source = 'apps/gpu-power-id/wrapper.c'
         variant = ['-DGPU_POWER_ONLY=1'] if args.power_only and source == 'apps/gpu-power-id/main.c' else []
         command = flags + variant + ['-MD', '-MF', str(obj) + '.d', '-c', str(ROOT / source), '-o', str(obj)]
         subprocess.run(command, check=True, cwd=ROOT)
@@ -154,9 +162,10 @@ def main():
               'layout_users_rebuilt': layout_users,
               'shared_layouts_equal': names, 'image_sha256': sha(out / 'image.elf'),
               'binary_sha256': sha(out / 'probe.bin'), 'binary_bytes': (out / 'probe.bin').stat().st_size,
-              'variant': 'power-only' if args.power_only else 'identity',
+              'variant': 'power-only' if args.power_only else 'wrapper-read' if args.wrapper_read else 'identity',
               'expect': ('COMPLETE GPU power only: CORE status 8, OFF and provider parked' if args.power_only
-                         else 'COMPLETE GPU power identity: OFF and provider parked'),
+                         else 'COMPLETE GPU wrapper read: CORE status 8, four wrapper words, OFF and provider parked'
+                         if args.wrapper_read else 'COMPLETE GPU power identity: OFF and provider parked'),
               'local_authority_required': 'Exclusive GPU CCU and PCK CORE6 policy/PWCR; TOP5 remains shared row' }
     (out / 'build.json').write_text(json.dumps(record, indent=2) + '\n')
     print(json.dumps({k: record[k] for k in ['image_sha256', 'binary_sha256', 'binary_bytes']}))

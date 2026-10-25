@@ -20,7 +20,11 @@ kernel runner's host tools, and validate() checks the copy:
   through the domain-5 row before the first CORE6 access and remove it
   only after the last; the power-only image defines no identity reader;
 - the host check's normal case ran the variant's number of ON/OFF cycles:
-  two for the power-only variant, one for the identity variant.
+  two for the power-only variant, one for the identity and wrapper-read
+  variants;
+- the wrapper-read image's wrapper_words table holds exactly the four GPU
+  wrapper words, in their order, and every host-check case read only a
+  prefix of them, with 32-bit loads and no GPU-window store.
 
 Nothing here contacts a device.
 """
@@ -40,11 +44,15 @@ SCHEMA = 'board-gpu-returning-bundle-v1'
 # The image each build reuses objects of, by its build record's identity.
 PROVIDER_READY = '3adfa4ad6ba386ce8d39f76646f540107c2a5d02ce42db6c1c35c90de68a75ed'
 FAILED_POWER_ID = 'fd3d5839f700b5e0f569b0ce722e186c33beba65512815b136d9c969a7341afe'
-CASES = {'provider-ready': 11, 'power-only': 11, 'identity': 13}
+CASES = {'provider-ready': 11, 'power-only': 11, 'identity': 13, 'wrapper-read': 7}
 # ON/OFF cycles of the client's normal run: the power-only variant powers
 # CORE6 on twice, so the second ON shows whether TOP5 OFF returned CORE6 to
 # its power-up state.
-CYCLES = {'power-only': 2, 'identity': 1}
+CYCLES = {'power-only': 2, 'identity': 1, 'wrapper-read': 1}
+# The host-check case that completes ON and OFF in each variant.
+NORMAL = {'power-only': 'normal', 'identity': 'normal', 'wrapper-read': 'wrapper-on'}
+# The only GPU-window addresses of the wrapper-read image, in read order.
+WRAPPER_WORDS = [0x01880104, 0x01880100, 0x01880018, 0x0188001c]
 # struct step of drivers/gpu/a733_gpu_power.c: kind, bank, offset, mask, value.
 STEP = struct.Struct('<5I')
 KIND_DOMAIN = 3        # enum kind: CHECK, UPDATE, DELAY, DOMAIN, CORE_POLICY, ...
@@ -77,6 +85,19 @@ def step_table(elf, name):
         data = section.data()[symbol['st_value'] - section['sh_addr']:][:symbol['st_size']]
     require(len(data) == symbol['st_size'] and len(data) % STEP.size == 0, f'{name} is not a table of steps')
     return [STEP.unpack_from(data, i) for i in range(0, len(data), STEP.size)]
+
+
+def wrapper_words(elf):
+    """The wrapper_words table of a linked wrapper-read image."""
+    from elftools.elf.elffile import ELFFile
+    with Path(elf).open('rb') as stream:
+        image = ELFFile(stream)
+        found = [s for s in image.get_section_by_name('.symtab').iter_symbols()
+                 if s.name == 'wrapper_words' and s['st_info']['type'] == 'STT_OBJECT']
+        require(len(found) == 1 and found[0]['st_size'] == 16, f'{elf} has no single 16-byte wrapper_words table')
+        section = image.get_section(found[0]['st_shndx'])
+        data = section.data()[found[0]['st_value'] - section['sh_addr']:][:16]
+    return list(struct.unpack('<4I', data))
 
 
 def power_order(elf, cycles):
@@ -154,7 +175,7 @@ def validate(row, output):
              'reused_from': sorted({o['origin'] for o in equivalence['objects'].values()} - {'new'}),
              'check_cases': len(checked['cases']), 'power_order': None}
     if variant != 'provider-ready':
-        normal = [case for case in checked['cases'] if case.get('case') == 'normal']
+        normal = [case for case in checked['cases'] if case.get('case') == NORMAL[variant]]
         require(len(normal) == 1 and normal[0].get('cycles') == CYCLES[variant],
                 f'The host check\'s normal case did not run {CYCLES[variant]} ON/OFF cycles.')
         value['power_order'] = power_order(output / 'image.elf', CYCLES[variant])
@@ -162,6 +183,16 @@ def validate(row, output):
                                text=True, check=True).stdout.split()
         identity = 'id_read' in names or 'id_reads' in names
         require(identity == (variant == 'identity'), 'The image\'s identity reader does not match its variant.')
+        wrapper = 'wrapper_read' in names or 'wrapper_words' in names
+        require(wrapper == (variant == 'wrapper-read'), 'The image\'s wrapper reader does not match its variant.')
+        if variant == 'wrapper-read':
+            require(wrapper_words(output / 'image.elf') == WRAPPER_WORDS,
+                    'The wrapper_words table is not the four GPU wrapper words in their order.')
+            for case in checked['cases']:
+                reads = [[hex(a), 4] for a in WRAPPER_WORDS]
+                require(case['gpu_reads'] == reads[:len(case['gpu_reads'])],
+                        'A host-check case read a GPU-window address other than the wrapper words in order.')
+            value['wrapper_words'] = [hex(a) for a in WRAPPER_WORDS]
         require(all(not case['gpu_writes'] for case in checked['cases']), 'A host-check case wrote the GPU window.')
         if variant == 'power-only':
             require(all(not case['gpu_reads'] for case in checked['cases']), 'A host-check case read the GPU window.')

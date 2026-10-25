@@ -105,6 +105,7 @@ that [the runbook README](../board-runbooks/README.md) requires.
 | 11 | Returning, port 3-1 | GPU provider readiness (`apps/gpu-provider-ready/`, frozen image `3adfa4ad…`) | First board run of the CPU monitor that bundles 12 and 13 reuse; no GPU or PCK access | Supply verification and empty owner records |
 | 12 | Returning, port 3-1, after 11 | GPU TOP5 and CORE6 ON and OFF (`apps/gpu-power-id/`, `--power-only`) | First CORE6 policy and PWCR writes; no GPU register access | CORE6 status 8 after ON |
 | 13 | Returning, port 3-1, after 12 | GPU power and identity (`apps/gpu-power-id/`) | First GPU register read | BVNC |
+| 14 | Returning, port 3-1, after 11 | GPU wrapper reads (`apps/gpu-power-id/wrapper.c`) | Four GPU wrapper reads with CORE6 not acknowledged, the only GPU-window access | The wrapper's core-0 Q-Channel state, power-complete delays and core count, or a non-return |
 
 **S_TWI0 interrupt.** Bundle 6 records the TWI controller's interrupt flag
 and leaves out the distributor pending bit of S_TWI0's interrupt (SPI 203 in

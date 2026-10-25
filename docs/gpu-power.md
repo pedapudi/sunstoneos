@@ -411,78 +411,166 @@ domain never powered up, or it is not wired to this PPU.
 - **Interrupt masks.** `PPU_IMR` and `PPU_AIMR` mask interrupt events only
   (DEN0051E section 5.2.12); they do not gate transitions.
 
+### The delay-row probe ruled out the delay row
+
+The power-only image `ade71834…` ran on port 3-1 in a new lifetime, after a
+power removal, a cold DDR start and a passing provider-readiness run. Each
+ON wrote the vendor CORE6 delay row and read it back, and the client took
+a 35-word snapshot before the first ON and after it. The ON failed as
+before: step 38, the final status poll, read 0 until the client deadline
+(error 6, CANCELLED), and status stayed 0 for 51 µs after the delay row,
+after PWCR 0 and after policy 8.
+
+Snapshot 0, taken before any write, already held the vendor row in CORE6
+(`0x1f1f1f`, `0x1f1f`, `0x08080808`, `0x0808`, `8`) and the same row in
+TOP5. The row therefore holds the vendor values from reset, and writing it
+changed nothing. The delay-row explanation is ruled out.
+
+The CORE6 words, decoded with DEN0051E chapter 5:
+
+| Offset | Register | Before ON | After ON | Meaning |
+| --- | --- | --- | --- | --- |
+| `0x000` | `PPU_PWPR` | `0x8` | `0x8` | Static policy ON; dynamic transitions, lock and operating policy off |
+| `0x004` | `PPU_PMER` | `0x0` | `0x0` | Emulation off |
+| `0x008` | `PPU_PWSR` | `0x0` | `0x0` | Status OFF, no dynamic or lock status |
+| `0x010` | `PPU_DISR` | `0x1` | `0x1` | `DEVQACTIVE` of Q-Channel 0 is HIGH |
+| `0x014` | `PPU_MISR` | `0x0` | `0x0` | No `PCSMPACCEPT`, no `DEVQACCEPTn`, no `DEVQDENY` |
+| `0x018` | `PPU_STSR` | `0x0` | `0x0` | Reserved for a PPU with one Q-Channel |
+| `0x020` | `PPU_PWCR` | `0x101` | `0x0` | Reset value; the controller wrote 0 |
+| `0x024` | `PPU_PTCR` | `0x0` | `0x0` | No device handshake for WARM_RST |
+| `0x030` | `PPU_IMR` | `0x2` | `0x2` | Reset value: the static-accept event masked; static policy completion and static denial events enabled; lock and emulation bits reserved |
+| `0x034` | `PPU_AIMR` | `0x6` | `0x6` | Reset value: dynamic accept and deny masked, unsupported-policy event enabled, policy-completion events reserved |
+| `0x038` | `PPU_ISR` | `0x0` | `0x0` | No event: no static policy completion, no denial |
+| `0x03c` | `PPU_AISR` | `0x0` | `0x0` | No event: policy 8 is supported |
+| `0x160`, `0x164` | `PPU_EDTR0/1` | `0x0` | `0x0` | Reserved: no power-mode entry delays |
+| `0x170`, `0x174` | `PPU_DCDR0/1` | `0x1f1f1f`, `0x1f1f` | same | Device control delays (clock-to-reset, isolation-to-clock, reset-to-status and the two OFF delays) of 32 PPU cycles each |
+| `0xc00`, `0xc04`, `0xc10` | vendor | `0x08080808`, `0x0808`, `8` | same | Vendor row, outside DEN0051E |
+| `0xfb4` | `PPU_IDR1` | `0x2` | `0x2` | Only software device-delay control: no entry delays, no lock, no retention RAM registers, no policy-completion events in `PPU_AISR` |
+
+In TOP5's row, policy and status are 8, `PPU_DISR` is 0, `PPU_MISR` is
+`0x100` (its device's `DEVQACCEPTn` HIGH, so its Q-Channel is running) and
+PWCR is `0x101`. R_CCU `0x1ac` is 1 (PPU gate open) and `0x250` is 1. The
+GPU PLL word `0x0e0` reads `0x41104500`: PLL disabled. The GPU clock word
+`0xb20` changed from 0 to `0x83000000` (gate open, PERI0 400 MHz, divisor 0,
+update bit cleared) and `0xb24` from 0 to `0x10001` (bus gate open, reset
+released).
+
+CORE6's `PPU_DISR` of 1 means that the device side of its Q-Channel drives
+`DEVQACTIVE` HIGH: it signals that it needs the domain. The signal does not
+gate a transition to a higher-power mode (DEN0051E section 3.4.2), and
+dynamic transitions are off, so it does not explain the stall. It is
+already HIGH before any write, with the GPU clock gated and its reset
+asserted, while `DEVQACCEPTn` stays LOW and nothing denies. That pattern
+fits a Q-Channel interface whose outputs come from logic that does not
+run: an isolation clamp of an unpowered domain, or a wrapper input held in
+a fixed state. It also means that the channel is connected to something,
+because TOP5's channel, which is running and idle, reads `DEVQACTIVE` LOW.
+`PPU_ISR` stays 0 with the static-completion and denial events enabled, so
+no static transition completed and none was denied after reset.
+
+The vendor GPU source names that device side. `sunxi_dvfs_ctrl.c:113–150`
+defines the GPU wrapper registers at `0x01880000`, inside the GPU register
+window: at `+0x100` a power-complete delay with 16-bit up and down counts,
+and at `+0x104` a Q-Channel configuration with, for core 0 and core 1, a
+software-control enable and the `q_active`, `q_accept` and `q_deny`
+signals, and a core-0 clock enable. Only the optional DVFS controller uses
+that block, and none of the cached build files defines its build option
+`SUNXI_DVFS_CTRL_ENABLE`. These registers
+are the closest documented candidate for the logic that answers CORE6's
+Q-Channel and power-switch handshakes.
+
 ### The remaining explanations, ranked
 
-1. **This PPU does not sequence CORE6's power switches.** They may be
-   switched with TOP5 or from inside the GPU block. The evidence is that
-   the vendor device tree comments out both CORE6 nodes, the SCP skips only
-   CORE6's status poll, and BXM never reads CORE6. MISR bit 0, the
-   power-switch accept, read 0, which is consistent but proves nothing: the
-   bit also reads 0 between handshakes. CORE6 status would then never be a
-   usable acknowledgement, and the GPU core would be powered by TOP5 alone.
-   Testing that needs a GPU register access, outside the power-only rule.
-2. **The undocumented CORE6 delay words stop the power-switch sequence.**
-   DEN0051E Table 4-5 defines the device control delays as finite counts:
-   each delay is its field value plus one PPU clock cycle, and the values
-   range from 0 to 255, so each is 1 to 256 cycles. A missing value in the
-   standard words at `0x170` and `0x174` therefore cannot stall a transition
-   forever. Only the vendor words at `0xc00`, `0xc04` and `0xc10`, which
-   neither DEN0051E nor the PCK-600 TRM describes, could. The vendor table
-   pins a CORE6 row that no vendor path writes, and its reset values are
-   unknown. The next probe reads the row and then writes the vendor values.
+1. **The GPU wrapper answers CORE6's handshakes and has not been brought
+   up.** The wrapper's Q-Channel configuration and power-complete delay
+   suggest that it produces CORE6's accept signals. Its handshake may have
+   been held in reset when the PPU raised its request at power-up (the GPU
+   bus reset was asserted), or it may need the core-0 clock enable or a
+   power-complete delay that nothing has set. The evidence is the register
+   layout, `DEVQACTIVE` HIGH with no accept, and the earlier vendor-side
+   signs: the device tree comments out both CORE6 nodes, the SCP skips only
+   CORE6's status poll, and BXM never reads CORE6.
+2. **This PPU does not sequence CORE6's power switches at all.** They are
+   switched with TOP5 or by the GPU itself, and CORE6 status never shows
+   whether the GPU core is powered. This differs from the first explanation
+   only in whether software can complete the handshake.
 3. **The reset-time transition is wedged for good.** It may have started
    before TOP5 reached ON. A PPU in transition does not abort on a new
-   policy, and no software reset of the PPU is documented. The probe cannot
-   clear this state; if it holds, the delay-row write changes nothing and
-   the snapshot words look normal.
+   policy, and no software reset of the PPU is documented.
 4. **The PWCR write had no effect during the outstanding transition.**
-   DEN0051E calls that write UNPREDICTABLE. The PPU would then wait for the
-   GPU's accept, which MISR shows never came. This leaves the same
-   question as the first explanation: why the GPU's Q-Channel logic is
-   unpowered or unconnected.
+   DEN0051E calls that write UNPREDICTABLE. The PPU would then still wait
+   for the accept that `PPU_MISR` shows never came, which leaves the same
+   question as the first explanation.
 5. **GPU PLL, SCP mailbox, PRCM power switch, interrupt mask or PPU
-   clock.** None is supported. The GPU clock was in effect from PERI0, the
-   SCP block has no CORE6 step, the PRCM has no GPU switch, masks gate no
-   transition, and the PPU gate is open.
+   clock.** None is supported. The GPU clock ran from PERI0, the SCP block
+   has no CORE6 step, the PRCM has no GPU switch, masks gate no
+   transition, and the PPU gate is open. The delay row is ruled out above.
 
-### The next probe writes the vendor CORE6 row and snapshots the prerequisites
+### The next step reads the GPU wrapper, inside the GPU register window
 
-After admission, the controller writes the vendor CORE6 delay row through
-its CORE bank, each word read back, and then observes CORE status as after
-the other writes: from the power-up state it re-reads for up to 50 µs until
-status 8. The PWCR 0, policy 8 and clock sequence follows unchanged. The
-native adapter admits each row word only with its pinned value.
+No register outside the GPU register window that the documentation names
+can decide between these explanations. The coordinator accepted an
+exception to the power-only rule for four reads of the GPU wrapper, with
+TOP5 ON and no CORE6 acknowledgement, and the wrapper-read variant of the
+diagnostic makes them:
 
-The power-only client also takes a read-only snapshot before the first ON
-and after each ON attempt, including a failed or expired one. It reads 35
-words, none in the GPU register window:
+| Address | Vendor name | What it shows |
+| --- | --- | --- |
+| `0x01880104` | `pwr_qchan_cfg` | Whether core 0's Q-Channel is under software control, and the `q_active`, `q_accept`, `q_deny` and clock-enable states that CORE6's PPU sees |
+| `0x01880100` | `pwr_cmp_dly` | The power-complete up and down delays; 0 would mean an unset delay |
+| `0x01880018` | `mult_core_cnt` | The GPU core count, which ties core 0 to CORE6 |
+| `0x0188001c` | `mult_core_id` | The primary and secondary core identifiers |
 
-- the CORE6 PPU row: `PWPR`, `PMER`, `PWSR`, `DISR`, `MISR`, `STSR`,
-  `PWCR`, `PTCR`, `IMR`, `AIMR`, `ISR`, `AISR`, `EDTR0`, `EDTR1`, the delay
-  row and `IDR1`;
-- the TOP5 row: policy, status, `DISR`, `MISR`, `PWCR` and the delay row;
-- R_CCU `0x1ac` (PPU gate) and `0x250` (VDD isolation gates);
-- CCU `0x0e0` (GPU PLL), `0xb20` and `0xb24`.
+Each read is one ordered 32-bit Device-nGnRnE load after an identity
+mapping check and a deadline check. The variant runs the power-only ON
+sequence and waits at most 200 ms for status 8, so the reads come after the
+CORE6 PWCR and policy writes, the GPU clock and the reset release; it
+refuses them if the controller stopped before those steps. Before the first
+read it prints both snapshots, the controller's failure state and the
+CORE6 lines. Before each read it writes the read's number and a counter
+stamp into the progress record between the result header and the log, and
+prints a `GPU WRAPPER reading` line. The image makes no write in the window
+([wrapper-read variant](../apps/gpu-power-id/README.md#the-wrapper-read-variant-reads-four-gpu-wrapper-words)).
 
-Each page is checked as an identity Device-nGnRnE mapping first. The
-expected results are:
+The risk is a read that never completes. Both earlier images that did not
+return were built to read the GPU register window with TOP5 ON and CORE6
+never written, which leaves CORE6 in this same power-up state; the
+power/identity probe `fd3d5839…` read `0x01800020`, the core's identity
+register. Neither produced a report, and a first read that stalled is the
+leading explanation for both. A load that its target never answers stops
+the CPU without an exception; the monitor's 2 s timer returned neither
+image, nothing reached the host, and only a power removal recovered the
+board.
+The wrapper is a different block from the core registers. It holds the
+DVFS and power-sequencing controls for both cores, which the vendor DVFS
+code programs before it requests TOP5 runtime power, so it is plausibly
+outside CORE6. That is an inference from the vendor source, not a
+documented guarantee.
 
-- **Status 8 at the observation after the delay row, or later.** The
-  vendor row is the missing step. The row stays in the controller, and a
-  later change removes the diagnostic reads.
-- **A STATE failure at a delay-row readback.** A CORE6 row word that does
-  not hold the written value, for example because it is read-only, fails
-  its readback check before any PWCR or policy write. The run returns
-  status 1 at once; the failed step and its last value name the word, and
-  snapshot 1 shows the whole row.
-- **Status 0 throughout.** The first ON fails at the deadline as before.
-  The snapshots compare CORE6's row with TOP5's working row and show any
-  latched interrupt event. With the row in place, the first, third and
-  fourth explanations remain, and the next step is a decision about a GPU
-  register access with TOP5 alone.
+The outcomes:
 
-The CORE6 observations and the snapshot are diagnostic. They stay in the
-controller and client only until a board run selects an explanation.
+- **The reads return.** The values say whether core 0's Q-Channel needs
+  software control or a delay or clock setting. A later image could then
+  write the wrapper, which is a separate decision.
+- **The run does not return.** The wrapper is unreachable in this state
+  too. The lifetime ends without a report, and GPU core power needs vendor
+  information beyond the cached sources.
+
+A lower-risk variant would issue the reads from a DMA engine into DRAM, so
+that the CPU keeps running and can report a read that never completes. It
+needs its own design, and a stalled DMA read could still hold an
+interconnect path; it is not evaluated here.
+
+### The delay-row writes stay
+
+The controller keeps the vendor delay-row writes. The board read back the
+vendor values at reset in both CORE6's and TOP5's rows, so each write
+stores the value its register already holds, and all five passed their
+readbacks on the board. Keeping them costs five writes and five reads per
+ON. Removing them would change the controller, its native adapter, six
+model checks, the reference check and the source-tree check, and would
+rebuild both images. They leave with the other diagnostic steps once a
+board run selects an explanation.
 
 ### What each failed lifetime left
 
@@ -499,8 +587,12 @@ not reset the PCK or CCU.
   reports OFF. Nothing touched the GPU register window, and the PMIC
   provider reported no held, retained or failed request.
 
-The queue's quarantine closes both lifetimes. A power removal resets the
-PCK and CCU, and CORE6 returns to its power-up state. Neither run wrote
+- **Deadline at the final poll after the delay row (`ade71834`).** The
+  same state as the run before, with the vendor delay row rewritten to the
+  values it held from reset.
+
+The queue's quarantine closes these lifetimes. A power removal resets the
+PCK and CCU, and CORE6 returns to its power-up state. No run wrote
 storage or any persistent setting, so the next lifetime needs nothing
 beyond the power removal.
 
