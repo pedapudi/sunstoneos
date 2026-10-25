@@ -1,0 +1,1307 @@
+{
+ "binary": "rogue_36.56.104.183_v1.fw",
+ "sha256": "1db1c399c17401d1f79d46c880db81c724d748c784d4639433b076aba2f9c0d2",
+ "source": "https://gitlab.freedesktop.org/imagination/linux-firmware/-/raw/8a58f81883f7be458daa34e418cc4079f995b279/powervr/rogue_36.56.104.183_v1.fw (sources.lock.json entry gpu-firmware)",
+ "license": "LICENSE.powervr, which prohibits reverse engineering, decompilation and disassembly. This file contains no firmware bytes; its facts are derived from disassembly. See the license note in docs/vendor-firmware/gpu-and-npu-binaries.md.",
+ "analysis": "docs/vendor-firmware/gpu-and-npu-binaries.md",
+ "full_inventory": "~/.cache/sunstoneos/evidence/vendor-firmware-20261025/accel/gpu/",
+ "contents": "Command dispatch tables, firmware events built by the firmware, and the functions with established roles",
+ "magic": "0x2abc0000 in the upper half of each command word",
+ "kccb": {
+  "dispatcher": "0xc0006df0",
+  "table": "0xc0033db8",
+  "subtracted": "0x2abc0065",
+  "entries": 118,
+  "commands": [
+   {
+    "id": 101,
+    "name": "KCCB_CMD_KICK",
+    "handled": true,
+    "case_address": "0xc00071df",
+    "first_call": "0xc00069d8"
+   },
+   {
+    "id": 102,
+    "name": "KCCB_CMD_MMUCACHE",
+    "handled": true,
+    "case_address": "0xc00071a7",
+    "first_call": "0xc000300c"
+   },
+   {
+    "id": 103,
+    "name": "KCCB_CMD_BP",
+    "handled": true,
+    "case_address": "0xc00071ed",
+    "first_call": "0xc000f0dc"
+   },
+   {
+    "id": 104,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 105,
+    "name": "KCCB_CMD_SLCFLUSHINVAL",
+    "handled": true,
+    "case_address": "0xc00070f5",
+    "first_call": "0xc00030d4"
+   },
+   {
+    "id": 106,
+    "name": "KCCB_CMD_CLEANUP",
+    "handled": true,
+    "case_address": "0xc0007109",
+    "first_call": "0xc000ec68"
+   },
+   {
+    "id": 107,
+    "name": "KCCB_CMD_POW",
+    "handled": true,
+    "case_address": "0xc0006e7f",
+    "first_call": "0xc0001f9c"
+   },
+   {
+    "id": 108,
+    "name": "KCCB_CMD_ZSBUFFER_BACKING_UPDATE",
+    "handled": true,
+    "case_address": "0xc0007163",
+    "first_call": "0xc0001f68"
+   },
+   {
+    "id": 109,
+    "name": "KCCB_CMD_ZSBUFFER_UNBACKING_UPDATE",
+    "handled": true,
+    "case_address": "0xc00070bd",
+    "first_call": "0xc0001f68"
+   },
+   {
+    "id": 110,
+    "name": "KCCB_CMD_FREELIST_GROW_UPDATE",
+    "handled": true,
+    "case_address": "0xc0007067",
+    "first_call": "0xc0012cfc"
+   },
+   {
+    "id": 111,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 112,
+    "name": "KCCB_CMD_FREELISTS_RECONSTRUCTION_UPDATE",
+    "handled": true,
+    "case_address": "0xc0006fff",
+    "first_call": "0xc0013420"
+   },
+   {
+    "id": 113,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 114,
+    "name": "KCCB_CMD_NOTIFY_WRITE_OFFSET_UPDATE",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 115,
+    "name": "KCCB_CMD_HEALTH_CHECK",
+    "handled": true,
+    "case_address": "0xc0006ec3",
+    "first_call": "0xc0001fd4"
+   },
+   {
+    "id": 116,
+    "name": "KCCB_CMD_FORCE_UPDATE",
+    "handled": true,
+    "case_address": "0xc0006fe7",
+    "first_call": "0xc0006be8"
+   },
+   {
+    "id": 117,
+    "name": "KCCB_CMD_COMBINED_GEOM_FRAG_KICK",
+    "handled": true,
+    "case_address": "0xc0006fcf",
+    "first_call": "0xc00069d8"
+   },
+   {
+    "id": 118,
+    "name": "KCCB_CMD_OS_ONLINE_STATE_CONFIGURE",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 119,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 120,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 121,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 122,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 123,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 124,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 125,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 126,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 127,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 128,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 129,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 130,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 131,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 132,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 133,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 134,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 135,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 136,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 137,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 138,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 139,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 140,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 141,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 142,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 143,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 144,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 145,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 146,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 147,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 148,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 149,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 150,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 151,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 152,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 153,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 154,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 155,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 156,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 157,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 158,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 159,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 160,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 161,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 162,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 163,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 164,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 165,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 166,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 167,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 168,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 169,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 170,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 171,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 172,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 173,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 174,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 175,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 176,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 177,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 178,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 179,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 180,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 181,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 182,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 183,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 184,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 185,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 186,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 187,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 188,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 189,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 190,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 191,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 192,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 193,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 194,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 195,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 196,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 197,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 198,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 199,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 200,
+    "name": "KCCB_CMD_REGCONFIG",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 201,
+    "name": "KCCB_CMD_HWPERF_UPDATE_CONFIG",
+    "handled": true,
+    "case_address": "0xc0006fc1",
+    "first_call": "0xc00049d4"
+   },
+   {
+    "id": 202,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 203,
+    "name": "KCCB_CMD_HWPERF_CTRL_BLKS",
+    "handled": true,
+    "case_address": "0xc0006f99",
+    "first_call": "0xc0004c3c"
+   },
+   {
+    "id": 204,
+    "name": "KCCB_CMD_CORECLKSPEEDCHANGE",
+    "handled": true,
+    "case_address": "0xc0006f8d",
+    "first_call": "0xc0008c04"
+   },
+   {
+    "id": 205,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 206,
+    "name": "KCCB_CMD_LOGTYPE_UPDATE",
+    "handled": true,
+    "case_address": "0xc0006f7f",
+    "first_call": "0xc0001ec0"
+   },
+   {
+    "id": 207,
+    "name": "KCCB_CMD_PDVFS_LIMIT_MAX_FREQ",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 208,
+    "name": "KCCB_CMD_OSID_PRIORITY_CHANGE",
+    "handled": true,
+    "case_address": "0xc0006ec3",
+    "first_call": "0xc0001fd4"
+   },
+   {
+    "id": 209,
+    "name": "KCCB_CMD_STATEFLAGS_CTRL",
+    "handled": true,
+    "case_address": "0xc0006f63",
+    "first_call": "0xc0008114"
+   },
+   {
+    "id": 210,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 211,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 212,
+    "name": "KCCB_CMD_PDVFS_LIMIT_MIN_FREQ",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 213,
+    "name": "KCCB_CMD_PHR_CFG",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 214,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 215,
+    "name": "KCCB_CMD_WDG_CFG",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 216,
+    "name": "KCCB_CMD_COUNTER_DUMP",
+    "handled": false,
+    "case_address": "0xc00071fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 217,
+    "name": "KCCB_CMD_HWPERF_CONFIG_ENABLE_BLKS",
+    "handled": true,
+    "case_address": "0xc0006f01",
+    "first_call": "0xc0004ce0"
+   },
+   {
+    "id": 218,
+    "name": "KCCB_CMD_HWPERF_SELECT_CUSTOM_CNTRS",
+    "handled": true,
+    "case_address": "0xc0006f71",
+    "first_call": "0xc0004f50"
+   }
+  ],
+  "outside_table": [
+   {
+    "id": 220,
+    "name": "KCCB_CMD_HWPERF_CONFIG_BLKS",
+    "handled": false
+   }
+  ]
+ },
+ "power_subtypes": {
+  "offset_in_command": 8,
+  "handled": [
+   1,
+   2,
+   3,
+   4
+  ],
+  "names": [
+   "POW_OFF_REQ",
+   "POW_FORCED_IDLE_REQ",
+   "POW_NUM_UNITS_CHANGE",
+   "POW_APM_LATENCY_CHANGE"
+  ],
+  "branch_site": "0xc0006e84"
+ },
+ "client_kick": {
+  "dispatcher": "0xc000644c",
+  "table": "0xc0033d8c",
+  "task_bit": "0x8000",
+  "commands": [
+   {
+    "id": 201,
+    "name": "CCB_CMD_TYPE_GEOM",
+    "handled": true,
+    "case_address": "0xc00064b1",
+    "first_call": "0xc00119b0"
+   },
+   {
+    "id": 202,
+    "name": "CCB_CMD_TYPE_TQ_3D",
+    "handled": true,
+    "case_address": "0xc00064e7",
+    "first_call": "0xc001042c"
+   },
+   {
+    "id": 203,
+    "name": "CCB_CMD_TYPE_FRAG",
+    "handled": true,
+    "case_address": "0xc0006503",
+    "first_call": "0xc000f34c"
+   },
+   {
+    "id": 204,
+    "name": "CCB_CMD_TYPE_FRAG_PR",
+    "handled": true,
+    "case_address": "0xc0006499",
+    "first_call": "0xc0006320"
+   },
+   {
+    "id": 205,
+    "name": "CCB_CMD_TYPE_CDM",
+    "handled": true,
+    "case_address": "0xc0006513",
+    "first_call": "0xc00152c4"
+   },
+   {
+    "id": 206,
+    "name": "CCB_CMD_TYPE_TQ_TDM",
+    "handled": false,
+    "case_address": "0xc00065ad",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 207,
+    "name": "CCB_CMD_TYPE_FBSC_INVALIDATE",
+    "handled": false,
+    "case_address": "0xc00065ad",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 208,
+    "name": "CCB_CMD_TYPE_TQ_2D",
+    "handled": false,
+    "case_address": "0xc00065ad",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 209,
+    "name": "CCB_CMD_TYPE_PRE_TIMESTAMP",
+    "handled": true,
+    "case_address": "0xc0006521",
+    "first_call": "0xc0008b2c"
+   },
+   {
+    "id": 210,
+    "name": "CCB_CMD_TYPE_NULL",
+    "handled": true,
+    "case_address": "0xc0006575",
+    "first_call": null
+   },
+   {
+    "id": 211,
+    "name": "CCB_CMD_TYPE_ABORT",
+    "handled": true,
+    "case_address": "0xc000648d",
+    "first_call": "0xc0006320"
+   }
+  ]
+ },
+ "client_fence": {
+  "dispatcher": "0xc00056ec",
+  "table": "0xc0033d48",
+  "commands": [
+   {
+    "id": 212,
+    "name": "CCB_CMD_TYPE_FENCE",
+    "handled": true,
+    "case_address": "0xc0005793",
+    "first_call": null
+   },
+   {
+    "id": 213,
+    "name": "CCB_CMD_TYPE_UPDATE",
+    "handled": true,
+    "case_address": "0xc0005773",
+    "first_call": null
+   },
+   {
+    "id": 214,
+    "name": "CCB_CMD_TYPE_RMW_UPDATE",
+    "handled": true,
+    "case_address": "0xc0005773",
+    "first_call": null
+   },
+   {
+    "id": 215,
+    "name": "CCB_CMD_TYPE_FENCE_PR",
+    "handled": true,
+    "case_address": "0xc000584d",
+    "first_call": null
+   },
+   {
+    "id": 216,
+    "name": "CCB_CMD_TYPE_PRIORITY",
+    "handled": true,
+    "case_address": "0xc0005751",
+    "first_call": "0xc0008310"
+   },
+   {
+    "id": 217,
+    "name": "CCB_CMD_TYPE_POST_TIMESTAMP",
+    "handled": true,
+    "case_address": "0xc0005773",
+    "first_call": null
+   },
+   {
+    "id": 218,
+    "name": "CCB_CMD_TYPE_UNFENCED_UPDATE",
+    "handled": true,
+    "case_address": "0xc0005773",
+    "first_call": null
+   },
+   {
+    "id": 219,
+    "name": "CCB_CMD_TYPE_UNFENCED_RMW_UPDATE",
+    "handled": true,
+    "case_address": "0xc0005773",
+    "first_call": null
+   },
+   {
+    "id": 220,
+    "name": "",
+    "handled": false,
+    "case_address": "0xc00058fd",
+    "first_call": "0xc00084f8"
+   },
+   {
+    "id": 221,
+    "name": "CCB_CMD_TYPE_PADDING",
+    "handled": true,
+    "case_address": "0xc0005773",
+    "first_call": null
+   }
+  ]
+ },
+ "client_update": {
+  "dispatcher": "0xc0005d38",
+  "table": "0xc0033d70",
+  "commands": [
+   {
+    "id": 213,
+    "name": "CCB_CMD_TYPE_UPDATE",
+    "handled": true,
+    "case_address": "0xc0005f17",
+    "first_call": null
+   },
+   {
+    "id": 214,
+    "name": "CCB_CMD_TYPE_RMW_UPDATE",
+    "handled": true,
+    "case_address": "0xc0005e63",
+    "first_call": null
+   },
+   {
+    "id": 215,
+    "name": "CCB_CMD_TYPE_FENCE_PR",
+    "handled": false,
+    "case_address": "0xc0005de1",
+    "first_call": null
+   },
+   {
+    "id": 216,
+    "name": "CCB_CMD_TYPE_PRIORITY",
+    "handled": false,
+    "case_address": "0xc0005de1",
+    "first_call": null
+   },
+   {
+    "id": 217,
+    "name": "CCB_CMD_TYPE_POST_TIMESTAMP",
+    "handled": true,
+    "case_address": "0xc0005d8f",
+    "first_call": "0xc0008b2c"
+   },
+   {
+    "id": 218,
+    "name": "CCB_CMD_TYPE_UNFENCED_UPDATE",
+    "handled": true,
+    "case_address": "0xc0005f17",
+    "first_call": null
+   },
+   {
+    "id": 219,
+    "name": "CCB_CMD_TYPE_UNFENCED_RMW_UPDATE",
+    "handled": true,
+    "case_address": "0xc0005e63",
+    "first_call": null
+   }
+  ]
+ },
+ "fwccb_events_built": [
+  {
+   "id": 101,
+   "name": "FWCCB_CMD_ZSBUFFER_BACKING",
+   "built_in": [
+    "0xc0007df4"
+   ]
+  },
+  {
+   "id": 102,
+   "name": "FWCCB_CMD_ZSBUFFER_UNBACKING",
+   "built_in": [
+    "0xc0007ed0"
+   ]
+  },
+  {
+   "id": 103,
+   "name": "FWCCB_CMD_FREELIST_GROW",
+   "built_in": [
+    "0xc00124c4"
+   ]
+  },
+  {
+   "id": 104,
+   "name": "FWCCB_CMD_FREELISTS_RECONSTRUCTION",
+   "built_in": [
+    "0xc0013338"
+   ]
+  },
+  {
+   "id": 105,
+   "name": "FWCCB_CMD_CONTEXT_RESET_NOTIFICATION",
+   "built_in": [
+    "0xc0007f74",
+    "0xc0008018"
+   ]
+  },
+  {
+   "id": 106,
+   "name": "FWCCB_CMD_DEBUG_DUMP",
+   "built_in": [
+    "0xc000bcac",
+    "0xc000c3b4",
+    "0xc000cedc"
+   ]
+  },
+  {
+   "id": 107,
+   "name": "FWCCB_CMD_UPDATE_STATS",
+   "built_in": [
+    "0xc0008794"
+   ]
+  },
+  {
+   "id": 109,
+   "name": "FWCCB_CMD_REQUEST_GPU_RESTART",
+   "built_in": [
+    "0xc00080f4"
+   ]
+  },
+  {
+   "id": 112,
+   "name": "FWCCB_CMD_CONTEXT_FW_PF_NOTIFICATION",
+   "built_in": [
+    "0xc000b990"
+   ]
+  }
+ ],
+ "fwccb_events_never_built": [
+  108
+ ],
+ "event_post": "0xc0009298",
+ "functions": [
+  {
+   "address": "0x9fc02000",
+   "role": "TLB refill and exception vectors",
+   "basis": "refill reads the host page table through 0xcf000000 and programs RGX_CR_MIPS_ADDR_REMAP_RANGE_* for each refill; contains WAIT and ERET",
+   "frame_bytes": 0
+  },
+  {
+   "address": "0xbfc00000",
+   "role": "boot and NMI vector",
+   "basis": "assembly; Status.NMI selects the NMI path; reset path reads boot data at 0xbfc01000 and enters main",
+   "frame_bytes": 0
+  },
+  {
+   "address": "0xc000086c",
+   "role": "rgxfw_init.c: host alignment checks and init record parsing",
+   "basis": "asserts on host alignment-check array and trace buffer control",
+   "frame_bytes": 216
+  },
+  {
+   "address": "0xc00011b4",
+   "role": "firmware initialisation and OS state",
+   "basis": "reads sysinit/osinit, programs MTS thread and DM interrupt association, logs the private-data state and OS state transitions",
+   "frame_bytes": 40
+  },
+  {
+   "address": "0xc00016ec",
+   "role": "rgxfw_gpu_init.c: GPU unit initialisation after power-up or reset",
+   "basis": "writes RGX_CR_CLK_CTRL/CLK_CTRL2, SLC bypass, context-state registers; called from power and HWR paths",
+   "frame_bytes": 24
+  },
+  {
+   "address": "0xc0001c54",
+   "role": "trace buffer writer",
+   "basis": "writes N words into the trace buffer; wrappers at 0xc0001f34.. pass 0..n parameters",
+   "frame_bytes": 8
+  },
+  {
+   "address": "0xc0003148",
+   "role": "HWPerf counter block register access",
+   "basis": "112-entry table over counter block IDs 0x00..0x6f",
+   "frame_bytes": 0
+  },
+  {
+   "address": "0xc00050d4",
+   "role": "rgxfw_bif.c: memory-context activation",
+   "basis": "BIF catalogue base registers",
+   "frame_bytes": 0
+  },
+  {
+   "address": "0xc00056ec",
+   "role": "rgxfw_client_ccb.c: client CCB fence processing",
+   "basis": "jump table for client command types 212..221",
+   "frame_bytes": 392
+  },
+  {
+   "address": "0xc0005d38",
+   "role": "rgxfw_client_ccb.c: client CCB update processing",
+   "basis": "jump table for client command types 213..219; raises host interrupt",
+   "frame_bytes": 80
+  },
+  {
+   "address": "0xc000644c",
+   "role": "rgxfw_client_ccb.c: client CCB kick dispatch",
+   "basis": "jump table for client task types 201..211",
+   "frame_bytes": 80
+  },
+  {
+   "address": "0xc0006df0",
+   "role": "rgxfw_kernel_ccb.c: KCCB command dispatch",
+   "basis": "118-entry jump table for KCCB commands 101..218; unknown commands logged",
+   "frame_bytes": 72
+  },
+  {
+   "address": "0xc0007730",
+   "role": "rgxfw_irq.c: IRQ task",
+   "basis": "reads RGX_CR_EVENT_STATUS, clears events, schedules MTS tasks; no direct callers",
+   "frame_bytes": 64
+  },
+  {
+   "address": "0xc0008f88",
+   "role": "background task: KCCB processing",
+   "basis": "calls the KCCB dispatcher",
+   "frame_bytes": 64
+  },
+  {
+   "address": "0xc0009298",
+   "role": "FWCCB post and host interrupt",
+   "basis": "called by every FWCCB event emitter; writes RGX_CR_MIPS_WRAPPER_IRQ_STATUS",
+   "frame_bytes": 0
+  },
+  {
+   "address": "0xc000a690",
+   "role": "dust/unit power request",
+   "basis": "selects core through RGX_CR_XPU_BROADCAST, writes register 0x38, polls EVENT_STATUS against RGX_CR_TIMER, retries on abort",
+   "frame_bytes": 88
+  },
+  {
+   "address": "0xc000ab80",
+   "role": "dust-count change",
+   "basis": "POW NUM_UNITS_CHANGE handling",
+   "frame_bytes": 32
+  },
+  {
+   "address": "0xc000ad1c",
+   "role": "power state publication",
+   "basis": "writes power state 3 to firmware system data and raises the host interrupt",
+   "frame_bytes": 24
+  },
+  {
+   "address": "0xc000adb0",
+   "role": "idle and power-down readiness",
+   "basis": "logs readiness for power-down and signals the host",
+   "frame_bytes": 64
+  },
+  {
+   "address": "0xc000b418",
+   "role": "OS power-off request",
+   "basis": "POW OFF_REQ handling",
+   "frame_bytes": 32
+  },
+  {
+   "address": "0xc000c3b4",
+   "role": "rgxfw_hwr.c: hardware recovery",
+   "basis": "lockup analysis, soft reset, SLC/MMU flush, FWCCB context-reset and restart events",
+   "frame_bytes": 112
+  },
+  {
+   "address": "0xc000ee74",
+   "role": "rgxfw_gpu_memory.c",
+   "basis": "GPU memory helpers",
+   "frame_bytes": 32
+  },
+  {
+   "address": "0xc0013420",
+   "role": "rgxfw_pm.c: free-list reconstruction",
+   "basis": "",
+   "frame_bytes": 64
+  },
+  {
+   "address": "0xc0013ff0",
+   "role": "rgxfw_pm.c: parameter manager",
+   "basis": "",
+   "frame_bytes": 88
+  },
+  {
+   "address": "0xc0016df4",
+   "role": "main (.text.startup)",
+   "basis": "enables RGX_CR_MIPS_WRAPPER_IRQ_ENABLE, calls the initialisation at 0xc00011b4",
+   "frame_bytes": 24
+  }
+ ],
+ "function_count": 254
+}

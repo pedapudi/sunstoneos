@@ -1,0 +1,313 @@
+{
+ "binaries": [
+  {
+   "name": "libVIPhal.so",
+   "sha256": "3ed5357b26bd6c4fb68fbdc0b21d637227dda711d1fe67b9e28accdc48bb11f2",
+   "source": "https://github.com/ZIFENG278/ai-sdk/tree/fc90006d0f6569da2f6726c2d8395877686f5aca/viplite-tina/lib/aarch64-none-linux-gnu/v2.0/libVIPhal.so"
+  },
+  {
+   "name": "libNBGlinker.so",
+   "sha256": "82f049b0ed0065dd4d443e37eeb1edfcbef24457c9c24e36170d64d5b748ca66",
+   "source": "https://github.com/ZIFENG278/ai-sdk/tree/fc90006d0f6569da2f6726c2d8395877686f5aca/viplite-tina/lib/aarch64-none-linux-gnu/v2.0/libNBGlinker.so"
+  }
+ ],
+ "analysis": "docs/vendor-firmware/gpu-and-npu-binaries.md",
+ "full_inventory": "~/.cache/sunstoneos/evidence/vendor-firmware-20261025/accel/npu/",
+ "kernel_driver_source": "https://github.com/orangepi-xunlong/linux-orangepi/tree/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/npu/aw_nna_vip/vip2",
+ "labels": {
+  "observed": "observed in the binary",
+  "source": "matches driver source",
+  "board": "confirmed on a board",
+  "inferred": "inferred"
+ },
+ "binary_ids": {
+  "libVIPhal.so": "3ed5357b26bd6c4fb68fbdc0b21d637227dda711d1fe67b9e28accdc48bb11f2",
+  "libNBGlinker.so": "82f049b0ed0065dd4d443e37eeb1edfcbef24457c9c24e36170d64d5b748ca66",
+  "nbinfo": "5ef6bb4f1590e0d1b9603506574bee09321d6159e32a6b3aaef66148085b2639"
+ },
+ "address_note": "libVIPhal/libNBGlinker: text and rodata virtual address equals file offset; nbinfo: file offset = VA - 0x400000.",
+ "constants": [
+  {
+   "constant": "/dev/vipcore",
+   "location": "libVIPhal.so 3ed5357b file 0x7120",
+   "meaning": "device node opened O_RDWR",
+   "label": "observed"
+  },
+  {
+   "constant": "30000 (0x7530)",
+   "location": "libVIPhal.so 3ed5357b 0x5c60; vip2/os/linux/vip_drv_os.h:59",
+   "meaning": "only ioctl request number",
+   "label": "source"
+  },
+  {
+   "constant": "0x1d",
+   "location": "libVIPhal.so 3ed5357b 0x5c50",
+   "meaning": "highest accepted driver command (29)",
+   "label": "observed"
+  },
+  {
+   "constant": "0x20003",
+   "location": "libVIPhal.so 3ed5357b 0x3764-0x3774; libNBGlinker.so 82f049b0 vip_get_version 0xe3b4",
+   "meaning": "VIPLite API version required by viphal_init and returned by vip_get_version",
+   "label": "observed"
+  },
+  {
+   "constant": "0x1000003b",
+   "location": "libVIPhal.so 3ed5357b file 0x921c; vip2/inc/vip_feature_database.h:161",
+   "meaning": "A733 customer ID (feature-db pid)",
+   "label": "source"
+  },
+  {
+   "constant": "0x9202",
+   "location": "libVIPhal.so 3ed5357b file 0x9220; vip_feature_database.h:162",
+   "meaning": "A733 chip revision in feature db",
+   "label": "source"
+  },
+  {
+   "constant": "0x10000016 / 0x9003",
+   "location": "libVIPhal.so 3ed5357b file 0x91d4; vip_feature_database.h:110-111; v2/network_binary.nb byte 8",
+   "meaning": "other VIP (6 NN, 2 TP); target of the SDK v2 sample model",
+   "label": "observed"
+  },
+  {
+   "constant": "0x10000021 / 0x9113",
+   "location": "libVIPhal.so 3ed5357b file 0x91f8; vip_feature_database.h:136-137",
+   "meaning": "other VIP (12 NN, 0 TP)",
+   "label": "source"
+  },
+  {
+   "constant": "0xee / 0x8303",
+   "location": "libVIPhal.so 3ed5357b file 0x91b0; vip_feature_database.h:85-86",
+   "meaning": "other VIP (3 NN, 1 TP, no MMU)",
+   "label": "source"
+  },
+  {
+   "constant": "0x03600000 len 0x1000",
+   "location": "sun60iw2p1.dtsi NPU node; vip2/os/linux/vip_drv_device_driver.c:927,987",
+   "meaning": "NPU register window; absent from all user binaries (the 4-byte pattern at libNBGlinker file 0xd3e is unaligned .dynstr text)",
+   "label": "source"
+  },
+  {
+   "constant": "+0x020 +0x024 +0x028 +0x030",
+   "location": "libNBGlinker.so 82f049b0 0x1d644-0x1d680, 0x1d890-0x1d8cc (via viphal_read_reg); vip_drv_hardware.c:931-934",
+   "meaning": "identity registers read for the capture header",
+   "label": "observed"
+  },
+  {
+   "constant": "+0x078 +0x07c",
+   "location": "vip2/task/vip_drv_task_debug.c:267-268,332-333",
+   "meaning": "total and idle cycle counters (profiling)",
+   "label": "source"
+  },
+  {
+   "constant": "+0x040 +0x044",
+   "location": "vip2/task/vip_drv_task_debug.c:272-273",
+   "meaning": "total read/write byte counters (profiling)",
+   "label": "source"
+  },
+  {
+   "constant": "+0x5c0 +0x5d0",
+   "location": "vip2/task/vip_drv_task_debug.c:275-276",
+   "meaning": "OCB read/write counters (ocb_counter=1)",
+   "label": "source"
+  },
+  {
+   "constant": "+0x438 +0x45c",
+   "location": "vip2/vip_drv_debug.c:1079,1086",
+   "meaning": "MC and shader cycle counters (hang dump)",
+   "label": "source"
+  },
+  {
+   "constant": "+0x660 +0x664 +0x668 +0x66c",
+   "location": "vip2/vip_drv_debug.c:103-111,1033-1035",
+   "meaning": "front-end DMA state/address/low/high debug (hang dump)",
+   "label": "source"
+  },
+  {
+   "constant": "+0x450",
+   "location": "vip2/vip_drv_debug.c:157-168",
+   "meaning": "front-end stack/link debug read",
+   "label": "source"
+  },
+  {
+   "constant": "+0x348 +0x358",
+   "location": "vip2/task/vip_drv_task_common.c:573; vip_drv_fusa.c:86-105",
+   "meaning": "error status words",
+   "label": "source"
+  },
+  {
+   "constant": "+0x380 +0x384 +0x3b8",
+   "location": "vip2/vip_drv_debug.c:355,406,409",
+   "meaning": "MMU debug/status reads",
+   "label": "source"
+  },
+  {
+   "constant": "+0x394 = 1",
+   "location": "vip2/vip_drv_hardware.c:315",
+   "meaning": "written before command-model MMU setup (not the PD path used on A733)",
+   "label": "source"
+  },
+  {
+   "constant": "0x0e4f / 0x0e50",
+   "location": "vip2/vip_drv_device.c:246-248; none in user binaries",
+   "meaning": "AXI SRAM base/end states, omitted when AXI SRAM size is 0",
+   "label": "source"
+  },
+  {
+   "constant": "0x08000000 | count<<16 | state",
+   "location": "vip2/vip_drv_hardware.c:557 (event form)",
+   "meaning": "LOAD_STATE (opcode 1 in bits 31:27); register byte offset = state x 4 (inferred)",
+   "label": "source"
+  },
+  {
+   "constant": "0x10000000",
+   "location": "vip_drv_device.c:262; vip_drv_hardware.c:335,650; task_schedule.c:524; libNBGlinker.so 82f049b0 0xc93c, 0x1d41c",
+   "meaning": "END (opcode 2)",
+   "label": "source"
+  },
+  {
+   "constant": "0x18000000",
+   "location": "vip_drv_hardware.c:571 (3<<27); libNBGlinker.so 82f049b0 0xc558, 0xc8a8 (0x18000001)",
+   "meaning": "NOP (opcode 3)",
+   "label": "source"
+  },
+  {
+   "constant": "0x38000000 | time",
+   "location": "vip_drv_hardware.c:574,587 (7<<27); libNBGlinker.so 82f049b0 0x297c",
+   "meaning": "WAIT (opcode 7); wait-link loop compiled only for TASK_PARALLEL_ASYNC",
+   "label": "source"
+  },
+  {
+   "constant": "0x40000000 | prefetch",
+   "location": "vip_drv_hardware.c:527,592 (8<<27 | 65535); libNBGlinker.so 82f049b0 0xc7b0 (0x4000ffff)",
+   "meaning": "LINK (opcode 8)",
+   "label": "source"
+  },
+  {
+   "constant": "0x48000000",
+   "location": "vip_drv_device.c:237,260; vip_drv_mmu.c:1158; task_schedule.c:130,502; libNBGlinker.so 82f049b0 0xc38c, 0xc900, 0xcaec, 0x1d408; libVIPhal.so 3ed5357b 0x4e44",
+   "meaning": "STALL (opcode 9), paired with the semaphore load-state",
+   "label": "source"
+  },
+  {
+   "constant": "0x68000000 | mask, 0x6800ffff",
+   "location": "vip_drv_hardware.c:540-544; task_schedule.c:742 (patch); libNBGlinker.so 82f049b0 0xbf3c, 0xbf54",
+   "meaning": "CHIP_ENABLE (opcode 13): select cores; all-cores form",
+   "label": "source"
+  },
+  {
+   "constant": "0x08010e02 + 0x30000701 / 0x701",
+   "location": "vip_drv_device.c:235,258-259; vip_drv_mmu.c:1156-1157; libNBGlinker.so 82f049b0 0xc388, 0xc8f0; libVIPhal.so 3ed5357b 0x4e40",
+   "meaning": "semaphore token (state 0x0e02) FE->PE, precedes STALL; 0x3000 bits in the tail form",
+   "label": "source"
+  },
+  {
+   "constant": "0x08010e03 + 0xc23",
+   "location": "task_schedule.c:504-505; libNBGlinker.so 82f049b0 0xc380, 0xc90c, 0xcafc",
+   "meaning": "cache flush state before completion",
+   "label": "source"
+  },
+  {
+   "constant": "0x08010e01 + 0x44",
+   "location": "vip_drv_hardware.c:557 (cmd_event, block 1<<6, IRQ_EVENT_ID 4); libNBGlinker.so 82f049b0 0xc988, 0xc9bc",
+   "meaning": "EVENT 4 from PE: completion interrupt bit 4 (SunstoneOS uses event 0, 0x40)",
+   "label": "source"
+  },
+  {
+   "constant": "0x08010061 + 0xffffff7f",
+   "location": "vip_drv_mmu.c:1154-1155",
+   "meaning": "MMU TLB flush state prepended when tables change",
+   "label": "source"
+  },
+  {
+   "constant": "0x0801022c + 0x1f",
+   "location": "vip_drv_device.c:239; libNBGlinker.so 82f049b0 0xc378, 0xcaf4",
+   "meaning": "state 0x022c = 0x1f in init stream and the user command prefix",
+   "label": "source"
+  },
+  {
+   "constant": "0x0801006b + 0xfffe0000, 0x08010e12 + 0x490000",
+   "location": "vip_drv_hardware.c:326-329 (command-model MMU setup); libNBGlinker.so 82f049b0 0x1d3f4-0x1d41c",
+   "meaning": "user library holds a copy of the command-model MMU setup stream (used for capture replay; inferred)",
+   "label": "observed"
+  },
+  {
+   "constant": "0x0801028a, 0x08010e13, 0x08010e12, 0x08010e55 x8, 0x08010e21, 0x08010e4e",
+   "location": "vip_drv_device.c:210-242",
+   "meaning": "initialization stream states (see reference-backsolve-npu.md step 18)",
+   "label": "source"
+  },
+  {
+   "constant": "0x08010e4c, 0x08010e5e, 0x08010e5a, 0x08010428, 0x08010429",
+   "location": "libVIPhal.so 3ed5357b viphal_hardware_trsp2_loadstate 0x4d04-0x4d24",
+   "meaning": "load-states emitted for NN transpose phase 2 (meaning of each state unknown)",
+   "label": "observed"
+  },
+  {
+   "constant": "0x08010240, 0x08010e1c, 0x08010e55, 0x08010429, 0x0804d800",
+   "location": "libNBGlinker.so 82f049b0 0xcf9c, 0x1e7f8, 0x1e7f0, 0x1e800/0x1a23c, 0xb410",
+   "meaning": "other linker-generated load-states (0x0804d800 = four states from 0xd800); meaning unknown",
+   "label": "observed"
+  },
+  {
+   "constant": "VPMN",
+   "location": "libNBGlinker.so 82f049b0 strings 0x1f878, 0x1fce8; byte compare 0x6458-0x6474 (fixed) and 0x85a0-0x85b4 (directory)",
+   "meaning": "NBG magic",
+   "label": "observed"
+  },
+  {
+   "constant": "0x1001e",
+   "location": "v3/network_binary.nb byte 4; nbinfo 5ef6bb4f 0x40a132 (nbg_fmt_read_dynamic), 0x40263f (print_operation)",
+   "meaning": "A733 fixed-header format version",
+   "label": "observed"
+  },
+  {
+   "constant": "0x20000",
+   "location": "libNBGlinker.so 82f049b0 0x1319c; nbinfo 5ef6bb4f nbg_parser_init 0x4052ed-0x405318",
+   "meaning": "directory format version; nbinfo accepts <=0x10020 or exactly 0x20000",
+   "label": "observed"
+  },
+  {
+   "constant": "0x10014",
+   "location": "v2/network_binary.nb byte 4",
+   "meaning": "older format of the non-A733 v2 sample",
+   "label": "observed"
+  },
+  {
+   "constant": "0x1001b, 0x1001f",
+   "location": "libNBGlinker.so 82f049b0 0x6b94, 0x6bd0 (and ~60 other 0x10002-0x10020 compares)",
+   "meaning": "per-minor-version field guards in the fixed-header reader (inferred)",
+   "label": "inferred"
+  },
+  {
+   "constant": "44 (0x2c)",
+   "location": "libNBGlinker.so 82f049b0 0x8708",
+   "meaning": "directory section-record size check",
+   "label": "observed"
+  },
+  {
+   "constant": "0xedb88320",
+   "location": "libNBGlinker.so 82f049b0 0x12bc0 (routine 0x12b70)",
+   "meaning": "CRC-32 reflected polynomial (docs/nbg-checksum.md)",
+   "label": "observed"
+  },
+  {
+   "constant": "0x44504e56",
+   "location": "libNBGlinker.so 82f049b0 0x1ebe8",
+   "meaning": "ASCII \"VNPD\" tag (likely NPD/layer-dump record; inferred)",
+   "label": "inferred"
+  },
+  {
+   "constant": "0xabbaf00d, 0x5a5a5a5a, 0xcdcdcdcd",
+   "location": "libVIPhal.so 3ed5357b viphal_heap_* 0x5168, 0x50b0, 0x4fe4",
+   "meaning": "user heap guard/fill patterns",
+   "label": "observed"
+  },
+  {
+   "constant": "0x20000 / 0x10000 chunking",
+   "location": "libNBGlinker.so 82f049b0 0x122e8, 0x125c4 around trsp2 calls 0x12538/0x125ec",
+   "meaning": "SRAM-sized chunking for runtime-generated transpose copies (inferred: SRAM preload)",
+   "label": "inferred"
+  }
+ ]
+}
