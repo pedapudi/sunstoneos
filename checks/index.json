@@ -2868,6 +2868,33 @@
   "summary": "",
   "usb": false
  },
+ "ddr-capture-host.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/dram-fast-boot.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "build",
+   "--evidence"
+  ],
+  "summary": "Run the DRAM capture runner against a modeled FEL device and lock.",
+  "usb": true
+ },
+ "ddr-capture.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/dram-fast-boot.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "build"
+  ],
+  "summary": "Check the DRAM capture reader's register accesses against its stage tables.",
+  "usb": true
+ },
  "ddr-host-retention.py": {
   "cache_areas": [],
   "docs": [],

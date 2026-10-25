@@ -116,5 +116,55 @@
   "selected_rail_error": "POWER SETTING ERROR!",
   "package_errors": ["bad magic", "bad checksum", "Loading boot-pkg fail"],
   "handoff_failure": "Jump to second boot failed! Stay in the loop..."
+ },
+
+ "dram_training_controls": {
+  "source": "boot0 829ea8e3; derivation in docs/designs/dram-fast-boot.md",
+  "phy": {
+   "base": "0x0a900000",
+   "csr_address": "base + 2 * csr",
+   "interface": "Synopsys DesignWare LPDDR4/5 PHY (inferred)",
+   "run_routine": "0x4f47c: MicroContMuxSel 0xd0000=1; MicroReset 0xd0099=9,1,0; poll UctShadowRegs 0xd0004 bit0; message 0xd0032|0xd0034<<16; ack DctWriteProt 0xd0031; 7 = success",
+   "message_block": "DMEM csr 0x58000 (0x0a9b0000); SequenceCtrl at byte 0x10 from dram_tpr10[28:16] (0x31f when zero); HdtCtrl 0xff at byte 0x12; writer 0x59d00",
+   "blocks_referenced": [
+    "0x10000-0x13000 DBYTE0-3",
+    "0x20000 MASTER",
+    "0x30000/0x31000",
+    "0x41000 ACSM",
+    "0x58000 DMEM",
+    "0x90000 INITENG",
+    "0xa0000 (+0x1000 per P-state)",
+    "0xc0000 DRTUB",
+    "0xd0000 APBONLY"
+   ]
+  },
+  "training_order": "dram_tpr13 bit2 set: P-states 1,2,3 then 0 (0x559ac); clear: P-state 0 only (0x560f0); every path runs 0x4f47c for P-state 0",
+  "observed_time_ms": {
+   "logs": 58,
+   "pstate1_1165MHz_with_setup": 151,
+   "pstate2_816MHz": 177,
+   "pstate3_408MHz": 346,
+   "pstate0_2040MHz": 4414,
+   "size_and_report": 4,
+   "drive_info_to_size": 5094,
+   "source": "firmware.log files under ~/.cache/sunstoneos/evidence, 2026-10-15 to 2026-10-25, medians"
+  },
+  "tpr_bits": {
+   "dram_tpr13 bit0": "fixed configuration; skips the rank/width/size scan 0x57e44 (0x49c50)",
+   "dram_tpr13 bit2": "train four P-states (0x55990); also gates 0x581b4 after init (0x57a08)",
+   "dram_tpr13 bit6": "two channels (0x578ac)",
+   "dram_tpr13 bit14": "skip the rank/width scan inside the auto scan (0x57e56)",
+   "dram_tpr10 bits28:16": "SequenceCtrl, the firmware's training-step bitmap (0x59d6a)",
+   "dram_tpr10 bit29": "save trained Vref after init: 0x576e4 packs PHY csr 0x4e/0x4f of 9 lanes x 4 blocks into words 32-49, MR14/MR15 into words 50-51; cleared unless bit30 (0x49c82)",
+   "dram_tpr1 bit31": "vendor 'not training' flag set by U-Boot; P-state 0 message block takes MR14/MR15 from words 50-51 (0x59ec4, 0x5a08e); SequenceCtrl unchanged",
+   "dram_para2 bit31": "size fixed in bits 30:16; otherwise 0x4b74c measures it (0x49ca0)"
+  },
+  "boot_parameter_region": {
+   "sectors": "24496-24499 (table 0x5e7cc gives 24504, minus 8); read by 0x49ab4 into 0x82df8",
+   "dram_block": "offset 0x400 (0x831f8), 96 words reserved; passed to init_DRAM by main 0x5e216",
+   "checks": "magic 'bootpara'; boot0 header checksum at +0x14; additive checksum over 2048 bytes with the field taken as 0x5f0a6c39 (0x49a44); chip ID = SID 0x03006200-0x0300620c at +0x600 (0x5d9d8)",
+   "on_failure": "rebuild from header block 0x47038, transfer_flag bit0 set (0x49b00)",
+   "writer": "vendor U-Boot b791be84 sprite/sunxi_boot_param.c lines 42-52 and 97-113 (normal-boot writer returns early); drivers/sunxi_flash/mmc/sdmmc.c lines 306-333"
+  }
  }
 }

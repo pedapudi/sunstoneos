@@ -310,6 +310,24 @@ record are tabulated in [`boot0-tables.json`](data/boot0-tables.json). SunstoneO
 reruns this path through its wrapper; it does not reimplement training
 ([dram.md](../dram.md), [boot.md](../boot.md)).
 
+The trained block stays in memory: boot0 updates it in its boot parameter
+buffer at `0x831f8` and copies it to the monitor header, and it writes
+nothing to the card (observed, `829ea8e3@0x5e2c4`). The PHY at `0x0a900000`
+follows the Synopsys DesignWare LPDDR4/5 PHY interface, and boot0 runs the
+PHY's training firmware once per P-state, in the order 1165, 816, 408 and
+2040 MHz; the 2040 MHz run takes 4.4 of the 5.1 s (inferred from the mailbox
+routine `829ea8e3@0x4f47c` and the message block at `@0x59d00`; timing
+confirmed on both boards in 58 logs). `dram_tpr13` bit 2 selects the four
+P-states and, when clear, P-state 0 alone (observed, `@0x55990`). boot0 also
+reads a 2 KiB boot parameter region from card sectors 24,496–24,499 and, when
+it is valid, trains from its parameter block instead of the selected set; the
+vendor U-Boot writes that region only in its card-production path. With
+`dram_tpr10` bit 29 boot0 saves trained Vref values into words 32–51 of the
+block, and `dram_tpr1` bit 31 reuses them as training inputs; no parameter
+skips the training run (observed, `@0x49ab4`, `@0x576e4`, `@0x5a08e`). The
+[DRAM fast-boot design](../designs/dram-fast-boot.md) gives the derivation,
+the timing table and the options.
+
 ### What boot0 parses from the boot package
 
 The package parser at `0x5dc80` loads a TOC1 container and verifies its
