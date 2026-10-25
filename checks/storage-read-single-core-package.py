@@ -20,8 +20,11 @@ def run(image,manifest,fixture,native,out,clang,lld):
         else:raise AssertionError(name)
     template=(fixture/'session-template.bin').read_bytes()
     assert int.from_bytes(template[532:536],'little')==2
-    # Generic board packaging retains its native mode1 contract.
-    try:prep.board.session_check(template[:592])
+    # Generic board packaging retains its native mode1 contract. Since
+    # 5fd948d4 session_check admits modes 1 and 2 by default, and the board's
+    # prepare() passes (1,) for every profile except the board's own
+    # single-core one (apps/board/prepare.py, prepare); check that rule.
+    try:prep.board.session_check(template[:592],usb_reference_modes=(1,))
     except ValueError:refused.append('generic-board-rom-mode')
     else:raise AssertionError('Generic board accepted ROM mode')
     admission=json.loads((fixture/'admission.json').read_text())

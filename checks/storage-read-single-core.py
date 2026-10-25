@@ -134,7 +134,10 @@ class Machine:
         return self.cpu.reg_read(UC_ARM64_REG_X0)
 def run(image,session,out):
     out.mkdir(parents=True,exist_ok=False)
-    e=harness.Image(image);e.path=image;e.ops={};raw=session.read_bytes();results={}
+    # The image links two private structures named profile (drivers/power/
+    # a733_pmic.c and a733_power_domains.c); read only the layouts used here.
+    e=harness.Image(image,{'a733_native_usb','board_application','board_provider','storage_read_application',
+                           'storage_read_consumer','storage_read_slot'});e.path=image;e.ops={};raw=session.read_bytes();results={}
     disassembly=subprocess.check_output(['/usr/lib/llvm-21/bin/llvm-objdump','-d','--no-show-raw-insn',str(image)],text=True)
     for line in disassembly.splitlines():
         match=re.match(r'^\s*([0-9a-f]+):\s+(.+)$',line)
