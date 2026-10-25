@@ -6,7 +6,8 @@
 #define SRAM_ROUTING UINT32_C(0x03000008)
 static int readable(uintptr_t address)
 {
-    if (address==0x07090160 || address==PCK || address==PCK+8 || address==SRAM_ROUTING) return 1;
+    if (address==0x07090160 || address==PCK || address==PCK+8 || address==SRAM_ROUTING ||
+        address==0x0300624c) return 1; /* SID speed-bin word. */
     if (address<CCU || address>=CCU+0x2000) return 0;
     switch(address-CCU) {
     case 0:case 0xa0:case 0xa8:case 0xac:case 0x2a0:case 0x2a4:case 0x2a8:case 0x2ac:case 0x2b0:
@@ -54,8 +55,9 @@ int a733_npu_platform_native_write(void *cookie,uintptr_t address,uint32_t value
         uint32_t mask=UINT32_C(0xe870ff02); /* PLL/LDO/lock enable, output, factors. */
         if ((value&LOCK) || ((old^value)&~(mask|LOCK))) return 0;
         if (old&~value&UINT32_C(0xc0000000)) return 0; /* Never disable PLL/LDO. */
-        if (((old^value)&0x0070ff02) &&
-            ((old&0x08000000) || (value&0x0070ff02)!=0x00305100)) return 0;
+        /* Factors change only to the 492 or 852 MHz profile, output closed. */
+        if (((old^value)&0x0070ff02) && ((old&0x08000000) ||
+            ((value&0x0070ff02)!=0x00305100 && (value&0x0070ff02)!=0x00104600))) return 0;
         if ((value&0x08000000) && (old&0xf0000000)!=0xf0000000) return 0;
         break;
     }

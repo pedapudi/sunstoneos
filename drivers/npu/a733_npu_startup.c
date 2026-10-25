@@ -13,15 +13,32 @@
 #define SETTLE_US 2000u
 /* PLL_NPU at CCU+0x2a0 (A733 User Manual V1.00 §4.1.6.56-60): enable 31, LDO
  * 30, lock enable 29, LOCK status 28, output gate 27, factors N 8-15, P0 20-22
- * and M1 1. The profile is N=82, M1=1, P0=4: a 1,968 MHz oscillator divided to
- * 492 MHz (docs/npu-pll.md). */
+ * and M1 1. Two profiles from a 24 MHz reference (docs/npu-pll.md): N=82,
+ * P0=4, M1=1, a 1,968 MHz oscillator divided to 492 MHz; and N=71, P0=2,
+ * M1=1, a 1,704 MHz oscillator divided to 852 MHz. DCDC2 stays at 800 mV. */
 #define PLL (CCU+0x2a0)
 #define PLL_LOCK BIT(28)
 /* The board kernel preserves this inherited reserved bit with every PLL RMW.
  * Its function is unspecified; it is not a writable factor or SDM control. */
 #define PLL_INHERITED BIT(24)
-#define PLL_ENABLED UINT32_C(0xe0305100) /* After the enable table, LOCK clear. */
-#define PLL_OPEN UINT32_C(0xe8305100)    /* With the output gate open. */
+#define PLL_FACTORS UINT32_C(0x0070ff02)
+#define FACTORS_492 UINT32_C(0x00305100)
+#define FACTORS_852 UINT32_C(0x00104600)
+#define PLL_ENABLED(f) (UINT32_C(0xe0000000)|(f)) /* After the enable table, LOCK clear. */
+#define PLL_OPEN(f) (UINT32_C(0xe8000000)|(f))    /* With the output gate open. */
+/* SID word 0x0300624c: the speed-bin code is bits 23:16 (dvfs_bak) when
+ * nonzero, else bits 15:8 (dvfs_ori), mapped to an operating-point column by
+ * vf_mapping_table (sun60iw2p1-cpu-vf.dtsi lines 3-17, linux-orangepi
+ * 2ac08e8c). The NPU table's 852 MHz row (lines 2069-2091) lists 800 mV in
+ * both oscillator columns of vf0200 (code 0x02), vf0201 (0x12), vf0400
+ * (0x04), vf0500 (0x05) and vf0501 (0x15). Every other code, including an
+ * unprogrammed 0, has no column, another voltage or no 852 MHz point. */
+#define SID_DVFS UINT32_C(0x0300624c)
+static int bin_allows_852(uint32_t word)
+{
+    unsigned code=(word>>16)&255;if(!code)code=(word>>8)&255;
+    return code==0x02 || code==0x12 || code==0x04 || code==0x05 || code==0x15;
+}
 /* Shared SRAM routing, SYSCTRL 0x03000008 bit 1, which the manual does not
  * document. Set, the 512 KiB shared SRAM (CPU 0x00074000-0x000f3fff, the NPU's
  * internal SRAM) belongs to the CPU: the boot ROM sets it on every entry
@@ -46,9 +63,30 @@ struct step { uint32_t address, mask, value, status; };
  * enable. The output gate stays closed until LOCK. */
 static const struct step pll_enable[]={
     {CCU+0x1920,BIT(16),BIT(16),0}, {CCU+0x1920,1,1,0}, {PLL,BIT(30),BIT(30),PLL_LOCK},
-    {PLL,UINT32_C(0x0070ff02),UINT32_C(0x00305100),PLL_LOCK}, {PLL,BIT(31),BIT(31),PLL_LOCK},
+    {PLL,PLL_FACTORS,FACTORS_492,PLL_LOCK}, {PLL,BIT(31),BIT(31),PLL_LOCK},
     {PLL,BIT(29),BIT(29),PLL_LOCK}
 };
+#define PLL_ENABLE_FACTOR_STEP 3u
+/* A rate change of a running, locked PLL in the order of the board kernel's
+ * ccu_nm_set_rate with CONFIG_AW_STANDARD_CCU (ccu_nm.c lines 250-344 at
+ * 2ac08e8c; the option is set in both shipped board kernel configurations):
+ * output gate off (line 264), the N and output divider factors in one write
+ * (314), lock enable cleared then set (329-334), LOCK (339); the output gate
+ * opens again in the open stage (342). Each write is read back. */
+static const struct step pll_retune[]={
+    {PLL,BIT(27),0,PLL_LOCK}, {PLL,PLL_FACTORS,FACTORS_492,PLL_LOCK},
+    {PLL,BIT(29),0,PLL_LOCK}, {PLL,BIT(29),BIT(29),PLL_LOCK}
+};
+#define PLL_RETUNE_FACTOR_STEP 1u
+/* Apply a PLL table with its factor step set to the selected profile. */
+static int apply(struct a733_npu_startup *,const struct step *,unsigned);
+static int apply_factors(struct a733_npu_startup *s,const struct step *t,unsigned count,unsigned factor_step)
+{
+    struct step copy[6];
+    for(unsigned i=0;i<count;++i)copy[i]=t[i];
+    copy[factor_step].value=s->pll_factors;
+    return apply(s,copy,count);
+}
 /* The local tables follow the pinned board kernel's fields: CCU+0xb00 module
  * divider bits 0-4, selector 24-26, gate 31; CCU+0xb04 bus gate 0, core
  * reset 16, AXI 17, AHB 18, SRAM reset 19. After domain 4 is ON and PLL_NPU
@@ -233,13 +271,19 @@ static int pass(struct a733_npu_startup *s)
         check(s,CCU+0x1b10,1,0) && check(s,CCU+0x1b14,1,0) && check(s,CCU+0x1b1c,1,0) &&
         rd(s,PLL,&v)))return 0;
     s->pll_inherited=v&PLL_INHERITED;
-    /* PLL_NPU adopted: enabled, locked at the profile factors with its output
+    const uint32_t other=s->pll_factors==FACTORS_852 ? FACTORS_492 : FACTORS_852;
+    /* PLL_NPU adopted: enabled, locked at the selected profile with its output
      * gate open and its gate controls set, as local stop of an earlier startup
      * in this power lifetime leaves it. The vendor clock driver's enable
      * helper likewise returns without a write when the PLL's enable, LDO and
-     * output gate are already set (ccu_gate.c:171-174 at 2ac08e8c). */
-    s->pll_adopted=(v&~PLL_INHERITED)==(PLL_OPEN|PLL_LOCK);
-    if(s->pll_adopted ? !check(s,CCU+0x1920,0x10001,0x10001) || !check(s,CCU+0x19a0,BIT(16),BIT(16)) :
+     * output gate are already set (ccu_gate.c:171-174 at 2ac08e8c). The same
+     * state at the other profile is retuned by the vendor's rate change. */
+    s->pll_adopted=(v&~PLL_INHERITED)==(PLL_OPEN(s->pll_factors)|PLL_LOCK);
+    s->pll_retune=(v&~PLL_INHERITED)==(PLL_OPEN(other)|PLL_LOCK);
+    /* 852 MHz only for a speed bin whose column lists 800 mV for it. */
+    uint32_t sid;
+    if(s->pll_factors==FACTORS_852 && !(rd(s,SID_DVFS,&sid) && bin_allows_852(sid)))return 0;
+    if(s->pll_adopted || s->pll_retune ? !check(s,CCU+0x1920,0x10001,0x10001) || !check(s,CCU+0x19a0,BIT(16),BIT(16)) :
        /* PLL_NPU disabled: enable, lock enable, LOCK and output gate clear,
         * with only the preserved inherited reserved bit outside documented fields. */
        (v&UINT32_C(0xb8000000)) || (v&~(UINT32_C(0xf870ff02)|PLL_INHERITED)))return 0;
@@ -250,7 +294,7 @@ static int pass(struct a733_npu_startup *s)
 /* The PLL_NPU control word without LOCK: after the enable table, or as
  * adopted with the output gate open. */
 static uint32_t pll_word(const struct a733_npu_startup *s)
-{return (s->pll_adopted ? PLL_OPEN : PLL_ENABLED)|s->pll_inherited;}
+{return (s->pll_adopted ? PLL_OPEN(s->pll_factors) : PLL_ENABLED(s->pll_factors))|s->pll_inherited;}
 /* LOCK without the register lock: the exclusive PLL_NPU token makes this
  * task the only writer of the control word. At most 100 observations 3 us
  * apart, about 320 us with the 20 us settle, so the spin does not yield.
@@ -305,7 +349,7 @@ static int opened(struct a733_npu_startup *s)
     return check(s,PCK,0xf,8) && check(s,PCK+8,0xf,8) && s->sram_routed &&
         check(s,SRAM_ROUTING,SRAM_TO_CPU,0) &&
         check(s,CCU+0xb04,0xf0001,0xf0001) && check(s,CCU+0xb00,0x8700001f,BIT(31)) &&
-        rd(s,PLL,&v) && v==(PLL_OPEN|PLL_LOCK|s->pll_inherited);
+        rd(s,PLL,&v) && v==(PLL_OPEN(s->pll_factors)|PLL_LOCK|s->pll_inherited);
 }
 static int owner_task(const struct a733_npu_startup *s)
 {
@@ -317,6 +361,7 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
     if(!owner_task(s))return RETAINED;
     uint64_t t;
     if(!now(s,&t))return s->stage<A733_NPU_STARTUP_ROW ? refuse(s) : fault(s);
+    if(!s->entry_us)s->entry_us=t;
     const uint64_t deadline=s->config.deadline_us;
     for(;;) switch(s->stage) {
     case A733_NPU_STARTUP_TOKENS: {
@@ -406,8 +451,15 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
         int held=enter(s);
         if(held!=1)return held==0 && now(s,0) ? PENDING : fault(s);
         uint32_t v;
-        if(!now(s,0) || (s->pll_adopted ? !rd(s,PLL,&v) || v!=(pll_word(s)|PLL_LOCK) :
-           !apply(s,pll_enable,STEPS(pll_enable))))return fault(s);
+        if(s->pll_adopted) {
+            if(!now(s,0) || !rd(s,PLL,&v) || v!=(pll_word(s)|PLL_LOCK))return fault(s);
+        } else if(s->pll_retune) {
+            /* The other profile's running PLL: the vendor's rate change. */
+            if(!now(s,0) || !rd(s,PLL,&v) || v!=(PLL_OPEN(s->pll_factors==FACTORS_852 ? FACTORS_492 : FACTORS_852)|
+               PLL_LOCK|s->pll_inherited) || !apply_factors(s,pll_retune,STEPS(pll_retune),PLL_RETUNE_FACTOR_STEP))
+                return fault(s);
+            s->pll_retune=0;
+        } else if(!now(s,0) || !apply_factors(s,pll_enable,STEPS(pll_enable),PLL_ENABLE_FACTOR_STEP))return fault(s);
         if(!leave(s) || !lock_wait(s))return fault(s);
         s->pll_locked=1;s->stage=A733_NPU_STARTUP_ROW;
         break;
@@ -445,7 +497,7 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
         if(held!=1)return held==0 && now(s,0) ? PENDING : fault(s);
         if(!now(s,0) || !opened(s) || !now(s,0))return fault(s);
         if(!leave(s))return fault(s);
-        s->stage=A733_NPU_STARTUP_READY;
+        s->stage=A733_NPU_STARTUP_READY;s->ready_us=s->last_now;
         atomic_store_explicit(&s->window_open,1,memory_order_release);
         return READY;
     }
@@ -496,6 +548,12 @@ uint32_t a733_npu_startup_wait_ticks(struct a733_npu_startup *s)
     }
     return 1;
 }
+int a733_npu_startup_rate(struct a733_npu_startup *s,unsigned mhz)
+{
+    if(!s || !s->initialized || s->task || (mhz!=492 && mhz!=852) || !privileged() ||
+       xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED)return 0;
+    s->pll_factors=mhz==852 ? FACTORS_852 : FACTORS_492;return 1;
+}
 int a733_npu_startup_init(struct a733_npu_startup *s,const struct a733_npu_startup_config *c,
     const struct a733_npu_startup_providers *p,const struct a733_npu_startup_ops *o,void *cookie)
 {
@@ -512,6 +570,7 @@ int a733_npu_startup_init(struct a733_npu_startup *s,const struct a733_npu_start
     const struct a733_npu_startup_ops native={{native_read,native_write},native_now,native_spin_us,
         native_enter,native_leave,native_retain,native_wake};
     s->config=*c;s->providers=*p;s->ops=o ? *o : native;s->cookie=o ? cookie : s;s->shared=shared;
+    s->pll_factors=FACTORS_492;
     /* No NPU image makes a supply transition, so the owner verifies DCDC2 at
      * its first step instead of after the 5,160 us settle. */
     if(!a733_power_domain_row_init(&s->row,p->domains,4,c->owner,&s->rail) ||

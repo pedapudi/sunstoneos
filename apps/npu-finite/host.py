@@ -227,6 +227,19 @@ def output_pattern(first_digest,second):
   'second_unwritten':bool(second) and ranges==[[0,len(second)]],
   'first_unwritten':bytes(first_digest)==hashlib.sha256(pattern).digest()}
 
+def timing(text):
+ """Startup entry to READY and each job's publication to completion
+ observation, in counter microseconds, from the image's NPU_TIME_US block;
+ None for an image that prints none."""
+ found=re.findall(r'NPU_TIME_US=\n((?:0x[0-9a-f]{16}\n){6})',text)
+ if len(found)!=1:return None
+ entry,ready,*jobs=[int(v,16) for v in found[0].split()]
+ require(entry<=ready and all(jobs[i]<=jobs[i+1] for i in (0,2)),'Timing values out of order.')
+ return {'startup_us':ready-entry,'job_us':[jobs[1]-jobs[0],jobs[3]-jobs[2]],
+  'entry_us':entry,'ready_us':ready,'jobs_raw_us':jobs,
+  'resolution':'Completion is observed at the service worker\'s next poll, once per 1 ms tick.'}
+
+
 def validate_reports(monitor,platform,receipt,p):
  thermal=p.get('execution_profile')==THERMAL
  require(len(monitor)==128 and len(platform)==16384 and len(receipt)==(112 if thermal else 88),'Incomplete returned reports.')
@@ -267,9 +280,10 @@ def validate_reports(monitor,platform,receipt,p):
    matches[0][3].startswith('PASS' if status==0 else 'FAIL' if status==1 else 'REFUSED'),'Thermal status disagrees with completed numerical work.')
   return {'normal_return':True,'functional_success':status==0,'controlled_negative':status==1,
    'thermal_refusal':status==2,'thermal_reason':reason,'jobs':jobs,'status':status,'diagnostic_deadline':deadline,
-   'first_digest':bytes(first).hex(),'last_output':bytes(second).hex(),'output_pattern':output_pattern(first,second),'log':text}
+   'first_digest':bytes(first).hex(),'last_output':bytes(second).hex(),'output_pattern':output_pattern(first,second),
+   'timing':timing(text),'log':text}
  require(matched==(status==0) and matches[0][3].startswith('PASS')==(status==0),'Numerical status disagrees with copied outputs.')
- return {'normal_return':True,'functional_success':matched,'controlled_negative':not matched,'status':status,'diagnostic_deadline':deadline,'first_digest':bytes(first).hex(),'second_output':bytes(second).hex(),'output_pattern':output_pattern(first,second),'log':text}
+ return {'normal_return':True,'functional_success':matched,'controlled_negative':not matched,'status':status,'diagnostic_deadline':deadline,'first_digest':bytes(first).hex(),'second_output':bytes(second).hex(),'output_pattern':output_pattern(first,second),'timing':timing(text),'log':text}
 
 def transfer(transaction,address,data,destination):
  with base.sealed_source(data) as (source,fd):transaction('write',hex(address),source,'read',hex(address),len(data),destination,pass_fds=(fd,))

@@ -335,10 +335,17 @@ static int publish(void *cookie,const struct a733_npu_mmu_image *image,
     struct npu_convolution *c=cookie;
     if((bootstrap!=0 && bootstrap!=1) || !same_command(command,&c->commands[bootstrap ? 0 : 1]) ||
        !unchanged(c,!bootstrap))return fault(c);
-    return a733_npu_native_operations.publish(&c->native,image,command,bootstrap);
+    if(!a733_npu_native_operations.publish(&c->native,image,command,bootstrap))return 0;
+    if(!bootstrap)c->job_published_us=a733_npu_native_operations.microseconds(&c->native);
+    return 1;
 }
 static int finish(void *cookie,const struct a733_npu_command *command,int canceled)
-{struct npu_convolution *c=cookie;return good(c) && a733_npu_native_operations.finish(&c->native,command,canceled);}
+{
+    struct npu_convolution *c=cookie;
+    if(!good(c))return 0;
+    if(command==&c->commands[1])c->job_finished_us=a733_npu_native_operations.microseconds(&c->native);
+    return a733_npu_native_operations.finish(&c->native,command,canceled);
+}
 static const struct a733_npu_ops operations={read_reg,write_reg,now,delay,barrier,publish,finish};
 static int metadata(const struct npu_convolution *c,const struct a733_npu_ops *ops,void *cookie,
     const struct a733_npu_mmu_image *image,const struct a733_npu_command *commands,unsigned count)

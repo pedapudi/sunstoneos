@@ -73,6 +73,15 @@ struct a733_npu_startup {
     unsigned pll_adopted;
     /* 1 once PLL_NPU has passed its LOCK samples. Bootstrap task only. */
     unsigned pll_locked;
+    /* The selected profile's factor field: 492 MHz unless
+     * a733_npu_startup_rate selected 852 MHz. Fixed before the scheduler. */
+    uint32_t pll_factors;
+    /* 1 when the register pass found PLL_NPU locked at the other profile with
+     * its output gate open; the enable stage then changes its rate. */
+    unsigned pll_retune;
+    /* Counter microseconds of the first step and of READY. Written by the
+     * bootstrap task; readable by a client once the service is active. */
+    uint64_t entry_us, ready_us;
     /* 1 from the readback that shows the shared SRAM routed to the NPU until
      * local stop routes it back. Bootstrap task only. */
     unsigned sram_routed;
@@ -86,6 +95,11 @@ struct a733_npu_startup {
 int a733_npu_startup_init(struct a733_npu_startup *, const struct a733_npu_startup_config *,
     const struct a733_npu_startup_providers *, const struct a733_npu_startup_ops *, void *cookie);
 int a733_npu_startup_bind_task(struct a733_npu_startup *, TaskHandle_t);
+/* After init, before bind and before the scheduler: PLL_NPU at 492 (the
+ * default) or 852 MHz, both at the inherited 800 mV. The register pass admits
+ * 852 MHz only for a SID speed bin whose operating-point column lists 800 mV
+ * for it and refuses otherwise, before any write. */
+int a733_npu_startup_rate(struct a733_npu_startup *, unsigned mhz);
 /* The bound EL1 bootstrap task only. READY once the NPU is powered, clocked
  * and out of reset; PENDING while a wait is open; RETAINED after a failure. */
 enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *);
