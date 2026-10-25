@@ -1,0 +1,337 @@
+{
+ "binary": "monitor.fex",
+ "sha256": "8af16b86ae8e2eff634a3ebca76a8cdf3c10b3540387573d46c3d785545b2632",
+ "bytes": 78609,
+ "source": "orangepi-build a95129bf30ea11886cc35f08ebb3e69695a26656, external/packages/pack-uboot/sun60iw2/bin/monitor.fex",
+ "load_address": "0x48000000",
+ "offsets": "file offsets; address = 0x48000000 + offset",
+ "fetch_reference": "docs/vendor-firmware/README.md",
+ "kind": "SMC function IDs",
+ "unknown_id_return": "-1 (SMC_UNK)",
+ "rt_svc_descriptors": [
+  {
+   "offset": "0x127a0",
+   "oen": "0",
+   "type": "fast",
+   "name": "arm_arch_svc",
+   "init": null,
+   "handler": "0x21e4"
+  },
+  {
+   "offset": "0x127c0",
+   "oen": "50-63",
+   "type": "yielding",
+   "name": "opteed_std",
+   "init": null,
+   "handler": "0x7c14"
+  },
+  {
+   "offset": "0x127e0",
+   "oen": "50-63",
+   "type": "fast",
+   "name": "opteed_fast",
+   "init": "0x7b9c",
+   "handler": "0x7c14"
+  },
+  {
+   "offset": "0x12800",
+   "oen": "4",
+   "type": "fast",
+   "name": "std_svc",
+   "init": "0xacb0",
+   "handler": "0xacf0"
+  }
+ ],
+ "ids": [
+  {
+   "id": "0x80000000",
+   "handler": "arm_arch_svc_smc_handler 0x21e4",
+   "name": "SMCCC_VERSION",
+   "behaviour": "returns 0x10002 (SMCCC 1.2)",
+   "hardware": null,
+   "label": "observed"
+  },
+  {
+   "id": "0x80000001",
+   "handler": "arm_arch_svc_smc_handler 0x21e4",
+   "name": "SMCCC_ARCH_FEATURES",
+   "behaviour": "reports VERSION/FEATURES/SOC_ID present; WORKAROUND_1 from the CPU check 0x2864; WORKAROUND_2 not required (-2)",
+   "hardware": null,
+   "label": "observed"
+  },
+  {
+   "id": "0x80000002",
+   "handler": "arm_arch_svc_smc_handler 0x21e4",
+   "name": "SMCCC_ARCH_SOC_ID",
+   "behaviour": "x1=0 version (0x831c), x1=1 revision (0x8314)",
+   "hardware": null,
+   "label": "observed"
+  },
+  {
+   "id": "0x80008000",
+   "handler": "arm_arch_svc_smc_handler 0x21e4",
+   "name": "SMCCC_ARCH_WORKAROUND_1",
+   "behaviour": "returns with no action",
+   "hardware": null,
+   "label": "observed"
+  },
+  {
+   "id": "0x80007fff",
+   "handler": "arm_arch_svc_smc_handler 0x21e4",
+   "name": "SMCCC_ARCH_WORKAROUND_2",
+   "behaviour": "returns with no action",
+   "hardware": null,
+   "label": "observed"
+  },
+  {
+   "id": "0x80000023/0xc0000023",
+   "handler": "0x1f7c",
+   "name": "vendor wakeup source",
+   "behaviour": "stores the SCP wakeup source saved at resume into the caller address in x1",
+   "hardware": null,
+   "label": "inferred"
+  },
+  {
+   "id": "0x80000025/0xc0000025",
+   "handler": "0x1904",
+   "name": "vendor SCP message 0x25",
+   "behaviour": "forwards x1 to the SCP",
+   "hardware": null,
+   "label": "observed"
+  },
+  {
+   "id": "0x80000026/0xc0000026",
+   "handler": "0x2114",
+   "name": "vendor SCP message 0x26",
+   "behaviour": "forwards x1 to the SCP",
+   "hardware": null,
+   "label": "observed"
+  },
+  {
+   "id": "0x80000027/0xc0000027",
+   "handler": "0x19e0",
+   "name": "vendor stub",
+   "behaviour": "returns -1",
+   "hardware": null,
+   "label": "observed"
+  },
+  {
+   "id": "0xc0000029",
+   "handler": "0x1f74",
+   "name": "vendor stub",
+   "behaviour": "returns -1",
+   "hardware": null,
+   "label": "observed"
+  },
+  {
+   "id": "0x80000060/0xc0000060",
+   "handler": "0x1ff8",
+   "name": "vendor SCP message 0x60",
+   "behaviour": "forwards x1 to the SCP",
+   "hardware": null,
+   "label": "observed"
+  },
+  {
+   "id": "0x80000061/0xc0000061",
+   "handler": "0x1f34",
+   "name": "vendor SCP message 0x61",
+   "behaviour": "no argument",
+   "hardware": null,
+   "label": "observed"
+  },
+  {
+   "id": "0x80000062/0xc0000062",
+   "handler": "0x20d0",
+   "name": "vendor SCP message 0x62",
+   "behaviour": "forwards x1 to the SCP",
+   "hardware": null,
+   "label": "observed"
+  },
+  {
+   "id": "0x80000064/0xc0000064",
+   "handler": "0x203c",
+   "name": "vendor SCP message 0x64",
+   "behaviour": "forwards x1 and x2 to the SCP",
+   "hardware": null,
+   "label": "observed"
+  },
+  {
+   "id": "0x80000095/0xc0000095",
+   "handler": "0x1f90",
+   "name": "vendor USB efex",
+   "behaviour": "runs the USB device loop at EL3 until it ends",
+   "hardware": "USB0 0x04100000, CCU USB gates, GIC INTID 188",
+   "label": "observed"
+  },
+  {
+   "id": "0x80000096/0xc0000096",
+   "handler": "0x1fb4",
+   "name": "vendor SCP message 0x96",
+   "behaviour": "forwards x1 to the SCP",
+   "hardware": null,
+   "label": "observed"
+  },
+  {
+   "id": "0xc00000a0",
+   "handler": "0x3e40",
+   "name": "vendor stub",
+   "behaviour": "returns -1",
+   "hardware": null,
+   "label": "observed"
+  },
+  {
+   "id": "0x8000fe00/0xc000fe00",
+   "handler": "0xbd58",
+   "name": "vendor eFuse key read",
+   "behaviour": "reads a named key from the eFuse key table",
+   "hardware": "SID 0x03006000",
+   "label": "observed"
+  },
+  {
+   "id": "0x8000fe01/0xc000fe01",
+   "handler": "0xbf9c",
+   "name": "vendor eFuse key write",
+   "behaviour": "programs a named key",
+   "hardware": "SID 0x03006040-0x03006060, RTC 0x07090204",
+   "label": "observed"
+  },
+  {
+   "id": "0x8000ff04",
+   "handler": "0x89c4",
+   "name": "vendor run Nonsecure OS",
+   "behaviour": "prepares a Nonsecure entry from x1-x3 and leaves EL3 into it",
+   "hardware": null,
+   "label": "observed"
+  },
+  {
+   "id": "0x8000ff40",
+   "handler": "0x89c4",
+   "name": "vendor run Nonsecure OS (variant)",
+   "behaviour": "as 0x8000ff04 with the mode argument set to 1",
+   "hardware": null,
+   "label": "observed"
+  },
+  {
+   "id": "0x8000ff10",
+   "handler": "0xae88",
+   "name": "vendor SCP load",
+   "behaviour": "copies the SCP image to SRAM A2 and starts the E902; x1 is stored in RTC 0x0709010c",
+   "hardware": "S_PRCM 0x0701021c, 0x07010210; CPUS_E902_CFG 0x07032204; CPUIDLE 0x07050008",
+   "label": "observed"
+  },
+  {
+   "id": "0x8000ff14",
+   "handler": "0x19e8",
+   "name": "vendor stub",
+   "behaviour": "returns -1",
+   "hardware": null,
+   "label": "observed"
+  },
+  {
+   "id": "0x8000ff15",
+   "handler": "0x219c",
+   "name": "vendor SCP message 0x24 (argument 3)",
+   "behaviour": "power message with argument 3",
+   "hardware": null,
+   "label": "inferred"
+  },
+  {
+   "id": "0x8000ff41",
+   "handler": "0x8c1c",
+   "name": "vendor AMP CPU start",
+   "behaviour": "psci_cpu_on (0x8c1c) for the core in x1 at the address in x2; sets SCR_EL3.RW first when x3 bit 31 is set",
+   "hardware": null,
+   "label": "observed"
+  },
+  {
+   "id": "0x8000ff42",
+   "handler": "0xc274",
+   "name": "vendor CPU power status",
+   "behaviour": "returns 1 when the CPUIDLE status of the caller-selected core reads ON (8)",
+   "hardware": null,
+   "label": "observed"
+  },
+  {
+   "id": "0x8000ff50",
+   "handler": "arm_arch_svc_smc_handler 0x21e4",
+   "name": "vendor ACTLR_EL3",
+   "behaviour": "writes ACTLR_EL3 = 0xc00",
+   "hardware": null,
+   "label": "observed"
+  },
+  {
+   "id": "0xc000ff05",
+   "handler": "0xb15c",
+   "name": "vendor secure register read",
+   "behaviour": "reads one register from a fixed list",
+   "hardware": null,
+   "label": "observed"
+  },
+  {
+   "id": "0xc000ff06",
+   "handler": "0xb1d8",
+   "name": "vendor secure register write",
+   "behaviour": "writes only the DMA security words",
+   "hardware": null,
+   "label": "observed"
+  },
+  {
+   "id": "0xc000ff07",
+   "handler": "0xbeec",
+   "name": "vendor eFuse key information",
+   "behaviour": "looks up a key; reads SID 0x03006200",
+   "hardware": null,
+   "label": "observed"
+  },
+  {
+   "id": "0xc000ff20",
+   "handler": "0xadd8",
+   "name": "vendor activity monitor init",
+   "behaviour": "enables the A76 activity counters; clears the AMU traps in CPTR_EL2/EL3",
+   "hardware": null,
+   "label": "observed"
+  },
+  {
+   "id": "0x84000000-0x8400000e, 0xc4000001-0xc400000e",
+   "handler": "std_svc_smc_handler 0xacf0 -> psci_smc_handler 0xa0b0",
+   "name": "PSCI 1.1",
+   "behaviour": "see psci_function_ids",
+   "hardware": null,
+   "label": "observed"
+  },
+  {
+   "id": "0x32000000-0x3fffffff, 0xb2000000-0xbfffffff",
+   "handler": "opteed_smc_handler 0x7c14",
+   "name": "OP-TEE (Trusted OS, OEN 50-63)",
+   "behaviour": "forwarded to OP-TEE when an OP-TEE image is present; this package has none",
+   "hardware": null,
+   "label": "observed"
+  }
+ ],
+ "psci_function_ids": {
+  "handler": "0xa0b0 psci_smc_handler (gated by psci_caps at 0x48040c1c)",
+  "supported": {
+   "0x84000000 PSCI_VERSION": "returns 0x10001 (PSCI 1.1)",
+   "0x84000001/0xC4000001 CPU_SUSPEND": "0x8f98 -> plat 0x8284/0x864c/0x8790",
+   "0x84000002 CPU_OFF": "0x8be4 -> plat 0x84bc",
+   "0x84000003/0xC4000003 CPU_ON": "0x8c1c -> plat 0x854c, finish 0x85c8",
+   "0x84000004/0xC4000004 AFFINITY_INFO": "0x8b6c",
+   "0x84000008 SYSTEM_OFF": "0xa250 -> plat 0x80bc",
+   "0x84000009 SYSTEM_RESET": "0xa2b4 -> plat 0x8110",
+   "0x8400000A PSCI_FEATURES": "0x95f0",
+   "0x8400000E/0xC400000E SYSTEM_SUSPEND": "0xa3dc -> plat 0x8324/0x864c/0x8790"
+  },
+  "dispatch_present_but_not_in_caps": {
+   "MIGRATE, MIGRATE_INFO_UP_CPU": "only if an SPD registers svc_migrate_info (OP-TEE dispatcher)",
+   "MIGRATE_INFO_TYPE": "never in psci_caps in v2.5, returns NOT_SUPPORTED",
+   "NODE_HW_STATE, MEM_PROTECT, MEM_PROTECT_CHECK_RANGE, SYSTEM_RESET2": "platform hooks absent -> NOT_SUPPORTED"
+  },
+  "not_compiled": [
+   "CPU_FREEZE",
+   "CPU_DEFAULT_SUSPEND",
+   "SET_SUSPEND_MODE",
+   "PSCI_STAT_RESIDENCY",
+   "PSCI_STAT_COUNT"
+  ]
+ }
+}
