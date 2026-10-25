@@ -121,7 +121,7 @@ def run(image,session,out,cases=None):
  selected=set(cases) if cases else None
  if selected:assert selected<=set(['two-clients-repeat', 'ranges-identity', 'max-ticket-exhaustion', 'queued-cancel-retains-active', 'removal-permanent', 'usb-partial-cancel-terminal', 'usb-retention-overrides-rejection', 'usb-fragmentation-ack-reuse', 'usb-disconnect-retains', 'unread-deadline', 'byte-addressed-read'])
  out.mkdir(parents=True,exist_ok=True);raw=session.read_bytes();prep=module('storage_read_service_prepare',ROOT/'apps/storage-read/prepare.py');prep.embedded_reference(image.read_bytes(),raw)
- e=base.Image(image);e.sizes={};e.symbol_sizes={}
+ e=base.sd0_image(image);e.sizes={};e.symbol_sizes={}
  with image.open('rb') as f:
   elf=ELFFile(f)
   for s in elf.get_section_by_name('.symtab').iter_symbols():

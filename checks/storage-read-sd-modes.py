@@ -55,8 +55,72 @@ class Machine(service.Machine):
     self.mode_data=bytes(data)
    return
   super().write_mmio(cpu,access,a,size,v,unused)
+# SD physical layer 9.10 section 4.2.4.5: the four-bit CMD19 tuning block.
+TUNING=bytes.fromhex('ff0fff00ffccc3ccc33cccfffefffeefffdfffddfffbfffbbfff7fff77f7bdef'
+                     'fff0fff00ffccc3ccc33cccfffefffeefffdfffddfffbfffbbfff7fff77f7bde')
+assert len(TUNING)==64
+class UhsMachine(Machine):
+ """A UHS-I card and the PF bank selector, for SD profile 3.
+
+ The card answers S18R with S18A, holds DAT low after CMD11 until the clock
+ restarts after the bank reports 1.8 V, then reports switch done; CMD6 offers
+ SDR104; CMD19 returns the tuning block only for sample delays in WINDOW."""
+ WINDOW=range(20,32)
+ def __init__(self,image,session):
+  super().__init__(image,session);self.phase=0;self.bank_reads=None;self.pf_writes=0;self.cmd19=0;self.sdr=0
+  self.regs[0x02000040]=1<<10 # Adaptive PF withstand mode, as port 3-3 reports.
+  gates=(1<<11)|(1<<9)|(1<<5)|(1<<4)|(1<<2)|(1<<1)
+  self.regs.update({0x02003908:gates*0x10001,0x02003988:gates<<16})
+ def read_mmio(self,cpu,access,a,size,value,unused):
+  if a==0x04020200 and self.data_command==19:
+   assert self.held and size==4 and self.fifo<self.total
+   word=int.from_bytes(self.mode_data[self.fifo:self.fifo+4],'little');self.fifo+=4
+   self.trace.append(['read',a,word]);self.write(a,word);return
+  if a==0x02000048 and self.bank_reads is not None:
+   self.bank_reads-=1
+   if self.bank_reads<=0:self.regs[a]=3<<10
+  super().read_mmio(cpu,access,a,size,value,unused)
+  if a==0x0402003c:
+   v=self.read(a)|((1<<9) if self.phase in (1,2) else (1<<8));self.write(a,v);self.trace[-1][2]=v
+ def write_mmio(self,cpu,access,a,size,v,unused):
+  if a==0x02000070:
+   assert self.held and v==0 and self.phase==2 and not self.regs.get(0x04020004) and not self.pf_writes
+   self.pf_writes+=1;self.bank_reads=3;self.trace.append(['write',a,v]);self.regs[a]=0;return
+  if a==0x04020018 and v&(1<<21) and v&(1<<28):
+   assert self.held and self.regs.get(0x04020004,0)&(1<<31);self.trace.append(['write',a,v]);self.regs[a]=0
+   if self.phase==1:self.phase=2
+   else:
+    assert self.phase==2 and self.regs[0x02000048]==3<<10 and self.regs[0x04020004]==(1<<16)|(1<<31)
+    self.phase=3;self.regs[0x04020038]=self.regs.get(0x04020038,0)|(1<<10)|4
+   return
+  if a==0x04020018 and not v&(1<<21) and v&63 in (11,19,41,6) and not (v&63==6 and not v&(1<<9)):
+   n=v&63;arg=self.regs.get(0x0402001c,0)
+   if n==41:
+    super().write_mmio(cpu,access,a,size,v,unused)
+    assert arg==0x40300000|(1<<24)
+    if self.ocr>=2:self.regs[0x04020020]|=1<<24
+    return
+   assert self.held and not v&(1<<10);self.trace.append(['write',a,v]);self.commands.append([n,arg])
+   self.regs[a]=v&~(1<<31);self.regs[0x04020038]=4;self.regs[0x04020020]=0x900;self.data_command=self.total=self.fifo=0
+   if n==11:
+    assert v==0x9000014b and arg==0 and self.state==1 and self.phase==0;self.regs[0x04020020]=0x200;self.phase=1;return
+   if n==6 and arg in (0x00fffff3,0x80fffff3):
+    assert self.phase==3 and self.width==4 and self.regs[0x04020010]==64
+    data=bytearray(64);data[13]=0x0b;data[16]=3
+    if arg>>31:self.sdr=3
+    self.data_command=6;self.total=64;self.mode_data=bytes(data);return
+   if n==6:
+    self.regs[a]=0;self.commands.pop();self.trace.pop()
+    return super().write_mmio(cpu,access,a,size,v,unused)
+   assert n==19 and arg==0 and self.sdr==3 and self.regs[0x04020010]==64 and self.regs[0x04020144]&0x80
+   assert (self.regs.get(0x04020100,0)&0x1fff0001)==(64<<16)|1 and not self.regs.get(0x0402005c,0)&(1<<31)
+   self.cmd19+=1;self.commands.pop()
+   self.data_command=19;self.total=64;self.mode_data=TUNING
+   if self.regs[0x04020144]&63 not in self.WINDOW:self.regs[0x04020038]|=1<<7
+   return
+  super().write_mmio(cpu,access,a,size,v,unused)
 def run(image,sessions,out,early_only=False,layout_only=False,board_live_only=False):
- out.mkdir(parents=True,exist_ok=False);e=service.base.Image(image);e.sizes={};e.symbol_sizes={}
+ out.mkdir(parents=True,exist_ok=False);e=service.base.sd0_image(image);e.sizes={};e.symbol_sizes={}
  with image.open('rb') as f:
   elf=ELFFile(f)
   for s in elf.get_section_by_name('.symtab').iter_symbols():
@@ -66,8 +130,8 @@ def run(image,sessions,out,early_only=False,layout_only=False,board_live_only=Fa
     if die.tag=='DW_TAG_structure_type' and 'DW_AT_name' in die.attributes and 'DW_AT_byte_size' in die.attributes:e.sizes[die.attributes['DW_AT_name'].value.decode()]=int(die.attributes['DW_AT_byte_size'].value)
  decoder=module('sd_modes_decoder',ROOT/'apps/storage-read/observe.py');results={}
  for session in sessions:
-  raw=session.read_bytes();profile=struct.unpack_from('<I',raw,860)[0];assert profile in (1,2)
-  dest=out/f'profile-{profile}';dest.mkdir();m=Machine(e,raw)
+  raw=session.read_bytes();profile=struct.unpack_from('<I',raw,860)[0];assert profile in (1,2,3)
+  dest=out/f'profile-{profile}';dest.mkdir();m=(UhsMachine if profile==3 else Machine)(e,raw)
   if board_live_only:
    layout=e.layouts['board_application'];address=e.address('board_live');hook=m.hooks.pop(address)
    m.write(m.board+layout['fatal'],0);m.write(m.board+layout['live_until'],m.time+1000000,8)
@@ -88,7 +152,11 @@ def run(image,sessions,out,early_only=False,layout_only=False,board_live_only=Fa
    results[str(profile)]={'preconstruction_pending':True,'early_mapping_failure_retained':True,'physical_access':False}
    continue
   m.establish();assert m.width==4 and m.card_hs==(profile==2)
-  assert len(m.module_changes)==3 and m.module_changes[-1]==(0x81000007 if profile==1 else 0x81000003)
+  assert len(m.module_changes)==3 and m.module_changes[-1]==(0x81000007 if profile==1 else 0x81000003 if profile==2 else 0x82000000)
+  if profile==3:
+   # One selector write, 12 passing delays of 20 CMD19 each plus 52 failing ones.
+   assert m.pf_writes==1 and m.phase==3 and m.sdr==3 and m.cmd19==12*20+52 and (m.regs[0x04020144]&0xbf)==0x80|26
+   assert [c[0] for c in m.commands[:7]]==[0,8,55,41,55,41,11]
   if layout_only:
    assert profile==1 and len(sessions)==1
    packet=decoder.read_request(19,2,1)
@@ -110,7 +178,10 @@ def run(image,sessions,out,early_only=False,layout_only=False,board_live_only=Fa
   (dest/'idle-frame.bin').write_bytes(m.frame())
   accepted,ticket=m.submit(2,19,2,1);assert accepted==1
   m.native_client();m.complete(0,True);frame=m.frame();value=decoder.decode(frame,raw)
-  assert value['card_hz']==(25000000 if profile==1 else 50000000) and value['bus_width']==4 and value['timing']==(profile==2)
+  assert value['card_hz']==(25000000 if profile==1 else 50000000 if profile==2 else 150000000) and value['bus_width']==4
+  # Model time does not advance inside one owner call, so elapsed_us may be 0.
+  assert value['timing']==(1 if profile==2 else 3 if profile==3 else 0) and value['elapsed_us'] is not None
+  if profile==3:assert (value['uhs_outcome'],value['signal_1v8'],value['tuning_start'],value['tuning_width'],value['sample_delay'])==(1,True,20,12,26)
   assert frame[288:]==service.payload(19,2);(dest/'read-frame.bin').write_bytes(frame)
   for _ in range(500):
    m.native_client();m.owner()

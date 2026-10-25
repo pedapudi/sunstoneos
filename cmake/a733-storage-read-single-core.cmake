@@ -38,7 +38,11 @@ foreach(target sunstone-a733-storage-read-single-core a733-sd-single-core-usb2-h
  target_include_directories(${target} PRIVATE ${sdsc_includes})
  target_compile_definitions(${target} PRIVATE ${sdsc_definitions} GUEST=1 SUNSTONE_SD_SINGLE_CORE=1)
 endforeach()
-target_include_directories(a733-sd-single-core-usb2-host BEFORE PRIVATE "${sdsc_root}/drivers/usb/host")
+# The USB2 host objects compile against the board's SuperSpeed TinyUSB copy and
+# the TinyUSB host headers, as a733-board-usb2-host does (cmake/a733-board.cmake);
+# without them hcd.h is missing and TUSB_SPEED_SUPER is undeclared.
+target_include_directories(a733-sd-single-core-usb2-host BEFORE PRIVATE "${board_host_tiny}" "${sdsc_root}/drivers/usb/host")
+target_include_directories(a733-sd-single-core-usb2-host PRIVATE "${TINYUSB_DIR}/src/host")
 target_compile_options(a733-sd-single-core-usb2-host PRIVATE "SHELL:-include ${sdsc_root}/apps/board/host-symbols.h")
 if(sdsc_links)
  target_link_libraries(sunstone-a733-storage-read-single-core PRIVATE ${sdsc_links})
