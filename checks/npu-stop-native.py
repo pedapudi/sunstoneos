@@ -17,7 +17,9 @@ spec=importlib.util.spec_from_file_location('layout',a.layout_helper)
 layout=importlib.util.module_from_spec(spec);spec.loader.exec_module(layout)
 image=layout.Image(a.elf,layout_names=())
 cases=[]
-for name,address,before,after,ok in [
+# A case may preset other words: the routing bit changes only while the NPU
+# bus and reset word and the module gate hold the NPU in reset.
+for name,address,before,after,ok,*preset in [
     ('module-gate-off',0x02002b00,0x80200001,0x00200001,1),
     ('bus-gate-off',0x02002b04,0xa00f0041,0xa00f0040,1),
     ('AHB-reset-assert',0x02002b04,0xa00f0040,0xa00b0040,1),
@@ -35,12 +37,15 @@ for name,address,before,after,ok in [
     ('SRAM-route-to-NPU',0x03000008,0x2,0x0,1),
     ('SRAM-route-to-CPU',0x03000008,0x0,0x2,1),
     ('SRAM-routing-other-bit-refused',0x03000008,0x2,0x3,0),
+    ('SRAM-routing-refused-with-a-reset-released',0x03000008,0x2,0x0,0,{0x02002b04:0x00090000}),
+    ('SRAM-routing-refused-with-the-module-gate-open',0x03000008,0x0,0x2,0,{0x02002b00:0x80000000}),
 ]:
     u=Uc(UC_ARCH_ARM64,UC_MODE_ARM)
     u.mem_map(0x02000000,0x06000000);u.mem_map(0x40000000,0x04000000)
     for start,data in image.parts:
         if data:u.mem_write(start,data)
     u.mem_write(address,struct.pack('<I',before))
+    for at,value in (preset[0] if preset else {}).items():u.mem_write(at,struct.pack('<I',value))
     writes=[]
     u.hook_add(UC_HOOK_MEM_WRITE,lambda cpu,access,at,size,value,cookie:writes.append((at,size,value)),begin=0x02000000,end=0x07ffffff)
     for i,value in enumerate((0,address,after)):u.reg_write(UC_ARM64_REG_X0+i,value)

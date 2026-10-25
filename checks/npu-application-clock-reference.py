@@ -57,7 +57,7 @@ def main():
             put(prov+L['a733_npu_startup_providers'][name],value)
         words={0x07090160:osc,CCU:ref,CCU+0xa0:peri0,CCU+0xac:0x30000000,CCU+0x1908:0x8fff0fff,CCU+0x1988:0x0fff0000,
                CCU+0x500:FABRIC[0],CCU+0x580:FABRIC[1],CCU+0x588:FABRIC[2],CCU+0xb04:1<<19,CCU+0xc00:1<<31,CCU+0xc0c:1<<16,
-               CCU+0x2ac:0x30000000,CCU+0x2b0:0x000b0000}
+               CCU+0x2ac:0x30000000,CCU+0x2b0:0x000b0000,0x03000008:2}  # The boot ROM's CPU routing.
         for at,v in words.items():put(at,v,4)
         writes=[];state={'running':False,'time':1000,'done':False}
         u.hook_add(UC_HOOK_MEM_WRITE,lambda c,acc,at,size,v,x:writes.append((at,v)),begin=0x02000000,end=0x08ffffff)

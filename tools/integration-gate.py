@@ -22,6 +22,8 @@ import shlex
 import subprocess
 import sys
 
+# The NPU catalogue map of the npu variant, relative to the --cache directory.
+NPU_CATALOGUE = 'build/npu-board/session-artifacts.json'
 VARIANTS = {
     'sup': [],
     'res': ['-DSUNSTONE_A733_OS_RESIDENT=ON'],
@@ -33,10 +35,10 @@ VARIANTS = {
     'radio-headset': ['-DSUNSTONE_A733_OS_RADIO=ON', '-DSUNSTONE_A733_OS_HEADSET=ON'],
     'resradio-headset': ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DSUNSTONE_A733_OS_RADIO=ON',
                          '-DSUNSTONE_A733_OS_HEADSET=ON'],
-    # The supervised NPU profile with the catalogue that the NPU board image
-    # builds; {cache} is the --cache directory.
-    'npu': ['-DSUNSTONE_A733_OS_NPU=ON',
-            '-DSUNSTONE_OS_NPU_CATALOGUE={cache}/build/npu-board/session-artifacts.json'],
+    # The supervised NPU profile. Its catalogue is a host input, as the mimus
+    # inputs are: the OS build verifies every file it names against
+    # tools/npu-session-models.json. {cache} is the --cache directory.
+    'npu': ['-DSUNSTONE_A733_OS_NPU=ON', '-DSUNSTONE_OS_NPU_CATALOGUE={cache}/' + NPU_CATALOGUE],
 }
 DEPENDENCIES = {'kernel': 'kernel-check', 'soak8': 'smp8-soak-model',
                 'mimus-smp': 'smp-mimus-model'}
@@ -110,6 +112,8 @@ def main(argv=None):
         parser.error('source must be a SunstoneOS checkout')
     targets = list(dict.fromkeys(args.target))
     variants = list(VARIANTS) if args.full else list(dict.fromkeys(args.variant))
+    if 'npu' in variants and not (cache / NPU_CATALOGUE).is_file():
+        parser.error('the npu variant needs the NPU catalogue map ' + str(cache / NPU_CATALOGUE))
     checks = list(CHECKS) if args.full else list(dict.fromkeys(args.check))
     for check in checks:
         if check in DEPENDENCIES and DEPENDENCIES[check] not in targets:
@@ -169,6 +173,8 @@ def main(argv=None):
                        str(len(changes.splitlines())) + ' changed paths'))
     if changes:
         (output / 'status.txt').write_text(changes)
+    if 'npu' in variants:
+        note('npu-catalogue-sha256: ' + hashlib.sha256((cache / NPU_CATALOGUE).read_bytes()).hexdigest())
 
     def unchanged(when):
         """The recorded state must be complete and still describe the tree."""

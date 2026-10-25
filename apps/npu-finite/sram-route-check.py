@@ -270,15 +270,22 @@ case('second-start-adopts-the-locked-pll-and-the-on-domain',
      m.writes[1][0] == BUS and m.get(PLL, 4) == left[PLL] and m.window() == 1,
      pll_word=hex(left[PLL]), writes=len(m.writes))
 
-for name, words, stuck in (('routing-refused-when-entry-routes-to-npu', {**COLD, SYSCTRL: 0}, False),
-                           ('routing-refused-when-the-word-ignores-the-write', COLD, True)):
-    m = Machine(words, domain=0, stuck=stuck)
-    first = m.step()
-    m.answer_row()
-    second = m.step()
-    case(name, first == RESULT['A733_NPU_PLATFORM_PENDING'] and second == RESULT['A733_NPU_PLATFORM_RETAINED'] and
-         m.first(lambda at, v: at in (BUS, MODULE)) is None and m.window() == 0 and m.field('sram_routed') == 0 and
-         [v for at, v in m.writes if at == SYSCTRL] == ([0] if stuck else []))
+# An entry word that already routes the SRAM to the NPU refuses in the
+# read-only pass, before the domain-4 request.
+m = Machine({**COLD, SYSCTRL: 0}, domain=0)
+first = m.step()
+request = m.get(m.s + L['a733_npu_startup']['row'] + L['a733_power_domain_row']['request'], 4)
+case('routing-refused-in-the-pass-when-entry-routes-to-npu',
+     first == RESULT['A733_NPU_PLATFORM_RETAINED'] and not m.writes and not request & 1 and m.window() == 0)
+# A word that ignores the write retains after PLL_NPU locks, before any reset release.
+m = Machine(COLD, domain=0, stuck=True)
+first = m.step()
+m.answer_row()
+second = m.step()
+case('routing-refused-when-the-word-ignores-the-write',
+     first == RESULT['A733_NPU_PLATFORM_PENDING'] and second == RESULT['A733_NPU_PLATFORM_RETAINED'] and
+     m.first(lambda at, v: at in (BUS, MODULE)) is None and m.window() == 0 and m.field('sram_routed') == 0 and
+     [v for at, v in m.writes if at == SYSCTRL] == [0])
 
 # The convolution backend's register callbacks on the linked instructions.
 # A prepared backend for the first catalogue model; the application register

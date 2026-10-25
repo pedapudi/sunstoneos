@@ -1144,6 +1144,12 @@ void kernel_main(void)
     configASSERT(!npu_runtime_bind_irq(&rt, &irq_ops, &rt, 1, 1));
     configASSERT(npu_runtime_bind(&rt, &startup, clients, 4, 1));
     configASSERT(rt.service.runtime && !npu_runtime_bind(&rt, &startup, clients, 4, 1));
+    /* Before READY the startup's register window is closed: the backend's
+     * register callbacks refuse without reaching the register model. */
+    uint32_t closed_value = 0;
+    configASSERT(!rt.service.ops.read(rt.service.cookie, 0x20, &closed_value) &&
+                 !rt.service.ops.write(rt.service.cookie, 0, 0x70900) &&
+                 !__atomic_load_n(&model.accesses, __ATOMIC_ACQUIRE));
     configASSERT(npu_runtime_bind_irq(&rt, &irq_ops, &rt, 1, 1));
 #ifdef NPU_BOARD_CLIENT_CHECK
     board_client = (struct npu_board_client){.rt = &rt, .slot = 3, .job_timeout_us = 1000000,

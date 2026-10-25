@@ -23,8 +23,8 @@ int a733_npu_platform_native_read(void *cookie,uintptr_t address,uint32_t *value
     *value=a733_mmio_read32_dsb_sy_both(address);return 1;
 }
 /* Writable: the NPU module and bus words, the PLL_NPU control word and its
- * gate control, and bit 1 of the shared SRAM routing word. PCK600 domain 4
- * belongs to the power-domain owner. */
+ * gate control, and bit 1 of the shared SRAM routing word while the NPU is
+ * held in reset. PCK600 domain 4 belongs to the power-domain owner. */
 int a733_npu_platform_native_write(void *cookie,uintptr_t address,uint32_t value)
 {
     (void)cookie;
@@ -33,7 +33,11 @@ int a733_npu_platform_native_write(void *cookie,uintptr_t address,uint32_t value
     uint32_t old=a733_mmio_read32_dsb_sy_both(address);
     switch (address) {
     case SRAM_ROUTING:
-        if ((old^value)&~UINT32_C(2)) return 0;
+        /* Only bit 1, and only while the NPU's AHB, AXI and core resets are
+         * asserted and its bus and module gates closed. */
+        if (((old^value)&~UINT32_C(2)) ||
+            (a733_mmio_read32_dsb_sy_both(CCU+0xb04)&UINT32_C(0x70001)) ||
+            (a733_mmio_read32_dsb_sy_both(CCU+0xb00)&UINT32_C(0x80000000))) return 0;
         break;
     case CCU+0xb00:
         if ((old^value)&~UINT32_C(0x8700001f)) return 0;

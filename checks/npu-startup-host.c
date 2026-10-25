@@ -59,6 +59,7 @@ static struct {
      * first bus and reset word write; PCK600 writes before the first write. */
     uint32_t sysctrl;
     unsigned sysctrl_stuck,route_at,pll_open_at,first_b04_at,ppu_before_first_write,pll_writes,gate_writes;
+    unsigned gate_status_off; /* +0x19a0 reads 0 whatever the gate control holds. */
     /* Counted in the callbacks: sequencer register reads, LOCK samples among
      * them (PLL_NPU reads without the register lock), the owner's register
      * reads during a step, and counter reads. */
@@ -93,7 +94,7 @@ static int reg_read(void *v,uintptr_t a,uint32_t *out)
             if(m.now>=r.locked_at)*out|=1u<<28;
         }
     } else if(a==CCU+0x19a0) {
-        *out=(r.ccu[0x1920/4]&0x10001)==0x10001 ? 1u<<16 : 0;
+        *out=(r.ccu[0x1920/4]&0x10001)==0x10001 && !r.gate_status_off ? 1u<<16 : 0;
     } else if(a==CCU+0xb04 && r.flip_b04 && r.writes>=r.flip_b04 && r.last_write==a) {
         *out^=1u<<18;r.flip_b04=0; /* A completed write that reads back wrong. */
     }
@@ -318,42 +319,48 @@ static int inherited_pll(void)
 }
 /* A second startup in one power lifetime: a new image finds PLL_NPU locked
  * with its output gate open, domain 4 ON, the local resets asserted and the
- * SRAM routed to the CPU, as local stop and the EL3 return leave them. */
+ * SRAM routed to the CPU, as local stop and the EL3 return leave them. Each
+ * case runs with the reserved PLL bit 24 clear and set. */
 static int second_start(void)
 {
-    setup();
-    struct run b=boot(200,1,0);
-    assert(b.result==A733_NPU_PLATFORM_READY && (d.ppu[4][2]&15)==8);
-    bootstrap_running=1;assert(a733_npu_startup_stop(&s)==A733_NPU_PLATFORM_READY);bootstrap_running=0;
-    static uint32_t left[0x2000/4];memcpy(left,r.ccu,sizeof(left));
-    const uint32_t policy=d.ppu[4][0],status=d.ppu[4][2];
-    const unsigned first_writes=r.writes;
-    assert(r.sysctrl==2 && left[0x2a0/4]==0xe8305100 && (left[0xb04/4]&0xf0001)==(1u<<19));
-    /* adopted: 0 the stopped state; 1 other factors; 2 output gate closed;
-     * 3 the gate control's No-Auto bit clear; 4 no LOCK. */
     unsigned refusals=0;
-    for(unsigned variant=0;variant<5;++variant) {
-        setup();memcpy(r.ccu,left,sizeof(left));d.ppu[4][0]=policy;d.ppu[4][2]=status;r.locked_at=1;
-        if(variant==1)r.ccu[0x2a0/4]=0xe8306100;
-        if(variant==2)r.ccu[0x2a0/4]=0xe0305100;
-        if(variant==3)r.ccu[0x1920/4]&=~1u;
-        if(variant==4)r.never_lock=1;
-        b=boot(200,1,0);
-        if(variant) {
-            assert(b.result==A733_NPU_PLATFORM_RETAINED && !r.writes && !d.ppu_writes && !s.row.counted && tokens_released());
-            ++refusals;continue;
-        }
-        assert(b.result==A733_NPU_PLATFORM_READY && s.pll_adopted && tokens_held());
-        assert(!r.pll_writes && !r.gate_writes && !d.ppu_writes && r.ccu[0x2a0/4]==0xe8305100);
-        assert(r.sysctrl==0 && r.route_at==1 && r.first_b04_at==2 && r.lock_samples==3);
-        printf("{\"second_start\":{\"ticks\":%u,\"elapsed_us\":%llu,\"local_writes\":%u,\"first_start_writes\":%u,"
-            "\"pll_writes\":%u,\"pck_writes\":%u,\"lock_samples\":%u,",
-            b.ticks,(unsigned long long)b.elapsed_us,r.writes,first_writes,r.pll_writes,d.ppu_writes,r.lock_samples);
+    for(unsigned inherited=0;inherited<2;++inherited) {
+        const uint32_t keep=inherited<<24;
+        setup();r.ccu[0x2a0/4]=keep;
+        struct run b=boot(200,1,0);
+        assert(b.result==A733_NPU_PLATFORM_READY && (d.ppu[4][2]&15)==8 && s.pll_inherited==keep);
         bootstrap_running=1;assert(a733_npu_startup_stop(&s)==A733_NPU_PLATFORM_READY);bootstrap_running=0;
-        assert(r.sysctrl==2 && r.ccu[0x2a0/4]==0xe8305100 && !memcmp(r.ccu,left,sizeof(left)));
+        static uint32_t left[0x2000/4];memcpy(left,r.ccu,sizeof(left));
+        const uint32_t policy=d.ppu[4][0],status=d.ppu[4][2];
+        const unsigned first_writes=r.writes;
+        assert(r.sysctrl==2 && left[0x2a0/4]==(0xe8305100|keep) && (left[0xb04/4]&0xf0001)==(1u<<19));
+        /* adopted: 0 the stopped state; 1 other factors; 2 output gate closed;
+         * 3 the gate control's No-Auto bit clear; 4 no LOCK; 5 the effective
+         * gate status clear. */
+        for(unsigned variant=0;variant<6;++variant) {
+            setup();memcpy(r.ccu,left,sizeof(left));d.ppu[4][0]=policy;d.ppu[4][2]=status;r.locked_at=1;
+            if(variant==1)r.ccu[0x2a0/4]=0xe8306100|keep;
+            if(variant==2)r.ccu[0x2a0/4]=0xe0305100|keep;
+            if(variant==3)r.ccu[0x1920/4]&=~1u;
+            if(variant==4)r.never_lock=1;
+            if(variant==5)r.gate_status_off=1;
+            b=boot(200,1,0);
+            if(variant) {
+                assert(b.result==A733_NPU_PLATFORM_RETAINED && !r.writes && !d.ppu_writes && !s.row.counted && tokens_released());
+                ++refusals;continue;
+            }
+            assert(b.result==A733_NPU_PLATFORM_READY && s.pll_adopted && s.pll_inherited==keep && tokens_held());
+            assert(!r.pll_writes && !r.gate_writes && !d.ppu_writes && r.ccu[0x2a0/4]==(0xe8305100|keep));
+            assert(r.sysctrl==0 && r.route_at==1 && r.first_b04_at==2 && r.lock_samples==3);
+            if(!inherited)printf("{\"second_start\":{\"ticks\":%u,\"elapsed_us\":%llu,\"local_writes\":%u,\"first_start_writes\":%u,"
+                "\"pll_writes\":%u,\"pck_writes\":%u,\"lock_samples\":%u,",
+                b.ticks,(unsigned long long)b.elapsed_us,r.writes,first_writes,r.pll_writes,d.ppu_writes,r.lock_samples);
+            bootstrap_running=1;assert(a733_npu_startup_stop(&s)==A733_NPU_PLATFORM_READY);bootstrap_running=0;
+            assert(r.sysctrl==2 && !memcmp(r.ccu,left,sizeof(left)));
+        }
     }
     printf("\"adoption_refusals\":%u}}\n",refusals);
-    puts("PASS second NPU startup adopts the locked PLL_NPU and the ON domain; four adoption refusals write nothing");
+    puts("PASS second NPU startup adopts the locked PLL_NPU and the ON domain with bit 24 clear and set; ten adoption refusals write nothing");
     return 0;
 }
 int main(int argc,char **argv)
@@ -440,14 +447,17 @@ int main(int argc,char **argv)
     setup();r.flip_b04=7;
     b=boot(200,1,0);
     assert(b.result==A733_NPU_PLATFORM_RETAINED && r.held && r.retained && tokens_held());
-    /* Routing refusals after PLL_NPU locks, before any reset release: the
-     * word already routes the SRAM to the NPU, or it ignores the write. */
-    for(unsigned stuck=0;stuck<2;++stuck) {
-        setup();if(stuck)r.sysctrl_stuck=1;else r.sysctrl=0;
-        b=boot(200,1,0);
-        assert(b.result==A733_NPU_PLATFORM_RETAINED && r.held && r.retained && tokens_held());
-        assert(!r.first_b04_at && !s.sram_routed && (stuck ? r.route_at && r.sysctrl==2 : !r.route_at));
-    }
+    /* Routing refusals. A word that already routes the SRAM to the NPU
+     * refuses in the read-only pass, before the domain-4 request. A word that
+     * ignores the write retains after PLL_NPU locks, before any reset
+     * release. */
+    setup();r.sysctrl=0;
+    b=boot(200,1,0);
+    assert(b.result==A733_NPU_PLATFORM_RETAINED && !r.writes && !d.ppu_writes && !s.row.counted && tokens_released());
+    setup();r.sysctrl_stuck=1;
+    b=boot(200,1,0);
+    assert(b.result==A733_NPU_PLATFORM_RETAINED && r.held && r.retained && tokens_held());
+    assert(!r.first_b04_at && !s.sram_routed && r.route_at && r.sysctrl==2);
     /* A restore that does not read back retains at stop. */
     setup();b=boot(200,1,0);assert(b.result==A733_NPU_PLATFORM_READY);r.sysctrl_stuck=1;
     bootstrap_running=1;b.result=a733_npu_startup_stop(&s);bootstrap_running=0;
@@ -466,6 +476,6 @@ int main(int argc,char **argv)
             b.result==A733_NPU_PLATFORM_RETAINED && !r.writes && tokens_released());
     }
     puts("\"cases\":18}");
-    puts("PASS NPU startup sequencer over the power-domain owner: boot, a late power service, stop, three refusals, six retentions and seven reference-clock cases");
+    puts("PASS NPU startup sequencer over the power-domain owner: boot, a late power service, stop, four refusals, five retentions and seven reference-clock cases");
     return 0;
 }

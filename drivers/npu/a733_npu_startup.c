@@ -197,14 +197,15 @@ static int peri0(struct a733_npu_startup *s)
 }
 /* The register pass before the first write (npu-platform.md): the reference
  * clock, the fabric words against the record, PERI0 when selected, every
- * PLL_NPU consumer under its mask, and PLL_NPU disabled or adopted with its
- * tuning words at reset. The owner has checked coherent domain-4 policy and
- * status; an inherited ON domain still requires the same local reset/gate
- * state. */
+ * PLL_NPU consumer under its mask, PLL_NPU disabled or adopted with its
+ * tuning words at reset, and the shared SRAM routed to the CPU. The owner has
+ * checked coherent domain-4 policy and status; an inherited ON domain still
+ * requires the same local reset/gate state. */
 static int pass(struct a733_npu_startup *s)
 {
     uint32_t osc,ref,v;
-    if(!rd(s,0x07090160,&osc) || !rd(s,CCU,&ref) || !a733_clock_ref24_valid(osc,ref))return 0;
+    if(!rd(s,0x07090160,&osc) || !rd(s,CCU,&ref) || !a733_clock_ref24_valid(osc,ref) ||
+       !check(s,SRAM_ROUTING,SRAM_TO_CPU,SRAM_TO_CPU))return 0;
     for(unsigned i=0;i<3;++i) {
         if(!rd(s,CCU+fabric_offsets[i],&v) || (v&a733_npu_fabric_masks[i])!=s->config.fabric.fabric[i] ||
            (i && (v&(BIT(28)|BIT(27)))))return 0;
@@ -268,9 +269,9 @@ static int lock_wait(struct a733_npu_startup *s)
     return 0;
 }
 /* Route the shared SRAM to the NPU, with readback. The register pass found
- * the NPU's AHB, AXI and core resets asserted and its bus and module gates
- * closed, and the exclusive NPU-local clock token keeps them so. Requires
- * the boot ROM's CPU routing on entry. */
+ * the boot ROM's CPU routing, the NPU's AHB, AXI and core resets asserted
+ * and its bus and module gates closed, and the exclusive NPU-local clock
+ * token keeps them so. The word is read again here before the write. */
 static int route_to_npu(struct a733_npu_startup *s)
 {
     uint32_t entry,v;

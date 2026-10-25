@@ -101,8 +101,17 @@ if os.environ.get('GATE_TEST_FAIL') in args:
         self.assertEqual(calls[0][2], str(self.sandbox / 'build' / ('gate-os-resaud-' + self.tree(self.source))))
 
     def test_npu_variant_names_the_cached_catalogue(self):
-        result = self.run_gate('--reason', 'OS NPU profile', '--variant', 'npu')
+        refused = self.run_gate('--reason', 'OS NPU profile', '--variant', 'npu')
+        self.assertEqual(refused.returncode, 2)
+        self.assertIn('NPU catalogue map', refused.stderr)
+        self.assertEqual(self.records(), [])
+        catalogue = self.sandbox / 'build/npu-board/session-artifacts.json'
+        catalogue.parent.mkdir(parents=True, exist_ok=True)
+        catalogue.write_text('{}\n')
+        result = self.run_gate('--reason', 'OS NPU profile', '--variant', 'npu', label='npu')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('npu-catalogue-sha256: ' + hashlib.sha256(b'{}\n').hexdigest(),
+                      (self.sandbox / 'build/gate-npu/summary.txt').read_text())
         calls = self.records()
         self.assertEqual(len(calls), 2)
         self.assertIn('-DSUNSTONE_A733_OS_NPU=ON', calls[0])
@@ -255,6 +264,9 @@ exec "$REAL" "$@"
         self.assertEqual((self.sandbox / 'build/gate-case/summary.txt').read_bytes(), before)
 
     def test_explicit_full_suite_and_declared_trials(self):
+        catalogue = self.sandbox / 'build/npu-board/session-artifacts.json'
+        catalogue.parent.mkdir(parents=True, exist_ok=True)
+        catalogue.write_text('{}\n')
         result = self.run_gate('--reason', 'Shared toolchain changed', '--full', '--trials', '2')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         calls = self.records()
