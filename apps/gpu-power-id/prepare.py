@@ -4,8 +4,7 @@
 tools/prepare-board-bundles.py calls prepare_bundle(row, build, check,
 output) inside its sandbox for the GPU rows: the provider-readiness checkpoint
 (apps/gpu-provider-ready/build.py), and the power-only, identity,
-wrapper-read, wrapper-write and vendor-order variants of
-apps/gpu-power-id/build.py. The function copies the image, its binary,
+wrapper-read and probe-read variants of apps/gpu-power-id/build.py. The function copies the image, its binary,
 its build record and its focused host-check result into the bundle with the
 kernel runner's host tools, and validate() checks the copy:
 
@@ -26,14 +25,10 @@ kernel runner's host tools, and validate() checks the copy:
 - the wrapper-read image's wrapper_words table holds exactly the four GPU
   wrapper words, in their order, and every host-check case read only a
   prefix of them, with 32-bit loads and no GPU-window store;
-- the wrapper-write image's wrapper_steps table holds exactly its twelve
-  wrapper accesses, and every host-check case made only accesses of that
-  table, in its order, and no access of the GPU core window; each write was
-  followed by its readback, and once a stage wrote, the restore ran in full
-  unless the controller failed or the check refused an access;
-- the vendor-order image's vendor_steps table holds exactly its fourteen
+- the probe-read image's probe_steps table holds exactly its fifteen
   accesses, every host-check case made only accesses of that table, in its
-  order, and every vendor write was followed by its restore.
+  order, and each vendor write was restored, by the client or, after a
+  synchronous abort, by its restore vectors.
 
 Nothing here contacts a device.
 """
@@ -53,25 +48,20 @@ SCHEMA = 'board-gpu-returning-bundle-v1'
 # The image each build reuses objects of, by its build record's identity.
 PROVIDER_READY = '3adfa4ad6ba386ce8d39f76646f540107c2a5d02ce42db6c1c35c90de68a75ed'
 FAILED_POWER_ID = 'fd3d5839f700b5e0f569b0ce722e186c33beba65512815b136d9c969a7341afe'
-CASES = {'provider-ready': 11, 'power-only': 11, 'identity': 13, 'wrapper-read': 7, 'wrapper-write': 15, 'vendor-order': 12}
+CASES = {'provider-ready': 11, 'power-only': 11, 'identity': 13, 'wrapper-read': 7, 'probe-read': 12}
 # ON/OFF cycles of the client's normal run: the power-only variant powers
 # CORE6 on twice, so the second ON shows whether TOP5 OFF returned CORE6 to
 # its power-up state.
-CYCLES = {'power-only': 2, 'identity': 1, 'wrapper-read': 1, 'wrapper-write': 1, 'vendor-order': 1}
+CYCLES = {'power-only': 2, 'identity': 1, 'wrapper-read': 1, 'probe-read': 0}
 # The host-check case that completes ON and OFF in each variant.
-NORMAL = {'power-only': 'normal', 'identity': 'normal', 'wrapper-read': 'wrapper-on', 'wrapper-write': 'ww-none', 'vendor-order': 'vo-board'}
+NORMAL = {'power-only': 'normal', 'identity': 'normal', 'wrapper-read': 'wrapper-on', 'probe-read': 'pr-board'}
 # The only GPU-window addresses of the wrapper-read image, in read order.
 WRAPPER_WORDS = [0x01880104, 0x01880100, 0x01880018, 0x0188001c]
-# The wrapper-write image's access table: address, value, write (1) or read (0).
-WRAPPER_STEPS = [(0x01880104, 0, 0), (0x01880100, 0, 0), (0x01880100, 0x00640064, 1), (0x01880100, 0, 0),
-                 (0x01880104, 0x100, 1), (0x01880104, 0, 0), (0x01880104, 0x107, 1), (0x01880104, 0, 0),
-                 (0x01880104, 0, 1), (0x01880104, 0, 0), (0x01880100, 0, 1), (0x01880100, 0, 0)]
-# The vendor-order image's access table: address, value, kind (0 read32, 1
+# The probe-read image's access table: address, value, kind (0 read32, 1
 # write32, 2 write32 of the value read by the row named in value).
-VENDOR_STEPS = [(0x01880014, 0, 0), (0x01880010, 0, 0), (0x01880018, 0, 0), (0x0a0000b0, 0, 0),
-                (0x0a0000b0, 2, 1), (0x0a0000b0, 0, 0), (0x01880014, 0, 1), (0x01880014, 0, 0),
-                (0x01800024, 0, 0), (0x01800020, 0, 0), (0x01880014, 0, 2), (0x01880014, 0, 0),
-                (0x0a0000b0, 3, 2), (0x0a0000b0, 0, 0)]
+PROBE_STEPS = [(0x01880014, 0, 0), (0x01880010, 0, 0), (0x0a0000b0, 0, 0), (0x01800024, 0, 0), (0x01800020, 0, 0),
+               (0x0a0000b0, 2, 1), (0x0a0000b0, 0, 0), (0x01880014, 0, 1), (0x01880014, 0, 0), (0x01800024, 0, 0),
+               (0x01800020, 0, 0), (0x01880014, 0, 2), (0x01880014, 0, 0), (0x0a0000b0, 2, 2), (0x0a0000b0, 0, 0)]
 # struct step of drivers/gpu/a733_gpu_power.c: kind, bank, offset, mask, value.
 STEP = struct.Struct('<5I')
 KIND_DOMAIN = 3        # enum kind: CHECK, UPDATE, DELAY, DOMAIN, CORE_POLICY, ...
@@ -106,33 +96,31 @@ def step_table(elf, name):
     return [STEP.unpack_from(data, i) for i in range(0, len(data), STEP.size)]
 
 
-def table(elf, name, size):
-    """The bytes of one static table of a linked image."""
+def wrapper_words(elf):
+    """The wrapper_words table of a linked wrapper-read image."""
     from elftools.elf.elffile import ELFFile
     with Path(elf).open('rb') as stream:
         image = ELFFile(stream)
         found = [s for s in image.get_section_by_name('.symtab').iter_symbols()
-                 if s.name == name and s['st_info']['type'] == 'STT_OBJECT']
-        require(len(found) == 1 and found[0]['st_size'] == size, f'{elf} has no single {size}-byte {name} table')
+                 if s.name == 'wrapper_words' and s['st_info']['type'] == 'STT_OBJECT']
+        require(len(found) == 1 and found[0]['st_size'] == 16, f'{elf} has no single 16-byte wrapper_words table')
         section = image.get_section(found[0]['st_shndx'])
-        return section.data()[found[0]['st_value'] - section['sh_addr']:][:size]
+        data = section.data()[found[0]['st_value'] - section['sh_addr']:][:16]
+    return list(struct.unpack('<4I', data))
 
 
-def wrapper_words(elf):
-    """The wrapper_words table of a linked wrapper-read image."""
-    return list(struct.unpack('<4I', table(elf, 'wrapper_words', 16)))
-
-
-def vendor_steps(elf):
-    """The vendor_steps table of a linked vendor-order image."""
-    data = table(elf, 'vendor_steps', 12 * len(VENDOR_STEPS))
-    return [struct.unpack_from('<3I', data, 12 * i) for i in range(len(VENDOR_STEPS))]
-
-
-def wrapper_steps(elf):
-    """The wrapper_steps table of a linked wrapper-write image."""
-    data = table(elf, 'wrapper_steps', 12 * len(WRAPPER_STEPS))
-    return [struct.unpack_from('<3I', data, 12 * i) for i in range(len(WRAPPER_STEPS))]
+def probe_steps(elf):
+    """The probe_steps table of a linked probe-read image."""
+    from elftools.elf.elffile import ELFFile
+    size = 12 * len(PROBE_STEPS)
+    with Path(elf).open('rb') as stream:
+        image = ELFFile(stream)
+        found = [s for s in image.get_section_by_name('.symtab').iter_symbols()
+                 if s.name == 'probe_steps' and s['st_info']['type'] == 'STT_OBJECT']
+        require(len(found) == 1 and found[0]['st_size'] == size, f'{elf} has no single {size}-byte probe_steps table')
+        section = image.get_section(found[0]['st_shndx'])
+        data = section.data()[found[0]['st_value'] - section['sh_addr']:][:size]
+    return [struct.unpack_from('<3I', data, 12 * i) for i in range(len(PROBE_STEPS))]
 
 
 def power_order(elf, cycles):
@@ -220,40 +208,6 @@ def validate(row, output):
         require(identity == (variant == 'identity'), 'The image\'s identity reader does not match its variant.')
         wrapper = 'wrapper_read' in names or 'wrapper_words' in names
         require(wrapper == (variant == 'wrapper-read'), 'The image\'s wrapper reader does not match its variant.')
-        writer = 'wrapper_access' in names or 'wrapper_steps' in names
-        require(writer == (variant == 'wrapper-write'), 'The image\'s wrapper writer does not match its variant.')
-        if variant == 'wrapper-write':
-            require(wrapper_steps(output / 'image.elf') == WRAPPER_STEPS,
-                    'The wrapper_steps table is not the twelve wrapper accesses in their order.')
-            for case in checked['cases']:
-                rows = [a[0] for a in case['ww_accesses']]
-                require(rows == sorted(set(rows)) and all(
-                    [hex(WRAPPER_STEPS[r][0]), WRAPPER_STEPS[r][2], hex(WRAPPER_STEPS[r][1]) if WRAPPER_STEPS[r][2]
-                     else None] == a[1:] for r, a in zip(rows, case['ww_accesses'])),
-                    'A host-check case made a GPU-window access outside the wrapper table or its order.')
-                require(not case['gpu_reads'], 'A host-check case read the GPU core window.')
-                if 'refused' not in case:
-                    require(all(r + 1 in rows for r in rows if WRAPPER_STEPS[r][2]),
-                            'A host-check case wrote a wrapper word without its readback.')
-                    require(not set(rows) & set(range(2, 8)) or case['failure'] == 'GPU ON poll' or
-                            set(range(8, 12)) <= set(rows), 'A host-check case left a stage write unrestored.')
-            value['wrapper_steps'] = [[hex(a), hex(v), w] for a, v, w in WRAPPER_STEPS]
-        vendor = 'vendor_access' in names or 'vendor_steps' in names
-        require(vendor == (variant == 'vendor-order'), 'The image\'s vendor-order client does not match its variant.')
-        if variant == 'vendor-order':
-            require(vendor_steps(output / 'image.elf') == VENDOR_STEPS,
-                    'The vendor_steps table is not the fourteen vendor-order accesses in their order.')
-            for case in checked['cases']:
-                rows = [a[0] for a in case['vo_accesses']]
-                require(rows == sorted(set(rows)) and all(
-                    a[1] == hex(VENDOR_STEPS[r][0]) and a[2] == int(VENDOR_STEPS[r][2] in (1, 2))
-                    for r, a in zip(rows, case['vo_accesses'])),
-                    'A host-check case made an access outside the vendor-order table or its order.')
-                require(not case['gpu_reads'], 'A host-check case read the GPU core window outside the table.')
-                if 'refused' not in case:
-                    require((4 not in rows or {12, 13} <= set(rows)) and (6 not in rows or {10, 11} <= set(rows)),
-                            'A host-check case left a vendor write unrestored.')
-            value['vendor_steps'] = [[hex(a), hex(v), k] for a, v, k in VENDOR_STEPS]
         if variant == 'wrapper-read':
             require(wrapper_words(output / 'image.elf') == WRAPPER_WORDS,
                     'The wrapper_words table is not the four GPU wrapper words in their order.')
@@ -262,6 +216,22 @@ def validate(row, output):
                 require(case['gpu_reads'] == reads[:len(case['gpu_reads'])],
                         'A host-check case read a GPU-window address other than the wrapper words in order.')
             value['wrapper_words'] = [hex(a) for a in WRAPPER_WORDS]
+        probe = 'probe_access' in names or 'probe_steps' in names
+        require(probe == (variant == 'probe-read'), 'The image\'s probe-read client does not match its variant.')
+        if variant == 'probe-read':
+            require(probe_steps(output / 'image.elf') == PROBE_STEPS,
+                    'The probe_steps table is not the fifteen probe-read accesses in their order.')
+            for case in checked['cases']:
+                rows = [a[0] for a in case['pr_accesses']]
+                require(rows == sorted(set(rows)) and all(
+                    a[1] == hex(PROBE_STEPS[r][0]) and a[2] == int(PROBE_STEPS[r][2] in (1, 2))
+                    for r, a in zip(rows, case['pr_accesses'])),
+                    'A host-check case made an access outside the probe-read table or its order.')
+                restored = case.get('handler_writes') == [['0x1880014', '0x1'], ['0xa0000b0', '0x5']] or (
+                    (5 not in rows or {13, 14} <= set(rows)) and (7 not in rows or {11, 12} <= set(rows)))
+                require('refused' in case or restored, 'A host-check case left a vendor write unrestored.')
+                require('a733_gpu_platform_off_begin' not in case['calls'], 'A host-check case powered the GPU OFF.')
+            value['probe_steps'] = [[hex(a), hex(v), k] for a, v, k in PROBE_STEPS]
         require(all(not case['gpu_writes'] for case in checked['cases']), 'A host-check case wrote the GPU window.')
         if variant == 'power-only':
             require(all(not case['gpu_reads'] for case in checked['cases']), 'A host-check case read the GPU window.')

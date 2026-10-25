@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Build the GPU identity consumer, or with --power-only the power-only
 variant that never accesses the GPU register window, with --wrapper-read the
-wrapper-read variant, with --wrapper-write the wrapper-write variant or with
---vendor-order the vendor-order variant, on the qualified returning PMIC
-platform."""
+wrapper-read variant or with --probe-read the probe-read variant, on the
+qualified returning PMIC platform."""
 import argparse
 import hashlib
 import json
@@ -51,6 +50,10 @@ def shared_layouts(path, names):
     return layouts
 
 
+PROBE_EXPECT = ('COMPLETE GPU probe read: identity 36.56.104.183 before and after the secure configuration, '
+                'restored, GPU left powered')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
@@ -58,12 +61,10 @@ def main():
                         help='TOP and CORE ON, CORE status 8, OFF and release; no GPU register access')
     parser.add_argument('--wrapper-read', action='store_true',
                         help='one ON, then four reads of GPU wrapper words; no other GPU register access')
-    parser.add_argument('--wrapper-write', action='store_true',
-                        help='one ON, then three stages of GPU wrapper writes, restore, OFF and park')
-    parser.add_argument('--vendor-order', action='store_true',
-                        help='one ON, the vendor secure configuration, one core identity read, restore, OFF and park')
+    parser.add_argument('--probe-read', action='store_true',
+                        help="one ON, the vendor's probe-time identity read, its secure configuration, the read again")
     args = parser.parse_args()
-    if args.power_only + args.wrapper_read + args.wrapper_write + args.vendor_order > 1:
+    if args.power_only + args.wrapper_read + args.probe_read > 1:
         parser.error('choose one variant')
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
@@ -102,14 +103,9 @@ def main():
         # as the power-only variant, in place of main.c.
         if source == 'apps/gpu-power-id/main.c' and args.wrapper_read:
             source = 'apps/gpu-power-id/wrapper.c'
-        # The wrapper-write and vendor-order variants compile their client in
-        # place of main.c, and the controller and platform sources with the
-        # abandon calls added (abandon.h); the shared sources stay unchanged.
-        if args.wrapper_write or args.vendor_order:
-            client = 'wrapper-write.c' if args.wrapper_write else 'vendor-order.c'
-            source = {'apps/gpu-power-id/main.c': 'apps/gpu-power-id/' + client,
-                      'drivers/gpu/a733_gpu_power.c': 'apps/gpu-power-id/power-abandon.c',
-                      'drivers/gpu/a733_gpu_platform.c': 'apps/gpu-power-id/platform-abandon.c'}.get(source, source)
+        # The probe-read variant compiles probe-read.c the same way.
+        if source == 'apps/gpu-power-id/main.c' and args.probe_read:
+            source = 'apps/gpu-power-id/probe-read.c'
         variant = ['-DGPU_POWER_ONLY=1'] if args.power_only and source == 'apps/gpu-power-id/main.c' else []
         command = flags + variant + ['-MD', '-MF', str(obj) + '.d', '-c', str(ROOT / source), '-o', str(obj)]
         subprocess.run(command, check=True, cwd=ROOT)
@@ -177,14 +173,11 @@ def main():
               'shared_layouts_equal': names, 'image_sha256': sha(out / 'image.elf'),
               'binary_sha256': sha(out / 'probe.bin'), 'binary_bytes': (out / 'probe.bin').stat().st_size,
               'variant': ('power-only' if args.power_only else 'wrapper-read' if args.wrapper_read
-                          else 'wrapper-write' if args.wrapper_write else 'vendor-order' if args.vendor_order
-                          else 'identity'),
+                          else 'probe-read' if args.probe_read else 'identity'),
               'expect': ('COMPLETE GPU power only: CORE status 8, OFF and provider parked' if args.power_only
                          else 'COMPLETE GPU wrapper read: CORE status 8, four wrapper words, OFF and provider parked'
-                         if args.wrapper_read else 'COMPLETE GPU wrapper write: CORE status 8, OFF and provider parked'
-                         if args.wrapper_write
-                         else 'COMPLETE GPU vendor order: identity 36.56.104.183, OFF and provider parked'
-                         if args.vendor_order else 'COMPLETE GPU power identity: OFF and provider parked'),
+                         if args.wrapper_read else PROBE_EXPECT if args.probe_read
+                         else 'COMPLETE GPU power identity: OFF and provider parked'),
               'local_authority_required': 'Exclusive GPU CCU and PCK CORE6 policy/PWCR; TOP5 remains shared row' }
     (out / 'build.json').write_text(json.dumps(record, indent=2) + '\n')
     print(json.dumps({k: record[k] for k in ['image_sha256', 'binary_sha256', 'binary_bytes']}))
