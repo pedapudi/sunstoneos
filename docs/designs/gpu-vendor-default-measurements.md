@@ -20,3 +20,46 @@ board run.
 
 Evidence: `~/.cache/sunstoneos/evidence/gpu-vendor-default-20261025/`, with
 the baseline GPU checks in `baseline/gpu-checks/`.
+
+## Default images whose identity changes
+
+The central targets and the supervised and resident OS images were built at
+the branch base (`750fa092`) and at `a071620a`, each from a clean archive at
+the same path, and compared by SHA-256 and by their loadable bytes
+(`~/.cache/sunstoneos/evidence/gpu-vendor-default-20261025/images/`). Of 56
+images, 34 change:
+
+- **Code changes, through an EL3 entry's security writes (17):**
+  `a733-cxx-check`, `a733-kernel-check`, `a733-memtest`, `a733-mimus`,
+  `a733-mimus-usb`, `a733-power-probe`, `a733-storage-probe` and
+  `a733-usb-runtime` (the returning monitor); `a733-smp-cached-diagnostic`,
+  `a733-smp-observe`, `a733-smp-supervised`, `sunstone-a733-board`,
+  `-camera`, `-hdmi`, `-mimus-native`, `-smp-cached-devices` and
+  `-storage-maintenance` (the SMP cached boot). The board, camera, HDMI,
+  mimus-native and storage-maintenance images also link the changed PMIC
+  provider, owner, consumer and resource manager.
+- **Code changes, through the GPU and supply path (10):**
+  `sunstone-a733-gpu-render` (SMP cached boot, GPU controller, platform and
+  supply); the supervised and resident OS images (SMP cached boot, PMIC
+  provider, owner, consumer and resource manager; their default
+  configuration links no GPU controller); `npu-startup-model` (PMIC
+  provider, owner and resource manager); and the six GPU service models
+  (`gpu-compute-service-model`, `gpu-freelist-service-model`,
+  `gpu-irq-model`, `gpu-memory-model`, `gpu-power-service-model`,
+  `gpu-service-model`), which link the changed GPU stand-in of
+  `checks/pvr-gpu-service.c` and, for the power model, the controller.
+- **Debug information only (7):** `a733-cxx-model`, `a733-kernel-model`,
+  `a733-mimus-model`, `a733-mimus-replay-model` and `a733-monitor-model`
+  build the monitor with `MONITOR_QEMU`, which compiles the writes out;
+  `i2s-file-model` and `i2s-runtime-model` include a changed header. Their
+  loadable bytes are unchanged.
+
+The 22 unchanged images are `a733-smp-diagnostic`, `kernel-check` and the
+DMA, I2S stream and duplex, NPU service, radio and SMP models.
+
+Images built by application scripts change when rebuilt from this tree,
+because they compile one of the three EL3 entries: the four GPU diagnostic
+variants (identity `908d1fd9…`, power-only `19a34592…`, wrapper-read
+`7750efb2…`, probe-read `19c7d2db…`), and the returning USB, RTC, finite NPU
+and board-bundle images. Frozen evidence sets, including the provider-readiness
+checkpoint `3adfa4ad…`, keep their images.
