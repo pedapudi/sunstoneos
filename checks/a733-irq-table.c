@@ -55,7 +55,7 @@ int main(void)
     assert(!a733_irq_table_dispatch(90,0));
     /* Routing writes group, level mode, priority and Aff1 core. */
     reset_gic();
-    assert(a733_irq_table_route(1000,counter));
+    assert(a733_irq_table_route(1000,counter)==A733_IRQ_TABLE_ROUTED);
     assert(gicd_read(0x80+4*5)&(1u<<27));
     assert(((gicd_read(0x400+4*(187/4))>>24)&0xff)==0xd8);
     assert(gicd_read64(0x6000+8*187)==0);

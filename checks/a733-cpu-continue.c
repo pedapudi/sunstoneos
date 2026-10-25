@@ -161,10 +161,11 @@ int main(int argc,char **argv)
     setup(&m,5);m.bad_distributor=1;assert(run(&m)==A733_CONTINUE_RETAINED && !m.cpu.writes_attempted);
     setup(&m,5);m.control|=1;assert(run(&m)==A733_CONTINUE_RETAINED && !m.cpu.writes_attempted);
     /* GICD_CTLR.RWP: a write in progress is waited for; one that never
-     * completes ends at the deadline with a time error in phase 0. */
+     * completes ends at the deadline with its own error in phase 0. */
     setup(&m,5);m.distributor_busy=3;assert(run(&m)==A733_CONTINUE_GIC_READY && !m.distributor_busy);quiet(&m);
     setup(&m,5);m.distributor_busy=1;m.distributor_stuck=1;assert(run(&m)==A733_CONTINUE_PENDING && !m.cpu.phase);
-    m.now=1000;assert(run(&m)==A733_CONTINUE_RETAINED && m.cpu.error==2 && !m.cpu.phase && !m.cpu.writes_attempted);quiet(&m);
+    m.now=1000;assert(run(&m)==A733_CONTINUE_RETAINED && m.cpu.error==5 && !m.cpu.phase && !m.cpu.writes_attempted);
+    assert(m.cpu.distributor==UINT32_C(0x80000033));quiet(&m);
     setup(&m,5);m.bad_distributor=1;m.distributor_busy=1;assert(run(&m)==A733_CONTINUE_RETAINED && m.cpu.error==3);
     setup(&m,5);m.stuck=1;assert(run(&m)==A733_CONTINUE_PENDING);m.now=1000;
     assert(run(&m)==A733_CONTINUE_RETAINED && m.cpu.error==2);quiet(&m);
