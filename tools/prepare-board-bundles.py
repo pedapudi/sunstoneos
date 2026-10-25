@@ -256,9 +256,12 @@ ROWS = [
                   'The kernel check\'s 100 rounds pass and the monitor returns to a responsive ROM.',
                   'The rank 4 kernel check with SUNSTONE_MONITOR_COUNTERS, built from the source revision: the '
                   'monitor writes MDCR_EL3, HSTR_EL2 and MDCR_EL2.HPMN before EL1 entry. Against bundle 2, which '
-                  'passed on port 3-3, only platform/a733/platform.c differs: platform_init() now sets DAIF.I again '
-                  'after the local pool preparation. Its pass makes it the equivalence base of the other returning '
-                  'images prepared in the same run, which link its platform.c object.'),
+                  'passed on port 3-3, platform/a733/platform.c and platform/a733/monitor.c differ: platform_init() '
+                  'sets DAIF.I again after the local pool preparation, and the monitor reads back the interrupt '
+                  'state it restores on return and, when that fails, publishes status 6 with the image\'s status in '
+                  'replaced_status. Its pass makes it the equivalence base of the other returning images prepared '
+                  'in the same run, which link its platform.c object and, when the monitor changed since '
+                  'rank-9-usb-v4, its monitor object.'),
     read_row('clock-words', 3, 'Clock words for the CPU-L boot-clock report, MBUS and NSI',
              'CPU-L configured rate, MBUS_DFS_EN and the NSI gate and reset, read before any image needs them',
              [word(CCU + 0x580, 'ccu', note='NSI_CLK_REG: gate 31, reset 30'),
@@ -863,7 +866,8 @@ def runbook(row, bundle, value, artifacts, prerequisites, timeout, lifetime=None
             tail = [f'        --ddr-evidence $D --platform-survey $S/{stem}-survey/session.json [--warm-return ...]']
         else:
             lines += [f'2. Run the image once, with the DDR record `{lifetime["ddr"]}` of this lifetime\'s cold start '
-                      + (f'and one `--warm-return` for each of the {len(links)} returning runs since then, in order:'
+                      + (f'and one `--warm-return` for each of the {len(links)} returning '
+                         + ('run' if len(links) == 1 else 'runs') + ' since then, in order:'
                          if links else 'and no `--warm-return`: no returning run precedes it in this lifetime:'),
                       '', '   ```sh']
             tail = [f'        --ddr-evidence $S/{lifetime["ddr"]}/session.json '
@@ -944,10 +948,6 @@ def set_runbook(run_dir, lifetime, rows, table):
 
 def outcome_paths(row, bundle):
     """The outcome of every path of a returning run: a warm return or a recorded quarantine."""
-    quarantine = ('quarantine: the runner records the failure in `session.json`, writes '
-                  '`~/.cache/sunstoneos/recovery-required-<port>-<identity>.json` for the instance, keeps the port '
-                  'lock and the queue claim, and `bundle-run.py` prints `"result": "failed", "claim": "held"`; the '
-                  'board waits for power removal and no later step of this lifetime runs')
     lines = ['## Outcome of each path', '', '| Path | Record | Ends in |', '| --- | --- | --- |']
     if row.get('passes', True):
         lines.append(f'| Pass | Status 0 and `{row["expect"]}` | Warm return: `PASS: kernel check, FEL recovery, '
@@ -957,19 +957,20 @@ def outcome_paths(row, bundle):
             lines.append(f'| Controlled `{o["name"]}` | Status {o["status"]}, matched as listed below | Warm return: '
                          f'`CONTROLLED: {o["name"]}, ...`; a `--warm-return` link, not a pass of any gate |')
     for text in row.get('failures', []):
-        lines.append(f'| Image failure | Status 1 with {text} | {quarantine.capitalize()} |')
-    lines += [f'| Any other image failure | Status 1 with a `FAIL` line, or one `FAIL exception` line (a fault) | '
-              f'{quarantine.capitalize()} |',
-              f'| Hang | The monitor\'s secure timer returns 2 s after entry: status 2, interrupt 29 | '
-              f'{quarantine.capitalize()} |',
-              f'| Monitor cleanup failure | Status 6 (`replaced_status` holds the image\'s status) | '
-              f'{quarantine.capitalize()} |',
+        lines.append(f'| Image failure | Status 1 with {text} | Quarantine |')
+    lines += ['| Any other image failure | Status 1 with a `FAIL` line, or one `FAIL exception` line (a fault) | '
+              'Quarantine |',
+              '| Hang | The monitor\'s secure timer returns 2 s after entry: status 2, interrupt 29 | Quarantine |',
+              '| Monitor cleanup failure | Status 6 (`replaced_status` holds the image\'s status) | Quarantine |',
               '| No return | No new FEL instance within the runner\'s return window: a stalled bus access or a '
-              'monitor that never ran | The runner stops device access and quarantines the old instance; the '
-              'claim stays held until whole-board power removal |',
-              '| Transport failure | A FEL transfer, readback or identity check fails before or after launch | The '
-              'runner stops at the first failure and keeps ownership; before launch the claim is held for review, '
-              'after launch as for no return |', '']
+              'monitor that never ran | Quarantine of the old instance; only whole-board power removal recovers it |',
+              '| Transport failure | A FEL transfer, readback or identity check fails, before or after launch | '
+              'Quarantine |', '',
+              'Quarantine: the runner records the failure in `session.json` and writes '
+              '`~/.cache/sunstoneos/recovery-required-<port>-<identity>.json` for the instance, which refuses '
+              'further FEL requests to it. It keeps the port lock and the queue claim, and `bundle-run.py` prints '
+              '`"result": "failed", "claim": "held"`. No later step of this lifetime runs, and the board waits '
+              'for power removal.', '']
     return lines
 
 
