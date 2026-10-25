@@ -354,7 +354,9 @@ static void bootstrap(void *argument)
             }
             if(a!=NPU_SERVICE_BUSY)break;
         }
-        vTaskDelay(1);
+        /* A PENDING startup blocks until its power-service notification, its
+         * deadline or the last tick of its settle. */
+        (void)ulTaskNotifyTake(pdTRUE,r==A733_NPU_PLATFORM_PENDING ? a733_npu_startup_wait_ticks(&app.startup) : 1);
     }
     a733_npu_application_fail(4);vTaskSuspend(NULL);fatal(NULL);
 }
@@ -396,7 +398,9 @@ static void bootstrap(void *argument)
             }
             if(a!=NPU_SERVICE_BUSY)break;
         }
-        vTaskDelay(1);
+        /* A PENDING startup blocks until its power-service notification, its
+         * deadline or the last tick of its settle. */
+        (void)ulTaskNotifyTake(pdTRUE,r==A733_NPU_PLATFORM_PENDING ? a733_npu_startup_wait_ticks(&app.startup) : 1);
     }
     a733_npu_application_fail(4);vTaskSuspend(NULL);fatal(NULL);
 }

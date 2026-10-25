@@ -17,4 +17,6 @@ typedef struct { void *unused; } StaticSemaphore_t;
 #define taskSCHEDULER_RUNNING 2
 BaseType_t xTaskGetSchedulerState(void);
 TaskHandle_t xTaskGetCurrentTaskHandle(void);
+/* The native wake; the host model supplies its own and never calls this one. */
+#define xTaskNotifyGive(task) ((void)(task))
 #endif

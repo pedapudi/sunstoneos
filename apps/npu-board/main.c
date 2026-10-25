@@ -56,7 +56,10 @@ static void bootstrap(void *unused)
             }
             if(a!=NPU_SERVICE_BUSY)break;
         }
-        vTaskDelay(1);
+        /* A PENDING startup blocks until its power-service notification, its
+         * deadline or the last tick of its settle; a client notification
+         * ends the block early. */
+        (void)ulTaskNotifyTake(pdTRUE,r==A733_NPU_PLATFORM_PENDING ? a733_npu_startup_wait_ticks(&npu_board.startup) : 1);
     }
     fatal(NULL);vTaskSuspend(NULL);for(;;){}
 }

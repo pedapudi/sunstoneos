@@ -34,7 +34,9 @@ struct a733_npu_startup_config {
  * now gives monotonic microseconds for deadlines; spin_us gives raw counter
  * microseconds for LOCK spacing. enter returns 1 held, 0 busy, -1 uncertain.
  * retain marks the held register lock retained after a sequence stopped
- * midway; the lock is never released afterwards. */
+ * midway; the lock is never released afterwards. wake, optional, is called
+ * by the power service when it answers the domain-4 row or publishes the
+ * supply result; the native one notifies the bound task. */
 struct a733_npu_startup_ops {
     struct a733_npu_register_ops registers;
     int (*now)(void *, uint64_t *);
@@ -42,6 +44,7 @@ struct a733_npu_startup_ops {
     int (*enter)(void *, uint64_t deadline_us);
     void (*leave)(void *);
     void (*retain)(void *);
+    void (*wake)(void *);
 };
 /* Stages in the order of the board's vendor kernel: domain 4 ON, then PLL_NPU,
  * then the shared SRAM routed to the NPU and the local clocks and resets. */
@@ -91,6 +94,12 @@ enum a733_npu_platform_result a733_npu_startup_stop(struct a733_npu_startup *);
  * shared provider has failed, 0 before READY, -1 after a failure or from
  * another task. No register access. */
 int a733_npu_startup_prepared(struct a733_npu_startup *);
+/* The bound task, after a PENDING step: the ticks to block in
+ * ulTaskNotifyTake(pdTRUE, ticks) before the next step. A wait for the
+ * supply or the domain-4 row ends with the power service's notification and
+ * otherwise at its deadline; the 2 ms settle wakes on the last tick before
+ * its end, and the step spins the remainder. 0 means step again at once. */
+uint32_t a733_npu_startup_wait_ticks(struct a733_npu_startup *);
 /* Any task, before each NPU register access: 1 only while the startup is
  * READY, which requires the shared SRAM routed to the NPU. One acquire load. */
 static inline int a733_npu_startup_window_open(const struct a733_npu_startup *s)

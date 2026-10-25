@@ -182,7 +182,7 @@ void kernel_main(void)
     ccu[0xb04/4]=1u<<19;ccu[0xc00/4]=1u<<31;ccu[0xc0c/4]=1u<<16;ccu[0x2ac/4]=0x30000000;ccu[0x2b0/4]=0x000b0000;
     const struct a733_npu_startup_config c={{{0x03000001,0x82000001,0x84000000},{300000000,400000000,400000000}},7,deadline(),4};
     const struct a733_npu_startup_providers p={&clock_source,&registry,&locks,&manager,&rails,&domains};
-    const struct a733_npu_startup_ops o={{npu_read,npu_write},npu_now,npu_spin,npu_enter,npu_leave,npu_retain};
+    const struct a733_npu_startup_ops o={{npu_read,npu_write},npu_now,npu_spin,npu_enter,npu_leave,npu_retain,NULL};
     configASSERT(a733_npu_startup_init(&startup,&c,&p,&o,&command_token));
     bootstrap_task=xTaskCreateStaticAffinitySet(bootstrap,"npu-bootstrap",3072,NULL,4,stacks[0],&task_storage[0],1);
     service_task=xTaskCreateStaticAffinitySet(service_loop,"power",3072,NULL,3,stacks[1],&task_storage[1],2);

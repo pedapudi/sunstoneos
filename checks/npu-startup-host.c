@@ -60,6 +60,7 @@ static struct {
     uint32_t sysctrl;
     unsigned sysctrl_stuck,route_at,pll_open_at,first_b04_at,ppu_before_first_write,pll_writes,gate_writes;
     unsigned gate_status_off; /* +0x19a0 reads 0 whatever the gate control holds. */
+    unsigned woken,wakes,waits; /* The power service's notifications of the bootstrap; its blocks. */
     /* Counted in the callbacks: sequencer register reads, LOCK samples among
      * them (PLL_NPU reads without the register lock), the owner's register
      * reads during a step, and counter reads. */
@@ -128,6 +129,8 @@ static int enter(void *v,uint64_t deadline)
 {assert(v==&r && !r.held && m.now<deadline);++r.enters;r.held=1;return 1;}
 static void leave(void *v){assert(v==&r && r.held);r.held=0;}
 static void retain(void *v){assert(v==&r && r.held);r.retained=1;}
+/* The power service's notification: the bootstrap runs after the service's step. */
+static void wake(void *v){assert(v==&r && !bootstrap_running);r.woken=1;++r.wakes;}
 
 /* The image's GPU/PCK resource manager reads the oscillator, the PERI0 words
  * and the PCK bus clock gate; none needs a write here. */
@@ -172,7 +175,7 @@ static void setup(void)
     locks=(struct a733_platform_locks){0};locks.initialized=1;
     const struct a733_npu_startup_config c=config();
     const struct a733_npu_startup_providers p={&counter,&m.clocks,&locks,&m.gpu,&m.rails,&d.owner};
-    const struct a733_npu_startup_ops o={{reg_read,reg_write},now_us,spin_us,enter,leave,retain};
+    const struct a733_npu_startup_ops o={{reg_read,reg_write},now_us,spin_us,enter,leave,retain,wake};
     assert(a733_npu_startup_init(&s,&c,&p,&o,&r) && a733_npu_startup_bind_task(&s,(TaskHandle_t)&s));
     scheduler_running=1;
 }
@@ -185,15 +188,17 @@ static enum a733_npu_platform_result step(void)
     return x;
 }
 struct run { enum a733_npu_platform_result result; unsigned calls,advancing,ticks,pending_clock_reads; uint64_t elapsed_us,stage_us[A733_NPU_STARTUP_STOPPED+1],supply_done_us; };
-/* Boot: each tick the bootstrap calls the step once; the service runs after
- * it whenever notified or due, from its first step service_from_us after the
- * bootstrap's first call. */
+/* Boot: the bootstrap calls the step, and after PENDING blocks for the ticks
+ * that a733_npu_startup_wait_ticks gives (0: at once), or until the power
+ * service notifies it; the service runs after it whenever notified or due,
+ * from its first step service_from_us after the bootstrap's first call. */
 static struct run boot(unsigned limit,unsigned service,uint64_t service_from_us)
 {
     struct run x={.result=A733_NPU_PLATFORM_PENDING};
     const uint64_t t0=m.now;uint64_t next=t0;d.wake_at=t0+service_from_us;
     while(x.ticks<limit) {
-        if(m.now>=next) {
+        if(m.now>=next || r.woken) {
+            r.woken=0;
             const unsigned stage=s.stage,clock_reads=r.clock_reads;
             x.result=step();++x.calls;
             /* The register window opens only at READY. */
@@ -202,7 +207,10 @@ static struct run boot(unsigned limit,unsigned service,uint64_t service_from_us)
             if(s.stage!=stage && s.stage<=A733_NPU_STARTUP_STOPPED)x.stage_us[s.stage]=m.now-t0;
             else x.pending_clock_reads+=r.clock_reads-clock_reads;
             if(x.result!=A733_NPU_PLATFORM_PENDING){x.elapsed_us=m.now-t0;break;}
-            x.ticks=(unsigned)((m.now-t0)/TICK_US)+1;next=t0+(uint64_t)x.ticks*TICK_US;
+            bootstrap_running=1;const uint32_t w=a733_npu_startup_wait_ticks(&s);bootstrap_running=0;
+            if(w)++r.waits;
+            x.ticks=(unsigned)((m.now-t0)/TICK_US)+1;
+            next=w ? t0+((m.now-t0)/TICK_US+w)*TICK_US : m.now;
             continue;
         }
         if(service && m.now>=t0+service_from_us && (d.notified || m.now>=d.wake_at)){

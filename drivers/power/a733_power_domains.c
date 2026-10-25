@@ -44,7 +44,16 @@ static int wr(struct a733_power_domains *d,uintptr_t a,uint32_t v)
 static int bits(const struct a733_power_domains *d,uintptr_t a,uint32_t mask,uint32_t expected)
 {uint32_t v;return rd(d,a,&v) && (v&mask)==expected;}
 static void publish(struct a733_power_domain_row *r,unsigned generation,enum a733_power_row_state s)
-{atomic_store_explicit(&r->state,generation<<3|s,memory_order_release);}
+{
+    atomic_store_explicit(&r->state,generation<<3|s,memory_order_release);
+    if(r->wake)r->wake(r->wake_context);
+}
+/* After the authority word changes: every row's consumer may be waiting on it. */
+static void wake_rows(const struct a733_power_domains *d)
+{
+    for(const struct a733_power_domain_row *r=d->rows;r;r=r->next)
+        if(r->wake)r->wake(r->wake_context);
+}
 static unsigned answered(const struct a733_power_domain_row *r)
 {return atomic_load_explicit(&r->state,memory_order_relaxed)>>3;}
 
@@ -230,6 +239,7 @@ enum { V_TOKEN, V_SUBMIT2, V_RESULT2, V_SUBMIT4, V_RESULT4, V_RELEASE, V_DONE, V
 static void verified(struct a733_power_domains *d,unsigned ok)
 {
     a733_power_authority_set(word(d),A733_POWER_SUPPLY_DONE|(ok ? d->supply_verified : 0));
+    wake_rows(d);
     d->supply_stage=ok ? V_RELEASE : d->supply_request.id ? V_REAP : d->supply_stage>V_TOKEN ? V_RELEASE : V_DONE;
 }
 static int correct(const struct a733_pmic_snapshot *s,enum a733_rail rail)

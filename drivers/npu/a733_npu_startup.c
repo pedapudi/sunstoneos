@@ -108,6 +108,11 @@ static void native_leave(void *v)
 {struct a733_npu_startup *s=v;a733_platform_lock_leave(s->providers.locks,A733_PLATFORM_REGISTER_LOCK);}
 static void native_retain(void *v)
 {struct a733_npu_startup *s=v;(void)a733_platform_lock_retain(s->providers.locks,A733_PLATFORM_REGISTER_LOCK);}
+/* From the power service task: the bound bootstrap task's notification. */
+static void native_wake(void *v)
+{struct a733_npu_startup *s=v;if(s->task)xTaskNotifyGive(s->task);}
+static void row_wake(void *v)
+{struct a733_npu_startup *s=v;if(s->ops.wake)s->ops.wake(s->cookie);}
 
 static int now(struct a733_npu_startup *s,uint64_t *out)
 {
@@ -414,8 +419,17 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
     }
     case A733_NPU_STARTUP_SETTLE:
         /* The vendor platform waits 2 ms after its power and clock hook
-         * (vip_drv_device_platform.c:1386-1387); checked against the counter. */
-        if(t<s->wait_until)return PENDING;
+         * (vip_drv_device_platform.c:1386-1387); checked against the counter.
+         * The task blocks until the last tick before the end and spins the
+         * remainder, at most one tick, on the raw counter. */
+        if(t<s->wait_until) {
+            const uint64_t left=s->wait_until-t;
+            if(left>TICK_US)return PENDING;
+            const uint64_t until=s->ops.spin_us(s->cookie)+left;
+            while(s->ops.spin_us(s->cookie)<until){}
+            if(!now(s,&t))return fault(s);
+            if(t<s->wait_until)return PENDING;
+        }
         s->stage=A733_NPU_STARTUP_FINAL;
         break;
     case A733_NPU_STARTUP_FINAL: {
@@ -460,6 +474,20 @@ int a733_npu_startup_prepared(struct a733_npu_startup *s)
     }
     return 1;
 }
+uint32_t a733_npu_startup_wait_ticks(struct a733_npu_startup *s)
+{
+    uint64_t t;
+    if(!owner_task(s) || !now(s,&t))return 1;
+    if(s->stage==A733_NPU_STARTUP_SETTLE)
+        return t>=s->wait_until ? 0 : (uint32_t)((s->wait_until-t)/TICK_US);
+    if((s->stage==A733_NPU_STARTUP_SUPPLY || s->stage==A733_NPU_STARTUP_ROW) && s->ops.wake) {
+        /* A notification ends the wait; the deadline bounds it. */
+        if(t>=s->wait_until)return 0;
+        const uint64_t ticks=(s->wait_until-t+TICK_US-1)/TICK_US;
+        return ticks>UINT32_MAX-1 ? UINT32_MAX-1 : (uint32_t)ticks;
+    }
+    return 1;
+}
 int a733_npu_startup_init(struct a733_npu_startup *s,const struct a733_npu_startup_config *c,
     const struct a733_npu_startup_providers *p,const struct a733_npu_startup_ops *o,void *cookie)
 {
@@ -474,7 +502,7 @@ int a733_npu_startup_init(struct a733_npu_startup *s,const struct a733_npu_start
               !o->leave || !o->retain)) ||
        !a733_ranges_disjoint(s,sizeof(*s),c,sizeof(*c)) || !a733_ranges_disjoint(s,sizeof(*s),p,sizeof(*p)))return 0;
     const struct a733_npu_startup_ops native={{native_read,native_write},native_now,native_spin_us,
-        native_enter,native_leave,native_retain};
+        native_enter,native_leave,native_retain,native_wake};
     s->config=*c;s->providers=*p;s->ops=o ? *o : native;s->cookie=o ? cookie : s;s->shared=shared;
     /* No NPU image makes a supply transition, so the owner verifies DCDC2 at
      * its first step instead of after the 5,160 us settle. */
@@ -486,5 +514,8 @@ int a733_npu_startup_bind_task(struct a733_npu_startup *s,TaskHandle_t task)
 {
     if(!s || !s->initialized || s->failed || s->task || !task || !privileged() ||
        xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED)return 0;
-    s->task=task;return 1;
+    s->task=task;
+    /* Before the service first runs, so its first answer already wakes. */
+    s->row.wake=row_wake;s->row.wake_context=s;
+    return 1;
 }

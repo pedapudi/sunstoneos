@@ -170,7 +170,10 @@ static void bootstrap(void *unused)
             }
             if(activated!=NPU_SERVICE_BUSY)break;
         }
-        vTaskDelay(1);
+        /* A PENDING startup blocks until its power-service notification, its
+         * deadline or the last tick of its settle; a thermal notification
+         * ends the block early. */
+        (void)ulTaskNotifyTake(pdTRUE,r==A733_NPU_PLATFORM_PENDING ? a733_npu_startup_wait_ticks(&npu.startup) : 1);
     }
 failed:
     (void)fail();vTaskSuspend(NULL);
