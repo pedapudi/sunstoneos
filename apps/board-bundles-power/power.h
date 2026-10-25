@@ -76,6 +76,14 @@ struct bb_power {
     unsigned cost_at_park;             /* set by the client before bb_power_park() */
     atomic_uint wire_armed;
     unsigned wire_in_step, wire_excluded;
+    /* Completing-poll spans of the step in progress: the poll's entry stamp
+     * and its bus-event count, and whether a phase-start CNTR write has
+     * ended its span. They join bb_power_next.complete when the step is
+     * recorded. */
+    unsigned in_step, poll_open;
+    uint32_t poll_events, poll_stops;
+    uint64_t poll_at;
+    struct bb_span step_complete[BB_COMPLETE_KINDS];
 };
 extern struct bb_power bb_power;
 /* Bundle 6 only: the windows of trace.h's struct bb_cost_next. The access

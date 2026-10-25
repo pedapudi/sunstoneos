@@ -464,6 +464,17 @@ static void next_window_case(void)
     assert(!bb_xaddr_admitted(0, 0x40, 0x08, 0x3a));            /* not idle */
     assert(!bb_xaddr_admitted(0, 0x40, 0xf8, 0x3b) && !bb_xaddr_admitted(0, 0x40, 0xf8, 0x3e)); /* a line forced */
     assert(!bb_xaddr_admitted(0, 0x40, 0xf8, 0x2a) && !bb_xaddr_admitted(0, 0x40, 0xf8, 0x1a)); /* a line low */
+    /* Completing-poll spans: no cap, the first sample sets the minimum, and a
+     * step's spans join the run's only through bb_span_merge(). */
+    struct bb_span run = {0}, step = {0}, empty = {0};
+    bb_span_merge(&run, &empty);
+    assert(!run.count && !run.min);
+    for (uint32_t i = 0; i < 2000; ++i)
+        bb_span_add(&step, 70 + i % 13);
+    bb_span_merge(&run, &step);
+    bb_span_add(&step, 40);
+    bb_span_merge(&run, &step);
+    assert(run.count == 4001 && run.min == 40 && run.max == 82 && step.count == 2001);
     struct bb_samples s;
     bb_samples_start(&s);
     uint32_t sum = 0, group[BB_COST_SUBWINDOWS] = {0};

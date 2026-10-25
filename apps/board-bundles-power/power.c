@@ -36,6 +36,17 @@ static int pmic_read(void *c, uintptr_t a, uint32_t *v)
         bb_twi_observe(&bb_power.twi, 0, a, *v);
     return r;
 }
+/* The poll's task check: the first callback of every a733_pmic_poll(). The
+ * stamp starts the poll's span; one counter read per poll. */
+static int pmic_current(void *c)
+{
+    struct bb_power *p = &bb_power;
+    p->poll_at = counter();
+    p->poll_events = p->twi.conditions + p->twi.bytes + p->twi.stops;
+    p->poll_stops = p->twi.stops;
+    p->poll_open = 1;
+    return p->native_pmic_ops.current(c);
+}
 static int pmic_write(void *c, uintptr_t a, uint32_t v)
 {
     struct bb_power *p = &bb_power;
@@ -68,6 +79,14 @@ static int pmic_write(void *c, uintptr_t a, uint32_t v)
     if (ticks < p->cost.write_min) p->cost.write_min = ticks;
     if (ticks > p->cost.write_max) p->cost.write_max = ticks;
     bb_twi_observe(&p->twi, 1, a, v);
+    /* A poll that completed a bus phase ends its span at its first
+     * phase-start CNTR write; the wire-time spin's write is left out. */
+    if (a == BB_TWI_CNTR && p->poll_open) {
+        p->poll_open = 0;
+        if (p->in_step && !spin && p->twi.conditions + p->twi.bytes + p->twi.stops != p->poll_events)
+            bb_span_add(&p->step_complete[v == 0x48 ? BB_COMPLETE_BYTE : v == 0x58 ? BB_COMPLETE_STOP :
+                p->twi.stops != p->poll_stops ? BB_COMPLETE_START : BB_COMPLETE_RESTART], (uint32_t)(after - p->poll_at));
+    }
     return r;
 }
 /* Caller buffers must also stay clear of the records this layer writes. */
@@ -276,15 +295,21 @@ static void service(void *unused)
         const struct bb_twi before = p->twi;
         p->twi.polls_max = 0;
         const TickType_t first = xTaskGetTickCount();
+        for (unsigned k = 0; k < BB_COMPLETE_KINDS; ++k)
+            p->step_complete[k] = (struct bb_span){0};
+        p->in_step = 1;
         const uint64_t start = counter();
         const uint32_t ticks = a733_power_service_step(&p->domains);
         const uint64_t end = counter();
+        p->in_step = 0;
         const TickType_t last = xTaskGetTickCount();
         const struct bb_twi *t = &p->twi;
         if (p->wire_in_step) {
             p->wire_in_step = 0;
             p->wire_excluded = 1;
         } else if (t->conditions != before.conditions || t->bytes != before.bytes || t->stops != before.stops) {
+            for (unsigned k = 0; k < BB_COMPLETE_KINDS; ++k)
+                bb_span_merge(&bb_power_next.complete[k], &p->step_complete[k]);
             if (p->stepped < BB_POWER_STEPS)
                 p->steps[p->stepped++] = (struct bb_step){end - start, last - first,
                     (uint16_t)(t->conditions - before.conditions), (uint16_t)(t->bytes - before.bytes),
@@ -336,6 +361,7 @@ static int power_init(TaskFunction_t client, const char *name, unsigned domain_r
         return 0;
     p->native_pmic_ops = p->pmic_native.pmic_bus_ops;
     struct a733_pmic_ops ops = p->native_pmic_ops;
+    ops.current = pmic_current;
     ops.read = pmic_read;
     ops.write = pmic_write;
     ops.outside = pmic_outside;

@@ -348,6 +348,17 @@ that the earlier adapter made per access:
      step is excluded and the poll window takes one, so the summary normally
      reads `STEPS recorded=32` and `excluded=1`; each further snapshot the
      window takes lowers the recorded count by one.
+6. **Completing polls in the recorded steps**, built after the second run
+   and not yet run. The bundle's wrapper of the poll's task check stamps the
+   counter at the entry of every `a733_pmic_poll()`; that is one counter read
+   per poll, about 35 ns, inside the step times. A poll that completes a bus
+   phase (a flag or a STOP wait, as the trace observer counts them) ends its
+   span at the stamp after its first phase-start `CNTR` write returns. The
+   spans of a recorded step join four records by that write: a byte
+   (`0x48`), a repeated START, a START after a STOP wait, and a STOP
+   (`0x58`). Each record keeps the count, the summed ticks and the fastest
+   and slowest span, printed as `TWI_COMPLETE` lines. The step that holds the
+   wire-time spin and the poll window's snapshot are left out.
 
 The step records count re-spins: control-register polls beyond the second
 of a flag phase or of a STOP wait. A STOP wait lasts until `M_STP` reads
@@ -495,9 +506,13 @@ Its candidates:
 - per-step work outside the phases, such as the admission's two lock
   waits.
 
-A window that stamps each completing poll from its entry to the return of
-its phase-start write, inside the recorded steps, would separate the first
-three from the fourth.
+The completing-poll window (item 6 under "Measurement") times each
+completing poll from its entry to the return of its phase-start write
+inside the recorded steps. At the measured costs the model charges such a
+span 2.63 µs for a byte, 2.23 µs for a repeated START or a START after a
+STOP wait, and 2.88 µs for a STOP, which also reads `DATA`. Spans about
+970 ns longer than those point to the first three candidates; spans that
+match them point to the fourth.
 
 **Lighter barrier placement, predicted.** The placement under "Left out"
 reads S_TWI0 plainly, writes `DATA` plainly and completes the `CNTR` write
