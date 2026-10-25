@@ -546,11 +546,23 @@ outside the 128 MiB that `platform_init()` maps. All bundles run one core.
 
 ## Reuse and removal
 
-Reused: `common/bundle-run.py`, `cache-off.py`, `survey.py`, the kernel
+Reused: `common/bundle-run.py`, `cache-off.py`, the kernel
 runner with `common/primary.patch`, `tools/returning_build.py
 --platform-build`, the platform objects of `rank-9-usb-v4/`, the reader logic
 of `state-capture-readl.py`, and the tool's sandbox, `nm` scan, snapshot and
 submission steps. Removed: rank 7 from the memory row's procedure.
+
+The returning SRAM survey before each returning run calls the repository's
+`tools/run-launch-survey.py` through `common/bundle-run.py` with the survey
+build in `bootstrap-retention-20261024/survey-build`. That runner refuses a
+build whose manifest names another runner (`host_sha256`) or survey source
+(`source_sha256`). The build in `launch-survey-20261017/build` holds the same
+binary but names the runner from before commit `575565f8`, and
+`common/survey.py` uses it, so the runbooks no longer call that script.
+`tools/prepare-board-bundles.py` refuses inputs with a returning row before it
+creates a run directory unless the survey build passes the runner's hash
+checks, and `checks/board-bundles.py` repeats that check offline and refuses
+the older build.
 
 ## Register sources and unproven sequences
 
