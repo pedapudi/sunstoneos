@@ -147,11 +147,13 @@ U-Boot clears SYSCTRL `0x03000008` bit 1 to give it to the NPU
 cleared while the NPU resets were held, both numerical jobs matched the
 reference; without it, both outputs were wrong ([handoff](../handoff.md)).
 
-**SunstoneOS today.** Variant only. The routing, the READY guard and the EL3
-restore live in `apps/npu-finite/sram-route.c` and `sram-route-el3.c`, linked
-by symbol wrapping. The production sequencer (`drivers/npu/a733_npu_startup.c`),
-the register adapter (`platform/a733/npu_native.c:7`–`8`) and the monitor's
-ROM return (`platform/a733/monitor.c:239`) have none of them.
+**SunstoneOS today.** Implemented on `work/npu-production-1025`
+([design](../designs/npu-sram-route.md)); not yet run on a board. The startup
+sequencer routes the SRAM and powers domain 4 first, both NPU backends refuse
+register access outside READY, the finite image's EL3 return path sets bit 1
+before its ROM return, and the register pass adopts a running PLL_NPU. The
+re-read of the master gates and the PCK clock at the final check (backsolve
+fix 4) is not part of that change.
 
 **Change.** Move the variant's three steps into production:
 

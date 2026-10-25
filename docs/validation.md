@@ -32,7 +32,12 @@ owner chooses coverage from the changed behavior and shared dependencies;
 the gate does not infer it from filenames or launch every matching check.
 
 `--full` explicitly requests all central targets, the nine OS variants of
-[the integrated OS image](handoff.md#integrated-os-image) and all gate checks.
+[the integrated OS image](handoff.md#integrated-os-image), its supervised NPU
+profile (variant `npu`) and all gate checks. The `npu` variant builds with the
+catalogue map `~/.cache/sunstoneos/build/npu-board/session-artifacts.json`;
+the OS build verifies every file it names against
+`tools/npu-session-models.json`, the gate refuses the variant before any
+build when the map is missing, and the summary records its SHA-256.
 The optional GPU linear, mSBC, Cortex-A76 and CPU clock options are not
 variants of the gate; build them directly with `cfg.sh` when a change
 affects them. Reserve it for a shared change or milestone whose missing

@@ -14,7 +14,8 @@ budgets are the ones in [npu-board.md](npu-board.md).
   sequencer against the actual PMIC provider, rail ledger, clock registry,
   GPU/PCK manager and power-domain owner over a register model. The PMIC bus
   runs at 400 kHz, the tick is 1 ms and PLL_NPU reports LOCK 200 µs after its
-  enable.
+  enable. The startup rows give the sequence with domain 4 powered first and
+  the shared SRAM routed to the NPU ([routing design](npu-sram-route.md)).
 - Runtime, client and slot counts come from `checks/npu-session.py` in QEMU
   with two Cortex-A55 cores, and from `checks/npu-runtime-bounds.py` over that
   evidence.
@@ -26,12 +27,12 @@ budgets are the ones in [npu-board.md](npu-board.md).
 
 | Metric | Base | Branch | Target | Met |
 | --- | --- | --- | --- | --- |
-| Boot to READY, scheduler start to READY | No board image | 11 ticks (11.0 ms): the owner sets its done bit at 8.39 ms; the call at that point runs the pass, the enable table, LOCK, the local open table and the row request, ending at 8.62 ms; the row reads ON at 9 ms; the settle ends at 11 ms | ≤ 12 ticks | Yes |
-| Startup calls that advance a stage | 9 harness polls | 4 of 12 calls; the other 8 return PENDING | 4 | Yes |
-| Startup register reads, LOCK reads excluded, owner's domain-check reads included | 90 | 57: 52 by the sequencer and 5 by the owner's domain check; 70 LOCK samples besides. Counting the native write adapter's read of each of the 12 written words, 69 device reads | ≤ 60 | Yes |
-| Startup register writes | 18, of which 6 to PCK600 | 12, none to PCK600; the model's write callback admits only `CCU+0xb00`, `+0xb04`, `+0x1920` and `+0x2a0` | ≤ 12, none to PCK600 | Yes |
-| Register-lock acquisitions in startup | 7 | 3 | 3 | Yes |
-| Counter reads in startup | 31 | 24: 16 in the four calls that advance, one in each of the 8 PENDING calls | ≤ 16 when advancing, one per PENDING call | Yes |
+| Boot to READY, scheduler start to READY | No board image | 13 ticks as the model rounds 12,001 µs: the owner sets its done bit at 8.38 ms; the call at that point runs the pass and the domain-4 request; the call at 9 ms sees ON and runs the enable table, LOCK and the local open table, ending at 9.23 ms; the settle ends at 11.23 ms; the call at 12 ms reads back and returns READY | ≤ 13 ticks | Yes |
+| Startup calls that advance a stage | 9 harness polls | 4 of 13 calls; the other 9 return PENDING | 4 | Yes |
+| Startup register reads, LOCK reads excluded, owner's domain-check reads included | 90 | 61: 56 by the sequencer and 5 by the owner's domain check; 70 LOCK samples besides. Counting the native write adapter's read of each of the 13 written words, 74 device reads | ≤ 61 | Yes |
+| Startup register writes | 18, of which 6 to PCK600 | 13, one of them to the routing word, none to PCK600; the model's write callback admits only `CCU+0xb00`, `+0xb04`, `+0x1920`, `+0x2a0` and SYSCTRL `0x03000008` | ≤ 13, none to PCK600 | Yes |
+| Register-lock acquisitions in startup | 7 | 4 | 4 | Yes |
+| Counter reads in startup | 31 | 25: 16 in the four calls that advance, one in each of the 9 PENDING calls | ≤ 16 when advancing, one per PENDING call | Yes |
 | PMIC traffic caused by startup | 12 register reads, 6 bus-state reads, 5,160 µs wait | None | None | Yes |
 | Bytes hashed by startup polls, accelerator image | 20.7 MB; the call graph of `npu_convolution_startup_poll` reaches `digest` and `hash_block` | 0; its call graph reaches 29 functions and no digest function, nor do the startup and GPU callbacks it calls through pointers | 0 | Yes |
 | GPU/PCK managers in an image with the NPU | 1 in the accelerator image | 1 in the accelerator image; 1 in the board image | 1 | Yes |

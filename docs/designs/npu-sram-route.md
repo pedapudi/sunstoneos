@@ -1,13 +1,18 @@
-# Route the shared SRAM to the NPU for the numerical finite run
+# Route the shared SRAM to the NPU in every NPU startup
 
-Status: implemented as a separate variant of the finite numerical NPU image
-and checked on its linked instructions. It has not run on a board.
+Status: implemented in the NPU startup sequencer, the two NPU backends and
+the finite image's EL3 return path. Checked in host models, on two QEMU
+cores and on the linked instructions of the finite numerical image. The
+routing ran on port 3-3 on 2026-10-25 in a separate variant of the finite
+image, which this change replaces. The production sequence, the power-first
+order and the adoption of a running PLL_NPU have not run on a board; the
+[two-start runbook](../board-runbooks/npu-two-starts.md) tests them.
 
 ## Problem and reference
 
 The A733's 512 KiB shared SRAM appears to the CPU at `0x00074000`–`0x000f3fff`
-and is the NPU's internal SRAM. Bit 1 of SYSCTRL `0x03000008` selects its
-owner:
+and is the NPU's internal SRAM. Bit 1 of SYSCTRL `0x03000008`, which the manual
+does not document, selects its owner: set, the CPU; clear, the NPU.
 
 - The boot ROM sets bit 1 at ROM offsets `0x20c`–`0x220` (FIXS-BROM, SHA-256
   `3a2a7d28…`), before it first uses its stack at `0x000f3400` in that SRAM.
@@ -16,158 +21,253 @@ owner:
   SunstoneOS images use enters at `0x20` instead, and that path zeroes
   `0x00044000`–`0x000f3ffc` before it reaches `0x20c`.
 - Board U-Boot clears bit 1 and reads it back at board init, before any NPU
-  clock or reset changes (`arch/arm/mach-sunxi/board_sun60iw2.c:119-133` and
+  clock or reset change (`arch/arm/mach-sunxi/board_sun60iw2.c:119-133` and
   `board/sunxi/board.c:248-252`, u-boot-orangepi `b791be84`). Its comment
   reads "set sram to npu".
 
 SunstoneOS images load through FEL, so no U-Boot runs. The read-only state
 bundle (`board-bundles-20261025-6`) read `0x03000008` = `0x2` on both boards.
-The numerical image `9e4adabf…` ran two jobs on port 3-1 with the SRAM routed
-to the CPU, and both outputs were wrong and equal. The model uses 101,376
-bytes of NPU SRAM. [The NPU reference backsolve](../reference-backsolve-npu.md)
-ranks this as the divergence that best fits that failure.
+Two numerical runs of the finite image establish the effect:
 
-## Change
+| Run | Routing | Result |
+| --- | --- | --- |
+| Image `9e4adabf…`, port 3-1, 2026-10-24 | none; SRAM routed to the CPU | Both jobs completed; both outputs wrong and equal to each other |
+| Image `b02ccc95…`, port 3-3, 2026-10-25, record `nr-npu` in `board-session-20261025-3/port-3-3` | bit 1 cleared while the NPU resets were held, register access refused unless routed and READY, bit 1 set at EL3 before the ROM return | Both outputs match the reference; status 0, normal ROM return, verified DRAM restoration |
 
-The variant is `9e4adabf…`'s sources plus two changes, linked into a copy of
-the default image by `apps/npu-finite/build-sram-route.py`:
+[The NPU reference backsolve](../reference-backsolve-npu.md) also found that
+the board's vendor kernel powers domain 4 before any NPU clock or reset
+change: its NPU driver compiles out runtime power management, and the
+platform bus attaches the device to its power domain with power-on before
+probe. Before this change the sequencer requested domain 4 ON after the local
+open table. Its register pass also refused an enabled PLL_NPU, so a second
+NPU start in one power lifetime needed a power removal.
 
-1. **SRAM routing** (`apps/npu-finite/sram-route.c`, EL1, and
-   `apps/npu-finite/sram-route-el3.c`, EL3).
-   - Before the startup sequencer's first write of the NPU bus and reset
-     word (CCU `+0xb04`), the bootstrap task requires the stage OPEN, the
-     AHB, AXI and core resets asserted and the bus and module gates closed,
-     then reads `0x03000008`, requires bit 1 set, clears it and reads it back.
-     PLL_NPU is locked at that point and its output gate open; the NPU's
-     module gate is still closed. Any refusal fails that write, so the
-     sequencer retains its resources and never releases a reset; the service
-     then refuses activation.
-   - After local stop has closed the NPU gates and asserted its resets, the
-     same task sets bit 1 again and reads it back. This is an earlier
-     diagnostic readback, not the safety step: a failure returns RETAINED,
-     so the client never reports quiescence and no normal return follows.
-   - At EL3, immediately before the forced-FEL reset, the monitor reads the
-     word, sets bit 1 if it is clear, and parks with status 7 if the readback
-     still shows the NPU routing. This store alone keeps the ROM's `0x20`
-     entry from zeroing an SRAM routed to the NPU.
-2. **READY guard.** The NPU register callbacks refuse every access unless
-   bit 1 has been cleared by the step above and the startup stage is READY.
-   A refusal makes no bus access; the controller then faults with an I/O
-   failure and retains every resource.
+## Startup sequence
 
-Six linker redirections (`--wrap`) attach the two files to the unchanged
-objects: `a733_npu_startup_init` records the one sequencer,
-`a733_npu_platform_native_write` gains the clear, `npu_service_activate`
-requires it, `npu_convolution_stop_poll` gains the EL1 restore,
-`a733_npu_native_operations` gains the guard, and `npu_finite_rom_return` gains
-the EL3 restore. That function holds the image's only `RMR_EL3` write, and
-the check confirms that the EL3 restore is its only caller. No existing source file changes, so the default finite image
-and every other image are unchanged.
+`a733_npu_startup_step` runs these stages on the bound bootstrap task
+([npu-startup.md](../npu-startup.md)):
+
+1. **Tokens and supply.** The clock, rail and PCK tokens, then the wait for
+   the owner's DCDC2 verification.
+2. **Register pass and power request.** Under the register lock, the owner's
+   domain-4 check and the read-only register pass, which now also requires
+   bit 1 of `0x03000008` set, the boot ROM's routing. A refusal has written
+   nothing and releases every token. The step then requests domain 4 ON
+   through its row and returns PENDING. The owner adopts an ON domain without
+   a PCK600 write and powers an OFF domain.
+3. **Row.** The step waits for the owner's answer, bounded by
+   `A733_POWER_PCK_BOUND_US` and two ticks. From here on every failure keeps
+   the tokens.
+4. **PLL_NPU.** The method-2 enable table ([npu-pll.md](../npu-pll.md)), or,
+   for an adopted PLL, one read that must still show it locked at the
+   profile. LOCK is then sampled three times in a row in both cases.
+5. **Open.** Under one lock acquisition: the PLL output gate opens; bit 1 of
+   `0x03000008` is read, required set, cleared and read back; then the local
+   open table releases the AHB, AXI and core resets and opens the bus and
+   module gates. The 2 ms settle starts at the end of this stage, after the
+   vendor platform's power and clock hook (`vip_drv_device_platform.c:1386-1387`).
+6. **Final readback.** Domain 4 ON, bit 1 clear, the local words and the PLL
+   word. The step publishes the register window open and returns READY.
+
+The routing write keeps the place it had in the board run: after PLL_NPU has
+locked and its output gate opened, before the first write of CCU `+0xb04`.
+The register pass established that the NPU resets are asserted and its bus
+and module gates closed. The exclusive NPU-local clock token keeps every
+other writer out until the write.
+
+`a733_npu_startup_stop`, after the controller's CLOSE, closes the register
+window, applies the local stop table, then sets bit 1 again with readback.
+
+The allowlist adapter ([`a733_npu_platform_native.c`](../../drivers/npu/a733_npu_platform_native.c))
+writes only bit 1 of the routing word, and only while CCU `+0xb04` holds the
+NPU's AHB, AXI and core resets asserted and its bus gate closed and the
+module gate at `+0xb00` is closed.
+
+### A second start in one power lifetime
+
+Local stop leaves PLL_NPU enabled, locked at the profile and with its output
+gate open; domain 4 stays ON. The register pass adopts only that PLL state:
+control word `0xf8305100` apart from the inherited reserved bit 24, with the
+gate controls at CCU `+0x1920` and `+0x19a0` set. The vendor clock driver
+behaves the same way: its PLL enable helper returns without a write when the
+PLL's enable, LDO and output gate bits are already set (`ccu_gate.c:171-174`,
+linux-orangepi `2ac08e8c`). Adoption makes no PLL or gate-control write. Every
+other enabled state still refuses before any write: other factors, the output
+gate closed, a clear gate-control bit, or no LOCK. Domain 4 ON was already
+adopted by the owner.
+
+## Register window
+
+The startup structure holds one atomic word, `window_open`. The bootstrap
+task stores 1 with release order when it reaches READY, and 0 at the start of
+local stop and on any failure. Both NPU backends,
+[`npu_convolution.c`](../../drivers/npu/npu_convolution.c) and
+[`a733_npu_runtime.c`](../../drivers/npu/a733_npu_runtime.c), load it with
+acquire order before every register read and write and refuse the access
+while it is 0. A refusal makes no bus access; the controller then faults with
+an I/O failure and retains its resources. READY requires the routing, so an
+open window implies the SRAM belongs to the NPU.
+
+The raw adapter ([`npu_native.c`](../../platform/a733/npu_native.c)) has no
+startup and keeps no window. Only host models call it directly.
+
+## Return to the ROM
+
+The finite image's EL3 receipt path ([`monitor.c`](../../apps/npu-finite/monitor.c))
+reads `0x03000008` after the GIC and secondary-core cleanup and before it
+publishes the report. It sets bit 1 if it reads clear and parks with
+`a733_smp_stop(7, 0x03000008)` if the readback still shows the NPU routing.
+Only then does it call `npu_finite_rom_return`, which holds the image's only
+`RMR_EL3` write. This step does not depend on the EL1 restore at local stop.
+The default, thermal, interrupt and entry-checkpoint profiles of the finite
+image share this monitor.
+
+The other images that link the startup do not return to the ROM. The
+supervised OS with the NPU profile, the NPU board image, the convolution
+images and the accelerator composition end in a terminal halt that needs a
+power removal. Their local stop restores the CPU routing at EL1.
 
 ## Exit paths and the window with the SRAM routed to the NPU
 
-The bit is clear from the first reset release until the stop step. Every way
-out of that window:
+The bit is clear from the open stage until local stop. Every way out of that
+window in the finite image:
 
 | Path | Restore |
 | --- | --- |
-| Normal: two jobs, CLOSE, local stop, quiescence, SMC, EL3 receipt check, ROM return | EL1 stop step, then the EL3 step before `RMR_EL3` |
+| Normal: two jobs, CLOSE, local stop, quiescence, SMC, EL3 receipt check, ROM return | EL1 at local stop, then EL3 before the report and `RMR_EL3` |
 | Local stop fails or retains | No quiescence, so `platform_exit` issues SMC 4; EL3 parks in `a733_smp_stop` |
-| Any EL1 fault, deadline or refused receipt | SMC or exception to EL3; the finite monitor parks in `a733_smp_stop` (status 6) |
-| EL3 recovery timer (FIQ) | The finite monitor parks in `a733_smp_stop` (status 6) |
+| Any EL1 fault, deadline or refused receipt | SMC or exception to EL3; the monitor parks in `a733_smp_stop` (status 6) |
+| EL3 cleanup failure | Parks with status 7 before the restore |
+| EL3 recovery timer (FIQ) | The monitor parks in `a733_smp_stop` (status 6) |
 | Bus stall | The CPU never returns |
 
-The parked paths do not restore the bit. They never return control to the
-ROM either: `a733_smp_stop` waits in `WFE` at EL3 with interrupts masked and
-writes no reset flag, and the image's only `RMR_EL3` write follows the EL3
-restore. Only a power removal recovers them, and that is a cold entry at
-`0x0`, which sets bit 1 before touching the SRAM. Changing `a733_smp_stop`
-would change the shared monitor of every single-core image, so the variant
-leaves it as it is. The window on a failure path therefore ends at the power
-removal that every failure already requires.
+The parked paths do not restore the bit, and they never return control to
+the ROM: `a733_smp_stop` waits in `WFE` at EL3 with interrupts masked and
+writes no reset flag. Only a power removal recovers them, and that is a cold
+entry at `0x0`, which sets bit 1 before touching the SRAM.
 
 That bound depends on the watchdog staying disabled. A watchdog reset would
 re-enter the ROM without the EL3 restore, and the state of SYSCTRL after such
-a reset is unknown. The profile requires it disabled at both ends: the host
-refuses to launch when `0x02050014` bit 0 is set (`apps/npu-finite/host.py`,
-the `readl 0x02050014` check before `exe`), and the monitor refuses entry
-when it is set (`apps/storage-read-single-core/monitor.c:135`). Nothing in
-the image arms it. The comment at `platform/a733-smp-cached/boot.c:25`
-describes an independently armed watchdog that owns reset; that file is not
-linked into this image, and the statement does not hold for this profile.
-The file is left unchanged because editing it would change the debug line
-checksums of every image that compiles it.
+a reset is unknown. The finite host refuses to launch when `0x02050014` bit 0
+is set (`apps/npu-finite/host.py`, the `readl 0x02050014` check before `exe`),
+and the monitor refuses entry when it is set
+(`apps/storage-read-single-core/monitor.c:135`). The OS NPU profile is
+supervised only: configuration refuses it with the resident lifetime, whose
+watchdog would reset the board.
 
 ## Shared SRAM use while it belongs to the NPU
 
-- **Image.** Every loadable segment and symbol lies in DRAM
-  (`0x41000000`–`0x42200000`); the check confirms that none lies in the shared
-  SRAM. The monitor stack, exception stack, page tables, result page and
-  platform log are DRAM sections of `apps/npu-finite/link.ld`.
+- **Image.** Every loadable segment and symbol of the finite image lies in
+  DRAM (`0x41000000`–`0x42200000`); the check confirms that none lies in the
+  shared SRAM.
 - **EL1 mapping.** The first gigabyte is one Device block
   (`platform/a733/cpu_coherence.c:59`), so the CPU makes no speculative or
-  prefetch access to the shared SRAM; only an explicit load or store could
-  touch it, and no image source names an address in it.
+  prefetch access to the shared SRAM; no image source names an address in it.
 - **Launcher and host.** The launcher, request, report and stack regions
   (`0x52000`–`0x54000`) and the FEL scratch bytes the readers use
   (`0x71000`–`0x71080`) lie in SRAM A2, below `0x74000`. The host reads the
   shared SRAM only after the ROM has returned.
 - **ROM.** The ROM's own stack and scratchpad are in the shared SRAM. It does
-  not run between the launch and the forced-FEL reset, which happens after
-  the EL3 restore. Whether the SRAM keeps the ROM's earlier scratchpad bytes
-  across the two routings is unknown; the ROM rebuilds its FEL state after
-  the reset in every earlier return.
+  not run between the launch and the forced-FEL reset, which follows the EL3
+  restore.
 
 ## Cost
 
-- **Hot path.** One NPU register access, at most a few hundred per job. The
-  guard adds one acquire load of the routing flag and one acquire load of the
-  startup stage: 20 instructions before the native callback in the check's
-  count, beside the callback's two `DSB SY`. This is the single acquire load
-  of [section 1.1](../performance-architecture.md#11-ownership-liveness-and-deadline-checks-repeated-on-every-register-access)
-  for a state that can change during the session; the other NPU callbacks
-  gain one forwarding branch each.
-- **Once per lifetime.** Two CCU reads and three SYSCTRL accesses before the
-  first reset release, three at stop and one to three at EL3.
-- **Size.** `.text` grows by 812 bytes (170,288 to 171,100); `.bss` and the
-  RAM layout are unchanged.
-- **Section 3 NPU budgets.** Unchanged: no digest, translation, copy, queue
-  round trip or cache operation is added.
+Measured in the host model of the sequencer (`checks/npu-startup-host.c`)
+and on the linked finite image; the before column is `37502c21`.
+
+| Quantity | Before | After |
+| --- | --- | --- |
+| Boot to READY, domain 4 OFF at entry | 11 ticks, 11,000 µs, 12 calls | 13 ticks, 12,001 µs, 13 calls |
+| Register reads besides LOCK samples, writes, lock acquisitions | 57, 12, 3 | 61, 13, 4 |
+| Local stop: reads, writes | 12, 5 | 15, 6 |
+| Second start, PLL_NPU and domain 4 adopted | refused; power removal | 12,001 µs, 6 writes, 3 LOCK samples, no PLL, gate-control or PCK600 write |
+| Instructions from the convolution backend's register read to the adapter call | 33 | 39, one of them an acquire load |
+| EL3 return | — | one to three SYSCTRL accesses |
+| Finite default image: functions, `.text` section | 139,564 and 148,520 bytes | 140,512 and 150,568 bytes |
+
+The extra tick comes from the order: the 2 ms settle now starts after the
+PLL LOCK wait inside a tick instead of at a tick boundary. It is paid once per
+startup. The register window costs one acquire load and one compare per
+register access, at most a few hundred per job. Section 3 of
+[performance architecture](../performance-architecture.md) is unchanged: no
+digest, translation, copy, queue round trip or cache operation is added.
 
 ## Failure classes
 
-- Routing refused before the reset release: the startup table fails at that
-  write and retains its resources; the controller never opens.
-- Activation without routing: refused; the controller never opens.
-- Guard refusal: an I/O fault of the controller; all resources retained.
-- Restore readback failure at EL1: RETAINED; at EL3: park with status 7.
-  Both need power removal.
+- Register pass refusal, including every unadoptable PLL state: nothing
+  written, every token released.
+- Domain 4 not ON within the bound: tokens and row retained; no NPU clock,
+  reset or routing write has happened.
+- Bit 1 already clear on entry: refused in the register pass, nothing
+  written, every token released.
+- Routing write not read back: the register lock and every resource
+  retained; no reset released.
+- Register access outside READY: an I/O fault of the controller; all
+  resources retained.
+- Restore readback failure at local stop: RETAINED, so no quiescence and no
+  normal return. At EL3: park with status 7. Both need a power removal.
 
 ## Checks
 
-- `apps/npu-finite/sram-route-check.py` runs the linked wrappers under
-  Unicorn with SYSCTRL modeled and the redirected functions stopped at their
-  entry: 33 cases, including the clear before the first reset release and
-  its six refusals, register refusals before READY, after STOP and without
-  routing, the restore on each path, the link redirection of every call site
-  and of the native callback table, and the reachability of the only
-  `RMR_EL3` write.
-- `apps/npu-finite/check.py` (26 return and cleanup cases) and
-  `apps/npu-finite/profile-check.py` pass on the variant unchanged.
-- The default finite image built from clean archives is identical with and
-  without the two files, and its objects equal those of `9e4adabf…`.
+- `checks/npu-startup-host.c` runs the sequencer with the actual PMIC
+  provider, rail ledger, clock registry, GPU/PCK manager and power-domain
+  owner, and measures the counts above. It checks:
+  - domain 4's PCK600 command before the first CCU write;
+  - the routing write after the PLL output gate and immediately before the
+    first reset release;
+  - the window, open only at READY;
+  - the refusal of an NPU-routed entry word in the pass, the retention when
+    the word ignores the write, and the failed restore at stop;
+  - with `--second-start`, a second startup over the state that local stop
+    leaves, with the reserved PLL bit 24 clear and set, and ten adoption
+    refusals that write nothing.
+- `checks/npu-startup.c` runs it on two QEMU cores with real FreeRTOS tasks.
+- `apps/npu-finite/sram-route-check.py` runs the linked sequencer and
+  allowlist adapter of the finite image from the register pass through local
+  stop, a second start, the two routing refusals, the convolution backend's
+  window and the reachability of the only `RMR_EL3` write: 10 cases.
+- `apps/npu-finite/check.py` runs the EL3 return path with SYSCTRL modeled:
+  the restore precedes the report on both normal returns, an already-set bit
+  is not written, a word that ignores the write parks with status 7, and every
+  refused receipt parks before the restore.
+- `checks/npu-stop-native.py` exercises the adapter's routing-word rule,
+  including its refusal while a reset is released or the module gate is
+  open.
+- `checks/npu-convolution.c`, `checks/npu-session-runtime.c`,
+  `checks/accelerator-shared-owner.py`,
+  `checks/npu-application-clock-reference.py` and `checks/os-npu.py` pass
+  with the window and the new order.
 
-Evidence: `~/.cache/sunstoneos/evidence/npu-sram-route-20261025-r2/`. The run is
-prepared for port 3-3 as `~/.cache/sunstoneos/evidence/board-bundles-20261025-7/`:
-the frozen image, the finite host that ran `9e4adabf…`, the root-review drafts
-with every approval false, the warm-return chain of the lifetime and the
-offline checks. `tools/prepare-board-bundles.py` has no row class for an image
-that the finite host launches under root-reviewed admission, so the set
-follows the preparation of the `9e4adabf…` run instead of a generated row.
+Evidence: `~/.cache/sunstoneos/evidence/npu-production-20261025/`.
 
-## Predicted board result
+## Images that change
 
-Startup, both jobs, CLOSE, local stop and the ROM return behave as in the
-`9e4adabf…` run, and both outputs match the reference. If the outputs still
-differ, routing is ruled out as the cause; the stopped-memory capture, with
-bit 1 restored, is then the next observation.
+Both `37502c21` and this change were built from clean archives, extracted in
+turn at one tree path and built in turn into one build path. The builds cover
+every default central target, the NPU board image, the convolution model, the
+supervised, resident and NPU-profile OS images, the accelerator composition
+and the finite image in its four profiles. Of 68 ELF files, 22 change. The
+other 46 are byte-identical, among them `npu-native-model`,
+`npu-service-model` and `npu-service-irq-model`.
+
+- **Code changes**, because the image links the startup sequencer, the
+  allowlist adapter, a backend or the finite monitor: the finite numerical
+  image in its default, thermal, interrupt and entry-checkpoint profiles,
+  each with its single-core base image; the OS image with the NPU profile;
+  the NPU board image `sunstone-a733-npu-board`; the accelerator composition
+  `sunstone-a733-accelerators`; and the QEMU models `npu-startup-model` and
+  `npu-convolution-model`.
+- **Build identity only**, because their identities hash
+  `include/a733_npu_startup.h`: `sunstone-a733-board`, `-camera`,
+  `-gpu-render`, `-hdmi`, `-mimus-native`, `-smp-cached-devices`,
+  `-storage-maintenance`, and the supervised and resident OS images without
+  the NPU profile. In each, `.text` and every other allocated section is
+  identical apart from the 32 build-ID bytes; the line table of the generated
+  `build-id.c` differs too.
+
+The supervised convolution image (`A733_NPU_SUPERVISED`) and the standalone
+convolution project link the same changed sources and change too; the
+comparison did not build them. The record is
+`~/.cache/sunstoneos/evidence/npu-production-20261025/default-images-2/`,
+with `classification.txt` and the commands in `commands.txt`.

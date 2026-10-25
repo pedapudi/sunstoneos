@@ -6,7 +6,7 @@ Before providers start, the EL3 contract check copies the uploaded session into 
 
 After successful task quiescence, normal exit checks the numerical result and publishes a receipt bound to epoch, generation, lease, status, deadline and exact linked memory interval. It stops the EL1 timers and cleans every 64-byte line from `__npu_clean_start` through `__device_pool_end`. The interval includes retained metadata, provider state, stacks, command buffers and NPU tables. Page-boundary deadline checks bound this sweep.
 
-The identity-mapped assembly tail disables EL1 translation and caching, then executes SMC without another stack access. EL3 consumes the cleaned receipt while retaining its separate monitor state. A normal return requires a matching receipt, unexpired contract, secondary CPUs still OFF and successful bounded GIC restoration. The monitor then completes whole-cache maintenance and uses the accepted small kernel's forced-FEL flag and RMR sequence. The final cache operation also covers stack stores made after the interval sweep.
+The identity-mapped assembly tail disables EL1 translation and caching, then executes SMC without another stack access. EL3 consumes the cleaned receipt while retaining its separate monitor state. A normal return requires a matching receipt, unexpired contract, secondary CPUs still OFF, successful bounded GIC restoration and the shared SRAM routed back to the CPU. The monitor then completes whole-cache maintenance and uses the accepted small kernel's forced-FEL flag and RMR sequence. The final cache operation also covers stack stores made after the interval sweep.
 
 Every unexpected SMC, exception, recovery-timer event, invalid receipt or cleanup timeout retains execution. Those paths do not write reset flags or request RMR. A numerical mismatch can return status one only after the same successful shutdown and cleanup. Software deadlines cannot recover a synchronous bus stall; the reviewed physical recovery plan remains required.
 
@@ -65,16 +65,14 @@ admission, validates them before writing, and refuses existing output files.
 The return/profile/client fixtures select only their consumed DWARF layouts,
 so unrelated private structure names cannot block those checks.
 
-`build-sram-route.py` builds a separate variant of the numerical image that
-routes the shared SRAM to the NPU from just before the NPU resets are
-released until local stop, restores it again at EL3 before the ROM return,
-and refuses NPU register access unless the SRAM is routed and startup is
-READY. It links two new objects
-into the default image's link with linker redirections and changes no
-existing object; the design, exit paths and checks are in
+The image routes the shared SRAM to the NPU from just before the NPU resets
+are released until local stop, and the monitor sets the CPU routing again at
+EL3 before the report and the ROM return; NPU register access is refused
+unless the startup is READY. The design, exit paths and checks are in
 [docs/designs/npu-sram-route.md](../../docs/designs/npu-sram-route.md).
+`sram-route-check.py` runs the image's linked sequencer through that window:
 
 ```sh
-python3 apps/npu-finite/build-sram-route.py --evidence OUTPUT
+python3 apps/npu-finite/build.py --evidence OUTPUT
 python3 apps/npu-finite/sram-route-check.py --evidence OUTPUT --output OUTPUT/sram-route-check.json
 ```

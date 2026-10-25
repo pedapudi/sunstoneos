@@ -105,8 +105,20 @@ further board run of each. Board runs test only predictions from those diffs.
   verified DRAM restoration. The `9e4adabf…` run without the routing step had
   produced wrong, input-independent outputs, so the routing bit is the cause.
   Before the run: IRQ97 captured, DCDC2 enabled at 800 mV (`nr-dcdc2`), fresh
-  cache-off and survey. PLL_NPU, domain 4, DCDC2 and the SRAM stay powered, so
-  another NPU startup needs a power removal.
+  cache-off and survey. PLL_NPU, domain 4, DCDC2 and the SRAM stay powered.
+  **The production NPU startup routes the SRAM** (`work/npu-production-1025`,
+  not merged; [design](designs/npu-sram-route.md)). Every image that links
+  the startup now powers domain 4 before any NPU clock, routes the SRAM while
+  the NPU resets are held, refuses NPU register access outside READY and
+  routes the SRAM back at local stop; the finite image also sets the bit at
+  EL3 before its ROM return. The register pass adopts a PLL_NPU that an
+  earlier start in the same power lifetime left locked, so a second start
+  needs no power removal. The board qualification is the
+  [two-start runbook](board-runbooks/npu-two-starts.md): one cold port 3-3
+  lifetime, two starts of two jobs each, all four outputs predicted to match
+  and the second start to adopt the PLL and domain 4. No set is frozen. The
+  852 MHz rate at 800 mV is a [plan](designs/npu-852mhz-plan.md) that needs
+  the coordinator's approval and its own design.
 - CPU (`work/backsolve-cpu-1025`, `docs/reference-backsolve-cpu.md`): the
   leading divergences are checks that the reference never performs, such as the
   GICR_CTLR status compare (now masked on `bringup`), GICD_CTLR.RWP treated
