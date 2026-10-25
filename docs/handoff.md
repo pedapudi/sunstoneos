@@ -129,6 +129,24 @@ further board run of each. Board runs test only predictions from those diffs.
 Fair spinlocks, cache-line relayout, `-march` and the IRQ FP save wait for a
 supervised eight-core board session.
 
+Merged on 2026-10-25:
+- `work/mc-perf-a-1025`: `__getreent` from TPIDRRO_EL0 (96 to 7 instructions)
+  and the lock-free counter read, with the measurement tools.
+- `work/mc-correct-1025`: status-bit masks, bounded RWP waits, the EL2 and
+  active-priority entry steps, single constants, the patch plan and the new
+  resident magic. Board qualification: ten deadline-workload runs built from
+  `52b408c5` passed in a fresh port 3-3 lifetime
+  (`board-session-20261025-5/port-3-3`, `tw1`–`tw10`). All completed with
+  DRAM restored and no deadline return, and all eleven 91-word captures equal
+  the clean capture. That run does not execute the new `continue.S` entry. It
+  runs once the native image `762237cd` is refrozen; the first-task profile on
+  the refrozen image then qualifies it. The rank 7 and rank 8 bundles and the
+  `cpu-next-20261024` and CPU0 bundles need the refreeze listed in
+  `docs/designs/multicore-correctness-1025.md`.
+- `work/mc-perf-1025` (lock DSBs, IRQ-exit barriers, wake placement,
+  missed-tick catch-up) stays held for the board session in
+  `docs/board-runbooks/multicore-performance-session.md`.
+
 **Board runs of 2026-10-24 night** (set `board-bundles-20261024-8`, sessions
 `~/.cache/sunstoneos/evidence/board-session-20261024-8/port-<PORT>`). The user
 reported both boards reconnected after power removal. The two claims held from
