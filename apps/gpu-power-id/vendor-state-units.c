@@ -10,6 +10,10 @@
  * or vsu_config.polls polls have run.
  * vsu_poll_again: one more poll of that controller.
  * vsu_native: the native allowlist's refusals, one result bit each.
+ * vsu_resources: one LOCAL acquisition of the resource manager copy
+ * (vendor-state-resources.c), its registers read from the modeled pages
+ * and its DCDC4 snapshot from vsu_rail.
+ * vendor-state-units-supply.c holds the PMIC provider and consumer cases.
  */
 #include "a733_gpu_platform_native.h"
 #include "vendor-state.h"
@@ -113,4 +117,39 @@ uint32_t vsu_native(void)
     bits |= (uint32_t)!!o->read(&native, A733_GPU_CCU, 0x0e0, &v) << 8;
     bits |= (uint32_t)!!o->update(&native, A733_GPU_CCU, 0x0e0, 0, 0x40000000, ~UINT64_C(0)) << 9;
     return bits | (uint32_t)(register_held != 0) << 31;
+}
+
+/* The DCDC4 snapshot the resource manager receives, as raw bytes. */
+volatile struct a733_gpu_resource_rail vsu_rail;
+struct vsu_acquired { uint32_t result, error, stage, supply_uv, parent_hz; };
+volatile struct vsu_acquired vsu_acquired;
+static struct a733_gpu_resource_manager manager;
+static int manager_read(void *c, uintptr_t address, uint32_t *out)
+{ (void)c; *out = *(volatile uint32_t *)address; return 1; }
+static int manager_update(void *c, uintptr_t address, uint32_t required, uint32_t set, uint64_t deadline)
+{
+    (void)c; (void)deadline;
+    volatile uint32_t *r = (volatile uint32_t *)address;
+    if ((*r & required) != required) return 0;
+    *r |= set;
+    return 1;
+}
+static int manager_rail(void *c, struct a733_gpu_resource_rail *out, uint64_t deadline)
+{ (void)c; (void)deadline; *out = vsu_rail; return 1; }
+uint32_t vsu_resources(void)
+{
+    memset(&manager, 0, sizeof manager);
+    memset(&native, 0, sizeof native);
+    const struct a733_gpu_resource_locks locks = {lock_enter, lock_leave, lock_enter, lock_leave, 0};
+    const struct a733_gpu_resource_ops ops = {now, manager_read, manager_update, manager_rail};
+    if (!a733_gpu_platform_native_init(&native, &locks) || !a733_gpu_resources_init(&manager, &ops, 0)) return 1;
+    uint64_t start, token = 0;
+    struct a733_gpu_power_resources ready = {0};
+    now(0, &start);
+    vsu_acquired.result = a733_gpu_resources_acquire(&manager, 0, A733_GPU_RESOURCE_ALL, start + 100000, &token, &ready);
+    vsu_acquired.error = manager.error;
+    vsu_acquired.stage = manager.stage;
+    vsu_acquired.supply_uv = ready.supply_uv;
+    vsu_acquired.parent_hz = ready.parent_hz;
+    return 0;
 }

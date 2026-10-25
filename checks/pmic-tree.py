@@ -10,6 +10,11 @@ check fails when:
 - the PMIC provider admits a selector write to any output other than DCDC3 and
   DCDC5, or its native adapter can write any register other than the S_TWI0
   data and control registers;
+- the provider copy of the GPU vendor-state diagnostic
+  (apps/gpu-power-id/vendor-state-pmic.c) admits any selector write other
+  than DCDC4 code 0x2e (960 mV). The user approved that one GPU voltage
+  change on 2026-10-25; only that diagnostic compiles the copy, and it
+  raises DCDC4 after the power-domain owner's boot read;
 - a source outside drivers/power names the S_TWI0 interrupt (GIC-600 INTID
   235), which only the provider may use;
 - the native adapter's register accessors leave the barrier placement of
@@ -25,9 +30,10 @@ check fails when:
   must not call current() or an a733_task_context_ predicate, because
   a733_pmic_poll() checks the provider task at entry and the adapter's
   enter() when it takes the I2C mutex;
-- a source other than the provider, its native adapter and the board-bundle
+- a source other than the provider, its native adapter, the board-bundle
   forwarders and cost windows (apps/board-bundles-power/power.c and
-  power.h) names pmic_bus_ops, struct a733_pmic_ops or a733_pmic_init.
+  power.h) and the vendor-state provider copy names pmic_bus_ops, struct
+  a733_pmic_ops or a733_pmic_init.
   pmic_bus_ops is the member that holds the adapter operations in both
   struct a733_pmic_native and struct a733_pmic, and no other code uses the
   name. Any use of it could reach the register accessors without the poll's
@@ -61,9 +67,11 @@ def files(root):
             yield from (p for p in base.rglob('*') if p.suffix in {'.c', '.h', '.S', '.s', '.patch', '.cc'})
 
 
+VENDOR_STATE_PMIC = Path('apps/gpu-power-id/vendor-state-pmic.c')
 ADAPTER_FILES = {Path('drivers/power/a733_pmic_native.c'), Path('include/a733_pmic_native.h'),
                  Path('drivers/power/a733_pmic.c'), Path('include/a733_pmic.h'),
-                 Path('apps/board-bundles-power/power.c'), Path('apps/board-bundles-power/power.h')}
+                 Path('apps/board-bundles-power/power.c'), Path('apps/board-bundles-power/power.h'),
+                 VENDOR_STATE_PMIC}
 
 
 def strip_comments(text):
@@ -115,6 +123,12 @@ def main():
     rails = set(re.findall(r'A733_RAIL_[A-Z0-9]+', writable[1]))
     if rails != {'A733_RAIL_DCDC3', 'A733_RAIL_DCDC5'}:
         problems.append(f'drivers/power/a733_pmic.c: writable() admits {sorted(rails)}')
+    copy = (root / VENDOR_STATE_PMIC).read_text()
+    writable = re.search(r'static int writable\([^)]*\)\s*\{(.*?)\n\}', copy, re.S)
+    if (not writable or set(re.findall(r'A733_RAIL_[A-Z0-9]+', writable[1])) != {'A733_RAIL_DCDC4'} or
+            'target==VENDOR_STATE_DCDC4_TARGET' not in writable[1] or
+            not re.search(r'#define VENDOR_STATE_DCDC4_TARGET 0x2eu\b', (root / 'apps/gpu-power-id/vendor-state.h').read_text())):
+        problems.append(f'{VENDOR_STATE_PMIC}: writable() admits more than DCDC4 code 0x2e')
     native = (root / 'include/a733_pmic_native.h').read_text()
     allow = re.search(r'if\(writing\)return (.*?);', native)
     if not allow or set(re.findall(r'0x[0-9a-fA-F]+', allow[1])) != {'0x07083008', '0x0708300c'}:
@@ -154,7 +168,7 @@ def main():
         print(p)
     assert not problems, f'{len(problems)} problem(s)'
     print(f'PASS PMIC tree facts: no PSCI CPU_OFF or suspend in {scanned} sources, selector writes '
-          'only to DCDC3 and DCDC5, INTID 235 only in the provider, no lock in the native adapter\'s '
+          'only to DCDC3 and DCDC5 (DCDC4 code 0x2e only in the vendor-state copy), INTID 235 only in the provider, no lock in the native adapter\'s '
           'per-phase time read or per-access ownership check, no task check per access, the adapter\'s '
           'barrier placement, adapter '
           'operations named only by the provider, its adapter and the bundle forwarders')

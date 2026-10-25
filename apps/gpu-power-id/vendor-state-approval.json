@@ -1,0 +1,37 @@
+{
+  "schema": "gpu-vendor-state-approval-v1",
+  "image": "apps/gpu-power-id vendor-state variant (build.py --vendor-state), port 3-1, the last image of its lifetime",
+  "approval": {
+    "date": "2026-10-25",
+    "by": "the user",
+    "text": "Approved for GPU clock and voltage as well",
+    "scope": "GPU clock and voltage changes, for example the vendor operating point of 1008 MHz from the GPU PLL at 960 mV; each with its own design and an approval record naming the rail and values (docs/handoff.md)",
+    "coordinator": "On 2026-10-25 the coordinator accepted one image that applies the GPU PLL clock, the DCDC4 voltage and the BL31 secure setup in the vendor order."
+  },
+  "voltage": {
+    "rail": "DCDC4",
+    "pmic": "AXP8191 at I2C address 0x36, through the S_TWI0 provider",
+    "consumer": "GPU supply (board device tree gpu-supply = <&reg_dcdc4>, sun60i-a733-orangepi-zero3w.dts:3420-3422)",
+    "register": "0x15",
+    "field_mask": "0x7f",
+    "bit7": "preserved by the provider's write",
+    "entry_selector": "0x1e",
+    "entry_uv": 800000,
+    "selector": "0x2e",
+    "value_uv": 960000,
+    "rail_limits_uv": [500000, 1540000],
+    "write_path": "a733_pmic_submit_write of apps/gpu-power-id/vendor-state-pmic.c under an exclusive DCDC4 rail token: the provider reads the six snapshot bytes, requires the output enabled at selector 0x1e, writes 0x2e and reads it back; a mismatch retains the request",
+    "settle_us": 1200,
+    "reference": "sunxi_platform.c:899-901 and 473-485 (regulator_enable, sunxiSetVoltage 960 mV, udelay 200); axp2101-regulator.c:383-410 (ramp 250 uV/us: 160 mV in 640 us, rounded up to 1 ms); sun60iw2p1.dtsi:4736-4739 (opp@1008000000, opp-microvolt-vfdefault 960000)"
+  },
+  "clock": {
+    "pll": "PLL_GPU0, CCU 0x020020e0",
+    "entry_word": "0x41104500",
+    "word": "0xe9105300",
+    "rate_hz": 1008000000,
+    "factors": "24 MHz x N 84 / P0 2",
+    "gpu_clock": "CCU 0x02002b20 gate on source 0 (PLL_GPU0), divider 1",
+    "reference": "sunxi_platform.c:167-223, 405-417, 922; ccu_gate.c:157-203; ccu_nm.c:250-345; ccu-sun60iw2.c:170-189"
+  },
+  "restore": "None. The image makes no OFF and leaves DCDC4 at 960 mV and the GPU clock at 1008 MHz until the power removal that ends its lifetime."
+}
