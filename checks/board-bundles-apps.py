@@ -538,15 +538,23 @@ def bundle8_outcomes(elf):
     return outcomes
 
 
-def usb_origins(usb, origins, provider_new, v4_monitor):
+def usb_origins(usb, origins, provider_new, v4_monitor, linked_elsewhere=(), work=None):
     """Each object of a native USB image built from this tree: its origin and, for the platform and provider
     objects, its unit. Platform and provider objects must come from an image that passed, the base or bundle
     6's new provider objects. Its monitor.c object is the base's (apps/usb-returning/build.py --base-monitor) or
-    this tree's central one with rank-9-usb-v4's instructions. Only the USB units and the accepted TinyUSB
-    objects may be new."""
+    this tree's central one with rank-9-usb-v4's instructions. An object that equals, apart from its debug
+    sections, an object that the set's images link (linked_elsewhere) takes that object's origin, as the
+    images themselves choose rank-9-usb-v4's objects; probe.bin carries no debug section. Only the USB units
+    and the accepted TinyUSB objects may be new."""
     known = dict(origins.known)
     for unit, path in provider_new.items():
         known.setdefault(sha(path), 'set-bundle-6')
+    stripped = {}
+    if linked_elsewhere:
+        Path(work).mkdir(exist_ok=True)
+        for path in linked_elsewhere:
+            if sha(path) in known:
+                stripped.setdefault(without_debug(path, work), known[sha(path)] + ', identical apart from debug sections')
     commands = json.loads((usb / 'commands.json').read_text())
     record, units = {}, {}
     for command in commands[:-2]:
@@ -559,6 +567,8 @@ def usb_origins(usb, origins, provider_new, v4_monitor):
         digest = sha(path)
         unit = units.get(path.name, '')
         origin = known.get(digest, 'new')
+        if origin == 'new' and stripped:
+            origin = stripped.get(without_debug(path, work), 'new')
         if origin == 'new' and unit.endswith('a733-power-probe.dir/' + MONITOR_OBJ):
             require(instructions(path) == instructions(v4_monitor),
                     'The native USB image\'s monitor.c changes rank-9-usb-v4 monitor instructions.')
@@ -664,7 +674,8 @@ def main():
         builds[name] = (directory, entry)
     result['model'] = model_check(out)
     if args.usb:
-        result['usb'] = usb_origins(args.usb.resolve(), origins, provider_new, dict(platform)[MONITOR_OBJ])
+        result['usb'] = usb_origins(args.usb.resolve(), origins, provider_new, dict(platform)[MONITOR_OBJ],
+                                    [path for _, path in platform] + list(provider.values()), out / 'usb-stripped')
 
     for name, (directory, entry) in builds.items():
         if entry['controlled'] is not None:
