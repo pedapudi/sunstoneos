@@ -308,10 +308,19 @@ int npu_convolution_prepare(struct npu_convolution *c,const struct npu_convoluti
     }
     c->prepared=1;return 1;
 }
+/* NPU register access only while the bound startup is READY, which requires
+ * the shared SRAM routed to the NPU. A refusal makes no bus access; the
+ * controller then faults with an I/O failure and retains its resources. */
 static int read_reg(void *cookie,unsigned offset,uint32_t *out)
-{struct npu_convolution *c=cookie;return good(c) && a733_npu_native_operations.read(&c->native,offset,out);}
+{
+    struct npu_convolution *c=cookie;
+    return good(c) && a733_npu_startup_window_open(c->startup) && a733_npu_native_operations.read(&c->native,offset,out);
+}
 static int write_reg(void *cookie,unsigned offset,uint32_t v)
-{struct npu_convolution *c=cookie;return good(c) && a733_npu_native_operations.write(&c->native,offset,v);}
+{
+    struct npu_convolution *c=cookie;
+    return good(c) && a733_npu_startup_window_open(c->startup) && a733_npu_native_operations.write(&c->native,offset,v);
+}
 static uint64_t now(void *cookie)
 {struct npu_convolution *c=cookie;return a733_npu_native_operations.microseconds(&c->native);}
 static void delay(void *cookie,unsigned us)

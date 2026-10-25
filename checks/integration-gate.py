@@ -100,6 +100,15 @@ if os.environ.get('GATE_TEST_FAIL') in args:
         self.assertNotIn('-DSUNSTONE_A733_OS_RADIO=ON', calls[0])
         self.assertEqual(calls[0][2], str(self.sandbox / 'build' / ('gate-os-resaud-' + self.tree(self.source))))
 
+    def test_npu_variant_names_the_cached_catalogue(self):
+        result = self.run_gate('--reason', 'OS NPU profile', '--variant', 'npu')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        calls = self.records()
+        self.assertEqual(len(calls), 2)
+        self.assertIn('-DSUNSTONE_A733_OS_NPU=ON', calls[0])
+        self.assertIn('-DSUNSTONE_OS_NPU_CATALOGUE=' + str(self.sandbox / 'build/npu-board/session-artifacts.json'),
+                      calls[0])
+
     def test_build_directory_follows_the_source(self):
         other = self.checkout('other')
         for source, label in ((self.source, 'first'), (other, 'second')):
@@ -253,7 +262,7 @@ exec "$REAL" "$@"
         self.assertIn('other-image', central)
         self.assertNotIn('clean', central)
         self.assertNotIn('ignored.o', central)
-        self.assertEqual(sum(c[0] == 'cfg.sh' for c in calls), 10)
+        self.assertEqual(sum(c[0] == 'cfg.sh' for c in calls), 11)  # central and ten OS variants
         runs = [c for c in calls if c[0] == 'python']
         self.assertEqual(len(runs), 8)
         soak = next(c for c in runs if 'tools/check-smp.py' in c)

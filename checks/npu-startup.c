@@ -26,7 +26,7 @@ static struct npu_service service;
 static StaticTask_t task_storage[3];
 static StackType_t stacks[3][3072];
 static TaskHandle_t bootstrap_task,client_task,service_task;
-static uint32_t ccu[0x2000/4],pck[2];
+static uint32_t ccu[0x2000/4],pck[2],sysctrl=2; /* The boot ROM's CPU routing. */
 static uint64_t counter_mhz;
 static atomic_uint reads,writes,backend_calls,notified;
 static unsigned failure_mode,command_token,prepared_calls;
@@ -40,6 +40,7 @@ static int npu_read(void *v,uintptr_t a,uint32_t *out)
     configASSERT(v==&command_token && xTaskGetCurrentTaskHandle()==bootstrap_task);
     atomic_fetch_add(&reads,1);
     if(a==0x07090160)*out=0x10000002;
+    else if(a==0x03000008)*out=sysctrl;
     else if(a==PCK || a==PCK+8)*out=pck[a==PCK+8];
     else {
         *out=*reg(a);
@@ -53,8 +54,10 @@ static int npu_write(void *v,uintptr_t a,uint32_t value)
 {
     configASSERT(v==&command_token && xTaskGetCurrentTaskHandle()==bootstrap_task);
     configASSERT(xSemaphoreGetMutexHolder(locks.mutex[A733_PLATFORM_REGISTER_LOCK])==bootstrap_task);
-    configASSERT(a==CCU+0xb00 || a==CCU+0xb04 || a==CCU+0x1920 || a==CCU+0x2a0);
-    atomic_fetch_add(&writes,1);*reg(a)=value;return 1;
+    configASSERT(a==CCU+0xb00 || a==CCU+0xb04 || a==CCU+0x1920 || a==CCU+0x2a0 || a==0x03000008);
+    atomic_fetch_add(&writes,1);
+    if(a==0x03000008){configASSERT(!((sysctrl^value)&~2u));sysctrl=value;return 1;}
+    *reg(a)=value;return 1;
 }
 static int npu_now(void *v,uint64_t *out){configASSERT(v==&command_token);return a733_counter_clock_now(&clock_source,out);}
 static uint64_t npu_spin(void *v)
@@ -130,6 +133,7 @@ static void bootstrap(void *unused)
         configASSERT(r==A733_NPU_PLATFORM_RETAINED && startup.failed && startup.register_held);
         configASSERT(atomic_load(&locks.retained) && xSemaphoreGetMutexHolder(locks.mutex[A733_PLATFORM_REGISTER_LOCK])==bootstrap_task);
         configASSERT(a733_clock_token_status(&registry,&startup.clock)==A733_CLOCK_OK && a733_rail_status(&rails,&startup.rail)==A733_RAIL_READY);
+        configASSERT(!a733_npu_startup_window_open(&startup));
         const unsigned before=atomic_load(&reads);
         configASSERT(a733_npu_startup_step(&startup)==A733_NPU_PLATFORM_RETAINED && before==atomic_load(&reads));
         configASSERT(npu_service_activate(&service)==NPU_SERVICE_FAULT && !atomic_load(&backend_calls));
@@ -137,6 +141,7 @@ static void bootstrap(void *unused)
         platform_exit(0);
     }
     configASSERT(r==A733_NPU_PLATFORM_READY && atomic_load(&notified) && pck[0]==8 && ccu[0xb00/4]==0x80000000);
+    configASSERT(!sysctrl && a733_npu_startup_window_open(&startup)); /* The SRAM is routed to the NPU. */
     platform_puts("COST calls=");platform_hex(calls);platform_puts(" ticks=");platform_hex(xTaskGetTickCount()-first);platform_puts("\n");
     configASSERT(npu_service_activate(&service)==NPU_SERVICE_OK);
     for(unsigned i=0;i<100 && !atomic_load(&backend_calls);++i)vTaskDelay(1);

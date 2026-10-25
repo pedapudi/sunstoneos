@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The linked NPU allowlist adapter: local stop writes, PLL rules and PCK600 refusals, with modeled MMIO."""
+"""The linked NPU allowlist adapter: local stop writes, PLL rules, the shared SRAM routing bit and PCK600 refusals, with modeled MMIO."""
 import argparse
 import hashlib
 import importlib.util
@@ -32,6 +32,9 @@ for name,address,before,after,ok in [
     ('PLL-write-refused',0x020022a0,0xf8105100,0,0),
     ('PLL-gate-control-enable',0x02003920,0,0x10000,1),
     ('PLL-output-before-lock-refused',0x020022a0,0xe0305100,0xe8305100,0),
+    ('SRAM-route-to-NPU',0x03000008,0x2,0x0,1),
+    ('SRAM-route-to-CPU',0x03000008,0x0,0x2,1),
+    ('SRAM-routing-other-bit-refused',0x03000008,0x2,0x3,0),
 ]:
     u=Uc(UC_ARCH_ARM64,UC_MODE_ARM)
     u.mem_map(0x02000000,0x06000000);u.mem_map(0x40000000,0x04000000)

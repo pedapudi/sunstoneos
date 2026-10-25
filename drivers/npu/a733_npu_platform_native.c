@@ -3,9 +3,10 @@
 #define CCU UINT32_C(0x02002000)
 #define PCK UINT32_C(0x07064000)
 #define LOCK UINT32_C(0x10000000)
+#define SRAM_ROUTING UINT32_C(0x03000008)
 static int readable(uintptr_t address)
 {
-    if (address==0x07090160 || address==PCK || address==PCK+8) return 1;
+    if (address==0x07090160 || address==PCK || address==PCK+8 || address==SRAM_ROUTING) return 1;
     if (address<CCU || address>=CCU+0x2000) return 0;
     switch(address-CCU) {
     case 0:case 0xa0:case 0xa8:case 0xac:case 0x2a0:case 0x2a4:case 0x2a8:case 0x2ac:case 0x2b0:
@@ -22,13 +23,18 @@ int a733_npu_platform_native_read(void *cookie,uintptr_t address,uint32_t *value
     *value=a733_mmio_read32_dsb_sy_both(address);return 1;
 }
 /* Writable: the NPU module and bus words, the PLL_NPU control word and its
- * gate control. PCK600 domain 4 belongs to the power-domain owner. */
+ * gate control, and bit 1 of the shared SRAM routing word. PCK600 domain 4
+ * belongs to the power-domain owner. */
 int a733_npu_platform_native_write(void *cookie,uintptr_t address,uint32_t value)
 {
     (void)cookie;
-    if (address!=CCU+0xb00 && address!=CCU+0xb04 && address!=CCU+0x1920 && address!=CCU+0x2a0) return 0;
+    if (address!=CCU+0xb00 && address!=CCU+0xb04 && address!=CCU+0x1920 && address!=CCU+0x2a0 &&
+        address!=SRAM_ROUTING) return 0;
     uint32_t old=a733_mmio_read32_dsb_sy_both(address);
     switch (address) {
+    case SRAM_ROUTING:
+        if ((old^value)&~UINT32_C(2)) return 0;
+        break;
     case CCU+0xb00:
         if ((old^value)&~UINT32_C(0x8700001f)) return 0;
         if ((old&0x80000000) && value!=old && value!=(old&~UINT32_C(0x80000000))) return 0;

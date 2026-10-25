@@ -22,6 +22,15 @@
 #define PLL_INHERITED BIT(24)
 #define PLL_ENABLED UINT32_C(0xe0305100) /* After the enable table, LOCK clear. */
 #define PLL_OPEN UINT32_C(0xe8305100)    /* With the output gate open. */
+/* Shared SRAM routing, SYSCTRL 0x03000008 bit 1, which the manual does not
+ * document. Set, the 512 KiB shared SRAM (CPU 0x00074000-0x000f3fff, the NPU's
+ * internal SRAM) belongs to the CPU: the boot ROM sets it on every entry
+ * (fixs-brom 3a2a7d28, offsets 0x20c-0x220). Board U-Boot clears it and reads
+ * it back at board init, before any NPU clock or reset change, to give the
+ * SRAM to the NPU (u-boot-orangepi b791be84, board_sun60iw2.c:119-133 and
+ * board.c:248-252). Images loaded through FEL never run U-Boot. */
+#define SRAM_ROUTING UINT32_C(0x03000008)
+#define SRAM_TO_CPU BIT(1)
 /* LOCK sampling (manual §4.1.4.2 and the lock helper of the pinned board
  * clock source): three locked observations in a row, 3 us apart, at most 100
  * observations, then a 20 us wait. */
@@ -42,12 +51,14 @@ static const struct step pll_enable[]={
 };
 /* The local tables follow the pinned board kernel's fields: CCU+0xb00 module
  * divider bits 0-4, selector 24-26, gate 31; CCU+0xb04 bus gate 0, core
- * reset 16, AXI 17, AHB 18, SRAM reset 19. Opened after PLL_NPU locks, in the
- * clock-before-power order of the pinned VIPLite vip_drv_device_platform.c
- * (lines 419-428): PLL output gate, AHB, AXI and core resets released, module
- * selector PLL_NPU at divider 1, bus gate, module gate. */
+ * reset 16, AXI 17, AHB 18, SRAM reset 19. After domain 4 is ON and PLL_NPU
+ * has locked, the PLL output gate opens; the shared SRAM is then routed to
+ * the NPU while the resets are still asserted; then npu_clk_init's order in
+ * the pinned VIPLite vip_drv_device_platform.c (lines 265-359): AHB, AXI and
+ * core resets released, module selector PLL_NPU at divider 1, bus gate,
+ * module gate. */
+static const struct step pll_open[]={{PLL,BIT(27),BIT(27),PLL_LOCK}};
 static const struct step local_open[]={
-    {PLL,BIT(27),BIT(27),PLL_LOCK},
     {CCU+0xb04,BIT(18),BIT(18),0}, {CCU+0xb04,BIT(17),BIT(17),0}, {CCU+0xb04,BIT(16),BIT(16),0},
     {CCU+0xb00,0x0700001f,0,0}, {CCU+0xb04,1,1,0}, {CCU+0xb00,BIT(31),BIT(31),0}
 };
@@ -131,6 +142,7 @@ static int check(struct a733_npu_startup *s,uintptr_t a,uint32_t mask,uint32_t e
 {uint32_t v;return rd(s,a,&v) && (v&mask)==expected;}
 static enum a733_npu_platform_result fault(struct a733_npu_startup *s)
 {
+    atomic_store_explicit(&s->window_open,0,memory_order_release);
     s->failed=1;
     if(s->register_held)s->ops.retain(s->cookie);
     return RETAINED;
@@ -185,9 +197,10 @@ static int peri0(struct a733_npu_startup *s)
 }
 /* The register pass before the first write (npu-platform.md): the reference
  * clock, the fabric words against the record, PERI0 when selected, every
- * PLL_NPU consumer under its mask, and PLL_NPU disabled with its tuning words
- * at reset. The owner has checked coherent domain-4 policy and status;
- * an inherited ON domain still requires the same local reset/gate state. */
+ * PLL_NPU consumer under its mask, and PLL_NPU disabled or adopted with its
+ * tuning words at reset. The owner has checked coherent domain-4 policy and
+ * status; an inherited ON domain still requires the same local reset/gate
+ * state. */
 static int pass(struct a733_npu_startup *s)
 {
     uint32_t osc,ref,v;
@@ -212,18 +225,30 @@ static int pass(struct a733_npu_startup *s)
         check(s,CCU+0xc00,BIT(31)|BIT(27)|UINT32_C(0x07010000),BIT(31)) &&
         check(s,CCU+0xc0c,BIT(16),BIT(16)) &&
         check(s,CCU+0x1b10,1,0) && check(s,CCU+0x1b14,1,0) && check(s,CCU+0x1b1c,1,0) &&
-        /* PLL_NPU disabled: enable, lock enable, LOCK and output gate clear,
-         * with only the preserved inherited reserved bit outside documented fields. */
-        rd(s,PLL,&v) && !(v&UINT32_C(0xb8000000)) &&
-        !(v&~(UINT32_C(0xf870ff02)|PLL_INHERITED))))return 0;
+        rd(s,PLL,&v)))return 0;
     s->pll_inherited=v&PLL_INHERITED;
+    /* PLL_NPU adopted: enabled, locked at the profile factors with its output
+     * gate open and its gate controls set, as local stop of an earlier startup
+     * in this power lifetime leaves it. The vendor clock driver's enable
+     * helper likewise returns without a write when the PLL's enable, LDO and
+     * output gate are already set (ccu_gate.c:171-174 at 2ac08e8c). */
+    s->pll_adopted=(v&~PLL_INHERITED)==(PLL_OPEN|PLL_LOCK);
+    if(s->pll_adopted ? !check(s,CCU+0x1920,0x10001,0x10001) || !check(s,CCU+0x19a0,BIT(16),BIT(16)) :
+       /* PLL_NPU disabled: enable, lock enable, LOCK and output gate clear,
+        * with only the preserved inherited reserved bit outside documented fields. */
+       (v&UINT32_C(0xb8000000)) || (v&~(UINT32_C(0xf870ff02)|PLL_INHERITED)))return 0;
     return check(s,CCU+0x2a4,1,0) && check(s,CCU+0x2a8,BIT(31),0) &&
         check(s,CCU+0x2ac,UINT32_C(0xff100000),UINT32_C(0x30000000)) &&
         check(s,CCU+0x2b0,UINT32_C(0x1f0000),UINT32_C(0xb0000));
 }
+/* The PLL_NPU control word without LOCK: after the enable table, or as
+ * adopted with the output gate open. */
+static uint32_t pll_word(const struct a733_npu_startup *s)
+{return (s->pll_adopted ? PLL_OPEN : PLL_ENABLED)|s->pll_inherited;}
 /* LOCK without the register lock: the exclusive PLL_NPU token makes this
  * task the only writer of the control word. At most 100 observations 3 us
- * apart, about 320 us with the 20 us settle, so the spin does not yield. */
+ * apart, about 320 us with the 20 us settle, so the spin does not yield.
+ * An adopted PLL passes the same three consecutive observations. */
 static int lock_wait(struct a733_npu_startup *s)
 {
     unsigned consecutive=0;
@@ -231,7 +256,7 @@ static int lock_wait(struct a733_npu_startup *s)
     for(unsigned samples=0;samples<PLL_SAMPLES;++samples) {
         while(s->ops.spin_us(s->cookie)<next){}
         uint32_t v;
-        if(!rd(s,PLL,&v) || (v&~PLL_LOCK)!=(PLL_ENABLED|s->pll_inherited))return 0;
+        if(!rd(s,PLL,&v) || (v&~PLL_LOCK)!=pll_word(s))return 0;
         consecutive=(v&PLL_LOCK) ? consecutive+1 : 0;
         next+=PLL_SAMPLE_US;
         if(consecutive==3) {
@@ -242,13 +267,37 @@ static int lock_wait(struct a733_npu_startup *s)
     }
     return 0;
 }
-/* The opened state: domain 4 ON, the NPU resets released and its gates open,
- * the module selector at PLL_NPU divider 1, PLL_NPU locked with its output
- * gate open. */
+/* Route the shared SRAM to the NPU, with readback. The register pass found
+ * the NPU's AHB, AXI and core resets asserted and its bus and module gates
+ * closed, and the exclusive NPU-local clock token keeps them so. Requires
+ * the boot ROM's CPU routing on entry. */
+static int route_to_npu(struct a733_npu_startup *s)
+{
+    uint32_t entry,v;
+    if(!rd(s,SRAM_ROUTING,&entry) || !(entry&SRAM_TO_CPU) ||
+       s->ops.registers.write(s->cookie,SRAM_ROUTING,entry&~SRAM_TO_CPU)!=1 ||
+       !rd(s,SRAM_ROUTING,&v) || v!=(entry&~SRAM_TO_CPU))return 0;
+    s->sram_routed=1;return 1;
+}
+/* After local stop has asserted the resets: route the shared SRAM back to
+ * the CPU, with readback. A ROM return does not depend on this step; the
+ * EL3 return path sets the bit again itself. */
+static int route_to_cpu(struct a733_npu_startup *s)
+{
+    uint32_t routed,v;
+    if(!s->sram_routed || !rd(s,SRAM_ROUTING,&routed) || (routed&SRAM_TO_CPU) ||
+       s->ops.registers.write(s->cookie,SRAM_ROUTING,routed|SRAM_TO_CPU)!=1 ||
+       !rd(s,SRAM_ROUTING,&v) || v!=(routed|SRAM_TO_CPU))return 0;
+    s->sram_routed=0;return 1;
+}
+/* The opened state: domain 4 ON, the shared SRAM routed to the NPU, the NPU
+ * resets released and its gates open, the module selector at PLL_NPU
+ * divider 1, PLL_NPU locked with its output gate open. */
 static int opened(struct a733_npu_startup *s)
 {
     uint32_t v;
-    return check(s,PCK,0xf,8) && check(s,PCK+8,0xf,8) &&
+    return check(s,PCK,0xf,8) && check(s,PCK+8,0xf,8) && s->sram_routed &&
+        check(s,SRAM_ROUTING,SRAM_TO_CPU,0) &&
         check(s,CCU+0xb04,0xf0001,0xf0001) && check(s,CCU+0xb00,0x8700001f,BIT(31)) &&
         rd(s,PLL,&v) && v==(PLL_OPEN|PLL_LOCK|s->pll_inherited);
 }
@@ -261,7 +310,7 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
 {
     if(!owner_task(s))return RETAINED;
     uint64_t t;
-    if(!now(s,&t))return s->stage<A733_NPU_STARTUP_ENABLE ? refuse(s) : fault(s);
+    if(!now(s,&t))return s->stage<A733_NPU_STARTUP_ROW ? refuse(s) : fault(s);
     const uint64_t deadline=s->config.deadline_us;
     for(;;) switch(s->stage) {
     case A733_NPU_STARTUP_TOKENS: {
@@ -304,10 +353,12 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
         if(w&SUPPLY_FAULTS)return refuse(s);
         if(!(w&A733_POWER_SUPPLY_DONE))return t<s->wait_until ? PENDING : refuse(s);
         if(!(w&A733_POWER_DCDC2_VERIFIED))return refuse(s);
-        s->stage=A733_NPU_STARTUP_ENABLE;
+        s->stage=A733_NPU_STARTUP_PASS;
         break;
     }
-    case A733_NPU_STARTUP_ENABLE: {
+    case A733_NPU_STARTUP_PASS: {
+        /* Read-only: the owner's domain-4 check and the register pass. A
+         * refusal has written nothing and releases every token. */
         int held=enter(s);
         if(held==0)return now(s,0) ? PENDING : refuse(s);
         if(held!=1)return fault(s);
@@ -316,22 +367,13 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
            (domain!=0 && domain!=8) || !pass(s)) {
             (void)leave(s);return refuse(s);
         }
-        if(!now(s,0) || !apply(s,pll_enable,STEPS(pll_enable)))return fault(s);
-        if(!leave(s) || !lock_wait(s))return fault(s);
-        s->stage=A733_NPU_STARTUP_OPEN;
-        break;
-    }
-    case A733_NPU_STARTUP_OPEN: {
-        int held=enter(s);
-        if(held!=1)return held==0 && now(s,0) ? PENDING : fault(s);
-        uint32_t v;
-        if(!now(s,0) || !rd(s,PLL,&v) || v!=(PLL_ENABLED|PLL_LOCK|s->pll_inherited) ||
-           !check(s,CCU+0x1920,0x10001,0x10001) || !check(s,CCU+0x19a0,BIT(16),BIT(16)) ||
-           !apply(s,local_open,STEPS(local_open)) ||
-           !now(s,0))return fault(s);
-        if(!leave(s))return fault(s);
-        /* The row was admitted before the scheduler; a refusal of the request
-         * itself means an earlier request is unanswered. */
+        if(!leave(s))return refuse(s);
+        /* Power before clocks: the vendor kernel attaches the NPU to domain 4
+         * with power-on before its probe changes any NPU clock or reset
+         * (drivers/base/platform.c:1399, power/domain.c:2774-2776). The owner
+         * adopts an ON domain without a PCK600 write. The row was admitted
+         * before the scheduler; a refusal of the request itself means an
+         * earlier request is unanswered. */
         if(!a733_power_domain_request(&s->row,1) || !now(s,&t) ||
            !a733_deadline_after(t,A733_POWER_PCK_BOUND_US+2*TICK_US,&s->wait_until))return fault(s);
         s->stage=A733_NPU_STARTUP_ROW;
@@ -340,13 +382,38 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
     case A733_NPU_STARTUP_ROW: {
         const enum a733_power_row_state r=a733_power_domain_state(&s->row);
         if(r==A733_POWER_ROW_PENDING)return t<s->wait_until ? PENDING : fault(s);
-        if(r!=A733_POWER_ROW_ON || !now(s,&t) || !a733_deadline_after(t,SETTLE_US,&s->wait_until))return fault(s);
+        if(r!=A733_POWER_ROW_ON)return fault(s);
+        s->stage=A733_NPU_STARTUP_ENABLE;
+        break;
+    }
+    case A733_NPU_STARTUP_ENABLE: {
+        /* The method-2 enable table, or the adopted control word read again
+         * unchanged; then LOCK in both cases. */
+        int held=enter(s);
+        if(held!=1)return held==0 && now(s,0) ? PENDING : fault(s);
+        uint32_t v;
+        if(!now(s,0) || (s->pll_adopted ? !rd(s,PLL,&v) || v!=(pll_word(s)|PLL_LOCK) :
+           !apply(s,pll_enable,STEPS(pll_enable))))return fault(s);
+        if(!leave(s) || !lock_wait(s))return fault(s);
+        s->stage=A733_NPU_STARTUP_OPEN;
+        break;
+    }
+    case A733_NPU_STARTUP_OPEN: {
+        int held=enter(s);
+        if(held!=1)return held==0 && now(s,0) ? PENDING : fault(s);
+        uint32_t v;
+        if(!now(s,0) || !rd(s,PLL,&v) || v!=(pll_word(s)|PLL_LOCK) ||
+           !check(s,CCU+0x1920,0x10001,0x10001) || !check(s,CCU+0x19a0,BIT(16),BIT(16)) ||
+           !apply(s,pll_open,STEPS(pll_open)) || !route_to_npu(s) ||
+           !apply(s,local_open,STEPS(local_open)) || !now(s,&t) ||
+           !a733_deadline_after(t,SETTLE_US,&s->wait_until))return fault(s);
+        if(!leave(s))return fault(s);
         s->stage=A733_NPU_STARTUP_SETTLE;
         return PENDING;
     }
     case A733_NPU_STARTUP_SETTLE:
-        /* No pinned source gives this settle; it is kept from the previous
-         * controller and checked against the counter. */
+        /* The vendor platform waits 2 ms after its power and clock hook
+         * (vip_drv_device_platform.c:1386-1387); checked against the counter. */
         if(t<s->wait_until)return PENDING;
         s->stage=A733_NPU_STARTUP_FINAL;
         break;
@@ -356,6 +423,7 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
         if(!now(s,0) || !opened(s) || !now(s,0))return fault(s);
         if(!leave(s))return fault(s);
         s->stage=A733_NPU_STARTUP_READY;
+        atomic_store_explicit(&s->window_open,1,memory_order_release);
         return READY;
     }
     case A733_NPU_STARTUP_READY:
@@ -369,10 +437,12 @@ enum a733_npu_platform_result a733_npu_startup_stop(struct a733_npu_startup *s)
     if(!owner_task(s))return RETAINED;
     if(s->stage==A733_NPU_STARTUP_STOPPED)return READY;
     if(s->stage!=A733_NPU_STARTUP_READY || !now(s,0))return fault(s);
+    /* The controller has closed; no register access follows. */
+    atomic_store_explicit(&s->window_open,0,memory_order_release);
     int held=enter(s);
     if(held!=1)return held==0 && now(s,0) ? A733_NPU_PLATFORM_BUSY : fault(s);
-    if(!now(s,0) || !opened(s) ||
-       !apply(s,local_stop,STEPS(local_stop)) || !now(s,0))return fault(s);
+    if(!now(s,0) || !opened(s) || !apply(s,local_stop,STEPS(local_stop)) ||
+       !route_to_cpu(s) || !now(s,0))return fault(s);
     if(!leave(s))return fault(s);
     s->stage=A733_NPU_STARTUP_STOPPED;
     return READY;

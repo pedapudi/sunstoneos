@@ -57,7 +57,9 @@ for variant in ('success','numerical-mismatch','not-quiescent','clean-deadline')
   raw=bytes(u.mem_read(receipt,88));receipts[status]=raw;assert get(u,receipt+rl['clean_lines'])==(end-start)//64
  results.append({'case':variant,'passed':True,'clean_lines':len(state['clean']),'smc':state['smc'],'no_stores_after_EL1_disable':True})
 # EL3 receipt/refusal + bounded GIC/secondary cleanup. Reuse the actual successful receipt.
-variants=['success','numerical-mismatch','wrong-magic','wrong-epoch','wrong-generation','wrong-lease','wrong-status','wrong-complete','wrong-start','wrong-end','wrong-lines','wrong-deadline','long-log','unexpected-SMC','recovery-IRQ','late','EL1-cache-live','secondary-on','GICD-timeout','GICR-timeout']
+# SYSCTRL 0x03000008 reads 0 (shared SRAM routed to the NPU) unless a case sets it.
+SRAM_ROUTING=0x03000008;REPORT=0x42000000  # A733_SMP_RESULT_ADDRESS, the monitor report.
+variants=['success','numerical-mismatch','SRAM-already-CPU','SRAM-restore-ignored','wrong-magic','wrong-epoch','wrong-generation','wrong-lease','wrong-status','wrong-complete','wrong-start','wrong-end','wrong-lines','wrong-deadline','long-log','unexpected-SMC','recovery-IRQ','late','EL1-cache-live','secondary-on','GICD-timeout','GICR-timeout']
 for variant in variants:
  u=machine();status=int(variant=='numerical-mismatch');u.mem_write(receipt,receipts[status]);admission=im.address('admission');c=im.layouts['a733_smp_contract'];state={'time':24000000,'return':False,'retained':False,'writes':[]}
  for name,v in [('epoch',7),('generation',8),('lease',9),('diagnostic_deadline',480000000)]:put(u,admission+c[name],v)
@@ -67,11 +69,14 @@ for variant in variants:
  if variant in change:name,v=change[variant];put(u,receipt+rl[name],v)
  if variant=='secondary-on':put(u,0x07053008,8,4)
  if variant=='late':state['time']=480000000
+ if variant=='SRAM-already-CPU':put(u,SRAM_ROUTING,2,4)
  hooks={im.address(n):n for n in ['a733_smp_stop','npu_finite_rom_return']}
  def code(cpu,at,size,cookie):
   word=get(u,at,4);kind=word&0xffffffe0;reg=word&31;name=hooks.get(at)
   if kind in (0xd51fe220,0xd51be220,0xd51be320):u.reg_write(UC_ARM64_REG_PC,at+4);return
-  if name:state['return']=name=='npu_finite_rom_return';state['retained']=name=='a733_smp_stop';u.emu_stop();return
+  if name:
+   state['return']=name=='npu_finite_rom_return';state['retained']=name=='a733_smp_stop'
+   state['stop']=[u.reg_read(UC_ARM64_REG_X0),u.reg_read(UC_ARM64_REG_X0+1)];u.emu_stop();return
   value=None
   if kind==0xd53be020:value=state['time'];state['time']+=240000
   elif kind==0xd53e5200:value=0x17<<26
@@ -79,18 +84,32 @@ for variant in variants:
   if value is not None:u.reg_write(UC_ARM64_REG_X0+reg,value);u.reg_write(UC_ARM64_REG_PC,at+4)
  def writes(cpu,access,at,size,value,cookie):state['writes'].append([at,value])
  def reads(cpu,access,at,size,value,cookie):
+  if variant=='SRAM-restore-ignored' and at==SRAM_ROUTING:put(u,at,0,4)  # A word that ignores writes.
   if variant=='GICD-timeout' and at==0x03400000:put(u,at,1<<31,4)
   if variant=='GICR-timeout' and at==0x03460000:put(u,at,8,4)
  from unicorn import UC_HOOK_MEM_READ
  u.hook_add(UC_HOOK_CODE,code);u.hook_add(UC_HOOK_MEM_WRITE,writes,begin=0x02000000,end=0x08ffffff);u.hook_add(UC_HOOK_MEM_READ,reads,begin=0x02000000,end=0x08ffffff)
+ u.hook_add(UC_HOOK_MEM_WRITE,writes,begin=REPORT,end=REPORT+0xfff)
  u.reg_write(UC_ARM64_REG_X0,0x734 if variant=='unexpected-SMC' else 0x733);u.reg_write(UC_ARM64_REG_X0+1,status);u.reg_write(UC_ARM64_REG_X0+2,2 if variant=='recovery-IRQ' else 1)
  
  try:u.emu_start(im.address('sd_single_core_exception'),0,count=2000000)
  except Exception:
   print('monitor failure',variant,hex(u.reg_read(UC_ARM64_REG_PC)),hex(get(u,u.reg_read(UC_ARM64_REG_PC),4)));raise
- normal=variant in ('success','numerical-mismatch');assert state['return']==normal and state['retained']!=normal,(variant,state)
+ normal=variant in ('success','numerical-mismatch','SRAM-already-CPU');assert state['return']==normal and state['retained']!=normal,(variant,state)
  assert not any(at in (0x08001004,0x08001008) for at,v in state['writes'])
- results.append({'case':'EL3-'+variant,'passed':True,'normal_return':state['return'],'retained':state['retained']})
+ # The shared SRAM goes back to the CPU before the report and the ROM return;
+ # a refused receipt or a failed cleanup parks before that step.
+ routing=[i for i,(at,v) in enumerate(state['writes']) if at==SRAM_ROUTING]
+ report=[i for i,(at,v) in enumerate(state['writes']) if REPORT<=at<REPORT+0x1000]
+ if variant in ('success','numerical-mismatch'):
+  assert len(routing)==1 and state['writes'][routing[0]][1]==2 and report and all(i>routing[0] for i in report),(variant,state['writes'])
+ elif variant=='SRAM-already-CPU':assert not routing
+ elif variant=='SRAM-restore-ignored':
+  # a733_smp_stop is stopped at its entry, so it writes no report here.
+  assert len(routing)==1 and state['stop']==[7,SRAM_ROUTING] and not report,(variant,state)
+ else:assert not routing,(variant,routing)
+ results.append({'case':'EL3-'+variant,'passed':True,'normal_return':state['return'],'retained':state['retained'],
+                 'sram_routing_writes':len(routing)})
 # Execute the accepted local ROM tail up to the modeled warm-reset request.
 u=machine();state={'cache_calls':0,'writes':[],'reset':False}
 def rom(cpu,at,size,cookie):

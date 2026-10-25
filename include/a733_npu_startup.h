@@ -1,6 +1,7 @@
 #ifndef SUNSTONE_A733_NPU_STARTUP_H
 #define SUNSTONE_A733_NPU_STARTUP_H
 /* The NPU startup sequencer: docs/npu-startup.md and docs/designs/npu-board.md. */
+#include <stdatomic.h>
 #include "a733_counter_clock.h"
 #include "a733_gpu_resources.h"
 #include "a733_npu_platform.h"
@@ -42,9 +43,12 @@ struct a733_npu_startup_ops {
     void (*leave)(void *);
     void (*retain)(void *);
 };
-enum { A733_NPU_STARTUP_TOKENS, A733_NPU_STARTUP_SUPPLY, A733_NPU_STARTUP_ENABLE,
-    A733_NPU_STARTUP_OPEN, A733_NPU_STARTUP_ROW, A733_NPU_STARTUP_SETTLE,
-    A733_NPU_STARTUP_FINAL, A733_NPU_STARTUP_READY, A733_NPU_STARTUP_STOPPED };
+/* Stages in the order of the board's vendor kernel: domain 4 ON, then PLL_NPU,
+ * then the shared SRAM routed to the NPU and the local clocks and resets. */
+enum { A733_NPU_STARTUP_TOKENS, A733_NPU_STARTUP_SUPPLY, A733_NPU_STARTUP_PASS,
+    A733_NPU_STARTUP_ROW, A733_NPU_STARTUP_ENABLE, A733_NPU_STARTUP_OPEN,
+    A733_NPU_STARTUP_SETTLE, A733_NPU_STARTUP_FINAL, A733_NPU_STARTUP_READY,
+    A733_NPU_STARTUP_STOPPED };
 struct a733_npu_startup {
     struct a733_npu_startup_config config;
     struct a733_npu_startup_providers providers;
@@ -61,6 +65,16 @@ struct a733_npu_startup {
     uint64_t last_now, wait_until;
     unsigned initialized, stage, failed, register_held;
     uint32_t pll_inherited; /* Reserved BIT24 captured once before any write; never programmed. */
+    /* 1 when the register pass found PLL_NPU locked at the profile with its
+     * output gate open, as an earlier startup in this power lifetime left it. */
+    unsigned pll_adopted;
+    /* 1 from the readback that shows the shared SRAM routed to the NPU until
+     * local stop routes it back. Bootstrap task only. */
+    unsigned sram_routed;
+    /* 1 from READY until stop or a failure: the only state in which the NPU
+     * register window may be accessed. Written by the bootstrap task with
+     * release order; read by the service worker before each access. */
+    atomic_uint window_open;
 };
 /* EL1, before the scheduler starts and before the power service first runs:
  * copies the configuration and providers and registers the domain-4 row. */
@@ -77,4 +91,10 @@ enum a733_npu_platform_result a733_npu_startup_stop(struct a733_npu_startup *);
  * shared provider has failed, 0 before READY, -1 after a failure or from
  * another task. No register access. */
 int a733_npu_startup_prepared(struct a733_npu_startup *);
+/* Any task, before each NPU register access: 1 only while the startup is
+ * READY, which requires the shared SRAM routed to the NPU. One acquire load. */
+static inline int a733_npu_startup_window_open(const struct a733_npu_startup *s)
+{
+    return s && atomic_load_explicit(&s->window_open, memory_order_acquire) == 1;
+}
 #endif

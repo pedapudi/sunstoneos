@@ -33,6 +33,10 @@ VARIANTS = {
     'radio-headset': ['-DSUNSTONE_A733_OS_RADIO=ON', '-DSUNSTONE_A733_OS_HEADSET=ON'],
     'resradio-headset': ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DSUNSTONE_A733_OS_RADIO=ON',
                          '-DSUNSTONE_A733_OS_HEADSET=ON'],
+    # The supervised NPU profile with the catalogue that the NPU board image
+    # builds; {cache} is the --cache directory.
+    'npu': ['-DSUNSTONE_A733_OS_NPU=ON',
+            '-DSUNSTONE_OS_NPU_CATALOGUE={cache}/build/npu-board/session-artifacts.json'],
 }
 DEPENDENCIES = {'kernel': 'kernel-check', 'soak8': 'smp8-soak-model',
                 'mimus-smp': 'smp-mimus-model'}
@@ -85,7 +89,7 @@ def main(argv=None):
     parser.add_argument('--target', action='append', default=[], help='central CMake target; repeat to add targets')
     parser.add_argument('--variant', choices=VARIANTS, action='append', default=[])
     parser.add_argument('--check', choices=CHECKS, action='append', default=[])
-    parser.add_argument('--full', action='store_true', help='explicit broad integration milestone: all central targets, the nine OS variants and all listed checks')
+    parser.add_argument('--full', action='store_true', help='explicit broad integration milestone: all central targets, the ten OS variants and all listed checks')
     parser.add_argument('--cache', type=Path, default=Path(os.environ.get('SUNSTONE_CACHE', Path.home() / '.cache/sunstoneos')))
     parser.add_argument('--trials', type=int, default=1, help='predeclared soak8 trials, not failure retries (default: 1)')
     parser.add_argument('--allow-dirty', action='store_true', help='build a tree with uncommitted changes; the status and diff hash are recorded')
@@ -203,8 +207,9 @@ def main(argv=None):
             return 1
     for variant in variants:
         directory = cache / 'build' / ('gate-os-' + variant + '-' + tree)
+        options = [value.replace('{cache}', str(cache)) for value in VARIANTS[variant]]
         if not run('os-' + variant + '-configure', [cfg, source, directory,
-                   '-DSUNSTONE_MIMUS_BOARD_APPLICATION=ON', '-DSUNSTONE_A733_OS=ON', *VARIANTS[variant]]):
+                   '-DSUNSTONE_MIMUS_BOARD_APPLICATION=ON', '-DSUNSTONE_A733_OS=ON', *options]):
             return 1
         if not run('os-' + variant + '-build', ['cmake', '--build', directory, '--target', 'sunstone-a733-os', '-j', '12']):
             return 1
