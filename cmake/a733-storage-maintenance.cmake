@@ -23,7 +23,7 @@ endif()
 apply_build_patch("${storage_build}/boot.c" "${storage_root}/platform/a733-smp-cached/boot.c"
   "${storage_root}/platform/a733-storage-maintenance/boot.patch")
 file(SHA256 "${storage_root}/platform/a733-smp-cached/platform.c" storage_source_hash)
-if(NOT storage_source_hash STREQUAL "3b0d2fc2826d1e682f06784e857e8100d081ba89c22de0818134942dc88f0f25")
+if(NOT storage_source_hash STREQUAL "a41486a70874d04f82a9077532bac5d814698f24894512fe261286964bf3f39d")
   message(FATAL_ERROR "Review the storage platform patch against changed cached source")
 endif()
 apply_build_patch("${storage_build}/platform.c" "${storage_root}/platform/a733-smp-cached/platform.c"

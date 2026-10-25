@@ -121,6 +121,13 @@ void platform_tick_setup(void)
     uint64_t one=1;
     __asm__ volatile("msr cntp_ctl_el0,%0\n isb"::"r"(one):"memory");
 }
+/* CNTP_CTL_EL0.ISTATUS: the counter has reached the compare value. */
+static inline uint64_t tick_due(void)
+{uint64_t v;__asm__ volatile("mrs %0, cntp_ctl_el0":"=r"(v)::"memory");return v&4u;}
+/* Tick handler calls per IRQ, as Linux hrtimer_interrupt retries its expiry
+ * at most three times; the level-sensitive timer interrupt is taken again
+ * for any period still due. */
+#define TICK_CALLS_PER_IRQ 3u
 void platform_tick_ack(void)
 {
     next_tick+=tick_interval;
@@ -131,7 +138,29 @@ void vApplicationIRQHandler(uint64_t interrupt)
     unsigned c=core();
     if(a733_smp_counter()>=diagnostic_deadline)a733_smp_exit_privileged(3,interrupt);
     if(interrupt==30 && !c) {
-        ++a733_smp_core_results[c].ticks;FreeRTOS_Tick_Handler();
+        /* An IRQ whose timer condition no longer holds processes no tick, as
+         * Linux's timer handler acts only on ISTATUS. Each tick handler call
+         * advances the compare value by one period (platform_tick_ack), so
+         * the next deadline stays in phase. When the condition still holds
+         * after the first call, the IRQ was late: like hrtimer_forward, it
+         * computes the periods already due from the counter and processes up
+         * to TICK_CALLS_PER_IRQ of them in all. ISTATUS guarantees at least
+         * one, which also covers a counter read taken early. The FromISR
+         * critical section of the first call cleared PSTATE.I, which every
+         * further call requires set. */
+        if(tick_due()) {
+            ++a733_smp_core_results[c].ticks;FreeRTOS_Tick_Handler();
+            if(tick_due()) {
+                uint64_t now,due=1;
+                __asm__ volatile("mrs %0, cntpct_el0":"=r"(now)::"memory");
+                if(now>=next_tick)due=(now-next_tick)/tick_interval+1u;
+                if(due>TICK_CALLS_PER_IRQ-1u)due=TICK_CALLS_PER_IRQ-1u;
+                while(due--) {
+                    __asm__ volatile("msr daifset,#2":::"memory");
+                    ++a733_smp_core_results[c].ticks;FreeRTOS_Tick_Handler();
+                }
+            }
+        }
     } else if(interrupt==0 && c<8) {
         /* Only this core writes its count, so a plain load and store suffice;
          * the relaxed store keeps other cores' relaxed loads untorn. */
