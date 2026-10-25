@@ -1,0 +1,609 @@
+{
+ "binaries": [
+  {
+   "name": "physical-brom",
+   "sha256": "a8e31821e8a1611d75867825914c58373c732742cb8f2235e8168c1d7e93b5aa",
+   "source": "FEL memmove capture from the original A733 board (evidence/rom-copy-20261016-084055); FIXS_BROM region"
+  },
+  {
+   "name": "fixs-brom",
+   "sha256": "3a2a7d289951f61095afdabe7813b067295223ce588c422d64200fc7e4431eb1",
+   "source": "smaeul/sunxi-blobs 42aabf4f, sun60iw2p1/fixs-brom/blob.hex; FIXS_BROM region 0x00000000-0x00010FFF decoded to binary"
+  }
+ ],
+ "note": "Boot ROM function inventory. BROM offsets are ROM addresses. The published FIXS dump and the board capture share the reset/FEL/clock code; thirteen words differ in the first 1 KiB (see README). The NS-BROM USB gadget is in brom-ns-functions.json.",
+ "full_inventory": "~/.cache/sunstoneos/evidence/vendor-firmware-20261025/boot/*.functions.json",
+ "functions": [
+  {
+   "addr": "0x44",
+   "size": 596,
+   "callers": [],
+   "callees": [
+    "0x248",
+    "0x264",
+    "0xb30"
+   ],
+   "role": "Reset entry for all cores. CPU0 falls through to common init; secondaries read MPIDR Aff1 and jump through the CPUIDLE vector table at 0x070501c4+."
+  },
+  {
+   "addr": "0x248",
+   "size": 80,
+   "callers": [
+    "0x44"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x264",
+   "size": 52,
+   "callers": [
+    "0x44"
+   ],
+   "callees": [],
+   "role": "Early bias/progress setup: sets bits 16 and 0 of 0x0701020c, bit 31 of 0x07090310."
+  },
+  {
+   "addr": "0xaec",
+   "size": 28,
+   "callers": [
+    "0xb30"
+   ],
+   "callees": [
+    "0x2abc"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0xb28",
+   "size": 8,
+   "callers": [
+    "0xb30"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0xb30",
+   "size": 168,
+   "callers": [
+    "0x44"
+   ],
+   "callees": [
+    "0x10134",
+    "0x2444",
+    "0x2474",
+    "0x2870",
+    "0x2a0c",
+    "0x2aa0",
+    "0x2c38",
+    "0x2e08",
+    "0xaec",
+    "0xb28",
+    "0xd14"
+   ],
+   "role": "Media-boot top level. Samples the FEL pin (0x10134), else tries boot media in priority order (0xa00); on media failure branches to the FEL dispatcher."
+  },
+  {
+   "addr": "0xbe4",
+   "size": 76,
+   "callers": [
+    "0x28a0",
+    "0xc30"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0xc30",
+   "size": 76,
+   "callers": [
+    "0x13f4",
+    "0x1900",
+    "0x1a08",
+    "0x1d04",
+    "0x1d48",
+    "0x1d68",
+    "0x1da0",
+    "0x1e48",
+    "0x1e8c",
+    "0x1fac",
+    "0x2004",
+    "0x2084",
+    "0xcf0"
+   ],
+   "callees": [
+    "0xbe4"
+   ],
+   "role": "Microsecond delay using the CNTVCT physical counter (mrrc p15 c14)."
+  },
+  {
+   "addr": "0xcf0",
+   "size": 36,
+   "callers": [
+    "0x231c"
+   ],
+   "callees": [
+    "0xc30"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0xd14",
+   "size": 164,
+   "callers": [
+    "0xb30"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x13f4",
+   "size": 180,
+   "callers": [
+    "0x21cc"
+   ],
+   "callees": [
+    "0xc30"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x152c",
+   "size": 36,
+   "callers": [
+    "0x15a4",
+    "0x16ac"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x15a4",
+   "size": 116,
+   "callers": [
+    "0x1ecc"
+   ],
+   "callees": [
+    "0x152c"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x16ac",
+   "size": 68,
+   "callers": [
+    "0x1a08"
+   ],
+   "callees": [
+    "0x152c"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x1700",
+   "size": 60,
+   "callers": [
+    "0x1f1c"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x173c",
+   "size": 32,
+   "callers": [
+    "0x1f1c"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x1900",
+   "size": 96,
+   "callers": [
+    "0x1a08"
+   ],
+   "callees": [
+    "0xc30"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x1a08",
+   "size": 152,
+   "callers": [
+    "0x21cc"
+   ],
+   "callees": [
+    "0x16ac",
+    "0x1900",
+    "0x1ecc",
+    "0x1f1c",
+    "0x1f58",
+    "0xc30"
+   ],
+   "role": "Program the CPU back-PLL (0x08870000) N via offset 0xa0."
+  },
+  {
+   "addr": "0x1d04",
+   "size": 68,
+   "callers": [
+    "0x23dc"
+   ],
+   "callees": [
+    "0xc30"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x1d48",
+   "size": 32,
+   "callers": [
+    "0x23dc"
+   ],
+   "callees": [
+    "0xc30"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x1d68",
+   "size": 56,
+   "callers": [
+    "0x23dc"
+   ],
+   "callees": [
+    "0xc30"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x1da0",
+   "size": 168,
+   "callers": [
+    "0x23dc"
+   ],
+   "callees": [
+    "0xc30"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x1e48",
+   "size": 68,
+   "callers": [
+    "0x23dc"
+   ],
+   "callees": [
+    "0xc30"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x1e8c",
+   "size": 64,
+   "callers": [
+    "0x23dc"
+   ],
+   "callees": [
+    "0xc30"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x1ecc",
+   "size": 52,
+   "callers": [
+    "0x1a08"
+   ],
+   "callees": [
+    "0x15a4"
+   ],
+   "role": "PLL lock wait: polls lock bit with a bounded delay via 0xc30."
+  },
+  {
+   "addr": "0x1f1c",
+   "size": 60,
+   "callers": [
+    "0x1a08"
+   ],
+   "callees": [
+    "0x1700",
+    "0x173c"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x1f58",
+   "size": 20,
+   "callers": [
+    "0x1a08"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x1fac",
+   "size": 84,
+   "callers": [
+    "0x2160"
+   ],
+   "callees": [
+    "0xc30"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x2004",
+   "size": 124,
+   "callers": [
+    "0x2160"
+   ],
+   "callees": [
+    "0xc30"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x2084",
+   "size": 208,
+   "callers": [
+    "0x2160"
+   ],
+   "callees": [
+    "0x28a0",
+    "0xc30"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x2160",
+   "size": 104,
+   "callers": [
+    "0x21cc",
+    "0x2444"
+   ],
+   "callees": [
+    "0x1fac",
+    "0x2004",
+    "0x2084"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x21cc",
+   "size": 140,
+   "callers": [
+    "0x2444"
+   ],
+   "callees": [
+    "0x13f4",
+    "0x1a08",
+    "0x2160",
+    "0x2b5c",
+    "0x2bc8"
+   ],
+   "role": "Clock-init top level. Reads speed-grade bits (0x2b5c/0x2bc8), picks CPU N=25/19 scaled by a multiplier, programs CPU-L/CPU-B/DSU PLLs and APBS dividers."
+  },
+  {
+   "addr": "0x231c",
+   "size": 64,
+   "callers": [
+    "0x23dc"
+   ],
+   "callees": [
+    "0xcf0"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x2360",
+   "size": 24,
+   "callers": [
+    "0x23dc"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x237c",
+   "size": 32,
+   "callers": [
+    "0x23a0"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x23a0",
+   "size": 60,
+   "callers": [
+    "0x23dc"
+   ],
+   "callees": [
+    "0x237c"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x23dc",
+   "size": 84,
+   "callers": [
+    "0x2444"
+   ],
+   "callees": [
+    "0x1d04",
+    "0x1d48",
+    "0x1d68",
+    "0x1da0",
+    "0x1e48",
+    "0x1e8c",
+    "0x231c",
+    "0x2360",
+    "0x23a0"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x2444",
+   "size": 48,
+   "callers": [
+    "0xb30"
+   ],
+   "callees": [
+    "0x2160",
+    "0x21cc",
+    "0x23dc",
+    "0x2b30"
+   ],
+   "role": "Secondary clock setup: de-asserts module gates including both CE bus gates before media access."
+  },
+  {
+   "addr": "0x2474",
+   "size": 36,
+   "callers": [
+    "0xb30"
+   ],
+   "callees": [],
+   "role": "Write the FEL/SMC0 report scratch at 0x030000b0."
+  },
+  {
+   "addr": "0x2870",
+   "size": 24,
+   "callers": [
+    "0xb30"
+   ],
+   "callees": [
+    "0x2c10"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x28a0",
+   "size": 84,
+   "callers": [
+    "0x2084"
+   ],
+   "callees": [
+    "0xbe4"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x29fc",
+   "size": 16,
+   "callers": [
+    "0x2aa0",
+    "0x2abc"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x2a0c",
+   "size": 12,
+   "callers": [
+    "0xb30"
+   ],
+   "callees": [],
+   "role": "Read SID security word 0x030060a0."
+  },
+  {
+   "addr": "0x2aa0",
+   "size": 24,
+   "callers": [
+    "0xb30"
+   ],
+   "callees": [
+    "0x29fc"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x2abc",
+   "size": 20,
+   "callers": [
+    "0xaec"
+   ],
+   "callees": [
+    "0x29fc"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x2b30",
+   "size": 8,
+   "callers": [
+    "0x2444"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x2b5c",
+   "size": 24,
+   "callers": [
+    "0x21cc"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x2bc8",
+   "size": 24,
+   "callers": [
+    "0x21cc"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x2c10",
+   "size": 8,
+   "callers": [
+    "0x2870"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x2c38",
+   "size": 56,
+   "callers": [
+    "0xb30"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x2e08",
+   "size": 16,
+   "callers": [
+    "0xb30"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x10118",
+   "size": 28,
+   "callers": [
+    "0x10134"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x10134",
+   "size": 72,
+   "callers": [
+    "0xb30"
+   ],
+   "callees": [
+    "0x10118"
+   ],
+   "role": "Boot-input (FEL pad) sampler: reads bit 8 of SYSCTRL 0x03000024 four times; four low samples select FEL."
+  }
+ ]
+}

@@ -1,0 +1,399 @@
+{
+ "binary": "boot0",
+ "sha256": "829ea8e3b65d71a02f2d0e094bc073de3a10869f948f62db49dbf023d07fabe3",
+ "source": "orangepi-build a95129bf, external/packages/pack-uboot/sun60iw2/bin/boot0_sdcard_orangepizero3w.fex; Thumb-2, load 0x47000",
+ "note": "MMIO addresses recovered by constant propagation; heuristic.",
+ "memory_map_source": "A733 User Manual V1.00 section 2",
+ "peripherals": {
+  "CCU": [
+   {
+    "addr": "0x2002518",
+    "reads": 1,
+    "writes": 1,
+    "funcs": [
+     "0x491b8"
+    ]
+   },
+   {
+    "addr": "0x2002580",
+    "reads": 3,
+    "writes": 1,
+    "funcs": [
+     "0x491b8"
+    ]
+   },
+   {
+    "addr": "0x2002d04",
+    "reads": 0,
+    "writes": 2,
+    "funcs": [
+     "0x5d3b0",
+     "0x5d528"
+    ]
+   },
+   {
+    "addr": "0x2002e00",
+    "reads": 2,
+    "writes": 4,
+    "funcs": [
+     "0x49560"
+    ]
+   },
+   {
+    "addr": "0x2002e80",
+    "reads": 2,
+    "writes": 3,
+    "funcs": [
+     "0x4ae28"
+    ]
+   },
+   {
+    "addr": "0x2002fc0",
+    "reads": 1,
+    "writes": 1,
+    "funcs": [
+     "0x49508"
+    ]
+   },
+   {
+    "addr": "0x2002fc4",
+    "reads": 2,
+    "writes": 3,
+    "funcs": [
+     "0x49508"
+    ]
+   }
+  ],
+  "CPU_PLL_CFG": [
+   {
+    "addr": "0x8871000",
+    "reads": 3,
+    "writes": 0,
+    "funcs": [
+     "0x491b8"
+    ]
+   },
+   {
+    "addr": "0x887101c",
+    "reads": 1,
+    "writes": 1,
+    "funcs": [
+     "0x491b8"
+    ]
+   },
+   {
+    "addr": "0x887201c",
+    "reads": 1,
+    "writes": 1,
+    "funcs": [
+     "0x491b8"
+    ]
+   },
+   {
+    "addr": "0x887301c",
+    "reads": 1,
+    "writes": 1,
+    "funcs": [
+     "0x491b8"
+    ]
+   }
+  ],
+  "CPU_SUBSYS_CTRL": [
+   {
+    "addr": "0x8000144",
+    "reads": 0,
+    "writes": 2,
+    "funcs": [
+     "0x48fac"
+    ]
+   },
+   {
+    "addr": "0x8000200",
+    "reads": 2,
+    "writes": 2,
+    "funcs": [
+     "0x48ee0",
+     "0x48f10"
+    ]
+   },
+   {
+    "addr": "0x8001004",
+    "reads": 0,
+    "writes": 1,
+    "funcs": [
+     "0x48ee0"
+    ]
+   },
+   {
+    "addr": "0x8001008",
+    "reads": 0,
+    "writes": 1,
+    "funcs": [
+     "0x48ee0"
+    ]
+   }
+  ],
+  "DRAM": [
+   {
+    "addr": "0x42e00024",
+    "reads": 1,
+    "writes": 0,
+    "funcs": [
+     "0x5e158"
+    ]
+   },
+   {
+    "addr": "0x48100000",
+    "reads": 0,
+    "writes": 1,
+    "funcs": [
+     "0x5dc80"
+    ]
+   }
+  ],
+  "GPADC0": [
+   {
+    "addr": "0x2521000",
+    "reads": 3,
+    "writes": 3,
+    "funcs": [
+     "0x4b114"
+    ]
+   },
+   {
+    "addr": "0x2521008",
+    "reads": 1,
+    "writes": 1,
+    "funcs": [
+     "0x4b174"
+    ]
+   },
+   {
+    "addr": "0x2521028",
+    "reads": 0,
+    "writes": 1,
+    "funcs": [
+     "0x4b114"
+    ]
+   },
+   {
+    "addr": "0x2521038",
+    "reads": 1,
+    "writes": 2,
+    "funcs": [
+     "0x4b114",
+     "0x4b174"
+    ]
+   }
+  ],
+  "GPIO": [
+   {
+    "addr": "0x2000040",
+    "reads": 0,
+    "writes": 1,
+    "funcs": [
+     "0x48fac"
+    ]
+   }
+  ],
+  "NSI": [
+   {
+    "addr": "0x2023a14",
+    "reads": 0,
+    "writes": 2,
+    "funcs": [
+     "0x48f38"
+    ]
+   },
+   {
+    "addr": "0x2023c14",
+    "reads": 0,
+    "writes": 1,
+    "funcs": [
+     "0x48f38"
+    ]
+   },
+   {
+    "addr": "0x2024014",
+    "reads": 0,
+    "writes": 3,
+    "funcs": [
+     "0x48f38"
+    ]
+   },
+   {
+    "addr": "0x2024214",
+    "reads": 0,
+    "writes": 1,
+    "funcs": [
+     "0x48f38"
+    ]
+   },
+   {
+    "addr": "0x202446c",
+    "reads": 0,
+    "writes": 1,
+    "funcs": [
+     "0x48f38"
+    ]
+   },
+   {
+    "addr": "0x202466c",
+    "reads": 0,
+    "writes": 1,
+    "funcs": [
+     "0x48f38"
+    ]
+   }
+  ],
+  "RTC": [
+   {
+    "addr": "0x7090000",
+    "reads": 3,
+    "writes": 3,
+    "funcs": [
+     "0x491b8"
+    ]
+   },
+   {
+    "addr": "0x7090100",
+    "reads": 1,
+    "writes": 2,
+    "funcs": [
+     "0x4a5ac",
+     "0x4a5cc",
+     "0x4a95c"
+    ]
+   },
+   {
+    "addr": "0x7090160",
+    "reads": 1,
+    "writes": 0,
+    "funcs": [
+     "0x491b8"
+    ]
+   }
+  ],
+  "SYSCTRL": [
+   {
+    "addr": "0x3000024",
+    "reads": 1,
+    "writes": 0,
+    "funcs": [
+     "0x5d9f0"
+    ]
+   },
+   {
+    "addr": "0x3000160",
+    "reads": 1,
+    "writes": 2,
+    "funcs": [
+     "0x49bdc"
+    ]
+   },
+   {
+    "addr": "0x3000168",
+    "reads": 1,
+    "writes": 1,
+    "funcs": [
+     "0x49bdc"
+    ]
+   }
+  ],
+  "S_INTC": [
+   {
+    "addr": "0x7024b00",
+    "reads": 2,
+    "writes": 0,
+    "funcs": [
+     "0x4a5ac"
+    ]
+   },
+   {
+    "addr": "0x7024b01",
+    "reads": 1,
+    "writes": 0,
+    "funcs": [
+     "0x4a5ac"
+    ]
+   },
+   {
+    "addr": "0x7024b02",
+    "reads": 1,
+    "writes": 0,
+    "funcs": [
+     "0x4a5ac"
+    ]
+   },
+   {
+    "addr": "0x7024b03",
+    "reads": 1,
+    "writes": 0,
+    "funcs": [
+     "0x4a5ac"
+    ]
+   },
+   {
+    "addr": "0x7024b04",
+    "reads": 1,
+    "writes": 0,
+    "funcs": [
+     "0x4a5ac"
+    ]
+   },
+   {
+    "addr": "0x7024b05",
+    "reads": 1,
+    "writes": 0,
+    "funcs": [
+     "0x4a5ac"
+    ]
+   },
+   {
+    "addr": "0x7024dc0",
+    "reads": 4,
+    "writes": 10,
+    "funcs": [
+     "0x4a5ac",
+     "0x4a5cc"
+    ]
+   },
+   {
+    "addr": "0x7024dd4",
+    "reads": 2,
+    "writes": 10,
+    "funcs": [
+     "0x4a5ac",
+     "0x4a5cc"
+    ]
+   },
+   {
+    "addr": "0x7024e50",
+    "reads": 4,
+    "writes": 0,
+    "funcs": [
+     "0x4a5ac",
+     "0x4a5cc"
+    ]
+   }
+  ],
+  "S_PRCM": [
+   {
+    "addr": "0x7010010",
+    "reads": 1,
+    "writes": 1,
+    "funcs": [
+     "0x491b8"
+    ]
+   },
+   {
+    "addr": "0x701019c",
+    "reads": 3,
+    "writes": 2,
+    "funcs": [
+     "0x4ae28"
+    ]
+   }
+  ]
+ }
+}
