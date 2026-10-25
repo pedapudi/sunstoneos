@@ -23,7 +23,7 @@
  "device_node": "/dev/vipcore",
  "device_node_citation": "libVIPhal.so 3ed5357b file offset 0x7120; opened O_RDWR at 0x5b28; driver DEVICE_NAME os/linux/vip_drv_device_driver.c:64",
  "ioctl_request": 30000,
- "ioctl_request_citation": "libVIPhal.so 3ed5357b 0x5c60 (mov 0x7530) before ioctl@plt at 0x5c7c; os/linux/vip_drv_os.h:59",
+ "ioctl_request_citation": "libVIPhal.so 3ed5357b loads 0x7530 at 0x5c60 for the ioctl call at 0x5c7c; os/linux/vip_drv_os.h:59",
  "ioctl_request_note": "Plain integer, not an _IOWR encoding; the kernel rejects any other code (os/linux/vip_drv_device_driver.c:257).",
  "outer_struct": {
   "name": "struct ioctl_data",

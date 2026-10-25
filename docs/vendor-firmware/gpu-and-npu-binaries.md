@@ -5,13 +5,13 @@ SunstoneOS depends on for the Allwinner A733: their container formats, the
 host interfaces their open drivers and headers define, and the behaviour a
 FreeRTOS driver must reproduce or match. The GPU firmware's own code is not
 analysed, because its license forbids it; see
-[the license note](#the-gpu-firmware-itself-is-not-analysed).
+[the license note](#the-gpu-firmware-itself-is-not-analysed). The
+[vendor firmware overview](README.md) pins each binary.
 
-Status: **reference analysis**. It read the open driver sources, the firmware
-container headers, the NPU libraries and the SunstoneOS sources. It made no
-board access and changed no runtime code. No GPU firmware has executed under
-SunstoneOS; the NPU has executed jobs once, with wrong output (see
-[NPU](../npu.md)).
+Status: **reference analysis**. The facts come from the open driver sources,
+the firmware container headers, the NPU libraries and the SunstoneOS sources. No
+GPU firmware has executed under SunstoneOS. The NPU has executed jobs once,
+with wrong output ([NPU](../npu.md)).
 
 The reader is assumed to know device drivers, ring buffers, page tables and
 ELF files. Existing SunstoneOS documents describe each implemented component;
@@ -28,7 +28,7 @@ behaviour. The GPU facts here come only from:
 - the open-source DDK host driver and its firmware-interface headers, cited
   by file and line (the board kernel's `bsp/drivers/gpu/imagination/`, which
   carries an MIT or GPL-2.0 notice per file);
-- parsing the firmware container exactly as the open driver's loader does,
+- parsing the firmware container as the open driver's loader does,
   which reads the ELF program headers, the information footer and the
   device-information counts (`pvr_fw.c:101-183`, `pvr_fw_info.h`);
 - SunstoneOS's own board evidence.
@@ -36,14 +36,21 @@ behaviour. The GPU facts here come only from:
 
 ## Citations, labels and machine-readable inventories
 
-Each fact carries a citation and one of three labels:
+Citations and labels follow the
+[overview's conventions](README.md#evidence-labels-and-citations). Each fact
+carries a citation and one of these labels:
 
 - **source**: matches a named published source file, cited as file and line
   or symbol.
 - **container**: read from the firmware container as the open loader reads
   it; the citation is the SHA-256 prefix and file offset (`1db1c399@0x1f000`).
-- **board**: confirmed on an A733 board, citing the evidence directory.
-- **observed** (NPU only): read from an NPU binary.
+- **observed** (NPU only): read from an NPU binary, cited as `HASH@offset`.
+- **confirmed on a board**: a read on an A733 board matched, citing the
+  evidence directory.
+- **inferred**: a conclusion that the cited sources alone do not prove.
+
+The GPU and NPU backsolve documents linked here are in preparation on their
+own branches; their links resolve once they merge.
 
 The complete inventories are JSON files outside Git, under
 `~/.cache/sunstoneos/evidence/vendor-firmware-20261025/accel/`.
@@ -68,41 +75,34 @@ short identifiers:
 | [npu-feature-database.json](data/npu-feature-database.json) | The per-chip feature table |
 | [npu-constants.json](data/npu-constants.json) | Register offsets, command opcodes and format constants |
 
-[The vendor firmware sources](README.md) record where each binary can be
-fetched, its revision, SHA-256 and license.
+[The vendor firmware overview](README.md) records where each binary can be
+fetched, its revision and its SHA-256.
 
 Neither the inventories nor this document contain firmware disassembly or
 firmware bytes.
 
 ## Binary identities
 
-| Binary | SHA-256 | Bytes | Provenance | Terms |
-| --- | --- | ---: | --- | --- |
-| GPU firmware `rogue_36.56.104.183_v1.fw` | `1db1c399c17401d1f79d46c880db81c724d748c784d4639433b076aba2f9c0d2` | 131,072 | Imagination `linux-firmware` revision `8a58f818`, pinned in [sources.lock.json](../../sources.lock.json) as `gpu-firmware` | Binary redistribution under `LICENSE.powervr`, pinned as `gpu-firmware-license` |
-| NPU hardware-abstraction library `libVIPhal.so` (VIPLite 2, AArch64) | `3ed5357b26bd6c4fb68fbdc0b21d637227dda711d1fe67b9e28accdc48bb11f2` | 39,416 | AI SDK `ZIFENG278/ai-sdk` revision `fc90006d`, `viplite-tina/lib/aarch64-none-linux-gnu/v2.0/` | [README](README.md) |
-| NPU network loader `libNBGlinker.so` (VIPLite 2, AArch64) | `82f049b0ed0065dd…` (full value in [npu-binaries.json](data/npu-binaries.json)) | 174,728 | Same directory | Same |
-| NPU model inspector `nbinfo` (x86-64 with DWARF) | `5ef6bb4f1590e0d1…` | 187,008 | AI SDK `tools/` | Same |
-| SDK sample model for the A733, `v3/network_binary.nb` | `fc0d50bdc863e4dfc74eef6dad9d34655c560e759a2f426979a01c505fa9b95f` | 964,224 | AI SDK `examples/vpm_run/operator/v3/` | Same |
-| VIPLite 2 kernel driver | Source, per-file hashes in `npu-binaries.json` | — | `orangepi-xunlong/linux-orangepi` `2ac08e8c`, `bsp/drivers/npu/aw_nna_vip/vip2/` | MIT or GPL-2.0 for the core files ([npu.md](../npu.md)) |
+| Binary | SHA-256 | Bytes | Provenance |
+| --- | --- | ---: | --- |
+| GPU firmware `rogue_36.56.104.183_v1.fw` | `1db1c399c17401d1f79d46c880db81c724d748c784d4639433b076aba2f9c0d2` | 131,072 | Imagination `linux-firmware` revision `8a58f818`, pinned in [sources.lock.json](../../sources.lock.json) as `gpu-firmware` |
+| NPU hardware-abstraction library `libVIPhal.so` (VIPLite 2, AArch64) | `3ed5357b26bd6c4fb68fbdc0b21d637227dda711d1fe67b9e28accdc48bb11f2` | 39,416 | AI SDK `ZIFENG278/ai-sdk` revision `fc90006d`, `viplite-tina/lib/aarch64-none-linux-gnu/v2.0/` |
+| NPU network loader `libNBGlinker.so` (VIPLite 2, AArch64) | `82f049b0ed0065dd4d443e37eeb1edfcbef24457c9c24e36170d64d5b748ca66` | 174,728 | Same directory |
+| NPU model inspector `nbinfo` (x86-64 with DWARF) | `5ef6bb4f1590e0d1b9603506574bee09321d6159e32a6b3aaef66148085b2639` | 187,008 | AI SDK `tools/` |
+| SDK sample model for the A733, `v3/network_binary.nb` | `fc0d50bdc863e4dfc74eef6dad9d34655c560e759a2f426979a01c505fa9b95f` | 964,224 | AI SDK `examples/vpm_run/operator/v3/` |
+| VIPLite 2 kernel driver | Source, per-file hashes in `npu-binaries.json` | — | `orangepi-xunlong/linux-orangepi` `2ac08e8c`, `bsp/drivers/npu/aw_nna_vip/vip2/` |
 
 The two `variant.fw` files under
 `~/.cache/sunstoneos/evidence/gpu-start-20261016/` and `gpu-stop-20261016/`
 are SunstoneOS test fixtures. The repository keeps every firmware binary
 outside Git.
 
-`LICENSE.powervr` permits redistribution of the unmodified firmware binary
-with its notice, and forbids reverse engineering, decompilation and
-disassembly. The GPU facts below come only from the open DDK driver and its
-headers, from parsing the firmware container as the open loader does, and
-from board evidence.
-
 ## GPU firmware
 
-The firmware is a binary for the GPU's internal processor. Under its license
-its code is not analysed here. What follows is the container the host loads,
-the host-facing interface the open driver and its headers define, and what
-SunstoneOS and board evidence establish. For the firmware's behaviour on the
-GPU, the authority is the open DDK driver source, not this document.
+The firmware is a binary for the GPU's internal processor. What follows is
+the container the host loads, the host-facing interface the open driver and
+its headers define, and what SunstoneOS and board evidence establish. For the
+firmware's behaviour on the GPU, the open DDK driver source is the authority.
 
 ### The container is a MIPS ELF with two trailing information blocks
 
@@ -222,9 +222,8 @@ The host owns the SoC-level power for the GPU: the PCK-600 power domains, the
 GPU PLL and clock gates, the reset and the DCDC4 supply. The vendor kernel's
 GPU platform layer writes the GPU-core domain policy itself and does not wait
 for its status; this is derived from the vendor kernel source and board
-evidence in
-[reference-backsolve-gpu.md](https://github.com/pedapudi/sunstoneos/blob/work/backsolve-gpu-1025/docs/reference-backsolve-gpu.md)
-(branch `work/backsolve-gpu-1025`) and [gpu-power.md](../gpu-power.md).
+evidence in the [GPU backsolve](../reference-backsolve-gpu.md) and
+[gpu-power.md](../gpu-power.md).
 SunstoneOS's power owner is [a733_gpu_power.c](../../drivers/gpu/a733_gpu_power.c).
 Idle and power-off requests pass to the firmware through power command 107 and
 are acknowledged in the shared power-sync word and the firmware power state,
@@ -410,16 +409,16 @@ no MMU), `0x10000016` (six and two) and `0x10000021` (twelve and none). All
 values are source `vip2/inc/vip_feature_database.h:161-183` and observed in
 the library copy; their meanings follow the field names (inferred).
 [npu-feature-database.json](data/npu-feature-database.json) lists every field.
-The identity values `0x1000003b` and `0x9202` were read on a board (board,
+The identity values `0x1000003b` and `0x9202` were read on a board (confirmed
+on a board,
 `~/.cache/sunstoneos/evidence/processor-completion-20261024/port-3-1/npu-numerical/runtime/session.json`).
 
 ### The kernel driver holds every NPU register sequence
 
 The user libraries contain no NPU register address: the window base
 `0x03600000` and the AXI SRAM states are absent from both (observed). Every
-register sequence is in the kernel driver source:
-[reference-backsolve-npu.md](https://github.com/pedapudi/sunstoneos/blob/work/backsolve-npu-1025/docs/reference-backsolve-npu.md)
-on branch `work/backsolve-npu-1025` derives power, clocks, reset,
+register sequence is in the kernel driver source: the
+[NPU backsolve](../reference-backsolve-npu.md) derives power, clocks, reset,
 initialisation, MMU, trigger, interrupt, cancellation and clock suspension
 from it, with line citations. The driver's debug and profiling paths read
 further registers (source):
@@ -440,11 +439,12 @@ A FreeRTOS NPU driver cannot use the libraries, which need Linux file, ioctl
 and thread services. It must reproduce:
 
 1. the platform sequence: shared-SRAM routing, power domain, PLL, gates and
-   resets ([reference-backsolve-npu.md](https://github.com/pedapudi/sunstoneos/blob/work/backsolve-npu-1025/docs/reference-backsolve-npu.md)).
-   After a FEL boot (the boot ROM's USB loader mode), the boot ROM leaves the shared SRAM routed to the CPU:
-   SYSCTRL `0x03000008` read 2 on both boards (board, the read-only state
-   read of 2026-10-25 in [the handoff](../handoff.md)). U-Boot normally
-   routes it to the NPU;
+   resets ([NPU backsolve](../reference-backsolve-npu.md)). After a FEL boot,
+   the boot ROM leaves the shared SRAM routed to the CPU: SYSCTRL
+   `0x03000008` read 2 on both boards (confirmed on a board,
+   `~/.cache/sunstoneos/evidence/board-session-20261025-4/port-3-1/bb9-read/`
+   and `board-session-20261025-3/port-3-3/`). U-Boot normally routes it to
+   the NPU ([boot ROM](boot-rom-and-boot0.md#sram-stack-and-the-shared-sram-routing));
 2. the controller sequence: identity, software reset, initialisation stream,
    MMU enable, trigger, completion and cancellation;
 3. the NPU page tables and memory ownership;
@@ -469,27 +469,26 @@ a board.
 | Finding | Affects |
 | --- | --- |
 | The open firmware container's errata list (BRN 44079, 63553) differs from the vendor DDK core header's (63553, 71317): the container omits 71317 and adds 44079. A workaround taken from the DDK source for BRN 71317 has no counterpart in the open firmware. | [gpu-start.md](../gpu-start.md), [gpu-mips.md](../gpu-mips.md) |
-| The container's device-information block carries seven feature parameter values that the DDK KM configuration header does not state. The open loader's decode is the authority for this image's feature values, not the DDK config header. | [gpu-mips.md](../gpu-mips.md), [gpu-fw-state.md](../gpu-fw-state.md) |
-| `libNBGlinker.so` imports a register-read function and reads the NPU identity registers. The NPU backsolve states that it imports none; its conclusion, that the libraries add no register sequence, still holds. | [reference-backsolve-npu.md](https://github.com/pedapudi/sunstoneos/blob/work/backsolve-npu-1025/docs/reference-backsolve-npu.md) |
+| The container's device-information block carries seven feature parameter values that the DDK KM configuration header does not state. The open loader's decode, rather than the DDK configuration header, gives this image's feature values. | [gpu-mips.md](../gpu-mips.md), [gpu-fw-state.md](../gpu-fw-state.md) |
+| `libNBGlinker.so` imports a register-read function and reads the NPU identity registers. The NPU backsolve states that it imports none; its conclusion, that the libraries add no register sequence, still holds. | [NPU backsolve](../reference-backsolve-npu.md) |
 | The vendor driver selects the feature row by product ID only; SunstoneOS also requires revision `0x9202`. The stricter check matches the board but would refuse another revision of the same product. | [a733_npu_controller.c](../../drivers/npu/a733_npu_controller.c) line 138 |
 | The vendor completion event is number 4 (`0x44`); SunstoneOS uses event 0 (`0x40`) and waits for interrupt bit 0. Both are self-consistent; the choice matters only if other events share the status register. | [nbg_command.h](../../drivers/npu/nbg_command.h), [a733_npu_controller.c](../../drivers/npu/a733_npu_controller.c) |
 | The A733 NPU has no tensor processor. Models that need transposes rely on neural-core transpose descriptors, which `libVIPhal.so` generates at run time; SunstoneOS's assembler has no such generator. | [nbg-assembly.md](../nbg-assembly.md), [npu-session.md](../npu-session.md) |
 | The SDK's v2 sample model is for a different chip (`0x10000016`). Only the v3 samples apply to the A733. | [npu.md](../npu.md), [npu-compiler.md](../npu-compiler.md) |
 
-## Audit of existing repository content
+## Repository content that states GPU firmware facts
 
-At `bringup` head `9d93d4c6` and on the GPU branches, several documents and
-checks state GPU firmware addresses, section sizes and register sequences.
-Each traces to the open DDK driver source or to a container parse, not to
-disassembling the firmware.
+Several SunstoneOS documents and checks state GPU firmware addresses, section
+sizes and register sequences. Each traces to the open DDK driver source or to
+a parse of the container headers as the open loader reads them:
 
 | Passage | Apparent source | Classification |
 | --- | --- | --- |
-| [docs/gpu.md:90-125](../gpu.md) firmware section table (addresses `0x9fc02000`, `0xbfc00000`, `0xc0000000`, sizes), entry `0xbfc00001`, the information header and six layout entries | ELF program headers and the information footer, read as the open loader reads them | Container parse; permitted |
-| [docs/gpu-mips.md:41-72](../gpu-mips.md) MIPS heap at `0xc0000000`, page-table format, the eleven wrapper register writes, microMIPS boot mode | The reference check compiles the original `pvr_fw_mips.c` and `rgxstartstop.c` functions (`docs/gpu-mips.md:86`) | Open driver source; permitted |
-| [docs/gpu-fw-state.md:41-72](../gpu-fw-state.md) record addresses `0xc0fd0000`/`0xc0fe0000`/`0xc0ff0000`, the `0xdeadbee0` fault word, trace buffers of 12,000 words | The reference check compiles the original initialisation functions with the open firmware-interface headers (`docs/gpu-fw-state.md:95`); the fault word is `pvr_fw.c:361` | Open driver source; permitted |
-| [docs/gpu-start.md:41-72](../gpu-start.md) the 35-step start sequence, reset masks, "Rascal and Dust" release | The reference check compiles the original startup, cache, AXI-ACE and MIPS wrapper functions (`docs/gpu-start.md:126`) | Open driver source; permitted |
-| `checks/pvr-mips-reference.py`, `pvr-firmware-reference.py`, `pvr-gpu-start-reference.py`, `pvr-gpu-stop-reference.py` | Compile and run the open DDK functions against staged firmware; region tuples are the container layout | Open driver source plus container parse; permitted |
+| [docs/gpu.md:90-125](../gpu.md) firmware section table (addresses `0x9fc02000`, `0xbfc00000`, `0xc0000000`, sizes), entry `0xbfc00001`, the information header and six layout entries | ELF program headers and the information footer, read as the open loader reads them | Container parse |
+| [docs/gpu-mips.md:41-72](../gpu-mips.md) MIPS heap at `0xc0000000`, page-table format, the eleven wrapper register writes, microMIPS boot mode | The reference check compiles the original `pvr_fw_mips.c` and `rgxstartstop.c` functions (`docs/gpu-mips.md:86`) | Open driver source |
+| [docs/gpu-fw-state.md:41-72](../gpu-fw-state.md) record addresses `0xc0fd0000`/`0xc0fe0000`/`0xc0ff0000`, the `0xdeadbee0` fault word, trace buffers of 12,000 words | The reference check compiles the original initialisation functions with the open firmware-interface headers (`docs/gpu-fw-state.md:95`); the fault word is `pvr_fw.c:361` | Open driver source |
+| [docs/gpu-start.md:41-72](../gpu-start.md) the 35-step start sequence, reset masks, "Rascal and Dust" release | The reference check compiles the original startup, cache, AXI-ACE and MIPS wrapper functions (`docs/gpu-start.md:126`) | Open driver source |
+| `checks/pvr-mips-reference.py`, `pvr-firmware-reference.py`, `pvr-gpu-start-reference.py`, `pvr-gpu-stop-reference.py` | Compile and run the open DDK functions against staged firmware; region tuples are the container layout | Open driver source and container parse |
 
 No passage in the repository was found that decodes firmware instructions,
 names an internal firmware function, or lists registers the firmware accesses.
@@ -499,8 +498,8 @@ names an internal firmware function, or lists registers the firmware accesses.
 GPU firmware:
 
 - How the vendor DDK firmware `rgx.fw`, which the vendor Linux build loads,
-  differs from this open image. It is not published, and analysing either
-  firmware's behaviour is outside this document's license scope.
+  differs from this open image. `rgx.fw` is not published, and
+  `LICENSE.powervr` forbids disassembling the open image.
 - Whether the open firmware behaves identically to the DDK firmware across
   the shared ABI. Only board execution can answer it.
 

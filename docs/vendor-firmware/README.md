@@ -1,13 +1,220 @@
 # Vendor firmware and closed binaries
 
-SunstoneOS loads or analyses 39 vendor files: boot ROM images, the vendor boot
-package, GPU and radio firmware, NPU runtime libraries, compiled NPU models and
-the NPU compiler. This page pins each one by its download location and
-revision, SHA-256, size and, where one exists, its license file. It also gives
-the cache path that SunstoneOS tools read. The machine-readable copy is [sources.json](sources.json), which
-[tools/fetch-vendor-firmware.py](../../tools/fetch-vendor-firmware.py) uses to
-fetch and verify the files. Source trees and manuals are pinned separately, as
-described under [sources pinned elsewhere](#sources-pinned-elsewhere).
+The Allwinner A733 boots and runs through a chain of vendor binaries: two boot
+ROMs, the first-stage loader boot0, the Trusted Firmware-A secure monitor
+BL31, the firmware of the system control processor (SCP), the GPU firmware
+and the NPU runtime libraries. SunstoneOS replaces some of them, calls into
+others and loads a few unchanged. This directory describes each binary, pins
+it by download location, SHA-256 and size, and records the facts derived from
+it in curated inventories under [data/](data/).
+
+This page is the overview. It explains how the binaries fit together and
+which ones SunstoneOS relies on, and it summarises which peripherals each
+binary programs. The analysis documents listed in the
+[reading guide](#reading-guide) hold the detail. The tables from
+[Fetch and verify the binaries](#fetch-and-verify-the-binaries) onwards pin
+38 files; [sources.json](sources.json) is their machine-readable copy.
+
+## The vendor boot chain and runtime
+
+On the vendor's Linux system the binaries run in this order:
+
+1. **Boot ROM.** After reset, Cortex-A55 core 0 runs the fixed secure boot ROM
+   (FIXS-BROM) at address `0x0`. It programs the CPU PLLs, routes the 512 KiB
+   shared SRAM at `0x74000` to the CPU by setting bit 1 of SYSCTRL
+   `0x03000008`, and samples the FEL pad. FEL is the ROM's USB recovery
+   protocol, served by the nonsecure boot ROM (NS-BROM) at `0x17000`. Without
+   FEL, the ROM copies boot0 from the boot medium to SRAM at `0x47000` and
+   enters it in AArch32.
+2. **boot0.** The first-stage loader sets the CPU PLLs, enables the DRAM and
+   GPU supplies on the AXP8191 PMIC, and trains DRAM. It then parses the
+   second-stage boot package (TOC1). The package holds U-Boot, BL31 and the
+   SCP image. boot0 copies BL31 to `0x48000000` and the SCP image to DRAM at
+   `0x48100000`, writes the DRAM size and parameters into the BL31 header,
+   and warm-resets core 0 into BL31 in AArch64.
+3. **BL31.** The EL3 secure monitor initialises the GIC-600, makes most
+   peripherals, clock registers and DMA channels Nonsecure, and serves PSCI
+   calls for core power. It enters U-Boot at EL1 and stays resident.
+4. **U-Boot.** U-Boot clears SYSCTRL `0x03000008` bit 1, which gives the
+   shared SRAM to the NPU. Just before it starts Linux, it issues SMC
+   `0x8000ff10`, and BL31 copies the SCP image into SRAM A2 and starts the
+   E902 RISC-V core that runs it.
+5. **SCP firmware.** The SCP polls a message box for BL31's requests. It runs
+   system suspend and resume, power-off and reset through the PMIC, and
+   wakeup-source configuration. It has no frequency-scaling or thermal code.
+6. **GPU firmware.** The Linux GPU driver loads the PowerVR firmware into the
+   GPU's internal MIPS processor and exchanges commands with it through
+   shared-memory queues.
+7. **NPU runtime.** The NPU has no firmware. The `vipcore` kernel driver
+   programs the NPU registers. The user-space libraries `libVIPhal.so` and
+   `libNBGlinker.so` load compiled models, and reach the driver through one
+   `ioctl`.
+
+SunstoneOS takes this position for each binary:
+
+| Binary | Runs on | SunstoneOS | Analysis |
+| --- | --- | --- | --- |
+| Boot ROM (FIXS-BROM and NS-BROM) | Cortex-A55 core 0 | Relies on it. Every image is loaded over FEL, and images return to the ROM through its forced-FEL entry | [Boot ROM and boot0](boot-rom-and-boot0.md) |
+| boot0 | Cortex-A55 core 0, AArch32 | Calls its board-setup and DRAM-training routines from a RAM wrapper. Reimplements its package parser and BL31 handoff. The microSD package carries it unmodified | [Boot ROM and boot0](boot-rom-and-boot0.md) |
+| BL31 | Every Cortex-A55 and Cortex-A76 core, EL3 | Replaces it with the SunstoneOS EL3 monitor, which reproduces the CPU_ON register sequence | [TF-A monitor](tf-a-monitor.md) |
+| SCP firmware | E902 RISC-V core | Never starts it. Core power-on, power-domain and PMIC control are reimplemented on the application cores; system suspend is not implemented | [SCP firmware](scp-firmware.md) |
+| GPU firmware | GPU's internal MIPS processor | Loads the published image unmodified and reimplements the host side from the open driver | [GPU and NPU binaries](gpu-and-npu-binaries.md) |
+| NPU runtime libraries | Linux user space | Does not load them. The native NPU driver and model loader reimplement the kernel driver and the libraries; the libraries serve as format and loader references | [GPU and NPU binaries](gpu-and-npu-binaries.md) |
+| Radio firmware | AIC8800D80 radio | Loads it unmodified over SDIO | [Radio firmware](../radio-firmware.md) |
+
+Two differences from the vendor chain follow from loading every image over
+FEL. U-Boot never runs, so the shared SRAM stays routed to the CPU; the NPU
+backsolve ties this routing to the input-independent output of an earlier NPU
+run. BL31 never runs either, so its security setup is absent. A SunstoneOS
+image that made BL31's security writes and applied the vendor's GPU supply
+voltage and PLL rate read the GPU core identity
+([TF-A monitor](tf-a-monitor.md#cold-boot-register-writes)).
+
+## Reading guide
+
+- [Boot ROM and boot0](boot-rom-and-boot0.md): ROM reset path, boot-media and
+  FEL dispatch, the CPU PLL rates, boot0's PMIC rails, DRAM training, package
+  parser and handoff.
+- [TF-A monitor](tf-a-monitor.md): BL31's memory map, cold-boot register
+  writes, PSCI power sequences, GIC setup, SMC services and the SCP start.
+- [SCP firmware](scp-firmware.md): start-up, the message protocol, system
+  suspend and resume, power-off, wakeup sources and DRAM retention.
+- [GPU and NPU binaries](gpu-and-npu-binaries.md): the GPU firmware container
+  and host interface, the NPU libraries, driver commands, model format and
+  feature database.
+- [Radio firmware](../radio-firmware.md): artifact selection, upload and start.
+- [microSD packaging](../microsd-boot-package.md): the boot-package packer and
+  the TOC1 format.
+
+Three backsolve documents derive each bring-up sequence from these binaries,
+the vendor sources and the manuals, and compare it with SunstoneOS. Each is on
+its own branch, and its link resolves once that branch merges:
+
+- [CPU backsolve](../reference-backsolve-cpu.md), in preparation: secondary-core power-up, EL3 and GIC setup, idle and DVFS.
+- [GPU backsolve](../reference-backsolve-gpu.md), in preparation: the vendor GPU state from cold boot to firmware start.
+- [NPU backsolve](../reference-backsolve-npu.md), in preparation: NPU power, clocks, reset, shared-SRAM routing and initialisation.
+
+### Terms used across the documents
+
+- **CPUS domain:** the always-on subsystem at `0x07000000`. It holds the E902
+  core, PRCM, RTC, S_TIMER, S_UART, S_TWI, S_MBOX and the PCK-600.
+- **PRCM:** the CPUS-domain clock and power controller at `0x07010000`. The
+  manual's memory map calls it S_PRCM and the vendor clock driver calls it
+  R_CCU.
+- **CPUIDLE:** the block at `0x07050000` that holds the per-core power
+  requests and status words.
+- **PCK-600 PPU:** one power-policy unit per power domain at
+  `0x07060000 + 0x1000·n`. Domain 4 is the NPU, 5 the GPU top (TOP5) and 6
+  the GPU core (CORE6).
+- **SYSCTRL:** the system control block at `0x03000000`; `+0x08` bit 1 routes
+  the shared SRAM, and `+0x24` holds the chip version.
+- **SCP:** the system control processor, an E902 RISC-V core. Allwinner's
+  older name for its firmware is arisc or AR100.
+- **BVNC:** the PowerVR GPU's revision identifier, 36.56.104.183 on the A733.
+- **NBG:** a network binary graph, the NPU's compiled-model file.
+
+## Evidence labels and citations
+
+Every document labels each fact with one of three labels:
+
+- **observed:** read from the instructions or data of the binary at the cited
+  location;
+- **confirmed on a board:** a read on an A733 board matched, and the
+  evidence directory under `~/.cache/sunstoneos/evidence/` is named;
+- **inferred:** a conclusion from observed facts, the manual or a vendor
+  source that the binary alone does not prove.
+
+Two documents add labels for their sources. The TF-A monitor document marks
+code that has the structure of the TF-A v2.5 release as **upstream**. The GPU
+and NPU document marks facts from published driver source as **source**, and
+facts read from the GPU firmware container as the open loader reads it as
+**container**.
+
+A citation `HASH@X` names a binary by the first eight hexadecimal digits of
+its SHA-256 and gives a location `X`:
+
+| Binary | Hash prefix | Load address | Meaning of `X` |
+| --- | --- | --- | --- |
+| Boot ROM captured on the board | `a8e31821` | `0x0` | ROM address, equal to the file offset |
+| Published FIXS-BROM | `3a2a7d28` | `0x0` | ROM address, equal to the file offset |
+| Published NS-BROM | `95be69c9` | `0x17000` | ROM address; file offset = address − `0x17000` |
+| boot0 | `829ea8e3` | `0x47000` | Load address, as in its inventories; file offset = address − `0x47000` |
+| BL31 (`monitor.fex`) | `8af16b86` | `0x48000000` | File offset; address = `0x48000000` + offset |
+| SCP firmware (`scp.fex`) | `07e6b976` | `0x40004000` in the E902 view | File offset; E902 address = `0x40004000` + offset |
+| GPU firmware | `1db1c399` | Loaded by segment | File offset in the container |
+| `libVIPhal.so`, `libNBGlinker.so` | `3ed5357b`, `82f049b0` | Shared objects | File offset, equal to the virtual address |
+| `nbinfo` | `5ef6bb4f` | `0x400000` | File offset = virtual address − `0x400000` |
+
+Within one document, a bare `@X` cites the binary that the section describes.
+
+## Peripherals each binary programs
+
+This table combines the register-access inventories of the four binaries
+whose code SunstoneOS analyses:
+[brom-mmio.json](data/brom-mmio.json), [boot0-mmio.json](data/boot0-mmio.json),
+[tf-a-monitor-mmio.json](data/tf-a-monitor-mmio.json) and
+[scp-mmio.json](data/scp-mmio.json). **W** means the binary writes at least one
+register of the block; **R** means it only reads; a dash means the inventory
+lists no access.
+
+| Peripheral | Base | Boot ROM | boot0 | BL31 | SCP |
+| --- | --- | :---: | :---: | :---: | :---: |
+| GPIO | `0x02000000` | — | W | W | — |
+| CCU | `0x02002000` | W | W | W | W |
+| NSI interconnect | `0x02020000` | — | W | — | W |
+| SPC | `0x02054000` | — | — | W | — |
+| UART0 | `0x02500000` | — | — | W | — |
+| GPADC0 | `0x02521000` | — | W | — | — |
+| SYSCTRL | `0x03000000` | W | W | W | W |
+| CPUX message box | `0x03004000` | — | — | W | W |
+| SID (eFuse) | `0x03006000` | R | — | W | R |
+| TIMER0 | `0x03009000` | — | — | W | — |
+| GIC-600 | `0x03400000` | — | — | W | — |
+| Window below the NAND controller | `0x04000000` | — | — | R | — |
+| DMAC1, DMAC0 | `0x04024000`, `0x04601000` | — | — | W | — |
+| USB0, USB1 | `0x04100000`, `0x04200000` | — | — | W | R |
+| S_SPC, S_TZMA | `0x07002000`, `0x07003000` | — | — | W | — |
+| PRCM | `0x07010000` | W | W | W | W |
+| S_WDG | `0x07021000` | W | — | — | W |
+| S_TWD | `0x07022000` | W | — | — | — |
+| S_INTC | `0x07024000` | — | W | — | W |
+| S_GPIO (port L) | `0x07025000` | — | — | — | W |
+| E902 configuration | `0x07032000` | — | — | W | W |
+| CPUIDLE | `0x07050000` | R | — | W | W |
+| PCK-600 PPUs | `0x07060000` | — | — | — | W |
+| S_UART0, S_TWI0 | `0x07080000`, `0x07083000` | — | — | — | W |
+| RTC | `0x07090000` | W | W | W | W |
+| S_TIMER | `0x07091000` | — | — | — | W |
+| S_MBOX | `0x07094000` | — | — | W | W |
+| CPU_SUBSYS_CTRL | `0x08000000` | — | W | W | W |
+| System counter | `0x08010000`, `0x08020000` | W | — | — | W |
+| CPU_PLL_CFG | `0x08870000` | W | W | — | W |
+| SMC0, SMC1 | `0x0a000000`, `0x0a010000` | — | — | W | W |
+| DRAM controllers | `0x0a020000`–`0x0a040000`, `0x0a100000`, `0x0a500000` | — | — | — | W |
+| DRAM PHY | `0x0a900000`, PHY memory `0x0aa40000` | — | — | — | W |
+| E902 interrupt controller | `0xe0800000`, core-local | — | — | — | W |
+
+The boot ROM and boot0 inventories come from a scan for constant addresses,
+which misses an access through a computed base. Their documents describe such
+accesses that the table omits: the boot ROM's storage and USB controllers,
+and boot0's PMIC bus, SD controller, DRAM controller and PHY. The BL31 and SCP
+inventories also list accesses through tables and loops.
+
+The other binaries add no row:
+
+- **GPU firmware.** Its license forbids disassembly, so the registers it
+  programs are not analysed. The host-side register writes come from the
+  open GPU driver and are described in [gpu-start.md](../gpu-start.md).
+- **NPU libraries.** They contain no NPU register address. `libNBGlinker.so`
+  reads four identity registers through the driver's register-read command.
+  The kernel driver source holds every NPU register sequence for the window
+  at `0x03600000`.
+- **Radio firmware.** It runs on the radio's own processor and reaches the
+  SoC only over SDIO.
+
+None of the four analysed binaries writes a PCK-600 power domain at cold boot;
+the vendor Linux drivers power the GPU and NPU domains. The SCP turns every
+domain on only when it resumes from system suspend.
 
 ## Fetch and verify the binaries
 
@@ -131,29 +338,29 @@ second-stage package (TOC1) from three entries:
   pins as `board-uboot`; the repository holds no prebuilt copy;
 - `monitor.fex`, the vendor build of Trusted Firmware-A BL31, the EL3 secure
   monitor;
-- `scp.fex`, the firmware of the RISC-V system control processor.
+- `scp.fex`, the firmware of the system control processor, an E902 RISC-V core.
 
 boot0 is the first-stage loader that the ROM reads from storage. It sets up
-clocks and the PMIC and trains DDR; the repository has no separate DDR
-initialization binary for the A733. `tools/prepare-ddr.py` runs the DDR
+clocks and the PMIC and trains DRAM; the repository has no separate DRAM
+initialization binary for the A733. `tools/prepare-ddr.py` runs the DRAM
 routines of the pinned Zero 3W boot0 from RAM. SunstoneOS builds its own
 microSD boot package with the vendor packer `dragonsecboot`, as described in
 [microSD packaging](../microsd-boot-package.md). The vendor monitor, SCP
-firmware and the second Zero 3W boot0 are references for CPU, power-domain and
+firmware and the 1800M Zero 3W boot0 are references for CPU, power-domain and
 GPU sequences. The four boot0 builds for other boards and media complete the
 pinned directory; SunstoneOS does not use them.
 
 | Item | Role | Pinned source | Bytes | SHA-256 |
 | --- | --- | --- | ---: | --- |
-| `boot0-sdcard-orangepizero3w` | boot0, the first-stage loader the boot ROM reads from storage (Thumb-2, load address 0x47000) for SD boot on the Orange Pi Zero 3W; it trains DDR, so it is also the only DDR initialization binary SunstoneOS uses | [boot0_sdcard_orangepizero3w.fex](https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/packages/pack-uboot/sun60iw2/bin/boot0_sdcard_orangepizero3w.fex) | 245,760 | `829ea8e3b65d71a02f2d0e094bc073de3a10869f948f62db49dbf023d07fabe3` |
-| `boot0-sdcard-orangepizero3w-1800m` | boot0, the first-stage loader the boot ROM reads from storage (Thumb-2, load address 0x47000) for SD boot on the Orange Pi Zero 3W, variant named for an 1800 MHz CPU clock; compared with the default variant in the CPU reference analysis | [boot0_sdcard_orangepizero3w_1800M.fex](https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/packages/pack-uboot/sun60iw2/bin/boot0_sdcard_orangepizero3w_1800M.fex) | 245,760 | `d2a9bcccf012dce554c4613cf3e2e4256fe9863f6215afbe979aca891d4a6e27` |
+| `boot0-sdcard-orangepizero3w` | boot0, the first-stage loader the boot ROM reads from storage (Thumb-2, load address 0x47000) for SD boot on the Orange Pi Zero 3W; it trains DRAM, so it is also the only DRAM initialization binary SunstoneOS uses | [boot0_sdcard_orangepizero3w.fex](https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/packages/pack-uboot/sun60iw2/bin/boot0_sdcard_orangepizero3w.fex) | 245,760 | `829ea8e3b65d71a02f2d0e094bc073de3a10869f948f62db49dbf023d07fabe3` |
+| `boot0-sdcard-orangepizero3w-1800m` | boot0, the first-stage loader the boot ROM reads from storage (Thumb-2, load address 0x47000) for SD boot on the Orange Pi Zero 3W, variant named 1800M; it differs from the default variant only in its DRAM parameter tables, DRAM training code and checksum | [boot0_sdcard_orangepizero3w_1800M.fex](https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/packages/pack-uboot/sun60iw2/bin/boot0_sdcard_orangepizero3w_1800M.fex) | 245,760 | `d2a9bcccf012dce554c4613cf3e2e4256fe9863f6215afbe979aca891d4a6e27` |
 | `boot0-sdcard` | boot0, the first-stage loader the boot ROM reads from storage (Thumb-2, load address 0x47000) for SD boot, generic board; not used or analysed by SunstoneOS, recorded to pin the complete vendor directory | [boot0_sdcard.fex](https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/packages/pack-uboot/sun60iw2/bin/boot0_sdcard.fex) | 245,760 | `a1ed6f1b8c4f5d98c29febefdc7203e5c442c2d1b841d204278b62ad56a70fd2` |
 | `boot0-sdcard-a733` | boot0, the first-stage loader the boot ROM reads from storage (Thumb-2, load address 0x47000) for SD boot, A733 reference board; not used or analysed by SunstoneOS, recorded to pin the complete vendor directory | [boot0_sdcard_a733.fex](https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/packages/pack-uboot/sun60iw2/bin/boot0_sdcard_a733.fex) | 245,760 | `9213f1c56ef932930d43b5751e8937bea0e9ae7460ec16187cc1b0dffdb75345` |
 | `boot0-spinor-a733` | boot0, the first-stage loader the boot ROM reads from storage (Thumb-2, load address 0x47000) for SPI NOR boot, A733 reference board; not used or analysed by SunstoneOS, recorded to pin the complete vendor directory | [boot0_spinor_a733.fex](https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/packages/pack-uboot/sun60iw2/bin/boot0_spinor_a733.fex) | 237,568 | `7f0babc242c1e4614c7243bd2c45a980e4385727ffbb544a7c8f2d324cf8dc07` |
 | `boot0-ufs-a733` | boot0, the first-stage loader the boot ROM reads from storage (Thumb-2, load address 0x47000) for UFS boot, A733 reference board; not used or analysed by SunstoneOS, recorded to pin the complete vendor directory | [boot0_ufs_a733.fex](https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/packages/pack-uboot/sun60iw2/bin/boot0_ufs_a733.fex) | 245,760 | `c5729d90686acfe7db9c649010c8026355fec212e72455e9eda6d17087c0942f` |
 | `boot0-ufs-orangepizero3w` | boot0, the first-stage loader the boot ROM reads from storage (Thumb-2, load address 0x47000) for UFS boot on the Orange Pi Zero 3W; not used or analysed by SunstoneOS, recorded to pin the complete vendor directory | [boot0_ufs_orangepizero3w.fex](https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/packages/pack-uboot/sun60iw2/bin/boot0_ufs_orangepizero3w.fex) | 245,760 | `7046c43d43b3b2e47452ccb6d5db935e109dc9ca7bde7d2ab90105e7901998b3` |
 | `monitor` | Vendor TF-A BL31 secure monitor (AArch64, load address 0x48000000), version string v2.5(debug):7dddb263a-dirty, built 30 December 2024; source not published | [monitor.fex](https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/packages/pack-uboot/sun60iw2/bin/monitor.fex) | 78,609 | `8af16b86ae8e2eff634a3ebca76a8cdf3c10b3540387573d46c3d785545b2632` |
-| `scp` | Vendor system control processor firmware (RISC-V, also called arisc or ar100); contains power-domain sequences and DRAM frequency scaling; source not published | [scp.fex](https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/packages/pack-uboot/sun60iw2/bin/scp.fex) | 105,912 | `07e6b97628101963e7944e012948c4bdf721f914bad347acd7dfbde89db42749` |
+| `scp` | Vendor system control processor (SCP) firmware for the E902 RISC-V core, derived from the arisc (AR100) firmware; runs system suspend, resume, power-off and reset; source not published | [scp.fex](https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/packages/pack-uboot/sun60iw2/bin/scp.fex) | 105,912 | `07e6b97628101963e7944e012948c4bdf721f914bad347acd7dfbde89db42749` |
 | `boot-package-cfg` | Vendor boot-package list: u-boot.fex, monitor.fex and scp.fex in that order, with OP-TEE disabled | [boot_package.cfg](https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/packages/pack-uboot/sun60iw2/bin/boot_package.cfg) | 209 | `09bd43f68e54c0746b5130a3acf37fd38191d9187e329e2b78711561b6f9d918` |
 | `sys-config` | Vendor board configuration read by boot0 and U-Boot (power mode, DRAM and pin settings) | [sys_config.fex](https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/packages/pack-uboot/sun60iw2/bin/sys_config/sys_config.fex) | 5,006 | `eb598823d947fa39d0cf2102051b921d10f41b26538103b9fa3a266c6a486a29` |
 | `u-boot-dts` | Vendor U-Boot device tree source for sun60iw2 (T736 demo board description) | [u-boot-current.dts](https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/packages/pack-uboot/sun60iw2/bin/dts/u-boot-current.dts) | 239,512 | `bd8e32740bc1c25532f28cae7860c61f07506dfc53a672d9726d2fd7ea71ff0c` |
@@ -212,7 +419,6 @@ the nested archive, the image and the loaded image identity, and the
 | `npu-sdk-model-input` | AI SDK sample input tensor for the ShuffleNetV2 model (150,528 bytes) | [input_0.dat](https://raw.githubusercontent.com/ZIFENG278/ai-sdk/fc90006d0f6569da2f6726c2d8395877686f5aca/examples/vpm_run/operator/input_0.dat) | 150,528 | `d38c22c2007db314572c9ddfeb513a9f3d11ec99e8deec0f65bc91481502f1b9` |
 | `npu-timvx-model` | TIM-VX compiled convolution, ReLU and max-pool FP32 model (format 0x1001e, target 0xba); independent checksum evidence; the A733 assembler refuses its target | [conv2d_relu_maxpool2d_fp32.nbg](https://raw.githubusercontent.com/VeriSilicon/TIM-VX/702715d714277376d7ff466b7b72833ff57564c1/samples/nbg_runner_pybind/examples/models/conv2d_relu_maxpool2d_fp32.nbg) | 9,152 | `e898680018e90837ec6941c9f0fa5566bde8876ac29a366d9ee53469342cb276` |
 | `npu-acuity-compiler` | Allwinner NPU compiler package: Docker image archive with ACUITY 6.30.22 and Vivante IDE 5.11.0 (x86-64 host tool, 2.9 GB) | [Sharing page](https://netstorage.allwinnertech.com:5001/sharing/Mh23BhPHq), manual download | 2,903,273,080 | `d876a96a74905b92d09ae5681256dd5fc6c430b0ebbd612097142473ec87e287` |
-| `npu-compiler-libopenvx` | OpenVX library from the Vivante IDE 5.11.0 simulator inside the compiler image (x86-64 shared object); its model writer and checksum routine were inspected to establish the compiled-model directory layout | [Sharing page](https://netstorage.allwinnertech.com:5001/sharing/Mh23BhPHq), manual download | 14,173,528 | `0d2ee44aaf78e0f2a7e4470ad5f24ea2094c8c7d772b2b050e2f7f81361bcd12` |
 
 ## Radio firmware
 
@@ -236,7 +442,7 @@ uses none of them.
 | `radio-wifi-bt-combined` | AIC8800D80 combined Wi-Fi and Bluetooth image (U02); not selected by the normal SDIO mode and not loaded | [fmacfwbt_8800d80_u02.bin](https://raw.githubusercontent.com/orangepi-xunlong/firmware/dc163b0ed2e0272d9ee31977a0e0a04884f0ae61/aic8800d80/fmacfwbt_8800d80_u02.bin) | 341,512 | `efd4bf622e6b7a92bd264c64bcb9002a2e293f8941b7fd891ca4dd6915648cb6` |
 | `radio-rf-test` | AIC8800D80 RF-test image (U02); not loaded | [lmacfw_rf_8800d80_u02.bin](https://raw.githubusercontent.com/orangepi-xunlong/firmware/dc163b0ed2e0272d9ee31977a0e0a04884f0ae61/aic8800d80/lmacfw_rf_8800d80_u02.bin) | 254,610 | `4e8b1efb5d9bb299aaf950d6a25e3ca71d42e012d42fd3ec3b49759cc64b38b2` |
 | `radio-userconfig` | AIC8800D80 user configuration text (power and calibration overrides); not loaded | [aic_userconfig_8800d80.txt](https://raw.githubusercontent.com/orangepi-xunlong/firmware/dc163b0ed2e0272d9ee31977a0e0a04884f0ae61/aic8800d80/aic_userconfig_8800d80.txt) | 2,683 | `995dbb9e4f2e7b19db838291f52be39af9ab673ad51b270c988216ccff1a720e` |
-| `radio-firmware-readme` | README of the Orange Pi firmware overlay; its only statement of origin or terms | [README.md](https://raw.githubusercontent.com/orangepi-xunlong/firmware/dc163b0ed2e0272d9ee31977a0e0a04884f0ae61/README.md) | 39 | `f743cde35d8c5922c3f966c7d0bbeb937de08ec5e1c4610f6f89301263fa46f2` |
+| `radio-firmware-readme` | README of the Orange Pi firmware overlay | [README.md](https://raw.githubusercontent.com/orangepi-xunlong/firmware/dc163b0ed2e0272d9ee31977a0e0a04884f0ae61/README.md) | 39 | `f743cde35d8c5922c3f966c7d0bbeb937de08ec5e1c4610f6f89301263fa46f2` |
 
 ## Cache paths and consumers
 
@@ -271,7 +477,6 @@ uses none of them.
 | `npu-sdk-model-input` | `sources/npu/ai-sdk-fc90006d0f6569da2f6726c2d8395877686f5aca/examples/vpm_run/operator/input_0.dat` | [npu-conv-input.py](../../tools/npu-conv-input.py), [npu-models.json](../../tools/npu-models.json), [npu-complete-nn.md](../../docs/npu-complete-nn.md) |
 | `npu-timvx-model` | `sources/npu/tim-vx-702715d714277376d7ff466b7b72833ff57564c1/samples/nbg_runner_pybind/examples/models/conv2d_relu_maxpool2d_fp32.nbg` | [nbg-checksum-reference.py](../../checks/nbg-checksum-reference.py), [nbg-checksum.md](../../docs/nbg-checksum.md) |
 | `npu-acuity-compiler` | `sources/npu/acuity-download/docker_images_v2.0.x.zip` | [npu-compiler.lock.json](../../tools/npu-compiler.lock.json), [npu-compiler.md](../../docs/npu-compiler.md) |
-| `npu-compiler-libopenvx` | `evidence/nbg-directory-20261016/libOpenVX.so` | [nbg-directory-reference.py](../../checks/nbg-directory-reference.py), [nbg-directory.md](../../docs/nbg-directory.md) |
 | `radio-bt-adid` | `sources/radio/firmware/aic8800d80/fw_adid_8800d80_u02.bin` | [aic8800_firmware.c](../../drivers/net/aic8800_firmware.c), [aic8800-firmware.py](../../checks/aic8800-firmware.py), [board-single-core-host.py](../../checks/board-single-core-host.py), [radio-bootstrap-budget.py](../../checks/radio-bootstrap-budget.py), [radio-firmware.md](../../docs/radio-firmware.md) |
 | `radio-bt-patch` | `sources/radio/firmware/aic8800d80/fw_patch_8800d80_u02.bin` | [aic8800_firmware.c](../../drivers/net/aic8800_firmware.c), [aic8800-firmware.py](../../checks/aic8800-firmware.py), [board-single-core-host.py](../../checks/board-single-core-host.py), [radio-bootstrap-budget.py](../../checks/radio-bootstrap-budget.py), [radio-firmware.md](../../docs/radio-firmware.md) |
 | `radio-bt-patch-table` | `sources/radio/firmware/aic8800d80/fw_patch_table_8800d80_u02.bin` | [aic8800_firmware.c](../../drivers/net/aic8800_firmware.c), [aic8800-firmware.py](../../checks/aic8800-firmware.py), [board-single-core-host.py](../../checks/board-single-core-host.py), [radio-bootstrap-budget.py](../../checks/radio-bootstrap-budget.py), [radio-firmware.md](../../docs/radio-firmware.md) |
@@ -284,43 +489,24 @@ uses none of them.
 
 ## Licenses
 
-These items are covered by a license file or notice:
+Two vendor licenses restrict how SunstoneOS may use these files:
 
-- **GPU firmware:** [LICENSE.powervr](https://gitlab.freedesktop.org/imagination/linux-firmware/-/raw/8a58f81883f7be458daa34e418cc4079f995b279/LICENSE.powervr)
-  permits redistribution in unmodified binary form. The distribution must
-  reproduce the copyright notice and disclaimer, and Imagination's name may not
-  endorse derived products. The license forbids reverse engineering,
-  decompilation and disassembly (line 14), and limits use to products designed
-  and licensed by Imagination. It grants a patent license for use with an
-  operating system under an OSI-approved license. The manifest pins the license
-  as `gpu-firmware-license`.
-- **NPU compiler image and its OpenVX library:** the Vivante End User License
-  Agreement inside the image grants a license to possess and use the software
-  and forbids disassembly, decompilation and reverse engineering. The lock file
+- **GPU firmware.** [LICENSE.powervr](https://gitlab.freedesktop.org/imagination/linux-firmware/-/raw/8a58f81883f7be458daa34e418cc4079f995b279/LICENSE.powervr),
+  pinned as `gpu-firmware-license`, permits redistribution of the firmware in
+  unmodified binary form. A distribution must reproduce the copyright notice
+  and disclaimer. The license forbids reverse engineering, decompilation and
+  disassembly (line 14), so the firmware's code is not analysed. An image that
+  embeds the GPU firmware is distributed with `LICENSE.powervr`.
+- **NPU compiler.** The Vivante End User License Agreement inside the compiler
+  image grants a license to possess and use the software, and forbids its
+  disassembly, decompilation and reverse engineering. SunstoneOS runs the
+  compiler to produce models and takes model-format facts from the compiled
+  files, the AI SDK inspector's debug information and the MIT-licensed TIM-VX
+  sources. [tools/npu-compiler.lock.json](../../tools/npu-compiler.lock.json)
   lists the license paths inside the image.
-- **TIM-VX model:** the MIT license of the
-  [TIM-VX repository](https://github.com/VeriSilicon/TIM-VX/blob/702715d714277376d7ff466b7b72833ff57564c1/LICENSE).
-- **Source locations:** the
-  [orangepi-build repository](https://github.com/orangepi-xunlong/orangepi-build/blob/a95129bf30ea11886cc35f08ebb3e69695a26656/LICENSE)
-  is licensed under GPL-2.0. The
-  [sunxi-blobs license](https://github.com/smaeul/sunxi-blobs/blob/42aabf4f2c93158a0cd88a000f9af56ce024882a/LICENSE)
-  covers the files that carry its copyright notice.
 
-## Analysis documents
-
-These documents analyse the binaries:
-
-- [Boot ROM and boot0](boot-rom-and-boot0.md), in preparation: ROM boot and FEL
-  paths, boot0 clock, PMIC and DDR sequences.
-- [TF-A monitor](tf-a-monitor.md), in preparation: the vendor BL31 services and
-  its CPU, GIC and power-state handling.
-- [SCP firmware](scp-firmware.md), in preparation: power-domain and DRAM
-  frequency sequences.
-- [GPU and NPU binaries](gpu-and-npu-binaries.md), in preparation: the GPU
-  firmware container and the NPU SDK libraries and models.
-- [Radio firmware](../radio-firmware.md): artifact selection, upload and start.
-- [microSD packaging](../microsd-boot-package.md): the boot-package packer and
-  the TOC1 format.
+The TIM-VX model `npu-timvx-model` is covered by the
+[TIM-VX repository's MIT license](https://github.com/VeriSilicon/TIM-VX/blob/702715d714277376d7ff466b7b72833ff57564c1/LICENSE).
 
 ## Sources pinned elsewhere
 

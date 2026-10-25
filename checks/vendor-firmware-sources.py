@@ -6,7 +6,8 @@ SHA-256 and size, acquisition-specific fields, a license only as a non-empty
 string, repository consumers that exist, and agreement with
 sources.lock.json for items pinned there. Checks that docs/vendor-firmware/README.md
 lists every item with its hash, that its local links resolve, and that each
-absent analysis document is declared pending. Then resolves every http(s) link in
+absent linked document is declared pending and marked in preparation. A pending
+document that now exists is reported so that its entry can be removed. Then resolves every http(s) link in
 both files with a HEAD request, falling back to a one-byte ranged GET; it
 downloads no item. --offline skips the network step. The xxd decoder of
 tools/fetch-vendor-firmware.py is exercised on a synthetic dump.
@@ -113,11 +114,13 @@ def check_readme(items, pending):
         path = target.split('#', 1)[0]
         resolved = (DIRECTORY / path).resolve()
         if not resolved.exists():
-            assert Path(path).name in pending and resolved.parent == DIRECTORY, f'README link {target} does not resolve'
+            assert path in pending, f'README link {target} does not resolve and is not pending'
         local += 1
     for name in pending:
-        assert not (DIRECTORY / name).exists(), f'{name} now exists; remove it from pending_documents'
-        assert any(f']({name})' in line and 'in preparation' in line for line in text.splitlines()), \
+        if (DIRECTORY / name).exists():
+            print(f'note: {name} now exists; remove it from pending_documents')
+            continue
+        assert any(f']({name}' in line and 'in preparation' in line for line in text.splitlines()), \
             f'README must link {name} and mark it in preparation on the same line'
     return local
 

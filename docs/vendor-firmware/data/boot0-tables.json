@@ -43,7 +43,7 @@
  },
 
  "pmic_regulator_table": {
-  "source": "table at 0x47000+0x81e98, 36 entries x 0x6c bytes; AXP8191 over TWI",
+  "source": "table at 0x81e98 (file offset 0x3ae98), 36 entries x 0x6c bytes; AXP8191 over TWI",
   "columns": "name, min_mV, max_mV, voltage_reg, field_mask, enable_reg, enable_bit",
   "entries": [
    {"name": "dcdc1", "reg": "0x10", "enable_reg_bit": "0x10:0", "min_mV": 1000, "max_mV": 3800},

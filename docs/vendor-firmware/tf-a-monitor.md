@@ -9,35 +9,36 @@ image: it boots through FEL with its own EL3 monitor. The vendor image is a
 reference for the work that monitor must do.
 
 The fetch reference and provenance record for every vendor binary is
-[the vendor firmware index](README.md). Repository rules are in
+[the vendor firmware overview](README.md). Repository rules are in
 [`AGENTS.md`](../../AGENTS.md), and recurring references are listed in
 [the reference index](../reference-index.md). Architectural requirements on
 EL3 and GIC setup are in
 [the multicore reference audit](../a733-multicore-reference-audit.md). The
 step-by-step comparisons of CPU and GPU bring-up with this image are in
 [the CPU backsolve](../reference-backsolve-cpu.md) and
-[the GPU backsolve](../reference-backsolve-gpu.md). The SunstoneOS thermal and
-GPADC service described in [`monitor-application.md`](../monitor-application.md)
-is unrelated; it shares only the word "monitor".
+[the GPU backsolve](../reference-backsolve-gpu.md). The CPU, GPU and NPU
+backsolve documents linked here are in preparation on their own branches;
+their links resolve once they merge. The SunstoneOS thermal and GPADC service
+described in [`monitor-application.md`](../monitor-application.md) is
+unrelated; it shares only the word "monitor".
 
 ## How facts are cited and labelled
 
-Every citation gives the first eight hexadecimal digits of the image's
-SHA-256 and a file offset, for example `8af16b86@0xc3b8`. The image loads at
-`0x48000000`, so an offset is the address minus `0x48000000`. Table columns
-headed "Offset" hold offsets in the same image.
+Citations and labels follow the
+[overview's conventions](README.md#evidence-labels-and-citations). A citation
+gives the first eight hexadecimal digits of the image's SHA-256 and a file
+offset, for example `8af16b86@0xc3b8`; a bare `@0xc3b8` cites the same image.
+The image loads at `0x48000000`, so an offset is the address minus
+`0x48000000`. Table columns headed "Offset" hold offsets in the same image.
 
-Each fact carries one of four labels:
+Each fact is labelled observed, confirmed on a board or inferred, or carries
+a fourth label:
 
-- **Observed**: read directly from the instructions or data of the image.
 - **Upstream**: the code has the structure of the named function in TF-A
   v2.5 (commit `c1588782`). The image's assertion messages quote file names
   and line numbers identical to that release. The newer TF-A pin
   `0892ad4d` and the experimental A733 port `5bc9605c` are cited where they
   differ.
-- **Board**: confirmed on an A733 board; the evidence record is named.
-- **Inferred**: a conclusion from observed facts that the image alone does
-  not prove.
 
 Machine-readable inventories accompany this document:
 
@@ -189,15 +190,15 @@ Order is program order within BL31. The basis is observed unless stated.
 | 6 | `0x03400000` | GICD_CTLR | Groups off, ARE_S and ARE_NS on; RWP polled without timeout | Distributor | `0x602c` |
 | 7 | `0x03400080`+ | GICD SPI registers | Group 1 Nonsecure, priority `0x80`, level | SPI defaults | `0x602c` |
 | 8 | `0x03460000`+ | GICR_PWRR, GICR_WAKER, SGI frame | Power on, wake, SGI and PPI defaults | Boot-core redistributor | `0x683c` |
-| 9 | `0x02054004`–`0x020540d4` | SPC ports 0–13 set registers | `0xffffffff` each, stride `0x10` | Peripherals Nonsecure (board: `board-session-20261025-4/port-3-1/s10-gvs-run`) | `0xc3cc` |
-| 10 | `0x02054104`–`0x02054174` | SPC ports 16–23 set registers | `0xffffffff` each | Peripherals Nonsecure (board: `board-session-20261025-4/port-3-1/s10-gvs-run`) | `0xc3e0` |
+| 9 | `0x02054004`–`0x020540d4` | SPC ports 0–13 set registers | `0xffffffff` each, stride `0x10` | Peripherals Nonsecure (confirmed on a board: `board-session-20261025-4/port-3-1/s10-gvs-run`) | `0xc3cc` |
+| 10 | `0x02054104`–`0x02054174` | SPC ports 16–23 set registers | `0xffffffff` each | Peripherals Nonsecure (confirmed on a board: `board-session-20261025-4/port-3-1/s10-gvs-run`) | `0xc3e0` |
 | 11 | `0x07003000`, `+0x4`, `+0x8` | S_TZMA | 0 | SRAM areas Nonsecure | `0xc408` |
 | 12 | `0x07002004`, `+0x14`, `+0x24` | S_SPC | `0xffffffff` | Always-on peripherals Nonsecure | `0xc41c` |
 | 13 | `0x07010290` | `PRCM_SEC_SWITCH_REG` | `\|= 7` | CPUS bus clock, PLL and power registers Nonsecure | `0xc438` |
-| 14 | `0x02003f00` | `CCMU_SEC_SWITCH_REG` | `7` | PLL, bus and MBUS clock registers Nonsecure (board: `board-session-20261025-4/port-3-1/s10-gvs-run`) | `0xc448` |
+| 14 | `0x02003f00` | `CCMU_SEC_SWITCH_REG` | `7` | PLL, bus and MBUS clock registers Nonsecure (confirmed on a board: `board-session-20261025-4/port-3-1/s10-gvs-run`) | `0xc448` |
 | 15 | `0x04601020` | DMAC0 `DMA_SEC_REG` | `0xffff` | All DMA0 channels Nonsecure | `0xc458` |
 | 16 | `0x04024020` | DMAC1 `DMA_SEC_REG` | `0xffff` | All DMA1 channels Nonsecure | `0xc460` |
-| 17 | `0x020540e0` | SPC port 14 set register | `0xfffffbff` | Port 14 Nonsecure except bit 10; port 15 is never written (board: `board-session-20261025-4/port-3-1/s10-gvs-run`) | `0xc470` |
+| 17 | `0x020540e0` | SPC port 14 set register | `0xfffffbff` | Port 14 Nonsecure except bit 10; port 15 is never written (confirmed on a board: `board-session-20261025-4/port-3-1/s10-gvs-run`) | `0xc470` |
 | 18 | `0x02002800` | CCU `TIMER0_CLK0_CLK_REG` | `0x80000002` | Gate on, 24 MHz source, divide by 4 | `0xc484` |
 | 19 | `0x02002850` | CCU `TIMER0_BGR_REG` | `0x10001` | TIMER0 out of reset and gated | `0xc48c` |
 | 20 | `0x03009008` | TIMER0 `+0x08` | 0 | Not described in the manual | `0xc498` |
@@ -279,7 +280,7 @@ MPIDR Aff1.
 Steps 1 to 8 are the sequence that SunstoneOS's
 [`cpu_start.c`](../../platform/a733/cpu_start.c) reproduces with bounded
 polls. Its first power-on of every secondary passes on the board
-(board: [CPU start evidence](../cpu-start.md)). The SunstoneOS instruction
+(confirmed on a board: [CPU start evidence](../cpu-start.md)). The SunstoneOS instruction
 harness also executes the image's helpers at `0xc4a0`, `0xc298` and `0xc314`
 and compares their writes with the native code (observed in emulation,
 `checks/a733-cpu-start.py`).
@@ -367,7 +368,7 @@ configured (observed, upstream `gicv3_distif_init`, `gicv3_cpuif_enable`).
   workaround.
 
 The distributor reports `GICD_IIDR = 0x0201643b`, GIC-600 r1p6, and each
-redistributor frame `n` reports `GICR_PWRR = n << 8` (board:
+redistributor frame `n` reports `GICR_PWRR = n << 8` (confirmed on a board:
 [ROM interrupt-frame reads](../a733-smp-supervised.md#rom-reads-identify-all-interrupt-frames-without-changing-their-state)).
 
 ## CPU errata and implementation-defined registers
@@ -418,7 +419,7 @@ header word `0x18`). The full list, with arguments, is in
 | `0x8000fe00` / `0xc000fe00` | `0xbd58` | Reads a named eFuse key | SID |
 | `0x8000fe01` / `0xc000fe01` | `0xbf9c` | Programs a named eFuse key | SID, RTC `0x07090204` |
 | `0x8000ff04`, `0x8000ff40` | `0x89c4` | Enter a new Nonsecure image | — |
-| `0x8000ff10` | `0xae88` | Load and start the SCP | S_PRCM, E902 configuration, CPUIDLE, RTC |
+| `0x8000ff10` | `0xae88` | Load and start the SCP | PRCM, E902 configuration, CPUIDLE, RTC |
 | `0x8000ff15` | `0x219c` | SCP message `0x24` with argument 3 | Message boxes |
 | `0x8000ff41` | `0x8c1c` | Start a core at a given address | CPU_ON registers |
 | `0x8000ff42` | `0xc274` | Report whether a core's CPUIDLE status is ON | `0x07052008 + 0x1000n` |
@@ -521,7 +522,7 @@ GIC, USB0 and UART0 bases) are listed separately in that file.
 | DMAC0, DMAC1 | `0x04601000`, `0x04024000` | Security register `+0x20` = `0xffff` | Not written ([DMA](../dma.md#dma1-request-routing-remains-unresolved)) |
 | USB0 | `0x04100000` | PHY word `+0x410`, controller through pointers | USB loop only |
 | S_SPC, S_TZMA | `0x07002000`, `0x07003000` | Security setup | Not written |
-| S_PRCM | `0x07010000` | Security switch `+0x290`, E902 clock and reset | Read by the remote-writer check only |
+| PRCM | `0x07010000` | Security switch `+0x290`, E902 clock and reset | Read by the remote-writer check only |
 | CPUS E902 configuration | `0x07032000` | Start address `+0x204` | Read by the remote-writer check only |
 | CPUIDLE | `0x07050000` | Core power requests, status, policy words, E902 word | Power requests and status written by `cpu_start.c`; policy words not written |
 | RTC | `0x07090000` | `+0x10c` SCP argument, `+0x204` eFuse | Not written |
@@ -574,9 +575,9 @@ Secondary power-on is [`cpu_start.c`](../../platform/a733/cpu_start.c).
 
 | Vendor behaviour | SunstoneOS today | Required |
 | --- | --- | --- |
-| CPU_ON register sequence (steps 1 to 8) | Reproduced with deadlines | Done (board) |
-| Wake-disable bit cleared on the target, set at power-down | Reproduced | Done (board) |
-| Security setup writes 9 to 17 | Absent from the production monitor; applied in the GPU board image (board) | Before any Nonsecure driver that needs a secure-default clock, bus or DMA register; the manual makes `PLL_GPU0_CTRL_REG` secure by default (section 4.1.6.16), and the GPU path needs these writes ([GPU backsolve](../reference-backsolve-gpu.md)) |
+| CPU_ON register sequence (steps 1 to 8) | Reproduced with deadlines | Done; confirmed on a board |
+| Wake-disable bit cleared on the target, set at power-down | Reproduced | Done; confirmed on a board |
+| Security setup writes 9 to 17 | Absent from the production monitor; applied in the GPU board image, confirmed on a board | Before any Nonsecure driver that needs a secure-default clock, bus or DMA register; the manual makes `PLL_GPU0_CTRL_REG` secure by default (section 4.1.6.16), and the GPU path needs these writes ([GPU backsolve](../reference-backsolve-gpu.md)) |
 | CNTFRQ, CNTHCTL, CNTVOFF, CPTR at EL3 and EL2 | Written | Done |
 | CNTHP_CTL_EL2 = 0, VPIDR_EL2 and VMPIDR_EL2 from MIDR and MPIDR | Absent | Add beside CNTHCTL_EL2 ([CPU backsolve](../reference-backsolve-cpu.md)) |
 | GIC distributor RWP wait instead of refusal | Refusal in several places | Poll until RWP clears, as upstream `gicd_wait_for_pending_write` does |
@@ -613,8 +614,10 @@ Secondary power-on is [`cpu_start.c`](../../platform/a733/cpu_start.c).
 5. **TIMER0 is clocked and its `+0x08` word cleared at cold boot**
    (`@0xc484`–`0xc498`). No SunstoneOS code uses TIMER0.
 6. **BL31 writes SYSCTRL `0x03000008` = 0 on resume from system suspend**
-   (`@0x8834`). This matches the NPU finding in [the handoff](../handoff.md)
-   that U-Boot, not BL31, routes the shared SRAM at cold boot.
+   (`@0x8834`), which gives the shared SRAM to the NPU again. At cold boot
+   U-Boot makes that write and BL31 does not. The
+   [NPU backsolve](../reference-backsolve-npu.md) reports no `0x03000008`
+   constant in this image; the resume write is the exception.
 7. **The vendor stack enters U-Boot and Linux at EL1.** EL2 is unused, and
    SunstoneOS's EL2 settings in `continue.S` follow the same unused-EL2 model.
 8. **System off and reset depend on the SCP.** BL31 has no reset register

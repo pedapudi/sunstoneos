@@ -2,10 +2,9 @@
   "schema": "sunstoneos-vendor-firmware-sources-v1",
   "cache_root": "~/.cache/sunstoneos",
   "pending_documents": [
-    "boot-rom-and-boot0.md",
-    "tf-a-monitor.md",
-    "scp-firmware.md",
-    "gpu-and-npu-binaries.md"
+    "../reference-backsolve-cpu.md",
+    "../reference-backsolve-gpu.md",
+    "../reference-backsolve-npu.md"
   ],
   "items": [
     {
@@ -17,7 +16,6 @@
       "revision": "42aabf4f2c93158a0cd88a000f9af56ce024882a",
       "sha256": "a7fc3c6ffe6254fb77929eb407edcf88d7925a64b4a968964a0ed79815373fc8",
       "bytes": 330752,
-      "license": "sunxi-blobs repository LICENSE (source location): covers the files that carry its copyright notice",
       "cache_path": "sources/brom/fixs-brom-blob.hex",
       "used_by": [
         "docs/sources.md"
@@ -33,7 +31,6 @@
       "revision": "42aabf4f2c93158a0cd88a000f9af56ce024882a",
       "sha256": "3a2a7d289951f61095afdabe7813b067295223ce588c422d64200fc7e4431eb1",
       "bytes": 69632,
-      "license": "sunxi-blobs repository LICENSE (source location): covers the files that carry its copyright notice",
       "cache_path": "sources/brom/fixs-brom.bin",
       "used_by": [
         "checks/a733-rom-recovery.py",
@@ -57,7 +54,6 @@
       "revision": "42aabf4f2c93158a0cd88a000f9af56ce024882a",
       "sha256": "7bd968d6323c54a457184d78e7cd6e1a851a5cceb1b504558407dd3eff7eaf15",
       "bytes": 214016,
-      "license": "sunxi-blobs repository LICENSE (source location): covers the files that carry its copyright notice",
       "cache_path": "sources/brom/ns-brom-blob.hex",
       "used_by": [
         "docs/video-platform.md"
@@ -74,7 +70,6 @@
       "revision": "42aabf4f2c93158a0cd88a000f9af56ce024882a",
       "sha256": "95be69c916846a8259578565f3193a6b9ab0625294d5374f3dc6c2f667fc6169",
       "bytes": 45056,
-      "license": "sunxi-blobs repository LICENSE (source location): covers the files that carry its copyright notice",
       "cache_path": "sources/brom/ns-brom.bin",
       "used_by": [
         "apps/usb-returning/build.py",
@@ -135,7 +130,6 @@
       "revision": "a95129bf30ea11886cc35f08ebb3e69695a26656",
       "sha256": "829ea8e3b65d71a02f2d0e094bc073de3a10869f948f62db49dbf023d07fabe3",
       "bytes": 245760,
-      "license": "GPL-2.0 (orangepi-build repository LICENSE; source location)",
       "cache_path": "sources/board-boot/boot0_sdcard_orangepizero3w.fex",
       "used_by": [
         "tools/prepare-microsd-boot.py",
@@ -154,13 +148,12 @@
     {
       "name": "boot0-sdcard-orangepizero3w-1800m",
       "group": "boot-package",
-      "role": "boot0, the first-stage loader the boot ROM reads from storage (Thumb-2, load address 0x47000) for SD boot on the Orange Pi Zero 3W, variant named for an 1800 MHz CPU clock; compared with the default variant in the CPU reference analysis",
+      "role": "boot0, the first-stage loader the boot ROM reads from storage (Thumb-2, load address 0x47000) for SD boot on the Orange Pi Zero 3W, variant named 1800M; it differs from the default variant only in its DRAM parameter tables, DRAM training code and checksum",
       "acquisition": "download",
       "url": "https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/packages/pack-uboot/sun60iw2/bin/boot0_sdcard_orangepizero3w_1800M.fex",
       "revision": "a95129bf30ea11886cc35f08ebb3e69695a26656",
       "sha256": "d2a9bcccf012dce554c4613cf3e2e4256fe9863f6215afbe979aca891d4a6e27",
       "bytes": 245760,
-      "license": "GPL-2.0 (orangepi-build repository LICENSE; source location)",
       "cache_path": "sources/board-boot/boot0_sdcard_orangepizero3w_1800M.fex",
       "used_by": [],
       "analysis": "boot-rom-and-boot0.md",
@@ -177,7 +170,6 @@
       "revision": "a95129bf30ea11886cc35f08ebb3e69695a26656",
       "sha256": "a1ed6f1b8c4f5d98c29febefdc7203e5c442c2d1b841d204278b62ad56a70fd2",
       "bytes": 245760,
-      "license": "GPL-2.0 (orangepi-build repository LICENSE; source location)",
       "cache_path": "sources/board-boot/boot0_sdcard.fex",
       "used_by": [],
       "analysis": null
@@ -191,7 +183,6 @@
       "revision": "a95129bf30ea11886cc35f08ebb3e69695a26656",
       "sha256": "9213f1c56ef932930d43b5751e8937bea0e9ae7460ec16187cc1b0dffdb75345",
       "bytes": 245760,
-      "license": "GPL-2.0 (orangepi-build repository LICENSE; source location)",
       "cache_path": "sources/board-boot/boot0_sdcard_a733.fex",
       "used_by": [],
       "analysis": null
@@ -205,7 +196,6 @@
       "revision": "a95129bf30ea11886cc35f08ebb3e69695a26656",
       "sha256": "7f0babc242c1e4614c7243bd2c45a980e4385727ffbb544a7c8f2d324cf8dc07",
       "bytes": 237568,
-      "license": "GPL-2.0 (orangepi-build repository LICENSE; source location)",
       "cache_path": "sources/board-boot/boot0_spinor_a733.fex",
       "used_by": [],
       "analysis": null
@@ -219,7 +209,6 @@
       "revision": "a95129bf30ea11886cc35f08ebb3e69695a26656",
       "sha256": "c5729d90686acfe7db9c649010c8026355fec212e72455e9eda6d17087c0942f",
       "bytes": 245760,
-      "license": "GPL-2.0 (orangepi-build repository LICENSE; source location)",
       "cache_path": "sources/board-boot/boot0_ufs_a733.fex",
       "used_by": [],
       "analysis": null
@@ -233,7 +222,6 @@
       "revision": "a95129bf30ea11886cc35f08ebb3e69695a26656",
       "sha256": "7046c43d43b3b2e47452ccb6d5db935e109dc9ca7bde7d2ab90105e7901998b3",
       "bytes": 245760,
-      "license": "GPL-2.0 (orangepi-build repository LICENSE; source location)",
       "cache_path": "sources/board-boot/boot0_ufs_orangepizero3w.fex",
       "used_by": [],
       "analysis": null
@@ -247,7 +235,6 @@
       "revision": "a95129bf30ea11886cc35f08ebb3e69695a26656",
       "sha256": "8af16b86ae8e2eff634a3ebca76a8cdf3c10b3540387573d46c3d785545b2632",
       "bytes": 78609,
-      "license": "GPL-2.0 (orangepi-build repository LICENSE; source location)",
       "cache_path": "sources/cpu-startup/monitor.fex",
       "used_by": [
         "checks/a733-cpu-start.py",
@@ -266,13 +253,12 @@
     {
       "name": "scp",
       "group": "boot-package",
-      "role": "Vendor system control processor firmware (RISC-V, also called arisc or ar100); contains power-domain sequences and DRAM frequency scaling; source not published",
+      "role": "Vendor system control processor (SCP) firmware for the E902 RISC-V core, derived from the arisc (AR100) firmware; runs system suspend, resume, power-off and reset; source not published",
       "acquisition": "download",
       "url": "https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/packages/pack-uboot/sun60iw2/bin/scp.fex",
       "revision": "a95129bf30ea11886cc35f08ebb3e69695a26656",
       "sha256": "07e6b97628101963e7944e012948c4bdf721f914bad347acd7dfbde89db42749",
       "bytes": 105912,
-      "license": "GPL-2.0 (orangepi-build repository LICENSE; source location)",
       "cache_path": "sources/board-boot/scp.fex",
       "used_by": [
         "docs/gpu-power.md"
@@ -293,7 +279,6 @@
       "revision": "a95129bf30ea11886cc35f08ebb3e69695a26656",
       "sha256": "09bd43f68e54c0746b5130a3acf37fd38191d9187e329e2b78711561b6f9d918",
       "bytes": 209,
-      "license": "GPL-2.0 (orangepi-build repository LICENSE; source location)",
       "cache_path": "sources/board-boot/boot_package.cfg",
       "used_by": [
         "docs/microsd-boot-package.md"
@@ -309,7 +294,6 @@
       "revision": "a95129bf30ea11886cc35f08ebb3e69695a26656",
       "sha256": "eb598823d947fa39d0cf2102051b921d10f41b26538103b9fa3a266c6a486a29",
       "bytes": 5006,
-      "license": "GPL-2.0 (orangepi-build repository LICENSE; source location)",
       "cache_path": "sources/board-boot/sys_config-sys_config.fex",
       "used_by": [
         "boot/a733/stage2/admission.c",
@@ -329,7 +313,6 @@
       "revision": "a95129bf30ea11886cc35f08ebb3e69695a26656",
       "sha256": "bd8e32740bc1c25532f28cae7860c61f07506dfc53a672d9726d2fd7ea71ff0c",
       "bytes": 239512,
-      "license": "GPL-2.0 (orangepi-build repository LICENSE; source location)",
       "cache_path": "sources/gpu-backsolve-20261025/orangepi-build-a95129bf/dts/u-boot-current.dts",
       "used_by": [],
       "analysis": null,
@@ -346,7 +329,6 @@
       "revision": "a95129bf30ea11886cc35f08ebb3e69695a26656",
       "sha256": "e5f9076504a0ccde29c5978bcfc341c1c5ac02d947c47b849a5e8d26433545f6",
       "bytes": 9105656,
-      "license": "GPL-2.0 (orangepi-build repository LICENSE; source location)",
       "cache_path": "sources/board-boot/dragonsecboot",
       "used_by": [
         "tools/prepare-microsd-boot.py",
@@ -550,34 +532,11 @@
         "tools/npu-compiler.lock.json",
         "docs/npu-compiler.md"
       ],
-      "analysis": null,
       "procedure": [
         "The direct link https://netstorage.allwinnertech.com:5001/fsdownload/Mh23BhPHq/docker_images_v2.0.x.zip redirects to the sharing page unless the browser holds a sharing session.",
         "Open the sharing page linked from https://docs.radxa.com/en/cubie/a7s/app-dev/npu-dev/cubie-acuity-env in a browser and download docker_images_v2.0.x.zip.",
         "Place it at the cache path and run tools/fetch-vendor-firmware.py --check --only npu-acuity-compiler.",
         "tools/npu-compiler.lock.json records the nested archive and Docker image identities."
-      ]
-    },
-    {
-      "name": "npu-compiler-libopenvx",
-      "group": "npu",
-      "role": "OpenVX library from the Vivante IDE 5.11.0 simulator inside the compiler image (x86-64 shared object); its model writer and checksum routine were inspected to establish the compiled-model directory layout",
-      "acquisition": "manual",
-      "url": "https://netstorage.allwinnertech.com:5001/sharing/Mh23BhPHq",
-      "revision": "Vivante IDE 5.11.0 in docker_images_v2.0.x.zip",
-      "sha256": "0d2ee44aaf78e0f2a7e4470ad5f24ea2094c8c7d772b2b050e2f7f81361bcd12",
-      "bytes": 14173528,
-      "license": "Vivante End User License Agreement inside the compiler image; forbids disassembly, decompilation and reverse engineering",
-      "cache_path": "evidence/nbg-directory-20261016/libOpenVX.so",
-      "used_by": [
-        "checks/nbg-directory-reference.py",
-        "docs/nbg-directory.md"
-      ],
-      "analysis": "gpu-and-npu-binaries.md",
-      "procedure": [
-        "Obtain and load the compiler image as described for npu-acuity-compiler; tools/npu-compiler.lock.json gives the loaded image ID.",
-        "Create a container from that image without starting it, then copy the library with symbolic links followed: docker cp -L CONTAINER:/root/Vivante_IDE/VivanteIDE5.11.0/cmdtools/vsimulator/lib/libOpenVX.so libOpenVX.so",
-        "Place it at the cache path and run tools/fetch-vendor-firmware.py --check --only npu-compiler-libopenvx."
       ]
     },
     {
@@ -722,7 +681,7 @@
     {
       "name": "radio-firmware-readme",
       "group": "radio",
-      "role": "README of the Orange Pi firmware overlay; its only statement of origin or terms",
+      "role": "README of the Orange Pi firmware overlay",
       "acquisition": "download",
       "url": "https://raw.githubusercontent.com/orangepi-xunlong/firmware/dc163b0ed2e0272d9ee31977a0e0a04884f0ae61/README.md",
       "revision": "dc163b0ed2e0272d9ee31977a0e0a04884f0ae61",
