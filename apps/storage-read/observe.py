@@ -16,18 +16,36 @@ def decode(raw,session,expected=None,session_magic=0x4153373352444131,session_by
     if len(raw)<HEADER:raise ValueError('Truncated SD0 record')
     magic,version,status,count,epoch,generation=struct.unpack_from('<4I2Q',raw)
     profile=struct.unpack_from('<I',session,860)[0] if session_magic==0x4153373352444131 else 0
-    if profile not in (0,1,2):raise ValueError('Unsupported SD0 bus profile')
-    if (magic,version)!=(0x44524453,3 if profile else 2) or status not in range(5):raise ValueError('Wrong SD0 record')
+    if profile not in (0,1,2,3):raise ValueError('Unsupported SD0 bus profile')
+    # Version 3 comes from images before the UHS-I profile; version 4 adds read
+    # timing and the UHS-I outcome. Profile 3 exists only in version 4.
+    if magic!=0x44524453 or status not in range(5) or version!=(2 if not profile else 4 if profile==3 else version) or (profile and version not in (3,4)):
+        raise ValueError('Wrong SD0 record')
     if (epoch,generation)!=struct.unpack_from('<2Q',session,24) or raw[208:240]!=session[48:80]:raise ValueError('Different SD0 session/build')
     mode,card_hz=struct.unpack_from('<2I',raw,280)
     width,timing,divisor=(mode>>8)&255,(mode>>16)&255,mode>>24
+    parent=300000000 if divisor&0x80 else 400000000;divisor&=0x7f
     if profile:
-        if mode&255!=profile or width not in (0,1,4) or timing>1 or divisor>32:raise ValueError('Invalid negotiated SD0 mode')
+        if mode&255!=profile or width not in (0,1,4) or timing not in ((0,1,3) if profile==3 else (0,1)) or divisor>32 or (parent==300000000 and profile!=3):
+            raise ValueError('Invalid negotiated SD0 mode')
     elif mode or card_hz:raise ValueError('Nonzero reserved SD0 bytes')
     ticket,first,request_id,blocks,client,application_status,application_reads=struct.unpack_from('<3Q4I',raw,240)
     if client>1 or application_status>2 or application_reads>2:raise ValueError('Invalid native client summary')
     facts=struct.unpack_from('<19I',raw,112)
-    if profile and facts[18]:
+    elapsed_us=uhs=None
+    if version==4:
+        elapsed_us,uhs=facts[6],facts[7]
+        if status!=1 and elapsed_us:raise ValueError('Timing without a completed read')
+        if profile!=3 and uhs:raise ValueError('UHS-I state outside its profile')
+        if profile==3 and (uhs&15>5 or (uhs>>8)&255>63 or (uhs>>16)&255>63 or (uhs>>24)&255>64):raise ValueError('Invalid UHS-I state')
+    if profile==3 and facts[18]:
+        outcome,signal=uhs&15,(uhs>>4)&1
+        if not outcome or (signal and outcome in (2,3)):raise ValueError('Invalid UHS-I outcome')
+        mode_plan={1:(3,(1,2))}.get(outcome,(1,(4,)))
+        if width!=4 or timing!=mode_plan[0] or divisor not in mode_plan[1] or (timing==3)!=(signal and outcome==1) or \
+           (timing==3 and (parent==300000000)!=(divisor==1)) or card_hz!=parent//(2*divisor):
+            raise ValueError('Incomplete UHS-I SD0 mode')
+    elif profile and facts[18]:
         if profile==1:
             speed=struct.unpack_from('<I',raw,80)[0]&255
             factors=(0,10,12,13,15,20,25,30,35,40,45,50,55,60,70,80)
@@ -47,7 +65,13 @@ def decode(raw,session,expected=None,session_magic=0x4153373352444131,session_by
         first_sector=first,blocks=blocks,request_id=request_id,client=client,
         application_status=application_status,application_reads=application_reads,
         sd_profile=profile,bus_width=width if profile else 1,timing=timing,
-        card_hz=card_hz if profile else 400000,module_hz=(400000000//divisor if divisor and card_hz else 0) if profile else 800000,
+        card_hz=card_hz if profile else 400000,module_hz=(parent//divisor if divisor and card_hz else 0) if profile else 800000,
+        elapsed_us=elapsed_us,uhs_outcome=(uhs&15) if uhs is not None and profile==3 else None,
+        signal_1v8=bool((uhs>>4)&1) if uhs is not None and profile==3 else False,
+        uhs_caps=((uhs>>5)&3) if uhs is not None and profile==3 else None,
+        sample_delay=((uhs>>8)&255) if uhs is not None and profile==3 else None,
+        tuning_start=((uhs>>16)&255) if uhs is not None and profile==3 else None,
+        tuning_width=((uhs>>24)&255) if uhs is not None and profile==3 else None,
         cid=list(struct.unpack_from('<4I',raw,64)),csd=list(struct.unpack_from('<4I',raw,80)),
         ocr=struct.unpack_from('<I',raw,96)[0],rca=struct.unpack_from('<H',raw,100)[0],
         sector_addressed=raw[102],ext_revision=raw[103],sectors=struct.unpack_from('<Q',raw,104)[0],

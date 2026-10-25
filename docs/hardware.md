@@ -785,9 +785,14 @@ implementation is **planned**. Partial results apply only to the stated scope:
   core with a modeled controller and refusals of corrupt metadata; the native
   objects compile. No image links it, and no card has been read through it.
   GPT cards, several volumes, several client tasks and writes are unsupported.
-  UHS-I SDR50 and SDR104 remain unimplemented: the 1.8 V switch writes the PF
-  bank voltage that card detect and the debug pins share, and a failed switch
-  needs whole-board power removal ([mmc.md](mmc.md)).
+  UHS-I SDR104 is **implemented** as SD profile three ([design](designs/sd-uhs.md)):
+  S18R and CMD11, one PF bank selector write to 1.8 V (the board has no card
+  I/O regulator), SDR104 at 150 MHz from PERI0_300M and a 64-delay CMD19
+  sweep, with high speed as the fallback. Core, platform and record host checks
+  pass under `checks/sunxi-mmc-uhs.py` and `checks/storage-read-uhs-host.py`;
+  no board has run it. A failure after CMD11, and the end of every successful
+  lifetime, need whole-board power removal. SDR50 and DDR50 remain
+  unimplemented.
 - I²C and PMIC: **tested** single-byte reads on the inherited always-on bus,
   AXP8191 identity, and storage-rail settings. [Power evidence](power.md) records
   the conditions. The second board also passes 21 register reads, including

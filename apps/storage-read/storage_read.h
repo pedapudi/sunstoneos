@@ -12,6 +12,8 @@ struct storage_read_slot {
  struct storage_read_request request;
  struct sunxi_mmc_result completion;
  uint64_t ticket,last_request_id,deadline,epoch,generation;
+ uint64_t started; /* Counter at the first poll of the active read. */
+ uint32_t elapsed_us; /* First poll to completion; nonzero profiles only. */
  atomic_uint state;
  uint8_t copied[STORAGE_READ_OUTPUT],digest[32];
 };

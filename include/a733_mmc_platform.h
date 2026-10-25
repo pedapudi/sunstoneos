@@ -21,7 +21,8 @@ struct a733_mmc_platform_config {
     uint64_t owner, handoff, topology, deadline_us, lifetime_deadline_us;
     enum sunxi_mmc_kind kind;
     uint32_t voltage_mask;
-    enum sunxi_mmc_sd_profile sd_profile; /* SD only; default0 unchanged. */
+    enum sunxi_mmc_sd_profile sd_profile; /* SD only; default0 unchanged. UHS-I
+     * switches PF to 1.8 V once; only whole-board power removal restores 3.3 V. */
     /* Exact inherited AHB/NSI/MBUS selector/divider profiles and rates. */
     uint32_t fabric[3], fabric_hz[3];
     /* SD: PF0..6. eMMC: PC0,1,5,6,8,9,10,11,13,14,15,16.
@@ -94,6 +95,7 @@ struct a733_mmc_platform {
     uint32_t initial_module, initial_bus, voltage_mode, running_module;
     unsigned initialized, stage, fault, held, clock_retained, rail_retained;
     unsigned rail_index, core_call;
+    unsigned signal; /* PF bank: 0 at 3.3 V, 1 selector written, 2 reports 1.8 V. */
 };
 /* Zero once. All managers, adapter storage and physical authority have platform
  * lifetime. Shared PMIC worker advances independently; the consumer never owns

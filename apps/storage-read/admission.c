@@ -27,7 +27,7 @@ int storage_read_session_valid(const struct storage_read_session *s)
      s->desired[i].function!=fn||((pin!=0&&pin!=5)&&s->desired[i].pull!=1))return 0;
  }
 #else
- if(!a733_mmc_sd0_inherited_mux(s->expected)||(unsigned)s->sd_profile>SUNXI_MMC_SD_HIGH_SPEED4)return 0;
+ if(!a733_mmc_sd0_inherited_mux(s->expected)||(unsigned)s->sd_profile>SUNXI_MMC_SD_UHS_SDR104)return 0;
  for(unsigned i=0;i<7;++i){
   if(!a733_pin_config_valid_banked(A733_PIN_F,i,s->expected[i])||
    !a733_pin_config_valid_banked(A733_PIN_F,i,s->desired[i])||

@@ -16,7 +16,8 @@ struct a733_mmc_platform_native {
     enum sunxi_mmc_sd_profile sd_profile; /* Set by successful actual platform admission. */
 };
 /* Pure selected-aperture filter. Parent clocks, shared storage fabric, voltage,
- * PMIC, other storage controllers and card data writes are never writable. */
+ * PMIC, other storage controllers and card data writes are never writable. The
+ * native adapter separately admits the UHS-I profile's one PF selector write. */
 static inline int a733_mmc_platform_native_address_selected(enum sunxi_mmc_kind kind,
     enum a733_mmc_emmc_host host,uintptr_t a,unsigned writing)
 {
@@ -29,6 +30,7 @@ static inline int a733_mmc_platform_native_address_selected(enum sunxi_mmc_kind 
         case 0:case 4:case 8:case 0xc:case 0x10:case 0x14:case 0x18:case 0x1c:
         case 0x30:case 0x38:case 0x54:case 0x58:case 0x5c:case 0x80:case 0x8c:
         case 0x104:case 0x10c:case 0x140:case 0x144:return 1;
+        case 0x100:return kind==SUNXI_MMC_SD; /* Read threshold: SD UHS-I only. */
         case 0x7c:return index==3&&!writing;
         case 0x20:case 0x24:case 0x28:case 0x2c:case 0x3c:case 0x200:case 0x300:return !writing;
         default:return 0;

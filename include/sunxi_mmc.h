@@ -10,13 +10,32 @@
 /* Explicit physical slot selection; SDC1 belongs to the radio driver. */
 enum sunxi_mmc_kind { SUNXI_MMC_SD = 1, SUNXI_MMC_EMMC = 2 };
 enum sunxi_mmc_sd_profile { SUNXI_MMC_SD_LEGACY=0, SUNXI_MMC_SD_DEFAULT4=1,
-    SUNXI_MMC_SD_HIGH_SPEED4=2 };
+    SUNXI_MMC_SD_HIGH_SPEED4=2, SUNXI_MMC_SD_UHS_SDR104=3 };
+/* Outcome of the UHS-I profile (card.uhs_outcome). Every value other than
+ * SDR104 leaves a working high-speed card: 3.3 V when the switch never began,
+ * SDR25 at 1.8 V after it completed. */
+enum sunxi_mmc_uhs_outcome { SUNXI_MMC_UHS_NONE, SUNXI_MMC_UHS_SDR104,
+    SUNXI_MMC_UHS_HOST, SUNXI_MMC_UHS_DECLINED, SUNXI_MMC_UHS_NO_SDR104,
+    SUNXI_MMC_UHS_NO_WINDOW };
+/* sd_signal operations and QUERY capability bits. */
+#define SUNXI_MMC_SIGNAL_QUERY 0u
+#define SUNXI_MMC_SIGNAL_SET 1u
+#define SUNXI_MMC_SIGNAL_POLL 2u
+#define SUNXI_MMC_SIGNAL_1V8 1u  /* Bank switch to 1.8 V is admitted. */
+#define SUNXI_MMC_SIGNAL_300M 2u /* A stable 300 MHz module parent exists. */
+/* sd_module divisor flag: divide the 300 MHz parent instead of 400 MHz. */
+#define SUNXI_MMC_MODULE_300M 0x100u
+#define SUNXI_MMC_TUNING_DELAYS 64u /* SAMP_DL_SW steps, manual 11.3.8.37. */
 enum sunxi_mmc_state { SUNXI_MMC_COLD, SUNXI_MMC_IDENTIFY,
     SUNXI_MMC_READY, SUNXI_MMC_READING, SUNXI_MMC_DONE, SUNXI_MMC_FAULT,
     SUNXI_MMC_WRITING };
 enum sunxi_mmc_error { SUNXI_MMC_OK, SUNXI_MMC_IO, SUNXI_MMC_TIME,
     SUNXI_MMC_TIMEOUT, SUNXI_MMC_ADMISSION, SUNXI_MMC_VARIANT,
-    SUNXI_MMC_CONTROLLER, SUNXI_MMC_CARD, SUNXI_MMC_UNSUPPORTED };
+    SUNXI_MMC_CONTROLLER, SUNXI_MMC_CARD, SUNXI_MMC_UNSUPPORTED,
+    /* The CMD11 sequence failed after the card accepted it. The SD physical
+     * layer requires a card power cycle; this board can only remove power
+     * from the whole board. */
+    SUNXI_MMC_SIGNAL };
 struct sunxi_mmc_ops {
     /* Every callback is bounded, serialized and non-reentrant. Return exactly
      * 1 for success. Failed writes may have taken effect. Offsets are relative
@@ -44,10 +63,11 @@ struct sunxi_mmc_ops {
      * freezes the core and retains ownership; it does not release any lease.
      */
     int (*retained)(void *, uintptr_t token);
-    /* SD-only negotiated profile: called once with card output stopped and
-     * UPDATE completed. Provider owns stable PERI0_400M and changes only the
-     * selected module to 400MHz/divisor (N=1), preserving other writers.
-     * Exactly1 completes; uncertainty is terminal, with no retry/rollback. */
+    /* SD-only negotiated profile: called with card output stopped and UPDATE
+     * completed. Provider owns stable PERI0_400M and changes only the selected
+     * module to 400MHz/divisor (N=1), preserving other writers. The UHS-I
+     * profile may also pass divisor 2, or SUNXI_MMC_MODULE_300M|1 for the
+     * PERI0_300M parent. Exactly1 completes; uncertainty is terminal. */
     int (*sd_module)(void *,uintptr_t token,unsigned divisor);
     /* Move 1..SUNXI_MMC_FIFO_WORDS words through the FIFO register in order.
      * The core sizes each burst from one STATUS sample: reads take at most the
@@ -55,6 +75,12 @@ struct sunxi_mmc_ops {
      * once per burst. A failed write burst may have transferred any prefix. */
     int (*read_fifo)(void *,uint32_t *words,unsigned count);
     int (*write_fifo)(void *,const uint32_t *words,unsigned count);
+    /* UHS-I profile only; NULL otherwise. QUERY stores the capability bits
+     * and changes nothing. SET, called once with the card clock stopped after
+     * the CMD11 response, selects 1.8 V for the card's pin bank. POLL stores 1
+     * once the bank reports 1.8 V and 0 while it is still changing. Exactly 1
+     * means the operation itself succeeded; uncertainty is terminal. */
+    int (*sd_signal)(void *,uintptr_t token,unsigned operation,unsigned *state);
 };
 struct sunxi_mmc_config {
     struct sunxi_mmc_ops ops;
@@ -73,8 +99,12 @@ struct sunxi_mmc_card {
     uint8_t sector_addressed, ext_revision;
     uint8_t scr[8],switch_status[64]; /* Raw wire byte order, SD profiles only. */
     uint32_t bus_width, timing, module_hz, card_hz, module_divisor;
-    /* Configured rates are floor(400MHz/divisor) and floor(400MHz/(2*divisor));
-     * these decode register configuration and do not measure frequency. */
+    /* Configured rates are floor(parent/divisor) and floor(parent/(2*divisor)),
+     * where parent is 400 MHz, or 300 MHz with SUNXI_MMC_MODULE_300M; these
+     * decode register configuration and do not measure frequency. timing is
+     * the CMD6 access mode: 0 default, 1 high speed or SDR25, 3 SDR104. */
+    uint8_t signal_1v8, uhs_outcome, uhs_caps, sample_delay, tuning_start, tuning_width;
+    uint64_t tuning_map; /* Bit d set: every CMD19 at sample delay d matched. */
 };
 struct sunxi_mmc_result {
     enum sunxi_mmc_error error;
@@ -127,6 +157,11 @@ struct sunxi_mmc {
     uint8_t write_payload[SUNXI_MMC_MAX_BLOCKS * SUNXI_MMC_BLOCK_BYTES];
     unsigned writing;
     unsigned sd_ios;
+    /* UHS-I switch and tuning progress. */
+    uint64_t signal_us;
+    unsigned sd_sig, tune_delay, tune_repeat, tune_recover;
+    uint8_t s18r, signal_window, tuning, tune_failed, after_clock;
+    uint8_t tuning_block[64];
 };
 /* Zero storage before its first use. Single task owner; no concurrent ISR or
  * callback access. Config, context and callback-owned storage must not overlap

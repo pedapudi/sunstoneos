@@ -53,7 +53,8 @@ card substitution remain unsupported modes.
 The existing 880-byte version-two session uses its former reserved word at
 offset 860 as typed `sd_profile`. Zero selects the original one-bit 400 kHz
 path. One selects four-bit default speed up to the card's CSD limit and
-25 MHz. Two requires four-bit high speed at 50 MHz. Profile zero preserves its original
+25 MHz. Two requires four-bit high speed at 50 MHz. Three requests UHS-I SDR104
+at 1.8 V, with high speed as its fallback ([design](designs/sd-uhs.md)). Profile zero preserves its original
 pin route and version-two response. Nonzero profiles also require a read-only,
 file-backed SD capability marker in the actual image. An older legacy image
 cannot be prepared for a new profile merely because its session size matches.
@@ -63,8 +64,12 @@ Wider profiles require complete PF0–5 data/command/clock routing and explicit
 physical authority for that route, read-only card mode negotiation and stable
 shared PERI0_400M ownership. The topology evidence binds the selected profile to
 the exact image and board. All existing 3.3 V signaling, supply, detection,
-exclusive ownership and recovery conditions remain required. No CMD11, voltage
-change, media write or uncertain-command fallback is admitted.
+exclusive ownership and recovery conditions remain required. Profiles one and
+two admit no CMD11, voltage change, media write or uncertain-command fallback.
+Profile three admits the single PF switch to 1.8 V and the CMD11 and CMD19
+sequence; its preparation also requires topology authority for approved 1.8 V
+signalling, an exclusive PF bank writer, observed adaptive withstand mode and
+whole-board power removal after the lifetime.
 
 The actual [MMC controller and platform](mmc.md) read SCR, negotiate ACMD6 and,
 for profile two, check and select high speed through CMD6. Card-output disable
@@ -73,14 +78,23 @@ and clock readback plus final CMD13 precede client access. Native and USB client
 then use the existing copied read service without an additional command API.
 The requested profile remains fixed for the session lifetime.
 
-Nonzero profiles use response wire version three while retaining the 288-byte
-header and version-two read-request format. Bytes 280–283 contain requested
+Nonzero profiles use response wire version four (version three before the UHS-I
+profile) while retaining the 288-byte header and version-two read-request format. Bytes 280–283 contain requested
 profile, actual bus width, card timing and module divisor in byte order.
 Bytes 284–287 contain the derived integer card-clock rate. The observer checks
 mode/card agreement, source/divider-derived rates and the CSD cap before accepting
 completed reads. Pending or retained records may report incomplete mode state;
 they carry no successful sector payload. A zero rate means unpublished state.
 Module/card rates describe register configuration rather than measured frequency.
+In version four the divisor byte's bit 7 selects the 300 MHz parent. Fact
+words 6 and 7, write diagnostics that this read-only service never sets,
+carry a completed read's elapsed microseconds and, for profile three, the UHS-I
+outcome, capability bits, chosen sample delay and passing window. Negotiated
+profiles poll an active read for up to 1 ms in one wake, so the elapsed time
+runs from the first poll to completion without tick pacing; profile zero keeps
+one poll per tick. The supervised launcher's `--throughput FIRST:SPAN` plan
+reads 128 sequential and 96 pseudo-random 4 KiB requests and 32 single
+sectors, and records MB/s and the per-block and per-request costs.
 
 ## First initialization can establish the card protocol state
 

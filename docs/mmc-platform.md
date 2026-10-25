@@ -86,15 +86,24 @@ one-bit SD route. PMIC snapshots prove programmed values, not wiring, measured
 voltage or settling. Those remain authenticated physical prerequisites.
 No regulator output is changed.
 
-GPIO voltage checks are also read-only. SD accepts PF's manual 3.3 V modes
-0/2 or adaptive mode 1, with sensed 3.3 V status 2 and the 3.3 V selector bit.
-The exact inherited mode is retained; a subsequent mode, status or selector
-change causes retained refusal before further controller commands. The A733
-manual sections 18.14.4.6 and 18.14.6.1–3 define adaptive mode as adjustment of
-the internal withstand circuit to detected voltage, separately from PF supply
-selection. No voltage setting is written. eMMC requires PC's manual 1.8 V
-mode and its distinct 1.8 V status encoding. Every writer that could change the
-bank voltage must remain excluded for the session's lifetime.
+GPIO voltage checks are read-only except for one write in the UHS-I profile.
+SD accepts PF's manual 3.3 V modes 0/2 or adaptive mode 1, with sensed 3.3 V
+status 2 and the 3.3 V selector bit. The exact inherited mode is retained; a
+subsequent mode, status or selector change causes retained refusal before
+further controller commands. The A733 manual sections 18.14.4.6 and
+18.14.6.1–3 define adaptive mode as adjustment of the internal withstand circuit
+to detected voltage, separately from PF supply selection. eMMC requires PC's
+manual 1.8 V mode and its distinct 1.8 V status encoding. Every other writer
+that could change the bank voltage must remain excluded for the session's
+lifetime.
+
+The UHS-I profile (SD profile three) offers the 1.8 V switch only in adaptive
+mode with CLDO5 programmed to 1.8 V. With the card clock stopped after CMD11,
+it clears `GPIO_POW_VAL_SET_CTL` bit 0 once, with readback, and then polls
+`GPIO_POW_VAL` until PF reports 1.8 V (value 3). From the write on, live
+checks require the cleared selector, and once the bank reports 1.8 V they
+require that value. Nothing restores 3.3 V; only whole-board power removal
+does. [The UHS-I design](designs/sd-uhs.md) gives the sources.
 
 ## Negotiated rates retain shared-parent ownership
 
@@ -107,14 +116,21 @@ After the core proves completed card-output disable, a callback runs within
 the existing designated owner and common register mutex. It checks live time,
 shared-clock health, voltage, masked interrupt and idle command/data state.
 It gates only SDC0's module, selects PERI0_400M and its linear divider, then
-reenables the module with exact readback. The recorded module configuration
+reenables the module with exact readback. The UHS-I profile also admits
+PERI0_400M / 2 and PERI0_300M / 1. PERI0_300M requires the enabled PERI0
+auto gates 11, 9, 5 and 4 and the exact 300 MHz PLL ratio, checked on every
+poll while the module runs from it. The recorded module configuration
 becomes the expected value for every later live check. A failed access, lost
 clock authority or wrong readback retains all resources without rollback.
 
 The native filter enables the new forms only after successful actual SD profile
 admission. It admits ACMD51 argument zero, ACMD6 argument two, and the exact
 read-direction CMD6 check/switch arguments for the required high-speed profile.
-It excludes eMMC CMD6 and every data-write direction from this read-only path.
+The UHS-I profile adds the SDR104 CMD6 arguments, CMD11 with the
+voltage-switch flag, the CMD19 tuning read, the read-threshold register and
+the one PF selector write; the default aperture filter keeps the selector
+read-only. It excludes eMMC CMD6 and every data-write direction from this
+read-only path.
 GPIO voltage modes, selected supplies, reset and shared fabric policy remain
 subject to the existing retained lifetime.
 
@@ -259,7 +275,7 @@ version 5.3 or later, below 6.0. A device-tree compatibility string does not pro
 that the physical version register meets this condition. A mismatch remains a
 retained refusal requiring investigation.
 
-SD v1, voltage switching, UHS/tuning, DMA, interrupts,
+SD v1, SDR50 and DDR50, physical qualification of the UHS-I switch and tuning, DMA, interrupts,
 hotplug, recovery, physically qualified storage writes, alternate eMMC partitions, command queuing and
 power management remain required storage work. UFS remains separate. Physical
 read qualification must preserve the inserted card and use its reviewed recovery

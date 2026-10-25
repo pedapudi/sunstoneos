@@ -128,6 +128,7 @@ static void step(void)
       (chosen==STORAGE_READ_CLIENTS||storage_read.slots[i].ticket<oldest)){chosen=i;oldest=storage_read.slots[i].ticket;}
   if(chosen<STORAGE_READ_CLIENTS){
    storage_read.active=chosen;slot=&storage_read.slots[chosen];storage_read.deadline=slot->deadline;
+   slot->started=0;slot->elapsed_us=0;
    atomic_store_explicit(&slot->state,STORAGE_READ_ACTIVE,memory_order_release);storage_read.stage=3;
   }
   break;
@@ -139,11 +140,28 @@ static void step(void)
   if(r==A733_MMC_PENDING)storage_read.stage=4;
   else if(r!=A733_MMC_BUSY)failure(5);
   break;
- case 4:
-  r=a733_mmc_platform_poll(&storage_read.platform);
-  if(r==A733_MMC_COMPLETE)storage_read.stage=5;
-  else if(r!=A733_MMC_PENDING&&r!=A733_MMC_BUSY)failure(6);
+ case 4: {
+  /* Negotiated profiles poll the transfer for up to 1 ms in one wake, so
+   * the recorded time measures the controller path rather than tick pacing.
+   * The legacy 400 kHz profile keeps one poll per tick. */
+  uint64_t wake=a733_smp_counter();
+  if(!slot){failure(8);break;}
+  if(!slot->started)slot->started=wake;
+  for(;;){
+   r=a733_mmc_platform_poll(&storage_read.platform);
+   if(r==A733_MMC_COMPLETE){
+    uint64_t us=(a733_smp_counter()-slot->started)/24;
+    slot->elapsed_us=us>UINT32_MAX?UINT32_MAX:(uint32_t)us;storage_read.stage=5;break;
+   }
+   if(r!=A733_MMC_PENDING&&r!=A733_MMC_BUSY){failure(6);break;}
+#ifdef SUNSTONE_EMMC_READ
+   break; /* eMMC keeps its single legacy profile and one poll per tick. */
+#else
+   if(!storage_read.session.sd_profile||(a733_smp_counter()-wake)/24>=1000)break;
+#endif
+  }
   break;
+ }
  case 5:
   if(!slot){failure(8);break;}
   r=a733_mmc_platform_take(&storage_read.platform,&slot->completion,slot->deadline);
@@ -253,7 +271,7 @@ int storage_read_copy(uint8_t *out,size_t capacity,unsigned *bytes)
 #ifdef SUNSTONE_EMMC_READ
  put32(out+4,2);
 #else
- put32(out+4,storage_read.session.sd_profile?3:2);
+ put32(out+4,storage_read.session.sd_profile?4:2);
 #endif
  put32(out+8,result);put32(out+12,count);
  put64(out+16,board.session.epoch);put64(out+24,board.session.generation);
@@ -276,8 +294,15 @@ int storage_read_copy(uint8_t *out,size_t capacity,unsigned *bytes)
  put32(out+276,atomic_load_explicit(&storage_read_consumer.completed,memory_order_acquire));
 #ifndef SUNSTONE_EMMC_READ
  if(storage_read.session.sd_profile){
-  put32(out+280,(uint32_t)storage_read.session.sd_profile|(c->bus_width<<8)|(c->timing<<16)|(c->module_divisor<<24));
+  /* Version 4: the divisor byte's bit 7 selects the 300 MHz parent. Fact
+   * words 6 and 7 (write diagnostics, always zero for this read-only service)
+   * carry the read's elapsed microseconds and the UHS-I outcome. */
+  uint32_t divisor=(c->module_divisor&0x7fu)|((c->module_divisor&SUNXI_MMC_MODULE_300M)?0x80u:0u);
+  put32(out+280,(uint32_t)storage_read.session.sd_profile|(c->bus_width<<8)|(c->timing<<16)|(divisor<<24));
   put32(out+284,c->card_hz);
+  put32(out+136,result==STORAGE_READ_SUCCESS?slot->elapsed_us:0);
+  put32(out+140,(uint32_t)c->uhs_outcome|(uint32_t)c->signal_1v8<<4|(uint32_t)c->uhs_caps<<5|
+   (uint32_t)c->sample_delay<<8|(uint32_t)c->tuning_start<<16|(uint32_t)c->tuning_width<<24);
  }
 #endif
  if(result==STORAGE_READ_SUCCESS){memcpy(out+32,slot->digest,32);memcpy(out+STORAGE_READ_HEADER,slot->copied,count);}

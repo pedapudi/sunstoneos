@@ -100,35 +100,57 @@ static int write_fifo(void *cookie,uintptr_t a,const uint32_t *v,unsigned count)
        !a733_mmc_platform_native_fifo_allowed(n->kind,n->emmc_host,n->update,a,count))return 0;
     return store(a,v,count);
 }
+/* The UHS-I profile's single PF selector write: 1.8 V, never back to 3.3 V.
+ * The default aperture filter keeps the selector read-only. */
+static int pf_select(struct a733_mmc_platform_native *n,uint32_t v)
+{
+    if(n->kind!=SUNXI_MMC_SD||n->sd_profile!=SUNXI_MMC_SD_UHS_SDR104||v||!current(n)||!n->holding||
+       (atomic_load_explicit(&n->locks->retained,memory_order_acquire)&1u))return 0;
+    return store(0x02000070,&v,1);
+}
 static int write32(void *cookie,uintptr_t a,uint32_t v)
 {
     struct a733_mmc_platform_native *n=cookie;
+    if(a==0x02000070)return n&&pf_select(n,v);
     if(!allowed(n,a,1))return 0;
     unsigned slot=a733_mmc_slot(n->kind,n->emmc_host);
     uintptr_t base=A733_MMC_BASE(slot);
     uintptr_t module=A733_MMC_MODULE(slot);
+    unsigned uhs=n->kind==SUNXI_MMC_SD&&n->sd_profile==SUNXI_MMC_SD_UHS_SDR104;
     if(a==base+SUNXI_SMHC_FIFO) {
         if(!a733_mmc_platform_native_transfer_allowed(n->kind,n->emmc_host,n->update,a,v))return 0;
+    } else if(a==base+SUNXI_SMHC_THLD) {
+        if(!uhs)return 0; /* The SDR104 read threshold; no other profile writes it. */
     } else if(a==0x03400198) {
         if(v!=A733_MMC_GIC_BIT(slot))return 0;
     } else if(a==module||a==A733_MMC_BUS(slot)) {
         uint32_t mask=a==module?UINT32_C(0x87001f1f):UINT32_C(0x10001);
         if(a==module){
             uint32_t setting=v&(mask&~UINT32_C(0x80000000));
-            if(setting!=29&&(n->kind!=SUNXI_MMC_SD||
-               !n->sd_profile||(setting&~31u)!=UINT32_C(0x01000000)||
-               (n->sd_profile==SUNXI_MMC_SD_DEFAULT4?(setting&31u)<7:(setting&31u)!=3)))return 0;
+            if(setting!=29&&(n->kind!=SUNXI_MMC_SD||!n->sd_profile||
+               (uhs?(setting!=UINT32_C(0x01000003)&&setting!=UINT32_C(0x01000001)&&setting!=UINT32_C(0x02000000)):
+               ((setting&~31u)!=UINT32_C(0x01000000)||
+               (n->sd_profile==SUNXI_MMC_SD_DEFAULT4?(setting&31u)<7:(setting&31u)!=3)))))return 0;
         }
         __asm__ volatile("dsb sy" ::: "memory");
         uint32_t old=*(volatile const uint32_t *)a;
         if((old^v)&~mask)return 0;
     } else if(a==base+SUNXI_SMHC_CMD) {
+        if((v&SUNXI_SMHC_CMD_VOLTAGE_SWITCH)&&(!uhs||(!(v&SUNXI_SMHC_CMD_UPDATE_CLOCK)&&(v&SUNXI_SMHC_CMD_INDEX)!=11)))return 0;
         if(v&SUNXI_SMHC_CMD_WRITE) {
             if(!a733_mmc_platform_native_transfer_allowed(n->kind,n->emmc_host,n->update,a,v))return 0;
         }
         if(!(v&SUNXI_SMHC_CMD_UPDATE_CLOCK))switch(v&SUNXI_SMHC_CMD_INDEX) {
         case 0:case 1:case 2:case 3:case 7:case 8:case 9:case 13:
         case 16:case 17:case 18:case 41:case 55:break;
+        case 11:case 19:
+            /* UHS-I only: CMD11 with the voltage-switch flag and the CMD19
+             * tuning read, each with a zero argument. */
+            {uint32_t argument=*(volatile const uint32_t *)(base+SUNXI_SMHC_ARG);
+             uint32_t flags=SUNXI_SMHC_CMD_START|SUNXI_SMHC_CMD_CRC|SUNXI_SMHC_CMD_RESP;
+             if(!uhs||argument||v!=((v&SUNXI_SMHC_CMD_INDEX)==11?flags|SUNXI_SMHC_CMD_VOLTAGE_SWITCH|11u:
+                flags|SUNXI_SMHC_CMD_WAIT|SUNXI_SMHC_CMD_DATA|19u))return 0;}
+            break;
         case 6:case 51:
             if(n->kind!=SUNXI_MMC_SD||!n->sd_profile)return 0;
             /* New SD commands have fixed read-only protocol forms. No eMMC
@@ -137,7 +159,8 @@ static int write32(void *cookie,uintptr_t a,uint32_t v)
              uint32_t flags=SUNXI_SMHC_CMD_START|SUNXI_SMHC_CMD_WAIT|SUNXI_SMHC_CMD_CRC|SUNXI_SMHC_CMD_RESP;
              if((v&SUNXI_SMHC_CMD_INDEX)==51){if(v!=(flags|SUNXI_SMHC_CMD_DATA|51u)||argument)return 0;}
              else if(v==(flags|6u)){if(argument!=2)return 0;}
-             else if(v==(flags|SUNXI_SMHC_CMD_DATA|6u)){if(n->sd_profile!=SUNXI_MMC_SD_HIGH_SPEED4||(argument!=0x00fffff1&&argument!=0x80fffff1))return 0;}
+             else if(v==(flags|SUNXI_SMHC_CMD_DATA|6u)){if(n->sd_profile<SUNXI_MMC_SD_HIGH_SPEED4||
+                 (argument!=0x00fffff1&&argument!=0x80fffff1&&(!uhs||(argument!=0x00fffff3&&argument!=0x80fffff3))))return 0;}
              else return 0;}
             break;
         case 24:if(!a733_mmc_platform_native_transfer_allowed(n->kind,n->emmc_host,n->update,a,v))return 0;break;

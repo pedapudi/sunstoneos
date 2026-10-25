@@ -9566,6 +9566,38 @@
   "summary": "Execute admitted single-core storage startup; hardware effects remain modeled.",
   "usb": false
  },
+ "storage-read-uhs-host.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/sd-uhs.md",
+   "docs/hardware.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Decode UHS-I SD0 records (version 4) and refuse inconsistent ones; summarize throughput.",
+  "usb": false
+ },
+ "sunxi-mmc-uhs.py": {
+  "cache_areas": [
+   "evidence",
+   "sources"
+  ],
+  "docs": [
+   "docs/designs/sd-uhs.md",
+   "docs/hardware.md",
+   "docs/mmc.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Check the UHS-I SDR104 sequence against pinned references and run its models.",
+  "usb": false
+ },
  "sunxi-mmc-write.py": {
   "cache_areas": [
    "evidence",
