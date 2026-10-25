@@ -29,6 +29,9 @@ unchanged.
   (ranges 1.5–6 ms and 1.0–5 ms); time ratio 0.6–0.9, central 0.72;
   active-cycle ratio 1.0–1.5, central 1.21; idle under 10% of the job's
   cycles.
-- Publication to doorbell about 17 µs, as for the one-operation job.
+- Publication to doorbell about 11 µs (seven register accesses of about
+  1.6 µs), as estimated for the one-operation job.
+- The 2-byte output `[0,255]` is saturated, so a match is weak evidence of
+  correct arithmetic ([design](../designs/npu-full-model.md)).
 - Submit phase 1–5 ms and publish phase 5–30 ms per job, on the CPU before
   the doorbell.

@@ -86,7 +86,14 @@ one-operation convolution measured C ≈ 0 and M ≈ 4.3 µs. For ShuffleNetV2:
 The two starts determine C and M: C = (T₄₉₂ − T₈₅₂)/(1/492 MHz − 1/852 MHz)
 and M = T₄₉₂ − C/492 MHz, which the set's `timing.py --compare` computes.
 Both outputs match the reference `[0,255]` at both rates, and startup stays
-at 4.0 ms. The submit and publish phases run on the CPU before the doorbell;
+at 4.0 ms. That output is saturated: both bytes sit at the ends of the UINT8
+range, so many wrong computations would produce it too, and a match is weak
+evidence of correct arithmetic. No unsaturated intermediate or larger
+reference exists for this graph. A later run can compare one: the SDK's
+`vpm_run --layer_dump` (`examples/vpm_run/vpm_run.c:57`, `:2411-2428`) dumps
+each layer's output on the host simulator, and the last 1 × 1 convolution's
+output, before pooling, lies in the DRAM pool, where the host can read it
+before it restores DRAM. The submit and publish phases run on the CPU before the doorbell;
 they are predicted at 1–5 ms and 5–30 ms per job, dominated by clearing the
 pool and hashing about 0.92 MB with the software SHA-256.
 
@@ -105,31 +112,36 @@ Set 13 timed four one-operation jobs. Two derived quantities explain the
 | 852 MHz, 1 | 44.88 µs | 39.50 µs | 5.38 µs | 4.38 µs | 23.88 µs | 15.62 µs |
 | 852 MHz, 2 | 43.56 µs | 38.83 µs | 4.73 µs | 4.00 µs | 23.04 µs | 15.79 µs |
 
-- **Cost of one register access.** The cycle counters are sampled one
-  register read before the start timestamp and, after the completion
-  timestamp, after one adapter-clock read and one more register read. The
-  window difference, 5.0 µs on average, is therefore two register reads and
-  one clock read: about 2.4 µs per NPU register access.
-- **Publication to doorbell, about 17 µs.** After the start timestamp the
-  controller reads three configuration registers, the idle register and the
-  event register, writes `+0x654` and `+0x3A4`, and issues two `DSB SY`
-  barriers (`a733_npu_controller.c:78-93`): seven accesses, 7 × 2.4 µs.
+- **Cost of one register access.** The start timestamp follows the
+  total-cycle read by the rest of that read and the whole idle-cycle read;
+  the completion timestamp precedes the total-cycle read by one adapter-clock
+  read, the whole idle-cycle read and the total-cycle read up to its sample.
+  The window difference, 5.0 µs on average, therefore spans three register
+  reads and one clock read: about 1.6 µs per NPU register access.
+- **Publication to doorbell, about 11 µs, estimated.** After the start
+  timestamp the controller reads three configuration registers, the idle
+  register and the event register, writes `+0x654` and `+0x3A4`, and issues
+  two `DSB SY` barriers (`a733_npu_controller.c:78-93`): seven accesses,
+  7 × 1.6 µs.
 - **NPU work, 4.0–4.4 µs.** The active cycles are 2,000–2,200 at 492 MHz and
   3,400–3,700 at 852 MHz, the same 4.3 µs at both clocks, so memory latency
   bounds it: command fetch, descriptor, kernel and input reads and the output
   write, all from DRAM.
-- **Completion to interrupt timestamp, about 2 µs**, the remainder:
-  23.3 − 17 − 4.3 µs, covering interrupt delivery and exception entry.
+- **About 8 µs not yet attributed**: 23.3 − 11 − 4.3 µs. It holds interrupt
+  delivery and exception entry and any NPU time between the doorbell and the
+  first active cycle or after the last one that the counters record as idle.
 - **Interrupt to completion record, 16 µs.** The worker reads three
   configuration registers, the event register, the idle register and the
-  event register again (`a733_npu_controller.c:211-228`): 6 × 2.4 µs plus the
-  wake.
+  event register again (`a733_npu_controller.c:211-228`): 6 × 1.6 µs, about
+  10 µs, and about 6 µs of wake, GIC mask and clock reads.
 
-Each access costs this much because the adapter translates the register
-address with `AT` and decodes `PAR_EL1` on every access
+Each access includes the bus access to the NPU's registers, a translation of
+the register address with `AT` and a `PAR_EL1` decode
 (`platform/a733/npu_native.c:94-113`, `include/a733_mapping_check.h:62-77`),
-and surrounds it with `DSB SY` (`include/a733_mmio.h:54-64`). The new
-doorbell timestamp tests the 17 µs on the board.
+and `DSB SY` around it (`include/a733_mmio.h:54-64`). These records do not
+separate the bus latency from the translation and barrier cost. The doorbell
+timestamp of the ShuffleNetV2 run measures publication to doorbell directly,
+and with it doorbell to interrupt, which bounds the unattributed 8 µs.
 
 ## Proposed reductions
 
@@ -144,18 +156,21 @@ is the synchronous one (`vpmdENABLE_MULTIPLE_TASK` 3,
    dropping the per-access translation and the `DSB SY` pair, is predicted to
    bring an access to 0.1–0.3 µs, the cost the
    [performance architecture](../performance-architecture.md) gives for the
-   access itself. Publication to doorbell: 17 → about 2 µs; publication to
-   interrupt: 23 → about 8 µs; interrupt to completion: 16 → about 3.5 µs.
+   access itself, if translation and barriers dominate the 1.6 µs.
+   Publication to doorbell: 11 → about 2 µs; publication to interrupt:
+   23 → about 14 µs; interrupt to completion: 16 → about 8 µs. If bus
+   latency dominates, the saving is smaller; the doorbell timestamp decides.
 2. **Two-write trigger.** The vendor starts a job with the `+0x654` write, a
    memory barrier and the `+0x3A4` write, and reads nothing
    (`vip2/vip_drv_hardware.c:882-893`). Checking the configuration, idle and
    event registers at open, at completion and at close instead of before
    every trigger removes five reads: with item 1, publication to doorbell
-   about 1 µs and publication to interrupt about 7 µs.
+   about 1 µs and publication to interrupt about 13 µs; alone, it removes
+   about 8 µs.
 3. **One event read at completion.** The vendor's handler reads `+0x010` once
    (`vip_drv_device_driver.c:382`). Reading the event and idle registers once
    and the configuration at close: with item 1, interrupt to completion about
-   2 µs.
+   6 µs.
 4. **Immutable buffers prepared once.** The vendor keeps its wait-link
    command memory uncached (`vip_drv_hardware.c:666-670`) and flushes video
    memory through `vipdrv_mem_flush_cache` when it is written
@@ -191,7 +206,7 @@ text size; it gains the `__npu_graph_staging` symbol and the timestamps.
 
 - The predictions of C and M rest on an estimated MAC count and an assumed
   engine throughput; the two starts measure both.
-- The 2.4 µs per access is inferred from the counter windows; the doorbell
+- The 1.6 µs per access is inferred from the counter windows; the doorbell
   timestamp measures the pre-trigger phase directly.
 - The ShuffleNetV2 input saturates the output; the comparison shows equal
   bytes, not classification accuracy.
