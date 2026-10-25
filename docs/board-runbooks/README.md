@@ -6,6 +6,7 @@ ranks 6 to 9 of the [ranked board test plan](../audit/board-test-plan.md):
 1. [Rank 6: returning thermal application](rank-6-thermal.md)
 2. [Rank 7: all-core first-task diagnostic](rank-7-first-task.md)
 3. [Rank 8: full returning eight-core workload](rank-8-workload.md)
+   and its [bisection with a CPU0 return deadline](rank-8-workload-bisect.md)
 4. [Rank 9: native USB device channel](rank-9-usb.md)
 
 They start from the state that ranks 1 to 5 left on 2026-10-23. Both boards
