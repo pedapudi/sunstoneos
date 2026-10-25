@@ -300,6 +300,9 @@ def run(image, case, power_only=False, wrapper=False, probe=False):
             field(row, 'a733_power_domain_row', 'counted', case == 'counted-row')
             field(domain5, 'a733_power_domain', 'state', 1)
             ret()
+        elif name == 'a733_gpu_platform_supply_end':
+            # The supply consumer's completed DCDC4 sample ends here.
+            ret(1)
         elif name == 'bb_power_park':
             field(bb, 'bb_power', 'parked', 0 if case == 'unparked' else 1)
             ret()
@@ -317,11 +320,14 @@ def run(image, case, power_only=False, wrapper=False, probe=False):
 
     modeled = ['bb_power_wait_ready', 'bb_power_now', 'vTaskDelay',
                'a733_gpu_platform_begin', 'a733_gpu_platform_poll', 'aarch64_device_translate',
-               'a733_gpu_platform_off_begin', 'a733_gpu_platform_off_poll', 'bb_power_park',
+               'a733_gpu_platform_off_begin', 'a733_gpu_platform_off_poll', 'a733_gpu_platform_supply_end',
+               'bb_power_park',
                'a733_power_service_idle', 'bb_power_fail', 'platform_puts', 'platform_exit']
     if probe:
         # The probe-read image makes no OFF, so its link drops the OFF calls.
         modeled = [n for n in modeled if image.symbols.get(n, set()) - {0}] + ['platform_exception']
+    elif wrapper:
+        modeled = [n for n in modeled if n != 'a733_gpu_platform_supply_end']
     hooks = {image.address(name): name for name in modeled}
     u.hook_add(UC_HOOK_CODE, lambda uc, address, size, arg: call(hooks[address]) if address in hooks else None)
 
@@ -536,7 +542,8 @@ def run(image, case, power_only=False, wrapper=False, probe=False):
         if case == 'normal':
             assert state['exit_status'] == 0 and state['failure'] is None
             assert 'COMPLETE GPU power identity: 36.56.104.183 in two ON/OFF cycles, provider parked' in output
-            assert state['calls'].index('a733_gpu_platform_off_poll') < state['calls'].index('bb_power_park') < \
+            assert state['calls'].index('a733_gpu_platform_off_poll') < \
+                state['calls'].index('a733_gpu_platform_supply_end') < state['calls'].index('bb_power_park') < \
                 last_put(state)
         else:
             assert state['failure'] == 'GPU identity not 36.56.104.183' and 'COMPLETE' not in output, state

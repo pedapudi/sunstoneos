@@ -227,6 +227,38 @@ The owner now compares the low 16 bits of the `+0xc10` readback.
 `checks/a733-gpu-second-on.c` built against `e1300fef` (`-DBOARD_RUN_2`)
 reproduces this run's values.
 
+### The third run completed both cycles and failed at the park
+
+With the delay-row readback fixed, the power-only image ran again on port
+3-1 (`board-session-20261025-11/port-3-1/s13-gpo-run`):
+
+- **Cycle 2 reached CORE6 status 8.** TOP5 powered up from OFF with both
+  master gates closed, as the vendor makes it, and reopened them
+  (`ahb_on=0x110103ff`, `mbus_on=0xf1055803`). Snapshot 2, taken after the
+  ON, shows TOP5 and CORE6 policy and status 8 and `+0xc10` back at 8. The
+  `policy_status=0x0` of the `GPU CORE after` line is the status read
+  straight after the policy write; on cycle 1 the power-up transition was
+  already pending, so the same read showed 8. The controller's final poll
+  read 8, or the client would have stopped at `GPU ON poll`.
+- **Cycle 2's OFF ran and completed.** The second `GPU gates cycle=2` line
+  is the report after the OFF, which follows a successful OFF poll and the
+  OFF ownership proof.
+- **The retained request is the supply consumer's DCDC4 sample.** The
+  consumer keeps its completed sample in a provider request slot, with its
+  rail borrow, so that every later admission can check it against the
+  provider (`a733_pmic_consumer.h`). The platform never ended it, and the
+  client's check after the park finds that slot.
+
+The vendor reads the regulator voltage once, synchronously, at probe
+(`regulator_get_voltage`, `sunxi_platform.c:839`), and holds only the
+regulator handle; no bus request outlives the read. The platform now has
+`a733_gpu_platform_supply_end`, which, after an OFF, ends the consumer's
+completed sample while keeping its shared DCDC4 token; a later begin samples
+again. The power-only and identity clients call it after their last OFF,
+before the park. `checks/a733-gpu-second-on.c` built against `4cefdec6`
+(`-DBOARD_RUN_3`) reproduces this run, and on the current tree frees every
+slot and powers on a third time.
+
 A successful power-off result does not establish that outstanding memory
 transactions have drained. This controller cannot supply the isolation callback
 required by [GPU shutdown](gpu-stop.md). Device backing must remain reserved

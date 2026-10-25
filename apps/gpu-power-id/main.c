@@ -224,6 +224,11 @@ void gpu_power_id_client(void *unused)
         off_proof();
     }
     cycle = GPU_CYCLES;
+    /* The supply consumer's completed DCDC4 sample keeps a provider request
+     * slot while the GPU may power on; end it before the park, which then
+     * finds every slot free. */
+    while ((result = a733_gpu_platform_supply_end(&gpu)) == 0) gpu_pause("GPU supply end deadline");
+    if (result != 1) gpu_fail("GPU supply end");
     bb_power_park();
     off_proof();
     if (!atomic_load_explicit(&bb_power.parked, memory_order_acquire) ||
