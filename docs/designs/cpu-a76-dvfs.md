@@ -358,6 +358,34 @@ must find. They are not B1: B1 is the supervised A76 run with the recognizer
 on core 6 and the worker on core 7, which still needs ranks 7 and 8 on the
 same board.
 
+On port 3-3 on 2026-10-25, bundles 14 and 15 recorded:
+
+| Item | Word or reading | Decoded |
+| --- | --- | --- |
+| Speed bin | SID `0x0300624c` = `0x496` | Code `0x04`, column 4 |
+| CPU-B | PLL `0xf8802700`, mux/P `0x03000000` | Source PLL, N = 39, P = 0: 1,014 MHz from the 26 MHz oscillator |
+| DSU | PLL `0xf8802600`, mux/P `0x03010105` | N = 38, P = 1: 494 MHz |
+| CPU-L | PLL `0xf8802600`, mux/P `0x03010000` | 494 MHz |
+| Pattern and LFM | CPU-L and CPU-B: `+0x4` = 0, `+0x8` = `0x30000000`, `+0x18` = `0x40000001` | Pattern type, pattern LFM enable and LFM ramp enable all clear |
+| DCDC3, DCDC5 | Enable `0xff`, selector `0x9e` each | Enabled, 800 mV each |
+
+B1 itself on port 3-3 still needs, in one power cycle:
+
+- rank 5, the forced-stall return, which this lifetime has not run; ranks 1
+  to 4 and rank 9 have run in it (cold DDR `s7-ddr`, the base kernel check
+  `s7-bb2-run`, native USB `s13-r9-usb`);
+- ranks 7 and 8, which set `board-bundles-20261025-2` runs;
+- the supervised integrated OS image built with `A733_A76_ADMITTED` and the
+  CPU clock option, with a grant record that names no cluster, prepared by
+  `apps/os/prepare.py` from a reviewed entry record (the thermal owner's
+  facts from a fresh reading and the DDR reservation of the recognition
+  inputs). No integrated OS image has run on a board, and this one takes
+  over USB0 and ends the session, so it runs last and the board then needs
+  a power removal;
+- the B1 record of schema `a733-os-cpu-clock-b1-v1` that `apps/os/prepare.py`
+  checks before any A step: B1 passed with a grant of no cluster on that
+  board and port, with clear pattern and LFM words.
+
 Each of the following needs the user's explicit approval before the run,
 runs last in a connection window after B1 has passed on that board, and is
 specific to that board through its approval record:

@@ -654,35 +654,45 @@ of the two changed sources, so the loaders refuse the frozen workload bundle
 (`rank-8-workload/`, "Identity source changed.") until its manifest and
 evidence are regenerated.
 
+## Port 3-3 ran the CPU0-only preparation and the pre-scheduler
+
+Set `board-bundles-20261025-1` ran on port 3-3 on 2026-10-25, in the lifetime
+that started with the cold DDR record `s7-ddr` and had since run the base
+kernel check, bundle 6 four times, rank 9's native USB image and bundle 15
+(session `board-session-20261024-8/port-3-3`):
+
+| Record | Run | Result |
+| --- | --- | --- |
+| `u1-r7-state-before` | 91-word capture | Every word at its clean value: seven secondaries OFF, no request |
+| `u1-r7p-prepare` | CPU0-only preparation | Returned |
+| `u1-r7-state-after-primary` | 91-word capture | All 91 words unchanged |
+| `u1-r7s-prepare` | All-eight-core pre-scheduler, the first secondary power-up of the lifetime | Returned: completed mask `0xfe`, DRAM restored, seven secondaries OFF |
+| `u1-r7-state-after-pre-scheduler` | 91-word capture | All 91 words equal to the capture before (`u1-r7-state-comparison.json`) |
+
+The coordinator accepted the rewritten admission conditions with the
+confound named: this lifetime had run FreeRTOS images before its first
+secondary power-up (`u1-r7s-root-review.json`).
+
+The comparison that port 3-1 did not make now exists: the first secondary
+power-up of a lifetime leaves every one of the 91 words, the secondaries'
+power-controller words and redistributor frames included, as it found them.
+If the first-task run depends on state that the pre-scheduler leaves, that
+state lies outside those words: system registers that FEL cannot read,
+the secondaries' SGI and PPI enable, pending and active words, and cache
+contents.
+
 ## Next board steps
 
-Port 3-1 has run the full sequence in one lifetime (section "The 2026-10-24
-sequence on port 3-1 returned"). Port 3-3 has never powered up a secondary.
-The narrowest next diagnostic there repeats the start of that sequence, in
-the same order and with the same frozen packages, and records the state
-around the first secondary power-up:
-
-1. The 21-word secondary-power capture and the CPU0-only preparation
-   (`cpu-startup-resolution-20261024/`). It writes no GIC or secondary-power
-   register.
-2. The 91-word capture, the all-eight-core pre-scheduler
-   (`cpu-diagnosis-20261024/pre-scheduler/`), which is the first secondary
-   power-up of the lifetime, and the same capture again, compared word for
-   word with the first. Port 3-1's lifetime did not repeat the secondaries'
-   78 words after its pre-scheduler, so this comparison is new.
-
-Both packages bind only to port 3-1. Port 3-3 bindings, with admission
-conditions that state port 3-3's lifetime, are frozen with set
-`board-bundles-20261025-1`. That lifetime has run returning CPU0 images (the
-base kernel check, bundle 6 four times and rank 9) since its cold DDR start,
-unlike the clean lifetime that passed on port 3-1, so a pass there would
-extend the sequence to that history and a non-return would not separate it
-from the first power-up. A pre-scheduler that does not return leaves the
-stop location unknown and needs a power removal; it is not retried. After
-both return, the first-task, task-switch and task-workload profiles of
-`cpu-next-20261024/` complete ranks 7 and 8 on port 3-3 in the same order as
-on port 3-1; their port 3-3 bindings follow the same pattern and are not yet
-prepared.
+Set `board-bundles-20261025-2` continues port 3-3's lifetime from
+`u1-r7s-prepare` in the order that returned on port 3-1: the corrected first
+task (rank 7), task switching, a thermal reading, the full workload (rank 8)
+and the current-source workload with one timer interrupt on each secondary.
+A 91-word capture follows each launch and stops the sequence when any of the
+21 secondary-power words differs from `u1-r7-state-before`. The packages bind
+only to port 3-1; the set holds port 3-3 bindings with admission conditions
+that state this lifetime. A launch that does not return needs a power
+removal and is not retried; the corrected first task can instead return a
+refusal code before releasing any secondary.
 
 ## Evidence
 

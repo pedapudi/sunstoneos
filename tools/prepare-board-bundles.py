@@ -966,10 +966,12 @@ def runbook(row, bundle, value, artifacts, prerequisites, timeout, lifetime=None
         origins = sorted({o['origin'] for o in json.loads((bundle / 'equivalence.json').read_text())['objects'].values()}
                          - {'new'})
         passed = sorted(set(origins) & set(PASSED_RECORDS))
+        earlier = (lifetime or {}).get('passed', {})
         lines += [f'Equivalence: {value["passed_objects"]} linked objects are byte-identical to objects of images '
                   'that passed on the board (' + ', '.join(f'`{k}`: {PASSED_RECORDS[k]}' for k in passed) + ').'
                   + (f' {len(value["base_objects"])} equal objects of the image of `{row["base"]}`, the base of '
-                     'this set, which has not run when the set is prepared: '
+                     + (f'this set, which passed earlier in this lifetime as `$S/{earlier[row["base"]]}`: '
+                        if row['base'] in earlier else 'this set, which has not run when the set is prepared: ')
                      + ', '.join(f'`{x}`' for x in value['base_objects']) + '.' if value.get('base_objects') else '')
                   + ' New: ' + ', '.join(f'`{x}`' for x in value['new_objects'])
                   + '. `equivalence.json` lists every object with its origin.', '']

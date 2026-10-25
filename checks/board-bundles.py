@@ -896,6 +896,15 @@ def main():
     assert status == 0 and '`returning-sync` passed earlier in this lifetime, from an earlier set, as `$S/p-sync-run`' in book, book
     assert '--warm-return $S/p-sync-run/session.json' in book, book
     assert '`returning-sync` passed (`p-sync-run`, already in the chain)' in (gated / 'runbook.md').read_text()
+    # A base row prepared again in a later set after its image passed earlier in this lifetime: the
+    # dependent row's runbook names that pass instead of saying the base has not run.
+    rebased = {'port': '3-1', 'ddr': 'q-ddr', 'chain': ['q-base-run'], 'passed': {'returning-base': 'q-base-run'},
+               'order': [{'row': 'returning-on-base', 'stem': 'q-on', 'run': 'q-on-run'}]}
+    status, again = tool.run({'returning-base': inputs['returning-base'], 'returning-on-base': inputs['returning-on-base']},
+                             rows, evidence, repo, lifetime=rebased, run_dir=evidence / 'named-set' / 'port-rebased')
+    on_book = (again / 'returning-on-base/runbook.md').read_text()
+    assert status == 0 and 'which passed earlier in this lifetime as `$S/q-base-run`' in on_book, on_book
+    assert 'which has not run when the set is prepared' not in on_book, on_book
     status, second = tool.run({}, rows, evidence, repo)
     assert status == 0 and second.name.endswith('-3'), 'a later run gets its own directory'
 
