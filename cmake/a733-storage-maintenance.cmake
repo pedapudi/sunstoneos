@@ -85,7 +85,7 @@ set(storage_inputs ${storage_sources} ${storage_headers} ${storage_usb_headers}
   "${storage_root}/platform/a733-storage-update/tusb_config.h"
   "${storage_root}/platform/a733-smp-cached/boot.h" "${storage_root}/platform/a733-smp-cached/cached.h"
   "${storage_root}/platform/a733/boot.h"
-  "${storage_root}/platform/a733-smp-cached/FreeRTOSConfig.h"
+  "${storage_root}/platform/a733-smp-cached/FreeRTOSConfig.h" "${storage_root}/include/a733_smp_placement.h"
   "${storage_base}/portmacro.h" "${storage_build}/tinyusb/musb_def.h")
 file(GLOB storage_kernel_headers "${FREERTOS_DIR}/include/*.h")
 list(APPEND storage_inputs ${storage_kernel_headers})

@@ -37,7 +37,8 @@ set(a733_identity_inputs ${a733_sources}
   "${a733_root}/include/a733_cpu_continue.h" "${a733_root}/include/a733_cpu_coherence.h"
   "${a733_root}/include/a733_cached_memory.h" "${a733_root}/include/a733_cpu_power.h"
   "${a733_root}/platform/a733-smp-cached/cached.h" "${a733_root}/include/FreeRTOSConfig.h"
-  "${a733_root}/platform/a733-smp-cached/FreeRTOSConfig.h" "${a733_root}/platform/a733-smp-cached/boot.h"
+  "${a733_root}/platform/a733-smp-cached/FreeRTOSConfig.h" "${a733_root}/include/a733_smp_placement.h"
+  "${a733_root}/platform/a733-smp-cached/boot.h"
   "${a733_root}/platform/a733-smp-cached/link.ld" "${a733_root}/cmake/a733-smp-cached.cmake"
   "${a733_build}/tasks.c" "${FREERTOS_DIR}/queue.c" "${FREERTOS_DIR}/list.c"
   "${a733_build}/port.c" "${a733_build}/portASM.S" "${a733_build}/portmacro.h")
