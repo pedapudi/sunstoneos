@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import re
 import struct
 import subprocess
 
@@ -32,9 +33,18 @@ def cached_patch_points(native):
             (vector,branch(vector,native['a733_cached_el3_fault']),'el1_return_checkpoint'))
 
 
-# Return-deadline bisection profiles (docs/designs/workload-bisect.md).
-DEADLINE_RECORD=(0x4201b200,512)
-DEADLINE_TICKS=12000000
+def header_defines(path=ROOT/'boot/a733/secondary-local-probe.h'):
+    """Every plain '#define NAME VALUE' of a probe header, as integers."""
+    return {name:int(value,0) for name,value in
+            re.findall(r'^#define (\w+) (0x[0-9a-fA-F]+|\d+)\b',path.read_text(),re.M)}
+
+
+# Return-deadline bisection profiles (docs/designs/workload-bisect.md). The
+# record address, magic number and deadline come from the overlay's header.
+PROBE=header_defines()
+DEADLINE_RECORD=(PROBE['DEADLINE_RECORD'],PROBE['DEADLINE_RECORD_BYTES'])
+DEADLINE_RECORD_MAGIC=PROBE['DEADLINE_RECORD_MAGIC']
+DEADLINE_TICKS=PROBE['DEADLINE_TICKS']
 
 
 def deadline_patch_points(native,quiet):

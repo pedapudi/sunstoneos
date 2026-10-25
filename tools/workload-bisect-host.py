@@ -25,13 +25,15 @@ CASES = ('complete-return', 'transport-failure-retained', 'invalid-report-restor
          'deadline-return-retained', 'damaged-deadline-retained', 'deadline-quarantine-failure-held',
          'deadline-record-checked',
          'changed-input-refused')
-RWP_CASES = ('restore-rwp', 'restore-rwp-secondary', 'restore-rwp-late', 'restore-rwp-late-secondary')
-INSTRUCTION_CASES = {False: ('success', 'stalled-core', 'stalled-no-tick', *RWP_CASES),
-                     True: ('success', *RWP_CASES)}
-RECORD = (0x4201b200, 512)
+RESTORE_CASES = ('restore-rwp', 'restore-rwp-secondary', 'restore-rwp-late', 'restore-rwp-late-secondary',
+             'restore-pwrr', 'restore-pwrr-secondary')
+INSTRUCTION_CASES = {False: ('success', 'stalled-core', 'stalled-no-tick', *RESTORE_CASES),
+                     True: ('success', *RESTORE_CASES)}
+builder = base.base.base.cache.local.identity.builder
+RECORD = builder.DEADLINE_RECORD
 RECORD_OFFSET = RECORD[0]-0x42018000
-RECORD_MAGIC = 0x413733444c4e5231
-DEADLINE_TICKS = 12000000
+RECORD_MAGIC = builder.DEADLINE_RECORD_MAGIC
+DEADLINE_TICKS = builder.DEADLINE_TICKS
 # Owned writable interval read after a deadline return: data, BSS, task
 # stacks, kernel state, the workload results and CPU0's EL1 record page.
 SNAPSHOT = ('owned-writable-after', 0x41200000, 0x91000)
@@ -149,9 +151,9 @@ def validate_software(software, manifest_hash):
         report = path.with_suffix('.bin')
         require(digest(report) == result['report_sha256'], 'Instruction report changed.')
         raw = report.read_bytes()
-        require(not case.startswith('restore-rwp') or result.get('rwp_reads_injected') == 1,
-                'The restoration RWP case did not inject RWP.')
-        if case == 'success' or case in RWP_CASES:
+        require(not case.startswith('restore-') or result.get('injected_reads') == 1,
+                'The restoration case did not inject its status read.')
+        if case == 'success' or case in RESTORE_CASES:
             require(result.get('off') == list(range(1, 8)) and result.get('clean_complete') == list(range(8)) and
                     not result.get('fiq_taken'), 'Completed workload or disarmed deadline missing.')
             actual = [list(struct.unpack_from('<5Q', raw, 0x4280+c*128)) for c in range(8)]

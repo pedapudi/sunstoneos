@@ -11,6 +11,14 @@ require,digest=identity.require,identity.digest
 PROFILE='secondary-local-return-v1'
 HOST_SOURCES=identity.HOST_SOURCES+('tools/secondary-local-host.py',)
 MODEL_SOURCES=('checks/secondary-local-probe.py',)+identity.MODEL_SOURCES
+# Read-only status bits of each snapshot word, in struct secondary_local_state
+# order, from boot/a733/secondary-local-probe.h. Equalities ignore them.
+PROBE=identity.builder.PROBE
+STATUS=tuple(PROBE.get('GICR_'+n+'_STATUS',0) for n in
+             ('CTLR','WAKER','ISENABLER0','ISPENDR0','ISACTIVER0','IGROUPR0','IGRPMODR0','ICFGR1','IPRIORITYR0','PWRR'))
+def stable(words):
+    """A ten-word snapshot without its status bits."""
+    return tuple(w&~s for w,s in zip(words,STATUS,strict=True))
 
 
 def decode(raw,nonce,cached=False,coherent=False,interrupts=False,pre_scheduler=False):
@@ -19,13 +27,14 @@ def decode(raw,nonce,cached=False,coherent=False,interrupts=False,pre_scheduler=
     cores=[]
     for core in range(1,8):
         r=struct.unpack_from('<64Q',raw,0xa00+core*512)
-        # GICR_CTLR.UWP and RWP (bits 31 and 3) are read-only status.
-        before,after=(r[17]&~0x80000008,*r[18:27]),(r[27]&~0x80000008,*r[28:37])
+        before,after=r[17:27],r[27:37]
         require(r[0] in (3,4) and r[1:5]==(result['epoch'],core,result['startup_deadline'],0x03460000+core*0x20000),
                 'Local result is incomplete or belongs to another target.')
         require(r[5]==r[6] and not r[5]&1 and r[11:13]==(0,7) and r[14]&7==7 and
                 not (r[15]&1 or r[16]&3) and not any(r[45:]),'Local cleanup or disabled group state differs.')
-        require(before==after and before[:5]==(0,6,0,0,0) and not before[9]&1 and
+        # The baseline matches the probe's own admission: asleep, nothing
+        # enabled, pending or active; only GICR_CTLR's status bits ignored.
+        require(stable(before)==stable(after) and (before[0]&~STATUS[0],*before[1:5])==(0,6,0,0,0) and not before[9]&1 and
                 ((before[9]>>2)&1)==((before[9]>>3)&1),'Local state was not restored.')
         if r[0]==3:require(r[7:11]==(2,26,0,11),'Initialization did not reach native GIC_READY.')
         else:require(r[7]==5 and 10<=r[8]<=26 and r[9] and r[10]>=4,'Refusal lacks bounded controller evidence.')
@@ -36,7 +45,7 @@ def decode(raw,nonce,cached=False,coherent=False,interrupts=False,pre_scheduler=
                       'before':before,'after':after})
     state,before,after,banks,deadline=struct.unpack_from('<5Q',raw,0x1a00)
     saved=struct.unpack_from('<32I',raw,0x1a28);restored=struct.unpack_from('<32I',raw,0x1aa8)
-    require(state==4 and before==after and before&0x70==0x30 and not before&(1<<31) and
+    require(state==4 and not (before^after)&~PROBE['GICD_CTLR_RWP'] and before&0x70==0x30 and
             1<=banks<=32 and deadline==result['startup_deadline'] and saved==restored and
             not saved[0] and not any(saved[banks:]) and not any(raw[0x1b28:0x1c00]),
             'Distributor restoration incomplete.')

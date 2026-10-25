@@ -125,9 +125,10 @@ int identity_primary_run(void)
 #ifdef SUNSTONE_SECONDARY_COHERENCE
     // Every writer has completed NS clean+invalidate and reached observed OFF.
     // Capture the resulting physical memory before the host restores its backup.
+    // The copy starts at the return-deadline record, so it replaces any record.
     extern unsigned char a733_cpu_el1_stacks[];
     const volatile uint64_t *shared=(void *)a733_cpu_el1_stacks;
-    volatile uint64_t *copy=(void *)0x4201b200;
+    volatile uint64_t *copy=(void *)DEADLINE_RECORD;
     for(unsigned i=0;i<4096/8;++i)copy[i]=shared[i];
 #ifdef SUNSTONE_ALL_CORE_PRE_SCHEDULER
     extern unsigned char probe_scheduler_state[];

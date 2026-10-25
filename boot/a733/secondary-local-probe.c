@@ -64,18 +64,6 @@ static void snapshot(struct context *c,volatile struct secondary_local_state *s)
     s->group=load(c,g+0x80);s->modifier=load(c,g+0xd00);
     s->configuration=load(c,g+0xc04);s->priority=load(c,g+0x400);s->pwrr=load(c,r+0x24);
 }
-/* GICR_CTLR.UWP (bit 31) and RWP (bit 3) are read-only status (IHI 0069G
- * 12.11.2). The board has read RWP set after a completed wait with no write
- * by this core in between, for a reason not yet explained. Linux and TF-A
- * poll these bits and never compare GICR_CTLR, so comparisons and baselines
- * ignore them. */
-#define CTLR_STATUS UINT64_C(0x80000008)
-static int same(const volatile struct secondary_local_state *a,const volatile struct secondary_local_state *b)
-{
-    const volatile uint64_t *x=(const volatile uint64_t *)a,*y=(const volatile uint64_t *)b;
-    for(unsigned i=0;i<sizeof(*a)/8;++i)if((x[i]^y[i])&(i?UINT64_MAX:~CTLR_STATUS))return 0;
-    return 1;
-}
 static int cleanup(struct context *c)
 {
     volatile struct secondary_local_record *r=c->report;
@@ -91,8 +79,8 @@ static int cleanup(struct context *c)
     const uint32_t values[]={(uint32_t)b->group,(uint32_t)b->modifier,
                             (uint32_t)b->configuration,(uint32_t)b->priority};
     for(unsigned i=0;i<4;++i) {++r->cleanup_writes;store(c,addresses[i],values[i]);}
-    /* GICR_CTLR.RWP is read-only status and part of the final comparison.
-     * Wait for it after the restoring writes, as Linux gic_cpu_init does. */
+    /* Wait for GICR_CTLR.RWP after the restoring writes, as Linux
+     * gic_cpu_init does. The final comparison ignores it. */
     if(!wait_bits(c,base,8,0)) {r->cleanup_error=7;return 0;}
     /* The final snapshot comparison (error 6) covers these four words; the
      * separate readback (former error 4) was removed to fit the overlay. */
@@ -100,7 +88,7 @@ static int cleanup(struct context *c)
     if(!wait_bits(c,base+0x14,4,4)) {r->cleanup_error=5;return 0;}
     ++r->cleanup_writes;store(c,0x07050200+c->core*4,(uint32_t)r->control_before);
     r->control_after=load(c,0x07050200+c->core*4);snapshot(c,&r->after);
-    if(r->control_after!=r->control_before || !same(&r->before,&r->after)) {r->cleanup_error=6;return 0;}
+    if(r->control_after!=r->control_before || !secondary_local_same(&r->before,&r->after)) {r->cleanup_error=6;return 0;}
     return 1;
 }
 int secondary_local_probe(unsigned core,uint64_t epoch,uint64_t deadline,
@@ -122,8 +110,8 @@ int secondary_local_probe(unsigned core,uint64_t epoch,uint64_t deadline,
     if((power&1) || (((power>>2)^(power>>3))&1))return 0;
     snapshot(&c,&r->before);
     const volatile struct secondary_local_state *b=&r->before;
-    if((b->ctlr&~CTLR_STATUS) || b->waker!=6 || b->enable || b->pending || b->active ||
-       b->pwrr!=power || ticks()>=deadline)return 0;
+    if((b->ctlr&~(uint64_t)GICR_CTLR_STATUS) || b->waker!=6 || b->enable || b->pending || b->active ||
+       ((b->pwrr^power)&~(uint64_t)GICR_PWRR_STATUS) || ticks()>=deadline)return 0;
     r->control_before=load(&c,0x07050200+core*4);
     if((r->control_before|load(&c,0x07050220+core*4))&1)return 0;
     uint64_t sre,g0,g1;
