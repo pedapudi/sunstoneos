@@ -3,6 +3,16 @@
 
 Actual workers, FP context checks, tick/SGI handlers and stop instructions run.
 Timing, interrupt delivery and coherent cache effects remain modeled.
+
+The modeled counter advances COUNTER_STEP ticks (24 MHz) per scheduling
+quantum, in which each core executes 211 to 887 instructions, so a 1 ms tick
+period gives CPU0 about 25,000 instructions. The image reprograms its tick as
+the previous compare value plus the period, so a tick handled later than one
+period fires again at once. At 1,000 ticks per quantum (about 12,500
+instructions per period) CPU0's tick, SGI and context-switch work came close
+to the whole period: inserting four or more instructions before EL1 entry
+left CPU0's worker starved by back-to-back ticks. A core on the board
+executes roughly a million instructions per tick period.
 """
 import argparse
 import importlib.util
@@ -14,6 +24,7 @@ from unicorn import UC_MEM_WRITE
 from unicorn.arm64_const import UC_ARM64_REG_PC, UC_ARM64_REG_SP
 
 ROOT = Path(__file__).resolve().parents[1]
+COUNTER_STEP = 500
 spec = importlib.util.spec_from_file_location('first_task', ROOT/'checks/all-core-first-task-probe.py')
 first = importlib.util.module_from_spec(spec); spec.loader.exec_module(first)
 base = first.barrier.model
@@ -150,7 +161,7 @@ class Workload(first.FirstTask):
                     self.last_announced_rounds = rounds
                 elif ticks-self.last_progress_tick >= 256:
                     raise AssertionError(('No worker progress for 256 ticks', rounds, ticks))
-            self.clock += 1000
+            self.clock += COUNTER_STEP
         raise AssertionError(('Returning workload instruction budget', self.last_rounds))
 
 

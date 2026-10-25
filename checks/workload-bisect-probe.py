@@ -41,9 +41,10 @@ cleaning SMC. Cases:
   final comparison fails (cleanup error 6), core 3 parks, CPU0's survey
   times out waiting for it and CPU0 returns with reason 3.
 
-Timing, cache visibility and interrupt delivery remain modeled. After the
-stall the modeled clock advances 20,000 ticks per scheduling quantum instead
-of 1,000, so that the 0.5 s deadline is reached in a bounded run time.
+Timing, cache visibility and interrupt delivery remain modeled. The modeled
+clock advances as in the workload model (its COUNTER_STEP, with the reason
+there); after the stall it advances 20,000 ticks per scheduling quantum, so
+that the 0.5 s deadline is reached in a bounded run time.
 """
 import argparse
 import importlib.util
@@ -87,7 +88,7 @@ class Bisect(workload.Workload):
         self.armed = []
         self.disarmed_at_completion = False
         self.helper_lines = 0
-        self.clock_step = 1000
+        self.clock_step = workload.COUNTER_STEP
         self.rwp_injected = False
         self.rwp_reads = self.rwp_seen = 0
 
