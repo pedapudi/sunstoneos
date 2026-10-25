@@ -272,6 +272,18 @@ other 46 are byte-identical, among them `npu-native-model`,
   identical apart from the 32 build-ID bytes; the line table of the generated
   `build-id.c` differs too.
 
+The startup latency changes, the 852 MHz profile and the review fixes
+(`67b0f60e` to `2443050e`) change, against `75b20c7b`, the same NPU images
+and also every image that links the power-domain owner:
+`sunstone-a733-board`, `-gpu-render`, `-hdmi`, the supervised and resident OS
+images and `gpu-power-service-model`. In those the owner's code changes (the
+row wake, the settled-supply mark and the per-rail publication), but their
+behavior does not: none sets the mark or a row wake, so their verification
+keeps the 5,160 µs settle and publishes both rails with the done bit.
+`-camera`, `-mimus-native`, `-smp-cached-devices` and `-storage-maintenance`
+change in their build identity only; 45 ELF files are byte-identical. The
+record is `default-images-3/` beside `default-images-2/`.
+
 The supervised convolution image (`A733_NPU_SUPERVISED`) and the standalone
 convolution project link the same changed sources and change too; the
 comparison did not build them. The record is
