@@ -35,7 +35,6 @@ The marker must preserve the historical `0x86000` span only when absent and
 refuse malformed present values. Do not replay unchanged successful cases.
 Untracked files include `apps/gpu-finite/current-monitor.patch` and
 `checks/gpu-linked-lifecycle.py`; preserve them with all tracked edits.
-Owner: `/root/gpu_resume_1024`; reviewer: `/root/pmic_review_1024`.
 
 **Uncommitted NPU OS integration:** preserve
 `/home/sunil/git/sunstoneos-worktrees/npu-thermal-1024`, branch
@@ -64,13 +63,36 @@ hardware failure. Critical faults retain resources; no full OFF/restart is claim
 NPU-only behavior is feature-gated, and old manifests without NPU metadata mean
 OFF. Reconcile only genuinely affected GPU-profile code after integration.
 Untracked NPU sources and `checks/os-npu.py` are part of this unfinished work;
-do not remove them. Owner: `/root/npu_resume_1024`; reviewer:
-`/root/application_review_1024`.
+do not remove them.
 
 **CPU audit:** the shutdown/publication review found no justified correction.
 Existing checks cover all-core capture/drain before cache cleaning and retained
 fatal exits. No tests were repeated. Idle/wake and induced-fault recovery still
 need physical qualification.
+
+**Review follow-ups, not yet fixed:** a review of `f03060ee..b4d0eadb`
+found these in addition to the corrections already committed:
+
+- `apps/npu-finite/thermal.c` and `apps/npu-board/client.c` each implement
+  the NPU's thermal admission and stop gate (claim, stop, stopping); one
+  shared gate should serve both.
+- The NPU convolution and finite units select profiles with many `#ifdef`
+  blocks; per-profile units would replace them.
+- `irq_quiet()` in `apps/gpu-finite/finite.c` repeats four mapping checks on
+  every tick it polls; one check at admission is enough.
+- `apps/cpu-runtime-qualification/terminal.S` runs its cache-cleaning pass
+  on all eight cores; whether each core needs it, and its cost, are
+  unreviewed.
+- Reopening the GPU mimus session (`platform/a733/gpu_mimus.c`) rebuilds its
+  immutable programs instead of reusing them.
+- The OS GPU service reopens the GPU inside Begin after a thermal stop, and
+  `apps/os/gpu.c` polls CLOSE once per tick; both need an event-driven form.
+- `healthy()` in `platform/a733/gpu_backend.c` calls the external live check
+  on every call; its cost on the job path is unmeasured.
+- The GPU return check must also require CORE6 OFF. The paused
+  `gpu-provider-ready-1024` work already adds it.
+- The CPU runtime qualification reads the EL3 alias before it validates the
+  descriptors; the read should follow validation.
 
 On resume, finish and review the two isolated implementations, integrate their
 commits, regenerate the check index once, update canonical status/issues and
@@ -585,7 +607,9 @@ board's radio owner owns the AIC8800 module and loads its firmware once, and
 the Bluetooth application attaches to that session as a second client with
 its own UART1, H4/HCI and wake-pin leases. The `SUNSTONE_A733_OS_MSBC` option,
 with `SUNSTONE_BT_SBC_DIR` naming the pinned libsbc sources, adds wideband
-speech to any headset build. The image builds in nine variants:
+speech to any headset build. Only the supervised variant admits board
+workload 2, staged recorded recognition after USB0 startup without a USB disk;
+every other variant refuses it. The image builds in nine variants:
 
 | Variant | Options added to `SUNSTONE_A733_OS=ON` | Needed before a board run |
 | --- | --- | --- |
@@ -594,9 +618,9 @@ speech to any headset build. The image builds in nine variants:
 | Resident with I2S audio | `SUNSTONE_A733_OS_RESIDENT`, `SUNSTONE_A733_OS_AUDIO` | As resident, plus a connected microphone and a reviewed audio entry record with the resident DMA facts |
 | Resident with radio | `SUNSTONE_A733_OS_RESIDENT`, `SUNSTONE_A733_OS_RADIO` | As resident, plus the radio profile and firmware as a slot asset at `0x43000000` and a reachable access point; any radio failure, including an absent access point, resets the board |
 | Resident with radio and audio | `SUNSTONE_A733_OS_RESIDENT`, `SUNSTONE_A733_OS_RADIO`, `SUNSTONE_A733_OS_AUDIO` | The requirements of resident with I2S audio and of resident with radio |
-| Supervised headset | `SUNSTONE_A733_OS_HEADSET`, with `SUNSTONE_BT_SECURITY_DIR` naming the pinned Zephyr security sources | Preparation that stages the Bluetooth profile and firmware, a paired, reviewed headset, and a qualified faster SDIO mode, because firmware loading cannot finish within the 30 s bound at the admitted clock |
+| Supervised headset | `SUNSTONE_A733_OS_HEADSET`, with `SUNSTONE_BT_SECURITY_DIR` naming the pinned Zephyr security sources | Preparation that stages the Bluetooth profile and firmware, a paired, reviewed headset, and a qualified faster SDIO mode, because firmware loading cannot finish within the 30 s bound at the default one-bit 400 kHz clock; the four-bit mode is admitted but unselected and physically unqualified |
 | Resident headset | `SUNSTONE_A733_OS_RESIDENT`, `SUNSTONE_A733_OS_HEADSET` | As resident, plus the Bluetooth profile and firmware as a slot asset and a paired, reviewed headset; any headset failure resets the board |
-| Radio with headset | `SUNSTONE_A733_OS_RADIO`, `SUNSTONE_A733_OS_HEADSET` | Preparation that stages both profiles and the shared firmware in one span, a reachable access point, a paired headset, and a qualified faster SDIO mode, because firmware loading needs at least 46.7 s at the admitted clock and the bootstrap bound is 40 s |
+| Radio with headset | `SUNSTONE_A733_OS_RADIO`, `SUNSTONE_A733_OS_HEADSET` | Preparation that stages both profiles and the shared firmware in one span, a reachable access point, a paired headset, and a qualified faster SDIO mode, because firmware loading needs at least 46.7 s at the default one-bit 400 kHz clock; the four-bit mode is admitted but unselected and physically unqualified, and the bootstrap bound is 40 s |
 | Resident radio with headset | `SUNSTONE_A733_OS_RESIDENT`, `SUNSTONE_A733_OS_RADIO`, `SUNSTONE_A733_OS_HEADSET` | As resident with radio, plus the Bluetooth profile at `0x43008000` and a paired headset; a radio or headset failure resets the board |
 
 A Bluetooth failure retains only the Bluetooth client's resources at the

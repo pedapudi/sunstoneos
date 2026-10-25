@@ -17,26 +17,23 @@ before changing the module source.
 
 The focused [instruction check](../checks/radio-native-clock.py) executes the
 actual native callback and task-context predicate. FreeRTOS observations and
-MMIO storage are modeled. Against the preceding source, it reproduces refusal
-of both PERI0 encodings. The corrected source passes the gate-off, source-change
-and gate-on sequence while preserving a nonzero unowned bit.
+MMIO storage are modeled. The callback accepts both PERI0 encodings in the
+gate-off, source-change and gate-on sequence and preserves a nonzero unowned
+bit.
 
 The check covers unsupported selectors and divisors, changed unowned bits,
 parent-register writes, and refusal without the correct task, mutex or execution
 context. Every accepted module write makes one MMIO read, one write and three
 `DSB SY` barriers. The identification-clock case executes 106 instructions,
-including the fixture wrapper, compared with 102 before the correction. The
-added comparison permits the second source encoding; it runs only during clock
-configuration. The faster-clock case executes 104 instructions.
+including the fixture wrapper, and the faster-clock case executes 104. The
+comparison that permits the second source encoding runs only during clock
+configuration.
 
-Both sets of 24 cases passed. Inputs, compiler dependencies, ELF files and
-results are preserved under
-`~/.cache/sunstoneos/evidence/radio-resume-20261024/`, in `baseline3/` and
-`corrected/`. The corrected ELF SHA-256 is
-`9447e25eb021570cd697985c747886cfdd07ad035241ac10b8c022373e6da96a`.
-The earlier directories preserve a linker-option refusal and a missing emulator
-mapping for the ELF header; neither executed a device operation. These results
-establish native admission behavior. Electrical operation and startup timing
+All 24 cases pass. Inputs, compiler dependencies, the ELF file and results are
+preserved under `~/.cache/sunstoneos/evidence/radio-resume-20261024/corrected/`;
+the checked ELF SHA-256 is
+`9447e25eb021570cd697985c747886cfdd07ad035241ac10b8c022373e6da96a`. These
+results establish native admission behavior. Electrical operation and startup timing
 remain unqualified.
 
 ## The existing returning image needs radio-specific authority
