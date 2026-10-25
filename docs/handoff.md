@@ -72,6 +72,11 @@ further board run of each. Board runs test only predictions from those diffs.
   boot ROM routes shared SRAM away from the NPU (SYSCTRL `0x03000008` bit 1)
   and U-Boot routes it back; FEL-loaded images never do. This best explains
   the wrong NPU outputs of the earlier two-job run.
+  The read-only state read (set `board-bundles-20261025-6`, bundle 9, 33
+  words, no NPU-window access) ran on both ports on 2026-10-25 (`bb9-read`
+  in `board-session-20261025-4/port-3-1` and `board-session-20261025-3/port-3-3`).
+  All 21 predicted words matched on both boards, including SYSCTRL
+  `0x03000008` = 2: bit 1 set, so the shared SRAM is routed to the CPU.
 - CPU (`work/backsolve-cpu-1025`, `docs/reference-backsolve-cpu.md`): the
   leading divergences are checks that the reference never performs, such as the
   GICR_CTLR status compare (now masked on `bringup`), GICD_CTLR.RWP treated
