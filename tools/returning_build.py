@@ -300,6 +300,12 @@ class ReturningPlatform:
         if names != CENTRAL_PLATFORM:
             raise SystemExit(f'The a733-power-probe platform objects changed: {names}')
 
+    def replace_platform_object(self, unit, obj):
+        """Link obj in place of the central build's object of one CENTRAL_PLATFORM unit."""
+        if not self.build:
+            raise SystemExit('Only a central platform build can replace a platform object')
+        self.platform_objects[CENTRAL_PLATFORM.index(unit)] = Path(obj)
+
     def compile(self, sources, flags=(), linked=True, prefix='new'):
         """Compile new units with the platform flags; return their object paths."""
         objects = []

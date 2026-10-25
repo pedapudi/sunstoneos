@@ -1994,6 +1994,7 @@
    "sources"
   ],
   "docs": [
+   "apps/usb-returning/README.md",
    "docs/designs/board-bundles-next.md",
    "docs/designs/pmic-access.md"
   ],

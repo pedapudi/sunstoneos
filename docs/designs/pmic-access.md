@@ -421,20 +421,20 @@ placement for snapshots. The native USB image of rank 9 needs a rerun on
 this adapter before it relies on it, and a DCDC3 selector write, under its
 own gate, covers the write of the selector byte.
 
-Rank 9 cannot yet be rebuilt for that rerun.
-`apps/usb-returning/build.py --platform-build` links the central
-`monitor.c` object, compiled without the monitor's counter option. Since
-`rank-9-usb-v4/`, `monitor.c` gained the interrupt-cleanup readbacks and the
-replaced status, so that object's instructions differ from every monitor
-object that ran on a board. The board-qualified monitor of this tree is the
-base image's, compiled with the counter option, which ran as
-`s7-bb2-run` and inside every bundle 6 run since.
-`checks/board-bundles-apps.py --usb` therefore refuses the rebuilt image
-("The native USB image's monitor.c changes rank-9-usb-v4 monitor
-instructions"). Two routes remain: link the base image's monitor object
-into the native USB image, which needs the USB runner to accept the
-counter option's record, or qualify the plain monitor object in its own
-run.
+The native USB image of rank 9 for that rerun links the base image's
+`monitor.c` object: `apps/usb-returning/build.py --base-monitor` replaces
+the central monitor object, compiled without the monitor's counter option,
+whose instructions no board run has executed since the interrupt-cleanup
+readbacks and the replaced status. The base's monitor, built with the
+counter option, ran as `s7-bb2-run` and inside every bundle 6 image since.
+The builder requires that object's SHA-256 to match the base bundle's
+equivalence record and the base run to have passed with that bundle's
+image. The counter option only sets the EL1 event-counter access registers
+before EL1 entry and adds no field to the monitor's result record, so the
+USB runner needs no change. `checks/board-bundles-apps.py --usb` gives each
+object of the rebuilt image the origin of the passed or set image it
+equals, apart from debug sections, and only the two USB application units
+are new.
 
 ## Board result
 
