@@ -358,5 +358,9 @@ it ran:
 [The multicore performance runbook](../board-runbooks/multicore-performance-session.md)
 lists the measurements: SGI, tick and floating-point progress on all eight
 cores with the lock bookkeeping and IRQ exit changes, PMU cycle counts for the
-removed barriers, the skew between A55 and A76 counter reads, a forced late
-tick on core 0 and where unpinned tasks run.
+removed barriers, the skew between A55 and A76 counter reads and a forced late
+tick on core 0. The compile definition `SUNSTONE_A733_PERF_SESSION` adds those
+measurements to the cached images (`platform/a733-smp-cached/perf_session.c`).
+The returning profile keeps every core busy, so the board session cannot
+measure wake placement, which acts only between idle cores; its evidence is
+the QEMU and model figures above.
