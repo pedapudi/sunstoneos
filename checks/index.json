@@ -817,6 +817,7 @@
    "docs/designs/cpu-power-states-measurements.md",
    "docs/designs/cpu-power-states.md",
    "docs/designs/cpu-table-walks.md",
+   "docs/designs/multicore-performance-1025.md",
    "docs/designs/smp-heterogeneous-measurements.md",
    "docs/designs/smp-heterogeneous.md",
    "docs/smp.md"
@@ -1647,6 +1648,7 @@
   "cache_areas": [],
   "docs": [
    "docs/build.md",
+   "docs/designs/multicore-performance-1025.md",
    "docs/designs/pmic-access-measurements.md"
   ],
   "library": false,
@@ -5681,6 +5683,7 @@
  "integration-gate.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/multicore-performance-1025.md",
    "docs/handoff.md",
    "docs/validation.md"
   ],
@@ -7847,6 +7850,7 @@
  "provider-clock-reference.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/multicore-performance-1025.md",
    "docs/designs/pmic-access-measurements.md",
    "docs/handoff.md",
    "docs/provider-clock-reference.md"
@@ -9147,6 +9151,7 @@
   ],
   "docs": [
    "docs/designs/cpu-a76-dvfs-measurements.md",
+   "docs/designs/multicore-performance-1025.md",
    "docs/designs/smp-heterogeneous-measurements.md",
    "docs/designs/smp-heterogeneous.md",
    "docs/smp.md"
