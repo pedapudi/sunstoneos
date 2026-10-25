@@ -1,0 +1,56 @@
+{
+ "binary": "fixs-brom / ns-brom",
+ "sha256_fixs": "3a2a7d289951f61095afdabe7813b067295223ce588c422d64200fc7e4431eb1",
+ "sha256_ns": "95be69c916846a8259578565f3193a6b9ab0625294d5374f3dc6c2f667fc6169",
+ "source": "smaeul/sunxi-blobs 42aabf4f, sun60iw2p1/{fixs-brom,ns-brom}/blob.hex; see docs/vendor-firmware/README.md",
+ "note": "Facts labelled observed are read from the blob at the cited offset; the boot-media order and crypto list are from A733 User Manual V1.00 section 3.1 and corroborate the dispatcher.",
+
+ "identity": {
+  "soc_id": "0x00001903",
+  "fel_protocol_version": "0x0001",
+  "fel_scratchpad": "0x000ee800",
+  "version_string": "AWUSBFEX",
+  "observed": "ns-brom version responder at 0x1a2c8; confirmed on the board (evidence/ddr-20261015-223537 FEL version line)"
+ },
+
+ "fel_command_table": {
+  "source": "ns-brom dispatcher at 0x19f40; whitelist table at 0x21370",
+  "note": "16-byte request header; first halfword selects the command",
+  "commands": [
+   {"id": "0x0001", "name": "FEL_VERSION", "action": "return the 32-byte AWUSBFEX identity"},
+   {"id": "0x0002", "name": "FEL_READ (control)", "action": "report secure/scratch status"},
+   {"id": "0x0003", "name": "FEL_WRITE (control)", "action": "accept scratch/secure setting"},
+   {"id": "0x0004", "name": "FEL_EXEC (legacy)", "action": "execute at the supplied address"},
+   {"id": "0x0100", "name": "FEL_UPLOAD", "action": "read device memory to host, window-checked"},
+   {"id": "0x0101", "name": "FEL_DOWNLOAD", "action": "write host data to device memory, window-checked"},
+   {"id": "0x0102", "name": "FEL_RUN", "action": "branch to the uploaded address"}
+  ],
+  "address_whitelist": [
+   {"start": "0x00000000", "end": "0x00022000", "flags": 3, "note": "FIXS+HS+NS BROM and SRAM A1 window"},
+   {"start": "0x000f3500", "end": "0x000f3ffc", "flags": 2, "note": "upper shared-SRAM scratch"},
+   {"start": "0x000f0f00", "end": "0x000f3400", "flags": 2, "note": "FEL stack/scratch region"},
+   {"start": "0x00047000", "end": "0x00048c00", "flags": 2, "note": "boot0 load window"}
+  ]
+ },
+
+ "boot_media_order": {
+  "source": "A733 User Manual V1.00 section 3.1.3; dispatcher at 0xa00",
+  "mode_select": "SYSCTRL BOOT_MODE bit 0: 0 = GPADC select, 1 = eFuse select",
+  "try_order": ["SMHC0", "SMHC2 (eMMC)", "RAW NAND", "SPI NOR", "SPI NAND", "UFS"],
+  "gpadc_fallback_order": ["EMMC_USR", "EMMC_BOOT", "SLC_NAND", "MLC_NAND", "SPI_NOR", "SPI_NAND", "UFS"]
+ },
+
+ "secure_boot": {
+  "source": "A733 User Manual V1.00 section 3.1; SID read at 0x2a0c (0x030060a0)",
+  "signature_algorithms": ["ECDSA-256/384/521", "RSA-2048/3072/4096"],
+  "hash_algorithms": ["SHA-256", "SHA-512"],
+  "note": "The published dumps contain the normal (non-monitor) BROM; the BROM Monitor (secure half) is not in these blobs."
+ },
+
+ "reset_path_registers": {
+  "cpu0_redirect_magic": {"addr": "0x070501c0", "value": "0xfa50392f", "entry": "0x070501c4"},
+  "alternate_dispatch": {"addr": "0x070501d4", "match_low16": "0xefe8", "entry": "0x070501d8"},
+  "progress_record": {"addr": "0x07090304", "note": "software progress halfword written at 0xa8/0xc4 and by helper 0xd14"},
+  "boot_input": {"addr": "0x03000024", "bit": 8, "note": "FEL pad; four low samples select FEL"}
+ }
+}
