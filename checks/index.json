@@ -5679,7 +5679,7 @@
   "library": false,
   "pure_host": true,
   "required_arguments": [],
-  "summary": "Check integration selection, failure handling, evidence preservation and",
+  "summary": "Check the integration gate with fake tools and a scratch Git checkout.",
   "usb": false
  },
  "isp0-boot.py": {
