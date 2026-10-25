@@ -20,14 +20,18 @@ surveys then passed. The set's runbooks still call the old survey and need
 regenerating.
 - **Port 3-1, GPU provider readiness (`3adfa4ad`): passed.** Supplies
   verified, provider parked, no GPU power request, warm return.
-- **Port 3-1, GPU power only (`81d4a728`): failed.** TOP5 came on, and the
-  CORE6 policy write of 8 was seen, but CORE6 status stayed 0 and the image
-  reported `FAIL GPU ON poll`. The log shows `phase=5 error=5 step=8
-  last=0x101`, `policy=0x8 status=0x0 pwcr=0x101`, and PMIC `state_word=0xf`.
-  The monitor returned status 1 to the ROM about 2 s after launch. The host
-  runner then waited until the 925 s queue timeout before exiting, which is a
-  host defect. The claim is held and the lifetime has ended: the identity probe
-  does not run. The next port 3-1 run needs another power removal.
+- **Port 3-1, GPU power only (`81d4a728`): failed before any CORE6 write.**
+  TOP5 came on. Step 8, the CORE6 admission step, read policy 8, status 0 and
+  PWCR 0x101 and refused that state (`phase=5 error=5 step=8 last=0x101`), so
+  the image reported `FAIL GPU ON poll`. That state is the PPU's power-up state:
+  an ON transition started at reset and waits on the GPU's Q-Channel handshake,
+  which a clock-gated GPU in reset cannot accept. The vendor sequence writes
+  PWCR 0 and then policy 8 unconditionally. TOP5 was left on, because a warm CPU
+  reset does not reset the power controller. The monitor returned status 1 to
+  the ROM about 2 s after launch. The host runner then held ownership until the
+  925 s queue timeout. The claim is held and the lifetime has ended. A corrected
+  driver and runner are under review on `work/gpu-core6-1024`, and the next
+  port 3-1 run needs another power removal.
 - **Port 3-3, base kernel check (`88bce618`): passed** all 100 rounds.
 - **Port 3-3, bundle 6 (`2291f78e`): passed.**
   - **Step bound:** median 1,243 permille against the 1,268 bound; the first
