@@ -648,6 +648,12 @@ def writer_sample(elf):
     for name, (registers, mask, admitted) in cases.items():
         m = machine.Machine(elf)
         m.map(0x02000000, 0x4000)
+        # The blocks of the EL3 security setup (platform/a733/el3_security.h),
+        # which monitor_init writes after the sample: SPC, S_SPC, S_TZMA,
+        # PRCM and both DMA controllers, which stay gated and in reset here.
+        for page in (0x02054000, 0x07002000, 0x07003000, 0x07010000, 0x04601000, 0x04024000):
+            if not any(a <= page < a + n for a, n in m.mapped):
+                m.map(page, 0x1000)
         m.write(0x03400000, 0x30, 4)  # GICD_CTLR with affinity routing in both security states
         for offset, value in registers.items():
             m.write(ccu + offset, value, 4)
@@ -659,6 +665,10 @@ def writer_sample(elf):
         stage = m.read(0x42000000 + 8)
         if admitted:
             assert m.pc() == machine.SENTINEL and stage == 2, (name, hex(m.pc()), stage)
+            # The security setup ran: the CCU switch and port 14 were written,
+            # and the gated DMA controllers were left untouched.
+            assert m.read(0x02003f00, 4) == 7 and m.read(0x020540e0, 4) == 0xfffffbff, name
+            assert m.read(0x04601020, 4) == 0 and m.read(0x04024020, 4) == 0, name
         else:
             assert m.pc() == finish and m.uc.reg_read(UC_ARM64_REG_X0) == 4 and stage == 1, (name, hex(m.pc()))
         out[name] = {'sample': hex(word), 'el1_entry': admitted}
