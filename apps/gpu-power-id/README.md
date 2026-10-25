@@ -211,6 +211,32 @@ gives the vendor trace, the write exception and the meaning of each
 result. `check.py --probe-read` runs thirteen cases, and bundle preparation
 requires the image's table to hold exactly the fifteen rows.
 
+## The firmware-start variant starts the GPU firmware as the vendor host does
+
+`fw-start.c` builds the firmware-start variant the same way, as step 2 of
+[the firmware-start design](../../docs/designs/gpu-firmware-start.md). The
+build adds the firmware preparation, queue, start and shared-memory units
+and the pinned open firmware (`rogue_36.56.104.183_v1.fw`, SHA-256
+`1db1c399…`) to the image, and links the 2 MiB Normal-NC block at
+`0x41c00000`. Before any power change the image places code, data and the
+MIPS page table in write-back image RAM and the nineteen shared resources
+in that block, with the 1,008 MHz core clock in system init. After the
+default ON, which must reach CORE6 status 8 within 200 ms, it reads the
+identity, `drm_ctrl` and the SMC0 word, writes one timer-correlation record
+from an `RGX_CR_TIMER` read, writes 2 to SMC0 `0x0a0000b0` and 0 to
+`drm_ctrl` without writing them back, and runs the 29-step start of
+`pvr_gpu_start.c` with every 64-bit register as two 32-bit accesses. It
+waits at most 1 s for the 32-bit started word, reports the shared state and
+the reset and wrapper registers, and leaves the GPU running: the lifetime
+ends with a power removal. The eight identity, entry and secure accesses
+are the rows of `fws_rows`; the progress record at result offset 128
+(magic `GPUFWS01`) names every access before it is made. The completion
+text is `COMPLETE GPU firmware start: started word 1 after the timer record
+and the secure configuration, GPU left running for the power removal`.
+`check.py --fw-start` runs eleven cases on the linked image, and bundle
+preparation requires the table, the embedded firmware's hash and that no
+case writes anything but the secure configuration and the start registers.
+
 A wrapper-write variant was refused before any board run and removed
 ([gpu-power.md](../../docs/gpu-power.md#the-wrapper-write-probe-was-refused)).
 
@@ -225,13 +251,13 @@ Run with the existing host Python environment containing pyelftools and Unicorn:
 ```
 
 Add `--power-only` to both commands for the power-only variant,
-`--wrapper-read` for the wrapper-read variant or `--probe-read` for the
-probe-read variant. The vendor-clock-order and vendor-state variants, whose
+`--wrapper-read` for the wrapper-read variant, `--probe-read` for the
+probe-read variant or `--fw-start` for the firmware-start variant. The vendor-clock-order and vendor-state variants, whose
 controller, monitor and supply copies the default path replaced, were
 removed after the vendor-state image read the identity.
 
 `prepare.py` turns a build and its check result into a board bundle for
-`tools/prepare-board-bundles.py` (rows 11 to 13, 16 and 17 of
+`tools/prepare-board-bundles.py` (rows 11 to 13, 16, 17 and 19 of
 [board-bundles-next.md](../../docs/designs/board-bundles-next.md)). For both
 power variants it reads `on_steps` and `off_steps` from the image and
 requires the domain-5 (TOP5) ON request before the first CORE6 access, the

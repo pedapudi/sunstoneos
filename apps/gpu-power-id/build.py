@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Build the GPU identity consumer, or with --power-only the power-only
 variant that never accesses the GPU register window, with --wrapper-read the
-wrapper-read variant or with --probe-read the probe-read variant, on the
-qualified returning PMIC platform. Every variant runs the default GPU power
+wrapper-read variant, with --probe-read the probe-read variant or with
+--fw-start the firmware-start variant, on the qualified returning PMIC
+platform. Every variant runs the default GPU power
 path (docs/designs/gpu-vendor-default.md), so the build compiles the current
 monitor, PMIC provider and supply consumer with the GPU units."""
 import argparse
@@ -119,6 +120,14 @@ CHANGED_LAYOUTS = ('a733_gpu_power', 'a733_gpu_platform', 'a733_power_domains', 
                    'a733_counter_clock', 'bb_power')
 PROBE_EXPECT = ('COMPLETE GPU probe read: identity 36.56.104.183 before and after the secure configuration, '
                 'restored, OFF and provider parked')
+FWS_EXPECT = ('COMPLETE GPU firmware start: started word 1 after the timer record and the secure configuration, '
+              'GPU left running for the power removal')
+# The firmware-start variant adds the firmware preparation and start units,
+# which no checkpoint object defines, and the pinned open firmware.
+FWS_UNITS = ['drivers/gpu/pvr_firmware.c', 'drivers/gpu/pvr_mips.c', 'drivers/gpu/pvr_fw_state.c',
+             'drivers/gpu/pvr_ccb.c', 'drivers/gpu/pvr_gpu_start.c', 'platform/a733/gpu_memory.c']
+FIRMWARE = 'sources/gpu/imagination-firmware/powervr/rogue_36.56.104.183_v1.fw'
+FIRMWARE_SHA256 = '1db1c399c17401d1f79d46c880db81c724d748c784d4639433b076aba2f9c0d2'
 
 
 def main():
@@ -130,8 +139,10 @@ def main():
                         help='one ON, then four reads of GPU wrapper words; no other GPU register access')
     parser.add_argument('--probe-read', action='store_true',
                         help="one ON, the vendor's probe-time identity read, its secure configuration, the read again")
+    parser.add_argument('--fw-start', action='store_true',
+                        help='one ON, the timer record and secure configuration, then the firmware start')
     args = parser.parse_args()
-    if args.power_only + args.wrapper_read + args.probe_read > 1:
+    if args.power_only + args.wrapper_read + args.probe_read + args.fw_start > 1:
         parser.error('choose one variant')
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
@@ -177,6 +188,8 @@ def main():
         # The probe-read variant compiles probe-read.c the same way.
         if source == 'apps/gpu-power-id/main.c' and args.probe_read:
             source = 'apps/gpu-power-id/probe-read.c'
+        if source == 'apps/gpu-power-id/main.c' and args.fw_start:
+            source = 'apps/gpu-power-id/fw-start.c'
         unit_flags = monitor_flags if source == 'platform/a733/monitor.c' else flags
         variant = ['-DGPU_POWER_ONLY=1'] if args.power_only and source == 'apps/gpu-power-id/main.c' else []
         command = unit_flags + variant + ['-MD', '-MF', str(obj) + '.d', '-c', str(ROOT / source), '-o', str(obj)]
@@ -202,6 +215,33 @@ def main():
             value = '-Wl,-Map,' + str(out / 'image.map')
         link.append(value.replace(oldroot, str(ROOT)))
     assert (len(reused), len(new)) == (23, 14), (len(reused), len(new))
+    added = []
+    if args.fw_start:
+        firmware = harness.CACHE / FIRMWARE
+        assert sha(firmware) == FIRMWARE_SHA256
+        defined = set()
+        for item in old_objects:
+            with Path(item['object']).open('rb') as stream:
+                defined |= {s.name for s in ELFFile(stream).get_section_by_name('.symtab').iter_symbols()
+                            if s['st_shndx'] != 'SHN_UNDEF' and s['st_info']['bind'] == 'STB_GLOBAL'}
+        assembly = out / 'firmware.S'
+        assembly.write_text('.section .rodata.gpu_firmware,"a"\n.balign 16\n.global gpu_firmware\ngpu_firmware:\n'
+                            f'.incbin "{firmware}"\n.global gpu_firmware_end\ngpu_firmware_end:\n')
+        for i, source in enumerate(FWS_UNITS + [str(assembly)]):
+            obj = out / f'added-{i}.obj'
+            path = Path(source) if source.startswith('/') else ROOT / source
+            command = flags + ['-MD', '-MF', str(obj) + '.d', '-c', str(path), '-o', str(obj)]
+            subprocess.run(command, check=True, cwd=ROOT)
+            commands.append(command)
+            with obj.open('rb') as stream:
+                symbols = {s.name for s in ELFFile(stream).get_section_by_name('.symtab').iter_symbols()
+                           if s['st_shndx'] != 'SHN_UNDEF' and s['st_info']['bind'] == 'STB_GLOBAL'}
+            # Each added unit is new to the image: no checkpoint object defines its symbols.
+            assert symbols and not symbols & defined, (source, symbols & defined)
+            added.append({'source': 'firmware.S' if source.startswith('/') else source,
+                          'source_sha256': sha(path), 'object': str(obj), 'sha256': sha(obj)})
+        output_at = link.index('-o')
+        link[output_at:output_at] = [a['object'] for a in added] + ['-Wl,--defsym=__uncached_pool_size=2097152']
     # Audit every input object, not a guessed list of layout consumers. A
     # complete DWARF declaration of a changed structure identifies the eight
     # objects that use one; all must be replaced in this candidate.
@@ -244,16 +284,18 @@ def main():
               'base_build': {'path': str(baseline / 'build.json'), 'sha256': sha(baseline / 'build.json')},
               'monitor_evidence': base['monitor_evidence'],
               'monitor_evidence_sha256': base['monitor_evidence_sha256'],
-              'compile': commands, 'link': link, 'new_objects': new, 'reused_objects': reused,
+              'compile': commands, 'link': link, 'new_objects': new, 'added_objects': added,
+              'firmware': {'path': str(harness.CACHE / FIRMWARE), 'sha256': FIRMWARE_SHA256} if args.fw_start else None,
+              'reused_objects': reused,
               'layout_users_rebuilt': layout_users,
               'shared_layouts_equal': [n for n in names if n not in CHANGED_LAYOUTS],
               'layouts_rebuilt': list(CHANGED_LAYOUTS), 'types_consistent_across_units': consistent, 'image_sha256': sha(out / 'image.elf'),
               'binary_sha256': sha(out / 'probe.bin'), 'binary_bytes': (out / 'probe.bin').stat().st_size,
               'variant': ('power-only' if args.power_only else 'wrapper-read' if args.wrapper_read
-                          else 'probe-read' if args.probe_read else 'identity'),
+                          else 'probe-read' if args.probe_read else 'fw-start' if args.fw_start else 'identity'),
               'expect': ('COMPLETE GPU power only: CORE status 8, OFF and provider parked' if args.power_only
                          else 'COMPLETE GPU wrapper read: CORE status 8, four wrapper words, OFF and provider parked'
-                         if args.wrapper_read else PROBE_EXPECT if args.probe_read
+                         if args.wrapper_read else PROBE_EXPECT if args.probe_read else FWS_EXPECT if args.fw_start
                          else 'COMPLETE GPU power identity: 36.56.104.183 in two ON/OFF cycles, provider parked'),
               'local_authority_required': ('Exclusive GPU CCU, PLL_GPU0 (CCU 0x0e0) and PCK CORE6 policy/PWCR; TOP5 '
                                            'remains shared row; DCDC4 selector 0x15 to 0x2e (960 mV); at EL3, the '

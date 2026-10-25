@@ -217,6 +217,9 @@ def returning_row(name, position, component, overlay, expect, controlled, expect
 
 GPU_SOURCES = ['apps/gpu-power-id/prepare.py', 'apps/gpu-power-id/build.py', 'apps/gpu-power-id/check.py',
                'apps/gpu-power-id/main.c', 'apps/gpu-power-id/wrapper.c', 'apps/gpu-power-id/probe-read.c',
+               'apps/gpu-power-id/fw-start.c', 'drivers/gpu/pvr_firmware.c', 'drivers/gpu/pvr_mips.c',
+               'drivers/gpu/pvr_fw_state.c', 'drivers/gpu/pvr_ccb.c', 'drivers/gpu/pvr_gpu_start.c',
+               'platform/a733/gpu_memory.c', 'include/pvr_gpu_start.h', 'include/a733_gpu_memory.h',
                'drivers/power/a733_pmic.c', 'drivers/power/a733_pmic_consumer.c',
                'platform/a733/monitor.c', 'include/a733_el3_security.h', 'include/a733_gpu_opp.h',
                'apps/gpu-provider-ready/main.c', 'apps/gpu-provider-ready/build.py',
@@ -658,6 +661,57 @@ ROWS = [
               word(0x07003008, 's_tzma', note='S_TZMA +0x8: 0 after write 11'),
               word(0x020540e0, 'spc', note='SPC port 14 status word: 0xfffffbff after write 17')],
              'All six words are read and the 128 scratch bytes are restored and equal.'),
+    gpu_row('gpu-fw-start', 19, 'GPU firmware start after the vendor secure configuration and timer record',
+            'fw-start', 'COMPLETE GPU firmware start: started word 1 after the timer record and the secure '
+            'configuration, GPU left running for the power removal',
+            'Status 0 with GPU FWS start result=0 phase=3 error=0, GPU FWS shared started=0x1 and COMPLETE GPU '
+            'firmware start: started word 1 after the timer record and the secure configuration, GPU left running '
+            'for the power removal; or status 1 with GPU FWS start result=3 and FAIL GPU firmware start: started '
+            'word not 1, GPU left running after the shared-state and register lines; or no return. Either return '
+            'leaves the GPU powered with its firmware processor released; the lifetime ends there and a power '
+            'removal follows. Record every line of kernel.log and the progress record at result.bin offset 128, '
+            'which names the access in flight.',
+            'apps/gpu-power-id, firmware-start variant (apps/gpu-power-id/fw-start.c), step 2 of '
+            'docs/designs/gpu-firmware-start.md. Before any power change it prepares the pinned open firmware '
+            '(sha256 1db1c399...): code, data and the MIPS page table in write-back image RAM, the nineteen shared '
+            'resources in the image\'s Normal-NC block at 0x41c00000, system and OS init with the 1,008 MHz core '
+            'clock, the queues and the 29-step start plan. Then the power-only ON of the default GPU power path, '
+            'which must reach CORE6 status 8 within 200 ms, snapshot 1, mapping checks, and these 32-bit accesses '
+            'in order: the identity 0x01800024 and 0x01800020, which must be 36.56.104.183; drm_ctrl 0x01880014 '
+            'and SMC0 0x0a0000b0; RGX_CR_TIMER 0x01800164 and 0x01800160 for one timer-correlation record; 2 to '
+            'SMC0 0x0a0000b0 and 0 to drm_ctrl, each read back as an observation and never written back; then the '
+            'start of drivers/gpu/pvr_gpu_start.c without SOFT_RESET2, every 64-bit register as two 32-bit '
+            'accesses (low word written first, high word read first), and a wait of at most 1 s for the 32-bit '
+            'started word; then reads of SOFT_RESET and the MIPS wrapper registers. The start begins only while '
+            'its 1 s bound and a 100 ms report fit before the 1.5 s session deadline, which keeps 500 ms before '
+            'the monitor\'s 2 s recovery. Before each access the image writes the access number into the progress '
+            'record and prints a GPU FWS reading or writing line. It runs after the cold DDR start and the '
+            'provider-readiness row, in a lifetime of its own, and is the last step of that lifetime.',
+            after=['gpu-provider-ready'],
+            failures=['`FAIL GPU firmware start: started word not 1, GPU left running`, after the `GPU FWS start`, '
+                      '`shared`, `state` and `register` lines: error 2 is the 1 s deadline, 4 a started word already '
+                      'set before the start, 5 a word other than 0 or 1; the firmware processor stays released',
+                      '`FAIL GPU firmware start: identity not 36.56.104.183, nothing written, GPU left powered`',
+                      '`FAIL GPU firmware start preparation, nothing powered`, `GPU firmware start mapping` or '
+                      '`GPU firmware start time budget`: no GPU, wrapper or SMC0 word was accessed',
+                      'status 7 with `FAIL GPU firmware start refused: deadline too near, nothing written`'],
+            admission='GPU firmware exception: this row alone starts the GPU firmware processor. After the default '
+                      'ON it makes the vendor sunxi_secure_config writes (sunxi_platform.c:964-979), 2 to SMC0 '
+                      '0x0a0000b0 and 0 to drm_ctrl 0x01880014, and does not write them back, as the vendor never '
+                      'does; step 1 on port 3-1 (board-session-20261025-14) read SMC0 +0xb0 as 0 right after '
+                      'writing 2 and drm_ctrl as 0 after writing 0. It then writes the GPU registers of the vendor '
+                      'RGXStart for this core (rgxstartstop.c): SYS_BUS_SECURE 0xa100, SOFT_RESET 0x100, '
+                      'SLC_CTRL_MISC 0x3800, the eleven MIPS wrapper registers and AXI_ACE_LITE 0x38c0, never '
+                      'SOFT_RESET2, and releases the firmware processor, which then runs the pinned open firmware '
+                      'from the image\'s own memory: 139,264 bytes of write-back RAM at the image\'s fw_memory and the '
+                      'first 184,320 bytes of the Normal-NC block at 0x41c00000, inside the granted RAM interval. The '
+                      'firmware\'s MIPS page table maps only those pages. The image does not stop the firmware or '
+                      'power the GPU off, because the vendor does both only after the firmware\'s own power-off '
+                      'handshake, which this image does not carry: the GPU stays on at 960 mV and 1008 MHz with the '
+                      'firmware running until the power removal that ends the lifetime. Risk: a GPU register access '
+                      'that never completes stops the CPU, the monitor does not return and only a power removal '
+                      'recovers the board; the firmware may write its own pages after the image returns, which no '
+                      'later step of the lifetime reads.'),
     # `admission` maps fields of the value prepare() returns to the values that
     # identify this row's build. None refuses the row: no owning package has
     # named those values yet.
