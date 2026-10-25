@@ -689,9 +689,14 @@ def sha256(path):
 
 
 def check_survey(build, repository, software=SURVEY_SOFTWARE):
-    """The survey build passes the checks that the repository's survey runner makes before any device access:
-    its manifest names that runner and the survey source, and the software record covers its binary."""
-    manifest = json.loads((Path(build) / 'manifest.json').read_text())
+    """The survey build passes every input check that the repository's survey runner makes before any device
+    access (tools/run-launch-survey.py, run): the manifest's schema and physical_access, the runner and survey
+    source it names, the SHA-256 of every frozen file it lists, and a software record of the instruction and
+    return evidence that covers its binary."""
+    build = Path(build)
+    manifest = json.loads((build / 'manifest.json').read_text())
+    require(manifest.get('schema') == 'a733-launch-survey-v1' and manifest.get('physical_access') is False,
+            f'The survey build {build} is not a launch-survey-v1 build without physical access.')
     runner = sha256(Path(repository) / SURVEY_RUNNER)
     require(manifest.get('host_sha256') == runner,
             f'The survey build {build} names the runner {manifest.get("host_sha256")}, but '
@@ -700,10 +705,16 @@ def check_survey(build, repository, software=SURVEY_SOFTWARE):
     require(manifest.get('source_sha256') == source,
             f'The survey build {build} names the source {manifest.get("source_sha256")}, but '
             f'{Path(repository) / SURVEY_SOURCE} is {source}; the runner would refuse it.')
-    binary = manifest.get('files', {}).get('launch-survey.bin')
-    require(binary == sha256(Path(build) / 'launch-survey.bin')
-            and json.loads(Path(software).read_text()).get('binary_sha256') == binary,
-            f'{software} does not cover the binary of the survey build {build}.')
+    files = manifest.get('files')
+    require(isinstance(files, dict) and 'launch-survey.bin' in files and
+            all(Path(name).name == name and (build / name).is_file() and sha256(build / name) == digest
+                for name, digest in files.items()),
+            f'A frozen file of the survey build {build} differs from its manifest; the runner would refuse it.')
+    record = json.loads(Path(software).read_text())
+    require(record.get('schema') == 'a733-launch-survey-software-v1'
+            and record.get('binary_sha256') == files['launch-survey.bin']
+            and record.get('return_preserved') is True and record.get('physical_access') is False,
+            f'{software} is not instruction and return evidence for the binary of the survey build {build}.')
 
 
 def reader():

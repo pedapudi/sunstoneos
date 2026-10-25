@@ -62,8 +62,11 @@ rows. It checks that:
   SHA-256 and its run command, and each returning row's runbook runs the
   survey of tools/prepare-board-bundles.py's SURVEY_BUILD with the
   repository's survey runner;
-- that build's manifest names the current tools/run-launch-survey.py
-  (host_sha256) and survey source, and the launch-survey-20261017 build,
+- that build passes the survey runner's own input checks (manifest schema
+  and physical_access, the current tools/run-launch-survey.py as
+  host_sha256, the survey source, every frozen file's SHA-256, and a
+  software record with its schema, return_preserved and physical_access),
+  a copy that changes any one of them is refused, and the launch-survey-20261017 build,
   which names the runner from before 575565f8, is refused by itself and,
   as a run's survey build, before any run directory exists;
 - the hand-written runbooks under docs/board-runbooks/ call no
@@ -455,11 +458,39 @@ def writable_tree(path):
                 os.chmod(p, os.lstat(p).st_mode | 0o700)
 
 
-def check_survey():
+def check_survey(work):
     """The runbooks' survey build names the current survey runner and source; the launch-survey-20261017
     build, which names the runner from before 575565f8, is refused."""
     tool.check_survey(tool.SURVEY_BUILD, ROOT)
     harness.refused(lambda: tool.check_survey(STALE_SURVEY, ROOT), 'the runner would refuse it')
+    # Copies of the build and the software record with one input changed each.
+    def variant(name, change_manifest=None, change_binary=False, change_software=None):
+        build = work / ('survey-' + name)
+        shutil.copytree(tool.SURVEY_BUILD, build)
+        manifest = json.loads((build / 'manifest.json').read_text())
+        if change_manifest:
+            change_manifest(manifest)
+        (build / 'manifest.json').write_text(json.dumps(manifest))
+        if change_binary:
+            data = bytearray((build / 'launch-survey.bin').read_bytes())
+            data[0] ^= 1
+            (build / 'launch-survey.bin').write_bytes(bytes(data))
+        software = json.loads(tool.SURVEY_SOFTWARE.read_text())
+        if change_software:
+            change_software(software)
+        (work / ('software-' + name + '.json')).write_text(json.dumps(software))
+        return build, work / ('software-' + name + '.json')
+    for name, kwargs, message in [
+            ('schema', {'change_manifest': lambda m: m.update(schema='a733-launch-survey-v0')}, 'launch-survey-v1'),
+            ('physical', {'change_manifest': lambda m: m.update(physical_access=True)}, 'launch-survey-v1'),
+            ('binary', {'change_binary': True}, 'differs from its manifest'),
+            ('software-schema', {'change_software': lambda r: r.update(schema='other')}, 'return evidence'),
+            ('return', {'change_software': lambda r: r.update(return_preserved=False)}, 'return evidence'),
+            ('software-physical', {'change_software': lambda r: r.update(physical_access=True)}, 'return evidence')]:
+        build, software = variant(name, **kwargs)
+        harness.refused(lambda: tool.check_survey(build, ROOT, software), message)
+    build, software = variant('unchanged')
+    tool.check_survey(build, ROOT, software)
     # The hand-written runbooks name the same survey build and never the bundle's survey.py.
     books = sorted((ROOT / 'docs/board-runbooks').glob('*.md'))
     stale = [b.name for b in books if '$V/common/survey.py' in b.read_text()]
@@ -549,7 +580,7 @@ def main():
     WORK.mkdir(parents=True, exist_ok=True)
     work = WORK / ('check-' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f'))
     work.mkdir()
-    result = {'table': check_table(), 'survey': check_survey(), 'reader': check_reader(work)}
+    result = {'table': check_table(), 'survey': check_survey(work), 'reader': check_reader(work)}
 
     elves = work / 'elf'
     elves.mkdir()
