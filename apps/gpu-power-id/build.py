@@ -118,7 +118,7 @@ LAYOUT_UNITS = [('apps/board-bundles-power/power.c', 'bb_power'),
 CHANGED_LAYOUTS = ('a733_gpu_power', 'a733_gpu_platform', 'a733_power_domains', 'a733_power_domain_row',
                    'a733_counter_clock', 'bb_power')
 PROBE_EXPECT = ('COMPLETE GPU probe read: identity 36.56.104.183 before and after the secure configuration, '
-                'restored, GPU left powered')
+                'restored, OFF and provider parked')
 
 
 def main():

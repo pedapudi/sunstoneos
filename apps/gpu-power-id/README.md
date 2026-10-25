@@ -188,8 +188,8 @@ a prefix of them.
 ## The probe-read variant reads the core identity as the vendor's probe does
 
 `probe-read.c` builds the probe-read variant the way `wrapper.c` builds the
-wrapper-read variant. After the default ON sequence, with the CORE6 status
-poll kept only as a 200 ms observation, it
+wrapper-read variant. After the default ON sequence, which must reach CORE6
+status 8 within 200 ms, it
 reads `drm_ctrl` (`0x01880014`), `irq_ctrl` (`0x01880010`) and the SMC0
 word `0x0a0000b0`, then the core identity as the vendor's probe reads it:
 two 32-bit reads, `0x01800024` and then `0x01800020`. It then writes 2 to
@@ -200,12 +200,12 @@ restore readback it masks D, A, I and F, makes no failure call, and points
 `VBAR_EL1` at restore vectors that write both words back before the
 image's own exception handler runs; it starts that window only while at
 least 500 ms remain before the monitor's 2 s deadline, and otherwise
-returns status 7 with nothing written. It makes no OFF and no provider park;
-the lifetime ends with a power removal. The fifteen accesses are the rows
+returns status 7 with nothing written. After the restore it makes the OFF,
+the supply end and the provider park of the power-only variant. The fifteen accesses are the rows
 of `probe_steps`; the progress record at result offset 128 (magic
 `GPUPRD01`) holds the row in flight and every completed value. The
 completion text is `COMPLETE GPU probe read: identity 36.56.104.183 before
-and after the secure configuration, restored, GPU left powered`.
+and after the secure configuration, restored, OFF and provider parked`.
 [gpu-power.md](../../docs/gpu-power.md#the-probe-read-probe-makes-the-vendors-probe-time-read-then-the-secure-configuration)
 gives the vendor trace, the write exception and the meaning of each
 result. `check.py --probe-read` runs thirteen cases, and bundle preparation

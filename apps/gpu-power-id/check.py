@@ -56,17 +56,21 @@ PROBE_MAGIC = 0x3130445250555047
 # Modeled entry values of drm_ctrl, irq_ctrl and the SMC0 word.
 PROBE_ENTRY = {0x01880014: 1, 0x01880010: 0, 0x0a0000b0: 5}
 PROBE_ALL = list(range(15))
-PROBE_PATHS = {'pr-board': PROBE_ALL, 'pr-core-on': PROBE_ALL, 'pr-bad-id': PROBE_ALL, 'pr-after-differs': PROBE_ALL,
+# pr-board: CORE6 reaches 8, every access, then OFF, supply end and park.
+# pr-on-deadline: CORE6 does not reach 8 within 200 ms; no GPU-window access.
+# pr-off-fault: every access, then the OFF fails.
+PROBE_PATHS = {'pr-board': PROBE_ALL, 'pr-on-deadline': [], 'pr-bad-id': PROBE_ALL, 'pr-after-differs': PROBE_ALL,
                'pr-restore-ignored': PROBE_ALL, 'pr-sync-abort': list(range(10)), 'pr-early-stop': [],
-               'pr-pending-early': [], 'pr-mapping': [], 'pr-time-budget': [], 'pr-window-refused': list(range(5))}
+               'pr-off-fault': PROBE_ALL, 'pr-mapping': [], 'pr-time-budget': [], 'pr-window-refused': list(range(5))}
 PROBE_FAIL = 'GPU probe read: identity or restore not as expected, GPU left powered'
-PROBE_REASONS = {'pr-board': None, 'pr-core-on': None, 'pr-bad-id': PROBE_FAIL, 'pr-after-differs': PROBE_FAIL,
+PROBE_REASONS = {'pr-board': None, 'pr-on-deadline': 'GPU ON deadline', 'pr-bad-id': PROBE_FAIL,
+                 'pr-after-differs': PROBE_FAIL,
                  'pr-restore-ignored': PROBE_FAIL, 'pr-sync-abort': None, 'pr-early-stop': 'GPU ON poll',
-                 'pr-pending-early': 'GPU probe read refused before clock and reset progress',
+                 'pr-off-fault': 'GPU OFF poll',
                  'pr-mapping': 'GPU probe read mapping', 'pr-time-budget': 'GPU probe read time budget',
                  'pr-window-refused': None}
 PROBE_COMPLETE = ('COMPLETE GPU probe read: identity 36.56.104.183 before and after the secure configuration, '
-                  'restored, GPU left powered')
+                  'restored, OFF and provider parked')
 NAMES = ['bb_power', 'a733_gpu_platform', 'a733_gpu_power', 'a733_pmic_consumer',
          'a733_power_domains', 'a733_power_domain', 'a733_power_domain_row']
 
@@ -181,18 +185,20 @@ def run(image, case, power_only=False, wrapper=False, probe=False):
         elif name == 'a733_gpu_platform_poll' and probe:
             state['on_polls'] += 1
             state['time'] += 5000
-            early = case == 'pr-early-stop'
-            field(power, 'a733_gpu_power', 'core_seen', 0x31f if case in ('pr-early-stop', 'pr-pending-early') else 0xfff)
+            # The board's ON: CORE6 status 8 at the third poll; pr-on-deadline
+            # never reaches it, pr-early-stop is refused at admission.
+            early, on = case == 'pr-early-stop', case != 'pr-on-deadline' and state['on_polls'] >= 3
+            field(power, 'a733_gpu_power', 'core_seen', 0x31f if early else 0xfff)
             field(power, 'a733_gpu_power', 'core_policy', 8)
             field(power, 'a733_gpu_power', 'core_config', 0x101)
-            field(power, 'a733_gpu_power', 'index', 10 if early else 6 if case == 'pr-pending-early' else 57)
-            notes(0x10130101, 0, 0, 0, 0)
-            field(gpu, 'a733_gpu_platform', 'phase', 7 if early else 3 if case == 'pr-core-on' else 2)
+            field(power, 'a733_gpu_power', 'index', 10 if early else 57)
+            notes(0x10130101, 0, 0, 8 if on else 0, 0x100 if on else 0)
+            field(gpu, 'a733_gpu_platform', 'phase', 7 if early else 3 if on else 2)
             field(gpu, 'a733_gpu_platform', 'token', 17, 8)
             field(gpu, 'a733_gpu_platform', 'delegated', 1)
-            field(power, 'a733_gpu_power', 'phase', 5 if early else 2 if case == 'pr-core-on' else 1)
-            field(power, 'a733_gpu_power', 'last_value', 8 if case == 'pr-core-on' else 0)
-            ret((1 << 64) - 1 if early else 1 if case == 'pr-core-on' else 0)
+            field(power, 'a733_gpu_power', 'phase', 5 if early else 2 if on else 1)
+            field(power, 'a733_gpu_power', 'last_value', 8 if on else 0)
+            ret((1 << 64) - 1 if early else 1 if on else 0)
         elif name == 'platform_exception':
             state['exception'] = True
             u.emu_stop()
@@ -289,7 +295,7 @@ def run(image, case, power_only=False, wrapper=False, probe=False):
             u.mem_write(target, struct.pack('<QII', address + (4096 if wrong else 0), 0, 0))
             ret()
         elif name == 'a733_gpu_platform_off_poll':
-            if case in ('off-fault', 'wrapper-off-fault'):
+            if case in ('off-fault', 'wrapper-off-fault', 'pr-off-fault'):
                 ret((1 << 64) - 1)
                 return
             field(gpu, 'a733_gpu_platform', 'phase', 6)
@@ -575,7 +581,13 @@ def run(image, case, power_only=False, wrapper=False, probe=False):
 def check_probe(u, state, case, output):
     """The probe-read variant's outcome for one case."""
     calls = state['calls']
-    assert 'a733_gpu_platform_off_begin' not in calls and 'bb_power_park' not in calls, calls
+    # OFF, the supply end and the park follow the window only on a complete run.
+    complete = case == 'pr-board'
+    assert ('bb_power_park' in calls) == complete and ('a733_gpu_platform_supply_end' in calls) == complete, calls
+    assert ('a733_gpu_platform_off_begin' in calls) == (case in ('pr-board', 'pr-off-fault')), calls
+    if complete:
+        assert calls.index('a733_gpu_platform_off_poll') < calls.index('a733_gpu_platform_supply_end') < \
+            calls.index('bb_power_park') < last_put(state)
     if case == 'pr-table-mutant':
         assert state.get('refused') == ['0xa0000b0', 4, 1, '0x3', 6] and state['pr'] == list(range(5)), state
         return state
@@ -610,7 +622,6 @@ def check_probe(u, state, case, output):
         assert [r[3] for r in state['pr_accesses'] if r[2]] == ['0x2', '0x0', '0x1', '0x5'], state['pr_accesses']
         assert values == (1, 0, 5, high, low, 2, 2, 0, 0, high, after_low, 1, restored_drm, 5, 5), values
         assert 'GPU PROBE window serror_pending=0' in output, output
-        good = case in ('pr-board', 'pr-core-on')
         assert f'GPU PROBE result before={int(case != "pr-bad-id")} after={int(case not in ("pr-bad-id", "pr-after-differs"))} ' \
                f'restored={int(case != "pr-restore-ignored")} accesses=15' in output, output
     snapshots = 1 if case == 'pr-time-budget' else 2
@@ -619,8 +630,9 @@ def check_probe(u, state, case, output):
         # Refused after the first identity read, before any write.
         assert state['exit_status'] == 7 and 'FAIL GPU probe read window refused' in output, output
         assert 'GPU PROBE window refused now_us=1600' in output and 'monitor_deadline_us=2000000' in output, output
-    elif case in ('pr-board', 'pr-core-on'):
+    elif case == 'pr-board':
         assert state['exit_status'] == 0 and PROBE_COMPLETE in output, output
+        assert 'GPU PROBE core6 on=1 status=0x8' in output, output
     else:
         assert state['exit_status'] is None and 'COMPLETE' not in output
     if case == 'pr-time-budget':

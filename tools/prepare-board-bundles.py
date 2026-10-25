@@ -591,33 +591,33 @@ ROWS = [
                       'record and log, which name each read before it is issued, survive only on a return.'),
     gpu_row('gpu-probe-read', 17, "GPU core identity read as the vendor's probe makes it, then after its secure configuration",
             'probe-read', 'COMPLETE GPU probe read: identity 36.56.104.183 before and after the secure configuration, '
-            'restored, GPU left powered',
+            'restored, OFF and provider parked',
             'Status 0 with both GPU PROBE identity lines matches=1, GPU PROBE window serror_pending=0, GPU PROBE result '
             'restored=1 and COMPLETE GPU probe read: identity 36.56.104.183 before and after the secure configuration, '
-            'restored, GPU left powered; or status 1 with FAIL GPU probe read: identity or restore not as expected, GPU '
+            'restored, OFF and provider parked; or status 1 with FAIL GPU probe read: identity or restore not as expected, GPU '
             'left powered after those lines; or a fault line from a synchronous abort in the write window; or no '
             'return. A return is followed by a responsive ROM. Record every line of kernel.log and the progress record '
             'at result.bin offset 128, which holds the row in flight and every completed value.',
             'apps/gpu-power-id, probe-read variant (apps/gpu-power-id/probe-read.c): the power-only ON sequence of '
-            'the default GPU power path (DCDC4 960 mV, PLL_GPU0 at 1008 MHz, CORE6 policy 8 after the clocks); the '
-            'CORE6 status poll for 8 runs at most 200 ms as an observation only. Then snapshot 1, the controller and CORE6 lines, '
+            'the default GPU power path (DCDC4 960 mV, PLL_GPU0 at 1008 MHz, TOP5 and CORE6 in the vendor order), '
+            'which must reach CORE6 status 8 within 200 ms before any GPU-window access. Then snapshot 1, the controller and CORE6 lines, '
             'identity Device-nGnRnE mapping checks of the wrapper, SMC0 and GPU core pages, and these 32-bit accesses '
             'in order: reads of 0x01880014 (drm_ctrl), 0x01880010 (irq_ctrl) and 0x0a0000b0 (SMC0); the core identity '
             'as the vendor reads it at probe time, 0x01800024 and then 0x01800020; then, with D, A, I and F masked and '
             'restore vectors installed, 2 to 0x0a0000b0 and 0 to 0x01880014 (the vendor sunxi_secure_config, in its '
             'order), each read back, the identity again, and both words written back to their entry values, each read '
-            'back. It makes no OFF and no provider park: CORE6 and TOP5 stay ON and the GPU clocked until the power '
-            'removal that ends the lifetime. Before each access the image writes the row number into the progress '
+            'back. Then the OFF, the supply end and the provider park of the power-only image, so the lifetime can '
+            'continue. Before each access the image writes the row number into the progress '
             'record at result offset 128 and prints a GPU PROBE reading or writing line. docs/gpu-power.md, "The '
             'probe-read probe makes the vendor\'s probe-time read, then the secure configuration", maps each result '
-            'to its meaning. It is the last step of its lifetime, after the cold DDR start and the provider-readiness '
-            'row.',
+            'to its meaning. It runs after the cold DDR start and the provider-readiness row; '
+            'docs/designs/gpu-firmware-start.md places it before the firmware start.',
             after=['gpu-provider-ready'],
             failures=['`FAIL GPU probe read: identity or restore not as expected, GPU left powered`, after the GPU PROBE '
                       'identity, window and result lines: record them',
                       'a fault line after a `GPU PROBE reading` line of rows 10 or 11: a synchronous abort on the '
                       'second identity read; the restore vectors wrote both words back before the fault report',
-                      '`FAIL GPU probe read refused before clock and reset progress`, `GPU probe read mapping` or `GPU '
+                      '`FAIL GPU ON deadline` (CORE6 not at 8 within 200 ms), `GPU probe read mapping` or `GPU '
                       'probe read time budget`: no wrapper, SMC0 or core word was accessed',
                       '`FAIL GPU probe read vector table` after the GPU PROBE identity before line: VBAR_EL1 was not '
                       'the image\'s table, so nothing was written',
