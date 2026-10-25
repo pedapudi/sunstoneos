@@ -21,6 +21,10 @@ Reuse prior reading and inspect relevant changes on subsequent visits.
 | NPU local shutdown versus domain power-off | [NPU CLOSE contract](npu-startup.md#local-stop-after-close): established scoped ownership, observed retirement and missing A733 power-transition guarantees |
 | Architectural constraints | [Arm/Linux audit](a733-multicore-reference-audit.md): the relevant named section |
 | Boot0 monitor header, cleanup and guarded cold entry | [Cold-entry recorder](cold-entry.md): mutable header/loadword, independent reset-state model and parked report; [parser cache cleanup](cold-entry.md#the-parser-cleans-cpu-caches-before-returning) precedes the main-tail cleanup and has separate instruction-model evidence. [Boot evidence](boot.md) and [ordinary-file packaging](microsd-boot-package.md) retain separate limits |
+| Boot ROM and boot0 vendor-binary behaviour | [Boot ROM and boot0 reference](vendor-firmware/boot-rom-and-boot0.md): identity and provenance, media/FEL dispatch, CPU PLL and the N=38 rate, PMIC rails, DRAM training, package parse and handoff, and the shared-SRAM routing bit; curated inventories under [vendor-firmware/data](vendor-firmware/data/) |
+| Vendor BL31 behaviour | [TF-A monitor reference](vendor-firmware/tf-a-monitor.md): cold-boot security writes, PSCI CPU_ON/OFF/SUSPEND sequences, GIC-600 setup, SMC IDs, SCP start and what the SunstoneOS EL3 monitor must reproduce |
+| Vendor SCP firmware behaviour | [SCP firmware reference](vendor-firmware/scp-firmware.md): E902 start-up, message types, system suspend and resume register sequences, power-off, wakeup sources and DRAM PHY retention |
+| GPU firmware container and NPU vendor libraries | [GPU and NPU binaries](vendor-firmware/gpu-and-npu-binaries.md): firmware container and BVNC binding, host interface identifiers, NPU driver commands, model format and feature database |
 | CPU diagnostic result | [Supervised startup](a733-smp-supervised.md): the matching checkpoint heading |
 | Cache mappings and publication | [CPU coherence](cpu-coherence.md): “EL3 and nonsecure EL1 use matching memory attributes” and “Cache entry requires published immutable memory”; also the audit's “Publication must cover the executable physical address space” |
 | Raw oscillator versus normalized reference admission | [Provider clock reference](provider-clock-reference.md): TWI11/USB2/radio/CE/I2S/PWM parents, raw S_TWI1/LED restrictions and [HDMI independent references and ownership](provider-clock-reference.md#hdmi-native-evidence); [SPI platform](spi-platform.md) distinguishes main SPI REF24 from raw S_SPI; [DMA platform](dma-platform.md#admission-verifies-the-selected-parent-and-programmed-rate) retains REF for normalized fabric parents. Function checks do not qualify images or physical clocks |
@@ -34,6 +38,7 @@ Reuse prior reading and inspect relevant changes on subsequent visits.
 | DI301 field processing and source selection | [Native deinterlacing](deinterlace-native.md): effective SUN60IW2 DI301 selection, GPL configuration adaptation, masked register publication and retained master-9 lifetime; [host preparation](deinterlace-preparation.md) |
 | Evidence reuse | [Validation](validation.md): “Reuse valid evidence” |
 | Dependency provenance | [Sources](sources.md) and the component's source manifest |
+| Vendor binaries, ROM images and models: boot chain, register access by binary, download, SHA-256, license and board-only captures | [Vendor firmware](vendor-firmware/README.md): the overview, then the item's table row; fetch or verify with `tools/fetch-vendor-firmware.py --check --only NAME` |
 
 Find a heading with `rg -n '^## ' path`, then read the needed line interval with
 `sed -n 'START,ENDp' path`. For a known document, search its relevant phrase or

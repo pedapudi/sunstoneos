@@ -1,0 +1,120 @@
+{
+ "binary": "boot0_sdcard_orangepizero3w.fex",
+ "sha256": "829ea8e3b65d71a02f2d0e094bc073de3a10869f948f62db49dbf023d07fabe3",
+ "sha256_1800M": "d2a9bcccf012dce554c4613cf3e2e4256fe9863f6215afbe979aca891d4a6e27",
+ "source": "orangepi-build a95129bf, external/packages/pack-uboot/sun60iw2/bin/; see docs/vendor-firmware/README.md",
+ "note": "Offsets are load addresses (blob offset = address - 0x47000). Values labelled observed are read from the blob.",
+
+ "egon_header": {
+  "source": "blob header 0x47000..0x47040",
+  "fields": {
+   "0x00": "branch to 0x47b00 (ARM)",
+   "0x04": "magic eGON.BT0",
+   "0x0c": "additive 32-bit checksum (stock 0x2fce7bb3)",
+   "0x10": "length 0x3c000 (245760)",
+   "0x18": "run address 0x47000",
+   "0x1c": "boot-CPU field 0x47000",
+   "0x24": "version string 4.0",
+   "0x30": "boot-media / platform id",
+   "0x38": "128-byte DRAM parameter block (overwritten at runtime by the selected set)"
+  }
+ },
+
+ "commit_id": {"std": "{4721ad08}", "1800M": "{a2322351}", "source": "blob at 0x472f8"},
+
+ "cpu_pll_registers": {
+  "source": "routine 0x491b8; CPU_PLL_CFG base 0x08870000",
+  "bit24_set_on": ["0x020020e0 PLL_GPU", "0x02002120", "0x02002140", "0x02002160",
+                   "0x02002220", "0x02002240", "0x02002260", "0x02002280",
+                   "0x020022a0 PLL_NPU", "0x020022e0"],
+  "gate": "0x07090160 bit14 set -> CPU PLLs left untouched",
+  "domains": {
+   "CPU_L": {"ctrl": "0x08871000", "mux": "0x0887101c"},
+   "CPU_B": {"ctrl": "0x08872000", "mux": "0x0887201c"},
+   "DSU":   {"ctrl": "0x08873000", "mux": "0x0887301c"}
+  },
+  "method": "park mux on 24 MHz, write N (bits 15:8), 20 us, set update bit, wait update clear + 3 lock reads (no timeout), 20 us, ungate, 20 us, then select the PLL in each mux with 20 us each",
+  "observed_board_result": {
+   "CPU_L_pll": "0xf8802600", "CPU_L_mux": "0x03010000",
+   "CPU_B_pll": "0xf8802700", "CPU_B_mux": "0x03000000",
+   "DSU_pll": "0xf8802600", "DSU_mux": "0x03010105",
+   "source": "evidence/board-session-20261025-1/port-3-3 bundle 14; evidence/cpu-clock-initial.json"
+  }
+ },
+
+ "pmic_regulator_table": {
+  "source": "table at 0x81e98 (file offset 0x3ae98), 36 entries x 0x6c bytes; AXP8191 over TWI",
+  "columns": "name, min_mV, max_mV, voltage_reg, field_mask, enable_reg, enable_bit",
+  "entries": [
+   {"name": "dcdc1", "reg": "0x10", "enable_reg_bit": "0x10:0", "min_mV": 1000, "max_mV": 3800},
+   {"name": "dcdc2", "reg": "0x13", "enable_reg_bit": "0x10:1", "min_mV": 500, "max_mV": 1540, "supplies": "NPU VDD, vdd-edp"},
+   {"name": "dcdc3", "reg": "0x14", "enable_reg_bit": "0x10:2", "min_mV": 500, "max_mV": 1540, "supplies": "CPU-B (A76)"},
+   {"name": "dcdc4", "reg": "0x15", "enable_reg_bit": "0x10:3", "min_mV": 500, "max_mV": 1540, "supplies": "GPU"},
+   {"name": "dcdc5", "reg": "0x16", "enable_reg_bit": "0x10:4", "min_mV": 500, "max_mV": 1540, "supplies": "CPU-L (A55) and DSU"}
+  ],
+  "boot0_writes": {
+   "dcdc2": "set to 800 or 840 mV (code then enable, no delay) at 0x1ff6; for DRAM supply",
+   "dcdc4": "enable set at 0x16940, voltage code untouched -> PMIC power-on default",
+   "note": "boot0 writes no CPU rail; DCDC3/DCDC5 read 800 mV on the board, left at PMIC default"
+  }
+ },
+
+ "dram_parameter_sets": {
+  "source": "DRAM.ext table at 0x47374, 15 slots x 0x80 bytes; selector at 0x4b2e8",
+  "select_mode": "sys_config select_mode=3 (GPADC channel 1 + GPIO PH16); boot0 reads thresholds [163,382,608,811,1050,1315,1569,1800]",
+  "board_selected": "set 5 (log: 'vaild para:4 select dram para5')",
+  "populated_sets": [
+   {"slot": 1, "clk_mhz": 2400, "type": "LPDDR5(9)", "para1": "0xa10a", "para2": "0x1001"},
+   {"slot": 2, "clk_mhz": 2040, "type": "LPDDR5(9)", "para1": "0xa10a", "para2": "0x1001"},
+   {"slot": 5, "clk_mhz": 2040, "type": "LPDDR5(9)", "para1": "0xa11a", "para2": "0x1001"}
+  ],
+  "1800M_variant": "same three slots at 1800 MHz (0x708)",
+  "training_result_record": {
+   "source": "evidence/ddr-20261015-223537/firmware.log (observed on the original board)",
+   "driver_version": "V0.6034",
+   "dram_vcc_mV": 560,
+   "pstates_mhz": [2040, 1165, 816, 408],
+   "training_result_code": 7,
+   "size_mib": 12288,
+   "runtime_para1": "0xa11a", "runtime_para2": "0x30001001", "dram_tpr13": "0x10065"
+  }
+ },
+
+ "boot_package_toc": {
+  "source": "parser 0x5dc80; header loader 0x5dc30",
+  "magic": "0x89119800",
+  "checksum": "additive 32-bit sum over the padded extent, checksum field replaced with 0x5f0a6c39",
+  "item_names": ["u-boot", "u-boot-gz", "u-boot-lz4", "u-boot-lzma", "monitor", "scp",
+                 "opensbi", "opensbi-gz", "dtb", "dtb-gz", "melis/rtos (+gz/lz4/lzma)", "optee"],
+  "handoff": {
+   "jump_atf": "monitor_base, uboot_base, optee_base (Jump to ATF log at 0x6055a)",
+   "jump_optee": "optee_base, uboot_base",
+   "jump_rtos": "rtos_base",
+   "jump_uboot": "uboot_base",
+   "scp_copy": "an 'scp' item is copied to DRAM (0x48100000) but no E902 core is started",
+   "monitor_header_mutation": "parser writes the DRAM size (MiB) over the monitor load word at payload+0x2c and copies 128 DRAM-param bytes at +0x30, 8 header bytes at +0x24, U-Boot/OP-TEE pointers at +0x10/+0x18, 16 id bytes at +0xb8"
+  }
+ },
+
+ "sys_config_keys": {
+  "source": "orangepi-build sun60iw2/bin/sys_config/sys_config.fex (SHA-256 eb598823...); parsed by the normal storage path, not by the RAM wrapper",
+  "power_mode": 1,
+  "card0_boot_para": {"card_ctrl": 0, "card_line": 4, "pins": "PF0-PF5"},
+  "card2_boot_para": {"card_ctrl": 2, "card_line": 8, "note": "eMMC pins PC0-PC16 (no eMMC populated)"},
+  "uart_para": {"uart_debug_port": 0, "tx": "PB09", "rx": "PB10"},
+  "jtag_para": {"jtag_enable": 1},
+  "twi_para": {"twi_used": 1, "twi_port": 6, "scl": "PL0", "sda": "PL1"},
+  "dram_select_para": {"select_mode": 3, "gpadc_channel": 1, "select_gpio0": "PH16"},
+  "dram_para": {"dram_clk": 1200, "dram_type": 8, "note": "default block; the DRAM.ext set overrides it"},
+  "secure": {"dram_region_mbytes": 120, "drm_region_mbytes": 0}
+ },
+
+ "error_and_status_strings": {
+  "note": "short identifiers only; full log text is excluded",
+  "boot_mode_codes": {"0x32": "normal boot", "0x64": "FEL/update", "0x71": "efex/crash"},
+  "dram_training_result_ok": 7,
+  "selected_rail_error": "POWER SETTING ERROR!",
+  "package_errors": ["bad magic", "bad checksum", "Loading boot-pkg fail"],
+  "handoff_failure": "Jump to second boot failed! Stay in the loop..."
+ }
+}

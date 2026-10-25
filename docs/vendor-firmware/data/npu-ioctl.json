@@ -1,0 +1,1462 @@
+{
+ "binaries": [
+  {
+   "name": "libVIPhal.so",
+   "sha256": "3ed5357b26bd6c4fb68fbdc0b21d637227dda711d1fe67b9e28accdc48bb11f2",
+   "source": "https://github.com/ZIFENG278/ai-sdk/tree/fc90006d0f6569da2f6726c2d8395877686f5aca/viplite-tina/lib/aarch64-none-linux-gnu/v2.0/libVIPhal.so"
+  },
+  {
+   "name": "libNBGlinker.so",
+   "sha256": "82f049b0ed0065dd4d443e37eeb1edfcbef24457c9c24e36170d64d5b748ca66",
+   "source": "https://github.com/ZIFENG278/ai-sdk/tree/fc90006d0f6569da2f6726c2d8395877686f5aca/viplite-tina/lib/aarch64-none-linux-gnu/v2.0/libNBGlinker.so"
+  }
+ ],
+ "analysis": "docs/vendor-firmware/gpu-and-npu-binaries.md",
+ "full_inventory": "~/.cache/sunstoneos/evidence/vendor-firmware-20261025/accel/npu/",
+ "kernel_driver_source": "https://github.com/orangepi-xunlong/linux-orangepi/tree/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/npu/aw_nna_vip/vip2",
+ "labels": {
+  "observed": "observed in the binary",
+  "source": "matches driver source",
+  "board": "confirmed on a board",
+  "inferred": "inferred"
+ },
+ "device_node": "/dev/vipcore",
+ "device_node_citation": "libVIPhal.so 3ed5357b file offset 0x7120; opened O_RDWR at 0x5b28; driver DEVICE_NAME os/linux/vip_drv_device_driver.c:64",
+ "ioctl_request": 30000,
+ "ioctl_request_citation": "libVIPhal.so 3ed5357b loads 0x7530 at 0x5c60 for the ioctl call at 0x5c7c; os/linux/vip_drv_os.h:59",
+ "ioctl_request_note": "Plain integer, not an _IOWR encoding; the kernel rejects any other code (os/linux/vip_drv_device_driver.c:257).",
+ "outer_struct": {
+  "name": "struct ioctl_data",
+  "source": "vip2/os/linux/vip_drv_os.h:61-67",
+  "size": 24,
+  "fields": [
+   {
+    "offset": 0,
+    "type": "vipdrv_intrface_e",
+    "name": "command"
+   },
+   {
+    "offset": 4,
+    "type": "vip_status_e",
+    "name": "error"
+   },
+   {
+    "offset": 8,
+    "type": "vip_uint32_t",
+    "name": "bytes"
+   },
+   {
+    "offset": 16,
+    "type": "vip_uint64_t",
+    "name": "buffer"
+   }
+  ],
+  "libVIPhal_build": "built on the stack at sp+0x40 in viphal_os_call_drv: command (+0), error (+4, read back on failure), bytes (+8, from the size table at 0x7358), buffer (+0x10, user pointer)"
+ },
+ "kernel_entry": {
+  "function": "drv_ioctl",
+  "source": "vip2/os/linux/vip_drv_device_driver.c:249-327",
+  "behaviour": "copy outer struct in, copy bytes from buffer into a kernel allocation, call vipdrv_interface_call, copy the outer struct and payload back."
+ },
+ "dispatcher": "vip2/vip_drv_interface.c:1075-1211 (vipdrv_interface_call)",
+ "user_build_options_implied_by_sizes": {
+  "vpmdENABLE_PREEMPTION": "1 (submit payload 0x24 includes the priority byte at +0x18)",
+  "vpmdNBG_SIZE_OVER_4G": "0 (vip_size_t is 32-bit; wrap-physical payload 0x1830)",
+  "vpmdENABLE_RESERVE_PHYSICAL": "1 (wrap-physical table of 512 entries)",
+  "vpmdENABLE_SYS_MEMORY_HEAP": "1 (query-database payload 0x188 includes sys_heap_size)",
+  "vipdMAX_CORE": "8",
+  "label": "inferred from the exact match of all 30 payload sizes with clang aarch64 layouts of vip2/inc/vip_drv_share.h"
+ },
+ "commands": [
+  {
+   "command": 0,
+   "enum": "VIPDRV_INTRFACE_INIT",
+   "enum_source": "vip2/inc/vip_drv_share.h:143",
+   "name_in_libVIPhal": "VIPDRV_INIT",
+   "payload_bytes_libVIPhal": 8,
+   "payload_struct": "_vipdrv_initialize",
+   "payload_struct_bytes_aarch64": 8,
+   "size_match": true,
+   "payload_fields": [
+    {
+     "offset": 0,
+     "type": "vip_uint32_t",
+     "name": "video_mem_size"
+    },
+    {
+     "offset": 4,
+     "type": "vip_uint32_t",
+     "name": "version"
+    }
+   ],
+   "handler": "vip2/vip_drv_interface.c:81",
+   "dispatch_case": "vip2/vip_drv_interface.c:1083",
+   "kernel_call": "do_init",
+   "compile_guard": null,
+   "kernel_action": "First open: OS init, power hook, 2 ms settle, identity read, feature-database selection, reset, init command, MMU enable, interrupts (see reference-backsolve-npu.md steps 15-21).",
+   "issued_by_libVIPhal": [
+    {
+     "function": "viphal_init",
+     "call_site": "0x37b8"
+    }
+   ],
+   "label": "source"
+  },
+  {
+   "command": 1,
+   "enum": "VIPDRV_INTRFACE_DESTROY",
+   "enum_source": "vip2/inc/vip_drv_share.h:144",
+   "name_in_libVIPhal": "VIPDRV_DESTROY",
+   "payload_bytes_libVIPhal": 0,
+   "payload_struct": null,
+   "payload_struct_bytes_aarch64": 0,
+   "size_match": true,
+   "payload_fields": [],
+   "handler": "vip2/vip_drv_interface.c:255",
+   "dispatch_case": "vip2/vip_drv_interface.c:1087",
+   "kernel_call": "do_destroy",
+   "compile_guard": null,
+   "kernel_action": "Tear down driver context for the process; last user stops hardware use.",
+   "issued_by_libVIPhal": [
+    {
+     "function": "viphal_destroy",
+     "call_site": "0x2414"
+    }
+   ],
+   "label": "source"
+  },
+  {
+   "command": 2,
+   "enum": "VIPDRV_INTRFACE_READ_REG",
+   "enum_source": "vip2/inc/vip_drv_share.h:145",
+   "name_in_libVIPhal": "VIPDRV_READ_REG",
+   "payload_bytes_libVIPhal": 16,
+   "payload_struct": "_vipdrv_reg",
+   "payload_struct_bytes_aarch64": 16,
+   "size_match": true,
+   "payload_fields": [
+    {
+     "offset": 0,
+     "type": "vip_uint32_t",
+     "name": "dev_index"
+    },
+    {
+     "offset": 4,
+     "type": "vip_uint32_t",
+     "name": "core_index"
+    },
+    {
+     "offset": 8,
+     "type": "vip_uint32_t",
+     "name": "reg"
+    },
+    {
+     "offset": 12,
+     "type": "vip_uint32_t",
+     "name": "data"
+    }
+   ],
+   "handler": "vip2/vip_drv_interface.c:373",
+   "dispatch_case": "vip2/vip_drv_interface.c:1091",
+   "kernel_call": "vipdrv_read_register (vip_drv_interface.c:405)",
+   "compile_guard": null,
+   "kernel_action": "Check power, clock on, read the register at the user-supplied offset, clock off. No offset bound beyond the mapping pointer check.",
+   "issued_by_libVIPhal": [
+    {
+     "function": "viphal_read_reg",
+     "call_site": "0x34c8"
+    }
+   ],
+   "label": "source"
+  },
+  {
+   "command": 3,
+   "enum": "VIPDRV_INTRFACE_WRITE_REG",
+   "enum_source": "vip2/inc/vip_drv_share.h:146",
+   "name_in_libVIPhal": "VIPDRV_WRITE_REG",
+   "payload_bytes_libVIPhal": 16,
+   "payload_struct": "_vipdrv_reg",
+   "payload_struct_bytes_aarch64": 16,
+   "size_match": true,
+   "payload_fields": [
+    {
+     "offset": 0,
+     "type": "vip_uint32_t",
+     "name": "dev_index"
+    },
+    {
+     "offset": 4,
+     "type": "vip_uint32_t",
+     "name": "core_index"
+    },
+    {
+     "offset": 8,
+     "type": "vip_uint32_t",
+     "name": "reg"
+    },
+    {
+     "offset": 12,
+     "type": "vip_uint32_t",
+     "name": "data"
+    }
+   ],
+   "handler": "vip2/vip_drv_interface.c:420",
+   "dispatch_case": "vip2/vip_drv_interface.c:1095",
+   "kernel_call": "vipdrv_write_register (vip_drv_interface.c:452)",
+   "compile_guard": null,
+   "kernel_action": "Same as READ_REG but writes; no offset or value filter.",
+   "issued_by_libVIPhal": [
+    {
+     "function": "viphal_write_reg",
+     "call_site": "0x3580"
+    }
+   ],
+   "label": "source"
+  },
+  {
+   "command": 4,
+   "enum": "VIPDRV_INTRFACE_WAIT_TASK",
+   "enum_source": "vip2/inc/vip_drv_share.h:147",
+   "name_in_libVIPhal": "VIPDRV_WAIT_TASK",
+   "payload_bytes_libVIPhal": 8,
+   "payload_struct": "_vipdrv_wait_task_param",
+   "payload_struct_bytes_aarch64": 8,
+   "size_match": true,
+   "payload_fields": [
+    {
+     "offset": 0,
+     "type": "vip_uint32_t",
+     "name": "task_id"
+    },
+    {
+     "offset": 4,
+     "type": "vip_uint32_t",
+     "name": "subtask_index"
+    }
+   ],
+   "handler": "vip2/vip_drv_interface.c:564",
+   "dispatch_case": "vip2/vip_drv_interface.c:1099",
+   "kernel_call": "vipdrv_task_desc_wait (vip_drv_interface.c:571)",
+   "compile_guard": null,
+   "kernel_action": "Block until the subtask completes (interrupt), check AXI/MMU error bits.",
+   "issued_by_libVIPhal": [
+    {
+     "function": "viphal_wait_task",
+     "call_site": "0x24d8"
+    }
+   ],
+   "label": "source"
+  },
+  {
+   "command": 5,
+   "enum": "VIPDRV_INTRFACE_SUBMIT_TASK",
+   "enum_source": "vip2/inc/vip_drv_share.h:148",
+   "name_in_libVIPhal": "VIPDRV_SUBMIT_TASK",
+   "payload_bytes_libVIPhal": 36,
+   "payload_struct": "_vipdrv_submit_task_param",
+   "payload_struct_bytes_aarch64": 36,
+   "size_match": true,
+   "payload_fields": [
+    {
+     "offset": 0,
+     "type": "vip_uint32_t",
+     "name": "task_id"
+    },
+    {
+     "offset": 4,
+     "type": "vip_uint32_t",
+     "name": "subtask_index"
+    },
+    {
+     "offset": 8,
+     "type": "vip_uint32_t",
+     "name": "subtask_cnt"
+    },
+    {
+     "offset": 12,
+     "type": "vip_uint32_t",
+     "name": "device_index"
+    },
+    {
+     "offset": 16,
+     "type": "vip_uint32_t",
+     "name": "core_index"
+    },
+    {
+     "offset": 20,
+     "type": "vip_uint32_t",
+     "name": "core_cnt"
+    },
+    {
+     "offset": 24,
+     "type": "vip_uint8_t",
+     "name": "priority"
+    },
+    {
+     "offset": 28,
+     "type": "vip_uint32_t",
+     "name": "time_out"
+    },
+    {
+     "offset": 32,
+     "type": "vip_uint8_t",
+     "name": "need_schedule"
+    }
+   ],
+   "handler": "vip2/vip_drv_interface.c:598",
+   "dispatch_case": "vip2/vip_drv_interface.c:1103",
+   "kernel_call": "vipdrv_task_desc_submit (vip_drv_interface.c:605)",
+   "compile_guard": null,
+   "kernel_action": "Queue subtasks on a core: patch multi-core sync/chip-enable words, append tail if the core changed, prepend MMU flush if tables changed, trigger.",
+   "issued_by_libVIPhal": [
+    {
+     "function": "viphal_submit_task",
+     "call_site": "0x2658"
+    }
+   ],
+   "label": "source"
+  },
+  {
+   "command": 6,
+   "enum": "VIPDRV_INTRFACE_ALLOCATION",
+   "enum_source": "vip2/inc/vip_drv_share.h:149",
+   "name_in_libVIPhal": "VIPDRV_ALLOCATION",
+   "payload_bytes_libVIPhal": 56,
+   "payload_struct": "_vipdrv_allocation",
+   "payload_struct_bytes_aarch64": 56,
+   "size_match": true,
+   "payload_fields": [
+    {
+     "offset": 0,
+     "type": "vip_uint64_t",
+     "name": "logical"
+    },
+    {
+     "offset": 8,
+     "type": "vip_uint32_t",
+     "name": "mem_id"
+    },
+    {
+     "offset": 16,
+     "type": "vip_address_t",
+     "name": "physical"
+    },
+    {
+     "offset": 24,
+     "type": "vip_size_t",
+     "name": "size"
+    },
+    {
+     "offset": 28,
+     "type": "vip_uint32_t",
+     "name": "align"
+    },
+    {
+     "offset": 32,
+     "type": "vip_uint32_t",
+     "name": "alloc_flag"
+    },
+    {
+     "offset": 40,
+     "type": "vip_uint64_t",
+     "name": "device_vis"
+    },
+    {
+     "offset": 48,
+     "type": "vip_uint8_t",
+     "name": "specified"
+    }
+   ],
+   "handler": "vip2/vip_drv_interface.c:469",
+   "dispatch_case": "vip2/vip_drv_interface.c:1107",
+   "kernel_call": "vipdrv_mem_allocate_videomemory (vip_drv_interface.c:479)",
+   "compile_guard": null,
+   "kernel_action": "Allocate video memory, map into NPU MMU, optionally map to user space; returns mem_id, NPU address, user pointer.",
+   "issued_by_libVIPhal": [
+    {
+     "function": "viphal_allocate_videomemory",
+     "call_site": "0x276c"
+    }
+   ],
+   "label": "source"
+  },
+  {
+   "command": 7,
+   "enum": "VIPDRV_INTRFACE_DEALLOCATION",
+   "enum_source": "vip2/inc/vip_drv_share.h:150",
+   "name_in_libVIPhal": "VIPDRV_DEALLOCATION",
+   "payload_bytes_libVIPhal": 4,
+   "payload_struct": "_vipdrv_deallocation",
+   "payload_struct_bytes_aarch64": 4,
+   "size_match": true,
+   "payload_fields": [
+    {
+     "offset": 0,
+     "type": "vip_uint32_t",
+     "name": "mem_id"
+    }
+   ],
+   "handler": "vip2/vip_drv_interface.c:511",
+   "dispatch_case": "vip2/vip_drv_interface.c:1111",
+   "kernel_call": "vipdrv_mem_free_videomemory (vip_drv_interface.c:517)",
+   "compile_guard": null,
+   "kernel_action": "Free video memory by mem_id.",
+   "issued_by_libVIPhal": [
+    {
+     "function": "viphal_free_videomemory",
+     "call_site": "0x2918"
+    }
+   ],
+   "label": "source"
+  },
+  {
+   "command": 8,
+   "enum": "VIPDRV_INTRFACE_NOT_USED",
+   "enum_source": "vip2/inc/vip_drv_share.h:151",
+   "name_in_libVIPhal": "VIPDRV_NOT_USED",
+   "payload_bytes_libVIPhal": 0,
+   "payload_struct": null,
+   "payload_struct_bytes_aarch64": 0,
+   "size_match": true,
+   "payload_fields": [],
+   "handler": null,
+   "dispatch_case": null,
+   "kernel_call": null,
+   "compile_guard": null,
+   "kernel_action": "Unused slot.",
+   "issued_by_libVIPhal": [],
+   "label": "observed"
+  },
+  {
+   "command": 9,
+   "enum": "VIPDRV_INTRFACE_QUERY_ADDRESS_INFO",
+   "enum_source": "vip2/inc/vip_drv_share.h:152",
+   "name_in_libVIPhal": "VIPDRV_QUERY_ADDRESS_INFO",
+   "payload_bytes_libVIPhal": 16,
+   "payload_struct": "_vipdrv_query_address_info",
+   "payload_struct_bytes_aarch64": 16,
+   "size_match": true,
+   "payload_fields": [
+    {
+     "offset": 0,
+     "type": "vip_uint64_t",
+     "name": "waitlink_logical"
+    },
+    {
+     "offset": 8,
+     "type": "vip_uint32_t",
+     "name": "waitlink_physical"
+    },
+    {
+     "offset": 12,
+     "type": "vip_uint32_t",
+     "name": "waitlink_size"
+    }
+   ],
+   "handler": "vip2/vip_drv_interface.c:619",
+   "dispatch_case": "vip2/vip_drv_interface.c:1162",
+   "kernel_call": "do_query_address_info",
+   "compile_guard": "vpmdENABLE_USE_AGENT_TRIGGER",
+   "kernel_action": "Return the wait-link buffer address; compiled only with vpmdENABLE_USE_AGENT_TRIGGER (0 in this build); libVIPhal never issues it.",
+   "issued_by_libVIPhal": [],
+   "label": "source"
+  },
+  {
+   "command": 10,
+   "enum": "VIPDRV_INTRFACE_QUERY_DATABASE",
+   "enum_source": "vip2/inc/vip_drv_share.h:153",
+   "name_in_libVIPhal": "VIPDRV_QUERY_DATABASE",
+   "payload_bytes_libVIPhal": 392,
+   "payload_struct": "_vipdrv_query_database",
+   "payload_struct_bytes_aarch64": 392,
+   "size_match": true,
+   "payload_fields": [
+    {
+     "offset": 0,
+     "type": "vip_uint32_t",
+     "name": "vip_sram_base"
+    },
+    {
+     "offset": 4,
+     "type": "vip_uint32_t[8]",
+     "name": "vip_sram_size"
+    },
+    {
+     "offset": 36,
+     "type": "vip_virtual_t",
+     "name": "axi_sram_base"
+    },
+    {
+     "offset": 40,
+     "type": "vip_uint32_t[8]",
+     "name": "axi_sram_size"
+    },
+    {
+     "offset": 72,
+     "type": "vip_uint32_t",
+     "name": "sys_heap_size"
+    },
+    {
+     "offset": 76,
+     "type": "vip_uint32_t",
+     "name": "hw_cid"
+    },
+    {
+     "offset": 80,
+     "type": "vip_uint32_t",
+     "name": "core_count"
+    },
+    {
+     "offset": 84,
+     "type": "vip_uint32_t",
+     "name": "max_core_count"
+    },
+    {
+     "offset": 88,
+     "type": "vip_uint32_t",
+     "name": "device_count"
+    },
+    {
+     "offset": 92,
+     "type": "vip_uint32_t[8]",
+     "name": "device_core_number"
+    },
+    {
+     "offset": 124,
+     "type": "vip_uint32_t[8][8]",
+     "name": "device_core_id"
+    },
+    {
+     "offset": 380,
+     "type": "struct _vipdrv_feature_config",
+     "name": "func_config"
+    }
+   ],
+   "handler": "vip2/vip_drv_interface.c:635",
+   "dispatch_case": "vip2/vip_drv_interface.c:1122",
+   "kernel_call": "do_query_database",
+   "compile_guard": null,
+   "kernel_action": "Return SRAM bases/sizes, sys heap size, hw_cid, core and device counts, debug feature switches.",
+   "issued_by_libVIPhal": [
+    {
+     "function": "viphal_query_database",
+     "call_site": "0x36d4"
+    }
+   ],
+   "label": "source"
+  },
+  {
+   "command": 11,
+   "enum": "VIPDRV_INTRFACE_OPERATE_CACHE",
+   "enum_source": "vip2/inc/vip_drv_share.h:154",
+   "name_in_libVIPhal": "VIPDRV_OPERATE_CACHE",
+   "payload_bytes_libVIPhal": 8,
+   "payload_struct": "_vipdrv_operate_cache",
+   "payload_struct_bytes_aarch64": 8,
+   "size_match": true,
+   "payload_fields": [
+    {
+     "offset": 0,
+     "type": "vip_uint32_t",
+     "name": "mem_id"
+    },
+    {
+     "offset": 4,
+     "type": "vipdrv_cache_type_e",
+     "name": "type"
+    }
+   ],
+   "handler": "vip2/vip_drv_interface.c:729",
+   "dispatch_case": "vip2/vip_drv_interface.c:1153",
+   "kernel_call": "vipdrv_mem_flush_cache (vip_drv_interface.c:740)",
+   "compile_guard": "vpmdENABLE_FLUSH_CPU_CACHE",
+   "kernel_action": "CPU cache flush/clean/invalidate on a video-memory buffer.",
+   "issued_by_libVIPhal": [
+    {
+     "function": "viphal_flush_cache",
+     "call_site": "0x3c5c"
+    }
+   ],
+   "label": "source"
+  },
+  {
+   "command": 12,
+   "enum": "VIPDRV_INTRFACE_WRAP_USER_MEMORY",
+   "enum_source": "vip2/inc/vip_drv_share.h:155",
+   "name_in_libVIPhal": "VIPDRV_WRAP_USER_MEMORY",
+   "payload_bytes_libVIPhal": 40,
+   "payload_struct": "_vipdrv_wrap_user_memory",
+   "payload_struct_bytes_aarch64": 40,
+   "size_match": true,
+   "payload_fields": [
+    {
+     "offset": 0,
+     "type": "vip_uint64_t",
+     "name": "logical"
+    },
+    {
+     "offset": 8,
+     "type": "vip_uint32_t",
+     "name": "mem_id"
+    },
+    {
+     "offset": 12,
+     "type": "vip_uint32_t",
+     "name": "memory_type"
+    },
+    {
+     "offset": 16,
+     "type": "vip_size_t",
+     "name": "size"
+    },
+    {
+     "offset": 24,
+     "type": "vip_uint64_t",
+     "name": "device_vis"
+    },
+    {
+     "offset": 32,
+     "type": "vip_address_t",
+     "name": "virtual_addr"
+    }
+   ],
+   "handler": "vip2/vip_drv_interface.c:780",
+   "dispatch_case": "vip2/vip_drv_interface.c:1138",
+   "kernel_call": "vipdrv_mem_wrap_usermemory (vip_drv_interface.c:789)",
+   "compile_guard": null,
+   "kernel_action": "Pin a user virtual range and map it into the NPU MMU.",
+   "issued_by_libVIPhal": [
+    {
+     "function": "viphal_wrap_usermemory",
+     "call_site": "0x2bd0"
+    }
+   ],
+   "label": "source"
+  },
+  {
+   "command": 13,
+   "enum": "VIPDRV_INTRFACE_UNWRAP_USER_MEMORY",
+   "enum_source": "vip2/inc/vip_drv_share.h:156",
+   "name_in_libVIPhal": "VIPDRV_UNWRAP_USER_MEMORY",
+   "payload_bytes_libVIPhal": 4,
+   "payload_struct": "_vipdrv_deallocation",
+   "payload_struct_bytes_aarch64": 4,
+   "size_match": true,
+   "payload_fields": [
+    {
+     "offset": 0,
+     "type": "vip_uint32_t",
+     "name": "mem_id"
+    }
+   ],
+   "handler": "vip2/vip_drv_interface.c:511",
+   "dispatch_case": "vip2/vip_drv_interface.c:1142",
+   "kernel_call": "vipdrv_mem_free_videomemory",
+   "compile_guard": null,
+   "kernel_action": "Release wrapped user memory (shares do_free_videomem).",
+   "issued_by_libVIPhal": [
+    {
+     "function": "viphal_unwrap_usermemory",
+     "call_site": "0x2cc4"
+    }
+   ],
+   "label": "source"
+  },
+  {
+   "command": 14,
+   "enum": "VIPDRV_INTRFACE_NOT_USED2",
+   "enum_source": "vip2/inc/vip_drv_share.h:157",
+   "name_in_libVIPhal": "VIPDRV_NOT_USED",
+   "payload_bytes_libVIPhal": 0,
+   "payload_struct": null,
+   "payload_struct_bytes_aarch64": 0,
+   "size_match": true,
+   "payload_fields": [],
+   "handler": null,
+   "dispatch_case": null,
+   "kernel_call": null,
+   "compile_guard": null,
+   "kernel_action": "Unused slot.",
+   "issued_by_libVIPhal": [],
+   "label": "observed"
+  },
+  {
+   "command": 15,
+   "enum": "VIPDRV_INTRFACE_POWER_MANAGEMENT",
+   "enum_source": "vip2/inc/vip_drv_share.h:158",
+   "name_in_libVIPhal": "VIPDRV_POWER_MANAGEMENT",
+   "payload_bytes_libVIPhal": 12,
+   "payload_struct": "_vipdrv_power_management",
+   "payload_struct_bytes_aarch64": 12,
+   "size_match": true,
+   "payload_fields": [
+    {
+     "offset": 0,
+     "type": "vip_enum",
+     "name": "property"
+    },
+    {
+     "offset": 4,
+     "type": "vip_uint8_t",
+     "name": "fscale_percent"
+    },
+    {
+     "offset": 8,
+     "type": "vip_uint32_t",
+     "name": "device_index"
+    }
+   ],
+   "handler": "vip2/vip_drv_interface.c:876",
+   "dispatch_case": "vip2/vip_drv_interface.c:1182",
+   "kernel_call": "vipdrv_pm_power_management (vip_drv_interface.c:888, vip_drv_pm.c:1305)",
+   "compile_guard": null,
+   "kernel_action": "Power state machine request: set frequency percent, off/on, stop/start, power-off timer enable/disable.",
+   "issued_by_libVIPhal": [
+    {
+     "function": "viphal_power_management",
+     "call_site": "0x3d4c"
+    }
+   ],
+   "label": "source"
+  },
+  {
+   "command": 16,
+   "enum": "VIPDRV_INTRFACE_WRAP_USER_PHYSICAL",
+   "enum_source": "vip2/inc/vip_drv_share.h:159",
+   "name_in_libVIPhal": "VIPDRV_WRAP_USER_PHYSICAL",
+   "payload_bytes_libVIPhal": 6192,
+   "payload_struct": "_vipdrv_wrap_user_physical",
+   "payload_struct_bytes_aarch64": 6192,
+   "size_match": true,
+   "payload_fields": [
+    {
+     "offset": 0,
+     "type": "vip_address_t[512]",
+     "name": "physical_table"
+    },
+    {
+     "offset": 4096,
+     "type": "vip_size_t[512]",
+     "name": "size_table"
+    },
+    {
+     "offset": 6144,
+     "type": "vip_uint32_t",
+     "name": "physical_num"
+    },
+    {
+     "offset": 6148,
+     "type": "vip_uint32_t",
+     "name": "memory_type"
+    },
+    {
+     "offset": 6152,
+     "type": "vip_uint64_t",
+     "name": "device_vis"
+    },
+    {
+     "offset": 6160,
+     "type": "vip_uint32_t",
+     "name": "mem_id"
+    },
+    {
+     "offset": 6168,
+     "type": "vip_address_t",
+     "name": "virtual_addr"
+    },
+    {
+     "offset": 6176,
+     "type": "vip_uint64_t",
+     "name": "logical"
+    },
+    {
+     "offset": 6184,
+     "type": "vip_uint32_t",
+     "name": "alloc_flag"
+    }
+   ],
+   "handler": "vip2/vip_drv_interface.c:749",
+   "dispatch_case": "vip2/vip_drv_interface.c:1130",
+   "kernel_call": "vipdrv_mem_wrap_userphysical (vip_drv_interface.c:758)",
+   "compile_guard": null,
+   "kernel_action": "Map a caller-supplied table of up to 512 CPU physical ranges into the NPU MMU (no ownership check beyond the allocator).",
+   "issued_by_libVIPhal": [
+    {
+     "function": "viphal_wrap_userphysical",
+     "call_site": "0x32bc"
+    }
+   ],
+   "label": "source"
+  },
+  {
+   "command": 17,
+   "enum": "VIPDRV_INTRFACE_UNWRAP_USER_PHYSICAL",
+   "enum_source": "vip2/inc/vip_drv_share.h:160",
+   "name_in_libVIPhal": "VIPDRV_UNWRAP_USER_PHYSICAL",
+   "payload_bytes_libVIPhal": 4,
+   "payload_struct": "_vipdrv_deallocation",
+   "payload_struct_bytes_aarch64": 4,
+   "size_match": true,
+   "payload_fields": [
+    {
+     "offset": 0,
+     "type": "vip_uint32_t",
+     "name": "mem_id"
+    }
+   ],
+   "handler": "vip2/vip_drv_interface.c:511",
+   "dispatch_case": "vip2/vip_drv_interface.c:1134",
+   "kernel_call": "vipdrv_mem_free_videomemory",
+   "compile_guard": null,
+   "kernel_action": "Release wrapped physical memory.",
+   "issued_by_libVIPhal": [
+    {
+     "function": "viphal_unwrap_userphysical",
+     "call_site": "0x2b14"
+    }
+   ],
+   "label": "source"
+  },
+  {
+   "command": 18,
+   "enum": "VIPDRV_INTRFACE_WRAP_USER_FD",
+   "enum_source": "vip2/inc/vip_drv_share.h:161",
+   "name_in_libVIPhal": "VIPDRV_WRAP_USER_FD",
+   "payload_bytes_libVIPhal": 48,
+   "payload_struct": "_vipdrv_wrap_user_fd",
+   "payload_struct_bytes_aarch64": 48,
+   "size_match": true,
+   "payload_fields": [
+    {
+     "offset": 0,
+     "type": "vip_uint32_t",
+     "name": "fd"
+    },
+    {
+     "offset": 4,
+     "type": "vip_uint32_t",
+     "name": "memory_type"
+    },
+    {
+     "offset": 8,
+     "type": "vip_size_t",
+     "name": "size"
+    },
+    {
+     "offset": 16,
+     "type": "vip_uint64_t",
+     "name": "device_vis"
+    },
+    {
+     "offset": 24,
+     "type": "vip_address_t",
+     "name": "virtual_addr"
+    },
+    {
+     "offset": 32,
+     "type": "vip_uint32_t",
+     "name": "mem_id"
+    },
+    {
+     "offset": 40,
+     "type": "vip_uint64_t",
+     "name": "logical"
+    }
+   ],
+   "handler": "vip2/vip_drv_interface.c:811",
+   "dispatch_case": "vip2/vip_drv_interface.c:1168",
+   "kernel_call": "vipdrv_mem_wrap_userfd (vip_drv_interface.c:820)",
+   "compile_guard": "vpmdENABLE_CREATE_BUF_FD",
+   "kernel_action": "Import a dma-buf fd into the NPU MMU.",
+   "issued_by_libVIPhal": [
+    {
+     "function": "viphal_wrap_userfd",
+     "call_site": "0x2da0"
+    }
+   ],
+   "label": "source"
+  },
+  {
+   "command": 19,
+   "enum": "VIPDRV_INTRFACE_UNWRAP_USER_FD",
+   "enum_source": "vip2/inc/vip_drv_share.h:162",
+   "name_in_libVIPhal": "VIPDRV_UNWRAP_USER_FD",
+   "payload_bytes_libVIPhal": 4,
+   "payload_struct": "_vipdrv_deallocation",
+   "payload_struct_bytes_aarch64": 4,
+   "size_match": true,
+   "payload_fields": [
+    {
+     "offset": 0,
+     "type": "vip_uint32_t",
+     "name": "mem_id"
+    }
+   ],
+   "handler": "vip2/vip_drv_interface.c:511",
+   "dispatch_case": "vip2/vip_drv_interface.c:1171",
+   "kernel_call": "vipdrv_mem_free_videomemory",
+   "compile_guard": "vpmdENABLE_CREATE_BUF_FD",
+   "kernel_action": "Release an imported dma-buf.",
+   "issued_by_libVIPhal": [
+    {
+     "function": "viphal_unwrap_userfd",
+     "call_site": "0x2ef4"
+    }
+   ],
+   "label": "source"
+  },
+  {
+   "command": 20,
+   "enum": "VIPDRV_INTRFACE_QUERY_PROFILING",
+   "enum_source": "vip2/inc/vip_drv_share.h:163",
+   "name_in_libVIPhal": "VIPDRV_QUERY_PROFILING",
+   "payload_bytes_libVIPhal": 204,
+   "payload_struct": "_vipdrv_query_profiling",
+   "payload_struct_bytes_aarch64": 204,
+   "size_match": true,
+   "payload_fields": [
+    {
+     "offset": 0,
+     "type": "vip_uint32_t",
+     "name": "task_id"
+    },
+    {
+     "offset": 4,
+     "type": "vip_uint32_t",
+     "name": "subtask_index"
+    },
+    {
+     "offset": 8,
+     "type": "vip_uint32_t[8]",
+     "name": "total_cycle"
+    },
+    {
+     "offset": 40,
+     "type": "vip_uint32_t[8]",
+     "name": "total_idle_cycle"
+    },
+    {
+     "offset": 72,
+     "type": "vip_uint32_t[8]",
+     "name": "total_read"
+    },
+    {
+     "offset": 104,
+     "type": "vip_uint32_t[8]",
+     "name": "total_write"
+    },
+    {
+     "offset": 136,
+     "type": "vip_uint32_t[8]",
+     "name": "total_read_ocb"
+    },
+    {
+     "offset": 168,
+     "type": "vip_uint32_t[8]",
+     "name": "total_write_ocb"
+    },
+    {
+     "offset": 200,
+     "type": "vip_uint32_t",
+     "name": "inference_time"
+    }
+   ],
+   "handler": "vip2/vip_drv_interface.c:839",
+   "dispatch_case": "vip2/vip_drv_interface.c:1177",
+   "kernel_call": "vipdrv_task_profile_query (vip_drv_interface.c:846)",
+   "compile_guard": "vpmdENABLE_TASK_PROFILE",
+   "kernel_action": "Return per-core cycle, idle-cycle, read/write and OCB byte counters and inference time for a subtask.",
+   "issued_by_libVIPhal": [
+    {
+     "function": "viphal_query_profiling",
+     "call_site": "0x3b04"
+    }
+   ],
+   "label": "source"
+  },
+  {
+   "command": 21,
+   "enum": "VIPDRV_INTRFACE_QUERY_DRIVER_STATUS",
+   "enum_source": "vip2/inc/vip_drv_share.h:164",
+   "name_in_libVIPhal": "VIPDRV_QUERY_DRIVER_STATUS",
+   "payload_bytes_libVIPhal": 20,
+   "payload_struct": "_vipdrv_query_driver_status",
+   "payload_struct_bytes_aarch64": 20,
+   "size_match": true,
+   "payload_fields": [
+    {
+     "offset": 0,
+     "type": "vip_uint32_t",
+     "name": "device_index"
+    },
+    {
+     "offset": 4,
+     "type": "vip_uint32_t",
+     "name": "commit_count"
+    },
+    {
+     "offset": 8,
+     "type": "vip_uint32_t",
+     "name": "init_cmd_handle"
+    },
+    {
+     "offset": 12,
+     "type": "vip_uint32_t",
+     "name": "init_cmd_size"
+    },
+    {
+     "offset": 16,
+     "type": "vip_uint32_t",
+     "name": "init_cmd_physical"
+    }
+   ],
+   "handler": "vip2/vip_drv_interface.c:691",
+   "dispatch_case": "vip2/vip_drv_interface.c:1126",
+   "kernel_call": "do_query_driver_status",
+   "compile_guard": null,
+   "kernel_action": "Return commit count and the init-command buffer handle/size/address.",
+   "issued_by_libVIPhal": [
+    {
+     "function": "viphal_query_driver_status",
+     "call_site": "0x3ba4"
+    }
+   ],
+   "label": "source"
+  },
+  {
+   "command": 22,
+   "enum": "VIPDRV_INTRFACE_QUERY_MMU_INFO",
+   "enum_source": "vip2/inc/vip_drv_share.h:165",
+   "name_in_libVIPhal": "VIPDRV_QUERY_MMU_INFO",
+   "payload_bytes_libVIPhal": 288,
+   "payload_struct": "_vipdrv_query_mmu_info",
+   "payload_struct_bytes_aarch64": 288,
+   "size_match": true,
+   "payload_fields": [
+    {
+     "offset": 0,
+     "type": "vip_uint32_t",
+     "name": "entry_mem_id"
+    },
+    {
+     "offset": 4,
+     "type": "vip_uint32_t",
+     "name": "mtlb_mem_id"
+    },
+    {
+     "offset": 8,
+     "type": "vip_uint32_t[16]",
+     "name": "stlb_mem_id"
+    },
+    {
+     "offset": 72,
+     "type": "vip_uint32_t",
+     "name": "entry_size"
+    },
+    {
+     "offset": 76,
+     "type": "vip_uint32_t",
+     "name": "mtlb_size"
+    },
+    {
+     "offset": 80,
+     "type": "vip_size_t[16]",
+     "name": "stlb_size"
+    },
+    {
+     "offset": 144,
+     "type": "vip_physical_t",
+     "name": "entry_physical"
+    },
+    {
+     "offset": 152,
+     "type": "vip_physical_t",
+     "name": "mtlb_physical"
+    },
+    {
+     "offset": 160,
+     "type": "vip_physical_t[16]",
+     "name": "stlb_physical"
+    }
+   ],
+   "handler": "vip2/vip_drv_interface.c:857",
+   "dispatch_case": "vip2/vip_drv_interface.c:1187",
+   "kernel_call": "vipdrv_mmu_query_mmu_info (vip_drv_interface.c:863)",
+   "compile_guard": "vpmdENABLE_CAPTURE_MMU",
+   "kernel_action": "Return MMU entry, MTLB and STLB buffer ids, sizes and physical addresses (for capture).",
+   "issued_by_libVIPhal": [
+    {
+     "function": "viphal_query_mmu_info",
+     "call_site": "0x3634"
+    }
+   ],
+   "label": "source"
+  },
+  {
+   "command": 23,
+   "enum": "VIPDRV_INTRFACE_MAP_USER_LOGICAL",
+   "enum_source": "vip2/inc/vip_drv_share.h:166",
+   "name_in_libVIPhal": "VIPDRV_MAP_USER_LOGICAL",
+   "payload_bytes_libVIPhal": 16,
+   "payload_struct": "_vipdrv_map_user_logical",
+   "payload_struct_bytes_aarch64": 16,
+   "size_match": true,
+   "payload_fields": [
+    {
+     "offset": 0,
+     "type": "vip_uint64_t",
+     "name": "logical"
+    },
+    {
+     "offset": 8,
+     "type": "vip_uint32_t",
+     "name": "mem_id"
+    }
+   ],
+   "handler": "vip2/vip_drv_interface.c:530",
+   "dispatch_case": "vip2/vip_drv_interface.c:1115",
+   "kernel_call": "vipdrv_mem_map_userlogical (vip_drv_interface.c:537)",
+   "compile_guard": null,
+   "kernel_action": "Map an existing video-memory buffer into the caller (kernel vm_mmap).",
+   "issued_by_libVIPhal": [
+    {
+     "function": "viphal_map_userlogical",
+     "call_site": "0x29c4"
+    }
+   ],
+   "label": "source"
+  },
+  {
+   "command": 24,
+   "enum": "VIPDRV_INTRFACE_UNMAP_USER_LOGICAL",
+   "enum_source": "vip2/inc/vip_drv_share.h:167",
+   "name_in_libVIPhal": "VIPDRV_UNMAP_USER_LOGICAL",
+   "payload_bytes_libVIPhal": 4,
+   "payload_struct": "_vipdrv_unmap_user_logical",
+   "payload_struct_bytes_aarch64": 4,
+   "size_match": true,
+   "payload_fields": [
+    {
+     "offset": 0,
+     "type": "vip_uint32_t",
+     "name": "mem_id"
+    }
+   ],
+   "handler": "vip2/vip_drv_interface.c:550",
+   "dispatch_case": "vip2/vip_drv_interface.c:1118",
+   "kernel_call": "vipdrv_mem_unmap_userlogical (vip_drv_interface.c:556)",
+   "compile_guard": null,
+   "kernel_action": "Remove the user mapping.",
+   "issued_by_libVIPhal": [
+    {
+     "function": "viphal_unmap_userlogical",
+     "call_site": "0x2a78"
+    }
+   ],
+   "label": "source"
+  },
+  {
+   "command": 25,
+   "enum": "VIPDRV_INTRFACE_CANCEL_TASK",
+   "enum_source": "vip2/inc/vip_drv_share.h:168",
+   "name_in_libVIPhal": "VIPDRV_CANCEL",
+   "payload_bytes_libVIPhal": 8,
+   "payload_struct": "_vipdrv_cancel_task_param",
+   "payload_struct_bytes_aarch64": 8,
+   "size_match": true,
+   "payload_fields": [
+    {
+     "offset": 0,
+     "type": "vip_uint32_t",
+     "name": "task_id"
+    },
+    {
+     "offset": 4,
+     "type": "vip_uint32_t",
+     "name": "subtask_index"
+    }
+   ],
+   "handler": "vip2/vip_drv_interface.c:581",
+   "dispatch_case": "vip2/vip_drv_interface.c:1147",
+   "kernel_call": "vipdrv_task_tcb_cancel (vip_drv_interface.c:588)",
+   "compile_guard": "vpmdENABLE_CANCELATION",
+   "kernel_action": "Cancel a running subtask: +0x3a8 bit 3 pulse (vip_drv_hardware.c:1119-1170).",
+   "issued_by_libVIPhal": [
+    {
+     "function": "viphal_cancel_task",
+     "call_site": "0x2578"
+    }
+   ],
+   "label": "source"
+  },
+  {
+   "command": 26,
+   "enum": "VIPDRV_INTRFACE_QUERY_REGISTER_DUMP",
+   "enum_source": "vip2/inc/vip_drv_share.h:169",
+   "name_in_libVIPhal": "VIPDRV_QUERY_REGISTER_DUMP",
+   "payload_bytes_libVIPhal": 16,
+   "payload_struct": "_vipdrv_query_register_dump",
+   "payload_struct_bytes_aarch64": 16,
+   "size_match": true,
+   "payload_fields": [
+    {
+     "offset": 0,
+     "type": "vip_physical_t",
+     "name": "physical"
+    },
+    {
+     "offset": 8,
+     "type": "vip_uint32_t",
+     "name": "mem_id"
+    },
+    {
+     "offset": 12,
+     "type": "vip_uint32_t",
+     "name": "count"
+    }
+   ],
+   "handler": "vip2/vip_drv_interface.c:902",
+   "dispatch_case": "vip2/vip_drv_interface.c:1192",
+   "kernel_call": "do_query_register_dump",
+   "compile_guard": "vpmdENABLE_CAPTURE || vpmdENABLE_HANG_DUMP > 1",
+   "kernel_action": "Return the hang-dump register log buffer.",
+   "issued_by_libVIPhal": [
+    {
+     "function": "viphal_query_register_dump",
+     "call_site": "0x4010"
+    }
+   ],
+   "label": "source"
+  },
+  {
+   "command": 27,
+   "enum": "VIPDRV_INTRFACE_CREATE_TASK",
+   "enum_source": "vip2/inc/vip_drv_share.h:170",
+   "name_in_libVIPhal": "VIPDRV_CREATE_TASK",
+   "payload_bytes_libVIPhal": 24,
+   "payload_struct": "_vipdrv_create_task_param",
+   "payload_struct_bytes_aarch64": 24,
+   "size_match": true,
+   "payload_fields": [
+    {
+     "offset": 0,
+     "type": "vip_uint32_t",
+     "name": "task_id"
+    },
+    {
+     "offset": 4,
+     "type": "vip_char_t[16]",
+     "name": "task_name"
+    },
+    {
+     "offset": 20,
+     "type": "vip_uint32_t",
+     "name": "subtask_count"
+    }
+   ],
+   "handler": "vip2/vip_drv_interface.c:921",
+   "dispatch_case": "vip2/vip_drv_interface.c:1196",
+   "kernel_call": "vipdrv_task_desc_create (vip_drv_interface.c:928)",
+   "compile_guard": null,
+   "kernel_action": "Create a task descriptor with a name and subtask capacity; returns task_id.",
+   "issued_by_libVIPhal": [
+    {
+     "function": "viphal_task_create",
+     "call_site": "0x40ac"
+    }
+   ],
+   "label": "source"
+  },
+  {
+   "command": 28,
+   "enum": "VIPDRV_INTRFACE_SET_TASK_PROPERTY",
+   "enum_source": "vip2/inc/vip_drv_share.h:171",
+   "name_in_libVIPhal": "VIPDRV_SET_TASK_PROPERTY",
+   "payload_bytes_libVIPhal": 36,
+   "payload_struct": "_vipdrv_set_task_property",
+   "payload_struct_bytes_aarch64": 36,
+   "size_match": true,
+   "payload_fields": [
+    {
+     "offset": 0,
+     "type": "vip_uint32_t",
+     "name": "task_id"
+    },
+    {
+     "offset": 4,
+     "type": "vip_uint32_t",
+     "name": "type"
+    },
+    {
+     "offset": 8,
+     "type": "vip_uint32_t",
+     "name": "index"
+    },
+    {
+     "offset": 12,
+     "type": "vip_uint32_t",
+     "name": "patch_type"
+    },
+    {
+     "offset": 16,
+     "type": "union _vipdrv_set_task_property::(unnamed at vip_drv_share.h:486)",
+     "name": "param"
+    }
+   ],
+   "handler": "vip2/vip_drv_interface.c:933",
+   "dispatch_case": "vip2/vip_drv_interface.c:1199",
+   "kernel_call": "vipdrv_task_desc_set_property (vip_drv_interface.c:940)",
+   "compile_guard": null,
+   "kernel_action": "Register a subtask command buffer (mem_id, size, patch count, core), a patch record (SYNC/CHIP/DUP offset and size), or duplicate another task.",
+   "issued_by_libVIPhal": [
+    {
+     "function": "viphal_task_set_property",
+     "call_site": "0x4174"
+    },
+    {
+     "function": "viphal_task_set_patch_info",
+     "call_site": "0x4234"
+    },
+    {
+     "function": "viphal_task_dup_info",
+     "call_site": "0x42f4"
+    }
+   ],
+   "label": "source"
+  },
+  {
+   "command": 29,
+   "enum": "VIPDRV_INTRFACE_DESTROY_TASK",
+   "enum_source": "vip2/inc/vip_drv_share.h:172",
+   "name_in_libVIPhal": "VIPDRV_DESTROY_TASK",
+   "payload_bytes_libVIPhal": 4,
+   "payload_struct": "_vipdrv_destroy_task_param",
+   "payload_struct_bytes_aarch64": 4,
+   "size_match": true,
+   "payload_fields": [
+    {
+     "offset": 0,
+     "type": "vip_uint32_t",
+     "name": "task_id"
+    }
+   ],
+   "handler": "vip2/vip_drv_interface.c:945",
+   "dispatch_case": "vip2/vip_drv_interface.c:1202",
+   "kernel_call": "vipdrv_task_desc_destroy (vip_drv_interface.c:952)",
+   "compile_guard": null,
+   "kernel_action": "Destroy a task descriptor.",
+   "issued_by_libVIPhal": [
+    {
+     "function": "viphal_task_destroy",
+     "call_site": "0x4398"
+    }
+   ],
+   "label": "source"
+  }
+ ],
+ "set_task_property_union_members": {
+  "_vipdrv_set_task_property::(unnamed at vip_drv_share.h:487)": {
+   "name": "_vipdrv_set_task_property::(unnamed at vip_drv_share.h:487)",
+   "fields": [
+    {
+     "offset": 0,
+     "type": "vip_uint32_t",
+     "name": "subtask_id"
+    },
+    {
+     "offset": 4,
+     "type": "vip_uint32_t",
+     "name": "size"
+    },
+    {
+     "offset": 8,
+     "type": "vip_uint32_t",
+     "name": "patch_count"
+    },
+    {
+     "offset": 12,
+     "type": "vip_uint32_t",
+     "name": "core_index"
+    }
+   ],
+   "size": 16,
+   "align": 4
+  },
+  "_vipdrv_set_task_property::(unnamed at vip_drv_share.h:498)": {
+   "name": "_vipdrv_set_task_property::(unnamed at vip_drv_share.h:498)",
+   "fields": [
+    {
+     "offset": 0,
+     "type": "vip_uint32_t",
+     "name": "patch_index"
+    },
+    {
+     "offset": 4,
+     "type": "vip_uint32_t",
+     "name": "size"
+    },
+    {
+     "offset": 8,
+     "type": "vip_uint32_t",
+     "name": "core_index"
+    },
+    {
+     "offset": 12,
+     "type": "vip_uint32_t",
+     "name": "core_count"
+    },
+    {
+     "offset": 16,
+     "type": "vip_uint32_t",
+     "name": "offset"
+    }
+   ],
+   "size": 20,
+   "align": 4
+  },
+  "_vipdrv_set_task_property::(unnamed at vip_drv_share.h:511)": {
+   "name": "_vipdrv_set_task_property::(unnamed at vip_drv_share.h:511)",
+   "fields": [
+    {
+     "offset": 0,
+     "type": "vip_uint32_t",
+     "name": "task_id"
+    },
+    {
+     "offset": 4,
+     "type": "vip_uint32_t",
+     "name": "type"
+    },
+    {
+     "offset": 8,
+     "type": "vip_uint32_t",
+     "name": "index"
+    }
+   ],
+   "size": 12,
+   "align": 4
+  },
+  "_vipdrv_set_task_property::(unnamed at vip_drv_share.h:486)": {
+   "name": "_vipdrv_set_task_property::(unnamed at vip_drv_share.h:486)",
+   "fields": [
+    {
+     "offset": 0,
+     "type": "struct _vipdrv_set_task_property::(unnamed at vip_drv_share.h:487)",
+     "name": "subtask_info"
+    },
+    {
+     "offset": 0,
+     "type": "struct _vipdrv_set_task_property::(unnamed at vip_drv_share.h:498)",
+     "name": "patch_info"
+    },
+    {
+     "offset": 0,
+     "type": "struct _vipdrv_set_task_property::(unnamed at vip_drv_share.h:511)",
+     "name": "dup_info"
+    }
+   ],
+   "size": 20,
+   "align": 4
+  }
+ }
+}

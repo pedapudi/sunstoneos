@@ -1,0 +1,697 @@
+{
+  "schema": "sunstoneos-vendor-firmware-sources-v1",
+  "cache_root": "~/.cache/sunstoneos",
+  "pending_documents": [
+    "../reference-backsolve-cpu.md",
+    "../reference-backsolve-gpu.md",
+    "../reference-backsolve-npu.md"
+  ],
+  "items": [
+    {
+      "name": "fixs-brom-hex",
+      "group": "boot-rom",
+      "role": "Published hexadecimal dump of the A733 fixed secure boot ROM (FIXS-BROM, addresses 0x0-0x10fff)",
+      "acquisition": "download",
+      "url": "https://raw.githubusercontent.com/smaeul/sunxi-blobs/42aabf4f2c93158a0cd88a000f9af56ce024882a/sun60iw2p1/fixs-brom/blob.hex",
+      "revision": "42aabf4f2c93158a0cd88a000f9af56ce024882a",
+      "sha256": "a7fc3c6ffe6254fb77929eb407edcf88d7925a64b4a968964a0ed79815373fc8",
+      "bytes": 330752,
+      "cache_path": "sources/brom/fixs-brom-blob.hex",
+      "used_by": [
+        "docs/sources.md"
+      ],
+      "analysis": "boot-rom-and-boot0.md"
+    },
+    {
+      "name": "fixs-brom",
+      "group": "boot-rom",
+      "role": "Binary decoded from the published FIXS-BROM dump; differs from the ROM captured on the board",
+      "acquisition": "derived",
+      "url": "https://raw.githubusercontent.com/smaeul/sunxi-blobs/42aabf4f2c93158a0cd88a000f9af56ce024882a/sun60iw2p1/fixs-brom/blob.hex",
+      "revision": "42aabf4f2c93158a0cd88a000f9af56ce024882a",
+      "sha256": "3a2a7d289951f61095afdabe7813b067295223ce588c422d64200fc7e4431eb1",
+      "bytes": 69632,
+      "cache_path": "sources/brom/fixs-brom.bin",
+      "used_by": [
+        "checks/a733-rom-recovery.py",
+        "docs/watchdog.md"
+      ],
+      "analysis": "boot-rom-and-boot0.md",
+      "derive": {
+        "from": "fixs-brom-hex",
+        "transform": "xxd-hex-columns"
+      },
+      "evidence": [
+        "evidence/reference-backsolve-20261025/npu/sources.json"
+      ]
+    },
+    {
+      "name": "ns-brom-hex",
+      "group": "boot-rom",
+      "role": "Published hexadecimal dump of the A733 nonsecure boot ROM (NS-BROM, addresses 0x17000-0x21fff), which holds the USB FEL implementation",
+      "acquisition": "download",
+      "url": "https://raw.githubusercontent.com/smaeul/sunxi-blobs/42aabf4f2c93158a0cd88a000f9af56ce024882a/sun60iw2p1/ns-brom/blob.hex",
+      "revision": "42aabf4f2c93158a0cd88a000f9af56ce024882a",
+      "sha256": "7bd968d6323c54a457184d78e7cd6e1a851a5cceb1b504558407dd3eff7eaf15",
+      "bytes": 214016,
+      "cache_path": "sources/brom/ns-brom-blob.hex",
+      "used_by": [
+        "docs/video-platform.md"
+      ],
+      "analysis": "boot-rom-and-boot0.md",
+      "lock": "a733-nonsecure-rom-reference"
+    },
+    {
+      "name": "ns-brom",
+      "group": "boot-rom",
+      "role": "Binary decoded from the published NS-BROM dump; not yet compared with a board capture",
+      "acquisition": "derived",
+      "url": "https://raw.githubusercontent.com/smaeul/sunxi-blobs/42aabf4f2c93158a0cd88a000f9af56ce024882a/sun60iw2p1/ns-brom/blob.hex",
+      "revision": "42aabf4f2c93158a0cd88a000f9af56ce024882a",
+      "sha256": "95be69c916846a8259578565f3193a6b9ab0625294d5374f3dc6c2f667fc6169",
+      "bytes": 45056,
+      "cache_path": "sources/brom/ns-brom.bin",
+      "used_by": [
+        "apps/usb-returning/build.py",
+        "checks/a733-video-unit.c",
+        "docs/usb-platform.md",
+        "docs/designs/usb-session-takeover.md"
+      ],
+      "analysis": "boot-rom-and-boot0.md",
+      "derive": {
+        "from": "ns-brom-hex",
+        "transform": "xxd-hex-columns"
+      }
+    },
+    {
+      "name": "board-secure-rom",
+      "group": "boot-rom",
+      "role": "Secure boot ROM (addresses 0x0-0x10fff) copied from the board over USB FEL; thirteen words in its first 1 KiB differ from the published FIXS-BROM",
+      "acquisition": "board",
+      "url": null,
+      "revision": "board capture 2026-10-16, USB port 3-1",
+      "sha256": "a8e31821e8a1611d75867825914c58373c732742cb8f2235e8168c1d7e93b5aa",
+      "bytes": 69632,
+      "cache_path": "evidence/rom-copy-20261016-084055/physical-rom.bin",
+      "used_by": [
+        "checks/a733-rom-recovery.py",
+        "checks/remote-writers-sources.py",
+        "checks/watchdog-rom-reset-log.py",
+        "tools/check-a733-smp.py",
+        "tools/check-fel-input.py",
+        "tools/check-watchdog-configuration.py",
+        "tools/check-watchdog-expiry.py",
+        "docs/watchdog.md",
+        "docs/usb-platform.md",
+        "docs/video-platform.md",
+        "apps/usb-returning/README.md"
+      ],
+      "analysis": "boot-rom-and-boot0.md",
+      "tool": {
+        "name": "sunxi-fel built by tools/build-sunxi-fel.py from the sunxi-tools entry in sources.lock.json with the four A733 patches",
+        "sha256": "4a54cdc179baafbdecac47eb85714c3745d6d9952e05b482c7016afd4b22bf3e"
+      },
+      "procedure": [
+        "Only the board coordinator runs these steps, under the board lock of tools/usb-access.py, on a board in USB FEL mode. FEL is the boot ROM's USB recovery protocol. A direct FEL read of address 0 is refused, so the copy runs on the board CPU through SRAM.",
+        "Let DEV be the bus:device pair of the board, for example 3:64.",
+        "Save the helper workspace and the copy buffer: sunxi-fel -d DEV read 0x71000 128 scratch.bin read 0x52000 1024 buffer.bin",
+        "Copy the first 1 KiB of ROM into SRAM and read it: sunxi-fel -d DEV memmove 0x52000 0x0 1024 read 0x52000 1024 rom-prefix.bin",
+        "Restore both areas: sunxi-fel -d DEV write 0x52000 buffer.bin write 0x71000 scratch.bin, then read them back and compare with the saved files.",
+        "Repeat the save, copy and restore for the remainder with a 68608-byte buffer: memmove 0x52000 0x400 68608, then read 0x52000 68608 rom-remainder.bin.",
+        "Concatenate rom-prefix.bin and rom-remainder.bin into physical-rom.bin (69632 bytes) and compare its SHA-256 with this entry. No reset is needed."
+      ]
+    },
+    {
+      "name": "boot0-sdcard-orangepizero3w",
+      "group": "boot-package",
+      "role": "boot0, the first-stage loader the boot ROM reads from storage (Thumb-2, load address 0x47000) for SD boot on the Orange Pi Zero 3W; it trains DDR, so it is also the only DDR initialization binary SunstoneOS uses",
+      "acquisition": "download",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/packages/pack-uboot/sun60iw2/bin/boot0_sdcard_orangepizero3w.fex",
+      "revision": "a95129bf30ea11886cc35f08ebb3e69695a26656",
+      "sha256": "829ea8e3b65d71a02f2d0e094bc073de3a10869f948f62db49dbf023d07fabe3",
+      "bytes": 245760,
+      "cache_path": "sources/board-boot/boot0_sdcard_orangepizero3w.fex",
+      "used_by": [
+        "tools/prepare-microsd-boot.py",
+        "tools/prepare-ddr.py",
+        "checks/cold-entry.py",
+        "checks/boot0-monitor-handoff.py",
+        "checks/remote-writers-sources.py",
+        "checks/cold-boot-cache.py",
+        "docs/boot.md",
+        "docs/microsd-boot-package.md",
+        "docs/cold-entry.md"
+      ],
+      "analysis": "boot-rom-and-boot0.md",
+      "lock": "board-boot0"
+    },
+    {
+      "name": "boot0-sdcard-orangepizero3w-1800m",
+      "group": "boot-package",
+      "role": "boot0, the first-stage loader the boot ROM reads from storage (Thumb-2, load address 0x47000) for SD boot on the Orange Pi Zero 3W, variant named 1800M; it differs from the default variant only in its DRAM parameter tables, DRAM training code and checksum",
+      "acquisition": "download",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/packages/pack-uboot/sun60iw2/bin/boot0_sdcard_orangepizero3w_1800M.fex",
+      "revision": "a95129bf30ea11886cc35f08ebb3e69695a26656",
+      "sha256": "d2a9bcccf012dce554c4613cf3e2e4256fe9863f6215afbe979aca891d4a6e27",
+      "bytes": 245760,
+      "cache_path": "sources/board-boot/boot0_sdcard_orangepizero3w_1800M.fex",
+      "used_by": [],
+      "analysis": "boot-rom-and-boot0.md",
+      "evidence": [
+        "evidence/reference-backsolve-20261025/cpu/sources.json"
+      ]
+    },
+    {
+      "name": "boot0-sdcard",
+      "group": "boot-package",
+      "role": "boot0, the first-stage loader the boot ROM reads from storage (Thumb-2, load address 0x47000) for SD boot, generic board; not used or analysed by SunstoneOS, recorded to pin the complete vendor directory",
+      "acquisition": "download",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/packages/pack-uboot/sun60iw2/bin/boot0_sdcard.fex",
+      "revision": "a95129bf30ea11886cc35f08ebb3e69695a26656",
+      "sha256": "a1ed6f1b8c4f5d98c29febefdc7203e5c442c2d1b841d204278b62ad56a70fd2",
+      "bytes": 245760,
+      "cache_path": "sources/board-boot/boot0_sdcard.fex",
+      "used_by": [],
+      "analysis": null
+    },
+    {
+      "name": "boot0-sdcard-a733",
+      "group": "boot-package",
+      "role": "boot0, the first-stage loader the boot ROM reads from storage (Thumb-2, load address 0x47000) for SD boot, A733 reference board; not used or analysed by SunstoneOS, recorded to pin the complete vendor directory",
+      "acquisition": "download",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/packages/pack-uboot/sun60iw2/bin/boot0_sdcard_a733.fex",
+      "revision": "a95129bf30ea11886cc35f08ebb3e69695a26656",
+      "sha256": "9213f1c56ef932930d43b5751e8937bea0e9ae7460ec16187cc1b0dffdb75345",
+      "bytes": 245760,
+      "cache_path": "sources/board-boot/boot0_sdcard_a733.fex",
+      "used_by": [],
+      "analysis": null
+    },
+    {
+      "name": "boot0-spinor-a733",
+      "group": "boot-package",
+      "role": "boot0, the first-stage loader the boot ROM reads from storage (Thumb-2, load address 0x47000) for SPI NOR boot, A733 reference board; not used or analysed by SunstoneOS, recorded to pin the complete vendor directory",
+      "acquisition": "download",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/packages/pack-uboot/sun60iw2/bin/boot0_spinor_a733.fex",
+      "revision": "a95129bf30ea11886cc35f08ebb3e69695a26656",
+      "sha256": "7f0babc242c1e4614c7243bd2c45a980e4385727ffbb544a7c8f2d324cf8dc07",
+      "bytes": 237568,
+      "cache_path": "sources/board-boot/boot0_spinor_a733.fex",
+      "used_by": [],
+      "analysis": null
+    },
+    {
+      "name": "boot0-ufs-a733",
+      "group": "boot-package",
+      "role": "boot0, the first-stage loader the boot ROM reads from storage (Thumb-2, load address 0x47000) for UFS boot, A733 reference board; not used or analysed by SunstoneOS, recorded to pin the complete vendor directory",
+      "acquisition": "download",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/packages/pack-uboot/sun60iw2/bin/boot0_ufs_a733.fex",
+      "revision": "a95129bf30ea11886cc35f08ebb3e69695a26656",
+      "sha256": "c5729d90686acfe7db9c649010c8026355fec212e72455e9eda6d17087c0942f",
+      "bytes": 245760,
+      "cache_path": "sources/board-boot/boot0_ufs_a733.fex",
+      "used_by": [],
+      "analysis": null
+    },
+    {
+      "name": "boot0-ufs-orangepizero3w",
+      "group": "boot-package",
+      "role": "boot0, the first-stage loader the boot ROM reads from storage (Thumb-2, load address 0x47000) for UFS boot on the Orange Pi Zero 3W; not used or analysed by SunstoneOS, recorded to pin the complete vendor directory",
+      "acquisition": "download",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/packages/pack-uboot/sun60iw2/bin/boot0_ufs_orangepizero3w.fex",
+      "revision": "a95129bf30ea11886cc35f08ebb3e69695a26656",
+      "sha256": "7046c43d43b3b2e47452ccb6d5db935e109dc9ca7bde7d2ab90105e7901998b3",
+      "bytes": 245760,
+      "cache_path": "sources/board-boot/boot0_ufs_orangepizero3w.fex",
+      "used_by": [],
+      "analysis": null
+    },
+    {
+      "name": "monitor",
+      "group": "boot-package",
+      "role": "Vendor TF-A BL31 secure monitor (AArch64, load address 0x48000000), version string v2.5(debug):7dddb263a-dirty, built 30 December 2024; source not published",
+      "acquisition": "download",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/packages/pack-uboot/sun60iw2/bin/monitor.fex",
+      "revision": "a95129bf30ea11886cc35f08ebb3e69695a26656",
+      "sha256": "8af16b86ae8e2eff634a3ebca76a8cdf3c10b3540387573d46c3d785545b2632",
+      "bytes": 78609,
+      "cache_path": "sources/cpu-startup/monitor.fex",
+      "used_by": [
+        "checks/a733-cpu-start.py",
+        "docs/cpu-start.md",
+        "docs/a733-smp-supervised.md",
+        "docs/designs/cpu-pmu.md"
+      ],
+      "analysis": "tf-a-monitor.md",
+      "lock": "board-monitor",
+      "evidence": [
+        "evidence/reference-backsolve-20261025/cpu/sources.json",
+        "evidence/reference-backsolve-20261025/gpu/sources.json",
+        "evidence/reference-backsolve-20261025/npu/sources.json"
+      ]
+    },
+    {
+      "name": "scp",
+      "group": "boot-package",
+      "role": "Vendor system control processor (SCP) firmware for the E902 RISC-V core, derived from the arisc (AR100) firmware; runs system suspend, resume, power-off and reset; source not published",
+      "acquisition": "download",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/packages/pack-uboot/sun60iw2/bin/scp.fex",
+      "revision": "a95129bf30ea11886cc35f08ebb3e69695a26656",
+      "sha256": "07e6b97628101963e7944e012948c4bdf721f914bad347acd7dfbde89db42749",
+      "bytes": 105912,
+      "cache_path": "sources/board-boot/scp.fex",
+      "used_by": [
+        "docs/gpu-power.md"
+      ],
+      "analysis": "scp-firmware.md",
+      "evidence": [
+        "evidence/npu-low-power-source-20261024/scp-origin.json",
+        "evidence/reference-backsolve-20261025/cpu/sources.json",
+        "evidence/reference-backsolve-20261025/npu/sources.json"
+      ]
+    },
+    {
+      "name": "boot-package-cfg",
+      "group": "boot-package",
+      "role": "Vendor boot-package list: u-boot.fex, monitor.fex and scp.fex in that order, with OP-TEE disabled",
+      "acquisition": "download",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/packages/pack-uboot/sun60iw2/bin/boot_package.cfg",
+      "revision": "a95129bf30ea11886cc35f08ebb3e69695a26656",
+      "sha256": "09bd43f68e54c0746b5130a3acf37fd38191d9187e329e2b78711561b6f9d918",
+      "bytes": 209,
+      "cache_path": "sources/board-boot/boot_package.cfg",
+      "used_by": [
+        "docs/microsd-boot-package.md"
+      ],
+      "analysis": null
+    },
+    {
+      "name": "sys-config",
+      "group": "boot-package",
+      "role": "Vendor board configuration read by boot0 and U-Boot (power mode, DRAM and pin settings)",
+      "acquisition": "download",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/packages/pack-uboot/sun60iw2/bin/sys_config/sys_config.fex",
+      "revision": "a95129bf30ea11886cc35f08ebb3e69695a26656",
+      "sha256": "eb598823d947fa39d0cf2102051b921d10f41b26538103b9fa3a266c6a486a29",
+      "bytes": 5006,
+      "cache_path": "sources/board-boot/sys_config-sys_config.fex",
+      "used_by": [
+        "boot/a733/stage2/admission.c",
+        "docs/boot-slots.md"
+      ],
+      "analysis": null,
+      "evidence": [
+        "evidence/reference-backsolve-20261025/gpu/sources.json"
+      ]
+    },
+    {
+      "name": "u-boot-dts",
+      "group": "boot-package",
+      "role": "Vendor U-Boot device tree source for sun60iw2 (T736 demo board description)",
+      "acquisition": "download",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/packages/pack-uboot/sun60iw2/bin/dts/u-boot-current.dts",
+      "revision": "a95129bf30ea11886cc35f08ebb3e69695a26656",
+      "sha256": "bd8e32740bc1c25532f28cae7860c61f07506dfc53a672d9726d2fd7ea71ff0c",
+      "bytes": 239512,
+      "cache_path": "sources/gpu-backsolve-20261025/orangepi-build-a95129bf/dts/u-boot-current.dts",
+      "used_by": [],
+      "analysis": null,
+      "evidence": [
+        "evidence/reference-backsolve-20261025/gpu/sources.json"
+      ]
+    },
+    {
+      "name": "dragonsecboot",
+      "group": "boot-package",
+      "role": "Vendor boot-package packer (x86-64 Linux executable) that builds the TOC1 package from a boot_package.cfg list",
+      "acquisition": "download",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf30ea11886cc35f08ebb3e69695a26656/external/packages/pack-uboot/tools/dragonsecboot",
+      "revision": "a95129bf30ea11886cc35f08ebb3e69695a26656",
+      "sha256": "e5f9076504a0ccde29c5978bcfc341c1c5ac02d947c47b849a5e8d26433545f6",
+      "bytes": 9105656,
+      "cache_path": "sources/board-boot/dragonsecboot",
+      "used_by": [
+        "tools/prepare-microsd-boot.py",
+        "docs/microsd-boot-package.md",
+        "docs/sources.md"
+      ],
+      "analysis": null,
+      "lock": "board-dragonsecboot"
+    },
+    {
+      "name": "gpu-firmware",
+      "group": "gpu",
+      "role": "Imagination PowerVR firmware for BVNC 36.56.104.183 (ELF32 MIPS, version 1.1 build 6976702); SunstoneOS loads it into the GPU's internal MIPS processor",
+      "acquisition": "download",
+      "url": "https://gitlab.freedesktop.org/imagination/linux-firmware/-/raw/8a58f81883f7be458daa34e418cc4079f995b279/powervr/rogue_36.56.104.183_v1.fw",
+      "revision": "8a58f81883f7be458daa34e418cc4079f995b279",
+      "sha256": "1db1c399c17401d1f79d46c880db81c724d748c784d4639433b076aba2f9c0d2",
+      "bytes": 131072,
+      "license": "LICENSE.powervr (Imagination Technologies): redistribution in unmodified binary form with its notice; forbids reverse engineering, decompilation and disassembly",
+      "cache_path": "sources/gpu/rogue_36.56.104.183_v1.fw",
+      "used_by": [
+        "cmake/gpu.cmake",
+        "cmake/a733-os.cmake",
+        "checks/pvr-firmware-reference.py",
+        "docs/gpu.md",
+        "docs/gpu-service.md",
+        "docs/gpu-application.md"
+      ],
+      "analysis": "gpu-and-npu-binaries.md",
+      "lock": "gpu-firmware"
+    },
+    {
+      "name": "gpu-firmware-license",
+      "group": "gpu",
+      "role": "LICENSE.powervr, the redistribution terms of the PowerVR firmware",
+      "acquisition": "download",
+      "url": "https://gitlab.freedesktop.org/imagination/linux-firmware/-/raw/8a58f81883f7be458daa34e418cc4079f995b279/LICENSE.powervr",
+      "revision": "8a58f81883f7be458daa34e418cc4079f995b279",
+      "sha256": "1c9aa6bd6703a7ce1cdb879542fa1d8aca115a327bd819b193c971de9c53f402",
+      "bytes": 2190,
+      "cache_path": "sources/gpu/LICENSE.powervr",
+      "used_by": [
+        "docs/gpu.md",
+        "docs/gpu-display-preparation.md"
+      ],
+      "analysis": "gpu-and-npu-binaries.md",
+      "lock": "gpu-firmware-license"
+    },
+    {
+      "name": "gpu-firmware-whence",
+      "group": "gpu",
+      "role": "WHENCE index of the Imagination firmware repository; lists the BVNC 36.56.104.183 firmware as version 1.1.OS@6976702 under LICENSE.powervr",
+      "acquisition": "download",
+      "url": "https://gitlab.freedesktop.org/imagination/linux-firmware/-/raw/8a58f81883f7be458daa34e418cc4079f995b279/WHENCE",
+      "revision": "8a58f81883f7be458daa34e418cc4079f995b279",
+      "sha256": "ec86d7649ff9e80e728b129dd725db1728f8a441cf342f1715c0a76dcf8146c3",
+      "bytes": 341319,
+      "cache_path": "sources/gpu/imagination-firmware/WHENCE",
+      "used_by": [
+        "docs/gpu-service.md"
+      ],
+      "analysis": "gpu-and-npu-binaries.md"
+    },
+    {
+      "name": "npu-libviphal",
+      "group": "npu",
+      "role": "AI SDK VIPLite 2 hardware-abstraction library (AArch64 Linux shared object); inspected for the ring-descriptor encoder",
+      "acquisition": "download",
+      "url": "https://raw.githubusercontent.com/ZIFENG278/ai-sdk/fc90006d0f6569da2f6726c2d8395877686f5aca/viplite-tina/lib/aarch64-none-linux-gnu/v2.0/libVIPhal.so",
+      "revision": "fc90006d0f6569da2f6726c2d8395877686f5aca",
+      "sha256": "3ed5357b26bd6c4fb68fbdc0b21d637227dda711d1fe67b9e28accdc48bb11f2",
+      "bytes": 39416,
+      "cache_path": "sources/npu/ai-sdk-fc90006d0f6569da2f6726c2d8395877686f5aca/viplite-tina/lib/aarch64-none-linux-gnu/v2.0/libVIPhal.so",
+      "used_by": [
+        "checks/nbg-ring-reference.py",
+        "docs/nbg-rings.md"
+      ],
+      "analysis": "gpu-and-npu-binaries.md",
+      "evidence": [
+        "evidence/reference-backsolve-20261025/npu/sources.json"
+      ]
+    },
+    {
+      "name": "npu-libnbglinker",
+      "group": "npu",
+      "role": "AI SDK VIPLite 2 network loader library (AArch64 Linux shared object); inspected for model loading and address relocation",
+      "acquisition": "download",
+      "url": "https://raw.githubusercontent.com/ZIFENG278/ai-sdk/fc90006d0f6569da2f6726c2d8395877686f5aca/viplite-tina/lib/aarch64-none-linux-gnu/v2.0/libNBGlinker.so",
+      "revision": "fc90006d0f6569da2f6726c2d8395877686f5aca",
+      "sha256": "82f049b0ed0065dd4d443e37eeb1edfcbef24457c9c24e36170d64d5b748ca66",
+      "bytes": 174728,
+      "cache_path": "sources/npu/ai-sdk-fc90006d0f6569da2f6726c2d8395877686f5aca/viplite-tina/lib/aarch64-none-linux-gnu/v2.0/libNBGlinker.so",
+      "used_by": [
+        "checks/nbg-loader-reference.py",
+        "checks/nbg-relocation-reference.py",
+        "docs/nbg-relocation.md",
+        "docs/nbg-conv-loader.md"
+      ],
+      "analysis": "gpu-and-npu-binaries.md",
+      "evidence": [
+        "evidence/reference-backsolve-20261025/npu/sources.json"
+      ]
+    },
+    {
+      "name": "npu-nbinfo",
+      "group": "npu",
+      "role": "AI SDK model inspection tool (x86-64 Linux executable with DWARF types); establishes the compiled model container layout",
+      "acquisition": "download",
+      "url": "https://raw.githubusercontent.com/ZIFENG278/ai-sdk/fc90006d0f6569da2f6726c2d8395877686f5aca/tools/nbinfo",
+      "revision": "fc90006d0f6569da2f6726c2d8395877686f5aca",
+      "sha256": "5ef6bb4f1590e0d1b9603506574bee09321d6159e32a6b3aaef66148085b2639",
+      "bytes": 187008,
+      "cache_path": "sources/npu/ai-sdk-fc90006d0f6569da2f6726c2d8395877686f5aca/tools/nbinfo",
+      "used_by": [
+        "checks/nbg-directory-reference.py",
+        "docs/nbg-directory.md",
+        "tools/npu-conformance-references.json"
+      ],
+      "analysis": "gpu-and-npu-binaries.md"
+    },
+    {
+      "name": "npu-sdk-shufflenet-model",
+      "group": "npu",
+      "role": "AI SDK compiled ShuffleNetV2 UINT8 model (format 0x1001e); the reference fixture for model inspection, checksum and loading",
+      "acquisition": "download",
+      "url": "https://raw.githubusercontent.com/ZIFENG278/ai-sdk/fc90006d0f6569da2f6726c2d8395877686f5aca/examples/vpm_run/operator/v3/network_binary.nb",
+      "revision": "fc90006d0f6569da2f6726c2d8395877686f5aca",
+      "sha256": "fc0d50bdc863e4dfc74eef6dad9d34655c560e759a2f426979a01c505fa9b95f",
+      "bytes": 964224,
+      "cache_path": "sources/npu/ai-sdk-fc90006d0f6569da2f6726c2d8395877686f5aca/examples/vpm_run/operator/v3/network_binary.nb",
+      "used_by": [
+        "checks/nbg-inspection.py",
+        "checks/nbg-loader-reference.py",
+        "docs/npu.md",
+        "docs/nbg-checksum.md",
+        "tools/npu-models.json"
+      ],
+      "analysis": "gpu-and-npu-binaries.md"
+    },
+    {
+      "name": "npu-sdk-older-model",
+      "group": "npu",
+      "role": "AI SDK compiled model in the older format 0x10014; the checksum verifier refuses it",
+      "acquisition": "download",
+      "url": "https://raw.githubusercontent.com/ZIFENG278/ai-sdk/fc90006d0f6569da2f6726c2d8395877686f5aca/examples/vpm_run/operator/v2/network_binary.nb",
+      "revision": "fc90006d0f6569da2f6726c2d8395877686f5aca",
+      "sha256": "1adb8a4358a1411009c649d0ff42c6c29f11911ce44c1be2c037cc0dcac0858d",
+      "bytes": 997120,
+      "cache_path": "sources/npu/ai-sdk-fc90006d0f6569da2f6726c2d8395877686f5aca/examples/vpm_run/operator/v2/network_binary.nb",
+      "used_by": [
+        "docs/nbg-checksum.md"
+      ],
+      "analysis": "gpu-and-npu-binaries.md"
+    },
+    {
+      "name": "npu-sdk-model-input",
+      "group": "npu",
+      "role": "AI SDK sample input tensor for the ShuffleNetV2 model (150,528 bytes)",
+      "acquisition": "download",
+      "url": "https://raw.githubusercontent.com/ZIFENG278/ai-sdk/fc90006d0f6569da2f6726c2d8395877686f5aca/examples/vpm_run/operator/input_0.dat",
+      "revision": "fc90006d0f6569da2f6726c2d8395877686f5aca",
+      "sha256": "d38c22c2007db314572c9ddfeb513a9f3d11ec99e8deec0f65bc91481502f1b9",
+      "bytes": 150528,
+      "cache_path": "sources/npu/ai-sdk-fc90006d0f6569da2f6726c2d8395877686f5aca/examples/vpm_run/operator/input_0.dat",
+      "used_by": [
+        "tools/npu-conv-input.py",
+        "tools/npu-models.json",
+        "docs/npu-complete-nn.md"
+      ],
+      "analysis": null
+    },
+    {
+      "name": "npu-timvx-model",
+      "group": "npu",
+      "role": "TIM-VX compiled convolution, ReLU and max-pool FP32 model (format 0x1001e, target 0xba); independent checksum evidence; the A733 assembler refuses its target",
+      "acquisition": "download",
+      "url": "https://raw.githubusercontent.com/VeriSilicon/TIM-VX/702715d714277376d7ff466b7b72833ff57564c1/samples/nbg_runner_pybind/examples/models/conv2d_relu_maxpool2d_fp32.nbg",
+      "revision": "702715d714277376d7ff466b7b72833ff57564c1",
+      "sha256": "e898680018e90837ec6941c9f0fa5566bde8876ac29a366d9ee53469342cb276",
+      "bytes": 9152,
+      "license": "MIT (https://github.com/VeriSilicon/TIM-VX/blob/702715d714277376d7ff466b7b72833ff57564c1/LICENSE, Vivante Corporation)",
+      "cache_path": "sources/npu/tim-vx-702715d714277376d7ff466b7b72833ff57564c1/samples/nbg_runner_pybind/examples/models/conv2d_relu_maxpool2d_fp32.nbg",
+      "used_by": [
+        "checks/nbg-checksum-reference.py",
+        "docs/nbg-checksum.md"
+      ],
+      "analysis": "gpu-and-npu-binaries.md"
+    },
+    {
+      "name": "npu-acuity-compiler",
+      "group": "npu",
+      "role": "Allwinner NPU compiler package: Docker image archive with ACUITY 6.30.22 and Vivante IDE 5.11.0 (x86-64 host tool, 2.9 GB)",
+      "acquisition": "manual",
+      "url": "https://netstorage.allwinnertech.com:5001/sharing/Mh23BhPHq",
+      "revision": "docker_images_v2.0.x.zip",
+      "sha256": "d876a96a74905b92d09ae5681256dd5fc6c430b0ebbd612097142473ec87e287",
+      "bytes": 2903273080,
+      "license": "Vivante End User License Agreement inside the compiler image; forbids disassembly, decompilation and reverse engineering",
+      "cache_path": "sources/npu/acuity-download/docker_images_v2.0.x.zip",
+      "used_by": [
+        "tools/npu-compiler.lock.json",
+        "docs/npu-compiler.md"
+      ],
+      "procedure": [
+        "The direct link https://netstorage.allwinnertech.com:5001/fsdownload/Mh23BhPHq/docker_images_v2.0.x.zip redirects to the sharing page unless the browser holds a sharing session.",
+        "Open the sharing page linked from https://docs.radxa.com/en/cubie/a7s/app-dev/npu-dev/cubie-acuity-env in a browser and download docker_images_v2.0.x.zip.",
+        "Place it at the cache path and run tools/fetch-vendor-firmware.py --check --only npu-acuity-compiler.",
+        "tools/npu-compiler.lock.json records the nested archive and Docker image identities."
+      ]
+    },
+    {
+      "name": "radio-bt-adid",
+      "group": "radio",
+      "role": "AIC8800D80 Bluetooth ADID data (U02), uploaded to radio address 0x00201940",
+      "acquisition": "download",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/firmware/dc163b0ed2e0272d9ee31977a0e0a04884f0ae61/aic8800d80/fw_adid_8800d80_u02.bin",
+      "revision": "dc163b0ed2e0272d9ee31977a0e0a04884f0ae61",
+      "sha256": "a526cbd02fcdc495f049f3ad6b5933cb08cd984b16790c716a060d582fee1a56",
+      "bytes": 1708,
+      "cache_path": "sources/radio/firmware/aic8800d80/fw_adid_8800d80_u02.bin",
+      "used_by": [
+        "drivers/net/aic8800_firmware.c",
+        "checks/aic8800-firmware.py",
+        "checks/board-single-core-host.py",
+        "checks/radio-bootstrap-budget.py",
+        "docs/radio-firmware.md"
+      ],
+      "analysis": "radio-firmware.md"
+    },
+    {
+      "name": "radio-bt-patch",
+      "group": "radio",
+      "role": "AIC8800D80 Bluetooth patch (U02), uploaded to radio address 0x001e0000",
+      "acquisition": "download",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/firmware/dc163b0ed2e0272d9ee31977a0e0a04884f0ae61/aic8800d80/fw_patch_8800d80_u02.bin",
+      "revision": "dc163b0ed2e0272d9ee31977a0e0a04884f0ae61",
+      "sha256": "4ad4eede4d347c45ed61b23508e7843dc884f0e411bf957f95410001d0cfc4d0",
+      "bytes": 24744,
+      "cache_path": "sources/radio/firmware/aic8800d80/fw_patch_8800d80_u02.bin",
+      "used_by": [
+        "drivers/net/aic8800_firmware.c",
+        "checks/aic8800-firmware.py",
+        "checks/board-single-core-host.py",
+        "checks/radio-bootstrap-budget.py",
+        "docs/radio-firmware.md"
+      ],
+      "analysis": "radio-firmware.md"
+    },
+    {
+      "name": "radio-bt-patch-table",
+      "group": "radio",
+      "role": "AIC8800D80 Bluetooth patch table (U02): seven records of address/value pairs",
+      "acquisition": "download",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/firmware/dc163b0ed2e0272d9ee31977a0e0a04884f0ae61/aic8800d80/fw_patch_table_8800d80_u02.bin",
+      "revision": "dc163b0ed2e0272d9ee31977a0e0a04884f0ae61",
+      "sha256": "5ff184105fdc4c4679e026418f4da293efec8df02a3a3ca22cee723c17df4a60",
+      "bytes": 23288,
+      "cache_path": "sources/radio/firmware/aic8800d80/fw_patch_table_8800d80_u02.bin",
+      "used_by": [
+        "drivers/net/aic8800_firmware.c",
+        "checks/aic8800-firmware.py",
+        "checks/board-single-core-host.py",
+        "checks/radio-bootstrap-budget.py",
+        "docs/radio-firmware.md"
+      ],
+      "analysis": "radio-firmware.md"
+    },
+    {
+      "name": "radio-wifi",
+      "group": "radio",
+      "role": "AIC8800D80 Wi-Fi image for non-H chip revisions (U02), uploaded to radio address 0x00120000",
+      "acquisition": "download",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/firmware/dc163b0ed2e0272d9ee31977a0e0a04884f0ae61/aic8800d80/fmacfw_8800d80_u02.bin",
+      "revision": "dc163b0ed2e0272d9ee31977a0e0a04884f0ae61",
+      "sha256": "55b5a20865aca7cd2edaae1733a36da45d2b0b29060bc243d8e9ec212e139f6c",
+      "bytes": 341212,
+      "cache_path": "sources/radio/firmware/aic8800d80/fmacfw_8800d80_u02.bin",
+      "used_by": [
+        "drivers/net/aic8800_firmware.c",
+        "checks/aic8800-firmware.py",
+        "checks/radio-bootstrap-budget.py",
+        "docs/radio-firmware.md"
+      ],
+      "analysis": "radio-firmware.md"
+    },
+    {
+      "name": "radio-wifi-h",
+      "group": "radio",
+      "role": "AIC8800D80 Wi-Fi image for H chip revisions (U02), uploaded to radio address 0x00120000",
+      "acquisition": "download",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/firmware/dc163b0ed2e0272d9ee31977a0e0a04884f0ae61/aic8800d80/fmacfw_8800d80_h_u02.bin",
+      "revision": "dc163b0ed2e0272d9ee31977a0e0a04884f0ae61",
+      "sha256": "ae8d548df96c132c445f888b91eab5ef03c19991b8bdef4fc12ebfcbf9f953e7",
+      "bytes": 341260,
+      "cache_path": "sources/radio/firmware/aic8800d80/fmacfw_8800d80_h_u02.bin",
+      "used_by": [
+        "drivers/net/aic8800_firmware.c",
+        "checks/aic8800-firmware.py",
+        "checks/board-single-core-host.py",
+        "checks/radio-bootstrap-budget.py",
+        "docs/radio-firmware.md"
+      ],
+      "analysis": "radio-firmware.md"
+    },
+    {
+      "name": "radio-wifi-bt-combined",
+      "group": "radio",
+      "role": "AIC8800D80 combined Wi-Fi and Bluetooth image (U02); not selected by the normal SDIO mode and not loaded",
+      "acquisition": "download",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/firmware/dc163b0ed2e0272d9ee31977a0e0a04884f0ae61/aic8800d80/fmacfwbt_8800d80_u02.bin",
+      "revision": "dc163b0ed2e0272d9ee31977a0e0a04884f0ae61",
+      "sha256": "efd4bf622e6b7a92bd264c64bcb9002a2e293f8941b7fd891ca4dd6915648cb6",
+      "bytes": 341512,
+      "cache_path": "sources/radio/firmware/aic8800d80/fmacfwbt_8800d80_u02.bin",
+      "used_by": [
+        "docs/radio.md"
+      ],
+      "analysis": null
+    },
+    {
+      "name": "radio-rf-test",
+      "group": "radio",
+      "role": "AIC8800D80 RF-test image (U02); not loaded",
+      "acquisition": "download",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/firmware/dc163b0ed2e0272d9ee31977a0e0a04884f0ae61/aic8800d80/lmacfw_rf_8800d80_u02.bin",
+      "revision": "dc163b0ed2e0272d9ee31977a0e0a04884f0ae61",
+      "sha256": "4e8b1efb5d9bb299aaf950d6a25e3ca71d42e012d42fd3ec3b49759cc64b38b2",
+      "bytes": 254610,
+      "cache_path": "sources/radio/firmware/aic8800d80/lmacfw_rf_8800d80_u02.bin",
+      "used_by": [
+        "docs/radio.md"
+      ],
+      "analysis": null
+    },
+    {
+      "name": "radio-userconfig",
+      "group": "radio",
+      "role": "AIC8800D80 user configuration text (power and calibration overrides); not loaded",
+      "acquisition": "download",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/firmware/dc163b0ed2e0272d9ee31977a0e0a04884f0ae61/aic8800d80/aic_userconfig_8800d80.txt",
+      "revision": "dc163b0ed2e0272d9ee31977a0e0a04884f0ae61",
+      "sha256": "995dbb9e4f2e7b19db838291f52be39af9ab673ad51b270c988216ccff1a720e",
+      "bytes": 2683,
+      "cache_path": "sources/radio/firmware/aic8800d80/aic_userconfig_8800d80.txt",
+      "used_by": [
+        "docs/radio.md"
+      ],
+      "analysis": null
+    },
+    {
+      "name": "radio-firmware-readme",
+      "group": "radio",
+      "role": "README of the Orange Pi firmware overlay",
+      "acquisition": "download",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/firmware/dc163b0ed2e0272d9ee31977a0e0a04884f0ae61/README.md",
+      "revision": "dc163b0ed2e0272d9ee31977a0e0a04884f0ae61",
+      "sha256": "f743cde35d8c5922c3f966c7d0bbeb937de08ec5e1c4610f6f89301263fa46f2",
+      "bytes": 39,
+      "cache_path": "sources/radio/firmware/README.md",
+      "used_by": [
+        "docs/radio.md"
+      ],
+      "analysis": null
+    }
+  ]
+}

@@ -1,0 +1,1638 @@
+{
+ "binaries": [
+  {
+   "name": "boot0",
+   "sha256": "829ea8e3b65d71a02f2d0e094bc073de3a10869f948f62db49dbf023d07fabe3",
+   "source": "orangepi-build a95129bf, external/packages/pack-uboot/sun60iw2/bin/boot0_sdcard_orangepizero3w.fex; Thumb-2, load 0x47000"
+  },
+  {
+   "name": "boot0-1800",
+   "sha256": "d2a9bcccf012dce554c4613cf3e2e4256fe9863f6215afbe979aca891d4a6e27",
+   "source": "orangepi-build a95129bf, boot0_sdcard_orangepizero3w_1800M.fex; identical code, 1800 MHz DRAM parameter set"
+  }
+ ],
+ "note": "boot0 function inventory. Offsets are load addresses (blob offset = address - 0x47000). The 1800 MHz variant shares this code; only DRAM parameter tables differ.",
+ "full_inventory": "~/.cache/sunstoneos/evidence/vendor-firmware-20261025/boot/*.functions.json",
+ "functions": [
+  {
+   "addr": "0x47b00",
+   "size": 0,
+   "callers": [],
+   "callees": [],
+   "role": "Reset stub. Enters SVC, clears SCTLR.M/A/C and sets SCTLR.I, sets SP=0x8d000, clears BSS (0x47b40), calls main (0x5e158)."
+  },
+  {
+   "addr": "0x482b0",
+   "size": 594,
+   "callers": [
+    "0x4ab20",
+    "0x4ab58",
+    "0x4ac7c",
+    "0x4b1bc"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x48d58",
+   "size": 14,
+   "callers": [
+    "0x4993c",
+    "0x4b1bc"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x48d80",
+   "size": 60,
+   "callers": [
+    "0x48dbc",
+    "0x48dfc",
+    "0x48e8c",
+    "0x49098",
+    "0x490f4",
+    "0x49114",
+    "0x491b8",
+    "0x49508",
+    "0x4ab20",
+    "0x4ab58",
+    "0x4ac7c",
+    "0x4b174"
+   ],
+   "callees": [],
+   "role": "Microsecond delay using CNTVCT (mrrc p15 c14)."
+  },
+  {
+   "addr": "0x48da4",
+   "size": 24,
+   "callers": [
+    "0x4ae28",
+    "0x5e158"
+   ],
+   "callees": [],
+   "role": "Millisecond delay (x1000 then 0x48d80)."
+  },
+  {
+   "addr": "0x48dae",
+   "size": 14,
+   "callers": [
+    "0x48dfc"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x48dbc",
+   "size": 26,
+   "callers": [
+    "0x49066"
+   ],
+   "callees": [
+    "0x48d80"
+   ],
+   "role": "Enable the L1 data cache (SCTLR.C)."
+  },
+  {
+   "addr": "0x48dd8",
+   "size": 30,
+   "callers": [
+    "0x49074"
+   ],
+   "callees": [],
+   "role": "Call a function then disable the data cache."
+  },
+  {
+   "addr": "0x48dfc",
+   "size": 144,
+   "callers": [
+    "0x5e158"
+   ],
+   "callees": [
+    "0x48d80",
+    "0x48dae"
+   ],
+   "role": "Build a flat identity page table at DRAM, program TTBR0/TTBR1/DACR and enable MMU plus caches."
+  },
+  {
+   "addr": "0x48e8c",
+   "size": 48,
+   "callers": [
+    "0x5e158"
+   ],
+   "callees": [
+    "0x48d80"
+   ],
+   "role": "Disable MMU and caches, invalidate I-cache and branch predictor (cold-boot main-tail cleanup)."
+  },
+  {
+   "addr": "0x48ec6",
+   "size": 12,
+   "callers": [
+    "0x5e158"
+   ],
+   "callees": [],
+   "role": "Invalidate branch predictor then branch to r0 (used to enter ROM forced-FEL at 0x20)."
+  },
+  {
+   "addr": "0x48ed2",
+   "size": 12,
+   "callers": [
+    "0x5e158"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x48ee0",
+   "size": 82,
+   "callers": [
+    "0x5e158"
+   ],
+   "callees": [],
+   "role": "Set a CPUX reset vector at 0x08001004, enable CPU actlr bits, then WFI park."
+  },
+  {
+   "addr": "0x48f10",
+   "size": 34,
+   "callers": [
+    "0x48fac"
+   ],
+   "callees": [],
+   "role": "Set bit 0 of 0x02000200 (GPIO/pad hold release)."
+  },
+  {
+   "addr": "0x48f38",
+   "size": 96,
+   "callers": [
+    "0x49050"
+   ],
+   "callees": [],
+   "role": "NSI interconnect init: program bandwidth/priority words for memory ports (0x02023a14, 0x02024014...)."
+  },
+  {
+   "addr": "0x48fac",
+   "size": 104,
+   "callers": [
+    "0x5e158"
+   ],
+   "callees": [
+    "0x48f10",
+    "0x491b8",
+    "0x4993c",
+    "0x4b2e8",
+    "0x5d714",
+    "0x5d744",
+    "0x5d9f0"
+   ],
+   "role": "Board clock and power setup. Reads the chip-version nibble at SYSCTRL 0x03000024, selects a CPU rate (0x348 or 0x320), calls the CPU-PLL routine (0x491b8) and NSI setup."
+  },
+  {
+   "addr": "0x49050",
+   "size": 14,
+   "callers": [
+    "0x5e158"
+   ],
+   "callees": [
+    "0x48f38",
+    "0x5d9ee"
+   ],
+   "role": "Run NSI setup (0x48f38) then a barrier helper."
+  },
+  {
+   "addr": "0x49062",
+   "size": 4,
+   "callers": [
+    "0x5e158"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x49066",
+   "size": 10,
+   "callers": [
+    "0x5dc80"
+   ],
+   "callees": [
+    "0x48dbc"
+   ],
+   "role": "Enable the data cache before the package copy."
+  },
+  {
+   "addr": "0x49074",
+   "size": 10,
+   "callers": [
+    "0x5dc80"
+   ],
+   "callees": [
+    "0x48dd8"
+   ],
+   "role": "Clean and disable the data cache on successful parser return."
+  },
+  {
+   "addr": "0x49082",
+   "size": 22,
+   "callers": [
+    "0x49098",
+    "0x490f4",
+    "0x49114",
+    "0x491b8"
+   ],
+   "callees": [],
+   "role": "Set one bit in an MMIO word (read-modify-write with barriers)."
+  },
+  {
+   "addr": "0x49098",
+   "size": 286,
+   "callers": [
+    "0x491b8"
+   ],
+   "callees": [
+    "0x48d80",
+    "0x49082"
+   ],
+   "role": "PLL program helper: park mux on 24 MHz, write N/M/P from a struct, wait update and lock."
+  },
+  {
+   "addr": "0x490f4",
+   "size": 194,
+   "callers": [
+    "0x496b4"
+   ],
+   "callees": [
+    "0x48d80",
+    "0x49082"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x49114",
+   "size": 162,
+   "callers": [
+    "0x491b8"
+   ],
+   "callees": [
+    "0x48d80",
+    "0x49082"
+   ],
+   "role": "PLL source-select helper: de-assert gate, set mux to the PLL, wait lock, re-gate."
+  },
+  {
+   "addr": "0x491b8",
+   "size": 788,
+   "callers": [
+    "0x48fac"
+   ],
+   "callees": [
+    "0x48d80",
+    "0x49082",
+    "0x49098",
+    "0x49114",
+    "0x4993c",
+    "0x4b114"
+   ],
+   "role": "CPU PLL setup. Sets bit 24 of ten CCU PLL control words (incl PLL_NPU 0x020022a0, PLL_GPU 0x020020e0); unless 0x07090160 bit14 is set, programs PLL_CPU_L/B/DSU N and selects each PLL."
+  },
+  {
+   "addr": "0x49504",
+   "size": 2,
+   "callers": [
+    "0x5e158"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x49508",
+   "size": 78,
+   "callers": [
+    "0x4b114"
+   ],
+   "callees": [
+    "0x48d80"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x49560",
+   "size": 68,
+   "callers": [
+    "0x4a4ec"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x495a8",
+   "size": 16,
+   "callers": [
+    "0x49ab4",
+    "0x5d3b0",
+    "0x5d528"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x495b8",
+   "size": 22,
+   "callers": [
+    "0x4a454",
+    "0x4a470"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x495ce",
+   "size": 34,
+   "callers": [
+    "0x49ab4",
+    "0x4af60",
+    "0x4af8a",
+    "0x4b2e8",
+    "0x5dc80"
+   ],
+   "callees": [],
+   "role": "Byte-string compare (used to match boot-package item names)."
+  },
+  {
+   "addr": "0x495f0",
+   "size": 12,
+   "callers": [
+    "0x49ab4",
+    "0x4a24a",
+    "0x4a298",
+    "0x4a37e",
+    "0x4a454",
+    "0x4af60",
+    "0x4af8a",
+    "0x4b2e8",
+    "0x5dc80"
+   ],
+   "callees": [],
+   "role": "String length."
+  },
+  {
+   "addr": "0x49620",
+   "size": 6,
+   "callers": [
+    "0x49ab4",
+    "0x49d32",
+    "0x5d3b0",
+    "0x5d528"
+   ],
+   "callees": [],
+   "role": "Memory set."
+  },
+  {
+   "addr": "0x4962c",
+   "size": 6,
+   "callers": [
+    "0x49ab4",
+    "0x49d32",
+    "0x49da0",
+    "0x4b2e8",
+    "0x5d3b0",
+    "0x5dc30",
+    "0x5dc3c",
+    "0x5dc80",
+    "0x5e158"
+   ],
+   "callees": [],
+   "role": "Memory copy."
+  },
+  {
+   "addr": "0x49638",
+   "size": 30,
+   "callers": [
+    "0x4a298"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x49682",
+   "size": 44,
+   "callers": [
+    "0x496b4"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x496b4",
+   "size": 478,
+   "callers": [
+    "0x498e4",
+    "0x49910",
+    "0x4993c"
+   ],
+   "callees": [
+    "0x490f4",
+    "0x49682"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x49898",
+   "size": 20,
+   "callers": [
+    "0x5e158"
+   ],
+   "callees": [],
+   "role": "Record the boot work mode and stage bytes."
+  },
+  {
+   "addr": "0x498c0",
+   "size": 6,
+   "callers": [
+    "0x4b2e8"
+   ],
+   "callees": [],
+   "role": "Read the recorded boot work mode."
+  },
+  {
+   "addr": "0x498cc",
+   "size": 16,
+   "callers": [
+    "0x5e158"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x498e4",
+   "size": 36,
+   "callers": [
+    "0x5d3b0",
+    "0x5d528",
+    "0x5e158"
+   ],
+   "callees": [
+    "0x496b4"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x49910",
+   "size": 40,
+   "callers": [
+    "0x4993c",
+    "0x4af60",
+    "0x4af8a"
+   ],
+   "callees": [
+    "0x496b4"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4993c",
+   "size": 70,
+   "callers": [
+    "0x48fac",
+    "0x491b8",
+    "0x49a5c",
+    "0x49ab4",
+    "0x49bdc",
+    "0x4a990",
+    "0x4af60",
+    "0x4af8a",
+    "0x4afc2",
+    "0x4b1bc",
+    "0x4b2e8",
+    "0x4b618",
+    "0x5d940",
+    "0x5db08",
+    "0x5dc80",
+    "0x5e13c",
+    "0x5e158"
+   ],
+   "callees": [
+    "0x48d58",
+    "0x496b4",
+    "0x49910",
+    "0x4a540"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x499fc",
+   "size": 56,
+   "callers": [
+    "0x49a44",
+    "0x49d32",
+    "0x49da0"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x49a44",
+   "size": 22,
+   "callers": [
+    "0x49ab4"
+   ],
+   "callees": [
+    "0x499fc"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x49a5c",
+   "size": 26,
+   "callers": [
+    "0x5e158"
+   ],
+   "callees": [
+    "0x4993c",
+    "0x4a554",
+    "0x4a568"
+   ],
+   "role": "Return the boot work mode code (0x32 normal, 0x64/0x71 FEL/crash variants)."
+  },
+  {
+   "addr": "0x49a80",
+   "size": 10,
+   "callers": [
+    "0x5dc80"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x49a90",
+   "size": 8,
+   "callers": [
+    "0x5e158"
+   ],
+   "callees": [],
+   "role": "Return a packed value."
+  },
+  {
+   "addr": "0x49a9c",
+   "size": 4,
+   "callers": [
+    "0x5e158"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x49aa8",
+   "size": 4,
+   "callers": [
+    "0x5dc80",
+    "0x5e158"
+   ],
+   "callees": [],
+   "role": "Return the address of the DRAM parameter buffer (0x000831f8)."
+  },
+  {
+   "addr": "0x49ab4",
+   "size": 220,
+   "callers": [
+    "0x5e158"
+   ],
+   "callees": [
+    "0x495a8",
+    "0x495ce",
+    "0x495f0",
+    "0x49620",
+    "0x4962c",
+    "0x4993c",
+    "0x49a44",
+    "0x5d9d8",
+    "0x5da04",
+    "0x5dab0",
+    "0x5db08"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x49bbc",
+   "size": 4,
+   "callers": [
+    "0x5e158"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x49bdc",
+   "size": 116,
+   "callers": [
+    "0x5e158"
+   ],
+   "callees": [
+    "0x4993c",
+    "0x4b618"
+   ],
+   "role": "init_DRAM top level. Prints the DRAM driver banner, sets R_CCU 0x07010250 bit0, programs MR values, runs training (0x4b618, 0x57b7c/0x57e44) and scans rank/size."
+  },
+  {
+   "addr": "0x49d14",
+   "size": 22,
+   "callers": [
+    "0x5e158"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x49d30",
+   "size": 2,
+   "callers": [
+    "0x4a4ec",
+    "0x4a5ac",
+    "0x4a5cc",
+    "0x4a95c",
+    "0x5d9d8",
+    "0x5dc30",
+    "0x5dc3c",
+    "0x5dc5e",
+    "0x5dc80"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x49d32",
+   "size": 148,
+   "callers": [
+    "0x5dc80"
+   ],
+   "callees": [
+    "0x49620",
+    "0x4962c",
+    "0x499fc"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x49da0",
+   "size": 38,
+   "callers": [
+    "0x5e158"
+   ],
+   "callees": [
+    "0x4962c",
+    "0x499fc"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x49e68",
+   "size": 130,
+   "callers": [
+    "0x49eec"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x49eec",
+   "size": 384,
+   "callers": [
+    "0x49eec",
+    "0x49fe4",
+    "0x4a008"
+   ],
+   "callees": [
+    "0x49e68",
+    "0x49eec",
+    "0x49fe4"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x49fe4",
+   "size": 136,
+   "callers": [
+    "0x49eec",
+    "0x49fe4",
+    "0x4a008",
+    "0x4a24a",
+    "0x4a268"
+   ],
+   "callees": [
+    "0x49eec",
+    "0x49fe4"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4a008",
+   "size": 100,
+   "callers": [
+    "0x4a0cc",
+    "0x4a280"
+   ],
+   "callees": [
+    "0x49eec",
+    "0x49fe4"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4a0cc",
+   "size": 24,
+   "callers": [
+    "0x4a298"
+   ],
+   "callees": [
+    "0x4a008"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4a124",
+   "size": 32,
+   "callers": [
+    "0x4a298"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4a24a",
+   "size": 54,
+   "callers": [
+    "0x4af60",
+    "0x4af8a"
+   ],
+   "callees": [
+    "0x495f0",
+    "0x49fe4"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4a268",
+   "size": 24,
+   "callers": [
+    "0x4a298"
+   ],
+   "callees": [
+    "0x49fe4"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4a280",
+   "size": 24,
+   "callers": [
+    "0x4a298"
+   ],
+   "callees": [
+    "0x4a008"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4a298",
+   "size": 226,
+   "callers": [
+    "0x4a298",
+    "0x4a320"
+   ],
+   "callees": [
+    "0x495f0",
+    "0x49638",
+    "0x4a0cc",
+    "0x4a124",
+    "0x4a268",
+    "0x4a280",
+    "0x4a298"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4a320",
+   "size": 90,
+   "callers": [
+    "0x4a37e"
+   ],
+   "callees": [
+    "0x4a298"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4a37e",
+   "size": 34,
+   "callers": [
+    "0x4a454",
+    "0x4a470",
+    "0x4a498",
+    "0x4af60",
+    "0x4af8a"
+   ],
+   "callees": [
+    "0x495f0",
+    "0x4a320"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4a454",
+   "size": 54,
+   "callers": [
+    "0x4af60"
+   ],
+   "callees": [
+    "0x495b8",
+    "0x495f0",
+    "0x4a37e"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4a470",
+   "size": 26,
+   "callers": [
+    "0x4af60",
+    "0x4af8a"
+   ],
+   "callees": [
+    "0x495b8",
+    "0x4a37e"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4a498",
+   "size": 36,
+   "callers": [
+    "0x4af60",
+    "0x4af8a"
+   ],
+   "callees": [
+    "0x4a37e"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4a4ec",
+   "size": 78,
+   "callers": [
+    "0x5e158"
+   ],
+   "callees": [
+    "0x49560",
+    "0x49d30",
+    "0x4a5cc"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4a540",
+   "size": 14,
+   "callers": [
+    "0x4993c"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4a554",
+   "size": 16,
+   "callers": [
+    "0x49a5c"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4a568",
+   "size": 12,
+   "callers": [
+    "0x49a5c"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4a5ac",
+   "size": 938,
+   "callers": [
+    "0x4b1bc",
+    "0x4b230"
+   ],
+   "callees": [
+    "0x49d30"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4a5cc",
+   "size": 906,
+   "callers": [
+    "0x4a4ec",
+    "0x4ae28",
+    "0x4b1bc",
+    "0x4b230",
+    "0x4b2e8",
+    "0x5d188",
+    "0x5e158"
+   ],
+   "callees": [
+    "0x49d30"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4a95c",
+   "size": 20,
+   "callers": [
+    "0x4a990"
+   ],
+   "callees": [
+    "0x49d30"
+   ],
+   "role": "Read an RTC general-purpose register."
+  },
+  {
+   "addr": "0x4a990",
+   "size": 52,
+   "callers": [
+    "0x5e158"
+   ],
+   "callees": [
+    "0x4993c",
+    "0x4a95c"
+   ],
+   "role": "Clear eight RTC general-purpose registers; read index 2 for the crashdump/FEL flag."
+  },
+  {
+   "addr": "0x4aa08",
+   "size": 54,
+   "callers": [
+    "0x5e158"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4aa10",
+   "size": 46,
+   "callers": [
+    "0x4ab20",
+    "0x4ab58",
+    "0x4ac7c"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4aa48",
+   "size": 52,
+   "callers": [
+    "0x4ab20",
+    "0x4ab58",
+    "0x4ac7c"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4aa88",
+   "size": 54,
+   "callers": [
+    "0x4ab20",
+    "0x4ab58",
+    "0x4ac7c"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4aad4",
+   "size": 66,
+   "callers": [
+    "0x4ab20",
+    "0x4ab58",
+    "0x4ab8c",
+    "0x4ac7c"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4ab20",
+   "size": 728,
+   "callers": [
+    "0x4af2a"
+   ],
+   "callees": [
+    "0x482b0",
+    "0x48d80",
+    "0x4aa10",
+    "0x4aa48",
+    "0x4aa88",
+    "0x4aad4"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4ab58",
+   "size": 672,
+   "callers": [
+    "0x4ab8c"
+   ],
+   "callees": [
+    "0x482b0",
+    "0x48d80",
+    "0x4aa10",
+    "0x4aa48",
+    "0x4aa88",
+    "0x4aad4"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4ab8c",
+   "size": 16,
+   "callers": [
+    "0x4ac16"
+   ],
+   "callees": [
+    "0x4aad4",
+    "0x4ab58"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4ac16",
+   "size": 22,
+   "callers": [
+    "0x4af60",
+    "0x4af8a"
+   ],
+   "callees": [
+    "0x4ab8c"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4ac7c",
+   "size": 380,
+   "callers": [
+    "0x4af3e"
+   ],
+   "callees": [
+    "0x482b0",
+    "0x48d80",
+    "0x4aa10",
+    "0x4aa48",
+    "0x4aa88",
+    "0x4aad4"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4ae08",
+   "size": 22,
+   "callers": [
+    "0x4ae28",
+    "0x4aee8"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4ae28",
+   "size": 240,
+   "callers": [
+    "0x4ae28",
+    "0x4aee8"
+   ],
+   "callees": [
+    "0x48da4",
+    "0x4a5cc",
+    "0x4ae08",
+    "0x4ae28"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4aee8",
+   "size": 48,
+   "callers": [
+    "0x4af20"
+   ],
+   "callees": [
+    "0x4ae08",
+    "0x4ae28"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4af20",
+   "size": 10,
+   "callers": [
+    "0x5d940"
+   ],
+   "callees": [
+    "0x4aee8"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4af2a",
+   "size": 20,
+   "callers": [
+    "0x5d940"
+   ],
+   "callees": [
+    "0x4ab20"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4af3e",
+   "size": 30,
+   "callers": [
+    "0x5d940"
+   ],
+   "callees": [
+    "0x4ac7c"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4af58",
+   "size": 4,
+   "callers": [
+    "0x5e158"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4af60",
+   "size": 362,
+   "callers": [
+    "0x5dc80"
+   ],
+   "callees": [
+    "0x495ce",
+    "0x495f0",
+    "0x49910",
+    "0x4993c",
+    "0x4a24a",
+    "0x4a37e",
+    "0x4a454",
+    "0x4a470",
+    "0x4a498",
+    "0x4ac16"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4af8a",
+   "size": 320,
+   "callers": [
+    "0x4afc2"
+   ],
+   "callees": [
+    "0x495ce",
+    "0x495f0",
+    "0x49910",
+    "0x4993c",
+    "0x4a24a",
+    "0x4a37e",
+    "0x4a470",
+    "0x4a498",
+    "0x4ac16"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4afc2",
+   "size": 6,
+   "callers": [
+    "0x4b000"
+   ],
+   "callees": [
+    "0x4993c",
+    "0x4af8a"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4b000",
+   "size": 10,
+   "callers": [
+    "0x4b2e8"
+   ],
+   "callees": [
+    "0x4afc2"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4b114",
+   "size": 88,
+   "callers": [
+    "0x491b8"
+   ],
+   "callees": [
+    "0x49508"
+   ],
+   "role": "GPADC/THS bring-up: program 0x02521000 control, enable and bias words."
+  },
+  {
+   "addr": "0x4b174",
+   "size": 58,
+   "callers": [
+    "0x4b1bc"
+   ],
+   "callees": [
+    "0x48d80"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4b1bc",
+   "size": 152,
+   "callers": [
+    "0x4b2e8"
+   ],
+   "callees": [
+    "0x482b0",
+    "0x48d58",
+    "0x4993c",
+    "0x4a5ac",
+    "0x4a5cc",
+    "0x4b174"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4b230",
+   "size": 36,
+   "callers": [
+    "0x4b290"
+   ],
+   "callees": [
+    "0x4a5ac",
+    "0x4a5cc"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x4b290",
+   "size": 18,
+   "callers": [
+    "0x5e158"
+   ],
+   "callees": [
+    "0x4b230"
+   ],
+   "role": "Read GPADC channel for the volume-key/boot-mode select."
+  },
+  {
+   "addr": "0x4b2e8",
+   "size": 406,
+   "callers": [
+    "0x48fac"
+   ],
+   "callees": [
+    "0x495ce",
+    "0x495f0",
+    "0x4962c",
+    "0x498c0",
+    "0x4993c",
+    "0x4a5cc",
+    "0x4b000",
+    "0x4b1bc"
+   ],
+   "role": "Select the active DRAM parameter set: copy sys_config defaults, read the DRAM.ext header and GPADC/GPIO select bits, pick one of the parameter sets."
+  },
+  {
+   "addr": "0x4b618",
+   "size": 278,
+   "callers": [
+    "0x49bdc"
+   ],
+   "callees": [
+    "0x4993c",
+    "0x5d72c"
+   ],
+   "role": "DRAM supply setup: compute DRAM_VCC from parameters and program the PMIC rail (0x4b620 regulator path)."
+  },
+  {
+   "addr": "0x5ce50",
+   "size": 44,
+   "callers": [
+    "0x5d3b0",
+    "0x5d528"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x5d188",
+   "size": 88,
+   "callers": [
+    "0x5d3b0",
+    "0x5d528"
+   ],
+   "callees": [
+    "0x4a5cc"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x5d1f0",
+   "size": 88,
+   "callers": [
+    "0x5d3b0"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x5d3b0",
+   "size": 734,
+   "callers": [
+    "0x5da7c"
+   ],
+   "callees": [
+    "0x495a8",
+    "0x49620",
+    "0x4962c",
+    "0x498e4",
+    "0x5ce50",
+    "0x5d188",
+    "0x5d1f0"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x5d528",
+   "size": 358,
+   "callers": [
+    "0x5dab0"
+   ],
+   "callees": [
+    "0x495a8",
+    "0x49620",
+    "0x498e4",
+    "0x5ce50",
+    "0x5d188"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x5d714",
+   "size": 20,
+   "callers": [
+    "0x48fac"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x5d72c",
+   "size": 18,
+   "callers": [
+    "0x4b618"
+   ],
+   "callees": [],
+   "role": "PMIC enable-regulator-by-name wrapper."
+  },
+  {
+   "addr": "0x5d744",
+   "size": 24,
+   "callers": [
+    "0x48fac"
+   ],
+   "callees": [
+    "0x5d940"
+   ],
+   "role": "PMIC detect over TWI: read register 0x36, accept code 0x0e (AXP8191 family)."
+  },
+  {
+   "addr": "0x5d940",
+   "size": 130,
+   "callers": [
+    "0x5d744"
+   ],
+   "callees": [
+    "0x4993c",
+    "0x4af20",
+    "0x4af2a",
+    "0x4af3e"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x5d9d8",
+   "size": 22,
+   "callers": [
+    "0x49ab4"
+   ],
+   "callees": [
+    "0x49d30"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x5d9ee",
+   "size": 2,
+   "callers": [
+    "0x49050"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x5d9f0",
+   "size": 14,
+   "callers": [
+    "0x48fac"
+   ],
+   "callees": [],
+   "role": "Read SYSCTRL 0x03000024 low 3 bits (boot/secure state)."
+  },
+  {
+   "addr": "0x5da04",
+   "size": 22,
+   "callers": [
+    "0x49ab4"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x5da64",
+   "size": 18,
+   "callers": [
+    "0x5da7c",
+    "0x5dab0"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x5da7c",
+   "size": 38,
+   "callers": [
+    "0x5e158"
+   ],
+   "callees": [
+    "0x5d3b0",
+    "0x5da64"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x5dab0",
+   "size": 68,
+   "callers": [
+    "0x49ab4"
+   ],
+   "callees": [
+    "0x5d528",
+    "0x5da64"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x5db08",
+   "size": 20,
+   "callers": [
+    "0x49ab4"
+   ],
+   "callees": [
+    "0x4993c"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x5dc30",
+   "size": 46,
+   "callers": [
+    "0x5e158"
+   ],
+   "callees": [
+    "0x4962c",
+    "0x49d30"
+   ],
+   "role": "Load and verify the boot-package header (magic 0x89119800, additive checksum)."
+  },
+  {
+   "addr": "0x5dc3c",
+   "size": 34,
+   "callers": [
+    "0x5dc80"
+   ],
+   "callees": [
+    "0x4962c",
+    "0x49d30"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x5dc5e",
+   "size": 20,
+   "callers": [
+    "0x5dc80"
+   ],
+   "callees": [
+    "0x49d30"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x5dc74",
+   "size": 6,
+   "callers": [
+    "0x5e158"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x5dc80",
+   "size": 1234,
+   "callers": [
+    "0x5e158"
+   ],
+   "callees": [
+    "0x49066",
+    "0x49074",
+    "0x495ce",
+    "0x495f0",
+    "0x4962c",
+    "0x4993c",
+    "0x49a80",
+    "0x49aa8",
+    "0x49d30",
+    "0x49d32",
+    "0x4af60",
+    "0x5dc3c",
+    "0x5dc5e",
+    "0x5e13c"
+   ],
+   "role": "Boot-package TOC parser. Walks TOC1 items, matches names (u-boot, monitor, scp, optee, opensbi, rtos, dtb), copies each to its run address, records the monitor/U-Boot/OP-TEE/SCP pointers."
+  },
+  {
+   "addr": "0x5e13c",
+   "size": 22,
+   "callers": [
+    "0x5dc80"
+   ],
+   "callees": [
+    "0x4993c"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x5e158",
+   "size": 1024,
+   "callers": [],
+   "callees": [
+    "0x48da4",
+    "0x48dfc",
+    "0x48e8c",
+    "0x48ec6",
+    "0x48ed2",
+    "0x48ee0",
+    "0x48fac",
+    "0x49050",
+    "0x49062",
+    "0x49504",
+    "0x4962c",
+    "0x49898",
+    "0x498cc",
+    "0x498e4",
+    "0x4993c",
+    "0x49a5c",
+    "0x49a90",
+    "0x49a9c",
+    "0x49aa8",
+    "0x49ab4",
+    "0x49bbc",
+    "0x49bdc",
+    "0x49d14",
+    "0x49da0",
+    "0x4a4ec",
+    "0x4a5cc",
+    "0x4a990",
+    "0x4aa08",
+    "0x4af58",
+    "0x4b290",
+    "0x5da7c",
+    "0x5dc30",
+    "0x5dc74",
+    "0x5dc80"
+   ],
+   "role": "main. Prints HELLO/commit, runs board setup (0x48fac), samples FEL (0x4a990), reads boot mode, runs init_DRAM, enables the MMU, loads and parses the package, and jumps to the monitor/ATF, OP-TEE, U-Boot or RTOS."
+  }
+ ]
+}

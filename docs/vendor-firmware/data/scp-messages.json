@@ -1,0 +1,152 @@
+{
+ "binary": "scp.fex",
+ "sha256": "07e6b97628101963e7944e012948c4bdf721f914bad347acd7dfbde89db42749",
+ "bytes": 105912,
+ "source": "orangepi-xunlong/orangepi-build a95129bf30ea11886cc35f08ebb3e69695a26656, external/packages/pack-uboot/sun60iw2/bin/scp.fex",
+ "provenance": "docs/vendor-firmware/README.md",
+ "reference": "docs/vendor-firmware/scp-firmware.md",
+ "load_address": "0x40004000 (E902 view; SRAM A2 + 0x4000)",
+ "offset_rule": "blob offset = address - 0x40004000",
+ "status_labels": {
+  "observed": "read from the instructions or data of this blob",
+  "inferred": "purpose deduced from strings, register names or data flow",
+  "unknown": "not analysed"
+ },
+ "transport": {
+  "to_scp": "S_MBOX 0x07094000 channel 3: application processor writes MSGBOX_MSG_REG 0x0709407c; firmware polls MSG_STATUS 0x0709406c and clears RD_IRQ_STATUS bit 6",
+  "from_scp": "CPUX_MSGBOX 0x03004000 channel 3: firmware writes MSGBOX_MSG_REG 0x0300407c after MSG_STATUS 0x0300406c is below 8",
+  "framing": "word 0 = header; word 1 = payload word count (low byte); then count payload words",
+  "header": {
+   "byte0": "state",
+   "byte1": "attribute (bit 1 synchronous: sender waits for a reply in the same framing)",
+   "byte2": "type",
+   "byte3": "result written by the receiver"
+  },
+  "reception": "polled from the main loop; no interrupt",
+  "timeout": "firmware: 100,000 tries of 1 ms per word; BL31 passes 4,000"
+ },
+ "to_scp": [
+  {
+   "type": "0x11",
+   "name": "CPU0 restore finished",
+   "payload": [],
+   "reply": "one word: wakeup event",
+   "handler": "0x400095a0 (accepted only while waiting for resume)",
+   "sender": "BL31 0x1994, synchronous"
+  },
+  {
+   "type": "0x19",
+   "name": "fake power-off",
+   "payload": [],
+   "handler": "0x4000aac4 (no action)",
+   "sender": ""
+  },
+  {
+   "type": "0x22",
+   "name": "CPU operation",
+   "payload": [
+    "mpidr",
+    "entry point",
+    "cpu state",
+    "cluster state",
+    "system state"
+   ],
+   "handler": "0x400095a0; acts only when entry point != 0 and system state = 3 (system suspend)",
+   "sender": "BL31 0x1948, asynchronous"
+  },
+  {
+   "type": "0x24",
+   "name": "system operation",
+   "payload": [
+    "state: 0 power-off after VBUS check, 1 or 2 reset, 3 power-off"
+   ],
+   "handler": "0x4000aa54",
+   "sender": "BL31 0x2158 and 0x219c"
+  },
+  {
+   "type": "0x25",
+   "name": "clear wakeup source",
+   "payload": [
+    "wakeup word"
+   ],
+   "handler": "0x40009346",
+   "sender": "BL31 0x1904, synchronous"
+  },
+  {
+   "type": "0x26",
+   "name": "set wakeup source",
+   "payload": [
+    "wakeup word: bits 31:30 = 3 for a timeout in ms in bits 29:0; otherwise bits 9:0 = GIC INTID - 32 from the wakeup table"
+   ],
+   "handler": "0x40009248",
+   "sender": "BL31 0x2114, synchronous"
+  },
+  {
+   "type": "0x60",
+   "name": "set debug mask",
+   "payload": [
+    "mask"
+   ],
+   "handler": "0x4000b044",
+   "sender": "BL31 0x1ff8, synchronous"
+  },
+  {
+   "type": "0x61",
+   "name": "loopback",
+   "payload": [
+    "up to 11 words"
+   ],
+   "handler": "dispatcher (result 0)",
+   "sender": "BL31 0x1f34"
+  },
+  {
+   "type": "0x62",
+   "name": "set UART baud rate",
+   "payload": [
+    "baud"
+   ],
+   "handler": "0x4000690e",
+   "sender": "BL31 0x20d0, synchronous"
+  },
+  {
+   "type": "0x64",
+   "name": "set DRAM checksum parameters",
+   "payload": [
+    "enable",
+    "start address",
+    "length in bytes"
+   ],
+   "handler": "0x400090e4",
+   "sender": "BL31 (3 words)"
+  },
+  {
+   "type": "0x96",
+   "name": "unnamed",
+   "payload": [
+    "one word"
+   ],
+   "handler": "dispatcher returns -1 without logging",
+   "sender": "BL31 0x1fb4"
+  }
+ ],
+ "from_scp": [
+  {
+   "type": "0x90",
+   "name": "startup notification",
+   "attribute": "synchronous",
+   "payload": "13 words copied from 0x4001067c (an empty version string in this build)",
+   "sender": "main 0x4000b1d2"
+  },
+  {
+   "type": "echo",
+   "name": "feedback",
+   "payload": "the received message with byte 3 = result; for type 0x11 one word with the wakeup event",
+   "sender": "0x4000733e"
+  }
+ ],
+ "wakeup_event_values": {
+  "gic_intid_minus_32": "interrupt wake (see wakeup_irq_map)",
+  "0xc0000000": "timeout wake",
+  "0xbc": "NMI wake"
+ }
+}

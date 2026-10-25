@@ -1,0 +1,520 @@
+{
+ "binary": "scp.fex",
+ "sha256": "07e6b97628101963e7944e012948c4bdf721f914bad347acd7dfbde89db42749",
+ "bytes": 105912,
+ "source": "orangepi-xunlong/orangepi-build a95129bf30ea11886cc35f08ebb3e69695a26656, external/packages/pack-uboot/sun60iw2/bin/scp.fex",
+ "provenance": "docs/vendor-firmware/README.md",
+ "reference": "docs/vendor-firmware/scp-firmware.md",
+ "load_address": "0x40004000 (E902 view; SRAM A2 + 0x4000)",
+ "offset_rule": "blob offset = address - 0x40004000",
+ "status_labels": {
+  "observed": "read from the instructions or data of this blob",
+  "inferred": "purpose deduced from strings, register names or data flow",
+  "unknown": "not analysed"
+ },
+ "tables": {
+  "pll_save_restore": {
+   "address": "0x4002adc4 (built at run time)",
+   "entry_bytes": 12,
+   "registers": [
+    "0x02002000",
+    "0x02002020",
+    "0x020020a0",
+    "0x020020c0",
+    "0x020020e0",
+    "0x02002120",
+    "0x02002140",
+    "0x02002160",
+    "0x02002220",
+    "0x02002240",
+    "0x02002260",
+    "0x02002280",
+    "0x020022a0",
+    "0x020022e0"
+   ],
+   "names": [
+    "PLL word at CCU+0x000 (not in the manual register list)",
+    "PLL_DDR_CTRL",
+    "PLL_PERI0_CTRL",
+    "PLL_PERI1_CTRL",
+    "PLL_GPU0_CTRL",
+    "PLL_VIDEO0_CTRL",
+    "PLL_VIDEO1_CTRL",
+    "PLL_VIDEO2_CTRL",
+    "PLL_VE0_CTRL",
+    "PLL_VE1_CTRL",
+    "PLL_AUDIO0_CTRL",
+    "PLL_AUDIO1_CTRL",
+    "PLL_NPU_CTRL",
+    "PLL_DE_CTRL"
+   ]
+  },
+  "bus_clock_save_restore": {
+   "address": "0x4002ae78",
+   "registers": [
+    "0x02002500",
+    "0x02002510",
+    "0x02002518",
+    "0x02002538",
+    "0x07010000",
+    "0x0701000c",
+    "0x07010010"
+   ]
+  },
+  "bus_clock_gate": {
+   "address": "0x4001ddf8",
+   "registers": [
+    "0x02002580",
+    "0x02002588",
+    "0x02002560",
+    "0x02002540"
+   ]
+  },
+  "pck600_rows_on_resume": {
+   "rows": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10
+   ],
+   "status_not_polled": [
+    6
+   ],
+   "policy_or": "0x8"
+  },
+  "cpu_plls": [
+   "0x08870000",
+   "0x08871000",
+   "0x08872000",
+   "0x08873000"
+  ],
+  "pmic_rail_switch": {
+   "address": "0x40010774",
+   "entry_bytes": 6,
+   "entries": [
+    {
+     "index": 0,
+     "axp8191_register": "0x10",
+     "bit": 0
+    },
+    {
+     "index": 1,
+     "axp8191_register": "0x10",
+     "bit": 1
+    },
+    {
+     "index": 2,
+     "axp8191_register": "0x10",
+     "bit": 2
+    },
+    {
+     "index": 3,
+     "axp8191_register": "0x10",
+     "bit": 3
+    },
+    {
+     "index": 4,
+     "axp8191_register": "0x10",
+     "bit": 4
+    },
+    {
+     "index": 5,
+     "axp8191_register": "0x10",
+     "bit": 5
+    },
+    {
+     "index": 6,
+     "axp8191_register": "0x10",
+     "bit": 6
+    },
+    {
+     "index": 7,
+     "axp8191_register": "0x10",
+     "bit": 7
+    },
+    {
+     "index": 8,
+     "axp8191_register": "0x11",
+     "bit": 0
+    },
+    {
+     "index": 9,
+     "axp8191_register": "0x11",
+     "bit": 3
+    },
+    {
+     "index": 10,
+     "axp8191_register": "0x11",
+     "bit": 4
+    },
+    {
+     "index": 11,
+     "axp8191_register": "0x20",
+     "bit": 0
+    },
+    {
+     "index": 12,
+     "axp8191_register": "0x20",
+     "bit": 1
+    },
+    {
+     "index": 13,
+     "axp8191_register": "0x20",
+     "bit": 2
+    },
+    {
+     "index": 14,
+     "axp8191_register": "0x20",
+     "bit": 3
+    },
+    {
+     "index": 15,
+     "axp8191_register": "0x20",
+     "bit": 4
+    },
+    {
+     "index": 16,
+     "axp8191_register": "0x20",
+     "bit": 5
+    },
+    {
+     "index": 17,
+     "axp8191_register": "0x20",
+     "bit": 6
+    },
+    {
+     "index": 18,
+     "axp8191_register": "0x20",
+     "bit": 7
+    },
+    {
+     "index": 19,
+     "axp8191_register": "0x21",
+     "bit": 0
+    },
+    {
+     "index": 20,
+     "axp8191_register": "0x21",
+     "bit": 1
+    },
+    {
+     "index": 21,
+     "axp8191_register": "0x21",
+     "bit": 2
+    },
+    {
+     "index": 22,
+     "axp8191_register": "0x21",
+     "bit": 3
+    },
+    {
+     "index": 23,
+     "axp8191_register": "0x21",
+     "bit": 4
+    },
+    {
+     "index": 24,
+     "axp8191_register": "0x21",
+     "bit": 5
+    },
+    {
+     "index": 25,
+     "axp8191_register": "0x21",
+     "bit": 6
+    },
+    {
+     "index": 26,
+     "axp8191_register": "0x21",
+     "bit": 7
+    },
+    {
+     "index": 27,
+     "axp8191_register": "0x22",
+     "bit": 0
+    },
+    {
+     "index": 28,
+     "axp8191_register": "0x22",
+     "bit": 1
+    },
+    {
+     "index": 29,
+     "axp8191_register": "0x22",
+     "bit": 2
+    },
+    {
+     "index": 30,
+     "axp8191_register": "0x22",
+     "bit": 3
+    },
+    {
+     "index": 31,
+     "axp8191_register": "0x22",
+     "bit": 4
+    },
+    {
+     "index": 32,
+     "axp8191_register": "0x22",
+     "bit": 5
+    },
+    {
+     "index": 33,
+     "axp8191_register": "0x22",
+     "bit": 6
+    },
+    {
+     "index": 34,
+     "axp8191_register": "0x22",
+     "bit": 7
+    },
+    {
+     "index": 35,
+     "axp8191_register": "0x23",
+     "bit": 0
+    },
+    {
+     "index": 36,
+     "axp8191_register": "0x23",
+     "bit": 1
+    },
+    {
+     "index": 37,
+     "axp8191_register": "0x23",
+     "bit": 2
+    },
+    {
+     "index": 38,
+     "axp8191_register": "0x23",
+     "bit": 3
+    }
+   ],
+   "note": "index used by the standby_param bit masks; registers per axp2101.h: 0x10/0x11 DCDC_CTL1/2, 0x20-0x23 LDO_POWER_ON_OFF_CTL1-4"
+  },
+  "wakeup_irq_map": {
+   "address": "0x4000fc74",
+   "entries": [
+    {
+     "e902_irq": 16,
+     "gic_intid": 189,
+     "source": "USB0_USB1_STB",
+     "wake_event_value": 157
+    },
+    {
+     "e902_irq": 16,
+     "gic_intid": 190,
+     "source": "USB0_USB1_STB",
+     "wake_event_value": 158
+    },
+    {
+     "e902_irq": 16,
+     "gic_intid": 191,
+     "source": "USB0_USB1_STB",
+     "wake_event_value": 159
+    },
+    {
+     "e902_irq": 16,
+     "gic_intid": 192,
+     "source": "USB0_USB1_STB",
+     "wake_event_value": 160
+    },
+    {
+     "e902_irq": 24,
+     "gic_intid": 228,
+     "source": "RTC_ALARM",
+     "wake_event_value": 196
+    },
+    {
+     "e902_irq": 25,
+     "gic_intid": 229,
+     "source": "GPIOL_S",
+     "wake_event_value": 197
+    },
+    {
+     "e902_irq": 26,
+     "gic_intid": 230,
+     "source": "GPIOL_NS",
+     "wake_event_value": 198
+    },
+    {
+     "e902_irq": 27,
+     "gic_intid": 231,
+     "source": "GPIOM_S",
+     "wake_event_value": 199
+    },
+    {
+     "e902_irq": 28,
+     "gic_intid": 232,
+     "source": "GPIOM_NS",
+     "wake_event_value": 200
+    },
+    {
+     "e902_irq": 34,
+     "gic_intid": 238,
+     "source": "S_IRRX",
+     "wake_event_value": 206
+    }
+   ]
+  },
+  "pmu_ops": {
+   "address": "0x4001086c",
+   "entries": [
+    "0x40007706 power-off",
+    "0x400076ce reset",
+    "0x4000766a VBUS check",
+    "0x4000756e rail switch"
+   ]
+  },
+  "charger_ops": {
+   "address": "0x40010880",
+   "entries": [
+    "0x4000791a probe",
+    "0 (none)",
+    "0x4000771a VBUS status",
+    "0x400078f8 reset",
+    "0x40007828 open battery FET"
+   ]
+  },
+  "dram_phy_register_lists": [
+   {
+    "table": "0x400108bc",
+    "entries": 4441,
+    "used_when": "DRAM parameter word 0x78 bit 2 set",
+    "address_range": [
+     "0x0a9200ac",
+     "0x0aaa01ce"
+    ]
+   },
+   {
+    "table": "0x40014e20",
+    "entries": 5717,
+    "used_when": "DRAM parameter word 0x78 bit 2 clear",
+    "address_range": [
+     "0x0a920000",
+     "0x0aaa01ce"
+    ]
+   },
+   {
+    "table": "0x4001a774",
+    "entries": 3374,
+    "used_when": "always (third list)",
+    "address_range": [
+     "0x0a920000",
+     "0x0aaa01ce"
+    ]
+   }
+  ],
+  "isr_table": {
+   "address": "0x4002aca0",
+   "entries": 35,
+   "entry_bytes": 8
+  },
+  "initialised_data": {
+   "0x400108a0": "osc24m-on default 1",
+   "0x400108a4": "debug mask default 3",
+   "0x4001ddd0": "UART baud (set to 57600 at init)",
+   "0x40010730": "measured RC oscillator rate"
+  }
+ },
+ "progress_codes": [
+  {
+   "value": "0xb000-0xb00f",
+   "meaning": "start-up step n of main"
+  },
+  {
+   "value": "0xa101/0xa102/0xa103",
+   "meaning": "system operation state 0 / 1-2 / 3"
+  },
+  {
+   "value": "0xa201/0xa202/0xa203",
+   "meaning": "PMIC power-off / reset / VBUS check"
+  },
+  {
+   "value": "0xa300|n",
+   "meaning": "AXP8191 power-down register write (n=0 off, 1 restart)"
+  },
+  {
+   "value": "0xa400/0xa401/0xa402/0xa501",
+   "meaning": "charger interrupt clear / reset / battery FET / VBUS read"
+  },
+  {
+   "value": "0xf3f31000-0xf3f3300b",
+   "meaning": "system-suspend steps (parameters, clocks, CPU off, DRAM, rails)"
+  },
+  {
+   "value": "0xf3f34000-0xf3f36000",
+   "meaning": "waiting for and receiving a wakeup event"
+  },
+  {
+   "value": "0xf3f37001-0xf3f3700d",
+   "meaning": "resume steps"
+  },
+  {
+   "value": "0xf3f38000",
+   "meaning": "resume complete"
+  },
+  {
+   "value": "0xf1f1900f",
+   "meaning": "DRAM checksum mismatch after resume; the firmware then spins"
+  }
+ ],
+ "error_codes": [
+  {
+   "value": -1,
+   "meaning": "generic failure / no message / unsupported type 0x96"
+  },
+  {
+   "value": -3,
+   "meaning": "unknown message type; feedback refused for an asynchronous message"
+  },
+  {
+   "value": -13,
+   "meaning": "driver not initialised (timer, UART)"
+  },
+  {
+   "value": -19,
+   "meaning": "PMIC driver not ready / no space in a list"
+  },
+  {
+   "value": -22,
+   "meaning": "invalid clock ID or invalid system power state"
+  },
+  {
+   "value": -28,
+   "meaning": "no free notifier or window slot"
+  },
+  {
+   "value": -35,
+   "meaning": "message-box timeout"
+  },
+  {
+   "value": -36,
+   "meaning": "timer or ISR not found"
+  }
+ ],
+ "device_tree": {
+  "source": "device tree whose address BL31 leaves in RTC GP_DATA_REG3",
+  "nodes": {
+   "/dram": [
+    "dram_para00 .. dram_paraNN (u32 each)"
+   ],
+   "standby_param": [
+    "vdd-cpu",
+    "vdd-cpub",
+    "vdd-sys",
+    "vdd-usb",
+    "vcc-pll",
+    "vcc-io",
+    "vcc-efuse",
+    "osc24m-on"
+   ]
+  },
+  "standby_param_semantics": "each vdd/vcc value is a 32-bit mask of rail-switch indices that the firmware switches off in suspend and on in resume; vdd-usb is only logged; osc24m-on=0 allows the DCXO to stop"
+ }
+}

@@ -57,13 +57,13 @@ output, explicit REAP and healthy CLOSE use the existing service unchanged.
 Buffers and shared leases remain owned through the retained session. There is
 no model switch or externally owned intermediate buffer.
 
-## Padding is excluded from the compiler CRC
+## Padding is excluded from the model CRC
 
 The emitted coefficient payload starts at byte 2112, leaving 28 zero bytes after
-the command-state range table ends at 2084. The pinned writer's section helper
-at `0x2229e0` seeks to each declared offset and updates CRC only for its declared
-payload. The accumulated CRC over concatenated payloads is `0xe864f719`; including
-the gap incorrectly yields `0xa44bd11c`. All listed section CRCs also match.
+the command-state range table ends at 2084. The CRC over the concatenated
+declared payloads is `0xe864f719`, which equals the stored value; including the
+gap yields `0xa44bd11c`, which does not. The CRC therefore covers each declared
+payload and skips alignment gaps. All listed section CRCs also match.
 
 [Native checksum admission](nbg-checksum.md) preserves independent section CRCs,
 section bounds and overlap checks. It requires ascending payload order, zero gaps
@@ -71,7 +71,7 @@ and no trailer. The decoder bounds section-relative table entries, and assembly
 copies descriptors and coefficients only from those declared sections. Excluded
 gap bytes cannot enter loaded payload through those offset paths. The earlier
 three emitted models retain their interpretation. Synthetic whole-tail padding
-and appended-zero-CRC assumptions have been corrected to the writer's coverage.
+and appended-zero-CRC assumptions follow the same payload-only coverage.
 
 ## Functional evidence uses the actual emitted artifact
 

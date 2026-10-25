@@ -1,0 +1,128 @@
+{
+ "binary": "rogue_36.56.104.183_v1.fw",
+ "sha256": "1db1c399c17401d1f79d46c880db81c724d748c784d4639433b076aba2f9c0d2",
+ "bytes": 131072,
+ "source": "Imagination linux-firmware revision 8a58f81883f7be458daa34e418cc4079f995b279, powervr/rogue_36.56.104.183_v1.fw; pinned in sources.lock.json (gpu-firmware)",
+ "license": "LICENSE.powervr. The license forbids reverse engineering, decompilation and disassembly. Every value here is read from the container headers exactly as the open DDK loader (pvr_fw.c, pvr_fw_info.h) reads them; the firmware code is not analysed.",
+ "parsed_as": "the open DDK driver loader pvr_fw.c:101-183 and pvr_fw_info.h structs",
+ "elf": {
+  "class_": "ELF32",
+  "endian": "little",
+  "machine_em": 8,
+  "entry": "0xbfc00001",
+  "flags": "0x72001001",
+  "phnum": 5
+ },
+ "program_headers": [
+  {
+   "vaddr": "0x9fc02000",
+   "file_offset": "0xd4",
+   "filesz": 3088,
+   "memsz": 3088,
+   "flags": "0x5"
+  },
+  {
+   "vaddr": "0xbfc00000",
+   "file_offset": "0xce4",
+   "filesz": 1748,
+   "memsz": 1748,
+   "flags": "0x5"
+  },
+  {
+   "vaddr": "0xc0000000",
+   "file_offset": "0x13b8",
+   "filesz": 93916,
+   "memsz": 93916,
+   "flags": "0x5"
+  },
+  {
+   "vaddr": "0xc0032000",
+   "file_offset": "0x18298",
+   "filesz": 0,
+   "memsz": 8,
+   "flags": "0x6"
+  },
+  {
+   "vaddr": "0xc0032008",
+   "file_offset": "0x182c8",
+   "filesz": 10712,
+   "memsz": 10712,
+   "flags": "0x6"
+  }
+ ],
+ "info_header": {
+  "file_offset": "0x1f000",
+  "info_version": 3,
+  "header_len": 48,
+  "layout_entry_num": 6,
+  "layout_entry_size": 24,
+  "bvnc": [
+   36,
+   56,
+   104,
+   183
+  ],
+  "fw_page_size": 4096,
+  "flags": "0x1",
+  "fw_version": "1.1 build 6976702",
+  "device_info_size": 4096
+ },
+ "layout_entries": [
+  {
+   "id": "MIPS_CODE",
+   "type": "FW_CODE",
+   "base_addr": "0xc0000000",
+   "max_size": 192512,
+   "alloc_size": 94208,
+   "alloc_offset": 0
+  },
+  {
+   "id": "MIPS_EXCEPTIONS_CODE",
+   "type": "FW_CODE",
+   "base_addr": "0x9fc02000",
+   "max_size": 8192,
+   "alloc_size": 4096,
+   "alloc_offset": 94208
+  },
+  {
+   "id": "MIPS_BOOT_CODE",
+   "type": "FW_CODE",
+   "base_addr": "0xbfc00000",
+   "max_size": 4096,
+   "alloc_size": 4096,
+   "alloc_offset": 98304
+  },
+  {
+   "id": "MIPS_PRIVATE_DATA",
+   "type": "FW_DATA",
+   "base_addr": "0xc0032000",
+   "max_size": 32768,
+   "alloc_size": 12288,
+   "alloc_offset": 0
+  },
+  {
+   "id": "MIPS_BOOT_DATA",
+   "type": "FW_DATA",
+   "base_addr": "0xbfc01000",
+   "max_size": 4096,
+   "alloc_size": 4096,
+   "alloc_offset": 12288
+  },
+  {
+   "id": "MIPS_STACK",
+   "type": "FW_DATA",
+   "base_addr": "0xcf600000",
+   "max_size": 4096,
+   "alloc_size": 4096,
+   "alloc_offset": 16384
+  }
+ ],
+ "device_info": {
+  "file_offset": "0x1e000",
+  "brn_mask_words": 1,
+  "ern_mask_words": 1,
+  "feature_mask_words": 2,
+  "feature_param_words": 29,
+  "note": "The loader reads these counts (pvr_fw_info.h pvr_fw_device_info_header) and passes the mask and parameter words to pvr_device_info_set_* without interpreting the firmware code."
+ }
+}

@@ -1,0 +1,340 @@
+{
+ "binary": "fixs-brom / physical-brom",
+ "sha256": "a8e31821e8a1611d75867825914c58373c732742cb8f2235e8168c1d7e93b5aa",
+ "source": "FEL memmove capture from the original A733 board (evidence/rom-copy-20261016-084055); FIXS_BROM region",
+ "note": "MMIO addresses recovered by constant propagation of literal-pool and movw/movt bases. Heuristic: a computed base is invisible to this scan.",
+ "memory_map_source": "A733 User Manual V1.00 section 2",
+ "peripherals": {
+  "CCU": [
+   {
+    "addr": "0x20020a0",
+    "reads": 2,
+    "writes": 2,
+    "funcs": [
+     "0x1a08"
+    ]
+   },
+   {
+    "addr": "0x2002500",
+    "reads": 2,
+    "writes": 2,
+    "funcs": [
+     "0x1e48"
+    ]
+   },
+   {
+    "addr": "0x2002588",
+    "reads": 3,
+    "writes": 3,
+    "funcs": [
+     "0x2084"
+    ]
+   },
+   {
+    "addr": "0x2002594",
+    "reads": 3,
+    "writes": 3,
+    "funcs": [
+     "0x2084"
+    ]
+   },
+   {
+    "addr": "0x2002ac0",
+    "reads": 7,
+    "writes": 7,
+    "funcs": [
+     "0x1fac",
+     "0x2004"
+    ]
+   },
+   {
+    "addr": "0x2002ac4",
+    "reads": 3,
+    "writes": 3,
+    "funcs": [
+     "0x2160"
+    ]
+   }
+  ],
+  "CPUIDLE": [
+   {
+    "addr": "0x70501c0",
+    "reads": 1,
+    "writes": 0,
+    "funcs": [
+     "0x44"
+    ]
+   },
+   {
+    "addr": "0x70501c4",
+    "reads": 2,
+    "writes": 0,
+    "funcs": [
+     "0x44"
+    ]
+   },
+   {
+    "addr": "0x70501c8",
+    "reads": 1,
+    "writes": 0,
+    "funcs": [
+     "0x44"
+    ]
+   },
+   {
+    "addr": "0x70501cc",
+    "reads": 1,
+    "writes": 0,
+    "funcs": [
+     "0x44"
+    ]
+   },
+   {
+    "addr": "0x70501d0",
+    "reads": 1,
+    "writes": 0,
+    "funcs": [
+     "0x44"
+    ]
+   },
+   {
+    "addr": "0x70501d4",
+    "reads": 1,
+    "writes": 0,
+    "funcs": [
+     "0x44"
+    ]
+   },
+   {
+    "addr": "0x70501d8",
+    "reads": 1,
+    "writes": 0,
+    "funcs": [
+     "0x44"
+    ]
+   },
+   {
+    "addr": "0x70501e0",
+    "reads": 1,
+    "writes": 0,
+    "funcs": [
+     "0x44"
+    ]
+   },
+   {
+    "addr": "0x70501e4",
+    "reads": 1,
+    "writes": 0,
+    "funcs": [
+     "0x44"
+    ]
+   },
+   {
+    "addr": "0x70501e8",
+    "reads": 1,
+    "writes": 0,
+    "funcs": [
+     "0x44"
+    ]
+   },
+   {
+    "addr": "0x70501ec",
+    "reads": 1,
+    "writes": 0,
+    "funcs": [
+     "0x44"
+    ]
+   }
+  ],
+  "CPU_PLL_CFG": [
+   {
+    "addr": "0x887101c",
+    "reads": 2,
+    "writes": 2,
+    "funcs": [
+     "0x1da0"
+    ]
+   },
+   {
+    "addr": "0x887301c",
+    "reads": 3,
+    "writes": 3,
+    "funcs": [
+     "0x1da0"
+    ]
+   },
+   {
+    "addr": "0x8873034",
+    "reads": 1,
+    "writes": 1,
+    "funcs": [
+     "0x1d48"
+    ]
+   }
+  ],
+  "RTC": [
+   {
+    "addr": "0x709015c",
+    "reads": 0,
+    "writes": 1,
+    "funcs": [
+     "0x231c"
+    ]
+   },
+   {
+    "addr": "0x7090160",
+    "reads": 3,
+    "writes": 0,
+    "funcs": [
+     "0x13f4",
+     "0x231c"
+    ]
+   },
+   {
+    "addr": "0x7090304",
+    "reads": 4,
+    "writes": 6,
+    "funcs": [
+     "0x44",
+     "0xd14"
+    ]
+   },
+   {
+    "addr": "0x7090310",
+    "reads": 3,
+    "writes": 3,
+    "funcs": [
+     "0x248",
+     "0x264",
+     "0x44"
+    ]
+   }
+  ],
+  "SID": [
+   {
+    "addr": "0x3006098",
+    "reads": 1,
+    "writes": 0,
+    "funcs": [
+     "0x2c38"
+    ]
+   },
+   {
+    "addr": "0x30060a0",
+    "reads": 1,
+    "writes": 0,
+    "funcs": [
+     "0x2a0c"
+    ]
+   },
+   {
+    "addr": "0x3006200",
+    "reads": 1,
+    "writes": 0,
+    "funcs": [
+     "0x237c"
+    ]
+   }
+  ],
+  "SYSCTRL": [
+   {
+    "addr": "0x3000008",
+    "reads": 1,
+    "writes": 1,
+    "funcs": [
+     "0x44"
+    ]
+   },
+   {
+    "addr": "0x3000024",
+    "reads": 1,
+    "writes": 0,
+    "funcs": [
+     "0x10134"
+    ]
+   },
+   {
+    "addr": "0x30000b0",
+    "reads": 0,
+    "writes": 2,
+    "funcs": [
+     "0x2474"
+    ]
+   },
+   {
+    "addr": "0x3000204",
+    "reads": 1,
+    "writes": 1,
+    "funcs": [
+     "0x23a0"
+    ]
+   }
+  ],
+  "S_PRCM": [
+   {
+    "addr": "0x7010000",
+    "reads": 2,
+    "writes": 2,
+    "funcs": [
+     "0x1d68"
+    ]
+   },
+   {
+    "addr": "0x701020c",
+    "reads": 3,
+    "writes": 6,
+    "funcs": [
+     "0x248",
+     "0x264",
+     "0x44"
+    ]
+   },
+   {
+    "addr": "0x7010254",
+    "reads": 1,
+    "writes": 1,
+    "funcs": [
+     "0x2360"
+    ]
+   }
+  ],
+  "S_TWD": [
+   {
+    "addr": "0x7022010",
+    "reads": 0,
+    "writes": 1,
+    "funcs": [
+     "0x2c38"
+    ]
+   },
+   {
+    "addr": "0x7022014",
+    "reads": 0,
+    "writes": 1,
+    "funcs": [
+     "0x2c38"
+    ]
+   }
+  ],
+  "S_WDG": [
+   {
+    "addr": "0x7021014",
+    "reads": 0,
+    "writes": 1,
+    "funcs": [
+     "0x44"
+    ]
+   }
+  ],
+  "TIMESTAMP_CTRL": [
+   {
+    "addr": "0x8020000",
+    "reads": 1,
+    "writes": 1,
+    "funcs": [
+     "0xb30"
+    ]
+   }
+  ]
+ }
+}

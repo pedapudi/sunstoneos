@@ -1,0 +1,185 @@
+{
+ "binaries": [
+  {
+   "name": "ns-brom",
+   "sha256": "95be69c916846a8259578565f3193a6b9ab0625294d5374f3dc6c2f667fc6169",
+   "source": "smaeul/sunxi-blobs 42aabf4f, sun60iw2p1/ns-brom/blob.hex; NS_BROM region, loaded at 0x00017000"
+  }
+ ],
+ "note": "NS-BROM (USB FEL gadget) function inventory.",
+ "full_inventory": "~/.cache/sunstoneos/evidence/vendor-firmware-20261025/boot/*.functions.json",
+ "functions": [
+  {
+   "addr": "0x17020",
+   "size": 112,
+   "callers": [],
+   "callees": [
+    "0x17218"
+   ],
+   "role": "USB/FEL exception shim: saves registers and calls the gadget handler at 0x17218."
+  },
+  {
+   "addr": "0x17030",
+   "size": 96,
+   "callers": [],
+   "callees": [],
+   "role": "NS-BROM reset: clears the DBGEN bit, sets a VBAR, zeroes r0-r12 and enters the gadget."
+  },
+  {
+   "addr": "0x171d8",
+   "size": 40,
+   "callers": [
+    "0x17218"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x17200",
+   "size": 8,
+   "callers": [
+    "0x17218"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x17208",
+   "size": 8,
+   "callers": [
+    "0x17218"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x17210",
+   "size": 8,
+   "callers": [
+    "0x17218"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x17218",
+   "size": 56,
+   "callers": [
+    "0x17020"
+   ],
+   "callees": [
+    "0x171d8",
+    "0x17200",
+    "0x17208",
+    "0x17210",
+    "0x192e8"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x176dc",
+   "size": 24,
+   "callers": [
+    "0x18fd8"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x17a5c",
+   "size": 12,
+   "callers": [
+    "0x188f0",
+    "0x18fd8"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x17b5c",
+   "size": 4,
+   "callers": [
+    "0x18fd8"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x180dc",
+   "size": 12,
+   "callers": [
+    "0x18fd8"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x188f0",
+   "size": 148,
+   "callers": [
+    "0x18984"
+   ],
+   "callees": [
+    "0x17a5c"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x18984",
+   "size": 36,
+   "callers": [
+    "0x18fd8"
+   ],
+   "callees": [
+    "0x188f0"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x18eb4",
+   "size": 36,
+   "callers": [
+    "0x18fd8"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x18fd8",
+   "size": 328,
+   "callers": [
+    "0x192e8"
+   ],
+   "callees": [
+    "0x176dc",
+    "0x17a5c",
+    "0x17b5c",
+    "0x180dc",
+    "0x18984",
+    "0x18eb4",
+    "0x19744"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x192e8",
+   "size": 16,
+   "callers": [
+    "0x17218"
+   ],
+   "callees": [
+    "0x18fd8"
+   ],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  },
+  {
+   "addr": "0x19744",
+   "size": 32,
+   "callers": [
+    "0x18fd8"
+   ],
+   "callees": [],
+   "role": "unclassified (BL-reachable; see full inventory)"
+  }
+ ]
+}

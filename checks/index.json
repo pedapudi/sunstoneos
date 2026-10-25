@@ -258,7 +258,9 @@
  "a733-cpu-start.py": {
   "cache_areas": [],
   "docs": [
-   "docs/cpu-start.md"
+   "docs/cpu-start.md",
+   "docs/vendor-firmware/README.md",
+   "docs/vendor-firmware/tf-a-monitor.md"
   ],
   "library": false,
   "pure_host": false,
@@ -792,6 +794,7 @@
  "a733-rom-recovery.py": {
   "cache_areas": [],
   "docs": [
+   "docs/vendor-firmware/README.md",
    "docs/watchdog.md"
   ],
   "library": false,
@@ -1423,7 +1426,8 @@
  "aic8800-firmware.py": {
   "cache_areas": [],
   "docs": [
-   "docs/radio-firmware.md"
+   "docs/radio-firmware.md",
+   "docs/vendor-firmware/README.md"
   ],
   "library": false,
   "pure_host": false,
@@ -2114,7 +2118,9 @@
    "host",
    "sources"
   ],
-  "docs": [],
+  "docs": [
+   "docs/vendor-firmware/README.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -2184,7 +2190,8 @@
  "boot0-monitor-handoff.py": {
   "cache_areas": [],
   "docs": [
-   "docs/boot.md"
+   "docs/boot.md",
+   "docs/vendor-firmware/README.md"
   ],
   "library": false,
   "pure_host": false,
@@ -2562,7 +2569,8 @@
  "cold-boot-cache.py": {
   "cache_areas": [],
   "docs": [
-   "docs/cold-entry.md"
+   "docs/cold-entry.md",
+   "docs/vendor-firmware/README.md"
   ],
   "library": false,
   "pure_host": false,
@@ -2577,7 +2585,8 @@
   "cache_areas": [],
   "docs": [
    "docs/boot-slots.md",
-   "docs/cold-entry.md"
+   "docs/cold-entry.md",
+   "docs/vendor-firmware/README.md"
   ],
   "library": false,
   "pure_host": false,
@@ -3616,6 +3625,7 @@
   "cache_areas": [],
   "docs": [
    "docs/board-wiring.md",
+   "docs/vendor-firmware/README.md",
    "docs/watchdog-expiry.md",
    "docs/watchdog.md",
    "tools/README.md"
@@ -3651,7 +3661,8 @@
    "docs/runtime.md",
    "docs/smp-runtime.md",
    "docs/sources.md",
-   "docs/usb.md"
+   "docs/usb.md",
+   "docs/vendor-firmware/README.md"
   ],
   "library": false,
   "pure_host": false,
@@ -6507,7 +6518,8 @@
   "cache_areas": [],
   "docs": [
    "docs/designs/npu-exact-sum.md",
-   "docs/nbg-checksum.md"
+   "docs/nbg-checksum.md",
+   "docs/vendor-firmware/README.md"
   ],
   "library": false,
   "pure_host": false,
@@ -6567,14 +6579,14 @@
  "nbg-directory-reference.py": {
   "cache_areas": [],
   "docs": [
-   "docs/nbg-directory.md"
+   "docs/nbg-directory.md",
+   "docs/vendor-firmware/README.md"
   ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
    "model",
    "inspector",
-   "compiler_library",
    "output"
   ],
   "summary": "Record the pinned convolution's directory layout and checksum evidence.",
@@ -6583,7 +6595,9 @@
  "nbg-inspection.py": {
   "cache_areas": [],
   "docs": [
-   "docs/npu.md"
+   "docs/npu.md",
+   "docs/vendor-firmware/README.md",
+   "docs/vendor-firmware/gpu-and-npu-binaries.md"
   ],
   "library": false,
   "pure_host": false,
@@ -6614,7 +6628,8 @@
  "nbg-loader-reference.py": {
   "cache_areas": [],
   "docs": [
-   "docs/nbg-loader-trace.md"
+   "docs/nbg-loader-trace.md",
+   "docs/vendor-firmware/README.md"
   ],
   "library": false,
   "pure_host": false,
@@ -6644,7 +6659,8 @@
  "nbg-relocation-reference.py": {
   "cache_areas": [],
   "docs": [
-   "docs/nbg-relocation.md"
+   "docs/nbg-relocation.md",
+   "docs/vendor-firmware/README.md"
   ],
   "library": false,
   "pure_host": false,
@@ -6659,7 +6675,8 @@
  "nbg-ring-reference.py": {
   "cache_areas": [],
   "docs": [
-   "docs/nbg-rings.md"
+   "docs/nbg-rings.md",
+   "docs/vendor-firmware/README.md"
   ],
   "library": false,
   "pure_host": false,
@@ -8041,7 +8058,9 @@
  "pvr-firmware-reference.py": {
   "cache_areas": [],
   "docs": [
-   "docs/gpu.md"
+   "docs/gpu.md",
+   "docs/vendor-firmware/README.md",
+   "docs/vendor-firmware/gpu-and-npu-binaries.md"
   ],
   "library": false,
   "pure_host": false,
@@ -8194,7 +8213,8 @@
  "pvr-gpu-start-reference.py": {
   "cache_areas": [],
   "docs": [
-   "docs/gpu-start.md"
+   "docs/gpu-start.md",
+   "docs/vendor-firmware/gpu-and-npu-binaries.md"
   ],
   "library": false,
   "pure_host": false,
@@ -8209,7 +8229,8 @@
  "pvr-gpu-stop-reference.py": {
   "cache_areas": [],
   "docs": [
-   "docs/gpu-stop.md"
+   "docs/gpu-stop.md",
+   "docs/vendor-firmware/gpu-and-npu-binaries.md"
   ],
   "library": false,
   "pure_host": false,
@@ -8263,7 +8284,8 @@
  "pvr-mips-reference.py": {
   "cache_areas": [],
   "docs": [
-   "docs/gpu-mips.md"
+   "docs/gpu-mips.md",
+   "docs/vendor-firmware/gpu-and-npu-binaries.md"
   ],
   "library": false,
   "pure_host": false,
@@ -8473,7 +8495,8 @@
   "cache_areas": [],
   "docs": [
    "docs/board-radio.md",
-   "docs/os-image.md"
+   "docs/os-image.md",
+   "docs/vendor-firmware/README.md"
   ],
   "library": false,
   "pure_host": false,
@@ -8689,7 +8712,8 @@
  "remote-writers-sources.py": {
   "cache_areas": [],
   "docs": [
-   "docs/remote-writers.md"
+   "docs/remote-writers.md",
+   "docs/vendor-firmware/README.md"
   ],
   "library": false,
   "pure_host": true,
@@ -9934,9 +9958,21 @@
   "summary": "Check that an NPU USB owner poll latches request expiry without hashing.",
   "usb": false
  },
+ "vendor-firmware-sources.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/vendor-firmware/README.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [],
+  "summary": "Validate the vendor firmware manifest, its README table and every link they document.",
+  "usb": false
+ },
  "watchdog-configuration.py": {
   "cache_areas": [],
   "docs": [
+   "docs/vendor-firmware/README.md",
    "docs/watchdog.md"
   ],
   "library": false,
@@ -9961,6 +9997,7 @@
  "watchdog-expiry.py": {
   "cache_areas": [],
   "docs": [
+   "docs/vendor-firmware/README.md",
    "docs/watchdog-expiry.md",
    "docs/watchdog.md",
    "tools/README.md"
@@ -9977,6 +10014,7 @@
  "watchdog-rom-reset-log.py": {
   "cache_areas": [],
   "docs": [
+   "docs/vendor-firmware/README.md",
    "docs/watchdog-reset-evidence.md"
   ],
   "library": false,

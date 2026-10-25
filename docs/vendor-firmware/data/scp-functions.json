@@ -1,0 +1,5126 @@
+{
+ "binary": "scp.fex",
+ "sha256": "07e6b97628101963e7944e012948c4bdf721f914bad347acd7dfbde89db42749",
+ "bytes": 105912,
+ "source": "orangepi-xunlong/orangepi-build a95129bf30ea11886cc35f08ebb3e69695a26656, external/packages/pack-uboot/sun60iw2/bin/scp.fex",
+ "provenance": "docs/vendor-firmware/README.md",
+ "reference": "docs/vendor-firmware/scp-firmware.md",
+ "load_address": "0x40004000 (E902 view; SRAM A2 + 0x4000)",
+ "offset_rule": "blob offset = address - 0x40004000",
+ "status_labels": {
+  "observed": "read from the instructions or data of this blob",
+  "inferred": "purpose deduced from strings, register names or data flow",
+  "unknown": "not analysed"
+ },
+ "functions": [
+  {
+   "address": "0x40004000",
+   "offset": "0x0",
+   "size": 192,
+   "group": "startup",
+   "role": "Reset entry: clears registers, sets gp and sp, zeroes the 1 KiB stack, installs the trap entry in mtvec and mtvt, enables machine interrupts, clears BSS, runs main, then the exit loop",
+   "status": "observed",
+   "callers": [],
+   "callees": [
+    "0x4000415c",
+    "0x4000418e",
+    "0x4000b080"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400040c0",
+   "offset": "0xc0",
+   "size": 2,
+   "group": "trap",
+   "role": "Trap entry (address in mtvec and mtvt): a jump to the register-saving trap handler",
+   "status": "observed",
+   "callers": [
+    "0x40004000"
+   ],
+   "callees": [
+    "0x400040c2"
+   ],
+   "address_taken_by": [
+    "0x40004044"
+   ],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400040c2",
+   "offset": "0xc2",
+   "size": 96,
+   "group": "trap",
+   "role": "Trap handler: saves the ten caller-saved RV32E registers, calls the C dispatcher with mcause and mepc, restores and returns with mret",
+   "status": "observed",
+   "callers": [
+    "0x400040c0"
+   ],
+   "callees": [
+    "0x40005330"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40004122",
+   "offset": "0x122",
+   "size": 58,
+   "group": "debug",
+   "role": "Daemon callback: scans the stack for the first non-zero word and logs the unused stack size",
+   "status": "inferred",
+   "callers": [
+    "0x4000417a"
+   ],
+   "callees": [
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [
+    "0x4000417e"
+   ],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000415c",
+   "offset": "0x15c",
+   "size": 30,
+   "group": "startup",
+   "role": "BSS clear from 0x4001ddb8 to 0x4002af3c",
+   "status": "observed",
+   "callers": [
+    "0x40004000"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000417a",
+   "offset": "0x17a",
+   "size": 12,
+   "group": "startup",
+   "role": "Registers the stack-usage callback in the daemon notifier list",
+   "status": "observed",
+   "callers": [
+    "0x4000b080"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40004186",
+   "offset": "0x186",
+   "size": 4,
+   "group": "runtime",
+   "role": "Interrupt-disable wrapper: saves mstatus and masks interrupts (critical section entry)",
+   "status": "observed",
+   "callers": [
+    "0x400064fc",
+    "0x40006c44",
+    "0x4000aafc",
+    "0x4000ae0a"
+   ],
+   "callees": [
+    "0x400052cc"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000418a",
+   "offset": "0x18a",
+   "size": 4,
+   "group": "runtime",
+   "role": "Critical section exit: restores the saved mstatus",
+   "status": "inferred",
+   "callers": [
+    "0x400064fc",
+    "0x40006c44",
+    "0x4000aafc",
+    "0x4000ae0a"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000418e",
+   "offset": "0x18e",
+   "size": 20,
+   "group": "startup",
+   "role": "Exit path after main returns: prints \"system exit\" and spins",
+   "status": "observed",
+   "callers": [
+    "0x40004000"
+   ],
+   "callees": [
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400041a2",
+   "offset": "0x1a2",
+   "size": 6,
+   "group": "runtime",
+   "role": "Executes WFI; used only while waiting for a wakeup event in system suspend",
+   "status": "observed",
+   "callers": [
+    "0x400095a0"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400041a8",
+   "offset": "0x1a8",
+   "size": 10,
+   "group": "runtime",
+   "role": "Busy-wait loop for a cycle count",
+   "status": "observed",
+   "callers": [
+    "0x40005710",
+    "0x40005ba8",
+    "0x4000674a"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400041b2",
+   "offset": "0x1b2",
+   "size": 14,
+   "group": "irq",
+   "role": "Default interrupt handler stub: logs \"No irq registered handler\"",
+   "status": "observed",
+   "callers": [
+    "0x400041c0",
+    "0x400052cc"
+   ],
+   "callees": [
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [
+    "0x400052fc"
+   ],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400041c0",
+   "offset": "0x1c0",
+   "size": 20,
+   "group": "irq",
+   "role": "Default-handler wrapper",
+   "status": "inferred",
+   "callers": [
+    "0x400052cc"
+   ],
+   "callees": [
+    "0x400041b2"
+   ],
+   "address_taken_by": [
+    "0x4000531e"
+   ],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400041d4",
+   "offset": "0x1d4",
+   "size": 150,
+   "group": "runtime",
+   "role": "CSR helpers: global interrupt disable and reads of T-Head custom CSRs 0x7c0 and 0x7e1",
+   "status": "inferred",
+   "callers": [
+    "0x4000451a",
+    "0x400052cc"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000426a",
+   "offset": "0x26a",
+   "size": 114,
+   "group": "runtime",
+   "role": "CSR accessors: mcause, mintstatus/0x345, 0x346, mtval, mip, cycle and instret counters, vendor/arch/impl/hart IDs, pmpcfg0-3",
+   "status": "observed",
+   "callers": [
+    "0x40005fe4"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400042dc",
+   "offset": "0x2dc",
+   "size": 574,
+   "group": "library-unreachable",
+   "role": "PMP configuration helpers from the vendor CPU support library; no caller from reachable code",
+   "status": "inferred",
+   "callers": [
+    "0x4000468e"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000451a",
+   "offset": "0x51a",
+   "size": 304,
+   "group": "library-unreachable",
+   "role": "PMP address register accessor (switch on index 0-15); no caller from reachable code",
+   "status": "inferred",
+   "callers": [
+    "0x4000468e"
+   ],
+   "callees": [
+    "0x400041d4"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000464a",
+   "offset": "0x64a",
+   "size": 68,
+   "group": "library-unreachable",
+   "role": "PMP region-size helper; no caller from reachable code",
+   "status": "inferred",
+   "callers": [
+    "0x4000468e"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000468e",
+   "offset": "0x68e",
+   "size": 3134,
+   "group": "library-unreachable",
+   "role": "PMP region configuration routine; reachable only from itself",
+   "status": "inferred",
+   "callers": [
+    "0x4000468e"
+   ],
+   "callees": [
+    "0x400042dc",
+    "0x4000451a",
+    "0x4000464a",
+    "0x4000468e"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400052cc",
+   "offset": "0x12cc",
+   "size": 100,
+   "group": "runtime",
+   "role": "Interrupt save/disable (returns previous mstatus) and restore",
+   "status": "observed",
+   "callers": [
+    "0x40004186"
+   ],
+   "callees": [
+    "0x400041d4"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40005330",
+   "offset": "0x1330",
+   "size": 48,
+   "group": "trap",
+   "role": "C trap dispatcher: interrupts go to the ISR table; exception cause 24 calls the NMI handler; other exceptions return unchanged",
+   "status": "observed",
+   "callers": [
+    "0x400040c2"
+   ],
+   "callees": [
+    "0x40006130",
+    "0x40007afe"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40005360",
+   "offset": "0x1360",
+   "size": 112,
+   "group": "wakeup",
+   "role": "Sets or clears an interrupt in the E902 wakeup masks (E902_WAKEUP_MASK0/1, 0x07032064/68)",
+   "status": "observed",
+   "callers": [
+    "0x40009248",
+    "0x40009346"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x7032064",
+    "0x7032068"
+   ]
+  },
+  {
+   "address": "0x400053d0",
+   "offset": "0x13d0",
+   "size": 110,
+   "group": "timer",
+   "role": "System tick callback (every 10 ms): increments the tick counter and runs the software-timer list (wakeup timer)",
+   "status": "observed",
+   "callers": [
+    "0x4000548e"
+   ],
+   "callees": [],
+   "address_taken_by": [
+    "0x40005496"
+   ],
+   "in_data_tables": [],
+   "indirect_calls": 1,
+   "mmio": []
+  },
+  {
+   "address": "0x4000543e",
+   "offset": "0x143e",
+   "size": 50,
+   "group": "timer",
+   "role": "Adds a software timer to the tick list (two slots)",
+   "status": "observed",
+   "callers": [
+    "0x400091f8"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40005470",
+   "offset": "0x1470",
+   "size": 12,
+   "group": "timer",
+   "role": "Returns the 10 ms tick counter",
+   "status": "observed",
+   "callers": [
+    "0x4000ae0a",
+    "0x4000b080"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000547c",
+   "offset": "0x147c",
+   "size": 18,
+   "group": "timer",
+   "role": "Converts milliseconds to 10 ms ticks",
+   "status": "observed",
+   "callers": [
+    "0x40009248",
+    "0x40009346"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000548e",
+   "offset": "0x148e",
+   "size": 64,
+   "group": "timer",
+   "role": "Starts the system tick: S_TIMER0 periodic, 10 ms, callback 0x400053d0",
+   "status": "observed",
+   "callers": [
+    "0x4000b080"
+   ],
+   "callees": [
+    "0x400064fc",
+    "0x40006584",
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400054ce",
+   "offset": "0x14ce",
+   "size": 38,
+   "group": "cpucfg",
+   "role": "cpucfg init: writes the timestamp counter base frequency 24,000,000 (0x08020020)",
+   "status": "observed",
+   "callers": [
+    "0x4000b080"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x8020020"
+   ]
+  },
+  {
+   "address": "0x400054f4",
+   "offset": "0x14f4",
+   "size": 272,
+   "group": "cpucfg",
+   "role": "Adds an address window to the CPUIDLE window table (0x0705000c enable mask, 0x07050010 + 8n start, +4 end); called once with the device-tree range. Strings name it \"little-endian config\"",
+   "status": "inferred",
+   "callers": [
+    "0x4000b080"
+   ],
+   "callees": [
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x705000c",
+    "0x8020008",
+    "0x802000c"
+   ]
+  },
+  {
+   "address": "0x40005604",
+   "offset": "0x1604",
+   "size": 78,
+   "group": "cpucfg",
+   "role": "Reads the 64-bit system timestamp counter (TIMESTAMP_STA 0x08010000/4) with a torn-read retry",
+   "status": "observed",
+   "callers": [
+    "0x40005710",
+    "0x40006676"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x8001000",
+    "0x8001004",
+    "0x8001008",
+    "0x8010000",
+    "0x8010004",
+    "0x8020000"
+   ]
+  },
+  {
+   "address": "0x40005652",
+   "offset": "0x1652",
+   "size": 22,
+   "group": "cpu-power",
+   "role": "Tests whether a core PPU (0x07052008 + n*0x1000) reports ON (8)",
+   "status": "observed",
+   "callers": [
+    "0x40005678"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40005668",
+   "offset": "0x1668",
+   "size": 16,
+   "group": "cpu-power",
+   "role": "Tests whether the cluster PPU (0x07051008) reports ON (8)",
+   "status": "observed",
+   "callers": [
+    "0x400056d0"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x7051008"
+   ]
+  },
+  {
+   "address": "0x40005678",
+   "offset": "0x1678",
+   "size": 88,
+   "group": "cpu-power",
+   "role": "Powers a core on: sets hotplug-enable 0x07050200+4n and power mode 0x07050220+4n bit 0, polls the core PPU for ON without a bound, clears hotplug-enable",
+   "status": "observed",
+   "callers": [
+    "0x400056ec"
+   ],
+   "callees": [
+    "0x40005652"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400056d0",
+   "offset": "0x16d0",
+   "size": 28,
+   "group": "cpu-power",
+   "role": "Core 0 power-mode clear (0x07050220 bit 0), then waits without a bound until the cluster PPU leaves ON",
+   "status": "observed",
+   "callers": [
+    "0x400095a0"
+   ],
+   "callees": [
+    "0x40005668"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x7050220"
+   ]
+  },
+  {
+   "address": "0x400056ec",
+   "offset": "0x16ec",
+   "size": 36,
+   "group": "cpu-power",
+   "role": "Resume entry for core 0: writes the entry address to CLU0_RVBARADDR0_L (0x08001004), clears _H, sets CLU0_CPU0_CTRL bit 0, powers core 0 on",
+   "status": "observed",
+   "callers": [
+    "0x400095a0"
+   ],
+   "callees": [
+    "0x40005678"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x8001000",
+    "0x8001004",
+    "0x8001008"
+   ]
+  },
+  {
+   "address": "0x40005710",
+   "offset": "0x1710",
+   "size": 228,
+   "group": "clock",
+   "role": "Measures the internal RC oscillator against the 24 MHz timestamp counter by switching AHBS between DCXO and RC16M; stores the rate (once)",
+   "status": "observed",
+   "callers": [
+    "0x400095a0"
+   ],
+   "callees": [
+    "0x400041a8",
+    "0x40005604",
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x7010000"
+   ]
+  },
+  {
+   "address": "0x400057f4",
+   "offset": "0x17f4",
+   "size": 82,
+   "group": "clock",
+   "role": "Cold-start CPUS bus clocks: AHBS = PERIPLL_DIV/1 (200 MHz), APBS0 = PERIPLL_DIV/2 (100 MHz), APBS1 = SYS_CLK24M/1",
+   "status": "observed",
+   "callers": [
+    "0x4000b080"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x7010000",
+    "0x701000c",
+    "0x7010010"
+   ]
+  },
+  {
+   "address": "0x40005846",
+   "offset": "0x1846",
+   "size": 20,
+   "group": "debug",
+   "role": "Writes a progress code to RTC GP_DATA_REG3 (0x0709010c); second entry reads it",
+   "status": "observed",
+   "callers": [
+    "0x400075ee",
+    "0x4000766a",
+    "0x400076ce",
+    "0x4000775a",
+    "0x40007828",
+    "0x400078f8",
+    "0x400095a0",
+    "0x4000aa54",
+    "0x4000b080"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x709010c"
+   ]
+  },
+  {
+   "address": "0x4000585a",
+   "offset": "0x185a",
+   "size": 10,
+   "group": "startup",
+   "role": "Reads RTC GP_DATA_REG3: the device-tree address that BL31 left there",
+   "status": "observed",
+   "callers": [
+    "0x4000b080"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x709010c"
+   ]
+  },
+  {
+   "address": "0x40005864",
+   "offset": "0x1864",
+   "size": 100,
+   "group": "clock",
+   "role": "Divider calculator for the S_IRRX clock (M and N from a requested ratio)",
+   "status": "inferred",
+   "callers": [
+    "0x400058c8"
+   ],
+   "callees": [
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400058c8",
+   "offset": "0x18c8",
+   "size": 722,
+   "group": "clock",
+   "role": "Module bus-gate control by clock ID (0x11 message boxes, 0x1a S_UART, 0x1f S_TIMER, 0x22 S_TWI, 0x26 S_IRRX module clock, 0x33 RTC, 0x3c S_IRRX bus); further entries set S_IRRX source/divider and CPUIDLE power-off gating (unreachable)",
+   "status": "observed",
+   "callers": [
+    "0x40006438",
+    "0x400067a0",
+    "0x40006b96",
+    "0x400070d4",
+    "0x4000717a",
+    "0x40007196"
+   ],
+   "callees": [
+    "0x40005864",
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x2002744",
+    "0x701011c",
+    "0x701017c",
+    "0x701018c",
+    "0x701019c",
+    "0x70101c0",
+    "0x70101cc",
+    "0x701020c",
+    "0x7050044",
+    "0x7050070",
+    "0x7050074",
+    "0x7050078",
+    "0x705007c"
+   ]
+  },
+  {
+   "address": "0x40005b9a",
+   "offset": "0x1b9a",
+   "size": 14,
+   "group": "clock",
+   "role": "Registers a callback for the 24 MHz oscillator notifier list",
+   "status": "observed",
+   "callers": [
+    "0x40006438"
+   ],
+   "callees": [
+    "0x4000aafc"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40005ba8",
+   "offset": "0x1ba8",
+   "size": 156,
+   "group": "standby",
+   "role": "Turns the 24 MHz DCXO off for standby: notifies listeners, clears R_PRCM 0x244 bit 0 (key 0xa7), sets RTC 0x310 bit 31, clears XO_CTRL bit 1 under key 0x16aa, disables oscillator auto-calibration and selects the internal low-speed source in LOSC_CTRL",
+   "status": "observed",
+   "callers": [
+    "0x400095a0"
+   ],
+   "callees": [
+    "0x400041a8",
+    "0x4000aba2",
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x7010244",
+    "0x7090000",
+    "0x709000c",
+    "0x709015c",
+    "0x7090160",
+    "0x7090310"
+   ]
+  },
+  {
+   "address": "0x40005c44",
+   "offset": "0x1c44",
+   "size": 226,
+   "group": "standby",
+   "role": "Turns the 24 MHz DCXO back on: restores LOSC_CTRL in steps, waits for the LOSC switch to settle, sets XO_CTRL bit 1, sets R_PRCM 0x244 bit 0, notifies listeners",
+   "status": "observed",
+   "callers": [
+    "0x400095a0"
+   ],
+   "callees": [
+    "0x40006676",
+    "0x4000aba2",
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x7010244",
+    "0x7090000",
+    "0x7090004",
+    "0x709015c",
+    "0x7090160"
+   ]
+  },
+  {
+   "address": "0x40005d26",
+   "offset": "0x1d26",
+   "size": 12,
+   "group": "clock",
+   "role": "Returns the \"24 MHz oscillator is off\" flag",
+   "status": "observed",
+   "callers": [
+    "0x4000674a"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40005d32",
+   "offset": "0x1d32",
+   "size": 362,
+   "group": "clock",
+   "role": "Module reset control by clock ID (same IDs as 0x400058c8; also 0x10 for CCU 0x724 SPINLOCK and R_PRCM 0x260)",
+   "status": "observed",
+   "callers": [
+    "0x40005d32",
+    "0x40006438",
+    "0x400067a0",
+    "0x40006b96",
+    "0x400070d4",
+    "0x4000717a",
+    "0x40007196"
+   ],
+   "callees": [
+    "0x40005d32",
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x2002724",
+    "0x2002744",
+    "0x701011c",
+    "0x701013c",
+    "0x701017c",
+    "0x701018c",
+    "0x701019c",
+    "0x70101cc",
+    "0x701020c",
+    "0x7010260"
+   ]
+  },
+  {
+   "address": "0x40005e9c",
+   "offset": "0x1e9c",
+   "size": 176,
+   "group": "clock",
+   "role": "Clock rate query by ID (0x11 AHBS, 0x24 APBS1) from the PRCM source fields",
+   "status": "observed",
+   "callers": [
+    "0x4000674a",
+    "0x400067a0",
+    "0x4000690e",
+    "0x40006ad6"
+   ],
+   "callees": [
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x7010000",
+    "0x7010010"
+   ]
+  },
+  {
+   "address": "0x40005f4c",
+   "offset": "0x1f4c",
+   "size": 4,
+   "group": "irq",
+   "role": "CLIC initialisation stub (returns 0)",
+   "status": "observed",
+   "callers": [
+    "0x4000606c"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40005f50",
+   "offset": "0x1f50",
+   "size": 148,
+   "group": "irq",
+   "role": "Interrupt helpers: stub, CLIC enable/disable/pending (0xe0801000 + 4n)",
+   "status": "observed",
+   "callers": [
+    "0x4000606c"
+   ],
+   "callees": [
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40005fe4",
+   "offset": "0x1fe4",
+   "size": 106,
+   "group": "irq",
+   "role": "Returns the current interrupt number from mcause",
+   "status": "observed",
+   "callers": [
+    "0x4000604e",
+    "0x40006130",
+    "0x40006154"
+   ],
+   "callees": [
+    "0x4000426a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x70240c0"
+   ]
+  },
+  {
+   "address": "0x4000604e",
+   "offset": "0x204e",
+   "size": 30,
+   "group": "irq",
+   "role": "Default ISR: logs \"irq enabled before ISR install\"",
+   "status": "observed",
+   "callers": [
+    "0x4000606c",
+    "0x400060b4"
+   ],
+   "callees": [
+    "0x40005fe4",
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [
+    "0x40006086",
+    "0x40006106"
+   ],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000606c",
+   "offset": "0x206c",
+   "size": 64,
+   "group": "irq",
+   "role": "Interrupt framework init: fills the 35-entry ISR table at 0x4002aca0 with the default ISR",
+   "status": "observed",
+   "callers": [
+    "0x4000b080"
+   ],
+   "callees": [
+    "0x40005f4c",
+    "0x40005f50"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400060ac",
+   "offset": "0x20ac",
+   "size": 2,
+   "group": "irq",
+   "role": "Tail call: CLIC interrupt enable",
+   "status": "observed",
+   "callers": [
+    "0x40006584",
+    "0x40009248"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400060ae",
+   "offset": "0x20ae",
+   "size": 2,
+   "group": "irq",
+   "role": "Tail call: CLIC interrupt disable",
+   "status": "observed",
+   "callers": [
+    "0x40006584"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400060b0",
+   "offset": "0x20b0",
+   "size": 2,
+   "group": "irq",
+   "role": "Tail call: set CLIC enable from a mask flag",
+   "status": "observed",
+   "callers": [
+    "0x4000916a",
+    "0x40009248",
+    "0x40009346"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400060b2",
+   "offset": "0x20b2",
+   "size": 2,
+   "group": "irq",
+   "role": "Tail call: S_INTC enable bit (0x070240c0); its only callers guard it with a test that cannot succeed",
+   "status": "inferred",
+   "callers": [
+    "0x400091b6",
+    "0x400091d6"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400060b4",
+   "offset": "0x20b4",
+   "size": 124,
+   "group": "irq",
+   "role": "Installs an ISR and argument in the ISR table",
+   "status": "observed",
+   "callers": [
+    "0x400064fc",
+    "0x40009248"
+   ],
+   "callees": [
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40006130",
+   "offset": "0x2130",
+   "size": 36,
+   "group": "irq",
+   "role": "Interrupt dispatch: calls the ISR registered for the current interrupt",
+   "status": "observed",
+   "callers": [
+    "0x40005330"
+   ],
+   "callees": [
+    "0x40005fe4"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 1,
+   "mmio": []
+  },
+  {
+   "address": "0x40006154",
+   "offset": "0x2154",
+   "size": 2,
+   "group": "irq",
+   "role": "Tail call: current interrupt number",
+   "status": "observed",
+   "callers": [
+    "0x4000916a"
+   ],
+   "callees": [
+    "0x40005fe4"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40006156",
+   "offset": "0x2156",
+   "size": 2,
+   "group": "irq",
+   "role": "Tail call: read CLIC enable of an interrupt (used to detect an enabled USB wake source)",
+   "status": "observed",
+   "callers": [
+    "0x400095a0"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40006158",
+   "offset": "0x2158",
+   "size": 12,
+   "group": "gpio",
+   "role": "GPIO driver init stub (returns 0)",
+   "status": "observed",
+   "callers": [
+    "0x4000b080"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40006164",
+   "offset": "0x2164",
+   "size": 70,
+   "group": "gpio",
+   "role": "Sets a pin function (S_GPIO config 0x07024fd0 + 0x30*port + 4*(pin/8))",
+   "status": "observed",
+   "callers": [
+    "0x400067a0",
+    "0x40006b96",
+    "0x400070d4"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400061aa",
+   "offset": "0x21aa",
+   "size": 70,
+   "group": "gpio",
+   "role": "Sets a pin pull (0x07024ff4 + 0x30*port)",
+   "status": "observed",
+   "callers": [
+    "0x40006b96",
+    "0x400070d4"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400061f0",
+   "offset": "0x21f0",
+   "size": 280,
+   "group": "gpio",
+   "role": "Sets a pin drive level (0x07024fe4 + 0x30*port); further unreachable entries read/write data and external-interrupt registers",
+   "status": "observed",
+   "callers": [
+    "0x40006b96",
+    "0x400070d4"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x702723c"
+   ]
+  },
+  {
+   "address": "0x40006308",
+   "offset": "0x2308",
+   "size": 102,
+   "group": "timer",
+   "role": "S_TIMER interrupt handler: calls the timer callback and clears the pending bit",
+   "status": "observed",
+   "callers": [
+    "0x400064fc"
+   ],
+   "callees": [
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [
+    "0x4000656c"
+   ],
+   "in_data_tables": [],
+   "indirect_calls": 1,
+   "mmio": [
+    "0x7091004"
+   ]
+  },
+  {
+   "address": "0x4000636e",
+   "offset": "0x236e",
+   "size": 202,
+   "group": "timer",
+   "role": "24 MHz oscillator notifier for S_TIMER0/1: moves the timers to the 32 kHz source (interval divided by 750) before power-off and back to 24 MHz after power-on",
+   "status": "observed",
+   "callers": [
+    "0x40006438"
+   ],
+   "callees": [
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [
+    "0x4000647a"
+   ],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x7010100",
+    "0x7010104",
+    "0x7091024",
+    "0x7091044"
+   ]
+  },
+  {
+   "address": "0x40006438",
+   "offset": "0x2438",
+   "size": 196,
+   "group": "timer",
+   "role": "Timer driver init: opens the S_TIMER gate and reset, selects 24 MHz for timers 0 and 1, sets 24,000 counts per ms",
+   "status": "observed",
+   "callers": [
+    "0x4000b080"
+   ],
+   "callees": [
+    "0x400058c8",
+    "0x40005b9a",
+    "0x40005d32"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x7010100",
+    "0x7010104",
+    "0x7091020",
+    "0x7091040"
+   ]
+  },
+  {
+   "address": "0x400064fc",
+   "offset": "0x24fc",
+   "size": 136,
+   "group": "timer",
+   "role": "Allocates a hardware timer and installs its ISR",
+   "status": "observed",
+   "callers": [
+    "0x4000548e"
+   ],
+   "callees": [
+    "0x40004186",
+    "0x4000418a",
+    "0x400060b4",
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40006584",
+   "offset": "0x2584",
+   "size": 242,
+   "group": "timer",
+   "role": "Starts a hardware timer: interval in ms, periodic or single-shot, enables its interrupt",
+   "status": "observed",
+   "callers": [
+    "0x4000548e"
+   ],
+   "callees": [
+    "0x400060ac",
+    "0x400060ae"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x7091000",
+    "0x7091004"
+   ]
+  },
+  {
+   "address": "0x40006676",
+   "offset": "0x2676",
+   "size": 212,
+   "group": "timer",
+   "role": "Millisecond delay on S_TIMER1 (polls the pending bit)",
+   "status": "observed",
+   "callers": [
+    "0x40005c44",
+    "0x400071b2",
+    "0x400071ea",
+    "0x4000756e",
+    "0x40007828",
+    "0x40007974",
+    "0x400079c8",
+    "0x40007a0e",
+    "0x400095a0"
+   ],
+   "callees": [
+    "0x40005604"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x7091004"
+   ]
+  },
+  {
+   "address": "0x4000674a",
+   "offset": "0x274a",
+   "size": 86,
+   "group": "timer",
+   "role": "Microsecond delay: CPU busy loop scaled by AHBS rate when the 24 MHz oscillator is off or during standby, otherwise the timestamp counter",
+   "status": "observed",
+   "callers": [
+    "0x4000702c",
+    "0x400095a0",
+    "0x4000b2fc",
+    "0x4000b4ba",
+    "0x4000b522",
+    "0x4000bce0",
+    "0x4000cf1c",
+    "0x4000d2d0",
+    "0x4000d522"
+   ],
+   "callees": [
+    "0x400041a8",
+    "0x40005d26",
+    "0x40005e9c",
+    "0x40009594"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400067a0",
+   "offset": "0x27a0",
+   "size": 214,
+   "group": "uart",
+   "role": "S_UART0 init: PL2/PL3 function 2, gate and reset, divisor for the stored baud rate (57,600), 8N1, FIFO enabled",
+   "status": "observed",
+   "callers": [
+    "0x4000add2"
+   ],
+   "callees": [
+    "0x400058c8",
+    "0x40005d32",
+    "0x40005e9c",
+    "0x40006164"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x7080000",
+    "0x7080004",
+    "0x7080008",
+    "0x708000c",
+    "0x70800a4"
+   ]
+  },
+  {
+   "address": "0x40006876",
+   "offset": "0x2876",
+   "size": 86,
+   "group": "uart",
+   "role": "UART character output (waits for THR empty); also an unreachable receive routine",
+   "status": "observed",
+   "callers": [
+    "0x400068cc",
+    "0x4000add2"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x7080000",
+    "0x708007c",
+    "0x7080084"
+   ]
+  },
+  {
+   "address": "0x400068cc",
+   "offset": "0x28cc",
+   "size": 66,
+   "group": "uart",
+   "role": "UART string output with LF to CRLF",
+   "status": "observed",
+   "callers": [
+    "0x4000add2",
+    "0x4000ae0a"
+   ],
+   "callees": [
+    "0x40006876"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000690e",
+   "offset": "0x290e",
+   "size": 186,
+   "group": "uart",
+   "role": "Changes the UART baud rate (message 0x62 and standby clock changes)",
+   "status": "observed",
+   "callers": [
+    "0x400069c8",
+    "0x4000abde"
+   ],
+   "callees": [
+    "0x40005e9c",
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x7080000",
+    "0x7080004",
+    "0x708000c",
+    "0x7080080",
+    "0x70800a4"
+   ]
+  },
+  {
+   "address": "0x400069c8",
+   "offset": "0x29c8",
+   "size": 110,
+   "group": "uart",
+   "role": "UART clock-change hook: recomputes the divisor before (mode 0) and after (mode 1) a source-clock change",
+   "status": "observed",
+   "callers": [
+    "0x400095a0"
+   ],
+   "callees": [
+    "0x4000690e",
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x708007c"
+   ]
+  },
+  {
+   "address": "0x40006a36",
+   "offset": "0x2a36",
+   "size": 12,
+   "group": "uart",
+   "role": "Returns the stored UART baud rate",
+   "status": "observed",
+   "callers": [
+    "0x4000b080"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40006a42",
+   "offset": "0x2a42",
+   "size": 26,
+   "group": "twi",
+   "role": "S_TWI0 soft reset of the controller state machine (TWI_CTRL bit 3) and wait",
+   "status": "observed",
+   "callers": [
+    "0x40006c44"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x708300c"
+   ]
+  },
+  {
+   "address": "0x40006a5c",
+   "offset": "0x2a5c",
+   "size": 40,
+   "group": "twi",
+   "role": "S_TWI0 software reset (TWI_SRST 0x18)",
+   "status": "observed",
+   "callers": [
+    "0x40006b96",
+    "0x40006c44",
+    "0x400070d4"
+   ],
+   "callees": [
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x7083018"
+   ]
+  },
+  {
+   "address": "0x40006a84",
+   "offset": "0x2a84",
+   "size": 82,
+   "group": "twi",
+   "role": "S_TWI0 bus recovery: restores bus status 0x3a (idle) via the line-control register",
+   "status": "observed",
+   "callers": [
+    "0x40006b96",
+    "0x400070d4"
+   ],
+   "callees": [
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x7083018",
+    "0x7083020"
+   ]
+  },
+  {
+   "address": "0x40006ad6",
+   "offset": "0x2ad6",
+   "size": 122,
+   "group": "twi",
+   "role": "S_TWI0 clock divider (M, N) for a requested SCL rate",
+   "status": "observed",
+   "callers": [
+    "0x40006b50",
+    "0x40006b96",
+    "0x400070d4"
+   ],
+   "callees": [
+    "0x40005e9c",
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x7083014"
+   ]
+  },
+  {
+   "address": "0x40006b50",
+   "offset": "0x2b50",
+   "size": 70,
+   "group": "twi",
+   "role": "TWI clock-change hook used around standby source switches",
+   "status": "observed",
+   "callers": [
+    "0x400095a0"
+   ],
+   "callees": [
+    "0x40006ad6",
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40006b96",
+   "offset": "0x2b96",
+   "size": 174,
+   "group": "twi",
+   "role": "S_TWI0 init: PL0/PL1 function 2 with pull-up, gate and reset, divider, bus enable (0x44), checks idle status 0x3a",
+   "status": "observed",
+   "callers": [
+    "0x4000b080"
+   ],
+   "callees": [
+    "0x400058c8",
+    "0x40005d32",
+    "0x40006164",
+    "0x400061aa",
+    "0x400061f0",
+    "0x40006a5c",
+    "0x40006a84",
+    "0x40006ad6",
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x708300c",
+    "0x7083020"
+   ]
+  },
+  {
+   "address": "0x40006c44",
+   "offset": "0x2c44",
+   "size": 834,
+   "group": "twi",
+   "role": "S_TWI0 transfer engine: start, address, register, data, stop, with status-based error codes e1-e15 and timeouts to0-to6",
+   "status": "observed",
+   "callers": [
+    "0x40006f86",
+    "0x40006fd0"
+   ],
+   "callees": [
+    "0x40004186",
+    "0x4000418a",
+    "0x40006a42",
+    "0x40006a5c",
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x7083008",
+    "0x708300c",
+    "0x7083010",
+    "0x708301c",
+    "0x7083020"
+   ]
+  },
+  {
+   "address": "0x40006f86",
+   "offset": "0x2f86",
+   "size": 74,
+   "group": "twi",
+   "role": "TWI register read (address, register, buffer, length)",
+   "status": "observed",
+   "callers": [
+    "0x40007abe"
+   ],
+   "callees": [
+    "0x40006c44"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40006fd0",
+   "offset": "0x2fd0",
+   "size": 92,
+   "group": "twi",
+   "role": "TWI register write",
+   "status": "observed",
+   "callers": [
+    "0x40007ab6"
+   ],
+   "callees": [
+    "0x40006c44"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000702c",
+   "offset": "0x302c",
+   "size": 128,
+   "group": "twi",
+   "role": "Recovers a stuck bus: toggles SCL until SDA is released",
+   "status": "observed",
+   "callers": [
+    "0x40007974",
+    "0x400079c8"
+   ],
+   "callees": [
+    "0x4000674a",
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x7083020"
+   ]
+  },
+  {
+   "address": "0x400070ac",
+   "offset": "0x30ac",
+   "size": 40,
+   "group": "twi",
+   "role": "Tests whether S_TWI0 is idle (status 0xf8 and both lines high)",
+   "status": "observed",
+   "callers": [
+    "0x40007974",
+    "0x400079c8",
+    "0x40007a0e"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x7083010",
+    "0x7083020"
+   ]
+  },
+  {
+   "address": "0x400070d4",
+   "offset": "0x30d4",
+   "size": 162,
+   "group": "twi",
+   "role": "S_TWI0 re-initialisation (same sequence as 0x40006b96); called before PMIC power-off/reset and on standby entry",
+   "status": "observed",
+   "callers": [
+    "0x40007974",
+    "0x400079c8",
+    "0x40007a0e",
+    "0x400095a0"
+   ],
+   "callees": [
+    "0x400058c8",
+    "0x40005d32",
+    "0x40006164",
+    "0x400061aa",
+    "0x400061f0",
+    "0x40006a5c",
+    "0x40006a84",
+    "0x40006ad6",
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x708300c",
+    "0x7083020"
+   ]
+  },
+  {
+   "address": "0x40007176",
+   "offset": "0x3176",
+   "size": 4,
+   "group": "standby",
+   "role": "Empty hook in the resume path (returns 0)",
+   "status": "observed",
+   "callers": [
+    "0x400095a0"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000717a",
+   "offset": "0x317a",
+   "size": 28,
+   "group": "msgbox",
+   "role": "Message-box driver init: opens the CPUX_MSGBOX (CCU 0x744) and S_MBOX (R_PRCM 0x17c) gates and resets",
+   "status": "observed",
+   "callers": [
+    "0x400074ae",
+    "0x4000b080"
+   ],
+   "callees": [
+    "0x400058c8",
+    "0x40005d32"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40007196",
+   "offset": "0x3196",
+   "size": 28,
+   "group": "msgbox",
+   "role": "Message-box driver shutdown: asserts the resets and closes the gates",
+   "status": "observed",
+   "callers": [
+    "0x400074a0"
+   ],
+   "callees": [
+    "0x400058c8",
+    "0x40005d32"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400071b2",
+   "offset": "0x31b2",
+   "size": 56,
+   "group": "msgbox",
+   "role": "Waits, 1 ms per try, until the outgoing queue (CPUX_MSGBOX channel 3) is not full",
+   "status": "observed",
+   "callers": [
+    "0x4000721e",
+    "0x4000733e"
+   ],
+   "callees": [
+    "0x40006676"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400071ea",
+   "offset": "0x31ea",
+   "size": 52,
+   "group": "msgbox",
+   "role": "Waits, 1 ms per try, until the incoming queue (S_MBOX channel 3) holds a word",
+   "status": "observed",
+   "callers": [
+    "0x4000721e"
+   ],
+   "callees": [
+    "0x40006676"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000721e",
+   "offset": "0x321e",
+   "size": 288,
+   "group": "msgbox",
+   "role": "Sends a message to the application processors; for a synchronous message also reads the reply into the same buffer",
+   "status": "observed",
+   "callers": [
+    "0x4000b080"
+   ],
+   "callees": [
+    "0x400071b2",
+    "0x400071ea",
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x300407c",
+    "0x709407c"
+   ]
+  },
+  {
+   "address": "0x4000733e",
+   "offset": "0x333e",
+   "size": 162,
+   "group": "msgbox",
+   "role": "Sends the feedback (reply) for a synchronous message",
+   "status": "observed",
+   "callers": [
+    "0x400095a0",
+    "0x4000abde"
+   ],
+   "callees": [
+    "0x400071b2",
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x300407c"
+   ]
+  },
+  {
+   "address": "0x400073e0",
+   "offset": "0x33e0",
+   "size": 192,
+   "group": "msgbox",
+   "role": "Polls S_MBOX channel 3 for a message and reads header, count and payload; clears the read interrupt",
+   "status": "observed",
+   "callers": [
+    "0x400095a0",
+    "0x4000b080"
+   ],
+   "callees": [
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x7094024",
+    "0x709406c",
+    "0x709406d",
+    "0x709407c"
+   ]
+  },
+  {
+   "address": "0x400074a0",
+   "offset": "0x34a0",
+   "size": 14,
+   "group": "msgbox",
+   "role": "Standby: message-box shutdown",
+   "status": "observed",
+   "callers": [
+    "0x400095a0"
+   ],
+   "callees": [
+    "0x40007196"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400074ae",
+   "offset": "0x34ae",
+   "size": 14,
+   "group": "msgbox",
+   "role": "Resume: message-box re-init",
+   "status": "observed",
+   "callers": [
+    "0x400095a0"
+   ],
+   "callees": [
+    "0x4000717a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400074bc",
+   "offset": "0x34bc",
+   "size": 178,
+   "group": "dram",
+   "role": "Reads the DRAM parameters (dram_para00..) from the /dram node of the device tree",
+   "status": "observed",
+   "callers": [
+    "0x4000b2e6"
+   ],
+   "callees": [
+    "0x40008072",
+    "0x400088ec",
+    "0x40008a72",
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000756e",
+   "offset": "0x356e",
+   "size": 128,
+   "group": "pmic",
+   "role": "PMIC ops[3]: switches one AXP8191 output on or off by index (enable bits in registers 0x10, 0x11, 0x20-0x23)",
+   "status": "observed",
+   "callers": [],
+   "callees": [
+    "0x40006676",
+    "0x40007ab6",
+    "0x40007abe"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [
+    "0x40010878"
+   ],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400075ee",
+   "offset": "0x35ee",
+   "size": 124,
+   "group": "pmic",
+   "role": "AXP8191 power-off (register 0x55 bit 7) or restart (bit 6), then spins",
+   "status": "inferred",
+   "callers": [
+    "0x4000766a",
+    "0x400076ce"
+   ],
+   "callees": [
+    "0x40005846",
+    "0x40007ab6",
+    "0x40007abe",
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000766a",
+   "offset": "0x366a",
+   "size": 100,
+   "group": "pmic",
+   "role": "PMIC ops[2]: VBUS check before power-off; if the charger IC reports VBUS, restarts instead",
+   "status": "inferred",
+   "callers": [],
+   "callees": [
+    "0x40005846",
+    "0x400075ee",
+    "0x40007ab6",
+    "0x40007b62",
+    "0x40007b82",
+    "0x40007c0c",
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [
+    "0x40010874"
+   ],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400076ce",
+   "offset": "0x36ce",
+   "size": 140,
+   "group": "pmic",
+   "role": "PMIC ops[1]: system reset through the PMIC; ops[0] (0x40007706) is power-off",
+   "status": "observed",
+   "callers": [],
+   "callees": [
+    "0x40005846",
+    "0x400075ee",
+    "0x40007ab6",
+    "0x40007abe",
+    "0x40007b42",
+    "0x40007b62"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [
+    "0x40010870"
+   ],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000775a",
+   "offset": "0x375a",
+   "size": 206,
+   "group": "pmic",
+   "role": "AXP515 charger: clears its interrupt enables (0x40-0x45) and status (0x48-0x4d)",
+   "status": "inferred",
+   "callers": [
+    "0x40007828",
+    "0x400078f8"
+   ],
+   "callees": [
+    "0x40005846",
+    "0x40007ab6",
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40007828",
+   "offset": "0x3828",
+   "size": 208,
+   "group": "pmic",
+   "role": "Charger ops: clears interrupts, sets 0x31, waits 100 ms, writes 0x16 and 0x10 to open the battery FET",
+   "status": "inferred",
+   "callers": [],
+   "callees": [
+    "0x40005846",
+    "0x40006676",
+    "0x4000775a",
+    "0x40007ab6",
+    "0x40007abe",
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [
+    "0x40010890"
+   ],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400078f8",
+   "offset": "0x38f8",
+   "size": 34,
+   "group": "pmic",
+   "role": "Charger ops: reset AXP515 (clears its interrupts)",
+   "status": "inferred",
+   "callers": [],
+   "callees": [
+    "0x40005846",
+    "0x4000775a",
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [
+    "0x4001088c"
+   ],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000791a",
+   "offset": "0x391a",
+   "size": 90,
+   "group": "pmic",
+   "role": "Charger probe: reads AXP515 register 3 and accepts IC types 0x46 and 0x49",
+   "status": "inferred",
+   "callers": [],
+   "callees": [
+    "0x40007abe",
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [
+    "0x40010880"
+   ],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40007974",
+   "offset": "0x3974",
+   "size": 84,
+   "group": "pmic",
+   "role": "System power-off: re-init TWI, wait for idle, call PMIC ops[0]",
+   "status": "observed",
+   "callers": [
+    "0x4000aa54"
+   ],
+   "callees": [
+    "0x40006676",
+    "0x4000702c",
+    "0x400070ac",
+    "0x400070d4",
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400079c8",
+   "offset": "0x39c8",
+   "size": 70,
+   "group": "pmic",
+   "role": "System reset: re-init TWI, wait for idle, call PMIC ops[1]",
+   "status": "observed",
+   "callers": [
+    "0x4000aa54"
+   ],
+   "callees": [
+    "0x40006676",
+    "0x4000702c",
+    "0x400070ac",
+    "0x400070d4",
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40007a0e",
+   "offset": "0x3a0e",
+   "size": 116,
+   "group": "pmic",
+   "role": "Power-off pre-check: re-init TWI, call PMIC ops[2] (VBUS check)",
+   "status": "observed",
+   "callers": [
+    "0x4000aa54"
+   ],
+   "callees": [
+    "0x40006676",
+    "0x400070ac",
+    "0x400070d4",
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40007a82",
+   "offset": "0x3a82",
+   "size": 52,
+   "group": "pmic",
+   "role": "Rail switch wrapper: calls PMIC ops[3] if the PMIC driver is ready",
+   "status": "observed",
+   "callers": [
+    "0x400095a0"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40007ab6",
+   "offset": "0x3ab6",
+   "size": 8,
+   "group": "pmic",
+   "role": "TWI write wrapper for the PMIC structure",
+   "status": "observed",
+   "callers": [
+    "0x4000756e",
+    "0x400075ee",
+    "0x4000766a",
+    "0x400076ce",
+    "0x4000775a",
+    "0x40007828",
+    "0x40007abe"
+   ],
+   "callees": [
+    "0x40006fd0"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40007abe",
+   "offset": "0x3abe",
+   "size": 34,
+   "group": "pmic",
+   "role": "TWI read wrapper for the PMIC structure",
+   "status": "observed",
+   "callers": [
+    "0x4000756e",
+    "0x400075ee",
+    "0x400076ce",
+    "0x40007828",
+    "0x4000791a"
+   ],
+   "callees": [
+    "0x40006f86",
+    "0x40007ab6"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40007ae0",
+   "offset": "0x3ae0",
+   "size": 30,
+   "group": "pmic",
+   "role": "PMIC driver init: marks the driver ready",
+   "status": "observed",
+   "callers": [
+    "0x4000b080"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40007afe",
+   "offset": "0x3afe",
+   "size": 30,
+   "group": "wakeup",
+   "role": "NMI handler: clears NMI enable (R_PRCM 0x324 bit 1) and records wakeup event 0xbc",
+   "status": "inferred",
+   "callers": [
+    "0x40005330"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x7010324"
+   ]
+  },
+  {
+   "address": "0x40007b1c",
+   "offset": "0x3b1c",
+   "size": 20,
+   "group": "wakeup",
+   "role": "Enables the NMI (R_PRCM NMI_INT_EN 0x324 bit 1) for standby",
+   "status": "observed",
+   "callers": [
+    "0x400095a0"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x7010324"
+   ]
+  },
+  {
+   "address": "0x40007b30",
+   "offset": "0x3b30",
+   "size": 18,
+   "group": "wakeup",
+   "role": "Disables the NMI after resume",
+   "status": "observed",
+   "callers": [
+    "0x400095a0"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x7010324"
+   ]
+  },
+  {
+   "address": "0x40007b42",
+   "offset": "0x3b42",
+   "size": 32,
+   "group": "pmic",
+   "role": "Charger ops dispatch (index 4)",
+   "status": "observed",
+   "callers": [
+    "0x400076ce"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40007b62",
+   "offset": "0x3b62",
+   "size": 32,
+   "group": "pmic",
+   "role": "Charger ops dispatch (index 3)",
+   "status": "observed",
+   "callers": [
+    "0x4000766a",
+    "0x400076ce"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40007b82",
+   "offset": "0x3b82",
+   "size": 68,
+   "group": "pmic",
+   "role": "Charger ops dispatch (index 2)",
+   "status": "observed",
+   "callers": [
+    "0x4000766a"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40007bc6",
+   "offset": "0x3bc6",
+   "size": 70,
+   "group": "pmic",
+   "role": "Charger probe at start-up: records whether the AXP515 is present",
+   "status": "observed",
+   "callers": [
+    "0x4000b080"
+   ],
+   "callees": [
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 1,
+   "mmio": []
+  },
+  {
+   "address": "0x40007c0c",
+   "offset": "0x3c0c",
+   "size": 12,
+   "group": "pmic",
+   "role": "Returns the charger-present flag",
+   "status": "observed",
+   "callers": [
+    "0x4000766a"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40007c18",
+   "offset": "0x3c18",
+   "size": 122,
+   "group": "watchdog",
+   "role": "S_WDG init: read-modify-write of WDT_MODE (0x14) and WDT_OCFG (0x18) without the 0x16aa key; feed and disable entries follow but have no caller",
+   "status": "inferred",
+   "callers": [
+    "0x4000b080"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x7021014",
+    "0x7021018"
+   ]
+  },
+  {
+   "address": "0x40007c92",
+   "offset": "0x3c92",
+   "size": 132,
+   "group": "libc",
+   "role": "Integer-to-decimal string",
+   "status": "observed",
+   "callers": [
+    "0x40008072",
+    "0x4000ae0a"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40007d16",
+   "offset": "0x3d16",
+   "size": 104,
+   "group": "libc",
+   "role": "Integer-to-string in a radix",
+   "status": "observed",
+   "callers": [
+    "0x4000ae0a"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40007d7e",
+   "offset": "0x3d7e",
+   "size": 274,
+   "group": "debug",
+   "role": "Hex dump of a buffer to the log",
+   "status": "observed",
+   "callers": [
+    "0x4000abde"
+   ],
+   "callees": [
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40007e90",
+   "offset": "0x3e90",
+   "size": 18,
+   "group": "libc",
+   "role": "strlen",
+   "status": "observed",
+   "callers": [
+    "0x4000834e",
+    "0x400085f8",
+    "0x400086a6",
+    "0x400087ca",
+    "0x400088c6",
+    "0x40008a72",
+    "0x40008dbc",
+    "0x4000ae0a"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40007ea2",
+   "offset": "0x3ea2",
+   "size": 24,
+   "group": "libc",
+   "role": "strnlen",
+   "status": "observed",
+   "callers": [
+    "0x40008dbc"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40007eba",
+   "offset": "0x3eba",
+   "size": 18,
+   "group": "libc",
+   "role": "strcpy",
+   "status": "observed",
+   "callers": [
+    "0x4000ae0a"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40007ecc",
+   "offset": "0x3ecc",
+   "size": 26,
+   "group": "libc",
+   "role": "strncpy",
+   "status": "observed",
+   "callers": [
+    "0x4000b080"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40007ee6",
+   "offset": "0x3ee6",
+   "size": 76,
+   "group": "libc",
+   "role": "strncat-like append",
+   "status": "inferred",
+   "callers": [
+    "0x4000ad8e"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40007f32",
+   "offset": "0x3f32",
+   "size": 44,
+   "group": "libc",
+   "role": "memcmp/strncmp",
+   "status": "observed",
+   "callers": [
+    "0x400088ec"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40007f5e",
+   "offset": "0x3f5e",
+   "size": 22,
+   "group": "libc",
+   "role": "strchr",
+   "status": "observed",
+   "callers": [
+    "0x40008a72"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40007f74",
+   "offset": "0x3f74",
+   "size": 100,
+   "group": "libc",
+   "role": "memcpy",
+   "status": "observed",
+   "callers": [
+    "0x40008a72",
+    "0x4000ad8e",
+    "0x4000ba16"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40007fd8",
+   "offset": "0x3fd8",
+   "size": 76,
+   "group": "libc",
+   "role": "memmove",
+   "status": "observed",
+   "callers": [
+    "0x4000834e"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40008024",
+   "offset": "0x4024",
+   "size": 34,
+   "group": "libc",
+   "role": "memcmp",
+   "status": "observed",
+   "callers": [
+    "0x4000834e",
+    "0x400085f8",
+    "0x400087ca",
+    "0x40008ca0",
+    "0x40008dbc"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40008046",
+   "offset": "0x4046",
+   "size": 26,
+   "group": "libc",
+   "role": "memchr",
+   "status": "observed",
+   "callers": [
+    "0x400085f8",
+    "0x40008dbc"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40008060",
+   "offset": "0x4060",
+   "size": 18,
+   "group": "libc",
+   "role": "memset",
+   "status": "observed",
+   "callers": [
+    "0x4000b080"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40008072",
+   "offset": "0x4072",
+   "size": 154,
+   "group": "libc",
+   "role": "Small snprintf for property names",
+   "status": "observed",
+   "callers": [
+    "0x400074bc"
+   ],
+   "callees": [
+    "0x40007c92"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000810c",
+   "offset": "0x410c",
+   "size": 178,
+   "group": "fdt",
+   "role": "Flattened device-tree parser (libfdt-style): header checks, tag walk, node and property lookup, string table access",
+   "status": "inferred",
+   "callers": [
+    "0x4000834e",
+    "0x40008560",
+    "0x400085f8",
+    "0x400086a6",
+    "0x40008a72",
+    "0x40008c2c",
+    "0x40008ca0",
+    "0x40008f42"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400081be",
+   "offset": "0x41be",
+   "size": 120,
+   "group": "fdt",
+   "role": "Flattened device-tree parser (libfdt-style): header checks, tag walk, node and property lookup, string table access",
+   "status": "inferred",
+   "callers": [
+    "0x40008236",
+    "0x400085f8"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40008236",
+   "offset": "0x4236",
+   "size": 204,
+   "group": "fdt",
+   "role": "Flattened device-tree parser (libfdt-style): header checks, tag walk, node and property lookup, string table access",
+   "status": "inferred",
+   "callers": [
+    "0x40008302",
+    "0x40008328",
+    "0x4000834e",
+    "0x40008522"
+   ],
+   "callees": [
+    "0x400081be"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40008302",
+   "offset": "0x4302",
+   "size": 38,
+   "group": "fdt",
+   "role": "Flattened device-tree parser (libfdt-style): header checks, tag walk, node and property lookup, string table access",
+   "status": "inferred",
+   "callers": [
+    "0x4000834e",
+    "0x400086a6",
+    "0x4000871e"
+   ],
+   "callees": [
+    "0x40008236"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40008328",
+   "offset": "0x4328",
+   "size": 38,
+   "group": "fdt",
+   "role": "Flattened device-tree parser (libfdt-style): header checks, tag walk, node and property lookup, string table access",
+   "status": "inferred",
+   "callers": [
+    "0x40008740",
+    "0x40008762"
+   ],
+   "callees": [
+    "0x40008236"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000834e",
+   "offset": "0x434e",
+   "size": 360,
+   "group": "fdt",
+   "role": "Flattened device-tree parser (libfdt-style): header checks, tag walk, node and property lookup, string table access",
+   "status": "inferred",
+   "callers": [
+    "0x4000834e",
+    "0x400085f8",
+    "0x40008a72",
+    "0x40008c2c",
+    "0x40008ca0",
+    "0x40008f42"
+   ],
+   "callees": [
+    "0x40007e90",
+    "0x40007fd8",
+    "0x40008024",
+    "0x4000810c",
+    "0x40008236",
+    "0x40008302",
+    "0x4000834e"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400084b6",
+   "offset": "0x44b6",
+   "size": 72,
+   "group": "fdt",
+   "role": "Flattened device-tree parser (libfdt-style): header checks, tag walk, node and property lookup, string table access",
+   "status": "inferred",
+   "callers": [
+    "0x40008560"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400084fe",
+   "offset": "0x44fe",
+   "size": 36,
+   "group": "fdt",
+   "role": "Flattened device-tree parser (libfdt-style): header checks, tag walk, node and property lookup, string table access",
+   "status": "inferred",
+   "callers": [
+    "0x40008560"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40008522",
+   "offset": "0x4522",
+   "size": 62,
+   "group": "fdt",
+   "role": "Flattened device-tree parser (libfdt-style): header checks, tag walk, node and property lookup, string table access",
+   "status": "inferred",
+   "callers": [
+    "0x4000871e",
+    "0x40008740"
+   ],
+   "callees": [
+    "0x40008236"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40008560",
+   "offset": "0x4560",
+   "size": 152,
+   "group": "fdt",
+   "role": "Flattened device-tree parser (libfdt-style): header checks, tag walk, node and property lookup, string table access",
+   "status": "inferred",
+   "callers": [
+    "0x400087ca",
+    "0x4000886e"
+   ],
+   "callees": [
+    "0x4000810c",
+    "0x400084b6",
+    "0x400084fe"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400085f8",
+   "offset": "0x45f8",
+   "size": 174,
+   "group": "fdt",
+   "role": "Flattened device-tree parser (libfdt-style): header checks, tag walk, node and property lookup, string table access",
+   "status": "inferred",
+   "callers": [
+    "0x40008a72"
+   ],
+   "callees": [
+    "0x40007e90",
+    "0x40008024",
+    "0x40008046",
+    "0x4000810c",
+    "0x400081be",
+    "0x4000834e"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400086a6",
+   "offset": "0x46a6",
+   "size": 120,
+   "group": "fdt",
+   "role": "Flattened device-tree parser (libfdt-style): header checks, tag walk, node and property lookup, string table access",
+   "status": "inferred",
+   "callers": [
+    "0x40008a72"
+   ],
+   "callees": [
+    "0x40007e90",
+    "0x4000810c",
+    "0x40008302"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000871e",
+   "offset": "0x471e",
+   "size": 34,
+   "group": "fdt",
+   "role": "Flattened device-tree parser (libfdt-style): header checks, tag walk, node and property lookup, string table access",
+   "status": "inferred",
+   "callers": [
+    "0x400087ca"
+   ],
+   "callees": [
+    "0x40008302",
+    "0x40008522"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40008740",
+   "offset": "0x4740",
+   "size": 34,
+   "group": "fdt",
+   "role": "Flattened device-tree parser (libfdt-style): header checks, tag walk, node and property lookup, string table access",
+   "status": "inferred",
+   "callers": [
+    "0x400087ca"
+   ],
+   "callees": [
+    "0x40008328",
+    "0x40008522"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40008762",
+   "offset": "0x4762",
+   "size": 104,
+   "group": "fdt",
+   "role": "Flattened device-tree parser (libfdt-style): header checks, tag walk, node and property lookup, string table access",
+   "status": "inferred",
+   "callers": [
+    "0x400087ca",
+    "0x4000886e"
+   ],
+   "callees": [
+    "0x40008328"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400087ca",
+   "offset": "0x47ca",
+   "size": 164,
+   "group": "fdt",
+   "role": "Flattened device-tree parser (libfdt-style): header checks, tag walk, node and property lookup, string table access",
+   "status": "inferred",
+   "callers": [
+    "0x4000886e"
+   ],
+   "callees": [
+    "0x40007e90",
+    "0x40008024",
+    "0x40008560",
+    "0x4000871e",
+    "0x40008740",
+    "0x40008762"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000886e",
+   "offset": "0x486e",
+   "size": 88,
+   "group": "fdt",
+   "role": "Flattened device-tree parser (libfdt-style): header checks, tag walk, node and property lookup, string table access",
+   "status": "inferred",
+   "callers": [
+    "0x400088c6",
+    "0x40008a36"
+   ],
+   "callees": [
+    "0x40008560",
+    "0x40008762",
+    "0x400087ca"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400088c6",
+   "offset": "0x48c6",
+   "size": 38,
+   "group": "fdt",
+   "role": "Flattened device-tree parser (libfdt-style): header checks, tag walk, node and property lookup, string table access",
+   "status": "inferred",
+   "callers": [
+    "0x400088ec",
+    "0x400089d0",
+    "0x40008ca0",
+    "0x40008dbc",
+    "0x40008f42"
+   ],
+   "callees": [
+    "0x40007e90",
+    "0x4000886e"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400088ec",
+   "offset": "0x48ec",
+   "size": 228,
+   "group": "fdt",
+   "role": "Reads a 32-bit property of a node (used for the standby_param values)",
+   "status": "inferred",
+   "callers": [
+    "0x400074bc",
+    "0x400095a0"
+   ],
+   "callees": [
+    "0x40007f32",
+    "0x400088c6"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400089d0",
+   "offset": "0x49d0",
+   "size": 102,
+   "group": "fdt",
+   "role": "Flattened device-tree parser (libfdt-style): header checks, tag walk, node and property lookup, string table access",
+   "status": "inferred",
+   "callers": [
+    "0x40008ca0"
+   ],
+   "callees": [
+    "0x400088c6"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40008a36",
+   "offset": "0x4a36",
+   "size": 60,
+   "group": "fdt",
+   "role": "Flattened device-tree parser (libfdt-style): header checks, tag walk, node and property lookup, string table access",
+   "status": "inferred",
+   "callers": [
+    "0x40008a72"
+   ],
+   "callees": [
+    "0x4000886e",
+    "0x40008a72"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40008a72",
+   "offset": "0x4a72",
+   "size": 442,
+   "group": "fdt",
+   "role": "Finds a node offset by path (used for \"/dram\" and \"standby_param\")",
+   "status": "inferred",
+   "callers": [
+    "0x400074bc",
+    "0x40008a36",
+    "0x40008a72",
+    "0x400095a0"
+   ],
+   "callees": [
+    "0x40007e90",
+    "0x40007f5e",
+    "0x40007f74",
+    "0x4000810c",
+    "0x4000834e",
+    "0x400085f8",
+    "0x400086a6",
+    "0x40008a36",
+    "0x40008a72"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40008c2c",
+   "offset": "0x4c2c",
+   "size": 116,
+   "group": "fdt",
+   "role": "Flattened device-tree parser (libfdt-style): header checks, tag walk, node and property lookup, string table access",
+   "status": "inferred",
+   "callers": [
+    "0x40008ca0"
+   ],
+   "callees": [
+    "0x4000810c",
+    "0x4000834e"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40008ca0",
+   "offset": "0x4ca0",
+   "size": 284,
+   "group": "fdt",
+   "role": "Flattened device-tree parser (libfdt-style): header checks, tag walk, node and property lookup, string table access",
+   "status": "inferred",
+   "callers": [
+    "0x40008ca0"
+   ],
+   "callees": [
+    "0x40008024",
+    "0x4000810c",
+    "0x4000834e",
+    "0x400088c6",
+    "0x400089d0",
+    "0x40008c2c",
+    "0x40008ca0"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40008dbc",
+   "offset": "0x4dbc",
+   "size": 390,
+   "group": "fdt",
+   "role": "Flattened device-tree parser (libfdt-style): header checks, tag walk, node and property lookup, string table access",
+   "status": "inferred",
+   "callers": [
+    "0x40008f42"
+   ],
+   "callees": [
+    "0x40007e90",
+    "0x40007ea2",
+    "0x40008024",
+    "0x40008046",
+    "0x400088c6"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40008f42",
+   "offset": "0x4f42",
+   "size": 340,
+   "group": "fdt",
+   "role": "Flattened device-tree parser (libfdt-style): header checks, tag walk, node and property lookup, string table access",
+   "status": "inferred",
+   "callers": [
+    "0x40008f42"
+   ],
+   "callees": [
+    "0x4000810c",
+    "0x4000834e",
+    "0x400088c6",
+    "0x40008dbc",
+    "0x40008f42"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40009096",
+   "offset": "0x5096",
+   "size": 78,
+   "group": "standby",
+   "role": "Standby service init: clears the DRAM checksum results and registers the wakeup software timer",
+   "status": "observed",
+   "callers": [
+    "0x4000b080"
+   ],
+   "callees": [
+    "0x400091f8",
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400090e4",
+   "offset": "0x50e4",
+   "size": 24,
+   "group": "standby",
+   "role": "Message 0x64: stores DRAM checksum enable, start address and length",
+   "status": "observed",
+   "callers": [
+    "0x4000abde"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400090fc",
+   "offset": "0x50fc",
+   "size": 12,
+   "group": "standby",
+   "role": "Returns the DRAM checksum enable flag",
+   "status": "observed",
+   "callers": [
+    "0x400095a0"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40009108",
+   "offset": "0x5108",
+   "size": 82,
+   "group": "standby",
+   "role": "Additive 32-bit checksum over the configured DRAM range",
+   "status": "observed",
+   "callers": [
+    "0x400095a0"
+   ],
+   "callees": [
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000915a",
+   "offset": "0x515a",
+   "size": 16,
+   "group": "wakeup",
+   "role": "Wakeup software-timer callback: records wakeup event 0xc0000000",
+   "status": "observed",
+   "callers": [
+    "0x400091f8"
+   ],
+   "callees": [],
+   "address_taken_by": [
+    "0x40009200"
+   ],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000916a",
+   "offset": "0x516a",
+   "size": 76,
+   "group": "wakeup",
+   "role": "Wakeup ISR: disables the interrupt and records the matching application-processor interrupt number as the wakeup event",
+   "status": "observed",
+   "callers": [
+    "0x40009248"
+   ],
+   "callees": [
+    "0x400060b0",
+    "0x40006154"
+   ],
+   "address_taken_by": [
+    "0x40009324"
+   ],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400091b6",
+   "offset": "0x51b6",
+   "size": 32,
+   "group": "wakeup",
+   "role": "Wakeup helper (guarded S_INTC enable; the guard cannot succeed)",
+   "status": "inferred",
+   "callers": [
+    "0x40009248"
+   ],
+   "callees": [
+    "0x400060b2"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400091d6",
+   "offset": "0x51d6",
+   "size": 34,
+   "group": "wakeup",
+   "role": "Wakeup helper (guarded S_INTC disable; the guard cannot succeed)",
+   "status": "inferred",
+   "callers": [
+    "0x40009346"
+   ],
+   "callees": [
+    "0x400060b2"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400091f8",
+   "offset": "0x51f8",
+   "size": 50,
+   "group": "wakeup",
+   "role": "Creates the wakeup software timer",
+   "status": "observed",
+   "callers": [
+    "0x40009096"
+   ],
+   "callees": [
+    "0x4000543e"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000922a",
+   "offset": "0x522a",
+   "size": 18,
+   "group": "wakeup",
+   "role": "Arms the wakeup software timer if a timeout was set",
+   "status": "observed",
+   "callers": [
+    "0x400095a0"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000923c",
+   "offset": "0x523c",
+   "size": 12,
+   "group": "wakeup",
+   "role": "Disarms the wakeup software timer",
+   "status": "observed",
+   "callers": [
+    "0x400095a0"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40009248",
+   "offset": "0x5248",
+   "size": 254,
+   "group": "wakeup",
+   "role": "Message 0x26 (set wakeup source): a timer timeout or an interrupt from the wakeup table; installs the wakeup ISR, enables it in the CLIC and the E902 wakeup mask",
+   "status": "observed",
+   "callers": [
+    "0x4000abde"
+   ],
+   "callees": [
+    "0x40005360",
+    "0x4000547c",
+    "0x400060ac",
+    "0x400060b0",
+    "0x400060b4",
+    "0x400091b6",
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x40009346",
+   "offset": "0x5346",
+   "size": 172,
+   "group": "wakeup",
+   "role": "Message 0x25 (clear wakeup source)",
+   "status": "observed",
+   "callers": [
+    "0x4000abde"
+   ],
+   "callees": [
+    "0x40005360",
+    "0x4000547c",
+    "0x400060b0",
+    "0x400091d6",
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400093f2",
+   "offset": "0x53f2",
+   "size": 98,
+   "group": "standby",
+   "role": "Converts the RTC day and time registers to seconds (used to advance the system counter over a suspend)",
+   "status": "observed",
+   "callers": [
+    "0x400095a0"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x7090010",
+    "0x7090014"
+   ]
+  },
+  {
+   "address": "0x40009454",
+   "offset": "0x5454",
+   "size": 150,
+   "group": "standby",
+   "role": "Saves and switches (mode 2) or restores (mode 4) bus clock registers: CCU AHB/APB0/APB1/APB_UART or PRCM AHBS/APBS0/APBS1, source field to 2 and divider cleared",
+   "status": "observed",
+   "callers": [
+    "0x400095a0"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400094ea",
+   "offset": "0x54ea",
+   "size": 132,
+   "group": "standby",
+   "role": "Gates (mode 2) or ungates (mode 4) CCU NSI and MBUS clocks, or GIC and TRACE clocks",
+   "status": "observed",
+   "callers": [
+    "0x400095a0"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0xa000004",
+    "0xa010004"
+   ]
+  },
+  {
+   "address": "0x4000956e",
+   "offset": "0x556e",
+   "size": 38,
+   "group": "dram",
+   "role": "SMC clock glitch workaround: if the SID secure bit is set, writes 0 to SMC0/SMC1 +4",
+   "status": "inferred",
+   "callers": [
+    "0x4000d2d0"
+   ],
+   "callees": [
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x30060a0"
+   ]
+  },
+  {
+   "address": "0x40009594",
+   "offset": "0x5594",
+   "size": 12,
+   "group": "standby",
+   "role": "Returns the \"standby in progress\" flag",
+   "status": "observed",
+   "callers": [
+    "0x4000674a"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x400095a0",
+   "offset": "0x55a0",
+   "size": 5300,
+   "group": "standby",
+   "role": "Message 0x22 (CPU operation): the system-suspend and resume sequence, executed only for system state 3 with a non-zero entry address",
+   "status": "observed",
+   "callers": [
+    "0x4000abde"
+   ],
+   "callees": [
+    "0x400041a2",
+    "0x400056d0",
+    "0x400056ec",
+    "0x40005710",
+    "0x40005846",
+    "0x40005ba8",
+    "0x40005c44",
+    "0x40006156",
+    "0x40006676",
+    "0x4000674a",
+    "0x400069c8",
+    "0x40006b50",
+    "0x400070d4",
+    "0x40007176",
+    "0x4000733e",
+    "0x400073e0",
+    "0x400074a0",
+    "0x400074ae",
+    "0x40007a82",
+    "0x40007b1c",
+    "0x40007b30",
+    "0x400088ec",
+    "0x40008a72",
+    "0x400090fc",
+    "0x40009108",
+    "0x4000922a",
+    "0x4000923c",
+    "0x400093f2",
+    "0x40009454",
+    "0x400094ea",
+    "0x4000ae0a",
+    "0x4000d522",
+    "0x4000da50"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x2003300",
+    "0x2003304",
+    "0x2003308",
+    "0x200330c",
+    "0x2003340",
+    "0x202200c",
+    "0x202220c",
+    "0x2023a14",
+    "0x2023c14",
+    "0x2023e14",
+    "0x2024014",
+    "0x2024214",
+    "0x202446c",
+    "0x202466c",
+    "0x30060a0",
+    "0x4101800",
+    "0x4200800",
+    "0x7010210",
+    "0x7010250",
+    "0x7010254",
+    "0x7010260",
+    "0x7010338",
+    "0x701033c",
+    "0x7010360",
+    "0x7050000",
+    "0x7060000",
+    "0x7060008",
+    "0x7090160",
+    "0x70901f4",
+    "0x8000200",
+    "0x8010000",
+    "0x8010004",
+    "0x8020000",
+    "0x8020008",
+    "0x802000c",
+    "0x8020020",
+    "0x8870000",
+    "0x887101c",
+    "0x887201c",
+    "0x887301c",
+    "0xa000004",
+    "0xa000018",
+    "0xa000070",
+    "0xa000074",
+    "0xa000080",
+    "0xa000084",
+    "0xa000100",
+    "0xa000104",
+    "0xa000108",
+    "0xa010018",
+    "0xa010070",
+    "0xa010074",
+    "0xa010080",
+    "0xa010084",
+    "0xa010100",
+    "0xa010104",
+    "0xa010108"
+   ]
+  },
+  {
+   "address": "0x4000aa54",
+   "offset": "0x6a54",
+   "size": 112,
+   "group": "pmic",
+   "role": "Message 0x24 (system operation): state 0 power-off after VBUS check, 1 and 2 reset, 3 power-off",
+   "status": "observed",
+   "callers": [
+    "0x4000abde"
+   ],
+   "callees": [
+    "0x40005846",
+    "0x40007974",
+    "0x400079c8",
+    "0x40007a0e",
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000aac4",
+   "offset": "0x6ac4",
+   "size": 8,
+   "group": "msg",
+   "role": "Message 0x19 (fake power-off): no action, result 0",
+   "status": "observed",
+   "callers": [
+    "0x4000abde"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000aacc",
+   "offset": "0x6acc",
+   "size": 48,
+   "group": "runtime",
+   "role": "Notifier pool init (8 entries of 12 bytes)",
+   "status": "observed",
+   "callers": [
+    "0x4000b080"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000aafc",
+   "offset": "0x6afc",
+   "size": 166,
+   "group": "runtime",
+   "role": "Adds a callback to a notifier list",
+   "status": "observed",
+   "callers": [
+    "0x40005b9a",
+    "0x4000b044"
+   ],
+   "callees": [
+    "0x40004186",
+    "0x4000418a",
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000aba2",
+   "offset": "0x6ba2",
+   "size": 52,
+   "group": "runtime",
+   "role": "Calls every callback in a notifier list",
+   "status": "observed",
+   "callers": [
+    "0x40005ba8",
+    "0x40005c44",
+    "0x4000b080"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 1,
+   "mmio": []
+  },
+  {
+   "address": "0x4000abd6",
+   "offset": "0x6bd6",
+   "size": 8,
+   "group": "msg",
+   "role": "Message manager init stub (returns 0)",
+   "status": "observed",
+   "callers": [
+    "0x4000b080"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000abde",
+   "offset": "0x6bde",
+   "size": 432,
+   "group": "msg",
+   "role": "Message dispatcher: logs header fields, switches on the message type, stores the result in byte 3, sends feedback when the attribute requests it",
+   "status": "observed",
+   "callers": [
+    "0x4000b080"
+   ],
+   "callees": [
+    "0x4000690e",
+    "0x4000733e",
+    "0x40007d7e",
+    "0x400090e4",
+    "0x40009248",
+    "0x40009346",
+    "0x400095a0",
+    "0x4000aa54",
+    "0x4000aac4",
+    "0x4000ae0a",
+    "0x4000b044"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000ad8e",
+   "offset": "0x6d8e",
+   "size": 68,
+   "group": "debug",
+   "role": "Log helper: indentation padding",
+   "status": "observed",
+   "callers": [
+    "0x4000ae0a"
+   ],
+   "callees": [
+    "0x40007ee6",
+    "0x40007f74"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000add2",
+   "offset": "0x6dd2",
+   "size": 56,
+   "group": "debug",
+   "role": "Debug console init (UART init)",
+   "status": "observed",
+   "callers": [
+    "0x4000b080"
+   ],
+   "callees": [
+    "0x400067a0",
+    "0x40006876",
+    "0x400068cc"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000ae0a",
+   "offset": "0x6e0a",
+   "size": 570,
+   "group": "debug",
+   "role": "Logger: prints when the level bit is allowed by the debug mask, with a [seconds.ms] tick prefix",
+   "status": "observed",
+   "callers": [
+    "0x40004122",
+    "0x4000418e",
+    "0x400041b2",
+    "0x4000548e",
+    "0x400054f4",
+    "0x40005710",
+    "0x40005864",
+    "0x400058c8",
+    "0x40005ba8",
+    "0x40005c44",
+    "0x40005d32",
+    "0x40005e9c",
+    "0x40005f50",
+    "0x4000604e",
+    "0x400060b4",
+    "0x40006308",
+    "0x4000636e",
+    "0x400064fc",
+    "0x4000690e",
+    "0x400069c8",
+    "0x40006a5c",
+    "0x40006a84",
+    "0x40006ad6",
+    "0x40006b50",
+    "0x40006b96",
+    "0x40006c44",
+    "0x4000702c",
+    "0x400070d4",
+    "0x4000721e",
+    "0x4000733e",
+    "0x400073e0",
+    "0x400074bc",
+    "0x400075ee",
+    "0x4000766a",
+    "0x4000775a",
+    "0x40007828",
+    "0x400078f8",
+    "0x4000791a",
+    "0x40007974",
+    "0x400079c8",
+    "0x40007a0e",
+    "0x40007bc6",
+    "0x40007d7e",
+    "0x40009096",
+    "0x40009108",
+    "0x40009248",
+    "0x40009346",
+    "0x4000956e",
+    "0x400095a0",
+    "0x4000aa54",
+    "0x4000aafc",
+    "0x4000abde",
+    "0x4000b044",
+    "0x4000b080",
+    "0x4000b522",
+    "0x4000d45c",
+    "0x4000d522",
+    "0x4000dd14",
+    "0x4000ded8",
+    "0x4000eb7c"
+   ],
+   "callees": [
+    "0x40004186",
+    "0x4000418a",
+    "0x40005470",
+    "0x400068cc",
+    "0x40007c92",
+    "0x40007d16",
+    "0x40007e90",
+    "0x40007eba",
+    "0x4000ad8e"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000b044",
+   "offset": "0x7044",
+   "size": 60,
+   "group": "debug",
+   "role": "Message 0x60: sets the debug mask",
+   "status": "observed",
+   "callers": [
+    "0x4000abde"
+   ],
+   "callees": [
+    "0x4000aafc",
+    "0x4000ae0a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000b080",
+   "offset": "0x7080",
+   "size": 610,
+   "group": "startup",
+   "role": "main: start-up sequence, startup notification (message 0x90), then the polling loop that dispatches messages and runs daemon callbacks every 500 ticks",
+   "status": "observed",
+   "callers": [
+    "0x40004000"
+   ],
+   "callees": [
+    "0x4000417a",
+    "0x40005470",
+    "0x4000548e",
+    "0x400054ce",
+    "0x400054f4",
+    "0x400057f4",
+    "0x40005846",
+    "0x4000585a",
+    "0x4000606c",
+    "0x40006158",
+    "0x40006438",
+    "0x40006a36",
+    "0x40006b96",
+    "0x4000717a",
+    "0x4000721e",
+    "0x400073e0",
+    "0x40007ae0",
+    "0x40007bc6",
+    "0x40007c18",
+    "0x40007ecc",
+    "0x40008060",
+    "0x40009096",
+    "0x4000aacc",
+    "0x4000aba2",
+    "0x4000abd6",
+    "0x4000abde",
+    "0x4000add2",
+    "0x4000ae0a",
+    "0x4000b2e2",
+    "0x4000b2e4",
+    "0x4000b2e6"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000b2e2",
+   "offset": "0x72e2",
+   "size": 2,
+   "group": "startup",
+   "role": "Empty init hook",
+   "status": "observed",
+   "callers": [
+    "0x4000b080"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000b2e4",
+   "offset": "0x72e4",
+   "size": 2,
+   "group": "startup",
+   "role": "Empty init hook",
+   "status": "observed",
+   "callers": [
+    "0x4000b080"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000b2e6",
+   "offset": "0x72e6",
+   "size": 22,
+   "group": "dram",
+   "role": "Reads the DRAM parameters from the device tree at start-up",
+   "status": "observed",
+   "callers": [
+    "0x4000b080"
+   ],
+   "callees": [
+    "0x400074bc"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000b2fc",
+   "offset": "0x72fc",
+   "size": 4,
+   "group": "dram",
+   "role": "Tail call to the microsecond delay",
+   "status": "observed",
+   "callers": [
+    "0x4000eb7c"
+   ],
+   "callees": [
+    "0x4000674a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000b300",
+   "offset": "0x7300",
+   "size": 24,
+   "group": "dram",
+   "role": "Ceiling division helper for DRAM timing (ns to clock cycles)",
+   "status": "inferred",
+   "callers": [
+    "0x4000bce0"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000b318",
+   "offset": "0x7318",
+   "size": 94,
+   "group": "dram",
+   "role": "DRAM controller mode-register write (0x0a110080/84/90 + 0x400000*channel)",
+   "status": "inferred",
+   "callers": [
+    "0x4000b522",
+    "0x4000d522"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000b376",
+   "offset": "0x7376",
+   "size": 120,
+   "group": "dram",
+   "role": "DRAM controller mode-register read (result from DRAMC common 0x0a02002c/40)",
+   "status": "inferred",
+   "callers": [
+    "0x4000bba6"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0xa02002c",
+    "0xa020040"
+   ]
+  },
+  {
+   "address": "0x4000b3ee",
+   "offset": "0x73ee",
+   "size": 204,
+   "group": "dram",
+   "role": "Computes the DRAM size from the parameter block",
+   "status": "inferred",
+   "callers": [
+    "0x4000d45c"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x2002020",
+    "0x2002028"
+   ]
+  },
+  {
+   "address": "0x4000b4ba",
+   "offset": "0x74ba",
+   "size": 104,
+   "group": "dram",
+   "role": "DRAM PLL/clock divider setup",
+   "status": "inferred",
+   "callers": [
+    "0x4000d2d0"
+   ],
+   "callees": [
+    "0x4000674a"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000b522",
+   "offset": "0x7522",
+   "size": 770,
+   "group": "dram",
+   "role": "DRAM resume sequence for a repeated standby (\"not the first time ddr standby\"): re-enables the controller with saved state and VDD-DDR gate (R_CCU 0x250 bit 0)",
+   "status": "inferred",
+   "callers": [
+    "0x4000cf1c"
+   ],
+   "callees": [
+    "0x4000674a",
+    "0x4000ae0a",
+    "0x4000b318",
+    "0x4000ead0"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x7010250",
+    "0xa110510",
+    "0xa510510",
+    "0xa910510"
+   ]
+  },
+  {
+   "address": "0x4000b824",
+   "offset": "0x7824",
+   "size": 498,
+   "group": "dram",
+   "role": "DRAM PHY register writes (0x0a920000-0x0a926000 lanes)",
+   "status": "inferred",
+   "callers": [
+    "0x4000bb4c"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0xa920100",
+    "0xa922100",
+    "0xa924100",
+    "0xa926100"
+   ]
+  },
+  {
+   "address": "0x4000ba16",
+   "offset": "0x7a16",
+   "size": 310,
+   "group": "dram",
+   "role": "DRAM PHY register writes (0x0a960000, 0x0a962000)",
+   "status": "inferred",
+   "callers": [
+    "0x4000bb4c"
+   ],
+   "callees": [
+    "0x40007f74"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0xa960120",
+    "0xa960122",
+    "0xa960124",
+    "0xa960126",
+    "0xa960128",
+    "0xa96012a",
+    "0xa96012c",
+    "0xa962120",
+    "0xa962122",
+    "0xa962124",
+    "0xa962126",
+    "0xa962128",
+    "0xa96212a",
+    "0xa96212c"
+   ]
+  },
+  {
+   "address": "0x4000bb4c",
+   "offset": "0x7b4c",
+   "size": 90,
+   "group": "dram",
+   "role": "DRAM PHY restore orchestrator",
+   "status": "inferred",
+   "callers": [
+    "0x4000cf1c"
+   ],
+   "callees": [
+    "0x4000b824",
+    "0x4000ba16",
+    "0x4000eb7c",
+    "0x4000f0cc",
+    "0x4000f1f8"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0xaaa0000"
+   ]
+  },
+  {
+   "address": "0x4000bba6",
+   "offset": "0x7ba6",
+   "size": 314,
+   "group": "dram",
+   "role": "DRAM controller and NSI port configuration",
+   "status": "inferred",
+   "callers": [
+    "0x4000cf1c"
+   ],
+   "callees": [
+    "0x4000b376"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x202448c",
+    "0x20244a8",
+    "0x202468c",
+    "0x20246a8",
+    "0x2024818",
+    "0x202481c",
+    "0x2024838",
+    "0xa030008",
+    "0xa030018",
+    "0xa030068",
+    "0xa040008",
+    "0xa040018",
+    "0xa040068",
+    "0xa110208",
+    "0xa110510",
+    "0xa110c80",
+    "0xa110c84"
+   ]
+  },
+  {
+   "address": "0x4000bce0",
+   "offset": "0x7ce0",
+   "size": 3242,
+   "group": "dram",
+   "role": "DRAM timing and parameter calculation",
+   "status": "inferred",
+   "callers": [
+    "0x4000cd3c"
+   ],
+   "callees": [
+    "0x4000674a",
+    "0x4000b300"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000c98a",
+   "offset": "0x898a",
+   "size": 842,
+   "group": "dram",
+   "role": "DRAM timing and parameter calculation",
+   "status": "inferred",
+   "callers": [
+    "0x4000cd3c"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000ccd4",
+   "offset": "0x8cd4",
+   "size": 32,
+   "group": "dram",
+   "role": "DRAM timing and parameter calculation",
+   "status": "inferred",
+   "callers": [
+    "0x4000cd3c"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000ccf4",
+   "offset": "0x8cf4",
+   "size": 72,
+   "group": "dram",
+   "role": "DRAM timing and parameter calculation",
+   "status": "inferred",
+   "callers": [
+    "0x4000cd3c"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000cd3c",
+   "offset": "0x8d3c",
+   "size": 480,
+   "group": "dram",
+   "role": "DRAM timing and parameter calculation",
+   "status": "inferred",
+   "callers": [
+    "0x4000cf1c"
+   ],
+   "callees": [
+    "0x4000bce0",
+    "0x4000c98a",
+    "0x4000ccd4",
+    "0x4000ccf4"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000cf1c",
+   "offset": "0x8f1c",
+   "size": 948,
+   "group": "dram",
+   "role": "DRAM controller initialisation (two channels at 0x0a100000 and 0x0a500000)",
+   "status": "inferred",
+   "callers": [
+    "0x4000cf1c"
+   ],
+   "callees": [
+    "0x4000674a",
+    "0x4000b522",
+    "0x4000bb4c",
+    "0x4000bba6",
+    "0x4000cd3c",
+    "0x4000cf1c",
+    "0x4000ded8"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x7010250",
+    "0xa020010",
+    "0xa020014",
+    "0xa02021c",
+    "0xa020220",
+    "0xa020224",
+    "0xa020228",
+    "0xa110180",
+    "0xa110184",
+    "0xa110208",
+    "0xa110224",
+    "0xa110510",
+    "0xa110b84",
+    "0xa110d00",
+    "0xa400c04",
+    "0xa400c78",
+    "0xa510180",
+    "0xa510184",
+    "0xa510208",
+    "0xa510224",
+    "0xa510510",
+    "0xa510b84",
+    "0xa510d00"
+   ]
+  },
+  {
+   "address": "0x4000d2d0",
+   "offset": "0x92d0",
+   "size": 376,
+   "group": "dram",
+   "role": "DRAM clock and bus setup (PLL_DDR, DRAM0 clock and reset, MBUS, NSI)",
+   "status": "inferred",
+   "callers": [
+    "0x4000d448"
+   ],
+   "callees": [
+    "0x4000674a",
+    "0x4000956e",
+    "0x4000b4ba"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x2002020",
+    "0x2002580",
+    "0x2002584",
+    "0x2002588",
+    "0x2002c00",
+    "0x2002c0c",
+    "0xa020010"
+   ]
+  },
+  {
+   "address": "0x4000d448",
+   "offset": "0x9448",
+   "size": 20,
+   "group": "dram",
+   "role": "DRAM initialisation wrapper",
+   "status": "inferred",
+   "callers": [
+    "0x4000d45c"
+   ],
+   "callees": [
+    "0x4000d2d0"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000d45c",
+   "offset": "0x945c",
+   "size": 198,
+   "group": "dram",
+   "role": "DRAM initialisation entry used on resume (driver version string V0.5): logs clock, type and size",
+   "status": "observed",
+   "callers": [
+    "0x4000da50"
+   ],
+   "callees": [
+    "0x4000ae0a",
+    "0x4000b3ee",
+    "0x4000d448"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x3000160",
+    "0x3000168"
+   ]
+  },
+  {
+   "address": "0x4000d522",
+   "offset": "0x9522",
+   "size": 1326,
+   "group": "dram",
+   "role": "DRAM suspend: self-refresh entry on both channels, PHY state save on the first standby, VDD-DDR gate clear (R_CCU 0x250 bit 0), PLL_DDR, DRAM, MBUS and NSI clocks off",
+   "status": "inferred",
+   "callers": [
+    "0x400095a0"
+   ],
+   "callees": [
+    "0x4000674a",
+    "0x4000ae0a",
+    "0x4000b318",
+    "0x4000ead0",
+    "0x4000f054",
+    "0x4000f1a8"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0x2002020",
+    "0x2002584",
+    "0x2002588",
+    "0x2002c00",
+    "0x2002c0c",
+    "0x7010250",
+    "0xa020010",
+    "0xa110014",
+    "0xa110180",
+    "0xa110184",
+    "0xa110500",
+    "0xa110508",
+    "0xa110510",
+    "0xa110514",
+    "0xa110518",
+    "0xa110b84",
+    "0xa110b88",
+    "0xa110c80",
+    "0xa110c84",
+    "0xa510014",
+    "0xa510180",
+    "0xa510184",
+    "0xa510500",
+    "0xa510508",
+    "0xa510510",
+    "0xa510514",
+    "0xa510518",
+    "0xa510b84",
+    "0xa510b88",
+    "0xa510c80",
+    "0xa510c84"
+   ]
+  },
+  {
+   "address": "0x4000da50",
+   "offset": "0x9a50",
+   "size": 6,
+   "group": "dram",
+   "role": "Resume: tail call into the DRAM initialisation entry",
+   "status": "observed",
+   "callers": [
+    "0x400095a0"
+   ],
+   "callees": [
+    "0x4000d45c"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000da56",
+   "offset": "0x9a56",
+   "size": 26,
+   "group": "dram",
+   "role": "DRAM frequency-scaling (DFS) table helpers",
+   "status": "inferred",
+   "callers": [
+    "0x4000dcb2",
+    "0x4000ded8"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000da70",
+   "offset": "0x9a70",
+   "size": 198,
+   "group": "dram",
+   "role": "DRAM frequency-scaling (DFS) table helpers",
+   "status": "inferred",
+   "callers": [
+    "0x4000dd14",
+    "0x4000ded8"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000db36",
+   "offset": "0x9b36",
+   "size": 198,
+   "group": "dram",
+   "role": "DRAM frequency-scaling (DFS) table helpers",
+   "status": "inferred",
+   "callers": [
+    "0x4000ded8"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000dbfc",
+   "offset": "0x9bfc",
+   "size": 182,
+   "group": "dram",
+   "role": "DRAM frequency-scaling (DFS) table helpers",
+   "status": "inferred",
+   "callers": [
+    "0x4000dd14",
+    "0x4000ded8"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000dcb2",
+   "offset": "0x9cb2",
+   "size": 98,
+   "group": "dram",
+   "role": "DRAM frequency-scaling (DFS) table helpers",
+   "status": "inferred",
+   "callers": [
+    "0x4000dd14",
+    "0x4000ded8"
+   ],
+   "callees": [
+    "0x4000da56"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000dd14",
+   "offset": "0x9d14",
+   "size": 452,
+   "group": "dram",
+   "role": "DRAM frequency-scaling (DFS) table helpers",
+   "status": "inferred",
+   "callers": [
+    "0x4000ded8"
+   ],
+   "callees": [
+    "0x4000ae0a",
+    "0x4000da70",
+    "0x4000dbfc",
+    "0x4000dcb2"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": []
+  },
+  {
+   "address": "0x4000ded8",
+   "offset": "0x9ed8",
+   "size": 3064,
+   "group": "dram",
+   "role": "DRAM frequency-scaling setup (\"DRAM DFS VERSION INFO: V0.5\")",
+   "status": "inferred",
+   "callers": [
+    "0x4000cf1c"
+   ],
+   "callees": [
+    "0x4000ae0a",
+    "0x4000da56",
+    "0x4000da70",
+    "0x4000db36",
+    "0x4000dbfc",
+    "0x4000dcb2",
+    "0x4000dd14"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0xa021000",
+    "0xa02101c",
+    "0xa110208"
+   ]
+  },
+  {
+   "address": "0x4000ead0",
+   "offset": "0xaad0",
+   "size": 172,
+   "group": "dram",
+   "role": "Saves DRAM PHY registers (one of two address lists, chosen by parameter bit 2) and the 32 KiB PHY memory at 0x0aa40000",
+   "status": "inferred",
+   "callers": [
+    "0x4000b522",
+    "0x4000d522"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0xaa40000",
+    "0xaa80100",
+    "0xaaa0000"
+   ]
+  },
+  {
+   "address": "0x4000eb7c",
+   "offset": "0xab7c",
+   "size": 1240,
+   "group": "dram",
+   "role": "Restores DRAM PHY registers from the saved image",
+   "status": "inferred",
+   "callers": [
+    "0x4000bb4c"
+   ],
+   "callees": [
+    "0x4000ae0a",
+    "0x4000b2fc"
+   ],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0xa9200ac",
+    "0xa92017c",
+    "0xa9220ac",
+    "0xa92217c",
+    "0xa9240ac",
+    "0xa92417c",
+    "0xa9260ac",
+    "0xa92617c",
+    "0xa940116",
+    "0xa940120",
+    "0xa9401de",
+    "0xa940620",
+    "0xa940622",
+    "0xa94064c",
+    "0xa94064e",
+    "0xa982010",
+    "0xa982018",
+    "0xa982030",
+    "0xa982038",
+    "0xa982050",
+    "0xa982058",
+    "0xa982070",
+    "0xa982078",
+    "0xa982090",
+    "0xa982098",
+    "0xa9820b0",
+    "0xa9820b8",
+    "0xa9820d0",
+    "0xa9820d8",
+    "0xa982100",
+    "0xa982108",
+    "0xa982120",
+    "0xa982128",
+    "0xa982140",
+    "0xa982148",
+    "0xa982160",
+    "0xa982168",
+    "0xa982170",
+    "0xa982176",
+    "0xa982178",
+    "0xa98217e",
+    "0xa982180",
+    "0xa982186",
+    "0xa982188",
+    "0xa98218e",
+    "0xa982190",
+    "0xa982196",
+    "0xa982198",
+    "0xa98219e",
+    "0xa9821a6",
+    "0xa9821ae",
+    "0xa9821b0",
+    "0xa9821b6",
+    "0xa9821b8",
+    "0xa9821be",
+    "0xa9821c6",
+    "0xa9821ce",
+    "0xa9821d0",
+    "0xa9821d6",
+    "0xa9821d8",
+    "0xa9821de",
+    "0xa9821e0",
+    "0xa9821e6",
+    "0xa9821e8",
+    "0xa9821ee",
+    "0xa9821f0",
+    "0xa9821f6",
+    "0xa9821f8",
+    "0xa9821fe",
+    "0xa982200",
+    "0xa982206",
+    "0xa982208",
+    "0xa98220e",
+    "0xa982210",
+    "0xa982226",
+    "0xa98222e",
+    "0xa982230",
+    "0xa982236",
+    "0xa982238",
+    "0xa98223e",
+    "0xa982240",
+    "0xa982248",
+    "0xa982256",
+    "0xa98225e",
+    "0xa982260",
+    "0xa982266",
+    "0xa982268",
+    "0xa98226e",
+    "0xa982270",
+    "0xa982280",
+    "0xa982286",
+    "0xa982288",
+    "0xa98228e",
+    "0xa982290",
+    "0xa982298",
+    "0xa9822a6",
+    "0xa9822ae",
+    "0xa9822b0",
+    "0xa9822b6",
+    "0xa9822b8",
+    "0xa9822be",
+    "0xa9822c6",
+    "0xa9822ce",
+    "0xa9822d6",
+    "0xa9822de",
+    "0xa9822e0",
+    "0xa9822e2",
+    "0xa9822e6",
+    "0xa9822e8",
+    "0xa9822ea",
+    "0xa9822ee",
+    "0xa9822f0",
+    "0xa9822f2",
+    "0xa9822f6",
+    "0xa9822f8",
+    "0xa9822fa",
+    "0xa982302",
+    "0xa982306",
+    "0xa98230a",
+    "0xa98230e",
+    "0xa982310",
+    "0xa982312",
+    "0xa982316",
+    "0xa982318",
+    "0xa98231a",
+    "0xa98231e",
+    "0xa982320",
+    "0xa982322",
+    "0xa982326",
+    "0xa982328",
+    "0xa98232a",
+    "0xa982332",
+    "0xa982336",
+    "0xa98233a",
+    "0xa98233e",
+    "0xa982340",
+    "0xa982342",
+    "0xa982346",
+    "0xa982348",
+    "0xa98234a",
+    "0xa98234e",
+    "0xa982350",
+    "0xa982352",
+    "0xa982356",
+    "0xa982358",
+    "0xa98235a",
+    "0xa982362",
+    "0xa982366",
+    "0xa98236a",
+    "0xa98236e",
+    "0xa982370",
+    "0xa982372",
+    "0xa982376",
+    "0xa982378",
+    "0xa98237a",
+    "0xa98237e",
+    "0xa982380",
+    "0xa982382",
+    "0xa982386",
+    "0xa982388",
+    "0xa98238a",
+    "0xaa21208",
+    "0xaa2130c",
+    "0xaa40000",
+    "0xaa80100",
+    "0xaaa0000"
+   ]
+  },
+  {
+   "address": "0x4000f054",
+   "offset": "0xb054",
+   "size": 120,
+   "group": "dram",
+   "role": "Reads DRAM controller registers (both channels) for the saved state",
+   "status": "inferred",
+   "callers": [
+    "0x4000d522"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0xa100008",
+    "0xa100024",
+    "0xa100060",
+    "0xa100584",
+    "0xa100588",
+    "0xa100d04",
+    "0xa100d08",
+    "0xa500008",
+    "0xa500024",
+    "0xa500060",
+    "0xa500584",
+    "0xa500588",
+    "0xa500d04",
+    "0xa500d08",
+    "0xa900d04"
+   ]
+  },
+  {
+   "address": "0x4000f0cc",
+   "offset": "0xb0cc",
+   "size": 220,
+   "group": "dram",
+   "role": "Writes DRAM controller registers from the saved state",
+   "status": "inferred",
+   "callers": [
+    "0x4000bb4c"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0xa100008",
+    "0xa100024",
+    "0xa100060",
+    "0xa100584",
+    "0xa100588",
+    "0xa100d04",
+    "0xa100d08",
+    "0xa110b84",
+    "0xa110b88",
+    "0xa110c80",
+    "0xa110c84"
+   ]
+  },
+  {
+   "address": "0x4000f1a8",
+   "offset": "0xb1a8",
+   "size": 80,
+   "group": "dram",
+   "role": "Saves a third list of PHY registers (3,374 addresses)",
+   "status": "inferred",
+   "callers": [
+    "0x4000d522"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0xaa80100",
+    "0xaaa0000"
+   ]
+  },
+  {
+   "address": "0x4000f1f8",
+   "offset": "0xb1f8",
+   "size": 116,
+   "group": "dram",
+   "role": "Restores the third list of PHY registers",
+   "status": "inferred",
+   "callers": [
+    "0x4000bb4c"
+   ],
+   "callees": [],
+   "address_taken_by": [],
+   "in_data_tables": [],
+   "indirect_calls": 0,
+   "mmio": [
+    "0xa940620",
+    "0xa94064c",
+    "0xa94064e",
+    "0xaa80100",
+    "0xaaa0000"
+   ]
+  }
+ ]
+}

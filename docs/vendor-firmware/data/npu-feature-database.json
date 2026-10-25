@@ -1,0 +1,336 @@
+{
+ "binaries": [
+  {
+   "name": "libVIPhal.so",
+   "sha256": "3ed5357b26bd6c4fb68fbdc0b21d637227dda711d1fe67b9e28accdc48bb11f2",
+   "source": "https://github.com/ZIFENG278/ai-sdk/tree/fc90006d0f6569da2f6726c2d8395877686f5aca/viplite-tina/lib/aarch64-none-linux-gnu/v2.0/libVIPhal.so"
+  },
+  {
+   "name": "libNBGlinker.so",
+   "sha256": "82f049b0ed0065dd4d443e37eeb1edfcbef24457c9c24e36170d64d5b748ca66",
+   "source": "https://github.com/ZIFENG278/ai-sdk/tree/fc90006d0f6569da2f6726c2d8395877686f5aca/viplite-tina/lib/aarch64-none-linux-gnu/v2.0/libNBGlinker.so"
+  }
+ ],
+ "analysis": "docs/vendor-firmware/gpu-and-npu-binaries.md",
+ "full_inventory": "~/.cache/sunstoneos/evidence/vendor-firmware-20261025/accel/npu/",
+ "kernel_driver_source": "https://github.com/orangepi-xunlong/linux-orangepi/tree/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/npu/aw_nna_vip/vip2",
+ "labels": {
+  "observed": "observed in the binary",
+  "source": "matches driver source",
+  "board": "confirmed on a board",
+  "inferred": "inferred"
+ },
+ "source": "vip2/inc/vip_feature_database.h:58-80 (struct), :84-186 (rows)",
+ "struct_layout_aarch64": {
+  "name": "_vip_hw_feature_db",
+  "fields": [
+   {
+    "offset": 0,
+    "type": "vip_uint32_t",
+    "name": "pid"
+   },
+   {
+    "offset": 4,
+    "type": "vip_uint32_t",
+    "name": "chip_revision",
+    "bits": "0-31"
+   },
+   {
+    "offset": 8,
+    "type": "vip_uint32_t",
+    "name": "nn_error_detect",
+    "bits": "0-0"
+   },
+   {
+    "offset": 8,
+    "type": "vip_uint32_t",
+    "name": "job_cancel",
+    "bits": "1-1"
+   },
+   {
+    "offset": 8,
+    "type": "vip_uint32_t",
+    "name": "mmu_pd_mode",
+    "bits": "2-2"
+   },
+   {
+    "offset": 8,
+    "type": "vip_uint32_t",
+    "name": "kernel_descriptor",
+    "bits": "3-3"
+   },
+   {
+    "offset": 8,
+    "type": "vip_uint32_t",
+    "name": "nn_transpose_phase2",
+    "bits": "4-4"
+   },
+   {
+    "offset": 8,
+    "type": "vip_uint32_t",
+    "name": "ocb_counter",
+    "bits": "5-5"
+   },
+   {
+    "offset": 8,
+    "type": "vip_uint32_t",
+    "name": "nn_probe",
+    "bits": "6-6"
+   },
+   {
+    "offset": 8,
+    "type": "vip_uint32_t",
+    "name": "sh_conformance",
+    "bits": "7-7"
+   },
+   {
+    "offset": 9,
+    "type": "vip_uint32_t",
+    "name": "remove_mmu",
+    "bits": "0-0"
+   },
+   {
+    "offset": 9,
+    "type": "vip_uint32_t",
+    "name": "nn_xydp0",
+    "bits": "1-1"
+   },
+   {
+    "offset": 9,
+    "type": "vip_uint32_t",
+    "name": "va_bits",
+    "bits": "2-9"
+   },
+   {
+    "offset": 10,
+    "type": "vip_uint32_t",
+    "name": "vip_core_count",
+    "bits": "2-9"
+   },
+   {
+    "offset": 12,
+    "type": "vip_uint32_t",
+    "name": "nn_core_count",
+    "bits": "0-7"
+   },
+   {
+    "offset": 13,
+    "type": "vip_uint32_t",
+    "name": "tp_core_count",
+    "bits": "0-7"
+   },
+   {
+    "offset": 16,
+    "type": "vip_uint32_t",
+    "name": "vip_sram_size",
+    "bits": "0-31"
+   },
+   {
+    "offset": 20,
+    "type": "vip_uint32_t",
+    "name": "axi_sram_size",
+    "bits": "0-31"
+   },
+   {
+    "offset": 24,
+    "type": "vip_uint32_t",
+    "name": "vip_sram_width",
+    "bits": "0-15"
+   },
+   {
+    "offset": 26,
+    "type": "vip_uint32_t",
+    "name": "axi_bus_width",
+    "bits": "0-15"
+   },
+   {
+    "offset": 28,
+    "type": "vip_uint32_t",
+    "name": "latencyHiding_AtFullAxiBw",
+    "bits": "0-15"
+   },
+   {
+    "offset": 30,
+    "type": "vip_uint32_t",
+    "name": "min_axi_burst_size",
+    "bits": "0-15"
+   },
+   {
+    "offset": 32,
+    "type": "vip_uint32_t",
+    "name": "ddr_kernel_burst_size",
+    "bits": "0-15"
+   }
+  ],
+  "size": 36,
+  "align": 4
+ },
+ "row_count": 4,
+ "selection": "Kernel: match chip_cid read from +0x030 against pid; revision is not compared (vip2/vip_drv_context.c:385-397, vip_drv_hardware.c:930-934). libVIPhal: same match on hw_cid returned by QUERY_DATABASE (libVIPhal 3ed5357b 0x37cc-0x37f4).",
+ "feature_query_mapping_libVIPhal": {
+  "function": "viphal_query_hw_feature (0x4410)",
+  "map": {
+   "0 JOB_CANCEL": "bit 1",
+   "1 MMU_PDMODE": "bit 2",
+   "2 FREQ_SCALE": "not a DB field",
+   "3 NN_ERROR_DETECT": "bit 0",
+   "4 KENERL_DESC": "bit 3",
+   "5 NN_TRANS_PHASE2": "bit 4",
+   "6 NN_CORE_CNT": "byte +0xc",
+   "7 TP_CORE_CNT": "byte +0xd",
+   "8 VIPSRAM_WIDTH": "half +0x18",
+   "9 LATENCY_HIDING_FULL_AXI_BW": "half +0x1c",
+   "10 MIN_AXI_BURST_SIZE": "half +0x1e",
+   "11 DDR_KERNEL_BURST_SIZE": "half +0x20",
+   "12 AXI_BUS_WIDTH": "half +0x1a",
+   "13 OCB_COUNTER": "bit 5",
+   "14 NN_PROBE": "bit 6",
+   "17 MMU_40VA": "va_bits == 40"
+  },
+  "label": "observed (partially; branches for 2, 15, 16, 18 not traced)"
+ },
+ "rows": [
+  {
+   "source_line": 86,
+   "pid": "0xee",
+   "chip_revision": "0x8303",
+   "nn_error_detect": "0x0",
+   "job_cancel": "0x0",
+   "mmu_pd_mode": "0x0",
+   "kernel_descriptor": "0x0",
+   "nn_transpose_phase2": "0x0",
+   "ocb_counter": "0x1",
+   "nn_probe": "0x1",
+   "sh_conformance": "0x1",
+   "remove_mmu": "0x1",
+   "nn_xydp0": "0x1",
+   "va_bits": "0x20",
+   "vip_core_count": "0x1",
+   "nn_core_count": "0x3",
+   "tp_core_count": "0x1",
+   "vip_sram_size": "0x20000",
+   "axi_sram_size": "0x0",
+   "vip_sram_width": "0x40",
+   "axi_bus_width": "0x10",
+   "latencyHiding_AtFullAxiBw": "0x80",
+   "min_axi_burst_size": "0x100",
+   "ddr_kernel_burst_size": "0x100",
+   "libVIPhal_copy_file_offset": "0x91b0",
+   "libVIPhal_copy_matches": true,
+   "is_a733": false
+  },
+  {
+   "source_line": 111,
+   "pid": "0x10000016",
+   "chip_revision": "0x9003",
+   "nn_error_detect": "0x0",
+   "job_cancel": "0x0",
+   "mmu_pd_mode": "0x0",
+   "kernel_descriptor": "0x0",
+   "nn_transpose_phase2": "0x0",
+   "ocb_counter": "0x1",
+   "nn_probe": "0x1",
+   "sh_conformance": "0x1",
+   "remove_mmu": "0x0",
+   "nn_xydp0": "0x1",
+   "va_bits": "0x20",
+   "vip_core_count": "0x1",
+   "nn_core_count": "0x6",
+   "tp_core_count": "0x2",
+   "vip_sram_size": "0x80000",
+   "axi_sram_size": "0x0",
+   "vip_sram_width": "0x40",
+   "axi_bus_width": "0x10",
+   "latencyHiding_AtFullAxiBw": "0x80",
+   "min_axi_burst_size": "0x100",
+   "ddr_kernel_burst_size": "0x100",
+   "libVIPhal_copy_file_offset": "0x91d4",
+   "libVIPhal_copy_matches": true,
+   "is_a733": false
+  },
+  {
+   "source_line": 136,
+   "pid": "0x10000021",
+   "chip_revision": "0x9113",
+   "nn_error_detect": "0x0",
+   "job_cancel": "0x1",
+   "mmu_pd_mode": "0x1",
+   "kernel_descriptor": "0x0",
+   "nn_transpose_phase2": "0x1",
+   "ocb_counter": "0x1",
+   "nn_probe": "0x1",
+   "sh_conformance": "0x1",
+   "remove_mmu": "0x0",
+   "nn_xydp0": "0x1",
+   "va_bits": "0x20",
+   "vip_core_count": "0x1",
+   "nn_core_count": "0xc",
+   "tp_core_count": "0x0",
+   "vip_sram_size": "0x80000",
+   "axi_sram_size": "0x0",
+   "vip_sram_width": "0x80",
+   "axi_bus_width": "0x10",
+   "latencyHiding_AtFullAxiBw": "0x80",
+   "min_axi_burst_size": "0x100",
+   "ddr_kernel_burst_size": "0x100",
+   "libVIPhal_copy_file_offset": "0x91f8",
+   "libVIPhal_copy_matches": true,
+   "is_a733": false
+  },
+  {
+   "source_line": 161,
+   "pid": "0x1000003b",
+   "chip_revision": "0x9202",
+   "nn_error_detect": "0x0",
+   "job_cancel": "0x1",
+   "mmu_pd_mode": "0x1",
+   "kernel_descriptor": "0x0",
+   "nn_transpose_phase2": "0x1",
+   "ocb_counter": "0x1",
+   "nn_probe": "0x1",
+   "sh_conformance": "0x1",
+   "remove_mmu": "0x0",
+   "nn_xydp0": "0x1",
+   "va_bits": "0x20",
+   "vip_core_count": "0x1",
+   "nn_core_count": "0x8",
+   "tp_core_count": "0x0",
+   "vip_sram_size": "0x80000",
+   "axi_sram_size": "0x0",
+   "vip_sram_width": "0x80",
+   "axi_bus_width": "0x10",
+   "latencyHiding_AtFullAxiBw": "0x400",
+   "min_axi_burst_size": "0x100",
+   "ddr_kernel_burst_size": "0x100",
+   "libVIPhal_copy_file_offset": "0x921c",
+   "libVIPhal_copy_matches": true,
+   "is_a733": true
+  }
+ ],
+ "a733_interpretation": {
+  "pid": "0x1000003b, the value of customer-ID register +0x030 (board: open passed the identity check on port 3-1, processor-completion-20261024/port-3-1/npu-numerical/runtime/session.json)",
+  "chip_revision": "0x9202 (SunstoneOS compares it with +0x024; the driver does not compare it)",
+  "vip_core_count": "1 VIP core (one front end, one interrupt)",
+  "nn_core_count": "8 NN cores (MAC arrays) inside that VIP core",
+  "tp_core_count": "0: no tensor-processor engine; transposes run as NN transpose phase 2 (nn_transpose_phase2=1)",
+  "vip_sram_size": "0x80000 = 512 KiB on-chip SRAM, NPU virtual base 0x400000 (vip_drv_mmu.c:711)",
+  "axi_sram_size": "0: no AXI SRAM; init stream omits states 0x0e4f/0x0e50",
+  "mmu_pd_mode": "1: page-descriptor MMU (+0x3b4, +0x388=0x21)",
+  "remove_mmu": "0: MMU present",
+  "va_bits": "32-bit NPU virtual addresses (not 40-bit)",
+  "job_cancel": "1: hardware cancel via +0x3a8 bit 3",
+  "nn_error_detect": "0",
+  "kernel_descriptor": "0",
+  "ocb_counter": "1: OCB read/write counters at +0x5c0/+0x5d0 exist",
+  "nn_probe": "1",
+  "sh_conformance": "1: +0x100 bit 10 left clear in init",
+  "nn_xydp0": "1",
+  "vip_sram_width": "128 bytes",
+  "axi_bus_width": "16 bytes (128-bit AXI)",
+  "latencyHiding_AtFullAxiBw": "1024 (highest of the four rows)",
+  "min_axi_burst_size": "256",
+  "ddr_kernel_burst_size": "256",
+  "nearest_relative": "0x10000021 rev 0x9113: same flags, 12 NN cores, latency hiding 128",
+  "label": "source (values); meanings inferred from field names"
+ }
+}
