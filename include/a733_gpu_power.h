@@ -11,11 +11,12 @@
  * policy 8 and status 0 after power-up, before any software write. */
 #define A733_GPU_CORE_RESET_PWCR UINT32_C(0x101)
 /* Diagnostic CORE6 words, in step order: identification, the device and
- * PCSM accept/deny inputs before any write, CORE status after the PWCR write
- * and after the policy write, and the inputs again after reset release. */
+ * PCSM accept/deny inputs before any write, CORE status after the delay-row
+ * writes, after the PWCR write and after the policy write, and the inputs
+ * again after reset release. */
 enum a733_gpu_core_note { A733_GPU_NOTE_IDR0, A733_GPU_NOTE_MISR,
-    A733_GPU_NOTE_AFTER_PWCR, A733_GPU_NOTE_AFTER_POLICY, A733_GPU_NOTE_MISR_LATE,
-    A733_GPU_CORE_NOTES };
+    A733_GPU_NOTE_AFTER_DELAYS, A733_GPU_NOTE_AFTER_PWCR, A733_GPU_NOTE_AFTER_POLICY,
+    A733_GPU_NOTE_MISR_LATE, A733_GPU_CORE_NOTES };
 
 /* GPU_TOP (PCK domain 5) remains behind the shared owner's row. CORE6 is
  * private to the GPU controller under its exclusive LOCAL lease. */
@@ -42,13 +43,15 @@ struct a733_gpu_power_resources { uint32_t parent_hz, supply_uv; };
  * must arbitrate shared clocks, rail changes and other devices' power requests.
  * read performs an ordered 32-bit read of CCU 0x02002000, R_CCU 0x07010000 or
  * CORE PPU 0x07066000 (policy/status/MISR/PWCR/IDR0 at 0/8/0x14/0x20/0xfb0
- * only; the last two of these are read-only diagnostics);
+ * and the delay row at 0x170/0x174/0xc00/0xc04/0xc10 only; MISR and IDR0 are
+ * read-only diagnostics);
  * the GPU_TOP domain (PCK domain 5) belongs to the power-domain owner and is
  * reached only through the bound row. update atomically applies
  * (old & ~clear) | set under the platform register lock, including any write
  * key, preserving unrelated fields. update completes before returning; read
  * acquires preceding device writes. CCU updates preserve unrelated fields;
- * exclusive CORE policy/PWCR writes use clear=UINT32_MAX and only values 0/8.
+ * exclusive CORE policy/PWCR writes use clear=UINT32_MAX and only values 0/8;
+ * CORE delay-row writes use clear=UINT32_MAX and only the pinned row values.
  * release drops only this controller's shared-resource leases after power off.
  * It must preserve resources still used by other devices and the board
  * always-on DCDC4 rail.
@@ -72,11 +75,11 @@ struct a733_gpu_power {
      * seen bits0/1/2 identify successful policy/status/PWCR reads, and bit
      * 3 + n a successful read of core_note[n] (enum a733_gpu_core_note).
      * core_wait_us holds the microseconds each status observation after a
-     * write waited, AFTER_PWCR first. core_power_up is set at admission when
+     * write waited, AFTER_DELAYS first. core_power_up is set at admission when
      * the entry words are the power-up state; only then do the observations
      * wait. */
     uint32_t core_policy, core_status, core_config, core_seen;
-    uint32_t core_note[A733_GPU_CORE_NOTES], core_wait_us[2], core_power_up;
+    uint32_t core_note[A733_GPU_CORE_NOTES], core_wait_us[3], core_power_up;
     /* GPU_TOP: registered before the scheduler on the owner bound to the
      * PMIC provider, by a733_gpu_platform_bind_pmic in the images. */
     struct a733_power_domain_row row;
@@ -104,7 +107,8 @@ enum a733_gpu_power_result a733_gpu_power_off(struct a733_gpu_power *, uint64_t 
  * an asserted reset, then requests the row ON and returns AGAIN until the
  * service answers. It admits settled static CORE policy/status, or the
  * power-up state of policy 8, status 0 and A733_GPU_CORE_RESET_PWCR, writes
- * PWCR0 and policy8, reading CORE status after each write without requiring
+ * the pinned CORE6 delay row with readbacks, then PWCR0 and policy8, reading
+ * CORE status after the row and after each later write without requiring
  * a value (after the power-up state, for up to A733_GPU_SPIN_US each until it
  * reads 8), then checks CORE ON after local clock/reset progress. Power-off
  * commands and checks CORE OFF before closing local clocks/reset and requesting

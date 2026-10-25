@@ -221,11 +221,24 @@ GPU_PREREQUISITES = ('Admission (apps/gpu-power-id/README.md, "Physical admissio
                      'of this lifetime; no GPU firmware or command has run since power was applied; the coordinator '
                      'grants the 18 MiB RAM interval [0x41000000, 0x42200000), the PMIC inputs (S_TWI0 gate and '
                      'reset, APBS route, PL0/PL1, settled supplies, no other PMU writer) and, for the power rows, '
-                     'exclusive GPU-local authority over the GPU CCU words and CORE6 policy and PWCR at 0x07066000, '
-                     'with TOP5 through the shared domain-5 row. No NPU image runs in this lifetime.')
-GPU_FAILURES = ['`FAIL GPU ON begin`, `GPU ON deadline` or `GPU ON poll`, after `GPU power phase=...` and `GPU CORE '
-                'entry seen=... policy=... status=... pwcr=...` lines that hold cached values only; `GPU ON poll` '
-                'or `GPU ON deadline` also ends a CORE6 status poll that never read 8',
+                     'exclusive GPU-local authority over the GPU CCU words and the CORE6 power policy unit at '
+                     '0x07066000: its policy (+0x00) and PWCR (+0x20) writes; on every ON, after admission and '
+                     'before PWCR 0, whole-word writes of the vendor delay row (pck600_domains.c:554), each read '
+                     'back: 0x1f1f1f at +0x170, 0x1f1f at +0x174, 0x08080808 at +0xc00, 0x0808 at +0xc04 and 8 at '
+                     '+0xc10; and reads of its status (+0x08), MISR (+0x14) and IDR0 (+0xfb0). The grant covers each '
+                     'CORE6 entry state the controller admits: settled OFF (policy and status 0), settled ON (both '
+                     '8) and the power-up state (policy 8, status 0, PWCR 0x101, the reset value), from which ON '
+                     'writes the delay row, PWCR 0 and then policy 8. Any other entry is refused before a write. The '
+                     'client also reads, without writing, a 35-word snapshot before the first ON and after each ON '
+                     'attempt: the CORE6 and TOP5 PPU rows, R_CCU 0x1ac and 0x250, and CCU 0x0e0, 0xb20 and 0xb24. '
+                     'TOP5 is written only through the shared domain-5 row. No NPU image runs in this lifetime.')
+GPU_FAILURES = ['`FAIL GPU ON begin`, `GPU ON deadline` or `GPU ON poll`, after the `GPU power phase=...` and `GPU '
+                'CORE entry`, `inputs` and `after` lines of the failing cycle, which hold cached values only; `GPU '
+                'ON poll` or `GPU ON deadline` also ends a CORE6 status poll that never read 8, and `GPU ON poll` an '
+                'entry state that admission refuses or a CORE6 delay-row word that does not read back its written '
+                'value; `GPU SNAP` lines of the failed ON precede it',
+                '`FAIL GPU snapshot mapping`: a snapshot page is not an identity Device-nGnRnE mapping; no snapshot '
+                'word was read',
                 '`FAIL GPU OFF begin`, `GPU OFF deadline`, `GPU OFF poll` or `GPU OFF ownership proof`',
                 '`FAIL GPU provider park proof` or `GPU provider request retained`',
                 'a `FAIL` line of the provider or service (`provider fault`, `provider startup and supply '
@@ -460,16 +473,17 @@ ROWS = [
             'COMPLETE GPU power only: CORE status 8, OFF and provider parked',
             'Monitor status 0 with GPU power cycle=1 core_status=0x8, GPU power cycle=2 core_status=0x8 and '
             'COMPLETE GPU power only: CORE status 8, OFF and provider parked, then a responsive ROM. Record the '
-            'GPU CORE entry, inputs and after lines of both cycles.',
+            'GPU CORE entry, inputs and after lines of both cycles and every GPU SNAP line.',
             'apps/gpu-power-id built with --power-only. Two ON/OFF cycles run before the provider park. Each ON '
             'requests domain 5 (TOP5) ON through the shared row, then, under the exclusive LOCAL lease, captures '
             'CORE6 policy, status, IDR0, MISR and PWCR, admits settled OFF or ON or the power-up state (policy 8, '
-            'status 0, PWCR 0x101), writes PWCR 0 and policy 8 with readbacks and a status observation after '
-            'each, opens the GPU clock and reset, and requires the CORE6 status poll to read 8; OFF writes CORE6 '
+            'status 0, PWCR 0x101), writes the vendor CORE6 delay row, PWCR 0 and policy 8 with readbacks and a '
+            'status observation after each, opens the GPU clock and reset, and requires the CORE6 status poll to read 8; OFF writes CORE6 '
             'policy 0 and requires status 0 before the clock and reset close and domain 5 goes OFF, in the order '
             'of drivers/gpu/a733_gpu_power.c. The preparation reads that order from the image\'s own on_steps and '
-            'off_steps tables. The image never reads or writes the GPU register window at 0x01800000: the '
-            'identity reads and their mapping check are compiled out.',
+            'off_steps tables. A read-only snapshot of 35 CORE6, TOP5, R_CCU and CCU words precedes the first ON '
+            'and follows each ON attempt. The image never reads or writes the GPU register window at 0x01800000: '
+            'the identity reads and their mapping check are compiled out.',
             after=['gpu-provider-ready']),
     gpu_row('gpu-power-identity', 13, 'GPU power and hardware identity', 'identity',
             'COMPLETE GPU power identity: OFF and provider parked',
@@ -479,7 +493,8 @@ ROWS = [
             'apps/gpu-power-id, identity variant: the power-only sequence with one 64-bit read of 0x01800020 (and, '
             'only when its branch field is zero, the legacy 32-bit reads of 0x01800020 and 0x01800018) between ON '
             'and OFF, each after an identity Device-nGnRnE mapping check and a deadline check. No GPU register '
-            'write. It runs only after gpu-power-only of this set returned with status 0 in the same lifetime.',
+            'write. It runs only after gpu-power-only of this set returned with status 0 in the same lifetime and '
+            'printed GPU power cycle=1 core_status=0x8 and GPU power cycle=2 core_status=0x8.',
             after=['gpu-power-only'],
             failures=['`FAIL GPU identity mapping`, `GPU identity ownership/access` or `GPU identity '
                       'deadline/clock`']),
@@ -855,8 +870,12 @@ def runbook(row, bundle, value, artifacts, prerequisites, timeout, lifetime=None
     required, stopped = gates(row), stops(entry)
     if required or stopped:
         lines += ['## Run only after', '']
-        lines += [f'- `{name}` of this set passed in this lifetime ({reason}): status 0 with its success text. A '
-                  'controlled outcome of that row is not a pass.' for name, reason in required]
+        passed = (lifetime or {}).get('passed', {})
+        lines += [(f'- `{name}` passed earlier in this lifetime, from an earlier set, as `$S/{passed[name]}`: '
+                   'status 0 with its success text. That run is the first link of the warm-return chain.'
+                   if name in passed else
+                   f'- `{name}` of this set passed in this lifetime ({reason}): status 0 with its success text. A '
+                   'controlled outcome of that row is not a pass.') for name, reason in required]
         lines += [f'- Do not run it when {text}.' for text in stopped]
         lines += ['', 'The operator applies these gates; the runner does not check them.', '']
     lines += ['## Bundle', '', '| File | SHA-256 |', '| --- | --- |']
@@ -865,7 +884,8 @@ def runbook(row, bundle, value, artifacts, prerequisites, timeout, lifetime=None
     if row.get('admission_text'):
         lines += ['## Admission', '', row['admission_text'], '']
     if row.get('variant'):
-        reused = {'gpu-provider-ready': 'the frozen provider-readiness image `3adfa4ad…`, which has not run on a board',
+        reused = {'gpu-provider-ready': 'the frozen provider-readiness image `3adfa4ad…`, which returned with '
+                                        'status 0 on port 3-1 in two earlier lifetimes',
                   'gpu-power-id-fd3d5839': 'the power and identity image `fd3d5839…`, which launched on port 3-1 '
                                            'and did not return'}
         lines += [f'Equivalence: {value["reused_objects"]} linked objects are those of '
@@ -994,7 +1014,9 @@ def set_runbook(run_dir, lifetime, rows, table):
         else:
             what = f'`{entry["external"]}`, `{entry["runbook"]}`'
             after = entry.get('after', [])
-        gate = [f'`{a}` passed' for a in after] + [f'not if {text}' for text in stops(entry)]
+        passed = lifetime.get('passed', {})
+        gate = [f'`{a}` passed' + (f' (`{passed[a]}`, already in the chain)' if a in passed else '') for a in after]
+        gate += [f'not if {text}' for text in stops(entry)]
         lines.append(f'| {i} | {what} | `$S/{entry["stem"]}-*`; link `{entry["run"]}` | '
                      + ('; '.join(gate) or 'none') + ' |')
     lines += ['', '## Warm-return chain', '',
@@ -1286,12 +1308,15 @@ def check_lifetime(lifetime, names, inputs):
     """A lifetime file names its port, DDR record, warm-return chain and an order of distinct record stems in
     which every gate names a row placed earlier."""
     require(isinstance(lifetime, dict) and {'port', 'ddr', 'chain', 'order'} <= set(lifetime)
-            and set(lifetime) <= {'port', 'ddr', 'chain', 'order', 'state', 'start'},
-            'The lifetime names port, ddr, chain and order, and optionally state and start.')
+            and set(lifetime) <= {'port', 'ddr', 'chain', 'order', 'state', 'start', 'passed'},
+            'The lifetime names port, ddr, chain and order, and optionally state, start and passed.')
+    passed = lifetime.get('passed', {})
+    require(isinstance(passed, dict) and all(name in names and run in lifetime['chain'] for name, run in passed.items()),
+            'passed maps a row of the table to the chain record of its earlier pass in this lifetime.')
     require(all(isinstance(x, str) for x in lifetime.get('start', [])), 'start is a list of runbook lines.')
     require(all(isinstance(x, str) and x and '/' not in x for x in [lifetime['ddr'], *lifetime['chain']]),
             'The DDR record and the chain are record directory names of the session directory.')
-    stems, runs, placed = set(), set(lifetime['chain']), []
+    stems, runs, placed = set(), set(lifetime['chain']), list(lifetime.get('passed', {}))
     for entry in lifetime['order']:
         require(isinstance(entry, dict) and ('row' in entry) != ('external' in entry), 'Each order entry names a row '
                 'or an external bundle.')

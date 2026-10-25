@@ -322,7 +322,9 @@ the cost model.
   modeled core and with two, and the retention of the I2C mutex after a fault
   that a client latches during a transfer.
 - `checks/power-domains-tree.py` checks the source facts: one writer of
-  domains 1 and 5, four delay-row writers and no native delay-row allowlist.
+  domains 1 and 5, and five delay-row writers. The GPU controller is the
+  writer of domain 6 (GPU_CORE), and the GPU native adapter is the only
+  native allowlist that admits the delay row, for that domain alone.
   It rejects direct NPU delay-row writes alongside a domain-4 row consumer,
   checks the five service tasks and their priorities, and rejects critical
   sections, scheduler suspension or waits in the owner's code.

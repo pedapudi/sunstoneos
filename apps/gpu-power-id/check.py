@@ -17,6 +17,13 @@ from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_RE
 from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_X2, UC_ARM64_REG_LR, UC_ARM64_REG_PC, UC_ARM64_REG_SP
 
 EXPECTED = 36 << 48 | 56 << 32 | 104 << 16 | 183
+# Words of the client's read-only prerequisite snapshot (snapshot_words in
+# main.c) and the identity-mapped pages that hold them.
+SNAPSHOT = [0x07066000 + o for o in (0, 4, 8, 0x10, 0x14, 0x18, 0x20, 0x24, 0x30, 0x34, 0x38, 0x3c, 0x160,
+                                     0x164, 0x170, 0x174, 0xc00, 0xc04, 0xc10, 0xfb4)] + \
+           [0x07065000 + o for o in (0, 8, 0x10, 0x14, 0x20, 0x170, 0x174, 0xc00, 0xc04, 0xc10)] + \
+           [0x070101ac, 0x07010250, 0x020020e0, 0x02002b20, 0x02002b24]
+SNAPSHOT_PAGES = (0x07066000, 0x07065000, 0x07010000, 0x02002000)
 NAMES = ['bb_power', 'a733_gpu_platform', 'a733_gpu_power', 'a733_pmic_consumer',
          'a733_power_domains', 'a733_power_domain', 'a733_power_domain_row']
 
@@ -30,6 +37,10 @@ def run(image, case, power_only=False):
     u = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
     u.mem_map(0x41000000, 0x1200000)
     u.mem_map(0x1800000, 0x1000)
+    for page in SNAPSHOT_PAGES:
+        u.mem_map(page, 0x1000)
+    for address in SNAPSHOT:
+        u.mem_write(address, (address ^ 0x5a5a0000).to_bytes(4, 'little'))
     for address, data in image.parts:
         u.mem_write(address, data)
     u.reg_write(UC_ARM64_REG_SP, 0x421f0000)
@@ -42,6 +53,7 @@ def run(image, case, power_only=False):
     domain5 = domains + L['a733_power_domains']['domain'] + 2 * 32
     deadline = 10000
     state = {'case': case, 'calls': [], 'gpu_reads': [], 'gpu_writes': [], 'clock_reads': 0, 'on_polls': 0,
+             'snapshot_reads': [], 'translated': [],
              'time': 100, 'messages': [], 'exit_status': None, 'failure': None}
 
     def put(address, value, size=4):
@@ -50,9 +62,9 @@ def run(image, case, power_only=False):
     def field(base, typ, name, value, size=4):
         put(base + L[typ][name], value, size)
 
-    def notes(idr0, misr, after_pwcr, after_policy, misr_late, waits=(0, 0)):
+    def notes(idr0, misr, after_delays, after_pwcr, after_policy, misr_late, waits=(0, 0, 0)):
         base = power + L['a733_gpu_power']['core_note']
-        for i, value in enumerate((idr0, misr, after_pwcr, after_policy, misr_late)):
+        for i, value in enumerate((idr0, misr, after_delays, after_pwcr, after_policy, misr_late)):
             put(base + 4 * i, value)
         for i, value in enumerate(waits):
             put(power + L['a733_gpu_power']['core_wait_us'] + 4 * i, value)
@@ -80,7 +92,7 @@ def run(image, case, power_only=False):
 
     def call(name):
         state['calls'].append(name)
-        if name == 'aarch64_device_translate' and power_only:
+        if name == 'aarch64_device_translate' and power_only and u.reg_read(UC_ARM64_REG_X0) not in SNAPSHOT_PAGES:
             raise AssertionError('power-only variant translated a GPU address')
         if name == 'bb_power_now':
             state['clock_reads'] += 1
@@ -89,9 +101,14 @@ def run(image, case, power_only=False):
                 state['time'] = deadline
             if case == 'clock-regresses' and state['gpu_reads']:
                 state['time'] = 99
+            if case == 'on-deadline' and state['on_polls'] >= 3:
+                state['time'] = deadline
             ret(state['time'])
         elif name == 'a733_gpu_platform_poll':
             state['on_polls'] += 1
+            if case == 'on-deadline':
+                ret(0)
+                return
             if case in ['on-fault', 'core-refused', 'core-partial'] or (case == 'second-on-fault' and state['on_polls'] == 2):
                 if case != 'on-fault':
                     # A refused entry has the policy, status, IDR0, MISR and
@@ -103,21 +120,21 @@ def run(image, case, power_only=False):
                     field(power, 'a733_gpu_power', 'index', 10 if case == 'core-refused' else 7)
                     field(power, 'a733_gpu_power', 'phase', 5)
                     if case == 'core-refused':
-                        notes(0x00031001, 0x100, 0, 0, 0)
+                        notes(0x00031001, 0x100, 0, 0, 0, 0)
                 ret((1 << 64) - 1)
                 return
             # The first ON enters from the power-up state and completes after
             # the PWCR write; the second enters from settled OFF with PWCR 0
             # and completes at the final poll.
-            field(power, 'a733_gpu_power', 'core_seen', 0xff)
+            field(power, 'a733_gpu_power', 'core_seen', 0x1ff)
             if state['on_polls'] == 1:
                 field(power, 'a733_gpu_power', 'core_policy', 8)
                 field(power, 'a733_gpu_power', 'core_config', 0x101)
-                notes(0x00031001, 0x100, 8, 8, 0x100, (3, 1))
+                notes(0x00031001, 0x100, 8, 8, 8, 0x100, (3, 1, 1))
             else:
                 field(power, 'a733_gpu_power', 'core_policy', 0)
                 field(power, 'a733_gpu_power', 'core_config', 0)
-                notes(0x00031001, 0, 0, 0, 0x100, (0, 0))
+                notes(0x00031001, 0, 0, 0, 0, 0x100, (0, 0, 0))
             field(gpu, 'a733_gpu_platform', 'phase', 3)
             field(gpu, 'a733_gpu_platform', 'token', 17, 8)
             field(gpu, 'a733_gpu_platform', 'delegated', 1)
@@ -127,12 +144,15 @@ def run(image, case, power_only=False):
             ret()
         elif name == 'aarch64_device_translate':
             address = u.reg_read(UC_ARM64_REG_X0)
-            assert address in (0x1800020, 0x1800018)
+            assert address in (0x1800020, 0x1800018) + SNAPSHOT_PAGES
             assert u.reg_read(UC_ARM64_REG_X1) == 0
+            state['translated'].append(address)
             # The compiled mapping predicate consumes this native translation
             # result; wrong physical address must refuse before the MMIO read.
             target = u.reg_read(UC_ARM64_REG_X2)
-            u.mem_write(target, struct.pack('<QII', address + (4096 if case == 'bad-mapping' else 0), 0, 0))
+            wrong = (case == 'bad-mapping' and address < 0x2000000) or \
+                    (case == 'snapshot-mapping' and address == 0x07065000)
+            u.mem_write(target, struct.pack('<QII', address + (4096 if wrong else 0), 0, 0))
             ret()
         elif name == 'a733_gpu_platform_off_poll':
             if case == 'off-fault':
@@ -173,6 +193,17 @@ def run(image, case, power_only=False):
         assert not power_only, 'power-only variant read the GPU register window'
         assert (address, size) in [(0x1800020, 8), (0x1800020, 4), (0x1800018, 4)]
 
+    def snapshot_read(uc, access, address, size, value, arg):
+        assert size == 4 and address in SNAPSHOT, (hex(address), size)
+        state['snapshot_reads'].append(address)
+
+    def snapshot_write(uc, access, address, size, value, arg):
+        raise AssertionError(f'write to a snapshot page at {address:#x}')
+
+    for page in SNAPSHOT_PAGES:
+        u.hook_add(UC_HOOK_MEM_READ, snapshot_read, begin=page, end=page + 0xfff)
+        u.hook_add(UC_HOOK_MEM_WRITE, snapshot_write, begin=page, end=page + 0xfff)
+
     def write(uc, access, address, size, value, arg):
         state['gpu_writes'].append([address, size, value])
         raise AssertionError('GPU write in never-booted identity consumer')
@@ -188,14 +219,21 @@ def run(image, case, power_only=False):
             assert 'COMPLETE GPU power only: CORE status 8, OFF and provider parked' in output
             assert 'identity' not in output, output
             # Two full cycles, each reported, then one park and the completion text.
-            for line in ['GPU CORE entry cycle=1 seen=255 policy=0x8 status=0x0 pwcr=0x101',
+            for line in ['GPU CORE entry cycle=1 seen=511 policy=0x8 status=0x0 pwcr=0x101',
                          'GPU CORE inputs cycle=1 idr0=0x31001 misr=0x100 misr_late=0x100',
-                         'GPU CORE after cycle=1 pwcr_status=0x8 pwcr_us=3 policy_status=0x8 policy_us=1',
-                         'GPU CORE entry cycle=2 seen=255 policy=0x0 status=0x0 pwcr=0x0',
+                         'GPU CORE after cycle=1 delays_status=0x8 delays_us=3 pwcr_status=0x8 pwcr_us=1 '
+                         'policy_status=0x8 policy_us=1',
+                         'GPU CORE entry cycle=2 seen=511 policy=0x0 status=0x0 pwcr=0x0',
                          'GPU CORE inputs cycle=2 idr0=0x31001 misr=0x0 misr_late=0x100',
-                         'GPU CORE after cycle=2 pwcr_status=0x0 pwcr_us=0 policy_status=0x0 policy_us=0',
+                         'GPU CORE after cycle=2 delays_status=0x0 delays_us=0 pwcr_status=0x0 pwcr_us=0 '
+                         'policy_status=0x0 policy_us=0',
                          'GPU power cycle=1 core_status=0x8', 'GPU power cycle=2 core_status=0x8']:
                 assert line in output, (line, output)
+            # Snapshots 0, 1 and 2, each of every word once, in order.
+            assert state['snapshot_reads'] == SNAPSHOT * 3, state['snapshot_reads']
+            for n in range(3):
+                for address in SNAPSHOT:
+                    assert f'GPU SNAP n={n} a={address:#x} v={address ^ 0x5a5a0000:#x}' in output
             calls = state['calls']
             starts = [i for i, c in enumerate(calls) if c == 'a733_gpu_platform_begin']
             stops = [i for i, c in enumerate(calls) if c == 'a733_gpu_platform_off_begin']
@@ -204,12 +242,18 @@ def run(image, case, power_only=False):
         else:
             reasons = {'core-refused': 'GPU ON poll', 'core-partial': 'GPU ON poll', 'on-fault': 'GPU ON poll',
                        'second-on-fault': 'GPU ON poll', 'off-fault': 'GPU OFF poll',
+                       'on-deadline': 'GPU ON deadline', 'snapshot-mapping': 'GPU snapshot mapping',
                        'retained-token': 'GPU OFF ownership proof', 'counted-row': 'GPU OFF ownership proof',
                        'unparked': 'GPU provider park proof'}
             assert state['failure'] == reasons[case], state
             assert state['exit_status'] is None and 'COMPLETE' not in output
-            if case in ['on-fault', 'core-refused', 'core-partial']:
+            if case in ['on-fault', 'core-refused', 'core-partial', 'on-deadline']:
                 assert 'a733_gpu_platform_off_begin' not in state['calls']
+                # The failed ON took its snapshot before the failure report.
+                assert state['snapshot_reads'] == SNAPSHOT * 2, state['snapshot_reads']
+            if case == 'snapshot-mapping':
+                # A wrong translation of one page refuses before any snapshot read.
+                assert not state['snapshot_reads'] and 'a733_gpu_platform_begin' not in state['calls']
             if case == 'second-on-fault':
                 # The first cycle completed; the failed second ON reports its cycle.
                 assert state['calls'].count('a733_gpu_platform_off_begin') == 1, state['calls']
@@ -282,7 +326,7 @@ def main():
     cases = ['normal', 'legacy-id', 'unexpected-id', 'on-fault', 'bad-mapping',
              'read-crosses-deadline', 'clock-regresses', 'off-fault', 'retained-token', 'counted-row', 'unparked', 'core-refused', 'core-partial']
     if a.power_only:
-        cases = ['normal', 'on-fault', 'second-on-fault', 'core-refused', 'core-partial',
+        cases = ['normal', 'on-fault', 'second-on-fault', 'on-deadline', 'snapshot-mapping', 'core-refused', 'core-partial',
                  'off-fault', 'retained-token', 'counted-row', 'unparked']
     if a.cases:
         assert set(a.cases) <= set(cases)

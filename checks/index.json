@@ -7745,6 +7745,7 @@
    "docs/designs/npu-board.md",
    "docs/designs/pmic-access-measurements.md",
    "docs/designs/power-domains.md",
+   "docs/gpu-power.md",
    "docs/power-domains.md"
   ],
   "library": false,

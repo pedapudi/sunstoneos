@@ -223,7 +223,7 @@ and with two, and with S_TWI0 divisors for 400 kHz and 100 kHz.
 | PMIC transactions per row request | GPU: 6 per start (one DCDC4 snapshot) | 0; 12 per boot | `checks/power-domains-pck.c` |
 | Slow acknowledgement | One caller poll per tick | ≤ 1 tick per retry; FAILED by 10 ms plus 1 tick | `checks/power-domains-pck.c` |
 | Register accesses per domain-5 ON | 14 (counted from the GPU steps) | 14, once per transition | `checks/a733-gpu-power.c` trace |
-| Files that write the delay row | 6, plus 2 native allowlists | 4; no native delay-row allowlist | New `checks/power-domains-tree.py` |
+| Files that write the delay row | 6, plus 2 native allowlists | 5, with one native allowlist: the GPU controller writes the domain-6 (GPU_CORE) row through the GPU native adapter, which admits only that row | New `checks/power-domains-tree.py` |
 
 The service check also covers the park paths. A park request in the GPU
 display image completes only when the PMIC is idle and every domain is ON, OFF
@@ -323,7 +323,7 @@ repeated START or STOP two; a time read costs 40 ns and a register access
 | PMIC transactions per row request | GPU: 6 per start (one DCDC4 snapshot) | 0; 12 per boot | 0; 12 per boot |
 | Slow acknowledgement | DE_SYS: one caller poll per tick; GPU: a 50 µs spin per poll | 54 µs spin after the command, then one status read per one-tick step; FAILED 10,092 µs after the command, after 10 retries | ≤ 1 tick per retry; FAILED by 10 ms plus 1 tick |
 | Register accesses per domain-5 ON | 13 PPU operations by the GPU (14 with the native read-modify-write of the policy word) | 14 PPU accesses by the owner (2 adoption reads, 5 delay-row writes and 5 readbacks, the command, 1 status read), plus 5 domain-level reads | 14, once per transition |
-| Files that write the delay row | 6, plus 2 native allowlists | 4, with no native allowlist | 4; no native delay-row allowlist |
+| Files that write the delay row | 6, plus 2 native allowlists | 4, with no native allowlist, before the GPU controller wrote domain 6; 5, with the GPU native allowlist, after | 5; one native allowlist, for the domain-6 row only |
 
 At 400 kHz and 200 ns per register access each request takes one step of
 107% of the model's wire time: the step adds polls and time reads to the bus

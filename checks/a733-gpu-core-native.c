@@ -21,6 +21,8 @@ unsigned core_native_check(unsigned mode)
         CHECK(n.operations.read(&n, A733_GPU_CORE, 0x20, &out) && out == 0x010101ff);
         CHECK(n.operations.read(&n, A733_GPU_CORE, 0x14, &out) && out == 0x100);
         CHECK(n.operations.read(&n, A733_GPU_CORE, 0xfb0, &out) && out == 0x00031001);
+        CHECK(n.operations.update(&n, A733_GPU_CORE, 0xc10, UINT32_MAX, 8, 100000));
+        CHECK(n.operations.read(&n, A733_GPU_CORE, 0xc10, &out) && out == 8);
         CHECK(n.operations.update(&n, A733_GPU_CORE, 0x20, UINT32_MAX, 0, 100000));
         CHECK(n.operations.update(&n, A733_GPU_CORE, 0, UINT32_MAX, 8, 100000));
         CHECK(n.operations.update(&n, A733_GPU_CORE, 0, UINT32_MAX, 0, 100000));
@@ -37,6 +39,11 @@ unsigned core_native_check(unsigned mode)
         CHECK(!n.operations.update(&n, A733_GPU_CORE, 8, UINT32_MAX, 0, 100000));
         CHECK(!n.operations.update(&n, A733_GPU_CORE, 0x14, UINT32_MAX, 0, 100000));
         CHECK(!n.operations.update(&n, A733_GPU_CORE, 0xfb0, UINT32_MAX, 0, 100000));
+        /* Delay-row words accept only the pinned row values, as whole words. */
+        CHECK(!n.operations.update(&n, A733_GPU_CORE, 0x170, UINT32_MAX, 0, 100000));
+        CHECK(!n.operations.update(&n, A733_GPU_CORE, 0xc00, UINT32_MAX, 0x0808, 100000));
+        CHECK(!n.operations.update(&n, A733_GPU_CORE, 0xc10, 15, 8, 100000));
+        CHECK(!n.operations.update(&n, A733_GPU_CORE, 0xc08, UINT32_MAX, 8, 100000));
         CHECK(!n.operations.update(&n, A733_GPU_CORE, 0, 15, 8, 100000));
         CHECK(!n.operations.update(&n, A733_GPU_CORE, 0, UINT32_MAX, 1, 100000));
         CHECK(!n.operations.update(&n, A733_GPU_CORE, 0x20, UINT32_MAX, 1, 100000));

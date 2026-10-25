@@ -881,6 +881,19 @@ def main():
     assert 'Fixture start.' in (chosen / 'runbook.md').read_text() and 'no returning run' in (chosen / 'runbook.md').read_text()
     harness.refused(lambda: tool.run({}, rows, evidence, repo, run_dir=named), 'exists', kind=FileExistsError)
     prepared['run_dir'] = str(chosen.relative_to(evidence))
+    # A gate that an earlier set's row passed in this lifetime: named in passed with its chain record.
+    seeded = {'port': '3-1', 'ddr': 'p-ddr', 'chain': ['p-sync-run'], 'passed': {'returning-sync': 'p-sync-run'},
+              'order': [{'row': 'returning-after-refused', 'stem': 'p-after', 'run': 'p-after-run'}]}
+    harness.refused(lambda: tool.run({'returning-after-refused': inputs['returning-after-refused']}, rows, evidence,
+                                     repo, lifetime=dict(seeded, chain=[])), 'passed maps a row')
+    harness.refused(lambda: tool.run({'returning-after-refused': inputs['returning-after-refused']}, rows, evidence,
+                                     repo, lifetime=dict(seeded, passed={})), 'not placed before it')
+    status, gated = tool.run({'returning-after-refused': inputs['returning-after-refused']}, rows, evidence, repo,
+                             lifetime=seeded, run_dir=evidence / 'named-set' / 'port-seeded')
+    book = (gated / 'returning-after-refused/runbook.md').read_text()
+    assert status == 0 and '`returning-sync` passed earlier in this lifetime, from an earlier set, as `$S/p-sync-run`' in book, book
+    assert '--warm-return $S/p-sync-run/session.json' in book, book
+    assert '`returning-sync` passed (`p-sync-run`, already in the chain)' in (gated / 'runbook.md').read_text()
     status, second = tool.run({}, rows, evidence, repo)
     assert status == 0 and second.name.endswith('-3'), 'a later run gets its own directory'
 

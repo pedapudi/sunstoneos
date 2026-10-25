@@ -29,10 +29,41 @@ static unsigned cycle;
 static unsigned id_reads;
 #endif
 
+/* Read-only snapshot of the candidate CORE6 prerequisites: the CORE6 and
+ * TOP5 PPU rows (DEN0051E registers and the vendor delay row), the R_CCU PPU
+ * gate and VDD isolation gates, and the GPU PLL, clock and gate words of the
+ * CCU. None is in the GPU register window. Snapshot 0 precedes the first ON;
+ * snapshot n follows the ON attempt of cycle n, also after its failure. Each
+ * page is checked as an identity Device-nGnRnE mapping before the reads. */
+static const uint32_t snapshot_words[] = {
+    0x07066000, 0x07066004, 0x07066008, 0x07066010, 0x07066014, 0x07066018, 0x07066020,
+    0x07066024, 0x07066030, 0x07066034, 0x07066038, 0x0706603c, 0x07066160, 0x07066164,
+    0x07066170, 0x07066174, 0x07066c00, 0x07066c04, 0x07066c10, 0x07066fb4,
+    0x07065000, 0x07065008, 0x07065010, 0x07065014, 0x07065020, 0x07065170, 0x07065174,
+    0x07065c00, 0x07065c04, 0x07065c10,
+    0x070101ac, 0x07010250, 0x020020e0, 0x02002b20, 0x02002b24};
+static void snapshot(unsigned which)
+{
+    static const struct a733_mapping_rule device = {A733_MAPPING_READ, 1,
+        {{A733_MAIR_DEVICE_NGNRNE, A733_SH_ANY}}, 0, 1};
+    static const uintptr_t pages[] = {0x07066000, 0x07065000, 0x07010000, 0x02002000};
+    for (unsigned i = 0; i < sizeof(pages) / sizeof(*pages); ++i)
+        if (!a733_mapping_check(aarch64_device_translate, pages[i], pages[i], &device))
+            bb_power_fail("GPU snapshot mapping");
+    for (unsigned i = 0; i < sizeof(snapshot_words) / sizeof(*snapshot_words); ++i) {
+        struct bb_line line;
+        bb_line_start(&line, "GPU SNAP");
+        bb_line_dec(&line, "n", which);
+        bb_line_hex(&line, "a", snapshot_words[i]);
+        bb_line_hex(&line, "v", a733_mmio_read32_dsb_sy_both(snapshot_words[i]));
+        bb_line_end(&line); bb_power_print(&line);
+    }
+}
+
 /* The controller's cached CORE6 observations of the last ON, with its cycle
- * number from 1: entry words,
- * identification and accept/deny inputs, and the status after the PWCR and
- * policy writes with the microseconds each observation waited. */
+ * number from 1: entry words, identification and accept/deny inputs, and
+ * the status after the delay-row, PWCR and policy writes with the
+ * microseconds each observation waited. */
 static void core_report(void)
 {
     const struct a733_gpu_power *p = &gpu.power;
@@ -50,10 +81,12 @@ static void core_report(void)
     bb_line_end(&line); bb_power_print(&line);
     bb_line_start(&line, "GPU CORE after");
     bb_line_dec(&line, "cycle", cycle);
+    bb_line_hex(&line, "delays_status", p->core_note[A733_GPU_NOTE_AFTER_DELAYS]);
+    bb_line_dec(&line, "delays_us", p->core_wait_us[0]);
     bb_line_hex(&line, "pwcr_status", p->core_note[A733_GPU_NOTE_AFTER_PWCR]);
-    bb_line_dec(&line, "pwcr_us", p->core_wait_us[0]);
+    bb_line_dec(&line, "pwcr_us", p->core_wait_us[1]);
     bb_line_hex(&line, "policy_status", p->core_note[A733_GPU_NOTE_AFTER_POLICY]);
-    bb_line_dec(&line, "policy_us", p->core_wait_us[1]);
+    bb_line_dec(&line, "policy_us", p->core_wait_us[2]);
     bb_line_end(&line); bb_power_print(&line);
 }
 static _Noreturn void gpu_fail(const char *reason)
@@ -137,10 +170,17 @@ void gpu_power_id_client(void *unused)
     uint64_t raw = 0, bvnc = 0;
     uint32_t revision = 0, core = 0;
 #endif
+    snapshot(0);
     for (cycle = 1; cycle <= GPU_CYCLES; ++cycle) {
         before();
         if (!a733_gpu_platform_begin(&gpu, bb_power.deadline)) gpu_fail("GPU ON begin");
-        while ((result = a733_gpu_platform_poll(&gpu)) == 0) gpu_pause("GPU ON deadline");
+        /* An expired ON still takes its snapshot before the failure report. */
+        while ((result = a733_gpu_platform_poll(&gpu)) == 0) {
+            if (bb_power_now() >= bb_power.deadline) { result = -2; break; }
+            vTaskDelay(1);
+        }
+        snapshot(cycle);
+        if (result == -2) gpu_fail("GPU ON deadline");
         if (result != 1) gpu_fail("GPU ON poll");
         core_report();
 #ifdef GPU_POWER_ONLY

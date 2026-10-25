@@ -109,8 +109,17 @@ cycle number, starting at 1:
   and the policy, status and PWCR words before any write.
 - `GPU CORE inputs`: `PPU_IDR0`, and `PPU_MISR` before any write and after
   reset release.
-- `GPU CORE after`: the status after the PWCR write and after the policy
-  write, each with the microseconds its observation waited.
+- `GPU CORE after`: the status after the CORE6 delay-row writes, after
+  the PWCR write and after the policy write, each with the microseconds its
+  observation waited.
+
+Both variants also print a read-only snapshot of the candidate CORE6
+prerequisites, one `GPU SNAP n=<k> a=<address> v=<value>` line per word.
+Snapshot 0 precedes the first ON, and snapshot n follows the ON attempt of
+cycle n, including a failed or expired one. The 35 words are the CORE6 and
+TOP5 PPU rows, R_CCU `0x1ac` and `0x250`, and CCU `0x0e0`, `0xb20` and
+`0xb24`; none is in the GPU register window. Each page is checked as an
+identity Device-nGnRnE mapping before its reads.
 
 A failure also prints a `GPU resources` line: the platform's last resource
 result and the resource manager's error, stage and last value. A release
@@ -149,10 +158,13 @@ requires the domain-5 (TOP5) ON request before the first CORE6 access and
 the last CORE6 access before domain-5 OFF. The build
 records `"variant": "power-only"` and its completion text in `build.json`.
 The check refuses an image of the other variant: only the identity variant
-defines the identity read counter. Its nine cases cover the normal path of
-two cycles, the ON failure in the first and in the second cycle, the
-CORE-refusal, partial CORE capture, OFF, retained token, counted row and
-unparked failures. Board-bundle preparation requires the normal case to have
+defines the identity read counter. Its eleven cases cover the normal path of
+two cycles with three snapshots, the ON failure in the first and in the
+second cycle, an ON that reaches the deadline, a wrong snapshot-page
+translation, the CORE-refusal, partial CORE capture, OFF, retained token,
+counted row and unparked failures. A failed or expired ON must take its
+snapshot before the failure report, and the snapshot reads exactly its 35
+words. Board-bundle preparation requires the normal case to have
 run two cycles for the power-only variant and one for the identity variant. Every case requires that no load,
 store or address translation reaches the GPU register window.
 
