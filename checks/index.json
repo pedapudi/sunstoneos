@@ -2032,7 +2032,8 @@
    "docs/designs/board-bundles-next.md",
    "docs/designs/board-bundles.md",
    "docs/designs/npu-sram-route.md",
-   "docs/reference-backsolve-npu.md"
+   "docs/reference-backsolve-npu.md",
+   "docs/vendor-firmware/action-plan.md"
   ],
   "library": false,
   "pure_host": false,
