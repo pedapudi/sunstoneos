@@ -13,8 +13,8 @@
  *   _dsb_sy_both   DSB SY; access; DSB SY
  *   _dsb_sy_after  access; DSB SY
  * a733_mmio_dsb_sy() issues the barrier alone, for sequences that fence several
- * plain accesses together. These helpers do not weaken any barrier; a weaker
- * ordering needs its own named form and board qualification. Address
+ * plain accesses together. A weaker ordering needs its own named form and
+ * board qualification: the _dmb_ forms below give readl/writel ordering. Address
  * allowlists and mapping checks stay with each caller. */
 #include <stdint.h>
 
@@ -72,5 +72,17 @@ static inline void a733_mmio_write32_dsb_sy_after(uintptr_t address, uint32_t va
 { a733_mmio_write32(address, value); a733_mmio_dsb_sy(); }
 static inline void a733_mmio_write64_dsb_sy_after(uintptr_t address, uint64_t value)
 { a733_mmio_write64(address, value); a733_mmio_dsb_sy(); }
+#if defined(__aarch64__)
+/* The ordering of Linux readl and writel on arm64 (arch/arm64/include/asm/io.h):
+ * a read followed by DMB OSHLD, so later normal-memory reads wait for it; a
+ * DMB OSHST before a write, so earlier normal-memory writes reach the device
+ * first. Device-nGnRnE accesses to one device stay in program order. A caller
+ * that needs completion, such as before a doorbell or before reading memory
+ * the device wrote, still issues a733_mmio_dsb_sy(). */
+static inline uint32_t a733_mmio_read32_dmb_oshld_after(uintptr_t address)
+{ uint32_t v = a733_mmio_read32(address); __asm__ volatile("dmb oshld" ::: "memory"); return v; }
+static inline void a733_mmio_write32_dmb_oshst_before(uintptr_t address, uint32_t value)
+{ __asm__ volatile("dmb oshst" ::: "memory"); a733_mmio_write32(address, value); }
+#endif
 #endif
 #endif

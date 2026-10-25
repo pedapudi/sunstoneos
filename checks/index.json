@@ -7029,6 +7029,20 @@
   "summary": "Check linked NPU interrupt routing and ownership without accessing hardware.",
   "usb": false
  },
+ "npu-job-cost.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/npu-job-overhead.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--output"
+  ],
+  "summary": "Count the CPU work of one NPU job in a linked finite image, without hardware.",
+  "usb": false
+ },
  "npu-large-host.py": {
   "cache_areas": [
    "evidence",
@@ -7092,6 +7106,7 @@
  "npu-nn-pool-native.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/npu-job-overhead.md",
    "docs/npu-relative-shift.md"
   ],
   "library": false,

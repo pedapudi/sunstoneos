@@ -41,6 +41,7 @@ static int npu_read(void *v,uintptr_t a,uint32_t *out)
     atomic_fetch_add(&reads,1);
     if(a==0x07090160)*out=0x10000002;
     else if(a==0x03000008)*out=sysctrl;
+    else if(a==0x0300624c)*out=0x496; /* Port 3-3's speed bin, code 4 (vf0400). */
     else if(a==PCK || a==PCK+8)*out=pck[a==PCK+8];
     else {
         *out=*reg(a);

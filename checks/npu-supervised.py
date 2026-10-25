@@ -283,6 +283,8 @@ def execute(image,out,selected_case=None):
             0x020022b0:0xb0000,0x02003920:0,0x020039a0:0,
             # SYSCTRL shared SRAM routing: bit 1 set, the boot ROM's CPU routing.
             0x03000008:2,
+            # SID speed bin of port 3-3, code 4 (vf0400): the vendor point is 852 MHz at 800 mV.
+            0x0300624c:0x496,
             0x0701000c:0,0x07010010:0,0x0701019c:0x10001,0x07025000:0x22,0x07025014:0,0x07025024:0,0x07025210:0,
             0x03400000:0,0x0340011c:0,0x0340021c:0,0x0340031c:0,
             0x708300c:0x40,0x7083010:0xf8,0x7083020:0x30,0x7083018:0,0x708301c:0,
@@ -319,7 +321,7 @@ def execute(image,out,selected_case=None):
 
             assert v(address+app['ready'])==1 and v(address+app['worker_admitted'])==1
             assert not v(sym['a733_npu_application_failed'])
-            assert m.mmio[0x020022a0]==0xf8305100 and m.mmio[0x02002b04]&0xf0001==0xf0001 and m.mmio[0x02002b00]&0x8700001f==1<<31
+            assert m.mmio[0x020022a0]==0xf8104600 and m.mmio[0x02002b04]&0xf0001==0xf0001 and m.mmio[0x02002b00]&0x8700001f==1<<31
             assert m.mmio[0x07064000]&15==8 and m.mmio[0x07064008]&15==8
             if mode=='ready':
                 # Domain 4 commanded ON before the first NPU clock write.
