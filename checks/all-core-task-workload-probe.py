@@ -135,7 +135,7 @@ class Workload(first.FirstTask):
             self.put(core, args[0], irq)
             u.reg_write(UC_ARM64_REG_PC, address+4)
             return
-        if op == 'dc' and args[0] == 'civac':
+        if op == 'dc' and args[0] == 'civac' and not self.production_table_clean(address):
             assert self.stopped_writers == set(range(8))
             assert not self.pending[core] and self.irq_active[core] is None
         if self.fault == 'wrong-rounds' and core == 6 and address == self.survey_hooks['identity_first_task_el0']:

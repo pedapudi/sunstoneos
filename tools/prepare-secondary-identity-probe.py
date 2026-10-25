@@ -28,7 +28,8 @@ def branch(address,target):
 
 def cached_patch_points(native):
     # Exact offsets in the NATIVE-pinned ELF; every displaced word is checked.
-    entry=native['a733_cached_enter_el1']+0x144
+    # +0x194 is MSR ICC_CTLR_EL1, XZR, the first EL1 interrupt-interface write.
+    entry=native['a733_cached_enter_el1']+0x194
     vector=native['a733_cached_el3_vectors']+8*128+4
     return ((entry,0xd518cc9f,'el1_observe_checkpoint'),
             (vector,branch(vector,native['a733_cached_el3_fault']),'el1_return_checkpoint'))
@@ -83,8 +84,8 @@ def deadline_patch_points(native,quiet):
         # The background loop's per-increment BL ucPortGetCoreID becomes an EL0
         # WFE (SCTLR_EL1.nTWE is set); W0 keeps the core index from the first call.
         at=native['background']+0x40
-        require(native['ucPortGetCoreID']-at==0x3d61*4,'Background core-index call differs.')
-        points.append((at,0x94003d61,None,False))
+        call=branch(at,native['ucPortGetCoreID'])|0x80000000  # BL ucPortGetCoreID
+        points.append((at,call,None,False))
     return points
 
 
@@ -151,8 +152,8 @@ def patch_plan(native,hooks,f):
         plan+=[(address,original,branch(address,hooks[hook])) for address,original,hook in cached_patch_points(native)]
     if not f.first_task:
         return plan
+    # The native entry sets SCTLR_EL1.nTWE and nTWI itself (NATIVE_EL1_SCTLR).
     first=[
-        (native['a733_cached_enter_el1']+0xac,0xaa0203f9,0xb26e0059),
         (native['a733_smp_primary_el1'],0xa9bd7bfd,branch(native['a733_smp_primary_el1'],native['a733_smp_diagnostic_start'])),
         (native['platform_tick_setup'],0xd538d088,0xd65f03c0),
         (native['prvIdleTask'],0xa9be7bfd,branch(native['prvIdleTask'],hooks['identity_first_task_el0'])),
@@ -161,13 +162,22 @@ def patch_plan(native,hooks,f):
     if f.task_switch:
         # Let both idle functions execute their native yield. Intercept the
         # selected worker before its body, after the real SVC save/select/restore.
-        first=first[:3]+[
+        first=first[:2]+[
             # The frozen image also creates a higher-priority USB observer
             # on CPU0. This CPU-only interval must not start that service.
             (native['a733_observe_service_start'],0xa9bf7bfd,0xd65f03c0),
             (native['worker'],0xa9bc7bfd,branch(native['worker'],hooks['identity_first_task_el0'])),
-            first[-1]]
+            first[-1],
+            # The idle loops wait with DSB; WFI. This profile stops the tick
+            # (platform_tick_setup returns at once), so an idle task that
+            # resumed after its yield could wait for an interrupt that never
+            # comes. Each WFI becomes SVC #0x69, the idle yield, so a resumed
+            # idle task yields again until its worker runs.
+            (native['prvIdleTask']+0x1c,0xd503207f,0xd4000d21),
+            (native['prvPassiveIdleTask']+0x10,0xd503207f,0xd4000d21)]
     if f.task_workload:
+        # The workload keeps the tick, the SGIs and the native idle WFI.
+        first=[p for p in first if p[0] not in (native['prvIdleTask']+0x1c,native['prvPassiveIdleTask']+0x10)]
         # Keep the real timer setup and complete worker loop. Its saved
         # x19 still identifies the pinned core at the post-loop branch.
         first=[p for p in first if p[0] not in (native['platform_tick_setup'],native['worker'],
@@ -230,7 +240,7 @@ def prepare(args):
         if quiet:names+=('background','ucPortGetCoreID')
         native={n:address(n) for n in names}
         if task_switch:
-            for name,expected in {'worker':(0x41001280,372),
+            for name,expected in {'worker':(0x4100123c,372),
                                   'tasks':(0x41241498,2688),
                                   'stacks':(0x41201498,262144)}.items():
                 require([(s['st_value'],s['st_size']) for s in entries if s.name==name]==[expected],
@@ -238,7 +248,7 @@ def prepare(args):
         if first_task:
             data,bss=(elf.get_section_by_name(n) for n in ('.data','.bss'))
             require(data['sh_addr']==0x41200000 and data['sh_addr']+data['sh_size']<=0x41201000 and
-                    bss['sh_addr']==0x41201000 and bss['sh_addr']+bss['sh_size']==0x41290d10,
+                    bss['sh_addr']==0x41201000 and bss['sh_addr']+bss['sh_size']==0x41290f00,
                     'First-task writable extent differs from the reviewed frozen ELF.')
         if pre_scheduler:
             state=native['probe_arrived']&~4095

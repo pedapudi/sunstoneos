@@ -126,6 +126,7 @@ class Machine:
         with image.open('rb') as f:
             elf=ELFFile(f)
             self.symbols={s.name:s['st_value'] for s in elf.get_section_by_name('.symtab').iter_symbols()}
+            self.sizes={s.name:s['st_size'] for s in elf.get_section_by_name('.symtab').iter_symbols()}
             segments=[(s['p_vaddr'],s['p_memsz'],s['p_flags'],s.data()) for s in elf.iter_segments() if s['p_type']=='PT_LOAD']
         assert self.symbols['a733_smp_entry']==0x41000000
         for addr,size,flags,data in segments:
@@ -146,6 +147,7 @@ class Machine:
         # Zeroed active-priority copies per core, and those zeroed when the
         # core first enabled Nonsecure Group 1 at EL1.
         self.active_priorities=[set() for _ in range(8)];self.group1_priorities={}
+        self.wfi_waiting=[None]*8
         self.mmio={0x02050014:0x41,0x02050010:1,0x02050018:2,0x07090108:0x5aa5a55a,
             0x070501c0:0xfa50392f,0x070501c4:0x20,0x070501d4:0,0x03000024:0,
             0x03400000:0,0x03400004:1}
@@ -185,6 +187,16 @@ class Machine:
         contract=contract[:16]+struct.pack('<Q',len(contract))+contract[24:]
         ctypes.memmove(self.ram_pointer+0x1004000,contract,len(contract))
     def read(self,a,n):return ctypes.string_at(self.ram_pointer+a-0x41000000,n)
+    def production_table_clean(self,address):
+        """A cache-maintenance instruction of the production EL1 coherence
+        helper, which cleans its own table lines before enabling the MMU."""
+        helper=self.symbols['a733_cpu_coherence_enable_el1']
+        return helper<=address<helper+self.sizes['a733_cpu_coherence_enable_el1']
+    def sealed_el1_table_read(self,address,size):
+        """A read by the production EL1 coherence helper, which sums the two
+        sealed EL1 table pages and compares the sum with the stored word."""
+        tables,total=self.symbols['a733_cached_el1_l1'],self.symbols.get('a733_cached_el1_table_sum')
+        return tables<=address and address+size<=tables+0x2000 or total is not None and total<=address and address+size<=total+8
     def active_priority(self,c,name,value):
         """Record a zeroed ICC_AP0R0_EL1 or ICC_AP1R0_EL1. At EL3 SCR_EL3.NS
         selects the ICC_AP1R0_EL1 copy; below EL3 the Nonsecure copy is
@@ -208,6 +220,10 @@ class Machine:
     def save_sp(self,c):self.regs[c][self.spname(c)]=self.cpus[c].reg_read(UC_ARM64_REG_SP)
     def exception(self,c,level,pc,esr=0,irq=False):
         u=self.cpus[c];m=self.regs[c];old=m['currentel']//4
+        # An interrupt that ends an EL0 WFI returns to the next instruction.
+        waiting=getattr(self,'wfi_waiting',None)
+        if irq and waiting and waiting[c]==pc:pc+=4
+        if waiting:waiting[c]=None
         self.save_sp(c)
         m[f'elr_el{level}']=pc
         m[f'spsr_el{level}']=u.reg_read(UC_ARM64_REG_NZCV)|m['daif']|(old*4+(m['spsel'] if old else 0))
@@ -329,6 +345,12 @@ class Machine:
             if name in ('cntp_cval_el0','cntp_ctl_el0') and not c:self.timer_level(c)
             skip=True
         elif op in ('isb','dsb','dmb','tlbi','dc','ic','sev','sevl','yield'):skip=True
+        elif op=='wfi' and m['currentel']==0:
+            # An idle task's WFI at EL0 (SCTLR_EL1.nTWI set) waits until an
+            # interrupt is taken; the core's next IRQ check delivers it.
+            assert m['sctlr_el1']&(1<<16),('EL0 WFI traps without nTWI',c)
+            if not hasattr(self,'wfi_waiting'):self.wfi_waiting=[None]*8
+            self.wfi_waiting[c]=a;u.emu_stop();return
         elif op in ('wfe','wfi'):
             u.reg_write(UC_ARM64_REG_PC,a+4);u.emu_stop();return
         elif op in ('ldaxr','ldxr'):

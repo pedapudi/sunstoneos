@@ -40,13 +40,13 @@ class Coherent(cached.Cached):
                     u.mem_write(address,(self.q(address)^1).to_bytes(8,'little'));self.payload_fault=True
             return
         if core and self.regs[core]['currentel']==4:
-            assert not write and 0x41000000<=address<0x41200000, 'EL1 access outside code/borrowed page'
+            assert not write and (0x41000000<=address<0x41200000 or self.sealed_el1_table_read(address,size)), ('EL1 access outside code/borrowed page',core,hex(address))
         return local.Local.memory(self,u,access,address,size,value,core)
 
     def instruction(self,u,address,size,core):
         if address not in self.decoded:self.decoded[address]=next(self.decoder.disasm(bytes(u.mem_read(address,4)),address))
         ins=self.decoded[address];op,args=ins.mnemonic,ins.op_str.split(', ')
-        if core and op=='dc' and args[0]=='civac':
+        if core and op=='dc' and args[0]=='civac' and not self.production_table_clean(address):
             assert self.regs[core]['currentel']==4
             assert self.started==list(range(1,8)) and self.el1_seen==set(range(1,8))
             assert all(self.q(SHARED+0x100+c*128+16)==self.epoch for c in range(1,8)), 'Cleaning before last store'

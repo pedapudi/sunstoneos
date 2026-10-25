@@ -106,8 +106,20 @@ def main():
             assert shared.run_case(a, case, fixture, deadline_transform(stalled),
                                    final=held_after_failed_quarantine, quarantine_fails=True)
         elif case == 'deadline-record-checked':
-            record = host.deadline_record(stalled, stalled[32:48])
-            assert record and record['reason'] == 2 and not record['inconsistent']
+            # Reason 2 when CPU0 took its tick's deadline exit; reason 1 when it
+            # waited in identity_park and the deadline interrupt returned it.
+            source = a.models if not quiet else a.models.parent/'deadline-check'
+            model = json.loads((source/'stalled-core.json').read_text())
+            record = host.deadline_record(stalled, stalled[32:48], model['identity_park'])
+            parked = record['cpu0_wait'] == 'identity_park'
+            assert parked == bool(model['cpu0_parked'])
+            assert record and record['reason'] == (1 if parked else 2) and not record['inconsistent']
+            if record['reason'] == 1:
+                # The same record with ELR_EL3 outside identity_park reads as a
+                # CPU0 stopped elsewhere, not as a timed-out barrier.
+                moved = bytearray(stalled)
+                struct.pack_into('<Q', moved, host.RECORD_OFFSET+48, model['identity_park']+8)
+                assert host.deadline_record(bytes(moved), stalled[32:48], model['identity_park'])['cpu0_wait'] == 'elsewhere'
             try:
                 host.decode(stalled, stalled[32:48], manifest)
             except host.DeadlineReturn as returned:

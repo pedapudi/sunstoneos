@@ -95,11 +95,12 @@ def decode(raw, nonce, manifest, task_switch=False, task_workload=False):
         tcb, stack = task_context(core, task_switch)
         if task_workload: stack -= 64  # Frozen worker prologue, retained at post-loop branch.
         record = struct.unpack_from('<8Q', raw, 0x3200+core*64)
-        require(record == (epoch, 1, hooks['identity_first_task_el0']+4, stack, 0x60000000 if task_workload else 0, tcb, core if task_switch else 0, 0x30d41805),
+        require(record == (epoch, 1, hooks['identity_first_task_el0']+4, stack, 0x60000000 if task_workload else 0, tcb, core if task_switch else 0,
+                          base.cache.local.identity.builder.PROBE['NATIVE_EL1_SCTLR']),
                 'First-task context, publication or SCTLR differs.')
         saved = struct.unpack_from('<32Q', raw, 0x3a00+core*256)
         require(saved[:8] == (hooks['el1_observe_checkpoint']+4, 0x4124b000+core*32768,
-                core, epoch, deadline, deadline, 0x03460000+core*0x20000, 0x4100a000) and
+                core, epoch, deadline, deadline, 0x03460000+core*0x20000, 0x4100a800) and  # a733_cached_el1_vectors
                 not any(saved[8:]), 'Saved returning context differs.')
         entries.append({'core': core, 'tcb': tcb, 'task_sp': stack, 'task_spsr': record[4]})
     if task_workload:
@@ -139,14 +140,14 @@ def load(build, image, manifest, task_switch=False, task_workload=False, **deadl
     with image.open('rb') as stream:
         elf = ELFFile(stream)
         symbols = list(elf.get_section_by_name('.symtab').iter_symbols())
-        geometry = {'worker': (0x41001280,372), 'tasks': (0x41241498,2688),
+        geometry = {'worker': (0x4100123c,372), 'tasks': (0x41241498,2688),
                     'stacks': (0x41201498,262144)} if task_switch else GEOMETRY
         for name, expected in geometry.items():
             require([(s['st_value'], s['st_size']) for s in symbols if s.name == name] == [expected],
                     'Task layout changed: '+name)
         data, bss = (elf.get_section_by_name(n) for n in ('.data', '.bss'))
         require(data['sh_addr'] == 0x41200000 and data['sh_addr']+data['sh_size'] <= 0x41201000 and
-                bss['sh_addr'] == 0x41201000 and bss['sh_addr']+bss['sh_size'] == 0x41290d10,
+                bss['sh_addr'] == 0x41201000 and bss['sh_addr']+bss['sh_size'] == 0x41290f00,
                 'Owned writable extent changed.')
     return frozen, dram
 

@@ -103,7 +103,7 @@ class Interrupts(coherent.Coherent):
                 if value==30:assert not m['cntp_ctl_el0']&3
                 self.irq_active[core]=None
             m[name]=value;u.reg_write(UC_ARM64_REG_PC,address+4);return
-        if core and op=='dc' and args[0]=='civac':
+        if core and op=='dc' and args[0]=='civac' and not self.production_table_clean(address):
             assert self.mmio[0x03460000+core*0x20000+0x1041c]==self.priority_before[core]
             assert self.stopped_delivery==set(range(1,8)) and not any(self.pending) and not any(x is not None for x in self.irq_active)
             assert all(not self.regs[c]['icc_igrpen1_el1'] and not self.regs[c]['cntp_ctl_el0']&3 for c in range(1,8))

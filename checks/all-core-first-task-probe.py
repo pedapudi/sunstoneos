@@ -10,6 +10,7 @@ from collections import deque
 import argparse
 import importlib.util
 import json
+import re
 import pickle
 import struct
 from pathlib import Path
@@ -17,6 +18,8 @@ from unicorn import UC_MEM_WRITE
 from unicorn.arm64_const import UC_ARM64_REG_PC, UC_ARM64_REG_SP
 
 ROOT = Path(__file__).resolve().parents[1]
+# SCTLR_EL1 that the native cached entry establishes (boot/a733/secondary-local-probe.h).
+EL1_SCTLR = int(re.search(r'^#define NATIVE_EL1_SCTLR (0x[0-9a-fA-F]+)', (ROOT/'boot/a733/secondary-local-probe.h').read_text(), re.M).group(1), 16)
 spec = importlib.util.spec_from_file_location('barrier', ROOT/'checks/all-core-pre-scheduler-probe.py')
 barrier = importlib.util.module_from_spec(spec); spec.loader.exec_module(barrier)
 digest = barrier.digest
@@ -24,6 +27,7 @@ digest = barrier.digest
 
 REPORT = 0x42018100
 # Refusal case: injected GIC words, then the expected code, address, value read and core.
+IDLE_RESUME_CORE = 3
 REFUSALS = {
     'refuse-gic-unreadable': (None, (0x10, 0x03400004, 0, 0)),
     'refuse-cpu0-pending': ({0x03470200: 1 << 29}, (0x34, 0x03470200, 1 << 29, 0)),
@@ -48,6 +52,7 @@ class FirstTask(barrier.AllCore):
         self.secure_pmr = [0]*8
         self.entries = {}
         self.idle_entries, self.idle_yields, self.selected = set(), set(), set()
+        self.idle_resumed = False
         self.recent = [deque(maxlen=24) for _ in range(8)]
         if fault in REFUSALS:
             words, _ = REFUSALS[fault]
@@ -121,17 +126,19 @@ class FirstTask(barrier.AllCore):
             if address == idle:
                 self.idle_entries.add(core)
             if op == 'svc' and args == ['#0x69']:
-                if not self.task_workload or idle <= address < idle+(44 if core == 0 else 28):
-                    assert core in self.idle_entries and idle <= address < idle+(44 if core == 0 else 28)
+                if not self.task_workload or idle <= address < idle+self.sizes['prvIdleTask' if core == 0 else 'prvPassiveIdleTask']:
+                    assert core in self.idle_entries and idle <= address < idle+self.sizes['prvIdleTask' if core == 0 else 'prvPassiveIdleTask']
                     self.idle_yields.add(core)
             if address == self.symbols['worker']:
                 assert core in self.selected and core not in self.entries
-                assert self.reg(core, 'x0') == core and r['sctlr_el1'] == 0x30d41805
+                assert self.reg(core, 'x0') == core and r['sctlr_el1'] == EL1_SCTLR
                 tcb = self.q(self.symbols['pxCurrentTCBs']+core*8)
                 stack = (self.symbols['stacks']+(core+1)*16384-8) & ~15
                 assert tcb == self.symbols['tasks']+core*168 and u.reg_read(UC_ARM64_REG_SP) == stack
                 self.entries[core] = {'pc':address, 'sp':stack, 'tcb':tcb, 'argument':core}
-            assert self.task_workload or idle <= address < idle+(44 if core == 0 else 28) or address in (
+            check = self.symbols['prvCheckTasksWaitingTermination']
+            assert self.task_workload or idle <= address < idle+self.sizes['prvIdleTask' if core == 0 else 'prvPassiveIdleTask'] or (
+                check <= address < check+self.sizes['prvCheckTasksWaitingTermination']) or address in (
                 self.symbols['worker'],self.survey_hooks['identity_first_task_el0']), {
                     'core':core,'pc':hex(address),'selected':sorted(self.selected),
                     'entries':self.entries,'trace':list(self.recent[core])}
@@ -140,9 +147,16 @@ class FirstTask(barrier.AllCore):
                                self.survey_hooks['identity_first_task_el0'])
             if core not in self.entries:
                 assert address == self.symbols['prvIdleTask' if core == 0 else 'prvPassiveIdleTask']
-                assert r['sctlr_el1'] == 0x30d41805
+                assert r['sctlr_el1'] == EL1_SCTLR
                 self.entries[core] = {'pc': address, 'sp': u.reg_read(UC_ARM64_REG_SP),
                     'tcb': self.q(self.symbols['pxCurrentTCBs']+core*8), 'argument': self.reg(core, 'x0')}
+        if (self.fault == 'idle-resumes' and core == IDLE_RESUME_CORE and r['currentel'] == 0 and op == 'svc' and
+                args == ['#0x69'] and not self.idle_resumed):
+            # The scheduler selects this idle task again: its first yield
+            # returns at once, and the idle loop continues.
+            assert self.task_switch and not self.task_workload
+            self.idle_resumed = True
+            u.reg_write(UC_ARM64_REG_PC, address+4); return
         if self.fault == 'wrong-task-argument' and core == 6 and address == self.survey_hooks['identity_first_task_el0']:
             self.put(core, 'x0', 1)
         if op == 'svc':
@@ -167,8 +181,9 @@ class FirstTask(barrier.AllCore):
         if op == 'msr' and args[0] in ('icc_ctlr_el1', 'icc_bpr1_el1'):
             assert r['currentel'] == 4 and self.reg(core, args[1]) == 0
             r[args[0]] = 0; u.reg_write(UC_ARM64_REG_PC, address+4); return
-        if op == 'dc' and args[0] == 'civac':
-            assert len(self.entries) == 8, 'Cache cleanup before every task entered'
+        if op == 'dc' and args[0] == 'civac' and not self.production_table_clean(address):
+            # The overlay's owned-memory cleanup follows every task entry.
+            assert len(self.entries) == 8, ('Cache cleanup before every task entered', core, hex(address), sorted(self.entries))
         return super().instruction(u, address, size, core)
 
 
@@ -176,7 +191,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     for n in ('image', 'bundle', 'prefix', 'output'):
         p.add_argument('--'+n, type=Path, required=True)
-    p.add_argument('--case', choices=('success','wrong-task-argument','restore-el3', *REFUSALS), default='success')
+    p.add_argument('--case', choices=('success','wrong-task-argument','restore-el3','idle-resumes', *REFUSALS), default='success')
     p.add_argument('--task-switch', action='store_true')
     a = p.parse_args()
     machine = FirstTask(a.image, a.bundle)
@@ -215,7 +230,7 @@ def main():
             'value':observed,'core':core},'report_sha256':digest(report)},indent=2)+'\n')
         print('PASS returned refusal',a.case,hex(code))
         return
-    if a.case != 'success':
+    if a.case not in ('success', 'idle-resumes'):
         assert machine.retained and not machine.returned
         assert 6 in machine.target_parked and 6 not in machine.stopped
         if a.case == 'wrong-task-argument':
@@ -237,6 +252,8 @@ def main():
         'report':machine.read(0x42018100,128).hex()}
     assert machine.started == machine.stopped == list(range(1, 8))
     assert machine.called == machine.clean_complete == set(machine.entries) == set(range(8))
+    # A resumed idle task must still reach its worker without an interrupt.
+    assert a.case != 'idle-resumes' or machine.idle_resumed
     raw = machine.read(0x42018000, 0x5200)
     assert raw[0x3200:0x4200] == machine.read(barrier.SHARED, 4096)
     for c in range(8):
@@ -244,7 +261,7 @@ def main():
         record = struct.unpack_from('<8Q', raw, 0x3200+c*64)
         entry = machine.entries[c]
         assert record[:4] == (machine.epoch, 1, machine.survey_hooks['identity_first_task_el0']+4, entry['sp'])
-        assert record[4] & 15 == 0 and record[5:] == (entry['tcb'], entry['argument'], 0x30d41805)
+        assert record[4] & 15 == 0 and record[5:] == (entry['tcb'], entry['argument'], EL1_SCTLR)
         assert machine.secure_pmr[c] == 0
     for address, value in machine.original_mmio.items():
         if 0x03400000 <= address < 0x03600000 and address & 0xffff not in (0x180, 0x280, 0x380):
@@ -259,7 +276,8 @@ def main():
     if a.task_switch:
         assert machine.idle_entries == machine.idle_yields == machine.selected == set(range(8))
         result.update(idle_yield_cores=sorted(machine.idle_yields),
-                      worker_selection_cores=sorted(machine.selected),worker_bodies_executed=False)
+                      worker_selection_cores=sorted(machine.selected),worker_bodies_executed=False,
+                      case=a.case, idle_resumed_core=IDLE_RESUME_CORE if machine.idle_resumed else None)
     a.output.write_text(json.dumps(result, indent=2)+'\n')
     print('PASS eight '+('idle-to-worker switches' if a.task_switch else 'first-task entries')+
           ', full writable-range cleaning and matched return')

@@ -36,6 +36,10 @@
 #define DEADLINE_RECORD_MAGIC 0x413733444c4e5231
 /* 0.5 s at 24 MHz after the startup deadline. */
 #define DEADLINE_TICKS 12000000
+/* SCTLR_EL1 after the native cached entry (platform/a733-smp-cached/continue.S):
+ * RES1 0x30d00800, nTWE (18) and nTWI (16), then M, C and I from the EL1
+ * coherence helper. */
+#define NATIVE_EL1_SCTLR 0x30d51805
 #ifndef __ASSEMBLER__
 #include <stdint.h>
 struct secondary_local_state {

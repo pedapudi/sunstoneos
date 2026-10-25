@@ -27,14 +27,14 @@ class Cached(local.Local):
     def memory(self,u,access,address,size,value,core):
         if core and self.regs[core]['currentel']==4:
             assert access!=UC_MEM_WRITE,'EL1 must not dirty Normal memory'
-            assert 0x41000000<=address<0x41200000,'EL1 only reads immutable code/literals'
+            assert 0x41000000<=address<0x41200000 or self.sealed_el1_table_read(address,size),('EL1 only reads immutable code/literals and sealed tables',core,hex(address),hex(u.reg_read(UC_ARM64_REG_PC)))
         return super().memory(u,access,address,size,value,core)
 
     def instruction(self,u,address,size,core):
         if address not in self.decoded:
             self.decoded[address]=next(self.decoder.disasm(bytes(u.mem_read(address,4)),address))
         ins=self.decoded[address];op,args=ins.mnemonic,ins.op_str.split(', ');m=self.regs[core]
-        if core and op=='wfi' and address!=self.survey_hooks['identity_target_terminal']+4:
+        if core and op=='wfi' and m['currentel']>0 and address!=self.survey_hooks['identity_target_terminal']+4:
             self.target_parked.add(core);self.clock=self.deadline+1;u.emu_stop();return
         if core and address==self.survey_hooks['el1_observe_checkpoint']:
             assert m['currentel']==4 and core in self.el1_seen
@@ -67,8 +67,11 @@ class Cached(local.Local):
                         self.el1_seen.add(core);self.el1_enabled.add(core)
                     else:self.el1_enabled.discard(core)
                 elif name.startswith('icc_'):
-                    assert name in ('icc_sre_el3','icc_ctlr_el3','icc_igrpen0_el1','icc_igrpen1_el3','icc_sre_el2','icc_sre_el1')
+                    entry=self.symbols['a733_cached_enter_el1']
+                    assert name in ('icc_sre_el3','icc_ctlr_el3','icc_igrpen0_el1','icc_igrpen1_el3','icc_sre_el2','icc_sre_el1','icc_pmr_el1')
                     if name in ('icc_igrpen0_el1','icc_igrpen1_el3'):assert value==0
+                    # The native entry sets the Secure priority mask at EL3 before Nonsecure entry.
+                    if name=='icc_pmr_el1':assert value==255 and m['currentel']==12 and entry<=address<entry+self.sizes['a733_cached_enter_el1']
                 m[name]=value;u.reg_write(UC_ARM64_REG_PC,address+4);return
             if name=='ttbr0_el3' and self.fault=='restore-el3' and core==6 and value==self.original_regs[core][name]:
                 m[name]=value^4096;u.reg_write(UC_ARM64_REG_PC,address+4);return

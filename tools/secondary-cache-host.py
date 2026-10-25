@@ -16,7 +16,7 @@ MODEL_SOURCES=('checks/secondary-cache-probe.py',)+local.MODEL_SOURCES
 def decode(raw,nonce,smc_return,coherent=False,interrupts=False,pre_scheduler=False,first_task=False,task_workload=False):
     require(not task_workload or first_task, "Task workload requires task report.")
     require(not first_task or pre_scheduler, "First task requires all-core report.")
-    observed_sctlr=0x30d41805 if first_task else 0x30d01805
+    observed_sctlr=local.identity.builder.PROBE['NATIVE_EL1_SCTLR']
     result=local.decode(raw,nonce,cached=True,coherent=coherent,interrupts=interrupts,pre_scheduler=pre_scheduler)
     require(not any(raw[0x1c00:0x2000]) and (pre_scheduler or
             not any(raw[0x2000:0x2100]) and not any(raw[0x2800:0x2900])),

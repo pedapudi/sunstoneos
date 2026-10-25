@@ -60,7 +60,7 @@ def main():
     assert host.digest(model_report) == instruction['report_sha256']
     raw = model_report.read_bytes()
     assert host.decode(raw, raw[32:48], manifest)['first_task_entry_completed']
-    instruction_cases = ('wrong-rounds',) if a.task_workload else ('wrong-task-argument',) if a.task_switch else host.INSTRUCTION_CASES[1:]
+    instruction_cases = ('wrong-rounds',) if a.task_workload else ('wrong-task-argument', 'idle-resumes') if a.task_switch else host.INSTRUCTION_CASES[1:]
     host_cases = host.CASES+getattr(host, 'REFUSAL_CASES', ())
     evidence = {'success': a.model, **{case: a.model.parent/(case+'.json') for case in instruction_cases}}
     proof = {'schema': host.SOFTWARE_SCHEMA if a.task_switch else 'a733-all-core-first-task-software-v1', 'physical_access': False,

@@ -86,7 +86,8 @@ class AllCore(cached.Cached):
                     self.mmio[address] = value & 0xfff0ffff; return
             return model.Machine.memory(self, u, access, address, size, value, core)
         if self.regs[core]['currentel'] == 4:
-            assert not write and 0x41000000 <= address < 0x41200000, 'EL1 access outside code/owned data'
+            assert not write and (0x41000000 <= address < 0x41200000 or self.sealed_el1_table_read(address, size)), (
+                'EL1 access outside code/owned data', core, hex(address))
         return local.Local.memory(self, u, access, address, size, value, core)
 
     def instruction(self, u, address, size, core):
@@ -109,7 +110,7 @@ class AllCore(cached.Cached):
             if core == 0 and self.fault == 'counter-corruption':
                 u.mem_write(STATE+32, struct.pack('<I', 1)); self.changed(STATE+32, 4)
                 self.fault_injected = True
-        if op == 'dc' and args[0] == 'civac':
+        if op == 'dc' and args[0] == 'civac' and not self.production_table_clean(address):
             assert m['currentel'] == 4
             assert self.called == set(range(8)) and all(self.q(SHARED+c*64) == self.epoch for c in range(8)), 'Cleaning before all production calls return'
             line = self.reg(core, args[1]); index = len(self.cleaned[core])
@@ -127,7 +128,7 @@ class AllCore(cached.Cached):
                 self.smc_seen.add(0)
                 self.exception(core, 3, address+4, (0x17 << 26) | (1 << 25) | 0x733)
                 return
-        if not core and op == 'wfi':
+        if not core and op == 'wfi' and m['currentel'] > 0:
             self.retained = True; u.emu_stop(); return
         if not core and op == 'msr':
             name, src = args; value = self.reg(core, src)
@@ -154,7 +155,12 @@ class AllCore(cached.Cached):
                     self.active_priority(0, name, value); u.reg_write(UC_ARM64_REG_PC, address+4); return
                 if name.startswith('icc_'):
                     assert name in ('icc_sre_el3', 'icc_ctlr_el3', 'icc_igrpen0_el1', 'icc_igrpen1_el3', 'icc_sre_el2', 'icc_sre_el1', 'icc_pmr_el1')
-                    if name in ('icc_igrpen0_el1', 'icc_igrpen1_el3', 'icc_pmr_el1'): assert value == 0
+                    entry = self.symbols['a733_cached_enter_el1']
+                    if name in ('icc_igrpen0_el1', 'icc_igrpen1_el3'): assert value == 0
+                    # PMR: zero from the probe's own restoration; 255 from the native
+                    # entry, which sets the Secure mask at EL3 before Nonsecure entry.
+                    if name == 'icc_pmr_el1':
+                        assert value == (255 if entry <= address < entry+self.sizes['a733_cached_enter_el1'] else 0)
                 m[name] = value; u.reg_write(UC_ARM64_REG_PC, address+4); return
         return super().instruction(u, address, size, core)
 
