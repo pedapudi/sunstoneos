@@ -255,7 +255,37 @@
              "isb sy         \n"
              :
              : "r" ( ulLock )
-@@ -1651,21 +1729,17 @@
+@@ -1614,21 +1692,25 @@
+ 
+ /*-----------------------------------------------------------*/
+ 
+-    /* Read 64b value shared between cores. */
++    /* Read and write lock bookkeeping: a lock's recursion count, which only
++     * the lock's holder accesses, and a core's ownership bits, which only that
++     * core accesses. A core observes its own accesses in program order. Between
++     * holders, the DMB SY in prvSpinUnlock orders the releasing core's writes
++     * before its gate store, and the DMB SY after a successful trylock orders
++     * the next holder's accesses after its gate load, as the release store and
++     * acquiring compare-and-swap of a Linux arm64 spinlock do (Arm ARM
++     * DDI 0487, K11 barrier litmus tests). No DSB is needed. */
+     static inline uint64_t prvGet64( volatile uint64_t * x )
+     {
+-        __asm( "dsb sy" );
+         return *x;
+     }
+ 
+ /*-----------------------------------------------------------*/
+ 
+-    /* Write 64b value shared between cores. */
+     static inline void prvSet64( volatile uint64_t * x,
+                                  uint64_t value )
+     {
+         *x = value;
+-        __asm( "dsb sy" );
+     }
+ 
+ /*-----------------------------------------------------------*/
+@@ -1651,21 +1733,17 @@
               * If the core owns the lock wait increment the lock count by the core.
               * If core does not own the lock wait for the spinlock.
               */
@@ -282,7 +312,7 @@
                  {
                     /* Follow Arm's recommended way of sleeping
                      * sevl is used to prime the wait loop.
-@@ -1679,7 +1753,7 @@
+@@ -1679,7 +1757,7 @@
                          "ldr w2, [%x0]   \n"
                          "cbnz w2, 1b     \n"
                          :
@@ -291,7 +321,7 @@
                          : "memory", "w2"
                      );
                  }
-@@ -1689,27 +1763,27 @@
+@@ -1689,27 +1767,27 @@
              __asm__ __volatile__ ( "dmb sy" ::: "memory" );
  
              /* Assert the lock count is 0 when the spinlock is free and is acquired. */
@@ -330,7 +360,7 @@
                  /* Add barrier to ensure lock status is reflected before we proceed. */
                  __asm__ __volatile__ ( "dmb sy" ::: "memory" );
              }
-@@ -1720,6 +1794,15 @@
+@@ -1720,6 +1798,15 @@
  
      uint8_t ucPortGetCoreID( void )
      {
@@ -346,7 +376,7 @@
          /* Use SVC to obtain the core ID in a way that is safe when called
           * from EL0 tasks. ISRs and EL1 code should use
           * ucPortGetCoreIDFromIsr()/portGET_CORE_ID_FROM_ISR().
-@@ -1740,7 +1823,7 @@
+@@ -1740,7 +1827,7 @@
      uint8_t ucPortGetCoreIDFromIsr ( void ) /* PRIVILEGED_FUNCTION */
      {
          uint64_t ullMpidrEl1;
@@ -355,7 +385,7 @@
  
          return ( uint8_t ) ( ullMpidrEl1 & 0xff );
      }
-@@ -1763,22 +1846,10 @@
+@@ -1763,22 +1850,10 @@
          }
          #endif /* configASSERT_DEFINED */
  
