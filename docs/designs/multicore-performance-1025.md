@@ -77,10 +77,10 @@ figures except where noted.
 | QEMU: the same when the two cores have different types, of 64 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | QEMU: instructions per such wake, both cores (note 1) | 5,308 | 5,308 | 5,308 | 5,101 | 5,090 | 4,733 | 4,733 |
 | Model: SGI IRQ that switches context: instructions; `DSB`, `ISB` | 904; 29, 7 | 904; 29, 7 | 904; 29, 7 | 880; 6, 7 | 875; 5, 5 | 879; 5, 5 | 881; 5, 5 |
-| Model: tick IRQ that returns without a switch: instructions; `DSB`, `ISB` | 465; 21, 12 | 465; 21, 12 | 465; 21, 12 | 454; 10, 12 | 451; 9, 10 | 451; 9, 10 | 458; 9, 10 |
+| Model: tick IRQ that returns without a switch: instructions; `DSB`, `ISB` | 465; 21, 12 | 465; 21, 12 | 465; 21, 12 | 454; 10, 12 | 451; 9, 10 | 451; 9, 10 | 456; 9, 10 |
 | Model: `vTaskExitCritical` from an EL0 task: instructions; `SVC`, `DSB` | 260; 1, 18 | 260; 1, 18 | 260; 1, 18 | 246; 1, 4 | 246; 1, 4 | 246; 1, 4 | 246; 1, 4 |
 | Model: SGIs sent by ticks that woke tasks, over the run (note 2) | 138 | 138 | 138 | 141 | 149 | 157 | 157 |
-| Model: six due tick periods: tick IRQs; tick handler calls; instructions (note 3) | 6; 6; 5,654 | 6; 6; 5,654 | 6; 6; 5,654 | 6; 6; 3,837 | 6; 6; 2,706 | 6; 6; 2,706 | 2; 6; 1,830 |
+| Model: six due tick periods: tick IRQs; tick handler calls; instructions (note 3) | 6; 6; 5,654 | 6; 6; 5,654 | 6; 6; 5,654 | 6; 6; 3,837 | 6; 6; 2,706 | 6; 6; 2,706 | 2; 6; 1,848 |
 | Host: counters up to 21 ticks apart on 16 threads | Faults | Faults | No fault | No fault | No fault | No fault | No fault |
 | Host: one caller stopped after its counter sample | Faults | Faults | No fault | No fault | No fault | No fault | No fault |
 
@@ -100,7 +100,7 @@ Notes:
 The QEMU EL1 critical-section pair falls by 22 instructions, the 22 `DSB SY`
 that the lock bookkeeping change removes. The SGI to the sending core loses
 the 22 `DSB SY` of its context switch's two lock pairs and then the three
-barriers of the IRQ exit. The late-tick guard adds 7 instructions to an
+barriers of the IRQ exit. The late-tick guard adds 5 instructions to an
 on-time tick IRQ: it reads `CNTP_CTL_EL0` and tests `ISTATUS` before and after
 the tick handler call.
 
@@ -255,18 +255,18 @@ the past, and the timer fired N more times in a row. The tick IRQ
   condition no longer holds, as Linux's timer handler acts only on `ISTATUS`
   (`drivers/clocksource/arm_arch_timer.c` 671).
 - After the first tick handler call it reads `ISTATUS` again. When the
-  condition still holds, the IRQ was late. It then computes the due periods
-  from the counter with one division, as `hrtimer_forward` does
-  (`kernel/time/hrtimer.c` 1042–1074). It makes at most three tick handler
-  calls in all, as `hrtimer_interrupt` retries at most three times
-  (`hrtimer.c` 1921–1922). The level-sensitive timer interrupt is taken again
+  condition still holds, the IRQ was late and at least one more period is
+  due. It makes at most three tick handler calls in all, as
+  `hrtimer_interrupt` retries at most three times (`hrtimer.c` 1921–1922), so
+  one comparison of the counter with the next deadline plus a period decides
+  whether a third call is due, where `hrtimer_forward` divides
+  (`kernel/time/hrtimer.c` 1042–1074). The level-sensitive timer interrupt is taken again
   for any period still due.
 - Each call advances the compare value by one period, so the next deadline
   stays in phase. Linux programs its next event from the current count
   instead (`arm_arch_timer.c` 741–757); keeping the phase keeps the kernel's
   tick count equal to the elapsed periods.
-- `ISTATUS` guarantees at least one due period, which also covers a counter
-  read taken early. The first call relies on the IRQ mask of exception entry;
+- A counter read taken early can only lower the count of due periods. The first call relies on the IRQ mask of exception entry;
   the further calls mask IRQs again, because the tick handler's FromISR
   critical section clears `PSTATE.I`.
 

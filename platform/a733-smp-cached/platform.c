@@ -142,19 +142,20 @@ void vApplicationIRQHandler(uint64_t interrupt)
          * Linux's timer handler acts only on ISTATUS. Each tick handler call
          * advances the compare value by one period (platform_tick_ack), so
          * the next deadline stays in phase. When the condition still holds
-         * after the first call, the IRQ was late: like hrtimer_forward, it
-         * computes the periods already due from the counter and processes up
-         * to TICK_CALLS_PER_IRQ of them in all. ISTATUS guarantees at least
-         * one, which also covers a counter read taken early. The FromISR
-         * critical section of the first call cleared PSTATE.I, which every
-         * further call requires set. */
+         * after the first call, the IRQ was late, and at least one more
+         * period is due. With TICK_CALLS_PER_IRQ at 3, one comparison of the
+         * counter with the next deadline plus a period decides whether a
+         * second is due as well; no division is needed. A counter read taken
+         * early can only lower that count. The FromISR critical section of
+         * the first call cleared PSTATE.I, which every further call requires
+         * set. */
         if(tick_due()) {
             ++a733_smp_core_results[c].ticks;FreeRTOS_Tick_Handler();
             if(tick_due()) {
-                uint64_t now,due=1;
+                _Static_assert(TICK_CALLS_PER_IRQ==3u,"one comparison counts the due periods");
+                uint64_t now;
                 __asm__ volatile("mrs %0, cntpct_el0":"=r"(now)::"memory");
-                if(now>=next_tick)due=(now-next_tick)/tick_interval+1u;
-                if(due>TICK_CALLS_PER_IRQ-1u)due=TICK_CALLS_PER_IRQ-1u;
+                unsigned due=1u+(now>=next_tick && now-next_tick>=tick_interval);
                 while(due--) {
                     __asm__ volatile("msr daifset,#2":::"memory");
                     ++a733_smp_core_results[c].ticks;FreeRTOS_Tick_Handler();
