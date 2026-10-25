@@ -41,9 +41,9 @@
  * and the TWI observer. A CNTR read has no side effect. It then runs the
  * windows of struct bb_cost_next (trace.h): the counter overhead, plain
  * writes of XADDR's own value when the idle reads admit them, and the
- * service loop's work between polls. The last BB_POLL_WINDOW_SNAPSHOTS
+ * service loop's work between polls. Up to the last BB_POLL_WINDOW_SNAPSHOTS
  * snapshots carry the poll window, which stamps whole provider polls that
- * read the flag clear. A changed S_TWI0 value after the write window, or a
+ * read the flag clear and stops at 256 samples, normally after the first. A changed S_TWI0 value after the write window, or a
  * provider that was not idle in the loop window, is an uncontrolled
  * failure. */
 #include "power.h"
@@ -90,8 +90,8 @@ static void client(void *unused)
     bb_power_acquire(A733_RAIL_BIT(A733_RAIL_DCDC2) | A733_RAIL_BIT(A733_RAIL_DCDC4));
     atomic_store_explicit(&bb_power.wire_armed, 1, memory_order_release);
     for (unsigned i = 0; i < SNAPSHOTS; ++i) {
-        /* The last snapshots carry the poll window, after the first step
-         * and the wire-time spin. */
+        /* Up to the last four snapshots carry the poll window, after the
+         * first step and the wire-time spin; it stops at 256 samples. */
         if (i == SNAPSHOTS - BB_POLL_WINDOW_SNAPSHOTS)
             bb_power_arm_poll_window();
         snapshot(i);

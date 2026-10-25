@@ -22,9 +22,10 @@ except the base on the changed PMIC provider or the base's platform
 those of the fifth set, `board-bundles-20261024-5/`; that set's native USB
 runbook names wrong record directories and must not be used. The fourth
 set, `board-bundles-20261024-4/`, is superseded and must not run.
-The seventh set, `~/.cache/sunstoneos/evidence/board-bundles-20261024-7/`, is
+The eighth set, `~/.cache/sunstoneos/evidence/board-bundles-20261024-8/`, is
 prepared for the next lifetimes of both boards and is not run (section "The
-seventh set"). Bundle 10 stays refused until its runner declares completion
+eighth set"). It supersedes the seventh set, `board-bundles-20261024-7/`,
+which must not run. Bundle 10 stays refused until its runner declares completion
 counts and its owner names admission values.
 It extends [the bundle tool design](board-bundles.md) and follows
 [performance-architecture.md](../performance-architecture.md). Board state
@@ -373,9 +374,9 @@ not a pass for any gate, and the operator applies the gates: the runner
 does not check them. Bundle 8 is not in the set; its NSI priority writes of
 `bb8-run` persist until power removal.
 
-## The seventh set
+## The eighth set
 
-`board-bundles-20261024-7/` holds one run directory per board, each with
+`board-bundles-20261024-8/` holds one run directory per board, each with
 its order, gates and warm-return chain in `runbook.md`. Both boards start a
 new lifetime: whole-board power removal, then a cold DDR start whose record
 `s7-ddr` begins the chain. `manifest.json` lists every frozen file with its
@@ -392,7 +393,7 @@ SHA-256 and the host checks that ran.
   fifth set's base in `monitor.c` (the interrupt cleanup readbacks) and
   `platform.c`, so its pass is needed again. Bundle 6 adds the windows of
   [pmic-access.md](pmic-access.md) (section "Bundle 6 windows of the
-  seventh set") and applies the 1,268-permille bound. The bound assumes
+  eighth set") and applies the 1,268-permille bound. The bound assumes
   CPU-L at 494 MHz, which this set does not measure; the frozen clock-words
   Read bundle of `board-bundles-20261024-1/` reads the CPU-L words before
   the base when the coordinator wants that record in the lifetime.
@@ -408,7 +409,16 @@ Every returning runbook lists the outcome of each path. A pass or a listed
 controlled outcome is a warm return. Any other status, including the
 monitor's forced return after a hang (status 2) and a failed monitor cleanup
 (status 6), and a run that does not return, ends in the runner's recorded
-quarantine of the instance with the claim held until power removal.
+quarantine of the instance with the claim held until power removal. A
+runner refusal before launch makes no device access and quarantines
+nothing; the input is repaired and the step resumed. A host timeout of
+`bundle-run.py` kills the runner and writes no recovery file, so the
+operator treats it as a quarantine.
+
+The seventh set differs from the eighth in bundle 6, whose write window
+there re-applied the admission test after the writes instead of requiring
+the values read before them, and in the power-only GPU image, which the
+merged CORE-status cleanup changed.
 
 The A76 operating-point runs and the DCDC3 selector write are not in the
 set. They need ranks 7 and 8 to pass on the board and the per-board record

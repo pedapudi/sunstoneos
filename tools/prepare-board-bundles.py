@@ -66,6 +66,7 @@ from pathlib import Path
 import re
 import stat
 import subprocess
+import tempfile
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -204,8 +205,8 @@ GPU_PREREQUISITES = ('Admission (apps/gpu-power-id/README.md, "Physical admissio
                      'exclusive GPU-local authority over the GPU CCU words and CORE6 policy and PWCR at 0x07066000, '
                      'with TOP5 through the shared domain-5 row. No NPU image runs in this lifetime.')
 GPU_FAILURES = ['`FAIL GPU ON begin`, `GPU ON deadline` or `GPU ON poll`, after `GPU power phase=...` and `GPU CORE '
-                'entry seen=... policy=... status=... pwcr=...` lines that hold cached values only',
-                '`FAIL GPU CORE status` (power-only: the last CORE6 status read was not 8)',
+                'entry seen=... policy=... status=... pwcr=...` lines that hold cached values only; `GPU ON poll` '
+                'or `GPU ON deadline` also ends a CORE6 status poll that never read 8',
                 '`FAIL GPU OFF begin`, `GPU OFF deadline`, `GPU OFF poll` or `GPU OFF ownership proof`',
                 '`FAIL GPU provider park proof` or `GPU provider request retained`',
                 'a `FAIL` line of the provider or service (`provider fault`, `provider startup and supply '
@@ -340,13 +341,16 @@ ROWS = [
                   'readback (A733 User Manual V1.00 sections 18.11.10.1, 18.11.10.2 and 18.11.10.4: XADDR only '
                   'matches a 10-bit slave address, and the controller answers as a slave only with A_ACK set, '
                   'which the provider never writes); and the service loop\'s work between two polls '
-                  '(a733_pmic_work, the time read, a733_pmic_work). The last four client snapshots carry the poll '
-                  'window: the service polls a queued snapshot back to back without its spin and stamps each '
+                  '(a733_pmic_work, the time read, a733_pmic_work). Up to four of the last four client snapshots carry '
+                  'the poll window, which stops at 256 samples, normally after the first of them: the service polls '
+                  'a queued snapshot back to back without its spin and stamps each '
                   'a733_pmic_poll(); a poll that read only CNTR in a flag phase, wrote nothing and returned PENDING '
                   'is a whole poll with the flag clear, through the provider object\'s try-lock, its time read and '
                   'its flag read. 256 such samples, those with a scheduler tick left out and counted, are grouped '
                   'in eight sub-windows of 32, beside 256 samples of the stamp pair alone. Those snapshots leave '
-                  'the step records. Pass: both supplies verified, every snapshot 0xff9e, 34 snapshots counted, and the '
+                  'the step records: of the 34 snapshots, the wire-time spin step is excluded and the poll window '
+                  'normally takes one, so STEPS normally reads recorded=32 and excluded=1, one fewer recorded for '
+                  'each further snapshot the window takes. Pass: both supplies verified, every snapshot 0xff9e, 34 snapshots counted, and the '
                   'provisional empirical bound of docs/designs/pmic-access.md: at CPU-L 494 MHz, the median step at most '
                   '1268 permille of its measured wire time and the first step at most that limit plus 40 us. A missed '
                   'bound, or a measured byte that is missing or above 110%, is the controlled outcome; a supply, '
@@ -722,12 +726,13 @@ def prepare_returning(row, build, output):
 
 def validate_returning(row, output):
     """The uploaded bytes are image.elf's loadable segments, and the equivalence and outcome files hold."""
-    flat = output.parent / (output.name + '-objcopy.bin')
-    result = subprocess.run([OBJCOPY, '-O', 'binary', str(output / 'image.elf'), str(flat)], capture_output=True,
-                            text=True)
-    require(result.returncode == 0, f'objcopy failed: {result.stderr.strip()}')
-    same = flat.read_bytes() == (output / 'probe.bin').read_bytes()
-    flat.unlink()
+    # A temporary directory, so that a frozen, read-only set can be validated again.
+    with tempfile.TemporaryDirectory() as scratch:
+        flat = Path(scratch) / 'objcopy.bin'
+        result = subprocess.run([OBJCOPY, '-O', 'binary', str(output / 'image.elf'), str(flat)], capture_output=True,
+                                text=True)
+        require(result.returncode == 0, f'objcopy failed: {result.stderr.strip()}')
+        same = flat.read_bytes() == (output / 'probe.bin').read_bytes()
     require(same, 'probe.bin is not the loadable segments of image.elf.')
     equivalence = json.loads((output / 'equivalence.json').read_text())
     require(equivalence['image_sha256'] == sha256(output / 'image.elf'), 'image.elf is not the built image.')
@@ -954,7 +959,8 @@ def outcome_paths(row, bundle):
                      'automatic USB access.`; the session is a `--warm-return` link |')
     if row['controlled']:
         for o in json.loads((bundle / 'controlled.json').read_text())['outcomes']:
-            lines.append(f'| Controlled `{o["name"]}` | Status {o["status"]}, matched as listed below | Warm return: '
+            lines.append(f'| Controlled `{o["name"]}` | Status {o["status"]}, matched as the section "Controlled outcomes" '
+                         'above lists it | Warm return: '
                          f'`CONTROLLED: {o["name"]}, ...`; a `--warm-return` link, not a pass of any gate |')
     for text in row.get('failures', []):
         lines.append(f'| Image failure | Status 1 with {text} | Quarantine |')
@@ -965,7 +971,14 @@ def outcome_paths(row, bundle):
               '| No return | No new FEL instance within the runner\'s return window: a stalled bus access or a '
               'monitor that never ran | Quarantine of the old instance; only whole-board power removal recovers it |',
               '| Transport failure | A FEL transfer, readback or identity check fails, before or after launch | '
-              'Quarantine |', '',
+              'Quarantine |',
+              '| Runner refusal before launch | The runner refuses its inputs (the DDR record, the survey, a '
+              'warm-return link, a file hash) before any device access | No device access and no recovery file; '
+              '`bundle-run.py` prints `"result": "failed", "claim": "held"`. Repair the input and resume this '
+              'step; the instance is not quarantined |',
+              '| Host timeout | `bundle-run.py` reaches the queue timeout and kills the runner | No recovery file, '
+              'and the port lock is released with the killed runner; the claim stays held. The board state is '
+              'unknown: treat it as a quarantine and run nothing more on this board until power removal |', '',
               'Quarantine: the runner records the failure in `session.json` and writes '
               '`~/.cache/sunstoneos/recovery-required-<port>-<identity>.json` for the instance, which refuses '
               'further FEL requests to it. It keeps the port lock and the queue claim, and `bundle-run.py` prints '
@@ -1258,8 +1271,7 @@ def run(inputs, rows=ROWS, evidence=EVIDENCE, repository=ROOT, nm=NM, lifetime=N
     require(Path(BWRAP).is_file(), f'{BWRAP} is missing; preparation needs the sandbox.')
     if run_dir is not None:
         run_dir = Path(run_dir).resolve()
-        require(EVIDENCE in run_dir.parents or Path(evidence).resolve() in run_dir.parents,
-                f'{run_dir} is not under {evidence}.')
+        require(Path(evidence).resolve() in run_dir.parents, f'{run_dir} is not under the evidence directory {evidence}.')
         run_dir.parent.mkdir(parents=True, exist_ok=True)
         run_dir.mkdir()
     else:

@@ -28,6 +28,7 @@ from pathlib import Path
 import shutil
 import struct
 import subprocess
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 OBJCOPY = '/usr/lib/llvm-21/bin/llvm-objcopy'
@@ -37,7 +38,7 @@ SCHEMA = 'board-gpu-returning-bundle-v1'
 # The image each build reuses objects of, by its build record's identity.
 PROVIDER_READY = '3adfa4ad6ba386ce8d39f76646f540107c2a5d02ce42db6c1c35c90de68a75ed'
 FAILED_POWER_ID = 'fd3d5839f700b5e0f569b0ce722e186c33beba65512815b136d9c969a7341afe'
-CASES = {'provider-ready': 11, 'power-only': 9, 'identity': 13}
+CASES = {'provider-ready': 11, 'power-only': 8, 'identity': 13}
 # struct step of drivers/gpu/a733_gpu_power.c: kind, bank, offset, mask, value.
 STEP = struct.Struct('<5I')
 KIND_DOMAIN = 3        # enum kind: CHECK, UPDATE, DELAY, DOMAIN, CORE_POLICY, ...
@@ -124,12 +125,13 @@ def validate(row, output):
     require(record['expect'] == row['expect'], 'The build\'s success text is not the row\'s.')
     require(sha256(output / 'image.elf') == record['image_sha256'] and
             sha256(output / 'probe.bin') == record['binary_sha256'], 'The bundle files are not the built image.')
-    flat = output.parent / (output.name + '-objcopy.bin')
-    result = subprocess.run([OBJCOPY, '-O', 'binary', str(output / 'image.elf'), str(flat)], capture_output=True,
-                            text=True)
-    require(result.returncode == 0, f'objcopy failed: {result.stderr.strip()}')
-    same = flat.read_bytes() == (output / 'probe.bin').read_bytes()
-    flat.unlink()
+    # A temporary directory, so that a frozen, read-only set can be validated again.
+    with tempfile.TemporaryDirectory() as scratch:
+        flat = Path(scratch) / 'objcopy.bin'
+        result = subprocess.run([OBJCOPY, '-O', 'binary', str(output / 'image.elf'), str(flat)], capture_output=True,
+                                text=True)
+        require(result.returncode == 0, f'objcopy failed: {result.stderr.strip()}')
+        same = flat.read_bytes() == (output / 'probe.bin').read_bytes()
     require(same, 'probe.bin is not the loadable segments of image.elf.')
     checked = json.loads((output / 'host-check.json').read_text())
     require(checked.get('image_sha256') == record['image_sha256'] and 'failed_case' not in checked
@@ -148,8 +150,7 @@ def validate(row, output):
         names = subprocess.run(['/usr/lib/llvm-21/bin/llvm-nm', '-P', str(output / 'image.elf')], capture_output=True,
                                text=True, check=True).stdout.split()
         identity = 'id_read' in names or 'id_reads' in names
-        require(record['gpu_register_window_access'] == (variant == 'identity') and identity == (variant == 'identity'),
-                'The image\'s GPU register access does not match its variant.')
+        require(identity == (variant == 'identity'), 'The image\'s identity reader does not match its variant.')
         require(all(not case['gpu_writes'] for case in checked['cases']), 'A host-check case wrote the GPU window.')
         if variant == 'power-only':
             require(all(not case['gpu_reads'] for case in checked['cases']), 'A host-check case read the GPU window.')

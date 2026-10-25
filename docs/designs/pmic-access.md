@@ -434,8 +434,8 @@ The model is not used to claim an independently measured margin. Reuse
 this provisional limit only under the stated bundle conditions; changed
 clock rates, instrumentation or bus timing require a new assessment.
 
-**Bundle 6 windows of the seventh set: implemented, not run.** The
-bundle 6 image of `board-bundles-20261024-7/` adds three windows at the park
+**Bundle 6 windows of the eighth set: implemented, not run.** The
+bundle 6 image of `board-bundles-20261024-8/` adds three windows at the park
 and one during the snapshots. Each uses the same 256 iterations in eight
 sub-windows of 32 as the other windows, with IRQs masked unless stated.
 
@@ -451,18 +451,20 @@ sub-windows of 32 as the other windows, with IRQs masked unless stated.
   respond as a slave unless `CNTR.A_ACK` is set, which the provider never
   writes. A START or STOP needs `M_STA` or `M_STP`, `INT_FLAG` is a CNTR
   bit, and the pins follow the line-control register `LCR` (section
-  18.11.10.9). An XADDR write therefore starts no bus phase, acknowledges no
+  18.11.10.9, printed pages 1505 and 1506; the SDA control enable, bit 0,
+  is on page 1506). An XADDR write therefore starts no bus phase, acknowledges no
   flag and drives no line. The window runs only when ADDR bits 7:3 are not
   `11110b`, CNTR reads `0x40`, STAT reads `0xf8` and LCR reads both lines
   high with neither forced (`bb_xaddr_admitted()` in
-  `apps/board-bundles-power/trace.c`). Afterwards XADDR, ADDR and the three
-  idle reads must be unchanged, or the image fails without a controlled
-  outcome. A refused precondition skips the window and is recorded.
+  `apps/board-bundles-power/trace.c`). Afterwards XADDR, ADDR, CNTR, STAT
+  and LCR must each read the value read before the window, or the image
+  fails without a controlled outcome. A refused precondition skips the window and is recorded.
 - **Service loop between polls:** the work query, the time read and the
   work query with the spin time, as `pmic()` in
   `drivers/power/a733_power_domains.c` runs them.
-- **Whole provider poll with the flag clear:** the last four client
-  snapshots carry this window. The service polls a queued snapshot back to
+- **Whole provider poll with the flag clear:** up to four of the last
+  four client snapshots carry this window; it stops at 256 samples,
+  normally after the first of them. The service polls a queued snapshot back to
   back, without its spin, and stamps each `a733_pmic_poll()`. A poll that
   read only CNTR in a flag phase, wrote nothing, completed no phase and
   returned PENDING is a whole poll with the flag clear: entry, the provider
@@ -470,7 +472,11 @@ sub-windows of 32 as the other windows, with IRQs masked unless stated.
   in the service, and a sample with a scheduler tick inside is left out and
   counted. 256 samples are grouped into eight sub-windows of 32; 256 samples
   of the stamp pair alone give the per-sample overhead. Those snapshots
-  leave the step records.
+  leave the step records. Of the 34 snapshots (two supply verifications and
+  32 client snapshots), each normally one service step, the wire-time spin
+  step is excluded and the poll window takes one, so the summary normally
+  reads `STEPS recorded=32` and `excluded=1`; each further snapshot the
+  window takes lowers the recorded count by one.
 
 The windows give no authority for a PMIC rail write, and production barrier
 placement remains a separate reviewed change.
@@ -513,7 +519,7 @@ member and the current power-domain check signature. The bundle builder
 admits the changed provider objects through its explicit overlay.
 
 The trace evaluator, distribution labels, host fixtures, controlled-outcome
-helper and bundle preparation row use 1,268 permille. The seventh set's
+helper and bundle preparation row use 1,268 permille. The eighth set's
 bundle 6 image applies it and has not run. The fifth and sixth sets'
 preserved images and runbooks retain their original 1,550-permille
 acceptance limit; their existing passes do not establish execution of the

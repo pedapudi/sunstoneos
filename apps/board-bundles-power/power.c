@@ -182,8 +182,9 @@ static void measure(struct bb_power *p)
         x->cntr_after = a733_mmio_read32_dsb_sy_both(BB_TWI_CNTR);
         x->stat_after = a733_mmio_read32_dsb_sy_both(BB_TWI_STAT);
         x->lcr_after = a733_mmio_read32_dsb_sy_both(BB_TWI_LCR);
+        /* Every register read before the window must read the same after it. */
         x->write_changed = x->xaddr_after != saved || a733_mmio_read32_dsb_sy_both(BB_TWI_ADDR) != x->addr ||
-            !bb_xaddr_admitted(x->addr, x->cntr_after, x->stat_after, x->lcr_after);
+            x->cntr_after != x->cntr || x->stat_after != x->stat || x->lcr_after != x->lcr;
     }
     /* The service loop's work between two polls (drivers/power/a733_power_domains.c,
      * pmic()): the work query, the time read and the work query with the
