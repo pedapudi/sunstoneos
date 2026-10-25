@@ -301,5 +301,24 @@ under `sources/pins/`, `sources/board-kernel/`, `sources/mmc-sdc3/`,
 
 The native SD-read emulation checks fail on the current image before reaching
 this change (a repeated structure name with two layouts in the DWARF); the
+same check fails identically on the base image, and the
 [handoff](../handoff.md) already lists these checks as failing on current
 images.
+
+The integration gate `sd-uhs-1025-5213c6ef` passed on the clean tree at
+`5213c6ef`: the storage-maintenance, board, mimus-native, GPU render, HDMI,
+camera and storage-probe images, the supervised OS image and the check index.
+Evidence is under `~/.cache/sunstoneos/build/gate-sd-uhs-1025-5213c6ef/`.
+
+Images built from clean archives of `3c17aeca` and `5213c6ef` at one shared
+path differ as follows:
+
+| Image | Change |
+| --- | --- |
+| Read-only SD service (`sunstone-a733-storage-read`) | `.text` +7,248 B, `.rodata` +296 B, `.bss` +192 B: the UHS-I core and platform functions, the filters and the record |
+| Storage maintenance | `.text` +6,144 B, `.rodata` +296 B, `.bss` +128 B: the same core and platform code |
+| Stage-2 slot loader (`a733-stage2`) | `.text` +5,392 B, `.bss` +128 B: the core's UHS-I code, unreachable at its profile 0; code now 29,576 of the 32,768 B the link script allows |
+| Board, mimus-native, GPU render, HDMI, camera, supervised and resident OS | Only the 32-byte build identity in `.rodata`; `.text` identical, because their links discard the MMC code |
+
+Evidence: `~/.cache/sunstoneos/evidence/sd-uhs-20261025/`, with the image
+comparison in `image-comparison/` and the host checks beside it.
