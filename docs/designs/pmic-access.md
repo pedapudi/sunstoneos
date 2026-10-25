@@ -19,9 +19,11 @@ snapshot step at 917 µs
 at 400 kHz, 630 µs of wire time, so the step is 146% of wire time (149.4% in
 the first step). The raw log is
 `~/.cache/sunstoneos/evidence/board-session-20261023/port-3-3/bb6-run/kernel.log`.
-The model reproduces the median when a register access costs 1,300 ns. That fit does not identify the cost of individual operations. The changed
-provider's run measured access windows, but those windows still omit parts
-of the wrapper and service loop (section "Board result").
+The model reproduces the median when a register access costs 1,300 ns. That
+fit does not identify the cost of individual operations. The changed
+provider's run timed component windows; the model at those costs falls short
+of that run's median step, and the gap is unexplained (section "Board
+result").
 
 ## Change
 
@@ -171,24 +173,35 @@ on the board. The service checks its 1 ms spin budget between polls, so a
 final poll can finish slightly later than 1 ms.
 
 **110% remains open.** A bare S_TWI0 read costs about 379 ns, but a write
-without a trailing barrier has not been measured. Read and write costs
-must remain separate: the model gives 688 µs with reads at 379 ns and
-writes assumed to cost 1 ns, and 685 µs with those costs exchanged.
+without a trailing barrier has not been measured; every timed write had
+`DSB SY` on both sides. Read and write costs must remain separate: the
+model gives 688 µs with reads at 379 ns and writes assumed to cost 1 ns,
+and 685 µs with those costs exchanged. With reads at 379 ns and no software
+cost, writes of at most 150 ns give 664 to 692 µs, within 110% of the
+630 µs wire (693 µs).
 The 1 ns values approximate a free operation; they are assumptions, not
 board measurements. The model uses zero write cost to mean "use the read
 cost", so zero would silently restore the rejected equal-cost assumption.
 At 379 ns for both accesses, it gives 694 µs with 22 µs bytes and 712 µs
 with 23 µs bytes. Neither establishes a hardware floor or proves that
-lighter barriers cannot reach 110%.
+lighter barriers cannot reach 110%. Two routes remain open: the lighter
+barrier placement under "Left out" (plain `DATA` write, one `DSB SY` after
+the phase-start `CNTR` write), and mapping S_TWI0 Device-nGnRE instead of
+Device-nGnRnE, which lets the interconnect acknowledge a write before it
+reaches the controller. Each needs the board windows of section "Board result" and
+the qualification of [shared-helpers.md](../shared-helpers.md).
 
 **Provisional empirical bound.** At 400 kHz and CPU-L at 494 MHz, bundle 6
 uses a median limit of 1,268 permille of each step's own measured wire
-time. The first-step limit adds 40 µs to that wire-relative limit. At the
-nominal 630 µs snapshot wire time these are 798.840 µs and 838.840 µs,
-rounded to 799 µs and 839 µs in summaries. They are chosen from the
-observed median plus approximately 20 µs, with another 40 µs for the
-first step. This is an empirical acceptance limit from one lifetime;
-it is not an independently derived worst-case bound.
+time. The first-step limit adds 40 µs to that wire-relative limit. Both
+are the board's figures plus a margin: the observed median, 779 µs, plus
+about 20 µs gives 799 µs, and the first-step limit, 839 µs, lies 30 µs
+above the observed first step of 809 µs. Those microsecond values hold at
+the nominal 22.5 µs byte, where a snapshot's wire time is 630 µs (798.840 µs
+and 838.840 µs exactly); at another measured byte the permille limit
+applies to that step's wire time. This is an empirical acceptance limit
+from one lifetime; no model or cost measurement derives it, and it is not
+a worst-case bound.
 
 The conditions include one service core, the trace observer and write
 stamps enabled, and interrupts unmasked during ordinary steps. Production
@@ -344,7 +357,7 @@ Each recorded step completed one snapshot: 12 conditions, 24 bytes and
 | Steps 2 to 33 | 777 to 788 µs |
 | First step | 809 µs, 128.4% |
 | Re-spins | 0 |
-| Steps containing an interrupt | 24 of 33 |
+| Steps containing an interrupt | 24 of 33; their median step is about 1 µs longer than that of the other 9 |
 | Byte | Last read with the flag clear 22.4 µs after the write returned, first with it set 23.0 µs; the byte is the nominal 22.5 µs |
 | Snapshots | All `0xff9e`; no fault |
 | Image's own verdict | Pass against the provisional 155% |
@@ -399,13 +412,17 @@ on the changed provider and 941 µs on the base provider, above their
 respective 779 µs and 917 µs board medians. The remainder method therefore
 fails for both providers.
 
-At 380 ns per poll the earlier model gives 779 µs. The added 299 ns is
-fitted to the observed median; it does not measure untimed software or
-identify the cause of the gap. The earlier host assertion was equality:
-779 + 20 = 799 µs, with no extra model headroom. At 250 ns per poll the
-step is 757 µs. At 380 ns a selector write takes one 1,001 µs step; at
-386 ns it splits into two steps with one tick wait. These sensitivity
-rows remain in the host check as historical model inputs.
+At 380 ns per poll the earlier model gives 779 µs. The added 299 ns is a
+fit to the observed median and measures nothing. The 23 µs gap between
+the model at 81 ns per poll (756 µs) and the board's median is
+unexplained. The model's step does not rise steadily with the per-poll
+cost: it is 757 µs at 250 and 260 ns, 762 µs at 300 ns and 759 µs at
+310 ns. At 380 ns a selector write takes one 1,001 µs step; at 386 ns
+(384 ns with 22 µs bytes) it splits into two steps with one tick wait,
+which the selector-write bound of at most two steps with one tick wait
+still admits. The host check prints the 380 ns row without asserting its
+step time, so the model is not tied to the board's median; the other
+sensitivity rows remain as historical model inputs.
 
 **Bound selection.** The observed median is 18,703 counter ticks,
 779.292 µs, or 123.7% of wire time. The preserved image printed 1,236
@@ -417,8 +434,18 @@ The model is not used to claim an independently measured margin. Reuse
 this provisional limit only under the stated bundle conditions; changed
 clock rates, instrumentation or bus timing require a new assessment.
 
-**Optional board window, not yet implemented or run.** To resolve the
-write-cost gap, first select an S_TWI0 register whose pinned manual
+**Next bundle 6 windows, not yet implemented or run.**
+
+- **A whole provider poll with the flag clear**: `a733_pmic_poll()` on a
+  transfer whose flag phase reads clear, so it returns PENDING after its
+  entry, try-lock, time read and flag read, timed in the same sub-windows
+  as the other windows; and the service loop between polls, with the
+  provider object's try-lock and `a733_pmic_work()`. These time the per-poll
+  work that no current window covers and test whether it accounts for the
+  23 µs gap.
+- **Plain writes**, below.
+
+To resolve the write-cost gap, first select an S_TWI0 register whose pinned manual
 semantics establish that same-value writes while idle cannot start a bus
 phase, acknowledge a flag or alter an output. Record that source and the
 register address in the coordinator's proposal before enabling the window.
@@ -435,8 +462,9 @@ write. Production barrier placement remains a separate reviewed change.
 
 ## Left out
 
-- **Lighter barriers.** The measured read pair adds about 41 ns; the effect
-  on writes and the achievable step time remain open. They need the board qualification of
+- **Lighter barriers and Device-nGnRE.** The measured read pair adds about
+  41 ns; the effect on writes and the achievable step time remain open, and
+  so does a Device-nGnRE mapping of S_TWI0. They need the board qualification of
   [shared-helpers.md](../shared-helpers.md). The intended placement, per
   section 1.2 of the performance architecture: the flag and
   status reads of a phase plain, the `DATA` write then the `CNTR` write

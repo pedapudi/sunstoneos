@@ -423,12 +423,16 @@ of [pmic-access.md](pmic-access.md) gives the windows, the model at those
 costs and explains why the model does not independently derive the bound.
 Interrupts landed in 24 of the 33 recorded steps.
 
-The 110% target remains open. A plain read costs about 379 ns, but plain
-write cost has not been measured. Assuming 379 ns for every access gives
-694–712 µs depending on whether model bytes take 22 or 23 µs. Separate
-read/write assumptions give different results; these rows establish no
-hardware floor. The optional write-throughput window is specified in
-[pmic-access.md](pmic-access.md) pending safe-register review.
+The 110% target remains open. A plain read costs about 379 ns, but every
+timed write had `DSB SY` on both sides, so plain write cost has not been
+measured. Assuming 379 ns for every access gives 694–712 µs depending on
+whether model bytes take 22 or 23 µs; with reads at 379 ns and writes of at
+most 150 ns the model gives 664–692 µs, within 110% (693 µs). These rows
+establish no hardware floor. A lighter barrier placement and a Device-nGnRE
+mapping of S_TWI0 both remain open. The next bundle 6 windows, a plain
+write window and a whole provider poll with the flag clear, are specified
+in [pmic-access.md](pmic-access.md); the write window is pending
+safe-register review.
 
 **Provisional empirical bound.** At 400 kHz a snapshot completes in one
 step. Its median limit is 1,268 permille of its measured wire time; the
@@ -436,7 +440,9 @@ first-step limit adds 40 µs. At the nominal 22.5 µs byte, these limits are
 798.840 µs and 838.840 µs, approximately 799 µs and 839 µs. They come from
 the observed median plus approximately 20 µs and hold for bundle 6 at
 CPU-L 494 MHz on one service core with its trace observer and write stamps.
-The fitted 299 ns per-poll remainder does not measure software overhead.
+The 299 ns per-poll remainder is a fit to the median and measures nothing;
+the 23 µs gap between the model at the timed costs and the board's median
+is unexplained.
 
 At a step near 1 ms, the service can split a snapshot across a tick wait.
 The DCDC3 selector-write bound remains at most two steps with one tick
