@@ -405,6 +405,20 @@ affects only images that run the power service: GPU, accelerator, GPU
 display, HDMI, the DisplayPort and G2D board image, and the integrated OS
 image built from it. None of them is board-qualified.
 
+**Qualification of the barrier placement.** Bundle 6 built from this tree
+links the adapter with the placement of item 6 under "Change". Its windows
+then time the new placement directly: the adapter-read window reads `CNTR`
+plainly, and the write bracket inside the transfers holds the plain `DATA`
+write and the `CNTR` write with its one `DSB SY`. The run qualifies the
+placement for snapshots when it meets bundle 6's pass conditions above, with
+the same 1,268-permille median limit and first-step allowance, and its
+snapshots, `XADDR` window and bus-idle reads match the second run's. The
+predicted median is about 776 µs (section "Board result"). The native USB
+image of rank 9 then needs a rerun on this adapter, and a DCDC3 selector
+write, under its own gate, covers the write of the selector byte.
+`checks/board-bundles-apps.py` builds and checks that bundle 6 image from
+this tree; it has not been frozen into a set.
+
 ## Board result
 
 Three runs used port 3-3 on 2026-10-24 and the read-only bundle 6 built from
