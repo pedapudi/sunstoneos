@@ -84,14 +84,20 @@ survey branches to `identity_park` (`secondary-identity-probe.S:7`–`8`),
 an EL3 `WFI` loop, so the same fault produces the silent non-return of the
 first port 3-3 run. It is intermittent: it depends on whether the
 redistributor is still propagating the restoring writes at the first read.
-The secondaries' cleanup rewrites the same registers but then requests
-redistributor sleep and waits for ChildrenAsleep before its comparison
-(`secondary-local-probe.c:89`–`92`), which leaves time for RWP to clear.
+The secondaries' cleanup has the same race in a weaker form: it rewrites
+the same registers, requests redistributor sleep and waits only for
+ChildrenAsleep before a comparison that includes GICR_CTLR
+(`secondary-local-probe.c:87`–`93` at `242fed72`). The sleep handshake
+usually leaves time for RWP to clear, but nothing requires it.
 
 The instruction model reproduces the board record. With the overlay of
 `d1e39b77` and GICR_CTLR reading RWP set once after the priority write,
 CPU0 returns with reason 3, stage 1, cleanup error 3 and after-GICR_CTLR 8
 (`workload-bisect-20261025/rwp-fix/reproduce/restore-rwp-unfixed.json`).
+The same injection on core 3 against the overlay of `242fed72` makes its
+cleanup fail with error 6; core 3 parks, CPU0's survey times out waiting
+for it and CPU0 returns with reason 3
+(`workload-bisect-20261025/rwp2/reproduce/restore-rwp-secondary-unfixed.json`).
 
 ## The correction follows the reference GIC initialization
 
@@ -99,19 +105,33 @@ Linux's `gic_cpu_init` writes the SGI/PPI groups and priorities and then
 calls `gic_redist_wait_for_rwp` before relying on them
 (`irq-gic-v3.c:1342`–`1346`); TF-A waits for RWP after its enable-clear
 writes (`gicv3_helpers.c:310`–`311`); neither compares GICR_CTLR for
-equality. `restore_local` now waits for RWP to clear, within the existing
-deadline, after its restoring writes and before the snapshot, and reports a
-timeout as cleanup error 4. The comparison itself is unchanged.
+equality. Both restorations now wait for RWP to clear, within the existing
+deadline, after their restoring writes:
 
-The change is in `boot/a733/primary-local-cache-probe.c`, so it changes the
-overlay of every profile that restores CPU0's GIC that way: the
-pre-scheduler, first-task, task-switch and workload profiles and both
-deadline profiles. The identity survey overlays and every native payload
-are unchanged. To fit the deadline unit into the reservation, its record no
-longer captures FAR_EL1, ICC_PMR_EL1 and ICC_RPR_EL1 (offsets 112, 176 and
-184 read 0), its EL1 helper no longer clears CNTP_CTL_EL0 (the warm reset
-does), and the SMC hook compares the syndrome once; the extension uses all
-12,288 bytes.
+- CPU0's `restore_local` before its snapshot; a timeout is cleanup error 4
+  in CPU0's record.
+- Each secondary's `cleanup` straight after its four restoring stores and
+  before the sleep request; a timeout is cleanup error 7 in that core's
+  record.
+
+The comparisons are unchanged. The secondaries' separate readback of the
+four restored words (former cleanup error 4) is removed: the final
+snapshot comparison (error 6) covers the same words, and the readback's
+256 bytes pay for both waits. `wait_bits` and `wait_rwp` are no longer
+inlined, for the same reason.
+
+The changes are in `boot/a733/primary-local-cache-probe.c` and
+`boot/a733/secondary-local-probe.c`, so they change the overlay of every
+profile that runs either restoration: the secondary local, cache,
+coherence and interrupt profiles, the pre-scheduler, first-task,
+task-switch and workload profiles and both deadline profiles. The identity
+survey overlay is unchanged. Native payload bytes are unchanged except the
+patched branch words, whose targets move with the overlay code. The
+deadline unit's record still omits FAR_EL1, ICC_PMR_EL1 and ICC_RPR_EL1
+(offsets 112, 176 and 184 read 0) and its SMC hook compares the syndrome
+once, changes made while the overlay was full; its EL1 helper clears
+CNTP_CTL_EL0 again, because CNTP_CTL_EL0.ENABLE is UNKNOWN after the warm
+reset. The extension now uses 12,064 of its 12,288 bytes.
 
 ## Every failure parks CPU0, so a non-return carries no information
 
@@ -343,13 +363,16 @@ launch.
 Besides its new files, the change edits files that other returning
 profiles share: `boot/a733/native-el1-cache-probe.S`,
 `boot/a733/secondary-identity-probe.S`,
-`boot/a733/primary-local-cache-probe.c` (the RWP correction),
+`boot/a733/primary-local-cache-probe.c` and
+`boot/a733/secondary-local-probe.c` (the RWP corrections),
 `tools/prepare-secondary-identity-probe.py`,
 `tools/run-native-startup-probe.py` and the host modules
 `tools/secondary-identity-host.py`, `tools/all-core-first-task-host.py` and
-`tools/all-core-task-workload-host.py`. The RWP correction changes the
-overlays of the pre-scheduler, first-task, task-switch and workload
-profiles; the other edits leave default builds byte-identical. The source
+`tools/all-core-task-workload-host.py`, and the model check
+`checks/secondary-local-probe.py` (its readback case now expects cleanup
+error 6). The RWP corrections change the overlays of every profile from
+the secondary local profile onwards; the other edits leave default builds
+byte-identical. The source
 and host-evidence digests change as well, so frozen
 returning bundles fail their source checks against the merged tree. Each
 frozen bundle still runs from its own source copy; a refreeze of the rank 7
@@ -371,8 +394,8 @@ module and the model. Both should move to one definition.
   workload overlays change in `restore_local` only. The central images
   (`a733-smp-supervised.elf`, `kernel-check.elf`) are byte-identical to a
   `bringup` build.
-- **Overlay space.** The extension uses all 12,288 of its bytes after the
-  correction (12,272 before it).
+- **Overlay space.** The extension uses 12,064 of its 12,288 bytes (12,272
+  before the RWP corrections, 12,288 with only CPU0's).
 - **Completed-path cost (counted).** CPU0 executes 22 more instructions once
   at EL1 entry and 17 more at its completion SMC; each secondary executes 3
   more at entry and 4 more per SMC. The workload loops are unchanged.
@@ -396,7 +419,10 @@ module and the model. Both should move to one definition.
   reproduces run 5's record. With the correction, the pre-scheduler,
   first-task (five cases), task-switch (two), workload (two), deadline
   (four) and quiet (two) instruction cases and their host cases pass again
-  (`workload-bisect-20261025/rwp-fix/`). Host cases
+  (`workload-bisect-20261025/rwp-fix/`). With the secondary correction, a
+  `restore-rwp-secondary` case injects RWP on core 3 and returns normally,
+  and the secondary local, cache, coherence and interrupt profiles' model
+  and host cases pass too (`workload-bisect-20261025/rwp2/`). Host cases
   (`checks/workload-bisect-host.py`) run the actual runner with a modeled
   FEL for a completed return, a transport failure, an invalid report, and a
   deadline return and a damaged deadline record that both restore nothing;

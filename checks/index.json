@@ -9087,7 +9087,9 @@
  },
  "secondary-local-probe.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/workload-bisect.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [

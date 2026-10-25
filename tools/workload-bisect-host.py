@@ -24,7 +24,8 @@ MODEL_SOURCES = base.MODEL_SOURCES+('checks/workload-bisect-probe.py',)
 CASES = ('complete-return', 'transport-failure-retained', 'invalid-report-restored',
          'deadline-return-retained', 'damaged-deadline-retained', 'deadline-record-checked',
          'changed-input-refused')
-INSTRUCTION_CASES = {False: ('success', 'stalled-core', 'stalled-no-tick', 'restore-rwp'), True: ('success', 'restore-rwp')}
+INSTRUCTION_CASES = {False: ('success', 'stalled-core', 'stalled-no-tick', 'restore-rwp', 'restore-rwp-secondary'),
+                     True: ('success', 'restore-rwp', 'restore-rwp-secondary')}
 RECORD = (0x4201b200, 512)
 RECORD_OFFSET = RECORD[0]-0x42018000
 RECORD_MAGIC = 0x413733444c4e5231
@@ -140,9 +141,9 @@ def validate_software(software, manifest_hash):
         report = path.with_suffix('.bin')
         require(digest(report) == result['report_sha256'], 'Instruction report changed.')
         raw = report.read_bytes()
-        require(case != 'restore-rwp' or result.get('rwp_reads_injected') == 1,
+        require(not case.startswith('restore-rwp') or result.get('rwp_reads_injected') == 1,
                 'The restoration RWP case did not inject RWP.')
-        if case in ('success', 'restore-rwp'):
+        if case in ('success', 'restore-rwp', 'restore-rwp-secondary'):
             require(result.get('off') == list(range(1, 8)) and result.get('clean_complete') == list(range(8)) and
                     not result.get('fiq_taken'), 'Completed workload or disarmed deadline missing.')
             actual = [list(struct.unpack_from('<5Q', raw, 0x4280+c*128)) for c in range(8)]

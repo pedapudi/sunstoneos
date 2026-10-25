@@ -48,7 +48,7 @@ static int write32(void *context,uintptr_t address,uint32_t value)
     store(c,address,value);return 1;
 }
 static int now_us(void *context,uint64_t *out) {(void)context;*out=ticks()/24;return 1;}
-static int wait_bits(struct context *c,uintptr_t address,uint32_t mask,uint32_t expected)
+static __attribute__((noinline)) int wait_bits(struct context *c,uintptr_t address,uint32_t mask,uint32_t expected)
 {
     uint64_t previous=ticks();
     do {
@@ -85,7 +85,11 @@ static int cleanup(struct context *c)
     const uint32_t values[]={(uint32_t)b->group,(uint32_t)b->modifier,
                             (uint32_t)b->configuration,(uint32_t)b->priority};
     for(unsigned i=0;i<4;++i) {++r->cleanup_writes;store(c,addresses[i],values[i]);}
-    for(unsigned i=0;i<4;++i)if(load(c,addresses[i])!=values[i]) {r->cleanup_error=4;return 0;}
+    /* GICR_CTLR.RWP is read-only status and part of the final comparison.
+     * Wait for it after the restoring writes, as Linux gic_cpu_init does. */
+    if(!wait_bits(c,base,8,0)) {r->cleanup_error=7;return 0;}
+    /* The final snapshot comparison (error 6) covers these four words; the
+     * separate readback (former error 4) was removed to fit the overlay. */
     ++r->cleanup_writes;store(c,base+0x14,(uint32_t)b->waker);
     if(!wait_bits(c,base+0x14,4,4)) {r->cleanup_error=5;return 0;}
     ++r->cleanup_writes;store(c,0x07050200+c->core*4,(uint32_t)r->control_before);

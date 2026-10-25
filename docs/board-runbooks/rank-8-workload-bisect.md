@@ -5,7 +5,8 @@ Status: in one port 3-3 lifetime on 2026-10-25
 then returned through the deadline unit with reason 3. The record locates
 the fault in CPU0's GIC restoration, which compared GICR_CTLR while its
 read-only write-pending bit was still set. The corrected profiles in
-`$B/rwp-fix/` wait for that bit first; they have not run on a board. The
+`$B/rwp-fix/` wait for that bit first, on CPU0 and on every secondary; they
+have not run on a board. The
 design, the reference comparison, the decoded record and the candidate
 causes are in [docs/designs/workload-bisect.md](../designs/workload-bisect.md).
 
@@ -23,10 +24,11 @@ plus 0.5 s, or at any earlier CPU0 stop:
 Next, run the corrected profile 1 repeatedly in one fresh lifetime, with a
 91-word capture after each run; one failure in five was seen before the
 correction. Every completed run is the expected outcome. A reason 3 return
-with cleanup error 4 in the record at `0x42018a00` would mean RWP never
-cleared within the deadline, a different fault. Profile 2 is not needed for
+with cleanup error 4 in CPU0's record at `0x42018a00`, or 7 in a
+secondary's record at `0x42018a00 + 512·n`, would mean RWP never cleared
+within the deadline, a different fault. Profile 2 is not needed for
 the observed fault. The frozen rank 7 and rank 8 bundles run the
-uncorrected `restore_local` and remain exposed to the same fault; refreeze
+uncorrected restorations and remain exposed to the same fault; refreeze
 them with the correction before running them again. Both boards take power
 and data from one USB-C cable, so the supply is not a difference between
 them.
@@ -69,7 +71,9 @@ and WFE candidates as well as with the load.
     failed), CPU0's local-probe record at `0x42018a00` (state, cleanup
     error at word 30, before and after snapshots from word 10 and word 20)
     and the secondaries' slots at `0x42018200 + 256·n` (ready, request,
-    ack, off).
+    ack, off). A secondary that never set ready has its own local-probe
+    record at `0x42018a00 + 512·n` (cleanup error at word 11, before and
+    after snapshots from word 17 and word 27).
   - Reason 4: `el1_return_checkpoint` refused CPU0's completion SMC; its
     record at `0x4201a800` holds the refusal. Stage 1.
 - **No return within the runner's 10 s.** Inconclusive: CPU0 could not take

@@ -201,7 +201,9 @@ identity_deadline_capture:
 
 identity_deadline_el1:
     // Nonsecure EL1h with DAIF masked, on CPU0's own translation regime.
-    // The warm reset that follows stops CPU0's tick timer.
+    // Stop CPU0's tick timer: CNTP_CTL_EL0.ENABLE is UNKNOWN after the warm
+    // reset, so the reset alone does not stop it.
+    msr cntp_ctl_el0, xzr
     msr icc_igrpen1_el1, xzr
     dsb sy
     ldr x0, =probe_writable_start
