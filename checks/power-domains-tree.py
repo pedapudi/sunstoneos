@@ -16,8 +16,14 @@ from one service task per image. This check fails when:
   the register, is not seen; for bundle 8, checks/board-bundles-apps-model.c
   asserts that the gate phase writes nothing;
 - the set of sources that write the pinned delay row (value 0x1f1f1f) differs
-  from the owner plus the writers of domains the owner does not hold, or a
-  native allowlist still admits the delay row;
+  from the owner plus the writers of domains the owner does not hold, five
+  sources in all, or a native allowlist other than the GPU native adapter's
+  admits the delay row. The GPU controller writes the row of domain 6
+  (GPU_CORE) through that adapter, so the adapter must name no PCK address
+  other than the CORE6 page 0x07066000 and must compare delay-row offsets
+  and values only under its CORE bank (bank == A733_GPU_CORE). Two seeded
+  mutants of the adapter, a computed 0x07060000 + 0x5000 address and a row
+  comparison under the CCU bank, must both fail that test;
 - a source outside checks/ registers a domain-4 row while the NPU platform
   writes domain 4 itself: the owner and the NPU would both write it;
 - an image in the service table polls the PMIC provider itself, or does not
@@ -98,6 +104,39 @@ BLOCKING = re.compile(r'\b(taskENTER_CRITICAL|portENTER_CRITICAL|vTaskSuspendAll
                       r'xSemaphoreTake|vTaskDelay|ulTaskNotifyTake|xTaskNotifyWait|xQueueReceive)\b|daifset')
 
 
+GPU_NATIVE = 'drivers/gpu/a733_gpu_platform_native.c'
+HEX = re.compile(r'\b0[xX]([0-9a-fA-F]+)' + SUFFIX + r'\b')
+# Delay-row offsets and the row's first value as the adapter compares them.
+ROW_COMPARISON = re.compile(r'\b(?:off\s*==\s*0x(?:170|174|c00|c04|c10)|set\s*==\s*0x1f1f1f)\b', re.I)
+CORE_BANK = re.compile(r'\s*bank\s*==\s*A733_GPU_CORE\b')
+
+
+def gpu_native_problems(text):
+    """The GPU native adapter's PCK reach: CORE6's page only, and every
+    delay-row comparison inside a parenthesized condition that starts with
+    bank == A733_GPU_CORE."""
+    code = re.sub(r'/\*.*?\*/', '', text, flags=re.S)
+    problems = []
+    for m in HEX.finditer(code):
+        value = int(m[1], 16)
+        if 0x07060000 <= value < 0x07079000 and value != 0x07066000:
+            problems.append(f'{GPU_NATIVE}: names a PCK address other than 0x07066000: {m[0]}')
+    for m in ROW_COMPARISON.finditer(code):
+        depth, inside = 0, False
+        for i in range(m.start() - 1, -1, -1):
+            if code[i] == ')':
+                depth += 1
+            elif code[i] == '(':
+                if depth:
+                    depth -= 1
+                elif CORE_BANK.match(code, i + 1):
+                    inside = True
+                    break
+        if not inside:
+            problems.append(f'{GPU_NATIVE}: compares a delay-row word outside the CORE bank: {m[0]}')
+    return problems
+
+
 def files(root):
     for d in SOURCES:
         base = root / d
@@ -142,6 +181,20 @@ def main():
         problems.append(f'delay-row writers {sorted(writers)} differ from {sorted(DELAY_WRITERS)}')
     if allowlists != DELAY_ALLOWLISTS:
         problems.append(f'delay-row native allowlists {sorted(allowlists)} differ from {sorted(DELAY_ALLOWLISTS)}')
+    native = (root / GPU_NATIVE).read_text()
+    if not ROW_COMPARISON.search(native):
+        problems.append(f'{GPU_NATIVE}: no delay-row comparison found to check')
+    problems += gpu_native_problems(native)
+    # Seeded mutants: a computed TOP5 address and a row comparison under the
+    # CCU bank must each be reported.
+    for name, old, new in [
+            ('computed TOP5 address', '0x07066000u + off', '0x07060000u + 0x5000 + off'),
+            ('row value under the CCU bank', '(bank == A733_GPU_CCU && off == 0xb20 &&',
+             '(bank == A733_GPU_CCU && set == 0x1f1f1f && off == 0xb20 &&')]:
+        if native.count(old) != 1:
+            problems.append(f'{GPU_NATIVE}: the {name} mutant has no unique site')
+        elif not gpu_native_problems(native.replace(old, new)):
+            problems.append(f'{GPU_NATIVE}: the {name} mutant was not detected')
     if domain4_rows and 'drivers/npu/a733_npu_platform.c' in writers:
         problems.append(f'domain-4 rows {sorted(domain4_rows)} while drivers/npu/a733_npu_platform.c still '
                         'writes domain 4; move the NPU onto its row first (docs/power-domains.md)')
@@ -162,7 +215,8 @@ def main():
         print(p)
     assert not problems, f'{len(problems)} problem(s)'
     print(f'PASS power-domain tree facts in {scanned} sources: domains 1 and 5 written only by the owner; '
-          f'{len(writers)} delay-row writers and {len(allowlists)} native allowlists; {len(domain4_rows)} '
+          f'{len(writers)} delay-row writers and {len(allowlists)} native allowlists, the GPU one reaching only '
+          f'the CORE6 page under its CORE bank (two seeded mutants refused); {len(domain4_rows)} '
           'domain-4 row sources and no NPU write to domain 4; five images run their PMIC work from one service '
           'task below USB0 on core 0; '
           'no critical section, scheduler suspension or wait in the owner')

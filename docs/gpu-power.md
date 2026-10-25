@@ -359,8 +359,14 @@ FAIL GPU ON poll
 
 This rules out the three explanations that predicted status 8 after the
 PWCR write, after the policy write or after clock and reset progress.
-Status 0 after PWCR 0, with the GPU clocked and out of reset and MISR bit
-8 clear, places the stall before or outside the device handshake.
+
+With PWCR 0 the PPU drives the device request DEVQREQn permanently HIGH
+(DEN0051E section 4.1.3), which asks a Q-Channel device to leave
+quiescence. A running GPU Q-Channel interface would answer with
+DEVQACCEPTn HIGH, which MISR bit 8 shows. That bit read 0 after reset
+release, with the GPU clocked and out of reset. The GPU therefore never
+accepted: its Q-Channel logic is unpowered, which is the case if CORE6's
+domain never powered up, or it is not wired to this PPU.
 
 `PPU_IDR0` reads `0x10130101`. Decoded against DEN0051E Table 5-26:
 
@@ -407,31 +413,34 @@ Status 0 after PWCR 0, with the GPU clocked and out of reset and MISR bit
 
 ### The remaining explanations, ranked
 
-1. **CORE6's power-switch sequencing never accepts the ON request.** The
-   stall precedes the device handshake, which PWCR 0 removed, and MISR bit
-   0 reads 0. Bit 0 also reads 0 between handshakes, so this is consistent
-   rather than proven. Two forms remain:
-   - **The CORE6 delay row stops the sequence.** The vendor table pins a
-     CORE6 row that no vendor path writes, and its reset values are
-     unknown. The next probe reads the row and then writes the vendor
-     values.
-   - **CORE6's switches are not sequenced by this PPU.** They may be
-     switched with TOP5 or from inside the GPU block. The evidence is that
-     the vendor device tree comments out both CORE6 nodes, the SCP skips
-     only CORE6's status poll, and BXM never reads CORE6. CORE6 status would
-     then never be a usable acknowledgement, and the GPU core would be
-     powered by TOP5 alone. Testing that needs a GPU register access,
-     outside the power-only rule.
-2. **The reset-time transition is wedged for good.** It may have started
+1. **This PPU does not sequence CORE6's power switches.** They may be
+   switched with TOP5 or from inside the GPU block. The evidence is that
+   the vendor device tree comments out both CORE6 nodes, the SCP skips only
+   CORE6's status poll, and BXM never reads CORE6. MISR bit 0, the
+   power-switch accept, read 0, which is consistent but proves nothing: the
+   bit also reads 0 between handshakes. CORE6 status would then never be a
+   usable acknowledgement, and the GPU core would be powered by TOP5 alone.
+   Testing that needs a GPU register access, outside the power-only rule.
+2. **The undocumented CORE6 delay words stop the power-switch sequence.**
+   DEN0051E Table 4-5 defines the device control delays as finite counts:
+   each delay is its field value plus one PPU clock cycle, and the values
+   range from 0 to 255, so each is 1 to 256 cycles. A missing value in the
+   standard words at `0x170` and `0x174` therefore cannot stall a transition
+   forever. Only the vendor words at `0xc00`, `0xc04` and `0xc10`, which
+   neither DEN0051E nor the PCK-600 TRM describes, could. The vendor table
+   pins a CORE6 row that no vendor path writes, and its reset values are
+   unknown. The next probe reads the row and then writes the vendor values.
+3. **The reset-time transition is wedged for good.** It may have started
    before TOP5 reached ON. A PPU in transition does not abort on a new
    policy, and no software reset of the PPU is documented. The probe cannot
    clear this state; if it holds, the delay-row write changes nothing and
    the snapshot words look normal.
-3. **The PWCR write had no effect during the outstanding transition, and
-   the GPU cannot accept the request.** DEN0051E calls that write
-   UNPREDICTABLE. The GPU was clocked and out of reset, and MISR bit 8 read
-   0. This explanation and the first produce the same observations.
-4. **GPU PLL, SCP mailbox, PRCM power switch, interrupt mask or PPU
+4. **The PWCR write had no effect during the outstanding transition.**
+   DEN0051E calls that write UNPREDICTABLE. The PPU would then wait for the
+   GPU's accept, which MISR shows never came. This leaves the same
+   question as the first explanation: why the GPU's Q-Channel logic is
+   unpowered or unconnected.
+5. **GPU PLL, SCP mailbox, PRCM power switch, interrupt mask or PPU
    clock.** None is supported. The GPU clock was in effect from PERI0, the
    SCP block has no CORE6 step, the PRCM has no GPU switch, masks gate no
    transition, and the PPU gate is open.
@@ -461,11 +470,16 @@ expected results are:
 - **Status 8 at the observation after the delay row, or later.** The
   vendor row is the missing step. The row stays in the controller, and a
   later change removes the diagnostic reads.
+- **A STATE failure at a delay-row readback.** A CORE6 row word that does
+  not hold the written value, for example because it is read-only, fails
+  its readback check before any PWCR or policy write. The run returns
+  status 1 at once; the failed step and its last value name the word, and
+  snapshot 1 shows the whole row.
 - **Status 0 throughout.** The first ON fails at the deadline as before.
   The snapshots compare CORE6's row with TOP5's working row and show any
-  latched interrupt event. With the row in place, the second form of the
-  first explanation and the second explanation remain, and the next step
-  is a decision about a GPU register access with TOP5 alone.
+  latched interrupt event. With the row in place, the first, third and
+  fourth explanations remain, and the next step is a decision about a GPU
+  register access with TOP5 alone.
 
 The CORE6 observations and the snapshot are diagnostic. They stay in the
 controller and client only until a board run selects an explanation.
