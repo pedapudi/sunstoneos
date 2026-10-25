@@ -45,6 +45,11 @@ regenerating.
     - Service-loop work between polls: 1,687 ticks per window.
   - **Domains:** 1, 4 and 5 are all policy 8 and status 8.
   - The port 3-3 lifetime continues; its last warm return is `s7-bb6-run`.
+- **Port 3-3, clock words (`board-bundles-20261024-1/clock-words`): passed.**
+  All six words read, none skipped. Every word, including PLL_CPU_L
+  `0xf8802600` and the CPU-L mux `0x03010000`, equals the 2026-10-23 reading of
+  the same board. CPU-L therefore ran at the same 494 MHz that the bundle 6
+  bound assumes.
 
 The mimus branch `port/sunstoneos` (`9c57286b7`) was pushed to
 `github.com/pedapudi/mimus` on 2026-10-24 with the user's approval; mimus
