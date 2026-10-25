@@ -20,10 +20,17 @@ def run(image,manifest,fixture,native,out,clang,lld):
         else:raise AssertionError(name)
     template=(fixture/'session-template.bin').read_bytes()
     assert int.from_bytes(template[532:536],'little')==2
-    # Generic board packaging retains its native mode1 contract.
-    try:prep.board.session_check(template[:592])
-    except ValueError:refused.append('generic-board-rom-mode')
+    # Generic board packaging retains its native mode1 contract: the board's own
+    # prepare(), given a generic board manifest for these bytes, must stop at
+    # the USB0 start mode before writing any bundle.
+    generic=out/'generic-board-manifest.json';generic.write_text(json.dumps({'target':'sunstone-a733-board',
+        'execution_profile':prep.board.PROFILES['sunstone-a733-board'],'final_elf':hashlib.sha256(body).hexdigest()}))
+    board_template=out/'generic-board-template.bin';board_template.write_bytes(template[:592])
+    try:prep.board.prepare(image,generic,fixture/'admission.json',board_template,out/'generic-board-bundle',clang,lld)
+    except ValueError as error:
+        assert 'Unsupported USB0 reference/takeover mode.' in str(error),error;refused.append('generic-board-rom-mode')
     else:raise AssertionError('Generic board accepted ROM mode')
+    assert not (out/'generic-board-bundle').exists()
     admission=json.loads((fixture/'admission.json').read_text())
     # Snapshot the same authority producer, changing one concrete authorization.
     cache=prep.validate_admission(admission,hashlib.sha256(body).hexdigest(),hashlib.sha256(template).hexdigest(),template)

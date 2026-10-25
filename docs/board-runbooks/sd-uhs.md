@@ -34,11 +34,23 @@ S=~/.cache/sunstoneos/evidence/board-session-<date>/port-$PORT
 export PYTHONDONTWRITEBYTECODE=1
 ```
 
-- **Image:** `sunstone-a733-storage-read.elf`, configured with
-  `~/.cache/sunstoneos/bin/cfg.sh $SR <build> -DSUNSTONE_A733_STORAGE_READ=ON`
-  and built with `cmake --build <build> --target sunstone-a733-storage-read`.
-  Its `storage_read_sd_modes` marker is version 2 with profile mask 15, and its
-  records are version 4.
+- **Image:** `sunstone-a733-storage-read-single-core.elf`, from the
+  standalone project `apps/storage-read-single-core` (target
+  `sunstone-a733-storage-read-single-core`). The ROM keeps USB0 after FEL, and
+  only the single-core SD build admits USB0 start mode 2, takeover of the
+  ROM's device controller (`apps/board/admission.c`); the supervised SD image
+  admits only mode 1, a cold controller. Its `storage_read_sd_modes` marker
+  is version 2 with profile mask 15, and its records are version 4.
+- **Prepared set:** `~/.cache/sunstoneos/evidence/board-bundles-20261025-14/`
+  holds the image, the software evidence, the session specification, the
+  draft records, one approval per lifetime (`approval-A.json`,
+  `approval-B.json`), the host tools pinned as an archive of one revision
+  (`host-src/`), `tools/sign-approval.py` and `tools/bind-lifetime.py`. After
+  each lifetime's cold DDR start and survey, the coordinator signs that
+  lifetime's approval, and `bind-lifetime.py` binds the bundle; it refuses an
+  approval signed before the DDR session or for another one, and a survey
+  that failed or ran on another port, node or ROM identity. Its `runbook.md`
+  gives every command.
 - **Session templates:** the existing 880-byte storage-read session for this
   port, with offset 860 (`sd_profile`) set to 2 for A and 3 for B,
   `identify_us` 5,000,000, `read_us` 1,000,000, the wide PF0–PF5 route and a

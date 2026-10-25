@@ -9,6 +9,17 @@ sys.path.insert(0,str(ROOT/'checks'))
 import harness
 # Many checks and builders load this module for its layout reader.
 Image=harness.Image
+# The SD0 image links two private structures named `profile` with different
+# layouts: drivers/power/a733_pmic.c (since 19a1b0c8) and
+# drivers/power/a733_power_domains.c (since b3df764e, which added the power
+# domain provider to the board composition). harness.Image reads every
+# structure by default and refuses a repeated name with two layouts, so the SD0
+# fixtures read only the structures they use, as harness.Image documents.
+SD0_LAYOUTS=('a733_clock_leases','a733_mmc_platform','a733_mmc_platform_native','a733_mmc_platform_ops',
+ 'a733_native_usb','a733_pins','a733_platform_locks','a733_pmic','a733_pmic_ops','a733_pmic_snapshot',
+ 'a733_rail_binding','a733_rail_leases','board_application','board_provider','storage_read_application',
+ 'storage_read_consumer','storage_read_session','storage_read_slot','sunxi_mmc')
+def sd0_image(path):return harness.Image(path,SD0_LAYOUTS)
 def module(name,path):
  s=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 class Machine:
@@ -23,7 +34,7 @@ class Machine:
    self.cpu.mem_write(image.address('ullCriticalNesting'),bytes(8))
    self.cpu.mem_write(image.address('ullPortInterruptNesting'),bytes(8))
   self.base=image.address('storage_read');self.layout=image.layouts['storage_read_application'];self.platform=self.base+self.layout['platform'];self.p=image.layouts['a733_mmc_platform'];self.core=self.platform+self.p['core'];self.c=image.layouts['sunxi_mmc'];self.native=self.base+self.layout['native'];self.n=image.layouts['a733_mmc_platform_native'];self.board=image.address('board');self.shared=image.address('providers')+image.layouts['board_provider']['shared'];self.usb=image.layouts['a733_native_usb']
-  self.time=1000000;self.held=False;self.appheld=False;self.finished=False;self.retained=False;self.trace=[];self.commands=[];self.fifo=0;self.total=0;self.data_command=0;self.state=0;self.ocr=0;self.tx=[];self.request=None;self.max_tx=768
+  self.time=1000000;self.held=False;self.appheld=False;self.finished=False;self.retained=False;self.trace=[];self.commands=[];self.fifo=0;self.total=0;self.data_command=0;self.state=0;self.ocr=0;self.tx=[];self.request=None;self.max_tx=768;self.queued=0
   self.cpu.mem_write(self.base,session);self.cpu.mem_write(self.board,session[:592]);self.write(self.board+160,61000000,8);self.write(self.base+self.layout['handle'],1,8);self.write(self.base+self.layout['mutex'],1,8)
   self.cpu.mem_write(0x41f00000,session)
   locks=self.shared+self.usb['locks'];ll=image.layouts['a733_platform_locks'];clock=self.shared+self.usb['clocks'];pins=self.shared+self.usb['pins'];rails=self.shared+self.usb['rails'];pmic=self.shared+self.usb['pmic'];gpu=self.shared+self.usb['gpu']
@@ -38,6 +49,10 @@ class Machine:
   csd=(1<<126)|(9<<80)|(5<<84)|(0x7fff<<48);self.csd=[(csd>>(96-32*i))&0xffffffff for i in range(4)];self.cid=[0x12345678+i for i in range(4)]
   names=['board_live','a733_smp_counter','a733_counter_clock_now','aarch64_device_translate','xTaskGetCurrentTaskHandle','xTaskGetSchedulerState','xQueueGetMutexHolder','xQueueSemaphoreTake','xQueueGenericSend','vTaskDelay','a733_platform_lock_enter','a733_platform_lock_leave','a733_platform_lock_retain','a733_rail_acquire','a733_rail_poll','a733_rail_status','a733_rail_retain','a733_pmic_identity','a733_pmic_live','a733_pmic_submit','a733_pmic_result','a733_pmic_reap','a733_pins_acquire_banked','a733_pins_held_banked','a733_pins_read_inputs_banked','a733_native_usb_step','a733_native_usb_health','tusb_rhport_init','tud_task_ext','tud_vendor_n_available','tud_vendor_n_read','tud_vendor_n_write','tud_vendor_n_write_flush','a733_cpu_coherence_publish']
   self.hooks={image.address(n):n for n in names}
+  # The TX FIFO's free space, so that the shared USB0 service, which repeats
+  # passes while they make progress (apps/board/usb0_service.h, since
+  # 3387ddc0), sees a full FIFO until tud_vendor_tx_cb drains it.
+  if 'tud_vendor_n_write_available' in image.symbols:self.hooks[image.address('tud_vendor_n_write_available')]='tud_vendor_n_write_available'
   self.cpu.hook_add(UC_HOOK_CODE,self.code);self.cpu.hook_add(UC_HOOK_MEM_READ,self.read_mmio,begin=0x02000000,end=0x07ffffff);self.cpu.hook_add(UC_HOOK_MEM_WRITE,self.write_mmio,begin=0x02000000,end=0x07ffffff)
  def write(self,a,v,n=4):self.cpu.mem_write(a,int(v).to_bytes(n,'little'))
  def read(self,a,n=4):return int.from_bytes(self.cpu.mem_read(a,n),'little')
@@ -79,7 +94,13 @@ class Machine:
   elif name in ('a733_native_usb_step','a733_native_usb_health','tusb_rhport_init','tud_task_ext','a733_cpu_coherence_publish'):self.ret(1)
   elif name=='tud_vendor_n_available':self.ret(1 if self.request is not None else 0)
   elif name=='tud_vendor_n_read':self.cpu.mem_write(args[1],bytes([self.request]));self.request=None;self.ret(1)
-  elif name=='tud_vendor_n_write':n=min(args[2],self.max_tx);self.tx.append(bytes(cpu.mem_read(args[1],n)));self.ret(n)
+  # max_tx is the TX FIFO capacity: bytes stay queued until the test reports
+  # their transmission through tud_vendor_tx_cb.
+  elif name=='tud_vendor_n_write':
+   n=min(args[2],max(0,self.max_tx-self.queued))
+   if n:self.tx.append(bytes(cpu.mem_read(args[1],n)));self.queued+=n
+   self.ret(n)
+  elif name=='tud_vendor_n_write_available':self.ret(max(0,self.max_tx-self.queued))
   elif name=='tud_vendor_n_write_flush':self.ret(0)
   else:raise AssertionError(name)
  def read_mmio(self,cpu,access,a,size,value,unused):
@@ -119,6 +140,7 @@ class Machine:
   elif n==17:
    assert arg==0 and self.regs[0x04020014]==512;self.total=512;self.data_command=17;self.regs[0x04020020]=0x900
  def call(self,name,*args):
+  if name=='tud_vendor_tx_cb':self.queued=max(0,self.queued-args[1])
   self.finished=False;self.cpu.reg_write(UC_ARM64_REG_SP,0x50ffeff0);self.cpu.reg_write(UC_ARM64_REG_LR,0x50fff000)
   for i,v in enumerate(args):self.cpu.reg_write(UC_ARM64_REG_X0+i,v)
   self.cpu.emu_start(self.image.address(name),0,count=3000000)
@@ -129,7 +151,7 @@ class Machine:
   return bytes(self.cpu.mem_read(0x50010000,self.read(0x50011000)))
 def run(image,session,out,only=None):
  out.mkdir(parents=True,exist_ok=False);raw=session.read_bytes();prep=module('sd0_native_prep',ROOT/'apps/storage-read/prepare.py');prep.embedded_reference(image.read_bytes(),raw)
- e=Image(image);required=['storage_read_task','storage_read_copy','storage_read_session_valid','storage_read_session_prepare','a733_mmc_platform_retain','a733_mmc_platform_init','sunxi_mmc_poll','board_usb0_task']
+ e=sd0_image(image);required=['storage_read_task','storage_read_copy','storage_read_session_valid','storage_read_session_prepare','a733_mmc_platform_retain','a733_mmc_platform_init','sunxi_mmc_poll','board_usb0_task']
  for n in required:e.address(n)
  # Freeze every consumed field/hook mapping before behavioral execution.
  (out/'preflight.json').write_text(json.dumps(dict(image_sha256=hashlib.sha256(image.read_bytes()).hexdigest(),session_sha256=hashlib.sha256(raw).hexdigest(),symbols={n:e.address(n) for n in required},layouts=e.layouts,physical_access=False),indent=2)+'\n')

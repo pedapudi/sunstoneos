@@ -18,6 +18,10 @@ apply_build_patch("${sdsc_build}/freertos-port.c" "${sdsc_port}/port.c"
 apply_build_patch("${sdsc_build}/platform.c" "${sdsc_root}/platform/a733/platform.c" "${sdsc_app}/platform.patch")
 apply_build_patch("${sdsc_build}/board-session.c" "${sdsc_root}/apps/board/session.c" "${sdsc_app}/board-session.patch")
 apply_build_patch("${sdsc_build}/sd-session.c" "${sdsc_root}/apps/storage-read/snapshot.c" "${sdsc_app}/sd-session.patch")
+# The SMP base links its patched tasks.c from the port directory, which the
+# filter removes; a boot-CPU-only image links the kernel's own tasks.c, as the
+# single-core GPU and NPU images do (cmake/a733-gpu-single-core.cmake).
+list(APPEND sdsc_sources "${FREERTOS_DIR}/tasks.c")
 list(APPEND sdsc_sources "${sdsc_app}/start.S" "${sdsc_app}/monitor.c" "${sdsc_app}/runtime.c"
  "${sdsc_build}/platform.c" "${sdsc_build}/board-session.c" "${sdsc_build}/sd-session.c"
  "${sdsc_build}/freertos-port.c" "${sdsc_port}/portASM.S"
@@ -38,7 +42,11 @@ foreach(target sunstone-a733-storage-read-single-core a733-sd-single-core-usb2-h
  target_include_directories(${target} PRIVATE ${sdsc_includes})
  target_compile_definitions(${target} PRIVATE ${sdsc_definitions} GUEST=1 SUNSTONE_SD_SINGLE_CORE=1)
 endforeach()
-target_include_directories(a733-sd-single-core-usb2-host BEFORE PRIVATE "${sdsc_root}/drivers/usb/host")
+# The USB2 host objects compile against the board's SuperSpeed TinyUSB copy and
+# the TinyUSB host headers, as a733-board-usb2-host does (cmake/a733-board.cmake);
+# without them hcd.h is missing and TUSB_SPEED_SUPER is undeclared.
+target_include_directories(a733-sd-single-core-usb2-host BEFORE PRIVATE "${board_host_tiny}" "${sdsc_root}/drivers/usb/host")
+target_include_directories(a733-sd-single-core-usb2-host PRIVATE "${TINYUSB_DIR}/src/host")
 target_compile_options(a733-sd-single-core-usb2-host PRIVATE "SHELL:-include ${sdsc_root}/apps/board/host-symbols.h")
 if(sdsc_links)
  target_link_libraries(sunstone-a733-storage-read-single-core PRIVATE ${sdsc_links})

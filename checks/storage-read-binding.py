@@ -7,7 +7,7 @@ ROOT=Path(__file__).resolve().parents[1]
 def module(name,path):
  s=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 def run(image,session,out):
- out.mkdir(parents=True,exist_ok=False);fixture=module('sd0_binding_machine',ROOT/'checks/storage-read-native.py');raw=session.read_bytes();e=fixture.Image(image);m=fixture.Machine(e,raw,'binding')
+ out.mkdir(parents=True,exist_ok=False);fixture=module('sd0_binding_machine',ROOT/'checks/storage-read-native.py');raw=session.read_bytes();e=fixture.sd0_image(image);m=fixture.Machine(e,raw,'binding')
  # ABI/nominal producer validation precedes mutation cases.
  prep=module('sd0_binding_producer',ROOT/'apps/storage-read/prepare.py');prep.embedded_reference(image.read_bytes(),raw)
  assert m.call('storage_read_session_valid',m.base)==1

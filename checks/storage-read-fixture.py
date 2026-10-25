@@ -37,6 +37,8 @@ def produce(image,out,rom_usb_takeover=False,sd_profile=0):
  refs={}
  for i,(key,required) in enumerate(FACTS.items()):
   extra=dict(four_bit_data_route_authorized=True,read_only_bus_negotiation_authorized=True,peri0_400m_stable_owned=True,sd_profile=sd_profile) if key=='topology' and sd_profile else {}
+  if key=='topology' and sd_profile==3:extra.update(uhs_1v8_signalling_approved=True,pf_bank_voltage_writer_exclusive=True,
+   pf_adaptive_withstand_observed=True,board_power_removal_after_lifetime=True)
   refs[key]=record(key+'.json',dict(**target,schema='a733-storage-read-'+key+'-v2',reviewed=True,physical_access=False,**{k:True for k in required},**extra));raw[632+32*i:664+32*i]=bytes.fromhex(refs[key]['sha256'])
  template=out/'session-template.bin';template.write_bytes(raw);prep.session_check(raw);prep.embedded_reference(image.read_bytes(),raw)
  conditions={'source-backed-cpu-dsu-transition','cold-cache-and-dirty-alias-exclusion','dual-pas-dram','exclusive-cpus-memory-dma','remote-writers-excluded','usb-clock-power-reset-ownership','usb-device-mapping','physical-counter-continuity'}
@@ -54,4 +56,4 @@ def produce(image,out,rom_usb_takeover=False,sd_profile=0):
  return template,path
 if __name__=='__main__':
  import argparse
- p=argparse.ArgumentParser(description=__doc__);p.add_argument('--image',type=Path,required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--rom-usb-takeover',action='store_true');p.add_argument('--sd-profile',type=int,choices=(0,1,2),default=0);a=p.parse_args();produce(a.image,a.output,a.rom_usb_takeover,a.sd_profile)
+ p=argparse.ArgumentParser(description=__doc__);p.add_argument('--image',type=Path,required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--rom-usb-takeover',action='store_true');p.add_argument('--sd-profile',type=int,choices=(0,1,2,3),default=0);a=p.parse_args();produce(a.image,a.output,a.rom_usb_takeover,a.sd_profile)
