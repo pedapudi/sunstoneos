@@ -1,14 +1,27 @@
 # Current work
 
-**Development resumed on 2026-10-24 at the user's request.** The Claude
-coordinator session now owns the GPU work in `gpu-provider-ready-1024` and the
-NPU OS work in `npu-thermal-1024`; each first commits its saved edits as is and
-merges `bringup`. The boards stay untouched until the user reports both
-reconnected. The PMIC step-bound review fixes merged at `b41460e6`: the bound is
-the board median plus about 20 µs (799 µs, and 839 µs for the first step),
-1,268 permille of the step's own wire time, and 110% stays open for writes.
-`checks/power-domains-service.c` now models the GPU CORE register bank; it had
-aborted on `a0f79c3d` after the CORE6 power commits.
+**Development resumed on 2026-10-24 at the user's request.** The board-free
+work is merged: the PMIC step bound (`b41460e6`), the returning GPU image, the
+NPU profile of the resident OS image, the minor review fixes (`3f7d16b4`) and
+the next board bundles. The bound is the board median plus about 20 µs (799 µs,
+and 839 µs for the first step), 1,268 permille of the step's own wire time; 110%
+stays open for writes. The boards stay untouched until the user reports both
+reconnected.
+
+**Next board runs:** use the frozen set
+`~/.cache/sunstoneos/evidence/board-bundles-20261024-8/`, starting with its
+`runbook.md`. It supersedes `-7`. Both ports start with power removal and a
+cold DDR start.
+- **Port 3-1:** `gpu-provider-ready` (`3adfa4ad`), then `gpu-power-only`
+  (`81d4a728`). Only if power-only returns status 0 does `gpu-power-identity`
+  (`8a73e945`) run. Power-only never reads the GPU register window.
+- **Port 3-3:** the base kernel check (`88bce618`), which must pass again
+  because the monitor and platform sources changed. Then bundle 6 (`2291f78e`),
+  with the plain-write window on S_TWI0 XADDR and the whole-poll window.
+
+A board-safety review found nothing blocking. A host timeout counts as a
+quarantine. Regenerate the `os-supervised-software` evidence before the next
+OS launch.
 
 The user approved physical CPU clock and voltage changes on 2026-10-24: the A76
 operating-point runs A1, A2 and A3 of `docs/designs/cpu-a76-dvfs.md` and the
