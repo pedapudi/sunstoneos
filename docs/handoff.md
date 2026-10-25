@@ -76,6 +76,19 @@ It also shows that CORE6 does power with the vendor state; the earlier
 failures to reach status 8 came from the missing vendor state, not from the PPU.
 Which of the three differences is necessary is not yet separated.
 
+**ShuffleNetV2 on the NPU, timed on port 3-3** (set `board-bundles-20261025-16`,
+`board-session-20261025-12/port-3-3`, branch `work/npu-full-model-1025`).
+Both starts passed: all four outputs matched, and all three state reads
+matched their predictions.
+- Inference, doorbell to IRQ: 3.69 ms at 492 MHz and 2.91 ms at 852 MHz, a
+  ratio of 0.79 against about 0.72 predicted. The NPU is 99% active, but its
+  active cycles rise 1.37× at the higher clock, so about 1.85 ms per inference
+  is clock-independent, probably memory traffic.
+- Before the trigger: 13–14 µs. IRQ to recorded completion: about 17 µs.
+- Each job spends about 56 ms between publication and start, in per-job
+  hashing and cache cleaning of the fixed model buffers. That is the largest
+  cost by far, and moving it to session open is the next change.
+
 **NPU interrupt completion and job timing, qualified on port 3-3**
 (set `board-bundles-20261025-13`, `board-session-20261025-9/port-3-3`;
 `work/npu-followups-1025` merged). Both starts passed, with all four
@@ -143,7 +156,9 @@ record `s13-gpo-run`) got further:
   - no master-gate requirement before TOP5 ON;
   - the delay-row read-back limited to the delay bits;
   - the supply sample released after OFF;
-  - TOP5 ON reopening the gates by itself. `work/sd-uhs-1025` (read-only UHS-I
+  - TOP5 ON reopening the gates by itself.
+
+  The branch is merged into `bringup`. `work/sd-uhs-1025` (read-only UHS-I
 SDR104 with 1.8 V PF-bank signalling) is merged after two review rounds; its
 board run is `docs/board-runbooks/sd-uhs.md`.
 
