@@ -438,6 +438,47 @@ static void top_cases(void)
     puts("PASS top operating points: step 1 at 800 mV with a flickering lock, whole-millisecond settle, "
          "CPU-B 2002 and CPU-L 1794 MHz, DSU 1274 MHz after both with no voltage write, DSU refusals");
 }
+/* A fresh image in the same lifetime: the driver and policy start again with
+ * a new grant; the clock words, the PMIC and the rail ledger keep their
+ * state. */
+static void regrant(const struct a733_cpu_clock_grant *grant)
+{
+    memset(&cpu,0,sizeof(cpu));memset(&policy,0,sizeof(policy));sequence=0;
+    const struct a733_cpu_clock_config config={4242,*grant};
+    assert(a733_thermal_policy_init(&policy,pm.now,notify,0));
+    assert(a733_cpu_clock_init(&cpu,&config,&ops,&cm,&pm.clocks,&pm.rails,&pm.provider,&policy));
+    assert(heat(50000)==A733_THERMAL_NORMAL);cm.count=0;cm.writes=0;
+}
+/* The lifetime of steps 2, 4 and 5 with the grants of bundles 22 to 24
+ * (apps/board-bundles-power/cpu-opp-step.c), then a thermal stop of step 5. */
+static void lifetime_cases(void)
+{
+    const struct a733_cpu_clock_grant g22={1,1,{1196,0},5},g23={1,3,{1196,2002},7},g24={1,1,{1794,0},5};
+    board33(&g22);cm.count=0;
+    assert(settle_run(A733_CPU_LITTLE,1196)==A733_CPU_CLOCK_COMPLETE && *word(PLL(0))==L0(46) &&
+        *word(SEL(0))==0x03000000);
+    assert(settle_run(A733_CPU_DSU,780)==A733_CPU_CLOCK_COMPLETE && *word(PLL(2))==(LOCKED|(30u<<8)) &&
+        *word(SEL(2))==0x03000105 && !pmic_writes() && released());
+    regrant(&g23);
+    assert(settle_run(A733_CPU_BIG,2002)==A733_CPU_CLOCK_COMPLETE && pm.pmic[REG_DCDC3]==55);
+    assert(settle_run(A733_CPU_DSU,910)==A733_CPU_CLOCK_COMPLETE && *word(PLL(2))==(LOCKED|(35u<<8)));
+    assert(settle_run(A733_CPU_DSU,598)==A733_CPU_CLOCK_COMPLETE && *word(PLL(2))==(LOCKED|(46u<<8)) &&
+        *word(SEL(2))==0x03010105);
+    assert(settle_run(A733_CPU_BIG,1014)==A733_CPU_CLOCK_COMPLETE && pm.pmic[REG_DCDC3]==30 &&
+        *word(PLL(1))==(LOCKED|(39u<<8)) && pmic_writes()==2 && released());
+    regrant(&g24);
+    assert(settle_run(A733_CPU_LITTLE,1794)==A733_CPU_CLOCK_COMPLETE && pm.pmic[REG_DCDC5]==50 &&
+        *word(PLL(0))==L0(69));
+    assert(settle_run(A733_CPU_DSU,1274)==A733_CPU_CLOCK_COMPLETE && *word(PLL(2))==(LOCKED|(49u<<8)) &&
+        *word(SEL(2))==0x03000105 && pmic_writes()==1);
+    /* A thermal stop lowers the DSU, then CPU-L, which returns DCDC5 to 800 mV. */
+    assert(settle_run(A733_CPU_DSU,598)==A733_CPU_CLOCK_COMPLETE && pm.pmic[REG_DCDC5]==50);
+    assert(settle_run(A733_CPU_LITTLE,1014)==A733_CPU_CLOCK_COMPLETE && pm.pmic[REG_DCDC5]==30 &&
+        cpu.rail_uv[0]==800000 && released());
+    puts("PASS lifetime of steps 2, 4 and 5: CPU-L 1196 and DSU 780 MHz at 800 mV, CPU-B 2002 MHz at 1050 mV "
+         "with the DSU at 910 then 598 MHz and back, CPU-L 1794 MHz at 1000 mV and the DSU 1274 MHz, then the "
+         "thermal-stop lowering to 800 mV");
+}
 int main(int argc,char **argv)
 {
     if(argc==2 && !strcmp(argv[1],"--late-policy-reproduce")){late_policy_cases(1);return 0;}
@@ -822,6 +863,7 @@ int main(int argc,char **argv)
     assert(a733_cpu_clock_parked(&cpu));cm.read_ns=0;cm.stuck_update=1;
     assert(a733_cpu_clock_burst(&cpu,200)==A733_CPU_CLOCK_RETAINED && cpu.failed);
     top_cases();
+    lifetime_cases();
     puts("PASS CPU clock: report, bins, grant records, grant and thermal-policy admission, "
          "voltage-before-frequency raise, frequency-before-voltage lowering, DSU rail share, throttle and "
          "restore, refusals, expiry before the PLL waits, retained faults, cycle timing, settle after "

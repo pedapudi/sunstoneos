@@ -475,6 +475,15 @@ requires an approval record of schema `cpu-operating-point-approval-v1`,
 which the bundle carries as `approval.json`. It links the base row's monitor
 and platform objects, so the base runs first in its lifetime.
 
+Bundle 20 passed on port 3-3 on 2026-10-25. Bundles 21 to 24 are steps 3,
+2, 4 and 5 of the same design, built from the same source with
+`-DOPP_BUNDLE=n` and run in one lifetime in that order (`dcdc3-1050mv-step`,
+`cpu-l-800mv-step`, `cpu-b-top-step`, `cpu-l-dsu-top-step`). Each adds a
+thermal stop at 70 °C: a sensor at or above it before any write refuses the
+step, and after a write it lowers what the step raised and returns STOPPED, a
+controlled outcome. Bundles 22 and 24 measure CPU0's rate with the PMU code
+of bundle 4 (`platform/a733/cpu_pmu.c`).
+
 ## Bundles that wait
 
 - **On the next lifetime of port 3-3.** A Read bundle of the CPU-B and DSU

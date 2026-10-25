@@ -1,7 +1,8 @@
 # Design: CPU clusters and the DSU default to the vendor's top operating points
 
-Status: **driver changes implemented and host-modeled; the first board step
-is frozen and has not run.** Every hardware block defaults to the highest
+Status: **driver changes implemented and host-modeled. Step 1 passed on port
+3-3 on 2026-10-25; steps 2 to 5 are built and frozen in one lifetime and have
+not run.** Every hardware block defaults to the highest
 operating point that the vendor uses for the chip's speed bin, with the
 vendor's voltage; lower points are optional modes ([AGENTS.md](../../AGENTS.md),
 "Implementation"). The user approved CPU clock and voltage changes on
@@ -254,10 +255,10 @@ changed is the last of its lifetime, because later images assume CPU-L at
 | Step | Change | Prediction |
 | --- | --- | --- |
 | 1 | CPU-B 1014 → 1404 → 1014 MHz at 800 mV, cores 6 and 7 off (bundle 20) | CPU-B PLL `0xf8803600`, then `0xf8802700`; mux `0x03000000` throughout; DCDC3 800 mV before and after; parked under 1 ms per change; CPU-L and DSU words unchanged |
-| 2 | CPU-L 494 → 1196 MHz at 800 mV, then the DSU 494 → 780 MHz | CPU-L PLL `0xf8802e00`, mux `0x03000000`; CPU0's cycle counter measures 1196 MHz ± 1% (494 MHz before); DSU PLL `0xf8801e00`, mux `0x03000105` |
-| 3 | DCDC3 800 → 1050 mV and back, CPU-B held at 1014 MHz | DCDC3 selector `0xb7`, then `0x9e`; temperatures within 1 °C |
+| 2 | CPU-L 494 → 1196 MHz at 800 mV, then the DSU 494 → 780 MHz | CPU-L PLL `0xf8802e00`, mux `0x03000000`; CPU0's cycle counter measures 1196 MHz ± 1% (494 MHz before); DSU PLL `0xf8801e00`, mux `0x03000105`; no PMIC write |
+| 3 | DCDC3 800 → 1050 mV and back, CPU-B held at 1014 MHz | DCDC3 selector `0xb7`, then `0x9e`; every clock word unchanged; temperatures within 1 °C |
 | 4 | DCDC3 to 1050 mV, CPU-B 1014 → 2002 MHz, then the DSU to 910 MHz; then the DSU to 598 MHz (the 800 mV row under three quarters of 1014 MHz), CPU-B to 1014 MHz and DCDC3 to 800 mV, cores 6 and 7 off; the DSU stays changed, so the step ends its lifetime | CPU-B PLL `0xf8804d00`, DCDC3 `0xb7`, DSU PLL `0xf8802300`, mux `0x03000105`; then DSU PLL `0xf8802e00`, mux `0x03010105`, CPU-B `0xf8802700`, DCDC3 `0x9e` |
-| 5 | DCDC5 to 1000 mV, CPU-L 494 → 1794 MHz, then the DSU → 1274 MHz | DCDC5 `0xb2`; CPU-L PLL `0xf8804500`, CPU0 measures 1794 MHz ± 1%; DSU PLL `0xf8803100`, mux `0x03000105` |
+| 5 | DCDC5 to 1000 mV, CPU-L → 1794 MHz, then the DSU → 1274 MHz | DCDC5 1000 mV (`0xb2`); CPU-L PLL `0xf8804500`, CPU0 measures 1794 MHz ± 1%; DSU PLL `0xf8803100`, mux `0x03000105`; the hottest sensor below 50 °C |
 | 6 | The all-core workload with the top point applied before the tasks start | Workload passes with the status-masked capture; core 6 measures 2002 MHz and core 0 1794 MHz; the hottest sensor stays below 90 °C |
 | 7 | B1, then the OS image with both clusters and the DSU at their top points | Recognition on the A76 pair at about 1.2 s for the bench recording ([cpu-a76-dvfs.md](cpu-a76-dvfs.md), A2) |
 
@@ -269,9 +270,60 @@ when the GPU vendor-state probe raised DCDC4 on port 3-1 and read `0xae` back. S
 non-return in step 2 or 5 leaves CPU0 on the oscillator or on an unproven
 PLL, and only a power removal recovers it.
 
-Steps 2 to 6 are not built. Steps 2 and 5 need the PMU cycle sampling of
-bundle 4 (`platform/a733/cpu_pmu.c`) in the step image; step 6 needs the
-driver in the all-core workload image.
+Step 1 passed on port 3-3 (`board-session-20261025-17/port-3-3`, record
+`c1-opp1-run`): CPU-B read `0xf8803600` at 1404 MHz and `0xf8802700` back at
+1014 MHz, the longest park was 59 µs, DCDC3 stayed at 800 mV and the hottest
+sensor read 39.7 °C before and 39.6 °C after.
+
+Steps 2 to 5 are bundles 22, 21, 23 and 24, built from the step-1 source with
+`-DOPP_BUNDLE=n` (below). Step 6 needs the driver in the all-core workload
+image and is not built.
+
+## Steps 2 to 5 share one lifetime
+
+The four steps run in one port 3-3 lifetime, in the order of their recovery
+risk, each returning to the ROM before the next starts:
+
+1. Step 3 (bundle 21): DCDC3 to 1050 mV and back. Only a rail of the
+   powered-off cluster changes.
+2. Step 2 (bundle 22): the first park of the cluster that runs the image, at
+   800 mV.
+3. Step 4 (bundle 23): CPU-B at its top point and the DSU at 910 MHz, then
+   CPU-B and DCDC3 back to their entry values.
+4. Step 5 (bundle 24): DCDC5 and CPU-L to their top points and the DSU to
+   1274 MHz.
+
+They can share a lifetime because each one returns with its rails back at
+800 mV, except step 5, which runs last, and each admits the state the
+earlier ones leave. Every step requires DCDC3 and DCDC5 at 800 mV and CPU-B
+at 1014 MHz, and admits CPU-L and the DSU at any rate on their PLLs. A step
+that does not return ends the lifetime, and the later steps then need a new
+one; they would also have been meaningless after that failure. The order puts the
+voltage-only step first and the step that leaves the board at its top
+points last. The ROM return is not known to keep the CPU PLLs: each step's
+`before` lines record what the previous step left.
+
+Each step reads a sensor set before any write and after each raise. The
+thermal stop is 70 °C, the board kernel's first passive trip of both CPU
+zones (`sun60iw2p1.dtsi:535`, `:568`). A step that finds a sensor at or above it
+before any write returns REFUSED. After a write it lowers what it raised (the DSU to
+598 MHz, then the clusters to 1014 MHz, then DCDC3 to 800 mV) and returns
+STOPPED; both are controlled outcomes. The driver's own THROTTLE level
+stays at 90 °C. CPU0's rate is measured from its cycle counter against
+CNTPCT over 1 ms, with the PMU code that bundle 4 ran on port 3-3, before
+and after each CPU-L change. The cycle counter counts core clocks during
+memory stalls too, so no step depends on the memory bus clock, which the
+clock audit finds at 400 MHz after each ROM return.
+
+Step 3 writes DCDC3 through the PMIC provider itself, because the driver
+changes a voltage only together with a clock. It holds CPU-B's clock lease
+exclusively, so CPU-B stays at 1014 MHz, which both voltages cover, and an
+exclusive DCDC3 lease. The provider requires the inherited selector `0x1e`
+before the write, keeps bit 7 and reads the byte back.
+
+The host model runs the three driver steps in sequence with the bundles'
+grants (`lifetime_cases` in `checks/cpu-clock-model.c`), followed by a
+thermal stop of step 5 that returns DCDC5 to 800 mV.
 
 ## Step 1: bundle 20
 

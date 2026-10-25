@@ -2028,7 +2028,7 @@
    "--tree",
    "--output"
   ],
-  "summary": "Build and check the base image and the returning images of bundles 4, 6, 7, 8, 15 and 20.",
+  "summary": "Build and check the base image and the returning images of bundles 4, 6, 7, 8, 15 and 20 to 24.",
   "usb": true
  },
  "board-bundles.py": {
