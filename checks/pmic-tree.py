@@ -16,6 +16,8 @@ check fails when:
   docs/designs/pmic-access.md: plain S_TWI0 reads and DATA write, DSB SY
   after the CNTR write that starts a bus phase, and DSB SY on both sides of
   every other register read;
+- the native adapter's file defines a macro that names an a733_mmio_
+  accessor, which could hide its barrier placement from the rule above;
 - the native adapter's time read, which the provider makes once per bus
   phase, calls the counter clock (a global ticket lock with interrupts
   masked), or its register accessors query the kernel's mutex holder (a
@@ -130,6 +132,9 @@ def main():
     # sides of every other register read.
     twi = re.search(r'static int twi\(uintptr_t a\)\{return \(a&~\(uintptr_t\)0xfffu\)==0x07083000u;\}', adapter)
     read, write = strip_comments(body('read32')), strip_comments(body('write32'))
+    if re.search(r'^\s*#\s*define\s+\w*a733_mmio_\w*|^\s*#\s*define\s+\w+.*\ba733_mmio_\w*', strip_comments(adapter), re.M):
+        problems.append('drivers/power/a733_pmic_native.c: a #define names an a733_mmio_ accessor, which hides '
+                        'the barrier placement from this check')
     if (not twi or not re.search(r'twi\(a\)\s*\?\s*a733_mmio_read32\(a\)\s*:\s*a733_mmio_read32_dsb_sy_both\(a\)', read)
             or re.findall(r'\ba733_mmio_\w+\(', read) != ['a733_mmio_read32(', 'a733_mmio_read32_dsb_sy_both(']):
         problems.append('drivers/power/a733_pmic_native.c: read32() must read S_TWI0 plainly and every other '

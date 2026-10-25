@@ -413,7 +413,8 @@ write and the `CNTR` write with its one `DSB SY`. The run qualifies the
 placement for snapshots when it meets bundle 6's pass conditions above, with
 the same 1,268-permille median limit and first-step allowance, and its
 snapshots, `XADDR` window and bus-idle reads match the second run's. The
-predicted median is about 776 µs (section "Board result"). The native USB
+predicted median, with the completing-poll window, is about 778 to 779 µs
+(section "Board result"). The native USB
 image of rank 9 then needs a rerun on this adapter, and a DCDC3 selector
 write, under its own gate, covers the write of the selector byte.
 `checks/board-bundles-apps.py` builds and checks that bundle 6 image from

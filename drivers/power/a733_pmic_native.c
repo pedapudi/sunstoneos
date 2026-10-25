@@ -59,7 +59,7 @@ static int owned(struct a733_pmic_native *n)
  * followed by DSB SY, so the provider's next time read, which sets
  * phase_at, follows the write's completion. The clock, reset, GIC and pin
  * registers that admission and startup read keep DSB SY on both sides
- * (docs/designs/pmic-access.md, "Barrier placement"). */
+ * (docs/designs/pmic-access.md, item 6 of section "Change"). */
 static int twi(uintptr_t a){return (a&~(uintptr_t)0xfffu)==0x07083000u;}
 static int read32(void *v,uintptr_t a,uint32_t *out)
 {

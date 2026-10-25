@@ -157,6 +157,8 @@ void bb_status_spin(int (*read)(void *, uintptr_t, uint32_t *), void *context, u
     uint64_t previous_at = 0;
     for (;;) {
         uint32_t v;
+        /* read() completes its access before it returns (a fenced read), so
+         * the stamp below follows the value it returned. */
         if (read(context, status, &v) != 1)
             return;
         const uint64_t at = now() - start;
