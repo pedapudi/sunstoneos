@@ -2,6 +2,9 @@
 #include "task.h"
 #include "platform.h"
 #include "boot.h"
+#ifdef SUNSTONE_A733_PERF_SESSION
+#include "perf_session.h"
+#endif
 #include "result.h"
 static StaticTask_t tasks[16];
 static StackType_t stacks[16][2048];
@@ -46,6 +49,10 @@ void a733_smp_diagnostic_start(void)
         configASSERT(xTaskCreateStaticAffinitySet(background,"busy",2048,(void *)(uintptr_t)c,1,
             stacks[8+c],&tasks[8+c],1UL<<c));
     }
+#ifdef SUNSTONE_A733_PERF_SESSION
+    /* The board-session measurements run before the workload starts. */
+    a733_perf_session_start(tasks,&stacks[0][0],2048);
+#endif
     a733_observe_service_start();
     vTaskStartScheduler();platform_panic("scheduler returned",3);
 }

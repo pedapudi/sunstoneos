@@ -63,7 +63,7 @@ EL3_SECURITY_ADDRESSES=frozenset(a for a,_ in el3_security_writes(dma=(True,True
 
 def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
 
-def build(e,freertos):
+def build(e,freertos,perf_session=False):
     e.mkdir(parents=True,exist_ok=False)
     source=e/'source';source.mkdir()
     paths=[*ROOT.glob('platform/a733-smp-cached/*'),*ROOT.glob('include/*.h'),
@@ -92,7 +92,8 @@ def build(e,freertos):
         f'include("{source}/cmake/aarch64-clang.cmake")\nset(CMAKE_C_COMPILER "{compiler}")\nset(CMAKE_ASM_COMPILER "{compiler}")\n')
     b=e/'build'
     run(['cmake','-G','Unix Makefiles','-S',source/'platform/a733-smp-cached','-B',b,
-        f'-DCMAKE_TOOLCHAIN_FILE={toolchain}',f'-DFREERTOS_DIR={dep}',f'-DSUNSTONE_LLD={linker}'],'configure')
+        f'-DCMAKE_TOOLCHAIN_FILE={toolchain}',f'-DFREERTOS_DIR={dep}',f'-DSUNSTONE_LLD={linker}',
+        f'-DSUNSTONE_A733_PERF_SESSION={"ON" if perf_session else "OFF"}'],'configure')
     run(['cmake','--build',b,'--target','a733-smp-cached-diagnostic'],'build')
     (e/'build-inputs.json').write_text(json.dumps({str(p.relative_to(e)):sha(p)
         for p in e.rglob('*') if p.is_file()},indent=2)+'\n')
@@ -111,12 +112,13 @@ def main():
     p.add_argument('--image',type=Path,help='Reuse preserved ELF without rebuilding')
     p.add_argument('--count',action='store_true',help='Count instructions per kernel and port call')
     p.add_argument('--late-ticks',type=int,default=0,help='Make one tick IRQ this many tick periods late')
+    p.add_argument('--perf-session',action='store_true',help='Build with the multicore performance session measurements')
     a=p.parse_args();e=a.evidence.resolve()
     if a.image:
         e.mkdir(parents=True,exist_ok=False);image=a.image.resolve()
         shutil.copy2(__file__,e/'executed-check.py')
     else:
-        assert a.freertos;image=build(e,a.freertos)
+        assert a.freertos;image=build(e,a.freertos,a.perf_session)
     if a.build_only:print(f'BUILT {image}');return
     try:result=cold_vector_check(image) if a.cold_vectors_only else transition_check(image) if a.transition_only else execute(image,e,a.stop_clock,a.resume,a.count,a.late_ticks)
     except Exception as error:
@@ -146,7 +148,7 @@ class Machine:
         self.ram=ctypes.create_string_buffer(0x1200000)
         self.ram_pointer=ctypes.addressof(self.ram)
         for addr,size,flags,data in segments:ctypes.memmove(self.ram_pointer+addr-0x41000000,data,len(data))
-        self.clock=24;self.steps=0;self.missing=missing
+        self.clock=24;self.steps=0;self.core_steps=[0]*8;self.missing=missing
         self.cpus=[];self.regs=[];self.active=[False]*8;self.active[0]=True
         self.pending=[set() for _ in range(8)];self.irq_active=[None]*8
         self.versions={};self.exclusive=[None]*8
@@ -302,7 +304,7 @@ class Machine:
             assert a>=0x41200000,('code/rodata mutation',c,hex(a))
             self.changed(a,size)
     def instruction(self,u,a,size,c):
-        self.steps+=1;m=self.regs[c]
+        self.steps+=1;self.core_steps[c]+=1;m=self.regs[c]
         # Deliver at an architectural instruction boundary, not only the model's
         # scheduling quantum. A periodic task can otherwise alias every quantum
         # with a masked SVC and spuriously starve an already pending interrupt.
@@ -317,6 +319,8 @@ class Machine:
             dest,name=args
             if name in ('fpcr','fpsr','nzcv'):return
             if name=='cntpct_el0':v=self.clock
+            # The PMU cycle counter advances one per instruction of its core.
+            elif name=='pmccntr_el0':v=self.core_steps[c]
             elif name=='s3_0_c15_c3_3':v=self.clusteractlr
             # Secure priority0xf0 is exposed as0xe0 through the NS CPU interface.
             elif name=='icc_rpr_el1':v=0xe0 if self.irq_active[c] is not None else 0xff

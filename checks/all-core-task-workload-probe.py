@@ -149,7 +149,10 @@ class Workload(first.FirstTask):
         of reporting starved workers."""
         r = self.regs[0]
         lag = self.clock - r['cntp_cval_el0']
-        if r['cntp_ctl_el0'] & 3 == 1 and lag > TICK_PERIOD:
+        # The multicore performance session image holds CPU0's tick behind its
+        # interrupt mask for 5.5 periods on purpose (perf_session.c).
+        allowed = 7*TICK_PERIOD if 'a733_perf_session_start' in self.symbols else TICK_PERIOD
+        if r['cntp_ctl_el0'] & 3 == 1 and lag > allowed:
             raise AssertionError(('Model saturated: CPU0 tick compare value is more than one period '
                                   'behind the modeled counter; reduce COUNTER_STEP', self.clock, lag))
 

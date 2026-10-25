@@ -14,6 +14,9 @@ extern void FreeRTOS_SGI_Handler(void);
 #ifdef SUNSTONE_A733_IRQ_TABLE
 #include "irq_table.h"
 #endif
+#ifdef SUNSTONE_A733_PERF_SESSION
+#include "perf_session.h"
+#endif
 extern void a733_smp_diagnostic_start(void);
 static unsigned core(void)
 {uint64_t c;__asm__ volatile("mrs %0, tpidr_el1":"=r"(c));return (unsigned)c;}
@@ -54,6 +57,9 @@ int a733_smp_pre_scheduler(unsigned long c,uint64_t epoch,uint64_t deadline)
     }
     while(!__atomic_load_n(&probe_release,__ATOMIC_ACQUIRE))
         if(a733_smp_counter()/24>=deadline)return 0;
+#ifdef SUNSTONE_A733_PERF_SESSION
+    if(!a733_perf_pre_scheduler((unsigned)c,deadline))return 0;
+#endif
     return 1;
 }
 int a733_smp_device_preparation_admitted(void)
@@ -138,6 +144,9 @@ void vApplicationIRQHandler(uint64_t interrupt)
     unsigned c=core();
     if(a733_smp_counter()>=diagnostic_deadline)a733_smp_exit_privileged(3,interrupt);
     if(interrupt==30 && !c) {
+#ifdef SUNSTONE_A733_PERF_SESSION
+        a733_perf_tick_irq();
+#endif
         /* An IRQ whose timer condition no longer holds processes no tick, as
          * Linux's timer handler acts only on ISTATUS. Each tick handler call
          * advances the compare value by one period (platform_tick_ack), so
