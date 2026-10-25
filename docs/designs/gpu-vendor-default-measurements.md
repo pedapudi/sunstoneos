@@ -61,8 +61,9 @@ after `a071620a` adds the writes to `platform/a733-smp/boot.c`, so
 models do not compile that file.
 
 Images built by application scripts change when rebuilt from this tree,
-because they compile one of the three EL3 entries: the four GPU diagnostic
-variants (identity `908d1fd9…`, power-only `19a34592…`, wrapper-read
-`7750efb2…`, probe-read `19c7d2db…`), and the returning USB, RTC, finite NPU
+because they compile one of the EL3 entries: the four GPU diagnostic
+variants (at `6621cdfa`: identity `a1b85d68…`, power-only `5a61b79e…`,
+wrapper-read `243d1c96…`, probe-read `5cc7c135…`; evidence
+`diagnostic-images-6621cdfa/`), and the returning USB, RTC, finite NPU
 and board-bundle images. Frozen evidence sets, including the provider-readiness
 checkpoint `3adfa4ad…`, keep their images.
