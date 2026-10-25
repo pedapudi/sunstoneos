@@ -404,11 +404,14 @@ domain never powered up, or it is not wired to this PPU.
   writes the CORE6 row. The power-domain owner writes TOP5's row before
   each TOP5 ON from OFF; nothing wrote CORE6's row in either run.
 - **SCP firmware**, file offsets `0x5e7e–0x5f80`, in a function whose
-  messages name standby resume. It clears bits 0, 3 and 8 of R_CCU
-  `0x250`, which `ccu-sun60iw2-r.c` names the `vdd-ddr`, `vdd-sys2usb` and
-  `vdd-usb2cpus` gates. It then ORs policy 8 into rows 0 to 10, polls every
-  status except CORE6's, and re-enables a table of PLLs. Nothing in it is
-  specific to CORE6 apart from the skipped poll.
+  messages name standby resume. It clears bits 3 and 8 of R_CCU `0x250`
+  (mask `~0x108`) and leaves bit 0 set; `ccu-sun60iw2-r.c` names bits 3 and
+  8 the `vdd-sys2usb` and `vdd-usb2cpus` gates and bit 0 the `vdd-ddr`
+  gate. It then ORs policy 8 into rows 0 to 10, polls every status except
+  CORE6's, and re-enables a table of PLLs. Nothing in it is specific to
+  CORE6 apart from the skipped poll. The reference backsolve
+  (`docs/reference-backsolve-gpu.md`) confirms this against the SCP blob at
+  `0x5e9a`: bit 0 is not cleared.
 - **PRCM.** The register list of manual section 4.2.4 has no GPU power
   switch. The PPU bus register `0x1ac` has a gate bit and no reset bit. The
   gate is open: the PPU registers respond and TOP5 works.
