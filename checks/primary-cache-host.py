@@ -60,7 +60,7 @@ def main():
         def report(data, dram, unused):
             result = bytearray(reports['baseline-refusal' if case == 'returned-local-refusal' else 'missing-irqs' if case == 'returned-interrupt-timeout' else 'success']) if el1 else bytearray(extent[1])
             result[:256] = data
-            if case in ('wrong-epoch-restored', 'incomplete-el1-restored'):
+            if case in ('wrong-epoch-restored', 'incomplete-el1-restored', 'restore-group-refused'):
                 struct.pack_into('<Q', result, 24, 4)
             before = (*struct.unpack_from('<4Q', data, 16*8), 0x731)
             active = (before[0] | 0x1005, 0x80823019, 0x421f2000, 0x44ff00, before[4] & ~0x200)
@@ -74,6 +74,17 @@ def main():
                     result[0x1a00:] = bytes(len(result)-0x1a00)
                 elif case == 'incomplete-el1-restored':
                     struct.pack_into('<Q', result, 0x2800, 2)
+                elif case in ('restore-pwrr', 'restore-group-refused'):
+                    # CPU0's after-snapshot (local record words 20-29). restore-pwrr
+                    # changes only read-only status: both PWRR group bits,
+                    # GICR_CTLR.RWP and GICR_WAKER.Quiescent. The refused case
+                    # changes a configuration word, the SGI/PPI group.
+                    words = list(struct.unpack_from('<10Q', result, 0xa00+20*8))
+                    if case == 'restore-pwrr':
+                        words[9] ^= 0xc; words[0] |= 8; words[1] |= 1 << 31
+                    else:
+                        words[5] ^= 1
+                    struct.pack_into('<10Q', result, 0xa00+20*8, *words)
                 elif case == 'invalid-context-restored':
                     struct.pack_into('<Q', result, 0x2948, 191)
                 elif case == 'invalid-interrupt-restored':
@@ -94,7 +105,8 @@ def main():
             try: host.load(args.build, args.bundle/'image.elf', changed)
             except ValueError: pass
             else: raise AssertionError('Changed entry patch accepted')
-        elif case in ('wrong-epoch-restored', 'incomplete-el1-restored', 'invalid-interrupt-restored', 'invalid-context-restored'):
+        elif case in ('wrong-epoch-restored', 'incomplete-el1-restored', 'invalid-interrupt-restored', 'invalid-context-restored',
+                      'restore-group-refused'):
             sub = args.output/case
             sub.mkdir()
             harness.run_case(SimpleNamespace(**{**vars(args), 'output': sub}),
@@ -105,6 +117,11 @@ def main():
             returned = json.loads((sub/'complete-return/runtime/session.json').read_text())['result']
             assert returned['primary_cached_el1_completed'] and not returned['primary_interrupts_completed']
             assert returned['interrupt_outcome'] == 1
+        elif case == 'restore-pwrr':
+            sub = args.output/case; sub.mkdir()
+            harness.run_case(SimpleNamespace(**{**vars(args), 'output': sub}), 'complete-return', fixture, report)
+            returned = json.loads((sub/'complete-return/runtime/session.json').read_text())['result']
+            assert returned['primary_cached_el1_completed'] and returned['local_gic_restored']
         elif case == 'returned-local-refusal':
             sub = args.output/case; sub.mkdir()
             harness.run_case(SimpleNamespace(**{**vars(args), 'output': sub}), 'complete-return', fixture, report)

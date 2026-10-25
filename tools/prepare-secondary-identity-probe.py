@@ -46,6 +46,32 @@ PROBE=header_defines()
 DEADLINE_RECORD=(PROBE['DEADLINE_RECORD'],PROBE['DEADLINE_RECORD_BYTES'])
 DEADLINE_RECORD_MAGIC=PROBE['DEADLINE_RECORD_MAGIC']
 DEADLINE_TICKS=PROBE['DEADLINE_TICKS']
+# Read-only status bits of each local snapshot word, in the order of struct
+# secondary_local_state. Before/after equalities ignore them.
+STATUS=tuple(PROBE.get('GICR_'+n+'_STATUS',0) for n in
+             ('CTLR','WAKER','ISENABLER0','ISPENDR0','ISACTIVER0','IGROUPR0','IGRPMODR0','ICFGR1','IPRIORITYR0','PWRR'))
+DISTRIBUTOR_ERRORS={0:'none',PROBE['DISTRIBUTOR_ERROR_CONFIGURATION']:'wrong distributor configuration',
+                    PROBE['DISTRIBUTOR_ERROR_RWP_TIMEOUT']:'GICD_CTLR.RWP still set at the deadline'}
+
+
+def stable(words):
+    """A ten-word local snapshot without its read-only status bits."""
+    return tuple(w&~s for w,s in zip(words,STATUS,strict=True))
+
+
+def check_distributor(raw,deadline):
+    """Require the distributor record at report offset 0x1a00 to show a complete
+    restoration; a failure names the record's error word. Returns the bank
+    count and the saved SPI enable words."""
+    state,before,after,banks,recorded=struct.unpack_from('<5Q',raw,0x1a00)
+    error=struct.unpack_from('<Q',raw,0x1b28)[0]
+    detail=f' (state {state}, error {error}: {DISTRIBUTOR_ERRORS.get(error,"unknown code")})'
+    require(state==4 and not error and not (before^after)&~PROBE['GICD_CTLR_RWP'] and before&0x70==0x30 and
+            1<=banks<=32 and recorded==deadline,'Distributor restoration incomplete'+detail+'.')
+    saved=struct.unpack_from('<32I',raw,0x1a28)
+    require(saved==struct.unpack_from('<32I',raw,0x1aa8) and not any(raw[0x1b30:0x1c00]),
+            'Distributor enables or report padding differ'+detail+'.')
+    return banks,saved
 
 
 def deadline_patch_points(native,quiet):

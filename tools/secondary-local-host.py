@@ -11,14 +11,8 @@ require,digest=identity.require,identity.digest
 PROFILE='secondary-local-return-v1'
 HOST_SOURCES=identity.HOST_SOURCES+('tools/secondary-local-host.py',)
 MODEL_SOURCES=('checks/secondary-local-probe.py',)+identity.MODEL_SOURCES
-# Read-only status bits of each snapshot word, in struct secondary_local_state
-# order, from boot/a733/secondary-local-probe.h. Equalities ignore them.
-PROBE=identity.builder.PROBE
-STATUS=tuple(PROBE.get('GICR_'+n+'_STATUS',0) for n in
-             ('CTLR','WAKER','ISENABLER0','ISPENDR0','ISACTIVER0','IGROUPR0','IGRPMODR0','ICFGR1','IPRIORITYR0','PWRR'))
-def stable(words):
-    """A ten-word snapshot without its status bits."""
-    return tuple(w&~s for w,s in zip(words,STATUS,strict=True))
+# The snapshot status masks of boot/a733/secondary-local-probe.h.
+STATUS,stable=identity.builder.STATUS,identity.builder.stable
 
 
 def decode(raw,nonce,cached=False,coherent=False,interrupts=False,pre_scheduler=False):
@@ -43,12 +37,8 @@ def decode(raw,nonce,cached=False,coherent=False,interrupts=False,pre_scheduler=
                       'phase':r[8],'error':r[9],'writes':r[10],'cleanup_writes':r[12],
                       'controller_access':dict(zip(('address','value','operation','completed'),r[41:45])),
                       'before':before,'after':after})
-    state,before,after,banks,deadline=struct.unpack_from('<5Q',raw,0x1a00)
-    saved=struct.unpack_from('<32I',raw,0x1a28);restored=struct.unpack_from('<32I',raw,0x1aa8)
-    require(state==4 and not (before^after)&~PROBE['GICD_CTLR_RWP'] and before&0x70==0x30 and
-            1<=banks<=32 and deadline==result['startup_deadline'] and saved==restored and
-            not saved[0] and not any(saved[banks:]) and not any(raw[0x1b28:0x1c00]),
-            'Distributor restoration incomplete.')
+    banks,saved=identity.builder.check_distributor(raw,result['startup_deadline'])
+    require(not saved[0] and not any(saved[banks:]),'Distributor restoration enabled a bank it does not own.')
     result.update(local_initialization_completed=all(c['initialized'] for c in cores),
                   local_results=cores,distributor_restored=True)
     return result

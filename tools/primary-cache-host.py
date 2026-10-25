@@ -12,11 +12,12 @@ probe = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(probe)
 require, digest = probe.require, probe.digest
 PROFILE = 'primary-cache-return-v1'
-HOST_SOURCES = (*probe.primary.HOST_SOURCES, 'tools/primary-cache-host.py')
+HOST_SOURCES = (*probe.primary.HOST_SOURCES, 'tools/primary-cache-host.py', 'tools/prepare-secondary-identity-probe.py')
 MODEL_SOURCES = ('checks/primary-cache-probe.py', *probe.primary.MODEL_SOURCES)
 CASES = ('complete-return', 'transport-failure-retained', 'missing-return-retained',
          'invalid-report-restored', 'changed-input-refused', 'wrong-epoch-restored')
-EL1_CASES = CASES + ('returned-local-refusal', 'incomplete-el1-restored', 'changed-entry-patch-refused')
+EL1_CASES = CASES + ('returned-local-refusal', 'incomplete-el1-restored', 'changed-entry-patch-refused',
+                     'restore-pwrr', 'restore-group-refused')
 IRQ_CASES = EL1_CASES + ('returned-interrupt-timeout', 'invalid-interrupt-restored')
 CONTEXT_CASES = IRQ_CASES + ('invalid-context-restored',)
 CONTEXT_MODEL_CASES = ('success', 'baseline-refusal', 'missing-irqs', 'late-irqs', 'context-corruption', 'cleanup-deadline', 'unexpected-yield')

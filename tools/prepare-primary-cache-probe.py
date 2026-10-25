@@ -13,6 +13,10 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('primary_host', ROOT/'tools/primary-publication-host.py')
 primary = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(primary)
+# Shared snapshot status masks and distributor record checks.
+spec = importlib.util.spec_from_file_location('identity_builder', ROOT/'tools/prepare-secondary-identity-probe.py')
+survey = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(survey)
 require, digest = primary.require, primary.digest
 NATIVE = primary.probe.NATIVE
 REPORT = (0x42018000, 0x2100)
@@ -104,7 +108,7 @@ def decode(raw, nonce, manifest=None):
                 require(local[3] == 0 and not any(local[5:10]) and not any(local[20:]) and
                         not any(raw[0x1a00:0x1c00]), 'Pre-write refusal changed controller state.')
             else:
-                require(local[10:20] == local[20:30] and local[30] == 0 and
+                require(survey.stable(local[10:20]) == survey.stable(local[20:30]) and local[30] == 0 and
                         local[7:10] == local[31:34], 'Refused controller did not restore local state.')
                 decode_distributor(raw, local[2])
             result.update(primary_cached_el3_completed=False, primary_cached_el1_completed=False,
@@ -129,9 +133,11 @@ def decode(raw, nonce, manifest=None):
         local = struct.unpack_from('<64Q', raw, 0xa00)
         binding = (values[1], values[2])
         require(local[:3] == (3, *binding) and local[4] == 0 and local[5] > 0 and
-                local[10:20] == local[20:30] and local[30] == 0 and not any(local[34:]),
-                'Primary local GIC setup/restoration incomplete.')
-        require(not any(local[10:15]) and not local[19] & 1 and
+                survey.stable(local[10:20]) == survey.stable(local[20:30]) and local[30] == 0 and
+                not any(local[34:]), 'Primary local GIC setup/restoration incomplete.')
+        # The baseline matches the probe's own admission: only GICR_CTLR's
+        # status bits are ignored.
+        require(not local[10] & ~survey.STATUS[0] and not any(local[11:15]) and not local[19] & 1 and
                 ((local[19] >> 2) & 1) == ((local[19] >> 3) & 1), 'Primary baseline was not quiescent and awake.')
         require(local[7:10] == local[31:34], 'Primary CPU-interface groups or priority mask changed.')
         decode_distributor(raw, binding[1])
@@ -166,11 +172,7 @@ def decode(raw, nonce, manifest=None):
 
 
 def decode_distributor(raw, deadline):
-    dist = struct.unpack_from('<5Q', raw, 0x1a00)
-    require(dist[0] == 4 and dist[1] == dist[2] and dist[1] & 0x70 == 0x30 and
-            1 <= dist[3] <= 32 and dist[4] == deadline, 'Distributor restoration incomplete.')
-    require(raw[0x1a28:0x1aa8] == raw[0x1aa8:0x1b28] and not any(raw[0x1b28:0x1c00]),
-            'Distributor enables or report padding differ.')
+    survey.check_distributor(raw, deadline)
 
 
 def prepare(args):
