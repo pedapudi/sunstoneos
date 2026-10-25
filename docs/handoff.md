@@ -1,10 +1,19 @@
 # Current work
 
-**Paused at the user's request on 2026-10-24 because the weekly limit is near.**
-The coordinator interrupted the GPU and NPU implementation agents and their
-active reviewers. Do not resume development, builds, tests or hardware work
-until the user asks. No board access occurred during this board-free tranche.
-There is no active goal object to update.
+**Development resumed on 2026-10-24 at the user's request.** The Claude
+coordinator session now owns the GPU work in `gpu-provider-ready-1024` and the
+NPU OS work in `npu-thermal-1024`; each first commits its saved edits as is and
+merges `bringup`. The boards stay untouched until the user reports both
+reconnected. The PMIC step-bound review fixes merged at `b41460e6`: the bound is
+the board median plus about 20 µs (799 µs, and 839 µs for the first step),
+1,268 permille of the step's own wire time, and 110% stays open for writes.
+`checks/power-domains-service.c` now models the GPU CORE register bank; it had
+aborted on `a0f79c3d` after the CORE6 power commits.
+
+The user approved physical CPU clock and voltage changes on 2026-10-24: the A76
+operating-point runs A1, A2 and A3 of `docs/designs/cpu-a76-dvfs.md` and the
+DCDC3 selector write, each still gated on its own prerequisites. Publishing the
+mimus branch `port/sunstoneos` (`9c57286b7`) awaits the user's answer.
 
 ## Review of the paused tranche (2026-10-24 evening)
 
@@ -307,9 +316,9 @@ defect was found. Evidence: `accelerator-shared-owner-20261024/`.
    permille of measured wire time, with 40 µs extra for the first step. Exact
    comparisons and focused checks pass; the 110% target remains open. Refreeze
    the revised trace and row text before the next physical timing measurement.
-6. Publishing mimus `9c57286b7` and each physical CPU clock or PMIC voltage
-   change still require their specific approvals. Independent implementation
-   and modeling continue without those operations.
+6. Physical CPU clock and DCDC3 voltage changes are approved within
+   `docs/designs/cpu-a76-dvfs.md`; other PMIC rails are not. Publishing mimus
+   `9c57286b7` still requires the user's approval.
 
 Both finite accelerator host parsers now use their actual native monitor
 identifiers, with producer-derived regression evidence. The earlier fixtures
