@@ -444,9 +444,17 @@ of the supervised A76 build with the CPU clock option (B1 in
   measures walk cost only; the owner's revert rule and its 1% contiguous-hint
   trigger need these workloads. Domain 4 ON is bound to bundle 10's records
   once the NPU startup requests it through the owner.
-- **On user approval.** CPU clock raises; DCDC3 and DCDC5 voltage changes,
-  including the service-step timing of a DCDC3 selector write, for which
-  the power-domain design's host model predicts two steps with one tick wait;
+- **On ranks 7 and 8, the B1 record and a bound approval record.** The A76
+  operating-point runs A1, A2 and A3 of [cpu-a76-dvfs.md](cpu-a76-dvfs.md)
+  and the DCDC3 selector write, including the service-step timing of that
+  write, for which the power-domain design's host model predicts two steps
+  with one tick wait. The user approved these physical clock and voltage
+  changes on 2026-10-24. Each still runs only on a board where ranks 7 and 8
+  have passed and the B1 record exists, whose DCDC3 reading gives the
+  selector that the write must find. Its approval record, of schema
+  `a733-os-cpu-clock-approval-v1`, names that board, the image, the session
+  and the B1 record, as the A76 design's approval-record rule states.
+- **On user approval.** Other CPU clock raises and DCDC5 voltage changes;
   domain 5 ON and OFF, repeated N times, which needs DCDC4 and is the only
   domain that powers off; WDT0 expiry with fault-record retention, which boots
   from microSD; intentional GPU and NPU hangs. Memory qualification also waits

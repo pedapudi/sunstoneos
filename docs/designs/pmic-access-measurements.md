@@ -161,8 +161,10 @@ the comparison objects are under `$P`.
 
 Bundle 6 has measured the access-cost windows and the step times of the
 changed provider, and the rank 9 native USB image has passed again on it
-(both on port 3-3 on 2026-10-24). A DCDC3 selector write still needs a board run with a PMIC write. Its
-acceptance bound is at most two steps with one tick wait.
+(both on port 3-3 on 2026-10-24). A DCDC3 selector write still needs a board run with a PMIC write,
+gated on ranks 7 and 8, the B1 record and a bound approval record
+([pmic-access.md](pmic-access.md), section "Measurement"). Its acceptance
+bound is at most two steps with one tick wait.
 
 ## Focused review corrections
 

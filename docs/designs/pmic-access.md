@@ -357,8 +357,13 @@ After the change, bundle 6 makes 32 snapshots of DCDC2 and DCDC4. Pass: the
 median and first steps within their bounds set as above; a measured byte
 within 110% of nine bit times; snapshot bytes unchanged (`0xff9e`); no
 fault. Re-spins are reported. A DCDC3 selector write needs a separate
-bundle with a PMIC write, which needs the user's approval; acceptance
-allows two steps and one tick wait.
+bundle with a PMIC write. The user approved it on 2026-10-24, and it runs
+only on a board where ranks 7 and 8 have passed and the B1 record of
+[cpu-a76-dvfs.md](cpu-a76-dvfs.md) exists, with an approval record bound to
+that board, image and session ([board-bundles-next.md](board-bundles-next.md),
+section "Bundles that wait"). The B1 record's DCDC3 reading gives the
+selector that the write must find. Acceptance allows two steps and one tick
+wait.
 
 **Requalification.** The provider and adapter change affects every image
 that links them. The board-qualified one is the native USB channel image
