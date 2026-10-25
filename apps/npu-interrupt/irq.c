@@ -132,8 +132,19 @@ int NPU_IRQ_EXTERNAL_BIND(struct npu_runtime *rt)
     binding.service=&rt->service;return 1;
 }
 #endif
+#ifndef NPU_IRQ_EXTERNAL_BIND
+/* System counter at the latest delivery, before the mask; read by the finite
+ * client after each completed job to time the job without the worker's wake. */
+static uint64_t delivered_ticks;
+uint64_t npu_application_irq_ticks(void)
+{ return __atomic_load_n(&delivered_ticks,__ATOMIC_ACQUIRE); }
+#endif
 void NPU_IRQ_HANDLER(void)
 {
+#ifndef NPU_IRQ_EXTERNAL_BIND
+    uint64_t now;__asm__ volatile("isb\n mrs %0, cntpct_el0" : "=r"(now) :: "memory");
+    __atomic_store_n(&delivered_ticks,now,__ATOMIC_RELEASE);
+#endif
     UBaseType_t saved=taskENTER_CRITICAL_FROM_ISR();
     int ok=gicv3_spi_mask(&source);
     binding.masked=1;

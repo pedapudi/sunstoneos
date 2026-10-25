@@ -6,6 +6,11 @@
 /* Fixture selector is outside the ELF load/BSS interval and remains in QEMU RAM. */
 #define npu_irq_case (*(volatile unsigned *)UINT64_C(0x47fff000))
 static unsigned mask_calls,rearm_calls,stop_calls,masked,delivered,critical_rearm;
+/* System counter at the latest modeled event delivery and at the owner's
+ * latest DONE or READY reply: the client's share of completion latency. */
+static volatile uint64_t event_ticks,reply_ticks;
+static uint64_t irq_ticks(void)
+{uint64_t v;__asm__ volatile("isb\n mrs %0, cntpct_el0" : "=r"(v) :: "memory");return v;}
 /* Case 9 pins the worker and the modeled route to core 1 instead of core 0. */
 static UBaseType_t irq_route;
 static void routed(void){configASSERT((UBaseType_t)1<<portGET_CORE_ID()==irq_route);}
@@ -29,7 +34,7 @@ static int irq_rearm(void *cookie)
      * survive the callback and be consumed next, without another trigger. */
     model.regs[0x10/4]|=npu_irq_case==3?UINT32_C(0x40000000):1;
     model.event_sent=1;model.regs[1]=IDLE;model.running=0;
-    masked=1;++delivered;BaseType_t woken=pdFALSE;
+    masked=1;++delivered;event_ticks=irq_ticks();BaseType_t woken=pdFALSE;
     npu_service_irq_notify_from_isr(&service,npu_irq_case==2?0:1,&woken);
     return 1;
 }
@@ -56,6 +61,7 @@ static struct npu_service_reply irq_wait(enum a733_npu_state wanted)
         configASSERT(xTaskGetTickCount()-start<1000);vTaskDelay(1);
         r=irq_request(NPU_SERVICE_STATUS,0,0);
     }while(r.state!=wanted && r.state!=A733_NPU_FAULT);
+    reply_ticks=irq_ticks();
     if(r.state==A733_NPU_FAULT){platform_puts("IRQ fixture fault=");platform_hex(r.fault);platform_puts(" masks=");platform_hex(mask_calls);platform_puts(" rearms=");platform_hex(rearm_calls);platform_puts(" pending=");platform_hex(atomic_load(&service.irq_pending));platform_puts("\n");}
     return r;
 }
@@ -64,7 +70,7 @@ static struct npu_service_reply irq_wait(enum a733_npu_state wanted)
 static struct npu_service_reply irq_hold(void)
 {
     struct npu_service_reply r=irq_request(NPU_SERVICE_WAIT,0,0);
-    vTaskDelay(2);configASSERT(!uxQueueMessagesWaiting(service.clients[0].replies));
+    reply_ticks=irq_ticks();vTaskDelay(2);configASSERT(!uxQueueMessagesWaiting(service.clients[0].replies));
     return r;
 }
 static void irq_owner(void *unused)
@@ -84,6 +90,12 @@ static void irq_owner(void *unused)
             uint64_t job=r.job_ticket;
             r=npu_irq_case==9?irq_hold():irq_wait(A733_NPU_DONE);
             configASSERT(r.state==A733_NPU_DONE && r.result==NPU_SERVICE_OK && r.job_ticket==job);
+            if(npu_irq_case!=6) {
+                uint64_t hz;__asm__ volatile("mrs %0, cntfrq_el0" : "=r"(hz));
+                platform_puts(npu_irq_case==9?"MEASURE WAIT":"MEASURE STATUS polls");
+                platform_puts(" job event to DONE reply us=");
+                platform_hex((reply_ticks-event_ticks)*1000000/hz);platform_puts("\n");
+            }
             configASSERT(native.memory.state==A733_NPU_MEMORY_IDLE && data[4096]==(uint8_t)(0x10080000>>19));
             r=irq_request(NPU_SERVICE_REAP,0,0);configASSERT(r.result==NPU_SERVICE_OK);
         }

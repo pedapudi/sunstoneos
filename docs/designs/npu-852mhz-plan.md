@@ -65,9 +65,10 @@ job time.
 
 The finite client logs each job's publication and completion observation in
 counter microseconds, and the host reports them. The service worker polls
-for completion once per 1 ms tick in this polled profile, so a job shorter
+for completion once per 1 ms tick in the polled profile, so a job shorter
 than a tick reads as the time to the next poll at either rate. The NPU's
 compute time is predicted to scale by 492/852 = 0.58, less where memory bounds
-the work; resolving that on the board needs a finer completion measurement
-than the tick poll. The outputs are predicted to be byte-identical at both
+the work. The interrupt profile resolves it: it times each job from
+publication to interrupt 97 and counts the NPU's active cycles
+([design](npu-irq-completion.md)). The outputs are predicted to be byte-identical at both
 rates.

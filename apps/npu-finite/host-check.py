@@ -4,15 +4,33 @@ import argparse,hashlib,importlib.util,json,os,shutil,struct,tempfile
 from pathlib import Path
 from unittest.mock import patch
 p=argparse.ArgumentParser(description=__doc__)
-p.add_argument('--case',action='append',default=[],help='Run only named transfer cases; packaging validation still runs.');p.add_argument('--native',type=Path,required=True);p.add_argument('--evidence',type=Path,required=True);a=p.parse_args();a.evidence.mkdir(parents=True,exist_ok=False)
-r=Path(__file__).resolve().parents[2];spec=importlib.util.spec_from_file_location('host',r/'apps/npu-finite/host.py');h=importlib.util.module_from_spec(spec);spec.loader.exec_module(h)
+p.add_argument('--case',action='append',default=[],help='Run only named transfer cases; packaging validation still runs.')
+p.add_argument('--interrupt',action='store_true',help='check the interrupt host (apps/npu-interrupt/host.py) and its admission record')
+p.add_argument('--client-logs',type=Path,help='interrupt client logs from checks/npu-interrupt-client.py, for the receipt cases');p.add_argument('--native',type=Path,required=True);p.add_argument('--evidence',type=Path,required=True);a=p.parse_args();a.evidence.mkdir(parents=True,exist_ok=False)
+r=Path(__file__).resolve().parents[2];HOST=r/('apps/npu-interrupt/host.py' if a.interrupt else 'apps/npu-finite/host.py')
+spec=importlib.util.spec_from_file_location('host',HOST);h=importlib.util.module_from_spec(spec);spec.loader.exec_module(h)
+# The interrupt host wraps a private copy of the finite host; check that copy.
+if a.interrupt:h=h.finite
+IRQ_RECEIPTS='NPU_IRQ_COMPLETIONS=0x0000000000000003\nNPU_IRQ_STOPPED=0x0000000000000001\n'
+IRQ_CONDITIONS=('exclusive-level-high-SPI65','single-task-event-acknowledgment','masked-notification-and-serialized-rearm',
+ 'close-source-disable-before-pending-clear','inactive-pending-clear-before-return','saved-route-restored-before-enable')
 def sha(data):return hashlib.sha256(data).hexdigest()
 # Startup entry and READY, then each job's publication and completion, in
 # counter microseconds, as the image logs them; the host's parse of them.
 TIMES=(1000,5628,7000,7900,9000,9850)
 assert h.timing('NPU_TIME_US=\n'+''.join(f'0x{x:016x}\n' for x in TIMES))=={'startup_us':4628,'job_us':[900,850],
     'publication_gap_us':2000,'entry_us':1000,'ready_us':5628,'jobs_raw_us':[7000,7900,9000,9850],
-    'resolution':'Completion is observed at the service worker\'s next poll, once per 1 ms tick.'}
+    'counters':None,'resolution':'Completion is observed at the service worker\'s next poll, once per 1 ms tick, or on INTID97.'}
+# The job counter block: 24 MHz system counter, then per job publication,
+# INTID97 and completion ticks, then NPU total and idle cycles.
+COUNTERS=(24000000,2400,2640,3120,49200,1200,4800,0,5520,49200,49300)
+counters=h.timing('NPU_TIME_US=\n'+''.join(f'0x{x:016x}\n' for x in TIMES)+
+    'NPU_JOB_COUNTERS=\n'+''.join(f'0x{x:016x}\n' for x in COUNTERS))['counters']
+assert counters=={'frequency':24000000,'jobs':[
+    {'start_ticks':2400,'irq_ticks':2640,'done_ticks':3120,'start_to_irq_us':10.0,'start_to_done_us':30.0,
+     'total_cycles':49200,'idle_cycles':1200,'active_cycles':48000},
+    {'start_ticks':4800,'irq_ticks':0,'done_ticks':5520,'start_to_irq_us':None,'start_to_done_us':30.0,
+     'total_cycles':49200,'idle_cycles':49300,'active_cycles':None}]},counters
 # The board's form of an unrecorded completion: no job time, no refusal.
 board=h.timing('NPU_TIME_US=\n'+''.join(f'0x{x:016x}\n' for x in (108189479,108193503,75005,0,77045,0)))
 assert board['startup_us']==4024 and board['job_us']==[None,None] and board['publication_gap_us']==2040
@@ -110,6 +128,9 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
  review=write('root.json',{**common,'schema':'a733-npu-finite-return-review-v1','reviewed':True,'execution_profile':execution,'build_id':build.hex(),'supervisor':profile['supervisor'],'launcher_sha256':sha(launcher.read_bytes()),'host_sources':{n:sha((r/n).read_bytes()) for n in h.HOST_SOURCES},'conditions':{k:ref(fact) for k in ('architecture-reset-reviewed','software-handoff-reviewed','normal-return-retirement-reviewed','failure-retention-reviewed')}})
  entry={**common,**profile,'schema':h.SCHEMA,'execution_profile':execution,'boot_sha256':boot_hash,'ddr':ref(ddr),'platform':ref(platform),'root_review':ref(review),**{k:ref(v) for k,v in facts.items()}}
  if thermal:entry['thermal']=thermal_facts
+ if a.interrupt:
+  irq=write('interrupt.json',{**common,'schema':'a733-npu-interrupt-entry-v1','build_id':build.hex(),'interrupt':97,'cpu':0,'conditions':{k:ref(fact) for k in IRQ_CONDITIONS}})
+  entry['interrupt']=ref(irq)
  admission=write('admission.json',entry);raw[80:112]=hashlib.sha256(admission.read_bytes()).digest();session=t/'session.bin';session.write_bytes(raw)
  boot_path=t/'typed-boot.bin';boot_path.write_bytes(raw[boot:boot+boot_bytes])
  constructed=t/'constructed-session.bin';h.construct_session(image,manifest,boot_path,admission,constructed)
@@ -187,6 +208,7 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
   # The image's startup and job times precede the thermal markers.
   text=text.replace('NPU_STAGE=WAIT_STARTUP\n','NPU_STAGE=WAIT_STARTUP\nNPU_TIME_US=\n'+''.join(f'0x{x:016x}\n' for x in TIMES),1)
   if thermal:text=text.replace('NPU_STAGE=QUIESCENT',f'NPU_THERMAL_REASON=0x{reason:016x}\nNPU_JOBS=0x{jobs:016x}\nNPU_STAGE=QUIESCENT')
+  if a.interrupt:text=text.replace('NPU_STAGE=QUIESCENT\n',IRQ_RECEIPTS+'NPU_STAGE=QUIESCENT\n',1)
   if checkpoint:
    text='NPU_CHECKPOINT=ENTRY_MEMORY_READY; providers never constructed; jobs=0\n'
    if variant=='false-success':text=text.replace('jobs=0','jobs=1')
@@ -321,4 +343,31 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
   if record.get('stopped_capture'):
    preserved=a.evidence/variant;preserved.mkdir()
    for path in out.glob('npu-stopped-*.bin'):shutil.copyfile(path,preserved/path.name)
-(a.evidence/'host-result.json').write_text(json.dumps({'passed':True,'physical_access':False,'native_elf_sha256':sha(image.read_bytes()),'host_sha256':sha((r/'apps/npu-finite/host.py').read_bytes()),'checker_sha256':sha(Path(__file__).read_bytes()),'stopped_capture_sha256':sha((r/'apps/npu-finite/stopped-capture.py').read_bytes()),'execution_profile':execution,'native_initializer':{'raw':'native-initial-report.bin','sha256':sha(initialized),'magic':hex(native_report[0]),'boundary':'Actual linked monitor report initialization; contract-validator success and counter modeled, stopped before session seal. Completion fields are modeled; final receipt/status writer covered separately.'},'cases':results,'scope':'New host packaging/admission/report validation/sealed preload/DRAM restoration/retention with mocked FEL and ROM enumeration. Temporary modeled evidence uses a nonexistent test port and is removed. Existing launcher bytes reused; no full native admission, hardware or queues.'},indent=2)+'\n');print('PASS new NPU returned-RAM host cases:',len(results))
+ if a.interrupt:
+  # The interrupt record is required and binds the route; a polled entry is refused.
+  for name,value in [('missing-IRQ-admission',{k:v for k,v in entry.items() if k!='interrupt'}),
+                     ('polled-entry-refused',{**entry,'execution_profile':'npu-finite-return-v1'})]:
+   encoded=json.dumps(value).encode();mutated=bytearray(raw);mutated[80:112]=hashlib.sha256(encoded).digest()
+   rejected(name,lambda:h.validate_admission(encoded,mutated,build,layout,sha(data),execution_profile=execution))
+  saved_irq=irq.read_bytes();bad=json.loads(saved_irq);bad['interrupt']=98;irq.write_text(json.dumps(bad))
+  encoded=json.dumps({**entry,'interrupt':ref(irq)}).encode();mutated=bytearray(raw);mutated[80:112]=hashlib.sha256(encoded).digest()
+  rejected('other-route-refused',lambda:h.validate_admission(encoded,mutated,build,layout,sha(data),execution_profile=execution));irq.write_bytes(saved_irq)
+  # Receipts in logs that the actual client produced (checks/npu-interrupt-client.py).
+  for variant in ('matched','mismatch','missing-completion','missing-stop','wrong-completion','duplicate-completion') if a.client_logs else ():
+   text=(a.client_logs/('mismatch.log' if variant=='mismatch' else 'matched.log')).read_text();status=int(variant=='mismatch')
+   if variant=='missing-completion':text=text.replace('NPU_IRQ_COMPLETIONS=0x0000000000000003\n','')
+   if variant=='missing-stop':text=text.replace('NPU_IRQ_STOPPED=0x0000000000000001\n','')
+   if variant=='wrong-completion':text=text.replace('NPU_IRQ_COMPLETIONS=0x0000000000000003','NPU_IRQ_COMPLETIONS=0x0000000000000002')
+   if variant=='duplicate-completion':text='NPU_IRQ_COMPLETIONS=0x0000000000000002\n'+text
+   monitor=list(native_report);monitor[3:9]=[5,status,0,11000000,1,12000000]
+   header=[0x534b4552,5,status,len(text),0,0,0,0,11500000,12000000]+[0]*6
+   receipt=[0x4e50555245543031,profile['epoch'],profile['generation'],profile['lease'],status,status+1,g['clean_start'],g['clean_end'],(g['clean_end']-g['clean_start'])//64,490000000,len(text)]
+   plat=bytearray(16384);struct.pack_into('<16Q',plat,0,*header);plat[256:256+len(text)]=text.encode()
+   frames=struct.pack('<16Q',*monitor),bytes(plat),struct.pack('<11Q',*receipt)
+   if variant in ('matched','mismatch'):
+    value=h.validate_reports(*frames,prepared)
+    assert value['functional_success']==(variant=='matched') and value['interrupt_completions']==3 and value['interrupt_stopped']
+    assert value['timing']['counters'] is not None,value['timing']
+    results.append({'name':variant+'-producer-log-report','passed':True})
+   else:rejected(variant+'-receipt-refused',lambda:h.validate_reports(*frames,prepared))
+(a.evidence/'host-result.json').write_text(json.dumps({'passed':True,'physical_access':False,'native_elf_sha256':sha(image.read_bytes()),'host_sha256':sha(HOST.read_bytes()),'checker_sha256':sha(Path(__file__).read_bytes()),'stopped_capture_sha256':sha((r/'apps/npu-finite/stopped-capture.py').read_bytes()),'execution_profile':execution,'native_initializer':{'raw':'native-initial-report.bin','sha256':sha(initialized),'magic':hex(native_report[0]),'boundary':'Actual linked monitor report initialization; contract-validator success and counter modeled, stopped before session seal. Completion fields are modeled; final receipt/status writer covered separately.'},'cases':results,'scope':'New host packaging/admission/report validation/sealed preload/DRAM restoration/retention with mocked FEL and ROM enumeration. Temporary modeled evidence uses a nonexistent test port and is removed. Existing launcher bytes reused; no full native admission, hardware or queues.'},indent=2)+'\n');print('PASS new NPU returned-RAM host cases:',len(results))

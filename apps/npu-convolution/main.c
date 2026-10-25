@@ -7,6 +7,9 @@
 #ifdef SUNSTONE_NPU_SUPERVISED
 #include "session.h"
 #endif
+#ifdef SUNSTONE_NPU_INTERRUPT
+#include "../npu-interrupt/irq.h"
+#endif
 
 static StaticTask_t client_state;
 static StackType_t client_stack[4096] __attribute__((aligned(16)));
@@ -62,17 +65,19 @@ static void client(void *unused)
     struct npu_convolution *c=a733_npu_application_client();
     if(!c)retained(10);
 #ifdef SUNSTONE_NPU_FINITE_RETURN
-    /* Each job's publication and completion observation, counter microseconds. */
-    uint64_t job_us[4]={0};
+    /* Each job's publication and completion observation, counter microseconds;
+     * and per job the system counter at publication, INTID97 delivery and
+     * completion observation, then the NPU's total and idle cycles. */
+    uint64_t job_us[4]={0},job_counters[2][5]={{0}};
 #endif
 #ifdef SUNSTONE_NPU_FINITE_RETURN
     platform_puts("NPU_STAGE=OPEN\n");
 #endif
+    /* WAIT is answered when the worker observes the bootstrap or job leave
+     * its active state, so the client never polls (npu_service.h). */
     struct npu_service_reply reply=request(c,NPU_SERVICE_OPEN,NULL,0,1000000);
-    while(reply.state!=A733_NPU_READY) {
-        if(reply.state!=A733_NPU_BOOTING)retained(11);
-        vTaskDelay(1);reply=request(c,NPU_SERVICE_STATUS,NULL,0,0);
-    }
+    if(reply.state==A733_NPU_BOOTING)reply=request(c,NPU_SERVICE_WAIT,NULL,0,0);
+    if(reply.state!=A733_NPU_READY)retained(11);
 #ifndef SUNSTONE_NPU_FINITE_THERMAL
     a733_npu_application_result.start=a733_smp_counter();
     unsigned mismatch=0;uint64_t previous=0,job=0;
@@ -88,14 +93,17 @@ static void client(void *unused)
     reply=request(c,NPU_SERVICE_SUBMIT,a733_npu_application_input,a733_npu_application_input_bytes,1000000);
     job=reply.job_ticket;
     if(!job || job==previous)retained(12);
-    while(reply.state!=A733_NPU_DONE) {
-        if(reply.state!=A733_NPU_RUNNING || reply.job_ticket!=job)retained(13);
-        vTaskDelay(1);reply=request(c,NPU_SERVICE_STATUS,NULL,0,0);
-    }
+    if(reply.state==A733_NPU_RUNNING && reply.job_ticket==job)reply=request(c,NPU_SERVICE_WAIT,NULL,0,0);
+    if(reply.state!=A733_NPU_DONE)retained(13);
     if(reply.job_ticket!=job || !npu_convolution_output(c,a733_npu_application_result.output,
         a733_npu_application_reference_bytes))retained(14);
 #ifdef SUNSTONE_NPU_FINITE_RETURN
     job_us[2*iteration]=c->job_published_us;job_us[2*iteration+1]=c->job_finished_us;
+    job_counters[iteration][0]=c->job_start_ticks;job_counters[iteration][2]=c->job_done_ticks;
+#ifdef SUNSTONE_NPU_INTERRUPT
+    job_counters[iteration][1]=npu_application_irq_ticks();
+#endif
+    job_counters[iteration][3]=c->job_cycles[0];job_counters[iteration][4]=c->job_cycles[1];
 #endif
     for(unsigned i=0;i<a733_npu_application_reference_bytes;++i)
         mismatch|=a733_npu_application_result.output[i]^a733_npu_application_reference[i];
@@ -122,6 +130,12 @@ static void client(void *unused)
     platform_puts("NPU_TIME_US=\n");platform_hex(startup ? startup->entry_us : 0);platform_puts("\n");
     platform_hex(startup ? startup->ready_us : 0);platform_puts("\n");
     for(unsigned i=0;i<4;++i){platform_hex(job_us[i]);platform_puts("\n");}
+    /* The counter frequency, then per job: system counter at publication,
+     * INTID97 delivery (0 when polled) and completion observation, then the
+     * NPU's total and idle cycles between publication and completion. */
+    uint64_t frequency;__asm__ volatile("mrs %0, cntfrq_el0" : "=r"(frequency));
+    platform_puts("NPU_JOB_COUNTERS=\n");platform_hex(frequency);platform_puts("\n");
+    for(unsigned i=0;i<10;++i){platform_hex(job_counters[i/5][i%5]);platform_puts("\n");}
     platform_puts("NPU_STAGE=CLOSE\n");
     reply=request(c,NPU_SERVICE_CLOSE,NULL,0,0);
     platform_puts("NPU_STAGE=WAIT_LOCAL_STOP\n");

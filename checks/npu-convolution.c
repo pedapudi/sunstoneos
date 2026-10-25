@@ -16,6 +16,10 @@ static TaskHandle_t check_bootstrap,check_client;
 static atomic_uint check_allow,check_accesses,check_publishes,check_finishes;
 static unsigned check_activation_mutation,check_prepared_calls,check_job;
 static uint32_t check_registers[0x800/4];
+/* Each modeled job adds these NPU cycles: active ones to the total counter
+ * (+0x078) and idle ones to both it and the idle counter (+0x07C). */
+#define CHECK_ACTIVE_CYCLES 48000u
+#define CHECK_IDLE_CYCLES 1200u
 static unsigned check_running,check_is_bootstrap;
 extern const struct a733_npu_ops __real_a733_npu_native_operations;
 static const struct a733_npu_ops *check_native=&__real_a733_npu_native_operations;
@@ -39,6 +43,10 @@ static int check_read(void *cookie,unsigned offset,uint32_t *out)
     configASSERT(cookie==&convolution.native);check_privileged();atomic_fetch_add(&check_accesses,1);
     if(check_running && (check_is_bootstrap || atomic_load(&check_allow))) {
         check_registers[0x10/4]=1;check_registers[1]=0x7fffffff;check_running=0;
+        if(!check_is_bootstrap) {
+            check_registers[0x78/4]+=CHECK_ACTIVE_CYCLES+CHECK_IDLE_CYCLES;
+            check_registers[0x7c/4]+=CHECK_IDLE_CYCLES;
+        }
     }
     *out=check_registers[offset/4];if(offset==0x10)check_registers[offset/4]=0;
     return 1;
@@ -105,6 +113,25 @@ static struct npu_service_reply check_request(enum npu_service_operation op,cons
         op==NPU_SERVICE_OPEN || op==NPU_SERVICE_SUBMIT ? 5000000 : 0,100,&ticket));
     configASSERT(npu_convolution_collect(&convolution,ticket,&reply,2000));return reply;
 }
+static uint64_t check_ticks(void)
+{uint64_t v;__asm__ volatile("isb\n mrs %0, cntpct_el0" : "=r"(v) :: "memory");return v;}
+static uint64_t check_us(uint64_t ticks)
+{uint64_t hz;__asm__ volatile("mrs %0, cntfrq_el0" : "=r"(hz));return ticks*1000000/hz;}
+/* The job's completion is recorded: adapter time, system counter and the
+ * modeled cycles, across a 32-bit counter wrap for the first job. */
+static void check_job_timing(void)
+{
+    configASSERT(convolution.job_published_us && convolution.job_finished_us>=convolution.job_published_us);
+    configASSERT(convolution.job_start_ticks && convolution.job_done_ticks>=convolution.job_start_ticks);
+    configASSERT(convolution.job_cycles[0]==CHECK_ACTIVE_CYCLES+CHECK_IDLE_CYCLES &&
+        convolution.job_cycles[1]==CHECK_IDLE_CYCLES);
+}
+/* A held WAIT answers when the job leaves RUNNING. */
+static struct npu_service_reply check_wait_job(void)
+{
+    struct npu_service_reply r=check_request(NPU_SERVICE_WAIT,NULL);
+    configASSERT(r.result==NPU_SERVICE_OK && r.state==A733_NPU_DONE);return r;
+}
 static struct npu_service_reply check_wait(enum a733_npu_state state)
 {
     for(unsigned i=0;i<100;++i) {
@@ -155,8 +182,9 @@ static void check_client_run(void *unused)
     for(unsigned i=0;i<sizeof(output);++i)configASSERT(output[i]==0xa5);
     configASSERT(!npu_convolution_send(&convolution,NPU_SERVICE_REAP,NULL,0,0,0,&ignored));
     configASSERT(!npu_convolution_send(&convolution,NPU_SERVICE_CLOSE,NULL,0,0,0,&ignored));
-    atomic_store(&check_allow,1);reply=check_wait(A733_NPU_DONE);
+    atomic_store(&check_allow,1);reply=check_wait_job();
     configASSERT(reply.job_ticket==ticket && atomic_load(&check_finishes)==2);
+    check_job_timing();
     configASSERT(!npu_convolution_send(&convolution,NPU_SERVICE_CLOSE,NULL,0,0,0,&ignored));
     configASSERT(npu_convolution_output(&convolution,output,sizeof(output)));
     configASSERT(!memcmp(output,fixture_output,sizeof(output)));
@@ -176,7 +204,15 @@ static void check_client_run(void *unused)
     /* The device never reads the private model copy, and the bootstrap stream
      * runs only at OPEN, so a job publication omits both from its digests. */
     convolution.model[0]^=1;check_commands[1][524287]^=1;
-    check_request(NPU_SERVICE_SUBMIT,input);check_wait(A733_NPU_DONE);
+    uint64_t submitted=check_ticks();
+    check_request(NPU_SERVICE_SUBMIT,input);check_wait_job();
+    uint64_t answered=check_ticks();check_job_timing();
+    if(!check_activation_mutation) {
+        platform_puts("MEASURE second job, client SUBMIT to DONE reply us=");
+        platform_hex(check_us(answered-submitted));
+        platform_puts(" publication to completion observation us=");
+        platform_hex(convolution.job_finished_us-convolution.job_published_us);platform_puts("\n");
+    }
     convolution.model[0]^=1;check_commands[1][524287]^=1;
     configASSERT(npu_convolution_output(&convolution,output,sizeof(output)));
     for(unsigned i=0;i<sizeof(output);++i)configASSERT(output[i]==(i<36 ? 0x5a : check_poison(i)));
@@ -265,6 +301,7 @@ void kernel_main(void)
     configASSERT(convolution.commands[0].token!=convolution.commands[1].token);
     check_registers[0x20/4]=0x9000;check_registers[0x24/4]=0x9202;
     check_registers[0x30/4]=0x1000003b;check_registers[0x28/4]=0x20240101;check_registers[1]=0x7fffffff;
+    check_registers[0x78/4]=0xffffff00u;check_registers[0x7c/4]=0xfffffff0u;
     check_bootstrap=xTaskCreateStaticAffinitySet(check_bootstrap_run,"conv-start",4096,NULL,4,check_stacks[0],&check_tasks[0],2);
     check_client=xTaskCreateStaticAffinitySet(check_client_run,"conv-client",4096,NULL,4,check_stacks[1],&check_tasks[1],1);
     startup_record.initialized=1;startup_record.task=check_bootstrap;

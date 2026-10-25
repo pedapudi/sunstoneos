@@ -6,9 +6,12 @@ before local gate/reset shutdown and finite ROM return. The default polled
 profile and its accepted evidence remain available. The compiler, model and
 reference data remain pinned external inputs.
 
-The ISR owns only masking interrupt 97 and notifying the service. One service
-worker owns event acknowledgment, deadlines, cancellation, full-idle checks and
-output cache acquisition. The finite client requires exactly three successful
+The ISR owns only recording the system counter, masking interrupt 97 and
+notifying the service. One service worker owns event acknowledgment,
+deadlines, cancellation, full-idle checks and output cache acquisition. The
+client waits for each bootstrap and job on the service's held `WAIT` reply,
+and the image logs each job's time from publication to the interrupt and its
+NPU active cycles ([design](../../docs/designs/npu-irq-completion.md)). The finite client requires exactly three successful
 notified completions: bootstrap and two inference jobs. Its returned log includes
 that count and the service's stopped receipt. The private host requires both
 receipts as well as the existing copied numerical outputs and return reports.
@@ -48,6 +51,12 @@ protected transport, output/receipt validation and DRAM restoration policy.
 Additional hashed interrupt admission must bind the exact image, build identity,
 CPU0 route, event owner, rearm exclusion, source-off stop and restoration order.
 No qualified defaults or live admission are generated.
+
+`~/.cache/sunstoneos/evidence/npu-irq-1025/irq-checks.sh SOURCE OUTPUT` builds
+the image at 492 and 852 MHz and runs its checks. `host-check.py` runs the
+finite host's fixtures (`apps/npu-finite/host-check.py --interrupt`) with the
+interrupt admission record, the interrupt receipts and the interrupt refusal
+cases.
 
 The native image links. Focused device tests cover controller/service ownership,
 retained failures, cancellation and deferred shutdown with actual native memory
