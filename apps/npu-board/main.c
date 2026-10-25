@@ -62,9 +62,14 @@ static void bootstrap(void *unused)
 }
 static void client(void *unused)
 {(void)unused;npu_board_client_run(&npu_board.client);fatal(NULL);vTaskSuspend(NULL);for(;;){}}
+static unsigned creating; /* Only while board_application_start creates its two tasks. */
+/* The bootstrap and the client call a733_counter_clock_now, which masks
+ * DAIF, so both start at EL1t. Only their two creations in
+ * board_application_start qualify; any other task with these entries starts
+ * at EL0. */
 int board_application_task_privileged(void (*entry)(void *),void *context)
-{return (!context && entry==bootstrap) || npu_board_thermal_privileged(entry,context) ||
-    npu_service_task_privileged(entry,context)==pdTRUE;}
+{return (creating && !context && (entry==bootstrap || entry==client)) ||
+    npu_board_thermal_privileged(entry,context) || npu_service_task_privileged(entry,context)==pdTRUE;}
 int board_application_pins(struct a733_pin_handoff *pins)
 {
     const struct npu_board_session *source=npu_board_admitted_session();
@@ -99,8 +104,10 @@ int board_application_start(void)
         &providers.shared.locks,&providers.shared.gpu,&providers.shared.rails,&providers.domains};
     if(!a733_npu_startup_init(&a->startup,&startup,&p,NULL,NULL))return 0;
     const UBaseType_t core=UINT32_C(1)<<NPU_BOARD_CORE;
+    creating=1;
     a->bootstrap=xTaskCreateStaticAffinitySet(bootstrap,"npu-boot",NPU_BOARD_STACK,NULL,4,a->stacks[0],&a->tasks[0],core);
     a->client_task=xTaskCreateStaticAffinitySet(client,"npu-client",NPU_BOARD_STACK,NULL,3,a->stacks[1],&a->tasks[1],core);
+    creating=0;
     if(!a->bootstrap||!a->client_task||!a733_npu_startup_bind_task(&a->startup,a->bootstrap))return 0;
     const TaskHandle_t clients[NPU_BOARD_SLOTS]={a->client_task};
     if(!npu_runtime_bind(&a->runtime,&a->startup,clients,4,core)||!npu_board_irq_bind(&a->runtime))return 0;

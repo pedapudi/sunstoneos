@@ -3,8 +3,9 @@
 
 USB0 operation 6 of an integrated OS image built with SUNSTONE_A733_OS_NPU
 answers with the 104-byte report of apps/os/npu.h and no frame header. Other
-OS images stop USB0 on this operation. This module opens no device; no
-launcher requests operation 6 yet.
+OS images stop USB0 on this operation. This module opens no device;
+tools/check-a733-os-supervised.py requests the report once after its capture
+for an image whose link check records the NPU profile.
 
 classify() keeps the outcomes apart:
 
@@ -20,6 +21,7 @@ classify() keeps the outcomes apart:
 """
 import struct
 
+OP = 6
 REPORT_BYTES = 104
 MAGIC = 0x5255504e
 PATTERN = 0xc35a3ca5

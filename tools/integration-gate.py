@@ -5,7 +5,10 @@ Host configuration stays in CACHE/bin/cfg.sh. This tool never launches a board.
 Build directories belong to the resolved source checkout, so gates on different
 checkouts never share a CMake cache; a lock refuses a second concurrent gate on
 the same checkout. A source tree with uncommitted changes is refused unless
---allow-dirty is given, and the recorded identity then names those changes.
+--allow-dirty is given, and the recorded identity then names those changes:
+the revision, the tracked diff and every untracked file that Git does not
+ignore. The gate fails if that state cannot be read completely, or if it
+changes before the gate holds the lock or by the end of the last step.
 Use checks/check-index.py --changed PATH... to help choose focused checks; its
 textual coverage is advisory. Component checks outside this gate run directly.
 """
@@ -35,6 +38,43 @@ DEPENDENCIES = {'kernel': 'kernel-check', 'soak8': 'smp8-soak-model',
                 'mimus-smp': 'smp-mimus-model'}
 CHECKS = (*DEPENDENCIES, 'shared-helpers', 'progress', 'check-index', 'pmic-tree',
           'power-domains-tree')
+
+
+def tree_state(source):
+    """The checkout's revision, status text, and the SHA-256 of the tracked
+    diff and of the untracked files.
+
+    Each untracked, non-ignored path contributes its name and the SHA-256 of
+    its contents (a symbolic link's target; a nested repository's name only).
+    None stands for a value Git or the file system could not produce,
+    including an untracked file that cannot be read."""
+    def git(*command, text=False):
+        return subprocess.run(['git', *command], cwd=source, capture_output=True, text=text)
+    head = git('rev-parse', 'HEAD', text=True)
+    status = git('status', '--porcelain', text=True)
+    diff = git('diff', '--binary', 'HEAD')
+    listed = git('ls-files', '--others', '--exclude-standard', '-z')
+    untracked = None
+    if listed.returncode == 0:
+        names = sorted(name for name in listed.stdout.split(b'\0') if name)
+        digest = hashlib.sha256()
+        try:
+            for name in names:
+                path = source / os.fsdecode(name)
+                if path.is_symlink():
+                    content = os.fsencode(os.readlink(path))
+                elif path.is_dir():
+                    content = b''
+                else:
+                    content = path.read_bytes()
+                digest.update(name + b'\0' + hashlib.sha256(content).digest())
+        except OSError:
+            pass
+        else:
+            untracked = (digest.hexdigest(), len(names))
+    return (head.stdout.strip() if head.returncode == 0 else None,
+            status.stdout if status.returncode == 0 else None,
+            hashlib.sha256(diff.stdout).hexdigest() if diff.returncode == 0 else None, untracked)
 
 
 def main(argv=None):
@@ -75,6 +115,9 @@ def main(argv=None):
         parser.error('source must be a Git checkout: ' + status.stderr.strip())
     if status.stdout and not args.allow_dirty:
         parser.error('source has uncommitted changes; commit them or pass --allow-dirty to record them')
+    state = tree_state(source)
+    if state[1] and not args.allow_dirty:
+        parser.error('source has uncommitted changes; commit them or pass --allow-dirty to record them')
     output = cache / 'build' / ('gate-' + args.label)
     try:
         output.mkdir(parents=True, exist_ok=False)
@@ -114,19 +157,32 @@ def main(argv=None):
     note('reason: ' + args.reason)
     note('source: ' + str(source))
     note('selection: ' + shlex.join(sys.argv[1:] if argv is None else argv))
-    identity = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=source, capture_output=True, text=True)
-    note('revision: ' + (identity.stdout.strip() if identity.returncode == 0 else 'unavailable'))
-    diff = subprocess.run(['git', 'diff', '--binary', 'HEAD'], cwd=source, capture_output=True)
-    note('diff-sha256: ' + (hashlib.sha256(diff.stdout).hexdigest() if diff.returncode == 0 else 'unavailable'))
-    note('status: ' + ('clean' if not status.stdout else str(len(status.stdout.splitlines())) + ' changed paths'))
-    if status.stdout:
-        (output / 'status.txt').write_text(status.stdout)
+    revision, changes, diff, untracked = state
+    note('revision: ' + (revision or 'unavailable'))
+    note('diff-sha256: ' + (diff or 'unavailable'))
+    note('untracked-sha256: ' + ('%s (%d files)' % untracked if untracked else 'unavailable'))
+    note('status: ' + ('unavailable' if changes is None else 'clean' if not changes else
+                       str(len(changes.splitlines())) + ' changed paths'))
+    if changes:
+        (output / 'status.txt').write_text(changes)
+
+    def unchanged(when):
+        """The recorded state must be complete and still describe the tree."""
+        if None in state or tree_state(source) != state:
+            note('FAIL the source revision, status, diff or untracked files changed or could not be read '
+                 + when + '; rerun with a new label')
+            return False
+        return True
     lock_path = cache / 'build' / ('gate-' + tree + '.lock')
     lock = lock_path.open('a')
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         note('FAIL another gate holds ' + str(lock_path) + ' for this checkout')
+        return 1
+    # The state recorded above must describe the tree that this gate builds
+    # while it holds the lock, both before the first step and after the last.
+    if not unchanged('between the status check and the lock'):
         return 1
     if targets or args.full:
         if not run('central-configure', [cfg, source, build]):
@@ -165,6 +221,8 @@ def main(argv=None):
     for check in checks:
         if not run('check-' + check, [python, *commands[check]]):
             return 1
+    if not unchanged('during the selected steps'):
+        return 1
     note('PASS selected integration checks; unselected behavior is not revalidated')
     return 0
 

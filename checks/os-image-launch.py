@@ -16,6 +16,12 @@ then checks that:
 - its --fault-report flag is refused before any launch step for an image
   without a733_fault_previous, and otherwise reads the report once through
   a modeled device before the capture, which a failed read never reaches;
+- for a link check that records the NPU profile, it requests the NPU report
+  (operation 6) once after a completed capture, saves it and records its
+  decoding and classification; a report of another session is kept with
+  its decoding error, a device that never answers ends the run, a failed
+  capture, or one that leaves less than 100 ms of its window, sends no
+  request, and an image without the profile never sends operation 6;
 - in the CPU clock build (docs/designs/cpu-a76-dvfs.md), a grant that names
   a cluster is prepared only with an approval record bound to one board, the
   image, the session and one step, which cites that board's B1 record, and
@@ -437,15 +443,22 @@ def main():
         def __exit__(self, *unused):
             return False
 
+    records = []
+
     def session(args, view, launch, ready, entry, capture, **unused):
         calls.append('session')
         args.evidence.mkdir()
         record = {}
-        capture(device, lambda: calls.append('same'), time.monotonic() + 60, record, lambda: calls.append('save'))
+        records.append(record)
+        capture(device, lambda: calls.append('same'), time.monotonic() + window[0], record, lambda: calls.append('save'))
         return record
+    capture_error = []
+    window = [60]
 
     def captured(device, same, deadline, prepared_value, evidence, record, save):
         calls.append(('capture', len(device.writes)))
+        if capture_error:
+            raise ValueError(capture_error[0])
         return record
     saved = (tool.freeze_bundle, tool.combined.launch_view, tool.supervisor.run_session,
              tool.combined.capture_device, tool.supervisor.base.fel_request)
@@ -492,6 +505,89 @@ def main():
         record = launch('fault-not-requested', prepared)
         assert ('capture', 0) in calls and not device.writes and 'fault_report' not in record
         cases['no-fault-report-request-without-flag'] = True
+
+        # Operation 6 after the capture, for a link check with the NPU profile.
+        # This image lacks the profile, so the record is changed in the frozen
+        # copy only; the request and decoding do not depend on the image.
+        assert not tool.npu_profile(prepared) and 'npu_report' not in record
+        cases['no-operation-6-without-npu-profile'] = True
+        frozen = prepared['_combined_frozen']
+        check = json.loads(frozen['board/image-input-manifest.json'])
+        with_npu = dict(prepared, _combined_frozen=dict(frozen, **{
+            'board/image-input-manifest.json': json.dumps(dict(check, npu=True)).encode()}))
+        assert tool.npu_profile(with_npu)
+        npu_epoch, npu_generation = struct.unpack_from('<2Q', frozen['board/session.bin'], 24)
+        npu_request = struct.pack('<BBHIQ', 6, 0, 0, 0, 0)
+
+        def npu_bytes(epoch=npu_epoch, mismatches=0, kept=0):
+            fields = (tool.npu_report.MAGIC, 1, tool.npu_report.REPORT_BYTES, 1, epoch, npu_generation, 0, 2, 2,
+                      mismatches, 0, 0, 1, 4096, kept, tool.npu_report.PATTERN)
+            return struct.pack(tool.npu_report.LAYOUT, *fields) + bytes(range(32))
+
+        def Device(responses, stop=False):
+            """checks/fault-report.py's operation 5 and 6 model, in 64-byte fragments."""
+            return faults.Device(responses, 64, stop=stop)
+
+        matched = npu_bytes()
+        device = Device({6: matched})
+        record = launch('npu-read', with_npu)
+        assert ('capture', 0) in calls and device.writes == [npu_request] and not device.queue
+        assert (out / 'npu-read/npu-report.bin').read_bytes() == matched
+        expected = tool.npu_report.decode(matched, npu_epoch, npu_generation)
+        assert record['npu_report'] == {'path': 'npu-report.bin', 'bytes': len(matched),
+                                        'sha256': hashlib.sha256(matched).hexdigest(),
+                                        'report': expected, 'classification': 'matched'}, record['npu_report']
+        json.dumps(record)
+        cases['npu-report-read-once-after-capture'] = True
+
+        device = Device({6: npu_bytes(mismatches=1, kept=4096)})
+        record = launch('npu-mismatch', with_npu)
+        assert record['npu_report']['classification'] == 'mismatch'
+        assert record['npu_report']['report']['pattern_bytes'] == 4096
+        cases['npu-report-mismatch-classified'] = True
+
+        device = Device({6: npu_bytes(epoch=npu_epoch + 1)})
+        record = launch('npu-other-session', with_npu)
+        assert record['npu_report']['decode_error'] == 'NPU report names another session.'
+        assert 'classification' not in record['npu_report'] and 'report' not in record['npu_report']
+        cases['npu-report-of-another-session-not-classified'] = True
+
+        device = Device({5: report, 6: matched})
+        record = launch('npu-after-fault', with_npu, '--fault-report')
+        assert device.writes == [faults.tool.REQUEST, npu_request] and ('capture', 1) in calls
+        assert record['fault_report']['bytes'] == len(report) and record['npu_report']['classification'] == 'matched'
+        cases['fault-report-capture-then-npu-report'] = True
+
+        device = Device({}, stop=True)
+        try:
+            launch('npu-no-reply', with_npu)
+            raise AssertionError('an unanswered NPU report must end the run')
+        except faults.Stopped:
+            pass
+        assert device.writes == [npu_request] and records[-1]['npu_report']['state'] == 'no-report'
+        assert not (out / 'npu-no-reply/npu-report.bin').exists()
+        cases['npu-report-without-reply-ends-run'] = True
+
+        device = Device({6: matched})
+        capture_error.append('modeled capture failure')
+        try:
+            launch('npu-capture-failed', with_npu)
+            raise AssertionError('a failed capture must end the run')
+        except ValueError as error:
+            assert str(error) == 'modeled capture failure'
+        capture_error.clear()
+        assert not device.writes and 'npu_report' not in records[-1]
+        cases['failed-capture-sends-no-operation-6'] = True
+
+        for name, seconds in (('npu-window-ended', 0), ('npu-window-short', 0.05)):
+            device = Device({6: matched})
+            window[0] = seconds
+            record = launch(name, with_npu)
+            window[0] = 60
+            assert not device.writes and record['npu_report'] == {
+                'state': 'not-requested', 'reason': 'less than 100 ms of the capture window left'}, record['npu_report']
+        cases['no-operation-6-after-the-capture-window'] = True
+        cases['no-operation-6-with-under-100-ms-left'] = True
     finally:
         (tool.freeze_bundle, tool.combined.launch_view, tool.supervisor.run_session,
          tool.combined.capture_device, tool.supervisor.base.fel_request) = saved
