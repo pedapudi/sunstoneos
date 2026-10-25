@@ -143,8 +143,7 @@ deadline. The builder option `--return-deadline` of
 The quiet profile does not isolate the sustained load. Before the core-index
 check, `ucPortGetCoreID` (`0x410109b8`) issues `SVC #0x6d` on every loop
 iteration, so the replacement also removes that supervisor-call traffic on
-all eight cores. That changes when interrupts arrive and the lock traffic
-around them, and it removes the check that a background task has not moved
+all eight cores. That changes when interrupts arrive, and it removes the check that a background task has not moved
 to another core (W0 keeps the first result). A completed quiet run is
 therefore consistent with the race candidates as well as with candidate 4.
 
