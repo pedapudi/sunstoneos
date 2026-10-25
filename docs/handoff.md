@@ -40,6 +40,18 @@ failed with the controlled result, and the queue resumed. The runbook ends
 the lifetime after this step, so the next GPU run needs another power
 removal.
 
+**Port 3-1, fifth lifetime** (session `board-session-20261025-1/port-3-1`,
+set `board-bundles-20261025-3`, branch `work/gpu-core6-c-1024` at
+`3e188e6a`). Cold DDR and GPU provider readiness passed. The probe-read image
+(bundle 17) did not return within the host's 925 s. Its order was the
+power-only ON, read-only reads of wrapper `+0x14` and `+0x10` and SMC0
+`0x0a0000b0`, then the GPU core identity as two 32-bit loads (`0x01800024`,
+`0x01800020`), as the vendor's probe reads it. The SMC0 and `drm_ctrl`
+writes come only after that read returns, so the stall happened at or before
+the first identity read, with no write made. The two 32-bit loads alone do
+not make the core readable at 400 MHz from PERI0 at 800 mV. The claim is
+held, and the board needs a power removal.
+
 **Board runs of 2026-10-24 night** (set `board-bundles-20261024-8`, sessions
 `~/.cache/sunstoneos/evidence/board-session-20261024-8/port-<PORT>`). The user
 reported both boards reconnected after power removal. The two claims held from
