@@ -76,8 +76,11 @@ static int return_gic(uint64_t deadline)
  * 0x20c (fixs-brom 3a2a7d28); with the SRAM still routed to the NPU those
  * stores would reach the NPU's SRAM. A cold entry at 0x0 sets the bit before
  * it touches the SRAM. The startup's local stop has already set the bit after
- * a normal stop; this step does not depend on that. A readback that still
- * shows the NPU routing parks with status 7 instead of returning. */
+ * a normal stop; this step does not depend on that. As at EL1, the bit
+ * changes only while CCU +0xb04 holds the NPU's AHB, AXI and core resets
+ * asserted with its bus gate closed and the module gate at +0xb00 is closed.
+ * A held-reset check or a readback that fails parks with status 7 instead of
+ * returning. */
 #define SRAM_ROUTING UINT32_C(0x03000008)
 #define SRAM_TO_CPU UINT32_C(2)
 static void return_sram_to_cpu(void)
@@ -85,6 +88,9 @@ static void return_sram_to_cpu(void)
     uint32_t value=mmio_read(SRAM_ROUTING);
     __asm__ volatile("dsb sy":::"memory");
     if(!(value&SRAM_TO_CPU)) {
+        const uint32_t bus=mmio_read(UINT32_C(0x02002b04)),module=mmio_read(UINT32_C(0x02002b00));
+        __asm__ volatile("dsb sy":::"memory");
+        if((bus&UINT32_C(0x70001)) || (module&UINT32_C(0x80000000)))a733_smp_stop(7,SRAM_ROUTING);
         mmio_write(SRAM_ROUTING,value|SRAM_TO_CPU);
         __asm__ volatile("dsb sy":::"memory");
         value=mmio_read(SRAM_ROUTING);

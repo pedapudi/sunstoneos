@@ -116,7 +116,11 @@ static unsigned boot_pair(unsigned mode)
     enum a733_gpu_power_result gr=A733_GPU_POWER_AGAIN;
     unsigned tick;
     for(tick=0;tick<100;++tick) {
-        if(nr==A733_NPU_PLATFORM_PENDING)nr=step();
+        /* Both consumers start after the whole supply verification, so that
+         * their domain rows are pending together; the NPU startup alone could
+         * proceed on DCDC2 verified while the owner still reads DCDC4. */
+        const unsigned done=a733_power_authority_load(&m.rails.authority)&A733_POWER_SUPPLY_DONE;
+        if(nr==A733_NPU_PLATFORM_PENDING && (done || s.stage<A733_NPU_STARTUP_SUPPLY))nr=step();
         if(!gpu_token && s.stage==A733_NPU_STARTUP_ROW)begin_gpu();
         else if(gpu_token && gr==A733_GPU_POWER_AGAIN)gr=a733_gpu_power_poll(&gpu);
         if(nr!=A733_NPU_PLATFORM_PENDING && gr!=A733_GPU_POWER_AGAIN)break;

@@ -59,7 +59,7 @@ for variant in ('success','numerical-mismatch','not-quiescent','clean-deadline')
 # EL3 receipt/refusal + bounded GIC/secondary cleanup. Reuse the actual successful receipt.
 # SYSCTRL 0x03000008 reads 0 (shared SRAM routed to the NPU) unless a case sets it.
 SRAM_ROUTING=0x03000008;REPORT=0x42000000  # A733_SMP_RESULT_ADDRESS, the monitor report.
-variants=['success','numerical-mismatch','SRAM-already-CPU','SRAM-restore-ignored','wrong-magic','wrong-epoch','wrong-generation','wrong-lease','wrong-status','wrong-complete','wrong-start','wrong-end','wrong-lines','wrong-deadline','long-log','unexpected-SMC','recovery-IRQ','late','EL1-cache-live','secondary-on','GICD-timeout','GICR-timeout']
+variants=['success','numerical-mismatch','SRAM-already-CPU','SRAM-restore-ignored','SRAM-reset-released','SRAM-module-gate-open','wrong-magic','wrong-epoch','wrong-generation','wrong-lease','wrong-status','wrong-complete','wrong-start','wrong-end','wrong-lines','wrong-deadline','long-log','unexpected-SMC','recovery-IRQ','late','EL1-cache-live','secondary-on','GICD-timeout','GICR-timeout']
 for variant in variants:
  u=machine();status=int(variant=='numerical-mismatch');u.mem_write(receipt,receipts[status]);admission=im.address('admission');c=im.layouts['a733_smp_contract'];state={'time':24000000,'return':False,'retained':False,'writes':[]}
  for name,v in [('epoch',7),('generation',8),('lease',9),('diagnostic_deadline',480000000)]:put(u,admission+c[name],v)
@@ -70,6 +70,8 @@ for variant in variants:
  if variant=='secondary-on':put(u,0x07053008,8,4)
  if variant=='late':state['time']=480000000
  if variant=='SRAM-already-CPU':put(u,SRAM_ROUTING,2,4)
+ if variant=='SRAM-reset-released':put(u,0x02002b04,0x00090000,4)  # Core reset released.
+ if variant=='SRAM-module-gate-open':put(u,0x02002b00,0x80000000,4)
  hooks={im.address(n):n for n in ['a733_smp_stop','npu_finite_rom_return']}
  def code(cpu,at,size,cookie):
   word=get(u,at,4);kind=word&0xffffffe0;reg=word&31;name=hooks.get(at)
@@ -104,6 +106,9 @@ for variant in variants:
  if variant in ('success','numerical-mismatch'):
   assert len(routing)==1 and state['writes'][routing[0]][1]==2 and report and all(i>routing[0] for i in report),(variant,state['writes'])
  elif variant=='SRAM-already-CPU':assert not routing
+ elif variant in ('SRAM-reset-released','SRAM-module-gate-open'):
+  # The held-reset check parks before the routing write and the report.
+  assert not routing and state['stop']==[7,SRAM_ROUTING] and not report,(variant,state)
  elif variant=='SRAM-restore-ignored':
   # a733_smp_stop is stopped at its entry, so it writes no report here.
   assert len(routing)==1 and state['stop']==[7,SRAM_ROUTING] and not report,(variant,state)

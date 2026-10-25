@@ -265,6 +265,8 @@ int __wrap_aarch64_device_translate(uintptr_t address, int write, struct aarch64
 int a733_npu_startup_prepared(struct a733_npu_startup *s)
 {
     configASSERT(s == &startup);
+    /* READY opens the register window, as the sequencer does. */
+    atomic_store_explicit(&startup.window_open, 1, memory_order_release);
     return 1;
 }
 enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
@@ -276,6 +278,7 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
 enum a733_npu_platform_result a733_npu_startup_stop(struct a733_npu_startup *s)
 {
     configASSERT(s == &startup && sessions.service.controller.state == A733_NPU_CLOSED);
+    atomic_store_explicit(&startup.window_open, 0, memory_order_release);
     ++stops;
     return A733_NPU_PLATFORM_READY;
 }
