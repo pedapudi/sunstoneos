@@ -14,8 +14,9 @@ The fetch reference and provenance record for every vendor binary is
 [the reference index](../reference-index.md). Architectural requirements on
 EL3 and GIC setup are in
 [the multicore reference audit](../a733-multicore-reference-audit.md). The
-step-by-step comparison of CPU bring-up with this image is in
-[the CPU backsolve](../reference-backsolve-cpu.md). The SunstoneOS thermal and
+step-by-step comparisons of CPU and GPU bring-up with this image are in
+[the CPU backsolve](../reference-backsolve-cpu.md) and
+[the GPU backsolve](../reference-backsolve-gpu.md). The SunstoneOS thermal and
 GPADC service described in [`monitor-application.md`](../monitor-application.md)
 is unrelated; it shares only the word "monitor".
 
@@ -63,32 +64,6 @@ the committed files with `curate.py` in that directory.
 | Base | TF-A v2.5, debug build, with Allwinner's platform `plat/allwinner/sun60iw2p1` | Upstream (assertion paths and lines) |
 | Load address | `0x48000000`; the header word at offset `0x2c` holds it | Observed |
 | Build options | `RESET_TO_BL31`: the cold entry discards x0 to x3 (`@0x1cc`); log level 20 (NOTICE, `@0x132fc`); OP-TEE dispatcher built in; no coherent memory section | Observed, upstream `bl31_entrypoint` |
-
-### License terms
-
-No term was found that forbids reverse engineering or disassembly of this
-image. Four sources were checked:
-
-- **The image.** It contains no license, copyright, "proprietary" or
-  "confidential" notice. A search of its bytes for those words, and for
-  "reverse" and "disassembl", finds nothing.
-- **The containing repository.** orangepi-build `a95129bf` has one root
-  `LICENSE`, the GNU General Public License version 2 (SHA-256
-  `39db8f9acf036595a2566ea3fe560bc7bd65d8749f088e0f4a4ef2f8a6cb4b34`, fetched from
-  `raw.githubusercontent.com/orangepi-xunlong/orangepi-build/a95129bf…/LICENSE`).
-  The repository's README states no other licensing.
-- **The binary's directory.** The repository tree lists no license, notice or
-  README file under `external/packages/pack-uboot/` or
-  `external/packages/pack-uboot/sun60iw2/`. The cached tree listing is
-  `~/.cache/sunstoneos/sources/orangepi-build-tree.txt`.
-- **The source the image is built from.** Upstream TF-A v2.5 is distributed
-  under the BSD-3-Clause license (`docs/license.rst` at `c1588782`). That
-  license sets conditions on redistribution and places no restriction on
-  analysis. Allwinner's platform additions carry no separate terms in the
-  image or in the repository.
-
-The fetched license and README copies are in
-`~/.cache/sunstoneos/sources/orangepi-build-license/`.
 
 The first 0x108 bytes are a boot0 header: a branch to `0x108`, the magic
 `monitor`, the tag `CHKv1.0` at `0x1c`, the load word at `0x2c` and the
@@ -214,15 +189,15 @@ Order is program order within BL31. The basis is observed unless stated.
 | 6 | `0x03400000` | GICD_CTLR | Groups off, ARE_S and ARE_NS on; RWP polled without timeout | Distributor | `0x602c` |
 | 7 | `0x03400080`+ | GICD SPI registers | Group 1 Nonsecure, priority `0x80`, level | SPI defaults | `0x602c` |
 | 8 | `0x03460000`+ | GICR_PWRR, GICR_WAKER, SGI frame | Power on, wake, SGI and PPI defaults | Boot-core redistributor | `0x683c` |
-| 9 | `0x02054004`–`0x020540d4` | SPC ports 0–13 set registers | `0xffffffff` each, stride `0x10` | Peripherals Nonsecure | `0xc3cc` |
-| 10 | `0x02054104`–`0x02054174` | SPC ports 16–23 set registers | `0xffffffff` each | Peripherals Nonsecure | `0xc3e0` |
+| 9 | `0x02054004`–`0x020540d4` | SPC ports 0–13 set registers | `0xffffffff` each, stride `0x10` | Peripherals Nonsecure (board: `board-session-20261025-4/port-3-1/s10-gvs-run`) | `0xc3cc` |
+| 10 | `0x02054104`–`0x02054174` | SPC ports 16–23 set registers | `0xffffffff` each | Peripherals Nonsecure (board: `board-session-20261025-4/port-3-1/s10-gvs-run`) | `0xc3e0` |
 | 11 | `0x07003000`, `+0x4`, `+0x8` | S_TZMA | 0 | SRAM areas Nonsecure | `0xc408` |
 | 12 | `0x07002004`, `+0x14`, `+0x24` | S_SPC | `0xffffffff` | Always-on peripherals Nonsecure | `0xc41c` |
 | 13 | `0x07010290` | `PRCM_SEC_SWITCH_REG` | `\|= 7` | CPUS bus clock, PLL and power registers Nonsecure | `0xc438` |
-| 14 | `0x02003f00` | `CCMU_SEC_SWITCH_REG` | `7` | PLL, bus and MBUS clock registers Nonsecure | `0xc448` |
+| 14 | `0x02003f00` | `CCMU_SEC_SWITCH_REG` | `7` | PLL, bus and MBUS clock registers Nonsecure (board: `board-session-20261025-4/port-3-1/s10-gvs-run`) | `0xc448` |
 | 15 | `0x04601020` | DMAC0 `DMA_SEC_REG` | `0xffff` | All DMA0 channels Nonsecure | `0xc458` |
 | 16 | `0x04024020` | DMAC1 `DMA_SEC_REG` | `0xffff` | All DMA1 channels Nonsecure | `0xc460` |
-| 17 | `0x020540e0` | SPC port 14 set register | `0xfffffbff` | Port 14 Nonsecure except bit 10; port 15 is never written | `0xc470` |
+| 17 | `0x020540e0` | SPC port 14 set register | `0xfffffbff` | Port 14 Nonsecure except bit 10; port 15 is never written (board: `board-session-20261025-4/port-3-1/s10-gvs-run`) | `0xc470` |
 | 18 | `0x02002800` | CCU `TIMER0_CLK0_CLK_REG` | `0x80000002` | Gate on, 24 MHz source, divide by 4 | `0xc484` |
 | 19 | `0x02002850` | CCU `TIMER0_BGR_REG` | `0x10001` | TIMER0 out of reset and gated | `0xc48c` |
 | 20 | `0x03009008` | TIMER0 `+0x08` | 0 | Not described in the manual | `0xc498` |
@@ -232,6 +207,13 @@ Order is program order within BL31. The basis is observed unless stated.
 | 24 | `0x07051000`, `0x07052000`–`0x07059000` | CPUIDLE words | Clear bits 3:0 of each of nine words | Policy field, meaning inferred | `0x4e88` |
 | 25 | `0x08001000` | CPU_SUBSYS_CTRL core 0 | `\|= 1` | Core 0 resets in AArch64 | `0xc298` |
 | 26 | `0x08001004`, `0x08001008` | CPU_SUBSYS_CTRL core 0 | `0x48000228`, 0 | Core 0 warm-reset address | `0xc4ac` |
+
+Writes 9, 10, 14 and 17, the SPC ports and the CCU security switch, are
+confirmed on a board. A SunstoneOS image made BL31's cold-boot writes, set
+DCDC4 to 960 mV and ran the GPU PLL at 1008 MHz. The GPU core domain reached
+ON and the GPU identity read `36.56.104.183` (evidence in
+`~/.cache/sunstoneos/evidence/board-session-20261025-4/port-3-1/s10-gvs-run/`;
+analysis in [the GPU backsolve](../reference-backsolve-gpu.md)).
 
 Register names come from the A733 user manual V1.00 (manual sections
 4.1.6.278 for `CCMU_SEC_SWITCH_REG` and 4.2.5.26 for `PRCM_SEC_SWITCH_REG`).
@@ -450,14 +432,16 @@ header word `0x18`). The full list, with arguments, is in
 
 No function in the image accesses the GPU window (`0x01800000`–`0x0188ffff`),
 the NPU, the PCK-600 at `0x07060000` or SMC0 `0x0a0000b0` (observed: none of
-these addresses appears in the access map).
+these addresses appears in the access map). The GPU driver performs the
+GPU's secure setup itself ([GPU backsolve](../reference-backsolve-gpu.md)).
 
 ## The SCP is started on request and reached through two message boxes
 
 BL31 never starts the SCP during its own boot. The board U-Boot issues SMC
 `0x8000ff10` with the kernel device tree address just before it starts Linux,
 when built with `CONFIG_ARISC_DEASSERT_BEFORE_KERNEL` (Orange Pi U-Boot
-`b791be84`, `arch/arm/lib/bootm.c` lines 408–412). Then `sunxi_arisc_load`
+`b791be84`, `arch/arm/lib/bootm.c` lines 408–412; also traced in
+[the GPU backsolve](../reference-backsolve-gpu.md)). Then `sunxi_arisc_load`
 (`8af16b86@0xae88`) runs these steps (observed):
 
 | Order | Address | Operation | Purpose |
@@ -592,7 +576,7 @@ Secondary power-on is [`cpu_start.c`](../../platform/a733/cpu_start.c).
 | --- | --- | --- |
 | CPU_ON register sequence (steps 1 to 8) | Reproduced with deadlines | Done (board) |
 | Wake-disable bit cleared on the target, set at power-down | Reproduced | Done (board) |
-| Security setup writes 9 to 17 | Absent | Before any Nonsecure driver that needs a secure-default clock, bus or DMA register; the manual makes `PLL_GPU0_CTRL_REG` secure by default (section 4.1.6.16) |
+| Security setup writes 9 to 17 | Absent from the production monitor; applied in the GPU board image (board) | Before any Nonsecure driver that needs a secure-default clock, bus or DMA register; the manual makes `PLL_GPU0_CTRL_REG` secure by default (section 4.1.6.16), and the GPU path needs these writes ([GPU backsolve](../reference-backsolve-gpu.md)) |
 | CNTFRQ, CNTHCTL, CNTVOFF, CPTR at EL3 and EL2 | Written | Done |
 | CNTHP_CTL_EL2 = 0, VPIDR_EL2 and VMPIDR_EL2 from MIDR and MPIDR | Absent | Add beside CNTHCTL_EL2 ([CPU backsolve](../reference-backsolve-cpu.md)) |
 | GIC distributor RWP wait instead of refusal | Refusal in several places | Poll until RWP clears, as upstream `gicd_wait_for_pending_write` does |
