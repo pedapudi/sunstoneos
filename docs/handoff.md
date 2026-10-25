@@ -18,6 +18,28 @@ ruled out. CORE6 `+0x10` reads 1 where TOP5 reads 0, and TOP5's MISR reads
 0x100 (its device accepted) where CORE6's reads 0. The claim is held, the
 lifetime has ended, and analysis continues on `work/gpu-core6-c-1024`.
 
+**Port 3-1, fourth lifetime** (session `board-session-20261024-14/port-3-1`,
+set `board-bundles-20261024-14`, 2026-10-25). After the user's power removal,
+cold DDR (12,288 MiB) and GPU provider readiness passed. The wrapper-read
+probe returned to the ROM with the expected status 1: CORE6 again did not
+reach ON, and all four GPU wrapper reads completed. So the wrapper at
+`0x01880000` is reachable with TOP5 ON and CORE6 unacknowledged.
+
+| Address | Vendor name | Value | Meaning |
+| --- | --- | --- | --- |
+| `0x01880104` | `pwr_qchan_cfg` | `0x0` | Core 0's Q-Channel is not under software control; `q_active`, `q_accept`, `q_deny` and the core-0 clock enable are all 0 |
+| `0x01880100` | `pwr_cmp_dly` | `0x0` | Power-complete up and down delays are unset |
+| `0x01880018` | `mult_core_cnt` | `0x2` | Two GPU cores |
+| `0x0188001c` | `mult_core_id` | `0x10` | Primary core 0, secondary core 1 |
+
+This fits the leading explanation in `docs/gpu-power.md` on
+`work/gpu-core6-c-1024`: nothing has brought up the wrapper logic that
+answers CORE6's Q-Channel. The next image writes the wrapper in the order
+the vendor DVFS source uses, then requests CORE6 ON. The claim closed as
+failed with the controlled result, and the queue resumed. The runbook ends
+the lifetime after this step, so the next GPU run needs another power
+removal.
+
 **Board runs of 2026-10-24 night** (set `board-bundles-20261024-8`, sessions
 `~/.cache/sunstoneos/evidence/board-session-20261024-8/port-<PORT>`). The user
 reported both boards reconnected after power removal. The two claims held from
@@ -151,11 +173,12 @@ regenerating.
     following 6.7 hours; the USB device kept its pre-launch number. The
     journal records `launch_attempted` with no transport failure. Nothing
     after the launch was read, so the stopping point is unknown.
-  - The claim (`31032df3…`) is held. The timer step and rank 8 did not run.
+  - The claim (`ac52d411…`) was held until the reconnect of 2026-10-25 and
+    then closed as failed. The timer step and rank 8 did not run.
     B1 and the CPU clock and voltage runs stay blocked behind this result.
-  - **Needed from the user:** remove every power source from port 3-3, then
-    reconnect it in FEL mode. Port 3-1 still needs the same action before
-    the GPU wrapper-read probe.
+  - The user power-cycled port 3-3 on 2026-10-25. Its next lifetime waits
+    for the workload diagnosis, which starts with a comparison against the
+    Linux, TF-A and Allwinner reference sources.
 
 The mimus branch `port/sunstoneos` (`9c57286b7`) was pushed to
 `github.com/pedapudi/mimus` on 2026-10-24 with the user's approval; mimus
