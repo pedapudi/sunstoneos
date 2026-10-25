@@ -640,13 +640,20 @@ ROWS = [
                       '500 ms remain before it, and a recovery inside the window would leave both words written until '
                       'the power removal. What SMC0 +0xb0 = 2 does is unknown; if it cut non-secure DRAM access the '
                       'run would not return. The progress record survives only on a return.'),
-    read_row('el3-security-switches', 18, 'The two security switches that every EL3 entry sets',
-             'Board evidence of the EL3 security setup (include/a733_el3_security.h): CCMU_SEC_SWITCH_REG and '
-             'PRCM_SEC_SWITCH_REG, written by cold-boot writes 14 and 13 and never restored. Each reads 0 after a '
-             'power removal and 7 once any image of the lifetime has entered EL1 through a SunstoneOS EL3 entry',
+    read_row('el3-security-switches', 18, 'The security words that every EL3 entry writes and the board can read back',
+             'Board evidence of the EL3 security setup (include/a733_el3_security.h), whose writes are never '
+             'restored: CCMU_SEC_SWITCH_REG and PRCM_SEC_SWITCH_REG (writes 14 and 13), which read 0 after a power '
+             'removal and 7 after the setup; the three S_TZMA words (write 11), predicted 0 after the setup, which '
+             'no board has read; and SPC 0x020540e0, port 14\'s status word (write 17), 0x1060 after a power '
+             'removal and 0xfffffbff after the setup. This is bundle 18 from set board-bundles-20261025-10 on; in '
+             'set board-bundles-20261025-4 the number named the removed gpu-vendor-clk row',
              [word(0x02003f00, 'ccu', note='CCMU_SEC_SWITCH_REG: 7 after write 14'),
-              word(0x07010290, 'r_ccu', note='PRCM_SEC_SWITCH_REG: bits 2:0 set after write 13')],
-             'Both words are read and the 128 scratch bytes are restored and equal.'),
+              word(0x07010290, 'r_ccu', note='PRCM_SEC_SWITCH_REG: bits 2:0 set after write 13'),
+              word(0x07003000, 's_tzma', note='S_TZMA +0x0: 0 after write 11'),
+              word(0x07003004, 's_tzma', note='S_TZMA +0x4: 0 after write 11'),
+              word(0x07003008, 's_tzma', note='S_TZMA +0x8: 0 after write 11'),
+              word(0x020540e0, 'spc', note='SPC port 14 status word: 0xfffffbff after write 17')],
+             'All six words are read and the 128 scratch bytes are restored and equal.'),
     # `admission` maps fields of the value prepare() returns to the values that
     # identify this row's build. None refuses the row: no owning package has
     # named those values yet.

@@ -196,7 +196,7 @@ Order is program order within BL31. The basis is observed unless stated.
 | 14 | `0x02003f00` | `CCMU_SEC_SWITCH_REG` | `7` | PLL, bus and MBUS clock registers Nonsecure (confirmed on a board: `board-session-20261025-4/port-3-1/s10-gvs-run`) | `0xc448` |
 | 15 | `0x04601020` | DMAC0 `DMA_SEC_REG` | `0xffff` | All DMA0 channels Nonsecure | `0xc458` |
 | 16 | `0x04024020` | DMAC1 `DMA_SEC_REG` | `0xffff` | All DMA1 channels Nonsecure | `0xc460` |
-| 17 | `0x020540e0` | SPC port 14 set register | `0xfffffbff` | Port 14 Nonsecure except bit 10; port 15 is never written (confirmed on a board: `board-session-20261025-4/port-3-1/s10-gvs-run`) | `0xc470` |
+| 17 | `0x020540e0` | SPC port 14 status word, written directly (the set register is `0x020540e4`) | `0xfffffbff` | Port 14 Nonsecure except bit 10; port 15 is never written (confirmed on a board: `board-session-20261025-4/port-3-1/s10-gvs-run`) | `0xc470` |
 | 18 | `0x02002800` | CCU `TIMER0_CLK0_CLK_REG` | `0x80000002` | Gate on, 24 MHz source, divide by 4 | `0xc484` |
 | 19 | `0x02002850` | CCU `TIMER0_BGR_REG` | `0x10001` | TIMER0 out of reset and gated | `0xc48c` |
 | 20 | `0x03009008` | TIMER0 `+0x08` | 0 | Not described in the manual | `0xc498` |

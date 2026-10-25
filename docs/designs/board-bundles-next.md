@@ -71,10 +71,14 @@ Terminal class.
   covers a hang but not a stalled bus access. Each run re-enumerates the
   board twice.
 
-**Gates.** Four blocks have no software gate: CCU, R_CCU, the SID block at
-`0x03006000` (`sun60iw2p1.dtsi` lines 1406–1408 name no clock or reset) and
+**Gates.** Six blocks have no software gate: CCU, R_CCU, the SID block at
+`0x03006000` (`sun60iw2p1.dtsi` lines 1406–1408 name no clock or reset),
 the CPU PLL block at `0x08870000`, whose pinned device-tree node (lines
-908–915) names only its oscillator parent and no bus clock or reset.
+908–915) names only its oscillator parent and no bus clock or reset, and the
+SPC (`0x02054000`) and S_TZMA (`0x07003000`) security controllers. The
+vendor BL31 writes both controllers on every cold boot with no clock or
+reset setup (`sunxi_security.c` lines 27–45), and the monitor of
+`board-session-20261025-4` read 23 SPC words.
 A record of the same port and lifetime admits their words. In a lifetime
 without such a record, a word there is a first read and sits after every
 bundle that does not need it. Every other word needs a condition word. The
@@ -109,7 +113,7 @@ that [the runbook README](../board-runbooks/README.md) requires.
 | 15 | Returning, base bundle 2 | DCDC3 and DCDC5 snapshots (`apps/board-bundles-power/cpu-supply.c`): the bundle 6 image without a domain row, one shared token of both rails, one snapshot of each, reaped, service parked | First provider transactions on DCDC3 and DCDC5; read-only, no PMIC write | The supply part of B1: enable, selector and programmed voltage of DCDC3 (CPU-B) and DCDC5 (CPU-L and DSU) |
 | 16 | Returning, port 3-1, after 11 | GPU wrapper reads (`apps/gpu-power-id/wrapper.c`) Set `board-bundles-20261024-14` froze it under the number 14. | Four GPU wrapper reads after the default ON, the only GPU-window access | The wrapper's core-0 Q-Channel state, power-complete delays and core count, or a non-return |
 | 17 | Returning, port 3-1, after 11 | GPU core identity as the vendor's probe reads it, then after the vendor's secure configuration (`apps/gpu-power-id/probe-read.c`) | The identity as two 32-bit loads after the default ON; then the SMC0 `0x0a0000b0` and wrapper `drm_ctrl` writes and the read again; no OFF | The entry values of `drm_ctrl`, `irq_ctrl` and SMC0 `+0xb0`; the identity before and after the writes; or a non-return |
-| 18 | Read | CCMU_SEC_SWITCH_REG `0x02003f00` and PRCM_SEC_SWITCH_REG `0x07010290` through the FEL interface | Read-only; no device write | Whether an EL3 entry of this lifetime made the security setup's writes 13 and 14 (`include/a733_el3_security.h`): 0 after a power removal, 7 after |
+| 18 | Read | CCMU_SEC_SWITCH_REG `0x02003f00`, PRCM_SEC_SWITCH_REG `0x07010290`, S_TZMA `0x07003000`–`+0x8` and SPC `0x020540e0` through the FEL interface. Set `board-bundles-20261025-4` used the number for the removed `gpu-vendor-clk` row | Read-only; no device write; first board read of S_TZMA | Whether an EL3 entry of this lifetime made the security setup's writes 11, 13, 14 and 17 (`include/a733_el3_security.h`): the switches 0 after a power removal and 7 after, S_TZMA 0 after, SPC `0x1060` before and `0xfffffbff` after |
 
 **S_TWI0 interrupt.** Bundle 6 records the TWI controller's interrupt flag
 and leaves out the distributor pending bit of S_TWI0's interrupt (SPI 203 in

@@ -369,10 +369,12 @@ What each departure would mean:
 [The EL3 qualification runbook](../board-runbooks/el3-qualification.md)
 runs in one fresh port 3-3 lifetime after this branch merges. It runs the
 kernel check with the security writes including S_TZMA (write 11), a read
-of the two security switches, and the six runs of the refreeze sequence on
+of six of the written words, and the six runs of the refreeze sequence on
 the refrozen native image `6fd7af86…`, whose pre-scheduler overlay calls
-the native setup. Its predictions: each run returns, both switches read 7,
-and every 91-word capture equals the clean capture.
+the native setup (set `board-bundles-20261025-10/port-3-3/`). Its
+predictions: each run returns, both security switches read 7, the three
+S_TZMA words read 0, SPC `0x020540e0` reads `0xfffffbff`, and every 91-word
+capture equals the clean capture.
 
 ### 2. Firmware start through the open-source host driver
 

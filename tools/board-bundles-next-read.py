@@ -6,9 +6,9 @@ Usage (under the coordinator's bundle-run.py, which sets SUNSTONE_USB_PORT):
 
 tools/prepare-board-bundles.py ships this file unchanged as board-read.py in
 every Read bundle (docs/designs/board-bundles-next.md). WORDS.json is data
-only: each word has either a block with no software gate (CCU, R_CCU, SID or
-the CPU PLL block) or a condition word listed earlier, with a mask and a
-value. The reader:
+only: each word has either a block with no software gate (CCU, R_CCU, SID,
+the CPU PLL block, SPC or S_TZMA) or a condition word listed earlier, with a
+mask and a value. The reader:
 
 - saves the 128 FEL scratch bytes at 0x71000 with read; each readl command
   writes a 48-byte A32 stub and the word's slot, the same first 52 bytes, and
@@ -44,6 +44,13 @@ UNGATED = {
     'r_ccu': (0x07010000, 0x340),      # sun60iw2p1.dtsi lines 938-940
     'sid': (0x03006000, 0x1000),       # sun60iw2p1.dtsi lines 1406-1408
     'cpu_pll': (0x08870000, 0x3034),   # sun60iw2p1.dtsi lines 908-915
+    # The SPC and S_TZMA security controllers: the vendor BL31's
+    # sunxi_security_setup (plat/allwinner/common/sunxi_security.c lines
+    # 27-45, bases in sun60i_a733/include/sunxi_mmap.h lines 30 and 39)
+    # writes both with no clock or reset setup on every cold boot, and the
+    # monitor of board-session-20261025-4 read 23 SPC words.
+    'spc': (0x02054000, 0x200),
+    's_tzma': (0x07003000, 0x10),
 }
 WORD_KEYS = {'address', 'block', 'condition', 'note'}
 CONDITION_KEYS = {'address', 'mask', 'value'}
