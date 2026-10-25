@@ -594,7 +594,7 @@ the older build.
 | Objects of bundles 4, 6, 7 and 8 that differ from passed images | Not applicable | Only the declared overlay | Equivalence record of each bundle |
 | Log bytes per returning image | 16,127 available after the result header | Summary and outcome line never cut: details stop while 256 bytes remain | Bundle 4 model log (8,343 bytes); host-model bound for bundles 6 and 7 |
 | NSI accesses of bundle 8 | 0 | 0 behind a closed gate or an OFF domain; 43 register accesses from zero fields, of which 6 writes, all on ports 2, 14 and 15 | `checks/board-bundles-apps-model.c` |
-| Bundle 6 service steps at 400 kHz | 687 µs per snapshot step in the owner's model, 107% of wire time | Provisional median limit 1,268 permille of measured wire time, first plus 40 µs, at CPU-L 494 MHz; about 799/839 µs only at nominal wire time. The 110% target remains open ([pmic-access.md](pmic-access.md)) | Bundle 6 STEP lines |
+| Bundle 6 service steps at 400 kHz | 687 µs per snapshot step in the owner's model, 107% of wire time | Provisional median limit 1,268 permille of measured wire time, first plus 40 µs, at CPU-L 494 MHz; about 799/839 µs only at nominal wire time. Passed on port 3-3 with a median of 1,243 permille; at the measured access costs no barrier placement reaches 110% ([pmic-access.md](pmic-access.md)) | Bundle 6 STEP lines |
 | Wall time per board for bundles 1 to 9 | Not applicable | 10 min (*estimated*); no guard window wait, because 12 re-enumerations fit the guard's 12 per 600 s. Both boards share one guard key, so this assumes no other A733 re-enumeration in that window | Session file times |
 | Host sandbox, bytes read, copies | [board-bundles-measurements.md](board-bundles-measurements.md) | Unchanged | `checks/board-bundles.py` |
 

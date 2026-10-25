@@ -1,13 +1,13 @@
 # PMIC register access and service spin timing
 
 Status: **implemented and measured on the board.** Bundle 6 ran the changed
-provider on port 3-3 on 2026-10-24; section "Board result" gives its steps,
-its access costs and the provisional empirical bound. The modeled step times come
-from the host model of the power service, `checks/power-domains-service.c`,
-which sets each bus flag at a sub-microsecond time, the write's completion
-time plus the phase's wire time.
-[pmic-access-measurements.md](pmic-access-measurements.md) records the
-modeled rows against the base tree.
+provider twice on port 3-3 on 2026-10-24, read-only. Section "Board result"
+gives the steps, the access costs, the provisional empirical bound and what
+the measured costs predict. The modeled step times come from the host model
+of the power service, `checks/power-domains-service.c`, which sets each bus
+flag at a sub-microsecond time, the write's completion time plus the phase's
+wire time. [pmic-access-measurements.md](pmic-access-measurements.md)
+records the modeled rows against the base tree.
 
 The PMIC provider (`drivers/power/a733_pmic.c`) reads the AXP8191 over the
 always-on I2C controller S_TWI0. In five images its worker is the power
@@ -19,11 +19,9 @@ snapshot step at 917 µs
 at 400 kHz, 630 µs of wire time, so the step is 146% of wire time (149.4% in
 the first step). The raw log is
 `~/.cache/sunstoneos/evidence/board-session-20261023/port-3-3/bb6-run/kernel.log`.
-The model reproduces the median when a register access costs 1,300 ns. That
-fit does not identify the cost of individual operations. The changed
-provider's run timed component windows; the model at those costs falls short
-of that run's median step, and the gap is unexplained (section "Board
-result").
+The changed provider's step is 779 to 784 µs (median), 124% of wire time.
+At the measured access costs the model gives 739 µs, and no timed window
+accounts for the remaining 45 µs (section "Board result").
 
 ## Change
 
@@ -147,11 +145,10 @@ final STOP, so each request still starts and ends with both lines released.
 Percentages are of the bit-time wire time: 630 µs for a snapshot and
 812.5 µs for a selector write (325 bit times). The model's bytes take 23 µs,
 so its own snapshot wire is 642 µs (102%). Rows at 200 ns per access keep the
-check's 40 ns per time read. The board-cost rows use illustrative sums of
-component means from bundle 6
-(section "Board result"): 506 ns per register read, 402 ns per write,
-144 ns per time read and 77 ns per provider poll. These costs omit work
-outside the timed windows; the empirical bound does not depend on them.
+check's 40 ns per time read. The board-cost rows use the costs that bundle 6
+measured (section "Board result"): 505 ns per register read, 403 ns per
+write, 145 ns per time read and 527 ns per provider poll beyond its time read
+and flag read.
 
 | Metric | Baseline | Design | Measured by |
 | --- | --- | --- | --- |
@@ -160,36 +157,38 @@ outside the timed windows; the empirical bound does not depend on them.
 | Task checks per register access | 1, plus 1 per poll | 0, plus 1 per poll | `checks/pmic-tree.py` |
 | Serial accesses between a flag and the next phase-start write | 27 per transaction | 25 per transaction, about 150 per snapshot | Counted from the phase sequence |
 | Snapshot step, 400 kHz, 200 ns per access | 712 µs (113%) | 685 µs (109%) | `checks/power-domains-service.c` |
-| Snapshot step, 400 kHz, component means: 506 ns per read, 402 ns per write, 77 ns per poll, 144 ns per time read | Not rerun | 731 µs (116%); incomplete cost model | Same, board-cost table |
-| Snapshot step on the board, median; first step | 917 µs (146%); 941 µs | 779 µs (123.7%); 809 µs (128.4%) | Bundle 6 `STEP` lines, port 3-3 |
-| Selector write, 400 kHz, component means | Not rerun | One step of 941 µs; incomplete cost model | Same |
+| Snapshot step, 400 kHz, measured costs | Not rerun | 739 µs (117%) | Same, board-cost table |
+| Snapshot step on the board, median; first step | 917 µs (146%); 941 µs | 779 µs (123.7%) and 784 µs (124.3%); 809 µs and 807 µs | Bundle 6 `STEP` lines of the two runs, port 3-3 |
+| Selector write, 400 kHz, measured costs | Not rerun | One step of 950 µs; not measured on the board | Same |
 | Snapshot, 400 kHz, flags 10% later than the divisor implies, 200 ns | Two steps, one tick wait | One step of 751 µs for 708 µs of model wire | Same, slow-bus case |
 | Tick waits per snapshot and selector write, 100 kHz | 2 and 3 | 2 and 3 | Same |
 | BUSY results per other-core caller; from `a733_pmic_live` | At most 1; 0 | At most 1; 0 | Same |
 
 The DCDC3 selector-write acceptance bound remains at most two steps with
 one tick wait. A one-step result is not required and has not been measured
-on the board. The service checks its 1 ms spin budget between polls, so a
-final poll can finish slightly later than 1 ms.
+on the board. At the poll cost that reproduces the board's snapshot median,
+the model splits a selector write into two steps with one tick wait. The
+service checks its 1 ms spin budget between polls, so a final poll can
+finish slightly later than 1 ms.
 
-**110% remains open.** A bare S_TWI0 read costs about 379 ns, but a write
-without a trailing barrier has not been measured; every timed write had
-`DSB SY` on both sides. Read and write costs must remain separate: the
-model gives 688 µs with reads at 379 ns and writes assumed to cost 1 ns,
-and 685 µs with those costs exchanged. With reads at 379 ns and no software
-cost, writes of at most 150 ns give 664 to 692 µs, within 110% of the
-630 µs wire (693 µs).
-The 1 ns values approximate a free operation; they are assumptions, not
-board measurements. The model uses zero write cost to mean "use the read
-cost", so zero would silently restore the rejected equal-cost assumption.
-At 379 ns for both accesses, it gives 694 µs with 22 µs bytes and 712 µs
-with 23 µs bytes. Neither establishes a hardware floor or proves that
-lighter barriers cannot reach 110%. Two routes remain open: the lighter
-barrier placement under "Left out" (plain `DATA` write, one `DSB SY` after
-the phase-start `CNTR` write), and mapping S_TWI0 Device-nGnRE instead of
-Device-nGnRnE, which lets the interconnect acknowledge a write before it
-reaches the controller. Each needs the board windows of section "Board result" and
-the qualification of [shared-helpers.md](../shared-helpers.md).
+**110% is not reachable by the register accesses of this design.** The
+target is 693 µs for a snapshot. With every software cost set to zero, the
+model charges only the register accesses and a 35 ns counter read per time
+read. It then gives 712 µs (113%) with a `DSB SY` pair around each access
+and 694 µs (110.2%) with the lighter placement under "Left out". Each phase
+of a snapshot spins its rounded wire time, 23 µs for a byte and 5 µs for a
+condition, which already makes 642 µs of the 693 µs. The 51 µs that remain
+cover 42 phases, about 1.2 µs each. The serial register accesses of a
+phase that writes `DATA` and `CNTR` take about 1.2 µs with the lighter
+placement (two plain reads, a plain write and a completed write) and 1.4 µs
+with `DSB SY` pairs. Any route to 110% therefore needs fewer serial
+register accesses per snapshot. The S_TWI0 packet engine (the `TWI_DRV`
+registers from `+0x200`, which startup requires disabled) sequences the
+conditions and bytes of a transaction in hardware. It would leave one
+software turnaround per transaction instead of one per phase, six per
+snapshot instead of 42. It is not designed or qualified here. Reading the
+status register alone to detect completion, under "Left out", removes one
+read per phase but not enough to reach 110% at the present software cost.
 
 **Provisional empirical bound.** At 400 kHz and CPU-L at 494 MHz, bundle 6
 uses a median limit of 1,268 permille of each step's own measured wire
@@ -200,16 +199,18 @@ above the observed first step of 809 µs. Those microsecond values hold at
 the nominal 22.5 µs byte, where a snapshot's wire time is 630 µs (798.840 µs
 and 838.840 µs exactly); at another measured byte the permille limit
 applies to that step's wire time. This is an empirical acceptance limit
-from one lifetime; no model or cost measurement derives it, and it is not
-a worst-case bound.
+set from the first run; no model or cost measurement derives it, and it is
+not a worst-case bound. The second run, in another lifetime, applied it and
+passed: a median of 1,243 permille and a first step of 807 µs against
+840 µs.
 
 The conditions include one service core, the trace observer and write
 stamps enabled, and interrupts unmasked during ordinary steps. Production
 images omit that instrumentation, but their step times were not measured
 here. Bundle 6's evaluator rounds ratios up from the counter ticks and
 compares the first step using the counter's 125/3 ns tick directly.
-Its upper distribution bin is also 1,268 permille. The preserved board
-image used the earlier 155% limit; a future image uses the revised one.
+Its upper distribution bin is also 1,268 permille. The first run's image
+used an earlier limit of 155%.
 
 The bundle's own wire time per step uses the measured byte: the lower bracket of the wire-time spin when it exceeds nine bit
 times, at most 110% of nine bit times. A measured byte that is missing or
@@ -224,14 +225,13 @@ bracket. Bundle 6 then takes nine bit times, as for a missing sample, and
 its `WIRE` line shows `reads=1`; the model treats that sample as missing.
 Unlike a missing sample it does not fail the bound, because with nine bit
 times the verdict can only be stricter. The service spins 23 µs for a
-22.5 µs byte. Changing the modeled byte from 22 to 23 µs can change the
-step because the completion checks and spin boundaries are quantized; the
-694 µs and 712 µs rows above expose that sensitivity.
+22.5 µs byte, and spin ends fall on whole microseconds, so a step changes
+in whole microseconds per phase (section "Board result").
 
 Re-spins are reported per step and in the summary and do not gate the run:
 the service model gives no re-spin at a 23 µs byte and 18 to 24 per
 snapshot at 24 µs. Each re-spin costs a quarter bit time and one poll, about
-1.5 µs. The changed provider's run had none. Their count sizes the
+1.5 µs. Neither run of the changed provider had one. Their count sizes the
 counter-tick spin resolution left out below.
 
 ## Measurement
@@ -239,9 +239,11 @@ counter-tick spin resolution left out below.
 Committed checks, added with the implementation:
 
 - `checks/power-domains-service.c`: independent read, write, poll and time
-  costs; component means; historical calibration sensitivities; separate
-  read/write floors; and byte-rounding sensitivity. `--board-costs` selects
-  only those rows. The slow-bus case remains in the default check. Every
+  costs. The board-cost rows charge the measured costs with the present and
+  the lighter barrier placement, the poll cost fitted to the board median
+  with both placements, and the register accesses alone with both
+  placements; each asserts its snapshot step. `--board-costs` selects only
+  those rows. The slow-bus case remains in the default check. Every
   service case runs with sub-microsecond flags.
   The 400 kHz case at 200 ns per access keeps its 110% assertion against the
   model's own wire time: the base provider fails it with sub-microsecond
@@ -305,11 +307,47 @@ that the earlier adapter made per access:
    flag clear and of the first with it set, both from the write's return;
    the byte is the lower one. That step is excluded from the step
    statistics and counted as excluded.
-5. **Baseline reconstruction, rejected.** The original procedure added
-   adapter-read, task-check, two time-read and observer windows, then fitted
-   the difference from the base provider's 1,380 ns per-access cost. This
-   cannot isolate the missing cost or transfer it to the changed provider.
-   Section "Board result" retains the figures and explains their limits.
+5. **Windows added in the eighth prepared set**, three at the park and one
+   during the snapshots, each with 256 iterations in eight sub-windows of
+   32 and IRQs masked unless stated:
+   - **Counter overhead:** the window loop with no body and a `DSB SY` at the
+     end of each sub-window, the structure of the write window.
+   - **Plain writes:** 256 plain writes of the extended slave address register
+     `XADDR` (S_TWI0 `+0x04`, `0x07083004`) with the value it read, and one
+     `DSB SY` after each sub-window before its end stamp. A733 User Manual
+     V1.00 section 18.11.10.2 with 18.11.10.1 (printed pages 1498 and 1499) gives
+     XADDR one use: the second byte of a 10-bit slave address, compared only
+     after the first byte matched `11110b` and ADDR bits 2:1. Section
+     18.11.10.4 (printed pages 1499 to 1501) states that the controller does not
+     respond as a slave unless `CNTR.A_ACK` is set, which the provider never
+     writes. A START or STOP needs `M_STA` or `M_STP`, `INT_FLAG` is a CNTR
+     bit, and the pins follow the line-control register `LCR` (section
+     18.11.10.9, printed pages 1505 and 1506; the SDA control enable, bit 0,
+     is on page 1506). An XADDR write therefore starts no bus phase, acknowledges no
+     flag and drives no line. The window runs only when ADDR bits 7:3 are not
+     `11110b`, CNTR reads `0x40`, STAT reads `0xf8` and LCR reads both lines
+     high with neither forced (`bb_xaddr_admitted()` in
+     `apps/board-bundles-power/trace.c`). Afterwards XADDR, ADDR, CNTR, STAT
+     and LCR must each read the value read before the window, or the image
+     fails without a controlled outcome. A refused precondition skips the window and is recorded.
+   - **Service loop between polls:** the work query, the time read and the
+     work query with the spin time, as `pmic()` in
+     `drivers/power/a733_power_domains.c` runs them.
+   - **Whole provider poll with the flag clear:** up to four of the last
+     four client snapshots carry this window; it stops at 256 samples,
+     normally after the first of them. The service polls a queued snapshot back to
+     back, without its spin, and stamps each `a733_pmic_poll()`. A poll that
+     read only CNTR in a flag phase, wrote nothing, completed no phase and
+     returned PENDING is a whole poll with the flag clear: entry, the provider
+     object's try-lock, the time read and the flag read. IRQs stay unmasked as
+     in the service, and a sample with a scheduler tick inside is left out and
+     counted. 256 samples are grouped into eight sub-windows of 32; 256 samples
+     of the stamp pair alone give the per-sample overhead. Those snapshots
+     leave the step records. Of the 34 snapshots (two supply verifications and
+     32 client snapshots), each normally one service step, the wire-time spin
+     step is excluded and the poll window takes one, so the summary normally
+     reads `STEPS recorded=32` and `excluded=1`; each further snapshot the
+     window takes lowers the recorded count by one.
 
 The step records count re-spins: control-register polls beyond the second
 of a flag phase or of a STOP wait. A STOP wait lasts until `M_STP` reads
@@ -341,159 +379,167 @@ image built from it. None of them is board-qualified.
 
 ## Board result
 
-Conditions: port 3-3, 2026-10-24, bundle 6 of the fifth prepared set (step
-3), built from the changed provider; read-only. The service ran on core 0.
-Bundle 4 in the same lifetime measured CPU-L at 493,989,502 Hz. S_TWI0 ran
-at 400 kHz (divisor `0x28`, bit time 2,500 ns). The raw log is
-`~/.cache/sunstoneos/evidence/board-session-20261023/port-3-3/set5-bb6-run/kernel.log`.
+Both runs used port 3-3 on 2026-10-24 and the read-only bundle 6 built from
+the changed provider. The service ran on core 0, S_TWI0 at 400 kHz (divisor
+`0x28`, bit time 2,500 ns), with the trace observer and write stamps active.
+CPU-L ran at its boot rate of 494 MHz; bundle 4 measured 493,989,502 Hz in
+the first run's lifetime, and the second lifetime did not measure it. Raw
+logs:
 
-**Steps.** 33 steps were recorded and one, the wire-time spin, was excluded.
-Each recorded step completed one snapshot: 12 conditions, 24 bytes and
-6 STOPs, 630 µs of wire time.
+- first run, step 3 of the fifth prepared set:
+  `~/.cache/sunstoneos/evidence/board-session-20261023/port-3-3/set5-bb6-run/kernel.log`;
+- second run, with the windows added in the eighth set:
+  `~/.cache/sunstoneos/evidence/board-session-20261024-8/port-3-3/s7-bb6-run/kernel.log`,
+  from the frozen bundle
+  `~/.cache/sunstoneos/evidence/board-bundles-20261024-8/port-3-3/pmic-power-domain-reads/`.
 
-| Metric | Board |
-| --- | --- |
-| Median step | 779 µs (18,703 counter ticks), 123.7% of wire time |
-| Steps 2 to 33 | 777 to 788 µs |
-| First step | 809 µs, 128.4% |
-| Re-spins | 0 |
-| Steps containing an interrupt | 24 of 33; their median step is about 1 µs longer than that of the other 9 |
-| Byte | Last read with the flag clear 22.4 µs after the write returned, first with it set 23.0 µs; the byte is the nominal 22.5 µs |
-| Snapshots | All `0xff9e`; no fault |
-| Image's own verdict | Pass against the provisional 155% |
+**Steps.** Each recorded step completed one snapshot: 12 conditions,
+24 bytes and 6 STOPs, 630 µs of wire time.
+
+| Metric | First run | Second run |
+| --- | --- | --- |
+| Steps recorded | 33; the wire-time spin step excluded | 32; the wire-time spin step excluded, one snapshot taken by the poll window |
+| Median step | 779 µs (18,703 counter ticks), 123.7% | 784 µs (18,815.5 ticks), 124.3%; 1,243 permille of the measured wire time |
+| Steps after the first | 777 to 788 µs | 779 to 793 µs |
+| First step | 809 µs, 128.4% | 807 µs (19,376 ticks), limit 840 µs |
+| Re-spins | 0 | 0 |
+| Steps containing an interrupt | 24 of 33 | 24 of 32 |
+| Byte | 22.5 µs | 22.541 µs |
+| Snapshots | All `0xff9e`; no fault | All `0xff9e`; no fault |
+| Image's own verdict | Pass against 155% | Pass against 1,268 permille |
 
 **Access costs.** Each window ran 256 iterations in eight sub-windows of 32,
-timed by the 24 MHz counter (41.7 ns per tick), with IRQs masked except in
-the task-check window, which held no scheduler tick.
+timed by the 24 MHz counter (41.67 ns per tick), with IRQs masked except in
+the task-check and poll windows; neither held a scheduler tick. Values are
+the second run's, with the first run's in parentheses.
 
-| Window | Average per iteration | Slowest sub-window per iteration |
+| Window | Average per iteration | Sub-windows, per iteration |
 | --- | --- | --- |
-| `CNTR` read with `DSB SY` before and after | 418.8 ns | 419.3 ns |
-| Plain `CNTR` read, value discarded | 377.9 ns | 378.9 ns |
-| Plain `CNTR` read, address-dependent | 378.7 ns | 380.2 ns |
-| Adapter time read | 143.6 ns | 149.7 ns |
-| Adapter register read | 462.4 ns | 470.1 ns |
-| Task check | 76.5 ns | 80.7 ns |
-| Trace observer | 43.5 ns | 58.6 ns |
+| `CNTR` read with `DSB SY` before and after | 418.5 ns (418.8 ns) | 416.7 to 420.6 ns |
+| Plain `CNTR` read, value discarded | 377.9 ns (377.9 ns) | 376.3 to 378.9 ns |
+| Plain `CNTR` read, address-dependent | 379.1 ns (378.7 ns) | 377.6 to 380.2 ns |
+| Adapter time read | 144.4 ns (143.6 ns) | 141.9 to 151.0 ns |
+| Adapter register read | 462.2 ns (462.4 ns) | 460.9 to 470.1 ns |
+| Task check | 77.0 ns (76.5 ns) | 75.5 to 83.3 ns |
+| Trace observer | 42.5 ns (43.5 ns) | 40.4 to 52.1 ns |
+| Plain `XADDR` write, one `DSB SY` per 32 | 200.7 ns; 197.6 ns less the empty window | 186.2 to 204.4 ns |
+| Empty window, one `DSB SY` per 32 | 3.1 ns; 99 ns per sub-window | 2 to 5 ticks per sub-window |
+| Service loop between polls | 274.6 ns | 272.1 to 286.5 ns |
+| Whole provider poll with the flag clear | 1,245.4 ns; 1,175.8 ns less its stamp pair | 1,225.3 to 1,263.0 ns |
+| Stamp pair of a poll sample | 69.7 ns | 69.0 to 70.3 ns |
 
-The 2,040 S_TWI0 writes of the snapshots took 17,533 ticks, 358.1 ns on
-average, 8 ticks (333 ns) at the fastest and 16 ticks (667 ns) at the
-slowest. Issue throughput and latency agree, so a read waits for its
-completion either way, and the barriers add about 41 ns.
+The 2,040 S_TWI0 writes inside the snapshots took 17,618 ticks, 359.9 ns on
+average (358.1 ns), from 8 ticks (333 ns) to 10 ticks (417 ns). The poll
+window took its 256 samples from the 398 polls of one snapshot. XADDR, ADDR,
+CNTR, STAT and LCR read the same values after the write window as before
+it: `XADDR` `0x0`, `CNTR` `0x40`, `STAT` `0xf8`, `LCR` `0x3a`. The
+wire-time spin read `CNTR` 40 times in 554 ticks, 577 ns per read with its
+stamp, which is an adapter read plus a time read, so a `CNTR` read costs the
+same while a byte is on the wire as at idle.
 
-**Illustrative model costs.** Use the mean for every measured component,
-rounded up after summation:
+The windows divide the costs as follows.
 
-- read: adapter read plus the observer window, 462.4 + 43.5 = 506 ns;
-- write: in-transfer write bracket plus the observer window,
-  358.1 + 43.5 = 402 ns;
-- time read: 144 ns;
-- poll: the task-check window alone, 77 ns.
+- **Reads.** The `DSB SY` pair adds 41 ns to a read. Issue throughput and
+  latency agree, so a plain read waits for its completion either way.
+- **Writes.** A plain write costs 198 ns when 32 run back to back before one
+  `DSB SY`. The adapter's write with a `DSB SY` pair costs about 325 ns in
+  the transfers: the 359.9 ns bracket less one counter read, half the stamp
+  pair. Of the 325 ns, about 44 ns are the adapter's checks (its read less
+  the fenced read) and about 20 ns the leading `DSB SY`, which leaves about
+  261 ns from the store to its completion. One completed write therefore
+  takes 198 to 261 ns.
+- **Polls.** The whole flag-clear poll, 1,176 ns, holds the task check
+  (77 ns), the time read (144 ns), the flag read with its observer call
+  (505 ns) and 449 ns of other provider software: entry, the try-lock,
+  the deadline and revocation checks, the phase dispatch and the release.
+- **Service loop.** Its time read takes 144 ns of the 275 ns, and the two
+  work queries the other 131 ns.
 
-These are sums of measured component means, not measurements of complete
-callbacks. The write bracket already contains counter-read overhead; adding
-two adapter time reads would double-charge part of it. The outer wrapper,
-bookkeeping and full provider poll are not timed. The observer window
-measures a flag-read path, so its cost for a write is only an approximation.
-At these inputs the model gives a 731 µs snapshot and a 941 µs selector
-write. Neither independently predicts the board's median or a worst case.
+**Model at the measured costs.** The board-cost table of
+`checks/power-domains-service.c` charges 505 ns per read (adapter read and
+observer), 403 ns per write (write bracket and observer), 145 ns per time
+read and 527 ns per poll (task check and the 449 ns remainder). It gives a
+739 µs snapshot and a 950 µs selector write in one step. The snapshot is
+45 µs below the second run's median and 40 µs below the first run's.
+Charging the task check alone as the poll cost gives 731 µs, so the whole
+poll accounts for 8 µs of the difference. It replaces the 299 ns per-poll
+remainder of an earlier fit, which also charged 1,026 ns per write, with a
+measured 449 ns. It does not explain the remaining 45 µs.
 
-**Rejected calibration, retained for comparison.** The earlier calculation
-used slowest sub-window costs for reads, the slowest single write among
-2,040 writes, and two additional 150 ns time reads per write. Its inputs
-were 529 ns per read, 1,026 ns per write and 150 ns per time read. They mix
-statistics and overcharge counter stamps, so they do not define the bound.
+**Step times move in whole microseconds per phase.** The provider stores
+`phase_at` in whole microseconds, the service spins until
+`phase_at` plus the rounded-up phase time, and the spin ends at the first
+time read at or after that whole microsecond. The next spin starts from the
+time read after the next phase-start write. Each phase therefore costs its
+spin, 23 µs for a byte and 5 µs for a condition, plus the whole microseconds
+spanned by its serial work. That work runs from the end of the spin through
+the work query, the poll entry, the flag and status reads and the
+phase-start writes to that time read. In the model at the measured costs
+that work spans 2 µs in each of the 42 phases. A poll cost of 1,500 ns, about
+970 ns per phase more than the measured costs, brings the model to 783 µs,
+within 1 µs of the board's median. The board therefore spends about 41 µs
+per step on work that the model does not charge, and no window isolates it.
+Its candidates:
 
-At 81 ns per poll that model gives 756 µs, below the 779 µs board median.
-Its baseline reconstruction was 909 ns against a fitted 1,380 ns access.
-Spreading the difference over the base provider's 211 accesses and 44
-polls gives 2,340 ns per poll, including the task check. This gives 850 µs
-on the changed provider and 941 µs on the base provider, above their
-respective 779 µs and 917 µs board medians. The remainder method therefore
-fails for both providers.
+- the two further phase passes, revocation loads and time-read bookkeeping
+  of a completing poll, which a flag-clear poll does once;
+- the write wrapper's second counter stamp, atomic exchange and observer
+  call, about 70 ns per write outside the bracket;
+- `DSB SY` waiting for the provider-state stores that precede each access
+  inside a poll, which the isolated windows do not make;
+- per-step work outside the phases, such as the admission's two lock
+  waits.
 
-At 380 ns per poll the earlier model gives 779 µs. The added 299 ns is a
-fit to the observed median and measures nothing. The 23 µs gap between
-the model at 81 ns per poll (756 µs) and the board's median is
-unexplained. The model's step does not rise steadily with the per-poll
-cost: it is 757 µs at 250 and 260 ns, 762 µs at 300 ns and 759 µs at
-310 ns. At 380 ns a selector write takes one 1,001 µs step; at 386 ns
-(384 ns with 22 µs bytes) it splits into two steps with one tick wait,
-which the selector-write bound of at most two steps with one tick wait
-still admits. The host check prints the 380 ns row without asserting its
-step time, so the model is not tied to the board's median; the other
-sensitivity rows remain as historical model inputs.
+A window that stamps each completing poll from its entry to the return of
+its phase-start write, inside the recorded steps, would separate the first
+three from the fourth.
 
-**Bound selection.** The observed median is 18,703 counter ticks,
-779.292 µs, or 123.7% of wire time. The preserved image printed 1,236
-permille because its evaluator rounded down; the revised evaluator prints
-1,237. Adding 20 µs and rounding down to a whole permille gives the
-chosen 1,268-permille limit (798.840 µs at nominal wire time), about
-19.55 µs above the observed median. The first-step allowance adds 40 µs.
-The model is not used to claim an independently measured margin. Reuse
-this provisional limit only under the stated bundle conditions; changed
-clock rates, instrumentation or bus timing require a new assessment.
+**Lighter barrier placement, predicted.** The placement under "Left out"
+reads S_TWI0 plainly, writes `DATA` plainly and completes the `CNTR` write
+with one `DSB SY`. From the windows, each read costs 41 ns less. A phase
+that writes `DATA` and `CNTR` costs 104 to 124 ns less, because the `DATA`
+write overlaps the `CNTR` write, and a phase with one `CNTR` write costs 20 to
+40 ns less. Over the 18 two-write and 24 one-write phases of a snapshot, the
+writes save 2.4 to 3.2 µs, 39 to 53 ns per write on average. The model at
+465 ns per read and 364 ns per write gives 732 µs at the measured poll cost
+(7 µs shorter) and 775 µs at the 1,500 ns poll cost (8 µs shorter). The
+predicted median of bundle 6 is therefore about 776 µs, 1,230 permille of
+its wire time, against 784 µs. Because steps move in whole microseconds per
+phase, the board can differ from that by a few microseconds. If `DSB SY`
+waiting for stores makes up much of the 970 ns per phase, the step falls by
+more.
 
-**Bundle 6 windows of the eighth set: implemented, not run.** The
-bundle 6 image of `board-bundles-20261024-8/` adds three windows at the park
-and one during the snapshots. Each uses the same 256 iterations in eight
-sub-windows of 32 as the other windows, with IRQs masked unless stated.
+**Bound selection.** The first run's median is 18,703 counter ticks,
+779.292 µs, or 123.7% of wire time. Its image printed 1,236 permille because
+its evaluator rounded down; the revised evaluator prints 1,237. Adding
+20 µs and rounding down to a whole permille gives the chosen 1,268-permille
+limit (798.840 µs at nominal wire time), about 19.55 µs above that median.
+The first-step allowance adds 40 µs. The model is not used to claim an
+independently measured margin. Reuse this provisional limit only under the
+stated bundle conditions; changed clock rates, instrumentation or bus
+timing require a new assessment. The second run's median, 784 µs, is 16 µs
+below the limit at its measured byte, 800 µs.
 
-- **Counter overhead:** the window loop with no body and a `DSB SY` at the
-  end of each sub-window, the structure of the write window.
-- **Plain writes:** 256 plain writes of the extended slave address register
-  `XADDR` (S_TWI0 `+0x04`, `0x07083004`) with the value it read, and one
-  `DSB SY` after each sub-window before its end stamp. A733 User Manual
-  V1.00 section 18.11.10.2 with 18.11.10.1 (printed pages 1498 and 1499) gives
-  XADDR one use: the second byte of a 10-bit slave address, compared only
-  after the first byte matched `11110b` and ADDR bits 2:1. Section
-  18.11.10.4 (printed pages 1499 to 1501) states that the controller does not
-  respond as a slave unless `CNTR.A_ACK` is set, which the provider never
-  writes. A START or STOP needs `M_STA` or `M_STP`, `INT_FLAG` is a CNTR
-  bit, and the pins follow the line-control register `LCR` (section
-  18.11.10.9, printed pages 1505 and 1506; the SDA control enable, bit 0,
-  is on page 1506). An XADDR write therefore starts no bus phase, acknowledges no
-  flag and drives no line. The window runs only when ADDR bits 7:3 are not
-  `11110b`, CNTR reads `0x40`, STAT reads `0xf8` and LCR reads both lines
-  high with neither forced (`bb_xaddr_admitted()` in
-  `apps/board-bundles-power/trace.c`). Afterwards XADDR, ADDR, CNTR, STAT
-  and LCR must each read the value read before the window, or the image
-  fails without a controlled outcome. A refused precondition skips the window and is recorded.
-- **Service loop between polls:** the work query, the time read and the
-  work query with the spin time, as `pmic()` in
-  `drivers/power/a733_power_domains.c` runs them.
-- **Whole provider poll with the flag clear:** up to four of the last
-  four client snapshots carry this window; it stops at 256 samples,
-  normally after the first of them. The service polls a queued snapshot back to
-  back, without its spin, and stamps each `a733_pmic_poll()`. A poll that
-  read only CNTR in a flag phase, wrote nothing, completed no phase and
-  returned PENDING is a whole poll with the flag clear: entry, the provider
-  object's try-lock, the time read and the flag read. IRQs stay unmasked as
-  in the service, and a sample with a scheduler tick inside is left out and
-  counted. 256 samples are grouped into eight sub-windows of 32; 256 samples
-  of the stamp pair alone give the per-sample overhead. Those snapshots
-  leave the step records. Of the 34 snapshots (two supply verifications and
-  32 client snapshots), each normally one service step, the wire-time spin
-  step is excluded and the poll window takes one, so the summary normally
-  reads `STEPS recorded=32` and `excluded=1`; each further snapshot the
-  window takes lowers the recorded count by one.
-
-The windows give no authority for a PMIC rail write, and production barrier
-placement remains a separate reviewed change.
+The windows give no authority for a PMIC rail write.
 
 ## Left out
 
-- **Lighter barriers and Device-nGnRE.** The measured read pair adds about
-  41 ns; the effect on writes and the achievable step time remain open, and
-  so does a Device-nGnRE mapping of S_TWI0. They need the board qualification of
-  [shared-helpers.md](../shared-helpers.md). The intended placement, per
-  section 1.2 of the performance architecture: the flag and
-  status reads of a phase plain, the `DATA` write then the `CNTR` write
-  plain, and one `DSB SY` after the phase-start `CNTR` write, which makes
-  `phase_at` follow the write's completion. Reads of R_CCU, CCU, GIC and
-  R_PIO at admission and startup keep their barriers.
+- **Lighter barriers.** Per section 1.2 of the performance architecture:
+  the flag and status reads of a phase plain, the `DATA` write then the
+  `CNTR` write plain, and one `DSB SY` after the phase-start `CNTR` write,
+  which makes `phase_at` follow the write's completion. Reads of R_CCU, CCU,
+  GIC and R_PIO at admission and startup keep their barriers. Section
+  "Board result" predicts a step about 8 µs shorter. It needs the board
+  qualification of [shared-helpers.md](../shared-helpers.md).
+- **A Device-nGnRE mapping of S_TWI0**, which lets the interconnect
+  acknowledge a write before it reaches the controller. No window measures
+  it, and it needs the same qualification.
+- **The S_TWI0 packet engine.** It would sequence a transaction's
+  conditions and bytes in hardware, the one route to 110% that section
+  "Budgets" identifies. Its registers, interrupt and failure handling have
+  no design or board evidence here.
 - **Reading status alone to detect completion.** It would remove one serial
-  read per phase. The manual defines `0xF8` with `INT_FLAG` clear but does
+  read per phase, up to about 16 µs per snapshot. The manual defines `0xF8` with `INT_FLAG` clear but does
   not state the status value while a phase is on the wire, and the
   bootloader reads the flag first.
 - **Removing the flag read right after each phase-start write.** It runs
@@ -520,7 +566,6 @@ admits the changed provider objects through its explicit overlay.
 
 The trace evaluator, distribution labels, host fixtures, controlled-outcome
 helper and bundle preparation row use 1,268 permille. The eighth set's
-bundle 6 image applies it and has not run. The fifth and sixth sets'
+bundle 6 image applies it and passed on port 3-3. The fifth and sixth sets'
 preserved images and runbooks retain their original 1,550-permille
-acceptance limit; their existing passes do not establish execution of the
-revised evaluator.
+acceptance limit.

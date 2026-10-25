@@ -25,17 +25,19 @@
  * - the GPU supply consumer, which completes from the boot record with no
  *   bus transaction, and refuses when DCDC4 was not verified;
  * - the GPU display park predicate during a transfer and a domain transition.
- * Board-cost sensitivity, 400 kHz: read, write, poll and time-read costs
- * are independent. Component means give illustrative 506/402/77/144 ns;
- * they omit wrapper work and do not independently predict a board limit.
- * Legacy 529/1026 ns rows preserve the rejected fit for comparison only;
- * the 380 ns poll row, a fit to the board's median, is printed without an
- * asserted step time. Separate read and write floors assume 1 ns for the
- * other access (zero write_ns would silently reuse the read cost); with
- * reads at 379 ns, writes of 1 and 150 ns at 22 us bytes bracket the
- * snapshot within 110% of its bit-time wire. Equal-cost rows at 22 and
- * 23 us per byte expose the rounding sensitivity. No row establishes a
- * hardware floor or the attainable benefit of changing barriers.
+ * Board costs, 400 kHz, from bundle 6 on port 3-3 (docs/designs/pmic-access.md,
+ * section "Board result"): read, write, poll and time-read costs are
+ * independent. Measured: 505 ns per read and 403 ns per write (adapter
+ * operation plus trace observer), 145 ns per time read, and 527 ns per poll,
+ * the whole flag-clear poll less its time read and flag read. The lighter
+ * barrier placement (plain S_TWI0 reads and DATA write, DSB SY after the
+ * CNTR write) takes 41 ns from each read and, from the plain-write window,
+ * averages at most 364 ns per write. The 1,500 ns poll rows charge the
+ * remainder that brings the present placement to 783 us, within 1 us of the
+ * board's median; it is a fit and measures nothing. The register-access rows
+ * charge only the accesses and a 35 ns counter read: 419 ns per read and
+ * 281 ns per write with a DSB SY pair, or 378 ns per plain read and 235 ns
+ * per write in the lighter placement. No row is a floor of another design.
  * Slow bus, 400 kHz: every flag sets 10% later than the divisor implies
  * (25 us bytes, 6 us conditions). A snapshot and a selector write each take
  * one step within 110% of that wire time.
@@ -323,17 +325,12 @@ int main(int argc,char **argv)
             unsigned write_steps;
             uint64_t snapshot_us;
         } rows[]={
-            {"component means, incomplete",506,402,77,144,23,1,731},
-            {"legacy fit at 250 ns poll",529,1026,250,150,23,1,757},
-            {"legacy median fit, step not asserted",529,1026,380,150,23,1,0},
-            {"legacy selector split",529,1026,386,150,23,2,781},
-            {"legacy base remainder",529,1026,2340,150,23,2,850},
-            {"read floor, assumed 1 ns write",379,1,0,40,23,1,688},
-            {"read floor, assumed 1 ns write, 22 us byte",379,1,0,40,22,1,664},
-            {"read floor, assumed 150 ns write, 22 us byte",379,150,0,40,22,1,692},
-            {"write floor, assumed 1 ns read",1,379,0,40,23,1,685},
-            {"assumed equal costs, 22 us byte",379,379,0,40,22,1,694},
-            {"assumed equal costs, 23 us byte",379,379,0,40,23,1,712}};
+            {"measured costs",505,403,527,145,23,1,739},
+            {"measured costs, lighter barriers",465,364,527,145,23,1,732},
+            {"poll term fitted to the board median",505,403,1500,145,23,2,783},
+            {"fitted poll term, lighter barriers",465,364,1500,145,23,1,775},
+            {"register accesses only, DSB SY pairs",419,281,0,35,23,1,712},
+            {"register accesses only, lighter barriers",378,235,0,35,23,1,694}};
         const uint64_t wire_snapshot_ns=6*(3*2+4*9)*UINT64_C(2500);
         for(unsigned i=0;i<sizeof(rows)/sizeof(rows[0]);++i) {
             const struct rate r={"400kHz",0x28,rows[i].byte_us,5};
@@ -347,8 +344,7 @@ int main(int argc,char **argv)
             print_cost("snapshot",snapshot);print_cost("selector_write",write);
             printf("\"snapshot_permille_of_bit_time_wire\":%llu}\n",
                 (unsigned long long)(snapshot.longest_step_us*1000000/wire_snapshot_ns));
-            assert(snapshot.steps==1 && !snapshot.tick_waits &&
-                (!rows[i].snapshot_us || snapshot.longest_step_us==rows[i].snapshot_us));
+            assert(snapshot.steps==1 && !snapshot.tick_waits && snapshot.longest_step_us==rows[i].snapshot_us);
             assert(write.steps==rows[i].write_steps && write.tick_waits==rows[i].write_steps-1 &&
                 write.longest_step_us<=A733_POWER_PMIC_SPIN_US+100);
         }

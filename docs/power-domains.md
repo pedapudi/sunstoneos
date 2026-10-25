@@ -288,14 +288,17 @@ the design document's implementation section
 modeled, except the service steps of the read-only board runs.
 
 On the board, 400 kHz snapshot steps took 146% of their wire time against a
-110% target, and 123.7% (779 µs, median) after the provider follow-up.
+110% target, and 123.7% and 124.3% (779 µs and 784 µs, medians of two
+runs) after the provider follow-up.
 The provisional median limit is 1,268 permille of each step's measured
 wire time, with another 40 µs for the first step, at CPU-L 494 MHz under
 bundle 6's conditions. At nominal wire time those limits round to 799 µs
-and 839 µs. The 110% target remains open because a write without its
-trailing barrier has not been measured. Section "Board result of the
-service steps" of the [design](designs/power-domains.md) gives the evidence
-and the limits of the cost model.
+and 839 µs. The measured access costs put 110% out of reach of a design
+that polls each bus phase: with no software cost at all, the model's
+register accesses alone give 113% with `DSB SY` pairs and 110.2%
+with the lighter placement. Section "Board result of the service steps" of
+the [design](designs/power-domains.md) gives the evidence and the limits of
+the cost model.
 
 ## Checks
 
