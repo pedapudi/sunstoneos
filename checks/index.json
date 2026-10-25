@@ -1316,6 +1316,19 @@
   "summary": "Linked retained clients and shared transport with modeled service/device I/O.",
   "usb": false
  },
+ "accelerator-shared-owner.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/power-domains.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "output"
+  ],
+  "summary": "Build and run only the live GPU/NPU shared-owner composition cases.",
+  "usb": false
+ },
  "adc-application-fixture.py": {
   "cache_areas": [
    "evidence"
@@ -5650,7 +5663,7 @@
   "library": false,
   "pure_host": true,
   "required_arguments": [],
-  "summary": "Check integration selection, failure handling and evidence preservation with fake tools.",
+  "summary": "Check integration selection, failure handling, evidence preservation and",
   "usb": false
  },
  "isp0-boot.py": {
