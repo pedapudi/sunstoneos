@@ -129,9 +129,9 @@ A software deadline cannot bound an instruction blocked by the interconnect.
 
 Defining `SUNSTONE_A733_RESIDENT` selects a contract for an image that runs
 after a cold boot from the microSD card instead of under the FEL host. Its
-contract magic is `0x4153373352455331` and its result magic is
+contract magic is `0x4153373352434e31` and its result magic is
 `0x4153373352525331`, so neither kind of contract admits the other kind of
-image. The stage-2 loader is its intended producer. It must arm the watchdog
+image. No other contract or result record in the tree uses either value. The stage-2 loader is its intended producer. It must arm the watchdog
 before it publishes the contract.
 
 | Field | FEL-launched contract | Resident contract |
