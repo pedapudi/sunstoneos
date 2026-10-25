@@ -1,7 +1,7 @@
 #ifndef SUNSTONE_A733_EL3_SECURITY_H
 #define SUNSTONE_A733_EL3_SECURITY_H
 /* The cold-boot security setup of the vendor's EL3 firmware, which both EL3
- * monitors make as their last step before entering EL1
+ * monitors and the SMP cached boot make as their last step before entering EL1
  * (docs/designs/gpu-vendor-default.md). The writes are BL31's
  * sunxi_security_setup (monitor.fex, SHA-256 8af16b86...5b2632, loaded at
  * 0x48000000), cold-boot writes 9 to 17 of docs/vendor-firmware/
@@ -32,23 +32,27 @@
  * are not security writes and are left out. The writes only open devices to
  * non-secure software and are not restored before a ROM return; a power
  * removal resets them. The QEMU machine has none of these blocks, so
- * MONITOR_QEMU builds make no write. Requires boot.h. */
+ * MONITOR_QEMU builds make no write. */
 #include <stdint.h>
 
 #ifndef MONITOR_QEMU
+static inline uint32_t a733_el3_security_read(uintptr_t address)
+{ return *(volatile uint32_t *)address; }
+static inline void a733_el3_security_write(uintptr_t address, uint32_t value)
+{ *(volatile uint32_t *)address = value; }
 static inline void a733_el3_security_setup(void)
 {
     /* EL3 runs with the MMU off, so every access is Device-nGnRnE and in
      * program order; one DSB SY completes them all before EL1 starts. */
-    for (unsigned n = 0; n < 14; ++n) mmio_write(0x02054004u + 0x10u * n, 0xffffffffu);
-    for (unsigned n = 16; n < 24; ++n) mmio_write(0x02054004u + 0x10u * n, 0xffffffffu);
-    for (unsigned n = 0; n < 3; ++n) mmio_write(0x07003000u + 4u * n, 0);
-    for (unsigned n = 0; n < 3; ++n) mmio_write(0x07002004u + 0x10u * n, 0xffffffffu);
-    mmio_write(0x07010290u, mmio_read(0x07010290u) | 7u);
-    mmio_write(0x02003f00u, 7u);
-    if ((mmio_read(0x02002704u) & 0x10001u) == 0x10001u) mmio_write(0x04601020u, 0xffffu);
-    if ((mmio_read(0x0200270cu) & 0x10001u) == 0x10001u) mmio_write(0x04024020u, 0xffffu);
-    mmio_write(0x020540e0u, 0xfffffbffu);
+    for (unsigned n = 0; n < 14; ++n) a733_el3_security_write(0x02054004u + 0x10u * n, 0xffffffffu);
+    for (unsigned n = 16; n < 24; ++n) a733_el3_security_write(0x02054004u + 0x10u * n, 0xffffffffu);
+    for (unsigned n = 0; n < 3; ++n) a733_el3_security_write(0x07003000u + 4u * n, 0);
+    for (unsigned n = 0; n < 3; ++n) a733_el3_security_write(0x07002004u + 0x10u * n, 0xffffffffu);
+    a733_el3_security_write(0x07010290u, a733_el3_security_read(0x07010290u) | 7u);
+    a733_el3_security_write(0x02003f00u, 7u);
+    if ((a733_el3_security_read(0x02002704u) & 0x10001u) == 0x10001u) a733_el3_security_write(0x04601020u, 0xffffu);
+    if ((a733_el3_security_read(0x0200270cu) & 0x10001u) == 0x10001u) a733_el3_security_write(0x04024020u, 0xffffu);
+    a733_el3_security_write(0x020540e0u, 0xfffffbffu);
     __asm__ volatile("dsb sy" ::: "memory");
 }
 #else

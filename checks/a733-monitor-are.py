@@ -2,7 +2,7 @@
 """Execute monitor ARE admission, the EL3 security setup and bounded GIC restoration with injected faults.
 
 The physical build must make the vendor BL31's cold-boot security writes
-(platform/a733/el3_security.h) in their order before EL1 entry, the DMA
+(include/a733_el3_security.h) in their order before EL1 entry, the DMA
 security words only when the controller's bus gate and reset are open; the
 QEMU build makes none."""
 import argparse
@@ -48,7 +48,8 @@ for model in (False, True):
     flags = ['-DMONITOR_QEMU=1'] if model else []
     command([a.clang, '--target=aarch64-none-elf', '-march=armv8-a', '-mgeneral-regs-only', '-ffreestanding',
              '-fno-stack-protector', '-fno-unwind-tables', '-O2', '-g', '-Wall', '-Wextra', *flags,
-             '-I' + str(ROOT / 'platform/a733'), '-c', a.monitor_source, '-o', a.build / (name + '.o')])
+             '-I' + str(ROOT / 'platform/a733'), '-I' + str(ROOT / 'include'), '-c', a.monitor_source,
+             '-o', a.build / (name + '.o')])
     elfpath = a.build / (name + '.elf')
     command([a.lld, '-Ttext=0x41000000', '-e', 'monitor_init', a.build / (name + '.o'), a.build / 'reset.o', '-o', elfpath])
     with elfpath.open('rb') as stream:
@@ -286,7 +287,7 @@ for model in (False, True):
         print('PASS', name, case, flush=True)
 assert results, 'No selected case matched'
 a.output.write_text(json.dumps({'physical_access': False, 'passed': True, 'cases': results,
-    'sources': {name: digest(ROOT / name) for name in ('platform/a733/boot.h', 'platform/a733/el3_security.h',
+    'sources': {name: digest(ROOT / name) for name in ('platform/a733/boot.h', 'include/a733_el3_security.h',
                                                        'checks/a733-monitor-are.py')},
     'monitor_source': {'path': str(a.monitor_source.resolve()), 'sha256': digest(a.monitor_source)},
     'tools': {str(path): digest(path) for path in (a.clang, a.lld, a.objdump)},

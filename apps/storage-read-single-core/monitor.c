@@ -93,7 +93,7 @@ static int secondaries_off(void)
     }
     return counter()<admission.startup_deadline;
 }
-#include "el3_security.h"
+#include "a733_el3_security.h"
 void sd_single_core_monitor_init(void)
 {
     volatile const struct a733_smp_contract *source=(void *)A733_SMP_CONTRACT_ADDRESS;

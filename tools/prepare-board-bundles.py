@@ -218,7 +218,7 @@ def returning_row(name, position, component, overlay, expect, controlled, expect
 GPU_SOURCES = ['apps/gpu-power-id/prepare.py', 'apps/gpu-power-id/build.py', 'apps/gpu-power-id/check.py',
                'apps/gpu-power-id/main.c', 'apps/gpu-power-id/wrapper.c', 'apps/gpu-power-id/probe-read.c',
                'drivers/power/a733_pmic.c', 'drivers/power/a733_pmic_consumer.c',
-               'platform/a733/monitor.c', 'platform/a733/el3_security.h', 'include/a733_gpu_opp.h',
+               'platform/a733/monitor.c', 'include/a733_el3_security.h', 'include/a733_gpu_opp.h',
                'apps/gpu-provider-ready/main.c', 'apps/gpu-provider-ready/build.py',
                'apps/gpu-provider-ready/check.py', 'drivers/gpu/a733_gpu_power.c', 'drivers/gpu/a733_gpu_platform.c',
                'drivers/gpu/a733_gpu_platform_native.c', 'drivers/gpu/a733_gpu_resources.c',
@@ -239,7 +239,7 @@ GPU_PREREQUISITES = ('Admission (apps/gpu-power-id/README.md, "Physical admissio
                      'DCDC4 lease, read back, and waits 1.2 ms; DCDC4 stays at 960 mV; each ON enables PLL_GPU0 and '
                      'sets it to 1008 MHz as the GPU core clock, and each OFF disables it, every PLL_GPU0 write read '
                      'back. Every image\'s EL3 monitor makes the vendor BL31\'s cold-boot security writes before EL1 '
-                     'starts (platform/a733/el3_security.h). The '
+                     'starts (include/a733_el3_security.h). The '
                      'client also reads, without writing, a 35-word snapshot before the first ON and after each ON '
                      'attempt: the CORE6 and TOP5 PPU rows, R_CCU 0x1ac and 0x250, and CCU 0x0e0, 0xb20 and 0xb24. '
                      'TOP5 is written only through the shared domain-5 row. No NPU image runs in this lifetime.')

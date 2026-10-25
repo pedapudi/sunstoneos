@@ -17,7 +17,7 @@ endforeach()
 list(REMOVE_ITEM storage_sources "${storage_base}/port.c" "${storage_base}/build-id.c"
   "${storage_root}/checks/fp-context.S")
 file(SHA256 "${storage_root}/platform/a733-smp-cached/boot.c" storage_source_hash)
-if(NOT storage_source_hash STREQUAL "2e7401667a2d320a268734f489722aedbb620bf8b2d96a8c791d2635136dcbe0")
+if(NOT storage_source_hash STREQUAL "3b31dcdb0d969c9117b36bd323b08e2dea5a3b155fe169201e044acc90a5f5a3")
   message(FATAL_ERROR "Review the storage boot patch against changed cached source")
 endif()
 apply_build_patch("${storage_build}/boot.c" "${storage_root}/platform/a733-smp-cached/boot.c"

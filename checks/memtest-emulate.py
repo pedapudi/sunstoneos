@@ -648,7 +648,7 @@ def writer_sample(elf):
     for name, (registers, mask, admitted) in cases.items():
         m = machine.Machine(elf)
         m.map(0x02000000, 0x4000)
-        # The blocks of the EL3 security setup (platform/a733/el3_security.h),
+        # The blocks of the EL3 security setup (include/a733_el3_security.h),
         # which monitor_init writes after the sample: SPC, S_SPC, S_TZMA,
         # PRCM and both DMA controllers, which stay gated and in reset here.
         for page in (0x02054000, 0x07002000, 0x07003000, 0x07010000, 0x04601000, 0x04024000):

@@ -1,5 +1,5 @@
 #include "boot.h"
-#include "el3_security.h"
+#include "a733_el3_security.h"
 
 // State is outside the BSS cleared by EL1 startup. EL1 does not write it, but
 // it can: cleanup re-checks the values it uses as bounds.
