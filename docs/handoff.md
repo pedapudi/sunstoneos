@@ -8,6 +8,15 @@ and 839 µs for the first step), 1,268 permille of the step's own wire time; 110
 stays open for writes. The boards stay untouched until the user reports both
 reconnected.
 
+**Reconnect request, port 3-1:** remove every power source, the separate 5 V
+supply as well as USB, then reconnect the board in FEL. Then run set
+`~/.cache/sunstoneos/evidence/board-bundles-20261024-11/`, in a new session
+`board-session-20261024-11/port-3-1`. The steps are cold DDR, then
+`gpu-provider-ready`, then `gpu-power-only` (`ade71834`). That image writes the
+vendor CORE6 delay row and takes 35-word read-only snapshots. `gpu-power-identity`
+runs only if both cycles reach `core_status=0x8`. The set merged into bringup at
+`12c9f746`.
+
 **Board runs of 2026-10-24 night** (set `board-bundles-20261024-8`, sessions
 `~/.cache/sunstoneos/evidence/board-session-20261024-8/port-<PORT>`). The user
 reported both boards reconnected after power removal. The two claims held from
