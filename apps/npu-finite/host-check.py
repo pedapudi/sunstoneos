@@ -11,8 +11,11 @@ def sha(data):return hashlib.sha256(data).hexdigest()
 # counter microseconds, as the image logs them; the host's parse of them.
 TIMES=(1000,5628,7000,7900,9000,9850)
 assert h.timing('NPU_TIME_US=\n'+''.join(f'0x{x:016x}\n' for x in TIMES))=={'startup_us':4628,'job_us':[900,850],
-    'entry_us':1000,'ready_us':5628,'jobs_raw_us':[7000,7900,9000,9850],
+    'publication_gap_us':2000,'entry_us':1000,'ready_us':5628,'jobs_raw_us':[7000,7900,9000,9850],
     'resolution':'Completion is observed at the service worker\'s next poll, once per 1 ms tick.'}
+# The board's form of an unrecorded completion: no job time, no refusal.
+board=h.timing('NPU_TIME_US=\n'+''.join(f'0x{x:016x}\n' for x in (108189479,108193503,75005,0,77045,0)))
+assert board['startup_us']==4024 and board['job_us']==[None,None] and board['publication_gap_us']==2040
 assert h.timing('NPU_STAGE=OPEN\n') is None
 def ref(path):return {'path':str(path.resolve()),'sha256':sha(path.read_bytes())}
 results=[]

@@ -228,14 +228,17 @@ def output_pattern(first_digest,second):
   'first_unwritten':bytes(first_digest)==hashlib.sha256(pattern).digest()}
 
 def timing(text):
- """Startup entry to READY and each job's publication to completion
- observation, in counter microseconds, from the image's NPU_TIME_US block;
- None for an image that prints none."""
+ """Startup entry to READY, in the startup's counter clock, and each job's
+ publication to completion observation, in the NPU adapter's clock, from the
+ image's NPU_TIME_US block; None for an image that prints none. A job whose
+ completion reads 0 or precedes its publication has no time; this never
+ refuses an otherwise valid report."""
  found=re.findall(r'NPU_TIME_US=\n((?:0x[0-9a-f]{16}\n){6})',text)
  if len(found)!=1:return None
  entry,ready,*jobs=[int(v,16) for v in found[0].split()]
- require(entry<=ready and all(jobs[i]<=jobs[i+1] for i in (0,2)),'Timing values out of order.')
- return {'startup_us':ready-entry,'job_us':[jobs[1]-jobs[0],jobs[3]-jobs[2]],
+ return {'startup_us':ready-entry if ready>=entry else None,
+  'job_us':[jobs[i+1]-jobs[i] if jobs[i] and jobs[i+1]>=jobs[i] else None for i in (0,2)],
+  'publication_gap_us':jobs[2]-jobs[0] if jobs[2]>=jobs[0]>0 else None,
   'entry_us':entry,'ready_us':ready,'jobs_raw_us':jobs,
   'resolution':'Completion is observed at the service worker\'s next poll, once per 1 ms tick.'}
 

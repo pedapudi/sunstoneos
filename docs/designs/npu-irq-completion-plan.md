@@ -32,6 +32,26 @@ The board kernel's NPU driver completes jobs by interrupt:
   (`vip2/task/vip_drv_task_common.c:1053`, `vip2/os/linux/vip_drv_os.c:446`)
   and treats the AXI and MMU error bits as faults (`:1053-1075`).
 
+## What the board run measured
+
+The three-start lifetime (`board-session-20261025-7/port-3-3`) recorded
+startup entry to READY as 4,024, 4,023 and 4,023 µs. It recorded no job time:
+each job's completion value is 0, because `npu_convolution.c:346` compares the
+finish command by pointer with its own copy, while the controller passes its
+private copy (`a733_npu_controller.c:162`, `:231`). The job values are in the
+NPU adapter's clock, which counts from the adapter's initialization
+(`platform/a733/npu_native.c:86`, `:115-120`): the jobs were published 75.0 ms
+and 77.0 ms after it at both rates. The 2.04 ms between the two publications
+bounds the first job together with the worker's one-tick completion poll
+(`npu_service.c:489`), the client's one-tick STATUS polls
+(`apps/npu-convolution/main.c:93`), REAP, the output copy and compare, and the
+second SUBMIT. The first step of this plan is therefore to compare the finish
+command by content (`same_command`) so that the completion is recorded.
+
+The vendor measures job time with the engine's own counters, total cycles at
+`+0x078` and idle cycles at `+0x07C`, read around a submission in its
+profiling build (`vip2/task/vip_drv_task_debug.c:267-268`, `:315-334`).
+
 ## What exists
 
 The optional interrupt-driven finite profile (`apps/npu-interrupt/`,
