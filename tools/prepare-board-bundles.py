@@ -187,8 +187,13 @@ def word(address, block=None, condition=None, note=''):
 CCU = 0x02002000
 R_CCU_RTC = (0x0701020c, 0x00010001, 0x00010001)  # RTC bus gate bit 0, reset bit 16
 PPU_CLOCK = (0x070101ac, 1, 1)                    # R_CCU PPU clock gate
-NPU_CCU = (0x000, 0x0a0, 0x0a8, 0x0ac, 0x2a0, 0x2a4, 0x2a8, 0x2ac, 0x2b0, 0x500, 0x5c0, 0x5e0, 0xa80, 0xa88, 0xa8c,
-           0xb00, 0xb04, 0xc00, 0xc0c, 0x1908, 0x1920, 0x1988, 0x19a0, 0x1b10, 0x1b14, 0x1b1c)
+NPU_CCU = (0x000, 0x0a0, 0x0a8, 0x0ac, 0x2a0, 0x2a4, 0x2a8, 0x2ac, 0x2b0, 0x500, 0x580, 0x588, 0x5c0, 0x5e0, 0xa80,
+           0xa88, 0xa8c, 0xb00, 0xb04, 0xc00, 0xc0c, 0x1908, 0x1920, 0x1988, 0x19a0, 0x1b10, 0x1b14, 0x1b1c)
+NPU_SRAM_RESET = (CCU + 0xb04, 1 << 19, 1 << 19)  # NPU SRAM reset released (manual 4.1.6.120)
+# SYSCTRL bit 1 routes the shared SRAM to the CPU (set by the boot ROM) or the NPU (cleared by U-Boot); its
+# sram_ctrl node names no clock or reset (sun60iw2p1.dtsi lines 1451-1459), so the reader admits it only behind
+# a condition word, the NPU SRAM reset (docs/reference-backsolve-npu.md).
+SRAM_ROUTING = 0x03000008
 
 
 def returning_row(name, position, component, overlay, expect, controlled, expected, intro, admission=True, needs=None,
@@ -447,11 +452,19 @@ ROWS = [
                            'apps/board-bundles-dram/sequence.h', 'drivers/dram/a733_dram.c', 'include/a733_dram.h',
                            'arch/aarch64/device_memory.c', 'checks/board-bundles-apps-model.c'], base=BASE_ROW,
                   after=['power-domain-1-on']),
-    read_row('npu-clock-words', 9, 'Speed-bin word and the CCU words of the NPU register pass',
-             'The NPU speed bin and the CCU state that NPU startup admits, read before the NPU bundle',
+    read_row('npu-clock-words', 9, 'Speed-bin word, the NPU register-pass CCU words, PPU domain 4 and the shared '
+             'SRAM routing word',
+             'The NPU speed bin, the CCU state that NPU startup admits, the PPU clock gate and domain-4 policy and '
+             'status, and SYSCTRL 0x03000008, whose bit 1 routes the shared SRAM to the CPU or the NPU, read before '
+             'the NPU bundle',
              [word(0x0300624c, 'sid', note='SID speed-bin word')] +
-             [word(CCU + o, 'ccu', note=f'CCU +0x{o:x}') for o in NPU_CCU],
-             'Every word is read, and the 128 scratch bytes are restored and equal.'),
+             [word(CCU + o, 'ccu', note=f'CCU +0x{o:x}') for o in NPU_CCU] +
+             [word(PPU_CLOCK[0], 'r_ccu', note='PPU clock gate 0')] +
+             [word(0x07064000 + o, condition=PPU_CLOCK, note=f'domain 4 {name}')
+              for o, name in ((0, 'policy'), (8, 'status'))] +
+             [word(SRAM_ROUTING, condition=NPU_SRAM_RESET, note='SYSCTRL shared SRAM routing, bit 1')],
+             'Every word is read, the domain-4 words only after R_CCU 0x1ac bit 0 reads 1, the SYSCTRL word only '
+             'after CCU +0xb04 bit 19 reads 1, and the 128 scratch bytes are restored and equal.'),
     {'name': 'npu-single-core', 'class': 'terminal', 'position': 10, 'admission': None,
      'transport': SUPERVISED_TRANSPORT,
      'component': 'NPU single-core image with native USB takeover',
