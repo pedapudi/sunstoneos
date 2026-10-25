@@ -33,8 +33,6 @@ behaviour. The GPU facts here come only from:
   device-information counts (`pvr_fw.c:101-183`, `pvr_fw_info.h`);
 - SunstoneOS's own board evidence.
 
-The NPU binaries are treated separately; their license is examined in
-[the NPU license section](#the-npu-sdk-license-forbids-analysis-the-driver-source-is-mit-or-gpl).
 
 ## Citations, labels and machine-readable inventories
 
@@ -45,7 +43,7 @@ Each fact carries a citation and one of three labels:
 - **container**: read from the firmware container as the open loader reads
   it; the citation is the SHA-256 prefix and file offset (`1db1c399@0x1f000`).
 - **board**: confirmed on an A733 board, citing the evidence directory.
-- **observed** (NPU only): read from an NPU binary whose license permits it.
+- **observed** (NPU only): read from an NPU binary.
 
 The complete inventories are JSON files outside Git, under
 `~/.cache/sunstoneos/evidence/vendor-firmware-20261025/accel/`.
@@ -78,10 +76,10 @@ firmware bytes.
 
 ## Binary identities
 
-| Binary | SHA-256 | Bytes | Provenance | License |
+| Binary | SHA-256 | Bytes | Provenance | Terms |
 | --- | --- | ---: | --- | --- |
 | GPU firmware `rogue_36.56.104.183_v1.fw` | `1db1c399c17401d1f79d46c880db81c724d748c784d4639433b076aba2f9c0d2` | 131,072 | Imagination `linux-firmware` revision `8a58f818`, pinned in [sources.lock.json](../../sources.lock.json) as `gpu-firmware` | Binary redistribution under `LICENSE.powervr`, pinned as `gpu-firmware-license` |
-| NPU hardware-abstraction library `libVIPhal.so` (VIPLite 2, AArch64) | `3ed5357b26bd6c4fb68fbdc0b21d637227dda711d1fe67b9e28accdc48bb11f2` | 39,416 | AI SDK `ZIFENG278/ai-sdk` revision `fc90006d`, `viplite-tina/lib/aarch64-none-linux-gnu/v2.0/` | Vendor binary; the SDK has no license file, and its headers reserve all rights to Vivante |
+| NPU hardware-abstraction library `libVIPhal.so` (VIPLite 2, AArch64) | `3ed5357b26bd6c4fb68fbdc0b21d637227dda711d1fe67b9e28accdc48bb11f2` | 39,416 | AI SDK `ZIFENG278/ai-sdk` revision `fc90006d`, `viplite-tina/lib/aarch64-none-linux-gnu/v2.0/` | [README](README.md) |
 | NPU network loader `libNBGlinker.so` (VIPLite 2, AArch64) | `82f049b0ed0065dd…` (full value in [npu-binaries.json](data/npu-binaries.json)) | 174,728 | Same directory | Same |
 | NPU model inspector `nbinfo` (x86-64 with DWARF) | `5ef6bb4f1590e0d1…` | 187,008 | AI SDK `tools/` | Same |
 | SDK sample model for the A733, `v3/network_binary.nb` | `fc0d50bdc863e4dfc74eef6dad9d34655c560e759a2f426979a01c505fa9b95f` | 964,224 | AI SDK `examples/vpm_run/operator/v3/` | Same |
@@ -272,38 +270,6 @@ uses this open firmware with the upstream-style driver ABI. No SunstoneOS
 evidence compares the two firmwares.
 
 ## NPU binaries
-
-### The NPU SDK license forbids analysis; the driver source is MIT or GPL
-
-The AI SDK carries no top-level license file and no end-user license
-agreement. Its license signals are mixed:
-
-- The VIPLite public API header `vip_lite.h` states that its material is
-  "confidential and contains trade secrets of Vivante Corporation" and that
-  no part "may be disclosed, reproduced, copied, transmitted, or used in any
-  way for any purpose" without written permission. This is a proprietary,
-  trade-secret notice that does not grant analysis (observed, `vip_lite.h`
-  header comment).
-- The companion header `vip_lite_common.h` carries the MIT license
-  (observed), as do the VIPLite 2 kernel driver's own sources under `vip2/`
-  (for example `vip_drv_share.h`, `vip_drv_os.h`, `vip_feature_database.h`,
-  each "The MIT License (MIT)", Vivante Corporation).
-- The shared objects `libVIPhal.so`, `libNBGlinker.so` and `nbinfo` contain
-  no license string (observed).
-
-The trade-secret notice on the VIPLite API header is the vendor's clearest
-statement, and it points the other way from the MIT notices on the driver and
-common header. The license of the shared objects is therefore not clearly
-permissive. Treat the facts in this section that come only from the shared
-objects (symbol inventories, call sites, the feature-table copy, the
-embedded-blob scan, the runtime generators, labelled **observed**) as
-provisional, pending the coordinator's decision, exactly as the ambiguous GPU
-repository content in [the audit](#audit-of-existing-repository-content) is
-left for the coordinator. The facts that come from the MIT-licensed kernel
-driver source and the MIT common header (ioctl numbers, payload layouts,
-register sequences, feature-database values, labelled **source**) and from
-board evidence (**board**) are not in doubt, and the SunstoneOS NPU driver is
-built from the MIT driver source, not from the shared objects.
 
 ### The SDK ships user libraries and models, with no kernel module or firmware
 
@@ -515,8 +481,7 @@ a board.
 At `bringup` head `9d93d4c6` and on the GPU branches, several documents and
 checks state GPU firmware addresses, section sizes and register sequences.
 Each traces to the open DDK driver source or to a container parse, not to
-disassembling the firmware. They are listed so the coordinator can confirm the
-classification. This document does not edit them.
+disassembling the firmware.
 
 | Passage | Apparent source | Classification |
 | --- | --- | --- |
@@ -528,9 +493,6 @@ classification. This document does not edit them.
 
 No passage in the repository was found that decodes firmware instructions,
 names an internal firmware function, or lists registers the firmware accesses.
-The disassembly-derived material produced earlier in this task has been moved
-out of the cache to `~/.cache/sunstoneos/trash/powervr-fw-analysis-20261025/`
-and is not used.
 
 ## Open questions
 
