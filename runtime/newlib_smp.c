@@ -20,7 +20,16 @@ struct __lock __lock___arc4random_mutex;
 static struct __lock pool[32];
 static unsigned initialized;
 
+/* Once this core has resumed a task, bits [47:0] of TPIDRRO_EL0 hold that
+ * task's TCB, and EL0 can read the register (docs/smp.md). A task's own TCB
+ * does not change when it migrates, so the read needs no mask, as in
+ * xTaskGetCurrentTaskHandle. StaticTask_t has the TCB's layout; the kernel
+ * additions check that its TLS member has the TCB's offset. The field reads
+ * zero until the core first resumes a task, and the supervisor call then
+ * returns the global state before the scheduler starts. */
 struct _reent *__getreent(void) {
+    const uintptr_t task = (uintptr_t)(ullPortGetTaskRegister() & portTASK_REGISTER_TCB_MASK);
+    if (task) return &((StaticTask_t *)task)->xDummy17;
     register struct _reent *context __asm__("x0");
     __asm__ volatile("svc #118" : "=r"(context) :: "memory");
     return context;
