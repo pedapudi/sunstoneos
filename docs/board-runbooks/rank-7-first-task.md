@@ -77,7 +77,14 @@ The board is on the instance that rank 6 returned.
      "Board $PORT: returning instruction-cache disable before the first-task diagnostic" \
      "The helper turns the instruction cache off and the 40 SRAM bytes at 0x73000 are restored." \
      -- $PY -B $V/common/cache-off.py $S/r7-cache-off
-   $PY -B $V/common/survey.py $PORT $S/r7-survey "Board $PORT before the first-task diagnostic"
+   $PY -B $V/common/bundle-run.py $PORT $S/r7-survey 240 \
+     "Board $PORT: returning SRAM survey before the first-task diagnostic" \
+     "Nonce-bound launcher controls, restored SRAM and a responsive same ROM." \
+     --prerequisite launch-survey-software=$SW \
+     --artifact $SB/manifest.json --artifact $SB/launch-survey.bin \
+     -- $PY -B $R/tools/run-launch-survey.py run --fel $FEL --build $SB \
+        --software $SW --database {database} --evidence $S/r7-survey \
+        --claim {claim} --owner {owner}
    ```
 
 2. Check each item of `$V/rank-7-first-task/root-review-draft.json`, then write the

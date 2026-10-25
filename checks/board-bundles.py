@@ -66,6 +66,8 @@ rows. It checks that:
   (host_sha256) and survey source, and the launch-survey-20261017 build,
   which names the runner from before 575565f8, is refused by itself and,
   as a run's survey build, before any run directory exists;
+- the hand-written runbooks under docs/board-runbooks/ call no
+  $V/common/survey.py, and those that name a survey build name that one;
 - the reader, with only its FEL commands modeled, saves the 128 scratch bytes,
   records the start and end time of each command,
   reads each condition word in its own command, skips the dependents of a
@@ -85,6 +87,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import statistics
@@ -457,6 +460,15 @@ def check_survey():
     build, which names the runner from before 575565f8, is refused."""
     tool.check_survey(tool.SURVEY_BUILD, ROOT)
     harness.refused(lambda: tool.check_survey(STALE_SURVEY, ROOT), 'the runner would refuse it')
+    # The hand-written runbooks name the same survey build and never the bundle's survey.py.
+    books = sorted((ROOT / 'docs/board-runbooks').glob('*.md'))
+    stale = [b.name for b in books if '$V/common/survey.py' in b.read_text()]
+    assert not stale, f'runbooks still call $V/common/survey.py: {stale}'
+    named = {b.name for b in books if 'SB=~/.cache/sunstoneos/evidence/' in b.read_text()}
+    for b in named:
+        build = re.search(r'^SB=~/\.cache/sunstoneos/evidence/(\S+)$', (ROOT / 'docs/board-runbooks' / b).read_text(), re.M)
+        assert build and tool.EVIDENCE / build[1] == tool.SURVEY_BUILD, f'{b} names another survey build'
+    assert 'README.md' in named, 'the runbook README does not name the survey build'
     manifest = json.loads((tool.SURVEY_BUILD / 'manifest.json').read_text())
     return {'build': str(tool.SURVEY_BUILD), 'runner_sha256': manifest['host_sha256']}
 
