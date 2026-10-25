@@ -427,12 +427,13 @@ int main(int argc, char **argv)
     fresh(); m.bad_supply = 1; assert(a733_gpu_power_on(&s, 10000) == A733_GPU_POWER_AGAIN);
     assert(drain() == A733_GPU_POWER_FAULT && s.error == A733_GPU_POWER_RESOURCES);
     assert(m.writes == 0 && s.lease_held); terminal(); ++faults;
-    /* Admission refusals, the last three for a GPU clock off its PLL_GPU0
-     * source, a running PLL_GPU0 and a PLL_GPU0 output left on. */
-    const unsigned bad_banks[] = {0, 0, 1, 0, 0, 2, 0, 0, 0};
-    const unsigned bad_offsets[] = {0x5c0, 0x5e0, 0x1ac, 0xb20, 0xb24, 0x5008, 0xb20, 0xe0, 0xe0};
-    const unsigned bad_bits[] = {0x80, 0x10000, 1, 0x80000000, 0x10000, 1, 0x03000000, 0x80000000, 0x08000000};
-    for (unsigned i = 0; i < 9; ++i) {
+    /* Admission refusals, the last four for a GPU clock off its PLL_GPU0
+     * source, a running PLL_GPU0, a PLL_GPU0 output left on and a PLL_GPU0
+     * input divider M1 of 2, which the factor write would keep. */
+    const unsigned bad_banks[] = {0, 0, 1, 0, 0, 2, 0, 0, 0, 0};
+    const unsigned bad_offsets[] = {0x5c0, 0x5e0, 0x1ac, 0xb20, 0xb24, 0x5008, 0xb20, 0xe0, 0xe0, 0xe0};
+    const unsigned bad_bits[] = {0x80, 0x10000, 1, 0x80000000, 0x10000, 1, 0x03000000, 0x80000000, 0x08000000, 2};
+    for (unsigned i = 0; i < 10; ++i) {
         fresh(); m.regs[bad_banks[i]][bad_offsets[i]/4] ^= bad_bits[i];
         assert(a733_gpu_power_on(&s, 10000) == A733_GPU_POWER_AGAIN);
         assert(drain() == A733_GPU_POWER_FAULT && s.error == A733_GPU_POWER_STATE);

@@ -29,7 +29,8 @@ _Static_assert(UINT64_C(24000000) * 84 / 2 == A733_GPU_CORE_HZ, "PLL_GPU0 factor
  * requires the GPU clock gate, bus gate and reset closed whenever domain 5
  * changes, so TOP5 is ON before any GPU clock and OFF after the last. The
  * MBUS gates, PPU clock, closed clock gate on its reset source 0 (PLL_GPU0)
- * and divider 1, asserted reset and a disabled PLL_GPU0 are checked first.
+ * and divider 1, asserted reset and a disabled PLL_GPU0 with input divider M1
+ * 1, which the factor write keeps, are checked first.
  * The selected BXM rgx_sunxi adapter controls CORE6 directly; its
  * device-tree node is commented out, and nothing writes its delay row.
  * DEN0051E 5.2.8 requires settled static policy before changing PWCR device
@@ -57,7 +58,7 @@ static const struct step on_steps[] = {
     {CHECK, A733_GPU_R_CCU, 0x01ac, BIT(0), BIT(0)},
     {CHECK, A733_GPU_CCU, 0x0b20, 0x8700000f, 0},
     {CHECK, A733_GPU_CCU, 0x0b24, BIT(16) | BIT(0), 0},
-    {CHECK, A733_GPU_CCU, 0x00e0, BIT(31) | BIT(29) | BIT(27), 0},
+    {CHECK, A733_GPU_CCU, 0x00e0, BIT(31) | BIT(29) | BIT(27) | BIT(1), 0},
     {DOMAIN, A733_GPU_CCU, 0, 0, 1},
     {CORE_POLICY, A733_GPU_CORE, 0, 0, 0},
     {CORE_STATUS, A733_GPU_CORE, 8, 0, 0},
@@ -199,6 +200,7 @@ static enum a733_gpu_power_result begin(struct a733_gpu_power *s,
         s->core_power_up = 0;
     }
     s->pll_lock_reads[0] = s->pll_lock_reads[1] = s->clock_update_reads[0] = s->clock_update_reads[1] = 0;
+    s->pll_word = 0;
     return clock_read(s) ? A733_GPU_POWER_AGAIN : A733_GPU_POWER_FAULT;
 }
 enum a733_gpu_power_result a733_gpu_power_on(struct a733_gpu_power *s, uint64_t deadline)

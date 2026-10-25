@@ -47,15 +47,25 @@ remain the candidates.
 
 ## EL3 security setup runs in every image
 
-**Decision.** Both monitor families make every cold-boot security write of
+**Decision.** Every EL3 entry makes every cold-boot security write of
 BL31's `sunxi_security_setup`, cold-boot writes 9 to 17 of
 `docs/vendor-firmware/tf-a-monitor.md` (branch `work/blob-doc-monitor-1025`),
-in BL31's order, as their last step before entering EL1:
-`platform/a733/monitor.c`, which the returning images use, and
-`apps/storage-read-single-core/monitor.c`, which the single-core
-application images use. One definition, `platform/a733/el3_security.h`,
-serves both. QEMU models (`MONITOR_QEMU`) omit the writes, because the QEMU
-machine has none of these blocks. This is rank 1 of the vendor action plan
+in BL31's order, before any core enters EL1. SunstoneOS has three EL3
+entries:
+
+- `platform/a733/monitor.c`, which the returning images use;
+- `apps/storage-read-single-core/monitor.c`, which the single-core
+  application images use;
+- `platform/a733-smp-cached/boot.c` (`a733_smp_boot`), which the multicore
+  application and OS images use through their boot patches. It makes the
+  writes after starting the secondaries, which wait for the primary's
+  continuation, and before that continuation.
+
+One definition, `include/a733_el3_security.h`, serves all three. The two
+build pins of the SMP cached boot source (`cmake/a733-storage-maintenance.cmake`
+and `cmake/a733-smp-observe.cmake`) name its new SHA-256; every boot patch
+applied to it still applies unchanged. QEMU models (`MONITOR_QEMU`) omit the
+writes, because the QEMU machine has none of these blocks. This is rank 1 of the vendor action plan
 (`docs/vendor-firmware/action-plan.md`, branch `work/vendor-actions-1025`).
 
 **Justification.**
@@ -152,7 +162,8 @@ its later power-ons (`sunxiPrePowerState`) and power-offs
 
 1. Admission (ours only): AHB and MBUS gates, PPU clock, GPU clock word at
    gate closed, source 0 (PLL_GPU0), divider 1, GPU bus gate and reset
-   closed, PLL_GPU0 disabled.
+   closed, PLL_GPU0 disabled with input divider M1 1, which the factor write
+   keeps.
 2. TOP5 ON through the power-domain owner's row. TOP5 is ON from reset; the
    owner adopts it.
 3. CORE6 entry words read and admitted (ours only), then PWCR 0. The vendor
@@ -241,7 +252,10 @@ uses; it runs once per transition.
 Failure classes are unchanged: a refused or failed step stops the
 controller, retains the leases and the TOP5 row, and makes no further
 access. A failed DCDC4 write retains the exclusive lease and the PMIC
-request, so the programmed voltage stays uncertain until recovery.
+request, so the programmed voltage stays uncertain until recovery. A DCDC4
+snapshot that completes at a voltage other than 800 or 960 mV made no
+write: the platform reaps it, releases the lease and fails, so the power
+service keeps its supply records.
 
 ## The next GPU board steps
 

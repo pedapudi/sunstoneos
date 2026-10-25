@@ -137,15 +137,23 @@ requires the vendor order: the reset released before the bus gate, the bus
 gate before the core gate, the PLL output gate opened at least 20 µs after
 each lock, PLL_GPU0 disabled only after the core gate closes, the reset
 asserted after both gates close, and the GPU clocked at both CORE6 policy
-writes. It covers 252 retained faults, including every callback failure on a
+writes. It covers 253 retained faults, including every callback failure on a
 successful ON/OFF, each of the eight PLL_GPU0 writes that change the word
 being ignored, a lock that never sets, a late and a dropped lock, an update
-bit that stays set, refusals of a GPU clock off its PLL source and of a
-running PLL, stalled transitions, and a stopped clock, which returns at the
+bit that stays set, refusals of a GPU clock off its PLL source, of a running
+PLL and of a PLL input divider M1 of 2, stalled transitions, and a stopped clock, which returns at the
 first lock wait without advancing. `--core` covers the CORE6 entry states:
 four inherited TOP/CORE pairs with reopening, eight refused entries, ten
 partial samples, three power-up completions, two invalid observed statuses
 and eight bounded acknowledgement cases.
+
+The [supply-raise check](../checks/a733-gpu-supply-raise.c) runs the GPU
+platform's admission with the actual PMIC provider, rail ledger, supply
+consumer and power-domain owner. DCDC4 at 800 mV is written to 960 mV once,
+with bit 7 kept, and the consumer samples it only after the 1.2 ms settle;
+DCDC4 already at 960 mV is not written; a write submit that meets a busy
+provider is retried; DCDC4 at 860 mV is refused with no write, its snapshot
+reaped and the lease released.
 
 The [reference check](../checks/a733-gpu-power-reference.py) compiles the original
 power-domain initialization and transition functions with a register model. All
