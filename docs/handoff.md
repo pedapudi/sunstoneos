@@ -217,7 +217,22 @@ regenerating.
   class: reason 3, stage 1, a deadline return about 5 s after launch. So the
   RWP wait does not remove the failure; decoding is in progress. The host
   runner again stayed alive after saving the record and was stopped. The
-  claim `e86e3137…` is held, and port 3-3 needs a power removal.
+  claim `e86e3137…` was closed as failed after the user's reconnect.
+  - The decode showed RWP read clear in the wait and set again at the
+    comparison, with no CPU0 write in between; why is unexplained by the
+    GIC specification. Linux and TF-A never compare GICR_CTLR. Head
+    `26b497a2` masks the volatile status bits 31 (UWP) and 3 (RWP) in every
+    GICR_CTLR comparison and keeps the waits. `fb6f5a69` also exits the host
+    runner after a quarantined deadline return.
+- **Port 3-3, third 2026-10-25 lifetime** (session
+  `board-session-20261025-3/port-3-3`, bundles `workload-bisect-20261025/rwp3`):
+  the status-masked deadline profile ran ten times in one lifetime
+  (`tw1-prepare` to `tw10-prepare`). All ten completed, with controls and
+  DRAM restored and no deadline return. Each of the eleven 91-word captures
+  equals the clean capture. This qualifies the full returning eight-core
+  workload with the status-masked check on port 3-3. The frozen rank 7 and
+  rank 8 bundles still carry the unmasked comparison and need a refreeze
+  from the branch.
 
 The mimus branch `port/sunstoneos` (`9c57286b7`) was pushed to
 `github.com/pedapudi/mimus` on 2026-10-24 with the user's approval; mimus
