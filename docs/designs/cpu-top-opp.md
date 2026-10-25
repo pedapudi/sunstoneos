@@ -321,6 +321,11 @@ exclusively, so CPU-B stays at 1014 MHz, which both voltages cover, and an
 exclusive DCDC3 lease. The provider requires the inherited selector `0x1e`
 before the write, keeps bit 7 and reads the byte back.
 
+The frozen set is
+`~/.cache/sunstoneos/evidence/cpu-top-opp-20261025/steps2-5-set/`: power
+removal, cold DDR start, the base image, then bundles 21, 22, 23 and 24, each
+with its approval record, then the Read bundle 14 as the host-side capture.
+
 The host model runs the three driver steps in sequence with the bundles'
 grants (`lifetime_cases` in `checks/cpu-clock-model.c`), followed by a
 thermal stop of step 5 that returns DCDC5 to 800 mV.
