@@ -1,0 +1,2815 @@
+{
+ "binaries": [
+  {
+   "name": "libVIPhal.so",
+   "sha256": "3ed5357b26bd6c4fb68fbdc0b21d637227dda711d1fe67b9e28accdc48bb11f2",
+   "source": "https://github.com/ZIFENG278/ai-sdk/tree/fc90006d0f6569da2f6726c2d8395877686f5aca/viplite-tina/lib/aarch64-none-linux-gnu/v2.0/libVIPhal.so"
+  },
+  {
+   "name": "libNBGlinker.so",
+   "sha256": "82f049b0ed0065dd4d443e37eeb1edfcbef24457c9c24e36170d64d5b748ca66",
+   "source": "https://github.com/ZIFENG278/ai-sdk/tree/fc90006d0f6569da2f6726c2d8395877686f5aca/viplite-tina/lib/aarch64-none-linux-gnu/v2.0/libNBGlinker.so"
+  },
+  {
+   "name": "nbinfo",
+   "sha256": "5ef6bb4f1590e0d1b9603506574bee09321d6159e32a6b3aaef66148085b2639",
+   "source": "https://github.com/ZIFENG278/ai-sdk/tree/fc90006d0f6569da2f6726c2d8395877686f5aca/tools/nbinfo"
+  }
+ ],
+ "analysis": "docs/vendor-firmware/gpu-and-npu-binaries.md",
+ "full_inventory": "~/.cache/sunstoneos/evidence/vendor-firmware-20261025/accel/npu/",
+ "kernel_driver_source": "https://github.com/orangepi-xunlong/linux-orangepi/tree/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/npu/aw_nna_vip/vip2",
+ "sdk_revision": "ZIFENG278/ai-sdk fc90006d0f6569da2f6726c2d8395877686f5aca",
+ "driver_revision": "orangepi-xunlong/linux-orangepi 2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f bsp/drivers/npu/aw_nna_vip/vip2",
+ "labels": {
+  "observed": "observed in the binary",
+  "source": "matches driver source",
+  "board": "confirmed on a board",
+  "inferred": "inferred"
+ },
+ "cached_binaries": [
+  {
+   "path": "viplite-tina/lib/aarch64-none-linux-gnu/v2.0/libVIPhal.so",
+   "sha256": "3ed5357b26bd6c4fb68fbdc0b21d637227dda711d1fe67b9e28accdc48bb11f2",
+   "bytes": 39416,
+   "elf_class": "ELF64",
+   "machine": "AArch64",
+   "soname": "libVIPhal.so",
+   "needed": [
+    "libpthread.so.0",
+    "libc.so.6"
+   ],
+   "role": "VIPLite 2 hardware-abstraction library: opens /dev/vipcore, wraps the single driver ioctl, keeps a copy of the four-row feature database, user-space heap, and three command/descriptor generators (NN transpose descriptor, transpose load-states, multi-core semaphore sync).",
+   "label": "observed",
+   "imports": [
+    "_ITM_deregisterTMCloneTable",
+    "_ITM_registerTMCloneTable",
+    "__cxa_finalize@GLIBC_2.17",
+    "__gmon_start__",
+    "close@GLIBC_2.17",
+    "fclose@GLIBC_2.17",
+    "fflush@GLIBC_2.17",
+    "fopen@GLIBC_2.17",
+    "fputs@GLIBC_2.17",
+    "fread@GLIBC_2.17",
+    "free@GLIBC_2.17",
+    "fseek@GLIBC_2.17",
+    "fwrite@GLIBC_2.17",
+    "getpid@GLIBC_2.17",
+    "gettimeofday@GLIBC_2.17",
+    "ioctl@GLIBC_2.17",
+    "malloc@GLIBC_2.17",
+    "memcpy@GLIBC_2.17",
+    "memset@GLIBC_2.17",
+    "open@GLIBC_2.17",
+    "pthread_mutex_destroy@GLIBC_2.17",
+    "pthread_mutex_init@GLIBC_2.17",
+    "pthread_mutex_lock@GLIBC_2.17",
+    "pthread_mutex_unlock@GLIBC_2.17",
+    "pthread_self@GLIBC_2.17",
+    "stdout@GLIBC_2.17",
+    "strcmp@GLIBC_2.17",
+    "strcpy@GLIBC_2.17",
+    "vfprintf@GLIBC_2.17",
+    "vsnprintf@GLIBC_2.17"
+   ],
+   "exports": [
+    {
+     "address": "0x2f70",
+     "name": "viphal_allocate_memory"
+    },
+    {
+     "address": "0x26d0",
+     "name": "viphal_allocate_videomemory"
+    },
+    {
+     "address": "0x2550",
+     "name": "viphal_cancel_task"
+    },
+    {
+     "address": "0x3470",
+     "name": "viphal_copy_memory"
+    },
+    {
+     "address": "0x23f0",
+     "name": "viphal_destroy"
+    },
+    {
+     "address": "0x3dc0",
+     "name": "viphal_dump_data"
+    },
+    {
+     "address": "0x3c20",
+     "name": "viphal_flush_cache"
+    },
+    {
+     "address": "0x3130",
+     "name": "viphal_free_memory"
+    },
+    {
+     "address": "0x28f0",
+     "name": "viphal_free_videomemory"
+    },
+    {
+     "address": "0x4e30",
+     "name": "viphal_hardware_multivip_sync"
+    },
+    {
+     "address": "0x4980",
+     "name": "viphal_hardware_trsp2_instr"
+    },
+    {
+     "address": "0x4be0",
+     "name": "viphal_hardware_trsp2_loadstate"
+    },
+    {
+     "address": "0x50f0",
+     "name": "viphal_heap_alloc"
+    },
+    {
+     "address": "0x55d0",
+     "name": "viphal_heap_construct"
+    },
+    {
+     "address": "0x57d0",
+     "name": "viphal_heap_destroy"
+    },
+    {
+     "address": "0x53a0",
+     "name": "viphal_heap_free"
+    },
+    {
+     "address": "0x5570",
+     "name": "viphal_heap_free_mem"
+    },
+    {
+     "address": "0x52a0",
+     "name": "viphal_heap_get_memsize"
+    },
+    {
+     "address": "0x5090",
+     "name": "viphal_heap_max_size"
+    },
+    {
+     "address": "0x3750",
+     "name": "viphal_init"
+    },
+    {
+     "address": "0x2990",
+     "name": "viphal_map_userlogical"
+    },
+    {
+     "address": "0x58a0",
+     "name": "viphal_os_allocate_memory"
+    },
+    {
+     "address": "0x5c10",
+     "name": "viphal_os_call_drv"
+    },
+    {
+     "address": "0x5f00",
+     "name": "viphal_os_close_file"
+    },
+    {
+     "address": "0x5920",
+     "name": "viphal_os_copy_memory"
+    },
+    {
+     "address": "0x6000",
+     "name": "viphal_os_create_mutex"
+    },
+    {
+     "address": "0x6200",
+     "name": "viphal_os_destroy_mutex"
+    },
+    {
+     "address": "0x58f0",
+     "name": "viphal_os_free_memory"
+    },
+    {
+     "address": "0x5870",
+     "name": "viphal_os_get_pid"
+    },
+    {
+     "address": "0x5880",
+     "name": "viphal_os_get_tid"
+    },
+    {
+     "address": "0x6270",
+     "name": "viphal_os_get_time"
+    },
+    {
+     "address": "0x5ae0",
+     "name": "viphal_os_init"
+    },
+    {
+     "address": "0x60c0",
+     "name": "viphal_os_lock_mutex"
+    },
+    {
+     "address": "0x5e00",
+     "name": "viphal_os_open_file"
+    },
+    {
+     "address": "0x5960",
+     "name": "viphal_os_print"
+    },
+    {
+     "address": "0x5f80",
+     "name": "viphal_os_print_string"
+    },
+    {
+     "address": "0x5e10",
+     "name": "viphal_os_read_file"
+    },
+    {
+     "address": "0x5f30",
+     "name": "viphal_os_seek_file"
+    },
+    {
+     "address": "0x5d80",
+     "name": "viphal_os_snprint"
+    },
+    {
+     "address": "0x62a0",
+     "name": "viphal_os_strcmp"
+    },
+    {
+     "address": "0x62b0",
+     "name": "viphal_os_strcpy"
+    },
+    {
+     "address": "0x59f0",
+     "name": "viphal_os_uninit"
+    },
+    {
+     "address": "0x6160",
+     "name": "viphal_os_unlock_mutex"
+    },
+    {
+     "address": "0x5e90",
+     "name": "viphal_os_write_file"
+    },
+    {
+     "address": "0x5a70",
+     "name": "viphal_os_zero_memory"
+    },
+    {
+     "address": "0x3d20",
+     "name": "viphal_power_management"
+    },
+    {
+     "address": "0x35f0",
+     "name": "viphal_print_string"
+    },
+    {
+     "address": "0x36b0",
+     "name": "viphal_query_database"
+    },
+    {
+     "address": "0x3b80",
+     "name": "viphal_query_driver_status"
+    },
+    {
+     "address": "0x4410",
+     "name": "viphal_query_hw_feature"
+    },
+    {
+     "address": "0x3610",
+     "name": "viphal_query_mmu_info"
+    },
+    {
+     "address": "0x3ae0",
+     "name": "viphal_query_profiling"
+    },
+    {
+     "address": "0x3fe0",
+     "name": "viphal_query_register_dump"
+    },
+    {
+     "address": "0x3490",
+     "name": "viphal_read_reg"
+    },
+    {
+     "address": "0x25f0",
+     "name": "viphal_submit_task"
+    },
+    {
+     "address": "0x4060",
+     "name": "viphal_task_create"
+    },
+    {
+     "address": "0x4370",
+     "name": "viphal_task_destroy"
+    },
+    {
+     "address": "0x42b0",
+     "name": "viphal_task_dup_info"
+    },
+    {
+     "address": "0x41f0",
+     "name": "viphal_task_set_patch_info"
+    },
+    {
+     "address": "0x4130",
+     "name": "viphal_task_set_property"
+    },
+    {
+     "address": "0x2a50",
+     "name": "viphal_unmap_userlogical"
+    },
+    {
+     "address": "0x2ed0",
+     "name": "viphal_unwrap_userfd"
+    },
+    {
+     "address": "0x2ca0",
+     "name": "viphal_unwrap_usermemory"
+    },
+    {
+     "address": "0x2af0",
+     "name": "viphal_unwrap_userphysical"
+    },
+    {
+     "address": "0x24b0",
+     "name": "viphal_wait_task"
+    },
+    {
+     "address": "0x2d40",
+     "name": "viphal_wrap_userfd"
+    },
+    {
+     "address": "0x2b90",
+     "name": "viphal_wrap_usermemory"
+    },
+    {
+     "address": "0x3210",
+     "name": "viphal_wrap_userphysical"
+    },
+    {
+     "address": "0x3550",
+     "name": "viphal_write_reg"
+    },
+    {
+     "address": "0x3480",
+     "name": "viphal_zero_memory"
+    }
+   ],
+   "export_count": 70,
+   "device_node": {
+    "string": "/dev/vipcore",
+    "file_offset": "0x7120",
+    "open_flags": "O_RDWR (2)",
+    "open_call_site": "0x5b28 in viphal_os_init"
+   },
+   "ioctl_call_sites": [
+    {
+     "address": "0x5c7c",
+     "function": "viphal_os_call_drv",
+     "request": 30000
+    }
+   ],
+   "mmap_imported": false,
+   "direct_register_access": "none; viphal_read_reg/viphal_write_reg issue driver commands 2/3",
+   "driver_command_by_export": {
+    "viphal_init": {
+     "command": 0,
+     "call_site": "0x37b8"
+    },
+    "viphal_destroy": {
+     "command": 1,
+     "call_site": "0x2414"
+    },
+    "viphal_read_reg": {
+     "command": 2,
+     "call_site": "0x34c8"
+    },
+    "viphal_write_reg": {
+     "command": 3,
+     "call_site": "0x3580"
+    },
+    "viphal_wait_task": {
+     "command": 4,
+     "call_site": "0x24d8"
+    },
+    "viphal_submit_task": {
+     "command": 5,
+     "call_site": "0x2658"
+    },
+    "viphal_allocate_videomemory": {
+     "command": 6,
+     "call_site": "0x276c"
+    },
+    "viphal_free_videomemory": {
+     "command": 7,
+     "call_site": "0x2918"
+    },
+    "viphal_query_database": {
+     "command": 10,
+     "call_site": "0x36d4"
+    },
+    "viphal_flush_cache": {
+     "command": 11,
+     "call_site": "0x3c5c"
+    },
+    "viphal_wrap_usermemory": {
+     "command": 12,
+     "call_site": "0x2bd0"
+    },
+    "viphal_unwrap_usermemory": {
+     "command": 13,
+     "call_site": "0x2cc4"
+    },
+    "viphal_power_management": {
+     "command": 15,
+     "call_site": "0x3d4c"
+    },
+    "viphal_wrap_userphysical": {
+     "command": 16,
+     "call_site": "0x32bc"
+    },
+    "viphal_unwrap_userphysical": {
+     "command": 17,
+     "call_site": "0x2b14"
+    },
+    "viphal_wrap_userfd": {
+     "command": 18,
+     "call_site": "0x2da0"
+    },
+    "viphal_unwrap_userfd": {
+     "command": 19,
+     "call_site": "0x2ef4"
+    },
+    "viphal_query_profiling": {
+     "command": 20,
+     "call_site": "0x3b04"
+    },
+    "viphal_query_driver_status": {
+     "command": 21,
+     "call_site": "0x3ba4"
+    },
+    "viphal_query_mmu_info": {
+     "command": 22,
+     "call_site": "0x3634"
+    },
+    "viphal_map_userlogical": {
+     "command": 23,
+     "call_site": "0x29c4"
+    },
+    "viphal_unmap_userlogical": {
+     "command": 24,
+     "call_site": "0x2a78"
+    },
+    "viphal_cancel_task": {
+     "command": 25,
+     "call_site": "0x2578"
+    },
+    "viphal_query_register_dump": {
+     "command": 26,
+     "call_site": "0x4010"
+    },
+    "viphal_task_create": {
+     "command": 27,
+     "call_site": "0x40ac"
+    },
+    "viphal_task_set_property": {
+     "command": 28,
+     "call_site": "0x4174"
+    },
+    "viphal_task_set_patch_info": {
+     "command": 28,
+     "call_site": "0x4234"
+    },
+    "viphal_task_dup_info": {
+     "command": 28,
+     "call_site": "0x42f4"
+    },
+    "viphal_task_destroy": {
+     "command": 29,
+     "call_site": "0x4398"
+    }
+   },
+   "notes": [
+    "Command size table: 30 u32 at file offset 0x7358; command-name table: 30 x 48-byte strings at 0x73e8.",
+    "Feature database copy: 4 rows x 36 bytes at file offset 0x91b0 (.data, vaddr 0x191b0); viphal_init selects the row whose pid equals hw_cid from QUERY_DATABASE (loop 0x37d0-0x37f4).",
+    "viphal_init requires API version 0x20003 (compare at 0x3764-0x3774).",
+    "No embedded firmware: dense non-text regions are .text and .eh_frame only."
+   ]
+  },
+  {
+   "path": "viplite-tina/lib/aarch64-none-linux-gnu/v2.0/libNBGlinker.so",
+   "sha256": "82f049b0ed0065dd4d443e37eeb1edfcbef24457c9c24e36170d64d5b748ca66",
+   "bytes": 174728,
+   "elf_class": "ELF64",
+   "machine": "AArch64",
+   "soname": "libNBGlinker.so",
+   "needed": [
+    "libVIPhal.so",
+    "libm.so.6",
+    "libc.so.6"
+   ],
+   "role": "VIPLite 2 network loader (public vip_* API): parses NBG fixed-header and directory formats, verifies CRC, allocates device memory through libVIPhal, relocates descriptors, builds the command buffer prefix and tail, registers tasks and submits through libVIPhal.",
+   "label": "observed",
+   "imports": [
+    "_ITM_deregisterTMCloneTable",
+    "_ITM_registerTMCloneTable",
+    "__cxa_finalize@GLIBC_2.17",
+    "__gmon_start__",
+    "calloc@GLIBC_2.17",
+    "exp@GLIBC_2.29",
+    "free@GLIBC_2.17",
+    "memcpy@GLIBC_2.17",
+    "memmove@GLIBC_2.17",
+    "memset@GLIBC_2.17",
+    "pthread_mutex_lock@GLIBC_2.17",
+    "pthread_mutex_unlock@GLIBC_2.17",
+    "viphal_allocate_memory",
+    "viphal_allocate_videomemory",
+    "viphal_cancel_task",
+    "viphal_copy_memory",
+    "viphal_destroy",
+    "viphal_dump_data",
+    "viphal_flush_cache",
+    "viphal_free_memory",
+    "viphal_free_videomemory",
+    "viphal_hardware_multivip_sync",
+    "viphal_hardware_trsp2_instr",
+    "viphal_hardware_trsp2_loadstate",
+    "viphal_init",
+    "viphal_map_userlogical",
+    "viphal_os_close_file",
+    "viphal_os_create_mutex",
+    "viphal_os_destroy_mutex",
+    "viphal_os_get_pid",
+    "viphal_os_get_tid",
+    "viphal_os_get_time",
+    "viphal_os_lock_mutex",
+    "viphal_os_open_file",
+    "viphal_os_print",
+    "viphal_os_read_file",
+    "viphal_os_seek_file",
+    "viphal_os_snprint",
+    "viphal_os_strcmp",
+    "viphal_os_strcpy",
+    "viphal_os_unlock_mutex",
+    "viphal_os_write_file",
+    "viphal_os_zero_memory",
+    "viphal_print_string",
+    "viphal_query_database",
+    "viphal_query_driver_status",
+    "viphal_query_hw_feature",
+    "viphal_query_mmu_info",
+    "viphal_query_profiling",
+    "viphal_query_register_dump",
+    "viphal_read_reg",
+    "viphal_submit_task",
+    "viphal_task_create",
+    "viphal_task_destroy",
+    "viphal_task_dup_info",
+    "viphal_task_set_patch_info",
+    "viphal_task_set_property",
+    "viphal_unmap_userlogical",
+    "viphal_unwrap_userfd",
+    "viphal_unwrap_usermemory",
+    "viphal_unwrap_userphysical",
+    "viphal_wait_task",
+    "viphal_wrap_userfd",
+    "viphal_wrap_usermemory",
+    "viphal_wrap_userphysical",
+    "viphal_zero_memory"
+   ],
+   "exports": [
+    {
+     "address": "0x18760",
+     "name": "vip_add_network"
+    },
+    {
+     "address": "0xf8a0",
+     "name": "vip_cancel_network"
+    },
+    {
+     "address": "0xffa0",
+     "name": "vip_create_buffer"
+    },
+    {
+     "address": "0x10ce0",
+     "name": "vip_create_buffer_cache"
+    },
+    {
+     "address": "0x10db0",
+     "name": "vip_create_buffer_from_fd"
+    },
+    {
+     "address": "0x10810",
+     "name": "vip_create_buffer_from_handle"
+    },
+    {
+     "address": "0x10320",
+     "name": "vip_create_buffer_from_physical"
+    },
+    {
+     "address": "0x18010",
+     "name": "vip_create_group"
+    },
+    {
+     "address": "0xe5f0",
+     "name": "vip_create_network"
+    },
+    {
+     "address": "0xe3d0",
+     "name": "vip_destroy"
+    },
+    {
+     "address": "0x111d0",
+     "name": "vip_destroy_buffer"
+    },
+    {
+     "address": "0x18260",
+     "name": "vip_destroy_group"
+    },
+    {
+     "address": "0xf040",
+     "name": "vip_destroy_network"
+    },
+    {
+     "address": "0xe8a0",
+     "name": "vip_dup_network"
+    },
+    {
+     "address": "0xf960",
+     "name": "vip_finish_network"
+    },
+    {
+     "address": "0x114f0",
+     "name": "vip_flush_buffer"
+    },
+    {
+     "address": "0x11490",
+     "name": "vip_get_buffer_size"
+    },
+    {
+     "address": "0xe3b0",
+     "name": "vip_get_version"
+    },
+    {
+     "address": "0xe3c0",
+     "name": "vip_init"
+    },
+    {
+     "address": "0x113b0",
+     "name": "vip_map_buffer"
+    },
+    {
+     "address": "0xf9c0",
+     "name": "vip_power_management"
+    },
+    {
+     "address": "0xf2a0",
+     "name": "vip_prepare_network"
+    },
+    {
+     "address": "0x18600",
+     "name": "vip_query_group"
+    },
+    {
+     "address": "0xe3e0",
+     "name": "vip_query_hardware"
+    },
+    {
+     "address": "0xf3e0",
+     "name": "vip_query_input"
+    },
+    {
+     "address": "0xf100",
+     "name": "vip_query_network"
+    },
+    {
+     "address": "0xf4b0",
+     "name": "vip_query_output"
+    },
+    {
+     "address": "0x18db0",
+     "name": "vip_run_group"
+    },
+    {
+     "address": "0xf720",
+     "name": "vip_run_network"
+    },
+    {
+     "address": "0x182c0",
+     "name": "vip_set_group"
+    },
+    {
+     "address": "0xf580",
+     "name": "vip_set_input"
+    },
+    {
+     "address": "0xf1d0",
+     "name": "vip_set_network"
+    },
+    {
+     "address": "0xf650",
+     "name": "vip_set_output"
+    },
+    {
+     "address": "0xfa10",
+     "name": "vip_set_ppu_param"
+    },
+    {
+     "address": "0x18f70",
+     "name": "vip_trigger_group"
+    },
+    {
+     "address": "0xf780",
+     "name": "vip_trigger_network"
+    },
+    {
+     "address": "0x11480",
+     "name": "vip_unmap_buffer"
+    },
+    {
+     "address": "0x190b0",
+     "name": "vip_wait_group"
+    },
+    {
+     "address": "0xf7e0",
+     "name": "vip_wait_network"
+    },
+    {
+     "address": "0xede0",
+     "name": "vip_weak_dup_network"
+    }
+   ],
+   "export_count": 40,
+   "ioctl_imported": false,
+   "viphal_imports": [
+    "viphal_allocate_memory",
+    "viphal_allocate_videomemory",
+    "viphal_cancel_task",
+    "viphal_copy_memory",
+    "viphal_destroy",
+    "viphal_dump_data",
+    "viphal_flush_cache",
+    "viphal_free_memory",
+    "viphal_free_videomemory",
+    "viphal_hardware_multivip_sync",
+    "viphal_hardware_trsp2_instr",
+    "viphal_hardware_trsp2_loadstate",
+    "viphal_init",
+    "viphal_map_userlogical",
+    "viphal_os_close_file",
+    "viphal_os_create_mutex",
+    "viphal_os_destroy_mutex",
+    "viphal_os_get_pid",
+    "viphal_os_get_tid",
+    "viphal_os_get_time",
+    "viphal_os_lock_mutex",
+    "viphal_os_open_file",
+    "viphal_os_print",
+    "viphal_os_read_file",
+    "viphal_os_seek_file",
+    "viphal_os_snprint",
+    "viphal_os_strcmp",
+    "viphal_os_strcpy",
+    "viphal_os_unlock_mutex",
+    "viphal_os_write_file",
+    "viphal_os_zero_memory",
+    "viphal_print_string",
+    "viphal_query_database",
+    "viphal_query_driver_status",
+    "viphal_query_hw_feature",
+    "viphal_query_mmu_info",
+    "viphal_query_profiling",
+    "viphal_query_register_dump",
+    "viphal_read_reg",
+    "viphal_submit_task",
+    "viphal_task_create",
+    "viphal_task_destroy",
+    "viphal_task_dup_info",
+    "viphal_task_set_patch_info",
+    "viphal_task_set_property",
+    "viphal_unmap_userlogical",
+    "viphal_unwrap_userfd",
+    "viphal_unwrap_usermemory",
+    "viphal_unwrap_userphysical",
+    "viphal_wait_task",
+    "viphal_wrap_userfd",
+    "viphal_wrap_usermemory",
+    "viphal_wrap_userphysical",
+    "viphal_zero_memory"
+   ],
+   "viphal_not_imported": [
+    "viphal_power_management",
+    "viphal_write_reg"
+   ],
+   "notes": [
+    "Calls the kernel only through libVIPhal; imports viphal_read_reg (identity reads 0x20/0x24/0x28/0x30 for the capture header at 0x1d644-0x1d680 and 0x1d890-0x1d8cc) but not viphal_write_reg or viphal_power_management.",
+    "vip_power_management (0xf9c0) is a stub returning VIP_ERROR_NOT_SUPPORTED (-4) with the message at 0x21270 (built without vpmdENABLE_USER_CONTROL_POWER).",
+    "No embedded firmware; the only non-string rodata table is 104 bytes at 0x1fd48."
+   ]
+  },
+  {
+   "path": "tools/nbinfo",
+   "sha256": "5ef6bb4f1590e0d1b9603506574bee09321d6159e32a6b3aaef66148085b2639",
+   "bytes": 187008,
+   "elf_class": "ELF64",
+   "machine": "Advanced Micro Devices X86-64",
+   "soname": null,
+   "needed": [
+    "libc.so.6"
+   ],
+   "role": "Host NBG inspector (x86-64, DWARF): static copy of the NBG parser plus file-only viphal_os_* helpers; no device access.",
+   "label": "observed",
+   "imports": [
+    "__gmon_start__",
+    "__libc_start_main@GLIBC_2.2.5",
+    "__stack_chk_fail@GLIBC_2.4",
+    "fclose@GLIBC_2.2.5",
+    "fflush@GLIBC_2.2.5",
+    "fopen@GLIBC_2.2.5",
+    "fread@GLIBC_2.2.5",
+    "free@GLIBC_2.2.5",
+    "fseek@GLIBC_2.2.5",
+    "ftell@GLIBC_2.2.5",
+    "fwrite@GLIBC_2.2.5",
+    "malloc@GLIBC_2.2.5",
+    "memcpy@GLIBC_2.14",
+    "memset@GLIBC_2.2.5",
+    "strcmp@GLIBC_2.2.5",
+    "strcpy@GLIBC_2.2.5",
+    "strlen@GLIBC_2.2.5",
+    "vprintf@GLIBC_2.2.5",
+    "vsprintf@GLIBC_2.2.5"
+   ],
+   "static_functions": [
+    {
+     "address": "0x403308",
+     "name": "analyse_input_memorypool"
+    },
+    {
+     "address": "0x403e3d",
+     "name": "analyse_sw_tile"
+    },
+    {
+     "address": "0x400a4f",
+     "name": "calc_command_size"
+    },
+    {
+     "address": "0x4011dd",
+     "name": "calc_dynamic_input_output"
+    },
+    {
+     "address": "0x401451",
+     "name": "calc_io_memory_size"
+    },
+    {
+     "address": "0x401392",
+     "name": "calc_sh_command_size_align256"
+    },
+    {
+     "address": "0x4013f2",
+     "name": "calc_sh_command_size_align64"
+    },
+    {
+     "address": "0x400930",
+     "name": "deregister_tm_clones"
+    },
+    {
+     "address": "0x4009a0",
+     "name": "__do_global_dtors_aux"
+    },
+    {
+     "address": "0x412164",
+     "name": "_fini"
+    },
+    {
+     "address": "0x4009d0",
+     "name": "frame_dummy"
+    },
+    {
+     "address": "0x406176",
+     "name": "get_binary_data"
+    },
+    {
+     "address": "0x401c27",
+     "name": "get_data_format_name"
+    },
+    {
+     "address": "0x401cb8",
+     "name": "get_data_type_name"
+    },
+    {
+     "address": "0x400b18",
+     "name": "get_dynamic_size"
+    },
+    {
+     "address": "0x4014d7",
+     "name": "get_init_commands_size"
+    },
+    {
+     "address": "0x403df7",
+     "name": "get_nn_inimage_data_size"
+    },
+    {
+     "address": "0x401cfb",
+     "name": "get_quantize_format_name"
+    },
+    {
+     "address": "0x400c74",
+     "name": "get_system_memory_size"
+    },
+    {
+     "address": "0x400c4c",
+     "name": "get_system_memory_size_kernel_space"
+    },
+    {
+     "address": "0x400798",
+     "name": "_init"
+    },
+    {
+     "address": "0x412160",
+     "name": "__libc_csu_fini"
+    },
+    {
+     "address": "0x4120f0",
+     "name": "__libc_csu_init"
+    },
+    {
+     "address": "0x404844",
+     "name": "main"
+    },
+    {
+     "address": "0x40faae",
+     "name": "nbg_fmt_copy_table_data"
+    },
+    {
+     "address": "0x4075d0",
+     "name": "nbg_fmt_free"
+    },
+    {
+     "address": "0x40d5eb",
+     "name": "nbg_fmt_get_non_video_sd_max_size"
+    },
+    {
+     "address": "0x40d074",
+     "name": "nbg_fmt_get_sd_offset"
+    },
+    {
+     "address": "0x40d09a",
+     "name": "nbg_fmt_get_sd_size"
+    },
+    {
+     "address": "0x407471",
+     "name": "nbg_fmt_get_version"
+    },
+    {
+     "address": "0x4074dd",
+     "name": "nbg_fmt_read"
+    },
+    {
+     "address": "0x406bc0",
+     "name": "nbg_fmt_read_byte"
+    },
+    {
+     "address": "0x406e2d",
+     "name": "nbg_fmt_read_data"
+    },
+    {
+     "address": "0x406f80",
+     "name": "nbg_fmt_read_data_copy"
+    },
+    {
+     "address": "0x408b61",
+     "name": "nbg_fmt_read_dynamic"
+    },
+    {
+     "address": "0x406a1d",
+     "name": "nbg_fmt_reader_backward"
+    },
+    {
+     "address": "0x4068b6",
+     "name": "nbg_fmt_reader_close"
+    },
+    {
+     "address": "0x406951",
+     "name": "nbg_fmt_reader_forward"
+    },
+    {
+     "address": "0x406ad4",
+     "name": "nbg_fmt_reader_locate"
+    },
+    {
+     "address": "0x406824",
+     "name": "nbg_fmt_reader_open"
+    },
+    {
+     "address": "0x406900",
+     "name": "nbg_fmt_reader_rewind"
+    },
+    {
+     "address": "0x407eef",
+     "name": "nbg_fmt_read_fixed"
+    },
+    {
+     "address": "0x40d0c0",
+     "name": "nbg_fmt_read_format_header"
+    },
+    {
+     "address": "0x40d567",
+     "name": "nbg_fmt_read_header"
+    },
+    {
+     "address": "0x4113b8",
+     "name": "nbg_fmt_read_non_video_section"
+    },
+    {
+     "address": "0x411fb2",
+     "name": "nbg_fmt_read_section"
+    },
+    {
+     "address": "0x40dba2",
+     "name": "nbg_fmt_read_section_axi_sram"
+    },
+    {
+     "address": "0x4111df",
+     "name": "nbg_fmt_read_section_checksum"
+    },
+    {
+     "address": "0x40fbd1",
+     "name": "nbg_fmt_read_section_coef_data_table"
+    },
+    {
+     "address": "0x40fe81",
+     "name": "nbg_fmt_read_section_coef_header_table"
+    },
+    {
+     "address": "0x4102b3",
+     "name": "nbg_fmt_read_section_dyna_io_table"
+    },
+    {
+     "address": "0x411a55",
+     "name": "nbg_fmt_read_section_entry"
+    },
+    {
+     "address": "0x40d423",
+     "name": "nbg_fmt_read_section_header"
+    },
+    {
+     "address": "0x40f56b",
+     "name": "nbg_fmt_read_section_hw_init_op"
+    },
+    {
+     "address": "0x40fd37",
+     "name": "nbg_fmt_read_section_ICD_table"
+    },
+    {
+     "address": "0x40dc3d",
+     "name": "nbg_fmt_read_section_inputs"
+    },
+    {
+     "address": "0x411b10",
+     "name": "nbg_fmt_read_section_layer_dump_instr"
+    },
+    {
+     "address": "0x410eff",
+     "name": "nbg_fmt_read_section_layer_dump_instr_table"
+    },
+    {
+     "address": "0x411bd6",
+     "name": "nbg_fmt_read_section_layer_dump_loadstate"
+    },
+    {
+     "address": "0x41106f",
+     "name": "nbg_fmt_read_section_layer_dump_loadstate_table"
+    },
+    {
+     "address": "0x410419",
+     "name": "nbg_fmt_read_section_layer_dump_operation"
+    },
+    {
+     "address": "0x4106a7",
+     "name": "nbg_fmt_read_section_layer_dump_outputs"
+    },
+    {
+     "address": "0x410a14",
+     "name": "nbg_fmt_read_section_layer_dump_patch_data"
+    },
+    {
+     "address": "0x40efa5",
+     "name": "nbg_fmt_read_section_layer_param"
+    },
+    {
+     "address": "0x40e355",
+     "name": "nbg_fmt_read_section_layers"
+    },
+    {
+     "address": "0x41014d",
+     "name": "nbg_fmt_read_section_load_states_table"
+    },
+    {
+     "address": "0x40d9e4",
+     "name": "nbg_fmt_read_section_memory_pool"
+    },
+    {
+     "address": "0x40d82d",
+     "name": "nbg_fmt_read_section_network_info"
+    },
+    {
+     "address": "0x40e5a8",
+     "name": "nbg_fmt_read_section_operations"
+    },
+    {
+     "address": "0x40dfc9",
+     "name": "nbg_fmt_read_section_outputs"
+    },
+    {
+     "address": "0x40ea8c",
+     "name": "nbg_fmt_read_section_patch_table"
+    },
+    {
+     "address": "0x40ffe7",
+     "name": "nbg_fmt_read_section_ppu_instr_table"
+    },
+    {
+     "address": "0x40f754",
+     "name": "nbg_fmt_read_section_ppu_param"
+    },
+    {
+     "address": "0x40e8d1",
+     "name": "nbg_fmt_read_section_sh"
+    },
+    {
+     "address": "0x40f3a1",
+     "name": "nbg_fmt_read_section_sw"
+    },
+    {
+     "address": "0x40da97",
+     "name": "nbg_fmt_read_section_vip_sram"
+    },
+    {
+     "address": "0x40d31c",
+     "name": "nbg_fmt_read_sub_header"
+    },
+    {
+     "address": "0x406cf3",
+     "name": "nbg_fmt_read_uInt"
+    },
+    {
+     "address": "0x40cfb3",
+     "name": "nbg_fmt_read_v1"
+    },
+    {
+     "address": "0x412036",
+     "name": "nbg_fmt_read_v2"
+    },
+    {
+     "address": "0x411ca2",
+     "name": "nbg_fmt_read_video_section"
+    },
+    {
+     "address": "0x40d7fc",
+     "name": "nbg_fmt_sd_count"
+    },
+    {
+     "address": "0x40714e",
+     "name": "nbg_get_buf_format_bit"
+    },
+    {
+     "address": "0x4070bb",
+     "name": "nbg_get_buf_format_byte"
+    },
+    {
+     "address": "0x407307",
+     "name": "nbg_get_input_size"
+    },
+    {
+     "address": "0x4014f5",
+     "name": "nbg_get_memory_profile"
+    },
+    {
+     "address": "0x4071e1",
+     "name": "nbg_get_nn_command_size"
+    },
+    {
+     "address": "0x407247",
+     "name": "nbg_get_operation_name"
+    },
+    {
+     "address": "0x4073a3",
+     "name": "nbg_get_output_size"
+    },
+    {
+     "address": "0x4009d7",
+     "name": "nbg_get_sw_operation_count"
+    },
+    {
+     "address": "0x407214",
+     "name": "nbg_get_tp_command_size"
+    },
+    {
+     "address": "0x40743f",
+     "name": "nbg_operation_is_nn_engine"
+    },
+    {
+     "address": "0x405c02",
+     "name": "nbg_parser_destroy"
+    },
+    {
+     "address": "0x4051da",
+     "name": "nbg_parser_init"
+    },
+    {
+     "address": "0x40580f",
+     "name": "nbg_parser_query_input"
+    },
+    {
+     "address": "0x4059e5",
+     "name": "nbg_parser_query_network"
+    },
+    {
+     "address": "0x4058fa",
+     "name": "nbg_parser_query_output"
+    },
+    {
+     "address": "0x4051ca",
+     "name": "nbg_parser_version"
+    },
+    {
+     "address": "0x4046b7",
+     "name": "print_help"
+    },
+    {
+     "address": "0x402906",
+     "name": "print_input"
+    },
+    {
+     "address": "0x40201b",
+     "name": "print_layer"
+    },
+    {
+     "address": "0x401bdc",
+     "name": "print_line_of_stars"
+    },
+    {
+     "address": "0x403883",
+     "name": "print_memory"
+    },
+    {
+     "address": "0x402184",
+     "name": "print_nbg_header"
+    },
+    {
+     "address": "0x4024bb",
+     "name": "print_operation"
+    },
+    {
+     "address": "0x402e07",
+     "name": "print_output"
+    },
+    {
+     "address": "0x401d32",
+     "name": "print_summary"
+    },
+    {
+     "address": "0x404dcd",
+     "name": "query_input_output"
+    },
+    {
+     "address": "0x407d1f",
+     "name": "read_bin_entry"
+    },
+    {
+     "address": "0x407af5",
+     "name": "read_bin_header"
+    },
+    {
+     "address": "0x407cb6",
+     "name": "read_bin_pool"
+    },
+    {
+     "address": "0x400960",
+     "name": "register_tm_clones"
+    },
+    {
+     "address": "0x404d7d",
+     "name": "show_nbg_info"
+    },
+    {
+     "address": "0x400900",
+     "name": "_start"
+    },
+    {
+     "address": "0x406285",
+     "name": "viphal_allocate_memory"
+    },
+    {
+     "address": "0x40630c",
+     "name": "viphal_copy_memory"
+    },
+    {
+     "address": "0x4062df",
+     "name": "viphal_free_memory"
+    },
+    {
+     "address": "0x4066c1",
+     "name": "viphal_os_close_file"
+    },
+    {
+     "address": "0x40679e",
+     "name": "viphal_os_get_file_size"
+    },
+    {
+     "address": "0x4065a5",
+     "name": "viphal_os_open_file"
+    },
+    {
+     "address": "0x4063ec",
+     "name": "viphal_os_print"
+    },
+    {
+     "address": "0x4065e3",
+     "name": "viphal_os_read_file"
+    },
+    {
+     "address": "0x4066e8",
+     "name": "viphal_os_seek_file"
+    },
+    {
+     "address": "0x4064c5",
+     "name": "viphal_os_snprint"
+    },
+    {
+     "address": "0x4063ad",
+     "name": "viphal_os_strcpy"
+    },
+    {
+     "address": "0x4063d2",
+     "name": "viphal_os_strlen"
+    },
+    {
+     "address": "0x406652",
+     "name": "viphal_os_write_file"
+    },
+    {
+     "address": "0x406357",
+     "name": "viphal_zero_memory"
+    }
+   ],
+   "static_function_count": 128,
+   "exports": []
+  }
+ ],
+ "cached_models": [
+  {
+   "path": "examples/vpm_run/operator/v2/network_binary.nb",
+   "sha256": "1adb8a4358a1411009c649d0ff42c6c29f11911ce44c1be2c037cc0dcac0858d",
+   "bytes": 997120,
+   "magic": "VPMN",
+   "format_version": "0x10014",
+   "target_pid": "0x10000016",
+   "name": "ShuffleNetV2_uint8_NCHW",
+   "stored_crc_bytes_108_111": "0x0",
+   "label": "observed"
+  },
+  {
+   "path": "examples/vpm_run/operator/v3/network_binary.nb",
+   "sha256": "fc0d50bdc863e4dfc74eef6dad9d34655c560e759a2f426979a01c505fa9b95f",
+   "bytes": 964224,
+   "magic": "VPMN",
+   "format_version": "0x1001e",
+   "target_pid": "0x1000003b",
+   "name": "ShuffleNetV2_uint8_NCHW",
+   "stored_crc_bytes_108_111": "0xdd476ad1",
+   "label": "observed"
+  }
+ ],
+ "sdk_tree_binaries": [
+  {
+   "path": "examples/lenet/model/v2/lenet.nb",
+   "bytes": 457536,
+   "git_blob_sha": "e22401b1f93da3ba623c3fceda5d29ca289e0ee3",
+   "family": "example model",
+   "variant": "release",
+   "toolchain": null,
+   "cached": false,
+   "role": "NBG model (v2 = older hardware target, v3 = A733 per SDK convention)",
+   "label": "inferred"
+  },
+  {
+   "path": "examples/lenet/model/v3/lenet.nb",
+   "bytes": 444152,
+   "git_blob_sha": "c63423f13f917299298d4fe21cc24510b221da39",
+   "family": "example model",
+   "variant": "release",
+   "toolchain": null,
+   "cached": false,
+   "role": "NBG model (v2 = older hardware target, v3 = A733 per SDK convention)",
+   "label": "inferred"
+  },
+  {
+   "path": "examples/multi_thread/yolact.nb",
+   "bytes": 25524288,
+   "git_blob_sha": "5d722b031be6ef44aea627829ad92fcb793e13fa",
+   "family": "example model",
+   "variant": "release",
+   "toolchain": null,
+   "cached": false,
+   "role": "NBG model (v2 = older hardware target, v3 = A733 per SDK convention)",
+   "label": "inferred"
+  },
+  {
+   "path": "examples/multi_thread/yolov5s.nb",
+   "bytes": 6553216,
+   "git_blob_sha": "23bf0e81910458e632030bda63530ed5f8982e7c",
+   "family": "example model",
+   "variant": "release",
+   "toolchain": null,
+   "cached": false,
+   "role": "NBG model (v2 = older hardware target, v3 = A733 per SDK convention)",
+   "label": "inferred"
+  },
+  {
+   "path": "examples/resnet50/model/v2/resnet50.nb",
+   "bytes": 16411520,
+   "git_blob_sha": "3557f8f47de90abc3e4985d6f009efba455ea25f",
+   "family": "example model",
+   "variant": "release",
+   "toolchain": null,
+   "cached": false,
+   "role": "NBG model (v2 = older hardware target, v3 = A733 per SDK convention)",
+   "label": "inferred"
+  },
+  {
+   "path": "examples/resnet50/model/v3/resnet50.nb",
+   "bytes": 17540864,
+   "git_blob_sha": "53a5f7b16f15abdaefdd5b69faeadfcee17ed6cf",
+   "family": "example model",
+   "variant": "release",
+   "toolchain": null,
+   "cached": false,
+   "role": "NBG model (v2 = older hardware target, v3 = A733 per SDK convention)",
+   "label": "inferred"
+  },
+  {
+   "path": "examples/vpm_run/operator/v2/network_binary.nb",
+   "bytes": 997120,
+   "git_blob_sha": "45d0fee5aa143aa16b14183978da94a11ae09714",
+   "family": "example model",
+   "variant": "release",
+   "toolchain": null,
+   "cached": true,
+   "role": "NBG model (v2 = older hardware target, v3 = A733 per SDK convention)",
+   "label": "observed"
+  },
+  {
+   "path": "examples/vpm_run/operator/v3/network_binary.nb",
+   "bytes": 964224,
+   "git_blob_sha": "7803dc9a7c4e2feb4ff1fd5d0b41e3cb9e007e0c",
+   "family": "example model",
+   "variant": "release",
+   "toolchain": null,
+   "cached": true,
+   "role": "NBG model (v2 = older hardware target, v3 = A733 per SDK convention)",
+   "label": "observed"
+  },
+  {
+   "path": "examples/yolact/model/v2/yolact.nb",
+   "bytes": 25524288,
+   "git_blob_sha": "5d722b031be6ef44aea627829ad92fcb793e13fa",
+   "family": "example model",
+   "variant": "release",
+   "toolchain": null,
+   "cached": false,
+   "role": "NBG model (v2 = older hardware target, v3 = A733 per SDK convention)",
+   "label": "inferred"
+  },
+  {
+   "path": "examples/yolact/model/v3/yolact.nb",
+   "bytes": 25520120,
+   "git_blob_sha": "eec28d1b986bfc8a464a888d6d334f0e041c6176",
+   "family": "example model",
+   "variant": "release",
+   "toolchain": null,
+   "cached": false,
+   "role": "NBG model (v2 = older hardware target, v3 = A733 per SDK convention)",
+   "label": "inferred"
+  },
+  {
+   "path": "examples/yolov5/model/v2/yolov5.nb",
+   "bytes": 6553216,
+   "git_blob_sha": "23bf0e81910458e632030bda63530ed5f8982e7c",
+   "family": "example model",
+   "variant": "release",
+   "toolchain": null,
+   "cached": false,
+   "role": "NBG model (v2 = older hardware target, v3 = A733 per SDK convention)",
+   "label": "inferred"
+  },
+  {
+   "path": "examples/yolov5/model/v3/yolov5.nb",
+   "bytes": 5033536,
+   "git_blob_sha": "a6f6861fe94b7acbea16a1d4e65a1a294a24539a",
+   "family": "example model",
+   "variant": "release",
+   "toolchain": null,
+   "cached": false,
+   "role": "NBG model (v2 = older hardware target, v3 = A733 per SDK convention)",
+   "label": "inferred"
+  },
+  {
+   "path": "tools/nbinfo",
+   "bytes": 187008,
+   "git_blob_sha": "9a115addebc303d6531ad0bdad286fa5c3c02dd4",
+   "family": "tool",
+   "variant": "release",
+   "toolchain": null,
+   "cached": true,
+   "role": null,
+   "label": "observed"
+  },
+  {
+   "path": "unified-tina/lib/aarch64-none-linux-gnu/libArchModelSw.so",
+   "bytes": 417720,
+   "git_blob_sha": "b441cd7dd6e8efc2292bc19c6bf069e13ccc3e37",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "aarch64-none-linux-gnu",
+   "cached": false,
+   "role": "NN architecture performance model (software)",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/aarch64-none-linux-gnu/libCLC.so",
+   "bytes": 2660984,
+   "git_blob_sha": "aad4f18ba7d6848cf5767457818497eed79ec688",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "aarch64-none-linux-gnu",
+   "cached": false,
+   "role": "OpenCL C front end for the shader compiler (used for VX kernels)",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/aarch64-none-linux-gnu/libGAL.so",
+   "bytes": 2035376,
+   "git_blob_sha": "950d1bf1a9f9da481026942b2585068be8e56db1",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "aarch64-none-linux-gnu",
+   "cached": false,
+   "role": "Vivante GAL (gc_hal) user-mode hardware layer of the unified driver; talks to the galcore kernel driver, not vipcore",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/aarch64-none-linux-gnu/libGLSLC.so",
+   "bytes": 1337960,
+   "git_blob_sha": "9724938b398a733b93869d76b4aff656656a2aa5",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "aarch64-none-linux-gnu",
+   "cached": false,
+   "role": "GLSL compiler front end (unified-driver dependency)",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/aarch64-none-linux-gnu/libNNArchPerf.so",
+   "bytes": 416984,
+   "git_blob_sha": "66573d2e2c665f126ddd34676dc82179beeacf1e",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "aarch64-none-linux-gnu",
+   "cached": false,
+   "role": "NN architecture performance estimator",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/aarch64-none-linux-gnu/libNNGPUBinary.so",
+   "bytes": 21718320,
+   "git_blob_sha": "80cc8b3bb59f9a06ff1566eeccca303dcd7c8112",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "aarch64-none-linux-gnu",
+   "cached": false,
+   "role": "Prebuilt shader-kernel binaries for NN operators (GPU/PPU path)",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/aarch64-none-linux-gnu/libNNVXCBinary.so",
+   "bytes": 65467528,
+   "git_blob_sha": "0c1f4a552b7c1b3790ceeffdc1c4ca04a12945b0",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "aarch64-none-linux-gnu",
+   "cached": false,
+   "role": "Prebuilt VX-C shader-kernel binaries for NN operators",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/aarch64-none-linux-gnu/libOpenVX.so",
+   "bytes": 5118768,
+   "git_blob_sha": "55baa2bf8b7da91179ea95cf9e34cc882fcefe85",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "aarch64-none-linux-gnu",
+   "cached": false,
+   "role": "Vivante unified driver: OpenVX 1.3 runtime (graph API, NN extension)",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/aarch64-none-linux-gnu/libOpenVX.so.1",
+   "bytes": 5118768,
+   "git_blob_sha": "55baa2bf8b7da91179ea95cf9e34cc882fcefe85",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "aarch64-none-linux-gnu",
+   "cached": false,
+   "role": "same file as libOpenVX.so",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/aarch64-none-linux-gnu/libOpenVX.so.1.3.0",
+   "bytes": 5118768,
+   "git_blob_sha": "55baa2bf8b7da91179ea95cf9e34cc882fcefe85",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "aarch64-none-linux-gnu",
+   "cached": false,
+   "role": "same file as libOpenVX.so",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/aarch64-none-linux-gnu/libOpenVXU.so",
+   "bytes": 43840,
+   "git_blob_sha": "0fc9afe9e5512d4b32cad95beaf7350965b1be08",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "aarch64-none-linux-gnu",
+   "cached": false,
+   "role": "OpenVX utility library (vxu immediate-mode wrappers)",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/aarch64-none-linux-gnu/libOvx12VXCBinary.so",
+   "bytes": 11960848,
+   "git_blob_sha": "53d09b210965aa827929c3ed06bef26d62c9ec21",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "aarch64-none-linux-gnu",
+   "cached": false,
+   "role": "Prebuilt OpenVX 1.2 VX-C kernel binaries",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/aarch64-none-linux-gnu/libOvxGPUVXCBinary.so",
+   "bytes": 5955440,
+   "git_blob_sha": "d0cc08ca821c87be457c9fe2ee973992ac242b61",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "aarch64-none-linux-gnu",
+   "cached": false,
+   "role": "Prebuilt OpenVX GPU VX-C kernel binaries",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/aarch64-none-linux-gnu/libVSC.so",
+   "bytes": 17827072,
+   "git_blob_sha": "729677283f348758d86ae8bf88fef790096d5aef",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "aarch64-none-linux-gnu",
+   "cached": false,
+   "role": "Vivante shader compiler back end",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/aarch64-none-linux-gnu/libovxlib.so",
+   "bytes": 5611984,
+   "git_blob_sha": "d036de13a135201e3f95d8658b07e3c42a5b9bda",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "aarch64-none-linux-gnu",
+   "cached": false,
+   "role": "ovxlib: VeriSilicon graph/operator layer on top of OpenVX used by Acuity exports",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/glibc-gcc10_2_0/libArchModelSw.so",
+   "bytes": 416448,
+   "git_blob_sha": "6902cd936a366c9770dc4041871894a7f3f13b94",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "glibc-gcc10_2_0",
+   "cached": false,
+   "role": "NN architecture performance model (software)",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/glibc-gcc10_2_0/libCLC.so",
+   "bytes": 2671976,
+   "git_blob_sha": "45e3551e72ed1280f072683e8f03938a7342d951",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "glibc-gcc10_2_0",
+   "cached": false,
+   "role": "OpenCL C front end for the shader compiler (used for VX kernels)",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/glibc-gcc10_2_0/libGAL.so",
+   "bytes": 1980936,
+   "git_blob_sha": "b2420a6bd2f4c1230b97dbd857ea8832cec7733d",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "glibc-gcc10_2_0",
+   "cached": false,
+   "role": "Vivante GAL (gc_hal) user-mode hardware layer of the unified driver; talks to the galcore kernel driver, not vipcore",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/glibc-gcc10_2_0/libGLSLC.so",
+   "bytes": 1361256,
+   "git_blob_sha": "a7500b514b690ef095ec5549870788efd46dcbc4",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "glibc-gcc10_2_0",
+   "cached": false,
+   "role": "GLSL compiler front end (unified-driver dependency)",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/glibc-gcc10_2_0/libNNArchPerf.so",
+   "bytes": 411600,
+   "git_blob_sha": "261b56c80bebf376e8b37313eb1ff35317e66515",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "glibc-gcc10_2_0",
+   "cached": false,
+   "role": "NN architecture performance estimator",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/glibc-gcc10_2_0/libNNGPUBinary.so",
+   "bytes": 21717072,
+   "git_blob_sha": "66418c55e8274cb6db887a544d420c58fca57f03",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "glibc-gcc10_2_0",
+   "cached": false,
+   "role": "Prebuilt shader-kernel binaries for NN operators (GPU/PPU path)",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/glibc-gcc10_2_0/libNNVXCBinary.so",
+   "bytes": 65466280,
+   "git_blob_sha": "17165328d4ec2e64fb22147b3330a0d8dc5d9d64",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "glibc-gcc10_2_0",
+   "cached": false,
+   "role": "Prebuilt VX-C shader-kernel binaries for NN operators",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/glibc-gcc10_2_0/libOpenVX.so",
+   "bytes": 5080696,
+   "git_blob_sha": "0240c27346bb100ca066b96aff7faaf8c544056f",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "glibc-gcc10_2_0",
+   "cached": false,
+   "role": "Vivante unified driver: OpenVX 1.3 runtime (graph API, NN extension)",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/glibc-gcc10_2_0/libOpenVX.so.1",
+   "bytes": 5080696,
+   "git_blob_sha": "0240c27346bb100ca066b96aff7faaf8c544056f",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "glibc-gcc10_2_0",
+   "cached": false,
+   "role": "same file as libOpenVX.so",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/glibc-gcc10_2_0/libOpenVX.so.1.3.0",
+   "bytes": 5080696,
+   "git_blob_sha": "0240c27346bb100ca066b96aff7faaf8c544056f",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "glibc-gcc10_2_0",
+   "cached": false,
+   "role": "same file as libOpenVX.so",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/glibc-gcc10_2_0/libOpenVXU.so",
+   "bytes": 43192,
+   "git_blob_sha": "8741dc07de22d374c977ea764a9278b3021d697a",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "glibc-gcc10_2_0",
+   "cached": false,
+   "role": "OpenVX utility library (vxu immediate-mode wrappers)",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/glibc-gcc10_2_0/libOvx12VXCBinary.so",
+   "bytes": 11959608,
+   "git_blob_sha": "f335ef1848847fac48b08b0626430ecf16cde10b",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "glibc-gcc10_2_0",
+   "cached": false,
+   "role": "Prebuilt OpenVX 1.2 VX-C kernel binaries",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/glibc-gcc10_2_0/libOvxGPUVXCBinary.so",
+   "bytes": 5954200,
+   "git_blob_sha": "4d5b9d5921de0d35db95cd576f67d8192776d348",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "glibc-gcc10_2_0",
+   "cached": false,
+   "role": "Prebuilt OpenVX GPU VX-C kernel binaries",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/glibc-gcc10_2_0/libVSC.so",
+   "bytes": 17882944,
+   "git_blob_sha": "38433a440258fd84a9aaab088ef97b8131fa3fce",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "glibc-gcc10_2_0",
+   "cached": false,
+   "role": "Vivante shader compiler back end",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/glibc-gcc10_2_0/libovxlib.so",
+   "bytes": 5592416,
+   "git_blob_sha": "b733f6015773d06ce65335bfd2a60e9b6ee04e13",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "glibc-gcc10_2_0",
+   "cached": false,
+   "role": "ovxlib: VeriSilicon graph/operator layer on top of OpenVX used by Acuity exports",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/glibc-gcc13_2_0/libArchModelSw.so",
+   "bytes": 416448,
+   "git_blob_sha": "6902cd936a366c9770dc4041871894a7f3f13b94",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "glibc-gcc13_2_0",
+   "cached": false,
+   "role": "NN architecture performance model (software)",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/glibc-gcc13_2_0/libCLC.so",
+   "bytes": 2671976,
+   "git_blob_sha": "45e3551e72ed1280f072683e8f03938a7342d951",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "glibc-gcc13_2_0",
+   "cached": false,
+   "role": "OpenCL C front end for the shader compiler (used for VX kernels)",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/glibc-gcc13_2_0/libGAL.so",
+   "bytes": 2014136,
+   "git_blob_sha": "1c90393fe2bebce375bf746d26ca63950db73cf9",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "glibc-gcc13_2_0",
+   "cached": false,
+   "role": "Vivante GAL (gc_hal) user-mode hardware layer of the unified driver; talks to the galcore kernel driver, not vipcore",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/glibc-gcc13_2_0/libGLSLC.so",
+   "bytes": 1361256,
+   "git_blob_sha": "a7500b514b690ef095ec5549870788efd46dcbc4",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "glibc-gcc13_2_0",
+   "cached": false,
+   "role": "GLSL compiler front end (unified-driver dependency)",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/glibc-gcc13_2_0/libNNArchPerf.so",
+   "bytes": 411600,
+   "git_blob_sha": "261b56c80bebf376e8b37313eb1ff35317e66515",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "glibc-gcc13_2_0",
+   "cached": false,
+   "role": "NN architecture performance estimator",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/glibc-gcc13_2_0/libNNGPUBinary.so",
+   "bytes": 21717080,
+   "git_blob_sha": "fe3e3cbcbc94d570694c909aec842823d18f46e9",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "glibc-gcc13_2_0",
+   "cached": false,
+   "role": "Prebuilt shader-kernel binaries for NN operators (GPU/PPU path)",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/glibc-gcc13_2_0/libNNVXCBinary.so",
+   "bytes": 65466288,
+   "git_blob_sha": "0ab0c6642996bf10065cff8e3de9ab17fd17519d",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "glibc-gcc13_2_0",
+   "cached": false,
+   "role": "Prebuilt VX-C shader-kernel binaries for NN operators",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/glibc-gcc13_2_0/libOpenVX.so",
+   "bytes": 4970048,
+   "git_blob_sha": "a4c023552168f9b9fe599badd2872a3e7633229d",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "glibc-gcc13_2_0",
+   "cached": false,
+   "role": "Vivante unified driver: OpenVX 1.3 runtime (graph API, NN extension)",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/glibc-gcc13_2_0/libOpenVX.so.1",
+   "bytes": 4970048,
+   "git_blob_sha": "a4c023552168f9b9fe599badd2872a3e7633229d",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "glibc-gcc13_2_0",
+   "cached": false,
+   "role": "same file as libOpenVX.so",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/glibc-gcc13_2_0/libOpenVX.so.1.3.0",
+   "bytes": 4970048,
+   "git_blob_sha": "a4c023552168f9b9fe599badd2872a3e7633229d",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "glibc-gcc13_2_0",
+   "cached": false,
+   "role": "same file as libOpenVX.so",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/glibc-gcc13_2_0/libOpenVXU.so",
+   "bytes": 38992,
+   "git_blob_sha": "e09489a551859fa8b9006a7b5ea563e32a7d09ae",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "glibc-gcc13_2_0",
+   "cached": false,
+   "role": "OpenVX utility library (vxu immediate-mode wrappers)",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/glibc-gcc13_2_0/libOvx12VXCBinary.so",
+   "bytes": 11959616,
+   "git_blob_sha": "2c7ee08e8b24f21c4343bbafeaa8323b013aad2e",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "glibc-gcc13_2_0",
+   "cached": false,
+   "role": "Prebuilt OpenVX 1.2 VX-C kernel binaries",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/glibc-gcc13_2_0/libOvxGPUVXCBinary.so",
+   "bytes": 5954208,
+   "git_blob_sha": "e6a681fdf1730e7aae164ec8d6e103cd85ebec0d",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "glibc-gcc13_2_0",
+   "cached": false,
+   "role": "Prebuilt OpenVX GPU VX-C kernel binaries",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/glibc-gcc13_2_0/libVSC.so",
+   "bytes": 17882944,
+   "git_blob_sha": "38433a440258fd84a9aaab088ef97b8131fa3fce",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "glibc-gcc13_2_0",
+   "cached": false,
+   "role": "Vivante shader compiler back end",
+   "label": "inferred"
+  },
+  {
+   "path": "unified-tina/lib/glibc-gcc13_2_0/libovxlib.so",
+   "bytes": 5547248,
+   "git_blob_sha": "2896a5abebd1756ca5f9fae709242bd60882e2d1",
+   "family": "unified-tina",
+   "variant": "release",
+   "toolchain": "glibc-gcc13_2_0",
+   "cached": false,
+   "role": "ovxlib: VeriSilicon graph/operator layer on top of OpenVX used by Acuity exports",
+   "label": "inferred"
+  },
+  {
+   "path": "viplite-tina/lib/aarch64-none-linux-gnu/v1.13/debug/BW/libVIPlite.so",
+   "bytes": 150120,
+   "git_blob_sha": "b766b04c21e1e5d79ac6def5804d4a815ce06ea6",
+   "family": "viplite v1.13",
+   "variant": "debug/BW",
+   "toolchain": "aarch64-none-linux-gnu",
+   "cached": false,
+   "role": "VIPLite 1.13 monolithic network runtime (pre-2.0 user API; NBG loader plus HAL)",
+   "label": "inferred"
+  },
+  {
+   "path": "viplite-tina/lib/aarch64-none-linux-gnu/v1.13/debug/BW/libVIPuser.so",
+   "bytes": 39240,
+   "git_blob_sha": "018ef0d4f10d04cfa5e43dc612f834ddce6fed38",
+   "family": "viplite v1.13",
+   "variant": "debug/BW",
+   "toolchain": "aarch64-none-linux-gnu",
+   "cached": false,
+   "role": "VIPLite 1.13 user-space driver shim (device-node and ioctl layer for libVIPlite)",
+   "label": "inferred"
+  },
+  {
+   "path": "viplite-tina/lib/aarch64-none-linux-gnu/v1.13/debug/CNN_BW/libVIPlite.so",
+   "bytes": 150064,
+   "git_blob_sha": "9a6e0c41446542cb1b82e2c2a9f3fa533a250466",
+   "family": "viplite v1.13",
+   "variant": "debug/CNN_BW",
+   "toolchain": "aarch64-none-linux-gnu",
+   "cached": false,
+   "role": "VIPLite 1.13 monolithic network runtime (pre-2.0 user API; NBG loader plus HAL)",
+   "label": "inferred"
+  },
+  {
+   "path": "viplite-tina/lib/aarch64-none-linux-gnu/v1.13/debug/CNN_BW/libVIPuser.so",
+   "bytes": 35080,
+   "git_blob_sha": "2d2110098f1f6ed674dc93663f4874ef55c4b0e0",
+   "family": "viplite v1.13",
+   "variant": "debug/CNN_BW",
+   "toolchain": "aarch64-none-linux-gnu",
+   "cached": false,
+   "role": "VIPLite 1.13 user-space driver shim (device-node and ioctl layer for libVIPlite)",
+   "label": "inferred"
+  },
+  {
+   "path": "viplite-tina/lib/aarch64-none-linux-gnu/v1.13/debug/DEBUG/libVIPlite.so",
+   "bytes": 158232,
+   "git_blob_sha": "be91053c44b56877344db5deb3269b3ea61c6ea3",
+   "family": "viplite v1.13",
+   "variant": "debug/DEBUG",
+   "toolchain": "aarch64-none-linux-gnu",
+   "cached": false,
+   "role": "VIPLite 1.13 monolithic network runtime (pre-2.0 user API; NBG loader plus HAL)",
+   "label": "inferred"
+  },
+  {
+   "path": "viplite-tina/lib/aarch64-none-linux-gnu/v1.13/debug/DEBUG/libVIPuser.so",
+   "bytes": 39264,
+   "git_blob_sha": "fd0aa1e6f5558f836941af02a29b89c2def343a3",
+   "family": "viplite v1.13",
+   "variant": "debug/DEBUG",
+   "toolchain": "aarch64-none-linux-gnu",
+   "cached": false,
+   "role": "VIPLite 1.13 user-space driver shim (device-node and ioctl layer for libVIPlite)",
+   "label": "inferred"
+  },
+  {
+   "path": "viplite-tina/lib/aarch64-none-linux-gnu/v1.13/libVIPlite.so",
+   "bytes": 145944,
+   "git_blob_sha": "c02eddf5406697be95ace8cff62167f3f3888407",
+   "family": "viplite v1.13",
+   "variant": "release",
+   "toolchain": "aarch64-none-linux-gnu",
+   "cached": false,
+   "role": "VIPLite 1.13 monolithic network runtime (pre-2.0 user API; NBG loader plus HAL)",
+   "label": "inferred"
+  },
+  {
+   "path": "viplite-tina/lib/aarch64-none-linux-gnu/v1.13/libVIPuser.so",
+   "bytes": 39240,
+   "git_blob_sha": "018ef0d4f10d04cfa5e43dc612f834ddce6fed38",
+   "family": "viplite v1.13",
+   "variant": "release",
+   "toolchain": "aarch64-none-linux-gnu",
+   "cached": false,
+   "role": "VIPLite 1.13 user-space driver shim (device-node and ioctl layer for libVIPlite)",
+   "label": "inferred"
+  },
+  {
+   "path": "viplite-tina/lib/aarch64-none-linux-gnu/v2.0/debug/BW/libNBGlinker.so",
+   "bytes": 178904,
+   "git_blob_sha": "64ffa80daadc96d77dbd8995997394624df7590c",
+   "family": "viplite v2.0",
+   "variant": "debug/BW",
+   "toolchain": "aarch64-none-linux-gnu",
+   "cached": false,
+   "role": "VIPLite 2.0 network loader",
+   "label": "inferred"
+  },
+  {
+   "path": "viplite-tina/lib/aarch64-none-linux-gnu/v2.0/debug/BW/libVIPhal.so",
+   "bytes": 39416,
+   "git_blob_sha": "a3803701b3e349d5192e7d1ce7e9ecc3c49acc66",
+   "family": "viplite v2.0",
+   "variant": "debug/BW",
+   "toolchain": "aarch64-none-linux-gnu",
+   "cached": false,
+   "role": "VIPLite 2.0 hardware-abstraction library",
+   "label": "inferred"
+  },
+  {
+   "path": "viplite-tina/lib/aarch64-none-linux-gnu/v2.0/debug/CNN_BW/libNBGlinker.so",
+   "bytes": 178888,
+   "git_blob_sha": "aa773da6e1ca82bce39656e55058d9cb9b4fea13",
+   "family": "viplite v2.0",
+   "variant": "debug/CNN_BW",
+   "toolchain": "aarch64-none-linux-gnu",
+   "cached": false,
+   "role": "VIPLite 2.0 network loader",
+   "label": "inferred"
+  },
+  {
+   "path": "viplite-tina/lib/aarch64-none-linux-gnu/v2.0/debug/CNN_BW/libVIPhal.so",
+   "bytes": 39416,
+   "git_blob_sha": "e8091560678472e8371c981226fba599ade240b4",
+   "family": "viplite v2.0",
+   "variant": "debug/CNN_BW",
+   "toolchain": "aarch64-none-linux-gnu",
+   "cached": false,
+   "role": "VIPLite 2.0 hardware-abstraction library",
+   "label": "inferred"
+  },
+  {
+   "path": "viplite-tina/lib/aarch64-none-linux-gnu/v2.0/debug/DEBUG/libNBGlinker.so",
+   "bytes": 196824,
+   "git_blob_sha": "1157f9adc5bf0017e151d65a5aba98f7388788ca",
+   "family": "viplite v2.0",
+   "variant": "debug/DEBUG",
+   "toolchain": "aarch64-none-linux-gnu",
+   "cached": false,
+   "role": "VIPLite 2.0 network loader",
+   "label": "inferred"
+  },
+  {
+   "path": "viplite-tina/lib/aarch64-none-linux-gnu/v2.0/debug/DEBUG/libVIPhal.so",
+   "bytes": 43536,
+   "git_blob_sha": "2aacc87bb0b5989b42519adb04bb3160dcc8af65",
+   "family": "viplite v2.0",
+   "variant": "debug/DEBUG",
+   "toolchain": "aarch64-none-linux-gnu",
+   "cached": false,
+   "role": "VIPLite 2.0 hardware-abstraction library",
+   "label": "inferred"
+  },
+  {
+   "path": "viplite-tina/lib/aarch64-none-linux-gnu/v2.0/libNBGlinker.so",
+   "bytes": 174728,
+   "git_blob_sha": "7b0907c8e61d45bc10e33f2365e8a58a6a503379",
+   "family": "viplite v2.0",
+   "variant": "release",
+   "toolchain": "aarch64-none-linux-gnu",
+   "cached": true,
+   "role": "VIPLite 2.0 network loader",
+   "label": "observed"
+  },
+  {
+   "path": "viplite-tina/lib/aarch64-none-linux-gnu/v2.0/libVIPhal.so",
+   "bytes": 39416,
+   "git_blob_sha": "a3803701b3e349d5192e7d1ce7e9ecc3c49acc66",
+   "family": "viplite v2.0",
+   "variant": "release",
+   "toolchain": "aarch64-none-linux-gnu",
+   "cached": true,
+   "role": "VIPLite 2.0 hardware-abstraction library",
+   "label": "observed"
+  },
+  {
+   "path": "viplite-tina/lib/glibc-gcc10_2_0/v1.13/libVIPlite.so",
+   "bytes": 141784,
+   "git_blob_sha": "02144851c0c4d225d9444a2579d51c21ce2ff828",
+   "family": "viplite v1.13",
+   "variant": "release",
+   "toolchain": "glibc-gcc10_2_0",
+   "cached": false,
+   "role": "VIPLite 1.13 monolithic network runtime (pre-2.0 user API; NBG loader plus HAL)",
+   "label": "inferred"
+  },
+  {
+   "path": "viplite-tina/lib/glibc-gcc10_2_0/v1.13/libVIPuser.so",
+   "bytes": 39200,
+   "git_blob_sha": "840a322d635cbbf739e7d21894c164a9a6a8eeef",
+   "family": "viplite v1.13",
+   "variant": "release",
+   "toolchain": "glibc-gcc10_2_0",
+   "cached": false,
+   "role": "VIPLite 1.13 user-space driver shim (device-node and ioctl layer for libVIPlite)",
+   "label": "inferred"
+  },
+  {
+   "path": "viplite-tina/lib/glibc-gcc11_3_0/v1.13/libVIPlite.so",
+   "bytes": 199112,
+   "git_blob_sha": "4614c7268c53b53f4d2afc1572f98d85c5477423",
+   "family": "viplite v1.13",
+   "variant": "release",
+   "toolchain": "glibc-gcc11_3_0",
+   "cached": false,
+   "role": "VIPLite 1.13 monolithic network runtime (pre-2.0 user API; NBG loader plus HAL)",
+   "label": "inferred"
+  },
+  {
+   "path": "viplite-tina/lib/glibc-gcc11_3_0/v1.13/libVIPuser.so",
+   "bytes": 67864,
+   "git_blob_sha": "b35f54f495af1ddeee71e390b1fa0d582dc72e5d",
+   "family": "viplite v1.13",
+   "variant": "release",
+   "toolchain": "glibc-gcc11_3_0",
+   "cached": false,
+   "role": "VIPLite 1.13 user-space driver shim (device-node and ioctl layer for libVIPlite)",
+   "label": "inferred"
+  },
+  {
+   "path": "viplite-tina/lib/glibc-gcc13_2_0/v1.13/debug/BW/libVIPlite.so",
+   "bytes": 199120,
+   "git_blob_sha": "00daa554981000dcc84216f38d27046bd4225ef6",
+   "family": "viplite v1.13",
+   "variant": "debug/BW",
+   "toolchain": "glibc-gcc13_2_0",
+   "cached": false,
+   "role": "VIPLite 1.13 monolithic network runtime (pre-2.0 user API; NBG loader plus HAL)",
+   "label": "inferred"
+  },
+  {
+   "path": "viplite-tina/lib/glibc-gcc13_2_0/v1.13/debug/BW/libVIPuser.so",
+   "bytes": 67792,
+   "git_blob_sha": "9ed0bb7d05dd76bf4a25a31f7a3f5ad418a3352a",
+   "family": "viplite v1.13",
+   "variant": "debug/BW",
+   "toolchain": "glibc-gcc13_2_0",
+   "cached": false,
+   "role": "VIPLite 1.13 user-space driver shim (device-node and ioctl layer for libVIPlite)",
+   "label": "inferred"
+  },
+  {
+   "path": "viplite-tina/lib/glibc-gcc13_2_0/v1.13/debug/CNN_BW/libVIPlite.so",
+   "bytes": 199064,
+   "git_blob_sha": "c1bce9824a18e1cf2758ef93bb29300f67bba8ec",
+   "family": "viplite v1.13",
+   "variant": "debug/CNN_BW",
+   "toolchain": "glibc-gcc13_2_0",
+   "cached": false,
+   "role": "VIPLite 1.13 monolithic network runtime (pre-2.0 user API; NBG loader plus HAL)",
+   "label": "inferred"
+  },
+  {
+   "path": "viplite-tina/lib/glibc-gcc13_2_0/v1.13/debug/CNN_BW/libVIPuser.so",
+   "bytes": 67728,
+   "git_blob_sha": "40e456dea44ec63ae2360fc2bb96ae02956dab32",
+   "family": "viplite v1.13",
+   "variant": "debug/CNN_BW",
+   "toolchain": "glibc-gcc13_2_0",
+   "cached": false,
+   "role": "VIPLite 1.13 user-space driver shim (device-node and ioctl layer for libVIPlite)",
+   "label": "inferred"
+  },
+  {
+   "path": "viplite-tina/lib/glibc-gcc13_2_0/v1.13/debug/DEBUG/libVIPlite.so",
+   "bytes": 199040,
+   "git_blob_sha": "1281a7a60c82f072b9e8ee78800af531ab291879",
+   "family": "viplite v1.13",
+   "variant": "debug/DEBUG",
+   "toolchain": "glibc-gcc13_2_0",
+   "cached": false,
+   "role": "VIPLite 1.13 monolithic network runtime (pre-2.0 user API; NBG loader plus HAL)",
+   "label": "inferred"
+  },
+  {
+   "path": "viplite-tina/lib/glibc-gcc13_2_0/v1.13/debug/DEBUG/libVIPuser.so",
+   "bytes": 67824,
+   "git_blob_sha": "209235b9b90ef37b746667d7c5fc636c96b81f62",
+   "family": "viplite v1.13",
+   "variant": "debug/DEBUG",
+   "toolchain": "glibc-gcc13_2_0",
+   "cached": false,
+   "role": "VIPLite 1.13 user-space driver shim (device-node and ioctl layer for libVIPlite)",
+   "label": "inferred"
+  },
+  {
+   "path": "viplite-tina/lib/glibc-gcc13_2_0/v1.13/libVIPlite.so",
+   "bytes": 199040,
+   "git_blob_sha": "a66cef44f597af7527669ddd6a8af4bf8862d0c4",
+   "family": "viplite v1.13",
+   "variant": "release",
+   "toolchain": "glibc-gcc13_2_0",
+   "cached": false,
+   "role": "VIPLite 1.13 monolithic network runtime (pre-2.0 user API; NBG loader plus HAL)",
+   "label": "inferred"
+  },
+  {
+   "path": "viplite-tina/lib/glibc-gcc13_2_0/v1.13/libVIPuser.so",
+   "bytes": 67792,
+   "git_blob_sha": "9ed0bb7d05dd76bf4a25a31f7a3f5ad418a3352a",
+   "family": "viplite v1.13",
+   "variant": "release",
+   "toolchain": "glibc-gcc13_2_0",
+   "cached": false,
+   "role": "VIPLite 1.13 user-space driver shim (device-node and ioctl layer for libVIPlite)",
+   "label": "inferred"
+  },
+  {
+   "path": "viplite-tina/lib/glibc-gcc13_2_0/v2.0/debug/BW/libNBGlinker.so",
+   "bytes": 199256,
+   "git_blob_sha": "bc90a6d605d74394b167a1225c8abbef2165732b",
+   "family": "viplite v2.0",
+   "variant": "debug/BW",
+   "toolchain": "glibc-gcc13_2_0",
+   "cached": false,
+   "role": "VIPLite 2.0 network loader",
+   "label": "inferred"
+  },
+  {
+   "path": "viplite-tina/lib/glibc-gcc13_2_0/v2.0/debug/BW/libVIPhal.so",
+   "bytes": 67968,
+   "git_blob_sha": "80de0b01228b13d9bf85c7856c750a6c99a8b602",
+   "family": "viplite v2.0",
+   "variant": "debug/BW",
+   "toolchain": "glibc-gcc13_2_0",
+   "cached": false,
+   "role": "VIPLite 2.0 hardware-abstraction library",
+   "label": "inferred"
+  },
+  {
+   "path": "viplite-tina/lib/glibc-gcc13_2_0/v2.0/debug/CNN_BW/libNBGlinker.so",
+   "bytes": 199240,
+   "git_blob_sha": "1858d2a4f7cbae4198e49c1c6573c3506ccc6a32",
+   "family": "viplite v2.0",
+   "variant": "debug/CNN_BW",
+   "toolchain": "glibc-gcc13_2_0",
+   "cached": false,
+   "role": "VIPLite 2.0 network loader",
+   "label": "inferred"
+  },
+  {
+   "path": "viplite-tina/lib/glibc-gcc13_2_0/v2.0/debug/CNN_BW/libVIPhal.so",
+   "bytes": 67968,
+   "git_blob_sha": "8b237ddcea01fcf71c7336510f97eabd4b4b9a09",
+   "family": "viplite v2.0",
+   "variant": "debug/CNN_BW",
+   "toolchain": "glibc-gcc13_2_0",
+   "cached": false,
+   "role": "VIPLite 2.0 hardware-abstraction library",
+   "label": "inferred"
+  },
+  {
+   "path": "viplite-tina/lib/glibc-gcc13_2_0/v2.0/debug/DEBUG/libNBGlinker.so",
+   "bytes": 204888,
+   "git_blob_sha": "de278b573d4b176ab34dc51eaa2b6180204f6586",
+   "family": "viplite v2.0",
+   "variant": "debug/DEBUG",
+   "toolchain": "glibc-gcc13_2_0",
+   "cached": false,
+   "role": "VIPLite 2.0 network loader",
+   "label": "inferred"
+  },
+  {
+   "path": "viplite-tina/lib/glibc-gcc13_2_0/v2.0/debug/DEBUG/libVIPhal.so",
+   "bytes": 68000,
+   "git_blob_sha": "600d35cbe45c74b1754b43aa7aa946abc9734aed",
+   "family": "viplite v2.0",
+   "variant": "debug/DEBUG",
+   "toolchain": "glibc-gcc13_2_0",
+   "cached": false,
+   "role": "VIPLite 2.0 hardware-abstraction library",
+   "label": "inferred"
+  },
+  {
+   "path": "viplite-tina/lib/glibc-gcc13_2_0/v2.0/libNBGlinker.so",
+   "bytes": 199176,
+   "git_blob_sha": "4780913428d3d0e96bb8f0a71d322a20ce1acc84",
+   "family": "viplite v2.0",
+   "variant": "release",
+   "toolchain": "glibc-gcc13_2_0",
+   "cached": false,
+   "role": "VIPLite 2.0 network loader",
+   "label": "inferred"
+  },
+  {
+   "path": "viplite-tina/lib/glibc-gcc13_2_0/v2.0/libVIPhal.so",
+   "bytes": 67968,
+   "git_blob_sha": "80de0b01228b13d9bf85c7856c750a6c99a8b602",
+   "family": "viplite v2.0",
+   "variant": "release",
+   "toolchain": "glibc-gcc13_2_0",
+   "cached": false,
+   "role": "VIPLite 2.0 hardware-abstraction library",
+   "label": "inferred"
+  }
+ ],
+ "sdk_tree_truncated": false,
+ "kernel_module_or_firmware_in_sdk_tree": [],
+ "kernel_module": {
+  "name": "vipcore (Kbuild MODULE_NAME; board config CONFIG_AW_NNA_VIP=m)",
+  "prebuilt_in_sdk": false,
+  "source_root": "vip2/",
+  "kbuild_objects": [
+   "vip_drv_interface",
+   "vip_drv_hardware",
+   "vip_drv_device",
+   "vip_drv_context",
+   "vip_drv_debug",
+   "vip_drv_util",
+   "vip_drv_pm",
+   "memory/vip_drv_mem_heap",
+   "memory/vip_drv_mmu",
+   "memory/vip_drv_video_memory",
+   "memory/vip_drv_mem_allocator",
+   "task/vip_drv_task_descriptor",
+   "task/vip_drv_task_schedule",
+   "task/vip_drv_task_parallel_async",
+   "task/vip_drv_task_serial_sync",
+   "task/vip_drv_task_parallel_sync",
+   "task/vip_drv_task_single",
+   "task/vip_drv_task_common",
+   "task/vip_drv_task_debug",
+   "os/linux/vip_drv_device_driver",
+   "os/linux/vip_drv_os",
+   "os/linux/vip_drv_os_debug",
+   "os/linux/allocator/vip_drv_mem_allocator_common",
+   "os/linux/allocator/vip_drv_mem_allocator_heap_reserved",
+   "os/linux/allocator/vip_drv_mem_allocator_heap_exclusive",
+   "os/linux/allocator/vip_drv_mem_allocator_continue",
+   "os/linux/allocator/vip_drv_mem_allocator_segment_continue",
+   "os/linux/allocator/vip_drv_mem_allocator_gfp",
+   "os/linux/allocator/vip_drv_mem_allocator_cma",
+   "os/linux/allocator/vip_drv_mem_allocator_ion",
+   "os/linux/allocator/vip_drv_mem_allocator_wrap_user_physical",
+   "os/linux/allocator/vip_drv_mem_allocator_wrap_user_memory",
+   "os/linux/allocator/vip_drv_mem_allocator_wrap_dma_buf",
+   "/vip_drv_device_platform",
+   "/gc_vip_kernel_ion",
+   "modules",
+   "mod",
+   "vip_drv_fusa"
+  ],
+  "platform_object": "os/linux/platform/allwinner/vip_drv_device_platform.o",
+  "device": "misc device \"vipcore\", dynamic minor, mode 0666 (os/linux/vip_drv_device_driver.c:357-362)",
+  "file_operations": "open, release, unlocked_ioctl, compat_ioctl; no mmap (os/linux/vip_drv_device_driver.c:342-355); user mappings are created inside ioctls with vm_mmap/remap_pfn_range (os/linux/allocator/vip_drv_mem_allocator_common.c:715,754,809,867)",
+  "firmware_requests": "none (no request_firmware in vip2/)",
+  "files": [
+   {
+    "path": "Kbuild",
+    "sha256": "84298c93726bc4bf428e088bc9799bc0691ccefb8d438f409480a2ac4b6be9cf",
+    "lines": 260
+   },
+   {
+    "path": "inc/vip_drv_interface.h",
+    "sha256": "3c434bfe9da6ce0919afbafae864b015867026cf254dc9ce6225a4a6fc950a17",
+    "lines": 97
+   },
+   {
+    "path": "inc/vip_drv_share.h",
+    "sha256": "82345284e62e86e5cbb2bfc4ad245510c3a0972302812d61206c0d8e46596908",
+    "lines": 609
+   },
+   {
+    "path": "inc/vip_feature_database.h",
+    "sha256": "ad030fd8a5b6d1a05b74fa8bdbe2e29ebf9aa57ed348b8b522ae14b52269b534",
+    "lines": 187
+   },
+   {
+    "path": "inc/vip_lite_common.h",
+    "sha256": "d807216e8376de4729de074ecb1b91cd5ccab279ef18543acd3adb61b1a1518e",
+    "lines": 240
+   },
+   {
+    "path": "inc/vip_lite_config.h",
+    "sha256": "a43ad78e3402ffa3c97b366dd2a259cd42dbae12287a1b46e50bcad8dd4da9d0",
+    "lines": 950
+   },
+   {
+    "path": "inc/vip_lite_version.h",
+    "sha256": "757b544a3dd41ed861a2bbe1153025f3e74d65ca7c2cb1e4365cd1e199d59a69",
+    "lines": 87
+   },
+   {
+    "path": "memory/vip_drv_mem_allocator.c",
+    "sha256": "180a5e4a90c65e6d01679a9ec6122d135333afb9481a1240bcd0f9d65dc6a018",
+    "lines": 538
+   },
+   {
+    "path": "memory/vip_drv_mem_allocator.h",
+    "sha256": "cf0672cc117acaa12efa5d0a2858d09f643754cd9505b6dd232a4847e4716dbb",
+    "lines": 186
+   },
+   {
+    "path": "memory/vip_drv_mem_heap.c",
+    "sha256": "7f470890b92d544cfecbe1b53a6b1da07fa188d5d5b48484f0713983c9b6d2b6",
+    "lines": 778
+   },
+   {
+    "path": "memory/vip_drv_mem_heap.h",
+    "sha256": "3f39861a93abccdcd44102a7aaf024d9f60ad9cdcfb476874dbdc99ed97909d4",
+    "lines": 124
+   },
+   {
+    "path": "memory/vip_drv_mmu.c",
+    "sha256": "4f6cd9705c915682f15653ba369cc7e3674cc20a886d650b64da29fdfbf04723",
+    "lines": 2118
+   },
+   {
+    "path": "memory/vip_drv_mmu.h",
+    "sha256": "970d1cc4f3f2a78224363d690b7b3e83c440267cbca299023c940304e749334d",
+    "lines": 249
+   },
+   {
+    "path": "memory/vip_drv_video_memory.c",
+    "sha256": "96796095631c91243e7b85f5072e7c7e509798dcb9e4eef969d76ae46eef4d8e",
+    "lines": 1414
+   },
+   {
+    "path": "memory/vip_drv_video_memory.h",
+    "sha256": "dbee21a018d63bbef635a4b29ecaf166f8e0c6c6d93b87c05f09ed451f4d426a",
+    "lines": 298
+   },
+   {
+    "path": "os/linux/allocator/vip_drv_mem_allocator_array.h",
+    "sha256": "cbe544cb6467cbbd056753099d49ce15ba36864fbbabb4c8acf708db23e617f7",
+    "lines": 156
+   },
+   {
+    "path": "os/linux/allocator/vip_drv_mem_allocator_cma.c",
+    "sha256": "8a4868d69b679c383829830cfae49e7e4ccc9bb02bbf96326f84e44252d2f66e",
+    "lines": 342
+   },
+   {
+    "path": "os/linux/allocator/vip_drv_mem_allocator_common.c",
+    "sha256": "2c5eabd65eaac0e2ffae75f94e530245764edbb5eb9e120ceda7917e281de225",
+    "lines": 963
+   },
+   {
+    "path": "os/linux/allocator/vip_drv_mem_allocator_common.h",
+    "sha256": "9db45aeaf43a83b4c93b1e0170c94e44056d8f48a714069e254b869591ad48e1",
+    "lines": 178
+   },
+   {
+    "path": "os/linux/allocator/vip_drv_mem_allocator_continue.c",
+    "sha256": "9e7d43df4920827a4a2a01cfff7c18dd7c132d95f035cff9787807ab09ed9fa3",
+    "lines": 410
+   },
+   {
+    "path": "os/linux/allocator/vip_drv_mem_allocator_gfp.c",
+    "sha256": "784aa3029dabb8cd9c6cc54bb5a3591f8af25f44f3a616531d8160d328143eba",
+    "lines": 405
+   },
+   {
+    "path": "os/linux/allocator/vip_drv_mem_allocator_heap_exclusive.c",
+    "sha256": "004980863be492a9c44bf6e2516f507ed7e90b0b79b9643147fcab56e0fe59f1",
+    "lines": 306
+   },
+   {
+    "path": "os/linux/allocator/vip_drv_mem_allocator_heap_reserved.c",
+    "sha256": "806a0d2094672cc684455d4f84e244794e3766e0e907f64f5c47adfe24834539",
+    "lines": 276
+   },
+   {
+    "path": "os/linux/allocator/vip_drv_mem_allocator_ion.c",
+    "sha256": "6371d9a36d37aaf0f2d6729d39af365289f2ea92f6b3eac35748828c65b5c0fe",
+    "lines": 396
+   },
+   {
+    "path": "os/linux/allocator/vip_drv_mem_allocator_segment_continue.c",
+    "sha256": "fc8b169c984620a9a6ce702cb80584727ebb6d623f36cf0b2275cadf97afa5b3",
+    "lines": 482
+   },
+   {
+    "path": "os/linux/allocator/vip_drv_mem_allocator_wrap_dma_buf.c",
+    "sha256": "7369354cf15772dc869181b05ce6455439ffa989b0eb15a8a7d85491d62151cd",
+    "lines": 366
+   },
+   {
+    "path": "os/linux/allocator/vip_drv_mem_allocator_wrap_user_memory.c",
+    "sha256": "c3125ec589b749c4ecb5229bffe5b49873323544aa8d286e707711fb5d8dcd2e",
+    "lines": 319
+   },
+   {
+    "path": "os/linux/allocator/vip_drv_mem_allocator_wrap_user_physical.c",
+    "sha256": "7809b311ddb607ccdb4c651f0eb5d02a1673328a92a83175b85bd9dc3e0a9e59",
+    "lines": 284
+   },
+   {
+    "path": "os/linux/platform/allwinner/vip_drv_device_ion.c",
+    "sha256": "638ba7feeb8060022580adb4c67d67cd48c9dcea510d024dcc39403ababd50f8",
+    "lines": 70
+   },
+   {
+    "path": "os/linux/platform/allwinner/vip_drv_device_ion.h",
+    "sha256": "584413a1e77df7bc148ef60ba3170e671a7eee61aed8d7cae03d89f99a0e4158",
+    "lines": 103
+   },
+   {
+    "path": "os/linux/platform/allwinner/vip_drv_device_platform.c",
+    "sha256": "a47f85f2266ec5a9e7ed27dbd948c325a1a169b05c79e2389d3d071f55bf89d9",
+    "lines": 1416
+   },
+   {
+    "path": "os/linux/platform/allwinner/vip_drv_device_platform.h",
+    "sha256": "2059bba996799687cdd434e9fcc96f109b3eb337403e63212a621a2d99d06418",
+    "lines": 91
+   },
+   {
+    "path": "os/linux/platform/allwinner/vip_drv_device_platform_config.h",
+    "sha256": "d19d1d5d8e33f411bf7b44abde2f369755876f2c43670a0e34d3127b4f03d8de",
+    "lines": 106
+   },
+   {
+    "path": "os/linux/vip_drv_device_driver.c",
+    "sha256": "ab9152734f10e71760a71a19ce78e4e5f7b9af68ecfa6c142f6e96e3865e96ad",
+    "lines": 1808
+   },
+   {
+    "path": "os/linux/vip_drv_device_driver.h",
+    "sha256": "d005558358d5d14a2f7f900dd72770855e2c8875d2ad0a2237b33ce6bdfac696",
+    "lines": 382
+   },
+   {
+    "path": "os/linux/vip_drv_os.c",
+    "sha256": "446e82745a48f709d9b7bc8ebc7a87cab2962debd0e40b1a936e959f99734943",
+    "lines": 1269
+   },
+   {
+    "path": "os/linux/vip_drv_os.h",
+    "sha256": "dde342eb8892ce6e098b21b9900c6567345ca0bac3d9cc79d32f79a1612fa4d7",
+    "lines": 68
+   },
+   {
+    "path": "os/linux/vip_drv_os_debug.c",
+    "sha256": "f127e195155a7c809f5b84e6d6bbbbd65f7b162d6faa7251bd102e04a3fdc269",
+    "lines": 3360
+   },
+   {
+    "path": "os/linux/vip_drv_os_debug.h",
+    "sha256": "ad63ed22c9bad37f9ccf2b67e714f7d241889c2cd572a8c1470a71af0202560d",
+    "lines": 137
+   },
+   {
+    "path": "task/vip_drv_task_common.c",
+    "sha256": "a2b6574562ba26290887b7164adc0f9dd196c507da3a453d7e60ac868c333bd9",
+    "lines": 1146
+   },
+   {
+    "path": "task/vip_drv_task_common.h",
+    "sha256": "8ff132fae0bbdba641d6353f1ce86b9f3961bb2e890bc45fb85b67d3a969202a",
+    "lines": 217
+   },
+   {
+    "path": "task/vip_drv_task_debug.c",
+    "sha256": "b3aa6b3cbcfd11a850a0baafeb757395e221d9df95fd675a8cacb16c42579679",
+    "lines": 441
+   },
+   {
+    "path": "task/vip_drv_task_debug.h",
+    "sha256": "0e905a91b6cd32dd897278c332fda94a43af2da425413cb2777924f8781d6a12",
+    "lines": 104
+   },
+   {
+    "path": "task/vip_drv_task_descriptor.c",
+    "sha256": "53e13e5c1231699cd0f9a28486a7888ebbdd900356ba7a2276dbd6b7f4f9d203",
+    "lines": 529
+   },
+   {
+    "path": "task/vip_drv_task_descriptor.h",
+    "sha256": "b03298cc9890a7b0ac92970b4d156d7faaa70655b0fa17124538d4ff26bc5a73",
+    "lines": 172
+   },
+   {
+    "path": "task/vip_drv_task_parallel_async.c",
+    "sha256": "d396d835a49ed300fe246308de00dc6c86609d08d04907d27a00003e1bcc6de1",
+    "lines": 583
+   },
+   {
+    "path": "task/vip_drv_task_parallel_sync.c",
+    "sha256": "ee2c8f594ae165eafc5df60f74aa035ef6c732f35d1365529a056c8e378ff159",
+    "lines": 429
+   },
+   {
+    "path": "task/vip_drv_task_schedule.c",
+    "sha256": "a44e0fe1bcca4f58fc571bad1a960f8c79a2ef738cf6b039abee168358790673",
+    "lines": 803
+   },
+   {
+    "path": "task/vip_drv_task_schedule.h",
+    "sha256": "89373da59dca31dd20dc0150837147b7172b9ee3731a89f35e8c8a45ae2c4967",
+    "lines": 73
+   },
+   {
+    "path": "task/vip_drv_task_serial_sync.c",
+    "sha256": "107cdbd65d6066fb70599e72e53ad5b87f0d4297a1570fe37b42e0c1b5b601a8",
+    "lines": 293
+   },
+   {
+    "path": "task/vip_drv_task_single.c",
+    "sha256": "e273fcd242fd9adc954bbe0765067152523567864cc28bf08256748bc850986b",
+    "lines": 448
+   },
+   {
+    "path": "vip_drv_context.c",
+    "sha256": "e1e668b297e4c82da09bbc930411e93e4e44da6d3b55e40af4b742377874f98f",
+    "lines": 471
+   },
+   {
+    "path": "vip_drv_context.h",
+    "sha256": "d5a5b61307366a9aa0101b18abafc0c1aec1bd6fe66b611366d5c0d43fe29dad",
+    "lines": 242
+   },
+   {
+    "path": "vip_drv_debug.c",
+    "sha256": "825db7488730e20b60645de9af09828fef12aa226ffc44b6be6372651167c9f1",
+    "lines": 1335
+   },
+   {
+    "path": "vip_drv_debug.h",
+    "sha256": "ec3ca6138b9607fe2dc2686a250ce039c760699b78cde229e9f91a3b4a26f8cd",
+    "lines": 124
+   },
+   {
+    "path": "vip_drv_device.c",
+    "sha256": "f931cd7e2b748e1ea2b90d24d0bf65f4f230bfd2a4086ce4d3503ff7e6fc780d",
+    "lines": 307
+   },
+   {
+    "path": "vip_drv_device.h",
+    "sha256": "ce450eae1f036bed5cb0fc53bb51d0c5cfe3aa584773f8b1f4b3a2c2ecfe071c",
+    "lines": 179
+   },
+   {
+    "path": "vip_drv_fusa.c",
+    "sha256": "a4ef1d52b9d6b709221fb5f1f4366b2dddc4fd1ebc6c76b5558df1499b805bee",
+    "lines": 119
+   },
+   {
+    "path": "vip_drv_fusa.h",
+    "sha256": "9a50b6d5ddedbc4a7bfaeb72e360eba979f14b023412f32c902219f8b8c8d684",
+    "lines": 75
+   },
+   {
+    "path": "vip_drv_hardware.c",
+    "sha256": "c02d81df77869f2b2b3c9b96cb8390723fee3bc03b1acf3740b3ce6ebec0983f",
+    "lines": 1199
+   },
+   {
+    "path": "vip_drv_hardware.h",
+    "sha256": "ca9c4c5dc4650f31e7442a40ebdc94bc0f9748f546918192d9146d968450d0a2",
+    "lines": 376
+   },
+   {
+    "path": "vip_drv_interface.c",
+    "sha256": "59b502255e6d15da229319cbe0e20ed6c46a741127ba2f1276c82620e2d90fcf",
+    "lines": 1211
+   },
+   {
+    "path": "vip_drv_os_port.h",
+    "sha256": "3b4b4b12389b9f033de684538b08885354fbf67c138d76b7ba7bd87c61ded8df",
+    "lines": 578
+   },
+   {
+    "path": "vip_drv_pm.c",
+    "sha256": "f92cc17a7bf5b9fa40a2991dbf9e511eb4b0cddcf09829f2b047bfe4cf141d35",
+    "lines": 1484
+   },
+   {
+    "path": "vip_drv_pm.h",
+    "sha256": "425463eb714593453483ccf22aea80d4b4bac5c70e4b9222b2fa2d5e2089921b",
+    "lines": 278
+   },
+   {
+    "path": "vip_drv_type.h",
+    "sha256": "388c0b16328b5a35a9db684984530ecb0c0d3b9b2b6afebcfa207962a962cbac",
+    "lines": 97
+   },
+   {
+    "path": "vip_drv_util.c",
+    "sha256": "af5ad6881cabb4f6e919669547e1ce55567944a2b0c471215d9fd09865e90252",
+    "lines": 2258
+   },
+   {
+    "path": "vip_drv_util.h",
+    "sha256": "55a6e10a3fbadb226d9cf64a187592a541447ceb3f4d44fdf2a4abd1e4ecb59a",
+    "lines": 511
+   }
+  ]
+ }
+}
