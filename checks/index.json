@@ -2871,6 +2871,7 @@
  "ddr-capture-host.py": {
   "cache_areas": [],
   "docs": [
+   "docs/board-runbooks/dram-training-capture.md",
    "docs/designs/dram-fast-boot.md"
   ],
   "library": false,
@@ -2885,6 +2886,7 @@
  "ddr-capture.py": {
   "cache_areas": [],
   "docs": [
+   "docs/board-runbooks/dram-training-capture.md",
    "docs/designs/dram-fast-boot.md"
   ],
   "library": false,

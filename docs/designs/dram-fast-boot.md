@@ -228,8 +228,9 @@ lifetime after a power removal, except where a run continues one.
    `tools/run-ddr.py`, then `tools/run-ddr-capture.py` in the same lifetime
    ([runbook](../board-runbooks/dram-training-capture.md)). It writes no
    storage and changes no training input; its only register writes are
-   `MicroContMuxSel` and `UcclkHclkEnables`, each restored, as boot0's save
-   routine and NXP's driver do. *Predictions:* training as in the table,
+   `MicroContMuxSel` and `UcclkHclkEnables`, each restored. boot0 itself
+   clears and sets `MicroContMuxSel` around PHY reads after every training
+   (`0x5767a`–`0x5768a`), and NXP's driver writes both. *Predictions:* training as in the table,
    12,288 MiB, four stages complete, `MicroContMuxSel` read as 1, words
    0–31 of the parameter block equal to earlier captures and words 32–127
    zero.
