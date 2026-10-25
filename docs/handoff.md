@@ -107,7 +107,7 @@ further board run of each. Board runs test only predictions from those diffs.
   Before the run: IRQ97 captured, DCDC2 enabled at 800 mV (`nr-dcdc2`), fresh
   cache-off and survey. PLL_NPU, domain 4, DCDC2 and the SRAM stay powered.
   **The production NPU startup routes the SRAM** (`work/npu-production-1025`,
-  not merged; [design](designs/npu-sram-route.md)). Every image that links
+  merged 2026-10-25 after two review rounds; [design](designs/npu-sram-route.md)). Every image that links
   the startup now powers domain 4 before any NPU clock, routes the SRAM while
   the NPU resets are held, refuses NPU register access outside READY and
   routes the SRAM back at local stop; the finite image also sets the bit at
@@ -123,7 +123,8 @@ further board run of each. Board runs test only predictions from those diffs.
   [three-start runbook](board-runbooks/npu-starts.md): one cold port 3-3
   lifetime, starts at 492 MHz cold, 492 MHz adopted and 852 MHz by rate
   change, two jobs each, all six outputs predicted to match, startup times
-  of about 4.6, 4.4 and 4.6 ms. No set is frozen.
+  of about 4.6, 4.4 and 4.6 ms. The set is being frozen as
+  `board-bundles-20261025-8`.
 - CPU (`work/backsolve-cpu-1025`, `docs/reference-backsolve-cpu.md`): the
   leading divergences are checks that the reference never performs, such as the
   GICR_CTLR status compare (now masked on `bringup`), GICD_CTLR.RWP treated
