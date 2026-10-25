@@ -63,11 +63,20 @@ def analyze(bundle,session,assembly,bootstrap,synthetic=False):
         require(p['geometry']==geometry,'Prepared geometry differs from exact image.')
         original=json.loads(read(session));require(isinstance(original,dict),'Session must be an object.');require(original.get('image_sha256')==capture.IMAGE,'Session image differs.')
         result=host.validate_reports(*(read(session.parent/(name+'.bin')) for name in ('monitor','platform','receipt')),p)
-        require(result==original.get('npu_result') and result['status']==1 and result['controlled_negative'] and not result['functional_success'],'No internally consistent numerical failure.')
+        # Records made before the host reported output_pattern lack it; the
+        # field is derived from the same copied outputs.
+        recorded=original.get('npu_result');recorded=dict(recorded) if isinstance(recorded,dict) else recorded
+        if isinstance(recorded,dict) and 'output_pattern' not in recorded:recorded['output_pattern']=result['output_pattern']
+        require(result==recorded and result['status']==1 and result['controlled_negative'] and not result['functional_success'],'No internally consistent numerical failure.')
         journal=original.get('stopped_capture',{});require(isinstance(journal,dict),'Capture journal must be an object.');rows=journal.get('files',[])
         require(isinstance(rows,list),'Capture files must be an array.')
         expected=[(name,at,n) for name,at,n in capture.METADATA]+[('parent',capture.PARENT,capture.BYTES)]
-        require(len(rows)<=4,'Unexpected capture journal size.')
+        # A fifth row, the NPU SRAM read, is journal-checked when present.
+        require(len(rows)<=5,'Unexpected capture journal size.')
+        if len(rows)==5:
+            path=session.parent/'npu-stopped-sram.bin';data=read(path);at,size=capture.SRAM
+            require(rows[4]=={'name':path.name,'address':at,'requested_bytes':size,'bytes':len(data),'sha256':sha(data)} and len(data)==size,'Capture journal differs: sram')
+            report['sram_sha256']=sha(data)
         raw={}
         for index,(name,at,size) in enumerate(expected):
             try:

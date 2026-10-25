@@ -173,7 +173,10 @@ results above remain evidence for their recorded image.
 
 The monitor publishes status 6 if its interrupt cleanup times out or a restored
 register differs from the saved readable value. This overrides both normal
-success and the controlled recovery status 2. The monitor still requests the
+success and the controlled recovery status 2. The status it replaces, which
+can itself be a failure status 3, 4 or 5, is published in the result's
+`replaced_status` word at offset 120; the word is zero otherwise.
+`tools/check-a733-kernel.py` decodes it and names it in the status-6 refusal. The monitor still requests the
 existing ROM return; the host rejects the unsuccessful result and retains
 ownership. A responsive ROM does not make the affected interrupt state reusable.
 
@@ -200,7 +203,8 @@ The model includes write-one-to-set/clear registers, unimplemented PPIs,
 implemented priority bits, delayed or stuck RWP, dropped restore writes,
 changed bank counts and reads that reach the deadline. It checks rejection
 before unsafe configuration writes and cleanup failure overriding statuses 0,
-2 and 4. The previous monitor reproduces the defect: a dropped priority restore
+2 and 4, and requires `replaced_status` to hold the overridden status. The
+previous monitor reproduces the defect: a dropped priority restore
 still returns status 0. The changed monitor returns status 6.
 
 For the nine-bank nominal fixture, cleanup grows from 162 to 445 executed

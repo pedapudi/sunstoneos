@@ -22,6 +22,35 @@ require, digest, save_json = supervised.require, supervised.digest, supervised.s
 MAGIC = 0x3154525133333741
 REPORT_BYTES, CPU_OFFSET, CPU_BYTES = 8880, 688, 1024
 PROFILE = 'current-finite-cpu-idle-wake-v3'
+# Retained-failure reasons that runtime.c publishes in the report's error word
+# and in the failing CPU's error word.
+REASONS = {
+    1: 'capture entered in the wrong state or after the deadline',
+    2: 'capture epoch, repeat or arrival mismatch',
+    3: 'exit fault slot differs',
+    4: 'workload rounds, background progress, SGIs, failure or ticks differ',
+    5: 'capture barrier timed out or another CPU failed',
+    6: 'owned timer PPIs did not quiesce',
+    7: 'owned timer PPIs remained pending or enabled',
+    8: 'idle/wake proof missing',
+    9: 'drained barrier timed out or another CPU failed',
+    20: 'shutdown entered after the deadline or a failure',
+    21: 'secondary waited too long for its shutdown request',
+    22: 'CPU0 waited too long for a secondary restore',
+    23: 'CPU0 waited too long for a power-down acknowledgement',
+    24: 'secondary power status did not reach OFF',
+    25: 'secondary power register restore differs',
+    26: 'distributor write did not complete before restore',
+    27: 'distributor disable did not complete',
+    28: 'SPI disable did not complete',
+    29: 'SPI enable restore differs',
+    30: 'distributor control restore differs',
+    31: 'shutdown before capture or cleaning',
+}
+
+
+def reason(code):
+    return f'reason {code} ({REASONS.get(code, "unknown")})'
 
 
 def geometry(image):
@@ -151,6 +180,7 @@ def validate_bundle(bundle):
 def decode_report(raw, epoch):
     require(type(epoch) is int and 0 < epoch < 2**64 and len(raw) == REPORT_BYTES, 'Report size or expected epoch differs.')
     magic, version, size, actual, deadline, state, error, core = struct.unpack_from('<8Q', raw)
+    require(not error, f'Native retained failure: {reason(error)}.')
     require((magic, version, size, actual, state, error, core) == (MAGIC, 3, REPORT_BYTES, epoch, 4, 0, 0) and deadline,
             'No matching successful native report.')
     cpus = []
@@ -160,7 +190,8 @@ def decode_report(raw, epoch):
         seen, captured, cleaned, restored, request, acknowledged, error, _, rounds, background, sgis, failure, ticks = values
         drained = struct.unpack_from('<Q', raw, offset + 104)[0]
         off = struct.unpack_from('<Q', raw, offset + 768)[0]
-        require((seen, captured, drained, cleaned, restored) == (epoch,) * 5 and error == failure == 0 and
+        require(not error, f'CPU {i} retained failure: {reason(error)}.')
+        require((seen, captured, drained, cleaned, restored) == (epoch,) * 5 and failure == 0 and
                 rounds == 32 and background > 0 and sgis > 0, f'CPU {i} workload/publication incomplete.')
         require((request, acknowledged, off) == ((epoch,) * 3 if i else (0, 0, 0)), f'CPU {i} shutdown incomplete.')
         require(ticks >= 32 if i == 0 else ticks == 1, f'CPU {i} timer count differs from its assigned role.')

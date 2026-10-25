@@ -2,10 +2,16 @@
 """Run explicitly selected integration builds and checks, once each.
 
 Host configuration stays in CACHE/bin/cfg.sh. This tool never launches a board.
+Build directories belong to the resolved source checkout, so gates on different
+checkouts never share a CMake cache; a lock refuses a second concurrent gate on
+the same checkout. A source tree with uncommitted changes is refused unless
+--allow-dirty is given, and the recorded identity then names those changes.
 Use checks/check-index.py --changed PATH... to help choose focused checks; its
 textual coverage is advisory. Component checks outside this gate run directly.
 """
 import argparse
+import fcntl
+import hashlib
 from pathlib import Path
 import os
 import re
@@ -18,6 +24,10 @@ VARIANTS = {
     'res': ['-DSUNSTONE_A733_OS_RESIDENT=ON'],
     'resaud': ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DSUNSTONE_A733_OS_AUDIO=ON'],
     'resradio': ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DSUNSTONE_A733_OS_RADIO=ON'],
+    'resradioaud': ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DSUNSTONE_A733_OS_RADIO=ON', '-DSUNSTONE_A733_OS_AUDIO=ON'],
+    'headset': ['-DSUNSTONE_A733_OS_HEADSET=ON'],
+    'resheadset': ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DSUNSTONE_A733_OS_HEADSET=ON'],
+    'radio-headset': ['-DSUNSTONE_A733_OS_RADIO=ON', '-DSUNSTONE_A733_OS_HEADSET=ON'],
     'resradio-headset': ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DSUNSTONE_A733_OS_RADIO=ON',
                          '-DSUNSTONE_A733_OS_HEADSET=ON'],
 }
@@ -35,9 +45,10 @@ def main(argv=None):
     parser.add_argument('--target', action='append', default=[], help='central CMake target; repeat to add targets')
     parser.add_argument('--variant', choices=VARIANTS, action='append', default=[])
     parser.add_argument('--check', choices=CHECKS, action='append', default=[])
-    parser.add_argument('--full', action='store_true', help='explicit broad integration milestone: all central targets, five variants and all listed checks')
+    parser.add_argument('--full', action='store_true', help='explicit broad integration milestone: all central targets, the nine OS variants and all listed checks')
     parser.add_argument('--cache', type=Path, default=Path(os.environ.get('SUNSTONE_CACHE', Path.home() / '.cache/sunstoneos')))
     parser.add_argument('--trials', type=int, default=1, help='predeclared soak8 trials, not failure retries (default: 1)')
+    parser.add_argument('--allow-dirty', action='store_true', help='build a tree with uncommitted changes; the status and diff hash are recorded')
     args = parser.parse_args(argv)
     if not args.reason.strip():
         parser.error('--reason must describe the validation risk')
@@ -59,6 +70,11 @@ def main(argv=None):
     for check in checks:
         if check in DEPENDENCIES and DEPENDENCIES[check] not in targets:
             targets.append(DEPENDENCIES[check])
+    status = subprocess.run(['git', 'status', '--porcelain'], cwd=source, capture_output=True, text=True)
+    if status.returncode != 0:
+        parser.error('source must be a Git checkout: ' + status.stderr.strip())
+    if status.stdout and not args.allow_dirty:
+        parser.error('source has uncommitted changes; commit them or pass --allow-dirty to record them')
     output = cache / 'build' / ('gate-' + args.label)
     try:
         output.mkdir(parents=True, exist_ok=False)
@@ -66,7 +82,10 @@ def main(argv=None):
         parser.error(f'evidence already exists: {output}; reuse its results or choose a new label for affected work')
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1')
     env['PATH'] = str(cache / 'host/usr/lib/llvm-21/bin') + os.pathsep + env.get('PATH', '')
-    cfg, build = cache / 'bin/cfg.sh', cache / 'build/gate-central'
+    # One build tree per resolved checkout: the name keeps it recognizable and
+    # the path hash separates checkouts that share a name.
+    tree = re.sub(r'[^A-Za-z0-9_.-]', '_', source.name) + '-' + hashlib.sha256(str(source).encode()).hexdigest()[:10]
+    cfg, build = cache / 'bin/cfg.sh', cache / 'build' / ('gate-central-' + tree)
     python = cache / 'venv/bin/python'
     qemu = cache / 'host/usr/bin/qemu-system-aarch64'
     evidence = output / 'evidence'
@@ -97,6 +116,18 @@ def main(argv=None):
     note('selection: ' + shlex.join(sys.argv[1:] if argv is None else argv))
     identity = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=source, capture_output=True, text=True)
     note('revision: ' + (identity.stdout.strip() if identity.returncode == 0 else 'unavailable'))
+    diff = subprocess.run(['git', 'diff', '--binary', 'HEAD'], cwd=source, capture_output=True)
+    note('diff-sha256: ' + (hashlib.sha256(diff.stdout).hexdigest() if diff.returncode == 0 else 'unavailable'))
+    note('status: ' + ('clean' if not status.stdout else str(len(status.stdout.splitlines())) + ' changed paths'))
+    if status.stdout:
+        (output / 'status.txt').write_text(status.stdout)
+    lock_path = cache / 'build' / ('gate-' + tree + '.lock')
+    lock = lock_path.open('a')
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        note('FAIL another gate holds ' + str(lock_path) + ' for this checkout')
+        return 1
     if targets or args.full:
         if not run('central-configure', [cfg, source, build]):
             return 1
@@ -115,7 +146,7 @@ def main(argv=None):
         if not run('central-build', ['cmake', '--build', build, '--target', *targets, '-j', '12']):
             return 1
     for variant in variants:
-        directory = cache / 'build' / ('gate-os-' + variant)
+        directory = cache / 'build' / ('gate-os-' + variant + '-' + tree)
         if not run('os-' + variant + '-configure', [cfg, source, directory,
                    '-DSUNSTONE_MIMUS_BOARD_APPLICATION=ON', '-DSUNSTONE_A733_OS=ON', *VARIANTS[variant]]):
             return 1

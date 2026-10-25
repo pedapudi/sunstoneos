@@ -243,6 +243,41 @@ it does not simulate physical PCK handshakes or prove GPU execution. No new nati
 image, hardware access or retry was made for this correction.
 
 
+## An unpowered GPU core is the leading hypothesis for both failed GPU runs
+
+Two GPU images started on a board and did not return:
+
+- the power/identity probe, ELF `fd3d5839…`, on port 3-1, observed for
+  30 seconds;
+- the finite GPU computation, ELF
+  `2ab2cb1b3bac150d5eb695793ab0eb39bb453afc7fbd7ecb2f595ebfca3fd08d` from
+  `gpu-returning-repeat-fix-20261019/build/return.elf`, on port 3-3, observed
+  for 90 seconds.
+
+Both were built before the controller gained CORE6 control (commit
+`9bd65b98`). Each powered GPU_TOP (domain 5) and never wrote CORE6 policy 8
+before its first access to the GPU register window at `0x01800000`. The
+leading hypothesis is that the first GPU register read stalled the CPU because
+the core domain was unpowered. A read whose target cannot respond does not
+complete and raises no exception, so no bounded failure path runs and no
+report is written. The probe's own limits argue against an ordinary bounded
+failure: its client deadline is 1.5 seconds from monitor entry and the
+returning CPU monitor's deadline is 2 seconds, so a refused step would have
+reported and returned well inside the 30-second observation.
+
+The hypothesis is not proven. Neither run produced a native report, so the
+stage at which each stopped is unknown, and a stop before the GPU access
+(entry, provider readiness or the TOP transition) remains possible.
+
+The [power-only variant](../apps/gpu-power-id/README.md#the-power-only-variant-runs-before-any-identity-probe)
+of the diagnostic separates the two explanations. It powers TOP and CORE,
+checks CORE status 8, powers both OFF and releases them, and never accesses
+the GPU register window. Following the lowest-recovery-risk order of
+AGENTS.md, it runs before any identity probe. If it returns, CORE power
+control works on that board and a later identity probe tests the register
+read alone. If it does not return, the failure lies in power control and
+involves no GPU register access.
+
 ## CORE ownership follows the selected BXM adapter
 
 The selected `rgx_sunxi` source defines `USE_FPGA` unconditionally at
@@ -267,8 +302,9 @@ transaction drain. The existing firmware-stop or admitted never-booted
 prerequisite remains necessary for OFF.
 
 The reference helpers do not await CORE acknowledgement. Native code adds a
-conservative completion check: one status read per poll, with a fresh monotonic
-deadline check before accepting its value. A delayed or unavailable CORE status
+conservative completion check. Each poll re-reads CORE status for up to
+`A733_GPU_SPIN_US` (50 µs) while the clock advances, with a fresh monotonic
+deadline check after every read, and then returns AGAIN. A delayed or unavailable CORE status
 may fail this criterion on hardware. ON is checked after local clock/reset
 progress; OFF is checked before teardown. Timeout, failed access or unexpected
 status retains the TOP row, rail pin and GPU leases without rollback.
@@ -285,8 +321,10 @@ provenance and decoded bytes are preserved in
 `~/.cache/sunstoneos/evidence/npu-low-power-source-20261024/source-search.json`.
 
 With immediate acknowledgement, this change adds two CORE writes and six reads
-on ON, then one write and two reads on OFF, plus two release reads. Each waiting
-poll adds one status read and two controller clock samples. Native writes use
+on ON, then one write and two reads on OFF, plus two release reads. A waiting
+poll adds at most 50 µs of status reads, one controller clock sample per read.
+An acknowledgement inside that window completes the step in the same poll
+instead of one scheduler tick later. Native writes use
 the existing shared register lock. The power structure grows by 16 bytes for
 cached policy/status/PWCR and a seen mask; the mask records completed reads,
 including a read followed by deadline rejection, and is not admission authority.

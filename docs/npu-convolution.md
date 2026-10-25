@@ -130,12 +130,26 @@ One live client task uses `npu_convolution_send` and
 
 1. OPEN, then send WAIT (or request STATUS repeatedly) until a copied reply
    reports READY.
-2. SUBMIT an input with the selected catalogue length. The wrapper copies it before queuing command 1.
+2. SUBMIT an input with the selected catalogue length. The wrapper copies it
+   and fills the selected output length of the device output buffer with the
+   word `NPU_CONVOLUTION_OUTPUT_POISON` (`0xc35a3ca5`, little-endian, repeated)
+   before queuing command 1. The job publication cleans that WRITE buffer to
+   memory, so an output byte the job never writes reads back as its pattern
+   byte instead of the previous job's value.
 3. Send WAIT (or request STATUS repeatedly) until DONE identifies the matching
    submission ticket. The live runtime client uses WAIT; the fixed two-job
    client still polls STATUS once per tick.
 4. Copy the selected output length with `npu_convolution_output`.
 5. Explicitly REAP before submitting another input.
+
+The fill costs one 64-bit store per 8 output bytes, five instructions per
+iteration in the compiled loop, and makes those lines dirty for the
+publication's clean. For the 400-byte numerical model that is 50 stores and
+seven 64-byte lines, against the 432-byte input copy that SUBMIT already
+makes. At the large-graph output capacity of 262,144 bytes it is at most 32,768
+stores, a quarter of the 1 MiB pool clear that SUBMIT already makes in that
+profile. These are
+counts from the code and the disassembly; no board measurement exists.
 
 A finite collect timeout preserves the pending ticket. The client must collect
 that request before sending another or accessing output. DONE follows the

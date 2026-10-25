@@ -799,7 +799,10 @@ without a grant. No device, queue database or FEL program is opened.
 ### First bounded launch with recorded audio
 
 The smallest OS launch uses the supervised lifetime, staged recorded audio
-and explicit board workload 2. The USB0 owner must first finish its provider
+and explicit board workload 2. Only that configuration admits workload 2:
+`OS_STAGED_WORKLOAD` in `apps/os/os.h` excludes the resident lifetime and the
+microphone, headset and radio options, and both the workload rule and the
+staged USB0 mode use it. The USB0 owner must first finish its provider
 and device-stack startup. Recognition then authenticates the staged models
 and WAV and produces one transcript without an external USB disk.
 
@@ -867,7 +870,8 @@ the native contract expires after 60 seconds. Success requires the complete
 transcript and a final live status with matching session identities. The USB
 frame retains version 1 and reports storage state 3, meaning no host workload
 was requested. Recognition uses status and text operations; a sector request
-ends the session. The existing prior-boot fault-report operation remains available. Workloads 0 and 4 continue to require the copied sector and
+ends the session. The existing prior-boot fault-report operation remains
+available. Workloads 0 and 4 continue to require the copied sector and
 recognition/storage overlap evidence.
 The image ends at a terminal halt, so recovery requires whole-board power
 removal even after successful capture. Stop at the first transport failure.

@@ -400,7 +400,7 @@ def main(argv=None, observe=None):
                 values = struct.unpack_from("<16Q", data)
                 names = ("magic", "stage", "status", "log_length", "esr", "elr", "far", "interrupt",
                          "start_counter", "end_counter", "mode", "gicd_ctlr", "gicd_typer",
-                         "gicr_typer", "priority_mask", "reserved")
+                         "gicr_typer", "priority_mask", "replaced_status")
                 record["result"] = dict(zip(names, values))
                 if values[3] > 16384 - 257:
                     raise RuntimeError("Invalid log length in result.")
@@ -424,6 +424,9 @@ def main(argv=None, observe=None):
                                 record["controlled"]["progress"] = progress
                             save()
                             break
+                if outcome is None and values[:3] == (0x534b4552, 5, 6):
+                    raise RuntimeError(f"Monitor interrupt cleanup failed (status 6) after status "
+                                       f"{values[15]}: {record['result']}")
                 if outcome is None and values[:3] != (0x534b4552, 5, expected_status):
                     raise RuntimeError(f"Unexpected kernel result: {record['result']}")
                 if outcome is None and args.mode == "kernel" and args.expect not in log:

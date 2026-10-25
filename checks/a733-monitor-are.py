@@ -226,10 +226,11 @@ for model in (False, True):
             cpu.emu_start(symbols['monitor_exception'], 0, count=100000)
         assert stopped[-1] == ('semihost-exit' if model else 'reset'), (case, stopped)
         status = int.from_bytes(cpu.mem_read(0x42000010, 8), 'little')
+        replaced = int.from_bytes(cpu.mem_read(0x42000078, 8), 'little')
         failed_cleanup = bool(fault and fault != 'delayed-rwp') or early_timeout
         expected_status = 4 if refused else 6 if failed_cleanup else requested_status
         assert not fault or fault_applied, (case, 'fault not reached')
-        row = {'case': case, 'mode': name, 'initial_ctlr': original, 'status': status,
+        row = {'case': case, 'mode': name, 'initial_ctlr': original, 'status': status, 'replaced_status': replaced,
                'expected_status': expected_status, 'fault_applied': bool(fault_applied), 'final_ctlr': registers[gicd],
                'cleanup_ticks': ticks[0]-cleanup_started,
                'cleanup_instructions': instructions[1],
@@ -239,6 +240,9 @@ for model in (False, True):
         if status != expected_status:
             a.output.write_text(json.dumps({'passed': False, 'cases': results}, indent=2)+'\n')
         assert status == expected_status, (case, status, expected_status)
+        # Status 6 keeps the status that cleanup failure replaced: the
+        # initialization timeout's failure status 4, or the requested status.
+        assert replaced == ((4 if early_timeout else requested_status) if status == 6 else 0), (case, replaced, requested_status)
         if refused:
             assert not writes and registers[gicd] == original
         elif not failed_cleanup:

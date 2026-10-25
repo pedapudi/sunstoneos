@@ -233,13 +233,14 @@ static void inherited_cases(void)
             enum a733_cpu_clock_status r=run(400);
             if(mode<=7 || mode>=16)assert(r==A733_CPU_CLOCK_READY && cpu.changes==changes);
             else if(mode==8 || mode==9){
-                assert(r==A733_CPU_CLOCK_REFUSED && cpu.changes==changes-1 && released());
+                /* Refused before any write: the change is not consumed. */
+                assert(r==A733_CPU_CLOCK_REFUSED && cpu.changes==changes && released());
                 unsigned reads=cm.reads;
-                assert(run(400)==A733_CPU_CLOCK_READY && cm.reads==reads && cpu.changes==changes-1);
+                assert(run(400)==A733_CPU_CLOCK_READY && cm.reads==reads && cpu.changes==changes);
                 assert(heat(50000)==A733_THERMAL_NORMAL && run(400)==A733_CPU_CLOCK_READY);
                 *word(PLL(0))=LOCKED|(46u<<8);*word(SEL(0))=0x03000000;pm.pmic[REG_DCDC5]=45;
                 assert(heat(95000)==A733_THERMAL_THROTTLE);
-                assert(run(400)==A733_CPU_CLOCK_COMPLETE && cpu.changes==changes-2 && first(1)==cm.count);
+                assert(run(400)==A733_CPU_CLOCK_COMPLETE && cpu.changes==changes-1 && first(1)==cm.count);
             } else {
                 assert(r==A733_CPU_CLOCK_COMPLETE && cpu.applied_mhz[0]==1014 && cpu.changes==changes-1);
                 if(mode==14)pm.pmic[REG_DCDC5]=30; /* Restore must not raise voltage. */

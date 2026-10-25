@@ -222,13 +222,21 @@ peripheral ownership. PLL, domain and rail retention still apply.
 ## Preserve stopped buffers before restoring a numerical failure
 
 The host captures returned RAM for a validated status-1 numerical failure from
-image `9e4adabf7c8fb19c2cfc2fb4260971cc32a3b6e5ee0fa09bcad0d4b4208c0e95`.
+image `9e4adabf7c8fb19c2cfc2fb4260971cc32a3b6e5ee0fa09bcad0d4b4208c0e95`. The
+capture is bound to that non-thermal numerical image, which runs without
+thermal supervision; the thermal and checkpoint profiles never capture.
 Three fixed metadata reads total 440 bytes. They validate the six buffer slots,
 stream lengths, parent extent and translation-table allocation against the
 audited ELF layout. Only then does the host read the 1,085,440-byte parent
-reservation, including command padding and translation tables. All four addresses
-and lengths come from the image-bound plan; captured pointers never authorize
-reads. Every range lies within admitted DRAM and the native published interval.
+reservation, including command padding and translation tables. A fifth,
+read-only read then copies the 101,376 bytes of the NPU SRAM CPU alias that the
+12×12 model uses, `0x74000..0x8cc00`, ending below the ROM scratchpad at
+`0xee800`. The image never powers domain 4 or the SRAM off, so the read targets
+powered SRAM. Whether the CPU alias returns the NPU's contents in that retained
+state is not established; the read runs last, after the DRAM evidence is saved.
+All five addresses and lengths come from the image-bound plan; captured
+pointers never authorize reads. Every DRAM range lies within admitted DRAM and
+the native published interval.
 
 Each read is synchronized to disk and journaled with its address, length and
 hash before the next read. Metadata differences, short reads, transport failures
@@ -238,7 +246,7 @@ and publishes the controlled outcome only after capture completes; the numerical
 result remains failed. Successful numerical runs, other images, checkpoints and
 thermal profiles perform no additional reads.
 
-This adds four ROM RAM reads totaling 1,085,880 bytes and no native instructions.
+This adds five ROM reads totaling 1,187,256 bytes and no native instructions.
 The helper is part of the frozen host source closure. A future attempt requires
 a newly reviewed host bundle and operating admission in a permitted lifetime.
 The earlier physical capture has already been restored and is unchanged. The
@@ -248,7 +256,8 @@ correctness and physical buffer contents remain unresolved.
 ## Compare stopped RAM with the accepted prepared artifacts
 
 `analyze-capture.py` reads an existing numerical bundle, its session and raw
-reports, and the four stopped-capture files. It validates their internal report
+reports, and the four DRAM stopped-capture files, and journal-checks the SRAM
+file when the capture includes it. It validates their internal report
 consistency and journal hashes, then compares the fixed allocation contents.
 The command takes `--bundle`, `--session`, `--assembly`, `--bootstrap` and an
 exclusive `--output` JSON path. It performs no device operations and grants no
