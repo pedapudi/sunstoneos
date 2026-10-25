@@ -58,6 +58,24 @@ clock and reset order probe (bus reset released before the bus gate and core
 clock, then the identity as two 32-bit loads, no other new access) did not
 return. Reset order, access width and the never-proven reads are ruled out.
 
+**Port 3-1, seventh lifetime: the GPU core answers** (session
+`board-session-20261025-4/port-3-1`, set `board-bundles-20261025-5`, bundle
+19, branch `work/gpu-core6-c-1024` at `750fa092`). Cold DDR and readiness
+passed. The vendor-state image applied the three differences the GPU backsolve
+found, in the vendor order:
+- the 28 BL31 cold-boot security writes at EL3: SPC ports, `0x07010290` = 7,
+  CCU security switch `0x02003f00` = 7, port 14 `0xfffffbff`;
+- DCDC4 to 960 mV (selector `0xae` read back, from the boot value `0x9e`);
+- the GPU PLL locked at 1008 MHz (`0xf9105300`), with all 10 read-backs passing.
+
+CORE6 then reached status 8 after 3,151 µs, and its MISR showed the device
+accept (`0x100`). The two 32-bit identity loads returned `0x00240038` and
+`0x006800b7`, BVNC `36.56.104.183`. The run ended `COMPLETE GPU vendor-state`
+and the ROM answered. This is the first GPU core register access on the board.
+It also shows that CORE6 does power with the vendor state; the earlier
+failures to reach status 8 came from the missing vendor state, not from the PPU.
+Which of the three differences is necessary is not yet separated.
+
 **Reference backsolves (2026-10-25).** At the user's request, CPU, GPU and
 NPU bring-up are being derived from the vendor sources and blobs before any
 further board run of each. Board runs test only predictions from those diffs.
