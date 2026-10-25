@@ -111,6 +111,13 @@ matched their predictions.
 - Each job spends about 56 ms between publication and start, in per-job
   hashing and cache cleaning of the fixed model buffers. That is the largest
   cost by far, and moving it to session open is the next change.
+- Both boards are NPU speed bin vf0400 (port 3-3 `0x496`, port 3-1 `0x495`,
+  from `bb9-read`). The vendor table has no 1008 MHz row for that bin, and the
+  vendor driver runs it at 852 MHz with DCDC2 at 800 mV, so 852 MHz is the
+  vendor's top operating point on these boards. `work/npu-full-model-1025` is
+  merged. `work/npu-job-overhead-1025` makes 852 MHz the default, moves the
+  fixed-buffer hashing to open and close, and simplifies the register path; it
+  is in review.
 
 **NPU interrupt completion and job timing, qualified on port 3-3**
 (set `board-bundles-20261025-13`, `board-session-20261025-9/port-3-3`;
