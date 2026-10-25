@@ -145,6 +145,8 @@ static int accesses(const struct trace *trace, unsigned count, int stopping)
         service.start.steps[0] = (struct pvr_gpu_start_step){0, t->offset, t->width, t->value};
         service.stop.phase = PVR_GPU_STOP_REGISTERS; service.stop.deadline = operation_deadline;
         service.stop.index = 0; service.stop.count = 1;
+        /* The verified stop traces read a pending interrupt before its clear. */
+        service.stop.irq_status = 1;
         service.stop.steps[0] = (struct pvr_gpu_stop_step){0, t->offset, t->width, 0, t->value};
         unsigned previous = mmio_count; uint64_t value = 0;
         int success = t->write ? (stopping ? config.stop.write : config.start.write)(&backend, t->offset, t->width, t->value) :

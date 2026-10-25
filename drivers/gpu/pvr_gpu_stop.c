@@ -2,12 +2,14 @@
  * Shutdown semantics adapted from pvr_power.c, pvr_fw_startstop.c,
  * pvr_rogue_fwif.h and pvr_rogue_cr_defs.h.
  * Copyright (c) 2023 Imagination Technologies Ltd. See LICENSE.pvr.
+ * The register sequence after the handshakes is the vendor DDK's RGXStop for
+ * a MIPS core (rgxstartstop.c:992-1241; docs/designs/gpu-firmware-stop.md).
  */
 #include "pvr_gpu_stop.h"
 #include "a733_range.h"
 #include <string.h>
 
-enum { POLL, WRITE, FENCE };
+enum { POLL, WRITE, IRQ_READ, IRQ_CLEAR };
 static int outside(const struct pvr_gpu_stop *s, const void *p, size_t n)
 {
     return a733_span_excl_nonempty(p, n) &&
@@ -35,17 +37,19 @@ int pvr_gpu_stop_init(struct pvr_gpu_stop *s, struct pvr_gpu_control *c,
     struct pvr_gpu_stop result = {0};
     result.ops=*ops; result.control=c; result.context=ctx; result.deadline=deadline;
     result.last_now=c->last_now; result.phase=PVR_GPU_STOP_CLEAR_IDLE;
-    add(&result,POLL,0x3c8,4,0x78,0x78);
+    /* RGXStop: acknowledge a pending MIPS interrupt (RGXAckIrqMIPS,
+     * rgxinit.c:420-460), wait for Sidekick and the SLC, clear the thread-0
+     * DM associations (thread 1 is META only), run the idle checks, and
+     * leave reset and power removal to the platform OFF. */
+    add(&result,IRQ_READ,0x8a8,4,0,0); add(&result,IRQ_CLEAR,0x8b0,4,0,1);
+    add(&result,POLL,0x3c8,4,0x78,0x78); add(&result,POLL,0x3898,4,0xff,0xff);
     add(&result,WRITE,0xb40,4,0,0); add(&result,WRITE,0xb30,4,0,0);
-    add(&result,WRITE,0xb48,4,0,0); add(&result,WRITE,0xb38,4,0,0);
     add(&result,POLL,0x1358,4,0xff,0); add(&result,POLL,0x1350,4,0xff,0);
     if (!(f[69/8] & (1u<<(69%8)))) add(&result,POLL,0x1320,4,0xfffffff,0);
     add(&result,POLL,0x1338,4,0xffff,0);
     add(&result,POLL,0x3870,8,UINT64_C(0x800003ff03ffffff),0);
     add(&result,POLL,0x3898,4,0xff,0xff);
     add(&result,POLL,0x3c8,4,0x78,0x78); add(&result,POLL,0x3c8,4,4,4);
-    add(&result,WRITE,0x100,8,0,f[32/8]&1 ? UINT64_C(0xffeffffffffffc3d) : UINT64_C(0x00e7fffffffffc3d));
-    add(&result,FENCE,0x100,8,0,0);
     *s=result; return 1;
 }
 static enum pvr_gpu_stop_result fail(struct pvr_gpu_stop *s, unsigned error)
@@ -122,12 +126,19 @@ enum pvr_gpu_stop_result pvr_gpu_stop_poll(struct pvr_gpu_stop *s)
         const struct pvr_gpu_stop_step *op=&s->steps[s->index];
         if (op->kind==WRITE) {
             if (!s->ops.write(s->context,op->offset,op->width,op->value)) return fail(s,PVR_GPU_STOP_IO);
+        } else if (op->kind==IRQ_READ) {
+            if (!s->ops.read(s->context,op->offset,op->width,&value)) return fail(s,PVR_GPU_STOP_IO);
+            s->irq_status=(uint32_t)value;
+        } else if (op->kind==IRQ_CLEAR) {
+            /* Clear only the event bit, and only when it was pending. */
+            if ((s->irq_status&1u) && !s->ops.write(s->context,op->offset,op->width,op->value))
+                return fail(s,PVR_GPU_STOP_IO);
         } else {
             /* A register poll re-reads for at most A733_GPU_SPIN_US. */
             struct a733_gpu_spin wait={0};
             for (;;) {
                 if (!s->ops.read(s->context,op->offset,op->width,&value)) return fail(s,PVR_GPU_STOP_IO);
-                if (op->kind!=POLL || (value&op->mask)==op->value) break;
+                if ((value&op->mask)==op->value) break;
                 if (!clock_now(s,&now)) return PVR_GPU_STOP_FAULT;
                 if (!a733_gpu_spin_again(&wait,now)) return PVR_GPU_STOP_AGAIN;
             }

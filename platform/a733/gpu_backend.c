@@ -173,9 +173,8 @@ static int compute_mode(void *context)
 
 static int read_allowed(uint32_t off, uint32_t width, int stopping)
 {
-    if (off == 0x100 && width == 8) return 1;
-    if (!stopping) return (off == 0xa100 || off == 0x3800) && width == 4;
-    return (off == 0x3870 && width == 8) || (width == 4 && (off == 0x3c8 || off == 0x1358 ||
+    if (!stopping) return (off == 0x100 && width == 8) || ((off == 0xa100 || off == 0x3800) && width == 4);
+    return (off == 0x3870 && width == 8) || (width == 4 && (off == 0x8a8 || off == 0x3c8 || off == 0x1358 ||
         off == 0x1350 || off == 0x1320 || off == 0x1338 || off == 0x3898));
 }
 static int start_read(void *context, uint32_t off, uint32_t width, uint64_t *out)
@@ -242,8 +241,8 @@ static int stop_write(void *context, uint32_t off, uint32_t width, uint64_t valu
     struct a733_gpu_backend *b = context;
     if (!active(b)) return 0;
     const struct pvr_gpu_stop *s = &b->service->stop;
-    int allowed = ((off == 0xb40 || off == 0xb30 || off == 0xb48 || off == 0xb38) && width == 4 && !value) ||
-        (off == 0x100 && width == 8 && (value == UINT64_C(0xffeffffffffffc3d) || value == UINT64_C(0x00e7fffffffffc3d)));
+    int allowed = ((off == 0xb40 || off == 0xb30) && width == 4 && !value) ||
+        (off == 0x8b0 && width == 4 && value == 1 && (s->irq_status & 1u));
     if (!allowed || s->phase != PVR_GPU_STOP_REGISTERS || s->index >= s->count || s->steps[s->index].offset != off ||
         s->steps[s->index].width != width || s->steps[s->index].value != value) return fail(b, A733_GPU_BACKEND_ACCESS);
     return before(b, s->deadline) && raw_write(b, off, width, value) && before(b, s->deadline);
