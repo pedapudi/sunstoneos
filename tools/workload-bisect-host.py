@@ -63,6 +63,12 @@ class DeadlineReturn(ValueError):
         self.record = record
         reason = REASONS.get(record.get('reason'), 'an unknown reason {}'.format(record.get('reason')))
         text = 'CPU0 returned through the deadline unit after {}; stage {:#x}.'.format(reason, record.get('stage', 0))
+        if record.get('cpu0_wait') == 'identity_park':
+            text += (' CPU0 was waiting in identity_park after its completion barrier timed out'
+                     ' (ELR_EL3 {:#x}).'.format(record['elr_el3']))
+        elif record.get('cpu0_wait') == 'elsewhere':
+            text += (' CPU0 was interrupted outside identity_park, at ELR_EL3 {:#x}; it may be wedged'
+                     ' there.'.format(record['elr_el3']))
         if record.get('inconsistent'):
             text += ' The record is inconsistent: '+record['inconsistent']
         super().__init__(text)
@@ -80,11 +86,14 @@ def check_record(raw, nonce, record, words):
             'Deadline differs from the startup contract.')
 
 
-def deadline_record(raw, nonce):
+def deadline_record(raw, nonce, park=None):
     """Return the decoded deadline record of a returned report, or None.
 
     A record whose checks fail is still returned, with the failed check in
-    'inconsistent'. ESR_EL3 is meaningful only for an SMC (reasons 2 and 4)."""
+    'inconsistent'. ESR_EL3 is meaningful only for an SMC (reasons 2 and 4).
+    PARK is the overlay's identity_park address: for reason 1, 'cpu0_wait'
+    says whether the deadline interrupt found CPU0 there (a timed-out
+    barrier, interrupts masked) or elsewhere (possibly wedged)."""
     if len(raw) != 0x5200 or struct.unpack_from('<Q', raw, RECORD_OFFSET)[0] != RECORD_MAGIC:
         return None
     words = struct.unpack_from('<64Q', raw, RECORD_OFFSET)
@@ -92,6 +101,10 @@ def deadline_record(raw, nonce):
     record['cores'] = [dict(zip(('pending', 'active', 'enabled', 'power'), words[29+4*c:33+4*c])) for c in range(8)]
     record['returned'] = words[62]
     record['epoch'], record['survey_deadline'] = struct.unpack_from('<2Q', raw, 0x100+24)
+    record['cpu0_wait'] = None
+    if park is not None and record['reason'] == 1:
+        # identity_park is WFI; B identity_park.
+        record['cpu0_wait'] = 'identity_park' if park <= record['elr_el3'] < park+8 else 'elsewhere'
     try:
         check_record(raw, nonce, record, words)
         record['inconsistent'] = None
@@ -101,7 +114,7 @@ def deadline_record(raw, nonce):
 
 
 def decode(raw, nonce, manifest):
-    record = deadline_record(raw, nonce)
+    record = deadline_record(raw, nonce, manifest['hooks']['identity_park'])
     if record:
         raise DeadlineReturn(record)
     result = base.decode(raw, nonce, manifest)
@@ -161,9 +174,12 @@ def validate_software(software, manifest_hash):
                     all(r[0] == 32 and r[1] and r[2] and not r[3] for r in actual) and actual[0][4] >= 32,
                     'Completed workload results differ.')
         else:
-            record = deadline_record(raw, raw[32:48])
+            record = deadline_record(raw, raw[32:48], result.get('identity_park'))
+            parked = record and record['cpu0_wait'] == 'identity_park'
+            # stalled-core ends through the deadline interrupt too when CPU0 was
+            # waiting in identity_park (see checks/workload-bisect-probe.py); the
+            # record's ELR_EL3 and the model must agree on where CPU0 waited.
             require(record and not record['inconsistent'] and
-                    # stalled-core ends through the deadline interrupt too when CPU0
-                    # was waiting in identity_park (see checks/workload-bisect-probe.py).
-                    record['reason'] == (1 if case == 'stalled-no-tick' or result.get('cpu0_parked') else 2) and
+                    record['reason'] == (1 if case == 'stalled-no-tick' or parked else 2) and
+                    (record['reason'] != 1 or parked == bool(result.get('cpu0_parked'))) and
                     record['stage'] == 3 and result.get('off') == [], 'Deadline return case differs.')

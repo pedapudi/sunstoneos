@@ -37,7 +37,7 @@ def validate_software(software, manifest_hash):
             software.get('host_sources') == {n:digest(ROOT/n) for n in HOST_SOURCES} and
             software.get('host_cases') == dict.fromkeys(CASES, True), 'Task-switch host evidence differs.')
     evidence = software['instruction_evidence']
-    require(set(evidence) == {'success','wrong-task-argument'}, 'Task-switch instruction cases incomplete.')
+    require(set(evidence) == {'success','wrong-task-argument','idle-resumes'}, 'Task-switch instruction cases incomplete.')
     for case,item in evidence.items():
         path = Path(item['path'])
         require(path.is_absolute() and digest(path) == item['sha256'], 'Instruction evidence changed.')
@@ -47,7 +47,11 @@ def validate_software(software, manifest_hash):
                 result.get('manifest_sha256') == manifest_hash and
                 result.get('sources') == {n:digest(ROOT/n) for n in MODEL_SOURCES},
                 'Task-switch instruction inputs or result differ.')
-        if case == 'success':
+        if case in ('success', 'idle-resumes'):
+            # idle-resumes: one idle task's first yield returns to it, and its
+            # loop must still reach the worker without an interrupt.
+            require(case == 'success' or result.get('case') == case and result.get('idle_resumed_core') == 3,
+                    'Resumed idle task case differs.')
             require(result.get('idle_yield_cores') == result.get('worker_selection_cores') == list(range(8)) and
                     result.get('worker_bodies_executed') is False and
                     result.get('clean_lines_per_core') == 9280 and result.get('off') == list(range(1,8)),

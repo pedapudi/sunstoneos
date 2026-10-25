@@ -128,7 +128,7 @@ class AllCore(cached.Cached):
                 self.smc_seen.add(0)
                 self.exception(core, 3, address+4, (0x17 << 26) | (1 << 25) | 0x733)
                 return
-        if not core and op == 'wfi':
+        if not core and op == 'wfi' and m['currentel'] > 0:
             self.retained = True; u.emu_stop(); return
         if not core and op == 'msr':
             name, src = args; value = self.reg(core, src)

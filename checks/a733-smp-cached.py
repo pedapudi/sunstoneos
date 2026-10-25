@@ -147,6 +147,7 @@ class Machine:
         # Zeroed active-priority copies per core, and those zeroed when the
         # core first enabled Nonsecure Group 1 at EL1.
         self.active_priorities=[set() for _ in range(8)];self.group1_priorities={}
+        self.wfi_waiting=[None]*8
         self.mmio={0x02050014:0x41,0x02050010:1,0x02050018:2,0x07090108:0x5aa5a55a,
             0x070501c0:0xfa50392f,0x070501c4:0x20,0x070501d4:0,0x03000024:0,
             0x03400000:0,0x03400004:1}
@@ -219,6 +220,10 @@ class Machine:
     def save_sp(self,c):self.regs[c][self.spname(c)]=self.cpus[c].reg_read(UC_ARM64_REG_SP)
     def exception(self,c,level,pc,esr=0,irq=False):
         u=self.cpus[c];m=self.regs[c];old=m['currentel']//4
+        # An interrupt that ends an EL0 WFI returns to the next instruction.
+        waiting=getattr(self,'wfi_waiting',None)
+        if irq and waiting and waiting[c]==pc:pc+=4
+        if waiting:waiting[c]=None
         self.save_sp(c)
         m[f'elr_el{level}']=pc
         m[f'spsr_el{level}']=u.reg_read(UC_ARM64_REG_NZCV)|m['daif']|(old*4+(m['spsel'] if old else 0))
@@ -340,6 +345,12 @@ class Machine:
             if name in ('cntp_cval_el0','cntp_ctl_el0') and not c:self.timer_level(c)
             skip=True
         elif op in ('isb','dsb','dmb','tlbi','dc','ic','sev','sevl','yield'):skip=True
+        elif op=='wfi' and m['currentel']==0:
+            # An idle task's WFI at EL0 (SCTLR_EL1.nTWI set) waits until an
+            # interrupt is taken; the core's next IRQ check delivers it.
+            assert m['sctlr_el1']&(1<<16),('EL0 WFI traps without nTWI',c)
+            if not hasattr(self,'wfi_waiting'):self.wfi_waiting=[None]*8
+            self.wfi_waiting[c]=a;u.emu_stop();return
         elif op in ('wfe','wfi'):
             u.reg_write(UC_ARM64_REG_PC,a+4);u.emu_stop();return
         elif op in ('ldaxr','ldxr'):

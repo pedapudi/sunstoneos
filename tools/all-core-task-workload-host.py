@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import struct
 from types import SimpleNamespace
+from elftools.elf.elffile import ELFFile
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('first_task_host', ROOT/'tools/all-core-first-task-host.py')
@@ -37,6 +38,16 @@ probe = SimpleNamespace(NATIVE=base.probe.NATIVE, REPORT=base.probe.REPORT, deco
 initial_report = base.initial_report
 
 
+def pinned_symbol(image, name):
+    """The address of NAME in the pinned native ELF, which must be that image."""
+    require(digest(image) == probe.NATIVE, 'Unreviewed native image.')
+    with image.open('rb') as stream:
+        found = [s['st_value'] for s in ELFFile(stream).get_section_by_name('.symtab').iter_symbols()
+                 if s.name == name and s['st_shndx'] != 'SHN_UNDEF']
+    require(len(found) == 1, 'Missing or ambiguous native symbol '+name)
+    return found[0]
+
+
 def load(build, image, manifest, **deadline):
     require(manifest.get('task_switch') == {
         'physical_eligible': False, 'worker_body': True, 'idle_body': True,
@@ -44,7 +55,7 @@ def load(build, image, manifest, **deadline):
         'pending': 'Instruction execution, host report validation and root review required.'},
         'Workload task-switch scope changed.')
     require(manifest.get('task_workload') == {
-        'physical_eligible': False, 'rounds_per_core': 32, 'completion_patch': manifest['native_symbols']['worker']+0x6c,
+        'physical_eligible': False, 'rounds_per_core': 32, 'completion_patch': pinned_symbol(image, 'worker')+0x6c,
         'pending': 'Returning workload instruction checks, host validation and root review required.'},
         'Workload scope or completion patch changed.')
     require(manifest['native_symbols'].get('a733_smp_core_results') == 0x41201080,

@@ -34,7 +34,7 @@ class Cached(local.Local):
         if address not in self.decoded:
             self.decoded[address]=next(self.decoder.disasm(bytes(u.mem_read(address,4)),address))
         ins=self.decoded[address];op,args=ins.mnemonic,ins.op_str.split(', ');m=self.regs[core]
-        if core and op=='wfi' and address!=self.survey_hooks['identity_target_terminal']+4:
+        if core and op=='wfi' and m['currentel']>0 and address!=self.survey_hooks['identity_target_terminal']+4:
             self.target_parked.add(core);self.clock=self.deadline+1;u.emu_stop();return
         if core and address==self.survey_hooks['el1_observe_checkpoint']:
             assert m['currentel']==4 and core in self.el1_seen

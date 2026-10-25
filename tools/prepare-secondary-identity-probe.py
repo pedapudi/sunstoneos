@@ -167,8 +167,17 @@ def patch_plan(native,hooks,f):
             # on CPU0. This CPU-only interval must not start that service.
             (native['a733_observe_service_start'],0xa9bf7bfd,0xd65f03c0),
             (native['worker'],0xa9bc7bfd,branch(native['worker'],hooks['identity_first_task_el0'])),
-            first[-1]]
+            first[-1],
+            # The idle loops wait with DSB; WFI. This profile stops the tick
+            # (platform_tick_setup returns at once), so an idle task that
+            # resumed after its yield could wait for an interrupt that never
+            # comes. Each WFI becomes SVC #0x69, the idle yield, so a resumed
+            # idle task yields again until its worker runs.
+            (native['prvIdleTask']+0x1c,0xd503207f,0xd4000d21),
+            (native['prvPassiveIdleTask']+0x10,0xd503207f,0xd4000d21)]
     if f.task_workload:
+        # The workload keeps the tick, the SGIs and the native idle WFI.
+        first=[p for p in first if p[0] not in (native['prvIdleTask']+0x1c,native['prvPassiveIdleTask']+0x10)]
         # Keep the real timer setup and complete worker loop. Its saved
         # x19 still identifies the pinned core at the post-loop branch.
         first=[p for p in first if p[0] not in (native['platform_tick_setup'],native['worker'],
