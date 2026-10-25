@@ -65,6 +65,24 @@ regenerating.
   the same board. CPU-L therefore ran at the same 494 MHz that the bundle 6
   bound assumes.
 
+- **Port 3-3, set `board-bundles-20261024-10`:** two more bundle 6 runs in
+  the same lifetime, both passed with warm returns, and both carrying a window
+  that times each completing poll. Snapshots and `TWI_WRITE` lines match
+  between the runs.
+  - **DSB SY pairs (`s10-bb6-dsb-run`):** median 796.4 µs (1,265 permille);
+    first step 823.6 µs against an 838.8 µs limit.
+  - **Plain S_TWI0 barrier placement (`s10-bb6-light-run`):** median 794.6 µs
+    (1,262 permille); first step 819.3 µs. This qualified the placement for
+    snapshots, and it merged at `7f74583a`. It saves 7.4 µs inside the polls
+    of each step but only 1.9 µs of median, because each phase costs whole
+    microseconds.
+  - **The window's own cost:** about 12 µs per step, which leaves 3 to 6
+    permille of margin. Compile it out of the default bundle 6 image before the
+    next timing run.
+  - **Still to do:** rerun rank 9 on the merged adapter. 110% still needs the
+    S_TWI0 packet engine, plus a cut to the roughly 38 µs of step work outside
+    the polls.
+
 The mimus branch `port/sunstoneos` (`9c57286b7`) was pushed to
 `github.com/pedapudi/mimus` on 2026-10-24 with the user's approval; mimus
 `main` is unchanged.
