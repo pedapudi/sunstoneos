@@ -303,9 +303,11 @@ Power and thermal integration remains incomplete:
   configuration. The
   [finite board profile](designs/npu-board.md#thermal-admission-and-orderly-stop)
   integrates thermal admission and orderly stop; the other NPU images have
-  no thermal-policy callback. Their healthy CLOSE disables local clocks and asserts engine
-  resets while retaining the power-domain and PLL ownership; it does not
-  establish reusable whole-device power recovery.
+  no thermal-policy callback. Their startup routes the shared SRAM to the NPU
+  ([routing design](designs/npu-sram-route.md)). Their healthy CLOSE disables
+  local clocks, asserts engine resets and routes the SRAM back to the CPU
+  while retaining the power-domain and PLL ownership; it does not establish
+  reusable whole-device power recovery.
 
 CPU clock and PMIC voltage board changes still need their existing individual
 approvals. Supervised manual recovery, resident watchdog recovery and physical

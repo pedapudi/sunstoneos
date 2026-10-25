@@ -6,10 +6,10 @@ allowlist adapter run under Unicorn from the register-pass step, with the
 tokens and the supply already admitted. Scheduler state, the current task,
 the counter, the register lock and the domain-4 check, which reads domain 4
 OFF, are modeled; the CCU
-and PCK words are modeled memory. An admitted case reaches the PLL_NPU enable
-table, whose first write is the software gate enable at CCU+0x1920; a refused
-case writes nothing. No LOCK is modeled, so an admitted case then retains
-after its 100 LOCK observations. No physical frequency is claimed.
+and PCK words are modeled memory. An admitted case requests domain 4 ON and
+returns PENDING without a device write, since power precedes every NPU clock
+write; a refused case returns RETAINED and writes nothing. No physical
+frequency is claimed.
 """
 import argparse,hashlib,json,struct,sys
 from pathlib import Path
@@ -18,7 +18,7 @@ from unicorn.arm64_const import *
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'checks'))
 import harness
-LAYOUTS=('a733_npu_startup','a733_npu_startup_config','a733_npu_platform_config','a733_npu_startup_providers',
+LAYOUTS=('a733_npu_startup','a733_npu_startup_config','a733_npu_platform_config','a733_npu_startup_providers','a733_power_domain_row',
     'a733_counter_clock','a733_clock_leases','a733_platform_locks','a733_power_domains','a733_pmic','a733_pmic_config')
 CCU=0x02002000
 CASES=[('26MHz-normalized24',0x10008002,0xf8675f00,0xff126310,True),('24MHz-normalized24',0x10000002,0xf8636300,0xff126310,True),
@@ -45,6 +45,8 @@ def main():
         put(counter+L['a733_counter_clock']['initialized'],1,4);put(clocks+L['a733_clock_leases']['initialized'],1,4)
         put(locks+L['a733_platform_locks']['initialized'],1,4)
         put(domains+L['a733_power_domains']['self'],domains);put(domains+L['a733_power_domains']['pmic'],pmic)
+        # The owner's service wake (ops.notify, the third callback): a hooked function that returns.
+        put(domains+L['a733_power_domains']['ops']+16,e.address('a733_platform_lock_leave'))
         put(pmic+L['a733_pmic']['config']+L['a733_pmic_config']['startup_deadline'],2000000)
         f=cfg+L['a733_npu_startup_config']['fabric']
         for i in range(3):
@@ -55,7 +57,7 @@ def main():
             put(prov+L['a733_npu_startup_providers'][name],value)
         words={0x07090160:osc,CCU:ref,CCU+0xa0:peri0,CCU+0xac:0x30000000,CCU+0x1908:0x8fff0fff,CCU+0x1988:0x0fff0000,
                CCU+0x500:FABRIC[0],CCU+0x580:FABRIC[1],CCU+0x588:FABRIC[2],CCU+0xb04:1<<19,CCU+0xc00:1<<31,CCU+0xc0c:1<<16,
-               CCU+0x2ac:0x30000000,CCU+0x2b0:0x000b0000}
+               CCU+0x2ac:0x30000000,CCU+0x2b0:0x000b0000,0x03000008:2}  # The boot ROM's CPU routing.
         for at,v in words.items():put(at,v,4)
         writes=[];state={'running':False,'time':1000,'done':False}
         u.hook_add(UC_HOOK_MEM_WRITE,lambda c,acc,at,size,v,x:writes.append((at,v)),begin=0x02000000,end=0x08ffffff)
@@ -89,13 +91,14 @@ def main():
             for i,v in enumerate(args):u.reg_write(UC_ARM64_REG_X0+i,v)
             u.emu_start(e.address(name),0,count=20000000);assert state['done'],name;return u.reg_read(UC_ARM64_REG_X0)&0xffffffff
         assert call('a733_npu_startup_init',s,cfg,prov,0,0)==1 and call('a733_npu_startup_bind_task',s,task)==1
-        put(s+L['a733_npu_startup']['stage'],2,4)   # A733_NPU_STARTUP_ENABLE: tokens and supply admitted
+        put(s+L['a733_npu_startup']['stage'],2,4)   # A733_NPU_STARTUP_PASS: tokens and supply admitted
         state['running']=True;writes.clear()
         result=call('a733_npu_startup_step',s)
-        first=writes[0] if writes else None
-        if admitted:assert result==3 and first is not None and first[0]==CCU+0x1920 and first[1]&0x10000,(label,result,first)
-        else:assert result==3 and not writes,(label,result,writes[:3])
-        rows.append(dict(case=label,admitted=admitted,first_write=hex(first[0]) if first else None,writes=len(writes)))
+        stage=get(s+L['a733_npu_startup']['stage'],4);request=get(s+L['a733_npu_startup']['row']+L['a733_power_domain_row']['request'],4)
+        # PENDING (2) at the row stage (3) with the ON request published; RETAINED (3) refuses.
+        if admitted:assert result==2 and stage==3 and request&1 and not writes,(label,result,stage,request,writes[:3])
+        else:assert result==3 and not writes and not request&1,(label,result,writes[:3])
+        rows.append(dict(case=label,admitted=admitted,domain_on_requested=bool(request&1),writes=len(writes)))
     (a.output/'result.json').write_text(json.dumps({'passed':True,'physical_access':False,
         'image_sha256':hashlib.sha256(a.image.read_bytes()).hexdigest(),'cases':rows,'scope':__doc__},indent=2)+'\n')
     print('PASS startup register pass reference cases',len(rows))

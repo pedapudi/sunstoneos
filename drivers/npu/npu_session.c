@@ -250,10 +250,20 @@ int npu_session_prepare(struct npu_sessions *s, const struct npu_session_config 
     return all_intact(s);
 }
 
+/* NPU register access only while the bound startup is READY, which requires
+ * the shared SRAM routed to the NPU; a refusal makes no bus access. */
 static int read_reg(void *cookie, unsigned offset, uint32_t *out)
-{ struct npu_sessions *s = cookie; return good(s) && a733_npu_native_operations.read(&s->native, offset, out); }
+{
+    struct npu_sessions *s = cookie;
+    return good(s) && a733_npu_startup_window_open(s->startup) &&
+        a733_npu_native_operations.read(&s->native, offset, out);
+}
 static int write_reg(void *cookie, unsigned offset, uint32_t value)
-{ struct npu_sessions *s = cookie; return good(s) && a733_npu_native_operations.write(&s->native, offset, value); }
+{
+    struct npu_sessions *s = cookie;
+    return good(s) && a733_npu_startup_window_open(s->startup) &&
+        a733_npu_native_operations.write(&s->native, offset, value);
+}
 static uint64_t now(void *cookie)
 { struct npu_sessions *s = cookie; return a733_npu_native_operations.microseconds(&s->native); }
 static void delay(void *cookie, unsigned us)

@@ -268,17 +268,22 @@ static int maintain(struct npu_runtime *rt, enum aarch64_cache_op op, uintptr_t 
 /* Backend operations installed in the controller. The bootstrap uses the
  * native memory policy once; jobs use G (the T and A checks) before the
  * trigger and invalidate only the output lines after completion. */
+/* NPU register access only while the bound startup is READY, which requires
+ * the shared SRAM routed to the NPU. A refusal makes no bus access; the
+ * controller then faults with an I/O failure and retains its resources. */
 static int read_reg(void *cookie, unsigned offset, uint32_t *out)
 {
     struct npu_runtime *rt = cookie;
     ++rt->counters.register_reads;
-    return good(rt) && a733_npu_native_operations.read(&rt->native, offset, out);
+    return good(rt) && a733_npu_startup_window_open(rt->startup) &&
+        a733_npu_native_operations.read(&rt->native, offset, out);
 }
 static int write_reg(void *cookie, unsigned offset, uint32_t value)
 {
     struct npu_runtime *rt = cookie;
     ++rt->counters.register_writes;
-    return good(rt) && a733_npu_native_operations.write(&rt->native, offset, value);
+    return good(rt) && a733_npu_startup_window_open(rt->startup) &&
+        a733_npu_native_operations.write(&rt->native, offset, value);
 }
 static uint64_t now(void *cookie)
 { struct npu_runtime *rt = cookie; return a733_npu_native_operations.microseconds(&rt->native); }

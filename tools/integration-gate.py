@@ -22,6 +22,8 @@ import shlex
 import subprocess
 import sys
 
+# The NPU catalogue map of the npu variant, relative to the --cache directory.
+NPU_CATALOGUE = 'build/npu-board/session-artifacts.json'
 VARIANTS = {
     'sup': [],
     'res': ['-DSUNSTONE_A733_OS_RESIDENT=ON'],
@@ -33,6 +35,10 @@ VARIANTS = {
     'radio-headset': ['-DSUNSTONE_A733_OS_RADIO=ON', '-DSUNSTONE_A733_OS_HEADSET=ON'],
     'resradio-headset': ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DSUNSTONE_A733_OS_RADIO=ON',
                          '-DSUNSTONE_A733_OS_HEADSET=ON'],
+    # The supervised NPU profile. Its catalogue is a host input, as the mimus
+    # inputs are: the OS build verifies every file it names against
+    # tools/npu-session-models.json. {cache} is the --cache directory.
+    'npu': ['-DSUNSTONE_A733_OS_NPU=ON', '-DSUNSTONE_OS_NPU_CATALOGUE={cache}/' + NPU_CATALOGUE],
 }
 DEPENDENCIES = {'kernel': 'kernel-check', 'soak8': 'smp8-soak-model',
                 'mimus-smp': 'smp-mimus-model'}
@@ -85,7 +91,7 @@ def main(argv=None):
     parser.add_argument('--target', action='append', default=[], help='central CMake target; repeat to add targets')
     parser.add_argument('--variant', choices=VARIANTS, action='append', default=[])
     parser.add_argument('--check', choices=CHECKS, action='append', default=[])
-    parser.add_argument('--full', action='store_true', help='explicit broad integration milestone: all central targets, the nine OS variants and all listed checks')
+    parser.add_argument('--full', action='store_true', help='explicit broad integration milestone: all central targets, the ten OS variants and all listed checks')
     parser.add_argument('--cache', type=Path, default=Path(os.environ.get('SUNSTONE_CACHE', Path.home() / '.cache/sunstoneos')))
     parser.add_argument('--trials', type=int, default=1, help='predeclared soak8 trials, not failure retries (default: 1)')
     parser.add_argument('--allow-dirty', action='store_true', help='build a tree with uncommitted changes; the status and diff hash are recorded')
@@ -106,6 +112,8 @@ def main(argv=None):
         parser.error('source must be a SunstoneOS checkout')
     targets = list(dict.fromkeys(args.target))
     variants = list(VARIANTS) if args.full else list(dict.fromkeys(args.variant))
+    if 'npu' in variants and not (cache / NPU_CATALOGUE).is_file():
+        parser.error('the npu variant needs the NPU catalogue map ' + str(cache / NPU_CATALOGUE))
     checks = list(CHECKS) if args.full else list(dict.fromkeys(args.check))
     for check in checks:
         if check in DEPENDENCIES and DEPENDENCIES[check] not in targets:
@@ -165,6 +173,8 @@ def main(argv=None):
                        str(len(changes.splitlines())) + ' changed paths'))
     if changes:
         (output / 'status.txt').write_text(changes)
+    if 'npu' in variants:
+        note('npu-catalogue-sha256: ' + hashlib.sha256((cache / NPU_CATALOGUE).read_bytes()).hexdigest())
 
     def unchanged(when):
         """The recorded state must be complete and still describe the tree."""
@@ -203,8 +213,9 @@ def main(argv=None):
             return 1
     for variant in variants:
         directory = cache / 'build' / ('gate-os-' + variant + '-' + tree)
+        options = [value.replace('{cache}', str(cache)) for value in VARIANTS[variant]]
         if not run('os-' + variant + '-configure', [cfg, source, directory,
-                   '-DSUNSTONE_MIMUS_BOARD_APPLICATION=ON', '-DSUNSTONE_A733_OS=ON', *VARIANTS[variant]]):
+                   '-DSUNSTONE_MIMUS_BOARD_APPLICATION=ON', '-DSUNSTONE_A733_OS=ON', *options]):
             return 1
         if not run('os-' + variant + '-build', ['cmake', '--build', directory, '--target', 'sunstone-a733-os', '-j', '12']):
             return 1

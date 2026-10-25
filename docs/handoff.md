@@ -105,8 +105,25 @@ further board run of each. Board runs test only predictions from those diffs.
   verified DRAM restoration. The `9e4adabf…` run without the routing step had
   produced wrong, input-independent outputs, so the routing bit is the cause.
   Before the run: IRQ97 captured, DCDC2 enabled at 800 mV (`nr-dcdc2`), fresh
-  cache-off and survey. PLL_NPU, domain 4, DCDC2 and the SRAM stay powered, so
-  another NPU startup needs a power removal.
+  cache-off and survey. PLL_NPU, domain 4, DCDC2 and the SRAM stay powered.
+  **The production NPU startup routes the SRAM** (`work/npu-production-1025`,
+  not merged; [design](designs/npu-sram-route.md)). Every image that links
+  the startup now powers domain 4 before any NPU clock, routes the SRAM while
+  the NPU resets are held, refuses NPU register access outside READY and
+  routes the SRAM back at local stop; the finite image also sets the bit at
+  EL3 before its ROM return. The register pass adopts a PLL_NPU that an
+  earlier start in the same power lifetime left locked, so a second start
+  needs no power removal. Modelled boot to READY is 4.6 ms (was 12.0 ms):
+  the owner verifies DCDC2 at its first step without the 5,160 µs settle, the
+  bootstrap waits on power-service notifications and ends the 2 ms vendor
+  settle exactly, and PLL_NPU starts at once when domain 4 is already ON. An
+  852 MHz profile at the unchanged 800 mV is admitted only for speed bins
+  whose column lists 800 mV, with the vendor's rate-change order
+  ([design](designs/npu-852mhz-plan.md)). The board qualification is the
+  [three-start runbook](board-runbooks/npu-starts.md): one cold port 3-3
+  lifetime, starts at 492 MHz cold, 492 MHz adopted and 852 MHz by rate
+  change, two jobs each, all six outputs predicted to match, startup times
+  of about 4.6, 4.4 and 4.6 ms. No set is frozen.
 - CPU (`work/backsolve-cpu-1025`, `docs/reference-backsolve-cpu.md`): the
   leading divergences are checks that the reference never performs, such as the
   GICR_CTLR status compare (now masked on `bringup`), GICD_CTLR.RWP treated

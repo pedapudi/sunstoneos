@@ -90,10 +90,12 @@ static int check_finish(void *cookie,const struct a733_npu_command *command,int 
 const struct a733_npu_ops __wrap_a733_npu_native_operations={
     check_read,check_write,check_now,check_delay,check_barrier,check_publish,check_finish};
 /* Startup health is a modeled boundary here; checks/npu-startup.c and
- * checks/npu-startup-host.c run the sequencer. */
+ * checks/npu-startup-host.c run the sequencer. A modeled READY opens the
+ * register window, as the sequencer does when it reaches READY. */
 int __wrap_a733_npu_startup_prepared(struct a733_npu_startup *startup)
 {
     configASSERT(startup==&startup_record && xTaskGetCurrentTaskHandle()==check_bootstrap);
+    atomic_store_explicit(&startup_record.window_open,1,memory_order_release);
     ++check_prepared_calls;return 1;
 }
 static struct npu_service_reply check_request(enum npu_service_operation op,const void *input)
@@ -267,5 +269,9 @@ void kernel_main(void)
     check_client=xTaskCreateStaticAffinitySet(check_client_run,"conv-client",4096,NULL,4,check_stacks[1],&check_tasks[1],1);
     startup_record.initialized=1;startup_record.task=check_bootstrap;
     configASSERT(npu_convolution_bind(&convolution,&startup_record,check_client,3,1));
+    /* Before READY the register window is closed: no access reaches the adapter. */
+    uint32_t value=0;
+    configASSERT(!read_reg(&convolution,0x20,&value) && !write_reg(&convolution,0,0x70900) &&
+        !atomic_load(&check_accesses) && !atomic_load(&convolution.failed));
     vTaskStartScheduler();platform_panic("scheduler returned",0);
 }

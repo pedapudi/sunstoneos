@@ -7,6 +7,13 @@ p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--case',action='append',default=[],help='Run only named transfer cases; packaging validation still runs.');p.add_argument('--native',type=Path,required=True);p.add_argument('--evidence',type=Path,required=True);a=p.parse_args();a.evidence.mkdir(parents=True,exist_ok=False)
 r=Path(__file__).resolve().parents[2];spec=importlib.util.spec_from_file_location('host',r/'apps/npu-finite/host.py');h=importlib.util.module_from_spec(spec);spec.loader.exec_module(h)
 def sha(data):return hashlib.sha256(data).hexdigest()
+# Startup entry and READY, then each job's publication and completion, in
+# counter microseconds, as the image logs them; the host's parse of them.
+TIMES=(1000,5628,7000,7900,9000,9850)
+assert h.timing('NPU_TIME_US=\n'+''.join(f'0x{x:016x}\n' for x in TIMES))=={'startup_us':4628,'job_us':[900,850],
+    'entry_us':1000,'ready_us':5628,'jobs_raw_us':[7000,7900,9000,9850],
+    'resolution':'Completion is observed at the service worker\'s next poll, once per 1 ms tick.'}
+assert h.timing('NPU_STAGE=OPEN\n') is None
 def ref(path):return {'path':str(path.resolve()),'sha256':sha(path.read_bytes())}
 results=[]
 with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
@@ -174,6 +181,8 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
    if jobs==0:first=bytes(32);second=bytes(len(reference))
    elif status==1:second=bytes([reference[0]^1])+reference[1:];first=hashlib.sha256(second).digest()
   text='NPU_STAGE=WAIT_STARTUP\nNPU_STAGE=QUIESCENT\nNPU_FIRST_DIGEST=\n'+''.join(f'0x{x:016x}\n' for x in first)+'NPU_SECOND_OUTPUT=\n'+''.join(f'0x{x:016x}\n' for x in second)+(('REFUSED NPU thermal admission; configured sensor disabled and providers parked' if status==2 else 'FAIL NPU numerical comparison' if status else 'PASS NPU two matched jobs, copied output, REAP, CLOSE, local stop and parked providers')+'\n')
+  # The image's startup and job times precede the thermal markers.
+  text=text.replace('NPU_STAGE=WAIT_STARTUP\n','NPU_STAGE=WAIT_STARTUP\nNPU_TIME_US=\n'+''.join(f'0x{x:016x}\n' for x in TIMES),1)
   if thermal:text=text.replace('NPU_STAGE=QUIESCENT',f'NPU_THERMAL_REASON=0x{reason:016x}\nNPU_JOBS=0x{jobs:016x}\nNPU_STAGE=QUIESCENT')
   if checkpoint:
    text='NPU_CHECKPOINT=ENTRY_MEMORY_READY; providers never constructed; jobs=0\n'

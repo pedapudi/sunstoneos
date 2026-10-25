@@ -44,7 +44,16 @@ static int wr(struct a733_power_domains *d,uintptr_t a,uint32_t v)
 static int bits(const struct a733_power_domains *d,uintptr_t a,uint32_t mask,uint32_t expected)
 {uint32_t v;return rd(d,a,&v) && (v&mask)==expected;}
 static void publish(struct a733_power_domain_row *r,unsigned generation,enum a733_power_row_state s)
-{atomic_store_explicit(&r->state,generation<<3|s,memory_order_release);}
+{
+    atomic_store_explicit(&r->state,generation<<3|s,memory_order_release);
+    if(r->wake)r->wake(r->wake_context);
+}
+/* After the authority word changes: every row's consumer may be waiting on it. */
+static void wake_rows(const struct a733_power_domains *d)
+{
+    for(const struct a733_power_domain_row *r=d->rows;r;r=r->next)
+        if(r->wake)r->wake(r->wake_context);
+}
 static unsigned answered(const struct a733_power_domain_row *r)
 {return atomic_load_explicit(&r->state,memory_order_relaxed)>>3;}
 
@@ -170,7 +179,10 @@ static int admit(struct a733_power_domains *d,struct a733_power_domain_row *r,un
     if(d->failed || m->state==A733_POWER_DOMAIN_FAILED){publish(r,g,A733_POWER_ROW_REFUSED);return 0;}
     if(m->state==A733_POWER_DOMAIN_OFF_WAIT)return 1;
     const unsigned w=a733_power_authority_load(word(d));
-    if(!(w&A733_POWER_SUPPLY_DONE))return 0; /* The step waits for verification. */
+    /* The step waits for verification: the done bit, or for a settled supply
+     * the domain's own verified bit, which is published as soon as its rail
+     * is verified. */
+    if(!(w&(A733_POWER_SUPPLY_DONE|f->verified)))return 0;
     const struct a733_rail_token *t=r->rail;
     if((w&(A733_POWER_PMIC_TRANSFER|f->fault)) || !(w&f->verified) || !t || t->owner!=r->owner ||
        !((t->shared|t->exclusive)&A733_RAIL_BIT(f->rail)) || !level(d,f)){publish(r,g,A733_POWER_ROW_REFUSED);return 0;}
@@ -216,7 +228,8 @@ static int release(struct a733_power_domains *d,struct a733_power_domain_row *r,
 }
 
 /* Supply verification once per boot: snapshots of DCDC2 and DCDC4. It may
- * start A733_POWER_SUPPLY_SETTLE_US after the service's first step, and its
+ * start A733_POWER_SUPPLY_SETTLE_US after the service's first step, or at
+ * that step for a settled supply, and its
  * A733_POWER_SUPPLY_BUDGET_US starts when it may start and the provider is
  * READY; before READY the provider's startup deadline bounds it. Any failure
  * sets the done bit with no verified bit at once, so waiting rows are
@@ -229,6 +242,7 @@ enum { V_TOKEN, V_SUBMIT2, V_RESULT2, V_SUBMIT4, V_RESULT4, V_RELEASE, V_DONE, V
 static void verified(struct a733_power_domains *d,unsigned ok)
 {
     a733_power_authority_set(word(d),A733_POWER_SUPPLY_DONE|(ok ? d->supply_verified : 0));
+    wake_rows(d);
     d->supply_stage=ok ? V_RELEASE : d->supply_request.id ? V_REAP : d->supply_stage>V_TOKEN ? V_RELEASE : V_DONE;
 }
 static int correct(const struct a733_pmic_snapshot *s,enum a733_rail rail)
@@ -283,6 +297,12 @@ static int verify(struct a733_power_domains *d,uint64_t now)
         if(correct(&s,rail)) {
             if(rail4)d->dcdc4=s;
             d->supply_verified|=rail4 ? A733_POWER_DCDC4_VERIFIED : A733_POWER_DCDC2_VERIFIED;
+            /* A settled supply publishes each verified rail at once, so its
+             * consumers need not wait for the other rail's snapshot. */
+            if(d->settled_supply) {
+                a733_power_authority_set(word(d),rail4 ? A733_POWER_DCDC4_VERIFIED : A733_POWER_DCDC2_VERIFIED);
+                wake_rows(d);
+            }
         }
         r=a733_pmic_reap(p,&d->supply_request);
         if(r==A733_PMIC_BUSY)return 1;
@@ -332,7 +352,8 @@ uint32_t a733_power_service_step(struct a733_power_domains *d)
     if(!d->running) {
         /* An image with no row needs no supply record and makes no bus read. */
         d->running=1;
-        if(!d->rows || !a733_deadline_after(now,A733_POWER_SUPPLY_SETTLE_US,&d->verify_at))verified(d,0);
+        if(!d->rows || !a733_deadline_after(now,d->settled_supply ? 0 : A733_POWER_SUPPLY_SETTLE_US,
+           &d->verify_at))verified(d,0);
     }
     const uint64_t start=now;
     int tick=0;
@@ -382,6 +403,11 @@ int a733_power_domains_init(struct a733_power_domains *d,struct a733_pmic *p,
     for(unsigned i=0;i<A733_POWER_DOMAINS;++i)d->domain[i].id=profiles[i].id;
     if(!a733_pmic_bind_service(p,ops.notify,context,d))return 0;
     d->self=d;return 1;
+}
+int a733_power_domains_settled_supply(struct a733_power_domains *d)
+{
+    if(!d || d->self!=d || d->running)return 0;
+    d->settled_supply=1;return 1;
 }
 int a733_power_service_idle(const struct a733_power_domains *d)
 {

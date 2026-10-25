@@ -62,6 +62,10 @@ static void client(void *unused)
     struct npu_convolution *c=a733_npu_application_client();
     if(!c)retained(10);
 #ifdef SUNSTONE_NPU_FINITE_RETURN
+    /* Each job's publication and completion observation, counter microseconds. */
+    uint64_t job_us[4]={0};
+#endif
+#ifdef SUNSTONE_NPU_FINITE_RETURN
     platform_puts("NPU_STAGE=OPEN\n");
 #endif
     struct npu_service_reply reply=request(c,NPU_SERVICE_OPEN,NULL,0,1000000);
@@ -90,6 +94,9 @@ static void client(void *unused)
     }
     if(reply.job_ticket!=job || !npu_convolution_output(c,a733_npu_application_result.output,
         a733_npu_application_reference_bytes))retained(14);
+#ifdef SUNSTONE_NPU_FINITE_RETURN
+    job_us[2*iteration]=c->job_published_us;job_us[2*iteration+1]=c->job_finished_us;
+#endif
     for(unsigned i=0;i<a733_npu_application_reference_bytes;++i)
         mismatch|=a733_npu_application_result.output[i]^a733_npu_application_reference[i];
     reply=request(c,NPU_SERVICE_REAP,NULL,0,0);
@@ -109,6 +116,12 @@ static void client(void *unused)
 #ifdef SUNSTONE_NPU_FINITE_THERMAL
     a733_npu_application_thermal_close();
 #endif
+    /* Startup entry and READY, then each job's publication and completion
+     * observation, in counter microseconds. */
+    const struct a733_npu_startup *startup=c->startup;
+    platform_puts("NPU_TIME_US=\n");platform_hex(startup ? startup->entry_us : 0);platform_puts("\n");
+    platform_hex(startup ? startup->ready_us : 0);platform_puts("\n");
+    for(unsigned i=0;i<4;++i){platform_hex(job_us[i]);platform_puts("\n");}
     platform_puts("NPU_STAGE=CLOSE\n");
     reply=request(c,NPU_SERVICE_CLOSE,NULL,0,0);
     platform_puts("NPU_STAGE=WAIT_LOCAL_STOP\n");

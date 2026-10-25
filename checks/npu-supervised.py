@@ -10,6 +10,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import re
 import shlex
 import shutil
 import struct
@@ -86,6 +87,13 @@ def build(args,out):
     save(out/'image-manifest.json',{'target':'a733-npu-convolution-supervised','protocol_version':1,'final_elf':sha(image),
         'physical_access':False,'external_session_required':True})
     return image
+
+def stages():
+    """The startup stage numbers by name, from include/a733_npu_startup.h."""
+    text=(ROOT/'include/a733_npu_startup.h').read_text()
+    body=re.search(r'enum \{ (A733_NPU_STARTUP_TOKENS[^}]*)\}',text).group(1)
+    return {name.strip():i for i,name in enumerate(body.split(',')) if name.strip()}
+
 
 def execute(image,out,selected_case=None):
     model=module('cached_model',ROOT/'checks/a733-smp-cached.py')
@@ -273,6 +281,8 @@ def execute(image,out,selected_case=None):
             0x02003908:0x0e060e06,0x02003988:0x0e060000,
             0x020022a0:0x40104500,0x020022a4:0,0x020022a8:0,0x020022ac:0x30000000,
             0x020022b0:0xb0000,0x02003920:0,0x020039a0:0,
+            # SYSCTRL shared SRAM routing: bit 1 set, the boot ROM's CPU routing.
+            0x03000008:2,
             0x0701000c:0,0x07010010:0,0x0701019c:0x10001,0x07025000:0x22,0x07025014:0,0x07025024:0,0x07025210:0,
             0x03400000:0,0x0340011c:0,0x0340021c:0,0x0340031c:0,
             0x708300c:0x40,0x7083010:0xf8,0x7083020:0x30,0x7083018:0,0x708301c:0,
@@ -288,7 +298,7 @@ def execute(image,out,selected_case=None):
         word(sym['pxCurrentTCBs'],bootstrap);cpu();u.reg_write(model.UC_ARM64_REG_X0,address)
         entry=sym['bootstrap'];polls=0
         while polls<320:
-            pc=run(entry,{sym['vTaskDelay'],sym['vTaskSuspend']});polls+=1
+            pc=run(entry,{sym['vTaskDelay'],sym['vTaskSuspend'],sym['ulTaskGenericNotifyTake']});polls+=1
             if pc==sym['vTaskSuspend']:break
             # One power-service step as the PMIC task between bootstrap polls.
             context=u.context_save();registers=dict(m.regs[0]);word(sym['pxCurrentTCBs'],pmic_task)
@@ -302,27 +312,42 @@ def execute(image,out,selected_case=None):
         assert not [x for x in m.writes if x[0] in (0x02002c00,0x02002c0c)], 'DRAM clocks must remain untouched'
         assert all(value&(1<<19) for address_,value in m.writes if address_==0x02002b04), 'SRAM reset changed'
         assert pc==sym['vTaskSuspend']
-        if mode=='ready':
-            assert v(stage)==7 and not v(failed)
+        stage_of=stages()
+        if mode in ('ready','domain-on'):
+            assert v(stage)==stage_of['A733_NPU_STARTUP_READY'] and not v(failed)
+            assert m.mmio[0x03000008]==0,'The shared SRAM is routed to the NPU at READY'
+
             assert v(address+app['ready'])==1 and v(address+app['worker_admitted'])==1
             assert not v(sym['a733_npu_application_failed'])
             assert m.mmio[0x020022a0]==0xf8305100 and m.mmio[0x02002b04]&0xf0001==0xf0001 and m.mmio[0x02002b00]&0x8700001f==1<<31
             assert m.mmio[0x07064000]&15==8 and m.mmio[0x07064008]&15==8
-            assert ppu_writes and all(0x07064000<=x[0]<0x07065000 for x in ppu_writes),ppu_writes
+            if mode=='ready':
+                # Domain 4 commanded ON before the first NPU clock write.
+                assert ppu_writes and all(0x07064000<=x[0]<0x07065000 for x in ppu_writes),ppu_writes
+                assert m.writes.index(ppu_writes[0])<m.writes.index(npu_writes[0]),(ppu_writes,npu_writes)
+            else:
+                # An inherited ON domain is adopted without a PCK600 write.
+                assert not ppu_writes,ppu_writes
             token=startup+off('a733_npu_startup','clock')
             assert call('a733_clock_token_status',registry,token)==0
         else:
-            # Wrong DCDC2 stops at the supply wait; domain 4 ON and a missing LOCK at enable.
-            assert v(stage)==(1 if mode=='wrong-rail' else 2),(mode,v(stage))
+            # Wrong DCDC2 stops at the supply wait, and a missing LOCK at
+            # enable, after domain 4 is powered.
+            expected={'wrong-rail':'A733_NPU_STARTUP_SUPPLY','lock-timeout':'A733_NPU_STARTUP_ENABLE'}[mode]
+            assert v(stage)==stage_of[expected],(mode,v(stage))
             assert v(failed) and v(sym['a733_npu_application_failed']) and not v(address+app['ready'])
             if mode=='lock-timeout':
-                # The enable table ran; the output gate and the domain stayed closed.
-                assert npu_writes and not m.mmio[0x020022a0]&(1<<27) and not ppu_writes
+                # Domain 4 was commanded ON before the enable table ran; the
+                # output gate stayed closed and the SRAM stayed with the CPU.
+                assert npu_writes and not m.mmio[0x020022a0]&(1<<27) and ppu_writes
+                assert m.writes.index(ppu_writes[0])<m.writes.index(npu_writes[0]),(ppu_writes,npu_writes)
+                assert m.mmio[0x03000008]==2
             else:
                 # Refused before the first NPU write.
                 assert not npu_writes and not ppu_writes,(npu_writes,ppu_writes)
         results[mode]={'bootstrap_polls':polls,'stage':v(stage),'npu_writes':len(npu_writes),'ppu_writes':len(ppu_writes),
-            'rail_identity':q(startup+off('a733_npu_startup','rail')+off('a733_rail_token','id')),'retained':mode!='ready'}
+            'rail_identity':q(startup+off('a733_npu_startup','rail')+off('a733_rail_token','id')),
+            'retained':mode not in ('ready','domain-on')}
         save(out/('case-'+mode+'.json'),{'image_sha256':sha(image),'runner_sha256':sha(Path(__file__)),
             'model_sha256':sha(Path(model.__file__)),'result':results[mode]})
     save(out/'session-layout.json',{'exported':list(exported),

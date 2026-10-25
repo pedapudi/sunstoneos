@@ -2,8 +2,9 @@
 
 The [startup sequencer](../drivers/npu/a733_npu_startup.c) holds the PLL_NPU
 method-2 enable table and its predicates over the control word as statics. It
-runs the table under the register lock, samples LOCK, and opens the output
-gate in its local open table ([npu-platform.md](npu-platform.md)). Physical PLL qualification is outstanding.
+runs the table under the register lock after domain 4 is ON, samples LOCK,
+and opens the output gate at the start of its open stage
+([npu-platform.md](npu-platform.md)). Physical PLL qualification is outstanding.
 
 The initial NPU operating point is 492 MHz at 800 mV. That voltage belongs to
 the NPU domain's DCDC2 supply, which the [power-domain owner](power-domains.md)
@@ -68,11 +69,61 @@ readback ignores it. The output gate (bit 27) stays closed.
 After the register lock is released, the sequencer reads the control word at
 least 3 µs apart until three consecutive reads show LOCK, at most 100 times,
 then waits 20 µs. Only the PLL_NPU token's holder writes this word, so the
-sampling needs no lock. The local open table requires the control word
-`0xe0305100` with LOCK and the captured bit 24 set as applicable. The local
-open table then opens the output gate. The final readback requires
-`0xe8305100` with those same bits. A LOCK that never
-appears leaves the PLL enabled with its output closed and retains every token.
+sampling needs no lock. The open stage requires the control word
+`0xe0305100` with LOCK and the captured bit 24 set as applicable, then opens
+the output gate. The final readback requires `0xe8305100` with those same
+bits. A LOCK that never appears leaves the PLL enabled with its output closed
+and retains every token.
+
+## Adopting a running PLL
+
+Local stop leaves PLL_NPU enabled and locked with its output gate open. A
+later image in the same power lifetime therefore finds `0xf8305100`, with the
+captured bit 24 as applicable, and the gate controls at `+0x1920` and
+`+0x19a0` set. The register pass adopts exactly that state and no other
+enabled state. The sequencer then writes neither the PLL nor its gate
+controls: it reads the control word once more under the register lock,
+samples LOCK three times as above, and leaves the output gate as it is. The
+board kernel's PLL enable helper also returns without a write when the
+enable, LDO and output gate bits are already set (`ccu_gate.c:171-174`).
+Other factors, a closed output gate, a clear gate-control bit or a missing
+LOCK refuse before any write; the pinned profile has no rate-change step.
+
+## Two profiles and the rate change
+
+`a733_npu_startup_rate` selects one of two profiles before the scheduler.
+Both come from the 24 MHz reference, inside the board source's N range of
+53–105, and both run at the inherited 800 mV:
+
+| Rate | N | P0 | Oscillator | Factor field |
+| --- | --- | --- | --- | --- |
+| 492 MHz (default) | 82 | 4 | 1,968 MHz | `0x00305100` |
+| 852 MHz | 71 | 2 | 1,704 MHz | `0x00104600` |
+
+The 852 MHz profile is admitted only for a speed bin whose column lists
+800 mV for it. The register pass reads SID word `0x0300624c`: the code is
+bits 23:16 (`dvfs_bak`) when nonzero, else bits 15:8 (`dvfs_ori`), and
+`vf_mapping_table` maps it to a column (`sun60iw2p1-cpu-vf.dtsi` lines 3–17).
+The 852 MHz row (lines 2069–2091) lists 800 mV in both oscillator columns of
+vf0200, vf0201, vf0400, vf0500 and vf0501, codes `0x02`, `0x12`, `0x04`,
+`0x05` and `0x15`. Every other code refuses before any write: an
+unprogrammed 0, a code without a column in the NPU table (vf0100, vf0101,
+vf0300, vf0600), and vf0401, which lists 820 mV. Port 3-3 reads `0x496`,
+code 4, column vf0400.
+
+A PLL that an earlier start left locked at the other profile, with its
+output gate open and its gate controls set, is retuned in the order of the
+board kernel's `ccu_nm_set_rate` with `CONFIG_AW_STANDARD_CCU`, which both
+shipped board kernel configurations set (`ccu_nm.c` lines 250–344):
+
+1. output gate off (line 264);
+2. the N and output-divider factors in one write (314);
+3. lock enable cleared, then set (329–334);
+4. LOCK, three consecutive observations (339);
+5. output gate on, at the start of the open stage (342).
+
+Each write is read back. The rate changes only while the NPU module gate is
+closed and the NPU's resets are asserted, which the register pass requires.
 
 ## Enabling the PLL while DRAM runs
 
@@ -104,7 +155,8 @@ rules:
 
 - LOCK is never written;
 - the PLL and its LDO are never disabled;
-- the factors change only to `0x00305100`, and only with the output closed;
+- the factors change only to `0x00305100` or `0x00104600`, and only with the
+  output closed;
 - the output opens only with the PLL, LDO, lock enable and LOCK set;
 - the two gate-control bits never clear.
 
@@ -114,14 +166,16 @@ the clock token remains the authority.
 ## Checks
 
 `checks/npu-startup-host.c` runs the table through the sequencer, including a
-PLL that never locks. `checks/npu-stop-native.py` exercises the adapter's PLL
+PLL that never locks; its `--second-start` cases adopt the stopped PLL with
+bit 24 clear and set and refuse the other enabled states. `checks/npu-stop-native.py` exercises the adapter's PLL
 rules in the linked images, and `checks/npu-application-clock-reference.py`
-shows that an admitted reference case writes the gate enable at
-`CCU+0x1920` first.
+shows that an admitted reference case requests domain 4 ON and makes no
+device write before the domain is ON.
 
 The sanitizer check `checks/npu-startup-host.c --inherited-pll` covers the
 observed disabled word `0x41104500` and the equal-LDO word `0x40104500`.
-Both use 11 writes, 24 counter reads and three register-lock acquisitions.
+Both use 12 writes, one of them to the routing word, 25 counter reads and
+four register-lock acquisitions.
 The captured field adds 16 bytes to the native startup structure, including
 alignment padding, and 60 bytes to the compiled startup functions.
 It also covers both drift directions at six existing validation boundaries and

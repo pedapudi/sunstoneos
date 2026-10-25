@@ -1325,6 +1325,7 @@
  "accelerator-shared-owner.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/npu-sram-route.md",
    "docs/power-domains.md"
   ],
   "library": false,
@@ -2036,7 +2037,6 @@
    "docs/designs/board-bundles-measurements.md",
    "docs/designs/board-bundles-next.md",
    "docs/designs/board-bundles.md",
-   "docs/designs/npu-sram-route.md",
    "docs/reference-backsolve-npu.md",
    "docs/vendor-firmware/action-plan.md"
   ],
@@ -6745,6 +6745,7 @@
    "docs/designs/npu-board-measurements.md",
    "docs/designs/npu-board.md",
    "docs/designs/npu-platform-measurements.md",
+   "docs/designs/npu-sram-route.md",
    "docs/npu-application.md",
    "docs/npu-platform.md",
    "docs/npu-pll.md",
@@ -7262,6 +7263,7 @@
    "docs/designs/npu-board-measurements.md",
    "docs/designs/npu-board.md",
    "docs/designs/npu-platform-measurements.md",
+   "docs/designs/npu-sram-route.md",
    "docs/npu-platform.md",
    "docs/npu-pll.md",
    "docs/npu-startup.md"
@@ -7272,7 +7274,7 @@
    "--elf",
    "--evidence"
   ],
-  "summary": "The linked NPU allowlist adapter: local stop writes, PLL rules and PCK600 refusals, with modeled MMIO.",
+  "summary": "The linked NPU allowlist adapter: local stop writes, PLL rules, the shared SRAM routing bit and PCK600 refusals, with modeled MMIO.",
   "usb": false
  },
  "npu-supervised-host.py": {
@@ -7499,6 +7501,7 @@
  "os-npu.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/npu-sram-route.md",
    "docs/handoff.md",
    "docs/os-image.md"
   ],

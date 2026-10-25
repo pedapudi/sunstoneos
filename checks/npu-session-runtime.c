@@ -380,6 +380,8 @@ void __wrap_npu_service_release(struct npu_service *s, unsigned client, enum npu
 int a733_npu_startup_prepared(struct a733_npu_startup *s)
 {
     configASSERT(s == &startup);
+    /* READY opens the register window, as the sequencer does. */
+    atomic_store_explicit(&startup.window_open, 1, memory_order_release);
     return 1;
 }
 enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
@@ -391,6 +393,7 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
 enum a733_npu_platform_result a733_npu_startup_stop(struct a733_npu_startup *s)
 {
     configASSERT(s == &startup && rt.service.controller.state == A733_NPU_CLOSED);
+    atomic_store_explicit(&startup.window_open, 0, memory_order_release);
     ++stops;
     return A733_NPU_PLATFORM_READY;
 }
@@ -1141,6 +1144,12 @@ void kernel_main(void)
     configASSERT(!npu_runtime_bind_irq(&rt, &irq_ops, &rt, 1, 1));
     configASSERT(npu_runtime_bind(&rt, &startup, clients, 4, 1));
     configASSERT(rt.service.runtime && !npu_runtime_bind(&rt, &startup, clients, 4, 1));
+    /* Before READY the startup's register window is closed: the backend's
+     * register callbacks refuse without reaching the register model. */
+    uint32_t closed_value = 0;
+    configASSERT(!rt.service.ops.read(rt.service.cookie, 0x20, &closed_value) &&
+                 !rt.service.ops.write(rt.service.cookie, 0, 0x70900) &&
+                 !__atomic_load_n(&model.accesses, __ATOMIC_ACQUIRE));
     configASSERT(npu_runtime_bind_irq(&rt, &irq_ops, &rt, 1, 1));
 #ifdef NPU_BOARD_CLIENT_CHECK
     board_client = (struct npu_board_client){.rt = &rt, .slot = 3, .job_timeout_us = 1000000,

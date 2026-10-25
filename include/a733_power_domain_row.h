@@ -36,6 +36,11 @@ struct a733_power_domain_row {
     unsigned counted; /* service task only: admitted, its rail pin held */
     atomic_uint request;
     atomic_uint state;
+    /* Optional consumer wake, set by the consumer before the service first
+     * runs: the service calls it after publishing an answer to this row and
+     * after publishing the supply-verification result. */
+    void (*wake)(void *);
+    void *wake_context;
 };
 
 /* a733_power_domain_row_init() in a733_power_domains.h registers a row. */

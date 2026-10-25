@@ -23,7 +23,8 @@ The pinned kernel and the A733 User Manual define these resources:
 | NPU module | CCU `0x02002000 + 0xb00`; divider bits 0–4, selector bits 24–26, gate bit 31 | Sequencer: requires the gate closed; the open table selects PLL_NPU at divider 1 and opens the gate |
 | NPU bus and resets | CCU `+0xb04`; bus gate bit 0, core reset bit 16, AXI reset bit 17, AHB reset bit 18 | Sequencer: requires gated and reset-asserted; releases AHB, AXI and core, then enables the bus |
 | NPU SRAM reset | CCU `+0xb04` bit 19 | Requires released; never written |
-| PLL_NPU | CCU `+0x2a0`, gate control `+0x1920`, gate status `+0x19a0` | Sequencer: requires disabled, enables it by method 2 ([npu-pll.md](npu-pll.md)) |
+| PLL_NPU | CCU `+0x2a0`, gate control `+0x1920`, gate status `+0x19a0` | Sequencer: requires disabled and enables it by method 2, or adopts it as an earlier start left it ([npu-pll.md](npu-pll.md)) |
+| Shared SRAM routing | SYSCTRL `0x03000008` bit 1 | Sequencer: requires set (routed to the CPU), clears it while the NPU resets are asserted and sets it again at local stop ([routing design](designs/npu-sram-route.md)) |
 | NPU clock-management mode | CCU `+0x1b1c` bit 0 | Requires disabled |
 | PCK clock | R_CCU `0x07010000 + 0x1ac` bit 0 | The image's GPU/PCK manager; the sequencer holds a stable lease |
 | NPU power domain | PCK `0x07060000 + 0x4000` | [Power-domain owner](power-domains.md): the sequencer requests ON through its row and reads policy and status |
@@ -58,28 +59,35 @@ The sequencer's apply helper reads each word, skips a field that already
 holds its value, writes the new word and reads it back; consecutive entries on
 one word reuse the value last read. It stops at the first entry that fails.
 
-The open table runs after PLL_NPU locks. It follows the clock-before-power
-order of the pinned VIPLite `vip_drv_device_platform.c` (lines 419–428):
+The open stage runs after domain 4 is ON and PLL_NPU has locked:
 
 1. PLL_NPU output gate (`+0x2a0` bit 27), with LOCK as status;
-2. AHB reset released (`+0xb04` bit 18);
-3. AXI reset released (bit 17);
-4. core reset released (bit 16);
-5. module selector PLL_NPU and divider 1 (`+0xb00` bits 24–26 and 0–4);
-6. bus gate (`+0xb04` bit 0);
-7. module gate (`+0xb00` bit 31).
+2. the shared SRAM routed to the NPU: SYSCTRL `0x03000008` bit 1 cleared and
+   read back, while the resets are still asserted;
+3. AHB reset released (`+0xb04` bit 18);
+4. AXI reset released (bit 17);
+5. core reset released (bit 16);
+6. module selector PLL_NPU and divider 1 (`+0xb00` bits 24–26 and 0–4);
+7. bus gate (`+0xb04` bit 0);
+8. module gate (`+0xb00` bit 31).
+
+Steps 3 to 8 are the local open table, in the order of `npu_clk_init` in the
+pinned VIPLite `vip_drv_device_platform.c` (lines 265–359). Domain 4 is ON
+before step 1, as the board's vendor kernel powers it before its probe.
 
 The stop table follows `npu_clk_uninit` in the pinned VIPLite platform:
 module gate off, bus gate off, then the AHB, AXI and core resets asserted.
-PLL_NPU, the SRAM reset and domain 4 stay as they are.
+The sequencer then routes the shared SRAM back to the CPU. PLL_NPU, the SRAM
+reset and domain 4 stay as they are.
 
 ## Native register adapter
 
 The [native adapter](../drivers/npu/a733_npu_platform_native.c) is the only
 register path of the sequencer. It reads the reference and PERI0 words, the
 fabric words, the PLL_NPU consumers, the NPU module and bus words, the
-PLL_NPU words, the clock-management modes, and domain-4 policy and status
-(`PCK+0x0`, `PCK+0x8`). It writes four words, each under field rules:
+PLL_NPU words, the clock-management modes, domain-4 policy and status
+(`PCK+0x0`, `PCK+0x8`) and the shared SRAM routing word. It writes five
+words, each under field rules:
 
 - `+0xb00`: only the selector, divider and gate; selector PLL_NPU; divider 1,
   2 or 4; the gate may close without other changes;
@@ -87,7 +95,10 @@ PLL_NPU words, the clock-management modes, and domain-4 policy and status
 - `+0x1920`: only the software enable and No-Auto bits, which never clear;
 - `+0x2a0`: never LOCK, never disables the PLL or its LDO, changes factors
   only to `0x00305100` with the output closed, and opens the output only with
-  the PLL, LDO, lock enable and LOCK set.
+  the PLL, LDO, lock enable and LOCK set;
+- SYSCTRL `0x03000008`: only bit 1, and only while `+0xb04` holds the AHB,
+  AXI and core resets asserted and the bus gate closed, and the module gate
+  at `+0xb00` is closed.
 
 Every PCK600 write is refused. The caller holds the register lock for every
 write. Device mappings and EL1 access to the CCU are prerequisites of the
@@ -97,7 +108,11 @@ independent watchdog covers that failure.
 ## Shared SRAM
 
 The manual maps shared SRAM at CPU addresses `0x00074000`–`0x000f3fff` and
-requires the NPU power domain to stay on while that SRAM is in use. Startup
+requires the NPU power domain to stay on while that SRAM is in use. Bit 1 of
+SYSCTRL `0x03000008` routes it to the CPU (set, as the boot ROM leaves it) or
+to the NPU (clear). With the CPU routing the board's NPU produced wrong
+outputs; with the NPU routing they matched the reference
+([routing design](designs/npu-sram-route.md#problem-and-reference)). Startup
 evidence must therefore exclude inherited CPU and DMA users of this memory,
 and later allocations must keep the domain on for their lifetime.
 

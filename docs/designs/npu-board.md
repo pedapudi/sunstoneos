@@ -494,11 +494,11 @@ Two of the checks failed on the base for reasons outside the record change:
 
 | Metric | Baseline | Target | Measured by |
 | --- | --- | --- | --- |
-| Boot to READY, board image, scheduler start to READY, PMIC at 400 kHz | No board image | ≤ 12 ticks: supply verification ends 8.4 ms after the service's first step, so the done bit is seen at tick 8 or 9; that call runs the pass, the enable table, LOCK, the local open table and the row request; the next call sees ON and samples the counter; the 2 ms settle ends two ticks later | `checks/npu-startup-host.c`, with the actual PMIC provider, ledger and owner |
-| Startup calls that advance a stage | 9 harness polls (3 local, 6 PLL); 8–9 calls in `checks/npu-startup.c` | 4: tokens; supply done through the row request; row ON and the settle sample; settle end and the final readback | Same |
-| Startup register reads, cold method-2 path, LOCK reads excluded, counting the owner's domain-check reads | 90 (51 local, 39 PLL) | ≤ 60 | Same; the model counts the sequencer's reads and the owner's in their callbacks |
-| Startup register writes | 18, of which 6 to PCK600 | ≤ 12, none to PCK600 | Same |
-| Register-lock acquisitions in startup | 7 (2 local, 5 PLL) | 3 | Same |
+| Boot to READY, board image, scheduler start to READY, PMIC at 400 kHz | No board image | ≤ 5 ms: the owner verifies DCDC2 at its first step, with no settle, and publishes it before DCDC4; the call it wakes runs the pass and the domain-4 request; the call that the row's ON answer wakes runs the enable table, LOCK and the local open table; the 2 ms settle ends exactly in that call or the next | `checks/npu-startup-host.c`, with the actual PMIC provider, ledger and owner |
+| Startup calls | 9 harness polls (3 local, 6 PLL); 8–9 calls in `checks/npu-startup.c` | 4, each advancing a stage: tokens through the domain-4 request; row ON through the local open table and the settle sample; the settle end and the final readback | Same |
+| Startup register reads, cold method-2 path, LOCK reads excluded, counting the owner's domain-check reads | 90 (51 local, 39 PLL) | ≤ 61, of which 4 read the shared SRAM routing word | Same; the model counts the sequencer's reads and the owner's in their callbacks |
+| Startup register writes | 18, of which 6 to PCK600 | ≤ 13, of which one to the routing word; none to PCK600 | Same |
+| Register-lock acquisitions in startup | 7 (2 local, 5 PLL) | 4: the pass, the enable table, the open table and the final readback, because the domain-4 wait separates the pass from the first write | Same |
 | Counter reads in startup | 31, with 3 LOCK samples | ≤ 16 in the calls that advance; one in each PENDING call | Same; LOCK spacing reads the raw counter |
 | PMIC traffic in startup | 12 register reads, 6 bus-state reads, 5,160 µs wait | None | Same; the owner's once-per-boot verification is counted in docs/power-domains.md |
 | Bytes hashed by startup polls, accelerator image | 20.7 MB (11 calls × 1,881,936) | 0 | Disassembly of the linked image: no digest call reachable from the startup poll |

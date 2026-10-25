@@ -354,7 +354,9 @@ static void bootstrap(void *argument)
             }
             if(a!=NPU_SERVICE_BUSY)break;
         }
-        vTaskDelay(1);
+        /* A PENDING startup blocks until its power-service notification, its
+         * deadline or the last tick of its settle. */
+        (void)ulTaskNotifyTake(pdTRUE,r==A733_NPU_PLATFORM_PENDING ? a733_npu_startup_wait_ticks(&app.startup) : 1);
     }
     a733_npu_application_fail(4);vTaskSuspend(NULL);fatal(NULL);
 }
@@ -396,7 +398,9 @@ static void bootstrap(void *argument)
             }
             if(a!=NPU_SERVICE_BUSY)break;
         }
-        vTaskDelay(1);
+        /* A PENDING startup blocks until its power-service notification, its
+         * deadline or the last tick of its settle. */
+        (void)ulTaskNotifyTake(pdTRUE,r==A733_NPU_PLATFORM_PENDING ? a733_npu_startup_wait_ticks(&app.startup) : 1);
     }
     a733_npu_application_fail(4);vTaskSuspend(NULL);fatal(NULL);
 }
@@ -565,6 +569,11 @@ int a733_npu_application_init(TaskHandle_t client)
     const struct a733_npu_startup_providers providers={&app.clock,&app.registry,&app.locks,
         &app.gpu,&app.rails,&app.domains};
     if(!a733_npu_startup_init(&app.startup,&startup,&providers,NULL,NULL) ||
+#ifdef SUNSTONE_NPU_RATE_852
+       /* The 852 MHz profile, admitted by the register pass only for a speed
+        * bin that lists 800 mV for it. */
+       !a733_npu_startup_rate(&app.startup,852) ||
+#endif
        !a733_npu_startup_bind_task(&app.startup,app.bootstrap_task) ||
        !npu_convolution_bind(&app.reserved.convolution,&app.startup,client,4,
 #ifdef SUNSTONE_NPU_SINGLE_CORE

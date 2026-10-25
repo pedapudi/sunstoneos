@@ -12,8 +12,10 @@ p.add_argument('--baseline',type=Path,default=Path.home()/'.cache/sunstoneos/evi
 p.add_argument('--entry-checkpoint',action='store_true',help='return before any provider construction')
 p.add_argument('--thermal',action='store_true',help='poll THS before and during finite execution')
 p.add_argument('--interrupt',action='store_true',help='build the interrupt-driven variant')
+p.add_argument('--rate-852',action='store_true',help='PLL_NPU at 852 MHz, admitted only for a speed bin that lists 800 mV for it')
 a=p.parse_args()
 if sum((a.interrupt,a.entry_checkpoint,a.thermal))>1:p.error('Checkpoint, interrupt and thermal profiles are separate')
+if a.rate_852 and a.entry_checkpoint:p.error('The entry checkpoint starts no NPU; it has no rate')
 root=Path(__file__).resolve().parents[2];e=a.evidence.resolve();base=a.baseline.resolve();e.mkdir(parents=True,exist_ok=True)
 def sha(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
 def save(name,value):(e/name).write_text(json.dumps(value,indent=2)+'\n')
@@ -41,6 +43,12 @@ platform=e/'platform.c';text=(e/'native/npu-single-core/platform.c').read_text()
 platform.write_text(text.replace('_Noreturn void platform_exit(','_Noreturn void npu_finite_legacy_exit('))
 platform_obj=compile_like('/npu-single-core/platform.c',platform,'platform')
 ret=compile_like('/apps/npu-convolution/native.c',root/'apps/npu-finite/return.c','return')
+# The 852 MHz profile recompiles only the application's native unit with its selection.
+native=None
+if a.rate_852:
+ entry=next(x for x in entries if x['file'].endswith('/apps/npu-convolution/native.c'));c=shlex.split(entry['command'])
+ native=obj/'native-852.obj';c[c.index('-o')+1]=str(native);c+=['-DSUNSTONE_NPU_RATE_852=1','-MD','-MF',str(native)+'.d']
+ commands.append(c);run('native-852',c,cwd=entry['directory'])
 assembly=compile_like('/arch/aarch64/cache.S',root/'apps/npu-finite/return.S','return-assembly')
 checkpoint=compile_like('/apps/npu-convolution/native.c',root/'apps/npu-finite/checkpoint.c','checkpoint') if a.entry_checkpoint else None
 # Bind the new monitor/cleanup/return sources into the existing authenticated
@@ -53,6 +61,8 @@ if a.interrupt:
 if a.thermal:
  identity['profile']='npu-finite-thermal-return-v1'
  identity['thermal_sources']={str(x.relative_to(root)):sha(x) for x in (root/'apps/npu-finite/thermal.c',root/'apps/npu-finite/thermal.h')}
+if a.rate_852:
+ identity['npu_rate_mhz']=852
 if a.entry_checkpoint:
  identity['profile']='npu-entry-memory-checkpoint-v1'
  identity['checkpoint_sources']={str(x.relative_to(root)):sha(x) for x in (root/'apps/npu-finite/checkpoint.c',root/'apps/npu-finite/checkpoint.h')}
@@ -63,6 +73,7 @@ newlink=[]
 for value in link:
  if a.entry_checkpoint and value.endswith('/apps/npu-convolution/main.c.obj'):continue
  if a.entry_checkpoint and value.endswith('/apps/npu-convolution/native.c.obj'):value=str(checkpoint)
+ elif native and value.endswith('/apps/npu-convolution/native.c.obj'):value=str(native)
  if value.startswith('-Wl,-T,'):value='-Wl,-T,'+str(root/'apps/npu-finite/link.ld')
  elif value.startswith('-Wl,-Map,'):value='-Wl,-Map,'+str(e/'image.map')
  else:

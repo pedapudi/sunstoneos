@@ -70,6 +70,34 @@ static int return_gic(uint64_t deadline)
     mmio_write(GICD_BASE,saved.ctlr|(live&0x30u));
     return return_wait(GICD_BASE,1u<<31,deadline);
 }
+/* Route the shared SRAM back to the CPU before the ROM return. The forced-FEL
+ * return enters the boot ROM at 0x20, and that path zeroes
+ * 0x00044000-0x000f3ffc before it sets SYSCTRL 0x03000008 bit 1 at offset
+ * 0x20c (fixs-brom 3a2a7d28); with the SRAM still routed to the NPU those
+ * stores would reach the NPU's SRAM. A cold entry at 0x0 sets the bit before
+ * it touches the SRAM. The startup's local stop has already set the bit after
+ * a normal stop; this step does not depend on that. As at EL1, the bit
+ * changes only while CCU +0xb04 holds the NPU's AHB, AXI and core resets
+ * asserted with its bus gate closed and the module gate at +0xb00 is closed.
+ * A held-reset check or a readback that fails parks with status 7 instead of
+ * returning. */
+#define SRAM_ROUTING UINT32_C(0x03000008)
+#define SRAM_TO_CPU UINT32_C(2)
+static void return_sram_to_cpu(void)
+{
+    uint32_t value=mmio_read(SRAM_ROUTING);
+    __asm__ volatile("dsb sy":::"memory");
+    if(!(value&SRAM_TO_CPU)) {
+        const uint32_t bus=mmio_read(UINT32_C(0x02002b04)),module=mmio_read(UINT32_C(0x02002b00));
+        __asm__ volatile("dsb sy":::"memory");
+        if((bus&UINT32_C(0x70001)) || (module&UINT32_C(0x80000000)))a733_smp_stop(7,SRAM_ROUTING);
+        mmio_write(SRAM_ROUTING,value|SRAM_TO_CPU);
+        __asm__ volatile("dsb sy":::"memory");
+        value=mmio_read(SRAM_ROUTING);
+        __asm__ volatile("dsb sy":::"memory");
+    }
+    if(!(value&SRAM_TO_CPU))a733_smp_stop(7,SRAM_ROUTING);
+}
 _Noreturn void sd_single_core_exception(uint64_t operation,uint64_t status,uint64_t kind)
 {
     uint64_t esr,control;
@@ -113,6 +141,7 @@ _Noreturn void sd_single_core_exception(uint64_t operation,uint64_t status,uint6
     uint64_t completed_at=counter();
     if(completed_at>=r->thermal_deadline || completed_at>=deadline)a733_smp_stop(7,operation);
 #endif
+    return_sram_to_cpu();
     REPORT->status=status;
 #ifdef SUNSTONE_NPU_ENTRY_CHECKPOINT
     REPORT->detail=NPU_ENTRY_MEMORY_READY;

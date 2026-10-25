@@ -72,6 +72,10 @@ struct npu_convolution {
     enum npu_service_operation pending_operation;
     atomic_uint failed, closed;
     unsigned prepared, bound, opened, ready, output_ready;
+    /* Counter microseconds of the latest job's publication, just before its
+     * trigger, and of the worker's first completion observation. Written by
+     * the service worker before the DONE reply that a client then reads. */
+    uint64_t job_published_us, job_finished_us;
 };
 
 /* EL1, before scheduling, zero once. Copies then hashes the complete model;

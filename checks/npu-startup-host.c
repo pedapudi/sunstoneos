@@ -5,9 +5,10 @@
  * tables with the actual PMIC provider, rail ledger, clock registry, GPU/PCK
  * resource manager and power-domain owner of checks/power-domains-model.h, at
  * the 400 kHz S_TWI0 timing of checks/power-domains-service.c. The NPU's CCU
- * words are a register model; PLL_NPU reports LOCK lock_us after its enable
- * table; domain 4 is the owner model's PPU, which acknowledges a policy write
- * 10 us later. Time is the PMIC model clock.
+ * words and the shared SRAM routing word (SYSCTRL 0x03000008) are a register
+ * model; PLL_NPU reports LOCK lock_us after its enable table; domain 4 is the
+ * owner model's PPU, which acknowledges a policy write 10 us later. Time is
+ * the PMIC model clock.
  *
  * Scheduling follows the images: the bootstrap task (priority 4) calls the
  * step once per tick until READY; the power service (priority 3) runs after
@@ -16,11 +17,15 @@
  * service starts 3.5 ticks later.
  *
  * Cases: boot to READY with the counts of the design's budget table, which
- * include the owner's reads for the domain check; the late power service; each
- * refusal before the first NPU write (supply unverified, supply never done,
- * register pass mismatch) releases the tokens and writes nothing; LOCK never
- * seen, a stalled PPU and a readback mismatch retain the tokens; local stop.
- * Output: one JSON line, then PASS. */
+ * include the owner's reads for the domain check, domain 4 ON before the first
+ * CCU write, and the SRAM routed after the PLL output gate opens and before
+ * the first reset release; the late power service; each refusal before the
+ * first NPU write (supply unverified, supply never done, register pass
+ * mismatch) releases the tokens and writes nothing; LOCK never seen, a
+ * stalled PPU and a readback mismatch retain the tokens; local stop, which
+ * routes the SRAM back to the CPU. --second-start runs a second startup over
+ * the state that local stop leaves, which adopts PLL_NPU and domain 4, and
+ * the adoption and routing refusals. Output: JSON lines, then PASS. */
 #include "power-domains-model.h"
 /* The model boots the service itself; it does not use domains_boot(). */
 static void unused_boot(void){(void)domains_boot;}
@@ -28,6 +33,7 @@ static void unused_boot(void){(void)domains_boot;}
 
 #define CCU UINT32_C(0x02002000)
 #define PCK UINT32_C(0x07064000)
+#define SYSCTRL UINT32_C(0x03000008)
 static struct a733_npu_startup s;
 static struct a733_counter_clock counter;
 static struct a733_platform_locks locks;
@@ -48,6 +54,14 @@ static struct {
     uint32_t osc;
     unsigned held,retained,enters,writes,never_lock,flip_b04,pmic_reads_before;
     unsigned flip_pll,open_pll_reads;
+    /* The routing word, and whether it ignores writes. Write positions (1 =
+     * first write) of the routing clear, the PLL output gate opening and the
+     * first bus and reset word write; PCK600 writes before the first write. */
+    uint32_t sysctrl,sid; /* The routing word; the SID speed-bin word. */
+    unsigned sysctrl_stuck,route_at,pll_open_at,first_b04_at,ppu_before_first_write,pll_writes,gate_writes;
+    unsigned gate_status_off; /* +0x19a0 reads 0 whatever the gate control holds. */
+    unsigned woken,wakes,waits; /* The power service's notifications of the bootstrap; its blocks. */
+    uint32_t pll_log[16];unsigned pll_log_n; /* PLL_NPU control writes in order. */
     /* Counted in the callbacks: sequencer register reads, LOCK samples among
      * them (PLL_NPU reads without the register lock), the owner's register
      * reads during a step, and counter reads. */
@@ -61,6 +75,8 @@ static int reg_read(void *v,uintptr_t a,uint32_t *out)
     assert(v==&r && bootstrap_running);
     ++r.reads;if(a==CCU+0x2a0 && !r.held)++r.lock_samples;
     if(a==0x07090160){*out=r.osc;return 1;}
+    if(a==SYSCTRL){*out=r.sysctrl;return 1;}
+    if(a==UINT32_C(0x0300624c)){*out=r.sid;return 1;}
     if(a==PCK || a==PCK+8){++r.pck_reads;return owner_read(&d,a,out);} /* The owner model's PPU words. */
     if(a==CCU+0x2a0) {
         if(s.stage==A733_NPU_STARTUP_OPEN)++r.open_pll_reads;
@@ -81,7 +97,7 @@ static int reg_read(void *v,uintptr_t a,uint32_t *out)
             if(m.now>=r.locked_at)*out|=1u<<28;
         }
     } else if(a==CCU+0x19a0) {
-        *out=(r.ccu[0x1920/4]&0x10001)==0x10001 ? 1u<<16 : 0;
+        *out=(r.ccu[0x1920/4]&0x10001)==0x10001 && !r.gate_status_off ? 1u<<16 : 0;
     } else if(a==CCU+0xb04 && r.flip_b04 && r.writes>=r.flip_b04 && r.last_write==a) {
         *out^=1u<<18;r.flip_b04=0; /* A completed write that reads back wrong. */
     }
@@ -90,10 +106,26 @@ static int reg_read(void *v,uintptr_t a,uint32_t *out)
 static int reg_write(void *v,uintptr_t a,uint32_t value)
 {
     assert(v==&r && bootstrap_running && r.held);
-    assert(a==CCU+0xb00 || a==CCU+0xb04 || a==CCU+0x1920 || a==CCU+0x2a0);
+    assert(a==CCU+0xb00 || a==CCU+0xb04 || a==CCU+0x1920 || a==CCU+0x2a0 || a==SYSCTRL);
+    if(!r.writes)r.ppu_before_first_write=d.ppu_writes;
+    ++r.writes;r.last_write=a;
+    if(a==SYSCTRL) {
+        assert(!((r.sysctrl^value)&~2u));
+        if(!(value&2) && !r.route_at)r.route_at=r.writes;
+        if(!r.sysctrl_stuck)r.sysctrl=value;
+        return 1;
+    }
     assert(a!=CCU+0x2a0 || !(value&(1u<<28)));
-    if(a==CCU+0x2a0)assert(!((*word(a)^value)&(1u<<24)));
-    ++r.writes;r.last_write=a;*word(a)=value;return 1;
+    if(a==CCU+0x2a0) {
+        assert(!((*word(a)^value)&(1u<<24)));++r.pll_writes;
+        /* New factors or a cleared lock enable: LOCK returns lock_us later. */
+        if(((*word(a)^value)&0x0070ff02) || !(value&(1u<<29)))r.locked_at=0;
+        if(r.pll_log_n<16)r.pll_log[r.pll_log_n++]=value;
+        if((value&(1u<<27)) && !r.pll_open_at)r.pll_open_at=r.writes;
+    }
+    if(a==CCU+0x1920)++r.gate_writes;
+    if(a==CCU+0xb04 && !r.first_b04_at)r.first_b04_at=r.writes;
+    *word(a)=value;return 1;
 }
 static int now_us(void *v,uint64_t *out){assert(v==&r);++r.clock_reads;return pmic_model_now(&m,out);}
 /* Raw counter for the LOCK spacing: one modeled microsecond per read. */
@@ -102,6 +134,8 @@ static int enter(void *v,uint64_t deadline)
 {assert(v==&r && !r.held && m.now<deadline);++r.enters;r.held=1;return 1;}
 static void leave(void *v){assert(v==&r && r.held);r.held=0;}
 static void retain(void *v){assert(v==&r && r.held);r.retained=1;}
+/* The power service's notification: the bootstrap runs after the service's step. */
+static void wake(void *v){assert(v==&r && !bootstrap_running);r.woken=1;++r.wakes;}
 
 /* The image's GPU/PCK resource manager reads the oscillator, the PERI0 words
  * and the PCK bus clock gate; none needs a write here. */
@@ -120,7 +154,8 @@ static int gpu_update(void *v,uintptr_t a,uint32_t q,uint32_t x,uint64_t t){(voi
 static int gpu_rail(void *v,struct a733_gpu_resource_rail *o,uint64_t t){(void)v;(void)o;(void)t;assert(0);return 0;}
 static void npu_registers(void)
 {
-    memset(&r,0,sizeof(r));r.lock_us=200;r.osc=0x10000002;
+    memset(&r,0,sizeof(r));r.lock_us=200;r.osc=0x10000002;r.sysctrl=2; /* The boot ROM's CPU routing. */
+    r.sid=0x496; /* Port 3-3's fuse word: code 4, column vf0400. */
     /* Reference PLL at 24 MHz; AHB, NSI and MBUS on PERI0 600, 800 and 400 MHz
      * outputs; PERI0 enabled, locked and its outputs gated on. */
     r.ccu[0]=0xf8000000|(99<<16)|(99<<8);
@@ -136,6 +171,7 @@ static struct a733_npu_startup_config config(void)
         .fabric={{0x03000001,0x82000001,0x84000000},{300000000,400000000,400000000}},
         .owner=31,.deadline_us=3000000,.pck_client=4};
 }
+static unsigned setup_mhz=492; /* The profile that setup() selects. */
 static void setup(void)
 {
     domains_model_setup(0x28,23);m.now_ns=40;m.access_ns=200;m.edge_us=5;
@@ -146,8 +182,9 @@ static void setup(void)
     locks=(struct a733_platform_locks){0};locks.initialized=1;
     const struct a733_npu_startup_config c=config();
     const struct a733_npu_startup_providers p={&counter,&m.clocks,&locks,&m.gpu,&m.rails,&d.owner};
-    const struct a733_npu_startup_ops o={{reg_read,reg_write},now_us,spin_us,enter,leave,retain};
-    assert(a733_npu_startup_init(&s,&c,&p,&o,&r) && a733_npu_startup_bind_task(&s,(TaskHandle_t)&s));
+    const struct a733_npu_startup_ops o={{reg_read,reg_write},now_us,spin_us,enter,leave,retain,wake};
+    assert(a733_npu_startup_init(&s,&c,&p,&o,&r) && a733_npu_startup_rate(&s,setup_mhz) &&
+        a733_npu_startup_bind_task(&s,(TaskHandle_t)&s) && !a733_npu_startup_rate(&s,492));
     scheduler_running=1;
 }
 static enum a733_npu_platform_result step(void)
@@ -159,22 +196,29 @@ static enum a733_npu_platform_result step(void)
     return x;
 }
 struct run { enum a733_npu_platform_result result; unsigned calls,advancing,ticks,pending_clock_reads; uint64_t elapsed_us,stage_us[A733_NPU_STARTUP_STOPPED+1],supply_done_us; };
-/* Boot: each tick the bootstrap calls the step once; the service runs after
- * it whenever notified or due, from its first step service_from_us after the
- * bootstrap's first call. */
+/* Boot: the bootstrap calls the step, and after PENDING blocks for the ticks
+ * that a733_npu_startup_wait_ticks gives (0: at once), or until the power
+ * service notifies it; the service runs after it whenever notified or due,
+ * from its first step service_from_us after the bootstrap's first call. */
 static struct run boot(unsigned limit,unsigned service,uint64_t service_from_us)
 {
     struct run x={.result=A733_NPU_PLATFORM_PENDING};
     const uint64_t t0=m.now;uint64_t next=t0;d.wake_at=t0+service_from_us;
     while(x.ticks<limit) {
-        if(m.now>=next) {
+        if(m.now>=next || r.woken) {
+            r.woken=0;
             const unsigned stage=s.stage,clock_reads=r.clock_reads;
             x.result=step();++x.calls;
+            /* The register window opens only at READY. */
+            assert((atomic_load(&s.window_open)==1)==(x.result==A733_NPU_PLATFORM_READY));
             if(s.stage!=stage || x.result==A733_NPU_PLATFORM_READY)++x.advancing;
             if(s.stage!=stage && s.stage<=A733_NPU_STARTUP_STOPPED)x.stage_us[s.stage]=m.now-t0;
             else x.pending_clock_reads+=r.clock_reads-clock_reads;
             if(x.result!=A733_NPU_PLATFORM_PENDING){x.elapsed_us=m.now-t0;break;}
-            x.ticks=(unsigned)((m.now-t0)/TICK_US)+1;next=t0+(uint64_t)x.ticks*TICK_US;
+            bootstrap_running=1;const uint32_t w=a733_npu_startup_wait_ticks(&s);bootstrap_running=0;
+            if(w)++r.waits;
+            x.ticks=(unsigned)((m.now-t0)/TICK_US)+1;
+            next=w ? t0+((m.now-t0)/TICK_US+w)*TICK_US : m.now;
             continue;
         }
         if(service && m.now>=t0+service_from_us && (d.notified || m.now>=d.wake_at)){
@@ -211,7 +255,7 @@ static int inherited_on(void)
     assert(b.result==A733_NPU_PLATFORM_READY && tokens_held());
     assert(!d.ppu_writes && s.row.counted==1 && d.owner.domain[1].count==1);
     assert(m.rails.pins[s.rail.id&(A733_RAIL_CLIENTS-1)]==1);
-    assert(b.ticks<=12 && r.writes<=12 && !r.pmic_reads_before);
+    assert(b.ticks<=13 && r.writes<=13 && !r.pmic_reads_before && r.sysctrl==0);
     printf("{\"inherited_on\":{\"ticks\":%u,\"elapsed_us\":%llu,\"settle_us\":%llu,\"local_writes\":%u,\"pck_writes\":%u},",
         b.ticks,(unsigned long long)b.elapsed_us,
         (unsigned long long)b.stage_us[A733_NPU_STARTUP_SETTLE],r.writes,d.ppu_writes);
@@ -289,12 +333,107 @@ static int inherited_pll(void)
         (unsigned long long)baseline.elapsed,baseline.reads,baseline.writes,baseline.clocks,baseline.locks,drift_refusals);
     puts("PASS inherited PLL reserved bit preservation and drift retention");return 0;
 }
+/* A second startup in one power lifetime: a new image finds PLL_NPU locked
+ * with its output gate open, domain 4 ON, the local resets asserted and the
+ * SRAM routed to the CPU, as local stop and the EL3 return leave them. Each
+ * case runs with the reserved PLL bit 24 clear and set. */
+static int second_start(void)
+{
+    unsigned refusals=0;
+    for(unsigned inherited=0;inherited<2;++inherited) {
+        const uint32_t keep=inherited<<24;
+        setup();r.ccu[0x2a0/4]=keep;
+        struct run b=boot(200,1,0);
+        assert(b.result==A733_NPU_PLATFORM_READY && (d.ppu[4][2]&15)==8 && s.pll_inherited==keep);
+        bootstrap_running=1;assert(a733_npu_startup_stop(&s)==A733_NPU_PLATFORM_READY);bootstrap_running=0;
+        static uint32_t left[0x2000/4];memcpy(left,r.ccu,sizeof(left));
+        const uint32_t policy=d.ppu[4][0],status=d.ppu[4][2];
+        const unsigned first_writes=r.writes;
+        assert(r.sysctrl==2 && left[0x2a0/4]==(0xe8305100|keep) && (left[0xb04/4]&0xf0001)==(1u<<19));
+        /* adopted: 0 the stopped state; 1 other factors; 2 output gate closed;
+         * 3 the gate control's No-Auto bit clear; 4 no LOCK; 5 the effective
+         * gate status clear. */
+        for(unsigned variant=0;variant<6;++variant) {
+            setup();memcpy(r.ccu,left,sizeof(left));d.ppu[4][0]=policy;d.ppu[4][2]=status;r.locked_at=1;
+            if(variant==1)r.ccu[0x2a0/4]=0xe8306100|keep;
+            if(variant==2)r.ccu[0x2a0/4]=0xe0305100|keep;
+            if(variant==3)r.ccu[0x1920/4]&=~1u;
+            if(variant==4)r.never_lock=1;
+            if(variant==5)r.gate_status_off=1;
+            b=boot(200,1,0);
+            if(variant) {
+                assert(b.result==A733_NPU_PLATFORM_RETAINED && !r.writes && !d.ppu_writes && !s.row.counted && tokens_released());
+                ++refusals;continue;
+            }
+            assert(b.result==A733_NPU_PLATFORM_READY && s.pll_adopted && s.pll_inherited==keep && tokens_held());
+            assert(!r.pll_writes && !r.gate_writes && !d.ppu_writes && r.ccu[0x2a0/4]==(0xe8305100|keep));
+            assert(r.sysctrl==0 && r.route_at==1 && r.first_b04_at==2 && r.lock_samples==3);
+            if(!inherited)printf("{\"second_start\":{\"ticks\":%u,\"elapsed_us\":%llu,\"local_writes\":%u,\"first_start_writes\":%u,"
+                "\"pll_writes\":%u,\"pck_writes\":%u,\"lock_samples\":%u,",
+                b.ticks,(unsigned long long)b.elapsed_us,r.writes,first_writes,r.pll_writes,d.ppu_writes,r.lock_samples);
+            bootstrap_running=1;assert(a733_npu_startup_stop(&s)==A733_NPU_PLATFORM_READY);bootstrap_running=0;
+            assert(r.sysctrl==2 && !memcmp(r.ccu,left,sizeof(left)));
+        }
+    }
+    printf("\"adoption_refusals\":%u}}\n",refusals);
+    puts("PASS second NPU startup adopts the locked PLL_NPU and the ON domain with bit 24 clear and set; ten adoption refusals write nothing");
+    return 0;
+}
+/* The 852 MHz profile: a cold enable at the 852 factors, the speed-bin
+ * admission, and the vendor's rate change of a PLL that an earlier start
+ * left running at the other profile, in both directions. */
+static int rate_852(void)
+{
+    setup_mhz=852;setup();
+    struct run b=boot(200,1,0);
+    assert(b.result==A733_NPU_PLATFORM_READY && r.ccu[0x2a0/4]==0xe8104600 && r.sysctrl==0);
+    printf("{\"cold_852\":{\"elapsed_us\":%llu,\"calls\":%u,\"writes\":%u,\"lock_samples\":%u},",
+        (unsigned long long)b.elapsed_us,b.calls,r.writes,r.lock_samples);
+    /* Codes with an 800 mV column at 852 MHz are admitted; the rest refuse
+     * before any write. A nonzero dvfs_bak (bits 23:16) takes precedence. */
+    static const struct { uint32_t sid; unsigned admitted; } bins[]={
+        {0x0200,1},{0x1200,1},{0x0400,1},{0x0500,1},{0x1500,1},{0x00030400,0},{0x00040300,1},
+        {0,0},{0x0100,0},{0x1100,0},{0x0300,0},{0x0600,0},{0x1400,0},{0x2200,0}};
+    unsigned refused=0;
+    for(unsigned i=0;i<sizeof(bins)/sizeof(*bins);++i) {
+        setup();r.sid=bins[i].sid;b=boot(200,1,0);
+        if(bins[i].admitted)assert(b.result==A733_NPU_PLATFORM_READY);
+        else{assert(b.result==A733_NPU_PLATFORM_RETAINED && !r.writes && !d.ppu_writes && tokens_released());++refused;}
+    }
+    /* Rate changes over the state that local stop left at the other profile. */
+    for(unsigned up=0;up<2;++up) {
+        setup_mhz=up ? 492 : 852;setup();
+        b=boot(200,1,0);assert(b.result==A733_NPU_PLATFORM_READY);
+        bootstrap_running=1;assert(a733_npu_startup_stop(&s)==A733_NPU_PLATFORM_READY);bootstrap_running=0;
+        static uint32_t left[0x2000/4];memcpy(left,r.ccu,sizeof(left));
+        const uint32_t policy=d.ppu[4][0],status=d.ppu[4][2],from=left[0x2a0/4];
+        setup_mhz=up ? 852 : 492;setup();memcpy(r.ccu,left,sizeof(left));d.ppu[4][0]=policy;d.ppu[4][2]=status;
+        r.locked_at=1;
+        b=boot(200,1,0);
+        const uint32_t to=up ? 0xe8104600 : 0xe8305100,f=to&0x0070ff02;
+        assert(b.result==A733_NPU_PLATFORM_READY && !s.pll_adopted && r.ccu[0x2a0/4]==to && !r.gate_writes && !d.ppu_writes);
+        /* Output gate off, factors, lock enable off then on, then the output
+         * gate on in the open stage; LOCK was sampled after the new factors. */
+        assert(r.pll_log_n==5 && r.pll_log[0]==(from&~(1u<<27)) && r.pll_log[1]==((0xe0000000)|f) &&
+            r.pll_log[2]==(0xc0000000|f) && r.pll_log[3]==(0xe0000000|f) && r.pll_log[4]==to);
+        assert(r.lock_samples>3);
+        if(up)printf("\"retune_492_to_852\":{\"elapsed_us\":%llu,\"calls\":%u,\"writes\":%u,\"pll_writes\":%u,\"lock_samples\":%u},",
+            (unsigned long long)b.elapsed_us,b.calls,r.writes,r.pll_writes,r.lock_samples);
+        setup_mhz=492;
+    }
+    printf("\"bin_refusals\":%u}\n",refused);
+    setup_mhz=492;setup();assert(!a733_npu_startup_rate(&s,600));
+    puts("PASS NPU 852 MHz profile: cold enable, speed-bin admission, and rate changes in the vendor order");
+    return 0;
+}
 int main(int argc,char **argv)
 
 {
     (void)unused_boot;
     if(argc==2 && !strcmp(argv[1],"--inherited-on"))return inherited_on();
     if(argc==2 && !strcmp(argv[1],"--inherited-pll"))return inherited_pll();
+    if(argc==2 && !strcmp(argv[1],"--second-start"))return second_start();
+    if(argc==2 && !strcmp(argv[1],"--rate-852"))return rate_852();
     assert(argc==1);
     /* Boot to READY. */
     setup();
@@ -303,6 +442,15 @@ int main(int argc,char **argv)
     assert(r.ccu[0xb00/4]==0x80000000 && (r.ccu[0xb04/4]&0xf0001)==0xf0001 && r.ccu[0x2a0/4]==0xe8305100);
     assert((d.ppu[4][0]&15)==8 && (d.ppu[4][2]&15)==8 && d.owner.domain[1].state==A733_POWER_DOMAIN_ON);
     assert(!r.held && !r.pmic_reads_before && tokens_held());
+    /* Power before clocks: domain 4's PCK600 command precedes the first CCU
+     * write. The SRAM is routed to the NPU after the PLL output gate opens and
+     * before the first write of the bus and reset word. */
+    assert(r.ppu_before_first_write && !s.pll_adopted && r.sysctrl==0 && s.sram_routed);
+    /* Startup init marks the supply settled: verification ends before the
+     * 5,160 us settle would, and the mark is refused once the service ran. */
+    assert(d.owner.settled_supply && b.supply_done_us<A733_POWER_SUPPLY_SETTLE_US &&
+        !a733_power_domains_settled_supply(&d.owner));
+    assert(r.pll_open_at && r.pll_open_at<r.route_at && r.route_at+1==r.first_b04_at);
     /* register_reads: the sequencer's reads without the LOCK samples, plus the
      * owner's domain-check reads, as the base counted its own domain reads.
      * device_reads adds the native write adapter's read of each written word. */
@@ -311,17 +459,20 @@ int main(int argc,char **argv)
         "\"register_reads\":%u,\"sequencer_reads\":%u,\"owner_reads\":%u,\"device_reads\":%u,"
         "\"register_writes\":%u,\"lock_acquisitions\":%u,\"counter_reads\":%u,"
         "\"counter_reads_on_pending_calls\":%u,\"lock_samples\":%u,\"pmic_transactions_by_startup\":%u,"
-        "\"supply_done_us\":%llu,\"row_us\":%llu,\"settle_us\":%llu},",
+        "\"supply_done_us\":%llu,\"row_us\":%llu,\"settle_us\":%llu,\"pck_writes_before_first_write\":%u,"
+        "\"routing_write\":%u,\"pll_output_gate_write\":%u,\"first_reset_write\":%u},",
         b.ticks,(unsigned long long)b.elapsed_us,b.calls,b.advancing,reads,r.reads-r.lock_samples,r.owner_reads,
         reads+r.writes,r.writes,r.enters,
         r.clock_reads,b.pending_clock_reads,r.lock_samples,r.pmic_reads_before,
         (unsigned long long)b.supply_done_us,
-        (unsigned long long)b.stage_us[A733_NPU_STARTUP_ROW],(unsigned long long)b.stage_us[A733_NPU_STARTUP_SETTLE]);
+        (unsigned long long)b.stage_us[A733_NPU_STARTUP_ROW],(unsigned long long)b.stage_us[A733_NPU_STARTUP_SETTLE],
+        r.ppu_before_first_write,r.route_at,r.pll_open_at,r.first_b04_at);
     /* Local stop: one locked pass of five writes with readback. */
     {
         const unsigned reads=r.reads,writes=r.writes,enters=r.enters,clocks=r.clock_reads;
         bootstrap_running=1;assert(a733_npu_startup_stop(&s)==A733_NPU_PLATFORM_READY);bootstrap_running=0;
         assert((r.ccu[0xb00/4]&0x80000000)==0 && (r.ccu[0xb04/4]&0xf0001)==(1u<<19) && r.ccu[0x2a0/4]==0xe8305100);
+        assert(r.sysctrl==2 && !s.sram_routed && !atomic_load(&s.window_open));
         printf("\"stop\":{\"register_reads\":%u,\"register_writes\":%u,\"lock_acquisitions\":%u,\"counter_reads\":%u},",
             r.reads-reads,r.writes-writes,r.enters-enters,r.clock_reads-clocks);
     }
@@ -351,17 +502,34 @@ int main(int argc,char **argv)
     setup();r.never_lock=1;
     b=boot(200,1,0);
     assert(b.result==A733_NPU_PLATFORM_RETAINED && r.lock_samples==100);
-    assert(r.ccu[0x2a0/4]==0xe0305100 && !(r.ccu[0xb04/4]&0x70001) && tokens_held() && (d.ppu[4][0]&15)==0);
+    assert(r.ccu[0x2a0/4]==0xe0305100 && !(r.ccu[0xb04/4]&0x70001) && tokens_held() && (d.ppu[4][0]&15)==8);
+    assert(r.sysctrl==2 && !r.route_at);
     /* A stalled PPU: the owner fails the domain at its 10 ms bound and the
-     * row reads FAILED, or the startup's row deadline expires; both retain. */
+     * row reads FAILED, or the startup's row deadline expires; both retain.
+     * No NPU clock, reset or routing write precedes power. */
     setup();d.stall[4]=1;
     b=boot(200,1,0);
-    assert(b.result==A733_NPU_PLATFORM_RETAINED && tokens_held() && (r.ccu[0xb04/4]&0x70001)==0x70001);
+    assert(b.result==A733_NPU_PLATFORM_RETAINED && tokens_held() && !r.writes && r.sysctrl==2);
     printf("\"stalled_domain_retained_after_us\":%llu,",(unsigned long long)b.elapsed_us);
     /* A readback mismatch in the local open table keeps the register lock. */
     setup();r.flip_b04=7;
     b=boot(200,1,0);
     assert(b.result==A733_NPU_PLATFORM_RETAINED && r.held && r.retained && tokens_held());
+    /* Routing refusals. A word that already routes the SRAM to the NPU
+     * refuses in the read-only pass, before the domain-4 request. A word that
+     * ignores the write retains after PLL_NPU locks, before any reset
+     * release. */
+    setup();r.sysctrl=0;
+    b=boot(200,1,0);
+    assert(b.result==A733_NPU_PLATFORM_RETAINED && !r.writes && !d.ppu_writes && !s.row.counted && tokens_released());
+    setup();r.sysctrl_stuck=1;
+    b=boot(200,1,0);
+    assert(b.result==A733_NPU_PLATFORM_RETAINED && r.held && r.retained && tokens_held());
+    assert(!r.first_b04_at && !s.sram_routed && r.route_at && r.sysctrl==2);
+    /* A restore that does not read back retains at stop. */
+    setup();b=boot(200,1,0);assert(b.result==A733_NPU_PLATFORM_READY);r.sysctrl_stuck=1;
+    bootstrap_running=1;b.result=a733_npu_startup_stop(&s);bootstrap_running=0;
+    assert(b.result==A733_NPU_PLATFORM_RETAINED && r.held && r.retained && !atomic_load(&s.window_open));
     /* The reference clock: 24 MHz and normalized 26 MHz inputs are admitted;
      * a wrong ratio, a reference PLL that is not locked, enabled or stable,
      * and an oscillator that is not stable are refused before any write. */
@@ -375,7 +543,7 @@ int main(int argc,char **argv)
         assert(refs[i].admitted ? b.result==A733_NPU_PLATFORM_READY :
             b.result==A733_NPU_PLATFORM_RETAINED && !r.writes && tokens_released());
     }
-    puts("\"cases\":15}");
-    puts("PASS NPU startup sequencer over the power-domain owner: boot, a late power service, stop, three refusals, three retentions and seven reference-clock cases");
+    puts("\"cases\":18}");
+    puts("PASS NPU startup sequencer over the power-domain owner: boot, a late power service, stop, four refusals, five retentions and seven reference-clock cases");
     return 0;
 }
