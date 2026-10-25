@@ -187,11 +187,26 @@ when the usage count reaches zero. An eventual generic-domain suspend may
 attempt domain power-off. This establishes no synchronous order between
 OFF completion and local clock/reset teardown, and proves neither order unsafe.
 
-The manual's shared SRAM range is `0x00074000`–`0x000f3fff`. The approved numerical
-lifetime already granted exclusive NPU SRAM/drain ownership and excluded other
-CPU, DMA and auxiliary-firmware writers. The known launcher, stack and FEL
-scratch lie below that range. No current shared-SRAM conflict was identified;
-a future lifetime must carry its own ownership grant.
+The manual's shared SRAM range is `0x00074000`–`0x000f3fff`, the CPU alias of
+the NPU's 512 KiB internal SRAM. The launcher and stack lie below that range.
+The FEL scratchpad does not: the boot ROM reports it at `0x000ee800`
+([boot.md](boot.md)), inside the range and `0x7a800` bytes (501,760) above its
+base. The approved numerical lifetime granted exclusive NPU SRAM/drain
+ownership and excluded other CPU, DMA and auxiliary-firmware writers. Its
+12×12 model uses the first 101,376 bytes, ending at `0x8cc00`, below the
+scratchpad, so that lifetime has no known conflict with it. A future lifetime must carry its own ownership grant.
+
+The ROM scratchpad inside the NPU SRAM alias constrains two later changes:
+
+- **Domain-4 OFF before ROM return.** An image that powers the NPU domain off
+  and then returns to the FEL ROM may remove power from the SRAM that holds the
+  ROM's scratchpad. It must first establish that the shared SRAM stays powered
+  or that the ROM does not depend on the scratchpad contents it left there.
+- **NPU SRAM footprints above about `0x7a800` bytes.** A footprint measured from
+  the start of the range that exceeds `0x7a800` bytes overwrites the scratchpad.
+  The NN pool model needs 518,144 bytes, 16 KiB more than that. An image that
+  uses it and returns to the FEL ROM must preserve or restore the scratchpad,
+  or must show that the ROM tolerates its loss.
 
 A normal OFF implementation still needs the A733-specific quiescence/isolation
 contract and permitted ordering of local clocks/resets against PCK completion.
