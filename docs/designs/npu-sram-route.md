@@ -132,7 +132,13 @@ ends at the power removal that every failure already requires.
 - The default finite image built from clean archives is identical with and
   without the two files, and its objects equal those of `9e4adabf…`.
 
-Evidence: `~/.cache/sunstoneos/evidence/npu-sram-route-20261025/`.
+Evidence: `~/.cache/sunstoneos/evidence/npu-sram-route-20261025/`. The run is
+prepared for port 3-3 as `~/.cache/sunstoneos/evidence/board-bundles-20261025-7/`:
+the frozen image, the finite host that ran `9e4adabf…`, the root-review drafts
+with every approval false, the warm-return chain of the lifetime and the
+offline checks. `tools/prepare-board-bundles.py` has no row class for an image
+that the finite host launches under root-reviewed admission, so the set
+follows the preparation of the `9e4adabf…` run instead of a generated row.
 
 ## Predicted board result
 
