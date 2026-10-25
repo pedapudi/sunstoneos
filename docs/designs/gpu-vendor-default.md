@@ -307,7 +307,28 @@ CORE6 status of 8.
 Images: the power-only diagnostic (bundle row 12), then the identity
 diagnostic (row 13), both two ON/OFF cycles on the default path. The
 power-only image makes no GPU-window access, so it tests OFF and the second
-ON alone.
+ON alone. Set `~/.cache/sunstoneos/evidence/board-bundles-20261025-9/port-3-1/`
+freezes the lifetime: the provider-readiness checkpoint `3adfa4ad…`
+(`s11-gpr`), then power-only `b163b8fc…` (`s11-gpo`), then identity
+`01849e62…` (`s11-gpi`), with its runbook at `port-3-1/runbook.md`.
+
+Both images link 23 objects of the checkpoint and compile 14. Two bringup
+changes altered structures that `struct bb_power` embeds, the counter
+clock's and the power service's, so the builder now also compiles the
+board-bundle power service, its trace helpers, the counter clock and the
+PMIC native adapter. Built against the checkpoint's `power.c`, the client
+read every power-service field after the clock 8 bytes from where it is
+written; the host checks caught it at the first deadline check.
+
+**Images that cannot follow a GPU image.** The power service of an image
+built before this branch verifies DCDC4 only at 800 mV, so after a GPU
+image has raised DCDC4 to 960 mV it leaves DCDC4 unverified. The only such
+image on a GPU lifetime is the provider-readiness checkpoint `3adfa4ad…`,
+which therefore runs first, as every port 3-1 lifetime orders it. Every
+other row is built from this branch when a set is prepared, and its power
+service accepts either voltage; board bundle 6 accepts either snapshot. The
+NPU images on port 3-3 verify DCDC4 the same way, but no GPU image runs on
+port 3-3.
 
 Predictions, per image:
 
@@ -342,6 +363,16 @@ What each departure would mean:
 - **Cycle 2 ON fails**: the first OFF left the GPU in a state from which
   this ON order does not recover; the controller's error, step and the
   snapshot after the failed ON name the step and the CORE6 and PLL words.
+
+### The EL3 setup on port 3-3
+
+[The EL3 qualification runbook](../board-runbooks/el3-qualification.md)
+runs in one fresh port 3-3 lifetime after this branch merges. It runs the
+kernel check with the security writes including S_TZMA (write 11), a read
+of the two security switches, and the six runs of the refreeze sequence on
+the refrozen native image `6fd7af86…`, whose pre-scheduler overlay calls
+the native setup. Its predictions: each run returns, both switches read 7,
+and every 91-word capture equals the clean capture.
 
 ### 2. Firmware start through the open-source host driver
 

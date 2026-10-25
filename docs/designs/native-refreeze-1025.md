@@ -97,3 +97,41 @@ CPU0 profile models, all fifteen host checks and the eight-core scheduler
 model built from the tree pass too. All twelve bundles under
 `refreeze-20261025/bundles-6cd9d008/` bind offline. No board
 has run the new image; the qualification runbook is the physical test.
+
+## The second refreeze adds the EL3 security writes
+
+`work/gpu-vendor-default-1025` makes `a733_smp_boot` call
+`a733_el3_security_setup` ([`include/a733_el3_security.h`](../../include/a733_el3_security.h))
+after it releases the secondaries and before CPU0 enters EL1, so the native
+image changes again. Built from a clean archive of that branch at
+`cc97b957`, and again at `22501205` after the rebase onto bringup
+`49bc00da`, `a733-smp-supervised.elf` is `6fd7af86…` with build ID
+`b6d3e7dc…` (`~/.cache/sunstoneos/evidence/refreeze-el3-20261025/native/`).
+`tools/prepare-primary-publication-probe.py` pins it.
+
+Against `a8228eaa…`, the code from `prvIdleTask` on moves by 260 bytes and
+the worker by 8. Of the pins in the table above only the worker's moves, to
+`0x41001244`, in the builder's and the first-task host's worker-layout
+check; every other pinned word and offset is unchanged. The admission
+template (`refreeze-el3-20261025/template/`) is this refreeze's template
+with the image hash replaced; its launcher is byte-identical.
+
+The returning overlays start the secondaries themselves and never reach
+`a733_smp_boot`'s call. The pre-scheduler overlay, which the first-task,
+task-switch, workload and deadline profiles extend, now calls the native
+`a733_el3_security_setup` at the native place: after all seven secondaries
+are released and before CPU0 enters EL1. The identity, local, cached,
+coherence, interrupt and CPU0 profiles make no write. The base model gives
+the setup's three reads their FEL-boot values (PRCM switch 0, both DMA
+controllers gated and in reset) and records its writes, which only CPU0 at
+EL3 may make. The pre-scheduler, first-task, workload and deadline models
+require the exact list of 31 writes once, after the seventh release and
+before CPU0's EL1 entry. The first-task refusals require none, and the
+supervised scheduler model requires the list from `a733_smp_boot`.
+
+From the archive at `22501205` (`refreeze-el3-20261025/source-22501205/`),
+all fifteen profiles build, the 32 model runs, the four CPU0 models, the
+fifteen host checks and the eight-core scheduler model pass
+(`final-22501205/`), and all twelve bundles under
+`refreeze-el3-20261025/bundles-22501205/` bind offline. The board sequence
+is [the EL3 qualification runbook](../board-runbooks/el3-qualification.md).
