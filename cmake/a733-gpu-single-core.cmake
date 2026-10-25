@@ -122,7 +122,10 @@ set(gpsc_inputs ${gpu_app_inputs} ${gpsc_sources} ${gpsc_headers}
  "${gpsc_shared}/FreeRTOSConfig.h" "${gpsc_shared}/link.ld" "${gpsc_shared}/platform.patch"
  "${gpsc_app}/link.patch" "${CMAKE_CURRENT_LIST_FILE}" "${gpsc_root}/patches/freertos-aarch64-clang.patch")
 if(SUNSTONE_GPU_FINITE_RETURN)
+  # The patched monitor replaces the shared one in gpsc_sources; its source and
+  # that of the patched platform must still re-run configuration when edited.
   list(APPEND gpsc_inputs "${gpsc_root}/apps/gpu-finite/current-monitor.patch"
+    "${gpsc_shared}/monitor.c" "${gpsc_root}/platform/a733/platform.c"
     "${gpsc_root}/apps/gpu-finite/link.patch" "${gpsc_root}/apps/gpu-finite/return.h"
     "${gpsc_root}/apps/gpu-finite/finite.h" "${gpsc_link}")
 endif()
