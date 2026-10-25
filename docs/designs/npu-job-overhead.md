@@ -175,3 +175,7 @@ the two DMB accessors.
 - The per-access split between bus and barrier cost is not yet measured; the
   doorbell timestamp of the next run measures the remaining two writes.
 - No speed bin that needs a DCDC2 change can run; both boards are vf0400.
+- The OS NPU profile and the NPU board image share the startup, controller
+  and adapter: they now default to 852 MHz on these boards with plain
+  register access, the two-write trigger and the single event read, and
+  neither has had a board run of its own with these changes.
