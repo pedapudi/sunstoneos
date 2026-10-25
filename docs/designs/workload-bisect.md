@@ -3,10 +3,12 @@
 Status: **implemented and used on a board.** In one port 3-3 lifetime on
 2026-10-25 the first profile completed four times and then failed once; the
 deadline unit returned CPU0 to the ROM with a record that locates the fault
-in CPU0's own GIC restoration (below). A correction waits for the
-redistributor's write-pending bit before that check; it passes the
-instruction-model and host checks and has not run on a board. Section
-numbers refer to
+in CPU0's own GIC restoration (below). A first correction waited for the
+redistributor's write-pending bit before that check and failed on its first
+board run in the next lifetime, on the same bit. The current correction
+ignores the read-only status bits of GICR_CTLR in every restoration
+comparison; it passes the instruction-model and host checks and has not run
+on a board. Section numbers refer to
 [docs/performance-architecture.md](../performance-architecture.md).
 
 The returning eight-core workload runs the frozen native image
@@ -132,6 +134,65 @@ deadline unit's record still omits FAR_EL1, ICC_PMR_EL1 and ICC_RPR_EL1
 once, changes made while the overlay was full; its EL1 helper clears
 CNTP_CTL_EL0 again, because CNTP_CTL_EL0.ENABLE is UNKNOWN after the warm
 reset. The extension now uses 12,064 of its 12,288 bytes.
+
+## The write-pending bit can be set again after a completed wait
+
+In a fresh port 3-3 lifetime on 2026-10-25
+(`board-session-20261025-2/port-3-3/tw1-prepare/runtime`), the first run of
+the profile with both RWP waits (`1c885abf`) returned about 5 s after
+launch with reason 3 and stage 1. The record matches run 5 of the previous
+lifetime: ELR_EL3 `0x41022e30` is that overlay's `el1_smc_return`, the
+completion SMC was CPU0's last entry to EL3, and every secondary had
+finished its own cleanup (local state 3, cleanup error 0, before and after
+snapshots equal) and set ready. CPU0's local-probe record shows cleanup
+error 3, not the wait-timeout error 4, and its after-snapshot differs from
+the before-snapshot only in GICR_CTLR = 8. The overlay that ran contains
+the wait: `restore_local` calls `wait_rwp`, which returned with RWP clear,
+and the snapshot's next read of GICR_CTLR found RWP set again, with no
+CPU0 write between the two reads.
+
+RWP therefore does not only track CPU0's own writes. The architecture
+defines it as read-only write-pending status for writes in the current
+Security state (IHI 0069G 12.11.2, page 12-622). The most likely source of
+the second assertion is the secondaries' concurrent cleanup writes to their
+own redistributors, but the record cannot show which agent set it. In
+either case GICR_CTLR's RWP and UWP (bit 31) are status bits that no
+restoration controls, and Linux and TF-A only poll them; they never
+compare them.
+
+All three comparisons of GICR_CTLR now ignore bits 31 and 3: CPU0's
+baseline check and restoration comparison in
+`boot/a733/primary-local-cache-probe.c`, the secondaries' baseline check
+and final comparison in `boot/a733/secondary-local-probe.c`, and the host
+decoders that check the same snapshots (`tools/all-core-pre-scheduler-host.py`
+and `tools/secondary-local-host.py`). The RWP waits stay, as in Linux. The
+records still hold the raw values.
+
+Other snapshot words also mix configuration with status that hardware can
+change: GICR_PWRR's group-power status bits (2 and 3), GICR_WAKER's
+ChildrenAsleep, and GICR_ISPENDR0, which shows any asserted level PPI.
+None has differed in any board record so far; they remain exact.
+
+The instruction model injects RWP at the second GICR_CTLR read after the
+priority write (`restore-rwp-late`, on CPU0 and on core 3). The corrected
+overlays return normally; the deployed overlay of `1c885abf` reproduces the
+board record on CPU0 and the parked-core failure on core 3
+(`workload-bisect-20261025/rwp3/reproduce/`).
+
+## The runner exits after a deadline return
+
+After every launch failure the runner calls `stop_after_failure`, whose
+`hold_ownership` sleeps forever and ignores SIGINT, so that the board lock
+stays held while a launch outcome is unknown
+(`tools/check-a733-smp.py:386`–`400`). A deadline return is not unknown:
+the ROM has answered, the runner has read the record and the owned memory
+and quarantined the instance, and nothing more can be learned from the
+board. The runner now raises `DeadlineRetained` for that outcome and passes
+a no-op hold, so it journals, quarantines and exits nonzero, releasing the
+lock; the queue claim stays held because the run failed, and the quarantine
+refuses the instance until a power removal. Every other post-launch
+failure keeps the indefinite hold. The host case
+`deadline-return-retained` now requires quarantine without the hold.
 
 ## Every failure parks CPU0, so a non-return carries no information
 
@@ -292,8 +353,8 @@ failed check in the record's `inconsistent` field. Any report that carries
 the magic number, consistent or not, is treated as a deadline return: a
 fault in the cleaning helper re-enters the capture and returns at stage 1,
 with the secondaries still running. The runner then reads the owned writable interval (`0x91000` bytes) into
-`owned-writable-after.bin`, writes nothing, keeps the claim and quarantines
-the instance. The secondaries were not stopped: they may still run FreeRTOS
+`owned-writable-after.bin`, writes nothing, quarantines the instance and
+exits, leaving the queue claim held. The secondaries were not stopped: they may still run FreeRTOS
 from DRAM with their GIC and power state unrestored, so the board needs a
 power removal before its next run. A completed run is validated exactly as
 the workload, and the runner restores DRAM as before.
@@ -365,6 +426,9 @@ profiles share: `boot/a733/native-el1-cache-probe.S`,
 `boot/a733/secondary-identity-probe.S`,
 `boot/a733/primary-local-cache-probe.c` and
 `boot/a733/secondary-local-probe.c` (the RWP corrections),
+`tools/all-core-pre-scheduler-host.py`, `tools/secondary-local-host.py`
+(the status-bit mask) and `checks/primary-publication-host.py` (the host
+harness accepts a hold argument),
 `tools/prepare-secondary-identity-probe.py`,
 `tools/run-native-startup-probe.py` and the host modules
 `tools/secondary-identity-host.py`, `tools/all-core-first-task-host.py` and
@@ -394,8 +458,9 @@ module and the model. Both should move to one definition.
   workload overlays change in `restore_local` only. The central images
   (`a733-smp-supervised.elf`, `kernel-check.elf`) are byte-identical to a
   `bringup` build.
-- **Overlay space.** The extension uses 12,064 of its 12,288 bytes (12,272
-  before the RWP corrections, 12,288 with only CPU0's).
+- **Overlay space.** The extension uses 12,112 of its 12,288 bytes (12,272
+  before the RWP corrections, 12,288 with only CPU0's wait, 12,064 with both
+  waits and before the status-bit mask).
 - **Completed-path cost (counted).** CPU0 executes 22 more instructions once
   at EL1 entry and 17 more at its completion SMC; each secondary executes 3
   more at entry and 4 more per SMC. The workload loops are unchanged.
@@ -422,7 +487,9 @@ module and the model. Both should move to one definition.
   (`workload-bisect-20261025/rwp-fix/`). With the secondary correction, a
   `restore-rwp-secondary` case injects RWP on core 3 and returns normally,
   and the secondary local, cache, coherence and interrupt profiles' model
-  and host cases pass too (`workload-bisect-20261025/rwp2/`). Host cases
+  and host cases pass too (`workload-bisect-20261025/rwp2/`). With the
+  status-bit mask, the late-RWP cases join them and every affected
+  profile's model and host cases pass again (`workload-bisect-20261025/rwp3/`). Host cases
   (`checks/workload-bisect-host.py`) run the actual runner with a modeled
   FEL for a completed return, a transport failure, an invalid report, and a
   deadline return and a damaged deadline record that both restore nothing;

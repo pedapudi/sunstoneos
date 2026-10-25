@@ -4,9 +4,12 @@ Status: in one port 3-3 lifetime on 2026-10-25
 (`board-session-20261025-1/port-3-3/`), profile 1 completed four times and
 then returned through the deadline unit with reason 3. The record locates
 the fault in CPU0's GIC restoration, which compared GICR_CTLR while its
-read-only write-pending bit was still set. The corrected profiles in
-`$B/rwp-fix/` wait for that bit first, on CPU0 and on every secondary; they
-have not run on a board. The
+read-only write-pending bit was still set. A profile that waited for that
+bit (`$B/../rwp-fix/`) failed the same way on its first run in the next
+lifetime (`board-session-20261025-2/port-3-3/tw1-prepare`): the bit was set
+again after the wait. The corrected profiles in `$B` ignore GICR_CTLR's
+read-only status bits in every comparison and keep the waits; they have not
+run on a board. The
 design, the reference comparison, the decoded record and the candidate
 causes are in [docs/designs/workload-bisect.md](../designs/workload-bisect.md).
 
@@ -18,8 +21,8 @@ plus 0.5 s, or at any earlier CPU0 stop:
 
 | Order | Profile | Bundle | Purpose |
 | --- | --- | --- | --- |
-| 1 | `all-core-task-workload-deadline-v1` | `$B/rwp-fix/bundle-deadline/` (corrected); `$B/bundle-deadline/` ran on 2026-10-25 | The unchanged workload, observable when it fails |
-| 2 | `all-core-task-workload-quiet-deadline-v1` | `$B/rwp-fix/bundle-quiet/` | The same with background tasks waiting in `WFE` between increments: much less sustained load |
+| 1 | `all-core-task-workload-deadline-v1` | `$B/bundle-deadline/` (corrected); `$B/../bundle-deadline/` and `$B/../rwp-fix/bundle-deadline/` ran on 2026-10-25 | The unchanged workload, observable when it fails |
+| 2 | `all-core-task-workload-quiet-deadline-v1` | `$B/bundle-quiet/` | The same with background tasks waiting in `WFE` between increments: much less sustained load |
 
 Next, run the corrected profile 1 repeatedly in one fresh lifetime, with a
 91-word capture after each run; one failure in five was seen before the
@@ -53,7 +56,8 @@ and WFE candidates as well as with the load.
   and closes the claim. The board stays usable.
 - **Deadline return.** The runner prints `CPU0 returned through the deadline
   unit after …`, saves `report.bin` and `owned-writable-after.bin`, writes
-  nothing to the board, keeps the claim and quarantines the instance.
+  nothing to the board, quarantines the instance and exits nonzero; the
+  queue claim stays held.
   `session.json` holds the decoded record under `deadline_return`. The
   secondaries were not stopped, and the return leaves EL3 translation
   controls, VBAR_EL3 and CPU0's PPI 29 configuration changed (listed in the
@@ -86,12 +90,12 @@ Set the variables of [the README](README.md#names-used-in-every-runbook)
 with `PORT=3-3`, then:
 
 ```sh
-B=~/.cache/sunstoneos/evidence/workload-bisect-20261025/rwp-fix
+B=~/.cache/sunstoneos/evidence/workload-bisect-20261025/rwp3
 S=<the session directory of the new lifetime>
 ```
 
-`$B` holds the corrected bundles; the uncorrected bundles that ran on
-2026-10-25 are one directory up and are kept unchanged. `$B/bundle-*/` holds `build/` (overlay and manifest), `host/software.json`
+`$B` holds the corrected bundles; the bundles that ran on 2026-10-25 are
+in `$B/..` and `$B/../rwp-fix` and are kept unchanged. `$B/bundle-*/` holds `build/` (overlay and manifest), `host/software.json`
 and `template/` (the admission records and prepared bundle of the passing
 first-task attempt). `$B/source/` is the tree of the commit that built them;
 its runner and host modules validate the bundle. `$B/prepare-workload-bisect.py`
