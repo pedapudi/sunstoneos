@@ -23,6 +23,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#define BB_TWI_DATA UINT32_C(0x07083008)
 #define BB_TWI_CNTR UINT32_C(0x0708300c)
 #define BB_TWI_STAT UINT32_C(0x07083010)
 /* A snapshot is six read transactions, each ending in a STOP. */
@@ -180,9 +181,11 @@ struct bb_span { uint32_t count, ticks, min, max; };
 void bb_span_add(struct bb_span *, uint32_t ticks);
 void bb_span_merge(struct bb_span *, const struct bb_span *);
 /* The completing polls of the recorded steps, by the phase-start CNTR write
- * that ends each span: a byte (0x48), a repeated START (0x68 after a flag),
- * a START after a STOP wait, and a STOP (0x58). */
-enum { BB_COMPLETE_BYTE, BB_COMPLETE_RESTART, BB_COMPLETE_START, BB_COMPLETE_STOP, BB_COMPLETE_KINDS };
+ * that ends each span: a byte that the poll wrote to DATA first (0x48 after
+ * a DATA write), a receive (0x48 with no DATA write in the poll), a repeated
+ * START (0x68 after a flag), a START after a STOP wait, and a STOP (0x58). */
+enum { BB_COMPLETE_BYTE, BB_COMPLETE_RECEIVE, BB_COMPLETE_RESTART, BB_COMPLETE_START, BB_COMPLETE_STOP,
+       BB_COMPLETE_KINDS };
 struct bb_cost_next {
     /* With IRQs masked, at the park, in the provider task with the I2C mutex
      * entered and the provider idle. */
@@ -227,7 +230,7 @@ struct bb6_summary {
     struct bb_cost cost;
     struct bb_cost_next next;
 };
-#define BB6_SUMMARY_LINES 35u
+#define BB6_SUMMARY_LINES 36u
 unsigned bb6_summary_lines(const struct bb6_summary *, struct bb_line *out);
 /* Bundle 7's summary. */
 struct bb7_summary {

@@ -353,7 +353,8 @@ unsigned bb6_summary_lines(const struct bb6_summary *s, struct bb_line *out)
         bb_line_end(l++);
     }
     static const char *const complete[BB_COMPLETE_KINDS] = {
-        "TWI_COMPLETE byte", "TWI_COMPLETE restart", "TWI_COMPLETE start", "TWI_COMPLETE stop"};
+        "TWI_COMPLETE byte", "TWI_COMPLETE receive", "TWI_COMPLETE restart", "TWI_COMPLETE start",
+        "TWI_COMPLETE stop"};
     for (unsigned i = 0; i < BB_COMPLETE_KINDS; ++i) {
         bb_line_start(l, complete[i]);
         bb_line_dec(l, "count", s->next.complete[i].count);

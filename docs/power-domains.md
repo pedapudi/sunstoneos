@@ -288,7 +288,7 @@ the design document's implementation section
 modeled, except the service steps of the read-only board runs.
 
 On the board, 400 kHz snapshot steps took 146% of their wire time against a
-110% target, and 123.7% and 124.3% (779 µs and 784 µs, medians of two
+110% target, and 123.7% and 124.4% (779 µs and 784 µs, medians of two
 runs) after the provider follow-up.
 The provisional median limit is 1,268 permille of each step's measured
 wire time, with another 40 µs for the first step, at CPU-L 494 MHz under

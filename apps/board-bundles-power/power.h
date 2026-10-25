@@ -80,7 +80,7 @@ struct bb_power {
      * and its bus-event count, and whether a phase-start CNTR write has
      * ended its span. They join bb_power_next.complete when the step is
      * recorded. */
-    unsigned in_step, poll_open;
+    unsigned in_step, poll_open, poll_data;
     uint32_t poll_events, poll_stops;
     uint64_t poll_at;
     struct bb_span step_complete[BB_COMPLETE_KINDS];

@@ -416,8 +416,9 @@ per access.
 Two runs of bundle 6 measured the follow-up on port 3-3 on 2026-10-24,
 with CPU-L at 494 MHz and the bundle's trace observer and write stamps
 active. Their median snapshot steps were 779 µs and 784 µs, 123.7% and
-124.3% of the 630 µs wire time, and their first steps 809 µs and 807 µs.
-The byte measured the nominal 22.5 µs, and no phase needed a re-spin.
+124.4% of the 630 µs wire time, and their first steps 809 µs and 807 µs.
+The first run measured the nominal 22.5 µs byte and the second a 22.541 µs
+byte, and no phase needed a re-spin.
 Timed in the service task, a bare S_TWI0 read takes about 378 ns, the
 `DSB SY` pair adds about 41 ns, the adapter's read takes 462 ns and a time
 read 144 ns. A fenced write in a transfer takes about 360 ns with its stamp,

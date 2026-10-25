@@ -45,6 +45,7 @@ static int pmic_current(void *c)
     p->poll_events = p->twi.conditions + p->twi.bytes + p->twi.stops;
     p->poll_stops = p->twi.stops;
     p->poll_open = 1;
+    p->poll_data = 0;
     return p->native_pmic_ops.current(c);
 }
 static int pmic_write(void *c, uintptr_t a, uint32_t v)
@@ -80,12 +81,16 @@ static int pmic_write(void *c, uintptr_t a, uint32_t v)
     if (ticks > p->cost.write_max) p->cost.write_max = ticks;
     bb_twi_observe(&p->twi, 1, a, v);
     /* A poll that completed a bus phase ends its span at its first
-     * phase-start CNTR write; the wire-time spin's write is left out. */
+     * phase-start CNTR write; the wire-time spin's write is left out. A byte
+     * phase writes DATA before CNTR; a receive writes CNTR alone. */
+    if (a == BB_TWI_DATA)
+        p->poll_data = 1;
     if (a == BB_TWI_CNTR && p->poll_open) {
         p->poll_open = 0;
         if (p->in_step && !spin && p->twi.conditions + p->twi.bytes + p->twi.stops != p->poll_events)
-            bb_span_add(&p->step_complete[v == 0x48 ? BB_COMPLETE_BYTE : v == 0x58 ? BB_COMPLETE_STOP :
-                p->twi.stops != p->poll_stops ? BB_COMPLETE_START : BB_COMPLETE_RESTART], (uint32_t)(after - p->poll_at));
+            bb_span_add(&p->step_complete[v == 0x48 ? (p->poll_data ? BB_COMPLETE_BYTE : BB_COMPLETE_RECEIVE) :
+                v == 0x58 ? BB_COMPLETE_STOP : p->twi.stops != p->poll_stops ? BB_COMPLETE_START :
+                BB_COMPLETE_RESTART], (uint32_t)(after - p->poll_at));
     }
     return r;
 }

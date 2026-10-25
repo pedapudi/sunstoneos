@@ -158,7 +158,7 @@ and flag read.
 | Serial accesses between a flag and the next phase-start write | 27 per transaction | 25 per transaction, about 150 per snapshot | Counted from the phase sequence |
 | Snapshot step, 400 kHz, 200 ns per access | 712 µs (113%) | 685 µs (109%) | `checks/power-domains-service.c` |
 | Snapshot step, 400 kHz, measured costs | Not rerun | 739 µs (117%) | Same, board-cost table |
-| Snapshot step on the board, median; first step | 917 µs (146%); 941 µs | 779 µs (123.7%) and 784 µs (124.3%); 809 µs and 807 µs | Bundle 6 `STEP` lines of the two runs, port 3-3 |
+| Snapshot step on the board, median; first step | 917 µs (146%); 941 µs | 779 µs (123.7%) and 784 µs (124.4%); 809 µs and 807 µs | Bundle 6 `STEP` lines of the two runs, port 3-3 |
 | Selector write, 400 kHz, measured costs | Not rerun | One step of 950 µs; not measured on the board | Same |
 | Snapshot, 400 kHz, flags 10% later than the divisor implies, 200 ns | Two steps, one tick wait | One step of 751 µs for 708 µs of model wire | Same, slow-bus case |
 | Tick waits per snapshot and selector write, 100 kHz | 2 and 3 | 2 and 3 | Same |
@@ -354,9 +354,10 @@ that the earlier adapter made per access:
    per poll, about 35 ns, inside the step times. A poll that completes a bus
    phase (a flag or a STOP wait, as the trace observer counts them) ends its
    span at the stamp after its first phase-start `CNTR` write returns. The
-   spans of a recorded step join four records by that write: a byte
-   (`0x48`), a repeated START, a START after a STOP wait, and a STOP
-   (`0x58`). Each record keeps the count, the summed ticks and the fastest
+   spans of a recorded step join five records by that write: a byte whose
+   poll wrote `DATA` first (`0x48` for an address or register index), a
+   receive (`0x48` with no `DATA` write in the poll), a repeated START, a
+   START after a STOP wait, and a STOP (`0x58`). Each record keeps the count, the summed ticks and the fastest
    and slowest span, printed as `TWI_COMPLETE` lines. The step that holds the
    wire-time spin and the poll window's snapshot are left out.
 
@@ -415,7 +416,7 @@ logs:
 | Metric | First run | Second run |
 | --- | --- | --- |
 | Steps recorded | 33; the wire-time spin step excluded | 32; the wire-time spin step excluded, one snapshot taken by the poll window |
-| Median step | 779 µs (18,703 counter ticks), 123.7% | 784 µs (18,815.5 ticks), 124.3%; 1,243 permille of the measured wire time |
+| Median step | 779 µs (18,703 counter ticks), 123.7% | 784 µs (18,815.5 ticks), 124.4%; 1,243 permille of the measured wire time |
 | Steps after the first | 777 to 788 µs | 779 to 793 µs |
 | First step | 809 µs, 128.4% | 807 µs (19,376 ticks), limit 840 µs |
 | Re-spins | 0 | 0 |
@@ -449,9 +450,12 @@ average (358.1 ns), from 8 ticks (333 ns) to 10 ticks (417 ns). The poll
 window took its 256 samples from the 398 polls of one snapshot. XADDR, ADDR,
 CNTR, STAT and LCR read the same values after the write window as before
 it: `XADDR` `0x0`, `CNTR` `0x40`, `STAT` `0xf8`, `LCR` `0x3a`. The
-wire-time spin read `CNTR` 40 times in 554 ticks, 577 ns per read with its
-stamp, which is an adapter read plus a time read, so a `CNTR` read costs the
-same while a byte is on the wire as at idle.
+wire-time spin read `CNTR` 40 times in 554 ticks, 577 ns per iteration. Each
+iteration is an adapter read without the observer (462 ns at idle), a raw
+counter stamp (about 35 ns, half the stamp pair) and the spin's own record
+keeping. The window does not separate the record keeping, so it bounds a
+`CNTR` read while a byte is on the wire at about 80 ns above the idle read
+and does not show whether it costs more.
 
 The windows divide the costs as follows.
 
@@ -509,8 +513,9 @@ Its candidates:
 The completing-poll window (item 6 under "Measurement") times each
 completing poll from its entry to the return of its phase-start write
 inside the recorded steps. At the measured costs the model charges such a
-span 2.63 µs for a byte, 2.23 µs for a repeated START or a START after a
-STOP wait, and 2.88 µs for a STOP, which also reads `DATA`. Spans about
+span 2.63 µs for a byte, 2.23 µs for a receive, a repeated START or a START
+after a STOP wait, and 2.88 µs for a STOP, which also reads `DATA`. The
+window's own stamp adds about 35 ns to each. Spans about
 970 ns longer than those point to the first three candidates; spans that
 match them point to the fourth.
 
@@ -522,9 +527,14 @@ write overlaps the `CNTR` write, and a phase with one `CNTR` write costs 20 to
 40 ns less. Over the 18 two-write and 24 one-write phases of a snapshot, the
 writes save 2.4 to 3.2 µs, 39 to 53 ns per write on average. The model at
 465 ns per read and 364 ns per write gives 732 µs at the measured poll cost
-(7 µs shorter) and 775 µs at the 1,500 ns poll cost (8 µs shorter). The
-predicted median of bundle 6 is therefore about 776 µs, 1,230 permille of
-its wire time, against 784 µs. Because steps move in whole microseconds per
+(7 µs shorter) and 775 µs at the 1,500 ns poll cost (8 µs shorter). Without
+the completing-poll window the predicted median of bundle 6 is therefore
+about 776 µs against 784 µs. The window's stamp at every poll entry and its
+per-write bookkeeping add about 2 to 3 µs to each snapshot step, so a
+bundle 6 that carries the window is predicted at about 786 to 787 µs
+(1,246 to 1,248 permille of a 631 µs measured wire time) with `DSB SY`
+pairs and about 778 to 779 µs (1,233 to 1,235 permille) with the lighter
+placement. Both lie below the 1,268-permille limit. Because steps move in whole microseconds per
 phase, the board can differ from that by a few microseconds. If `DSB SY`
 waiting for stores makes up much of the 970 ns per phase, the step falls by
 more.
