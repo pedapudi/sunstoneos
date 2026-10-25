@@ -1,7 +1,10 @@
 /* Actual GPU controller, TOP owner, PMIC provider and rail ledger; modeled IO. */
 #include "power-domains-model.h"
 static uint32_t core[0xc14/4]; /* policy..PWCR and the delay row, by word */
-static unsigned pending, stalled, release_count;
+static unsigned pending, stalled, release_count, abandon;
+#ifdef GPU_POWER_ABANDON_CHECK
+#include "../apps/gpu-power-id/abandon.h"
+#endif
 static struct a733_gpu_power gpu;
 static int now(void *context, uint64_t *out) { (void)context; return pmic_model_now(&m, out); }
 static int acquire(void *context, struct a733_gpu_power_resources *out)
@@ -39,7 +42,9 @@ static int update(void *context, enum a733_gpu_power_bank bank, uint32_t off, ui
         assert(clear == UINT32_MAX && ((off == 0 && (set == 0 || set == 8)) || (off == 0x20 && !set) ||
                (off == 0x170 && set == 0x1f1f1f) || (off == 0x174 && set == 0x1f1f)
                || (off == 0xc00 && set == 0x08080808) || (off == 0xc04 && set == 0x0808) || (off == 0xc10 && set == 8)));
-        core[off/4] = set; if (!off) pending = 1; return 1;
+        /* An abandoned ON's policy 0 leaves the stalled ON transition
+         * with status 0 (abandon mode only). */
+        core[off/4] = set; if (!off) pending = !(abandon && !set); return 1;
     }
     assert(bank == A733_GPU_CCU && (off == 0xb20 || off == 0xb24));
     if (gpu.phase == A733_GPU_POWER_STOPPING) assert(!core[0] && !core[2] && !pending);
@@ -97,5 +102,48 @@ int main(void)
         for (unsigned i = 0; i < d.trace_n; ++i)
             assert(d.trace[i].address < 0x07066000 || d.trace[i].address >= 0x07067000);
     }
+#ifdef GPU_POWER_ABANDON_CHECK
+    {
+        /* The board's state: the power-up CORE state with TOP ON and an ON
+         * transition that never completes. The ON reaches its CORE status
+         * poll; abandon refuses earlier, then turns it into the OFF steps. */
+        domains_model_setup(0x28,23); d.ack_us = 0;
+        memset(&gpu,0,sizeof(gpu)); memset(core,0,sizeof(core));
+        d.ppu[5][0] |= 8; d.ppu[5][2] |= 8;
+        core[0] = 8; core[2] = 0; core[8] = A733_GPU_CORE_RESET_PWCR;
+        pending = stalled = abandon = 1; release_count = 0;
+        struct a733_rail_token token = {0};
+        assert(a733_gpu_power_init(&gpu,&ops,0));
+        assert(a733_power_domain_row_init(&gpu.row,&d.owner,5,9,&token));
+        domains_boot(); token = domains_rail(9,A733_RAIL_DCDC4);
+        assert(a733_gpu_power_abandon(&gpu, m.now + 10000) == A733_GPU_POWER_INVALID);
+        assert(a733_gpu_power_on(&gpu, m.now + 100000) == A733_GPU_POWER_AGAIN);
+        assert(a733_gpu_power_abandon(&gpu, m.now + 10000) == A733_GPU_POWER_INVALID);
+        assert(gpu.phase == A733_GPU_POWER_STARTING && gpu.index == 0);
+        unsigned polls = 0;
+        while (!(gpu.core_seen & (UINT32_C(8) << A733_GPU_NOTE_MISR_LATE))) {
+            assert(a733_gpu_power_poll(&gpu) == A733_GPU_POWER_AGAIN);
+            assert(++polls < 100); service_step(); m.now += 1000;
+        }
+        for (unsigned i = 0; i < 3; ++i) {
+            assert(a733_gpu_power_poll(&gpu) == A733_GPU_POWER_AGAIN); service_step(); m.now += 1000;
+        }
+        assert(gpu.phase == A733_GPU_POWER_STARTING && !core[2] && core[0] == 8 && !core[8]);
+        assert((d.ccu_b24 & 0x10001) == 0x10001 && a733_power_domain_state(&gpu.row) == A733_POWER_ROW_ON);
+        assert(a733_gpu_power_abandon(&gpu, m.now + 10000) == A733_GPU_POWER_AGAIN);
+        assert(gpu.phase == A733_GPU_POWER_STOPPING && gpu.index == 0);
+        enum a733_gpu_power_result result; polls = 0;
+        while ((result = a733_gpu_power_poll(&gpu)) == A733_GPU_POWER_AGAIN) {
+            assert(++polls < 100); service_step(); m.now += 1000;
+        }
+        assert(result == A733_GPU_POWER_OK && gpu.phase == A733_GPU_POWER_OFF && release_count == 1 && !gpu.lease_held);
+        assert(!core[0] && !core[2] && !(d.ccu_b24 & 0x10001) && !(d.ccu_b20 & 0x80000000));
+        assert(!(d.ppu[5][2] & 15) && !gpu.row.counted && a733_power_domain_state(&gpu.row) == A733_POWER_ROW_OFF);
+        assert(a733_rail_release(&m.rails,&token,m.now+100000) == A733_RAIL_READY);
+        assert(a733_gpu_power_abandon(&gpu, m.now + 10000) == A733_GPU_POWER_INVALID);
+        puts("PASS abandon: refused before the CORE status poll and after OFF; from the poll, CORE policy 0, "
+             "reset and gates closed, TOP row OFF, resources released");
+    }
+#endif
     puts("PASS eight CORE/TOP composition cases: four inherited pairs, two power-up CORE states, ON/OFF timeouts retain TOP row and rail pin; NPU, rail and shared gates preserved");
 }

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Build the GPU identity consumer, or with --power-only the power-only
-variant that never accesses the GPU register window, on the qualified
-returning PMIC platform."""
+variant that never accesses the GPU register window, with --wrapper-read the
+wrapper-read variant or with --wrapper-write the wrapper-write variant, on
+the qualified returning PMIC platform."""
 import argparse
 import hashlib
 import json
@@ -56,8 +57,10 @@ def main():
                         help='TOP and CORE ON, CORE status 8, OFF and release; no GPU register access')
     parser.add_argument('--wrapper-read', action='store_true',
                         help='one ON, then four reads of GPU wrapper words; no other GPU register access')
+    parser.add_argument('--wrapper-write', action='store_true',
+                        help='one ON, then three stages of GPU wrapper writes, restore, OFF and park')
     args = parser.parse_args()
-    if args.power_only and args.wrapper_read:
+    if args.power_only + args.wrapper_read + args.wrapper_write > 1:
         parser.error('choose one variant')
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
@@ -96,6 +99,13 @@ def main():
         # as the power-only variant, in place of main.c.
         if source == 'apps/gpu-power-id/main.c' and args.wrapper_read:
             source = 'apps/gpu-power-id/wrapper.c'
+        # The wrapper-write variant compiles wrapper-write.c in place of
+        # main.c, and the controller and platform sources with its abandon
+        # calls added (abandon.h); the shared sources stay unchanged.
+        if args.wrapper_write:
+            source = {'apps/gpu-power-id/main.c': 'apps/gpu-power-id/wrapper-write.c',
+                      'drivers/gpu/a733_gpu_power.c': 'apps/gpu-power-id/power-abandon.c',
+                      'drivers/gpu/a733_gpu_platform.c': 'apps/gpu-power-id/platform-abandon.c'}.get(source, source)
         variant = ['-DGPU_POWER_ONLY=1'] if args.power_only and source == 'apps/gpu-power-id/main.c' else []
         command = flags + variant + ['-MD', '-MF', str(obj) + '.d', '-c', str(ROOT / source), '-o', str(obj)]
         subprocess.run(command, check=True, cwd=ROOT)
@@ -162,10 +172,12 @@ def main():
               'layout_users_rebuilt': layout_users,
               'shared_layouts_equal': names, 'image_sha256': sha(out / 'image.elf'),
               'binary_sha256': sha(out / 'probe.bin'), 'binary_bytes': (out / 'probe.bin').stat().st_size,
-              'variant': 'power-only' if args.power_only else 'wrapper-read' if args.wrapper_read else 'identity',
+              'variant': ('power-only' if args.power_only else 'wrapper-read' if args.wrapper_read
+                          else 'wrapper-write' if args.wrapper_write else 'identity'),
               'expect': ('COMPLETE GPU power only: CORE status 8, OFF and provider parked' if args.power_only
                          else 'COMPLETE GPU wrapper read: CORE status 8, four wrapper words, OFF and provider parked'
-                         if args.wrapper_read else 'COMPLETE GPU power identity: OFF and provider parked'),
+                         if args.wrapper_read else 'COMPLETE GPU wrapper write: CORE status 8, OFF and provider parked'
+                         if args.wrapper_write else 'COMPLETE GPU power identity: OFF and provider parked'),
               'local_authority_required': 'Exclusive GPU CCU and PCK CORE6 policy/PWCR; TOP5 remains shared row' }
     (out / 'build.json').write_text(json.dumps(record, indent=2) + '\n')
     print(json.dumps({k: record[k] for k in ['image_sha256', 'binary_sha256', 'binary_bytes']}))

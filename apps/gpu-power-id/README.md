@@ -186,6 +186,43 @@ preparation (`prepare.py`) requires the image's `wrapper_words` table to
 hold exactly the four words in order and every host-check case to read only
 a prefix of them.
 
+## The wrapper-write variant writes two wrapper words in three stages
+
+`wrapper-write.c` builds the wrapper-write variant the way `wrapper.c`
+builds the wrapper-read variant, and links `power-abandon.c` and
+`platform-abandon.c` in place of the shared controller and platform
+sources. Those two files include the shared sources and add the
+diagnostic-only abandon calls of `abandon.h`, which turn an ON waiting at
+its CORE6 status poll into the controller's OFF steps. The shared sources
+and every other image stay unchanged.
+
+The client runs one ON of the power-only sequence with a 200 ms bound.
+With the controller still polling CORE6 status at its last step, it reads
+`0x01880104` (`pwr_qchan_cfg`) and `0x01880100` (`pwr_cmp_dly`), requires
+both to be 0, and runs three stages: `0x00640064` to `0x01880100`, then
+`0x100` and `0x107` to `0x01880104`. Each stage is a 32-bit write, its
+readback, one read of CORE6 status, DISR and MISR, and a wait of at most
+20 ms for status 8; the first stage that brings status 8 ends the stages.
+The stages keep the earlier stages' values. The client then writes both
+words back to 0 with readbacks, polls once more, reads CORE6 status, DISR
+and MISR, powers CORE6 and TOP5 OFF (through the abandon call when CORE6 is
+not ON), takes snapshot 2 and parks the provider. The twelve accesses are
+the rows of the `wrapper_steps` table; before each the progress record at
+result offset 128 (magic `GPUWRW01`) and a `GPU WRAPPER reading` or
+`writing` line name it. The completion text is `COMPLETE GPU wrapper
+write: CORE status 8, OFF and provider parked`; CORE6 not ON ends with
+`FAIL GPU wrapper write: CORE6 not ON after three stages, OFF and provider
+parked` after the park. [gpu-power.md](../../docs/gpu-power.md#the-wrapper-write-probe-sets-the-core-0-controls-one-at-a-time)
+gives the design, the write exception and the meaning of each result.
+
+`check.py --wrapper-write` runs fifteen cases on the linked image and
+requires every GPU-window access to be a row of the table, in table order,
+after its progress record and log line and before any OFF call, with no
+GPU core window access.
+Bundle preparation requires the image's `wrapper_steps` table to hold
+exactly the twelve rows and every host-check case to access only those
+rows in order.
+
 ## Build and evidence
 
 Run with the existing host Python environment containing pyelftools and Unicorn:
@@ -196,10 +233,11 @@ Run with the existing host Python environment containing pyelftools and Unicorn:
   --image /absolute/new/build/image.elf --output /absolute/new/client-results.json
 ```
 
-Add `--power-only` to both commands for the power-only variant, or
-`--wrapper-read` for the wrapper-read variant.
+Add `--power-only` to both commands for the power-only variant,
+`--wrapper-read` for the wrapper-read variant or `--wrapper-write` for the
+wrapper-write variant.
 `prepare.py` turns a build and its check result into a board bundle for
-`tools/prepare-board-bundles.py` (rows 11 to 14 of
+`tools/prepare-board-bundles.py` (rows 11 to 13, 16 and 17 of
 [board-bundles-next.md](../../docs/designs/board-bundles-next.md)). For both
 power variants it reads `on_steps` and `off_steps` from the image and
 requires the domain-5 (TOP5) ON request before the first CORE6 access and

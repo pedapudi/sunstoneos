@@ -211,7 +211,9 @@ def returning_row(name, position, component, overlay, expect, controlled, expect
 
 
 GPU_SOURCES = ['apps/gpu-power-id/prepare.py', 'apps/gpu-power-id/build.py', 'apps/gpu-power-id/check.py',
-               'apps/gpu-power-id/main.c', 'apps/gpu-power-id/wrapper.c', 'apps/gpu-provider-ready/main.c', 'apps/gpu-provider-ready/build.py',
+               'apps/gpu-power-id/main.c', 'apps/gpu-power-id/wrapper.c', 'apps/gpu-power-id/wrapper-write.c',
+               'apps/gpu-power-id/abandon.h', 'apps/gpu-power-id/power-abandon.c',
+               'apps/gpu-power-id/platform-abandon.c', 'apps/gpu-provider-ready/main.c', 'apps/gpu-provider-ready/build.py',
                'apps/gpu-provider-ready/check.py', 'drivers/gpu/a733_gpu_power.c', 'drivers/gpu/a733_gpu_platform.c',
                'drivers/gpu/a733_gpu_platform_native.c', 'drivers/gpu/a733_gpu_resources.c',
                'drivers/gpu/a733_gpu_resources_native.c', 'drivers/power/a733_power_domains.c',
@@ -558,6 +560,54 @@ ROWS = [
                       'monitor does not return, nothing reaches the host and only a power removal recovers the board. '
                       'A non-return is itself the result that the wrapper is unreachable in this state; the progress '
                       'record and log, which name each read before it is issued, survive only on a return.'),
+    gpu_row('gpu-wrapper-write', 17, 'GPU wrapper writes with TOP5 ON and CORE6 not acknowledged', 'wrapper-write',
+            'COMPLETE GPU wrapper write: CORE status 8, OFF and provider parked',
+            'Either monitor status 1 with the GPU WRAPPER lines of all twelve accesses, three pairs of GPU WRAPPER '
+            'stage lines, GPU WRAPPER result stage=0, snapshot 2 and FAIL GPU wrapper write: CORE6 not ON after three '
+            'stages, OFF and provider parked, the expected result while CORE6 never reports ON; or status 0 with GPU '
+            'WRAPPER result stage=<k> on=1 (stage 0 when status 8 came before any wrapper write or only after the '
+            'restore, late=1 for the latter) and COMPLETE GPU wrapper write: CORE status 8, OFF and provider parked. '
+            'Either is followed by a responsive ROM. Record every line of kernel.log and the progress record at '
+            'result.bin offset 128.',
+            'apps/gpu-power-id, wrapper-write variant (apps/gpu-power-id/wrapper-write.c): the power-only ON sequence, '
+            'with its delay-row writes, CORE6 PWCR 0 and policy 8, GPU clock, bus gate and reset release, waited for '
+            'at most 200 ms; then snapshot 1 and the controller and CORE6 lines. With the controller still polling '
+            'CORE6 status at its last step, the image reads 0x01880104 (pwr_qchan_cfg) and 0x01880100 (pwr_cmp_dly) '
+            'and requires both to be 0, then runs three stages, each a 32-bit write, its readback, one read of CORE6 '
+            'status, DISR and MISR, and a wait of at most 20 ms for status 8: stage 1 writes 0x00640064 to '
+            '0x01880100, stage 2 writes 0x100 to 0x01880104, stage 3 writes 0x107 to 0x01880104. The first stage that '
+            'brings status 8 ends the stages. It then writes 0 to 0x01880104 and to 0x01880100, each read back, and '
+            'powers CORE6 and TOP5 OFF, from the unacknowledged ON through the controller\'s OFF steps if needed, '
+            'takes snapshot 2 after the OFF attempt and parks the provider. The stages keep the earlier stages\' values. '
+            'Before each wrapper access the image writes the access number '
+            'into the progress record at result offset 128 and prints a GPU WRAPPER reading or writing line. '
+            'docs/gpu-power.md, "The wrapper-write probe sets the core-0 controls one at a time", maps each result '
+            'to its meaning. It is the last step of its lifetime.',
+            after=['gpu-provider-ready'],
+            failures=['`FAIL GPU wrapper write: CORE6 not ON after three stages, OFF and provider parked`, after the '
+                      'twelve wrapper accesses, the stage lines and snapshot 2: the expected result while CORE6 never '
+                      'reports ON; record it',
+                      '`FAIL GPU wrapper write refused: wrapper words not 0, OFF and provider parked`: the entry reads '
+                      'found a nonzero word; nothing was written',
+                      '`FAIL GPU wrapper write refused before the final CORE6 poll`, `GPU wrapper mapping` or `GPU '
+                      'wrapper write time budget`: no wrapper word was accessed, and no OFF ran',
+                      '`FAIL GPU ON poll` after a `GPU WRAPPER stage` line: the controller failed during a stage; the '
+                      'wrapper keeps the stage value and no OFF ran; after the restore lines it failed at the last poll',
+                      '`FAIL GPU OFF begin`, `GPU OFF deadline` or `GPU OFF poll` after snapshot 2: the OFF from the '
+                      'unacknowledged ON was refused or failed; record snapshot 2',
+                      '`FAIL GPU wrapper write order`: an internal refusal before the access it names'],
+            admission='GPU-window write exception: this row alone accesses two words of the GPU wrapper, each a 32-bit '
+                      'Device-nGnRnE access after one identity mapping check of the page, with TOP5 ON, the GPU '
+                      'clock open, its reset released and CORE6 not acknowledged: reads of 0x01880104 and 0x01880100; '
+                      'writes of 0x00640064 then 0 to 0x01880100 and of 0x100, 0x107 then 0 to 0x01880104, in the '
+                      'order of the wrapper_steps table, each followed by a readback. It writes no other GPU-window '
+                      'word, and neither the wrapper\'s drm_ctrl nor the SMC0 word 0x0a0000b0. Outside the window it '
+                      'adds three CORE6 reads per stage (+0x08, +0x10, +0x14) and an OFF of CORE6 and TOP5 from the '
+                      'unacknowledged ON: CORE6 policy 0, reset asserted, gates closed and the domain-5 OFF request. '
+                      'Risk: a wrapper access or CORE6 transition that never completes stops the CPU without an '
+                      'exception, the monitor does not return and only a power removal recovers the board; the '
+                      'progress record survives only on a return. TOP5 OFF has not run on a board with CORE6\'s '
+                      'transition outstanding; a refusal returns FAIL GPU OFF poll with the claim retained.'),
     # `admission` maps fields of the value prepare() returns to the values that
     # identify this row's build. None refuses the row: no owning package has
     # named those values yet.

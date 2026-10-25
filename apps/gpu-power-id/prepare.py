@@ -2,9 +2,9 @@
 """Board-bundle preparation of the returning GPU images on port 3-1.
 
 tools/prepare-board-bundles.py calls prepare_bundle(row, build, check,
-output) inside its sandbox for three rows: the provider-readiness checkpoint
-(apps/gpu-provider-ready/build.py), and the power-only and identity variants
-of apps/gpu-power-id/build.py. The function copies the image, its binary,
+output) inside its sandbox for the GPU rows: the provider-readiness checkpoint
+(apps/gpu-provider-ready/build.py), and the power-only, identity,
+wrapper-read and wrapper-write variants of apps/gpu-power-id/build.py. The function copies the image, its binary,
 its build record and its focused host-check result into the bundle with the
 kernel runner's host tools, and validate() checks the copy:
 
@@ -24,7 +24,12 @@ kernel runner's host tools, and validate() checks the copy:
   variants;
 - the wrapper-read image's wrapper_words table holds exactly the four GPU
   wrapper words, in their order, and every host-check case read only a
-  prefix of them, with 32-bit loads and no GPU-window store.
+  prefix of them, with 32-bit loads and no GPU-window store;
+- the wrapper-write image's wrapper_steps table holds exactly its twelve
+  wrapper accesses, and every host-check case made only accesses of that
+  table, in its order, and no access of the GPU core window; each write was
+  followed by its readback, and once a stage wrote, the restore ran in full
+  unless the controller failed or the check refused an access.
 
 Nothing here contacts a device.
 """
@@ -44,15 +49,19 @@ SCHEMA = 'board-gpu-returning-bundle-v1'
 # The image each build reuses objects of, by its build record's identity.
 PROVIDER_READY = '3adfa4ad6ba386ce8d39f76646f540107c2a5d02ce42db6c1c35c90de68a75ed'
 FAILED_POWER_ID = 'fd3d5839f700b5e0f569b0ce722e186c33beba65512815b136d9c969a7341afe'
-CASES = {'provider-ready': 11, 'power-only': 11, 'identity': 13, 'wrapper-read': 7}
+CASES = {'provider-ready': 11, 'power-only': 11, 'identity': 13, 'wrapper-read': 7, 'wrapper-write': 15}
 # ON/OFF cycles of the client's normal run: the power-only variant powers
 # CORE6 on twice, so the second ON shows whether TOP5 OFF returned CORE6 to
 # its power-up state.
-CYCLES = {'power-only': 2, 'identity': 1, 'wrapper-read': 1}
+CYCLES = {'power-only': 2, 'identity': 1, 'wrapper-read': 1, 'wrapper-write': 1}
 # The host-check case that completes ON and OFF in each variant.
-NORMAL = {'power-only': 'normal', 'identity': 'normal', 'wrapper-read': 'wrapper-on'}
+NORMAL = {'power-only': 'normal', 'identity': 'normal', 'wrapper-read': 'wrapper-on', 'wrapper-write': 'ww-none'}
 # The only GPU-window addresses of the wrapper-read image, in read order.
 WRAPPER_WORDS = [0x01880104, 0x01880100, 0x01880018, 0x0188001c]
+# The wrapper-write image's access table: address, value, write (1) or read (0).
+WRAPPER_STEPS = [(0x01880104, 0, 0), (0x01880100, 0, 0), (0x01880100, 0x00640064, 1), (0x01880100, 0, 0),
+                 (0x01880104, 0x100, 1), (0x01880104, 0, 0), (0x01880104, 0x107, 1), (0x01880104, 0, 0),
+                 (0x01880104, 0, 1), (0x01880104, 0, 0), (0x01880100, 0, 1), (0x01880100, 0, 0)]
 # struct step of drivers/gpu/a733_gpu_power.c: kind, bank, offset, mask, value.
 STEP = struct.Struct('<5I')
 KIND_DOMAIN = 3        # enum kind: CHECK, UPDATE, DELAY, DOMAIN, CORE_POLICY, ...
@@ -87,17 +96,27 @@ def step_table(elf, name):
     return [STEP.unpack_from(data, i) for i in range(0, len(data), STEP.size)]
 
 
-def wrapper_words(elf):
-    """The wrapper_words table of a linked wrapper-read image."""
+def table(elf, name, size):
+    """The bytes of one static table of a linked image."""
     from elftools.elf.elffile import ELFFile
     with Path(elf).open('rb') as stream:
         image = ELFFile(stream)
         found = [s for s in image.get_section_by_name('.symtab').iter_symbols()
-                 if s.name == 'wrapper_words' and s['st_info']['type'] == 'STT_OBJECT']
-        require(len(found) == 1 and found[0]['st_size'] == 16, f'{elf} has no single 16-byte wrapper_words table')
+                 if s.name == name and s['st_info']['type'] == 'STT_OBJECT']
+        require(len(found) == 1 and found[0]['st_size'] == size, f'{elf} has no single {size}-byte {name} table')
         section = image.get_section(found[0]['st_shndx'])
-        data = section.data()[found[0]['st_value'] - section['sh_addr']:][:16]
-    return list(struct.unpack('<4I', data))
+        return section.data()[found[0]['st_value'] - section['sh_addr']:][:size]
+
+
+def wrapper_words(elf):
+    """The wrapper_words table of a linked wrapper-read image."""
+    return list(struct.unpack('<4I', table(elf, 'wrapper_words', 16)))
+
+
+def wrapper_steps(elf):
+    """The wrapper_steps table of a linked wrapper-write image."""
+    data = table(elf, 'wrapper_steps', 12 * len(WRAPPER_STEPS))
+    return [struct.unpack_from('<3I', data, 12 * i) for i in range(len(WRAPPER_STEPS))]
 
 
 def power_order(elf, cycles):
@@ -185,6 +204,24 @@ def validate(row, output):
         require(identity == (variant == 'identity'), 'The image\'s identity reader does not match its variant.')
         wrapper = 'wrapper_read' in names or 'wrapper_words' in names
         require(wrapper == (variant == 'wrapper-read'), 'The image\'s wrapper reader does not match its variant.')
+        writer = 'wrapper_access' in names or 'wrapper_steps' in names
+        require(writer == (variant == 'wrapper-write'), 'The image\'s wrapper writer does not match its variant.')
+        if variant == 'wrapper-write':
+            require(wrapper_steps(output / 'image.elf') == WRAPPER_STEPS,
+                    'The wrapper_steps table is not the twelve wrapper accesses in their order.')
+            for case in checked['cases']:
+                rows = [a[0] for a in case['ww_accesses']]
+                require(rows == sorted(set(rows)) and all(
+                    [hex(WRAPPER_STEPS[r][0]), WRAPPER_STEPS[r][2], hex(WRAPPER_STEPS[r][1]) if WRAPPER_STEPS[r][2]
+                     else None] == a[1:] for r, a in zip(rows, case['ww_accesses'])),
+                    'A host-check case made a GPU-window access outside the wrapper table or its order.')
+                require(not case['gpu_reads'], 'A host-check case read the GPU core window.')
+                if 'refused' not in case:
+                    require(all(r + 1 in rows for r in rows if WRAPPER_STEPS[r][2]),
+                            'A host-check case wrote a wrapper word without its readback.')
+                    require(not set(rows) & set(range(2, 8)) or case['failure'] == 'GPU ON poll' or
+                            set(range(8, 12)) <= set(rows), 'A host-check case left a stage write unrestored.')
+            value['wrapper_steps'] = [[hex(a), hex(v), w] for a, v, w in WRAPPER_STEPS]
         if variant == 'wrapper-read':
             require(wrapper_words(output / 'image.elf') == WRAPPER_WORDS,
                     'The wrapper_words table is not the four GPU wrapper words in their order.')

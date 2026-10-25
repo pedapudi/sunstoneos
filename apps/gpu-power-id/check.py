@@ -6,7 +6,10 @@ requires that no load or store reaches the GPU register window. With
 --wrapper-read the image must be the wrapper-read variant: its only
 GPU-window accesses are 32-bit loads of the four wrapper words, in their
 order, each after its progress record and log line, and there is no store
-to the window."""
+to the window. With --wrapper-write the image must be the wrapper-write
+variant: its only GPU-window accesses are 32-bit accesses of the rows of its
+access table in their order, each after its progress record and log line,
+and each case's accesses are the rows its path allows."""
 import argparse
 import hashlib
 import json
@@ -17,7 +20,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'checks'))
 import harness
-from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE
+from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE, UC_MEM_WRITE
 from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_X2, UC_ARM64_REG_LR, UC_ARM64_REG_PC, UC_ARM64_REG_SP
 
 EXPECTED = 36 << 48 | 56 << 32 | 104 << 16 | 183
@@ -35,6 +38,29 @@ WRAPPER_VALUES = {0x01880104: 0x2, 0x01880100: 0x00200010, 0x01880018: 0x1, 0x01
 WRAPPER_PAGE = 0x01880000
 WRAPPER_MAGIC = 0x3130505257555047
 PROGRESS = 0x42000080
+# The wrapper-write variant's access table (wrapper_steps in wrapper-write.c):
+# address, value, write. Rows 0 and 1 read the entry words, rows 2 to 7 are
+# the three stages' writes and readbacks, rows 8 to 11 the restore.
+WRITE_TABLE = [(0x01880104, 0, 0), (0x01880100, 0, 0), (0x01880100, 0x00640064, 1), (0x01880100, 0, 0),
+               (0x01880104, 0x100, 1), (0x01880104, 0, 0), (0x01880104, 0x107, 1), (0x01880104, 0, 0),
+               (0x01880104, 0, 1), (0x01880104, 0, 0), (0x01880100, 0, 1), (0x01880100, 0, 0)]
+WRITE_MAGIC = 0x3130575257555047
+# The rows each wrapper-write case accesses, and how it ends.
+WRITE_PATHS = {'ww-none': list(range(12)), 'ww-stage2': [0, 1, 2, 3, 4, 5, 8, 9, 10, 11], 'ww-on-first': [],
+               'ww-entry-nonzero': [0, 1], 'ww-early-stop': [], 'ww-pending-early': [], 'ww-mapping': [],
+               'ww-off-fault': list(range(12)), 'ww-abandon-refused': list(range(12)), 'ww-stage-fault': [0, 1, 2, 3],
+               'ww-time-budget': [], 'ww-late': list(range(12)), 'ww-stage3': list(range(12)),
+               'ww-readback': list(range(12))}
+WRITE_REASONS = {'ww-none': 'GPU wrapper write: CORE6 not ON after three stages, OFF and provider parked',
+                 'ww-stage2': None, 'ww-on-first': None,
+                 'ww-entry-nonzero': 'GPU wrapper write refused: wrapper words not 0, OFF and provider parked',
+                 'ww-early-stop': 'GPU ON poll', 'ww-pending-early': 'GPU wrapper write refused before the final CORE6 poll',
+                 'ww-mapping': 'GPU wrapper mapping', 'ww-off-fault': 'GPU OFF poll', 'ww-abandon-refused': 'GPU OFF begin',
+                 'ww-stage-fault': 'GPU ON poll', 'ww-time-budget': 'GPU wrapper write time budget',
+                 'ww-late': None, 'ww-stage3': None,
+                 'ww-readback': 'GPU wrapper write: CORE6 not ON after three stages, OFF and provider parked'}
+# The CORE6 status, DISR and MISR words read after each stage's readback and after the restore.
+CORE_WORDS = [0x07066008, 0x07066010, 0x07066014]
 NAMES = ['bb_power', 'a733_gpu_platform', 'a733_gpu_power', 'a733_pmic_consumer',
          'a733_power_domains', 'a733_power_domain', 'a733_power_domain_row']
 
@@ -44,13 +70,17 @@ def last_put(state):
     return len(state['calls']) - 1 - state['calls'][::-1].index('platform_puts')
 
 
-def run(image, case, power_only=False, wrapper=False):
+def run(image, case, power_only=False, wrapper=False, writer=False):
     u = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
     u.mem_map(0x41000000, 0x1200000)
     u.mem_map(0x1800000, 0x1000)
     u.mem_map(WRAPPER_PAGE, 0x1000)
     for address, value in WRAPPER_VALUES.items():
         u.mem_write(address, value.to_bytes(4, 'little'))
+    if writer:
+        # The board's entry words; the wrapper page holds what is written.
+        u.mem_write(0x01880104, (2 if case == 'ww-entry-nonzero' else 0).to_bytes(4, 'little'))
+        u.mem_write(0x01880100, bytes(4))
     for page in SNAPSHOT_PAGES:
         u.mem_map(page, 0x1000)
     for address in SNAPSHOT:
@@ -61,6 +91,9 @@ def run(image, case, power_only=False, wrapper=False):
         # A seeded mutant of the image: the second table entry names another
         # wrapper word, which the check must refuse at that read.
         u.mem_write(image.address('wrapper_words') + 4, (0x01880108).to_bytes(4, 'little'))
+    if case == 'ww-table-mutant':
+        # A seeded mutant: stage 3 writes 0x10f, which the check must refuse.
+        u.mem_write(image.address('wrapper_steps') + 6 * 12 + 4, (0x10f).to_bytes(4, 'little'))
     u.reg_write(UC_ARM64_REG_SP, 0x421f0000)
     L = image.layouts
     gpu, bb = image.address('gpu'), image.address('bb_power')
@@ -70,10 +103,11 @@ def run(image, case, power_only=False, wrapper=False):
     domains = bb + L['bb_power']['domains']
     domain5 = domains + L['a733_power_domains']['domain'] + 2 * 32
     # The wrapper-read client keeps 200 ms for ON and 100 ms after it.
-    deadline = 10**6 if wrapper else 10000
+    deadline = 500000 if case == 'ww-time-budget' else 10**6 if wrapper or writer else 10000
     state = {'case': case, 'calls': [], 'gpu_reads': [], 'gpu_writes': [], 'clock_reads': 0, 'on_polls': 0,
              'snapshot_reads': [], 'translated': [], 'wrapper_reads': [], 'progress': [],
-             'time': 100, 'messages': [], 'exit_status': None, 'failure': None}
+             'time': 100, 'messages': [], 'exit_status': None, 'failure': None, 'ww': [], 'ww_accesses': [],
+             'events': [], 'rw_translated': []}
 
     def put(address, value, size=4):
         u.mem_write(address, value.to_bytes(size, 'little'))
@@ -113,9 +147,9 @@ def run(image, case, power_only=False, wrapper=False):
         state['calls'].append(name)
         if name == 'aarch64_device_translate' and power_only and u.reg_read(UC_ARM64_REG_X0) not in SNAPSHOT_PAGES:
             raise AssertionError('power-only variant translated a GPU address')
-        if name == 'aarch64_device_translate' and wrapper and \
+        if name == 'aarch64_device_translate' and (wrapper or writer) and \
                 u.reg_read(UC_ARM64_REG_X0) not in SNAPSHOT_PAGES + (WRAPPER_PAGE,):
-            raise AssertionError('wrapper-read variant translated another GPU address')
+            raise AssertionError('wrapper variant translated another GPU address')
         if name == 'bb_power_now':
             state['clock_reads'] += 1
             state['time'] += 1
@@ -126,6 +160,44 @@ def run(image, case, power_only=False, wrapper=False):
             if case == 'on-deadline' and state['on_polls'] >= 3:
                 state['time'] = deadline
             ret(state['time'])
+        elif name == 'a733_gpu_platform_poll' and writer:
+            state['on_polls'] += 1
+            state['time'] += 5000
+            early = case == 'ww-early-stop'
+            field(power, 'a733_gpu_power', 'core_seen', 0x1f if case in ('ww-early-stop', 'ww-pending-early') else 0x1ff)
+            field(power, 'a733_gpu_power', 'core_policy', 8)
+            field(power, 'a733_gpu_power', 'core_config', 0x101)
+            field(power, 'a733_gpu_power', 'index', 10 if early else 5 if case == 'ww-pending-early' else 38)
+            notes(0x10130101, 0, 0, 0, 0, 0, (51, 51, 51))
+            field(gpu, 'a733_gpu_platform', 'phase', 2)
+            field(gpu, 'a733_gpu_platform', 'token', 17, 8)
+            field(gpu, 'a733_gpu_platform', 'delegated', 1)
+            field(power, 'a733_gpu_power', 'phase', 1)
+            field(power, 'a733_gpu_power', 'last_value', 0)
+            qchan = int.from_bytes(u.mem_read(0x01880104, 4), 'little')
+            delay = int.from_bytes(u.mem_read(0x01880100, 4), 'little')
+            if early or (case == 'ww-stage-fault' and delay == 0x00640064):
+                # Admission refused the entry, or a status read failed.
+                field(power, 'a733_gpu_power', 'phase', 5)
+                field(power, 'a733_gpu_power', 'error', 5)
+                field(gpu, 'a733_gpu_platform', 'phase', 7)
+                ret((1 << 64) - 1)
+                return
+            if case == 'ww-on-first' or (case == 'ww-stage2' and qchan == 0x100) or \
+                    (case == 'ww-stage3' and qchan == 0x107) or (case == 'ww-late' and len(state['ww']) == 12):
+                field(gpu, 'a733_gpu_platform', 'phase', 3)
+                field(power, 'a733_gpu_power', 'phase', 2)
+                field(power, 'a733_gpu_power', 'last_value', 8)
+                ret()
+                return
+            ret(0)
+        elif name == 'a733_gpu_platform_abandon':
+            if case == 'ww-abandon-refused':
+                ret(0)
+                return
+            field(gpu, 'a733_gpu_platform', 'phase', 4)
+            field(power, 'a733_gpu_power', 'phase', 3)
+            ret()
         elif name == 'a733_gpu_platform_poll' and wrapper:
             state['on_polls'] += 1
             if case in ('wrapper-on', 'wrapper-off-fault'):
@@ -203,18 +275,21 @@ def run(image, case, power_only=False, wrapper=False):
         elif name == 'aarch64_device_translate':
             address = u.reg_read(UC_ARM64_REG_X0)
             assert address in (0x1800020, 0x1800018, WRAPPER_PAGE) + SNAPSHOT_PAGES
-            assert u.reg_read(UC_ARM64_REG_X1) == 0
+            # Only the wrapper-write variant translates for a store, of the wrapper page.
+            assert u.reg_read(UC_ARM64_REG_X1) == 0 or (writer and address == WRAPPER_PAGE and
+                                                        u.reg_read(UC_ARM64_REG_X1) == 1)
             state['translated'].append(address)
+            state['rw_translated'].append([address, u.reg_read(UC_ARM64_REG_X1)])
             # The compiled mapping predicate consumes this native translation
             # result; wrong physical address must refuse before the MMIO read.
             target = u.reg_read(UC_ARM64_REG_X2)
             wrong = (case == 'bad-mapping' and address < 0x2000000) or \
                     (case == 'snapshot-mapping' and address == 0x07065000) or \
-                    (case == 'wrapper-mapping' and address == WRAPPER_PAGE)
+                    (case in ('wrapper-mapping', 'ww-mapping') and address == WRAPPER_PAGE)
             u.mem_write(target, struct.pack('<QII', address + (4096 if wrong else 0), 0, 0))
             ret()
         elif name == 'a733_gpu_platform_off_poll':
-            if case in ('off-fault', 'wrapper-off-fault'):
+            if case in ('off-fault', 'wrapper-off-fault', 'ww-off-fault'):
                 ret((1 << 64) - 1)
                 return
             field(gpu, 'a733_gpu_platform', 'phase', 6)
@@ -244,6 +319,8 @@ def run(image, case, power_only=False, wrapper=False):
                'a733_gpu_platform_begin', 'a733_gpu_platform_poll', 'aarch64_device_translate',
                'a733_gpu_platform_off_begin', 'a733_gpu_platform_off_poll', 'bb_power_park',
                'a733_power_service_idle', 'bb_power_fail', 'platform_puts', 'platform_exit']
+    if writer:
+        modeled.append('a733_gpu_platform_abandon')
     hooks = {image.address(name): name for name in modeled}
     u.hook_add(UC_HOOK_CODE, lambda uc, address, size, arg: call(hooks[address]) if address in hooks else None)
 
@@ -269,6 +346,42 @@ def run(image, case, power_only=False, wrapper=False):
         state['wrapper_reads'].append(address)
         state['progress'].append([stage, count])
 
+    def ww_access(uc, access, address, size, value, arg):
+        """One wrapper-write access: the table row its progress record names,
+        after that row's log line, later than the previous access."""
+        write = access == UC_MEM_WRITE
+        magic, stage, count, stamp = struct.unpack('<4Q', bytes(u.mem_read(PROGRESS, 32)))
+        row = stage - 1
+        expected = WRITE_TABLE[row] if 0 <= row < len(WRITE_TABLE) else None
+        if not (size == 4 and expected and expected[0] == address and expected[2] == write and
+                (not write or expected[1] == value) and magic == WRITE_MAGIC and stamp and
+                count == len(state['ww']) and (not state['ww'] or row > state['ww'][-1])):
+            state['refused'] = [hex(address), size, int(write), hex(value) if write else None, stage]
+            uc.emu_stop()
+            return
+        if case == 'ww-readback' and row == 3:
+            # The register keeps 0: the stage-1 readback differs from its write.
+            u.mem_write(address, bytes(4))
+        if not state['ww']:
+            # The page was checked for read and then write before the first access.
+            assert state['rw_translated'][-2:] == [[WRAPPER_PAGE, 0], [WRAPPER_PAGE, 1]], state['rw_translated']
+            # Everything already known is printed before the first wrapper access.
+            output = ''.join(state['messages'])
+            assert state['snapshot_reads'] == SNAPSHOT * 2, state['snapshot_reads']
+            for text in ('GPU SNAP n=1 a=0x2002b24', 'GPU power phase=', 'GPU resources result=',
+                         'GPU CORE entry cycle=1', 'GPU CORE inputs cycle=1', 'GPU CORE after cycle=1'):
+                assert text in output, (text, output)
+        line = (f'GPU WRAPPER writing n={stage} a={address:#x} v={value:#x}\n' if write
+                else f'GPU WRAPPER reading n={stage} a={address:#x}\n')
+        assert state['messages'][-1] == line, (state['messages'][-1], line)
+        state['ww'].append(row)
+        state['ww_accesses'].append([row, hex(address), int(write), hex(value) if write else None])
+        # Each access happens before any OFF call, with the platform still starting or ON.
+        phase = int.from_bytes(u.mem_read(gpu + L['a733_gpu_platform']['phase'], 4), 'little')
+        assert phase in (2, 3) and 'a733_gpu_platform_abandon' not in state['calls'] and \
+            'a733_gpu_platform_off_begin' not in state['calls'], (phase, state['calls'])
+        state['events'].append(['ww', row])
+
     def read(uc, access, address, size, value, arg):
         state['gpu_reads'].append([hex(address), size])
         assert not power_only, 'power-only variant read the GPU register window'
@@ -278,6 +391,8 @@ def run(image, case, power_only=False, wrapper=False):
     def snapshot_read(uc, access, address, size, value, arg):
         assert size == 4 and address in SNAPSHOT, (hex(address), size)
         state['snapshot_reads'].append(address)
+        if state['ww']:
+            state['events'].append(['core', address])
 
     def snapshot_write(uc, access, address, size, value, arg):
         raise AssertionError(f'write to a snapshot page at {address:#x}')
@@ -292,10 +407,16 @@ def run(image, case, power_only=False, wrapper=False):
 
     u.hook_add(UC_HOOK_MEM_READ, read, begin=0x1800000, end=0x1800fff)
     u.hook_add(UC_HOOK_MEM_WRITE, write, begin=0x1800000, end=0x1800fff)
-    u.hook_add(UC_HOOK_MEM_READ, wrapper_read, begin=WRAPPER_PAGE, end=WRAPPER_PAGE + 0xfff)
-    u.hook_add(UC_HOOK_MEM_WRITE, write, begin=WRAPPER_PAGE, end=WRAPPER_PAGE + 0xfff)
-    u.emu_start(image.address('gpu_power_id_client'), 0, count=100000)
+    if writer:
+        u.hook_add(UC_HOOK_MEM_READ, ww_access, begin=WRAPPER_PAGE, end=WRAPPER_PAGE + 0xfff)
+        u.hook_add(UC_HOOK_MEM_WRITE, ww_access, begin=WRAPPER_PAGE, end=WRAPPER_PAGE + 0xfff)
+    else:
+        u.hook_add(UC_HOOK_MEM_READ, wrapper_read, begin=WRAPPER_PAGE, end=WRAPPER_PAGE + 0xfff)
+        u.hook_add(UC_HOOK_MEM_WRITE, write, begin=WRAPPER_PAGE, end=WRAPPER_PAGE + 0xfff)
+    u.emu_start(image.address('gpu_power_id_client'), 0, count=400000 if writer else 100000)
     output = ''.join(state['messages'])
+    if writer:
+        return check_writer(u, state, case, output)
     if wrapper and case == 'wrapper-table-mutant':
         assert state.get('refused') == ['0x1880108', 4, 2] and state['wrapper_reads'] == WRAPPER[:1], state
         state['gpu_reads'] = state['gpu_reads'][:1]
@@ -409,6 +530,77 @@ def run(image, case, power_only=False, wrapper=False):
     return state
 
 
+def check_writer(u, state, case, output):
+    """The wrapper-write variant's outcome for one case."""
+    assert not state['gpu_reads'] and not state['gpu_writes'], 'a GPU core window access'
+    calls = state['calls']
+    if case == 'ww-table-mutant':
+        # Refused at the mutated stage-3 write, after rows 0 to 5.
+        assert state.get('refused') == ['0x1880104', 4, 1, '0x10f', 7] and state['ww'] == list(range(6)), state
+        return state
+    assert 'refused' not in state, state['refused']
+    assert state['failure'] == WRITE_REASONS[case], (state['failure'], output)
+    rows = WRITE_PATHS[case]
+    assert state['ww'] == rows, state['ww']
+    magic, stage, count, _ = struct.unpack('<4Q', bytes(u.mem_read(PROGRESS, 32)))
+    if case != 'ww-time-budget':
+        assert magic == WRITE_MAGIC and stage == (rows[-1] + 1 if rows else 0) and count == len(rows), (stage, count)
+    for row in rows:
+        address, value, write = WRITE_TABLE[row]
+        if not write:
+            stored = 2 if case == 'ww-entry-nonzero' and row == 0 else WRITE_TABLE[row - 1][1] if row > 1 else 0
+            stored = 0 if case == 'ww-readback' and row == 3 else stored
+            assert f'GPU WRAPPER n={row + 1} a={address:#x} v={stored:#x}' in output, (row, output)
+    # Snapshots 0 and 1; the three CORE6 words after each stage's readback
+    # and after the restore, in order with the wrapper accesses; and snapshot
+    # 2 after every OFF attempt.
+    stages = {'ww-none': 3, 'ww-stage2': 2, 'ww-off-fault': 3, 'ww-abandon-refused': 3, 'ww-stage-fault': 1,
+              'ww-late': 3, 'ww-stage3': 3, 'ww-readback': 3}.get(case, 0)
+    snapshots = 1 if case == 'ww-time-budget' else 2
+    restored = 11 in rows
+    off = case in ('ww-none', 'ww-stage2', 'ww-on-first', 'ww-entry-nonzero', 'ww-off-fault', 'ww-abandon-refused',
+                   'ww-late', 'ww-stage3', 'ww-readback')
+    after = SNAPSHOT if off else []
+    assert state['snapshot_reads'] == SNAPSHOT * snapshots + CORE_WORDS * (stages + restored) + after, \
+        state['snapshot_reads']
+    events = []
+    for row in rows:
+        events.append(['ww', row])
+        if row in (3, 5, 7, 11):
+            events += [['core', a] for a in CORE_WORDS]
+    events += [['core', a] for a in after] if rows else []
+    assert state['events'] == events, state['events']
+    on_stage = {'ww-stage2': 2, 'ww-stage3': 3}.get(case, 0)
+    for k in range(1, stages + 1):
+        readback = 0 if case == 'ww-readback' and k == 1 else WRITE_TABLE[2 * k][1]
+        assert f'GPU WRAPPER stage k={k} readback={readback:#x} ' in output, (k, output)
+        if case != 'ww-stage-fault':
+            assert f'GPU WRAPPER stage k={k} on={int(k == on_stage)} ' in output, (k, output)
+    assert ('GPU WRAPPER restored status=' in output) == restored, output
+    abandoned = case in ('ww-none', 'ww-entry-nonzero', 'ww-off-fault', 'ww-abandon-refused', 'ww-readback')
+    assert ('a733_gpu_platform_abandon' in calls) == abandoned, calls
+    completes = case in ('ww-stage2', 'ww-on-first', 'ww-late', 'ww-stage3')
+    assert ('a733_gpu_platform_off_begin' in calls) == completes, calls
+    parked = completes or case in ('ww-none', 'ww-entry-nonzero', 'ww-readback')
+    assert ('bb_power_park' in calls) == parked, calls
+    if parked:
+        late = int(case == 'ww-late')
+        assert f'GPU WRAPPER result stage={on_stage} on={int(completes)} late={late} accesses={len(rows)}' in output, \
+            output
+        # The restore precedes the OFF, and the park follows it.
+        off = calls.index('a733_gpu_platform_abandon' if abandoned else 'a733_gpu_platform_off_begin')
+        assert calls.index('a733_gpu_platform_off_poll') > off and calls.index('bb_power_park') > off
+    if completes:
+        assert state['exit_status'] == 0
+        assert 'COMPLETE GPU wrapper write: CORE status 8, OFF and provider parked' in output, output
+    else:
+        assert state['exit_status'] is None and 'COMPLETE' not in output
+    if case == 'ww-time-budget':
+        assert 'a733_gpu_platform_begin' not in calls
+    state['cycles'] = calls.count('a733_gpu_platform_off_begin') + calls.count('a733_gpu_platform_abandon')
+    return state
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--image', type=Path, required=True)
@@ -416,8 +608,9 @@ def main():
     p.add_argument('--cases', nargs='+', help='Resume selected cases after a fixture-only failure')
     p.add_argument('--power-only', action='store_true', help='check the power-only variant')
     p.add_argument('--wrapper-read', action='store_true', help='check the wrapper-read variant')
+    p.add_argument('--wrapper-write', action='store_true', help='check the wrapper-write variant')
     a = p.parse_args()
-    assert not (a.power_only and a.wrapper_read), 'choose one variant'
+    assert a.power_only + a.wrapper_read + a.wrapper_write <= 1, 'choose one variant'
     # The shared owner added delays_ready in existing padding. Reused objects
     # retain the old DWARF member list; consume the actual replacement owner's
     # layout, and verify every old member and the total size still agree.
@@ -426,7 +619,10 @@ def main():
     # defines the identity read counter.
     identity = bool(image.symbols.get('id_reads', set()) - {0})
     wrapper_image = bool(image.symbols.get('wrapper_words', set()) - {0})
-    assert identity == (not a.power_only and not a.wrapper_read), 'image variant does not match the options'
+    writer_image = bool(image.symbols.get('wrapper_steps', set()) - {0})
+    assert writer_image == a.wrapper_write, 'image variant does not match --wrapper-write'
+    assert identity == (not a.power_only and not a.wrapper_read and not a.wrapper_write), \
+        'image variant does not match the options'
     assert wrapper_image == a.wrapper_read, 'image variant does not match --wrapper-read'
     from elftools.elf.elffile import ELFFile
     layouts = []
@@ -453,17 +649,20 @@ def main():
     if a.wrapper_read:
         cases = ['wrapper-platform-deadline', 'wrapper-client-deadline', 'wrapper-on', 'wrapper-early-stop',
                  'wrapper-mapping', 'wrapper-off-fault', 'wrapper-table-mutant']
+    if a.wrapper_write:
+        cases = [*WRITE_PATHS, 'ww-table-mutant']
     if a.cases:
         assert set(a.cases) <= set(cases)
         cases = a.cases
     result = {'physical_access': False,
-              'variant': 'power-only' if a.power_only else 'wrapper-read' if a.wrapper_read else 'identity',
+              'variant': ('power-only' if a.power_only else 'wrapper-read' if a.wrapper_read
+                          else 'wrapper-write' if a.wrapper_write else 'identity'),
               'scope': 'actual ELF client and ID access; modeled provider/power transitions',
               'image_sha256': hashlib.sha256(a.image.read_bytes()).hexdigest(),
               'cases': []}
     for case in cases:
         try:
-            result['cases'].append(run(image, case, a.power_only, a.wrapper_read))
+            result['cases'].append(run(image, case, a.power_only, a.wrapper_read, a.wrapper_write))
         except Exception as error:
             result['failed_case'] = case
             result['fixture_error'] = repr(error)
