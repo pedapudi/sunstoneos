@@ -1,4 +1,5 @@
 #include "boot.h"
+#include "el3_security.h"
 
 // State is outside the BSS cleared by EL1 startup. EL1 does not write it, but
 // it can: cleanup re-checks the values it uses as bounds.
@@ -133,6 +134,8 @@ void monitor_init(void)
     if (unproven & ~MEMTEST_WRITERS_ACCEPTED)
         finish(4);
 #endif
+    // The vendor's cold-boot security setup, the last step before EL1.
+    a733_el3_security_setup();
     RESULT->stage = 2;
 }
 
