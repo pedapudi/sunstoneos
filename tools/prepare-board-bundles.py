@@ -138,9 +138,10 @@ RETURNING_SOURCES = ['tools/prepare-board-bundles.py', 'checks/board-bundles-app
                      *HOST_TOOLS, 'platform/a733/monitor.S', 'platform/a733/monitor.c', 'platform/a733/platform.c',
                      'platform/a733/link.ld', 'arch/aarch64/vectors.S', 'include/a733_fault.h', 'checks/kernel.c',
                      'checks/board-bundles-fault.c']
-RETURNING_STOP = ('Stop at any nonzero exit. The runner keeps the A733 port lock and quarantines the instance after '
-                  'any outcome that its bundle does not list as controlled; a hang ends at the monitor\'s 2 s '
-                  'deadline, and a stalled bus access needs a power removal. Do not retry.')
+RETURNING_STOP = ('Stop at any nonzero exit. The runner quarantines the instance after any outcome that its bundle '
+                  'does not list as controlled. After a return to the ROM it then exits with the recorded result; '
+                  'without a return it keeps the A733 port lock. A hang ends at the monitor\'s 2 s deadline, and a '
+                  'stalled bus access needs a power removal. Do not retry.')
 READ_STOP = ('Stop at any nonzero exit. The reader keeps the A733 port lock and quarantines the instance after a '
              'failed FEL command; a stalled or aborted read needs a power removal. Do not retry.')
 
@@ -981,9 +982,11 @@ def outcome_paths(row, bundle):
               'unknown: treat it as a quarantine and run nothing more on this board until power removal |', '',
               'Quarantine: the runner records the failure in `session.json` and writes '
               '`~/.cache/sunstoneos/recovery-required-<port>-<identity>.json` for the instance, which refuses '
-              'further FEL requests to it. It keeps the port lock and the queue claim, and `bundle-run.py` prints '
-              '`"result": "failed", "claim": "held"`. No later step of this lifetime runs, and the board waits '
-              'for power removal.', '']
+              'further FEL requests to it. When the image returned to the ROM and its result was read, the '
+              'runner then exits at once with that result; otherwise it keeps the port lock until recovery and '
+              '`bundle-run.py` ends it at the queue timeout. The queue claim stays held, and `bundle-run.py` '
+              'prints `"result": "failed", "claim": "held"`. No later step of this lifetime runs, and the board '
+              'waits for power removal.', '']
     return lines
 
 

@@ -193,11 +193,37 @@ def validate_platform_admission(raw, node, identity, port, tool_hash, pinned_too
         raise RuntimeError("DDR/survey evidence does not admit the selected live board instance.")
 
 
+def returned_to_rom(record):
+    """True when the launched image is known to have ended: the runner found
+    the new ROM instance with access, verified it, and read its result page,
+    all without a transport failure."""
+    return (record.get("launch_attempted") is True and record.get("transport_failed") is False
+            and record.get("automatic_access") is True and isinstance(record.get("returned_node"), str)
+            and isinstance(record.get("result"), dict))
+
+
 def retain_failure(record, save, quarantine, error, helper):
-    """Called inside board_lock: a failed transport or launch keeps ownership."""
+    """Called inside board_lock: a failed transport or launch keeps ownership.
+
+    A launch whose image returned to the ROM and whose result was read has a
+    known outcome. Once its returned instance is quarantined, the runner exits
+    with that recorded result: the quarantine record refuses further requests
+    to the instance and the caller keeps the queue claim. Every other launch,
+    or a return whose journal or quarantine failed, holds the port lock until
+    coordinator recovery."""
     if record.get("launch_attempted") or record.get("transport_failed"):
+        quarantined = []
+
+        def protect():
+            quarantine()
+            quarantined.append(True)
+
+        def hold():
+            if not (quarantined and returned_to_rom(record)):
+                helper.hold_ownership()
+
         try:
-            helper.stop_after_failure(record, save, quarantine, error)
+            helper.stop_after_failure(record, save, protect, error, hold)
         finally:
             # The shared helper holds launches. Pre-launch transport loss also
             # requires intervention even if journaling or quarantine fails.
