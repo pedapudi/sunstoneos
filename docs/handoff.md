@@ -76,6 +76,19 @@ It also shows that CORE6 does power with the vendor state; the earlier
 failures to reach status 8 came from the missing vendor state, not from the PPU.
 Which of the three differences is necessary is not yet separated.
 
+**GPU firmware-start step 1 passed on port 3-1** (set `board-bundles-20261025-18`,
+`board-session-20261025-14/port-3-1`, branch `work/gpu-fw-start-1025`). The
+probe-read on the vendor-default path made all 15 accesses, after CORE6 had
+reached status 8 (10,341 µs). The identity was 36.56.104.183 both before and
+after the vendor secure configuration, and no SError was pending; the image
+then restored, went OFF and parked. The first board reads:
+- `drm_ctrl` `0x01880014` = 1 at entry;
+- `irq_ctrl` `0x01880010` = 0;
+- SMC0 `0x0a0000b0` = 0. Writing 2 (the vendor value) reads back 0, so the
+  bit self-clears or the write is ignored. It is named `SMC_DRM_GPU_HW_RST`.
+
+Step 2, the firmware start, is next.
+
 **microSD lifetime A, first SD board run** (set `board-bundles-20261025-14`,
 `board-session-20261025-14/port-3-3`). DDR, cache-off, survey, signing and
 binding passed. The first launch was refused before launch, because the
