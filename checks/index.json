@@ -8232,6 +8232,7 @@
  "pvr-gpu-start-reference.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/gpu-firmware-start.md",
    "docs/gpu-start.md",
    "docs/vendor-firmware/gpu-and-npu-binaries.md"
   ],
