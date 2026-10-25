@@ -128,9 +128,14 @@ further board run of each. Board runs test only predictions from those diffs.
   outputs matched the reference. The four state reads matched every predicted
   word, including PLL_NPU at 852 MHz after start 3. Measured startup times
   were 4,024 µs (492 MHz cold), 4,023 µs (492 MHz, PLL adopted) and 4,023 µs
-  (852 MHz). Each job took about 75–77 ms at both rates (`jobs_raw_us`;
-  `timing.py` prints them with the wrong sign), so job time is not set by NPU
-  compute. The cause is under investigation.
+  (852 MHz). No job time was measured: the image never recorded completion,
+  because `npu_convolution.c:346` matches the finished command by pointer
+  while the controller passes its own copy (`a733_npu_controller.c:162,231`).
+  The 75,005 and 77,045 µs values are the publication times since the NPU
+  driver started, not durations. The gap between the two publications,
+  2,038–2,043 µs, bounds job 1 plus the 1 ms completion polls, the output
+  copy and compare, and the submission of job 2 (`timing-2.json` beside each
+  record).
 - CPU (`work/backsolve-cpu-1025`, `docs/reference-backsolve-cpu.md`): the
   leading divergences are checks that the reference never performs, such as the
   GICR_CTLR status compare (now masked on `bringup`), GICD_CTLR.RWP treated
