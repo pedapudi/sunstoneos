@@ -281,9 +281,19 @@ Merged on 2026-10-25:
   −71% to +361%. The 64-pair figure is dominated by lock contention under
   eight cores, not by barrier cost. The four changes stay off `bringup` until
   an uncontended per-core measurement exists.
-- `work/mc-perf-1025` (lock DSBs, IRQ-exit barriers, wake placement,
-  missed-tick catch-up) stays held for the board session in
-  `docs/board-runbooks/multicore-performance-session.md`.
+- **Contention-free performance session on port 3-3**
+  (`board-session-20261025-13/port-3-3`, sets
+  `multicore-performance-session-v2`): one core at a time timed 32 samples of
+  64 uncontended lock pairs, three control and three changed runs.
+  - The changed image was lower in every pairing on all eight cores, and every
+    confidence interval was within 5%.
+  - Saving: 164 counts per pair on the A55 cores (control about 57,200 per 64
+    pairs, changed about 46,500) and 163 on the A76 cores (about 64,000 and
+    53,600). That is about 7.4 counts per removed `DSB SY`.
+  - All runs completed, and all seven captures equal the clean capture.
+
+  `work/mc-perf-1025` (lock-bookkeeping DSBs, IRQ-exit barriers, same-type wake
+  placement, capped late-tick catch-up) is merged.
 
 **Board runs of 2026-10-24 night** (set `board-bundles-20261024-8`, sessions
 `~/.cache/sunstoneos/evidence/board-session-20261024-8/port-<PORT>`). The user
