@@ -89,11 +89,13 @@ static void publish_load(enum a733_thermal_level level)
     atomic_store_explicit(&load_level,level,memory_order_release);
 }
 /* The recognizer backs off at its checkpoints during THROTTLE, and new GPU
- * placements use the CPU. CRITICAL closes admission through board_fail. */
+ * placements use the CPU. CRITICAL closes admission through board_fail.
+ * The policy calls this only from a733_thermal_policy_update, after which
+ * step() publishes the returned level, so this callback publishes only
+ * CRITICAL. */
 static int policy(void *v,enum a733_thermal_level level)
 {
     if(v!=&thermal)return -1;
-    publish_load(level);
     if(level==A733_THERMAL_CRITICAL)cancel();
     return 1;
 }

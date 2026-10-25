@@ -107,9 +107,21 @@ Those observations alone do not establish that an accelerator has stopped
 issuing memory transactions. The existing [healthy GPU shutdown](gpu-isolation.md)
 provides that proof before requesting domain 5 OFF: fresh firmware idle/OFF
 states, queue retirement, BIF/MMU/cache idle polls and reset readback. The
-GPU controller then asserts external reset, closes its local gates and
+GPU controller then writes policy zero to the GPU core PPU (CORE6, at
+`0x07066000`) and checks CORE status zero while GPU_TOP and the local clocks
+remain available. It then asserts external reset, closes its local gates and
 requests OFF through the existing row. Successful OFF permits its normal
 resource release; a deadline or clock failure preserves the row and rail pin.
+
+CORE status zero is not a quiescence proof. GPU startup writes the CORE6
+power configuration register (PWCR, offset `0x20`) to zero, which disables
+the PPU's device interface channels and so its handshake with the GPU.
+CORE6 transitions then proceed without issuing requests to the GPU or
+waiting for its responses
+([DEN0051E](https://documentation-service.arm.com/static/5f873177f86e16515cdb6d99),
+page 4-13, "Device Interface Channel Enables"). The firmware-stop proof above
+therefore remains the only evidence that the GPU has stopped issuing
+transactions before CORE6 and domain 5 power off.
 
 NPU local CLOSE retains domain 4 ON and its rail pin. The pinned NPU
 platform calls `pm_runtime_put()` before disabling local clocks; those
@@ -316,6 +328,20 @@ and the limits of the cost model.
   `checks/rail-leases.c` covers the rail pin.
 - `checks/g2d-power-native.py` runs the G2D task of a linked G2D image with
   the row answered by the model: ON, REFUSED, FAILED and never answered.
+
+The [live accelerator composition check](../checks/accelerator-shared-owner.py)
+exercises the actual NPU startup, GPU power and resource manager, PMIC consumers,
+rail ledger, clock registry and domain owner together. Four focused sanitizer
+cases cover overlapping domain-4/domain-5 admission, each domain's local timeout,
+and shared PMIC transport failure. They also verify that local NPU stop retains
+its domain, PLL and rail ownership while the GPU shuts down. Domain-local failure
+can leave the other admitted consumer progressing; global transport uncertainty
+retains ownership and prevents further device access.
+
+Evidence is under `accelerator-shared-owner-20261024/snapshot/manifest.json`.
+Hardware effects, task context and scheduling are modeled. These cases establish
+shared-owner behavior, not firmware drain, thermal orchestration, multicore
+concurrency or physical operation. No production change was needed.
 
 ## Board evidence required
 

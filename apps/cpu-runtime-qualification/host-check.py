@@ -80,6 +80,18 @@ int main(void) {
             changed = bytearray(raw)
             struct.pack_into('<Q', changed, offset, value)
             refused(name, lambda changed=changed: host.decode_report(changed, args.epoch))
+        # The two idle-phase reasons are named distinctly.
+        for code, text in ((8, 'idle/wake proof missing'), (9, 'drained barrier timed out')):
+            changed = bytearray(raw)
+            struct.pack_into('<Q', changed, 48, code)
+            struct.pack_into('<Q', changed, host.CPU_OFFSET + 3 * host.CPU_BYTES + 48, code)
+            try:
+                host.decode_report(changed, args.epoch)
+            except ValueError as error:
+                host.require(f'reason {code} ({text}' in str(error), f'Reason {code} decoded as: {error}')
+            else:
+                raise AssertionError(f'Reason {code} accepted')
+            passed.append(f'reason-{code}-decoded')
         refused('truncated-report', lambda: host.decode_report(raw[:-1], args.epoch))
         refused('oversized-report', lambda: host.decode_report(raw + b'\0', args.epoch))
     host.save_json(args.output / 'result.json', {'passed': passed, 'geometry': g,

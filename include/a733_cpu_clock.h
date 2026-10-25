@@ -112,6 +112,7 @@ struct a733_cpu_clock {
     unsigned throttle_failed; /* Cluster bits whose throttle lowering did not complete. */
     unsigned inherited;       /* Inspected cluster bits; thermal changes keep voltage and require grants. */
     unsigned inspect_only;    /* The active transition only reads (a733_cpu_clock_inspect). */
+    unsigned spend;           /* The active transition consumes a change at its first clock write. */
     uint32_t rail_uv[2];      /* Last read or confirmed voltage of DCDC5 and DCDC3; 0 unread. */
     uint32_t words[2][3];     /* Last pattern 0, pattern 1 and LFM words read per cluster. */
     uint64_t park_at, parked_max_us; /* Park write time; longest park write to select readback, us. */
@@ -149,7 +150,9 @@ enum a733_cpu_clock_status a733_cpu_clock_request(struct a733_cpu_clock *,
  * While idle the thermal level selects operating points. Under THROTTLE, a
  * cluster this driver raised above the ceiling is lowered to it without
  * consuming a change and without lowering its voltage. An inspected inherited
- * point needs a grant covering the ceiling and consumes one change. Its
+ * point needs a grant covering the ceiling and consumes one change when its
+ * first clock write begins; a lowering refused or expired before then consumes
+ * none. Its
  * source point, bin and voltage are rechecked; thermal transitions of inherited
  * points never write voltage. A lowering that is refused or expires is not
  * retried in the same THROTTLE episode. At NORMAL,

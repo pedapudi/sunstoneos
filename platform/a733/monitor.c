@@ -218,8 +218,12 @@ static _Noreturn void finish(unsigned status)
     __asm__ volatile("msr daifset, #0xf\n msr cntps_ctl_el1, xzr\n"
                      "msr cntp_ctl_el0, xzr\n isb" ::: "memory");
     RESULT->end_counter = counter();
-    if (saved.ready && !restore_interrupts())
-        status = 6; // ROM return is permitted, but interrupt ownership is retained.
+    if (saved.ready && !restore_interrupts()) {
+        // ROM return is permitted, but interrupt ownership is retained. The
+        // replaced status, which can itself report a failure, stays visible.
+        RESULT->replaced_status = status;
+        status = 6;
+    }
     RESULT->status = status;
     RESULT->stage = 5;
     __asm__ volatile("dsb sy" ::: "memory");

@@ -1,5 +1,138 @@
 # Current work
 
+**Paused at the user's request on 2026-10-24 because the weekly limit is near.**
+The coordinator interrupted the GPU and NPU implementation agents and their
+active reviewers. Do not resume development, builds, tests or hardware work
+until the user asks. No board access occurred during this board-free tranche.
+There is no active goal object to update.
+
+## Review of the paused tranche (2026-10-24 evening)
+
+A four-area review (CPU, NPU, GPU and power, integration) of `f03060ee..b4d0eadb`
+found no blocking defect. Its fixes merged at `019b26f6` after a three-lens
+review and a selected integration gate (`gate-review-fixes-1024`). They
+change behaviour that the paused GPU and NPU work must account for when it
+resumes:
+
+- Resident images no longer accept staged workload 2 (`OS_STAGED_WORKLOAD`
+  in `apps/os/os.h`).
+- NPU SUBMIT fills the output buffer with `0xc35a3ca5`, and the host reports
+  which bytes kept it, so a job that writes nothing is detected.
+- `apps/gpu-power-id` has a power-only variant (`build.py --power-only`) that
+  never reads the GPU register window; run it before any identity probe.
+- The GPU CORE status poll spins up to 50 µs before returning AGAIN; the
+  monitor publishes an overridden status in `replaced_status`; a CPU
+  qualification drained-barrier timeout is reason 9; an inherited CPU
+  cluster spends its grant change at the first clock write.
+- Configure refuses a `MIMUS_DIR` that is not the pinned `9c57286b7` or has
+  changes; `tools/integration-gate.py` builds per checkout, locks, and
+  refuses a dirty tree unless `--allow-dirty`.
+
+The paused `gpu-provider-ready-1024` work may also edit
+`drivers/gpu/a733_gpu_power.c` and this file; merge `bringup` into it first.
+Remaining minor review items, not yet fixed: the unreachable CORE-status check
+and the unused `gpu_register_window_access` field in `apps/gpu-power-id`;
+hashing untracked files into the gate's dirty-tree identity and re-checking
+status under the lock; an `#error` when `OS_STAGED_WORKLOAD` is undefined in an
+OS build; checking report identity before decoding the CPU qualification
+reason; repeated statements of the workload-2 rule, the SDIO four-bit caveat
+and the GPU deadline argument across documents.
+
+## Resume checkpoint
+
+Main worktree: `/home/sunil/git/sunstoneos-worktrees/bringup`.
+The last published revision is `fa9bb2fc`. Local commit `12613f42` integrates
+reviewed live GPU/NPU shared-owner checks; it is not pushed yet. Its four
+sanitizer cases passed, covering overlapping admission, each domain's timeout
+and global PMIC transport retention. No production defect was found. Reuse
+`accelerator-shared-owner-20261024/snapshot/manifest.json`; do not rerun it for
+this pause or documentation commit. The associated power-domain documentation
+is saved with this handoff. Check-index aggregation remains pending.
+
+**Uncommitted GPU integration:** preserve
+`/home/sunil/git/sunstoneos-worktrees/gpu-provider-ready-1024`, branch
+`work/gpu-provider-ready-1024`, based on merge `50db83c6`.
+The finite returning GPU and resident OS GPU-linear profiles both build using
+current dependency objects. The GPU-specific CMake option and current-monitor
+patch remove historical application-object mixing. Return admission now checks
+CORE6 OFF as well as TOP5. Actual typed allocator output exposed a further
+legacy-geometry defect: payload starts at `0x48030000`, the first-fit table fills
+`0x48022000..0x4802e000`, and the WB span ends at `0x48088000`. Earlier estimates
+of table/end addresses were superseded by these producer results.
+Six affected linked return cases passed; three OS caller cases and three finite
+backend cases were preserved. Evidence: `gpu-full-integration-20261024/`.
+Final review still needs the immutable ELF span marker, native-report-to-host
+round trip, malformed-span refusal and final dependency/artifact closure.
+The marker must preserve the historical `0x86000` span only when absent and
+refuse malformed present values. Do not replay unchanged successful cases.
+Untracked files include `apps/gpu-finite/current-monitor.patch` and
+`checks/gpu-linked-lifecycle.py`; preserve them with all tracked edits.
+
+**Uncommitted NPU OS integration:** preserve
+`/home/sunil/git/sunstoneos-worktrees/npu-thermal-1024`, branch
+`work/npu-thermal-1024`, based on merge `925f143e`.
+The optional supervised profile links the existing five-model runtime and a
+trusted task-bound application API. It reserves `0x47400000..0x47c00000` after
+the cold/stage-2 monitor, uses existing WB/ISH mappings and shared power owners,
+and leaves mimus inputs/output unchanged. The complete catalogue fits in CODE:
+text plus rodata measured 1,998,889 bytes, with roughly 98 KiB spare. Private
+static state is 140,224 bytes including three task stacks. Build succeeded;
+constructor, API, session and actual allocator/runtime preparation checks are
+in progress under `os-npu-20261024/`.
+
+The latest reviewer finding is a concrete privilege requirement:
+`a733_counter_clock_now` masks DAIF, so the registered NPU application client
+must execute at EL1. Verify/finalize the narrow
+`os_npu_client_task(NULL)` privilege-hook correction and test the actual task
+frame SPSR. Unregistered tasks must remain refused. The older
+`apps/npu-board/main.c` client appears to share this problem; inspect it as a
+separate source issue, without assuming its unqualified image works.
+A proposed read-only vendor opcode 6 exposes a separate fixed 104-byte NPU
+report; its implementation/review is not complete. Verify actual framed USB
+length, immutable completion publication and preservation of mimus protocol
+semantics. Numerical mismatch must be reported separately from transport or
+hardware failure. Critical faults retain resources; no full OFF/restart is claimed.
+NPU-only behavior is feature-gated, and old manifests without NPU metadata mean
+OFF. Reconcile only genuinely affected GPU-profile code after integration.
+Untracked NPU sources and `checks/os-npu.py` are part of this unfinished work;
+do not remove them.
+
+**CPU audit:** the shutdown/publication review found no justified correction.
+Existing checks cover all-core capture/drain before cache cleaning and retained
+fatal exits. No tests were repeated. Idle/wake and induced-fault recovery still
+need physical qualification.
+
+**Review follow-ups, not yet fixed:** a review of `f03060ee..b4d0eadb`
+found these in addition to the corrections already committed:
+
+- `apps/npu-finite/thermal.c` and `apps/npu-board/client.c` each implement
+  the NPU's thermal admission and stop gate (claim, stop, stopping); one
+  shared gate should serve both.
+- The NPU convolution and finite units select profiles with many `#ifdef`
+  blocks; per-profile units would replace them.
+- `irq_quiet()` in `apps/gpu-finite/finite.c` repeats four mapping checks on
+  every tick it polls; one check at admission is enough.
+- `apps/cpu-runtime-qualification/terminal.S` runs its cache-cleaning pass
+  on all eight cores; whether each core needs it, and its cost, are
+  unreviewed.
+- Reopening the GPU mimus session (`platform/a733/gpu_mimus.c`) rebuilds its
+  immutable programs instead of reusing them.
+- The OS GPU service reopens the GPU inside Begin after a thermal stop, and
+  `apps/os/gpu.c` polls CLOSE once per tick; both need an event-driven form.
+- `healthy()` in `platform/a733/gpu_backend.c` calls the external live check
+  on every call; its cost on the job path is unmeasured.
+- The GPU return check must also require CORE6 OFF. The paused
+  `gpu-provider-ready-1024` work already adds it.
+- The CPU runtime qualification reads the EL3 alias before it validates the
+  descriptors; the read should follow validation.
+
+On resume, finish and review the two isolated implementations, integrate their
+commits, regenerate the check index once, update canonical status/issues and
+push after the normal scan. Preserve all existing freezes and evidence. Both
+board sessions below still require the previously requested physical recovery;
+board-free work does not authorize probing them.
+
+
 **Engine revision:** `bringup` now builds against mimus `9c57286b7`, the
 exact-sum hook and the AArch64 epilogue default, on the local branch
 `port/sunstoneos` in `~/git/mimus-worktrees/sunstoneos`. That revision is
@@ -13,7 +146,10 @@ The queue still retains claim
 `f5e77284cf63a0b25af8681a8798031c6a976a84166256a8eaa31d162a7c771c`.
 Evidence is under `processor-completion-20261024/port-3-3/gpu-corrected-guard/`.
 Source diagnosis continues without board access; the failed execution boundary
-is unknown.
+is unknown. The leading, unproven hypothesis is that the image predates
+CORE6 power control (`9bd65b98`) and its first GPU register read stalled the
+CPU with the core domain unpowered
+([gpu-power.md](gpu-power.md#an-unpowered-gpu-core-is-the-leading-hypothesis-for-both-failed-gpu-runs)).
 
 **Port `3-1` also needs USB power removal:** the GPU power/identity probe
 launched from `/dev/bus/usb/003/047`, identity `[7, 1642, 1097006, 0, 0]`,
@@ -22,7 +158,12 @@ runner and wrapper PIDs `3974830` and `3974825` have ended. The queue retains cl
 `a7c35b3b0e5c0bce0d06cfb9db6039b8830898ec4115509636115de998db0cc8`.
 Evidence: `processor-completion-20261024/port-3-1/gpu-power-id-corrected/`.
 All six FEL transactions succeeded, including launch; no native report locates
-the failure. A preceding command-path error stopped before board access and
+the failure. This image also predates CORE6 power control, and the same
+unproven hypothesis applies: the client's 1.5-second deadline and the
+monitor's 2-second deadline would have ended an ordinary bounded failure well
+inside 30 seconds. After recovery, the
+[power-only GPU diagnostic](../apps/gpu-power-id/README.md#the-power-only-variant-runs-before-any-identity-probe)
+runs before any identity probe; it is built and host-checked, and no board bundle is frozen. A preceding command-path error stopped before board access and
 was closed as blocked; it did not require physical recovery. USB is the only
 power source. A reconnect request is pending while software work continues.
 Host metadata checked at 21:49 UTC still identifies both failed USB instances;
@@ -50,6 +191,19 @@ GPU probe was admitted with those retained resources explicitly preserved.
 management. Complete startup, repeated operation, interrupt delivery, bounded
 failure handling and safe shutdown before performance tuning. Model checks do
 not establish physical operation.
+
+**Board-free work at pause:** rebuild the finite GPU and OS GPU-linear profiles
+with current dependency layouts; integrate the existing five-model NPU runtime
+into an explicit supervised OS profile; and check simultaneous GPU/NPU use of
+the shared power owners. The CPU shutdown/publication audit found no new defect
+or uncovered software requirement, so its accepted checks were not repeated.
+The NPU design reserves `0x47400000..0x47c00000` after the cold/stage-2 monitor,
+using existing mappings and a session-bound ownership record. Implementation
+and its focused evidence are still in progress.
+The live shared-owner composition now passes four focused cases covering
+simultaneous admissions, domain-local timeouts and global PMIC failure. It
+preserves NPU ownership through local stop and GPU shutdown; no production
+defect was found. Evidence: `accelerator-shared-owner-20261024/`.
 
 **Open work:**
 
@@ -123,7 +277,8 @@ not establish physical operation.
    physical qualification remains open. The reviewed host at
    `npu-stopped-capture-20261024/snapshot/sources/` conditionally captures the
    audited numerical image after safe retirement and before RAM restoration.
-   Four fixed reads preserve 1,085,880 bytes of metadata and runtime buffers.
+   Four fixed DRAM reads preserve 1,085,880 bytes of metadata and runtime
+   buffers, and a fifth reads the 101,376 bytes of NPU SRAM the model uses.
    Capture failures retain ownership; correct numerical execution remains open.
    The reviewed `apps/npu-finite/analyze-capture.py` compares that capture
    with the accepted commands, tensors and MMU mappings. Nineteen synthetic
@@ -484,7 +639,9 @@ board's radio owner owns the AIC8800 module and loads its firmware once, and
 the Bluetooth application attaches to that session as a second client with
 its own UART1, H4/HCI and wake-pin leases. The `SUNSTONE_A733_OS_MSBC` option,
 with `SUNSTONE_BT_SBC_DIR` naming the pinned libsbc sources, adds wideband
-speech to any headset build. The image builds in nine variants:
+speech to any headset build. Only the supervised variant admits board
+workload 2, staged recorded recognition after USB0 startup without a USB disk;
+every other variant refuses it. The image builds in nine variants:
 
 | Variant | Options added to `SUNSTONE_A733_OS=ON` | Needed before a board run |
 | --- | --- | --- |
@@ -493,9 +650,9 @@ speech to any headset build. The image builds in nine variants:
 | Resident with I2S audio | `SUNSTONE_A733_OS_RESIDENT`, `SUNSTONE_A733_OS_AUDIO` | As resident, plus a connected microphone and a reviewed audio entry record with the resident DMA facts |
 | Resident with radio | `SUNSTONE_A733_OS_RESIDENT`, `SUNSTONE_A733_OS_RADIO` | As resident, plus the radio profile and firmware as a slot asset at `0x43000000` and a reachable access point; any radio failure, including an absent access point, resets the board |
 | Resident with radio and audio | `SUNSTONE_A733_OS_RESIDENT`, `SUNSTONE_A733_OS_RADIO`, `SUNSTONE_A733_OS_AUDIO` | The requirements of resident with I2S audio and of resident with radio |
-| Supervised headset | `SUNSTONE_A733_OS_HEADSET`, with `SUNSTONE_BT_SECURITY_DIR` naming the pinned Zephyr security sources | Preparation that stages the Bluetooth profile and firmware, a paired, reviewed headset, and a qualified faster SDIO mode, because firmware loading cannot finish within the 30 s bound at the admitted clock |
+| Supervised headset | `SUNSTONE_A733_OS_HEADSET`, with `SUNSTONE_BT_SECURITY_DIR` naming the pinned Zephyr security sources | Preparation that stages the Bluetooth profile and firmware, a paired, reviewed headset, and a qualified faster SDIO mode, because firmware loading cannot finish within the 30 s bound at the default one-bit 400 kHz clock; the four-bit mode is admitted but unselected and physically unqualified |
 | Resident headset | `SUNSTONE_A733_OS_RESIDENT`, `SUNSTONE_A733_OS_HEADSET` | As resident, plus the Bluetooth profile and firmware as a slot asset and a paired, reviewed headset; any headset failure resets the board |
-| Radio with headset | `SUNSTONE_A733_OS_RADIO`, `SUNSTONE_A733_OS_HEADSET` | Preparation that stages both profiles and the shared firmware in one span, a reachable access point, a paired headset, and a qualified faster SDIO mode, because firmware loading needs at least 46.7 s at the admitted clock and the bootstrap bound is 40 s |
+| Radio with headset | `SUNSTONE_A733_OS_RADIO`, `SUNSTONE_A733_OS_HEADSET` | Preparation that stages both profiles and the shared firmware in one span, a reachable access point, a paired headset, and a qualified faster SDIO mode, because firmware loading needs at least 46.7 s at the default one-bit 400 kHz clock; the four-bit mode is admitted but unselected and physically unqualified, and the bootstrap bound is 40 s |
 | Resident radio with headset | `SUNSTONE_A733_OS_RESIDENT`, `SUNSTONE_A733_OS_RADIO`, `SUNSTONE_A733_OS_HEADSET` | As resident with radio, plus the Bluetooth profile at `0x43008000` and a paired headset; a radio or headset failure resets the board |
 
 A Bluetooth failure retains only the Bluetooth client's resources at the

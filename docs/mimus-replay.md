@@ -133,17 +133,14 @@ results. It covers absent and conflicting scores, scored and unscored words,
 empty text, short and long pauses, final flush, and malformed alignment.
 It also checks that the native parity checker refuses added or missing score
 records and changed formatting. Recognition arithmetic and scheduling are
-modeled in this check; the earlier arithmetic evidence remains separate.
-The 2026-10-24 result is
+modeled in this check; the arithmetic evidence is separate. The adapter
+passes all eight cases, including the no-punctuation alignment case; the
+result is
 `~/.cache/sunstoneos/evidence/mimus-paced-optional-20261024/after/result.json`.
-The original adapter refuses the no-punctuation alignment case; the corrected
-adapter passes all eight cases. Each segment still makes one recognition call,
-and a scored segment's output is unchanged. No-punctuation segments skip the
-score-copy loop and score records without adding synchronization or allocations.
+Each segment makes one recognition call. A no-punctuation segment skips the
+score-copy loop and score records, with no synchronization or allocation.
 
-The native image compiles but has not run on the board. No physical device
-requests were issued for this work because the failed USB instance remains
-quarantined. [Watchdog recovery](watchdog.md) remains the hardware prerequisite.
+The native image compiles but has not run on the board. [Watchdog recovery](watchdog.md) remains the hardware prerequisite.
 
 This work does not qualify I2S, Bluetooth audio, DMA, microphone buffering,
 physical capture timing, or sustained real-time throughput. Those requirements

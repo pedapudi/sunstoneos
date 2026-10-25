@@ -31,14 +31,26 @@ Its textual search cannot prove that an empty selection is sufficient. The
 owner chooses coverage from the changed behavior and shared dependencies;
 the gate does not infer it from filenames or launch every matching check.
 
-`--full` explicitly requests all central targets, the five listed OS variants
-and all gate checks. Reserve it for a shared change or milestone whose missing
+`--full` explicitly requests all central targets, the nine OS variants of
+[the integrated OS image](handoff.md#integrated-os-image) and all gate checks.
+The optional GPU linear, mSBC, Cortex-A76 and CPU clock options are not
+variants of the gate; build them directly with `cfg.sh` when a change
+affects them. Reserve it for a shared change or milestone whose missing
 integration evidence justifies that scope, and state why in `--reason`.
 An integration commit alone does not justify it.
 
 Each invocation uses a new label under `~/.cache/sunstoneos/build/gate-LABEL`.
 It records the selection, reason, revision, commands and logs, and stops at the
-first failure. There are no automatic retries, including for emulator timeouts.
+first failure. The builds use one directory per source checkout,
+`gate-central-NAME-HASH` and `gate-os-VARIANT-NAME-HASH`, where NAME is the
+checkout's directory name and HASH is the first ten hexadecimal digits of the
+SHA-256 of its resolved path. A gate on another worktree therefore never meets
+a CMake cache configured for a different source. A lock file,
+`gate-NAME-HASH.lock`, refuses a second gate on the same checkout while one
+runs. The gate refuses a source with uncommitted or untracked changes unless
+`--allow-dirty` is given. It records `git status --porcelain` in `status.txt`
+and the SHA-256 of `git diff --binary HEAD` in the summary, so evidence from a
+dirty tree names the changes it built. There are no automatic retries, including for emulator timeouts.
 Diagnose a failure and run only the affected work with a new label; reuse the
 successful evidence from the earlier invocation. The soak defaults to one
 trial; `--trials N` declares a repeatability sample in advance and needs a

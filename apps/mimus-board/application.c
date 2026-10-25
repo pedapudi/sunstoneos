@@ -10,7 +10,7 @@
 static atomic_uint attached,usb0_started;
 int mimus_board_staged(void)
 {
-#if defined(SUNSTONE_A733_OS) && defined(SUNSTONE_BOARD_SUPERVISED) && !defined(SUNSTONE_A733_OS_AUDIO) && !defined(SUNSTONE_A733_OS_HEADSET) && !defined(SUNSTONE_A733_OS_RADIO)
+#if defined(SUNSTONE_A733_OS) && OS_STAGED_WORKLOAD /* os.h, which the OS build includes */
     return board.session.workload==2;
 #else
     return 0;

@@ -86,6 +86,25 @@ restoration-readback fix from the provider-readiness candidate. The failed
 ownership remains. Every failed or missing completion retains the claim and
 owned RAM for coordinator recovery; ROM visibility alone does not authorize reuse.
 
+## The power-only variant runs before any identity probe
+
+`GPU_POWER_ONLY` builds a variant of the same client that powers TOP and
+CORE, requires the controller's final CORE status read to be 8, then powers
+CORE and TOP OFF, releases the platform token and parks the provider. It
+makes no access to the GPU register window at `0x01800000`: the identity
+reads and their mapping check are compiled out. Its completion text is
+`COMPLETE GPU power only: CORE status 8, OFF and provider parked`, after a
+`GPU power core_status=0x8` line.
+
+Both GPU images that failed to return on a board predate CORE6 control. The
+leading, unproven hypothesis is that their first GPU register read stalled
+the CPU with the core domain unpowered
+([gpu-power.md](../../docs/gpu-power.md#an-unpowered-gpu-core-is-the-leading-hypothesis-for-both-failed-gpu-runs)).
+The power-only variant tests CORE power control without that read, so it
+has the lower recovery risk. On a recovered board it runs after the frozen
+provider-readiness checkpoint and before any identity probe; the identity
+variant runs only after the power-only variant has returned on that board. Admission is the same for both variants.
+
 ## Build and evidence
 
 Run with the existing host Python environment containing pyelftools and Unicorn:
@@ -95,6 +114,14 @@ Run with the existing host Python environment containing pyelftools and Unicorn:
 ~/.cache/sunstoneos/venv/bin/python apps/gpu-power-id/check.py \
   --image /absolute/new/build/image.elf --output /absolute/new/client-results.json
 ```
+
+Add `--power-only` to both commands for the power-only variant. The build
+records `"variant": "power-only"` and its completion text in `build.json`.
+The check refuses an image of the other variant: only the identity variant
+defines the identity read counter. Its nine cases cover the normal path, the
+ON, CORE-refusal, partial CORE capture, CORE status zero, OFF, retained
+token, counted row and unparked failures. Every case requires that no load,
+store or address translation reaches the GPU register window.
 
 The build reuses 30 objects from the frozen provider-readiness candidate,
 including its accepted CPU monitor. Seven replacements compile the consumer,

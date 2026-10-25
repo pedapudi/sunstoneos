@@ -477,8 +477,9 @@ near-identical ones of `pvr_compute_service.c`.
 
 ## Changes needed in the mimus engine
 
-mimus commit `9c57286b7` implements all six; the image build's pinned engine
-must move to it before any call reaches the GPU.
+mimus commit `9c57286b7e1e50cd2181438a2d9ab717102d288e` implements all six.
+It is the engine that [apps/mimus/source.json](../../apps/mimus/source.json)
+pins and that configuration requires of `MIMUS_DIR`.
 
 1. `TensorView::ordinal`, set by `Model::Load`: base tensors in file order
    with overlay replacements in place, then the overlay's new tensors.

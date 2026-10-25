@@ -94,6 +94,8 @@ with tempfile.TemporaryDirectory(prefix='returning-transport-') as temporary:
  if not args.return_window_only:
   # Check the production NPU adapter delegates admission and execution, without replaying reports.
   npu=load('npu_host',root/'apps/npu-finite/host.py');identity=[1,56,3,4,5];seen=[]
+  # run() selects the execution profile from the prepared bundle record.
+  (bundle/'prepared.json').write_text(json.dumps({'execution_profile':npu.PROFILE})+'\n')
   paths=[]
   for name in ('ddr','survey','warm'):
    path=t/(name+'.json');path.write_bytes(name.encode());paths.append(path)

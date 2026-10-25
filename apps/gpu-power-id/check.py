@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Focused actual-ELF consumer checks; device transitions are explicit models."""
+"""Focused actual-ELF consumer checks; device transitions are explicit models.
+
+With --power-only the image must be the power-only variant: every case also
+requires that no load or store reaches the GPU register window."""
 import argparse
 import hashlib
 import json
@@ -18,7 +21,7 @@ NAMES = ['bb_power', 'a733_gpu_platform', 'a733_gpu_power', 'a733_pmic_consumer'
          'a733_power_domains', 'a733_power_domain', 'a733_power_domain_row']
 
 
-def run(image, case):
+def run(image, case, power_only=False):
     u = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
     u.mem_map(0x41000000, 0x1200000)
     u.mem_map(0x1800000, 0x1000)
@@ -65,6 +68,8 @@ def run(image, case):
 
     def call(name):
         state['calls'].append(name)
+        if name == 'aarch64_device_translate' and power_only:
+            raise AssertionError('power-only variant translated a GPU address')
         if name == 'bb_power_now':
             state['clock_reads'] += 1
             state['time'] += 1
@@ -86,6 +91,9 @@ def run(image, case):
             field(gpu, 'a733_gpu_platform', 'phase', 3)
             field(gpu, 'a733_gpu_platform', 'token', 17, 8)
             field(gpu, 'a733_gpu_platform', 'delegated', 1)
+            # The controller's last read is the CORE status poll.
+            field(power, 'a733_gpu_power', 'phase', 2)
+            field(power, 'a733_gpu_power', 'last_value', 0 if case == 'core-status-zero' else 8)
             ret()
         elif name == 'aarch64_device_translate':
             address = u.reg_read(UC_ARM64_REG_X0)
@@ -132,6 +140,7 @@ def run(image, case):
 
     def read(uc, access, address, size, value, arg):
         state['gpu_reads'].append([hex(address), size])
+        assert not power_only, 'power-only variant read the GPU register window'
         assert (address, size) in [(0x1800020, 8), (0x1800020, 4), (0x1800018, 4)]
 
     def write(uc, access, address, size, value, arg):
@@ -142,6 +151,23 @@ def run(image, case):
     u.hook_add(UC_HOOK_MEM_WRITE, write, begin=0x1800000, end=0x1800fff)
     u.emu_start(image.address('gpu_power_id_client'), 0, count=100000)
     output = ''.join(state['messages'])
+    if power_only:
+        assert not state['gpu_reads'] and not state['gpu_writes']
+        if case == 'normal':
+            assert state['exit_status'] == 0 and state['failure'] is None, state
+            assert 'COMPLETE GPU power only: CORE status 8, OFF and provider parked' in output
+            assert 'GPU power core_status=0x8' in output and 'identity' not in output, output
+            assert state['calls'].index('a733_gpu_platform_off_poll') < state['calls'].index('bb_power_park') < state['calls'].index('platform_puts')
+        else:
+            reasons = {'core-refused': 'GPU ON poll', 'core-partial': 'GPU ON poll', 'on-fault': 'GPU ON poll',
+                       'core-status-zero': 'GPU CORE status', 'off-fault': 'GPU OFF poll',
+                       'retained-token': 'GPU OFF ownership proof', 'counted-row': 'GPU OFF ownership proof',
+                       'unparked': 'GPU provider park proof'}
+            assert state['failure'] == reasons[case], state
+            assert state['exit_status'] is None and 'COMPLETE' not in output
+            if case in ['on-fault', 'core-refused', 'core-partial', 'core-status-zero']:
+                assert 'a733_gpu_platform_off_begin' not in state['calls']
+        return state
     if case in ['normal', 'legacy-id', 'unexpected-id']:
         assert state['exit_status'] == 0 and state['failure'] is None
         assert 'COMPLETE GPU power identity: OFF and provider parked' in output
@@ -172,11 +198,16 @@ def main():
     p.add_argument('--image', type=Path, required=True)
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--cases', nargs='+', help='Resume selected cases after a fixture-only failure')
+    p.add_argument('--power-only', action='store_true', help='check the power-only variant')
     a = p.parse_args()
     # The shared owner added delays_ready in existing padding. Reused objects
     # retain the old DWARF member list; consume the actual replacement owner's
     # layout, and verify every old member and the total size still agree.
     image = harness.Image(a.image, layout_names=[n for n in NAMES if n != 'a733_power_domain'])
+    # The variant is a compile option of main.c: only the identity variant
+    # defines the identity read counter.
+    identity = bool(image.symbols.get('id_reads', set()) - {0})
+    assert identity != a.power_only, 'image variant does not match --power-only'
     from elftools.elf.elffile import ELFFile
     layouts = []
     with a.image.open('rb') as stream:
@@ -196,15 +227,19 @@ def main():
     image.layouts['a733_power_domain'] = current
     cases = ['normal', 'legacy-id', 'unexpected-id', 'on-fault', 'bad-mapping',
              'read-crosses-deadline', 'clock-regresses', 'off-fault', 'retained-token', 'counted-row', 'unparked', 'core-refused', 'core-partial']
+    if a.power_only:
+        cases = ['normal', 'on-fault', 'core-refused', 'core-partial', 'core-status-zero',
+                 'off-fault', 'retained-token', 'counted-row', 'unparked']
     if a.cases:
         assert set(a.cases) <= set(cases)
         cases = a.cases
-    result = {'physical_access': False, 'scope': 'actual ELF client and ID access; modeled provider/power transitions',
+    result = {'physical_access': False, 'variant': 'power-only' if a.power_only else 'identity',
+              'scope': 'actual ELF client and ID access; modeled provider/power transitions',
               'image_sha256': hashlib.sha256(a.image.read_bytes()).hexdigest(),
               'cases': []}
     for case in cases:
         try:
-            result['cases'].append(run(image, case))
+            result['cases'].append(run(image, case, a.power_only))
         except Exception as error:
             result['failed_case'] = case
             result['fixture_error'] = repr(error)

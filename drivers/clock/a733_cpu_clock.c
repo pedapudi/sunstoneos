@@ -312,7 +312,7 @@ static enum a733_cpu_clock_status start(struct a733_cpu_clock *c,unsigned cluste
 {
     c->cluster=cluster;c->target_mhz=mhz;c->deadline=deadline;c->thermal=thermal;
     c->clock=(struct a733_clock_token){0};c->rail=(struct a733_rail_token){0};
-    c->request=(struct a733_pmic_request){0};c->after=S_IDLE;c->state=S_CLOCK;c->inspect_only=0;
+    c->request=(struct a733_pmic_request){0};c->after=S_IDLE;c->state=S_CLOCK;c->inspect_only=0;c->spend=0;
     return A733_CPU_CLOCK_PENDING;
 }
 enum a733_cpu_clock_status a733_cpu_clock_request(struct a733_cpu_clock *c,
@@ -471,12 +471,13 @@ enum a733_cpu_clock_status a733_cpu_clock_poll(struct a733_cpu_clock *c)
         for(unsigned i=0;i<2;++i) {
             if(now==A733_THERMAL_THROTTLE && c->applied_mhz[i]>A733_CPU_CLOCK_THROTTLE_MHZ &&
                !(c->throttle_failed&BIT(i))) {
-                if(c->inherited&BIT(i)){
-                    if(!granted(c,i,A733_CPU_CLOCK_THROTTLE_MHZ))continue;
-                    --c->changes;
-                }
+                /* An inherited point's lowering consumes its change at the
+                 * first clock write (S_PARK), not when it starts. */
+                if((c->inherited&BIT(i)) && !granted(c,i,A733_CPU_CLOCK_THROTTLE_MHZ))continue;
                 c->restore_mhz[i]=c->applied_mhz[i];
-                return start(c,i,A733_CPU_CLOCK_THROTTLE_MHZ,c->last_now+THERMAL_US,LOWER);
+                enum a733_cpu_clock_status r=start(c,i,A733_CPU_CLOCK_THROTTLE_MHZ,c->last_now+THERMAL_US,LOWER);
+                c->spend=!!(c->inherited&BIT(i));
+                return r;
             }
             if(now!=A733_THERMAL_NORMAL)continue;
             /* A new THROTTLE episode may try a failed lowering again. A restore
@@ -578,6 +579,8 @@ enum a733_cpu_clock_status a733_cpu_clock_poll(struct a733_cpu_clock *c)
          * is touched yet, and any confirmed voltage covers the present rate. */
         uint32_t pll,select;
         if(c->deadline-c->last_now<UPDATE_US+LOCK_US+UNPARK_US)return finish(c,A733_CPU_CLOCK_EXPIRED);
+        /* No other transition ran since start, so the grant still covers it. */
+        c->changes-=c->spend;c->spend=0;
         if(!rd(c,pll_word(c->cluster),&pll) || (pll&(PLL_ON|UPDATE))!=PLL_ON ||
            !rd(c,select_word(c->cluster),&select) || select!=c->select ||
            !wr(c,select_word(c->cluster),c->select&~MUX))return fault(c);
