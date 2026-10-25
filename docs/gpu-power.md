@@ -390,8 +390,10 @@ domain never powered up, or it is not wired to this PPU.
   the bus and core clocks, and sets the update bit. It never reads CORE6.
   SunstoneOS does the same apart from the GPU PLL: its GPU clock runs from
   PERI0 400 MHz, and the readback above shows that selection in effect.
-  `sunxi_secure_config` writes `0x0a0000b0` and a register in the GPU
-  window; it is the secure-configuration callback, outside this sequence.
+  Each later power-on also calls `sunxi_secure_config` just before the
+  first GPU core access; it writes the SMC0 word `0x0a0000b0` and the
+  wrapper's `drm_ctrl`
+  ([below](#the-vendor-code-never-writes-the-q-channel-or-delay-registers)).
 - **Vendor domain table** (`pck600_domains.c:554`). It pins a CORE6 delay
   row: `0x1f1f1f`, `0x1f1f`, `0x08080808`, `0x0808` and `8` at `0x170`,
   `0x174`, `0xc00`, `0xc04` and `0xc10`, the same row as TOP5's.
@@ -473,9 +475,10 @@ defines the GPU wrapper registers at `0x01880000`, inside the GPU register
 window: at `+0x100` a power-complete delay with 16-bit up and down counts,
 and at `+0x104` a Q-Channel configuration with, for core 0 and core 1, a
 software-control enable and the `q_active`, `q_accept` and `q_deny`
-signals, and a core-0 clock enable. Only the optional DVFS controller uses
-that block, and none of the cached build files defines its build option
-`SUNXI_DVFS_CTRL_ENABLE`. These registers
+signals, and a core-0 clock enable. No vendor code writes either register;
+the optional DVFS controller writes other words of the block, and none of
+the cached build files defines its build option `SUNXI_DVFS_CTRL_ENABLE`.
+These registers
 are the closest documented candidate for the logic that answers CORE6's
 Q-Channel and power-switch handshakes.
 
@@ -506,59 +509,328 @@ Q-Channel and power-switch handshakes.
    has no CORE6 step, the PRCM has no GPU switch, masks gate no
    transition, and the PPU gate is open. The delay row is ruled out above.
 
-### The next step reads the GPU wrapper, inside the GPU register window
+### The wrapper reads returned with every Q-Channel control unset
 
-No register outside the GPU register window that the documentation names
-can decide between these explanations. The coordinator accepted an
-exception to the power-only rule for four reads of the GPU wrapper, with
-TOP5 ON and no CORE6 acknowledgement, and the wrapper-read variant of the
-diagnostic makes them:
+The coordinator accepted an exception to the power-only rule for four
+reads of the GPU wrapper, with TOP5 ON and no CORE6 acknowledgement. The
+wrapper-read variant of the diagnostic
+([README](../apps/gpu-power-id/README.md#the-wrapper-read-variant-reads-four-gpu-wrapper-words))
+runs the power-only ON sequence, waits at most 200 ms for CORE6 status 8,
+and then makes the four reads, each a 32-bit Device-nGnRnE load named in a
+progress record before it is issued. It writes nothing in the window.
 
-| Address | Vendor name | What it shows |
+It ran on port 3-1 on 2026-10-25 (session
+`board-session-20261024-14/port-3-1`, after a power removal, a cold DDR
+start and a passing provider-readiness run). CORE6 again stayed at status
+0, the controller's deadline cancelled the final poll (step 38, error 6),
+and all four reads completed:
+
+| Address | Vendor name | Value | Meaning |
+| --- | --- | --- | --- |
+| `0x01880104` | `pwr_qchan_cfg` | `0x0` | Core 0's Q-Channel is not under software control; the `q_active`, `q_accept`, `q_deny` and core-0 clock-enable bits are all 0 |
+| `0x01880100` | `pwr_cmp_dly` | `0x0` | Power-complete up and down delays of 0 |
+| `0x01880018` | `mult_core_cnt` | `0x2` | Two GPU cores |
+| `0x0188001c` | `mult_core_id` | `0x10` | Primary core 0, secondary core 1 |
+
+The wrapper therefore answers 32-bit reads with TOP5 ON, the GPU clock
+open, its reset released and CORE6 unacknowledged. Both earlier GPU images
+that did not return read `0x01800020`, the core's identity register, in
+the same CORE6 state; the wrapper is a different block from the core
+registers, and these reads show that it is reachable.
+
+The `q_active` bit reads 0 while CORE6's `PPU_DISR` reports `DEVQACTIVE`
+HIGH. With software control off, the register bits are therefore software
+override values, or the wrapper is not the source of CORE6's channel; the
+reads alone cannot tell which.
+
+### The vendor code never writes the Q-Channel or delay registers
+
+The pinned BXM sources at `2ac08e8c7`
+(`~/.cache/sunstoneos/evidence/gpu-wrapper-reference-20261025/sources.json`
+records each file's URL, revision and SHA-256) define the wrapper registers
+and write three of them, none of which is `pwr_qchan_cfg` or `pwr_cmp_dly`.
+
+Register layout, `sunxi_dvfs_ctrl.c:113–150`, at `0x01800000 +
+SUNXI_DVFS_CTRL_OFFSET` (`0x80000`, `sunxi_dvfs_ctrl.h:33`):
+
+| Offset | Name | Fields (bit) |
 | --- | --- | --- |
-| `0x01880104` | `pwr_qchan_cfg` | Whether core 0's Q-Channel is under software control, and the `q_active`, `q_accept`, `q_deny` and clock-enable states that CORE6's PPU sees |
-| `0x01880100` | `pwr_cmp_dly` | The power-complete up and down delays; 0 would mean an unset delay |
-| `0x01880018` | `mult_core_cnt` | The GPU core count, which ties core 0 to CORE6 |
-| `0x0188001c` | `mult_core_id` | The primary and secondary core identifiers |
+| `+0x100` | `pwr_cmp_dly` | `pwr_dly_up` (15:0), `pwr_dly_down` (31:16) |
+| `+0x104` | `pwr_qchan_cfg` | core 0: `sw_cfg_en` (0), `q_active` (1), `q_accept` (2), `q_deny` (3); core 1: the same at 4–7; `core0_clk_en` (8) |
 
-Each read is one ordered 32-bit Device-nGnRnE load after an identity
-mapping check and a deadline check. The variant runs the power-only ON
-sequence and waits at most 200 ms for status 8, so the reads come after the
-CORE6 PWCR and policy writes, the GPU clock and the reset release; it
-refuses them if the controller stopped before those steps. Before the first
-read it prints both snapshots, the controller's failure state and the
-CORE6 lines. Before each read it writes the read's number and a counter
-stamp into the progress record between the result header and the log, and
-prints a `GPU WRAPPER reading` line. The image makes no write in the window
-([wrapper-read variant](../apps/gpu-power-id/README.md#the-wrapper-read-variant-reads-four-gpu-wrapper-words)).
+The vendor writes, in the order of one GPU power-on:
 
-The risk is a read that never completes. Both earlier images that did not
-return were built to read the GPU register window with TOP5 ON and CORE6
-never written, which leaves CORE6 in this same power-up state; the
-power/identity probe `fd3d5839…` read `0x01800020`, the core's identity
-register. Neither produced a report, and a first read that stalled is the
-leading explanation for both. A load that its target never answers stops
-the CPU without an exception; the monitor's 2 s timer returned neither
-image, nothing reached the host, and only a power removal recovered the
-board.
-The wrapper is a different block from the core registers. It holds the
-DVFS and power-sequencing controls for both cores, which the vendor DVFS
-code programs before it requests TOP5 runtime power, so it is plausibly
-outside CORE6. That is an inference from the vendor source, not a
-documented guarantee.
+1. **Probe** (`sunxi_platform_init`, `sunxi_platform.c:863–945`). The
+   DVFS block at 883–898 is compiled only with `SUNXI_DVFS_CTRL_ENABLE`
+   (`Kbuild.mk:52–54`), which no cached build defines. If enabled, it
+   would write the wrapper before the regulator and before TOP5:
+   `vf_level[i]` (`+0x20` onward, `sunxi_dvfs_ctrl.c:170`), `timeout_dbg`
+   `0x1ff` (303), `dvfs_dbg` 1 (305), `irq_ctrl` 0 (307) and `dvfs_ctrl`
+   `0x1003` (318). Line 309, `pwr_cmp_dly = 0x00640064` (100 up, 100
+   down), is commented out; it is the only `pwr_cmp_dly` value in any
+   vendor source. The DVFS interrupt handler, compiled under the same
+   option, writes `irq_ctrl` 0 (203) and only prints the two registers
+   (218–219). The active probe then enables the regulator (899),
+   requests TOP5 runtime power (912), writes CORE6 PWCR 0 and policy 8
+   (915–916, functions at 72–91) and enables the GPU clocks: PERI0
+   outputs, reset release (203), bus clock (208), core clock (213) and the
+   update bit `0x02002b20` bit 27 (220).
+2. **System pre-power** (`sunxiPrePowerState`, 316–359), when the runtime
+   state is OFF: clocks and reset (349), TOP5 (350), CORE6 policy 8 (352).
+   The DDK calls it after the device pre-power callback and before the
+   post-power callbacks (`power.c:743–873`).
+3. **Device post-power** (`RGXPostPowerState`, `rgxpower.c:1010–1037`)
+   calls `RGXDoStart` (865–889). Without `SUPPORT_TRUSTED_DEVICE` it calls
+   `pfnTDSystemSecureConfig`, which `sysconfig.c:371` sets to
+   `sunxi_secure_config` (`sunxi_platform.c:964–979`), and then `RGXStart`,
+   the first GPU core register access. `sunxi_secure_config` writes 2 to
+   `0x0a0000b0` (`SMC_DRM_GPU_HW_RST`, in the SMC0 DRAM firewall) and 0 to
+   wrapper `+0x14` (`drm_ctrl`: `drm_bypass` bit 0, `tb_bypass` bit 8).
 
-The outcomes:
+The only wrapper write of the active vendor build is therefore `drm_ctrl`
+0, after TOP5, CORE6 policy 8, the clocks and the reset release, and
+immediately before the first GPU core access. It sets DRAM security
+bypasses, which `sunxi_dvfs_ctrl.c` declares with no power meaning.
 
-- **The reads return.** The values say whether core 0's Q-Channel needs
-  software control or a delay or clock setting. A later image could then
-  write the wrapper, which is a separate decision.
-- **The run does not return.** The wrapper is unreachable in this state
-  too. The lifetime ends without a report, and GPU core power needs vendor
-  information beyond the cached sources.
+The BSP 1.4.6 revision `142ce05b` of the same files writes no CORE6 word
+(`USE_FPGA` is undefined), has no `sunxi_secure_config`, and enables the
+GPU clocks before TOP5. Its DVFS source has the same register layout and
+the same commented-out delay. A web search found no other source that names
+`pwr_qchan_cfg` or its fields.
 
-A lower-risk variant would issue the reads from a DMA engine into DRAM, so
-that the CPU keeps running and can report a read that never completes. It
-needs its own design, and a stalled DMA read could still hold an
+So no reference supplies a value for `pwr_qchan_cfg`, and none shows
+software driving CORE6's Q-Channel. The probe below takes its values from
+the field definitions, and its one delay value from the commented-out line.
+
+### The wrapper-write probe sets the core-0 controls one at a time
+
+The wrapper-write variant (`apps/gpu-power-id/wrapper-write.c`, build and
+check option `--wrapper-write`) runs the power-only ON sequence and then,
+with the controller still polling CORE6 status at its last step, writes
+the two wrapper registers in three stages. It stops at the first stage
+after which the controller reads CORE6 status 8. It is implemented and
+host-checked; it has not run on a board.
+
+Sequence:
+
+1. Snapshot 0, then ON with the client deadline as the controller's bound.
+   The client waits at most 200 ms for status 8. CORE6 ON within that
+   bound skips the wrapper: OFF, park, stage 0.
+2. Snapshot 1 and the controller and CORE6 lines. Wrapper access is
+   refused unless the controller is still starting and has read MISR after
+   the reset release. That read is the step before the final status poll,
+   and the poll does not advance until it reads 8, so the controller is at
+   its last step.
+3. One identity Device-nGnRnE mapping check of the wrapper page for read
+   and write, then the accesses of a fixed table, `wrapper_steps`. Before
+   each access the client writes the access number and a counter stamp
+   into the progress record at result offset 128 (magic `GPUWRW01`) and
+   prints the access; after a read, it prints the value. Each access is a
+   32-bit Device-nGnRnE load or store with `DSB SY` before and after.
+
+| # | Access | Purpose |
+| --- | --- | --- |
+| 1 | read `0x01880104` | Entry value; must be 0 |
+| 2 | read `0x01880100` | Entry value; must be 0 |
+| 3, 4 | write `0x01880100` ← `0x00640064`, read back | Stage 1: power-complete delays of 100 up and 100 down, the vendor's commented-out value |
+| 5, 6 | write `0x01880104` ← `0x100`, read back | Stage 2: core-0 clock enable, with the stage-1 delays kept |
+| 7, 8 | write `0x01880104` ← `0x107`, read back | Stage 3: core-0 software control with `q_active` 1 and `q_accept` 1, with the clock enable and delays kept |
+
+The stages add up: each keeps the earlier stages' values, so the stage
+that brings status 8 names the last write needed, and a later image tests
+whether the earlier writes are needed too.
+| 9, 10 | write `0x01880104` ← 0, read back | Restore |
+| 11, 12 | write `0x01880100` ← 0, read back | Restore |
+
+4. After each stage's readback the client reads CORE6 `PPU_PWSR` (`+0x08`),
+   `PPU_DISR` (`+0x10`) and `PPU_MISR` (`+0x14`) once and prints them, then
+   polls the controller for at most 20 ms and prints whether status 8
+   arrived and after how many microseconds. Status 8 ends the stages: the
+   remaining stage accesses are skipped and the restore follows. Once any
+   stage has run, the restore always runs in full.
+5. After the restore the client polls the controller once more and reads
+   CORE6 status, DISR and MISR once (`GPU WRAPPER restored`). Status 8 that
+   appears only then is reported as late, and no stage is credited with
+   it.
+6. Entry values other than 0 skip accesses 3 to 12. A readback that differs
+   from the written value is printed and does not stop the sequence.
+7. OFF: from ON, the existing OFF; otherwise the abandon call below.
+   Snapshot 2 records CORE6 and TOP5 after every OFF attempt, including a
+   refused or failed one. Then the existing ownership proofs and the
+   provider park.
+8. A `GPU WRAPPER result` line names the stage that reached status 8 (0
+   for none, including status 8 within the first 200 ms) and whether
+   status 8 came late. CORE6 ON ends with `COMPLETE
+   GPU wrapper write: CORE status 8, OFF and provider parked` (status 0).
+   CORE6 not ON ends with `FAIL GPU wrapper write: CORE6 not ON after three
+   stages, OFF and provider parked`, and nonzero entry values with `FAIL
+   GPU wrapper write refused: wrapper words not 0, OFF and provider
+   parked`; both return status 1 after the park.
+
+These paths return without OFF, with the claim retained as for any
+controller or provider failure:
+
+- the controller fails during the ON wait, a stage or the poll after the
+  restore (`GPU ON poll`); a failure during a stage leaves that stage's
+  value in the wrapper;
+- the ON is still before its last step after 200 ms (`GPU wrapper write
+  refused before the final CORE6 poll`);
+- the wrapper page is not an identity Device-nGnRnE mapping (`GPU wrapper
+  mapping`);
+- a clock check reaches the client deadline;
+- the OFF itself fails (`GPU OFF begin`, `GPU OFF deadline` or `GPU OFF
+  poll`), after snapshot 2.
+
+Stage 3 holds the accept HIGH; it is not a handshake. The wrapper
+register has no bit that shows the PPU's `DEVQREQn`, so software cannot
+answer a request, only present a fixed accept. Under PWCR 0 the PPU drives
+`DEVQREQn` HIGH (DEN0051E section 4.1.3), and a HIGH `DEVQACCEPTn` is the
+answer an ON transition waits for. The mapping of `q_accept` 1 to a HIGH
+`DEVQACCEPTn` is an assumption from the field name; `PPU_MISR` bit 8 after
+the stage shows whether it holds.
+
+The restore precedes the OFF so that no forced accept remains when CORE6
+is asked to turn off. If the PWCR 0 write had no effect during the
+outstanding transition (explanation 4), CORE6's OFF would wait for
+`DEVQACCEPTn` LOW, which a forced HIGH would block. If CORE6 reached ON at
+stage 3, the restore drops the forced accept while CORE6 is ON, which a
+Q-Channel device must not do while the request is HIGH. With PWCR 0 the
+PPU does not use the channel, so no change of CORE6 state is expected;
+the `GPU WRAPPER restored` line records the status, DISR and MISR that
+follow.
+
+**Abandoning an unacknowledged ON.** Two diagnostic-only calls,
+`a733_gpu_power_abandon` and `a733_gpu_platform_abandon`
+(`apps/gpu-power-id/abandon.h`), live in `power-abandon.c` and
+`platform-abandon.c`, which include the shared controller and platform
+sources and add one function each. Only this variant's build compiles
+them, in place of the shared sources, so the shared files and every other
+image stay unchanged. The controller accepts the call only while starting
+at its last ON step, the CORE6 status poll; in any other state it refuses
+with no change. It then runs the existing OFF steps from their start:
+CORE6 policy 0 with readback, a poll for status 0, reset assert, bus and
+clock gates closed, the domain-5 OFF request through the row, and the
+delegated release; the platform then releases its resource token as after
+any OFF.
+
+That OFF does not show that CORE6 settled. A PPU does not abort an
+outstanding transition (DEN0051E), so the policy 0 takes effect only after
+the ON transition ends, and the status poll for 0 passes at once because
+the status never left 0. The OFF here establishes CORE6 policy 0, the GPU
+in reset with its clocks closed, and the domain-5 row OFF as the owner
+checks it; snapshot 2 shows the PPU words that result.
+
+What each result means:
+
+- **Status 8 after stage 1.** The power-complete delay of 0 held CORE6's
+  transition. The next image writes the delay after the reset release, as
+  here: the wrapper has been reached only in that state.
+- **Status 8 after stage 2, with MISR bit 8 HIGH.** The wrapper's core-0
+  clock enable, with the delays set, lets the GPU's Q-Channel accept. The
+  next image sets the clock enable after the reset release, without the
+  delays, before it reads the GPU identity.
+- **Status 8 after stage 1 or 2, with MISR bit 8 LOW.** The transition
+  completed without the device accept that MISR shows, so the write
+  changed the PPU's view through another input; the stage still names
+  the write that the next image needs.
+- **Status 8 after stage 3, with MISR bit 8 HIGH.** The wrapper drives
+  CORE6's accept and the transition completes on it, but the GPU never
+  answered by itself. Status 8 here does not show that the GPU core is
+  powered, and no GPU core access follows.
+- **MISR bit 8 HIGH after stage 3 and status still 0.** The wrapper drives
+  CORE6's channel, and the transition waits on something else: the power
+  switch, or the reset-time transition is wedged (explanations 1 to 3).
+- **MISR unchanged at every stage.** The wrapper's core-0 bits do not
+  reach CORE6's channel, which supports explanation 2.
+- **Late status 8.** CORE6 completed after a stage's 20 ms; the stages
+  cannot say which write caused it, and a later image repeats the stage
+  with a longer wait.
+- **A readback that differs from the write.** The bits are not writable
+  in this state; that stage tested nothing.
+- **An OFF failure** (`GPU OFF poll`, after snapshot 2): TOP5 or CORE6
+  refused OFF with the transition outstanding. The run returns with
+  status 1 and the claim retained.
+- **No return.** A wrapper write or a CORE6 transition stalled the CPU.
+  Only a power removal recovers the board, and the progress record, which
+  survives only on a return, cannot say which access.
+
+**Write exception for coordinator acceptance.** The image writes only
+`0x01880100` (`0x00640064`, then 0) and `0x01880104` (`0x100`, then
+`0x107`, then 0), in the table's order, each a 32-bit Device-nGnRnE store
+followed by a readback, with TOP5 ON, the GPU clock open, its reset
+released and CORE6 unacknowledged. It reads only those two words in the
+GPU window. Outside the window it adds three CORE6 reads per stage
+(`+0x08`, `+0x10`, `+0x14`), snapshot 2, and an OFF of CORE6 and TOP5 from
+the unacknowledged ON. It writes neither `drm_ctrl` nor the SMC0 word:
+they set DRAM security, which a probe without GPU memory traffic does not
+need, and `0x0a0000b0` lies outside the GPU grant.
+
+**Performance design note.** The probe runs once per board lifetime and
+has no hot path. Its cost is at most 12 wrapper accesses, one translation
+walk of the wrapper page for read and write, at most three sets of three
+CORE6 reads and three 35-word snapshots. Its waits are at most 200 ms for
+ON and 60 ms for the stages, in one-tick pauses. The client refuses to start
+unless, after the ON begins, the client deadline leaves those 260 ms and
+a 300 ms reserve for the restore, OFF and park. The wrapper-read run
+reached its last read 209 ms after monitor entry, inside the 1.5 s client
+deadline. Each access keeps `DSB SY` on both sides (performance
+architecture section 1.2): the ordering spans two devices, the progress
+record in DRAM before the wrapper access and the wrapper store before the
+CORE6 reads. Failures fall in the existing classes of section 1.8: a
+controller, provider or deadline fault retains the claim and owned RAM;
+the stage outcomes and the entry refusal end after OFF and park.
+
+The host check (`check.py --wrapper-write`, fifteen cases) runs the
+linked client against modeled controller results. It requires:
+
+- the wrapper page checked for read and then for write before the first
+  access;
+- the wrapper accesses of every case in table order, with skips only where
+  the path allows, each preceded by its progress record and log line;
+- every wrapper access before any OFF call, with the platform starting or
+  ON, and the CORE6 reads after each stage and after the restore in their
+  place among the accesses;
+- no GPU core window access.
+
+The cases are:
+
+- the board's state through all three stages;
+- status 8 after stage 2, after stage 3, only after the restore, and
+  before any wrapper access;
+- a stage-1 readback that differs from the write;
+- nonzero entry words;
+- a controller refusal, and an ON still before its last step;
+- a wrong wrapper translation;
+- an OFF failure, and a refused abandon;
+- a controller failure during stage 1;
+- a short client deadline;
+- a seeded table mutant, which the check refuses at the mutated write.
+
+`checks/a733-gpu-core-owner.c` compiled with `-DGPU_POWER_ABANDON_CHECK`
+links `power-abandon.c` and runs the real controller from the power-up
+state with a transition that never completes. Abandon refuses before ON
+and at the first step. From the status poll it runs the OFF steps to TOP5
+OFF and the resource release, and it refuses again after OFF. The model
+clears CORE6's pending transition at the policy 0 write, which the PPU
+does not do, so it does not show how TOP5 OFF behaves with CORE6's
+transition outstanding; only the board run can. The command is
+
+```sh
+clang-21 -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+  -fno-sanitize-recover=all -Iinclude -Ichecks -DGPU_POWER_ABANDON_CHECK \
+  checks/a733-gpu-core-owner.c drivers/power/a733_pmic.c drivers/power/a733_rail_leases.c \
+  drivers/clock/a733_clock_leases.c drivers/gpu/a733_gpu_resources.c drivers/pinctrl/a733_pins.c \
+  drivers/pinctrl/a733_pin_tables.c drivers/power/a733_power_domains.c \
+  drivers/power/a733_pmic_consumer.c apps/gpu-power-id/power-abandon.c -o owner-abandon
+```
+
+The probe is the last step of its lifetime. A non-return needs a power
+removal, and a return with CORE6 ON does not qualify GPU identity access:
+the identity probe runs only in a later lifetime.
+
+A lower-risk variant would issue the wrapper accesses from a DMA engine, so
+that the CPU keeps running and can report an access that never completes.
+It needs its own design, and a stalled DMA access could still hold an
 interconnect path; it is not evaluated here.
 
 ### The delay-row writes stay
