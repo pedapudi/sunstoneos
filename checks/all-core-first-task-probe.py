@@ -214,6 +214,7 @@ def main():
     machine.execute()
     if a.case in REFUSALS:
         assert machine.returned and not machine.retained and machine.started == machine.stopped == []
+        assert machine.security == [], machine.security  # Refused before the EL3 security setup.
         assert all(address in (0x08001004, 0x08001008) for address, _, _ in machine.mmio_writes), machine.mmio_writes
         assert machine.mmio == machine.original_mmio | {0x08001004: 0x20, 0x08001008: 0}
         raw = machine.read(0x42018000, 0x5200)
@@ -243,6 +244,7 @@ def main():
             'off':machine.stopped,'clean_complete':sorted(machine.clean_complete)},indent=2)+'\n')
         print('PASS retained',a.case)
         return
+    assert machine.security == barrier.model.el3_security_writes(), machine.security
     assert machine.returned and not machine.retained, {
         'started':machine.started,'stopped':machine.stopped,'entries':machine.entries,
         'called':sorted(machine.called),'parked':sorted(machine.target_parked),

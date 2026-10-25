@@ -231,7 +231,7 @@ def prepare(args):
         if cached:names+=('a733_cached_allow_ns_code','a733_cpu_coherence_enable_el3','a733_cached_el3_l1',
                           'a733_cached_enter_el1','a733_cached_el1_l1','a733_cpu_el1_stacks','a733_cached_el3_fault')
         if pre_scheduler:names+=('a733_cached_block_walks','a733_smp_pre_scheduler','probe_arrived','probe_count','probe_lock',
-                                 'probe_finished','probe_release')
+                                 'probe_finished','probe_release','a733_el3_security_setup')
         if first_task:names+=('a733_cached_el1','a733_smp_primary_el1','a733_smp_diagnostic_start',
                               'platform_tick_setup','prvIdleTask','prvPassiveIdleTask',
                               'FreeRTOS_SWI_Handler','pxCurrentTCBs','xIdleTaskHandles')
@@ -240,7 +240,7 @@ def prepare(args):
         if quiet:names+=('background','ucPortGetCoreID')
         native={n:address(n) for n in names}
         if task_switch:
-            for name,expected in {'worker':(0x4100123c,372),
+            for name,expected in {'worker':(0x41001244,372),
                                   'tasks':(0x41241498,2688),
                                   'stacks':(0x41201498,262144)}.items():
                 require([(s['st_value'],s['st_size']) for s in entries if s.name==name]==[expected],

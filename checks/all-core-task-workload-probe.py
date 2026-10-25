@@ -216,6 +216,7 @@ def main():
         machine.execute()
         if a.case == 'success':
             assert machine.returned and not machine.retained
+            assert machine.security == base.el3_security_writes(), machine.security
             assert machine.started == machine.stopped == list(range(1, 8))
             assert machine.clean_complete == machine.stopped_writers == set(range(8))
             assert not any(machine.pending) and all(irq is None for irq in machine.irq_active)
