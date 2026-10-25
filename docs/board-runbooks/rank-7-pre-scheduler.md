@@ -85,6 +85,10 @@ V=~/.cache/sunstoneos/evidence/board-bundles-20261023
 F=~/.cache/sunstoneos/evidence/cpu-diagnosis-20261024
 W=~/.cache/sunstoneos/evidence/board-session-20261023
 S=$W/port-$PORT
+FEL=~/.cache/sunstoneos/build/sunxi-a733/sunxi-fel
+R=/home/sunil/git/sunstoneos-worktrees/bringup
+SB=~/.cache/sunstoneos/evidence/bootstrap-retention-20261024/survey-build
+SW=~/.cache/sunstoneos/evidence/launch-survey-20261017/software.json
 export PYTHONDONTWRITEBYTECODE=1
 ```
 
@@ -122,7 +126,14 @@ Each runner refuses an existing evidence directory.
      "Board $PORT: returning instruction-cache disable before the pre-scheduler diagnostic" \
      "The helper turns the instruction cache off and the 40 SRAM bytes at 0x73000 are restored." \
      -- $PY -B $V/common/cache-off.py $S/ps-cache-off
-   $PY -B $V/common/survey.py $PORT $S/ps-survey "Board $PORT before the pre-scheduler diagnostic"
+   $PY -B $V/common/bundle-run.py $PORT $S/ps-survey 240 \
+     "Board $PORT: returning SRAM survey before the pre-scheduler diagnostic" \
+     "Nonce-bound launcher controls, restored SRAM and a responsive same ROM." \
+     --prerequisite launch-survey-software=$SW \
+     --artifact $SB/manifest.json --artifact $SB/launch-survey.bin \
+     -- $PY -B $R/tools/run-launch-survey.py run --fel $FEL --build $SB \
+        --software $SW --database {database} --evidence $S/ps-survey \
+        --claim {claim} --owner {owner}
    ```
 
 3. Check each item of `$F/pre-scheduler/root-review-draft.json`, then

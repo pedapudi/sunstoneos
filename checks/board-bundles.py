@@ -59,7 +59,18 @@ rows. It checks that:
   entry's stem, apart from the DDR record, the chain and earlier runs, and
   it names its run directory;
 - each prepared single-core row has a runbook naming every bundle file's
-  SHA-256 and its run command;
+  SHA-256 and its run command, and each returning row's runbook runs the
+  survey of tools/prepare-board-bundles.py's SURVEY_BUILD with the
+  repository's survey runner;
+- that build passes the survey runner's own input checks (manifest schema
+  and physical_access, the current tools/run-launch-survey.py as
+  host_sha256, the survey source, every frozen file's SHA-256, and a
+  software record with its schema, return_preserved and physical_access),
+  a copy that changes any one of them is refused, and the launch-survey-20261017 build,
+  which names the runner from before 575565f8, is refused by itself and,
+  as a run's survey build, before any run directory exists;
+- the hand-written runbooks under docs/board-runbooks/ call no
+  $V/common/survey.py, and those that name a survey build name that one;
 - the reader, with only its FEL commands modeled, saves the 128 scratch bytes,
   records the start and end time of each command,
   reads each condition word in its own command, skips the dependents of a
@@ -79,6 +90,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import statistics
@@ -104,6 +116,8 @@ def module(name, path):
 
 
 tool = module('board_bundles_tool', ROOT / 'tools/prepare-board-bundles.py')
+# A frozen survey build whose manifest names the runner from before 575565f8.
+STALE_SURVEY = tool.EVIDENCE / 'launch-survey-20261017/build'
 reader = module('board_bundles_reader_check', ROOT / tool.READER)
 queue = module('board_bundles_queue', ROOT / 'tools/board-test-queue.py')
 transport = module('board_bundles_transport', ROOT / tool.SUPERVISED_TRANSPORT)
@@ -404,7 +418,10 @@ def fixture_repository(work):
     (repo / 'tools').mkdir()
     # The single-core rows load the tool itself, its reader and host modules,
     # and the kernel runner whose FEL requests bound the returning timeout.
-    for rel in ('tools/prepare-board-bundles.py', tool.READER, *tool.HOST_TOOLS, 'tools/check-a733-kernel.py'):
+    # The survey runner and source let the returning runbooks name the survey build.
+    (repo / 'boot/a733').mkdir(parents=True)
+    for rel in ('tools/prepare-board-bundles.py', tool.READER, *tool.HOST_TOOLS, 'tools/check-a733-kernel.py',
+                tool.SURVEY_RUNNER, tool.SURVEY_SOURCE):
         shutil.copyfile(ROOT / rel, repo / rel)
     uncounted = RUNNER.replace('COMPLETION_COUNTS', 'OTHER_COUNTS')
     for name, text in [('nested.py', NESTED), ('monitor.py', MONITOR), ('failing.py', FAILING), ('many.py', MANY),
@@ -439,6 +456,52 @@ def writable_tree(path):
             p = Path(directory) / name
             if not p.is_symlink():
                 os.chmod(p, os.lstat(p).st_mode | 0o700)
+
+
+def check_survey(work):
+    """The runbooks' survey build names the current survey runner and source; the launch-survey-20261017
+    build, which names the runner from before 575565f8, is refused."""
+    tool.check_survey(tool.SURVEY_BUILD, ROOT)
+    harness.refused(lambda: tool.check_survey(STALE_SURVEY, ROOT), 'the runner would refuse it')
+    # Copies of the build and the software record with one input changed each.
+    def variant(name, change_manifest=None, change_binary=False, change_software=None):
+        build = work / ('survey-' + name)
+        shutil.copytree(tool.SURVEY_BUILD, build)
+        manifest = json.loads((build / 'manifest.json').read_text())
+        if change_manifest:
+            change_manifest(manifest)
+        (build / 'manifest.json').write_text(json.dumps(manifest))
+        if change_binary:
+            data = bytearray((build / 'launch-survey.bin').read_bytes())
+            data[0] ^= 1
+            (build / 'launch-survey.bin').write_bytes(bytes(data))
+        software = json.loads(tool.SURVEY_SOFTWARE.read_text())
+        if change_software:
+            change_software(software)
+        (work / ('software-' + name + '.json')).write_text(json.dumps(software))
+        return build, work / ('software-' + name + '.json')
+    for name, kwargs, message in [
+            ('schema', {'change_manifest': lambda m: m.update(schema='a733-launch-survey-v0')}, 'launch-survey-v1'),
+            ('physical', {'change_manifest': lambda m: m.update(physical_access=True)}, 'launch-survey-v1'),
+            ('binary', {'change_binary': True}, 'differs from its manifest'),
+            ('software-schema', {'change_software': lambda r: r.update(schema='other')}, 'return evidence'),
+            ('return', {'change_software': lambda r: r.update(return_preserved=False)}, 'return evidence'),
+            ('software-physical', {'change_software': lambda r: r.update(physical_access=True)}, 'return evidence')]:
+        build, software = variant(name, **kwargs)
+        harness.refused(lambda: tool.check_survey(build, ROOT, software), message)
+    build, software = variant('unchanged')
+    tool.check_survey(build, ROOT, software)
+    # The hand-written runbooks name the same survey build and never the bundle's survey.py.
+    books = sorted((ROOT / 'docs/board-runbooks').glob('*.md'))
+    stale = [b.name for b in books if '$V/common/survey.py' in b.read_text()]
+    assert not stale, f'runbooks still call $V/common/survey.py: {stale}'
+    named = {b.name for b in books if 'SB=~/.cache/sunstoneos/evidence/' in b.read_text()}
+    for b in named:
+        build = re.search(r'^SB=~/\.cache/sunstoneos/evidence/(\S+)$', (ROOT / 'docs/board-runbooks' / b).read_text(), re.M)
+        assert build and tool.EVIDENCE / build[1] == tool.SURVEY_BUILD, f'{b} names another survey build'
+    assert 'README.md' in named, 'the runbook README does not name the survey build'
+    manifest = json.loads((tool.SURVEY_BUILD / 'manifest.json').read_text())
+    return {'build': str(tool.SURVEY_BUILD), 'runner_sha256': manifest['host_sha256']}
 
 
 def check_table():
@@ -517,7 +580,7 @@ def main():
     WORK.mkdir(parents=True, exist_ok=True)
     work = WORK / ('check-' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f'))
     work.mkdir()
-    result = {'table': check_table(), 'reader': check_reader(work)}
+    result = {'table': check_table(), 'survey': check_survey(work), 'reader': check_reader(work)}
 
     elves = work / 'elf'
     elves.mkdir()
@@ -643,6 +706,8 @@ def main():
     harness.refused(lambda: tool.run(inputs, rows, evidence, repo, lifetime=late_stop), 'not placed before it')
     own_gate = dict(lifetime, order=[dict(lifetime['order'][0], after=['returning-good'])] + lifetime['order'][1:])
     harness.refused(lambda: tool.run(inputs, rows, evidence, repo, lifetime=own_gate), 'keys outside')
+    harness.refused(lambda: tool.run(inputs, rows, evidence, repo, lifetime=lifetime, survey_build=STALE_SURVEY),
+                    'the runner would refuse it')
     assert not evidence.exists(), 'refused inputs created no run directory'
 
     status, run_dir = tool.run(inputs, rows, evidence, repo, lifetime=lifetime)
@@ -754,6 +819,10 @@ def main():
             assert f'CONTROLLED: {outcome["name"]}, status {outcome["status"]}' in text, name
             assert ('progress record at result offset 128' in text) == (name == 'returning-progress'), name
         assert f'Queue timeout: {timeout} s' in text, name
+        if name != 'read-good':
+            assert (f'-- $PY -B {repo / tool.SURVEY_RUNNER} run --fel $FEL --build {tool.SURVEY_BUILD} \\\n'
+                    in text and '--prerequisite launch-survey-software=' in text and '$V/common/survey.py' not in text
+                    and '--claim {claim} --owner {owner}' in text), name
         prepared[name] = {'files': len(files), 'timeout_seconds': timeout}
     assert (run_dir / 'read-good/bundle/board-read.py').read_bytes() == (ROOT / tool.READER).read_bytes()
     # The base and the rows on it, with the lifetime's records.

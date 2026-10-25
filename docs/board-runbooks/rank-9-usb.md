@@ -218,7 +218,14 @@ the last returning image of ranks 6 to 8. Every directory below starts with
      "Board $PORT: returning instruction-cache disable before the native USB channel" \
      "The helper turns the instruction cache off and the 40 SRAM bytes at 0x73000 are restored." \
      -- $PY -B $V/common/cache-off.py $S/r9-v3-cache-off
-   $PY -B $V/common/survey.py $PORT $S/r9-v3-survey "Board $PORT before the native USB channel"
+   $PY -B $V/common/bundle-run.py $PORT $S/r9-v3-survey 240 \
+     "Board $PORT: returning SRAM survey before the native USB channel" \
+     "Nonce-bound launcher controls, restored SRAM and a responsive same ROM." \
+     --prerequisite launch-survey-software=$SW \
+     --artifact $SB/manifest.json --artifact $SB/launch-survey.bin \
+     -- $PY -B $R/tools/run-launch-survey.py run --fel $FEL --build $SB \
+        --software $SW --database {database} --evidence $S/r9-v3-survey \
+        --claim {claim} --owner {owner}
    ```
 
 2. Capture the 14 clock and reference words and the three entry words

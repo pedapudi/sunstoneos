@@ -444,9 +444,17 @@ of the supervised A76 build with the CPU clock option (B1 in
   measures walk cost only; the owner's revert rule and its 1% contiguous-hint
   trigger need these workloads. Domain 4 ON is bound to bundle 10's records
   once the NPU startup requests it through the owner.
-- **On user approval.** CPU clock raises; DCDC3 and DCDC5 voltage changes,
-  including the service-step timing of a DCDC3 selector write, for which
-  the power-domain design's host model predicts two steps with one tick wait;
+- **On ranks 7 and 8, the B1 record and a bound approval record.** The A76
+  operating-point runs A1, A2 and A3 of [cpu-a76-dvfs.md](cpu-a76-dvfs.md)
+  and the DCDC3 selector write, including the service-step timing of that
+  write, for which the power-domain design's host model predicts two steps
+  with one tick wait. The user approved these physical clock and voltage
+  changes on 2026-10-24. Each still runs only on a board where ranks 7 and 8
+  have passed and the B1 record exists, whose DCDC3 reading gives the
+  selector that the write must find. Its approval record, of schema
+  `a733-os-cpu-clock-approval-v1`, names that board, the image, the session
+  and the B1 record, as the A76 design's approval-record rule states.
+- **On user approval.** Other CPU clock raises and DCDC5 voltage changes;
   domain 5 ON and OFF, repeated N times, which needs DCDC4 and is the only
   domain that powers off; WDT0 expiry with fault-record retention, which boots
   from microSD; intentional GPU and NPU hangs. Memory qualification also waits
@@ -546,11 +554,23 @@ outside the 128 MiB that `platform_init()` maps. All bundles run one core.
 
 ## Reuse and removal
 
-Reused: `common/bundle-run.py`, `cache-off.py`, `survey.py`, the kernel
+Reused: `common/bundle-run.py`, `cache-off.py`, the kernel
 runner with `common/primary.patch`, `tools/returning_build.py
 --platform-build`, the platform objects of `rank-9-usb-v4/`, the reader logic
 of `state-capture-readl.py`, and the tool's sandbox, `nm` scan, snapshot and
 submission steps. Removed: rank 7 from the memory row's procedure.
+
+The returning SRAM survey before each returning run calls the repository's
+`tools/run-launch-survey.py` through `common/bundle-run.py` with the survey
+build in `bootstrap-retention-20261024/survey-build`. That runner refuses a
+build whose manifest names another runner (`host_sha256`) or survey source
+(`source_sha256`). The build in `launch-survey-20261017/build` holds the same
+binary but names the runner from before commit `575565f8`, and
+`common/survey.py` uses it, so the runbooks no longer call that script.
+`tools/prepare-board-bundles.py` refuses inputs with a returning row before it
+creates a run directory unless the survey build passes the runner's hash
+checks, and `checks/board-bundles.py` repeats that check offline and refuses
+the older build.
 
 ## Register sources and unproven sequences
 
@@ -582,7 +602,7 @@ submission steps. Removed: rank 7 from the memory row's procedure.
 | Objects of bundles 4, 6, 7 and 8 that differ from passed images | Not applicable | Only the declared overlay | Equivalence record of each bundle |
 | Log bytes per returning image | 16,127 available after the result header | Summary and outcome line never cut: details stop while 256 bytes remain | Bundle 4 model log (8,343 bytes); host-model bound for bundles 6 and 7 |
 | NSI accesses of bundle 8 | 0 | 0 behind a closed gate or an OFF domain; 43 register accesses from zero fields, of which 6 writes, all on ports 2, 14 and 15 | `checks/board-bundles-apps-model.c` |
-| Bundle 6 service steps at 400 kHz | 687 µs per snapshot step in the owner's model, 107% of wire time | Provisional median limit 1,268 permille of measured wire time, first plus 40 µs, at CPU-L 494 MHz; about 799/839 µs only at nominal wire time. The 110% target remains open ([pmic-access.md](pmic-access.md)) | Bundle 6 STEP lines |
+| Bundle 6 service steps at 400 kHz | 687 µs per snapshot step in the owner's model, 107% of wire time | Provisional median limit 1,268 permille of measured wire time, first plus 40 µs, at CPU-L 494 MHz; about 799/839 µs only at nominal wire time. Passed on port 3-3 with a median of 1,243 permille; at the measured access costs no barrier placement reaches 110% ([pmic-access.md](pmic-access.md)) | Bundle 6 STEP lines |
 | Wall time per board for bundles 1 to 9 | Not applicable | 10 min (*estimated*); no guard window wait, because 12 re-enumerations fit the guard's 12 per 600 s. Both boards share one guard key, so this assumes no other A733 re-enumeration in that window | Session file times |
 | Host sandbox, bytes read, copies | [board-bundles-measurements.md](board-bundles-measurements.md) | Unchanged | `checks/board-bundles.py` |
 

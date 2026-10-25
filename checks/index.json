@@ -2012,7 +2012,8 @@
  },
  "board-bundles.py": {
   "cache_areas": [
-   "build"
+   "build",
+   "evidence"
   ],
   "docs": [
    "apps/gpu-power-id/README.md",
@@ -6093,7 +6094,15 @@
   "docs": [
    ".agents/skills/sunstone-a733-board/SKILL.md",
    "docs/a733-smp-supervised.md",
-   "docs/board-test-queue.md"
+   "docs/board-runbooks/README.md",
+   "docs/board-runbooks/rank-6-thermal.md",
+   "docs/board-runbooks/rank-7-corrected.md",
+   "docs/board-runbooks/rank-7-first-task.md",
+   "docs/board-runbooks/rank-7-pre-scheduler.md",
+   "docs/board-runbooks/rank-8-workload.md",
+   "docs/board-runbooks/rank-9-usb.md",
+   "docs/board-test-queue.md",
+   "docs/designs/board-bundles-next.md"
   ],
   "library": false,
   "pure_host": false,

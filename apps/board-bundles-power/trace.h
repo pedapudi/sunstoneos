@@ -23,6 +23,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#define BB_TWI_DATA UINT32_C(0x07083008)
 #define BB_TWI_CNTR UINT32_C(0x0708300c)
 #define BB_TWI_STAT UINT32_C(0x07083010)
 /* A snapshot is six read transactions, each ending in a STOP. */
@@ -175,6 +176,16 @@ unsigned bb_xaddr_admitted(uint32_t addr, uint32_t cntr, uint32_t stat, uint32_t
 struct bb_samples { uint32_t count, ticks, sub_min, sub_max, group, min, max; };
 void bb_samples_start(struct bb_samples *);
 unsigned bb_samples_add(struct bb_samples *, uint32_t ticks); /* 0 once the record is full */
+/* A count, sum, fastest and slowest of counter-tick spans, with no cap. */
+struct bb_span { uint32_t count, ticks, min, max; };
+void bb_span_add(struct bb_span *, uint32_t ticks);
+void bb_span_merge(struct bb_span *, const struct bb_span *);
+/* The completing polls of the recorded steps, by the phase-start CNTR write
+ * that ends each span: a byte that the poll wrote to DATA first (0x48 after
+ * a DATA write), a receive (0x48 with no DATA write in the poll), a repeated
+ * START (0x68 after a flag), a START after a STOP wait, and a STOP (0x58). */
+enum { BB_COMPLETE_BYTE, BB_COMPLETE_RECEIVE, BB_COMPLETE_RESTART, BB_COMPLETE_START, BB_COMPLETE_STOP,
+       BB_COMPLETE_KINDS };
 struct bb_cost_next {
     /* With IRQs masked, at the park, in the provider task with the I2C mutex
      * entered and the provider idle. */
@@ -193,6 +204,10 @@ struct bb_cost_next {
     struct bb_samples poll;
     struct bb_samples stamp;           /* two back-to-back stamps per sample, the per-sample overhead */
     uint32_t polls, poll_ticked, poll_snapshots; /* polls of the window; samples left out for a tick; snapshots */
+    /* Inside the recorded steps: each a733_pmic_poll() that completed a bus
+     * phase and then wrote a phase-start CNTR value, from the stamp before
+     * its task check to the stamp after that write returned. */
+    struct bb_span complete[BB_COMPLETE_KINDS];
 };
 #define BB_POLL_WINDOW_POLLS 4096u     /* a back-to-back snapshot needs about 500 */
 
@@ -215,7 +230,7 @@ struct bb6_summary {
     struct bb_cost cost;
     struct bb_cost_next next;
 };
-#define BB6_SUMMARY_LINES 31u
+#define BB6_SUMMARY_LINES 36u
 unsigned bb6_summary_lines(const struct bb6_summary *, struct bb_line *out);
 /* Bundle 7's summary. */
 struct bb7_summary {

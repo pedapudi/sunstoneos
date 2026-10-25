@@ -11,10 +11,11 @@ design's baselines were counted on commit `b3b1289` with the host models in
 the budget table. One set of figures comes from the board: the service steps
 of a read-only run on port 3-3, in section "Board result of the service
 steps". They exceed the 110% wire-time target. The provider follow-up
-shortened the step, and a second run with it measured the register access
+shortened the step, and two runs with it measured the register access
 costs. The provisional median limit for a 400 kHz snapshot is 1,268 permille of
-its measured wire time, with another 40 µs for the first step. The 110%
-target remains open because plain write cost has not been measured.
+its measured wire time, with another 40 µs for the first step. At the
+measured costs no barrier placement reaches 110% while the provider polls
+each bus phase.
 
 ## Ownership and data flow
 
@@ -238,7 +239,8 @@ GPU liveness park complete before their deadlines.
 - The S_TWI0 packet engine and both interrupts: delivery is unqualified, and the
   spin is capped at 1 ms per step at a few requests per second.
 - Lighter barriers, which need the board qualification in
-  [docs/shared-helpers.md](../shared-helpers.md).
+  [docs/shared-helpers.md](../shared-helpers.md); the measured costs predict
+  a step about 8 µs shorter ([pmic-access.md](pmic-access.md)).
 
 ## Board evidence required
 
@@ -411,45 +413,48 @@ spin from the provider's time of the phase-start write with a minimum re-spin
 of a quarter bit time, and reads the time once per bus phase instead of twice
 per access.
 
-A second bundle 6 ran the follow-up on port 3-3 on 2026-10-24, with CPU-L at
-494 MHz in the same lifetime and the bundle's trace observer and write
-stamps active. Its median snapshot step was 779 µs, 123.7% of the 630 µs
-wire time (33 steps, 777 to 788 µs after the first), and its first step
-809 µs, 128.4%. The byte measured the nominal 22.5 µs, and no phase needed a
-re-spin. Timed in the service task, a bare S_TWI0 read takes about 378 ns,
-the `DSB SY` pair adds about 41 ns, the adapter's read takes 462 ns on
-average, a time read 144 ns and a write about 358 ns. Section "Board result"
-of [pmic-access.md](pmic-access.md) gives the windows, the model at those
-costs and explains why the model does not independently derive the bound.
-Interrupts landed in 24 of the 33 recorded steps.
+Two runs of bundle 6 measured the follow-up on port 3-3 on 2026-10-24,
+with CPU-L at 494 MHz and the bundle's trace observer and write stamps
+active. Their median snapshot steps were 779 µs and 784 µs, 123.7% and
+124.4% of the 630 µs wire time, and their first steps 809 µs and 807 µs.
+The first run measured the nominal 22.5 µs byte and the second a 22.541 µs
+byte, and no phase needed a re-spin.
+Timed in the service task, a bare S_TWI0 read takes about 378 ns, the
+`DSB SY` pair adds about 41 ns, the adapter's read takes 462 ns and a time
+read 144 ns. A fenced write in a transfer takes about 360 ns with its stamp,
+a plain write 198 ns, and a whole provider poll that finds the flag clear
+1,176 ns.
+Section "Board result" of [pmic-access.md](pmic-access.md) gives the
+windows. At those costs the model gives 739 µs; the step moves in whole
+microseconds per bus phase, so the 45 µs it lacks corresponds to about 1 µs
+in each of the 42 phases. A third run timed each completing poll and had a
+median of 796.4 µs with that window. Its byte polls take 3.10 µs against
+the model's 2.72 µs, and the completing polls account for about 12 µs of
+the per-step difference; about 38 µs lies in step work outside them, such as
+the admission's lock waits and the publication.
 
-The 110% target remains open. A plain read costs about 379 ns, but every
-timed write had `DSB SY` on both sides, so plain write cost has not been
-measured. Assuming 379 ns for every access gives 694–712 µs depending on
-whether model bytes take 22 or 23 µs; with reads at 379 ns and writes of at
-most 150 ns the model gives 664–692 µs, within 110% (693 µs). These rows
-establish no hardware floor. A lighter barrier placement and a Device-nGnRE
-mapping of S_TWI0 both remain open. The next bundle 6 windows, a plain
-write window and a whole provider poll with the flag clear, are specified
-in [pmic-access.md](pmic-access.md); the write window is pending
-safe-register review.
+The 110% target, 693 µs, is out of reach of a provider that polls each bus
+phase. Charging the register accesses alone, with no software cost, the
+model gives 712 µs with `DSB SY` pairs and 694 µs with plain reads, a plain
+`DATA` write and a `DSB SY` after the `CNTR` write. That lighter placement
+is predicted to shorten the board step by about 8 µs. A route to 110% needs
+fewer serial accesses per snapshot, such as the S_TWI0 packet engine, which
+runs a transaction's conditions and bytes in hardware; neither it nor a
+Device-nGnRE mapping of S_TWI0 is designed here.
 
 **Provisional empirical bound.** At 400 kHz a snapshot completes in one
 step. Its median limit is 1,268 permille of its measured wire time; the
 first-step limit adds 40 µs. At the nominal 22.5 µs byte, these limits are
 798.840 µs and 838.840 µs, approximately 799 µs and 839 µs. They come from
-the observed median plus approximately 20 µs and hold for bundle 6 at
+the first run's median plus approximately 20 µs and hold for bundle 6 at
 CPU-L 494 MHz on one service core with its trace observer and write stamps.
-The 299 ns per-poll remainder is a fit to the median and measures nothing;
-the 23 µs gap between the model at the timed costs and the board's median
-is unexplained.
+The second run applied them and passed.
 
 At a step near 1 ms, the service can split a snapshot across a tick wait.
 The DCDC3 selector-write bound remains at most two steps with one tick
-wait, pending a board run. The historical mixed-cost model takes one
-1,001 µs step at 380 ns per poll and splits at 386 ns; the 250 ns poll row
-gives a 757 µs snapshot. These are sensitivity results from a rejected
-calibration, not independent hardware limits.
+wait, pending a board run. At the measured costs the model writes the
+selector in one 950 µs step; at the poll cost fitted to the board's median
+it splits the write into two steps with one tick wait, within that bound.
 
 Differences from the design, each with its reason:
 

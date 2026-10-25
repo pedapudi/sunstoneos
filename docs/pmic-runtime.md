@@ -143,14 +143,15 @@ and a selector write each complete in one step with no tick wait; at 100 kHz
 they take two and three tick waits. On the board (bundle 6, port 3-3,
 CPU-L at 494 MHz, with the bundle's trace observer), a 400 kHz snapshot step
 takes 779 µs at the median, 123.7% of its 630 µs wire time, and 809 µs in the
-first step. The provisional median limit for later runs under those conditions is
+first step; a second run gave 784 µs and 807 µs. The provisional median limit for later runs under those conditions is
 1,268 permille of each step's measured wire time; the first step adds
 40 µs. At nominal wire time these limits round to 799 µs and 839 µs.
 They come from the observed median plus approximately 20 µs, not an
-independent model prediction. Whether lighter barriers can reach 110%
-remains open because plain write cost was not measured. Section "Board
-result" of [the access design](designs/pmic-access.md) gives the windows,
-model limitations and provisional bound. The other images keep their
+independent model prediction. At the measured access costs, including a
+plain write of 198 ns, a lighter barrier placement shortens the step by
+about 8 µs and no placement reaches 110% while the provider polls each bus
+phase. Section "Board result" of [the access design](designs/pmic-access.md)
+gives the windows, model limitations and provisional bound. The other images keep their
 per-tick loops.
 `a733_pmic_work()` reads faults from the state word. When a
 client latches a fault while the provider task holds the I2C mutex for a

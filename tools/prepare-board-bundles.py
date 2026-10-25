@@ -40,6 +40,12 @@ runbook only: the base and every row in that list must pass on the board
 first, in the same lifetime. The operator applies these gates; the runner
 does not check them.
 
+A returning row's runbook runs the returning SRAM survey of SURVEY_BUILD with
+the repository's tools/run-launch-survey.py before the image. Inputs with a
+returning row are refused before any run directory exists unless that build's
+manifest names the repository's runner and survey source, as the runner
+itself requires, and the survey software record covers its binary.
+
 With --lifetime, the runbooks name the board lifetime they run in: its DDR
 record, the warm-return chain of the runs since then, and the order of this
 run's rows and of external bundles (such as a native USB image) with the
@@ -104,6 +110,18 @@ READER = 'tools/board-bundles-next-read.py'
 # its 30 s FEL bound per command and the scratch save and restore fit 120 s.
 READ_TIMEOUT = 120
 HOST_TOOLS = ('tools/check-a733-smp.py', 'tools/usb-access.py')
+# The returning SRAM survey that precedes each returning run. Its runner is the
+# repository's tools/run-launch-survey.py, which refuses a build whose manifest
+# names another runner or survey source. The build of launch-survey-20261017
+# names the runner from before 575565f8; this build holds the same binary and
+# names the current runner. SURVEY_SOFTWARE is the binary's instruction and
+# return evidence.
+SURVEY_RUNNER = 'tools/run-launch-survey.py'
+SURVEY_SOURCE = 'boot/a733/launch-survey.S'
+SURVEY_BUILD = EVIDENCE / 'bootstrap-retention-20261024/survey-build'
+SURVEY_SOFTWARE = EVIDENCE / 'launch-survey-20261017/software.json'
+# The coordinator's survey script gave the runner 240 s.
+SURVEY_TIMEOUT = 240
 # Objects of an image that passed on the board, by the record that shows it:
 # the kernel check of ranks 4 and 5, rank-9-usb-v4 on port 3-3, and bundle 2's
 # image with the monitor's counter option, which passed on port 3-3
@@ -674,6 +692,35 @@ def sha256(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def check_survey(build, repository, software=SURVEY_SOFTWARE):
+    """The survey build passes every input check that the repository's survey runner makes before any device
+    access (tools/run-launch-survey.py, run): the manifest's schema and physical_access, the runner and survey
+    source it names, the SHA-256 of every frozen file it lists, and a software record of the instruction and
+    return evidence that covers its binary."""
+    build = Path(build)
+    manifest = json.loads((build / 'manifest.json').read_text())
+    require(manifest.get('schema') == 'a733-launch-survey-v1' and manifest.get('physical_access') is False,
+            f'The survey build {build} is not a launch-survey-v1 build without physical access.')
+    runner = sha256(Path(repository) / SURVEY_RUNNER)
+    require(manifest.get('host_sha256') == runner,
+            f'The survey build {build} names the runner {manifest.get("host_sha256")}, but '
+            f'{Path(repository) / SURVEY_RUNNER} is {runner}; the runner would refuse it.')
+    source = sha256(Path(repository) / SURVEY_SOURCE)
+    require(manifest.get('source_sha256') == source,
+            f'The survey build {build} names the source {manifest.get("source_sha256")}, but '
+            f'{Path(repository) / SURVEY_SOURCE} is {source}; the runner would refuse it.')
+    files = manifest.get('files')
+    require(isinstance(files, dict) and 'launch-survey.bin' in files and
+            all(Path(name).name == name and (build / name).is_file() and sha256(build / name) == digest
+                for name, digest in files.items()),
+            f'A frozen file of the survey build {build} differs from its manifest; the runner would refuse it.')
+    record = json.loads(Path(software).read_text())
+    require(record.get('schema') == 'a733-launch-survey-software-v1'
+            and record.get('binary_sha256') == files['launch-survey.bin']
+            and record.get('return_preserved') is True and record.get('physical_access') is False,
+            f'{software} is not instruction and return evidence for the binary of the survey build {build}.')
+
+
 def reader():
     """The fixed reader, loaded without running it; its plan() admits a word list."""
     return load('board_bundles_reader', ROOT / READER)
@@ -787,7 +834,7 @@ def stops(entry):
             for outcome in outcomes]
 
 
-def runbook(row, bundle, value, artifacts, prerequisites, timeout, lifetime=None):
+def runbook(row, bundle, value, artifacts, prerequisites, timeout, lifetime=None, survey=None):
     """runbook.md for one prepared row, in the format of docs/board-runbooks/."""
     n = row['position']
     placed = lifetime_runs(lifetime, row['name'])
@@ -867,8 +914,16 @@ def runbook(row, bundle, value, artifacts, prerequisites, timeout, lifetime=None
                   f'     "Board $PORT: returning instruction-cache disable before bundle {n}" \\',
                   '     "The helper turns the instruction cache off and the 40 SRAM bytes at 0x73000 are restored." '
                   '\\', f'     -- $PY -B $V/common/cache-off.py $S/{stem}-cache-off',
-                  f'   $PY -B $V/common/survey.py $PORT $S/{stem}-survey "Board $PORT before bundle {n}"', '   ```', '',
-                  '   Each prints `"result": "passed"`.', '']
+                  f'   $PY -B $V/common/bundle-run.py $PORT $S/{stem}-survey {SURVEY_TIMEOUT} \\',
+                  f'     "Board $PORT: returning SRAM survey before bundle {n}" \\',
+                  '     "Nonce-bound launcher controls, restored SRAM and a responsive same ROM." \\',
+                  f'     --prerequisite launch-survey-software={survey["software"]} \\',
+                  f'     --artifact {survey["build"]}/manifest.json --artifact {survey["build"]}/launch-survey.bin \\',
+                  f'     -- $PY -B {survey["runner"]} run --fel $FEL --build {survey["build"]} \\',
+                  f'        --software {survey["software"]} --database {{database}} --evidence $S/{stem}-survey \\',
+                  '        --claim {claim} --owner {owner}', '   ```', '',
+                  '   Each prints `"result": "passed"`. The survey build\'s manifest names the survey runner '
+                  f'(`{survey["runner_sha256"]}`), which refuses a build that names another.', '']
         if links is None:
             lines += ['2. Run the image once. `D` is the DDR record of this lifetime\'s cold start; give one '
                       '`--warm-return` for each returning run since then, in order:', '', '   ```sh']
@@ -1150,7 +1205,7 @@ def prepare_row(row, arguments, row_dir, request, queue, prepared=()):
             stage = 'runbook'
             with (row_dir / 'runbook.md').open('x') as stream:
                 stream.write(runbook(row, bundle, admitted, artifacts, prerequisites, timeout,
-                                     request.get('lifetime')) + '\n')
+                                     request.get('lifetime'), request.get('survey')) + '\n')
         record.update(status='prepared', submission=str(row_dir / 'submission.json'), revision=manifest['revision'],
                       timeout_seconds=timeout, prerequisites=prerequisites)
     except Exception as error:
@@ -1264,9 +1319,11 @@ def check_lifetime(lifetime, names, inputs):
             placed.append(entry['row'])
 
 
-def run(inputs, rows=ROWS, evidence=EVIDENCE, repository=ROOT, nm=NM, lifetime=None, run_dir=None):
+def run(inputs, rows=ROWS, evidence=EVIDENCE, repository=ROOT, nm=NM, lifetime=None, run_dir=None,
+        survey_build=SURVEY_BUILD):
     """Create the run directory, the next board-bundles-<date>-<n> under evidence or the new directory run_dir,
-    and wait once on the sandboxed step; return (exit status, run directory)."""
+    and wait once on the sandboxed step; return (exit status, run directory). Inputs with a returning row
+    first need a survey build that the repository's survey runner accepts."""
     names = {row['name']: row for row in rows}
     unknown = sorted(set(inputs) - set(names))
     require(not unknown, 'Inputs name unknown rows: ' + ', '.join(unknown))
@@ -1275,6 +1332,12 @@ def run(inputs, rows=ROWS, evidence=EVIDENCE, repository=ROOT, nm=NM, lifetime=N
     excluded = sorted(n for n in inputs if names[n]['class'] == 'excluded')
     require(not excluded, 'Inputs name excluded rows: ' + ', '.join(excluded))
     require(Path(BWRAP).is_file(), f'{BWRAP} is missing; preparation needs the sandbox.')
+    survey = None
+    if any(names[n].get('returning') for n in inputs):
+        check_survey(survey_build, repository)
+        survey = {'build': str(Path(survey_build).resolve()), 'software': str(SURVEY_SOFTWARE.resolve()),
+                  'runner': str((Path(repository) / SURVEY_RUNNER).resolve()),
+                  'runner_sha256': sha256(Path(repository) / SURVEY_RUNNER)}
     if run_dir is not None:
         run_dir = Path(run_dir).resolve()
         require(Path(evidence).resolve() in run_dir.parents, f'{run_dir} is not under the evidence directory {evidence}.')
@@ -1293,7 +1356,7 @@ def run(inputs, rows=ROWS, evidence=EVIDENCE, repository=ROOT, nm=NM, lifetime=N
             except FileExistsError:
                 n += 1
     save(run_dir / 'request.json', {'rows': rows, 'inputs': inputs, 'repository': str(repository), 'nm': str(nm),
-                                    'lifetime': lifetime})
+                                    'lifetime': lifetime, 'survey': survey})
     command = sandbox(run_dir) + [sys.executable, str(Path(__file__).resolve()), '--step', str(run_dir)]
     status = subprocess.run(command).returncode
     require((run_dir / 'run.json').is_file(), f'The sandboxed step stopped before recording a result ({status}).')

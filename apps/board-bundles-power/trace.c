@@ -131,6 +131,24 @@ unsigned bb_samples_add(struct bb_samples *s, uint32_t ticks)
     return s->count < BB_COST_SAMPLES;
 }
 
+void bb_span_add(struct bb_span *s, uint32_t ticks)
+{
+    if (!s->count || ticks < s->min) s->min = ticks;
+    if (ticks > s->max) s->max = ticks;
+    ++s->count;
+    s->ticks += ticks;
+}
+
+void bb_span_merge(struct bb_span *s, const struct bb_span *add)
+{
+    if (!add->count)
+        return;
+    if (!s->count || add->min < s->min) s->min = add->min;
+    if (add->max > s->max) s->max = add->max;
+    s->count += add->count;
+    s->ticks += add->ticks;
+}
+
 void bb_status_spin(int (*read)(void *, uintptr_t, uint32_t *), void *context, uint64_t (*now)(void),
     uintptr_t status, uint32_t mask, uint32_t done, uint64_t start, uint64_t bound, struct bb_status_trace *t)
 {
@@ -332,6 +350,17 @@ unsigned bb6_summary_lines(const struct bb6_summary *s, struct bb_line *out)
         bb_line_dec(l, "sub_max", samples[i].x->sub_max);
         bb_line_dec(l, "min", samples[i].x->min);
         bb_line_dec(l, "max", samples[i].x->max);
+        bb_line_end(l++);
+    }
+    static const char *const complete[BB_COMPLETE_KINDS] = {
+        "TWI_COMPLETE byte", "TWI_COMPLETE receive", "TWI_COMPLETE restart", "TWI_COMPLETE start",
+        "TWI_COMPLETE stop"};
+    for (unsigned i = 0; i < BB_COMPLETE_KINDS; ++i) {
+        bb_line_start(l, complete[i]);
+        bb_line_dec(l, "count", s->next.complete[i].count);
+        bb_line_dec(l, "cntpct", s->next.complete[i].ticks);
+        bb_line_dec(l, "min", s->next.complete[i].min);
+        bb_line_dec(l, "max", s->next.complete[i].max);
         bb_line_end(l++);
     }
     bb_line_start(l, "TWI_POLL window");

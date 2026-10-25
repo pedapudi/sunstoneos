@@ -36,6 +36,9 @@ PY=~/.cache/sunstoneos/venv/bin/python
 FEL=~/.cache/sunstoneos/build/sunxi-a733/sunxi-fel
 V=~/.cache/sunstoneos/evidence/board-bundles-20261023
 S=~/.cache/sunstoneos/evidence/board-session-20261023/port-$PORT
+R=/home/sunil/git/sunstoneos-worktrees/bringup
+SB=~/.cache/sunstoneos/evidence/bootstrap-retention-20261024/survey-build
+SW=~/.cache/sunstoneos/evidence/launch-survey-20261017/software.json
 export PYTHONDONTWRITEBYTECODE=1
 ```
 
@@ -52,13 +55,22 @@ an existing evidence directory.
 | --- | --- | --- |
 | `bundle-run.py` | `7a369d60…` | Writes a recovery record for the port's current USB instance, then submits, reviews and claims the queue entry, runs the runner once with `SUNSTONE_USB_PORT` set, and finishes the claim on success or keeps it on failure. It generalizes the coordinator's `queued-run.py` with extra prerequisites, extra artifacts and the `{claim}`, `{owner}` and `{database}` placeholders that claim-checking runners need. |
 | `cache-off.py` | `0330c1da…` | Unchanged copy of the coordinator's helper: turns the instruction cache off after a warm ROM return. |
-| `survey.py` | `9303d4de…` | Unchanged copy of the coordinator's rank 2 script: one returning SRAM survey of the current instance. |
 | `exec-command.py` | `f50ab626…` | Prints and runs the argument list in a `command.json` that a preparation script wrote. |
 | `primary.patch` | `eba24ff3…` | The runner change described below. |
 
-`$V/manifest.json` records the full SHA-256 of every bundle file. The copies
-of `cache-off.py` and `survey.py` are byte-identical to the coordinator's
-scripts in `board-session-20261023/`.
+`$V/manifest.json` records the full SHA-256 of every bundle file. The copy
+of `cache-off.py` is byte-identical to the coordinator's script in
+`board-session-20261023/`.
+
+The returning SRAM survey runs the repository's `tools/run-launch-survey.py`
+(`$R`) through `bundle-run.py` with the survey build `$SB`. The runner
+refuses, before any device access, a build whose manifest names another
+runner (`host_sha256`) or survey source (`source_sha256`). `$SB` holds the
+same binary as `launch-survey-20261017/build` and names the current runner;
+the older build names the runner from before commit `575565f8`, so the
+bundle's `common/survey.py`, which uses it, is no longer called.
+`checks/board-bundles.py` compares `$SB`'s manifest with the current runner
+offline. `$SW` is the survey binary's instruction and return evidence.
 
 After a warm ROM return, a survey fails its `mmu_caches_endian_off` gate
 until the cache-off helper runs; `all-core-first-task-20261018/warm-010/`
@@ -70,7 +82,14 @@ $PY -B $V/common/bundle-run.py $PORT $S/rN-cache-off 120 \
   "Board $PORT: returning instruction-cache disable before rank N" \
   "The helper turns the instruction cache off and the 40 SRAM bytes at 0x73000 are restored." \
   -- $PY -B $V/common/cache-off.py $S/rN-cache-off
-$PY -B $V/common/survey.py $PORT $S/rN-survey "Board $PORT before rank N"
+$PY -B $V/common/bundle-run.py $PORT $S/rN-survey 240 \
+  "Board $PORT: returning SRAM survey before rank N" \
+  "Nonce-bound launcher controls, restored SRAM and a responsive same ROM." \
+  --prerequisite launch-survey-software=$SW \
+  --artifact $SB/manifest.json --artifact $SB/launch-survey.bin \
+  -- $PY -B $R/tools/run-launch-survey.py run --fel $FEL --build $SB \
+     --software $SW --database {database} --evidence $S/rN-survey \
+     --claim {claim} --owner {owner}
 ```
 
 Success prints `{"port": "PORT", "complete": true}` and then
@@ -183,7 +202,7 @@ one directory per row with `bundle/`, `runbook.md`, `submission.json` and
 `snapshot/`. Offline check results are in `offline-checks/` and
 `offline-checks-3/` beside them. The
 commands use the variables above, including `$V/common/` for
-`bundle-run.py`, `cache-off.py` and `survey.py`.
+`bundle-run.py` and `cache-off.py`.
 
 | Position | Row | Class | Runbook |
 | --- | --- | --- | --- |

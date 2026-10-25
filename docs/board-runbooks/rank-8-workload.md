@@ -68,7 +68,14 @@ when rank 7 passed on this board and the rank 6 classifier
      "Board $PORT: returning instruction-cache disable before the eight-core workload" \
      "The helper turns the instruction cache off and the 40 SRAM bytes at 0x73000 are restored." \
      -- $PY -B $V/common/cache-off.py $S/r8-cache-off
-   $PY -B $V/common/survey.py $PORT $S/r8-survey "Board $PORT before the eight-core workload"
+   $PY -B $V/common/bundle-run.py $PORT $S/r8-survey 240 \
+     "Board $PORT: returning SRAM survey before the eight-core workload" \
+     "Nonce-bound launcher controls, restored SRAM and a responsive same ROM." \
+     --prerequisite launch-survey-software=$SW \
+     --artifact $SB/manifest.json --artifact $SB/launch-survey.bin \
+     -- $PY -B $R/tools/run-launch-survey.py run --fel $FEL --build $SB \
+        --software $SW --database {database} --evidence $S/r8-survey \
+        --claim {claim} --owner {owner}
    ```
 
 2. Check each item of `$V/rank-8-workload/root-review-draft.json`, then write the

@@ -54,7 +54,14 @@ The board is on the forced-stall return's instance.
      "Board $PORT: returning instruction-cache disable after the forced-stall return" \
      "The helper turns the instruction cache off and the 40 SRAM bytes at 0x73000 are restored." \
      -- $PY -B $V/common/cache-off.py $S/r6-cache-off
-   $PY -B $V/common/survey.py $PORT $S/r6-survey "Board $PORT after the forced-stall return and cache-off"
+   $PY -B $V/common/bundle-run.py $PORT $S/r6-survey 240 \
+     "Board $PORT: returning SRAM survey after the forced-stall return and cache-off" \
+     "Nonce-bound launcher controls, restored SRAM and a responsive same ROM." \
+     --prerequisite launch-survey-software=$SW \
+     --artifact $SB/manifest.json --artifact $SB/launch-survey.bin \
+     -- $PY -B $R/tools/run-launch-survey.py run --fel $FEL --build $SB \
+        --software $SW --database {database} --evidence $S/r6-survey \
+        --claim {claim} --owner {owner}
    ```
 
    Each prints `"result": "passed"`. Timeouts: 120 s and 240 s.
