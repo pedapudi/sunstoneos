@@ -197,13 +197,15 @@ SRAM_ROUTING = 0x03000008
 
 
 def returning_row(name, position, component, overlay, expect, controlled, expected, intro, admission=True, needs=None,
-                  passes=True, sources=(), base=None, after=(), failures=()):
+                  passes=True, sources=(), base=None, after=(), failures=(), approval=None):
     """passes: a status-0 run with the expect text is one of the bundle's outcomes, beside any controlled one.
     base: the row whose image this row links objects of, prepared in the same run and run first; after: further
     rows of the same run that must pass first. failures: the image's own failure lines, which the runbook lists
-    among the paths that end in a quarantine."""
+    among the paths that end in a quarantine. approval: the schema of the reviewed approval record that a row
+    changing a clock or voltage requires; the record names the row, the port and the image's SHA-256, and the
+    bundle carries it as approval.json."""
     return {'name': name, 'class': 'monitor', 'returning': True, 'position': position, 'component': component,
-            'base': base, 'after': list(after), 'failures': list(failures),
+            'base': base, 'after': list(after), 'failures': list(failures), 'approval': approval,
             'module': 'tools/prepare-board-bundles.py', 'function': 'prepare_returning',
             'runner': 'tools/check-a733-kernel.py', 'prerequisite': SUPERVISED_PREREQUISITE,
             'admission': {'schema': 'board-returning-bundle-v1', 'row': name} if admission else None,
@@ -559,6 +561,36 @@ ROWS = [
                   sources=POWER_SOURCES + ['apps/board-bundles-power/cpu-supply.c'], base=BASE_ROW,
                   failures=['a `FAIL` line of the provider or service (`snapshot submit`, `snapshot result`, '
                             '`snapshot reap`, a deadline, `provider fault`, `provider not quiescent at park`)']),
+    returning_row('cpu-b-800mv-step', 20, 'CPU-B 1,014 -> 1,404 -> 1,014 MHz at 800 mV with cores 6 and 7 off',
+                  POWER_OVERLAY + ['apps/board-bundles-power/cpu-opp-step.c.obj', 'drivers/clock/a733_cpu_clock.c.obj',
+                                   'drivers/thermal/a733_thermal.c.obj', 'drivers/thermal/a733_thermal_native.c.obj',
+                                   'drivers/adc/a733_adc_native.c.obj'],
+                  'COMPLETE board bundle 20: CPU-B 1404 MHz and back to 1014 MHz at 800 mV, no PMIC write', True,
+                  'Monitor status 0 with two TEMP lines at level 0, the SUPPLY line (dcdc5_uv=800000 dcdc3_uv=800000 '
+                  'sid=0x496 bin=4 dcxo_hz=26000000), the CPU-L, DSU and CPU-B words before, CPU-B raised with '
+                  'pll=0xf8803600 mux=0x3000000 mhz=1404, CPU-B restored and CPU-B after with pll=0xf8802700 '
+                  'mux=0x3000000 mhz=1014, each STEP line with dcdc3_uv=800000, and COMPLETE board bundle 20, then a '
+                  'responsive ROM.',
+                  'The first CPU operating-point step of docs/designs/cpu-top-opp.md, on the image of bundle 15 '
+                  '(apps/board-bundles-power/cpu-opp-step.c). With cores 6 and 7 powered off, the client starts the '
+                  'thermal driver and the thermal policy, reads one full sensor set, inspects CPU-L, the DSU and '
+                  'CPU-B read-only through the CPU clock driver (DCDC5 and DCDC3 snapshots; PLL, mux, pattern and LFM '
+                  'words), and admits the step only at the NORMAL thermal level on speed bin vf0400 with DCDC3 and '
+                  'DCDC5 at 800 mV, CPU-B at 1,014 MHz and every pattern and LFM enable clear. The driver then raises '
+                  'CPU-B to 1,404 MHz and lowers it to 1,014 MHz. Each change parks the CPU-B mux on the 26 MHz '
+                  'oscillator for 20 us, writes N with the update bit, waits for update and for three lock reads 3 us '
+                  'apart, waits 20 us, selects the PLL and waits 20 us. Both points need 800 mV in vf0400, so no PMIC '
+                  'register is written. A second inspection and sensor set follow, then the thermal converter is '
+                  'disabled and the PMIC service parked. Approved by the user on 2026-10-24 (CPU clock and voltage); '
+                  'bundle/approval.json binds the values to port 3-3 and this image.',
+                  sources=POWER_SOURCES + ['apps/board-bundles-power/cpu-opp-step.c', 'drivers/clock/a733_cpu_clock.c',
+                                           'include/a733_cpu_clock.h', 'drivers/thermal/a733_thermal.c',
+                                           'drivers/thermal/a733_thermal_native.c', 'drivers/adc/a733_adc_native.c',
+                                           'checks/cpu-clock-model.c', 'checks/cpu-clock-check.py'],
+                  base=BASE_ROW, approval='cpu-operating-point-approval-v1',
+                  failures=['a `FAIL` line of the provider, the thermal driver or the CPU clock driver, after a `STEP` '
+                            'line naming the driver state: `transition` after the park leaves CPU-B on the oscillator '
+                            'or the PLL, which only a power removal restores']),
     gpu_row('gpu-wrapper-read', 16, 'GPU wrapper reads after the default GPU ON', 'wrapper-read',
             'COMPLETE GPU wrapper read: CORE status 8, four wrapper words, OFF and provider parked',
             'Either monitor status 1 with the four GPU WRAPPER n=1 to n=4 lines, the decoded GPU WRAPPER qchan and '
@@ -928,11 +960,22 @@ def validate_read(row, output):
             'reader_sha256': sha256(output / 'board-read.py'), 'words_sha256': sha256(output / 'WORDS.json')}
 
 
-def prepare_returning(row, build, output):
-    """A returning bundle from the image builder's build.json: image, binary, runner closure, equivalence and
-    controlled outcomes."""
+def prepare_returning(row, build, output, approval=None):
+    """A returning bundle from the image builder's build.json: image, binary, runner closure, equivalence,
+    controlled outcomes and, for a row that changes a clock or voltage, the approval record."""
     record = json.loads(Path(build).read_text())
+    require((approval is None) == (row.get('approval') is None),
+            'An approval record is required exactly for a row that names an approval schema.')
+    if approval is not None:
+        value = json.loads(Path(approval).read_text())
+        require(value.get('schema') == row['approval'] and value.get('row') == row['name']
+                and value.get('image_sha256') == record['elf_sha256'] and value.get('port') in ('3-1', '3-3')
+                and isinstance(value.get('approval'), dict) and value['approval'].get('text')
+                and value['approval'].get('date'),
+                'The approval record does not name this row, its image, a port and the user\'s approval.')
     output.mkdir()
+    if approval is not None:
+        shutil.copyfile(approval, output / 'approval.json')
     shutil.copyfile(record['elf'], output / 'image.elf')
     shutil.copyfile(record['bin'], output / 'probe.bin')
     tools = dict(record['host_tools'])

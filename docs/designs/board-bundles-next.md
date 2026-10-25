@@ -457,6 +457,23 @@ set. They need ranks 7 and 8 to pass on the board and the per-board record
 of the supervised A76 build with the CPU clock option (B1 in
 [cpu-a76-dvfs.md](cpu-a76-dvfs.md)); neither exists.
 
+## Bundle 20: the first CPU operating-point step
+
+Bundle 20 (`cpu-b-800mv-step`) is step 1 of
+[the top operating-point design](cpu-top-opp.md): bundle 15's image with the
+CPU clock driver, the thermal driver, its native adapter and the ADC native
+binding (`apps/board-bundles-power/cpu-opp-step.c`). With cores 6 and 7
+powered off, it raises CPU-B from 1,014 to 1,404 MHz and lowers it to
+1,014 MHz again, both points at the 800 mV of bin vf0400, so it writes no
+PMIC register. It reads a temperature set and the CPU-L, DSU and CPU-B words
+before the change and CPU-B and a second set after it. Its admission refuses,
+before any write and with a controlled warm return, a board that is not at
+the NORMAL thermal level, not on vf0400, not at 800 mV on DCDC3 and DCDC5,
+not at 1,014 MHz on CPU-B or with a pattern or LFM enable set. The row
+requires an approval record of schema `cpu-operating-point-approval-v1`,
+which the bundle carries as `approval.json`. It links the base row's monitor
+and platform objects, so the base runs first in its lifetime.
+
 ## Bundles that wait
 
 - **On the next lifetime of port 3-3.** A Read bundle of the CPU-B and DSU
