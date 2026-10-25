@@ -222,16 +222,23 @@ GPU_PREREQUISITES = ('Admission (apps/gpu-power-id/README.md, "Physical admissio
                      'grants the 18 MiB RAM interval [0x41000000, 0x42200000), the PMIC inputs (S_TWI0 gate and '
                      'reset, APBS route, PL0/PL1, settled supplies, no other PMU writer) and, for the power rows, '
                      'exclusive GPU-local authority over the GPU CCU words and the CORE6 power policy unit at '
-                     '0x07066000: its policy (+0x00) and PWCR (+0x20) writes, and reads of its status (+0x08), '
-                     'MISR (+0x14) and IDR0 (+0xfb0). The grant covers each CORE6 entry state the controller admits: '
-                     'settled OFF (policy and status 0), settled ON (both 8) and the power-up state (policy 8, status '
-                     '0, PWCR 0x101, the reset value), from which ON writes PWCR 0 and then policy 8. Any other entry '
-                     'is refused before a write. TOP5 is reached only through the shared domain-5 row. No NPU image '
-                     'runs in this lifetime.')
+                     '0x07066000: its policy (+0x00) and PWCR (+0x20) writes; on every ON, after admission and '
+                     'before PWCR 0, whole-word writes of the vendor delay row (pck600_domains.c:554), each read '
+                     'back: 0x1f1f1f at +0x170, 0x1f1f at +0x174, 0x08080808 at +0xc00, 0x0808 at +0xc04 and 8 at '
+                     '+0xc10; and reads of its status (+0x08), MISR (+0x14) and IDR0 (+0xfb0). The grant covers each '
+                     'CORE6 entry state the controller admits: settled OFF (policy and status 0), settled ON (both '
+                     '8) and the power-up state (policy 8, status 0, PWCR 0x101, the reset value), from which ON '
+                     'writes the delay row, PWCR 0 and then policy 8. Any other entry is refused before a write. The '
+                     'client also reads, without writing, a 35-word snapshot before the first ON and after each ON '
+                     'attempt: the CORE6 and TOP5 PPU rows, R_CCU 0x1ac and 0x250, and CCU 0x0e0, 0xb20 and 0xb24. '
+                     'TOP5 is written only through the shared domain-5 row. No NPU image runs in this lifetime.')
 GPU_FAILURES = ['`FAIL GPU ON begin`, `GPU ON deadline` or `GPU ON poll`, after the `GPU power phase=...` and `GPU '
                 'CORE entry`, `inputs` and `after` lines of the failing cycle, which hold cached values only; `GPU '
                 'ON poll` or `GPU ON deadline` also ends a CORE6 status poll that never read 8, and `GPU ON poll` an '
-                'entry state that admission refuses',
+                'entry state that admission refuses or a CORE6 delay-row word that does not read back its written '
+                'value; `GPU SNAP` lines of the failed ON precede it',
+                '`FAIL GPU snapshot mapping`: a snapshot page is not an identity Device-nGnRnE mapping; no snapshot '
+                'word was read',
                 '`FAIL GPU OFF begin`, `GPU OFF deadline`, `GPU OFF poll` or `GPU OFF ownership proof`',
                 '`FAIL GPU provider park proof` or `GPU provider request retained`',
                 'a `FAIL` line of the provider or service (`provider fault`, `provider startup and supply '
@@ -866,7 +873,8 @@ def runbook(row, bundle, value, artifacts, prerequisites, timeout, lifetime=None
     if row.get('admission_text'):
         lines += ['## Admission', '', row['admission_text'], '']
     if row.get('variant'):
-        reused = {'gpu-provider-ready': 'the frozen provider-readiness image `3adfa4ad…`, which has not run on a board',
+        reused = {'gpu-provider-ready': 'the frozen provider-readiness image `3adfa4ad…`, which returned with '
+                                        'status 0 on port 3-1 in two earlier lifetimes',
                   'gpu-power-id-fd3d5839': 'the power and identity image `fd3d5839…`, which launched on port 3-1 '
                                            'and did not return'}
         lines += [f'Equivalence: {value["reused_objects"]} linked objects are those of '
