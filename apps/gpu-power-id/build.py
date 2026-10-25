@@ -155,7 +155,6 @@ def main():
               'shared_layouts_equal': names, 'image_sha256': sha(out / 'image.elf'),
               'binary_sha256': sha(out / 'probe.bin'), 'binary_bytes': (out / 'probe.bin').stat().st_size,
               'variant': 'power-only' if args.power_only else 'identity',
-              'gpu_register_window_access': not args.power_only,
               'expect': ('COMPLETE GPU power only: CORE status 8, OFF and provider parked' if args.power_only
                          else 'COMPLETE GPU power identity: OFF and provider parked'),
               'local_authority_required': 'Exclusive GPU CCU and PCK CORE6 policy/PWCR; TOP5 remains shared row' }

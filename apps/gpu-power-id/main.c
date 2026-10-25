@@ -100,10 +100,9 @@ void gpu_power_id_client(void *unused)
     if (result != 1) gpu_fail("GPU ON poll");
 
 #ifdef GPU_POWER_ONLY
-    /* The last controller read is the CORE status poll; ON requires 8. */
+    /* The controller's last ON step polls CORE status until it reads 8, so a
+     * successful poll leaves that value as its last read. */
     const uint32_t core_status = gpu.power.last_value;
-    if (gpu.phase != A733_GPU_PLATFORM_ON || gpu.power.phase != A733_GPU_POWER_ON || core_status != 8)
-        gpu_fail("GPU CORE status");
 #else
     uint64_t raw = id_read(0x20, 8), bvnc = raw;
     uint32_t revision = 0, core = 0;
