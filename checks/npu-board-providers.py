@@ -16,7 +16,11 @@ bootstrap and the client are pinned to core 1, USB0 and thermal to core 0;
 the thermal constructor uses the actual clock registry; INTID 97 is
 bound once with its route to core 1 checked; the linked TinyUSB vendor class
 has the transmit FIFO of apps/npu-board/tusb_config.h, which usb.c's READ
-limit assumes.
+limit assumes. Each task's first frame comes from the linked port's stack
+initializer in its creation context: the bootstrap, the client, the service
+worker and the thermal task start at EL1t, because the bootstrap and the
+client call a733_counter_clock_now, which masks DAIF. The bootstrap and
+client entries created outside board_application_start start at EL0t.
 """
 import argparse,hashlib,json,re,struct,subprocess,sys
 from pathlib import Path
@@ -31,6 +35,9 @@ LAYOUTS=('npu_board_application','npu_board_session','a733_board_session','board
     'a733_platform_locks','npu_runtime','npu_service','a733_pmic','a733_pmic_config')
 WB,WB_END=0x48000000,0x78000000
 PARENT=8388608
+TRAMPOLINE=0x43fff100
+# SPSR of a first frame (FreeRTOS portINITIAL_PSTATE_EL1 and _EL0).
+EL1T,EL0T=4,0
 def vendor_fifos(path):
     """The transmit and receive FIFO sizes of the linked TinyUSB vendor class,
     from the member offsets of vendord_interface_t in vendor_device.c."""
@@ -83,24 +90,26 @@ def main():
     put(board+ba['live_until'],20000000)
     usb0=0x43f00000;put(board+ba['handles']+8,usb0)
     gicd=0x03400000;put(gicd+0x460,0xd8<<8,4);put(gicd+0x6308,0x100)
-    state={'done':False,'scheduler':1,'tasks':[],'affinity':[],'acquire_callers':[]}
+    state={'done':False,'scheduler':1,'tasks':[],'affinity':[],'acquire_callers':[],'frames':{},'pending':None}
     def returned(v=0):u.reg_write(UC_ARM64_REG_X0,v);u.reg_write(UC_ARM64_REG_PC,u.reg_read(UC_ARM64_REG_LR))
     names=('npu_board_session_valid','vTaskEnterCritical','vTaskExitCritical','aarch64_device_cache',
         'aarch64_device_cache_stride','aarch64_device_translate','xTaskCreateStaticAffinitySet','xTaskCreateStatic',
         'xQueueGenericCreateStatic','xQueueCreateMutexStatic','vTaskCoreAffinitySet','xTaskGetSchedulerState',
         'xTaskGetCurrentTaskHandle','a733_counter_clock_now','platform_panic')
     hooks={e.address(n):n for n in names if e.symbols.get(n)}
+    hooks[TRAMPOLINE]='trampoline';port=e.address('pxPortInitialiseStack')
     ret=0x43fff000;sites=set(hooks)|{ret}
     for at,data in e.parts:
         if at>=0x48000000:continue
         for off in range(0,len(data)-3,4):
             w=int.from_bytes(data[off:off+4],'little')
-            if w&0xffffffe0 in (0xd5384240,0xd53b00e0,0xd53be020,0xd53be000,0xd53800a0):sites.add(at+off)
+            if w&0xffffffe0 in (0xd5384240,0xd53b00e0,0xd53be020,0xd53be000,0xd53800a0,0xd53bd060):sites.add(at+off)
     def hook(c,at,size,x):
         if at==ret:state['done']=True;c.emu_stop();return
         if at not in hooks:
             w=get(at,4);reg=UC_ARM64_REG_X0+(w&31)
-            v={0xd5384240:4,0xd53b00e0:4,0xd53be020:24000,0xd53be000:24000000,0xd53800a0:0x100}[w&0xffffffe0]
+            # TPIDRRO_EL0 reads 1, the port's core-0 identity word, while the port builds a frame.
+            v={0xd5384240:4,0xd53b00e0:4,0xd53be020:24000,0xd53be000:24000000,0xd53800a0:0x100,0xd53bd060:1}[w&0xffffffe0]
             c.reg_write(reg,v);c.reg_write(UC_ARM64_REG_PC,at+4);return
         n=hooks[at];r=[c.reg_read(UC_ARM64_REG_X0+i) for i in range(8)]
         if n=='npu_board_session_valid':returned(1)
@@ -112,7 +121,14 @@ def main():
             u.mem_write(r[2],struct.pack('<QII',r[0],attr,share));returned(1)
         elif n=='xTaskCreateStaticAffinitySet':
             name=bytes(u.mem_read(r[1],16)).split(b'\0')[0].decode();state['tasks'].append((name,r[7],r[6]))
-            returned(r[6])
+            # The linked port builds this task's first frame, in this creation context.
+            top=(r[5]+(r[2]-1)*8)&~15;state['pending']=(name,r[0],r[6],c.reg_read(UC_ARM64_REG_LR),top)
+            for i,v in enumerate((top,r[0],r[3])):c.reg_write(UC_ARM64_REG_X0+i,v)
+            c.reg_write(UC_ARM64_REG_LR,TRAMPOLINE);c.reg_write(UC_ARM64_REG_PC,port)
+        elif n=='trampoline':
+            name,entry,handle,lr,top=state['pending'];state['pending']=None
+            state['frames'][name]=spsr(c.reg_read(UC_ARM64_REG_X0),top,entry)
+            c.reg_write(UC_ARM64_REG_X0,handle);c.reg_write(UC_ARM64_REG_PC,lr)
         elif n=='xTaskCreateStatic':state['tasks'].append((bytes(u.mem_read(r[1],16)).split(b'\0')[0].decode(),None,r[6]));returned(r[6])
         elif n=='xQueueGenericCreateStatic':returned(r[3])
         elif n=='xQueueCreateMutexStatic':returned(r[1])
@@ -121,6 +137,10 @@ def main():
         elif n=='xTaskGetCurrentTaskHandle':returned(0)
         elif n=='a733_counter_clock_now':put(r[1],1000);returned(1)
         else:raise AssertionError(('panic',bytes(u.mem_read(r[0],64)).split(b'\0')[0]))
+    def spsr(frame,top,entry):
+        """SPSR of an initial frame: the word above the exception return address."""
+        found=[at for at in range(frame,top,8) if get(at)==entry and get(at+8) in (EL0T,EL1T)]
+        assert len(found)==1,(hex(frame),found);return get(found[0]+8)
     for at in sites:u.hook_add(UC_HOOK_CODE,hook,begin=at,end=at)
     def call(name,*args):
         state['done']=False;u.reg_write(UC_ARM64_REG_SP,0x43ffeff0);u.reg_write(UC_ARM64_REG_LR,ret)
@@ -168,6 +188,19 @@ def main():
     assert {k:tasks[k][1] for k in ('npu-boot','npu-client','npu-service')}=={'npu-boot':2,'npu-client':2,'npu-service':2},state['tasks']
     assert tasks['npu-thermal'][1]==1,state['tasks']
     assert state['affinity']==[(usb0,1)],state['affinity']
+    # Every first frame the creations built; then the same entries outside them.
+    assert state['frames']=={'npu-boot':EL1T,'npu-client':EL1T,'npu-service':EL1T,'npu-thermal':EL1T},state['frames']
+    def frame(entry,context):
+        top=0x43ff0000;u.mem_write(top-0x1000,bytes(0x1000))
+        state['done']=False;u.reg_write(UC_ARM64_REG_SP,0x43ffeff0);u.reg_write(UC_ARM64_REG_LR,ret)
+        for i,v in enumerate((top,entry,context)):u.reg_write(UC_ARM64_REG_X0+i,v)
+        u.emu_start(port,0,count=1000000);assert state['done'];return spsr(u.reg_read(UC_ARM64_REG_X0),top,entry)
+    client,boot=(e.address(n,unit='apps/npu-board/main.c') for n in ('client','bootstrap'))
+    # The compiler keeps the window flag as one byte.
+    creating=e.address('creating');assert get(creating,1)==0
+    outside=[frame(client,0),frame(boot,0),frame(client,0x43f00040)]
+    put(creating,1,1);outside.append(frame(client,0x43f00040));put(creating,0,1)
+    assert outside==[EL0T]*4,outside
     binding=e.address('binding',unit='/irq.c')
     assert get(binding)==app+na['runtime']+L['npu_runtime']['service']
     config=(ROOT/'apps/npu-board/tusb_config.h').read_text()
@@ -176,7 +209,8 @@ def main():
     assert tx==tx_bufsize>=64+2816,(tx,tx_bufsize)
     record=dict(passed=True,physical_access=False,vendor_fifos=dict(tx=tx,rx_at_least=rx),image_sha256=hashlib.sha256(a.image.read_bytes()).hexdigest(),
         providers={k:hex(v) for k,v in expected.items()},domain_rows=len(rows),parent=dict(cpu=hex(cpu),bytes=size),
-        largest_free_extent_bytes=largest,acquire_callers=sorted(callers),tasks=[(t[0],t[1]) for t in state['tasks']],scope=__doc__)
+        largest_free_extent_bytes=largest,acquire_callers=sorted(callers),tasks=[(t[0],t[1]) for t in state['tasks']],
+        first_frame_spsr=state['frames'],unregistered_frame_spsr=outside,scope=__doc__)
     (a.output/'result.json').write_text(json.dumps(record,indent=2)+'\n')
     print('PASS NPU board providers, domain-4 row and runtime pool: parent',size,'bytes, largest free extent',largest)
 if __name__=='__main__':main()
