@@ -5658,6 +5658,7 @@
  "integration-gate.py": {
   "cache_areas": [],
   "docs": [
+   "docs/handoff.md",
    "docs/validation.md"
   ],
   "library": false,

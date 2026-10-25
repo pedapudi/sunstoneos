@@ -48,11 +48,12 @@ selector write. The model's bytes take 23 µs, so its own snapshot wire is
 | Snapshot step, 400 kHz, 200 ns per access, 40 ns per time read | 712 µs (113%) | 685 µs (109%) | `checks/power-domains-service.c` |
 | Selector write, same costs | 920 µs (113%), one step | 883 µs (109%), one step | Same |
 | Snapshot step, 400 kHz, illustrative component means: 506 ns per read, 402 ns per write, 77 ns per poll, 144 ns per time read | Not rerun | 731 µs (116%); incomplete cost model | Same, board-cost table |
-| Snapshot step, historical mixed-cost fit: 529 ns per read, 1,026 ns per write, 380 ns per poll, 150 ns per time read | 853 µs (135%) | 779 µs (123.7%), fitted to the board median | Preserved base evidence; current sensitivity row |
+| Snapshot step, historical mixed-cost fit: 529 ns per read, 1,026 ns per write, 380 ns per poll, 150 ns per time read | 853 µs (135%) | 779 µs (123.7%), fitted to the board median; printed, not asserted | Preserved base evidence; current sensitivity row |
 | Snapshot step, same historical inputs with 2,340 ns per poll | 941 µs (149%), above the base run's 917 µs | 850 µs (135%), above the changed run's 779 µs | Same |
 | Snapshot step, same historical inputs with 250 ns per poll | Not rerun | 757 µs | Same |
 | Selector write at the historical inputs, with 380 ns; 386 ns per poll | Not rerun | One step of 1,001 µs; two steps with one tick wait | Same |
 | Snapshot step, read 379 ns / write 1 ns; read 1 ns / write 379 ns, no poll cost, 40 ns per time read | Not rerun | 688 µs; 685 µs; the 1 ns access is an assumption | Same, separate access floors |
+| Snapshot step, read 379 ns with writes of 1 ns; 150 ns, 22 µs bytes, no poll cost | Not rerun | 664 µs; 692 µs, both within 110% (693 µs); the write costs are assumptions | Same |
 | Snapshot step, both accesses assumed at 379 ns, 22 µs; 23 µs bytes | Not rerun | 694 µs; 712 µs; neither establishes a hardware floor | Same |
 | Flags 10% later than the 400 kHz divisor implies (25 µs bytes, 6 µs conditions), 200 ns per access | Snapshot and selector write each two steps with one tick wait | Snapshot one step of 751 µs, selector write one step of 968 µs (708 µs and 913 µs of wire) | Same, slow-bus case |
 | Tick waits, 100 kHz, snapshot and selector write | 2 and 3 | 2 and 3 | Same |
@@ -68,7 +69,8 @@ at sub-microsecond times (712 µs and 920 µs); the head provider passes
 the base gave 687 µs and 885 µs.
 
 The service check asserts the modeled snapshot times and selector-write
-step counts in its board-cost rows. The mixed-cost rows retain the rejected
+step counts in its board-cost rows, except the snapshot time of the 380 ns
+row, which is a fit to the board's median and is printed only. The mixed-cost rows retain the rejected
 calibration for comparison; they do not derive a board bound. The current
 component-mean row also omits callback and service work. Bundle 6's separate
 host fixture checks the provisional empirical limit of 1,268 permille

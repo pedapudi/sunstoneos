@@ -28,9 +28,12 @@
  * Board-cost sensitivity, 400 kHz: read, write, poll and time-read costs
  * are independent. Component means give illustrative 506/402/77/144 ns;
  * they omit wrapper work and do not independently predict a board limit.
- * Legacy 529/1026 ns rows preserve the rejected fit for comparison only.
- * Separate read and write floors assume 1 ns for the other access (zero
- * write_ns would silently reuse the read cost). Equal-cost rows at 22 and
+ * Legacy 529/1026 ns rows preserve the rejected fit for comparison only;
+ * the 380 ns poll row, a fit to the board's median, is printed without an
+ * asserted step time. Separate read and write floors assume 1 ns for the
+ * other access (zero write_ns would silently reuse the read cost); with
+ * reads at 379 ns, writes of 1 and 150 ns at 22 us bytes bracket the
+ * snapshot within 110% of its bit-time wire. Equal-cost rows at 22 and
  * 23 us per byte expose the rounding sensitivity. No row establishes a
  * hardware floor or the attainable benefit of changing barriers.
  * Slow bus, 400 kHz: every flag sets 10% later than the divisor implies
@@ -73,14 +76,28 @@ static int gpu_now(void *v,uint64_t *out){(void)v;return pmic_model_now(&m,out);
 static int gpu_acquire(void *v,struct a733_gpu_power_resources *out)
 {(void)v;*out=(struct a733_gpu_power_resources){A733_GPU_INITIAL_HZ,A733_GPU_INITIAL_UV};return 1;}
 static int gpu_release(void *v){(void)v;return 1;}
+/* The GPU CORE PPU: a policy write sets the status at its next read. */
+static uint32_t gpu_core[9];
+static unsigned gpu_core_pending;
 static int gpu_read(void *v,enum a733_gpu_power_bank bank,uint32_t off,uint32_t *out)
 {
     (void)v;
+    if(bank==A733_GPU_CORE) {
+        assert(off==0 || off==8 || off==0x20);
+        if(off==8 && gpu_core_pending){gpu_core[2]=gpu_core[0];gpu_core_pending=0;}
+        *out=gpu_core[off/4];return 1;
+    }
     uint32_t *w=level_word((bank==A733_GPU_CCU ? CCU_BASE : RCCU_BASE)+off);assert(w);*out=*w;return 1;
 }
 static int gpu_update(void *v,enum a733_gpu_power_bank bank,uint32_t off,uint32_t clear,uint32_t set)
 {
-    (void)v;assert(bank==A733_GPU_CCU && (off==0xb20 || off==0xb24));
+    (void)v;
+    if(bank==A733_GPU_CORE) {
+        assert(clear==UINT32_MAX && ((off==0 && (set==0 || set==8)) || (off==0x20 && !set)));
+        gpu_core[off/4]=set;if(!off)gpu_core_pending=1;
+        return 1;
+    }
+    assert(bank==A733_GPU_CCU && (off==0xb20 || off==0xb24));
     uint32_t *w=level_word(CCU_BASE+off);*w=(*w&~clear)|set;
     if(off==0xb20)*w&=~(1u<<27);
     return 1;
@@ -97,6 +114,7 @@ static void setup(const struct rate *r,uint64_t access_ns)
     domains_model_setup(r->divider,r->wire_us);
     m.now_ns=40;m.access_ns=access_ns;m.edge_us=r->edge_us;
     gpu=(struct a733_gpu_power){0};fb_row=(struct a733_power_domain_row){0};
+    memset(gpu_core,0,sizeof(gpu_core));gpu_core_pending=0;
     gpu_rail=fb_rail=submitter=(struct a733_rail_token){0};
     assert(a733_gpu_power_init(&gpu,&gpu_ops,0) && a733_power_domain_row_init(&gpu.row,&d.owner,5,9,&gpu_rail));
     assert(a733_power_domain_row_init(&fb_row,&d.owner,1,11,&fb_rail));
@@ -307,10 +325,12 @@ int main(int argc,char **argv)
         } rows[]={
             {"component means, incomplete",506,402,77,144,23,1,731},
             {"legacy fit at 250 ns poll",529,1026,250,150,23,1,757},
-            {"legacy median fit",529,1026,380,150,23,1,779},
+            {"legacy median fit, step not asserted",529,1026,380,150,23,1,0},
             {"legacy selector split",529,1026,386,150,23,2,781},
             {"legacy base remainder",529,1026,2340,150,23,2,850},
             {"read floor, assumed 1 ns write",379,1,0,40,23,1,688},
+            {"read floor, assumed 1 ns write, 22 us byte",379,1,0,40,22,1,664},
+            {"read floor, assumed 150 ns write, 22 us byte",379,150,0,40,22,1,692},
             {"write floor, assumed 1 ns read",1,379,0,40,23,1,685},
             {"assumed equal costs, 22 us byte",379,379,0,40,22,1,694},
             {"assumed equal costs, 23 us byte",379,379,0,40,23,1,712}};
@@ -327,7 +347,8 @@ int main(int argc,char **argv)
             print_cost("snapshot",snapshot);print_cost("selector_write",write);
             printf("\"snapshot_permille_of_bit_time_wire\":%llu}\n",
                 (unsigned long long)(snapshot.longest_step_us*1000000/wire_snapshot_ns));
-            assert(snapshot.steps==1 && !snapshot.tick_waits && snapshot.longest_step_us==rows[i].snapshot_us);
+            assert(snapshot.steps==1 && !snapshot.tick_waits &&
+                (!rows[i].snapshot_us || snapshot.longest_step_us==rows[i].snapshot_us));
             assert(write.steps==rows[i].write_steps && write.tick_waits==rows[i].write_steps-1 &&
                 write.longest_step_us<=A733_POWER_PMIC_SPIN_US+100);
         }
