@@ -133,7 +133,9 @@ void vApplicationIRQHandler(uint64_t interrupt)
     if(interrupt==30 && !c) {
         ++a733_smp_core_results[c].ticks;FreeRTOS_Tick_Handler();
     } else if(interrupt==0 && c<8) {
-        __atomic_add_fetch(&a733_smp_core_results[c].sgis,1,__ATOMIC_RELAXED);
+        /* Only this core writes its count, so a plain load and store suffice;
+         * the relaxed store keeps other cores' relaxed loads untorn. */
+        __atomic_store_n(&a733_smp_core_results[c].sgis,a733_smp_core_results[c].sgis+1,__ATOMIC_RELAXED);
         FreeRTOS_SGI_Handler();
 #ifdef SUNSTONE_A733_IRQ_TABLE
     } else if(interrupt<1020 && a733_irq_table_dispatch((unsigned)interrupt,c)) {
