@@ -1102,15 +1102,16 @@ software only; it has not run on a board. Its steps, in order:
    R_TZMA, DMA, unidentified CCU `0x2800`/`0x2850` and timer writes are left
    out: the image uses no secure memory, no DMA channel and no timer there.
    The monitor reads each word before and after its write into a record at
-   `0x42010000`, which the client prints as `GPU VST el3` lines. It restores
-   none of the writes before the ROM return: they only open devices to
-   non-secure software, which the Secure-state ROM does not need; the SPC
-   register layout is undocumented, so writing back the word read at a
-   write offset might not restore the earlier state; and the image ends its
-   lifetime, whose power removal resets the SPC, R_PRCM and the clock
-   controller. Apart from this function the copy is the accepted monitor
-   (`platform/a733/monitor.c` at `08c3a6ad`) that the provider-readiness
-   image links.
+   `0x42010000`, which the client prints as `GPU VST el3` lines. Apart from
+   this function the copy is the accepted monitor (`platform/a733/monitor.c`
+   at `08c3a6ad`) that the provider-readiness image links. It restores none
+   of the writes before the ROM return, for three reasons:
+   - the writes only open devices to non-secure software, which the
+     Secure-state ROM does not need;
+   - the SPC register layout is undocumented, so writing back the word read
+     at a write offset might not restore the earlier state;
+   - the image ends its lifetime, whose power removal resets the SPC,
+     R_PRCM and the clock controller.
 2. **DCDC4 to 960 mV.** Under an exclusive DCDC4 token the provider copy
    writes AXP8191 register `0x15` from `0x1e` (800 mV) to `0x2e` (960 mV),
    keeping bit 7, and reads it back. The client then waits 1.2 ms: the
@@ -1170,42 +1171,62 @@ What each result means:
   as in the probe-read outcomes: 0 or all ones for a block held in reset or
   unpowered, or a branch-0 legacy format.
 - **A refusal before the identity read.** A `FAIL GPU vendor-state` line or
-  controller error 8, 9 or 10 names the step that did not take: an
-  incomplete EL3 record or a security switch that does not read 7, a DCDC4
-  write that the provider refused or that did not read back 960 mV, or a
-  PLL_GPU0 write, lock or clock update that did not complete. The GPU
-  window was not read.
+  controller error 8, 9 or 10 names the step that did not take. The
+  candidates are an incomplete EL3 record or a security switch that does
+  not read 7, a DCDC4 write that the provider refused or that did not read
+  back 960 mV, and a PLL_GPU0 write, lock or clock update that did not
+  complete. The GPU window was not read.
 - **No return.** The identity read stalls even in the vendor's clock,
-  supply and secure state, so the cause lies outside the GPU sequence, in
-  state SunstoneOS still does not reproduce: the BL31 writes left out above,
-  the normal boot path's NSI writes after DRAM initialization that FEL
-  skips (boot0 `0x1f38`), or the vendor's DRAM-controller configuration. A
-  stall in an earlier step, at EL3 or in a PLL access, also gives no
-  return; only a return distinguishes those.
+  supply and secure state. The cause then lies outside the GPU sequence,
+  in state that SunstoneOS still does not reproduce: the BL31 writes left
+  out above, the NSI writes that the normal boot path makes after DRAM
+  initialization and FEL skips (boot0 `0x1f38`), or the vendor's
+  DRAM-controller configuration. A stall at EL3 or in a PLL access also
+  gives no return, and nothing distinguishes it from a stalled identity
+  read.
 
 **Performance design note.** The probe runs once per lifetime and has no
-hot path. Its additions cost 28 EL3 read-write-read triples, one PMIC write
+hot path. Its additions are 28 EL3 read-write-read triples, one PMIC write
 and readback, two lock waits of at most 100 reads 3 µs apart, two
-update-bit waits of at most 100 reads, the 1.2 ms settling wait and the
-existing 200 ms CORE6 observation, inside the client's 1.5 s deadline; the
+update-bit waits of at most 100 reads and the 1.2 ms settling wait. With the
+existing 200 ms CORE6 observation they fit the client's 1.5 s deadline: the
 client refuses to start unless 1.2 ms, 200 ms and a 100 ms reserve remain.
 
 `apps/gpu-power-id/vendor-state-units.py` compiles each copy with the
-image's flags and runs 22 cases under Unicorn with modeled registers. They
-cover the ON writes in order on the board's state; CORE6 reaching ON; late
-and flickering locks; refusals for an 800 mV supply, a wrong parent, a PLL
-or clock word off its entry value and a refused domain row; an ignored PLL
-enable or factor write; a first or second lock that never sets; an update
-bit that never clears; the native allowlist's refusals; the provider's,
-consumer's and resource manager's DCDC4 admission; the approval record; and
-the 28 EL3 writes, each read before and after, with the record they leave,
-including a security switch that ignores its write. After each controller
-failure a further poll makes no access. The check pins each copy's diff from
-its original. `check.py --vendor-state` runs twelve client cases on the
-linked image: the board's state, CORE6 ON, an identity of 0, an incomplete
-EL3 record, a security switch of 0, a refused, failed or wrong DCDC4 write,
-a controller PLL fault, a clock not at 1008 MHz when the observation ends, a
-wrong GPU-page translation and a short client deadline.
+image's flags and runs 22 cases under Unicorn with modeled registers:
+
+- **Controller and native operations:** the ON writes in order on the
+  board's state, CORE6 reaching ON, and late and flickering locks;
+  refusals for an 800 mV supply, a wrong parent, a PLL or clock word off
+  its entry value and a refused domain row; an ignored PLL enable or factor
+  write, a first or second lock that never sets and an update bit that
+  never clears, after each of which a further poll makes no access; and the
+  native allowlist's refusals.
+- **Supply:** the provider's, consumer's and resource manager's DCDC4
+  admission, and the approval record against `vendor-state.h`.
+- **Monitor:** the 28 EL3 writes, each read before and after, with the
+  record they leave, also when the security switch ignores its write.
+
+The check also pins each copy's diff from its original. `check.py
+--vendor-state` runs twelve client cases on the linked image: the board's
+state, CORE6 ON, an identity of 0, an incomplete EL3 record, a security
+switch of 0, a refused, failed or wrong DCDC4 write, a controller PLL fault,
+a clock not at 1008 MHz when the observation ends, a wrong GPU-page
+translation and a short client deadline.
+
+Set `~/.cache/sunstoneos/evidence/board-bundles-20261025-5` freezes the
+probe for port 3-1 at `b603d523`, in a new lifetime
+`board-session-20261025-4/port-3-1`: a power removal and the cold DDR start
+`s7-ddr`, then the provider-readiness checkpoint (`s10-gpr-*`), then this
+probe (`s10-gvs-*`, image `69dc042f…`, binary `fabb1df3…`). The bundle
+carries `approval.json` and the unit-check result. Its offline checks pass:
+the client and unit checks, the shared GPU checks, the board-bundle fixture
+check with row 19, the kernel admission cases, the frozen-bundle
+validation and the integration gate `gpu-vendor-state-20261025`. The
+identity, power-only, wrapper-read, probe-read and vendor-clk images built
+from clean archives of `d4c79c59` and `b603d523` are byte-identical
+(`~/.cache/sunstoneos/evidence/gpu-vendor-state-20261025/default-images/`).
+
 
 ### The delay-row writes stay
 
