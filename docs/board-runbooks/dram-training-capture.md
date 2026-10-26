@@ -150,8 +150,15 @@ two kinds (the `0xa0000` block, the address/command sequencer, a group of
 master registers and the multi-P-state message-block fields), so lifetime
 variation is measured within one kind only.
 
-The eight lifetimes settle the room-temperature questions, so the schedule
-is reduced to temperature lifetimes only:
+**No power cycle is available after the reconnect of 2026-10-25.** That
+lifetime (`board-session-20261025-36`) gives each board a standard
+four-P-state cold start (`s7-ddr`) and two four-P-state captures
+(`lc-capture-1`, `lc-capture-2`), which confirm the status class and the
+vendor path's lifetime spread. The restore set is then fixed from the
+existing lifetimes, as the [first restore test](dram-restore-test-1.md)
+describes, and the schedule below waits for power cycles to return. Had
+more lifetimes been possible, the eight would already have settled the
+room-temperature questions, leaving temperature lifetimes only:
 
 | Kind, per board | Room temperature | Cold | Warm | Still needed per board |
 | --- | --- | --- | --- | --- |
