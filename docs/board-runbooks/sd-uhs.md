@@ -252,7 +252,7 @@ power-cycled.
 | --- | --- | --- |
 | Capability query, `uhs_caps` (UHS word bits 5–6) | Not issued | 3: the 1.8 V switch and PERI0_300M. Port 3-3 read the manual-default PERI0 gates `0x8fff0fff`, status `0x0fff0000` and PLL `0xff126310` in four reads on 2026-10-25 (`board-session-20261025-3/port-3-3/bb9-read/`, `board-session-20261025-7/port-3-3/ts-read-0` to `-3`): every PERI0 branch, including 300 MHz, is enabled at 2.4 GHz. If an earlier test in the window has gated PERI0 bit 4, 5, 9 or 11, the value is 1 and the card runs at 100 MHz |
 | ACMD41 | S18R not requested | S18R requested; S18A set if the card is UHS-I |
-| CMD11 and switch | Not issued | R1 without errors; DAT3 low 1 ms later; PF value 2 becomes 3 within 10 ms of the one selector write; DAT3 high and `RINTSTS` bit 10 set within 1–11 ms of the restarted clock |
+| CMD11 and switch | Not issued | R1 without errors; DAT3 low 1 ms later; PF value 2 becomes 3 within 10 ms of the one selector write; DAT3 high and both `RINTSTS` bits 10 and 2 set within the 10 ms check after the restart’s 1 ms delay |
 | Outcome | Not applicable | `SDR104` (1); `DECLINED` (3) if the card is not UHS-I, leaving high speed at 3.3 V |
 | Mode word | width 4, timing 1, divisor 4, 50 MHz | width 4, timing 3, divisor byte `0x81` (300 MHz / 1), 150 MHz; with `uhs_caps` 1, divisor byte 2 (400 MHz / 2), 100 MHz |
 | Tuning window | Not applicable | One longest passing run of at least 12 delays, likely 20–40; the chosen delay is its midpoint. The vendor's untuned default at up to 150 MHz is delay 5 (`sunxi-mmc-v4p5x.c:1258`), which suggests that low delays pass. A run shorter than 12 gives outcome `NO_WINDOW` (5), SDR25 at 50 MHz |

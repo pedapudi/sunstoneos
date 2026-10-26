@@ -613,7 +613,7 @@ static void sd_clock(struct sunxi_mmc *h)
  * the controller's switch-done bit within 10 ms after a further 1 ms. */
 static void sd_signal(struct sunxi_mmc *h)
 {
-    uint32_t v,r;unsigned state=0;
+    uint32_t v,r;uint64_t restart_us;unsigned state=0;
     switch(h->sd_sig){
     case 0:
         if(!rd(h,0x3c,&h->result.status))return;
@@ -639,15 +639,27 @@ static void sd_signal(struct sunxi_mmc *h)
         h->card.signal_1v8=1;defer_command(h,10000);++h->sd_sig;return;
     case 3:
         if(!wr(h,4,(1u<<16)|MASK_DAT0)||!fence(h)||!wr(h,0x18,UPDATE|VSW))return;
-        ++h->sd_sig;return;
-    case 4:
-        if(!rd(h,0x18,&v)||(v&START))return;
+        if(!time_ok(h))return;
+        restart_us=h->last_us;
+        /* The vendor waits up to 250 ms, then clears the update's flags
+         * without yielding a protocol step. A tick here can erase the later
+         * switch completion. The overall operation deadline still applies. */
+        for(;;){
+            if(!rd(h,0x18,&v))return;
+            if(!(v&START))break;
+            if(!time_ok(h))return;
+            if(h->last_us-restart_us>=250000){fault(h,SUNXI_MMC_TIMEOUT);return;}
+        }
         /* Clear every flag the update set, as the board kernel does after each
          * clock update (sunxi-mmc-v5p3x.c:386-388); the switch's own
          * voltage-switch and command-done bits arrive after the clock restart. */
         if(!interrupts(h)||!wr(h,0x38,h->result.interrupts&0xffffu)||!wr(h,4,1u<<16)||!rd(h,4,&v))return;
         if(v!=(1u<<16)){fault(h,SUNXI_MMC_CONTROLLER);return;}
-        defer_command(h,1000);h->signal_us=h->last_us;++h->sd_sig;return;
+        defer_command(h,1000);++h->sd_sig;return;
+    case 4:
+        /* card_busy's separate 10 ms begins after Linux's 1 ms delay. */
+        h->signal_us=h->last_us;++h->sd_sig;
+        /* fall through */
     case 5:
         if(!rd(h,0x3c,&h->result.status)||!rd(h,0x38,&r))return;
         h->result.interrupts=r;
