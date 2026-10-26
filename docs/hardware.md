@@ -1148,8 +1148,10 @@ to the stated scope:
   across 201 documented pins in banks B–M, including GPIO, mux/pull/drive,
   interrupt configuration and shared debounce ownership. Host checks, source
   comparisons and native compilation pass. Explicit UART routes exclude shared
-  controller conflicts. Always-on output updates require a trusted bank latch
-  shadow. Physical pin availability, interrupt delivery, unresolved signal maps
+  controller conflicts. Always-on output updates use an authenticated bank
+  shadow. Normal OS PM ownership may initialize inactive latches while
+  preserving live outputs and priming every subsequent output transition;
+  exact inherited-latch preservation remains available for returning diagnostics. Physical pin availability, interrupt delivery, unresolved signal maps
   and platform admission remain unqualified.
 - I2S0 capture: **implemented** finite mono/stereo capture through the native
   DMA controller. Host checks cover producer shutdown before DMA drain and
@@ -1795,7 +1797,12 @@ to the stated scope:
   and nine producer refusals pass under `radio-native-20261025/`. Fitted supply
   topology and complete PM output-latch/PM2 authority remain unresolved; missing
   evidence produces only a refusal image. Neither Wi-Fi nor Bluetooth has been
-  demonstrated physically. [Identity-message encoding and decoding](radio-codec.md)
+  demonstrated physically. Normal OS radio/headset startup now accepts an
+  authenticated PM record without dormant latch history: it preserves live
+  outputs and initializes inactive latches before output use. Focused pin and
+  admission checks and the native radio/headset image pass under
+  `radio-startup-facts-1026/`. This does not resolve fitted rails, PM2 suitability
+  or host firmware/profile staging. [Identity-message encoding and decoding](radio-codec.md)
   are implemented, with host sanitizer and AArch64 compile evidence. The
   [bootstrap and board mapping](radio.md) remains source-based research, with a
   host-tested Bluetooth patch-table inspector. Published software identifies

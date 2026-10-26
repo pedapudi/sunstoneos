@@ -67,7 +67,8 @@ does not establish recovery from a fault.
 | Work | Branch | Immediate deliverable |
 | --- | --- | --- |
 | DRAM restoration | `work/resume-dram-restore-1025` | Implement the card-boot loader using verified early single-sector reads and explicit helper storage |
-| Radio startup | `work/radio-startup-facts-1026` | Resolve supply topology and pin-state prerequisites from primary sources before changing startup |
+| Radio startup | `work/radio-os-staging-1026` | Stage existing firmware and profiles for the OS while preserving physical wiring requirements |
+| GPU recognition | `work/resume-gpu-wait-1026` | Bound caller waits and integrate supervised recorded recognition without relying on watchdog expiry |
 | NPU restart | `work/resume-npu-restart-1026` | Add normal worker-mediated rearm while preserving registered objects, domain and SRAM ownership |
 
 Independent reviewers cover CPU/thermal/DRAM, accelerator operation and peripheral
@@ -157,8 +158,12 @@ be pruned.
   Its accepted lifetime ends with power removal. The source-backed scheduling
   decision is under
   `~/.cache/sunstoneos/evidence/sd-dma-eligibility-20261026/`.
-  A minimal host-produced first-read plan is being added so qualification does
-  not require the existing 240-read measurement sweep.
+  The host producer now supports `--profile 2 --plan first-read`: one 4096-byte
+  read at sector 0 using the unchanged native binary. Successful decoding
+  requires matching card identity and CRC from the accepted PIO reference.
+  Focused producer and decoder checks pass under
+  `~/.cache/sunstoneos/evidence/sd-first-read-host-1026/`; the existing 240-read
+  measurement mode remains available. No physical test ran.
 - **Paired DRAM training records are implemented.** Selection chooses the newest
   eligible record; updates write the standby payload before its header and
   preserve the other copy. Thirty-two focused cases, including interruption
@@ -189,6 +194,14 @@ be pruned.
   `~/.cache/sunstoneos/evidence/radio-native-20261025/`. Fitted supply topology,
   PM output-latch provenance and inherited PM2 behavior still prevent physical
   admission. Missing authority produces a refusal image before provider startup.
+  Normal OS radio ownership now has a separate, reviewed pin contract: it
+  preserves live PM outputs from documented readback and initializes inactive
+  latches before enabling outputs. Strict returning diagnostics retain their
+  complete-latch requirement. Focused pin/admission checks and the native
+  radio/headset OS build pass under
+  `~/.cache/sunstoneos/evidence/radio-startup-facts-1026/`.
+  This removes dormant latch history as a normal OS prerequisite; fitted supply
+  wiring, PM2 suitability and host firmware/profile staging remain unresolved.
   The camera stream uses two slots and polls capture during each copied chunk.
   It exports one immutable frame, then reports retained hardware because packet
   drain is unproven. Native/model/host evidence is frozen under
