@@ -1,12 +1,13 @@
 # Several timed GPU jobs in one firmware session
 
-Status: **implemented, host-checked and frozen for port 3-1 as set
-`board-bundles-20261025-30`; not yet run on a board.** It follows the first GPU job, which
-passed on port 3-1 in set 29 ([first GPU job](gpu-first-job.md)): one
-32-lane compute job between the firmware's health check and its stop. This
-step runs eight jobs on one context in one firmware session, times each
-one from the board counter, and makes the client CCB wrap. The step after
-it runs a larger dispatch (last section).
+Status: **qualified on port 3-1** in set `board-bundles-20261025-30`
+(`board-session-20261025-29/port-3-1`, record `s29-gjs-run`). Eight
+32-lane jobs ran on one context in one firmware session; all 32 output
+words matched, with no firmware event or reset; the cleanup and the stop
+were acknowledged and the GPU powered off. The step follows the first GPU
+job ([first GPU job](gpu-first-job.md)): it runs eight jobs on one context
+in one firmware session, times each from the board counter, and makes the
+client CCB wrap.
 
 ## Why this step
 
@@ -153,8 +154,7 @@ does not complete is a controlled failure: the sequence ends, the cleanup
 runs when the firmware has finished with the context, and the stop powers
 the GPU off, with the firmware's acknowledgements or by upstream's hard
 reset when the idle checks pass. A GPU that never reports idle stays
-powered until a power removal, as in set 29. Nothing is retained between
-sessions: the image ends at the OFF.
+powered until a power removal, as in set 29. A successful session ends at OFF; a failed drain retains all resources.
 
 ## Checks before a board run
 
@@ -207,16 +207,107 @@ session image (`850d833f…`, loadable bytes `80fa9d1a…`, from `5c4420d2`).
 Its runbook gives the predictions above as the log lines they produce and
 what each departure means.
 
-## The step after: a larger dispatch
+## Set 30 on port 3-1
 
-The compiled-package path (`pvr_compute_package.c`, profile 2) runs a
-Mesa-compiled kernel over up to 992 elements in 31 dispatches of 32 lanes,
-each dispatch with its own PDS slot (first index and count) and a final
-fence. On the board it would show the multi-dispatch CDM stream, the
-first-index and count order fixed after set 27 and never run, and a real
-workload's throughput. It needs the package's input and output regions in
-the image's payload and a host case per profile, and is proposed once this
-step passes.
+Kick to timeline, on the 24 MHz counter:
+
+| Job | Time |
+| --- | --- |
+| 1, after `MMUCACHE` | 113 µs |
+| 2 to 5, 7 and 8 | 80 to 83 µs each |
+| 6, the first after the ring wrapped | 87 µs |
+
+Preparation took 1.45 ms and the eight jobs 2.39 ms in all, kick of job 1
+to timeline of job 8. A job's time includes the firmware's scheduling, the
+CDM work, the timeline UPDATE and its write reaching the CPU; the first
+read's floor (`first`) includes the `MTS_SCHEDULE` read-back and its log
+lines.
+
+## Failed shutdown retains power and ownership
+
+The diagnostic powers off only after a complete stop. The stop includes the
+firmware handshakes, register idle checks and platform isolation. A failed
+control can instead use the existing unacknowledged stop when its transport
+has latched failure and no OFF acknowledgement, register step or isolation
+has occurred. That stop runs the complete idle plan, asserts the reset mask
+selected from the validated firmware features, and then requests OFF.
+
+The idle plan freshly reads the BIF MMU and outstanding-read registers
+(`0x1358`, `0x1350`, `0x1320`, `0x1338`), SLC outstanding transactions
+(`0x3870`), SLC idle (`0x3898`) and Sidekick idle (`0x3c8`). Any failed poll
+prevents reset and OFF. A firmware OFF acknowledgement followed by a failed
+command collection or retirement also retains power. The acknowledgement
+alone does not establish that transactions have drained.
+
+A failed firmware start or refused control leaves power and ownership
+retained. The application does not manufacture a failed control state to
+admit recovery. Before any firmware access, a successful ON followed by
+failed GPU mapping, refused identity or insufficient startup time permits
+plain OFF. Uncertain ON completion, invalid provider mappings and clock
+failure retain resources without further GPU register access. A partial OFF
+retains resources and does not retry isolation.
+
+The stop has a 300 ms total budget within the diagnostic's 2 s monitor:
+200 ms for acknowledged shutdown and 100 ms reserved for an admitted
+unacknowledged stop. This is shorter than the vendor's 500 ms per poll and
+upstream's 1 s per poll. Expiry limits diagnostic availability; it never
+permits reset or resource release. A retained failure ends GPU use for that
+powered lifetime and requires coordinator-directed physical recovery.
+
+These rules follow the pinned upstream `pvr_fw_startstop.c:220–320`, which
+returns at each failed idle poll before its reset, and vendor
+`rgxpower.c:392–427`, which returns when the power-off handshake fails.
+The source revisions and licenses are recorded in
+[the firmware-stop design](gpu-firmware-stop.md). CORE6's vendor ON disables
+the device-interface handshake, so its OFF cannot replace GPU drain proof.
+
+The native ELF checks model the firmware and platform power callbacks.
+They check retained power after failed idle polls, failed startup, refused
+control and collection failure after the OFF acknowledgement. They also
+check plain OFF before firmware startup and reject every GPU access after
+OFF begins. These checks establish software ordering; physical failure
+recovery and application operation remain unqualified for this revision.
+
+The corrected firmware-stop, first-job and eight-job native images built
+successfully. Fourteen selected stop cases, four job cases and two session
+cases passed. Build records, source hashes, ELF files and model results are
+preserved under `~/.cache/sunstoneos/evidence/gpu-recovery-20261025/`.
+The unchanged job arithmetic and transport evidence remains applicable;
+these checks cover the changed shutdown decisions and their callers.
+
+## Next steps
+
+For the next agent on the GPU:
+
+- **The larger Mesa-compiled dispatch.** The compiled-package path
+  (`drivers/gpu/pvr_compute_package.c`, profile 2) runs a Mesa-compiled
+  kernel over up to 992 elements in 31 dispatches of 32 lanes, each with
+  its own PDS slot (first index and count), and a final fence. It shows the
+  multi-dispatch CDM stream, the first-index and count order fixed after
+  set 27 (stored low word first; never run on a board), and a real
+  workload's throughput. It needs the package's input and output regions
+  in the image payload, a session variant that loads a package instead of
+  the fixed program, and host cases per profile, then the usual panel,
+  review and gate. Every set now continues a long-lived lifetime
+  (`board-session-20261025-36/port-3-1`): no cold DDR start, no power
+  removal, a warm-return chain from the lifetime's records.
+- **Clock and DVFS.** The GPU runs only at the vendor's top operating
+  point, 1,008 MHz from PLL_GPU0 with DCDC4 at 960 mV (the highest node of
+  `gpu_opp_table`, `include/a733_gpu_opp.h`). No DVFS: the 800, 600 and
+  400 MHz nodes are unused, and the power service admits DCDC4 only at the
+  node's voltages.
+- **Startup cost.** The CORE6 power-on to status 8 took 7.11 ms (set 27)
+  and 11.09 ms (set 29) on port 3-1. It dominates a session's startup
+  beside the firmware start (0.67 ms) and the health check (1.92 ms);
+  a service that powers the GPU per job pays it each time.
+- **License.** The PowerVR firmware binary is under `LICENSE.powervr`,
+  which forbids disassembly. Decode it only through the host driver
+  sources and the firmware-interface headers, and the board's own records.
+- **Open post-mortem field.** In set 27's capture the MMU status of the
+  recovery record names catalogue base 1, while the job's VM record shows
+  the catalogue-register field 0 after the firmware wrote it
+  ([first GPU job](gpu-first-job.md), "Set 27 post-mortem"). It did not
+  affect the fault's cause and is unexplained.
 
 ## Design panel
 
