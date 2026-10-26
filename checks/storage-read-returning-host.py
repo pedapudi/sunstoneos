@@ -17,7 +17,14 @@ plan, and requires:
   refuses a read line whose sector differs from the plan, a missing read count
   and a card line for another profile; reports a window stop as incomplete;
 - apps/storage-read-returning/controlled.json: the kernel runner's parser
-  accepts it, and a stopped log matches only the sd-stopped outcome.
+  accepts it, and a stopped log matches only the sd-stopped outcome;
+- fabric: the tool's masks and parent rates equal those of
+  drivers/storage/a733_mmc_platform.c; port 3-3's words 0x03000002,
+  0xc3000000 and 0x84000000 give 0x03000002, 0x83000000 and 0x84000000 at
+  200, 600 and 400 MHz, and an MBUS word of 0x81000000 gives 600 MHz; the
+  input command takes the words from a read record on the DDR start's node
+  and identity and refuses a read from another node, a failed read and a
+  configuration that carries its own fabric words.
 
 No board, USB or queue access.
 """
@@ -26,6 +33,7 @@ import binascii
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import struct
 import time
@@ -129,6 +137,41 @@ def main(out):
         refused(lambda: tool.decode_log(log_for(raw).replace('SD_READS=0x0000000000000100\n', ''), raw, 0), 'read count'),
         refused(lambda: tool.decode_log(log_for(raw, profile=3), raw, 0), 'another profile')]
     results['complete_throughput'] = complete['throughput']
+    # Fabric: the tool's tables are the provider's, and each lifetime's read binds the words.
+    source = (ROOT / 'drivers/storage/a733_mmc_platform.c').read_text()
+    def array(name):
+        body = source.split(name, 1)[1].split(';', 1)[0]
+        return [int(x, 0) for x in re.findall(r'0x[0-9a-fA-F]+|\b\d+\b', body.split('=', 1)[1])]
+    assert array('fabric_off[]') == [a - 0x02002000 for a in tool.FABRIC]
+    assert array('fabric_mask[]') == list(tool.FABRIC_MASK)
+    assert array('parent_mhz[3][8]') == [x for row in tool.PARENT_MHZ for x in row], array('parent_mhz[3][8]')
+    assert tool.fabric([0x03000002, 0xc3000000, 0x84000000]) == ([0x03000002, 0x83000000, 0x84000000],
+                                                                 [200000000, 600000000, 400000000])
+    assert tool.fabric([0x03000002, 0xc3000000, 0x81000000])[1] == [200000000, 600000000, 600000000]
+    refused(lambda: tool.fabric([0x03000002, 0x43000000, 0x84000000]), 'no admitted parent or gate')
+    def read_record(name, node='/dev/bus/usb/003/051', identity=(7, 2142, 1097010, 0, 0), complete=True):
+        d = out / name; d.mkdir()
+        (d / 'session.json').write_text(json.dumps({'schema': 'board-read-words-v1', 'complete': complete,
+            'scratch_restored': True, 'port': '3-3', 'node': node, 'identity': list(identity),
+            'words': {'0x2002500': 0x03000002, '0x2002580': 0xc3000000, '0x2002588': 0x84000000},
+            'model': 'MODEL-NOT-PHYSICAL'}))
+        return d
+    good = read_record('fabric-read')
+    assert tool.fabric_read(good, ddr)[0] == ([0x03000002, 0x83000000, 0x84000000], [200000000, 600000000, 400000000])
+    fabric_refusals = [refused(lambda: tool.fabric_read(read_record('fabric-other', node='/dev/bus/usb/003/060'), ddr),
+                               'another node'),
+                       refused(lambda: tool.fabric_read(read_record('fabric-failed', complete=False), ddr), 'did not pass')]
+    board = {k: v for k, v in CONFIG.items() if not k.startswith('fabric')}
+    (out / 'board.json').write_text(json.dumps(board)); (out / 'fabric-config.json').write_text(json.dumps(CONFIG))
+    common = ['input', '--approval', str(a), '--request', str(request), '--ddr', str(ddr), '--survey', str(survey),
+              '--fabric-read', str(good), '--profile', '2']
+    fabric_refusals.append(refused(lambda: tool.main(common + ['--config', str(out / 'fabric-config.json'),
+                                                               '--output', str(out / 'refused.bin')]), 'this lifetime'))
+    assert tool.main(common + ['--config', str(out / 'board.json'), '--output', str(out / 'cli-input.bin')]) == 0
+    made = json.loads((out / 'cli-input.json').read_text())
+    assert made['fabric'] == ['0x03000002', '0x83000000', '0x84000000'] and made['fabric_hz'] == [200000000, 600000000, 400000000]
+    assert struct.unpack_from('<3I', (out / 'cli-input.bin').read_bytes(), 72) == (0x03000002, 0x83000000, 0x84000000)
+    results['fabric_refusals'] = fabric_refusals
     # The image's controlled outcomes, as the kernel runner reads them.
     spec = importlib.util.spec_from_file_location('sd_returning_runner', ROOT / 'tools/check-a733-kernel.py')
     runner = importlib.util.module_from_spec(spec); spec.loader.exec_module(runner)

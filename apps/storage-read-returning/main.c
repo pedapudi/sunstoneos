@@ -31,6 +31,7 @@
 #include "a733_mmc_platform_native.h"
 #include "a733_mapping_check.h"
 #include "aarch64_device_memory.h"
+#include "sunxi_smhc.h"
 #include "sdrt.h"
 #include <stdatomic.h>
 #include <string.h>
@@ -241,6 +242,29 @@ SDRT_ENTRY int sdrt_quiet(void)
     return !xSemaphoreGetMutexHolder(sdrt.locks.mutex[0])&&!xSemaphoreGetMutexHolder(sdrt.locks.mutex[1]);
 }
 
+/* The last step before every exit after the SD task: gate the card clock
+ * (CLKCR bit 16) and apply it with one clock-update command, so that a card
+ * left mid-read stops clocking data onto DAT1 and DAT2, which the ROM's
+ * return makes JTAG TMS and TCK. It writes the controller directly: after a
+ * fault the provider keeps its register lock retained, and by now the SD
+ * task is the only task running. Returns 1 when CLKCR reads back with the
+ * card clock off, 2 when the controller's bus gate, reset or module clock
+ * was never enabled (no card clock to stop), and 0 when a command or the
+ * update did not complete within 1 ms. */
+SDRT_ENTRY int sdrt_clock_off(void)
+{
+    if((mmio_read(A733_MMC_BUS(0))&0x10001u)!=0x10001u||!(mmio_read(A733_MMC_MODULE(0))&(UINT32_C(1)<<31)))return 2;
+    uintptr_t base=A733_MMC_BASE(0);
+    uint64_t end=sdrt_ticks()+24000;
+    while(mmio_read(base+SUNXI_SMHC_CMD)&SUNXI_SMHC_CMD_START)if(sdrt_ticks()>=end)return 0;
+    mmio_write(base+SUNXI_SMHC_CLKCR,mmio_read(base+SUNXI_SMHC_CLKCR)&~(UINT32_C(1)<<16));
+    __asm__ volatile("dsb sy":::"memory");
+    mmio_write(base+SUNXI_SMHC_CMD,SUNXI_SMHC_UPDATE);
+    end=sdrt_ticks()+24000;
+    while(mmio_read(base+SUNXI_SMHC_CMD)&SUNXI_SMHC_CMD_START)if(sdrt_ticks()>=end)return 0;
+    return !(mmio_read(base+SUNXI_SMHC_CLKCR)&(UINT32_C(1)<<16));
+}
+
 /* The result lines; host tool tools/storage-read-returning.py parses them. */
 SDRT_ENTRY void sdrt_report(int outcome)
 {
@@ -272,6 +296,7 @@ SDRT_ENTRY void sdrt_report(int outcome)
     }
     line("SD_READS=",sdrt.done);line("SD_PLAN=",sdrt.input.reads);
     line("SD_PMIC_PARKED=",atomic_load_explicit(&sdrt.pmic_parked,memory_order_acquire));
+    line("SD_CLOCK_OFF=",sdrt.clock_off);
     if(outcome==0){platform_puts(sdrt.done==sdrt.input.reads?"COMPLETE SD0 returning read\n":
         "INCOMPLETE SD0 returning read: window\n");return;}
     platform_puts("INCOMPLETE SD0 returning read: stopped\n");
@@ -314,7 +339,9 @@ static void sd_task(void *unused)
     atomic_store_explicit(&sdrt.pmic_stop,1,memory_order_release);
     while(!atomic_load_explicit(&sdrt.pmic_parked,memory_order_acquire)&&now_us()<sdrt.end)vTaskDelay(1);
     int quiet=sdrt_quiet();
+    sdrt.clock_off=(unsigned)sdrt_clock_off();
     if(r>0&&!quiet){sdrt.reason=9;r=-1;}
+    if(r>0&&!sdrt.clock_off){sdrt.reason=10;r=-1;}
     sdrt_report(r>0?0:1);
     platform_exit(r>0&&sdrt.done==sdrt.input.reads?0:1);
 }
@@ -324,11 +351,11 @@ void kernel_main(void)
 {
     platform_init();
     platform_puts("SD0 returning start\n");
-    if(!sdrt_setup()){platform_puts("INCOMPLETE SD0 returning read: input\n");platform_exit(1);}
+    if(!sdrt_setup()){(void)sdrt_clock_off();platform_puts("INCOMPLETE SD0 returning read: input\n");platform_exit(1);}
     line("SD_PROFILE=",sdrt.input.profile);line("SD_GENERATION=",sdrt.input.generation);
     TaskHandle_t pmic=xTaskCreateStatic(pmic_task,"sd-pmic",4096,NULL,2,stacks[0],&tasks[0]);
     TaskHandle_t sd=xTaskCreateStatic(sd_task,"sd-read",4096,NULL,2,stacks[1],&tasks[1]);
-    if(!pmic||!sd||!sdrt_bind(pmic)){platform_puts("INCOMPLETE SD0 returning read: providers\n");platform_exit(1);}
+    if(!pmic||!sd||!sdrt_bind(pmic)){(void)sdrt_clock_off();platform_puts("INCOMPLETE SD0 returning read: providers\n");platform_exit(1);}
     vTaskStartScheduler();
     platform_panic("scheduler returned",0);
 }

@@ -2,8 +2,8 @@
 """Host side of the returning SD0 read image (apps/storage-read-returning).
 
   storage-read-returning.py sign --approval APPROVAL --ddr DDR_DIR --survey SURVEY_DIR --signer NAME
-  storage-read-returning.py input --approval APPROVAL --ddr DDR_DIR --survey SURVEY_DIR --config CONFIG
-                                  --profile 2|3 --output INPUT.bin
+  storage-read-returning.py input --approval APPROVAL --request REQUEST --ddr DDR_DIR --survey SURVEY_DIR
+                                  --fabric-read READ_DIR --config CONFIG --profile 2|3 --output INPUT.bin
   storage-read-returning.py decode --run RUN_DIR --input INPUT.bin --output RESULT.json
 
 sign records, in the coordinator's approval of one lifetime, the SHA-256 of
@@ -14,8 +14,11 @@ is already signed, so no approval carries into the next lifetime.
 
 input writes the 2192-byte input that the image reads at 0x43000000
 (apps/storage-read-returning/sdrt.h): SD profile 2 or 3, fresh owner, handoff
-and topology identifiers, the fabric words, the PMIC and PF pin configurations
-of CONFIG, and the read plan of check-a733-storage-read-supervised.py's
+and topology identifiers, the fabric words of this lifetime's own read of CCU
+0x500, 0x580 and 0x588 (READ_DIR, a board-read-words-v1 record of
+tools/board-bundles-next-read.py on the DDR start's node and ROM identity),
+masked and converted to rates as the SD0 provider does, the PMIC and PF pin
+configurations of CONFIG, and the read plan of check-a733-storage-read-supervised.py's
 throughput_plan(0, 4194304): 128 sequential and 96 random eight-sector reads
 and 32 single sectors. It refuses unless the approval is signed for this DDR
 start and survey, newer than the DDR record, names the profile's bundle and
@@ -46,6 +49,12 @@ PORT = '3-3'
 COMPLETE = 'COMPLETE SD0 returning read'
 INCOMPLETE = 'INCOMPLETE SD0 returning read: '
 BUNDLES = {2: 'A', 3: 'B'}
+# The SD0 provider's fabric words, masks and parent rates in MHz
+# (drivers/storage/a733_mmc_platform.c: fabric_off, fabric_mask, parent_mhz).
+# The image only reads these words; no unit of it writes CCU 0x500, 0x580 or 0x588.
+FABRIC = (0x02002500, 0x02002580, 0x02002588)
+FABRIC_MASK = (0x0300001f, 0x8700001f, 0x8700001f)
+PARENT_MHZ = ((24, 0, 0, 600, 0, 0, 0, 0), (24, 0, 800, 600, 480, 0, 0, 0), (24, 600, 0, 480, 400, 0, 0, 0))
 
 
 def module(name, path):
@@ -116,6 +125,35 @@ def approved(approval, request, ddr, survey, bundle):
         for name in names:
             require(value.get('fields', {}).get(record, {}).get(name) is True, f'{record}.{name} not approved')
     return value
+
+
+def fabric(words):
+    """(config words, rates in Hz) from the three register words, as the provider checks them:
+    each word under its mask, with bit 31 set in the second and third and a known parent."""
+    config, rates = [], []
+    for i, word in enumerate(words):
+        require(type(word) is int and 0 <= word < 2**32, 'invalid fabric word')
+        value = word & FABRIC_MASK[i]
+        mhz, div = PARENT_MHZ[i][(value >> 24) & 7], (value & 31) + 1
+        require(mhz and (mhz * 1000000) % div == 0 and (i == 0 or value >> 31),
+                f'fabric word {i} 0x{word:08x} has no admitted parent or gate')
+        config.append(value); rates.append(mhz * 1000000 // div)
+    return config, rates
+
+
+def fabric_read(read, ddr):
+    """The fabric configuration of this lifetime's own read of the three words."""
+    path, ddr_path = Path(read) / 'session.json', Path(ddr) / 'session.json'
+    record, d = json.loads(path.read_text()), json.loads(ddr_path.read_text())
+    seen = record.get('identity'); seen = json.loads(seen) if isinstance(seen, str) else seen
+    require(record.get('schema') == 'board-read-words-v1' and record.get('complete') is True and
+            record.get('scratch_restored') is True and record.get('port') == PORT, 'fabric read did not pass on 3-3')
+    require(record.get('node') == d.get('device') and seen == d.get('node_identity'),
+            'fabric read ran on another node or ROM identity than the DDR start')
+    require(path.stat().st_mtime > ddr_path.stat().st_mtime, 'fabric read is older than the DDR start')
+    words = {int(k, 16): v for k, v in (record.get('words') or {}).items()}
+    require(all(a in words for a in FABRIC), 'fabric read lacks a fabric word')
+    return fabric([words[a] for a in FABRIC]), [words[a] for a in FABRIC]
 
 
 def pins(values, count):
@@ -216,7 +254,8 @@ def main(argv=None):
     for name in ('approval', 'ddr', 'survey'): s.add_argument('--' + name, type=Path, required=True)
     s.add_argument('--signer', required=True)
     i = sub.add_parser('input')
-    for name in ('approval', 'request', 'ddr', 'survey', 'config', 'output'): i.add_argument('--' + name, type=Path, required=True)
+    for name in ('approval', 'request', 'ddr', 'survey', 'fabric_read', 'config', 'output'):
+        i.add_argument('--' + name.replace('_', '-'), type=Path, required=True)
     i.add_argument('--profile', type=int, choices=(2, 3), required=True)
     d = sub.add_parser('decode')
     for name in ('run', 'input', 'output'): d.add_argument('--' + name, type=Path, required=True)
@@ -228,11 +267,15 @@ def main(argv=None):
         approved(args.approval, args.request, args.ddr, args.survey, BUNDLES[args.profile])
         require(not args.output.exists(), 'output exists')
         config = json.loads(args.config.read_text())
+        require('fabric' not in config and 'fabric_hz' not in config, 'the fabric words come from this lifetime\'s read')
+        (config['fabric'], config['fabric_hz']), registers = fabric_read(args.fabric_read, args.ddr)
         raw = input_bytes(args.profile, secrets.randbits(63) | 1, config, throughput().throughput_plan(0, 4194304))
         args.output.write_bytes(raw)
         args.output.with_suffix('.json').write_text(json.dumps({
             'input_sha256': hashlib.sha256(raw).hexdigest(), 'profile': args.profile,
             'approval_sha256': digest(args.approval), 'config_sha256': digest(args.config),
+            'fabric_registers': [f'0x{w:08x}' for w in registers], 'fabric': [f'0x{w:08x}' for w in config['fabric']],
+            'fabric_hz': config['fabric_hz'], 'fabric_read_sha256': digest(args.fabric_read / 'session.json'),
             'ddr_session_sha256': digest(args.ddr / 'session.json'),
             'survey_session_sha256': digest(args.survey / 'session.json'), 'tool_sha256': digest(__file__)}, indent=1) + '\n')
         print(args.output); return 0

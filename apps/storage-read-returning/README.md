@@ -22,7 +22,17 @@ tasks run on core 0:
   input's profile and runs the input's read plan. For each read it records the
   time from the first poll after submission to completion, and the CRC-32 of
   the data. It then parks the PMIC task, checks that no PMIC request, rail
-  borrow or register lock is outstanding, writes its report and exits.
+  borrow or register lock is outstanding, stops the card clock, writes its
+  report and exits.
+
+The image stops the card clock on every exit after the SD task, including a
+stop or window expiry in the middle of a read: it clears the card clock
+enable (CLKCR bit 16) and applies it with one clock-update command. A card
+interrupted mid-read then stops clocking data onto DAT1 and DAT2, which the
+ROM's return turns into the JTAG TMS and TCK inputs. After a provider fault
+the provider keeps its register lock retained, so this last step writes the
+controller directly; by then the PMIC task has parked and no other code
+runs.
 
 The image never touches USB0. The monitor returns to the ROM after
 `platform_exit()`, and the host reads the 16 KiB result page at `0x42000000`
@@ -31,7 +41,11 @@ over FEL.
 **Input.** `tools/storage-read-returning.py input` writes the 2192-byte input
 that the image reads at `0x43000000` (`sdrt.h`): the profile, fresh owner,
 handoff and topology identifiers, the fabric words and rates, the PMIC and PF
-pin configurations, and the read plan. The plan is the supervised service's
+pin configurations, and the read plan. The fabric words come from the
+lifetime's own FEL read of CCU `0x500`, `0x580` and `0x588`
+(`tools/board-bundles-next-read.py`) on the DDR start's node and ROM
+identity; the tool masks them and computes their rates as the SD0 provider
+does. The plan is the supervised service's
 throughput plan, `throughput_plan(0, 4194304)` in
 `tools/check-a733-storage-read-supervised.py`: 128 sequential eight-sector
 reads from sector 0, 96 eight-sector reads at fixed pseudo-random offsets
@@ -46,7 +60,8 @@ below sector 4,194,304, and 32 single sectors.
 - `R`: one line per read, with its index, first sector, block count, time in
   microseconds and CRC-32;
 - `D0` to `D7`: sector 0 in hex;
-- `SD_READS`, `SD_PLAN`, `SD_PMIC_PARKED`, then `COMPLETE SD0 returning read`,
+- `SD_READS`, `SD_PLAN`, `SD_PMIC_PARKED`, `SD_CLOCK_OFF` (1: card clock
+  off; 2: the controller was never enabled), then `COMPLETE SD0 returning read`,
   or `INCOMPLETE SD0 returning read:` followed by `window` or `stopped`; a
   stop also prints the provider's stage, fault, last command and result.
 
@@ -107,11 +122,12 @@ dispatcher at `0x2514` into the nonsecure ROM's USB FEL loop found:
   (`a733_mmc_sd0_inherited_mux`).
 
 After a return, therefore, the card stays powered at the signalling voltage
-of its lifetime, the PF bank selector still matches it, and the controller
-keeps running the card clock. The command and data lines carry the JTAG
-functions with the pulls the provider set; with no debugger attached the TAP
-stays in reset and its TDO output stays released, so the command line stays
-high and the card, in its transfer state, receives no command.
+of its lifetime and the PF bank selector still matches it. The controller
+keeps its configuration with the card clock stopped, because the image
+stops it before exiting. The command and data lines carry the JTAG functions
+with the pulls the provider set; with no debugger attached the TAP stays in
+reset and its TDO output stays released, so the command line stays high and
+the card, with no clock, receives no command.
 
 ## Lifetime B uses the returning path
 
@@ -157,12 +173,20 @@ tool's signing, input and decoding. Neither establishes physical operation.
 
 ## Board configuration
 
-`BOARD_CONFIG.json` holds `fabric`, `fabric_hz`, `pmic_pins`,
-`expected_pins` and `desired_pins`. For port 3-3 the fabric words are
-`0x03000002`, `0x83000000` and `0x84000000` at 200, 600 and 400 MHz, the
-words port 3-3 reads at CCU `0x500`, `0x580` and `0x588`
-(`board-session-20261023/port-3-3/r9-v4-capture`), with bit 30 of `0x580`
-removed: the board reads `0xc3000000` there, and every provider's fabric
-check masks that bit out. These are the words of the rank 9 input that passed
-on port 3-3. The expected PF pins are the ROM JTAG route: function 3 on PF0,
-PF1, PF3 and PF5 and function 15 on PF2, PF4 and PF6.
+`BOARD_CONFIG.json` holds `pmic_pins`, `expected_pins` and `desired_pins`;
+the input tool refuses one that also carries fabric words. The expected PF
+pins are the ROM JTAG route: function 3 on PF0, PF1, PF3 and PF5 and
+function 15 on PF2, PF4 and PF6.
+
+The fabric words are read in each lifetime because the SD0 provider checks
+the live AHB, NSI and MBUS words (CCU `0x500`, `0x580`, `0x588`) against its
+configuration under the masks `0x0300001f`, `0x8700001f` and `0x8700001f`. A
+frozen value would turn any change of those clocks before the run, such as a
+restore of the vendor MBUS clock, into a refusal. The image itself writes
+none of the three: the SD0 adapter admits them for reading only
+(`a733_mmc_platform_native_address_selected`), and no other unit of the
+image writes the CCU's fabric words. On port 3-3 the board has read
+`0x03000002`, `0xc3000000` and `0x84000000`, which give `0x03000002`,
+`0x83000000` and `0x84000000` at 200, 600 and 400 MHz; bit 30 of
+`0xc3000000` is outside the mask. An MBUS word of `0x81000000` gives 600 MHz
+and is also admitted.

@@ -184,14 +184,17 @@ the returning image: the card and the PF bank stay at 1.8 V until the
 whole-board power removal that ends the lifetime, and nothing else runs on the
 board before it.
 
-Each lifetime runs the cold DDR start, the cache-off helper and the survey,
-then:
+Each lifetime runs the cold DDR start, a FEL read of the fabric words CCU
+`0x500`, `0x580` and `0x588` (`tools/board-bundles-next-read.py`), the
+cache-off helper and the survey, then:
 
 1. The coordinator signs the lifetime's approval:
    `$PY $SR/tools/storage-read-returning.py sign --approval APPROVAL --ddr $S/DDR --survey $S/SURVEY --signer coordinator`.
-2. `$PY $SR/tools/storage-read-returning.py input --approval APPROVAL --request REQUEST --ddr $S/DDR --survey $S/SURVEY --config CONFIG --profile 2 --output $S/INPUT.bin`
+2. `$PY $SR/tools/storage-read-returning.py input --approval APPROVAL --request REQUEST --ddr $S/DDR --survey $S/SURVEY --fabric-read $S/FABRIC --config CONFIG --profile 2 --output $S/INPUT.bin`
    (profile 3 for lifetime B). It refuses an approval not signed for this
-   DDR start and survey.
+   DDR start and survey, and takes the fabric words from this lifetime's
+   read, so a change of those clocks before the run cannot become a
+   refusal.
 3. The kernel runner, through the board queue:
    `$PY $SR/tools/check-a733-kernel.py --fel $FEL --image IMAGE --mode kernel --ram-input $S/INPUT.bin --expect "COMPLETE SD0 returning read" --controlled CONTROLLED --return-timeout 5 --ddr-evidence $S/DDR/session.json --platform-survey $S/SURVEY/session.json --evidence $S/RUN`.
 4. `$PY $SR/tools/storage-read-returning.py decode --run $S/RUN --input $S/INPUT.bin --output $S/RUN/sd-result.json`.

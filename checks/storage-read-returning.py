@@ -31,12 +31,21 @@ Cases:
 - crc-read: a data CRC error on the first read; the same;
 - not-parked: the PMIC service has not parked; sdrt_quiet() refuses, so the
   image would exit with status 1;
-- board-3: profile 3 with CONFIG and the CCU words port 3-3 read (fabric
+- board-3: profile 3 with CONFIG, the CCU words port 3-3 read (fabric
   0x03000002, 0xc3000000, 0x84000000; PERI0 PLL 0xff126310, gates 0x8fff0fff,
-  status 0x0fff0000): SDR104 at 150 MHz and all 256 reads;
+  status 0x0fff0000) and the fabric configuration the host tool derives from
+  those words: SDR104 at 150 MHz and all 256 reads;
+- board-mbus-600: profile 2 with the MBUS word at 0x81000000 (600 MHz), as a
+  restore of the vendor MBUS clock would leave it, and the configuration
+  derived from that read: all 256 reads;
 - board-old-fabric: CONFIG with the fabric words of lifetime A's session
   template (0x03000002, 0xc3000000, 0x81000000 at 200, 600 and 600 MHz):
   sdrt_setup() refuses it, as every provider's fabric check does.
+
+Every case then runs sdrt_clock_off(), the image's last step before its
+exit: the card clock enable must read back clear after one clock-update
+command (result 1), or, where the controller was never enabled, the image
+must leave it untouched (result 2).
 
 No board, USB or queue access.
 """
@@ -197,10 +206,10 @@ class Card(modes.UhsMachine):
         return value - (1 << 32) if value >> 31 else value
 
 
-def run_case(image, raw, profile, variant, config=None):
+def run_case(image, raw, profile, variant, registers=None):
     m = Card(image, profile, variant)
-    if config is not None:
-        m.regs.update(PORT_3_3)
+    if registers is not None:
+        m.regs.update(registers)
     m.cpu.mem_write(0x43000000, raw)
     assert m.call('sdrt_setup') == 1, 'setup refused the input'
     assert m.call('sdrt_bind', 2) == 1, 'PMIC bind failed'
@@ -220,6 +229,12 @@ def run_case(image, raw, profile, variant, config=None):
     m.ticks = ticks
     m.write(m.base + m.layout['pmic_parked'], 0 if variant == 'not-parked' else 1)
     quiet = m.call('sdrt_quiet')
+    # The final quiesce writes the controller without the register lock,
+    # after every provider has stopped; waive the model's lock assertion.
+    before = len(m.trace); m.held = True
+    clock_off = m.call('sdrt_clock_off'); m.held = False
+    m.write(m.base + m.layout['clock_off'], clock_off)
+    m.clock_writes = m.trace[before:]
     m.call('sdrt_report', 0 if r > 0 else 1)
     return m, r, quiet, steps
 
@@ -235,20 +250,35 @@ def run(elf, board, out):
     for name, profile, variant in [('profile-2', 2, 'nominal'), ('profile-3', 3, 'nominal'), ('window', 2, 'window'),
                                    ('absent', 2, 'absent'), ('crc-identify', 2, 'crc-identify'),
                                    ('crc-read', 2, 'crc-read'), ('not-parked', 2, 'not-parked'),
-                                   ('board-3', 3, 'nominal')]:
-        config = board if name == 'board-3' else FIXTURE
+                                   ('board-3', 3, 'nominal'), ('board-mbus-600', 2, 'nominal')]:
+        registers = dict(PORT_3_3)
+        if name == 'board-mbus-600': registers[0x02002588] = 0x81000000
+        if name.startswith('board-'):
+            (fabric, fabric_hz) = host.fabric([registers[a] for a in host.FABRIC])
+            config = dict(board, fabric=fabric, fabric_hz=fabric_hz)
+        else:
+            config = FIXTURE
         raw = host.input_bytes(profile, 0x1234567, config, plan, ids=(7, 9, 11))
-        m, r, quiet, steps = run_case(image, raw, profile, variant, board if name == 'board-3' else None)
+        m, r, quiet, steps = run_case(image, raw, profile, variant, registers if name.startswith('board-') else None)
         (out / f'{name}.log').write_text(m.log)
         value = host.decode_log(m.log, raw, 0 if r > 0 and quiet and m.field('done') == len(plan) else 1)
         reads = value['reads']
         for item in reads:
             assert item['crc32'] == binascii.crc32(service.payload(item['first'], item['blocks'])), item
-        if name in ('profile-2', 'profile-3', 'board-3'):
+        writes = [(a, v) for kind, a, v in m.clock_writes if kind == 'write']
+        if name == 'absent':
+            assert value['words']['SD_CLOCK_OFF'] == 2 and not writes
+        else:
+            assert value['words']['SD_CLOCK_OFF'] == 1, name
+            assert writes[-2][0] == 0x04020004 and not writes[-2][1] & (1 << 16) and writes[-1] == (0x04020018, 0x80202000)
+            assert not m.regs[0x04020004] & (1 << 16)
+        if name in ('profile-2', 'profile-3', 'board-3', 'board-mbus-600'):
             assert r == 1 and quiet == 1 and value['complete'] and len(reads) == 256, (name, r, quiet, value['outcome'])
             card = value['card']
             assert card['sectors'] == 33554432 and card['bus_width'] == 4
             assert card['card_hz'] == (50000000 if profile == 2 else 150000000)
+            if name.startswith('board-'):
+                assert host.parse_input(raw)['profile'] == profile and struct.unpack_from('<3I', raw, 72) == tuple(config['fabric'])
             assert card['timing'] == (1 if profile == 2 else 3)
             assert value['first_sector_hex'] == service.payload(0, 1).hex()
             assert set(value['throughput']) >= {'sequential', 'random', 'single'}, value['throughput']

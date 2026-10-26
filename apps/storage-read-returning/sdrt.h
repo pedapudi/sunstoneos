@@ -56,7 +56,7 @@ struct sdrt {
     struct sunxi_mmc_result result;
     atomic_uint failed, pmic_stop, pmic_parked;
     uint64_t start, end, started, identified_us;
-    unsigned stage, done, reason, card_valid;
+    unsigned stage, done, reason, card_valid, clock_off;
     uint32_t elapsed[SDRT_PLAN], crc[SDRT_PLAN];
     uint8_t first[512];
 };
@@ -64,6 +64,7 @@ extern struct sdrt sdrt;
 int sdrt_setup(void);
 int sdrt_step(void);
 int sdrt_quiet(void);
+int sdrt_clock_off(void);
 void sdrt_report(int outcome);
 uint64_t sdrt_ticks(void);
 #endif
