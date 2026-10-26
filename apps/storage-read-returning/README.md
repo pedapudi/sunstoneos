@@ -100,13 +100,21 @@ read cannot see the monitor's other conditions, MSI_LITE0 released and no
 active bus master. When the monitor skips the restore for any reason, the
 SD0 provider refuses the predicted MBUS word and the report says so
 (`SD_REASON=3`, with the provider's stage and fault); the monitor's `MBUS`
-line precedes the report only for codes 8 to 10. Input version 2 selects a
+line precedes the report only for codes 8 to 10. Input version 2 with
+`--plan measurement` (the compatible default) selects a
 240-read plan: 64 sequential and 64 random 4 KiB reads, 32 sequential and
 32 random 32 KiB reads, eight sequential and eight random 128 KiB reads,
 and 32 single sectors. Random starts align to the request size below sector
 4,194,304. Sequential classes start at sector zero. The first 64 reads
 repeat the accepted PIO run's sectors for CRC comparison. Profile 3 is the
 input tool's default; profile 2 remains explicit.
+
+For the first DMA read, use `input --profile 2 --plan first-read` with the
+same approval, request, DDR, survey, fabric-read, configuration and output
+arguments. This emits one read of sector 0, eight blocks (4096 bytes), in
+the existing input format. It exercises multi-block DMA and automatic stop
+without a measurement sweep. It refuses profile 3 and preserves all
+lifetime admission checks. The existing native binary accepts both plans.
 
 **Report.** The log lines of the result page:
 
@@ -142,10 +150,17 @@ input's plan and reports per-class throughput and observed card/data phases.
 It fits fixed request cost plus per-block cost over the sequential classes,
 with and without measured cache maintenance. Censored values are excluded,
 with explicit counts. The decoder also accepts version-1 PIO captures.
-For the first physical DMA qualification, pass `--reference` with the
-accepted PIO run's decoded `sd-result.json`; it requires the same card CID
-and matching CRCs for the 64 repeated reads. Without that argument the
-report makes no reference-parity claim.
+Successful first-read decoding requires `decode --reference PIO_RESULT`
+with the accepted profile-2 PIO run's decoded `sd-result.json`. It requires
+a complete successful reference, the same card CID and a matching sector-0,
+eight-block, 4096-byte record and CRC. Failed runs remain decodable without
+a reference. First-read reports contain no throughput fit.
+
+For `--plan measurement`, `decode --reference PIO_RESULT` retains the
+comparison of all 64 repeated reads. Measurement decoding without a
+reference makes no reference-parity claim. Neither plan establishes
+physical DMA recovery; whole-board power removal remains required after
+the first DMA lifetime.
 
 ## Time window
 

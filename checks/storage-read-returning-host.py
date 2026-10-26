@@ -41,6 +41,7 @@ No board, USB or queue access.
 """
 import argparse
 import binascii
+import copy
 import importlib.util
 import json
 import os
@@ -259,13 +260,132 @@ def dma_checks(out, native):
     print('PASS DMA host plan, censored timing, fits, strict reports and native-produced logs')
 
 
+def first_read_checks(out, real, native, reference_path):
+    """Only first-read production admission, input, decode and reference comparison.
+
+    Authority records are modeled. The accepted native log supplies the report
+    format; only the comparison fixture substitutes the accepted PIO CID/CRC.
+    No native execution, physical approval or board operation occurs here.
+    """
+    out.mkdir(parents=True, exist_ok=False)
+    results = {}; errors = []
+    ddr, survey = lifetime(out, 'first')
+    request = out / 'request.json'; request.write_text(json.dumps(REQUEST))
+    a = approval(out / 'approval.json', 'A', {'initial': {'authorize_one_cmd0_initialization': True}})
+    board = out / 'board.json'
+    board.write_text(json.dumps({k: v for k, v in CONFIG.items() if not k.startswith('fabric')}))
+    read = out / 'fabric-read'; read.mkdir()
+    d = json.loads((ddr / 'session.json').read_text())
+    read_record = dict(real, node=d['device'], identity=d['node_identity'], port='3-3',
+        complete=True, scratch_restored=True, transactions=[],
+        words={'0x2002500': 0x03000002, '0x2002580': 0xc3000000, '0x2002588': 0x84000000},
+        model='MODEL-NOT-PHYSICAL: existing read-record schema, substituted identity and fabric')
+    (read / 'session.json').write_text(json.dumps(read_record))
+    common = ['input', '--approval', str(a), '--request', str(request), '--ddr', str(ddr),
+              '--survey', str(survey), '--fabric-read', str(read), '--config', str(board), '--profile', '2']
+    raw_path = out / 'first-read.bin'
+    produce = common + ['--plan', 'first-read', '--output', str(raw_path)]
+    errors.append(refused(lambda: tool.main(produce), 'not signed for this lifetime'))
+    assert not raw_path.exists()
+    tool.sign(a, ddr, survey, 'MODEL')
+    other_ddr, other_survey = lifetime(out, 'other', node='/dev/bus/usb/003/060', identity=(7, 9, 9, 0, 0))
+    wrong_lifetime = produce.copy(); wrong_lifetime[wrong_lifetime.index('--ddr') + 1] = str(other_ddr)
+    wrong_lifetime[wrong_lifetime.index('--survey') + 1] = str(other_survey)
+    errors.append(refused(lambda: tool.main(wrong_lifetime), 'not signed for this lifetime'))
+    wrong_profile = produce.copy(); wrong_profile[wrong_profile.index('--profile') + 1] = '3'
+    errors.append(refused(lambda: tool.main(wrong_profile), 'first-read requires profile 2'))
+    for bad in (dict(read_record, complete=False), dict(read_record, identity=[0] * 5),
+                dict(read_record, words={})):
+        (read / 'session.json').write_text(json.dumps(bad))
+        errors.append(refused(lambda: tool.main(produce),
+            'did not pass' if not bad['complete'] else 'another node' if bad['identity'] != d['node_identity'] else 'lacks a fabric word'))
+    (read / 'session.json').write_text(json.dumps(read_record))
+    assert tool.main(produce) == 0
+    raw = raw_path.read_bytes(); given = tool.parse_input(raw)
+    assert len(raw) == 2192 and given['version'] == 2 and given['profile'] == 2 and given['plan'] == [(0, 8)]
+    assert not any(raw[152:]) and all(struct.unpack_from('<4Q', raw, 24))
+    assert struct.unpack_from('<3I', raw, 72) == (0x03000002, 0x83000000, 0x81000000)
+    metadata = json.loads(raw_path.with_suffix('.json').read_text())
+    assert metadata['input_sha256'] == tool.digest(raw_path)
+    assert metadata['ddr_session_sha256'] == tool.digest(ddr / 'session.json')
+    assert metadata['survey_session_sha256'] == tool.digest(survey / 'session.json')
+    assert metadata['fabric_read_sha256'] == tool.digest(read / 'session.json')
+    for offset, fmt, replacement in ((24, '<Q', 0), (32, '<Q', 2), (40, '<Q', 0),
+                                      (64, '<I', 0), (148, '<I', 257)):
+        malformed = bytearray(raw); struct.pack_into(fmt, malformed, offset, replacement)
+        errors.append(refused(lambda: tool.parse_input(malformed),
+            'identities' if offset in (24, 32, 40) else 'not an SD0' if offset == 64 else 'invalid plan'))
+    errors.append(refused(lambda: tool.parse_input(raw[:-1]), 'input size'))
+    # Both explicit measurement and its compatible default retain the 240-read plan.
+    for name, option in (('measurement', ['--plan', 'measurement']), ('default', [])):
+        path = out / (name + '.bin')
+        assert tool.main(common + option + ['--output', str(path)]) == 0
+        assert tool.parse_input(path.read_bytes())['plan'] == tool.dma_plan()
+    # Decode the existing frozen one-read output without running its image again.
+    native_log = native / 'no-idst-receive.log'; native_input = native / 'no-idst-receive.input.bin'
+    assert tool.parse_input(native_input.read_bytes())['plan'] == [(0, 8)]
+    value = tool.decode_log(native_log.read_text(), raw, 0)
+    assert value['complete'] and value['reads'][0]['bytes'] == 4096 and value['throughput'] == {}
+    reference = json.loads(reference_path.read_text())
+    errors.append(refused(lambda: tool.compare_reference(value, reference, True), 'same card'))
+    # Model only the card identity/data for a nominal host comparison with actual PIO evidence.
+    text = native_log.read_text().replace(value['card']['cid'], reference['card']['cid'])
+    text = text.replace(f"{value['reads'][0]['crc32']:08x}", f"{reference['reads'][0]['crc32']:08x}")
+    run = out / 'modeled-run'; run.mkdir()
+    (run / 'kernel.log').write_text(text)
+    (run / 'session.json').write_text(json.dumps({'result': {'status': 0}, 'model': 'MODEL-NOT-PHYSICAL'}))
+    decoded_path = out / 'decoded.json'
+    decode = ['decode', '--run', str(run), '--input', str(raw_path), '--output', str(decoded_path)]
+    errors.append(refused(lambda: tool.main(decode), 'requires --reference'))
+    assert not decoded_path.exists()
+    assert tool.main(decode + ['--reference', str(reference_path)]) == 0
+    value = json.loads(decoded_path.read_text())
+    (out / 'nominal-decoded.json').write_bytes(decoded_path.read_bytes())
+    assert value['reference_crc'] == {'matched_reads': 1, 'matched_bytes': 4096}
+    assert value['reference_sha256'] == tool.digest(reference_path)
+    for bad, message in ((None, 'must be complete'), (dict(reference, complete=False), 'must be complete'),
+                         (dict(reference, status=1), 'successful profile-2'),
+                         (dict(reference, card={}), 'same card'), (dict(reference, reads=[]), 'coverage')):
+        errors.append(refused(lambda: tool.compare_reference(value, bad, True), message))
+    for key, replacement, message in (('first', 8, 'reference sector'), ('blocks', 1, 'malformed'),
+                                      ('bytes', 512, 'malformed'), ('crc32', -1, 'malformed'),
+                                      ('crc32', reference['reads'][0]['crc32'] ^ 1, 'CRC mismatch')):
+        bad = copy.deepcopy(reference); bad['reads'][0][key] = replacement
+        errors.append(refused(lambda: tool.compare_reference(value, bad, True), message))
+    errors.append(refused(lambda: tool.compare_reference(dict(value, complete=False), reference, True), 'must be complete'))
+    errors.append(refused(lambda: tool.compare_reference(value, reference), 'coverage'))
+    # Existing measurement reference coverage still needs all 64 matching records.
+    measurement_raw = (out / 'measurement.bin').read_bytes()
+    measurement = tool.decode_log(log_for(measurement_raw), measurement_raw, 0)
+    full_reference = copy.deepcopy(measurement)
+    assert tool.compare_reference(measurement, full_reference)['matched_reads'] == 64
+    full_reference['reads'][63]['crc32'] ^= 1
+    errors.append(refused(lambda: tool.compare_reference(measurement, full_reference), 'CRC mismatch'))
+    # A failed first-read remains available for diagnosis without claiming parity.
+    (run / 'kernel.log').write_text(log_for(raw, 'stopped', reads=0))
+    (run / 'session.json').write_text(json.dumps({'result': {'status': 1}, 'model': 'MODEL-NOT-PHYSICAL'}))
+    assert tool.main(decode) == 0 and not json.loads(decoded_path.read_text())['complete']
+    results.update(passed=True, physical_access=False, refusals=errors, first_read_bytes=4096,
+        measurement_reads=240, comparison={'matched_reads': 1, 'matched_bytes': 4096},
+        sources={str(p): tool.digest(p) for p in (native_log, native_input, reference_path)},
+        scope='Host producer and decoder only; modeled authority and nominal comparison, accepted native log reused.')
+    (out / 'result.json').write_text(json.dumps(results, indent=1) + '\n')
+    print('PASS first-read producer admission, native report decode, PIO reference and measurement compatibility')
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--read-record', type=Path)
     parser.add_argument('--dma-native',type=Path,help='check only DMA changes using this native capture directory')
+    parser.add_argument('--first-read-native',type=Path,help='check only first-read host changes using the frozen one-read capture')
+    parser.add_argument('--reference',type=Path,help='accepted decoded profile-2 PIO result for first-read checks')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
-    if args.dma_native: dma_checks(args.output,args.dma_native)
+    if args.first_read_native:
+        if args.read_record is None or args.reference is None:
+            parser.error('--first-read-native requires --read-record and --reference')
+        first_read_checks(args.output,json.loads(args.read_record.read_text()),args.first_read_native,args.reference)
+    elif args.dma_native: dma_checks(args.output,args.dma_native)
     else:
         if args.read_record is None: parser.error('--read-record is required without --dma-native')
         main(args.output, json.loads(args.read_record.read_text()))
