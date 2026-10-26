@@ -208,17 +208,30 @@ static int job_read_output(void *context, void *out, size_t bytes)
     __asm__ volatile("dsb sy" ::: "memory");
     return 1;
 }
-/* Firmware events the job may raise without consequence: a debug dump
- * request, statistics and a core clock rate notice (upstream FWCCB types
- * 106-108). Any other event fails the control. */
-static uint32_t job_events;
+/* Firmware events. Upstream processes the firmware CCB without failing on
+ * any type it does not handle (pvr_ccb.c:139-160). The job records every
+ * event of types 101-108 and fails none of them, so the control and the
+ * kernel CCB still serve the cleanup and the stop: 106-108 (debug dump,
+ * statistics, core clock rate) need nothing; 105, a context reset
+ * notification (struct rogue_fwif_fwccb_cmd_context_reset_data,
+ * pvr_rogue_fwif.h:1348-1362, at command offset 8), ends the job as failed
+ * and its words are printed; 101-104 belong to geometry work, which this
+ * job never submits, and end it as failed too. 109 and 112, a restart
+ * request and a firmware page fault, latch the queue failed in
+ * pvr_ccb_receive; the stop then runs without the acknowledgements. */
+static uint32_t job_events, job_event_last, job_resets, job_unexpected;
+static uint32_t job_reset_words[10];
 static int job_event(void *context, const unsigned char command[PVR_CCB_COMMAND_BYTES])
 {
     (void)context;
     const uint32_t type = (uint32_t)command[0] | (uint32_t)command[1] << 8 | (uint32_t)command[2] << 16 |
         (uint32_t)command[3] << 24;
-    if (type < (PVR_CCB_MAGIC | 106u) || type > (PVR_CCB_MAGIC | 108u)) return 0;
+    if (type < (PVR_CCB_MAGIC | 101u) || type > (PVR_CCB_MAGIC | 108u)) return 0;
     ++job_events;
+    job_event_last = type;
+    if (type == (PVR_CCB_MAGIC | 105u)) {
+        if (!job_resets++) memcpy(job_reset_words, command + 8, sizeof(job_reset_words));
+    } else if (type < (PVR_CCB_MAGIC | 106u)) ++job_unexpected;
     return 1;
 }
 
@@ -242,7 +255,7 @@ static int job_output_matches(void)
  * would fail the shared kernel CCB and with it the stop: the job's own
  * deadline is the session's, and the job reads its output only after this
  * function has found it correct. Returns 1 for a complete job. */
-static unsigned job_outcome; /* 1 complete, 2 no timeline, 3 output differs, 4 transport */
+static unsigned job_outcome; /* 1 complete, 2 no timeline, 3 output differs, 4 transport, 5 firmware event */
 static int fws_job_run(uint64_t deadline)
 {
     struct bb_line line;
@@ -276,6 +289,7 @@ static int fws_job_run(uint64_t deadline)
         job_outcome = 4;
         for (;;) {
             if (pvr_gpu_control_poll(&control, 4) == PVR_GPU_CONTROL_FAULT) break;
+            if (job_resets || job_unexpected) { job_outcome = 5; break; }
             if (job.phase == PVR_JOB_WAIT_FENCE) {
                 uint32_t value = 0;
                 (void)job_read_fence(NULL, &value);
@@ -286,6 +300,12 @@ static int fws_job_run(uint64_t deadline)
             if (result) { job_outcome = result == 1 ? 1 : 4; break; }
             if (job.phase == PVR_JOB_WAIT_FENCE || job.phase == PVR_JOB_KICK) vTaskDelay(1);
         }
+    }
+    /* A KICK the firmware has consumed is settled now: a slot left pending
+     * would fail the kernel CCB at its deadline, and with it the stop. */
+    if (job_client.phase == PVR_CCCB_WAIT && control.phase == PVR_GPU_CONTROL_READY) {
+        (void)pvr_gpu_control_poll(&control, 4);
+        (void)pvr_cccb_poll(&job_client);
     }
     uint32_t timeline = 0;
     (void)job_read_fence(NULL, &timeline);
@@ -303,6 +323,31 @@ static int fws_job_run(uint64_t deadline)
     bb_line_dec(&line, "client", job_client.phase); bb_line_dec(&line, "client_error", job_client.error);
     bb_line_hex(&line, "kick_status", job_client.status); bb_line_hex(&line, "timeline", timeline);
     bb_line_end(&line); bb_power_print(&line);
+    /* The firmware events, the last one the control read (also one it
+     * refused), and the first context reset notification's words. */
+    const unsigned char *e = control.last_event;
+    bb_line_start(&line, "GPU FWJ events");
+    bb_line_dec(&line, "control", control.phase); bb_line_dec(&line, "control_error", control.error);
+    bb_line_dec(&line, "n", job_events); bb_line_hex(&line, "last", job_event_last);
+    bb_line_hex(&line, "read", (uint32_t)e[0] | (uint32_t)e[1] << 8 | (uint32_t)e[2] << 16 | (uint32_t)e[3] << 24);
+    bb_line_dec(&line, "resets", job_resets); bb_line_dec(&line, "unexpected", job_unexpected);
+    bb_line_end(&line); bb_power_print(&line);
+    if (job_resets) {
+        const uint32_t *r = job_reset_words;
+        bb_line_start(&line, "GPU FWJ reset");
+        bb_line_hex(&line, "ctx", r[0]); bb_line_dec(&line, "reason", r[1]); bb_line_dec(&line, "dm", r[2]);
+        bb_line_hex(&line, "ref", r[3]); bb_line_hex(&line, "flags", r[4]);
+        bb_line_hex(&line, "pc", (uint64_t)r[7] << 32 | r[6]); bb_line_hex(&line, "fault", (uint64_t)r[9] << 32 | r[8]);
+        bb_line_end(&line); bb_power_print(&line);
+    }
+    /* How far the firmware read the client CCB, and the KICK slot's
+     * return word. */
+    bb_line_start(&line, "GPU FWJ ring");
+    bb_line_hex(&line, "cccb_read", a733_mmio_read32_dsb_sy_after((uintptr_t)job_objects[2].storage.cpu + 4));
+    bb_line_hex(&line, "cccb_write", job_client.write);
+    bb_line_hex(&line, "kick_rtn", job_client.token.serial && job_client.token.slot < PVR_CCB_HOST_SLOTS ?
+                *shared_word(PVR_FW_RETURNS, job_client.token.slot * 4u) : UINT32_MAX);
+    bb_line_end(&line); bb_power_print(&line);
     bb_line_start(&line, "GPU FWJ output");
     bb_line_hex(&line, "w0", job_output_words[0]); bb_line_hex(&line, "w1", job_output_words[1]);
     bb_line_hex(&line, "w31", job_output_words[2]); bb_line_hex(&line, "guard", job_output_words[3]);
@@ -311,8 +356,11 @@ static int fws_job_run(uint64_t deadline)
     /* pvr_fw_structure_cleanup: KCCB 106, flags 0, cleanup type 0
      * (FWCOMMONCONTEXT), the context's firmware address; upstream waits for
      * its return word (pvr_fw.c:1127-1158). Bounded by the same deadline. */
+    /* The cleanup once the firmware has finished with the context: the job
+     * complete, never submitted, its timeline reached, or the context reset
+     * by the firmware. */
     if (stage >= 3 && queue.phase == PVR_CCB_ACTIVE && control.phase == PVR_GPU_CONTROL_READY &&
-        (result == 1 || job.phase == PVR_JOB_NEW)) {
+        (result == 1 || job.phase == PVR_JOB_NEW || timeline == job.sequence || job_resets)) {
         const uint32_t command[PVR_CCB_COMMAND_BYTES / 4] = {PVR_CCB_MAGIC | 106u, 0, 0, job_object_address[0]};
         uint64_t now = bb_power_now();
         if (pvr_ccb_submit(&queue, command, now, deadline, &job_cleanup_token) == PVR_CCB_OK) {

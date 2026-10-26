@@ -18,15 +18,19 @@ static int outside(const struct pvr_gpu_stop *s, const void *p, size_t n)
 static void add(struct pvr_gpu_stop *s, unsigned kind, unsigned off, unsigned width,
                 uint64_t mask, uint64_t value)
 { s->steps[s->count++] = (struct pvr_gpu_stop_step){kind,off,width,mask,value}; }
-int pvr_gpu_stop_init(struct pvr_gpu_stop *s, struct pvr_gpu_control *c,
-                      const void *image, size_t bytes, const struct pvr_gpu_stop_ops *ops,
-                      void *ctx, uint64_t deadline)
+/* The admission both entries share; acknowledged selects the control and
+ * queue states each requires. */
+static int plan(struct pvr_gpu_stop *s, struct pvr_gpu_control *c, const void *image, size_t bytes,
+                const struct pvr_gpu_stop_ops *ops, void *ctx, uint64_t deadline, int acknowledged)
 {
     struct pvr_fw_plan p;
-    if (!a733_span_excl_nonempty(s,sizeof(*s)) || s->phase != PVR_GPU_STOP_NEW ||
+    const uint32_t control = acknowledged ? PVR_GPU_CONTROL_READY : PVR_GPU_CONTROL_FAILED;
+    const uint32_t queue = acknowledged ? PVR_CCB_ACTIVE : PVR_CCB_FAILED;
+    if (!a733_span_excl_nonempty(s,sizeof(*s)) || (s->phase != PVR_GPU_STOP_NEW && s->phase != PVR_GPU_STOP_FAILED) ||
+        (s->phase == PVR_GPU_STOP_FAILED && (acknowledged || s->index || s->isolation_started)) ||
         !outside(s,c,sizeof(*c)) || !outside(s,ops,sizeof(*ops)) ||
-        c->phase != PVR_GPU_CONTROL_READY || !outside(s,c->queue,sizeof(*c->queue)) ||
-        c->queue->phase != PVR_CCB_ACTIVE || !deadline ||
+        c->phase != control || !outside(s,c->queue,sizeof(*c->queue)) ||
+        c->queue->phase != queue || !deadline ||
         !ops->now || !ops->read || !ops->write || !ops->sync_write || !ops->sync_read || !ops->isolate ||
         !pvr_fw_requirements(image,bytes,PVR_FW_A733_BVNC,&p) || !outside(s,image,bytes) ||
         p.device_info_counts[0] != 1 || p.device_info_counts[1] != 1 || p.device_info_counts[2] != 2)
@@ -36,7 +40,10 @@ int pvr_gpu_stop_init(struct pvr_gpu_stop *s, struct pvr_gpu_control *c,
     for (unsigned i=9;i<16;++i) if (f[i]) return 0;
     struct pvr_gpu_stop result = {0};
     result.ops=*ops; result.control=c; result.context=ctx; result.deadline=deadline;
-    result.last_now=c->last_now; result.phase=PVR_GPU_STOP_CLEAR_IDLE;
+    result.last_now=acknowledged || s->phase == PVR_GPU_STOP_NEW ? c->last_now : s->last_now;
+    if (c->last_now > result.last_now) result.last_now=c->last_now;
+    result.phase=acknowledged ? PVR_GPU_STOP_CLEAR_IDLE : PVR_GPU_STOP_REGISTERS;
+    result.unacknowledged=!acknowledged;
     /* RGXStop: acknowledge a pending MIPS interrupt (RGXAckIrqMIPS,
      * rgxinit.c:420-460), wait for Sidekick and the SLC, clear the thread-0
      * DM associations (thread 1 is META only), run the idle checks, and
@@ -52,6 +59,14 @@ int pvr_gpu_stop_init(struct pvr_gpu_stop *s, struct pvr_gpu_control *c,
     add(&result,POLL,0x3c8,4,0x78,0x78); add(&result,POLL,0x3c8,4,4,4);
     *s=result; return 1;
 }
+int pvr_gpu_stop_init(struct pvr_gpu_stop *s, struct pvr_gpu_control *c,
+                      const void *image, size_t bytes, const struct pvr_gpu_stop_ops *ops,
+                      void *ctx, uint64_t deadline)
+{ return a733_span_excl_nonempty(s,sizeof(*s)) && s->phase==PVR_GPU_STOP_NEW && plan(s,c,image,bytes,ops,ctx,deadline,1); }
+int pvr_gpu_stop_init_unacknowledged(struct pvr_gpu_stop *s, struct pvr_gpu_control *c,
+                                     const void *image, size_t bytes, const struct pvr_gpu_stop_ops *ops,
+                                     void *ctx, uint64_t deadline)
+{ return plan(s,c,image,bytes,ops,ctx,deadline,0); }
 static enum pvr_gpu_stop_result fail(struct pvr_gpu_stop *s, unsigned error)
 {
     s->phase=PVR_GPU_STOP_FAILED; s->error=error;
@@ -74,8 +89,11 @@ enum pvr_gpu_stop_result pvr_gpu_stop_poll(struct pvr_gpu_stop *s)
     if (s->phase==PVR_GPU_STOP_FAILED) return PVR_GPU_STOP_FAULT;
     if (s->phase==PVR_GPU_STOP_STOPPED) return PVR_GPU_STOP_OK;
     if (s->phase<PVR_GPU_STOP_CLEAR_IDLE || s->phase>PVR_GPU_STOP_ISOLATE) return PVR_GPU_STOP_INVALID;
+    /* Without the acknowledgements the control and queue stay latched
+     * failed, so no kernel CCB traffic can follow the register sequence. */
     int retired=s->phase>=PVR_GPU_STOP_REGISTERS;
-    if (s->control->phase!=(retired ? PVR_GPU_CONTROL_RETIRED : PVR_GPU_CONTROL_READY) ||
+    if (s->unacknowledged ? s->control->phase!=PVR_GPU_CONTROL_FAILED || s->control->queue->phase!=PVR_CCB_FAILED :
+        s->control->phase!=(retired ? PVR_GPU_CONTROL_RETIRED : PVR_GPU_CONTROL_READY) ||
         s->control->queue->phase!=(retired ? PVR_CCB_RETIRED : PVR_CCB_ACTIVE))
         return fail(s,PVR_GPU_STOP_CONTROL);
     uint64_t now, value=0;
