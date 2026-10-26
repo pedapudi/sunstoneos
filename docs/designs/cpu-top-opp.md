@@ -503,7 +503,11 @@ workload ends the lifetime with the A76 cores possibly running at 2002 MHz
 and CPU0 at 1794 MHz; only a power removal recovers it. A deadline return
 resets CPU0 into the ROM, which resets CPU-L and the DSU but not CPU-B: a
 secondary still running on CPU-B runs at 2002 MHz with DCDC3 at 1050 mV,
-and the lifetime also ends with a power removal, before any other image. The
+and the lifetime also ends with a power removal, before any other image.
+A deadline return with every secondary completed (mask `0xfe`) means the
+lowering refused or failed: no secondary runs, CPU-B is at 2002 MHz or
+parked on the oscillator at 1050 mV, the lowering record at report offset
+`0x160` gives the code, and the lifetime ends with a power removal. The
 deadline unit returns CPU0 1.5 s after the launch (the 1 s startup deadline
 plus 0.5 s), and the runner waits 10 s after its `exe` transaction for the
 returned FEL instance. The operator therefore removes power at once when the
@@ -522,7 +526,13 @@ equals the frozen deadline overlay byte for byte. This set replaces
 CPU-B raised for bundle 27 to lower, `step6-set-2`, whose bundle 25 returned
 with CPU-B raised, and `step6-set`; those must not run. Bundle 27's order
 entry names the workload as a gate (`after_external` in the set's lifetime
-order). The binding script refuses
+order). After review round two, two runbook passages were corrected
+without changing any image, build, host or binding file: the set runbook's
+bundle 26 action now covers the CPU-B rate refusal, and the workload
+runbook adds the lowering-failure outcome. The correction record,
+`step6/step6-set-4-runbook-corrected.json`, gives both files' previous and
+new SHA-256; `bundle-deadline-top-4.sha256` changed only in the runbook
+line. The binding script refuses
 port 3-1, whose bin, oscillator and supplies have not been read, and requires
 that bundle 26's run record and every later record belong to the current
 survey's instance chain: each launch starts on the instance of the record
