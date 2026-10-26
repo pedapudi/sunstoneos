@@ -34,6 +34,7 @@ static inline int os_workload_valid(unsigned workload)
 /* The microphone build appends 184 bytes of I2S receive facts to the
  * 808-byte session. The stage-2 loader admits either size, so these
  * definitions do not depend on the build. */
+#include "npu-session.h"
 #define OS_AUDIO_SESSION_MAGIC UINT64_C(0x415337334f415531)
 #define OS_AUDIO_SESSION_VERSION 1u
 #define OS_AUDIO_SESSION_BYTES 184u
@@ -222,6 +223,9 @@ int os_capture(unsigned g,const uint8_t **wav,size_t *bytes);
  * and network client, and the headset build the Bluetooth owner and the
  * headset capture client. */
 enum { OS_SERVICE_MIMUS=5, OS_SERVICE_THERMAL,
+#ifdef SUNSTONE_A733_OS_NPU
+    OS_SERVICE_NPU,
+#endif
 #ifdef SUNSTONE_A733_OS_AUDIO
     OS_SERVICE_AUDIO,
 #endif

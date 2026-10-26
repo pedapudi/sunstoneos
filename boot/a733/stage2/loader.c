@@ -463,9 +463,10 @@ static const struct slot_extent *session_extent(const struct slot_header *h)
 }
 /* Resident contract for the integrated OS image (docs/os-image.md). The slot
  * supplies the session page as an asset; the slot header's extent digest
- * already authenticated it. Recorded workload 2 has 808 bytes, or 904 with
- * the CPU grant; its persisted epochs are zero. The separate microphone
- * profile retains 992 bytes. Every size must match the session's size field. The loader stamps a fresh epoch into the session, binds its new
+ * already authenticated it. Recorded workload 2 has 808 bytes, plus 272 for
+ * NPU and 96 for the trailing CPU grant when selected; persisted epochs are
+ * zero. The separate microphone profile retains 992 bytes. Every size must
+ * match the session's size field. The loader stamps a fresh epoch, binds its new
  * digest, its size and the image build ID that the session names, and
  * publishes the contract magic last. Deadlines count from arming. */
 static _Noreturn void enter(const struct slot_header *h)
@@ -476,8 +477,10 @@ static _Noreturn void enter(const struct slot_header *h)
         (volatile struct a733_smp_contract *)(uintptr_t)A733_SMP_CONTRACT_ADDRESS;
     volatile uint64_t *result = (volatile uint64_t *)(uintptr_t)A733_SMP_RESULT_ADDRESS;
     const struct os_session *os = (const struct os_session *)(uintptr_t)A733_BOARD_SESSION_ADDRESS;
-    if (!e || (e->bytes != A733_OS_SESSION_BYTES &&
-               e->bytes != A733_OS_SESSION_BYTES + sizeof(struct a733_cpu_clock_grant_record) &&
+    const unsigned base = e && e->bytes >= A733_OS_SESSION_BYTES + OS_NPU_SESSION_BYTES ?
+        A733_OS_SESSION_BYTES + OS_NPU_SESSION_BYTES : A733_OS_SESSION_BYTES;
+    if (!e || (e->bytes != base &&
+               e->bytes != base + sizeof(struct a733_cpu_clock_grant_record) &&
                e->bytes != A733_OS_SESSION_BYTES + OS_AUDIO_SESSION_BYTES)) finish(ENTRY_REFUSED, 1);
     if (s->magic != A733_BOARD_SUPERVISED_SESSION_MAGIC || s->version != 2 ||
         s->bytes != sizeof(*s) || s->generation != h->generation || !s->lease ||
@@ -485,8 +488,8 @@ static _Noreturn void enter(const struct slot_header *h)
         finish(ENTRY_REFUSED, 2);
     struct a733_cpu_clock_grant_record *grant = 0;
     if (s->workload == 2) {
-        if ((e->bytes != A733_OS_SESSION_BYTES &&
-             e->bytes != A733_OS_SESSION_BYTES + sizeof(*grant)) || s->epoch || !s->sid_authority)
+        if ((e->bytes != base &&
+             e->bytes != base + sizeof(*grant)) || s->epoch || !s->sid_authority)
             finish(ENTRY_REFUSED, 3);
         /* Only this recorded-card profile interprets sid_evidence as the
          * four identity words' digest; headset/radio profiles are unchanged. */
@@ -494,8 +497,8 @@ static _Noreturn void enter(const struct slot_header *h)
         for (unsigned i = 0; i < 4; ++i) sid[i] = rd(0x03006200 + 4*i);
         storage_digest_bytes(sid, sizeof(sid), digest);
         if (memcmp(digest, s->sid_evidence, sizeof(digest))) finish(ENTRY_REFUSED, 4);
-        if (e->bytes != A733_OS_SESSION_BYTES) {
-            grant = (void *)((uint8_t *)s + A733_OS_SESSION_BYTES);
+        if (e->bytes != base) {
+            grant = (void *)((uint8_t *)s + base);
             if (grant->magic != A733_CPU_CLOCK_GRANT_MAGIC || grant->version != 1 ||
                 grant->bytes != sizeof(*grant) || !grant->owner || grant->epoch ||
                 grant->generation != h->generation || grant->clusters != 3 ||
@@ -503,7 +506,8 @@ static _Noreturn void enter(const struct slot_header *h)
                 grant->changes > A733_CPU_CLOCK_GRANT_CHANGES || zero(grant->approval, 32))
                 finish(ENTRY_REFUSED, 5);
         }
-    } else if (e->bytes == A733_OS_SESSION_BYTES + sizeof(*grant)) finish(ENTRY_REFUSED, 3);
+    } else if (e->bytes == A733_OS_SESSION_BYTES + sizeof(*grant) ||
+               base != A733_OS_SESSION_BYTES) finish(ENTRY_REFUSED, 3);
     /* The image refuses a contract whose generation a retained result already
      * holds. Each boot of a slot repeats its generation, so a result left by
      * the previous boot moves into this report before it is cleared. */

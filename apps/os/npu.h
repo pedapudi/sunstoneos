@@ -6,17 +6,7 @@
 #define OS_NPU_CORE 1u
 #define OS_NPU_POOL_START UINT64_C(0x47400000)
 #define OS_NPU_POOL_BYTES UINT64_C(0x800000)
-#define OS_NPU_SESSION_MAGIC UINT64_C(0x415337334f4e5031)
-#define OS_NPU_SESSION_BYTES 272u
-/* Fixed optional profile; the supervisor grants this exact private interval.
- * Evidence hashes bind external facts, never manufacture those facts. */
-struct os_npu_session {
-    uint64_t magic,version,bytes,owner,command_admission,supervisor;
-    uint32_t pck_client,client_model,jobs,reserved;
-    uint64_t pool_start,pool_bytes;
-    uint8_t catalogue[32],admission[32],clock[32],power[32],supervision[32],ddr[32];
-};
-_Static_assert(sizeof(struct os_npu_session)==OS_NPU_SESSION_BYTES,"OS NPU session geometry");
+#include "npu-session.h"
 extern const struct npu_runtime_model os_npu_models[OS_NPU_MODELS];
 extern const uint8_t os_npu_catalogue_digest[32];
 struct os_npu_vector { const uint8_t *data; size_t bytes; };
@@ -41,6 +31,10 @@ int os_npu_submit(uint64_t timeout_us);
 int os_npu_close(void);
 int os_npu_stopping(void);
 unsigned os_npu_stopped(void);
+/* Caller progress must remain within the finite NPU work deadline. */
+int os_npu_progress(void);
+/* Published finite result with local stop complete and no retained failure. */
+int os_npu_complete(void);
 void os_npu_client_task(void *);
 int os_npu_task_privileged(void (*)(void *),void *);
 struct a733_pin_handoff;

@@ -20,6 +20,10 @@ uint64_t a733_smp_counter(void);
 const struct os_service os_services[OS_SERVICES]={
     {"board-pmic",1000000},{"board-usb0",1000000},{"board-typec",1000000},
     {"board-power",1000000},{"board-usb2",1000000},{"mimus",3000000},{"thermal",1000000},
+#ifdef SUNSTONE_A733_OS_NPU
+    /* One request can spend two seconds sending and two collecting. */
+    {"npu",5000000},
+#endif
 #ifdef SUNSTONE_A733_OS_AUDIO
     {"audio",1000000},
 #endif
@@ -56,6 +60,11 @@ static int services_state(uint64_t now,unsigned *first)
         /* main.c creates these three tasks only for host workloads. Keep
          * their stable service IDs without demanding reports from absent tasks. */
         if(!(required&(1u<<i)))continue;
+#ifdef SUNSTONE_A733_OS_NPU
+        /* The finite caller publishes only after actual local stop. Its
+         * suspended terminal state needs no artificial heartbeat. */
+        if(i==OS_SERVICE_NPU&&os_npu_complete())continue;
+#endif
         uint64_t t=atomic_load_explicit(&seen[i],memory_order_acquire);
         if(!t){if(!pending)*first=i;pending=1;continue;}
         /* A record newer than now comes from another core's later read. */

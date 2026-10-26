@@ -37,6 +37,11 @@ static void gicd_barrier(void){}
 #include "../apps/os/irq.c"
 static unsigned thermal_calls,audio_calls;
 void os_thermal_irq(void){++thermal_calls;}
+#ifdef SUNSTONE_A733_OS_NPU
+void os_npu_irq(void){}
+static unsigned npu_terminal;
+int os_npu_complete(void){return npu_terminal;}
+#endif
 #ifdef SUNSTONE_A733_OS_AUDIO
 void os_audio_irq(void){++audio_calls;}
 #define ROUTES 2u
@@ -257,6 +262,15 @@ static void nominal_session(struct os_session *s,uint64_t generation)
     memcpy(a->dma.fabric,b->fabric,sizeof(b->fabric));memcpy(a->dma.rate_hz,b->fabric_hz,sizeof(b->fabric_hz));
     a->dma_controller=0x04601000;a->dma_established=OS_AUDIO_DMA_ESTABLISHED;
     a->dma_owned_channels=0xffff;a->dma_service_channels=1;a->capture_samples=48000;
+#endif
+#ifdef SUNSTONE_A733_OS_NPU
+    s->npu.magic=OS_NPU_SESSION_MAGIC;s->npu.version=1;s->npu.bytes=OS_NPU_SESSION_BYTES;
+    s->npu.owner=19;s->npu.command_admission=20;s->npu.supervisor=21;s->npu.pck_client=1;
+    s->npu.client_model=os_npu_client_model;s->npu.jobs=1;
+    s->npu.pool_start=OS_NPU_POOL_START;s->npu.pool_bytes=OS_NPU_POOL_BYTES;
+    memcpy(s->npu.catalogue,os_npu_catalogue_digest,32);
+    memset(s->npu.admission,1,160);
+    b->fabric[0]=0x03000002;b->fabric[1]=0x83000002;b->fabric[2]=0x81000002;
 #endif
 #ifdef SUNSTONE_A733_OS_CPU_CLOCK
     /* A grant that names no cluster: every clock and voltage stays. */
@@ -488,6 +502,20 @@ int main(int argc,char **argv)
         int ok=a733_smp_contract_valid(&c,strtoull(argv[4],0,0));
         printf("%s\n",ok?"admitted":"refused");return ok?0:1;
     }
+#ifdef SUNSTONE_A733_OS_NPU
+    if(argc==2&&!strcmp(argv[1],"--npu-health")){
+        service_session.board.workload=2;ticks=HZ;
+        for(unsigned i=0;i<OS_SERVICES;++i)if(i<2||i>4)board_service_progress(i);
+        assert(os_services_healthy(ticks/24)==1);
+        ticks+=5*HZ;
+        for(unsigned i=0;i<OS_SERVICES;++i)if((i<2||i>4)&&i!=OS_SERVICE_NPU)board_service_progress(i);
+        assert(os_services_healthy(ticks/24)==1);
+        ticks+=48;
+        assert(os_services_healthy(ticks/24)==0);
+        npu_terminal=1;assert(os_services_healthy(ticks/24)==1);
+        puts("PASS NPU five-second service window and completed-client exemption");return 0;
+    }
+#endif
     if(argc==2&&!strcmp(argv[1],"--selected-services")){recorded_service_cases();return 0;}
     assert(argc==1);
     irq_cases();
