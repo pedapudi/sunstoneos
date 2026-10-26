@@ -68,7 +68,8 @@ does not establish recovery from a fault.
 | --- | --- | --- |
 | Cold entry | `work/cold-arm-cache-audit-1026` | Establish a source-backed secondary wake/reset ownership sequence; non-Arm writer exclusion remains separate |
 | Bluetooth startup | `work/radio-bootstrap-rate-1026` | Audit the remaining bootstrap deadline and first-readiness semantics after integrating fast SDIO startup |
-| GPU integration | `work/resume-gpu-wait-1026` | Verify the merged link checker against the frozen supervised GPU image |
+| Resident NPU | implementation design | Extend the existing OS NPU application and cold-card session with bounded resident health and thermal ownership |
+| Cold non-Arm ownership | source audit | Establish OR100 and crypto-engine exclusion without assuming an idle snapshot proves drain |
 
 Independent reviewers cover CPU/thermal/DRAM, accelerator operation and peripheral
 integration. Workers reuse successful evidence and submit focused checks. The
@@ -153,6 +154,8 @@ be pruned.
   pass under `~/.cache/sunstoneos/evidence/resume-gpu-wait-20261026/`.
   Added storage is 1,288 executable bytes, 56 mutable bytes and 32 read-only
   bytes. Completion copies one eight-byte reply; workload buffers are not copied.
+  The merged link checker accepts both the frozen GPU image and the resident
+  eight-worker image; no rebuild or runtime replay was needed for integration.
   Physical GPU recognition, failure drain and recovery remain unqualified.
 - **NPU interrupt waits are bounded in software.** Pending mask, rearm and
   stop callbacks expire after 10 ms plus one scheduler tick, observed on the
