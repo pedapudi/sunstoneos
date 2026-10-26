@@ -150,12 +150,26 @@ All 32 output words matched, with no firmware events or resets. Cleanup and
 the stop were acknowledged, and the GPU powered off. Preparation took 1.45 ms
 and the eight jobs 2.39 ms in total.
 
-**CPU step 6, second attempt on port 3-3** (`board-session-cpu-top-opp-8`,
-`step6-set-4`): bundles 2, 25 and 26 passed, and after the ROM return all
-three domains read their boot words with both rails held. The workload did
-not launch. Its binding (`cpu-prepare.py`) compares bundle 26's ELF hash with
-the record's `image_sha256`, which holds the uploaded `probe.bin` hash, so it
-refuses every real record. The fix is pending review.
+**CPU step 6 passed on port 3-3** (`board-session-cpu-top-opp-10/port-3-3`,
+set `step6-set-5`). In one lifetime, with an operator present:
+- bundle 25 raised CPU-L to 1794 MHz at 1000 mV and the DSU to 1274 MHz, and
+  set DCDC3 to 1050 mV with CPU-B kept at 1014 MHz;
+- bundle 26 read the boot words after the ROM return;
+- the workload relocked CPU-B to 2002 MHz, CPU-L and the DSU, and ran all
+  eight cores: 32 rounds each, 32 ticks on CPU0 and 33 SGIs on each
+  secondary. It powered the secondaries off, lowered CPU-B to 1014 MHz at
+  EL3, and returned with DRAM restored in 7 s;
+- bundle 27 read the three boot words and both rails afterwards, at 37 °C at
+  most.
+
+The background progress counts (about 2.66 million per A55 core and 3.27
+million per A76 core) are far above the predicted 300,000 and 260,000; the
+analysis is on `work/cpu-top-opp-step6-1025`. An earlier attempt
+(`board-session-cpu-top-opp-8`) stopped before launch because its binding
+compared the wrong hash kind; set 5 fixed it.
+
+**P-state-0-only DRAM capture, port 3-1** (`board-session-20261025-31`):
+training took 4,451 ms, 12,288 MiB, and both captures passed.
 
 **First GPU compute job passed on port 3-1** (set `board-bundles-20261025-29`,
 `board-session-20261025-28/port-3-1`, record `s27-gfj-run`). After the cold DDR
