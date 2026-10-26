@@ -330,9 +330,10 @@ static void admission_cases(void)
     SESSION_REFUSED(SESSION->magic^=1);
     SESSION_REFUSED(SESSION->bytes=592);
     SESSION_REFUSED(SESSION->alarm_mask=15);
+    SESSION_REFUSED(SESSION->cpu_critical_millicelsius=110001);
     SESSION_REFUSED(SESSION->limits[2][2]=1501);
     SESSION_REFUSED(SESSION->apb1=0x03000003;SESSION->apb1_hz=0);
-    SESSION_REFUSED(SESSION->reserved[5]=1);
+    SESSION_REFUSED(SESSION->reserved[1]=1);
     SESSION_REFUSED(SESSION->board.deadline_us=1);
 #ifdef SUNSTONE_A733_OS_RADIO
     /* The radio build admits workload 1 only, and the board's radio rules apply. */
@@ -449,6 +450,9 @@ int main(int argc,char **argv)
         if(!strcmp(argv[1],"--write-staged-session")){without_host(&SESSION->board);assert(os_session_valid(SESSION));}
         FILE *f=fopen(argv[2],"wb");assert(f&&fwrite(SESSION,1,sizeof(*SESSION),f)==sizeof(*SESSION));fclose(f);
         return 0;
+    }
+    if(argc==3&&!strcmp(argv[1],"--check-session")){
+        read_file(argv[2],sizeof(*SESSION),SESSION);assert(os_session_valid(SESSION));return 0;
     }
     if(argc==5&&!strcmp(argv[1],"--admit")){
         struct a733_smp_contract c;read_file(argv[2],sizeof(c),&c);read_file(argv[3],sizeof(*SESSION),SESSION);

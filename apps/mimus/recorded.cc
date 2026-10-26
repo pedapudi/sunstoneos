@@ -23,6 +23,8 @@
 // The integrated OS image supplies its CPU clock record; other native images
 // leave the weak reference null and print no clock line.
 extern "C" __attribute__((weak)) int os_cpu_clock_line(char *line, size_t bytes);
+extern "C" __attribute__((weak)) void os_thermal_record_begin(void);
+extern "C" __attribute__((weak)) void os_thermal_record_end(int success);
 #endif
 static void report_clock()
 {
@@ -219,7 +221,15 @@ bool mimus_engine_finish(unsigned options, bool success)
 bool mimus_transcribe_recorded(std::span<const uint8_t> inputs[3],std::span<uint8_t> internal_arena,
                                const std::atomic<bool> *stop,unsigned options)
 {
-    return mimus_engine_finish(options, recognize(inputs, internal_arena, stop, options));
+#ifdef SUNSTONE_MIMUS_NATIVE
+    if (os_thermal_record_begin) os_thermal_record_begin();
+#endif
+    const bool success = recognize(inputs, internal_arena, stop, options);
+#ifdef SUNSTONE_MIMUS_NATIVE
+    // Freeze after both compute_us and total_us, also on early error returns.
+    if (os_thermal_record_end) os_thermal_record_end(success);
+#endif
+    return mimus_engine_finish(options, success);
 }
 bool mimus_transcribe_recorded(std::span<const uint8_t> inputs[3],std::span<uint8_t> internal_arena,
                                const std::atomic<bool> *stop)

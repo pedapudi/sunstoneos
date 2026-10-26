@@ -688,14 +688,20 @@ the same power cycle on port 3-3:
 - after B1, its record of schema `a733-os-cpu-clock-b1-v1`, which the `TOP`
   approval must cite.
 
-The 70 °C stop is not yet built for these runs. The OS thermal policy's
-trips are compiled constants, the vendor's THROTTLE at 90 °C and CRITICAL at
-110 °C (`drivers/thermal/a733_thermal.c`). The session's hardware alarm
-thresholds are not inputs to the policy. A 70 °C stop therefore needs a
-policy change before step 7 is frozen: a CRITICAL trip at 70 °C on every CPU
-sensor for these runs, which ends the session. The run's record must also
-carry the thermal task's readings, taken about every 100 ms, through the
-timed recognition.
+The OS session now carries an optional CPU CRITICAL trip in millicelsius at
+bytes 804..807. Both runs require a reviewed template with this field set to
+70000. Host preparation and native admission refuse values above the vendor's
+110000; zero retains the vendor trip for existing sessions. The policy uses
+the lower trip for CPUB and CPUL and ends the session when either reaches it.
+
+The thermal task records all five temperatures and their ages about every
+100 ms. The CPU-clock image freezes the first recognition's window and serves
+it through USB operation 7, separately from recognized text. The host saves
+`thermal-report.bin` and its decoded JSON after recognition capture. Missing,
+stale, incomplete or overflowing evidence cannot establish the temperature
+condition. A critical board failure can prevent USB delivery; the terminal
+reading remains in RAM until power removal. See [the OS thermal
+contract](../os-image.md#thermal-service) for the layout and bounds.
 
 Predictions for the bench recording, from the A2 estimate of
 [cpu-a76-dvfs.md](cpu-a76-dvfs.md) (14.894 s × 494 ÷ (2 × 2 × f) for the
@@ -717,28 +723,32 @@ below the bin's top points and both clusters for step A2 (48 cases);
 `checks/cpu-clock-check.py` checks the DSU rule's points, including 1274 MHz
 for vf0400 with CPU-L at 1794 MHz and CPU-B at 2002 MHz.
 `checks/os-cpu-clock-native.py` passes on the same build but covers the
-register adapter only; no check yet drives the owner's request order for a
-grant of both clusters.
+register adapter and the actual owner's request order: CPU-B, CPU-L, then
+the DSU at 1274 MHz. The owner waits for the corresponding CPU sensor before
+each request and publishes readiness after completion. The fixture models
+driver completions; it does not qualify physical clocks or rails.
 
 ## Next steps
 
 - **Step 7, the sustained load.** The OS-image runs above (B1, then `TOP`)
-  wait for three things. First, a 70 °C stop in the OS thermal policy: a
-  session field for a CRITICAL trip at or below the vendor's, validated by
-  `apps/os/prepare.py` and used by the policy as the lower of the two.
-  Second, B1: rank 5, the reviewed physical entry record, and a producer of
-  the `a733-os-cpu-clock-b1-v1` record. Third, power cycles: the integrated
+  have software support for the 70 °C CPU stop and bounded temperature
+  evidence. They still need rank 5, the reviewed physical entry record,
+  templates with the CPU trip set to 70000, and a producer of the
+  `a733-os-cpu-clock-b1-v1` record. They also need power cycles: the integrated
   OS image ends at a terminal halt that only a power removal clears, and
   the boards cannot be power-cycled until further notice. Review the
-  policy change, the session format change and the clock owner's order for
-  a grant of both clusters, which no check drives yet, before any freeze.
+  exact launch inputs before any freeze. Host and native checks cover the
+  policy, session extension and both-cluster owner order; board qualification
+  remains pending.
   Until power cycles return, a CPU set must continue an existing lifetime
   and return on every reachable outcome with the clocks and rails at boot
   values. Step 6's sets left DCDC3 at 1050 mV and DCDC5 at 1000 mV for the
-  power removal, so a continuing set also needs a last image that lowers
-  both rails with the clocks at their boot rates. For DCDC5 that needs a
-  write like `dcdc3_change` with CPU-L and the DSU held, which does not
-  exist yet.
+  power removal. The successful-set rail-return helper now lowers both
+  rails after checking the boot clock words, including DCDC5 with CPU-L
+  and the DSU held (`36fee1b7`, `checks/cpu-rails-return.c`). Its software
+  checks pass. Physical rail restoration and restoration on fatal or
+  deadline outcomes remain unqualified, so this helper does not yet make
+  every reachable outcome safe for a continuing lifetime.
 - **CPU-B after a ROM return.** The ROM resets CPU-L and the DSU but not
   CPU-B. Every image that raises CPU-B lowers it to 1014 MHz before a
   successful return; a failed return can leave it raised, with DCDC3 at
@@ -749,14 +759,11 @@ grant of both clusters.
   `-O`-proof checks and names the rail read-back image bundle 31; the next
   freeze takes it, with `binding.json` beside it, and
   `checks/top-opp-workload-bind.py` then runs against that freeze.
-- **The returning overlay no longer links on bringup.** Bringup's MBUS
-  restore in `identity_primary_run` (`01308e9e`, `3f09ec2c`) grows the overlay's
-  `identity-c.o` by about 870 bytes. The return-deadline workload profile
-  now exceeds its 16 KiB reservation, with or without `--top-opp`. That
-  profile's next freeze needs a new layout, for example the extension
-  placed in the gap after the base overlay when no relock or vector table
-  uses it, or the MBUS window moved into the native image the overlay
-  calls.
+- **The returning overlay fits again.** The returning workload layout
+  (`d3bf5ab8`) places its extension within the saved overlay reservation.
+  The top-point image links with 68 bytes of headroom. The layout and its
+  software checks close the earlier MBUS-related size failure; they do not
+  establish physical return or restore the rails on fatal/deadline outcomes.
 - **The performance-mode toggle.** The default path is CPU-B, CPU-L and the
   DSU at the top points through the driver, in the order and with the
   waits above. The toggle lowers through the same driver: the DSU first,

@@ -304,8 +304,17 @@ def main():
         'thermal-evidence-hash': lambda: prepare('r4', **session_with(lambda v: v.__setitem__(slice(632, 633), b'\0'), 'thermal')),
         'unexpected-host-authority' if args.staged else 'workload-two-with-storage-authority':
             lambda: prepare('r5', **session_with(lambda v: struct.pack_into('<I', v, 536 if args.staged else 400, 2), 'workload')),
+        'cpu-critical-above-vendor': lambda: prepare('r12', **session_with(lambda v: struct.pack_into('<I', v, 804, 110001), 'cpu-critical')),
+        'thermal-reserved': lambda: prepare('r13', **session_with(lambda v: v.__setitem__(802, 1), 'thermal-reserved')),
         'rom-takeover-reference': lambda: prepare('r11', **session_with(lambda v: struct.pack_into('<I', v, 532, 2), 'usb-reference')),
     }
+    qualification = prepare('MODEL-NOT-DEPLOYABLE-70C', **session_with(
+        lambda v: struct.pack_into('<I', v, 804, 70000), 'qualification-70C'))
+    qualified_session = out / 'MODEL-NOT-DEPLOYABLE-70C/board/session.bin'
+    assert struct.unpack_from('<I', qualified_session.read_bytes(), 804)[0] == 70000
+    # Run the same C admission used by the native image, with the producer's bytes.
+    subprocess.run([str(model), '--check-session', str(qualified_session)], check=True)
+    cases['prepared-session-70C-native-admission'] = True
     other = dict(manifest, audio=not audio)
     (out / 'other-link-check.json').write_text(json.dumps(other))
     refusals['link-check-of-other-configuration'] = lambda: prepare('r6', check=out / 'other-link-check.json')
@@ -474,10 +483,11 @@ def main():
             raise ValueError(capture_error[0])
         return record
     saved = (tool.freeze_bundle, tool.combined.launch_view, tool.supervisor.run_session,
-             tool.combined.capture_device, tool.supervisor.base.fel_request)
+             tool.combined.capture_device, tool.supervisor.base.fel_request, tool.thermal_profile)
     tool.combined.launch_view = lambda value: Unused()
     tool.supervisor.run_session = session
     tool.combined.capture_device = captured
+    tool.thermal_profile = lambda prepared: False
     tool.supervisor.base.fel_request = lambda *unused: calls.append('fel')
 
     def launch(name, value, *flags):
@@ -603,7 +613,7 @@ def main():
         cases['no-operation-6-with-under-100-ms-left'] = True
     finally:
         (tool.freeze_bundle, tool.combined.launch_view, tool.supervisor.run_session,
-         tool.combined.capture_device, tool.supervisor.base.fel_request) = saved
+         tool.combined.capture_device, tool.supervisor.base.fel_request, tool.thermal_profile) = saved
     assert not any(name == 'usb' or name.startswith('usb.') for name in sys.modules)
     result = {'passed': True, 'physical_access': False, 'audio': audio, 'image_sha256': image_hash,
               'build_id': manifest['build_id'], 'tool_sha256': tool.digest(Path(tool.__file__)),

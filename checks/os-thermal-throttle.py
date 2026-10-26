@@ -24,7 +24,9 @@ CASES = {0: 'repeated-throttle-normal-and-critical', 1: 'owner-and-worker-checkp
          7: 'stale-sensors-throttle-then-critical',
          8: 'ready-without-samples-stays-throttled', 9: 'last-channel-releases-startup-throttle',
          10: 'partial-hot-remains-throttled-until-cool', 11: 'partial-critical-retains-without-more-reads',
-         12: 'last-channel-does-not-override-earlier-stale'}
+         12: 'last-channel-does-not-override-earlier-stale',
+         13: 'freshness-expiry-without-owner-read', 14: '70C-terminal-row-before-cancel',
+         15: 'bounded-immutable-temperature-evidence'}
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--build', type=Path, required=True)
 parser.add_argument('--output', type=Path, required=True)
@@ -77,7 +79,8 @@ for index, source in enumerate(('drivers/thermal/a733_thermal.c', 'drivers/clock
     run('compile-common-' + str(index), [*c_flags, '-c', ROOT / source, '-o', obj])
 
 results = {}
-for variant, patch in (('cpu', 'recognition-placement.patch'), ('gpu', 'recognition-dispatch.patch')):
+for variant, patch in (('cpu', 'recognition-placement.patch'), ('gpu', 'recognition-dispatch.patch'),
+                       ('clock', 'recognition-placement.patch')):
     generated = out / f'recognition-{variant}.cc'
     revision = stamp([ROOT / 'apps/os' / patch])
     run('patch-' + variant + '-' + revision, ['patch', '-s', '--fuzz=0', '--reject-file=-', '--output', generated,
@@ -88,7 +91,8 @@ for variant, patch in (('cpu', 'recognition-placement.patch'), ('gpu', 'recognit
                                     ROOT / 'apps/mimus-board/recognition.cc', ROOT / 'apps/os/recognition.patch'])
     run('capture-placement-' + variant + '-' + revision, ['patch', '-s', '--fuzz=0', '--reject-file=-', '--output',
                                          out / f'capture-placed-{variant}.cc', captured, ROOT / 'apps/os' / patch])
-    extra = [f'-I{out}'] + (['-DSUNSTONE_A733_OS_GPU_LINEAR=1', '-DOS_RECOGNITION_CORE=2'] if variant == 'gpu' else [])
+    extra = [f'-I{out}'] + (['-DSUNSTONE_A733_OS_GPU_LINEAR=1', '-DOS_RECOGNITION_CORE=2'] if variant == 'gpu' else
+        ['-DSUNSTONE_A733_OS_CPU_CLOCK=1', '-DA733_A76_ADMITTED=1'] if variant == 'clock' else [])
     fixture, recognition = out / (variant + '-fixture.o'), out / (variant + '-recognition.o')
     fixture_revision = stamp([ROOT / p for p in ('checks/os-thermal-throttle.c', 'apps/os/thermal.c',
                                                'apps/os/dispatch.c', 'apps/os/os.h', 'apps/os/dispatch.h')])
@@ -101,7 +105,8 @@ for variant, patch in (('cpu', 'recognition-placement.patch'), ('gpu', 'recognit
     assert image.address('os_throttle_check') and image.address('os_thermal_throttled')
     assert image.address('mimus_native_checkpoint')
     for mode, case in CASES.items():
-        if variant == 'cpu' and mode in (5, 6): continue
+        if variant != 'gpu' and mode in (5, 6): continue
+        if variant != 'clock' and mode in (14, 15): continue
         record_path = out / f'{variant}-{case}.json'
         identity = hashlib.sha256(image_path.read_bytes()).hexdigest()
         if args.resume and record_path.exists():

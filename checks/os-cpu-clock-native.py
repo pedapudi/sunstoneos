@@ -12,7 +12,7 @@ from pathlib import Path
 import shlex
 
 from harness import Image, LLD, Steps
-from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE, UC_MEM_READ
+from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE, UC_MEM_READ, UC_HOOK_INTR
 from unicorn.arm64_const import UC_ARM64_REG_SP, UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_X2, UC_ARM64_REG_LR, UC_ARM64_REG_PC
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -105,9 +105,36 @@ for addr in (0x08870000, 0x0887001c, 0x08871004, 0x08871008, 0x08871018, 0x08873
 for mode, addr in ((0, 0x08870000), (0, 0x08871002), (1, 0x08871002), (2, 0x08871000), (3, 0x08871000)):
     assert call(mode, addr, 0) == 0 and not events
 cases.append('out-of-policy-and-wrong-owner-refusal')
+# Drive the actual owner through both inspections and both-cluster requests.
+# The driver boundary models completion; its grant decoder/DSU table are real.
+owner_obj = a.output / 'owner.o'
+stamp = hashlib.sha256((ROOT / 'checks/os-cpu-clock-owner.c').read_bytes() +
+                       (ROOT / 'apps/os/cpu.c').read_bytes()).hexdigest()[:12]
+steps.command('compile-owner-' + stamp, [*flags, '-c', ROOT / 'checks/os-cpu-clock-owner.c', '-o', owner_obj])
+policy_obj = a.output / 'policy.o'
+steps.command('compile-owner-policy-' + hashlib.sha256((ROOT / 'drivers/thermal/a733_thermal.c').read_bytes()).hexdigest()[:12],
+              [*flags, '-c', ROOT / 'drivers/thermal/a733_thermal.c', '-o', policy_obj])
+owner_elf = a.output / 'owner.elf'
+steps.command('link-owner-' + hashlib.sha256(owner_obj.read_bytes() + policy_obj.read_bytes()).hexdigest()[:12],
+              [LLD, '-Ttext=0x41000000', '--entry=os_cpu_owner_check', '--gc-sections',
+               owner_obj, policy_obj, *objects[1:], '-o', owner_elf])
+owner_image = Image(owner_elf)
+for mode, name in enumerate(('both-clusters-big-little-dsu', 'no-grant-read-only', 'retained-request-not-ready')):
+    cpu = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
+    cpu.mem_map(0x41000000, 0x400000)
+    cpu.mem_map(0x200000, 0x10000)
+    for address, data in owner_image.parts: cpu.mem_write(address, data)
+    cpu.mem_map(0x42000000, 0x10000)
+    cpu.reg_write(UC_ARM64_REG_SP, 0x4200f000);cpu.reg_write(UC_ARM64_REG_X0, mode)
+    cpu.hook_add(UC_HOOK_INTR, lambda machine, interrupt, unused: machine.emu_stop())
+    cpu.emu_start(owner_image.address('os_cpu_owner_check'), 0, count=100000)
+    status = int.from_bytes(cpu.mem_read(owner_image.address('os_check_result'), 4), 'little')
+    assert status == 1, (name, status)
+    cases.append(name)
 result = dict(status='PASS', cases=cases, elf_sha256=hashlib.sha256(elf.read_bytes()).hexdigest(),
     inputs={f: hashlib.sha256((ROOT / f).read_bytes()).hexdigest() for f in
-            (*units, 'checks/os-cpu-clock-native.py', 'apps/os/cpu.c', 'include/a733_cpu_clock.h', 'include/a733_mmio.h')},
-    limits='Actual AArch64 adapters with modeled MMIO storage. No physical clock, rail or thermal qualification.')
+            (*units, 'checks/os-cpu-clock-owner.c', 'checks/os-cpu-clock-native.py', 'apps/os/cpu.c', 'include/a733_cpu_clock.h', 'include/a733_mmio.h')},
+    owner_elf_sha256=hashlib.sha256(owner_elf.read_bytes()).hexdigest(),
+    limits='Actual AArch64 adapters with modeled MMIO storage; actual request owner with modeled driver completion. No physical clock, rail or thermal qualification.')
 (a.output / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
 print('PASS actual OS CPU adapter: report, CPU-B above boot0 refused, seventeen reads, six writes, mux DSB, refusals')

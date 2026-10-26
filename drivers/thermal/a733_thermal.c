@@ -275,8 +275,14 @@ int a733_thermal_policy_init(struct a733_thermal_policy *p,uint64_t now,
     int (*notify)(void *,enum a733_thermal_level),void *cookie)
 {
     if (!p || p->initialized || !notify) return 0;
-    *p=(struct a733_thermal_policy){.notify=notify,.cookie=cookie,.start_us=now,.last_us=now,.initialized=1};
+    *p=(struct a733_thermal_policy){.notify=notify,.cookie=cookie,.start_us=now,.last_us=now,.initialized=1,.cpu_critical_millicelsius=110000};
     atomic_init(&p->level,A733_THERMAL_NORMAL);atomic_init(&p->published_seen,0);return 1;
+}
+int a733_thermal_policy_cpu_limit(struct a733_thermal_policy *p,uint32_t limit)
+{
+    if(!p||!p->initialized||p->sequence||p->last_us!=p->start_us||p->request||
+       a733_thermal_policy_level(p)!=A733_THERMAL_NORMAL||limit>110000)return 0;
+    p->cpu_critical_millicelsius=limit?limit:110000;return 1;
 }
 unsigned a733_thermal_policy_seen(const struct a733_thermal_policy *p)
 {
@@ -310,7 +316,10 @@ enum a733_thermal_level a733_thermal_policy_update(struct a733_thermal_policy *p
                 uint64_t age=now-((p->seen&bit) ? p->seen_us[i] : p->start_us);
                 int32_t t=p->millicelsius[i];
                 p->stale=(uint8_t)(age>STALE_US ? p->stale|bit : p->stale&~bit);
-                if (age>LOST_US || ((p->seen&bit) && t>=trips[i].critical)) p->critical|=bit;
+                int32_t critical=trips[i].critical;
+                if ((i==0||i==3) && p->cpu_critical_millicelsius<(uint32_t)critical)
+                    critical=(int32_t)p->cpu_critical_millicelsius;
+                if (age>LOST_US || ((p->seen&bit) && t>=critical)) p->critical|=bit;
                 if (!trips[i].passive || !(p->seen&bit)) continue;
                 if (t>=trips[i].passive) p->passive|=bit;
                 else if (t<trips[i].passive-trips[i].hysteresis) p->passive&=(uint8_t)~bit;

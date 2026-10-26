@@ -12,7 +12,9 @@ once through tools/fault-report.py and saves it with its decoding. For an
 image whose link check records the NPU profile, a capture that completes is
 followed by one request for the NPU report (USB0 operation 6), which is saved
 with its decoding and classification from apps/os/npu-report.py; other
-images never send operation 6. Host checks of this tool
+images never send operation 6. CPU-clock images also return the first
+recognition's immutable thermal window through paged operation 7; it is saved
+separately as thermal-report.bin and thermal-report.json. Host checks of this tool
 (checks/os-image-launch.py) stop before any device access.
 """
 import argparse
@@ -41,6 +43,7 @@ preparation = module('os_supervised_preparation', ROOT / 'apps/os/prepare.py')
 faults = module('os_supervised_fault_report', ROOT / 'tools/fault-report.py')
 fault_decoder = module('os_supervised_fault_decode', ROOT / 'checks/fault-decode.py')
 npu_report = module('os_supervised_npu_report', ROOT / 'apps/os/npu-report.py')
+thermal_report = module('os_supervised_thermal_report', ROOT / 'apps/os/thermal-report.py')
 supervisor = combined.supervisor
 require, digest, reference_bytes = combined.require, combined.digest, combined.reference_bytes
 PREREQUISITES = {'supervised-ram-recovery', 'os-supervised-software'}
@@ -62,6 +65,7 @@ def source_files():
             ('dma-nonsecure-access.py', Path(preparation.security_authority.__file__)),
             ('fault-report.py', Path(faults.__file__)), ('fault-decode.py', Path(fault_decoder.__file__)),
             ('npu-report.py', Path(npu_report.__file__)),
+            ('thermal-report.py', Path(thermal_report.__file__)),
             ('usb-access.py', ROOT / 'tools/usb-access.py')]
 
 
@@ -236,6 +240,43 @@ def read_npu_report(device, same, deadline, prepared, evidence, record, save, no
     save()
 
 
+def thermal_profile(prepared):
+    manifest = json.loads(prepared['_combined_frozen']['board/image-input-manifest.json'])
+    return manifest.get('cpu_clock', False) is True and manifest.get('thermal_report', False) is True
+
+
+def read_thermal_report(device, same, deadline, prepared, evidence, record, save, now=time.monotonic):
+    """Keep recognition outputs even when the separate thermal window is unavailable."""
+    if deadline - now() < 0.1:
+        record['thermal_report'] = {'state': 'not-requested', 'reason': 'less than 100 ms of the capture window left'}
+        save()
+        return
+    record['thermal_report'] = {'state': 'unobserved', 'frames': []}
+    result = record['thermal_report']
+    save()
+    def retain(frame):
+        path = evidence / f"thermal-frame-{len(result['frames']):03}.bin"
+        supervisor.durable_frame(path, frame)
+        result['frames'].append({'path': path.name, 'sha256': digest(path)})
+        save()
+    exchange = preparation.host.device_exchange(device, same, deadline, retain, now=now)
+    epoch, generation = struct.unpack_from('<2Q', prepared['_combined_frozen']['board/session.bin'], 24)
+    try:
+        raw = thermal_report.capture(exchange, epoch, generation)
+        path = evidence / 'thermal-report.bin'
+        supervisor.durable_frame(path, raw)
+        result.update(path=path.name, bytes=len(raw), sha256=digest(path))
+        decoded = thermal_report.decode(raw, epoch, generation)
+        decoded_path = evidence / 'thermal-report.json'
+        supervisor.durable_frame(decoded_path, (json.dumps(decoded, indent=2) + '\n').encode())
+        result.update(state=thermal_report.classify(decoded), decoded=decoded_path.name)
+    except BaseException as error:
+        result.update(state='unavailable', type=type(error).__name__, message=str(error))
+        save()
+        raise
+    save()
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('bundle', 'fel', 'evidence', 'database'):
@@ -252,6 +293,7 @@ def main(argv=None):
     if args.fault_report:
         require_fault_report(prepared)
     npu = npu_profile(prepared)
+    thermal = thermal_profile(prepared)
 
     def capture(device, same, deadline, record, save):
         if args.fault_report:
@@ -259,6 +301,8 @@ def main(argv=None):
         combined.capture_device(device, same, deadline, prepared, args.evidence, record, save)
         if npu:
             read_npu_report(device, same, deadline, prepared, args.evidence, record, save)
+        if thermal:
+            read_thermal_report(device, same, deadline, prepared, args.evidence, record, save)
     with combined.launch_view(prepared) as (view, launch):
         def ready():
             claimed(args.database, args.claim, args.owner, bundle, prepared)

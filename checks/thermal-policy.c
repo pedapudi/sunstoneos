@@ -179,6 +179,27 @@ int main(void)
     setup(&m);s=(struct a733_thermal_sample){.sequence=1,.valid=1,.observed_us=m.time+10};
     assert(a733_thermal_policy_update(&m.policy,m.time+5,A733_THERMAL_SAMPLE,&s)==A733_THERMAL_CRITICAL);
     setup(&m);assert(a733_thermal_policy_update(&m.policy,m.time,A733_THERMAL_SAMPLE,NULL)==A733_THERMAL_CRITICAL);
+    /* Session limits affect both CPU sensors only, never raise vendor trips,
+     * and cannot change after sampling has begun. */
+    for(unsigned sensor=0;sensor<5;++sensor){
+        setup(&m);assert(a733_thermal_policy_cpu_limit(&m.policy,70000));
+        assert(!a733_thermal_policy_cpu_limit(&m.policy,110001));
+        s=(struct a733_thermal_sample){.sequence=1,.valid=31,.observed_us=m.time};
+        for(unsigned i=0;i<5;++i)s.millicelsius[i]=30000;
+        s.millicelsius[sensor]=69999;
+        assert(a733_thermal_policy_update(&m.policy,m.time,A733_THERMAL_SAMPLE,&s)==A733_THERMAL_NORMAL);
+        assert(!a733_thermal_policy_cpu_limit(&m.policy,110000));
+        ++s.sequence;s.millicelsius[sensor]=70000;
+        assert(a733_thermal_policy_update(&m.policy,m.time,A733_THERMAL_SAMPLE,&s)==
+            ((sensor==0||sensor==3)?A733_THERMAL_CRITICAL:A733_THERMAL_NORMAL));
+    }
+    setup(&m);assert(a733_thermal_policy_cpu_limit(&m.policy,0)&&m.policy.cpu_critical_millicelsius==110000);
+    assert(a733_thermal_policy_cpu_limit(&m.policy,110000));
+    s=(struct a733_thermal_sample){.sequence=1,.valid=31,.observed_us=m.time};
+    for(unsigned i=0;i<5;++i)s.millicelsius[i]=30000;
+    assert(a733_thermal_policy_update(&m.policy,m.time,A733_THERMAL_SAMPLE,&s)==A733_THERMAL_NORMAL);
+    assert(a733_thermal_policy_update(&m.policy,m.time+1000000,A733_THERMAL_AGAIN,NULL)==A733_THERMAL_NORMAL);
+    assert(a733_thermal_policy_update(&m.policy,m.time+1000001,A733_THERMAL_AGAIN,NULL)==A733_THERMAL_THROTTLE);
     /* Uninitialized policy objects report CRITICAL. */
     struct a733_thermal_policy none={0};
     assert(a733_thermal_policy_level(&none)==A733_THERMAL_CRITICAL && a733_thermal_policy_level(NULL)==A733_THERMAL_CRITICAL);

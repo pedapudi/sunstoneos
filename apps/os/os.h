@@ -99,7 +99,9 @@ struct os_session {
     uint32_t apb1,apb1_hz;
     uint8_t configure_adc_clock,alarm_mask,critical_mask,reserved0;
     uint16_t limits[5][3]; /* hot, hysteresis, critical hardware codes */
-    uint8_t reserved[6];
+    uint8_t reserved[2];
+    /* Zero keeps the vendor trip; otherwise a lower CPU-only CRITICAL trip. */
+    uint32_t cpu_critical_millicelsius;
 #ifdef SUNSTONE_A733_OS_NPU
     struct os_npu_session npu;
 #endif
@@ -111,7 +113,8 @@ struct os_session {
     struct a733_cpu_clock_grant_record cpu_clock;
 #endif
 };
-_Static_assert(sizeof(struct os_session)==OS_SESSION_BYTES,"OS session geometry");
+_Static_assert(sizeof(struct os_session)==OS_SESSION_BYTES&&
+    offsetof(struct os_session,cpu_critical_millicelsius)==804,"OS session geometry");
 #define OS_SESSION_VERSION 1u
 int os_session_valid(const struct os_session *);
 /* The admitted complete session after EL3 sealing; NULL before. */

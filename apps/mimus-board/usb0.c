@@ -24,6 +24,9 @@ static uint8_t frame[1088],request[16];
  * 64-byte frame header (apps/os/npu.h). It reads no recognizer state. */
 _Static_assert(sizeof(frame)>=OS_NPU_REPORT_BYTES,"frame holds the NPU report");
 #endif
+#ifdef SUNSTONE_A733_OS_CPU_CLOCK
+#include "../os/thermal-report.h"
+#endif
 static unsigned frame_bytes,sent,transferred,request_used,frame_success;
 /* USB0 owner only. Receipt publication follows the final TX completion. */
 static unsigned delivery_generation,delivered_text,delivered_sector,delivered_trigger;
@@ -74,6 +77,20 @@ static void exchange(void)
         if(request[1]||offset||bytes||expected)stop();
         os_npu_report_copy(frame);
         frame_success=0;sent=transferred=0;frame_bytes=OS_NPU_REPORT_BYTES;return;
+    }
+#endif
+#ifdef SUNSTONE_A733_OS_CPU_CLOCK
+    if(op==OS_THERMAL_REPORT_OP){
+        if(request[1]||!bytes||bytes>1024)stop();
+        memset(frame,0,1088);size_t copied=0;uint32_t total=0;
+        int r=os_thermal_report_copy(expected,offset,bytes,frame+64,&copied,&total);
+        if(!board_live(NULL))stop();
+        if(r!=1)copied=0;
+        put32(frame,0x424d494d);put32(frame+4,1);put32(frame+8,r<0?2:r?1:0);
+        put32(frame+12,(uint32_t)copied);put32(frame+16,total);put32(frame+20,offset);put32(frame+28,op);
+        for(unsigned i=0;i<8;++i){frame[32+i]=(uint8_t)(board.session.epoch>>(8*i));frame[40+i]=(uint8_t)(board.session.generation>>(8*i));}
+        /* Diagnostic reads neither acknowledge nor gate recognizer output. */
+        frame_success=0;sent=transferred=0;frame_bytes=64+(unsigned)copied;return;
     }
 #endif
     if(op>(keyboard?4u:mimus_board_staged()?1u:2u)||request[1]||bytes>1024)stop();

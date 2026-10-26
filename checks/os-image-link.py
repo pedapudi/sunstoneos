@@ -199,6 +199,10 @@ def check(path, assets, recognizer, loader, audio=False, radio=False, headset=Fa
     # so preparation can tell the session size from this record.
     owner = [s for s in defined if s['name'] == 'os_cpu_clock_step']
     assert bool(owner) == cpu_clock, 'os_cpu_clock_step linked: %s, CPU clock build: %s' % (bool(owner), cpu_clock)
+    names = {s['name'] for s in defined}
+    thermal = [name in names for name in ('os_thermal_record_begin', 'os_thermal_record_end', 'os_thermal_report_copy')]
+    assert all(thermal) or not any(thermal), 'Incomplete thermal report implementation'
+    assert not any(thermal) or cpu_clock, 'Thermal report outside CPU-clock profile'
     npu_profile = None
     if npu:
         assert not any((audio, radio, headset, gpu_linear, cpu_clock)), 'Unsupported combined NPU profile'
@@ -213,7 +217,8 @@ def check(path, assets, recognizer, loader, audio=False, radio=False, headset=Fa
         selected = one('os_npu_client_model')
         npu_profile = {'range': [start, end], 'catalogue': elf.read(catalogue['value'], 32).hex(),
                        'client_model': struct.unpack('<I', elf.read(selected['value'], 4))[0]}
-    return {'npu_profile': npu_profile, 'interrupts': interrupts, 'applications': applications,
+    return {'thermal_report': all(thermal), 'cpu_critical_trip': 'a733_thermal_policy_cpu_limit' in names,
+            'npu_profile': npu_profile, 'interrupts': interrupts, 'applications': applications,
             'layout': layout(elf, assets, recognizer, loader, radio or headset, gpu_linear)}
 
 

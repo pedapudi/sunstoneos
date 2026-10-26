@@ -14,7 +14,10 @@
 #include "a733_mapping_check.h"
 #include "boot.h"
 #include <string.h>
-static struct {
+#ifdef SUNSTONE_A733_OS_CPU_CLOCK
+#include "thermal-report.h"
+#endif
+static struct os_thermal_service {
     struct a733_thermal driver;
     struct a733_thermal_config config;
     struct a733_clock_token token;
@@ -24,12 +27,101 @@ static struct {
     atomic_uint failed,pending;
     unsigned active,retaining,masked,rearm_wait;
     uint64_t next_read;
+    uint32_t cpu_critical_millicelsius;
 } thermal;
 /* Recognition may run before the thermal task or the first complete sensor
  * set. Keep load reduced until all channels have valid, nonstale readings. */
-static atomic_uint load_level=A733_THERMAL_THROTTLE;
+/* One publication binds level to the inclusive freshness deadline. The
+ * architectural counter divided by 24 fits in the remaining 62 bits. */
+static _Atomic uint64_t load_state=A733_THERMAL_THROTTLE;
 int os_thermal_throttled(void)
-{return atomic_load_explicit(&load_level,memory_order_acquire)!=A733_THERMAL_NORMAL;}
+{
+    uint64_t state=atomic_load_explicit(&load_state,memory_order_acquire);
+    return (state&3)!=A733_THERMAL_NORMAL||a733_smp_counter()/24>(state>>2);
+}
+static uint64_t fresh_until(void)
+{
+    uint64_t until=thermal.policy.start_us;
+    if(a733_thermal_policy_seen(&thermal.policy)==31){
+        until=UINT64_MAX;
+        for(unsigned i=0;i<5;++i)if(thermal.policy.seen_us[i]<until)until=thermal.policy.seen_us[i];
+    }
+    return until+1000000;
+}
+#ifdef SUNSTONE_A733_OS_CPU_CLOCK
+/* The supervised lifetime is 60 s. One owner appends at most 10 rows/s plus
+ * an initial and terminal row. Readers acquire the count; published rows
+ * never change. No allocation, I/O, wait or additional THS read occurs here. */
+#define THERMAL_RECORDS (A733_BOARD_SUPERVISED_SECONDS*10u+2u)
+static struct os_thermal_readings {
+    struct os_thermal_reading rows[THERMAL_RECORDS];
+    atomic_uint count,overflow;
+    uint64_t next;
+} readings;
+static void record_reading(uint64_t now,enum a733_thermal_level level)
+{
+    if(now<readings.next&&level!=A733_THERMAL_CRITICAL)return;
+    unsigned n=atomic_load_explicit(&readings.count,memory_order_relaxed);
+    if(n==THERMAL_RECORDS){atomic_store_explicit(&readings.overflow,1,memory_order_release);return;}
+    struct os_thermal_reading *r=&readings.rows[n];
+    r->time_us=now;r->sequence=thermal.policy.sequence;r->seen=thermal.policy.seen;
+    r->stale=thermal.policy.stale;r->level=(uint8_t)level;r->sensor=thermal.policy.sensor;
+    for(unsigned i=0;i<5;++i){
+        r->millicelsius[i]=thermal.policy.millicelsius[i];
+        uint64_t age=now-((r->seen&(1u<<i))?thermal.policy.seen_us[i]:thermal.policy.start_us);
+        r->age_us[i]=age>UINT32_MAX?UINT32_MAX:(uint32_t)age;
+    }
+    readings.next=now+100000;
+    atomic_store_explicit(&readings.count,n+1,memory_order_release);
+}
+/* Only the recognizer writes the first window. Publish once; the USB owner
+ * acquires it before copying any header/row bytes. Later recognitions leave
+ * it intact, so acknowledgments cannot change a paged diagnostic response. */
+static struct os_thermal_window {
+    struct os_thermal_report header;
+    unsigned first,collecting;
+    atomic_uint ready;
+} window;
+extern unsigned mimus_board_generation(void);
+void os_thermal_record_begin(void)
+{
+    if(atomic_load_explicit(&window.ready,memory_order_relaxed)||window.collecting)return;
+    unsigned n=atomic_load_explicit(&readings.count,memory_order_acquire);
+    window.first=n?n-1:0;window.collecting=1;
+    window.header.begin_us=a733_smp_counter()/24;
+    window.header.recognition_generation=mimus_board_generation();
+}
+void os_thermal_record_end(int success)
+{
+    if(!window.collecting||atomic_load_explicit(&window.ready,memory_order_relaxed))return;
+    unsigned n=atomic_load_explicit(&readings.count,memory_order_acquire);
+    struct os_thermal_report *h=&window.header;
+    h->end_us=a733_smp_counter()/24;h->magic=OS_THERMAL_REPORT_MAGIC;h->version=1;
+    h->rows=n-window.first;h->row_bytes=sizeof(struct os_thermal_reading);
+    h->bytes=sizeof(*h)+h->rows*h->row_bytes;
+    h->epoch=board.session.epoch;h->generation=board.session.generation;
+    h->overflow=atomic_load_explicit(&readings.overflow,memory_order_acquire);
+    h->cpu_critical_millicelsius=thermal.policy.cpu_critical_millicelsius;h->recognition_ok=success!=0;
+    atomic_store_explicit(&window.ready,1,memory_order_release);
+}
+int os_thermal_report_copy(uint64_t expected,uint32_t offset,size_t bytes,
+    uint8_t *out,size_t *copied,uint32_t *total)
+{
+    if(!out||!copied||!total)return -1;
+    *copied=0;*total=0;
+    if(!bytes||bytes>1024)return -1;
+    if(!atomic_load_explicit(&window.ready,memory_order_acquire))return 0;
+    const struct os_thermal_report *h=&window.header;*total=h->bytes;
+    if((expected&&expected!=h->recognition_generation)||offset>*total||bytes>*total-offset)return -1;
+    size_t head=offset<sizeof(*h)?sizeof(*h)-offset:0;
+    if(head>bytes)head=bytes;
+    if(head)memcpy(out,(const uint8_t *)h+offset,head);
+    if(bytes>head)memcpy(out+head,(const uint8_t *)&readings.rows[window.first]+(offset+head-sizeof(*h)),bytes-head);
+    *copied=bytes;return 1;
+}
+#else
+#define record_reading(now,level) ((void)0)
+#endif
 static uint64_t deadline(void){return board.session.deadline_us-10000;}
 static int live(void)
 {return board_live(NULL)&&!atomic_load_explicit(&providers.shared.clocks.failed,memory_order_acquire)&&
@@ -80,24 +172,22 @@ static void cancel(void)
 #ifdef SUNSTONE_A733_OS_NPU
  os_npu_thermal(0,1,0,a733_smp_counter()/24);
 #endif
- atomic_store_explicit(&load_level,A733_THERMAL_CRITICAL,memory_order_release);
+ atomic_store_explicit(&load_state,A733_THERMAL_CRITICAL,memory_order_release);
  atomic_store_explicit(&thermal.failed,1,memory_order_release);board_fail(NULL);}
 static void publish_load(enum a733_thermal_level level)
 {
     if(level==A733_THERMAL_NORMAL&&a733_thermal_policy_seen(&thermal.policy)!=31)
         level=A733_THERMAL_THROTTLE;
-    atomic_store_explicit(&load_level,level,memory_order_release);
+    atomic_store_explicit(&load_state,(fresh_until()<<2)|level,memory_order_release);
 }
 /* The recognizer backs off at its checkpoints during THROTTLE, and new GPU
  * placements use the CPU. CRITICAL closes admission through board_fail.
  * The policy calls this only from a733_thermal_policy_update, after which
- * step() publishes the returned level, so this callback publishes only
- * CRITICAL. */
+ * step() records the final policy fields before closing the session. */
 static int policy(void *v,enum a733_thermal_level level)
 {
     if(v!=&thermal)return -1;
-    if(level==A733_THERMAL_CRITICAL)cancel();
-    return 1;
+    return level==A733_THERMAL_CRITICAL?0:1;
 }
 /* IRQ callbacks share the SMP kernel critical section with task rearm. They
  * never inspect driver fields, touch THS status or enter the platform mutex. */
@@ -140,7 +230,8 @@ static int step(void)
         uint64_t t;
         if(thermal.driver.fault||(r!=A733_THERMAL_READY&&r!=A733_THERMAL_PENDING&&r!=A733_THERMAL_BUSY))return fault();
         if(r!=A733_THERMAL_READY)return 1;
-        if(!a733_counter_clock_now(&providers.shared.counter,&t)||!a733_thermal_policy_init(&thermal.policy,t,policy,&thermal))
+        if(!a733_counter_clock_now(&providers.shared.counter,&t)||!a733_thermal_policy_init(&thermal.policy,t,policy,&thermal)||
+           !a733_thermal_policy_cpu_limit(&thermal.policy,thermal.cpu_critical_millicelsius))
             return fault();
         thermal.active=1;
     }
@@ -151,24 +242,33 @@ static int step(void)
         enum a733_thermal_result r=a733_thermal_read(&thermal.driver,deadline(),&sample);
         uint64_t t;
         enum a733_thermal_level level;
-        if(thermal.driver.fault||!a733_counter_clock_now(&providers.shared.counter,&t)||
-           (level=a733_thermal_policy_update(&thermal.policy,t,r,&sample))==A733_THERMAL_CRITICAL||
-           (r!=A733_THERMAL_SAMPLE&&r!=A733_THERMAL_AGAIN&&r!=A733_THERMAL_BUSY))return fault();
+        if(!a733_counter_clock_now(&providers.shared.counter,&t))return fault();
+        level=a733_thermal_policy_update(&thermal.policy,t,thermal.driver.fault?A733_THERMAL_INVALID:r,&sample);
+        record_reading(t,level);
+        if(level==A733_THERMAL_CRITICAL)return fault();
         /* The final missing channel may arrive without changing policy level,
          * so the transition callback alone cannot release startup throttling. */
         publish_load(level);
 #ifdef SUNSTONE_A733_OS_NPU
-        uint64_t until=thermal.policy.start_us+1000000;
-        const unsigned seen=a733_thermal_policy_seen(&thermal.policy);
-        if(seen==31) {
-            until=UINT64_MAX;
-            for(unsigned i=0;i<5;++i)if(thermal.policy.seen_us[i]<until)until=thermal.policy.seen_us[i];
-            until+=1000000;
-        }
-        os_npu_thermal(level==A733_THERMAL_NORMAL&&seen==31,
-            level!=A733_THERMAL_NORMAL,until,t);
+        /* NPU admission uses an exclusive deadline; the policy's age==1 s
+         * remains fresh, so its equivalent boundary is one microsecond later. */
+        os_npu_thermal(level==A733_THERMAL_NORMAL&&a733_thermal_policy_seen(&thermal.policy)==31,
+            level!=A733_THERMAL_NORMAL,fresh_until()+1,t);
 #endif
         thermal.next_read=n+25000;
+    }else{
+        /* Expire clock admission between reads without extra THS accesses.
+         * Checkpoints independently enforce this same inclusive deadline. */
+        uint64_t state=atomic_load_explicit(&load_state,memory_order_relaxed);
+        if((state&3)==A733_THERMAL_NORMAL&&n>(state>>2)){
+            enum a733_thermal_level level=a733_thermal_policy_update(&thermal.policy,n,A733_THERMAL_AGAIN,NULL);
+            record_reading(n,level);
+            if(level==A733_THERMAL_CRITICAL)return fault();
+            publish_load(level);
+#ifdef SUNSTONE_A733_OS_NPU
+            os_npu_thermal(0,1,0,n);
+#endif
+        }
     }
     if(!rearm())return fault();
 #ifdef SUNSTONE_A733_OS_CPU_CLOCK
@@ -185,6 +285,7 @@ void os_thermal_task(void *unused)
 static int construct(const struct os_session *s)
 {
     if(!board_live(NULL)||board.session.deadline_us<=10000||!mappings())return 0;
+    thermal.cpu_critical_millicelsius=s->cpu_critical_millicelsius;
     thermal.irq=(struct gicv3_spi){0x03400000,A733_THERMAL_INTID};thermal.masked=1;
     atomic_init(&thermal.failed,0);atomic_init(&thermal.pending,0);
     thermal.config=(struct a733_thermal_config){.owner=s->thermal_owner,.handoff=s->thermal_authority,

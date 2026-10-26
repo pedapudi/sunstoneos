@@ -124,6 +124,13 @@ def manifest_cpu_clock(manifest, raw):
     cpu_clock = manifest.get('cpu_clock')
     require(type(cpu_clock) is bool and session_layout(raw)[1] is cpu_clock,
             'The session size and the link check disagree on the CPU clock build.')
+    # Missing capabilities mean an older linked image. A zero trip remains
+    # compatible; a nonzero trip requires the native setter to be linked.
+    trip, report = manifest.get('cpu_critical_trip', False), manifest.get('thermal_report', False)
+    require(type(trip) is bool and type(report) is bool and (not report or cpu_clock and trip),
+            'Invalid thermal image capabilities.')
+    require(not struct.unpack_from('<I', raw, 804)[0] or trip,
+            'The linked image does not support a session CPU critical trip.')
     npu = len(raw) == OS_BYTES + NPU_BYTES
     require(manifest.get('npu', False) is npu, 'NPU image/session profile differs.')
     if npu:
@@ -173,8 +180,10 @@ def session_check(raw, audio):
     apb, hz, configure, alarm, critical, reserved = struct.unpack_from('<2I4B', raw, 760)
     rate, div = {0: 24000000, 3: 600000000}.get(apb >> 24, 0), (apb & 31) + 1
     require(not apb & ~0x0300001f and rate and rate % div == 0 and hz == rate // div and configure in (0, 1) and
-            alarm == critical == 31 and not reserved and raw[802:808] == bytes(6),
+            alarm == critical == 31 and not reserved and raw[802:804] == bytes(2),
             'Unsupported thermal clock or control profile.')
+    require(struct.unpack_from('<I', raw, 804)[0] <= 110000,
+            'CPU critical trip must not exceed the vendor 110000 millicelsius.')
     for i in range(5):
         hot, hysteresis, limit = struct.unpack_from('<3H', raw, 772 + 6 * i)
         require(0 < limit <= hot < hysteresis <= 4095, 'Invalid thermal thresholds.')

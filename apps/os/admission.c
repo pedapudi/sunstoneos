@@ -17,7 +17,7 @@ int os_session_valid(const struct os_session *s)
        !s->thermal_owner||!s->thermal_authority||!present(s->thermal_initial,32)||
        !present(s->thermal_electrical,32)||!present(s->thermal_clocks,32)||
        !present(s->thermal_supervision,32)||s->configure_adc_clock>1||s->alarm_mask!=31||
-       s->critical_mask!=31||s->reserved0||present(s->reserved,6)||(s->apb1&~UINT32_C(0x0300001f)))
+       s->critical_mask!=31||s->reserved0||present(s->reserved,2)||s->cpu_critical_millicelsius>110000||(s->apb1&~UINT32_C(0x0300001f)))
         return 0;
     /* The thermal owner is distinct from every board owner. */
     uint64_t owners[]={s->board.pmic_owner,s->board.usb0_owner,s->board.typec_owner,s->board.usb2_owner};

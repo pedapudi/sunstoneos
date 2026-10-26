@@ -124,7 +124,7 @@ struct a733_thermal_policy {
     atomic_uint level;
     uint64_t start_us,last_us,seen_us[A733_THERMAL_SENSORS];
     int32_t millicelsius[A733_THERMAL_SENSORS];
-    uint32_t sequence;
+    uint32_t sequence,cpu_critical_millicelsius;
     /* Channel masks: valid reading seen, at passive trip, without a reading
      * for 1 s, critical (trip reached or no reading for 5 s). Frozen at CRITICAL. */
     uint8_t seen,passive,stale,critical,sensor;
@@ -134,6 +134,9 @@ struct a733_thermal_policy {
 /* Zeroed storage once; now_us starts every channel's staleness window. */
 int a733_thermal_policy_init(struct a733_thermal_policy *,uint64_t now_us,
     int (*notify)(void *,enum a733_thermal_level),void *cookie);
+/* Before the first update, optionally lower the CPU channels (CPUB 0, CPUL 3)
+ * critical trip. Zero selects the vendor trip; values above it are refused. */
+int a733_thermal_policy_cpu_limit(struct a733_thermal_policy *,uint32_t millicelsius);
 /* Owner task only, after each a733_thermal_read, with now_us from the driver's
  * clock read after that call. The sample is read only for SAMPLE. Bounded: at
  * most one notify call. Returns the level now in force. */

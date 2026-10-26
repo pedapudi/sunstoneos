@@ -22,7 +22,17 @@ static void check(int ok,unsigned code)
 {if(!ok){os_check_result=code;__asm__ volatile("brk #0");for(;;){}}}
 static void done(void){os_check_result=1;__asm__ volatile("brk #0");for(;;){}}
 int board_live(void *v){(void)v;return up;}
-void board_fail(void *v){(void)v;up=0;++fails;}
+void board_fail(void *v){(void)v;
+#ifdef SUNSTONE_A733_OS_CPU_CLOCK
+    if(mode==14){
+        unsigned n=atomic_load_explicit(&readings.count,memory_order_acquire);
+        check(n&&readings.rows[n-1].level==A733_THERMAL_CRITICAL&&readings.rows[n-1].millicelsius[3]==70000,60);
+    }
+#endif
+    up=0;++fails;}
+#ifdef SUNSTONE_A733_OS_CPU_CLOCK
+int os_cpu_clock_step(const struct a733_thermal_policy *p){(void)p;return 1;}
+#endif
 int mimus_board_live(void){return up;}
 void mimus_board_fail(void){up=0;++fails;}
 void mimus_board_progress(void){check(up,2);++progress;}
@@ -85,6 +95,7 @@ int a733_gpu_mimus_open(void){return 1;}
 void os_throttle_check(unsigned selected)
 {
     mode=selected;
+    if(mode==14)thermal.cpu_critical_millicelsius=70000;
     if(mode==2){mimus_native_checkpoint();check(sleeps==1&&progress==1,13);done();}
     if(mode==3){up=0;mimus_native_checkpoint();check(0,14);}
     if(mode==4){fail_on_sleep=1;mimus_native_checkpoint();check(0,15);}
@@ -156,7 +167,7 @@ void os_throttle_check(unsigned selected)
         uint64_t sequence=thermal.policy.sequence;unsigned before_reads=reads;
         sample(50000,50000);
         check(step()==-1&&!up&&os_thermal_throttled()&&thermal.policy.sequence==sequence&&reads==before_reads,48);
-        check(atomic_load_explicit(&load_level,memory_order_acquire)==A733_THERMAL_CRITICAL,49);done();
+        check((atomic_load_explicit(&load_state,memory_order_acquire)&3)==A733_THERMAL_CRITICAL,49);done();
     }
     if(mode==12){
         sample(50000,50000);next_sample.valid=1;
@@ -165,5 +176,40 @@ void os_throttle_check(unsigned selected)
         check(step()==1&&os_thermal_throttled()&&a733_thermal_policy_seen(&thermal.policy)==31,51);
         check(a733_thermal_policy_level(&thermal.policy)==A733_THERMAL_THROTTLE,52);done();
     }
+    if(mode==13){
+        sample(50000,50000);check(step()==1&&!os_thermal_throttled(),53);
+        time_us+=1000000;check(!os_thermal_throttled(),54);
+        ++time_us;check(os_thermal_throttled(),55);
+        /* Expire the policy before the next scheduled hardware read. */
+        thermal.next_read=time_us+1000;unsigned before=reads;
+        check(step()==1&&reads==before&&a733_thermal_policy_level(&thermal.policy)==A733_THERMAL_THROTTLE,56);
+        sample(50000,50000);check(step()==1&&!os_thermal_throttled(),57);done();
+    }
+#ifdef SUNSTONE_A733_OS_CPU_CLOCK
+    if(mode==14){
+        sample(50000,50000);check(step()==1,58);
+        unsigned n=atomic_load_explicit(&readings.count,memory_order_acquire);
+        struct os_thermal_reading first=readings.rows[0];
+        sample(50000,50000);next_sample.valid=8;next_sample.millicelsius[3]=70000;
+        check(step()==-1&&!up&&fails&&thermal.retaining,59);
+        check(atomic_load_explicit(&readings.count,memory_order_acquire)==n+1,61);
+        check(!memcmp(&first,&readings.rows[0],sizeof(first)),62);
+        check(readings.rows[n].seen==31&&readings.rows[n].sequence==2,63);done();
+    }
+    if(mode==15){
+        /* Ten rows per second, no writes to already published rows, fixed
+         * capacity and an explicit overflow bit after the lifetime budget. */
+        struct os_thermal_reading first=readings.rows[0];
+        for(unsigned i=0;i<THERMAL_RECORDS*4;++i){
+            time_us+=25000;record_reading(time_us,A733_THERMAL_NORMAL);
+        }
+        check(atomic_load_explicit(&readings.count,memory_order_acquire)==THERMAL_RECORDS,64);
+        check(atomic_load_explicit(&readings.overflow,memory_order_acquire),65);
+        check(!memcmp(&first,&readings.rows[0],sizeof(first)),66);
+        for(unsigned i=1;i<THERMAL_RECORDS;++i)
+            check(readings.rows[i].time_us-readings.rows[i-1].time_us==100000,67);
+        done();
+    }
+#endif
     check(0,35);
 }

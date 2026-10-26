@@ -205,7 +205,8 @@ by the thermal owner's facts ([os.h](../apps/os/os.h)):
 | 760..767 | APB1 clock word and its frequency |
 | 768..771 | ADC clock flag, alarm mask 31, critical mask 31, zero |
 | 772..801 | Hot, hysteresis and critical codes for five channels |
-| 802..807 | Zero |
+| 802..803 | Zero |
+| 804..807 | CPU CRITICAL trip in millicelsius; zero keeps 110000, otherwise 1..110000 |
 | 808..991 | Microphone build only: the I2S receive facts below |
 
 The board session's workload is 0 or 4 in the base, microphone and headset
@@ -234,20 +235,31 @@ CRITICAL level, a driver fault, a lost owner or an unexpected result ends the
 session through `board_fail`. The service then masks its interrupt and retains
 its clock token and any mutex held across an uncertain operation. A sensor
 without a valid reading for one second triggers THROTTLE; five seconds without
-a reading triggers terminal CRITICAL.
+a reading triggers terminal CRITICAL. These intervals are inclusive: a
+reading remains fresh at an age of 1000000 µs. The session can lower the
+CRITICAL trip of CPUB and CPUL; qualification at 70 °C sets the field to
+70000. Host and native admission reject values above the vendor's 110000.
+The policy uses the lower of the session and vendor trips. Existing zeroed
+session fields retain vendor behavior; older validators refuse nonzero values
+because those bytes were reserved. Preparation also refuses a nonzero trip
+when the linked image manifest lacks the CPU-trip capability.
 
 Before every sensor has supplied a valid reading and during THROTTLE, both
 recognition tasks sleep for one scheduler tick at each existing checkpoint.
 Driver readiness alone does not permit full load. The thermal owner releases
 this startup delay only when all five channels have been seen and the policy
 is NORMAL; a stale, hot or critical earlier reading prevents that release.
-It republishes the effective load level after each successful policy update,
-because the final missing channel can arrive without a policy-level change.
+It publishes the effective level and oldest sensor's freshness deadline in
+one atomic word after each successful policy update. Checkpoints enforce
+that deadline even when the thermal task is delayed. The owner also expires
+clock admission between scheduled reads without an extra THS read.
 The thermal task continues sampling independently while recognition backs off. Each checkpoint checks
 board liveness before and after that sleep and reports progress only after
 it completes. NORMAL removes the delay. There is no waiting loop that could
 keep watchdog progress current while inference is stuck. The normal path adds
-one thermal getter call, whose only shared-state access is one acquire load.
+one thermal getter call: one acquire load and, when NORMAL, a counter read.
+The NPU receives the same freshness interval through its exclusive deadline,
+one microsecond after the policy's inclusive endpoint.
 
 The GPU dispatcher selects the CPU for new layers during THROTTLE. An already
 admitted layer can finish its remaining GPU batches under the existing job
@@ -256,24 +268,70 @@ failure or incomplete output remains disabled. CPU fallback can shift heat
 to the CPU, so the checkpoint delay and critical stop remain necessary.
 This policy changes no clock, voltage or device power setting.
 
-The focused [thermal integration check](../checks/os-thermal-throttle.py)
-executes the actual AArch64 thermal policy, publication callback, CPU and GPU
-recognition checkpoints, and dispatcher. Twenty-four cases cover startup,
-repeated throttle/recovery, owner and worker calls, liveness loss before or
-during a sleep, stale/critical sensors, and disabled GPU sessions. The startup
-cases include no data, partial sets, final-channel release, an earlier stale
-channel, and early critical retention with no further sensor reads.
-Sensor reads, scheduler delays and GPU device operations are modeled.
-Evidence for the startup gate is in
-`~/.cache/sunstoneos/evidence/os-thermal-startup-20261024/checked/`.
-The change adds no state, MMIO or interrupt operations. A normal publication
-adds one acquire load of the policy channel mask; a transition to NORMAL can
-perform that load in both the callback and post-update publication. The
-consumer still performs its existing single acquire load. Sampling deadlines,
-critical retention and CPU clock/voltage permission checks are unchanged.
-No physical temperature reduction, scheduling latency or thermal recovery
-has been qualified. USB0 output does not carry thermal readings; the mimus
-result frame has no free field for them.
+The CPU-clock build retains 602 immutable 56-byte snapshots, or 33,712 bytes,
+covering the 60 s supervised lifetime at ten snapshots per second plus an
+initial and terminal row. Each row contains a timestamp, five temperatures
+and ages, a sample sequence and the seen, stale, level and sensor-fault flags.
+The thermal owner performs no allocation, output or additional sensor read.
+It publishes each row with a release store; readers acquire the count.
+A critical reading is recorded before `board_fail` closes the session.
+
+The first recognition's begin/end hooks select its baseline row and freeze
+the final count. They surround the recorded recognition call, including model
+loading, so the window contains both measured intervals. The end hook runs
+after `compute_us` and `total_us` are captured, including on early errors.
+Later recognitions cannot overwrite this first window. Other OS profiles
+allocate no snapshot buffer and expose no thermal report operation.
+
+With the same CPU-clock compiler flags, the thermal translation unit grows
+by 1440 bytes of code, 33,816 bytes of zero-initialized storage and four bytes
+of initialized data. The snapshot array accounts for 33,712 bytes of that
+storage. The comparison uses the preceding implementation's source and
+headers with the same cached compiler; it is a code-size measurement, not a
+board timing measurement. The normal checkpoint adds one counter read; the
+sampling and interrupt rates do not change.
+
+USB operation 7 returns this immutable window through the existing 64-byte
+response header, with up to 1024 payload bytes per request. Its 72-byte report
+header binds epoch, session generation, recognition generation, row count,
+overflow, CPU critical trip, begin/end times and recognition outcome. The
+header and rows total at most 33,784 bytes. The host first fetches the header,
+then at most 33 row pages, binding every page to the recognition generation.
+The linked manifest records report capability from the native symbols; older
+CPU-clock images without it receive no operation 7 request. The host saves
+raw frames, `thermal-report.bin` and decoded `thermal-report.json`
+separately from the existing recognition output. No transcript buffer grows.
+A transport failure ends capture without retry. Earlier recognition artifacts
+remain saved when thermal evidence is unavailable.
+
+The decoder reports incomplete evidence when any channel lacks a fresh
+reading, a snapshot gap exceeds 125 ms, or the final snapshot precedes the
+window end by more than 125 ms. Overflow and recognition failure are separate
+outcomes. A complete sampling record establishes neither continuous
+measurement nor physical operating-point qualification. USB delivery after a
+critical board failure is not guaranteed; the terminal row remains in RAM
+until power removal.
+
+The focused checks use modeled devices and task scheduling:
+
+- [Thermal integration](../checks/os-thermal-throttle.py) covers startup,
+  throttle/recovery, exact freshness expiry, the 70 °C stop, terminal-row
+  publication and fixed snapshot capacity across CPU, GPU and CPU-clock builds.
+- [Report capture](../checks/os-thermal-report.py) executes the linked native
+  admission, thermal task, window hooks, report copy and USB exchange. It checks
+  page bounds, immutable generations, malformed requests, the excluded profile,
+  terminal failure and separate host artifacts.
+- [CPU owner](../checks/os-cpu-clock-native.py) covers CPU-B, CPU-L and DSU
+  request order, sensor waits, no grant and retained failure, with modeled
+  driver completion and the real grant decoder and DSU table.
+
+The checked A76 CPU-clock build and raw evidence are in
+`~/.cache/sunstoneos/build/resume-thermal-1025-complete/` and
+`~/.cache/sunstoneos/evidence/resume-thermal-1025/`. The policy host check,
+40 thermal native cases, 51 preparation cases, eight CPU adapter/owner cases
+and eleven linked report cases pass. The host entry also passes its profile
+and post-capture routing check. No physical temperature response, scheduling
+latency or thermal recovery has been qualified.
 
 Power and thermal integration remains incomplete:
 
