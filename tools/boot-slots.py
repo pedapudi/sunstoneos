@@ -277,6 +277,24 @@ def container_writes(manifest_path):
     return writes
 
 
+def os_session_generation(raw, generation):
+    """Bind only the recorded-card template's generation; epochs stay zero."""
+    if (len(raw) not in (808, 904) or struct.unpack_from('<3Q', raw) !=
+            (0x4153373342535332, 2, 592) or struct.unpack_from('<2Q', raw, 24) != (0, 0) or
+            struct.unpack_from('<I', raw, 400)[0] != 2 or
+            struct.unpack_from('<3Q', raw, 592) != (0x415337334f534131, 1, len(raw))):
+        raise ValueError('Expected an unassigned zero-epoch recorded OS template')
+    result = bytearray(raw)
+    struct.pack_into('<Q', result, 32, generation)
+    if len(raw) == 904:
+        if (struct.unpack_from('<3Q', raw, 808) != (0x4153373343505531, 1, 96) or
+                struct.unpack_from('<2Q', raw, 840) != (0, 0) or
+                struct.unpack_from('<I', raw, 856)[0] != 3):
+            raise ValueError('Expected an unassigned recorded-card CPU grant')
+        struct.pack_into('<Q', result, 848, generation)
+    return bytes(result)
+
+
 def plan(args):
     allocation_raw = Path(args.allocation).read_bytes()
     allocation = json.loads(allocation_raw)
@@ -301,12 +319,17 @@ def plan(args):
                             region['first'], region['blocks']):
                     raise ValueError('Valid slot %s header has an extent in the slot %s region'
                                      % (name, slot))
-        loads = [(parse_load(args.image), IMAGE)] + [(parse_load(a), ASSET) for a in args.asset]
+        session_path = getattr(args, 'os_session', None)
+        bound_session = os_session_generation(Path(session_path).read_bytes(), generation) if session_path else None
+        loads = [(parse_load(args.image), IMAGE)]
+        if session_path:
+            loads.append(((Path(session_path), 0x41f00000), ASSET))
+        loads += [(parse_load(a), ASSET) for a in args.asset]
         if len(loads) > EXTENTS:
             raise ValueError('A slot holds one image and at most three assets')
         payload, extents, sector = bytearray(), [], region['first']
         for (path, load), kind in loads:
-            data = Path(path).read_bytes()
+            data = bound_session if session_path and load == 0x41f00000 and Path(path) == Path(session_path) else Path(path).read_bytes()
             sector = region['first'] + (len(payload) // SECTOR + 7) // 8 * 8
             payload += bytes((sector - region['first']) * SECTOR - len(payload))
             payload += data + bytes(sectors(len(data)) * SECTOR - len(data))
@@ -343,6 +366,8 @@ def plan(args):
             if overlaps(a['first_sector'], a['sectors'], b['first_sector'], b['sectors']):
                 raise ValueError('Planned writes overlap')
     output = new_directory(args.output)
+    if bound_session is not None:
+        write_new(output / 'os-session.bin', bound_session)
     for (name, _, data), record in zip(writes, records):
         write_new(output / record['file'], data)
     result = {'schema': 1, 'kind': PLAN_KIND, 'card_sectors': card_sectors,
@@ -443,6 +468,7 @@ def main(argv=None):
     p.add_argument('--image', required=True, metavar='PATH@LOAD')
     p.add_argument('--entry', required=True, type=address)
     p.add_argument('--asset', action='append', default=[], metavar='PATH@LOAD')
+    p.add_argument('--os-session', help='Unassigned zero-epoch recorded OS session; bind its generation as a session asset')
     p.add_argument('--container', help='prepare-microsd-boot.py manifest to install after the slot')
     p.add_argument('--output', required=True, help='New plan directory')
     p = sub.add_parser('apply', help='Apply a plan to an ordinary card image file')

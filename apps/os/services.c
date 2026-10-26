@@ -41,7 +41,21 @@ void board_service_progress(unsigned service)
 static int services_state(uint64_t now,unsigned *first)
 {
     int pending=0;
+    /* The supervisor is the sole reader. The admitted session is sealed for
+     * this boot; derive its task set once, outside the steady renewal path.
+     * Board service IDs 2..4 are Type-C, power and USB2 (start.c asserts them). */
+    static unsigned required;
+    if(!required){
+        const struct os_session *session=os_session_admitted();
+        if(!session){*first=OS_SERVICE_MIMUS;return 0;}
+        required=(1u<<OS_SERVICES)-1;
+        if(!a733_board_host_workload(session->board.workload))
+            required&=~((1u<<2)|(1u<<3)|(1u<<4));
+    }
     for(unsigned i=0;i<OS_SERVICES;++i){
+        /* main.c creates these three tasks only for host workloads. Keep
+         * their stable service IDs without demanding reports from absent tasks. */
+        if(!(required&(1u<<i)))continue;
         uint64_t t=atomic_load_explicit(&seen[i],memory_order_acquire);
         if(!t){if(!pending)*first=i;pending=1;continue;}
         /* A record newer than now comes from another core's later read. */

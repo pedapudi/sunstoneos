@@ -39,15 +39,17 @@ endif()
 # default affinity. The option is also the compile definition.
 option(A733_A76_ADMITTED "Integrated OS with recognition on the admitted Cortex-A76 cores" OFF)
 if(SUNSTONE_MIMUS_WORKERS STREQUAL "8" AND
-   (NOT A733_A76_ADMITTED OR SUNSTONE_A733_OS_RESIDENT OR SUNSTONE_A733_OS_AUDIO OR
+   (NOT A733_A76_ADMITTED OR SUNSTONE_A733_OS_AUDIO OR
     SUNSTONE_A733_OS_RADIO OR SUNSTONE_A733_OS_HEADSET OR SUNSTONE_A733_OS_GPU_LINEAR))
-  message(FATAL_ERROR "Eight OS inference workers require admitted supervised recorded recognition")
+  message(FATAL_ERROR "Eight OS inference workers require admitted recorded recognition")
 endif()
 # CPU operating points granted by a sealed supervised session; each change
 # needs the user's approval before the run (docs/cpu-clock.md).
 option(SUNSTONE_A733_OS_CPU_CLOCK "Integrated OS with granted CPU operating-point changes" OFF)
-if(SUNSTONE_A733_OS_CPU_CLOCK AND SUNSTONE_A733_OS_RESIDENT)
-  message(FATAL_ERROR "CPU operating-point grants name the supervised session's epoch; the resident loader replaces it on every boot")
+if(SUNSTONE_A733_OS_CPU_CLOCK AND SUNSTONE_A733_OS_RESIDENT AND
+   (SUNSTONE_A733_OS_AUDIO OR SUNSTONE_A733_OS_RADIO OR SUNSTONE_A733_OS_HEADSET OR
+    SUNSTONE_A733_OS_GPU_LINEAR OR SUNSTONE_A733_OS_NPU))
+  message(FATAL_ERROR "Resident CPU grants require the recorded-card session profile")
 endif()
 if(SUNSTONE_A733_OS_CPU_CLOCK AND NOT A733_A76_ADMITTED)
   message(FATAL_ERROR "CPU operating-point grants need A733_A76_ADMITTED")
@@ -57,6 +59,9 @@ endif()
 # the image has it, between the speed bin's vendor points. The boot mode is
 # the image manifest's perf_boot_mode.
 option(SUNSTONE_A733_OS_PERF "Integrated OS with the high and low performance-mode service" OFF)
+if(SUNSTONE_A733_OS_PERF AND SUNSTONE_A733_OS_RESIDENT)
+  message(FATAL_ERROR "Resident recorded-card CPU grants use startup operating points without the performance-command service")
+endif()
 set(SUNSTONE_A733_OS_PERF_BOOT "high" CACHE STRING "Performance mode at boot: high or low")
 if(SUNSTONE_A733_OS_PERF AND NOT SUNSTONE_A733_OS_CPU_CLOCK)
   message(FATAL_ERROR "The performance-mode service runs in the CPU clock owner; it needs SUNSTONE_A733_OS_CPU_CLOCK")

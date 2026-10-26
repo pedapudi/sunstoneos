@@ -13,6 +13,7 @@
 #include "a733_range.h"
 #include "a733_storage_digest.h"
 #include "a733_board_application.h"
+#include "a733_cpu_clock.h"
 #include "../../../platform/a733-smp-cached/boot.h"
 #include "../../../apps/os/os.h"
 #include <stddef.h>
@@ -462,9 +463,9 @@ static const struct slot_extent *session_extent(const struct slot_header *h)
 }
 /* Resident contract for the integrated OS image (docs/os-image.md). The slot
  * supplies the session page as an asset; the slot header's extent digest
- * already authenticated it. The session is the 808-byte OS session or the
- * microphone build's 992-byte one, and its own size field must equal the
- * extent. The loader stamps a fresh epoch into the session, binds its new
+ * already authenticated it. Recorded workload 2 has 808 bytes, or 904 with
+ * the CPU grant; its persisted epochs are zero. The separate microphone
+ * profile retains 992 bytes. Every size must match the session's size field. The loader stamps a fresh epoch into the session, binds its new
  * digest, its size and the image build ID that the session names, and
  * publishes the contract magic last. Deadlines count from arming. */
 static _Noreturn void enter(const struct slot_header *h)
@@ -476,11 +477,33 @@ static _Noreturn void enter(const struct slot_header *h)
     volatile uint64_t *result = (volatile uint64_t *)(uintptr_t)A733_SMP_RESULT_ADDRESS;
     const struct os_session *os = (const struct os_session *)(uintptr_t)A733_BOARD_SESSION_ADDRESS;
     if (!e || (e->bytes != A733_OS_SESSION_BYTES &&
+               e->bytes != A733_OS_SESSION_BYTES + sizeof(struct a733_cpu_clock_grant_record) &&
                e->bytes != A733_OS_SESSION_BYTES + OS_AUDIO_SESSION_BYTES)) finish(ENTRY_REFUSED, 1);
     if (s->magic != A733_BOARD_SUPERVISED_SESSION_MAGIC || s->version != 2 ||
         s->bytes != sizeof(*s) || s->generation != h->generation || !s->lease ||
         os->magic != A733_OS_SESSION_MAGIC || os->version != OS_SESSION_VERSION || os->bytes != e->bytes)
         finish(ENTRY_REFUSED, 2);
+    struct a733_cpu_clock_grant_record *grant = 0;
+    if (s->workload == 2) {
+        if ((e->bytes != A733_OS_SESSION_BYTES &&
+             e->bytes != A733_OS_SESSION_BYTES + sizeof(*grant)) || s->epoch || !s->sid_authority)
+            finish(ENTRY_REFUSED, 3);
+        /* Only this recorded-card profile interprets sid_evidence as the
+         * four identity words' digest; headset/radio profiles are unchanged. */
+        uint32_t sid[4]; uint8_t digest[32];
+        for (unsigned i = 0; i < 4; ++i) sid[i] = rd(0x03006200 + 4*i);
+        storage_digest_bytes(sid, sizeof(sid), digest);
+        if (memcmp(digest, s->sid_evidence, sizeof(digest))) finish(ENTRY_REFUSED, 4);
+        if (e->bytes != A733_OS_SESSION_BYTES) {
+            grant = (void *)((uint8_t *)s + A733_OS_SESSION_BYTES);
+            if (grant->magic != A733_CPU_CLOCK_GRANT_MAGIC || grant->version != 1 ||
+                grant->bytes != sizeof(*grant) || !grant->owner || grant->epoch ||
+                grant->generation != h->generation || grant->clusters != 3 ||
+                !grant->max_mhz[0] || !grant->max_mhz[1] || !grant->changes ||
+                grant->changes > A733_CPU_CLOCK_GRANT_CHANGES || zero(grant->approval, 32))
+                finish(ENTRY_REFUSED, 5);
+        }
+    } else if (e->bytes == A733_OS_SESSION_BYTES + sizeof(*grant)) finish(ENTRY_REFUSED, 3);
     /* The image refuses a contract whose generation a retained result already
      * holds. Each boot of a slot repeats its generation, so a result left by
      * the previous boot moves into this report before it is cleared. */
@@ -496,6 +519,7 @@ static _Noreturn void enter(const struct slot_header *h)
     uint64_t armed = 0;
     if (!arm(&armed) || !armed) finish(WATCHDOG, armed);
     s->epoch = armed;
+    if (grant) grant->epoch = armed;
     uint64_t digest[4];
     storage_digest_bytes(s, (size_t)e->bytes, (uint8_t *)digest);
     c->magic = 0;

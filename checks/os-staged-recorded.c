@@ -17,6 +17,14 @@ extern void fixture_result(unsigned overlap);
 static _Noreturn void finish(unsigned status)
 {fixture_status=status;__asm__ volatile("brk #0");for(;;){}}
 static void check(int ok,unsigned code){if(!ok)finish(code);}
+int mimus_keyboard_step(void){finish(30);}
+#ifdef SUNSTONE_BOARD_RESIDENT
+void board_service_progress(unsigned service){check(service<7,31);}
+#endif
+#ifdef SUNSTONE_A733_OS_CPU_CLOCK
+int os_thermal_report_copy(uint64_t expected,uint32_t offset,size_t bytes,uint8_t *out,size_t *copied,uint32_t *total)
+{(void)expected;(void)offset;(void)bytes;(void)out;(void)copied;(void)total;finish(32);}
+#endif
 int board_live(void *v){(void)v;return !atomic_load(&board.fatal)&&time_us<board.session.deadline_us;}
 void board_fail(void *v){(void)v;atomic_store(&board.fatal,1);}
 uint64_t a733_smp_counter(void){return time_us*24;}
@@ -103,6 +111,10 @@ void fixture_case(unsigned selected)
     case 10:
         check(atomic_load(&board.fatal)&&!mimus_board_live()&&mimus_board_export_live()==-1,24);
         check(!fixture_typec_reads&&!fixture_typec_revokes&&!fixture_usb2_reads,25);break;
+    case 11:
+        check(mimus_board_live()&&mimus_board_staged()&&!mimus_board_keyboard(),27);
+        check(mimus_board_trigger_step()==1,28);
+        check(!fixture_typec_reads&&!fixture_typec_revokes&&!fixture_usb2_reads,29);break;
     default:check(0,26);
     }
     fixture_status=1;__asm__ volatile("brk #0");

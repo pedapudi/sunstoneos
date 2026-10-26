@@ -294,7 +294,7 @@ def main():
             result['contract_profile'] = profile
         assert result['inference']['workers'] == args.workers, 'Linked worker count differs from build selection'
         if args.workers == 8:
-            assert args.lifetime == 'supervised' and not any((audio, radio, headset, gpu_linear)), 'Unsupported eight-worker OS profile'
+            assert not any((audio, radio, headset, gpu_linear)), 'Unsupported eight-worker OS profile'
     except AssertionError as error:
         print('FAIL integrated OS link check:', error, file=sys.stderr)
         return 1

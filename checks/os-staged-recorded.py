@@ -22,6 +22,7 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--build', type=Path, required=True)
 parser.add_argument('--output', type=Path, required=True)
 parser.add_argument('--resume', action='store_true')
+parser.add_argument('--startup-only', action='store_true', help='Only actual recorded startup/trigger and stop boundaries')
 args = parser.parse_args()
 out = args.output.resolve(); out.mkdir(parents=True, exist_ok=args.resume)
 steps = Steps(out, 'commands.json')
@@ -98,6 +99,21 @@ def checked(name, action):action();cases[name] = True
 
 def native_case(workload, case, start=True):
     n = Native(workload, start);n.call('fixture_case', case)
+
+if args.startup_only:
+    for name, case, started in [('before-ready',0,False), ('ready-no-host',1,True),
+                                ('automatic-trigger',11,True), ('failure-closes',2,True)]:
+        native_case(2, case, started); cases[name] = True
+    sources = ['checks/os-staged-recorded.py','checks/os-staged-recorded.c','checks/os-staged-usb-base.h',
+               'apps/mimus-board/application.c','apps/mimus-board/recognition.cc','apps/mimus-board/keyboard.c',
+               'apps/os/application.patch','apps/os/os.h']
+    result = dict(passed=True, physical_access=False, cases=cases,
+                  os_image_sha256=hashlib.sha256((args.build/'sunstone-a733-os.elf').read_bytes()).hexdigest(),
+                  image_sha256=hashlib.sha256(image_path.read_bytes()).hexdigest(),
+                  sources={p:hashlib.sha256((ROOT/p).read_bytes()).hexdigest() for p in sources},
+                  scope='Actual AArch64 recorded readiness and automatic trigger; USB providers, scheduler and inference completion modeled.')
+    (out/'result.json').write_text(json.dumps(result,indent=2)+'\n')
+    print('PASS recorded startup:', len(cases)); raise SystemExit(0)
 
 for label, workload, case, start in (
         ('staged-before-usb-start',2,0,False), ('staged-usb-ready-no-host-access',2,1,True),

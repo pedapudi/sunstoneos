@@ -57,6 +57,9 @@ int os_watchdog_reload(void *supervisor)
     expires=ticks+4*HZ;++reloads;last_reload=ticks;return 1;
 }
 #include "../apps/os/services.c"
+/* Supervision consumes the immutable admitted task selection. */
+static struct os_session service_session;
+const struct os_session *os_session_admitted(void){return &service_session;}
 
 /* Admission compiled with this build's lifetime. checks/os-image-launch.py
  * sets OS_MODEL_BUILD_ID to a linked image's identity, so that --admit judges
@@ -441,6 +444,32 @@ static void *read_file(const char *path,size_t bytes,void *out)
     FILE *f=fopen(path,"rb");assert(f);
     assert(fread(out,1,bytes,f)==bytes&&fgetc(f)==EOF);fclose(f);return out;
 }
+static void recorded_service_cases(void)
+{
+    for(unsigned workload=0;workload<=4;workload+=2){
+        for(unsigned missing=0;missing<=OS_SERVICES;++missing){
+            pid_t child=fork();assert(child>=0);
+            if(!child){
+                service_session.board.workload=workload;
+                ticks=HZ;expires=4*HZ;
+                for(unsigned i=0;i<OS_SERVICES;++i){
+                    if(i==missing||(workload==2&&i>=2&&i<=4))continue;
+                    board_service_progress(i);
+                }
+                unsigned required=missing<OS_SERVICES&&!(workload==2&&missing>=2&&missing<=4);
+                assert(os_services_healthy(ticks/24)==(required?-1:1));
+                assert(board_resident_renew(&ticks,4*HZ)==1);
+                assert(reloads==(required?0:1));
+                ticks+=4*HZ;
+                assert(os_services_healthy(ticks/24)==0);
+                assert(!board_resident_renew(&ticks,4*HZ));
+                _exit(0);
+            }
+            int status;assert(waitpid(child,&status,0)==child&&WIFEXITED(status)&&!WEXITSTATUS(status));
+        }
+    }
+    puts("PASS selected resident services: workloads 0/2/4, every missing selected service, absent host tasks, stalled progress");
+}
 int main(int argc,char **argv)
 {
     assert(mmap((void *)(uintptr_t)A733_BOARD_SESSION_ADDRESS,4096,PROT_READ|PROT_WRITE,
@@ -459,6 +488,7 @@ int main(int argc,char **argv)
         int ok=a733_smp_contract_valid(&c,strtoull(argv[4],0,0));
         printf("%s\n",ok?"admitted":"refused");return ok?0:1;
     }
+    if(argc==2&&!strcmp(argv[1],"--selected-services")){recorded_service_cases();return 0;}
     assert(argc==1);
     irq_cases();
     supervision_cases();

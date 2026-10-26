@@ -3,12 +3,12 @@
 #ifndef SUNSTONE_MIMUS_WORKERS
 #define SUNSTONE_MIMUS_WORKERS 2
 #endif
-// Eight-worker OS support is the admitted, supervised recorded composition.
+// Eight-worker OS support is the admitted recorded composition.
 #if defined(SUNSTONE_A733_OS) && SUNSTONE_MIMUS_WORKERS == 8
-#if !defined(A733_A76_ADMITTED) || defined(SUNSTONE_BOARD_RESIDENT) || \
+#if !defined(A733_A76_ADMITTED) || \
     defined(SUNSTONE_A733_OS_AUDIO) || defined(SUNSTONE_A733_OS_RADIO) || \
     defined(SUNSTONE_A733_OS_HEADSET) || defined(SUNSTONE_A733_OS_GPU_LINEAR)
-#error Eight OS inference workers require admitted supervised recorded recognition
+#error Eight OS inference workers require admitted recorded recognition
 #endif
 #endif
 inline constexpr unsigned kMimusOwnerPriority = 3;

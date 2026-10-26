@@ -82,6 +82,11 @@ Each listed service records the counter time of its latest bounded loop
 iteration. The record is one atomic store, which the EL0 recognizer can make.
 A failed service parks or suspends without recording.
 
+Recorded workload 2 selects PMIC, USB0, mimus and thermal services. It creates
+no Type-C, host-power or USB2 tasks, so those three reports are not required.
+The supervisor derives that task set once from the sealed session. Service
+numbers and the windows below remain fixed across workloads.
+
 | Service | Reports from | Window |
 | --- | --- | --- |
 | PMIC owner | Each poll | 1 s |
@@ -112,11 +117,11 @@ iteration, so a capture client waiting longer on an unanswered request means
 the worker has stopped, and the client's record then expires.
 
 The board's supervising task runs every 20 ms. While the board is live and
-every service has reported within its window, it renews WDT0 at most once per
+every selected service has reported within its window, it renews WDT0 at most once per
 second (`apps/os/services.c`). The supervising task starts with the scheduler,
 before the services have finished their own startup; USB0, for example,
 reports only after its supply rails are ready and TinyUSB has started. Until
-every service has made its first report, the task neither renews nor closes,
+every selected service has made its first report, the task neither renews nor closes,
 and the loader's first expiry, four seconds after arming, bounds startup. The
 first renewal follows the first complete set of reports. If a service is
 still silent at that expiry and the watchdog has not reset the board, the
@@ -335,7 +340,7 @@ latency or thermal recovery has been qualified.
 
 Power and thermal integration remains incomplete:
 
-- **CPU operating points.** The optional supervised CPU clock build uses
+- **CPU operating points.** The optional CPU clock build uses
   the pinned 26 MHz tables, speed-bin limits and session grant. The tables
   extend to 1,794 MHz for CPU-L and 2,002 MHz for CPU-B, subject to the bin.
   The driver lowers clusters that it raised above **1,014 MHz** to that
@@ -1131,12 +1136,19 @@ without a grant. No device, queue database or FEL program is opened.
 ### First bounded launch with recorded audio
 
 The smallest OS launch uses the supervised lifetime, staged recorded audio
-and explicit board workload 2. Only that configuration admits workload 2:
-`OS_STAGED_WORKLOAD` in `apps/os/os.h` excludes the resident lifetime and the
-microphone, headset and radio options, and both the workload rule and the
-staged USB0 mode use it. The USB0 owner must first finish its provider
+and explicit board workload 2. Recorded builds admit that workload in either
+lifetime; `OS_STAGED_WORKLOAD` excludes the microphone, headset and radio
+options. Both the workload rule and staged USB0 mode use it. The USB0 owner must first finish its provider
 and device-stack startup. Recognition then authenticates the staged models
 and WAV and produces one transcript without an external USB disk.
+
+The [autonomous card bundle](designs/autonomous-card-os.md) supplies the
+resident recorded session, models and WAV from the selected slot. Its complete
+performance profile uses eight workers and a fresh per-boot CPU grant for both
+clusters' vendor operating points. Resident supervision requires only the
+selected PMIC, USB0, recognizer and thermal tasks; absent USB-host tasks do not
+block renewal. No host trigger or transcript acknowledgment is required.
+Physical cold entry, ownership and reset qualification remain separate.
 
 Workload 0 still requires storage attachment and a sector-zero read completed
 during recognition. Workload 4 additionally requires a boot keyboard and its

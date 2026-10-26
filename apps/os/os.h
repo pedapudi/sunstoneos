@@ -14,11 +14,10 @@ int os_thermal_throttled(void);
 #if defined(SUNSTONE_A733_OS_MSBC) && !defined(SUNSTONE_A733_OS_HEADSET)
 #error Wideband speech is a headset option
 #endif
-/* Workloads 0/4 require storage; the radio build selects 1. The supervised
- * recorded-audio image alone also admits the storage-free USB0-only workload
- * 2 (staged mode). Resident builds also define SUNSTONE_BOARD_SUPERVISED, so
- * the lifetime test names SUNSTONE_BOARD_RESIDENT. */
-#if defined(SUNSTONE_BOARD_SUPERVISED) && !defined(SUNSTONE_BOARD_RESIDENT) && \
+/* Workloads 0/4 require storage; the radio build selects 1. Recorded images
+ * in either lifetime also admit storage-free workload 2. The resident
+ * supervisor requires progress only from tasks selected by that workload. */
+#if defined(SUNSTONE_BOARD_SUPERVISED) && \
     !defined(SUNSTONE_A733_OS_AUDIO) && !defined(SUNSTONE_A733_OS_HEADSET) && !defined(SUNSTONE_A733_OS_RADIO)
 #define OS_STAGED_WORKLOAD 1
 #else
@@ -80,9 +79,8 @@ _Static_assert(sizeof(struct os_audio_session)==OS_AUDIO_SESSION_BYTES&&
 #define OS_SESSION_BASE_BYTES (A733_OS_SESSION_BYTES+OS_NPU_SESSION_BYTES)
 #endif
 #ifdef SUNSTONE_A733_OS_CPU_CLOCK
-/* Supervised only, with the A76 cores admitted (cmake/a733-os.cmake): the
- * grant names the session's epoch, which the stage-2 loader replaces on every
- * resident boot. */
+/* With A76 admission, the grant names this boot's epoch. The recorded-card
+ * loader stamps a zero-epoch persisted grant together with the board epoch. */
 #include "a733_cpu_clock.h"
 #define OS_SESSION_BYTES (OS_SESSION_BASE_BYTES+96u)
 #else

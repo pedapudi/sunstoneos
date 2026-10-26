@@ -16,8 +16,9 @@ card. It checks that state against the pinned boot0 and the A733 manual; host
 models cover the check.
 The loader's entry path, which arms the watchdog, builds the resident contract
 of the [integrated OS image](os-image.md) and branches to it, is implemented
-and host-modeled. Its three native entry prerequisites refuse, so the loader
-does not enter the loaded image. The
+and host-modeled. Unresolved remote-writer and CPU/cache ownership checks
+refuse before SD access or slot copies. Local entry and reset policy checks
+are implemented. The
 [boundary section](#the-loader-stops-before-entering-the-image) lists what each
 prerequisite needs.
 
@@ -127,8 +128,8 @@ the header state, generation, load state and failing extent.
 | 4 | Every valid slot failed to load | SD core error |
 | 5 | The system counter does not advance; the card was not accessed | Zero |
 | 6 | The resident contract was published and the image entered | Entry address |
-| 7 | Entry refused: no session extent of 808 or 992 bytes at `0x41f00000` (1), or its board magic, version, size, generation or lease, or its OS magic, version or size field differs (2) | 1 or 2 |
-| 8 | WDT0, the ROM redirect words, the RTC FEL flag or CCU word `0x24` was not in the cold state, or arming did not read back | Zero when the loader did not enable WDT0 mode; otherwise the arming counter value |
+| 7 | Session extent size refused (1); base identity/header refused (2); recorded profile/epoch refused (3); SID differs (4); CPU grant refused (5) | Refusal number |
+| 8 | WDT0, the ROM redirect words or the RTC FEL flag was not in the cold state, or arming did not read back | Zero when the loader did not enable WDT0 mode; otherwise the arming counter value |
 | 9 | Remote-writer ownership refused before SD access | Unproven-master mask |
 | 10 | CPU/cache ownership refused before SD access | Zero |
 | 11 | SD ownership remains retained; the loader parks | Original loader status; SD diagnostic fields remain available |
@@ -229,45 +230,51 @@ and measured end-to-end loading time.
 
 ## The loader stops before entering the image
 
-Three prerequisites in [admission.c](../boot/a733/stage2/admission.c) must each
-return 1 before the loader enters a verified image. Each is a separate
-function, so later work can supply its evidence alone. All three return
-refusal.
+Before card access or slot copies, [admission.c](../boot/a733/stage2/admission.c)
+checks remote-writer exclusion and CPU/cache ownership. A refusal publishes
+its diagnostic report and parks. These checks establish no ownership by
+changing another agent's reset or clock state.
 
-- **Remote-writer exclusion** (`a733_stage2_remote_writers_excluded`). No stop
-  or drain procedure exists for the E902
-  core or for other DMA-capable agents
-  ([cold-entry record](cold-entry.md#remote-processor-exclusion-needs-the-effective-a733-register-map)).
-  Ownership of the `0x42e00000` boot0 staging area is also undecided.
-- **Watchdog recovery** (`a733_stage2_watchdog_recovery`). A watchdog expiry
-  after a cold boot has not been
-  shown to restart the board into this monitor with both cards preserved. A
-  forced-FEL return from a cold boot has not been observed either; the
-  FEL-launched watchdog path writes an RTC FEL flag and a redirect flag that a
-  cold boot never sets.
-- **Entry state** (`a733_stage2_entry_state`). The CPU, GIC and timer state
-  that boot0 leaves at EL3 has not been compared with the reset state that
-  FEL-launched images see.
+- **Remote writers.** The native read-only checker reports a mask of agents
+  whose exclusion is unproven. OR100 remains unproven; CE requires both resets
+  asserted. The mask prevents a bundle or session from substituting a host
+  assertion for hardware exclusion.
+- **CPU/cache ownership.** The pinned boot0 cache loop covers the documented
+  CPU cache hierarchy, including the DSU L3. Stable exclusion of every
+  secondary Arm core remains unproven: an OFF snapshot alone does not rule
+  out an autonomous wake or start request. The separate predicate still
+  refuses. See [cold entry](cold-entry.md).
+
+Before OS entry, the loader checks the local EL3/core-0/A55 state, masked
+interrupts, disabled data cache and translation, and the counter-frequency
+contract. The reset policy requires disabled WDT0, zero ROM redirect words
+and a zero RTC FEL flag. Normal card boot permits the BOOT input to select
+storage. These readbacks establish the selected reset policy; physical
+watchdog expiry and successful card reboot remain unqualified.
 
 ## The entry path builds the resident contract
 
 With the prerequisites granted, the loader enters only the integrated OS
 image. Its slot carries the OS session as an asset loaded at `0x41f00000`;
 the slot header's extent digest has already authenticated it. The session is
-808 bytes, or 992 bytes in the microphone build, which appends the I2S
-receive facts.
+808 bytes, 904 bytes for recorded workload 2 with a CPU grant, or 992 bytes
+in the microphone build. The recorded profile's input epochs are zero; its
+board and optional grant generation both equal the selected slot generation.
 
-1. Refuse with status 7 unless that extent exists with one of these two
+1. Refuse with status 7 unless that extent exists with one of these three
    sizes, the session's board magic, version 2, size, nonzero lease and
    generation equal the slot's, and its OS magic, version and size field
-   match, the size field being equal to the extent.
+   match, the size field being equal to the extent. Recorded workload 2 also
+   requires a zero board epoch, an SID authority and the SHA-256 of the four
+   live SID identity words. Its 904-byte form requires a valid CPU grant,
+   zero grant epoch, matching generation, both clusters and a bounded change
+   count. A 904-byte session with another workload refuses.
 2. If the image result record at `0x42000000` holds the resident OS result
    magic, copy its 128 bytes into report bytes 192..319 and clear its magic.
    Each boot of a slot repeats its generation, and the image refuses a
    contract whose generation a retained result already holds.
 3. Refuse with status 8 if WDT0 mode bit 0 or configuration bit 8 is set,
-   the ROM redirect words or RTC FEL flag are nonzero, or CCU word `0x24` bit 8
-   is set. Otherwise write the reset output and four-second configuration, read
+   or the ROM redirect words or RTC FEL flag are nonzero. Otherwise write the reset output and four-second configuration, read
    them back, read the counter as `armed_at`, enable the mode and restart it.
    The arming must read back within one millisecond. This is the FEL
    launcher's sequence without the redirect and FEL flag. If the mode
@@ -275,8 +282,8 @@ receive facts.
    status 8 with the arming counter value as its detail. WDT0 then stays
    armed with no ROM redirect, so the board leaves the ROM's FEL mode with a
    cold reset within four seconds.
-4. Write `armed_at` into the session as its fresh epoch and hash every
-   session byte.
+4. Write `armed_at` into the board session and optional recorded CPU grant
+   as their fresh epoch, then hash every session byte.
 5. Clear the contract magic at `0x42004000`. Write version 2, the epoch, the
    slot generation and its inverse, the build ID named by the session and the
    session lease. Write `armed_at`, a startup deadline one second later, no
@@ -290,12 +297,11 @@ receive facts.
 
 The OS image's armed boot reads WDT0, the redirect words and the FEL flag
 back against this contract before it admits it. A slot has one image and at
-most three assets, so the OS image's two models and recorded WAV must form
-one asset extent at `0x44000000`, with the session as the second asset.
-
-The legacy profile reads about 25 KB/s, so 14 MB of models would take roughly
-ten minutes. A faster SD profile needs the provider-owned module clock change
-that the SD core already defines.
+most three assets. [Cold OS preparation](designs/autonomous-card-os.md) combines
+both models in one span at `0x44000000`, preserving their fixed addresses.
+The other two assets are the session and the WAV. `boot-slots.py plan
+--os-session` accepts an unassigned zero-epoch recorded template and binds
+both board and grant generation before computing the slot's extent hashes.
 
 ## Install, update and rollback
 
