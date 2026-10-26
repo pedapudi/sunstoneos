@@ -2,16 +2,22 @@
 """Check the video PLL profile against pinned sources and the board dump, then run the decoder cold-start model."""
 import argparse
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import re
+import shlex
 import subprocess
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+UBOOT_SHA = 'bd8e32740bc1c25532f28cae7860c61f07506dfc53a672d9726d2fd7ea71ff0c'
 CACHE = Path.home()/'.cache/sunstoneos'
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--output', type=Path, required=True)
 p.add_argument('--clang', default='clang')
+p.add_argument('--app-compile-commands', type=Path, nargs='*', default=[],
+               help='compile_commands.json of configured apps/{h264,hevc,jpeg} builds; their native.c is compiled')
 a = p.parse_args()
 a.output.mkdir(parents=True, exist_ok=False)
 paths = {
@@ -27,6 +33,9 @@ paths = {
     'dump': CACHE/'evidence/board-session-20261025-24/port-3-3/clock-audit-b/session.json',
     'rom': CACHE/'sources/brom/ns-brom.bin',
     'jpeg': CACHE/'video-codecs/fixtures/baseline-48x32.jpg',
+    'schematic': CACHE/'sources/board-documents/schematic-v1.2.txt',
+    'uboot': CACHE/'sources/gpu-backsolve-20261025/orangepi-build-a95129bf/dts/u-boot-current.dts',
+    'kernel_dts': CACHE/'sources/board-kernel/sun60i-a733-orangepi-zero3w.dts',
 }
 expected = {
     'manual': '219d3c21e5377d18a096765f429555d0693f7fa9b2ae2eb5bb3f225d8b6a09c2',
@@ -41,6 +50,9 @@ expected = {
     'dump': 'd9335d5957e8a61bba56c8cfb615a508288604d6478c8095a7848462263fa261',
     'rom': '95be69c916846a8259578565f3193a6b9ab0625294d5374f3dc6c2f667fc6169',
     'jpeg': '6522f2719f1f05e23a95aa71a18d52f2e91b19b4b6c94381b4100de4c79fd573',
+    'schematic': 'c43d19737277e895bd63af5d3df938ab07704e1e5004f2f11986e7de7bb2bcea',
+    'uboot': UBOOT_SHA,
+    'kernel_dts': '31145367f604fd756f2c6a67447e5134e4be0ad5fae87672cfaa9b7c6d055a39',
 }
 for key, path in paths.items():
     assert hashlib.sha256(path.read_bytes()).hexdigest() == expected[key], key
@@ -89,9 +101,15 @@ for n in range(53, 106):
 assert best == (624000000, 78, 3)
 factors = ((78 - 1) << 8) | ((3 - 1) << 20)
 assert factors == 0x00204d00 and 24000000*78 == 1872000000
-for term in ['read_times != 100', 'lock_times != 3', 'udelay(3)', 'udelay(20)']:
-    assert term in s['common'], term
-assert 'writel(reg | ldo_en' in s['gate'] and 'writel(reg | output' in s['gate']
+helper = s['common'][s['common'].index('#if IS_ENABLED(CONFIG_AW_STANDARD_CCU)'):]
+ordered(helper, ['while (read_times != 100 && lock_times != 3) {', 'if (readl(addr) & lock)', 'lock_times = 0;',
+                 'udelay(3);', 'if (lock_times == 3)\n\t\tudelay(20);'])
+enable = s['gate'][s['gate'].index('int ccu_pll_gate_helper_enable'):]
+ordered(enable, ['writel(reg & ~output', 'writel(reg | ldo_en', 'writel(reg | gate', 'writel(reg | lock_enable',
+                 'ccu_helper_wait_for_lock(common, lock)', 'writel(reg | output'])
+relock = s['nm'][s['nm'].index('static int ccu_nm_set_rate'):]
+ordered(relock, ['/* Enable lock enable */', 'reg &= ~(nm->lock_enable);', 'reg |= (nm->lock_enable);',
+                 'ccu_helper_wait_for_lock(&nm->common, nm->lock);'])
 
 # The vendor operating point and parent selection.
 table = s['vf'][s['vf'].index('ve-opp-table'):]
@@ -100,7 +118,36 @@ assert len(rows) == 11 and all(hz == '624000000' and uv == '800000' for _, hz, u
 assert '#define VE_DVFS_MAX_FREQ\t(624)' in s['plat'] and 'attr->default_freq = attr->dvfs_array[j].ve_freq;' in s['plat']
 setup = s['cedar'][s['cedar'].index('static long setup_ve_freq'):]
 ordered(setup, ['disable_cedar_hw_clk_module', 'clk_set_rate(cedar_devp->ve_clk', 'enable_cedar_hw_clk_module'])
+module = s['cedar'][s['cedar'].index('static int enable_cedar_hw_clk_module(struct cedar_dev *cedar_devp)\n{'):]
+module = module[module.index('#if IS_ENABLED(CONFIG_ARCH_SUN60IW2)'):]
+ordered(module, ['clk_prepare_enable(cedar_devp->ahb_gate)', 'clk_prepare_enable(cedar_devp->mbus_gate)',
+                 'clk_prepare_enable(cedar_devp->mbus_clk)', 'clk_prepare_enable(cedar_devp->bus_clk)',
+                 'clk_prepare_enable(cedar_devp->ve_clk)'])
 assert 'clk_set_parent(cedar_devp->ve_clk, cedar_devp->pll_ve)' in s['cedar']
+# Every PLL_VE0 consumer: the encoder at mux 0, the decoder at mux 1, the NPU at mux 4.
+consumers = {n: re.search(n + r'\[\] = \{(.*?)\};', ccu).group(1).replace('"', '').replace(' ', '').split(',')
+             for n in re.findall(r'static const char \* const (\w+)\[\] = \{[^;]*"pll-ve0"', ccu)}
+assert {n: v.index('pll-ve0') for n, v in consumers.items()} == {'ve_enc0_parents': 0, 've_dec_parents': 1, 'npu_parents': 4}
+platform = (ROOT/'drivers/video/a733_video_platform.c').read_text()
+assert 'pll_ve0_consumers[]={{0xa80,0},{0xa88,1},{0xb00,4}}' in platform
+# The VE supply: schematic sheet 6 puts VDD-VE on DCDC2 with VDD-SYS, and the
+# power-sequence sheet lists it with DCDC2; DCDC5 feeds VDD-CPUL. The vendor
+# U-Boot device tree names DCDC5 as ve-supply; the board kernel's has none.
+pages = s['schematic'].split('\f')
+sheet6 = [line.split() for line in pages[5].splitlines()]
+def adjacent(*words):
+    return any(line[i:i + len(words)] == list(words) for line in sheet6 for i in range(len(line)))
+# The text layer keeps each column's labels in drawing order: DCDC2's net
+# labels VDD-SYS, then VDD-VE, follow it (rendered in sheet-6.png).
+lines = [' '.join(line) for line in sheet6]
+dcdc2 = next(i for i, line in enumerate(sheet6) if any(line[j:j + 2] == ['DCDC2', 'VDD-SYS'] for j in range(len(line))))
+assert adjacent('DCDC5', 'VDD-CPUL') and any('VDD-VE' in line.split() for line in lines[dcdc2:dcdc2 + 6])
+sequence = pages[1]
+assert re.search(r'VDD-SYS/VDD-DRAM/VDD-VE\s+/VDD-NPU.*?DCDC2\(4A\)', sequence, re.S)
+assert 've-supply = <0x2a>;' in s['uboot'] and re.search(r'axp8191-dcdc5";[^}]*phandle = <0x2a>;', s['uboot'])
+assert 've-supply' not in s['kernel_dts']
+for app in ('jpeg', 'h264', 'hevc'):
+    assert 's->supply_uv==800000&&s->supply_rail==A733_RAIL_DCDC2' in (ROOT/'apps'/app/'admission.c').read_text(), app
 dtsi = s['dtsi']
 dec = dtsi[dtsi.index('ve: ve@1c0e000'):dtsi.index('ve1: ve1@1c0e000')]
 enc = dtsi[dtsi.index('ve2: ve2@1c10000'):]
@@ -143,6 +190,73 @@ for name in ('cold', 'platform'):
         runs[' '.join([name, *extra])] = r.stdout.splitlines()
 assert any(line.startswith('PASS: PLL_VE0 at the vendor 624 MHz') for line in runs['cold'])
 assert any(line.startswith('PASS: native VE binding model') for line in runs['platform'])
+# Mutants that the model must refuse: each replaces one text in one source.
+MUTANTS = [
+    ('drivers/video/a733_video_unit.c', '!(w&UINT32_C(0xb8000000))', '!(w&UINT32_C(0x38000000))', 'entry with enable set'),
+    ('drivers/video/a733_video_unit.c', '!(w&UINT32_C(0xb8000000))', '!(w&UINT32_C(0x98000000))', 'entry with lock enable set'),
+    ('drivers/video/a733_video_unit.c', '#define PLL_FIELDS UINT32_C(0xf870ff02)', '#define PLL_FIELDS UINT32_C(0xf870ffe2)', 'lock levels admitted'),
+    ('drivers/video/a733_video_unit.c', 'u->pll_inherited=pll&PLL_INHERITED;', 'u->pll_inherited=PLL_INHERITED;', 'bit 24 forced on'),
+    ('drivers/video/a733_video_unit.c', '{{BIT(30),BIT(30)},{0x0070ff02u,A733_VIDEO_PLL_FACTORS},\n        {BIT(31),BIT(31)}',
+     '{{BIT(30),BIT(30)},{BIT(31),BIT(31)},\n        {0x0070ff02u,A733_VIDEO_PLL_FACTORS}', 'enable before factors'),
+    ('drivers/video/a733_video_unit.c', 'value=(*word&~(mask|PLL_LOCK))|(value&mask);', 'value=(*word&~mask)|(value&mask);', 'LOCK written back'),
+    ('include/a733_pll_lock.h', "if(read(cookie,&v)!=1 || (v&~A733_PLL_LOCK_BIT)!=word || now(cookie,&t)!=1)return 0;",
+     "if(read(cookie,&v)!=1 || now(cookie,&t)!=1)return 0;", 'no whole-word check per LOCK read'),
+    ('include/a733_pll_lock.h', 'if(!locked){l->locked=0;return 0;}', 'if(!locked)return 0;', 'LOCK drop ignored'),
+    ('include/a733_pll_lock.h', '#define A733_PLL_LOCK_GAP_US 3u', '#define A733_PLL_LOCK_GAP_US 1u', 'reads 2 us apart'),
+    ('include/a733_pll_lock.h', '#define A733_PLL_LOCK_SETTLE_US 20u', '#define A733_PLL_LOCK_SETTLE_US 16u', 'settle of 17 us'),
+    ('include/a733_pll_lock.h', '#define A733_PLL_LOCK_MAX_READS 100u', '#define A733_PLL_LOCK_MAX_READS 50u', '50 reads'),
+    ('drivers/video/a733_video_platform.c', '{{0xa80,0},{0xa88,1},{0xb00,4}}', '{{0xa88,1},{0xb00,4}}', 'encoder consumer ignored'),
+    ('drivers/video/a733_video_platform.c', '{{0xa80,0},{0xa88,1},{0xb00,4}}', '{{0xa80,0},{0xa88,1}}', 'NPU consumer ignored'),
+    ('drivers/video/a733_video_platform.c', '    if(p->config.start==A733_VIDEO_COLD_NS_ROM&&p->cold_step==COLD_PLL_WAIT) {',
+     '    if(0) {', 'lock wait under the register mutex'),
+]
+mutants = []
+for i, (path, old, new, name) in enumerate(MUTANTS):
+    text = (ROOT/path).read_text()
+    assert text.count(old) == 1, (name, old)
+    root = a.output/'mutants'/str(i)
+    (root/Path(path).parent).mkdir(parents=True)
+    (root/path).write_text(text.replace(old, new))
+    units = [str(root/path) if u == path else u for u in sources]
+    binary = root/'cold'
+    # A mutant may leave a variable unused, so warnings stay warnings here.
+    subprocess.run([a.clang, *[f for f in flags[:-1] if f != '-Werror'], '-I' + str(root/'include'), '-Iinclude', *units,
+                    'checks/a733-video-cold.c', '-o', binary], cwd=ROOT, check=True,
+                   stdout=(root/'compile.log').open('w'), stderr=subprocess.STDOUT)
+    r = subprocess.run([binary, str(paths['jpeg']), str(paths['rom'])], cwd=ROOT, capture_output=True, text=True,
+                       env={'UBSAN_OPTIONS': 'halt_on_error=1', 'ASAN_OPTIONS': 'detect_leaks=0'})
+    assert r.returncode != 0, ('mutant survived', name)
+    mutants.append({'source': path, 'mutant': name, 'refused': True})
+# The session producers default to the vendor point.
+producers = {}
+for app in ('hevc', 'h264-encode', 'jpeg-encode'):
+    spec = importlib.util.spec_from_file_location('producer_' + app.replace('-', '_'), ROOT/'apps'/app/'producer.py')
+    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    seen = {}
+    module.extend = lambda board, raw, **kw: seen.update(kw) or b''
+    inputs = a.output/'producer'/app; inputs.mkdir(parents=True)
+    argv = []
+    for name in ('board', 'input', 'initial', 'memory', 'electrical', 'supervision'):
+        (inputs/name).write_bytes(b'x'); argv += ['--' + name, str(inputs/name)]
+    argv += ['--output', str(inputs/'out'), '--owner', '1', '--authority', '2', '--client', '3']
+    if app == 'hevc':
+        argv += ['--first-bytes', '1']
+    saved = sys.argv; sys.argv = [app] + argv
+    try: module.main()
+    finally: sys.argv = saved
+    assert (seen['module'], seen['hz']) == (0x01000000, 624000000), app
+    producers[app] = {'module': hex(seen['module']), 'hz': seen['hz']}
+# The changed applications' native.c, with their own configured flags.
+applications = {}
+for commands in a.app_compile_commands:
+    for e in json.loads(commands.read_text()):
+        if not re.search(r'apps/(h264|hevc|jpeg)/native\.c$', e['file']):
+            continue
+        args = e['arguments'] if 'arguments' in e else shlex.split(e['command'])
+        args[args.index('-o') + 1] = str(a.output/(e['file'].split('/')[-2] + '-native.o'))
+        r = subprocess.run(args + ['-Werror'], cwd=e['directory'], capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+        applications[e['file'].split('/')[-2]] = 'compiled with -Werror'
 for target in ('drivers/video/a733_video_unit.c', 'drivers/video/a733_video_platform.c',
                'drivers/video/a733_video_encode_platform.c'):
     subprocess.run([a.clang, '--target=aarch64-none-elf', '-std=c11', '-Wall', '-Wextra', '-Werror', '-O2',
@@ -154,7 +268,10 @@ record = {
                 'vco_hz': 1872000000, 'factor_bits': hex(factors), 'microvolts': 800000},
     'board_entry': board,
     'model': runs,
+    'mutants_refused': mutants,
+    'producers': producers,
+    'applications': applications,
     'scope': 'Source, dump and model comparison. No board access; physical LOCK, rate and decoding are unmeasured.',
 }
 (a.output/'result.json').write_text(json.dumps(record, indent=2) + '\n')
-print('PASS video PLL profile, vendor sources, board entry state, cold-start model and AArch64 compilation')
+print(f'PASS video PLL profile, vendor sources and order, VE supply, board entry state, cold-start model, {len(mutants)} mutants refused, producer defaults, {len(applications)} applications and AArch64 compilation')

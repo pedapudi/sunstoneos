@@ -116,6 +116,11 @@ int a733_video_platform_retained_copy(void *,uint64_t,uint64_t,
  */
 int a733_video_platform_native_read(void *,uintptr_t,uint32_t *);
 int a733_video_platform_native_write(void *,uintptr_t,unsigned,uint32_t);
+/* The native write allowlist as a pure rule, for native_write and models:
+ * returns 1 allowed with the owned mask for a733_video_unit_native_write, 0
+ * refused and -1 when read fails. read observes the PLL_VE0 consumers. */
+int a733_video_platform_write_policy(uintptr_t,unsigned,uint32_t,int (*read)(void *,uintptr_t,uint32_t *),
+    void *,uint32_t *owned);
 
 /* One fixed H.264 consumer of the same decoder sequencing and leases. The
  * H.264 job stays typed and is never presented as a JPEG picture or scan.

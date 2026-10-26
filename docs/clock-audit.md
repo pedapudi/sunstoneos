@@ -374,7 +374,7 @@ GPU and NPU clock and voltage changes and the microSD 1.8 V switch.
 5. **Video engine and JPEG at 624 MHz.**
    - *Reference:* vf.dtsi:2169-2172.
    - *Change:* the decoder's cold start programs PLL_VE0 for 624 MHz, and the
-     HEVC session producer defaults to it ([video PLL design](designs/video-pll.md)).
+     HEVC and encoder session producers default to it ([video PLL design](designs/video-pll.md)).
      The encoder first needs a cold start.
    - *Approval:* the coordinator directed it.
    - *Board run:* the PLL table alone through FEL, then a JPEG decode at

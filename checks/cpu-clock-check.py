@@ -321,8 +321,11 @@ def main():
     helper = common[common.index('#if IS_ENABLED(CONFIG_AW_STANDARD_CCU)'):]
     for term in ['while (read_times != 100 && lock_times != 3) {', 'udelay(3);', 'if (lock_times == 3)\n\t\tudelay(20);']:
         assert term in helper, term
-    for define in ['#define LOCK_READS 3u', '#define LOCK_GAP_US 3u', '#define LOCK_SETTLE_US 20u', '#define SETTLE_US 20u']:
-        assert define in driver, define
+    lock = read(ROOT / 'include/a733_pll_lock.h')
+    for define in ['#define A733_PLL_LOCK_READS 3u', '#define A733_PLL_LOCK_GAP_US 3u',
+                   '#define A733_PLL_LOCK_SETTLE_US 20u', '#define A733_PLL_LOCK_MAX_READS 100u']:
+        assert define in lock, define
+    assert '#define SETTLE_US 20u' in driver and 'a733_pll_lock_count(&c->lock' in driver
     # DSU rule: three quarters of the faster cluster, rounded down to the
     # 26 MHz step, at most the DSU point at CPU-L's voltage, and no voltage
     # write of its own.

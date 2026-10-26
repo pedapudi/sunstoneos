@@ -66,10 +66,13 @@ The enable table has six entries, each read back:
 The LOCK bit (28) is read-only status: the table writes it as zero and the
 readback ignores it. The output gate (bit 27) stays closed.
 
-After the register lock is released, the sequencer reads the control word at
-least 3 µs apart until three consecutive reads show LOCK, at most 100 times,
-then waits 20 µs. Only the PLL_NPU token's holder writes this word, so the
-sampling needs no lock. The open stage requires the control word
+After the register lock is released, the sequencer runs the lock wait that
+it shares with the CPU clock and the video decoder (`include/a733_pll_lock.h`).
+The wait reads the control word until three consecutive reads show LOCK, at
+most 100 times, starting each read at least 3 µs after the previous read
+ended, as the kernel helper's `udelay(3)` follows each read. It then waits
+20 µs after the third. Only the PLL_NPU token's holder writes this word, so
+the sampling needs no lock. The open stage requires the control word
 `0xe0305100` with LOCK and the captured bit 24 set as applicable, then opens
 the output gate. The final readback requires `0xe8305100` with those same
 bits. A LOCK that never appears leaves the PLL enabled with its output closed

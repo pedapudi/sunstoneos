@@ -82,6 +82,8 @@ static int cold_entry(struct a733_video_decoder *p)
 /* One bounded action per acquire call. Reset remains asserted through the PCK
  * ON acknowledgement. Preserve all unrelated gates: the BSP's key-OR aliases
  * conflict with ordinary gate fields documented in manual4.1.6.82-84. */
+#define COLD_PLL_WAIT 14u
+#define COLD_STEPS 19u
 static int cold(struct a733_video_decoder *p)
 {
     struct a733_video_unit *u=&p->unit;
@@ -103,15 +105,20 @@ static int cold(struct a733_video_decoder *p)
     case 10:return update(u,CCU+0x5e0,BIT(14),BIT(14));
     case 11:return update(u,CCU+0x5e4,BIT(18),BIT(18));
     case 12:return update(u,CCU+0xa8c,BIT(2),BIT(2));
-    /* Bus gate open, reset released, module gate closed: the PLL table runs
-     * here, as cedar_ve.c setup_ve_freq sets the rate with the module clock
-     * disabled. */
-    case 13:return a733_video_unit_pll_prepare(u)&&update(u,CCU+0xa88,BIT(31),BIT(31));
-    case 14:return a733_video_unit_baseline(u);
+    /* Reset released, bus gates open and the module gate closed: the state
+     * before cedar_ve.c enable_cedar_hw_clk_module opens the module clock,
+     * its last gate (lines 450-472, after the AHB, MBUS and bus gates), with
+     * the parent clk_set_parent chose (line 1789). setup_ve_freq changes the
+     * rate with the module clock disabled too (lines 351-366). PLL_VE0's
+     * table starts here; its lock wait is step COLD_PLL_WAIT, which acquire
+     * runs without the register mutex. */
+    case 13:return a733_video_unit_pll_start(u);
+    case 15:return a733_video_unit_pll_open(u)&&update(u,CCU+0xa88,BIT(31),BIT(31));
+    case 16:return a733_video_unit_baseline(u);
     /* A733 kernel cold startup always pulses VCU before any compound-ID
      * lookup. Immutable ROM/resource admission authorizes only this reset. */
-    case 15:return update(u,VE+0x804,0x11,0x11);
-    case 16:return update(u,VE+0x804,0x11,0);
+    case 17:return update(u,VE+0x804,0x11,0x11);
+    case 18:return update(u,VE+0x804,0x11,0);
     default:return 0;
     }
 }
@@ -131,13 +138,17 @@ static int acquire(struct a733_video_decoder *p,const void *j,uint64_t d,uint64_
     }
     *token=u->token;
     if(p->checked)return 1;
+    if(p->config.start==A733_VIDEO_COLD_NS_ROM&&p->cold_step==COLD_PLL_WAIT) {
+        if(!a733_video_unit_pll_wait(u))return fail(u);
+        ++p->cold_step;return 0;
+    }
     int r=lock(u);if(r!=1)return r;
     if(p->config.start==A733_VIDEO_COLD_NS_ROM) {
         int c=cold(p);
         if(!c)return fail(u);
         if(c==1)++p->cold_step;
         if(unlock(u)!=1)return -1;
-        if(p->cold_step<17)return 0;
+        if(p->cold_step<COLD_STEPS)return 0;
     }else {
         if(!a733_video_unit_baseline(u))return fail(u);
         if(unlock(u)!=1)return -1;
@@ -469,18 +480,27 @@ int a733_video_platform_native_read(void *cookie,uintptr_t a,uint32_t *out)
     if(!out||!readable(a))return -1;
     return a733_video_unit_native_read(a,out);
 }
-int a733_video_platform_native_write(void *cookie,uintptr_t a,unsigned width,uint32_t value)
+/* PLL_VE0 feeds three module clocks (ccu-sun60iw2.c lines 965-1015): the
+ * encoder's at mux 0, the decoder's at mux 1 and the NPU's at mux 4. */
+static const struct {uint32_t module,mux;} pll_ve0_consumers[]={{0xa80,0},{0xa88,1},{0xb00,4}};
+int a733_video_platform_write_policy(uintptr_t a,unsigned width,uint32_t value,
+    int (*read)(void *,uintptr_t,uint32_t *),void *cookie,uint32_t *owned)
 {
-    (void)cookie;
     uint32_t mask=0;
+    if(!owned)return -1;
     if(a==CCU+0xa8c)mask=BIT(18)|BIT(2);
     if(a==CCU+0xa88)mask=BIT(31);
-    /* The PLL_VE0 enable table (bit 24 kept) and the module selector and
-     * divider, only while the decoder's module gate is closed: no write
-     * retunes a clock that the decoder is running on. */
-    if((a==CCU+0xa88&&!(value&BIT(31)))||a==CCU+0x220) {
-        uint32_t module;
-        if(width!=4||a733_video_unit_native_read(CCU+0xa88,&module)!=1||(module&BIT(31)))return -1;
+    /* The PLL_VE0 enable table (bit 24 kept) only while no consumer runs on
+     * PLL_VE0, and the decoder's selector and divider only while its module
+     * gate is closed: no write retunes a clock a running module uses. */
+    if(a==CCU+0x220||(a==CCU+0xa88&&!(value&BIT(31)))) {
+        if(width!=4)return 0;
+        for(unsigned i=0;i<sizeof(pll_ve0_consumers)/sizeof(pll_ve0_consumers[0]);++i) {
+            uint32_t m;
+            if(a==CCU+0xa88&&pll_ve0_consumers[i].module!=0xa88)continue;
+            if(read(cookie,CCU+pll_ve0_consumers[i].module,&m)!=1)return -1;
+            if((m&BIT(31))&&(a==CCU+0xa88||((m>>24)&7)==pll_ve0_consumers[i].mux))return 0;
+        }
         mask=a==CCU+0x220?UINT32_C(0xf870ff02):UINT32_C(0x0700001f);
     }
     if(a==CCU+0x5c0)mask=1;
@@ -494,6 +514,14 @@ int a733_video_platform_native_write(void *cookie,uintptr_t a,unsigned width,uin
         uint32_t off=(uint32_t)(a-VE);
         allowed=jpeg_write_allowed(off,width)||(width==4&&(h264_write_allowed(off)||hevc_write_allowed(off)||off==0||off==4||off==0x1c||off==0x50||off==0x54||off==0x804));
     }
-    if(!allowed)return -1;
+    *owned=mask;
+    return allowed;
+}
+static int native_policy_read(void *cookie,uintptr_t a,uint32_t *out)
+{(void)cookie;return a733_video_unit_native_read(a,out);}
+int a733_video_platform_native_write(void *cookie,uintptr_t a,unsigned width,uint32_t value)
+{
+    uint32_t mask;
+    if(a733_video_platform_write_policy(a,width,value,native_policy_read,cookie,&mask)!=1)return -1;
     return a733_video_unit_native_write(a,width,mask,value);
 }

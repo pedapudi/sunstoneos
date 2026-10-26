@@ -2627,7 +2627,8 @@
    "docs/designs/cpu-pmu.md",
    "docs/designs/cpu-top-opp.md",
    "docs/designs/pmic-access-measurements.md",
-   "docs/designs/power-authority-measurements.md"
+   "docs/designs/power-authority-measurements.md",
+   "docs/designs/video-pll.md"
   ],
   "library": false,
   "pure_host": false,
