@@ -292,16 +292,16 @@ static void job_spin(uint32_t n, uint64_t end)
 {
     const volatile uint32_t *timeline = job_objects[5].storage.cpu;
     const uint64_t kick = fws_mts_tick;
-    uint32_t passes = 0;
+    uint32_t passes = 0, value;
     uint64_t first = 0, t;
-    for (;;) {
+    do {
         t = fws_counter();
-        const uint32_t value = *timeline;
+        value = *timeline;
         if (!passes++) first = t - kick;
-        if (value == n || t >= end) break;
-    }
+    } while (value != n && t < end);
+    /* ticks 0: the timeline did not arrive within the wait. */
     if (n >= 1 && n <= FWS_JOBS)
-        job_runs[n - 1] = (typeof(job_runs[0])){*timeline == n ? t - kick : 0, first, passes, job_client.write};
+        job_runs[n - 1] = (typeof(job_runs[0])){value == n ? t - kick : 0, first, passes, job_client.write};
 }
 static int fws_job_run(uint64_t deadline)
 {
