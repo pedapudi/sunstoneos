@@ -27,11 +27,13 @@ The complete session and immutable image geometry must match the tested image.
 
 Physical admission requires current-instance evidence for these conditions:
 
-- Exclusive SD0/card ownership, disabled and drained IRQ193, no DMA, command
-  queue, encryption, remote client or other clock/reset writer. The initial
+- Exclusive SD0/card ownership, disabled and drained IRQ193, no outstanding DMA,
+  command queue, encryption, remote client or other clock/reset writer. The initial
   authority selects either established cold state or one bounded CMD0 attempt.
-- A private PIO buffer with identity-mapped, cacheable, inner-shareable RAM,
-  no aliases and permanent reservation.
+- Private, permanently reserved, identity-mapped, inner-shareable controller
+  memory. PIO profiles require cacheable RAM without aliases. DMA profiles also
+  require exclusive cache-line ownership, no dirty aliases and private
+  non-cacheable descriptors; page translations alone do not establish ownership.
 - Qualified SD slot wiring, PF routing, pulls, drives, 3.3 V domain and detection.
 - Qualified DCDC1/DC1SW2 3.3 V and CLDO5 1.8 V supply topology and settling.
 - No card substitution during the admitted lifetime, one supervised attempt,
@@ -216,8 +218,9 @@ operation on the selected board remain unqualified.
 Image startup binds the actual USB task and native application task to two
 fixed slots. The public API is `apps/storage-read/storage_read_service.h`.
 Each client may retain one copied request or unread result. A request contains
-a first sector, one to eight 512-byte blocks and a monotonically increasing
-client request ID. The service assigns a distinct increasing ticket. Slot
+a first sector, a bounded count of 512-byte blocks and a monotonically
+increasing client request ID. SD profiles 2 and 3 accept up to 64 blocks through
+DMA. Profiles 0 and 1 and the separate eMMC image retain eight-block PIO. The service assigns a distinct increasing ticket. Slot
 ownership also binds the admitted epoch and generation.
 
 Submission checks the complete range using subtraction from decoded capacity.
@@ -225,20 +228,75 @@ It checks sector or byte command addressing and rejects overflow before any
 provider read call. Descriptors and output spans must exclude private service,
 provider and immutable session storage. Client pointers are never retained.
 Only the MMC owner advances platform/controller state. It selects the oldest
-queued ticket and reads through one fixed 4096-byte PIO buffer.
+queued ticket and reads through one fixed controller buffer. The SD image
+reserves 32768 bytes; the eMMC image retains 4096 bytes.
 
-A complete read requires controller integrity, idle/FIFO checks, any automatic
-CMD12 completion and final CMD13 card status. Only successful actual `take`
-returns the core to READY and releases its borrowed buffer. A separate owner
+A complete read requires controller integrity, data completion and automatic
+CMD12 completion for a multi-block transfer. PIO also checks the idle FIFO and
+final CMD13 card status. DMA instead verifies IDMAC status, the exact descriptor
+chain and cleared OWN bits, then completes bounded controller/IDMAC drain and
+the AFTER cache operation before DONE. Only successful actual `take` returns
+the core to READY and releases its borrowed buffer. A separate owner
 step copies the verified bytes and digest into the selected client's result
-slot before another request can reuse PIO memory. The other client's completed
-result remains immutable while the controller serves a different range.
+slot before another request can reuse controller memory. The other client's
+payload, digest, request identity and completion remain immutable while the
+controller serves a different range. Wire records also include live controller
+diagnostics, which may change between copies.
 
 A client acknowledges its exact successful ticket only after consuming its
 copy. The native application verifies the copied digest and acknowledges it.
 USB acknowledges only after TX callbacks account for every queued result byte.
 Only the slot owner can acknowledge or target its ticket for cancellation.
 No dynamic registration or general storage framework is involved.
+
+## Private DMA buffers for high-speed reads
+
+The SD constructor selects DMA only for profiles 2 and 3. Its descriptor pointer
+comes from the linked non-cacheable pool at `0x41c00000`; neither the session nor
+a client supplies it. The existing 2 MiB pool remains reserved, and the fixed
+33-descriptor allocation occupies 528 bytes. Public request, result and output
+pointers must exclude the whole reservation. Admission checks every descriptor
+page as writable identity-mapped Normal NC (`0x44`) and every controller-buffer
+page as writable identity-mapped Normal WB (`0xff`), both inner-shareable.
+
+The controller buffer begins and ends on 64-byte boundaries, separate from
+service state and copied replies. The cache callback accepts only the actual
+native cookie, exact private descriptor configuration, exact buffer and a
+whole-sector span within that allocation. It cleans before device ownership and
+invalidates only through the existing MMC AFTER phase. The core verifies the
+chain, completion and bounded reset/idle drain before AFTER and DONE; actual
+`take` precedes publication into a client slot. Failed cache maintenance, loss,
+cancellation or deadline retains the lifetime and its storage.
+
+The preparer binds the actual ELF's immutable payload geometry and DMA marker,
+including the profile mask, maximum blocks and descriptor extent. DMA profiles
+require image-bound `private_dma_buffer`, `private_uncached_descriptors`,
+`exclusive_cache_line_ownership` and `no_dirty_aliases` evidence. Legacy PIO and
+eMMC keep their existing memory facts and request limits. Profile 3 retains its
+separate 1.8 V authority even when the card declines S18A and falls back to
+high-speed operation; this consumer adds no CMD11 or tuning sequence.
+
+Five existing SD buffers grow by 28 KiB each: the controller buffer, two copied
+slots, the native client's reply and USB's reply. This adds 140 KiB plus alignment
+padding, with no new task, request buffer, FIFO or memory reservation. One
+64-sector read uses eight data descriptors and a zero sentinel. It removes
+8192 CPU FIFO word reads for that payload, while retaining the existing copy,
+digest and two cache operations. The core's maximum remains 256 sectors; this
+consumer chooses 64 to bound its five permanent allocations.
+
+The actual single-core build adds 143360 bytes of live BSS and 744 bytes of
+function code against the preserved PIO build. The linked text extent stays
+536624 bytes because the fixed layout already contained padding. The separately
+merged PMIC changes add another 48 function bytes. The same 32 KiB card model
+uses one CMD18, zero CPU payload FIFO reads and five worker ticks with DMA,
+compared with eight CMD18s, 8192 FIFO word reads and 40 ticks with PIO. These are
+operation counts, not measured physical throughput. Focused linked checks also
+cover both clients, final-IN ACK, native consumption, mapping/cache/ownership
+failure, unchanged PIO limits and the profile-3 no-S18A fallback. The host
+captures complete native-produced records through fragmented transport and
+checks the actual ELF and memory authority. Evidence is preserved under
+`~/.cache/sunstoneos/evidence/resume-storage-read-dma-1026/`. Physical DMA
+coherence and throughput remain unqualified for this supervised image.
 
 ## Deadlines and uncertainty retain ownership
 
@@ -272,7 +330,9 @@ digest, cached card identity/capacity, controller facts, build ID, ticket, first
 sector, request ID, block count and client slot. It also reports the native
 application's result and completed read count. Status values are pending 0,
 success 1, retained lifetime 2, idle client 3 and rejected request 4. Only success
-appends the requested sector bytes, up to 4096. The observer checks the exact
+appends the requested sector bytes: up to 32768 for SD profiles 2/3, or 4096
+for PIO profiles. The largest complete record is 33056 bytes, including its
+288-byte header; USB adds no application framing. The observer checks the exact
 request/client/ticket/range and digest; it makes no filesystem-validity claim.
 
 USB uses its own copied staging buffer. Submission of bytes does not prove

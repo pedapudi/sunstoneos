@@ -1,4 +1,5 @@
 #include "storage_read_session.h"
+#include "storage_read_service.h"
 #include "a733_pins.h"
 #include "a733_mmc_platform.h"
 #define a733_smp_contract_valid board_contract_unused
@@ -12,7 +13,7 @@ int storage_read_session_valid(const struct storage_read_session *s)
  !present(s->initial,32)||!present(s->memory,32)||!present(s->supplies,32)||
  !present(s->topology,32)||!present(s->supervision,32)||
  !s->identify_us||s->identify_us>10000000||!s->read_us||s->read_us>5000000||
- !s->application_blocks||s->application_blocks>8||s->application_reserved||
+ !s->application_blocks||s->application_blocks>STORAGE_READ_MAX_BLOCKS||s->application_reserved||
  s->application_first_sector>UINT32_MAX||s->application_blocks-1>UINT32_MAX-s->application_first_sector||
  !s->voltage_mask||(s->voltage_mask&~UINT32_C(0x00300000)))return 0;
  for(unsigned i=0;i<sizeof(s->reserved);++i)if(s->reserved[i])return 0;
@@ -27,7 +28,8 @@ int storage_read_session_valid(const struct storage_read_session *s)
      s->desired[i].function!=fn||((pin!=0&&pin!=5)&&s->desired[i].pull!=1))return 0;
  }
 #else
- if(!a733_mmc_sd0_inherited_mux(s->expected)||(unsigned)s->sd_profile>SUNXI_MMC_SD_UHS_SDR104)return 0;
+ if((s->sd_profile<SUNXI_MMC_SD_HIGH_SPEED4&&s->application_blocks>STORAGE_READ_PIO_BLOCKS)||
+    !a733_mmc_sd0_inherited_mux(s->expected)||(unsigned)s->sd_profile>SUNXI_MMC_SD_UHS_SDR104)return 0;
  for(unsigned i=0;i<7;++i){
   if(!a733_pin_config_valid_banked(A733_PIN_F,i,s->expected[i])||
    !a733_pin_config_valid_banked(A733_PIN_F,i,s->desired[i])||

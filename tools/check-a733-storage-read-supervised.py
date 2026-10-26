@@ -55,7 +55,8 @@ def throughput_summary(reads):
 def capture(exchange,session,evidence,record,save,deadline,now=time.monotonic,pause=time.sleep,ranges=((0,1),(1,1)),maximum=4):
     preparation.session_check(session)
     require(1<=len(ranges)<=maximum,'SD0 capture requires a bounded number of ranges.')
-    packets=[decoder.read_request(first,blocks,i+1) for i,(first,blocks) in enumerate(ranges)]
+    profile=struct.unpack_from('<I',session,860)[0] if preparation.SESSION_MAGIC==0x4153373352444131 else 0
+    packets=[decoder.read_request(first,blocks,i+1,profile) for i,(first,blocks) in enumerate(ranges)]
     require(not record.get('storage_read_cancelled'),'Cancelled SD0 session output is invalid.')
     record.update(storage_read_retention='whole-board-power-removal',storage_read_result='unobserved');save()
     def query(packet):
@@ -123,12 +124,12 @@ def capture(exchange,session,evidence,record,save,deadline,now=time.monotonic,pa
     return result
 
 
-def read_frame(device,same,deadline,evidence,record,save,now=time.monotonic):
+def read_frame(device,same,deadline,evidence,record,save,now=time.monotonic,payload_maximum=decoder.MAXIMUM):
     frame=bytearray();expected=None
     while expected is None or len(frame)<expected:
         same();remaining=int((deadline-now())*1000)
         require(remaining>0,'SD0 frame deadline expired.')
-        maximum=(decoder.HEADER+decoder.MAXIMUM if expected is None else expected)-len(frame)
+        maximum=(decoder.HEADER+payload_maximum if expected is None else expected)-len(frame)
         fragment=bytes(device.read(0x81,maximum,timeout=min(500,remaining)))
         path=evidence/f"fragment-{len(record.get('storage_read_fragments',[]))+1:04}.bin"
         supervisor.durable_frame(path,fragment)
@@ -138,7 +139,7 @@ def read_frame(device,same,deadline,evidence,record,save,now=time.monotonic):
         if expected is None and len(frame)>=decoder.HEADER:
             magic,version,status,count=struct.unpack_from('<4I',frame)
             require(magic==0x44524453 and version in (2,3,4) and status in range(5) and
-                    ((0<count<=decoder.MAXIMUM and count%512==0) if status==1 else count==0),'Invalid SD0 frame extent.')
+                    ((0<count<=payload_maximum and count%512==0) if status==1 else count==0),'Invalid SD0 frame extent.')
             expected=decoder.HEADER+count;require(len(frame)<=expected,'SD0 frame exceeds extent.')
     return bytes(frame)
 
@@ -154,7 +155,9 @@ def capture_device(device,same,deadline,session,evidence,record,save,ranges=((0,
     def exchange(packet,timeout):
         require(not record.get('storage_read_cancelled'),'Cancelled SD0 session output is invalid.')
         same();require(device.write(0x02,packet,timeout=timeout)==len(packet),'Incomplete SD0 request.')
-        return read_frame(device,same,deadline,evidence,record,save)
+        return read_frame(device,same,deadline,evidence,record,save,
+                          payload_maximum=(decoder.maximum(struct.unpack_from('<I',session,860)[0])
+                              if preparation.SESSION_MAGIC==0x4153373352444131 else decoder.MAXIMUM))
     return capture(exchange,session,evidence,record,save,deadline,ranges=ranges,maximum=maximum)
 
 
@@ -205,9 +208,10 @@ def main(argv=None):
                 'Throughput timing needs the high-speed or UHS-I profile.')
     else:ranges=[tuple(map(int,x.split(':'))) for x in args.read] if args.read else [(0,1),(1,1)]
     require(1<=len(ranges)<=maximum and all(len(x)==2 for x in ranges),'Invalid bounded read plan.')
-    for i,(first,blocks) in enumerate(ranges):decoder.read_request(first,blocks,i+1)
     bundle=args.bundle.resolve();prepared=freeze_bundle(bundle);frozen=prepared['_frozen']
     admission=json.loads(frozen['admission.json']);session=frozen['session.bin'];template=frozen['session-template.bin']
+    profile=struct.unpack_from('<I',session,860)[0] if preparation.SESSION_MAGIC==0x4153373352444131 else 0
+    for i,(first,blocks) in enumerate(ranges):decoder.read_request(first,blocks,i+1,profile)
     evidence={path:frozen[item['name']] for path,item in prepared['entry_evidence'].items()}
     def validate_entry(identity,port):
         preparation.validate_admission(admission,prepared['image_sha256'],hashlib.sha256(template).hexdigest(),template,evidence,True)

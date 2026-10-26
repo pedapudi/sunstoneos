@@ -12,7 +12,7 @@ FACTS={
  'topology':['sd0_pf0_6_route','inserted_removable_sd','no_card_substitution','pf6_active_low_detect','source_qualified_pulls_drives','no_alternate_pad_writers','complete_pin_authority'],
  'supervision':['whole_board_power_removal','permanent_resource_retention','no_buffer_reuse_after_uncertainty','one_attempt','no_watchdog_arm','no_reset_retry']}
 BASELINE_SHA256='550bf5f889ece592127d59422fe3a8db68ea71a1e0e652e508f73851c7784c29'
-def produce(image,out,rom_usb_takeover=False,sd_profile=0):
+def produce(image,out,rom_usb_takeover=False,sd_profile=0,application_blocks=2):
  out.mkdir(parents=True,exist_ok=False);prep=module('sd0_fixture_prepare',ROOT/'apps/storage-read/prepare.py');ih=hashlib.sha256(image.read_bytes()).hexdigest();parts,entry,identity=prep.base.image_parts(image)
  # The board session prefix comes from preserved evidence; pin its bytes so a
  # regenerated evidence directory cannot change the fixture silently.
@@ -21,7 +21,7 @@ def produce(image,out,rom_usb_takeover=False,sd_profile=0):
  for i in range(7):raw[813+3*i:816+3*i]=bytes((2 if (i<6 if sd_profile else 1<=i<=3) else 0,1,0))
  struct.pack_into('<QQI',raw,840,10000000,5000000,0x00300000)
  struct.pack_into('<I',raw,860,sd_profile)
- struct.pack_into('<QII',raw,864,7,2,0)
+ struct.pack_into('<QII',raw,864,7,application_blocks,0)
  # The inherited board model did not initialize providers. Use the accepted
  # actual PMIC producer's two PL pin triples before testing whole construction.
  pmic_source=ROOT/'checks/a733-pmic.c'
@@ -37,6 +37,8 @@ def produce(image,out,rom_usb_takeover=False,sd_profile=0):
  refs={}
  for i,(key,required) in enumerate(FACTS.items()):
   extra=dict(four_bit_data_route_authorized=True,read_only_bus_negotiation_authorized=True,peri0_400m_stable_owned=True,sd_profile=sd_profile) if key=='topology' and sd_profile else {}
+  if key=='memory' and sd_profile in (2,3):
+   required=[k for k in required if k!='private_pio_buffer']+list(prep.DMA_MEMORY_FACTS)
   if key=='topology' and sd_profile==3:extra.update(uhs_1v8_signalling_approved=True,pf_bank_voltage_writer_exclusive=True,
    pf_adaptive_withstand_observed=True,board_power_removal_after_lifetime=True)
   refs[key]=record(key+'.json',dict(**target,schema='a733-storage-read-'+key+'-v2',reviewed=True,physical_access=False,**{k:True for k in required},**extra));raw[632+32*i:664+32*i]=bytes.fromhex(refs[key]['sha256'])

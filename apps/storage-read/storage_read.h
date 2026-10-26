@@ -33,7 +33,11 @@ struct storage_read_application {
  struct sunxi_mmc_card card;
  struct storage_read_slot slots[STORAGE_READ_CLIENTS];
  uint64_t next_ticket;
- /* Borrowed PIO memory is never reused after fault. USB only uses copied. */
+ /* The controller owns whole cache lines until DONE/take; faults retain them.
+  * USB and the native consumer use only copied completion slots. */
+#ifndef SUNSTONE_EMMC_READ
+ _Alignas(64)
+#endif
  uint8_t borrowed[STORAGE_READ_OUTPUT];
 };
 struct storage_read_consumer {

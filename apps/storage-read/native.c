@@ -2,9 +2,27 @@
 #include "boot.h"
 #include "a733_mapping_check.h"
 #include "a733_storage_digest.h"
+#include "aarch64_device_memory.h"
 #include <string.h>
 struct storage_read_application storage_read;
-__attribute__((used,retain)) const uint64_t storage_read_geometry[5]={A733_STORAGE_READ_SESSION_MAGIC,STORAGE_READ_SESSION_BYTES,288,4096,2};
+__attribute__((used,retain)) const uint64_t storage_read_geometry[5]={A733_STORAGE_READ_SESSION_MAGIC,STORAGE_READ_SESSION_BYTES,STORAGE_READ_HEADER,STORAGE_READ_OUTPUT,2};
+#ifndef SUNSTONE_EMMC_READ
+extern unsigned char __uncached_pool_start[],__uncached_pool_end[];
+static int dma_profile(void)
+{return storage_read.session.sd_profile==SUNXI_MMC_SD_HIGH_SPEED4||
+        storage_read.session.sd_profile==SUNXI_MMC_SD_UHS_SDR104;}
+static int dma_sync(void *cookie,uint8_t *buffer,size_t bytes,unsigned phase)
+{
+ return cookie==&storage_read.native&&dma_profile()&&
+ storage_read.config.dma==(volatile struct sunxi_mmc_dma_descriptor *)__uncached_pool_start&&
+ storage_read.platform.config.dma==storage_read.config.dma&&buffer==storage_read.borrowed&&
+ bytes&&bytes<=sizeof(storage_read.borrowed)&&!(bytes%512)&&
+ (phase==SUNXI_MMC_DMA_BEFORE||phase==SUNXI_MMC_DMA_AFTER)&&board_live(NULL)&&
+ !atomic_load_explicit(&storage_read.cancel,memory_order_acquire)&&
+ aarch64_device_cache(phase==SUNXI_MMC_DMA_BEFORE?AARCH64_CACHE_CLEAN:AARCH64_CACHE_INVALIDATE,
+                     (uintptr_t)buffer,bytes)==1;
+}
+#endif
 static uint64_t limit(void){return board.session.deadline_us-10000;}
 /* Every page of [a, a + bytes) translates for write to itself with exactly
  * this attribute value and shareability. The exclusive end must fit. */
@@ -22,6 +40,9 @@ static int mappings(void)
     !memory(0x07090160,4,0,2))return 0;
 #else
  if(!memory(0x04020000,0x304,0,2))return 0;
+ if(dma_profile()&&((uintptr_t)__uncached_pool_start!=UINT32_C(0x41c00000)||
+    (uintptr_t)__uncached_pool_end!=UINT32_C(0x41e00000)||
+    !memory((uintptr_t)__uncached_pool_start,SUNXI_MMC_DMA_DESCRIPTORS*sizeof(struct sunxi_mmc_dma_descriptor),0x44,3)))return 0;
 #endif
  static const uintptr_t a[]={0x02002d00,0x02002d0c,0x02002500,0x02002580,0x02002588,
  0x020000f0,0x02000344,0x03400118,0x03400218,0x03400318};
@@ -48,6 +69,7 @@ static int construct(void)
  .kind=SUNXI_MMC_EMMC,.emmc_host=storage_read.session.emmc_host,
 #else
  .kind=SUNXI_MMC_SD,.sd_profile=storage_read.session.sd_profile,
+ .dma=dma_profile()?(volatile struct sunxi_mmc_dma_descriptor *)__uncached_pool_start:NULL,
 #endif
  .voltage_mask=storage_read.session.voltage_mask};
  memcpy(storage_read.config.fabric,board.session.fabric,sizeof(storage_read.config.fabric));
@@ -56,6 +78,9 @@ static int construct(void)
  memcpy(storage_read.config.desired,storage_read.session.desired,sizeof(storage_read.session.desired));
  if(!a733_mmc_platform_native_init_selected(&storage_read.native,&providers.shared.locks,storage_read.handle,
  storage_read.config.kind,storage_read.config.emmc_host,admit,&storage_read))return 0;
+ #ifndef SUNSTONE_EMMC_READ
+ if(dma_profile())storage_read.native.operations.dma_sync=dma_sync;
+#endif
  return a733_mmc_platform_init(&storage_read.platform,&storage_read.config,&storage_read.native.operations,
  &storage_read.native,&providers.shared.clocks,&providers.shared.pins,&providers.shared.rails,&providers.shared.pmic);
 }
@@ -171,7 +196,7 @@ static void step(void)
   storage_read.stage=6;break;
  case 6:
   if(!slot){failure(8);break;}
-  /* Actual take released the PIO borrower. Copy into this client's slot before
+  /* Actual take released the controller borrower after DMA AFTER/drain or PIO. Copy into this client's slot before
    * allowing the next queued request to reuse that one controller buffer. */
   memcpy(slot->copied,storage_read.borrowed,slot->request.blocks*512u);
   storage_digest_bytes(slot->copied,slot->request.blocks*512u,slot->digest);
@@ -195,6 +220,9 @@ static int separate(const void *address,size_t bytes)
 {
  uintptr_t a=(uintptr_t)address;
  if(!address||!bytes||bytes>UINTPTR_MAX-a)return 0;
+#ifndef SUNSTONE_EMMC_READ
+ if(dma_profile()&&a<(uintptr_t)__uncached_pool_end&&(uintptr_t)__uncached_pool_start<a+bytes)return 0;
+#endif
  /* Board task stacks are legitimate client storage; protect its immutable
   * session records rather than excluding those entire containing stacks. */
  const void *objects[]={&storage_read,&providers,&board.session,&board.admitted_session};
@@ -210,6 +238,9 @@ int storage_read_submit(const struct storage_read_request *request,uint64_t *tic
  int i=client();if(i<0||!separate(request,sizeof(*request))||!separate(ticket,sizeof(*ticket)))return -1;
  struct storage_read_request r=*request;
  if(!r.blocks||r.blocks>STORAGE_READ_MAX_BLOCKS||r.reserved||!r.request_id)return -1;
+#ifndef SUNSTONE_EMMC_READ
+ if(!dma_profile()&&r.blocks>STORAGE_READ_PIO_BLOCKS)return -1;
+#endif
  if(xSemaphoreTake(storage_read.mutex,0)!=pdTRUE)return 0;
  int answer=0;struct storage_read_slot *slot=&storage_read.slots[i];
  if(atomic_load_explicit(&storage_read.cancel,memory_order_acquire)||

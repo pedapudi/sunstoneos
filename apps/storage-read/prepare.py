@@ -27,6 +27,8 @@ SINGLE_CORE_TARGET='sunstone-a733-storage-read-single-core'
 SINGLE_CORE_BYTES=880
 AUTHORITY_PREFIX='a733-storage-read-'
 ENTRY_SCHEMA='a733-storage-read-supervised-entry-v2'
+DMA_MEMORY_FACTS=('private_dma_buffer','private_uncached_descriptors',
+                  'exclusive_cache_line_ownership','no_dirty_aliases')
 REQUIRED_FACTS={
  'initial':[],
  'memory':['private_pio_buffer','identity_cacheable_inner_shareable','no_aliases','permanent_reservation'],
@@ -49,7 +51,7 @@ def session_check(raw):
     profile=struct.unpack_from('<I',raw,860)[0]
     require(profile in (0,1,2,3),'Unsupported SD0 bus profile.')
     first,blocks,reserved=struct.unpack_from('<QII',raw,864)
-    require(1<=blocks<=8 and not reserved and first<=0xffffffff and blocks-1<=0xffffffff-first,'Invalid native application range.')
+    require(1<=blocks<=(64 if profile in (2,3) else 8) and not reserved and first<=0xffffffff and blocks-1<=0xffffffff-first,'Invalid native application range.')
     identify,read,voltage=struct.unpack_from('<QQI',raw,840)
     require(0<identify<=10000000 and 0<read<=5000000 and voltage and not voltage&~0x00300000,'Invalid bounded SD0 profile.')
     require(inherited_mux(raw),'Unsupported inherited SD0 pin route.')
@@ -65,10 +67,13 @@ def embedded_reference(image,session):
     elf=ELFFile(io.BytesIO(image));table=elf.get_section_by_name('.symtab')
     require(table is not None,'SD0 image has no symbols.')
     symbols={s.name:(int(s['st_value']),int(s['st_size'])) for s in table.iter_symbols()}
-    expected=struct.pack('<5Q',SESSION_MAGIC,SESSION_BYTES,288,4096,2)
+    sd=SESSION_MAGIC==0x4153373352444131
+    expected=struct.pack('<5Q',SESSION_MAGIC,SESSION_BYTES,288,32768 if sd else 4096,2)
     markers=[('storage_read_geometry',expected)]
-    if struct.unpack_from('<I',session,860)[0]:
+    if sd and struct.unpack_from('<I',session,860)[0]:
         markers.append(('storage_read_sd_modes',struct.pack('<4Q',0x4153373353444d31,2,15,400000000)))
+    if sd:
+        markers.append(('storage_read_dma_geometry',struct.pack('<6Q',0x4153373353444431,1,12,64,0x41c00000,528)))
     for name,body in markers:
         require(name in symbols,'Missing immutable SD0 geometry.')
         first,size=symbols[name];require(size==len(body),'Wrong SD0 geometry size.')
@@ -175,6 +180,8 @@ def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=Fal
                     fact.get('jtag_debug_clients_excluded') is True,
                     'Reviewed ROM JTAG handoff and excluded debug clients required.')
         required=REQUIRED_FACTS[key]
+        if key=='memory' and SESSION_MAGIC==0x4153373352444131 and struct.unpack_from('<I',raw,860)[0] in (2,3):
+            required=[k for k in required if k!='private_pio_buffer']+list(DMA_MEMORY_FACTS)
         require(all(fact.get(k) is True for k in required),'Required STORAGE_READ physical fact absent.')
     if struct.unpack_from('<I',raw,532)[0]==2:
         # The existing platform reference is retained by board.validate_admission.

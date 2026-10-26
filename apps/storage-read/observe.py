@@ -3,9 +3,13 @@
 import hashlib
 import struct
 HEADER=288
-MAXIMUM=4096
-def read_request(first,blocks,request_id):
-    if not 0<=first<=0xffffffff or not 1<=blocks<=8 or blocks-1>0xffffffff-first or not 0<request_id<2**64:
+MAXIMUM=4096  # Shared eMMC and legacy callers retain their eight-sector default.
+DMA_MAXIMUM=32768
+def maximum(profile=0):
+    if profile not in (0,1,2,3):raise ValueError('Unsupported SD0 bus profile')
+    return DMA_MAXIMUM if profile in (2,3) else MAXIMUM
+def read_request(first,blocks,request_id,profile=0):
+    if not 0<=first<=0xffffffff or not 1<=blocks<=maximum(profile)//512 or blocks-1>0xffffffff-first or not 0<request_id<2**64:
         raise ValueError('Invalid bounded SD0 read request')
     return struct.pack('<BBHIQQQ',2,2,32,blocks,request_id,first,0)
 def cancel_request(ticket):
@@ -56,7 +60,7 @@ def decode(raw,session,expected=None,session_magic=0x4153373352444131,session_by
             raise ValueError('Incomplete negotiated SD0 mode')
     if status==1:
         sectors=struct.unpack_from('<Q',raw,104)[0]
-        if not ticket or not request_id or not 1<=blocks<=8 or first>=sectors or blocks>sectors-first:raise ValueError('Invalid completed read range')
+        if not ticket or not request_id or not 1<=blocks<=maximum(profile)//512 or first>=sectors or blocks>sectors-first:raise ValueError('Invalid completed read range')
         if first+blocks-1>(0xffffffff if raw[102] else 0xffffffff//512):raise ValueError('Read command argument overflows')
         if count!=blocks*512 or len(raw)!=HEADER+count or raw[32:64]!=hashlib.sha256(raw[HEADER:]).digest():raise ValueError('Incomplete copied sectors')
         if facts[0] or facts[5]!=count or facts[8] or facts[18]!=1:raise ValueError('Read integrity/card validity failed')
