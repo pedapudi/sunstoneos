@@ -1097,6 +1097,37 @@ ROWS = [
             'for the boot clock words or the CPU-B rate means CPU-B is still raised: remove power at once.',
             ('cpu-rails-held-read',), entry=('DCDC5 at 1,000 mV and DCDC3 at 1,050 mV, CPU-B at 1,014 MHz',
                                              'dcdc5_uv=1000000 dcdc3_uv=1050000'), writes=False),
+    dict(gpu_row('gpu-exact-sum', 34, 'Two GPU integer matrix products with exact sums, followed by cleanup and OFF',
+            'fw-mimus', 'COMPLETE GPU exact sums: 2 jobs, tags and sums match, context cleaned up, firmware stopped, OFF and '
+            'provider parked',
+            'Status 0 with GPU exact sums jobs=2 sums=1122 bad_tags=0 bad_sums=0 bad_guards=0, GPU FWJ job '
+            'complete=1 outcome=1 timeline=0x2 jobs=2, context cleanup status 1, acknowledged firmware stop, '
+            'the exact-sum COMPLETE line and normal ROM return. The frozen host wrapper checks every required '
+            'report before publishing success. Save kernel.log and result.bin.',
+            'apps/gpu-power-id/build.py --fw-mimus, docs/designs/gpu-exact-sum-caller.md. One context runs the '
+            'production exact-sum program for K=512 and K=516, each with 33 rows and 17 channels. The image checks '
+            'all sums against scalar int64 products, all lane tags and surrounding guards. Both jobs share the '
+            'existing 200 ms budget with a 50 ms cleanup reserve. GPU operation remains at 1008 MHz and 960 mV. '
+            'This targets the first physical exact-sum qualification; host parity and modeled completion are separate evidence.',
+            after=['gpu-provider-ready'],
+            failures=['`FAIL GPU exact sums: not complete, GPU OFF and provider parked`: a timeline, tag, sum, guard '
+                      'or transport check failed; read the job outcome and exact-sum counters',
+                      '`FAIL GPU exact sums: context cleanup not confirmed, GPU OFF and provider parked`: both '
+                      'jobs matched but the context cleanup did not return status 1',
+                      'a shutdown failure retains the existing recovery requirement; a GPU without the idle proof '
+                      'stays powered and requires power removal',
+                      'host application-result rejection retains the failed session even when ROM return succeeded'],
+            admission='The existing GPU-local grant covers this bounded job variant. Its image-owned storage adds '
+                      '16 KiB of read-only weights, 128 KiB of read-only activations, 128 KiB of writable output, '
+                      'and 12 KiB of read-only job/program pages. All 71 added GPU mappings use validated image RAM '
+                      'inside the existing 18 MiB interval. Output bypasses the GPU system-level cache. The firmware '
+                      'uses the same six context objects, MMUCACHE, two KICKs, context cleanup and stop protocol. '
+                      'The caller stops at its first failure and retains all backing.'),
+         sources=GPU_SOURCES + ['apps/gpu-power-id/fw-mimus.inc', 'apps/gpu-power-id/fw-mimus-run.inc',
+             'apps/gpu-power-id/mimus-check.py', 'apps/gpu-power-id/mimus-host.py',
+             'apps/gpu-power-id/mimus-host-check.py', 'drivers/gpu/pvr_compute_mimus.c',
+             'drivers/gpu/pvr_compute_mimus_usc.c', 'include/pvr_compute_mimus.h',
+             'shaders/pvr_mimus_linear.cl', 'docs/designs/gpu-exact-sum-caller.md']),
     # `admission` maps fields of the value prepare() returns to the values that
     # identify this row's build. None refuses the row: no owning package has
     # named those values yet.
