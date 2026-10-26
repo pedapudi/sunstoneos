@@ -66,8 +66,9 @@ void gpu_power_id_client(void *unused);
 #define FWS_START_US 500000u   /* MAX_HW_TIME_US, rgx_sunxi/sysinfo.h:48 */
 #define FWS_CONTROL_US 200000u
 #define FWS_STOP_US 300000u
-/* Of the stop's 300 ms, the last 100 ms are kept for the stop without the
- * firmware's acknowledgements (pvr_gpu_stop_init_unacknowledged). */
+/* This diagnostic must fit the 2 s monitor. Unlike the vendor's 500 ms
+ * per poll and upstream's 1 s, this is a total availability budget. Expiry
+ * retains power and ownership. Reserve 100 ms for the unacknowledged stop. */
 #define FWS_HARD_US 100000u
 #else
 #define FWS_START_US 1000000u
@@ -145,10 +146,7 @@ static struct pvr_gpu_control control;
 static struct pvr_gpu_stop stop;
 /* The progress record's step: 100 + the stop's register step, or 200 + the
  * control phase while the control or the stop handshake runs. */
-/* 199 marks the forced soft reset and OFF of fws_shutdown. */
-static unsigned fws_forced;
-#define FWS_STEP_AFTER (fws_forced ? 199u : \
-                        stop.phase == PVR_GPU_STOP_REGISTERS ? (stop.unacknowledged ? 150u : 100u) + stop.index : \
+#define FWS_STEP_AFTER (stop.phase == PVR_GPU_STOP_REGISTERS ? (stop.unacknowledged ? 150u : 100u) + stop.index : \
                         control.phase ? 200u + control.phase : 0u)
 #else
 #define FWS_STEP_AFTER 0u
@@ -594,19 +592,17 @@ static void fws_park(void)
 #endif
     before();
 }
-/* How the GPU was powered off (docs/designs/gpu-job-session.md, "Every
- * outcome ends with the GPU off"). */
-enum fws_off { FWS_OFF_SOFT, FWS_OFF_VENDOR, FWS_OFF_HARD, FWS_OFF_FORCED, FWS_OFF_PLAIN };
+/* Only a completed stop permits resource release. */
+enum fws_off { FWS_OFF_SOFT, FWS_OFF_HARD, FWS_OFF_PLAIN, FWS_LEFT_POWERED };
 static const char *const fws_off_text[] = {
     "firmware stopped, GPU OFF and provider parked",
-    "firmware stop: idle check not met after the power-off acknowledgement, GPU OFF and provider parked",
     "firmware stop: not acknowledged, idle checks met, GPU OFF and provider parked",
-    "firmware stop: not acknowledged and the GPU not idle, soft reset and OFF forced, provider parked",
-    "no firmware started, GPU OFF and provider parked"};
+    "no firmware started, GPU OFF and provider parked",
+    "firmware stop incomplete, GPU left powered, ownership retained"};
 static const struct pvr_gpu_stop_ops fws_stop_ops = {fws_now, stop_read, stop_write, stop_sync_write,
                                                      stop_sync_read, stop_isolate, stop_isolate_poll};
-/* The platform OFF and the provider park; a power controller that fails
- * here leaves the GPU powered (gpu_fail), the one case no path can help. */
+/* The platform OFF and provider park. A power-controller failure retains
+ * ownership and reports failure without another isolation attempt. */
 static void fws_off_park(void)
 {
     int result;
@@ -615,14 +611,10 @@ static void fws_off_park(void)
     if (result != 1) gpu_fail("GPU OFF poll");
     fws_park();
 }
-/* Powers the GPU off from any state after its ON. firmware: the start began,
- * so the firmware processor may run. In order: the acknowledged stop when
- * the control is READY; the vendor OFF after a power-off acknowledgement;
- * upstream's hard reset (the register plan, the soft reset, the OFF) with
- * the control latched failed; and, when an idle check never matches, the
- * soft reset of every unit and the OFF anyway, as the vendor powers off
- * after a failed RGXStop (rgxpower.c:333-341), so that no outcome returns
- * with the GPU on. */
+/* No firmware access has begun on the plain-OFF path. Once firmware may
+ * run, use only a complete acknowledged stop or the admitted upstream hard
+ * stop. An acknowledgement alone does not establish the bus idle. A failed
+ * idle poll, refused control or partial isolation retains power/resources. */
 static enum fws_off fws_shutdown(int firmware)
 {
     if (!firmware) { fws_off_park(); return FWS_OFF_PLAIN; }
@@ -637,14 +629,10 @@ static enum fws_off fws_shutdown(int firmware)
     }
     if (s == PVR_GPU_STOP_OK) { fws_park(); return FWS_OFF_SOFT; }
     if (stop.isolation_started) gpu_fail("GPU firmware stop: isolation failed, GPU left powered");
-    if (stop.acknowledgement[1]) { fws_off_park(); return FWS_OFF_VENDOR; }
-    /* Neither power-off acknowledgement nor isolation. A control that never
-     * came up (the start failed, or its init was refused) is latched failed
-     * as one that failed, with its queue aborted. */
-    if (control.phase == PVR_GPU_CONTROL_NEW) {
-        control.queue = &queue; control.last_now = begun; control.phase = PVR_GPU_CONTROL_FAILED;
-        (void)pvr_ccb_abort(&queue);
-    } else if (control.phase != PVR_GPU_CONTROL_FAILED) (void)pvr_gpu_control_abort(&control);
+    /* The stop controller admits recovery only before any register step,
+     * OFF acknowledgement or isolation. A refused control has no valid
+     * failed transport to recover; preserve its state and ownership. */
+    if (control.phase != PVR_GPU_CONTROL_FAILED) return FWS_LEFT_POWERED;
     if (pvr_gpu_stop_init_unacknowledged(&stop, &control, gpu_firmware, firmware_bytes, &fws_stop_ops, NULL,
                                          begun + FWS_STOP_US)) {
         while ((s = pvr_gpu_stop_poll(&stop)) == PVR_GPU_STOP_AGAIN) vTaskDelay(1);
@@ -652,23 +640,11 @@ static enum fws_off fws_shutdown(int firmware)
         if (s == PVR_GPU_STOP_OK) { fws_park(); return FWS_OFF_HARD; }
         if (stop.isolation_started) gpu_fail("GPU firmware stop: isolation failed, GPU left powered");
     }
-    /* An idle check never matched, or the stop was refused: halt every unit
-     * with upstream's full soft reset (pvr_fw_startstop.c:315-320, the mask
-     * of the pinned firmware's pbe2_in_xe feature) and power off. */
-    struct bb_line line;
-    bb_line_start(&line, "GPU FWS forced");
-    bb_line_dec(&line, "stop_phase", stop.phase); bb_line_dec(&line, "step", stop.index);
-    bb_line_end(&line); bb_power_print(&line);
-    fws_forced = 1;
-    gpu_write64(0x100, UINT64_C(0xffeffffffffffc3d));
-    fws_off_park();
-    return FWS_OFF_FORCED;
+    return FWS_LEFT_POWERED;
 }
-/* A failure after the GPU's ON: power it off, then report the reason and
- * how the GPU went off. */
-static _Noreturn void fws_fail_off(const char *reason, int firmware)
+/* Report a failure after its shutdown attempt, including retained power. */
+static _Noreturn void fws_report_failure(const char *reason, enum fws_off off)
 {
-    const enum fws_off off = fws_shutdown(firmware);
     static char text[224];
     size_t n = 0;
     for (const char *p = reason; *p && n + 1 < sizeof(text); ++p) text[n++] = *p;
@@ -677,6 +653,8 @@ static _Noreturn void fws_fail_off(const char *reason, int firmware)
     text[n] = 0;
     bb_power_fail(text);
 }
+static _Noreturn void fws_fail_off(const char *reason, int firmware)
+{ fws_report_failure(reason, fws_shutdown(firmware)); }
 static _Noreturn void fws_stop_run(void)
 {
 #ifdef FWS_JOB
@@ -696,18 +674,11 @@ static _Noreturn void fws_stop_run(void)
     if (c != PVR_GPU_CONTROL_OK)
         fws_fail_off("GPU firmware control: compatibility or health check not complete", 1);
 #ifdef FWS_JOB
-    /* The job, then the stop and OFF whatever its result. */
+    /* The job, then a bounded stop; an unproven drain retains resources. */
     const int job_result = fws_job_run(bb_power_now() + FWS_JOB_US);
 #endif
     const enum fws_off off = fws_shutdown(1);
-    if (off != FWS_OFF_SOFT) {
-        static char text[160];
-        size_t n = 0;
-        for (const char *p = "GPU "; *p; ++p) text[n++] = *p;
-        for (const char *p = fws_off_text[off]; *p && n + 1 < sizeof(text); ++p) text[n++] = *p;
-        text[n] = 0;
-        bb_power_fail(text);
-    }
+    if (off != FWS_OFF_SOFT) fws_report_failure("GPU shutdown", off);
 #ifdef FWS_JOB
 #if FWS_JOBS > 1
     if (job_result != 1) bb_power_fail("GPU job session: not complete, GPU OFF and provider parked");

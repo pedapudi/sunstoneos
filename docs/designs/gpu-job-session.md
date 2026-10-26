@@ -154,8 +154,7 @@ does not complete is a controlled failure: the sequence ends, the cleanup
 runs when the firmware has finished with the context, and the stop powers
 the GPU off, with the firmware's acknowledgements or by upstream's hard
 reset when the idle checks pass. A GPU that never reports idle stays
-powered until a power removal, as in set 29. Nothing is retained between
-sessions: the image ends at the OFF.
+powered until a power removal, as in set 29. A successful session ends at OFF; a failed drain retains all resources.
 
 ## Checks before a board run
 
@@ -224,33 +223,57 @@ CDM work, the timeline UPDATE and its write reaching the CPU; the first
 read's floor (`first`) includes the `MTS_SCHEDULE` read-back and its log
 lines.
 
-## Every outcome ends with the GPU off
+## Failed shutdown retains power and ownership
 
-After the boards' last power cycle no image may leave the GPU on: a GPU
-left powered with its firmware running blocks the lifetime until a power
-removal. Every failure after the GPU's ON now goes through one shutdown
-(`fws_shutdown` in `apps/gpu-power-id/fw-start.c`), in this order:
+The diagnostic powers off only after a complete stop. The stop includes the
+firmware handshakes, register idle checks and platform isolation. A failed
+control can instead use the existing unacknowledged stop when its transport
+has latched failure and no OFF acknowledgement, register step or isolation
+has occurred. That stop runs the complete idle plan, asserts the reset mask
+selected from the validated firmware features, and then requests OFF.
 
-1. the acknowledged stop, when the control is READY;
-2. the vendor's OFF after a power-off acknowledgement whose idle checks
-   failed (`rgxpower.c:333–341`);
-3. upstream's hard reset with the control latched failed: the register
-   plan, the soft reset, the OFF (`pvr_power.c:518–531`);
-4. when an idle check never matches, or that stop is refused: the full
-   soft reset of every unit and the OFF anyway, logged as `GPU FWS forced`
-   and marked as step 199 in the progress record. No reference does this:
-   upstream marks the device lost and the vendor leaves it on. It is
-   chosen because a GPU left on now costs the board until the user is back;
-   its risk is a GPU bus left mid-transfer at the OFF.
+The idle plan freshly reads the BIF MMU and outstanding-read registers
+(`0x1358`, `0x1350`, `0x1320`, `0x1338`), SLC outstanding transactions
+(`0x3870`), SLC idle (`0x3898`) and Sidekick idle (`0x3c8`). Any failed poll
+prevents reset and OFF. A firmware OFF acknowledgement followed by a failed
+command collection or retirement also retains power. The acknowledgement
+alone does not establish that transactions have drained.
 
-A failed start (the started word never 1), a refused or failed control, a
-refused identity and a failed mapping take the same path; the refusal for
-a near deadline powers the GPU off before it returns. Only a power
-controller that fails during the ON or the OFF itself, or a GPU register
-access that never completes, can still leave the GPU on or the board
-without a return. The stop variant's host check gains two cases (a start
-whose word never arrives, a refused identity) and twelve pass; the
-first-job and session variants' cases now expect the forced OFF.
+A failed firmware start or refused control leaves power and ownership
+retained. The application does not manufacture a failed control state to
+admit recovery. Before any firmware access, a successful ON followed by
+failed GPU mapping, refused identity or insufficient startup time permits
+plain OFF. Uncertain ON completion, invalid provider mappings and clock
+failure retain resources without further GPU register access. A partial OFF
+retains resources and does not retry isolation.
+
+The stop has a 300 ms total budget within the diagnostic's 2 s monitor:
+200 ms for acknowledged shutdown and 100 ms reserved for an admitted
+unacknowledged stop. This is shorter than the vendor's 500 ms per poll and
+upstream's 1 s per poll. Expiry limits diagnostic availability; it never
+permits reset or resource release. A retained failure ends GPU use for that
+powered lifetime and requires coordinator-directed physical recovery.
+
+These rules follow the pinned upstream `pvr_fw_startstop.c:220–320`, which
+returns at each failed idle poll before its reset, and vendor
+`rgxpower.c:392–427`, which returns when the power-off handshake fails.
+The source revisions and licenses are recorded in
+[the firmware-stop design](gpu-firmware-stop.md). CORE6's vendor ON disables
+the device-interface handshake, so its OFF cannot replace GPU drain proof.
+
+The native ELF checks model the firmware and platform power callbacks.
+They check retained power after failed idle polls, failed startup, refused
+control and collection failure after the OFF acknowledgement. They also
+check plain OFF before firmware startup and reject every GPU access after
+OFF begins. These checks establish software ordering; physical failure
+recovery and application operation remain unqualified for this revision.
+
+The corrected firmware-stop, first-job and eight-job native images built
+successfully. Fourteen selected stop cases, four job cases and two session
+cases passed. Build records, source hashes, ELF files and model results are
+preserved under `~/.cache/sunstoneos/evidence/gpu-recovery-20261025/`.
+The unchanged job arithmetic and transport evidence remains applicable;
+these checks cover the changed shutdown decisions and their callers.
 
 ## Next steps
 
