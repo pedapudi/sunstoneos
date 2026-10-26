@@ -53,8 +53,8 @@ history.
   native instruction cases, nineteen host cases, both board record producers
   and seven capture-refusal cases pass under
   `~/.cache/sunstoneos/evidence/resume-dram-restore-1025/`. Physical memory
-  validation and card-boot integration remain outstanding. The 36 ms figure
-  excludes training and does not establish working restored memory.
+  validation remains outstanding; optional card-boot integration is implemented.
+  The 36 ms figure excludes training and does not establish working restored memory.
 
 ## Active branches
 
@@ -66,10 +66,11 @@ does not establish recovery from a fault.
 
 | Work | Branch | Immediate deliverable |
 | --- | --- | --- |
-| DRAM restoration | `work/resume-dram-restore-1025` | Implement the card-boot loader using verified early single-sector reads and explicit helper storage |
-| Radio startup | `work/radio-os-staging-1026` | Stage existing firmware and profiles for the OS while preserving physical wiring requirements |
+| Cold OS bundle | `work/resume-card-os-1026` | Bind the actual stage-2 monitor, resident OS, fresh session and mimus assets into one install bundle |
+| Cold SD reads | `work/resume-stage2-sd-1026` | Reuse high-speed four-bit reads and DMA under explicit cold ownership and cache prerequisites |
+| Cold entry | `work/cold-admission-audit-1026` | Separate normal card reset policy from FEL diagnostics and establish entry/writer/cache prerequisites |
+| Radio startup | `work/radio-bootstrap-rate-1026` | Select the existing fast SDIO path with honest prerequisites and viable firmware-loading bounds |
 | GPU recognition | `work/resume-gpu-wait-1026` | Bound caller waits and integrate supervised recorded recognition without relying on watchdog expiry |
-| NPU restart | `work/resume-npu-restart-1026` | Add normal worker-mediated rearm while preserving registered objects, domain and SRAM ownership |
 
 Independent reviewers cover CPU/thermal/DRAM, accelerator operation and peripheral
 integration. Workers reuse successful evidence and submit focused checks. The
@@ -77,10 +78,10 @@ coordinator integrates accepted work, updates the canonical records and pushes
 `bringup`. No board command has run during this continuation.
 
 The latest merged work includes paired training-record selection and updates,
-read-only microSD DMA, eight-worker supervised OS recognition, and CPU/NPU
-performance controls. The supported NPU OS image also rebuilds
-successfully against the shared service and thermal changes; its evidence is
-under `~/.cache/sunstoneos/evidence/resume-thermal-npu-integration-1025/`.
+read-only microSD DMA, eight-worker supervised OS recognition, CPU/NPU
+performance controls, normal NPU restart and optional card-boot DRAM restoration.
+The combined CPU/NPU OS also builds against the changed service and pin layouts;
+evidence is under `~/.cache/sunstoneos/evidence/integrate-shared-layouts-1026/`.
 
 The branch notes under "Next steps" in each design document say what remains.
 - **`work/cpu-top-opp-step6-1025`:** CPU top points, step 6 and its
@@ -99,6 +100,17 @@ Most of the other `work/*` branches are superseded or already merged and can
 be pruned.
 
 ## Known problems and next steps
+
+- **An autonomous OS card bundle is not complete.** The restore packager's
+  accepted monitor was a 268-byte host fixture, not the actual stage-2 OS
+  loader. Current stage-2 entry checks still refuse, and no producer yet binds
+  the resident OS, session, models and recording into a complete install.
+  Resident recorded recognition also needs supervision of its selected tasks;
+  the existing service list waits for tasks that this workload does not start.
+  Stage 2 still uses identification-speed SD reads. Separate workstreams now
+  address the bundle, fast reads and cold admission. OR100/CE exclusion and
+  other-core/shared-cache ownership remain genuine prerequisites; local cache
+  disable or a non-Arm writer mask does not establish them.
 
 - **CPU returning image layout is repaired.** Both workload profiles fit
   the existing 16 KiB reservation. The ordinary profile has 3,004 bytes free;
@@ -120,6 +132,12 @@ be pruned.
   `~/.cache/sunstoneos/evidence/gpu-recovery-20261025/`.
   Physical failure recovery remains unqualified. A retained failure ends GPU
   use for that powered lifetime; it does not establish reusable GPU state.
+- **GPU firmware clock configuration matches the hardware default.** Successful
+  native backend binding now sets the firmware's clock field to 1008 MHz before
+  startup. It previously retained the initial 400 MHz value while the power
+  path selected 1008 MHz. The power sequence is unchanged. A focused actual
+  bind-to-serializer check verifies both firmware fields and unchanged refusals
+  under `~/.cache/sunstoneos/evidence/resume-gpu-wait-20261026/clock/`.
 - **NPU interrupt waits are bounded in software.** Pending mask, rearm and
   stop callbacks expire after 10 ms plus one scheduler tick, observed on the
   next worker pass. Expiry retains resources; it does not prove hardware drain.
@@ -128,7 +146,19 @@ be pruned.
   `~/.cache/sunstoneos/evidence/resume-npu-lifecycle-1025/` and
   `~/.cache/sunstoneos/build/gate-resume-npu-lifecycle-1025/`.
   Physical faults, thermal response, in-place restart and domain OFF remain
-  unqualified.
+  unqualified. An opt-in normal restart now retains the registered providers,
+  worker, queues, tickets, leases and SRAM grant. It parks the worker after
+  completed/reaped CLOSE, reopens local hardware, then rearms the same service.
+  Fourteen native composition cases and focused startup, IRQ and client checks
+  pass under `~/.cache/sunstoneos/evidence/resume-npu-restart-1026/`.
+  The combined CPU/NPU performance OS build also passes after the shared
+  service/pin layout changes; evidence is under
+  `~/.cache/sunstoneos/evidence/integrate-shared-layouts-1026/`.
+  The ambiguous bootstrap-cancellation fixture is corrected separately: an
+  event-free cancellation closes successfully, while an unnotified pending
+  completion retains ownership. Both focused cases pass under
+  `~/.cache/sunstoneos/evidence/npu-cancel-fixture-1026/`.
+  Production cancellation behavior is unchanged.
 - **OS thermal qualification support is implemented.** The session can lower
   the CPU critical threshold to 70 °C; zero retains the normal policy. A
   bounded binary report preserves the first recognition interval's temperature
@@ -171,8 +201,16 @@ be pruned.
   `~/.cache/sunstoneos/evidence/resume-dram-record-copies-1025/`.
   The exercised allocation and backup are ordinary-file fixtures. Neither
   physical card has an established training-record allocation or full backup.
-  The boot worker is implementing the card hook; physical restoration and
-  temperature qualification remain outstanding.
+  The optional card hook is now implemented. It preserves boot0's parameter
+  slot markers, uses single-sector reads before DRAM exists, and bounds all
+  restore reads with one full-width ten-second deadline. The default variant
+  performs no restore reads and keeps full training. An explicitly experimental
+  variant permits the currently unqualified temperature policy.
+  Twenty experimental and one default instruction case, thirteen actual vendor
+  PIO/timer cases and nineteen host cases pass under
+  `~/.cache/sunstoneos/evidence/dram-card-restore-20261026/`. The accepted RAM
+  artifacts remain byte-identical. Physical reservations, backups, ROM boot,
+  memory restoration and temperature qualification remain outstanding.
 - **CPU/NPU performance modes are integrated in software.** The optional service
   selects the highest operating points for the speed bin by default, with a
   lower-power mode and thermal overrides. It changes NPU clocks only after
@@ -201,7 +239,14 @@ be pruned.
   radio/headset OS build pass under
   `~/.cache/sunstoneos/evidence/radio-startup-facts-1026/`.
   This removes dormant latch history as a normal OS prerequisite; fitted supply
-  wiring, PM2 suitability and host firmware/profile staging remain unresolved.
+  wiring and PM2 suitability remain unresolved. OS host staging is now
+  implemented: it binds the existing profiles and four shared firmware roles
+  to exact images, session facts and fixed nonoverlapping ranges. Frozen
+  validation re-derives the upload plan without live-path fallback. Thirty-eight
+  focused cases pass under `~/.cache/sunstoneos/evidence/radio-os-staging-1026/`;
+  the accepted native radio/headset image is reused. The default slow SDIO
+  profile cannot meet supervised firmware-loading deadlines, so fast-mode
+  selection and physical qualification remain outstanding.
   The camera stream uses two slots and polls capture during each copied chunk.
   It exports one immutable frame, then reports retained hardware because packet
   drain is unproven. Native/model/host evidence is frozen under

@@ -244,6 +244,11 @@ Prevent recurring fixture failures at setup:
   source/header path and effective feature flag from the accepted CMakeCache.
   Verify those paths exist and preserve the generator, compiler and linker
   invocations; copying compiler flags alone does not reproduce the configuration.
+  A direct OS configure also needs `SUNSTONE_A733_OS=ON` and
+  `SUNSTONE_MIMUS_BOARD_APPLICATION=ON`; options such as
+  `SUNSTONE_A733_OS_NPU=ON` do not enable the top-level target. Prefer an existing integration-gate variant
+  when it matches the requested profile. The cached `cfg.sh` supplies dependency
+  paths and reads the checkout's mimus source record, but does not select the OS.
   Resolving a linker symlink can change invocation behavior; system Python may
   lack the native tooling's packages. Keep builds and downloads in the cache.
   For a small target with a shared-layout change, prefer rebuilding its

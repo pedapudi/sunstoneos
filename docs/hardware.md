@@ -52,8 +52,18 @@ its return and failure paths.
   switching qualification remain outstanding.
 - [DRAM restoration](designs/dram-training-restore.md) includes a RAM-only
   helper and paired persistent records with interruption-safe update planning.
-  Card-boot integration is in development. Physical restoration, memory checks
-  and temperature coverage remain outstanding.
+  The optional boot0 card-restore hook is implemented, including a shared bounded
+  read deadline and backup-first helper update plans. The default keeps full
+  training; restoration remains explicitly experimental until physical memory
+  and temperature qualification. Actual card allocation and backups remain
+  prerequisites. This does not yet form an autonomous OS card bundle.
+
+Normal NPU stop/restart now preserves the same registered providers and service
+objects; focused software checks pass. Physical same-instance restart and domain
+power-off remain unqualified. The native GPU backend also now publishes the
+actual 1008 MHz operating rate to firmware before startup; it previously
+published the initial 400 MHz value. See [NPU startup](npu-startup.md) and
+[GPU backend](gpu-backend.md) for scope and evidence.
 
 ## Implementation inventory
 
@@ -1802,7 +1812,10 @@ to the stated scope:
   outputs and initializes inactive latches before output use. Focused pin and
   admission checks and the native radio/headset image pass under
   `radio-startup-facts-1026/`. This does not resolve fitted rails, PM2 suitability
-  or host firmware/profile staging. [Identity-message encoding and decoding](radio-codec.md)
+  or physical operation. OS firmware/profile staging and frozen validation are
+  implemented with 38 focused cases under `radio-os-staging-1026/`, using the
+  accepted native image. The supervised bootstrap still needs the existing
+  fast SDIO mode selected and qualified. [Identity-message encoding and decoding](radio-codec.md)
   are implemented, with host sanitizer and AArch64 compile evidence. The
   [bootstrap and board mapping](radio.md) remains source-based research, with a
   host-tested Bluetooth patch-table inspector. Published software identifies

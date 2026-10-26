@@ -2553,6 +2553,58 @@
   "summary": "Build the root-configured camera image; execute only new supervised cases.",
   "usb": false
  },
+ "card-ddr-host.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/dram-training-restore.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--build",
+   "--boot0",
+   "--allocation",
+   "--backup",
+   "--packer",
+   "--monitor-input",
+   "--output"
+  ],
+  "summary": "Check derived-image identity and helper updates with actual producers and files.",
+  "usb": false
+ },
+ "card-ddr-pio.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/dram-training-restore.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "build",
+   "--boot0",
+   "--output"
+  ],
+  "summary": "Exercise actual pinned PIO wait instructions through the restore timer shim.",
+  "usb": false
+ },
+ "card-ddr.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/dram-training-restore.md",
+   "docs/microsd-boot-package.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "build",
+   "--record",
+   "--other-record",
+   "--boot0",
+   "--output"
+  ],
+  "summary": "Execute card hooks and vendor PIO waits with modeled MMIO; no hardware access.",
+  "usb": false
+ },
  "ce-clock-launcher.py": {
   "cache_areas": [],
   "docs": [],
@@ -7096,6 +7148,7 @@
  "npu-interrupt-client.py": {
   "cache_areas": [],
   "docs": [
+   "apps/npu-interrupt/README.md",
    "docs/designs/npu-irq-completion.md",
    "docs/designs/npu-platform-measurements.md"
   ],
@@ -7661,6 +7714,26 @@
    "--output"
   ],
   "summary": "Focused linked OS NPU constructor/API checks; RTOS and device effects modeled.",
+  "usb": false
+ },
+ "os-radio-staging.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/os-image.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--link-check",
+   "--fixture",
+   "--radio-profile",
+   "--bluetooth-profile",
+   "--firmware",
+   "--native-recipe",
+   "--output"
+  ],
+  "summary": "Focused offline OS radio staging. Every board fact is synthetic, never authority.",
   "usb": false
  },
  "os-staged-recorded.py": {
