@@ -429,9 +429,10 @@ SunstoneOS uses these binaries as follows:
   secure-region and QoS configuration cannot be decoded
   ([designs/dram-controller.md](../designs/dram-controller.md)).
 - **Remote-processor ownership at handoff.** boot0 copies an SCP image without
-  starting the E902, and neither binary contains the E902 or OR100 start
-  registers, so which masters are left out of reset at cold boot is not fully
-  proven ([remote-writers.md](../remote-writers.md)).
+  starting the E902. The literal survey does not prove all predecessor device
+  activity or completion; CE ownership remains open. OR100 is excluded by the
+  A733 device inventory, not by a startup-register survey
+  ([remote-writers.md](../remote-writers.md)).
 - **Bit 24 of the CCU PLL words.** The manual marks the field reserved, so the
   effect of boot0 setting it is unknown
   ([GPU backsolve](../reference-backsolve-gpu.md)). The table at

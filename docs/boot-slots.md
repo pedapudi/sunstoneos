@@ -236,8 +236,8 @@ its diagnostic report and parks. These checks establish no ownership by
 changing another agent's reset or clock state.
 
 - **Remote writers.** The native read-only checker reports a mask of agents
-  whose exclusion is unproven. OR100 remains unproven; CE requires both resets
-  asserted. The mask prevents a bundle or session from substituting a host
+  whose exclusion is unproven. The A733 device inventory excludes OR100; its
+  historical bit 1 remains reserved. CE requires both resets asserted. The mask prevents a bundle or session from substituting a host
   assertion for hardware exclusion.
 - **CPU/cache ownership.** The pinned boot0 cache loop covers the documented
   CPU cache hierarchy, including the DSU L3. Stable exclusion of every

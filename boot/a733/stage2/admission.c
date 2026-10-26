@@ -193,8 +193,9 @@ int a733_stage2_card_gate(void)
 }
 
 /* Sample before the loader mutates SDC0 or copies any slot extent. The mask
- * is diagnostic state, not a grant to restart or stop another agent. OR100
- * remains unproven, and CE is admitted only with both resets asserted. */
+ * is diagnostic state, not a grant to restart or stop another agent. CE
+ * is admitted only with both resets asserted; reserved bit 1 is inapplicable
+ * to the A733 device processor inventory (docs/remote-writers.md). */
 static uint32_t remote_mask;
 static int remote_sampled;
 static int remote_read(void *unused, uint64_t address, uint32_t *value)

@@ -288,11 +288,11 @@ to the stated scope:
   reset, clock and DMA-enable registers of the E902, the DMA controllers and
   each peripheral with its own DMA engine, including the SPI flash controller,
   and reports every master whose exclusion it cannot prove. It writes no
-  register. Checks against modeled register states pass. No source documents
-  an OR100 reset or clock, and the board ROM leaves the crypto engine out of
-  reset with no documented idle status, so on a board the check cannot report
-  every master excluded. No boot image calls it, and no board has reported the
-  registers it reads. No native
+  register. Checks against modeled register states pass. The A733 device
+  datasheet excludes OR100; its historical mask bit remains reserved. The ROM
+  leaves CE out of reset without an established predecessor completion
+  contract, so that engine remains unproven. Stage2 checks the mask before
+  card access and refuses any unproven writer. No native
   management-core control or physical qualification is claimed. This inventory
   does not require a separate general-purpose application runtime on E902.
 - CPU: **tested** for instruction execution on the boot A55 in AArch32 and

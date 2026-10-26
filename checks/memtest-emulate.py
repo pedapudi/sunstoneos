@@ -637,13 +637,13 @@ def host_round_trip(elf, binary, out):
 
 def writer_sample(elf):
     """monitor_init stores (magic << 32) | mask in the record's sample word.
-    With every modeled CCU reset asserted only OR100 is unproven; CE and USB0
+    With every modeled CCU reset asserted no writer is unproven; CE and USB0
     out of reset are accepted; NAND0 out of reset stops at finish(4) before
     EL1 entry."""
     ccu = 0x02002000
-    cases = {'reset-defaults': ({}, 1 << 1, True),
-             'ce-and-usb0-out-of-reset': ({0xac4: 1 << 16, 0x1304: 1 << 16}, (1 << 1) | (1 << 4) | (1 << 12), True),
-             'nand0-out-of-reset': ({0xc8c: 1 << 16}, (1 << 1) | (1 << 9), False)}
+    cases = {'reset-defaults': ({}, 0, True),
+             'ce-and-usb0-out-of-reset': ({0xac4: 1 << 16, 0x1304: 1 << 16}, (1 << 4) | (1 << 12), True),
+             'nand0-out-of-reset': ({0xc8c: 1 << 16}, 1 << 9, False)}
     out = {}
     for name, (registers, mask, admitted) in cases.items():
         m = machine.Machine(elf)
