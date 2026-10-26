@@ -64,8 +64,10 @@ SCHEMA = 'board-gpu-returning-bundle-v1'
 # The image each build reuses objects of, by its build record's identity.
 PROVIDER_READY = '3adfa4ad6ba386ce8d39f76646f540107c2a5d02ce42db6c1c35c90de68a75ed'
 FAILED_POWER_ID = 'fd3d5839f700b5e0f569b0ce722e186c33beba65512815b136d9c969a7341afe'
+# The firmware-start images: the start alone, the stop, the first job and the job session.
+FWS_VARIANTS = ('fw-start', 'fw-stop', 'fw-job', 'fw-session')
 CASES = {'provider-ready': 11, 'power-only': 11, 'identity': 12, 'wrapper-read': 7, 'probe-read': 13, 'fw-start': 11,
-         'fw-stop': 10, 'fw-job': 13, 'fw-session': 12}
+         'fw-stop': 10, 'fw-job': 13, 'fw-session': 15}
 # ON/OFF cycles of the client's normal run: the power-only and identity
 # variants power the GPU on twice, so the second ON shows that OFF left a
 # state from which ON succeeds again.
@@ -322,11 +324,11 @@ def validate(row, output):
                         'A host-check case powered the GPU OFF before both words were restored.')
             value['probe_steps'] = [[hex(a), hex(v), k] for a, v, k in PROBE_STEPS]
         fws = 'fws_rows' in names or 'fws_access' in names
-        require(fws == (variant in ('fw-start', 'fw-stop', 'fw-job', 'fw-session')) and
+        require(fws == (variant in FWS_VARIANTS) and
                 ('fws_stop_run' in names) == (variant in ('fw-stop', 'fw-job', 'fw-session')) and
                 ('job_backing' in names) == (variant in ('fw-job', 'fw-session')),
                 'The image\'s firmware-start or firmware-stop client does not match its variant.')
-        if variant in ('fw-start', 'fw-stop', 'fw-job', 'fw-session'):
+        if variant in FWS_VARIANTS:
             rows = table(output / 'image.elf', 'fws_rows', 12 * len(FWS_ROWS))
             require([struct.unpack_from('<3I', rows, 12 * i) for i in range(len(FWS_ROWS))] == FWS_ROWS,
                     'The fws_rows table is not the eight firmware-start accesses in their order.')
@@ -366,7 +368,7 @@ def validate(row, output):
                 reads = [[hex(a), 4] for a in (0x01800024, 0x01800020)] * 2
                 require(case['gpu_reads'] == reads[:len(case['gpu_reads'])],
                         'A host-check case read a GPU address other than the identity words in order.')
-        require(variant in ('fw-start', 'fw-stop', 'fw-job', 'fw-session') or all(not case['gpu_writes'] for case in checked['cases']),
+        require(variant in FWS_VARIANTS or all(not case['gpu_writes'] for case in checked['cases']),
                 'A host-check case wrote the GPU window.')
         if variant == 'power-only':
             require(all(not case['gpu_reads'] for case in checked['cases']), 'A host-check case read the GPU window.')

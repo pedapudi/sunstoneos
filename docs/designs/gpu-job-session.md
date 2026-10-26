@@ -40,8 +40,12 @@ there; `include/a733_gpu_opp.h` holds it. No clock or voltage changes.
 ## The image
 
 The first-job image (`apps/gpu-power-id/fw-start.c` built with `FWS_STOP`
-and `FWS_JOB`) gains a build option `FWS_JOBS=8` (default 1, the set-29
-image). Only the job phase of `fw-job.inc` changes:
+and `FWS_JOB`) gains a build option `FWS_JOBS=8` (default 1, the
+one-job build of the session code). Only the job phase of `fw-job.inc`
+changes; the one-job build differs from the image qualified in set 29 in
+the same ways: the timed spin, no tick wait in the job, `MMUCACHE` and
+cleanup loops, the new lines, a job without its timeline reported in its
+KICK phase, and the never-kicked branch of the cleanup rule.
 
 1. As in set 29: the workload pages and tables, `MMUCACHE` waited for by
    the executed count, the client CCB format, then job 1.
@@ -76,8 +80,8 @@ generic counter (24 MHz, one tick 41.7 ns), the counter the progress
 record already stamps:
 
 - **kick**: `fws_access` reads the counter immediately before the
-  `MTS_SCHEDULE` write itself, after its progress record and log line, and
-  keeps it for the job loop;
+  `MTS_SCHEDULE` write itself, after its progress record and log line and a
+  `DSB SY` that completes them, and keeps it for the job loop;
 - **done**: right after the KICK's write and read-back return, the image
   spins on the timeline word alone: one counter read and one Normal-NC load
   per pass, no register access, no clock lock, no log line and no yield.
@@ -87,7 +91,13 @@ record already stamps:
 
 Each job also logs the ticks from kick to the spin's first read and the
 pass count: with one pass, the job's time is an upper bound, not a
-latency. The spin ends at the 150 ms wait like every other wait. The
+latency. The counter is read before the timeline load, so a time is right
+to within one pass. The spin ends early at any value other than *n* − 1.
+The image keeps FreeRTOS preemption, and the power service runs above it,
+so each job also logs the scheduler ticks crossed between its KICK pass
+and *done*: a nonzero count marks a time that a tick or a service step may
+have lengthened. The `MMUCACHE` and cleanup waits no longer yield either,
+so their times are the firmware's, not the next tick. The spin ends at the 150 ms wait like every other wait. The
 output refill and clean happen in the job's publish step, before the kick;
 the output check comes after *done*.
 
@@ -104,11 +114,11 @@ firmware's read of the padding command.
 All times are in counter ticks. Each line stays under the 127-character
 limit:
 
-- one per job: `GPU FWJ run n=6 ticks=… first=… passes=… write=0xb8`,
+- one per job: `GPU FWJ run n=6 ticks=… first=… passes=… os=… write=0xb8`,
   where `write` is the client CCB write offset after the job's commands
   (`0xb8` … `0x398` for jobs 1 to 5, then `0xb8`, `0x170`, `0x228`);
 - `GPU FWJ phases prepare=… publish=… mmu=… jobs=… cleanup=…`;
-- `GPU FWS park ticks=…`;
+- `GPU FWS park ticks=…`, from after the OFF's gate report and proof;
 - the job line gains `jobs=` (completed jobs).
 
 Each extra KICK logs its `MTS_SCHEDULE` write and read-back and an
@@ -154,7 +164,7 @@ sessions: the image ends at the OFF.
   needed. Because each job completes before the next is written, the ring
   never waits for space in this session; the existing pressure cases cover
   the wait.
-- `apps/gpu-power-id/check.py --fw-session` (twelve cases) on the
+- `apps/gpu-power-id/check.py --fw-session` (fifteen cases) on the
   eight-job image, with a
   firmware model that runs every KICK and follows the padding command:
   - eight complete jobs: timeline 8, every job's words, `kccb_done=0xb`
@@ -163,12 +173,15 @@ sessions: the image ends at the OFF.
     complete, no cleanup is sent, and the stop powers the GPU off;
   - a context reset at job 1, 5, 6 and 8: the cleanup is sent and the stop
     powers the GPU off;
-  - a firmware that stops reading at the padding command (job 6 never
-    completes);
-  - a timeline that jumps, so job 6's publish refuses before its KICK: the
-    never-kicked branch of the cleanup rule;
+  - a reset whose job writes no timeline (job 6);
+  - a firmware that reads job 6's padding command, moves to 0 and stops;
+  - the clock passing the wait's end after job 5, during job 6's publish or
+    while its commands are written: job 6 is never kicked, the two forms of
+    the never-kicked branch of the cleanup rule;
+  - less than 10 ms of the wait left after job 4 (outcome 6);
   - the worst-case log under 16,128 bytes: eight jobs, a reset at job 8
-    and no power acknowledgement, 13,683 bytes in the host model.
+    and no power acknowledgement. The model's timeline arrives on the
+    spin's third counter read, so the multi-pass spin runs.
 - The set-29 image (`--fw-job`, one job) still passes its thirteen cases.
 
 ## Predictions

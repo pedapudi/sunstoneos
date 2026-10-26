@@ -1016,6 +1016,49 @@ ROWS = [
                       'program ran and faulted on its first load because its input pointer\'s halves were exchanged; '
                       'the GPU MMU refused the access and the firmware reset the context. Risk: as bundle 25; a GPU '
                       'that never reports idle after a failed job stays on until a power removal.'),
+    gpu_row('gpu-job-session', 29, 'Eight timed GPU compute jobs on one context in one firmware session, then the '
+            'firmware stop and OFF',
+            'fw-session', 'COMPLETE GPU job session: 8 jobs as computed, context cleaned up, firmware stopped, OFF and '
+            'provider parked',
+            'Status 0 with GPU FWJ job complete=1 outcome=1 timeline=0x8 jobs=8, eight GPU FWJ run lines n=1 to 8 '
+            'with write=0xb8 0x170 0x228 0x2e0 0x398 0xb8 0x170 0x228, GPU FWJ ring cccb_read=0x228 '
+            'cccb_write=0x228, GPU FWJ output w0=0x2e5ca990 w1=0xd09b3063 w31=0x4775f521 guard=0x6d35a7c1, GPU FWJ '
+            'cleanup status=0x1 kccb_done=0xb, GPU FWS stop result=0 phase=10 and COMPLETE GPU job session: 8 jobs '
+            'as computed, context cleaned up, firmware stopped, OFF and provider parked; or one of the controlled '
+            'failures below; or no return. Record every line of kernel.log and the progress record at result.bin '
+            'offset 128.',
+            'apps/gpu-power-id, session variant (apps/gpu-power-id/fw-start.c built with FWS_STOP, FWS_JOB and '
+            'FWS_JOBS=8), docs/designs/gpu-job-session.md. The first-job image of bundle 28 (qualified on port 3-1 '
+            'in set board-bundles-20261025-29), with seven more jobs on the same context by pvr_compute_job_repeat: '
+            'each job refills and cleans the output, writes the CDM command and a timeline UPDATE to its number, '
+            'and kicks; the client CCB wraps before job 6 with a padding command. Each job is timed in 24 MHz '
+            'counter ticks from the MTS_SCHEDULE write of its KICK to the first read of its timeline value, by a '
+            'spin that touches no register, and the image logs the ticks of its preparation, publication, '
+            'MMUCACHE, jobs, cleanup and park. The GPU stays at 1,008 MHz with DCDC4 at 960 mV, the vendor top '
+            'operating point. It runs first in a new lifetime, after the provider-readiness checkpoint.',
+            after=['gpu-provider-ready'],
+            failures=['`FAIL GPU job session: not complete, GPU OFF and provider parked`, after the `GPU FWJ job` '
+                      'line with `jobs=` the completed jobs: outcome 2 a kicked job\'s timeline did not arrive '
+                      'within 150 ms (its run line shows ticks=0; no cleanup), 3 an output word or guard differs, 4 a '
+                      'transport fault or a job never kicked, 5 a firmware event (a `GPU FWJ reset` line gives the '
+                      'reason, data master, page-fault flag and fault address), 6 too little of the wait left for '
+                      'another job; the firmware acknowledged the stop, and the GPU is off',
+                      '`FAIL GPU firmware stop: not acknowledged, idle checks met, GPU OFF and provider parked`: the '
+                      'control failed or the firmware acknowledged neither power request; the stop ran upstream\'s '
+                      'hard reset and the GPU is off',
+                      '`FAIL GPU firmware stop: not acknowledged and the GPU not idle, GPU left powered`: an idle '
+                      'check never matched; a power removal follows',
+                      '`FAIL GPU job session: 8 jobs as computed, context cleanup not confirmed, GPU OFF and provider '
+                      'parked`: the cleanup command returned no word of 1',
+                      'every failure line of bundle 25'],
+            admission='GPU job exception: this row runs eight GPU compute jobs on one context, the job of bundle 28 '
+                      'repeated. Its data and programs are 88 write-back pages of the image\'s own RAM, mapped only in '
+                      'the job\'s GPU VM, whose tables are also image RAM; the firmware reaches only its own mappings '
+                      'plus the six job objects in the image\'s Normal-NC block. The GPU reads the programs, control '
+                      'stream and input and writes only the 256-byte output page. It sends MMUCACHE, eight KICKs and '
+                      'the context cleanup through the kernel CCB, besides bundle 25\'s commands. The client CCB '
+                      'wraps for the first time on the board. Risk: as bundle 28; a GPU that never reports idle after '
+                      'a failed job stays on until a power removal.'),
     # `admission` maps fields of the value prepare() returns to the values that
     # identify this row's build. None refuses the row: no owning package has
     # named those values yet.

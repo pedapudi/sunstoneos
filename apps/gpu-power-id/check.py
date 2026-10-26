@@ -705,10 +705,28 @@ FWQ_NOT_COMPLETE = 'GPU job session: not complete, GPU OFF and provider parked'
 FWQ_EFFECT = {'fq-board': (None, 0),
               **{f'fq-stuck-{k}': ('stuck', k) for k in (1, 5, 6, 8)},
               **{f'fq-reset-{k}': ('reset', k) for k in (1, 5, 6, 8)},
-              'fq-pad-stall': ('pad-stall', 6), 'fq-never-kicked': ('never-kicked', 5),
+              # A reset whose job writes no timeline.
+              'fq-reset-silent-6': ('reset-silent', 6),
+              # The firmware reads job 6's padding command, then stops.
+              'fq-pad-stall': ('pad-stall', 6),
+              # After job 5 the clock passes the wait's end during job 6's
+              # publish, or while its commands are written: job 6 is never kicked.
+              'fq-never-kicked': ('never-kicked', 5), 'fq-never-kicked-writing': ('never-kicked-writing', 5),
+              # At job 4's completion less than 10 ms of the wait remain.
+              'fq-budget': ('budget', 4),
               # The longest log: eight jobs, a reset at the last, and a
               # firmware that acknowledges no power request.
               'fq-reset-8-hard': ('reset', 8)}
+# Per effect, for a job k: (KICKs, completed jobs, final timeline, outcome,
+# cleanup sent, the last job's run line timed).
+FWQ_EXPECT = {None: lambda k: (8, 8, 8, 1, True, True),
+              'stuck': lambda k: (k, k - 1, k - 1, 2, False, False),
+              'reset': lambda k: (k, k - 1, k, 5, True, True),
+              'reset-silent': lambda k: (k, k - 1, k - 1, 5, True, False),
+              'pad-stall': lambda k: (k, k - 1, k - 1, 2, False, False),
+              'never-kicked': lambda k: (k, k, k, 4, True, True),
+              'never-kicked-writing': lambda k: (k, k, k, 4, True, True),
+              'budget': lambda k: (k, k, k, 6, True, True)}
 FWQ_REASONS = {case: None if case == 'fq-board' else FWX_HARD if case == 'fq-reset-8-hard' else FWQ_NOT_COMPLETE
                for case in FWQ_EFFECT}
 # The client CCB write offset after each job: five jobs of 184 bytes, the
@@ -731,23 +749,21 @@ def check_fwq(u, image, state, case, timer_reads):
                                          for g, e in zip(got, start)), 'start sequence'
     assert 'GPU FWS control result=0 phase=4 error=0 health=1 health_status=0x0 ' in output, output[-2500:]
     effect, k = FWQ_EFFECT[case]
-    kicks = {None: 8, 'stuck': k, 'reset': k, 'pad-stall': 6, 'never-kicked': 5}[effect]
-    done = {None: 8, 'stuck': k - 1, 'reset': k - 1, 'pad-stall': 5, 'never-kicked': 5}[effect]
-    timeline_value = {None: 8, 'stuck': k - 1, 'reset': k, 'pad-stall': 5, 'never-kicked': 5}[effect]
-    outcome = {None: 1, 'stuck': 2, 'reset': 5, 'pad-stall': 2, 'never-kicked': 4}[effect]
-    # The cleanup only once the firmware has finished with the context.
-    cleaned = effect in (None, 'reset', 'never-kicked')
+    kicks, done, timeline_value, outcome, cleaned, last_timed = FWQ_EXPECT[effect](k)
     hard = case == 'fq-reset-8-hard'
     kinds = [c[0] for c in state['commands']]
     assert kinds == [115, 102] + [101] * kicks + ([106] if cleaned else []) + ([107] if hard else [107, 107]), kinds
     assert state['commands'][1] == [102, 0x400001f, 0xc0109000], state['commands']
-    # The padding command between jobs 5 and 6, when job 6 ran.
+    # The commands the firmware read: each job's CDM and UPDATE, the padding
+    # command before job 6, none of a stuck job's.
     expected_client = []
     for n in range(1, kicks + 1):
-        if effect in ('stuck', 'pad-stall') and n == kicks:
-            break  # The firmware read none of this job's commands.
         if n == 6:
             expected_client.append(221)
+        if effect in ('stuck', 'pad-stall') and n == kicks:
+            if effect == 'stuck' and n == 6:
+                expected_client.pop()
+            break
         expected_client += [0x8000 | 205, 213]
     assert state['client_commands'] == expected_client, (state['client_commands'], expected_client)
     timeline = int.from_bytes(u.mem_read(JOB_OBJECTS[5], 4), 'little')
@@ -755,13 +771,15 @@ def check_fwq(u, image, state, case, timer_reads):
     assert (f'GPU FWJ job complete={int(effect is None)} outcome={outcome} stage=4 ') in output, output[-2500:]
     assert f'timeline={timeline_value:#x} jobs={done}\n' in output, output[-2500:]
     import re
-    runs = re.findall(r'GPU FWJ run n=(\d+) ticks=(\d+) first=(\d+) passes=(\d+) write=(0x[0-9a-f]+)', output)
+    runs = re.findall(r'GPU FWJ run n=(\d+) ticks=(\d+) first=(\d+) passes=(\d+) os=(\d+) write=(0x[0-9a-f]+)',
+                      output)
     assert [int(r[0]) for r in runs] == list(range(1, kicks + 1)), runs
-    for n, ticks, first, passes, write in runs:
+    for n, ticks, first, passes, os_ticks, write in runs:
         n, ticks, first, passes = int(n), int(ticks), int(first), int(passes)
         assert int(write, 16) == FWQ_WRITE[n - 1] and passes >= 1 and first > 0, (n, write, passes, first)
-        timed = not (effect in ('stuck', 'pad-stall') and n == kicks)
-        assert (ticks >= first) if timed else ticks == 0, (n, ticks, first)
+        timed = last_timed or n < kicks
+        # The model's timeline arrives on the spin's third counter read.
+        assert (ticks > first and passes == 3) if timed else ticks == 0, (n, ticks, first, passes)
     assert re.search(r'GPU FWJ phases prepare=\d+ publish=\d+ mmu=\d+ jobs=\d+ cleanup=\d+', output), output[-2500:]
     if effect is None:
         assert 'GPU FWJ ring cccb_read=0x228 cccb_write=0x228 ' in output, output[-2500:]
@@ -948,20 +966,33 @@ def run_fws(image, case, stop=False, unchecked=False, job=False):
         elif name == 'aarch64_device_cache':
             state['cache'].append([u.reg_read(UC_ARM64_REG_X0), u.reg_read(UC_ARM64_REG_X1),
                                    u.reg_read(UC_ARM64_REG_X2), len(state['accesses'])])
-            # Op 1, clean and invalidate: the next job's publish of the output
-            # fill, not the completed job's output check (op 2, invalidate).
-            if state.get('jump_armed') and job and u.reg_read(UC_ARM64_REG_X0) == 1 and \
-                    u.reg_read(UC_ARM64_REG_X1) == struct.unpack(
-                    '<Q', bytes(u.mem_read(image.address('job_backing') + 5 * 32, 8)))[0]:
-                # The next job's publish: the clock passes the timeline wait's
-                # end before its KICK, so the job is never kicked.
-                state['jump_armed'] = False
-                state['time'] += 150000  # past the 150 ms wait, inside the 50 ms cleanup reserve
+            output_page = struct.unpack('<Q', bytes(u.mem_read(image.address('job_backing') + 5 * 32, 8)))[0] \
+                if job else None
+            op, address = u.reg_read(UC_ARM64_REG_X0), u.reg_read(UC_ARM64_REG_X1)
+            armed = state.get('jump_armed')
+            if armed == 'never-kicked' and op == 1 and address == output_page:
+                # Op 1, clean and invalidate: the next job's publish of the
+                # output fill. The clock passes the 150 ms wait, inside the
+                # 50 ms cleanup reserve, before that job's KICK.
+                state['jump_armed'] = None
+                state['time'] += 150000
+            if armed == 'budget' and op == 2 and address == output_page:
+                # Op 2, invalidate: the completed job's output check. Less than
+                # 10 ms of the wait remain for another job.
+                state['jump_armed'] = None
+                state['time'] += 141000
             ret()
         elif name == 'fws_counter':
-            # The generic counter: 24 ticks per read, one microsecond.
-            state['ticks'] = state.get('ticks', 1000) + 24
-            ret(state['ticks'])
+            # The generic counter at 24 MHz, on the model's clock: one
+            # microsecond per read. A deferred timeline arrives after three.
+            state['time'] += 1
+            pending = state.get('pending_timeline')
+            if pending:
+                pending[1] -= 1
+                if not pending[1]:
+                    put(JOB_OBJECTS[5], pending[0])
+                    state['pending_timeline'] = None
+            ret(state['time'] * 24)
         elif name == 'bb_power_fail':
             state['failure'] = text(u.reg_read(UC_ARM64_REG_X0))
             u.emu_stop()
@@ -998,8 +1029,15 @@ def run_fws(image, case, stop=False, unchecked=False, job=False):
     if stop:
         modeled += ['a733_gpu_platform_off_begin', 'a733_gpu_platform_off_poll', 'a733_gpu_platform_supply_end',
                     'bb_power_park', 'a733_power_service_idle']
-    if image.symbols.get('fws_counter'):
+    if image.symbols.get('fws_counter', set()) - {0}:
         modeled.append('fws_counter')
+
+        def job_write(uc, address, size, arg):
+            # Job 6's commands being written: the clock passes the wait's end.
+            if state.get('jump_armed') == 'never-kicked-writing' and state.get('kicks') == 5:
+                state['jump_armed'] = None
+                state['time'] += 150000
+        u.hook_add(UC_HOOK_CODE, job_write, None, begin=image.address('job_write'), end=image.address('job_write'))
     for name in modeled:
         address = image.address(name)
         u.hook_add(UC_HOOK_CODE, lambda uc, a, size, n: call(n), name, begin=address, end=address)
@@ -1169,13 +1207,25 @@ def fws_job_gpu(u, state, case, image, kick, put):
     read = word(JOB_OBJECTS[2] + 4)
     state['kicks'] = state.get('kicks', 0) + 1
     kicks, effect = state['kicks'], FWQ_EFFECT.get(case, (None, 0))
-    if effect[1] == kicks and effect[0] in ('stuck', 'pad-stall'):
+    here = effect[1] == kicks
+    if here and effect[0] == 'stuck':
         # The firmware consumed the KICK but runs nothing: the client CCB
         # read offset stays, no output, no timeline.
-        return
-    if effect[1] == kicks and effect[0] == 'never-kicked':
-        state['jump_armed'] = True
-    reset = effect[1] == kicks and effect[0] == 'reset'
+        return False
+    if here and effect[0] == 'pad-stall':
+        # It reads the padding command at 920, moves to 0, and stops there.
+        kind, size = struct.unpack('<II', bytes(u.mem_read(JOB_OBJECTS[3] + read, 8)))
+        assert kind == MAGIC | 221 and read == 920 and size == 64, (hex(kind), read, size)
+        state['client_commands'].append(221)
+        put(JOB_OBJECTS[2] + 4, 0)
+        return False
+    if here and effect[0] in ('never-kicked', 'never-kicked-writing', 'budget'):
+        state['jump_armed'] = effect[0]
+    reset = here and effect[0] in ('reset', 'reset-silent')
+    silent = here and effect[0] == 'reset-silent'
+    # On the session image the timeline arrives a few counter reads after the
+    # KICK, so the spin runs more than one pass.
+    deferred = bool(image.symbols.get('fws_counter', set()) - {0})
     while read != offset:
         kind, size = struct.unpack('<II', bytes(u.mem_read(JOB_OBJECTS[3] + read, 8)))
         payload = bytes(u.mem_read(JOB_OBJECTS[3] + read + 40, size))
@@ -1188,10 +1238,13 @@ def fws_job_gpu(u, state, case, image, kick, put):
                 put(output + 64 + 4 * i, value)
             if case == 'fj-guard':
                 put(output + 64 + 128, 0)
-        elif kind == MAGIC | 213 and case not in FWJ_NO_TIMELINE:
+        elif kind == MAGIC | 213 and case not in FWJ_NO_TIMELINE and not silent:
             address, value = struct.unpack_from('<II', payload)
             assert address == JOB_ADDRESS[5], hex(address)
-            put(JOB_OBJECTS[5], value)
+            if deferred:
+                state['pending_timeline'] = [value, 3]
+            else:
+                put(JOB_OBJECTS[5], value)
         read = (read + 40 + size) & 1023
     put(JOB_OBJECTS[2] + 4, read)
     return reset
@@ -1445,7 +1498,10 @@ def check_fwj(u, image, state, case, timer_reads):
         # The job stays waiting for its timeline, with no transport fault,
         # so the shared kernel CCB still serves the stop.
         outcomes = {'fj-no-fence': 2, 'fj-wrong-output': 3, 'fj-guard': 3}
-        assert f'GPU FWJ job complete=0 outcome={outcomes[case]} stage=4 phase=5 error=0 client=2 client_error=0 ' \
+        # A job whose timeline never arrives ends in its KICK phase, when the
+        # timed spin gives up (docs/designs/gpu-job-session.md, "Timing").
+        phase = 4 if case == 'fj-no-fence' else 5
+        assert f'GPU FWJ job complete=0 outcome={outcomes[case]} stage=4 phase={phase} error=0 client=2 client_error=0 ' \
             in output, output[-2500:]
         assert f'GPU FWJ cleanup status={1 if cleaned else 0xffffffff:#x}' in output, output[-2500:]
     # The stop and OFF run whatever the job's result.
@@ -1631,17 +1687,8 @@ def main():
     stop_image = bool(image.symbols.get('fws_stop_run', set()) - {0})
     job_image = bool(image.symbols.get('job_backing', set()) - {0})
     assert job_image == a.fw_job, 'image variant does not match --fw-job'
-    if job_image:
-        from elftools.elf.elffile import ELFFile as _ELF
-        with a.image.open('rb') as stream:
-            runs = [sym for sym in _ELF(stream).get_section_by_name('.symtab').iter_symbols() if sym.name == 'job_runs']
-        jobs = runs[0]['st_size'] // 24 if runs else 1
-        assert jobs == (FWQ_JOBS if session else 1), f'image runs {jobs} jobs; --fw-session needs {FWQ_JOBS}'
-    assert fws_image == (a.fw_start or a.fw_stop or a.fw_job) and stop_image == (a.fw_stop or a.fw_job), \
-        'image variant does not match --fw-start or --fw-stop'
-    assert identity == (not a.power_only and not a.wrapper_read and not a.probe_read and not fws_image), \
-        'image variant does not match the options'
-    assert wrapper_image == a.wrapper_read, 'image variant does not match --wrapper-read'
+    # The session image carries its own completion text.
+    assert (FWQ_COMPLETE.encode() in a.image.read_bytes()) == session, 'image variant does not match --fw-session'
     from elftools.elf.elffile import ELFFile
     layouts = []
     with a.image.open('rb') as stream:

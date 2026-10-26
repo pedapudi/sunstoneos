@@ -285,7 +285,7 @@ The first job that does not complete ends the sequence; the cleanup runs
 only when the firmware has finished with the context, and the stop powers
 the GPU off as in the first-job variant. The completion text is `COMPLETE
 GPU job session: 8 jobs as computed, context cleaned up, firmware stopped,
-OFF and provider parked`. `check.py --fw-session` runs twelve cases.
+OFF and provider parked`. `check.py --fw-session` runs fifteen cases.
 
 A wrapper-write variant was refused before any board run and removed
 ([gpu-power.md](../../docs/gpu-power.md#the-wrapper-write-probe-was-refused)).
