@@ -11,11 +11,14 @@ from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_SP, UC_ARM64_REG_L
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--image', type=Path, required=True)
 parser.add_argument('--output', type=Path, required=True)
+parser.add_argument('--npu-owners-only', action='store_true', help='only combined NPU owner and PCK exclusions')
 a = parser.parse_args()
-image = Image(a.image, layout_names=['board_application', 'os_session', 'a733_cpu_clock_grant_record'])
+image = Image(a.image, layout_names=['board_application', 'os_session', 'a733_cpu_clock_grant_record', 'os_npu_session'])
 unit = '/os-image/recognition-gpu.cc'
 results = []
-for case in ('ready', 'delayed', 'expired', 'revoked', 'firmware-owner', 'session-owner', 'distinct-owner'):
+cases = ('npu-firmware-owner', 'npu-session-owner', 'npu-pck-client', 'distinct-owner') if a.npu_owners_only else (
+    'ready', 'delayed', 'expired', 'revoked', 'firmware-owner', 'session-owner', 'distinct-owner')
+for case in cases:
     uc = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
     uc.mem_map(0x41000000, 0x1200000)
     uc.mem_map(0x80000000, 0x10000)
@@ -29,7 +32,7 @@ for case in ('ready', 'delayed', 'expired', 'revoked', 'firmware-owner', 'sessio
     def ret(value=0):
         uc.reg_write(UC_ARM64_REG_X0, value)
         uc.reg_write(UC_ARM64_REG_PC, uc.reg_read(UC_ARM64_REG_LR))
-    ownership = case.endswith('owner')
+    ownership = a.npu_owners_only or case.endswith('owner')
     state = dict(hashes=0, waits=0, ready_reads=0, opens=0, providers=0, suspends=0)
     hooks = {image.address(n, '/apps/mimus/parallel_runtime.cc' if n == 'mimus_parallel_bind' else None): n for n in (
         'mimus_parallel_bind', 'mimus_board_live', 'mimus_board_session_live',
@@ -83,8 +86,12 @@ for case in ('ready', 'delayed', 'expired', 'revoked', 'firmware-owner', 'sessio
     uc.reg_write(UC_ARM64_REG_SP, 0x8000f000)
     uc.reg_write(UC_ARM64_REG_LR, 0x80000000)
     if ownership:
-        owner = {'firmware-owner': 0x4f53475055464d31, 'session-owner': 0x4f534731,
-                 'distinct-owner': 0x43505531}[case]
+        owner = {'firmware-owner': 0x4f53475055464d31, 'session-owner': 0x4f534731}.get(case,0x43505531)
+        if a.npu_owners_only:
+            npu = 0x80002000 + image.layouts['os_session']['npu']
+            npu_owner = {'npu-firmware-owner':0x4f53475055464d31,'npu-session-owner':0x4f534731}.get(case,19)
+            put(npu+image.layouts['os_npu_session']['owner'],npu_owner,8)
+            put(npu+image.layouts['os_npu_session']['pck_client'],7 if case=='npu-pck-client' else 1)
         offset = image.layouts['os_session']['cpu_clock'] + image.layouts['a733_cpu_clock_grant_record']['owner']
         put(0x80002000 + offset, owner, 8)
         put(image.address('os_recognizer'), 1, 8)

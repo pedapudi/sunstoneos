@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
-def generate(artifacts, output, model=0, ram_assets=False):
+def generate(artifacts, output, model=0):
     catalogue = json.loads((ROOT / 'tools/npu-session-models.json').read_text())['models']
     paths = json.loads(Path(artifacts).read_text())
     if len(catalogue) != 5 or not 0 <= model < len(catalogue):
@@ -23,8 +23,7 @@ def generate(artifacts, output, model=0, ram_assets=False):
         data = Path(path).read_bytes()
         if len(data) != expected['bytes'] or hashlib.sha256(data).hexdigest() != expected['sha256']:
             raise ValueError(f'{name}: reviewed artifact differs')
-        section = ',section(".data.os_npu_assets")' if ram_assets else ''
-        text += f'static const uint8_t {name}[{len(data)}] __attribute__((aligned(64){section}))={{' + ','.join(map(str, data)) + '};\n'
+        text += f'static const uint8_t {name}[{len(data)}] __attribute__((aligned(64),section(".data.os_npu_assets")))={{' + ','.join(map(str, data)) + '};\n'
         return data
     selected = catalogue[model]
     data = blob('model_0', paths[selected['name']]['model'], selected['model'])
@@ -49,6 +48,5 @@ if __name__ == '__main__':
     p.add_argument('--artifacts', required=True)
     p.add_argument('--output', required=True)
     p.add_argument('--model', type=int, default=0)
-    p.add_argument('--ram-assets', action='store_true', help='Place resident const payloads in existing non-executable initialized RAM')
     a = p.parse_args()
-    generate(a.artifacts, a.output, a.model, a.ram_assets)
+    generate(a.artifacts, a.output, a.model)

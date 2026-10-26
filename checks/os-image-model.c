@@ -36,6 +36,10 @@ static void gicd_barrier(void){}
 #include "../platform/a733-smp-cached/irq_table.c"
 #include "../apps/os/irq.c"
 static unsigned thermal_calls,audio_calls;
+#ifdef SUNSTONE_A733_OS_GPU_LINEAR
+void a733_gpu_mimus_irq(void){}
+unsigned os_dispatch_gpu_state(void){return OS_DISPATCH_GPU_IDLE;}
+#endif
 void os_thermal_irq(void){++thermal_calls;}
 #ifdef SUNSTONE_A733_OS_NPU
 void os_npu_irq(void){}

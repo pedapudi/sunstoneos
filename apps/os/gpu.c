@@ -21,12 +21,6 @@ extern const struct os_placement os_placement_table[];
 extern const struct os_placement_tensor os_placement_tensors[];
 extern const uint32_t os_placement_rows, os_placement_gpu_rows;
 
-/* Fixed identities: the GPU resource manager's client, the PMIC consumer and
- * pool owner of the firmware, and the pool owner and context owner of the
- * session. */
-#define OS_GPU_CLIENT 7u
-#define OS_GPU_FIRMWARE_OWNER UINT64_C(0x4f53475055464d31)
-#define OS_GPU_SESSION_OWNER UINT32_C(0x4f534731)
 /* Worker priority, above the recognizer's 3 on the same core. */
 #define OS_GPU_PRIORITY 4u
 /* OPEN covers power-up, firmware start and the session's publication. The
@@ -115,12 +109,18 @@ static int session_owners_distinct(void)
     const struct a733_board_session *s = &board.session;
     const uint64_t owners[] = {s->pmic_owner, s->usb0_owner, s->typec_owner, s->usb2_owner, s->latch_owner,
                                s->latch_m_owner, os->thermal_owner,
+#ifdef SUNSTONE_A733_OS_NPU
+                               os->npu.owner,
+#endif
 #ifdef SUNSTONE_A733_OS_CPU_CLOCK
                                os->cpu_clock.owner,
 #endif
     };
     for (unsigned i = 0; i < sizeof(owners) / sizeof(*owners); ++i)
         if (owners[i] == OS_GPU_FIRMWARE_OWNER || owners[i] == OS_GPU_SESSION_OWNER) return 0;
+#ifdef SUNSTONE_A733_OS_NPU
+    if (os->npu.pck_client == OS_GPU_CLIENT) return 0;
+#endif
     return s->pck_client != OS_GPU_CLIENT;
 }
 

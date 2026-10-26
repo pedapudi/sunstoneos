@@ -56,6 +56,8 @@ GPU_CONDITIONS = {
     'shared-pmic-and-register-ownership', 'irq95-route-disabled-inactive-clear',
     'gpu-device-mappings-and-memory-alias-exclusion',
     'manual-whole-board-power-removal-and-no-reuse'}
+GPU_NPU_CONDITION = 'concurrent-gpu-npu-lifetime-and-cross-pll-risk'
+GPU_NPU_SCHEMA = 'a733-os-gpu-npu-supervised-entry-v1'
 CONTRACT_MAGIC = 0x415337334f534331
 REQUEST_MAGIC = 0x415337334f534c31
 SESSION_MAGIC = 0x415337334f534131
@@ -193,6 +195,33 @@ def inference_admission(record, config):
         require(same_inference(record['inference'], config), 'Reviewed inference configuration differs.')
 
 
+def linked_npu_assets(elf):
+    """Authenticate the actual embedded model and vectors, using linked pointers."""
+    def one(name):
+        rows = [s for s in elf.symbols if s['name'] == name and s['shndx'] != 0]
+        require(len(rows) == 1, 'NPU linked symbol is absent or ambiguous: ' + name)
+        return rows[0]
+    def value(name):
+        symbol = one(name)
+        require(symbol['size'] == 4, 'NPU linked count size differs.')
+        return struct.unpack('<I', elf.read(symbol['value'], 4))[0]
+    model = value('os_npu_client_model')
+    catalogue = json.loads((ROOT / 'tools/npu-session-models.json').read_text())['models']
+    require(model < len(catalogue), 'NPU linked catalogue entry differs.')
+    selected = catalogue[model]
+    for symbol, entries in [('os_npu_models', [selected['model']]),
+                            ('os_npu_inputs', [v['reference'] for v in selected['inputs']]),
+                            ('os_npu_references', [v['reference'] for v in selected['outputs']])]:
+        table = one(symbol)
+        require(table['size'] == 16 * len(entries), 'NPU linked vector table size differs.')
+        for i, expected in enumerate(entries):
+            pointer, size = struct.unpack('<2Q', elf.read(table['value'] + 16*i, 16))
+            require(size == expected['bytes'] and hashlib.sha256(elf.read(pointer, size)).hexdigest() == expected['sha256'],
+                    'NPU embedded asset differs from the authenticated catalogue.')
+    require(value('os_npu_input_count') == len(selected['inputs']) and
+            value('os_npu_output_count') == len(selected['outputs']), 'NPU linked vector counts differ.')
+
+
 def image_gpu(manifest, raw):
     """Read the bounded caller and immutable GPU inputs from the actual linked image."""
     enabled = manifest.get('gpu_linear', False)
@@ -209,32 +238,54 @@ def image_gpu(manifest, raw):
     if enabled:
         cpu_clock = manifest.get('cpu_clock')
         require(type(cpu_clock) is bool, 'GPU CPU-clock feature must be boolean.')
-        expected_bytes = OS_BYTES + (GRANT_BYTES if cpu_clock else 0)
+        npu = manifest.get('npu', False)
+        require(type(npu) is bool, 'GPU NPU feature must be boolean.')
+        expected_bytes = OS_BYTES + (NPU_BYTES if npu else 0) + (GRANT_BYTES if cpu_clock else 0)
         require(contract == {'lifetime': 'supervised', 'session_bytes': expected_bytes} and
                 manifest.get('contract_profile') == contract,
                 'Supervised GPU requires the actual linked supervised contract and session size.')
         require(manifest.get('lifetime') == 'supervised' and
-                not any(manifest.get(k) for k in ('audio', 'radio', 'headset', 'npu', 'perf_modes')),
+                not any(manifest.get(k) for k in ('audio', 'radio', 'headset', 'perf_modes')),
                 'Supervised GPU requires recorded recognition without other optional devices or performance commands.')
     return config
 
 
-def gpu_admission(record, config, evidence, grant):
+def gpu_admission(record, config, evidence, raw):
+    grant = grant_fields(raw)
     if config is None:
         require('gpu' not in record, 'GPU authority supplied for an image without GPU.')
         return
-    # Fixed native GPU identities in apps/os/gpu.c; its pre-provider check
-    # excludes the sealed CPU grant owner from both.
+    # Fixed native GPU identities in apps/os/dispatch.h; session and
+    # pre-provider checks exclude the CPU and NPU owners.
     require(grant is None or grant['owner'] not in (0x4f53475055464d31, 0x4f534731),
             'CPU clock owner aliases a GPU owner.')
     value = record.get('gpu')
     require(isinstance(value, dict) and set(value) == {'configuration', 'conditions'} and
             json.dumps(value['configuration'], sort_keys=True) == json.dumps(config, sort_keys=True),
             'Reviewed GPU entry must name the exact linked configuration.')
-    require(isinstance(value['conditions'], dict) and set(value['conditions']) == GPU_CONDITIONS,
+    combined = npu_session(raw)
+    conditions = GPU_CONDITIONS | ({GPU_NPU_CONDITION} if combined else set())
+    require(isinstance(value['conditions'], dict) and set(value['conditions']) == conditions,
             'Incomplete GPU physical entry conditions.')
     for item in value['conditions'].values():
         evidence(item)
+    if combined:
+        owner, pck = struct.unpack_from('<Q', raw, 832)[0], struct.unpack_from('<I', raw, 856)[0]
+        require(owner not in (0x4f53475055464d31, 0x4f534731) and pck != 7,
+                'NPU owner or PCK client aliases the GPU.')
+        facts = json.loads(evidence(value['conditions'][GPU_NPU_CONDITION]))
+        require(facts.get('schema') == GPU_NPU_SCHEMA and facts.get('scope') == 'simultaneous-powered-lifetime' and
+                facts.get('reviewed') is True and facts.get('physical_authority') is True and facts.get('modeled') is False and
+                all(facts.get(k) == record[k] for k in ('identity', 'port', 'image_sha256', 'epoch', 'generation', 'lease')),
+                'Combined GPU/NPU authority names another scope or lifetime.')
+        require(facts.get('gpu') == {'core_hz': config['core_hz'], 'supply_uv': config['supply_uv']} and
+                facts.get('npu') == {'mhz': 852, 'supply_uv': 800000} and
+                facts.get('npu_pll_enable_with_gpu_active') is True and
+                facts.get('gpu_pll_start_stop_with_npu_active') is True and
+                facts.get('cpu_ddr_clocks_remain_admitted') is True and facts.get('evidence'),
+                'Combined GPU/NPU clock authority is incomplete.')
+        for item in facts['evidence']:
+            evidence(item)
 
 
 def image_manifest_check(manifest, raw):
@@ -245,6 +296,8 @@ def image_manifest_check(manifest, raw):
     # A link check from before the NPU profile has no 'npu' key: NPU is off.
     npu = manifest.get('npu', False)
     require(type(npu) is bool, 'The link check records the NPU profile as a boolean.')
+    if npu:
+        linked_npu_assets(os_link.Elf(raw))
     flags = radio_assets.features(manifest, raw, os_link.Elf, require)
     require(not (audio and flags['headset']), 'Microphone and headset profiles cannot be combined.')
     require(manifest.get('passed') is True and manifest.get('target') == 'sunstone-a733-os' and
@@ -461,7 +514,7 @@ def validate_admission(record, image_hash, template_hash, raw, audio, cache=None
         return data
     require(isinstance(record.get('mimus_ddr'), dict), 'Recognition input DDR reservation required.')
     mimus.input_admission(record, image_hash, evidence)
-    gpu_admission(record, gpu, evidence, grant_fields(raw))
+    gpu_admission(record, gpu, evidence, raw)
     if npu_session(raw):
         npu_admission(record, image_hash, raw, evidence)
     else:
