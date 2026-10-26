@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import struct
 import subprocess
@@ -32,6 +33,8 @@ def main():
     parser.add_argument("--build", type=Path, required=True)
     parser.add_argument("--ddr-evidence", type=Path, required=True,
                         help="the run-ddr.py evidence directory of this FEL lifetime")
+    parser.add_argument("--temperature-note", default="",
+                        help="the coordinator's temperature observation, recorded unchanged")
     parser.add_argument("--evidence", type=Path,
                         default=CACHE / "evidence" / time.strftime("ddr-capture-%Y%m%d-%H%M%S"))
     args = parser.parse_args()
@@ -52,6 +55,7 @@ def main():
     record = {"manifest": manifest, "build": str(args.build), "ddr_evidence": str(args.ddr_evidence),
               "tool_sha256": hashlib.sha256(args.fel.read_bytes()).hexdigest(),
               "runner_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+              "port": os.environ.get("SUNSTONE_USB_PORT", ""), "temperature_note": args.temperature_note,
               "transactions": [], "stages": [], "complete": False,
               "launch_attempted": False, "device_access_attempted": False}
 

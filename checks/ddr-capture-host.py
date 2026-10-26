@@ -144,9 +144,10 @@ def run_case(case, build, out):
     guard.check_health = lambda: None
     evidence = out / "capture"
     argv = [str(RUNNER), "--fel", str(build / "manifest.json"), "--build", str(build),
-            "--ddr-evidence", str(ddr), "--evidence", str(evidence)]
+            "--ddr-evidence", str(ddr), "--evidence", str(evidence), "--temperature-note", "fixture"]
     outcome = "returned"
     with patch.object(sys, "argv", argv), patch.dict(sys.modules, {"usb_guard": guard}), \
+            patch.dict("os.environ", {"SUNSTONE_USB_PORT": "3-3"}), \
             patch("importlib.util.spec_from_file_location", spec), patch("subprocess.run", fake_run):
         try:
             runpy.run_path(str(RUNNER), run_name="__main__")
@@ -176,6 +177,7 @@ def main():
     assert [s["name"] for s in record["stages"]] == [s["name"] for s in stages]
     assert all(s["done"] for s in record["stages"])
     assert record["parameter_block"][:2] == ["0x00001000", "0x00001001"]
+    assert record["port"] == "3-3" and record["temperature_note"] == "fixture"
 
     outcome, record, log, events = run_case("ddr-incomplete", args.build, args.evidence / "ddr-incomplete")
     assert outcome == "exit" and record is None and not log
@@ -186,7 +188,8 @@ def main():
 
     outcome, record, log, events = run_case("stage-refused", args.build, args.evidence / "stage-refused")
     assert outcome == "held" and "quarantine" in events and not record["complete"]
-    assert [s["name"] for s in record["stages"]] == [s["name"] for s in stages[:3]]
+    refused = [s["name"] for s in stages].index("phy-blocks") + 1
+    assert [s["name"] for s in record["stages"]] == [s["name"] for s in stages[:refused]]
     assert not record["stages"][-1]["done"]
     print("PASS: nominal capture order; incomplete DDR evidence, another lifetime's mailbox "
           "and an incomplete stage stop as required")

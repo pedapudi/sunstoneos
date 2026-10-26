@@ -2868,6 +2868,19 @@
   "summary": "",
   "usb": false
  },
+ "ddr-capture-analysis.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/dram-fast-boot.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Check the DRAM capture classifier on synthetic captures with planted registers.",
+  "usb": false
+ },
  "ddr-capture-host.py": {
   "cache_areas": [],
   "docs": [

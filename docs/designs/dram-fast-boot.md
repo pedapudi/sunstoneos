@@ -1,8 +1,11 @@
 # Design: shorter cold boot by reusing DRAM training
 
-Status: **analysis complete; capture tooling built, host-checked and frozen;
-no board run.** The capture run that the [runbook](../board-runbooks/dram-training-capture.md)
-specifies has not taken place, and no fast path is implemented.
+Status: **analysis complete; capture tooling built, host-checked and frozen
+for both boards; no board run.** The user approved the training-restore
+path (option 2 below); [its design](dram-training-restore.md) specifies the
+record, the restore sequence and the qualification. The captures that the
+[runbook](../board-runbooks/dram-training-capture.md) specifies have not
+taken place.
 
 Every cold start trains the board's 12,288 MiB of LPDDR5 at four operating
 frequencies, and that training takes about 5.1 s, most of the cold-boot time.
@@ -269,21 +272,26 @@ path counts only with a passing memory test over the full map; any training
 result other than 7 or a size other than 12,288 MiB stops it. The capture
 tooling adds no step to the normal boot path.
 
-## The capture reads registers in four stages ordered by risk
+## The capture reads registers in five stages ordered by risk
 
 - [`boot/a733/ddr-capture.S`](../../boot/a733/ddr-capture.S): a 388-byte
   table-driven reader run from FEL at `0x85000`. It reads the listed
   registers into DRAM at `0x43100000` and above and publishes a completion
   word last.
 - [`tools/prepare-ddr-capture.py`](../../tools/prepare-ddr-capture.py):
-  builds the reader and four stage tables, ordered by risk: boot0's own
-  save window (72 registers), the controller (1,842 words), the PHY blocks
+  builds the reader and five stage tables, ordered by risk: the SID chip ID
+  and thermal calibration (7 words), boot0's own save window (72 registers), the controller (1,842 words), the PHY blocks
   over boot0's address extents (32,007 registers) and the firmware message
   block (1,233 registers). Each range is bounded by addresses that boot0
   accesses.
 - [`tools/run-ddr-capture.py`](../../tools/run-ddr-capture.py): requires the
   DDR run's mailbox in SRAM, reads the 2 KiB boot parameter buffer, then
   runs each stage with one FEL execution and stops at the first failure.
+  It records the port and the coordinator's temperature note.
+- [`tools/analyse-ddr-captures.py`](../../tools/analyse-ddr-captures.py):
+  classifies each register across captures as constant, board, lifetime or
+  status; [`checks/ddr-capture-analysis.py`](../../checks/ddr-capture-analysis.py)
+  checks it on synthetic captures.
 - [`checks/ddr-capture.py`](../../checks/ddr-capture.py) runs the reader in
   Unicorn against every stage table, and
   [`checks/ddr-capture-host.py`](../../checks/ddr-capture-host.py) runs the

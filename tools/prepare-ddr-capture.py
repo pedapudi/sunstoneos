@@ -44,6 +44,12 @@ vendor_window = [(0x0a92009c + 0x2000 * block + 0x200 * lane, 2, H16 | PHY, f"db
                  for block in range(4) for lane in range(9)]
 
 STAGES = [
+    {"name": "identity",
+     "purpose": "Chip ID and thermal calibration words from the SID shadow, which has no clock gate.",
+     "entries": [
+         (*words(0x03006200, 0x0300620c), H32, "chip ID; boot0 compares these with the boot parameter region (0x5d9d8)"),
+         (*words(0x03006244, 0x0300624c), H32, "thermal calibration fields (docs/thermal.md)"),
+     ]},
     {"name": "vendor-window",
      "purpose": "The registers boot0's own training-save routine reads, with its MicroContMuxSel write only.",
      "entries": vendor_window},

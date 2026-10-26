@@ -20,6 +20,10 @@ from unicorn.arm_const import (UC_ARM_REG_CPSR, UC_ARM_REG_LR, UC_ARM_REG_PC, UC
 MUXSEL, UCCLK = 0x0aaa0000, 0x0aa80100
 DONE = 0x454e4f44
 RETURN = 0xf0000
+
+
+def register(address):
+    return 0x0a000000 <= address < 0x0b000000 or 0x03006000 <= address < 0x03007000
 SAVED = (UC_ARM_REG_R4, UC_ARM_REG_R5, UC_ARM_REG_R6, UC_ARM_REG_R7,
          UC_ARM_REG_R8, UC_ARM_REG_R9, UC_ARM_REG_R10, UC_ARM_REG_R11)
 
@@ -33,7 +37,8 @@ def run(build, table, entries):
     cpu = Uc(UC_ARCH_ARM, UC_MODE_ARM)
     cpu.mem_map(0x40000, 0xc0000)
     cpu.mem_map(0x0a000000, 0x01000000)
-    cpu.mem_map(0x43000000, 0x00200000)
+    cpu.mem_map(0x03006000, 0x1000)                # SID shadow
+    cpu.mem_map(0x43000000, 0x00400000)
     cpu.mem_write(0x85000, (build / "ddr-capture.bin").read_bytes())
     cpu.mem_write(0x43000000, table)
     for entry in entries:
@@ -52,11 +57,11 @@ def run(build, table, entries):
     output = struct.unpack_from("<I", table, 12)[0]
 
     def on_read(uc, access, address, size, value, data):
-        if 0x0a000000 <= address < 0x0b000000:
+        if register(address):
             reads.append((address, size))
 
     def on_write(uc, access, address, size, value, data):
-        if 0x0a000000 <= address < 0x0b000000:
+        if register(address):
             writes.append((address, size, value & ((1 << 8 * size) - 1)))
         elif 0x43000010 <= address < 0x43000020 or output <= address < output + 0x40000:
             pass
