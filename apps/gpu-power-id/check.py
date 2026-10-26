@@ -1238,6 +1238,13 @@ def check_fwj(u, image, state, case, timer_reads):
     output_cpu = struct.unpack('<Q', bytes(u.mem_read(image.address('job_backing') + 5 * 32, 8)))[0]
     payload = image.address('job_payload')
     assert payload <= output_cpu < payload + 88 * 4096 and payload + 88 * 4096 <= NC_BASE
+    # The kernel's pointer constants, low word first: DOUTW writes data word 0
+    # to the even register, which the program reads as the low half. With the
+    # high word first, port 3-1 faulted reading GPU address 0x80
+    # (board-session-20261025-22, s22-gfj-postmortem).
+    pds_cpu = struct.unpack('<Q', bytes(u.mem_read(image.address('job_backing') + 1 * 32, 8)))[0]
+    pds = struct.unpack('<8I', bytes(u.mem_read(pds_cpu, 32)))
+    assert pds[:3] == (0x01140000, 0x80, 2) and pds[4:7] == (0x01190040, 0x80, 0x80004002), [hex(x) for x in pds]
     post = list(zip(got[len(start):], state['steps'][len(start):]))
     kicks = [i for i, ((w, a, v), _) in enumerate(post) if w and a == GPU + 0xb00]
     assert all(post[i + 1][0][:2] == (0, GPU + 0xb00) for i in kicks), post

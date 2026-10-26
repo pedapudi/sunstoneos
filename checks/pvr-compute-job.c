@@ -94,8 +94,13 @@ static void reference(void)
     assert(usc->size_dwords==70&&usc->temps==6);
     memcpy(config.buffers[0].cpu,usc->binary,usc->size_dwords*4);
     uint32_t data[128]={0};
+    /* Mesa's save-restore generator stores each constant high word first;
+     * DOUTW writes word 0 to the even register, which the probe reads as
+     * the low half (pvr_compute_job.c doutw_pair), so the reference passes
+     * each pointer with its halves exchanged. */
+#define HALVES(v) ((uint64_t)(v)<<32|(uint64_t)(v)>>32)
     struct pvr_pds_shared_storing_program p={.cc_enable=true,.doutw_control={.dest_store=PDS_UNIFIED_STORE,
-      .num_const64=2,.doutw_data={config.buffers[PVR_JOB_INPUT].gpu,config.buffers[PVR_JOB_OUTPUT].gpu+64}}};
+      .num_const64=2,.doutw_data={HALVES(config.buffers[PVR_JOB_INPUT].gpu),HALVES(config.buffers[PVR_JOB_OUTPUT].gpu+64)}}};
     pvr_pds_setup_doutu(&p.usc_task.usc_task_control,config.buffers[0].gpu-programs.usc.base,usc->temps,0,false);
     pvr_pds_generate_shared_storing_program(&p,data,PDS_GENERATE_DATA_SEGMENT,dev);
     uint32_t *end=pvr_pds_generate_compute_barrier_conditional(data+ALIGN_POT(p.data_size,4),PDS_GENERATE_CODE_SEGMENT);

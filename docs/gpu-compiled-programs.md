@@ -73,10 +73,17 @@ Mesa's `cdm.xml`. One firmware compute command and one timeline UPDATE enclose
 the complete stream. Partial group completion cannot expose output: acquisition
 requires the final timeline sequence and intact guards.
 
-Mesa's DOUTW constants use H32/L32 storage order, while the even input register
-receives the low half. The tile pair therefore packs tile count in the high half
-and first index in the low half. The native bytes at PDS slot offsets 32 and 36
-contain tile count and first index respectively.
+A DOUTW writes data word 0 of its 64-bit constant to the even destination
+register and word 1 to the odd one, and the programs read the low half from
+the even register. Mesa's clear-colour and end-of-tile DOUTWs use it so
+(`pvr_pds.c:570–573`, `3238–3247` in the producer's Mesa tree). Port 3-1
+showed it: with the high word first, as Mesa's save-restore generator stores
+it (`pvr_pds.c:3664–3667`), the first job's program read GPU address `0x80`,
+the high half of its input pointer ([first GPU job](designs/gpu-first-job.md)).
+Native constants are therefore stored low word first, and the byte checks pass
+Mesa's generator each value with its halves exchanged. The tile pair keeps the
+first index in the low half and the count in the high half: the native bytes at
+PDS slot offsets 32 and 36 hold the first index and the count.
 
 The package preserves Mesa's eight-byte `pco_precomp_data` header. Its instruction
 length, temporary registers, input registers, coefficients and shared registers
@@ -156,9 +163,8 @@ and controls occupy bytes 80 through 111 after aligned generator data. The
 inserted writes use no temporaries and omit END/LAST. Original ordinary-task
 local-index publication and USC launch follow them. The resulting 60-byte code
 begins at byte 128. The indirect address stays zero; direct group counts use
-ordinary X/Y/Z word order. Pointer constants retain the earlier generator's
-H32/L32 convention. That byte comparison does not qualify physical register-half
-mapping.
+ordinary X/Y/Z word order. Pointer constants are stored low word first, as
+described above.
 
 CDM allocates two 16-byte unified units, one 64-byte coefficient unit, one
 16-byte PDS temporary unit and seven 16-byte PDS data units. `USC_COMMON_SHARED`

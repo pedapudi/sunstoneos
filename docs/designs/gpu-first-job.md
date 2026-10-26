@@ -1,8 +1,8 @@
 # The first GPU job on the A733
 
-Status: **failed on port 3-1 in set 27 (see "Set 27 on port 3-1"); the
-failure path is fixed and host-checked; the job's cause is not yet
-known.** The firmware lifecycle passed on port 3-1
+Status: **failed on port 3-1 in set 27; the post-mortem capture found the
+cause, a swapped pointer constant (see "Set 27 post-mortem"); fixed and
+host-checked.** The firmware lifecycle passed on port 3-1
 ([firmware stop design](gpu-firmware-stop.md)): start, one health check,
 forced idle, power off, idle checks, OFF. This note plans the first job that
 makes the GPU compute something the host can check, from the upstream Linux
@@ -224,13 +224,10 @@ cache maintenance matching, and these differences, most likely first:
 4. The CDM command's flags `0x24` (prevent overlap, single core), which
    Mesa sets for barriers or atomics.
 
-The pointer constants of the job's PDS program are stored high word first.
-That matches Mesa's DOUTW constants (`pvr_pds.c:3664–3667`), whose
-save-restore shader reads the low half from the even input register
-(`pvr_iface.h:117–124` in the producer's Mesa tree), so it is not counted
-as a difference. The context reset's words (reason, page-fault flag, page
-catalogue and fault address) decide between these; the next run prints
-them, and the firmware CCB still in DRAM holds set 27's.
+The pointer constants of the job's PDS program were stored high word
+first, as Mesa's save-restore generator stores them, and the comparison
+judged that order correct. The post-mortem capture showed it was the cause
+(below).
 
 **Changes.** The job image records events 101–108 without failing the
 control; it settles a consumed KICK after the job, so its pending slot cannot
@@ -245,6 +242,80 @@ KICK's return word, the MMU command's status and the firmware's first
 recovery record. Differences 2 and 3 are removed (see "What SunstoneOS
 changes"); 1 and 4 stay, because the program and the command bytes are
 compared with Mesa's output.
+
+## Set 27 post-mortem
+
+After set 27 returned to FEL, with the GPU still powered and nothing run in
+between, the coordinator read three regions with `sunxi-fel read`
+(`board-session-20261025-22/port-3-1/s22-gfj-postmortem`): the firmware's
+shared pages and the job's six firmware objects (`0x41c00000`, 51 pages),
+the job payload (`0x41090000`, 88 pages) and the GPU page tables
+(`0x410e8000`, 32 pages). The structures are decoded from the upstream
+interface headers (`pvr_rogue_fwif.h`, `pvr_rogue_fwif_check.h`,
+`pvr_rogue_cr_defs.h`) and the DDK's `rgxmhdefs_km.h`.
+
+**The event that ended the control.** The firmware CCB holds one command
+(write and read offset 1), `0x2abc0069`: 105, the context reset
+notification. Its data (`struct rogue_fwif_fwccb_cmd_context_reset_data`)
+is context 1, reason 1 (`GUILTY_LOCKUP`), data master 4 (CDM), job
+reference 1, flags `0x1` (page fault), page catalogue `0x410e8000` (the
+job's) and fault address `0x80`. This confirms the first of the three
+causes: the image refused the context reset event, and the control failed.
+
+**The recovery record** (`0x8000`, `struct rogue_fwif_hwrinfobuf`): count 1;
+record 0 is type 3 (`BIF0FAULT`), data master 4, recovery flags `0x20`;
+the CDM locked-up and recovered counts are each 1. Its BIF data:
+
+- request status `0x0010100000000080`. The core has the XE memory hierarchy
+  (36.0.104.183 feature word `0x000002181d51bf35`, bit 41), so the XE layout
+  applies: bit 52 set, a read; tag ID 16, `MCU_USCA`, a USC data access;
+  tag sideband 0; address bits 4–39, `0x80`;
+- MMU status `0x1041`: fault, data type 2, 4 KB pages, catalogue base 1;
+- page catalogue `0x410e8000`.
+
+System data shows the power state IDLE (3) and the HWR state flag 1. The
+kernel CCB's write and read offsets are 2 (the health check and the KICK
+consumed, no return words). The job's client CCB control (`0x2f000`) shows
+write, read and dependency offsets all `0xb8` and wrap mask `0x3ff`: the
+firmware took both the CDM and the UPDATE command. The timeline is 1.
+
+**The page tables are right; the address is not.** GPU address `0x80` falls
+in catalogue entry 0, which is invalid, so the walk faults there. The job's
+input `0x8001140000` walks catalogue entry 512, directory entry 8 and table
+entry 320 to `0x410a6000`, the input page, and its output `0x8001190000`
+walks to `0x410a7000` with the cache-bypass bit, as built.
+
+**The address comes from the PDS constants.** The job's PDS data at
+`0x410a3000` stores each pointer high word first: `0x80`, `0x01140000` for
+the input and `0x80`, `0x01190040` for the output. A DOUTW writes data word
+0 to the even register, and the program reads the low half from the even
+register. The input pointer therefore became `0x0114000000000080`, whose
+40-bit bus address is `0x80`, the fault address; the output pointer would
+have given `0x4000000080`, so the fault was the program's first load, of
+`seed` and `factor`. Mesa's clear-colour and end-of-tile DOUTWs put word 0
+in the destination register (`pvr_pds.c:570–573`, `3238–3247`); only its
+save-restore generator, whose layout the job's PDS reference followed,
+stores the high word first (`pvr_pds.c:3664–3667`).
+
+**The payload is unchanged.** The payload and the page tables are byte for
+byte what the set-27 image composed, replayed in the host model with no GPU
+write: the output page holds the image's fill, and no other byte of the 88
+pages changed. In the shared pages only firmware-owned words differ: the
+queue offsets, the recovery record, system and OS data counters, the client
+CCB's offsets, one word of the context state and the VM record's
+catalogue-register field (`0xffffffff` to 0). The trace buffers are
+unchanged.
+
+**Fix.** The job's PDS constants are stored low word first
+(`pvr_compute_job.c`, `doutw_pair`), in the single-dispatch, grid and
+multi-dispatch forms, and the tile pair keeps the first index in the low
+half. The byte references (`checks/pvr-compute-job.c`,
+`checks/pvr-compute-package.c`) pass Mesa's generator each value with its
+halves exchanged, and `check.py --fw-job` checks the constants in the
+linked image; the set-27 image fails that check. The context store and
+resume programs still follow Mesa's save-restore order; the firmware runs
+them only when it stores or resumes a compute context, which one job on a
+new context does not do, so they are left unchanged and recorded as open.
 
 ## Design gate
 

@@ -47,6 +47,15 @@ static void put32(void *p,size_t off,uint32_t v)
 { unsigned char *b=p;for(unsigned i=0;i<4;++i)b[off+i]=(unsigned char)(v>>(8*i)); }
 static void put64(void *p,size_t off,uint64_t v)
 { put32(p,off,(uint32_t)v);put32(p,off+4,(uint32_t)(v>>32)); }
+/* A 64-bit DOUTW constant: DOUTW writes data word 0 to the even destination
+ * register and word 1 to the odd one, as Mesa's clear-colour and end-of-tile
+ * DOUTWs use it (pvr_pds.c:570-573 and 3238-3247), and the USC programs take
+ * the low half from the even register. Port 3-1 showed the opposite order
+ * fault: with the high word first, the probe read GPU address 0x80, the high
+ * half of its input pointer (board-session-20261025-22, s22-gfj-postmortem).
+ * Mesa's save-restore generator, which stored the high word first, is not
+ * the reference for kernel arguments. */
+static void doutw_pair(void *p,size_t off,uint64_t v) { put64(p,off,v); }
 static void clear(void *p,size_t n)
 { unsigned char *b=p;for(size_t i=0;i<n;++i)b[i]=0; }
 static void words(void *p,size_t off,const uint32_t *w,size_t count)
@@ -152,10 +161,10 @@ __attribute__((always_inline)) void pvr_compute_job_grid_pds(void *pds,uint64_t 
     words(pds,0,data,18);words(pds,128,code,15);
     put64(pds,0,task);
     for(unsigned i=0;i<3;++i)put32(pds,48+4*i,groups[i]);
-    /* Pointer constants preserve the existing pinned DOUTW H32/L32 order.
-     * Their control words omit LAST; the ordinary local-index write ends it. */
-    put32(pds,80,(uint32_t)(input>>32));put32(pds,84,(uint32_t)input);put32(pds,88,2);
-    put32(pds,96,(uint32_t)(output>>32));put32(pds,100,(uint32_t)output);put32(pds,104,0x4002);
+    /* Pointer constants, low word first (doutw_pair). Their control words
+     * omit LAST; the ordinary local-index write ends it. */
+    doutw_pair(pds,80,input);put32(pds,88,2);
+    doutw_pair(pds,96,output);put32(pds,104,0x4002);
 }
 __attribute__((always_inline)) void pvr_compute_job_grid_cdm(void *cdm,uint32_t pds,uint32_t fence,const uint32_t groups[3])
 {
@@ -188,8 +197,8 @@ int pvr_compute_job_build(const struct pvr_compute_job_config *c,struct pvr_comp
     else words(c->buffers[PVR_JOB_USC].cpu,0,probe_usc,70);
     void *pds=c->buffers[PVR_JOB_PDS].cpu;
     uint64_t input=c->buffers[PVR_JOB_INPUT].gpu,output=c->buffers[PVR_JOB_OUTPUT].gpu+64;
-    put32(pds,0,(uint32_t)(input>>32));put32(pds,4,(uint32_t)input);put32(pds,8,2);
-    put32(pds,16,(uint32_t)(output>>32));put32(pds,20,(uint32_t)output);put32(pds,24,0x80004002u);
+    doutw_pair(pds,0,input);put32(pds,8,2);
+    doutw_pair(pds,16,output);put32(pds,24,0x80004002u);
     put64(pds,32,(c->buffers[PVR_JOB_USC].gpu-c->programs->usc.base)|((uint64_t)(c->package?(pvr_compute_package_temps(c->package)+3)/4:2)<<35));
     static const uint32_t dispatch[]={0xc1100001u,0xdb000000u,0xc1080001u,0xf0020001u,0xf0060201u,0xfc000402u};
     words(pds,64,dispatch,6);
@@ -218,10 +227,10 @@ int pvr_compute_job_build(const struct pvr_compute_job_config *c,struct pvr_comp
             unsigned count=p->count-first;
             if(count>PVR_COMPUTE_DISPATCH_LANES)count=PVR_COMPUTE_DISPATCH_LANES;
             size_t slot=(size_t)group*PVR_COMPUTE_DISPATCH_PDS_SLOT,stream=(size_t)group*28;
-            put32(pds,slot,(uint32_t)(input>>32));put32(pds,slot+4,(uint32_t)input);put32(pds,slot+8,2);
-            put32(pds,slot+16,(uint32_t)(output>>32));put32(pds,slot+20,(uint32_t)output);put32(pds,slot+24,0x4002);
-            /* Mesa H32/L32 constant order: even USC register gets low half. */
-            put32(pds,slot+32,count);put32(pds,slot+36,first);put32(pds,slot+40,0x80008002u);
+            doutw_pair(pds,slot,input);put32(pds,slot+8,2);
+            doutw_pair(pds,slot+16,output);put32(pds,slot+24,0x4002);
+            /* The first index in the even (low) register, the count in the odd. */
+            doutw_pair(pds,slot+32,(uint64_t)count<<32|first);put32(pds,slot+40,0x80008002u);
             put64(pds,slot+48,task);
             put32(cdm,stream,(2u<<12)|(5u<<2)|(1u<<1));
             put32(cdm,stream+4,a+(uint32_t)slot);
