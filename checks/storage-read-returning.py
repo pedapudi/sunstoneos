@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""The returning SD0 read image's actual setup, SD task and report under the SD card models.
+"""Earlier frozen SD0 images and reusable card models.
+
+The current terminal-close/return guard is checked by sd-return-native.py.
+This runner preserves the pre-close image's original evidence contract.
 
 usage: storage-read-returning.py --image ELF --board-config CONFIG --output NEW_DIRECTORY [--case NAME]...
 

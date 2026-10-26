@@ -11,7 +11,8 @@
 /* Core steps sharing one admitted poll while a transfer advances. */
 #define CORE_STEPS 8u
 enum { CLOCK,RAIL,RAIL_WAIT,ADMIT,SUPPLIES,BASELINE,GIC_WAIT,PINS,PRESENCE,
-       ENABLE,RESET_WAIT,RESET_RELEASE,OPEN,IDENTIFY,READY };
+       ENABLE,RESET_WAIT,RESET_RELEASE,OPEN,IDENTIFY,READY,
+       CLOSE_CLOCK,CLOSE_WAIT,CLOSE_PINS,CLOSE_RAIL,CLOSE_LEASE,CLOSED };
 static const unsigned emmc_pins[]={0,1,5,6,8,9,10,11,13,14,15,16};
 static const enum a733_rail supply[]={A733_RAIL_DCDC1,A733_RAIL_DC1SW2,A733_RAIL_CLDO5};
 static const uint32_t fabric_off[]={0x500,0x580,0x588};
@@ -506,6 +507,7 @@ static enum a733_mmc_platform_result poll_owned(struct a733_mmc_platform *p,stru
     if(!enter_api(p))return A733_MMC_BUSY;
     if(p->fault)return finish(p,fail(p));
     if(p->ops.current(p->cookie)!=1)return finish(p,A733_MMC_INVALID);
+    if(p->stage>READY)return finish(p,A733_MMC_INVALID);
     if(p->stage==READY&&p->core.state==SUNXI_MMC_READY)return finish(p,A733_MMC_READY);
     if(p->stage==READY&&p->core.state==SUNXI_MMC_DONE)return finish(p,A733_MMC_COMPLETE);
     if(!timely(p))return finish(p,fail(p));
@@ -621,4 +623,79 @@ enum a733_mmc_platform_result a733_mmc_platform_retain(struct a733_mmc_platform 
         ((p->clock.id&&!p->clock_retained)||(p->rail.id&&!p->rail_retained))?
         A733_MMC_BUSY:A733_MMC_RETAINED;
     return finish(p,r);
+}
+
+/* DONE/take already proved DMA completion and returned the buffer. These
+ * observations confirm that proof still holds; no reset can manufacture it. */
+static int close_idle(struct a733_mmc_platform *p)
+{
+    uint32_t v;
+    return rd(p,p->base+SUNXI_SMHC_GCTRL,&v)&&!(v&(7u|SUNXI_SMHC_GCTRL_DMA_ENABLE))&&
+        rd(p,p->base+SUNXI_SMHC_DMAC,&v)&&!(v&(SUNXI_SMHC_DMAC_RESET|SUNXI_SMHC_DMAC_ON))&&
+        rd(p,p->base+SUNXI_SMHC_IDST,&v)&&!SUNXI_SMHC_IDST_STATE(v)&&!(v&SUNXI_SMHC_IDST_ERRORS)&&
+        rd(p,p->base+SUNXI_SMHC_CMD,&v)&&!(v&SUNXI_SMHC_CMD_START)&&
+        rd(p,p->base+SUNXI_SMHC_STATUS,&v)&&!(v&SUNXI_SMHC_STATUS_BUSY)&&
+        rd(p,p->base+SUNXI_SMHC_RINT,&v)&&!(v&SUNXI_SMHC_MMC_ERRORS);
+}
+enum a733_mmc_platform_result a733_mmc_platform_close(struct a733_mmc_platform *p,uint64_t deadline)
+{
+    if(!p||!p->initialized||p->update||p->config.kind!=SUNXI_MMC_SD||
+       p->config.sd_profile!=SUNXI_MMC_SD_HIGH_SPEED4||!deadline||
+       deadline>p->config.lifetime_deadline_us)return A733_MMC_INVALID;
+    if(!enter_api(p))return A733_MMC_BUSY;
+    if(p->fault)return finish(p,fail(p));
+    if(p->ops.current(p->cookie)!=1||p->signal||p->stage<READY||p->stage==CLOSED||
+       p->core.state!=SUNXI_MMC_READY||p->core.borrowed||p->core.result.write_started||
+       p->core.result.error!=SUNXI_MMC_OK||!p->core.result.received||
+       (p->stage>READY&&p->deadline!=deadline))return finish(p,A733_MMC_INVALID);
+    if(p->stage==READY){p->deadline=deadline;p->stage=CLOSE_CLOCK;}
+    if(!timely(p))return finish(p,fail(p));
+    /* Once released, an owner cannot be revalidated or retained. Every
+     * partial-release failure retains the owners that remain. */
+    if(p->stage<=CLOSE_PINS){
+        int r=live(p);if(r<0)return finish(p,fail(p));if(!r)return finish(p,A733_MMC_BUSY);
+    }
+    if(p->stage==CLOSE_PINS){
+        enum a733_pins_result r=a733_pins_release_banked(p->pins,&p->pin,1,deadline);
+        if(r==A733_PINS_BUSY)return finish(p,A733_MMC_BUSY);
+        if(r!=A733_PINS_OK)return finish(p,fail(p));
+        p->stage=CLOSE_RAIL;
+    }else if(p->stage==CLOSE_RAIL){
+        enum a733_rail_result r=a733_rail_release(p->rails,&p->rail,deadline);
+        if(r==A733_RAIL_BUSY)return finish(p,A733_MMC_BUSY);
+        if(r!=A733_RAIL_READY)return finish(p,fail(p));
+        p->rail=(struct a733_rail_token){0};p->stage=CLOSE_LEASE;
+    }else if(p->stage==CLOSE_LEASE){
+        enum a733_clock_result r=a733_clock_release(p->clocks,&p->clock,deadline);
+        if(r==A733_CLOCK_BUSY)return finish(p,A733_MMC_BUSY);
+        if(r!=A733_CLOCK_OK)return finish(p,fail(p));
+        p->clock=(struct a733_clock_token){0};p->stage=CLOSED;
+        return finish(p,A733_MMC_CLOSED);
+    }else{
+        int r=lock(p);if(r<0)return finish(p,fail(p));if(!r)return finish(p,A733_MMC_BUSY);
+        if(!running(p))return finish(p,fail(p));
+        uint32_t v;
+        if(p->stage==CLOSE_CLOCK){
+            if(!close_idle(p)||!rd(p,p->base+SUNXI_SMHC_CLKCR,&v)||
+               !wr(p,p->base+SUNXI_SMHC_CLKCR,(v&~(BIT(16)|BIT(17)))|BIT(31))||
+               !wr(p,p->base+SUNXI_SMHC_CMD,SUNXI_SMHC_UPDATE))return finish(p,fail(p));
+            p->stage=CLOSE_WAIT;
+        }else{
+            if(!rd(p,p->base+SUNXI_SMHC_CMD,&v))return finish(p,fail(p));
+            if(v&SUNXI_SMHC_CMD_START)return finish(p,A733_MMC_PENDING);
+            if(!close_idle(p)||!rd(p,p->base+SUNXI_SMHC_RINT,&v)||
+               (v&SUNXI_SMHC_MMC_ERRORS)||!wr(p,p->base+SUNXI_SMHC_RINT,v&~SUNXI_SMHC_INT_SDIO)||
+               !update(p,p->base+SUNXI_SMHC_CLKCR,BIT(31)|BIT(17)|BIT(16),BIT(31),0)||
+               !close_idle(p))return finish(p,fail(p));
+            /* BSP disable order: module, bus, reset. No controller aperture
+             * access after gating its bus. Restore only the leased fields. */
+            if(!update(p,p->module,0x87001f1f,p->running_module,p->running_module&~BIT(31))||
+               !update(p,p->bus,0x10001,0x10001,0x10000)||
+               !update(p,p->bus,0x10001,0x10000,p->initial_bus&0x10001)||
+               !update(p,p->module,0x87001f1f,p->running_module&~BIT(31),p->initial_module&0x87001f1f))
+                return finish(p,fail(p));
+            p->stage=CLOSE_PINS;
+        }
+    }
+    return finish(p,A733_MMC_PENDING);
 }

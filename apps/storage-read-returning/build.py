@@ -45,7 +45,7 @@ V4 = CACHE / 'evidence/board-bundles-20261023/rank-9-usb-v4'
 QUALIFIED = CACHE / 'evidence/board-bundles-20261025-mbus-qual-2/port-3-3/kernel-check-counter-option/bundle'
 QUALIFIED_RUN = CACHE / 'evidence/board-session-20261025-24/port-3-3/bb2-run-2'
 QUALIFIED_MONITOR = 'd86d9743f3b2445de089619a49552c7993815acf35668f5a4f17d6c5e67b9656'
-UNITS = ['apps/storage-read-returning/main.c', 'drivers/storage/sunxi_mmc.c', 'drivers/storage/a733_mmc_platform.c',
+UNITS = ['apps/storage-read-returning/main.c', 'apps/storage-read-returning/return.c', 'drivers/storage/sunxi_mmc.c', 'drivers/storage/a733_mmc_platform.c',
          'drivers/storage/a733_mmc_platform_native.c', 'drivers/storage/a733_storage_update.c',
          'arch/aarch64/device_memory.c']
 
@@ -78,7 +78,7 @@ def main():
     platform.replace_platform_object('platform/a733/monitor.c', monitor)
     platform.compile([ROOT / unit for unit in UNITS], [f'-I{ROOT}/apps/storage-read-returning'])
     platform.reuse(list(PROVIDER_UNITS))
-    platform.link(); platform.binary(); platform.run()
+    platform.link(options=['-Wl,--wrap=monitor_init','-Wl,--wrap=monitor_exception']); platform.binary(); platform.run()
     # Origins against rank-9-usb-v4 and the qualified kernel check.
     v4_platform, v4_provider, _ = apps.v4_parts(V4)
     work = e / 'build/compare'; work.mkdir()

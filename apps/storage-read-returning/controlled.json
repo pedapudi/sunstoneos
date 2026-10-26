@@ -1,15 +1,11 @@
 {
  "schema": "kernel-controlled-outcomes-v1",
  "outcomes": [
-  {"name": "sd-stopped", "status": 1, "interrupt": null, "fail_lines": 0, "fault": null,
-   "log_contains": ["INCOMPLETE SD0 returning read: stopped"]},
-  {"name": "sd-window", "status": 1, "interrupt": null, "fail_lines": 0, "fault": null,
-   "log_contains": ["INCOMPLETE SD0 returning read: window"]},
   {"name": "sd-input", "status": 1, "interrupt": null, "fail_lines": 0, "fault": null,
    "log_contains": ["INCOMPLETE SD0 returning read: input"]},
   {"name": "sd-providers", "status": 1, "interrupt": null, "fail_lines": 0, "fault": null,
    "log_contains": ["INCOMPLETE SD0 returning read: providers"]},
-  {"name": "monitor-window", "status": 2, "interrupt": 29, "fail_lines": 0, "fault": null,
-   "log_contains": ["SD0 returning start"]}
+  {"name": "sd-return-admission", "status": 1, "interrupt": null, "fail_lines": 0, "fault": null,
+   "log_contains": ["INCOMPLETE SD0 returning read: return admission"]}
  ]
 }

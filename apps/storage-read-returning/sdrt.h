@@ -65,7 +65,8 @@ extern struct sdrt sdrt;
 int sdrt_setup(void);
 int sdrt_step(void);
 int sdrt_quiet(void);
-int sdrt_clock_off(void);
+int sdrt_arm(void);
+int sdrt_close(void);
 void sdrt_report(int outcome);
 uint64_t sdrt_ticks(void);
 #endif

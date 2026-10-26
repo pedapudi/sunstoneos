@@ -169,17 +169,19 @@ is in `~/.cache/sunstoneos/evidence/sd-dma-20261025/vendor-idmac-sequence.md`;
   recorded clean and invalidate times and once without them, and reports per class
   the rate, the mean command-to-first-byte time (the card's access time plus
   up to one poll) and the data time against the bus time.
-- **SDR104 by default.** The default input selects profile 3; a card without
-  UHS-I, or a failed switch before CMD11, falls back to high speed at 3.3 V
-  (existing rule). A set runs one lifetime per mode: profile 2, then profile 3.
-- **The clock stop stops IDMAC first.** When `DMAC` bit 7 or `GCTRL` bit 5
-  reads set, it runs the vendor teardown and waits for `DMAC` bit 0 to clear
-  and the `IDST` state field (bits 16:13) to read idle.
-  If the stop does not complete, it asserts the SD0 bus reset (CCU `0xd0c`
-  bit 16) as well as gating the module clock, because the module gate alone
-  does not stop the bus-clocked IDMAC. After the monitor's 2 s exit or an
-  exception, which run no image code, IDMAC may still write into the buffer
-  or the area, so in both profiles the next step is power removal.
+- **High speed by default.** The current input selects profile 2, 3.3 V,
+  four-bit high speed. Profile 3 remains explicit and cannot authorize ROM
+  return; restoring its 1.8 V lifetime is unqualified.
+- **Normal close reuses the completed-read proof.** Only after every read is
+  collected, with no borrowed buffer and an idle parked PMIC worker, does the
+  provider stop the card clock and restore SD0 module/bus/reset and PF pin
+  fields, then release its rail/clock leases. It never resets a faulted DMA
+  engine and calls that drain. A private EL3 guard verifies the final baseline
+  before delegating to the byte-identical qualified monitor. All armed timer,
+  exception, incomplete or uncertain exits park with ownership retained.
+  See [the return contract](../../apps/storage-read-returning/README.md).
+  Physical DMA restoration and eligibility for another powered lifetime remain
+  unqualified; no preserved board is authorized by these software changes.
 
 ## Predictions
 

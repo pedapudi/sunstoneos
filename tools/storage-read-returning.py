@@ -386,6 +386,13 @@ def decode_log(log, raw_input, status=None):
                          'core_protocol': PROTOCOLS[protocol] if isinstance(protocol, int) and protocol < len(PROTOCOLS)
                          else protocol, 'clock_off': words.get('SD_CLOCK_OFF')}
     value['complete'] = value['outcome'] == 'complete' and len(value['reads']) == len(plan) and status in (0, None)
+    # Earlier frozen images have no return-version marker. Preserve their
+    # decoding, while a new image cannot publish success without its EL3 receipt.
+    if 'SD_RETURN_VERSION' in words:
+        require(words['SD_RETURN_VERSION']==1, 'unsupported return version')
+        if value['complete']:
+            require(status==0, 'missing successful return status')
+            require(given['profile']==2 and words.get('SD_RESTORED')==1, 'missing SD restoration receipt')
     if value['complete']:
         require(value['card'] is not None, 'missing card line')
         value['throughput'] = (throughput().throughput_summary(value['reads']) if given['version']==1 else
@@ -412,7 +419,7 @@ def main(argv=None):
     i = sub.add_parser('input')
     for name in ('approval', 'request', 'ddr', 'survey', 'fabric_read', 'config', 'output'):
         i.add_argument('--' + name.replace('_', '-'), type=Path, required=True)
-    i.add_argument('--profile', type=int, choices=(2, 3), default=3)
+    i.add_argument('--profile', type=int, choices=(2, 3), default=2)
     i.add_argument('--plan', choices=('measurement', 'first-read'), default='measurement',
                    help='measurement: existing 240 reads; first-read: profile 2, sector 0, eight blocks')
     d = sub.add_parser('decode')

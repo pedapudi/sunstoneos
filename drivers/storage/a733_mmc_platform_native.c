@@ -125,16 +125,23 @@ static int write32(void *cookie,uintptr_t a,uint32_t v)
         if(v!=A733_MMC_GIC_BIT(slot))return 0;
     } else if(a==module||a==A733_MMC_BUS(slot)) {
         uint32_t mask=a==module?UINT32_C(0x87001f1f):UINT32_C(0x10001);
+        __asm__ volatile("dsb sy" ::: "memory");
+        uint32_t old=*(volatile const uint32_t *)a;
+        if((old^v)&~mask)return 0;
         if(a==module){
             uint32_t setting=v&(mask&~UINT32_C(0x80000000));
             if(setting!=29&&(n->kind!=SUNXI_MMC_SD||!n->sd_profile||
                (uhs?(setting!=UINT32_C(0x01000003)&&setting!=UINT32_C(0x01000001)&&setting!=UINT32_C(0x02000000)):
                ((setting&~31u)!=UINT32_C(0x01000000)||
-               (n->sd_profile==SUNXI_MMC_SD_DEFAULT4?(setting&31u)<7:(setting&31u)!=3)))))return 0;
+               (n->sd_profile==SUNXI_MMC_SD_DEFAULT4?(setting&31u)<7:(setting&31u)!=3))))){
+                /* Terminal HIGH_SPEED4 close restores its exact admitted
+                 * factors only after module and bus are off, reset asserted.
+                 * Arbitrary factors can never enable a running clock here. */
+                if(n->kind!=SUNXI_MMC_SD||n->sd_profile!=SUNXI_MMC_SD_HIGH_SPEED4||
+                   ((old|v)&UINT32_C(0x80000000))||
+                   (*(volatile const uint32_t *)(uintptr_t)A733_MMC_BUS(slot)&0x10001))return 0;
+            }
         }
-        __asm__ volatile("dsb sy" ::: "memory");
-        uint32_t old=*(volatile const uint32_t *)a;
-        if((old^v)&~mask)return 0;
     } else if(a==base+SUNXI_SMHC_CMD) {
         if((v&SUNXI_SMHC_CMD_VOLTAGE_SWITCH)&&(!uhs||(!(v&SUNXI_SMHC_CMD_UPDATE_CLOCK)&&(v&SUNXI_SMHC_CMD_INDEX)!=11)))return 0;
         if(v&SUNXI_SMHC_CMD_WRITE) {

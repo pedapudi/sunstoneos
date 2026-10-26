@@ -9,12 +9,11 @@ DMA image have native instruction-model evidence, not board evidence. See
 and predicted DMA costs. Every DMA lifetime requires whole-board power
 removal before another operation until the first physical qualification.
 
-The image reads
-the microSD card on SDC0 in SD profile 2 (high speed, 3.3 V) or profile 3
-(UHS-I SDR104, 1.8 V), returns to the boot ROM, and leaves its result in DRAM
-for the host to read over FEL. It is the result path for boards whose USB-C
-cable is their only power supply, where the supervised SD0 service's recovery,
-a manual USB reconnect, removes power and erases any result still in DRAM.
+The default input selects SD profile 2 (high speed, four-bit, 3.3 V). A
+completed read plan restores the SDC0 module/bus/reset fields and PF pins
+before returning through the qualified monitor to the boot ROM. Profile 3
+keeps its existing UHS-I protocol but cannot authorize return: its 1.8 V
+restoration remains unqualified. Neither mode writes card data.
 
 ## What the image does
 
@@ -48,44 +47,45 @@ line). Two tasks run on core 0:
   descriptors at `0x42100000`; every page is checked for writable identity
   translation before admission. CRC instructions run outside the timed read. It then asks the PMIC task to park and waits for it until the end
   deadline, checks that the park happened and that no PMIC request, rail
-  borrow or register lock is outstanding, stops the card clock, writes its
-  report and exits.
+  borrow or register lock is outstanding, then requests terminal SD close.
 
-**Card clock stop.** Every exit that the image makes itself after the SD
-task, including a stop or window expiry in the middle of a read, stops the
-card clock first, so that a card interrupted mid-read stops clocking data
-onto DAT1 and DAT2, which the ROM's return turns into the JTAG TMS and TCK
-inputs. The steps follow the vendor driver (`sunxi-mmc-v5p3x.c`,
-`__sunxi_mmc_do_oclk_onoff`, and its FIFO and DMA interface resets):
+**Normal close and uncertain exits.** Close accepts only profile 2 after a
+successful read has completed and its result has been collected. The existing
+core DONE path already proves descriptor ownership returned, command/data
+completion, IDMAC reset/idle, interface/FIFO reset, DMA disabled and AFTER
+cache maintenance. Close rechecks idle/error-free hardware; it never uses a
+reset or clock gate to manufacture a drain proof.
 
-1. If DMA is enabled, clear its status, disable interrupts, reset IDMAC and
-   wait for its reset and state machine to become idle. Reset the DMA
-   interface and FIFO and disable DMA. An outstanding non-DMA transfer
-   also resets the interface and FIFO. Wait for those resets.
-2. Clear the card clock enable and low-power bits and set MASK_DATA0 (CLKCR
-   bits 16, 17 and 31), so the update does not wait on DAT0.
-3. Issue the clock-update command and wait for it; write back RINT's set
-   bits except SDIO.
-4. Clear MASK_DATA0.
+Close stops the card clock with MASK_DATA0 and the vendor UPDATE sequence,
+checks errors before acknowledging observed flags, then gates the module,
+gates its bus and asserts reset in the pinned BSP's order. It restores the
+initial module factors, releases PF0..6 through the pin provider, and releases
+the SD rail/clock leases. Every phase shares one absolute deadline. A failed
+phase retains all remaining owners and cannot be retried as a new lifetime.
+The PMIC performed snapshots only: its supply settings, PL pins and clock
+route remain unchanged. Its worker must be parked with no queued or borrowed
+request, and EL3 verifies its bus is idle before return.
 
-If the reset or the update does not complete within 10 ms, the image gates
-the controller's module clock (CCU SMHC0 word bit 31) and asserts its bus
-reset (CCU `0xd0c` bit 16). The module gate stops the card clock; the bus
-reset stops the independently bus-clocked IDMAC. After a provider fault the provider keeps its
-register lock retained, so this step writes the controller directly; the
-PMIC task, parked or not, uses only the S_TWI0 bus.
+Private linker wrappers leave the qualified monitor object unchanged. Before
+either task is scheduled, EL1 marks a receipt at `0x42101000` ARMED. This
+non-cacheable page is separate from descriptors and the monitor log. Only a
+completed plan and successful terminal close publish READY. The EL3 wrapper
+accepts the normal success SMC only with READY, matching initial SD/PF/PMIC
+pin and clock fields, and idle S_TWI0; it consumes the receipt and prints
+`SD_RESTORED=1` before entering the qualified monitor's existing return path.
+The linked vector branches all pass through this wrapper.
 
-Two exits run no image code and so do not stop the clock: the monitor's
-secure timer at 2 s (status 2, `monitor-window`), and an exception. After
-either, IDMAC may still write to the buffer or descriptors and the card may
-still drive its lines on the JTAG functions. The lifetime ends with whole-board power removal before anything else
-runs. The two refusals before the scheduler starts (`input`, `providers`)
-make no controller access at all, because the controller has not been
-enabled.
-
-The image never touches USB0. The monitor returns to the ROM after
-`platform_exit()`, and the host reads the 16 KiB result page at `0x42000000`
-over FEL.
+Every timer, exception, panic, incomplete plan or failed SD/provider
+restoration before monitor delegation parks with ownership retained. It performs no speculative reset, pin
+remap, ROM return or memory reuse. Even a timer after READY parks. Input,
+provider-binding and return-admission refusals before task scheduling may
+return status 1 because no task has touched SD or PMIC hardware. A malformed
+or uninitialized receipt cannot use that exception. The current image is
+still physically unqualified; these changes do not authorize a preserved
+board lifetime without its existing recovery prerequisites. The inherited
+monitor may replace status 0 with status 6 if its GIC restoration fails and
+still reset to ROM. The SD restoration proof precedes that delegation; the
+host requires an explicit final status 0 to report success.
 
 **Input.** `tools/storage-read-returning.py input` writes the 2192-byte input
 that the image reads at `0x43000000` (`sdrt.h`): the profile, fresh owner,
@@ -106,8 +106,8 @@ line precedes the report only for codes 8 to 10. Input version 2 with
 32 random 32 KiB reads, eight sequential and eight random 128 KiB reads,
 and 32 single sectors. Random starts align to the request size below sector
 4,194,304. Sequential classes start at sector zero. The first 64 reads
-repeat the accepted PIO run's sectors for CRC comparison. Profile 3 is the
-input tool's default; profile 2 remains explicit.
+repeat the accepted PIO run's sectors for CRC comparison. Profile 2 is the
+input tool's default; profile 3 requires an explicit selection and cannot return.
 
 For the first DMA read, use `input --profile 2 --plan first-read` with the
 same approval, request, DDR, survey, fabric-read, configuration and output
@@ -131,19 +131,17 @@ lifetime admission checks. The existing native binary accepts both plans.
   by `window` or `stopped`; a stop also prints `SD_REASON`, the provider's
   stage, fault, last command and result.
 
-`SD_CLOCK_OFF` values: 1, the clock update completed and CLKCR reads back
-with the card clock off; 3, the stop needed the module gate and bus reset,
-and both read back stopped; 2, the controller was never enabled and the image wrote
-nothing; 0, neither stop read back, so the card may still be clocked.
+`SD_CLOCK_OFF=1` now means terminal close completed, including pin and
+lease restoration; zero means it did not. Older frozen images used values
+2 and 3 for weaker clock-off observations. Their captures remain historical
+evidence, not proof of this return path.
 
-`SD_REASON` values: 1, the end deadline passed or a provider failed; 2, the
-SD0 provider could not be constructed; 3, identification or mode selection
-failed; 4, the card registers could not be read; 5, a read could not be
-submitted; 6, a read failed while in progress; 7, a read's result was wrong;
-9, the plan completed but the PMIC task had not parked or a provider request
-was outstanding; 10, the plan completed but the card clock stop read back
-neither stop (`SD_CLOCK_OFF=0`). Reasons 9 and 10 turn a completed plan into
-status 1 with `stopped`.
+`SD_RETURN_VERSION=1` identifies the new return contract. A complete decoded
+log with this marker requires profile 2 and `SD_RESTORED=1`. Earlier version-1
+PIO and version-2 DMA logs without that marker remain decodable. `SD_REASON`
+1–7 retain their existing provider/read meanings; 9 means PMIC parking was
+not proved and 10 means terminal close was refused or failed. These failures
+park after reporting and cannot produce a controlled ROM return.
 
 `tools/storage-read-returning.py decode` checks every `R` line against the
 input's plan and reports per-class throughput and observed card/data phases.
@@ -164,15 +162,16 @@ the first DMA lifetime.
 
 ## Time window
 
-The monitor arms its secure timer for 2 s before EL1 starts and returns to
-the ROM with status 2 when it expires; the image cannot extend it. The image's
+The monitor arms its secure timer for 2 s before EL1 starts. The private
+wrapper parks on expiry; it cannot extend the timer or use it as a drain
+proof. The image's
 deadlines, measured from the start of `kernel_main()`:
 
 | Deadline | Time | Bounds |
 | --- | --- | --- |
 | Identification | 1.15 s | Power-up checks, CMD0, ACMD41, mode selection and, for profile 3, the voltage switch and 64-delay CMD19 sweep |
 | Plan end | 1.55 s | No read starts after it; the report then says `window` and gives the reads completed |
-| Provider lifetime | 1.65 s | Every SD0 provider operation, including the last read |
+| Provider lifetime | 1.75 s | Every SD0 operation, including terminal close |
 | End | 1.8 s | PMIC parking and the report |
 
 Identification polls for up to 1 ms per wake and yields to the PMIC task.
@@ -212,26 +211,16 @@ dispatcher at `0x2514` into the nonsecure ROM's USB FEL loop found:
   every lifetime starts with and that the SD provider takes over
   (`a733_mmc_sd0_inherited_mux`).
 
-After a return, therefore, the card stays powered at the signalling voltage
-of its lifetime and the PF bank selector still matches it. After the image's
-own exit the controller keeps its configuration with the card clock stopped
-(`SD_CLOCK_OFF` 1 or 3). The command and data lines carry the JTAG functions
-with the pulls the provider set; with no debugger attached the TAP stays in
-reset and its TDO output stays released, so the command line stays high and
-the card receives no command. After the monitor's 2 s return or an
-exception, the card clock may still run; the card then also receives no
-command, but a card interrupted mid-read may keep driving DAT lines until
-power is removed, which is the next step.
+The current profile-2 path restores SD0's initial clock/reset and PF pin
+fields before this ROM path runs. It never reaches ROM from an armed timer
+or exception. The card remains powered at 3.3 V; successful software close
+is not yet physical evidence that another native lifetime is eligible.
 
-## Lifetime B uses the returning path
-
-For profile 3 the return leaves the PF bank at 1.8 V, the card at 1.8 V
-signalling and the controller untouched, so no step drives 3.3 V into a card
-that signals at 1.8 V. The only way back to 3.3 V signalling is the
-whole-board power removal that ends lifetime B, which the SD specification
-allows and the runbook already requires. Until then the board runs nothing
-else: no further launch, no FEL reset and no watchdog, because a system reset
-returns the selector to 3.3 V while the card keeps 1.8 V.
+Earlier frozen profile-3 images returned with the PF bank and card at 1.8 V.
+Those captures and the ROM analysis remain historical evidence. The current
+image parks for profile 3. Whole-board power removal remains its only
+qualified way back to 3.3 V; a system reset may restore the selector while
+the card remains at 1.8 V and must not be substituted.
 
 The analysis is static. It does not cover the two indirect calls of the
 nonsecure ROM, which can reach only code that names no PF, SMHC or PMIC
@@ -246,12 +235,11 @@ From the repository root, with a central build configured from this tree and
 ```sh
 PYTHONDONTWRITEBYTECODE=1 ~/.cache/sunstoneos/venv/bin/python apps/storage-read-returning/build.py \
   --platform-build /absolute/central-build --evidence /absolute/new/directory
-PYTHONDONTWRITEBYTECODE=1 ~/.cache/sunstoneos/venv/bin/python checks/storage-read-returning.py \
-  --image /absolute/new/directory/build/probe.elf --board-config BOARD_CONFIG.json --output /absolute/new/check
-PYTHONDONTWRITEBYTECODE=1 ~/.cache/sunstoneos/venv/bin/python checks/storage-read-returning-host.py \
-  --read-record /absolute/accepted-read/session.json --output /absolute/new/host-check
-PYTHONDONTWRITEBYTECODE=1 ~/.cache/sunstoneos/venv/bin/python checks/storage-read-returning-host.py \
-  --dma-native /absolute/new/check --output /absolute/new/dma-host-check
+PYTHONDONTWRITEBYTECODE=1 ~/.cache/sunstoneos/venv/bin/python checks/sd-return-native.py \
+  --image /absolute/new/directory/build/probe.elf --output /absolute/new/check
+PYTHONDONTWRITEBYTECODE=1 ~/.cache/sunstoneos/venv/bin/python checks/sd-return-host.py \
+  --native /absolute/new/check --output /absolute/new/host-check
+python3 checks/sd-return-close.py --output /absolute/new/provider-check
 ```
 
 `build.py` refuses unless this tree's `platform/a733/monitor.c`, compiled
@@ -262,12 +250,28 @@ MBUS restore (`board-bundles-20261025-mbus-qual-2`, run
 writes `origins.json`, which compares every platform and provider object with
 `rank-9-usb-v4`'s.
 
-`checks/storage-read-returning.py` runs the linked image's input copy,
+`checks/sd-return-native.py` checks the current linked task, close and monitor
+guard with explicit MMIO/card/cache/service models. It observes delegation
+to the unchanged qualified monitor entry; it does not execute a new ROM-return
+sequence. `checks/sd-return-close.py`
+checks actual provider restoration under ASan/UBSan. The unchanged qualified
+monitor body and arithmetic fixtures are reused.
+
+For earlier frozen images, `checks/storage-read-returning.py` runs the input copy,
 provider construction, SD task, quiescence check and report under the SD card
 and controller models of the supervised SD0 checks, for profiles 2 and 3, the
 port 3-3 configuration, a window expiry, an absent card, two CRC faults and an
 unparked PMIC task. `checks/storage-read-returning-host.py` checks the host
 tool's signing, input and decoding. Neither establishes physical operation.
+
+The return change adds 5,412 bytes of linked text against the same-platform
+`6a945b30` baseline, 80 bytes of private monitor state and a 16-byte NC receipt.
+BSS is unchanged. The text increase includes the existing pin, rail and clock
+release implementations becoming reachable. Ordinary read polling and cache
+maintenance are unchanged; close adds six bounded phases once per lifetime.
+No physical close duration or throughput is claimed. A future authorized
+runner must require `SD_RESTORED=0x0000000000000001` as its success expectation
+and use the current pre-task-only controlled outcomes.
 
 ## Board configuration
 

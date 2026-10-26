@@ -16,7 +16,8 @@ static inline unsigned a733_mmc_slot(enum sunxi_mmc_kind kind,enum a733_mmc_emmc
 /* Private, permanent provider. SD selects SDC0; eMMC explicitly selects SDC2
  * or SDC3. Zero preserves the existing default SDC2 selection.
  * Default APIs are read-only. A separate actual storage update service may bind
- * a permanent range owner. No close, power change, recovery or raw-command API exists. */
+ * a permanent range owner. Only the completed, read-only SD high-speed path
+ * supports terminal close; no power change, recovery or raw-command API exists. */
 struct a733_mmc_platform_config {
     uint64_t owner, handoff, topology, deadline_us, lifetime_deadline_us;
     enum sunxi_mmc_kind kind;
@@ -50,7 +51,8 @@ static inline unsigned a733_mmc_sd0_inherited_mux(const struct a733_pin_config *
     return passive?1:jtag?2:0;
 }
 enum a733_mmc_platform_result { A733_MMC_PENDING, A733_MMC_BUSY,
-    A733_MMC_READY, A733_MMC_COMPLETE, A733_MMC_RETAINED, A733_MMC_INVALID };
+    A733_MMC_READY, A733_MMC_COMPLETE, A733_MMC_RETAINED, A733_MMC_INVALID,
+    A733_MMC_CLOSED };
 /* Bounded, non-reentrant callbacks; exactly1 means success. Authenticated
  * admission covers the immutable config and actual token, cold native card
  * state (or the documented first read-only SD CMD0 policy), populated eMMC,
@@ -129,6 +131,12 @@ enum a733_mmc_platform_result a733_mmc_platform_card(struct a733_mmc_platform *,
  * update-bound providers. BUSY means serialization/metadata bookkeeping must
  * be retried; output must already be revoked and borrowed buffers retained. */
 enum a733_mmc_platform_result a733_mmc_platform_retain(struct a733_mmc_platform *);
+/* Terminal restoration, never cancellation/recovery. SD HIGH_SPEED4 only,
+ * READY after a successful collected read, no borrower or update binding.
+ * Repeat close with the SAME absolute deadline while PENDING/BUSY; poll does
+ * not advance close. CLOSED means module/bus/reset and pins restored and SD
+ * leases released. Any uncertainty retains remaining ownership forever. */
+enum a733_mmc_platform_result a733_mmc_platform_close(struct a733_mmc_platform *,uint64_t deadline);
 /* Private service composition. A copied pointer cannot establish ownership:
  * the service authenticates its self, exact platform and complete grant. */
 int a733_mmc_platform_storage(struct a733_mmc_platform *,const void *,size_t);
