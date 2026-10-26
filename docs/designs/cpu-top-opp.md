@@ -1,9 +1,10 @@
 # Design: CPU clusters and the DSU default to the vendor's top operating points
 
 Status: **driver changes implemented and host-modeled. Steps 1 to 5 passed
-on port 3-3 on 2026-10-25. Step 6's first run stopped as designed at
-bundle 26, which found CPU-B not reset by the ROM return; step 6 is
-refrozen with CPU-B lowered before every return and has not run again. Step
+on port 3-3 on 2026-10-25, and step 6, all eight cores at the top points,
+passed there the same day (`board-session-cpu-top-opp-10`); its first run
+had stopped as designed at bundle 26, which found CPU-B not reset by the ROM
+return. Step
 7's grant of both clusters is implemented and host-checked; it cannot be
 frozen until the integrated OS image has a reviewed physical entry record
 and B1 has passed (below).** Every hardware block defaults to the highest
@@ -575,6 +576,87 @@ in all nine deadline cases; the model allows the completed path's CPU-B
 accesses only after every secondary is observed OFF.
 `checks/workload-bisect-host.py` validates the relock and lowering records
 in the runner's decoder.
+
+## Step 6 passed on port 3-3
+
+Set `step6-set-5` ran in one fresh port 3-3 lifetime on 2026-10-25
+(`~/.cache/sunstoneos/evidence/board-session-cpu-top-opp-10/port-3-3/`),
+with the frozen binding of `bundle-deadline-top-5`:
+
+| Phase | Records | Wall time (end) | Result |
+| --- | --- | --- | --- |
+| Cold DDR start | `s7-ddr` | 22:01:46 | 12,288 MiB |
+| Bundle 2 | `c6-bb2-*` | 22:01:49 | Kernel check passed |
+| Bundle 25 | `c6-opp25-*` | 22:02:07 | CPU-L 1794 MHz at DCDC5 1000 mV in 10.98 ms (the longest park 143 µs), the DSU 1274 MHz in 5.94 ms, DCDC3 `0xb7` (1050 mV) with CPU-B at 1014 MHz; the hottest sensor 35.7 °C |
+| Bundle 26 | `c6-opp26-*` | 22:02:24 | Boot words in all three domains, DCDC5 1000 mV, DCDC3 1050 mV |
+| Capture, cache-off, survey, binding | `c6-tw-state-before`, `c6-tw-cache-off`, `c6-tw-survey`, `c6-tw-prepare` | 22:02:36 | All passed; the binding refused nothing |
+| Workload | `c6-tw-run` | 22:02:43 to 22:02:50 | `complete`, `rom_usable` and `dram_restored` true, completed mask 254 |
+| Bundle 27 | `c6-opp27-*` | 22:03:13 | Boot words in all three domains, both rails held; the hottest sensor 37.1 °C |
+| Read bundle 14 | `bb14-read` | 22:03:14 | Passed; then the power removal |
+
+The workload's own record, in 24 MHz counter ticks:
+
+- **Relock.** Entry words: CPU-B `0xf8802700`/`0x03000000`, CPU-L
+  `0xf8802600`/`0x03010000`, DSU `0xf8802600`/`0x03010105`, the boot
+  words. Final words: CPU-B `0xf8804d00` (N 77, 2002 MHz), CPU-L
+  `0xf8804500` (N 69, 1794 MHz), DSU `0xf8803100`/`0x03000105` (N 49,
+  1274 MHz). Its own reads: DCXO word `0x983fb0f7` (26 MHz), SID `0x496`
+  (bin 4), PMIC page 0, chip 3, revision 0, enables `0xff`, DCDC3 `0xb7`
+  and DCDC5 `0xb2`, all seven reads with the idle status `0xf8`, S_TWI0
+  divider `0x28`, 400 kHz, which the route check admits only from the
+24 MHz PLL_REF. From the first board
+  read to the last select took 25,901 ticks (1.08 ms), most of it the PMIC
+  reads. Each domain was parked 1308, 1668 and 1651 ticks (55, 70 and
+  69 µs), with 7, 3 and 3 lock reads.
+- **Workload.** 32 rounds on every core; CPU0 32 ticks and 1 SGI; 33 SGIs
+  on each secondary; no failure.
+- **Lowering.** After every secondary was OFF: entry `0xf8804d00`, final
+  `0xf8802700`/`0x03000000` (1014 MHz), parked 1292 ticks (54 µs), 12 lock
+  reads.
+
+### The background-progress prediction used the wrong image
+
+The predicted counts (300,000 to 320,000 on cores 0 to 5, 255,000 to
+270,000 on cores 6 and 7) scaled the ten boot-rate runs of
+`board-session-20261025-3` by the clock ratios. Those runs used the native
+image `762237cd…`, not `6fd7af86…`, which step 6 runs. The two images'
+background loops are identical, an exclusive increment of the core's
+counter between two calls of `ucPortGetCoreID`, but that routine differs:
+in `762237cd…` it is a supervisor call from the EL0 task, and in
+`6fd7af86…` it reads `TPIDRRO_EL0` and returns. At the boot rates the old
+image spends about 188 cycles per iteration on the A55 cores and 248 on the
+A76 cores, the new one about 23 and 20, assuming the 32 ms window of 32
+ticks. The unit, the counter and the 32-tick window are the same in both.
+
+The correct baseline is the same image and profile at the boot rates:
+`board-session-20261025-8`, runs `r4` to `r6` (`6fd7af86…`, overlay
+manifest `582c76f5…`), with 687,505 to 697,371 on the A55 cores (mean
+692,204) and 1,583,985 to 1,598,607 on the A76 cores (mean 1,589,962).
+Against it:
+
+| Cores | Boot rates | Top points | Ratio | Clock ratio |
+| --- | --- | --- | --- | --- |
+| 0 to 5, A55 | 692,204 | 2,664,229 (2,660,665 to 2,671,333) | 3.85 | 1794/494 = 3.63 |
+| 6 and 7, A76 | 1,589,962 | 3,275,263 (3,273,698 and 3,276,827) | 2.06 | 2002/1014 = 1.97 |
+
+The counts scale about 6% and 4% above the clock ratios. A fixed amount of
+other work per window explains it: the workers' rounds, the tick and the
+SGIs cost a number of cycles, which take less time at the higher rate and
+leave more of the window to the background task. Fitting count = k (f W −
+O) to both rates with W = 32 ms gives O = 1.21 million cycles (2.4 ms at
+494 MHz) on the A55 cores and 2.62 million cycles (2.6 ms at 1014 MHz) on
+the A76 cores, and 21 and 19 cycles per iteration. Both core types lose
+about the same 2.5 ms at the boot rates, which fits clocks of 1794 and
+2002 MHz; the clocks themselves come from the relock's final PLL words,
+locked and read back. The A76/A55 count ratio is 2.30 at the boot rates
+(clock ratio 2.05) and 1.23 at the top points (clock ratio 1.12): at both
+rates an A76 core runs 1.10 to 1.12 times as many iterations per cycle as
+an A55 core. The predicted 0.85 came from the wrong baseline.
+
+The prediction for cores 0 to 5 and 6 and 7 was wrong because of that
+baseline, not because of the clocks or the measurement. Every other
+prediction held: rounds, ticks and SGIs, the relock and lowering words,
+parks under 100 µs, and the hottest sensor below 50 °C.
 
 ## Step 7: B1, then the OS image at the top points
 
