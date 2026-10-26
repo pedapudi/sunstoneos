@@ -107,6 +107,23 @@ The image leaves the GPU running, so port 3-1 needs a power removal before
 its next run. Nothing from the firmware binary was used, only the open DDK
 host sources (`docs/designs/gpu-firmware-start.md`).
 
+**CPU top operating points, steps 2–5 passed on port 3-3** (set
+`cpu-top-opp-20261025/steps2-5-set-r2`, `board-session-20261025-19/port-3-3`).
+In one lifetime, with CPU0 running and every other core off:
+- DCDC3 went to 1050 mV and back to 800 mV, with CPU-B held at 1014 MHz;
+- CPU-L reached 1196 MHz and the DSU 780 MHz at 800 mV;
+- CPU-B reached 2002 MHz (PLL read back) at 1050 mV, with the DSU at
+  910 MHz, then returned to 1014 MHz and 800 mV;
+- CPU-L reached 1794 MHz at 1000 mV and the DSU 1274 MHz, left there
+  until the power removal that followed.
+
+Every clock word read back as predicted, every ROM return worked,
+including returns with CPU-L above 494 MHz, and the hottest sensor read
+42 °C. The ROM resets CPU-L to 494 MHz on each return, as it does MBUS,
+so each image must set its own clocks. A76 execution at 2002 MHz (steps 6
+and 7, B1) is still to do. The merge into `bringup` waits on integration
+fixes (`work/merge-cpu-top-opp-1025`).
+
 **CPU top operating points, step 1 passed on port 3-3** (set
 `cpu-top-opp-20261025/step1-set`, `board-session-20261025-17/port-3-3`,
 branch `work/cpu-top-opp-1025`). The kernel check passed. With cores 6 and 7
