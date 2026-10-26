@@ -21,7 +21,7 @@ struct uhs {
     uint8_t scr[8], sw[64], data[64];
     unsigned caps, s18a, phase, bank, bank_polls, queries, sets, polls, module_calls, divisor;
     unsigned width, sdr, sdr104, sdr104_busy, set_refuses, cmd11_timeout, no_dat_low, no_dat_high;
-    unsigned no_vsd, set_fails, bad_caps, fatal_delay, cmd19, cmd11, cmd6_uhs, cmd6_hs;
+    unsigned pending_done, no_vsd, set_fails, bad_caps, fatal_delay, cmd19, cmd11, cmd6_uhs, cmd6_hs;
     unsigned window[2][2], s18r_seen, cmd11_before_cmd2, cid_seen, dat0_masked;
     uint64_t answered, gated, restarted;
 };
@@ -44,6 +44,7 @@ static int uhs_read(void *v, uint32_t off, uint32_t *out)
     }
     int r = read32(m, off, out);
     if (off == 0x3c) {
+        if (u->phase == 3 && u->pending_done) { u->pending_done = 0; m->reg[0x38/4] |= VSD | 4; }
         unsigned low = u->phase == 1 || u->phase == 2 || u->phase == 4;
         if (!low || (u->phase == 1 && u->no_dat_low)) *out |= SUNXI_SMHC_STATUS_DAT3;
         if (low && !(u->phase == 1 && u->no_dat_low)) *out |= 1u << 9; /* DAT0 held low. */
@@ -76,7 +77,7 @@ static int uhs_write(void *v, uint32_t off, uint32_t value)
                 assert(u->bank == 2 && m->reg[4/4] == ((1u << 16) | (1u << 31)));
                 assert(m->now - u->restarted >= 10000); /* Clock gated 10 ms after the bank switch. */
                 if (u->no_dat_high) u->phase = 4;
-                else { u->phase = 3; if (!u->no_vsd) m->reg[0x38/4] |= VSD | 4; }
+                else { u->phase = 3; u->pending_done = !u->no_vsd; }
             }
             m->reg[0x18/4] = 0; return 1;
         }
@@ -99,6 +100,7 @@ static int uhs_write(void *v, uint32_t off, uint32_t value)
         assert(value & VSW && !arg && m->state == 1 && !u->phase && !u->cid_seen && u->s18a);
         reply(m, 11, value, arg); ++u->cmd11; m->reg[0x20/4] = 0x200;
         if (u->cmd11_timeout) { m->reg[0x38/4] = 1u << 8; return 1; }
+        m->reg[0x38/4] = VSD;
         u->phase = 1; u->answered = m->now; return 1;
     }
     if (cmd == 2) { u->cid_seen = 1; if (u->cmd11) u->cmd11_before_cmd2 = 1; assert(u->phase == 0 || u->phase == 3); }
