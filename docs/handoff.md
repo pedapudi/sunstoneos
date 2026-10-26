@@ -46,7 +46,7 @@ history.
   - SDR104 is not qualified: its 1.8 V switch stopped at CMD11.
   - Throughput is 1.4 to 1.7 MB/s until DMA is built.
 - **DRAM training restore:** captures from ten lifetimes fix a per-board
-  restore set of 1,069 registers. Initialization without training takes
+  restore set of 1,036 registers (`restore-set-v3.json`). Initialization without training takes
   36 ms, against 5.1 s to train all four P-states. The restore itself is
   designed but not built.
 
