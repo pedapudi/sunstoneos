@@ -76,3 +76,10 @@ physical return.
 
 No board, USB or queue access occurred. Physical IRQ delivery, NPU execution,
 cache visibility, numerical output, shutdown and ROM return remain unqualified.
+
+`build.py --restart --evidence PATH` builds the separate software-only baseline
+composition with a normal local stop/restart between the two jobs. It retains
+domain/SRAM ownership and uses four IRQ completions, including two bootstraps.
+The existing host admission rejects its distinct profile; it grants no board
+authority. See the [restart contract](../../docs/npu-startup.md#normal-restart-within-one-powered-lifetime)
+and run the linked client check with `checks/npu-interrupt-client.py --restart`.

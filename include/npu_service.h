@@ -124,6 +124,8 @@ struct npu_service {
     unsigned command_count, owner, initialized;
     atomic_uint activation_state;
     struct npu_service_activation activation;
+    int (*restart_irq)(void *), (*restart_ready)(void *);
+    unsigned restart_reaped, reopening;
     uint64_t job_ticket;
     QueueHandle_t requests;
     StaticQueue_t request_state;
@@ -137,6 +139,22 @@ struct npu_service {
     struct npu_service_member member[NPU_SERVICE_CLIENTS];
     struct npu_service_runtime_state *runtime; /* Null outside runtime mode. */
 };
+
+/* Optional normal restart for the deferred, single-client IRQ service. Bind
+ * before scheduling, after client 0 and its IRQ. ready runs in the worker
+ * with activation.context and checks the retained lifetime's absolute
+ * deadline/health. irq runs masked in the routed-core critical section and
+ * must prove stopped, disabled, inactive and pending-clear, leaving masked.
+ * Existing bindings, worker, queues and ticket counters survive every run. */
+int npu_service_restart_enable(struct npu_service *, int (*irq)(void *), int (*ready)(void *));
+/* Bootstrap task only, after collecting a normal completed/reaped CLOSE.
+ * prepare acquires the parked worker; resume authenticates prepared metadata
+ * and asks that same worker to resume. BUSY requires another bounded poll.
+ * retain withdraws any pending resume permanently; callers use it on their
+ * original lifetime deadline or a platform restart failure. */
+enum npu_service_result npu_service_restart_prepare(struct npu_service *);
+enum npu_service_result npu_service_restart_resume(struct npu_service *);
+void npu_service_restart_retain(struct npu_service *);
 
 /* One statically configured service for the single NPU. Call init/bind before
  * starting the scheduler, at EL1. Zero storage once. This service exclusively

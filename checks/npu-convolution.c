@@ -23,6 +23,13 @@ static uint32_t check_registers[0x800/4];
 #define CHECK_ACTIVE_CYCLES 48000u
 #define CHECK_IDLE_CYCLES 1200u
 static unsigned check_running,check_is_bootstrap;
+static struct a733_counter_clock restart_counter;
+static struct a733_clock_leases restart_clocks;
+static struct a733_platform_locks restart_locks;
+static atomic_uint restart_done;
+static atomic_ullong restart_now=100;
+static unsigned restart_irq_calls,check_time_calls;
+static void restart_event(void);
 extern const struct a733_npu_ops __real_a733_npu_native_operations;
 static const struct a733_npu_ops *check_native=&__real_a733_npu_native_operations;
 int __real_aarch64_device_translate(uintptr_t,int,struct aarch64_translation *);
@@ -57,17 +64,25 @@ static int check_read(void *cookie,unsigned offset,uint32_t *out)
 static int check_write(void *cookie,unsigned offset,uint32_t value)
 {
     configASSERT(cookie==&convolution.native);check_privileged();atomic_fetch_add(&check_accesses,1);
+    uint32_t previous=check_registers[offset/4];
     check_registers[offset/4]=value;
-    if(offset==0x3a8 && (value&1)){check_registers[0x388/4]=0;check_registers[1]=0x7fffffff;}
+    if(check_activation_mutation==20 && offset==0x3a8 && (previous&8) && !(value&8)) {
+        check_registers[offset/4]|=16;check_running=0;check_registers[1]=0x7fffffff;
+    }
+    if(offset==0x3a8 && (value&1)){
+        check_registers[0x388/4]=0;check_registers[1]=0x7fffffff;
+        if(check_activation_mutation==20)check_running=0;
+    }
     if(offset==0x3a4) {
         configASSERT(value==0x1ffff && convolution.native.memory.state==A733_NPU_MEMORY_DEVICE);
         check_is_bootstrap=check_registers[0x654/4]==convolution.commands[0].device;
         if(!check_is_bootstrap)check_at_doorbell=atomic_load(&check_accesses);
         check_running=1;check_registers[1]=0;
+        if(check_activation_mutation==15 && check_is_bootstrap && restart_irq_calls)restart_event();
     }
     return 1;
 }
-static uint64_t check_now(void *cookie){check_privileged();return check_native->microseconds(cookie);}
+static uint64_t check_now(void *cookie){check_privileged();++check_time_calls;return check_native->microseconds(cookie);}
 static void check_delay(void *cookie,unsigned us){check_privileged();check_native->delay(cookie,us);}
 static unsigned char check_poison(unsigned i)
 {return (unsigned char)(NPU_CONVOLUTION_OUTPUT_POISON>>8*(i&3));}
@@ -88,9 +103,9 @@ static int check_publish(void *cookie,const struct a733_npu_mmu_image *image,
 }
 static int check_finish(void *cookie,const struct a733_npu_command *command,int canceled)
 {
-    check_privileged();configASSERT(!check_running && !canceled);
+    check_privileged();configASSERT(!check_running && (!canceled || check_activation_mutation==20));
     /* Device stand-in, not a numerical implementation or inference result. */
-    if(!check_is_bootstrap) {
+    if(!check_is_bootstrap && !canceled) {
         /* The second job writes only its first 36 bytes; the rest must
          * read back as the SUBMIT pattern, not as the first job's output. */
         if(check_job==1)memcpy(check_small[3],fixture_output,72);
@@ -110,8 +125,51 @@ int __wrap_a733_npu_startup_prepared(struct a733_npu_startup *startup)
 {
     configASSERT(startup==&startup_record && xTaskGetCurrentTaskHandle()==check_bootstrap);
     atomic_store_explicit(&startup_record.window_open,1,memory_order_release);
+    if(check_activation_mutation==18) {
+        BaseType_t woken=pdFALSE;taskENTER_CRITICAL();
+        npu_service_irq_notify_from_isr(&convolution.service,1,&woken);taskEXIT_CRITICAL();
+    }
     ++check_prepared_calls;return 1;
 }
+/* Changed composition runs actual wrapper/service/controller/native memory;
+ * the local clock sequencer is covered separately by --restart host cases. */
+int __real_a733_counter_clock_now(void *,uint64_t *);
+int __wrap_a733_counter_clock_now(void *cookie,uint64_t *out)
+{
+    if(cookie!=&restart_counter)return __real_a733_counter_clock_now(cookie,out);
+    *out=atomic_load(&restart_now);return 1;
+}
+enum a733_npu_platform_result __wrap_a733_npu_startup_stop(struct a733_npu_startup *s)
+{
+    configASSERT(s==&startup_record && atomic_load(&convolution.closed));
+    atomic_store(&s->window_open,0);s->stage=A733_NPU_STARTUP_STOPPED;return A733_NPU_PLATFORM_READY;
+}
+enum a733_npu_platform_result __wrap_a733_npu_startup_restart(struct a733_npu_startup *s)
+{
+    configASSERT(s==&startup_record && s->stage==A733_NPU_STARTUP_STOPPED);
+    if(check_activation_mutation==14)return A733_NPU_PLATFORM_RETAINED;
+    s->stage=A733_NPU_STARTUP_READY;atomic_store(&s->window_open,1);return A733_NPU_PLATFORM_READY;
+}
+static void restart_event(void)
+{
+    uint32_t ignored;configASSERT(check_read(&convolution.native,4,&ignored));
+    BaseType_t woken=pdFALSE;
+    npu_service_irq_notify_from_isr(&convolution.service,1,&woken);
+}
+static int restart_mask(void *cookie){configASSERT(cookie==&convolution);return 1;}
+static int restart_rearm(void *cookie)
+{configASSERT(cookie==&convolution);if(check_activation_mutation!=20 || check_is_bootstrap)restart_event();return 1;}
+static int restart_stop(void *cookie)
+{configASSERT(cookie==&convolution && convolution.service.controller.state==A733_NPU_CLOSED);return 1;}
+static int restart_route(void *cookie)
+{
+    configASSERT(cookie==&convolution);++restart_irq_calls;
+    if(check_activation_mutation==9) {
+        BaseType_t woken=pdFALSE;npu_service_irq_notify_from_isr(&convolution.service,1,&woken);
+    }
+    return check_activation_mutation==12 ? -1 : 1;
+}
+static const struct npu_service_irq_ops restart_ops={restart_mask,restart_rearm,restart_stop};
 static struct npu_service_reply check_request(enum npu_service_operation op,const void *input)
 {
     uint64_t ticket;struct npu_service_reply reply;
@@ -152,6 +210,67 @@ static struct npu_service_reply check_wait(enum a733_npu_state state)
     }
     configASSERT(0);return (struct npu_service_reply){0};
 }
+static void check_restart_client(void)
+{
+    unsigned char input[192],output[72];uint64_t previous=0;
+    const TaskHandle_t worker=convolution.service.worker;
+    const QueueHandle_t requests=convolution.service.requests,replies=convolution.service.clients[0].replies;
+    const uint64_t table=convolution.native.memory.image.physical;
+    atomic_store(&check_allow,check_activation_mutation!=20);
+    for(unsigned run=0;run<2;++run) {
+        struct npu_service_reply r=check_request(NPU_SERVICE_OPEN,NULL);
+        configASSERT(r.result==NPU_SERVICE_OK);check_wait(A733_NPU_READY);
+        if(check_activation_mutation==19) {
+            configASSERT(check_request(NPU_SERVICE_CLOSE,NULL).state==A733_NPU_CLOSED);
+            xTaskNotifyGive(check_bootstrap);
+            while(!atomic_load_explicit(&restart_done,memory_order_acquire))vTaskDelay(1);
+            configASSERT(atomic_load(&convolution.failed) && !restart_irq_calls && atomic_load(&check_publishes)==1);
+            platform_puts("PASS NPU restart requires a completed and reaped inference\n");platform_exit(0);
+        }
+        for(unsigned i=0;i<192;++i)input[i]=fixture_input[i]^(run?255:0);
+        r=check_request(NPU_SERVICE_SUBMIT,input);uint64_t ticket=r.job_ticket;
+        configASSERT(ticket>previous);previous=ticket;
+        if(check_activation_mutation==20) {
+            const enum npu_service_operation operations[]={NPU_SERVICE_CANCEL,NPU_SERVICE_WAIT,NPU_SERVICE_REAP,NPU_SERVICE_CLOSE};
+            for(unsigned i=0;i<4;++i) {
+                const struct npu_service_request q={operations[i],0,i?0:100000};uint64_t raw;
+                configASSERT(npu_service_send(&convolution.service,&q,10,&raw));
+                configASSERT(npu_service_collect(&convolution.service,raw,&r,2000) && r.result==NPU_SERVICE_OK);
+            }
+            configASSERT(r.state==A733_NPU_CLOSED);xTaskNotifyGive(check_bootstrap);
+            while(!atomic_load_explicit(&restart_done,memory_order_acquire))vTaskDelay(1);
+            configASSERT(!restart_irq_calls && atomic_load(&check_publishes)==2);
+            platform_puts("PASS NPU canceled/reaped CLOSED service refuses restart\n");platform_exit(0);
+        }
+        r=check_wait_job();configASSERT(r.job_ticket==ticket);
+        configASSERT(npu_convolution_output(&convolution,output,sizeof(output)));
+        uint64_t ignored=0;
+        configASSERT(!npu_convolution_send(&convolution,NPU_SERVICE_CLOSE,NULL,0,0,0,&ignored));
+        for(unsigned i=0;i<72;++i)configASSERT(output[i]==(run?(i<36?0x5a:check_poison(i)):fixture_output[i]));
+        configASSERT(check_request(NPU_SERVICE_REAP,NULL).state==A733_NPU_READY);
+        configASSERT(check_request(NPU_SERVICE_CLOSE,NULL).state==A733_NPU_CLOSED);
+        unsigned accesses=atomic_load(&check_accesses),times=check_time_calls;
+        vTaskDelay(3);configASSERT(accesses==atomic_load(&check_accesses) && times==check_time_calls);
+        if(!run) {
+            xTaskNotifyGive(check_bootstrap);
+            while(!atomic_load_explicit(&restart_done,memory_order_acquire))vTaskDelay(1);
+            if(check_activation_mutation!=7 && check_activation_mutation!=13 && check_activation_mutation!=15 && check_activation_mutation!=16) {
+                vTaskDelay(3);
+                configASSERT(atomic_load(&convolution.failed) && !atomic_load(&startup_record.window_open));
+                configASSERT(restart_irq_calls<=1 && atomic_load(&check_publishes)==2);
+                platform_puts("PASS NPU restart retained boundary, no delayed revival\n");platform_exit(0);
+            }
+            configASSERT(!atomic_load(&convolution.closed) && !atomic_load(&convolution.failed));
+            configASSERT(convolution.service.worker==worker && convolution.service.requests==requests &&
+                convolution.service.clients[0].replies==replies && convolution.native.memory.image.physical==table &&
+                convolution.service.clients[0].next_ticket>ticket && convolution.native.memory.booted);
+        }
+    }
+    configASSERT(restart_irq_calls==1 && check_prepared_calls==2 && atomic_load(&check_publishes)==4 &&
+        atomic_load(&check_finishes)==4 && npu_service_irq_completions(&convolution.service)==4);
+    platform_puts("PASS NPU restart two runs: native publication/output/reap, parked callbacks, same worker/queues/tables and monotonic tickets\n");
+    platform_exit(0);
+}
 static void check_client_run(void *unused)
 {
     (void)unused;uint64_t ignored=999;unsigned char input[192],output[72];
@@ -162,6 +281,7 @@ static void check_client_run(void *unused)
     configASSERT(npu_convolution_startup_poll(&convolution)==A733_NPU_PLATFORM_RETAINED);
     configASSERT(!atomic_load(&convolution.failed));
     xTaskNotifyGive(check_bootstrap);configASSERT(ulTaskNotifyTake(pdTRUE,2000)==1);
+    if(check_activation_mutation>=7)check_restart_client();
     if(check_activation_mutation==1) {
         /* The bootstrap publication hashes every immutable byte before the
          * device fetches the stream, so a changed command tail stops there. */
@@ -286,8 +406,51 @@ static void check_bootstrap_run(void *unused)
 {
     (void)unused;configASSERT(ulTaskNotifyTake(pdTRUE,2000)==1);
     if(check_activation_mutation==1)check_commands[0][524287]^=1;
+    if(check_activation_mutation==18) {
+        configASSERT(npu_service_activate(&convolution.service)==NPU_SERVICE_FAULT);
+        npu_convolution_restart_retain(&convolution);vTaskDelay(3);
+        configASSERT(!atomic_load(&check_accesses) && !atomic_load(&startup_record.window_open));
+        platform_puts("PASS NPU restart initial activation IRQ cannot revive retained service\n");platform_exit(0);
+    }
     configASSERT(npu_service_activate(&convolution.service)==NPU_SERVICE_OK);
-    xTaskNotifyGive(check_client);vTaskSuspend(NULL);configASSERT(0);
+    xTaskNotifyGive(check_client);
+    if(check_activation_mutation>=7) {
+        configASSERT(npu_service_restart_prepare(&convolution.service)==NPU_SERVICE_BUSY);
+        configASSERT(ulTaskNotifyTake(pdTRUE,2000)==1);
+        if(check_activation_mutation==20) {
+            configASSERT(npu_service_restart_prepare(&convolution.service)==NPU_SERVICE_INVALID);
+            npu_convolution_restart_retain(&convolution);atomic_store_explicit(&restart_done,1,memory_order_release);
+            vTaskSuspend(NULL);configASSERT(0);
+        }
+        configASSERT(npu_convolution_stop_poll(&convolution)==A733_NPU_PLATFORM_READY);
+        if(check_activation_mutation==8) {
+            BaseType_t woken=pdFALSE;taskENTER_CRITICAL();
+            npu_service_irq_notify_from_isr(&convolution.service,1,&woken);taskEXIT_CRITICAL();
+        }
+        if(check_activation_mutation==11 || check_activation_mutation==17)vTaskSuspend(convolution.service.worker);
+        enum a733_npu_platform_result result;
+        do {
+            result=npu_convolution_restart_poll(&convolution);
+            if(check_activation_mutation==13 && result==A733_NPU_PLATFORM_PENDING)
+                configASSERT(npu_service_restart_prepare(&convolution.service)==NPU_SERVICE_BUSY);
+            if(check_activation_mutation==17 && result==A733_NPU_PLATFORM_PENDING) {
+                npu_convolution_restart_retain(&convolution);result=A733_NPU_PLATFORM_RETAINED;
+            }
+            if(check_activation_mutation==11)atomic_store(&restart_now,startup_record.config.deadline_us);
+            if(result==A733_NPU_PLATFORM_PENDING && check_activation_mutation!=11)vTaskDelay(1);
+        } while(result==A733_NPU_PLATFORM_PENDING);
+        if(check_activation_mutation==11 || check_activation_mutation==17)vTaskResume(convolution.service.worker);
+        if(check_activation_mutation==10 && result==A733_NPU_PLATFORM_READY) {
+            BaseType_t woken=pdFALSE;taskENTER_CRITICAL();
+            npu_service_irq_notify_from_isr(&convolution.service,1,&woken);taskEXIT_CRITICAL();
+            /* The consumer's health failure exit withdraws any restart. */
+            npu_convolution_restart_retain(&convolution);result=A733_NPU_PLATFORM_RETAINED;
+        }
+        if(check_activation_mutation==16)configASSERT(result==A733_NPU_PLATFORM_READY &&
+            npu_convolution_restart_poll(&convolution)==A733_NPU_PLATFORM_RETAINED && !atomic_load(&convolution.failed));
+        atomic_store_explicit(&restart_done,1,memory_order_release);
+    }
+    vTaskSuspend(NULL);configASSERT(0);
 }
 BaseType_t npu_convolution_task_privileged(TaskFunction_t entry,void *argument)
 {return entry==check_bootstrap_run || npu_service_task_privileged(entry,argument);}
@@ -298,6 +461,11 @@ static unsigned check_mode(void)
     char command[128]={0};uintptr_t params[2]={(uintptr_t)command,sizeof(command)};
     register uintptr_t op __asm__("x0")=0x15,args __asm__("x1")=(uintptr_t)params;
     __asm__ volatile("hlt #0xf000":"+r"(op):"r"(args):"memory");configASSERT(!op);
+    for(unsigned i=0;i+8<sizeof(command);++i)if(!memcmp(command+i,"restart",7)) {
+        unsigned n=(unsigned)(command[i+7]-'0');
+        if(command[i+8]>='0' && command[i+8]<='9')n=n*10+(unsigned)(command[i+8]-'0');
+        return 7+n;
+    }
     for(unsigned i=0;i+13<sizeof(command);++i)if(!memcmp(command+i,"counter-fault",13))return 6;
     for(unsigned i=0;i+11<sizeof(command);++i)if(!memcmp(command+i,"job-command",11))return 5;
     for(unsigned i=0;i+11<sizeof(command);++i)if(!memcmp(command+i,"close-fault",11))return 4;
@@ -338,6 +506,13 @@ void kernel_main(void)
     check_client=xTaskCreateStaticAffinitySet(check_client_run,"conv-client",4096,NULL,4,check_stacks[1],&check_tasks[1],1);
     startup_record.initialized=1;startup_record.task=check_bootstrap;
     configASSERT(npu_convolution_bind(&convolution,&startup_record,check_client,3,1));
+    if(check_activation_mutation>=7) {
+        startup_record.providers.counter=&restart_counter;startup_record.providers.clocks=&restart_clocks;
+        startup_record.providers.locks=&restart_locks;startup_record.config.deadline_us=1000000;
+        configASSERT(npu_service_bind_irq(&convolution.service,&restart_ops,&convolution,1));
+        configASSERT(npu_convolution_restart_enable(&convolution,restart_route));
+        configASSERT(!npu_service_bind(&convolution.service,1,check_bootstrap,2));
+    }
     /* Before READY the register window is closed: no access reaches the adapter. */
     uint32_t value=0;
     configASSERT(!read_reg(&convolution,0x20,&value) && !write_reg(&convolution,0,0x70900) &&

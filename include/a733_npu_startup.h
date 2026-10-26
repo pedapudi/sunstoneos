@@ -123,6 +123,13 @@ int a733_npu_startup_retune(struct a733_npu_startup *, unsigned mhz);
  * shared provider has failed, 0 before READY, -1 after a failure or from
  * another task. No register access. */
 int a733_npu_startup_prepared(struct a733_npu_startup *);
+/* Original bootstrap task, after normal CLOSE and local STOPPED. Retains the
+ * registered row, tokens, SRAM grant and deadline; no acquire, OFF or reset
+ * recovery. Reuses the adopted PLL/local-open stages. Failure is terminal. */
+enum a733_npu_platform_result a733_npu_startup_restart(struct a733_npu_startup *);
+/* Bound bootstrap only: close software register admission after a failed
+ * restart handshake. No hardware write, token release or ownership reset. */
+void a733_npu_startup_retain(struct a733_npu_startup *);
 /* The bound task, after a PENDING step: the ticks to block in
  * ulTaskNotifyTake(pdTRUE, ticks) before the next step. A wait for the
  * supply or the domain-4 row ends with the power service's notification and

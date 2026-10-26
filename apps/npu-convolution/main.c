@@ -10,6 +10,11 @@
 #ifdef SUNSTONE_NPU_INTERRUPT
 #include "../npu-interrupt/irq.h"
 #endif
+#ifdef SUNSTONE_NPU_RESTART
+#define EXPECTED_IRQ_COMPLETIONS 4u
+#else
+#define EXPECTED_IRQ_COMPLETIONS 3u
+#endif
 
 static StaticTask_t client_state;
 static StackType_t client_stack[4096] __attribute__((aligned(16)));
@@ -117,11 +122,23 @@ static void client(void *unused)
     if(iteration==0) {previous=job;
         a733_observe_digest(a733_npu_application_result.output,a733_npu_application_reference_bytes,
             a733_npu_application_result.first_digest);
+#ifdef SUNSTONE_NPU_RESTART
+        platform_puts("NPU_STAGE=FIRST_CLOSE\n");
+        reply=request(c,NPU_SERVICE_CLOSE,NULL,0,0);
+        while(atomic_load_explicit(&c->closed,memory_order_acquire)) {
+            if(!live() || atomic_load_explicit(&c->failed,memory_order_acquire))retained(23);
+            vTaskDelay(1);
+        }
+        platform_puts("NPU_STAGE=RESTART_OPEN\n");
+        reply=request(c,NPU_SERVICE_OPEN,NULL,0,1000000);
+        if(reply.state==A733_NPU_BOOTING)reply=request(c,NPU_SERVICE_WAIT,NULL,0,0);
+        if(reply.state!=A733_NPU_READY)retained(24);
+#endif
     }
     }
 #ifdef SUNSTONE_NPU_FINITE_RETURN
 #ifdef SUNSTONE_NPU_INTERRUPT
-    if(npu_service_irq_completions(&c->service)!=3)retained(21);
+    if(npu_service_irq_completions(&c->service)!=EXPECTED_IRQ_COMPLETIONS)retained(21);
 #endif
 #ifdef SUNSTONE_NPU_FINITE_THERMAL
     a733_npu_application_thermal_close();
@@ -167,7 +184,7 @@ finished_engine:
 #ifdef SUNSTONE_NPU_FINITE_RETURN
     if(!a733_npu_application_quiesce())retained(20);
 #ifdef SUNSTONE_NPU_INTERRUPT
-    if(!npu_service_irq_stopped(&c->service) || npu_service_irq_completions(&c->service)!=3)retained(21);
+    if(!npu_service_irq_stopped(&c->service) || npu_service_irq_completions(&c->service)!=EXPECTED_IRQ_COMPLETIONS)retained(21);
     platform_puts("NPU_IRQ_COMPLETIONS=");platform_hex(npu_service_irq_completions(&c->service));
     platform_puts("\nNPU_IRQ_STOPPED=");platform_hex(1);platform_puts("\n");
 #endif
@@ -183,7 +200,11 @@ finished_engine:
     taskENTER_CRITICAL();
     platform_puts(status==1?"FAIL NPU numerical comparison\n":status==2?
         "REFUSED NPU thermal admission; configured sensor disabled and providers parked\n":
+#ifdef SUNSTONE_NPU_RESTART
+        "PASS NPU two matched jobs across normal local restart and parked providers\n");
+#else
         "PASS NPU two matched jobs, copied output, REAP, CLOSE, local stop and parked providers\n");
+#endif
     /* The returning platform must keep all reservations and restore RAM only
      * after this successful stop; a retained failure never takes this path. */
     platform_exit(status);

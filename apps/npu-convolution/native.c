@@ -364,6 +364,9 @@ static void bootstrap(void *argument)
 static void bootstrap(void *argument)
 {
     if(argument!=&app)fatal(NULL);
+#ifdef SUNSTONE_NPU_RESTART
+    unsigned restarted=0,restart_pending=0;
+#endif
     for(;;) {
         uint64_t now;
         if(!live() || !parent() || !a733_counter_clock_now(&app.clock,&now) ||
@@ -382,9 +385,20 @@ static void bootstrap(void *argument)
                     if(!live() || !parent() || !a733_counter_clock_now(&app.clock,&now) ||
                        now>=app.startup.config.deadline_us)break;
                     if(atomic_load_explicit(&app.reserved.convolution.closed,memory_order_acquire)) {
+#ifdef SUNSTONE_NPU_RESTART
+                        if(restart_pending) {
+                            enum a733_npu_platform_result result=npu_convolution_restart_poll(&app.reserved.convolution);
+                            if(result==A733_NPU_PLATFORM_RETAINED)break;
+                            if(result==A733_NPU_PLATFORM_READY){restarted=1;restart_pending=0;}
+                            vTaskDelay(1);continue;
+                        }
+#endif
                         enum a733_npu_platform_result stopped=npu_convolution_stop_poll(&app.reserved.convolution);
                         if(stopped==A733_NPU_PLATFORM_RETAINED)break;
                         if(stopped==A733_NPU_PLATFORM_READY) {
+#ifdef SUNSTONE_NPU_RESTART
+                            if(!restarted){restart_pending=1;continue;}
+#endif
                             atomic_store_explicit(&app.stopped,1,memory_order_release);
                             vTaskSuspend(NULL);fatal(NULL);
                         }
@@ -402,6 +416,9 @@ static void bootstrap(void *argument)
          * deadline or the last tick of its settle. */
         (void)ulTaskNotifyTake(pdTRUE,r==A733_NPU_PLATFORM_PENDING ? a733_npu_startup_wait_ticks(&app.startup) : 1);
     }
+#ifdef SUNSTONE_NPU_RESTART
+    npu_convolution_restart_retain(&app.reserved.convolution);
+#endif
     a733_npu_application_fail(4);vTaskSuspend(NULL);fatal(NULL);
 }
 #endif
@@ -588,6 +605,9 @@ int a733_npu_application_init(TaskHandle_t client)
        ) ||
 #ifdef SUNSTONE_NPU_INTERRUPT
        !npu_application_irq_bind(&app.reserved.convolution.service) ||
+#endif
+#ifdef SUNSTONE_NPU_RESTART
+       !npu_convolution_restart_enable(&app.reserved.convolution,npu_application_irq_restart) ||
 #endif
        !preparation_admitted())goto failed;
 #ifdef SUNSTONE_NPU_FINITE_THERMAL

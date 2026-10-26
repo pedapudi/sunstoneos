@@ -91,6 +91,15 @@ static int stop(void *cookie)
     }
     taskEXIT_CRITICAL();return result;
 }
+#ifndef NPU_IRQ_EXTERNAL_BIND
+int npu_application_irq_restart(void *cookie)
+{
+    if(cookie!=&binding || !on_core() || !binding.service || !binding.stopped ||
+       !binding.masked || binding.fault || (read32(0)&(1u<<31)) ||
+       ((read32(0x10c)|read32(0x20c)|read32(0x30c))&BIT))return -1;
+    binding.stopped=0;return 1;
+}
+#endif
 /* Before the scheduler, at EL1: the source disabled, inactive and not
  * pending, level-sensitive, at NPU_IRQ_PRIORITY and routed to NPU_IRQ_CORE.
  * The route is checked once here; the callbacks check only the calling core.
