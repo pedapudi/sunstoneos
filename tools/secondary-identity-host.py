@@ -63,13 +63,13 @@ def initial_report(nonce):
 
 
 def load(build, image, manifest, local=False, cached=False, coherent=False, interrupts=False, pre_scheduler=False, first_task=False, task_switch=False, task_workload=False,
-         return_deadline=False, quiet=False):
+         return_deadline=False, quiet=False, top_opp=False):
     """Check a build against the frozen inputs: the builder's patch plan,
     reapplied to the frozen base overlay and native segments, must reproduce
     every built byte and the recorded patch inventory."""
     f = builder.profile(local=local, cached=cached, coherent=coherent, interrupts=interrupts,
                         pre_scheduler=pre_scheduler, first_task=first_task, task_switch=task_switch,
-                        task_workload=task_workload, return_deadline=return_deadline, quiet=quiet)
+                        task_workload=task_workload, return_deadline=return_deadline, quiet=quiet, top_opp=top_opp)
     report = builder.report_area(f)
     require(manifest.get('schema') == builder.schema(f) and
             manifest.get('physical_access') is False and manifest.get('native_sha256') == probe.NATIVE,
@@ -87,7 +87,7 @@ def load(build, image, manifest, local=False, cached=False, coherent=False, inte
             'Report overlaps existing storage.')
     with (build/'identity.elf').open('rb') as stream:
         hooks = {s.name:s['st_value'] for s in ELFFile(stream).get_section_by_name('.symtab').iter_symbols()
-                 if s.name.startswith('identity_') or (f.cached and s.name.startswith(('native_el','el1_')))}
+                 if s.name.startswith(('identity_','top_opp_')) or (f.cached and s.name.startswith(('native_el','el1_')))}
     require(hooks == manifest['hooks'], 'Identity hooks differ.')
     with image.open('rb') as stream:
         symbols = list(ELFFile(stream).get_section_by_name('.symtab').iter_symbols())

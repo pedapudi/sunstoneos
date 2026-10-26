@@ -82,6 +82,10 @@ struct npu_convolution {
      * the bootstrap record nothing; publication clears the completion values. */
     uint64_t job_published_us, job_finished_us, job_start_ticks, job_done_ticks;
     uint32_t job_start_cycles[2], job_cycles[2];
+    /* System counter at the client's SUBMIT send, at the job publication's
+     * entry (before its integrity hashes and cache maintenance) and just after
+     * the doorbell write (+0x3A4) that starts the job. */
+    uint64_t job_submit_ticks, job_publish_ticks, job_doorbell_ticks;
 };
 
 /* EL1, before scheduling, zero once. Copies then hashes the complete model;
@@ -95,9 +99,8 @@ struct npu_convolution {
  *
  * Any admitted initialization failure is terminal; reservations remain owned.
  * No teardown/reinitialization is provided. Model/weights/commands stay immutable.
- * Startup, activation, bootstrap publication and stop check the model copy,
- * weight digests and both command streams; a job publication checks the
- * weights and the job command stream only. Input/output are accessed only
+ * The bootstrap publication and CLOSE check the model copy, weight digests
+ * and both command streams; a job publication checks only the selection. Input/output are accessed only
  * through the client API below. Full mapped command tails contain END pairs.
  *
  * Successful preparation admits the selected trusted compiled artifact only;

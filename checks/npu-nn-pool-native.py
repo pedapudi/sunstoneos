@@ -37,6 +37,9 @@ def constructor(a,out,image,inputs,outputs):
  assert len(offsets)==1
  reserved=image.address('app')+offsets[0];rl=image.layouts['a733_npu_reserved'];cl=image.layouts['npu_convolution'];nl=image.layouts['a733_npu_native'];ml=image.layouts['a733_npu_memory'];bl=image.layouts['a733_npu_buffer'];el=image.layouts['device_memory_extent']
  c=reserved+rl['convolution'];native=c+cl['native'];memory=native+nl['memory'];image_at=memory+ml['image']
+ # Boot publishes the local pool before the constructor; the getter alone
+ # does not initialize its storage (as checks/npu-large-native.py runs it).
+ assert m.call('a733_memory_reservations_prepare')==1
  assert m.call('a733_npu_reserved_prepare',reserved,1,image.address('a733_npu_application_model'),964224,0x03600000,0x43fff000,0)==c
  assert m.get(reserved+rl['admitted'],4)==m.get(c+cl['prepared'],4)==1
  extent=reserved+rl['extent'];assert m.get(extent+el['cpu'])==0x41600000 and m.get(extent+el['bytes'])==3235840
@@ -76,13 +79,15 @@ def constructor(a,out,image,inputs,outputs):
   assert sorted(m.cache)==sorted([[0,cpus[3],sizes[3]],[1,cpus[4],sizes[4]],[1,cpus[6],sizes[6]]]),m.cache
   assert m.call('a733_npu_memory_finish',memory,command,0)==1
   for i in (6,4):assert [2,cpus[i],sizes[i]] in m.cache
- # Coefficient integrity is rechecked at the actual wrapper publication boundary.
- old=m.get(cpus[1],1);m.u.mem_write(cpus[1],bytes([old^1]));m.u.mem_write(cpus[6],bytes([0x7b])*sizes[6])
- m.cache=[]
- assert m.call(('publish','/drivers/npu/npu_convolution.c'),c,image_at,command,0)==0
- assert not m.cache and m.get(c+cl['failed'],4)==1 and m.data(cpus[6],sizes[6])==bytes([0x7b])*sizes[6]
+ # A job publication hashes nothing (checks/npu-job-cost.py counts it); CLOSE
+ # rechecks the coefficients, refuses before any cache or device work and
+ # retains the session.
+ old=m.get(cpus[1],1);m.u.mem_write(cpus[1],bytes([old^1]))
+ m.put(c+cl['job'],0);m.put(c+cl['pending'],0);m.cache=[]
+ assert m.call('npu_convolution_send',c,5,0,0,0,5,0x43e00100)==0
+ assert not m.cache and m.get(c+cl['failed'],4)==1
  (out/'tables.bin').write_bytes(m.data(tables,20480))
- return dict(result='pass',actual_allocator=True,parent_bytes=3235840,mapped_payload_pages=pages,actual_second_level=hex(second),table_alignment_bytes=4096,translation_checks=m.translations,pool_clear_and_cache_policy_jobs=2,coefficient_mutation_retained_before_cache_publication=True,hardware_effects_modeled=True)
+ return dict(result='pass',actual_allocator=True,parent_bytes=3235840,mapped_payload_pages=pages,actual_second_level=hex(second),table_alignment_bytes=4096,translation_checks=m.translations,pool_clear_and_cache_policy_jobs=2,coefficient_mutation_refused_at_close=True,hardware_effects_modeled=True)
 def main():
  p=argparse.ArgumentParser(description=__doc__)
  for name in ('image','assembly','output'):p.add_argument('--'+name,type=Path,required=True)

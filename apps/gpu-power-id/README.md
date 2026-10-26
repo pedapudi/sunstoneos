@@ -188,8 +188,8 @@ a prefix of them.
 ## The probe-read variant reads the core identity as the vendor's probe does
 
 `probe-read.c` builds the probe-read variant the way `wrapper.c` builds the
-wrapper-read variant. After the default ON sequence, with the CORE6 status
-poll kept only as a 200 ms observation, it
+wrapper-read variant. After the default ON sequence, which must reach CORE6
+status 8 within 200 ms, it
 reads `drm_ctrl` (`0x01880014`), `irq_ctrl` (`0x01880010`) and the SMC0
 word `0x0a0000b0`, then the core identity as the vendor's probe reads it:
 two 32-bit reads, `0x01800024` and then `0x01800020`. It then writes 2 to
@@ -200,16 +200,92 @@ restore readback it masks D, A, I and F, makes no failure call, and points
 `VBAR_EL1` at restore vectors that write both words back before the
 image's own exception handler runs; it starts that window only while at
 least 500 ms remain before the monitor's 2 s deadline, and otherwise
-returns status 7 with nothing written. It makes no OFF and no provider park;
-the lifetime ends with a power removal. The fifteen accesses are the rows
+returns status 7 with nothing written. After the restore it makes the OFF,
+the supply end and the provider park of the power-only variant. The fifteen accesses are the rows
 of `probe_steps`; the progress record at result offset 128 (magic
 `GPUPRD01`) holds the row in flight and every completed value. The
 completion text is `COMPLETE GPU probe read: identity 36.56.104.183 before
-and after the secure configuration, restored, GPU left powered`.
+and after the secure configuration, restored, OFF and provider parked`.
 [gpu-power.md](../../docs/gpu-power.md#the-probe-read-probe-makes-the-vendors-probe-time-read-then-the-secure-configuration)
 gives the vendor trace, the write exception and the meaning of each
 result. `check.py --probe-read` runs thirteen cases, and bundle preparation
 requires the image's table to hold exactly the fifteen rows.
+
+## The firmware-start variant starts the GPU firmware as the vendor host does
+
+`fw-start.c` builds the firmware-start variant the same way, as step 2 of
+[the firmware-start design](../../docs/designs/gpu-firmware-start.md). The
+build adds the firmware preparation, queue, start and shared-memory units
+and the pinned open firmware (`rogue_36.56.104.183_v1.fw`, SHA-256
+`1db1c399…`) to the image, and links the 2 MiB Normal-NC block at
+`0x41c00000`. Before any power change the image places code, data and the
+MIPS page table in write-back image RAM and the nineteen shared resources
+in that block, with the 1,008 MHz core clock in system init. After the
+default ON, which must reach CORE6 status 8 within 200 ms, it reads the
+identity, `drm_ctrl` and the SMC0 word, writes one timer-correlation record
+from an `RGX_CR_TIMER` read, writes 2 to SMC0 `0x0a0000b0` and 0 to
+`drm_ctrl` without writing them back, and runs the 29-step start of
+`pvr_gpu_start.c` with every 64-bit register as two 32-bit accesses. It
+waits at most 1 s for the 32-bit started word, reports the shared state and
+the reset and wrapper registers, and leaves the GPU running: the lifetime
+ends with a power removal. The eight identity, entry and secure accesses
+are the rows of `fws_rows`; the progress record at result offset 128
+(magic `GPUFWS01`) names every access before it is made. The completion
+text is `COMPLETE GPU firmware start: started word 1 after the timer record
+and the secure configuration, GPU left running for the power removal`.
+`check.py --fw-start` runs eleven cases on the linked image, and bundle
+preparation requires the table, the embedded firmware's hash and that no
+case writes anything but the secure configuration and the start registers.
+
+## The firmware-stop variant stops the firmware and powers the GPU off
+
+`fw-start.c` built with `FWS_STOP` (build and check option `--fw-stop`) is
+the firmware-stop variant of
+[the firmware-stop design](../../docs/designs/gpu-firmware-stop.md). After
+the firmware start, with the vendor's 500 ms bound, it brings the firmware
+control up (the compatibility record and one health-check command through
+the kernel CCB), stops the firmware with the forced-idle and power-off
+requests and the vendor `RGXStop` register sequence, and then makes the
+OFF, the supply end and the provider park of the power-only variant. It
+links the control and stop units as well. The completion text is `COMPLETE
+GPU firmware stop: started, health check executed, forced idle and power
+off acknowledged, idle, OFF and provider parked`. `check.py --fw-stop` runs
+nine cases with a model of the firmware's side of the queues.
+
+## The first-job variant runs one GPU compute job before the stop
+
+`fw-start.c` built with `FWS_STOP` and `FWS_JOB` (build and check option
+`--fw-job`) adds `fw-job.inc`, the fixed 32-lane compute job of
+[the first-job design](../../docs/designs/gpu-first-job.md), between the
+firmware-stop variant's health check and its stop. It builds the job's
+workload VM, context programs, context and job in its own memory before any
+power change, sends the MMU cache command and kicks the job after the
+health check, waits at most 200 ms for the timeline word, checks the 32
+output words and their guards, cleans the context up, and then stops the
+firmware and powers the GPU off whatever the job's result. When the control
+has failed or the firmware acknowledges neither power request, the stop
+runs without the acknowledgements (upstream's hard reset) and powers off
+only when every idle poll matches. The completion text is `COMPLETE GPU
+first job: 32 words as computed, context cleaned up, firmware stopped, OFF
+and provider parked`. `check.py --fw-job` runs thirteen cases with a model
+of the firmware and GPU that runs the job's client CCB commands;
+`--board-log` with `--board-cases` compares a board log with chosen
+models.
+
+## The session variant runs eight timed jobs on one context
+
+`--fw-session` builds the first-job variant with `FWS_JOBS=8`
+([the job-session design](../../docs/designs/gpu-job-session.md)): after
+the first job, `pvr_compute_job_repeat` runs seven more on the same
+context, the client CCB wrapping before job 6. Each job is timed in
+counter ticks from its `MTS_SCHEDULE` write to the first read of its
+timeline value, by a spin that touches no register, and the image logs the
+times of its preparation, publication, `MMUCACHE`, jobs, cleanup and park.
+The first job that does not complete ends the sequence; the cleanup runs
+only when the firmware has finished with the context, and the stop powers
+the GPU off as in the first-job variant. The completion text is `COMPLETE
+GPU job session: 8 jobs as computed, context cleaned up, firmware stopped,
+OFF and provider parked`. `check.py --fw-session` runs fifteen cases.
 
 A wrapper-write variant was refused before any board run and removed
 ([gpu-power.md](../../docs/gpu-power.md#the-wrapper-write-probe-was-refused)).
@@ -225,13 +301,15 @@ Run with the existing host Python environment containing pyelftools and Unicorn:
 ```
 
 Add `--power-only` to both commands for the power-only variant,
-`--wrapper-read` for the wrapper-read variant or `--probe-read` for the
-probe-read variant. The vendor-clock-order and vendor-state variants, whose
+`--wrapper-read` for the wrapper-read variant, `--probe-read` for the
+probe-read variant, `--fw-start` for the firmware-start variant or
+`--fw-stop` for the firmware-stop variant or `--fw-job` for the first-job
+variant. The vendor-clock-order and vendor-state variants, whose
 controller, monitor and supply copies the default path replaced, were
 removed after the vendor-state image read the identity.
 
 `prepare.py` turns a build and its check result into a board bundle for
-`tools/prepare-board-bundles.py` (rows 11 to 13, 16 and 17 of
+`tools/prepare-board-bundles.py` (rows 11 to 13, 16, 17, 19, 25, 26 and 28 of
 [board-bundles-next.md](../../docs/designs/board-bundles-next.md)). For both
 power variants it reads `on_steps` and `off_steps` from the image and
 requires the domain-5 (TOP5) ON request before the first CORE6 access, the

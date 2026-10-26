@@ -1,9 +1,13 @@
 // One sequential batch through the original power and entry controllers.
+#include "a733_el3_mbus.h"
 #include "secondary-identity-probe.h"
 #include "a733_cpu_entry.h"
 #include "boot.h"
 #ifdef SUNSTONE_SECONDARY_LOCAL
 #include "secondary-local-probe.h"
+#endif
+#ifdef SUNSTONE_TOP_OPP
+#include "top-opp-relock.h"
 #endif
 
 #define HEADER ((volatile struct identity_header *)IDENTITY_REPORT)
@@ -45,6 +49,18 @@ int identity_primary_run(void)
     HEADER->magic=IDENTITY_MAGIC;HEADER->version=1;
     HEADER->bytes=IDENTITY_REPORT_BYTES;HEADER->epoch=admission->epoch;
     HEADER->deadline=admission->startup_deadline;HEADER->state=1;barrier();
+    // MBUS back to boot0's 600 MHz, as the native image's SMP boot does, and
+    // like it before any secondary core is released: the restore's gated
+    // window runs from SRAM while the released cores would spin in DRAM
+    // (include/a733_el3_mbus.h). A failure returns before any core is started;
+    // an active bus master skips the restore and leaves 400 MHz.
+    if(A733_MBUS_FAILED(a733_el3_mbus_restore()))return 0;
+#ifdef SUNSTONE_TOP_OPP
+    // The ROM resets CPU-L and the DSU on each return and every image returns
+    // CPU-B to its boot point: relock CPU-B, CPU-L and the DSU to the top
+    // points before any secondary is released.
+    if(top_opp_relock(&HEADER->reserved[TOP_OPP_RECORD_OFFSET/8-8],HEADER->deadline)!=TOP_OPP_DONE)return 0;
+#endif
 #ifdef SUNSTONE_SECONDARY_LOCAL
     if(!secondary_distributor_begin(HEADER->deadline))return 0;
 #endif
@@ -141,6 +157,11 @@ int identity_primary_run(void)
     for(unsigned i=0;i<4096/8;++i)copy[4096/8+i]=state[i];
 #endif
     barrier();
+#endif
+#ifdef SUNSTONE_TOP_OPP
+    // Every secondary is OFF: CPU-B back to boot0's 1014 MHz before the
+    // return, which resets CPU-L and the DSU but not CPU-B.
+    if(top_opp_lower_b(&HEADER->reserved[TOP_OPP_LOWER_OFFSET/8-8],HEADER->deadline)!=TOP_OPP_DONE)return 0;
 #endif
     HEADER->state=2;barrier();return 1;
 }

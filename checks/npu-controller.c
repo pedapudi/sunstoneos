@@ -244,16 +244,26 @@ int main(int argc, char **argv)
     started(&d, &c); assert(a733_npu_submit(&c, &task, 1000));
     d.reg[0x10/4] = 0x80000001; assert(a733_npu_poll(&c) == A733_NPU_FAULT);
     assert(c.fault == A733_NPU_IRQ && d.finished == 1); retained(&d, &c);
+    /* Completion reads the event word once; an event raised after it stays
+     * pending and close refuses it. */
     started(&d, &c); assert(a733_npu_submit(&c, &task, 1000));
     d.inject_late_fault = 1; d.now += 40;
-    assert(a733_npu_poll(&c) == A733_NPU_FAULT && d.finished == 1); retained(&d, &c);
+    assert(a733_npu_poll(&c) == A733_NPU_DONE && d.finished == 2);
+    { void *t = NULL; int k = -1; assert(a733_npu_reap(&c, &t, &k)); }
+    assert(!a733_npu_close(&c) && c.fault == A733_NPU_IRQ); retained(&d, &c);
 
-    started(&d, &c); d.reg[0x10/4] = 1;
-    assert(!a733_npu_submit(&c, &task, 1000));
-    assert(c.fault == A733_NPU_IRQ && d.triggers == 1); retained(&d, &c);
-    started(&d, &c); d.reg[0x3b4/4] ^= 16;
-    assert(!a733_npu_submit(&c, &task, 1000));
-    assert(c.fault == A733_NPU_REGISTER && d.triggers == 1); retained(&d, &c);
+    /* The trigger is two writes; a pending error event faults the job's
+     * first completion sample instead of the submit. */
+    started(&d, &c); d.reg[0x10/4] = 0x80000000;
+    unsigned reads = d.reads;
+    assert(a733_npu_submit(&c, &task, 1000) && d.triggers == 2 && d.reads == reads);
+    assert(a733_npu_poll(&c) == A733_NPU_FAULT && c.fault == A733_NPU_IRQ); retained(&d, &c);
+    /* The configuration is checked at open and at close. */
+    started(&d, &c); assert(a733_npu_submit(&c, &task, 1000)); d.now += 40;
+    assert(a733_npu_poll(&c) == A733_NPU_DONE);
+    { void *t = NULL; int k = -1; assert(a733_npu_reap(&c, &t, &k)); }
+    d.reg[0x3b4/4] ^= 16;
+    assert(!a733_npu_close(&c) && c.fault == A733_NPU_REGISTER); retained(&d, &c);
 
     started(&d, &c); d.event_after = d.idle_after = 10000;
     assert(a733_npu_submit(&c, &task, 1000)); assert(a733_npu_cancel(&c, 500));

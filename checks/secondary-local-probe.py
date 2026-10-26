@@ -49,11 +49,19 @@ class Local(survey.Survey):
             else:self.regs[c]['sctlr_el1']=0xc50838
             if c==6:self.regs[c]['tcr_el1']=0x600e12242aa
             if c==7:self.regs[c]['tcr_el1']=0x8250e02a402a
+        self.init_top_opp()
         self.original_mmio=copy.deepcopy(self.mmio)
         self.original_regs=copy.deepcopy(self.regs)
 
     def memory(self,u,access,address,size,value,core):
         write=access==UC_MEM_WRITE
+        if self.top_opp_address(address):
+            # The top-operating-point relock (survey.Survey.pll_access and
+            # twi_access).
+            if not 0x08871000<=address<0x08874000:
+                return self.twi_access(u,access,address,size,value,core)
+            self.pll_access(access,address,size,value,core)
+            return model.Machine.memory(self,u,access,address,size,value,core)
         if address in model.EL3_SECURITY_ADDRESSES:
             # The native EL3 security setup, which the pre-scheduler profiles
             # call; the base model checks and records it.
@@ -95,7 +103,9 @@ class Local(survey.Survey):
                     assert target==core and self.shutdown_steps[core]==['power','dsb','isb']
                     self.shutdown_steps[core].append('control')
             else:
-                allowed={0x08001004,0x08001008}
+                # MBUS_CLK and MSI_LITE0_BGR: the MBUS restore's two reads;
+                # the model holds boot0's value, so it writes neither.
+                allowed={0x08001004,0x08001008,0x02002588,0x02002594}
                 for c in range(1,8):
                     allowed.update((0x08001000+c*0x1000,0x08001004+c*0x1000,0x08001008+c*0x1000,
                                     0x07050200+c*4,0x07050220+c*4,0x07052008+c*0x1000))

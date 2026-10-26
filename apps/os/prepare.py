@@ -65,7 +65,9 @@ AUDIO_CONDITIONS = {
 GRANT_MAGIC, GRANT_BYTES, GRANT_CHANGES = 0x4153373343505531, 96, 64
 APPROVAL_SCHEMA = 'a733-os-cpu-clock-approval-v1'
 B1_SCHEMA = 'a733-os-cpu-clock-b1-v1'
-STEPS = {'A1': ('cpu-b', 1196), 'A2': ('cpu-b', None), 'A3': ('cpu-l', 1196)}
+# TOP is the default path of docs/designs/cpu-top-opp.md: both clusters at
+# their bin's highest points; the OS owner then sets the DSU by the vendor rule.
+STEPS = {'A1': ('cpu-b', 1196), 'A2': ('cpu-b', None), 'A3': ('cpu-l', 1196), 'TOP': ('both', None)}
 
 
 def driver_text():
@@ -391,7 +393,6 @@ def cpu_clock_admission(record, image_hash, raw, profile, evidence):
             isinstance(a.get('approval_date'), str) and a.get('step') in STEPS,
             'The approval record names another board, image, session or step.')
     cluster, fixed = STEPS[a['step']]
-    index = 0 if cluster == 'cpu-l' else 1
     b1 = json.loads(evidence(a.get('b1')))
     # B1 ran this build with a grant that named no cluster, and passed.
     require(b1.get('schema') == B1_SCHEMA and b1.get('passed') is True and b1.get('grant_clusters') == 0 and
@@ -401,13 +402,22 @@ def cpu_clock_admission(record, image_hash, raw, profile, evidence):
             isinstance(b1.get('sid_word'), int), "The approval must cite this board's B1 record.")
     column = bin_column(b1['sid_word'])
     require(column is not None, 'B1 recorded a fuse code without a table column.')
-    points = supported(cluster, column)
-    highest = fixed if fixed else points[-1]
-    require(a.get('cluster') == cluster and a.get('highest_mhz') == highest and highest in points and
-            isinstance(a.get('changes'), int) and 0 < a['changes'] <= GRANT_CHANGES,
-            "The approval's step, cluster or highest point does not fit this board's bin.")
-    maxima = (highest, 0) if index == 0 else (0, highest)
-    require(g['clusters'] == 1 << index and g['max_mhz'] == maxima and g['changes'] == a['changes'] and
+    if cluster == 'both':
+        # Each cluster at the top row of the board's column.
+        highest = {'cpu-l': supported('cpu-l', column)[-1], 'cpu-b': supported('cpu-b', column)[-1]}
+        require(a.get('cluster') == 'both' and a.get('highest_mhz') == highest and
+                isinstance(a.get('changes'), int) and 0 < a['changes'] <= GRANT_CHANGES,
+                "The approval's step, clusters or top points do not fit this board's bin.")
+        clusters, maxima = 3, (highest['cpu-l'], highest['cpu-b'])
+    else:
+        index = 0 if cluster == 'cpu-l' else 1
+        points = supported(cluster, column)
+        highest = fixed if fixed else points[-1]
+        require(a.get('cluster') == cluster and a.get('highest_mhz') == highest and highest in points and
+                isinstance(a.get('changes'), int) and 0 < a['changes'] <= GRANT_CHANGES,
+                "The approval's step, cluster or highest point does not fit this board's bin.")
+        clusters, maxima = 1 << index, ((highest, 0) if index == 0 else (0, highest))
+    require(g['clusters'] == clusters and g['max_mhz'] == maxima and g['changes'] == a['changes'] and
             g['approval'] == hashlib.sha256(data).digest(), 'The session grant differs from the approval record.')
 
 

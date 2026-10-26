@@ -14,6 +14,8 @@ static StaticTask_t check_tasks[2];
 static StackType_t check_stacks[2][4096];
 static TaskHandle_t check_bootstrap,check_client;
 static atomic_uint check_allow,check_accesses,check_publishes,check_finishes;
+/* Register accesses at the job publication, at the doorbell and at the finish. */
+static unsigned check_at_publish,check_at_doorbell,check_at_finish;
 static unsigned check_activation_mutation,check_prepared_calls,check_job;
 static uint32_t check_registers[0x800/4];
 /* Each modeled job adds these NPU cycles: active ones to the total counter
@@ -60,6 +62,7 @@ static int check_write(void *cookie,unsigned offset,uint32_t value)
     if(offset==0x3a4) {
         configASSERT(value==0x1ffff && convolution.native.memory.state==A733_NPU_MEMORY_DEVICE);
         check_is_bootstrap=check_registers[0x654/4]==convolution.commands[0].device;
+        if(!check_is_bootstrap)check_at_doorbell=atomic_load(&check_accesses);
         check_running=1;check_registers[1]=0;
     }
     return 1;
@@ -73,6 +76,7 @@ static int check_publish(void *cookie,const struct a733_npu_mmu_image *image,
     const struct a733_npu_command *command,int boot)
 {
     check_privileged();atomic_fetch_add(&check_publishes,1);
+    if(!boot)check_at_publish=atomic_load(&check_accesses);
     if(!boot) {
         ++check_job;
         for(unsigned i=0;i<192;++i)configASSERT(check_small[2][i]==
@@ -92,6 +96,7 @@ static int check_finish(void *cookie,const struct a733_npu_command *command,int 
         if(check_job==1)memcpy(check_small[3],fixture_output,72);
         else memset(check_small[3],0x5a,36);
     }
+    if(!check_is_bootstrap)check_at_finish=atomic_load(&check_accesses);
     int ok=check_native->finish(cookie,command,canceled);
     if(ok)atomic_fetch_add(&check_finishes,1);
     return ok;
@@ -124,6 +129,11 @@ static void check_job_timing(void)
 {
     configASSERT(convolution.job_published_us && convolution.job_finished_us>=convolution.job_published_us);
     configASSERT(convolution.job_start_ticks && convolution.job_done_ticks>=convolution.job_start_ticks);
+    /* SUBMIT, publication entry, counters, doorbell, completion: in order. */
+    configASSERT(convolution.job_submit_ticks && convolution.job_submit_ticks<=convolution.job_publish_ticks &&
+        convolution.job_publish_ticks<=convolution.job_start_ticks &&
+        convolution.job_start_ticks<=convolution.job_doorbell_ticks &&
+        convolution.job_doorbell_ticks<=convolution.job_done_ticks);
     configASSERT(convolution.job_cycles[0]==CHECK_ACTIVE_CYCLES+CHECK_IDLE_CYCLES &&
         convolution.job_cycles[1]==CHECK_IDLE_CYCLES);
 }
@@ -202,13 +212,19 @@ static void check_client_run(void *unused)
     configASSERT(!npu_convolution_output(&convolution,output,sizeof(output)));
     for(unsigned i=0;i<sizeof(input);++i)input[i]=fixture_input[i]^0xff;
     if(check_activation_mutation==5) {
-        /* A job publication still binds the command padding. */
+        /* A job publication hashes nothing; CLOSE rehashes the command
+         * stream and its padding, refuses before any device access and
+         * retains the session. */
         unsigned publications=atomic_load(&check_publishes);
         check_commands[0][524280]^=1;
         reply=check_request(NPU_SERVICE_SUBMIT,input);
-        configASSERT(reply.result==NPU_SERVICE_FAULT && reply.fault==A733_NPU_MEMORY);
-        configASSERT(atomic_load(&convolution.failed) && atomic_load(&check_publishes)==publications);
-        platform_puts("PASS convolution job integrity: mutated command padding refused before publication\n");
+        configASSERT(reply.result==NPU_SERVICE_OK && atomic_load(&check_publishes)==publications+1);
+        check_wait_job();check_request(NPU_SERVICE_REAP,NULL);
+        unsigned accesses=atomic_load(&check_accesses);
+        configASSERT(!npu_convolution_send(&convolution,NPU_SERVICE_CLOSE,NULL,0,0,0,&ignored));
+        configASSERT(atomic_load(&convolution.failed) && !convolution.pending);
+        vTaskDelay(2);configASSERT(atomic_load(&check_accesses)==accesses);
+        platform_puts("PASS convolution job integrity: mutated command padding refused at CLOSE, before any device access; session retained\n");
         platform_exit(0);
     }
     /* The device never reads the private model copy, and the bootstrap stream
@@ -222,6 +238,8 @@ static void check_client_run(void *unused)
         platform_hex(check_us(answered-submitted));
         platform_puts(" publication to completion observation us=");
         platform_hex(convolution.job_finished_us-convolution.job_published_us);platform_puts("\n");
+        platform_puts("MEASURE register accesses, publication to doorbell=");platform_hex(check_at_doorbell-check_at_publish);
+        platform_puts(" doorbell to finish=");platform_hex(check_at_finish-check_at_doorbell);platform_puts("\n");
     }
     convolution.model[0]^=1;check_commands[1][524287]^=1;
     configASSERT(npu_convolution_output(&convolution,output,sizeof(output)));
@@ -249,16 +267,19 @@ static void check_client_run(void *unused)
             "PASS convolution CLOSE fault: exact MMU mismatch retains ownership, no closed publication or later access\n");
         platform_exit(0);
     }
-    unsigned publications=atomic_load(&check_publishes),accesses=atomic_load(&check_accesses);
+    unsigned publications=atomic_load(&check_publishes);
     check_small[1][255]^=1; /* Accidental coefficient mutation after activation. */
+    /* A job publication hashes nothing, as the vendor prepares once; CLOSE
+     * finds the change, refuses before any device access and retains. */
     reply=check_request(NPU_SERVICE_SUBMIT,input);
-    configASSERT(reply.result==NPU_SERVICE_FAULT && reply.fault==A733_NPU_MEMORY && reply.owns_session);
-    configASSERT(atomic_load(&convolution.failed) && convolution.job && !convolution.pending);
-    configASSERT(atomic_load(&check_publishes)==publications && atomic_load(&check_accesses)==accesses);
-    configASSERT(!npu_convolution_output(&convolution,output,sizeof(output)));
-    configASSERT(!npu_convolution_send(&convolution,NPU_SERVICE_REAP,NULL,0,0,0,&ignored));
+    configASSERT(reply.result==NPU_SERVICE_OK && atomic_load(&check_publishes)==publications+1);
+    check_wait_job();check_request(NPU_SERVICE_REAP,NULL);
+    unsigned accesses=atomic_load(&check_accesses);
+    configASSERT(!npu_convolution_send(&convolution,NPU_SERVICE_CLOSE,NULL,0,0,0,&ignored));
+    configASSERT(atomic_load(&convolution.failed) && !convolution.pending);
+    configASSERT(!npu_convolution_send(&convolution,NPU_SERVICE_SUBMIT,input,192,5000000,0,&ignored));
     vTaskDelay(2);configASSERT(atomic_load(&check_accesses)==accesses);
-    platform_puts("PASS fixed convolution: exact artifact/relocations/bootstrap, native MMU/cache publication, copied inputs, matched DONE/output/REAP, varied input, mutation retained before publication\n");
+    platform_puts("PASS fixed convolution: exact artifact/relocations/bootstrap, native MMU/cache publication, copied inputs, matched DONE/output/REAP, varied input, mutation refused at CLOSE and retained\n");
     platform_exit(0);
 }
 static void check_bootstrap_run(void *unused)

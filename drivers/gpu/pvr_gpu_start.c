@@ -42,7 +42,7 @@ static int features(const unsigned char *image, const struct pvr_fw_plan *p,
         }
     }
     if (index != n[3] || found != 31 || !line || line > UINT16_MAX || (line & (line - 1))) return 0;
-    *options = (uint32_t)(bit(f, 32) | bit(f, 48) << 1 | bit(f, 65) << 2);
+    *options = (uint32_t)(bit(f, 32) | bit(f, 48) << 1);
     *slc = 0x200000u | (line < 1024 ? 1u : 0u) |
         (bit(info + 32, 11) && !bit(f, 16) ? 0x1000000u : 0u);
     return 1;
@@ -93,11 +93,13 @@ int pvr_gpu_start_init(struct pvr_gpu_start *s, const void *image, size_t bytes,
     }
     uint64_t mask = options & 1 ? UINT64_C(0xffeffffffffffc3d) : UINT64_C(0x00e7fffffffffc3d);
     const uint64_t reset[] = {mask, mask ^ UINT64_C(0x000001f8e0000000), UINT64_C(1) << 32};
+    /* Upstream also writes SOFT_RESET2 (0x108) when the firmware reports
+     * XE_TPU2. The vendor DDK's RGXStart never writes it for this core
+     * (rgxstartstop.c:775-829), and a stall there cannot be recovered, so
+     * the A733 sequence leaves it alone (docs/designs/gpu-firmware-start.md). */
     for (unsigned i = 0; i < 3; ++i) {
         add(&result, WRITE, 0x100, 8, reset[i]);
-        if (options & 4) add(&result, WRITE, 0x108, 8, i ? 0 : 0x1fffff);
         add(&result, READ_FENCE, 0x100, 8, 0);
-        if (options & 4) add(&result, READ_FENCE, 0x108, 8, 0);
     }
     add(&result, READ_SLC, 0x3800, 4, 0); add(&result, WRITE_SLC, 0x3800, 4, slc);
     for (unsigned i = 0; i < b->write_count; ++i)
@@ -143,7 +145,7 @@ enum pvr_gpu_start_result pvr_gpu_start_poll(struct pvr_gpu_start *s)
     case PUBLISH: ok = s->ops.publish(s->context); break;
     case CHECK_CLEAR:
     case WAIT_BOOT: {
-        /* Re-read the readiness byte for at most A733_GPU_SPIN_US before
+        /* Re-read the readiness word for at most A733_GPU_SPIN_US before
          * leaving the wait to the caller's next poll. */
         struct a733_gpu_spin wait = {0};
         for (;;) {

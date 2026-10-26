@@ -44,6 +44,8 @@ int a733_gpu_memory_sync_write(void *, uint32_t);
 int a733_gpu_memory_sync_read(void *, uint32_t *);
 /* Acquire firmware system-data power state; zero means ready for power-down. */
 int a733_gpu_memory_power_state(void *, uint32_t *);
+/* Acquire the firmware's executed kernel-command count (OS data +568). */
+int a733_gpu_memory_executed(void *, uint32_t *);
 
 /* Call only AFTER the complete healthy firmware/local-idle/reset/platform-OFF
  * sequence establishes orderly shutdown. Failed/uncertain DMA requires separate

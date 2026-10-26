@@ -16,10 +16,11 @@
 void kernel_main(void);
 void gpu_power_id_client(void *unused);
 
-/* One ON of the power-only sequence through the reset release, with the
- * CORE6 status poll kept only as an observation (docs/gpu-power.md, "The
- * probe-read probe makes the vendor's probe-time read, then the secure
- * configuration"). The accesses are the rows of probe_steps, in order:
+/* One complete ON of the default GPU power path, which must reach CORE6
+ * status 8 within 200 ms before any GPU-window access (docs/gpu-power.md,
+ * "The probe-read probe makes the vendor's probe-time read, then the secure
+ * configuration"; docs/designs/gpu-firmware-start.md). The accesses are the
+ * rows of probe_steps, in order:
  * - reads of drm_ctrl, irq_ctrl and the SMC0 word;
  * - the core identity as the vendor reads it at probe time
  *   (rgxbvnc.c:119): OSReadHWReg64 is two 32-bit reads, +0x24 then +0x20
@@ -40,8 +41,9 @@ void gpu_power_id_client(void *unused);
  * 10 ms window bound. A recovery inside the window, or an access that never
  * completes, would leave both words written until the power removal. The progress
  * record between the result header and the log holds the row in flight
- * and each completed value. There is no OFF: the run ends after the
- * restore, and the lifetime ends with a power removal. */
+ * and each completed value. After the restore the client powers the GPU
+ * off, ends its supply sample and parks the provider, as the power-only
+ * client does, so the lifetime can continue to the firmware start. */
 #define PROBE_ON_US 200000u
 /* The monitor returns to the ROM 2 s after its entry (start_counter). The
  * window must end at least 500 ms before that. The wrapper-read run on port
@@ -198,7 +200,7 @@ void gpu_power_id_client(void *unused)
     cycle = 1;
     before();
     /* The controller keeps the client deadline. The client's 200 ms bound
-     * ends the CORE6 status observation; the reserve covers the accesses. */
+     * ends the wait for CORE6 status 8; the reserve covers the accesses. */
     const uint64_t start = last_now, on_deadline = last_now + PROBE_ON_US;
     if (on_deadline + PROBE_RESERVE_US > bb_power.deadline) bb_power_fail("GPU probe read time budget");
     if (!a733_gpu_platform_begin(&gpu, bb_power.deadline)) gpu_fail("GPU ON begin");
@@ -216,12 +218,9 @@ void gpu_power_id_client(void *unused)
     bb_line_dec(&line, "waited_us", last_now - start);
     bb_line_end(&line); bb_power_print(&line);
     if (result < 0) gpu_fail("GPU ON poll");
-    /* The MISR read after the reset release precedes only the final status
-     * poll: the clocks are open and the reset released, as in the vendor's
-     * sunxi_platform_init before its probe-time read. */
-    if (result == 0 && (gpu.phase != A733_GPU_PLATFORM_STARTING || gpu.power.phase != A733_GPU_POWER_STARTING ||
-                        !(gpu.power.core_seen & (UINT32_C(8) << A733_GPU_NOTE_MISR_LATE))))
-        gpu_fail("GPU probe read refused before clock and reset progress");
+    /* No GPU-window access without CORE6 ON: the default path reaches it,
+     * and the identity reads have only ever completed after it. */
+    if (result != 1) gpu_fail("GPU ON deadline");
     static const struct a733_mapping_rule read_write = {A733_MAPPING_READ_WRITE, 1,
         {{A733_MAIR_DEVICE_NGNRNE, A733_SH_ANY}}, 1, 1};
     static const struct a733_mapping_rule read_only = {A733_MAPPING_READ, 1,
@@ -271,10 +270,25 @@ void gpu_power_id_client(void *unused)
     bb_line_dec(&line, "restored", restored); bb_line_dec(&line, "accesses", probe_done);
     bb_line_end(&line); bb_power_print(&line);
     before();
-    /* No OFF: CORE6 never acknowledged ON, and the lifetime ends here. */
     if (!complete) bb_power_fail("GPU probe read: identity or restore not as expected, GPU left powered");
+    /* The OFF, supply end and park of the power-only client. */
+    if (!a733_gpu_platform_off_begin(&gpu, bb_power.deadline)) gpu_fail("GPU OFF begin");
+    while ((result = a733_gpu_platform_off_poll(&gpu)) == 0) gpu_pause("GPU OFF deadline");
+    if (result != 1) gpu_fail("GPU OFF poll");
+    gates_report();
+    off_proof();
+    while ((result = a733_gpu_platform_supply_end(&gpu)) == 0) gpu_pause("GPU supply end deadline");
+    if (result != 1) gpu_fail("GPU supply end");
+    bb_power_park();
+    off_proof();
+    if (!atomic_load_explicit(&bb_power.parked, memory_order_acquire) ||
+        !a733_power_service_idle(&bb_power.domains)) bb_power_fail("GPU provider park proof");
+    for (unsigned i = 0; i < A733_PMIC_REQUESTS; ++i)
+        if (bb_power.pmic.slots[i].state || bb_power.pmic.slots[i].borrow.id)
+            bb_power_fail("GPU provider request retained");
+    before();
     platform_puts("COMPLETE GPU probe read: identity 36.56.104.183 before and after the secure configuration, "
-                  "restored, GPU left powered\n");
+                  "restored, OFF and provider parked\n");
     platform_exit(0);
 }
 

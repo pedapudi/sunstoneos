@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Build the GPU identity consumer, or with --power-only the power-only
 variant that never accesses the GPU register window, with --wrapper-read the
-wrapper-read variant or with --probe-read the probe-read variant, on the
-qualified returning PMIC platform. Every variant runs the default GPU power
+wrapper-read variant, with --probe-read the probe-read variant, with
+--fw-start the firmware-start variant, with --fw-stop the firmware-stop
+variant or with --fw-job the first-job variant, on the qualified returning
+PMIC platform. Every variant runs the default GPU power
 path (docs/designs/gpu-vendor-default.md), so the build compiles the current
 monitor, PMIC provider and supply consumer with the GPU units."""
 import argparse
@@ -118,7 +120,29 @@ LAYOUT_UNITS = [('apps/board-bundles-power/power.c', 'bb_power'),
 CHANGED_LAYOUTS = ('a733_gpu_power', 'a733_gpu_platform', 'a733_power_domains', 'a733_power_domain_row',
                    'a733_counter_clock', 'bb_power')
 PROBE_EXPECT = ('COMPLETE GPU probe read: identity 36.56.104.183 before and after the secure configuration, '
-                'restored, GPU left powered')
+                'restored, OFF and provider parked')
+FWS_EXPECT = ('COMPLETE GPU firmware start: started word 1 after the timer record and the secure configuration, '
+              'GPU left running for the power removal')
+# The firmware-start variant adds the firmware preparation and start units,
+# which no checkpoint object defines, and the pinned open firmware.
+FWS_UNITS = ['drivers/gpu/pvr_firmware.c', 'drivers/gpu/pvr_mips.c', 'drivers/gpu/pvr_fw_state.c',
+             'drivers/gpu/pvr_ccb.c', 'drivers/gpu/pvr_gpu_start.c', 'platform/a733/gpu_memory.c']
+# The firmware-stop variant also links the firmware control and stop.
+FWS_STOP_UNITS = ['drivers/gpu/pvr_gpu_control.c', 'drivers/gpu/pvr_gpu_stop.c']
+FWS_STOP_EXPECT = ('COMPLETE GPU firmware stop: started, health check executed, forced idle and power off '
+                   'acknowledged, idle, OFF and provider parked')
+# The first-job variant also links the compute job, its programs, context,
+# client CCB and workload VM.
+FWS_JOB_UNITS = ['drivers/gpu/pvr_compute_job.c', 'drivers/gpu/pvr_compute_programs.c',
+                 'drivers/gpu/pvr_compute_context.c', 'drivers/gpu/pvr_compute_package.c', 'drivers/gpu/pvr_cccb.c',
+                 'drivers/gpu/pvr_gpu_vm.c', 'platform/a733/gpu_vm_memory.c']
+FWS_JOB_EXPECT = ('COMPLETE GPU first job: 32 words as computed, context cleaned up, firmware stopped, OFF and '
+                  'provider parked')
+FWS_SESSION_JOBS = 8
+FWS_SESSION_EXPECT = ('COMPLETE GPU job session: 8 jobs as computed, context cleaned up, firmware stopped, OFF and '
+                      'provider parked')
+FIRMWARE = 'sources/gpu/imagination-firmware/powervr/rogue_36.56.104.183_v1.fw'
+FIRMWARE_SHA256 = '1db1c399c17401d1f79d46c880db81c724d748c784d4639433b076aba2f9c0d2'
 
 
 def main():
@@ -130,9 +154,22 @@ def main():
                         help='one ON, then four reads of GPU wrapper words; no other GPU register access')
     parser.add_argument('--probe-read', action='store_true',
                         help="one ON, the vendor's probe-time identity read, its secure configuration, the read again")
+    parser.add_argument('--fw-start', action='store_true',
+                        help='one ON, the timer record and secure configuration, then the firmware start')
+    parser.add_argument('--fw-stop', action='store_true',
+                        help='the firmware start, one health check, the firmware stop, OFF and provider park')
+    parser.add_argument('--fw-job', action='store_true',
+                        help='the firmware stop variant with the first compute job between the health check and the stop')
+    parser.add_argument('--fw-session', action='store_true',
+                        help='the first-job variant running eight timed jobs on one context '
+                             '(docs/designs/gpu-job-session.md)')
     args = parser.parse_args()
-    if args.power_only + args.wrapper_read + args.probe_read > 1:
+    if args.power_only + args.wrapper_read + args.probe_read + args.fw_start + args.fw_stop + args.fw_job + \
+            args.fw_session > 1:
         parser.error('choose one variant')
+    # The session variant is the first-job variant built with FWS_JOBS.
+    session = args.fw_session
+    args.fw_job = args.fw_job or session
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
     baseline = harness.CACHE / 'evidence/gpu-provider-ready-20261024/image-1'
@@ -177,8 +214,13 @@ def main():
         # The probe-read variant compiles probe-read.c the same way.
         if source == 'apps/gpu-power-id/main.c' and args.probe_read:
             source = 'apps/gpu-power-id/probe-read.c'
+        if source == 'apps/gpu-power-id/main.c' and (args.fw_start or args.fw_stop or args.fw_job):
+            source = 'apps/gpu-power-id/fw-start.c'
         unit_flags = monitor_flags if source == 'platform/a733/monitor.c' else flags
-        variant = ['-DGPU_POWER_ONLY=1'] if args.power_only and source == 'apps/gpu-power-id/main.c' else []
+        variant = ['-DGPU_POWER_ONLY=1'] if args.power_only and source == 'apps/gpu-power-id/main.c' else \
+            ['-DFWS_STOP=1'] if args.fw_stop and source == 'apps/gpu-power-id/fw-start.c' else \
+            ['-DFWS_STOP=1', '-DFWS_JOB=1'] + ([f'-DFWS_JOBS={FWS_SESSION_JOBS}'] if session else []) \
+            if args.fw_job and source == 'apps/gpu-power-id/fw-start.c' else []
         command = unit_flags + variant + ['-MD', '-MF', str(obj) + '.d', '-c', str(ROOT / source), '-o', str(obj)]
         subprocess.run(command, check=True, cwd=ROOT)
         commands.append(command)
@@ -202,6 +244,35 @@ def main():
             value = '-Wl,-Map,' + str(out / 'image.map')
         link.append(value.replace(oldroot, str(ROOT)))
     assert (len(reused), len(new)) == (23, 14), (len(reused), len(new))
+    added = []
+    if args.fw_start or args.fw_stop or args.fw_job:
+        firmware = harness.CACHE / FIRMWARE
+        assert sha(firmware) == FIRMWARE_SHA256
+        defined = set()
+        for item in old_objects:
+            with Path(item['object']).open('rb') as stream:
+                defined |= {s.name for s in ELFFile(stream).get_section_by_name('.symtab').iter_symbols()
+                            if s['st_shndx'] != 'SHN_UNDEF' and s['st_info']['bind'] == 'STB_GLOBAL'}
+        assembly = out / 'firmware.S'
+        assembly.write_text('.section .rodata.gpu_firmware,"a"\n.balign 16\n.global gpu_firmware\ngpu_firmware:\n'
+                            f'.incbin "{firmware}"\n.global gpu_firmware_end\ngpu_firmware_end:\n')
+        extra = FWS_STOP_UNITS if args.fw_stop or args.fw_job else []
+        extra = extra + (FWS_JOB_UNITS if args.fw_job else [])
+        for i, source in enumerate(FWS_UNITS + extra + [str(assembly)]):
+            obj = out / f'added-{i}.obj'
+            path = Path(source) if source.startswith('/') else ROOT / source
+            command = flags + ['-MD', '-MF', str(obj) + '.d', '-c', str(path), '-o', str(obj)]
+            subprocess.run(command, check=True, cwd=ROOT)
+            commands.append(command)
+            with obj.open('rb') as stream:
+                symbols = {s.name for s in ELFFile(stream).get_section_by_name('.symtab').iter_symbols()
+                           if s['st_shndx'] != 'SHN_UNDEF' and s['st_info']['bind'] == 'STB_GLOBAL'}
+            # Each added unit is new to the image: no checkpoint object defines its symbols.
+            assert symbols and not symbols & defined, (source, symbols & defined)
+            added.append({'source': 'firmware.S' if source.startswith('/') else source,
+                          'source_sha256': sha(path), 'object': str(obj), 'sha256': sha(obj)})
+        output_at = link.index('-o')
+        link[output_at:output_at] = [a['object'] for a in added] + ['-Wl,--defsym=__uncached_pool_size=2097152']
     # Audit every input object, not a guessed list of layout consumers. A
     # complete DWARF declaration of a changed structure identifies the eight
     # objects that use one; all must be replaced in this candidate.
@@ -244,16 +315,23 @@ def main():
               'base_build': {'path': str(baseline / 'build.json'), 'sha256': sha(baseline / 'build.json')},
               'monitor_evidence': base['monitor_evidence'],
               'monitor_evidence_sha256': base['monitor_evidence_sha256'],
-              'compile': commands, 'link': link, 'new_objects': new, 'reused_objects': reused,
+              'compile': commands, 'link': link, 'new_objects': new, 'added_objects': added,
+              'firmware': ({'path': str(harness.CACHE / FIRMWARE), 'sha256': FIRMWARE_SHA256}
+                           if args.fw_start or args.fw_stop or args.fw_job else None),
+              'reused_objects': reused,
               'layout_users_rebuilt': layout_users,
               'shared_layouts_equal': [n for n in names if n not in CHANGED_LAYOUTS],
               'layouts_rebuilt': list(CHANGED_LAYOUTS), 'types_consistent_across_units': consistent, 'image_sha256': sha(out / 'image.elf'),
               'binary_sha256': sha(out / 'probe.bin'), 'binary_bytes': (out / 'probe.bin').stat().st_size,
               'variant': ('power-only' if args.power_only else 'wrapper-read' if args.wrapper_read
-                          else 'probe-read' if args.probe_read else 'identity'),
+                          else 'probe-read' if args.probe_read else 'fw-start' if args.fw_start
+                          else 'fw-stop' if args.fw_stop else 'fw-session' if session
+                          else 'fw-job' if args.fw_job else 'identity'),
               'expect': ('COMPLETE GPU power only: CORE status 8, OFF and provider parked' if args.power_only
                          else 'COMPLETE GPU wrapper read: CORE status 8, four wrapper words, OFF and provider parked'
-                         if args.wrapper_read else PROBE_EXPECT if args.probe_read
+                         if args.wrapper_read else PROBE_EXPECT if args.probe_read else FWS_EXPECT if args.fw_start
+                         else FWS_STOP_EXPECT if args.fw_stop else FWS_SESSION_EXPECT if session
+                         else FWS_JOB_EXPECT if args.fw_job
                          else 'COMPLETE GPU power identity: 36.56.104.183 in two ON/OFF cycles, provider parked'),
               'local_authority_required': ('Exclusive GPU CCU, PLL_GPU0 (CCU 0x0e0) and PCK CORE6 policy/PWCR; TOP5 '
                                            'remains shared row; DCDC4 selector 0x15 to 0x2e (960 mV); at EL3, the '

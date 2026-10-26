@@ -41,7 +41,7 @@ own policy. Changing a mapping after initialization violates the platform's
 pinning contract; the next write to an affected page is refused. Four-byte
 queue accesses use a single aligned word load or store. Other shared reads use
 volatile byte loads. Full-system barriers order publication, completion, and
-acquisition. The callbacks cover queues, the firmware-started byte, compatibility
+acquisition. The callbacks cover queues, the 32-bit firmware-started word, compatibility
 records, and the power synchronization word.
 
 Offline queue formatting may write every queue region. After publication, writes

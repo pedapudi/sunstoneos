@@ -124,22 +124,46 @@ def main():
         pbe=bool(raw[122880+48+4]&1); xt=bool(raw[122880+48+8]&32)
         out=(Event*32)(); commands=(C.c_uint8*176)(); count=lib.reference(pbe,xt,out,commands)
         trace=json.loads((e/f'trace-{i}.json').read_text())
-        expected=[{k:getattr(v,k) for k in ['kind','offset','width','mask','value']} for v in out[:count]]
-        assert trace['plan'][:-1]==expected
-        assert trace['plan'][-1]==dict(kind=2,offset=0x100,width=8,mask=0,value=0)
+        upstream=[{k:getattr(v,k) for k in ['kind','offset','width','mask','value']} for v in out[:count]]
+        # The A733 register sequence is the vendor DDK's RGXStop for a MIPS core
+        # (docs/designs/gpu-firmware-stop.md): it first acknowledges a pending
+        # MIPS interrupt (kinds 2 and 3: read 0x8a8, clear 0x8b0), polls SLC_IDLE
+        # after the first Sidekick poll, clears only the thread-0 DM
+        # associations, and asserts no SOFT_RESET. Upstream's other operations
+        # stay, in its order.
+        thread1=[x for x in upstream if x['kind']==1 and x['offset'] in (0xb48,0xb38)]
+        reset=[x for x in upstream if x['offset']==0x100]
+        assert len(thread1)==2 and reset==[upstream[-1]] and reset[0]['kind']==1
+        kept=[x for x in upstream if x not in thread1 and x is not reset[0]]
+        assert kept[0]==dict(kind=0,offset=0x3c8,width=4,mask=0x78,value=0x78)
+        expected=[dict(kind=2,offset=0x8a8,width=4,mask=0,value=0),dict(kind=3,offset=0x8b0,width=4,mask=0,value=1),
+                  kept[0],dict(kind=0,offset=0x3898,width=4,mask=0xff,value=0xff)]+kept[1:]
+        assert trace['plan']==expected,(trace['plan'],expected)
+        # The traces record a pending interrupt, so the clear is made.
         assert len(trace['accesses'])==len(trace['plan'])
         for operation,access in zip(trace['plan'],trace['accesses']):
             assert access['offset']==operation['offset'] and access['width']==operation['width']
-            assert access['write']==int(operation['kind']==1)
-            if operation['kind']==1: assert access['value']==operation['value']
+            assert access['write']==int(operation['kind'] in (1,3))
+            if operation['kind'] in (1,3): assert access['value']==operation['value']
             elif operation['kind']==0: assert access['value']&operation['mask']==operation['value']
         assert bytes(commands)==(e/'commands.bin').read_bytes()
         results.append(dict(synthetic=bool(i),pbe2_in_xe=pbe,xt_top_infrastructure=xt,reference_operations=count,
             native_operations=len(trace['plan']),firmware_sha256=hashlib.sha256(raw).hexdigest()))
+    # The stop without the firmware's acknowledgements (trace 2, pinned
+    # firmware): the same vendor plan, then upstream's final soft reset with
+    # the mask of the firmware's pbe2_in_xe feature.
+    raw=firmware; pbe=bool(raw[122880+48+4]&1); xt=bool(raw[122880+48+8]&32)
+    out=(Event*32)(); commands=(C.c_uint8*176)(); count=lib.reference(pbe,xt,out,commands)
+    upstream=[{k:getattr(v,k) for k in ['kind','offset','width','mask','value']} for v in out[:count]]
+    reset=upstream[-1]; assert reset['offset']==0x100 and reset['kind']==1 and reset['width']==8
+    hard=json.loads((e/'trace-2.json').read_text())
+    first=json.loads((e/'trace-0.json').read_text())['plan']
+    assert hard['plan']==first+[reset],(hard['plan'][-1],reset)
+    results.append(dict(unacknowledged=True,reset_value=reset['value'],native_operations=len(hard['plan'])))
     (e/'comparison.json').write_text(json.dumps(dict(result='pass',sources=hashes,compiler_command=command,
         variants=results,command_comparison='Original functions assign defined fields; unused reference bytes zeroed in capture shim.',
-        native_extra='Reset readback and mandatory platform isolation callback',physical_access=False),indent=2)+'\n')
-    print('PASS shutdown commands and complete idle/reset plans match pinned functions for both feature profiles')
+        native_differences='Vendor RGXStop: interrupt acknowledgement, early SLC_IDLE poll, thread-0 DM associations only, no SOFT_RESET; mandatory platform isolation callback',physical_access=False),indent=2)+'\n')
+    print('PASS shutdown commands match the pinned functions and the idle plans match them with the vendor RGXStop differences, for both feature profiles; the unacknowledged plan adds upstream\'s final soft reset')
 
 
 if __name__=='__main__': main()

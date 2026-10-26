@@ -75,8 +75,10 @@ wait. A waiting stage returns PENDING; every wait has a counter deadline.
    table ([PLL table](npu-pll.md)); for an adopted PLL one read that must show
    it unchanged; for a PLL locked at the other profile, the vendor's rate
    change. The lock is released, and LOCK is read without it: at most 100
-   observations 3 µs apart until three in a row read locked, then 20 µs. The
-   worst case is about 320 µs, so the spin does not yield.
+   reads, each at least 3 µs after the previous one, until three in a row
+   read locked, then 20 µs (`include/a733_pll_lock.h`). Times are whole
+   microseconds, so each gap is 4 µs on the counter and the worst case is
+   about 420 µs; the spin does not yield.
 6. **Open.** Under a third acquisition, the step requires PLL_NPU locked with
    its gate controls set and opens its output gate. It then routes the shared
    SRAM to the NPU, clearing SYSCTRL `0x03000008` bit 1 with readback while

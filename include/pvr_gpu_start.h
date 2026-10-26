@@ -3,7 +3,7 @@
 #include "pvr_mips.h"
 #include "a733_gpu_spin.h"
 
-#define PVR_GPU_START_MAX_STEPS 35u
+#define PVR_GPU_START_MAX_STEPS 29u
 enum pvr_gpu_start_phase { PVR_GPU_START_NEW, PVR_GPU_START_PREPARED,
     PVR_GPU_START_RUNNING, PVR_GPU_START_BOOTED, PVR_GPU_START_FAILED };
 enum pvr_gpu_start_result { PVR_GPU_START_OK, PVR_GPU_START_AGAIN,
@@ -15,11 +15,13 @@ enum pvr_gpu_start_error { PVR_GPU_START_NO_ERROR, PVR_GPU_START_IO,
 /* All callbacks return 1 on success, 0 on failure; they must be bounded,
  * serialized and non-reentrant. A failed write may have taken effect.
  * now returns monotonic microseconds without wrap during this instance.
- * read/write perform exactly one ordered 32- or 64-bit device transaction.
+ * read/write perform one ordered 32- or 64-bit register access. A 64-bit
+ * access may be the vendor's two 32-bit transactions (OSWriteHWReg64 writes
+ * the low word first; OSReadHWReg64 reads the high word first).
  * Writes complete before returning, so minimum delays start after completion.
  * Readbacks fence preceding writes, including writes to other registers.
- * started acquires one firmware_started byte at system-init offset 352, after
- * making firmware writes visible, and returns that byte as a uint32_t.
+ * started acquires the 32-bit firmware_started word at system-init offset
+ * 352, after making firmware writes visible, as the vendor host polls it.
  * publish makes every firmware allocation and table visible to the device,
  * completing cache maintenance and barriers before returning. It must not
  * overwrite firmware data from a previous live instance.
@@ -59,7 +61,7 @@ enum pvr_gpu_start_result pvr_gpu_start_begin(struct pvr_gpu_start *, uint64_t d
  * reads. The clock may round down to whole microseconds. A delay step waits
  * on the clock inside the step until the clock passes the start sample by more
  * than 3, so at least 3 us elapse after the preceding operation completes. A
- * readiness check re-reads the shared byte for at most A733_GPU_SPIN_US and then
+ * readiness check re-reads the shared word for at most A733_GPU_SPIN_US and then
  * returns AGAIN. A wait whose clock stops advancing returns AGAIN without
  * advancing the step. Every wait ends at the deadline. Service until BOOTED or
  * FAILED.

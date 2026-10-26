@@ -54,7 +54,7 @@ static void reference(const struct pvr_compute_program_config *c,
         uint32_t buf[64]={0};
         struct pvr_pds_shared_storing_program p={.cc_enable=PVR_HAS_ENHANCEMENT(dev,35421),
           .doutw_control={.dest_store=PDS_UNIFIED_STORE,.num_const64=2,
-                         .doutw_data={state,state+48},.last_instruction=false}};
+                         .doutw_data={state<<32|state>>32,(state+48)<<32|(state+48)>>32},.last_instruction=false}};
         pvr_pds_setup_doutu(&p.usc_task.usc_task_control,
                             c->buffers[i%2].gpu-c->usc.base,usc[i%2]->temps,0,false);
         pvr_pds_generate_shared_storing_program(&p,buf,PDS_GENERATE_DATA_SEGMENT,dev);

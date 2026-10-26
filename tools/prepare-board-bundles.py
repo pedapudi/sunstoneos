@@ -197,13 +197,15 @@ SRAM_ROUTING = 0x03000008
 
 
 def returning_row(name, position, component, overlay, expect, controlled, expected, intro, admission=True, needs=None,
-                  passes=True, sources=(), base=None, after=(), failures=()):
+                  passes=True, sources=(), base=None, after=(), failures=(), approval=None):
     """passes: a status-0 run with the expect text is one of the bundle's outcomes, beside any controlled one.
     base: the row whose image this row links objects of, prepared in the same run and run first; after: further
     rows of the same run that must pass first. failures: the image's own failure lines, which the runbook lists
-    among the paths that end in a quarantine."""
+    among the paths that end in a quarantine. approval: the schema of the reviewed approval record that a row
+    changing a clock or voltage requires; the record names the row, the port and the image's SHA-256, and the
+    bundle carries it as approval.json."""
     return {'name': name, 'class': 'monitor', 'returning': True, 'position': position, 'component': component,
-            'base': base, 'after': list(after), 'failures': list(failures),
+            'base': base, 'after': list(after), 'failures': list(failures), 'approval': approval,
             'module': 'tools/prepare-board-bundles.py', 'function': 'prepare_returning',
             'runner': 'tools/check-a733-kernel.py', 'prerequisite': SUPERVISED_PREREQUISITE,
             'admission': {'schema': 'board-returning-bundle-v1', 'row': name} if admission else None,
@@ -217,6 +219,14 @@ def returning_row(name, position, component, overlay, expect, controlled, expect
 
 GPU_SOURCES = ['apps/gpu-power-id/prepare.py', 'apps/gpu-power-id/build.py', 'apps/gpu-power-id/check.py',
                'apps/gpu-power-id/main.c', 'apps/gpu-power-id/wrapper.c', 'apps/gpu-power-id/probe-read.c',
+               'apps/gpu-power-id/fw-start.c', 'drivers/gpu/pvr_firmware.c', 'drivers/gpu/pvr_mips.c',
+               'drivers/gpu/pvr_fw_state.c', 'drivers/gpu/pvr_ccb.c', 'drivers/gpu/pvr_gpu_start.c',
+               'platform/a733/gpu_memory.c', 'include/pvr_gpu_start.h', 'include/a733_gpu_memory.h',
+               'drivers/gpu/pvr_gpu_control.c', 'drivers/gpu/pvr_gpu_stop.c', 'include/pvr_gpu_control.h',
+               'include/pvr_gpu_stop.h', 'include/pvr_ccb.h', 'apps/gpu-power-id/fw-job.inc',
+               'drivers/gpu/pvr_compute_job.c', 'drivers/gpu/pvr_compute_programs.c', 'drivers/gpu/pvr_compute_context.c',
+               'drivers/gpu/pvr_compute_package.c', 'drivers/gpu/pvr_cccb.c', 'drivers/gpu/pvr_gpu_vm.c',
+               'platform/a733/gpu_vm_memory.c', 'include/pvr_cccb.h',
                'drivers/power/a733_pmic.c', 'drivers/power/a733_pmic_consumer.c',
                'platform/a733/monitor.c', 'include/a733_el3_security.h', 'include/a733_gpu_opp.h',
                'apps/gpu-provider-ready/main.c', 'apps/gpu-provider-ready/build.py',
@@ -226,7 +236,7 @@ GPU_SOURCES = ['apps/gpu-power-id/prepare.py', 'apps/gpu-power-id/build.py', 'ap
                'include/a733_gpu_power.h', 'checks/a733-gpu-core-owner.c', 'tools/prepare-board-bundles.py',
                'tools/check-a733-kernel.py', *HOST_TOOLS]
 GPU_PREREQUISITES = ('Admission (apps/gpu-power-id/README.md, "Physical admission is separate"): a cold DDR start '
-                     'of this lifetime; no GPU firmware or command has run since power was applied; the coordinator '
+                     'of this lifetime; {history}; the coordinator '
                      'grants the 18 MiB RAM interval [0x41000000, 0x42200000), the PMIC inputs (S_TWI0 gate and '
                      'reset, APBS route, PL0/PL1, settled supplies, no other PMU writer) and, for the power rows, '
                      'exclusive GPU-local authority over the GPU CCU words, PLL_GPU0 (CCU 0x0e0) and the CORE6 power '
@@ -259,14 +269,21 @@ GPU_FAILURES = ['`FAIL GPU ON begin`, `GPU ON deadline` or `GPU ON poll`, after 
                 'verification deadline`, `service park deadline`, `provider not quiescent at park`, `PMIC clock`)']
 
 
-def gpu_row(name, position, component, variant, expect, expected, intro, after=(), failures=(), admission=''):
+# What a GPU row's lifetime holds before it runs; the rows after a firmware
+# run in the same lifetime name those runs instead.
+GPU_FRESH = 'no GPU firmware or command has run since power was applied'
+
+
+def gpu_row(name, position, component, variant, expect, expected, intro, after=(), failures=(), admission='',
+            history=GPU_FRESH):
     """A returning GPU image of port 3-1, prepared by apps/gpu-power-id/prepare.py from its own build record.
-    admission: text added to the shared GPU admission, such as a row's own exception."""
+    admission: text added to the shared GPU admission, such as a row's own exception. history: what GPU firmware
+    has run earlier in the lifetime."""
     row = returning_row(name, position, component, [], expect, False, expected, intro, after=after,
                         failures=list(failures) + GPU_FAILURES)
     row.update(module='apps/gpu-power-id/prepare.py', function='prepare_bundle', variant=variant,
                admission={'schema': 'board-gpu-returning-bundle-v1', 'row': name}, sources=list(GPU_SOURCES),
-               admission_text=GPU_PREREQUISITES + (' ' + admission if admission else ''))
+               admission_text=GPU_PREREQUISITES.format(history=history) + (' ' + admission if admission else ''))
     return row
 
 
@@ -288,6 +305,85 @@ POWER_SOURCES = ['apps/board-bundles-power/power.c', 'apps/board-bundles-power/p
                  'drivers/gpu/a733_gpu_resources_native.c', 'include/a733_pmic.h', 'include/a733_pmic_native.h',
                  'arch/aarch64/device_memory.c', 'checks/board-bundles-apps-model.c']
 BASE_ROW = 'kernel-check-counter-option'
+# Bundle numbers that unmerged branches hold. The bundle check requires the
+# positioned rows and these numbers together to count 1, 2, 3, ... without a
+# gap, so a dropped row is still caught; a merge moves a number from here
+# into the table.
+RESERVED_POSITIONS = {}
+
+# The clock audit's dump (docs/clock-audit.md): every documented register of the CCU (manual 4.1.5 with the
+# offsets of the board kernel's ccu-sun60iw2.c), of the PRCM below the reader's 0x340 bound (manual 4.2.4 with
+# ccu-sun60iw2-r.c) and of the CPU PLL block below its 0x3034 bound (manual 5.1.5.5). The PRCM words at 0x360
+# and above, including the crypt key at 0x3e4, and CPU_SLOW_CLK_SEL at 0x3034 lie outside the reader's ungated
+# blocks and are not read. The RTC clock words follow the RTC bus gate and reset, as in bundles 3 and 14.
+CCU_OFFSETS = (
+    0x0, 0x20, 0x24, 0x28, 0x2c, 0x30, 0xa0, 0xa4, 0xa8, 0xac, 0xb0, 0xc0, 0xc4, 0xc8, 0xcc, 0xd0, 0xe0, 0xe4, 0xe8,
+    0xec, 0xf0, 0x120, 0x124, 0x128, 0x12c, 0x130, 0x140, 0x144, 0x148, 0x14c, 0x150, 0x160, 0x164, 0x168, 0x16c,
+    0x170, 0x220, 0x224, 0x228, 0x22c, 0x230, 0x240, 0x244, 0x248, 0x24c, 0x250, 0x260, 0x264, 0x268, 0x26c, 0x270,
+    0x280, 0x284, 0x288, 0x28c, 0x290, 0x2a0, 0x2a4, 0x2a8, 0x2ac, 0x2b0, 0x2e0, 0x2e4, 0x2e8, 0x2ec, 0x2f0, 0x500,
+    0x510, 0x518, 0x538, 0x540, 0x560, 0x568, 0x574, 0x580, 0x584, 0x588, 0x58c, 0x594, 0x59c, 0x5a4, 0x5b4, 0x5c0,
+    0x5e0, 0x5e4, 0x704, 0x70c, 0x724, 0x744, 0x784, 0x78c, 0x7a4, 0x7ac, 0x800, 0x804, 0x808, 0x80c, 0x810, 0x814,
+    0x818, 0x81c, 0x820, 0x824, 0x850, 0x880, 0xa00, 0xa04, 0xa20, 0xa24, 0xa40, 0xa44, 0xa60, 0xa64, 0xa6c, 0xa74,
+    0xa80, 0xa88, 0xa8c, 0xac0, 0xac4, 0xb00, 0xb04, 0xb20, 0xb24, 0xc00, 0xc0c, 0xc80, 0xc84, 0xc8c, 0xd00, 0xd0c,
+    0xd10, 0xd1c, 0xd20, 0xd2c, 0xd30, 0xd3c, 0xd80, 0xd84, 0xd8c, 0xd90, 0xe00, 0xe04, 0xe08, 0xe0c, 0xe10, 0xe14,
+    0xe18, 0xe80, 0xe84, 0xe88, 0xe8c, 0xe90, 0xe94, 0xe98, 0xe9c, 0xea0, 0xea4, 0xea8, 0xeac, 0xeb0, 0xf00, 0xf04,
+    0xf08, 0xf0c, 0xf10, 0xf14, 0xf18, 0xf1c, 0xf20, 0xf24, 0xf28, 0xf2c, 0xfc0, 0xfc4, 0xfe4, 0x1000, 0x1004,
+    0x1008, 0x100c, 0x1024, 0x1060, 0x1064, 0x1080, 0x1084, 0x1200, 0x120c, 0x1210, 0x121c, 0x1220, 0x1224, 0x122c,
+    0x1230, 0x123c, 0x1240, 0x124c, 0x1280, 0x1284, 0x128c, 0x12c0, 0x12cc, 0x1300, 0x1304, 0x1308, 0x130c, 0x1340,
+    0x1348, 0x1350, 0x1354, 0x135c, 0x1360, 0x1364, 0x1380, 0x1384, 0x138c, 0x13c0, 0x13c4, 0x1400, 0x1410, 0x141c,
+    0x1420, 0x142c, 0x1500, 0x1504, 0x1508, 0x150c, 0x1510, 0x1514, 0x1544, 0x154c, 0x1580, 0x1584, 0x1588, 0x158c,
+    0x15c0, 0x15c4, 0x1604, 0x160c, 0x1640, 0x164c, 0x1680, 0x1684, 0x168c, 0x1690, 0x1694, 0x16c4, 0x16cc, 0x16e4,
+    0x16ec, 0x1700, 0x1704, 0x1744, 0x1800, 0x1804, 0x1808, 0x1840, 0x1844, 0x1860, 0x1884, 0x1904, 0x1908, 0x190c,
+    0x1910, 0x1914, 0x1918, 0x191c, 0x1920, 0x1928, 0x1984, 0x1988, 0x198c, 0x1990, 0x1994, 0x1998, 0x199c, 0x19a0,
+    0x19a8, 0x1a00, 0x1b00, 0x1b04, 0x1b10, 0x1b14, 0x1b1c, 0x1b28, 0x1b30, 0x1b34, 0x1b38, 0x1c00, 0x1c04, 0x1f00,
+    0x1f10, 0x1f20, 0x1f24, 0x1f28, 0x1f30, 0x1f34, 0x1f38, 0x1f3c, 0x1f50)
+R_CCU_OFFSETS = (
+    0x0, 0xc, 0x10, 0x100, 0x104, 0x108, 0x10c, 0x11c, 0x12c, 0x130, 0x13c, 0x150, 0x15c, 0x17c, 0x18c, 0x19c, 0x1ac,
+    0x1b0, 0x1bc, 0x1c0, 0x1cc, 0x20c, 0x210, 0x21c, 0x22c, 0x250, 0x260, 0x290, 0x294, 0x320, 0x324, 0x328, 0x338,
+    0x33c)
+CPU_PLL_OFFSETS = (
+    0x0, 0x4, 0x8, 0xc, 0x10, 0x1000, 0x1004, 0x1008, 0x100c, 0x1010, 0x1014, 0x1018, 0x101c, 0x1020, 0x1024, 0x1028,
+    0x102c, 0x2000, 0x2004, 0x2008, 0x200c, 0x2010, 0x2014, 0x2018, 0x201c, 0x2020, 0x2024, 0x2028, 0x202c, 0x3000,
+    0x3004, 0x3008, 0x300c, 0x3010, 0x3014, 0x3018, 0x301c, 0x3020, 0x3024, 0x3028, 0x302c)
+RTC_CLOCK_OFFSETS = (0x000, 0x004, 0x060, 0x160, 0x16c)  # LOSC, auto switch, 32K fanout, DCXO, DCXO gating
+
+# The CPU operating-point steps of docs/designs/cpu-top-opp.md: one source,
+# apps/board-bundles-power/cpu-opp-step.c, built with -DOPP_BUNDLE=n.
+OPP_STEP_OVERLAY = POWER_OVERLAY + ['apps/board-bundles-power/cpu-opp-step.c.obj', 'drivers/clock/a733_cpu_clock.c.obj',
+                                    'drivers/thermal/a733_thermal.c.obj', 'drivers/thermal/a733_thermal_native.c.obj',
+                                    'drivers/adc/a733_adc_native.c.obj', 'platform/a733/cpu_pmu.c.obj']
+OPP_STEP_SOURCES = POWER_SOURCES + ['apps/board-bundles-power/cpu-opp-step.c', 'drivers/clock/a733_cpu_clock.c',
+                                    'include/a733_cpu_clock.h', 'drivers/thermal/a733_thermal.c',
+                                    'drivers/thermal/a733_thermal_native.c', 'drivers/adc/a733_adc_native.c',
+                                    'platform/a733/cpu_pmu.c', 'include/a733_cpu_pmu.h', 'checks/cpu-clock-model.c',
+                                    'checks/cpu-clock-check.py']
+OPP_APPROVAL = 'cpu-operating-point-approval-v1'
+
+
+def opp_row(name, position, component, text, lines, intro, after, entry=None, writes=True):
+    """One CPU operating-point step after bundle 20: admission, thermal stop and end checks as the source states.
+    entry names the admitted rails and CPU-B rate when they are not the boot values; a row without writes needs no
+    approval record."""
+    entry = entry or ('DCDC3 and DCDC5 at 800 mV, CPU-B at 1,014 MHz', 'dcdc5_uv=800000 dcdc3_uv=800000')
+    return returning_row(
+        name, position, component, OPP_STEP_OVERLAY, f'COMPLETE board bundle {position}: {text}', True,
+        f'Monitor status 0 with TEMP set=0 below 70000 at level 0; the SUPPLY line ({entry[1]} sid=0x496 bin=4 '
+        f'dcxo_hz=26000000); {lines}; the CPU-L, CPU-B and DSU after lines; a last '
+        f'TEMP line below 70000; and COMPLETE board bundle {position}: {text}; then a responsive ROM.',
+        intro + ' The image admits the step only at the NORMAL thermal level with every sensor below 70 C, on '
+        f'vf0400, with {entry[0]}, CPU-L and the DSU on their PLLs and every '
+        'pattern and LFM enable clear, and no planned voltage above the bin\'s top voltage for its rail (DCDC5 '
+        '1000 mV, DCDC3 1050 mV in vf0400), and otherwise returns REFUSED before any write. ' +
+        ('A sensor set follows each raise and at the end; a sensor at 70 C or more stops the step, which lowers what '
+         'it raised (DSU 598 MHz, clusters 1,014 MHz, DCDC3 800 mV if it raised DCDC3) and returns STOPPED.' if writes
+         else 'Sensor sets come at the start and the end; a sensor at 70 C or more at the end returns STOPPED.') +
+        ' Both are controlled outcomes. At the end it requires the planned rates and rails.' + (' Approved by the user on 2026-10-24 (CPU clock and voltage); '
+        'bundle/approval.json binds the values to port 3-3 and this image.' if writes else
+        ' It writes no clock or PMIC register.'),
+        sources=OPP_STEP_SOURCES, base=BASE_ROW, after=after, approval=OPP_APPROVAL if writes else None,
+        failures=['a `FAIL` line of the provider, the thermal driver, the PMIC requests or the CPU clock driver, '
+                  'after a `STEP` line naming the driver state; one after a park or a selector write leaves that '
+                  'domain or rail where the log last shows it, which only a power removal restores'])
 
 ROWS = [
     # The single-core bundles of docs/designs/board-bundles-next.md, in the
@@ -591,33 +687,33 @@ ROWS = [
                       'record and log, which name each read before it is issued, survive only on a return.'),
     gpu_row('gpu-probe-read', 17, "GPU core identity read as the vendor's probe makes it, then after its secure configuration",
             'probe-read', 'COMPLETE GPU probe read: identity 36.56.104.183 before and after the secure configuration, '
-            'restored, GPU left powered',
+            'restored, OFF and provider parked',
             'Status 0 with both GPU PROBE identity lines matches=1, GPU PROBE window serror_pending=0, GPU PROBE result '
             'restored=1 and COMPLETE GPU probe read: identity 36.56.104.183 before and after the secure configuration, '
-            'restored, GPU left powered; or status 1 with FAIL GPU probe read: identity or restore not as expected, GPU '
+            'restored, OFF and provider parked; or status 1 with FAIL GPU probe read: identity or restore not as expected, GPU '
             'left powered after those lines; or a fault line from a synchronous abort in the write window; or no '
             'return. A return is followed by a responsive ROM. Record every line of kernel.log and the progress record '
             'at result.bin offset 128, which holds the row in flight and every completed value.',
             'apps/gpu-power-id, probe-read variant (apps/gpu-power-id/probe-read.c): the power-only ON sequence of '
-            'the default GPU power path (DCDC4 960 mV, PLL_GPU0 at 1008 MHz, CORE6 policy 8 after the clocks); the '
-            'CORE6 status poll for 8 runs at most 200 ms as an observation only. Then snapshot 1, the controller and CORE6 lines, '
+            'the default GPU power path (DCDC4 960 mV, PLL_GPU0 at 1008 MHz, TOP5 and CORE6 in the vendor order), '
+            'which must reach CORE6 status 8 within 200 ms before any GPU-window access. Then snapshot 1, the controller and CORE6 lines, '
             'identity Device-nGnRnE mapping checks of the wrapper, SMC0 and GPU core pages, and these 32-bit accesses '
             'in order: reads of 0x01880014 (drm_ctrl), 0x01880010 (irq_ctrl) and 0x0a0000b0 (SMC0); the core identity '
             'as the vendor reads it at probe time, 0x01800024 and then 0x01800020; then, with D, A, I and F masked and '
             'restore vectors installed, 2 to 0x0a0000b0 and 0 to 0x01880014 (the vendor sunxi_secure_config, in its '
             'order), each read back, the identity again, and both words written back to their entry values, each read '
-            'back. It makes no OFF and no provider park: CORE6 and TOP5 stay ON and the GPU clocked until the power '
-            'removal that ends the lifetime. Before each access the image writes the row number into the progress '
+            'back. Then the OFF, the supply end and the provider park of the power-only image, so the lifetime can '
+            'continue. Before each access the image writes the row number into the progress '
             'record at result offset 128 and prints a GPU PROBE reading or writing line. docs/gpu-power.md, "The '
             'probe-read probe makes the vendor\'s probe-time read, then the secure configuration", maps each result '
-            'to its meaning. It is the last step of its lifetime, after the cold DDR start and the provider-readiness '
-            'row.',
+            'to its meaning. It runs after the cold DDR start and the provider-readiness row; '
+            'docs/designs/gpu-firmware-start.md places it before the firmware start.',
             after=['gpu-provider-ready'],
             failures=['`FAIL GPU probe read: identity or restore not as expected, GPU left powered`, after the GPU PROBE '
                       'identity, window and result lines: record them',
                       'a fault line after a `GPU PROBE reading` line of rows 10 or 11: a synchronous abort on the '
                       'second identity read; the restore vectors wrote both words back before the fault report',
-                      '`FAIL GPU probe read refused before clock and reset progress`, `GPU probe read mapping` or `GPU '
+                      '`FAIL GPU ON deadline` (CORE6 not at 8 within 200 ms), `GPU probe read mapping` or `GPU '
                       'probe read time budget`: no wrapper, SMC0 or core word was accessed',
                       '`FAIL GPU probe read vector table` after the GPU PROBE identity before line: VBAR_EL1 was not '
                       'the image\'s table, so nothing was written',
@@ -658,6 +754,349 @@ ROWS = [
               word(0x07003008, 's_tzma', note='S_TZMA +0x8: 0 after write 11'),
               word(0x020540e0, 'spc', note='SPC port 14 status word: 0xfffffbff after write 17')],
              'All six words are read and the 128 scratch bytes are restored and equal.'),
+    gpu_row('gpu-fw-start', 19, 'GPU firmware start after the vendor secure configuration and timer record',
+            'fw-start', 'COMPLETE GPU firmware start: started word 1 after the timer record and the secure '
+            'configuration, GPU left running for the power removal',
+            'Status 0 with GPU FWS start result=0 phase=3 error=0, GPU FWS shared started=0x1 and COMPLETE GPU '
+            'firmware start: started word 1 after the timer record and the secure configuration, GPU left running '
+            'for the power removal; or status 1 with GPU FWS start result=3 and FAIL GPU firmware start: started '
+            'word not 1, GPU left running after the shared-state and register lines; or no return. Either return '
+            'leaves the GPU powered with its firmware processor released; the lifetime ends there and a power '
+            'removal follows. Record every line of kernel.log and the progress record at result.bin offset 128, '
+            'which names the access in flight.',
+            'apps/gpu-power-id, firmware-start variant (apps/gpu-power-id/fw-start.c), step 2 of '
+            'docs/designs/gpu-firmware-start.md. Before any power change it prepares the pinned open firmware '
+            '(sha256 1db1c399...): code, data and the MIPS page table in write-back image RAM, the nineteen shared '
+            'resources in the image\'s Normal-NC block at 0x41c00000, system and OS init with the 1,008 MHz core '
+            'clock, the queues and the 29-step start plan. Then the power-only ON of the default GPU power path, '
+            'which must reach CORE6 status 8 within 200 ms, snapshot 1, mapping checks, and these 32-bit accesses '
+            'in order: the identity 0x01800024 and 0x01800020, which must be 36.56.104.183; drm_ctrl 0x01880014 '
+            'and SMC0 0x0a0000b0; RGX_CR_TIMER 0x01800164 and 0x01800160 for one timer-correlation record; 2 to '
+            'SMC0 0x0a0000b0 and 0 to drm_ctrl, each read back as an observation and never written back; then the '
+            'start of drivers/gpu/pvr_gpu_start.c without SOFT_RESET2, every 64-bit register as two 32-bit '
+            'accesses (low word written first, high word read first), and a wait of at most 1 s for the 32-bit '
+            'started word; then reads of SOFT_RESET and the MIPS wrapper registers. The start begins only while '
+            'its 1 s bound and a 100 ms report fit before the 1.5 s session deadline, which keeps 500 ms before '
+            'the monitor\'s 2 s recovery. Before each access the image writes the access number into the progress '
+            'record and prints a GPU FWS reading or writing line. It runs after the cold DDR start and the '
+            'provider-readiness row, in a lifetime of its own, and is the last step of that lifetime.',
+            after=['gpu-provider-ready'],
+            failures=['`FAIL GPU firmware start: started word not 1, GPU left running`, after the `GPU FWS start`, '
+                      '`shared`, `state` and `register` lines: error 2 is the 1 s deadline, 4 a started word already '
+                      'set before the start, 5 a word other than 0 or 1; the firmware processor stays released',
+                      '`FAIL GPU firmware start: identity not 36.56.104.183, nothing written, GPU left powered`',
+                      '`FAIL GPU firmware start preparation, nothing powered`, `GPU firmware start mapping` or '
+                      '`GPU firmware start time budget`: no GPU, wrapper or SMC0 word was accessed',
+                      'status 7 with `FAIL GPU firmware start refused: deadline too near, nothing written`'],
+            admission='GPU firmware exception: this row alone starts the GPU firmware processor. After the default '
+                      'ON it makes the vendor sunxi_secure_config writes (sunxi_platform.c:964-979), 2 to SMC0 '
+                      '0x0a0000b0 and 0 to drm_ctrl 0x01880014, and does not write them back, as the vendor never '
+                      'does; step 1 on port 3-1 (board-session-20261025-14) read SMC0 +0xb0 as 0 right after '
+                      'writing 2 and drm_ctrl as 0 after writing 0. It then writes the GPU registers of the vendor '
+                      'RGXStart for this core (rgxstartstop.c): SYS_BUS_SECURE 0xa100, SOFT_RESET 0x100, '
+                      'SLC_CTRL_MISC 0x3800, the eleven MIPS wrapper registers and AXI_ACE_LITE 0x38c0, never '
+                      'SOFT_RESET2, and releases the firmware processor, which then runs the pinned open firmware '
+                      'from the image\'s own memory: 139,264 bytes of write-back RAM at the image\'s fw_memory and the '
+                      'first 184,320 bytes of the Normal-NC block at 0x41c00000, inside the granted RAM interval. The '
+                      'firmware\'s MIPS page table maps only those pages. The image does not stop the firmware or '
+                      'power the GPU off, because the vendor does both only after the firmware\'s own power-off '
+                      'handshake, which this image does not carry: the GPU stays on at 960 mV and 1008 MHz with the '
+                      'firmware running until the power removal that ends the lifetime. Risk: a GPU register access '
+                      'that never completes stops the CPU, the monitor does not return and only a power removal '
+                      'recovers the board; the firmware may write its own pages after the image returns, which no '
+                      'later step of the lifetime reads.'),
+    returning_row('cpu-b-800mv-step', 20, 'CPU-B 1,014 -> 1,404 -> 1,014 MHz at 800 mV with cores 6 and 7 off',
+                  OPP_STEP_OVERLAY,
+                  'COMPLETE board bundle 20: CPU-B 1404 MHz and back to 1014 MHz at 800 mV, no PMIC write', True,
+                  'Monitor status 0 with two TEMP lines at level 0, the SUPPLY line (dcdc5_uv=800000 dcdc3_uv=800000 '
+                  'sid=0x496 bin=4 dcxo_hz=26000000), the CPU-L, DSU and CPU-B words before, CPU-B raised with '
+                  'pll=0xf8803600 mux=0x3000000 mhz=1404, CPU-B restored and CPU-B after with pll=0xf8802700 '
+                  'mux=0x3000000 mhz=1014, each STEP line with dcdc3_uv=800000, and COMPLETE board bundle 20, then a '
+                  'responsive ROM.',
+                  'The first CPU operating-point step of docs/designs/cpu-top-opp.md, on the image of bundle 15 '
+                  '(apps/board-bundles-power/cpu-opp-step.c). With cores 6 and 7 powered off, the client starts the '
+                  'thermal driver and the thermal policy, reads one full sensor set, inspects CPU-L, the DSU and '
+                  'CPU-B read-only through the CPU clock driver (DCDC5 and DCDC3 snapshots; PLL, mux, pattern and LFM '
+                  'words), and admits the step only at the NORMAL thermal level on speed bin vf0400 with DCDC3 and '
+                  'DCDC5 at 800 mV, CPU-B at 1,014 MHz and every pattern and LFM enable clear. The driver then raises '
+                  'CPU-B to 1,404 MHz and lowers it to 1,014 MHz. Each change parks the CPU-B mux on the 26 MHz '
+                  'oscillator for 20 us, writes N with the update bit, waits for update and for three lock reads 3 us '
+                  'apart, waits 20 us, selects the PLL and waits 20 us. Both points need 800 mV in vf0400, so no PMIC '
+                  'register is written; after each change the image requires DCDC3 to have kept 800 mV. A second inspection of '
+                  'the three domains must read every PLL and mux word and both rails as before, then a second sensor set '
+                  'follows, the thermal converter is disabled and the PMIC service parked. Approved by the user on 2026-10-24 (CPU clock and voltage); '
+                  'bundle/approval.json binds the values to port 3-3 and this image.',
+                  sources=OPP_STEP_SOURCES, base=BASE_ROW, approval=OPP_APPROVAL,
+                  failures=['a `FAIL` line of the provider, the thermal driver or the CPU clock driver, after a `STEP` '
+                            'line naming the driver state: `transition` after the park leaves CPU-B on the oscillator '
+                            'or the PLL, which only a power removal restores']),
+    opp_row('dcdc3-1050mv-step', 21, 'DCDC3 800 -> 1,050 -> 800 mV with CPU-B held at 1,014 MHz',
+            'DCDC3 1050 mV and back to 800 mV, CPU-B held at 1014 MHz',
+            'VOLT dcdc3_selector=0xb7 dcdc3_uv=1050000, a TEMP line below 70000 at level 0, then VOLT '
+            'dcdc3_selector=0x9e dcdc3_uv=800000; CPU-L, CPU-B and DSU after with the words they had before',
+            'Step 3 of docs/designs/cpu-top-opp.md, the first DCDC3 selector write. Under an exclusive CPU-B clock '
+            'lease, so CPU-B stays at 1,014 MHz, and an exclusive DCDC3 lease, the client reads DCDC3, writes '
+            'selector 0x37 (1,050 mV) through the PMIC provider, which requires the inherited 0x1e first, keeps bit '
+            '7 and reads the byte back, waits 1 ms and reads it again; after a sensor set it writes 0x1e (800 mV) the '
+            'same way. 1,014 MHz needs 800 mV, so both voltages cover it. No clock register is written.', ()),
+    opp_row('cpu-l-800mv-step', 22, 'CPU-L 494 -> 1,196 MHz and the DSU 494 -> 780 MHz at 800 mV',
+            'CPU-L 1196 MHz and the DSU 780 MHz at 800 mV',
+            'RATE cpu0_hz near 494000000, CPU-L set pll=0xf8802e00 mux=0x3000000 mhz=1196, RATE cpu0_hz near '
+            '1196000000, a TEMP line below 70000, DSU set pll=0xf8801e00 mux=0x3000105 mhz=780, every STEP line with '
+            'dcdc5_uv=800000 and dcdc3_uv=800000',
+            'Step 2 of docs/designs/cpu-top-opp.md: the first park of the cluster that runs the image, as boot0 parks '
+            'it. CPU0 measures its own rate with the cycle counter against CNTPCT over 1 ms before and after the '
+            'change and requires it within 1% of the configured rate. The DSU then goes to 780 MHz, under three '
+            'quarters of 1,196 MHz. Both points need 800 mV in vf0400, so no PMIC register is written. CPU-L and the '
+            'DSU stay at their new rates.', ('dcdc3-1050mv-step',)),
+    opp_row('cpu-b-top-step', 23, 'CPU-B to 2,002 MHz at 1,050 mV with the DSU at 910 MHz, then back',
+            'CPU-B 2002 MHz at 1050 mV with the DSU at 910 MHz, then CPU-B 1014 MHz at 800 mV',
+            'CPU-B set pll=0xf8804d00 mhz=2002 with STEP dcdc3_uv=1050000, a TEMP line below 70000, DSU set '
+            'pll=0xf8802300 mux=0x3000105 mhz=910, a TEMP line, DSU set pll=0xf8802e00 mux=0x3010105 mhz=598, CPU-B '
+            'set pll=0xf8802700 mhz=1014 with STEP dcdc3_uv=800000',
+            'Step 4 of docs/designs/cpu-top-opp.md, with cores 6 and 7 off: the driver raises DCDC3 to 1,050 mV, '
+            'waits 1 ms and relocks CPU-B at 2,002 MHz, the top point of vf0400; the DSU then goes to 910 MHz, the '
+            'rate at which the vendor holds the DSU while CPU-B runs at 1,488 MHz or more, which the driver\'s '
+            'three-quarters cap admits only after CPU-B is above 1,214 MHz. The DSU then goes to 598 MHz, the '
+            'fastest 800 mV DSU row at or below three quarters of 1,014 MHz whatever CPU-L\'s rate, and CPU-B back '
+            'to 1,014 MHz, after which the driver writes DCDC3 back to 800 mV. The DSU stays at 598 MHz.',
+            ('cpu-l-800mv-step',)),
+    opp_row('cpu-l-dsu-top-step', 24, 'CPU-L to 1,794 MHz at 1,000 mV, then the DSU to 1,274 MHz',
+            'CPU-L 1794 MHz at 1000 mV and the DSU 1274 MHz',
+            'RATE cpu0_hz near the entry rate, CPU-L set pll=0xf8804500 mux=0x3000000 mhz=1794 with STEP '
+            'dcdc5_uv=1000000, RATE cpu0_hz near 1794000000, a TEMP line below 70000, DSU set pll=0xf8803100 '
+            'mux=0x3000105 mhz=1274 with dcdc5_uv=1000000',
+            'Step 5 of docs/designs/cpu-top-opp.md: the driver raises DCDC5, which feeds CPU-L and the DSU, to '
+            '1,000 mV, waits 1 ms and relocks CPU-L at 1,794 MHz, measured by CPU0; the DSU then goes to 1,274 MHz '
+            'with no voltage write. CPU-L, the DSU and DCDC5 stay at the top points of vf0400, so this step ends its '
+            'lifetime.', ('cpu-b-top-step',)),
+    gpu_row('gpu-fw-stop', 25, 'GPU firmware start, one health-check command, firmware stop and OFF',
+            'fw-stop', 'COMPLETE GPU firmware stop: started, health check executed, forced idle and power off '
+            'acknowledged, idle, OFF and provider parked',
+            'Status 0 with GPU FWS start result=0, GPU FWS control result=0 phase=4 error=0 health=1 '
+            'health_status=0x0, GPU FWS stop result=0 phase=10, GPU FWS power ack_idle=0x1 ack_off=0x1 '
+            'state_idle=0x2 state_off=0x0 and COMPLETE GPU firmware stop: started, health check executed, '
+            'forced idle and power off acknowledged, idle, OFF and provider parked; or one of the controlled '
+            'failures listed below; or no return. Record every line of kernel.log and the progress record at '
+            'result.bin offset 128, which names the access in flight and its step.',
+            'apps/gpu-power-id, firmware-stop variant (apps/gpu-power-id/fw-start.c built with FWS_STOP), the '
+            'combined steps (a) and (b) of docs/designs/gpu-firmware-stop.md. It runs the firmware start of bundle '
+            '19, with the vendor 500 ms started-word bound. Then the firmware control: it waits for the firmware\'s '
+            'compatibility record, starts the kernel CCB and submits one health-check command (type 115 of the '
+            'open firmware), kicking MTS_SCHEDULE 0x01800b00 with 0 and reading it back, and waits for its return '
+            'slot; it reads the MIPS wrapper interrupt status 0x018008a8 and clears its event bit at 0x018008b0. '
+            'Then the stop: a forced-idle request and a forced power-off request, each acknowledged through the '
+            'power-sync word with the firmware power state FORCED_IDLE and then OFF; the vendor RGXStop register '
+            'sequence (interrupt acknowledgement, Sidekick and SLC idle polls, thread-0 DM association clears, BIF '
+            'and SLC status polls, no SOFT_RESET); then the platform OFF, the supply end and the provider park, so '
+            'the lifetime can continue. Every GPU-window access is a 32-bit access after its progress record. It '
+            'runs after the cold DDR start and the provider-readiness row, in a lifetime of its own.',
+            after=['gpu-provider-ready'],
+            failures=['`FAIL GPU firmware control: compatibility or health check not complete, GPU left running`, '
+                      'after the `GPU FWS control` and `compat` lines: error 4 an incompatible record, 3 the '
+                      '200 ms deadline, 7 a firmware event; the firmware stays running and a power removal follows',
+                      '`FAIL GPU firmware stop: not complete, GPU left powered`, after the `GPU FWS stop`, `power` '
+                      'and `after` lines: a power request not acknowledged within 300 ms, an acknowledgement with '
+                      'another power state, or a platform OFF fault; a power removal follows',
+                      '`FAIL GPU firmware stop: idle check not met after the power-off acknowledgement, GPU OFF and '
+                      'provider parked`: the vendor powers off in that case too; the GPU is off',
+                      '`FAIL GPU firmware start: started word not 1, GPU left running` or a start refusal, as in '
+                      'bundle 19'],
+            admission='GPU firmware exception: this row starts the GPU firmware as bundle 19 does, then sends it '
+                      'three kernel CCB commands, a health check and the forced-idle and power-off requests, each '
+                      'in the shared queues of the image\'s own Normal-NC block, kicked through MTS_SCHEDULE '
+                      '0x01800b00. It reads and clears the MIPS wrapper interrupt (0x018008a8, 0x018008b0), writes '
+                      'the thread-0 DM associations 0x01800b40 and 0x01800b30 to 0, polls the Sidekick, SLC, BIF '
+                      'and SLC status registers (0x018003c8, 0x01803898, 0x01801358, 0x01801350, 0x01801320, '
+                      '0x01801338, 0x01803870), and powers the GPU off through the default path only after the '
+                      'firmware acknowledged the power-off request. No GPU job, context or memory outside the '
+                      'firmware\'s own mappings is created. Risk: a register access that never completes stops the '
+                      'CPU and only a power removal recovers the board; a failure before the power-off '
+                      'acknowledgement leaves the firmware running until the power removal.'),
+    gpu_row('gpu-fw-stop-again', 26, 'The GPU firmware stop image again in the same lifetime, with no power removal',
+            'fw-stop', 'COMPLETE GPU firmware stop: started, health check executed, forced idle and power off '
+            'acknowledged, idle, OFF and provider parked',
+            'Status 0 with GPU FWS start result=0, GPU FWS control result=0 phase=4 error=0 health=1 '
+            'health_status=0x0, GPU FWS stop result=0 phase=10, GPU FWS power ack_idle=0x1 ack_off=0x1 '
+            'state_idle=0x2 state_off=0x0 and COMPLETE GPU firmware stop: started, health check executed, '
+            'forced idle and power off acknowledged, idle, OFF and provider parked; or one of the controlled '
+            'failures listed below; or no return. Record every line of kernel.log and the progress record at '
+            'result.bin offset 128, which names the access in flight and its step.',
+            'Step (c) of docs/designs/gpu-firmware-stop.md: the image of bundle 25, the same build, run a second time '
+            'in the lifetime right after bundle 25 passed, with no power removal between them, so that its start '
+            'begins from the stopped firmware, the GPU OFF and DCDC4 already at 960 mV. A pass shows that the stop '
+            'leaves a state from which the firmware starts again. As in bundle 25:'
+            ' apps/gpu-power-id, firmware-stop variant (apps/gpu-power-id/fw-start.c built with FWS_STOP), the '
+            'combined steps (a) and (b) of docs/designs/gpu-firmware-stop.md. It runs the firmware start of bundle '
+            '19, with the vendor 500 ms started-word bound. Then the firmware control: it waits for the firmware\'s '
+            'compatibility record, starts the kernel CCB and submits one health-check command (type 115 of the '
+            'open firmware), kicking MTS_SCHEDULE 0x01800b00 with 0 and reading it back, and waits for its return '
+            'slot; it reads the MIPS wrapper interrupt status 0x018008a8 and clears its event bit at 0x018008b0. '
+            'Then the stop: a forced-idle request and a forced power-off request, each acknowledged through the '
+            'power-sync word with the firmware power state FORCED_IDLE and then OFF; the vendor RGXStop register '
+            'sequence (interrupt acknowledgement, Sidekick and SLC idle polls, thread-0 DM association clears, BIF '
+            'and SLC status polls, no SOFT_RESET); then the platform OFF, the supply end and the provider park, so '
+            'the lifetime can continue. Every GPU-window access is a 32-bit access after its progress record. It '
+            'runs after the cold DDR start and the provider-readiness row, in a lifetime of its own.',
+            after=['gpu-provider-ready', 'gpu-fw-stop'],
+            history=('one complete GPU firmware cycle has run in this lifetime, bundle 25: firmware start, one '
+                     'health check, the forced-idle and power-off requests, the stop and the OFF, with the GPU OFF '
+                     'and the provider parked at its end'),
+            failures=['`FAIL GPU firmware control: compatibility or health check not complete, GPU left running`, '
+                      'after the `GPU FWS control` and `compat` lines: error 4 an incompatible record, 3 the '
+                      '200 ms deadline, 7 a firmware event; the firmware stays running and a power removal follows',
+                      '`FAIL GPU firmware stop: not complete, GPU left powered`, after the `GPU FWS stop`, `power` '
+                      'and `after` lines: a power request not acknowledged within 300 ms, an acknowledgement with '
+                      'another power state, or a platform OFF fault; a power removal follows',
+                      '`FAIL GPU firmware stop: idle check not met after the power-off acknowledgement, GPU OFF and '
+                      'provider parked`: the vendor powers off in that case too; the GPU is off',
+                      '`FAIL GPU firmware start: started word not 1, GPU left running` or a start refusal, as in '
+                      'bundle 19'],
+            admission='GPU firmware exception: this row starts the GPU firmware as bundle 19 does, then sends it '
+                      'three kernel CCB commands, a health check and the forced-idle and power-off requests, each '
+                      'in the shared queues of the image\'s own Normal-NC block, kicked through MTS_SCHEDULE '
+                      '0x01800b00. It reads and clears the MIPS wrapper interrupt (0x018008a8, 0x018008b0), writes '
+                      'the thread-0 DM associations 0x01800b40 and 0x01800b30 to 0, polls the Sidekick, SLC, BIF '
+                      'and SLC status registers (0x018003c8, 0x01803898, 0x01801358, 0x01801350, 0x01801320, '
+                      '0x01801338, 0x01803870), and powers the GPU off through the default path only after the '
+                      'firmware acknowledged the power-off request. No GPU job, context or memory outside the '
+                      'firmware\'s own mappings is created. Risk: a register access that never completes stops the '
+                      'CPU and only a power removal recovers the board; a failure before the power-off '
+                      'acknowledgement leaves the firmware running until the power removal.'),
+    read_row('clock-audit-words', 27, 'Every CCU, PRCM and CPU PLL clock register, the speed bin and the RTC clock words',
+             'The clock state of the board, read only, for the rate audit of docs/clock-audit.md: each PLL, bus, '
+             'module clock and gate word that the CCU, the PRCM and the CPU PLL block document, the SID speed-bin '
+             'word, and the RTC oscillator words behind their bus gate',
+             [word(0x0300624c, 'sid', note='SID speed-bin word')] +
+             [word(CCU + o, 'ccu', note=f'CCU +0x{o:x}') for o in CCU_OFFSETS] +
+             [word(0x07010000 + o, 'r_ccu', note=f'PRCM +0x{o:x}') for o in R_CCU_OFFSETS] +
+             [word(0x08870000 + o, 'cpu_pll', note=f'CPU PLL +0x{o:x}') for o in CPU_PLL_OFFSETS] +
+             [word(0x07090000 + o, condition=R_CCU_RTC, note=f'RTC +0x{o:x}') for o in RTC_CLOCK_OFFSETS],
+             'Every word is read, the RTC words only after the R_CCU RTC gate reads open and its reset released, '
+             'and the 128 scratch bytes are restored and equal.'),
+    gpu_row('gpu-first-job', 28, 'The first GPU job: the fixed 32-lane compute job, then the firmware stop and OFF',
+            'fw-job', 'COMPLETE GPU first job: 32 words as computed, context cleaned up, firmware stopped, OFF and '
+            'provider parked',
+            'Status 0 with GPU FWJ job complete=1 outcome=1 timeline=0x1, GPU FWJ events control=4 control_error=0 '
+            'n=0, GPU FWJ hwr mmu_status=0x0 count=0, GPU FWJ output w0=0x2e5ca990 w1=0xd09b3063 w31=0x4775f521 '
+            'guard=0x6d35a7c1 (expected0 and expected31 equal), GPU FWJ cleanup status=0x1, GPU FWS stop result=0 '
+            'phase=10 and COMPLETE GPU first job: 32 words as computed, context cleaned up, firmware stopped, OFF and '
+            'provider parked; or one of the controlled failures below; or no return. Record every line of kernel.log '
+            'and the progress record at result.bin offset 128.',
+            'apps/gpu-power-id, first-job variant (apps/gpu-power-id/fw-start.c built with FWS_STOP and FWS_JOB, with '
+            'apps/gpu-power-id/fw-job.inc), docs/designs/gpu-first-job.md. The firmware lifecycle image of bundle 25 '
+            'with the fixed numerical compute job between the health check and the stop, corrected after set 27 '
+            '(docs/designs/gpu-first-job.md, "Set 27 post-mortem"): the job\'s PDS pointer constants are stored low '
+            'word first, an MMUCACHE command precedes the KICK, no page is mapped GPU read-only, every firmware event '
+            '101-108 is recorded without failing the control, and a stop the firmware does not acknowledge runs '
+            'upstream\'s hard reset (the idle checks, the full soft reset, then the OFF). Before any power change it '
+            'builds, in its own memory, the workload GPU VM (88 write-back pages, the output page bypassing the GPU '
+            'system-level cache), the context programs, the compute context and the job (seed 0x12345678, factor '
+            '0x9e3779b1), and maps the six firmware objects for the firmware at 0xc0800000 + n * 0x10000 in its '
+            'Normal-NC block. After the health check it publishes the workload pages and tables, sends MMUCACHE and '
+            'waits for its execution, formats the client CCB, writes a CDM command and a timeline UPDATE, kicks, '
+            'waits at most 150 ms for the timeline word, checks all 32 words and both guards, sends the context '
+            'cleanup, and then stops the firmware and powers the GPU off whatever the job\'s result. It runs first '
+            'in a new lifetime, after the provider-readiness checkpoint.',
+            after=['gpu-provider-ready'],
+            failures=['`FAIL GPU first job: not complete, GPU OFF and provider parked`, after the `GPU FWJ job`, '
+                      '`events`, `hwr`, `ring` and `output` lines: outcome 2 the timeline did not reach 1 within '
+                      '150 ms, 3 an output word or guard differs, 4 a transport fault, 5 a firmware event (a `GPU FWJ '
+                      'reset` line gives the reason, data master, page-fault flag and fault address); the firmware '
+                      'acknowledged the stop, and the GPU is off',
+                      '`FAIL GPU firmware stop: not acknowledged, idle checks met, GPU OFF and provider parked`: the '
+                      'control failed or the firmware acknowledged neither power request; the stop ran upstream\'s '
+                      'hard reset (`GPU FWS stop ... unacknowledged=1`) and the GPU is off',
+                      '`FAIL GPU firmware stop: not acknowledged and the GPU not idle, GPU left powered`: an idle '
+                      'check never matched; a power removal follows',
+                      '`FAIL GPU first job: 32 words as computed, context cleanup not confirmed, GPU OFF and provider '
+                      'parked`: the cleanup command returned no word of 1',
+                      'every failure line of bundle 25'],
+            admission='GPU job exception: this row runs one GPU compute job. Its data and programs are 88 write-back '
+                      'pages of the image\'s own RAM, mapped only in the job\'s GPU VM, whose tables are also image '
+                      'RAM; the firmware reaches only its own mappings plus the six job objects in the image\'s '
+                      'Normal-NC block. The GPU reads the programs, control stream and input and writes only the '
+                      '256-byte output page; no other memory is mapped for the GPU. It sends MMUCACHE, the KICK and '
+                      'the context cleanup through the kernel CCB, besides bundle 25\'s commands. On set 27 the USC '
+                      'program ran and faulted on its first load because its input pointer\'s halves were exchanged; '
+                      'the GPU MMU refused the access and the firmware reset the context. Risk: as bundle 25; a GPU '
+                      'that never reports idle after a failed job stays on until a power removal.'),
+    gpu_row('gpu-job-session', 29, 'Eight timed GPU compute jobs on one context in one firmware session, then the '
+            'firmware stop and OFF',
+            'fw-session', 'COMPLETE GPU job session: 8 jobs as computed, context cleaned up, firmware stopped, OFF and '
+            'provider parked',
+            'Status 0 with GPU FWJ job complete=1 outcome=1 timeline=0x8 jobs=8, eight GPU FWJ run lines n=1 to 8 '
+            'with write=0xb8 0x170 0x228 0x2e0 0x398 0xb8 0x170 0x228, GPU FWJ ring cccb_read=0x228 '
+            'cccb_write=0x228, GPU FWJ output w0=0x2e5ca990 w1=0xd09b3063 w31=0x4775f521 guard=0x6d35a7c1, GPU FWJ '
+            'cleanup status=0x1 kccb_done=0xb, GPU FWS stop result=0 phase=10 and COMPLETE GPU job session: 8 jobs '
+            'as computed, context cleaned up, firmware stopped, OFF and provider parked; or one of the controlled '
+            'failures below; or no return. Record every line of kernel.log and the progress record at result.bin '
+            'offset 128.',
+            'apps/gpu-power-id, session variant (apps/gpu-power-id/fw-start.c built with FWS_STOP, FWS_JOB and '
+            'FWS_JOBS=8), docs/designs/gpu-job-session.md. The first-job image of bundle 28 (qualified on port 3-1 '
+            'in set board-bundles-20261025-29), with seven more jobs on the same context by pvr_compute_job_repeat: '
+            'each job refills and cleans the output, writes the CDM command and a timeline UPDATE to its number, '
+            'and kicks; the client CCB wraps before job 6 with a padding command. Each job is timed in 24 MHz '
+            'counter ticks from the MTS_SCHEDULE write of its KICK to the first read of its timeline value, by a '
+            'spin that touches no register, and the image logs the ticks of its preparation, publication, '
+            'MMUCACHE, jobs, cleanup and park. The GPU stays at 1,008 MHz with DCDC4 at 960 mV, the vendor top '
+            'operating point. It runs first in a new lifetime, after the provider-readiness checkpoint.',
+            after=['gpu-provider-ready'],
+            failures=['`FAIL GPU job session: not complete, GPU OFF and provider parked`, after the `GPU FWJ job` '
+                      'line with `jobs=` the completed jobs: outcome 2 a kicked job\'s timeline did not arrive '
+                      'within 150 ms (its run line shows ticks=0; no cleanup), 3 an output word or guard differs, 4 a '
+                      'transport fault or a job never kicked, 5 a firmware event (a `GPU FWJ reset` line gives the '
+                      'reason, data master, page-fault flag and fault address), 6 too little of the wait left for '
+                      'another job; the firmware acknowledged the stop, and the GPU is off',
+                      '`FAIL GPU firmware stop: not acknowledged, idle checks met, GPU OFF and provider parked`: the '
+                      'control failed or the firmware acknowledged neither power request; the stop ran upstream\'s '
+                      'hard reset and the GPU is off',
+                      '`FAIL GPU firmware stop: not acknowledged and the GPU not idle, GPU left powered`: an idle '
+                      'check never matched; a power removal follows',
+                      '`FAIL GPU job session: 8 jobs as computed, context cleanup not confirmed, GPU OFF and provider '
+                      'parked`: the cleanup command returned no word of 1',
+                      'every failure line of bundle 25'],
+            admission='GPU job exception: this row runs eight GPU compute jobs on one context, the job of bundle 28 '
+                      'repeated. Its data and programs are 88 write-back pages of the image\'s own RAM, mapped only in '
+                      'the job\'s GPU VM, whose tables are also image RAM; the firmware reaches only its own mappings '
+                      'plus the six job objects in the image\'s Normal-NC block. The GPU reads the programs, control '
+                      'stream and input and writes only the 256-byte output page. It sends MMUCACHE, eight KICKs and '
+                      'the context cleanup through the kernel CCB, besides bundle 25\'s commands. The client CCB '
+                      'wraps for the first time on the board. Risk: as bundle 28; a GPU that never reports idle after '
+                      'a failed job stays on until a power removal.'),
+    opp_row('cpu-top-hold-step', 30, 'CPU-L 1,794 and the DSU 1,274 MHz with DCDC5 1,000 mV, then DCDC3 1,050 mV '
+            'with CPU-B at 1,014 MHz, for the ROM return',
+            'CPU-L 1794 MHz and DCDC5 1000 mV, the DSU 1274 MHz, DCDC3 1050 mV with CPU-B at 1014 MHz',
+            'CPU-L set pll=0xf8804500 mux=0x3000000 mhz=1794 with STEP dcdc5_uv=1000000, a TEMP line below 70000, '
+            'DSU set pll=0xf8803100 mux=0x3000105 mhz=1274, VOLT dcdc3_selector=0xb7 dcdc3_uv=1050000, a TEMP line',
+            'Step 6 of docs/designs/cpu-top-opp.md, first image: with cores 6 and 7 off, the driver raises DCDC5 to '
+            '1,000 mV and CPU-L to 1,794 MHz, then the DSU to 1,274 MHz; the image then raises DCDC3 to 1,050 mV '
+            'with CPU-B held at 1,014 MHz, as step 3 did. The ROM return that follows resets CPU-L and the DSU and '
+            'keeps the rails, which bundle 31 reads back; it does not reset CPU-B, which this image never changes. '
+            'The workload relocks all three itself and lowers CPU-B to 1,014 MHz again before its return. Steps 1 '
+            'to 5 passed on port 3-3 in earlier lifetimes. Set step6-set-5 ran this image as bundle 25, before the GPU '
+            'and clock-audit rows took 25 to 29.', ()),
+    opp_row('cpu-rails-held-read', 31, 'DCDC5 1,000 mV and DCDC3 1,050 mV after the ROM return, read only',
+            'DCDC5 1000 mV and DCDC3 1050 mV kept across the ROM return, read only',
+            'CPU-L before pll=0xf8802600 mux=0x3010000 mhz=494, CPU-B before pll=0xf8802700 mux=0x3000000 mhz=1014 '
+            'and DSU before pll=0xf8802600 mux=0x3010105 mhz=494, which the image requires',
+            'Step 6 of docs/designs/cpu-top-opp.md, the gate before the workload: after bundle 30 and one ROM return, '
+            'the rails must still read DCDC5 1,000 mV and DCDC3 1,050 mV, the voltages that the workload\'s relock '
+            'to the top points needs, and the three domains their boot PLL and mux words; a REFUSED line for the '
+            'CPU supplies or the boot clock words ends the lifetime before the workload.',
+            ('cpu-top-hold-step',), entry=('DCDC5 at 1,000 mV and DCDC3 at 1,050 mV, CPU-B at 1,014 MHz',
+                                           'dcdc5_uv=1000000 dcdc3_uv=1050000'), writes=False),
+    opp_row('cpu-after-workload-read', 32, 'Temperatures, rails and boot clock words after the top-point workload, '
+            'read only',
+            'temperatures, rails and boot clock words after the top-point workload, read only',
+            'CPU-L before pll=0xf8802600 mux=0x3010000 mhz=494, CPU-B before pll=0xf8802700 mux=0x3000000 mhz=1014 '
+            'and DSU before pll=0xf8802600 mux=0x3010105 mhz=494, which the image requires',
+            'Step 6 of docs/designs/cpu-top-opp.md, after a completed workload: the workload lowered CPU-B to '
+            '1,014 MHz before its return and the ROM return reset CPU-L and the DSU, so the three domains must read '
+            'their boot words, with DCDC5 at 1,000 mV and DCDC3 at 1,050 mV; two temperature sets. A REFUSED line '
+            'for the boot clock words or the CPU-B rate means CPU-B is still raised: remove power at once.',
+            ('cpu-rails-held-read',), entry=('DCDC5 at 1,000 mV and DCDC3 at 1,050 mV, CPU-B at 1,014 MHz',
+                                             'dcdc5_uv=1000000 dcdc3_uv=1050000'), writes=False),
     # `admission` maps fields of the value prepare() returns to the values that
     # identify this row's build. None refuses the row: no owning package has
     # named those values yet.
@@ -928,11 +1367,22 @@ def validate_read(row, output):
             'reader_sha256': sha256(output / 'board-read.py'), 'words_sha256': sha256(output / 'WORDS.json')}
 
 
-def prepare_returning(row, build, output):
-    """A returning bundle from the image builder's build.json: image, binary, runner closure, equivalence and
-    controlled outcomes."""
+def prepare_returning(row, build, output, approval=None):
+    """A returning bundle from the image builder's build.json: image, binary, runner closure, equivalence,
+    controlled outcomes and, for a row that changes a clock or voltage, the approval record."""
     record = json.loads(Path(build).read_text())
+    require((approval is None) == (row.get('approval') is None),
+            'An approval record is required exactly for a row that names an approval schema.')
+    if approval is not None:
+        value = json.loads(Path(approval).read_text())
+        require(value.get('schema') == row['approval'] and value.get('row') == row['name']
+                and value.get('image_sha256') == record['elf_sha256'] and value.get('port') in ('3-1', '3-3')
+                and isinstance(value.get('approval'), dict) and value['approval'].get('text')
+                and value['approval'].get('date'),
+                'The approval record does not name this row, its image, a port and the user\'s approval.')
     output.mkdir()
+    if approval is not None:
+        shutil.copyfile(approval, output / 'approval.json')
     shutil.copyfile(record['elf'], output / 'image.elf')
     shutil.copyfile(record['bin'], output / 'probe.bin')
     tools = dict(record['host_tools'])
@@ -1003,6 +1453,12 @@ def gates(row):
                     if name != row.get('base')]
 
 
+def external_gates(entry, lifetime):
+    """The external entries of the order that must have completed before a row's order entry: (stem, name, run)."""
+    externals = {e['stem']: e for e in (lifetime or {}).get('order', []) if 'external' in e}
+    return [(stem, externals[stem]['external'], externals[stem]['run']) for stem in (entry or {}).get('after_external', [])]
+
+
 def stops(entry):
     """The controlled outcomes of earlier rows that stop an order entry, as text."""
     return [f'`{name}` ended in `{outcome}`' for name, outcomes in (entry or {}).get('stop_if', {}).items()
@@ -1028,7 +1484,7 @@ def runbook(row, bundle, value, artifacts, prerequisites, timeout, lifetime=None
     else:
         lines += [row['intro'], '']
     required, stopped = gates(row), stops(entry)
-    if required or stopped:
+    if required or stopped or external_gates(entry, lifetime):
         lines += ['## Run only after', '']
         passed = (lifetime or {}).get('passed', {})
         lines += [(f'- `{name}` passed earlier in this lifetime, from an earlier set, as `$S/{passed[name]}`: '
@@ -1037,6 +1493,9 @@ def runbook(row, bundle, value, artifacts, prerequisites, timeout, lifetime=None
                    f'- `{name}` of this set passed in this lifetime ({reason}): status 0 with its success text. A '
                    'controlled outcome of that row is not a pass.') for name, reason in required]
         lines += [f'- Do not run it when {text}.' for text in stopped]
+        lines += [f'- `{name}` (external entry `{stem}`) completed in this lifetime: `$S/{run}/session.json` has '
+                  '`complete`, `rom_usable` and `dram_restored` true. Any other outcome of it ends the lifetime with '
+                  'a power removal instead of this bundle.' for stem, name, run in external_gates(entry, lifetime)]
         lines += ['', 'The operator applies these gates; the runner does not check them.', '']
     lines += ['## Bundle', '', '| File | SHA-256 |', '| --- | --- |']
     lines += [f'| `{Path(a["path"]).relative_to(bundle)}` | `{a["sha256"]}` |' for a in artifacts]
@@ -1181,6 +1640,7 @@ def set_runbook(run_dir, lifetime, rows, table):
             after = entry.get('after', [])
         passed = lifetime.get('passed', {})
         gate = [f'`{a}` passed' + (f' (`{passed[a]}`, already in the chain)' if a in passed else '') for a in after]
+        gate += [f'`{stem}` completed with DRAM restored' for stem, _, _ in external_gates(entry, lifetime)]
         gate += [f'not if {text}' for text in stops(entry)]
         lines.append(f'| {i} | {what} | `$S/{entry["stem"]}-*`; link `{entry["run"]}` | '
                      + ('; '.join(gate) or 'none') + ' |')
@@ -1481,12 +1941,12 @@ def check_lifetime(lifetime, names, inputs):
     require(all(isinstance(x, str) for x in lifetime.get('start', [])), 'start is a list of runbook lines.')
     require(all(isinstance(x, str) and x and '/' not in x for x in [lifetime['ddr'], *lifetime['chain']]),
             'The DDR record and the chain are record directory names of the session directory.')
-    stems, runs, placed = set(), set(lifetime['chain']), list(lifetime.get('passed', {}))
+    stems, runs, placed, placed_externals = set(), set(lifetime['chain']), list(lifetime.get('passed', {})), set()
     for entry in lifetime['order']:
         require(isinstance(entry, dict) and ('row' in entry) != ('external' in entry), 'Each order entry names a row '
                 'or an external bundle.')
-        keys = {'row', 'stem', 'run', 'stop_if'} if 'row' in entry else {'external', 'stem', 'run', 'runbook', 'after',
-                                                                         'stop_if'}
+        keys = {'row', 'stem', 'run', 'stop_if', 'after_external'} if 'row' in entry else {
+            'external', 'stem', 'run', 'runbook', 'after', 'stop_if'}
         require(set(entry) <= keys, f'Order entry {entry} has keys outside {sorted(keys)}; a row\'s gates are its '
                 'base and after fields.')
         require('row' not in entry or (entry['row'] in inputs and names[entry['row']].get('returning')),
@@ -1503,6 +1963,11 @@ def check_lifetime(lifetime, names, inputs):
         required = [g for g, _ in gates(names[entry['row']])] if 'row' in entry else list(entry.get('after', []))
         late = [g for g in required + list(stop_if) if g not in placed]
         require(not late, f'Order entry {entry} names gate rows that are not placed before it: ' + ', '.join(late))
+        late = [g for g in entry.get('after_external', []) if g not in placed_externals]
+        require(not late, f'Order entry {entry} names external entries that are not placed before it: '
+                + ', '.join(late))
+        if 'external' in entry:
+            placed_externals.add(entry['stem'])
         stems.add(entry['stem'])
         runs.add(entry['run'])
         if 'row' in entry:

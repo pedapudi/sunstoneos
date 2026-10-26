@@ -12,8 +12,14 @@ def preparation():
     spec=importlib.util.spec_from_file_location('displayport_producer_prepare',Path(__file__).with_name('prepare.py'))
     value=importlib.util.module_from_spec(spec);spec.loader.exec_module(value);return value
 
+# Sessions name MBUS at boot0's 600 MHz, which every EL3 entry restores (tools/vendor-mbus.py).
+def _vendor_mbus():
+    import importlib.util as u
+    s=u.spec_from_file_location('vendor_mbus',Path(__file__).resolve().parents[2]/'tools/vendor-mbus.py')
+    m=u.module_from_spec(s);s.loader.exec_module(m);return m
 
 def extend(board,*,owner,authority,client,facts,clocks,typec,latch,source,pins):
+    board=_vendor_mbus().board_session(board) if len(board)==592 else board
     prep=preparation()
     if len(board)!=592 or len(facts)!=6 or len(clocks)!=8 or len(typec)!=3 or len(latch)!=4 or len(source)!=6 or len(pins)!=4:
         raise ValueError('DisplayPort requires the typed board, six facts and complete clock/TYPEC24 fields.')

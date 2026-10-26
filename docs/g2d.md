@@ -57,8 +57,9 @@ fabric, oscillator, PLL reference and PERI0 parent, plus exclusive DE_SYS and
 IOMMU ownership. The global IOMMU exclusion also reserves the other native
 media master clock scopes against concurrent consumers.
 
-The supported module clock selects the PERI0 400 MHz output and divides by four
-for 100 MHz. Native code validates the normalized 24 MHz PLL reference, parent
+The supported module clock selects the PERI0 300 MHz output undivided, for
+300 MHz, the rate the vendor device tree assigns to G2D (`sun60iw2p1.dtsi`
+lines 3383–3384). Native code validates the normalized 24 MHz PLL reference, parent
 integer ratio, output gates, immutable fabric selectors and DE_SYS bus gates.
 Before local clock or IOMMU access, a fixed power provider accepts domain1 only
 when its command and status agree at OFF0 or ON8. An inherited ON state requires

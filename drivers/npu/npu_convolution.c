@@ -121,11 +121,11 @@ static int stream_intact(const struct npu_convolution *c,unsigned k)
 }
 /* Integrity policy. The shared SMP mappings cannot stop another privileged
  * writer, so bytes the NPU reads are rechecked against digests taken at
- * preparation. Every check covers descriptors, coefficients or shader, and
- * the job command stream. The bootstrap publication also covers the private
- * model copy and the bootstrap stream. A job publication omits those two: the
- * device never reads the model copy, and the bootstrap stream runs only at
- * OPEN. Startup, activation and stop hash nothing. */
+ * preparation: the private model copy, descriptors, coefficients or shader,
+ * and both command streams. The bootstrap publication (OPEN) and CLOSE check
+ * them; a job publication checks only the selection. A change between them is
+ * found at CLOSE, which then refuses and retains the session. Startup,
+ * activation and stop hash nothing. */
 static int unchanged(struct npu_convolution *c,int job)
 {
     unsigned char actual[32];
@@ -134,16 +134,19 @@ static int unchanged(struct npu_convolution *c,int job)
        c->model_bytes!=models[c->model_index].model_bytes ||
        c->input_bytes!=models[c->model_index].input_bytes ||
        c->output_bytes!=models[c->model_index].output_bytes)return fault(c);
-    if(!job) {
-        digest(c->model,c->model_bytes,actual);
-        if(memcmp(actual,models[c->model_index].digest,sizeof(actual)))return fault(c);
-    }
+    /* A job publication hashes nothing: the device-read bytes are checked at
+     * the bootstrap publication and again at CLOSE, as the vendor prepares a
+     * network once and per run flushes only its input and invalidates its
+     * output (examples/vpm_run/vpm_run.c:2628, :2672-2704). */
+    if(job)return 1;
+    digest(c->model,c->model_bytes,actual);
+    if(memcmp(actual,models[c->model_index].digest,sizeof(actual)))return fault(c);
     for(unsigned j=0;j<2;++j) {
         const struct a733_npu_buffer *b=&c->buffers[immutable_slot(c,j)];
         digest((void *)b->cpu,b->bytes,actual);
         if(memcmp(actual,c->immutable_digest[j],sizeof(actual)))return fault(c);
     }
-    for(unsigned k=0;k<(job ? 1u : 2u);++k)if(!stream_intact(c,k))return fault(c);
+    for(unsigned k=0;k<2u;++k)if(!stream_intact(c,k))return fault(c);
     return 1;
 }
 static void little(unsigned char *p,uint32_t v)
@@ -306,6 +309,11 @@ int npu_convolution_prepare(struct npu_convolution *c,const struct npu_convoluti
         digest((void *)b->cpu,c->stream_bytes[k],c->stream_digest[k]);
         if(!stream_intact(c,k))return fault(c);
     }
+#if defined(SUNSTONE_NPU_LARGE_GRAPH) && defined(SUNSTONE_NPU_FINITE_RETURN)
+    /* The finite image's pool is cleared once; the bootstrap publication
+     * cleans and invalidates it, and the device alone uses it afterwards. */
+    memset((void *)c->buffers[NPU_CONVOLUTION_POOL].cpu,0,c->buffers[NPU_CONVOLUTION_POOL].bytes);
+#endif
     c->prepared=1;return 1;
 }
 /* NPU register access only while the bound startup is READY, which requires
@@ -316,10 +324,14 @@ static int read_reg(void *cookie,unsigned offset,uint32_t *out)
     struct npu_convolution *c=cookie;
     return good(c) && a733_npu_startup_window_open(c->startup) && a733_npu_native_operations.read(&c->native,offset,out);
 }
+static uint64_t ticks(void)
+{uint64_t v;__asm__ volatile("isb\n mrs %0, cntpct_el0" : "=r"(v) :: "memory");return v;}
 static int write_reg(void *cookie,unsigned offset,uint32_t v)
 {
     struct npu_convolution *c=cookie;
-    return good(c) && a733_npu_startup_window_open(c->startup) && a733_npu_native_operations.write(&c->native,offset,v);
+    if(!good(c) || !a733_npu_startup_window_open(c->startup) || !a733_npu_native_operations.write(&c->native,offset,v))return 0;
+    if(offset==0x3a4)c->job_doorbell_ticks=ticks(); /* The trigger; the bootstrap's is overwritten by the job's. */
+    return 1;
 }
 static uint64_t now(void *cookie)
 {struct npu_convolution *c=cookie;return a733_npu_native_operations.microseconds(&c->native);}
@@ -327,19 +339,18 @@ static void delay(void *cookie,unsigned us)
 {struct npu_convolution *c=cookie;a733_npu_native_operations.delay(&c->native,us);}
 static void barrier(void *cookie)
 {struct npu_convolution *c=cookie;a733_npu_native_operations.barrier(&c->native);}
-static uint64_t ticks(void)
-{uint64_t v;__asm__ volatile("isb\n mrs %0, cntpct_el0" : "=r"(v) :: "memory");return v;}
 static int same_command(const struct a733_npu_command *a,const struct a733_npu_command *b)
 {return a->device==b->device && a->readable_bytes==b->readable_bytes && a->token==b->token;}
 static int publish(void *cookie,const struct a733_npu_mmu_image *image,
     const struct a733_npu_command *command,int bootstrap)
 {
     struct npu_convolution *c=cookie;
+    if(!bootstrap)c->job_publish_ticks=ticks();
     if((bootstrap!=0 && bootstrap!=1) || !same_command(command,&c->commands[bootstrap ? 0 : 1]) ||
        !unchanged(c,!bootstrap))return fault(c);
     if(!a733_npu_native_operations.publish(&c->native,image,command,bootstrap))return 0;
     if(!bootstrap) {
-        c->job_finished_us=c->job_done_ticks=0;c->job_cycles[0]=c->job_cycles[1]=0;
+        c->job_finished_us=c->job_done_ticks=c->job_doorbell_ticks=0;c->job_cycles[0]=c->job_cycles[1]=0;
         /* A failed counter read is reported as such (A733_NPU_COUNTER). */
         if(!read_reg(c,0x078,&c->job_start_cycles[0]) || !read_reg(c,0x07c,&c->job_start_cycles[1]))return -1;
         c->job_start_ticks=ticks();
@@ -431,7 +442,8 @@ int npu_convolution_send(struct npu_convolution *c,enum npu_service_operation op
     case NPU_SERVICE_SUBMIT:
         if(!c->ready || c->job || !input || bytes!=c->input_bytes ||
            !timeout || timeout>INT64_MAX || private_overlap(c,(uintptr_t)input,bytes))return 0;
-#if defined(SUNSTONE_NPU_LARGE_GRAPH)
+        c->job_submit_ticks=ticks();
+#if defined(SUNSTONE_NPU_LARGE_GRAPH) && !defined(SUNSTONE_NPU_FINITE_RETURN)
         /* Restore the entire intermediate allocation, including padding, only
          * while the previous job is reaped and the memory callback is idle.
          * Existing WRITE-role publication cleans/invalidates these CPU writes.
@@ -454,6 +466,7 @@ int npu_convolution_send(struct npu_convolution *c,enum npu_service_operation op
         break;
     case NPU_SERVICE_CLOSE:
         if(!c->opened || !c->ready || c->job || c->output_ready || timeout)return 0;
+        if(!unchanged(c,0))return 0; /* Faults and retains on a changed byte. */
         break;
     default:return 0;
     }

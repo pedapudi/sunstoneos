@@ -66,10 +66,13 @@ The enable table has six entries, each read back:
 The LOCK bit (28) is read-only status: the table writes it as zero and the
 readback ignores it. The output gate (bit 27) stays closed.
 
-After the register lock is released, the sequencer reads the control word at
-least 3 µs apart until three consecutive reads show LOCK, at most 100 times,
-then waits 20 µs. Only the PLL_NPU token's holder writes this word, so the
-sampling needs no lock. The open stage requires the control word
+After the register lock is released, the sequencer runs the lock wait that
+it shares with the CPU clock and the video decoder (`include/a733_pll_lock.h`).
+The wait reads the control word until three consecutive reads show LOCK, at
+most 100 times, starting each read at least 3 µs after the previous read
+ended, as the kernel helper's `udelay(3)` follows each read. It then waits
+20 µs after the third. Only the PLL_NPU token's holder writes this word, so
+the sampling needs no lock. The open stage requires the control word
 `0xe0305100` with LOCK and the captured bit 24 set as applicable, then opens
 the output gate. The final readback requires `0xe8305100` with those same
 bits. A LOCK that never appears leaves the PLL enabled with its output closed
@@ -91,14 +94,19 @@ LOCK refuse before any write; the pinned profile has no rate-change step.
 
 ## Two profiles and the rate change
 
-`a733_npu_startup_rate` selects one of two profiles before the scheduler.
-Both come from the 24 MHz reference, inside the board source's N range of
-53–105, and both run at the inherited 800 mV:
+By default the register pass selects the operating point the vendor driver
+selects for the SID speed bin ([job overhead design](designs/npu-job-overhead.md#default-operating-point)):
+852 MHz at 800 mV for vf0201, vf0400 and vf0500, which includes both boards
+(code 4). It refuses every other bin before any write, because that bin's
+point needs another DCDC2 voltage or it has no row. `a733_npu_startup_rate`
+selects an optional mode instead, before the scheduler: 492 MHz, or 852 MHz.
+Both profiles come from the 24 MHz reference, inside the board source's N
+range of 53–105, and both run at the inherited 800 mV:
 
 | Rate | N | P0 | Oscillator | Factor field |
 | --- | --- | --- | --- | --- |
-| 492 MHz (default) | 82 | 4 | 1,968 MHz | `0x00305100` |
-| 852 MHz | 71 | 2 | 1,704 MHz | `0x00104600` |
+| 492 MHz (optional mode) | 82 | 4 | 1,968 MHz | `0x00305100` |
+| 852 MHz (the vendor point for vf0201, vf0400 and vf0500) | 71 | 2 | 1,704 MHz | `0x00104600` |
 
 The 852 MHz profile is admitted only for a speed bin whose column lists
 800 mV for it. The register pass reads SID word `0x0300624c`: the code is

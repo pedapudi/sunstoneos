@@ -559,6 +559,7 @@
    "host"
   ],
   "docs": [
+   "docs/designs/mbus-restore.md",
    "docs/watchdog.md"
   ],
   "library": false,
@@ -630,7 +631,8 @@
   "cache_areas": [],
   "docs": [
    "docs/a733-kernel.md",
-   "docs/designs/gpu-vendor-default-measurements.md"
+   "docs/designs/gpu-vendor-default-measurements.md",
+   "docs/designs/mbus-restore.md"
   ],
   "library": false,
   "pure_host": false,
@@ -824,6 +826,7 @@
    "docs/designs/cpu-power-states-measurements.md",
    "docs/designs/cpu-power-states.md",
    "docs/designs/cpu-table-walks.md",
+   "docs/designs/mbus-restore.md",
    "docs/designs/multicore-correctness-1025.md",
    "docs/designs/multicore-performance-1025.md",
    "docs/designs/smp-heterogeneous-measurements.md",
@@ -2014,6 +2017,7 @@
   "docs": [
    "apps/usb-returning/README.md",
    "docs/designs/board-bundles-next.md",
+   "docs/designs/cpu-top-opp.md",
    "docs/designs/pmic-access.md"
   ],
   "library": false,
@@ -2027,7 +2031,7 @@
    "--tree",
    "--output"
   ],
-  "summary": "Build and check the base image and the returning images of bundles 4, 6, 7 and 8.",
+  "summary": "Build and check the base image and the returning images of bundles 4, 6, 7, 8, 15, 20 to 24 and 30 to 32.",
   "usb": true
  },
  "board-bundles.py": {
@@ -2038,9 +2042,12 @@
   "docs": [
    "apps/gpu-power-id/README.md",
    "docs/board-runbooks/README.md",
+   "docs/clock-audit.md",
    "docs/designs/board-bundles-measurements.md",
    "docs/designs/board-bundles-next.md",
    "docs/designs/board-bundles.md",
+   "docs/designs/cpu-top-opp.md",
+   "docs/designs/mbus-restore.md",
    "docs/reference-backsolve-npu.md",
    "docs/vendor-firmware/action-plan.md"
   ],
@@ -2189,7 +2196,8 @@
   "cache_areas": [],
   "docs": [
    "docs/board-test-queue.md",
-   "docs/designs/board-bundles.md"
+   "docs/designs/board-bundles.md",
+   "docs/handoff.md"
   ],
   "library": false,
   "pure_host": false,
@@ -2618,8 +2626,10 @@
    "docs/designs/cpu-a76-dvfs.md",
    "docs/designs/cpu-pmu-measurements.md",
    "docs/designs/cpu-pmu.md",
+   "docs/designs/cpu-top-opp.md",
    "docs/designs/pmic-access-measurements.md",
-   "docs/designs/power-authority-measurements.md"
+   "docs/designs/power-authority-measurements.md",
+   "docs/designs/video-pll.md"
   ],
   "library": false,
   "pure_host": false,
@@ -3606,6 +3616,22 @@
   "summary": "Run private DSI profile and application checks with explicit model authority.",
   "usb": false
  },
+ "el3-mbus.py": {
+  "cache_areas": [
+   "evidence",
+   "sources"
+  ],
+  "docs": [
+   "docs/designs/mbus-restore.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "sys.argv"
+  ],
+  "summary": "Check the EL3 MBUS restore: its admission, its SRAM window and the pinned ROM and boot0 sequences.",
+  "usb": false
+ },
  "elf-memory-hazards.py": {
   "cache_areas": [],
   "docs": [
@@ -3876,6 +3902,7 @@
  "g2d-modes-native.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/mbus-restore.md",
    "docs/g2d.md"
   ],
   "library": false,
@@ -3922,6 +3949,7 @@
    "evidence"
   ],
   "docs": [
+   "docs/designs/mbus-restore.md",
    "docs/power-domains.md"
   ],
   "library": false,
@@ -7077,6 +7105,20 @@
   "summary": "Check linked NPU interrupt routing and ownership without accessing hardware.",
   "usb": false
  },
+ "npu-job-cost.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/npu-job-overhead.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--output"
+  ],
+  "summary": "Count the CPU work of one NPU job in a linked finite image, without hardware.",
+  "usb": false
+ },
  "npu-large-host.py": {
   "cache_areas": [
    "evidence",
@@ -7140,6 +7182,7 @@
  "npu-nn-pool-native.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/npu-job-overhead.md",
    "docs/npu-relative-shift.md"
   ],
   "library": false,
@@ -7377,7 +7420,8 @@
  "os-cpu-clock-native.py": {
   "cache_areas": [],
   "docs": [
-   "docs/cpu-clock.md"
+   "docs/cpu-clock.md",
+   "docs/designs/cpu-top-opp.md"
   ],
   "library": false,
   "pure_host": false,
@@ -7483,6 +7527,7 @@
    "docs/designs/cpu-a76-dvfs.md",
    "docs/designs/cpu-leftovers-measurements.md",
    "docs/designs/cpu-leftovers.md",
+   "docs/designs/cpu-top-opp.md",
    "docs/handoff.md",
    "docs/os-image.md"
   ],
@@ -8003,6 +8048,7 @@
  "pvr-cccb.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/gpu-first-job.md",
    "docs/gpu-cccb.md"
   ],
   "library": false,
@@ -8285,6 +8331,7 @@
  "pvr-gpu-start-reference.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/gpu-firmware-start.md",
    "docs/gpu-start.md",
    "docs/vendor-firmware/gpu-and-npu-binaries.md"
   ],
@@ -8301,6 +8348,8 @@
  "pvr-gpu-stop-reference.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/gpu-firmware-stop.md",
+   "docs/designs/gpu-first-job.md",
    "docs/gpu-stop.md",
    "docs/vendor-firmware/gpu-and-npu-binaries.md"
   ],
@@ -9197,6 +9246,7 @@
  "secondary-local-probe.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/mbus-restore.md",
    "docs/designs/workload-bisect.md"
   ],
   "library": false,
@@ -9374,6 +9424,19 @@
   ],
   "summary": "Check the linked SPI3 interrupt route and CPU dispatch with modeled GIC state.",
   "usb": false
+ },
+ "sram-window-reservation.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/mbus-restore.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "sys.argv"
+  ],
+  "summary": "Check that no SRAM layout overlaps the MBUS restore's window page.",
+  "usb": true
  },
  "sram_launcher.py": {
   "cache_areas": [],
@@ -9766,6 +9829,23 @@
   "summary": "",
   "usb": false
  },
+ "top-opp-workload-bind.py": {
+  "cache_areas": [
+   "venv"
+  ],
+  "docs": [
+   "docs/designs/cpu-top-opp.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--bundle",
+   "--session",
+   "--output"
+  ],
+  "summary": "Run a frozen step 6 workload binding on a real session's records.",
+  "usb": false
+ },
  "training-record.py": {
   "cache_areas": [],
   "docs": [
@@ -10091,6 +10171,24 @@
   "summary": "Validate the vendor firmware manifest, its README table and every link they document.",
   "usb": false
  },
+ "video-pll.py": {
+  "cache_areas": [
+   "evidence",
+   "sources",
+   "video-codecs"
+  ],
+  "docs": [
+   "docs/designs/video-pll.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--output",
+   "--app-compile-commands"
+  ],
+  "summary": "Check the video PLL profile against pinned sources and the board dump, then run the decoder cold-start model.",
+  "usb": false
+ },
  "watchdog-configuration.py": {
   "cache_areas": [],
   "docs": [
@@ -10150,6 +10248,7 @@
  "workload-bisect-host.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/cpu-top-opp.md",
    "docs/designs/multicore-correctness-1025.md",
    "docs/designs/workload-bisect.md"
   ],
@@ -10169,6 +10268,7 @@
  "workload-bisect-probe.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/cpu-top-opp.md",
    "docs/designs/multicore-correctness-1025.md",
    "docs/designs/workload-bisect.md"
   ],

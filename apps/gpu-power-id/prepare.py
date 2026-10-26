@@ -4,7 +4,8 @@
 tools/prepare-board-bundles.py calls prepare_bundle(row, build, check,
 output) inside its sandbox for the GPU rows: the provider-readiness checkpoint
 (apps/gpu-provider-ready/build.py), and the power-only, identity,
-wrapper-read and probe-read variants of apps/gpu-power-id/build.py. The
+wrapper-read, probe-read, firmware-start and firmware-stop variants of
+apps/gpu-power-id/build.py. The
 function copies the image, its binary, its build record and its focused
 host-check result into the bundle with the kernel runner's host tools, and
 validate() checks the copy:
@@ -34,7 +35,16 @@ validate() checks the copy:
 - the probe-read image's probe_steps table holds exactly its fifteen
   accesses, every host-check case made only accesses of that table, in its
   order, and each vendor write was restored, by the client or, after a
-  synchronous abort, by its restore vectors.
+  synchronous abort, by its restore vectors;
+- the firmware-start image's fws_rows table holds exactly its eight
+  identity, entry and secure-configuration accesses, it embeds the pinned
+  open firmware, and every host-check case wrote only SMC0 +0xb0 = 2 and
+  drm_ctrl = 0, once each and never back, and the start registers of
+  pvr_gpu_start.c, never SOFT_RESET2, and never powered the GPU off;
+- the firmware-stop image passes the same table, firmware and secure
+  configuration checks; its cases also wrote only the kernel CCB kick, the
+  interrupt clear and the stop's thread-0 association words, and powered
+  the GPU off only after the firmware received the power-off request.
 
 Nothing here contacts a device.
 """
@@ -54,13 +64,18 @@ SCHEMA = 'board-gpu-returning-bundle-v1'
 # The image each build reuses objects of, by its build record's identity.
 PROVIDER_READY = '3adfa4ad6ba386ce8d39f76646f540107c2a5d02ce42db6c1c35c90de68a75ed'
 FAILED_POWER_ID = 'fd3d5839f700b5e0f569b0ce722e186c33beba65512815b136d9c969a7341afe'
-CASES = {'provider-ready': 11, 'power-only': 11, 'identity': 12, 'wrapper-read': 7, 'probe-read': 13}
+# The firmware-start images: the start alone, the stop, the first job and the job session.
+FWS_VARIANTS = ('fw-start', 'fw-stop', 'fw-job', 'fw-session')
+CASES = {'provider-ready': 11, 'power-only': 11, 'identity': 12, 'wrapper-read': 7, 'probe-read': 13, 'fw-start': 11,
+         'fw-stop': 10, 'fw-job': 13, 'fw-session': 15}
 # ON/OFF cycles of the client's normal run: the power-only and identity
 # variants power the GPU on twice, so the second ON shows that OFF left a
 # state from which ON succeeds again.
-CYCLES = {'power-only': 2, 'identity': 2, 'wrapper-read': 1, 'probe-read': 0}
+CYCLES = {'power-only': 2, 'identity': 2, 'wrapper-read': 1, 'probe-read': 0, 'fw-start': 0, 'fw-stop': 1, 'fw-job': 1, 'fw-session': 1}
 # The host-check case that completes ON and OFF in each variant.
-NORMAL = {'power-only': 'normal', 'identity': 'normal', 'wrapper-read': 'wrapper-on', 'probe-read': 'pr-board'}
+NORMAL = {'power-only': 'normal', 'identity': 'normal', 'wrapper-read': 'wrapper-on', 'probe-read': 'pr-board',
+          'fw-start': 'fs-board', 'fw-stop': 'fx-board', 'fw-job': 'fj-board',
+          'fw-session': 'fq-board'}
 # The only GPU-window addresses of the wrapper-read image, in read order.
 WRAPPER_WORDS = [0x01880104, 0x01880100, 0x01880018, 0x0188001c]
 # The probe-read image's access table: address, value, kind (0 read32, 1
@@ -68,6 +83,16 @@ WRAPPER_WORDS = [0x01880104, 0x01880100, 0x01880018, 0x0188001c]
 PROBE_STEPS = [(0x01880014, 0, 0), (0x01880010, 0, 0), (0x0a0000b0, 0, 0), (0x01800024, 0, 0), (0x01800020, 0, 0),
                (0x0a0000b0, 2, 1), (0x0a0000b0, 0, 0), (0x01880014, 0, 1), (0x01880014, 0, 0), (0x01800024, 0, 0),
                (0x01800020, 0, 0), (0x01880014, 0, 2), (0x01880014, 0, 0), (0x0a0000b0, 2, 2), (0x0a0000b0, 0, 0)]
+# The firmware-start image's fws_rows table, in the same form, and the
+# pinned open firmware it embeds.
+FWS_ROWS = [(0x01800024, 0, 0), (0x01800020, 0, 0), (0x01880014, 0, 0), (0x0a0000b0, 0, 0),
+            (0x0a0000b0, 2, 1), (0x0a0000b0, 0, 0), (0x01880014, 0, 1), (0x01880014, 0, 0)]
+FIRMWARE_SHA256 = '1db1c399c17401d1f79d46c880db81c724d748c784d4639433b076aba2f9c0d2'
+# The GPU registers the start writes (pvr_gpu_start.c, 29 steps), as the
+# 32-bit words the image writes: SYS_BUS_SECURE, SOFT_RESET (both words),
+# SLC_CTRL_MISC, the eleven MIPS wrapper registers and AXI_ACE_LITE.
+FWS_GPU_WRITES = {0xa100, 0x100, 0x104, 0x3800, 0x810, 0x818, 0x81c, 0x820, 0x824, 0x858, 0x85c, 0x860, 0x864,
+                  0x828, 0x82c, 0x830, 0x834, 0x838, 0x83c, 0x840, 0x844, 0xb50, 0xb54, 0x8c8, 0x38c0, 0x38c4}
 # struct step of drivers/gpu/a733_gpu_power.c: kind, bank, offset, mask, value.
 STEP = struct.Struct('<5I')
 # enum kind: CHECK0 UPDATE1 DELAY2 DOMAIN3 CORE_POLICY4 CORE_STATUS5 CORE_CONFIG6 POLL7 NOTE8 SETTLE9 PLL10
@@ -137,6 +162,33 @@ def probe_steps(elf):
     return [struct.unpack_from('<3I', data, 12 * i) for i in range(len(PROBE_STEPS))]
 
 
+def table(elf, name, size):
+    """The bytes of one static table of a linked image."""
+    from elftools.elf.elffile import ELFFile
+    with Path(elf).open('rb') as stream:
+        image = ELFFile(stream)
+        found = [s for s in image.get_section_by_name('.symtab').iter_symbols()
+                 if s.name == name and s['st_info']['type'] == 'STT_OBJECT']
+        require(len(found) == 1 and found[0]['st_size'] == size, f'{elf} has no single {size}-byte {name} table')
+        section = image.get_section(found[0]['st_shndx'])
+        return section.data()[found[0]['st_value'] - section['sh_addr']:][:size]
+
+
+def embedded_firmware(elf):
+    """The firmware between gpu_firmware and gpu_firmware_end of a linked image."""
+    from elftools.elf.elffile import ELFFile
+    with Path(elf).open('rb') as stream:
+        image = ELFFile(stream)
+        symbols = {s.name: s['st_value'] for s in image.get_section_by_name('.symtab').iter_symbols()
+                   if s.name in ('gpu_firmware', 'gpu_firmware_end')}
+        require(len(symbols) == 2, 'The image embeds no firmware.')
+        for section in image.iter_sections():
+            start = section['sh_addr']
+            if start <= symbols['gpu_firmware'] < start + section['sh_size'] and section['sh_type'] == 'SHT_PROGBITS':
+                return section.data()[symbols['gpu_firmware'] - start:symbols['gpu_firmware_end'] - start]
+    raise ValueError('The firmware lies in no loaded section.')
+
+
 def power_order(elf, cycles):
     """The vendor order in the image's own step tables, which every one of the client's cycles runs.
     ON (sunxi_platform_init, then sunxiPrePowerState): CORE6 PWCR 0, PLL_GPU0 at 1008 MHz and the GPU
@@ -198,7 +250,7 @@ def prepare_bundle(row, build, check, output):
     origin = {PROVIDER_READY: 'gpu-provider-ready', FAILED_POWER_ID: 'gpu-power-id-fd3d5839'}.get(source)
     require(origin is not None, 'The build reuses objects of an unrecorded image.')
     objects = {}
-    for item in record['new_objects']:
+    for item in record['new_objects'] + record.get('added_objects', []):
         objects[item.get('source', Path(item['object']).name)] = {'sha256': item['sha256'], 'origin': 'new'}
     for item in record['reused_objects']:
         objects[Path(item.get('original', item['object'])).name] = {'sha256': item['sha256'], 'origin': origin}
@@ -267,14 +319,57 @@ def validate(row, output):
                 restored = case.get('handler_writes') == [['0x1880014', '0x1'], ['0xa0000b0', '0x5']] or (
                     (5 not in rows or {13, 14} <= set(rows)) and (7 not in rows or {11, 12} <= set(rows)))
                 require('refused' in case or restored, 'A host-check case left a vendor write unrestored.')
-                require('a733_gpu_platform_off_begin' not in case['calls'], 'A host-check case powered the GPU OFF.')
+                # The OFF comes only after every access, both restores included.
+                require('a733_gpu_platform_off_begin' not in case['calls'] or rows == list(range(len(PROBE_STEPS))),
+                        'A host-check case powered the GPU OFF before both words were restored.')
             value['probe_steps'] = [[hex(a), hex(v), k] for a, v, k in PROBE_STEPS]
+        fws = 'fws_rows' in names or 'fws_access' in names
+        require(fws == (variant in FWS_VARIANTS) and
+                ('fws_stop_run' in names) == (variant in ('fw-stop', 'fw-job', 'fw-session')) and
+                ('job_backing' in names) == (variant in ('fw-job', 'fw-session')),
+                'The image\'s firmware-start or firmware-stop client does not match its variant.')
+        if variant in FWS_VARIANTS:
+            rows = table(output / 'image.elf', 'fws_rows', 12 * len(FWS_ROWS))
+            require([struct.unpack_from('<3I', rows, 12 * i) for i in range(len(FWS_ROWS))] == FWS_ROWS,
+                    'The fws_rows table is not the eight firmware-start accesses in their order.')
+            firmware = embedded_firmware(output / 'image.elf')
+            require(hashlib.sha256(firmware).hexdigest() == FIRMWARE_SHA256 == record['firmware']['sha256'],
+                    'The image does not embed the pinned open firmware.')
+            # The stop variant also kicks the kernel CCB, clears the firmware
+            # interrupt and clears the thread-0 DM associations.
+            allowed = FWS_GPU_WRITES | ({0xb00, 0x8b0, 0xb40, 0xb30} if variant != 'fw-start' else set())
+            for case in checked['cases']:
+                writes = [(a, v) for w, a, v in case['accesses'] if w]
+                require(all(a in (0x0a0000b0, 0x01880014) or a - 0x01800000 in allowed for a, _ in writes),
+                        'A host-check case wrote a word outside the secure configuration and the start registers.')
+                kicks = [i for i, (w, a, v) in enumerate(case['accesses']) if w and a == 0x01800b00]
+                # After the first kick, SOFT_RESET is written only as the last
+                # step (164) of the stop without acknowledgements: the full
+                # mask, low word first, upstream's final pvr_fw_stop reset.
+                late = [(a, v, case['steps'][i]) for i, (w, a, v) in enumerate(case['accesses'])
+                        if kicks and i > kicks[0] and w and a in (0x01800100, 0x01800104)]
+                require(late in ([], [(0x01800100, 0xfffffc3d, 164), (0x01800104, 0xffefffff, 164)]),
+                        'A host-check case wrote SOFT_RESET after the firmware started taking commands, other than '
+                        'as the last step of the stop without acknowledgements.')
+                secure = [(a, v) for a, v in writes if a in (0x0a0000b0, 0x01880014)]
+                require(secure in ([], [(0x0a0000b0, 2), (0x01880014, 0)]),
+                        'A host-check case wrote the secure configuration other than once, in the vendor order.')
+                if variant == 'fw-start':
+                    require(not {'a733_gpu_platform_off_begin', 'bb_power_park'} & set(case['calls']),
+                            'A host-check case powered the GPU off.')
+                else:
+                    require('a733_gpu_platform_off_begin' not in case['calls'] or [107, 1, 1] in case['commands'] or
+                            late, 'A host-check case powered the GPU off before the firmware power-off request '
+                                  'without the soft reset of the stop without acknowledgements.')
+            value['fws_rows'] = [[hex(a), hex(v), k] for a, v, k in FWS_ROWS]
+            value['firmware_sha256'] = FIRMWARE_SHA256
         if variant == 'identity':
             for case in checked['cases']:
                 reads = [[hex(a), 4] for a in (0x01800024, 0x01800020)] * 2
                 require(case['gpu_reads'] == reads[:len(case['gpu_reads'])],
                         'A host-check case read a GPU address other than the identity words in order.')
-        require(all(not case['gpu_writes'] for case in checked['cases']), 'A host-check case wrote the GPU window.')
+        require(variant in FWS_VARIANTS or all(not case['gpu_writes'] for case in checked['cases']),
+                'A host-check case wrote the GPU window.')
         if variant == 'power-only':
             require(all(not case['gpu_reads'] for case in checked['cases']), 'A host-check case read the GPU window.')
     return value
