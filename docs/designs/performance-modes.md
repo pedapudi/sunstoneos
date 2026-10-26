@@ -299,7 +299,7 @@ the image sizes and the default-image comparison.
 ## Checks
 
 The current integration's frozen evidence is
-`~/.cache/sunstoneos/evidence/resume-perf-modes-1025/snapshot/manifest.json`.
+`~/.cache/sunstoneos/evidence/resume-perf-modes-1025/final-snapshot/manifest.json`.
 It includes 28 engine cases, 21 CPU-owner and 22 combined-owner cases, eight
 host-command cases, 44 producer/launcher cases and seven native combined
 admission/USB cases. The native check reuses the existing OS NPU instruction

@@ -23,7 +23,7 @@ Current linked sizes, in bytes:
 | Profile | `.text` | `.rodata` | `.bss` |
 | --- | ---: | ---: | ---: |
 | CPU performance, high boot | 903,584 | 43,689 | 1,567,264 |
-| CPU and NPU performance, low boot | 983,776 | 47,801 | 1,707,808 |
+| CPU and NPU performance, low boot | 983,840 | 47,801 | 1,707,808 |
 
 These totals include the current thermal evidence window. The older sizes
 below use an earlier base and cannot isolate the current service's cost.

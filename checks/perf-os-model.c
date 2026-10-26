@@ -106,8 +106,9 @@ enum a733_rail_result fake_rail_acquire(struct a733_rail_leases *l,uint64_t owne
 }
 enum a733_rail_result fake_rail_release(struct a733_rail_leases *l,const struct a733_rail_token *t,uint64_t deadline)
 {
-    (void)deadline;assert(l==&providers.shared.rails && t->id==1 && m.leases==1 && !m.outstanding);
+    assert(l==&providers.shared.rails && t->id==1 && m.leases==1 && !m.outstanding);
     if(m.release_busy){--m.release_busy;return A733_RAIL_BUSY;}
+    if(m.now>=deadline)return A733_RAIL_EXPIRED;
     m.leases=0;return A733_RAIL_READY;
 }
 static enum a733_rail requested;
@@ -327,9 +328,9 @@ int main(void)
         for(;ticks<800;++ticks){status=tick();r=usb(OS_PERF_REPORT,0,0);if(status<0)break;
             if(r.completed==perf.number && !r.state)break;}
         assert(ticks<800);
-        if(failure<2)assert(status>=0 && !m.leases && !m.outstanding);
+        if(failure==0)assert(status>=0 && !m.leases && !m.outstanding);
         else assert(status==-1 && perf.failed && m.leases &&
-            (failure==4 ? !m.outstanding : m.outstanding) && r.reason==A733_PERF_STEP_FAILED);
+            (failure==1 || failure==4 ? !m.outstanding : m.outstanding) && r.reason==A733_PERF_STEP_FAILED);
         perf=saved_perf;m=saved_m;atomic_store(&mailbox,0);publish();++cases;
     }
 #ifdef SUNSTONE_A733_OS_NPU

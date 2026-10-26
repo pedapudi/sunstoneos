@@ -132,6 +132,7 @@ static enum a733_perf_status release_rail(uint64_t deadline)
 }
 static enum a733_perf_status read_block(enum a733_perf_block b,uint64_t deadline,int start,struct a733_perf_point *out)
 {
+    if(perf.failed)return A733_PERF_FAILED;
     /* A thermal transition invalidates the entire pass. Finish only an
      * outstanding provider request; its token cannot be abandoned. */
     if((perf.cancelled || perf.cpu_busy || a733_thermal_policy_level(perf.policy)!=A733_THERMAL_NORMAL) && !perf.requested) {
