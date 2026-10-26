@@ -122,7 +122,7 @@ including returns with CPU-L above 494 MHz, and the hottest sensor read
 42 °C. The ROM resets CPU-L to 494 MHz on each return, as it does MBUS,
 so each image must set its own clocks. A76 execution at 2002 MHz (steps 6
 and 7, B1) is still to do. The merge into `bringup` waits on integration
-fixes (`work/merge-cpu-top-opp-1025`).
+fixes; it is now merged (`work/merge-cpu-top-opp-1025`).
 
 **CPU top operating points, step 1 passed on port 3-3** (set
 `cpu-top-opp-20261025/step1-set`, `board-session-20261025-17/port-3-3`,
