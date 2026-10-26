@@ -223,7 +223,10 @@ GPU_SOURCES = ['apps/gpu-power-id/prepare.py', 'apps/gpu-power-id/build.py', 'ap
                'drivers/gpu/pvr_fw_state.c', 'drivers/gpu/pvr_ccb.c', 'drivers/gpu/pvr_gpu_start.c',
                'platform/a733/gpu_memory.c', 'include/pvr_gpu_start.h', 'include/a733_gpu_memory.h',
                'drivers/gpu/pvr_gpu_control.c', 'drivers/gpu/pvr_gpu_stop.c', 'include/pvr_gpu_control.h',
-               'include/pvr_gpu_stop.h', 'include/pvr_ccb.h',
+               'include/pvr_gpu_stop.h', 'include/pvr_ccb.h', 'apps/gpu-power-id/fw-job.inc',
+               'drivers/gpu/pvr_compute_job.c', 'drivers/gpu/pvr_compute_programs.c', 'drivers/gpu/pvr_compute_context.c',
+               'drivers/gpu/pvr_compute_package.c', 'drivers/gpu/pvr_cccb.c', 'drivers/gpu/pvr_gpu_vm.c',
+               'platform/a733/gpu_vm_memory.c', 'include/pvr_cccb.h',
                'drivers/power/a733_pmic.c', 'drivers/power/a733_pmic_consumer.c',
                'platform/a733/monitor.c', 'include/a733_el3_security.h', 'include/a733_gpu_opp.h',
                'apps/gpu-provider-ready/main.c', 'apps/gpu-provider-ready/build.py',
@@ -233,7 +236,7 @@ GPU_SOURCES = ['apps/gpu-power-id/prepare.py', 'apps/gpu-power-id/build.py', 'ap
                'include/a733_gpu_power.h', 'checks/a733-gpu-core-owner.c', 'tools/prepare-board-bundles.py',
                'tools/check-a733-kernel.py', *HOST_TOOLS]
 GPU_PREREQUISITES = ('Admission (apps/gpu-power-id/README.md, "Physical admission is separate"): a cold DDR start '
-                     'of this lifetime; no GPU firmware or command has run since power was applied; the coordinator '
+                     'of this lifetime; {history}; the coordinator '
                      'grants the 18 MiB RAM interval [0x41000000, 0x42200000), the PMIC inputs (S_TWI0 gate and '
                      'reset, APBS route, PL0/PL1, settled supplies, no other PMU writer) and, for the power rows, '
                      'exclusive GPU-local authority over the GPU CCU words, PLL_GPU0 (CCU 0x0e0) and the CORE6 power '
@@ -266,14 +269,21 @@ GPU_FAILURES = ['`FAIL GPU ON begin`, `GPU ON deadline` or `GPU ON poll`, after 
                 'verification deadline`, `service park deadline`, `provider not quiescent at park`, `PMIC clock`)']
 
 
-def gpu_row(name, position, component, variant, expect, expected, intro, after=(), failures=(), admission=''):
+# What a GPU row's lifetime holds before it runs; the rows after a firmware
+# run in the same lifetime name those runs instead.
+GPU_FRESH = 'no GPU firmware or command has run since power was applied'
+
+
+def gpu_row(name, position, component, variant, expect, expected, intro, after=(), failures=(), admission='',
+            history=GPU_FRESH):
     """A returning GPU image of port 3-1, prepared by apps/gpu-power-id/prepare.py from its own build record.
-    admission: text added to the shared GPU admission, such as a row's own exception."""
+    admission: text added to the shared GPU admission, such as a row's own exception. history: what GPU firmware
+    has run earlier in the lifetime."""
     row = returning_row(name, position, component, [], expect, False, expected, intro, after=after,
                         failures=list(failures) + GPU_FAILURES)
     row.update(module='apps/gpu-power-id/prepare.py', function='prepare_bundle', variant=variant,
                admission={'schema': 'board-gpu-returning-bundle-v1', 'row': name}, sources=list(GPU_SOURCES),
-               admission_text=GPU_PREREQUISITES + (' ' + admission if admission else ''))
+               admission_text=GPU_PREREQUISITES.format(history=history) + (' ' + admission if admission else ''))
     return row
 
 
@@ -924,6 +934,9 @@ ROWS = [
             'the lifetime can continue. Every GPU-window access is a 32-bit access after its progress record. It '
             'runs after the cold DDR start and the provider-readiness row, in a lifetime of its own.',
             after=['gpu-provider-ready', 'gpu-fw-stop'],
+            history=('one complete GPU firmware cycle has run in this lifetime, bundle 25: firmware start, one '
+                     'health check, the forced-idle and power-off requests, the stop and the OFF, with the GPU OFF '
+                     'and the provider parked at its end'),
             failures=['`FAIL GPU firmware control: compatibility or health check not complete, GPU left running`, '
                       'after the `GPU FWS control` and `compat` lines: error 4 an incompatible record, 3 the '
                       '200 ms deadline, 7 a firmware event; the firmware stays running and a power removal follows',
@@ -956,6 +969,53 @@ ROWS = [
              [word(0x07090000 + o, condition=R_CCU_RTC, note=f'RTC +0x{o:x}') for o in RTC_CLOCK_OFFSETS],
              'Every word is read, the RTC words only after the R_CCU RTC gate reads open and its reset released, '
              'and the 128 scratch bytes are restored and equal.'),
+    gpu_row('gpu-first-job', 28, 'The first GPU job: the fixed 32-lane compute job, then the firmware stop and OFF',
+            'fw-job', 'COMPLETE GPU first job: 32 words as computed, context cleaned up, firmware stopped, OFF and '
+            'provider parked',
+            'Status 0 with GPU FWJ job complete=1 outcome=1 timeline=0x1, GPU FWJ events control=4 control_error=0 '
+            'n=0, GPU FWJ hwr mmu_status=0x0 count=0, GPU FWJ output w0=0x2e5ca990 w1=0xd09b3063 w31=0x4775f521 '
+            'guard=0x6d35a7c1 (expected0 and expected31 equal), GPU FWJ cleanup status=0x1, GPU FWS stop result=0 '
+            'phase=10 and COMPLETE GPU first job: 32 words as computed, context cleaned up, firmware stopped, OFF and '
+            'provider parked; or one of the controlled failures below; or no return. Record every line of kernel.log '
+            'and the progress record at result.bin offset 128.',
+            'apps/gpu-power-id, first-job variant (apps/gpu-power-id/fw-start.c built with FWS_STOP and FWS_JOB, with '
+            'apps/gpu-power-id/fw-job.inc), docs/designs/gpu-first-job.md. The firmware lifecycle image of bundle 25 '
+            'with the fixed numerical compute job between the health check and the stop, corrected after set 27 '
+            '(docs/designs/gpu-first-job.md, "Set 27 post-mortem"): the job\'s PDS pointer constants are stored low '
+            'word first, an MMUCACHE command precedes the KICK, no page is mapped GPU read-only, every firmware event '
+            '101-108 is recorded without failing the control, and a stop the firmware does not acknowledge runs '
+            'upstream\'s hard reset (the idle checks, the full soft reset, then the OFF). Before any power change it '
+            'builds, in its own memory, the workload GPU VM (88 write-back pages, the output page bypassing the GPU '
+            'system-level cache), the context programs, the compute context and the job (seed 0x12345678, factor '
+            '0x9e3779b1), and maps the six firmware objects for the firmware at 0xc0800000 + n * 0x10000 in its '
+            'Normal-NC block. After the health check it publishes the workload pages and tables, sends MMUCACHE and '
+            'waits for its execution, formats the client CCB, writes a CDM command and a timeline UPDATE, kicks, '
+            'waits at most 150 ms for the timeline word, checks all 32 words and both guards, sends the context '
+            'cleanup, and then stops the firmware and powers the GPU off whatever the job\'s result. It runs first '
+            'in a new lifetime, after the provider-readiness checkpoint.',
+            after=['gpu-provider-ready'],
+            failures=['`FAIL GPU first job: not complete, GPU OFF and provider parked`, after the `GPU FWJ job`, '
+                      '`events`, `hwr`, `ring` and `output` lines: outcome 2 the timeline did not reach 1 within '
+                      '150 ms, 3 an output word or guard differs, 4 a transport fault, 5 a firmware event (a `GPU FWJ '
+                      'reset` line gives the reason, data master, page-fault flag and fault address); the firmware '
+                      'acknowledged the stop, and the GPU is off',
+                      '`FAIL GPU firmware stop: not acknowledged, idle checks met, GPU OFF and provider parked`: the '
+                      'control failed or the firmware acknowledged neither power request; the stop ran upstream\'s '
+                      'hard reset (`GPU FWS stop ... unacknowledged=1`) and the GPU is off',
+                      '`FAIL GPU firmware stop: not acknowledged and the GPU not idle, GPU left powered`: an idle '
+                      'check never matched; a power removal follows',
+                      '`FAIL GPU first job: 32 words as computed, context cleanup not confirmed, GPU OFF and provider '
+                      'parked`: the cleanup command returned no word of 1',
+                      'every failure line of bundle 25'],
+            admission='GPU job exception: this row runs one GPU compute job. Its data and programs are 88 write-back '
+                      'pages of the image\'s own RAM, mapped only in the job\'s GPU VM, whose tables are also image '
+                      'RAM; the firmware reaches only its own mappings plus the six job objects in the image\'s '
+                      'Normal-NC block. The GPU reads the programs, control stream and input and writes only the '
+                      '256-byte output page; no other memory is mapped for the GPU. It sends MMUCACHE, the KICK and '
+                      'the context cleanup through the kernel CCB, besides bundle 25\'s commands. On set 27 the USC '
+                      'program ran and faulted on its first load because its input pointer\'s halves were exchanged; '
+                      'the GPU MMU refused the access and the firmware reset the context. Risk: as bundle 25; a GPU '
+                      'that never reports idle after a failed job stays on until a power removal.'),
     # `admission` maps fields of the value prepare() returns to the values that
     # identify this row's build. None refuses the row: no owning package has
     # named those values yet.

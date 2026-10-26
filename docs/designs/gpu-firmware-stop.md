@@ -292,7 +292,12 @@ deadline, and keep the monitor's 500 ms margin.
   read or clear, a kick with its read-back, or the next stop step.
 - The GPU service host checks rerun at the stop change; three fixtures that
   expected the stop's reset now expect none
-  (`~/.cache/sunstoneos/evidence/gpu-fw-stop-regress-20261025/`).
+  (`~/.cache/sunstoneos/evidence/gpu-fw-stop-regress-20261025/`). The edit in
+  `checks/pvr-gpu-service.c` runs in service cases 1–3. The edits in
+  `checks/gpu-draw.c` and `checks/gpu-draw-repeat.c` have never run: both
+  checks fail earlier (`gpu-draw.c:118`, `gpu-draw-repeat.c:41`), as they
+  did before the change, so the service's stop path through those fixtures
+  is unchecked.
 
 **Image comparison.** The firmware-start image's loadable bytes are
 unchanged (`487ee41e…`, the image that passed on the board); its debug

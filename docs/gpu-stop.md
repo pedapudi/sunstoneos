@@ -99,12 +99,38 @@ fails after normal firmware service has closed.
 A callback failure, clock regression, or deadline expiry latches shutdown failure
 and prevents further callbacks. An external control/queue failure is detected
 before another clock or device access. All backing and diagnostics remain owned.
-There is no automatic hard-reset fallback or startup replay. Independent recovery
-remains a separate requirement.
+The controller retries nothing and replays no startup; the owner may start the
+stop without the acknowledgements, described next.
 
 The isolation callback may succeed after the deadline. In that case the controller
 records the observed success but remains FAILED and retains resources. It does
 not silently extend the deadline or turn a late acknowledgement into acceptance.
+
+## The stop without the firmware's acknowledgements
+
+`pvr_gpu_stop_init_unacknowledged` is upstream's hard reset
+(`pvr_power_reset` with `hard_reset`, `pvr_power.c:496–531`, which calls
+`pvr_power_fw_disable` without the power requests and then powers the
+device down). It is admitted only while the control component and its queue
+are latched FAILED, so no command can follow it, and only from a new
+controller or from one that failed before the power-off acknowledgement,
+its first register step and isolation. It starts at the register sequence:
+the same interrupt acknowledgement, idle polls and DM-association clears.
+Because the firmware processor was never asked to park, the plan then ends
+as upstream's `pvr_fw_stop` does (`pvr_fw_startstop.c:315–320`): one
+64-bit write of `SOFT_RESET` with the full mask that the firmware's
+`pbe2_in_xe` feature selects (`0xffeffffffffffc3d` for the pinned
+firmware), which halts the processor and every unit before the isolation
+callback.
+
+Without the acknowledgements, the idle polls are the only evidence that no
+GPU memory access is in flight, and each shows that only at the moment of
+its read; the soft reset closes the window before the OFF. When a poll
+never matches, the stop fails at its deadline before the reset and
+isolation, and the GPU must stay powered until a power removal. The first-job image (`apps/gpu-power-id/fw-start.c`) takes this
+path when its control failed or the firmware acknowledged neither request,
+in the last 100 ms of the stop's 300 ms; set 27 on port 3-1 showed why it is
+needed ([first GPU job](designs/gpu-first-job.md)).
 
 ## Focused integration checks cover failure and retirement
 
@@ -116,12 +142,17 @@ ordering, and isolation are exercised through callbacks. A synthetic feature
 variant checks omission of the external BIF read-status operation; it does not
 establish another board profile.
 
-The check passes 118 retained-failure cases. These include callback failures,
+The check passes 122 retained-failure cases. These include callback failures,
 each distinct idle-register wait, missing acknowledgements, clock regression,
 command errors, and late isolation. A held idle register and a missing
 acknowledgement are each re-read for at least 50 µs within one poll. With a
 stopped clock, both re-reads return without advancing and shutdown completes
-once the clock runs. It verifies that terminal states make no
+once the clock runs. The stop without acknowledgements is refused while the
+control is READY, after a register step and after the power-off
+acknowledgement, completes from NEW and after a failed handshake without
+sending a command and with the soft reset last, and fails before isolation
+on a held idle poll. The reference comparison checks that its plan is the
+acknowledged plan followed by upstream's final reset. It verifies that terminal states make no
 callbacks, that recorded results survive retirement, and that a power acknowledgement
 can arrive without a command-return flag.
 

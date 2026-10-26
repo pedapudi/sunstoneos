@@ -11,8 +11,8 @@ The [interface](../include/pvr_cccb.h) and
 [implementation](../drivers/gpu/pvr_cccb.c) implement the client circular command
 buffer, abbreviated CCCB in the source. The separate
 [kernel command queue](gpu-queues.md) carries firmware control messages,
-including the notification called KICK. A successful KICK return means firmware
-accepted the notification; it does not establish GPU job completion.
+including the notification called KICK. An accepted KICK means the firmware
+consumed the notification; it does not establish GPU job completion.
 
 ## Format an unattached ring before admitting commands
 
@@ -60,7 +60,13 @@ A publication barrier completes all ring writes before KICK submission. The
 88-byte notification contains the firmware context address, resulting write
 cursor, wrap mask, and up to three cleanup-record addresses. A full kernel queue
 leaves submission pending without rewriting the ring. After submission, the
-transport collects the reserved return slot and requires status one.
+transport settles the KICK's slot: it is accepted once the kernel queue's read
+offset, sampled by the owner's queue poll, has passed it (status 0), or when the
+firmware wrote a return word of 1. Any other return word fails. Upstream sends
+the KICK without a return slot (`pvr_cccb_send_kccb_kick`), and on the A733 the
+open firmware writes no return word for a command no caller waits on
+([firmware stop design](designs/gpu-firmware-stop.md)). The paired geometry and
+fragment KICK is settled the same way.
 
 One notification may be outstanding per client ring. The privileged owner
 continues normal firmware control, event handling, and kernel return polling
@@ -96,8 +102,7 @@ kernel queue implementation. Eighteen successive sequences vary payload sizes,
 cross ring boundaries, and compare complete ring and notification bytes.
 
 The same fixture checks empty payloads, client-ring pressure, a full kernel
-queue, delayed returns, and the distinction between cursor progress and command
-acceptance. Focused faults cover malformed cursors, writes that take effect
+queue, delayed returns, and a KICK consumed without a return word. Focused faults cover malformed cursors, writes that take effect
 before failing, late completion, clock regression, changed epochs, unsuccessful
 returns, and terminal refusal. Invalid admission preserves state and performs
 no I/O. Guard bytes remain intact.

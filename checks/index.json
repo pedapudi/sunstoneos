@@ -7997,6 +7997,7 @@
  "pvr-cccb.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/gpu-first-job.md",
    "docs/gpu-cccb.md"
   ],
   "library": false,
@@ -8297,6 +8298,7 @@
   "cache_areas": [],
   "docs": [
    "docs/designs/gpu-firmware-stop.md",
+   "docs/designs/gpu-first-job.md",
    "docs/gpu-stop.md",
    "docs/vendor-firmware/gpu-and-npu-binaries.md"
   ],

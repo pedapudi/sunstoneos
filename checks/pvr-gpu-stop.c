@@ -63,7 +63,8 @@ static int compat(void *ctx,uint32_t off,void *out,size_t n)
 static const struct pvr_gpu_control_ops cops={now,irq_read,irq_write,compat,NULL};
 static void event(unsigned write,uint32_t off,uint32_t width,uint64_t v)
 {
-    assert(m.events_count<32 && c.phase==PVR_GPU_CONTROL_RETIRED && q.phase==PVR_CCB_RETIRED);
+    assert(m.events_count<32 && (s.unacknowledged ? c.phase==PVR_GPU_CONTROL_FAILED && q.phase==PVR_CCB_FAILED :
+                                 c.phase==PVR_GPU_CONTROL_RETIRED && q.phase==PVR_CCB_RETIRED));
     m.events[m.events_count++]=(struct event){write,off,width,v};
 }
 static int read_reg(void *ctx,uint32_t off,uint32_t width,uint64_t *v)
@@ -88,7 +89,8 @@ static int sync_read(void *ctx,uint32_t *v)
 { assert(ctx==&m); if(!operation())return 0; *v=m.sync; return 1; }
 static int isolate(void *ctx)
 {
-    assert(ctx==&m && s.index==s.count && m.sent==2 && s.acknowledgement[0] && s.acknowledgement[1]);
+    assert(ctx==&m && s.index==s.count &&
+           (s.unacknowledged || (m.sent==2 && s.acknowledgement[0] && s.acknowledgement[1])));
     if(!operation())return 0; ++m.isolation;
     if(m.late_isolation)m.now=s.deadline;
     return m.isolation_result;
@@ -251,6 +253,55 @@ int main(int argc,char **argv)
     assert(!pvr_gpu_stop_init(&s,&c,image,image_bytes,&ops,&m,10000) && !memcmp(&s,&before,sizeof(s)));
     memset(&s,0,sizeof(s)); before=s; struct pvr_gpu_stop_ops bad=ops; bad.isolate=NULL;
     assert(!pvr_gpu_stop_init(&s,&c,image,image_bytes,&bad,&m,10000) && !memcmp(&s,&before,sizeof(s)));
+    /* Without the acknowledgements (upstream's hard reset): refused while
+     * the control is READY, admitted once the control and queue are latched
+     * failed, from NEW or from a stop that failed before its first register
+     * step; the same register plan and isolation follow, and no command. */
+    prepare(image); memset(&s,0,sizeof(s)); before=s;
+    assert(c.phase==PVR_GPU_CONTROL_READY && q.phase==PVR_CCB_ACTIVE);
+    assert(!pvr_gpu_stop_init_unacknowledged(&s,&c,image,image_bytes,&ops,&m,10000) && !memcmp(&s,&before,sizeof(s)));
+    assert(pvr_gpu_stop_init(&s,&c,image,image_bytes,&ops,&m,10000));
+    m.no_ack=1;
+    while(s.phase!=PVR_GPU_STOP_WAIT_IDLE)assert(pvr_gpu_stop_poll(&s)==PVR_GPU_STOP_AGAIN);
+    m.now=s.deadline; assert(run()==PVR_GPU_STOP_FAULT); stopped(PVR_GPU_STOP_TIMEOUT);
+    unsigned sent=m.sent; m.events_count=0;
+    assert(pvr_gpu_stop_init_unacknowledged(&s,&c,image,image_bytes,&ops,&m,m.now+10000));
+    /* The vendor plan, then upstream's final soft reset of every unit. */
+    assert(s.phase==PVR_GPU_STOP_REGISTERS && s.unacknowledged && !s.index && s.count==15);
+    assert(s.steps[14].kind==1 && /* WRITE */ s.steps[14].offset==0x100 && s.steps[14].width==8 &&
+           s.steps[14].value==UINT64_C(0xffeffffffffffc3d));
+    assert(run()==PVR_GPU_STOP_OK && m.isolation==1 && m.sent==sent && m.irq_cleared && m.events_count==s.count);
+    assert(m.events[14].write && m.events[14].offset==0x100 && m.events[14].value==s.steps[14].value);
+    assert(c.phase==PVR_GPU_CONTROL_FAILED && q.phase==PVR_CCB_FAILED);
+    save(argv[2],2);
+    /* From NEW, after an external control failure. */
+    prepare(image); memset(&s,0,sizeof(s)); assert(pvr_gpu_control_abort(&c)==PVR_GPU_CONTROL_FAULT);
+    assert(pvr_gpu_stop_init_unacknowledged(&s,&c,image,image_bytes,&ops,&m,m.now+10000));
+    assert(run()==PVR_GPU_STOP_OK && m.isolation==1 && !m.sent);
+    /* Not after a register step: the stop failed on a held idle poll. */
+    prepare(image); m.hold_register=held[0];
+    while(s.phase!=PVR_GPU_STOP_REGISTERS || s.steps[s.index].offset!=held[0])
+        assert(pvr_gpu_stop_poll(&s)==PVR_GPU_STOP_AGAIN);
+    m.now=s.deadline; assert(run()==PVR_GPU_STOP_FAULT); stopped(PVR_GPU_STOP_TIMEOUT); before=s;
+    assert(!pvr_gpu_stop_init_unacknowledged(&s,&c,image,image_bytes,&ops,&m,m.now+10000) &&
+           !memcmp(&s,&before,sizeof(s)));
+    /* Not after the power-off acknowledgement: that stop's owner powers off
+     * as the vendor does, without this entry. */
+    prepare(image); m.hold_register=held[0];
+    while(s.phase!=PVR_GPU_STOP_REGISTERS || s.steps[s.index].offset!=held[0])
+        assert(pvr_gpu_stop_poll(&s)==PVR_GPU_STOP_AGAIN);
+    m.now=s.deadline; assert(run()==PVR_GPU_STOP_FAULT); stopped(PVR_GPU_STOP_TIMEOUT);
+    s.index=0; assert(s.acknowledgement[1]); before=s;
+    assert(!pvr_gpu_stop_init_unacknowledged(&s,&c,image,image_bytes,&ops,&m,m.now+10000) &&
+           !memcmp(&s,&before,sizeof(s)));
+    /* A held idle poll ends the unacknowledged stop at its deadline, before
+     * isolation: the GPU stays powered. */
+    prepare(image); memset(&s,0,sizeof(s)); assert(pvr_gpu_control_abort(&c)==PVR_GPU_CONTROL_FAULT);
+    m.hold_register=held[0];
+    assert(pvr_gpu_stop_init_unacknowledged(&s,&c,image,image_bytes,&ops,&m,m.now+10000));
+    while(s.steps[s.index].offset!=held[0])assert(pvr_gpu_stop_poll(&s)==PVR_GPU_STOP_AGAIN);
+    m.now=s.deadline; assert(run()==PVR_GPU_STOP_FAULT && !m.isolation && s.error==PVR_GPU_STOP_TIMEOUT); ++faults;
     free(image); free(variant);
-    printf("PASS GPU shutdown: two acknowledged commands, interrupt acknowledgement, idle/isolation ordering, retirement, and %u retained faults\n",faults);
+    printf("PASS GPU shutdown: two acknowledged commands, interrupt acknowledgement, idle/isolation ordering, retirement, "
+           "the unacknowledged stop, and %u retained faults\n",faults);
 }

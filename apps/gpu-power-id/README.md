@@ -252,6 +252,26 @@ GPU firmware stop: started, health check executed, forced idle and power
 off acknowledged, idle, OFF and provider parked`. `check.py --fw-stop` runs
 nine cases with a model of the firmware's side of the queues.
 
+## The first-job variant runs one GPU compute job before the stop
+
+`fw-start.c` built with `FWS_STOP` and `FWS_JOB` (build and check option
+`--fw-job`) adds `fw-job.inc`, the fixed 32-lane compute job of
+[the first-job design](../../docs/designs/gpu-first-job.md), between the
+firmware-stop variant's health check and its stop. It builds the job's
+workload VM, context programs, context and job in its own memory before any
+power change, sends the MMU cache command and kicks the job after the
+health check, waits at most 200 ms for the timeline word, checks the 32
+output words and their guards, cleans the context up, and then stops the
+firmware and powers the GPU off whatever the job's result. When the control
+has failed or the firmware acknowledges neither power request, the stop
+runs without the acknowledgements (upstream's hard reset) and powers off
+only when every idle poll matches. The completion text is `COMPLETE GPU
+first job: 32 words as computed, context cleaned up, firmware stopped, OFF
+and provider parked`. `check.py --fw-job` runs thirteen cases with a model
+of the firmware and GPU that runs the job's client CCB commands;
+`--board-log` with `--board-cases` compares a board log with chosen
+models.
+
 A wrapper-write variant was refused before any board run and removed
 ([gpu-power.md](../../docs/gpu-power.md#the-wrapper-write-probe-was-refused)).
 
@@ -268,12 +288,13 @@ Run with the existing host Python environment containing pyelftools and Unicorn:
 Add `--power-only` to both commands for the power-only variant,
 `--wrapper-read` for the wrapper-read variant, `--probe-read` for the
 probe-read variant, `--fw-start` for the firmware-start variant or
-`--fw-stop` for the firmware-stop variant. The vendor-clock-order and vendor-state variants, whose
+`--fw-stop` for the firmware-stop variant or `--fw-job` for the first-job
+variant. The vendor-clock-order and vendor-state variants, whose
 controller, monitor and supply copies the default path replaced, were
 removed after the vendor-state image read the identity.
 
 `prepare.py` turns a build and its check result into a board bundle for
-`tools/prepare-board-bundles.py` (rows 11 to 13, 16, 17, 19 and 25 of
+`tools/prepare-board-bundles.py` (rows 11 to 13, 16, 17, 19, 25, 26 and 28 of
 [board-bundles-next.md](../../docs/designs/board-bundles-next.md)). For both
 power variants it reads `on_steps` and `off_steps` from the image and
 requires the domain-5 (TOP5) ON request before the first CORE6 access, the
