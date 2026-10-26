@@ -3,40 +3,64 @@
 #include <stdio.h>
 #include <string.h>
 
+#ifdef SUNSTONE_BOARD_RESIDENT
+#define NREG 7
+#define NWRITE 8
+#define INITIAL_STATUS 0
+#define ON_STATUS 0x108
+#else
+#define NREG 6
+#define NWRITE 7
+#define INITIAL_STATUS 0x12340000
+#define ON_STATUS 0x12340008
+#endif
 struct model {
-    uint32_t regs[6];unsigned core,ops,clocks,fail_at,late_at,corrupt_at,hold,waits,writes;
+    uint32_t regs[NREG];unsigned core,ops,clocks,fail_at,late_at,corrupt_at,hold,waits,writes,published,immediate,dynamic_hold;
     uint64_t now;
-    struct {uintptr_t address;uint32_t value;} trace[8];
+    struct {uintptr_t address;uint32_t value;} trace[9];
 };
 static uintptr_t address(const struct model *m,unsigned n)
 {
     uintptr_t b=UINT32_C(0x08001000)+m->core*0x1000u;
     const uintptr_t a[]={b,b+4,b+8,UINT32_C(0x07050200)+m->core*4u,
-        UINT32_C(0x07050220)+m->core*4u,UINT32_C(0x07052008)+m->core*0x1000u};
+        UINT32_C(0x07050220)+m->core*4u,UINT32_C(0x07052008)+m->core*0x1000u
+#ifdef SUNSTONE_BOARD_RESIDENT
+        ,UINT32_C(0x07052000)+m->core*0x1000u
+#endif
+    };
     return a[n];
 }
 static unsigned reg(struct model *m,uintptr_t a)
-{for(unsigned i=0;i<6;++i)if(a==address(m,i))return i;assert(0);return 0;}
+{for(unsigned i=0;i<NREG;++i)if(a==address(m,i))return i;assert(0);return 0;}
 static int action(struct model *m)
 {++m->ops;if(m->ops==m->late_at)m->now=1000;return m->ops!=m->fail_at;}
 static int read32(void *ctx,uintptr_t a,uint32_t *out)
 {
     struct model *m=ctx;unsigned r=reg(m,a);
-    if(r==5 && (m->regs[3]&1) && !m->hold && ++m->waits>=2)m->regs[5]=0x12340008;
+    if(r==5 && (m->regs[3]&1) && !m->hold && ++m->waits>=2)m->regs[5]=ON_STATUS;
+#ifdef SUNSTONE_BOARD_RESIDENT
+    if(r==5 && m->regs[6]==0x100 && !m->dynamic_hold)m->regs[5]|=0x100;
+#endif
     *out=m->regs[r];if(m->ops+1==m->corrupt_at)*out^=1;return action(m);
 }
 static int write32(void *ctx,uintptr_t a,uint32_t v)
 {
-    struct model *m=ctx;unsigned r=reg(m,a);assert(r!=5 && m->writes<8);
+    struct model *m=ctx;unsigned r=reg(m,a);assert(r!=5 && m->writes<9);
     m->trace[m->writes].address=a;m->trace[m->writes++].value=v;m->regs[r]=v;
+#ifdef SUNSTONE_BOARD_RESIDENT
+    if(r==6) {
+        assert(m->published && (m->regs[0]&1) && m->regs[1]==0x41000000+m->core*0x4000 && !m->regs[2]);
+        if(m->immediate)m->regs[5]=ON_STATUS;
+    }
+#endif
     return action(m); /* An uncertain write may already have taken effect. */
 }
-static int barrier(void *ctx) {return action(ctx);}
+static int barrier(void *ctx) {struct model *m=ctx;m->published=1;return action(ctx);}
 static int now_us(void *ctx,uint64_t *out)
 {struct model *m=ctx;++m->clocks;*out=m->now++;return 1;}
 static struct a733_cpu_start_config config(struct model *m,unsigned core)
 {
-    *m=(struct model){.core=core,.now=1,.regs={0xa0,0,0,0x42,0x80,0x12340000}};
+    *m=(struct model){.core=core,.now=1,.regs={0xa0,0,0,0x42,0x80,INITIAL_STATUS}};
     return (struct a733_cpu_start_config){.ops={read32,write32,barrier,now_us},.context=m,
         .boot_mpidr=0x81000000,.entry=0x41000000+core*0x4000,.lease=0x12345678,
         .deadline=1000,.core=core};
@@ -63,7 +87,7 @@ int main(void)
         struct a733_cpu_start s={0};struct a733_cpu_start_config c=config(&m,core);
         assert(a733_cpu_start_init(&s,&c));memset(&c,0,sizeof(c));assert(!m.ops&&!m.clocks);
         run(&s,&m);assert(s.state==A733_CPU_START_POWERED && m.regs[3]==0x42 && m.regs[4]==0x80);
-        assert(s.writes_attempted==7 && m.writes==7 && (m.regs[5]&15)==8);actions=m.ops;
+        assert(s.writes_attempted==NWRITE && m.writes==NWRITE && (m.regs[5]&15)==8);actions=m.ops;
         for(unsigned i=0;i<m.writes;++i)printf("TRACE %u %lx %x\n",core,(unsigned long)m.trace[i].address,m.trace[i].value);
         quiet(&s,&m);
     }
@@ -79,7 +103,13 @@ int main(void)
         struct a733_cpu_start s={0};struct a733_cpu_start_config c=config(&m,2);m.regs[r]|=1;
         assert(a733_cpu_start_init(&s,&c));run(&s,&m);assert(s.error==A733_CPU_START_INITIAL_STATE && !m.writes);quiet(&s,&m);
     }
-    const unsigned verify[]={7,8,10,18,19};
+    const unsigned verify[]={
+#ifdef SUNSTONE_BOARD_RESIDENT
+        9,10,12,15,23,24
+#else
+        7,8,10,18,19
+#endif
+    };
     for(unsigned n=0;n<sizeof(verify)/sizeof(*verify);++n) {
         struct a733_cpu_start s={0};struct a733_cpu_start_config c=config(&m,3);m.corrupt_at=verify[n];
         assert(a733_cpu_start_init(&s,&c));run(&s,&m);assert(s.error==A733_CPU_START_VERIFY);quiet(&s,&m);
@@ -94,6 +124,21 @@ int main(void)
         assert(a733_cpu_start_init(&s,&c));a733_cpu_start_poll(&s);m.now=0;
         a733_cpu_start_poll(&s);assert(s.error==A733_CPU_START_TIME);quiet(&s,&m);
     }
+#ifdef SUNSTONE_BOARD_RESIDENT
+    for(unsigned immediate=0;immediate<2;++immediate) {
+        struct a733_cpu_start s={0};struct a733_cpu_start_config c=config(&m,6);
+        m.immediate=immediate;m.dynamic_hold=!immediate;c.deadline=80;
+        assert(a733_cpu_start_init(&s,&c));run(&s,&m);
+        assert(immediate?s.state==A733_CPU_START_POWERED:s.error==A733_CPU_START_TIME);
+        assert(m.regs[6]==0x100 && (m.regs[3]&2));quiet(&s,&m);
+    }
+    for(unsigned bad=0;bad<2;++bad) {
+        struct a733_cpu_start s={0};struct a733_cpu_start_config c=config(&m,1);
+        if(bad)m.regs[6]=0x100;else m.regs[3]&=~2u;
+        assert(a733_cpu_start_init(&s,&c));run(&s,&m);
+        assert(s.error==A733_CPU_START_INITIAL_STATE && !m.writes && m.regs[6]==(bad?0x100u:0u));quiet(&s,&m);
+    }
+#endif
     for(unsigned core=0;core<8;++core) {
         unsigned out=99;assert(a733_cpu_index((uint64_t)core<<8,&out)&&out==core);
         assert(a733_cpu_index(UINT64_C(0x81000000)|((uint64_t)core<<8),&out)&&out==core);

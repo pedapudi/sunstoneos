@@ -118,5 +118,8 @@ int a733_smp_power_address(unsigned core,uintptr_t address,int write)
     uintptr_t cfg=UINT32_C(0x08001000)+(uintptr_t)core*0x1000;
     if(address==cfg||address==cfg+4||address==cfg+8||address==UINT32_C(0x07050200)+core*4||
        address==UINT32_C(0x07050220)+core*4)return 1;
+#ifdef SUNSTONE_BOARD_RESIDENT
+    if(address==UINT32_C(0x07052000)+(uintptr_t)core*0x1000)return 1;
+#endif
     return !write&&address==UINT32_C(0x07052008)+(uintptr_t)core*0x1000;
 }

@@ -11,6 +11,7 @@ add_executable(a733-stage2 EXCLUDE_FROM_ALL
   "${stage2_root}/boot/a733/cold-entry.S"
   "${stage2_root}/boot/a733/stage2/loader.c"
   "${stage2_root}/boot/a733/stage2/admission.c"
+  "${stage2_root}/boot/a733/stage2/cpu.c"
   "${stage2_root}/platform/a733/remote_writers.c"
   "${stage2_root}/drivers/storage/sunxi_mmc.c"
   "${stage2_root}/drivers/storage/storage_digest.c"
@@ -34,3 +35,11 @@ add_custom_command(TARGET a733-stage2 POST_BUILD
     "${CMAKE_CURRENT_BINARY_DIR}/a733-stage2.bin"
   BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/a733-stage2.bin"
   VERBATIM)
+
+# Keep cold ownership within the fixed monitor reservation. SD and hashing
+# retain the shared -O2 setting; these control paths run only during boot.
+set_source_files_properties(
+  "${stage2_root}/boot/a733/stage2/loader.c"
+  "${stage2_root}/boot/a733/stage2/admission.c"
+  "${stage2_root}/boot/a733/stage2/cpu.c"
+  PROPERTIES COMPILE_OPTIONS "-Os")

@@ -1,0 +1,70 @@
+{
+  "scope": "PPU static-OFF ownership and A76 powerdown references; existing boot0/A55/DSU pins remain in the cold-entry audit",
+  "sources": [
+    {
+      "title": "Arm Power Policy Unit Architecture Specification",
+      "revision": "DEN0051E, architecture 1.1",
+      "url": "https://documentation-service.arm.com/static/5f873177f86e16515cdb6d99",
+      "license": "Arm proprietary, non-confidential reference document; no source code incorporated",
+      "use": "Host-side hardware protocol reference; not linked into native software",
+      "sections": [
+        "3.4.3",
+        "4.1.1",
+        "5.2.1",
+        "5.2.3",
+        "5.2.23\u20135.2.26"
+      ],
+      "cache_path": "/home/sunil/.cache/sunstoneos/sources/cold-cpuidle/arm-den0051e-ppu.pdf",
+      "sha256": "fa4ec504e4ffb98f5b35bda644e65c08884d5a5f77d2f853e1eb4d55ec1889fb",
+      "text_sha256": "78f2544f03e7fce924cfffe4aac9be96dd09e3fe83a36d875640d8bd0ebba7da"
+    },
+    {
+      "title": "Cortex-A76 Technical Reference Manual",
+      "revision": "100798_0401_00, r4p1",
+      "url": "https://documentation-service.arm.com/static/5f562083235b3560a01e03bc",
+      "license": "Arm proprietary, non-confidential reference document; no source code incorporated",
+      "use": "Host-side hardware protocol reference; not linked into native software",
+      "sections": [
+        "A4.6.2",
+        "A4.9"
+      ],
+      "cache_path": "/home/sunil/.cache/sunstoneos/sources/cold-cpuidle/cortex-a76-r4p1-trm.pdf",
+      "sha256": "ea16a7af56045572125e0be1f6be8877eaef1e37d67133d8fb5dbcb96f7f9e57",
+      "text_sha256": "2001f792283e6d0d0ecf1531fefca58ff817f26ebc072ab22bda14dbaa928c21"
+    },
+    {
+      "title": "Arm CoreLink PCK-600 Technical Reference Manual",
+      "revision": "101150 r0p5",
+      "url": "https://documentation-service.arm.com/static/61fa619e2dd99944d0514955",
+      "sections": [
+        "4.3 PPU_IIDR"
+      ],
+      "sha256": "32bd49afc93c0ecdb2b11663f73fbe90742203ac296a1d4aabb8172c3988e6ac",
+      "license": "Arm proprietary, non-confidential reference document; no source code incorporated",
+      "use": "Host-side hardware protocol reference; not linked into native software",
+      "cache_path": "/home/sunil/.cache/sunstoneos/sources/gpu-isolation/pck600-trm.pdf"
+    },
+    {
+      "title": "Cortex-A55 Technical Reference Manual",
+      "revision": "100442_0200_00",
+      "url": "https://documentation-service.arm.com/static/5e7e09f6a3736a0d2e862d2f",
+      "sections": [
+        "A4.8",
+        "A6.2.3",
+        "B1.15",
+        "B1.16"
+      ],
+      "sha256": "1f71b74d5cf1cbf3c86dab85d1407c45355ab5015d12d68afc0dc64107f7dd97",
+      "license": "Arm proprietary, non-confidential reference document; no source code incorporated",
+      "use": "Host-side hardware protocol reference; not linked into native software",
+      "cache_path": "/home/sunil/.cache/sunstoneos/sources/cpu-continue/cortex-a55-trm.pdf"
+    }
+  ],
+  "existing_source_pins": {
+    "sources.lock.json": [
+      "cpu-start-atf-plat-allwinner-common-sunxi_native_pm_ncat2-c"
+    ],
+    "vendor_monitor": "docs/vendor-firmware/tf-a-monitor.md; monitor SHA-256 8af16b86ae8e2eff634a3ebca76a8cdf3c10b3540387573d46c3d785545b2632",
+    "boot0_and_A733": "docs/cold-entry.md and docs/vendor-firmware/boot-rom-and-boot0.md"
+  }
+}

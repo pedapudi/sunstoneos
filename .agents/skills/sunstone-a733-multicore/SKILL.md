@@ -40,6 +40,25 @@ Capture the state needed to distinguish those boundaries, including the matching
 core and epoch. Raw ESR/FAR values outside an observed exception path may be
 reset or stale contents; do not interpret them as a captured fault.
 
+## Hold cold secondary CPUs until their entry is published
+
+An OFF sample does not exclude an autonomous wake. The A733 CPU power pages
+use the PCK-600 PPU protocol: bind their identity and capabilities before using
+standard policy semantics. Wait for both static-policy acknowledgment and actual
+OFF before admitting memory ownership. Preserve that policy until the target's
+mailbox, architecture and entry address have been published. The existing
+mailbox protocol parks an immediately awakened target until primary power/request
+cleanup completes; only then may the continuation change its wake controls.
+See the [cold CPU owner](../../../docs/designs/cold-cpu-static-off.md) and its
+[pinned references](../../../boot/a733/stage2/cpu-sources.json).
+
+A55 CLIDR/CCSIDR includes the A733's documented DSU L3. Do not require an
+unsupported hypothetical external-cache authority. An in-flight wake can flush
+private data into L3 after boot0 cleanup, so acknowledged final OFF must precede
+fresh hierarchy cleanup for later DMA. This cleanup cannot retrospectively
+protect the monitor bytes that boot0 already loaded. Keep that predecessor
+contract and non-Arm exclusion separate from stage2's subsequent-load ownership.
+
 ## GIC-600 power and CPU power are separate protocols
 
 The pinned A733 map places the distributor at `0x03400000` and redistributor
