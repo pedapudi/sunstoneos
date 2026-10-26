@@ -122,6 +122,10 @@ static uint64_t stage_deadline(const struct bluetooth_application *a,uint64_t du
     /* Recognition reserves the final20s of the existing60s supervised session.
      * This allocation is not a physical inference-time qualification. */
     if((a->profile->version==3||a->profile->headset.mode==4)&&duration>40000000)duration=40000000;
+    if(a->resident){
+        uint64_t firmware=(a->profile->version==3||a->profile->headset.mode==4)?30000000:40000000;
+        return cap(a->started,duration-firmware,a->deadline);
+    }
     return a->started+duration;
 }
 static int upper_init(struct bluetooth_application *a)

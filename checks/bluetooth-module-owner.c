@@ -26,9 +26,11 @@ static struct a733_radio_session module;
 static TaskHandle_t owner=(TaskHandle_t)(uintptr_t)1,current_task;
 static BaseType_t scheduler=taskSCHEDULER_NOT_STARTED;
 static unsigned bootstrap_ready,uart_retains,wake_reads;
+static unsigned uart_busy,wake_busy,bootstrap_tick,bootstrap_clock_fail,clock_fail;
+static uint64_t observed_generation=4;
 TaskHandle_t xTaskGetCurrentTaskHandle(void){return current_task;}
 BaseType_t xTaskGetSchedulerState(void){return scheduler;}
-int a733_counter_clock_now(void *p,uint64_t *t){assert(p==&providers.counter);*t=wire.now;return 1;}
+int a733_counter_clock_now(void *p,uint64_t *t){assert(p==&providers.counter);*t=wire.now;return !clock_fail;}
 int a733_radio_platform_native_init(struct a733_radio_platform_native *n,struct a733_platform_locks *l,void *task,
     int (*admit)(void *,const struct a733_radio_platform_config *,const struct a733_clock_token *),void *cookie)
 {assert(l==&providers.locks&&task==owner);n->admit=admit;n->admission_cookie=cookie;n->initialized=1;return 1;}
@@ -51,7 +53,7 @@ int a733_uart_platform_init(struct a733_uart_platform *u,const struct a733_uart_
 enum a733_uart_platform_result a733_uart_platform_poll(struct a733_uart_platform *u)
 {assert(u==&app.uart);return a733_uart_poll(&u->uart)==A733_UART_READY?A733_UART_PLATFORM_READY:A733_UART_PLATFORM_RETAINED;}
 enum a733_uart_platform_result a733_uart_platform_live(struct a733_uart_platform *u,uint64_t d)
-{assert(u==&app.uart&&d==app.deadline);u->uart.deadline=d;return A733_UART_PLATFORM_READY;}
+{assert(u==&app.uart&&d==app.deadline);u->uart.deadline=d;return uart_busy?A733_UART_PLATFORM_BUSY:A733_UART_PLATFORM_READY;}
 struct a733_uart *a733_uart_platform_controller(struct a733_uart_platform *u){assert(u==&app.uart);return &u->uart;}
 enum a733_uart_platform_result a733_uart_platform_retain(struct a733_uart_platform *u)
 {assert(u==&app.uart&&(atomic_load(app.recovery_state)&4));++uart_retains;return A733_UART_PLATFORM_RETAINED;}
@@ -65,7 +67,7 @@ int a733_radio_platform_bluetooth(struct a733_radio_platform *p,const struct a73
 {assert(p==app.module_radio&&b==&profile.wake&&!p->bluetooth.authority);p->bluetooth=*b;return 1;}
 enum a733_radio_platform_result a733_radio_platform_bluetooth_wake(struct a733_radio_platform *p,
     const struct a733_radio_borrow *b,uint64_t d,unsigned *v)
-{assert(p==&platform&&b==&module.borrow&&d==module.deadline);++wake_reads;*v=0;return A733_RADIO_READY;}
+{assert(p==app.module_radio&&b==&app.module_session->borrow&&d==app.module_session->deadline);++wake_reads;*v=0;return wake_busy?A733_RADIO_BUSY:A733_RADIO_READY;}
 int a733_radio_session_init_bootstrap(struct a733_radio_session *s,struct a733_radio_platform *p,const struct a733_radio_session_config *c)
 {assert(s==&app.session&&p==&app.radio);s->config=*c;s->deadline=c->bootstrap_deadline;return 1;}
 /* The module owner polls, drains and retains its own session. */
@@ -75,8 +77,9 @@ int a733_radio_session_take_event(struct a733_radio_session *s,struct aic8800_di
 int a733_radio_session_take_record(struct a733_radio_session *s,struct aic8800_dispatch_record *r){assert(s!=&module);(void)r;return 0;}
 int a733_radio_session_bootstrap(struct a733_radio_session *s,uint64_t *generation)
 {
-    assert(s==app.module_session);if(s->fault)return -1;if(!bootstrap_ready)return 0;
-    s->borrow.generation=4;*generation=4;return 1;
+    assert(s==app.module_session);wire.now+=bootstrap_tick;clock_fail=bootstrap_clock_fail;
+    if(s->fault)return -1;if(!bootstrap_ready)return 0;
+    s->borrow.generation=observed_generation;*generation=observed_generation;return 1;
 }
 static uint8_t digest[32];
 static struct fixture fresh_wire;
@@ -110,7 +113,10 @@ static void identify(void)
     }
     struct bt_hci_identity identity;assert(bluetooth_application_result(&app,&identity)==1&&identity.valid==63);
 }
-int main(void)
+#ifndef BLUETOOTH_MODULE_FIXTURE_ENTRY
+#define BLUETOOTH_MODULE_FIXTURE_ENTRY main
+#endif
+int BLUETOOTH_MODULE_FIXTURE_ENTRY(void)
 {
     wire.now=1;wire.room=1024;providers.used=1;providers.boot.identity=99;
     profile=(struct bluetooth_profile){.magic=BLUETOOTH_PROFILE_MAGIC,.version=1,.bytes=624,
@@ -161,9 +167,9 @@ int main(void)
     assert(native.extension(native.extension_cookie,&platform.config,&token)==1);
 
     /* Resident attachment identifies the controller on the module's firmware
-     * generation. Readiness at 50 s moves the origin to 10 s, where the
-     * supervised 40 s firmware bound would fall: HCI identification is due at
-     * 65 s. Nothing in the client polls or retains the module. */
+     * generation. Readiness at 50 s anchors the resident schedule there.
+     * The supervised 15 s HCI budget ends at 65 s. Nothing in the client
+     * polls or retains the module. */
     reset();wire=fresh_wire;
     assert(attach(0,BLUETOOTH_RESIDENT_END_US)==1&&app.resident&&app.bootstrap_deadline==120000000&&
         app.deadline==BLUETOOTH_RESIDENT_END_US-10000);
@@ -171,7 +177,7 @@ int main(void)
     assert(bluetooth_application_poll(&app)==0&&app.stage==1);
     wire.now=50000000;assert(bluetooth_application_poll(&app)==0);
     bootstrap_ready=1;identify();
-    assert(app.started==10000000&&app.hci_deadline==65000000&&app.firmware_generation==4&&wake_reads);
+    assert(app.started==50000000&&app.hci_deadline==65000000&&app.firmware_generation==4&&wake_reads);
     /* A module fault ends the client without touching the module again. */
     module.fault=1;unsigned retains=uart_retains;
     assert(bluetooth_application_poll(&app)==-1&&(atomic_load(&latch)&4)&&uart_retains==retains+1&&

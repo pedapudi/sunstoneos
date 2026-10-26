@@ -159,11 +159,12 @@ registers. The check accepts the E902 only when its start bits all read clear:
 the RISC-V bus gates and configuration reset (bits 0, 1 and 16 of
 `0x0701021c`), the clock enable (bit 31 of `0x07010210`) and bit 0 of the
 CPUIDLE word at `0x07050008`. Other bits of these registers are not checked,
-and the check never reads the gated block at `0x07032000`. Two masters remain
-unproven: the OR100 processor, for which neither pinned document gives a
-reset or clock control, and the crypto engine, which the board ROM takes out
-of reset. The check therefore refuses on every board until further evidence
-exists. The loader does not call it yet.
+and the check never reads the gated block at `0x07032000`. The A733 device
+datasheet excludes OR100 from the processor inventory; historical bit 1 remains
+reserved. CE remains unproven when the ROM releases its resets, because prior
+task completion is not established. The stage-2 loader now checks the native
+mask before card access and refuses any unproven writer. See the
+[applicability and CE audit](remote-writers.md#device-applicability-excludes-or100-ce-ownership-remains-open).
 
 ## The EL1 tables need a Nonsecure dirty-line experiment
 

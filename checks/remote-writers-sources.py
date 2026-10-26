@@ -120,13 +120,20 @@ def main():
                  'SPIF_BGR_REG                   0x0F1C', '11.5.5.7       SPI Flash Private DMA'):
         assert text in manual, text
     assert manual.count('OR100') == 2 and 'E902_CORE_RST' not in manual
+    assert ('Some modules shown in this block diagram are not offered on all devices, please refer to\n'
+            'A733_Datasheet.') in manual
     datasheet = raw['datasheet'].decode()
     assert 'RISC-V CPU                Single E902' in datasheet and 'OR100' not in datasheet
+    ordering = datasheet[datasheet.index('Table 2-1 Ordering Information'):datasheet.index('3.1     Processors', datasheet.index('Table 2-1 Ordering Information'))]
+    assert all(device in ordering for device in ('A733MX-HN3', 'A733MX-N3X', 'A733MX-1XX'))
+    assert 'all the orderable devices listed' in ordering
+    assert 'RISC-V E902 CPU, up to 200 MHz' in datasheet
 
     result = {'schema': 'remote-writers-sources-v1', 'physical_access': False,
               'inputs': {n: d for n, (_, d) in INPUTS.items()}, 'boot0': b0, 'board_rom': rs,
               'rom_ce_enable': '0x218c', 'rom_dma0_deassert': '0x10d0', 'rom_dma0_reassert': '0xc91c',
-              'boot0_scp_destination': '0x48100000', 'manual_or100_mentions': 2}
+              'boot0_scp_destination': '0x48100000', 'manual_or100_mentions': 2,
+              'or100_applicability': 'Not in the A733 device inventory; manual defers availability to datasheet.'}
     (args.output / 'remote-writers-sources.json').write_text(json.dumps(result, indent=1) + '\n')
     print(json.dumps(result, indent=1))
 

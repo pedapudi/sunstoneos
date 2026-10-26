@@ -1945,6 +1945,22 @@
   "summary": "Run changed mode2 serializer/ACK/security cases in the actual native ELF.",
   "usb": false
  },
+ "bluetooth-startup-deadline.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/bluetooth-native.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--output",
+   "--native-recipe",
+   "--hci-reference",
+   "--native-build"
+  ],
+  "summary": "Bluetooth first-readiness and HCI startup deadlines only.",
+  "usb": false
+ },
  "bluetooth-usb-native.py": {
   "cache_areas": [
    "evidence"
@@ -2088,6 +2104,19 @@
    "--headers"
   ],
   "summary": "Check the radio coordinator and changed session admission without protocol replay.",
+  "usb": false
+ },
+ "board-session-fields.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--recorded",
+   "--radio",
+   "--output"
+  ],
+  "summary": "Check native board invariants on recorded and existing radio templates.",
   "usb": false
  },
  "board-session-seal-cases.py": {
@@ -7501,6 +7530,49 @@
   "summary": "One supervised native link and the supply, startup sequencer and refusal composition.",
   "usb": true
  },
+ "os-card-bundle.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--build",
+   "--base-model",
+   "--overlay-model",
+   "--wav",
+   "--boot0",
+   "--packer",
+   "--output"
+  ],
+  "summary": "Exercise the real cold-card producer using explicit ordinary-file model evidence.",
+  "usb": false
+ },
+ "os-card-entry.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--build",
+   "--fixture",
+   "--output"
+  ],
+  "summary": "Execute the actual linked stage-2 recorded entry and native OS admission.",
+  "usb": false
+ },
+ "os-contract-profile.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--legacy",
+   "--output"
+  ],
+  "summary": "Read actual ELF contract metadata and refuse malformed/absent new profiles.",
+  "usb": false
+ },
  "os-cpu-clock-native.py": {
   "cache_areas": [],
   "docs": [
@@ -7527,6 +7599,18 @@
    "--output"
   ],
   "summary": "Check the actual AArch64 native GPU thermal caller with modeled service replies.",
+  "usb": false
+ },
+ "os-gpu-wait-linked.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--output"
+  ],
+  "summary": "Run GPU timeout through the actual linked hook, dispatcher and recognizer failure path.",
   "usb": false
  },
  "os-image-audio.py": {
@@ -8780,7 +8864,6 @@
   "cache_areas": [],
   "docs": [
    "docs/board-radio.md",
-   "docs/os-image.md",
    "docs/vendor-firmware/README.md"
   ],
   "library": false,
@@ -8789,6 +8872,19 @@
    "--firmware"
   ],
   "summary": "Compare the minimum radio firmware bus time with the supervised bootstrap bound.",
+  "usb": false
+ },
+ "radio-bootstrap-rate.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--output",
+   "--native-recipe",
+   "--hci-reference"
+  ],
+  "summary": "Changed firmware-owner construction and bounded Bluetooth polling only.",
   "usb": false
  },
  "radio-dhcp-reconnect.py": {
@@ -8913,6 +9009,18 @@
    "--phase"
   ],
   "summary": "Build or execute only the affected retained-session reconnect composition,",
+  "usb": false
+ },
+ "radio-session-rate.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--output"
+  ],
+  "summary": "Exact linked session admission before borrow; platform outcomes are modeled.",
   "usb": false
  },
  "radio-sntp.py": {

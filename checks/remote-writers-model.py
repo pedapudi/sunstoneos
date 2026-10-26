@@ -32,7 +32,7 @@ WRITERS = ['E902', 'OR100', 'DMA0', 'DMA1', 'CE', 'SMHC0', 'SMHC1', 'SMHC2', 'SM
            'SPIF', 'USB0', 'USB1', 'USB2', 'PCIE0', 'GMAC0', 'DE0', 'DI', 'G2D', 'EINK', 'VE', 'NPU',
            'GPU0', 'CSI', 'ISP']
 BIT = {name: 1 << n for n, name in enumerate(WRITERS)}
-ALL = (1 << len(WRITERS)) - 1
+ALL = ((1 << len(WRITERS)) - 1) & ~BIT['OR100']
 CCU, PRCM = 0x02002000, 0x07010000
 RISCV_24M, RISCV_BGR, CPUIDLE = PRCM + 0x210, PRCM + 0x21c, 0x07050008
 ISP_CLK, MBUS_GATE_EN = CCU + 0x1860, CCU + 0x5e4
@@ -214,8 +214,8 @@ def stage2_checks(build, output):
         case('prior-owner-' + hex(address), 'a733_stage2_reset_policy', 0, changes={address: value})
     case('CPU-cache-authority-unresolved', 'a733_stage2_cpu_cache_owned', 0)
     case('CPU-cache-refused-before-SD', 'a733_stage2_main', 0, grant_remote=True)
-    case('OR100-refused-before-SD', 'a733_stage2_main', BIT['OR100'])
-    case('CE-out-of-reset-refused-before-SD', 'a733_stage2_main', BIT['OR100'] | BIT['CE'], changes={CCU + 0xac4: 0x30003})
+    case('E902-refused-before-SD', 'a733_stage2_main', BIT['E902'], changes={RISCV_BGR: 1})
+    case('CE-out-of-reset-refused-before-SD', 'a733_stage2_main', BIT['CE'], changes={CCU + 0xac4: 0x30003})
     (output / 'stage2-admission.json').write_text(json.dumps(dict(passed=True, physical_access=False, cases=cases,
         scope='Local system registers and hardware reads modeled; no ownership, cache publication or reset qualification.'), indent=1) + '\n')
     print('PASS stage-2 admission:', len(cases), 'focused instruction cases')
@@ -238,13 +238,14 @@ def main():
         regs.update(changes or {})
         mask, reads = run(image, regs, entry, fail)
         assert mask == expected, f'{label}: {names(mask)} != {names(expected)}'
+        assert not mask & BIT['OR100'], 'reserved processor bit emitted'
         for address in absent:
             assert address not in reads, f'{label}: read {address:#x}'
         assert all(not 0x07032000 <= a < 0x07034000 for a in reads)
         results.append({'case': label, 'unproven': names(mask), 'reads': len(reads)})
         return reads
 
-    base = BIT['OR100']
+    base = 0  # OR100 bit 1 is reserved; A733 implements the E902 only.
     reads = case('reset-defaults', base)
     assert sorted(set(reads)) == sorted(reads), 'a register was read twice'
     gated_reads = {a for a in reads if a >= 0x04000000 and a < 0x05000000}

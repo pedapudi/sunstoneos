@@ -19,6 +19,12 @@ A733 inputs. A device-tree node alone does not establish fitted-board wiring,
 peripheral presence or electrical state. Use the
 [wiring guide](../../../docs/board-wiring.md) for board routes and accessories.
 
+Resolve device applicability before treating a family diagram or generated
+register map as an implemented processor. The A733 manual explicitly defers
+module availability to the device datasheet; its OR100 labels do not add a
+second A733 control processor. Preserve contrary family references and the
+separate CE ownership requirement in the [remote-writer audit](../../../docs/remote-writers.md#device-applicability-excludes-or100-ce-ownership-remains-open).
+
 Reuse suitable open-source implementations through FreeRTOS adapters. Pin new
 references in the existing component manifest or `sources.lock.json`, preserve
 licenses, and state whether code runs on the host, CPU, accelerator or other

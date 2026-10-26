@@ -1247,9 +1247,12 @@ No integrated OS physical execution is established by these checks.
   ends the session on any headset failure, also while the radio is still up.
 - **SHA-256 and AES requests.** The crypto engine serves only radio entropy;
   no part of the image submits hash or cipher requests.
-- **HDMI, camera, NPU and GPU graphics.** These are separate images. The
-  GPU linear build places mimus linear layers on the GPU, and the NPU does
-  not yet produce the exact sums that recognition needs.
+- **HDMI, camera and GPU graphics.** These remain separate images. The GPU
+  linear option integrates recognition compute into the OS.
+- **Resident NPU and recognition acceleration.** The supervised OS integrates
+  a finite NPU application with its existing model catalogue. Resident NPU
+  startup and cold-card authority are not yet integrated. The NPU does not
+  produce the exact sums required by the mimus recognition path.
 - **Physical use.** The supervised image needs a reviewed entry record
   from physical evidence and a queued board test; the microphone build also
   needs a connected, reviewed microphone. The radio and headset builds need

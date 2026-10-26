@@ -88,7 +88,7 @@ static int dmac_idle(const struct a733_remote_writers_ops *ops, uint64_t base)
 
 uint32_t a733_remote_writers_excluded(const struct a733_remote_writers_ops *ops)
 {
-    uint32_t unproven = A733_REMOTE_WRITER_BIT(A733_REMOTE_OR100), v;
+    uint32_t unproven = 0, v;
     if (!ops || !ops->read32) return A733_REMOTE_WRITERS_ALL;
     if (!e902_gated(ops)) unproven |= A733_REMOTE_WRITER_BIT(A733_REMOTE_E902);
     if (!isp_gated(ops)) unproven |= A733_REMOTE_WRITER_BIT(A733_REMOTE_ISP);

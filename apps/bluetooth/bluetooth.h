@@ -63,10 +63,11 @@ _Static_assert(sizeof(struct bluetooth_profile)==832&&offsetof(struct bluetooth_
  * bluetooth_application_attach, a full Wi-Fi session that another owner built
  * on the same task. module_radio and module_session name the one in use.
  *
- * started is the origin of the stage schedule, which keeps the offsets of the
- * supervised 60 s session. In the resident lifetime the origin moves when the
- * firmware first becomes ready, to the point where the supervised bootstrap
- * bound would fall, so each later stage keeps its supervised time budget. */
+ * started is the supervised session origin, or the first accepted firmware
+ * readiness time in a resident lifetime. Resident stage deadlines add the
+ * supervised stage offset minus its firmware offset to that anchor.
+ * firmware_generation latches that first on-time observation before HCI
+ * initialization; UART or wake contention cannot move the anchor. */
 struct bluetooth_application {
     struct bluetooth_application *self;
     const struct bluetooth_profile *profile;

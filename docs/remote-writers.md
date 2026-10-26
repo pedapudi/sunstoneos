@@ -13,13 +13,13 @@ and returns a bitmask of the masters whose exclusion it cannot prove. Zero means
 every listed master is excluded. The function never writes a register. The
 interface is in [`a733_remote_writers.h`](../include/a733_remote_writers.h).
 
-Status: implemented and checked against modeled register states. The
-[memory qualification image](memory-qualification.md) is the only image that
-calls it, and no board has reported the register values it reads. With the
-current sources it cannot return zero on a board: the OR100 processor and the
-crypto engine (CE) remain unproven, as explained below.
+Status: implemented and checked against modeled register states. The stage-2
+loader checks the mask before card access; the memory qualification image
+records it under its separate residual-risk contract. CE remains unproven when
+the ROM has released its resets. OR100 is not part of the A733 device processor
+inventory, so its historical mask bit 1 is reserved and never emitted.
 
-## The cold boot chain starts CE and may leave DMA0 and storage controllers out of reset
+## The cold boot chain releases CE reset and may leave DMA0 and storage controllers out of reset
 
 The cold boot chain is the board ROM, then boot0, then the SunstoneOS cold-entry
 monitor and its stage-2 loader. The TOC1 package contains only the monitor; it
@@ -59,7 +59,7 @@ bit reads 0 when asserted and bit 0 is the bus clock gate.
 | Master | Excluded when | Manual section |
 | --- | --- | --- |
 | E902 | `RISCV_BGR_REG` (`0x0701021c`) bits 0, 1 and 16 are 0; `RISCV_24M_CLK_REG` (`0x07010210`) bit 31 is 0; CPUIDLE word `0x07050008` bit 0 is 0 | 4.2.5.23, 4.2.5.24 |
-| OR100 | Never; no register controls it in either pinned document | 1, 12.1.2 |
+| Reserved bit 1 (formerly OR100) | Not an implemented A733 processor; no register access | Manual page 3; datasheet figure 1-1, table 2-1, 3.1 |
 | DMA0, DMA1 | Reset asserted (`0x704`, `0x70c` bit 16), or bus gate open, every `DMA_EN_REG` bit 0 clear and `DMA_STA_REG` bits 31 and 15:0 clear | 4.1.6.85, 4.1.6.86, 13.1.7.3, 13.1.7.6 |
 | SMHC0 to SMHC3 | Reset asserted (`0xd0c`, `0xd1c`, `0xd2c`, `0xd3c` bit 16), or bus gate open and `SMHC_DMAC` bit 7 (IDMAC enable) clear | 4.1.6.129 to 4.1.6.135, 11.3.8.25, 11.3.9.26 |
 | CE | Both resets asserted (`0xac4` bits 16 and 17) | 4.1.6.118 |
@@ -97,28 +97,61 @@ stays unproven. The ISP shares the `VIDEO_IN` reset, which defaults to
 de-asserted, so its rule uses its module clock and MBUS clock instead.
 
 One sample is valid only while nothing can restart a stopped master. Apart
-from the Arm cores, the E902 and OR100 are the only programmable agents in the
-pinned sources that could do so. A caller therefore refuses on any set bit.
+from the Arm cores, the E902 is the programmable control processor in the
+A733 device inventory that could do so. A caller therefore refuses on any set bit.
 
-## OR100 and CE need further evidence
+## Device applicability excludes OR100; CE ownership remains open
 
-- **OR100.** The manual's block diagram (section 1) and interrupt controller
-  diagram (section 12.1.2) show an OR100 processor in the CPUS domain. The
-  datasheet lists only the E902 as a RISC-V or CPUS-domain processor, and
-  neither document gives an OR100 clock, reset or memory map. Clearing this
-  bit needs a vendor source that either removes OR100 from the A733 or
-  documents its reset and bus gate.
-- **CE.** The board ROM leaves both CE resets de-asserted on every boot that
-  passes its clock setup. Neither the ROM nor boot0 contains a literal CE
-  register address, which suggests that no CE task was loaded, but a literal
-  scan cannot prove it. Clearing this bit needs either a documented CE idle
-  status or a complete control-flow proof that no ROM or boot0 path writes the
-  CE task registers.
-- **Board values.** No board has reported the registers listed above after a
-  cold boot. One read-only snapshot of them on a cold-booted board would show
-  which masters the ROM and boot0 actually leave out of reset, including
-  SMHC0's IDMAC state, DMA0 after the ROM's media probe and the NAND0, SMHC2
-  and UFS resets.
+The manual's broad block diagram on printed page 2 shows both E902 and OR100.
+Page 3 explicitly says that some depicted modules are not offered on every
+device and directs the reader to the A733 datasheet. That datasheet's device
+diagram (figure 1-1), ordering table covering all three A733 variants (table 2-1)
+and processor list (section 3.1) specify six A55 cores, two A76 cores and one
+E902, with no OR100. The device inventory therefore takes precedence over the
+manual's broad diagram.
+
+The manual's interrupt diagram also names OR100, and the generated sun60iw2
+U-Boot map at revision `b791be842935b27268ae3d00e943a9075495f30a` names
+`SUNXI_CPUS_OR100_CFG_BASE` at `0x07031000`. These family-level definitions do
+not establish a second implemented A733 processor. The manual's actual memory
+map omits that address and documents E902 configuration at `0x07032000`.
+No probe or guessed control write to `0x07031000` is justified. This conclusion
+uses device applicability; it does not identify OR100 as an alias for E902.
+The native enum keeps bit 1 reserved so historical evidence masks retain their
+meaning. The applicable-writer mask and all new samples exclude that bit.
+
+The actual package contains only the native monitor and omits the vendor
+monitor, U-Boot and SCP. The vendor ARISC startup service reaches the documented
+E902 start sequence; this package does not execute that service. The E902
+runtime checks remain necessary and unchanged.
+
+CE remains a real ownership requirement. The ROM releases both CE resets.
+At captured-ROM address `0xb88`, the helper at `0x2a0c` reads SID word
+`0x030060a0`; a nonzero result reaches uncaptured secure ROM at `0x11000`
+through `0xb98`. Absence of CE literals in the captured normal ROM and boot0
+cannot establish what that predecessor submitted. A runtime SID check could
+exclude the secure branch, but would not alone establish no prior submissions
+on the remaining path or reset coverage.
+
+The effective A733 Linux CE v5 implementation at revision
+`2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f` has no supported stop operation.
+Its removal helper checks only the low byte of task status; the manual does
+not define that as a complete both-world idle indication. CE task-load zero
+has no effect. Completion bits must be tied to known submissions, including
+chained tasks, before they can transfer memory ownership.
+
+A valid initializer must exclude competing control writers, account for every
+predecessor task or establish no submissions since a reset with known coverage,
+and finish that proof before reusing protected memory. Unknown or active work
+must refuse admission without an unproven reset, gate change or pool reuse.
+The monitor is already in DRAM when stage2 runs, so a late check cannot protect
+its earlier load from arbitrary inherited DMA. That interval needs a boot0 or
+predecessor contract as well as the check before slot copying.
+
+The cached follow-up at
+`~/.cache/sunstoneos/evidence/cold-remote-followup-1026/` preserves source hashes,
+numbered excerpts and exact ROM instructions, including the contrary generated
+map. No new hardware observation or CE quiesce sequence is claimed.
 
 ## No source defines a safe stop procedure
 
@@ -131,14 +164,12 @@ Reversing the shipped monitor's E902 start writes is equally unproven. A stop
 procedure therefore needs a source that defines completion of outstanding
 writes before it can replace a refusal.
 
-## The stage-2 loader should call the check before reading the card
+## The stage-2 loader checks before reading the card
 
-The stage-2 loader in `boot/a733/stage2/` should call the function at EL3,
-before it reads the first slot header, with a read function that performs one
-aligned 32-bit load. It should store the returned mask in its report and
-refuse entry in `a733_stage2_entry_admission()` while the mask is nonzero.
-The loader takes over SMHC0 for its own polled reads after this call; the SD
-core's own admission already refuses an enabled IDMAC.
+The stage-2 loader calls the function at EL3 before card access, using one
+aligned 32-bit load per callback. It records a nonzero mask and refuses before
+slot copies. After admission, the existing SD provider establishes its own
+controller ownership and completion contract before enabling IDMAC.
 
 ```c
 static int mmio_read(void *context, uint64_t address, uint32_t *value)
@@ -151,25 +182,20 @@ const struct a733_remote_writers_ops ops = {mmio_read, 0};
 uint32_t unproven = a733_remote_writers_excluded(&ops);
 ```
 
-## The memory qualification image accepts OR100, CE and USB0
+## Memory qualification retains its separate residual-risk contract
 
-The memory qualification image departs from the caller rule above. Its
-monitor samples the mask once at EL3, at the end of `monitor_init()` and
-before EL1 entry, stores it in the image's result record and refuses EL1
-entry on any bit other than OR100, CE and USB0. The other images keep their
-current admission and do not call the function.
+The memory qualification monitor samples the mask once at EL3, before EL1
+entry, and stores it in the result record. Its historical exception mask accepts
+bits 1, 4 and 12: the former OR100 bit, CE and USB0. Bit 1 remains numerically
+reserved, and new samples leave it clear. Historical records are unchanged.
 
-- **OR100 and CE** stay unproven on every boot, for the reasons given under
-  [OR100 and CE need further evidence](#or100-and-ce-need-further-evidence).
-- **USB0** is out of reset because the ROM's FEL stack uploaded the image.
-  That stack uses programmed I/O, as the physical ROM capture shows
-  ([hardware.md](hardware.md), USB row), and does not run while the image
-  does.
-
-Each exclusion that the sample shows holds only at the sampling instant. A write by OR100, CE or
-USB0 during a run would look like a DRAM fault to the image. The host
-prepares no run contract until its run log holds the user's acceptance of
-this residual ([memory-qualification.md](memory-qualification.md#host-side)).
+CE remains unproven when its resets are released. USB0 is out of reset because
+the ROM's FEL stack uploaded the image; the captured stack uses programmed I/O
+and does not execute concurrently with the image. These facts do not give a
+cold loader general predecessor ownership. A CE or USB0 write during memory
+qualification could appear as a DRAM fault, so preparation still requires the
+existing explicit acceptance of that residual
+([memory-qualification.md](memory-qualification.md#host-side)).
 
 ## Checks
 
