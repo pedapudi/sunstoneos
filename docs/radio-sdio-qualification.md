@@ -36,7 +36,7 @@ the checked ELF SHA-256 is
 results establish native admission behavior. Electrical operation and startup timing
 remain unqualified.
 
-## The existing returning image needs radio-specific authority
+## The returning constructor requires radio-specific authority
 
 The [single-core returning platform](designs/board-bundles-next.md) supplies
 FreeRTOS and a secure timer that returns to ROM after two seconds.
@@ -44,6 +44,12 @@ FreeRTOS and a secure timer that returns to ROM after two seconds.
 of the counter, mutexes, clock leases, pins, rail leases and shared PMIC service.
 That constructor authorizes PL0 and PL1 for PMIC access. It does not supply the
 radio's required pin or power authority.
+
+The [returning SDIO identity application](../apps/radio-sdio-id/README.md)
+now supplies the native constructor and bounded transport caller. Its producer
+requires reviewed board/lifetime evidence before supplying pin authority,
+the complete PM latch and a rail map. An explicit zero-authority image refuses
+before initializing providers. No physical authority record has been supplied.
 
 Before creating a runnable radio image, preparation must bind these inputs to
 the selected board and its current power lifetime:
@@ -77,8 +83,17 @@ the selected board and its current power lifetime:
 The [platform contract](radio-platform.md) identifies the pinned schematic,
 device tree, clock and power sources behind these predicates. Successful
 single-core or PMIC operation does not provide the missing radio-specific
-authority. No board bundle has been frozen because those inputs and a native
-radio application constructor are still missing.
+authority. No board bundle has been frozen because those board inputs remain
+missing.
+
+The source check against schematic V1.2 and the pinned board device tree leaves
+the supply discrepancy unresolved. The cached vendor early-boot configuration
+(`sources/board-boot/sys_config-sys_config.fex`) contains no radio rail map or
+PM output-latch record. Schematic sheet 14 also connects the PM2-derived net
+to both Bluetooth reset and low-power oscillator symbols through resistors.
+These source observations do not identify the fitted board revision, resistor
+population or current powered lifetime. The producer therefore has no default
+topology or inherited latch value.
 
 ## A bounded debug exchange must exercise CMD53 data transfers
 
@@ -100,7 +115,8 @@ Wi-Fi, entropy or the network stack for this test.
 The smallest procedure supported by the current APIs uses separate power
 lifetimes for the one-bit baseline and four-bit comparison:
 
-1. Prepare a single-core image that stops after transport identity completion.
+1. Supply the reviewed authority record to the single-core application producer.
+   Prepare an image that stops after transport identity completion.
    Give platform setup and identity work one absolute deadline of 1.5 seconds
    after monitor entry, below the existing two-second forced return. This is a
    proposed test bound; no measurement establishes that startup fits it.
@@ -127,3 +143,10 @@ Passing this procedure would establish only the tested CMD53 exchanges at the
 selected rate. The next test must load the pinned firmware within the original
 40-second bootstrap bound and record its start confirmation. Larger transfers,
 firmware startup, RF operation and sustained timing remain separate requirements.
+
+The native constructor links with the current provider, radio, card and
+transport units. Thirteen application instruction-model cases and nine producer
+refusal cases pass. They cover absence of authority before provider construction,
+the real shared-provider and radio constructors, mapping refusal, card binding, four-bit fallback,
+transport failure and one fixed absolute deadline. The fixture supplies device
+responses and cannot establish electrical operation or startup timing.
