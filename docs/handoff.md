@@ -138,6 +138,25 @@ one lifetime with no power removal between, and both runs completed: the
 firmware restarts cleanly. `work/gpu-fw-stop-1025` is merged; its
 bundle row is now 25, while frozen sets 21 and 23 call it 20.
 
+**GPU eight-job session passed on port 3-1** (set `board-bundles-20261025-30`,
+`board-session-20261025-29/port-3-1`, record `s29-gjs-run`). One firmware
+session ran eight 32-lane jobs on one context, timed from the kick to the
+timeline word on the 24 MHz counter:
+- job 1 took 113 µs, including the MMU cache flush;
+- jobs 2 to 5, 7 and 8 took 80 to 83 µs each;
+- job 6, the first after the command ring wrapped, took 87 µs.
+
+All 32 output words matched, with no firmware events or resets. Cleanup and
+the stop were acknowledged, and the GPU powered off. Preparation took 1.45 ms
+and the eight jobs 2.39 ms in total.
+
+**CPU step 6, second attempt on port 3-3** (`board-session-cpu-top-opp-8`,
+`step6-set-4`): bundles 2, 25 and 26 passed, and after the ROM return all
+three domains read their boot words with both rails held. The workload did
+not launch. Its binding (`cpu-prepare.py`) compares bundle 26's ELF hash with
+the record's `image_sha256`, which holds the uploaded `probe.bin` hash, so it
+refuses every real record. The fix is pending review.
+
 **First GPU compute job passed on port 3-1** (set `board-bundles-20261025-29`,
 `board-session-20261025-28/port-3-1`, record `s27-gfj-run`). After the cold DDR
 start and provider readiness, one power-on did all of the following:
