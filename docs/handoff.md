@@ -252,8 +252,12 @@ set `step6-set-5`). In one lifetime, with an operator present:
   most.
 
 The background progress counts (about 2.66 million per A55 core and 3.27
-million per A76 core) are far above the predicted 300,000 and 260,000; the
-analysis is on `work/cpu-top-opp-step6-1025`. An earlier attempt
+million per A76 core) were far above the predicted 300,000 and 260,000
+because the prediction scaled runs of the older native image `762237cd…`,
+whose core-ID read was a supervisor call. Against the same image `6fd7af86…`
+at the boot rates (`board-session-20261025-8`, 692,000 and 1,590,000), the
+counts rose 3.85 and 2.06 times for clock ratios of 3.63 and 1.97
+(`docs/designs/cpu-top-opp.md`, "Step 6 passed on port 3-3"). An earlier attempt
 (`board-session-cpu-top-opp-8`) stopped before launch because its binding
 compared the wrong hash kind; set 5 fixed it.
 
@@ -341,8 +345,14 @@ In one lifetime, with CPU0 running and every other core off:
 
 Every clock word read back as predicted, every ROM return worked,
 including returns with CPU-L above 494 MHz, and the hottest sensor read
-42 °C. The ROM resets CPU-L to 494 MHz on each return, as it does MBUS,
-so each image must set its own clocks. A76 execution at 2002 MHz (steps 6
+42 °C. The ROM resets CPU-L and the DSU to 494 MHz on each return, as it
+does MBUS, so each image must set its own clocks. It does not reset CPU-B:
+the first step 6 run (`board-session-cpu-top-opp-7/port-3-3`) read CPU-B
+still at 2002 MHz after bundle 25's return, and the boot ROM's clock setup
+writes only the CPU-L and DSU PLLs. Every image that raises CPU-B lowers it
+to 1014 MHz before a successful return, the step 6 workload included; a
+failed return can leave it raised and ends the lifetime with a power
+removal (`docs/designs/cpu-top-opp.md`). A76 execution at 2002 MHz (steps 6
 and 7, B1) is still to do. The merge into `bringup` waits on integration
 fixes; it is now merged (`work/merge-cpu-top-opp-1025`).
 

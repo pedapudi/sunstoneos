@@ -90,7 +90,11 @@ def deadline_patch_points(native,quiet):
 
 
 FLAGS=('local','cached','coherent','interrupts','pre_scheduler','first_task','task_switch',
-       'task_workload','return_deadline','quiet')
+       'task_workload','return_deadline','quiet','top_opp')
+# The top-operating-point profile (docs/designs/cpu-top-opp.md, step 6): CPU0
+# relocks CPU-B, CPU-L and the DSU before the first secondary is released.
+TOP_OPP_TARGETS={'cpu_b':{'pll':0x08872000,'n':77,'mhz':2002},'cpu_l':{'pll':0x08871000,'n':69,'mhz':1794},
+                 'dsu':{'pll':0x08873000,'n':49,'mhz':1274}}
 
 
 def profile(**given):
@@ -100,6 +104,7 @@ def profile(**given):
     f=SimpleNamespace(**{name:bool(given.get(name,False)) for name in FLAGS})
     require(not f.quiet or f.return_deadline,'The quiet-background profile requires the return deadline.')
     require(not f.return_deadline or f.task_workload,'The return deadline applies to the task workload only.')
+    require(not f.top_opp or (f.return_deadline and not f.quiet),'The top-operating-point profile is the return-deadline workload.')
     f.task_switch|=f.task_workload
     f.first_task|=f.task_switch
     f.pre_scheduler|=f.first_task
@@ -131,6 +136,7 @@ def sources(f):
     elif f.coherent:names+=('boot/a733/secondary-coherence-probe.S',)
     if f.interrupts:names+=('boot/a733/secondary-interrupt-probe.S',)
     if f.return_deadline:names+=('boot/a733/workload-deadline-probe.S',)
+    if f.top_opp:names+=('boot/a733/top-opp-relock.c','boot/a733/top-opp-relock.h')
     return names
 
 
@@ -139,7 +145,10 @@ def report_area(f):
 
 
 def extension_address(f):
-    return 0x41020800 if f.interrupts else EXTENSION
+    # The interrupt vectors use the 2 KiB-aligned gap before the extension;
+    # the top-operating-point relock and its tables start right after the
+    # 512-byte base overlay.
+    return 0x41020200 if f.top_opp else 0x41020800 if f.interrupts else EXTENSION
 
 
 def patch_plan(native,hooks,f):
@@ -212,7 +221,7 @@ def prepare(args):
     f=profile(**{name:getattr(args,'quiet_background' if name=='quiet' else name,False) for name in FLAGS})
     local,cached,coherent,interrupts=f.local,f.cached,f.coherent,f.interrupts
     pre_scheduler,first_task,task_switch,task_workload=f.pre_scheduler,f.first_task,f.task_switch,f.task_workload
-    return_deadline,quiet=f.return_deadline,f.quiet
+    return_deadline,quiet,top_opp=f.return_deadline,f.quiet,f.top_opp
     extension=extension_address(f)
     report=report_area(f)
     base=json.loads((args.primary/'manifest.json').read_text())
@@ -263,6 +272,8 @@ def prepare(args):
     args.output.mkdir(parents=True,exist_ok=False)
     link=args.output/'identity.ld'
     vectors=' . = 0x41020800; .irq_vectors : { KEEP(*(.irq_vectors)) }\n ASSERT(. == 0x41021000, "Vector table extent differs")\n' if interrupts else ''
+    if top_opp:
+        vectors=' . = 0x41020200; .top_opp : { KEEP(*(.text.top_opp)) KEEP(*(.text.top_opp.*)) KEEP(*(.rodata.top_opp)) }\n ASSERT(. <= 0x41021000, "Relock exceeds its gap")\n'
     link.write_text('ENTRY(identity_primary_gate)\nSECTIONS {\n'+vectors+'''
  . = 0x41021000;
  .text : { *(.text .text.*) *(.rodata .rodata.*) }
@@ -284,6 +295,7 @@ def prepare(args):
     elif coherent:units += [('boot/a733/secondary-coherence-probe.S','coherence.o')]
     if interrupts:units += [('boot/a733/secondary-interrupt-probe.S','interrupt.o')]
     if return_deadline:units += [('boot/a733/workload-deadline-probe.S','deadline.o')]
+    if top_opp:units += [('boot/a733/top-opp-relock.c','top-opp.o')]
     for unit,object_name in units:
         commands.append([args.clang,'--target=aarch64-none-elf','-march=armv8-a','-mgeneral-regs-only',
             '-O2','-ffreestanding','-fno-builtin','-fno-stack-protector','-ffunction-sections','-fdata-sections',
@@ -295,6 +307,7 @@ def prepare(args):
             *(['-DSUNSTONE_TASK_SWITCH=1'] if task_switch else []),
             *(['-DSUNSTONE_TASK_WORKLOAD=1'] if task_workload else []),
             *(['-DSUNSTONE_WORKLOAD_DEADLINE=1'] if return_deadline else []),
+            *(['-DSUNSTONE_TOP_OPP=1'] if top_opp else []),
             *(['-DSUNSTONE_SECONDARY_INTERRUPTS=1'] if interrupts else []),'-I',ROOT/'include','-I',ROOT/'platform/a733-smp-cached',
             '-I',ROOT/'boot/a733','-c',ROOT/unit,'-o',args.output/object_name])
     symbols=[f'--defsym={name}={value:#x}' for name,value in native.items()]
@@ -326,7 +339,7 @@ def prepare(args):
         require(result.returncode==0,'Identity extension build failed; inspect build.log.')
     with (args.output/'identity.elf').open('rb') as stream:
         hooks={s.name:s['st_value'] for s in ELFFile(stream).get_section_by_name('.symtab').iter_symbols()
-               if s.name.startswith('identity_') or (cached and s.name.startswith(('native_el','el1_')))}
+               if s.name.startswith(('identity_','top_opp_')) or (cached and s.name.startswith(('native_el','el1_')))}
     overlay=bytearray(frozen['overlay.bin'])
     offset=return_address-primary.probe.OVERLAY[0]
     word=struct.unpack_from('<I',overlay,offset)[0]
@@ -374,6 +387,19 @@ def prepare(args):
             'quiet_background':quiet,'deadline_ticks_after_startup':DEADLINE_TICKS,'deadline_interrupt':29,
             'record':{'address':DEADLINE_RECORD[0],'bytes':DEADLINE_RECORD[1]},
             'pending':'Instruction cases, host validation and root review required before physical use.'}
+    if top_opp:
+        manifest['top_opp']={'record':{'address':REPORT[0]+0x80,'words':16},'targets':TOP_OPP_TARGETS,
+            'relock':hooks.get('top_opp_relock'),
+            'lower':{'record':{'address':REPORT[0]+0x60,'words':4},'cpu_b':{'pll':0x08872000,'n':39,'mhz':1014},
+                     'when':'completed path, after every secondary is OFF, before the return'},
+            'voltages':'DCDC3 1050 mV and DCDC5 1000 mV, set by bundle 25 and read back by bundle 26 after a ROM return '
+                       'in the same lifetime; the relock reads both selectors over S_TWI0 and refuses before any clock '
+                       'write unless they are at those voltages',
+            'entry_checks':['DCXO enabled and stable at 26 MHz','speed-bin code 0x04',
+                            'every domain on its locked PLL with modulation off',
+                            'S_TWI0 in the PMIC provider baseline and route',
+                            'PMIC page 0, chip 3, revision 0; DCDC3 and DCDC5 enabled at 1050 and 1000 mV'],
+            'pending':'Instruction cases, host validation and root review required before physical use.'}
     (args.output/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
     print('Prepared '+('first FreeRTOS task entry for all eight cores' if first_task else 'production pre-scheduler for all eight cores' if pre_scheduler else 'timer and peer IRQs for cores1..7' if interrupts else 'concurrent cached exchange for cores1..7' if coherent else 'cached EL1 entry for cores1..7' if cached else 'local initialization for cores1..7' if local else 'identity survey for cores2..7')+'; no board access.')
 
@@ -392,4 +418,5 @@ if __name__=='__main__':
     parser.add_argument("--task-workload",action="store_true",help="Offline-only complete FP/timer/SGI workload before coordinated return")
     parser.add_argument("--return-deadline",action="store_true",help="With --task-workload: CPU0 returns to the ROM with a record at a fixed deadline or on any CPU0 stop")
     parser.add_argument("--quiet-background",action="store_true",help="With --return-deadline: background tasks wait in WFE between increments")
+    parser.add_argument("--top-opp",action="store_true",help="With --return-deadline: CPU0 relocks CPU-B, CPU-L and the DSU to the top operating points first")
     prepare(parser.parse_args())
