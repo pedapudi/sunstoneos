@@ -197,6 +197,7 @@ def main():
     for name in ('build', 'base', 'overlay', 'wav', 'output'):
         parser.add_argument('--' + name, type=Path, required=True)
     parser.add_argument('--staged', action='store_true', help='explicit USB0-only recorded workload 2')
+    parser.add_argument('--gpu-performance-only', action='store_true', help='only GPU performance capability and frozen entry admission')
     parser.add_argument('--accelerators-only', action='store_true', help='only combined GPU/NPU session, authority and asset admission')
     parser.add_argument('--gpu-workers-only', action='store_true', help='only eight-worker GPU capability and combined admission')
     parser.add_argument('--gpu-cpu-only', action='store_true', help='only combined GPU and CPU-grant admission')
@@ -210,11 +211,11 @@ def main():
     link_check = args.build / 'os-image/link-check.json'
     manifest = json.loads(link_check.read_text())
     audio = manifest['audio']
-    assert sum((args.gpu_only, args.gpu_cpu_only, args.accelerators_only, args.gpu_workers_only)) <= 1
+    assert sum((args.gpu_only, args.gpu_cpu_only, args.accelerators_only, args.gpu_workers_only, args.gpu_performance_only)) <= 1
     npu = manifest.get('npu', False)
     if args.accelerators_only:
         assert npu and manifest.get('gpu_linear') and not audio
-    if args.gpu_only or args.gpu_cpu_only or args.gpu_workers_only:
+    if args.gpu_only or args.gpu_cpu_only or args.gpu_workers_only or args.gpu_performance_only:
         assert manifest.get('gpu_linear') and not audio
     # The CPU clock build appends the driver's 96-byte grant record.
     cpu_clock = 'SUNSTONE_A733_OS_CPU_CLOCK:BOOL=ON' in (args.build / 'CMakeCache.txt').read_text()
@@ -285,7 +286,8 @@ def main():
         record['inference'] = manifest['inference']
     if manifest.get('gpu_linear'):
         record['gpu'] = {'configuration': manifest['gpu_profile'],
-                         'conditions': {key: marker for key in sorted(prep.GPU_CONDITIONS)}}
+                         'conditions': {key: marker for key in sorted(prep.GPU_CONDITIONS |
+                             ({prep.GPU_PERF_CONDITION} if manifest.get('perf_modes') else set()))}}
     for key, offset in zip(thermal_facts, (632, 664, 696, 728)):
         ref = put('thermal-' + key, {**target, 'schema': 'a733-thermal-' + key + '-v1', 'reviewed': True,
                                      **dict.fromkeys(thermal_facts[key], True)})
@@ -422,6 +424,41 @@ def main():
         (out/'result.json').write_text(json.dumps(dict(passed=True,physical_access=False,image_sha256=image_hash,
             cases=cases,limits='Synthetic physical assertions exercise actual producers/validators; no board authority or transport.'),indent=2)+'\n')
         print('PASS combined GPU/NPU preparation:',len(cases),'focused cases');return
+    if args.gpu_performance_only:
+        from harness import refused as reject
+        assert manifest['perf_modes'] and manifest['gpu_profile']['performance']['boot_mode']=='low'
+        perf_clock_cases(raw, record, put, target, identities, prepare, refused, out, cases)
+        frozen = tool.freeze_bundle(out / 'MODEL-NOT-DEPLOYABLE-perf', 1)
+        tool.entry_check(frozen, target['identity'], target['port'])
+        cases['frozen-performance-grant'] = True
+        for label, change in (
+                ('hidden-service', lambda v: v.update(perf_modes=False)),
+                ('boot-mode', lambda v: v.update(perf_boot_mode='high')),
+                ('points', lambda v: v['gpu_profile']['performance'].update(low_uv=960000))):
+            value = copy.deepcopy(manifest);change(value)
+            reject(lambda: prep.image_manifest_check(value, image.read_bytes()), 'GPU')
+            cases['refuse-manifest-' + label] = True
+        for label, change in (
+                ('missing-runtime-authority', lambda v: v['gpu']['conditions'].pop(prep.GPU_PERF_CONDITION)),
+                ('fixed-rate-entry', lambda v: v['gpu']['configuration'].pop('performance'))):
+            value = copy.deepcopy(record);change(value)
+            entry = out / ('MODEL-' + label + '.json');entry.write_text(json.dumps(value))
+            reject(lambda: prepare('refuse-' + label, entry=entry), 'GPU')
+            prepared = tool.freeze_bundle(bundle, 1)
+            altered = dict(prepared['_combined_frozen']);altered['board/admission.json']=json.dumps(value).encode()
+            reject(lambda: tool.entry_check(dict(prepared, _combined_frozen=altered), target['identity'], target['port']), 'GPU')
+            cases['fresh-and-frozen-refuse-' + label] = True
+        altered = image.read_bytes().replace(b'os_gpu_performance_configuration\0', b'os_gpu_performance_configuratioX\0')
+        reject(lambda: prep.image_gpu(manifest, altered), 'incomplete')
+        cases['missing-performance-record-refused'] = True
+        altered = altered.replace(b'os_perf_boot_mode\0', b'os_perf_boot_modX\0')
+        reject(lambda: prep.image_gpu(manifest, altered), 'incomplete')
+        cases['missing-both-records-cannot-downgrade'] = True
+        (out / 'result.json').write_text(json.dumps(dict(passed=True, physical_access=False,
+            image_sha256=image_hash, build_id=manifest['build_id'], cases=cases,
+            limits='Synthetic exact-image entry facts; no physical performance authority.'), indent=2) + '\n')
+        print('PASS GPU performance admission:', len(cases), 'focused outcomes')
+        return
     if args.gpu_workers_only:
         from harness import refused as reject
         top = clock_cases(raw, record, put, target, identities, prepare, refused, out, cases, gpu=True, top_only=True)

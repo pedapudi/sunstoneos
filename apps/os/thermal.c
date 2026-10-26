@@ -313,3 +313,6 @@ int os_thermal_start(void)
     thermal.handle=xTaskCreateStatic(os_thermal_task,"os-thermal",2048,NULL,4,thermal.stack,&thermal.task);
     return thermal.handle!=NULL;
 }
+#if defined(SUNSTONE_A733_OS_PERF) && defined(SUNSTONE_A733_OS_GPU_LINEAR)
+TaskHandle_t os_thermal_task_handle(void){return thermal.handle;}
+#endif

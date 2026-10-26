@@ -18,20 +18,20 @@
  *     (soc:4736, soc:4739); low 600 at 800 (soc:4682, soc:4685).
  *   NPU high 852 MHz at 800 mV (vf:2069, vf:2087); low 492 at 800 (vf:2039, vf:2063).
  * checks/perf-mode.py compares every point with the pinned rows. */
-static const struct a733_perf_entry entries[]={
+static const struct a733_perf_entry a733_perf_modes[]={
     {4,0x0400,{{{1794,1000},{2002,1050},{1274,1000},{1008,960},{852,800}},
                {{1196,800},{1404,800},{910,800},{600,800},{492,800}}}},
 };
 const struct a733_perf_entry *a733_perf_entries(unsigned *count)
 {
-    if(count)*count=sizeof(entries)/sizeof(*entries);
-    return entries;
+    if(count)*count=sizeof(a733_perf_modes)/sizeof(*a733_perf_modes);
+    return a733_perf_modes;
 }
 const struct a733_perf_entry *a733_perf_entry(uint32_t sid_word)
 {
     unsigned column;
     if(!a733_cpu_clock_bin(sid_word,&column) || column>=A733_CPU_VF_BINS)return 0;
-    for(unsigned i=0;i<sizeof(entries)/sizeof(*entries);++i)if(entries[i].column==column)return &entries[i];
+    for(unsigned i=0;i<sizeof(a733_perf_modes)/sizeof(*a733_perf_modes);++i)if(a733_perf_modes[i].column==column)return &a733_perf_modes[i];
     return 0;
 }
 static uint32_t row_mv(enum a733_cpu_domain d,uint32_t mhz,unsigned column)
@@ -184,7 +184,7 @@ enum a733_perf_reason a733_perf_request(struct a733_perf *p,enum a733_perf_comma
     enum a733_perf_mode mode,unsigned blocks)
 {
     if(!p)return A733_PERF_REQUEST;
-    if(p->phase!=IDLE)return A733_PERF_ACTIVE;
+    if(p->phase!=IDLE || p->retained)return A733_PERF_ACTIVE;
     uint64_t t;
     struct a733_perf_record *r=&p->record;
     r->command=command;r->mode_requested=mode;r->blocks=blocks;r->reason=A733_PERF_OK;
@@ -231,6 +231,15 @@ static void stop(struct a733_perf *p,const struct a733_perf_step *s,enum a733_pe
     p->record.result=wrote ? A733_PERF_RESULT_STOPPED : A733_PERF_RESULT_REFUSED;
     p->phase=RELEASE;p->start=1;p->block=0;
 }
+/* A device-writing hold may fail before DONE. Never run cleanup or another
+ * command against uncertainty; the owner retains the actual device resources. */
+static void retained(struct a733_perf *p,unsigned block,uint64_t now)
+{
+    p->retained|=A733_PERF_BIT(block);
+    p->record.reason=A733_PERF_STEP_FAILED;p->record.failed_block=block;
+    p->record.result=A733_PERF_RESULT_STOPPED;p->record.mode=A733_PERF_UNKNOWN;
+    p->record.read_ok=0;p->record.finished_us=now;p->phase=IDLE;
+}
 enum a733_perf_result a733_perf_step(struct a733_perf *p)
 {
     if(!p)return A733_PERF_RESULT_NONE;
@@ -238,27 +247,32 @@ enum a733_perf_result a733_perf_step(struct a733_perf *p)
     for(unsigned budget=0;budget<A733_PERF_STEPS && p->phase!=IDLE;++budget) {
         uint64_t t;
         if(!now(p,&t)) {
-            /* No time: stop without starting another action. A running
-             * owner action keeps its own deadline. */
-            if(p->phase==APPLY && !p->start)return r->result;
-            r->reason=A733_PERF_NOT_READY;r->result=A733_PERF_RESULT_STOPPED;p->phase=IDLE;break;
+            /* Loss of the clock cannot turn an incomplete operation into a
+             * clean refusal, or allow the next request to reuse its owner. */
+            retained(p,p->phase==APPLY && p->index<p->count ? p->plan[p->index].block :
+                p->block<A733_PERF_BLOCKS ? p->block : A733_PERF_GPU,p->record.started_us);
+            break;
         }
         if(p->phase==APPLY) {
             if(p->index==p->count){p->phase=READ;p->block=0;p->start=1;continue;}
             const struct a733_perf_step *s=&p->plan[p->index];
             if(p->start) {
                 /* One deadline covers every hold; the other actions get their own. */
-                if(s->action!=A733_PERF_HOLD || !p->index)
-                    p->deadline=t+(s->action==A733_PERF_HOLD ? A733_PERF_HOLD_US :
-                        s->action==A733_PERF_CHANGE_CPU ? A733_PERF_CPU_US : A733_PERF_ACCEL_US);
+                if(s->action!=A733_PERF_HOLD || !p->index) {
+                    const uint64_t span=s->action==A733_PERF_HOLD ? A733_PERF_HOLD_US :
+                        s->action==A733_PERF_CHANGE_CPU ? A733_PERF_CPU_US : A733_PERF_ACCEL_US;
+                    if(t>UINT64_MAX-span){retained(p,s->block,t);break;}
+                    p->deadline=t+span;
+                }
+                if(s->action==A733_PERF_HOLD)p->held|=A733_PERF_BIT(s->block);
             }
             enum a733_perf_status st=p->ops.act(p->cookie,(enum a733_perf_action)s->action,
                 (enum a733_perf_block)s->block,s->value,p->deadline,p->start,0);
             p->start=0;
             if(st==A733_PERF_PENDING) {
-                /* A hold is the only action the engine abandons at its bound:
-                 * nothing has been written, and RELEASE ends it. */
-                if(s->action==A733_PERF_HOLD && t>=p->deadline){p->held|=A733_PERF_BIT(s->block);stop(p,s,A733_PERF_BUSY);continue;}
+                /* The owner must resolve the captured bound. A still-pending
+                 * firmware command cannot be classified as a clean refusal. */
+                if(t>=p->deadline){retained(p,s->block,t);break;}
                 return r->result;
             }
             if(st==A733_PERF_DONE) {
@@ -266,14 +280,29 @@ enum a733_perf_result a733_perf_step(struct a733_perf *p)
                 if(s->action==A733_PERF_RELEASE)p->held&=~A733_PERF_BIT(s->block);
                 ++p->index;p->start=1;continue;
             }
-            stop(p,s,s->action==A733_PERF_HOLD ? A733_PERF_NOT_READY : st==A733_PERF_REFUSED ? A733_PERF_STEP_REFUSED :
+            if(st==A733_PERF_FAILED){retained(p,s->block,t);break;}
+            /* REFUSED proves this HOLD acquired no device ownership. A
+             * concurrent healthy CLOSE must not be followed by RELEASE of
+             * a hold that never existed. */
+            if(s->action==A733_PERF_HOLD && st==A733_PERF_REFUSED)
+                p->held&=~A733_PERF_BIT(s->block);
+            stop(p,s,s->action==A733_PERF_HOLD ? (st==A733_PERF_EXPIRED ? A733_PERF_BUSY : A733_PERF_NOT_READY) : st==A733_PERF_REFUSED ? A733_PERF_STEP_REFUSED :
                 st==A733_PERF_EXPIRED ? A733_PERF_STEP_EXPIRED : A733_PERF_STEP_FAILED);
             continue;
         }
         if(p->phase==RELEASE) {
-            for(unsigned b=0;b<A733_PERF_BLOCKS;++b)
-                if(p->held&A733_PERF_BIT(b)){(void)p->ops.act(p->cookie,A733_PERF_RELEASE,(enum a733_perf_block)b,0,0,1,0);p->held&=~A733_PERF_BIT(b);}
-            p->phase=READ;p->block=0;p->start=1;continue;
+            if(p->block==A733_PERF_BLOCKS){p->phase=READ;p->block=0;p->start=1;continue;}
+            if(!(p->held&A733_PERF_BIT(p->block))){++p->block;continue;}
+            if(p->start) {
+                if(t>UINT64_MAX-A733_PERF_ACCEL_US){retained(p,p->block,t);break;}
+                p->deadline=t+A733_PERF_ACCEL_US;
+            }
+            enum a733_perf_status st=p->ops.act(p->cookie,A733_PERF_RELEASE,
+                (enum a733_perf_block)p->block,0,p->deadline,p->start,0);
+            p->start=0;
+            if(st==A733_PERF_PENDING && t<p->deadline)return r->result;
+            if(st!=A733_PERF_DONE){retained(p,p->block,t);break;}
+            p->held&=~A733_PERF_BIT(p->block);++p->block;p->start=1;continue;
         }
         /* READ: every block in order, one action at a time. */
         if(p->block==A733_PERF_BLOCKS) {
@@ -282,10 +311,16 @@ enum a733_perf_result a733_perf_step(struct a733_perf *p)
             if(r->result==A733_PERF_RESULT_RUNNING)r->result=A733_PERF_RESULT_DONE;
             r->finished_us=t;p->phase=IDLE;break;
         }
-        if(p->start)p->deadline=t+A733_PERF_READ_US;
+        if(p->start) {
+            if(t>UINT64_MAX-A733_PERF_READ_US){retained(p,p->block,t);break;}
+            p->deadline=t+A733_PERF_READ_US;
+        }
         struct a733_perf_point point={0,0};
         enum a733_perf_status st=p->ops.act(p->cookie,A733_PERF_READ,(enum a733_perf_block)p->block,0,p->deadline,p->start,&point);
         p->start=0;
+        if(st==A733_PERF_FAILED || (st==A733_PERF_PENDING && t>=p->deadline)) {
+            retained(p,p->block,t);break;
+        }
         if(st==A733_PERF_PENDING)return r->result;
         if(st==A733_PERF_DONE){r->read[p->block]=point;r->read_ok|=A733_PERF_BIT(p->block);}
         else r->read_ok&=~A733_PERF_BIT(p->block);

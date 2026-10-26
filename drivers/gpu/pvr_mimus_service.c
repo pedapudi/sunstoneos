@@ -371,7 +371,8 @@ int pvr_mimus_service_submit(struct pvr_mimus_service *m, const struct pvr_mimus
      * sequentially consistent publication and lost handshake also covers
      * an abort while this producer holds RESERVED. */
     unsigned idle = PVR_MIMUS_SLOT_IDLE;
-    if (!atomic_compare_exchange_strong(&m->slot_state, &idle, PVR_MIMUS_SLOT_RESERVED)) return 0;
+    if (!atomic_compare_exchange_strong(&m->slot_state, &idle, PVR_MIMUS_SLOT_RESERVED))
+        return idle==PVR_MIMUS_SLOT_HELD ? PVR_MIMUS_SUBMIT_HELD : 0;
     m->slot = *job;
     atomic_store(&m->slot_state, PVR_MIMUS_SLOT_SUBMITTED);
     const struct pvr_gpu_service_message wake = {.client = PVR_GPU_SERVICE_CLIENTS,

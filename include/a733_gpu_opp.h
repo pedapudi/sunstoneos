@@ -11,6 +11,11 @@
  * which are 960 mV as well. docs/designs/gpu-vendor-default.md. */
 #define A733_GPU_CORE_HZ 1008000000u
 #define A733_GPU_SUPPLY_UV 960000u
+/* The same vfdefault column's 600 MHz row. Only the live GPU performance
+ * owner may lower DCDC4 after establishing this clock under firmware idle. */
+#define A733_GPU_LOW_HZ 600000000u
+#define A733_GPU_LOW_UV 800000u
+#define A733_GPU_LOW_SELECTOR 0x1eu
 /* DCDC4 selectors (AXP8191 register 0x15, 7-bit field, 10 mV steps from
  * 500 mV): the power-on 800 mV and the operating point's 960 mV. */
 #define A733_GPU_DCDC4_BOOT 0x1eu

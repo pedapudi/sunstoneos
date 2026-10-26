@@ -338,6 +338,71 @@ static int sync_write(void *context, uint32_t value)
     if (!active(b)) return 0;
     return memory_result(b, a733_gpu_memory_sync_write(b->memory, value));
 }
+#ifdef SUNSTONE_A733_OS_PERF
+static int performance_live(struct a733_gpu_backend *b)
+{
+    return active(b) && b->power->perf.enabled && b->service->phase==PVR_GPU_SERVICE_READY &&
+        b->service->performance.ticket;
+}
+static int clock_sync_write(void *context,uint32_t value)
+{
+    struct a733_gpu_backend *b=context;
+    const unsigned phase=b->service->performance.clock.phase;
+    return performance_live(b) && !value &&
+        (phase==PVR_GPU_CLOCK_CLEAR_IDLE || phase==PVR_GPU_CLOCK_CLEAR_CANCEL) &&
+        memory_result(b,a733_gpu_memory_sync_write(b->memory,0));
+}
+static int clock_sync_read(void *context,uint32_t *out)
+{
+    struct a733_gpu_backend *b=context;
+    const unsigned phase=b->service->performance.clock.phase;
+    return performance_live(b) && (phase==PVR_GPU_CLOCK_WAIT_IDLE || phase==PVR_GPU_CLOCK_WAIT_CANCEL) &&
+        output(b,out,sizeof(*out)) && memory_result(b,a733_gpu_memory_sync_read(b->memory,out));
+}
+static int clock_power_state(void *context,uint32_t *out)
+{
+    struct a733_gpu_backend *b=context;
+    return performance_live(b) && b->service->performance.clock.phase==PVR_GPU_CLOCK_WAIT_IDLE &&
+        output(b,out,sizeof(*out)) && memory_result(b,a733_gpu_memory_power_state(b->memory,out));
+}
+static int clock_publish(void *context,uint32_t hz)
+{
+    struct a733_gpu_backend *b=context;
+    if(!performance_live(b) || b->service->performance.clock.phase!=PVR_GPU_CLOCK_PUBLISH ||
+        hz!=b->power->perf.current_hz)return fail(b,A733_GPU_BACKEND_STATE);
+    uint64_t cr,us;
+    if(!raw_read(b,0x160,8,&cr))return 0;
+    if((cr^(cr<<32))&(UINT64_C(1)<<63)) {
+        if(!raw_read(b,0x160,8,&cr) || ((cr^(cr<<32))&(UINT64_C(1)<<63)))
+            return fail(b,A733_GPU_BACKEND_CLOCK);
+    }
+    if(!now(b,&us) || us>UINT64_MAX/1000 ||
+        !memory_result(b,a733_gpu_memory_clock(b->memory,hz,us*1000,cr&UINT64_C(0xffffffffffff))))return 0;
+    /* Future healthy OPEN serializes this selected rate before firmware start. */
+    b->service->config.state.gpu_clock_hz=hz;b->power->perf.selected_hz=hz;
+    return 1;
+}
+static int performance_begin(void *context,enum a733_perf_action a,uint32_t value,uint64_t deadline)
+{
+    struct a733_gpu_backend *b=context;
+    if(!performance_live(b) || (a!=A733_PERF_READ && b->service->performance.clock.phase!=PVR_GPU_CLOCK_HELD))
+        return 0;
+    return a733_gpu_platform_performance_begin(b->power,a,value,deadline);
+}
+static int performance_poll(void *context,struct a733_perf_point *point)
+{
+    struct a733_gpu_backend *b=context;
+    if(!performance_live(b) || !output(b,point,sizeof(*point)))return -1;
+    int r=a733_gpu_platform_performance_poll(b->power);
+    if(r==1)*point=(struct a733_perf_point){b->power->perf.current_hz/1000000,b->power->perf.current_uv/1000};
+    return r;
+}
+static uint32_t performance_rate(void *context)
+{
+    struct a733_gpu_backend *b=context;
+    return performance_live(b) ? b->power->perf.current_hz : 0;
+}
+#endif
 static int event(void *context, const unsigned char command[PVR_CCB_COMMAND_BYTES])
 {
     struct a733_gpu_backend *b = context;
@@ -471,6 +536,14 @@ int a733_gpu_backend_bind(struct a733_gpu_backend *b, struct pvr_gpu_service *s,
      * this backend's power controller establishes. OPEN reconstructs both
      * firmware clock fields from this config before publishing them. */
     c->state.gpu_clock_hz = A733_GPU_CORE_HZ;
+#ifdef SUNSTONE_A733_OS_PERF
+    if(p->perf.enabled) {
+        c->state.gpu_clock_hz=p->perf.selected_hz;
+        c->performance_clock=(struct pvr_gpu_clock_ops){now,clock_sync_write,clock_sync_read,clock_power_state,clock_publish};
+        c->performance_begin=performance_begin;c->performance_poll=performance_poll;
+        c->performance_rate=performance_rate;c->performance_client=1;
+    }
+#endif
     c->queue = (struct pvr_ccb_ops){queue_read, queue_write, barrier, kick};
     c->start = (struct pvr_gpu_start_ops){now, start_read, start_write, started, publish};
     c->control = (struct pvr_gpu_control_ops){now, control_read, control_write, compat, event};

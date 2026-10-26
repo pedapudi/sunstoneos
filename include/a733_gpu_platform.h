@@ -2,6 +2,7 @@
 #define SUNSTONE_A733_GPU_PLATFORM_H
 #include "a733_gpu_resources.h"
 #include "a733_pmic_consumer.h"
+#include "a733_perf_mode.h"
 struct a733_gpu_resource_native;
 
 /* Bounded, ordered operations; all mutations use the common register lock.
@@ -35,6 +36,14 @@ struct a733_gpu_platform {
     struct a733_pmic_request supply_request;
     uint64_t supply_settled;
     unsigned supply_stage, supply_written;
+    /* The performance-enabled GPU's existing owner retains both tokens.
+     * Only its worker changes these fields; fixed-rate images leave them zero. */
+    struct {
+        struct a733_clock_token parent;
+        uint64_t deadline, settled, last_now;
+        uint32_t selected_hz, current_hz, current_uv, value;
+        unsigned enabled, action, stage, startup, off_normalized;
+    } perf;
 };
 /* Zero storage, initialize once, then serialize all calls through one privileged
  * task. Register this client exclusively; manager/context outlive the platform.
@@ -77,4 +86,17 @@ int a733_gpu_platform_off_poll(struct a733_gpu_platform *);
  * The consumer keeps its shared DCDC4 token; a later begin samples again.
  * Returns 1 done (or nothing to end), 0 pending, -1 fault. */
 int a733_gpu_platform_supply_end(struct a733_gpu_platform *);
+/* Before concurrency, after PMIC binding. HIGH is the ordinary default;
+ * explicit LOW is applied while firmware is stopped during every ON. */
+int a733_gpu_platform_performance_enable(struct a733_gpu_platform *,uint32_t selected_hz);
+/* Existing worker only. RATE/VOLTAGE require independently acknowledged
+ * firmware idle, or stopped firmware before its first start. The one deadline
+ * covers the operation and every provider request. READ uses the same rail
+ * owner. Return 1 accepted, 0 refused; poll returns 1 done, 0 pending, -1 fault. */
+int a733_gpu_platform_performance_begin(struct a733_gpu_platform *,enum a733_perf_action,
+    uint32_t value,uint64_t deadline);
+int a733_gpu_platform_performance_poll(struct a733_gpu_platform *);
+/* Startup/healthy OFF internals, retaining the existing GPU resource owner. */
+int a733_gpu_platform_performance_parent(struct a733_gpu_platform *,uint64_t);
+int a733_gpu_platform_performance_off(struct a733_gpu_platform *);
 #endif

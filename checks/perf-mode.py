@@ -84,7 +84,7 @@ def table_check(inputs):
     vf, soc = pinned['npu-platform-sun60iw2p1-cpu-vf-dtsi'], pinned['board-gpu-power-sun60iw2p1-dtsi']
     assert 'vf-version = "V0.9"' in vf
     source = (ROOT / 'drivers/power/a733_perf_mode.c').read_text()
-    body = re.search(r'static const struct a733_perf_entry entries\[\]=\{(.*?)\n\};', source, re.S)[1]
+    body = re.search(r'static const struct a733_perf_entry a733_perf_modes\[\]=\{(.*?)\n\};', source, re.S)[1]
     assert body.count('{4,0x0400,') == 1 and '0x' not in body.replace('0x0400', ''), 'one entry, vf0400'
     pairs = [tuple(map(int, p)) for p in re.findall(r'\{(\d+),(\d+)\}', body)]
     assert len(pairs) == 10, pairs

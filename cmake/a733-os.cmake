@@ -84,9 +84,8 @@ if(SUNSTONE_A733_OS_GPU_LINEAR)
   # GPU replies retain bounded failure handling for the recorded two- and
   # eight-worker compositions.
   if(NOT SUNSTONE_A733_OS_RESIDENT AND
-     (SUNSTONE_A733_OS_AUDIO OR SUNSTONE_A733_OS_RADIO OR SUNSTONE_A733_OS_HEADSET OR
-      SUNSTONE_A733_OS_PERF))
-    message(FATAL_ERROR "Supervised GPU linear requires recorded recognition without other optional devices or performance commands")
+     (SUNSTONE_A733_OS_AUDIO OR SUNSTONE_A733_OS_RADIO OR SUNSTONE_A733_OS_HEADSET))
+    message(FATAL_ERROR "Supervised GPU linear requires recorded recognition without capture/radio/headset")
   endif()
   # This branch maps 0x46C00000-0x47000000 read-only itself (below); a value
   # given on the command line could only disagree with it.
@@ -327,6 +326,9 @@ if(SUNSTONE_A733_OS_GPU_LINEAR)
     drivers/gpu/pvr_mips.c drivers/gpu/pvr_fw_state.c drivers/gpu/pvr_ccb.c drivers/gpu/pvr_gpu_start.c
     drivers/gpu/pvr_gpu_control.c drivers/gpu/pvr_gpu_stop.c drivers/gpu/pvr_free_list.c
     drivers/gpu/pvr_gpu_events.c)
+  if(SUNSTONE_A733_OS_PERF)
+    list(APPEND os_added drivers/gpu/a733_gpu_performance.c drivers/gpu/pvr_gpu_clock.c)
+  endif()
   file(WRITE "${os_build}/gpu-firmware.S"
     ".section .rodata.gpu_firmware,\"a\"\n.balign 16\n.global gpu_firmware\ngpu_firmware:\n.incbin \"${SUNSTONE_GPU_FIRMWARE}\"\n.global gpu_firmware_end\ngpu_firmware_end:\n")
   list(APPEND os_sources "${os_build}/gpu-firmware.S")

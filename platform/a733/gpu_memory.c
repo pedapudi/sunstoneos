@@ -2,6 +2,7 @@
 #include "a733_range.h"
 #include "a733_mmio.h"
 #include "a733_gpu_mapping.h"
+#include "a733_gpu_opp.h"
 #include <string.h>
 
 static const struct pvr_mips_buffer *buffer(const struct a733_gpu_memory *m, unsigned i)
@@ -204,6 +205,25 @@ int a733_gpu_memory_power_state(void *ctx, uint32_t *out)
     if (!ready(m) || m->phase != A733_GPU_MEMORY_PUBLISHED || !external(m, out, sizeof(*out)) ||
         !shared(m, PVR_FW_SYSTEM_DATA, 8, 4, 0)) return fail(m);
     *out = a733_mmio_read32_dsb_sy_after((uintptr_t)address(m, PVR_FW_SYSTEM_DATA, 8));
+    return 1;
+}
+int a733_gpu_memory_clock(struct a733_gpu_memory *m,uint32_t hz,uint64_t ns,uint64_t cr)
+{
+    if(!ready(m) || m->phase!=A733_GPU_MEMORY_PUBLISHED ||
+        (hz!=A733_GPU_CORE_HZ && hz!=A733_GPU_LOW_HZ) || cr>>48 ||
+        !shared(m,PVR_FW_RUNTIME_CONFIG,12,4,1) || !shared(m,PVR_FW_UTILIZATION,10240,4,1))return fail(m);
+    const uintptr_t sequence=(uintptr_t)address(m,PVR_FW_UTILIZATION,10240);
+    const uint32_t next=a733_mmio_read32(sequence)+1;
+    const size_t offset=(next&255u)*40u;
+    if(!shared(m,PVR_FW_UTILIZATION,offset,40,1))return fail(m);
+    const uint64_t words[5]={ns,ns,cr,(UINT64_C(256000000)<<20)/(hz/1000),hz};
+    volatile uint64_t *record=address(m,PVR_FW_UTILIZATION,offset);
+    a733_mmio_write32((uintptr_t)address(m,PVR_FW_RUNTIME_CONFIG,12),hz);
+    for(unsigned i=0;i<5;++i)record[i]=words[i];
+    /* Shared uncached RAM: finish payload stores before publishing the index,
+     * then finish publication before the following KCCB kick. */
+    __asm__ volatile("dsb sy" ::: "memory");
+    a733_mmio_write32_dsb_sy_after(sequence,next);
     return 1;
 }
 int a733_gpu_memory_executed(void *ctx, uint32_t *out)

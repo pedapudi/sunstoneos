@@ -181,7 +181,24 @@ def gpu_configuration(elf, required=False):
     keys = ('version', 'reply_us', 'lifecycle_us', 'wait_ticks', 'worker_priority', 'core', 'core_hz', 'supply_uv')
     result = dict(zip(keys, values))
     assert values[:5] == (1, 2000000, 1000000, 10, 4) and values[5] in (2, 6), 'GPU caller configuration differs'
-    assert values[6:] == (1008000000, 960000), 'GPU operating point differs'
+    performance = [s for s in elf.symbols if s['name'] == 'os_gpu_performance_configuration' and s['shndx'] != 0]
+    boot = [s for s in elf.symbols if s['name'] == 'os_perf_boot_mode' and s['shndx'] != 0]
+    implemented = any(s['name'] == 'os_gpu_perf_action' and s['shndx'] != 0 for s in elf.symbols)
+    assert bool(performance) == bool(boot) == implemented, 'GPU performance implementation is incomplete'
+    if performance:
+        record = one('os_gpu_performance_configuration')
+        assert record['size'] == 20, 'GPU performance record size differs'
+        points = struct.unpack('<5I', elf.read(record['value'], 20))
+        assert points == (1, 1008000000, 960000, 600000000, 800000), 'GPU performance points differ'
+        mode = struct.unpack('<I', elf.read(one('os_perf_boot_mode')['value'], 4))[0]
+        assert mode in (1, 2), 'GPU boot mode differs'
+        assert values[6:] == points[1:3] if mode == 1 else values[6:] == points[3:5], 'GPU boot point differs'
+        result['performance'] = dict(zip(('version', 'high_hz', 'high_uv', 'low_hz', 'low_uv'), points))
+        result['performance']['boot_mode'] = 'high' if mode == 1 else 'low'
+        for name in ('os_gpu_perf_action', 'a733_gpu_platform_performance_poll', 'pvr_gpu_clock_poll'):
+            one(name)
+    else:
+        assert values[6:] == (1008000000, 960000), 'GPU operating point differs'
     inference = inference_configuration(elf)
     assert inference['workers'] in (2, 8) and inference['owner_core'] == result['core'], 'GPU inference placement differs'
     assert elf.read(one('os_recognition_core')['value'], 1)[0] == result['core'], 'GPU interrupt owner differs'
@@ -344,7 +361,7 @@ def main():
         if args.workers == 8:
             assert not any((audio, radio, headset)), 'Unsupported eight-worker OS profile'
         if gpu_linear and args.lifetime == 'supervised':
-            assert not any((audio, radio, headset, args.perf == '1')), 'Unsupported supervised GPU profile'
+            assert not any((audio, radio, headset)), 'Unsupported supervised GPU profile'
     except AssertionError as error:
         print('FAIL integrated OS link check:', error, file=sys.stderr)
         return 1

@@ -35,7 +35,8 @@ CASES = {1: 'bench, exact sums', 2: 'bench, pattern sums', 3: 'bench, jobs compl
          17: 'backward final clock sample', 18: 'pending, active and drained CLOSE',
          19: 'reserved-slot CLOSE and abort', 20: 'lost CLOSE',
          21: 'two healthy retained reopens', 22: 'reopen proof refusals', 23: 'reopen cache failure',
-         24: 'reopen result publication failure'}
+         24: 'reopen result publication failure', 25: 'performance transition and reopen', 26: 'accepted job drains before forced idle',
+         27: 'forced idle acknowledgement absent', 28: 'cancel acknowledgement absent', 29: 'clean drain refusal'}
 COUNTED = ('aarch64_device_translate', 'aarch64_device_cache', 'vTaskEnterCritical', 'vTaskEnterCriticalFromISR',
            'xQueueGenericSend', 'xQueueReceive', 'xQueueGenericSendFromISR', 'gicv3_spi_mask', 'gicv3_spi_rearm',
            'advance', 'external', 'now', 'pvr_mimus_service_submit', 'pvr_mimus_service_receive', 'kick',
@@ -203,11 +204,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--models', type=Path, default=Path.home() / '.cache/sunstoneos/inputs/mimus-bench')
-    parser.add_argument('--cases', nargs='+', type=int, choices=sorted(CASES), default=sorted(CASES))
+    parser.add_argument('--cases', nargs='+', type=int, choices=sorted(CASES), default=list(range(1, 25)))
     parser.add_argument('--trace', nargs='*', type=int, default=[], help='cases to run instrumented')
     for name in ('freertos', 'tinyusb', 'firmware', 'qemu', 'lld'):
         parser.add_argument('--' + name, type=Path, required=True)
     args = parser.parse_args()
+    performance = any(c >= 25 for c in args.cases)
+    assert not performance or all(c >= 25 for c in args.cases) and not args.trace
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=True)
     project, build, fixtures = out / 'project', out / 'build', out / 'fixtures'
@@ -237,6 +240,8 @@ def main():
         'checks/pvr-mimus-service.c', 'platform/a733/gpu_memory.c', 'platform/a733/gpu_reserved.c',
         'platform/a733/gpu_mimus.c', 'drivers/gpu/pvr_mimus_service.c', 'drivers/gpu/pvr_compute_mimus.c',
         'drivers/gpu/pvr_compute_mimus_usc.c', 'drivers/gpu/gicv3_spi.c'))
+    if performance:
+        extra += ' \"%s\"' % (ROOT / 'drivers/gpu/pvr_gpu_clock.c')
     (project / 'CMakeLists.txt').write_text(f'''cmake_minimum_required(VERSION 3.24)
 project(mimus_service_check LANGUAGES C ASM)
 add_subdirectory("{ROOT}" sunstone)
@@ -246,7 +251,7 @@ list(APPEND sources "{platform}" {extra})
 list(REMOVE_DUPLICATES sources)
 set_property(TARGET gpu-service-model PROPERTY SOURCES "${{sources}}")
 target_include_directories(gpu-service-model PRIVATE "{fixtures}" "{ROOT}/checks")
-target_compile_definitions(gpu-service-model PRIVATE SUNSTONE_GPU_NATIVE_MEMORY=1)
+target_compile_definitions(gpu-service-model PRIVATE SUNSTONE_GPU_NATIVE_MEMORY=1 {"SUNSTONE_A733_OS_PERF=1" if performance else ""})
 get_target_property(options gpu-service-model LINK_OPTIONS)
 list(FILTER options EXCLUDE REGEX "-Wl,-T,")
 list(APPEND options "-Wl,-T,{linker}" -Wl,--defsym=__device_pool_size=2097152

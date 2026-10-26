@@ -32,10 +32,17 @@ static int request_identity(const struct a733_pmic_consumer *c)
 static int correct(const struct a733_pmic_consumer *c,const struct a733_pmic_snapshot *s)
 {
     const int gpu=c->config.rail==A733_RAIL_DCDC4;
+    const uint32_t uv=gpu ? (c->gpu_performance ? c->expected_uv : A733_GPU_SUPPLY_UV) : 800000;
     return s->rail==c->config.rail && !s->page_before && s->chip==3 && !s->revision &&
         !s->page_after && s->enabled==1 && s->decoded==1 &&
-        s->programmed_uv==(gpu ? A733_GPU_SUPPLY_UV : 800000) &&
-        (s->selector&127)==(gpu ? A733_GPU_DCDC4_SELECTOR : 30) && (s->enable&(gpu ? 8 : 2));
+        s->programmed_uv==uv && (s->selector&127)==(uv-500000)/10000 && (s->enable&(gpu ? 8 : 2));
+}
+static int rail_identity(const struct a733_pmic_consumer *c)
+{
+    const a733_rail_mask_t bit=A733_RAIL_BIT(c->config.rail);
+    return c->rail.owner==c->config.owner &&
+        c->rail.shared==(c->gpu_performance ? 0 : bit) &&
+        c->rail.exclusive==(c->gpu_performance ? bit : 0);
 }
 static int equal(const struct a733_pmic_snapshot *a,const struct a733_pmic_snapshot *b)
 {
@@ -71,13 +78,14 @@ int a733_pmic_consumer_reserve(struct a733_pmic_consumer *c,uint64_t deadline)
     c->deadline=deadline;if(timely(c,deadline)<0)return -1;
     struct a733_rail_leases *r=c->config.provider->rails;enum a733_rail_result status;
     if(c->stage==NEW) {
-        status=a733_rail_acquire(r,c->config.owner,A733_RAIL_BIT(c->config.rail),0,deadline,&c->rail);
+        const a733_rail_mask_t bit=A733_RAIL_BIT(c->config.rail);
+        status=a733_rail_acquire(r,c->config.owner,c->gpu_performance ? 0 : bit,
+            c->gpu_performance ? bit : 0,deadline,&c->rail);
         if(status==A733_RAIL_BUSY)return 0;
         if(status!=A733_RAIL_PENDING || !c->rail.id)return fault(c);
         c->stage=RESERVED;return timely(c,deadline)<0 ? -1 : 0;
     }
-    if(c->rail.owner!=c->config.owner || c->rail.shared!=A733_RAIL_BIT(c->config.rail) || c->rail.exclusive)
-        return fault(c);
+    if(!rail_identity(c))return fault(c);
     status=c->stage==RESERVED ? a733_rail_poll(r,&c->rail) : a733_rail_status(r,&c->rail);
     if(status==A733_RAIL_BUSY || status==A733_RAIL_PENDING)return 0;
     if(status!=A733_RAIL_READY || timely(c,deadline)<0)return fault(c);
@@ -108,8 +116,7 @@ int a733_pmic_consumer_health(struct a733_pmic_consumer *c)
 {
     if(!identity(c))return -1;
     if(c->stage!=SAMPLED)return 0;
-    if(!request_identity(c) || c->rail.owner!=c->config.owner ||
-        c->rail.shared!=A733_RAIL_BIT(c->config.rail) || c->rail.exclusive)return fault(c);
+    if(!request_identity(c) || !rail_identity(c))return fault(c);
     enum a733_rail_result rail=a733_rail_status(c->config.provider->rails,&c->rail);
     if(rail==A733_RAIL_BUSY)return 0;
     if(rail!=A733_RAIL_READY)return fault(c);
@@ -131,6 +138,31 @@ int a733_pmic_consumer_refresh(struct a733_pmic_consumer *c,uint64_t deadline)
     if(s!=A733_PMIC_COMPLETE)return fault(c);
     c->request=(struct a733_pmic_request){0};c->stage=STABLE;
     return timely(c,deadline);
+}
+int a733_pmic_consumer_gpu_performance(struct a733_pmic_consumer *c)
+{
+    if(!identity(c) || c->config.rail!=A733_RAIL_DCDC4 || c->stage!=NEW || c->deadline ||
+        c->gpu_performance)return 0;
+    c->gpu_performance=1;c->expected_uv=A733_GPU_SUPPLY_UV;return 1;
+}
+int a733_pmic_consumer_gpu_begin(struct a733_pmic_consumer *c,uint64_t deadline,uint32_t uv)
+{
+    if(!identity(c) || !c->gpu_performance || c->config.rail!=A733_RAIL_DCDC4 || c->armed ||
+        (uv!=A733_GPU_SUPPLY_UV && uv!=A733_GPU_LOW_UV) || timely(c,deadline)<0)return -1;
+    if(c->stage==NEW || c->stage==RESERVED) {
+        if(uv!=A733_GPU_SUPPLY_UV)return fault(c);
+        return a733_pmic_consumer_reserve(c,deadline);
+    }
+    if(c->stage==SAMPLED) {
+        int r=a733_pmic_consumer_health(c);if(r!=1)return r;
+        enum a733_pmic_status s=a733_pmic_reap(c->config.provider,&c->request);
+        if(s==A733_PMIC_BUSY)return 0;
+        if(s!=A733_PMIC_COMPLETE)return fault(c);
+        c->request=(struct a733_pmic_request){0};c->stage=STABLE;
+    }
+    if(c->stage!=STABLE || !rail_identity(c))return fault(c);
+    c->deadline=deadline;c->expected_uv=uv;
+    return 1;
 }
 int a733_pmic_consumer_arm(struct a733_pmic_consumer *c,uint64_t deadline)
 {

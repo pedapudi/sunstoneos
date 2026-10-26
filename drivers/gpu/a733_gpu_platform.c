@@ -68,6 +68,10 @@ int a733_gpu_platform_begin(void *context, uint64_t deadline)
         return 0;
     p->deadline = deadline;
     if (!clock_ok(p)) return 0;
+    if(p->perf.enabled) {
+        p->supply_stage=0;p->supply_written=0;p->pmic_observed=0;
+        p->perf.startup=0;p->perf.off_normalized=0;
+    }
     p->phase = A733_GPU_PLATFORM_ADMIT;
     return 1;
 }
@@ -127,6 +131,14 @@ static int supply_raise(struct a733_gpu_platform *p)
          * no raise is made. While it runs it holds DCDC4 shared. */
         const unsigned w = a733_power_authority_load(&rails->authority);
         if (provider->domains && (w & A733_POWER_SUPPLY_DONE) && !(w & A733_POWER_DCDC4_VERIFIED)) return -1;
+        if(p->perf.enabled) {
+            /* The initial verifier needs a shared DCDC2/DCDC4 token. A
+             * permanent exclusive GPU token must follow its completed pass. */
+            if(!(w&A733_POWER_SUPPLY_DONE))return 0;
+            int ready=a733_pmic_consumer_gpu_begin(&p->pmic,p->deadline,A733_GPU_SUPPLY_UV);
+            if(ready!=1)return ready;
+            p->supply_token=p->pmic.rail;p->supply_stage=RAISE_LEASED;return 0;
+        }
         lease = a733_rail_acquire(rails, owner, 0, A733_RAIL_BIT(A733_RAIL_DCDC4), p->deadline, &p->supply_token);
         if (lease == A733_RAIL_BUSY) return 0;
         if ((lease != A733_RAIL_PENDING && lease != A733_RAIL_READY) || !p->supply_token.id) return -1;
@@ -167,7 +179,7 @@ static int supply_raise(struct a733_gpu_platform *p)
         p->supply_stage = RAISE_RELEASE;
         return 0;
     case RAISE_RELEASE:
-        lease = a733_rail_release(rails, &p->supply_token, p->deadline);
+        lease = p->perf.enabled ? A733_RAIL_READY : a733_rail_release(rails, &p->supply_token, p->deadline);
         if (lease == A733_RAIL_BUSY) return 0;
         if (lease != A733_RAIL_READY) return -1;
         p->supply_token = (struct a733_rail_token){0};
@@ -209,10 +221,32 @@ int a733_gpu_platform_poll(void *context)
 {
     struct a733_gpu_platform *p = context;
     if (!p || !p->initialized || p->phase == A733_GPU_PLATFORM_FAILED) return -1;
-    if (p->phase == A733_GPU_PLATFORM_ON) return pmic_health(p);
+    if (p->phase == A733_GPU_PLATFORM_ON) {
+#ifdef SUNSTONE_A733_OS_PERF
+        if(p->perf.startup) {
+            if(!clock_ok(p))return -1;
+            if(p->perf.startup==1 || p->perf.startup==3) {
+                const enum a733_perf_action a=p->perf.startup==1 ? A733_PERF_RATE : A733_PERF_VOLTAGE;
+                if(!a733_gpu_platform_performance_begin(p,a,a==A733_PERF_RATE ? 600 : 800,p->deadline))return fail(p);
+                ++p->perf.startup;
+            }
+            int r=a733_gpu_platform_performance_poll(p);
+            if(r!=1)return r;
+            if(p->perf.startup==2){p->perf.startup=3;return 0;}
+            p->perf.startup=0;
+        }
+#endif
+        return pmic_health(p);
+    }
     if (p->phase != A733_GPU_PLATFORM_ADMIT && p->phase != A733_GPU_PLATFORM_STARTING) return -1;
     if (!clock_ok(p)) return -1;
     if (p->phase == A733_GPU_PLATFORM_ADMIT) {
+#ifdef SUNSTONE_A733_OS_PERF
+        if(p->perf.enabled) {
+            int r=a733_gpu_platform_performance_parent(p,p->deadline);
+            if(r!=1)return r;
+        }
+#endif
         if(p->pmic_native) {
             int r=p->pmic_observed ? 1 : supply_raise(p);
             if(r<0)return fail(p);
@@ -243,6 +277,10 @@ int a733_gpu_platform_poll(void *context)
     if (result != A733_GPU_POWER_OK) return fail(p);
     health=pmic_health(p);if(health!=1)return health;
     p->phase = A733_GPU_PLATFORM_ON;
+    if(p->perf.enabled) {
+        p->perf.current_hz=A733_GPU_CORE_HZ;p->perf.current_uv=A733_GPU_SUPPLY_UV;
+        if(p->perf.selected_hz==A733_GPU_LOW_HZ){p->perf.startup=1;return 0;}
+    }
     return 1;
 }
 int a733_gpu_platform_off_begin(struct a733_gpu_platform *p, uint64_t deadline)
@@ -269,6 +307,12 @@ int a733_gpu_platform_off_poll(struct a733_gpu_platform *p)
         p->phase = A733_GPU_PLATFORM_RELEASE;
         return 0;
     }
+#ifdef SUNSTONE_A733_OS_PERF
+    if(p->perf.enabled) {
+        int r=a733_gpu_platform_performance_off(p);
+        if(r!=1)return r;
+    }
+#endif
     p->resource_result = a733_gpu_resources_release(p->manager, p->client, p->token, p->deadline);
     /* Record completed release even if the following clock read fails. */
     if (p->resource_result == A733_GPU_RESOURCE_OK) p->token = 0;
@@ -283,7 +327,11 @@ int a733_gpu_platform_supply_end(struct a733_gpu_platform *p)
     if (!p || !p->initialized || p->phase != A733_GPU_PLATFORM_OFF) return -1;
     if (!p->pmic_native || !p->pmic_observed) return 1;
     if (!clock_ok(p)) return -1;
-    const int r = a733_pmic_consumer_refresh(&p->pmic, p->deadline);
+    /* The completed performance sample used its own short transaction bound.
+     * OFF is a new bounded operation under the same retained exclusive lease. */
+    const int r = p->perf.enabled ?
+        a733_pmic_consumer_gpu_begin(&p->pmic,p->deadline,p->perf.current_uv) :
+        a733_pmic_consumer_refresh(&p->pmic, p->deadline);
     if (r < 0) return fail(p);
     if (!r) return 0;
     p->pmic_observed = 0;

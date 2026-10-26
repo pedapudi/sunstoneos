@@ -23,9 +23,20 @@ struct a733_pmic_consumer {
     const void *recipient;
     struct a733_gpu_resource_rail *destination;
     unsigned stage, failed, armed;
+    /* GPU performance mode only: retain one exclusive DCDC4 lease from
+     * initial acquisition; expected_uv follows its serialized writer. */
+    unsigned gpu_performance;
+    uint32_t expected_uv;
 };
 int a733_pmic_consumer_init(struct a733_pmic_consumer *,const struct a733_pmic_consumer_config *);
 int a733_pmic_consumer_storage(struct a733_pmic *,const void *,size_t);
+/* Before acquisition/concurrency; DCDC4 only. No provider access. */
+int a733_pmic_consumer_gpu_performance(struct a733_pmic_consumer *);
+/* GPU owner only, before a serialized write/readback operation. End the old
+ * completed sample, retain its exclusive parent, and capture one new deadline
+ * and expected voltage. Then sample after any write has settled. No retry or
+ * lease release after uncertainty. 1 ready, 0 contention, -1 retained fault. */
+int a733_pmic_consumer_gpu_begin(struct a733_pmic_consumer *,uint64_t,uint32_t expected_uv);
 /* 1 ready, 0 pending/contention, -1 retained failure. Reserve performs only
  * ledger operations. Sample queues actual bus work for the separate provider
  * task. Both use one absolute acquisition deadline. */

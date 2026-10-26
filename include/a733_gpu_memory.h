@@ -44,6 +44,9 @@ int a733_gpu_memory_sync_write(void *, uint32_t);
 int a733_gpu_memory_sync_read(void *, uint32_t *);
 /* Acquire firmware system-data power state; zero means ready for power-down. */
 int a733_gpu_memory_power_state(void *, uint32_t *);
+/* GPU worker, live acknowledged clock change: publish runtime Hz and one
+ * 40-byte timer correlation before advancing the sequence. No workload copy. */
+int a733_gpu_memory_clock(struct a733_gpu_memory *,uint32_t hz,uint64_t host_ns,uint64_t cr);
 /* Acquire the firmware's executed kernel-command count (OS data +568). */
 int a733_gpu_memory_executed(void *, uint32_t *);
 

@@ -2886,5 +2886,29 @@
     "directory": "radio/stacks/openssl-3.5.9",
     "sha256": "603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a",
     "license": "Apache-2.0"
+  },
+  "board-gpu-performance-pvr-dvfs-device-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/modules/gpu/img-bxm/linux/rogue_km/services/server/env/linux/pvr_dvfs_device.c",
+    "archive": "gpu-performance-2ac08e8c/pvr_dvfs_device.c",
+    "sha256": "1f32114c38a92aa8c14de9f7e63a83e601911c9938a75f65b803b44bda4fb420",
+    "license": "MIT OR GPL-2.0-only",
+    "role": "host reference only"
+  },
+  "board-gpu-performance-ccu-mux-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/clk/sunxi-ng/ccu_mux.c",
+    "archive": "gpu-performance-2ac08e8c/ccu_mux.c",
+    "sha256": "3d77975f6cd26b19aa0b4c064263c4b365bc55d67f6e3c9fa71d3eaf64d2b623",
+    "license": "GPL-2.0-or-later",
+    "role": "host reference only"
+  },
+  "board-gpu-performance-ccu-div-c": {
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/clk/sunxi-ng/ccu_div.c",
+    "archive": "gpu-performance-2ac08e8c/ccu_div.c",
+    "sha256": "4c468a3e045a31f0a82ac1c790d9bd044c1cd8b5763241d82e0c6259349394e6",
+    "license": "GPL-2.0-or-later",
+    "role": "host reference only"
   }
 }

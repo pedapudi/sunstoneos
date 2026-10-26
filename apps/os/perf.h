@@ -43,4 +43,10 @@ struct a733_thermal_policy;
 int os_perf_step(struct a733_cpu_clock *, const struct a733_thermal_policy *, int burst);
 /* USB0 task: answers one operation 8 request that passed the framing rules. */
 void os_perf_usb(unsigned command, uint32_t selection, uint64_t epoch, uint8_t out[OS_PERF_REPORT_BYTES]);
+#ifdef SUNSTONE_A733_OS_GPU_LINEAR
+#include "a733_perf_mode.h"
+int os_gpu_perf_ready(void);
+int os_gpu_perf_owner(void);
+enum a733_perf_status os_gpu_perf_action(enum a733_perf_action,uint32_t,uint64_t,int,struct a733_perf_point *);
+#endif
 #endif

@@ -226,13 +226,14 @@ enum a733_pmic_status a733_pmic_live(struct a733_pmic *p,const struct a733_pmic_
 }
 /* The CPU rails accept writes within the pinned CPU operating points'
  * 800-1050 mV, and DCDC4, the GPU supply, only to a voltage of the GPU
- * operating point's speed-bin row (a733_gpu_opp.h, 860-960 mV), so a wrong
+ * high operating point's speed-bin row (860-960 mV) or its explicit 600 MHz
+ * low point (800 mV, a733_gpu_opp.h), so a wrong
  * caller value cannot leave those ranges. */
 static int writable(enum a733_rail which,uint8_t target)
 {
     struct a733_pmic_snapshot s;
     if(target>127 || !a733_pmic_decode(which,0,target,&s) || !s.decoded)return 0;
-    if(which==A733_RAIL_DCDC4)return a733_gpu_opp_voltage(s.programmed_uv);
+    if(which==A733_RAIL_DCDC4)return a733_gpu_opp_voltage(s.programmed_uv) || s.programmed_uv==A733_GPU_LOW_UV;
     return (which==A733_RAIL_DCDC3 || which==A733_RAIL_DCDC5) &&
         s.programmed_uv>=800000 && s.programmed_uv<=1050000;
 }

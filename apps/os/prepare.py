@@ -56,6 +56,7 @@ GPU_CONDITIONS = {
     'shared-pmic-and-register-ownership', 'irq95-route-disabled-inactive-clear',
     'gpu-device-mappings-and-memory-alias-exclusion',
     'manual-whole-board-power-removal-and-no-reuse'}
+GPU_PERF_CONDITION = 'gpu-runtime-600-1008mhz-and-exclusive-dcdc4-800-960mv-authority'
 GPU_NPU_CONDITION = 'concurrent-gpu-npu-lifetime-and-cross-pll-risk'
 GPU_NPU_SCHEMA = 'a733-os-gpu-npu-supervised-entry-v1'
 CONTRACT_MAGIC = 0x415337334f534331
@@ -245,8 +246,15 @@ def image_gpu(manifest, raw):
                 manifest.get('contract_profile') == contract,
                 'Supervised GPU requires the actual linked supervised contract and session size.')
         require(manifest.get('lifetime') == 'supervised' and
-                not any(manifest.get(k) for k in ('audio', 'radio', 'headset', 'perf_modes')),
-                'Supervised GPU requires recorded recognition without other optional devices or performance commands.')
+                not any(manifest.get(k) for k in ('audio', 'radio', 'headset')),
+                'Supervised GPU requires recorded recognition without audio or radio devices.')
+        perf = manifest.get('perf_modes', False)
+        require(type(perf) is bool and perf is ('performance' in config),
+                'GPU performance capability differs from the linked implementation.')
+        if perf:
+            require(cpu_clock and manifest.get('perf_operation') == 8 and
+                    manifest.get('perf_boot_mode') == config['performance']['boot_mode'],
+                    'GPU performance boot mode or command differs.')
     return config
 
 
@@ -264,7 +272,7 @@ def gpu_admission(record, config, evidence, raw):
             json.dumps(value['configuration'], sort_keys=True) == json.dumps(config, sort_keys=True),
             'Reviewed GPU entry must name the exact linked configuration.')
     combined = npu_session(raw)
-    conditions = GPU_CONDITIONS | ({GPU_NPU_CONDITION} if combined else set())
+    conditions = GPU_CONDITIONS | ({GPU_NPU_CONDITION} if combined else set()) | ({GPU_PERF_CONDITION} if config.get('performance') else set())
     require(isinstance(value['conditions'], dict) and set(value['conditions']) == conditions,
             'Incomplete GPU physical entry conditions.')
     for item in value['conditions'].values():

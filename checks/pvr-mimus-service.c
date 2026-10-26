@@ -148,10 +148,16 @@ void fixture_gpu_irq(void)
 /* The client-ring KICK: both commands as the session wrote them, the update
  * naming the timeline with the next sequence; the kernel return; then the
  * job goes to the model. */
+#ifdef SUNSTONE_A733_OS_PERF
+static int perf_kick(void *,unsigned,unsigned,unsigned char *);
+#endif
 static int kick(void *ctx, uint32_t off, uint32_t value)
 {
     unsigned next = (unsigned)word(resource(0), 4), slot = (next - 1) & 127;
     unsigned char *command = resource(1) + slot * 88;
+#ifdef SUNSTONE_A733_OS_PERF
+    if(perf_kick(ctx,next,slot,command))return 1;
+#endif
     if (word(command, 4) != (PVR_CCB_MAGIC | 101u)) return firmware_fixture_kick(ctx, off, value);
     callback(ctx); configASSERT(off == 0xb00 && !value && running);
     const struct pvr_mimus_service_config *c = mimus->config;
@@ -387,6 +393,9 @@ static void closed(void)
     }
 }
 
+#ifdef SUNSTONE_A733_OS_PERF
+#include "gpu-performance-service.inc"
+#endif
 static void client(void *unused)
 {
     (void)unused;
@@ -406,6 +415,9 @@ static void client(void *unused)
     metric("pool-wb-pages", wb); metric("pool-nc-pages", nc);
     metric("table-pages", session.requirements.table_pages);
     configASSERT(wb <= 80 && nc <= 52);
+#ifdef SUNSTONE_A733_OS_PERF
+    if(c>=25)performance_client();
+#endif
     if (c >= 21 && c <= 24) {
         configASSERT(bench_job(0));
         closed();
@@ -654,7 +666,7 @@ void fixture_unused(void)
 void kernel_main(void)
 {
     platform_init(); first_publish = 0;
-    configASSERT(mimus_service_case >= 1 && mimus_service_case <= 24);
+    configASSERT(mimus_service_case >= 1 && mimus_service_case <= 29);
     /* Synthetic weights over both 8 MiB model regions. */
     uint64_t *weights = (uint64_t *)(uintptr_t)0x44000000u;
     if (mimus_service_case == 1) for (size_t i = 0; i < (16u << 20) / 8; ++i) weights[i] = next_random();
@@ -689,9 +701,17 @@ void kernel_main(void)
     configASSERT(a733_gpu_memory_init(&memory, config.firmware_buffers, config.resources));
     /* The component was bound to the reserved configuration; the service
      * copies this one, which carries the same pointer. */
+#ifdef SUNSTONE_A733_OS_PERF
+    config.performance_clock=(struct pvr_gpu_clock_ops){boundary_now,sync_write,sync_read,perf_state,perf_publish};
+    config.performance_begin=perf_begin;config.performance_poll=perf_poll;config.performance_rate=perf_current;config.performance_client=1;
+#endif
     configASSERT(pvr_gpu_service_init(&service, &config, 4, 1));
     TaskHandle_t a = xTaskCreateStaticAffinitySet(client, "client", 4096, NULL, 3, mimus_stacks[0], &mimus_tasks[0], 1);
     TaskHandle_t m = xTaskCreateStaticAffinitySet(model, "model", 4096, NULL, 6, mimus_stacks[1], &mimus_tasks[1], 2);
     configASSERT(a && m && pvr_gpu_service_bind(&service, 0, a));
+#ifdef SUNSTONE_A733_OS_PERF
+    TaskHandle_t thermal=xTaskCreateStaticAffinitySet(performance_owner,"thermal",4096,NULL,5,perf_stack,&perf_task,1);
+    configASSERT(thermal && pvr_gpu_service_bind(&service,1,thermal));
+#endif
     vTaskStartScheduler(); platform_panic("scheduler returned", 0);
 }

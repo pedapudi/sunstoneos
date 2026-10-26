@@ -31,7 +31,10 @@ struct pvr_gpu_service_config;
 #define PVR_MIMUS_SERVICE_PUBLISH 10u
 
 enum pvr_mimus_slot_state { PVR_MIMUS_SLOT_IDLE, PVR_MIMUS_SLOT_SUBMITTED, PVR_MIMUS_SLOT_TAKEN,
-    PVR_MIMUS_SLOT_RESERVED, PVR_MIMUS_SLOT_CLOSED };
+    PVR_MIMUS_SLOT_RESERVED, PVR_MIMUS_SLOT_CLOSED, PVR_MIMUS_SLOT_HELD };
+/* Submission result when a performance hold owns the empty slot. The caller
+ * waits within its original job deadline; this is not CPU-fallback admission. */
+#define PVR_MIMUS_SUBMIT_HELD (-2)
 /* The longest hang bound bind accepts, from the kick: one third of the
  * recognizer's 3 s service window. */
 #define PVR_MIMUS_SERVICE_MAX_JOB_US UINT64_C(1000000)

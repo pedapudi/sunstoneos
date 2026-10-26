@@ -62,7 +62,8 @@ int a733_perf_dsu(unsigned column, uint32_t l_mhz, uint32_t b_mhz, struct a733_p
 /* Actions the owner performs. READ fills the point read back from the
  * hardware (a programmed rate and voltage). HOLD completes once the
  * accelerator can change (for the NPU: once its session has stopped) and
- * keeps it so; RELEASE ends a hold and cannot fail. CPU changes one CPU domain through the
+ * keeps it so; RELEASE ends a hold after acknowledged resume and may be
+ * asynchronous. A failed HOLD or RELEASE retains ownership. CPU changes one CPU domain through the
  * CPU clock driver, which orders voltage and frequency itself. VOLTAGE and
  * RATE change an accelerator's supply and clock. */
 enum a733_perf_action { A733_PERF_READ, A733_PERF_HOLD, A733_PERF_RELEASE, A733_PERF_CHANGE_CPU,
@@ -119,7 +120,7 @@ struct a733_perf {
     const struct a733_perf_entry *entry;
     struct a733_perf_ops ops;
     void *cookie;
-    unsigned owned, phase, index, count, held, start, block;
+    unsigned owned, phase, index, count, held, start, block, retained;
     uint64_t deadline;
     struct a733_perf_step plan[A733_PERF_STEPS];
     struct a733_perf_record record;

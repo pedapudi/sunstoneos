@@ -3,7 +3,7 @@
 
 The power-domain owner (docs/power-domains.md) reads DCDC2 and DCDC4 once per
 boot. No agent the OS controls may change DCDC2 afterwards; DCDC4 changes only
-through the GPU platform's raise to the GPU operating point
+through the GPU platform and its bounded performance transitions to supported points
 (docs/designs/gpu-vendor-default.md), which the owner's boot check and the GPU
 supply consumer accept. This check fails when:
 
@@ -11,11 +11,11 @@ supply consumer accept. This check fails when:
   OS sources, because firmware may change PMIC outputs on those calls;
 - the PMIC provider admits a selector write to any output other than DCDC3,
   DCDC4 and DCDC5, admits a DCDC4 write other than through
-  a733_gpu_opp_voltage() (the GPU operating point's speed-bin voltages,
+  a733_gpu_opp_voltage() or the explicit low-point 800 mV (
   include/a733_gpu_opp.h), or its native adapter can write any register
   other than the S_TWI0 data and control registers. The user approved the
   GPU's 960 mV on 2026-10-25;
-- a source other than the GPU platform (drivers/gpu/a733_gpu_platform.c),
+- a source other than the GPU platform and its private performance helper,
   the CPU clock driver and the CPU step's private rail helper submits a selector write;
 - a source outside drivers/power names the S_TWI0 interrupt (GIC-600 INTID
   235), which only the provider may use;
@@ -77,6 +77,7 @@ ADAPTER_FILES = {Path('drivers/power/a733_pmic_native.c'), Path('include/a733_pm
 # operating-point steps use a private helper for DCDC3 with CPU-B held and
 # the final rail-return bundle's DCDC5 with CPU-L and the DSU held.
 WRITERS = {Path('drivers/gpu/a733_gpu_platform.c'): {'A733_RAIL_DCDC4'},
+           Path('drivers/gpu/a733_gpu_performance.c'): {'A733_RAIL_DCDC4'},
            Path('drivers/clock/a733_cpu_clock.c'): {'rail_of(c->cluster)'},
            Path('apps/board-bundles-power/cpu-rail-change.h'): {'rail'}}
 
@@ -150,7 +151,7 @@ def main():
     rails = set(re.findall(r'A733_RAIL_[A-Z0-9]+', writable[1]))
     if rails != {'A733_RAIL_DCDC3', 'A733_RAIL_DCDC4', 'A733_RAIL_DCDC5'}:
         problems.append(f'drivers/power/a733_pmic.c: writable() admits {sorted(rails)}')
-    if not re.search(r'if\(which==A733_RAIL_DCDC4\)return a733_gpu_opp_voltage\(s\.programmed_uv\);', writable[1]):
+    if not re.search(r'if\(which==A733_RAIL_DCDC4\)return a733_gpu_opp_voltage\(s\.programmed_uv\) \|\| s\.programmed_uv==A733_GPU_LOW_UV;', writable[1]):
         problems.append('drivers/power/a733_pmic.c: writable() admits DCDC4 other than at a GPU operating-point voltage')
     for path in files(root):
         rel = path.relative_to(root)
@@ -206,7 +207,7 @@ def main():
     assert not problems, f'{len(problems)} problem(s)'
     print(f'PASS PMIC tree facts: no PSCI CPU_OFF or suspend in {scanned} sources, selector writes '
           'only to DCDC3 and DCDC5 and to DCDC4 at GPU operating-point voltages, from the CPU clock driver, the GPU '
-          'platform and the CPU step rail helper (DCDC3 and DCDC5) only, each call naming only its rails, INTID 235 only in the provider, no lock in the native adapter\'s '
+          'platform/performance helper and the CPU step rail helper (DCDC3 and DCDC5) only, each call naming only its rails, INTID 235 only in the provider, no lock in the native adapter\'s '
           'per-phase time read or per-access ownership check, no task check per access, the adapter\'s '
           'barrier placement, adapter '
           'operations named only by the provider, its adapter and the bundle forwarders')

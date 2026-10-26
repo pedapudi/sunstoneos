@@ -46,7 +46,8 @@ static int update_reg(void *context, enum a733_gpu_power_bank bank, uint32_t off
           (clear == 0x0070ff00 && set == 0x00105300))) ||
         (bank == A733_GPU_CCU && off == 0xb20 &&
          ((clear == 0 && set == 0x88000000) || (clear == 0 && set == 0x08000000) ||
-          (clear == 0x80000000 && set == 0x08000000))) ||
+          (clear == 0x80000000 && set == 0x08000000) ||
+          (clear == 0x0700000f && (set == 0x08000000 || set == 0x0a000000)))) ||
         (bank == A733_GPU_CCU && off == 0xb24 &&
          ((clear == 0 && (set == 1 || set == 0x10000)) || (set == 0 && (clear == 1 || clear == 0x10000)))) ||
         (bank == A733_GPU_CORE && clear == UINT32_MAX &&

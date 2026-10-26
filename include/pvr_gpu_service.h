@@ -7,6 +7,13 @@
 #include "pvr_fw_state.h"
 #include "pvr_gpu_stop.h"
 #include "pvr_free_list.h"
+#ifdef SUNSTONE_A733_OS_PERF
+#include "pvr_gpu_clock.h"
+#include "a733_perf_mode.h"
+#define PVR_GPU_PERF_READY 1u
+#define PVR_GPU_PERF_OWNER 2u
+#define PVR_GPU_PERF_FAILED 4u
+#endif
 struct pvr_compute_service;
 struct pvr_mimus_service;
 struct pvr_gpu_service;
@@ -50,7 +57,8 @@ enum pvr_gpu_service_phase { PVR_GPU_SERVICE_COLD, PVR_GPU_SERVICE_STARTING,
 enum pvr_gpu_service_operation { PVR_GPU_SERVICE_STATUS, PVR_GPU_SERVICE_OPEN,
     PVR_GPU_SERVICE_CLOSE, PVR_GPU_SERVICE_COMPUTE, PVR_GPU_SERVICE_RENDER, PVR_GPU_SERVICE_RENDER_OUTPUT,
     PVR_GPU_SERVICE_COMPUTE_OUTPUT, PVR_GPU_SERVICE_COMPUTE_CANCEL, PVR_GPU_SERVICE_COMPUTE_INPUT,
-    PVR_GPU_SERVICE_DRAW, PVR_GPU_SERVICE_TEXTURE, PVR_GPU_SERVICE_DISPOSE };
+    PVR_GPU_SERVICE_DRAW, PVR_GPU_SERVICE_TEXTURE, PVR_GPU_SERVICE_DISPOSE,
+    PVR_GPU_SERVICE_PERFORMANCE };
 enum pvr_gpu_service_result { PVR_GPU_SERVICE_OK, PVR_GPU_SERVICE_INVALID,
     PVR_GPU_SERVICE_DENIED, PVR_GPU_SERVICE_BUSY, PVR_GPU_SERVICE_FAULT };
 enum pvr_gpu_service_error { PVR_GPU_SERVICE_NO_ERROR, PVR_GPU_SERVICE_CLOCK,
@@ -148,6 +156,14 @@ struct pvr_gpu_service_config {
     struct pvr_mimus_service *mimus;
     /* Concrete retained native owner; permits healthy STOPPED reopen only. */
     struct a733_gpu_mimus *mimus_owner;
+#ifdef SUNSTONE_A733_OS_PERF
+    /* Concrete OS GPU performance owner, using a second pre-bound client. */
+    struct pvr_gpu_clock_ops performance_clock;
+    int (*performance_begin)(void *,enum a733_perf_action,uint32_t,uint64_t);
+    int (*performance_poll)(void *,struct a733_perf_point *);
+    uint32_t (*performance_rate)(void *);
+    unsigned performance_client;
+#endif
 };
 struct pvr_gpu_service_request {
     enum pvr_gpu_service_operation operation;
@@ -169,12 +185,20 @@ struct pvr_gpu_service_reply {
     uint32_t render_sequence;
     uint64_t texture_generation;
     uint32_t texture_received;
+#ifdef SUNSTONE_A733_OS_PERF
+    uint32_t performance_status;
+    struct a733_perf_point performance_point;
+#endif
 };
 struct pvr_gpu_service_message {
     struct pvr_gpu_service_request request;
     uint64_t ticket, epoch;
     unsigned client;
     uint32_t render_first_pixel, compute_first_word, compute_sequence, render_sequence;
+#ifdef SUNSTONE_A733_OS_PERF
+    uint64_t performance_limit;
+    uint32_t performance_action, performance_value;
+#endif
 };
 /* Scoped copied triangle upload. epoch must match the caller's OPEN reply.
  * The complete input is copied before enqueue; no caller pointer reaches the
@@ -215,6 +239,14 @@ struct pvr_gpu_service {
     struct pvr_gpu_start start;
     struct pvr_gpu_control control;
     struct pvr_gpu_stop stop;
+#ifdef SUNSTONE_A733_OS_PERF
+    struct {
+        struct pvr_gpu_clock clock;
+        uint64_t ticket, deadline, limit;
+        unsigned client, action, value, stage;
+        atomic_uint published;
+    } performance;
+#endif
     struct pvr_free_lists free_lists;
     struct pvr_gpu_events free_list_events;
     struct pvr_gpu_events statistics_events;
@@ -259,6 +291,13 @@ struct pvr_gpu_service {
 int pvr_gpu_service_init(struct pvr_gpu_service *, const struct pvr_gpu_service_config *,
                          UBaseType_t priority, UBaseType_t affinity);
 int pvr_gpu_service_bind(struct pvr_gpu_service *, unsigned slot, TaskHandle_t);
+#ifdef SUNSTONE_A733_OS_PERF
+/* One deferred completion reply per action, collected through the existing
+ * finite API. Absolute deadlines are copied, never restarted by the worker. */
+int pvr_gpu_service_performance(struct pvr_gpu_service *,enum a733_perf_action,uint32_t,
+    uint64_t deadline,uint64_t limit,uint64_t *ticket);
+unsigned pvr_gpu_service_performance_state(const struct pvr_gpu_service *);
+#endif
 
 /* Task-only copied requests/replies, one pending ticket per registered caller.
  * Finite waits only. Refusal/timeout preserves outputs; collect timeout retains

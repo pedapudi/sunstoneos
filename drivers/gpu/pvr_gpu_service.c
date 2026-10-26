@@ -157,6 +157,10 @@ int pvr_gpu_service_interrupt(struct pvr_gpu_service *s, BaseType_t *woken)
 }
 static void fail(struct pvr_gpu_service *s, enum pvr_gpu_service_error error)
 {
+#ifdef SUNSTONE_A733_OS_PERF
+    if(s->config.performance_begin)
+        atomic_store_explicit(&s->performance.published,PVR_GPU_PERF_OWNER|PVR_GPU_PERF_FAILED,memory_order_release);
+#endif
     if (!interrupt_mask(s)) error = PVR_GPU_SERVICE_INTERRUPT;
     s->phase = PVR_GPU_SERVICE_FAILED; s->error = error;
     if (s->config.compute) pvr_compute_service_abort(s->config.compute, PVR_COMPUTE_SERVICE_LIFECYCLE);
@@ -406,6 +410,117 @@ static int submitting(const struct pvr_gpu_service *s)
         (r && r->phase >= PVR_RENDER_SERVICE_FORMAT_GEOMETRY && r->phase <= PVR_RENDER_SERVICE_SUBMIT) ||
         (s->config.mimus && pvr_mimus_service_submitting(s->config.mimus));
 }
+#ifdef SUNSTONE_A733_OS_PERF
+static int performance_controlling(const struct pvr_gpu_service *s)
+{
+    const unsigned phase=s->performance.clock.phase;
+    return phase!=PVR_GPU_CLOCK_NEW && phase!=PVR_GPU_CLOCK_READY && phase!=PVR_GPU_CLOCK_FAILED;
+}
+static void performance_finish(struct pvr_gpu_service *s,enum a733_perf_status status,
+    struct a733_perf_point point)
+{
+    if(status==A733_PERF_FAILED)fail(s,PVR_GPU_SERVICE_CONTROL);
+    struct pvr_gpu_service_reply reply={.ticket=s->performance.ticket,.epoch=s->epoch,
+        .result=status==A733_PERF_FAILED ? PVR_GPU_SERVICE_FAULT : PVR_GPU_SERVICE_OK,
+        .phase=s->phase,.error=s->error,.performance_status=status,.performance_point=point};
+    if(xQueueSend(s->clients[s->performance.client].replies,&reply,0)!=pdTRUE) {
+        fail(s,PVR_GPU_SERVICE_CONTROL);return;
+    }
+    s->performance.ticket=0;s->performance.stage=0;
+}
+static enum pvr_gpu_service_result performance_start(struct pvr_gpu_service *s,
+    const struct pvr_gpu_service_message *m)
+{
+    if(!s->config.performance_begin || m->client!=s->config.performance_client || m->client==s->owner ||
+        m->epoch!=s->epoch)return PVR_GPU_SERVICE_DENIED;
+    if(s->phase==PVR_GPU_SERVICE_FAILED)return PVR_GPU_SERVICE_FAULT;
+    if(s->phase!=PVR_GPU_SERVICE_READY || s->performance.ticket)return PVR_GPU_SERVICE_BUSY;
+    uint64_t now;
+    if(!sample(s,&now))return PVR_GPU_SERVICE_FAULT;
+    if(!m->request.timeout_us || now>=m->request.timeout_us ||
+        m->request.timeout_us>m->performance_limit)return PVR_GPU_SERVICE_INVALID;
+    const unsigned action=m->performance_action,value=m->performance_value;
+    const int held=s->performance.clock.phase==PVR_GPU_CLOCK_HELD;
+    if((action==A733_PERF_HOLD && (held || performance_controlling(s))) ||
+        ((action==A733_PERF_RATE || action==A733_PERF_VOLTAGE) && !held) ||
+        (action==A733_PERF_READ && performance_controlling(s)))return PVR_GPU_SERVICE_BUSY;
+    if((action!=A733_PERF_HOLD && action!=A733_PERF_RELEASE && action!=A733_PERF_RATE &&
+        action!=A733_PERF_VOLTAGE && action!=A733_PERF_READ) ||
+        (action==A733_PERF_RATE && value!=600 && value!=1008) ||
+        (action==A733_PERF_VOLTAGE && value!=800 && value!=960) ||
+        ((action==A733_PERF_READ || action==A733_PERF_HOLD || action==A733_PERF_RELEASE) && value) ||
+        (held && m->request.timeout_us>s->performance.clock.limit))return PVR_GPU_SERVICE_INVALID;
+    s->performance.ticket=m->ticket;s->performance.client=m->client;s->performance.action=action;
+    s->performance.value=value;s->performance.deadline=m->request.timeout_us;
+    s->performance.limit=m->performance_limit;s->performance.stage=1;
+    return PVR_GPU_SERVICE_OK;
+}
+static void performance_step(struct pvr_gpu_service *s)
+{
+    if(!s->config.performance_begin)return;
+    int clock_result=0;
+    if(performance_controlling(s)) {
+        clock_result=pvr_gpu_clock_poll(&s->performance.clock);
+        if(clock_result<0) {
+            if(s->performance.ticket)performance_finish(s,A733_PERF_FAILED,(struct a733_perf_point){0});
+            else fail(s,PVR_GPU_SERVICE_CONTROL);
+            return;
+        }
+    }
+    if(!s->performance.ticket)return;
+    uint64_t now;
+    if(!sample(s,&now) || now>=s->performance.deadline) {
+        const int clean=s->performance.action==A733_PERF_HOLD && s->performance.stage==1;
+        performance_finish(s,clean ? A733_PERF_EXPIRED : A733_PERF_FAILED,(struct a733_perf_point){0});return;
+    }
+    const unsigned action=s->performance.action;
+    if(action==A733_PERF_HOLD) {
+        if(s->performance.stage==1) {
+            struct pvr_mimus_service *m=s->config.mimus;
+            if(m->phase!=PVR_MIMUS_SERVICE_IDLE || m->owed || atomic_load(&m->lost))return;
+            unsigned idle=PVR_MIMUS_SLOT_IDLE;
+            if(!atomic_compare_exchange_strong(&m->slot_state,&idle,PVR_MIMUS_SLOT_HELD))return;
+            if(!pvr_gpu_clock_hold(&s->performance.clock,&s->control,&s->config.performance_clock,
+                s->config.context,s->performance.deadline,s->performance.limit)) {
+                performance_finish(s,A733_PERF_FAILED,(struct a733_perf_point){0});return;
+            }
+            s->performance.stage=2;
+        } else if(clock_result==1 && s->performance.clock.phase==PVR_GPU_CLOCK_HELD)
+            performance_finish(s,A733_PERF_DONE,(struct a733_perf_point){0});
+        return;
+    }
+    if(action==A733_PERF_RELEASE) {
+        if(s->performance.stage==1) {
+            if(!performance_controlling(s)) {
+                performance_finish(s,A733_PERF_DONE,(struct a733_perf_point){0});return;
+            }
+            if(!pvr_gpu_clock_resume(&s->performance.clock,s->config.performance_rate(s->config.context),
+                s->performance.deadline)) {
+                performance_finish(s,A733_PERF_FAILED,(struct a733_perf_point){0});return;
+            }
+            s->performance.stage=2;return;
+        }
+        if(clock_result==1 && s->performance.clock.phase==PVR_GPU_CLOCK_READY) {
+            unsigned held=PVR_MIMUS_SLOT_HELD;
+            if(!atomic_compare_exchange_strong(&s->config.mimus->slot_state,&held,PVR_MIMUS_SLOT_IDLE)) {
+                performance_finish(s,A733_PERF_FAILED,(struct a733_perf_point){0});return;
+            }
+            performance_finish(s,A733_PERF_DONE,(struct a733_perf_point){0});
+        }
+        return;
+    }
+    if(s->performance.stage==1) {
+        if(!s->config.performance_begin(s->config.context,(enum a733_perf_action)action,
+            s->performance.value,s->performance.deadline)) {
+            performance_finish(s,A733_PERF_FAILED,(struct a733_perf_point){0});return;
+        }
+        s->performance.stage=2;
+    }
+    struct a733_perf_point point={0};
+    int r=s->config.performance_poll(s->config.context,&point);
+    if(r==1 || r<0)performance_finish(s,r==1 ? A733_PERF_DONE : A733_PERF_FAILED,point);
+}
+#endif
 static void advance(struct pvr_gpu_service *s)
 {
     if (s->phase == PVR_GPU_SERVICE_FAILED) return;
@@ -459,7 +574,12 @@ static void advance(struct pvr_gpu_service *s)
     }
     case PVR_GPU_SERVICE_CHECKING:
     case PVR_GPU_SERVICE_READY: {
-        enum pvr_gpu_control_result r = pvr_gpu_control_poll(&s->control, 4);
+        enum pvr_gpu_control_result r;
+#ifdef SUNSTONE_A733_OS_PERF
+        if(performance_controlling(s))r=PVR_GPU_CONTROL_OK;
+        else
+#endif
+        r=pvr_gpu_control_poll(&s->control,4);
         if (r == PVR_GPU_CONTROL_OK) { s->phase = PVR_GPU_SERVICE_READY; rearm = 1; }
         else if (r != PVR_GPU_CONTROL_AGAIN) { fail(s, PVR_GPU_SERVICE_CONTROL); return; }
         if (s->config.free_lists.count) {
@@ -475,6 +595,14 @@ static void advance(struct pvr_gpu_service *s)
             pvr_mimus_service_poll(s->config.mimus) < 0) {
             fail(s, PVR_GPU_SERVICE_COMPUTATION); return;
         }
+#ifdef SUNSTONE_A733_OS_PERF
+        if(s->phase==PVR_GPU_SERVICE_READY) {
+            performance_step(s);
+            if(s->phase==PVR_GPU_SERVICE_FAILED)return;
+            if(s->config.performance_begin)
+                atomic_store_explicit(&s->performance.published,PVR_GPU_PERF_OWNER|PVR_GPU_PERF_READY,memory_order_release);
+        }
+#endif
         break;
     }
     case PVR_GPU_SERVICE_COMPUTE_CLEANUP: {
@@ -644,6 +772,12 @@ static enum pvr_gpu_service_result execute(struct pvr_gpu_service *s,
             if (!result) return PVR_GPU_SERVICE_BUSY;
         }
         s->owner = m->client; ++s->epoch;
+#ifdef SUNSTONE_A733_OS_PERF
+        if(s->config.performance_begin) {
+            s->performance.clock=(struct pvr_gpu_clock){0};
+            atomic_store_explicit(&s->performance.published,PVR_GPU_PERF_OWNER,memory_order_release);
+        }
+#endif
         atomic_store_explicit(&s->published_epoch,s->epoch,memory_order_release);
         if ((!reopening_mimus && !deadline(s, r->timeout_us)) || !prepare(s)) return PVR_GPU_SERVICE_FAULT;
         return PVR_GPU_SERVICE_OK;
@@ -651,6 +785,10 @@ static enum pvr_gpu_service_result execute(struct pvr_gpu_service *s,
     if (s->owner != m->client) return PVR_GPU_SERVICE_DENIED;
     if (s->phase == PVR_GPU_SERVICE_FAILED) return PVR_GPU_SERVICE_FAULT;
     if (s->phase != PVR_GPU_SERVICE_READY) return PVR_GPU_SERVICE_BUSY;
+#ifdef SUNSTONE_A733_OS_PERF
+    if(r->operation==PVR_GPU_SERVICE_CLOSE && (s->performance.ticket || performance_controlling(s)))
+        return PVR_GPU_SERVICE_BUSY;
+#endif
     if(r->operation==PVR_GPU_SERVICE_TEXTURE) {
         struct pvr_render_service *d=s->config.render;
         if(!d || !d->owner || d->owner->draw<2 || !s->config.compute ||
@@ -745,6 +883,10 @@ static enum pvr_gpu_service_result execute(struct pvr_gpu_service *s,
     }
     if (s->config.mimus && !pvr_mimus_service_close(s->config.mimus)) return PVR_GPU_SERVICE_BUSY;
     s->closed_owner=m->client;s->closed_epoch=s->epoch;
+#ifdef SUNSTONE_A733_OS_PERF
+    if(s->config.performance_begin)
+        atomic_store_explicit(&s->performance.published,PVR_GPU_PERF_OWNER,memory_order_release);
+#endif
     if (!interrupt_mask(s)) { fail(s, PVR_GPU_SERVICE_INTERRUPT); return PVR_GPU_SERVICE_FAULT; }
     if (!deadline(s, r->timeout_us)) return PVR_GPU_SERVICE_FAULT;
     if(s->config.graphics) {
@@ -819,6 +961,9 @@ static TickType_t ticks(uint64_t us)
  * delivery an idle session also wakes every IDLE_POLL_US. */
 static TickType_t wait_ticks(struct pvr_gpu_service *s)
 {
+#ifdef SUNSTONE_A733_OS_PERF
+    if(s->phase==PVR_GPU_SERVICE_READY && (s->performance.ticket || performance_controlling(s)))return ticks(1000);
+#endif
     switch (s->phase) {
     case PVR_GPU_SERVICE_COLD: case PVR_GPU_SERVICE_STOPPED: case PVR_GPU_SERVICE_FAILED:
     case PVR_GPU_SERVICE_DISPOSED: case PVR_GPU_SERVICE_RECONSTRUCTING: return portMAX_DELAY;
@@ -916,6 +1061,13 @@ static void worker(void *argument)
             s->config.mimus) continue;
         configASSERT(message.client < PVR_GPU_SERVICE_CLIENTS && message.ticket);
         struct pvr_gpu_service_reply reply = {.ticket = message.ticket};
+#ifdef SUNSTONE_A733_OS_PERF
+        if(message.request.operation==PVR_GPU_SERVICE_PERFORMANCE) {
+            reply.result=performance_start(s,&message);
+            if(reply.result==PVR_GPU_SERVICE_OK)continue;
+            reply.performance_status=reply.result==PVR_GPU_SERVICE_FAULT ? A733_PERF_FAILED : A733_PERF_REFUSED;
+        } else
+#endif
         reply.result = execute(s, &message);
         if(message.request.operation==PVR_GPU_SERVICE_COMPUTE_INPUT) {
             struct pvr_compute_service *c=s->config.compute;
@@ -981,6 +1133,14 @@ int pvr_gpu_service_init(struct pvr_gpu_service *s, const struct pvr_gpu_service
         c->stop.now != c->start.now || !c->stop.read || !c->stop.write ||
         !c->stop.sync_write || !c->stop.sync_read || !c->stop.isolate ||
         (!!c->irq.mask != !!c->irq.rearm) || !allocations(s, c)) return 0;
+#ifdef SUNSTONE_A733_OS_PERF
+    if(c->performance_begin && (!c->mimus || c->compute || c->render || c->free_lists.count ||
+        !c->performance_poll || !c->performance_rate || !c->performance_client ||
+        c->performance_client>=PVR_GPU_SERVICE_CLIENTS || !c->performance_clock.now ||
+        !c->performance_clock.sync_write || !c->performance_clock.sync_read ||
+        !c->performance_clock.power_state || !c->performance_clock.publish))return 0;
+    atomic_init(&s->performance.published,0);
+#endif
     s->config = *c; s->owner = PVR_GPU_SERVICE_CLIENTS; s->irq_masked = 1;
     s->requests = xQueueCreateStatic(PVR_GPU_SERVICE_CLIENTS, sizeof(struct pvr_gpu_service_message),
                                      s->request_storage, &s->request_state);
@@ -1019,10 +1179,31 @@ static struct pvr_gpu_service_client *caller(struct pvr_gpu_service *s, unsigned
         if (s->clients[i].task == task) { *slot = i; return &s->clients[i]; }
     return NULL;
 }
+#ifdef SUNSTONE_A733_OS_PERF
+unsigned pvr_gpu_service_performance_state(const struct pvr_gpu_service *s)
+{
+    return s && s==instance && s->initialized && s->config.performance_begin ?
+        atomic_load_explicit(&s->performance.published,memory_order_acquire) : 0;
+}
+int pvr_gpu_service_performance(struct pvr_gpu_service *s,enum a733_perf_action action,uint32_t value,
+    uint64_t deadline,uint64_t limit,uint64_t *ticket)
+{
+    unsigned slot;
+    struct pvr_gpu_service_client *c=caller(s,&slot);
+    if(!c || !ticket || !s->config.performance_begin || slot!=s->config.performance_client || c->pending ||
+        c->next_ticket==UINT64_MAX || !deadline || deadline>limit)return 0;
+    struct pvr_gpu_service_message m={.request={PVR_GPU_SERVICE_PERFORMANCE,deadline},
+        .ticket=c->next_ticket+1,.epoch=atomic_load_explicit(&s->published_epoch,memory_order_acquire),
+        .client=slot,.performance_limit=limit,.performance_action=action,.performance_value=value};
+    c->pending=m.ticket;
+    if(xQueueSend(s->requests,&m,0)!=pdTRUE){c->pending=0;return 0;}
+    c->next_ticket=m.ticket;*ticket=m.ticket;return 1;
+}
+#endif
 int pvr_gpu_service_send_epoch(struct pvr_gpu_service *s,uint64_t epoch, const struct pvr_gpu_service_request *r,
                          TickType_t wait, uint64_t *ticket)
 {
-    if (!r || !ticket || wait == portMAX_DELAY || r->operation==PVR_GPU_SERVICE_COMPUTE_INPUT ||
+    if (!r || !ticket || wait == portMAX_DELAY || r->operation==PVR_GPU_SERVICE_PERFORMANCE || r->operation==PVR_GPU_SERVICE_COMPUTE_INPUT ||
         r->operation==PVR_GPU_SERVICE_DRAW) return 0;
     unsigned slot; struct pvr_gpu_service_client *c = caller(s, &slot);
     if (!c || c->pending || c->next_ticket == UINT64_MAX) return 0;

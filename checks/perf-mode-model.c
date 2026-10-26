@@ -46,6 +46,8 @@ static struct {
     /* Injected faults. */
     unsigned fail_block, fail_status, read_fail, admit_reason, changes_left;
     unsigned events, cpu_changes, pmic_writes;
+    unsigned release_mode, release_polls, hold_failed;
+    uint64_t release_deadline;
     char log[64][24];
 } m;
 static uint32_t row_mv(enum a733_cpu_domain d,uint32_t mhz)
@@ -103,12 +105,19 @@ static enum a733_perf_status act(void *v,enum a733_perf_action a,enum a733_perf_
         read->mhz=m.mhz[b];read->mv=m.rail[rail_of(b)];return A733_PERF_DONE;
     }
     if(a==A733_PERF_HOLD) {
+        if(m.hold_failed)return m.hold_failed==2 ? A733_PERF_REFUSED : A733_PERF_FAILED;
         assert(b==N || b==G);
         if(start){if(!m.held){m.hold_at=m.now;++m.holds;}m.held|=BIT(b);}
-        return b==N && m.now<m.job_end ? A733_PERF_PENDING : A733_PERF_DONE;
+        return b==N && m.now<m.job_end ? (m.now>=deadline ? A733_PERF_EXPIRED : A733_PERF_PENDING) : A733_PERF_DONE;
     }
     if(a==A733_PERF_RELEASE) {
-        assert(start && (m.held&BIT(b)));m.held&=~BIT(b);++m.releases;
+        assert(m.held&BIT(b));
+        if(start)m.release_deadline=deadline;
+        assert(deadline==m.release_deadline);
+        ++m.release_polls;
+        if(m.release_mode==2)return A733_PERF_FAILED;
+        if(m.release_mode==3 || (m.release_mode==1 && m.release_polls<3))return A733_PERF_PENDING;
+        m.held&=~BIT(b);++m.releases;
         if(!m.held && m.now-m.hold_at>m.unavailable_max)m.unavailable_max=m.now-m.hold_at;
         return A733_PERF_DONE;
     }
@@ -331,10 +340,14 @@ int main(void)
         const enum a733_perf_result result=request(A733_PERF_LOW,OWNED,0);
         m.fail_block=0;
         /* Only the NPU's hold precedes its step, so its failure wrote nothing. */
-        assert(result==(failures[i].block==N ? A733_PERF_RESULT_REFUSED : A733_PERF_RESULT_STOPPED));
+        assert(result==A733_PERF_RESULT_STOPPED);
         assert(p.record.reason==failures[i].reason && p.record.failed_block==failures[i].block);
-        assert(p.record.mode==A733_PERF_MIXED || (failures[i].block==N && p.record.mode==A733_PERF_HIGH));
-        assert(!m.held && p.record.read_ok==A733_PERF_ALL);
+        if(failures[i].status==A733_PERF_FAILED) {
+            assert(p.retained==BIT(failures[i].block) && p.record.mode==A733_PERF_UNKNOWN && !p.record.read_ok);
+            assert(a733_perf_request(&p,A733_PERF_COMMAND_READ,0,0)==A733_PERF_ACTIVE);
+            ++cases;continue;
+        }
+        assert(p.record.mode==A733_PERF_MIXED && !m.held && p.record.read_ok==A733_PERF_ALL);
         /* The read-back points are the hardware's; blocks after the failed
          * one keep their old point. */
         for(unsigned b=0;b<A733_PERF_BLOCKS;++b)assert(p.record.read[b].mhz==m.mhz[b] && p.record.read[b].mv==m.rail[rail_of(b)]);
@@ -346,10 +359,12 @@ int main(void)
     boot_state();assert(a733_perf_init(&p,SID,OWNED,&ops,&m));read_back();
     assert(request(A733_PERF_LOW,OWNED,0)==A733_PERF_RESULT_DONE);
     m.fail_block=BIT(N);m.fail_status=A733_PERF_FAILED;
-    assert(request(A733_PERF_HIGH,OWNED,0)==A733_PERF_RESULT_REFUSED);
-    /* Only the hold preceded the failed NPU step, so nothing was written. */
-    assert(p.record.reason==A733_PERF_STEP_FAILED && p.record.failed_block==N && !m.events && !m.held);
+    assert(request(A733_PERF_HIGH,OWNED,0)==A733_PERF_RESULT_STOPPED);
+    /* Failure may have written hardware; retain the NPU hold and refuse reuse. */
+    assert(p.record.reason==A733_PERF_STEP_FAILED && p.record.failed_block==N && !m.events && m.held==BIT(N) && p.retained==BIT(N));
     m.fail_block=0;++cases;
+    boot_state();assert(a733_perf_init(&p,SID,OWNED,&ops,&m));read_back();
+    assert(request(A733_PERF_LOW,OWNED,0)==A733_PERF_RESULT_DONE);
     /* A block that cannot be read back is reported, and a switch then
      * refuses until a read succeeds. */
     m.read_fail=BIT(B);read_back();
@@ -402,6 +417,22 @@ int main(void)
         assert(a733_perf_npu_mhz(osc,ref,0xf8305100,0x00000000,&mhz,&stopped) && mhz==492 && stopped);
         assert(a733_perf_npu_mhz(osc,ref,0xf8104600,0x80000001,&mhz,&stopped) && mhz==426);
         assert(!a733_perf_npu_mhz(osc,ref,0xf8104600,0x81000000,&mhz,&stopped));
+        ++cases;
+    }
+    /* The firmware RELEASE is asynchronous. Its fixed deadline and hold
+     * survive pending, failed and missing replies; failed HOLD may already
+     * have published a device-writing request before DONE. */
+    for(unsigned mode=1;mode<=5;++mode) {
+        boot_state();m.mhz[G]=1008;m.rail[RAIL4]=960;
+        assert(a733_perf_init(&p,SID,BIT(G),&ops,&m));read_back();
+        m.release_mode=mode;m.hold_failed=mode==5 ? 2 : mode==4;
+        enum a733_perf_result result=request(A733_PERF_LOW,BIT(G),0);
+        if(mode==1)assert(result==A733_PERF_RESULT_DONE && m.release_polls==3 && !p.held && !p.retained);
+        else if(mode==5)assert(result==A733_PERF_RESULT_REFUSED && !p.held && !p.retained && !m.releases && !m.release_polls);
+        else {
+            assert(result==A733_PERF_RESULT_STOPPED && p.retained==BIT(G) && (p.held&BIT(G)) && !m.releases);
+            assert(a733_perf_request(&p,A733_PERF_COMMAND_READ,0,0)==A733_PERF_ACTIVE);
+        }
         ++cases;
     }
     printf("{\"cases\":%u,\"boot_switch_us\":%llu,\"high_to_low_us\":%llu,\"low_to_high_us\":%llu,"

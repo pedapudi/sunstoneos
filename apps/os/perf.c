@@ -4,7 +4,7 @@
  * boot switch, then the commands that USB0 operation 8 posts. This file is
  * the engine's owner: CPU domain requests through the driver, the NPU's
  * retune through its bootstrap task, and the readback of every block. The
- * GPU is read back and never owned. */
+ * GPU changes run through its existing privileged worker. */
 #include "os.h"
 #include "perf.h"
 #include "../board/application.h"
@@ -133,6 +133,15 @@ static enum a733_perf_status release_rail(uint64_t deadline)
 static enum a733_perf_status read_block(enum a733_perf_block b,uint64_t deadline,int start,struct a733_perf_point *out)
 {
     if(perf.failed)return A733_PERF_FAILED;
+#ifdef SUNSTONE_A733_OS_GPU_LINEAR
+    if(b==A733_PERF_GPU && os_gpu_perf_owner()) {
+        if(start && (perf.cancelled || perf.cpu_busy || a733_thermal_policy_level(perf.policy)!=A733_THERMAL_NORMAL))
+            return A733_PERF_REFUSED;
+        enum a733_perf_status r=os_gpu_perf_action(A733_PERF_READ,0,deadline,start,out);
+        if(r==A733_PERF_FAILED)perf.failed=1;
+        return r;
+    }
+#endif
     /* A thermal transition invalidates the entire pass. Finish only an
      * outstanding provider request; its token cannot be abandoned. */
     if((perf.cancelled || perf.cpu_busy || a733_thermal_policy_level(perf.policy)!=A733_THERMAL_NORMAL) && !perf.requested) {
@@ -177,8 +186,15 @@ static enum a733_perf_status act(void *v,enum a733_perf_action a,enum a733_perf_
     /* A running CPU or NPU request resolves under its own bound. All new
      * writes stop after a thermal interruption, even if NORMAL has returned. */
     if((perf.cancelled || a733_thermal_policy_level(perf.policy)!=A733_THERMAL_NORMAL) &&
-       (a==A733_PERF_HOLD || (a==A733_PERF_RATE && start) ||
+       ((a==A733_PERF_HOLD && start) || ((a==A733_PERF_RATE || a==A733_PERF_VOLTAGE) && start) ||
         (a==A733_PERF_CHANGE_CPU && (start || !perf.cpu_started))))return A733_PERF_REFUSED;
+#ifdef SUNSTONE_A733_OS_GPU_LINEAR
+    if(b==A733_PERF_GPU && a!=A733_PERF_READ) {
+        enum a733_perf_status r=os_gpu_perf_action(a,value,deadline,start,out);
+        if(r==A733_PERF_FAILED)perf.failed=1;
+        return r;
+    }
+#endif
     switch(a) {
     case A733_PERF_READ:return read_block(b,deadline,start,out);
     case A733_PERF_CHANGE_CPU: {
@@ -200,7 +216,9 @@ static enum a733_perf_status act(void *v,enum a733_perf_action a,enum a733_perf_
     case A733_PERF_HOLD:
         /* The NPU changes only once its session has stopped. */
         if(b!=A733_PERF_NPU || !os_npu_perf_ready())return A733_PERF_REFUSED;
-        return os_npu_perf_stopped() ? A733_PERF_DONE : A733_PERF_PENDING;
+        if(os_npu_perf_stopped())return A733_PERF_DONE;
+        if(!now(&perf,&t))return A733_PERF_FAILED;
+        return t>=deadline ? A733_PERF_EXPIRED : A733_PERF_PENDING;
     case A733_PERF_RATE:
         if(b!=A733_PERF_NPU)return A733_PERF_REFUSED;
         if(start) {
@@ -233,6 +251,9 @@ static enum a733_perf_reason admit(void *v,unsigned blocks,unsigned cpu)
     if((blocks&A733_PERF_BIT(A733_PERF_NPU)) && !os_npu_perf_ready())return A733_PERF_NOT_READY;
 #else
     (void)blocks;
+#endif
+#ifdef SUNSTONE_A733_OS_GPU_LINEAR
+    if((blocks&A733_PERF_BIT(A733_PERF_GPU)) && !os_gpu_perf_ready())return A733_PERF_NOT_READY;
 #endif
     return A733_PERF_OK;
 }
@@ -275,6 +296,9 @@ int os_perf_step(struct a733_cpu_clock *cpu,const struct a733_thermal_policy *po
         unsigned owned=cpu_owned();
 #ifdef SUNSTONE_A733_OS_NPU
         owned|=A733_PERF_BIT(A733_PERF_NPU);
+#endif
+#ifdef SUNSTONE_A733_OS_GPU_LINEAR
+        owned|=A733_PERF_BIT(A733_PERF_GPU);
 #endif
         /* A bin without an entry still reads back; every switch is refused. */
         (void)a733_perf_init(&perf.engine,cpu->report.sid_word,owned,&ops,&perf);
@@ -334,7 +358,7 @@ int os_perf_step(struct a733_cpu_clock *cpu,const struct a733_thermal_policy *po
         perf.engine.record.result=A733_PERF_RESULT_STOPPED;perf.engine.record.reason=A733_PERF_THERMAL;
         perf.cancelled=0;changed=1;
     }
-    if(perf.failed) {
+    if(perf.failed || perf.engine.retained) {
         perf.engine.record.result=A733_PERF_RESULT_STOPPED;perf.engine.record.reason=A733_PERF_STEP_FAILED;
         publish();return -1;
     }
