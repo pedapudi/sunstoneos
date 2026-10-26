@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Board bundles 20 to 24 and 30 to 32: the CPU operating-point steps of
+/* Board bundles 20 to 24 and 30 to 33: the CPU operating-point steps of
  * docs/designs/cpu-top-opp.md on the returning CPU0 image of bundle 15. Cores
  * 6 and 7 stay powered off. OPP_BUNDLE selects the step's plan:
  *
@@ -17,7 +17,9 @@
  *       must read the boot PLL and mux words; no write;
  *   32  step 6, read-back after the workload: temperatures, rails and the
  *       boot clock words, which the workload's own CPU-B lowering and the
- *       ROM return leave; no write.
+ *       ROM return leave; no write;
+ *   33  after a successful workload return: require all boot clock words,
+ *       then restore DCDC3 and DCDC5 to 800 mV with their clocks held.
  *
  * Set step6-set-5 ran 30 to 32 as bundles 25 to 27, before the GPU and
  * clock-audit rows took those numbers.
@@ -75,7 +77,8 @@
 
 enum { OP_CLOCK, OP_VOLT, OP_RATE };
 /* OP_CLOCK: one domain to mhz, with mv the planned voltage of its rail.
- * OP_VOLT: DCDC3 to mv with CPU-B held. OP_RATE: measure CPU0. */
+ * OP_VOLT: the domain's rail to mv with its supplied clocks held.
+ * OP_RATE: measure CPU0. */
 struct op { uint8_t kind, domain; uint16_t mhz, mv; };
 struct plan {
     const char *text;              /* BEGIN and COMPLETE text. */
@@ -122,6 +125,11 @@ static const struct plan plan = {"CPU-L 1794 MHz and DCDC5 1000 mV, the DSU 1274
 static const struct plan plan = {OPP_BUNDLE == 31 ? "DCDC5 1000 mV and DCDC3 1050 mV kept across the ROM return, read only"
                                                   : "temperatures, rails and boot clock words after the top-point workload, read only",
     0, {0, 0}, 0, {{OP_RATE, 0, 0, 0}}, {1000, 1050}};
+#elif OPP_BUNDLE == 33
+/* Successful-set cleanup only: all boot clocks before either rail falls.
+ * A failed workload can retain running secondaries and is not an input. */
+static const struct plan plan = {"DCDC3 and DCDC5 restored to 800 mV at boot clock words",
+    0, {0, 0}, 2, {{OP_VOLT, A733_CPU_BIG, 0, 800}, {OP_VOLT, A733_CPU_LITTLE, 0, 800}}, {1000, 1050}};
 #else
 #error OPP_BUNDLE names no step
 #endif
@@ -397,71 +405,20 @@ static void clock_change(enum a733_cpu_domain d, uint32_t mhz, uint32_t mv)
     bb_power_print(&l);
 }
 
-/* One DCDC3 request under the step's exclusive lease: a snapshot, or a
- * selector write that the provider reads back. */
-static void dcdc3_request(const struct a733_rail_token *t, int write, uint8_t expected, uint8_t target,
-                          struct a733_pmic_snapshot *out)
-{
-    struct a733_pmic_request q = {0};
-    enum a733_pmic_status r;
-    while ((r = write ? a733_pmic_submit_write(&bb_power.pmic, VOLT_OWNER, t, A733_RAIL_DCDC3, expected, target,
-                                               bb_power.deadline, &q)
-                      : a733_pmic_submit(&bb_power.pmic, VOLT_OWNER, t, A733_RAIL_DCDC3, bb_power.deadline, &q)) ==
-           A733_PMIC_BUSY)
-        bb_power_pause("PMIC submit deadline");
-    REQUIRE(r == A733_PMIC_PENDING, "PMIC submit");
-    while ((r = a733_pmic_result(&bb_power.pmic, &q, out)) == A733_PMIC_PENDING || r == A733_PMIC_BUSY)
-        bb_power_pause("PMIC result deadline");
-    REQUIRE(r == A733_PMIC_COMPLETE && out->rail == A733_RAIL_DCDC3, "PMIC result");
-    while ((r = a733_pmic_reap(&bb_power.pmic, &q)) == A733_PMIC_BUSY)
-        bb_power_pause("PMIC reap deadline");
-    REQUIRE(r == A733_PMIC_COMPLETE, "PMIC reap");
-}
+#include "cpu-rail-change.h"
 
-/* DCDC3 to mv with CPU-B's clock held exclusively, so its rate stays at
- * 1014 MHz, which both 800 and 1050 mV cover; then the vendor's 1 ms. */
-static void dcdc3_change(uint32_t mv)
+static void rail_change(enum a733_cpu_domain domain, uint32_t mv)
 {
-    struct a733_clock_token hold = {0};
-    struct a733_rail_token rail = {0};
-    REQUIRE(a733_clock_acquire(&bb_power.clocks, VOLT_OWNER, 0, A733_CLOCK_CPU_B, request_deadline(), &hold) ==
-            A733_CLOCK_OK, "CPU-B clock lease");
-    enum a733_rail_result rr = a733_rail_acquire(&bb_power.rails, VOLT_OWNER, 0, A733_RAIL_BIT(A733_RAIL_DCDC3),
-                                                 request_deadline(), &rail);
-    REQUIRE(rr == A733_RAIL_PENDING || rr == A733_RAIL_READY, "DCDC3 lease");
-    while ((rr = a733_rail_poll(&bb_power.rails, &rail)) != A733_RAIL_READY) {
-        REQUIRE(rr == A733_RAIL_PENDING || rr == A733_RAIL_BUSY, "DCDC3 lease poll");
-        bb_power_pause("DCDC3 lease deadline");
-    }
-    /* Admission found CPU-B at 1014 MHz, which every DCDC3 point covers, and
-     * the clock lease held here keeps it there; no plan with a DCDC3 write
-     * changes CPU-B. */
-    REQUIRE(now_mhz[A733_CPU_BIG] == BASE_MHZ, "CPU-B not at 1014 MHz for the DCDC3 write");
-    struct a733_pmic_snapshot s;
-    dcdc3_request(&rail, 0, 0, 0, &s);
-    REQUIRE(s.enabled && s.decoded && s.programmed_uv == rail_mv[1] * 1000u, "DCDC3 before the write");
-    dcdc3_request(&rail, 1, (uint8_t)(s.selector & 127u), (uint8_t)((mv - 500u) / 10u), &s);
-    REQUIRE(s.enabled && s.decoded && s.programmed_uv == mv * 1000u, "DCDC3 readback");
-    const uint64_t settled = bb_power_now() + VOLT_SETTLE_US;
-    while (bb_power_now() < settled)
-        bb_power_pause("DCDC3 settle deadline");
-    dcdc3_request(&rail, 0, 0, 0, &s);
-    REQUIRE(s.enabled && s.decoded && s.programmed_uv == mv * 1000u, "DCDC3 after the settle");
-    while ((rr = a733_rail_release(&bb_power.rails, &rail, request_deadline())) != A733_RAIL_READY) {
-        REQUIRE(rr == A733_RAIL_PENDING || rr == A733_RAIL_BUSY, "DCDC3 release");
-        bb_power_pause("DCDC3 release deadline");
-    }
-    enum a733_clock_result cr;
-    while ((cr = a733_clock_release(&bb_power.clocks, &hold, request_deadline())) == A733_CLOCK_BUSY)
-        bb_power_pause("CPU-B clock release deadline");
-    REQUIRE(cr == A733_CLOCK_OK, "CPU-B clock release");
-    if (mv > rail_mv[1])
+    const unsigned r = supply(domain);
+    struct a733_pmic_snapshot snapshot;
+    cpu_rail_change(domain, rail_mv[r], mv, &snapshot);
+    if (domain == A733_CPU_BIG && mv > rail_mv[r])
         raised |= 1u << 3;
-    rail_mv[1] = mv;
+    rail_mv[r] = mv;
     struct bb_line l;
     bb_line_start(&l, "VOLT");
-    bb_line_hex(&l, "dcdc3_selector", s.selector);
-    bb_line_dec(&l, "dcdc3_uv", s.programmed_uv);
+    bb_line_hex(&l, domain == A733_CPU_BIG ? "dcdc3_selector" : "dcdc5_selector", snapshot.selector);
+    bb_line_dec(&l, domain == A733_CPU_BIG ? "dcdc3_uv" : "dcdc5_uv", snapshot.programmed_uv);
     bb_line_end(&l);
     bb_power_print(&l);
 }
@@ -507,7 +464,7 @@ static _Noreturn void stop(void)
     if ((raised & (1u << A733_CPU_LITTLE)) && now_mhz[A733_CPU_LITTLE] > BASE_MHZ)
         clock_change(A733_CPU_LITTLE, BASE_MHZ, BOOT_MV);
     if ((raised & (1u << 3)) && rail_mv[1] > BOOT_MV)
-        dcdc3_change(BOOT_MV);
+        rail_change(A733_CPU_BIG, BOOT_MV);
     controlled("STOPPED", "thermal limit");
 }
 
@@ -588,7 +545,7 @@ static void client(void *unused)
         if ((cpu.words[d][0] & (3u << 29)) || (cpu.words[d][1] >> 31) || (cpu.words[d][2] >> 31))
             refuse("pattern or LFM enabled");
     }
-#if OPP_BUNDLE == 31 || OPP_BUNDLE == 32
+#if OPP_BUNDLE == 31 || OPP_BUNDLE == 32 || OPP_BUNDLE == 33
     /* The boot words (bundle 14 on port 3-3): CPU-L and the DSU at 494 MHz,
      * which the ROM return restores, and CPU-B at 1014 MHz, which bundle 30
      * never changes and the workload restores before its return. */
@@ -615,11 +572,11 @@ static void client(void *unused)
             rate();
             continue;
         }
-        const uint32_t was = o->kind == OP_CLOCK ? now_mhz[o->domain] : rail_mv[1];
+        const uint32_t was = o->kind == OP_CLOCK ? now_mhz[o->domain] : rail_mv[supply((enum a733_cpu_domain)o->domain)];
         if (o->kind == OP_CLOCK)
             clock_change((enum a733_cpu_domain)o->domain, o->mhz, o->mv);
         else
-            dcdc3_change(o->mv);
+            rail_change((enum a733_cpu_domain)o->domain, o->mv);
         /* A sensor set after each raise of a rate or a voltage. */
         if ((o->kind == OP_CLOCK ? o->mhz > was : o->mv > was) || raised != before)
             check_temperature();
