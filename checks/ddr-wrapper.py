@@ -6,16 +6,28 @@ PMIC, clocks, or the blob functions replaced by the hooks below.
 import argparse
 from pathlib import Path
 import struct
+import runpy
+import sys
 from unicorn import Uc, UC_ARCH_ARM, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_WRITE
 from unicorn.arm_const import *
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("build", type=Path)
+parser.add_argument("--record", type=Path)
+parser.add_argument("--other-record", type=Path)
+parser.add_argument("--output", type=Path)
 args = parser.parse_args()
 import json
 # A capture variant patches dram_tpr13 bit 2 and dram_tpr10 bits 28:16 after
 # the copy (tools/prepare-ddr.py --variant); the default build patches nothing.
 variant = json.loads((args.build / "manifest.json").read_text()).get("variant")
+if variant == "restore":
+    if not args.record or not args.other_record or not args.output:
+        parser.error("restore checks require --record, --other-record and --output")
+    sys.argv = [str(Path(__file__).with_name("ddr-restore.py")), str(args.build),
+                "--record", str(args.record), "--other-record", str(args.other_record), "--output", str(args.output)]
+    runpy.run_path(str(Path(__file__).with_name("ddr-restore.py")), run_name="__main__")
+    sys.exit(0)
 
 for board_result, dram_result in ((0, 4096), (0, 0), (0xffffffff, 0)):
     cpu = Uc(UC_ARCH_ARM, UC_MODE_ARM)
