@@ -76,6 +76,22 @@ It also shows that CORE6 does power with the vendor state; the earlier
 failures to reach status 8 came from the missing vendor state, not from the PPU.
 Which of the three differences is necessary is not yet separated.
 
+**Next steps (2026-10-25 17:10, before the usage-window reset):**
+1. CPU steps 2–5 (`cpu-top-opp-20261025/steps2-5-set`) passed independent
+   review as safe to run. First fix `cpu-top-opp.md:250-253,260` (a stale rule
+   that a CPU-L change ends the lifetime). Add the prediction that a ROM return
+   with CPU-L above 494 MHz is untested, and remove power promptly after the
+   top-point step. Then run the set on port 3-3 after a power removal.
+2. Port 3-1 needs a power removal (the GPU firmware-start image left the GPU
+   running). Then run the DRAM training captures on both ports
+   (`work/dram-fast-boot-1025`) and GPU firmware stop (a), once that is frozen
+   and reviewed.
+3. In flight:
+   - the MBUS 600 MHz fix and peripheral clocks (`work/clock-audit-1025`);
+   - the performance-mode toggle (`work/perf-modes-1025`);
+   - the FEL-returning microSD variant;
+   - GPU firmware stop and the first command.
+
 **The GPU firmware starts** (set `board-bundles-20261025-20`,
 `board-session-20261025-16/port-3-1`, record `s16-gfs-run`;
 `work/gpu-fw-start-1025` merged). After cold DDR and readiness, the start
