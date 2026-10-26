@@ -35,6 +35,7 @@ def features(manifest, image, elf_type, require):
         result[key] = value
     result['msbc'] = 'bluetooth_msbc_init' in defined
     if result['radio'] or result['headset']:
+        require('a733_radio_platform_four_bit' in defined, 'Linked image lacks the firmware fast-mode capability.')
         require(all(not (s[2] & 2 and s[5] and s[3] < RANGE[1] and RANGE[0] < s[3] + s[5])
                     for s in elf.sections), 'Linked image overlaps radio asset reservation.')
     return result
@@ -148,6 +149,8 @@ def validate(record, raw, flags, cache, board, bluetooth, require, *, frozen=Fal
     require(facts['startup'].get('fabric') == list(struct.unpack_from('<3I', platform, 56)) and
             facts['startup'].get('fabric_hz') == list(struct.unpack_from('<3I', platform, 68)),
             'Radio fabric differs from reviewed startup.')
+    require(facts['startup'].get('peri0_400mhz_branch_verified') is True,
+            'Four-bit firmware startup requires the reviewed PERI0 400 MHz branch.')
     if known:
         require(pins.get('complete_pm_latch_authority') is True and pins.get('pm_latch') == value and
                 pins.get('latch_origin') in ('verified-writer-history', 'verified-reset-contract') and

@@ -3,10 +3,8 @@
  * it starts. A resident session has no end: main.c sets its deadline to
  * UINT64_MAX/24 us, beyond every counter value. Bootstrap and startup keep
  * fixed offsets from the session start; the radio lifetime and the client
- * deadline follow the session's. Firmware loading at the admitted one-bit
- * 400 kHz SDIO clock needs at least 46.7 s of bus time
- * (checks/radio-bootstrap-budget.py), more than the 40 s that the 60-second
- * profile allows. The resident offsets give it 120 s; this is configuration,
+ * deadline follow the session's. Firmware owners request four-bit 25 MHz
+ * operation; the resident offsets retain the existing 120 s bound. This is configuration,
  * not a board measurement. A radio that misses them fails, stops reporting
  * progress, and the watchdog resets the board. */
 #include "../board/application.h"

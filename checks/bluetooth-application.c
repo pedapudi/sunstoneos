@@ -14,9 +14,11 @@ static atomic_uint recovery;
 static TaskHandle_t owner=(TaskHandle_t)(uintptr_t)1,current_task;
 static BaseType_t scheduler=taskSCHEDULER_NOT_STARTED;
 static unsigned radio_polls,radio_retains,uart_retains,bootstrap_ready,uart_busy,constructor_calls;
+static unsigned fast_requests,fast_refused,radio_progress,radio_tick,ready_on_poll,clock_fail;
+static enum a733_radio_session_result radio_status=A733_SESSION_PENDING;
 TaskHandle_t xTaskGetCurrentTaskHandle(void){return current_task;}
 BaseType_t xTaskGetSchedulerState(void){return scheduler;}
-int a733_counter_clock_now(void *p,uint64_t *t){assert(p==&providers.counter);*t=wire.now;return 1;}
+int a733_counter_clock_now(void *p,uint64_t *t){assert(p==&providers.counter);*t=wire.now;return !clock_fail;}
 int a733_radio_platform_native_init(struct a733_radio_platform_native *n,struct a733_platform_locks *l,void *task,
     int (*admit)(void *,const struct a733_radio_platform_config *,const struct a733_clock_token *),void *cookie)
 {assert(l==&providers.locks&&task==owner);n->admit=admit;n->admission_cookie=cookie;return 1;}
@@ -45,6 +47,8 @@ int a733_radio_platform_init(struct a733_radio_platform *p,const struct a733_rad
     struct a733_pins *pins,struct a733_rail_leases *rails,struct a733_pmic *pmic)
 {(void)ops;assert(p==&app.radio&&cookie==&app.radio_native&&clocks==&providers.clocks&&
  pins==&providers.pins&&rails==&providers.rails&&pmic==&providers.pmic);p->config=*c;return 1;}
+int a733_radio_platform_four_bit(struct a733_radio_platform *p)
+{assert(p==&app.radio&&!p->four_bit);++fast_requests;if(fast_refused)return 0;p->four_bit=1;return 1;}
 int a733_radio_platform_bluetooth(struct a733_radio_platform *p,const struct a733_radio_bluetooth_pins *b)
 {assert(p==&app.radio&&b==&profile.wake);p->bluetooth=*b;return 1;}
 enum a733_radio_platform_result a733_radio_platform_bluetooth_wake(struct a733_radio_platform *p,
@@ -52,11 +56,14 @@ enum a733_radio_platform_result a733_radio_platform_bluetooth_wake(struct a733_r
 {assert(p==&app.radio&&b==&app.session.borrow&&d==app.session.deadline);*v=0;return A733_RADIO_READY;}
 int a733_radio_session_init_bootstrap(struct a733_radio_session *s,struct a733_radio_platform *p,const struct a733_radio_session_config *c)
 {
-    assert(s==&app.session&&p==&app.radio&&c->owner_task==owner&&!c->wifi.rf_profile_record);
+    assert(s==&app.session&&p==&app.radio&&c->owner_task==owner&&!c->wifi.rf_profile_record&&p->four_bit);
     s->config=*c;s->deadline=c->bootstrap_deadline;return 1;
 }
 enum a733_radio_session_result a733_radio_session_poll(struct a733_radio_session *s)
-{assert(s==&app.session&&app.uart.uart.state==A733_UART_READY);++radio_polls;return A733_SESSION_PENDING;}
+{assert(s==&app.session&&app.uart.uart.state==A733_UART_READY);++radio_polls;wire.now+=radio_tick;
+ if(radio_progress&1)++app.radio.host.progress;if(radio_progress&2)++s->transport.progress;
+ if(radio_progress&4)++app.radio.stage;if(radio_progress&8)++s->stage;
+ if(ready_on_poll==radio_polls)s->dispatcher.initialized=1;return radio_status;}
 int a733_radio_session_bootstrap(struct a733_radio_session *s,uint64_t *generation)
 {assert(s==&app.session);if(!bootstrap_ready)return 0;s->borrow.generation=4;*generation=4;return 1;}
 enum a733_radio_session_result a733_radio_session_retain(struct a733_radio_session *s)

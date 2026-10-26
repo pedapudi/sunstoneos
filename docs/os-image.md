@@ -98,8 +98,8 @@ A failed service parks or suspends without recording.
 | Headset capture client (headset build) | Each task pass while capture has not failed; a pass follows each wake-up, at most 250 ms apart | 1 s |
 
 The windows are configuration. No board measurement of the longest pause of
-each loop exists yet. One radio owner pass repeats session polls for at most
-500 microseconds of CPU time and then sleeps one tick
+each loop exists yet. One radio owner pass repeats session polls with a
+500-microsecond elapsed-time budget checked between bounded steps, then sleeps one tick
 ([board radio](board-radio.md)); the network client never waits on its
 socket queues. The radio owner and network client are the board's own tasks
 in `apps/board/main.c`; the radio build compiles that file with a build patch
@@ -575,9 +575,11 @@ the four chip-ID words, as the board image's hook does.
 The board's radio profile bounds assume a session that ends 60 seconds after
 it starts: bootstrap 40 s, startup 50 s, and the radio lifetime and client
 deadline 10 ms before the session ends. The supervised radio build keeps them.
-At the admitted one-bit 400 kHz SDIO clock, firmware loading needs at least
-46.7 s of bus time (`checks/radio-bootstrap-budget.py`), so the
-supervised radio build cannot finish bootstrap. The resident radio build
+The module owner requests four-bit 25 MHz SDIO before its first platform poll
+and refuses a slow-card fallback before firmware transfer. At that rate the
+firmware bus-time lower bound is 0.242 s, versus 46.689 s at one bit and 400 kHz
+([firmware budget](board-radio.md)). Actual startup latency remains unmeasured.
+The resident radio build
 replaces the bounds with [radio_profile.c](../apps/os/radio_profile.c):
 bootstrap 120 s and startup 130 s after the session start, and the session's
 unbounded lifetime for the radio and its client. These offsets are
@@ -1062,6 +1064,12 @@ inside `0x43010000..0x43100000`. Upload ranges cannot overlap one another,
 the image, the session or the recognition inputs.
 
 The platform facts retain the [radio qualification prerequisites](radio-sdio-qualification.md).
+The startup record must set the existing `peri0_400mhz_branch_verified` predicate
+for the firmware owner's four-bit mode. Native startup independently observes
+and leases that branch throughout use.
+Preparation also requires the linked fast-mode function, which the older
+slow-only images omitted. Constructor checks and exact-image software evidence
+establish that the selected module owner requests it.
 Fitted supply routing and stable inherited PM2 behavior remain mandatory.
 An authenticated PM record with zero mask and value selects the normal OS
 [pin ownership contract](pins.md#configuration-preserves-neighbors-and-primes-output-latches).
@@ -1074,8 +1082,8 @@ once. The upload list refers to those frozen files, including only one copy of
 each firmware role when both clients share the module. Before launch, bundle
 validation derives the same list from frozen bytes without reading the original
 input paths. The existing launcher preloads and verifies those segments with
-the recognition inputs. This staging does not change the supervised bootstrap
-deadline limitation described under [Radio station](#radio-station).
+the recognition inputs. Staging does not establish the physical startup timing
+described under [Radio station](#radio-station).
 
 [os-radio-staging.py](../checks/os-radio-staging.py) checks combined preparation,
 frozen verification, preload bytes and range/identity refusals with labeled
@@ -1235,9 +1243,9 @@ No integrated OS physical execution is established by these checks.
   needs a connected, reviewed microphone. The radio and headset builds need
   supervised preparation that stages their profile and firmware, and a
   reachable access point or paired headset. The supervised radio and headset
-  builds also need selection and physical qualification of the existing optional
-  four-bit 25 MHz SDIO mode. Their default one-bit 400 kHz firmware loading
-  cannot finish within the 40 s and 30 s bootstrap bounds. The build with both needs a
+  builds request four-bit 25 MHz SDIO and still need physical qualification and
+  measured completion within their unchanged 40 s and 30 s bootstrap bounds.
+  The build with both needs a
   staged span that holds both profiles and the shared firmware. The resident image needs every
   stage-2 entry prerequisite, a qualified watchdog-expiry recovery, and
   measured service windows; the resident microphone build also needs a

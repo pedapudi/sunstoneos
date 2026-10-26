@@ -15,6 +15,7 @@ static unsigned entropy_calls,session_calls,retained,connects,security_calls,net
 static unsigned entropy_retains;
 static atomic_uint recovery_state;
 static int entropy_failed,boundary;
+static unsigned fast_requests,fast_refused;
 static int client_model;
 static unsigned listener_variant,listener_closes;
 /* Socket requests that time out while the link is lost: the first SEND and
@@ -60,10 +61,12 @@ int a733_radio_platform_init(struct a733_radio_platform *p,const struct a733_rad
     struct a733_pins *pi,struct a733_rail_leases *ra,struct a733_pmic *pm)
 {assert(p==&app.platform&&c==&app.config.platform&&o==&app.native.operations&&cookie==&app.native&&
  cl==&shared.clocks&&pi==&shared.pins&&ra==&shared.rails&&pm==&shared.pmic);p->config=*c;return 1;}
+int a733_radio_platform_four_bit(struct a733_radio_platform *p)
+{assert(p==&app.platform&&!p->four_bit);++fast_requests;if(fast_refused)return 0;p->four_bit=1;return 1;}
 int a733_radio_session_init(struct a733_radio_session *s,struct a733_radio_platform *p,
     const struct a733_radio_session_config *c)
 {
-    assert(s==&app.session&&p==&app.platform&&c->owner_task==task);
+    assert(s==&app.session&&p==&app.platform&&c->owner_task==task&&p->four_bit);
     uint8_t output[16];assert(c->runtime.read_platform_id(c->runtime.context,output));
     assert(output[0]==0x44&&output[3]==0x11&&output[15]==0xdd);
     s->deadline=9000;return 1;

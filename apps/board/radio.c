@@ -4,7 +4,7 @@
 #include "a733_storage_digest.h"
 #include <string.h>
 enum { STARTING,CONNECTING,SECURING,ONLINE };
-/* CPU time one owner poll may spend repeating session steps that advance. At
+/* Elapsed time before an owner stops repeating advancing session steps. At
  * 25 MHz four-bit SDIO this covers the largest 4,096-byte receive. */
 #define BOARD_RADIO_POLL_BUDGET_US 500u
 static int platform_id(void *context,uint8_t id[16])
@@ -53,6 +53,7 @@ int board_radio_init(struct board_radio *r,const struct board_radio_config *inpu
             p->admit,p->admission_context)||
         !a733_radio_platform_init(&r->platform,&p->platform,&r->native.operations,&r->native,
             &p->shared->clocks,&p->shared->pins,&p->shared->rails,&p->shared->pmic)||
+        !a733_radio_platform_four_bit(&r->platform)||
         !a733_radio_session_init(&r->session,&r->platform,&p->session))return 0;
     r->constructed=1;atomic_store_explicit(&r->failed,0,memory_order_release);return 1;
 }

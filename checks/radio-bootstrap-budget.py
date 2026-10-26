@@ -13,6 +13,9 @@ transfers. The fixed platform power-up waits (supply, module settle and reset)
 are subtracted from the board profile's bootstrap offset. The check fails when
 the bus lower bound does not fit in the time that remains. A pass shows only
 that this bound fits; it does not show that the bootstrap meets its deadline.
+The report also counts the minimum controller polls if an owner advances it
+only once per scheduler tick. Byte-length and block-length confirmations are
+both considered; this exposes the separate need for bounded advancing polls.
 """
 import argparse
 import hashlib
@@ -62,6 +65,8 @@ def main():
     parser.add_argument("--output", type=Path, help="Write the computed budget as JSON")
     parser.add_argument("--four-bit", action="store_true",
                         help="Evaluate the optional four-bit default-speed platform profile")
+    parser.add_argument("--profile", choices=("radio", "headset"), default="radio",
+                        help="Use the radio 40 s or recognition-headset 30 s bootstrap bound")
     args = parser.parse_args()
     data = {}
     for name, expected in BLOBS.items():
@@ -84,6 +89,10 @@ def main():
         module_hz, lines = 400000000 // divisor, 4
     bootstrap_us = int(source("apps/board/radio_profile.c",
                               r"#define BOARD_RADIO_BOOTSTRAP_US (\d+)u").group(1))
+    if args.profile == "headset":
+        bootstrap_us = int(source("apps/bluetooth/bluetooth.c",
+                                  r"static uint64_t bootstrap_offset[\s\S]*?\?([0-9]+):40000000;",
+                                  ).group(1))
     bus_hz = module_hz // 2   # sunxi_sdio selects the SDR divide-by-two path.
     # Minimum waits the radio platform holds before the first card command.
     power_up_us = sum(int(source("drivers/net/a733_radio_platform.c",
@@ -102,6 +111,9 @@ def main():
 
     chunk_bytes = request_bytes(1032)
     word_bytes = request_bytes(8)
+    fifo_words = int(source("include/sunxi_sdio.h", r"#define SUNXI_SDIO_FIFO_BUDGET" +
+                           ("_WIDE" if args.four_bit else "") + r" (\d+)u").group(1))
+    tick_hz = int(source("include/FreeRTOSConfig.h", r"#define configTICK_RATE_HZ (\d+)").group(1))
     results = {}
     for image in ("fmacfw_8800d80_u02.bin", "fmacfw_8800d80_h_u02.bin"):
         chunks = sum(-(-len(data[n]) // 1024) for n in
@@ -114,12 +126,21 @@ def main():
         cycles = (chunks * write_cycles(chunk_bytes, lines) + small * write_cycles(word_bytes, lines) +
                   commands * (3 * CMD52 + read_cycles(CONFIRMATION_BYTES, lines)))
         seconds = cycles / bus_hz
+        # Every CMD52 requires QUEUED and ACTIVE polls. Each CMD53 requires
+        # FIFO reset and issue polls, then ceil(bytes/FIFO budget) ACTIVE polls.
+        # A block-length confirmation skips RX_LENGTH but reads 512 bytes.
+        active = lambda n: -(-n // (fifo_words * 4))
+        confirmation_polls = min(3 * 2 + 2 + active(CONFIRMATION_BYTES),
+                                 2 * 2 + 2 + active(512))
+        polls = commands * (2 + confirmation_polls) + chunks * active(chunk_bytes) + small * active(word_bytes)
         results[image] = {"chunks": chunks, "word_commands": small, "tx_bytes": tx_bytes,
                           "payload_only_seconds": round(tx_bytes * 8 / lines / bus_hz, 3),
-                          "lower_bound_cycles": cycles, "lower_bound_seconds": round(seconds, 3)}
+                          "lower_bound_cycles": cycles, "lower_bound_seconds": round(seconds, 3),
+                          "minimum_unbatched_controller_polls": polls,
+                          "minimum_unbatched_tick_seconds": (polls - 1) / tick_hz}
     worst = max(r["lower_bound_seconds"] for r in results.values())
     budget = (bootstrap_us - power_up_us) / 1e6
-    report = {"module_hz": module_hz, "bus_hz": bus_hz, "data_lines": lines, "patch_table_pairs": pairs,
+    report = {"profile": args.profile, "module_hz": module_hz, "bus_hz": bus_hz, "data_lines": lines, "patch_table_pairs": pairs,
               "bootstrap_offset_seconds": bootstrap_us / 1e6, "power_up_wait_seconds": power_up_us / 1e6,
               "bootstrap_budget_seconds": budget, "images": results,
               "lower_bound_seconds": worst, "within_budget": worst < budget,

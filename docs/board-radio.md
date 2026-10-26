@@ -77,14 +77,12 @@ defers attachment before consuming supplicant or socket-service storage.
 
 Within one iteration, `board_radio_poll` repeats complete session polls while
 the SDIO controller, transport, platform or session reports progress. It stops
-at the first poll that only waits, on any non-pending result, or after 500
-microseconds of CPU time; the owner task then sleeps one tick. Each repeated
-session poll performs its own platform liveness and deadline checks. The budget
-covers the largest 4,096-byte receive at the optional four-bit 25 MHz clock and
-limits the time taken from other tasks on the same core. At one bit and 400 kHz
-an in-flight command usually ends the loop, so the main saving is the removed
-tick waits between small steps such as credit, status and length reads and
-record parsing.
+at the first poll that only waits, on any non-pending result, or after a
+500-microsecond elapsed-time budget. That budget is checked between steps, so
+one bounded session step may extend it; the owner then sleeps one tick. Each
+repeated session poll performs its own platform liveness and deadline checks.
+The loop removes tick waits between advancing credit, status, length and
+record-parsing steps without spinning on hardware that is not ready.
 
 Before sockets exist, and while a reconnect or link recovery runs, each
 iteration consumes at most one copied dispatcher event and one diagnostic record.
@@ -129,22 +127,35 @@ The firmware engine sends each of the 2,880 written patch-table pairs as its
 own padded 512-byte CMD53 transfer and each 1 KiB image chunk as a padded
 1,536-byte transfer. Firmware loading therefore moves about 2.04 MB over the
 bus, although the four pinned blobs contain about 391,000 bytes. At the one-bit
-400 kHz SDIO rate that the platform admits, this data alone takes 40.8 seconds.
+400 kHz identification rate, this data alone takes 40.8 seconds.
 With the smallest command, polling and confirmation framing it takes at least
-46.7 seconds. The supervised profile allows 40 seconds from session start to its
-bootstrap deadline, so firmware loading cannot finish in time; power-up, card
-setup and controller latency add more.
-A four-second watchdog window cannot cover cold startup either.
+46.7 seconds. That exceeds the supervised profile's 40-second bootstrap
+deadline before power-up, card setup or controller latency.
+
+The normal board and Bluetooth module constructors now request the existing
+four-bit 25 MHz mode before their first platform poll. Enumeration still uses
+one bit at 400 kHz. The session refuses a requested mode that reaches READY
+without four-bit width and a 25 MHz card clock, before borrowing the card or
+setting up the firmware transport. A low-speed fallback cannot silently enter
+an upload that misses its deadline. The platform retains its existing PERI0
+parent lease and rate/gate/status checks; it never enables a shared parent.
 
 [`checks/radio-bootstrap-budget.py`](../checks/radio-bootstrap-budget.py)
 computes this lower bound from the pinned artifacts, the engine framing, the
-admitted module clock and the profile's bootstrap offset. It fails for the
-current profile. Do not queue the radio board test with this profile until a
-faster or wider SDIO mode is qualified or the engine sends fewer bytes. A later
-deadline cannot help, because the supervised session itself ends at 60 seconds.
-With `--four-bit`, the check evaluates the radio platform's optional four-bit
-25 MHz profile instead; its bus lower bound is about 0.2 seconds. The board does
-not request that profile, and it has no physical qualification.
+admitted module clock and the profile's bootstrap offset. The slow-path check
+fails. With `--four-bit`, the bus lower bound is 0.242 seconds;
+`--profile headset` compares it with the 30-second recognition-headset bound. The deadlines
+and source-default per-pair writes remain unchanged. The result excludes actual
+controller, firmware and scheduling latency and cannot establish completion.
+Electrical operation still needs the [SDIO qualification](radio-sdio-qualification.md).
+
+The check also counts the minimum controller polls for both supported
+confirmation-length encodings. Even at four bits, one poll per 1 ms tick needs
+at least 33.311 seconds before setup and parsing. The Bluetooth owner therefore
+uses the same bounded advancing-poll pattern while its own module bootstraps.
+It stops batching when the dispatcher becomes initialized, refreshes the local
+time before bootstrap/HCI deadline decisions, and keeps one poll per iteration
+after bootstrap. An attached headset leaves polling to the board radio owner.
 
 The transport counts only consumed successful CMD53 transactions that moved
 nonzero bytes. The counter saturates and never wraps. The radio owner publishes

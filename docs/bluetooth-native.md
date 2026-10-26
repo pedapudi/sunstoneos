@@ -200,11 +200,14 @@ which no counter value reaches.
 | Closing after capture stops | 40 s after the origin | 2 s after the stop |
 
 The resident origin keeps each stage's supervised time budget after the
-firmware becomes ready. Firmware loading needs about 47 s of SDIO bus time at
-the admitted one-bit 400 kHz clock, which the supervised bounds do not allow;
-the resident 120 s bound matches the integrated OS radio. The resident bounds
-are configuration, not a board measurement. The Bluetooth image itself
-remains supervised.
+firmware becomes ready. The module owner requests four-bit 25 MHz operation
+before polling and rejects a slow fallback before firmware transport setup.
+During its own bootstrap, it repeats advancing session polls within the
+[board radio polling budget](board-radio.md). It keeps one session poll per
+iteration after bootstrap; an attached client leaves module polling to its owner.
+The resident 120 s bound remains unchanged. Neither the bus-time lower bound
+nor these configured deadlines establish measured startup time. The Bluetooth
+image itself remains supervised.
 
 [bluetooth-application.py](../checks/bluetooth-application.py) runs
 [bluetooth-module-owner.c](../checks/bluetooth-module-owner.c) with the real

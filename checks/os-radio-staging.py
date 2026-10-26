@@ -27,6 +27,7 @@ def main():
     for name in ('image','link-check','fixture','radio-profile','bluetooth-profile','firmware','native-recipe','output'):
         p.add_argument('--'+name,type=Path,required=True)
     p.add_argument('--resume',action='store_true')
+    p.add_argument('--parent-only',action='store_true',help='Only changed fast-mode parent admission')
     a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=a.resume)
     steps=Steps(out,'commands.json');facts=out/'MODEL-facts';facts.mkdir(exist_ok=True)
     (out/'invocation.json').write_text(json.dumps([sys.executable,*sys.argv],indent=2)+'\n')
@@ -84,7 +85,7 @@ def main():
         if group=='topology':f.update(rails={'vbat':'dcdc1','pg':'dcdc8','pm':'dcdc8','vddio':'dcdc8'},routing_evidence='MODEL only')
         if group=='pins':
             f.update({k:[list(platform[o+3*i:o+3*i+3]) for i in range(8)] for k,o in [('expected',80),('desired',104)]})
-        if group=='startup':f.update(fabric=list(struct.unpack_from('<3I',platform,56)),fabric_hz=list(struct.unpack_from('<3I',platform,68)))
+        if group=='startup':f.update(fabric=list(struct.unpack_from('<3I',platform,56)),fabric_hz=list(struct.unpack_from('<3I',platform,68)),peri0_400mhz_branch_verified=True)
         fact_objects[group]=f;proof[group]=put('radio-'+group,f)
     doc={'schema':prep.radio_assets.SCHEMA,**target,**scope,'reviewed':True,'platform':put('radio-platform',proof),
          'chip_id':list(struct.unpack_from('<4I',r,72)),'sid_authority':7}
@@ -115,6 +116,21 @@ def main():
         try:action()
         except Exception as error:steps.failed(error);raise
         steps.case(name,{'passed':True})
+    if a.parent_only:
+        case('fast-parent-reviewed',lambda:prep.radio_assets.validate(record,raw,flags,{},prep.board,prep.bluetooth,prep.require))
+        def parent(value):
+            ff=copy.deepcopy(fact_objects['startup']);ff.pop('peri0_400mhz_branch_verified')
+            if value is not None:ff['peri0_400mhz_branch_verified']=value
+            pp={**proof,'startup':put('parent-startup-'+str(value),ff)}
+            dd={**doc,'platform':put('parent-platform-'+str(value),pp)}
+            rr=bytearray(r);rr[88:120]=bytes.fromhex(dd['platform']['sha256'])
+            dd['radio_profile']=put('parent-radio-'+str(value),rr);ss=bytearray(raw)
+            ss[368:400]=bytes.fromhex(dd['radio_profile']['sha256'])
+            entry={**record,'radio_assets':put('parent-assets-'+str(value),dd)}
+            refused(lambda:prep.radio_assets.validate(entry,ss,flags,{},prep.board,prep.bluetooth,prep.require),'reviewed PERI0 400 MHz branch')
+        for value in (None,False,1):case('fast-parent-refused-'+str(value),lambda value=value:parent(value))
+        (out/'result.json').write_text(json.dumps({'passed':True,'physical_access':False,'cases':selected},indent=2)+'\n')
+        print('Passed four fast-parent admission cases');return
     case('linked-profile-admission',lambda:(prep.image_manifest_check(manifest,image),prep.session_check(raw,False,flags)))
     nominal_cache={}
     case('profile-and-firmware-staging',lambda:prep.radio_assets.validate(record,raw,flags,nominal_cache,prep.board,prep.bluetooth,prep.require))

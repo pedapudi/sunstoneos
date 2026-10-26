@@ -142,6 +142,7 @@ int bluetooth_application_init(struct bluetooth_application *a,const struct blue
     if(!a733_radio_platform_native_init(&a->radio_native,&shared->locks,owner,radio_admit,a)||
         !a733_radio_platform_init(&a->radio,&a->radio_config,&a->radio_native.operations,&a->radio_native,
             &shared->clocks,&shared->pins,&shared->rails,&shared->pmic)||
+        !a733_radio_platform_four_bit(&a->radio)||
         !a733_radio_platform_bluetooth(&a->radio,&p->wake))return 0;
     a->session_config=(struct a733_radio_session_config){.owner_task=owner,.owner=p->session_owner,
         .bootstrap_deadline=a->radio_config.deadline_us,.runtime_lease_us=p->runtime_lease_us,.renew_margin_us=p->renew_margin_us,
@@ -200,6 +201,28 @@ int bluetooth_application_retain(struct bluetooth_application *a)
     if(!a->attached)(void)a733_radio_session_retain(&a->session);
     return -1;
 }
+/* Before HCI starts, repeat whole session steps while they advance, as the
+ * board radio owner does. The between-step budget permits one bounded step
+ * beyond 500 us. Waiting work yields without spinning; runtime stays one poll. */
+#define BLUETOOTH_BOOTSTRAP_POLL_BUDGET_US 500u
+static int poll_module(struct bluetooth_application *a,uint64_t *now)
+{
+    if(a->stage!=1){
+        enum a733_radio_session_result r=a733_radio_session_poll(&a->session);
+        return r!=A733_SESSION_RETAINED&&r!=A733_SESSION_INVALID;
+    }
+    for(uint64_t start=*now;;){
+        uint64_t host=a->radio.host.progress,transport=a->session.transport.progress;
+        unsigned platform=a->radio.stage,session=a->session.stage;
+        enum a733_radio_session_result r=a733_radio_session_poll(&a->session);
+        if(r==A733_SESSION_RETAINED||r==A733_SESSION_INVALID)return 0;
+        if(!a733_counter_clock_now(&a->shared->counter,now))return 0;
+        if(a->session.dispatcher.initialized||r!=A733_SESSION_PENDING||*now>=a->bootstrap_deadline||
+           *now-start>=BLUETOOTH_BOOTSTRAP_POLL_BUDGET_US||
+           (host==a->radio.host.progress&&transport==a->session.transport.progress&&
+            platform==a->radio.stage&&session==a->session.stage))return 1;
+    }
+}
 int bluetooth_application_poll(struct bluetooth_application *a)
 {
     if(!a||a->self!=a||xTaskGetCurrentTaskHandle()!=a->owner)return -1;
@@ -219,8 +242,7 @@ int bluetooth_application_poll(struct bluetooth_application *a)
     }
     if(!a->attached){
         /* An attached module's owner polls its session and drains its events. */
-        enum a733_radio_session_result s=a733_radio_session_poll(&a->session);
-        if(s==A733_SESSION_RETAINED||s==A733_SESSION_INVALID)return bluetooth_application_retain(a);
+        if(!poll_module(a,&now))return bluetooth_application_retain(a);
         if(a->session.dispatcher.initialized){
             (void)a733_radio_session_take_event(&a->session,&a->event);
             (void)a733_radio_session_take_record(&a->session,&a->diagnostic);

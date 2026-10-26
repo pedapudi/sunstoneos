@@ -51,9 +51,9 @@ _Static_assert(sizeof(struct bluetooth_profile)==832&&offsetof(struct bluetooth_
  * resident, ending at UINT64_MAX/24 us like the board's resident session. */
 #define BLUETOOTH_SUPERVISED_US UINT64_C(60000000)
 #define BLUETOOTH_RESIDENT_END_US (UINT64_MAX/24)
-/* Resident firmware bootstrap bound after the session start. Loading needs
- * about 47 s of bus time at the admitted one-bit 400 kHz SDIO clock; the
- * bound matches the integrated OS radio's. Configuration, not a measurement. */
+/* Resident firmware bootstrap bound after the session start, unchanged when
+ * requesting four-bit 25 MHz. It matches the integrated OS radio's bound;
+ * this is configuration, not a measurement. */
 #define BLUETOOTH_RESIDENT_BOOTSTRAP_US UINT64_C(120000000)
 /* One actual owner task. Providers, profiles, identity and all buffers remain
  * disjoint and retained through terminal failure and manual power removal.

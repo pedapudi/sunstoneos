@@ -197,6 +197,11 @@ enum a733_radio_session_result a733_radio_session_poll(struct a733_radio_session
         enum a733_radio_platform_result r=a733_radio_platform_poll(s->platform);
         if(r==A733_RADIO_RETAINED||r==A733_RADIO_INVALID)return leave(s,fail(s));
         if(r==A733_RADIO_READY){
+            /* Firmware owners require the requested default-speed path;
+             * a low-speed card cannot meet their bootstrap budget. Refuse
+             * before borrowing the card or issuing transport commands. */
+            if(s->platform->four_bit&&(!s->platform->host.wide||s->platform->host.card_hz!=25000000u))
+                return leave(s,fail(s));
             struct sdio_card *card;
             if(!a733_radio_platform_borrow(s->platform,s->config.owner,&s->borrow,&card)||
                 card!=&s->platform->card)return leave(s,fail(s));

@@ -59,6 +59,8 @@ int a733_radio_platform_init(struct a733_radio_platform *p,const struct a733_rad
     const struct a733_radio_platform_ops *ops,void *cookie,struct a733_clock_leases *clocks,
     struct a733_pins *pins,struct a733_rail_leases *rails,struct a733_pmic *pmic)
 {(void)ops;(void)clocks;(void)pins;(void)rails;(void)pmic;assert(p==&app.radio&&cookie==&app.radio_native);p->config=*c;return 1;}
+int a733_radio_platform_four_bit(struct a733_radio_platform *p)
+{assert(p==&app.radio&&!p->four_bit);p->four_bit=1;return 1;}
 int a733_radio_platform_bluetooth(struct a733_radio_platform *p,const struct a733_radio_bluetooth_pins *b)
 {assert(p==app.module_radio&&b==&profile.wake&&!p->bluetooth.authority);p->bluetooth=*b;return 1;}
 enum a733_radio_platform_result a733_radio_platform_bluetooth_wake(struct a733_radio_platform *p,

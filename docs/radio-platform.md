@@ -48,7 +48,10 @@ clock is 25 MHz. A final CCCR read at the new clock must still report four bits
 before the platform becomes READY. Any failure retains the platform, including
 the changed module register. A low-speed card stays at one bit and 400 kHz.
 
-No board image requests this profile yet. Physical qualification requires a
+The normal board-radio and Bluetooth firmware owners request this mode before
+session construction. Their session refuses a low-speed fallback before borrowing
+the card; lower-level callers retain the explicit one-bit option.
+Physical qualification requires a
 coordinator-owned CMD53 debug identity exchange at four bits and 25 MHz that
 matches the one-bit result. CMD52 uses the command line, so the final CCCR
 readback alone does not exercise the data lines. The
@@ -258,8 +261,9 @@ the pin-function tables, board schematic V1.2 sheets 6, 9 and 14, and the pinned
 board device tree. Published clock, GPIO power sequencing and AXP8191 register
 sources corroborate those register contracts.
 
-The default native profile uses one SDIO data line at 400 kHz. The optional
-four-bit 25 MHz profile is implemented and covered by the register model only.
+Enumeration starts with one SDIO data line at 400 kHz. Normal firmware owners
+then require the implemented four-bit 25 MHz mode, whose operation remains
+software-tested only.
 High-speed timing, DMA, interrupt service and suspend/resume require separate
 implementation and qualification. Board startup must connect the borrowed
 card and live guard to the transport worker before firmware loading.

@@ -2,9 +2,9 @@
 
 This procedure is for native-driver and board-test maintainers. The four-bit
 25 MHz path is implemented and software-tested. No image or physical result
-currently qualifies it. Firmware loading at one bit and 400 kHz needs at least
-46.7 seconds of bus time, exceeding the supervised profile's 40-second bootstrap
-bound; see [the firmware budget](board-radio.md).
+currently qualifies it. Normal firmware owners now request that mode. Firmware
+loading at one bit and 400 kHz needs at least 46.7 seconds of bus time, exceeding
+the supervised bootstrap bounds; see [the firmware budget](board-radio.md).
 
 ## The native adapter admits both implemented clock settings
 
