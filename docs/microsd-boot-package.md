@@ -6,6 +6,16 @@ host packaging capability. CPU entry, application functionality, physical boot
 and storage security remain unqualified. A successful pack does not admit the
 artifact for a board run or establish that its instructions are useful.
 
+The resident stage2 monitor supports the fixed nonsecure SD0 entry contract in
+[remote-writers.md](remote-writers.md#ordinary-nonsecure-sd-boot-has-a-caller-owned-entry-contract).
+The caller must establish a fresh, CE-quiesced power-on lifetime before ROM or
+boot0 reuses DRAM. A whole-system-reset route requires physical qualification.
+boot0's local AArch64 handoff inherits that lifetime; an arbitrary warm jump or
+FEL upload does not. The pinned stock image or validated restore derivative and
+sole-monitor package constrain the predecessor; runtime SID, header, media and
+BOOT checks detect mismatches without attesting reset history. Packaging does
+not qualify power/reset coverage or cold memory operation.
+
 The tool never writes a card. It accepts existing ordinary inputs and creates a
 set of private regular output files with a caller-selected filename prefix. It refuses symbolic links in input and output
 paths, device paths, and existing output entries, including the prefix itself. Both current boards lack eMMC

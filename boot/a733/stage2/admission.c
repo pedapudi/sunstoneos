@@ -194,8 +194,12 @@ int a733_stage2_card_gate(void)
 
 /* Sample before the loader mutates SDC0 or copies any slot extent. The mask
  * is diagnostic state, not a grant to restart or stop another agent. CE
- * is admitted only with both resets asserted; reserved bit 1 is inapplicable
- * to the A733 device processor inventory (docs/remote-writers.md). */
+ * otherwise requires both resets asserted. This fixed cold monitor also
+ * accepts the pinned nonsecure SD0 predecessor contract: the caller supplies
+ * a fresh, CE-quiesced cold lifetime and the audited ROM/boot0 path submits
+ * no CE work before loading this monitor. These words reject mismatches;
+ * they do not attest reset history. Warm/FEL entry is unsupported. See
+ * docs/remote-writers.md. Reserved bit 1 is inapplicable to A733. */
 static uint32_t remote_mask;
 static int remote_sampled;
 static int remote_read(void *unused, uint64_t address, uint32_t *value)
@@ -209,6 +213,12 @@ int a733_stage2_remote_writers_excluded(void)
 {
     const struct a733_remote_writers_ops ops = {remote_read, 0};
     remote_mask = a733_remote_writers_excluded(&ops);
+    if ((remote_mask & A733_REMOTE_WRITER_BIT(A733_REMOTE_CE)) &&
+        !rd(0x030060a0) && (rd(0x03000024) & 0x100) &&
+        *(volatile const uint32_t *)(uintptr_t)0x47004 == UINT32_C(0x4e4f4765) &&
+        *(volatile const uint32_t *)(uintptr_t)0x47008 == UINT32_C(0x3054422e) &&
+        !(*(volatile const uint8_t *)(uintptr_t)0x47028 & 15))
+        remote_mask &= ~A733_REMOTE_WRITER_BIT(A733_REMOTE_CE);
     remote_sampled = 1;
     return remote_mask == 0;
 }

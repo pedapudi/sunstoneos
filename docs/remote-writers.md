@@ -92,15 +92,16 @@ its bus gate open. A master that is out of reset with its gate closed stays
 unproven, because its state cannot be read.
 
 The CE has no documented idle indication. `CE_TSR` reports which channel runs
-a task type, and the value 0 also names channel 0. A CE out of reset therefore
-stays unproven. The ISP shares the `VIDEO_IN` reset, which defaults to
+a task type, and the value 0 also names channel 0. The generic provider therefore
+leaves a CE out of reset unproven; the cold-monitor exception below relies on
+its predecessor contract. The ISP shares the `VIDEO_IN` reset, which defaults to
 de-asserted, so its rule uses its module clock and MBUS clock instead.
 
 One sample is valid only while nothing can restart a stopped master. Apart
 from the Arm cores, the E902 is the programmable control processor in the
 A733 device inventory that could do so. A caller therefore refuses on any set bit.
 
-## Device applicability excludes OR100; CE ownership remains open
+## Device applicability excludes OR100; CE requires predecessor accounting
 
 The manual's broad block diagram on printed page 2 shows both E902 and OR100.
 Page 3 explicitly says that some depicted modules are not offered on every
@@ -152,6 +153,75 @@ The cached follow-up at
 `~/.cache/sunstoneos/evidence/cold-remote-followup-1026/` preserves source hashes,
 numbered excerpts and exact ROM instructions, including the contrary generated
 map. No new hardware observation or CE quiesce sequence is claimed.
+
+## Ordinary nonsecure SD boot has a caller-owned entry contract
+
+A fixed cold firmware entry does not need a hardware-attested reset-cause latch.
+Its caller must establish a fresh CE and fabric lifetime before ROM or boot0
+reuses memory. Power-on and a qualified whole-system reset can supply that
+condition. Arbitrary CPU-only resets, warm jumps and preserved FEL sessions do
+not satisfy it. The documented watchdog whole-system reset remains a candidate
+route awaiting physical qualification; this contract adds no reset automation.
+
+The captured ROM first attempts SD0 through `0x2f4` and `0xafe4` with arguments
+`r0=0, r1=5`. The supported route requires normal CPU0 entry without redirect,
+SID security word zero, storage BOOT selection and a successful first SD0
+attempt. It loads the pinned eGON image into SRAM at `0x47000`; checksum routine
+`0x3244` uses CPU word sums. Secure-ROM dispatch and alternate media/package
+paths remain outside this contract.
+
+boot0's local AArch64 handoff at `0x48ee0` preserves that established lifetime;
+it does not reset the peripherals into a new one. The loader's failure return
+publishes RVBAR `0x20` for forced FEL. That recovery exit is not a cold SD entry.
+Media history in boot0 byte `+0x28` and RTC `0x07090120` can detect mismatches,
+but cannot attest history. Helper `0x49a5c` polls UART commands, not reset cause.
+The required CE boundary precedes `init_DRAM`, translation-table writes and the
+monitor copy. A late stage2 reset or poll cannot protect those earlier accesses.
+
+The source audit closes selected control targets, including Thumb IT conditions,
+fixed libc/cache/SD callbacks and bounded jump tables. Its store inventory and
+pointer-family analysis are separate from that control-flow result. The DRAM
+pattern-test address arithmetic excludes CE, and the training-sequencer
+constructor resets its cursor before emitting at most 83 entries. The reviewed
+source-origin argument confines the remaining stack, SRAM, heap, descriptor,
+monitor-copy and peripheral destinations. It establishes no CE submission for
+this trusted fixed-firmware route, conditional on the caller-owned initial
+quiescence. This is source assurance, not formal verification or physical evidence.
+
+Only the cold monitor applies this predecessor exception. Before slot copying,
+it may clear the residual CE bit when SID `0x030060a0` is zero, BOOT input
+`0x03000024` bit 8 is high, the SRAM header at `0x47004` contains `eGON.BT0`,
+and the low nibble of boot0 media byte `0x47028` is zero. These observations
+reject profile mismatches; a warm caller that reproduces them still violates
+the entry contract. All other writer bits remain required. The generic provider
+continues to refuse a CE with released resets for unknown predecessors. Neither
+path writes CE registers or treats task-load zero as completion.
+
+`tools/prepare-microsd-boot.py` pins the complete stock boot0 identity and
+validates the sole-monitor TOC1 package. Its optional restore path accepts only
+the existing validated derivative, including allowed patches and helper identity.
+The package and trusted medium supply the image identity; the SRAM magic is
+not a replacement for those host checks or a secure-boot claim.
+
+The preserved vendor DRAM record is another input to the boot path. Before
+`init_DRAM`, `0x49ab4` reads 2 KiB at LBA `0x5fb0`, byte offset `0xbf6000`.
+The current installer preserves this range. An accepted record can replace the
+selected header's 32 parameter words after magic, checksum, boot0 checksum and
+SID checks. A boot0 hash alone therefore does not identify the live parameters.
+
+The optional restore hook already checks those live parameters at `0x831f8`.
+Board setup selects the header timing set before the vendor record is processed;
+restore admission runs afterward. Four focused instruction cases cover blank,
+stock-checksum and derivative-checksum records. A valid differing derivative
+record returns `STRAP=6` before edits, allowing full-training fallback. No sector
+correction is needed. The cases model storage transport and the selector decision;
+they do not qualify physical DRAM operation.
+
+The audit and focused evidence are preserved at
+`~/.cache/sunstoneos/evidence/cold-ce-lineage-1026/`. Source applicability and
+a supported entry ABI do not establish that
+a current board has followed that route. Physical cold boot, reset coverage and
+memory operation remain unqualified.
 
 ## No source defines a safe stop procedure
 

@@ -16,9 +16,10 @@ card. It checks that state against the pinned boot0 and the A733 manual; host
 models cover the check.
 The loader's entry path, which arms the watchdog, builds the resident contract
 of the [integrated OS image](os-image.md) and branches to it, is implemented
-and host-modeled. Unresolved remote-writer and CPU/cache ownership checks
-refuse before SD access or slot copies. Local entry and reset policy checks
-are implemented. The
+and host-modeled. Remote-writer, CPU/cache, local-entry and reset-policy checks
+are implemented. The supported cold route requires the caller-owned predecessor
+contract; an arbitrary warm or FEL launch is unsupported. Physical cold boot
+and reset coverage remain unqualified. The
 [boundary section](#the-loader-stops-before-entering-the-image) lists what each
 prerequisite needs.
 
@@ -232,14 +233,18 @@ and measured end-to-end loading time.
 ## The loader stops before entering the image
 
 Before card access or slot copies, [admission.c](../boot/a733/stage2/admission.c)
-checks remote-writer exclusion and CPU/cache ownership. A refusal publishes
-its diagnostic report and parks. These checks establish no ownership by
-changing another agent's reset or clock state.
+checks remote-writer exclusion and CPU/cache ownership. An early remote refusal
+returns to forced FEL before SD acquisition. Once CPU ownership has changed,
+failure retains that ownership and parks.
 
 - **Remote writers.** The native read-only checker reports a mask of agents
   whose exclusion is unproven. The A733 device inventory excludes OR100; its
-  historical bit 1 remains reserved. CE requires both resets asserted. The mask prevents a bundle or session from substituting a host
-  assertion for hardware exclusion.
+  historical bit 1 remains reserved. The generic provider requires both CE resets
+  asserted. This cold monitor also accepts the reviewed no-submission predecessor
+  contract after SID, eGON, media and BOOT mismatch checks, preserving every
+  other writer bit. This depends on a trusted fixed package and caller-owned
+  initial quiescence, not a session Boolean or late idle sample. See the
+  [ordinary SD entry contract](remote-writers.md#ordinary-nonsecure-sd-boot-has-a-caller-owned-entry-contract).
 - **CPU/cache ownership.** The loader identifies each secondary PPU, admits
   the fixed OFF policy and clear start requests, then waits for acknowledged
   static OFF. It retains that policy through loading and cleans the documented

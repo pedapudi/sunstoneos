@@ -1632,7 +1632,7 @@
     "0x5dc74",
     "0x5dc80"
    ],
-   "role": "main. Prints HELLO/commit, runs board setup (0x48fac), samples FEL (0x4a990), reads boot mode, runs init_DRAM, enables the MMU, loads and parses the package, and jumps to the monitor/ATF, OP-TEE, U-Boot or RTOS."
+   "role": "main. Prints HELLO/commit, runs board setup (0x48fac), samples FEL (0x4a990), polls UART commands, runs init_DRAM, enables the MMU, loads and parses the package, and jumps to the monitor/ATF, OP-TEE, U-Boot or RTOS."
   }
  ]
 }

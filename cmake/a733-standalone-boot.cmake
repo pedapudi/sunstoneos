@@ -40,6 +40,9 @@ add_custom_command(TARGET a733-stage2 POST_BUILD
 # retain the shared -O2 setting; these control paths run only during boot.
 set_source_files_properties(
   "${stage2_root}/boot/a733/stage2/loader.c"
-  "${stage2_root}/boot/a733/stage2/admission.c"
   "${stage2_root}/boot/a733/stage2/cpu.c"
   PROPERTIES COMPILE_OPTIONS "-Os")
+# Admission includes the fixed predecessor checks; size optimization keeps
+# the report ABI unchanged. The SD transfer and digest implementations stay O2.
+set_source_files_properties("${stage2_root}/boot/a733/stage2/admission.c"
+  PROPERTIES COMPILE_OPTIONS "-Oz")

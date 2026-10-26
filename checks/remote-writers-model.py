@@ -129,7 +129,7 @@ def names(mask):
     return sorted(n for n in WRITERS if mask & BIT[n])
 
 
-def stage2_checks(build, output):
+def stage2_checks(build, output, ce_only=False):
     """Actual linked admission predicates and early refusal; no card model runs."""
     elf = build / 'a733-stage2.elf'
     with elf.open('rb') as stream:
@@ -144,17 +144,20 @@ def stage2_checks(build, output):
         if i and i.mnemonic in ('mrs', 'msr', 'wfe'): system[i.address] = (i.mnemonic, i.op_str)
     cases = []
 
-    def case(name, entry, expected, controls=None, changes=None, grant_remote=False):
+    def case(name, entry, expected, controls=None, changes=None, grant_remote=False, mask=None):
+        if ce_only and not name.startswith("cold-CE-"): return
         uc = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
         uc.mem_map(0x47000000, 0x400000); uc.mem_map(SENTINEL, 0x1000)
         for address, data in segments: uc.mem_write(address, data)
         regs = defaults()
         regs.update({a: 0 for a in (0x02050010, 0x02050014, 0x070501c0, 0x070501c4,
                                    0x070501d4, 0x07090108, 0x08001004, 0x08001008, 0x03000024)})
+        regs.update({0x030060a0: 0, 0x47004: 0, 0x47008: 0, 0x47028: 0})
         regs[0x0701022c] = 0  # Unsupported CPU configuration bus: clean refusal.
         regs.update(changes or {})
         pages = PAGES + [(0x02050000, 0x1000), (0x07090000, 0x1000),
-                         (0x08001000, 0x1000), (0x03000000, 0x1000)]
+                         (0x08001000, 0x1000), (0x03000000, 0x1000),
+                         (0x03006000, 0x1000), (0x47000, 0x1000)]
         for base, size in pages: uc.mem_map(base, size)
         for address, value in regs.items(): uc.mem_write(address, value.to_bytes(4, 'little'))
         values = dict(currentel=12, mpidr_el1=0x81000000, midr_el1=0x412fd050,
@@ -176,7 +179,7 @@ def stage2_checks(build, output):
 
         def read(u, access, address, size, value, unused):
             if any(b <= address < b + n for b, n in pages):
-                assert size == 4 and address in regs, hex(address)
+                assert (size == 4 or (address == 0x47028 and size == 1)) and address in regs, hex(address)
                 reads.append(address)
 
         def write(u, access, address, size, value, unused):
@@ -207,7 +210,12 @@ def stage2_checks(build, output):
         else:
             assert uc.reg_read(a64.UC_ARM64_REG_PC) == SENTINEL and uc.reg_read(a64.UC_ARM64_REG_X0) == expected, name
             assert not writes
-        assert 0x03000024 not in reads  # Normal-card policy does not sample BOOT.
+        if entry == "a733_stage2_reset_policy":
+            assert 0x03000024 not in reads  # Reset policy itself does not sample BOOT.
+        if mask is not None:
+            actual = int.from_bytes(uc.mem_read(symbols["remote_mask"], 4), "little")
+            assert actual == mask, (name, actual, mask)
+            assert not any(0x03040000 <= a < 0x03041000 for a in reads), "CE registers touched"
         cases.append(dict(case=name, expected=expected, reads=[hex(a) for a in reads], writes=[hex(a) for a in writes]))
 
     for label, change, expected in [('zero-frequency-metadata', {}, 1), ('24MHz-metadata', {'cntfrq_el0': 24000000}, 1),
@@ -223,6 +231,20 @@ def stage2_checks(build, output):
     case('CPU-cache-refused-before-SD', 'a733_stage2_main', 0, grant_remote=True)
     case('E902-refused-before-SD', 'a733_stage2_main', BIT['E902'], changes={RISCV_BGR: 1})
     case('CE-out-of-reset-refused-before-SD', 'a733_stage2_main', BIT['CE'], changes={CCU + 0xac4: 0x30003})
+    cold = {CCU + 0xac4: 0x30003, 0x030060a0: 0, 0x03000024: 0x100,
+            0x47004: 0x4e4f4765, 0x47008: 0x3054422e, 0x47028: 0}
+    remote = 'a733_stage2_remote_writers_excluded'
+    case('cold-CE-fixed-predecessor', remote, 1, changes=cold, mask=0)
+    for label, address, value in [('secure', 0x030060a0, 1), ('BOOT-low', 0x03000024, 0),
+        ('magic-first', 0x47004, 0), ('magic-second', 0x47008, 0), ('other-media', 0x47028, 1)]:
+        case('cold-CE-' + label, remote, 0, changes={**cold, address: value}, mask=BIT['CE'])
+    case('cold-CE-media-high-bits', remote, 1, changes={**cold, 0x47028: 0xf0}, mask=0)
+    case('cold-CE-reset-provider', remote, 1, mask=0)
+    for label, change in [('E902', {RISCV_BGR: 1}), ('DMA0', {CCU + 0x704: 0x10000}),
+                          ('SMHC0', {CCU + 0xd0c: 0x10001, SMHC['SMHC0']+0x80: 0x80})]:
+        case('cold-CE-preserves-' + label, remote, 0, changes={**cold, **change}, mask=BIT[label])
+    case('cold-CE-main-other-writer', 'a733_stage2_main', BIT['E902'],
+         changes={**cold, RISCV_BGR: 1})
     (output / 'stage2-admission.json').write_text(json.dumps(dict(passed=True, physical_access=False, cases=cases,
         scope='Local system registers and hardware reads modeled; no ownership, cache publication or reset qualification.'), indent=1) + '\n')
     print('PASS stage-2 admission:', len(cases), 'focused instruction cases')
@@ -387,12 +409,13 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--stage2-build', type=Path, help='only changed stage-2 admission using its already-built ELF')
     parser.add_argument('--cpu-case', action='append', default=[], help='select added CPU owner cases without replaying accepted cases')
+    parser.add_argument('--ce-only', action='store_true', help='only changed cold CE predecessor cases')
     parser.add_argument('--cpu-only', action='store_true', help='changed static-OFF owner in --stage2-build')
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
     if args.stage2_build:
         if args.cpu_only: stage2_cpu_checks(args.stage2_build, args.output, args.cpu_case)
-        else: stage2_checks(args.stage2_build, args.output)
+        else: stage2_checks(args.stage2_build, args.output, args.ce_only)
         return
     image = load(build(args.output))
     results = []
