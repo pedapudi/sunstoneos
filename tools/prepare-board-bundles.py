@@ -817,7 +817,7 @@ ROWS = [
             'fw-stop', 'COMPLETE GPU firmware stop: started, health check executed, forced idle and power off '
             'acknowledged, idle, OFF and provider parked',
             'Status 0 with GPU FWS start result=0, GPU FWS control result=0 phase=4 error=0 health=1 '
-            'health_status=0x1, GPU FWS stop result=0 phase=10, GPU FWS power ack_idle=0x1 ack_off=0x1 '
+            'health_status=0x0, GPU FWS stop result=0 phase=10, GPU FWS power ack_idle=0x1 ack_off=0x1 '
             'state_idle=0x2 state_off=0x0 and COMPLETE GPU firmware stop: started, health check executed, '
             'forced idle and power off acknowledged, idle, OFF and provider parked; or one of the controlled '
             'failures listed below; or no return. Record every line of kernel.log and the progress record at '
@@ -835,6 +835,53 @@ ROWS = [
             'the lifetime can continue. Every GPU-window access is a 32-bit access after its progress record. It '
             'runs after the cold DDR start and the provider-readiness row, in a lifetime of its own.',
             after=['gpu-provider-ready'],
+            failures=['`FAIL GPU firmware control: compatibility or health check not complete, GPU left running`, '
+                      'after the `GPU FWS control` and `compat` lines: error 4 an incompatible record, 3 the '
+                      '200 ms deadline, 7 a firmware event; the firmware stays running and a power removal follows',
+                      '`FAIL GPU firmware stop: not complete, GPU left powered`, after the `GPU FWS stop`, `power` '
+                      'and `after` lines: a power request not acknowledged within 300 ms, an acknowledgement with '
+                      'another power state, or a platform OFF fault; a power removal follows',
+                      '`FAIL GPU firmware stop: idle check not met after the power-off acknowledgement, GPU OFF and '
+                      'provider parked`: the vendor powers off in that case too; the GPU is off',
+                      '`FAIL GPU firmware start: started word not 1, GPU left running` or a start refusal, as in '
+                      'bundle 19'],
+            admission='GPU firmware exception: this row starts the GPU firmware as bundle 19 does, then sends it '
+                      'three kernel CCB commands, a health check and the forced-idle and power-off requests, each '
+                      'in the shared queues of the image\'s own Normal-NC block, kicked through MTS_SCHEDULE '
+                      '0x01800b00. It reads and clears the MIPS wrapper interrupt (0x018008a8, 0x018008b0), writes '
+                      'the thread-0 DM associations 0x01800b40 and 0x01800b30 to 0, polls the Sidekick, SLC, BIF '
+                      'and SLC status registers (0x018003c8, 0x01803898, 0x01801358, 0x01801350, 0x01801320, '
+                      '0x01801338, 0x01803870), and powers the GPU off through the default path only after the '
+                      'firmware acknowledged the power-off request. No GPU job, context or memory outside the '
+                      'firmware\'s own mappings is created. Risk: a register access that never completes stops the '
+                      'CPU and only a power removal recovers the board; a failure before the power-off '
+                      'acknowledgement leaves the firmware running until the power removal.'),
+    gpu_row('gpu-fw-stop-again', 26, 'The GPU firmware stop image again in the same lifetime, with no power removal',
+            'fw-stop', 'COMPLETE GPU firmware stop: started, health check executed, forced idle and power off '
+            'acknowledged, idle, OFF and provider parked',
+            'Status 0 with GPU FWS start result=0, GPU FWS control result=0 phase=4 error=0 health=1 '
+            'health_status=0x0, GPU FWS stop result=0 phase=10, GPU FWS power ack_idle=0x1 ack_off=0x1 '
+            'state_idle=0x2 state_off=0x0 and COMPLETE GPU firmware stop: started, health check executed, '
+            'forced idle and power off acknowledged, idle, OFF and provider parked; or one of the controlled '
+            'failures listed below; or no return. Record every line of kernel.log and the progress record at '
+            'result.bin offset 128, which names the access in flight and its step.',
+            'Step (c) of docs/designs/gpu-firmware-stop.md: the image of bundle 25, the same build, run a second time '
+            'in the lifetime right after bundle 25 passed, with no power removal between them, so that its start '
+            'begins from the stopped firmware, the GPU OFF and DCDC4 already at 960 mV. A pass shows that the stop '
+            'leaves a state from which the firmware starts again. As in bundle 25:'
+            ' apps/gpu-power-id, firmware-stop variant (apps/gpu-power-id/fw-start.c built with FWS_STOP), the '
+            'combined steps (a) and (b) of docs/designs/gpu-firmware-stop.md. It runs the firmware start of bundle '
+            '19, with the vendor 500 ms started-word bound. Then the firmware control: it waits for the firmware\'s '
+            'compatibility record, starts the kernel CCB and submits one health-check command (type 115 of the '
+            'open firmware), kicking MTS_SCHEDULE 0x01800b00 with 0 and reading it back, and waits for its return '
+            'slot; it reads the MIPS wrapper interrupt status 0x018008a8 and clears its event bit at 0x018008b0. '
+            'Then the stop: a forced-idle request and a forced power-off request, each acknowledged through the '
+            'power-sync word with the firmware power state FORCED_IDLE and then OFF; the vendor RGXStop register '
+            'sequence (interrupt acknowledgement, Sidekick and SLC idle polls, thread-0 DM association clears, BIF '
+            'and SLC status polls, no SOFT_RESET); then the platform OFF, the supply end and the provider park, so '
+            'the lifetime can continue. Every GPU-window access is a 32-bit access after its progress record. It '
+            'runs after the cold DDR start and the provider-readiness row, in a lifetime of its own.',
+            after=['gpu-provider-ready', 'gpu-fw-stop'],
             failures=['`FAIL GPU firmware control: compatibility or health check not complete, GPU left running`, '
                       'after the `GPU FWS control` and `compat` lines: error 4 an incompatible record, 3 the '
                       '200 ms deadline, 7 a firmware event; the firmware stays running and a power removal follows',
