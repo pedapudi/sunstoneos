@@ -148,6 +148,20 @@ power off the GPU after a failed job; that is a defect. The fix and the
 diagnosis against the open DDK are in progress on `work/gpu-first-job-1025`,
 which stays unmerged.
 
+**P-state-0-only DRAM capture, port 3-3** (`board-session-20261025-25/port-3-3`,
+set `dram-training-capture-v5-20261025`, build `ddr-pstate0`): boot0 trained
+P-state 0 alone at 2040 MHz (result 7) in 4,441 ms, against about 5,090 ms
+for all four P-states, and reported 12,288 MiB, `dram_tpr13` 0x10061 and
+`dram_tpr10` 0x925f0000. Both read-only captures completed all six stages.
+This is the first reference lifetime of the restore design; its analysis is
+on `work/dram-fast-boot-1025`.
+
+**CPU step 6 (eight cores at the top points)** is refrozen as
+`cpu-top-opp-20261025/step6/step6-set-2` on `work/cpu-top-opp-step6-1025`.
+The second-round review confirmed all three fixes. It runs on port 3-3 after
+a power removal, with an operator present who removes power if nothing has
+returned 12 s after the workload's launch.
+
 **DRAM training capture, port 3-3** (`board-session-20261025-21/port-3-3`,
 set `dram-training-capture-v3-20261025`): cold DDR (12,288 MiB), then two
 read-only captures, each with all six stages complete. This is the first
