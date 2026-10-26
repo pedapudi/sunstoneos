@@ -750,7 +750,7 @@ grant of both clusters.
   freeze takes it, with `binding.json` beside it, and
   `checks/top-opp-workload-bind.py` then runs against that freeze.
 - **The returning overlay no longer links on bringup.** Bringup's MBUS
-  restore in `identity_primary_run` (`3f09ec2c`) grows the overlay's
+  restore in `identity_primary_run` (`01308e9e`, `3f09ec2c`) grows the overlay's
   `identity-c.o` by about 870 bytes. The return-deadline workload profile
   now exceeds its 16 KiB reservation, with or without `--top-opp`. That
   profile's next freeze needs a new layout, for example the extension
