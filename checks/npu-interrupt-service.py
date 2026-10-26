@@ -5,14 +5,18 @@ from pathlib import Path
 from elftools.elf.elffile import ELFFile
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--elf',type=Path,required=True);p.add_argument('--output',type=Path,required=True)
-p.add_argument('--cases',default='0,1,2,3,4,5,6,7,8,9')
+p.add_argument('--cases',default=','.join(map(str,range(20))))
 p.add_argument('--qemu',type=Path,default=Path.home()/'.cache/sunstoneos/host/usr/bin/qemu-system-aarch64')
 a=p.parse_args();a.output.mkdir(parents=True,exist_ok=True);result=a.output/'service-result.json'
 values=json.loads(result.read_text()) if result.exists() else {'physical_access':False,'cases':{}}
 labels=['notified-bootstrap-two-jobs-deferred-stop','event-without-notification-times-out','ISR-mask-failure-retained',
         'notified-device-error-retained','task-mask-failure-retained','rearm-failure-retained',
         'stop-failure-keeps-owner','deferred-mask-still-expires','cancel-without-event-IRQ',
-        'route-and-worker-on-core-1']
+        'route-and-worker-on-core-1','initial-mask-pending-expires','rearm-pending-expires',
+        'stop-pending-expires','shared-stop-pending-expires','runtime-stop-pending-expires',
+        'independent-transient-rearm-waits','stationary-backend-clock-mask-expires',
+        'runtime-deferred-stop-completes','shared-deferred-stop-completes',
+        'notification-ends-pending-rearm-episode']
 with a.elf.open('rb') as stream:
     elf=ELFFile(stream)
     assert not any(s['p_vaddr']<=0x47fff000<s['p_vaddr']+s['p_memsz'] for s in elf.iter_segments() if s['p_type']=='PT_LOAD')

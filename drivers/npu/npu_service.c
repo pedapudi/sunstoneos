@@ -32,12 +32,35 @@ static void irq_fault(struct npu_service *s)
     s->controller.state=A733_NPU_FAULT;s->controller.fault=A733_NPU_IRQ;
     atomic_fetch_or_explicit(&s->irq_pending,IRQ_FAILED,memory_order_release);
 }
+enum { IRQ_MASK_WAIT, IRQ_REARM_WAIT, IRQ_STOP_WAIT };
+/* Availability policy for scheduler-driven callbacks, not proof of hardware
+ * completion. The extra tick covers the first sample's unknown tick phase. */
+#define IRQ_WAIT_TICKS (pdMS_TO_TICKS(10) + 1)
+static int irq_call(struct npu_service *s, unsigned which, int (*call)(void *))
+{
+    unsigned bit = 1u << which;
+    if (s->irq_retained) return -1;
+    if ((s->irq_waiting & bit) &&
+        (TickType_t)(xTaskGetTickCount() - s->irq_wait_start[which]) >= IRQ_WAIT_TICKS) {
+        s->irq_retained = 1;
+        irq_fault(s);
+        return -1;
+    }
+    int result = call(s->irq_cookie);
+    if (!result) {
+        if (!(s->irq_waiting & bit)) {
+            s->irq_wait_start[which] = xTaskGetTickCount();
+            s->irq_waiting |= bit;
+        }
+    } else s->irq_waiting &= ~bit;
+    return result;
+}
 static int irq_mask(struct npu_service *s)
 {
     if(!s->irq_bound || s->irq_masked)return 1;
     if(s->irq_retained)return -1;
-    int r=s->irq_ops.mask(s->irq_cookie);
-    if(r==1){s->irq_masked=1;s->irq_rearming=0;}
+    int r=irq_call(s, IRQ_MASK_WAIT, s->irq_ops.mask);
+    if(r==1){s->irq_masked=1;s->irq_rearming=0;s->irq_waiting&=~(1u<<IRQ_REARM_WAIT);}
     else if(r<0){s->irq_retained=1;irq_fault(s);}
     return r;
 }
@@ -75,7 +98,7 @@ SERVICE_INLINE int irq_progress(struct npu_service *s)
        !s->controller.irq_seen && (s->irq_masked || s->irq_rearming)) {
         taskENTER_CRITICAL();
         if(!atomic_load_explicit(&s->irq_pending,memory_order_acquire)) {
-            int r=s->irq_ops.rearm(s->irq_cookie);
+            int r=irq_call(s, IRQ_REARM_WAIT, s->irq_ops.rearm);
             if(r>=0){s->irq_masked=0;s->irq_rearming=r==0;}
             else {s->irq_retained=1;irq_fault(s);}
         }
@@ -141,7 +164,7 @@ static enum npu_service_result execute(struct npu_service *s,
             return c->state==A733_NPU_FAULT ? NPU_SERVICE_FAULT : SERVICE_DEFERRED;
         if (c->state==A733_NPU_CLOSED || a733_npu_close(c)) {
             if(s->irq_bound) {
-                int r=s->irq_ops.stop(s->irq_cookie);
+                int r=irq_call(s, IRQ_STOP_WAIT, s->irq_ops.stop);
                 if(r<0){s->irq_retained=1;irq_fault(s);return NPU_SERVICE_FAULT;}
                 if(!r)return SERVICE_DEFERRED;
                 atomic_store_explicit(&s->irq_stopped,1,memory_order_release);
@@ -257,7 +280,7 @@ SERVICE_INLINE enum npu_service_result execute_shared(struct npu_service *s,
             return c->state == A733_NPU_FAULT ? NPU_SERVICE_FAULT : SERVICE_DEFERRED;
         if (c->state == A733_NPU_CLOSED || a733_npu_close(c)) {
             if (s->irq_bound) {
-                int stopped = s->irq_ops.stop(s->irq_cookie);
+                int stopped = irq_call(s, IRQ_STOP_WAIT, s->irq_ops.stop);
                 if (stopped < 0) { s->irq_retained = 1; irq_fault(s); return NPU_SERVICE_FAULT; }
                 if (!stopped) return SERVICE_DEFERRED;
                 atomic_store_explicit(&s->irq_stopped, 1, memory_order_release);

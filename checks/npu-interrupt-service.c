@@ -6,6 +6,30 @@
 /* Fixture selector is outside the ELF load/BSS interval and remains in QEMU RAM. */
 #define npu_irq_case (*(volatile unsigned *)UINT64_C(0x47fff000))
 static unsigned mask_calls,rearm_calls,stop_calls,masked,delivered,critical_rearm;
+static unsigned runtime_closed,runtime_failed;
+static TickType_t pending_start;
+static int shared_case(void)
+{return npu_irq_case==13 || npu_irq_case==14 || npu_irq_case==17 || npu_irq_case==18;}
+static int runtime_case(void){return npu_irq_case==14 || npu_irq_case==17;}
+static int stop_timeout(void)
+{return npu_irq_case==12 || npu_irq_case==13 || npu_irq_case==14;}
+static int timed_pending(void)
+{
+    if(!pending_start)pending_start=xTaskGetTickCount();
+    return 0;
+}
+static uint64_t stationary_clock(void *unused)
+{(void)unused;privileged();return 0;}
+static int runtime_request(void *ctx,unsigned client,const struct npu_service_request *r,
+    enum npu_service_result *result)
+{(void)ctx;(void)client;(void)r;*result=NPU_SERVICE_INVALID;return 0;}
+static int runtime_step(void *ctx){(void)ctx;return 0;}
+static void runtime_finished(void *ctx,unsigned client,int fault)
+{(void)ctx;(void)client;configASSERT(fault);++runtime_failed;}
+static void runtime_close(void *ctx,unsigned client)
+{(void)ctx;configASSERT(client==0);++runtime_closed;}
+static const struct npu_service_runtime runtime_hooks={
+    runtime_request,runtime_step,runtime_finished,runtime_close,0};
 /* System counter at the latest modeled event delivery and at the owner's
  * latest DONE or READY reply: the client's share of completion latency. */
 static volatile uint64_t event_ticks,reply_ticks;
@@ -18,6 +42,7 @@ static int irq_mask(void *cookie)
 {
     configASSERT(cookie==&service);privileged();routed();++mask_calls;
     if(npu_irq_case==4)return -1;
+    if(npu_irq_case==10 || npu_irq_case==16)return timed_pending();
     if(npu_irq_case==7 && mask_calls>=3)return 0;
     if(mask_calls==1)return 0;
     masked=1;return 1;
@@ -28,6 +53,8 @@ static int irq_rearm(void *cookie)
     uint64_t pmr;__asm__ volatile("mrs %0,ICC_PMR_EL1":"=r"(pmr));
     configASSERT(pmr==portMAX_API_PRIORITY_MASK);++critical_rearm;
     if(npu_irq_case==5)return -1;
+    if(npu_irq_case==11)return timed_pending();
+    if(npu_irq_case==15 && (rearm_calls&1))return 0;
     masked=0;
     if(npu_irq_case==1 || npu_irq_case==8)return 1;
     /* An event becomes visible during the rearm window. Its notification must
@@ -36,14 +63,16 @@ static int irq_rearm(void *cookie)
     model.event_sent=1;model.regs[1]=IDLE;model.running=0;
     masked=1;++delivered;event_ticks=irq_ticks();BaseType_t woken=pdFALSE;
     npu_service_irq_notify_from_isr(&service,npu_irq_case==2?0:1,&woken);
-    return 1;
+    return npu_irq_case==19?0:1;
 }
 static int irq_stop(void *cookie)
 {
     configASSERT(cookie==&service && masked);privileged();routed();++stop_calls;
     configASSERT(service.controller.state==A733_NPU_CLOSED && !model.regs[0x14/4] &&
-        model.regs[1]==IDLE && service.owner==0 && (stop_calls==1 || service.has_deferred));
+        model.regs[1]==IDLE && (shared_case()?service.members==1:service.owner==0) &&
+        (stop_calls==1 || service.has_deferred));
     if(npu_irq_case==6)return -1;
+    if(stop_timeout())return timed_pending();
     return stop_calls<3?0:1;
 }
 static const struct npu_service_irq_ops irq_ops={irq_mask,irq_rearm,irq_stop};
@@ -75,17 +104,20 @@ static struct npu_service_reply irq_hold(void)
 }
 static void irq_owner(void *unused)
 {
-    (void)unused;configASSERT(npu_irq_case<=9);
+    (void)unused;configASSERT(npu_irq_case<=19);
     struct npu_service_reply r=irq_request(NPU_SERVICE_OPEN,0,100000);
-    if(npu_irq_case==4)configASSERT(r.result==NPU_SERVICE_FAULT);
+    if(npu_irq_case==4 || npu_irq_case==10 || npu_irq_case==16)configASSERT(r.result==NPU_SERVICE_FAULT);
     else configASSERT(r.result==NPU_SERVICE_OK);
-    if(npu_irq_case==8){
+    if(shared_case()){
+        r=irq_wait(A733_NPU_READY);configASSERT(r.state==A733_NPU_READY);
+    }else if(npu_irq_case==8){
         r=irq_request(NPU_SERVICE_CANCEL,0,100000);configASSERT(r.result==NPU_SERVICE_OK);
         r=irq_wait(A733_NPU_CANCELED);configASSERT(r.state==A733_NPU_CANCELED);
         r=irq_request(NPU_SERVICE_REAP,0,0);configASSERT(r.result==NPU_SERVICE_OK && r.canceled);
-    }else if(npu_irq_case==0 || npu_irq_case==6 || npu_irq_case==9){
+    }else if(npu_irq_case==0 || npu_irq_case==6 || npu_irq_case==9 || npu_irq_case==12 || npu_irq_case==15 || npu_irq_case==19){
         r=npu_irq_case==9?irq_hold():irq_wait(A733_NPU_READY);configASSERT(r.state==A733_NPU_READY);
         for(unsigned j=0;j<2;++j){
+            if(npu_irq_case==15 || npu_irq_case==19)vTaskDelay(pdMS_TO_TICKS(20));
             r=irq_request(NPU_SERVICE_SUBMIT,1,100000);configASSERT(r.result==NPU_SERVICE_OK);
             uint64_t job=r.job_ticket;
             r=npu_irq_case==9?irq_hold():irq_wait(A733_NPU_DONE);
@@ -99,7 +131,7 @@ static void irq_owner(void *unused)
             configASSERT(native.memory.state==A733_NPU_MEMORY_IDLE && data[4096]==(uint8_t)(0x10080000>>19));
             r=irq_request(NPU_SERVICE_REAP,0,0);configASSERT(r.result==NPU_SERVICE_OK);
         }
-        configASSERT(npu_service_irq_completions(&service)==3 && delivered==3 && critical_rearm==3);
+        configASSERT(npu_service_irq_completions(&service)==3 && delivered==3 && critical_rearm==(npu_irq_case==15?6u:3u));
     }else {
         r=npu_irq_case==1?irq_hold():irq_wait(A733_NPU_FAULT);configASSERT(r.state==A733_NPU_FAULT);
         if(npu_irq_case==1)configASSERT(r.result==NPU_SERVICE_FAULT && r.fault==A733_NPU_TIMEOUT);
@@ -107,14 +139,30 @@ static void irq_owner(void *unused)
         unsigned accesses=model.accesses,mc=mask_calls,rc=rearm_calls;
         vTaskDelay(4);r=irq_request(NPU_SERVICE_STATUS,0,0);
         configASSERT(model.accesses==accesses && (npu_irq_case==7 || mask_calls==mc) && rearm_calls==rc && !stop_calls);
-        if(npu_irq_case!=4 && npu_irq_case!=7)configASSERT(r.owns_session);
+        if(npu_irq_case==10 || npu_irq_case==11 || npu_irq_case==16) {
+            configASSERT(r.fault==A733_NPU_IRQ && service.irq_retained);
+            configASSERT((TickType_t)(xTaskGetTickCount()-pending_start)>=pdMS_TO_TICKS(10));
+            configASSERT(r.owns_session==(npu_irq_case==11) && !model.finished);
+            configASSERT(mask_calls==mc && rearm_calls==rc);
+        } else if(npu_irq_case!=4 && npu_irq_case!=7)configASSERT(r.owns_session);
         platform_puts("PASS NPU IRQ retained failure\n");platform_exit(0);
     }
     r=irq_request(NPU_SERVICE_CLOSE,0,0);
-    if(npu_irq_case==6){configASSERT(r.result==NPU_SERVICE_FAULT && r.owns_session && stop_calls==1);}
+    if(stop_timeout()) {
+        configASSERT(r.result==NPU_SERVICE_FAULT && r.fault==A733_NPU_IRQ && r.owns_session);
+        configASSERT(service.irq_retained && !npu_service_irq_stopped(&service));
+        configASSERT((TickType_t)(xTaskGetTickCount()-pending_start)>=pdMS_TO_TICKS(10));
+        unsigned accesses=model.accesses,mc=mask_calls,rc=rearm_calls,sc=stop_calls;
+        vTaskDelay(4);r=irq_request(NPU_SERVICE_STATUS,0,0);
+        configASSERT(r.result==NPU_SERVICE_FAULT && r.owns_session && model.accesses==accesses);
+        configASSERT(mask_calls==mc && rearm_calls==rc && stop_calls==sc);
+        if(shared_case())configASSERT(service.members==1);
+        if(runtime_case())configASSERT(runtime_failed==1 && !runtime_closed);
+    } else if(npu_irq_case==6){configASSERT(r.result==NPU_SERVICE_FAULT && r.owns_session && stop_calls==1);}
     else {
         configASSERT(r.result==NPU_SERVICE_OK && !r.owns_session && stop_calls==3);
         configASSERT(npu_service_irq_stopped(&service));
+        if(runtime_case())configASSERT(runtime_closed==1 && !runtime_failed);
         r=irq_request(NPU_SERVICE_OPEN,0,100000);configASSERT(r.result==NPU_SERVICE_FAULT);
     }
     platform_puts("PASS NPU IRQ native ownership, rearm window, repeated jobs, deferred CLOSE and retained failure\n");platform_exit(0);
@@ -134,7 +182,11 @@ void kernel_main(void)
     model.regs[0x20/4]=0x9000;model.regs[0x24/4]=0x9202;model.regs[0x30/4]=0x1000003b;
     model.regs[0x28/4]=0x20240101;model.regs[1]=IDLE;
     irq_route=npu_irq_case==9 ? 2 : 1;
-    configASSERT(npu_service_init(&service,&model_ops,NULL,&native.memory.image,commands,3,4,irq_route));
+    struct a733_npu_ops selected_ops=model_ops;
+    if(npu_irq_case==16)selected_ops.microseconds=stationary_clock;
+    configASSERT(npu_service_init(&service,&selected_ops,NULL,&native.memory.image,commands,3,4,irq_route));
+    if(shared_case())configASSERT(npu_service_share(&service));
+    if(runtime_case())configASSERT(npu_service_runtime(&service,&runtime_hooks,&service));
     /* The route must name exactly the one CPU the worker is pinned to. */
     configASSERT(!npu_service_bind_irq(&service,&irq_ops,&service,0));
     configASSERT(!npu_service_bind_irq(&service,&irq_ops,&service,3));

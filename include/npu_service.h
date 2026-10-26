@@ -69,7 +69,9 @@ struct npu_service_activation {
  * propagated and no handler remains active. rearm never clears pending and is
  * invoked inside the kernel critical section after checking latched events.
  * stop follows successful controller CLOSE (events disabled/full idle), and
- * proves the owned GIC source disabled, inactive and pending clear. */
+ * proves the owned GIC source disabled, inactive and pending clear. Deferred
+ * callbacks get 10 ms plus one tick from their first pending result, then
+ * retain on the next worker pass. This bounds waiting, not hardware drain. */
 struct npu_service_irq_ops {
     int (*mask)(void *);
     int (*rearm)(void *);
@@ -111,6 +113,8 @@ struct npu_service {
     void *irq_cookie;
     atomic_uint irq_pending, irq_stopped, irq_completions;
     unsigned irq_bound, irq_masked, irq_rearming, irq_retained;
+    unsigned irq_waiting;
+    TickType_t irq_wait_start[3];
     struct npu_service_message deferred;
     unsigned has_deferred;
     struct npu_service_message held;
