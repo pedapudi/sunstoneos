@@ -38,6 +38,11 @@ endif()
 # inference worker run on cores 6 and 7, and every other task keeps the A55
 # default affinity. The option is also the compile definition.
 option(A733_A76_ADMITTED "Integrated OS with recognition on the admitted Cortex-A76 cores" OFF)
+if(SUNSTONE_MIMUS_WORKERS STREQUAL "8" AND
+   (NOT A733_A76_ADMITTED OR SUNSTONE_A733_OS_RESIDENT OR SUNSTONE_A733_OS_AUDIO OR
+    SUNSTONE_A733_OS_RADIO OR SUNSTONE_A733_OS_HEADSET OR SUNSTONE_A733_OS_GPU_LINEAR))
+  message(FATAL_ERROR "Eight OS inference workers require admitted supervised recorded recognition")
+endif()
 # CPU operating points granted by a sealed supervised session; each change
 # needs the user's approval before the run (docs/cpu-clock.md).
 option(SUNSTONE_A733_OS_CPU_CLOCK "Integrated OS with granted CPU operating-point changes" OFF)
@@ -248,8 +253,8 @@ if(SUNSTONE_A733_OS_AUDIO OR SUNSTONE_A733_OS_HEADSET)
   set(os_recognition "${os_build}/recognition.cc")
   list(APPEND os_patches "${os_root}/apps/os/recognition.patch")
 endif()
-# The recognizer and the engine's second inference worker run on the
-# recognition pair: A55 cores 2 and 3, or A76 cores 6 and 7 once admitted.
+# The owner and first worker use the recognition pair; an admitted eight-worker
+# recorded build adds priority-2 inference tasks to the A55 cores.
 list(APPEND os_added apps/mimus/parallel_runtime.cc)
 list(APPEND os_external_inputs "${os_root}/include/a733_smp_placement.h" "${os_root}/apps/mimus/parallel_runtime.h")
 if(NOT SUNSTONE_A733_OS_GPU_LINEAR)
@@ -396,7 +401,7 @@ if(NOT os_recognition STREQUAL "${os_root}/apps/mimus-board/recognition.cc")
   list(APPEND os_inputs "${os_recognition}")
 endif()
 list(REMOVE_ITEM os_inputs "${mb_build}/build-id.c")
-set(os_identity "native-os-1;resident=${SUNSTONE_A733_OS_RESIDENT};audio=${SUNSTONE_A733_OS_AUDIO};radio=${SUNSTONE_A733_OS_RADIO};headset=${SUNSTONE_A733_OS_HEADSET};msbc=${SUNSTONE_A733_OS_MSBC};gpu_linear=${SUNSTONE_A733_OS_GPU_LINEAR};npu=${SUNSTONE_A733_OS_NPU};${MIMUS_AARCH64_NEON};${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};${CMAKE_CXX_COMPILER_ID};${CMAKE_CXX_COMPILER_VERSION}")
+set(os_identity "native-os-1;inference_workers=${SUNSTONE_MIMUS_WORKERS};resident=${SUNSTONE_A733_OS_RESIDENT};audio=${SUNSTONE_A733_OS_AUDIO};radio=${SUNSTONE_A733_OS_RADIO};headset=${SUNSTONE_A733_OS_HEADSET};msbc=${SUNSTONE_A733_OS_MSBC};gpu_linear=${SUNSTONE_A733_OS_GPU_LINEAR};npu=${SUNSTONE_A733_OS_NPU};${MIMUS_AARCH64_NEON};${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};${CMAKE_CXX_COMPILER_ID};${CMAKE_CXX_COMPILER_VERSION}")
 foreach(input IN LISTS os_inputs)
   file(SHA256 "${input}" hash)
   string(APPEND os_identity "${hash}")
@@ -425,6 +430,11 @@ add_custom_command(TARGET sunstone-a733-os POST_BUILD
     --audio "$<BOOL:${SUNSTONE_A733_OS_AUDIO}>" --radio "$<BOOL:${SUNSTONE_A733_OS_RADIO}>"
     --headset "$<BOOL:${SUNSTONE_A733_OS_HEADSET}>" --gpu-linear "$<BOOL:${SUNSTONE_A733_OS_GPU_LINEAR}>"
     --cpu-clock "$<BOOL:${SUNSTONE_A733_OS_CPU_CLOCK}>" --npu "$<BOOL:${SUNSTONE_A733_OS_NPU}>"
-    --perf "$<BOOL:${SUNSTONE_A733_OS_PERF}>"
+    --perf "$<BOOL:${SUNSTONE_A733_OS_PERF}>" --workers "${SUNSTONE_MIMUS_WORKERS}"
     --output "${os_build}/link-check.json"
   VERBATIM)
+
+# Focused emulator fixture: actual OS recognition checkpoints and worker adapter.
+if(SUNSTONE_MIMUS_WORKERS STREQUAL "8")
+  include("${os_root}/cmake/mimus-os-workers-check.cmake")
+endif()

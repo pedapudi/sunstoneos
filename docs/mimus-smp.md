@@ -1,20 +1,35 @@
-# Mimus recognition on two FreeRTOS cores
+# Mimus recognition on two or eight FreeRTOS cores
 
-Mimus runs with the [SMP C/C++ runtime](smp-runtime.md) on two emulated
-Cortex-A55 cores. A FreeRTOS worker executes the engine's existing parallel
-ranges. Both whole-recording transcription and paced utterance replay match
-their host references. This is **QEMU functional evidence**; physical multicore
-startup, cache coherence, recovery, and performance remain unqualified.
+Mimus uses the [SMP C/C++ runtime](smp-runtime.md) with two inference workers by
+default. `SUNSTONE_MIMUS_WORKERS=8` selects eight workers for independent row
+stages and aligned packed matrix products. Stateful producers, frontend
+FFT/log-mel scratch and unaligned matrix boundary repair retain two contexts;
+the asynchronous pipeline remains available only with two workers. The
+[eight-worker design](designs/mimus-eight-workers.md) records the exact engine
+pin, arithmetic parity and memory bounds.
 
-## Recognition owns work until the worker completes
+The integrated OS supports eight workers for admitted, supervised recorded
+recognition. Its A76 owner and first worker use cores 6 and 7 at priority 3;
+six A55 workers use cores 0 through 5 at priority 2, below the OS services.
+Linked worker metadata and the reviewed host entry must agree. Resident,
+capture, radio, headset and GPU-linear profiles currently require two workers.
+[OS placement and admission](designs/mimus-os-eight-workers.md) describes that
+boundary and its focused software checks.
 
-The recognition task runs on core 0 at priority 3. A worker runs on core 1 at
+Whole-recording recognition matches the host reference with two and eight
+workers. Paced replay evidence remains scoped to two workers. These are
+software results; physical service latency, heterogeneous throughput and
+recovery are not established by emulator parity.
+
+## Two-worker configuration and its recorded evidence
+
+In the two-worker emulator configuration, recognition runs on core 0 at priority 3. A worker runs on core 1 at
 the same priority, with a statically allocated 64 KiB stack. Paced capture runs
 on core 1 at priority 4, so it can preempt inference. The application deadline
 task runs at priority 5 and can run on either core.
 
 The [parallel adapter](../apps/mimus/parallel_runtime.cc) installs the existing
-mimus `ParallelFor` interface. For at least two items, it sends the upper half
+mimus `ParallelFor` interface. In two-worker mode, for at least two items, it sends the upper half
 to the worker and computes the lower half on the recognition task. Smaller
 ranges execute locally. Worker indices remain 0 and 1, matching the engine's
 per-worker scratch layout.
@@ -26,11 +41,12 @@ publishes CPU stores through the shared cacheable mapping. This mechanism
 requires coherent CPU memory; it does not synchronize noncoherent DMA.
 
 Only the bound recognition task may submit work, and calls cannot nest.
-Assertions verify the caller on core 0 and the worker on core 1. A final
+In this emulator configuration, assertions verify the caller on core 0 and
+the worker on core 1. A final
 `WORKERS` record reports completed jobs; the acceptance tool requires a
 nonzero count. Execution on all eight physical cores remains outstanding.
 
-The adapter also installs the engine's asynchronous interface. The engine uses
+Two-worker mode also installs the engine's asynchronous interface. The engine uses
 it to run one item on the worker while recognition continues: the attention
 softmax and context steps, and the hand-off of the next layer's input. The same
 queues carry these items, under the same owner, core and lifetime assertions.
@@ -44,13 +60,13 @@ work, about 3 to 5 percent of the 19.5-second physical bench. Emulator timing
 does not measure it. The two-core emulator run matches the host reference for
 the bench recording with 2,631 worker jobs, 2,428 of them asynchronous items:
 features, log probabilities, frame count, words, punctuation, capitals and
-formatted text. The engine caps workers at two (`kMaxWorkers` in the pinned
-mimus source), so a change there is required to use more cores.
+formatted text. That recorded engine revision capped workers at two; the
+current optional eight-worker port preserves this two-worker behavior.
 
 ## Packed matrix products share rows between workers
 
 The AArch64 engine also splits eligible packed int16 matrix products across
-both workers. Expanded weights and quantized inputs remain read-only until the
+the selected workers. Expanded weights and quantized inputs remain read-only until the
 join. Integer sums are local to each worker. Residual accumulation uses a
 private float buffer of at most 256 outputs per worker.
 
@@ -61,8 +77,8 @@ scratch requirements retain their existing path. Each output keeps its serial
 arithmetic order.
 
 If the row boundary can share a cache line, one row separates the workers'
-writes. The caller computes that row after the join. The focused matrix check
-covers 12 shapes in both plain and residual modes, comparing all output bytes
+writes. The caller computes that row after the join. The original focused matrix check
+covered 12 shapes in both plain and residual modes, comparing all output bytes
 with serial execution. It checks the 16-row admission threshold, unaligned
 bases and strides, padding, partial packed groups, and the private-scratch bound.
 It also covers multiple weight blocks, grouped weights, and narrow activations.
@@ -173,8 +189,8 @@ physical worker execution, and the performance target remain outstanding.
 
 The `sunstone-a733-mimus-native` image combines cached eight-core FreeRTOS
 startup with the existing recorded and paced recognition paths. Recognition
-uses two inference workers because the engine reserves two worker scratch
-areas. The model, arithmetic, punctuation, formatting and prerecorded inputs
+defaults to two inference workers; the optional eight-worker build requires
+admitted A76 placement. The model, arithmetic, punctuation, formatting and prerecorded inputs
 remain unchanged. Recorded and paced emulator parity evidence remains scoped
 to the fixtures described above; native recognition is not physically qualified.
 

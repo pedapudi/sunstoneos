@@ -251,6 +251,8 @@ def main():
               'recovery': {'mode': 'manual-usb-reconnect', 'demonstrated_fel': True,
                            'explicit_reconnect_before_resumption': True, 'preserve_microsd': True,
                            'one_attempt': True, 'evidence': [marker]}}
+    if manifest.get('inference', {}).get('workers') == 8:
+        record['inference'] = manifest['inference']
     for key, offset in zip(thermal_facts, (632, 664, 696, 728)):
         ref = put('thermal-' + key, {**target, 'schema': 'a733-thermal-' + key + '-v1', 'reviewed': True,
                                      **dict.fromkeys(thermal_facts[key], True)})

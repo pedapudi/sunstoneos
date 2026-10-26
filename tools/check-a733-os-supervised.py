@@ -63,6 +63,7 @@ NPU_REPORT_MIN_SECONDS = 0.1
 
 def source_files():
     return [('os-host-tool.py', Path(__file__)), ('os-preparation.py', Path(preparation.__file__)),
+            ('os-link-configuration.py', Path(preparation.os_link.__file__)),
             ('mimus-board-host-tool.py', Path(combined.__file__)),
             ('mimus-board-preparation.py', Path(preparation.mimus.__file__)),
             ('mimus-board-transport.py', Path(preparation.host.__file__)),
@@ -176,7 +177,9 @@ def entry_check(prepared, identity, port):
     template = frozen['board/session-template.bin']
     preparation.validate_admission(admission, prepared['image_sha256'], hashlib.sha256(template).hexdigest(),
                                    template, prepared['audio'], cache, True,
-                                   perf_modes=json.loads(frozen['board/image-input-manifest.json']).get('perf_modes', False))
+                                   perf_modes=json.loads(frozen['board/image-input-manifest.json']).get('perf_modes', False),
+                                   inference=preparation.image_inference(json.loads(frozen['board/image-input-manifest.json']),
+                                                                         frozen['board/image.elf']))
     require(admission['identity'] == identity and admission['port'] == port, 'OS entry covers another USB instance.')
 
 
