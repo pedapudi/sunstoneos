@@ -20,6 +20,7 @@ parser.add_argument('--bundle', type=Path, required=True)
 parser.add_argument('--reference', type=Path, required=True)
 parser.add_argument('--evidence', type=Path, required=True)
 parser.add_argument('--qemu', default='qemu-system-aarch64')
+parser.add_argument('--cores', type=int, choices=(2, 8), default=2)
 parser.add_argument('--paced', action='store_true')
 args = parser.parse_args()
 emulator = shutil.which(args.qemu)
@@ -33,7 +34,7 @@ if bool(reference.get('paced')) != args.paced:
     sys.exit('Reference mode differs from the requested mode.')
 checker = Path(__file__).resolve().parents[1] / 'checks/mimus-parity.py'
 command = [emulator, '-machine', 'virt,gic-version=3,secure=off,virtualization=off',
-           '-cpu', 'cortex-a55', '-smp', '2', '-m', '128M', '-nographic',
+           '-cpu', 'cortex-a55', '-smp', str(args.cores), '-m', '128M', '-nographic',
            '-monitor', 'none', '-semihosting-config', 'enable=on,target=native',
            '-device', f'loader,file={args.bundle.resolve()},addr=0x43000000,force-raw=on',
            '-device', f'loader,file={args.image.resolve()},cpu-num=0']
@@ -69,9 +70,9 @@ result_path.write_text(json.dumps(record, indent=2) + '\n')
 print(stdout + stderr, end='', flush=True)
 if code or 'FAIL' in stdout + stderr or 'ERROR ' in stdout + stderr:
     sys.exit('Recognition failed; see model.json.')
-workers = re.findall(r'^WORKERS count=2 jobs=([0-9]+) core_mask=3$', stdout + stderr, re.M)
+workers = re.findall(rf'^WORKERS count={args.cores} jobs=([0-9]+) core_mask={(1 << args.cores) - 1:x}$', stdout + stderr, re.M)
 if len(workers) != 1 or int(workers[0]) == 0:
-    sys.exit('No completed inference work on both cores; see model.json.')
+    sys.exit('No completed inference work on every selected core; see model.json.')
 result = subprocess.run([sys.executable, str(checker), '--reference', str(args.reference),
                          '--candidate', str(result_path), '--output', str(parity_path)])
 sys.exit(result.returncode)

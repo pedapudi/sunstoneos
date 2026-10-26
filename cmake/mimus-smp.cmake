@@ -1,6 +1,10 @@
 if(NOT MIMUS_DIR OR NOT NEWLIB_ROOT OR NOT NEWLIB_SMP_ROOT)
   return()
 endif()
+set(SUNSTONE_MIMUS_WORKERS "2" CACHE STRING "Inference workers (2 or 8)")
+if(NOT SUNSTONE_MIMUS_WORKERS MATCHES "^(2|8)$")
+  message(FATAL_ERROR "SUNSTONE_MIMUS_WORKERS must be 2 or 8")
+endif()
 # Recompile the same recognition sources against the SMP C library headers.
 get_target_property(asr_sources mimus_asr SOURCES)
 get_target_property(asr_directory mimus_asr SOURCE_DIR)
@@ -14,6 +18,8 @@ sunstone_smp_compile(mimus_asr_smp)
 target_compile_options(mimus_asr_smp PRIVATE ${MIMUS_COMPUTE_OPTIONS})
 target_include_directories(mimus_asr_smp PUBLIC "${MIMUS_DIR}/firmware/components/asr/include")
 target_compile_definitions(mimus_asr_smp PRIVATE MIMUS_EXTERNAL_PLATFORM=1)
+target_compile_definitions(mimus_asr_smp PUBLIC
+  MIMUS_MAX_WORKERS=${SUNSTONE_MIMUS_WORKERS} SUNSTONE_MIMUS_WORKERS=${SUNSTONE_MIMUS_WORKERS})
 if(MIMUS_AARCH64_NEON)
   target_compile_definitions(mimus_asr_smp PRIVATE MIMUS_AARCH64_NEON=1)
 endif()
@@ -33,8 +39,9 @@ foreach(target IN ITEMS smp-mimus-model smp-mimus-replay-model smp-mimus-linear-
     "${smp_build}/port.c" "${smp_build}/portASM.S")
   sunstone_smp_compile(${target})
   target_include_directories(${target} PRIVATE apps/mimus "${MIMUS_DIR}/firmware/components/pipeline/include")
-  target_compile_definitions(${target} PRIVATE MONITOR_QEMU=1)
+  target_compile_definitions(${target} PRIVATE MONITOR_QEMU=1 SUNSTONE_SMP_CORES=${SUNSTONE_MIMUS_WORKERS})
   target_link_options(${target} PRIVATE -nostdlib -static -Wl,--gc-sections -Wl,--wrap=_impure_ptr
+    "-Wl,--defsym=__smp_cores=${SUNSTONE_MIMUS_WORKERS}"
     "-Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-smp/runtime.ld"
     "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/${target}.map")
   target_link_libraries(${target} PRIVATE mimus_asr_smp

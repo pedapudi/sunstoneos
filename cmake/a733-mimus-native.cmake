@@ -56,7 +56,7 @@ list(APPEND mimus_native_inputs ${mimus_native_asr_sources} ${mimus_native_model
   "${SUNSTONE_SOURCE_ROOT}/platform/a733-smp-cached/freertos_tasks_c_additions.h"
   "${SUNSTONE_SOURCE_ROOT}/platform/qemu-smp/freertos_tasks_c_additions.h")
 list(REMOVE_DUPLICATES mimus_native_inputs)
-set(mimus_native_identity "native-mimus-1;${SUNSTONE_MIMUS_SUPERVISED};${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};8;two-inference-workers;WBWA")
+set(mimus_native_identity "native-mimus-1;${SUNSTONE_MIMUS_SUPERVISED};${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};8;${SUNSTONE_MIMUS_WORKERS}-inference-workers;WBWA")
 foreach(input IN LISTS mimus_native_inputs)
   file(SHA256 "${input}" input_digest)
   string(APPEND mimus_native_identity "${input_digest}")
@@ -80,6 +80,9 @@ target_include_directories(${mimus_native_target} PRIVATE "${SUNSTONE_SOURCE_ROO
 target_compile_definitions(${mimus_native_target} PRIVATE SUNSTONE_SECURE_MONITOR=1 SUNSTONE_A733_SMP_DIAGNOSTIC=1
   SUNSTONE_A733_USB=1 SUNSTONE_MIMUS_NATIVE=1 SUNSTONE_MIMUS_PACED=1
  )
+if(A733_A76_ADMITTED)
+ target_compile_definitions(${mimus_native_target} PRIVATE A733_A76_ADMITTED=1)
+endif()
 if(SUNSTONE_MIMUS_SUPERVISED)
  target_compile_definitions(${mimus_native_target} PRIVATE SUNSTONE_MIMUS_SUPERVISED=1 A733_SMP_CONTRACT_MAGIC=0x415337334d494333ULL A733_SMP_RESULT_MAGIC=0x415337334d495233ULL)
 else()
