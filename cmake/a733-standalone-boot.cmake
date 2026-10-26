@@ -17,7 +17,7 @@ add_executable(a733-stage2 EXCLUDE_FROM_ALL
   "${stage2_root}/runtime/memory.c")
 target_include_directories(a733-stage2 PRIVATE
   "${stage2_root}/include" "${stage2_root}/runtime/include")
-# The loader reads at the legacy profile only; leave the UHS-I code out.
+# The loader uses 3.3 V high-speed four-bit SD; leave the UHS-I code out.
 target_compile_definitions(a733-stage2 PRIVATE A733_COLD_STAGE2=1 SUNXI_MMC_NO_UHS=1)
 # MMU and caches stay off at EL3: Device memory requires aligned accesses, and
 # no FP/SIMD trap configuration exists before this code runs.

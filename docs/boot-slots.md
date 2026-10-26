@@ -81,30 +81,39 @@ Within one header, extents may not overlap on the card or in memory.
 
 ## The loader selects the newest verified slot
 
-The loader runs after the [cold-entry gate](cold-entry.md) has admitted the
-primary CPU at EL3 with translation and both caches off. It identifies the card
-through the polled SD core in [sunxi_mmc.c](../drivers/storage/sunxi_mmc.c),
-using the 1-bit legacy profile at a 400 kHz module clock, after the
-[cold SD admission](#cold-sd-admission-starts-from-boot0s-controller-state)
-below. Its register binding
-admits only read-only identification and transfer commands and refuses FIFO
-writes. Each operation has an absolute deadline in system counter ticks, so
-the loader first samples the counter up to 4,096 times and stops with status 5
-when the value never increases. A counter that boot0 left stopped would
-otherwise leave every deadline unreached while a silent controller holds the
-polling loop.
+The loader first requires separate remote-writer and CPU/cache ownership
+admission. Both currently refuse without the missing cold-chain evidence.
+The [cold-entry gate](cold-entry.md) establishes local EL3 state with
+translation and caches off; it does not establish exclusive memory ownership.
+
+After those prerequisites, the existing [SD core](../drivers/storage/sunxi_mmc.c)
+identifies the card at a 400 kHz module clock. Its high-speed profile reads
+SCR, selects four-bit operation with ACMD6, checks and selects high speed
+with CMD6, then uses a 100 MHz module clock and a 50 MHz card clock at 3.3 V.
+The loader supplies no voltage-switch callback and compiles out UHS-I.
+The adapter permits read commands and refuses the write direction and FIFO
+writes. It shares module encoding and exact DMA descriptor checks with the
+runtime platform through [a733_mmc_read.h](../include/a733_mmc_read.h).
+
+Identification has a two-second deadline, each read has 500 ms, and the
+entire load has 30 seconds. The loader also refuses a backward counter or
+4,096 consecutive samples with no raw counter progress. Admission settling,
+clock changes and final controller stop use the same lifetime bound.
 
 1. Read both header sectors and check each header against the rules above.
 2. Order valid headers by generation, newest first. Equal generations try A
    first.
-3. For the first candidate, copy each extent in 4 KiB chunks to its load
-   address, then hash the destination bytes. A hash mismatch or read failure
-   moves to the other valid slot.
-4. Check the entry prerequisites. While they refuse, publish a 512-byte
-   report at `0x47008200`, magic last, and request the ROM forced-FEL return:
-   RVBAR is set to `0x20` and an AArch32 warm reset is requested, as the RAM
-   monitor does. The [entry path](#the-entry-path-builds-the-resident-contract)
-   follows when they are granted.
+3. Read each extent in requests of at most 256 sectors (128 KiB), then hash
+   the destination bytes. Aligned full sectors go directly to the destination.
+   Headers, unaligned destinations and the last partial sector use a private
+   bounce buffer. Padding never overwrites bytes beyond an extent.
+4. A digest mismatch after clean read completion tries the other valid slot.
+   A transfer fault retains the descriptors and borrowed destination and parks.
+5. Before the [entry path](#the-entry-path-builds-the-resident-contract) or
+   ROM return, require the core to be READY without a borrowed buffer or DMA
+   ownership. Verify controller and IDMAC idle, stop the card clock through
+   the existing UPDATE command, then gate only the SDC0 module. A failed stop
+   parks without reset, fallback or image entry.
 
 The report holds status, detail, selected slot and generation, card capacity,
 start and end counter values and the last SD core result. Per slot it records
@@ -120,15 +129,18 @@ the header state, generation, load state and failing extent.
 | 6 | The resident contract was published and the image entered | Entry address |
 | 7 | Entry refused: no session extent of 808 or 992 bytes at `0x41f00000` (1), or its board magic, version, size, generation or lease, or its OS magic, version or size field differs (2) | 1 or 2 |
 | 8 | WDT0, the ROM redirect words, the RTC FEL flag or CCU word `0x24` was not in the cold state, or arming did not read back | Zero when the loader did not enable WDT0 mode; otherwise the arming counter value |
+| 9 | Remote-writer ownership refused before SD access | Unproven-master mask |
+| 10 | CPU/cache ownership refused before SD access | Zero |
+| 11 | SD ownership remains retained; the loader parks | Original loader status; SD diagnostic fields remain available |
 
-The SD core never retries after a fault, so a read failure during one slot
-also fails the other. An exception during the loader uses the cold-entry
-exception record and parks, because repeating the ROM-return sequence could
-repeat the fault.
+Report words at offsets 320 through 360 hold the selected CMD6 timing,
+configured card rate, completed read count, completed bytes, clean-stop flag
+and DMA ownership-barrier count. Configured frequency is not a measurement.
 
-The loader never writes the card. Fallback therefore covers a slot that fails
-to read or verify; it cannot detect a runtime image that verifies and then
-fails while running. That case needs the rollback procedure below.
+The loader never writes the card. Fallback covers invalid headers and digest
+mismatches after completed reads. It cannot detect an image that verifies and
+then fails while running; that case needs the rollback procedure below.
+Exceptions retain the cold-entry report and park.
 
 ## Cold SD admission starts from boot0's controller state
 
@@ -151,6 +163,8 @@ A733 manual. It refuses unless every check below holds.
 | PF6 | IO-disabled reset value, or an input; no pull or pull-up | Manual 18.14.6.68; boot0 does not configure PF6 |
 | PF bank voltage | 3.3 V in `GPIO_POW_MOD_SEL`, `GPIO_POW_VAL` and `GPIO_POW_VAL_SET_CTL` | Manual 18.14.6.1 to 18.14.6.3; same rule as the native SD platform |
 | SDC0 controller | No command start bit, no busy state, internal DMA disabled | Manual 11.3.8 |
+| Clock parents | Normalized 24 MHz reference, stable unmodulated PERI0_400M branch and effective gates | Existing runtime SD provider and [clock reference](../include/a733_clock_reference.h) |
+| SDC0 interrupt | Disabled, inactive and no pending interrupt; distributor not updating | Existing runtime SD provider |
 
 The SD core assumes a 400 kHz module clock during identification, and
 boot0 leaves the module at its faster transfer rate. PF6 is IO-disabled, so it
@@ -168,8 +182,8 @@ a pause and a slower clock while its bus is idle; the SD core's first command
 is CMD0.
 
 Before every SD core poll, `a733_stage2_card_present` repeats the bus, clock,
-PF0..PF6 configuration and bank voltage checks against the selected values,
-then samples PF6. Any change, or a card that leaves, freezes the SD core with
+PF0..PF6 configuration, bank voltage, clock parent and interrupt checks against
+the selected values, then samples PF6. Any change, or a card that leaves, freezes the SD core with
 an admission fault.
 
 Two conditions have no register to check, and neither is verified.
@@ -183,26 +197,35 @@ Two conditions have no register to check, and neither is verified.
   U-Boot's older generic `private_boot0.h` reads 1 as no PMIC. The boot0
   binary contains PMU driver code for the DCDC, ALDO and CLDO rails. The card
   rail state after boot0 needs a board observation.
-- **Exclusive use of SDC0.** The cold path starts only one application core:
-  the cold-entry gate requires zero U-Boot and OP-TEE pointers, and the
-  monitor package holds no other image. No other agent, such as the E902
-  core, is known to use SDC0, but that is not established; it depends on the
-  [remote-writer exclusion](#the-loader-stops-before-entering-the-image)
-  prerequisite.
+- **Exclusive use of SDC0 and its memory.** The package holds no other image
+  and its U-Boot and OP-TEE pointers are zero. This does not prove that other
+  Arm cores are off or that dirty shared-cache lines are absent. Separate
+  CPU/cache and remote-writer admission must establish those conditions.
 
 A board run is also needed to confirm the boot0 module clock value, which the
 models represent with an assumed transfer rate.
 
-A board run of the cold path must account for two properties of admission.
-First, admission writes the PF6 configuration and the SMHC0 module clock, so
-it changes hardware state before any card access. The writes reach only
-SDC0 registers, every write is read back, and SD commands stay read-only.
-Second, once admission accepts, the loader reads each
-slot at the 400 kHz identification module clock, which gives a 200 kHz
-card clock on a 1-bit bus, about 25 KB/s. A cold boot with a valid slot
-therefore reads the full image and its assets before the forced-FEL return:
-about 40 seconds per megabyte, or several minutes for a multi-megabyte
-slot.
+The high-speed clock change follows the existing runtime sequence: the core
+stops the card clock and waits for UPDATE completion before the adapter gates
+the SDC0 module, changes its source/divider and enables it. Each write is read
+back. Shared parent clocks, bus gates, reset and supply rails remain owned.
+
+The linked loader reserves 33 descriptors (528 bytes) and a 128 KiB bounce
+buffer, both aligned to 64 bytes inside its existing 4 MiB monitor reservation.
+The fixed 32 KiB code boundary and report addresses remain unchanged. With
+cold admission linked, the SD change adds 3,480 text bytes and 127,600 BSS
+bytes. Each request validates at most 33 descriptors, reading their four
+fields; it adds no per-block translation or cache-maintenance loop. The shared
+helper extraction adds 32 bytes to the compiled runtime provider and one
+function call per submitted DMA command, with the same descriptor reads.
+
+A 15 MiB contiguous payload needs 120 maximum-size reads instead of 3,840
+4 KiB reads. At the configured 50 MHz four-bit rate, its data-only bus time
+has a 0.63-second lower bound. Command, card, polling and uncached SHA-256
+costs are additional and unmeasured. The 30-second limit bounds failure; it
+does not predict throughput. CPU caches remain disabled. A practical cold
+boot still requires resolved CPU/cache ownership, physical DMA qualification
+and measured end-to-end loading time.
 
 ## The loader stops before entering the image
 
@@ -343,48 +366,25 @@ full backup is the only way to restore it.
 
 ## Checks
 
-[standalone-boot-loader.py](../checks/standalone-boot-loader.py) feeds the flat
-loader through the pinned boot0 parser and cleanup model, then executes the
-linked AArch64 monitor from `0x47000000`. A Python SD controller and card model
-follows the existing C card model's register behavior and serves card images
-built by the host tool. A register model holds the SMHC0 clock and bus
-registers and the PF bank in the state boot0 leaves, with an assumed transfer
-clock of `PERI0_400M` divided by four. The actual cold SD admission runs
-against it. Twenty-five cases cover:
+[standalone-boot-loader.py](../checks/standalone-boot-loader.py) runs the linked
+AArch64 loader after the pinned boot0 parser and cleanup model. Sparse card
+images come from the actual host slot producer. Remote-writer and CPU/cache
+ownership are explicit model grants; the native prerequisites still refuse.
 
-- slot A alone, and a newer slot B;
-- slot B with a corrupt payload, a corrupt header, a load range reaching the
-  monitor reservation, and an update interrupted before its header;
-- no valid header, both payloads corrupt, and a controller read fault;
-- a PF6 already configured as an input with pull-up, which needs only the
-  clock writes;
-- six boot0 states that admission refuses before any write or controller
-  access: a gated module clock, an asserted reset, PF3 in another function, a
-  missing PF pull-up, PF6 as an output, and a 1.8 V PF bank;
-- a pending controller command and enabled internal DMA, refused before any
-  controller write;
-- card detection reading high, refused after the admission writes;
-- a module clock that does not read back, refused at that write;
-- card detection reporting no card, and another writer restoring a transfer
-  clock, each after the first payload read;
-- a stopped system counter, without controller access;
-- the unchanged entry gate refusing EL1, and an exception parking.
+The focused high-speed/DMA cases exercise maximum-size direct transfers,
+partial-sector canaries, unaligned destinations, digest fallback, exact
+chain refusal, DMA errors, reset/idle retention, clock-parent and interrupt
+refusal, changed provider state, card removal and counter/deadline failures.
+The model observes the actual DMA ownership callbacks and validates every
+submitted descriptor against the current extent before producing card bytes.
+Completion must precede the AFTER callback, and all reset/idle checks must
+precede clean stop or return. Retained cases require no ROM reset or image entry.
 
-Every case checks the report, the ROM-return request and the copied bytes.
-Every admitted case checks that admission writes only PF_PUL0, PF_CFG0 and
-the SMHC0 clock register, in the documented order and values, and that the
-first card-detect sample comes at least 1 ms after PF6 becomes an input. The
-native entry prerequisites refuse in every case. It
-also checks that data accesses stay naturally aligned, as Device memory
-requires, and that no store leaves the monitor storage, the load extents and
-the reset-vector registers. Once the loader starts, a store to the cold report
-also fails the case, and all 512 report bytes must match their values at
-loader entry. The loader never executes from the load window or
-writes the system control register. The host tool reproduces the loader's
-selection and per-slot states on every card image without a modeled card
-fault. System registers, the counter, the SD controller and card, and the
-clock and PF registers are modeled; the boot0 module clock value and the card
-supply are not observed.
+Evidence is under `~/.cache/sunstoneos/evidence/resume-stage2-sd-1026/`.
+The affected runtime provider's sanitizer and native build checks also pass.
+Existing arithmetic, SD protocol and physical high-speed PIO evidence retain
+their prior scope. These checks model system registers, clock/IRQ state,
+DMA and cache visibility; they do not qualify cold boot or physical DMA.
 
 [standalone-boot-slots.py](../checks/standalone-boot-slots.py) covers
 allocation refusals, the install order with container extents, an interrupted

@@ -4,10 +4,15 @@
 #include "sunxi_smhc.h"
 #include "a733_cpu_entry.h"
 #include "a733_remote_writers.h"
+#include "a733_clock_reference.h"
+#include "a733_mmc_read.h"
 #include <stdint.h>
 
 int a733_stage2_card_admission(uint32_t module_hz);
 int a733_stage2_card_present(void);
+int a733_stage2_card_module(unsigned divisor);
+int a733_stage2_card_gate(void);
+int a733_stage2_time_valid(void);
 int a733_stage2_remote_writers_excluded(void);
 uint32_t a733_stage2_remote_writers_mask(void);
 int a733_stage2_cpu_cache_owned(void);
@@ -28,10 +33,10 @@ int a733_stage2_entry_state(void);
  * - PF is a 3.3 V bank, as the native SD platform requires; manual 18.14.6.1
  *   to 18.14.6.3;
  * - no command, transfer or internal DMA is in progress.
- * The cold path starts only this application core: the cold-entry gate
- * requires zero U-Boot and OP-TEE pointers, and the monitor package holds no
- * other image. No other agent, such as the E902, is known to use SDC0, but
- * that is not established (see a733_stage2_remote_writers_excluded).
+ * The package holds no other image and its U-Boot/OP-TEE pointers are zero.
+ * That does not establish secondary-CPU exclusion or absence of dirty shared
+ * cache lines. The separate CPU/cache and remote-writer admission decisions
+ * must precede this controller admission.
  * The card supply has no read-only observation, because the PMIC needs bus
  * transactions. The only evidence for it is that its rails served boot0's
  * own read of this card. boot0 is configured for the AXP2202 and may program
@@ -67,6 +72,7 @@ int a733_stage2_entry_state(void);
 #define SETTLE_SAMPLES (UINT32_C(1) << 24)
 
 static int selected;
+static uint32_t running_module;
 
 static uint32_t rd(uint32_t address)
 {
@@ -99,12 +105,28 @@ static int bank_3v3(void)
     return ((rd(GPIO_POW_MOD_SEL) >> 10) & 3) <= 2 && ((rd(GPIO_POW_VAL) >> 10) & 3) == 2 &&
         (rd(GPIO_POW_VAL_SET_CTL) & 1);
 }
+/* Same normalized reference and PERI0_400M branch as the runtime provider.
+ * Shared parents are read only throughout this cold-owner lifetime. */
+static int parent(void)
+{
+    uint32_t required=(1u<<11)|(1u<<2)|(1u<<1);
+    return a733_clock_ref24_valid(rd(0x07090160),rd(0x02002000)) &&
+        a733_clock_peri0_valid(rd(0x020020a0)) && !(rd(0x020020a8)&(1u<<31)) &&
+        !(rd(0x020020ac)&(1u<<27)) &&
+        (rd(0x02003908)&(required|(required<<16)))==(required|(required<<16)) &&
+        (rd(0x02003988)&(required<<16))==(required<<16);
+}
+static int masked(void)
+{
+    return !(rd(0x03400000)&(1u<<31)) && !(rd(0x03400118)&2u) &&
+        !(rd(0x03400318)&2u) && !(rd(0x03400218)&2u);
+}
 /* SDC0 registers are read last, behind the checked gate and reset. */
 static int inherited(void)
 {
     uint32_t module = rd(CCU_SMHC0_CLK), function = rd(PF_CFG0) & 0x0fffffffu;
     uint32_t pull = rd(PF_PUL0) & 0x3fffu, pf6 = function & PF6_FUNCTION;
-    return (rd(CCU_SMHC0_BGR) & BUS_OPEN) == BUS_OPEN &&
+    return parent() && masked() && (rd(CCU_SMHC0_BGR) & BUS_OPEN) == BUS_OPEN &&
         (module & MODULE_GATE) && !(module & ~MODULE_MASK) && ((module >> 24) & 7) <= 4 &&
         (function & ~PF6_FUNCTION) == SDC0_FUNCTIONS && (pf6 == PF6_FUNCTION || !pf6) &&
         (pull & ~PF6_PULL) == SDC0_PULLS && (pull & PF6_PULL) <= PF6_PULL_UP && bank_3v3() &&
@@ -114,15 +136,15 @@ static int inherited(void)
 /* Before every poll: the selected clock, bus, pins and bank voltage hold. */
 static int retained(void)
 {
-    return selected && (rd(CCU_SMHC0_BGR) & BUS_OPEN) == BUS_OPEN &&
-        rd(CCU_SMHC0_CLK) == IDENTIFY_MODULE && (rd(PF_CFG0) & 0x0fffffffu) == SDC0_FUNCTIONS &&
+    return selected && a733_stage2_time_valid() && parent() && masked() && (rd(CCU_SMHC0_BGR) & BUS_OPEN) == BUS_OPEN &&
+        rd(CCU_SMHC0_CLK) == running_module && (rd(PF_CFG0) & 0x0fffffffu) == SDC0_FUNCTIONS &&
         (rd(PF_PUL0) & 0x3fffu) == (SDC0_PULLS | PF6_PULL_UP) && bank_3v3();
 }
 
 /* The SD core calls this once, before its first controller access. */
 int a733_stage2_card_admission(uint32_t module_hz)
 {
-    if (module_hz != 400000 || selected || !inherited()) return 0;
+    if (module_hz != 400000 || selected || !a733_stage2_time_valid() || !inherited()) return 0;
     /* PF6 takes its pull-up before it becomes an input, as in the pin manager. */
     if (!update(PF_PUL0, PF6_PULL, PF6_PULL_UP) || !update(PF_CFG0, PF6_FUNCTION, 0)) return 0;
     uint32_t gated = rd(CCU_SMHC0_CLK) & MODULE_MASK & ~MODULE_GATE;
@@ -131,7 +153,8 @@ int a733_stage2_card_admission(uint32_t module_hz)
         !update(CCU_SMHC0_CLK, MODULE_MASK, IDENTIFY_MODULE)) return 0;
     uint64_t start = counter();
     for (uint32_t n = 0; counter() - start < SETTLE_TICKS; )
-        if (++n == SETTLE_SAMPLES) return 0;
+        if (++n == SETTLE_SAMPLES || !a733_stage2_time_valid()) return 0;
+    running_module=IDENTIFY_MODULE;
     selected = 1;
     return a733_stage2_card_present();
 }
@@ -142,6 +165,31 @@ int a733_stage2_card_admission(uint32_t module_hz)
 int a733_stage2_card_present(void)
 {
     return retained() && !(rd(PF_DAT) & (UINT32_C(1) << 6));
+}
+
+/* The existing core has stopped CLKCR and completed UPDATE before this call.
+ * Only SDC0's module gate/source/divider changes; the card remains at 3.3 V. */
+int a733_stage2_card_module(unsigned divisor)
+{
+    uint32_t next;
+    if (!retained() || !a733_mmc_module_setting(SUNXI_MMC_SD_HIGH_SPEED4,divisor,&next) ||
+        rd(SDC0+SUNXI_SMHC_CLKCR) || (rd(SDC0+SUNXI_SMHC_CMD)&SUNXI_SMHC_CMD_START) ||
+        (rd(SDC0+SUNXI_SMHC_STATUS)&SUNXI_SMHC_STATUS_BUSY)) return 0;
+    if (!update(CCU_SMHC0_CLK,MODULE_MASK,running_module&~MODULE_GATE) ||
+        !a733_stage2_time_valid() || !update(CCU_SMHC0_CLK,MODULE_MASK,next&~MODULE_GATE) ||
+        !a733_stage2_time_valid() || !update(CCU_SMHC0_CLK,MODULE_MASK,next)) return 0;
+    running_module=next;
+    return retained();
+}
+/* Called only after the loader proved card clock off and controller idle. */
+int a733_stage2_card_gate(void)
+{
+    if (!retained() || rd(SDC0+SUNXI_SMHC_CLKCR) ||
+        (rd(SDC0+SUNXI_SMHC_CMD)&SUNXI_SMHC_CMD_START) ||
+        (rd(SDC0+SUNXI_SMHC_STATUS)&SUNXI_SMHC_STATUS_BUSY) || rd(SDC0+SUNXI_SMHC_DMAC) ||
+        !update(CCU_SMHC0_CLK,MODULE_MASK,running_module&~MODULE_GATE)) return 0;
+    selected=0;
+    return a733_stage2_time_valid();
 }
 
 /* Sample before the loader mutates SDC0 or copies any slot extent. The mask

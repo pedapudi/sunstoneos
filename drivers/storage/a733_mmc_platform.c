@@ -3,6 +3,7 @@
 #include "a733_range.h"
 #include "a733_storage_update.h"
 #include "sunxi_smhc.h"
+#include "a733_mmc_read.h"
 #define CCU UINT32_C(0x02002000)
 #define PIO UINT32_C(0x02000000)
 #define GIC UINT32_C(0x03400000)
@@ -229,19 +230,6 @@ static int core_read(void *v,uint32_t off,uint32_t *out)
  * write direction and walks the chain the core built: every buffer inside the
  * read's borrowed buffer, the sizes summing to the byte count, the last
  * descriptor pointing at the zeroed spare slot. So IDMAC writes nowhere else. */
-static int dma_value(const struct a733_mmc_platform *p,uint32_t off,uint32_t value)
-{
-    uintptr_t area=(uintptr_t)p->config.dma;
-    switch(off) {
-    case SUNXI_SMHC_FTRGL:return area&&value==SUNXI_SMHC_FTRGL_VALUE;
-    case SUNXI_SMHC_DLBA:return area&&value==(uint32_t)(area>>2);
-    case SUNXI_SMHC_IDST:return area&&!(value&~SUNXI_SMHC_IDST_CLEAR);
-    case SUNXI_SMHC_IDIE:return !value;
-    case SUNXI_SMHC_DMAC:return !value||(area&&(value==SUNXI_SMHC_DMAC_RESET||value==SUNXI_SMHC_DMAC_ON));
-    case SUNXI_SMHC_GCTRL:return area||!(value&SUNXI_SMHC_GCTRL_DMA_ENABLE);
-    default:return 1;
-    }
-}
 static int dma_chain(struct a733_mmc_platform *p,uint32_t command)
 {
     uint32_t g,dlba,count;
@@ -250,26 +238,12 @@ static int dma_chain(struct a733_mmc_platform *p,uint32_t command)
     if(!p->config.dma||(command&SUNXI_SMHC_CMD_WRITE)||!p->core.borrowed||
        !rd(p,p->base+SUNXI_SMHC_DLBA,&dlba)||dlba!=(uint32_t)((uintptr_t)p->config.dma>>2)||
        !rd(p,p->base+SUNXI_SMHC_BCNT,&count))return 0;
-    uintptr_t first=(uintptr_t)p->core.borrowed;
-    if(!count||count!=p->core.borrowed_bytes||count>SUNXI_MMC_MAX_DMA_BLOCKS*512u)return 0;
-    unsigned n=(count+SUNXI_MMC_DMA_SEGMENT-1)/SUNXI_MMC_DMA_SEGMENT;
-    for(unsigned i=0;i<n;++i) {
-        volatile const struct sunxi_mmc_dma_descriptor *d=&p->config.dma[i];
-        uint32_t expected=SUNXI_SMHC_DES_OWN|SUNXI_SMHC_DES_CH|SUNXI_SMHC_DES_DIC;
-        if(!i)expected|=SUNXI_SMHC_DES_FD;
-        if(i==n-1)expected=(expected|SUNXI_SMHC_DES_LD)&~SUNXI_SMHC_DES_DIC;
-        uint32_t left=count-i*SUNXI_MMC_DMA_SEGMENT;
-        if(d->config!=expected||d->size!=(left<SUNXI_MMC_DMA_SEGMENT?left:SUNXI_MMC_DMA_SEGMENT)||
-           d->buffer!=(uint32_t)((first+(uintptr_t)i*SUNXI_MMC_DMA_SEGMENT)>>2)||
-           d->next!=(uint32_t)((uintptr_t)&p->config.dma[i+1]>>2))return 0;
-    }
-    volatile const struct sunxi_mmc_dma_descriptor *spare=&p->config.dma[n];
-    return !spare->config&&!spare->size&&!spare->buffer&&!spare->next;
+    return a733_mmc_dma_chain(p->config.dma,p->core.borrowed,p->core.borrowed_bytes,count);
 }
 static int core_write(void *v,uint32_t off,uint32_t value)
 {
     struct a733_mmc_platform *p=v;
-    int ok=core_guard(p)&&dma_value(p,off,value)&&
+    int ok=core_guard(p)&&a733_mmc_dma_value((uintptr_t)p->config.dma,off,value)&&
         (off!=SUNXI_SMHC_CMD||!(value&SUNXI_SMHC_CMD_DATA)||dma_chain(p,value))&&wr(p,p->base+off,value);
     if(!ok)fail(p);return ok;
 }
@@ -305,19 +279,11 @@ static int core_admit(void *v,uintptr_t token,enum sunxi_mmc_kind kind,uint32_t 
 {struct a733_mmc_platform *p=v;return kind==p->config.kind&&hz==800000&&core_retained(v,token);}
 /* Profiles 1-2 use PERI0_400M/4..32. UHS-I adds 400M/2 (100 MHz card clock)
  * and PERI0_300M/1 (150 MHz, the board tree's SDC0 limit). */
-static int module_setting(const struct a733_mmc_platform *p,unsigned divisor,uint32_t *out)
-{
-    unsigned m=divisor&0xffu,source=(divisor&SUNXI_MMC_MODULE_300M)?2u:1u;
-    int ok=!(divisor&~(0xffu|SUNXI_MMC_MODULE_300M))&&(p->config.sd_profile==SUNXI_MMC_SD_UHS_SDR104?
-        ((source==2&&m==1)||(source==1&&(m==2||m==4))):(source==1&&m>=4&&m<=32));
-    if(ok)*out=UINT32_C(0x80000000)|((uint32_t)source<<24)|(m-1);
-    return ok;
-}
 static int core_sd_module(void *v,uintptr_t token,unsigned divisor)
 {
     struct a733_mmc_platform *p=v;uint32_t ctrl,command,status,next=0;
     if(token!=(uintptr_t)p||p->config.kind!=SUNXI_MMC_SD||!p->config.sd_profile||
-       !module_setting(p,divisor,&next)||(((next>>24)&7)==2&&peri300(p)!=1)||
+       !a733_mmc_module_setting(p->config.sd_profile,divisor,&next)||(((next>>24)&7)==2&&peri300(p)!=1)||
        !core_guard(p)||!profile(p)||!voltage(p,0)||masked(p)!=1||
        atomic_load_explicit(&p->clocks->failed,memory_order_acquire)||p->pins->failed||
        !rd(p,p->base+4,&ctrl)||ctrl||!rd(p,p->base+0x18,&command)||(command&BIT(31))||

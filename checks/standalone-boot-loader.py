@@ -49,7 +49,10 @@ PF_CFG0, PF_DAT, PF_PUL0 = PIO + 0x300, PIO + 0x310, PIO + 0x330
 # rate is not modeled), PF0..PF5 SDC0 function 2 with pull-up from the boot0
 # header, PF6 at its IO-disabled reset value, and the PF bank at 3.3 V.
 BOOT0_STATE = {SMHC0_CLK: 0x81000003, SMHC0_BGR: 0x00010001, POW_MOD_SEL: 0,
-               POW_VAL: 0x01155950, POW_VAL_SET_CTL: 1, PF_CFG0: 0x0f222222, PF_PUL0: 0x555}
+               POW_VAL: 0x01155950, POW_VAL_SET_CTL: 1, PF_CFG0: 0x0f222222, PF_PUL0: 0x555,
+               0x07090160:0x10000002, CCU:0xf8636300, CCU+0xa0:0xfe106300,
+               CCU+0xa8:0, CCU+0xac:0, CCU+0x1908:0x08060806, CCU+0x1988:0x08060000,
+               0x03400000:0,0x03400118:0,0x03400218:0,0x03400318:0}
 # Admission's writes: PF6 pull-up, PF6 input, then the module clock gated,
 # moved to SYS_CLK24M / (2 * 30) and enabled.
 SELECTED = [(PF_PUL0, 0x1555), (PF_CFG0, 0x00222222), (SMHC0_CLK, 0x01000003),
@@ -72,7 +75,7 @@ def field(words, first, count, value):
 
 
 class Card:
-    """SD controller and SDHC card, following checks/sunxi-mmc.c for the legacy profile."""
+    """SD controller and SDHC card, following the accepted SD mode and IDMAC models."""
 
     def __init__(self, image, fail_sector=None):
         assert len(image) == CARD_SECTORS * 512
@@ -84,15 +87,71 @@ class Card:
         self.csd, self.cid = [0] * 4, [0x12345678 + i for i in range(4)]
         field(self.csd, 126, 2, 1)
         field(self.csd, 80, 4, 9)
-        field(self.csd, 84, 12, 5)
+        field(self.csd, 96, 8, 0x32)
+        field(self.csd, 84, 12, 5 | (1 << 10))
         field(self.csd, 48, 22, CARD_SECTORS // 1024 - 1)
         self.state, self.app, self.ocr_calls, self.selected = 0, False, 0, False
         self.data, self.position, self.data_command = b'', 0, 0
         self.commands, self.reads, self.accesses = [], [], 0
+        self.owner=None; self.dma=None; self.dma_events=[]; self.variant='normal'
+        self.reset_reads={}; self.idle_reads=0; self.dma_polls=0
+
+    def ownership(self,uc,buffer,size,phase):
+        assert not buffer&63 and not size&511 and 512<=size<=131072
+        if phase==0:
+            assert self.owner is None and self.dma is None
+            self.owner=(buffer,size)
+        else:
+            assert phase==1 and self.owner==(buffer,size) and self.dma and self.dma['complete']
+            assert not self.reg[0x80//4] and not self.reg[0]&0x27 and not self.idle_reads
+            assert all(not struct.unpack('<I',uc.mem_read(d,4))[0]&(1<<31) for d in self.dma['descriptors'])
+            self.owner=None; self.dma=None
+        self.dma_events.append((phase,buffer,size))
+
+    def dma_command(self,uc,value):
+        count=self.reg[0x14//4]; first=self.reg[0x1c//4]; area=self.reg[0x84//4]<<2
+        assert self.owner and self.owner[1]==count and not self.reg[0]&(1<<31)
+        if self.owner[0]!=self.bounce:
+            matches=[e for e in self.extents if e['first_sector']<=first<e['first_sector']+(e['bytes']+511)//512]
+            assert len(matches)==1
+            e=matches[0]; displacement=(first-e['first_sector'])*512
+            assert self.owner[0]==e['load']+displacement and count<=e['bytes']-displacement
+
+        assert value&63 in (17,18) and not value&(1<<10) and not self.reg[0x8c//4]
+        buffer,_=self.owner; n=(count+4095)//4096; descriptors=[]
+        for i in range(n):
+            d=area+16*i; flags=(1<<31)|16|2|(8 if i==0 else 0)
+            if i==n-1: flags=(flags|4)&~2
+            assert struct.unpack('<4I',uc.mem_read(d,16))==(flags,min(4096,count-i*4096),(buffer+i*4096)>>2,(d+16)>>2)
+            descriptors.append(d)
+        assert bytes(uc.mem_read(area+16*n,16))==bytes(16)
+        self.dma=dict(complete=False,descriptors=descriptors,buffer=buffer,
+                      data=bytes(self.image[first*512:first*512+count]))
+        self.dma_polls=0
+
 
     def read(self, uc, offset, size, user):
         assert size == 4 and offset <= 0x300 and not offset & 3, hex(offset)
         self.accesses += 1
+        if offset in self.reset_reads:
+            self.reset_reads[offset]-=1
+            if not self.reset_reads[offset]:
+                self.reg[offset//4]&=~(1 if offset==0x80 else 7)
+                del self.reset_reads[offset]
+        if offset==0x88 and self.idle_reads:
+            if self.variant!='idle-stuck': self.idle_reads-=1
+            self.reg[offset//4]=(self.reg[offset//4]&~0x1e000)|(0x2000 if self.idle_reads else 0)
+        if self.dma and offset==0x38 and not self.dma['complete']:
+            self.dma_polls+=1
+            if self.variant=='dma-error': self.reg[0x88//4]|=4
+            elif self.dma_polls>=3 and not (self.variant=='counter-late-stall' and len(self.reads)>=3):
+                self.dma['complete']=True; self.position=len(self.data)
+                uc.mem_write(self.dma['buffer'],self.dma['data'])
+                for d in self.dma['descriptors']:
+                    flags=struct.unpack('<I',uc.mem_read(d,4))[0]
+                    uc.mem_write(d,struct.pack('<I',flags&~(1<<31)))
+                self.reg[0x88//4]=2
+        if offset==0x48: return min(512,len(self.data)) if self.dma else 0
         drained = self.position == len(self.data)
         if offset == 0x38 and self.data_command and drained:
             self.reg[0x38 // 4] |= 8 | ((1 << 14) if self.data_command & (1 << 12) else 0)
@@ -112,18 +171,28 @@ class Card:
         if offset == 0x38:
             assert not value & 0xffff0000
             self.reg[0x38 // 4] &= ~value
+        elif offset == 0x88:
+            self.reg[offset//4]&=~value
+        elif offset==0x80:
+            self.reg[offset//4]=value
+            if value==1:
+                if self.variant!='reset-stuck' or self.dma is None: self.reset_reads[offset]=2
+                if self.dma: self.idle_reads=2
         elif offset == 0:
-            self.reg[0] = value & ~7
+            self.reg[0] = value
+            if value&7: self.reset_reads[offset]=2
             if value & 7:
                 self.data, self.position = b'', 0
         else:
             self.reg[offset // 4] = value
         if offset == 0x18:
             self.command(value)
+            if value&(1<<9) and self.reg[0]&32:
+                self.dma_command(uc,value)
 
     def command(self, value):
         if value & (1 << 21):
-            self.reg[0x18 // 4] = 0
+            self.reg[0x18 // 4] = value if self.variant=='stop-stuck' and len(self.reads)>=6 else 0
             return
         assert not value & (1 << 10), 'write-direction command'
         number, argument = value & 63, self.reg[0x1c // 4]
@@ -139,7 +208,7 @@ class Card:
             assert self.state == 0 and argument == 0x1aa
             self.reg[0x20 // 4] = 0x1aa
         elif number == 55:
-            assert self.state == 0 and not argument
+            assert argument == (0x12340000 if self.selected else 0)
             self.app = True
             self.reg[0x20 // 4] |= 1 << 5
         elif number == 41:
@@ -161,10 +230,21 @@ class Card:
         elif number == 13:
             assert self.selected and argument == 0x12340000
             self.reg[0x20 // 4] = 0x900
+        elif number==51:
+            assert self.app and self.selected and not argument and self.reg[0x14//4]==8
+            self.app=False; self.data=bytes([2,5,0,0,0,0,0,0]); self.data_command=value
+        elif number==6:
+            if self.app:
+                assert self.selected and argument==2 and not value&(1<<9)
+                self.app=False
+            else:
+                assert argument in (0x00fffff1,0x80fffff1) and self.reg[0x14//4]==64
+                data=bytearray(64); data[13]=2; data[16]=1
+                self.data=bytes(data); self.data_command=value
         elif number in (17, 18):
             total = self.reg[0x14 // 4]
             assert self.selected and self.reg[0x10 // 4] == 512 and value & (1 << 9)
-            assert 512 <= total <= 4096 and not total % 512 and (number == 18) == bool(value & (1 << 12))
+            assert 512 <= total <= 131072 and not total % 512 and (number == 18) == bool(value & (1 << 12))
             assert argument + total // 512 <= CARD_SECTORS
             self.reads.append((argument, total // 512))
             self.data = bytes(self.image[argument * 512:argument * 512 + total])
@@ -230,7 +310,12 @@ def main():
     parser.add_argument('--build', type=Path, required=True, help='stage-2 CMake build directory')
     parser.add_argument('--boot0', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--sd-only', action='store_true', help='Changed high-speed/DMA path only')
+    parser.add_argument('--sd-extra', action='store_true', help='Remaining DMA ownership/counter cases')
+    parser.add_argument('--case', action='append', default=[], help='Select an --sd-extra case')
     args = parser.parse_args()
+    if args.case and not args.sd_extra: parser.error("--case requires --sd-extra")
+    if args.sd_extra: args.sd_only=True
     args.output.mkdir(parents=True, exist_ok=False)
     raw = (args.build / 'a733-stage2.bin').read_bytes()
     table = symbols(args.build / 'a733-stage2.elf')
@@ -260,7 +345,7 @@ def main():
     tool(['allocate', '--backup', str(empty), '--slot-a', '40960:8192',
                 '--slot-b', '49152:8192', '--output', str(allocation)])
     payloads = {}
-    for name, size, seed in (('image1', 6000, 1), ('asset1', 3000, 2), ('image2', 7000, 3), ('asset2', 2500, 4)):
+    for name, size, seed in (('image1', 6000, 1), ('asset1', 3000, 2), ('image2', 131600 if args.sd_only else 7000, 3), ('asset2', 513 if args.sd_only else 2500, 4)):
         data = bytes((i * 131 + seed * 17 + i // 251) & 255 for i in range(size))
         payloads[name] = data
         (work / name).write_bytes(data)
@@ -273,7 +358,7 @@ def main():
     def plan(source, number, name):
         tool(['plan', '--allocation', str(allocation), '--card-image', str(source),
                     '--image', '%s@0x41000000' % (work / ('image%d' % number)),
-                    '--entry', '0x41000000', '--asset', '%s@0x44000000' % (work / ('asset%d' % number)),
+                    '--entry', '0x41000000', '--asset', '%s@0x%x' % (work / ('asset%d' % number), 0x44000001 if args.sd_only else 0x44000000),
                     '--output', str(work / name)])
         return work / name / 'plan.json'
 
@@ -298,8 +383,10 @@ def main():
     cases = []
 
     def run(name, card_bytes, expected, fail_sector=None, registers=None, vector=False,
-            counter_step=2400, expect_writes='all', sdc0=None, **board_state):
+            counter_step=2400, expect_writes='all', sdc0=None, variant='normal', **board_state):
         card = Card(card_bytes, fail_sector)
+        card.variant=variant
+        card.bounce=table["chunk"];card.extents=[e for plan in headers.values() for e in plan["extents"]]
         for offset, value in (sdc0 or {}).items():
             card.reg[offset // 4] = value
         board = Board(card, lambda: values['cntpct_el0'], **board_state)
@@ -307,10 +394,12 @@ def main():
         cpu.mem_map(RAM, RAM_END - RAM)
         cpu.mem_map(RVBAR, 0x1000)
         cpu.mmio_map(SDC0, 0x1000, card.read, None, card.write, None)
-        for base in (PIO, CCU):
+        for base in (PIO, CCU, CCU+0x1000, 0x07090000, 0x03400000):
             read, write = board.page(base)
             cpu.mmio_map(base, 0x1000, read, None, write, None)
         cpu.mem_write(0x47000000, inherited)
+        canaries={e['load']+e['bytes']:0xa7 for e in headers['B']['extents']}
+        for address,value in canaries.items(): cpu.mem_write(address,bytes([value]))
         cpu.mem_write(0x47008000, b'\xa5' * (table['a733_stage2_stack_top'] - 0x47008000))
         values = {'currentel': 12, 'mpidr_el1': 0x81000000, 'midr_el1': 0x412fd050,
                   'sctlr_el3': 0x30c50832, 'scr_el3': 0x30, 'cntfrq_el0': 0,
@@ -319,6 +408,18 @@ def main():
                   'elr_el3': table['a733_stage2_main'], 'spsr_el3': 0x3cd, **(registers or {})}
         controls, stops, foreign, report_writes, entered, unaligned = [], [], [], [], [], []
         cold_at_entry = []
+
+        def ownership(u,address,size,context):
+            buffer=u.reg_read(a64.UC_ARM64_REG_X1); count=u.reg_read(a64.UC_ARM64_REG_X2)
+            phase=u.reg_read(a64.UC_ARM64_REG_X3)
+            assert (table['chunk']<=buffer and buffer+count<=table['chunk']+131072 or
+                    any(lo<=buffer and buffer+count<=hi for lo,hi in windows)), (name,hex(buffer),count)
+            card.ownership(u,buffer,count,phase)
+            if variant=='chain-buffer' and phase==0:
+                u.mem_write(table['descriptors']+8,struct.pack('<I',(buffer+64)>>2))
+
+        cpu.hook_add(UC_HOOK_CODE,ownership,begin=table['dma_sync'],end=table['dma_sync'])
+
 
         def instruction(u, address, size, context):
             mnemonic, operands = system[address]
@@ -330,7 +431,11 @@ def main():
             if mnemonic == 'mrs':
                 value = values[second_operand]
                 if second_operand == 'cntpct_el0':
-                    values['cntpct_el0'] += counter_step  # 100 us per sample by default.
+                    step=counter_step
+                    if len(card.reads)>=3:
+                        if variant=='counter-late-stall': step=0
+                        elif variant=='lifetime-expired': step=24*31000000
+                    values['cntpct_el0'] += step
                 u.reg_write(getattr(a64, 'UC_ARM64_REG_' + first_operand.upper()), value)
             else:
                 assert first_operand in ('daifset', 'vbar_el3', 'rmr_el3'), first_operand
@@ -388,15 +493,18 @@ def main():
         report = bytes(cpu.mem_read(0x47008200, 512))
         # Admission writes only PF6 and the SMHC0 module clock, in order, and
         # samples card detection only after the PF6 pull-up has settled.
-        if isinstance(expect_writes, list):
-            assert [w[:2] for w in board.writes] == expect_writes and board.detect_reads, (name, board.writes)
-        elif expect_writes:
-            assert [w[:2] for w in board.writes] == SELECTED[:len(board.writes)], (name, board.writes)
-            if expect_writes == 'all':
-                assert len(board.writes) == len(SELECTED) and board.detect_reads, (name, board.writes)
-                assert board.detect_reads[0] - board.writes[1][2] >= SETTLE_TICKS, name
+        observed=[w[:2] for w in board.writes]
+        initial=expect_writes if isinstance(expect_writes,list) else SELECTED
+        if expect_writes:
+            assert observed[:len(initial)]==initial[:len(observed)],(name,observed)
+            extra=observed[len(initial):]
+            sequence=[(SMHC0_CLK,0x11d),(SMHC0_CLK,0x01000003),
+                      (SMHC0_CLK,0x81000003),(SMHC0_CLK,0x01000003)]
+            assert extra==sequence[:len(extra)],(name,observed)
+            if board.detect_reads and len(board.writes)>1 and not isinstance(expect_writes,list):
+                assert board.detect_reads[0]-board.writes[1][2]>=SETTLE_TICKS,name
         else:
-            assert not board.writes and not board.detect_reads, (name, board.writes)
+            assert not board.writes and not board.detect_reads,(name,board.writes)
         result = {'case': name, 'stops': stops, 'controls': controls, 'card_accesses': card.accesses,
                   'card_writes': card.writes, 'card_reads': len(card.reads),
                   'board_writes': [[hex(a), hex(v)] for a, v, _ in board.writes],
@@ -415,9 +523,24 @@ def main():
         per_slot = [struct.unpack_from('<4Q', report, 128 + 32 * s) for s in range(2)]
         status, detail, selected, generation = fields[3], fields[4], fields[5], fields[6]
         assert fields[:3] == (REPORT_MAGIC, 1, 512) and report_writes[-1] == 0x47008200
-        assert not any(report[192:]) and not any(report[112:128])
-        assert controls[-1] == ['rmr_el3', 2] and stops == ['wfi']
-        assert struct.unpack('<2I', cpu.mem_read(0x08001004, 8)) == (0x20, 0)
+        assert not any(report[192:320]) and not any(report[368:]) and not any(report[112:128])
+        sd=struct.unpack_from('<6Q',report,320)
+        if status==11:
+            assert stops==['wfe'] and not any(c[0]=='rmr_el3' for c in controls)
+            assert not sd[4] and not entered
+        else:
+            assert controls[-1] == ['rmr_el3', 2] and stops == ['wfi']
+            assert struct.unpack('<2I', cpu.mem_read(0x08001004, 8)) == (0x20, 0)
+        if status in (1,3,4):
+            assert sd[:2]==(1,50000000) and sd[4]==1 and card.owner is None
+            assert len(card.dma_events)==2*len(card.reads) and sd[5]==len(card.dma_events)
+            assert card.reg[0xc//4]==1 and card.reg[0x4//4]==0 and not board.values[SMHC0_CLK]&(1<<31)
+            assert 11 not in card.commands and 19 not in card.commands and 6 in card.commands
+        result['sd']=sd;result['dma_events']=card.dma_events
+        if status==1 and selected==1:
+            assert all(bytes(cpu.mem_read(a,1))==bytes([v]) for a,v in canaries.items())
+            result['tail_canaries']=True
+        result['retained_dma']=card.owner is not None
         assert fields[8] < fields[9] if counter_step else fields[8] == fields[9]
         result.update({'status': status, 'detail': detail, 'mmc_error': fields[10],
                        'selected': 'AB'[selected] if selected < 2 else None, 'generation': generation,
@@ -446,63 +569,94 @@ def main():
                     == result['slots'][s], (name, s, host['slots'][s], result['slots'][s])
             result['host_tool_agrees'] = True
         cases.append(result)
+        (args.output/(name+'.json')).write_text(json.dumps(result,indent=2)+'\n')
         return result
 
-    header_b = slots.HEADER_SECTORS['B']
-    run('slot-a-only', image(first), (1, 'A', True))
-    run('slot-b-newer', image(both), (1, 'B', True))
-    run('slot-b-payload-digest', image(both, (extent('B', 1)['first_sector'], 7)), (1, 'A', True))
-    run('slot-b-header-digest', image(both, (header_b, 16)), (1, 'A', True))
-    run('slot-b-interrupted-before-header', image(interrupted), (1, 'A', True))
-    run('no-valid-slot', image(first, (slots.HEADER_SECTORS['A'], 16)), (3, None, True))
-    run('both-payloads-digest', image(both, (extent('A', 0)['first_sector'], 3),
-                                      (extent('B', 0)['first_sector'], 3)), (4, None, True))
-    forged = image(both)
-    plan_data = headers['B']
-    bad = [dict(e) for e in plan_data['extents']]
-    bad[1]['load'] = 0x47000000 - 1024  # Asset would run into the monitor reservation.
-    forged[header_b * 512:header_b * 512 + 512] = slots.pack_header('B', 2, 0x41000000, bad)
-    run('slot-b-load-window', forged, (1, 'A', True))
-    faulted = run('read-fault', image(both), (4, None, False),
-                  fail_sector=extent('B', 0)['first_sector'])
-    assert faulted['mmc_error'] == 6 and faulted['slots']['B']['load'] == 'read'
-    # A PF6 left as an input with pull-up needs only the clock writes.
-    run('pf6-already-input', image(both), (1, 'B', True), expect_writes=SELECTED[2:],
-        changes={PF_CFG0: 0x00222222, PF_PUL0: 0x1555})
-    # boot0 state that admission refuses before any write or SD command.
-    for case, change in (('module-clock-gated', {SMHC0_CLK: 0x01000003}),
-                         ('bus-reset-asserted', {SMHC0_BGR: 0x00000001}),
-                         ('pf3-not-sdc0', {PF_CFG0: 0x0f223222}),
-                         ('pf-pull-missing', {PF_PUL0: 0x551}),
-                         ('pf6-output', {PF_CFG0: 0x01222222}),
-                         ('pf-bank-1v8', {POW_VAL_SET_CTL: 0})):
-        refused = run(case, image(both), (2, None, False), expect_writes=False, changes=change)
-        assert refused['mmc_error'] == SUNXI_MMC_ADMISSION and refused['card_accesses'] == 0, case
-    for case, registers in (('controller-command-pending', {0x18: 1 << 31}),
-                            ('internal-dma-enabled', {0x80: 1 << 7})):
-        refused = run(case, image(both), (2, None, False), expect_writes=False, sdc0=registers)
-        assert refused['mmc_error'] == SUNXI_MMC_ADMISSION and not refused['card_writes'], case
-    # No card: the writes happen, then card detection refuses.
-    nocard = run('no-card', image(both), (2, None, False), present=False)
-    assert nocard['mmc_error'] == SUNXI_MMC_ADMISSION and not nocard['card_writes']
-    # A gated module clock that does not read back stops admission at that write.
-    stuck = run('module-clock-not-read-back', image(both), (2, None, False), expect_writes=True,
-                stuck=(SMHC0_CLK,))
-    assert stuck['mmc_error'] == SUNXI_MMC_ADMISSION and len(stuck['board_writes']) == 3
-    assert not stuck['card_writes']
-    # Two header reads and the first slot B chunk, then card-detect reports no card.
-    removed = run('card-removed', image(both), (4, None, False), removed_after_reads=3)
-    assert removed['mmc_error'] == SUNXI_MMC_ADMISSION and removed['card_reads'] == 3
-    assert removed['slots']['B']['load'] == 'read' and removed['slots']['A']['load'] == 'read'
-    # Another writer restores a transfer clock after the same reads.
-    changed = run('module-clock-changed', image(both), (4, None, False),
-                  changed_after_reads=(3, SMHC0_CLK, 0x81000003))
-    assert changed['mmc_error'] == SUNXI_MMC_ADMISSION and changed['card_reads'] == 3
-    stopped = run('counter-stopped', image(both), (5, None, False), counter_step=0, expect_writes=False)
-    assert stopped['card_accesses'] == 0
-    run('wrong-el-parks', image(both), None, registers={'currentel': 4}, expect_writes=False)
-    run('exception-parks', image(both), None, vector=True, expect_writes=False)
-    assert cases[-1]['cold_status'] == 3 and cases[-2]['cold_status'] is None
+    if args.sd_extra:
+        if not args.case or 'stop-stuck' in args.case:
+            failed=run('stop-stuck',image(both),(11,'B',False),variant='stop-stuck')
+            assert not failed['retained_dma'] and failed['card_reads']==6,failed
+        if not args.case or 'direct-tail-canaries' in args.case:
+            run('direct-tail-canaries',image(both),(1,'B',True))
+        for variant in ('counter-late-stall','lifetime-expired'):
+            if args.case and variant not in args.case: continue
+            failed=run(variant,image(both),(11,None,False),variant=variant)
+            assert failed['retained_dma'] and failed['card_reads']==3,failed
+        for name,kwargs in (('parent-changed',{'changed_after_reads':(3,CCU+0xa0,0xde106300)}),
+                            ('irq-became-pending',{'changed_after_reads':(3,0x03400218,2)}),
+                            ('card-removed-during-dma',{'removed_after_reads':3})):
+            if args.case and name not in args.case: continue
+            failed=run(name,image(both),(11,None,False),**kwargs)
+            assert failed['retained_dma'] and failed['card_reads']==3 and failed['mmc_error']==SUNXI_MMC_ADMISSION,failed
+    elif args.sd_only:
+        run('direct-256-tail-unaligned',image(both),(1,'B',True))
+        run('clean-digest-fallback',image(both,(extent('B',1)['first_sector'],7)),(1,'A',True))
+        for variant in ('dma-error','reset-stuck','idle-stuck','chain-buffer'):
+            failed=run(variant,image(both),(11,None,False),variant=variant)
+            assert failed['retained_dma'] and failed['card_reads']<=1,failed
+        for name,change in (('parent-unlocked',{CCU+0xa0:0xde106300}),
+                            ('irq-pending',{0x03400218:2})):
+            failed=run(name,image(both),(11,None,False),changes=change,expect_writes=False)
+            assert failed['card_accesses']==0 and failed['mmc_error']==SUNXI_MMC_ADMISSION
+        failed=run('counter-stopped',image(both),(5,None,False),counter_step=0,expect_writes=False)
+        assert failed['card_accesses']==0
+    else:
+        header_b = slots.HEADER_SECTORS['B']
+        run('slot-a-only', image(first), (1, 'A', True))
+        run('slot-b-newer', image(both), (1, 'B', True))
+        run('slot-b-payload-digest', image(both, (extent('B', 1)['first_sector'], 7)), (1, 'A', True))
+        run('slot-b-header-digest', image(both, (header_b, 16)), (1, 'A', True))
+        run('slot-b-interrupted-before-header', image(interrupted), (1, 'A', True))
+        run('no-valid-slot', image(first, (slots.HEADER_SECTORS['A'], 16)), (3, None, True))
+        run('both-payloads-digest', image(both, (extent('A', 0)['first_sector'], 3),
+                                          (extent('B', 0)['first_sector'], 3)), (4, None, True))
+        forged = image(both)
+        plan_data = headers['B']
+        bad = [dict(e) for e in plan_data['extents']]
+        bad[1]['load'] = 0x47000000 - 1024  # Asset would run into the monitor reservation.
+        forged[header_b * 512:header_b * 512 + 512] = slots.pack_header('B', 2, 0x41000000, bad)
+        run('slot-b-load-window', forged, (1, 'A', True))
+        faulted = run('read-fault', image(both), (11, None, False),
+                      fail_sector=extent('B', 0)['first_sector'])
+        assert faulted['mmc_error'] == 6 and faulted['slots']['B']['load'] == 'read'
+        # A PF6 left as an input with pull-up needs only the clock writes.
+        run('pf6-already-input', image(both), (1, 'B', True), expect_writes=SELECTED[2:],
+            changes={PF_CFG0: 0x00222222, PF_PUL0: 0x1555})
+        # boot0 state that admission refuses before any write or SD command.
+        for case, change in (('module-clock-gated', {SMHC0_CLK: 0x01000003}),
+                             ('bus-reset-asserted', {SMHC0_BGR: 0x00000001}),
+                             ('pf3-not-sdc0', {PF_CFG0: 0x0f223222}),
+                             ('pf-pull-missing', {PF_PUL0: 0x551}),
+                             ('pf6-output', {PF_CFG0: 0x01222222}),
+                             ('pf-bank-1v8', {POW_VAL_SET_CTL: 0})):
+            refused = run(case, image(both), (11, None, False), expect_writes=False, changes=change)
+            assert refused['mmc_error'] == SUNXI_MMC_ADMISSION and refused['card_accesses'] == 0, case
+        for case, registers in (('controller-command-pending', {0x18: 1 << 31}),
+                                ('internal-dma-enabled', {0x80: 1 << 7})):
+            refused = run(case, image(both), (11, None, False), expect_writes=False, sdc0=registers)
+            assert refused['mmc_error'] == SUNXI_MMC_ADMISSION and not refused['card_writes'], case
+        # No card: the writes happen, then card detection refuses.
+        nocard = run('no-card', image(both), (11, None, False), present=False)
+        assert nocard['mmc_error'] == SUNXI_MMC_ADMISSION and not nocard['card_writes']
+        # A gated module clock that does not read back stops admission at that write.
+        stuck = run('module-clock-not-read-back', image(both), (11, None, False), expect_writes=True,
+                    stuck=(SMHC0_CLK,))
+        assert stuck['mmc_error'] == SUNXI_MMC_ADMISSION and len(stuck['board_writes']) == 3
+        assert not stuck['card_writes']
+        # Two header reads and the first slot B chunk, then card-detect reports no card.
+        removed = run('card-removed', image(both), (11, None, False), removed_after_reads=3)
+        assert removed['mmc_error'] == SUNXI_MMC_ADMISSION and removed['card_reads'] == 3
+        assert removed['slots']['B']['load'] == 'read' and removed['slots']['A']['load'] == 'none'
+        # Another writer restores a transfer clock after the same reads.
+        changed = run('module-clock-changed', image(both), (11, None, False),
+                      changed_after_reads=(3, SMHC0_CLK, 0x8000011d))
+        assert changed['mmc_error'] == SUNXI_MMC_ADMISSION and changed['card_reads'] == 3
+        stopped = run('counter-stopped', image(both), (5, None, False), counter_step=0, expect_writes=False)
+        assert stopped['card_accesses'] == 0
+        run('wrong-el-parks', image(both), None, registers={'currentel': 4}, expect_writes=False)
+        run('exception-parks', image(both), None, vector=True, expect_writes=False)
+        assert cases[-1]['cold_status'] == 3 and cases[-2]['cold_status'] is None
+    assert cases and (not args.case or {c['case'] for c in cases}==set(args.case))
     result = {'passed': True, 'physical_access': False, 'physical_boot_qualified': False,
               'monitor_sha256': hashlib.sha256(raw).hexdigest(),
               'inherited_monitor_sha256': hashlib.sha256(inherited).hexdigest(),

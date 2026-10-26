@@ -6,9 +6,11 @@
  * before card access, the normal-card reset policy and local entry state; with
  * them, the loader arms the watchdog, builds the integrated OS image's
  * resident contract and branches to the image entry.
- * Every other reported outcome requests the ROM forced-FEL return of the RAM
- * monitor. */
+ * Proven idle completion stops the card clock before handoff or ROM return.
+ * Uncertain transfers and failed stop checks retain all memory and park. */
 #include "sunxi_mmc.h"
+#include "a733_mmc_read.h"
+#include "a733_range.h"
 #include "a733_storage_digest.h"
 #include "a733_board_application.h"
 #include "../../../platform/a733-smp-cached/boot.h"
@@ -26,9 +28,10 @@
 #define LOAD_BASE UINT64_C(0x41000000)
 #define LOAD_LIMIT UINT64_C(0x47000000)   /* The monitor reservation begins here. */
 #define SDC0 UINT64_C(0x04020000)
-#define CHUNK_BYTES (SUNXI_MMC_MAX_BLOCKS * SUNXI_MMC_BLOCK_BYTES)
+#define CHUNK_BYTES (SUNXI_MMC_MAX_DMA_BLOCKS * SUNXI_MMC_BLOCK_BYTES)
 #define OPEN_US 2000000u
-#define READ_US 500000u /* 4 KiB at the 200 kHz 1-bit identification clock. */
+#define READ_US 500000u
+#define LIFETIME_US UINT64_C(30000000)
 
 #define COUNTER_SAMPLES 4096u /* Far longer than one 24 MHz tick with caches off. */
 
@@ -74,7 +77,10 @@ static const uint64_t header_sector[2] = {8192, 16384};
 __attribute__((section(".bss.stage2_report"))) volatile struct stage2_report a733_stage2_report;
 static struct sunxi_mmc card;
 static struct slot_header headers[2];
-static _Alignas(16) uint8_t chunk[CHUNK_BYTES];
+static _Alignas(64) uint8_t chunk[CHUNK_BYTES];
+static _Alignas(64) struct sunxi_mmc_dma_descriptor descriptors[SUNXI_MMC_DMA_DESCRIPTORS];
+static uint64_t last_counter, lifetime_end;
+static unsigned stalled_samples, dma_owned, stopped;
 static int admitted;
 
 static uint64_t counter(void)
@@ -88,6 +94,9 @@ static uint64_t counter(void)
  * from the PF6 card-detect pin (admission.c). */
 int a733_stage2_card_admission(uint32_t module_hz);
 int a733_stage2_card_present(void);
+int a733_stage2_card_module(unsigned divisor);
+int a733_stage2_card_gate(void);
+int a733_stage2_time_valid(void);
 /* Separate unit: each prerequisite for entering a verified image
  * (admission.c). Calls across units keep every one a separate decision that
  * the instruction model can grant or refuse. */
@@ -126,14 +135,23 @@ static int read32(void *context, uint32_t offset, uint32_t *value)
 static int write32(void *context, uint32_t offset, uint32_t value)
 {
     (void)context;
-    if (offset > 0x300 || (offset & 3) || offset == 0x200) return 0;
+    if (offset > 0x300 || (offset & 3) || offset == 0x200 ||
+        !a733_mmc_dma_value((uintptr_t)descriptors,offset,value)) return 0;
     if (offset == 0x18 && !(value & (1u << 21))) {
         if (value & (1u << 10)) return 0;
         switch (value & 63u) {
-        case 0: case 2: case 3: case 7: case 8: case 9: case 13: case 16:
-        case 17: case 18: case 41: case 55: break;
+        case 0: case 2: case 3: case 6: case 7: case 8: case 9: case 13: case 16:
+        case 17: case 18: case 41: case 51: case 55: break;
         default: return 0;
         }
+    }
+    if (offset == SUNXI_SMHC_CMD && (value & SUNXI_SMHC_CMD_DATA)) {
+        uint32_t g,base,bytes;
+        if (!read32(0,SUNXI_SMHC_GCTRL,&g)) return 0;
+        if ((g & SUNXI_SMHC_GCTRL_DMA_ENABLE) &&
+            (!dma_owned || !read32(0,SUNXI_SMHC_DLBA,&base) || base != (uint32_t)((uintptr_t)descriptors >> 2) ||
+             !read32(0,SUNXI_SMHC_BCNT,&bytes) ||
+             !a733_mmc_dma_chain(descriptors,card.borrowed,card.borrowed_bytes,bytes))) return 0;
     }
     __asm__ volatile("dsb sy" ::: "memory");
     *(volatile uint32_t *)(uintptr_t)(SDC0 + offset) = value;
@@ -166,8 +184,42 @@ static int barrier(void *context)
 static int now_us(void *context, uint64_t *value)
 {
     (void)context;
-    if (!value) return 0;
-    *value = counter() / 24u;
+    uint64_t n=counter();
+    if (!value || n<last_counter || (n==last_counter && ++stalled_samples>=COUNTER_SAMPLES)) return 0;
+    if (n!=last_counter) stalled_samples=0;
+    last_counter=n;
+    *value=n/24u;
+    return lifetime_end && *value<lifetime_end;
+}
+/* Shared with bounded admission and module-clock transitions. */
+int a733_stage2_time_valid(void)
+{ uint64_t now; return now_us(0,&now); }
+static int sd_module(void *context,uintptr_t token,unsigned divisor)
+{
+    (void)context;
+    return token==(uintptr_t)&card && admitted && a733_stage2_time_valid() &&
+        a733_stage2_card_module(divisor)==1 && a733_stage2_time_valid();
+}
+static int dma_range(const void *buffer,size_t bytes)
+{
+    uintptr_t first=(uintptr_t)buffer;
+    return !(first&63u) && bytes && !(bytes&511u) && bytes<=CHUNK_BYTES &&
+        (a733_extent_within((uintptr_t)chunk,sizeof(chunk),first,bytes) ||
+         a733_extent_within(LOAD_BASE,LOAD_LIMIT-LOAD_BASE,first,bytes));
+}
+/* Entry owns the uncached physical ranges. These barriers transfer ownership;
+ * the core calls AFTER only after OWN, IDMAC idle and both reset completions. */
+static int dma_sync(void *context,uint8_t *buffer,size_t bytes,unsigned phase)
+{
+    (void)context;
+    uint64_t sctlr;
+    __asm__ volatile("mrs %0,sctlr_el3" : "=r"(sctlr));
+    if ((sctlr&UINT64_C(0x02000005)) || buffer!=card.borrowed || bytes!=card.borrowed_bytes ||
+        !dma_range(buffer,bytes) || phase>SUNXI_MMC_DMA_AFTER || dma_owned!=phase ||
+        !a733_stage2_time_valid()) return 0;
+    __asm__ volatile("dsb sy" ::: "memory");
+    dma_owned=phase==SUNXI_MMC_DMA_BEFORE;
+    ++a733_stage2_report.reserved1[21];
     return 1;
 }
 
@@ -178,7 +230,11 @@ static int counter_runs(void)
 {
     uint64_t first = counter();
     for (unsigned i = 0; i < COUNTER_SAMPLES; ++i)
-        if (counter() > first) return 1;
+        if (counter() > first) {
+            last_counter=counter();
+            lifetime_end=last_counter/24u+LIFETIME_US;
+            return 1;
+        }
     return 0;
 }
 static void record(void)
@@ -193,9 +249,12 @@ static void record(void)
 static int card_open(void)
 {
     struct sunxi_mmc_config config = {
-        .ops = {read32, write32, barrier, now_us, admit, retained, 0, read_fifo, write_fifo, 0, 0},
+        .ops = {.read32=read32,.write32=write32,.barrier=barrier,.now_us=now_us,
+            .admit=admit,.retained=retained,.sd_module=sd_module,.read_fifo=read_fifo,
+            .write_fifo=write_fifo,.dma_sync=dma_sync},
         .token = (uintptr_t)&card, .kind = SUNXI_MMC_SD,
         .module_hz = 400000, .voltage_mask = 0x00300000,
+        .sd_profile=SUNXI_MMC_SD_HIGH_SPEED4,.dma=descriptors,
     };
     uint64_t now;
     if (!sunxi_mmc_init(&card, &config) || !now_us(0, &now) ||
@@ -203,18 +262,54 @@ static int card_open(void)
     while (card.state == SUNXI_MMC_IDENTIFY) sunxi_mmc_poll(&card);
     if (card.state != SUNXI_MMC_READY) { record(); return 0; }
     a733_stage2_report.card_sectors = card.card.sectors;
+    a733_stage2_report.reserved1[16]=card.card.timing;
+    a733_stage2_report.reserved1[17]=card.card.card_hz;
     return 1;
 }
 static int card_read(uint64_t sector, uint32_t blocks, void *buffer)
 {
     uint64_t now;
-    if (card.state != SUNXI_MMC_READY || !now_us(0, &now) ||
+    if (!dma_range(buffer,(size_t)blocks*SUNXI_MMC_BLOCK_BYTES) ||
+        card.state != SUNXI_MMC_READY || !now_us(0, &now) ||
         !sunxi_mmc_read(&card, sector, blocks, buffer, blocks * SUNXI_MMC_BLOCK_BYTES,
                         now + READ_US)) return 0;
     while (card.state == SUNXI_MMC_READING) sunxi_mmc_poll(&card);
     int done = card.state == SUNXI_MMC_DONE;
     record();
-    return done && card.state == SUNXI_MMC_READY;
+    if (done) { ++a733_stage2_report.reserved1[18]; a733_stage2_report.reserved1[19]+=(uint64_t)blocks*512u; }
+    return done && !dma_owned && card.state == SUNXI_MMC_READY;
+}
+
+static int header_read(uint64_t sector,struct slot_header *header)
+{
+    if (!card_read(sector,1,chunk)) return 0;
+    memcpy(header,chunk,sizeof(*header));
+    return 1;
+}
+/* Completion of the final read already returned IDMAC ownership. Stop only
+ * an idle controller; do not reset a transfer whose completion is uncertain. */
+static int card_stop(void)
+{
+    uint32_t v;
+    uint64_t now,deadline;
+    if (stopped || !card.initialized) return 1;
+    if (card.state!=SUNXI_MMC_READY || dma_owned || card.borrowed ||
+        !a733_stage2_card_present() || !now_us(0,&now)) return 0;
+    deadline=now+1000u;
+    if (!read32(0,SUNXI_SMHC_GCTRL,&v) || (v&0x27u) ||
+        !read32(0,SUNXI_SMHC_DMAC,&v) || v ||
+        !read32(0,SUNXI_SMHC_IDST,&v) || (v&SUNXI_SMHC_IDST_ERRORS) || SUNXI_SMHC_IDST_STATE(v) ||
+        !read32(0,SUNXI_SMHC_STATUS,&v) || (v&SUNXI_SMHC_STATUS_BUSY) ||
+        !read32(0,SUNXI_SMHC_CMD,&v) || (v&SUNXI_SMHC_CMD_START) ||
+        !write32(0,SUNXI_SMHC_CLKCR,0) || !write32(0,SUNXI_SMHC_CMD,SUNXI_SMHC_UPDATE)) return 0;
+    do {
+        if (!now_us(0,&now) || now>=deadline || !a733_stage2_card_present() ||
+            !read32(0,SUNXI_SMHC_CMD,&v)) return 0;
+    } while (v&SUNXI_SMHC_CMD_START);
+    if (!read32(0,SUNXI_SMHC_CLKCR,&v) || v || !a733_stage2_card_gate()) return 0;
+    stopped=1;
+    a733_stage2_report.reserved1[20]=1;
+    return 1;
 }
 
 static int zero(const void *p, size_t n)
@@ -270,16 +365,24 @@ static unsigned load(const struct slot_header *h, uint64_t *failed)
         uint8_t *target = (uint8_t *)(uintptr_t)e->load, digest[32];
         struct storage_digest d;
         storage_digest_init(&d);
-        for (uint64_t done = 0; done < e->bytes; done += CHUNK_BYTES) {
-            uint64_t n = e->bytes - done < CHUNK_BYTES ? e->bytes - done : CHUNK_BYTES;
-            uint32_t blocks = (uint32_t)((n + SUNXI_MMC_BLOCK_BYTES - 1) / SUNXI_MMC_BLOCK_BYTES);
-            if (!card_read(e->first_sector + done / SUNXI_MMC_BLOCK_BYTES, blocks, chunk)) {
-                *failed = i;
+        for (uint64_t done = 0; done < e->bytes; ) {
+            uint64_t n=e->bytes-done<CHUNK_BYTES?e->bytes-done:CHUNK_BYTES;
+            /* Only full blocks wholly inside this extent go directly to RAM.
+             * Header sectors, unaligned targets and a partial tail use bounce. */
+            int direct=!((uintptr_t)(target+done)&63u) && n>=512u;
+            if (direct) n&=~UINT64_C(511);
+            uint32_t blocks=(uint32_t)((n+511u)/512u);
+            if (!card_read(e->first_sector+done/512u,blocks,direct?target+done:chunk)) {
+                *failed=i;
                 return LOAD_READ;
             }
-            memcpy(target + done, chunk, (size_t)n);
+            if (!direct) memcpy(target+done,chunk,(size_t)n);
             __asm__ volatile("dsb sy" ::: "memory");
-            (void)storage_digest_add(&d, target + done, (size_t)n);
+            if (!a733_stage2_time_valid() || !storage_digest_add(&d,target+done,(size_t)n)) {
+                *failed=i;
+                return LOAD_READ;
+            }
+            done+=n;
         }
         storage_digest_end(&d, digest);
         if (memcmp(digest, e->sha256, sizeof(digest))) {
@@ -311,6 +414,10 @@ static void publish(uint64_t status, uint64_t detail)
 }
 static _Noreturn void finish(uint64_t status, uint64_t detail)
 {
+    if (!card_stop()) {
+        publish(11,status);
+        for (;;) __asm__ volatile("wfe");
+    }
     publish(status, detail);
     rom_return();
 }
@@ -437,9 +544,10 @@ _Noreturn void a733_stage2_main(void)
     if (!card_open()) finish(CARD, a733_stage2_report.mmc_error);
     unsigned valid = 0;
     for (unsigned s = 0; s < 2; ++s) {
-        unsigned r = card_read(header_sector[s], 1, &headers[s]) ?
+        unsigned r = header_read(header_sector[s], &headers[s]) ?
             header_check(&headers[s], s) : HEADER_READ;
         a733_stage2_report.slot[s].header = r;
+        if (r==HEADER_READ) finish(CARD,a733_stage2_report.mmc_error);
         if (r == HEADER_VALID) {
             a733_stage2_report.slot[s].generation = headers[s].generation;
             valid |= 1u << s;
@@ -454,6 +562,7 @@ _Noreturn void a733_stage2_main(void)
         unsigned r = load(&headers[s], &extent);
         a733_stage2_report.slot[s].load = r;
         a733_stage2_report.slot[s].extent = extent;
+        if (r==LOAD_READ) finish(LOAD_FAILED,a733_stage2_report.mmc_error);
         if (r == LOAD_DONE) {
             a733_stage2_report.selected = s;
             a733_stage2_report.generation = headers[s].generation;
@@ -461,6 +570,7 @@ _Noreturn void a733_stage2_main(void)
              * These local checks do not grant missing ownership evidence. */
             if (a733_stage2_reset_policy() != 1 ||
                 a733_stage2_entry_state() != 1) finish(LOADED, headers[s].entry);
+            if (!card_stop()) finish(LOAD_FAILED,a733_stage2_report.mmc_error);
             enter(&headers[s]);
         }
     }
