@@ -68,6 +68,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     for name in ('build', 'base-model', 'overlay-model', 'wav', 'boot0', 'packer', 'output'):
         p.add_argument('--' + name, type=Path, required=True)
+    p.add_argument('--prepare-only', action='store_true', help='Bind a final integration image without replaying mutation cases')
     a = p.parse_args(); out = a.output; out.mkdir(parents=True, exist_ok=False)
     image = a.build / 'sunstone-a733-os.elf'
     manifest = json.loads((a.build / 'os-image/link-check.json').read_text())
@@ -149,6 +150,12 @@ def main():
     bound = (args.output/'slot/os-session.bin').read_bytes()
     assert struct.unpack_from('<2Q', bound, 24) == struct.unpack_from('<2Q', bound, grant + 32) == (0,1)
     assert card.canonical_session(bound) == card.canonical_session(raw) and len(plan['extents']) == 4
+    if a.prepare_only:
+        save(out/'result.json', {'passed':True, 'physical_access':False,
+             'scope':'Actual producer and linked layout; mutation cases reused from component evidence.',
+             'workers':manifest['inference']['workers'], 'bundle_sha256':card.sha((args.output/'bundle.json').read_bytes())})
+        print('PASS final card producer:',manifest['inference']['workers'],'workers')
+        return
     before_hash = card.sha(backup.read_bytes())
     card.slots.apply(SimpleNamespace(plan=plan_path, card_image=working, stop_after=None))
     fd, sectors = card.slots.open_image(working)

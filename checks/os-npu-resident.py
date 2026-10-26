@@ -158,8 +158,15 @@ def late_stop(image, raw, results):
     for i in range(8):
         machine.put(seen + i * 8, machine.now if i != 7 else 1001)
     before = bytes(machine.u.mem_read(published, native.report.REPORT_BYTES))
+    reloads = []
+    def reload(cpu, pc, size, unused):
+        reloads.append(True)
+        machine.ret(1)
+    reload_address = image.address('os_watchdog_reload')
+    machine.u.hook_add(UC_HOOK_CODE, reload, begin=reload_address, end=reload_address)
     assert machine.call('os_npu_complete') == 1
-    assert machine.call('os_services_healthy', machine.now) == 1
+    assert machine.call('board_resident_renew', 0, machine.now * 24 + 24000000) == 1
+    assert len(reloads) == 1
     notification = next(name for name in ('vTaskGenericNotifyGiveFromISR', 'vTaskNotifyGiveFromISR') if name in image.symbols)
     address = image.address(notification)
     notified = []
@@ -171,7 +178,7 @@ def late_stop(image, raw, results):
     assert notified and not machine.get(service + layout['irq_stopped'], 4)
     assert machine.get(service + layout['irq_pending'], 4)
     assert machine.call('os_npu_complete') == 0
-    assert machine.call('os_services_healthy', machine.now) == 0
+    assert machine.call('board_resident_renew', 0, machine.now * 24 + 24000000) == 0
     assert bytes(machine.u.mem_read(published, len(before))) == before
     results.append({'case': 'actual-late-stop-isr-revokes-health-with-immutable-result'})
     # Consuming pending status cannot hide the worker's persistent fault.
@@ -179,14 +186,15 @@ def late_stop(image, raw, results):
     machine.put(service + layout['irq_stopped'], 1, 4)
     machine.put(machine.rt + machine.L['npu_runtime']['failed'], 1, 4)
     assert machine.call('os_npu_complete') == 0
-    assert machine.call('os_services_healthy', machine.now) == 0
+    assert machine.call('board_resident_renew', 0, machine.now * 24 + 24000000) == 0
+    assert len(reloads) == 1
     results.append({'case': 'atomic-runtime-fault-keeps-terminal-exemption-revoked'})
     # Before activation, the thermal refusal needs no IRQ-stop receipt.
     machine.put(machine.rt + machine.L['npu_runtime']['failed'], 0, 4)
     machine.put(machine.n + machine.nL['active'], 0, 4)
     machine.put(service + layout['irq_stopped'], 0, 4)
     assert machine.call('os_npu_complete') == 1
-    assert machine.call('os_services_healthy', machine.now) == 1
+    assert machine.call('board_resident_renew', 0, machine.now * 24 + 24000000) == 1
     results.append({'case': 'pre-activation-refusal-retains-valid-terminal-exemption'})
 
 

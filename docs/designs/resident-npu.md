@@ -121,3 +121,14 @@ RTOS replies, counters, SID and watchdog registers are modeled. These checks
 execute no NPU inference, reset or physical card operation. Earlier successful
 ShuffleNet inference and normal local-stop evidence remain unchanged; they do
 not qualify this resident cold-boot path.
+
+The combined resident build in
+`~/.cache/sunstoneos/evidence/resident-npu-cpu8-1026` selects eight recognition
+workers, CPU clock grants, A76 admission and the same ShuffleNet entry. Its
+monitor includes the reviewed CPU static-OFF owner and is 32,688 bytes, leaving
+80 bytes. The final image passes card production and 20 linked entry cases.
+Three focused linked cases verify late-IRQ revocation, persistent atomic
+runtime fault and the pre-activation stopped exemption. The initial late-IRQ
+fixture targeted an unlinked helper; the corrected check invokes the actual
+`board_resident_renew` path with only watchdog reload modeled. CPU-owner checks
+use this same final artifact. No inference or physical test is repeated.
