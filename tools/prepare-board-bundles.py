@@ -919,47 +919,50 @@ ROWS = [
     gpu_row('gpu-first-job', 27, 'The first GPU job: the fixed 32-lane compute job, then the firmware stop and OFF',
             'fw-job', 'COMPLETE GPU first job: 32 words as computed, context cleaned up, firmware stopped, OFF and '
             'provider parked',
-            'Status 0 with GPU FWJ job complete=1 outcome=1 timeline=0x1, GPU FWJ output w0=0x2e5ca990 '
-            'w1=0xd09b3063 w31=0x4775f521 guard=0x6d35a7c1 (expected0 and expected31 equal), GPU FWJ cleanup '
-            'status=0x1, GPU FWS stop result=0 phase=10 and COMPLETE GPU first job: 32 words as computed, context '
-            'cleaned up, firmware stopped, OFF and provider parked; or one of the controlled failures below; or no '
-            'return. Record every line of kernel.log and the progress record at result.bin offset 128.',
+            'Status 0 with GPU FWJ job complete=1 outcome=1 timeline=0x1, GPU FWJ events control=4 control_error=0 '
+            'n=0, GPU FWJ hwr mmu_status=0x0 count=0, GPU FWJ output w0=0x2e5ca990 w1=0xd09b3063 w31=0x4775f521 '
+            'guard=0x6d35a7c1 (expected0 and expected31 equal), GPU FWJ cleanup status=0x1, GPU FWS stop result=0 '
+            'phase=10 and COMPLETE GPU first job: 32 words as computed, context cleaned up, firmware stopped, OFF and '
+            'provider parked; or one of the controlled failures below; or no return. Record every line of kernel.log '
+            'and the progress record at result.bin offset 128.',
             'apps/gpu-power-id, first-job variant (apps/gpu-power-id/fw-start.c built with FWS_STOP and FWS_JOB, with '
-            'apps/gpu-power-id/fw-job.inc), docs/designs/gpu-first-job.md. The image of bundle 25 with the fixed '
-            'numerical compute job between the health check and the stop. Before any power change it builds, in its '
-            'own memory, the workload GPU VM (88 write-back pages, programs and inputs GPU read-only, the output page '
-            'bypassing the GPU system-level cache), the context programs, the compute context and the job (seed '
-            '0x12345678, factor 0x9e3779b1), and maps the six firmware objects (context, register state, client CCB '
-            'control and ring, VM record, timeline) for the firmware at 0xc0800000 + n * 0x10000 in its Normal-NC '
-            'block. After the health check it publishes the workload pages and tables, formats the client CCB, '
-            'writes a CDM command and a timeline UPDATE, kicks the kernel CCB, accepts the KICK once the firmware '
-            'consumed it, waits at most 200 ms for the timeline word, checks all 32 words and both guards, and sends '
-            'the context cleanup. It then attempts the firmware stop and the OFF of bundle 25 whatever the job\'s result; '
-            'after a failed job they complete only if the firmware acknowledges both power requests. It runs in the lifetime of set board-bundles-20261025-25 after its bundle 26 passed.',
-            after=['gpu-provider-ready', 'gpu-fw-stop-again'],
-            history=('two complete GPU firmware cycles have run in this lifetime, bundles 25 and 26: each a firmware '
-                     'start, one health check, the forced-idle and power-off requests, the stop and the OFF, with the '
-                     'GPU OFF and the provider parked at their ends; no GPU job has run'),
-            failures=['`FAIL GPU first job: not complete, GPU OFF and provider parked`, after the `GPU FWJ job` and '
-                      '`output` lines: outcome 2 the timeline did not reach 1 within 200 ms, 3 an output word or '
-                      'guard differs, 4 a transport fault; the firmware acknowledged the stop, and the GPU is off',
-                      '`FAIL GPU firmware stop: not complete, GPU left powered` after a `GPU FWJ job complete=0` line: '
-                      'with the job\'s context live the firmware did not acknowledge the forced-idle or power-off '
-                      'request; a power removal follows',
+            'apps/gpu-power-id/fw-job.inc), docs/designs/gpu-first-job.md. The firmware lifecycle image of bundle 25 '
+            'with the fixed numerical compute job between the health check and the stop, corrected after set 27 '
+            '(docs/designs/gpu-first-job.md, "Set 27 post-mortem"): the job\'s PDS pointer constants are stored low '
+            'word first, an MMUCACHE command precedes the KICK, no page is mapped GPU read-only, every firmware event '
+            '101-108 is recorded without failing the control, and a stop the firmware does not acknowledge runs '
+            'upstream\'s hard reset (the idle checks, the full soft reset, then the OFF). Before any power change it '
+            'builds, in its own memory, the workload GPU VM (88 write-back pages, the output page bypassing the GPU '
+            'system-level cache), the context programs, the compute context and the job (seed 0x12345678, factor '
+            '0x9e3779b1), and maps the six firmware objects for the firmware at 0xc0800000 + n * 0x10000 in its '
+            'Normal-NC block. After the health check it publishes the workload pages and tables, sends MMUCACHE and '
+            'waits for its execution, formats the client CCB, writes a CDM command and a timeline UPDATE, kicks, '
+            'waits at most 150 ms for the timeline word, checks all 32 words and both guards, sends the context '
+            'cleanup, and then stops the firmware and powers the GPU off whatever the job\'s result. It runs first '
+            'in a new lifetime, after the provider-readiness checkpoint.',
+            after=['gpu-provider-ready'],
+            failures=['`FAIL GPU first job: not complete, GPU OFF and provider parked`, after the `GPU FWJ job`, '
+                      '`events`, `hwr`, `ring` and `output` lines: outcome 2 the timeline did not reach 1 within '
+                      '150 ms, 3 an output word or guard differs, 4 a transport fault, 5 a firmware event (a `GPU FWJ '
+                      'reset` line gives the reason, data master, page-fault flag and fault address); the firmware '
+                      'acknowledged the stop, and the GPU is off',
+                      '`FAIL GPU firmware stop: not acknowledged, idle checks met, GPU OFF and provider parked`: the '
+                      'control failed or the firmware acknowledged neither power request; the stop ran upstream\'s '
+                      'hard reset (`GPU FWS stop ... unacknowledged=1`) and the GPU is off',
+                      '`FAIL GPU firmware stop: not acknowledged and the GPU not idle, GPU left powered`: an idle '
+                      'check never matched; a power removal follows',
                       '`FAIL GPU first job: 32 words as computed, context cleanup not confirmed, GPU OFF and provider '
                       'parked`: the cleanup command returned no word of 1',
-                      '`FAIL GPU firmware stop refused, GPU left running`: the control failed during the job, for '
-                      'example on a firmware context-reset event; a power removal follows',
                       'every failure line of bundle 25'],
             admission='GPU job exception: this row runs one GPU compute job. Its data and programs are 88 write-back '
                       'pages of the image\'s own RAM, mapped only in the job\'s GPU VM, whose tables are also image '
                       'RAM; the firmware reaches only its own mappings plus the six job objects in the image\'s '
                       'Normal-NC block. The GPU reads the programs, control stream and input and writes only the '
-                      '256-byte output page; no other memory is mapped for the GPU. It sends the KICK and the context '
-                      'cleanup through the kernel CCB, besides bundle 25\'s commands. Its USC program runs for the first time '
-                      'on the board; the host checks only compare its bytes and model its writes. Risk: as bundle '
-                      '25; and after a failed job the context stays live, the firmware may not acknowledge the '
-                      'forced-idle or power-off request, and then the GPU stays on until a power removal.'),
+                      '256-byte output page; no other memory is mapped for the GPU. It sends MMUCACHE, the KICK and '
+                      'the context cleanup through the kernel CCB, besides bundle 25\'s commands. On set 27 the USC '
+                      'program ran and faulted on its first load because its input pointer\'s halves were exchanged; '
+                      'the GPU MMU refused the access and the firmware reset the context. Risk: as bundle 25; a GPU '
+                      'that never reports idle after a failed job stays on until a power removal.'),
     # `admission` maps fields of the value prepare() returns to the values that
     # identify this row's build. None refuses the row: no owning package has
     # named those values yet.
