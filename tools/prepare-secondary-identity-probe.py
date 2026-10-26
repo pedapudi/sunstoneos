@@ -128,7 +128,7 @@ def sources(f):
     """Source files whose digests bind the build to the tree."""
     source='boot/a733/secondary-identity-probe'
     names=(source+'.c',source+'.S',source+'.h','include/a733_cpu_entry.h','include/a733_cpu_start.h',
-           'platform/a733-smp-cached/boot.h','tools/prepare-secondary-identity-probe.py')
+           'platform/a733-smp-cached/boot.h','include/a733_el3_mbus.h','tools/prepare-secondary-identity-probe.py')
     if f.local:names+=('boot/a733/secondary-local-probe.c','boot/a733/secondary-local-probe.h',
                        'boot/a733/secondary-distributor-probe.c','include/a733_cpu_continue.h')
     if f.cached:names+=('boot/a733/native-el3-cache-probe.S','boot/a733/native-el1-cache-probe.S')
@@ -146,9 +146,9 @@ def report_area(f):
 
 def extension_address(f):
     # The interrupt vectors use the 2 KiB-aligned gap before the extension;
-    # the top-operating-point relock and its tables start right after the
-    # 512-byte base overlay.
-    return 0x41020200 if f.top_opp else 0x41020800 if f.interrupts else EXTENSION
+    # the return-deadline profiles start right after the 512-byte base
+    # overlay. Their code uses the gap to stay within the saved 16 KiB.
+    return 0x41020200 if f.return_deadline else 0x41020800 if f.interrupts else EXTENSION
 
 
 def patch_plan(native,hooks,f):
@@ -274,8 +274,10 @@ def prepare(args):
     vectors=' . = 0x41020800; .irq_vectors : { KEEP(*(.irq_vectors)) }\n ASSERT(. == 0x41021000, "Vector table extent differs")\n' if interrupts else ''
     if top_opp:
         vectors=' . = 0x41020200; .top_opp : { KEEP(*(.text.top_opp)) KEEP(*(.text.top_opp.*)) KEEP(*(.rodata.top_opp)) }\n ASSERT(. <= 0x41021000, "Relock exceeds its gap")\n'
-    link.write_text('ENTRY(identity_primary_gate)\nSECTIONS {\n'+vectors+'''
- . = 0x41021000;
+    # Pack deadline code after the relock, when present. Other profiles keep
+    # their established text address, including the interrupt vector table.
+    text_start=' . = ALIGN(4);\n' if top_opp else f' . = {extension if return_deadline else EXTENSION:#x};\n'
+    link.write_text('ENTRY(identity_primary_gate)\nSECTIONS {\n'+vectors+text_start+'''
  .text : { *(.text .text.*) *(.rodata .rodata.*) }
  .data : { *(.data .data.*) }
  .bss (NOLOAD) : { *(.bss .bss.* COMMON) }
