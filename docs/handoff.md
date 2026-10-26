@@ -66,11 +66,9 @@ does not establish recovery from a fault.
 
 | Work | Branch | Immediate deliverable |
 | --- | --- | --- |
-| Multicore mimus | `work/resume-mimus-multicore-1025` | Integrate the accepted eight-worker engine into supervised OS recognition with service-aware priorities |
 | DRAM restoration | `work/resume-dram-restore-1025` | Implement the card-boot loader using verified early single-sector reads and explicit helper storage |
-| Radio startup | New isolated branch from `bringup` | Resolve supply topology and pin-state prerequisites from primary sources before changing startup |
-| Camera shutdown | New isolated branch from `bringup` | Derive receiver and DMA drain from primary references before changing retained shutdown |
-| NPU restart | New isolated branch from `bringup` | Assess and implement normal stop/reconstruction within a powered lifetime, preserving domain and SRAM ownership |
+| Radio startup | `work/radio-startup-facts-1026` | Resolve supply topology and pin-state prerequisites from primary sources before changing startup |
+| NPU restart | `work/resume-npu-restart-1026` | Add normal worker-mediated rearm while preserving registered objects, domain and SRAM ownership |
 
 Independent reviewers cover CPU/thermal/DRAM, accelerator operation and peripheral
 integration. Workers reuse successful evidence and submit focused checks. The
@@ -78,8 +76,8 @@ coordinator integrates accepted work, updates the canonical records and pushes
 `bringup`. No board command has run during this continuation.
 
 The latest merged work includes paired training-record selection and updates,
-read-only microSD DMA, optional eight-worker mimus outside the integrated OS,
-and CPU/NPU performance controls. The supported NPU OS image also rebuilds
+read-only microSD DMA, eight-worker supervised OS recognition, and CPU/NPU
+performance controls. The supported NPU OS image also rebuilds
 successfully against the shared service and thermal changes; its evidence is
 under `~/.cache/sunstoneos/evidence/resume-thermal-npu-integration-1025/`.
 
@@ -154,6 +152,13 @@ be pruned.
   affected sanitizer checks, host decoding and native builds pass under
   `~/.cache/sunstoneos/evidence/resume-sd-completion-1025/snapshot/`.
   Physical DMA, cache coherence, SDR104 and throughput remain unqualified.
+  The first DMA image cannot use either preserved session: timer/exception
+  exits bypass SD stop, and successful return retains SD configuration.
+  Its accepted lifetime ends with power removal. The source-backed scheduling
+  decision is under
+  `~/.cache/sunstoneos/evidence/sd-dma-eligibility-20261026/`.
+  A minimal host-produced first-read plan is being added so qualification does
+  not require the existing 240-read measurement sweep.
 - **Paired DRAM training records are implemented.** Selection chooses the newest
   eligible record; updates write the standby payload before its header and
   preserve the other copy. Thirty-two focused cases, including interruption
@@ -188,7 +193,10 @@ be pruned.
   It exports one immutable frame, then reports retained hardware because packet
   drain is unproven. Native/model/host evidence is frozen under
   `~/.cache/sunstoneos/evidence/resume-camera-native-1025/final-snapshot/`.
-  No camera is attached; no physical capture or drain is qualified.
+  The [stop-source audit](camera-stop.md) establishes a parser final-frame
+  boundary but leaves receiver, residual traffic and IOMMU retirement unresolved.
+  It changes no driver behavior or test evidence. No camera is attached; no
+  physical capture or drain is qualified.
 - **Do not run GPU set `board-bundles-20261025-31`.** It repeats the qualified
   eight-job session with the older image, which lacks the shutdown on every
   failure path.
@@ -201,10 +209,20 @@ be pruned.
      multiplication use eight workers; stages with two scratch contexts remain
      limited to two. Evidence is under
      `~/.cache/sunstoneos/evidence/resume-mimus-eight-20261025/`.
-     The integrated OS still refuses eight workers until its task placement,
-     service priorities and image admission are implemented and reviewed.
+     Eight-worker supervised recorded recognition is now integrated into the OS,
+     with A76 admission required. A55 inference runs below OS services; the
+     image declares its actual placement and priorities for host verification.
+     The combined CPU/NPU performance image, focused FreeRTOS service/retention
+     case, 31 host cases and 13 compiler/configuration cases pass under
+     `~/.cache/sunstoneos/evidence/resume-os-eight-20261026/`.
+     Resident, capture, radio, headset and GPU-linear modes still reject eight
+     workers. Physical multicore recognition and service latency remain
+     unqualified; two workers remain the default.
      Builds use the local unpublished mimus pin `967747f10dcf038aadc2961b5990d540f6b76455`;
      set `MIMUS_DIR=/home/sunil/git/mimus-worktrees/sunstoneos-eight-workers-1025`.
+     The cached `cfg.sh` helper now derives its default from that source record;
+     explicit source overrides still work. Argument checks pass under
+     `~/.cache/sunstoneos/evidence/configure-source-pin-20261026/`.
      Do not publish the separate mimus repository without user approval.
   2. The first board execution of the exact-sum GPU kernel
      (`docs/gpu-mimus.md`). Its returning diagnostic and host validator are

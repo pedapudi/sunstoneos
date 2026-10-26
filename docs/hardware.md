@@ -42,8 +42,10 @@ its return and failure paths.
 
 - Optional eight-worker mimus passes exact recognition parity in QEMU and
   native compilation. Physical multicore recognition remains unqualified.
-  The integrated OS still admits two workers while its eight-worker scheduling
-  and admission changes are developed; see [mimus SMP](mimus-smp.md).
+  Supervised recorded OS recognition now supports eight workers with A76
+  admission, while other profiles retain their existing limits. Focused service
+  scheduling, failure retention, image admission and layout checks pass; see
+  [mimus SMP](mimus-smp.md). Two workers remain the default.
 - [Performance modes](performance-modes.md) integrate CPU clock and voltage
   control, stopped-NPU retuning and thermal overrides. Both native profiles
   and focused software checks pass. GPU runtime control and physical

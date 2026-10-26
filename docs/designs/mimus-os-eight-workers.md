@@ -1,9 +1,8 @@
 # Eight inference workers in the supervised OS
 
-Status: implemented with focused software checks. The reviewed performance-mode integration has released the
-shared OS CMake, link-check and host-preparation files. This extends
-the reviewed eight-worker engine and adapter without changing the model,
-weights, arithmetic, producer scratch or session format.
+Status: implemented with focused software checks; physical execution remains
+unqualified. The supervised OS uses the eight-worker engine and adapter with
+its existing model, weights, arithmetic, producer scratch and session format.
 
 ## Supported composition and placement
 
@@ -24,7 +23,7 @@ no heterogeneous speed ratio is assumed.
 
 `mimus_parallel_init` validates the OS owner/worker pair against
 `a733_smp_placement.h`. The selected count remains `SUNSTONE_MIMUS_WORKERS`.
-The compile guard admits the supported eight-worker composition and reject
+The compile guard admits the supported eight-worker composition and rejects
 other OS profiles. Standalone native and QEMU configurations retain their
 accepted behavior.
 
@@ -45,12 +44,6 @@ evidence. This adds no session bytes, device operation or separate approval
 schema. Existing two-worker artifacts without the new record remain eligible
 under the existing rules; removing metadata from a new eight-worker manifest
 must fail against the linked record.
-
-The shared files are `cmake/a733-os.cmake`, `checks/os-image-link.py` and
-`apps/os/prepare.py`. The reviewed performance-mode candidate is now integrated and those files have
-been released to this workstream. Adapter/header changes, placement comments and focused
-checks belong to this workstream. Thermal policy, performance-mode transitions,
-USB operation 8 and the B1/TOP rules remain with their current owners.
 
 ## Bounded jobs and failure retention
 
@@ -76,7 +69,7 @@ relative to the accepted two-worker adapter. The linked configuration record is
 at most 32 bytes. No inference-arena, producer scratch or session allocation
 grows. The OS image must retain its existing code/RAM reservations, 4 MiB heap,
 model addresses and inference-arena bounds; the optional NPU pool remains
-separate. Actual linked section and stack extents will be checked.
+separate. The linked section and stack extents pass the bounds recorded below.
 
 Validation reuses accepted engine arithmetic and eight-worker recognition
 parity. New checks are limited to:

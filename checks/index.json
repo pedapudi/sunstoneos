@@ -7633,6 +7633,19 @@
   "summary": "Execute the stage-2 entry path with modeled entry prerequisites.",
   "usb": false
  },
+ "os-inference-workers.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--eight-build",
+   "--legacy-build",
+   "--output"
+  ],
+  "summary": "Check linked OS worker capabilities and exact entry binding without hardware.",
+  "usb": false
+ },
  "os-npu.py": {
   "cache_areas": [],
   "docs": [
