@@ -69,7 +69,7 @@ does not establish recovery from a fault.
 | Cold entry | `work/cold-arm-cache-audit-1026` | Establish a source-backed secondary wake/reset ownership sequence; non-Arm writer exclusion remains separate |
 | GPU CPU clocks | `work/resume-gpu-cpu-clock-1026` | Reuse the existing CPU-ready wait and operating-point grant in the supervised GPU image |
 | Resident NPU | `work/resident-npu-1026` | Extend the existing OS NPU application and cold-card session; resolve selected-model image size without reducing the supported model scope |
-| Cold non-Arm ownership | source audit | Establish OR100 and crypto-engine exclusion without assuming an idle snapshot proves drain |
+| Cold non-Arm ownership | `work/resume-remote-cold-1026` | Account for crypto-engine submissions before the monitor is loaded; OR100 is inapplicable to A733 |
 
 Independent reviewers cover CPU/thermal/DRAM, accelerator operation and peripheral
 integration. Workers reuse successful evidence and submit focused checks. The
@@ -117,8 +117,13 @@ be pruned.
   boot0 maintenance; it is no longer an unresolved cache-hierarchy question.
   An OFF observation alone cannot exclude a later autonomous wake. Reset-hold
   initialization also needs a race-free assertion and an owned OS release.
-  Source evidence is under `cold-arm-cache-followup-1026/`. No card installation
-  or physical autonomous OS boot has occurred.
+  Source evidence is under `cold-arm-cache-followup-1026/`. Device-specific
+  applicability now excludes OR100 from the required writer mask, while its
+  historical bit remains reserved. All 25 real-device checks remain; 113 native
+  provider cases and pinned source assertions pass under `cold-remote-followup-1026/`.
+  Crypto-engine submission accounting must cover memory reuse before the monitor
+  loads; a later reset or idle sample cannot establish that earlier protection.
+  No card installation or physical autonomous OS boot has occurred.
 
 - **CPU returning image layout is repaired.** Both workload profiles fit
   the existing 16 KiB reservation. The ordinary profile has 3,004 bytes free;

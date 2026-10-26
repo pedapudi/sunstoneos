@@ -10,6 +10,11 @@ features and consolidation based on those packages are merged; [Implementation r
 records what each package changed and which findings remain deferred.
 
 - **Date:** 2026-10-20.
+- **Later applicability correction (2026-10-26):** the device-specific
+  [processor inventory](../remote-writers.md) excludes OR100 from A733.
+  Its requirement in the historical round-five findings below is superseded.
+  Crypto-engine exclusion remains unresolved; current support claims are in
+  the [hardware matrix](../hardware.md).
 - **Code audited:** branch `bringup` at commit `70a4e63`, checked out as branch
   `audit/integration`.
 - **Goal measured against:** [docs/goal.md](../goal.md). SunstoneOS must
