@@ -52,7 +52,8 @@ struct a733_gpu_backend {
 };
 /* Zero storage. Bind before service initialization, at EL1 with MMU/cache on.
  * memory is initialized and OFFLINE; power is initialized and NEW. Config must
- * describe exactly that memory instance at 400 MHz. A successful call replaces
+ * describe exactly that memory instance with the legacy 400 MHz staging value.
+ * A successful call sets the firmware clock to A733_GPU_CORE_HZ and replaces
  * queue/start/control/stop/power/IRQ callbacks and context, leaving other config
  * fields intact. Optional free-list operations retain their original context
  * through forwarding callbacks. The saved context stays live and disjoint from

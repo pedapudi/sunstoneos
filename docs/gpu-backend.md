@@ -18,8 +18,12 @@ Initialize the [firmware-memory adapter](gpu-memory.md) and
 [power platform](gpu-platform.md), then call `a733_gpu_backend_bind` before
 initializing the GPU service. The supplied service configuration must refer to
 the same firmware and shared-buffer descriptors as the memory adapter. Its
-configured GPU clock must be 400 MHz. Buffers, page lists, backend state, and
-control objects must remain private and pinned.
+initial clock field must be the legacy 400 MHz staging value. Successful
+binding replaces it with the power controller's 1008 MHz core clock. Service
+OPEN reconstructs the firmware system-init and runtime-config clock fields
+from that value before publication and startup. A refused bind preserves the
+configuration. Buffers, page lists, backend state, and control objects must
+remain private and pinned.
 
 Binding verifies EL1 execution, enabled MMU/data cache, the 24 MHz counter,
 and readable/writable identity Device-nGnRnE mappings for every allowlisted

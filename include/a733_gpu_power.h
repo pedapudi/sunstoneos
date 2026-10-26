@@ -8,8 +8,8 @@
 /* The PERI0 400 MHz output that the resource manager verifies for its PERI0
  * users (A733_GPU_RESOURCE_PARENT). The GPU core runs from PLL_GPU0 at
  * A733_GPU_CORE_HZ (a733_gpu_opp.h) and holds no PERI0 parent. The firmware
- * configuration of the GPU service still states this rate until firmware
- * start adopts A733_GPU_CORE_HZ. */
+ * configuration initially states this legacy rate; successful native backend
+ * binding replaces it with A733_GPU_CORE_HZ before service OPEN publishes it. */
 #define A733_GPU_INITIAL_HZ 400000000u
 /* PWCR reset value of a PPU with one device Q-Channel (DEN0051E Table 5-10):
  * DEVQACTIVE 0 and the channel's handshake enabled. CORE6 reads this with

@@ -124,6 +124,26 @@ static int bind(void)
     CHECK(!mmio_count && !power_enabled);
     return 0;
 }
+
+int backend_firmware_clock_check(void)
+{
+    CHECK(!setup());
+    const uint32_t initial = config.state.gpu_clock_hz;
+    /* Refusal is transactional: it must not rewrite caller configuration. */
+    CHECK(!a733_gpu_backend_bind(&backend, &service, &config, &memory, &power, NULL));
+    CHECK(config.state.gpu_clock_hz == initial && !backend.initialized);
+    CHECK(!bind());
+    CHECK(config.state.gpu_clock_hz == A733_GPU_CORE_HZ);
+    /* This is the serializer used by service OPEN before firmware startup. */
+    struct pvr_mips_object mappings[PVR_FW_RESOURCE_COUNT];
+    CHECK(pvr_fw_state_prepare(service.config.resources, &service.config.state, mappings));
+    uint32_t system, runtime;
+    memcpy(&system, (unsigned char *)region(PVR_FW_SYSTEM_INIT) + 344, sizeof(system));
+    memcpy(&runtime, (unsigned char *)region(PVR_FW_RUNTIME_CONFIG) + 12, sizeof(runtime));
+    CHECK(system == A733_GPU_CORE_HZ && runtime == A733_GPU_CORE_HZ);
+    CHECK(!mmio_count && !power_enabled);
+    return 0;
+}
 static int enabled(void)
 {
     CHECK(config.power.begin(&backend, operation_deadline));

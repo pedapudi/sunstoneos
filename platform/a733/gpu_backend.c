@@ -467,6 +467,10 @@ int a733_gpu_backend_bind(struct a733_gpu_backend *b, struct pvr_gpu_service *s,
         .free_list_ops = c->free_lists.ops, .free_list_context = c->context,
         .irq = {A733_GPU_GICD, A733_GPU_INTID}, .phase = A733_GPU_BACKEND_BOUND, .initialized = 1};
     atomic_init(&b->error, 0);
+    /* The legacy staging value describes PERI0, not the PLL_GPU0 rate that
+     * this backend's power controller establishes. OPEN reconstructs both
+     * firmware clock fields from this config before publishing them. */
+    c->state.gpu_clock_hz = A733_GPU_CORE_HZ;
     c->queue = (struct pvr_ccb_ops){queue_read, queue_write, barrier, kick};
     c->start = (struct pvr_gpu_start_ops){now, start_read, start_write, started, publish};
     c->control = (struct pvr_gpu_control_ops){now, control_read, control_write, compat, event};
