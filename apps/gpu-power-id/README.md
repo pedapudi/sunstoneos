@@ -272,6 +272,18 @@ of the firmware and GPU that runs the job's client CCB commands;
 `--board-log` with `--board-cases` compares a board log with chosen
 models.
 
+## Every failure after the ON powers the GPU off
+
+In the firmware-stop, first-job and session variants every failure after
+the GPU's ON goes through `fws_shutdown` (`fw-start.c`): the acknowledged
+stop, the vendor OFF after a power-off acknowledgement, the stop without
+acknowledgements, and, when an idle check never matches, a forced full
+soft reset and the OFF. The FAIL line names the failure and then how the
+GPU went off. Only a failing power controller or a GPU register access
+that never completes can leave the GPU on or the board without a return
+([job-session design](../../docs/designs/gpu-job-session.md), "Every
+outcome ends with the GPU off"). `check.py --fw-stop` runs twelve cases.
+
 ## The session variant runs eight timed jobs on one context
 
 `--fw-session` builds the first-job variant with `FWS_JOBS=8`

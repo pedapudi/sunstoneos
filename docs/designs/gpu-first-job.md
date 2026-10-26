@@ -408,3 +408,12 @@ check is at most 11,311 of 16,128 bytes.
 - `checks/pvr-gpu-stop.c` (122 retained faults) and
   `checks/pvr-gpu-stop-reference.py` pass; the second compares the
   unacknowledged plan with upstream's `pvr_fw_stop`, final reset included.
+
+## Next steps
+
+The job session that followed this job passed on port 3-1 (set 30); its
+design note lists the next GPU steps: the larger Mesa-compiled dispatch,
+the clock and DVFS state (1,008 MHz at 960 mV), the CORE6 power-on time
+as a startup cost (7 to 11 ms), the license rule for the firmware binary,
+and the open MMU-status field of this note's post-mortem
+([job session](gpu-job-session.md), "Next steps").

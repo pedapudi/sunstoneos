@@ -34,6 +34,10 @@ class Local(survey.Survey):
         ctypes.memset(self.ram_pointer+survey.REPORT-0x41000000,0,0x1b00)
         self.mmio[0x03400000]=0x37
         self.mmio[0x03400004]=3
+        # The preserved prefix predates the MBUS admission reads. Model the
+        # already-restored boot0 state; checks/el3-mbus.py covers the change.
+        self.mmio[0x02002588]=0x81000000
+        self.mmio[0x02002594]=0x00030001
         for i in range(1,4):self.mmio[0x03400100+4*i]=0x10101*i
         for c,r in enumerate(self.rdist):
             self.mmio[r+0x24]=0x100

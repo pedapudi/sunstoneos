@@ -52,6 +52,27 @@ history.
 
 ## Active branches
 
+Autonomous development has resumed. The coordinator preserves both initialized
+board sessions while implementations and independent reviews proceed without
+hardware access. Each proposed physical test still needs a reviewed return and
+failure path compatible with the current session; a normal ROM return alone
+does not establish recovery from a fault.
+
+| Work | Branch | Immediate deliverable |
+| --- | --- | --- |
+| GPU failure recovery | `work/gpu-job-session-1025` | Correct the rejected reset/OFF path; retain power and ownership when idle cannot be proved |
+| CPU returning image | `work/resume-cpu-return-1025` | Fit the workload overlay within its reservation and prepare safe clock/rail restoration |
+| OS thermal protection | `work/resume-thermal-1025` | Admit and enforce the qualification session's 70 °C CPU stop |
+| NPU lifecycle | `work/resume-npu-lifecycle-1025` | Bound interrupt-route waits without releasing uncertain ownership |
+| GPU exact-sum application | `work/resume-gpu-application-1025` | Connect the existing mimus kernel to the demonstrated job path and compare exact outputs |
+| DRAM restoration | `work/resume-dram-restore-1025` | Build the capture-derived record and SRAM restore path with failure checks |
+
+Two independent reviewers cover CPU/thermal/DRAM and GPU/NPU respectively.
+Workers own separate source paths, reuse successful evidence and submit focused
+checks. The coordinator integrates changes, updates this handoff and the hardware
+matrix, and pushes reviewed results. The microSD merge remains a separate ongoing
+assignment; these workers do not edit its storage paths.
+
 The branch notes under "Next steps" in each design document say what remains.
 - **`work/cpu-top-opp-step6-1025`:** CPU top points, step 6 and its
   analysis. Step 7, the sustained load, needs the 70 °C OS thermal stop and an
@@ -68,19 +89,22 @@ be pruned.
 
 ## Known problems and next steps
 
-- **Returning overlay overflow.** The MBUS restore merged into bringup adds
-  about 870 bytes to the returning overlay. The return-deadline workload
-  profile then overflows its 16 KiB reservation, with or without the top-point
-  relock. Its next freeze needs a new layout (`docs/designs/cpu-top-opp.md`,
-  "Next steps").
-- **GPU shutdown on every failure is unmerged.** Commit `52e8c75c` on
-  `work/gpu-job-session-1025` (head `2081c682`) routes each failure after GPU
-  ON through one shutdown path. Its review found a high-severity risk: the
-  forced soft reset and OFF, used when idle checks fail, can hang the memory
-  bus and lose the board. The review recommends leaving the GPU on unless a
-  fresh read shows the bus idle. The findings are in
-  `~/.cache/sunstoneos/evidence/gpu-off-review-20261025/review.md`. Fix them,
-  rerun the review, then merge.
+- **CPU returning image layout is repaired.** Both workload profiles fit
+  the existing 16 KiB reservation. The ordinary profile has 3,004 bytes free;
+  the top-point profile has 68 bytes free. Both builds and nine instruction
+  cases plus eight host-runner cases per profile pass. Evidence is under
+  `~/.cache/sunstoneos/evidence/resume-cpu-return-20261025/`.
+  Restoring the raised supply rails remains separate. A failed top-point
+  workload can also retain raised clocks, so this layout repair does not
+  authorize a top-point run in the current board sessions.
+- **GPU failure cleanup is corrected in software.** The reviewed shutdown
+  path retains power and ownership when idle cannot be proved. It no longer
+  forces reset/OFF after failed idle checks or bypasses idle checks solely on
+  a firmware power-off acknowledgement. Three native builds and twenty focused
+  ELF-model cases pass under
+  `~/.cache/sunstoneos/evidence/gpu-recovery-20261025/`.
+  Physical failure recovery remains unqualified. A retained failure ends GPU
+  use for that powered lifetime; it does not establish reusable GPU state.
 - **Do not run GPU set `board-bundles-20261025-31`.** It repeats the qualified
   eight-job session with the older image, which lacks the shutdown on every
   failure path.

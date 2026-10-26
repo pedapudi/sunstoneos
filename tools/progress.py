@@ -54,6 +54,8 @@ ALIASES = {
 # Explicit source scopes already established by the canonical hardware matrix.
 # A **tested** marker is still required; a host DMA result cannot enter here.
 PHYSICAL_SCOPES = {
+    'gpu': '**tested** for firmware restart and eight correct compute jobs',
+    'npu': '**tested** for interrupt completion and matching ShuffleNetV2 outputs',
     'boot rom': '**tested** for identity, SRAM transfer',
     'cpu': '**tested** for instruction execution on the boot A55',
     'ddr': '**tested** independently on both attached boards for initialization and distinct transfers',
@@ -238,7 +240,9 @@ def parse_hardware(markdown):
         updates.append({'title': title, 'markdown': prose, 'links': links(prose)})
     if not rows:
         warnings.append('Hardware inventory table was not recognized; no completion totals are inferred.')
-    known_unqualified = 'Every row below has **no qualification evidence**' in markdown
+    known_unqualified = any(declaration in markdown for declaration in (
+        '**No row is fully qualified across its required functions.**',
+        'Every row below has **no qualification evidence**'))
     if not known_unqualified:
         warnings.append('The matrix-wide qualification declaration changed; qualification is not inferred.')
     matched = set()
