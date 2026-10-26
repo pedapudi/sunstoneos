@@ -66,10 +66,7 @@ does not establish recovery from a fault.
 
 | Work | Branch | Immediate deliverable |
 | --- | --- | --- |
-| Cold crypto ownership | `work/resume-remote-cold-1026` | Complete selected boot-path accounting and define the supported predecessor contract before DRAM reuse |
-| Eight-worker GPU | `work/resume-gpu-eight-workers-1026` | Reuse the existing owner-only GPU hook and synchronous eight-worker dispatch; remove only unsupported restrictions justified by source and linked evidence |
-| Concurrent GPU/NPU | `work/concurrent-gpu-npu-design-1026` | Resolve shared client/owner admission and clock-disturbance prerequisites in the existing OS services |
-| microSD DMA return | `work/resume-sd-return-1026` | Complete bounded normal drain/restoration and retain ownership on uncertain exception paths |
+| Resident GPU | `work/resident-gpu-cold-1026` | Extend the complete eight-worker CPU/GPU/NPU composition to the cold-card path with explicit reset, mapping and clock prerequisites |
 
 Independent reviewers cover CPU/thermal/DRAM, accelerator operation and peripheral
 integration. Workers reuse successful evidence and submit focused checks. The
@@ -79,9 +76,9 @@ coordinator integrates accepted work, updates the canonical records and pushes
 The latest merged work includes paired training-record selection and updates,
 read-only microSD DMA, eight-worker supervised OS recognition, CPU/NPU
 performance controls, normal NPU restart and optional card-boot DRAM restoration.
-The combined resident eight-worker CPU/NPU image and supervised GPU image with
-CPU clock control also build and pass their selected checks. Their evidence is
-under `resident-npu-cpu8-1026/` and `resume-gpu-cpu-clock-20261026/`.
+The resident eight-worker CPU/NPU image and the supervised eight-worker
+CPU/GPU/NPU image build and pass selected checks. Their evidence is under
+`resident-npu-cpu8-1026/` and `concurrent-gpu-npu-1026/`.
 
 The branch notes under "Next steps" in each design document say what remains.
 - **`work/cpu-top-opp-step6-1025`:** CPU top points, step 6 and its
@@ -108,8 +105,8 @@ be pruned.
   session and CPU-grant epochs; supervision follows the tasks actually selected.
   Twenty-four host cases and twenty linked entry/admission cases pass under
   `~/.cache/sunstoneos/evidence/resume-card-os-1026/`. With cold CPU ownership
-  and resident NPU integration, the combined monitor is 32,688 bytes, leaving
-  80 bytes in its fixed 32 KiB reservation.
+  and the reviewed crypto-engine predecessor contract, the combined monitor is
+  32,456 bytes, leaving 312 bytes in its fixed 32 KiB reservation.
   Stage 2 now uses the existing 3.3 V, 50 MHz, four-bit DMA reader with bounded
   transfers and guarded partial sectors. Sixteen focused linked cases pass under
   `~/.cache/sunstoneos/evidence/resume-stage2-sd-1026/`; physical throughput is
@@ -121,9 +118,14 @@ be pruned.
   Twenty-three linked ownership cases and actual resident startup/permission
   checks pass under `cold-cpu-static-off-1026/combined-frozen/`. Control code uses
   size optimization; SD and SHA code retain their normal optimization.
-  Physical boot remains unqualified, and crypto-engine exclusion still refuses.
-  The fixed supported boot/reset contract and predecessor accounting remain
-  under review; arbitrary warm/FEL jumps are outside that proposed contract.
+  The cold monitor now admits the crypto engine under the fixed nonsecure SD
+  predecessor contract, with checks that reject mismatched entry routes. The
+  caller must establish a fresh, quiescent device lifetime before memory reuse;
+  these checks do not establish reset history. Arbitrary warm/FEL jumps remain
+  unsupported. Thirty-one admission cases and two affected SD instruction cases
+  pass under `cold-ce-lineage-1026/implementation-closure.json`. Only admission
+  uses `-Oz`; SD transfer and SHA code retain `-O2`. Physical cold boot and reset
+  coverage remain unqualified.
   Device-specific
   applicability now excludes OR100 from the required writer mask, while its
   historical bit remains reserved. All 25 real-device checks remain; 113 native
@@ -173,8 +175,14 @@ be pruned.
   rejects owner aliases and binds the exact 904-byte combined session. Seven
   startup cases, fourteen host cases and shared-provider success/fault cases
   pass under `resume-gpu-cpu-clock-20261026/`. The composition adds 88 executable
-  bytes and no state beyond the existing CPU feature. Eight-worker GPU and
-  concurrent GPU/NPU integration remain active work.
+  bytes and no state beyond the existing CPU feature.
+  Supervised GPU recognition now supports eight workers. The actual engine and
+  FreeRTOS fixture verify joined output readout, service progress during work
+  and retained failure before acknowledgment. Thirteen host cases, four build
+  guards and pair compatibility pass under `resume-gpu-eight-workers-20261026/`.
+  The existing placement plan is retained; it does not establish an eight-core
+  speedup. Added worker support uses 6,336 code bytes and 401,440 mutable bytes,
+  mainly existing worker stacks and slots.
   Physical GPU recognition, failure drain and recovery remain unqualified.
 - **NPU interrupt waits are bounded in software.** Pending mask, rearm and
   stop callbacks expire after 10 ms plus one scheduler tick, observed on the
@@ -209,6 +217,20 @@ be pruned.
   card producer, twenty entry cases and three late-fault cases pass under
   `resident-npu-cpu8-1026/`. This does not implement NPU acceleration of mimus.
   Physical combined execution and cold reset/retirement remain unqualified.
+- **The supervised eight-worker CPU/GPU/NPU image is integrated.**
+  GPU recognition and the finite ShuffleNet NPU application start independently.
+  Admission rejects shared-client and fixed-owner collisions before provider
+  construction. Combined clocks require a distinct record bound to the image,
+  board and powered lifetime. Newly generated OS NPU payloads use initialized
+  non-executable RAM in every profile; actual linked bytes remain authenticated.
+  One combined native build, sixteen host cases, four native admission cases
+  and one current-provider overlap/retention case pass under
+  `concurrent-gpu-npu-1026/`. Code and read-only data occupy 1,332,905 bytes;
+  888,832 bytes remain before the fixed noncacheable pool. The merged source
+  matches the reviewed tree, so no integration rebuild or runtime replay was
+  needed. Physical concurrency and cross-PLL behavior remain unqualified;
+  synthetic bundles cannot supply that authority. Resident GPU card support is
+  the next implementation step.
 - **OS thermal qualification support is implemented.** The session can lower
   the CPU critical threshold to 70 °C; zero retains the normal policy. A
   bounded binary report preserves the first recognition interval's temperature
@@ -233,11 +255,17 @@ be pruned.
   affected sanitizer checks, host decoding and native builds pass under
   `~/.cache/sunstoneos/evidence/resume-sd-completion-1025/snapshot/`.
   Physical DMA, cache coherence, SDR104 and throughput remain unqualified.
-  The first DMA image cannot use either preserved session: timer/exception
-  exits bypass SD stop, and successful return retains SD configuration.
-  Its accepted lifetime ends with power removal. The source-backed scheduling
-  decision is under
-  `~/.cache/sunstoneos/evidence/sd-dma-eligibility-20261026/`.
+  The first frozen DMA image remains ineligible for either preserved session;
+  its scheduling decision is under `sd-dma-eligibility-20261026/`. The current
+  default 3.3 V profile instead drains completed reads and restores the initial
+  controller, clock, pin and resource state before normal return. A private
+  return guard requires an explicit restoration receipt and successful monitor
+  status. Uncertain DMA, exceptions and the 1.8 V profile park without returning.
+  Fifteen linked modeled cases, all sixteen vector routes and focused provider
+  and host checks pass under `resume-sd-return-1026/`. The linked cases delegate
+  ROM return to the previously qualified monitor; they do not qualify the new
+  image on hardware. Code grows by 5,412 bytes, with 96 bytes of added state and
+  no per-read work. Physical return and current-session eligibility remain open.
   The host producer now supports `--profile 2 --plan first-read`: one 4096-byte
   read at sector 0 using the unchanged native binary. Successful decoding
   requires matching card identity and CRC from the accepted PIO reference.
@@ -261,6 +289,10 @@ be pruned.
   `~/.cache/sunstoneos/evidence/dram-card-restore-20261026/`. The accepted RAM
   artifacts remain byte-identical. Physical reservations, backups, ROM boot,
   memory restoration and temperature qualification remain outstanding.
+  The existing saved DRAM-parameter record is preserved. Four actual-instruction
+  cases verify that a differing valid parameter set fails restore admission and
+  falls back to full training. Evidence is under
+  `cold-ce-lineage-1026/restore-prelude-results.json`.
 - **CPU/NPU performance modes are integrated in software.** The optional service
   selects the highest operating points for the speed bin by default, with a
   lower-power mode and thermal overrides. It changes NPU clocks only after

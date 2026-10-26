@@ -56,7 +56,13 @@ its return and failure paths.
   read deadline and backup-first helper update plans. The default keeps full
   training; restoration remains explicitly experimental until physical memory
   and temperature qualification. Actual card allocation and backups remain
-  prerequisites. This does not yet form an autonomous OS card bundle.
+  prerequisites. The resident OS card bundle is implemented and software-checked;
+  physical installation and autonomous boot remain unqualified.
+
+The default 3.3 V read-only microSD DMA diagnostic now restores its controller,
+clock, pins and ownership before normal return. Uncertain completion parks.
+Focused linked, provider and host checks pass under `resume-sd-return-1026/`;
+physical return and eligibility for the preserved board sessions remain open.
 
 Normal NPU stop/restart now preserves the same registered providers and service
 objects; focused software checks pass. Physical same-instance restart and domain
@@ -256,7 +262,8 @@ to the stated scope:
   storage plans. Eight inference workers and CPU operating-point grants are
   supported; entry binds the board identity and derives fresh session/grant
   epochs. Twenty-four producer cases and twenty linked entry/admission cases
-  pass under `resume-card-os-1026/`. The combined CPU/NPU monitor occupies 32,688 of 32,768 bytes.
+  pass under `resume-card-os-1026/`. With cold CPU ownership and the crypto-engine
+  predecessor contract, the monitor occupies 32,456 of 32,768 bytes.
   [Cold SD admission](boot-slots.md#cold-sd-admission-starts-from-boot0s-controller-state)
   checks inherited controller and pin state. Loading then uses the existing
   3.3 V, 50 MHz, four-bit DMA path, with bounded transfers and guarded tails.
@@ -267,8 +274,12 @@ to the stated scope:
   OFF through loading. Cache cleanup follows acknowledged OFF, and resident
   startup releases policy after publishing entry state. Twenty-three ownership
   cases and actual resident startup/permission checks pass under
-  `cold-cpu-static-off-1026/combined-frozen/`. Crypto-engine predecessor accounting
-  and physical boot qualification remain open. No card installation or physical
+  `cold-cpu-static-off-1026/combined-frozen/`. The fixed nonsecure SD predecessor
+  contract now permits crypto-engine admission after caller-established cold
+  quiescence. Thirty-one admission and two affected SD cases pass under
+  `cold-ce-lineage-1026/implementation-closure.json`. Arbitrary warm/FEL entry is
+  unsupported; physical cold boot and reset coverage remain unqualified.
+  No card installation or physical
   autonomous OS boot has occurred. Packer licensing
   and exact source equivalence remain unresolved.
   The [cache-wrapper audit](cold-entry.md#the-parser-cleans-cpu-caches-before-returning)
@@ -613,8 +624,14 @@ to the stated scope:
   The supervised GPU image now also accepts CPU clock control on the A76 pair,
   with a finite readiness wait before GPU OPEN and exact combined-session/owner
   checks. The selected native build and focused startup, host and shared-provider
-  cases pass under `resume-gpu-cpu-clock-20261026/`. Eight-worker GPU and concurrent
-  GPU/NPU operation remain under development.
+  cases pass under `resume-gpu-cpu-clock-20261026/`. Eight-worker GPU support now
+  passes actual engine/FreeRTOS readout, service-progress and retained-failure
+  checks, plus native build and host admission, under
+  `resume-gpu-eight-workers-20261026/`. The combined supervised eight-worker
+  CPU/GPU/ShuffleNet-NPU image also builds within its existing mappings. Sixteen
+  host cases, four native admission cases and one current-provider overlap/stop
+  case pass under `concurrent-gpu-npu-1026/`. Physical recognition, simultaneous
+  accelerator operation and cross-PLL behavior remain unqualified.
   A supervised launcher and session preparation exist. Preparation requires a
   reviewed entry record from physical evidence and stages authenticated radio
   and headset profiles and firmware for those builds. [The recorded-audio launch](os-image.md#first-bounded-launch-with-recorded-audio)
@@ -2223,8 +2240,11 @@ to the stated scope:
   and late IRQ/fault state revokes the completed-client health exemption.
   The combined build, actual card producer, twenty entry cases and three
   late-fault cases pass under `resident-npu-cpu8-1026/`. Physical combined
-  execution and cold-reset retirement remain unqualified. NPU mimus acceleration
-  is separate outstanding work.
+  execution and cold-reset retirement remain unqualified. The supervised NPU
+  application also composes with eight-worker GPU recognition and CPU clock
+  grants; it has its own combined lifetime/clock prerequisites. All newly
+  generated OS NPU profiles place payloads in initialized non-executable RAM.
+  NPU mimus acceleration remains separate outstanding work.
   The application clock admission accepts the board's normalized
   reference and recorded PERI0 settings. Six focused final-image cases pass
   under `npu-single-core-20261018/reference-refresh/`; unchanged startup and

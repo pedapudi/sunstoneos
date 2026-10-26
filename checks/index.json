@@ -7729,6 +7729,7 @@
  "os-image-link.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/gpu-eight-workers.md",
    "docs/designs/gpu-recognition.md",
    "docs/designs/recognition-dispatch.md",
    "docs/gpu-mimus-service.md",
@@ -9378,6 +9379,47 @@
   "summary": "Authenticate the pinned OpenSSL source; build its minimal host library and run the SAE cases.",
   "usb": false
  },
+ "sd-return-close.py": {
+  "cache_areas": [],
+  "docs": [
+   "apps/storage-read-returning/README.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Exercise terminal SD close with actual providers and modeled card/MMIO.",
+  "usb": false
+ },
+ "sd-return-host.py": {
+  "cache_areas": [],
+  "docs": [
+   "apps/storage-read-returning/README.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--native",
+   "--output"
+  ],
+  "summary": "Bind the new return decoder to an actual linked producer log, without USB.",
+  "usb": false
+ },
+ "sd-return-native.py": {
+  "cache_areas": [],
+  "docs": [
+   "apps/storage-read-returning/README.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--output"
+  ],
+  "summary": "Actual SD task/close and linked private monitor guard; modeled hardware only.",
+  "usb": false
+ },
  "sdio-controller.py": {
   "cache_areas": [],
   "docs": [
@@ -9936,7 +9978,7 @@
   "required_arguments": [
    "'--' + name.replace('_', '-')"
   ],
-  "summary": "The returning SD0 read image's actual setup, SD task and report under the SD card models.",
+  "summary": "Earlier frozen SD0 images and reusable card models.",
   "usb": false
  },
  "storage-read-rom-pins.py": {

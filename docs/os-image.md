@@ -380,11 +380,13 @@ thermal qualification remain separate prerequisites and evidence gaps.
 
 `SUNSTONE_A733_OS_NPU=ON` links the NPU runtime and one application client
 into either OS lifetime with recorded input. The resident profile accepts CPU
-operating-point grants; the supervised combination requires the performance
-service. Configuration refuses the microphone, radio, headset and GPU linear
-options. [Resident NPU integration](designs/resident-npu.md) describes cold-card
+operating-point grants. A supervised NPU/CPU-clock build requires either the
+performance service or the combined GPU profile; GPU builds exclude performance
+commands. Microphone, radio and headset combinations remain refused. [Resident NPU integration](designs/resident-npu.md) describes cold-card
 authority, initialized non-executable assets, bounded health and the combined
-eight-worker ShuffleNet evidence.
+eight-worker ShuffleNet evidence. [Concurrent GPU/NPU integration](designs/os-gpu-npu.md)
+adds the supervised eight-worker GPU path with independent startup, fixed-owner
+and client checks, and distinct combined clock authority.
 `SUNSTONE_OS_NPU_CLIENT_MODEL` selects the catalogue entry of
 `tools/npu-session-models.json` that the client runs (default 0, the
 192-byte to 72-byte convolution). Only that model and its input and
@@ -394,7 +396,9 @@ OS. `SUNSTONE_OS_NPU_CATALOGUE` names the artifact map;
 with its size and SHA-256 hash in the catalogue. The session binds the
 SHA-256 of the linked model's SHA-256 digest.
 
-- **Memory.** The service owns `0x47400000..0x47c00000` as one write-back
+- **Memory.** Newly generated model/input/reference payloads occupy initialized
+  non-executable RAM in every OS NPU profile; metadata remains in CODE.
+  The service owns `0x47400000..0x47c00000` as one write-back
   DMA32 pool, separate from the board's local pool; that 8 MiB fits any one
   catalogue entry. The link check refuses any loaded section in that
   interval, and startup checks the write-back mapping of every 2 MiB block.
@@ -869,8 +873,8 @@ Configuration stops when `SUNSTONE_A733_OS_AUDIO` and
 set without the headset. GPU builds require the pinned firmware and model
 inputs and set their own output mapping; callers must not override
 `A733_GPU_OUTPUT_EL0_READ_ONLY`. Supervised GPU builds use recorded input,
-optionally with CPU clock control, and exclude other optional devices and the
-performance-command service ([recognition dispatch](recognition-dispatch.md#build-gate)).
+optionally with CPU clock control and the NPU service. They exclude microphone,
+radio, headset and performance-command services ([recognition dispatch](recognition-dispatch.md#build-gate)).
 Supervised radio and headset builds request the existing fast SDIO mode;
 physical firmware-loading time remains unqualified (see [Radio station](#radio-station)).
 
@@ -1254,8 +1258,9 @@ No integrated OS physical execution is established by these checks.
   linear option integrates recognition compute into the OS.
 - **NPU recognition acceleration.** Both OS lifetimes integrate a finite NPU
   catalogue application. It does not produce the exact sums required by the
-  mimus recognition path. Concurrent GPU/NPU and eight-worker GPU integration
-  remain separate work.
+  mimus recognition path. Supervised eight-worker GPU/NPU composition is
+  implemented; resident cold-card GPU authority and physical concurrent
+  qualification remain outstanding.
 - **Physical use.** The supervised image needs a reviewed entry record
   from physical evidence and a queued board test; the microphone build also
   needs a connected, reviewed microphone. The radio and headset builds need

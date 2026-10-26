@@ -15,8 +15,10 @@ interface is in [`a733_remote_writers.h`](../include/a733_remote_writers.h).
 
 Status: implemented and checked against modeled register states. The stage-2
 loader checks the mask before card access; the memory qualification image
-records it under its separate residual-risk contract. CE remains unproven when
-the ROM has released its resets. OR100 is not part of the A733 device processor
+records it under its separate residual-risk contract. The generic provider leaves
+CE unproven when the ROM has released its resets. The cold monitor additionally
+accepts the fixed nonsecure SD predecessor contract described below. OR100 is not
+part of the A733 device processor
 inventory, so its historical mask bit 1 is reserved and never emitted.
 
 ## The cold boot chain releases CE reset and may leave DMA0 and storage controllers out of reset
