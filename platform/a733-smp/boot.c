@@ -58,6 +58,7 @@ static void wait_clear(uintptr_t address,uint32_t mask)
     do {a733_smp_startup_check();if(!(read32(address)&mask))return;}while(1);
 }
 #include "a733_el3_security.h"
+#include "a733_el3_mbus.h"
 void a733_smp_boot(void)
 {
     volatile const struct a733_smp_contract *source=(void *)A733_SMP_CONTRACT_ADDRESS;
@@ -106,7 +107,9 @@ void a733_smp_boot(void)
         if(owners[c-1].state!=A733_CPU_ENTRY_DISPATCHED)a733_smp_stop(2,c+32);
     }
     /* The vendor's cold-boot security setup, before any core enters EL1:
-     * the secondaries wait for the primary's continuation below. */
+     * the secondaries wait for the primary's continuation below. MBUS goes
+     * back to boot0's 600 MHz first (include/a733_el3_mbus.h). */
+    {unsigned mbus=a733_el3_mbus_restore();if(mbus)a733_smp_stop(2,0x200u|mbus);}
     a733_el3_security_setup();
     RESULT->stage=2;barrier();
     a733_cpu_primary_continue(admission.epoch);

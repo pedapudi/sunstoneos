@@ -102,9 +102,13 @@ static int parents(void)
     if(!load(0x07090160,&xo)||!load(CCU,&ref)||!a733_clock_ref24_valid(xo,ref)||
        !load(CCU+0xa0,&peri)||(peri&0xff000002)!=0xfe000000||
        !bits(CCU+0xa8,0x80000000,0)||!bits(CCU+0xac,0x8e000000,0))return 0;
-    unsigned n=((peri>>8)&255)+1,div=(((peri>>20)&7)+1)*3;
-    if(n<53||n>105||24*n!=400*div||!bits(CCU+0x1908,0x8060806,0x8060806)||
-       !bits(CCU+0x1988,0x8060000,0x8060000))return 0;
+    /* PERI0_300M is PERI0_2X/4 through PERI0_600M (ccu-sun60iw2.c:118, 120).
+     * Its software and auto gates and those of 2X and 600M must be on
+     * (manual 4.1.6.249: bits 27, 25, 21, 20 and 11, 9, 5, 4), and the
+     * status register must show the software gates (4.1.6.258). */
+    unsigned n=((peri>>8)&255)+1,div=(((peri>>20)&7)+1)*4;
+    if(n<53||n>105||24*n!=300*div||!bits(CCU+0x1908,0x0b300b30,0x0b300b30)||
+       !bits(CCU+0x1988,0x0b300000,0x0b300000))return 0;
     /* The row reads ON: the power-domain owner powered or adopted domain 1.
      * Fabric leaf gates remain inherited under the sealed authority. */
     if(!bits(CCU+0x5c0,1u<<5,1u<<5)||!bits(CCU+0x5e0,1u<<11,1u<<11))return 0;

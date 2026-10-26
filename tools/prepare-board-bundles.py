@@ -694,7 +694,7 @@ ROWS = [
               word(0x07003008, 's_tzma', note='S_TZMA +0x8: 0 after write 11'),
               word(0x020540e0, 'spc', note='SPC port 14 status word: 0xfffffbff after write 17')],
              'All six words are read and the 128 scratch bytes are restored and equal.'),
-    read_row('clock-audit-words', 19, 'Every CCU, PRCM and CPU PLL clock register, the speed bin and the RTC clock words',
+    read_row('clock-audit-words', 21, 'Every CCU, PRCM and CPU PLL clock register, the speed bin and the RTC clock words',
              'The clock state of the board, read only, for the rate audit of docs/clock-audit.md: each PLL, bus, '
              'module clock and gate word that the CCU, the PRCM and the CPU PLL block document, the SID speed-bin '
              'word, and the RTC oscillator words behind their bus gate',

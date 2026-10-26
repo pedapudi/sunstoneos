@@ -4,7 +4,9 @@
 The physical build must make the vendor BL31's cold-boot security writes
 (include/a733_el3_security.h) in their order before EL1 entry, the DMA
 security words only when the controller's bus gate and reset are open; the
-QEMU build makes none."""
+QEMU build makes none. Before them, a start that finds MBUS at the boot ROM's
+400 MHz restores boot0's 600 MHz (include/a733_el3_mbus.h); with any other
+MBUS value it makes no MBUS write."""
 import argparse
 import hashlib
 import json
@@ -43,6 +45,9 @@ def security_writes(dma_open):
     rows += [(0x07010290, 0x17), (0x02003f00, 7)]
     rows += [(0x04601020, 0xffff), (0x04024020, 0xffff)] if dma_open else []
     return rows + [(0x020540e0, 0xfffffbff)]
+# The MBUS restore from the ROM's 0x84000000 (checks/el3-mbus.py has the order).
+MBUS_WRITES = [(0x02002588, 0x0c000000), (0x02002594, 0x10001), (0x02002588, 0x0c000000),
+               (0x02002588, 0x09000000), (0x02002594, 0x30001), (0x02002588, 0x89000000)]
 for model in (False, True):
     name = 'qemu' if model else 'physical'
     flags = ['-DMONITOR_QEMU=1'] if model else []
@@ -68,7 +73,8 @@ for model in (False, True):
               'spi-disable-dropped', 'spi-enable-restore-dropped', 'banks-changed',
               'final-ctlr-dropped', 'final-rwp', 'dist-read-at-deadline',
               'local-read-at-deadline', 'spi-read-after-deadline', 'final-read-at-deadline')
-    cases = [(f'are-{value:x}', value, False, '', 0) for value in (0, 0x10, 0x20, 0x30, 0x37)] if not model else [
+    cases = [(f'are-{value:x}', value, False, '', 0) for value in (0, 0x10, 0x20, 0x30, 0x37)] + [
+        ('are-37-mbus-rom', 0x37, False, '', 0)] if not model else [
         ('qemu-cold', 0, False, '', 0), ('qemu-init-timeout', 0, True, '', 0)]
     if not model:
         cases += [('cleanup-' + fault, 0x37, False, fault, 0) for fault in faults]
@@ -93,10 +99,21 @@ for model in (False, True):
         # PRCM_SEC_SWITCH_REG holds 0x10 to show the OR keeps other bits; the
         # DMA controllers are gated and in reset, as FEL leaves them, except
         # in are-37, where an earlier image left both running.
-        dma_open = case == 'are-37'
+        dma_open = case.startswith('are-37')
         cpu.mem_write(0x07010290, (0x10).to_bytes(4, 'little'))
         for bgr in (0x02002704, 0x0200270c):
             cpu.mem_write(bgr, (0x10001 if dma_open else 0).to_bytes(4, 'little'))
+        # MBUS at the ROM's value in the -mbus-rom case; zero, which the
+        # restore leaves alone, in every other case. Its update bit clears
+        # before the next read.
+        mbus_rom = case.endswith('-mbus-rom')
+        if mbus_rom:
+            cpu.mem_write(0x02002588, (0x84000000).to_bytes(4, 'little'))
+            cpu.mem_write(0x02002594, (0x30001).to_bytes(4, 'little'))
+        def read_mbus(uc, access, address, size, value, unused):
+            word = int.from_bytes(uc.mem_read(0x02002588, 4), 'little')
+            uc.mem_write(0x02002588, (word & ~(1 << 27)).to_bytes(4, 'little'))
+        cpu.hook_add(UC_HOOK_MEM_READ, read_mbus, None, 0x02002588, 0x0200258b)
         security = []
         def write_security(uc, access, address, size, value, unused):
             assert size == 4 and phase[0] == 'init', (hex(address), size, phase[0])
@@ -256,9 +273,14 @@ for model in (False, True):
         assert stopped[-1] == ('semihost-exit' if model else 'reset'), (case, stopped)
         # Every admitted physical start makes the security writes, after the GIC
         # setup; a refused start and the QEMU build make none.
-        expected_security = [] if model or refused or early_timeout else security_writes(dma_open)
+        expected_security = [] if model or refused or early_timeout else (
+            (MBUS_WRITES if mbus_rom else []) + security_writes(dma_open))
         assert security == expected_security, (case, [(hex(a), hex(v)) for a, v in security])
         status = int.from_bytes(cpu.mem_read(0x42000010, 8), 'little')
+        # The restore's log line opens the log; other cases start it empty.
+        log_length = int.from_bytes(cpu.mem_read(0x42000018, 8), 'little')
+        log = bytes(cpu.mem_read(0x42000100, log_length)).decode()
+        assert log == ('MBUS 0x84000000 0x81000000 0\n' if mbus_rom else ''), (case, log)
         replaced = int.from_bytes(cpu.mem_read(0x42000078, 8), 'little')
         failed_cleanup = bool(fault and fault != 'delayed-rwp') or early_timeout
         expected_status = 4 if refused else 6 if failed_cleanup else requested_status
@@ -288,6 +310,7 @@ for model in (False, True):
 assert results, 'No selected case matched'
 a.output.write_text(json.dumps({'physical_access': False, 'passed': True, 'cases': results,
     'sources': {name: digest(ROOT / name) for name in ('platform/a733/boot.h', 'include/a733_el3_security.h',
+                                                       'include/a733_el3_mbus.h',
                                                        'checks/a733-monitor-are.py')},
     'monitor_source': {'path': str(a.monitor_source.resolve()), 'sha256': digest(a.monitor_source)},
     'tools': {str(path): digest(path) for path in (a.clang, a.lld, a.objdump)},

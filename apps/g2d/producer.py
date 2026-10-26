@@ -29,7 +29,7 @@ def extend(board,source,*,owner,authority,client,initial,memory,electrical,super
     facts=b''.join(hashlib.sha256(data).digest() for data in (initial,memory,electrical,supervision))
     raw=board+struct.pack('<6Q',0x4153373347324131,1,904,owner,authority,client)+facts
     raw+=hashlib.sha256(source).digest()+struct.pack('<8I',*extension)
-    raw+=struct.pack('<6I',0x01000003,100000000,0x10007,0x10007,800000,1)
+    raw+=struct.pack('<6I',0,300000000,0x10007,0x10007,800000,1)
     raw+=struct.pack('<12I',*geometry)
     prep.session_check(raw)
     return raw
