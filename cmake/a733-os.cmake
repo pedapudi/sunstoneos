@@ -58,9 +58,6 @@ endif()
 # the image has it, between the speed bin's vendor points. The boot mode is
 # the image manifest's perf_boot_mode.
 option(SUNSTONE_A733_OS_PERF "Integrated OS with the high and low performance-mode service" OFF)
-if(SUNSTONE_A733_OS_PERF AND SUNSTONE_A733_OS_RESIDENT)
-  message(FATAL_ERROR "Resident recorded-card CPU grants use startup operating points without the performance-command service")
-endif()
 set(SUNSTONE_A733_OS_PERF_BOOT "high" CACHE STRING "Performance mode at boot: high or low")
 if(SUNSTONE_A733_OS_PERF AND NOT SUNSTONE_A733_OS_CPU_CLOCK)
   message(FATAL_ERROR "The performance-mode service runs in the CPU clock owner; it needs SUNSTONE_A733_OS_CPU_CLOCK")

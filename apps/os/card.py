@@ -55,6 +55,69 @@ def condition_bytes(name, ref, directory, frozen):
     return data
 
 
+PERF_CONDITIONS = {'runtime-operating-point-transitions-qualified',
+    'thermal-interruption-and-exhausted-budget-qualified',
+    'uncertain-transition-retired-before-cold-reuse'}
+PERF_CROSS = 'concurrent-gpu-npu-runtime-cross-pll-qualified'
+
+
+def performance_configuration(elf, manifest, raw):
+    """Actual linked mode row and the existing finite CPU authority."""
+    perf = manifest.get('perf_modes', False)
+    require(type(perf) is bool, 'Performance capability must be boolean.')
+    if not perf:
+        return None
+    require(manifest.get('perf_operation') == 8 and manifest.get('perf_boot_mode') in ('high', 'low'),
+            'Resident performance capability differs.')
+    rows = [s for s in elf.symbols if s['name'] == 'a733_perf_modes' and s['shndx'] != 0]
+    require(len(rows) == 1 and rows[0]['size'] == 88, 'Expected the actual single-bin performance table.')
+    column, name, *values = struct.unpack('<IH2x20I', elf.read(rows[0]['value'], 88))
+    require((column, name) == (4, 0x0400), 'Resident performance bin is unsupported.')
+    blocks = ('cpu-l', 'cpu-b', 'dsu', 'gpu', 'npu')
+    points = {mode: {block: values[base + i*2:base + i*2 + 2] for i, block in enumerate(blocks)}
+              for mode, base in (('high', 0), ('low', 10))}
+    g = host.grant_fields(raw)
+    require(g is not None and g['clusters'] == 3 and 5 <= g['changes'] <= 64 and
+            list(g['max_mhz']) == [points['high'][b][0] for b in blocks[:2]],
+            'Resident performance needs both CPU maxima and a bounded boot/thermal grant.')
+    gpu = host.os_link.gpu_configuration(elf, required=manifest.get('gpu_linear', False))
+    if gpu:
+        expected = {'version': 1, 'boot_mode': manifest['perf_boot_mode']}
+        for mode in ('high', 'low'):
+            expected[mode + '_hz'] = points[mode]['gpu'][0] * 1000000
+            expected[mode + '_uv'] = points[mode]['gpu'][1] * 1000
+        require(gpu.get('performance') == expected, 'GPU runtime points differ from the linked performance table.')
+    owned = list(blocks[:3]) + (['gpu'] if manifest.get('gpu_linear') else []) + (['npu'] if host.npu_session(raw) else [])
+    return {'version': 1, 'boot_mode': manifest['perf_boot_mode'], 'operation': 8,
+            'bin_column': column, 'bin_name': name, 'points': points, 'owned': owned,
+            'cpu_changes_per_boot': g['changes'], 'thermal_restore_reserve': 2}
+
+
+def performance_policy(policy, configuration, directory, frozen):
+    if configuration is None:
+        require('performance' not in policy, 'Runtime performance authority supplied without service.')
+        return
+    perf = policy.get('performance')
+    conditions = PERF_CONDITIONS | ({PERF_CROSS} if {'gpu', 'npu'} <= set(configuration['owned']) else set())
+    require(isinstance(perf, dict) and set(perf) == {'configuration', 'conditions'} and
+            perf['configuration'] == configuration and isinstance(perf['conditions'], dict) and
+            set(perf['conditions']) == conditions, 'Cold runtime performance policy differs.')
+    for condition, ref in perf['conditions'].items():
+        fact = json.loads(condition_bytes('performance_' + condition, ref, directory, frozen))
+        require(fact.get('schema') == 'a733-os-card-performance-condition-v1' and
+                fact.get('scope') == 'resident-runtime-operating-points' and
+                fact.get('condition') == condition and fact.get('configuration') == configuration and
+                fact.get('reviewed') is True and all(fact.get(k) == policy[k] for k in
+                    ('identity', 'sid_authority', 'image_sha256', 'stage2_sha256', 'canonical_session_sha256', 'evidence_class')),
+                'Cold runtime performance condition names another capability or lifetime.')
+        physical = policy['evidence_class'] == 'board-records'
+        require(fact.get('physical_authority') is physical and fact.get('modeled') is (not physical),
+                'Cold runtime performance evidence class differs.')
+        require(isinstance(fact.get('evidence'), list) and fact['evidence'], 'Runtime performance evidence is missing.')
+        for i, item in enumerate(fact['evidence']):
+            condition_bytes('performance_' + condition + '_' + str(i), item, directory, frozen)
+
+
 def gpu_policy(policy, config, raw, directory, frozen):
     if config is None:
         require('gpu' not in policy, 'GPU cold authority supplied without GPU.')
@@ -91,7 +154,7 @@ def gpu_policy(policy, config, raw, directory, frozen):
             require(fact.get('schema') == 'a733-os-card-gpu-npu-clock-v1' and
                     fact.get('scope') == 'simultaneous-powered-cold-lifetime' and
                     fact.get('gpu') == {'core_hz': config['core_hz'], 'supply_uv': config['supply_uv']} and
-                    fact.get('npu') == {'mhz': 852, 'supply_uv': 800000} and
+                    fact.get('npu') == {'mhz': policy['npu']['mhz'], 'supply_uv': 800000} and
                     fact.get('npu_pll_enable_with_gpu_active') is True and
                     fact.get('gpu_pll_start_stop_with_npu_active') is True and
                     fact.get('cpu_ddr_clocks_remain_admitted') is True,
@@ -123,13 +186,13 @@ def evidence_offsets(raw):
     return offsets
 
 
-def npu_summary(raw):
+def npu_summary(raw, boot_mhz=852):
     owner, command, supervisor = struct.unpack_from('<3Q', raw, 832)
     pck, model, jobs = struct.unpack_from('<3I', raw, 856)
     return {'owner': owner, 'command_admission': command, 'supervisor': supervisor,
             'pck_client': pck, 'client_model': model, 'jobs': jobs,
             'catalogue': bytes(raw[888:920]).hex(), 'pool': host.NPU_RANGE,
-            'work_us': NPU_WORK_US, 'mhz': 852, 'supply_uv': 800000}
+            'work_us': NPU_WORK_US, 'mhz': boot_mhz, 'supply_uv': 800000}
 
 
 linked_npu_assets = host.linked_npu_assets
@@ -139,7 +202,9 @@ def npu_policy(policy, raw, directory, frozen):
     if not host.npu_session(raw):
         require('npu' not in policy, 'NPU cold authority supplied without NPU.')
         return
-    require(policy.get('npu') == npu_summary(raw), 'Cold NPU owner/catalogue/jobs/pool/operating point differs.')
+    perf = policy.get('performance', {}).get('configuration')
+    boot_mhz = perf['points'][perf['boot_mode']]['npu'][0] if perf else 852
+    require(policy.get('npu') == npu_summary(raw, boot_mhz), 'Cold NPU owner/catalogue/jobs/pool/operating point differs.')
     rules = host.module('card_npu_rules', ROOT / 'apps/npu-board/prepare.py')
     conditions = {k: set(v) for k, v in rules.CONDITIONS.items()}
     conditions['clock'].remove('supervised-cross-pll-disturbance-risk')
@@ -171,7 +236,7 @@ def npu_policy(policy, raw, directory, frozen):
             word = fact.get('sid_dvfs_word')
             require(type(word) is int and 0 <= word < 2**32 and
                     (((word >> 16) & 255) or ((word >> 8) & 255)) in (0x12, 0x04, 0x05) and
-                    fact.get('mhz') == 852, 'Cold NPU vendor top point is unsupported by the fixed 800 mV provider.')
+                    fact.get('mhz') == boot_mhz, 'Cold NPU boot point is unsupported by the fixed 800 mV provider.')
         if name == 'supervision':
             require(fact.get('supervisor') == policy['npu']['supervisor'] and fact.get('work_us') == NPU_WORK_US and
                     fact.get('one_attempt_per_boot') is True, 'Cold NPU finite-work supervision differs.')
@@ -277,7 +342,7 @@ def policy_check(policy_path, raw, image, manifest, monitor, model_fixture):
                 all(type(b1.get(k)) is int and 800 <= b1[k] <= 1050 for k in ('dcdc3_mv', 'dcdc5_mv')),
                 'Cold CPU policy requires matching read-only B1 evidence.')
         column = host.bin_column(b1['sid_word'])
-        require(column is not None, 'Unsupported SID bin.')
+        require(column is not None and (not manifest.get('perf_modes') or column == 4), 'Unsupported SID bin.')
         maxima = [host.supported(c, column)[-1] for c in ('cpu-l', 'cpu-b')]
         g = host.grant_fields(raw)
         require(cpu == {'clusters': 3, 'max_mhz': maxima, 'changes_per_boot': g['changes']} and
@@ -285,6 +350,8 @@ def policy_check(policy_path, raw, image, manifest, monitor, model_fixture):
                 g['approval'] == hashlib.sha256(policy_raw).digest(), 'Cold CPU policy/grant differs from vendor maxima.')
     else:
         require('cpu' not in p, 'CPU policy supplied without a linked grant.')
+    configuration = performance_configuration(host.os_link.Elf(image), manifest, raw)
+    performance_policy(p, configuration, policy_path.parent, frozen)
     npu_policy(p, raw, policy_path.parent, frozen)
     config = host.os_link.gpu_configuration(host.os_link.Elf(image), required=manifest.get('gpu_linear', False))
     require(manifest.get('gpu_profile') == config, 'Cold GPU manifest differs from the linked image.')
@@ -305,7 +372,7 @@ def prepare(a):
             manifest.get('lifetime') == profile['lifetime'] == 'resident' and
             manifest.get('image_sha256') == sha(image) and manifest.get('contract_profile') == profile and
             manifest.get('inference') == inference and
-            not any(manifest.get(k) for k in ('audio', 'radio', 'headset', 'perf_modes')),
+            not any(manifest.get(k) for k in ('audio', 'radio', 'headset')),
             'Expected the linked resident recorded OS profile.')
     runtime, build_id = flat_runtime(image)
     raw = a.session.read_bytes()
@@ -319,7 +386,7 @@ def prepare(a):
     assets_header = SimpleNamespace(read_text=lambda: 'mimus_asset_address[3]={0x44000000,0x44800000,0x45000000};\n' +
                                    'mimus_asset_bytes[3]={' + ','.join(str(e['bytes']) for e in declared) + '};\n')
     linked = host.os_link.check(SimpleNamespace(read_bytes=lambda: image), assets_header, ROOT / 'apps/mimus/recorded.h',
-                               ROOT / 'boot/a733/stage2/loader.c', gpu_linear=manifest.get('gpu_linear', False), cpu_clock=host.session_layout(raw)[1], npu=host.npu_session(raw))
+                               ROOT / 'boot/a733/stage2/loader.c', gpu_linear=manifest.get('gpu_linear', False), cpu_clock=host.session_layout(raw)[1], npu=host.npu_session(raw), perf=manifest.get('perf_modes', False))
     require(all(manifest.get(k) == v for k, v in linked.items() if k != 'perf_boot_mode' or v is not None),
             'The actual linked services, capability or layout differs from the manifest.')
     if host.npu_session(raw):
@@ -360,7 +427,7 @@ def prepare(a):
     updates.plan(out / 'slot/plan.json', out / 'allocation.json', a.card_image,
                  json.loads(card_raw), out / 'storage')
     result = {'schema': SCHEMA, 'physical_qualified': False, 'model_fixture': policy['evidence_class'] == 'model-fixture',
-              'inference': inference, 'cpu_vendor_top_policy': host.session_layout(raw)[1], 'npu': npu_summary(raw) if host.npu_session(raw) else None,
+              'inference': inference, 'cpu_vendor_top_policy': host.session_layout(raw)[1], 'npu': policy.get('npu'), 'performance': policy.get('performance', {}).get('configuration'),
               'gpu': linked['gpu_profile'], 'generation': plan['generation'],
               'slot': plan['slot'], 'runtime_bytes': len(runtime), 'models_bytes': len(models),
               'files': {str(p.relative_to(out)): sha(p.read_bytes()) for p in sorted(out.rglob('*')) if p.is_file()},

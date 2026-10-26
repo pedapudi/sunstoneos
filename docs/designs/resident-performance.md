@@ -69,7 +69,11 @@ change budget per boot. Runtime-transition evidence must cover thermal
 interruption, retained failure and watchdog recovery. A startup-only policy
 cannot satisfy this section, and supervised per-epoch approval cannot replace
 cold authority. The producer freezes these references with the existing
-policy and validates the actual linked service capability.
+policy and validates the actual linked service capability. The producer reads
+all points from the unique linked mode table and checks the GPU capability
+against that row. Combined GPU/NPU runtime transitions require a separate
+`concurrent-gpu-npu-runtime-cross-pll-qualified` condition bound to those points.
+Cold startup qualification at one fixed pair cannot satisfy that condition.
 
 NPU cold authority must bind the actual boot rate and authorize stopped PLL
 retunes between 492 and 852 MHz at 800 mV on a supported bin. The finite NPU

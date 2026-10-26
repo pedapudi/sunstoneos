@@ -18,16 +18,82 @@ npu = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(npu)
 
 
+def resident(a, manifest):
+    """Actual resident admission/USB dispatch; thermal publication is modeled."""
+    assert manifest['lifetime'] == 'resident' and manifest['inference']['workers'] == 8
+    image = npu.Image(a.build / 'sunstone-a733-os.elf', layout_names=npu.NAMES)
+    raw = bytearray(a.resident_session.read_bytes())
+    assert len(raw) == 1176 and raw[48:80].hex() == manifest['build_id']
+    # The card template has generation but no epoch until monitor entry.
+    assert struct.unpack_from('<Q', raw, 24)[0] == 0
+    generation = struct.unpack_from('<Q', raw, 32)[0]
+    assert generation and struct.unpack_from('<2Q', raw, len(raw)-64) == (0, generation)
+    epoch = 17
+    struct.pack_into('<Q', raw, 24, epoch)
+    struct.pack_into('<Q', raw, len(raw)-64, epoch)
+    npu.prep.session_check(raw, False)
+    npu.prep.manifest_cpu_clock(manifest, raw)
+    m = npu.Machine(image, raw)
+    assert m.call('os_session_valid', m.session) == 1
+    cases = ['actual resident card grant admitted']
+    m.now = 70000000
+    m.u.mem_write(m.board, bytes(raw[:592]))
+    publication = image.address('report', unit='apps/os/perf.c')
+    sequence = image.address('report_sequence', unit='apps/os/perf.c')
+    mailbox = image.address('mailbox', unit='apps/os/perf.c')
+    # Only publication readiness is supplied by the model; no owner work runs.
+    m.u.mem_write(publication, bytes(192));m.put(sequence, 2, 4)
+    def exchange(command, request_epoch):
+        stopped, reply = m.exchange(struct.pack('<BBHIQ', 8, command, 0, 0x11b if command == 2 else 0, request_epoch))
+        assert not stopped and len(reply) == 192
+        assert struct.unpack_from('<2Q', reply, 16) == (epoch, generation)
+        return reply
+    reply = exchange(0, 0)
+    assert struct.unpack_from('<I', reply, 32)[0] == 0 and not m.get(mailbox, 8)
+    cases.append('resident report remains available beyond finite workload')
+    reply = exchange(2, epoch-1)
+    assert struct.unpack_from('<I', reply, 32)[0] == 3 and not m.get(mailbox, 8)
+    cases.append('stale epoch refuses before mailbox publication')
+    reply = exchange(2, epoch)
+    answer, number = struct.unpack_from('<2I', reply, 32)
+    queued = m.get(mailbox, 8)
+    assert answer == 1 and number and queued == number << 32 | 2 << 12 | 0x11b
+    cases.append('fresh epoch publishes exactly one command after workload expiry')
+    reply = exchange(2, epoch)
+    assert struct.unpack_from('<I', reply, 32)[0] == 2 and m.get(mailbox, 8) == queued
+    cases.append('occupied mailbox refuses a second command')
+    m.put(mailbox, 0, 8)
+    m.put(publication+40, number, 4);m.put(publication+44, number, 4);m.put(sequence, 4, 4)
+    reply = exchange(0, 0)
+    assert struct.unpack_from('<2I', reply, 40) == (number, number)
+    cases.append('USB returns the modeled matching completion publication')
+    (a.output / 'MODEL-session.bin').write_bytes(raw)
+    result = {'cases': cases, 'physical_operation': False, 'thermal_publication_modeled': True,
+              'workers': manifest['inference']['workers'],
+              'image_sha256': hashlib.sha256((a.build / 'sunstone-a733-os.elf').read_bytes()).hexdigest(),
+              'session_sha256': hashlib.sha256(a.resident_session.read_bytes()).hexdigest(),
+              'inputs': {path: hashlib.sha256((ROOT / path).read_bytes()).hexdigest() for path in
+                         ('checks/perf-native.py', 'checks/os-npu.py', 'apps/os/admission.c',
+                          'apps/os/prepare.py', 'apps/mimus-board/usb0.c', 'apps/os/perf.c')}}
+    (a.output / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
+    print('PASS resident performance native admission and opcode8:', len(cases), 'cases')
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--build', type=Path, required=True)
-    p.add_argument('--cpu-session', type=Path, required=True)
+    sessions = p.add_mutually_exclusive_group(required=True)
+    sessions.add_argument('--cpu-session', type=Path)
+    sessions.add_argument('--resident-session', type=Path, help='Bound card template; only resident admission/epoch/mailbox cases')
     p.add_argument('--output', type=Path, required=True)
     a = p.parse_args()
     a.output.mkdir(parents=True, exist_ok=False)
     manifest = json.loads((a.build / 'os-image/link-check.json').read_text())
     assert manifest['perf_modes'] and manifest['npu'] and manifest['cpu_clock']
     assert manifest['perf_operation'] == 8 and manifest['thermal_report']
+    if a.resident_session:
+        resident(a, manifest)
+        return
     image = npu.Image(a.build / 'sunstone-a733-os.elf', layout_names=npu.NAMES)
     cpu = a.cpu_session.read_bytes()
     assert len(cpu) == 904

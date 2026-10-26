@@ -21,7 +21,7 @@ def save(path, value):
     path.write_text(json.dumps(value, indent=2) + '\n')
 
 
-def gpu_records(out, image_hash, stage2_hash, config, combined):
+def gpu_records(out, image_hash, stage2_hash, config, combined, npu_mhz=852):
     source=out/'gpu-source.json';save(source,{'fixture':'MODEL ONLY; no physical authority'})
     reference={'path':str(source.resolve()),'sha256':card.sha(source.read_bytes())}
     result={'configuration':config,'conditions':{}}
@@ -38,14 +38,14 @@ def gpu_records(out, image_hash, stage2_hash, config, combined):
         if condition==card.GPU_NPU_CLOCK:
             fact.update(schema='a733-os-card-gpu-npu-clock-v1',scope='simultaneous-powered-cold-lifetime',
                         gpu={'core_hz':config['core_hz'],'supply_uv':config['supply_uv']},
-                        npu={'mhz':852,'supply_uv':800000},npu_pll_enable_with_gpu_active=True,
+                        npu={'mhz':npu_mhz,'supply_uv':800000},npu_pll_enable_with_gpu_active=True,
                         gpu_pll_start_stop_with_npu_active=True,cpu_ddr_clocks_remain_admitted=True)
         path=out/('gpu-'+condition+'.json');save(path,fact)
         result['conditions'][condition]={'path':str(path.resolve()),'sha256':card.sha(path.read_bytes())}
     return result
 
 
-def npu_records(out, raw, refs, image_hash, gpu=None):
+def npu_records(out, raw, refs, image_hash, gpu=None, boot_mhz=852):
     rules = card.host.module('card_fixture_npu_rules', ROOT/'apps/npu-board/prepare.py')
     evidence = out/'npu-condition.json';save(evidence, {'fixture':'MODEL ONLY; no hardware evidence'})
     ref = {'path':str(evidence.resolve()), 'sha256':card.sha(evidence.read_bytes())}
@@ -64,7 +64,7 @@ def npu_records(out, raw, refs, image_hash, gpu=None):
         else: fact['conditions']={key:(gpu['conditions'][key] if key==card.GPU_NPU_CLOCK else ref) for key in sorted(conditions[name])}
         if name=='admission':fact['ddr_sha256']=refs['npu_ddr']['sha256']
         if name=='power':fact['supply_uv']=800000
-        if name=='clock':fact.update(mhz=852,sid_dvfs_word=0x400)
+        if name=='clock':fact.update(mhz=boot_mhz,sid_dvfs_word=0x400)
         if name=='supervision':fact.update(supervisor=21,work_us=60000000,one_attempt_per_boot=True)
         path=out/('npu_'+name+'.json');save(path,fact);digest=card.sha(path.read_bytes())
         refs['npu_'+name]={'path':str(path.resolve()),'sha256':digest}
@@ -87,6 +87,63 @@ def npu_cases(card, args, raw, manifest, refused):
     section=next(s for s in elf.sections if s[1]!=8 and s[3]<=pointer<s[3]+s[5])
     bad=bytearray(original);bad[section[4]+pointer-section[3]]^=1
     refused('actual-linked-npu-model-bytes',lambda:card.linked_npu_assets(card.host.os_link.Elf(bytes(bad))))
+
+
+def performance_records(out, policy, configuration):
+    source=out/'performance-source.json';save(source,{'fixture':'MODEL ONLY; no physical authority'})
+    reference={'path':str(source.resolve()),'sha256':card.sha(source.read_bytes())}
+    result={'configuration':configuration,'conditions':{}}
+    conditions=card.PERF_CONDITIONS | ({card.PERF_CROSS} if {'gpu','npu'} <= set(configuration['owned']) else set())
+    for condition in sorted(conditions):
+        fact={key:policy[key] for key in ('identity','sid_authority','image_sha256','stage2_sha256','canonical_session_sha256','evidence_class')}
+        fact.update(schema='a733-os-card-performance-condition-v1',scope='resident-runtime-operating-points',
+                    condition=condition,configuration=configuration,reviewed=True,modeled=True,
+                    physical_authority=False,evidence=[reference])
+        path=out/('performance-'+condition+'.json');save(path,fact)
+        result['conditions'][condition]={'path':str(path.resolve()),'sha256':card.sha(path.read_bytes())}
+    return result
+
+
+def performance_cases(args, raw, manifest, model):
+    from harness import refused
+    image=args.image.read_bytes();monitor=args.stage2.read_bytes()
+    original=json.loads(args.policy.read_text());out=args.policy.parent
+    cases=['actual-resident-performance-card-bundle','four-extents','bound-fresh-generation']
+    def check(name, change, reason):
+        policy=json.loads(json.dumps(original));change(policy)
+        path=out/('performance-bad-'+name+'.json');save(path,policy)
+        bound=bytearray(raw);bound[-32:]=hashlib.sha256(path.read_bytes()).digest()
+        refused(lambda:card.policy_check(path,bound,image,manifest,monitor,True),reason)
+        cases.append(name)
+    check('startup-only-policy',lambda p:p.pop('performance'),'Cold runtime performance policy differs')
+    for field,value in (('boot_mode','low' if manifest['perf_boot_mode']=='high' else 'high'),
+                        ('operation',7),('cpu_changes_per_boot',63),('thermal_restore_reserve',0),('owned',['cpu-l'])):
+        check('configuration-'+field,lambda p,k=field,v=value:p['performance']['configuration'].__setitem__(k,v),
+              'Cold runtime performance policy differs')
+    if card.PERF_CROSS in original['performance']['conditions']:
+        check('missing-runtime-cross-pll',lambda p:p['performance']['conditions'].pop(card.PERF_CROSS),
+              'Cold runtime performance policy differs')
+    check('configuration-wrong-point',lambda p:p['performance']['configuration']['points']['high']['npu'].__setitem__(0,851),
+          'Cold runtime performance policy differs')
+    condition=sorted(card.PERF_CONDITIONS)[0]
+    def mutate_fact(policy,name,field,value):
+        fact=json.loads(Path(policy['performance']['conditions'][condition]['path']).read_text())
+        fact[field]=value;path=out/('performance-fact-'+name+'.json');save(path,fact)
+        policy['performance']['conditions'][condition]={'path':str(path.resolve()),'sha256':card.sha(path.read_bytes())}
+    for field,value in (('scope','startup-only'),('identity','another-board'),('image_sha256','00'*32),
+                        ('sid_authority',1),('canonical_session_sha256','00'*32),('reviewed',False)):
+        check('fact-'+field,lambda p,k=field,v=value:mutate_fact(p,k,k,v),
+              'Cold runtime performance condition names another capability or lifetime')
+    check('model-claims-physical',lambda p:mutate_fact(p,'physical','physical_authority',True),
+          'Cold runtime performance evidence class differs')
+    refused(lambda:card.policy_check(args.policy,raw,image,manifest,monitor,False),'explicit --model-fixture')
+    cases.append('model-is-not-physical-authority')
+    bound=bytearray((args.output/'slot/os-session.bin').read_bytes())
+    struct.pack_into('<Q',bound,24,1);struct.pack_into('<Q',bound,len(bound)-64,1)
+    path=out/'performance-native-session.bin';path.write_bytes(bound)
+    subprocess.run([model,'--check-session',path],check=True)
+    cases.append('native-runtime-grant-admission')
+    return cases
 
 
 def gpu_cases(args, raw, manifest, model):
@@ -158,12 +215,17 @@ def main():
     for name in ('build', 'base-model', 'overlay-model', 'wav', 'boot0', 'packer', 'output'):
         p.add_argument('--' + name, type=Path, required=True)
     p.add_argument('--stage2-build', type=Path, help='Reuse an accepted monitor build without rebuilding unchanged stage2')
+    p.add_argument('--perf-only', action='store_true', help='Only resident runtime performance authority and actual bundle cases')
     p.add_argument('--gpu-only', action='store_true', help='Only changed cold GPU authority and actual bundle cases')
     p.add_argument('--prepare-only', action='store_true', help='Bind a final integration image without replaying mutation cases')
     a = p.parse_args(); out = a.output; out.mkdir(parents=True, exist_ok=False)
     image = a.build / 'sunstone-a733-os.elf'
     manifest = json.loads((a.build / 'os-image/link-check.json').read_text())
     npu = manifest.get('npu', False)
+    perf = manifest.get('perf_modes', False)
+    assert sum((a.perf_only,a.gpu_only,a.prepare_only))<=1
+    if a.perf_only: assert perf
+    npu_mhz=492 if perf and manifest['perf_boot_mode']=='low' else 852
     gpu = manifest.get('gpu_linear', False)
     stage2 = a.stage2_build or a.build
     _, build_id = card.flat_runtime(image.read_bytes())
@@ -174,6 +236,7 @@ def main():
                '-DA733_A76_ADMITTED=1', '-DSUNSTONE_A733_OS_CPU_CLOCK=1', '-DA733_SMP_CONTRACT_MAGIC=0x415337334f524331ULL',
                '-DOS_MODEL_BUILD_ID=' + ','.join(str(v) for v in build_id), 'checks/os-image-model.c',
                'drivers/storage/storage_digest.c', 'drivers/clock/a733_cpu_clock.c', '-o', str(model)]
+    if perf: command += ['-DSUNSTONE_A733_OS_PERF=1']
     if gpu:
         command += ['-DSUNSTONE_A733_OS_GPU_LINEAR=1',
                     '-DOS_RECOGNITION_CORE=' + str(manifest['inference']['owner_core'])]
@@ -198,24 +261,26 @@ def main():
         digest = card.sha(path.read_bytes()); raw[offset:offset+32] = bytes.fromhex(digest)
         refs[name] = {'path': str(path.resolve()), 'sha256': digest}
     gpu_facts = gpu_records(out, card.sha(image.read_bytes()), card.sha((stage2/'a733-stage2.bin').read_bytes()),
-                            manifest['gpu_profile'], npu) if gpu else None
+                            manifest['gpu_profile'], npu, npu_mhz) if gpu else None
     if npu:
-        npu_records(out, raw, refs, card.sha(image.read_bytes()), gpu_facts)
+        npu_records(out, raw, refs, card.sha(image.read_bytes()), gpu_facts, npu_mhz)
     raw[80:112] = raw[280:312]; refs['qualification'] = refs['recovery']
     b1 = out / 'cpu-b1.json'
     save(b1, {'schema': card.host.B1_SCHEMA, 'fixture': 'MODEL ONLY', 'identity': 'model-board',
-              'passed': True, 'grant_clusters': 0, 'pattern_lfm_clear': True, 'dcdc3_mv': 800, 'dcdc5_mv': 800, 'sid_word': 0})
+              'passed': True, 'grant_clusters': 0, 'pattern_lfm_clear': True, 'dcdc3_mv': 800, 'dcdc5_mv': 800, 'sid_word': 0x496 if perf else 0})
     refs['cpu_b1'] = {'path': str(b1.resolve()), 'sha256': card.sha(b1.read_bytes())}
-    maxima = [card.host.supported(c, 9)[-1] for c in ('cpu-l', 'cpu-b')]
-    struct.pack_into('<2Q4I', raw, grant + 32, 0, 0, 3, *maxima, 8)
+    maxima = [card.host.supported(c, 4 if perf else 9)[-1] for c in ('cpu-l', 'cpu-b')]
+    changes=64 if perf else 8
+    struct.pack_into('<2Q4I', raw, grant + 32, 0, 0, 3, *maxima, changes)
     manifest = json.loads((a.build / 'os-image/link-check.json').read_text())
     policy = {'schema': card.POLICY, 'scope': 'resident-recorded-cold-boot', 'identity': 'model-board',
               'evidence_class': 'model-fixture', 'sid_authority': 0x434f4c44, 'sid_words': sid,
               'image_sha256': card.sha(image.read_bytes()), 'stage2_sha256': card.sha((stage2/'a733-stage2.bin').read_bytes()),
               'inference': manifest['inference'], 'canonical_session_sha256': card.sha(card.canonical_session(raw)),
-              'cpu': {'clusters': 3, 'max_mhz': maxima, 'changes_per_boot': 8}, 'evidence': refs}
-    if npu: policy['npu'] = card.npu_summary(raw)
+              'cpu': {'clusters': 3, 'max_mhz': maxima, 'changes_per_boot': changes}, 'evidence': refs}
+    if npu: policy['npu'] = card.npu_summary(raw,npu_mhz)
     if gpu: policy['gpu'] = gpu_facts
+    if perf: policy['performance']=performance_records(out,policy,card.performance_configuration(card.host.os_link.Elf(image.read_bytes()),manifest,raw))
     save(out / 'policy.json', policy); raw[-32:] = hashlib.sha256((out/'policy.json').read_bytes()).digest()
     (out / 'session.bin').write_bytes(raw)
     backup = out / 'original-backup.img'
@@ -249,6 +314,12 @@ def main():
     bound = (args.output/'slot/os-session.bin').read_bytes()
     assert struct.unpack_from('<2Q', bound, 24) == struct.unpack_from('<2Q', bound, grant + 32) == (0,1)
     assert card.canonical_session(bound) == card.canonical_session(raw) and len(plan['extents']) == 4
+    if a.perf_only:
+        cases=performance_cases(args,raw,manifest,model)
+        save(out/'result.json',{'passed':True,'physical_access':False,'cases':cases,
+             'workers':manifest['inference']['workers'],'image_sha256':card.sha(image.read_bytes()),
+             'bundle_sha256':card.sha((args.output/'bundle.json').read_bytes())})
+        print('PASS resident performance card producer:',len(cases),'focused cases');return
     if a.gpu_only:
         assert gpu and npu and result['gpu']==manifest['gpu_profile']
         cases=gpu_cases(args,raw,manifest,model)
