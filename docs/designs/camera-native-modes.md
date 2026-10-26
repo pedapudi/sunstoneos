@@ -245,3 +245,20 @@ and USB fixtures. Its parent image predates the explicit profile-field loads;
 its tested capture and USB production units remain unchanged. Final actual-image
 profile admission and sealing are covered separately. The evidence closure
 records both identities and limits this reuse to those unchanged units.
+
+Integration with GPU performance control changes four camera compiler inputs:
+`drivers/power/a733_pmic.c`, `drivers/power/a733_pmic_consumer.c`,
+`include/a733_pmic_consumer.h`, and `include/a733_gpu_opp.h`. These inputs reach
+23 camera translation units. The camera samples its three configured rails
+through the PMIC provider and borrows their shared parent lease. It does not
+initialize the GPU consumer or request exclusive DCDC4 control. The linked
+consumer callback remains behind the shared adapter's GPU-only admission.
+
+The maximum-stream integration image builds and passes actual ELF profile
+admission. A focused provider check completes all three samples and stops before
+sensor-bus activity; a wrong voltage faults with memory retained. The image adds
+eight bytes of text, with data and BSS unchanged. Capture, geometry, and USB
+transport evidence is reused for unchanged production units. Results, compiler
+dependencies, artifact identities, and the frozen inputs are under
+`~/.cache/sunstoneos/evidence/camera-modes-1026/gpu-integration/`. These software
+checks establish no physical camera operation or timing.
