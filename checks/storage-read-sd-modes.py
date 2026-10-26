@@ -62,8 +62,10 @@ assert len(TUNING)==64
 class UhsMachine(Machine):
  """A UHS-I card and the PF bank selector, for SD profile 3.
 
- The card answers S18R with S18A, holds DAT low after CMD11 until the clock
- restarts after the bank reports 1.8 V, then reports switch done; CMD6 offers
+ The card answers S18R with S18A; the controller reports CMD11's response
+ with the voltage-switch bit only, not command done. The card holds DAT low
+ until the clock restarts after the bank reports 1.8 V, then the controller
+ reports both bits; CMD6 offers
  SDR104; CMD19 returns the tuning block only for sample delays in WINDOW."""
  WINDOW=range(20,32)
  def __init__(self,image,session):
@@ -76,6 +78,11 @@ class UhsMachine(Machine):
    assert self.held and size==4 and self.fifo<self.total
    word=int.from_bytes(self.mode_data[self.fifo:self.fifo+4],'little');self.fifo+=4
    self.trace.append(['read',a,word]);self.write(a,word);return
+  if a==0x0402003c and self.phase==3 and not getattr(self,'switch_done',False):
+   # The card drives DAT high after the clock restart; only then does the
+   # controller report the switch with both the voltage-switch and
+   # command-done bits (sunxi-mmc.c:2296-2307).
+   self.switch_done=True;self.regs[0x04020038]=self.regs.get(0x04020038,0)|(1<<10)|4
   if a==0x02000048 and self.bank_reads is not None:
    self.bank_reads-=1
    if self.bank_reads<=0:self.regs[a]=3<<10
@@ -90,8 +97,8 @@ class UhsMachine(Machine):
    assert self.held and self.regs.get(0x04020004,0)&(1<<31);self.trace.append(['write',a,v]);self.regs[a]=0
    if self.phase==1:self.phase=2
    else:
-    assert self.phase==2 and self.regs[0x02000048]==3<<10 and self.regs[0x04020004]==(1<<16)|(1<<31)
-    self.phase=3;self.regs[0x04020038]=self.regs.get(0x04020038,0)|(1<<10)|4
+    assert self.phase==2 and self.regs[0x02000048]==3<<10 and self.regs[0x04020004]==(1<<16)|(1<<31),(self.phase,hex(self.regs[0x02000048]),hex(self.regs[0x04020004]))
+    self.phase=3
    return
   if a==0x04020018 and not v&(1<<21) and v&63 in (11,19,41,6) and not (v&63==6 and not v&(1<<9)):
    n=v&63;arg=self.regs.get(0x0402001c,0)
@@ -103,7 +110,12 @@ class UhsMachine(Machine):
    assert self.held and not v&(1<<10);self.trace.append(['write',a,v]);self.commands.append([n,arg])
    self.regs[a]=v&~(1<<31);self.regs[0x04020038]=4;self.regs[0x04020020]=0x900;self.data_command=self.total=self.fifo=0
    if n==11:
-    assert v==0x9000014b and arg==0 and self.state==1 and self.phase==0;self.regs[0x04020020]=0x200;self.phase=1;return
+    # The controller reports CMD11's response with the voltage-switch bit
+    # (10) and withholds command done until the switch completes, as the
+    # board kernel's CMD11 handling expects (sunxi-mmc.c:2656-2659,
+    # :2296-2307); port 3-3's lifetime B read RINT 0x10400 there.
+    assert v==0x9000014b and arg==0 and self.state==1 and self.phase==0
+    self.regs[0x04020020]=0x200;self.regs[0x04020038]=1<<10;self.phase=1;return
    if n==6 and arg in (0x00fffff3,0x80fffff3):
     assert self.phase==3 and self.width==4 and self.regs[0x04020010]==64
     data=bytearray(64);data[13]=0x0b;data[16]=3

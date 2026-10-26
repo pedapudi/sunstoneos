@@ -1,12 +1,32 @@
 # microSD UHS-I SDR104 qualification and read throughput
 
-Status: **not frozen**. The coordinator freezes the image, sessions and
-authority records after review. Nothing here has run. [The UHS-I
-design](../designs/sd-uhs.md) gives the sequence, its sources and the
-fallback rules.
+Status:
 
-The test runs the supervised read-only SD service twice on one board, from the
-same image and card, with whole-board power removal before, between and after:
+- **Returning reads at high speed (profile 2): qualified** on port 3-3,
+  lifetime A of 2026-10-25 (`board-session-20261025-30/port-3-3/sd-ret-a`):
+  256 reads completed, card clock stopped at exit, throughput 1.4–1.7 MB/s
+  at 4 KiB.
+- **UHS-I SDR104 (profile 3): not qualified.** Lifetime B
+  (`board-session-20261025-32/port-3-3/sd-ret-b`) stopped at CMD11 before
+  any read; the driver waited for command done, which the controller
+  withholds until the switch ends. The fix is in the driver and the
+  emulation, not yet run on a board ([the UHS-I design](../designs/sd-uhs.md),
+  "Lifetime B: CMD11 completion").
+- **DMA reads: designed, not built** ([the DMA design](../designs/sd-dma.md),
+  accepted by the panel; unbuilt work in progress on `work/sd-dma-1025`).
+
+[The UHS-I design](../designs/sd-uhs.md) gives the sequence, its sources and
+the fallback rules. The first lifetime A on port 3-3 ran the supervised image
+and stopped before any SD command ("How the result reaches the host").
+
+On boards whose USB-C cable is their only power supply, the run uses the
+returning SD image (`apps/storage-read-returning/`, "The returning run"
+below): it reads the card, returns to the boot ROM and leaves its result in
+DRAM for FEL. The supervised image's result path needs a USB reconnect after
+every run, which on those boards removes power.
+
+The test reads the card twice on one board, from the same image and card,
+with whole-board power removal before, between and after:
 
 - **Lifetime A, before:** SD profile 2, four-bit high speed at 50 MHz and
   3.3 V. No SD command has yet run on either board, so this lifetime is also
@@ -83,6 +103,19 @@ the earlier storage-read bundles.
    requests at fixed pseudo-random offsets below sector 4,194,304 (2 GiB) and
    32 single sectors. The record's `storage_read_throughput` holds MB/s per
    pattern and the per-block and per-request costs.
+
+   Through the board queue, `common/bundle-run.py` takes the timeout and
+   the three `--artifact` paths from
+   `$PY $SR/tools/storage-read-queue-plan.py --bundle <bundle-A> --format shell`.
+   The checker refuses a claim whose submission does not cover the bundle's
+   `prepared.json`, `image.elf` and `launch.bin`. The timeout is the sum of the
+   checker's own bounds: every FEL request bounded by `fel_timeout`, the
+   59-second capture window, the refusal path and 60 seconds of setup. It is
+   638 s for the bundles of 2026-10-25. After the capture window every outcome
+   but a clean refusal holds the port lock and claim, so the timeout ends that
+   hold. `checks/storage-read-queue-plan.py` builds the queue row in a scratch
+   database and requires the checker's claim check to refuse it without the
+   artifacts and accept it with them.
 3. Remove board power, restore it, and bring the board to FEL and DDR again.
 4. Lifetime B: the same command with `<bundle-B>` and `$S/sd-uhs-b-sdr104`.
 5. Remove board power. This step is mandatory even after a failure: the card
@@ -98,6 +131,121 @@ Each command runs once. A retained or failed lifetime A stops the sequence
 before B. A retained lifetime B is recorded and not retried; its recovery is
 step 5.
 
+## How the result reaches the host
+
+The single-core image does not return to the ROM. After `exe`, it takes over
+the ROM's USB0 device controller (start mode 2): one soft disconnect, a device
+reset, and enumeration as a new device, product `sunstoneos native SD0 read`,
+serial `sunstoneos-a733-storage-read`, `bcdDevice` 0x0100. The checker waits
+up to 59 s for that instance, sends the read requests and stores each reply.
+If the original FEL instance is still present and unchanged at the end of the
+window, it makes one FEL read of the launcher's report at `0x52d00`, which
+answers only if the launcher refused before leaving the ROM. Every other
+outcome, success included, quarantines the port and holds it.
+`--supervised-manual-reconnect` names that recovery: the operator removes
+whole-board power before the port or the card is used again. On boards whose
+USB-C cable is their only supply, that is a power removal and DRAM is lost.
+A successful capture survives it, because the replies are on the host first.
+A stop before enumeration does not: the image's `a733_smp_stop` writes its
+status to DRAM at `0x42000000` and waits in WFE. FEL cannot read that address
+while the CPU is outside the ROM, and the power removal erases it.
+
+Lifetime A on 2026-10-25
+(`board-session-20261025-14/port-3-3/sd-uhs-a-hs-2/`) ran `exe` 12.2 s after
+the version request. For 59 s the original instance `003:051` stayed present
+with the same identity, so the image never made its USB0 disconnect. The
+report read then failed in `usb_bulk_send` with a timeout: the ROM's
+endpoints were still configured, but no code serviced them, so the launcher
+had not refused and the CPU had left the ROM. The image stopped after entry
+and before the takeover's disconnect.
+
+Its session supplied fabric words that the USB0 provider refuses, which
+explains the stop. Lifetime A's session template
+(`board-session-20261025-14/port-3-3/sd-bundle-A/session-template.bin`,
+offsets 488 and 500) holds `0x03000002`, `0xc3000000` and `0x81000000` at
+200, 600 and 600 MHz, copied from an unreviewed draft. Port 3-3 reads
+`0x03000002`, `0xc3000000` and `0x84000000` at CCU `0x500`, `0x580` and
+`0x588` (`board-session-20261023/port-3-3/r9-v4-capture`). Every provider's
+fabric check masks the second word with `0x8700001f`
+(`drivers/usb/a733_usb_platform.c`, `a733_usb_platform_init`;
+`drivers/storage/a733_mmc_platform.c`, `a733_mmc_platform_scopes`), and bit
+30 of `0xc3000000` falls outside that mask, so `a733_usb_platform_init`
+returns 0. The board application calls it through `a733_native_usb_bind`
+before the scheduler starts and, on that failure, calls
+`platform_panic("board bind", 6)` (`apps/board/main.c`), which stops the CPU
+in the monitor with the status in DRAM. The third word did not match that
+image either: its monitor had no MBUS restore, and the board's MBUS word
+after a ROM return is `0x84000000` (400 MHz). The configuration that image
+needed was `0x03000002`, `0x83000000` and `0x84000000` at 200, 600 and
+400 MHz, which the rank 9 input used when it passed on port 3-3. Current
+monitors restore MBUS to `0x81000000` (600 MHz) before EL1 starts
+(`include/a733_el3_mbus.h`), so a frozen word is wrong for one monitor or
+the other; the returning run computes its words from each lifetime's own
+read. This decoding comes from source and the session bytes; the image's own
+stop record was erased by the power removal.
+
+## The returning run
+
+The returning image (`apps/storage-read-returning/README.md`) identifies the
+card in the input's profile, runs the same read plan, records each read's
+time and CRC-32, parks the PMIC service and exits; the monitor returns to the
+ROM within its 2 s window. A stop also returns, with the provider's stage and
+fault in the log. `tools/storage-read-returning.py` signs the coordinator's
+approval for the lifetime, writes the image's input and decodes the result
+into the same throughput summary that the supervised checker computes.
+
+Before each exit it makes itself, the image stops the card clock and reports
+`SD_CLOCK_OFF`: 1 or 3 when the clock reads back stopped, 0 when it does not
+(a completed plan then ends with `SD_REASON=10` and status 1), 2 when the
+controller was never enabled. The monitor's 2 s return and an exception run
+no image code and leave the clock as it was; after them, and after every
+`SD_CLOCK_OFF=0`, the next step is whole-board power removal.
+
+The return leaves the PF bank voltage selector, the SD controller and its
+clock untouched, and resets the PF0, PF1, PF3 and PF5 functions to the ROM
+JTAG route; the README gives the ROM analysis. Lifetime B therefore also uses
+the returning image: the card and the PF bank stay at 1.8 V until the
+whole-board power removal that ends the lifetime, and nothing else runs on the
+board before it.
+
+Each lifetime runs the cold DDR start, a FEL read of the fabric words CCU
+`0x500`, `0x580` and `0x588` (`tools/board-bundles-next-read.py`), the
+cache-off helper and the survey, then:
+
+1. The coordinator signs the lifetime's approval:
+   `$PY $SR/tools/storage-read-returning.py sign --approval APPROVAL --ddr $S/DDR --survey $S/SURVEY --signer coordinator`.
+2. `$PY $SR/tools/storage-read-returning.py input --approval APPROVAL --request REQUEST --ddr $S/DDR --survey $S/SURVEY --fabric-read $S/FABRIC --config CONFIG --profile 2 --output $S/INPUT.bin`
+   (profile 3 for lifetime B). It refuses an approval not signed for this
+   DDR start and survey, and takes the fabric words from this lifetime's
+   read, with the MBUS word as the image's monitor will restore it, so a
+   change of those clocks before the run cannot become a refusal.
+3. The kernel runner, through the board queue:
+   `$PY $SR/tools/check-a733-kernel.py --fel $FEL --image IMAGE --mode kernel --ram-input $S/INPUT.bin --expect "COMPLETE SD0 returning read" --controlled CONTROLLED --return-timeout 5 --ddr-evidence $S/DDR/session.json --platform-survey $S/SURVEY/session.json --evidence $S/RUN`.
+4. `$PY $SR/tools/storage-read-returning.py decode --run $S/RUN --input $S/INPUT.bin --output $S/RUN/sd-result.json`.
+
+A prepared set gives these commands with every path filled in.
+
+
+## Next steps
+
+Both steps below end in a lifetime that needs whole-board power removal
+afterwards (lifetime B after the 1.8 V switch; any SD DMA run before its
+first board pass), so neither can run while the boards cannot be
+power-cycled.
+
+1. **Rerun lifetime B with the CMD11 fix.** Build the returning image from
+   this branch (`apps/storage-read-returning/build.py`), run
+   `checks/storage-read-returning.py` and `checks/storage-read-returning-host.py`,
+   freeze a set from set 28's runbook with the new image, and run profile 3
+   after a power removal, cold DDR start, fabric read, cache-off and survey.
+   Predictions are in "Predictions" below; the stop conditions are unchanged.
+2. **Build the SD DMA design.** `work/sd-dma-1025` holds the accepted design
+   (`c1d0b802`) and an unbuilt first pass of the core, platform and image
+   changes (`29bc8a2c`), which also carries the CMD11 fix. What remains: the
+   IDMAC model in the emulation check, the host tool's plan and log format,
+   the three-lens code review, the gate, a set, and board runs in profile 2
+   and then profile 3.
+
 ## Predictions
 
 | Quantity | Lifetime A | Lifetime B |
@@ -112,7 +260,7 @@ step 5.
 | Sequential 4 KiB reads | 8.5–13.0 MB/s | 8.5–15.6 MB/s, at least lifetime A's |
 | Random 4 KiB reads | 6.0–7.9 MB/s | 6.0–8.9 MB/s, at least lifetime A's |
 | Per-block cost | 20.8–34 µs (bus floor 20.8 µs) | 14–34 µs (bus floor 6.9 µs) |
-| Sector digests | Reference | Identical to lifetime A for every planned read |
+| Sector digests | Reference | Identical to lifetime A for every planned read (CRC-32 per read in the returning run) |
 
 The clock rates describe register configuration and are not measured. A
 lifetime-B per-block cost equal to lifetime A's means programmed I/O bounds

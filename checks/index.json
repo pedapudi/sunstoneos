@@ -9574,6 +9574,21 @@
   "summary": "Focused actual-image SD0 task/controller/native trace with modeled board services.",
   "usb": false
  },
+ "storage-read-queue-plan.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/board-runbooks/sd-uhs.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--bundle",
+   "--software",
+   "--output"
+  ],
+  "summary": "Check the queue artifacts and host timeout of a supervised SD0 read run.",
+  "usb": true
+ },
  "storage-read-retain.py": {
   "cache_areas": [],
   "docs": [],
@@ -9583,6 +9598,37 @@
    "--output"
   ],
   "summary": "Build and execute only the additive MMC retain API against existing real managers.",
+  "usb": false
+ },
+ "storage-read-returning-host.py": {
+  "cache_areas": [],
+  "docs": [
+   "apps/storage-read-returning/README.md",
+   "docs/board-runbooks/sd-uhs.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--read-record",
+   "--output"
+  ],
+  "summary": "The host tool of the returning SD0 read image: signing, input and decoding.",
+  "usb": true
+ },
+ "storage-read-returning.py": {
+  "cache_areas": [],
+  "docs": [
+   "apps/storage-read-returning/README.md",
+   "docs/board-runbooks/sd-uhs.md",
+   "docs/designs/mbus-restore.md",
+   "docs/designs/sd-uhs.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "'--' + name.replace('_', '-')"
+  ],
+  "summary": "The returning SD0 read image's actual setup, SD task and report under the SD card models.",
   "usb": false
  },
  "storage-read-rom-pins.py": {
@@ -9612,7 +9658,9 @@
  },
  "storage-read-sd-modes.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/sd-uhs.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [

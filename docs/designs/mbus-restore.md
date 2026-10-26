@@ -165,11 +165,15 @@ needs a session that names 600 MHz. These sets name MBUS `0x84000000`:
 | `board-bundles-20261025-8` | Three NPU starts in one lifetime |
 | `board-bundles-20261025-11`, `-13` | Two interrupt-completed NPU starts |
 | `board-bundles-20261025-16`, `-19` | Two ShuffleNetV2 starts |
-| `board-bundles-20261025-22` | Returning microSD reads (`config.json`) |
+| `board-bundles-20261025-22` (superseded) | Returning microSD reads (`config.json`) |
 
 The physical configurations `usb-returning-20261018/physical/config.json` and
 `usb-first-fault-20261018/physical-06{3,4}/config.json` name it too.
-`board-bundles-20261025-14` already names `0x81000000`.
+`board-bundles-20261025-14`, superseded, names `0x81000000` beside an NSI
+word that every provider refuses. The returning microSD reads of
+`board-bundles-20261025-28` name no frozen word: their input tool reads the
+three fabric words in each lifetime and applies this restore's rule to the
+MBUS word (`tools/storage-read-returning.py`).
 
 ## G2D runs at 300 MHz
 
