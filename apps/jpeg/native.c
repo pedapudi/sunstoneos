@@ -208,7 +208,7 @@ static int jpeg_setup(void)
        jpeg.supply.page_before||jpeg.supply.page_after||jpeg.supply.chip!=3||jpeg.supply.revision||
        !jpeg.supply.enabled||!jpeg.supply.decoded||jpeg.supply.programmed_uv!=jpeg.session.supply_uv)return -1;
     a733_clock_mask_t scopes;if(!a733_video_platform_scopes(c,&scopes))return -1;
-    if(!c->clock.id){enum a733_clock_result r=a733_clock_acquire(c->clocks,c->owner,scopes,A733_CLOCK_VE_DEC,jpeg_deadline(),&c->clock);if(r==A733_CLOCK_BUSY)return 0;if(r!=A733_CLOCK_OK)return -1;}
+    if(!c->clock.id){enum a733_clock_result r=a733_clock_acquire(c->clocks,c->owner,scopes,a733_video_platform_exclusive(c),jpeg_deadline(),&c->clock);if(r==A733_CLOCK_BUSY)return 0;if(r!=A733_CLOCK_OK)return -1;}
     if(!jpeg.iommu_clock.id){enum a733_clock_result r=a733_clock_acquire(c->clocks,c->owner,A733_CLOCK_FABRIC|A733_CLOCK_REF|A733_CLOCK_OSC,
         A733_CLOCK_IOMMU_SYS|A733_CLOCK_VI|A733_CLOCK_DE_SYS|A733_CLOCK_VE_ENC,jpeg_deadline(),&jpeg.iommu_clock);if(r==A733_CLOCK_BUSY)return 0;if(r!=A733_CLOCK_OK)return -1;}
     if(!jpeg.power_token){enum a733_gpu_resource_result r=a733_gpu_resources_acquire(c->power,c->power_client,A733_GPU_RESOURCE_OSC|A733_GPU_RESOURCE_PCK,jpeg_deadline(),&jpeg.power_token,&jpeg.power_ready);if(r==A733_GPU_RESOURCE_BUSY)return 0;if(r!=A733_GPU_RESOURCE_OK)return -1;}

@@ -185,9 +185,9 @@ The supply stays DCDC2 at 800 mV.
 
 ## Deferred changes
 
-- **Video engine and JPEG at 624 MHz.** Their bindings derive the rate from
-  the inherited PLL_VE0 or PLL_VE1, which no board has read. The clock-audit
-  dump reads them; the change follows that result.
+- **Video engine and JPEG at 624 MHz.** The dump found both video PLLs
+  disabled. The decoder's cold start now programs PLL_VE0
+  ([video PLL design](video-pll.md)); the encoder needs a cold start first.
 - **SDIO Wi-Fi.** The vendor allows up to 208 MHz with SDR104 on SMHC1
   (`sun60i-a733-orangepi-zero3w.dts` lines 1663 and 1670). Reaching it needs
   the module's UHS-I support from CCCR registers `0x13` and `0x14`, the CMD11

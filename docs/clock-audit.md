@@ -38,7 +38,7 @@ rate that boot firmware left and does not program it.
 | DSU (L3) | 494 | 1274 at 1000 mV | Not stated | 2.6× below; no SunstoneOS DSU control |
 | GPU | 1008 at 960 mV | 1008 at 960 mV | Not stated | None |
 | NPU | 492 at 800 mV (852 profile exists) | 852 at 800 mV | Not stated; the table's highest row for any bin is 1188 | 1.7× below until the 852 default merges |
-| Video engine, JPEG | Session-supplied, at most 720; PLL_VE inherited and unread | 624 at 800 mV | Not stated | Unknown until the dump; no default rate |
+| Video engine, JPEG | Decoder: 624, its cold start programs PLL_VE0. Encoder: session-supplied from an inherited PLL | 624 at 800 mV | Not stated | Decoder at the vendor rate in software, not run on a board; encoder needs a cold start |
 | Display engine | 600 | 600 | 696 for 4K output (manual note) | None |
 | G2D | 300 from `53f2f75c`; 100 before | 300 | Not stated | None |
 | DRAM | 2040, P-state 0 | 2040 for this board's strap | 2400 (LPDDR5) | None against the vendor; 15% below the SoC limit |
@@ -101,7 +101,7 @@ first board step: CPU-B to 1404 MHz at 800 mV with the A76 cores off.
 | --- | --- | --- | --- | --- |
 | GPU | 1008: PLL_GPU0 N=84, P0=2 (`0xe9105300` locked), GPU clock `0x80000000`; DCDC4 960 mV (`include/a733_gpu_opp.h:12-18`, `drivers/gpu/a733_gpu_power.c:22-25`) | 1008 at 960 mV, the node's `vfdefault` (dtsi:4736-4739). The vf0400 column lists 900 mV (dtsi:4751), but the vendor kernel tree carries no speed-bin map for the GPU, so its driver takes `vfdefault` ([GPU power](gpu-power.md)) | Not stated; UM 4.1.3.2 gives PLL_GPU0 a 1.8 GHz typical VCO | None |
 | NPU | 492: PLL_NPU N=82, P0=4 at 800 mV, the startup default (`drivers/npu/a733_npu_startup.c:14-28`). 852 (N=71, P0=2) is a second profile, which today only `apps/npu-convolution` selects | 852 at 800 mV (vf.dtsi:2069-2091, vf0400 at 2077 and 2087). The 1008 MHz row has no vf0400 entry (vf.dtsi:2093) | Not stated. Rows up to 1188 exist for other bins (vf.dtsi:2133) | 1.7×. `work/npu-job-overhead-1025`, in review, makes 852 the default |
-| Video decoder, encoder and JPEG encoder | The bindings derive the rate from the inherited PLL_VE0 or PLL_VE1 and require it to equal the session's value, at most 720 (`drivers/video/a733_video_unit.c:134-151`, [video platform](video-platform.md)). They program no PLL. No board has read PLL_VE | 624 at 800 mV (vf.dtsi:2169-2172) | Not stated; UM 4.1.3.2 gives PLL_VE a 1.872 GHz typical VCO, which divides to 624 | Unknown until the dump reads PLL_VE. SunstoneOS has no default rate |
+| Video decoder, encoder and JPEG encoder | The decoder's cold start at the vendor point programs PLL_VE0 to N=78, P0=3 and runs the module at 624 ([video PLL design](designs/video-pll.md)). Other configurations, and the encoder, derive the rate from a running PLL_VE0 or PLL_VE1 and require it to equal the session's value, at most 720. The board leaves both PLLs disabled (dump: `0x41305a00`, `0x41205600`) | 624 at 800 mV (vf.dtsi:2169-2172) | Not stated; UM 4.1.3.2 gives PLL_VE a 1.872 GHz typical VCO, which divides to 624 | Decoder: vendor rate, host-modeled. Encoder: cannot start on a board until it has a cold start |
 | ISP and CSI | 324 each, from PLL_VIDEO0 4X (`drivers/clock/a733_media_clock.c:120-122`) | 324 each on this board (dts:3626-3627); the SoC tree gives 600 and 540 (dtsi:2567-2568) | Not stated | None for this board |
 | Display engine | 600 from PLL_DE 3X (`a733_media_clock.c:124-126`) | 600 from PLL_DE 3X (dtsi:3764-3766, dts:2715) | UM 4.1.4.3: 696 when DE drives 4K | None at the vendor rate |
 | TCON and HDMI | Pixel clock 74.25 or 148.5 from the HDMI TOP PLL at a 24 MHz oscillator; 73.9375 or 147.875 at the board's 26 MHz ([HDMI](hdmi.md)) | Mode-dependent | 4K at 60 fps (DS:30) | Modes above 1080p are not implemented; the 26 MHz rows run 0.42% slow |
@@ -157,7 +157,7 @@ first board step: CPU-B to 1404 MHz at 800 mV with the A76 cores off.
 | PLL_GPU0 | 1008 when the GPU is on | 1008 | VCO 1.26–2.52 GHz | None |
 | PLL_NPU | 492 or 852 when the NPU is on; off at boot (`0x41104500`) | 852 | Same | See NPU |
 | PLL_VIDEO0, 1, 2 | VIDEO0 4X checked at 324; VIDEO1 4X checked at 1188 for DisplayPort; VIDEO2 unused | Mode-dependent | VCO 1.26–2.52 GHz | Unknown until the dump |
-| PLL_VE0, PLL_VE1 | Inherited, unread | Set for 624 | Same | Unknown until the dump |
+| PLL_VE0, PLL_VE1 | Disabled at FEL entry (546 and 696 configured); the decoder's cold start sets PLL_VE0 to 624 | Set for 624 | Same | PLL_VE0 done in software; PLL_VE1 waits for an encoder cold start |
 | PLL_DE | 3X checked at 600 | 600 | Same | None |
 | PLL_AUDIO0, PLL_AUDIO1 | AUDIO0 unused; AUDIO1 VCO 3072 | AUDIO0 90.3168 for 44.1 kHz rates; AUDIO1 3072 | AUDIO1 VCO 1.8–3.1 GHz | None |
 
@@ -373,10 +373,12 @@ GPU and NPU clock and voltage changes and the microSD 1.8 V switch.
      300 MHz.
 5. **Video engine and JPEG at 624 MHz.**
    - *Reference:* vf.dtsi:2169-2172.
-   - *Change:* after the dump reads PLL_VE, program PLL_VE0 for 624 MHz and make
-     624 the binding's default. Waiting for the dump.
-   - *Approval:* a clock change outside the recorded approvals.
-   - *Board run:* the H.264 and JPEG encoder applications with frame timing.
+   - *Change:* the decoder's cold start programs PLL_VE0 for 624 MHz, and the
+     HEVC session producer defaults to it ([video PLL design](designs/video-pll.md)).
+     The encoder first needs a cold start.
+   - *Approval:* the coordinator directed it.
+   - *Board run:* the PLL table alone through FEL, then a JPEG decode at
+     624 MHz once its session's physical evidence exists.
 6. **microSD SDR104 at 150 MHz.**
    - *Reference:* dts:1637, 1644.
    - *Change:* none; it is built.
@@ -402,8 +404,9 @@ than 24 MHz.
 
 ## Open questions
 
-- The rates of APB0, APB1, APB_UART, PLL_DDR, PLL_PERI1, PLL_VIDEO0–2 and
-  PLL_VE0/1 that boot0 leaves; the dump reads them.
+- The rates of APB0, APB1, APB_UART, PLL_DDR, PLL_PERI1 and PLL_VIDEO0–2 that
+  boot0 leaves; the port 3-3 dump has read them, and their rows above still
+  need its values.
 - The DSU mux word read as `0x03000105` (988 MHz) in one earlier port 3-3
   capture and `0x03010105` (494 MHz) in another.
 - The LPDDR5 part number and rating.

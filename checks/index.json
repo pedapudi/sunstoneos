@@ -10085,6 +10085,23 @@
   "summary": "Validate the vendor firmware manifest, its README table and every link they document.",
   "usb": false
  },
+ "video-pll.py": {
+  "cache_areas": [
+   "evidence",
+   "sources",
+   "video-codecs"
+  ],
+  "docs": [
+   "docs/designs/video-pll.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Check the video PLL profile against pinned sources and the board dump, then run the decoder cold-start model.",
+  "usb": false
+ },
  "watchdog-configuration.py": {
   "cache_areas": [],
   "docs": [

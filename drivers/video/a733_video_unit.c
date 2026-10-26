@@ -32,14 +32,17 @@ static const uint32_t mhz[3][8]={
 };
 static int ve0(const struct a733_video_unit_desc *d,uint32_t module)
 {return ((module>>24)&1)==d->ve0_mux;}
+static a733_clock_mask_t selected_pll(const struct a733_video_unit_desc *d,uint32_t module)
+{return ve0(d,module)?A733_CLOCK_PLL_VE0:A733_CLOCK_PLL_VE1;}
 int a733_video_unit_scopes(const struct a733_video_unit_desc *d,const struct a733_video_unit_config *c,
     a733_clock_mask_t *out)
 {
     if(!d||!c||!out||!c->clocks||!c->power||!c->owner||!c->handoff||!c->module_hz||
        c->module_hz>720000000u||(c->module&~0x8700001fu)||!(c->module&BIT(31))||
-       ((c->module>>24)&7)>1)return 0;
+       ((c->module>>24)&7)>1||c->program_pll>1||
+       (c->program_pll&&((c->module&0x0700001fu)!=A733_VIDEO_VENDOR_MODULE||c->module_hz!=A733_VIDEO_VENDOR_HZ)))return 0;
     a733_clock_mask_t shared=A733_CLOCK_FABRIC|A733_CLOCK_REF|A733_CLOCK_OSC|
-        (ve0(d,c->module)?A733_CLOCK_PLL_VE0:A733_CLOCK_PLL_VE1);
+        (c->program_pll?0:selected_pll(d,c->module));
     for(unsigned i=0;i<3;++i) {
         unsigned rate=mhz[i][(c->fabric[i]>>24)&7],div=(c->fabric[i]&31)+1;
         if((c->fabric[i]&~fabric_mask[i])||(i&&!(c->fabric[i]&BIT(31)))||!rate||
@@ -48,6 +51,9 @@ int a733_video_unit_scopes(const struct a733_video_unit_desc *d,const struct a73
     }
     *out=shared;return 1;
 }
+a733_clock_mask_t a733_video_unit_exclusive(const struct a733_video_unit_desc *d,
+    const struct a733_video_unit_config *c)
+{return d->exclusive|(c->program_pll?selected_pll(d,c->module):0);}
 int a733_video_unit_init(struct a733_video_unit *u,const struct a733_video_unit_desc *d,
     const struct a733_video_unit_config *c,const struct a733_video_unit_ops *o,void *cookie)
 {
@@ -55,7 +61,7 @@ int a733_video_unit_init(struct a733_video_unit *u,const struct a733_video_unit_
     if(!u||u->initialized||!o||!o->now_us||!o->enter||!o->leave||!o->read||!o->write||
        !a733_video_unit_scopes(d,c,&shared)||
        !c->clock.id||c->clock.owner!=c->owner||c->clock.shared!=shared||
-       c->clock.exclusive!=d->exclusive||c->power_client>=A733_GPU_RESOURCE_CLIENTS||
+       c->clock.exclusive!=a733_video_unit_exclusive(d,c)||c->power_client>=A733_GPU_RESOURCE_CLIENTS||
        !c->pck.token||c->pck.mask!=(A733_GPU_RESOURCE_OSC|A733_GPU_RESOURCE_PCK)||
        c->pck.mode!=A733_GPU_RESOURCE_STABLE)return 0;
     *u=(struct a733_video_unit){.desc=d,.config=*c,.ops=*o,.cookie=cookie,.shared=shared,.initialized=1};
@@ -131,24 +137,54 @@ int a733_video_unit_update(struct a733_video_unit *u,uintptr_t a,uint32_t mask,u
     value=(old&~mask)|(value&mask);
     return a733_video_unit_write(u,a,4,value)==1&&a733_video_unit_read(u,a,&actual)==1&&actual==value;
 }
-static int parents(struct a733_video_unit *u)
+/* PLL_VE0 (CCU+0x220) and PLL_VE1 (+0x240), A733 User Manual V1.00 4.1.6.36
+ * and its PLL_VE1 counterpart: enable 31, LDO 30, lock enable 29, LOCK 28
+ * (read-only status), output gate 27, P0 22:20, N 15:8, M1 1. The board
+ * reads reserved bit 24 set (0x41305a00, 0x41205600); like the board kernel's
+ * read-modify-writes, every write keeps it. */
+#define PLL_LOCK BIT(28)
+#define PLL_INHERITED BIT(24)
+#define PLL_OWNED UINT32_C(0xf870ff02)
+#define PLL_ENABLED (UINT32_C(0xe0000000)|A733_VIDEO_PLL_FACTORS)
+#define PLL_OPEN (UINT32_C(0xe8000000)|A733_VIDEO_PLL_FACTORS)
+/* LOCK sampling (manual 4.1.4.2 and the board kernel's lock helper,
+ * ccu_common.c): three locked observations in a row, 3 us apart, at most 100
+ * observations, then a 20 us wait. */
+#define PLL_SAMPLE_US 3u
+#define PLL_SAMPLES 100u
+#define PLL_SETTLE_US 20u
+static uintptr_t pll_address(const struct a733_video_unit *u)
+{return CCU+(ve0(u->desc,u->config.module)?0x220:0x240);}
+/* entry: a cold start may find a programmed PLL disabled, or running the
+ * vendor profile. Otherwise the selected PLL must run at module_hz. */
+static int parents(struct a733_video_unit *u,int entry)
 {
     uint32_t osc,ref,pll,pat,gate,status;
     /* The shared rule admits an enabled, stable DCXO whose PLL_REF output is
      * normalized to 24 MHz, including the 26 MHz board's N=96/M=104. */
     if(a733_video_unit_read(u,0x07090160,&osc)!=1||a733_video_unit_read(u,CCU,&ref)!=1||
        !a733_clock_ref24_valid(osc,ref))return 0;
-    unsigned n,m,v0=ve0(u->desc,u->config.module),off=v0?0x220:0x240;
-    if(a733_video_unit_read(u,CCU+off,&pll)!=1||(pll&0xf8000000u)!=0xf8000000u||
-       a733_video_unit_read(u,CCU+off+8,&pat)!=1||(pat&BIT(31))||
-       a733_video_unit_read(u,CCU+off+12,&pat)!=1||(pat&BIT(27))||
+    unsigned n,m,v0=ve0(u->desc,u->config.module);
+    if(a733_video_unit_read(u,pll_address(u),&pll)!=1||
+       a733_video_unit_read(u,pll_address(u)+8,&pat)!=1||(pat&BIT(31))||
+       a733_video_unit_read(u,pll_address(u)+12,&pat)!=1||(pat&BIT(27))||
        a733_video_unit_read(u,CCU+0x1918,&gate)!=1)return 0;
     unsigned required=v0?(BIT(0)|BIT(16)):(BIT(1)|BIT(17));
     if((gate&required)!=required||a733_video_unit_read(u,CCU+0x1998,&status)!=1||
        (status&(required&0xffff0000u))!=(required&0xffff0000u))return 0;
+    if(u->config.program_pll) {
+        const uint32_t running=PLL_OPEN|PLL_LOCK;
+        if(entry) {
+            u->pll_inherited=pll&PLL_INHERITED;
+            u->pll_adopted=(pll&~PLL_INHERITED)==running;
+            if(!u->pll_adopted&&((pll&UINT32_C(0xb8000000))||(pll&~(PLL_OWNED|PLL_INHERITED))))return 0;
+            u->pll_entered=1;
+        }else if(!u->pll_done||pll!=(running|u->pll_inherited))return 0;
+    }else if((pll&0xf8000000u)!=0xf8000000u)return 0;
     /* No-Auto, requested enable and effective output status are independent. */
     n=((pll>>8)&255)+1;m=(((pll>>20)&7)+1)*((pll&2)?2:1)*(1+(u->config.module&31));
-    if(n<53||n>105||24000000u*n%m||24000000u*n/m!=u->config.module_hz)return 0;
+    if(!(u->config.program_pll&&entry&&!u->pll_adopted)&&
+       (n<53||n>105||24000000u*n%m||24000000u*n/m!=u->config.module_hz))return 0;
     if(!(u->shared&A733_CLOCK_PERI0))return 1;
     if(a733_video_unit_read(u,CCU+0xa0,&pll)!=1||(pll&0xfe000000u)!=0xfe000000u||
        (pll&(BIT(24)|BIT(1)))||a733_video_unit_read(u,CCU+0xa8,&pat)!=1||(pat&BIT(31))||
@@ -171,11 +207,60 @@ static int parents(struct a733_video_unit *u)
     }
     return 1;
 }
-int a733_video_unit_clocks(struct a733_video_unit *u)
+static int clocks(struct a733_video_unit *u,int entry)
 {
     for(unsigned i=0;i<3;++i)
         if(!a733_video_unit_check(u,CCU+fabric_off[i],fabric_mask[i],u->config.fabric[i]))return 0;
-    return parents(u)&&a733_video_unit_check(u,R_CCU+0x1ac,1,1);
+    return parents(u,entry)&&a733_video_unit_check(u,R_CCU+0x1ac,1,1);
+}
+int a733_video_unit_clocks(struct a733_video_unit *u) {return clocks(u,0);}
+int a733_video_unit_clocks_entry(struct a733_video_unit *u) {return clocks(u,1);}
+/* One PLL write from the last word read: the masked field takes value, LOCK
+ * is written as zero, every other bit keeps its value. The readback ignores
+ * LOCK and becomes the next write's base. */
+static int pll_write(struct a733_video_unit *u,uint32_t *word,uint32_t mask,uint32_t value)
+{
+    value=(*word&~(mask|PLL_LOCK))|(value&mask);
+    return a733_video_unit_write(u,pll_address(u),4,value)==1&&
+        a733_video_unit_read(u,pll_address(u),word)==1&&(*word&~PLL_LOCK)==value;
+}
+/* Spin on the unit's clock until it reaches until; refuses at the deadline. */
+static int spin_until(struct a733_video_unit *u,uint64_t until)
+{
+    uint64_t t;
+    do if(a733_video_unit_now(u,&t)!=1||t>=u->deadline)return 0;
+    while(t<until);
+    return 1;
+}
+/* The table follows the manual's enable method 2 (4.1.4.1): LDO, factors,
+ * enable, lock enable, LOCK three times, 20 us, output gate. The board
+ * kernel's clock framework instead enables the PLL at its reset factors and
+ * then retunes it (ccu_gate.c ccu_pll_gate_helper_enable, ccu_nm.c
+ * ccu_nm_set_rate); both end in the same word. The selector and divider come
+ * first, as clk_set_parent and setup_ve_freq do (cedar_ve.c). The whole table
+ * runs in one call under the held mutex, as the kernel's runs under its
+ * spinlock: a poll per step would space the LOCK reads a scheduler tick
+ * apart. The LOCK wait is at most 100 reads 3 us apart and the 20 us settle. */
+int a733_video_unit_pll_prepare(struct a733_video_unit *u)
+{
+    if(!u->config.program_pll)return 1;
+    if(!u->pll_entered||u->pll_done||
+       !a733_video_unit_update(u,CCU+u->desc->module,0x0700001fu,A733_VIDEO_VENDOR_MODULE))return 0;
+    if(u->pll_adopted){u->pll_done=1;return 1;}
+    static const uint32_t table[4][2]={{BIT(30),BIT(30)},{0x0070ff02u,A733_VIDEO_PLL_FACTORS},
+        {BIT(31),BIT(31)},{BIT(29),BIT(29)}};
+    uint32_t word;uint64_t next;unsigned locked=0;
+    if(a733_video_unit_read(u,pll_address(u),&word)!=1)return 0;
+    for(unsigned i=0;i<4;++i)if(!pll_write(u,&word,table[i][0],table[i][1]))return 0;
+    if(a733_video_unit_now(u,&next)!=1)return 0;
+    for(unsigned samples=0;locked<3;++samples,next+=PLL_SAMPLE_US) {
+        if(samples==PLL_SAMPLES||!spin_until(u,next)||a733_video_unit_read(u,pll_address(u),&word)!=1||
+           (word&~PLL_LOCK)!=(PLL_ENABLED|u->pll_inherited))return 0;
+        locked=(word&PLL_LOCK)?locked+1:0;
+    }
+    if(a733_video_unit_now(u,&next)!=1||!spin_until(u,next+PLL_SETTLE_US)||!pll_write(u,&word,BIT(27),BIT(27))||
+       word!=(PLL_OPEN|PLL_LOCK|u->pll_inherited))return 0;
+    u->pll_done=1;return 1;
 }
 int a733_video_unit_irq_quiet(struct a733_video_unit *u)
 {

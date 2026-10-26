@@ -18,7 +18,10 @@
 static struct a733_video_unit_config unit_config(const struct a733_video_platform_config *c)
 {
     struct a733_video_unit_config u={.clocks=c->clocks,.clock=c->clock,.power=c->power,.pck=c->pck,
-        .power_client=c->power_client,.owner=c->owner,.handoff=c->handoff,.module=c->module,.module_hz=c->module_hz};
+        .power_client=c->power_client,.owner=c->owner,.handoff=c->handoff,.module=c->module,.module_hz=c->module_hz,
+        /* A cold start at the vendor operating point programs PLL_VE0. */
+        .program_pll=c->start==A733_VIDEO_COLD_NS_ROM&&(c->module&0x0700001fu)==A733_VIDEO_VENDOR_MODULE&&
+            c->module_hz==A733_VIDEO_VENDOR_HZ};
     for(unsigned i=0;i<3;++i){u.fabric[i]=c->fabric[i];u.fabric_hz[i]=c->fabric_hz[i];}
     return u;
 }
@@ -27,6 +30,13 @@ int a733_video_platform_scopes(const struct a733_video_platform_config *c,a733_c
     if(!c||(c->start!=A733_VIDEO_INHERITED&&c->start!=A733_VIDEO_COLD_NS_ROM))return 0;
     const struct a733_video_unit_config u=unit_config(c);
     return a733_video_unit_scopes(&a733_video_decoder_unit,&u,out);
+}
+a733_clock_mask_t a733_video_platform_exclusive(const struct a733_video_platform_config *c)
+{
+    a733_clock_mask_t shared;
+    if(!a733_video_platform_scopes(c,&shared))return 0;
+    const struct a733_video_unit_config u=unit_config(c);
+    return a733_video_unit_exclusive(&a733_video_decoder_unit,&u);
 }
 static int decoder_init(struct a733_video_decoder *p,const struct a733_video_platform_config *c,
     const struct a733_video_unit_ops *o,void *cookie,
@@ -59,9 +69,11 @@ static int cold_entry(struct a733_video_decoder *p)
     struct a733_video_unit *u=&p->unit;
     for(unsigned i=0;i<sizeof(rom_identity)/sizeof(rom_identity[0]);++i)
         if(!check(u,rom_identity[i].address,UINT32_MAX,rom_identity[i].word))return 0;
-    return a733_video_unit_clocks(u)&&
+    /* A programmed PLL_VE0 may be disabled, and the module selector and
+     * divider are then written later; the module gate must be closed. */
+    return a733_video_unit_clocks_entry(u)&&
         check(u,PCK,15,0)&&check(u,PCK+8,15,0)&&
-        check(u,CCU+0xa88,0x8700001f,p->config.module&~BIT(31))&&
+        (u->config.program_pll?check(u,CCU+0xa88,BIT(31),0):check(u,CCU+0xa88,0x8700001f,p->config.module&~BIT(31)))&&
         check(u,CCU+0xa8c,BIT(18)|BIT(2),0)&&
         check(u,CCU+0x5c0,1,0)&&check(u,CCU+0x5e0,BIT(14),0)&&
         check(u,CCU+0x5e4,BIT(18),0)&&check(u,CCU+0x1b10,0x30001,0x10000)&&
@@ -91,7 +103,10 @@ static int cold(struct a733_video_decoder *p)
     case 10:return update(u,CCU+0x5e0,BIT(14),BIT(14));
     case 11:return update(u,CCU+0x5e4,BIT(18),BIT(18));
     case 12:return update(u,CCU+0xa8c,BIT(2),BIT(2));
-    case 13:return update(u,CCU+0xa88,BIT(31),BIT(31));
+    /* Bus gate open, reset released, module gate closed: the PLL table runs
+     * here, as cedar_ve.c setup_ve_freq sets the rate with the module clock
+     * disabled. */
+    case 13:return a733_video_unit_pll_prepare(u)&&update(u,CCU+0xa88,BIT(31),BIT(31));
     case 14:return a733_video_unit_baseline(u);
     /* A733 kernel cold startup always pulses VCU before any compound-ID
      * lookup. Immutable ROM/resource admission authorizes only this reset. */
@@ -460,6 +475,14 @@ int a733_video_platform_native_write(void *cookie,uintptr_t a,unsigned width,uin
     uint32_t mask=0;
     if(a==CCU+0xa8c)mask=BIT(18)|BIT(2);
     if(a==CCU+0xa88)mask=BIT(31);
+    /* The PLL_VE0 enable table (bit 24 kept) and the module selector and
+     * divider, only while the decoder's module gate is closed: no write
+     * retunes a clock that the decoder is running on. */
+    if((a==CCU+0xa88&&!(value&BIT(31)))||a==CCU+0x220) {
+        uint32_t module;
+        if(width!=4||a733_video_unit_native_read(CCU+0xa88,&module)!=1||(module&BIT(31)))return -1;
+        mask=a==CCU+0x220?UINT32_C(0xf870ff02):UINT32_C(0x0700001f);
+    }
     if(a==CCU+0x5c0)mask=1;
     if(a==CCU+0x5e0)mask=BIT(14);
     if(a==CCU+0x5e4)mask=BIT(18);
