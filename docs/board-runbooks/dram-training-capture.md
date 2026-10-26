@@ -163,12 +163,15 @@ capture's note. A temperature reading needs a later THS read in the same
 lifetime; until one exists the note is the only temperature record.
 
 After each batch, on the host, once per kind for the lifetime and status
-classes, and once over the reference kinds for the restore set:
+classes, and once over the reference kinds for the restore set. The
+analysis touches no board, so it uses the classifier from
+`work/dram-fast-boot-1025` at `fb2dfebf` or later (`A`); the frozen copy in
+`$F/source` predates the training-kind options.
 
 ```sh
-$PY -B $F/source/tools/analyse-ddr-captures.py <every p0-capture-N directory> \
-  --output <new report path>.json
-$PY -B $F/source/tools/analyse-ddr-captures.py <every p0- and in-capture-N directory> \
+A=/home/sunil/git/sunstoneos-worktrees/dram-fast-boot-1025/tools/analyse-ddr-captures.py
+$PY -B $A <every p0-capture-N directory> --output <new report path>.json
+$PY -B $A <every p0- and in-capture-N directory> \
   --trained-kind pstate0 --baseline-kind init-only --output <new report path>.json
 ```
 
