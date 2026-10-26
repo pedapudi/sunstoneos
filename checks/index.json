@@ -2043,6 +2043,7 @@
    "docs/designs/board-bundles-next.md",
    "docs/designs/board-bundles.md",
    "docs/designs/cpu-top-opp.md",
+   "docs/handoff.md",
    "docs/reference-backsolve-npu.md",
    "docs/vendor-firmware/action-plan.md"
   ],
@@ -8272,6 +8273,7 @@
  "pvr-gpu-stop-reference.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/gpu-firmware-stop.md",
    "docs/gpu-stop.md",
    "docs/vendor-firmware/gpu-and-npu-binaries.md"
   ],

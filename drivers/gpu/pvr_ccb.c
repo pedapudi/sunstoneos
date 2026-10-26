@@ -186,6 +186,20 @@ enum pvr_ccb_result pvr_ccb_collect(struct pvr_ccb *q, struct pvr_ccb_token toke
     return PVR_CCB_OK;
 }
 
+enum pvr_ccb_result pvr_ccb_settle(struct pvr_ccb *q, struct pvr_ccb_token token, uint32_t *out)
+{
+    enum pvr_ccb_result result = pvr_ccb_collect(q, token, out);
+    if (result != PVR_CCB_AGAIN) return result;
+    /* Still pending in an active queue: the firmware's read offset, sampled
+     * by the last poll, shows whether it has consumed this slot. */
+    const uint32_t mask = PVR_CCB_HOST_SLOTS - 1;
+    const uint32_t queued = (q->host_write - token.slot) & mask, consumed = (q->host_read - token.slot) & mask;
+    if (!consumed || consumed > queued) return PVR_CCB_AGAIN;
+    q->slots[token.slot].state = FREE;
+    *out = 0;
+    return PVR_CCB_OK;
+}
+
 enum pvr_ccb_result pvr_ccb_receive(struct pvr_ccb *q, void *event)
 {
     enum pvr_ccb_result status = active(q);

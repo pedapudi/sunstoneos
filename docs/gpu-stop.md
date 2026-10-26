@@ -2,7 +2,7 @@
 
 Native GPU shutdown is **implemented and host-tested**. It sends the reference
 forced-idle and power-off requests, waits for their firmware acknowledgements,
-checks hardware idle state, asserts reset, and requires platform isolation.
+checks hardware idle state as the vendor `RGXStop` does, and requires platform isolation.
 The sequence has not run on the GPU. Its callbacks, physical shutdown, and
 safe buffer reuse remain unqualified.
 
@@ -13,7 +13,7 @@ must close application admission, hold power and every device-visible allocation
 and serialize control/queue operations through one shutdown worker. Event handlers
 remain available until the firmware handshakes finish.
 
-## Separate firmware acknowledgements precede hardware reset
+## Separate firmware acknowledgements precede the hardware idle checks
 
 The [implementation](../drivers/gpu/pvr_gpu_stop.c) follows these steps:
 
@@ -24,8 +24,9 @@ The [implementation](../drivers/gpu/pvr_gpu_stop.c) follows these steps:
    for its separate acknowledgement.
 4. Retire the control component and command transport, preventing further queue
    or interrupt access through those components.
-5. Check the reference hardware idle conditions, clear thread associations,
-   assert the selected soft-reset mask, and read back reset to fence the write.
+5. Acknowledge a pending firmware interrupt, check the hardware idle
+   conditions and clear the thread-0 associations, in the order of the vendor
+   DDK's `RGXStop` for a MIPS core.
 6. Complete platform power-off through one admission callback and optional
    bounded polling. Report STOPPED only after completion before the deadline.
 
@@ -40,7 +41,7 @@ not require that return flag before accepting a power acknowledgement, matching
 the reference handshake. Unresolved return tokens remain recorded and cannot be
 reported as successful merely because shutdown completed.
 
-One absolute deadline covers both handshakes, hardware polls, reset, and isolation.
+One absolute deadline covers both handshakes, hardware polls and isolation.
 During a firmware wait, one poll services at most four events and one
 command-return scan, then re-reads power-sync for up to 50 µs
 (`A733_GPU_SPIN_US`), counted from the first read, before returning. A full
@@ -50,20 +51,26 @@ be reused during shutdown.
 
 ## Idle checks and platform isolation have distinct roles
 
-The register sequence checks the Sidekick control block, clears four firmware
-thread associations, and checks the memory-management interfaces, outstanding
-reads, system-level cache status, and firmware-wrapper idle state. The firmware
-feature bits select the reset mask and whether the external BIF read-status check
-is required. The pinned A733 profile uses fifteen register operations, including
-the added reset readback.
+The register sequence is the vendor DDK's `RGXStop` for a MIPS core
+(`rgxstartstop.c:992–1241`, ODM DDK `2ac08e8c`;
+[firmware stop design](designs/gpu-firmware-stop.md)). It reads the MIPS
+wrapper interrupt status (`0x8a8`) and, when the event bit is set, clears it
+(`0x8b0`), as `RGXAckIrqMIPS` does (`rgxinit.c:420–462`). It then waits for
+Sidekick and the system-level cache to report idle, clears the thread-0
+interrupt and background DM associations, and checks the memory-management
+interfaces, outstanding reads, system-level cache status, Sidekick and the
+firmware wrapper. The firmware feature bits select whether the external BIF
+read-status check is required. The pinned A733 profile uses fourteen register
+operations. Upstream Linux also clears the thread-1 associations, which the
+vendor clears only for a META core, and asserts the soft-reset mask; the vendor
+asserts no reset, and the platform OFF removes the power.
 
 Each hardware-stage poll performs one register step. An idle check re-reads its
 register for up to 50 µs; a value that stays mismatched leaves the controller at
 that step for the next poll, until the deadline. A re-read whose clock shows no
 advance for 1,024 consecutive samples (`A733_GPU_SPIN_STALLED_READS`) also
 returns, so a stopped clock cannot hold the worker inside one poll. Writes complete before
-their callbacks return. The final reset readback fences the write; it is not
-interpreted as proof of interconnect isolation.
+their callbacks return.
 
 The native backend independently checks firmware forced-idle/OFF state after
 each acknowledgement, then completes A733 platform power-off after these local
@@ -104,11 +111,12 @@ not silently extend the deadline or turn a late acknowledgement into acceptance.
 One [ASan/UBSan check](../checks/pvr-gpu-stop.c) links shutdown, control, queue,
 and firmware decoding. It starts from a simulated READY control state and uses
 the pinned firmware's feature record. Both power requests, separate sync-word
-clears, idle/reset ordering, and isolation are exercised through callbacks.
-A synthetic feature variant checks alternate reset selection and omission of
-the external BIF read-status operation; it does not establish another board profile.
+clears, the interrupt acknowledgement with and without a pending event, idle
+ordering, and isolation are exercised through callbacks. A synthetic feature
+variant checks omission of the external BIF read-status operation; it does not
+establish another board profile.
 
-The check passes 120 retained-failure cases. These include callback failures,
+The check passes 118 retained-failure cases. These include callback failures,
 each distinct idle-register wait, missing acknowledgements, clock regression,
 command errors, and late isolation. A held idle register and a missing
 acknowledgement are each re-read for at least 50 µs within one poll. With a
@@ -124,20 +132,22 @@ Unchanged firmware staging, cache-publication, OS, mimus, and NPU evidence was r
 
 The [reference comparison](../checks/pvr-gpu-stop-reference.py) compiles the
 original power-request and firmware-stop functions. Both defined command payloads
-and the complete idle/reset plan match. The capture shim clears unused command
-bytes while copying only fields assigned by the original request functions.
-Native traces also include the additional reset readback. Platform isolation
+match. The idle plan matches the upstream function's after four vendor
+differences, each checked: the interrupt acknowledgement first, the early
+system-level cache poll, no thread-1 association writes, and no soft reset. The
+capture shim clears unused command bytes while copying only fields assigned by
+the original request functions. Platform isolation
 has no reference substitute in this check. Source hashes are verified against
 the pinned board-source manifest.
 
 Clang 21 compiled shutdown, control, and queue components for AArch64 with strict
-alignment and freestanding options. Their code/read-only sizes are 2,592, 2,060,
-and 3,440 bytes respectively, with no writable static data. Shutdown's individual
-frames are 1,968 bytes for initialization, 160 for polling, and 32 for the clock
-helper. Total stack accounting must include nested decoding, control, queue,
+alignment and freestanding options. Shutdown's code and read-only data are
+2,876 bytes, with no writable static data. Its individual frames are 1,904
+bytes for initialization, 176 for polling, and 32 for the clock helper. Total stack accounting must include nested decoding, control, queue,
 and platform callbacks.
 
 Commands, input snapshots, hashes, command bytes, register traces, regression
 output, reference comparison, and objects are under
-`~/.cache/sunstoneos/evidence/gpu-stop-20261016/`. No device access or performance
-measurement occurred.
+`~/.cache/sunstoneos/evidence/gpu-stop-20261025/` (the upstream sequence's run
+is under `gpu-stop-20261016/`). No device access or performance measurement
+occurred.
