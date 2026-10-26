@@ -139,16 +139,23 @@ def main():
         native = json.loads((evidence/f'trace-{variant}.json').read_text())
         out = (Event*64)()
         n = lib.reference(flags,values['SLC_CACHE_LINE_SIZE_BITS'],native['code'],native['data'],native['exceptions'],out)
-        expected = [{key:getattr(e,key) for key in ['kind','offset','width','value']} for e in out[:n] if e.kind != 3]
+        # The A733 sequence leaves SOFT_RESET2 (0x108) alone: the vendor DDK's
+        # RGXStart never writes it for this core (docs/designs/gpu-firmware-start.md).
+        # Upstream writes and reads it back once per reset stage when the
+        # firmware reports XE_TPU2, which the pinned firmware does.
+        soft_reset2 = [e for e in out[:n] if e.kind != 3 and e.offset == 0x108]
+        assert len(soft_reset2) == (6 if 'XE_TPU2' in enabled else 0), (variant, len(soft_reset2))
+        expected = [{key:getattr(e,key) for key in ['kind','offset','width','value']} for e in out[:n]
+                    if e.kind != 3 and e.offset != 0x108]
         actual = [{key:e[key] for key in ['kind','offset','width','value']} for e in native['events']]
         assert expected == actual, (variant,expected,actual)
         assert [e.value for e in out[:n] if e.kind==3] == [3,3]
-        results.append(dict(variant=variant,synthetic=bool(variant),features=flags,
+        results.append(dict(variant=variant,synthetic=bool(variant),features=flags,soft_reset2_omitted=len(soft_reset2),
             line_bits=values['SLC_CACHE_LINE_SIZE_BITS'],access_count=len(actual),
             firmware_sha256=hashlib.sha256(raw).hexdigest(),trace_sha256=hashlib.sha256((evidence/f'trace-{variant}.json').read_bytes()).hexdigest()))
     (evidence/'comparison.json').write_text(json.dumps(dict(result='pass',sources=hashes,
         compiler_command=command,variants=results,physical_access=False),indent=2)+'\n')
-    print('PASS complete startup register traces match pinned original functions for firmware and synthetic feature variant')
+    print('PASS complete startup register traces match pinned original functions, without SOFT_RESET2, for firmware and synthetic feature variant')
 
 
 if __name__ == '__main__':

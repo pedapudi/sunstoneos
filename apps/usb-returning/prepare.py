@@ -6,6 +6,11 @@ import json
 from pathlib import Path
 import struct
 
+def _vendor_mbus():
+    import importlib.util as u
+    s=u.spec_from_file_location('vendor_mbus',Path(__file__).resolve().parents[2]/'tools/vendor-mbus.py')
+    m=u.module_from_spec(s);s.loader.exec_module(m);return m
+
 def input_bytes(config,generation):
     fields=[]
     for name,count in [('fabric',3),('fabric_hz',3),('usb_supply_uv',4)]:
@@ -13,6 +18,8 @@ def input_bytes(config,generation):
         if len(values)!=count or any(type(v) is not int or not 0<=v<2**32 for v in values):
             raise ValueError('Invalid '+name)
         fields+=values
+    # MBUS as the restored image finds it (tools/vendor-mbus.py).
+    words,rates=_vendor_mbus().fabric(fields[0:3],fields[3:6]);fields[0:6]=words+rates
     pins=config['pmic_expected']
     if len(pins)!=2 or any(len(pin)!=3 for pin in pins):raise ValueError('Invalid PMIC pin extent')
     if any(type(v) is not int or not 0<=v<=15 for pin in pins for v in pin):raise ValueError('Invalid PMIC pin value')

@@ -2,7 +2,9 @@
 """Build the NPU-local returning monitor around the accepted finite client.
 
 With --interrupt, build the optional interrupt-driven finite NPU application
-instead; apps/npu-interrupt/build.py selects it.
+instead; apps/npu-interrupt/build.py selects it. With --shufflenet (interrupt
+only), the image runs the published 125-operation ShuffleNetV2 graph with its
+published input and recorded SDK output instead of the trusted convolution.
 """
 import argparse,hashlib,json,shlex,shutil,subprocess
 from pathlib import Path
@@ -13,9 +15,15 @@ p.add_argument('--entry-checkpoint',action='store_true',help='return before any 
 p.add_argument('--thermal',action='store_true',help='poll THS before and during finite execution')
 p.add_argument('--interrupt',action='store_true',help='build the interrupt-driven variant')
 p.add_argument('--rate-852',action='store_true',help='PLL_NPU at 852 MHz, admitted only for a speed bin that lists 800 mV for it')
+p.add_argument('--rate-492',action='store_true',help='the optional 492 MHz mode; the default is the vendor operating point for the speed bin')
+p.add_argument('--shufflenet',action='store_true',help='the published ShuffleNetV2 graph in the large NN-pool profile (needs --interrupt)')
+p.add_argument('--sdk-reference',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/npu-complete-graph-proposal-20261019/sdk-reference',
+ help='directory with network_binary.nb, published-input.dat and output0_2_1.dat')
 a=p.parse_args()
+if a.shufflenet and not a.interrupt:p.error('The large graph profile requires --interrupt')
 if sum((a.interrupt,a.entry_checkpoint,a.thermal))>1:p.error('Checkpoint, interrupt and thermal profiles are separate')
-if a.rate_852 and a.entry_checkpoint:p.error('The entry checkpoint starts no NPU; it has no rate')
+if (a.rate_852 or a.rate_492) and a.entry_checkpoint:p.error('The entry checkpoint starts no NPU; it has no rate')
+if a.rate_852 and a.rate_492:p.error('Choose one rate')
 root=Path(__file__).resolve().parents[2];e=a.evidence.resolve();base=a.baseline.resolve();e.mkdir(parents=True,exist_ok=True)
 def sha(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
 def save(name,value):(e/name).write_text(json.dumps(value,indent=2)+'\n')
@@ -26,6 +34,12 @@ def run(name,c,cwd=None):
 old=json.loads((base/'configure-command.json').read_text());old_root=next(v[:-len('/apps/npu-convolution-single-core')] for v in old if v.endswith('/apps/npu-convolution-single-core'))
 config=[v.replace(old_root,str(root)).replace(str(base/'native'),str(e/'native')) for v in old]
 if a.interrupt:config+=['-DA733_NPU_INTERRUPT=ON']
+if a.shufflenet:
+ # artifacts.py admits these only by their catalogue hashes (tools/npu-models.json).
+ sdk=a.sdk_reference.resolve();files={'MODEL':sdk/'network_binary.nb','INPUT':sdk/'published-input.dat','REFERENCE':sdk/'output0_2_1.dat'}
+ config=[next((f'-DA733_NPU_{k}={v}' for k,v in files.items() if x.startswith(f'-DA733_NPU_{k}=')),x) for x in config]
+ assert all(f'-DA733_NPU_{k}={v}' in config for k,v in files.items())
+ config+=['-DA733_NPU_LARGE_GRAPH=ON','-DA733_NPU_NN_POOL_GRAPH=ON']
 if a.thermal:config+=['-DA733_NPU_FINITE_THERMAL=ON']
 save('configure-command.json',config);run('configure',config)
 run('base-build',['cmake','--build',str(e/'native'),'--target','a733-npu-convolution-single-core','-j6'])
@@ -43,12 +57,13 @@ platform=e/'platform.c';text=(e/'native/npu-single-core/platform.c').read_text()
 platform.write_text(text.replace('_Noreturn void platform_exit(','_Noreturn void npu_finite_legacy_exit('))
 platform_obj=compile_like('/npu-single-core/platform.c',platform,'platform')
 ret=compile_like('/apps/npu-convolution/native.c',root/'apps/npu-finite/return.c','return')
-# The 852 MHz profile recompiles only the application's native unit with its selection.
+# An explicit rate recompiles only the application's native unit with its selection.
 native=None
-if a.rate_852:
+if a.rate_852 or a.rate_492:
+ rate='852' if a.rate_852 else '492'
  entry=next(x for x in entries if x['file'].endswith('/apps/npu-convolution/native.c'));c=shlex.split(entry['command'])
- native=obj/'native-852.obj';c[c.index('-o')+1]=str(native);c+=['-DSUNSTONE_NPU_RATE_852=1','-MD','-MF',str(native)+'.d']
- commands.append(c);run('native-852',c,cwd=entry['directory'])
+ native=obj/f'native-{rate}.obj';c[c.index('-o')+1]=str(native);c+=[f'-DSUNSTONE_NPU_RATE_{rate}=1','-MD','-MF',str(native)+'.d']
+ commands.append(c);run(f'native-{rate}',c,cwd=entry['directory'])
 assembly=compile_like('/arch/aarch64/cache.S',root/'apps/npu-finite/return.S','return-assembly')
 checkpoint=compile_like('/apps/npu-convolution/native.c',root/'apps/npu-finite/checkpoint.c','checkpoint') if a.entry_checkpoint else None
 # Bind the new monitor/cleanup/return sources into the existing authenticated
@@ -63,6 +78,12 @@ if a.thermal:
  identity['thermal_sources']={str(x.relative_to(root)):sha(x) for x in (root/'apps/npu-finite/thermal.c',root/'apps/npu-finite/thermal.h')}
 if a.rate_852:
  identity['npu_rate_mhz']=852
+elif a.rate_492:
+ identity['npu_rate_mhz']=492
+else:
+ identity['npu_rate']='vendor-point-for-speed-bin'
+if a.shufflenet:
+ identity['model']='shufflenet-v2-published';identity['large_graph']=True
 if a.entry_checkpoint:
  identity['profile']='npu-entry-memory-checkpoint-v1'
  identity['checkpoint_sources']={str(x.relative_to(root)):sha(x) for x in (root/'apps/npu-finite/checkpoint.c',root/'apps/npu-finite/checkpoint.h')}

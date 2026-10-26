@@ -91,25 +91,29 @@ int a733_npu_native_init(struct a733_npu_native *n, uintptr_t register_cpu,
     return 1;
 }
 
-static int register_access(struct a733_npu_native *n, unsigned offset, int write)
+/* The register page's read and write mappings are checked once, at
+ * initialization; the EL1 tables do not change afterwards. Each access then
+ * is a plain device access with readl/writel ordering, as the vendor driver
+ * reads and writes registers (vip2/os/linux/vip_drv_os.c:383-430). The
+ * controller's barrier callback issues DSB SY before the doorbell and before
+ * output is read. */
+static int register_access(struct a733_npu_native *n, unsigned offset)
 {
-    if (!ready(n) || (offset & 3) || offset >= 4096) return refuse(n);
-    return device_mapping(n->registers + offset, n->register_physical + offset, write) ?
-           1 : refuse(n);
+    return ready(n) && !(offset & 3) && offset < 4096 ? 1 : refuse(n);
 }
 static int read32(void *cookie, unsigned offset, uint32_t *out)
 {
     struct a733_npu_native *n = cookie;
     if (!out) return refuse(n);
-    if (!register_access(n, offset, 0)) return 0;
-    *out = a733_mmio_read32_dsb_sy_after(n->registers + offset);
+    if (!register_access(n, offset)) return 0;
+    *out = a733_mmio_read32_dmb_oshld_after(n->registers + offset);
     return 1;
 }
 static int write32(void *cookie, unsigned offset, uint32_t value)
 {
     struct a733_npu_native *n = cookie;
-    if (!register_access(n, offset, 1)) return 0;
-    a733_mmio_write32_dsb_sy_both(n->registers + offset, value);
+    if (!register_access(n, offset)) return 0;
+    a733_mmio_write32_dmb_oshst_before(n->registers + offset, value);
     return 1;
 }
 static uint64_t microseconds(void *cookie)

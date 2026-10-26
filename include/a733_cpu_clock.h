@@ -3,12 +3,15 @@
 #include "a733_pmic.h"
 #include "a733_thermal.h"
 
-/* CPU cluster clock and voltage control with fixed operating points.
+/* CPU cluster and DSU clock and voltage control with fixed operating points.
  * Sources: linux-orangepi 2ac08e8c ccu-sun60iw2-cpupll.c/ccu_nkmp.c (PLL and
- * mux fields), sun60iw2p1-cpu-vf.dtsi V0.9 (operating points and bin map),
- * sun60iw2p1.dtsi sid@3006000 (dvfs_ori/dvfs_bak), the board DTS (DCDC5
- * supplies cpu0 and the DSU, DCDC3 supplies cpu6, ramp 250 uV/us) and
- * u-boot b791be84 pmu_axp8191.c (DCDC3/DCDC5 selectors). docs/cpu-clock.md. */
+ * mux fields), ccu_common.c (lock confirmation), sunxi-dsufreq.c (DSU rate
+ * rule), axp2101-regulator.c (voltage settle), sun60iw2p1-cpu-vf.dtsi V0.9
+ * (operating points and bin map), sun60iw2p1.dtsi sid@3006000
+ * (dvfs_ori/dvfs_bak), the board DTS (DCDC5 supplies cpu0 and the DSU, DCDC3
+ * supplies cpu6, ramp 250 uV/us), u-boot b791be84 pmu_axp8191.c (DCDC3/DCDC5
+ * selectors) and boot0's CPU PLL routine (mux settles).
+ * docs/cpu-clock.md, docs/designs/cpu-top-opp.md. */
 enum a733_cpu_domain { A733_CPU_LITTLE, A733_CPU_BIG, A733_CPU_DSU, A733_CPU_DOMAINS };
 #define A733_CPU_VF_BINS 9u /* Columns vf0000,0100,0200,0300,0400,0500,0600,0401,0501. */
 #define A733_CPU_VF_ENVELOPE A733_CPU_VF_BINS /* Code 0: highest voltage of every column. */
@@ -40,9 +43,9 @@ void a733_cpu_clock_decode(uint32_t dcxo_hz,uint32_t pll,uint32_t select,struct 
  * caller with read access may use it, for example to name the clock in a
  * timing record. Returns 1 when every read succeeded. */
 int a733_cpu_clock_report(int (*read)(void *,uintptr_t,uint32_t *),void *,struct a733_cpu_clock_report *);
-/* Native access policy: those eight reads, reads of the CPU-L and CPU-B
+/* Native access policy: those eight reads, reads of the CPU-L, CPU-B and DSU
  * pattern (PLL+0x4, +0x8) and LFM (PLL+0x18) words, and writes only to the
- * CPU-L and CPU-B PLL and mux/P words. The DSU and PLL_CPU_BACK are never
+ * CPU-L, CPU-B and DSU PLL and mux/P words. PLL_CPU_BACK is never
  * written. */
 int a733_cpu_clock_address(uintptr_t,int write);
 
@@ -51,7 +54,8 @@ int a733_cpu_clock_address(uintptr_t,int write);
  * every request is refused. Each requested transition consumes one change. */
 struct a733_cpu_clock_grant {
     uint64_t session;            /* Zero refuses every transition. */
-    uint32_t clusters;           /* Bit per admitted enum a733_cpu_domain (LITTLE, BIG). */
+    uint32_t clusters;           /* Bit per admitted enum a733_cpu_domain (LITTLE, BIG);
+                                  * LITTLE also admits the DSU, which shares DCDC5. */
     uint32_t max_mhz[2];         /* Highest admitted operating point per cluster. */
     uint32_t changes;            /* Requested transitions admitted. */
 };
@@ -90,7 +94,8 @@ enum a733_cpu_clock_status {
     A733_CPU_CLOCK_READY, A733_CPU_CLOCK_PENDING, A733_CPU_CLOCK_COMPLETE, A733_CPU_CLOCK_BUSY,
     A733_CPU_CLOCK_REFUSED, A733_CPU_CLOCK_INVALID, A733_CPU_CLOCK_EXPIRED, A733_CPU_CLOCK_RETAINED
 };
-#define A733_CPU_CLOCK_THROTTLE_MHZ 1014u /* Ceiling under THROTTLE; 800 mV in every bin. */
+#define A733_CPU_CLOCK_THROTTLE_MHZ 1014u /* Cluster ceiling under THROTTLE; 800 mV in every bin. */
+#define A733_CPU_CLOCK_DSU_THROTTLE_MHZ 780u /* DSU ceiling under THROTTLE; 800 mV in every bin. */
 struct a733_cpu_clock {
     struct a733_cpu_clock *self;
     struct a733_cpu_clock_config config;
@@ -106,15 +111,17 @@ struct a733_cpu_clock {
     struct a733_pmic_snapshot snapshot;
     struct a733_cpu_clock_report report;
     uint64_t last_now, deadline, timer;
-    uint32_t changes, applied_mhz[2], restore_mhz[2], target_mhz, from_uv, to_uv, select;
+    uint32_t changes, applied_mhz[A733_CPU_DOMAINS], restore_mhz[2], target_mhz, from_uv, to_uv, select;
     unsigned state, after, cluster, n, p, selector, raise, thermal, failed, result, retained, critical;
+    unsigned locks;           /* Consecutive lock reads counted in the transition's lock wait. */
+    uint64_t lock_at;         /* Time of the last counted lock read. */
     unsigned throttled;       /* Cluster bits lowered by THROTTLE, to restore at NORMAL. */
     unsigned throttle_failed; /* Cluster bits whose throttle lowering did not complete. */
     unsigned inherited;       /* Inspected cluster bits; thermal changes keep voltage and require grants. */
     unsigned inspect_only;    /* The active transition only reads (a733_cpu_clock_inspect). */
     unsigned spend;           /* The active transition consumes a change at its first clock write. */
     uint32_t rail_uv[2];      /* Last read or confirmed voltage of DCDC5 and DCDC3; 0 unread. */
-    uint32_t words[2][3];     /* Last pattern 0, pattern 1 and LFM words read per cluster. */
+    uint32_t words[A733_CPU_DOMAINS][3]; /* Last pattern 0, pattern 1 and LFM words read per domain. */
     uint64_t park_at, parked_max_us; /* Park write time; longest park write to select readback, us. */
 };
 /* Zeroed private storage once. Managers, the PMIC provider and the thermal
@@ -123,22 +130,28 @@ struct a733_cpu_clock {
 int a733_cpu_clock_init(struct a733_cpu_clock *,const struct a733_cpu_clock_config *,
     const struct a733_cpu_clock_ops *,void *,struct a733_clock_leases *,
     struct a733_rail_leases *,struct a733_pmic *,const struct a733_thermal_policy *);
-/* Owner task. Admits one transition of LITTLE or BIG to an exact operating
- * point when the grant covers it, the thermal policy permits it and no
- * transition is active. The policy permits a point once the cluster's sensor
- * (CPUL for LITTLE, CPUB for BIG) has had a valid reading: any granted point
- * at NORMAL, none above the ceiling at THROTTLE and none at CRITICAL, which
- * this driver keeps once seen. PENDING starts it; poll completes it. No
- * access. */
+/* Owner task. Admits one transition of LITTLE, BIG or the DSU to an exact
+ * operating point when the grant covers it, the thermal policy permits it and
+ * no transition is active. The policy permits a point once the domain's
+ * sensor (CPUL for LITTLE and the DSU, CPUB for BIG) has had a valid reading:
+ * any granted point at NORMAL, none above the ceiling at THROTTLE and none at
+ * CRITICAL, which this driver keeps once seen. A DSU point also needs a CPU-L
+ * grant, at most three quarters of the faster cluster's rate rounded down to
+ * 26 MHz, a voltage no higher than that of CPU-L's granted maximum, and a
+ * DCDC5 voltage that already covers it: the DSU writes no voltage. PENDING
+ * starts it; poll completes it. No access. */
 enum a733_cpu_clock_status a733_cpu_clock_request(struct a733_cpu_clock *,
     enum a733_cpu_domain,uint32_t mhz,uint64_t deadline);
-/* Owner task, one bounded step per call, no busy waits. Exclusive cluster
- * clock lease (LITTLE also holds the DSU rate shared) and exclusive rail
- * lease, then inspection and a PMIC snapshot. Inspection refuses a PLL with
- * its pattern or LFM enables set. A raise writes voltage, waits the ramp,
- * then changes frequency; a lowering changes frequency, then voltage.
- * Frequency changes park the mux on the DCXO, write N with the update bit,
- * wait for update (10 ms) and lock (70 ms), set P and select the PLL again.
+/* Owner task, one bounded step per call, no waits longer than 20 us.
+ * Exclusive domain clock lease (LITTLE also holds the DSU rate shared, the
+ * DSU both cluster rates) and exclusive rail lease, then inspection and a
+ * PMIC snapshot. Inspection refuses a PLL with its pattern or LFM enables
+ * set. A raise writes voltage, waits |dV| / 250 uV/us rounded up to whole
+ * milliseconds as the vendor regulator driver does, then changes frequency;
+ * a lowering changes frequency, then voltage. Frequency changes park the mux
+ * on the DCXO and wait 20 us, write N with the update bit, wait for update
+ * (10 ms) and for three lock reads at least 3 us apart (70 ms), wait 20 us,
+ * set P, select the PLL again and wait 20 us.
  * The PLL is touched only when the remaining deadline covers both waits plus
  * a 10 ms margin. COMPLETE, REFUSED or EXPIRED end a transition and release
  * both leases. REFUSED occurs before any write, including for a disabled or
@@ -161,7 +174,7 @@ enum a733_cpu_clock_status a733_cpu_clock_request(struct a733_cpu_clock *,
  * stays at the ceiling. Idle with
  * nothing to do: READY. */
 enum a733_cpu_clock_status a733_cpu_clock_poll(struct a733_cpu_clock *);
-/* Owner task. A read-only pass over one cluster that needs no grant: the
+/* Owner task. A read-only pass over one domain that needs no grant: the
  * leases, the inspection reads and one PMIC snapshot, whose voltage it keeps
  * in rail_uv and which records the rail's boot floor. A supported source point
  * with adequate CPU/DSU voltage becomes eligible for granted thermal lowering;
@@ -170,7 +183,7 @@ enum a733_cpu_clock_status a733_cpu_clock_poll(struct a733_cpu_clock *);
  * with COMPLETE, or REFUSED for a disabled or undecodable rail. */
 enum a733_cpu_clock_status a733_cpu_clock_inspect(struct a733_cpu_clock *,enum a733_cpu_domain,uint64_t deadline);
 /* 1 while a frequency change holds the cluster on the oscillator: from the
- * park write to the select readback. Each mux write is followed by a 2 us
+ * park write to the select readback. Each mux write is followed by a 20 us
  * settle spin on the time source before the next register write. */
 int a733_cpu_clock_parked(const struct a733_cpu_clock *);
 /* Owner task: one poll, then further polls while the cluster stays parked

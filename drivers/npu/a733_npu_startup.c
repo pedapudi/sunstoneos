@@ -34,10 +34,30 @@
  * (0x04), vf0500 (0x05) and vf0501 (0x15). Every other code, including an
  * unprogrammed 0, has no column, another voltage or no 852 MHz point. */
 #define SID_DVFS UINT32_C(0x0300624c)
+static unsigned bin_code(uint32_t word)
+{
+    unsigned code=(word>>16)&255;return code ? code : (word>>8)&255;
+}
 static int bin_allows_852(uint32_t word)
 {
-    unsigned code=(word>>16)&255;if(!code)code=(word>>8)&255;
+    unsigned code=bin_code(word);
     return code==0x02 || code==0x12 || code==0x04 || code==0x05 || code==0x15;
+}
+/* The default: the operating point the vendor driver selects for the speed
+ * bin. It caps the rate at 1,008 MHz (npu-vfgear 0, vip_drv_device_platform.c
+ * :655-686), lists only the table rows that have the bin's column
+ * (:736-790) and keeps the highest such row at or below the cap (:703-734).
+ * From the NPU table (sun60iw2p1-cpu-vf.dtsi lines 2036-2140), 24 MHz columns:
+ *   vf0000 (code 0x00), vf0200 (0x02), vf0401 (0x14): 1,008 MHz at 960 mV;
+ *   vf0300 (0x03), vf0501 (0x15): 1,008 MHz at 900 mV;
+ *   vf0201 (0x12), vf0400 (0x04), vf0500 (0x05): 852 MHz at 800 mV;
+ *   vf0100 (0x01), vf0101 (0x11), vf0600 (0x06) and unmapped codes: no row.
+ * This startup sets no DCDC2 voltage; it runs a point at the verified 800 mV
+ * and refuses every other bin, before any write. Both boards read code 4. */
+static uint32_t vendor_top(uint32_t word)
+{
+    unsigned code=bin_code(word);
+    return code==0x12 || code==0x04 || code==0x05 ? FACTORS_852 : 0;
 }
 /* Shared SRAM routing, SYSCTRL 0x03000008 bit 1, which the manual does not
  * document. Set, the 512 KiB shared SRAM (CPU 0x00074000-0x000f3fff, the NPU's
@@ -271,6 +291,12 @@ static int pass(struct a733_npu_startup *s)
         check(s,CCU+0x1b10,1,0) && check(s,CCU+0x1b14,1,0) && check(s,CCU+0x1b1c,1,0) &&
         rd(s,PLL,&v)))return 0;
     s->pll_inherited=v&PLL_INHERITED;
+    /* The selected profile, before any write: the vendor's point for the
+     * speed bin unless a733_npu_startup_rate chose one. */
+    uint32_t sid;
+    if(!s->pll_factors) {
+        if(!rd(s,SID_DVFS,&sid) || !(s->pll_factors=vendor_top(sid)))return 0;
+    } else if(s->pll_factors==FACTORS_852 && !(rd(s,SID_DVFS,&sid) && bin_allows_852(sid)))return 0;
     const uint32_t other=s->pll_factors==FACTORS_852 ? FACTORS_492 : FACTORS_852;
     /* PLL_NPU adopted: enabled, locked at the selected profile with its output
      * gate open and its gate controls set, as local stop of an earlier startup
@@ -280,9 +306,6 @@ static int pass(struct a733_npu_startup *s)
      * state at the other profile is retuned by the vendor's rate change. */
     s->pll_adopted=(v&~PLL_INHERITED)==(PLL_OPEN(s->pll_factors)|PLL_LOCK);
     s->pll_retune=(v&~PLL_INHERITED)==(PLL_OPEN(other)|PLL_LOCK);
-    /* 852 MHz only for a speed bin whose column lists 800 mV for it. */
-    uint32_t sid;
-    if(s->pll_factors==FACTORS_852 && !(rd(s,SID_DVFS,&sid) && bin_allows_852(sid)))return 0;
     if(s->pll_adopted || s->pll_retune ? !check(s,CCU+0x1920,0x10001,0x10001) || !check(s,CCU+0x19a0,BIT(16),BIT(16)) :
        /* PLL_NPU disabled: enable, lock enable, LOCK and output gate clear,
         * with only the preserved inherited reserved bit outside documented fields. */
@@ -573,7 +596,7 @@ int a733_npu_startup_init(struct a733_npu_startup *s,const struct a733_npu_start
     const struct a733_npu_startup_ops native={{native_read,native_write},native_now,native_spin_us,
         native_enter,native_leave,native_retain,native_wake};
     s->config=*c;s->providers=*p;s->ops=o ? *o : native;s->cookie=o ? cookie : s;s->shared=shared;
-    s->pll_factors=FACTORS_492;
+    s->pll_factors=0; /* The vendor's point for the speed bin, resolved by the register pass. */
     /* No NPU image makes a supply transition, so the owner verifies DCDC2 at
      * its first step instead of after the 5,160 us settle. */
     if(!a733_power_domain_row_init(&s->row,p->domains,4,c->owner,&s->rail) ||

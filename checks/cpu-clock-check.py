@@ -220,10 +220,20 @@ def main():
         assert inputs[str(path)] == lock[key]['sha256'], key
     tree = {e['path']: e['sha'] for e in json.loads(read(SOURCES / 'board-kernel/tree-2ac08e8.json'))['tree']}
     kernel = {}
-    for name in ['ccu-sun60iw2-cpupll.c', 'ccu_nkmp.c']:
+    for name, where in [('ccu-sun60iw2-cpupll.c', 'bsp/drivers/clk/sunxi-ng/'), ('ccu_nkmp.c', 'bsp/drivers/clk/sunxi-ng/'),
+                        ('ccu_common.c', 'bsp/drivers/clk/sunxi-ng/'),
+                        ('axp2101-regulator.c', 'bsp/drivers/power/regulator/'),
+                        ('sunxi-dsufreq.c', 'bsp/drivers/dsufreq/'),
+                        ('cpufreq-dt.c', 'bsp/drivers/cpufreq/cpufreq-linux-6.6/')]:
         path = SOURCES / 'board-kernel' / name
         kernel[name] = read(path)
-        assert blob(path) == tree['bsp/drivers/clk/sunxi-ng/' + name], name
+        assert blob(path) == tree[where + name], name
+    # The board kernel configuration of orangepi-build a95129bf
+    # (external/config/kernel/linux-sun60iw2-current-a733.config).
+    config_path = SOURCES / 'board-kernel-config/linux-sun60iw2-current-a733.config.a95129bf'
+    config = read(config_path)
+    assert inputs[str(config_path)] == 'ae50f80a9f46cf06adfd79aa5c754809fc9c5f59d3ded9863ebe0dc783b1e3dc'
+    assert 'CONFIG_AW_STANDARD_CCU=y' in config.splitlines() and 'CONFIG_AW_CPUFREQ_DT=y' in config.splitlines()
     driver = read(ROOT / 'drivers/clock/a733_cpu_clock.c')
     vf = pinned['npu-platform-sun60iw2p1-cpu-vf-dtsi']
 
@@ -302,14 +312,37 @@ def main():
     for rail in ['dcdc3', 'dcdc5']:
         assert 'regulator-ramp-delay = <250>;' in node(dts, 'reg_' + rail + ': ' + rail)
     assert '#define RAMP_UV_US 250u' in driver
+    # Voltage settle: |dV| / ramp rounded up to whole milliseconds.
+    regulator = kernel['axp2101-regulator.c']
+    assert 'delay = (DIV_ROUND_UP(abs(new_uV - old_uV), ramp_delay) + 999) / 1000;' in regulator
+    assert 'return delay * 1000;' in regulator and '#define RAMP_ROUND_US 1000u' in driver
+    # Lock confirmation of the standard CCU helper: three lock reads 3 us apart, then 20 us.
+    common = kernel['ccu_common.c']
+    helper = common[common.index('#if IS_ENABLED(CONFIG_AW_STANDARD_CCU)'):]
+    for term in ['while (read_times != 100 && lock_times != 3) {', 'udelay(3);', 'if (lock_times == 3)\n\t\tudelay(20);']:
+        assert term in helper, term
+    for define in ['#define LOCK_READS 3u', '#define LOCK_GAP_US 3u', '#define LOCK_SETTLE_US 20u', '#define SETTLE_US 20u']:
+        assert define in driver, define
+    # DSU rule: three quarters of the faster cluster, rounded down to the
+    # 26 MHz step, at most the DSU point at CPU-L's voltage, and no voltage
+    # write of its own.
+    dsu = kernel['sunxi-dsufreq.c']
+    for term in ['dsu_next_freq = (max_next_freq * 3)/4;', 'dsu_next_freq -= (dsu_next_freq % DCXO_CLK_26M);',
+                 'return min(dsu_next_freq, dsu_max_freq);', 'if (volt == dsufreq_dev->opp[idx - i].volt_uv) {',
+                 'ret = clk_set_rate(clk, freq);']:
+        assert term in dsu, term
+    assert 'regulator_set' not in dsu
+    assert 'cap=fast*3u/4u;' in driver and 'cap-=cap%26000000u;' in driver
     # The throttle ceiling needs 800 mV in every column of both clusters.
     header = read(ROOT / 'include/a733_cpu_clock.h')
     assert '#define A733_CPU_CLOCK_THROTTLE_MHZ 1014u' in header
     for table in ['little', 'big']:
         assert dict(c_rows(driver, table))[1014] == [800] * len(BINS), table
+    assert '#define A733_CPU_CLOCK_DSU_THROTTLE_MHZ 780u' in header
+    assert dict(c_rows(driver, 'dsu'))[780] == [800] * len(BINS)
     # Sensor channels in the thermal header's physical order: CPUB, DDR, NPU, CPUL, GPU.
     assert 'Physical channel order: CPUB, DDR, NPU, CPUL, GPU.' in read(ROOT / 'include/a733_thermal.h')
-    assert 'static const unsigned sensor[2]={3,0}; /* Physical channels CPUL and CPUB. */' in driver
+    assert 'static const unsigned sensor[3]={3,0,3}; /* Physical channels CPUL, CPUB and CPUL. */' in driver
 
     # Transition model with sanitizers, then AArch64 compilation of changed units.
     for path in UNITS + ['checks/cpu-clock-model.c', 'checks/a733-pmic.c']:

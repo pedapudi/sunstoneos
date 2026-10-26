@@ -87,7 +87,7 @@ static enum pvr_gpu_start_result run(struct pvr_gpu_start *s, struct model *m)
     for (unsigned i = 0; i < 1000; ++i) {
         unsigned io = m->io, reads = m->reads_started;
         enum pvr_gpu_start_result r = pvr_gpu_start_poll(s);
-        /* One device access per poll; only the readiness byte is re-read. */
+        /* One device access per poll; only the readiness word is re-read. */
         assert(m->io - io <= 1 || m->io - io == m->reads_started - reads);
         if (r != PVR_GPU_START_AGAIN) return r;
         ++m->now;
@@ -155,7 +155,7 @@ int main(int argc, char **argv)
     }
     free(wrapper);
     struct pvr_gpu_start s; struct model m;
-    prepare(&s,&m,image); assert(s.count == 35);
+    prepare(&s,&m,image); assert(s.count == 29);
     assert(pvr_gpu_start_poll(&s) == PVR_GPU_START_INVALID && !m.io && !m.clock_calls);
     assert(pvr_gpu_start_begin(&s,10000) == PVR_GPU_START_AGAIN);
     assert(run(&s,&m) == PVR_GPU_START_OK && s.phase == PVR_GPU_START_BOOTED);

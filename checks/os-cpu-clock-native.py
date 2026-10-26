@@ -84,17 +84,17 @@ def call(mode, addr=0, value=0):
 cases = []
 assert call(4) == 1 and len(events) == 8 and all(e[0] == 'read' and e[2] == 4 for e in events)
 cases.append('actual-os-admission-report')
-reads = [*registers, *[base + offset for base in (0x08871000, 0x08872000) for offset in (4, 8, 0x18)]]
+reads = [*registers, *[base + offset for base in (0x08871000, 0x08872000, 0x08873000) for offset in (4, 8, 0x18)]]
 for addr in reads:
     assert call(0, addr) == 1 and len(events) == 1 and events[0][:3] == ('read', addr, 4)
-cases.append('all-fourteen-allowed-reads')
-for addr in (0x08871000, 0x08872000, 0x0887101c, 0x0887201c):
+cases.append('all-seventeen-allowed-reads')
+for addr in (0x08871000, 0x08872000, 0x08873000, 0x0887101c, 0x0887201c, 0x0887301c):
     assert call(1, addr, registers[addr]) == 1
     expected = [('write', addr, 4, registers[addr])]
     if addr & 0xfff == 0x1c: expected.append(('dsb-sy',))
     assert events == expected, (hex(addr), events)
-cases.append('both-cluster-writes-and-mux-dsb')
-for addr in (0x08873000, 0x0887301c, 0x08871004, 0x08871008, 0x08871018, 0x0300624c, 0x07090160):
+cases.append('cluster-and-dsu-writes-and-mux-dsb')
+for addr in (0x08870000, 0x0887001c, 0x08871004, 0x08871008, 0x08871018, 0x08873018, 0x0300624c, 0x07090160):
     assert call(1, addr, 0) == 0 and not events
 for mode, addr in ((0, 0x08870000), (0, 0x08871002), (1, 0x08871002), (2, 0x08871000), (3, 0x08871000)):
     assert call(mode, addr, 0) == 0 and not events
@@ -104,4 +104,4 @@ result = dict(status='PASS', cases=cases, elf_sha256=hashlib.sha256(elf.read_byt
             (*units, 'checks/os-cpu-clock-native.py', 'apps/os/cpu.c', 'include/a733_cpu_clock.h', 'include/a733_mmio.h')},
     limits='Actual AArch64 adapters with modeled MMIO storage. No physical clock, rail or thermal qualification.')
 (a.output / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
-print('PASS actual OS CPU adapter: report, fourteen reads, four writes, mux DSB, refusals')
+print('PASS actual OS CPU adapter: report, seventeen reads, six writes, mux DSB, refusals')

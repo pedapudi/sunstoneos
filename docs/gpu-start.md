@@ -38,19 +38,22 @@ borrow the firmware image, wrapper record, or callback table.
 
 ## Startup publishes memory before releasing the firmware processor
 
-The pinned firmware selects a sequence of 35 steps:
+The pinned firmware selects a sequence of 29 steps:
 
 1. Publish prepared firmware code, data, tables, queues, and initialization
-   records. Read the firmware-started byte and require it to be clear.
+   records. Read the 32-bit firmware-started word and require it to be clear.
 2. Disable the reference system-bus protection and read back the register.
 3. Assert the selected reset masks. Release the Rascal and Dust processing
    blocks, then hold only the firmware processor in reset. Each stage includes
-   the reference readbacks.
+   the reference readbacks. Upstream also writes `SOFT_RESET2` (`0x108`) at
+   each stage when the firmware reports XE_TPU2; the vendor DDK never writes
+   it for this core, so the A733 sequence does not
+   ([firmware start design](designs/gpu-firmware-start.md)).
 4. Read and update the low word of cache control, preserving its hazard bit.
    Apply the eleven prepared MIPS wrapper writes and configure the AXI-ACE interface.
 5. Wait at least three microseconds, release firmware reset, read back reset,
    and wait at least another three microseconds.
-6. Acquire the firmware-started byte from system initialization until it becomes
+6. Acquire the 32-bit firmware-started word from system initialization until it becomes
    one or the absolute deadline expires.
 
 The reference MIPS path skips GPU BIF setup. [GPU workload page tables](gpu-vm.md)
@@ -61,7 +64,7 @@ after boot and the remaining compatibility and health checks.
 ## Each poll performs at most one device operation
 
 Platform callbacks provide ordered 32/64-bit register access, a monotonic
-microsecond clock, firmware-memory publication, and an acquired readiness byte.
+microsecond clock, firmware-memory publication, and an acquired 32-bit readiness word.
 Writes must complete before their callback returns. Register readbacks fence
 preceding writes. Shared-memory callbacks must maintain visibility without
 writing stale CPU cache lines over firmware-owned data.
@@ -70,7 +73,7 @@ A poll performs at most one register access or publication operation. A delay
 step starts after the preceding callback has finished and waits on the clock
 inside the step for its 3 µs. The clock may report whole microseconds rounded
 down, so the step waits until the clock passes its first sample by more than
-3 µs. The readiness check re-reads the shared byte for up to 50 µs
+3 µs. The readiness check re-reads the shared word for up to 50 µs
 (`A733_GPU_SPIN_US`) and then returns to the caller, which polls again on its
 next wake. A wait whose clock shows no advance for 1,024 consecutive samples
 (`A733_GPU_SPIN_STALLED_READS`) also returns to the caller without advancing the
@@ -79,7 +82,7 @@ Every wait ends at the startup deadline. The service
 must continue polling and keep its independent watchdog protection active.
 
 The caller supplies one absolute deadline for the complete startup. Clock
-regression, callback failure, stale readiness, an invalid readiness byte,
+regression, callback failure, stale readiness, an invalid readiness word,
 cancellation, or timeout latches failure and the current step index. Readiness
 observed after the deadline is rejected by a second clock read.
 
@@ -104,14 +107,14 @@ poll, a readiness wait bounded to 50 µs per poll, a deadline that expires durin
 a delay, and at most one register access per poll. A second clock model counts
 one 24 MHz tick per clock read and callback and reports whole microseconds
 rounded down, as the board counter does. Under it, the two 3 µs delays
-separated their bracketing callbacks by 86 and 95 counter ticks, at least the
+separated their bracketing callbacks by 98 and 95 counter ticks, at least the
 72 that 3 µs requires. With a stopped clock, a delay and a readiness wait each
 return to the caller without advancing and complete once the clock runs. A synthetic feature variant covers
-alternate reset-mask selection, omission of secure-bus/reset2 operations, a
+alternate reset-mask selection, omission of the secure-bus operations, a
 1,024-bit cache line, and the lazy-writeback workaround. It is not another
 physically supported board profile.
 
-The successful check covers 42 retained-failure cases and 40 atomic input
+The successful check covers 36 retained-failure cases and 40 atomic input
 refusals. Every device callback in the successful sequence has a failure case.
 Other cases cover clock failure/regression, stale or malformed readiness,
 firmware boot timeout, timeout during a minimum delay, cancellation, malformed
@@ -124,20 +127,22 @@ AArch64 compilation was reused.
 
 The [reference comparison](../checks/pvr-gpu-start-reference.py) compiles the
 original startup, cache, AXI-ACE, and MIPS wrapper functions. Mock register
-operations record their complete traces. All thirty register accesses for the
-pinned firmware and twenty-two for the synthetic variant match native offsets,
+operations record their complete traces. Leaving out the reference's six
+`SOFT_RESET2` accesses, all twenty-four register accesses for the pinned
+firmware and twenty-two for the synthetic variant match native offsets,
 widths, values, and order. The reference also requests two three-microsecond
 delays. Source hashes are checked against the pinned board-source manifest.
 Neither trace establishes physical reset, cache coherence, or firmware execution.
 
 Clang 21 compiled the component for AArch64 with strict alignment and freestanding
-options. It contains 3,752 bytes of code/read-only data and no writable static
-data. Individual stack frames are 2,320 bytes for offline initialization,
-64 for polling, and 32 each for begin and the clock helper. These are individual
+options. It contains 3,724 bytes of code/read-only data and no writable static
+data. Individual stack frames are 2,080 bytes for offline initialization,
+96 for polling, and 32 each for begin and the clock helper. These are individual
 frames; the caller must account for nested helpers, firmware decoding, and callbacks.
 
 Commands, source snapshots, firmware and wrapper identities, traces, compiler
 output, and comparison results are under
-`~/.cache/sunstoneos/evidence/gpu-start-20261016/`. Existing OS, mimus, NPU,
+`~/.cache/sunstoneos/evidence/gpu-start-20261025/` (the earlier run, with
+`SOFT_RESET2`, is under `gpu-start-20261016/`). Existing OS, mimus, NPU,
 and GPU preparation evidence was reused. No device access or performance
 measurement occurred.

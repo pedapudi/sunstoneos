@@ -9,7 +9,7 @@ static struct {
     unsigned char memory[5][128*88], commands[2][88];
     uint64_t now;
     unsigned calls, fail_at, sync, clears, sent, no_ack, no_return, status;
-    unsigned hold_register, register_reads, isolation, late_isolation, fenced, reset;
+    unsigned hold_register, register_reads, isolation, late_isolation, irq, irq_cleared;
     unsigned events_count, frozen;
     int isolation_result;
     unsigned isolation_polls, isolation_pending;
@@ -70,16 +70,17 @@ static int read_reg(void *ctx,uint32_t off,uint32_t width,uint64_t *v)
 {
     assert(ctx==&m); if(!operation())return 0;
     ++m.register_reads;
-    *v=off==0x3c8?0x7f:off==0x3898?0xff:0;
+    *v=off==0x3c8?0x7f:off==0x3898?0xff:off==0x8a8?m.irq:0;
     if(m.hold_register==off) { *v=off==0x3c8||off==0x3898?0:1; return 1; }
     event(0,off,width,*v);
-    if(off==0x100) { assert(m.reset && width==8); m.fenced=1; }
     return 1;
 }
 static int write_reg(void *ctx,uint32_t off,uint32_t width,uint64_t v)
 {
     assert(ctx==&m); if(!operation())return 0; event(1,off,width,v);
-    if(off==0x100)m.reset=1; return 1;
+    /* The interrupt clear follows a pending status read, with its event bit. */
+    if(off==0x8b0) { assert(m.irq&1 && v==1 && !m.irq_cleared); m.irq_cleared=1; }
+    return 1;
 }
 static int sync_write(void *ctx,uint32_t v)
 { assert(ctx==&m && !v); if(!operation())return 0; m.sync=v; ++m.clears; return 1; }
@@ -87,7 +88,7 @@ static int sync_read(void *ctx,uint32_t *v)
 { assert(ctx==&m); if(!operation())return 0; *v=m.sync; return 1; }
 static int isolate(void *ctx)
 {
-    assert(ctx==&m && m.fenced && m.sent==2 && s.acknowledgement[0] && s.acknowledgement[1]);
+    assert(ctx==&m && s.index==s.count && m.sent==2 && s.acknowledgement[0] && s.acknowledgement[1]);
     if(!operation())return 0; ++m.isolation;
     if(m.late_isolation)m.now=s.deadline;
     return m.isolation_result;
@@ -106,7 +107,7 @@ static void prepare(const void *fw)
     assert(pvr_ccb_init(&q,&qops,&m,21)==PVR_CCB_OK);
     assert(pvr_ccb_start(&q,m.now)==PVR_CCB_OK);
     c.ops=cops; c.context=&m; c.queue=&q; c.phase=PVR_GPU_CONTROL_READY; c.last_now=m.now;
-    m.status=1; m.sync=0xfeed; m.calls=0; m.isolation_result=1;
+    m.status=1; m.sync=0xfeed; m.calls=0; m.isolation_result=1; m.irq=1;
     assert(pvr_gpu_stop_init(&s,&c,fw,image_bytes,&ops,&m,10000));
 }
 static enum pvr_gpu_stop_result run(void)
@@ -155,7 +156,7 @@ int main(int argc,char **argv)
     image=malloc(image_bytes); variant=malloc(image_bytes); assert(image && variant);
     assert(fread(image,1,image_bytes,f)==image_bytes && !fclose(f));
     assert(pvr_gpu_stop_poll(&s)==PVR_GPU_STOP_INVALID);
-    prepare(image); assert(s.count==15 && run()==PVR_GPU_STOP_OK && m.isolation==1);
+    prepare(image); assert(s.count==14 && run()==PVR_GPU_STOP_OK && m.isolation==1 && m.irq_cleared);
     assert(c.phase==PVR_GPU_CONTROL_RETIRED && q.phase==PVR_CCB_RETIRED);
     unsigned calls=m.calls,successful_calls=m.calls;
     assert(pvr_gpu_stop_poll(&s)==PVR_GPU_STOP_OK);
@@ -163,7 +164,7 @@ int main(int argc,char **argv)
     assert(pvr_ccb_poll(&q,m.now)==PVR_CCB_FAULT && calls==m.calls);
     save(argv[2],0); f=output(argv[2],"commands.bin"); assert(fwrite(m.commands,1,176,f)==176 && !fclose(f));
     memcpy(variant,image,image_bytes); variant[122880+48+4]&=0xfe; variant[122880+48+8]|=0x20;
-    prepare(variant); assert(s.count==14 && run()==PVR_GPU_STOP_OK); save(argv[2],1);
+    prepare(variant); assert(s.count==13 && run()==PVR_GPU_STOP_OK); save(argv[2],1);
     f=output(argv[2],"variant.fw"); assert(fwrite(variant,1,image_bytes,f)==image_bytes && !fclose(f));
     for(unsigned i=1;i<=successful_calls;++i) {
         prepare(image); m.fail_at=i;
@@ -190,7 +191,7 @@ int main(int argc,char **argv)
         while(s.phase!=PVR_GPU_STOP_REGISTERS || s.steps[s.index].offset!=held[i])
             assert(pvr_gpu_stop_poll(&s)==PVR_GPU_STOP_AGAIN);
         unsigned index=s.index,reads=m.register_reads; uint64_t start=m.now;
-        assert(pvr_gpu_stop_poll(&s)==PVR_GPU_STOP_AGAIN && s.index==index && !m.reset && !m.isolation);
+        assert(pvr_gpu_stop_poll(&s)==PVR_GPU_STOP_AGAIN && s.index==index && !m.isolation);
         /* The held register is re-read for A733_GPU_SPIN_US within one poll. */
         assert(m.register_reads-reads>1 && m.now-start>=A733_GPU_SPIN_US && m.now-start<=3*A733_GPU_SPIN_US);
         m.now=s.deadline; assert(run()==PVR_GPU_STOP_FAULT); stopped(PVR_GPU_STOP_TIMEOUT);
@@ -205,7 +206,7 @@ int main(int argc,char **argv)
     while(s.phase!=PVR_GPU_STOP_REGISTERS || s.steps[s.index].offset!=held[0])
         assert(pvr_gpu_stop_poll(&s)==PVR_GPU_STOP_AGAIN);
     m.frozen=1; unsigned held_index=s.index;
-    assert(pvr_gpu_stop_poll(&s)==PVR_GPU_STOP_AGAIN && s.index==held_index && !m.reset);
+    assert(pvr_gpu_stop_poll(&s)==PVR_GPU_STOP_AGAIN && s.index==held_index && !m.isolation);
     m.frozen=0; m.hold_register=0; assert(run()==PVR_GPU_STOP_OK);
     prepare(image); m.late_isolation=1;
     assert(run()==PVR_GPU_STOP_FAULT && s.isolation_observed && m.isolation==1); stopped(PVR_GPU_STOP_TIMEOUT);
@@ -230,6 +231,8 @@ int main(int argc,char **argv)
     m.now=s.deadline;calls=m.calls;
     assert(run()==PVR_GPU_STOP_FAULT && m.calls==calls+1 && m.isolation==1 && m.isolation_polls==1);
     stopped(PVR_GPU_STOP_TIMEOUT);
+    /* No pending interrupt: the status is read and nothing is cleared. */
+    prepare(image); m.irq=0; assert(run()==PVR_GPU_STOP_OK && !m.irq_cleared && m.events_count==s.count-1);
     /* A power acknowledgement is independent of the queue return-slot flag. */
     prepare(image); m.no_return=1; assert(run()==PVR_GPU_STOP_OK);
     uint32_t value=0; calls=m.calls;
@@ -249,5 +252,5 @@ int main(int argc,char **argv)
     memset(&s,0,sizeof(s)); before=s; struct pvr_gpu_stop_ops bad=ops; bad.isolate=NULL;
     assert(!pvr_gpu_stop_init(&s,&c,image,image_bytes,&bad,&m,10000) && !memcmp(&s,&before,sizeof(s)));
     free(image); free(variant);
-    printf("PASS GPU shutdown: two acknowledged commands, idle/reset/isolation ordering, retirement, and %u retained faults\n",faults);
+    printf("PASS GPU shutdown: two acknowledged commands, interrupt acknowledgement, idle/isolation ordering, retirement, and %u retained faults\n",faults);
 }

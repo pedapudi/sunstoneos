@@ -58,6 +58,7 @@ static void wait_clear(uintptr_t address,uint32_t mask)
     do {a733_smp_startup_check();if(!(read32(address)&mask))return;}while(1);
 }
 #include "a733_el3_security.h"
+#include "a733_el3_mbus.h"
 void a733_smp_boot(void)
 {
     volatile const struct a733_smp_contract *source=(void *)A733_SMP_CONTRACT_ADDRESS;
@@ -88,6 +89,10 @@ void a733_smp_boot(void)
     /* GICv3 security/routing sequence follows the existing EL3 monitor. */
     uint32_t ctlr=read32(0x03400000),banks=(read32(0x03400004)&31)+1;
     if(ctlr&(1u<<6))a733_smp_stop(2,2);
+    /* MBUS back to boot0's 600 MHz before any secondary core is released:
+     * the window runs from SRAM, and released cores would spin in DRAM
+     * (include/a733_el3_mbus.h). */
+    {unsigned mbus=a733_el3_mbus_restore();if(A733_MBUS_FAILED(mbus))a733_smp_stop(2,0x200u|mbus);}
     write32(0x03400000,ctlr&~7u);wait_clear(0x03400000,1u<<31);
     for(unsigned i=1;i<banks;++i)write32(0x03400180+i*4,UINT32_MAX);
     wait_clear(0x03400000,1u<<31);

@@ -134,7 +134,7 @@ blocks, and a TEXTURE submission can see tick blocks before its kick.
 
 Hardware waits shorter than 50 µs (`A733_GPU_SPIN_US`) end inside a step.
 Startup waits on the clock for its two 3 µs delays and re-reads the firmware
-readiness byte for up to 50 µs. Shutdown re-reads each idle register and each
+readiness word for up to 50 µs. Shutdown re-reads each idle register and each
 power acknowledgement for up to 50 µs. The power controller runs its register
 steps back to back, waits on the clock for its 1 µs settling delay and re-reads
 the power-domain acknowledgement for up to 50 µs. Each re-read budget starts at
