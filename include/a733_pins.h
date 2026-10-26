@@ -57,9 +57,12 @@ struct a733_pin_state {
 };
 /* Implementation state; zero-initialize once and never modify initialized
  * fields. All managers sharing these pins must be the SAME instance. */
-/* The platform authenticates this complete bank-latch record before init.
- * It excludes all other DATA writers for the manager lifetime. Values sampled
- * while pins are inputs or alternate functions cannot establish this record. */
+/* The platform authenticates this bank-latch record before init and excludes
+ * all other DATA/mux writers for the manager lifetime. A full known_mask
+ * preserves every inherited latch. PM alone also accepts known_mask=value=0:
+ * preserve live GPIO outputs, initialize inactive latches on the first write,
+ * and require every future GPIO-output transition to use manager priming.
+ * Input/alternate DATA samples never establish historical latch values. */
 struct a733_pin_latch_handoff {
     uint64_t identity, owner;
     uint32_t known_mask, value;
@@ -79,7 +82,7 @@ struct a733_pins {
     struct a733_pins_operations operations;
     void *cookie;
     uint64_t next_id, last_time;
-    unsigned initialized, failed;
+    unsigned initialized, failed, established_latches;
     struct a733_pin_handoff handoff;
     struct a733_pin_bank_state banks[A733_PIN_BANKS];
     struct a733_pin_state pins[A733_PIN_BANKS][32];

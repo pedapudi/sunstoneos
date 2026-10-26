@@ -24,7 +24,11 @@ int bluetooth_profile_valid(const struct bluetooth_profile *p,const uint8_t dige
         p->uart.format.data_bits!=8||p->uart.format.stop_half_bits!=2||p->uart.format.parity||!p->uart.format.auto_flow||
         !p->radio.owner||!p->uart.owner||p->radio.owner==p->uart.owner||!p->session_owner||
         p->wake.authority!=p->wake_authority||!p->pm_latch.identity||!p->pm_latch.owner||
-        p->pm_latch.known_mask!=0x3f||(p->pm_latch.value&~0x3fu)||
+        (p->pm_latch.known_mask!=0x3f
+#ifdef SUNSTONE_A733_OS
+         &&p->pm_latch.known_mask!=0
+#endif
+        )||(p->pm_latch.value&~p->pm_latch.known_mask)||
         !p->command_timeout_us||p->command_timeout_us>5000000||!p->frame_timeout_us||
         p->frame_timeout_us>p->command_timeout_us||!p->binding_timeout_us||
         !p->runtime_lease_us||!p->renew_margin_us||p->renew_margin_us>=p->runtime_lease_us)return 0;

@@ -95,6 +95,12 @@ These source observations do not identify the fitted board revision, resistor
 population or current powered lifetime. The producer therefore has no default
 topology or inherited latch value.
 
+The complete-latch requirement above belongs to this returning diagnostic.
+The [normal OS ownership contract](radio-platform.md#published-startup-and-inherited-boot-state)
+can initialize inactive PM latches while preserving all live outputs. That
+contract does not resolve the fitted supply map or PM2 electrical behavior,
+and this producer retains its stricter requirement.
+
 ## A bounded debug exchange must exercise CMD53 data transfers
 
 The platform's final CCCR read uses CMD52, which transfers its byte on the

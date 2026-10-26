@@ -9,7 +9,7 @@ static uint32_t latches[A733_PIN_BANKS],inputs[A733_PIN_BANKS],primed[A733_PIN_B
 static unsigned locked,reads,writes,fail_write,fail_read,expire_write,reenter_write;
 static unsigned ignore_alias,late_read,reassert_irq;
 static uint64_t time_now;
-static uintptr_t last_write,expire_address;
+static uintptr_t last_write,expire_address,fail_address;
 static uint32_t last_value;
 static uintptr_t base(unsigned b)
 { return b<A733_PIN_L ? A733_PINS_BASE+0x80+b*0x80 : A733_PINS_R_BASE+(b-A733_PIN_L)*0x30; }
@@ -75,7 +75,12 @@ static int write_model(void *cookie,uintptr_t a,uint32_t v)
             (b>=A733_PIN_L && a==base(b)+0x10)) {
             assert(mask);
             if (b>=A733_PIN_L) {
-                assert(!((latches[b]^v)&~mask));
+                uint32_t preserve=a733_pin_bank_mask(b);
+                if (!(m.established_latches&(1u<<b))) {
+                    preserve=0;
+                    for (unsigned p=0;p<32;++p) if (mux(b,p)==1) preserve|=1u<<p;
+                }
+                assert(!((latches[b]^v)&~mask&preserve));
                 if (!ignore_alias) latches[b]=v;
             } else {
                 assert(!(v&~mask));
@@ -121,24 +126,28 @@ static int write_model(void *cookie,uintptr_t a,uint32_t v)
     }
     assert(handled);
     if (writes==expire_write || a==expire_address) time_now=100;
-    return writes!=fail_write;
+    return writes!=fail_write && a!=fail_address;
 }
 static void setup(unsigned latch_authority)
 {
     assert(!locked); memset(&m,0,sizeof(m)); memset(main_words,0,sizeof(main_words)); memset(r_words,0,sizeof(r_words));
     memset(latches,0,sizeof(latches)); memset(inputs,0,sizeof(inputs)); memset(primed,0,sizeof(primed));
     reads=writes=fail_write=fail_read=expire_write=reenter_write=ignore_alias=late_read=reassert_irq=0;
-    expire_address=last_write=0; time_now=0;
+    expire_address=last_write=fail_address=0; time_now=0;
     struct a733_pin_handoff h={0};
     for (unsigned b=1;b<A733_PIN_BANKS;++b) {
         h.authorized[b]=a733_pin_bank_mask(b); h.irq_banks|=1u<<b;
         for (unsigned p=0;p<32;++p) if (h.authorized[b]&(1u<<p)) config(b,p,15,1,2);
         *word(irq(b)+0x18)=0x80000000;
     }
-    if (latch_authority) for (unsigned b=A733_PIN_L;b<=A733_PIN_M;++b) {
+    if (latch_authority==1) for (unsigned b=A733_PIN_L;b<=A733_PIN_M;++b) {
         h.latch[b-A733_PIN_L]=(struct a733_pin_latch_handoff){10+b,88,a733_pin_bank_mask(b),1u<<1};
         latches[b]=1u<<1;
         config(b,1,1,0,1); /* Unleased neighbor with an authenticated high latch. */
+    }
+    if (latch_authority==2) {
+        h.latch[1]=(struct a733_pin_latch_handoff){22,88,0,0};
+        h.authorized[A733_PIN_M]=0x13; /* PM2/3/5 remain outside pin authority. */
     }
     struct a733_pins_operations ops={enter_model,leave_model,now_model,read_model,write_model};
     assert(a733_pins_init_banks(&m,&ops,&m,&h));
@@ -153,8 +162,76 @@ static void retained(struct a733_pin_lease_banked *h)
     assert(a733_pins_release_banked(&m,h,1,1000)==A733_PINS_RECOVERY);
     assert(n==reads && w==writes);
 }
-int main(void)
+static void pm_startup(void)
 {
+    const unsigned bank=A733_PIN_M;
+    struct a733_pin_lease_banked a={0},b={0};
+    setup(2);
+    config(bank,0,0,1,2); config(bank,2,1,2,3); config(bank,3,1,1,0);
+    config(bank,4,0,2,1); config(bank,5,2,1,2);
+    /* Live PM2/3 high; unknown inactive latches differ from input/alternate
+     * DATA. Only the live outputs may supply the first shared-write value. */
+    latches[bank]=0x1d; inputs[bank]=0x11;
+    uint32_t cfg=*word(base(bank)),drive=*word(base(bank)+0x14),pull=*word(base(bank)+0x24);
+    struct a733_pin_request_banked out=req(bank,1,1); out.output_value=1;
+    assert(a733_pins_acquire_banked(&m,1,&out,1,&a,100)==A733_PINS_OK);
+    assert(latches[bank]==0x0e && m.banks[bank].latch==0x0e);
+    assert(m.established_latches&(1u<<bank));
+    assert(((*word(base(bank))^cfg)&~0xf0u)==0);
+    assert(((*word(base(bank)+0x14)^drive)&~0xf0u)==0);
+    assert(((*word(base(bank)+0x24)^pull)&~0xcu)==0);
+    struct a733_pin_request_banked later={bank,4,{0,2,1},{1,2,1},1,0,0};
+    assert(a733_pins_acquire_banked(&m,2,&later,1,&b,100)==A733_PINS_OK);
+    assert(latches[bank]==0x1e && mux(bank,4)==1);
+    assert(a733_pins_release_banked(&m,&b,1,100)==A733_PINS_OK && mux(bank,4)==0);
+    assert(a733_pins_write_outputs(&m,&a,bank,2,0,100)==A733_PINS_OK && latches[bank]==0x1c);
+    assert(a733_pins_release_banked(&m,&a,1,100)==A733_PINS_OK && mux(bank,1)==15);
+    assert(latches[bank]==0x1c && mux(bank,2)==1 && mux(bank,3)==1);
+
+    /* A leased inherited output must be sampled before the mux is disabled,
+     * and restored from that defined sample despite no historical shadow. */
+    setup(2); config(bank,1,1,0,1); config(bank,2,1,0,1); latches[bank]=6;
+    out=(struct a733_pin_request_banked){bank,1,{1,0,1},{1,0,1},0,0,0};
+    assert(a733_pins_acquire_banked(&m,1,&out,1,&a,100)==A733_PINS_OK);
+    assert(latches[bank]==4 && m.pins[bank][1].initial_output==1);
+    assert(a733_pins_release_banked(&m,&a,1,100)==A733_PINS_OK && latches[bank]==6);
+
+    setup(2); out=req(bank,1,1); out.output_value=1; config(bank,2,1,0,1); latches[bank]=4;
+    fail_address=base(bank)+0x10;
+    assert(a733_pins_acquire_banked(&m,1,&out,1,&a,100)==A733_PINS_RECOVERY);
+    retained(&a); assert(m.banks[bank].latch==6 && latches[bank]==6 && mux(bank,1)==15);
+    unsigned before=writes;
+    assert(a733_pins_release_banked(&m,&a,1,100)==A733_PINS_RECOVERY && writes==before);
+
+    /* The strict record preserves even dormant bits and retains its mismatch
+     * refusal; unknown startup must never become an implicit repair mode. */
+    setup(1); a=(struct a733_pin_lease_banked){0}; out=req(bank,0,1);
+    m.banks[bank].latch|=0x30; m.handoff.latch[1].value|=0x30; latches[bank]|=0x30;
+    assert(a733_pins_acquire_banked(&m,1,&out,1,&a,100)==A733_PINS_OK && latches[bank]==0x32);
+    latches[bank]&=~2u; before=writes;
+    assert(a733_pins_write_outputs(&m,&a,bank,1,1,100)==A733_PINS_RECOVERY && writes==before);
+    retained(&a);
+
+    setup(2);
+    struct a733_pin_handoff h=m.handoff;
+    struct a733_pins fresh={0};
+    h.latch[1].value=1; assert(!a733_pins_init_banks(&fresh,&m.operations,&m,&h));
+    h.latch[1].value=0; h.latch[1].known_mask=0x1f;
+    assert(!a733_pins_init_banks(&fresh,&m.operations,&m,&h));
+    h.latch[1].known_mask=0; h.latch[1].owner=0;
+    assert(!a733_pins_init_banks(&fresh,&m.operations,&m,&h));
+    h.latch[1].owner=88; h.latch[1].identity=0;
+    assert(!a733_pins_init_banks(&fresh,&m.operations,&m,&h));
+    h=m.handoff; h.latch[0]=(struct a733_pin_latch_handoff){21,88,0,0};
+    assert(!a733_pins_init_banks(&fresh,&m.operations,&m,&h));
+    setup(0); a=(struct a733_pin_lease_banked){0}; before=writes;
+    assert(a733_pins_acquire_banked(&m,1,&out,1,&a,100)==A733_PINS_INVALID && !a.id && writes==before);
+    puts("PM startup: live-output preservation, inactive-latch initialization, future priming, inherited-output restore, retained first-write failure and strict/malformed handoffs passed");
+}
+int main(int argc,char **argv)
+{
+    if (argc==2 && !strcmp(argv[1],"--pm-startup")) { pm_startup(); return 0; }
+    assert(argc==1);
     setup(0);
     struct a733_pin_request_banked bt[4];
     for (unsigned i=0;i<4;++i) bt[i]=req(A733_PIN_G,6+i,2);
