@@ -59,7 +59,7 @@ static int timely(struct a733_storage_update *s)
 int a733_storage_update_init(struct a733_storage_update *s,struct a733_mmc_platform *p,
     const struct a733_storage_grant *g,uint64_t deadline)
 {
-    if(!s||s->self||!p||!g||!a733_ranges_disjoint(s,sizeof(*s),g,sizeof(*g))||
+    if(!s||((uintptr_t)s%_Alignof(struct a733_storage_update))||s->self||!p||!g||!a733_ranges_disjoint(s,sizeof(*s),g,sizeof(*g))||
        !a733_mmc_platform_storage(p,s,sizeof(*s))||!a733_mmc_platform_storage(p,g,sizeof(*g)))return 0;
     const struct a733_storage_grant copied=*g;g=&copied;
     if(!grant_valid(g)||!a733_ranges_disjoint(s,sizeof(*s),p,sizeof(*p))||g->deadline_us>p->config.lifetime_deadline_us||
@@ -127,14 +127,14 @@ int a733_storage_update_request(struct a733_storage_update *s,const uint8_t *p,s
     if(op==A733_STORAGE_INFO) {
         if(bytes||offset)return fault(s);
         uint8_t info[A733_STORAGE_GRANT_BYTES+4];a733_storage_grant_encode(&s->grant,info);
-        put32(info+A733_STORAGE_GRANT_BYTES,A733_STORAGE_READ_BLOCKS);respond(s,0,info,sizeof(info),NULL);return 1;
+        put32(info+A733_STORAGE_GRANT_BYTES,s->platform->config.dma?A733_STORAGE_READ_BLOCKS:SUNXI_MMC_MAX_BLOCKS);respond(s,0,info,sizeof(info),NULL);return 1;
     }
     if(op==A733_STORAGE_BACKUP) {
         if(bytes||s->sealed||offset!=s->read_blocks||offset>=s->grant.blocks)return fault(s);
-        /* Reads finish well inside the operation deadline even at 400 kHz:
-         * eight sectors take about 85 ms of one-bit bus time. */
+        /* PIO retains its eight-sector identification-speed bound. */
+        unsigned limit=s->platform->config.dma?A733_STORAGE_READ_BLOCKS:SUNXI_MMC_MAX_BLOCKS;
         uint64_t left=s->grant.blocks-offset;
-        s->chunk_bytes=(unsigned)(left>A733_STORAGE_READ_BLOCKS?A733_STORAGE_READ_BLOCKS:left)*512;
+        s->chunk_bytes=(unsigned)(left>limit?limit:left)*512;
         s->state=A733_STORAGE_READ_START;return 1;
     }
     if(op==A733_STORAGE_SEAL) {

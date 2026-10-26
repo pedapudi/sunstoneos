@@ -60,6 +60,21 @@ The transfer references the constructor’s copied grant. No uploaded C pointer 
 accepted. The native constructor creates the actual tasks and binds their handles
 to the single watchdog owner before starting the scheduler.
 
+Set `mmc_sd_profile` to `2` in the admitted launch configuration to use
+64-sector DMA backup reads; the default profile zero retains eight-sector PIO.
+SD profile two uses a private descriptor chain in the existing noncacheable
+pool at `0x41c00000–0x41e00000`. The image reserves that 2 MiB block and uses
+528 bytes for descriptors. Bootstrap rejects any supplied DMA pointer before
+selecting this array. Admission checks every descriptor and readback page for
+identity mapping, normal memory attributes and inner shareability; the cached
+image's existing coherence admission remains mandatory. The permanent 32 KiB
+readback buffer owns complete 64-byte cache lines, separate from input and
+service state. The existing cache adapter cleans its exact borrowed range
+before DMA and invalidates it only after the core proves descriptor completion
+and controller drain. Failed transfers retain the range, descriptors and leases.
+Writes remain one-sector PIO, with DMA disabled and CPU FIFO selected before
+CMD24. See [the backup protocol](storage-update.md) for batching and memory costs.
+
 Runtime exits revoke subsequent feeds. Fatal exceptions use the existing atomic
 lease after validating the current EL3 translation and every core’s canonical
 translation record. They select a reserved Secure Device stack before calling C.

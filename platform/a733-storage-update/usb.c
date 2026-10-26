@@ -8,7 +8,7 @@
 #define MESSAGE_MAGIC UINT32_C(0x53534f53)
 #define UPDATE_COMMAND UINT32_C(0x53555044)
 static struct a733_storage_native *runtime;
-static uint8_t request[16+A733_STORAGE_BODY],response[16+A733_STORAGE_BODY];
+static uint8_t request[16+A733_STORAGE_REQUEST_BYTES],response[16+A733_STORAGE_BODY];
 static unsigned received,wanted=16,response_bytes,sent,transferred,polling,initialized;
 static uint32_t sequence;
 static uint32_t get32(const uint8_t *p)
@@ -137,7 +137,7 @@ static void receive(void)
     unsigned got=tud_vendor_read(request+received,count);if(got!=count)stop();received+=got;
     if(received==16&&wanted==16) {
         unsigned body=get32(request+12);
-        if(get32(request)!=MESSAGE_MAGIC||get32(request+8)!=UPDATE_COMMAND||body<88||body>A733_STORAGE_BODY)stop();
+        if(get32(request)!=MESSAGE_MAGIC||get32(request+8)!=UPDATE_COMMAND||body<88||body>A733_STORAGE_REQUEST_BYTES)stop();
         wanted=16+body;
     }
     if(received==wanted) {

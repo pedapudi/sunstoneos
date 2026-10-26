@@ -133,7 +133,8 @@ again.
 ## Backup bytes precede write admission
 
 The service reads the granted range through the actual MMC platform in chunks
-of at most eight sectors (4,096 bytes). It hashes the complete stream while the platform retains
+of at most 64 sectors (32 KiB) with SD high-speed DMA, or eight sectors with
+PIO. It hashes the complete stream while the platform retains
 exclusive controller ownership. Each response binds its sequence and range
 offset and includes a chunk digest.
 
@@ -194,16 +195,28 @@ The maintenance session record selects the SD bus profile, as described in
 the default, uses one data line at 400 kHz. Profile one uses four data lines at
 the card's default speed, at most 25 MHz. Profile two uses four data lines at
 50 MHz high speed. An eMMC session stays at profile zero. Every profile uses the
-same CMD24 writes, CMD13 status polling and readback comparison. No profile has
+same CMD24 writes, CMD13 status polling and readback comparison.
+Profile two uses DMA for the readback after its one-sector PIO write, sharing
+the original write deadline. No profile has
 been used with physical media.
 
-A BACKUP request reads up to eight sectors, the MMC core's request limit. At
-profile zero, eight sectors take about 85 ms of bus time, well inside the
-one-second request deadline. The INFO response carries the encoded grant
-followed by this sector count as a little-endian 32-bit word. The host takes
-its BACKUP stride from that word and refuses a missing or zero count, or one
-above eight. With its 16-byte USB frame, no response length is a multiple of
-512 bytes, so every USB read ends with a short packet.
+The native maintenance image uses descriptor DMA for reads at SD profile two,
+with BACKUP batches of up to 64 sectors. Other profiles retain eight-sector
+PIO reads; at profile zero their bus time is about 85 ms, within the one-second
+request deadline. INFO carries the encoded grant followed by the admitted
+sector count as a little-endian 32-bit word. The host uses that stride and
+refuses a missing or zero count, or one above 64. The existing USB stream sends
+each response through its 2 KiB FIFO. A response includes 72 bytes of framing,
+so it ends with a short packet.
+
+A 1 MiB backup needs 32 read requests at the DMA stride instead of 256 at the
+PIO stride. Four permanent read/response buffers grow by 112 KiB in total;
+limiting the two request buffers to their unchanged 632-byte maximum saves
+7,040 bytes. A 32 KiB response takes 17 FIFO writes when each accepts 2 KiB.
+Using the core's full 256-sector capacity would quadruple those four buffers
+without removing the USB task's per-iteration delivery limit. These are source
+and model operation counts, not measured card or USB throughput. Hashing and
+three payload copies per response remain unchanged.
 
 A WRITE request carries one sector at every profile. A conforming SDXC card may
 stay busy programming one block for 500 ms, and the maintenance watchdog fixes
@@ -271,11 +284,22 @@ commitment, uncertain writes, transport loss and host durability failures. A
 card model that stays in programming state for 500 ms after each CMD24 completes
 a two-sector update; one that stays busy for one second retains the first write
 as uncertain.
-A profile-two case extends the card model with the SD capability and switch
+A PIO profile-two case extends the card model with the SD capability and switch
 commands. It runs a 20-sector backup in chunks of eight, eight and four
 sectors, then an update and a restoration of the same range. Host cases check
 that the BACKUP stride comes from INFO and that a zero, oversized or missing
 count refuses.
+The focused `checks/a733-storage-update.py --dma-only` selection runs a
+67-sector DMA backup in batches of 64 and three, followed by 67 one-sector PIO
+writes with DMA readback. It checks cache failure, transport loss and deadline
+retention, and preserves the eight-sector PIO stride. The linked maintenance
+image check, `checks/storage-maintenance-dma.py`, executes its private DMA
+admission/cache adapter and USB task with modeled provider and transport edges.
+It checks every mapped page, supplied-pointer refusal, both incoming request
+bounds, a 32 KiB streamed response and final-IN progress publication. The host
+parser consumes that native-produced frame. These checks establish software
+composition, not physical DMA coherence, USB throughput or recovery.
+
 The card model holds only the granted range of an SD card whose capacity
 equals the grant's. Planning cases build a 64 MiB card image with a partition
 table, boot0, a nonzero backup package unit and a TOC1, then plan a slot A

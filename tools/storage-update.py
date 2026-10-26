@@ -18,9 +18,9 @@ import secrets
 import stat
 import struct
 
-# The INFO response names the BACKUP stride in sectors. It may not exceed the
-# MMC core's eight-sector request limit, which also bounds every response.
-MAX_READ_BLOCKS = 8
+# INFO advertises the maintenance BACKUP stride: up to 64 sectors for DMA,
+# eight for legacy PIO. This maximum also bounds the complete response.
+MAX_READ_BLOCKS = 64
 RESPONSE_BYTES = 16 + 56 + MAX_READ_BLOCKS * 512
 # WRITE carries one sector, so one CMD24 busy period and its readback fit in
 # the native one-second operation deadline (docs/storage-update.md).
@@ -291,7 +291,7 @@ class USBExchange:
             require(self.access.identity(self.node) == self.identity, 'USB runtime instance changed.')
             require(self.device.write(0x02, packet, timeout=1500) == len(packet), 'Incomplete storage USB request.')
             response = bytes(self.device.read(0x81, RESPONSE_BYTES, timeout=1500))
-            require(len(response) >= 16 and struct.unpack_from('<4I', response) ==
+            require(16 <= len(response) <= RESPONSE_BYTES and struct.unpack_from('<4I', response) ==
                     (0x53534f53, sequence, 0xd3555044, len(response) - 16), 'Storage USB response framing differs.')
             return response[16:]
         except BaseException as error:

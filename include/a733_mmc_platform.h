@@ -34,7 +34,8 @@ struct a733_mmc_platform_config {
     /* NULL: reads use programmed I/O. Otherwise the IDMAC descriptor area
      * (sunxi_mmc.h): identity-mapped, non-cacheable, 64-byte aligned, outside
      * the result page [0x42000000, 0x42004000) and below 16 GiB; reads then
-     * use IDMAC, up to SUNXI_MMC_MAX_DMA_BLOCKS, and no update can bind. */
+     * use IDMAC, up to SUNXI_MMC_MAX_DMA_BLOCKS. An exclusive SD HIGH_SPEED4
+     * update service may bind; its writes remain authorized one-sector PIO. */
     volatile struct sunxi_mmc_dma_descriptor *dma;
 };
 /* Fixed ROM JTAG route, not permission to take over a debugger. The caller's

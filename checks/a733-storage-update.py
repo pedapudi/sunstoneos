@@ -151,15 +151,42 @@ def info_stride(host,base,passed):
     exchange,offsets=server(3);client=host.Client(exchange,grant);client.identify()
     for offset in range(0,grant['blocks'],client.read_blocks):client.call(2,offset)
     assert client.read_blocks==3 and offsets==[0,3,6]
-    for stride,size in ((0,260),(9,260),(8,256)):
+    for stride,size in ((0,260),(65,260),(8,256)):
         client=host.Client(server(stride,size)[0],grant)
         refused(client.identify);assert client.failed
     passed.append('host BACKUP stride comes from INFO; a zero, oversized or missing stride refuses')
 
 
+def dma_cases(host,fixture,base,Session,passed):
+    work=fixture/'dma';work.mkdir()
+    initial=pattern(67*512,12);candidate=pattern(67*512,13)
+    media=work/'initial';media.write_bytes(initial);source=work/'candidate';source.write_bytes(candidate)
+    grant=dict(base,blocks=67)
+    session=Session(grant,media,'dma');client=host.Client(session.exchange,grant)
+    with host.ProtectedDirectory(work/'backup',True) as store:host.backup(client,store)
+    session.close();assert client.read_blocks==64 and client.sequence==5 and session.output.read_bytes()==initial
+    with host.ProtectedDirectory(work/'backup') as old,host.ProtectedDirectory(work/'update',True) as out:
+        prepared=host._prepare_files(out,old,source,dict(grant,mode=1,nonce='02'*32))
+    session=Session(prepared['grant'],media,'dma')
+    with host.ProtectedDirectory(work/'update') as store:host.apply(host.Client(session.exchange,prepared['grant']),store)
+    session.close();assert session.output.read_bytes()==candidate
+    passed.append('67-sector protected backup uses DMA chunks of 64 and 3; update keeps 67 PIO one-sector writes and DMA readback under the original deadlines')
+    for mode in ('dma-before','dma-after','dma-loss','dma-deadline'):
+        session=Session(grant,media,mode);client=host.Client(session.exchange,grant);client.identify()
+        try:client.call(2,0);assert False,mode
+        except RuntimeError:pass
+        session.close();assert session.output.read_bytes()==initial
+    passed.append('DMA clean/invalidate failures and USB loss/deadline expiry retain borrowed readback, range and leases without media writes')
+    session=Session(grant,media,'hs');client=host.Client(session.exchange,grant)
+    with host.ProtectedDirectory(work/'legacy',True) as store:host.backup(client,store)
+    session.close();assert client.read_blocks==8 and client.sequence==12
+    passed.append('unchanged PIO high-speed image advertises 8 and reads the same 67 sectors in 9 commands')
+    info_stride(host,grant,passed)
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--evidence', type=Path, required=True)
+    parser.add_argument('--dma-only', action='store_true', help='Only changed DMA maintenance and legacy stride cases')
     parser.add_argument('--sources', type=Path, default=Path.home()/'.cache/sunstoneos/sources')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
@@ -226,7 +253,7 @@ def main():
         records.append(dict(path=str(path),sha256=sha,snapshot=str(target.relative_to(evidence))))
     (evidence/'inputs.json').write_text(json.dumps(records,indent=2))
     binary=evidence/'storage-server'
-    run(flags+sources+['-o',binary],'host-build.log')
+    run(flags+sources+['-no-pie','-o',binary],'host-build.log')
     spec=importlib.util.spec_from_file_location('storage_update_host',root/'tools/storage-update.py')
     host=importlib.util.module_from_spec(spec);spec.loader.exec_module(host)
     for line in run([binary,'--digest'],'digest.log').splitlines():
@@ -258,6 +285,11 @@ def main():
         def close(self):
             self.process.stdin.close();self.process.stdout.close()
             result=self.process.wait(timeout=10);self.log.close();assert result==0,self.prefix
+    if args.dma_only:
+        dma_cases(host,fixture,base,Session,passed)
+        for i,source in enumerate(native_sources):run(native+['-c',source,'-o',evidence/(Path(source).stem+'.o')],f'native-build-{i}.log')
+        (evidence/'result.json').write_text(json.dumps(dict(result='pass',physical=False,checks=passed),indent=2)+'\n')
+        print('\n'.join('PASS: '+x for x in passed));return
     session=Session(base,fixture/'initial.bin')
     client=host.Client(session.exchange,base)
     with host.ProtectedDirectory(fixture/'backup',True) as store:

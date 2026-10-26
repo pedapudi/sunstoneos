@@ -1,6 +1,7 @@
 /* Actual storage service/platform/PMIC/pin/rail/clock composition. This fixture
  * models only MMIO, card media, monotonic time and the host transport. */
 #include "a733_storage_update.h"
+#include "a733_mmc_read.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,6 +28,30 @@ static unsigned bursting,programming_polls;
  * and the controller runs at the module rate the platform programmed. */
 static unsigned sd_profile,sd_width;
 static uint8_t sd_scr[8]={2,5},sd_switch[64];
+/* This model adds only the maintenance composition's DMA path; descriptor
+ * completion/reset/error qualification belongs to storage-read-idmac.py. */
+static _Alignas(64) struct sunxi_mmc_dma_descriptor descriptors[SUNXI_MMC_DMA_DESCRIPTORS];
+static unsigned dma_enabled,dma_pending,dma_completed,dma_reads,dma_before,dma_after,dma_failure;
+static uint64_t dma_first,write_deadline;
+static unsigned dma_bytes;
+static int update_sync(void *v,uint8_t *buffer,size_t bytes,unsigned phase)
+{
+    assert(v==&m&&buffer==service.readback&&bytes&&bytes<=sizeof(service.readback)&&!(bytes%512));
+    assert(m.platform.core.borrowed==buffer&&m.platform.core.borrowed_bytes==bytes);
+    if(phase==SUNXI_MMC_DMA_BEFORE) {
+        assert(!dma_pending&&!m.card.reg[0x80/4]);++dma_before;
+        assert(a733_mmc_dma_chain(descriptors,buffer,bytes,(uint32_t)bytes));
+        if(dma_failure==1)return 0;
+    } else {
+        assert(phase==SUNXI_MMC_DMA_AFTER&&dma_pending&&dma_completed);
+        assert(!m.card.reg[0x80/4]&&!(m.card.reg[0]&0x27)&&!(m.card.reg[0x88/4]&0x1e000));
+        for(unsigned i=0;i<(bytes+4095)/4096;++i)assert(!(descriptors[i].config&(1u<<31)));
+        if(dma_failure==2)return 0;
+        assert(dma_first>=media_base&&bytes<=media_bytes-(dma_first-media_base));
+        memcpy(buffer,card_media+dma_first-media_base,bytes);++dma_after;dma_pending=0;
+    }
+    return 1;
+}
 static void reachable(struct storage_model *s)
 {
     if(!sd_profile){accessible(s);return;}
@@ -72,6 +97,13 @@ static int mode_write(struct storage_model *s,uintptr_t address,uint32_t value)
 static int update_read(void *v,uintptr_t address,uint32_t *out)
 {
     struct storage_model *s=v;struct model *c=&s->card;
+    if(dma_pending&&address==s->platform.base+0x38&&!dma_completed) {
+        dma_completed=1;c->fifo_pos=c->fifo_total;
+        c->reg[0x38/4]|=8|((c->data_command&63)==18?1u<<14:0);c->reg[0x88/4]=2;
+        for(unsigned i=0;i<(dma_bytes+4095)/4096;++i)descriptors[i].config&=~(1u<<31);
+        if(dma_failure==3)a733_storage_channel_lost(&channel);
+        if(dma_failure==4)m.power.now+=1000000;
+    }
     if(address==s->platform.base+0x200&&((c->data_command&63)==17||(c->data_command&63)==18)) {
         reachable(s);++s->accesses;++c->calls;assert(++c->fifo_this_poll<=SUNXI_MMC_FIFO_WORDS);
         uint64_t at=(uint64_t)c->reg[0x1c/4]*512+c->fifo_pos;
@@ -85,6 +117,23 @@ static int update_read(void *v,uintptr_t address,uint32_t *out)
 static int update_write(void *v,uintptr_t address,uint32_t value)
 {
     struct storage_model *s=v;struct model *c=&s->card;
+    if(dma_enabled&&address==s->platform.base+0x80) {
+        reachable(s);c->reg[0x80/4]=value==1?0:value;return 1;
+    }
+    if(dma_enabled&&address==s->platform.base+0x88) {
+        reachable(s);c->reg[0x88/4]&=~value;return 1;
+    }
+    if(dma_enabled&&address==s->platform.base+0x18&&(c->reg[0]&32)&&(value&(1u<<9))&&!(value&(1u<<10))) {
+        reachable(s);assert((value&63)==17||(value&63)==18);
+        assert((c->reg[0]&(1u<<5))&&!(c->reg[0]&(1u<<31))&&c->reg[0x80/4]==0x82);
+        assert(c->reg[0x84/4]==(uint32_t)((uintptr_t)descriptors>>2));
+        dma_bytes=c->reg[0x14/4];dma_first=(uint64_t)c->reg[0x1c/4]*512;
+        assert(a733_mmc_dma_chain(descriptors,service.readback,dma_bytes,dma_bytes));
+        if(service.state==A733_STORAGE_VERIFY_WAIT)assert(write_deadline==service.operation_deadline);
+        assert(dma_before==dma_reads+1&&!dma_pending);++dma_reads;dma_pending=1;dma_completed=0;
+        c->reg[0x18/4]=value&~(1u<<31);c->reg[0x38/4]=4;c->reg[0x20/4]=0x900;
+        c->reg[0x24/4]=0x900;c->data_command=value;c->fifo_pos=0;c->fifo_total=dma_bytes;return 1;
+    }
     if(address==s->platform.base+0x200) {
         reachable(s);
         if(!bursting) {
@@ -107,6 +156,8 @@ static int update_write(void *v,uintptr_t address,uint32_t value)
         assert(!a733_mmc_platform_native_transfer_allowed(SUNXI_MMC_EMMC,A733_MMC_EMMC_SDC3,&service,address,value));
         assert(!a733_mmc_platform_native_transfer_allowed(s->platform.config.kind,s->platform.config.emmc_host,&service,address+0x1000,value));
         ++s->accesses;++c->calls;++issued;assert(c->selected&&c->reg[0x14/4]==512);
+        assert(!(c->reg[0]&32)&&(c->reg[0]&(1u<<31))&&!c->reg[0x80/4]&&!dma_pending);
+        write_deadline=service.operation_deadline;
         if(sd_profile)assert(sd_width==4&&c->reg[0xc/4]==1&&s->platform.running_module==0x81000003u);
         c->reg[0x18/4]=value&~(1u<<31);c->reg[0x38/4]=4;c->reg[0x20/4]=0x900;
         c->data_command=value;c->fifo_pos=0;c->fifo_total=512;programmed_until=m.power.now+program_us;return 1;
@@ -170,7 +221,9 @@ int main(int argc,char **argv)
     storage_setup_selected((enum sunxi_mmc_kind)g.kind,(enum a733_mmc_emmc_host)g.host);
     field(m.card.csd,84,12,21);field(m.card.csd,22,4,9);
     field(m.card.csd,48,22,(uint32_t)(g.sectors/1024-1));
-    sd_profile=!strcmp(argv[4],"hs")?SUNXI_MMC_SD_HIGH_SPEED4:SUNXI_MMC_SD_LEGACY;
+    dma_enabled=!strncmp(argv[4],"dma",3);
+    dma_failure=!strcmp(argv[4],"dma-before")?1:!strcmp(argv[4],"dma-after")?2:!strcmp(argv[4],"dma-loss")?3:!strcmp(argv[4],"dma-deadline")?4:0;
+    sd_profile=(dma_enabled||!strcmp(argv[4],"hs"))?SUNXI_MMC_SD_HIGH_SPEED4:SUNXI_MMC_SD_LEGACY;
     if(sd_profile) {
         /* Switch class, 25 MHz TRAN_SPEED, PERI0 400 MHz output and PF0-5 routing. */
         field(m.card.csd,84,12,21|(1u<<10));field(m.card.csd,96,8,0x32);
@@ -179,7 +232,9 @@ int main(int argc,char **argv)
         *pmic_model_word(&m.power,0x02003988)=((1u<<11)|(1u<<2)|(1u<<1))<<16;
         struct a733_mmc_platform_config c=m.platform.config;c.sd_profile=SUNXI_MMC_SD_HIGH_SPEED4;
         for(unsigned i=0;i<7;++i)c.desired[i].function=i<6?2:0;
-        struct a733_mmc_platform_ops ops=m.platform.ops;memset(&m.platform,0,sizeof(m.platform));
+        struct a733_mmc_platform_ops ops=m.platform.ops;
+        if(dma_enabled){c.dma=descriptors;ops.dma_sync=update_sync;}
+        memset(&m.platform,0,sizeof(m.platform));
         assert(a733_mmc_platform_init(&m.platform,&c,&ops,&m,&m.power.clocks,&m.power.pins,&m.power.rails,&m.power.provider));
     }
     ready_storage();
@@ -226,14 +281,18 @@ int main(int argc,char **argv)
             progress();if(a733_storage_channel_response(&channel,response,sizeof(response),&bytes))break;
         }
         if(atomic_load(&channel.lost)) {
+            fprintf(stderr,"retained: core=%u error=%u step=%u dma=%u/%u/%u regs=%x/%x/%x\n",m.platform.core.state,m.platform.core.result.error,m.platform.core.command_step,dma_before,dma_reads,dma_after,m.card.reg[0],m.card.reg[0x38/4],m.card.reg[0x88/4]);
             unsigned accesses=m.accesses;progress();assert(service.state==A733_STORAGE_RETAINED&&accesses==m.accesses);
             assert(m.platform.update==&service&&m.platform.clock.id&&m.platform.rail.id&&m.platform.pin.id);
-            if(issued)assert(service.input==m.platform.core.borrowed&&m.platform.core.write_request.source==service.input);
+            if(dma_enabled)assert(service.readback==m.platform.core.borrowed);
+            else if(issued)assert(service.input==m.platform.core.borrowed&&m.platform.core.write_request.source==service.input);
             if(loss_during_write)assert(fifo_writes==128); /* The admitted burst completes. */
             n=0;assert(fwrite(&n,1,4,stdout)==4&&!fflush(stdout));break;
         }
         assert(bytes);n=(uint32_t)bytes;assert(fwrite(&n,1,4,stdout)==4&&fwrite(response,1,bytes,stdout)==bytes&&!fflush(stdout));
     }
+    if(dma_enabled&&!dma_failure)assert(dma_before==dma_reads&&dma_reads==dma_after&&!dma_pending);
+    fprintf(stderr,"dma_reads=%u clean=%u invalidate=%u stride=%u\n",dma_reads,dma_before,dma_after,dma_enabled?64u:8u);
     save_file(argv[3],card_media,media_bytes);fprintf(stderr,"commands=%u fifo_words=%u programming_polls=%u retained=%u model_us=%llu\n",issued,fifo_writes,
         programming_polls,service.state==A733_STORAGE_RETAINED,(unsigned long long)m.power.now);
     return 0;

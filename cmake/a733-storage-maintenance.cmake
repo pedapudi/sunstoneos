@@ -115,5 +115,6 @@ target_include_directories(${storage_target} PRIVATE
 target_compile_definitions(${storage_target} PRIVATE SUNSTONE_SECURE_MONITOR=1 SUNSTONE_A733_SMP_DIAGNOSTIC=1
   SUNSTONE_A733_USB=1 A733_SMP_CONTRACT_MAGIC=0x4153373353544331ULL A733_SMP_RESULT_MAGIC=0x4153373353545231ULL)
 target_link_options(${storage_target} PRIVATE -nostdlib -static -Wl,--gc-sections
+  -Wl,--defsym=__uncached_pool_size=2097152
   "-Wl,-T,${storage_build}/link.ld" "-Wl,-Map,${storage_build}/image.map")
 set_target_properties(${storage_target} PROPERTIES SUFFIX ".elf" LINK_DEPENDS "${storage_build}/link.ld")

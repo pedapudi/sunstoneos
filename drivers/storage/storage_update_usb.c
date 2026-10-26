@@ -6,7 +6,7 @@ void a733_storage_channel_lost(struct a733_storage_channel *c)
 {atomic_store_explicit(&c->lost,1,memory_order_release);}
 int a733_storage_channel_submit(struct a733_storage_channel *c,const uint8_t *p,size_t n)
 {
-    if(!c||!p||n<88||n>A733_STORAGE_BODY||atomic_load_explicit(&c->lost,memory_order_acquire))return 0;
+    if(!c||!p||n<88||n>A733_STORAGE_REQUEST_BYTES||atomic_load_explicit(&c->lost,memory_order_acquire))return 0;
     unsigned expected=0;
     if(!atomic_compare_exchange_strong_explicit(&c->state,&expected,4,memory_order_acquire,memory_order_relaxed)) {
         a733_storage_channel_lost(c);return 0;

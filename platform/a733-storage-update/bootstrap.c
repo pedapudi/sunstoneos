@@ -2,9 +2,33 @@
 #include "a733_storage_update_native.h"
 #include "a733_usb_platform_native.h"
 #include "task.h"
+#include "aarch64_device_memory.h"
 #include <string.h>
 
 static struct a733_storage_native native;
+extern unsigned char __uncached_pool_start[],__uncached_pool_end[];
+static int dma_span(uintptr_t address,size_t bytes,unsigned attributes)
+{
+    uintptr_t last=(address+bytes-1)&~(uintptr_t)4095;
+    for(uintptr_t page=address&~(uintptr_t)4095;;page+=4096) {
+        struct aarch64_translation t;
+        if(!aarch64_device_translate(page,1,&t)||t.physical!=page||
+           t.attributes!=attributes||t.shareability!=3)return 0;
+        if(page==last)return 1;
+    }
+}
+/* The worker owns the complete cache-line allocation until DONE/take. The
+ * permanent service never shares its input or state lines with this buffer. */
+static int dma_sync(void *cookie,uint8_t *buffer,size_t bytes,unsigned phase)
+{
+    struct a733_storage_native *n=&native;
+    return cookie==&n->mmc_native&&n->mmc.config.dma==
+        (volatile struct sunxi_mmc_dma_descriptor *)__uncached_pool_start&&
+        buffer==n->service.readback&&bytes&&bytes<=sizeof(n->service.readback)&&!(bytes%512)&&
+        (phase==SUNXI_MMC_DMA_BEFORE||phase==SUNXI_MMC_DMA_AFTER)&&a733_storage_native_live(n)&&
+        aarch64_device_cache(phase==SUNXI_MMC_DMA_BEFORE?AARCH64_CACHE_CLEAN:AARCH64_CACHE_INVALIDATE,
+            (uintptr_t)buffer,bytes)==1;
+}
 int a733_storage_native_task_privileged(void (*entry)(void *),void *context)
 {
     return native.used&&context==&native&&(entry==a733_storage_native_pmic_task||
@@ -27,12 +51,19 @@ static int mmc_admit(void *p,const struct a733_mmc_platform_config *c,const stru
     const struct a733_mmc_platform_config *b=&n->boot.mmc;
     if(!a733_storage_native_live(n)||c!=&n->mmc.config||c->owner!=b->owner||c->handoff!=b->handoff||
        c->topology!=b->topology||c->deadline_us!=b->deadline_us||c->lifetime_deadline_us!=b->lifetime_deadline_us||
-       c->kind!=b->kind||c->emmc_host!=b->emmc_host||c->sd_profile!=b->sd_profile||c->voltage_mask!=b->voltage_mask||
+       c->dma!=b->dma||c->kind!=b->kind||c->emmc_host!=b->emmc_host||c->sd_profile!=b->sd_profile||c->voltage_mask!=b->voltage_mask||
        memcmp(c->fabric,b->fabric,sizeof(c->fabric))||memcmp(c->fabric_hz,b->fabric_hz,sizeof(c->fabric_hz))||
        memcmp(c->expected,b->expected,sizeof(c->expected))||memcmp(c->desired,b->desired,sizeof(c->desired))||
        t->owner!=c->owner)return -1;
     enum a733_clock_result r=a733_clock_token_status(&n->providers.clocks,t);
-    return r==A733_CLOCK_BUSY?0:r==A733_CLOCK_OK?1:-1;
+    if(r==A733_CLOCK_BUSY)return 0;
+    if(r!=A733_CLOCK_OK)return -1;
+    if(c->dma&&(c->dma!=(volatile struct sunxi_mmc_dma_descriptor *)__uncached_pool_start||
+       (uintptr_t)__uncached_pool_start!=UINT32_C(0x41c00000)||
+       (uintptr_t)__uncached_pool_end!=UINT32_C(0x41e00000)||
+       !dma_span((uintptr_t)c->dma,SUNXI_MMC_DMA_DESCRIPTORS*sizeof(*c->dma),0x44)||
+       !dma_span((uintptr_t)n->service.readback,sizeof(n->service.readback),0xff)))return -1;
+    return 1;
 }
 int a733_storage_native_usb_health(struct a733_storage_native *n)
 {return n?a733_native_usb_health(&n->providers):-1;}
@@ -64,13 +95,15 @@ int a733_storage_native_start(const struct a733_storage_native_boot *b,struct a7
        b->mmc.lifetime_deadline_us!=b->grant.deadline_us||
        b->mmc.deadline_us>b->grant.deadline_us||b->usb.deadline_us>b->grant.deadline_us||
        b->pmic.startup_deadline>b->grant.deadline_us||
-       !b->mmc.owner||!b->usb.owner||!b->pmic.owner||b->mmc.owner==b->usb.owner||
+       b->mmc.dma||!b->mmc.owner||!b->usb.owner||!b->pmic.owner||b->mmc.owner==b->usb.owner||
        b->mmc.owner==b->pmic.owner||b->usb.owner==b->pmic.owner)return 0;
     if(b->usb_supply_uv[0]!=3300000||b->usb_supply_uv[1]!=3300000||
        b->usb_supply_uv[2]<500000||b->usb_supply_uv[2]>1820000||
        b->usb_supply_uv[3]<500000||b->usb_supply_uv[3]>1500000||
        b->usb_supply_uv[2]<=b->usb_supply_uv[3])return 0;
     n->boot=*b;n->maintenance=maintenance;
+    if(b->mmc.kind==SUNXI_MMC_SD&&b->mmc.sd_profile==SUNXI_MMC_SD_HIGH_SPEED4)
+        n->boot.mmc.dma=(volatile struct sunxi_mmc_dma_descriptor *)__uncached_pool_start;
     n->transfer=*transfer;n->transfer.storage=&n->boot.grant;
     atomic_init(&n->active,0);atomic_init(&n->failed,0);
     atomic_init(&n->service_ready,0);
@@ -92,8 +125,9 @@ int a733_storage_native_start(const struct a733_storage_native_boot *b,struct a7
     }
     n->transport.owner_task=n->task_handle[2];
     if(!a733_native_usb_bind(&n->providers,n->task_handle[0],n->task_handle[2])||
-       !a733_mmc_platform_native_init_selected(&n->mmc_native,&n->providers.locks,n->task_handle[1],b->mmc.kind,b->mmc.emmc_host,mmc_admit,n)||
-       !a733_mmc_platform_init(&n->mmc,&n->boot.mmc,&n->mmc_native.operations,&n->mmc_native,&n->providers.clocks,&n->providers.pins,&n->providers.rails,&n->providers.pmic))return 0;
+       !a733_mmc_platform_native_init_selected(&n->mmc_native,&n->providers.locks,n->task_handle[1],b->mmc.kind,b->mmc.emmc_host,mmc_admit,n))return 0;
+    if(n->boot.mmc.dma)n->mmc_native.operations.dma_sync=dma_sync;
+    if(!a733_mmc_platform_init(&n->mmc,&n->boot.mmc,&n->mmc_native.operations,&n->mmc_native,&n->providers.clocks,&n->providers.pins,&n->providers.rails,&n->providers.pmic))return 0;
     /* The real lease must authenticate this final tuple before publication. */
     if(!a733_maintenance_bind(maintenance,&n->transfer,&n->providers.counter,&n->providers.locks,&n->transport,
         &n->service,n->task_handle[1],n->task_handle[2]))return 0;

@@ -2,10 +2,11 @@
 #define SUNSTONE_A733_STORAGE_UPDATE_H
 #include "a733_mmc_platform.h"
 #include "a733_storage_digest.h"
-/* BACKUP reads up to the core's eight-sector limit; INFO reports the count. */
-#define A733_STORAGE_READ_BLOCKS SUNXI_MMC_MAX_BLOCKS
+/* INFO selects 64 sectors for admitted SD DMA, eight for PIO. */
+#define A733_STORAGE_READ_BLOCKS 64u
 #define A733_STORAGE_CHUNK (A733_STORAGE_READ_BLOCKS*512u)
 #define A733_STORAGE_WRITE_BYTES 512u /* WRITE carries exactly one sector. */
+#define A733_STORAGE_REQUEST_BYTES (120u+A733_STORAGE_WRITE_BYTES)
 #define A733_STORAGE_GRANT_BYTES 256u
 /* Largest message: a full BACKUP response. A WRITE request is 632 bytes.
  * With the 16-byte USB frame, no message length is a multiple of 512. */
@@ -40,7 +41,8 @@ struct a733_storage_update {
     uint64_t read_blocks,written_blocks,last_now,operation_deadline;
     uint32_t sequence,active_command;
     unsigned sealed,finished,response_ready,response_size,chunk_bytes;
-    uint8_t input[A733_STORAGE_WRITE_BYTES],readback[A733_STORAGE_CHUNK];
+    uint8_t input[A733_STORAGE_WRITE_BYTES];
+    _Alignas(64) uint8_t readback[A733_STORAGE_CHUNK];
     uint8_t response[A733_STORAGE_BODY],backup_hash[32],receipt[32],chain[32],next_chain[32];
     struct sunxi_mmc_result result;
 };
@@ -58,7 +60,7 @@ void a733_storage_grant_encode(const struct a733_storage_grant *,uint8_t[256]);
  * Exactly one request may be pending; a duplicate is a fault, never a replay.
  * Response: sequence u32, status u32, offset u64, bytes u32, reserved u32,
  * digest32, payload. Status0 completes; status1 is retained failure.
- * The INFO payload is the encoded grant followed by A733_STORAGE_READ_BLOCKS
+ * The INFO payload is the encoded grant followed by the admitted read-block count
  * as u32, which sets the host's BACKUP stride. */
 int a733_storage_update_request(struct a733_storage_update *,const uint8_t *,size_t);
 void a733_storage_update_poll(struct a733_storage_update *);
@@ -77,7 +79,7 @@ int a733_storage_update_owned(const struct a733_storage_update *,const struct a7
 struct a733_storage_channel {
     atomic_uint state,lost; /* 0 empty,1 request,2 worker,3 response,4 producer. */
     unsigned request_size,response_size;
-    uint8_t request[A733_STORAGE_BODY],response[A733_STORAGE_BODY];
+    uint8_t request[A733_STORAGE_REQUEST_BYTES],response[A733_STORAGE_BODY];
 };
 void a733_storage_channel_init(struct a733_storage_channel *);
 int a733_storage_channel_submit(struct a733_storage_channel *,const uint8_t *,size_t);

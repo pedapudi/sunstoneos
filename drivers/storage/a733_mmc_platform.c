@@ -585,7 +585,10 @@ enum a733_mmc_platform_result a733_mmc_platform_poll(struct a733_mmc_platform *p
 int a733_mmc_platform_update_bind(struct a733_mmc_platform *p,struct a733_storage_update *u)
 {
     if(!p||!p->initialized||!u||!outside(p,u,sizeof(*u))||!a733_storage_update_owned(u,p)||!enter_api(p))return 0;
-    int ok=!p->update&&!p->config.dma&&!p->fault&&p->stage==READY&&p->core.state==SUNXI_MMC_READY&&p->ops.current(p->cookie)==1;
+    int dma_ok=!p->config.dma||(p->config.kind==SUNXI_MMC_SD&&
+        p->config.sd_profile==SUNXI_MMC_SD_HIGH_SPEED4&&!((uintptr_t)u->readback&63u)&&
+        (uint64_t)(uintptr_t)u->readback<=(UINT64_C(1)<<34)-sizeof(u->readback));
+    int ok=!p->update&&dma_ok&&!p->fault&&p->stage==READY&&p->core.state==SUNXI_MMC_READY&&p->ops.current(p->cookie)==1;
     if(ok)p->update=u;
     atomic_store_explicit(&p->busy,0,memory_order_release);return ok;
 }
