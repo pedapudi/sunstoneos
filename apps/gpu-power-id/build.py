@@ -138,6 +138,9 @@ FWS_JOB_UNITS = ['drivers/gpu/pvr_compute_job.c', 'drivers/gpu/pvr_compute_progr
                  'drivers/gpu/pvr_gpu_vm.c', 'platform/a733/gpu_vm_memory.c']
 FWS_JOB_EXPECT = ('COMPLETE GPU first job: 32 words as computed, context cleaned up, firmware stopped, OFF and '
                   'provider parked')
+FWS_SESSION_JOBS = 8
+FWS_SESSION_EXPECT = ('COMPLETE GPU job session: 8 jobs as computed, context cleaned up, firmware stopped, OFF and '
+                      'provider parked')
 FIRMWARE = 'sources/gpu/imagination-firmware/powervr/rogue_36.56.104.183_v1.fw'
 FIRMWARE_SHA256 = '1db1c399c17401d1f79d46c880db81c724d748c784d4639433b076aba2f9c0d2'
 
@@ -157,9 +160,16 @@ def main():
                         help='the firmware start, one health check, the firmware stop, OFF and provider park')
     parser.add_argument('--fw-job', action='store_true',
                         help='the firmware stop variant with the first compute job between the health check and the stop')
+    parser.add_argument('--fw-session', action='store_true',
+                        help='the first-job variant running eight timed jobs on one context '
+                             '(docs/designs/gpu-job-session.md)')
     args = parser.parse_args()
-    if args.power_only + args.wrapper_read + args.probe_read + args.fw_start + args.fw_stop + args.fw_job > 1:
+    if args.power_only + args.wrapper_read + args.probe_read + args.fw_start + args.fw_stop + args.fw_job + \
+            args.fw_session > 1:
         parser.error('choose one variant')
+    # The session variant is the first-job variant built with FWS_JOBS.
+    session = args.fw_session
+    args.fw_job = args.fw_job or session
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
     baseline = harness.CACHE / 'evidence/gpu-provider-ready-20261024/image-1'
@@ -209,7 +219,8 @@ def main():
         unit_flags = monitor_flags if source == 'platform/a733/monitor.c' else flags
         variant = ['-DGPU_POWER_ONLY=1'] if args.power_only and source == 'apps/gpu-power-id/main.c' else \
             ['-DFWS_STOP=1'] if args.fw_stop and source == 'apps/gpu-power-id/fw-start.c' else \
-            ['-DFWS_STOP=1', '-DFWS_JOB=1'] if args.fw_job and source == 'apps/gpu-power-id/fw-start.c' else []
+            ['-DFWS_STOP=1', '-DFWS_JOB=1'] + ([f'-DFWS_JOBS={FWS_SESSION_JOBS}'] if session else []) \
+            if args.fw_job and source == 'apps/gpu-power-id/fw-start.c' else []
         command = unit_flags + variant + ['-MD', '-MF', str(obj) + '.d', '-c', str(ROOT / source), '-o', str(obj)]
         subprocess.run(command, check=True, cwd=ROOT)
         commands.append(command)
@@ -314,11 +325,13 @@ def main():
               'binary_sha256': sha(out / 'probe.bin'), 'binary_bytes': (out / 'probe.bin').stat().st_size,
               'variant': ('power-only' if args.power_only else 'wrapper-read' if args.wrapper_read
                           else 'probe-read' if args.probe_read else 'fw-start' if args.fw_start
-                          else 'fw-stop' if args.fw_stop else 'fw-job' if args.fw_job else 'identity'),
+                          else 'fw-stop' if args.fw_stop else 'fw-session' if session
+                          else 'fw-job' if args.fw_job else 'identity'),
               'expect': ('COMPLETE GPU power only: CORE status 8, OFF and provider parked' if args.power_only
                          else 'COMPLETE GPU wrapper read: CORE status 8, four wrapper words, OFF and provider parked'
                          if args.wrapper_read else PROBE_EXPECT if args.probe_read else FWS_EXPECT if args.fw_start
-                         else FWS_STOP_EXPECT if args.fw_stop else FWS_JOB_EXPECT if args.fw_job
+                         else FWS_STOP_EXPECT if args.fw_stop else FWS_SESSION_EXPECT if session
+                         else FWS_JOB_EXPECT if args.fw_job
                          else 'COMPLETE GPU power identity: 36.56.104.183 in two ON/OFF cycles, provider parked'),
               'local_authority_required': ('Exclusive GPU CCU, PLL_GPU0 (CCU 0x0e0) and PCK CORE6 policy/PWCR; TOP5 '
                                            'remains shared row; DCDC4 selector 0x15 to 0x2e (960 mV); at EL3, the '

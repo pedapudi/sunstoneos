@@ -169,6 +169,13 @@ static int fws_last_read;
 #define FWS_CHANGED(value) 1
 #define FWS_REMEMBER(address, write, value) ((void)0)
 #endif
+#ifdef FWS_JOB
+/* The generic counter for the job session's times, one call so that the
+ * host model can supply it (docs/designs/gpu-job-session.md, "Timing"). */
+__attribute__((noinline)) static uint64_t fws_counter(void) { return counter(); }
+/* The counter just before the last MTS_SCHEDULE write: a job's kick time. */
+static uint64_t fws_mts_tick;
+#endif
 static uint32_t fws_access(uint32_t address, int write, uint32_t value)
 {
     const int quiet = FWS_QUIET(address, write);
@@ -185,6 +192,14 @@ static uint32_t fws_access(uint32_t address, int write, uint32_t value)
         if (write) bb_line_hex(&line, "v", value);
         bb_line_end(&line); bb_power_print(&line);
     }
+#ifdef FWS_JOB
+    /* After the log line and the progress record are complete, so neither
+     * lies inside the job's time. */
+    if (write && address == GPU_BASE + 0xb00) {
+        __asm__ volatile("dsb sy" ::: "memory");
+        fws_mts_tick = fws_counter();
+    }
+#endif
     if (write) a733_mmio_write32_dsb_sy_both(address, value);
     else value = a733_mmio_read32_dsb_sy_both(address);
     FWS_PROGRESS->value = value;
@@ -556,6 +571,9 @@ static void fws_park(void)
     int result;
     gates_report();
     off_proof();
+#ifdef FWS_JOB
+    const uint64_t begun = fws_counter();
+#endif
     while ((result = a733_gpu_platform_supply_end(&gpu)) == 0) gpu_pause("GPU supply end deadline");
     if (result != 1) gpu_fail("GPU supply end");
     bb_power_park();
@@ -565,6 +583,12 @@ static void fws_park(void)
     for (unsigned i = 0; i < A733_PMIC_REQUESTS; ++i)
         if (bb_power.pmic.slots[i].state || bb_power.pmic.slots[i].borrow.id)
             bb_power_fail("GPU provider request retained");
+#ifdef FWS_JOB
+    struct bb_line line;
+    bb_line_start(&line, "GPU FWS park");
+    bb_line_dec(&line, "ticks", fws_counter() - begun);
+    bb_line_end(&line); bb_power_print(&line);
+#endif
     before();
 }
 static _Noreturn void fws_stop_run(void)
@@ -634,11 +658,19 @@ static _Noreturn void fws_stop_run(void)
     }
     fws_park();
 #ifdef FWS_JOB
+#if FWS_JOBS > 1
+    if (job_result != 1) bb_power_fail("GPU job session: not complete, GPU OFF and provider parked");
+    if (job_cleanup_status != 1)
+        bb_power_fail("GPU job session: 8 jobs as computed, context cleanup not confirmed, GPU OFF and provider parked");
+    platform_puts("COMPLETE GPU job session: 8 jobs as computed, context cleaned up, firmware stopped, OFF and "
+                  "provider parked\n");
+#else
     if (job_result != 1) bb_power_fail("GPU first job: not complete, GPU OFF and provider parked");
     if (job_cleanup_status != 1)
         bb_power_fail("GPU first job: 32 words as computed, context cleanup not confirmed, GPU OFF and provider parked");
     platform_puts("COMPLETE GPU first job: 32 words as computed, context cleaned up, firmware stopped, OFF and "
                   "provider parked\n");
+#endif
 #else
     platform_puts("COMPLETE GPU firmware stop: started, health check executed, forced idle and power off "
                   "acknowledged, idle, OFF and provider parked\n");
