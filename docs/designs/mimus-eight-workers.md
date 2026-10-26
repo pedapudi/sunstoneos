@@ -103,7 +103,13 @@ and focused runners. The coordinator retains OS thermal and session ownership.
 ## Build selection and observed results
 
 Configure with `-DSUNSTONE_MIMUS_WORKERS=8` to select eight workers in the SMP
-engine and its callers. Omitting the option selects two. Native eight-worker
+engine and its linked callers. Omitting the option selects two. These public
+compile definitions also reach the integrated OS through its board composition.
+The integrated OS currently supports only two inference workers: its launch
+metadata and service placement have not been extended to eight. Its adapter
+therefore refuses compilation with eight workers, regardless of A76 admission.
+This target-local refusal leaves standalone native and QEMU eight-worker builds
+available in the same CMake configuration. Native eight-worker
 builds also require `-DA733_A76_ADMITTED=ON`; their recognition owner uses core 6,
 and their first worker uses core 7. This build selection does not qualify a
 physical session or change the existing clock, rail or failure-recovery rules.
@@ -142,3 +148,11 @@ extents and every emulator exception-stack top. The source record includes
 compiled dependencies, tool identities and effective build flags. Existing
 two-worker recognition evidence remains the baseline; only the changed
 adapter/arithmetic cases and the selected eight-worker recognition ran here.
+
+The OS propagation guard has separate compile evidence in
+`~/.cache/sunstoneos/evidence/resume-mimus-os-worker-guard-20261026/`.
+Generated OS compile arguments reject eight workers with A76 admission; removing
+that admission also rejects eight workers. The default two-worker OS adapter
+compiles. Standalone native and QEMU eight-worker adapters compile in the same
+configuration, and their preprocessed source is unchanged by the guard. The
+original execution artifacts and evidence above remain preserved.
