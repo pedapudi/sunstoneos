@@ -1,15 +1,20 @@
 # DRAM training captures on ports 3-1 and 3-3
 
-Status: **built, host-checked and frozen for both boards; not run.** These
+Status: **frozen for both boards; the first port 3-3 lifetime ran on
+2026-10-25 with the v3 set** (`board-session-20261025-21`: all six stages
+in both captures). These
 are the captures of [the training-restore design](../designs/dram-training-restore.md#captures-identify-which-registers-training-sets).
 Each lifetime trains DRAM with the unchanged FEL DDR step and then captures
 twice: the parameter block that boot0 leaves in SRAM, the SID chip ID and
 thermal calibration, and the DRAM controller and PHY registers.
 `tools/analyse-ddr-captures.py` then classifies every register as constant,
 board, lifetime or status. These are the four-P-state captures, the first
-of the three capture kinds in the restore design; the P-state-0-only and
-device-initialization-only kinds need wrapper variants that follow the
-design's second review. The earlier sets
+of the three capture kinds in the restore design. The other two, after a
+P-state-0-only training and after an initialization-only run, are frozen in
+the same set and wait for the design's second review
+([their section](#p-state-0-only-and-initialization-only-captures)). The v4
+set below replaces v3; both hold the same reader and stage tables, so their
+captures are analysed together. The sets
 `~/.cache/sunstoneos/evidence/dram-fast-boot-20261025`,
 `dram-training-capture-20261025` and `dram-training-capture-v2-20261025` are
 superseded and are not used.
@@ -19,28 +24,31 @@ each capture writes SRAM at `0x71000` (the cache-off helper) and `0x85000`
 (the reader), DRAM at `0x43000000`–`0x43258000` (tables and results), and
 two PHY registers: `MicroContMuxSel` (`0x0aaa0000`) and, in stages 4 to 6,
 `UcclkHclkEnables` (`0x0aa80100`), which the reader reads only after
-clearing `MicroContMuxSel`. It restores both to the values it read. boot0 makes the first write on every boot, when it reads two PHY
+clearing `MicroContMuxSel`. It restores both to the values it read; the
+first lifetime read `UcclkHclkEnables` as 0. boot0 makes the first write on every boot, when it reads two PHY
 registers after training (`0x5767a`–`0x5768a`), and in its training-save
 routine (`0x576e4`); NXP's published driver for this PHY makes both.
 
 ## Frozen inputs
 
-`F=~/.cache/sunstoneos/evidence/dram-training-capture-v3-20261025`
+`F=~/.cache/sunstoneos/evidence/dram-training-capture-v4-20261025`
 
 | Input | Port 3-1 | Port 3-3 |
 | --- | --- | --- |
 | Capture set | `$F/port-3-1` | `$F/port-3-3` |
 | Build manifest `capture-build/manifest.json` | `5ec01fd9…` | `5ec01fd9…` |
 | Reader `ddr-capture.bin`, 388 bytes at `0x85000` | `0da3194f…` | `0da3194f…` |
+| P-state-0-only DDR build `ddr-pstate0/manifest.json`, wrapper `efe58d3b…` | `d3f61d2f…` | `d3f61d2f…` |
+| Initialization-only DDR build `ddr-init-only/manifest.json`, wrapper `31c5435e…` | `fbcc95f7…` | `fbcc95f7…` |
 
-Both sets come from `work/dram-fast-boot-1025` at `8c96e99b`, whose tree is
+Both sets come from `work/dram-fast-boot-1025` at `256937f4`, whose tree is
 `$F/source`, and hold byte-identical builds. They share these inputs:
 
 | Input | Identity |
 | --- | --- |
-| Runner `$F/source/tools/run-ddr-capture.py` | `ab828777…` |
-| Classifier `$F/source/tools/analyse-ddr-captures.py` | `64d01ef0…` |
-| DDR runner `$F/source/tools/run-ddr.py`, equal to `bringup` | `783ac662…` |
+| Runner `$F/source/tools/run-ddr-capture.py` | `ea4c0454…` |
+| Classifier `$F/source/tools/analyse-ddr-captures.py` | `581a9f3d…` |
+| DDR runner `$F/source/tools/run-ddr.py`, with `--allow-untrained` | `ea7a597a…` |
 | DDR build `~/.cache/sunstoneos/build/a733-ddr/manifest.json`, wrapper `a401ce2b…` | `4f20beed…` |
 | `sunxi-fel` | `4a54cdc1…` |
 
@@ -49,8 +57,12 @@ each build `checks/ddr-capture.py` passed: every stage reads each listed
 register once, in table order, and writes only the two controls; a wrong
 magic, a bad width and a zero count refuse. `checks/ddr-capture-host.py`
 passed: the runner binds to the DDR mailbox before any execution, honours
-`--stages` and stops at the first incomplete stage. `checks/ddr-capture-analysis.py` passed on
-synthetic captures (`$F/check-ddr-capture-analysis.txt`).
+`--stages` and `--allow-untrained`, and stops at the first incomplete
+stage. `checks/ddr-wrapper.py` passed on both variant wrappers: each copies
+the selected parameters and patches only `dram_tpr13` bit 2 and, for the
+initialization-only variant, `dram_tpr10` bits 28:16 to `0x0001`.
+`checks/ddr-host-retention.py` passed with the two new cases.
+`checks/ddr-capture-analysis.py` passed on synthetic captures.
 
 | Stage | Content | Registers | Output bytes |
 | --- | --- | --- | --- |
@@ -67,7 +79,7 @@ Set the variables of [the README](README.md#names-used-in-every-runbook)
 with `PORT` set to the board, then:
 
 ```sh
-F=~/.cache/sunstoneos/evidence/dram-training-capture-v3-20261025
+F=~/.cache/sunstoneos/evidence/dram-training-capture-v4-20261025
 C=$F/port-$PORT
 S=<a new session directory for a fresh lifetime of this board>
 T="<temperature note: room temperature, minutes since power-on, any load or heating>"
@@ -161,6 +173,35 @@ of the first six rows holds. The classifier rows are expectations that the
 analysis tests, not pass criteria: the result defines the restore set
 whatever it is. A stage-2 halfword at or above `0x80` means the window holds
 other fields than the design assumes; record it and continue.
+
+## P-state-0-only and initialization-only captures
+
+**Gate:** these change boot0's training input, so they run only after the
+restore design's second independent review closes. Each uses a fresh
+lifetime; the commands differ from the four-P-state ones only as listed.
+
+- **P-state 0 only** (three lifetimes per board): step 1 uses
+  `--build $C/ddr-pstate0` and the record name `p0-ddr`; steps 2 and 3
+  name `p0-capture-1` and `p0-capture-2` and pass `--ddr-evidence $S/p0-ddr`.
+  *Predictions:* one `Training result is = 7` line, then `DRAM Pstate 0
+  training, frequency is 2040 Mhz`; 12,288 MiB; `DRAM BOOT DRIVE INFO` to
+  `Actual DRAM SIZE` 4,400–4,600 ms; `dram_tpr13` reported as `0x10061`;
+  both 4 KiB pages read back; six stages complete in each capture. A
+  P-state 0 run much shorter than 4.4 s is a finding about boot0's
+  multi-P-state firmware runs, and the timing must be recorded.
+- **Initialization only** (two lifetimes per board): step 1 uses
+  `--build $C/ddr-init-only --allow-untrained` and the record name
+  `in-ddr`; steps 2 and 3 name `in-capture-1` and `in-capture-2` and add
+  `--allow-untrained` with `--ddr-evidence $S/in-ddr`. *Predictions:* the
+  wrapper returns to FEL with stage 5; the firmware reports a result
+  (7 expected if it accepts the step value `0x0001`); boot0 may then report
+  `DRAM initial error` or a size of 0, because DRAM is untrained, and the
+  runner records `untrained` true without testing RAM pages; six stages
+  complete in each capture. The lifetime ends there: the next use of the
+  board needs a power removal.
+
+The restore set is the PHY registers that differ between the P-state-0-only
+and initialization-only captures of a board, minus the status class.
 
 ## After the runs
 

@@ -2913,7 +2913,9 @@
  },
  "ddr-host-retention.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/board-runbooks/dram-training-capture.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -2925,6 +2927,7 @@
  "ddr-wrapper.py": {
   "cache_areas": [],
   "docs": [
+   "docs/board-runbooks/dram-training-capture.md",
    "docs/boot.md"
   ],
   "library": false,

@@ -46,6 +46,24 @@ lifetime, board or constant. Three kinds of capture feed the restore set:
    registers, minus the status class, each with the bit mask of the bits
    that differ.
 
+The P-state-0-only and initialization-only kinds use DDR wrapper variants
+(`tools/prepare-ddr.py --variant pstate0` or `init-only`), frozen with the
+captures and gated on the second review.
+
+**The first lifetime.** Two four-P-state captures of one port 3-3 lifetime
+(`board-session-20261025-21`) agree on 84,095 registers and differ on 274
+status registers: 207 in the APB-only block, 64 byte-lane registers at
+offsets `0xe0`, `0xe2`, `0xe8` and `0x1c4` of the eight lanes of byte blocks
+0 and 1 only, two master registers (`0x0a940176`, `0x0a940178`) and one
+DRTUB register (`0x0aa80206`). The status lane registers appear only in
+blocks 0 and 1, which suggests that one channel's tracking runs between the
+captures. All 49,152 registers of `0x0000`–`0xbfff` read zero, so the
+address/command delays are not where the published PHY keeps them;
+the restore set must come from the blocks boot0 accesses or from the
+kind 2 and kind 3 diff. `UcclkHclkEnables` read 0 after training.
+`analyse-ddr-captures.py` output:
+`~/.cache/sunstoneos/evidence/dram-training-analysis-20261025/port-3-3-lifetime-1-blocks.json`.
+
 The capture must also record the LPDDR5 mode registers. boot0's stored
 parameter set has `dram_tpr10` bit 29 set, so every boot runs the save
 routine `0x576e4`: parameter words 32–49 hold the receive Vref values and
