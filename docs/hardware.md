@@ -12,8 +12,34 @@ Status meanings: **planned** has no implementation; **implemented** has code;
 **tested** has a functional result under stated conditions; **qualified** meets
 its recorded operational and recovery criteria on physical hardware.
 
-Every row below has **no qualification evidence**. Unless stated below, its
-implementation is **planned**. Partial results apply only to the stated scope:
+Qualification applies to the specific image, operation and recovery conditions
+in its evidence. The current physical results are summarized below; the detailed
+inventory that follows also records earlier implementations and their remaining
+gaps. A passing diagnostic does not qualify every application using that device.
+
+## Current physical results
+
+The [handoff](handoff.md#qualified-on-the-boards) identifies the frozen images
+and board sessions for these results from 2026-10-25:
+
+| Function | Demonstrated operation | Remaining qualification |
+| --- | --- | --- |
+| CPU | All eight cores ran the timer and interrupt workload at A76 2002 MHz, A55 1794 MHz and DSU 1274 MHz, then returned with the secondaries off | Sustained load, thermal transitions, failure recovery and integrated multicore recognition |
+| GPU | Firmware start, health check, stop and restart; eight correct compute jobs in one session at 1008 MHz, followed by shutdown | Failure cleanup, exact-sum mimus execution, graphics and representative concurrent workloads |
+| NPU | Interrupt completion and matching ShuffleNetV2 outputs at 852 MHz; 2.91 ms inference and about 3.3 ms per job end to end | Full power-off and restart, thermal behavior and broader application integration |
+| Memory bus | Restore to 600 MHz on EL3 entry, with the preserved memory pattern verified on both boards | Broader memory and concurrent-device qualification |
+| microSD | 256 high-speed reads at 50 MHz, four-bit, 3.3 V | DMA, 1.8 V signalling and the remaining storage/update paths |
+| DRAM training | Captures across ten lifetimes establish the inputs for the training-restore design | Executing the restore and qualifying memory after it |
+
+Both boards retain initialized sessions. Physical recovery by power removal is
+unavailable until further notice. New software results remain separate from
+physical qualification; the coordinator admits each proposed board test against
+its return and failure paths.
+
+## Implementation inventory
+
+Unless stated below, implementation is **planned**. Partial results apply only
+to the stated scope:
 
 - PCIe: **implemented** [native root-port preparation](pcie.md) with shared
   clock, rail, pin and PMIC ownership, COMB1 PHY initialization, x1 Gen1 link
@@ -2095,11 +2121,15 @@ implementation is **planned**. Partial results apply only to the stated scope:
   qualification is established. Independent pixel comparison, wider processing,
   scaling, 3A tuning, interrupt completion and physical recovery remain required.
 
-- NPU: The application clock admission now accepts the board's normalized
+- NPU: **tested** for interrupt completion and matching ShuffleNetV2 outputs
+  in the returning diagnostics described above. The resident runtime and OS
+  profiles below retain their separate qualification requirements.
+  The application clock admission accepts the board's normalized
   reference and recorded PERI0 settings. Six focused final-image cases pass
   under `npu-single-core-20261018/reference-refresh/`; unchanged startup and
-  inference evidence is reused. Physical NPU computation remains unobserved.
-  The first physical attempt returned no USB result and required power removal.
+  inference evidence is reused. The initial application attempt returned no USB
+  result and required power removal; the later returning diagnostics establish
+  physical computation without qualifying this earlier USB application.
   The application now preserves failure reporting over independently valid USB;
   ten affected native cases and source review pass under
   `npu-usb-terminal-20261018/`. Physical reporting and inference remain untested

@@ -52,6 +52,27 @@ history.
 
 ## Active branches
 
+Autonomous development has resumed. The coordinator preserves both initialized
+board sessions while implementations and independent reviews proceed without
+hardware access. Each proposed physical test still needs a reviewed return and
+failure path compatible with the current session; a normal ROM return alone
+does not establish recovery from a fault.
+
+| Work | Branch | Immediate deliverable |
+| --- | --- | --- |
+| GPU failure recovery | `work/gpu-job-session-1025` | Correct the rejected reset/OFF path; retain power and ownership when idle cannot be proved |
+| CPU returning image | `work/resume-cpu-return-1025` | Fit the workload overlay within its reservation and prepare safe clock/rail restoration |
+| OS thermal protection | `work/resume-thermal-1025` | Admit and enforce the qualification session's 70 °C CPU stop |
+| NPU lifecycle | `work/resume-npu-lifecycle-1025` | Bound interrupt-route waits without releasing uncertain ownership |
+| GPU exact-sum application | `work/resume-gpu-application-1025` | Connect the existing mimus kernel to the demonstrated job path and compare exact outputs |
+| DRAM restoration | `work/resume-dram-restore-1025` | Build the capture-derived record and SRAM restore path with failure checks |
+
+Two independent reviewers cover CPU/thermal/DRAM and GPU/NPU respectively.
+Workers own separate source paths, reuse successful evidence and submit focused
+checks. The coordinator integrates changes, updates this handoff and the hardware
+matrix, and pushes reviewed results. The microSD merge remains a separate ongoing
+assignment; these workers do not edit its storage paths.
+
 The branch notes under "Next steps" in each design document say what remains.
 - **`work/cpu-top-opp-step6-1025`:** CPU top points, step 6 and its
   analysis. Step 7, the sustained load, needs the 70 °C OS thermal stop and an
