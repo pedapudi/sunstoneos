@@ -74,6 +74,17 @@ class Elf:
         raise AssertionError('string %#x is not in image data' % address)
 
 
+def contract_profile(elf, legacy=False):
+    found = [s for s in elf.symbols if s['name'] == 'os_contract_profile' and s['shndx'] != 0]
+    if not found and legacy:
+        return None
+    assert len(found) == 1 and found[0]['bind'] == 1 and found[0]['size'] == 16, 'Missing or malformed linked OS contract profile'
+    magic, size = struct.unpack('<2Q', elf.read(found[0]['value'], 16))
+    assert magic in (0x415337334f534331, 0x415337334f524331), 'Unknown linked OS lifetime'
+    assert size in (808, 904, 992, 1088, 1080, 1176), 'Unknown linked OS session size'
+    return {'lifetime': 'resident' if magic == 0x415337334f524331 else 'supervised', 'session_bytes': size}
+
+
 def inference_configuration(elf, legacy=False):
     """The adapter's actual linked count, placement and task priorities."""
     found = [s for s in elf.symbols if s['name'] == 'mimus_parallel_configuration' and s['shndx'] != 0]
@@ -276,6 +287,11 @@ def main():
     try:
         result = check(args.image, args.assets, args.recognizer, args.loader, audio, radio, headset, gpu_linear,
                        cpu_clock, args.npu == '1', args.perf == '1')
+        profile = contract_profile(Elf(args.image.read_bytes()), legacy=True)
+        if profile is not None:
+            assert profile['lifetime'] == args.lifetime, 'Linked lifetime differs from build selection'
+            assert profile['session_bytes'] == 808 + (184 if audio else 272 if args.npu == '1' else 0) + (96 if cpu_clock else 0), 'Linked session size differs from build selection'
+            result['contract_profile'] = profile
         assert result['inference']['workers'] == args.workers, 'Linked worker count differs from build selection'
         if args.workers == 8:
             assert args.lifetime == 'supervised' and not any((audio, radio, headset, gpu_linear)), 'Unsupported eight-worker OS profile'

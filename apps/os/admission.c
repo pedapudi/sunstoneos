@@ -10,6 +10,9 @@ _Static_assert(A733_SMP_CONTRACT_MAGIC==A733_OS_RESIDENT_CONTRACT_MAGIC,"residen
 #else
 _Static_assert(A733_SMP_CONTRACT_MAGIC==A733_OS_CONTRACT_MAGIC,"supervised OS contract magic");
 #endif
+/* Offline card preparation reads these compiled constants, so a manifest
+ * cannot relabel a supervised image or another session layout as resident. */
+__attribute__((used,retain)) const uint64_t os_contract_profile[2]={A733_SMP_CONTRACT_MAGIC,sizeof(struct os_session)};
 int os_session_valid(const struct os_session *s)
 {
     if(!s||!a733_board_session_valid(&s->board,0)||!os_workload_valid(s->board.workload)||
