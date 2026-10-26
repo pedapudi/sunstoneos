@@ -128,7 +128,10 @@ After cold DDR and readiness, one image ran:
 - the 14-step stop, then OFF and provider park.
 
 The image returned to a responsive ROM with the GPU off, so a firmware run
-no longer needs a power removal. `work/gpu-fw-stop-1025` is merged; its
+no longer needs a power removal. Set `board-bundles-20261025-25`
+(`board-session-20261025-22/port-3-1`) then ran the whole lifecycle twice in
+one lifetime with no power removal between, and both runs completed: the
+firmware restarts cleanly. `work/gpu-fw-stop-1025` is merged; its
 bundle row is now 25, while frozen sets 21 and 23 call it 20.
 
 **DRAM training capture, port 3-3** (`board-session-20261025-21/port-3-3`,
