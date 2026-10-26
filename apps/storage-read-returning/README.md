@@ -219,7 +219,7 @@ PYTHONDONTWRITEBYTECODE=1 ~/.cache/sunstoneos/venv/bin/python apps/storage-read-
 PYTHONDONTWRITEBYTECODE=1 ~/.cache/sunstoneos/venv/bin/python checks/storage-read-returning.py \
   --image /absolute/new/directory/build/probe.elf --board-config BOARD_CONFIG.json --output /absolute/new/check
 PYTHONDONTWRITEBYTECODE=1 ~/.cache/sunstoneos/venv/bin/python checks/storage-read-returning-host.py \
-  --output /absolute/new/host-check
+  --read-record /absolute/accepted-read/session.json --output /absolute/new/host-check
 ```
 
 `build.py` refuses unless this tree's `platform/a733/monitor.c`, compiled

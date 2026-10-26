@@ -27,7 +27,7 @@ static void begin(struct uhs *u, struct sunxi_mmc *h, unsigned caps)
 {
     memset(u, 0, sizeof(*u)); seed(&u->base, h, SUNXI_MMC_SD, 1);
     field(u->base.csd, 84, 12, 5 | (1u << 10)); field(u->base.csd, 96, 8, 0x32); u->scr[0] = 2; u->scr[1] = 5;
-    u->caps = caps; u->s18a = 1; u->sdr104 = 1; u->bank_polls = 3; u->fatal_delay = 99;
+    u->caps = caps; u->s18a = 1; u->sdr104 = 1; u->bank_polls = 3; u->fatal_delay = 99; u->done_delay = 1000;
     u->window[0][0] = 20; u->window[0][1] = 24;
     struct sunxi_mmc_config c = {{uhs_read, uhs_write, barrier, now_us, admit, retained, uhs_module,
         uhs_read_fifo, model_write_fifo, uhs_signal}, u, 0xa733, SUNXI_MMC_SD, 800000, 0x300000,
@@ -39,6 +39,7 @@ static void drive(struct uhs *u, struct sunxi_mmc *h)
     for (unsigned i = 0; i < 400000; ++i) {
         if (h->state == SUNXI_MMC_READY || h->state == SUNXI_MMC_DONE || h->state == SUNXI_MMC_FAULT) return;
         u->base.fifo_this_poll = 0; sunxi_mmc_poll(h);
+        if (u->clock_started && u->restart_gap) { u->base.now += u->restart_gap; u->restart_gap = 0; }
     }
     assert(!"UHS model did not reach a terminal state");
 }
@@ -87,6 +88,22 @@ int main(void)
     /* 100 MHz from 400 MHz when the 300 MHz branch is absent. */
     begin(u, &h, 1); drive(u, &h);
     assert(h.state == SUNXI_MMC_READY && u->divisor == 2 && h.card.card_hz == 100000000 && h.card.timing == 3);
+    /* Restart completion and flag clearing must share a step: two START
+     * reads followed by a scheduler gap must preserve the later switch bits. */
+    begin(u, &h, 3); u->restart_reads = 2; u->restart_gap = 2000; drive(u, &h);
+    assert(h.state == SUNXI_MMC_READY && !u->restart_reads);
+    /* The separate 10 ms starts after the mandatory 1 ms delay. */
+    begin(u, &h, 3); u->done_delay = 10500; drive(u, &h); assert(h.state == SUNXI_MMC_READY);
+    begin(u, &h, 3); u->done_delay = 12000; faulted(u, &h, SUNXI_MMC_SIGNAL);
+    begin(u, &h, 3); u->restart_stuck = 1; faulted(u, &h, SUNXI_MMC_TIMEOUT);
+    assert(u->base.now-u->clock_started >= 250000 && u->base.now-u->clock_started < 251000);
+    begin(u, &h, 3); u->restart_stuck = 1;
+    while (!u->clock_started && h.state != SUNXI_MMC_FAULT) {
+        if (h.sd_sig == 3) h.deadline_us = h.last_us + 15000;
+        u->base.fifo_this_poll = 0; sunxi_mmc_poll(&h);
+    }
+    assert(h.state == SUNXI_MMC_FAULT && h.result.error == SUNXI_MMC_TIMEOUT);
+    assert(u->base.now-u->clock_started < 250000);
     /* Host or card declines: no CMD11, high speed at 3.3 V. */
     begin(u, &h, 2); high_speed_33(u, &h, SUNXI_MMC_UHS_HOST); assert(!u->s18r_seen);
     begin(u, &h, 0); high_speed_33(u, &h, SUNXI_MMC_UHS_HOST);
@@ -99,6 +116,7 @@ int main(void)
     begin(u, &h, 3); u->set_fails = 1; faulted(u, &h, SUNXI_MMC_IO); assert(u->sets == 1);
     begin(u, &h, 3); u->no_dat_high = 1; faulted(u, &h, SUNXI_MMC_SIGNAL); assert(u->bank == 2 && !u->cid_seen);
     begin(u, &h, 3); u->no_vsd = 1; faulted(u, &h, SUNXI_MMC_SIGNAL); assert(u->bank == 2 && !u->cid_seen);
+    begin(u, &h, 3); u->no_cc = 1; faulted(u, &h, SUNXI_MMC_SIGNAL); assert(u->bank == 2 && !u->cid_seen);
     begin(u, &h, 3); u->bad_caps = 1; faulted(u, &h, SUNXI_MMC_IO); assert(!u->base.ocr_calls);
     /* At 1.8 V without SDR104 or a usable window: SDR25 at 50 MHz, no power cycle. */
     begin(u, &h, 3); u->sdr104 = 0; sdr25_18(u, &h, SUNXI_MMC_UHS_NO_SDR104); assert(!u->cmd19 && u->cmd6_uhs == 1);
@@ -123,6 +141,6 @@ int main(void)
     assert(!sunxi_mmc_init(&probe, &c));
     printf("PASS UHS-I: S18R/CMD11/1.8 V switch with 1 ms and 10 ms waits, SDR104 at 150 and 100 MHz, "
            "%u CMD19 for a 24-delay window centered at 32, eight declines or fallbacks to high speed without "
-           "a power cycle, eight terminal switch or tuning failures, window selection rules\n", first);
+           "a power cycle, terminal switch or tuning failures, bounded restart and post-delay deadline, window selection rules\n", first);
     free(u); return 0;
 }

@@ -21,9 +21,10 @@ struct uhs {
     uint8_t scr[8], sw[64], data[64];
     unsigned caps, s18a, phase, bank, bank_polls, queries, sets, polls, module_calls, divisor;
     unsigned width, sdr, sdr104, sdr104_busy, set_refuses, cmd11_timeout, no_dat_low, no_dat_high;
-    unsigned pending_done, no_vsd, set_fails, bad_caps, fatal_delay, cmd19, cmd11, cmd6_uhs, cmd6_hs;
+    unsigned pending_done, no_cc, no_vsd, set_fails, bad_caps, fatal_delay, cmd19, cmd11, cmd6_uhs, cmd6_hs;
     unsigned window[2][2], s18r_seen, cmd11_before_cmd2, cid_seen, dat0_masked;
-    uint64_t answered, gated, restarted;
+    unsigned restart_reads, restart_stuck, restart_gap;
+    uint64_t answered, gated, restarted, clock_started, done_delay;
 };
 static unsigned passes(struct uhs *u, unsigned d)
 {
@@ -34,6 +35,15 @@ static unsigned passes(struct uhs *u, unsigned d)
 static int uhs_read(void *v, uint32_t off, uint32_t *out)
 {
     struct uhs *u = v; struct model *m = &u->base;
+    /* Completion advances with elapsed time, independently of which register
+     * software reads. START can require several reads to clear. */
+    if (u->phase == 3 && u->pending_done && m->now-u->clock_started >= (u->done_delay ? u->done_delay : 1000)) {
+        u->pending_done = 0; m->reg[0x38/4] |= (u->no_vsd ? 0 : VSD) | (u->no_cc ? 0 : 4);
+    }
+    if (off == 0x18 && u->clock_started && (u->restart_reads || u->restart_stuck)) {
+        if (u->restart_reads) --u->restart_reads;
+        *out = 1u << 31; return 1;
+    }
     if (off == 0x200 && m->data_command && ((m->data_command & 63) == 51 || (m->data_command & 63) == 6 ||
                                             (m->data_command & 63) == 19)) {
         assert(++m->fifo_this_poll <= SUNXI_MMC_FIFO_WORDS && m->fifo_pos < m->fifo_total);
@@ -44,7 +54,6 @@ static int uhs_read(void *v, uint32_t off, uint32_t *out)
     }
     int r = read32(m, off, out);
     if (off == 0x3c) {
-        if (u->phase == 3 && u->pending_done) { u->pending_done = 0; m->reg[0x38/4] |= VSD | 4; }
         unsigned low = u->phase == 1 || u->phase == 2 || u->phase == 4;
         if (!low || (u->phase == 1 && u->no_dat_low)) *out |= SUNXI_SMHC_STATUS_DAT3;
         if (low && !(u->phase == 1 && u->no_dat_low)) *out |= 1u << 9; /* DAT0 held low. */
@@ -76,8 +85,9 @@ static int uhs_write(void *v, uint32_t off, uint32_t value)
             else {
                 assert(u->bank == 2 && m->reg[4/4] == ((1u << 16) | (1u << 31)));
                 assert(m->now - u->restarted >= 10000); /* Clock gated 10 ms after the bank switch. */
+                u->clock_started = m->now;
                 if (u->no_dat_high) u->phase = 4;
-                else { u->phase = 3; u->pending_done = !u->no_vsd; }
+                else { u->phase = 3; u->pending_done = 1; }
             }
             m->reg[0x18/4] = 0; return 1;
         }
