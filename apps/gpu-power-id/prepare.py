@@ -65,7 +65,7 @@ SCHEMA = 'board-gpu-returning-bundle-v1'
 PROVIDER_READY = '3adfa4ad6ba386ce8d39f76646f540107c2a5d02ce42db6c1c35c90de68a75ed'
 FAILED_POWER_ID = 'fd3d5839f700b5e0f569b0ce722e186c33beba65512815b136d9c969a7341afe'
 CASES = {'provider-ready': 11, 'power-only': 11, 'identity': 12, 'wrapper-read': 7, 'probe-read': 13, 'fw-start': 11,
-         'fw-stop': 8}
+         'fw-stop': 9}
 # ON/OFF cycles of the client's normal run: the power-only and identity
 # variants power the GPU on twice, so the second ON shows that OFF left a
 # state from which ON succeeds again.

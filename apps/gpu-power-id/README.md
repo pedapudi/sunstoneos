@@ -250,7 +250,7 @@ OFF, the supply end and the provider park of the power-only variant. It
 links the control and stop units as well. The completion text is `COMPLETE
 GPU firmware stop: started, health check executed, forced idle and power
 off acknowledged, idle, OFF and provider parked`. `check.py --fw-stop` runs
-eight cases with a model of the firmware's side of the queues.
+nine cases with a model of the firmware's side of the queues.
 
 A wrapper-write variant was refused before any board run and removed
 ([gpu-power.md](../../docs/gpu-power.md#the-wrapper-write-probe-was-refused)).
