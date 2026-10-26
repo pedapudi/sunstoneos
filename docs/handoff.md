@@ -138,15 +138,22 @@ one lifetime with no power removal between, and both runs completed: the
 firmware restarts cleanly. `work/gpu-fw-stop-1025` is merged; its
 bundle row is now 25, while frozen sets 21 and 23 call it 20.
 
-**First GPU compute job failed on port 3-1** (set `board-bundles-20261025-27`,
-`board-session-20261025-22/port-3-1`, record `s22-gfj-run`). Firmware start
-and the health check passed. The fixed 32-lane job then did not complete:
-outcome 4, timeline word 0x1, and output word 0 is the bitwise inverse of the
-expected value. Cleanup returned 0xffffffff and the firmware stop was refused,
-so the image returned to FEL with the GPU still powered. The stop does not yet
-power off the GPU after a failed job; that is a defect. The fix and the
-diagnosis against the open DDK are in progress on `work/gpu-first-job-1025`,
-which stays unmerged.
+**First GPU compute job passed on port 3-1** (set `board-bundles-20261025-29`,
+`board-session-20261025-28/port-3-1`, record `s27-gfj-run`). After the cold DDR
+start and provider readiness, one power-on did all of the following:
+- firmware start in 0.7 ms and the health check in 1.9 ms;
+- MMUCACHE, then one 32-lane compute job, with the timeline completed and all
+  32 output words equal to the formula;
+- no firmware events and no recovery records;
+- context cleanup, then the 14-step stop acknowledged in 23 ms, OFF and provider
+  park.
+
+The first attempt (set 27) faulted. The job's setup program stored each 64-bit
+pointer constant high word first, so the shader's first load went to address
+`0x80` and the firmware reset the context. A read-only FEL capture of the
+firmware memory identified the fault. Set 29 stores the constants low word first. A failed job now still
+ends with the GPU off: an unacknowledged stop runs upstream's hard reset.
+`work/gpu-first-job-1025` is being merged with bringup.
 
 **P-state-0-only DRAM capture, port 3-3** (`board-session-20261025-25/port-3-3`,
 set `dram-training-capture-v5-20261025`, build `ddr-pstate0`): boot0 trained
