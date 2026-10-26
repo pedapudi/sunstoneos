@@ -34,8 +34,9 @@ adds three fixed parts to it:
 
 Status: implemented for the combinations listed under [Build and checks](#build-and-checks).
 Recorded GPU recognition and the separate NPU application compose in both
-lifetimes; performance commands remain restricted to the supervised CPU/NPU profiles. Native builds and focused
-software checks do not establish physical OS operation. The sources are in
+lifetimes. The optional performance service controls CPU, GPU and stopped-NPU
+operating points in supervised and resident recorded profiles. Native builds
+and focused software checks do not establish physical OS operation. The sources are in
 [apps/os](../apps/os) and the build is [cmake/a733-os.cmake](../cmake/a733-os.cmake).
 
 ## Lifetimes
@@ -357,9 +358,11 @@ Power and thermal integration remains incomplete:
   The ordinary OS build changes neither CPU clocks nor voltage.
 - **GPU lifetime.** Critical thermal failure revokes the GPU backend through
   `board.fatal`. The resident supervisor ends renewal on a stalled GPU wait
-  or failed recognition. The OS has no dynamic GPU operating-point control
-  or reusable recovery after an uncertain job; resources remain retained
-  until the prescribed reset or power removal.
+  or failed recognition. The optional performance service switches a live
+  GPU between 1008 MHz/960 mV and 600 MHz/800 mV through acknowledged firmware
+  idle and exclusive rail ownership. Uncertain jobs or transitions retain
+  resources until the prescribed reset or power removal; reusable recovery
+  and physical live switching remain unqualified.
 - **NPU integration.** Only the optional
   [NPU service](#optional-npu-service) adds the NPU to
   the OS start list. The default operating point is 852 MHz at 800 mV; the
@@ -381,8 +384,9 @@ thermal qualification remain separate prerequisites and evidence gaps.
 `SUNSTONE_A733_OS_NPU=ON` links the NPU runtime and one application client
 into either OS lifetime with recorded input. The resident profile accepts CPU
 operating-point grants. A supervised NPU/CPU-clock build requires either the
-performance service or the combined GPU profile; GPU builds exclude performance
-commands. Microphone, radio and headset combinations remain refused. [Resident NPU integration](designs/resident-npu.md) describes cold-card
+performance service or the combined GPU profile. GPU and NPU performance
+control compose in either lifetime. Microphone, radio and headset combinations
+with the NPU remain refused. [Resident NPU integration](designs/resident-npu.md) describes cold-card
 authority, initialized non-executable assets, bounded health and the combined
 eight-worker ShuffleNet evidence. [Concurrent GPU/NPU integration](designs/os-gpu-npu.md)
 adds the supervised eight-worker GPU path with independent startup, fixed-owner
@@ -784,10 +788,10 @@ added.
 
 `SUNSTONE_A733_OS_PERF=ON` adds the high and low performance modes
 ([user guide](performance-modes.md), [design](designs/performance-modes.md)).
-It needs `SUNSTONE_A733_OS_CPU_CLOCK` and may be combined with
-`SUNSTONE_A733_OS_NPU`, whose profile then also carries the CPU grant; the
-session is then 1,176 bytes. `SUNSTONE_A733_OS_PERF_BOOT=high|low` (default
-`high`) sets the boot mode, which the image keeps in `os_perf_boot_mode` and
+It needs `SUNSTONE_A733_OS_CPU_CLOCK` and supports recorded recognition in
+either lifetime, including eight workers and the GPU and NPU together. The
+NPU profile also carries the CPU grant; that session is 1,176 bytes.
+`SUNSTONE_A733_OS_PERF_BOOT=high|low` (default `high`) sets the boot mode, which the image keeps in `os_perf_boot_mode` and
 the link check records as `perf_boot_mode`, beside `perf_modes: true` and `perf_operation: 8`. Every
 link check records `perf_modes`; the host requires the exact opcode capability.
 
@@ -796,15 +800,27 @@ link check records `perf_modes`; the host requires the exact opcode capability.
   replaces the start's one request per granted cluster: once every sensor has
   a reading at NORMAL (at most 500 ms), it reads every block back and
   switches the CPU domains to the boot mode, and only then reports ready to
-  the recognizer. The NPU starts at the boot mode's rate.
+  the recognizer. GPU and NPU startup independently select the boot mode's
+  operating point.
 - **Grant.** This build accepts a grant of both clusters, or of none.
-  Other CPU-clock builds retain their TOP and B1 admission rules. Preparation binds a two-cluster grant to an approval record
-  of schema `a733-os-perf-modes-approval-v1`: the board, port, image, session
+  Other CPU-clock builds retain their TOP and B1 admission rules. Supervised
+  preparation binds a two-cluster grant to an approval record of schema `a733-os-perf-modes-approval-v1`: the board, port, image, session
   identities, the user's approval, the board's B1 record, the bin's high
-  points of both clusters and the change count.
+  points of both clusters and the change count. Resident card preparation
+  instead binds the actual linked points, boot mode and finite per-boot
+  change budget to typed cold-runtime evidence. It requires exclusive GPU
+  rail authority and separate concurrent GPU/NPU clock qualification when
+  those blocks are present; startup-only authority cannot satisfy it.
+- **GPU.** The existing GPU worker acknowledges forced idle, orders voltage
+  and clock changes, publishes firmware clock/time-correlation data and
+  acknowledges idle cancellation. Failed or overdue transitions retain
+  ownership and end the board lifetime. See [GPU performance control](designs/gpu-performance.md).
 - **NPU.** After its session's local stop, the NPU bootstrap task waits for
   retune requests instead of suspending, and changes PLL_NPU with
-  `a733_npu_startup_retune`.
+  `a733_npu_startup_retune_until`. Each request supplies a fresh absolute
+  deadline, so the stopped provider remains usable after the finite NPU
+  workload ends. The request mailbox remains occupied until its matching
+  answer is published. See [resident performance integration](designs/resident-performance.md).
 
 A request with operation 8 carries its command in the flags byte: 0 report,
 1 read back, 2 switch. A switch names the mode in offset bits 9:8 (1 high,
@@ -868,15 +884,15 @@ the interrupt table follow the options:
 | `SUNSTONE_A733_OS_RADIO`, `SUNSTONE_A733_OS_HEADSET`, with or without `SUNSTONE_A733_OS_MSBC` | `mimus`, `thermal`, `radio`, `headset` | 71 |
 | `SUNSTONE_A733_OS_GPU_LINEAR`, resident with permitted peripheral rows or supervised recorded input | That row's entries, then `gpu-linear` | That row's INTIDs, then 95 |
 | `SUNSTONE_A733_OS_NPU`, recorded input in either lifetime | `mimus`, `thermal`, `npu` | 71, 97 |
-| `SUNSTONE_A733_OS_PERF` with `SUNSTONE_A733_OS_CPU_CLOCK`, supervised only, with or without `SUNSTONE_A733_OS_NPU` | That build's entries | That build's INTIDs |
+| `SUNSTONE_A733_OS_PERF` with `SUNSTONE_A733_OS_CPU_CLOCK`, recorded input in either lifetime, optionally GPU and NPU | That build's entries | That build's INTIDs |
 
 Configuration stops when `SUNSTONE_A733_OS_AUDIO` and
 `SUNSTONE_A733_OS_HEADSET` are both set, and when `SUNSTONE_A733_OS_MSBC` is
 set without the headset. GPU builds require the pinned firmware and model
 inputs and set their own output mapping; callers must not override
 `A733_GPU_OUTPUT_EL0_READ_ONLY`. Supervised GPU builds use recorded input,
-optionally with CPU clock control and the NPU service. They exclude microphone,
-radio, headset and performance-command services ([recognition dispatch](recognition-dispatch.md#build-gate)).
+optionally with CPU clock control, the NPU service and performance commands.
+They exclude microphone, radio and headset services ([recognition dispatch](recognition-dispatch.md#build-gate)).
 Supervised radio and headset builds request the existing fast SDIO mode;
 physical firmware-loading time remains unqualified (see [Radio station](#radio-station)).
 

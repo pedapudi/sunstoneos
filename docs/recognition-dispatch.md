@@ -23,10 +23,14 @@ gives the hook's original integration. No board has run integrated OS GPU
 recognition. The option is off by default. It supports the existing resident
 compositions and supervised recorded recognition with two or eight inference
 workers. Eight workers require admitted A76 cores.
-The supervised GPU profile supports the existing CPU clock owner with admitted
-A76 workers. It excludes capture, radio, headset, NPU and performance-mode
-commands. See [eight-worker GPU ownership](designs/gpu-eight-workers.md) and
-[CPU/GPU ownership and startup](designs/gpu-cpu-clock.md).
+Recorded GPU recognition composes with CPU clock control, the separate NPU
+application and performance commands in either lifetime. Eight-worker control
+requires admitted A76 cores. Supervised GPU builds exclude microphone, radio
+and headset services; resident CPU-grant and NPU profiles are also restricted
+to recorded input. The NPU application does not accelerate mimus exact sums.
+See [eight-worker GPU ownership](designs/gpu-eight-workers.md),
+[CPU/GPU startup](designs/gpu-cpu-clock.md) and
+[resident performance integration](designs/resident-performance.md).
 
 ## Parts in this package
 
@@ -107,8 +111,9 @@ The recognition core pair is a build constant. Until the A76 cores are
 admitted it is cores 2 and 3 at 494 MHz; with `A733_A76_ADMITTED` it is cores
 6 and 7 at 2,002 MHz. The recognizer runs on the first core and the engine's
 second inference worker (`apps/mimus/parallel_runtime.cc`) on the second,
-in the two-worker GPU build. Other supported OS profiles can use eight
-workers, as described in [the multicore recognition guide](mimus-smp.md). The emitted tables for the
+in the two-worker GPU build. The eight-worker GPU composition keeps the
+recognizer and GPU worker on core 6 while CPU read-out work uses all eight
+cores, as described in [the multicore recognition guide](mimus-smp.md). The emitted tables for the
 bench models are:
 
 | Layer, K → N | A55 pair: n_gpu, job_rows | A76 pair: n_gpu, job_rows |
@@ -145,9 +150,9 @@ and the dispatch record need no atomic operations or locks.
 
 The thermal gate applies at each layer's `Begin`, after the preceding call's
 output has been consumed. A layer already admitted can finish its remaining
-batches through `Finish`. THROTTLE then closes the healthy GPU session;
-NORMAL reopens its retained allocations before another job. If throttle
-arrives during reopen, the client closes again before admitting work.
+batches through `Finish`. A non-NORMAL level or stale readings then close
+the healthy GPU session; fresh NORMAL readings permit reopening its retained
+allocations before another job. If thermal refusal arrives during reopen, the client closes again before admitting work.
 This boundary performs at most two transitions and cannot reopen faulted or
 incomplete dispatch admission. The [GPU component](gpu-mimus-service.md#lifecycle-and-power-limits)
 defines the bounded waits and retained-failure behavior. Physical cooling
@@ -224,9 +229,10 @@ worker EL1 and creates it before the scheduler starts.
 `SUNSTONE_A733_OS_GPU_LINEAR` is off by default. With it on, configuration
 stops unless:
 
-- supervised builds use recorded recognition with two or eight workers and exclude
-  capture, radio, headset, NPU and performance-mode commands; CPU clock control
-  additionally requires admitted A76 workers and its exact session grant;
+- supervised builds use recorded recognition with two or eight workers and
+  exclude microphone, radio and headset services; CPU clock control requires
+  admitted A76 workers and its exact session grant; optional NPU and performance
+  services must satisfy their own session and runtime authority checks;
 - `A733_GPU_OUTPUT_EL0_READ_ONLY` is not given: the branch sets it itself,
   which maps `0x46C00000`–`0x47000000` read-only at EL0 and EL1 as two 2 MiB
   blocks, so no CPU store can leave a dirty line whose eviction overwrites
@@ -247,9 +253,18 @@ cmake -S . -B BUILD ... -DSUNSTONE_MIMUS_BOARD_APPLICATION=ON -DSUNSTONE_A733_OS
   -DSUNSTONE_GPU_FIRMWARE=<gpu.fw> -DSUNSTONE_A733_OS_MODEL_DIR=<models>
 ```
 
-Resident builds additionally set `SUNSTONE_A733_OS_RESIDENT=ON` and retain
-their existing microphone and headset capture options. The recognizer patch
-applies after the selected capture patch.
+Resident builds additionally set `SUNSTONE_A733_OS_RESIDENT=ON`. Fixed-point
+GPU builds retain their permitted capture options, with the recognizer patch
+applied after the capture patch. Adding CPU grants or the NPU requires recorded
+input; the resident performance service inherits that restriction.
+
+The optional [performance service](performance-modes.md) changes GPU operating
+points through the existing worker after acknowledged firmware idle. Default
+HIGH selects 1008 MHz/960 mV; optional LOW selects 600 MHz/800 mV. An accepted
+transition resolves before CLOSE, or retains ownership on uncertainty. This
+does not change the exact-sum hook, worker placement or per-layer placement
+tables. Physical runtime switching and combined GPU/NPU clock qualification
+remain outstanding.
 
 ## What other owners provide
 
