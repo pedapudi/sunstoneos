@@ -107,6 +107,15 @@ The image leaves the GPU running, so port 3-1 needs a power removal before
 its next run. Nothing from the firmware binary was used, only the open DDK
 host sources (`docs/designs/gpu-firmware-start.md`).
 
+**MBUS restore qualified on port 3-1** (set `board-bundles-20261025-mbus-qual-2`,
+`board-session-20261025-23/port-3-1`, branch `work/clock-audit-1025` at
+`4950b025`). After the cold DDR start, a FEL-written pattern (2 × 4 MiB) was
+laid down. The first kernel check passed with no `MBUS` line, since MBUS was
+still at boot0's 600 MHz. The second, after a ROM return, logged
+`MBUS 0x84000000 0x81000000 0`, so it restored 600 MHz from the SRAM window,
+and its kernel check passed. The pattern then read back unchanged. Port 3-3
+(steps 1–6) is next, before the merge.
+
 **GPU firmware lifecycle passed on port 3-1** (set `board-bundles-20261025-23`,
 `board-session-20261025-20/port-3-1`, branch `work/gpu-fw-stop-1025`).
 After cold DDR and readiness, one image ran:
