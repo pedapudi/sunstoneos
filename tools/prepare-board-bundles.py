@@ -223,7 +223,10 @@ GPU_SOURCES = ['apps/gpu-power-id/prepare.py', 'apps/gpu-power-id/build.py', 'ap
                'drivers/gpu/pvr_fw_state.c', 'drivers/gpu/pvr_ccb.c', 'drivers/gpu/pvr_gpu_start.c',
                'platform/a733/gpu_memory.c', 'include/pvr_gpu_start.h', 'include/a733_gpu_memory.h',
                'drivers/gpu/pvr_gpu_control.c', 'drivers/gpu/pvr_gpu_stop.c', 'include/pvr_gpu_control.h',
-               'include/pvr_gpu_stop.h', 'include/pvr_ccb.h',
+               'include/pvr_gpu_stop.h', 'include/pvr_ccb.h', 'apps/gpu-power-id/fw-job.inc',
+               'drivers/gpu/pvr_compute_job.c', 'drivers/gpu/pvr_compute_programs.c', 'drivers/gpu/pvr_compute_context.c',
+               'drivers/gpu/pvr_compute_package.c', 'drivers/gpu/pvr_cccb.c', 'drivers/gpu/pvr_gpu_vm.c',
+               'platform/a733/gpu_vm_memory.c', 'include/pvr_cccb.h',
                'drivers/power/a733_pmic.c', 'drivers/power/a733_pmic_consumer.c',
                'platform/a733/monitor.c', 'include/a733_el3_security.h', 'include/a733_gpu_opp.h',
                'apps/gpu-provider-ready/main.c', 'apps/gpu-provider-ready/build.py',
@@ -903,6 +906,42 @@ ROWS = [
                       'firmware\'s own mappings is created. Risk: a register access that never completes stops the '
                       'CPU and only a power removal recovers the board; a failure before the power-off '
                       'acknowledgement leaves the firmware running until the power removal.'),
+    gpu_row('gpu-first-job', 27, 'The first GPU job: the fixed 32-lane compute job, then the firmware stop and OFF',
+            'fw-job', 'COMPLETE GPU first job: 32 words as computed, context cleaned up, firmware stopped, OFF and '
+            'provider parked',
+            'Status 0 with GPU FWJ job complete=1 outcome=1 timeline=0x1, GPU FWJ output w0=0x2e5ca990 '
+            'w1=0xd09b3063 w31=0x4775f521 guard=0x6d35a7c1 (expected0 and expected31 equal), GPU FWJ cleanup '
+            'status=0x1, GPU FWS stop result=0 phase=10 and COMPLETE GPU first job: 32 words as computed, context '
+            'cleaned up, firmware stopped, OFF and provider parked; or one of the controlled failures below; or no '
+            'return. Record every line of kernel.log and the progress record at result.bin offset 128.',
+            'apps/gpu-power-id, first-job variant (apps/gpu-power-id/fw-start.c built with FWS_STOP and FWS_JOB, with '
+            'apps/gpu-power-id/fw-job.inc), docs/designs/gpu-first-job.md. The image of bundle 25 with the fixed '
+            'numerical compute job between the health check and the stop. Before any power change it builds, in its '
+            'own memory, the workload GPU VM (88 write-back pages, programs and inputs GPU read-only, the output page '
+            'bypassing the GPU system-level cache), the context programs, the compute context and the job (seed '
+            '0x12345678, factor 0x9e3779b1), and maps the six firmware objects (context, register state, client CCB '
+            'control and ring, VM record, timeline) for the firmware at 0xc0800000 + n * 0x10000 in its Normal-NC '
+            'block. After the health check it publishes the workload pages and tables, formats the client CCB, '
+            'writes a CDM command and a timeline UPDATE, kicks the kernel CCB, accepts the KICK once the firmware '
+            'consumed it, waits at most 200 ms for the timeline word, checks all 32 words and both guards, and sends '
+            'the context cleanup. It then stops the firmware and powers the GPU off as bundle 25 does, whatever the '
+            'job\'s result. It runs in the lifetime of set board-bundles-20261025-25 after its bundle 26 passed.',
+            after=['gpu-provider-ready', 'gpu-fw-stop-again'],
+            failures=['`FAIL GPU first job: not complete, GPU OFF and provider parked`, after the `GPU FWJ job` and '
+                      '`output` lines: outcome 2 the timeline did not reach 1 within 200 ms, 3 an output word or '
+                      'guard differs, 4 a transport fault; the stop and OFF ran',
+                      '`FAIL GPU first job: 32 words as computed, context cleanup not confirmed, GPU OFF and provider '
+                      'parked`: the cleanup command returned no word of 1',
+                      '`FAIL GPU firmware stop refused, GPU left running`: the control failed during the job, for '
+                      'example on a firmware context-reset event; a power removal follows',
+                      'every failure line of bundle 25'],
+            admission='GPU job exception: this row runs one GPU compute job. Its data and programs are 88 write-back '
+                      'pages of the image\'s own RAM, mapped only in the job\'s GPU VM, whose tables are also image '
+                      'RAM; the firmware reaches only its own mappings plus the six job objects in the image\'s '
+                      'Normal-NC block. The GPU reads the programs, control stream and input and writes only the '
+                      '256-byte output page; no other memory is mapped for the GPU. It sends the KICK and the context '
+                      'cleanup through the kernel CCB, besides bundle 25\'s commands. Risk: as bundle 25, and a GPU '
+                      'job that never completes is left waiting when the firmware is forced idle and powered off.'),
     # `admission` maps fields of the value prepare() returns to the values that
     # identify this row's build. None refuses the row: no owning package has
     # named those values yet.

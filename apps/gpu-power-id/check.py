@@ -20,7 +20,10 @@ the case's expected sequence, after its progress record and log line. With
 the control, the stop, the OFF and the park, with a model of the firmware's
 side of the kernel CCB, the power-sync word and the interrupt status; after
 the start every access must be an interrupt read or clear, a kick with its
-read-back, or the next stop step. Without a
+read-back, or the next stop step. With --fw-job the image must be the
+first-job variant: the firmware-stop variant with the compute job between
+the health check and the stop, and a model of the firmware and GPU that
+runs the job's client CCB commands. Without a
 variant option the image must be the identity variant: in each of two ON/OFF
 cycles its only GPU-window accesses are two 32-bit loads, 0x01800024 and
 then 0x01800020. The PMIC, rail and GPU platform calls are modeled."""
@@ -658,6 +661,26 @@ FWX_STOP_PLAN = [(0, 0x8a8), (1, 0x8b0), (0, 0x3c8), (0, 0x3898), (1, 0xb40), (1
                  (0, 0x3c8)]
 
 
+# The first-job variant (fw-start.c built with FWS_STOP and FWS_JOB): its six
+# firmware objects follow the 45 shared pages, at firmware addresses
+# 0xc0800000 + n * 0x10000; object 2 is the client CCB control, 3 its ring
+# and 5 the timeline.
+JOB_OBJECTS = [NC_BASE + 4096 * (45 + i) for i in range(6)]
+JOB_ADDRESS = [0xc0800000 + i * 0x10000 for i in range(6)]
+JOB_SEED, JOB_FACTOR = 0x12345678, 0x9e3779b1
+JOB_WORDS = [((JOB_SEED + (i + 1) * JOB_FACTOR) ^ (0x9e3779b9 + (i << 16))) & 0xffffffff for i in range(32)]
+JOB_GUARD = 0x6d35a7c1
+FWJ_COMPLETE = ('COMPLETE GPU first job: 32 words as computed, context cleaned up, firmware stopped, OFF and '
+                'provider parked')
+FWJ_NOT_COMPLETE = 'GPU first job: not complete, GPU OFF and provider parked'
+FWJ_REASONS = {'fj-board': None, 'fj-kick-word': None, 'fj-stats-event': None,
+               'fj-no-fence': FWJ_NOT_COMPLETE, 'fj-wrong-output': FWJ_NOT_COMPLETE,
+               'fj-guard': FWJ_NOT_COMPLETE,
+               'fj-cleanup-no-word': 'GPU first job: 32 words as computed, context cleanup not confirmed, GPU OFF '
+                                     'and provider parked',
+               'fj-reset-event': 'GPU firmware stop refused, GPU left running'}
+
+
 def split(write, offset, width, value):
     """One register access as the vendor's 32-bit accesses: OSWriteHWReg64
     writes the low word first, OSReadHWReg64 reads the high word first."""
@@ -700,7 +723,7 @@ def fws_case_sequence(case, boot, timer_reads):
     return expected
 
 
-def run_fws(image, case, stop=False, unchecked=False):
+def run_fws(image, case, stop=False, unchecked=False, job=False):
     """One firmware-start case, or with stop a firmware-stop case. Only the
     client's platform calls are modeled: the ON and OFF, the clock,
     translations, cache maintenance and the log; for the stop variant also
@@ -733,7 +756,7 @@ def run_fws(image, case, stop=False, unchecked=False):
     state = {'case': case, 'calls': [], 'time': 100, 'messages': [], 'exit_status': None, 'failure': None,
              'accesses': [], 'on_polls': 0, 'snapshot_reads': [], 'started_reads': 0, 'released': None,
              'cache': [], 'record_at': None, 'gpu_reads': [], 'gpu_writes': [], 'steps': [],
-             'commands': [], 'irq_reads': []}
+             'commands': [], 'irq_reads': [], 'client_commands': []}
     row = power + L['a733_gpu_power']['row']
     consumer = gpu + L['a733_gpu_platform']['pmic']
     domains = bb + L['bb_power']['domains']
@@ -866,7 +889,8 @@ def run_fws(image, case, stop=False, unchecked=False):
         previous = state['accesses'][-1] if state['accesses'] else None
         since = state['messages'][state.get('printed', 0):]
         quiet = stop and not write and previous == [0, address, None] and \
-            all(m.startswith(f'GPU FWS n={n - 1} v=') for m in since)
+            not any(m.startswith(('GPU FWS reading', 'GPU FWS writing', 'GPU FWS n=')) and
+                    not m.startswith(f'GPU FWS n={n - 1} v=') for m in since)
         if not (size == 4 and magic == FWS_MAGIC and named == n and count == n - 1 and at == address and
                 (not write or stored == value) and (quiet or (state['messages'] and state['messages'][-1] == line))):
             state['refused'] = [hex(address), size, int(write), hex(value) if write else None, n]
@@ -901,7 +925,7 @@ def run_fws(image, case, stop=False, unchecked=False):
         state['steps'].append(step)
         state['printed'] = len(state['messages'])
         if stop:
-            fws_firmware(u, state, case, write, address, value, put)
+            fws_firmware(u, state, case, write, address, value, put, image if job else None)
         if address == 0x0a0000b0 and not write:
             # SMC0 +0xb0 read 0 at entry and 0 right after a write of 2 on the board.
             put(address, 0)
@@ -957,6 +981,8 @@ def run_fws(image, case, stop=False, unchecked=False):
     u.emu_start(image.address('gpu_power_id_client'), 0, count=60000000)
     if unchecked:
         return state
+    if job:
+        return check_fwj(u, image, state, case, timer_reads)
     return check_fwx(u, image, state, case, timer_reads) if stop else check_fws(u, image, state, case, timer_reads)
 
 
@@ -980,7 +1006,37 @@ def reproduce(image, log):
             'equal': all(v['equal'] for v in compared.values())}
 
 
-def fws_firmware(u, state, case, write, address, value, put):
+def fws_job_gpu(u, state, case, image, kick, put):
+    """The firmware and GPU for one client KICK: run the client CCB commands
+    from the control's read offset to the KICK's write offset. The CDM
+    command writes the 32 result words, by the job's formula, into the
+    output that the job's own descriptor names, between its guards; the
+    UPDATE command writes its value to the timeline its payload names."""
+    word = lambda a: int.from_bytes(u.mem_read(a, 4), 'little')
+    context, offset, mask = struct.unpack_from('<III', kick, 8)
+    assert context == JOB_ADDRESS[0] and mask == 1023, (hex(context), mask)
+    read = word(JOB_OBJECTS[2] + 4)
+    while read != offset:
+        kind, size = struct.unpack('<II', bytes(u.mem_read(JOB_OBJECTS[3] + read, 8)))
+        payload = bytes(u.mem_read(JOB_OBJECTS[3] + read + 40, size))
+        state['client_commands'].append(kind - MAGIC)
+        if kind == MAGIC | 0x8000 | 205 and case != 'fj-no-fence':
+            output = struct.unpack('<Q', bytes(u.mem_read(image.address('job_backing') + 5 * 32, 8)))[0]
+            for i, value in enumerate(JOB_WORDS):
+                if case == 'fj-wrong-output' and i == 7:
+                    value ^= 1
+                put(output + 64 + 4 * i, value)
+            if case == 'fj-guard':
+                put(output + 64 + 128, 0)
+        elif kind == MAGIC | 213 and case != 'fj-no-fence':
+            address, value = struct.unpack_from('<II', payload)
+            assert address == JOB_ADDRESS[5], hex(address)
+            put(JOB_OBJECTS[5], value)
+        read = (read + 40 + size) & 1023
+    put(JOB_OBJECTS[2] + 4, read)
+
+
+def fws_firmware(u, state, case, write, address, value, put, image=None):
     """The firmware's side of one register access of the stop variant: a
     kernel CCB kick runs every pending command, advances the read offset,
     counts it executed and raises the interrupt; a health check leaves the
@@ -1002,6 +1058,17 @@ def fws_firmware(u, state, case, write, address, value, put):
         state['commands'].append([kind - MAGIC, pow_type, request])
         if kind == MAGIC | 115 and case == 'fx-no-health':
             return  # Never consumed.
+        if kind == MAGIC | 101:
+            fws_job_gpu(u, state, case, image, command, put)
+            if case == 'fj-stats-event':
+                u.mem_write(FW_COMMANDS, struct.pack('<I', MAGIC | 107) + bytes(84))
+                put(FW_CONTROL, 1)
+            if case == 'fj-reset-event':
+                u.mem_write(FW_COMMANDS, struct.pack('<I', MAGIC | 105) + bytes(84))
+                put(FW_CONTROL, 1)
+        if kind == MAGIC | 106 and case != 'fj-cleanup-no-word':
+            # The cleanup's return word, as upstream waits for it.
+            put(RETURNS + read * 4, 1)
         if kind == MAGIC | 115:
             put(SYSTEM_DATA + 8, 3)
             if case == 'fx-event':
@@ -1013,7 +1080,7 @@ def fws_firmware(u, state, case, write, address, value, put):
             if not (off and case == 'fx-no-ack'):
                 put(SYSTEM_DATA + 8, 2 if not off else 2 if case == 'fx-denied' else 0)
                 put(POWER_SYNC, 1)
-        if case == 'fx-health-return':
+        if case == 'fx-health-return' or (kind == MAGIC | 101 and case == 'fj-kick-word'):
             put(RETURNS + read * 4, 1)
         put(OS_DATA + 568, word(OS_DATA + 568) + 1)
         read = (read + 1) & 127
@@ -1090,6 +1157,75 @@ def check_fwx(u, image, state, case, timer_reads):
         # never came, so no register of the stop was touched and the GPU stays on.
         assert state['commands'] == [[115, 0, 0], [107, 2, 1], [107, 1, 1]] and not stop_accesses, state['commands']
         assert 'GPU FWS stop result=3 phase=11 ' in output and 'ack_off=0x0 ' in output, output[-2500:]
+    state['cycles'] = calls.count('a733_gpu_platform_off_begin')
+    state['memory_flushes'] = state.pop('cache')
+    return state
+
+
+def check_fwj(u, image, state, case, timer_reads):
+    """The first-job variant's outcome for one case."""
+    output = ''.join(state['messages'])
+    calls = state['calls']
+    accesses = state['accesses']
+    assert not state.get('exception'), output[-2000:]
+    assert 'refused' not in state, (state['refused'], output[-3000:])
+    assert state['failure'] == FWJ_REASONS[case], (state['failure'], output[-3000:])
+    writes, boot = fws_boot(u, image)
+    start = fws_case_sequence(case, boot, timer_reads)
+    got = [(w, a, v) for w, a, v in accesses]
+    assert len(got) >= len(start) and all(g[:2] == e[:2] and (e[2] is None or g[2] == e[2])
+                                         for g, e in zip(got, start)), 'start sequence'
+    assert 'GPU FWS control result=0 phase=4 error=0 health=1 health_status=0x0 ' in output, output[-2500:]
+    # The job's image computes the formula's words.
+    assert f'expected0={JOB_WORDS[0]:#x} expected31={JOB_WORDS[31]:#x}' in output, output[-2500:]
+    # Every buffer the GPU reads or writes is the image's: the output in its
+    # payload, the timeline and client CCB in its NC pages.
+    output_cpu = struct.unpack('<Q', bytes(u.mem_read(image.address('job_backing') + 5 * 32, 8)))[0]
+    payload = image.address('job_payload')
+    assert payload <= output_cpu < payload + 88 * 4096 and payload + 88 * 4096 <= NC_BASE
+    post = list(zip(got[len(start):], state['steps'][len(start):]))
+    kicks = [i for i, ((w, a, v), _) in enumerate(post) if w and a == GPU + 0xb00]
+    assert all(post[i + 1][0][:2] == (0, GPU + 0xb00) for i in kicks), post
+    stop_accesses = [(w, a - GPU) for (w, a, v), step in post if 100 <= step < 200]
+    if case == 'fj-reset-event':
+        # The firmware reported a context reset: the control fails, so the
+        # stop cannot start and the GPU stays on.
+        assert [c[0] for c in state['commands']] == [115, 101] and not stop_accesses, state['commands']
+        assert 'a733_gpu_platform_off_begin' not in calls and state['exit_status'] is None
+        state['cycles'] = 0
+        state['memory_flushes'] = state.pop('cache')
+        return state
+    complete = case in ('fj-board', 'fj-kick-word', 'fj-stats-event', 'fj-cleanup-no-word')
+    kinds = [c[0] for c in state['commands']]
+    assert kinds == ([115, 101, 106, 107, 107] if complete else [115, 101, 107, 107]), state['commands']
+    assert len(kicks) == len(kinds), kicks
+    assert state['client_commands'] == [0x8000 | 205, 213], state['client_commands']
+    timeline = int.from_bytes(u.mem_read(JOB_OBJECTS[5], 4), 'little')
+    assert timeline == (0 if case == 'fj-no-fence' else 1), timeline
+    if complete:
+        assert f'GPU FWJ job complete=1 outcome=1 stage=4 phase=7 error=0 client=2 client_error=0 kick_status=' \
+               f'{int(case == "fj-kick-word"):#x} timeline=0x1' in output, output[-2500:]
+        assert f'GPU FWJ output w0={JOB_WORDS[0]:#x} w1={JOB_WORDS[1]:#x} w31={JOB_WORDS[31]:#x} ' \
+               f'guard={JOB_GUARD:#x}' in output, output[-2500:]
+        cleanup = 0 if case == 'fj-cleanup-no-word' else 1
+        assert f'GPU FWJ cleanup status={cleanup:#x} events={int(case == "fj-stats-event")} kccb_done=0x3' \
+            in output, output[-2500:]
+    else:
+        # The job stays waiting for its timeline, with no transport fault,
+        # so the shared kernel CCB still serves the stop.
+        outcomes = {'fj-no-fence': 2, 'fj-wrong-output': 3, 'fj-guard': 3}
+        assert f'GPU FWJ job complete=0 outcome={outcomes[case]} stage=4 phase=5 error=0 client=2 client_error=0 ' \
+            in output, output[-2500:]
+        assert 'GPU FWJ cleanup status=0xffffffff' in output, output[-2500:]
+    # The stop and OFF run whatever the job's result.
+    assert 'GPU FWS power ack_idle=0x1 ack_off=0x1 state_idle=0x2 state_off=0x0 ' in output, output[-2500:]
+    assert 'GPU FWS stop result=0 phase=10 error=0 step=14 count=14 ' in output, output[-2500:]
+    assert calls.index('a733_gpu_platform_off_begin') < calls.index('a733_gpu_platform_supply_end') < \
+        calls.index('bb_power_park'), calls
+    if case in ('fj-board', 'fj-kick-word', 'fj-stats-event'):
+        assert state['exit_status'] == 0 and FWJ_COMPLETE in output, output[-2000:]
+    else:
+        assert state['exit_status'] is None and 'COMPLETE' not in output
     state['cycles'] = calls.count('a733_gpu_platform_off_begin')
     state['memory_flushes'] = state.pop('cache')
     return state
@@ -1238,10 +1374,11 @@ def main():
     p.add_argument('--probe-read', action='store_true', help='check the probe-read variant')
     p.add_argument('--fw-start', action='store_true', help='check the firmware-start variant')
     p.add_argument('--fw-stop', action='store_true', help='check the firmware-stop variant')
+    p.add_argument('--fw-job', action='store_true', help='check the first-job variant')
     p.add_argument('--board-log', type=Path,
                    help='with --fw-stop: reproduce this board kernel.log with the board firmware model instead')
     a = p.parse_args()
-    assert a.power_only + a.wrapper_read + a.probe_read + a.fw_start + a.fw_stop <= 1, 'choose one variant'
+    assert a.power_only + a.wrapper_read + a.probe_read + a.fw_start + a.fw_stop + a.fw_job <= 1, 'choose one variant'
     # The shared owner added delays_ready in existing padding. Reused objects
     # retain the old DWARF member list; consume the actual replacement owner's
     # layout, and verify every old member and the total size still agree.
@@ -1254,7 +1391,9 @@ def main():
     assert probe_image == a.probe_read, 'image variant does not match --probe-read'
     fws_image = bool(image.symbols.get('fws_rows', set()) - {0})
     stop_image = bool(image.symbols.get('fws_stop_run', set()) - {0})
-    assert fws_image == (a.fw_start or a.fw_stop) and stop_image == a.fw_stop, \
+    job_image = bool(image.symbols.get('job_backing', set()) - {0})
+    assert job_image == a.fw_job, 'image variant does not match --fw-job'
+    assert fws_image == (a.fw_start or a.fw_stop or a.fw_job) and stop_image == (a.fw_stop or a.fw_job), \
         'image variant does not match --fw-start or --fw-stop'
     assert identity == (not a.power_only and not a.wrapper_read and not a.probe_read and not fws_image), \
         'image variant does not match the options'
@@ -1298,19 +1437,22 @@ def main():
         cases = list(FWS_REASONS)
     if a.fw_stop:
         cases = list(FWX_REASONS)
+    if a.fw_job:
+        cases = list(FWJ_REASONS)
     if a.cases:
         assert set(a.cases) <= set(cases)
         cases = a.cases
     result = {'physical_access': False,
               'variant': ('power-only' if a.power_only else 'wrapper-read' if a.wrapper_read
                           else 'probe-read' if a.probe_read else 'fw-start' if a.fw_start
-                          else 'fw-stop' if a.fw_stop else 'identity'),
+                          else 'fw-stop' if a.fw_stop else 'fw-job' if a.fw_job else 'identity'),
               'scope': 'actual ELF client and ID access; modeled provider/power transitions',
               'image_sha256': hashlib.sha256(a.image.read_bytes()).hexdigest(),
               'cases': []}
     for case in cases:
         try:
-            result['cases'].append(run_fws(image, case, a.fw_stop) if a.fw_start or a.fw_stop else
+            result['cases'].append(run_fws(image, case, a.fw_stop or a.fw_job, False, a.fw_job)
+                                   if a.fw_start or a.fw_stop or a.fw_job else
                                    run(image, case, a.power_only, a.wrapper_read, a.probe_read))
         except Exception as error:
             result['failed_case'] = case

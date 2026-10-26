@@ -2043,7 +2043,6 @@
    "docs/designs/board-bundles-next.md",
    "docs/designs/board-bundles.md",
    "docs/designs/cpu-top-opp.md",
-   "docs/handoff.md",
    "docs/reference-backsolve-npu.md",
    "docs/vendor-firmware/action-plan.md"
   ],
@@ -7974,6 +7973,7 @@
  "pvr-cccb.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/gpu-first-job.md",
    "docs/gpu-cccb.md"
   ],
   "library": false,
