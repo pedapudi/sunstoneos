@@ -1,12 +1,19 @@
 # microSD UHS-I SDR104 qualification and read throughput
 
 Status: **not frozen**. The coordinator freezes the image, sessions and
-authority records after review. Nothing here has run. [The UHS-I
-design](../designs/sd-uhs.md) gives the sequence, its sources and the
-fallback rules.
+authority records after review. [The UHS-I design](../designs/sd-uhs.md) gives
+the sequence, its sources and the fallback rules. One lifetime has run: lifetime
+A on port 3-3 on 2026-10-25, through the supervised image, which stopped before
+any SD command ("How the result reaches the host").
 
-The test runs the supervised read-only SD service twice on one board, from the
-same image and card, with whole-board power removal before, between and after:
+On boards whose USB-C cable is their only power supply, the run uses the
+returning SD image (`apps/storage-read-returning/`, "The returning run"
+below): it reads the card, returns to the boot ROM and leaves its result in
+DRAM for FEL. The supervised image's result path needs a USB reconnect after
+every run, which on those boards removes power.
+
+The test reads the card twice on one board, from the same image and card,
+with whole-board power removal before, between and after:
 
 - **Lifetime A, before:** SD profile 2, four-bit high speed at 50 MHz and
   3.3 V. No SD command has yet run on either board, so this lifetime is also
@@ -136,12 +143,60 @@ the version request. For 59 s the original instance `003:051` stayed present
 with the same identity, so the image never made its USB0 disconnect. The
 report read then failed in `usb_bulk_send` with a timeout: the ROM's
 endpoints were still configured, but no code serviced them, so the launcher
-had not refused and the CPU had left the ROM. The image stopped or stalled
-after entry and before the takeover's disconnect: in startup, in the PMIC
-and supply checks, or in a takeover check that refused. Rank 9's first two
-returning USB images stopped at such checks and could report them because
-they returned to the ROM (`apps/usb-returning/README.md`). This record cannot
-tell where the image stopped.
+had not refused and the CPU had left the ROM. The image stopped after entry
+and before the takeover's disconnect.
+
+Its session supplied fabric words that the USB0 provider refuses, which
+explains the stop. Lifetime A's session template
+(`board-session-20261025-14/port-3-3/sd-bundle-A/session-template.bin`,
+offsets 488 and 500) holds `0x03000002`, `0xc3000000` and `0x81000000` at
+200, 600 and 600 MHz, copied from an unreviewed draft. Port 3-3 reads
+`0x03000002`, `0xc3000000` and `0x84000000` at CCU `0x500`, `0x580` and
+`0x588` (`board-session-20261023/port-3-3/r9-v4-capture`). Every provider's
+fabric check masks the second word with `0x8700001f`
+(`drivers/usb/a733_usb_platform.c`, `a733_usb_platform_init`;
+`drivers/storage/a733_mmc_platform.c`, `a733_mmc_platform_scopes`), and bit
+30 of `0xc3000000` falls outside that mask, so `a733_usb_platform_init`
+returns 0. The board application calls it through `a733_native_usb_bind`
+before the scheduler starts and, on that failure, calls
+`platform_panic("board bind", 6)` (`apps/board/main.c`), which stops the CPU
+in the monitor with the status in DRAM. The third word is also wrong: the
+board's MBUS parent is 400 MHz. The correct configuration is `0x03000002`,
+`0x83000000` and `0x84000000` at 200, 600 and 400 MHz, which the rank 9
+input used when it passed on port 3-3. This decoding comes from source and
+the session bytes; the image's own stop record was erased by the power
+removal.
+
+## The returning run
+
+The returning image (`apps/storage-read-returning/README.md`) identifies the
+card in the input's profile, runs the same read plan, records each read's
+time and CRC-32, parks the PMIC service and exits; the monitor returns to the
+ROM within its 2 s window. A stop also returns, with the provider's stage and
+fault in the log. `tools/storage-read-returning.py` signs the coordinator's
+approval for the lifetime, writes the image's input and decodes the result
+into the same throughput summary that the supervised checker computes.
+
+The return leaves the PF bank voltage selector, the SD controller and its
+clock untouched, and resets the PF0, PF1, PF3 and PF5 functions to the ROM
+JTAG route; the README gives the ROM analysis. Lifetime B therefore also uses
+the returning image: the card and the PF bank stay at 1.8 V until the
+whole-board power removal that ends the lifetime, and nothing else runs on the
+board before it.
+
+Each lifetime runs the cold DDR start, the cache-off helper and the survey,
+then:
+
+1. The coordinator signs the lifetime's approval:
+   `$PY $SR/tools/storage-read-returning.py sign --approval APPROVAL --ddr $S/DDR --survey $S/SURVEY --signer coordinator`.
+2. `$PY $SR/tools/storage-read-returning.py input --approval APPROVAL --request REQUEST --ddr $S/DDR --survey $S/SURVEY --config CONFIG --profile 2 --output $S/INPUT.bin`
+   (profile 3 for lifetime B). It refuses an approval not signed for this
+   DDR start and survey.
+3. The kernel runner, through the board queue:
+   `$PY $SR/tools/check-a733-kernel.py --fel $FEL --image IMAGE --mode kernel --ram-input $S/INPUT.bin --expect "COMPLETE SD0 returning read" --controlled CONTROLLED --return-timeout 5 --ddr-evidence $S/DDR/session.json --platform-survey $S/SURVEY/session.json --evidence $S/RUN`.
+4. `$PY $SR/tools/storage-read-returning.py decode --run $S/RUN --input $S/INPUT.bin --output $S/RUN/sd-result.json`.
+
+A prepared set gives these commands with every path filled in.
 
 
 ## Predictions
@@ -158,7 +213,7 @@ tell where the image stopped.
 | Sequential 4 KiB reads | 8.5–13.0 MB/s | 8.5–15.6 MB/s, at least lifetime A's |
 | Random 4 KiB reads | 6.0–7.9 MB/s | 6.0–8.9 MB/s, at least lifetime A's |
 | Per-block cost | 20.8–34 µs (bus floor 20.8 µs) | 14–34 µs (bus floor 6.9 µs) |
-| Sector digests | Reference | Identical to lifetime A for every planned read |
+| Sector digests | Reference | Identical to lifetime A for every planned read (CRC-32 per read in the returning run) |
 
 The clock rates describe register configuration and are not measured. A
 lifetime-B per-block cost equal to lifetime A's means programmed I/O bounds
