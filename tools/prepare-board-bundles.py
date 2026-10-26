@@ -823,7 +823,8 @@ ROWS = [
             'Step 6 of docs/designs/cpu-top-opp.md, first image: with cores 6 and 7 off, the driver raises DCDC3 to '
             '1,050 mV and CPU-B to 2,002 MHz, then DCDC5 to 1,000 mV and CPU-L to 1,794 MHz, then the DSU to '
             '1,274 MHz, and leaves all of them. The ROM return that follows resets the CPU PLLs and keeps the rails, '
-            'which bundle 26 reads back; the workload relocks the PLLs itself.', ('cpu-l-dsu-top-step',)),
+            'which bundle 26 reads back; the workload relocks the PLLs itself. Steps 1 to 5 passed on port 3-3 in '
+            'earlier lifetimes.', ()),
     opp_row('cpu-rails-held-read', 26, 'DCDC5 1,000 mV and DCDC3 1,050 mV after the ROM return, read only',
             'DCDC5 1000 mV and DCDC3 1050 mV kept across the ROM return, read only',
             'CPU-L before pll=0xf8802600 mux=0x3010000 mhz=494, CPU-B before pll=0xf8802700 mux=0x3000000 mhz=1014 '
