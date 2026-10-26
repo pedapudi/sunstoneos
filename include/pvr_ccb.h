@@ -84,6 +84,13 @@ enum pvr_ccb_result pvr_ccb_poll(struct pvr_ccb *, uint64_t now);
  * of an already recorded result remains available after failure, without I/O.
  */
 enum pvr_ccb_result pvr_ccb_collect(struct pvr_ccb *, struct pvr_ccb_token, uint32_t *status);
+/* Settle a command whose completion the caller established another way, as
+ * upstream judges a health check by the firmware's executed-command count
+ * (pvr_power.c, pvr_watchdog_kccb_stalled): OK with the return word when the
+ * firmware wrote one, OK with 0 when the last poll saw the firmware's read
+ * offset past the slot without a return word, AGAIN otherwise. Either OK
+ * frees the slot. Same refusals as collect. No device access. */
+enum pvr_ccb_result pvr_ccb_settle(struct pvr_ccb *, struct pvr_ccb_token, uint32_t *status);
 /* Consume at most one 88-byte firmware event. Output changes only on OK or
  * RESTART. Restart/page-fault requests latch FAILED and return RESTART with the
  * event. Other valid event IDs are delivered for service-level dispatch.

@@ -74,7 +74,7 @@ ADAPTER_FILES = {Path('drivers/power/a733_pmic_native.c'), Path('include/a733_pm
 # The only callers of the selector write, with the rail argument each call
 # may pass: the GPU platform writes DCDC4 before the GPU's first ON; the CPU
 # clock driver writes its domain's rail, DCDC3 or DCDC5; and the CPU
-# operating-point step images of board bundles 20 to 27 (docs/designs/cpu-top-opp.md)
+# operating-point step images of board bundles 20 to 24 and 30 to 32 (docs/designs/cpu-top-opp.md)
 # write DCDC3 alone, with CPU-B's clock held.
 WRITERS = {Path('drivers/gpu/a733_gpu_platform.c'): {'A733_RAIL_DCDC4'},
            Path('drivers/clock/a733_cpu_clock.c'): {'rail_of(c->cluster)'},

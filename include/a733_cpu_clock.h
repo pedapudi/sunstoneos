@@ -1,5 +1,6 @@
 #ifndef SUNSTONE_A733_CPU_CLOCK_H
 #define SUNSTONE_A733_CPU_CLOCK_H
+#include "a733_pll_lock.h"
 #include "a733_pmic.h"
 #include "a733_thermal.h"
 
@@ -118,8 +119,7 @@ struct a733_cpu_clock {
     uint64_t last_now, deadline, timer;
     uint32_t changes, applied_mhz[A733_CPU_DOMAINS], restore_mhz[2], target_mhz, from_uv, to_uv, select;
     unsigned state, after, cluster, n, p, selector, raise, thermal, failed, result, retained, critical;
-    unsigned locks;           /* Consecutive lock reads counted in the transition's lock wait. */
-    uint64_t lock_at;         /* Time of the last counted lock read. */
+    struct a733_pll_lock lock; /* The transition's lock reads (a733_pll_lock.h). */
     unsigned throttled;       /* Cluster bits lowered by THROTTLE, to restore at NORMAL. */
     unsigned throttle_failed; /* Cluster bits whose throttle lowering did not complete. */
     unsigned inherited;       /* Inspected cluster bits; thermal changes keep voltage and require grants. */

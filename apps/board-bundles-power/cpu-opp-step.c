@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Board bundles 20 to 27: the CPU operating-point steps of
+/* Board bundles 20 to 24 and 30 to 32: the CPU operating-point steps of
  * docs/designs/cpu-top-opp.md on the returning CPU0 image of bundle 15. Cores
  * 6 and 7 stay powered off. OPP_BUNDLE selects the step's plan:
  *
@@ -9,19 +9,22 @@
  *   23  step 4: CPU-B to 2002 MHz at 1050 mV, the DSU to 910 MHz, then the
  *       DSU to 598 MHz and CPU-B back to 1014 MHz at 800 mV;
  *   24  step 5: CPU-L to 1794 MHz at 1000 mV, then the DSU to 1274 MHz;
- *   25  step 6, first image: CPU-L 1794 MHz at 1000 mV and the DSU 1274 MHz,
+ *   30  step 6, first image: CPU-L 1794 MHz at 1000 mV and the DSU 1274 MHz,
  *       then DCDC3 1050 mV with CPU-B held at 1014 MHz; the rails stay for
  *       the ROM return;
- *   26  step 6, read-back before the workload: DCDC5 1000 mV and DCDC3
+ *   31  step 6, read-back before the workload: DCDC5 1000 mV and DCDC3
  *       1050 mV must have survived the ROM return, and the three domains
  *       must read the boot PLL and mux words; no write;
- *   27  step 6, read-back after the workload: temperatures, rails and the
+ *   32  step 6, read-back after the workload: temperatures, rails and the
  *       boot clock words, which the workload's own CPU-B lowering and the
  *       ROM return leave; no write.
  *
+ * Set step6-set-5 ran 30 to 32 as bundles 25 to 27, before the GPU and
+ * clock-audit rows took those numbers.
+ *
  * The FEL ROM's clock setup writes the CPU-L and DSU PLLs only: on each
  * return CPU-L and the DSU read 494 MHz again, but CPU-B keeps the PLL word
- * the last image left (board-session-cpu-top-opp-7, bundle 26). Every plan
+ * the last image left (board-session-cpu-top-opp-7, the bundle now numbered 31). Every plan
  * is admitted only with CPU-B at 1014 MHz and ends with it there, and a
  * DCDC3 write runs with the CPU-B clock lease held and CPU-B at 1014 MHz.
  *
@@ -103,20 +106,20 @@ static const struct plan plan = {"CPU-L 1794 MHz at 1000 mV and the DSU 1274 MHz
     1u << A733_CPU_LITTLE, {1794, 0}, 4,
     {{OP_RATE, 0, 0, 0}, {OP_CLOCK, A733_CPU_LITTLE, 1794, 1000}, {OP_RATE, 0, 0, 0},
      {OP_CLOCK, A733_CPU_DSU, 1274, 1000}}, {0, 0}};
-#elif OPP_BUNDLE == 25
+#elif OPP_BUNDLE == 30
 /* Step 6, before the workload: DCDC5 to 1000 mV through CPU-L's top point
  * and the DSU's, then DCDC3 to 1050 mV with CPU-B held at 1014 MHz. The ROM
- * return resets CPU-L and the DSU and keeps the rails, which bundle 26 reads
+ * return resets CPU-L and the DSU and keeps the rails, which bundle 31 reads
  * back; CPU-B, which the ROM does not reset, never leaves 1014 MHz here. */
 static const struct plan plan = {"CPU-L 1794 MHz and DCDC5 1000 mV, the DSU 1274 MHz, DCDC3 1050 mV with CPU-B at 1014 MHz",
     1u << A733_CPU_LITTLE, {1794, 0}, 3,
     {{OP_CLOCK, A733_CPU_LITTLE, 1794, 1000}, {OP_CLOCK, A733_CPU_DSU, 1274, 1000},
      {OP_VOLT, A733_CPU_BIG, 0, 1050}}, {0, 0}};
-#elif OPP_BUNDLE == 26 || OPP_BUNDLE == 27
+#elif OPP_BUNDLE == 31 || OPP_BUNDLE == 32
 /* Step 6 read-backs with no clock or PMIC write: DCDC5 1000 mV and DCDC3
  * 1050 mV kept across the ROM return, and the three domains at their boot
- * words, before the workload (26) and after it (27). */
-static const struct plan plan = {OPP_BUNDLE == 26 ? "DCDC5 1000 mV and DCDC3 1050 mV kept across the ROM return, read only"
+ * words, before the workload (31) and after it (32). */
+static const struct plan plan = {OPP_BUNDLE == 31 ? "DCDC5 1000 mV and DCDC3 1050 mV kept across the ROM return, read only"
                                                   : "temperatures, rails and boot clock words after the top-point workload, read only",
     0, {0, 0}, 0, {{OP_RATE, 0, 0, 0}}, {1000, 1050}};
 #else
@@ -585,9 +588,9 @@ static void client(void *unused)
         if ((cpu.words[d][0] & (3u << 29)) || (cpu.words[d][1] >> 31) || (cpu.words[d][2] >> 31))
             refuse("pattern or LFM enabled");
     }
-#if OPP_BUNDLE == 26 || OPP_BUNDLE == 27
+#if OPP_BUNDLE == 31 || OPP_BUNDLE == 32
     /* The boot words (bundle 14 on port 3-3): CPU-L and the DSU at 494 MHz,
-     * which the ROM return restores, and CPU-B at 1014 MHz, which bundle 25
+     * which the ROM return restores, and CPU-B at 1014 MHz, which bundle 30
      * never changes and the workload restores before its return. */
     static const uint32_t boot_words[A733_CPU_DOMAINS][2] = {
         {0xf8802600u, 0x03010000u}, {0xf8802700u, 0x03000000u}, {0xf8802600u, 0x03010105u}};

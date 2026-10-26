@@ -15,6 +15,14 @@
 #include "a733_gpu_memory.h"
 #include "a733_gpu_opp.h"
 #include "pvr_gpu_start.h"
+#ifdef FWS_JOB
+#ifndef FWS_STOP
+#error "the firmware-job variant extends the firmware-stop variant"
+#endif
+#endif
+#ifdef FWS_STOP
+#include "pvr_gpu_stop.h"
+#endif
 #include <string.h>
 
 void kernel_main(void);
@@ -43,9 +51,34 @@ void gpu_power_id_client(void *unused);
  *    firmware's own power-off handshake, which this image does not carry.
  *    The lifetime ends here; a power removal follows.
  * Every GPU, wrapper and SMC0 access is one 32-bit access, made after its
- * progress record and log line. */
+ * progress record and log line.
+ *
+ * Built with FWS_STOP (the firmware-stop variant), the client does not end
+ * at step 7. It then brings the firmware control up (the compatibility
+ * record and one health-check command through the kernel CCB), stops the
+ * firmware with the forced-idle and power-off requests and the vendor
+ * RGXStop register sequence (pvr_gpu_stop.c), powers the GPU off, ends its
+ * supply sample and parks the provider, so the lifetime can continue
+ * (docs/designs/gpu-firmware-stop.md). The started-word wait is then the
+ * vendor's 500 ms. */
 #define FWS_ON_US 200000u
+#ifdef FWS_STOP
+#define FWS_START_US 500000u   /* MAX_HW_TIME_US, rgx_sunxi/sysinfo.h:48 */
+#define FWS_CONTROL_US 200000u
+#define FWS_STOP_US 300000u
+/* Of the stop's 300 ms, the last 100 ms are kept for the stop without the
+ * firmware's acknowledgements (pvr_gpu_stop_init_unacknowledged). */
+#define FWS_HARD_US 100000u
+#else
 #define FWS_START_US 1000000u
+#define FWS_CONTROL_US 0u
+#define FWS_STOP_US 0u
+#endif
+#ifdef FWS_JOB
+#define FWS_JOB_US 200000u
+#else
+#define FWS_JOB_US 0u
+#endif
 #define FWS_REPORT_US 100000u
 #define MONITOR_DEADLINE_US 2000000u
 #define MONITOR_SLACK_US 500000u
@@ -60,7 +93,16 @@ void gpu_power_id_client(void *unused);
 #define FW_CODE_BYTES 102400u
 #define FW_DATA_BYTES 20480u
 #define FW_PAGES ((FW_CODE_BYTES + FW_DATA_BYTES + PVR_MIPS_TABLE_BYTES) / 4096u)
-#define NC_PAGES 45u
+/* The firmware's shared resources, then, in the firmware-job variant, the six
+ * firmware objects of the compute job. */
+#define NC_FW_PAGES 45u
+#ifdef FWS_JOB
+#define NC_PAGES (NC_FW_PAGES + 6u)
+#define FWS_OBJECTS (PVR_FW_RESOURCE_COUNT + 6u)
+#else
+#define NC_PAGES NC_FW_PAGES
+#define FWS_OBJECTS PVR_FW_RESOURCE_COUNT
+#endif
 
 enum fws_kind { FWS_READ, FWS_WRITE };
 struct fws_row { uint32_t address, value, kind; };
@@ -90,37 +132,82 @@ struct fws_time_corr { uint64_t os_ns, os_mono_ns, cr, k; uint32_t clock_hz, res
 _Static_assert(sizeof(struct fws_time_corr) == 40, "the firmware's timer-correlation record");
 
 static unsigned char fw_memory[FW_PAGES * 4096u] __attribute__((aligned(4096)));
-static uint64_t fw_pages[FW_PAGES], nc_pages[NC_PAGES];
+static uint64_t fw_pages[FW_PAGES], nc_pages[NC_FW_PAGES];
 static struct pvr_mips_buffer firmware_buffers[3], resources[PVR_FW_RESOURCE_COUNT];
-static struct pvr_mips_object mappings[PVR_FW_RESOURCE_COUNT];
+static struct pvr_mips_object mappings[FWS_OBJECTS];
 static struct pvr_mips_boot boot;
 static struct a733_gpu_memory memory;
 static struct pvr_ccb queue;
 static struct pvr_gpu_start start;
 static unsigned fws_done;
+#ifdef FWS_STOP
+static struct pvr_gpu_control control;
+static struct pvr_gpu_stop stop;
+/* The progress record's step: 100 + the stop's register step, or 200 + the
+ * control phase while the control or the stop handshake runs. */
+#define FWS_STEP_AFTER (stop.phase == PVR_GPU_STOP_REGISTERS ? (stop.unacknowledged ? 150u : 100u) + stop.index : \
+                        control.phase ? 200u + control.phase : 0u)
+#else
+#define FWS_STEP_AFTER 0u
+#endif
 extern unsigned char __uncached_pool_start[], __uncached_pool_end[];
 extern const unsigned char gpu_firmware[], gpu_firmware_end[];
 
 /* One 32-bit access, after its progress record and log line. */
+#ifdef FWS_STOP
+/* A read that repeats the previous read of the same register is a poll: it
+ * is named by the progress record only, and its value is printed only when it
+ * changes, so that a poll until a deadline cannot fill the log. */
+static uint32_t fws_last_address = UINT32_MAX, fws_last_value;
+static int fws_last_read;
+#define FWS_QUIET(address, write) (!(write) && fws_last_read && (address) == fws_last_address)
+#define FWS_CHANGED(value) ((value) != fws_last_value)
+#define FWS_REMEMBER(address, write, value) \
+    (fws_last_address = (address), fws_last_read = !(write), fws_last_value = (value))
+#else
+#define FWS_QUIET(address, write) 0
+#define FWS_CHANGED(value) 1
+#define FWS_REMEMBER(address, write, value) ((void)0)
+#endif
+#ifdef FWS_JOB
+/* The generic counter for the job session's times, one call so that the
+ * host model can supply it (docs/designs/gpu-job-session.md, "Timing"). */
+__attribute__((noinline)) static uint64_t fws_counter(void) { return counter(); }
+/* The counter just before the last MTS_SCHEDULE write: a job's kick time. */
+static uint64_t fws_mts_tick;
+#endif
 static uint32_t fws_access(uint32_t address, int write, uint32_t value)
 {
+    const int quiet = FWS_QUIET(address, write);
     FWS_PROGRESS->n = fws_done + 1;
     FWS_PROGRESS->address = address;
     FWS_PROGRESS->value = write ? value : 0;
-    FWS_PROGRESS->step = start.phase == PVR_GPU_START_RUNNING ? start.index + 1 : 0;
+    FWS_PROGRESS->step = start.phase == PVR_GPU_START_RUNNING ? start.index + 1 : FWS_STEP_AFTER;
     FWS_PROGRESS->stamp = counter();
     __asm__ volatile("dsb sy" ::: "memory");
     struct bb_line line;
-    bb_line_start(&line, write ? "GPU FWS writing" : "GPU FWS reading");
-    bb_line_dec(&line, "n", fws_done + 1); bb_line_hex(&line, "a", address);
-    if (write) bb_line_hex(&line, "v", value);
-    bb_line_end(&line); bb_power_print(&line);
+    if (!quiet) {
+        bb_line_start(&line, write ? "GPU FWS writing" : "GPU FWS reading");
+        bb_line_dec(&line, "n", fws_done + 1); bb_line_hex(&line, "a", address);
+        if (write) bb_line_hex(&line, "v", value);
+        bb_line_end(&line); bb_power_print(&line);
+    }
+#ifdef FWS_JOB
+    /* After the log line and the progress record are complete, so neither
+     * lies inside the job's time. */
+    if (write && address == GPU_BASE + 0xb00) {
+        __asm__ volatile("dsb sy" ::: "memory");
+        fws_mts_tick = fws_counter();
+    }
+#endif
     if (write) a733_mmio_write32_dsb_sy_both(address, value);
     else value = a733_mmio_read32_dsb_sy_both(address);
     FWS_PROGRESS->value = value;
     FWS_PROGRESS->count = ++fws_done;
     __asm__ volatile("dsb sy" ::: "memory");
-    if (!write) {
+    const int changed = !quiet || FWS_CHANGED(value);
+    FWS_REMEMBER(address, write, value);
+    if (!write && changed) {
         bb_line_start(&line, "GPU FWS");
         bb_line_dec(&line, "n", fws_done); bb_line_hex(&line, "v", value);
         bb_line_end(&line); bb_power_print(&line);
@@ -182,8 +269,18 @@ static int fws_started(void *context, uint32_t *value) { (void)context; return a
 static int fws_publish(void *context) { (void)context; return a733_gpu_memory_publish(&memory); }
 static int fws_kick(void *context, uint32_t offset, uint32_t value)
 {
-    (void)context; (void)offset; (void)value;
+    (void)context;
+#ifdef FWS_STOP
+    /* __MTSScheduleWrite (rgxfwutils.c:215-234): the GP kick, then a
+     * read-back so that the write reaches the register bank. */
+    if (offset != 0xb00 || value || memory.phase != A733_GPU_MEMORY_PUBLISHED) return 0;
+    (void)fws_access(GPU_BASE + offset, 1, value);
+    (void)fws_access(GPU_BASE + offset, 0, 0);
+    return 1;
+#else
+    (void)offset; (void)value;
     return 0; /* No command is submitted. */
+#endif
 }
 static const struct pvr_gpu_start_ops fws_ops = {fws_now, fws_read, fws_write, fws_started, fws_publish};
 static const struct pvr_ccb_ops queue_ops = {a733_gpu_memory_read, a733_gpu_memory_write,
@@ -198,6 +295,9 @@ static struct pvr_mips_buffer child(uintptr_t base, uint64_t *pages, size_t offs
 
 /* Identity-mapped buffers: the firmware's physical addresses are the CPU's.
  * a733_gpu_memory_init() checks each page's translation and attributes. */
+#ifdef FWS_JOB
+static int fws_job_prepare(uintptr_t nc, struct pvr_mips_object *objects);
+#endif
 static int fws_prepare(void)
 {
     const uintptr_t nc = (uintptr_t)__uncached_pool_start;
@@ -218,12 +318,15 @@ static int fws_prepare(void)
         resources[i] = child(nc, nc_pages, offset, n);
         offset += n;
     }
-    if (offset != NC_PAGES * 4096u || !a733_gpu_memory_init(&memory, firmware_buffers, resources)) return 0;
+    if (offset != NC_FW_PAGES * 4096u || !a733_gpu_memory_init(&memory, firmware_buffers, resources)) return 0;
     /* The pool holds whatever the previous image left in that DRAM. */
     memset((void *)nc, 0, NC_PAGES * 4096u);
     const struct pvr_fw_state_config config = {PVR_FW_A733_BVNC, A733_GPU_CORE_HZ, 1, 16};
     return pvr_fw_state_prepare(resources, &config, mappings) &&
-        pvr_mips_prepare(gpu_firmware, bytes, firmware_buffers, mappings, PVR_FW_RESOURCE_COUNT, &boot) &&
+#ifdef FWS_JOB
+        fws_job_prepare(nc + NC_FW_PAGES * 4096u, mappings + PVR_FW_RESOURCE_COUNT) &&
+#endif
+        pvr_mips_prepare(gpu_firmware, bytes, firmware_buffers, mappings, FWS_OBJECTS, &boot) &&
         pvr_gpu_start_init(&start, gpu_firmware, bytes, &boot, &fws_ops, NULL) && start.count == 29 &&
         pvr_ccb_init(&queue, &queue_ops, &memory, 1) == PVR_CCB_OK;
 }
@@ -259,6 +362,9 @@ static volatile uint32_t *shared_word(enum pvr_fw_resource r, size_t offset)
 {
     return (volatile uint32_t *)((uintptr_t)resources[r].storage.cpu + offset);
 }
+#ifdef FWS_JOB
+#include "fw-job.inc"
+#endif
 
 /* _RGXMakeTimeCorrData (rgxtimecorr.c:271-343): the CR timer, read again
  * when its bit-31 copy in bit 63 differs from bit 31, bits 47:0; then the
@@ -326,6 +432,253 @@ static void read_after(void)
     }
 }
 
+#ifdef FWS_STOP
+/* The stop callbacks admit only the access of the stop's current register
+ * step, on the core control, BIF status and SLC pages. */
+static int stop_current(uint32_t offset, uint32_t width)
+{
+    const struct pvr_gpu_stop_step *s = &stop.steps[stop.index];
+    const uint32_t page = offset >> 12;
+    return stop.phase == PVR_GPU_STOP_REGISTERS && stop.index < stop.count && s->offset == offset &&
+        s->width == width && (width == 4 || width == 8) && ((offset + width - 1) >> 12) == page &&
+        (page == 0 || page == 1 || page == 3);
+}
+/* The control reads the MIPS wrapper interrupt status and clears its event
+ * bit (RGXAckIrqMIPS, rgxinit.c:420-462); no other register. */
+static int control_read32(void *context, uint32_t offset, uint32_t *out)
+{
+    (void)context;
+    if (offset != 0x8a8) return 0;
+    *out = fws_access(GPU_BASE + offset, 0, 0);
+    return 1;
+}
+static int control_write32(void *context, uint32_t offset, uint32_t value)
+{
+    (void)context;
+    if (offset != 0x8b0 || value != 1) return 0;
+    (void)fws_access(GPU_BASE + offset, 1, value);
+    return 1;
+}
+static int control_compat(void *context, uint32_t offset, void *out, size_t bytes)
+{ (void)context; return a733_gpu_memory_compat(&memory, offset, out, bytes); }
+/* The executed kernel-command count, by which upstream judges a health
+ * check (pvr_power.c:150-185): on port 3-1 the firmware counted the health
+ * check executed without writing its return word
+ * (board-session-20261025-18, s18-gfx-run). */
+static int control_executed(void *context, uint32_t *out)
+{ (void)context; return a733_gpu_memory_executed(&memory, out); }
+static int stop_read(void *context, uint32_t offset, uint32_t width, uint64_t *out)
+{
+    (void)context;
+    if (!stop_current(offset, width)) return 0;
+    *out = width == 4 ? fws_access(GPU_BASE + offset, 0, 0) : gpu_read64(offset);
+    return 1;
+}
+static int stop_write(void *context, uint32_t offset, uint32_t width, uint64_t value)
+{
+    (void)context;
+    if (!stop_current(offset, width)) return 0;
+    /* The stop without acknowledgements ends with the full soft reset,
+     * written as the vendor writes a 64-bit register: low word first. */
+    if (stop.unacknowledged && offset == 0x100 && width == 8 && value == stop.steps[stop.index].value &&
+        stop.index + 1 == stop.count) {
+        gpu_write64(offset, value);
+        return 1;
+    }
+    if (width != 4 ||
+        !(((offset == 0xb40 || offset == 0xb30) && !value) || (offset == 0x8b0 && value == 1))) return 0;
+    (void)fws_access(GPU_BASE + offset, 1, (uint32_t)value);
+    return 1;
+}
+static int stop_sync_write(void *context, uint32_t value)
+{ (void)context; return a733_gpu_memory_sync_write(&memory, value); }
+/* The firmware's power state after each acknowledgement: FORCED_IDLE (2)
+ * after the forced-idle request, OFF (0) after the power-off request, which
+ * RGXPrePowerState requires before it stops the GPU (rgxpower.c:410-428). */
+static uint32_t fws_pow_state[2] = {UINT32_MAX, UINT32_MAX};
+static int stop_sync_read(void *context, uint32_t *out)
+{
+    (void)context;
+    uint32_t ack, state;
+    if (!a733_gpu_memory_sync_read(&memory, &ack)) return 0;
+    if (ack) {
+        const unsigned off = stop.phase == PVR_GPU_STOP_WAIT_OFF;
+        if (ack != 1 || (stop.phase != PVR_GPU_STOP_WAIT_IDLE && !off) ||
+            !a733_gpu_memory_power_state(&memory, &state)) return 0;
+        fws_pow_state[off] = state;
+        if (state != (off ? 0u : 2u)) return 0;
+    }
+    *out = ack;
+    return 1;
+}
+/* The stop's isolation is the platform OFF of the default path. */
+static int stop_isolate(void *context) { (void)context; return a733_gpu_platform_off_begin(&gpu, bb_power.deadline); }
+static int stop_isolate_poll(void *context) { (void)context; return a733_gpu_platform_off_poll(&gpu); }
+
+static void print_control(enum pvr_gpu_control_result result, uint64_t waited)
+{
+    const unsigned char *c = control.compatibility;
+    struct bb_line line;
+    bb_line_start(&line, "GPU FWS control");
+    bb_line_dec(&line, "result", result); bb_line_dec(&line, "phase", control.phase);
+    bb_line_dec(&line, "error", control.error); bb_line_dec(&line, "health", control.health_done);
+    bb_line_hex(&line, "health_status", control.health_status); bb_line_dec(&line, "waited_us", waited);
+    bb_line_end(&line); bb_power_print(&line);
+    bb_line_start(&line, "GPU FWS compat");
+    bb_line_hex(&line, "w0", (uint32_t)c[0] | (uint32_t)c[1] << 8 | (uint32_t)c[2] << 16 | (uint32_t)c[3] << 24);
+    bb_line_hex(&line, "w16", (uint32_t)c[16] | (uint32_t)c[17] << 8 | (uint32_t)c[18] << 16 | (uint32_t)c[19] << 24);
+    bb_line_hex(&line, "updated", c[56]);
+    bb_line_hex(&line, "kccb_done", *shared_word(PVR_FW_OS_DATA, 568));
+    bb_line_hex(&line, "pow_state", *shared_word(PVR_FW_SYSTEM_DATA, 8));
+    bb_line_end(&line); bb_power_print(&line);
+    /* The kernel CCB as the firmware left it: its read offset, the return
+     * word of the health check's slot and the executed count before it. */
+    bb_line_start(&line, "GPU FWS kccb");
+    bb_line_hex(&line, "write", *shared_word(PVR_FW_HOST_CONTROL, 0));
+    bb_line_hex(&line, "read", *shared_word(PVR_FW_HOST_CONTROL, 128));
+    bb_line_hex(&line, "rtn0", *shared_word(PVR_FW_RETURNS, 0));
+    bb_line_hex(&line, "executed_before", control.executed_before);
+    bb_line_hex(&line, "executed_after", control.executed_after);
+    bb_line_end(&line); bb_power_print(&line);
+}
+static void print_stop(enum pvr_gpu_stop_result result, uint64_t waited)
+{
+    struct bb_line line;
+    bb_line_start(&line, "GPU FWS stop");
+    bb_line_dec(&line, "result", result); bb_line_dec(&line, "phase", stop.phase);
+    bb_line_dec(&line, "error", stop.error); bb_line_dec(&line, "step", stop.index);
+    bb_line_dec(&line, "count", stop.count); bb_line_dec(&line, "waited_us", waited);
+    bb_line_dec(&line, "unacknowledged", stop.unacknowledged);
+    bb_line_end(&line); bb_power_print(&line);
+    bb_line_start(&line, "GPU FWS power");
+    bb_line_hex(&line, "ack_idle", stop.acknowledgement[0]); bb_line_hex(&line, "ack_off", stop.acknowledgement[1]);
+    bb_line_hex(&line, "state_idle", fws_pow_state[0]); bb_line_hex(&line, "state_off", fws_pow_state[1]);
+    bb_line_hex(&line, "status_idle", stop.command_status[0]); bb_line_hex(&line, "status_off", stop.command_status[1]);
+    bb_line_hex(&line, "irq", stop.irq_status); bb_line_dec(&line, "isolated", stop.isolation_observed);
+    bb_line_end(&line); bb_power_print(&line);
+    bb_line_start(&line, "GPU FWS after");
+    bb_line_hex(&line, "kccb_done", *shared_word(PVR_FW_OS_DATA, 568));
+    bb_line_hex(&line, "pow_state", *shared_word(PVR_FW_SYSTEM_DATA, 8));
+    bb_line_hex(&line, "kccb_read", *shared_word(PVR_FW_HOST_CONTROL, 128));
+    bb_line_hex(&line, "rtn1", *shared_word(PVR_FW_RETURNS, 4));
+    bb_line_hex(&line, "rtn2", *shared_word(PVR_FW_RETURNS, 8));
+    bb_line_end(&line); bb_power_print(&line);
+}
+/* After the OFF: the supply end and the provider park of the power-only
+ * client, each proved. */
+static void fws_park(void)
+{
+    int result;
+    gates_report();
+    off_proof();
+#ifdef FWS_JOB
+    const uint64_t begun = fws_counter();
+#endif
+    while ((result = a733_gpu_platform_supply_end(&gpu)) == 0) gpu_pause("GPU supply end deadline");
+    if (result != 1) gpu_fail("GPU supply end");
+    bb_power_park();
+    off_proof();
+    if (!atomic_load_explicit(&bb_power.parked, memory_order_acquire) ||
+        !a733_power_service_idle(&bb_power.domains)) bb_power_fail("GPU provider park proof");
+    for (unsigned i = 0; i < A733_PMIC_REQUESTS; ++i)
+        if (bb_power.pmic.slots[i].state || bb_power.pmic.slots[i].borrow.id)
+            bb_power_fail("GPU provider request retained");
+#ifdef FWS_JOB
+    struct bb_line line;
+    bb_line_start(&line, "GPU FWS park");
+    bb_line_dec(&line, "ticks", fws_counter() - begun);
+    bb_line_end(&line); bb_power_print(&line);
+#endif
+    before();
+}
+static _Noreturn void fws_stop_run(void)
+{
+#ifdef FWS_JOB
+    static const struct pvr_gpu_control_ops control_ops = {fws_now, control_read32, control_write32,
+                                                           control_compat, job_event};
+#else
+    static const struct pvr_gpu_control_ops control_ops = {fws_now, control_read32, control_write32,
+                                                           control_compat, NULL};
+#endif
+    static const struct pvr_gpu_stop_ops stop_ops = {fws_now, stop_read, stop_write, stop_sync_write,
+                                                     stop_sync_read, stop_isolate, stop_isolate_poll};
+    uint64_t begun = bb_power_now();
+    if (!pvr_gpu_control_init(&control, &start, &queue, &control_ops, NULL, begun + FWS_CONTROL_US) ||
+        !pvr_gpu_control_count_executed(&control, control_executed))
+        bb_power_fail("GPU firmware control refused, GPU left running");
+    enum pvr_gpu_control_result c;
+    while ((c = pvr_gpu_control_poll(&control, 4)) == PVR_GPU_CONTROL_AGAIN) vTaskDelay(1);
+    print_control(c, bb_power_now() - begun);
+    if (c != PVR_GPU_CONTROL_OK)
+        bb_power_fail("GPU firmware control: compatibility or health check not complete, GPU left running");
+#ifdef FWS_JOB
+    /* The job, then the stop and OFF whatever its result, so the lifetime
+     * survives when the firmware acknowledges its power-off. */
+    const int job_result = fws_job_run(bb_power_now() + FWS_JOB_US);
+#endif
+    begun = bb_power_now();
+    const size_t firmware_bytes = (size_t)(gpu_firmware_end - gpu_firmware);
+    enum pvr_gpu_stop_result s = PVR_GPU_STOP_INVALID;
+    if (pvr_gpu_stop_init(&stop, &control, gpu_firmware, firmware_bytes, &stop_ops, NULL,
+                          begun + FWS_STOP_US - FWS_HARD_US)) {
+        while ((s = pvr_gpu_stop_poll(&stop)) == PVR_GPU_STOP_AGAIN) vTaskDelay(1);
+        print_stop(s, bb_power_now() - begun);
+    }
+    if (s != PVR_GPU_STOP_OK && !stop.acknowledgement[1] && !stop.isolation_started) {
+        /* Neither power-off acknowledgement nor isolation: the control
+         * failed, or the firmware did not acknowledge a request. As
+         * upstream's hard reset (pvr_power.c:518-531): pvr_fw_stop's
+         * register sequence without the requests, then the OFF, admitted
+         * only when the control and its queue are latched failed. */
+        if (control.phase != PVR_GPU_CONTROL_FAILED) (void)pvr_gpu_control_abort(&control);
+        if (!pvr_gpu_stop_init_unacknowledged(&stop, &control, gpu_firmware, firmware_bytes, &stop_ops, NULL,
+                                              begun + FWS_STOP_US))
+            bb_power_fail("GPU firmware stop refused, GPU left running");
+        while ((s = pvr_gpu_stop_poll(&stop)) == PVR_GPU_STOP_AGAIN) vTaskDelay(1);
+        print_stop(s, bb_power_now() - begun);
+        if (s != PVR_GPU_STOP_OK)
+            bb_power_fail("GPU firmware stop: not acknowledged and the GPU not idle, GPU left powered");
+        fws_park();
+        bb_power_fail("GPU firmware stop: not acknowledged, idle checks met, GPU OFF and provider parked");
+    }
+    if (s != PVR_GPU_STOP_OK) {
+        /* The vendor powers the GPU off even when RGXStop fails after the
+         * firmware acknowledged the power-off (RGXFinalisePowerOff,
+         * rgxpower.c:333-341); before that acknowledgement the firmware
+         * may still run, and the GPU stays on. */
+        if (!stop.acknowledgement[1] || stop.isolation_started)
+            bb_power_fail("GPU firmware stop: not complete, GPU left powered");
+        int result;
+        if (!a733_gpu_platform_off_begin(&gpu, bb_power.deadline)) gpu_fail("GPU OFF begin");
+        while ((result = a733_gpu_platform_off_poll(&gpu)) == 0) gpu_pause("GPU OFF deadline");
+        if (result != 1) gpu_fail("GPU OFF poll");
+        fws_park();
+        bb_power_fail("GPU firmware stop: idle check not met after the power-off acknowledgement, "
+                      "GPU OFF and provider parked");
+    }
+    fws_park();
+#ifdef FWS_JOB
+#if FWS_JOBS > 1
+    if (job_result != 1) bb_power_fail("GPU job session: not complete, GPU OFF and provider parked");
+    if (job_cleanup_status != 1)
+        bb_power_fail("GPU job session: 8 jobs as computed, context cleanup not confirmed, GPU OFF and provider parked");
+    platform_puts("COMPLETE GPU job session: 8 jobs as computed, context cleaned up, firmware stopped, OFF and "
+                  "provider parked\n");
+#else
+    if (job_result != 1) bb_power_fail("GPU first job: not complete, GPU OFF and provider parked");
+    if (job_cleanup_status != 1)
+        bb_power_fail("GPU first job: 32 words as computed, context cleanup not confirmed, GPU OFF and provider parked");
+    platform_puts("COMPLETE GPU first job: 32 words as computed, context cleaned up, firmware stopped, OFF and "
+                  "provider parked\n");
+#endif
+#else
+    platform_puts("COMPLETE GPU firmware stop: started, health check executed, forced idle and power off "
+                  "acknowledged, idle, OFF and provider parked\n");
+#endif
+    platform_exit(0);
+}
+#endif
+
 void gpu_power_id_client(void *unused)
 {
     (void)unused;
@@ -368,7 +721,11 @@ void gpu_power_id_client(void *unused)
     if (result != 1) gpu_fail("GPU ON deadline");
     static const struct a733_mapping_rule read_write = {A733_MAPPING_READ_WRITE, 1,
         {{A733_MAIR_DEVICE_NGNRNE, A733_SH_ANY}}, 1, 1};
-    static const uintptr_t pages[] = {WRAPPER_PAGE, SMC0_PAGE, GPU_BASE, GPU_BASE + 0x3000, GPU_BASE + 0xa000};
+    static const uintptr_t pages[] = {WRAPPER_PAGE, SMC0_PAGE, GPU_BASE, GPU_BASE + 0x3000, GPU_BASE + 0xa000
+#ifdef FWS_STOP
+        , GPU_BASE + 0x1000 /* the stop's BIF status registers */
+#endif
+    };
     before();
     for (unsigned i = 0; i < sizeof(pages) / sizeof(*pages); ++i)
         if (!a733_mapping_check(aarch64_device_translate, pages[i], pages[i], &read_write))
@@ -380,11 +737,13 @@ void gpu_power_id_client(void *unused)
     if (identity != EXPECTED_BVNC)
         bb_power_fail("GPU firmware start: identity not 36.56.104.183, nothing written, GPU left powered");
 
-    /* The start begins only while its bound and the report fit before the
-     * session deadline, and its end keeps the monitor's 500 ms margin. */
+    /* The start begins only while its bound, the control and stop bounds of
+     * the stop variant and the report fit before the session deadline, and
+     * their end keeps the monitor's 500 ms margin. */
     const uint64_t now = bb_power_now(), start_deadline = now + FWS_START_US,
-        monitor_deadline = RESULT->start_counter / 24 + MONITOR_DEADLINE_US;
-    if (start_deadline + FWS_REPORT_US > bb_power.deadline || start_deadline + MONITOR_SLACK_US > monitor_deadline) {
+        monitor_deadline = RESULT->start_counter / 24 + MONITOR_DEADLINE_US,
+        last_deadline = start_deadline + FWS_CONTROL_US + FWS_JOB_US + FWS_STOP_US;
+    if (last_deadline + FWS_REPORT_US > bb_power.deadline || last_deadline + MONITOR_SLACK_US > monitor_deadline) {
         bb_line_start(&line, "GPU FWS refused");
         bb_line_dec(&line, "now_us", now); bb_line_dec(&line, "session_deadline_us", bb_power.deadline);
         bb_line_dec(&line, "monitor_deadline_us", monitor_deadline);
@@ -417,9 +776,13 @@ void gpu_power_id_client(void *unused)
     read_after();
     if (r != PVR_GPU_START_OK)
         bb_power_fail("GPU firmware start: started word not 1, GPU left running");
+#ifdef FWS_STOP
+    fws_stop_run();
+#else
     platform_puts("COMPLETE GPU firmware start: started word 1 after the timer record and the secure "
                   "configuration, GPU left running for the power removal\n");
     platform_exit(0);
+#endif
 }
 
 void kernel_main(void)

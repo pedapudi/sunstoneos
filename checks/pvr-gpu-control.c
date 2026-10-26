@@ -11,7 +11,7 @@ struct model {
     uint64_t now;
     unsigned calls, fail_at, queue_calls, irq, ack_count, irq_reads, handler_count;
     unsigned auto_complete, status, change_updated, fail_handler, arrive_on_ack;
-    unsigned irq_event_count;
+    unsigned irq_event_count, executed, executed_step, no_return;
     struct irq_event irq_events[128];
 };
 static struct model m;
@@ -45,7 +45,8 @@ static int kick(void *ctx,uint32_t reg,uint32_t value)
     for(unsigned i=4;i<88;++i)assert(m.memory[PVR_CCB_HOST_COMMANDS][slot*88+i]==0);
     if(m.auto_complete) {
         put(m.memory[PVR_CCB_HOST_CONTROL]+128,next,4);
-        put(m.memory[PVR_CCB_RETURNS]+slot*4,m.status,4); m.irq=1;
+        if(!m.no_return)put(m.memory[PVR_CCB_RETURNS]+slot*4,m.status,4);
+        m.executed+=m.executed_step; m.irq=1;
     }
     return 1;
 }
@@ -91,12 +92,14 @@ static int handle_event(void *ctx,const unsigned char *data)
     return !m.fail_handler;
 }
 static const struct pvr_gpu_control_ops ops={now,irq_read,irq_write,compat,handle_event};
+static int executed(void *ctx,uint32_t *value)
+{ assert(ctx==&m); if(!operation())return 0; *value=m.executed; return 1; }
 static void prepare(void)
 {
     memset(&m,0,sizeof(m)); memset(&q,0,sizeof(q)); memset(&control,0,sizeof(control));
     memset(&start,0,sizeof(start)); start.phase=PVR_GPU_START_BOOTED; start.last_now=100;
     assert(pvr_ccb_init(&q,&qops,&m,17)==PVR_CCB_OK);
-    m.calls=m.queue_calls=0; m.now=100; m.auto_complete=1; m.status=1;
+    m.calls=m.queue_calls=0; m.now=100; m.auto_complete=1; m.status=1; m.executed=7; m.executed_step=1;
     put(m.compat,3,4); put(m.compat+8,PVR_FW_A733_BVNC,8);
     put(m.compat+16,3,4); put(m.compat+24,PVR_FW_A733_BVNC,8);
     put(m.compat+32,0x12345678,4); put(m.compat+36,0x01020304,4);
@@ -214,5 +217,39 @@ int main(int argc,char **argv)
     assert(pvr_ccb_collect(&q,control.health_token,&status)==PVR_CCB_OK && status==1 && m.calls==calls);
     prepare(); struct pvr_gpu_control before=control;
     assert(!pvr_gpu_control_init(&control,&start,&q,&ops,&m,5000) && !memcmp(&before,&control,sizeof(control)));
-    printf("PASS GPU compatibility, bounded IRQ/event service, health completion, and %u retained-failure cases\n",faults);
+    /* The board's firmware (board-session-20261025-18): the health check is
+     * consumed and counted executed, and no return word is written. Waiting
+     * on the return word alone ends at the deadline, as on the board. */
+    prepare(); m.no_return=1;
+    for(unsigned i=0;i<30;++i) assert(pvr_gpu_control_poll(&control,4)==PVR_GPU_CONTROL_AGAIN);
+    assert(control.phase==PVR_GPU_CONTROL_WAIT_HEALTH && m.executed==8 && !control.health_done);
+    m.now=5000; assert(pvr_gpu_control_poll(&control,4)==PVR_GPU_CONTROL_FAULT); stopped(PVR_GPU_CONTROL_TIMEOUT);
+    /* With the executed count, the same firmware completes the health check
+     * with no return word, and the settled slot cannot be collected again. */
+    memset(&control,0,sizeof(control)); prepare(); memset(&control,0,sizeof(control));
+    assert(pvr_gpu_control_init(&control,&start,&q,&ops,&m,5000) && pvr_gpu_control_count_executed(&control,executed)); m.no_return=1;
+    assert(run()==PVR_GPU_CONTROL_OK && control.health_done && !control.health_status);
+    assert(control.executed_before==7 && control.executed_after==8);
+    assert(pvr_ccb_collect(&q,control.health_token,&status)==PVR_CCB_INVALID);
+    /* A return word, when the firmware writes one, is recorded. */
+    memset(&control,0,sizeof(control)); prepare(); memset(&control,0,sizeof(control));
+    assert(pvr_gpu_control_init(&control,&start,&q,&ops,&m,5000) && pvr_gpu_control_count_executed(&control,executed));
+    assert(run()==PVR_GPU_CONTROL_OK && control.health_status==1);
+    /* Two executions for one command, a bad return word, or a count without
+     * the read offset past the slot refuse or wait. */
+    memset(&control,0,sizeof(control)); prepare(); memset(&control,0,sizeof(control));
+    assert(pvr_gpu_control_init(&control,&start,&q,&ops,&m,5000) && pvr_gpu_control_count_executed(&control,executed)); m.executed_step=2;
+    assert(run()==PVR_GPU_CONTROL_FAULT); stopped(PVR_GPU_CONTROL_HEALTH);
+    memset(&control,0,sizeof(control)); prepare(); memset(&control,0,sizeof(control));
+    assert(pvr_gpu_control_init(&control,&start,&q,&ops,&m,5000) && pvr_gpu_control_count_executed(&control,executed)); m.status=3;
+    assert(run()==PVR_GPU_CONTROL_FAULT); stopped(PVR_GPU_CONTROL_HEALTH);
+    memset(&control,0,sizeof(control)); prepare(); memset(&control,0,sizeof(control));
+    assert(pvr_gpu_control_init(&control,&start,&q,&ops,&m,5000) && pvr_gpu_control_count_executed(&control,executed)); m.auto_complete=0;
+    for(unsigned i=0;i<10;++i) assert(pvr_gpu_control_poll(&control,4)==PVR_GPU_CONTROL_AGAIN);
+    m.executed=8; /* Counted, but the read offset has not passed the slot. */
+    for(unsigned i=0;i<10;++i) assert(pvr_gpu_control_poll(&control,4)==PVR_GPU_CONTROL_AGAIN);
+    assert(!control.health_done);
+    put(m.memory[PVR_CCB_HOST_CONTROL]+128,1,4);
+    assert(run()==PVR_GPU_CONTROL_OK && control.health_done && !control.health_status);
+    printf("PASS GPU compatibility, bounded IRQ/event service, health completion by return word or executed count, and %u retained-failure cases\n",faults);
 }

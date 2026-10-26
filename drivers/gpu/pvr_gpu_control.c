@@ -48,6 +48,12 @@ int pvr_gpu_control_init(struct pvr_gpu_control *s, const struct pvr_gpu_start *
     result.last_now = start->last_now; result.phase = PVR_GPU_CONTROL_COMPAT;
     *s = result; return 1;
 }
+int pvr_gpu_control_count_executed(struct pvr_gpu_control *s, int (*executed)(void *, uint32_t *))
+{
+    if (!s || !executed || s->phase != PVR_GPU_CONTROL_COMPAT || s->executed) return 0;
+    s->executed = executed;
+    return 1;
+}
 static int compatible(const unsigned char *b)
 {
     return b[56] == 1 && le(b, 4) == 3 && le(b + 16, 4) == 3 &&
@@ -108,12 +114,26 @@ enum pvr_gpu_control_result pvr_gpu_control_poll(struct pvr_gpu_control *s, unsi
         uint32_t type = PVR_CCB_HEALTH;
         for (unsigned i = 0; i < 4; ++i) command[i] = (unsigned char)(type >> (8 * i));
         if (!clock_now(s, &now)) return PVR_GPU_CONTROL_FAULT;
+        if (s->executed && !s->executed(s->context, &s->executed_before))
+            return fail(s, PVR_GPU_CONTROL_IO);
         enum pvr_ccb_result result = pvr_ccb_submit(s->queue, command, now, s->deadline, &s->health_token);
         if (result == PVR_CCB_AGAIN) return PVR_GPU_CONTROL_AGAIN;
         if (result != PVR_CCB_OK) return fail(s, PVR_GPU_CONTROL_QUEUE);
         s->phase = PVR_GPU_CONTROL_WAIT_HEALTH;
     } else if (s->phase == PVR_GPU_CONTROL_WAIT_HEALTH) {
-        if (!s->health_done) {
+        if (!s->health_done && s->executed) {
+            /* The firmware counts the command executed; its return word is
+             * optional (pvr_power.c sends the health check without a slot). */
+            if (!s->executed(s->context, &s->executed_after)) return fail(s, PVR_GPU_CONTROL_IO);
+            const uint32_t done = s->executed_after - s->executed_before;
+            if (done > 1) return fail(s, PVR_GPU_CONTROL_HEALTH);
+            if (!done) return PVR_GPU_CONTROL_AGAIN;
+            enum pvr_ccb_result result = pvr_ccb_settle(s->queue, s->health_token, &s->health_status);
+            if (result == PVR_CCB_AGAIN) return PVR_GPU_CONTROL_AGAIN;
+            if (result != PVR_CCB_OK) return fail(s, PVR_GPU_CONTROL_QUEUE);
+            if (s->health_status > 1) return fail(s, PVR_GPU_CONTROL_HEALTH);
+            s->health_done = 1;
+        } else if (!s->health_done) {
             enum pvr_ccb_result result = pvr_ccb_collect(s->queue, s->health_token, &s->health_status);
             if (result == PVR_CCB_AGAIN) return PVR_GPU_CONTROL_AGAIN;
             if (result != PVR_CCB_OK) return fail(s, PVR_GPU_CONTROL_QUEUE);

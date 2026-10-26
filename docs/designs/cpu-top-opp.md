@@ -579,6 +579,11 @@ in the runner's decoder.
 
 ## Step 6 passed on port 3-3
 
+This design and the step 6 sets name the step images bundles 25, 26 and
+27. In the tree they are now bundles 30, 31 and 32 (`OPP_BUNDLE`,
+`tools/prepare-board-bundles.py`), because bringup's GPU and clock-audit
+rows took 25 to 29; a later set prints the new numbers.
+
 Set `step6-set-5` ran in one fresh port 3-3 lifetime on 2026-10-25
 (`~/.cache/sunstoneos/evidence/board-session-cpu-top-opp-10/port-3-3/`),
 with the frozen binding of `bundle-deadline-top-5`:

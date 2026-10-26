@@ -40,6 +40,15 @@ Readiness requires command-executed status without cleanup-busy or poll-failure
 bits, followed by completion of the observed event backlog. A collected health
 result remains recorded across subsequent bounded event batches.
 
+A caller may instead have the health command judged by the firmware's executed
+kernel-command count (OS data +568), as upstream Linux judges it
+(`pvr_watchdog_kccb_stalled`), through `pvr_gpu_control_count_executed` before
+the compatibility record is accepted. The command then completes when the count
+has advanced by exactly one and the firmware's read offset has passed the
+command; `pvr_ccb_settle` frees its slot. A return word, when written, must be 1.
+On the A733 the open firmware counted the health command executed and left its
+return word 0 ([firmware stop design](designs/gpu-firmware-stop.md)).
+
 The caller supplies one absolute deadline covering compatibility publication and
 health completion. Expiry and clock regression stop the controller. A clock check
 before readiness prevents a late result from passing the deadline. The initial

@@ -24,6 +24,10 @@ NOTIFY=0x90f00010
 # enum a733_power_row_state and the generation mask (a733_power_domain_row.h).
 ROW_PENDING,ROW_ON,ROW_REFUSED,ROW_FAILED=1,2,4,5
 GENERATION_MASK=0xffffffff>>3
+# PERI0 gate enable and status as both boards read them (bb9-read): every
+# output's software and auto gate on. The pinned task model sets only the
+# 400 MHz output's gates; G2D's PERI0_300M parent also needs 2X, 600M and 300M.
+PERI0_GATES={0x02003908:0x8fff0fff,0x02003988:0x0fff0000}
 MMIO=[(0x02002000,0x2000),(0x07010000,0x1000),(0x07060000,0x2000),
       (0x07090000,0x1000),(0x03900000,0x20000),(0x05440000,0x40000)]
 PINS={'allocation-check.py':'f0f62a2c4d68a9f1446f34066f335d143c34cb55410fa65e46d2e446bb9ae2d9',
@@ -164,7 +168,7 @@ class Power(Task):
         self.phase='fresh-call-fork-from-row-request'
 
 try:
-    m=Power();m.pools();m.upload(raw,session);m.configure()
+    m=Power();m.pools();m.upload(raw,session);m.configure();m.regs.update(PERI0_GATES)
     assert m.call('a733_g2d_session_valid',m.base)==1
     preflight={'modeled':True,'physical_authority':False,'image':digest(a.image),'session':digest(a.session),
         'input':digest(a.input),'model_sources':PINS,'task_handle':m.task_handle,

@@ -4,7 +4,10 @@
 Usage: cpu-prepare.py --bundle BUNDLE --port PORT --survey CURRENT_SURVEY
                       --root-review REVIEW --continuity RECORD [--continuity RECORD]...
                       --output NEW_DIR
-No device access. This script binds the top-operating-point deadline profile
+No device access. "Bundle 26" below is the rails-and-boot-words read-back
+image, bundle 31 in the tree since bringup's GPU and clock-audit rows took 25
+to 29; set step6-set-5 ran it as bundle 26 with the frozen copy of this
+script from 5a334288. This script binds the top-operating-point deadline profile
 (docs/designs/cpu-top-opp.md, step 6) and is otherwise the refrozen
 cpu-prepare-22501205.py. A frozen workload bundle carries a byte-identical
 copy as cpu-prepare.py, with binding.json beside it: the source archive R,
@@ -126,7 +129,7 @@ if "top_opp" in manifest:
     # before it. Captures and reads without a kernel log may follow it.
     images = [Path(x) for x in a.continuity if (Path(x).parent / "kernel.log").is_file()]
     text = (images[-1].parent / "kernel.log").read_text(errors="replace") if images else ""
-    require("COMPLETE board bundle 26: DCDC5 1000 mV and DCDC3 1050 mV kept across the ROM return, read only" in text
+    require("COMPLETE board bundle 31: DCDC5 1000 mV and DCDC3 1050 mV kept across the ROM return, read only" in text
             and "SUPPLY dcdc5_uv=1000000 dcdc3_uv=1050000" in text,
             "The last image of the continuity records is not bundle 26's pass")
     b26 = read(images[-1])

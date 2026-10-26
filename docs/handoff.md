@@ -107,6 +107,129 @@ The image leaves the GPU running, so port 3-1 needs a power removal before
 its next run. Nothing from the firmware binary was used, only the open DDK
 host sources (`docs/designs/gpu-firmware-start.md`).
 
+**MBUS restore qualified on port 3-1** (set `board-bundles-20261025-mbus-qual-2`,
+`board-session-20261025-23/port-3-1`, branch `work/clock-audit-1025` at
+`4950b025`). After the cold DDR start, a FEL-written pattern (2 × 4 MiB) was
+laid down. The first kernel check passed with no `MBUS` line, since MBUS was
+still at boot0's 600 MHz. The second, after a ROM return, logged
+`MBUS 0x84000000 0x81000000 0`, so it restored 600 MHz from the SRAM window,
+and its kernel check passed. The pattern then read back unchanged. Port 3-3 then passed the same steps (`board-session-20261025-24/port-3-3`):
+the second kernel check logged `MBUS 0x84000000 0x81000000 0`, and the
+pattern verified. The full clock dump (`clock-audit-b`) matched all 49
+predicted words, including speed bin `0x496` (code 4); the decode is in
+`decoded-clocks.json`. The merge waits on row and index conflicts that are
+being resolved on the branch.
+
+**GPU firmware lifecycle passed on port 3-1** (set `board-bundles-20261025-23`,
+`board-session-20261025-20/port-3-1`, branch `work/gpu-fw-stop-1025`).
+After cold DDR and readiness, one image ran:
+- firmware start: started word 1 after 665 µs;
+- the compatibility check;
+- the health check, executed in 1.9 ms (executed count 0 to 1; the open
+  firmware writes no return word, so completion is judged by the count, as
+  upstream does);
+- forced idle and power-off, both acknowledged;
+- the 14-step stop, then OFF and provider park.
+
+The image returned to a responsive ROM with the GPU off, so a firmware run
+no longer needs a power removal. Set `board-bundles-20261025-25`
+(`board-session-20261025-22/port-3-1`) then ran the whole lifecycle twice in
+one lifetime with no power removal between, and both runs completed: the
+firmware restarts cleanly. `work/gpu-fw-stop-1025` is merged; its
+bundle row is now 25, while frozen sets 21 and 23 call it 20.
+
+**GPU eight-job session passed on port 3-1** (set `board-bundles-20261025-30`,
+`board-session-20261025-29/port-3-1`, record `s29-gjs-run`). One firmware
+session ran eight 32-lane jobs on one context, timed from the kick to the
+timeline word on the 24 MHz counter:
+- job 1 took 113 µs, including the MMU cache flush;
+- jobs 2 to 5, 7 and 8 took 80 to 83 µs each;
+- job 6, the first after the command ring wrapped, took 87 µs.
+
+All 32 output words matched, with no firmware events or resets. Cleanup and
+the stop were acknowledged, and the GPU powered off. Preparation took 1.45 ms
+and the eight jobs 2.39 ms in total.
+
+**CPU step 6 passed on port 3-3** (`board-session-cpu-top-opp-10/port-3-3`,
+set `step6-set-5`). In one lifetime, with an operator present:
+- bundle 25 raised CPU-L to 1794 MHz at 1000 mV and the DSU to 1274 MHz, and
+  set DCDC3 to 1050 mV with CPU-B kept at 1014 MHz;
+- bundle 26 read the boot words after the ROM return;
+- the workload relocked CPU-B to 2002 MHz, CPU-L and the DSU, and ran all
+  eight cores: 32 rounds each, 32 ticks on CPU0 and 33 SGIs on each
+  secondary. It powered the secondaries off, lowered CPU-B to 1014 MHz at
+  EL3, and returned with DRAM restored in 7 s;
+- bundle 27 read the three boot words and both rails afterwards, at 37 °C at
+  most.
+
+The background progress counts (about 2.66 million per A55 core and 3.27
+million per A76 core) were far above the predicted 300,000 and 260,000
+because the prediction scaled runs of the older native image `762237cd…`,
+whose core-ID read was a supervisor call. Against the same image `6fd7af86…`
+at the boot rates (`board-session-20261025-8`, 692,000 and 1,590,000), the
+counts rose 3.85 and 2.06 times for clock ratios of 3.63 and 1.97
+(`docs/designs/cpu-top-opp.md`, "Step 6 passed on port 3-3"). An earlier attempt
+(`board-session-cpu-top-opp-8`) stopped before launch because its binding
+compared the wrong hash kind; set 5 fixed it.
+
+**microSD set 28 on port 3-3.**
+- **Lifetime A passed** (`board-session-20261025-30`): high speed at 50 MHz, 4-bit, 3.3 V. All 256 reads completed and the card clock stopped on exit. Throughput was 1.4 to 1.7 MB/s, limited by per-request polling, and DMA is designed in `docs/designs/sd-dma.md` on `work/sd-returning-1025`.
+- **Lifetime B stopped** (`board-session-20261025-32`) at the CMD11 voltage switch, before any read, with `SD_REASON=3`, platform stage 13, and the card clock stopped by the module-clock fallback. Its diagnosis is pending.
+
+**Initialization-only DRAM capture, port 3-1** (`board-session-20261025-33`):
+boot0 initialized without training (result 7, 12,288 MiB, `dram_tpr13`
+0x10061, simple test FAIL, as predicted), and both SRAM captures completed
+five stages.
+
+**P-state-0-only DRAM capture, port 3-1** (`board-session-20261025-31`):
+training took 4,451 ms, 12,288 MiB, and both captures passed.
+
+**First GPU compute job passed on port 3-1** (set `board-bundles-20261025-29`,
+`board-session-20261025-28/port-3-1`, record `s27-gfj-run`). After the cold DDR
+start and provider readiness, one power-on did all of the following:
+- firmware start in 0.7 ms and the health check in 1.9 ms;
+- MMUCACHE, then one 32-lane compute job, with the timeline completed and all
+  32 output words equal to the formula;
+- no firmware events and no recovery records;
+- context cleanup, then the 14-step stop acknowledged in 23 ms, OFF and provider
+  park.
+
+The first attempt (set 27) faulted. The job's setup program stored each 64-bit
+pointer constant high word first, so the shader's first load went to address
+`0x80` and the firmware reset the context. A read-only FEL capture of the
+firmware memory identified the fault. Set 29 stores the constants low word first. A failed job now still
+ends with the GPU off: an unacknowledged stop runs upstream's hard reset.
+`work/gpu-first-job-1025` is merged; the job is bundle row 28.
+
+**P-state-0-only DRAM capture, port 3-3** (`board-session-20261025-25/port-3-3`,
+set `dram-training-capture-v5-20261025`, build `ddr-pstate0`): boot0 trained
+P-state 0 alone at 2040 MHz (result 7) in 4,441 ms, against about 5,090 ms
+for all four P-states, and reported 12,288 MiB, `dram_tpr13` 0x10061 and
+`dram_tpr10` 0x925f0000. Both read-only captures completed all six stages.
+This is the first reference lifetime of the restore design; its analysis is
+on `work/dram-fast-boot-1025`.
+
+**CPU step 6 stopped before the workload on port 3-3**
+(`board-session-cpu-top-opp-7/port-3-3`, set `step6-set-2`). Bundle 25 set
+CPU-B to 2002 MHz at 1050 mV, CPU-L to 1794 MHz at 1000 mV and the DSU to
+1274 MHz, with every temperature below 37 °C. After the ROM return, bundle 26
+read both rails held. It also read CPU-L and the DSU back at their 494 MHz
+boot words, but the CPU-B PLL still at 2002 MHz (`0xf8804d00`), so it
+refused as designed. **The FEL ROM return does not reset the CPU-B PLL.**
+Any image that lowers DCDC3 after a top-point bundle in the same lifetime
+must first reset or check the CPU-B PLL. The fix and the refreeze are on
+`work/cpu-top-opp-step6-1025`. Step 6 still needs an operator at the board.
+
+**Four-P-state DRAM capture, port 3-1** (`board-session-20261025-26/port-3-1`,
+v5 set): DDR passed with result 7 for all four P-states, 12,288 MiB and
+5,093 ms of training, and both captures passed. This is port 3-1's first
+capture lifetime.
+
+**DRAM training capture, port 3-3** (`board-session-20261025-21/port-3-3`,
+set `dram-training-capture-v3-20261025`): cold DDR (12,288 MiB), then two
+read-only captures, each with all six stages complete. This is the first
+lifetime of the capture plan.
+
 **CPU top operating points, steps 2–5 passed on port 3-3** (set
 `cpu-top-opp-20261025/steps2-5-set-r2`, `board-session-20261025-19/port-3-3`).
 In one lifetime, with CPU0 running and every other core off:

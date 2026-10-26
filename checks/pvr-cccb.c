@@ -116,6 +116,38 @@ static void reference_cases(void)
     assert(kicks==18);
     setup();begin(0);finish();assert(client.write==40 && get(ring+36)==0);
 }
+/* The eight-job session (docs/designs/gpu-job-session.md): each job is the
+ * 96-byte CDM command and the 8-byte timeline UPDATE, 184 bytes with their
+ * headers, with no cleanup controls. Five jobs fill 920 bytes; before the
+ * sixth the ring holds a padding command (type 221, size 64) at 920 and the
+ * sixth job starts at 0, as upstream writes it. */
+static void session_cases(void)
+{
+    setup();
+    for(unsigned n=0;n<8;++n) {
+        struct pvr_cccb_command cmds[]={command(96),{PVR_CCB_MAGIC|213u,8,0,0,payload}};
+        ref_control.read_offset=ref.write_offset;put(control+4,ref.write_offset);
+        assert(pvr_cccb_cmdseq_fits(&ref,184));
+        if(n==5) {
+            /* The firmware still at the start of job 5 (read offset 736):
+             * job 6 needs 184 bytes plus the 104 padded, and 839 are free,
+             * so the space check passes at once. Sequential jobs never wait
+             * for ring space; pressure_cases covers the wait. */
+            put(control+4,736);
+        }
+        assert(pvr_cccb_begin(&client,cmds,2,NULL,0,now+1000));
+        for(unsigned i=0;i<2;++i)pvr_cccb_write_command_with_header(&ref,cmds[i].type,cmds[i].bytes,
+            (void *)cmds[i].payload,cmds[i].external_reference,cmds[i].internal_reference);
+        finish();assert(client.status==1 && client.write==ref.write_offset);
+        assert(client.write==(n<5 ? 184u*(n+1) : 184u*(n-4)));
+        assert(!memcmp(ring+32,expected,1024) && get(last_kick+12)==client.write && get(last_kick+16)==1023);
+        if(n==5) {
+            assert(get(ring+32+920)==(PVR_CCB_MAGIC|221u) && get(ring+32+924)==64);
+            assert(get(ring+32)==(PVR_CCB_MAGIC|PVR_CCCB_TASK|205u) && get(ring+32+136)==(PVR_CCB_MAGIC|213u));
+        }
+    }
+    assert(kicks==8);
+}
 static void pressure_cases(void)
 {
     setup();begin(320);finish();begin(320);finish(); /* 720 bytes occupied. */
@@ -133,9 +165,14 @@ static void pressure_cases(void)
     for(unsigned i=0;i<127;++i) {uint32_t v;assert(pvr_ccb_collect(&queue,tokens[i],&v)==PVR_CCB_OK && v==1);}
     finish();assert(kicks==1 && writes==before);
     setup();hold_return=1;begin(24);until(PVR_CCCB_WAIT);
-    put(qmem[0]+128,get(qmem[0])); /* Read progress alone is not a return. */
     assert(tick()==PVR_CCCB_AGAIN && client.phase==PVR_CCCB_WAIT && kicks==1);
-    put(qmem[2],1);finish();assert(kicks==1);
+    put(qmem[2],1);finish();assert(kicks==1 && client.status==1);
+    /* The open firmware consumes a KICK without writing its return word
+     * (board-session-20261025-18): accepted with status 0 once the queue's
+     * poll, which each tick makes first, has sampled the read offset past it. */
+    setup();hold_return=1;begin(24);until(PVR_CCCB_WAIT);
+    put(qmem[0]+128,get(qmem[0]));
+    assert(tick()==PVR_CCCB_OK && kicks==1 && client.status==0 && client.phase==PVR_CCCB_IDLE);
 }
 static void failure_cases(void)
 {
@@ -182,6 +219,6 @@ static void refusal_cases(void)
 }
 int main(void)
 {
-    reference_cases();pressure_cases();failure_cases();refusal_cases();
-    puts("PASS GPU client commands: reference ring/KICK bytes, wrap, pressure, delayed return, retained faults and atomic refusals");
+    reference_cases();session_cases();pressure_cases();failure_cases();refusal_cases();
+    puts("PASS GPU client commands: reference ring/KICK bytes, wrap, the eight-job session wrap, pressure, delayed return, KICK consumed without a return word, retained faults and atomic refusals");
 }

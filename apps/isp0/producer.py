@@ -11,8 +11,14 @@ def preparation():
     spec=importlib.util.spec_from_file_location('isp0_producer_preparation',Path(__file__).with_name('prepare.py'))
     value=importlib.util.module_from_spec(spec);spec.loader.exec_module(value);return value
 
+# Sessions name MBUS at boot0's 600 MHz, which every EL3 entry restores (tools/vendor-mbus.py).
+def _vendor_mbus():
+    import importlib.util as u
+    s=u.spec_from_file_location('vendor_mbus',Path(__file__).resolve().parents[2]/'tools/vendor-mbus.py')
+    m=u.module_from_spec(s);s.loader.exec_module(m);return m
 
 def extend(board,source,*,owner,authority,client,initial,memory,electrical,supervision):
+    board=_vendor_mbus().board_session(board) if len(board)==592 else board
     prep=preparation()
     prep.input_check(source)
     if len(board)!=592 or not all(type(v) is int for v in (owner,authority,client)) or not (
