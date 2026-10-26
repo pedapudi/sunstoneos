@@ -67,7 +67,6 @@ does not establish recovery from a fault.
 | Work | Branch | Immediate deliverable |
 | --- | --- | --- |
 | GPU performance control | `work/resume-gpu-performance-1026` | Derive and review bounded runtime clock/voltage changes through existing owners and firmware notification |
-| Second camera connector | `work/resume-camera-stream-native-1026` | Bind the existing OV5640 application to CAM2 using authenticated port selection and existing TWI9/clock providers |
 | Maintenance backup DMA | `work/resume-maintenance-dma-1026` | Use the existing bounded DMA reader for larger backup requests while preserving single-sector writes and backup-first authority |
 
 Independent reviewers cover CPU/thermal/DRAM, accelerator operation and peripheral
@@ -355,8 +354,16 @@ be pruned.
   `~/.cache/sunstoneos/evidence/resume-camera-native-1025/final-snapshot/`.
   The [stop-source audit](camera-stop.md) establishes a parser final-frame
   boundary but leaves receiver, residual traffic and IOMMU retirement unresolved.
-  It changes no driver behavior or test evidence. No camera is attached; no
-  physical capture or drain is qualified.
+  It changes no driver behavior or test evidence. The native binding now selects
+  CAM1 or CAM2 from the authenticated clock mask, using the matching sensor bus,
+  pins, PHY and parser. The existing session format is unchanged. Focused native
+  still, rearm, stream and admission checks pass under
+  `camera-cam2-1026/final-snapshot/`. Modeled capture operations match across ports;
+  native code and read-only data grow by 419 bytes. Host image admission now
+  accepts the actual streaming initializer and requires defined executable
+  functions; actual streaming and preserved still images pass. No camera is
+  attached; electrical compatibility, physical images, coherence and drain
+  remain unqualified.
 - **Do not run GPU set `board-bundles-20261025-31`.** It repeats the qualified
   eight-job session with the older image, which lacks the shutdown on every
   failure path.

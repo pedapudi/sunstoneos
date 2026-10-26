@@ -2182,8 +2182,9 @@ to the stated scope:
   actual shared resources, TWI, frame allocations and device controllers. Ten
   focused cases pass; five native units and two existing embedding fixtures
   compile. Completed payload is copied into a CPU-owned destination while source
-  buffers, tables and hardware leases remain reserved. Complete image admission,
-  module electrical binding, physical DMA/coherence and drain, native use of
+  buffers, tables and hardware leases remain reserved. Image and session
+  admission are software-checked. Module electrical binding, physical DMA/coherence
+  and drain, native use of
   further modes and physical qualification remain outstanding.
   Repeated capture is **implemented**. The coordinator rearms a retained,
   readable capture into the same planes, mappings and leases with the sensor
@@ -2197,8 +2198,16 @@ to the stated scope:
   The coordinator records receiver and parser status before each sensor stop,
   so a board run can show whether stopping the sensor latches receiver errors.
   A TWI9 controller and an exclusive TWI9 clock scope are **implemented** for
-  the CAM2 sensor bus. No CAM2 binding exists: the camera boot record has no
-  port field, and receiver port 1 has no sourced deskew value.
+  the CAM2 sensor bus. The native binding now selects either connector from the
+  authenticated MCLK mask, without adding a boot-record field. It binds the
+  matching TWI controller, clock, pins, PHY and parser and rejects selector
+  mutation or reset-pin conflicts. Still, rearm, finite-stream and native/host
+  admission checks pass under `camera-cam2-1026/final-snapshot/`. Both ports have
+  identical modeled access/copy costs; native code and read-only data grow by
+  419 bytes. The host admits the actual streaming and preserved still ELFs using
+  defined executable function symbols. Connector-specific electrical and deskew
+  evidence remain required; the reference sensor node establishes routing, not
+  OV5640 module compatibility.
   No MIPI camera is connected; physical capture qualification awaits a module.
   Continuous capture is **implemented** in the [capture coordinator](camera-capture.md#continuous-capture-delivers-complete-ring-slots)
   for any UYVY or YUYV mode, whose size now reaches the receiver, VIPP and DMA.
@@ -2214,7 +2223,9 @@ to the stated scope:
   interval now opens immediately before the OV5640 frame-enable write.
   Focused host checks cover delayed setup, uncertain enable and callback
   reentry ([camera capture](camera-capture.md)). Address latching at frame start and frame-done timing need a
-  module; the native application does not stream yet. Live sensor frames do not reach ISP0: raw receiver input,
+  module. The native finite-stream application copies one completed NV16 frame
+  through USB, then retains hardware because packet and transaction drain remain
+  unproved. Live sensor frames do not reach ISP0: raw receiver input,
   parser-to-ISP0 routing and live ISP0 operation remain required.
   A separate [recorded-image ISP0 application](camera-isp0.md) now accepts one
   640×480 BGGR12 frame and produces an immutable copied NV16 frame through
