@@ -383,6 +383,14 @@ def main():
         frozen = tool.freeze_bundle(bundle, 1)
         tool.entry_check(frozen, target['identity'], target['port'])
         cases['complete-combined-frozen-entry'] = True
+        if cpu_clock:
+            top = clock_cases(raw, record, put, target, identities, prepare, refused, out, cases, gpu=True, top_only=True)
+            tool.entry_check(tool.freeze_bundle(top, 1), target['identity'], target['port'])
+            top_session = top / 'board/session.bin'
+            bound = bytearray(contract); bound[192:224] = hashlib.sha256(top_session.read_bytes()).digest()
+            bound_path = out / 'MODEL-contract-top.bin'; bound_path.write_bytes(bound)
+            assert admit(bound_path, armed + HZ // 10, top_session)
+            cases['complete-combined-top-frozen-and-native-entry'] = True
         for name,offset,fmt,value in (('firmware-owner',832,'Q',0x4f53475055464d31),
                 ('session-owner',832,'Q',0x4f534731),('pck-client',856,'I',7)):
             changed=bytearray(raw);struct.pack_into('<'+fmt,changed,offset,value)

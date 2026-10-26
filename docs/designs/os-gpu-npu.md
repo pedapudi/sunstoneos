@@ -5,31 +5,30 @@ workers, A76 admission, CPU clock grants, GPU linear dispatch and the selected
 ShuffleNetV2 NPU application. Performance commands remain off. The GPU uses
 its existing 1,008 MHz / 960 mV point; the NPU uses 852 MHz / 800 mV on the
 supported bins. The finite NPU application remains independent of Mimus.
-This design is based on source revision `6a945b30`; implementation and combined
-physical execution are not yet qualified.
+The software integration is implemented and checked with the complete native
+image. Combined physical execution remains unqualified.
 
-The [GPU eight-worker work](gpu-eight-workers.md) owns worker admission and
-readout. The combined-device change owns optional-device guards, native and
-host owner admission, asset placement and the complete session. The shared
-files are split by those branches and integrated sequentially. Existing
+[Eight-worker GPU recognition](gpu-eight-workers.md) supplies worker admission
+and joined CPU readout. Combined-device admission checks owner identities,
+asset placement and the complete session. Existing
 [accelerator composition](../accelerator-composition.md) establishes the
 provider-sharing pattern; it is a different application and memory layout.
 
 ## Concrete conflicts and changes
 
-| Current restriction or gap | Scoped change |
+| Integration requirement | Implementation |
 | --- | --- |
-| CMake and the link checker reject GPU plus NPU | Admit the combined supervised recorded profile; preserve unrelated device exclusions |
-| Supervised NPU plus CPU clocks requires PERF, while GPU rejects PERF | Permit ordinary CPU startup grants for the combined profile without adding performance commands |
-| GPU host admission assumes an 808- or 904-byte session | Derive 1,080 bytes with NPU and 1,176 with NPU plus the existing trailing CPU grant |
-| NPU admission does not reserve GPU identities | Reject NPU owner aliases with GPU firmware owner `0x4f53475055464d31` or session owner `0x4f534731`, and reject NPU PCK client 7 |
-| Supervised NPU payloads consume CODE | Use `.data.os_npu_assets` for all newly generated OS NPU payloads |
-| Actual NPU pointer/hash checking exists only in card preparation | Share that helper with supervised preparation and frozen validation |
+| Combined build and image admission | CMake and the link checker accept supervised recorded GPU plus NPU; unrelated device exclusions remain |
+| Ordinary CPU clock grants with both accelerators | The combined profile accepts startup grants without performance commands |
+| Complete session size | GPU host admission derives 1,080 bytes with NPU and 1,176 with NPU plus the existing trailing CPU grant |
+| Distinct accelerator identities | Native and host admission reject NPU owner aliases with GPU firmware owner `0x4f53475055464d31` or session owner `0x4f534731`, and reject NPU PCK client 7 |
+| Fixed executable mapping | All newly generated OS NPU payloads use `.data.os_npu_assets` |
+| Actual linked NPU asset authentication | Supervised preparation, frozen validation and card preparation share the pointer/hash helper |
 
 The identity checks run in [native session admission](../../apps/os/admission.c)
 before provider construction and in [host admission](../../apps/os/prepare.py).
-The existing GPU pre-provider guard also checks the NPU identity. Move the GPU
-constants into its existing `dispatch.h` interface to avoid divergent values.
+The existing GPU pre-provider guard also checks the NPU identity. The GPU
+constants reside in its existing `dispatch.h` interface.
 No session field, queue protocol, loader ABI or memory-manager abstraction is
 needed. GPU authority remains an external record bound to the image and
 supervised lifetime; the NPU retains its existing 272-byte session extension.
@@ -70,7 +69,7 @@ A startup rendezvous solely for that observation is outside production scope.
 
 ## Memory and scheduling budgets
 
-Keep the executable block `0x41000000..0x41200000`. ShuffleNet's 964,224-byte
+The executable block remains `0x41000000..0x41200000`. ShuffleNet's 964,224-byte
 model, 150,528-byte input and two-byte reference use initialized XN RAM from
 `0x41200000`; they remain const and 64-byte aligned. Their CPU mapping is
 writable, so immutability relies on trusted ownership. Authentication follows
@@ -87,10 +86,20 @@ read-only bytes. Its write-back pool ends at `0x41993000`, leaving 2,543,616
 bytes before the noncacheable pool. Allocated sections from the 19 NPU-only
 objects add 80,944 executable, 1,988 CODE read-only, 1,114,816 initialized-RAM
 and 140,490 BSS bytes. Six additional worker stacks and slots add 398,976 bytes.
-This predicts 1,331,768 CODE bytes and 889,334 bytes of RAM margin before
-alignment and changes in shared objects. These are planning estimates from
-accepted objects, not a combined link result. A final link must enforce both
-fixed boundaries; no executable-map or pool expansion is proposed.
+The planning estimate was 1,331,768 CODE bytes and 889,334 bytes of RAM margin
+before alignment and changes in shared objects. The actual combined image has
+1,138,848 bytes of `.text` and 194,057 bytes of `.rodata`. Its write-back pool
+ends at `0x41b27000`, leaving 888,832 bytes before the noncacheable pool. Both
+fixed boundaries remain enforced by the linker and image checker.
+
+Compared with the accepted eight-worker GPU+CPU image, allocated executable
+sections grow by 76,800 bytes, read-only sections by 1,888 bytes and writable
+sections by 1,254,144 bytes. The writable total includes pools, stacks, heap
+and padding. These costs add the existing NPU application, providers and
+1,114,754 payload bytes; `cost.json` records each linked object contribution.
+The combined guards run at admission and before GPU provider construction.
+Host preparation and frozen validation authenticate the linked NPU payload
+once per validation. Runtime service requests gain no hashing or copying.
 
 Recognition remains owner core 6 and worker core 7 at priority 3, with six A55
 workers at priority 2. GPU service priority 4 and IRQ95 remain on core 6.
@@ -113,13 +122,30 @@ retains its local stopped resources; GPU CLOSE does not release those leases.
 The NPU's immutable report, live atomic stopped proof and existing finite
 wait/deadline checks remain intact.
 
-Implementation validation is one combined eight-worker native build, actual
-linked layout/IRQ/start-list/payload checks, complete producer and frozen host
-admission, and focused native alias refusals. Shared-provider cases cover both
-rows active, independent healthy stop, shared-owner failure and retained
-engine failure without reclaiming the other engine's leases. Existing GPU
-arithmetic, NPU inference, thermal and CPU-readout evidence is reused. No old
-inference run or hardware access is part of this implementation.
+One combined eight-worker native build passed actual linked layout, IRQ,
+startup-list and payload checks. Fourteen host checks cover complete
+preparation, frozen entry, owner aliases, combined authority and payload
+tampering. Two further checks admit CPU TOP grants through preparation,
+frozen entry and native admission. Four checks execute the linked GPU startup
+guard, refusing aliases before provider construction and accepting distinct
+owners. One current shared-provider check observes both domain rows pending
+together, NPU local stop with retained tokens, and GPU shutdown in vendor
+order without disturbing NPU ownership. It passes with seven service steps,
+145 PPU reads, 13 PPU writes and 180 PMIC bus writes in the model. Historical
+failure cases retain their original source identities; the current case covers
+subsequent GPU gate/PPU and rail-verification changes. Existing GPU arithmetic,
+NPU inference, thermal and CPU-readout evidence is reused. No inference or
+hardware workload was replayed.
+
+Evidence is in `~/.cache/sunstoneos/evidence/concurrent-gpu-npu-1026`. The
+combined ELF SHA-256 is
+`b4d130c6b100aee263ba7e60218d86d6e89d7dd32898814a4bc0d4d98c96370c`.
+The complete compiler-input closure, generated payloads, models, tools,
+producer bundles and results are frozen with the existing snapshot tool.
+Nominal fixture records assert physical fields solely to exercise admission;
+they are labeled nondeployable and supply no board authority. An initial
+fixture failed on a malformed DWARF layout key before executing a case. Its
+log is retained; correcting that checker lookup required no image rebuild.
 
 Resident GPU-plus-NPU card operation remains a separate admission gap. Current
 card preparation rejects GPU, and supervised manual power-removal authority

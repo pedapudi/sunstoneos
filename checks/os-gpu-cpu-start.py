@@ -92,7 +92,7 @@ for case in cases:
             npu_owner = {'npu-firmware-owner':0x4f53475055464d31,'npu-session-owner':0x4f534731}.get(case,19)
             put(npu+image.layouts['os_npu_session']['owner'],npu_owner,8)
             put(npu+image.layouts['os_npu_session']['pck_client'],7 if case=='npu-pck-client' else 1)
-        offset = image.layouts['os_session']['cpu_clock'] + image.layouts['a733_cpu_clock_grant_record', 'os_npu_session']['owner']
+        offset = image.layouts['os_session']['cpu_clock'] + image.layouts['a733_cpu_clock_grant_record']['owner']
         put(0x80002000 + offset, owner, 8)
         put(image.address('os_recognizer'), 1, 8)
         uc.reg_write(UC_ARM64_REG_X0, 6)
