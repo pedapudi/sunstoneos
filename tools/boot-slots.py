@@ -153,6 +153,18 @@ def parse_extent(text):
     return {'first': first, 'blocks': blocks}
 
 
+def training_units(allocation):
+    """Return legacy or paired record ownership without guessing absent units."""
+    single, pair = allocation.get('training_record'), allocation.get('training_records')
+    if single is not None and pair is not None:
+        raise ValueError('Single and paired training-record allocations are mutually exclusive')
+    if pair is not None:
+        if not isinstance(pair, dict) or set(pair) != {'A', 'B'}:
+            raise ValueError('Training records must assign exactly copies A and B')
+        return pair
+    return {'single': single} if single is not None else {}
+
+
 def check_allocation(allocation, card_sectors, sector0):
     if (allocation.get('schema') != 1 or allocation.get('kind') != ALLOCATION_KIND
             or allocation.get('owner') != 'SunstoneOS'
@@ -171,16 +183,15 @@ def check_allocation(allocation, card_sectors, sector0):
     if overlaps(slots['A']['first'], slots['A']['blocks'], slots['B']['first'], slots['B']['blocks']):
         raise ValueError('Slots overlap')
     owned = list(slots.values())
-    record = allocation.get('training_record')
-    if record is not None:
+    for record in training_units(allocation).values():
         # The DRAM training record has one allocation unit of its own
         # (docs/designs/dram-training-restore.md).
         if (set(record) != {'first', 'blocks'} or record['first'] % ALLOCATION_UNIT
                 or record['blocks'] != ALLOCATION_UNIT or record['first'] < BOOT_AREA_SECTORS
                 or record['first'] + record['blocks'] > card_sectors):
             raise ValueError('The training record is not one allocation unit beyond the boot area')
-        if any(overlaps(record['first'], record['blocks'], s['first'], s['blocks']) for s in slots.values()):
-            raise ValueError('The training record overlaps a slot')
+        if any(overlaps(record['first'], record['blocks'], s['first'], s['blocks']) for s in owned):
+            raise ValueError('The training record overlaps a slot or another record')
         owned.append(record)
     for p in mbr_partitions(sector0) or []:
         if overlaps(p['first'], p['blocks'], 0, BOOT_AREA_SECTORS) or any(
@@ -205,6 +216,9 @@ def write_new(path, data):
 
 
 def allocate(args):
+    pair_a, pair_b = args.training_record_a, args.training_record_b
+    if bool(pair_a) != bool(pair_b) or (args.training_record and pair_a):
+        raise ValueError('Supply both training-record copies, or one legacy unit')
     fd, card_sectors = open_image(args.backup)
     try:
         sector0 = read_at(fd, 0, 1)
@@ -221,6 +235,7 @@ def allocate(args):
                   'card_sectors': card_sectors, 'headers': HEADER_SECTORS,
                   'slots': {'A': parse_extent(args.slot_a), 'B': parse_extent(args.slot_b)},
                   **({'training_record': parse_extent(args.training_record)} if args.training_record else {}),
+                  **({'training_records': {'A': parse_extent(pair_a), 'B': parse_extent(pair_b)}} if pair_a else {}),
                   'backup': {'bytes': card_sectors * SECTOR, 'sha256': digest.hexdigest()},
                   'mbr_sha256': sha(sector0),
                   'partition_table': 'mbr' if mbr_partitions(sector0) is not None else 'none'}
@@ -419,6 +434,8 @@ def main(argv=None):
     p.add_argument('--slot-b', required=True, metavar='FIRST:BLOCKS')
     p.add_argument('--training-record', metavar='FIRST:BLOCKS',
                    help='one allocation unit for the DRAM training record')
+    p.add_argument('--training-record-a', metavar='FIRST:BLOCKS', help='paired record copy A')
+    p.add_argument('--training-record-b', metavar='FIRST:BLOCKS', help='paired record copy B')
     p.add_argument('--output', required=True)
     p = sub.add_parser('plan', help='Prepare the standby slot without writing the image')
     p.add_argument('--allocation', required=True)

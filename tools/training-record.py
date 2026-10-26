@@ -215,7 +215,7 @@ def record_unit(slots, allocation_path, card_image):
         raise
 
 
-def write_plan(slots, output, raw, sectors, writes, fd):
+def write_plan(slots, output, raw, sectors, writes, fd, metadata=None):
     try:
         out = slots.new_directory(output)
         listed = []
@@ -229,9 +229,156 @@ def write_plan(slots, output, raw, sectors, writes, fd):
     finally:
         os.close(fd)
     result = {"schema": 1, "kind": PLAN_KIND, "card_sectors": sectors,
-              "allocation_sha256": slots.sha(raw), "writes": listed}
+              "allocation_sha256": slots.sha(raw), "writes": listed, **(metadata or {})}
     slots.write_new(out / "plan.json", (json.dumps(result, indent=2) + "\n").encode())
     return result
+
+
+def admit_restore(record, analysis, chip=None):
+    """Host equivalent of the existing fixed SRAM profile, before selection."""
+    spec = parse(record)
+    if len(record) > RECORD_LIMIT or len(record) != HEADER_SIZE + struct.unpack_from('<I', record, 16)[0]:
+        raise ValueError('Record exceeds the admitted SRAM geometry')
+    fields = {'boot0_checksum': 0x2fce7bb3, 'set_index': 5, 'strap_crc': 0xf874a6a5,
+              'temperature_mc': -2147483648, 'temperature_limit_mc': 0,
+              'step_value': 0x125f, 'size_mib': 12288}
+    if any(spec[k] != v for k, v in fields.items()):
+        raise ValueError('Record differs from the admitted restore identity')
+    phy = profile(analysis)
+    addresses = [r['base'] + 2*i for r in spec['runs'] for i in range(len(r['values']))]
+    expected = [PARAMETERS+128+2*i for i in range(40)] + [a for a, m in phy]
+    if (addresses != expected or len(spec['runs'][0]['values']) != 40
+            or spec['masks'] != [{'address': a, 'mask': m} for a, m in phy] or spec['mode_registers']):
+        raise ValueError('Record differs from the admitted address/mask profile')
+    board = 'chip-' + '-'.join(f'{v:08x}' for v in spec['chip_id'])
+    if board not in analysis['kind_diff']['per_board'] or (chip is not None and spec['chip_id'] != chip):
+        raise ValueError('Record belongs to another board')
+    if not spec['generation']:
+        raise ValueError('Record generation must be nonzero')
+    return spec
+
+
+def read_copy(slots, fd, unit):
+    """Read only the bounded bytes used for this copy's selection decision."""
+    header = slots.read_at(fd, unit['first'], 1)
+    guards = [{'first': unit['first'], 'blocks': 1, 'sha256': slots.sha(header)}]
+    try:
+        if crc(header[:124]) != struct.unpack_from('<I', header, 124)[0]:
+            raise ValueError('Header CRC mismatch')
+        if header[:8] != MAGIC or struct.unpack_from('<II', header, 8) != (VERSION, HEADER_SIZE):
+            raise ValueError('Unsupported record header')
+        length = struct.unpack_from('<I', header, 16)[0]
+        if not length or length > RECORD_LIMIT-HEADER_SIZE:
+            raise ValueError('Record exceeds the admitted SRAM geometry')
+        blocks = (length+SECTOR-1)//SECTOR
+        if blocks+1 > unit['blocks']:
+            raise ValueError('Record exceeds its allocation')
+        payload = slots.read_at(fd, unit['first']+1, blocks)
+        guards.append({'first': unit['first']+1, 'blocks': blocks, 'sha256': slots.sha(payload)})
+        record = header[:HEADER_SIZE] + payload[:length]
+        parsed = parse(record)
+        return {'status': 'valid', 'generation': parsed['generation'], '_record': record, '_spec': parsed, 'guards': guards}
+    except (ValueError, struct.error) as error:
+        return {'status': 'invalid', 'reason': str(error), 'guards': guards}
+
+
+def select_copies(slots, fd, units, analysis, reference):
+    if set(units) != {'A', 'B'}:
+        raise ValueError('Selection requires a paired training-record allocation')
+    target = admit_restore(reference, analysis)
+    copies = {name: read_copy(slots, fd, unit) for name, unit in units.items()}
+    for state in copies.values():
+        if state['status'] == 'valid':
+            try:
+                admit_restore(state['_record'], analysis, target['chip_id'])
+                state['status'] = 'eligible'
+            except ValueError as error:
+                state.update(status='ineligible', reason=str(error))
+    order = sorted((name for name in copies if copies[name]['status'] == 'eligible'),
+                   key=lambda name: (-copies[name]['generation'], name))
+    return {'selected': order[0] if order else None, 'action': 'restore' if order else 'full-training',
+            'copies': copies}
+
+
+def public_selection(selection):
+    return {**selection, 'copies': {name: {k:v for k,v in state.items() if not k.startswith('_')}
+                                   for name,state in selection['copies'].items()}}
+
+
+def paired_image(slots, allocation_path, card_image):
+    raw = Path(allocation_path).read_bytes()
+    allocation = json.loads(raw)
+    fd, sectors = slots.open_image(card_image)
+    try:
+        slots.check_allocation(allocation, sectors, slots.read_at(fd, 0, 1))
+        units = slots.training_units(allocation)
+        if set(units) != {'A', 'B'}:
+            raise ValueError('Operation requires a paired training-record allocation')
+        return raw, units, fd, sectors
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def plan_standby(slots, allocation_path, card_image, reference, analysis, output):
+    raw, units, fd, sectors = paired_image(slots, allocation_path, card_image)
+    try:
+        desired = admit_restore(reference, analysis)
+        selected = select_copies(slots, fd, units, analysis, reference)
+        for state in selected['copies'].values():
+            if '_record' in state:
+                try:
+                    other = admit_restore(state['_record'], analysis)
+                except ValueError:
+                    continue
+                if other['chip_id'] != desired['chip_id']:
+                    raise ValueError('A valid allocated copy belongs to another board')
+        active = selected['selected']
+        if active:
+            current = selected['copies'][active]['_spec']
+            if {k:v for k,v in current.items() if k != 'generation'} == {k:v for k,v in desired.items() if k != 'generation'}:
+                raise ValueError('Selected copy already holds this record; resume the existing plan')
+        generation = max((state['generation'] for state in selected['copies'].values()
+                          if state['status'] == 'eligible'), default=0) + 1
+        if generation > 0xffffffffffffffff:
+            raise ValueError('Record generation is exhausted')
+        target = 'B' if active == 'A' else 'A'
+        other = 'B' if target == 'A' else 'A'
+        desired['generation'] = generation
+        record = build(desired)
+        unit = units[target]
+        writes = [(f'record-{target}-payload', unit['first']+1, record[HEADER_SIZE:]),
+                  (f'record-{target}-header', unit['first'], record[:HEADER_SIZE])]
+        metadata = {'record_copy': target, 'generation': generation, 'before': public_selection(selected),
+                    'guards': selected['copies'][other]['guards'], 'restore_set_sha256': RESTORE_SET_SHA256,
+                    'reference_sha256': slots.sha(reference)}
+    except BaseException:
+        os.close(fd)
+        raise
+    return write_plan(slots, output, raw, sectors, writes, fd, metadata)
+
+
+def validate_standby_plan(slots, plan, units, fd, directory):
+    """Bind every inspected non-target byte and require header-last geometry."""
+    target = plan.get('record_copy')
+    if set(units) != {'A', 'B'} or target not in units or plan.get('restore_set_sha256') != RESTORE_SET_SHA256:
+        raise ValueError('Not a paired restore-profile plan')
+    other = 'B' if target == 'A' else 'A'
+    if plan.get('guards') != read_copy(slots, fd, units[other])['guards']:
+        raise ValueError('Non-target training record changed since selection')
+    writes = plan['writes']
+    if [w['name'] for w in writes] != [f'record-{target}-payload', f'record-{target}-header']:
+        raise ValueError('Paired record plan must write payload then header')
+    payload, header = [Path(directory, w['file']).read_bytes() for w in writes]
+    if (writes[0]['first_sector'] != units[target]['first']+1
+            or writes[1]['first_sector'] != units[target]['first'] or len(header) != SECTOR):
+        raise ValueError('Paired record plan has invalid header/payload placement')
+    length = struct.unpack_from('<I', header, 16)[0]
+    if len(payload) != (length+SECTOR-1)//SECTOR*SECTOR or length > RECORD_LIMIT-HEADER_SIZE:
+        raise ValueError('Paired record payload exceeds its profile')
+    spec = parse(header[:HEADER_SIZE] + payload[:length])
+    if spec['generation'] != plan.get('generation') or not spec['generation']:
+        raise ValueError('Paired record generation differs from its plan')
 
 
 def main(argv=None):
@@ -246,6 +393,12 @@ def main(argv=None):
     for option in ("capture", "restore-set", "boot0", "output"):
         p.add_argument("--" + option, type=Path, required=True)
     p.add_argument("--generation", type=int, required=True)
+    for name in ('select', 'plan-standby'):
+        p = sub.add_parser(name)
+        for option in ('allocation', 'card-image', 'restore-set', 'record'):
+            p.add_argument('--'+option, type=Path, required=True)
+        if name == 'plan-standby':
+            p.add_argument('--output', type=Path, required=True)
     for name in ("plan", "invalidate"):
         p = sub.add_parser(name)
         if name == "plan":
@@ -266,6 +419,18 @@ def main(argv=None):
             result = {"bytes": len(record), "crc": crc(record)}
         elif args.command == "parse":
             result = parse(args.record.read_bytes())
+        elif args.command in ('select', 'plan-standby'):
+            slots = boot_slots()
+            analysis = restore_set(args.restore_set)
+            reference = args.record.read_bytes()
+            if args.command == 'plan-standby':
+                result = plan_standby(slots, args.allocation, args.card_image, reference, analysis, args.output)
+            else:
+                raw, units, fd, sectors = paired_image(slots, args.allocation, args.card_image)
+                try:
+                    result = public_selection(select_copies(slots, fd, units, analysis, reference))
+                finally:
+                    os.close(fd)
         else:
             slots = boot_slots()
             raw, unit, fd, sectors = record_unit(slots, args.allocation, args.card_image)
