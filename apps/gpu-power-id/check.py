@@ -1058,7 +1058,7 @@ def check_fwx(u, image, state, case, timer_reads):
         # never came, so no register of the stop was touched and the GPU stays on.
         assert state['commands'] == [[115, 0, 0], [107, 2, 1], [107, 1, 1]] and not stop_accesses, state['commands']
         assert 'GPU FWS stop result=3 phase=11 ' in output and 'ack_off=0x0 ' in output, output[-2500:]
-    state['cycles'] = 0
+    state['cycles'] = calls.count('a733_gpu_platform_off_begin')
     state['memory_flushes'] = state.pop('cache')
     return state
 
@@ -1128,7 +1128,7 @@ def check_fws(u, image, state, case, timer_reads):
     else:
         assert state['exit_status'] is None and 'COMPLETE' not in output
     assert state['snapshot_reads'] == SNAPSHOT * (0 if case == 'fs-memory' else 2), len(state['snapshot_reads'])
-    state['cycles'] = calls.count('a733_gpu_platform_off_begin')
+    state['cycles'] = 0
     state['memory_flushes'] = state.pop('cache')
     return state
 
