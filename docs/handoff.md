@@ -60,14 +60,14 @@ does not establish recovery from a fault.
 
 | Work | Branch | Immediate deliverable |
 | --- | --- | --- |
-| GPU failure recovery | `work/gpu-job-session-1025` | Correct the rejected reset/OFF path; retain power and ownership when idle cannot be proved |
-| CPU returning image | `work/resume-cpu-return-1025` | Fit the workload overlay within its reservation and prepare safe clock/rail restoration |
+| CPU returning image | `work/resume-cpu-return-1025` | Restore both supply rails after verified successful clock lowering |
 | OS thermal protection | `work/resume-thermal-1025` | Admit and enforce the qualification session's 70 °C CPU stop |
-| NPU lifecycle | `work/resume-npu-lifecycle-1025` | Bound interrupt-route waits without releasing uncertain ownership |
 | GPU exact-sum application | `work/resume-gpu-application-1025` | Connect the existing mimus kernel to the demonstrated job path and compare exact outputs |
 | DRAM restoration | `work/resume-dram-restore-1025` | Build the capture-derived record and SRAM restore path with failure checks |
+| Radio startup | `work/resume-radio-native-1025` | Compose the native SDIO diagnostic with explicit pin, supply and inherited-state authority |
+| Continuous camera capture | `work/resume-camera-native-1025` | Bind the existing stream coordinator to native buffers and per-slot synchronization |
 
-Two independent reviewers cover CPU/thermal/DRAM and GPU/NPU respectively.
+Three independent reviewers cover CPU/thermal/DRAM, GPU/NPU, and radio/camera.
 Workers own separate source paths, reuse successful evidence and submit focused
 checks. The coordinator integrates changes, updates this handoff and the hardware
 matrix, and pushes reviewed results. The microSD merge remains a separate ongoing
@@ -105,6 +105,15 @@ be pruned.
   `~/.cache/sunstoneos/evidence/gpu-recovery-20261025/`.
   Physical failure recovery remains unqualified. A retained failure ends GPU
   use for that powered lifetime; it does not establish reusable GPU state.
+- **NPU interrupt waits are bounded in software.** Pending mask, rearm and
+  stop callbacks expire after 10 ms plus one scheduler tick, observed on the
+  next worker pass. Expiry retains resources; it does not prove hardware drain.
+  Immediate successful callbacks add no timer or MMIO reads. Twelve focused
+  FreeRTOS/QEMU cases and the selected integration build pass under
+  `~/.cache/sunstoneos/evidence/resume-npu-lifecycle-1025/` and
+  `~/.cache/sunstoneos/build/gate-resume-npu-lifecycle-1025/`.
+  Physical faults, thermal response, in-place restart and domain OFF remain
+  unqualified.
 - **Do not run GPU set `board-bundles-20261025-31`.** It repeats the qualified
   eight-job session with the older image, which lacks the shutdown on every
   failure path.
