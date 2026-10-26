@@ -1,9 +1,11 @@
 # Design: restoring DRAM training from a record on the microSD card
 
-Status: **design, reviewed once; restore not implemented.** The independent
-review of 2026-10-25 found two blocking and six major issues, and this text
-includes the changes it proposed; it needs a second review before any board
-run beyond the read-only captures. Implemented and host-checked: the capture
+Status: **design, reviewed twice; restore not implemented.** The first
+independent review of 2026-10-25 found two blocking and six major issues;
+the second review found the blocking issues resolved, closed the gate for
+the P-state-0-only and initialization-only capture runs, and raised the
+RTC-flag loop and cache findings that this text now resolves. The restore
+prototype needs its own review once the captures are analysed. Implemented and host-checked: the capture
 tooling and its classifier, the record format (`tools/training-record.py`)
 and the card region in the boot-slot allocation and `tools/storage-update.py`
 (`checks/training-record.py`). The restore hook follows that review and the

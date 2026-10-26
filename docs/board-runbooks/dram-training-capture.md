@@ -178,11 +178,12 @@ other fields than the design assumes; record it and continue.
 
 ## P-state-0-only and initialization-only captures
 
-**Gate:** these change boot0's training input. The second independent
-review (2026-10-25) closed the gate for the P-state-0-only run. It kept it
-open for the initialization-only run until its capture moved out of
-untrained DRAM; the SRAM capture build below does that and needs the
-reviewer's short re-check before it runs. Each run uses a fresh lifetime;
+**Gate: closed for both runs.** These change boot0's training input. The
+second independent review (2026-10-25) closed the gate for the
+P-state-0-only run, and its re-check at `a1caa6f3` closed it for the
+initialization-only run once its capture moved out of untrained DRAM into
+the SRAM build, after confirming that `0x4a000`–`0x5f9a4` is unused by the
+ROM, `sunxi-fel` and the capture after the wrapper returns. Each run uses a fresh lifetime;
 the commands differ from the four-P-state ones only as listed.
 
 - **P-state 0 only** (three lifetimes per board): step 1 uses
@@ -210,9 +211,8 @@ the commands differ from the four-P-state ones only as listed.
   `--build $C/capture-sram --ddr-evidence $S/in-ddr`. The SRAM build keeps
   its tables at `0x4a000` and results at `0x4b000`–`0x5f9a4`, in boot0's
   body area, which is free after the wrapper returns, and omits stage 6.
-  *Predictions:* the wrapper returns to FEL with stage 5, or does not
-  return; a return that the host's 30 s limit does not see stops the
-  session with quarantine. With firmware result 7, the log shows
+  *Predictions:* the wrapper returns to FEL with stage 5; if it does not
+  return within the host's 30 s limit, the session stops with quarantine. With firmware result 7, the log shows
   `Actual DRAM SIZE =12288 M`, `dram_tpr13 = 10061` and most likely
   `DRAM simple test FAIL… read 10 times again`; `dram_mib` is 0 and
   `dram_tpr10` reads `0x80010000` (bit 29 cleared at `0x49c9a`). With any
