@@ -12,8 +12,12 @@ a manual USB reconnect, removes power and erases any result still in DRAM.
 The image runs on the returning platform: the EL3 monitor, EL1 platform and
 FreeRTOS kernel of the rank 9 native USB image (`rank-9-usb-v4`), with the
 monitor and platform objects of the kernel check that passed on port 3-3 with
-the vendor EL3 security writes (`build.py` lists each object's origin). Two
-tasks run on core 0:
+the vendor EL3 security writes and the MBUS restore (`build.py` lists each
+object's origin). Before EL1 starts, that monitor changes the MBUS clock word
+from the ROM's `0x84000000` (400 MHz) to boot0's `0x81000000` (600 MHz) when
+no bus master is active, and logs `MBUS <before> <after> <result>` as the
+first line of the result page (`include/a733_el3_mbus.h`). Two tasks run on
+core 0:
 
 - The PMIC task polls the production PMIC provider until the SD task asks it
   to park.
@@ -21,18 +25,39 @@ tasks run on core 0:
   production clock, pin and rail providers. It identifies the card in the
   input's profile and runs the input's read plan. For each read it records the
   time from the first poll after submission to completion, and the CRC-32 of
-  the data. It then parks the PMIC task, checks that no PMIC request, rail
+  the data. It then asks the PMIC task to park and waits for it until the end
+  deadline, checks that the park happened and that no PMIC request, rail
   borrow or register lock is outstanding, stops the card clock, writes its
   report and exits.
 
-The image stops the card clock on every exit after the SD task, including a
-stop or window expiry in the middle of a read: it clears the card clock
-enable (CLKCR bit 16) and applies it with one clock-update command. A card
-interrupted mid-read then stops clocking data onto DAT1 and DAT2, which the
-ROM's return turns into the JTAG TMS and TCK inputs. After a provider fault
-the provider keeps its register lock retained, so this last step writes the
-controller directly; by then the PMIC task has parked and no other code
-runs.
+**Card clock stop.** Every exit that the image makes itself after the SD
+task, including a stop or window expiry in the middle of a read, stops the
+card clock first, so that a card interrupted mid-read stops clocking data
+onto DAT1 and DAT2, which the ROM's return turns into the JTAG TMS and TCK
+inputs. The steps follow the vendor driver (`sunxi-mmc-v5p3x.c`,
+`__sunxi_mmc_do_oclk_onoff`, and its FIFO and DMA interface resets):
+
+1. If a read is outstanding, or a command or the data state machine is
+   busy, reset the FIFO and the DMA interface and wait for the reset.
+2. Clear the card clock enable and low-power bits and set MASK_DATA0 (CLKCR
+   bits 16, 17 and 31), so the update does not wait on DAT0.
+3. Issue the clock-update command and wait for it; write back RINT's set
+   bits except SDIO.
+4. Clear MASK_DATA0.
+
+If the reset or the update does not complete within 10 ms, the image gates
+the controller's module clock (CCU SMHC0 word bit 31) instead, which stops the
+card clock at its source. After a provider fault the provider keeps its
+register lock retained, so this step writes the controller directly; the
+PMIC task, parked or not, uses only the S_TWI0 bus.
+
+Two exits run no image code and so do not stop the clock: the monitor's
+secure timer at 2 s (status 2, `monitor-window`), and an exception. After
+either, the card may still be clocked with its lines on the JTAG functions,
+and the lifetime ends with whole-board power removal before anything else
+runs. The two refusals before the scheduler starts (`input`, `providers`)
+make no controller access at all, because the controller has not been
+enabled.
 
 The image never touches USB0. The monitor returns to the ROM after
 `platform_exit()`, and the host reads the 16 KiB result page at `0x42000000`
@@ -44,8 +69,10 @@ handoff and topology identifiers, the fabric words and rates, the PMIC and PF
 pin configurations, and the read plan. The fabric words come from the
 lifetime's own FEL read of CCU `0x500`, `0x580` and `0x588`
 (`tools/board-bundles-next-read.py`) on the DDR start's node and ROM
-identity; the tool masks them and computes their rates as the SD0 provider
-does. The plan is the supervised service's
+identity. The tool applies the monitor's MBUS rule (only `0x84000000`
+becomes `0x81000000`), then masks the words and computes their rates as the
+SD0 provider does. If the monitor skips the restore, the provider refuses
+the MBUS word and the report says so, after the monitor's `MBUS` line. The plan is the supervised service's
 throughput plan, `throughput_plan(0, 4194304)` in
 `tools/check-a733-storage-read-supervised.py`: 128 sequential eight-sector
 reads from sector 0, 96 eight-sector reads at fixed pseudo-random offsets
@@ -60,10 +87,24 @@ below sector 4,194,304, and 32 single sectors.
 - `R`: one line per read, with its index, first sector, block count, time in
   microseconds and CRC-32;
 - `D0` to `D7`: sector 0 in hex;
-- `SD_READS`, `SD_PLAN`, `SD_PMIC_PARKED`, `SD_CLOCK_OFF` (1: card clock
-  off; 2: the controller was never enabled), then `COMPLETE SD0 returning read`,
-  or `INCOMPLETE SD0 returning read:` followed by `window` or `stopped`; a
-  stop also prints the provider's stage, fault, last command and result.
+- `SD_READS`, `SD_PLAN`, `SD_PMIC_PARKED`, `SD_CLOCK_OFF`, then
+  `COMPLETE SD0 returning read`, or `INCOMPLETE SD0 returning read:` followed
+  by `window` or `stopped`; a stop also prints `SD_REASON`, the provider's
+  stage, fault, last command and result.
+
+`SD_CLOCK_OFF` values: 1, the clock update completed and CLKCR reads back
+with the card clock off; 3, the update did not complete and the module clock
+reads back gated; 2, the controller was never enabled and the image wrote
+nothing; 0, neither stop read back, so the card may still be clocked.
+
+`SD_REASON` values: 1, the end deadline passed or a provider failed; 2, the
+SD0 provider could not be constructed; 3, identification or mode selection
+failed; 4, the card registers could not be read; 5, a read could not be
+submitted; 6, a read failed while in progress; 7, a read's result was wrong;
+9, the plan completed but the PMIC task had not parked or a provider request
+was outstanding; 10, the plan completed but the card clock stop read back
+neither stop (`SD_CLOCK_OFF=0`). Reasons 9 and 10 turn a completed plan into
+status 1 with `stopped`.
 
 `tools/storage-read-returning.py decode` checks every `R` line against the
 input's plan and computes the supervised checker's throughput summary
@@ -122,12 +163,15 @@ dispatcher at `0x2514` into the nonsecure ROM's USB FEL loop found:
   (`a733_mmc_sd0_inherited_mux`).
 
 After a return, therefore, the card stays powered at the signalling voltage
-of its lifetime and the PF bank selector still matches it. The controller
-keeps its configuration with the card clock stopped, because the image
-stops it before exiting. The command and data lines carry the JTAG functions
+of its lifetime and the PF bank selector still matches it. After the image's
+own exit the controller keeps its configuration with the card clock stopped
+(`SD_CLOCK_OFF` 1 or 3). The command and data lines carry the JTAG functions
 with the pulls the provider set; with no debugger attached the TAP stays in
 reset and its TDO output stays released, so the command line stays high and
-the card, with no clock, receives no command.
+the card receives no command. After the monitor's 2 s return or an
+exception, the card clock may still run; the card then also receives no
+command, but a card interrupted mid-read may keep driving DAT lines until
+power is removed, which is the next step.
 
 ## Lifetime B uses the returning path
 
@@ -160,7 +204,9 @@ PYTHONDONTWRITEBYTECODE=1 ~/.cache/sunstoneos/venv/bin/python checks/storage-rea
 
 `build.py` refuses unless this tree's `platform/a733/monitor.c`, compiled
 with the monitor's counter option, equals byte for byte the monitor object of
-the kernel check that passed on port 3-3 (`board-bundles-20261025-10`). It
+the kernel check that passed on port 3-3 with the EL3 security writes and the
+MBUS restore (`board-bundles-20261025-mbus-qual-2`, run
+`board-session-20261025-24/port-3-3/bb2-run-2`). It
 writes `origins.json`, which compares every platform and provider object with
 `rank-9-usb-v4`'s.
 
@@ -181,12 +227,12 @@ function 15 on PF2, PF4 and PF6.
 The fabric words are read in each lifetime because the SD0 provider checks
 the live AHB, NSI and MBUS words (CCU `0x500`, `0x580`, `0x588`) against its
 configuration under the masks `0x0300001f`, `0x8700001f` and `0x8700001f`. A
-frozen value would turn any change of those clocks before the run, such as a
-restore of the vendor MBUS clock, into a refusal. The image itself writes
-none of the three: the SD0 adapter admits them for reading only
-(`a733_mmc_platform_native_address_selected`), and no other unit of the
-image writes the CCU's fabric words. On port 3-3 the board has read
-`0x03000002`, `0xc3000000` and `0x84000000`, which give `0x03000002`,
-`0x83000000` and `0x84000000` at 200, 600 and 400 MHz; bit 30 of
-`0xc3000000` is outside the mask. An MBUS word of `0x81000000` gives 600 MHz
-and is also admitted.
+frozen value would turn any change of those clocks before the run into a
+refusal. Of the image's code, only the EL3 monitor writes one of them: the
+MBUS restore, which the input tool predicts. The SD0 adapter admits the three
+words for reading only (`a733_mmc_platform_native_address_selected`), and no
+other unit writes them. On port 3-3 a pre-launch read gives `0x03000002`,
+`0xc3000000` and `0x84000000`; the image's configuration is then
+`0x03000002`, `0x83000000` and `0x81000000` at 200, 600 and 600 MHz. Bit 30
+of `0xc3000000` is outside the mask, and `0x81000000` is the restored MBUS
+word.

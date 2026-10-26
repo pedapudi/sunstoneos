@@ -31,21 +31,26 @@ Cases:
 - crc-read: a data CRC error on the first read; the same;
 - not-parked: the PMIC service has not parked; sdrt_quiet() refuses, so the
   image would exit with status 1;
-- board-3: profile 3 with CONFIG, the CCU words port 3-3 read (fabric
-  0x03000002, 0xc3000000, 0x84000000; PERI0 PLL 0xff126310, gates 0x8fff0fff,
-  status 0x0fff0000) and the fabric configuration the host tool derives from
-  those words: SDR104 at 150 MHz and all 256 reads;
-- board-mbus-600: profile 2 with the MBUS word at 0x81000000 (600 MHz), as a
-  restore of the vendor MBUS clock would leave it, and the configuration
-  derived from that read: all 256 reads;
+- board-3: profile 3 with CONFIG and the fabric configuration the host tool
+  derives from port 3-3's pre-launch read (0x03000002, 0xc3000000,
+  0x84000000), with the CCU words the image then finds: the MBUS word as the
+  monitor's restore leaves it (0x81000000), and PERI0 PLL 0xff126310, gates
+  0x8fff0fff, status 0x0fff0000: SDR104 at 150 MHz and all 256 reads;
+- board-mbus-skip: the same configuration, with the monitor's restore
+  skipped (MBUS still 0x84000000): the SD0 provider refuses the fabric word
+  and the image stops with the reason in its report;
 - board-old-fabric: CONFIG with the fabric words of lifetime A's session
-  template (0x03000002, 0xc3000000, 0x81000000 at 200, 600 and 600 MHz):
-  sdrt_setup() refuses it, as every provider's fabric check does.
+  template (0x03000002, 0xc3000000, 0x81000000): sdrt_setup() refuses it,
+  because bit 30 of 0xc3000000 is outside every provider's fabric mask;
+- stall-update: profile 2, then the clock-update command never completes;
+  the image gates the module clock instead (result 3).
 
-Every case then runs sdrt_clock_off(), the image's last step before its
-exit: the card clock enable must read back clear after one clock-update
-command (result 1), or, where the controller was never enabled, the image
-must leave it untouched (result 2).
+Every case then runs sdrt_clock_off(), the image's last step before its own
+exit, and requires the vendor driver's order: FIFO and DMA interface reset
+when a read was outstanding, CLKCR with the card clock off and MASK_DATA0
+set, the clock-update command, RINT written back, and MASK_DATA0 cleared
+(result 1); the module clock gate after a stalled update (result 3); and no
+write where the controller was never enabled (result 2).
 
 No board, USB or queue access.
 """
@@ -118,7 +123,7 @@ class Card(modes.UhsMachine):
         self.present = True; self.byte_addressed = False; self.first_sector = 0
         self.width = 1; self.card_hs = 0; self.mode_app = False; self.mode_data = bytes(); self.module_changes = []
         self.phase = 0; self.bank_reads = None; self.pf_writes = 0; self.cmd19 = 0; self.sdr = 0
-        self.log = ''; self.exit = None; self.mutexes = 0; self.window_after = None
+        self.log = ''; self.exit = None; self.mutexes = 0; self.window_after = None; self.final = False
         self.regs = {0x07090160: (1 << 28) | 2, 0x02002000: 0xf8000000 | (99 << 8) | (99 << 16), 0x02002580: 1 << 31,
                      0x02002588: 1 << 31, 0x020025c0: 1 << 24, 0x020025e0: 1 << 30, 0x0200259c: 0x30001,
                      0x02000040: 2 << 10, 0x02000048: 2 << 10, 0x02000070: 1, 0x04020300: 0x03050530,
@@ -193,6 +198,10 @@ class Card(modes.UhsMachine):
             v = self.read(a) | (1 << 7); self.write(a, v); self.trace[-1][2] = v  # data CRC error
 
     def write_mmio(self, cpu, access, a, size, value, unused):
+        if self.final and a == 0x04020018 and value & (1 << 21) and self.variant == 'stall-update':
+            self.trace.append(['write', a, value]); self.regs[a] = value; return  # START never clears
+        if self.final and a == 0x02002d00:
+            self.trace.append(['write', a, value]); self.regs[a] = value; return  # module clock gate
         (modes.UhsMachine if self.profile == 3 else modes.Machine).write_mmio(self, cpu, access, a, size, value, unused)
 
     def field(self, name, n=4): return self.read(self.base + self.layout[name], n)
@@ -231,8 +240,9 @@ def run_case(image, raw, profile, variant, registers=None):
     quiet = m.call('sdrt_quiet')
     # The final quiesce writes the controller without the register lock,
     # after every provider has stopped; waive the model's lock assertion.
-    before = len(m.trace); m.held = True
-    clock_off = m.call('sdrt_clock_off'); m.held = False
+    before = len(m.trace); m.held = True; m.final = True
+    if variant == 'stall-update-final': m.variant = 'stall-update'
+    clock_off = m.call('sdrt_clock_off'); m.held = False; m.final = False
     m.write(m.base + m.layout['clock_off'], clock_off)
     m.clock_writes = m.trace[before:]
     m.call('sdrt_report', 0 if r > 0 else 1)
@@ -250,12 +260,13 @@ def run(elf, board, out):
     for name, profile, variant in [('profile-2', 2, 'nominal'), ('profile-3', 3, 'nominal'), ('window', 2, 'window'),
                                    ('absent', 2, 'absent'), ('crc-identify', 2, 'crc-identify'),
                                    ('crc-read', 2, 'crc-read'), ('not-parked', 2, 'not-parked'),
-                                   ('board-3', 3, 'nominal'), ('board-mbus-600', 2, 'nominal')]:
+                                   ('board-3', 3, 'nominal'), ('board-mbus-skip', 2, 'nominal'),
+                                   ('stall-update', 2, 'stall-update-final')]:
         registers = dict(PORT_3_3)
-        if name == 'board-mbus-600': registers[0x02002588] = 0x81000000
         if name.startswith('board-'):
-            (fabric, fabric_hz) = host.fabric([registers[a] for a in host.FABRIC])
+            (fabric, fabric_hz) = host.fabric(host.restored([PORT_3_3[a] for a in host.FABRIC]))
             config = dict(board, fabric=fabric, fabric_hz=fabric_hz)
+            if name == 'board-3': registers[0x02002588] = host.MBUS_RESTORED
         else:
             config = FIXTURE
         raw = host.input_bytes(profile, 0x1234567, config, plan, ids=(7, 9, 11))
@@ -266,13 +277,23 @@ def run(elf, board, out):
         for item in reads:
             assert item['crc32'] == binascii.crc32(service.payload(item['first'], item['blocks'])), item
         writes = [(a, v) for kind, a, v in m.clock_writes if kind == 'write']
-        if name == 'absent':
-            assert value['words']['SD_CLOCK_OFF'] == 2 and not writes
+        stalled = r == -1 and value['words'].get('SD_STAGE') in (4, 5)
+        if value['words']['SD_CLOCK_OFF'] == 2:
+            # Stopped before the controller's clock, bus gate and reset were enabled.
+            assert name in ('absent', 'board-mbus-skip') and not writes, name
         else:
-            assert value['words']['SD_CLOCK_OFF'] == 1, name
-            assert writes[-2][0] == 0x04020004 and not writes[-2][1] & (1 << 16) and writes[-1] == (0x04020018, 0x80202000)
-            assert not m.regs[0x04020004] & (1 << 16)
-        if name in ('profile-2', 'profile-3', 'board-3', 'board-mbus-600'):
+            expected = [0x04020000] if stalled else []
+            expected += [0x04020004, 0x04020018, 0x04020038]
+            expected += [0x02002d00] if name == 'stall-update' else [0x04020004]
+            assert [a for a, _ in writes] == expected, (name, [hex(a) for a, _ in writes])
+            if stalled: assert writes[0][1] & 6 == 6
+            clkcr = writes[1 if stalled else 0][1]
+            assert clkcr & (1 << 31) and not clkcr & (3 << 16) and writes[1 + stalled][1] == 0x80202000
+            if name == 'stall-update':
+                assert value['words']['SD_CLOCK_OFF'] == 3 and not writes[-1][1] & (1 << 31)
+            else:
+                assert value['words']['SD_CLOCK_OFF'] == 1 and not writes[-1][1] & ((1 << 31) | (1 << 16)), name
+        if name in ('profile-2', 'profile-3', 'board-3', 'stall-update'):
             assert r == 1 and quiet == 1 and value['complete'] and len(reads) == 256, (name, r, quiet, value['outcome'])
             card = value['card']
             assert card['sectors'] == 33554432 and card['bus_width'] == 4
@@ -299,6 +320,8 @@ def run(elf, board, out):
         elif name == 'crc-read':
             assert r == -1 and not reads and value['outcome'] == 'stopped' and value['words']['SD_REASON'] in (6, 7)
             assert value['words']['SD_PLATFORM_FAULT'] == 1 and m.retained and value['card'] is not None
+        elif name == 'board-mbus-skip':
+            assert r == -1 and not reads and value['outcome'] == 'stopped' and value['words']['SD_PLATFORM_FAULT'] == 1
         elif name == 'not-parked':
             assert r == 1 and quiet == 0 and len(reads) == 256
         results[name] = {'passed': True, 'steps': steps, 'tick_waits': m.ticks,
@@ -307,8 +330,7 @@ def run(elf, board, out):
                          'pf_selector_writes': m.pf_writes, 'log_bytes': len(m.log.encode()),
                          'throughput': value.get('throughput')}
         assert len(m.log.encode()) <= 16127 - 200, 'log does not fit the result page with the start lines'
-    # Lifetime A's template words: 0xc3000000 has bit 30 outside the fabric
-    # mask, and port 3-3's MBUS word is 0x84000000 at 400 MHz, not 0x81000000.
+    # Lifetime A's template words: 0xc3000000 has bit 30 outside the fabric mask.
     old = dict(board, fabric=[0x03000002, 0xc3000000, 0x81000000], fabric_hz=[200000000, 600000000, 600000000])
     m = Card(image, 2); m.regs.update(PORT_3_3)
     m.cpu.mem_write(0x43000000, host.input_bytes(2, 0x1234567, old, plan, ids=(7, 9, 11)))

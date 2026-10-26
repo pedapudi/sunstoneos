@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """The host tool of the returning SD0 read image: signing, input and decoding.
 
-usage: storage-read-returning-host.py --output NEW_DIRECTORY
+usage: storage-read-returning-host.py --read-record SESSION_JSON --output NEW_DIRECTORY
+
+SESSION_JSON is a session record that tools/board-bundles-next-read.py wrote
+on a board, such as board-session-20261025-24/port-3-3/clock-audit-b; the
+fabric-read fixtures are copies of it with their node, identity and words
+replaced, so their schema and keys are the read tool's own.
 
 Runs tools/storage-read-returning.py on model DDR and survey records, an
 approval request and approvals written here, and logs built from the input's
@@ -19,12 +24,14 @@ plan, and requires:
 - apps/storage-read-returning/controlled.json: the kernel runner's parser
   accepts it, and a stopped log matches only the sd-stopped outcome;
 - fabric: the tool's masks and parent rates equal those of
-  drivers/storage/a733_mmc_platform.c; port 3-3's words 0x03000002,
-  0xc3000000 and 0x84000000 give 0x03000002, 0x83000000 and 0x84000000 at
-  200, 600 and 400 MHz, and an MBUS word of 0x81000000 gives 600 MHz; the
-  input command takes the words from a read record on the DDR start's node
-  and identity and refuses a read from another node, a failed read and a
-  configuration that carries its own fabric words.
+  drivers/storage/a733_mmc_platform.c, its read schema equals the schema
+  the read tool's main() writes and the real record's, and its MBUS rule
+  equals include/a733_el3_mbus.h's two values; port 3-3's pre-launch words
+  0x03000002, 0xc3000000 and 0x84000000 give 0x03000002, 0x83000000 and,
+  after the monitor's restore, 0x81000000 at 200, 600 and 600 MHz, and a word
+  of 0x81000000 stays; the input command takes the words from a read record
+  on the DDR start's node and identity and refuses a read from another node,
+  a failed read and a configuration that carries its own fabric words.
 
 No board, USB or queue access.
 """
@@ -92,7 +99,7 @@ def log_for(raw, outcome='complete', reads=None, profile=2, first=None):
     return '\n'.join(lines) + '\n'
 
 
-def main(out):
+def main(out, real):
     out.mkdir(parents=True, exist_ok=False)
     request = out / 'approval-request.json'; request.write_text(json.dumps(REQUEST))
     results = {}
@@ -151,13 +158,20 @@ def main(out):
     refused(lambda: tool.fabric([0x03000002, 0x43000000, 0x84000000]), 'no admitted parent or gate')
     def read_record(name, node='/dev/bus/usb/003/051', identity=(7, 2142, 1097010, 0, 0), complete=True):
         d = out / name; d.mkdir()
-        (d / 'session.json').write_text(json.dumps({'schema': 'board-read-words-v1', 'complete': complete,
-            'scratch_restored': True, 'port': '3-3', 'node': node, 'identity': list(identity),
-            'words': {'0x2002500': 0x03000002, '0x2002580': 0xc3000000, '0x2002588': 0x84000000},
-            'model': 'MODEL-NOT-PHYSICAL'}))
+        record = dict(real, complete=complete, node=node, identity=list(identity), port='3-3', transactions=[],
+                      words={'0x2002500': 0x03000002, '0x2002580': 0xc3000000, '0x2002588': 0x84000000},
+                      model='MODEL-NOT-PHYSICAL: a copy of a real read record with node, identity and words replaced')
+        (d / 'session.json').write_text(json.dumps(record))
         return d
+    reader = (ROOT / 'tools/board-bundles-next-read.py').read_text()
+    written = re.findall(r"r = \{'schema': '([^']+)'", reader)
+    assert written == [tool.READ_SCHEMA] == [real['schema']], (written, real['schema'])
+    mbus = (ROOT / 'include/a733_el3_mbus.h').read_text()
+    assert f'0x{tool.MBUS_ROM:08x}' in mbus and f'0x{tool.MBUS_RESTORED:08x}' in mbus
+    assert tool.restored([1, 2, 0x84000000]) == [1, 2, 0x81000000] and tool.restored([1, 2, 0x81000000])[2] == 0x81000000
     good = read_record('fabric-read')
-    assert tool.fabric_read(good, ddr)[0] == ([0x03000002, 0x83000000, 0x84000000], [200000000, 600000000, 400000000])
+    assert tool.fabric_read(good, ddr) == (([0x03000002, 0x83000000, 0x81000000], [200000000, 600000000, 600000000]),
+                                           [0x03000002, 0xc3000000, 0x84000000])
     fabric_refusals = [refused(lambda: tool.fabric_read(read_record('fabric-other', node='/dev/bus/usb/003/060'), ddr),
                                'another node'),
                        refused(lambda: tool.fabric_read(read_record('fabric-failed', complete=False), ddr), 'did not pass')]
@@ -169,8 +183,9 @@ def main(out):
                                                                '--output', str(out / 'refused.bin')]), 'this lifetime'))
     assert tool.main(common + ['--config', str(out / 'board.json'), '--output', str(out / 'cli-input.bin')]) == 0
     made = json.loads((out / 'cli-input.json').read_text())
-    assert made['fabric'] == ['0x03000002', '0x83000000', '0x84000000'] and made['fabric_hz'] == [200000000, 600000000, 400000000]
-    assert struct.unpack_from('<3I', (out / 'cli-input.bin').read_bytes(), 72) == (0x03000002, 0x83000000, 0x84000000)
+    assert made['fabric'] == ['0x03000002', '0x83000000', '0x81000000'] and made['fabric_hz'] == [200000000, 600000000, 600000000]
+    assert made['fabric_registers'] == ['0x03000002', '0xc3000000', '0x84000000']
+    assert struct.unpack_from('<3I', (out / 'cli-input.bin').read_bytes(), 72) == (0x03000002, 0x83000000, 0x81000000)
     results['fabric_refusals'] = fabric_refusals
     # The image's controlled outcomes, as the kernel runner reads them.
     spec = importlib.util.spec_from_file_location('sd_returning_runner', ROOT / 'tools/check-a733-kernel.py')
@@ -189,5 +204,7 @@ def main(out):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--read-record', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
-    main(parser.parse_args().output)
+    args = parser.parse_args()
+    main(args.output, json.loads(args.read_record.read_text()))

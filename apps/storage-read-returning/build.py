@@ -10,7 +10,9 @@ CENTRAL is a central CMake build configured from this tree with
   (tools/returning_build.py, CENTRAL_PLATFORM), except platform/a733/monitor.c,
   which is compiled with the monitor's counter option and must equal, byte for
   byte, the monitor object of the kernel check that passed on port 3-3 with the
-  EL3 security writes (board-bundles-20261025-10, board-session-20261025-8);
+  EL3 security writes and the MBUS restore (board-bundles-20261025-mbus-qual-2,
+  board-session-20261025-24, run bb2-run-2, which logged
+  "MBUS 0x84000000 0x81000000 0");
 - the fourteen provider units of tools/returning_build.py, compiled from this
   tree with the PMIC provider probe's FreeRTOS configuration;
 - its own units: apps/storage-read-returning/main.c, the SD0 driver and
@@ -37,12 +39,12 @@ from returning_build import CENTRAL_PLATFORM, PROVIDER_UNITS, ReturningPlatform,
 
 CACHE = Path.home() / '.cache/sunstoneos'
 V4 = CACHE / 'evidence/board-bundles-20261023/rank-9-usb-v4'
-# The kernel check with the EL3 security writes and the counter option, which
-# passed its 100 rounds on port 3-3 (docs/handoff.md, "Vendor EL3 security
-# setup in every image, qualified on port 3-3").
-QUALIFIED = CACHE / 'evidence/board-bundles-20261025-10/port-3-3/kernel-check-counter-option/bundle'
-QUALIFIED_RUN = CACHE / 'evidence/board-session-20261025-8/port-3-3/q1-kc-run'
-QUALIFIED_MONITOR = '29ae37437eae9f548bae851bb69876a5c823d475aee2f9ee73619415a1a5e9e6'
+# The kernel check with the EL3 security writes, the MBUS restore and the
+# counter option, which passed on port 3-3 (docs/handoff.md, "MBUS restore
+# qualified").
+QUALIFIED = CACHE / 'evidence/board-bundles-20261025-mbus-qual-2/port-3-3/kernel-check-counter-option/bundle'
+QUALIFIED_RUN = CACHE / 'evidence/board-session-20261025-24/port-3-3/bb2-run-2'
+QUALIFIED_MONITOR = 'd86d9743f3b2445de089619a49552c7993815acf35668f5a4f17d6c5e67b9656'
 UNITS = ['apps/storage-read-returning/main.c', 'drivers/storage/sunxi_mmc.c', 'drivers/storage/a733_mmc_platform.c',
          'drivers/storage/a733_mmc_platform_native.c', 'drivers/storage/a733_storage_update.c',
          'arch/aarch64/device_memory.c']
@@ -88,7 +90,7 @@ def main():
                if apps.without_debug(obj, work) == apps.without_debug(v4_obj, work) else 'differs from rank-9-usb-v4')
         record = qualified['objects'].get(rel)
         if record and record['sha256'] == mine:
-            how += '; byte-identical to the qualified kernel check of board-session-20261025-8'
+            how += '; byte-identical to the qualified kernel check of board-session-20261025-24'
         origins[rel] = {'sha256': mine, 'origin': how}
     for unit, obj in zip(PROVIDER_UNITS.values(), platform.provider_objects):
         mine, theirs = digest(obj), digest(v4_provider[unit])

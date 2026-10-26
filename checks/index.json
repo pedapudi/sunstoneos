@@ -9554,6 +9554,7 @@
   "library": false,
   "pure_host": false,
   "required_arguments": [
+   "--read-record",
    "--output"
   ],
   "summary": "The host tool of the returning SD0 read image: signing, input and decoding.",
@@ -9563,7 +9564,8 @@
   "cache_areas": [],
   "docs": [
    "apps/storage-read-returning/README.md",
-   "docs/board-runbooks/sd-uhs.md"
+   "docs/board-runbooks/sd-uhs.md",
+   "docs/designs/mbus-restore.md"
   ],
   "library": false,
   "pure_host": false,

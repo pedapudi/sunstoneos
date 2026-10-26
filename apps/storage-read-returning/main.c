@@ -242,27 +242,67 @@ SDRT_ENTRY int sdrt_quiet(void)
     return !xSemaphoreGetMutexHolder(sdrt.locks.mutex[0])&&!xSemaphoreGetMutexHolder(sdrt.locks.mutex[1]);
 }
 
-/* The last step before every exit after the SD task: gate the card clock
- * (CLKCR bit 16) and apply it with one clock-update command, so that a card
- * left mid-read stops clocking data onto DAT1 and DAT2, which the ROM's
- * return makes JTAG TMS and TCK. It writes the controller directly: after a
- * fault the provider keeps its register lock retained, and by now the SD
- * task is the only task running. Returns 1 when CLKCR reads back with the
- * card clock off, 2 when the controller's bus gate, reset or module clock
- * was never enabled (no card clock to stop), and 0 when a command or the
- * update did not complete within 1 ms. */
+/* The last step before the image's own exit after the SD task: stop the
+ * card clock, so that a card left in the middle of a read stops clocking data
+ * onto DAT1 and DAT2, which the ROM's return makes the JTAG TMS and TCK
+ * inputs. The order is the vendor driver's (sunxi-mmc-v5p3x.c,
+ * __sunxi_mmc_do_oclk_onoff, lines 364-400, and its FIFO and DMA interface
+ * resets, sunxi_mmc_reset_fifo and the error path at lines 936-951):
+ *   1. if a transfer is outstanding (a read submitted and not taken, a
+ *      command still started, or a busy data or command state machine),
+ *      reset the FIFO and the DMA interface (GCTRL bits 1 and 2) and wait
+ *      for both bits to clear;
+ *   2. clear the card clock enable and low-power bits and set MASK_DATA0
+ *      (CLKCR bits 16, 17 and 31), so the update does not wait on a DAT0
+ *      that the card holds low;
+ *   3. issue the clock-update command (START, UPCLK_ONLY, WAIT_PRE_OVER) and
+ *      wait for START to clear; write back RINT's set bits but SDIO;
+ *   4. clear MASK_DATA0.
+ * If the reset or the update does not complete within 10 ms, gate the
+ * controller's module clock instead (CCU SMHC0 word bit 31), which stops the
+ * card clock at its source. The writes go to the controller directly: after a
+ * fault the provider keeps its register lock retained, and the PMIC task,
+ * whether or not it has parked, accesses only S_TWI0.
+ *
+ * Returns 1 when the update completed and CLKCR reads back with the card
+ * clock off, 3 when the update timed out and the module clock reads back
+ * gated, 2 when the controller's bus gate, reset or module clock was never
+ * enabled (no card clock, no write), and 0 when neither stop read back. The
+ * monitor's own 2 s return runs no image code, so this step does not cover
+ * that exit. */
+static int wait_clear(uintptr_t address,uint32_t bits)
+{
+    uint64_t end=sdrt_ticks()+10*24000;
+    while(mmio_read(address)&bits)if(sdrt_ticks()>=end)return 0;
+    return 1;
+}
 SDRT_ENTRY int sdrt_clock_off(void)
 {
-    if((mmio_read(A733_MMC_BUS(0))&0x10001u)!=0x10001u||!(mmio_read(A733_MMC_MODULE(0))&(UINT32_C(1)<<31)))return 2;
-    uintptr_t base=A733_MMC_BASE(0);
-    uint64_t end=sdrt_ticks()+24000;
-    while(mmio_read(base+SUNXI_SMHC_CMD)&SUNXI_SMHC_CMD_START)if(sdrt_ticks()>=end)return 0;
-    mmio_write(base+SUNXI_SMHC_CLKCR,mmio_read(base+SUNXI_SMHC_CLKCR)&~(UINT32_C(1)<<16));
+    const uintptr_t base=A733_MMC_BASE(0),module=A733_MMC_MODULE(0);
+    const uint32_t card_on=UINT32_C(1)<<16,low_power=UINT32_C(1)<<17,mask_data0=UINT32_C(1)<<31;
+    const uint32_t resets=(UINT32_C(1)<<1)|(UINT32_C(1)<<2);
+    if((mmio_read(A733_MMC_BUS(0))&0x10001u)!=0x10001u||!(mmio_read(module)&(UINT32_C(1)<<31)))return 2;
+    int stalled=sdrt.stage==SDRT_POLL||sdrt.stage==SDRT_TAKE||
+        (mmio_read(base+SUNXI_SMHC_CMD)&SUNXI_SMHC_CMD_START)||(mmio_read(base+SUNXI_SMHC_STATUS)&SUNXI_SMHC_STATUS_BUSY);
+    int ok=1;
+    if(stalled){
+        mmio_write(base+SUNXI_SMHC_GCTRL,mmio_read(base+SUNXI_SMHC_GCTRL)|resets);
+        ok=wait_clear(base+SUNXI_SMHC_GCTRL,resets);
+    }
+    if(ok){
+        mmio_write(base+SUNXI_SMHC_CLKCR,(mmio_read(base+SUNXI_SMHC_CLKCR)&~(card_on|low_power))|mask_data0);
+        __asm__ volatile("dsb sy":::"memory");
+        mmio_write(base+SUNXI_SMHC_CMD,SUNXI_SMHC_UPDATE);
+        ok=wait_clear(base+SUNXI_SMHC_CMD,SUNXI_SMHC_CMD_START);
+        mmio_write(base+SUNXI_SMHC_RINT,mmio_read(base+SUNXI_SMHC_RINT)&~SUNXI_SMHC_INT_SDIO);
+    }
+    if(ok){
+        mmio_write(base+SUNXI_SMHC_CLKCR,mmio_read(base+SUNXI_SMHC_CLKCR)&~mask_data0);
+        return !(mmio_read(base+SUNXI_SMHC_CLKCR)&card_on);
+    }
+    mmio_write(module,mmio_read(module)&~(UINT32_C(1)<<31));
     __asm__ volatile("dsb sy":::"memory");
-    mmio_write(base+SUNXI_SMHC_CMD,SUNXI_SMHC_UPDATE);
-    end=sdrt_ticks()+24000;
-    while(mmio_read(base+SUNXI_SMHC_CMD)&SUNXI_SMHC_CMD_START)if(sdrt_ticks()>=end)return 0;
-    return !(mmio_read(base+SUNXI_SMHC_CLKCR)&(UINT32_C(1)<<16));
+    return mmio_read(module)&(UINT32_C(1)<<31)?0:3;
 }
 
 /* The result lines; host tool tools/storage-read-returning.py parses them. */
@@ -334,7 +374,10 @@ static void sd_task(void *unused)
         vTaskDelay(1);
     }
     /* A stopped provider keeps its controller, clock, pins and rails; the
-     * report states where it stopped. The PMIC parks in either case. */
+     * report states where it stopped. The SD task asks the PMIC task to park
+     * and waits for it until the end deadline; sdrt_quiet() requires the
+     * park, and a missing park ends the run as a stop (reason 9). The card
+     * clock stop that follows does not depend on it. */
     if(r<0&&sdrt.platform.initialized)(void)a733_mmc_platform_retain(&sdrt.platform);
     atomic_store_explicit(&sdrt.pmic_stop,1,memory_order_release);
     while(!atomic_load_explicit(&sdrt.pmic_parked,memory_order_acquire)&&now_us()<sdrt.end)vTaskDelay(1);
@@ -351,11 +394,11 @@ void kernel_main(void)
 {
     platform_init();
     platform_puts("SD0 returning start\n");
-    if(!sdrt_setup()){(void)sdrt_clock_off();platform_puts("INCOMPLETE SD0 returning read: input\n");platform_exit(1);}
+    if(!sdrt_setup()){platform_puts("INCOMPLETE SD0 returning read: input\n");platform_exit(1);}
     line("SD_PROFILE=",sdrt.input.profile);line("SD_GENERATION=",sdrt.input.generation);
     TaskHandle_t pmic=xTaskCreateStatic(pmic_task,"sd-pmic",4096,NULL,2,stacks[0],&tasks[0]);
     TaskHandle_t sd=xTaskCreateStatic(sd_task,"sd-read",4096,NULL,2,stacks[1],&tasks[1]);
-    if(!pmic||!sd||!sdrt_bind(pmic)){(void)sdrt_clock_off();platform_puts("INCOMPLETE SD0 returning read: providers\n");platform_exit(1);}
+    if(!pmic||!sd||!sdrt_bind(pmic)){platform_puts("INCOMPLETE SD0 returning read: providers\n");platform_exit(1);}
     vTaskStartScheduler();
     platform_panic("scheduler returned",0);
 }

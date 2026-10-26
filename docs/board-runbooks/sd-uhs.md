@@ -160,12 +160,16 @@ fabric check masks the second word with `0x8700001f`
 returns 0. The board application calls it through `a733_native_usb_bind`
 before the scheduler starts and, on that failure, calls
 `platform_panic("board bind", 6)` (`apps/board/main.c`), which stops the CPU
-in the monitor with the status in DRAM. The third word is also wrong: the
-board's MBUS parent is 400 MHz. The correct configuration is `0x03000002`,
-`0x83000000` and `0x84000000` at 200, 600 and 400 MHz, which the rank 9
-input used when it passed on port 3-3. This decoding comes from source and
-the session bytes; the image's own stop record was erased by the power
-removal.
+in the monitor with the status in DRAM. The third word did not match that
+image either: its monitor had no MBUS restore, and the board's MBUS word
+after a ROM return is `0x84000000` (400 MHz). The configuration that image
+needed was `0x03000002`, `0x83000000` and `0x84000000` at 200, 600 and
+400 MHz, which the rank 9 input used when it passed on port 3-3. Current
+monitors restore MBUS to `0x81000000` (600 MHz) before EL1 starts
+(`include/a733_el3_mbus.h`), so a frozen word is wrong for one monitor or
+the other; the returning run computes its words from each lifetime's own
+read. This decoding comes from source and the session bytes; the image's own
+stop record was erased by the power removal.
 
 ## The returning run
 
@@ -176,6 +180,13 @@ ROM within its 2 s window. A stop also returns, with the provider's stage and
 fault in the log. `tools/storage-read-returning.py` signs the coordinator's
 approval for the lifetime, writes the image's input and decodes the result
 into the same throughput summary that the supervised checker computes.
+
+Before each exit it makes itself, the image stops the card clock and reports
+`SD_CLOCK_OFF`: 1 or 3 when the clock reads back stopped, 0 when it does not
+(a completed plan then ends with `SD_REASON=10` and status 1), 2 when the
+controller was never enabled. The monitor's 2 s return and an exception run
+no image code and leave the clock as it was; after them, and after every
+`SD_CLOCK_OFF=0`, the next step is whole-board power removal.
 
 The return leaves the PF bank voltage selector, the SD controller and its
 clock untouched, and resets the PF0, PF1, PF3 and PF5 functions to the ROM
@@ -193,8 +204,8 @@ cache-off helper and the survey, then:
 2. `$PY $SR/tools/storage-read-returning.py input --approval APPROVAL --request REQUEST --ddr $S/DDR --survey $S/SURVEY --fabric-read $S/FABRIC --config CONFIG --profile 2 --output $S/INPUT.bin`
    (profile 3 for lifetime B). It refuses an approval not signed for this
    DDR start and survey, and takes the fabric words from this lifetime's
-   read, so a change of those clocks before the run cannot become a
-   refusal.
+   read, with the MBUS word as the image's monitor will restore it, so a
+   change of those clocks before the run cannot become a refusal.
 3. The kernel runner, through the board queue:
    `$PY $SR/tools/check-a733-kernel.py --fel $FEL --image IMAGE --mode kernel --ram-input $S/INPUT.bin --expect "COMPLETE SD0 returning read" --controlled CONTROLLED --return-timeout 5 --ddr-evidence $S/DDR/session.json --platform-survey $S/SURVEY/session.json --evidence $S/RUN`.
 4. `$PY $SR/tools/storage-read-returning.py decode --run $S/RUN --input $S/INPUT.bin --output $S/RUN/sd-result.json`.

@@ -14,15 +14,25 @@ is already signed, so no approval carries into the next lifetime.
 
 input writes the 2192-byte input that the image reads at 0x43000000
 (apps/storage-read-returning/sdrt.h): SD profile 2 or 3, fresh owner, handoff
-and topology identifiers, the fabric words of this lifetime's own read of CCU
-0x500, 0x580 and 0x588 (READ_DIR, a board-read-words-v1 record of
-tools/board-bundles-next-read.py on the DDR start's node and ROM identity),
-masked and converted to rates as the SD0 provider does, the PMIC and PF pin
+and topology identifiers, the fabric words the image will find, the PMIC and PF pin
 configurations of CONFIG, and the read plan of check-a733-storage-read-supervised.py's
 throughput_plan(0, 4194304): 128 sequential and 96 random eight-sector reads
 and 32 single sectors. It refuses unless the approval is signed for this DDR
 start and survey, newer than the DDR record, names the profile's bundle and
 sets every field that approval-request.json lists for it to true.
+
+The fabric words come from this lifetime's own read of CCU 0x500, 0x580 and
+0x588 (READ_DIR, the board-read-session-v1 record that
+tools/board-bundles-next-read.py writes, on the DDR start's node and ROM
+identity), masked and converted to rates as the SD0 provider does. Every
+image's EL3 monitor restores MBUS before EL1 starts
+(include/a733_el3_mbus.h): it changes only the ROM's exact value
+0x84000000 (400 MHz) to boot0's 0x81000000 (600 MHz). The ROM sets
+0x84000000 again on every return, so a read before the launch sees it while
+the image sees the restored word; the tool applies the same rule. When the
+monitor skips the restore (a bus master active), the SD0 provider refuses
+the fabric word and the image stops with the monitor's MBUS line first in
+its log.
 
 decode reads the runner's kernel.log and result record, checks every read line
 against the input's plan, and writes the card registers, the selected mode and
@@ -53,6 +63,8 @@ BUNDLES = {2: 'A', 3: 'B'}
 # (drivers/storage/a733_mmc_platform.c: fabric_off, fabric_mask, parent_mhz).
 # The image only reads these words; no unit of it writes CCU 0x500, 0x580 or 0x588.
 FABRIC = (0x02002500, 0x02002580, 0x02002588)
+READ_SCHEMA = 'board-read-session-v1'  # tools/board-bundles-next-read.py, main()
+MBUS_ROM, MBUS_RESTORED = 0x84000000, 0x81000000  # include/a733_el3_mbus.h
 FABRIC_MASK = (0x0300001f, 0x8700001f, 0x8700001f)
 PARENT_MHZ = ((24, 0, 0, 600, 0, 0, 0, 0), (24, 0, 800, 600, 480, 0, 0, 0), (24, 600, 0, 480, 400, 0, 0, 0))
 
@@ -141,19 +153,25 @@ def fabric(words):
     return config, rates
 
 
+def restored(words):
+    """The words the image finds after the monitor's MBUS restore: only MBUS 0x84000000 changes."""
+    return [MBUS_RESTORED if i == 2 and w == MBUS_ROM else w for i, w in enumerate(words)]
+
+
 def fabric_read(read, ddr):
-    """The fabric configuration of this lifetime's own read of the three words."""
+    """(the image's fabric configuration, the read words) of this lifetime's own read of the three words."""
     path, ddr_path = Path(read) / 'session.json', Path(ddr) / 'session.json'
     record, d = json.loads(path.read_text()), json.loads(ddr_path.read_text())
     seen = record.get('identity'); seen = json.loads(seen) if isinstance(seen, str) else seen
-    require(record.get('schema') == 'board-read-words-v1' and record.get('complete') is True and
+    require(record.get('schema') == READ_SCHEMA and record.get('complete') is True and
             record.get('scratch_restored') is True and record.get('port') == PORT, 'fabric read did not pass on 3-3')
     require(record.get('node') == d.get('device') and seen == d.get('node_identity'),
             'fabric read ran on another node or ROM identity than the DDR start')
     require(path.stat().st_mtime > ddr_path.stat().st_mtime, 'fabric read is older than the DDR start')
     words = {int(k, 16): v for k, v in (record.get('words') or {}).items()}
     require(all(a in words for a in FABRIC), 'fabric read lacks a fabric word')
-    return fabric([words[a] for a in FABRIC]), [words[a] for a in FABRIC]
+    read_words = [words[a] for a in FABRIC]
+    return fabric(restored(read_words)), read_words
 
 
 def pins(values, count):
@@ -196,7 +214,7 @@ def decode_log(log, raw_input, status=None):
     """The reads, card and mode of one log, checked against the input that produced it."""
     given = parse_input(raw_input); plan = given['plan']
     lines = log.splitlines()
-    value = {'status': status, 'profile': given['profile'], 'generation': given['generation'], 'complete': False,
+    value = {'status': status, 'profile': given['profile'], 'generation': given['generation'], 'complete': False, 'mbus': None,
              'outcome': None, 'reads': [], 'card': None, 'first_sector_hex': None}
     words = {}
     for line in lines:
@@ -223,6 +241,9 @@ def decode_log(log, raw_input, status=None):
             require(value['card']['profile'] == given['profile'], 'card line names another profile')
         elif line.startswith('D') and len(line) == 131 and line[2] == ' ':
             value['first_sector_hex'] = (value['first_sector_hex'] or '') + line[3:]
+        elif line.startswith('MBUS ') and value.get('mbus') is None:
+            before, after, code = line.split()[1:4]
+            value['mbus'] = {'before': int(before, 16), 'after': int(after, 16), 'result': int(code, 16)}
         elif line == COMPLETE:
             value['outcome'] = 'complete'
         elif line.startswith(INCOMPLETE):
