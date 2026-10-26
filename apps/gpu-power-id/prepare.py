@@ -65,7 +65,7 @@ SCHEMA = 'board-gpu-returning-bundle-v1'
 PROVIDER_READY = '3adfa4ad6ba386ce8d39f76646f540107c2a5d02ce42db6c1c35c90de68a75ed'
 FAILED_POWER_ID = 'fd3d5839f700b5e0f569b0ce722e186c33beba65512815b136d9c969a7341afe'
 CASES = {'provider-ready': 11, 'power-only': 11, 'identity': 12, 'wrapper-read': 7, 'probe-read': 13, 'fw-start': 11,
-         'fw-stop': 9, 'fw-job': 8}
+         'fw-stop': 10, 'fw-job': 13}
 # ON/OFF cycles of the client's normal run: the power-only and identity
 # variants power the GPU on twice, so the second ON shows that OFF left a
 # state from which ON succeeds again.
@@ -340,8 +340,14 @@ def validate(row, output):
                 require(all(a in (0x0a0000b0, 0x01880014) or a - 0x01800000 in allowed for a, _ in writes),
                         'A host-check case wrote a word outside the secure configuration and the start registers.')
                 kicks = [i for i, (w, a, v) in enumerate(case['accesses']) if w and a == 0x01800b00]
-                require(not kicks or all(a not in (0x01800100, 0x01800104) for w, a, v in case['accesses'][kicks[0]:] if w),
-                        'A host-check case wrote SOFT_RESET after the firmware started taking commands.')
+                # After the first kick, SOFT_RESET is written only as the last
+                # step (164) of the stop without acknowledgements: the full
+                # mask, low word first, upstream's final pvr_fw_stop reset.
+                late = [(a, v, case['steps'][i]) for i, (w, a, v) in enumerate(case['accesses'])
+                        if kicks and i > kicks[0] and w and a in (0x01800100, 0x01800104)]
+                require(late in ([], [(0x01800100, 0xfffffc3d, 164), (0x01800104, 0xffefffff, 164)]),
+                        'A host-check case wrote SOFT_RESET after the firmware started taking commands, other than '
+                        'as the last step of the stop without acknowledgements.')
                 secure = [(a, v) for a, v in writes if a in (0x0a0000b0, 0x01880014)]
                 require(secure in ([], [(0x0a0000b0, 2), (0x01880014, 0)]),
                         'A host-check case wrote the secure configuration other than once, in the vendor order.')
@@ -349,8 +355,9 @@ def validate(row, output):
                     require(not {'a733_gpu_platform_off_begin', 'bb_power_park'} & set(case['calls']),
                             'A host-check case powered the GPU off.')
                 else:
-                    require('a733_gpu_platform_off_begin' not in case['calls'] or [107, 1, 1] in case['commands'],
-                            'A host-check case powered the GPU off before the firmware power-off request.')
+                    require('a733_gpu_platform_off_begin' not in case['calls'] or [107, 1, 1] in case['commands'] or
+                            late, 'A host-check case powered the GPU off before the firmware power-off request '
+                                  'without the soft reset of the stop without acknowledgements.')
             value['fws_rows'] = [[hex(a), hex(v), k] for a, v, k in FWS_ROWS]
             value['firmware_sha256'] = FIRMWARE_SHA256
         if variant == 'identity':
