@@ -2,7 +2,7 @@
 
 Status: **audit of 2026-10-25, from sources and earlier board reads.** No board
 was accessed for it. A read-only dump of every clock register is frozen for
-both boards and has not run ([measurement](#a-read-only-dump-measures-both-boards)).
+port 3-3 and has not run ([measurement](#a-read-only-dump-measures-the-clock-tree)).
 
 The project's performance policy ([AGENTS.md](../AGENTS.md), "Implementation")
 sets every hardware block's default to the highest operating point that the
@@ -40,9 +40,9 @@ rate that boot firmware left and does not program it.
 | NPU | 492 at 800 mV (852 profile exists) | 852 at 800 mV | Not stated; the table's highest row for any bin is 1188 | 1.7× below until the 852 default merges |
 | Video engine, JPEG | Session-supplied, at most 720; PLL_VE inherited and unread | 624 at 800 mV | Not stated | Unknown until the dump; no default rate |
 | Display engine | 600 | 600 | 696 for 4K output (manual note) | None |
-| G2D | 100 | 300 | Not stated | 3× below |
+| G2D | 300 from `53f2f75c`; 100 before | 300 | Not stated | None |
 | DRAM | 2040, P-state 0 | 2040 for this board's strap | 2400 (LPDDR5) | None against the vendor; 15% below the SoC limit |
-| MBUS | 600 for the first image of a lifetime; 400 after any return to the ROM | 600 | 600 | 1.5× below for every later image |
+| MBUS | 600 in every image from `53f2f75c`, restored at EL3; before it, 400 after any return to the ROM | 600 | 600 | None once session fabric records name 600 |
 | NSI | 600 | 600 | 700 | None against the vendor |
 | AHB | 200 | 200 | 200 | None |
 | microSD (SMHC0) card clock | 0.4 by default; 25 and 50 profiles; 150 SDR104 built and not yet run | 150 SDR104 | 200 SDR at 1.8 V | 375× below by default; 3× below at high speed |
@@ -105,7 +105,7 @@ first board step: CPU-B to 1404 MHz at 800 mV with the A76 cores off.
 | ISP and CSI | 324 each, from PLL_VIDEO0 4X (`drivers/clock/a733_media_clock.c:120-122`) | 324 each on this board (dts:3626-3627); the SoC tree gives 600 and 540 (dtsi:2567-2568) | Not stated | None for this board |
 | Display engine | 600 from PLL_DE 3X (`a733_media_clock.c:124-126`) | 600 from PLL_DE 3X (dtsi:3764-3766, dts:2715) | UM 4.1.4.3: 696 when DE drives 4K | None at the vendor rate |
 | TCON and HDMI | Pixel clock 74.25 or 148.5 from the HDMI TOP PLL at a 24 MHz oscillator; 73.9375 or 147.875 at the board's 26 MHz ([HDMI](hdmi.md)) | Mode-dependent | 4K at 60 fps (DS:30) | Modes above 1080p are not implemented; the 26 MHz rows run 0.42% slow |
-| G2D | 100: PERI0_400M ÷ 4, fixed by the session check (`apps/g2d/admission.c:25`) | 300 (dtsi:3383-3384) | Not stated | 3× |
+| G2D | 300: PERI0_300M ÷ 1, fixed by the session check (`include/a733_g2d.h`, `apps/g2d/admission.c`); 100 before `53f2f75c` | 300 (dtsi:3383-3384) | Not stated | None ([MBUS and G2D design](designs/mbus-restore.md)) |
 | Deinterlacer | 300: PERI0_600M ÷ 2 (`apps/deinterlace/admission.c:24`) | 300 (dtsi:3364) | DS:1299: 500 for 1080p60 YUV420, 550 for YUV422 with every function | None against the vendor |
 
 ### Memory and buses
@@ -113,7 +113,7 @@ first board step: CPU-B to 1404 MHz at 800 mV with the A76 cores off.
 | Clock | (a) Current | (b) Vendor top | (c) Hardware maximum | (d) Gap and cause |
 | --- | --- | --- | --- | --- |
 | DRAM | 2040, boot0's trained P-state 0 (P-states 2040, 1165, 816 and 408), LPDDR5, 12,288 MiB, DRAM_VCC 560 mV (`ddr-20261015-223537/firmware.log`). DRAM0 clock `0x80000003`: PLL_DDR ÷ 4 | 2040: the only set boot0 holds for this board's strap ([DRAM](#dram-runs-the-only-set-that-boot0-holds-for-this-boards-strap)) | 2400 for LPDDR5 (DS:1091) | None against the vendor; 15% below the SoC limit |
-| MBUS | 600 (`0x81000000`, PERI0_600M) right after the cold DDR start; 400 (`0x84000000`, PERI0_400M) after any return to the boot ROM. Every driver only checks it (`drivers/dma/a733_dma_platform.c:19-22`) | 600: the value after boot0; the board kernel sets no MBUS rate (ccu.c:517) | 600 (UM 4.1.4.3) | 1.5× for every image after the first in a lifetime ([MBUS](#mbus-falls-to-400-mhz-after-every-return-to-the-boot-rom)) |
+| MBUS | 600 (`0x81000000`, PERI0_600M) right after the cold DDR start; 400 (`0x84000000`, PERI0_400M) after any return to the boot ROM. From `53f2f75c` every EL3 entry restores 600 (`include/a733_el3_mbus.h`); the drivers only check it (`drivers/dma/a733_dma_platform.c:19-22`) | 600: the value after boot0; the board kernel sets no MBUS rate (ccu.c:517) | 600 (UM 4.1.4.3) | 1.5× before `53f2f75c` for every image after a ROM return ([MBUS](#the-boot-rom-sets-mbus-to-400-mhz-on-every-return)) |
 | NSI | 600 (`0xc3000000`, PERI0_600M) after boot0; 24 in a lifetime without boot0 (port 3-1 bb9-read) | 600 (dtsi:1481) | 700 (UM 4.1.4.3, from PLL_DE 3X at 696) | None against the vendor |
 | AHB | 200 (`0x03000002`, PERI0_600M ÷ 3), on both boards | 200 | 200 (UM 4.1.4.3) | None |
 | APB0, APB1 | Inherited from boot0; unread. Drivers accept SYS24M or PERI0_600M ÷ M (`drivers/i2c/a733_twi_native.c:154-157`) | boot0's value; the kernel sets none | 100 each (UM 4.1.4.3) | Unknown until the dump |
@@ -223,10 +223,12 @@ Running this board at 2400 MHz would need a parameter set that the vendor has
 not published for this strap and part, the part's rating, and training
 qualification on both boards.
 
-## MBUS falls to 400 MHz after every return to the boot ROM
+## The boot ROM sets MBUS to 400 MHz on every return
 
-MBUS clocks the memory-bus fabric between the masters (CPU, DMA, NPU, GPU,
-video) and the DRAM controller. Its register is CCU `+0x588`: source in bits
+MBUS clocks the memory-bus fabric between the DRAM controller and the bus
+masters that UM 4.1.6.83 lists: the MSI_LITE bridges, STORE, SERDES,
+VID_IN, the NPU, the GPU, the video engines, the display engine and the
+IOMMUs. The CPU reaches DRAM through the NSI. Its register is CCU `+0x588`: source in bits
 26:24, divider in bits 4:0, and an update bit 27 that applies a new
 configuration (UM 4.1.6.76).
 
@@ -237,25 +239,30 @@ configuration (UM 4.1.6.76).
 | Port 3-3, every state read after an image returned to the ROM in the same lifetimes (`*-read-1` and later) | `0x84000000` | 400 |
 | Port 3-3, a USB fault capture and a USB return capture of 2026-10-18 | `0x81000000` and `0x84000000` | 600 and 400 |
 
-The boot ROM writes MBUS in its clock setup (function `0x2084` of the ROM
-inventory, [`brom-mmio.json`](vendor-firmware/data/brom-mmio.json)), the cold
-DDR start, which runs boot0's routines from SunstoneOS's RAM wrapper, leaves
-600 MHz, and no SunstoneOS driver writes the register.
-The reads therefore fit this account: each return to the ROM reruns the ROM's
-clock setup, which leaves 400 MHz, and the next image inherits it. This is an
-inference from the reads. The [dump](#a-read-only-dump-measures-both-boards)
-run at the end of a lifetime, after its images returned, confirms or refutes it.
+The physical boot ROM (`a8e31821`) explains the reads. Every SunstoneOS
+image returns through the forced-FEL entry at `0x20`, which passes 127 to the
+FEL dispatcher (`0x224`–`0x22c`); with 127 the dispatcher calls the secondary
+clock setup `0x2444` (`0x2534`), and through `0x2160` the MBUS routine
+`0x2084` sets source 4, PERI0_400M. boot0's DRAM clock routine (`0x57a4c`)
+sets source 1, PERI0_600M. The SRAM survey returns to the FEL loop with
+`bx lr` and does not rerun the setup. The
+[design note](designs/mbus-restore.md) gives both sequences.
 
-Two consequences follow:
+Consequences before `53f2f75c`:
 
-- Every image after the first of a lifetime runs its memory traffic on a bus
+- Every image launched after a ROM return ran its memory traffic on a bus
   clocked at two thirds of boot0's rate, which is also the manual's maximum.
-- The ShuffleNetV2 timing of 2026-10-25 (`board-session-20261025-12/port-3-3`)
-  ran the 492 MHz start first, with MBUS at 600 MHz, and the 852 MHz start
-  after a ROM return, with MBUS at 400 MHz unless something restored it. Its
-  ratio of 0.79 against 0.72 predicted, and the 1.85 ms per inference that
-  did not scale with the NPU clock, are therefore confounded with the MBUS
-  rate.
+- Both ShuffleNetV2 starts of 2026-10-25 (`board-session-20261025-12/port-3-3`)
+  ran at 400 MHz: their sessions named MBUS `0x84000000`, and the NPU
+  startup compares the live word with the session before it starts. The
+  492 and 852 MHz comparison is therefore consistent, but both runs had two
+  thirds of boot0's memory-bus rate. The read before the first start showed
+  600 MHz, so at least one image returned between that read and the start.
+
+From `53f2f75c` both EL3 monitors and both SMP boots restore boot0's 600 MHz
+before the security setup, with the ROM's own sequence. Session fabric
+records must then name MBUS `0x81000000` at 600,000,000 Hz, because every
+driver compares the live word with its session.
 
 ## microSD defaults to 400 kHz, and SDR104 at 150 MHz has not run
 
@@ -284,9 +291,9 @@ Two consequences follow:
   times the high-speed throughput, against the bus's 3 times, until the
   controller's descriptor DMA replaces it ([SD DMA](designs/sd-dma.md)).
 
-## A read-only dump measures both boards
+## A read-only dump measures the clock tree
 
-The Read bundle `clock-audit-words` (bundle 19 in `tools/prepare-board-bundles.py`)
+The Read bundle `clock-audit-words` (bundle 21 in `tools/prepare-board-bundles.py`)
 reads 380 words through the boot ROM's FEL `readl` command and writes no device
 register:
 
@@ -306,21 +313,25 @@ bundles 9 and 14 ran (`6d7bae37…`) it adds only the SPC and S_TZMA blocks,
 which this bundle does not use.
 
 The frozen set is
-`~/.cache/sunstoneos/evidence/board-bundles-20261025-clock-audit/`, prepared
-from `e3d5bf48` with one bundle per port (`port-3-1/`, `port-3-3/`) and these
-offline files:
+`~/.cache/sunstoneos/evidence/board-bundles-20261025-clock-audit-2/`, prepared
+from `53f2f75c` for port 3-3 (`port-3-3/`), with these offline files:
 
-- `runbook.md`: run point A right after the cold DDR start, before any image,
-  and optional point B at the end of a lifetime;
-- `predictions.json`: 49 checked words from earlier board reads (for example
-  PLL_REF, PERI0, AHB, NSI, MBUS 600 MHz, the CPU PLL words) and 331 recorded
-  words with their manual reset defaults;
+- `runbook.md`: read A right after the cold DDR start, read B after a
+  returning image's return to the ROM, a returning image built from
+  `01ec4800` or later whose first log line records the MBUS restore, and an
+  optional read C after its return;
+- `predictions-a.json` and `predictions-b.json`: 49 checked words from
+  earlier board reads (for example PLL_REF, PERI0, AHB, NSI, the CPU PLL
+  words, and MBUS at 600 MHz for read A and 400 MHz for reads B and C) and
+  331 recorded words with their manual reset defaults;
 - `check-predictions.py`: compares a session with the predictions;
 - `decode-clocks.py`: decodes every PLL, the CPU domains and 25 module clocks
   into MHz.
 
-The offline self-test of the checker and decoder passes on five synthetic
-sessions, and both bundles re-validate with the preparation tool's own checks.
+The offline self-test of the checker and decoder passes on seven synthetic
+sessions, and the bundle re-validates with the preparation tool's own checks.
+A FEL read cannot show the restored rate, because the image's return to the
+ROM sets 400 MHz again; the image's log line records it.
 The coordinator runs the bundle; this audit made no board access.
 
 ## Ranked changes
@@ -329,18 +340,17 @@ Gain is the expected speed-up of the work the board runs; risk counts board
 writes that have not run before and their recovery. The user has approved CPU,
 GPU and NPU clock and voltage changes and the microSD 1.8 V switch.
 
-1. **Restore MBUS to 600 MHz in every image.**
-   - *Reference:* boot0's own value `0x81000000` and the manual's maximum (UM
-     4.1.4.3). The manual's rule for raising a bus clock sets the divider before
-     the source (UM 4.1.4.3), and the update bit 27 applies the change (UM
-     4.1.6.76).
-   - *Change:* the shared platform start writes `0x81000000` with the update
-     bit when it finds `0x84000000`, and the fabric checks expect 600 MHz.
-   - *Approval:* a bus clock change with no voltage change, covered by the
-     performance policy but outside the recorded approvals; record it before
-     the first run.
-   - *Board run:* the dump at points A and B on one port, then the ShuffleNetV2
-     timing at 492 and 852 MHz with MBUS at 600 MHz for both starts.
+1. **Restore MBUS to 600 MHz in every image.** Implemented in `53f2f75c`
+   ([design](designs/mbus-restore.md)).
+   - *Reference:* boot0's value `0x81000000`, the ROM's live-change sequence
+     at `0x2084`, and the manual's maximum and divider-first rule (UM 4.1.4.3).
+   - *Change:* every EL3 entry restores `0x81000000` when it finds the ROM's
+     `0x84000000`; session fabric records name 600 MHz.
+   - *Approval:* a clock-only change, which the coordinator directed under the
+     performance policy.
+   - *Board run:* the refrozen dump's reads A and B and the returning image's
+     log line, then the ShuffleNetV2 timing at 492 and 852 MHz with MBUS at
+     600 MHz.
 2. **CPU clusters and the DSU to 1794, 2002 and 1274 MHz.**
    - *Reference:* vf.dtsi rows above and the vendor change order in
      `docs/designs/cpu-top-opp.md` on `work/cpu-top-opp-1025`.
@@ -355,17 +365,16 @@ GPU and NPU clock and voltage changes and the microSD 1.8 V switch.
    - *Change:* merge `work/npu-job-overhead-1025`.
    - *Approval:* approved on 2026-10-25.
    - *Board run:* the ShuffleNetV2 timing with MBUS held at 600 MHz.
-4. **G2D to 300 MHz.**
+4. **G2D to 300 MHz.** Implemented in `53f2f75c`.
    - *Reference:* dtsi:3383-3384.
    - *Change:* PERI0_300M ÷ 1 in the G2D session check and module write.
-   - *Approval:* a clock change outside the recorded approvals; the voltage is
-     unchanged.
+   - *Approval:* a clock-only change, which the coordinator directed.
    - *Board run:* the G2D application with identical output digests at 100 and
      300 MHz.
 5. **Video engine and JPEG at 624 MHz.**
    - *Reference:* vf.dtsi:2169-2172.
    - *Change:* after the dump reads PLL_VE, program PLL_VE0 for 624 MHz and make
-     624 the binding's default.
+     624 the binding's default. Waiting for the dump.
    - *Approval:* a clock change outside the recorded approvals.
    - *Board run:* the H.264 and JPEG encoder applications with frame timing.
 6. **microSD SDR104 at 150 MHz.**
@@ -378,7 +387,9 @@ GPU and NPU clock and voltage changes and the microSD 1.8 V switch.
 7. **SDIO Wi-Fi above 25 MHz.**
    - *Reference:* dts:1663, 1670.
    - *Change:* SDR50 or SDR104 on SMHC1 with tuning, once the module's
-     supported modes are read from its CCCR.
+     supported modes are read from its CCCR. Deferred: the UHS-I SDIO sequence
+     is not implemented, and the 25 MHz four-bit profile has not run on a
+     board ([design](designs/mbus-restore.md#deferred-changes)).
    - *Approval:* a clock change outside the recorded approvals.
    - *Board run:* the radio throughput test at 25 MHz and at the raised rate.
 8. **DRAM at 2400 MHz.** Not recommended now. No vendor parameter set exists
@@ -391,8 +402,6 @@ than 24 MHz.
 
 ## Open questions
 
-- Whether the ROM return or an image lowers MBUS; the dump's points A and B
-  separate them.
 - The rates of APB0, APB1, APB_UART, PLL_DDR, PLL_PERI1, PLL_VIDEO0–2 and
   PLL_VE0/1 that boot0 leaves; the dump reads them.
 - The DSU mux word read as `0x03000105` (988 MHz) in one earlier port 3-3

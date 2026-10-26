@@ -630,7 +630,8 @@
   "cache_areas": [],
   "docs": [
    "docs/a733-kernel.md",
-   "docs/designs/gpu-vendor-default-measurements.md"
+   "docs/designs/gpu-vendor-default-measurements.md",
+   "docs/designs/mbus-restore.md"
   ],
   "library": false,
   "pure_host": false,
@@ -824,6 +825,7 @@
    "docs/designs/cpu-power-states-measurements.md",
    "docs/designs/cpu-power-states.md",
    "docs/designs/cpu-table-walks.md",
+   "docs/designs/mbus-restore.md",
    "docs/designs/multicore-correctness-1025.md",
    "docs/designs/multicore-performance-1025.md",
    "docs/designs/smp-heterogeneous-measurements.md",
@@ -1675,7 +1677,9 @@
  },
  "audit-consolidate-apps-a-h-equivalence.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/mbus-restore.md"
+  ],
   "library": false,
   "pure_host": true,
   "required_arguments": [
@@ -2042,6 +2046,7 @@
    "docs/designs/board-bundles-measurements.md",
    "docs/designs/board-bundles-next.md",
    "docs/designs/board-bundles.md",
+   "docs/designs/mbus-restore.md",
    "docs/reference-backsolve-npu.md",
    "docs/vendor-firmware/action-plan.md"
   ],
@@ -3557,6 +3562,22 @@
    "--image"
   ],
   "summary": "Run private DSI profile and application checks with explicit model authority.",
+  "usb": false
+ },
+ "el3-mbus.py": {
+  "cache_areas": [
+   "evidence",
+   "sources"
+  ],
+  "docs": [
+   "docs/designs/mbus-restore.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "sys.argv"
+  ],
+  "summary": "Check the EL3 MBUS restore against a register model and the pinned ROM and boot0 sequences.",
   "usb": false
  },
  "elf-memory-hazards.py": {
