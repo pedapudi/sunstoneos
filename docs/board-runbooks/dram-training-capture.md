@@ -13,11 +13,12 @@ of the three capture kinds in the restore design. The other two, after a
 P-state-0-only training and after an initialization-only run, are frozen in
 the same set and wait for the design's second review
 ([their section](#p-state-0-only-and-initialization-only-captures)). The v4
-set below replaces v3; both hold the same reader and stage tables, so their
-captures are analysed together. The sets
+set below replaces v3 and v4; all three hold the same reader and stage
+tables for the four-P-state captures, so their captures are analysed
+together. The sets
 `~/.cache/sunstoneos/evidence/dram-fast-boot-20261025`,
-`dram-training-capture-20261025` and `dram-training-capture-v2-20261025` are
-superseded and are not used.
+`dram-training-capture-20261025`, `dram-training-capture-v2-20261025` and
+`dram-training-capture-v4-20261025` are superseded and are not used.
 
 The run writes no storage and changes no training input. After training,
 each capture writes SRAM at `0x71000` (the cache-off helper) and `0x85000`
@@ -31,22 +32,23 @@ routine (`0x576e4`); NXP's published driver for this PHY makes both.
 
 ## Frozen inputs
 
-`F=~/.cache/sunstoneos/evidence/dram-training-capture-v4-20261025`
+`F=~/.cache/sunstoneos/evidence/dram-training-capture-v5-20261025`
 
 | Input | Port 3-1 | Port 3-3 |
 | --- | --- | --- |
 | Capture set | `$F/port-3-1` | `$F/port-3-3` |
-| Build manifest `capture-build/manifest.json` | `5ec01fd9…` | `5ec01fd9…` |
+| Build manifest `capture-build/manifest.json` | `6cb19cbf…` | `6cb19cbf…` |
 | Reader `ddr-capture.bin`, 388 bytes at `0x85000` | `0da3194f…` | `0da3194f…` |
+| SRAM capture build `capture-sram/manifest.json`, reader `f9aa11e8…` | `bd2c4a6e…` | `bd2c4a6e…` |
 | P-state-0-only DDR build `ddr-pstate0/manifest.json`, wrapper `efe58d3b…` | `d3f61d2f…` | `d3f61d2f…` |
 | Initialization-only DDR build `ddr-init-only/manifest.json`, wrapper `31c5435e…` | `fbcc95f7…` | `fbcc95f7…` |
 
-Both sets come from `work/dram-fast-boot-1025` at `256937f4`, whose tree is
+Both sets come from `work/dram-fast-boot-1025` at `84de8552`, whose tree is
 `$F/source`, and hold byte-identical builds. They share these inputs:
 
 | Input | Identity |
 | --- | --- |
-| Runner `$F/source/tools/run-ddr-capture.py` | `ea4c0454…` |
+| Runner `$F/source/tools/run-ddr-capture.py` | `812a2227…` |
 | Classifier `$F/source/tools/analyse-ddr-captures.py` | `581a9f3d…` |
 | DDR runner `$F/source/tools/run-ddr.py`, with `--allow-untrained` | `ea7a597a…` |
 | DDR build `~/.cache/sunstoneos/build/a733-ddr/manifest.json`, wrapper `a401ce2b…` | `4f20beed…` |
@@ -79,7 +81,7 @@ Set the variables of [the README](README.md#names-used-in-every-runbook)
 with `PORT` set to the board, then:
 
 ```sh
-F=~/.cache/sunstoneos/evidence/dram-training-capture-v4-20261025
+F=~/.cache/sunstoneos/evidence/dram-training-capture-v5-20261025
 C=$F/port-$PORT
 S=<a new session directory for a fresh lifetime of this board>
 T="<temperature note: room temperature, minutes since power-on, any load or heating>"
