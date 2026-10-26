@@ -1,12 +1,13 @@
 # DRAM training captures on ports 3-1 and 3-3
 
-Status: **frozen for both boards; eight lifetimes have run, and every
-command and checked prediction passed.** All on 2026-10-25:
+Status: **frozen for both boards; ten lifetimes have run, and every
+command and checked prediction passed. No further lifetime is available
+until the user can reconnect.** All on 2026-10-25:
 
 | Board | Four P-states | P-state 0 only | Initialization only |
 | --- | --- | --- | --- |
-| 3-3 | `board-session-20261025-21` | `-25`, `-27` | `-34` |
-| 3-1 | `board-session-20261025-26` | `-31`, `-35` | `-33` |
+| 3-3 | `board-session-20261025-21`, `-36` | `-25`, `-27` | `-34` |
+| 3-1 | `board-session-20261025-26`, `-36` | `-31`, `-35` | `-33` |
 
 From `DRAM BOOT DRIVE INFO` to `Actual DRAM SIZE`, the four-P-state
 training took 5,093–5,098 ms and the P-state-0-only one 4,437–4,451 ms, so
@@ -151,10 +152,13 @@ master registers and the multi-P-state message-block fields), so lifetime
 variation is measured within one kind only.
 
 **No power cycle is available after the reconnect of 2026-10-25.** That
-lifetime (`board-session-20261025-36`) gives each board a standard
-four-P-state cold start (`s7-ddr`) and two four-P-state captures
-(`lc-capture-1`, `lc-capture-2`), which confirm the status class and the
-vendor path's lifetime spread. The restore set is then fixed from the
+lifetime (`board-session-20261025-36`) gave each board a standard
+four-P-state cold start (`s7-ddr`, 5,088 ms on 3-3 and 5,102 ms on 3-1)
+and two four-P-state captures (`lc-capture-1`, `lc-capture-2`); all passed.
+They confirm the status class (276 on 3-3, 275 on 3-1) and show the
+vendor path's lifetime spread: 1,206 and 1,324 registers vary between a
+board's two four-P-state lifetimes, mostly in the `0xa0000` block and the
+byte lanes. The restore set is then fixed from the
 existing lifetimes, as the [first restore test](dram-restore-test-1.md)
 describes, and the schedule below waits for power cycles to return. Had
 more lifetimes been possible, the eight would already have settled the

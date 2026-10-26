@@ -115,8 +115,11 @@ lists them) give the first restore sets:
   by a median of 2 codes, so a record belongs to one board, as the chip-ID
   check requires.
 
-After the last reconnect of 2026-10-25 no further lifetime is available,
-so the set is fixed from these lifetimes and the first board test waits for
+The last reconnect of 2026-10-25 added a four-P-state lifetime per board,
+which removes one status register (`0x0a51022c`) from the union and shows
+that the `0xa0000` block is mostly stable after four-P-state training but
+not after P-state-0-only training. No further lifetime is available, so
+the set, 1,069 registers, is fixed from these lifetimes and the first board test waits for
 power cycles to return; [its runbook](../board-runbooks/dram-restore-test-1.md)
 gives the set's derivation, the build it needs, the predictions, the
 qualification ladder and the residual risk. Until cold and warm lifetimes

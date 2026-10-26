@@ -14,17 +14,29 @@ at 2040 MHz. It writes no storage: the record comes from the host.
 
 ## The restore set comes from the existing lifetimes
 
-After the last reconnect each board has two four-P-state, two
-P-state-0-only and one initialization-only lifetime
-([capture runbook](dram-training-capture.md)). The set is fixed from those:
+Each board has two four-P-state, two P-state-0-only and one
+initialization-only lifetime ([capture runbook](dram-training-capture.md)).
+The set is fixed from those, in
+`~/.cache/sunstoneos/evidence/dram-training-analysis-20261025/restore-set-final.json`:
 
-- **Registers:** the union of both boards' P-state-0-only minus
-  initialization-only diffs, without the `0xa0000` block, 1,070 registers
-  (`dram-training-analysis-20261025/port-3-3-restore-set-v2.json` and
-  `port-3-1-restore-set-v2.json`), minus any register that the two
-  four-P-state captures of the final lifetime class as status. The
-  four-P-state captures do not change the set otherwise, because the
-  restore runs boot0's P-state-0-only path.
+- **Registers: 1,069.** The union of both boards' P-state-0-only minus
+  initialization-only diffs, without the `0xa0000` block, holds 1,070
+  registers (`port-3-3-restore-set-v2.json`, `port-3-1-restore-set-v2.json`).
+  The final four-P-state lifetimes class one of them, channel 1 controller
+  word `0x0a51022c`, as status, and it is removed. Of the 1,069, about 250
+  also vary between the two four-P-state lifetimes of each board, and the
+  rest are equal there; the four-P-state captures change nothing else,
+  because the restore runs boot0's P-state-0-only path.
+- **The `0xa0000` block stays out.** After a four-P-state training, 8–9% of
+  its words change between lifetimes (941 on 3-3, 1,039 on 3-1), much as
+  trained registers do. After a P-state-0-only training nearly every word
+  of all four copies changes (about 3,500 per copy). So the four-P-state
+  path writes the block and the P-state-0-only path leaves it at its
+  power-on contents; the post-training call `0x581b4`, which runs only with
+  `dram_tpr13` bit 2 set (`0x57a08`), is the likely writer (inferred). The
+  restore runs the P-state-0-only path, so it leaves the block as that
+  path does, and P-state-0-only training already passes boot0's simple
+  test and the two page checks with it.
 - **Values:** one capture of the board's later P-state-0-only lifetime
   (`-27` for 3-3, `-35` for 3-1). Values from one training are restored
   together, because a byte-lane register can move by one coarse step of
@@ -96,9 +108,11 @@ power cycles are possible, adds per board:
 
 ## Confidence and residual risk
 
-- **High confidence** that the 1,008 registers in both boards' diffs are
-  training state: they differ between trained and untrained PHYs on two
-  chips, and about 660 of them never varied between trainings.
+- **High confidence** that the 1,007 registers in both boards' diffs,
+  after the status removal, are training state: they differ between
+  trained and untrained PHYs on two chips, and about 660 of them never
+  varied between trainings. The other 62 are in one board's diff only and
+  are restored as harmless on the other.
 - **Registers the set may miss:**
   - a trained register that equals its initialization value in every
     captured lifetime on both boards (2–4% of the set match that value on
@@ -109,6 +123,11 @@ power cycles are possible, adds per board:
     lifetimes and whose function is unknown;
   - MR12 and any mode register that the message block does not carry.
   The memory test is the check for all of these.
+- **The reference path has no full memory test.** P-state-0-only training
+  has passed boot0's simple test and two 4 KiB pages per lifetime, never
+  March C-. The restore inherits that path, so qualification needs a
+  March C- baseline after a P-state-0-only training as well as after the
+  standard four-P-state one.
 - **Temperature:** every capture is a room-temperature cold start. Until
   cold and warm lifetimes exist, a record is valid only for room-temperature
   cold starts, and the temperature gate needs a THS reading that is not
