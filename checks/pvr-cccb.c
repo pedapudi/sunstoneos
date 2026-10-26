@@ -116,6 +116,31 @@ static void reference_cases(void)
     assert(kicks==18);
     setup();begin(0);finish();assert(client.write==40 && get(ring+36)==0);
 }
+/* The eight-job session (docs/designs/gpu-job-session.md): each job is the
+ * 96-byte CDM command and the 8-byte timeline UPDATE, 184 bytes with their
+ * headers, with no cleanup controls. Five jobs fill 920 bytes; before the
+ * sixth the ring holds a padding command (type 221, size 64) at 920 and the
+ * sixth job starts at 0, as upstream writes it. */
+static void session_cases(void)
+{
+    setup();
+    for(unsigned n=0;n<8;++n) {
+        struct pvr_cccb_command cmds[]={command(96),{PVR_CCB_MAGIC|213u,8,0,0,payload}};
+        ref_control.read_offset=ref.write_offset;put(control+4,ref.write_offset);
+        assert(pvr_cccb_cmdseq_fits(&ref,184));
+        assert(pvr_cccb_begin(&client,cmds,2,NULL,0,now+1000));
+        for(unsigned i=0;i<2;++i)pvr_cccb_write_command_with_header(&ref,cmds[i].type,cmds[i].bytes,
+            (void *)cmds[i].payload,cmds[i].external_reference,cmds[i].internal_reference);
+        finish();assert(client.status==1 && client.write==ref.write_offset);
+        assert(client.write==(n<5 ? 184u*(n+1) : 184u*(n-4)));
+        assert(!memcmp(ring+32,expected,1024) && get(last_kick+12)==client.write);
+        if(n==5) {
+            assert(get(ring+32+920)==(PVR_CCB_MAGIC|221u) && get(ring+32+924)==64);
+            assert(get(ring+32)==(PVR_CCB_MAGIC|PVR_CCCB_TASK|205u) && get(ring+32+136)==(PVR_CCB_MAGIC|213u));
+        }
+    }
+    assert(kicks==8);
+}
 static void pressure_cases(void)
 {
     setup();begin(320);finish();begin(320);finish(); /* 720 bytes occupied. */
@@ -187,6 +212,6 @@ static void refusal_cases(void)
 }
 int main(void)
 {
-    reference_cases();pressure_cases();failure_cases();refusal_cases();
-    puts("PASS GPU client commands: reference ring/KICK bytes, wrap, pressure, delayed return, KICK consumed without a return word, retained faults and atomic refusals");
+    reference_cases();session_cases();pressure_cases();failure_cases();refusal_cases();
+    puts("PASS GPU client commands: reference ring/KICK bytes, wrap, the eight-job session wrap, pressure, delayed return, KICK consumed without a return word, retained faults and atomic refusals");
 }
