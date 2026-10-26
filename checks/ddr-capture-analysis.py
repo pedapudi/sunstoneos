@@ -97,11 +97,37 @@ def main():
                                 "--baseline-kind", "init-only")
     assert completed.returncode == 0, completed.stderr
     diff = report["kind_diff"]["registers"]
-    assert sorted(diff) == ["0x%08x" % CONTROLLER["lifetime"], "0x%08x" % PHY["lifetime"]], sorted(diff)
-    assert all(entry["mask"] == 3 for entry in diff.values())
+    lifetime_regs = ["0x%08x" % CONTROLLER["lifetime"], "0x%08x" % PHY["lifetime"]]
+    assert sorted(diff) == lifetime_regs + ["param[7]"], sorted(diff)
+    # Per board the planted register moves by one bit; the board register is
+    # in neither board's diff because each board keeps one value in both kinds.
+    # param[7] differs between the kinds on board 0 only, so the union holds it
+    # with that board alone, as the restore set holds one-board registers.
+    assert all(diff[r]["mask"] == 1 and len(diff[r]["boards"]) == 2 and not diff[r]["fixed"]
+               for r in lifetime_regs)
+    assert diff["param[7]"]["boards"] == ["chip-0000abc0-00000001-00000002-00000003"] and diff["param[7]"]["fixed"]
+    assert report["kind_diff"]["per_board"] == {"chip-0000abc0-00000001-00000002-00000003": 3,
+                                                "chip-0000abc1-00000001-00000002-00000003": 2}
+    one_board = [p for p in full if p.name.startswith("b0-")] + [p for p in full if p.name.startswith("b1-l0-")]
+    completed, report = analyse(one_board, args.output / "one-board-baseline.json", "--trained-kind", "pstate0",
+                                "--baseline-kind", "init-only")
+    assert completed.returncode != 0 and "needs captures of both" in completed.stderr
+    for extra, text in ((["--exclude-block", "csr-0xa0000"], "unknown block names"),
+                        (["--baseline-kind", "pstate0"], "two different kinds")):
+        completed, _ = analyse(full, args.output / f"refused-{text.split()[0]}.json", "--trained-kind", "pstate0",
+                               *(extra if extra[0] == "--baseline-kind" else ["--baseline-kind", "init-only", *extra]))
+        assert completed.returncode != 0 and text in completed.stderr, completed.stderr
+    completed, report = analyse(full, args.output / "kind-diff-register.json", "--trained-kind", "pstate0",
+                                "--baseline-kind", "init-only", "--exclude-register", "0x%08x" % PHY["lifetime"])
+    assert completed.returncode == 0
+    assert sorted(report["kind_diff"]["registers"]) == ["0x%08x" % CONTROLLER["lifetime"], "param[7]"]
+    completed, report = analyse(full, args.output / "kind-diff-drop-fixed.json", "--trained-kind", "pstate0",
+                                "--baseline-kind", "init-only", "--drop-fixed-in", "parameter-block")
+    assert completed.returncode == 0 and report["kind_diff"]["dropped_fixed"] == ["param[7]"]
     completed, report = analyse(full, args.output / "kind-diff-excluded.json", "--trained-kind", "pstate0",
                                 "--baseline-kind", "init-only", "--exclude-block", "controller")
-    assert completed.returncode == 0 and sorted(report["kind_diff"]["registers"]) == ["0x%08x" % PHY["lifetime"]]
+    assert completed.returncode == 0
+    assert sorted(report["kind_diff"]["registers"]) == ["0x%08x" % PHY["lifetime"], "param[7]"]
     assert report["boards"] == 2 and report["lifetimes"] == 4
 
     one_capture = [p for p in full if p.name.endswith("-c0")]
@@ -126,7 +152,8 @@ def main():
     assert report["stages_compared"] == ["identity", "phy"]
     assert not any(key.startswith("0x0a11") for key in report["varying"])
     print("PASS: constant, board, lifetime and status registers classified; the trained-minus-baseline "
-          "kind diff finds the planted registers with their masks; a stage-limited capture is "
+          "kind diff, per board and united, finds the planted registers with their masks and refuses a board "
+          "without both kinds, an unknown block and equal kinds; a stage-limited capture is "
           "compared over the shared stages; reduced sets merge "
           "classes as stated; incomplete captures and different tables refused")
 

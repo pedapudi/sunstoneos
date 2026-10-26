@@ -91,7 +91,7 @@ into two groups:
 
 The training-step value at `0x0a9b0010` read `0x125f` in both kinds.
 
-**Eight lifetimes on both boards** (the [runbook status](../board-runbooks/dram-training-capture.md)
+**Ten lifetimes on both boards** (the [runbook status](../board-runbooks/dram-training-capture.md)
 lists them) give the first restore sets:
 
 - **The firmware accepts the initialization-only step value.** It reported
@@ -105,29 +105,33 @@ lists them) give the first restore sets:
   restore relies on boot0 rewriting the block on its own path.
 - **The restore sets agree.** Without that block, the P-state-0-only minus
   initialization-only diff holds 1,026 registers on 3-3 and 1,052 on 3-1,
-  1,008 of them on both: about 500 byte-lane registers, 440 address/command
-  sequencer words, 45 message-block fields, 20 `0x30000` registers, the
-  saved Vref and MR words, four or five controller words and a few others.
-  About 660 of them never varied between lifetimes. The record carries the
-  union of 1,070 with each board's values.
+  1,008 of them on both. After the review of 2026-10-25 the final set is
+  derived by one recorded command over all twenty captures, per board and
+  united, with status pooled over both boards and with firmware controls,
+  firmware inputs and controller read-result words left out: 1,036
+  registers, 527 byte-lane registers, 445 address/command sequencer words,
+  21 `0x30000` registers, 20 message-block result fields, 20 parameter words
+  and three others. 410 vary between trainings; 626 are fixed by the
+  P-state-0-only path. The [first test's runbook](../board-runbooks/dram-restore-test-1.md)
+  lists the exclusions and their reasons.
 - **The chip IDs differ in their last word only** (`0x40892413` on 3-3,
   `0x40792413` on 3-1). Trained byte-lane values differ between the boards
   by a median of 2 codes, so a record belongs to one board, as the chip-ID
   check requires.
 
 The last reconnect of 2026-10-25 added a four-P-state lifetime per board,
-which removes one status register (`0x0a51022c`) from the union and shows
+which confirms the status class (`0x0a51022c`, already status on 3-1) and shows
 that the `0xa0000` block is mostly stable after four-P-state training but
 not after P-state-0-only training. No further lifetime is available, so
-the set, 1,069 registers, is fixed from these lifetimes and the first board test waits for
+the set, 1,036 registers, is fixed from these lifetimes and the first board test waits for
 power cycles to return; [its runbook](../board-runbooks/dram-restore-test-1.md)
 gives the set's derivation, the build it needs, the predictions, the
 qualification ladder and the residual risk. Until cold and warm lifetimes
 exist, a record is valid only for room-temperature cold starts.
 
 **Projected DRAM time with a restore:** 40 ms for boot0's
-initialization-only path, plus about 1 ms for some 1,070 16-bit PHY writes
-and a few mode-register writes (*estimated* at 1 µs per APB write), plus the
+initialization-only path, plus about 1 ms for 1,016 16-bit PHY writes and
+their read-back, the 20 parameter words being set before the call (*estimated* at 1 µs per APB write), plus the
 20 ms quick check: about 60 ms against 5,093 ms of training today, a saving
 of about 5.0 s per cold boot.
 
@@ -335,8 +339,6 @@ step value (result 7 after 36 ms on both boards). These remain:
 
 - Whether a second `init_DRAM` call after a failed restore trains
   correctly; the first FEL test therefore stops instead of retraining.
-- Whether the four or five controller words in the diff need restoring, or
-  whether boot0 recomputes them from the restored state.
 - The RTC general-purpose register for part B's flag, and whether it
   survives the warm reset.
 - The coordinator's decision on a modified boot0 for card boots, and on the
@@ -350,7 +352,7 @@ Status of the work on `work/dram-fast-boot-1025`:
 | --- | --- |
 | Capture reader, stage tables, runner, DRAM and SRAM builds, wrapper variants | Implemented, host-checked, frozen (v5 sets), run in ten lifetimes |
 | `tools/analyse-ddr-captures.py`, kind diff and block exclusion | Implemented, host-checked |
-| Restore set | Fixed: `~/.cache/sunstoneos/evidence/dram-training-analysis-20261025/restore-set-final.json` |
+| Restore set | Fixed: `~/.cache/sunstoneos/evidence/dram-training-analysis-20261025/restore-set-v3.json`, command in `restore-set-v3.command` |
 | Record format and card region (`tools/training-record.py`, one unit) | Implemented, host-checked; card stage not started |
 | Record builder from a capture | Not built |
 | Restore wrapper variant | Not built |
@@ -363,9 +365,11 @@ Status of the work on `work/dram-fast-boot-1025`:
 - boot0's initialization-only path reaches firmware result 7 in 36 ms and
   the size line in 40 ms; P-state-0-only training takes 4,437–4,451 ms and
   four-P-state training 5,088–5,102 ms.
-- The restore set is 1,069 registers: the union of both boards'
-  P-state-0-only minus initialization-only diffs, without the `0xa0000`
-  block and without the status word `0x0a51022c`.
+- The restore set is 1,036 registers: the union of both boards'
+  P-state-0-only minus initialization-only diffs, with status pooled over
+  both boards and without the `0xa0000` block, firmware controls, firmware
+  inputs and controller read-result words; 410 vary between trainings and
+  626 are fixed by the P-state-0-only path.
 - The values come from one capture of each board's later P-state-0-only
   lifetime: `board-session-20261025-27/port-3-3` and
   `board-session-20261025-35/port-3-1`.
@@ -379,15 +383,13 @@ Status of the work on `work/dram-fast-boot-1025`:
 **Work in order:**
 
 1. **Record builder.** `tools/training-record.py from-capture`: read a
-   P-state-0-only capture and `restore-set-final.json`, refuse a capture
+   P-state-0-only capture and `restore-set-v3.json`, refuse a capture
    whose SID chip ID, training kind or stage tables differ, and emit the
    record with the chip ID, the pinned boot0 checksum, the CRC of boot0's
    parameter set 5 (the strap check; both boards select it), unknown
-   temperature fields, register runs and parameter words 32–51. Add a run
-   width flag, because the set holds a few 32-bit controller words, or
-   leave those words out after deciding the open question above. Leave
-   APB-only and DRTUB registers out of the written set, because they are
-   firmware controls.
+   temperature fields, register runs and parameter words 32–51. The set
+   holds only 16-bit PHY registers and parameter words, so runs need no
+   width flag.
 2. **Restore wrapper variant.** `tools/prepare-ddr.py --variant restore`:
    record in SRAM at `0x87000`, record checks before any edit (magic,
    version, both CRCs, chip ID, boot0 checksum, strap CRC), the parameter

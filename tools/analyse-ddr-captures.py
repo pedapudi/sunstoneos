@@ -20,9 +20,11 @@ and board classes merge. The summary records both counts. PHY registers of
 the lifetime and board classes are the candidates for a training restore
 (docs/designs/dram-training-restore.md). Captures are grouped by the
 training kind of their DDR run: four-p-state, pstate0 or init-only. With
---trained-kind and --baseline-kind the report adds the design's diff: the
-registers whose values in the trained kind all differ from those in the
-baseline kind, with the differing bits as a mask. Classes computed across
+--trained-kind and --baseline-kind the report adds the design's diff,
+taken per board and united: the registers whose values in the trained kind
+all differ, on that board, from those in the baseline kind, with the
+differing bits as a mask and a flag for values fixed across every trained
+capture. Status is decided over all captures. Classes computed across
 kinds count a kind difference as a lifetime difference. The output is a
 new JSON file.
 """
@@ -135,7 +137,18 @@ def main():
     parser.add_argument("--baseline-kind", help="training kind to diff against, e.g. init-only")
     parser.add_argument("--exclude-block", action="append", default=[],
                         help="leave a block out of the kind diff, e.g. phy-csr-0xa0000")
+    parser.add_argument("--drop-fixed-in", action="append", default=[],
+                        help="drop diff entries of this block whose trained value never varies, e.g. the "
+                             "message block, whose fixed fields are inputs set by the training-step value")
+    parser.add_argument("--exclude-register", action="append", default=[],
+                        help="leave one register out of the kind diff, e.g. 0x0a02002c or param[27]")
     args = parser.parse_args()
+    known_blocks = {"phy-" + block for _, _, block in PHY_BLOCKS} | {"sid", "controller", "parameter-block"}
+    unknown = sorted((set(args.exclude_block) | set(args.drop_fixed_in)) - known_blocks)
+    if unknown:
+        fail(f"unknown block names {unknown}; known: {sorted(known_blocks)}")
+    if (args.trained_kind or args.baseline_kind) and args.trained_kind == args.baseline_kind:
+        fail("--trained-kind and --baseline-kind must name two different kinds")
     captures = [load(path) for path in args.captures]
     # Captures limited with --stages share a prefix of the stage tables;
     # only those stages are compared.
@@ -165,34 +178,54 @@ def main():
     training = {kind: {"captures": len(items),
                        "runs_median_ms": [statistics.median(t["runs_ms"][i] for t in items)
                                           for i in range(min(len(t["runs_ms"]) for t in items))],
-                       "total_median_ms": statistics.median(t["total_ms"] for t in items if t["total_ms"])}
+                       "total_median_ms": (statistics.median(totals) if (totals := [t["total_ms"] for t in items
+                                                                                      if t["total_ms"]]) else None)}
                 for kind, items in by_kind.items()}
     kind_diff = None
     if args.trained_kind or args.baseline_kind:
-        # The restore design's diff: a register is set by training when every
-        # value in the trained kind differs from every value in the baseline
-        # kind. Status registers are excluded; the mask holds the bits that
-        # differ in any pair.
-        trained = [c for c in captures if c["training_kind"] == args.trained_kind]
-        baseline = [c for c in captures if c["training_kind"] == args.baseline_kind]
-        if not trained or not baseline:
-            fail("--trained-kind and --baseline-kind each need at least one capture")
+        # The restore design's diff, per board: a register is set by training
+        # on a board when every value of the trained kind there differs from
+        # every value of the baseline kind there. The result is the union over
+        # the boards. Status, decided over every capture of every board, is
+        # excluded; the mask holds the bits that differ in any pair.
         registers = {}
-        for key, kind in classes.items():
-            if kind == "status" or block_of(key) in args.exclude_block:
-                continue
-            a = {c["values"][key] for c in trained}
-            b = {c["values"][key] for c in baseline}
-            if a.isdisjoint(b):
-                mask = 0
-                for x in a:
-                    for y in b:
-                        mask |= x ^ y
-                registers[name(key)] = {"block": block_of(key), "mask": mask,
-                                        "trained": sorted(a), "baseline": sorted(b)}
+        for board, group in sorted(boards.items()):
+            trained = [c for c in group if c["training_kind"] == args.trained_kind]
+            baseline = [c for c in group if c["training_kind"] == args.baseline_kind]
+            if not trained or not baseline:
+                fail(f"board {board} needs captures of both --trained-kind and --baseline-kind")
+            for key, kind in classes.items():
+                if (kind == "status" or block_of(key) in args.exclude_block
+                        or name(key) in args.exclude_register):
+                    continue
+                a = {c["values"][key] for c in trained}
+                b = {c["values"][key] for c in baseline}
+                if a.isdisjoint(b):
+                    entry = registers.setdefault(name(key), {"block": block_of(key), "mask": 0,
+                                                             "boards": [], "trained": {}})
+                    entry["boards"].append(board)
+                    entry["trained"][board] = sorted(a)
+                    for x in a:
+                        for y in b:
+                            entry["mask"] |= x ^ y
+        trained_all = [c for c in captures if c["training_kind"] == args.trained_kind]
+        for key_name, entry in registers.items():
+            key = -1 - int(key_name[6:-1]) if key_name.startswith("param[") else int(key_name, 16)
+            # Fixed: one value in every trained capture of every board, so the
+            # value belongs to the trained path rather than to one training.
+            entry["fixed"] = len({c["values"][key] for c in trained_all}) == 1
+        dropped_fixed = sorted(k for k, e in registers.items() if e["fixed"] and e["block"] in args.drop_fixed_in)
+        for k in dropped_fixed:
+            del registers[k]
         kind_diff = {"trained_kind": args.trained_kind, "baseline_kind": args.baseline_kind,
                      "excluded_blocks": sorted(args.exclude_block),
+                     "excluded_registers": sorted(args.exclude_register),
+                     "dropped_fixed": dropped_fixed,
+                     "stages_dropped": [name_ for name_, _ in max((c["layout"] for c in captures), key=len)[common:]],
                      "count": len(registers),
+                     "fixed_count": sum(e["fixed"] for e in registers.values()),
+                     "per_board": {board: sum(board in e["boards"] for e in registers.values())
+                                   for board in sorted(boards)},
                      "by_block": dict(Counter(r["block"] for r in registers.values())),
                      "registers": registers}
     report = {

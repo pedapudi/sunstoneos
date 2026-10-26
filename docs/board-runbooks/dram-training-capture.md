@@ -176,7 +176,9 @@ in the earlier schedule. The reasons, from
 
 - **The restore set agrees across boards.** The P-state-0-only minus
   initialization-only diff, without the `0xa0000` block, gives 1,026
-  registers on 3-3 and 1,052 on 3-1; 1,008 are in both. The union of 1,070
+  registers on 3-3 and 1,052 on 3-1; 1,008 are in both. (The final set,
+  after the review's exclusions, is 1,036; see the
+  [first restore test](dram-restore-test-1.md).) The union of 1,070
   registers is restored on each board with that board's values; a register
   outside one board's diff holds its initialization value there, so
   restoring it is harmless.

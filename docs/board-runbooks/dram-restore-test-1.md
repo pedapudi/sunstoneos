@@ -16,17 +16,31 @@ at 2040 MHz. It writes no storage: the record comes from the host.
 
 Each board has two four-P-state, two P-state-0-only and one
 initialization-only lifetime ([capture runbook](dram-training-capture.md)).
-The set is fixed from those, in
-`~/.cache/sunstoneos/evidence/dram-training-analysis-20261025/restore-set-final.json`:
+The set is fixed from those, in `~/.cache/sunstoneos/evidence/dram-training-analysis-20261025/restore-set-v3.json`,
+by the single command recorded beside it in `restore-set-v3.command`
+(`tools/analyse-ddr-captures.py` over all twenty captures):
 
-- **Registers: 1,069.** The union of both boards' P-state-0-only minus
-  initialization-only diffs, without the `0xa0000` block, holds 1,070
-  registers (`port-3-3-restore-set-v2.json`, `port-3-1-restore-set-v2.json`).
-  The final four-P-state lifetimes class one of them, channel 1 controller
-  word `0x0a51022c`, as status, and it is removed. Of the 1,069, about 250
-  also vary between the two four-P-state lifetimes of each board, and the
-  rest are equal there; the four-P-state captures change nothing else,
-  because the restore runs boot0's P-state-0-only path.
+- **Registers: 1,036, all 16-bit PHY registers or parameter words.** For
+  each board, the registers whose P-state-0-only values all differ from its
+  initialization-only values (993 on 3-3, 1,019 on 3-1), united. Status is
+  decided over all twenty captures of both boards, which removes the
+  controller word `0x0a51022c`; it changed within a port 3-1 lifetime.
+- **Left out, with the reason:**
+  - the `0xa0000` block (below);
+  - the APB-only and DRTUB blocks, which are firmware controls;
+  - `dram_tpr10` itself (parameter word 27), which the restore edits;
+  - 27 message-block fields that hold one value in every P-state-0-only
+    capture, such as the training-step value at `0x0a9b0010`: they are
+    firmware inputs that the step value sets, not results;
+  - the controller's mode-register-read result words `0x0a02002c` and
+    `0x0a020040` and the MR14 copies `0x0a110094` and `0x0a510094`, which a
+    restore cannot meaningfully write; MR14 travels in parameter word 50.
+- **Two groups.** 410 registers vary between trainings: they are training
+  results. 626 hold one value in every P-state-0-only capture of both
+  boards and differ after the initialization-only run; they are the
+  P-state-0-only path's training state, which the restore writes over the
+  initialization-only path's. The earlier `restore-set-final.json`
+  (1,069 registers) is superseded.
 - **The `0xa0000` block stays out.** After a four-P-state training, 8–9% of
   its words change between lifetimes (941 on 3-3, 1,039 on 3-1), much as
   trained registers do. After a P-state-0-only training nearly every word
@@ -108,15 +122,19 @@ power cycles are possible, adds per board:
 
 ## Confidence and residual risk
 
-- **High confidence** that the 1,007 registers in both boards' diffs,
-  after the status removal, are training state: they differ between
-  trained and untrained PHYs on two chips, and about 660 of them never
-  varied between trainings. The other 62 are in one board's diff only and
-  are restored as harmless on the other.
+- **High confidence** that the 976 registers in both boards' diffs are
+  training state: they differ between trained and untrained PHYs on two
+  chips. The other 60 are in one board's diff only and are restored as
+  harmless on the other, where they hold their initialization value.
+- **Status bits that flip rarely:** status is decided from two captures
+  per lifetime, and `0x0a51022c` changed in only one of ten lifetimes. A
+  register that flips as rarely may still be in the set. Its read-back
+  right after the write could then mismatch and stop the test, which costs
+  a lifetime but no safety.
 - **Registers the set may miss:**
   - a trained register that equals its initialization value in every
     captured lifetime on both boards (2–4% of the set match that value on
-    one board, so about two of 1,070 could be missed on both);
+    one board, so about two of 1,036 could be missed on both);
   - registers outside the captured address ranges, which follow boot0's
     own accesses (`0x0000`–`0xbfff` read zero);
   - the `0xa0000` block, whose words change between power-cycled
