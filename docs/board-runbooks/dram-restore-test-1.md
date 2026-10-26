@@ -1,13 +1,13 @@
 # First DRAM training-restore test (FEL path)
 
-Status: **designed; not built and not run.** It needs the restore hook and
-the record builder below, their host checks and the independent review that
-[the restore design](../designs/dram-training-restore.md) requires, and a
-fresh power-cycled lifetime per board. No power cycle is available after
-the 2026-10-25 reconnect, so this test waits; it is written now so that it
-can run and be qualified as soon as power cycles are possible again.
+Status: **built and host-checked; not run on a board.** The record builder,
+SRAM restore helper and runner are implemented. The first physical test
+still requires a fresh power-cycled lifetime per board and acceptance of the memory qualification image's three residuals.
+Independent correctness review approved the offline implementation on
+2026-10-25. No launch approval or recovery qualification follows from the
+host checks or that review.
 
-The test replaces boot0's 4.4 s P-state 0 training with the
+This boot-time experiment replaces boot0's 4.4 s P-state 0 training with the
 initialization-only firmware run (40 ms on both boards) and a write of the
 board's recorded training results, then shows on the board that DRAM works
 at 2040 MHz. It writes no storage: the record comes from the host.
@@ -59,7 +59,7 @@ by the single command recorded beside it in `restore-set-v3.command`
 - **Mode registers:** MR14 and MR15 from that capture's parameter words 50
   and 51, through boot0's own `dram_tpr1` bit 31 path. MR12 is not captured.
 
-## What has to be built first
+## Implemented RAM-only preparation
 
 1. **Record builder:** `tools/training-record.py from-capture`, turning a
    capture directory and the set file into the record format the design
@@ -68,7 +68,7 @@ by the single command recorded beside it in `restore-set-v3.command`
 2. **Restore wrapper variant:** `tools/prepare-ddr.py --variant restore`.
    It uploads the record to SRAM, applies the P-state-0-only and
    initialization-only parameter edits plus `dram_tpr1` bit 31 and words
-   50–51, redirects the call at `0x56142` to a table-driven writer
+   32–51, redirects the call at `0x56142` to a table-driven writer
    (`MicroContMuxSel` cleared, writes in record order, set to 1, then
    `0x4bca8`), and after `init_DRAM` reads every restored register back and
    runs quick-check part A below 4 GiB. It reports each step in the
@@ -79,13 +79,69 @@ by the single command recorded beside it in `restore-set-v3.command`
    modeled (edit order, the record checks, the writer's accesses, every
    refusal), and `run-ddr.py` with a modeled FEL device for the restore mode.
 
-## Commands for one board, once built
+## Host evidence and SRAM bounds
+
+The evidence directory is
+`~/.cache/sunstoneos/evidence/resume-dram-restore-1025/`.
+The restore build is `build-final`; `from-capture` contains the two
+board records and their producer checks. No check opens a physical device. Each final check directory preserves its
+checker sources and their hashes under `checker-sources/`.
+
+| Check | Result and scope |
+| --- | --- |
+| `checks/training-record-capture.py` | Both recorded P-state-0 references produce 13,836-byte records; seven altered identity/data cases refuse. Parameter words 32–51 retain all 32 bits. |
+| `checks/ddr-wrapper.py` with restore build | Seventeen instruction cases pass, including the actual patched Thumb BLX, full-width parameters, wrong SID, header/payload CRC, malformed sections, arbitrary address/mask rejection, size, missing hook, two readback failures and sampled-memory failure. boot0 calls and MMIO effects are modeled. |
+| `checks/ddr-host-retention.py` | Nineteen cases pass. Restore errors keep ownership and prevent the host's RAM-page transactions; record/helper upload mismatches stop before DDR execution. |
+| `checks/training-record.py` | Existing record and card-image plan checks pass without device access. |
+| Existing P-state-0 wrapper | Its focused instruction check passes; the 432-byte wrapper remains byte-identical to the accepted capture build. |
+
+The nominal instruction case executes 2,345,249 instructions under a
+4,000,000-instruction fixture limit. It performs 1,016 masked PHY writes,
+immediate readback and a second readback pass after modeled `init_DRAM`.
+The sample touches two 4 KiB pages at `0x41000000` and `0x42000000`.
+Thirty-two walking-one passes and two address-pattern passes each write
+and read 278,528 bytes in total. This bounds software work and detects
+gross errors; it does not cover every channel, rank or the full memory map.
+
+| Artifact or reservation | Address and size |
+| --- | --- |
+| Wrapper | `0x85000`, 504 bytes; limit 4 KiB |
+| Mailbox | `0x86000`, 128 bytes |
+| Record | `0x87000`, 13,836 bytes; reservation 24 KiB |
+| FEL head shadow | `0x8e000`, 12 KiB |
+| Helper and address/mask table | `0x92000`, 9,864 bytes; reservation 32 KiB |
+| Private stack | `0x9b000..0x9f000`, 16 KiB |
+
+The build manifest gives source and payload SHA-256 identities and the
+linked allocated sections. The helper has one allocated code/data section
+and no uninitialized BSS. The helper digest is
+`65b20a53e13fa3d484343869bfee78f4fe503d15b6cecf78f5eeef92c28ff080`.
+The port 3-3 record digest is
+`ae1da9e29fccfd68d8d99f1bd2ab880228978038992dcb69b3efd88c57dab7e4`;
+the port 3-1 record digest is
+`7a9f0213da86318d972e1f366d2cc446e53b4a7dd7f1974fae3c0f2e49372793`.
+These records use generation 1, boot0 checksum `0x2fce7bb3`, parameter-set
+index 5 and strap CRC `0xf874a6a5`. Unknown temperature is encoded as
+`INT32_MIN` with limit zero; this experiment has no temperature admission
+measurement and remains limited to supervised room-temperature cold starts.
+
+Admission failures return error 1 (geometry), 2 (header CRC), 3 (payload
+CRC), 4 (SID), 5 (boot0) or 6 (strap) before parameter edits.
+Runtime failures return 7 (PHY readback), 8 (size), 9 (sampled memory),
+10 (missing or repeated hook) or 11 (cache/MMU state after boot0).
+A readback failure inside boot0 restores the wrapper context from SRAM,
+swaps the FEL head back and returns without resuming boot0. The runner
+requires success, 1,016 writes, one hook call, 278,528 sampled read bytes
+and the 12,288 MiB size before issuing its RAM-page checks.
+
+## Commands for one board after approval
 
 In a fresh lifetime after a power removal, at room temperature after at
 least one hour unpowered, matching the captures:
 
 1. Restore DDR start (`rs-ddr`): `run-ddr.py` with the restore build and
-   the board's record.
+   the board's record through `--record`. The build must use
+   `--variant restore --restore-set` with the fixed analysis file.
 2. The v5 capture (`rs-capture-1`) with `--ddr-evidence $S/rs-ddr`.
 3. The [memory qualification image](../memory-qualification.md), March C-
    over the 12,288 MiB map, three to five runs.
@@ -113,8 +169,9 @@ power cycles are possible, adds per board:
 2. Restored lifetimes after cold and warm starts, each with March C- and a
    stress run; these also give the temperature limit the record needs.
 3. The fallback cases of the design: a wrong record CRC, the other board's
-   record, a changed strap CRC and a forced read-back failure, each
-   refusing before any parameter edit.
+   record, a changed strap CRC and a forced read-back failure, with identity and CRC failures
+   refusing before parameter edits and the readback failure stopping before
+   further DRAM use.
 4. An in-place retraining after a refused restore, once a single run shows
    that `init_DRAM` can train twice in one lifetime.
 5. The card path only after these pass, under

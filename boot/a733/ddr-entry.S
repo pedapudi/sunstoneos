@@ -13,7 +13,11 @@ _start:
     mrs r9, cpsr
     mrc p15, 0, r10, c1, c0, 0
     cpsid if
+.ifdef DDR_RESTORE
+    ldr sp, =0x9f000
+.else
     ldr sp, =0x8d000
+.endif
     ldr r11, =0x86000
     mov r0, #0
     mov r1, #32
@@ -58,6 +62,15 @@ _start:
     str r3, [r1], #4
     subs r2, r2, #1
     bne 3b
+.ifdef DDR_RESTORE
+    ldr r3, =0x92000
+    blx r3                         // Admit everything before editing parameters.
+    cmp r0, #0
+    bne restore_failed
+    add r0, r11, #64
+    stmia r0, {r4-r11}
+    str sp, [r11, #96]
+.endif
 .ifdef DDR_PARAM_PATCH
     // Capture variants (docs/designs/dram-training-restore.md): clear
     // dram_tpr13 bit 2 to train P-state 0 only, and optionally replace the
@@ -80,6 +93,12 @@ _start:
     ldr r3, =0x49bdd
     blx r3                         // init_DRAM(0, parameters), returns MiB.
     str r0, [r11, #8]
+.ifdef DDR_RESTORE
+    ldr r3, =0x92008
+    blx r3
+    cmp r0, #0
+    bne restore_failed
+.endif
     mov r0, #4
     str r0, [r11, #4]
 finish:
@@ -98,6 +117,28 @@ restore_context:
     mov sp, r8
     msr cpsr_cxsf, r9
     pop {r4-r11, pc}
+
+.ifdef DDR_RESTORE
+.global restore_hook
+restore_hook:
+    push {r0-r3, r12, lr}
+    ldr r3, =0x92004
+    blx r3
+    cmp r0, #0
+    bne restore_abort
+    pop {r0-r3, r12, lr}
+    ldr r12, =0x4bca9
+    bx r12                         // Original Thumb call, with original arguments.
+restore_abort:
+    // Nested boot0 callees may own all callee-saved registers. Recover the
+    // wrapper context from SRAM, then use its normal FEL swap and return.
+    ldr r1, =0x86040
+    ldmia r1, {r4-r11}
+    ldr sp, [r11, #96]
+restore_failed:
+    str r0, [r11, #28]
+    b finish
+.endif
 
 swap_fel:
     ldr r0, =0x47000

@@ -15,7 +15,10 @@ import sys
 import types
 from unittest.mock import patch
 ROOT=Path(__file__).resolve().parents[1]
-p=argparse.ArgumentParser(description=__doc__);p.add_argument('--evidence',type=Path,required=True);a=p.parse_args();a.evidence.mkdir(parents=True,exist_ok=False)
+p=argparse.ArgumentParser(description=__doc__);p.add_argument('--evidence',type=Path,required=True)
+p.add_argument('--restore-build',type=Path);p.add_argument('--restore-record',type=Path)
+a=p.parse_args();a.evidence.mkdir(parents=True,exist_ok=False)
+if bool(a.restore_build)!=bool(a.restore_record):p.error('restore build and record must be supplied together')
 spec=importlib.util.spec_from_file_location('ddr_fixture_base',ROOT/'tools/check-a733-smp.py');base=importlib.util.module_from_spec(spec);spec.loader.exec_module(base)
 real_spec=importlib.util.spec_from_file_location;real_stop=base.stop_after_failure
 build=a.evidence/'build';build.mkdir();files={}
@@ -27,7 +30,10 @@ init_build=a.evidence/'build-init-only';init_build.mkdir()
 for name in files:(init_build/name).write_bytes((build/name).read_bytes())
 (init_build/'manifest.json').write_text(json.dumps({'files':files,'variant':'init-only'}))
 results=[]
-for case in ('nominal','pre-device-refusal','version-timeout','upload-mismatch','post-exe-timeout','RAM-mismatch','quarantine-failure','journal-failure','init-only','init-only-flag-missing'):
+cases=['nominal','pre-device-refusal','version-timeout','upload-mismatch','post-exe-timeout','RAM-mismatch','quarantine-failure','journal-failure','init-only','init-only-flag-missing']
+restore_errors={'restore-nominal':0,'restore-wrong-board':4,'restore-header-crc':2,'restore-payload-crc':3,'restore-readback':7,'restore-memory':9}
+if a.restore_build:cases+=list(restore_errors)+['restore-record-upload','restore-helper-upload','restore-record-missing']
+for case in cases:
     out=a.evidence/case;out.mkdir();lock=out/'private.lock';events=[];memory={};node=Path('/fixture-usb/003/072')
     @contextmanager
     def board_lock():
@@ -63,8 +69,17 @@ for case in ('nominal','pre-device-refusal','version-timeout','upload-mismatch',
             op,address=arguments[i],int(arguments[i+1],16)
             if op=='read':
                 size=int(arguments[i+2]);data=memory.get(address,bytes(size))[:size]
-                if address==0x86000:data=struct.pack('<7I',0x53524444,5,0 if case=='init-only' else 4096,0,0,0,0)+bytes(100)
+                if address==0x86000:
+                    data=struct.pack('<7I',0x53524444,5,0 if case=='init-only' else 4096,0,0,0,0)+bytes(100)
+                    if case in restore_errors:
+                        error=restore_errors[case]
+                        data=struct.pack('<7I',0x53524444,5,12288 if error in (0,9) else 0,0,0,0,0)
+                        writes=1016 if error in (0,9) else 1 if error==7 else 0
+                        data+=struct.pack('<7I',error,writes,int(error in (0,7,9)),
+                                           278528 if not error else 4 if error==9 else 0,0,0,0)+bytes(72)
                 if (case=='upload-mismatch' and address==0x8e000 and address in memory) or (case=='RAM-mismatch' and address==0x41000000):data=bytes([data[0]^1])+data[1:]
+                if address in memory and ((case=='restore-record-upload' and address==0x87000) or (case=='restore-helper-upload' and address==0x92000)):
+                    data=bytes([data[0]^1])+data[1:]
                 Path(arguments[i+3]).write_bytes(data);i+=4
             elif op=='write':memory[address]=Path(arguments[i+2]).read_bytes();i+=3
             else:assert op=='exe';i+=2
@@ -74,16 +89,25 @@ for case in ('nominal','pre-device-refusal','version-timeout','upload-mismatch',
         if case=='journal-failure' and path.name=='session.json' and '"failure"' in data:raise OSError('Modeled journal failure')
         return real_write(path,data,*args,**kwargs)
     guard=types.ModuleType('usb_guard');guard.check_health=lambda:None
-    argv=[str(ROOT/'tools/run-ddr.py'),'--fel',str(fel),'--build',str(init_build if case.startswith('init-only') else build),'--evidence',str(out/'runtime')]+(['--allow-untrained'] if case=='init-only' else [])
+    selected_build=a.restore_build if case.startswith('restore-') else init_build if case.startswith('init-only') else build
+    argv=[str(ROOT/'tools/run-ddr.py'),'--fel',str(fel),'--build',str(selected_build),'--evidence',str(out/'runtime')]+(['--allow-untrained'] if case=='init-only' else [])
+    if case.startswith('restore-') and case!='restore-record-missing':argv+=['--record',str(a.restore_record)]
     error=None
     with patch.object(sys,'argv',argv),patch.object(importlib.util,'spec_from_file_location',selected_spec),patch.object(base,'stop_after_failure',stop),patch.object(base,'hold_ownership',hold),patch.object(subprocess,'run',fake_fel),patch.object(Path,'write_text',write),patch.dict(sys.modules,{'usb_guard':guard}):
         try:runpy.run_path(str(ROOT/'tools/run-ddr.py'),run_name='__main__')
         except (SystemExit,OSError) as failure:error=str(failure)
-    assert (error is None)==(case in ('nominal','init-only')),(case,error)
-    retained=case not in ('nominal','pre-device-refusal','init-only','init-only-flag-missing')
+    assert (error is None)==(case in ('nominal','init-only','restore-nominal')),(case,error)
+    retained=case not in ('nominal','pre-device-refusal','init-only','init-only-flag-missing','restore-nominal','restore-record-missing')
     assert events.count('hold')==int(retained),(case,events)
     assert events.count('quarantine')==int(retained and case!='journal-failure'),(case,events)
-    if case in ('pre-device-refusal','init-only-flag-missing'):assert not events
+    if case in ('pre-device-refusal','init-only-flag-missing','restore-record-missing'):assert not events
+    if case.startswith('restore-') and case!='restore-nominal':
+        assert not any(isinstance(x,list) and ('0x41000000' in x or '0x42000000' in x) for x in events),(case,events)
+    if case in restore_errors:
+        record=json.loads((out/'runtime/session.json').read_text())
+        assert record['restore_result']['error']==restore_errors[case]
+        assert record['training_record_sha256']==hashlib.sha256(a.restore_record.read_bytes()).hexdigest()
+        assert any(isinstance(x,list) and '0x9b000' in x and '0x87000' in x and '0x92000' in x for x in events)
     if case=='init-only':
         record=json.loads((out/'runtime/session.json').read_text())
         assert record['complete'] and record['untrained'] and not any(isinstance(x,list) and '0x41000000' in x for x in events)

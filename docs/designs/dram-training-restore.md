@@ -1,17 +1,14 @@
 # Design: restoring DRAM training from a record on the microSD card
 
-Status: **design, reviewed twice; restore not implemented.** The first
-independent review of 2026-10-25 found two blocking and six major issues;
-the second review found the blocking issues resolved, closed the gate for
-the P-state-0-only and initialization-only capture runs, and raised the
-RTC-flag loop and cache findings that this text now resolves. The restore
-prototype needs its own review once the captures are analysed. Implemented and host-checked: the capture
-tooling and its classifier, the record format (`tools/training-record.py`)
-and the card region in the boot-slot allocation and `tools/storage-update.py`
-(`checks/training-record.py`). The restore hook follows that review and the
-first capture analysis.
+Status: **RAM-only restore implemented and host-checked; no physical restore
+has run.** The capture tools, fixed restore set, record builder, SRAM
+admission and restore helper are implemented. The card allocation and
+record planner retain their existing single-unit format; the two-copy
+card stage below remains future work. Independent code review and physical
+prerequisites are recorded in the [first-test runbook](../board-runbooks/dram-restore-test-1.md).
 
-The user approved replacing boot0's 5.1 s DRAM training with a restore of
+Training restore improves boot time; the existing full-training path
+continues to provide DRAM initialization. The user approved replacing boot0's 5.1 s DRAM training with a restore of
 saved training results kept on the microSD card. The
 [DRAM fast-boot design](dram-fast-boot.md) derives boot0's training flow and
 measures the cost. This design specifies how the training results are
@@ -147,6 +144,11 @@ it waits for the second review.
 
 ## The hook wraps init_DRAM and writes the PHY registers inside it
 
+The sequence below describes the intended qualified path, including future
+in-place fallback. The implemented first experiment uses the narrower
+[RAM-only contract](#ram-only-implementation-contract): it returns a failure
+to FEL and never calls `init_DRAM` twice in one lifetime.
+
 boot0's P-state-0-only LPDDR5 path runs `init_DRAM` (`0x49bdc`): DRAM
 supply (`0x4b618`), clock and reset setup (`0x57a4c`), controller setup
 (`0x578a4`, `0x57238`, `0x570d4`), then `0x55990`: PHY setup (`0x55654`,
@@ -243,6 +245,9 @@ register, 64 KiB holds over 30,000 registers. On the card the header fills
 the unit's first sector and the payload starts at the second.
 
 ## The record has its own 4 MiB unit on the card
+
+This is the existing planner format. Physical card work remains deferred;
+the later two-copy design in the next steps extends this allocation.
 
 The coordinator proposed the `bootpara` region at sectors 24,496–24,499 or
 beside it. That unit, 16,384–24,575, holds the slot B header, which
@@ -344,9 +349,60 @@ step value (result 7 after 36 ms on both boards). These remain:
 - The coordinator's decision on a modified boot0 for card boots, and on the
   record's own 4 MiB unit in place of the `bootpara` sectors.
 
+## RAM-only implementation contract
+
+The first implementation admits only the fixed 1,036-entry restore set and
+its recorded P-state-0 captures. The builder binds the analysis file by
+SHA-256, checks the capture chip ID, training kind and stage tables, and
+uses the pinned boot0 parameter set 5 for the strap CRC. Capture words
+32–51 are 32-bit values: the record encodes their 40 little-endian
+halfwords as a run at `0x83278`, without truncating their upper halves.
+The remaining 1,016 entries are masked PHY halfwords. Temperature is
+unknown (`INT32_MIN`, limit zero), so this profile is restricted to the
+supervised room-temperature cold-start experiment.
+
+The wrapper retains its entry and mailbox at `0x85000` and `0x86000`.
+The record occupies at most 24 KiB at `0x87000`, ending before the FEL
+shadow at `0x8e000`. The restore helper and its compiled address/mask
+allowlist occupy at most 32 KiB at `0x92000`; a private 16 KiB stack ends
+at `0x9f000`. These intervals lie in CPU-routed shared SRAM
+(`0x74000..0xf3fff`, [ROM analysis](../vendor-firmware/boot-rom-and-boot0.md#sram-stack-and-the-shared-sram-routing)).
+The host backs up and verifies every added upload interval before launch.
+
+Admission checks both CRCs, the complete record geometry, the actual SID,
+pinned boot0 checksum, set index and selected parameter CRC before editing
+parameters. It requires the complete compiled address and mask sequence;
+a valid CRC cannot authorize another MMIO destination. It admits no
+separate mode-register writes: boot0 consumes MR14/MR15 from words 50–51.
+The wrapper clears training bits 29:16, selects initialization-only step
+1 and P-state 0, and enables boot0's saved-value path through `dram_tpr1`
+bit 31. The source-backed call at `0x56142` becomes a Thumb BLX to an ARM
+trampoline. The trampoline preserves the original arguments, applies and
+checks every PHY write with `MicroContMuxSel` clear, restores that mux to
+1, then calls boot0's original `0x4bca8`.
+
+A failed write check exits directly to the wrapper's saved SRAM context;
+it must not resume boot0 and reach its memory test. After a successful
+`init_DRAM`, the wrapper checks the size and performs a bounded uncached
+sample test below 4 GiB. This sample is a gross-error check; the separate
+March C- qualification remains required. Failures have distinct mailbox
+codes for record geometry, header CRC, payload CRC, chip ID, boot0 identity,
+strap, PHY readback, size and memory comparison. No failure retrains in
+place. The host refuses its RAM page checks on any restore failure.
+
+The budget is one admission pass and one ordered PHY write/readback pass,
+with bounded record parsing and no allocation. Ordered same-register
+readback follows each write; explicit barriers surround mux transitions.
+A second readback pass after
+`init_DRAM` detects changes made by boot0 before the sample test. Host instruction checks
+exercise the real wrapper/helper with modeled boot0 calls and MMIO. They
+require exact fault codes and zero later memory accesses for wrong-board,
+CRC, readback and sampled-memory failures. These checks establish software
+ordering only; they do not qualify the PHY or authorize a launch.
+
 ## Next steps
 
-Status of the work on `work/dram-fast-boot-1025`:
+Implementation and remaining physical work:
 
 | Part | Status |
 | --- | --- |
@@ -354,10 +410,10 @@ Status of the work on `work/dram-fast-boot-1025`:
 | `tools/analyse-ddr-captures.py`, kind diff and block exclusion | Implemented, host-checked |
 | Restore set | Fixed: `~/.cache/sunstoneos/evidence/dram-training-analysis-20261025/restore-set-v3.json`, command in `restore-set-v3.command` |
 | Record format and card region (`tools/training-record.py`, one unit) | Implemented, host-checked; card stage not started |
-| Record builder from a capture | Not built |
-| Restore wrapper variant | Not built |
+| Record builder from a capture | Implemented; both actual board references and identity refusals checked |
+| Restore wrapper variant | Implemented; instruction and host-runner cases checked |
 | March C- runs on the restored and P-state-0-only paths | Image implemented and host-modeled, never run on a board |
-| First restore test, [runbook](../board-runbooks/dram-restore-test-1.md) | Designed, not built |
+| First restore test, [runbook](../board-runbooks/dram-restore-test-1.md) | SRAM artifacts built; physical prerequisites remain |
 
 **Facts the next steps rest on**, all measured on both boards on
 2026-10-25 except where marked:
@@ -382,7 +438,7 @@ Status of the work on `work/dram-fast-boot-1025`:
 
 **Work in order:**
 
-1. **Record builder.** `tools/training-record.py from-capture`: read a
+1. **Record builder, implemented.** `tools/training-record.py from-capture`: read a
    P-state-0-only capture and `restore-set-v3.json`, refuse a capture
    whose SID chip ID, training kind or stage tables differ, and emit the
    record with the chip ID, the pinned boot0 checksum, the CRC of boot0's
@@ -390,7 +446,7 @@ Status of the work on `work/dram-fast-boot-1025`:
    temperature fields, register runs and parameter words 32–51. The set
    holds only 16-bit PHY registers and parameter words, so runs need no
    width flag.
-2. **Restore wrapper variant.** `tools/prepare-ddr.py --variant restore`:
+2. **Restore wrapper variant, implemented.** `tools/prepare-ddr.py --variant restore`:
    record in SRAM at `0x87000`, record checks before any edit (magic,
    version, both CRCs, chip ID, boot0 checksum, strap CRC), the parameter
    edits (`dram_tpr13` bit 2 clear, `dram_tpr10` bits 29:16 set to
@@ -400,8 +456,8 @@ Status of the work on `work/dram-fast-boot-1025`:
    after `init_DRAM` a sampled pattern check below 4 GiB. Any failure stops
    and reports in the mailbox; there is no in-place retraining.
    `tools/run-ddr.py` gains a `--record` upload for that variant.
-3. **Host checks.** Extend `checks/ddr-wrapper.py` with a model of the
-   restore path, and `checks/ddr-host-retention.py` with its runner cases:
+3. **Host checks, implemented.** `checks/ddr-wrapper.py` covers the
+   restore path, and `checks/ddr-host-retention.py` covers its runner cases:
    a wrong-board record, a corrupt record, a read-back mismatch and a
    memory-check failure must each stop with their code before any further
    DRAM use.

@@ -16,6 +16,7 @@ turns each write into a backup-first session. No command opens a device.
 import argparse
 import binascii
 import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -26,6 +27,90 @@ ROOT = Path(__file__).resolve().parents[1]
 MAGIC = b"AS73DTRN"
 VERSION, HEADER_SIZE, SECTOR = 1, 128, 512
 PLAN_KIND = "a733-training-record-plan"
+BOOT0_SHA256 = "829ea8e3b65d71a02f2d0e094bc073de3a10869f948f62db49dbf023d07fabe3"
+RESTORE_SET_SHA256 = "d1a7c6fe2570726e75057bb71bacaf154f937eede05a4fc9237ec8647e087991"
+CAPTURE_LAYOUT_SHA256 = "c7a012ca80a27eb6c666d4db0f9e5e10dbfefa23b1ba30ff08eac3206f594b2d"
+PARAMETERS = 0x831f8
+RECORD_LIMIT = 0x6000
+
+
+def restore_set(path):
+    data = Path(path).read_bytes()
+    if hashlib.sha256(data).hexdigest() != RESTORE_SET_SHA256:
+        raise ValueError("Restore set differs from the reviewed ten-lifetime analysis")
+    return json.loads(data)
+
+
+def profile(analysis):
+    """Ordered PHY addresses and masks; parameters use a separate full-width run."""
+    entries = analysis["kind_diff"]["registers"]
+    assert len(entries) == 1036
+    assert {k for k in entries if k.startswith("param[")} == {f"param[{i}]" for i in range(32, 52)}
+    return [(int(k, 16), v["mask"]) for k, v in sorted(entries.items()) if k.startswith("0x")]
+
+
+def from_capture(directory, set_path, boot0_path, generation):
+    directory = Path(directory).resolve()
+    analysis = restore_set(set_path)
+    metadata = next((c for c in analysis["captures"] if Path(c["path"]).resolve() == directory), None)
+    if metadata is None or metadata["training_kind"] != "pstate0":
+        raise ValueError("Capture is not an admitted P-state-0 reference")
+    session = json.loads((directory / "session.json").read_text())
+    stages = session["manifest"]["stages"]
+    layout = [(s["name"], s["output_bytes"],
+               [(e["address"], e["count"], e["width"], e["offset"]) for e in s["entries"]]) for s in stages]
+    if hashlib.sha256(json.dumps(layout, separators=(",", ":")).encode()).hexdigest() != CAPTURE_LAYOUT_SHA256:
+        raise ValueError("Capture stage tables differ from the reviewed capture")
+    if not session.get("complete") or len(session["stages"]) != len(stages):
+        raise ValueError("Capture is incomplete")
+    ddr = json.loads((Path(session["ddr_evidence"]) / "session.json").read_text())
+    if (not ddr.get("complete") or ddr["manifest"].get("variant") != "pstate0"
+            or ddr["manifest"]["boot0_sha256"] != BOOT0_SHA256
+            or ddr["result"]["dram_mib"] != 12288 or ddr["result"]["board_result"] != 0):
+        raise ValueError("Capture training kind or DDR identity differs")
+    values = {}
+    for stage, outcome in zip(stages, session["stages"]):
+        if not outcome["done"] or outcome["name"] != stage["name"]:
+            raise ValueError("Capture stage did not finish")
+        data = (directory / outcome["output"]).read_bytes()
+        if len(data) != stage["output_bytes"]:
+            raise ValueError("Capture stage size differs")
+        for entry in stage["entries"]:
+            for n in range(entry["count"]):
+                address = entry["address"] + n * entry["width"]
+                value = struct.unpack_from("<H" if entry["width"] == 2 else "<I", data,
+                                           entry["offset"] + n * entry["width"])[0]
+                # The vendor-window stage overlaps the later full PHY capture.
+                values[address] = value
+    chip = [values[0x03006200 + 4 * n] for n in range(4)]
+    if "chip-" + "-".join(f"{v:08x}" for v in chip) != metadata["board"]:
+        raise ValueError("Capture SID differs from the analysis board")
+    params = [int(word, 16) for word in session["parameter_block"]]
+    if len(params) != 128 or params[30] & 4 or (params[27] >> 16) & 0x1fff != 0x125f:
+        raise ValueError("Capture parameters are not P-state-0 trained values")
+    # Every selected register is in varying, including the fixed trained values:
+    # they differ from initialization-only captures. Bind bytes to that evidence.
+    for key in analysis["kind_diff"]["registers"]:
+        actual = params[int(key[6:-1])] if key.startswith("param[") else values[int(key, 16)]
+        if analysis["varying"][key]["values"][str(directory)] != actual:
+            raise ValueError("Capture value differs from the frozen analysis: " + key)
+    boot0 = Path(boot0_path).read_bytes()
+    if hashlib.sha256(boot0).hexdigest() != BOOT0_SHA256:
+        raise ValueError("boot0 differs from the reviewed image")
+    phy = profile(analysis)
+    runs = [{"base": PARAMETERS + 128,
+             "values": list(struct.unpack("<40H", struct.pack("<20I", *params[32:52])))}]
+    for address, mask in phy:
+        if runs[-1]["base"] + 2 * len(runs[-1]["values"]) == address:
+            runs[-1]["values"].append(values[address])
+        else:
+            runs.append({"base": address, "values": [values[address]]})
+    return {"generation": generation, "chip_id": chip,
+            "boot0_checksum": struct.unpack_from("<I", boot0, 12)[0], "set_index": 5,
+            "strap_crc": crc(boot0[0x574:0x5f4]), "temperature_mc": -2147483648,
+            "temperature_limit_mc": 0, "step_value": 0x125f, "size_mib": 12288,
+            "runs": runs, "masks": [{"address": a, "mask": m} for a, m in phy],
+            "mode_registers": []}
 # magic, version, header size, payload length, payload CRC, generation,
 # chip ID x4, boot0 checksum, set index, strap CRC, temperature, limit,
 # step value, size, section offsets and counts, reserved; the header CRC
@@ -83,13 +168,27 @@ def parse(record):
     if len(payload) != length or crc(payload) != payload_crc:
         raise ValueError("Payload CRC mismatch")
     runs_offset, runs, masks_offset, masks, mrs_offset, mrs = fields[17:23]
+    if (record[100:124] != bytes(24) or runs_offset != 0
+            or not 0 <= masks_offset <= mrs_offset <= length
+            or masks_offset + 8 * masks != mrs_offset or mrs_offset + 4 * mrs != length
+            or runs > masks_offset // 12):
+        raise ValueError("Invalid record section geometry")
     registers, offset = [], runs_offset
     for _ in range(runs):
+        if offset + 8 > masks_offset:
+            raise ValueError("Run header exceeds register section")
         base, count = struct.unpack_from("<II", payload, offset)
         offset += 8
+        if not count or base % 2 or count > (masks_offset - offset) // 2 or base + 2 * count > 0x100000000:
+            raise ValueError("Invalid register run")
         values = struct.unpack_from("<%dH" % count, payload, offset)
         offset += 2 * count + (-2 * count % 4)
+        if offset > masks_offset:
+            raise ValueError("Run padding exceeds register section")
         registers.append({"base": base, "values": list(values)})
+    if offset != masks_offset or any(struct.unpack_from("<H", payload, masks_offset + 8*i + 6)[0]
+                                     for i in range(masks)):
+        raise ValueError("Invalid run length or mask reserved field")
     return {"generation": fields[5], "chip_id": list(fields[6:10]), "boot0_checksum": fields[10],
             "set_index": fields[11], "strap_crc": fields[12], "temperature_mc": fields[13],
             "temperature_limit_mc": fields[14], "step_value": fields[15], "size_mib": fields[16],
@@ -143,6 +242,10 @@ def main(argv=None):
     p.add_argument("--output", type=Path, required=True)
     p = sub.add_parser("parse")
     p.add_argument("--record", type=Path, required=True)
+    p = sub.add_parser("from-capture")
+    for option in ("capture", "restore-set", "boot0", "output"):
+        p.add_argument("--" + option, type=Path, required=True)
+    p.add_argument("--generation", type=int, required=True)
     for name in ("plan", "invalidate"):
         p = sub.add_parser(name)
         if name == "plan":
@@ -151,8 +254,12 @@ def main(argv=None):
             p.add_argument("--" + option, type=Path, required=True)
     args = parser.parse_args(argv)
     try:
-        if args.command == "build":
-            record = build(json.loads(args.input.read_text()))
+        if args.command in ("build", "from-capture"):
+            spec = (from_capture(args.capture, args.restore_set, args.boot0, args.generation)
+                    if args.command == "from-capture" else json.loads(args.input.read_text()))
+            record = build(spec)
+            if args.command == "from-capture" and len(record) > RECORD_LIMIT:
+                raise ValueError("Record exceeds restore SRAM reservation")
             parse(record)
             with args.output.open("xb") as handle:
                 handle.write(record)
