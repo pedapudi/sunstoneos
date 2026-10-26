@@ -202,6 +202,32 @@ int main(void)
                (unsigned long long)(record[10] >> 32), (unsigned long long)(record[11] >> 32),
                (unsigned long long)(record[12] >> 32));
         assert(writes == 15);
+        /* The completed path: every secondary OFF, CPU-B back to 1014 MHz in
+         * the same sequence, five more clock writes and no PMIC access. */
+        uint64_t lower[4] = {0};
+        const unsigned before_bus = bus_writes;
+        orders = 0;
+        assert(top_opp_lower_b(lower, far) == TOP_OPP_DONE && lower[TOP_OPP_LOWER_RESULT_WORD] == TOP_OPP_DONE);
+        assert(regs[2][0] == 0xf8802700 && regs[2][4] == 0x03000000 && writes == 20 && bus_writes == before_bus);
+        assert(orders == 1 && order[0] == 2 && regs[1][0] == 0xf8804500 && regs[3][0] == 0xf8803100);
+        assert(lower[TOP_OPP_LOWER_ENTRY_WORD] == ((uint64_t)0xf8804d00 << 32 | 0x03000000));
+        assert(lower[TOP_OPP_LOWER_FINAL_WORD] == ((uint64_t)0xf8802700 << 32 | 0x03000000));
+        assert((lower[TOP_OPP_LOWER_PARKED_WORD] & 0xffffffff) >= 3 && (lower[TOP_OPP_LOWER_PARKED_WORD] >> 32) < 24 * 1000);
+    }
+    /* The lowering refuses, with no write, CPU-B at any word but the relock's,
+     * and a deadline already passed. */
+    board();
+    {
+        uint64_t lower[4] = {0};
+        assert(top_opp_lower_b(lower, far) == TOP_OPP_REFUSED_STATE && !writes); /* Still at the boot word. */
+        assert(relock(far) == TOP_OPP_DONE);
+        const unsigned w = writes;
+        regs[2][3] = 0xc0000001;
+        assert(top_opp_lower_b(lower, far) == TOP_OPP_REFUSED_STATE && writes == w);
+        regs[2][3] = 0x40000001;
+        assert(top_opp_lower_b(lower, 1) == TOP_OPP_REFUSED_DEADLINE && writes == w);
+        stuck_lock = 1;
+        assert(top_opp_lower_b(lower, far) == (TOP_OPP_FAULT | 3) && ((regs[2][4] >> 24) & 7) == 0);
     }
     /* Board and supply refusals before any clock write. */
     board();BW(0x07090160) &= ~(3u << 14); /* DCXO at 24 MHz. */
@@ -274,6 +300,7 @@ int main(void)
          "parked 20 us before N, three lock reads 3 us apart and 20 us before the select, P before the select, "
          "a flickering lock, its own DCDC3 1050 mV and DCDC5 1000 mV reading before any clock write, "
          "23 refusals with no clock write (oscillator, bin, bus, route, transfer, supply, PLL state, modulation, "
-         "range, deadline), update and lock timeouts, an expiring deadline");
+         "range, deadline), update and lock timeouts, an expiring deadline; CPU-B back to 1014 MHz on the completed "
+         "path with no PMIC access, and its refusals and lock timeout");
     return 0;
 }

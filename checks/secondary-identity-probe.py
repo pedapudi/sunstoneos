@@ -73,7 +73,7 @@ class Survey(primary.Probe):
     def init_top_opp(self):
         """Board 3-3's boot words of the three CPU clock domains; called again
         after a prefix restore replaces the modeled MMIO."""
-        self.pll_state, self.pll_order, self.pll_written = {}, [], False
+        self.pll_state, self.pll_order, self.pll_written, self.pll_lowered = {}, [], False, False
         self.twi = dict(stage='idle', pending=None, countdown=0, stopping=0, data=0, reg=None, regs=[])
         if not self.top_opp:
             return
@@ -154,7 +154,15 @@ class Survey(primary.Probe):
         three lock reads at least 3 us apart and 20 us after the third, with
         P = 0 written first; and the domains in the order CPU-B, CPU-L, DSU."""
         d, offset = (address-0x08870000) >> 12, address & 0xfff
-        assert self.in_survey and core == 0 and not self.started and size == 4 and d in (1, 2, 3)
+        if self.started:
+            # The completed path's CPU-B lowering (top_opp_lower_b): CPU0, CPU-B
+            # only, and only once every started secondary is observed OFF.
+            assert core == 0 and size == 4 and d == 2 and sorted(self.stopped) == sorted(self.started) and \
+                not any(self.mmio[0x07052008+c*0x1000] & 15 for c in self.started), \
+                ('CPU PLL access while a secondary runs', hex(address))
+            self.pll_lowered = True
+        else:
+            assert self.in_survey and core == 0 and size == 4 and d in (1, 2, 3)
         assert offset in (0, 4, 8, 0x18, 0x1c), ('unexpected CPU PLL word', hex(address))
         pll, sel, st = 0x08870000+0x1000*d, 0x08870000+0x1000*d+0x1c, self.pll_state[d]
         parked = not (self.mmio[sel] >> 24) & 7

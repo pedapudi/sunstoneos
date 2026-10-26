@@ -151,5 +151,10 @@ int identity_primary_run(void)
 #endif
     barrier();
 #endif
+#ifdef SUNSTONE_TOP_OPP
+    // Every secondary is OFF: CPU-B back to boot0's 1014 MHz before the
+    // return, which resets CPU-L and the DSU but not CPU-B.
+    if(top_opp_lower_b(&HEADER->reserved[TOP_OPP_LOWER_OFFSET/8-8],HEADER->deadline)!=TOP_OPP_DONE)return 0;
+#endif
     HEADER->state=2;barrier();return 1;
 }

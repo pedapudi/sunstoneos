@@ -117,12 +117,17 @@ def deadline_record(raw, nonce, park=None):
 # relock record in identity header words 16 to 31 (boot/a733/top-opp-relock.h),
 # at this offset of the combined report, which starts 0x100 before the header.
 TOP_OPP_OFFSET, TOP_OPP_WORDS, TOP_OPP_MAGIC = 0x180, 16, 0x3130505054504f54
+# CPU-B's lowering on the completed path: four words in header words 12 to 15.
+TOP_OPP_LOWER_OFFSET, TOP_OPP_LOWER_WORDS = 0x160, 4
+TOP_OPP_BOOT_B = (0xf8802700, 0x03000000)
 TOP_OPP_FINAL = ((0xf8804d00, 0x03000000), (0xf8804500, 0x03000000), (0xf8803100, 0x03000105))
 TOP_OPP_DOMAINS = ('cpu_b', 'cpu_l', 'dsu')
 TOP_OPP_SCOPE = {'record': {'address': 0x42018180, 'words': 16},
                  'targets': {'cpu_b': {'pll': 0x08872000, 'n': 77, 'mhz': 2002},
                              'cpu_l': {'pll': 0x08871000, 'n': 69, 'mhz': 1794},
                              'dsu': {'pll': 0x08873000, 'n': 49, 'mhz': 1274}},
+                 'lower': {'record': {'address': 0x42018160, 'words': 4}, 'cpu_b': {'pll': 0x08872000, 'n': 39, 'mhz': 1014},
+                           'when': 'completed path, after every secondary is OFF, before the return'},
                  'voltages': 'DCDC3 1050 mV and DCDC5 1000 mV, set by bundle 25 and read back by bundle 26 after a ROM '
                              'return in the same lifetime; the relock reads both selectors over S_TWI0 and refuses before '
                              'any clock write unless they are at those voltages',
@@ -170,7 +175,15 @@ def decode(raw, nonce, manifest):
                 all(n >= 3 for n in relock['lock_reads']) and all(t < 24000 for t in relock['parked_ticks']) and
                 (relock['oscillator'] >> 14) & 3 == 2 and top_opp_supplies(relock),
                 'Top-operating-point relock record differs.')
+        lower = struct.unpack_from('<4Q', raw, TOP_OPP_LOWER_OFFSET)
+        relock['lower'] = {'result': lower[0], 'entry': [lower[1] >> 32, lower[1] & 0xffffffff],
+                           'final': [lower[2] >> 32, lower[2] & 0xffffffff], 'parked_ticks': lower[3] >> 32,
+                           'lock_reads': lower[3] & 0xffffffff}
+        require(lower[0] == 1 and relock['lower']['entry'] == list(TOP_OPP_FINAL[0]) and
+                relock['lower']['final'] == list(TOP_OPP_BOOT_B) and relock['lower']['lock_reads'] >= 3 and
+                relock['lower']['parked_ticks'] < 24000, 'CPU-B was not lowered to its boot word before the return.')
         # The identity header's other reserved words stay checked as zero.
+        raw = raw[:TOP_OPP_LOWER_OFFSET]+bytes(8*TOP_OPP_LOWER_WORDS)+raw[TOP_OPP_LOWER_OFFSET+8*TOP_OPP_LOWER_WORDS:]
         raw = raw[:TOP_OPP_OFFSET]+bytes(8*TOP_OPP_WORDS)+raw[TOP_OPP_OFFSET+8*TOP_OPP_WORDS:]
     result = base.decode(raw, nonce, manifest)
     result.update(deadline_disarmed=True, quiet_background=manifest['workload_bisect']['quiet_background'])

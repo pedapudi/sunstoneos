@@ -124,7 +124,9 @@ does MBUS, so each image must set its own clocks. It does not reset CPU-B:
 the first step 6 run (`board-session-cpu-top-opp-7/port-3-3`) read CPU-B
 still at 2002 MHz after bundle 25's return, and the boot ROM's clock setup
 writes only the CPU-L and DSU PLLs. Every image that raises CPU-B lowers it
-to 1014 MHz before its return (`docs/designs/cpu-top-opp.md`). A76 execution at 2002 MHz (steps 6
+to 1014 MHz before a successful return, the step 6 workload included; a
+failed return can leave it raised and ends the lifetime with a power
+removal (`docs/designs/cpu-top-opp.md`). A76 execution at 2002 MHz (steps 6
 and 7, B1) is still to do. The merge into `bringup` waits on integration
 fixes; it is now merged (`work/merge-cpu-top-opp-1025`).
 

@@ -273,7 +273,7 @@ def prepare(args):
     link=args.output/'identity.ld'
     vectors=' . = 0x41020800; .irq_vectors : { KEEP(*(.irq_vectors)) }\n ASSERT(. == 0x41021000, "Vector table extent differs")\n' if interrupts else ''
     if top_opp:
-        vectors=' . = 0x41020200; .top_opp : { KEEP(*(.text.top_opp)) KEEP(*(.rodata.top_opp)) }\n ASSERT(. <= 0x41021000, "Relock exceeds its gap")\n'
+        vectors=' . = 0x41020200; .top_opp : { KEEP(*(.text.top_opp)) KEEP(*(.text.top_opp.*)) KEEP(*(.rodata.top_opp)) }\n ASSERT(. <= 0x41021000, "Relock exceeds its gap")\n'
     link.write_text('ENTRY(identity_primary_gate)\nSECTIONS {\n'+vectors+'''
  . = 0x41021000;
  .text : { *(.text .text.*) *(.rodata .rodata.*) }
@@ -390,6 +390,8 @@ def prepare(args):
     if top_opp:
         manifest['top_opp']={'record':{'address':REPORT[0]+0x80,'words':16},'targets':TOP_OPP_TARGETS,
             'relock':hooks.get('top_opp_relock'),
+            'lower':{'record':{'address':REPORT[0]+0x60,'words':4},'cpu_b':{'pll':0x08872000,'n':39,'mhz':1014},
+                     'when':'completed path, after every secondary is OFF, before the return'},
             'voltages':'DCDC3 1050 mV and DCDC5 1000 mV, set by bundle 25 and read back by bundle 26 after a ROM return '
                        'in the same lifetime; the relock reads both selectors over S_TWI0 and refuses before any clock '
                        'write unless they are at those voltages',

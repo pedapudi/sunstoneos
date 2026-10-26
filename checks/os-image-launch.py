@@ -73,7 +73,7 @@ def clock_cases(raw, record, put, target, identities, prepare, refused, out, cas
     tail = len(raw) - prep.GRANT_BYTES
     assert struct.unpack_from('<4I', raw, tail + 48) == (0, 0, 0, 0), 'the nominal grant names nothing'
     b1 = {**target, 'schema': prep.B1_SCHEMA, 'passed': True, 'grant_clusters': 0, 'sid_word': 0x496,
-          'dcdc3_mv': 900, 'dcdc5_mv': 850, 'cpu_b_pll': 0xf8802700, 'cpu_b_mux': 0x03000000,
+          'dcdc3_mv': 900, 'dcdc5_mv': 850,
           'pattern_lfm_clear': True, 'warning': 'Synthetic fixture only. Never physical authority.'}
     approval = {**target, **identities, 'schema': prep.APPROVAL_SCHEMA, 'step': 'A2', 'cluster': 'cpu-b',
                 'highest_mhz': 2002, 'changes': 1, 'approval_text': 'MODEL: no user approval exists',
@@ -101,14 +101,12 @@ def clock_cases(raw, record, put, target, identities, prepare, refused, out, cas
     other_b1 = put('cpu-clock-b1-envelope', dict(b1, sid_word=0))
     failed_b1 = put('cpu-clock-b1-failed', dict(b1, passed=False))
     granted_b1 = put('cpu-clock-b1-granted', dict(b1, grant_clusters=2))
-    raised_b1 = put('cpu-clock-b1-raised', dict(b1, cpu_b_pll=0xf8804d00))
     refusals = {
         'approval-for-another-port': granted('port', dict(approval, port='OTHER-PORT')),
         'approval-for-another-session': granted('lease', dict(approval, lease=identities['lease'] + 1)),
         'b1-envelope-bin-tops-at-1508': granted('envelope', dict(approval, b1=other_b1)),
         'b1-run-not-passed': granted('b1-failed', dict(approval, b1=failed_b1)),
         'b1-with-a-grant': granted('b1-granted', dict(approval, b1=granted_b1)),
-        'b1-with-cpu-b-above-boot0': granted('b1-raised', dict(approval, b1=raised_b1)),
         'grant-above-approval': granted('above', maxima=(0, 1794)),
         'a1-at-2002': granted('a1', dict(approval, step='A1')),
         'grant-without-approval-record': granted('missing', with_record=False),

@@ -359,11 +359,17 @@ def main():
                 opp = struct.unpack_from('<16Q', raw, 0x180)
                 finals = {2: (0xf8804d00, 0x03000000), 1: (0xf8804500, 0x03000000), 3: (0xf8803100, 0x03000105)}
                 assert opp[0] == TOP_OPP_MAGIC and opp[1] == 1 and opp[2] < opp[3], opp
-                assert machine.pll_order == [2, 1, 3], machine.pll_order
+                # The relock (CPU-B, CPU-L, DSU), then CPU-B's lowering after
+                # every secondary is OFF.
+                assert machine.pll_order == [2, 1, 3, 2] and machine.pll_lowered, machine.pll_order
                 for i, d in enumerate((2, 1, 3)):
                     pll = 0x08870000+0x1000*d
-                    assert (machine.mmio[pll], machine.mmio[pll+0x1c]) == finals[d]
+                    assert (machine.mmio[pll], machine.mmio[pll+0x1c]) == ((0xf8802700, 0x03000000) if d == 2 else finals[d])
                     assert opp[7+i] == finals[d][0] << 32 | finals[d][1] and opp[10+i] & 0xffffffff >= 3
+                lower = struct.unpack_from('<4Q', raw, 0x160)
+                assert lower[0] == 1 and lower[1] == 0xf8804d00 << 32 | 0x03000000, [hex(x) for x in lower]
+                assert lower[2] == 0xf8802700 << 32 | 0x03000000 and lower[3] & 0xffffffff >= 3, [hex(x) for x in lower]
+                top_opp_lower = list(lower)
                 # Its own entry reading: the oscillator and SID words, then the
                 # seven PMIC bytes with DCDC3 at 0xb7 (1050 mV) and DCDC5 at
                 # 0xb2 (1000 mV), all seven reads complete with the idle status.
@@ -405,7 +411,7 @@ def main():
         'deadline': machine.deadline+DEADLINE_TICKS, 'fiq_taken': machine.fiq_taken,
         'stalled_core': getattr(machine, 'stalled', None), 'cpu0_parked': machine.cpu0_parked, 'identity_park': machine.survey_hooks['identity_park'], 'injected_reads': machine.rwp_seen, 'parked_secondaries': sorted(getattr(machine, 'target_parked', ())),
         'workload_results': results, 'off': machine.stopped,
-        'top_opp_record': locals().get('top_opp_record'),
+        'top_opp_record': locals().get('top_opp_record'), 'top_opp_lower': locals().get('top_opp_lower'),
         'clean_complete': sorted(machine.clean_complete), 'helper_lines': machine.helper_lines,
         'limits': __doc__}, indent=2)+'\n')
     print('PASS return-deadline workload:', a.case, flush=True)

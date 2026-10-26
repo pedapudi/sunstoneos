@@ -319,10 +319,11 @@ def opp_row(name, position, component, text, lines, intro, after, entry=None, wr
         intro + ' The image admits the step only at the NORMAL thermal level with every sensor below 70 C, on '
         f'vf0400, with {entry[0]}, CPU-L and the DSU on their PLLs and every '
         'pattern and LFM enable clear, and no planned voltage above the bin\'s top voltage for its rail (DCDC5 '
-        '1000 mV, DCDC3 1050 mV in vf0400), and otherwise returns REFUSED before any write. A sensor set follows each '
-        'raise and at the end; a sensor at 70 C or more stops the step, which lowers what it raised (DSU 598 MHz, clusters '
-        '1,014 MHz, DCDC3 800 mV) and returns STOPPED. Both are controlled outcomes. At the end it requires the '
-        'planned rates and rails.' + (' Approved by the user on 2026-10-24 (CPU clock and voltage); '
+        '1000 mV, DCDC3 1050 mV in vf0400), and otherwise returns REFUSED before any write. ' +
+        ('A sensor set follows each raise and at the end; a sensor at 70 C or more stops the step, which lowers what '
+         'it raised (DSU 598 MHz, clusters 1,014 MHz, DCDC3 800 mV if it raised DCDC3) and returns STOPPED.' if writes
+         else 'Sensor sets come at the start and the end; a sensor at 70 C or more at the end returns STOPPED.') +
+        ' Both are controlled outcomes. At the end it requires the planned rates and rails.' + (' Approved by the user on 2026-10-24 (CPU clock and voltage); '
         'bundle/approval.json binds the values to port 3-3 and this image.' if writes else
         ' It writes no clock or PMIC register.'),
         sources=OPP_STEP_SOURCES, base=BASE_ROW, after=after, approval=OPP_APPROVAL if writes else None,
@@ -824,7 +825,8 @@ ROWS = [
             '1,000 mV and CPU-L to 1,794 MHz, then the DSU to 1,274 MHz; the image then raises DCDC3 to 1,050 mV '
             'with CPU-B held at 1,014 MHz, as step 3 did. The ROM return that follows resets CPU-L and the DSU and '
             'keeps the rails, which bundle 26 reads back; it does not reset CPU-B, which this image never changes. '
-            'The workload relocks all three itself. Steps 1 to 5 passed on port 3-3 in earlier lifetimes.', ()),
+            'The workload relocks all three itself and lowers CPU-B to 1,014 MHz again before its return. Steps 1 '
+            'to 5 passed on port 3-3 in earlier lifetimes.', ()),
     opp_row('cpu-rails-held-read', 26, 'DCDC5 1,000 mV and DCDC3 1,050 mV after the ROM return, read only',
             'DCDC5 1000 mV and DCDC3 1050 mV kept across the ROM return, read only',
             'CPU-L before pll=0xf8802600 mux=0x3010000 mhz=494, CPU-B before pll=0xf8802700 mux=0x3000000 mhz=1014 '
@@ -833,18 +835,19 @@ ROWS = [
             'the rails must still read DCDC5 1,000 mV and DCDC3 1,050 mV, the voltages that the workload\'s relock '
             'to the top points needs, and the three domains their boot PLL and mux words; a REFUSED line for the '
             'CPU supplies or the boot clock words ends the lifetime before the workload.',
-            ('cpu-top-hold-step',), entry=('DCDC5 at 1,000 mV and DCDC3 at 1,050 mV, CPU-B at any rate on its PLL',
+            ('cpu-top-hold-step',), entry=('DCDC5 at 1,000 mV and DCDC3 at 1,050 mV, CPU-B at 1,014 MHz',
                                            'dcdc5_uv=1000000 dcdc3_uv=1050000'), writes=False),
-    opp_row('cpu-after-workload-read', 27, 'CPU-B back to 1,014 MHz at 1,050 mV after the top-point workload',
-            'CPU-B back to 1014 MHz at 1050 mV after the top-point workload',
-            'CPU-B before pll=0xf8804d00 mux=0x3000000 mhz=2002 (the relock\'s word, which the ROM return keeps), '
-            'then CPU-B set pll=0xf8802700 mux=0x3000000 mhz=1014 with STEP dcdc3_uv=1050000',
-            'Step 6 of docs/designs/cpu-top-opp.md, after a completed workload: the workload\'s relock left CPU-B '
-            'at 2,002 MHz, which the ROM return does not reset. The driver lowers CPU-B to 1,014 MHz and keeps '
-            'DCDC3 at its first reading in the image, 1,050 mV, with no PMIC write, so the lifetime ends with CPU-B '
-            'at its boot rate; temperature sets come before and after.', ('cpu-rails-held-read',),
-            entry=('DCDC5 at 1,000 mV and DCDC3 at 1,050 mV, CPU-B at any rate on its PLL',
-                   'dcdc5_uv=1000000 dcdc3_uv=1050000')),
+    opp_row('cpu-after-workload-read', 27, 'Temperatures, rails and boot clock words after the top-point workload, '
+            'read only',
+            'temperatures, rails and boot clock words after the top-point workload, read only',
+            'CPU-L before pll=0xf8802600 mux=0x3010000 mhz=494, CPU-B before pll=0xf8802700 mux=0x3000000 mhz=1014 '
+            'and DSU before pll=0xf8802600 mux=0x3010105 mhz=494, which the image requires',
+            'Step 6 of docs/designs/cpu-top-opp.md, after a completed workload: the workload lowered CPU-B to '
+            '1,014 MHz before its return and the ROM return reset CPU-L and the DSU, so the three domains must read '
+            'their boot words, with DCDC5 at 1,000 mV and DCDC3 at 1,050 mV; two temperature sets. A REFUSED line '
+            'for the boot clock words or the CPU-B rate means CPU-B is still raised: remove power at once.',
+            ('cpu-rails-held-read',), entry=('DCDC5 at 1,000 mV and DCDC3 at 1,050 mV, CPU-B at 1,014 MHz',
+                                             'dcdc5_uv=1000000 dcdc3_uv=1050000'), writes=False),
     # `admission` maps fields of the value prepare() returns to the values that
     # identify this row's build. None refuses the row: no owning package has
     # named those values yet.
@@ -1201,6 +1204,12 @@ def gates(row):
                     if name != row.get('base')]
 
 
+def external_gates(entry, lifetime):
+    """The external entries of the order that must have completed before a row's order entry: (stem, name, run)."""
+    externals = {e['stem']: e for e in (lifetime or {}).get('order', []) if 'external' in e}
+    return [(stem, externals[stem]['external'], externals[stem]['run']) for stem in (entry or {}).get('after_external', [])]
+
+
 def stops(entry):
     """The controlled outcomes of earlier rows that stop an order entry, as text."""
     return [f'`{name}` ended in `{outcome}`' for name, outcomes in (entry or {}).get('stop_if', {}).items()
@@ -1226,7 +1235,7 @@ def runbook(row, bundle, value, artifacts, prerequisites, timeout, lifetime=None
     else:
         lines += [row['intro'], '']
     required, stopped = gates(row), stops(entry)
-    if required or stopped:
+    if required or stopped or external_gates(entry, lifetime):
         lines += ['## Run only after', '']
         passed = (lifetime or {}).get('passed', {})
         lines += [(f'- `{name}` passed earlier in this lifetime, from an earlier set, as `$S/{passed[name]}`: '
@@ -1235,6 +1244,9 @@ def runbook(row, bundle, value, artifacts, prerequisites, timeout, lifetime=None
                    f'- `{name}` of this set passed in this lifetime ({reason}): status 0 with its success text. A '
                    'controlled outcome of that row is not a pass.') for name, reason in required]
         lines += [f'- Do not run it when {text}.' for text in stopped]
+        lines += [f'- `{name}` (external entry `{stem}`) completed in this lifetime: `$S/{run}/session.json` has '
+                  '`complete`, `rom_usable` and `dram_restored` true. Any other outcome of it ends the lifetime with '
+                  'a power removal instead of this bundle.' for stem, name, run in external_gates(entry, lifetime)]
         lines += ['', 'The operator applies these gates; the runner does not check them.', '']
     lines += ['## Bundle', '', '| File | SHA-256 |', '| --- | --- |']
     lines += [f'| `{Path(a["path"]).relative_to(bundle)}` | `{a["sha256"]}` |' for a in artifacts]
@@ -1379,6 +1391,7 @@ def set_runbook(run_dir, lifetime, rows, table):
             after = entry.get('after', [])
         passed = lifetime.get('passed', {})
         gate = [f'`{a}` passed' + (f' (`{passed[a]}`, already in the chain)' if a in passed else '') for a in after]
+        gate += [f'`{stem}` completed with DRAM restored' for stem, _, _ in external_gates(entry, lifetime)]
         gate += [f'not if {text}' for text in stops(entry)]
         lines.append(f'| {i} | {what} | `$S/{entry["stem"]}-*`; link `{entry["run"]}` | '
                      + ('; '.join(gate) or 'none') + ' |')
@@ -1679,12 +1692,12 @@ def check_lifetime(lifetime, names, inputs):
     require(all(isinstance(x, str) for x in lifetime.get('start', [])), 'start is a list of runbook lines.')
     require(all(isinstance(x, str) and x and '/' not in x for x in [lifetime['ddr'], *lifetime['chain']]),
             'The DDR record and the chain are record directory names of the session directory.')
-    stems, runs, placed = set(), set(lifetime['chain']), list(lifetime.get('passed', {}))
+    stems, runs, placed, placed_externals = set(), set(lifetime['chain']), list(lifetime.get('passed', {})), set()
     for entry in lifetime['order']:
         require(isinstance(entry, dict) and ('row' in entry) != ('external' in entry), 'Each order entry names a row '
                 'or an external bundle.')
-        keys = {'row', 'stem', 'run', 'stop_if'} if 'row' in entry else {'external', 'stem', 'run', 'runbook', 'after',
-                                                                         'stop_if'}
+        keys = {'row', 'stem', 'run', 'stop_if', 'after_external'} if 'row' in entry else {
+            'external', 'stem', 'run', 'runbook', 'after', 'stop_if'}
         require(set(entry) <= keys, f'Order entry {entry} has keys outside {sorted(keys)}; a row\'s gates are its '
                 'base and after fields.')
         require('row' not in entry or (entry['row'] in inputs and names[entry['row']].get('returning')),
@@ -1701,6 +1714,11 @@ def check_lifetime(lifetime, names, inputs):
         required = [g for g, _ in gates(names[entry['row']])] if 'row' in entry else list(entry.get('after', []))
         late = [g for g in required + list(stop_if) if g not in placed]
         require(not late, f'Order entry {entry} names gate rows that are not placed before it: ' + ', '.join(late))
+        late = [g for g in entry.get('after_external', []) if g not in placed_externals]
+        require(not late, f'Order entry {entry} names external entries that are not placed before it: '
+                + ', '.join(late))
+        if 'external' in entry:
+            placed_externals.add(entry['stem'])
         stems.add(entry['stem'])
         runs.add(entry['run'])
         if 'row' in entry:

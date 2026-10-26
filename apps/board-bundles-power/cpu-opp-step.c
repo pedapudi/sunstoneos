@@ -15,21 +15,22 @@
  *   26  step 6, read-back before the workload: DCDC5 1000 mV and DCDC3
  *       1050 mV must have survived the ROM return, and the three domains
  *       must read the boot PLL and mux words; no write;
- *   27  step 6, after the workload: CPU-B, which the workload left at
- *       2002 MHz, back to 1014 MHz with DCDC3 kept at 1050 mV.
+ *   27  step 6, read-back after the workload: temperatures, rails and the
+ *       boot clock words, which the workload's own CPU-B lowering and the
+ *       ROM return leave; no write.
  *
  * The FEL ROM's clock setup writes the CPU-L and DSU PLLs only: on each
  * return CPU-L and the DSU read 494 MHz again, but CPU-B keeps the PLL word
  * the last image left (board-session-cpu-top-opp-7, bundle 26). Every plan
- * therefore ends with CPU-B at 1014 MHz, and the DCDC3 write requires CPU-B
- * at a rate whose voltage the target covers, read from the PLL itself.
+ * is admitted only with CPU-B at 1014 MHz and ends with it there, and a
+ * DCDC3 write runs with the CPU-B clock lease held and CPU-B at 1014 MHz.
  *
  * The client task owns the thermal driver, the thermal policy and the CPU
  * clock driver. It reads one full sensor set and inspects the three CPU
  * domains read-only (DCDC5 and DCDC3 snapshots; PLL, mux, pattern and LFM
  * words). It admits the step only at the NORMAL thermal level with every
- * sensor below OPP_LIMIT_MC, on bin vf0400, with DCDC3 and DCDC5 at 800 mV,
- * CPU-B at 1014 MHz, CPU-L and the DSU on decodable PLL rates and every
+ * sensor below OPP_LIMIT_MC, on bin vf0400, with DCDC3 and DCDC5 at the
+ * plan's entry voltages (800 mV unless it names others), CPU-B at 1014 MHz, CPU-L and the DSU on decodable PLL rates and every
  * pattern and LFM enable clear; otherwise it returns with a REFUSED line
  * before any write. Each clock change goes through the driver in 200 us
  * bursts and is followed by a check of the rail voltage it planned. A sensor
@@ -79,30 +80,29 @@ struct plan {
     unsigned count;
     struct op ops[6];
     uint16_t entry_mv[2];          /* DCDC5 and DCDC3 at admission; 0: 800 mV. */
-    uint8_t any_b;                 /* 1: CPU-B may run at any rate on its PLL. */
 };
 #if OPP_BUNDLE == 20
 static const struct plan plan = {"CPU-B 1404 MHz and back to 1014 MHz at 800 mV, no PMIC write",
     1u << A733_CPU_BIG, {0, 1404}, 2,
-    {{OP_CLOCK, A733_CPU_BIG, 1404, 800}, {OP_CLOCK, A733_CPU_BIG, 1014, 800}}, {0, 0}, 0};
+    {{OP_CLOCK, A733_CPU_BIG, 1404, 800}, {OP_CLOCK, A733_CPU_BIG, 1014, 800}}, {0, 0}};
 #elif OPP_BUNDLE == 21
 static const struct plan plan = {"DCDC3 1050 mV and back to 800 mV, CPU-B held at 1014 MHz",
-    0, {0, 0}, 2, {{OP_VOLT, A733_CPU_BIG, 0, 1050}, {OP_VOLT, A733_CPU_BIG, 0, 800}}, {0, 0}, 0};
+    0, {0, 0}, 2, {{OP_VOLT, A733_CPU_BIG, 0, 1050}, {OP_VOLT, A733_CPU_BIG, 0, 800}}, {0, 0}};
 #elif OPP_BUNDLE == 22
 static const struct plan plan = {"CPU-L 1196 MHz and the DSU 780 MHz at 800 mV",
     1u << A733_CPU_LITTLE, {1196, 0}, 4,
     {{OP_RATE, 0, 0, 0}, {OP_CLOCK, A733_CPU_LITTLE, 1196, 800}, {OP_RATE, 0, 0, 0},
-     {OP_CLOCK, A733_CPU_DSU, 780, 800}}, {0, 0}, 0};
+     {OP_CLOCK, A733_CPU_DSU, 780, 800}}, {0, 0}};
 #elif OPP_BUNDLE == 23
 static const struct plan plan = {"CPU-B 2002 MHz at 1050 mV with the DSU at 910 MHz, then CPU-B 1014 MHz at 800 mV",
     (1u << A733_CPU_LITTLE) | (1u << A733_CPU_BIG), {1196, 2002}, 4,
     {{OP_CLOCK, A733_CPU_BIG, 2002, 1050}, {OP_CLOCK, A733_CPU_DSU, 910, 800},
-     {OP_CLOCK, A733_CPU_DSU, 598, 800}, {OP_CLOCK, A733_CPU_BIG, 1014, 800}}, {0, 0}, 0};
+     {OP_CLOCK, A733_CPU_DSU, 598, 800}, {OP_CLOCK, A733_CPU_BIG, 1014, 800}}, {0, 0}};
 #elif OPP_BUNDLE == 24
 static const struct plan plan = {"CPU-L 1794 MHz at 1000 mV and the DSU 1274 MHz",
     1u << A733_CPU_LITTLE, {1794, 0}, 4,
     {{OP_RATE, 0, 0, 0}, {OP_CLOCK, A733_CPU_LITTLE, 1794, 1000}, {OP_RATE, 0, 0, 0},
-     {OP_CLOCK, A733_CPU_DSU, 1274, 1000}}, {0, 0}, 0};
+     {OP_CLOCK, A733_CPU_DSU, 1274, 1000}}, {0, 0}};
 #elif OPP_BUNDLE == 25
 /* Step 6, before the workload: DCDC5 to 1000 mV through CPU-L's top point
  * and the DSU's, then DCDC3 to 1050 mV with CPU-B held at 1014 MHz. The ROM
@@ -111,19 +111,14 @@ static const struct plan plan = {"CPU-L 1794 MHz at 1000 mV and the DSU 1274 MHz
 static const struct plan plan = {"CPU-L 1794 MHz and DCDC5 1000 mV, the DSU 1274 MHz, DCDC3 1050 mV with CPU-B at 1014 MHz",
     1u << A733_CPU_LITTLE, {1794, 0}, 3,
     {{OP_CLOCK, A733_CPU_LITTLE, 1794, 1000}, {OP_CLOCK, A733_CPU_DSU, 1274, 1000},
-     {OP_VOLT, A733_CPU_BIG, 0, 1050}}, {0, 0}, 0};
-#elif OPP_BUNDLE == 26
-/* Step 6 read-back before the workload, with no clock or PMIC write:
- * DCDC5 1000 mV and DCDC3 1050 mV kept across the ROM return. */
-static const struct plan plan = {"DCDC5 1000 mV and DCDC3 1050 mV kept across the ROM return, read only",
-    0, {0, 0}, 0, {{OP_RATE, 0, 0, 0}}, {1000, 1050}, 1};
-#elif OPP_BUNDLE == 27
-/* Step 6 after the workload: its relock left CPU-B at 2002 MHz, which the
- * ROM return keeps. CPU-B goes back to 1014 MHz; the driver keeps DCDC3 at
- * this image's first reading, 1050 mV, so the lifetime ends with CPU-B at
- * its boot rate. */
-static const struct plan plan = {"CPU-B back to 1014 MHz at 1050 mV after the top-point workload",
-    1u << A733_CPU_BIG, {0, 1014}, 1, {{OP_CLOCK, A733_CPU_BIG, 1014, 1050}}, {1000, 1050}, 1};
+     {OP_VOLT, A733_CPU_BIG, 0, 1050}}, {0, 0}};
+#elif OPP_BUNDLE == 26 || OPP_BUNDLE == 27
+/* Step 6 read-backs with no clock or PMIC write: DCDC5 1000 mV and DCDC3
+ * 1050 mV kept across the ROM return, and the three domains at their boot
+ * words, before the workload (26) and after it (27). */
+static const struct plan plan = {OPP_BUNDLE == 26 ? "DCDC5 1000 mV and DCDC3 1050 mV kept across the ROM return, read only"
+                                                  : "temperatures, rails and boot clock words after the top-point workload, read only",
+    0, {0, 0}, 0, {{OP_RATE, 0, 0, 0}}, {1000, 1050}};
 #else
 #error OPP_BUNDLE names no step
 #endif
@@ -422,7 +417,6 @@ static void dcdc3_request(const struct a733_rail_token *t, int write, uint8_t ex
 
 /* DCDC3 to mv with CPU-B's clock held exclusively, so its rate stays at
  * 1014 MHz, which both 800 and 1050 mV cover; then the vendor's 1 ms. */
-static uint32_t row_mv(enum a733_cpu_domain d, uint32_t mhz, unsigned bin);
 static void dcdc3_change(uint32_t mv)
 {
     struct a733_clock_token hold = {0};
@@ -436,15 +430,10 @@ static void dcdc3_change(uint32_t mv)
         REQUIRE(rr == A733_RAIL_PENDING || rr == A733_RAIL_BUSY, "DCDC3 lease poll");
         bb_power_pause("DCDC3 lease deadline");
     }
-    /* CPU-B's present rate, from its PLL with the clock lease held: an
-     * earlier image of this lifetime may have left it raised, since the ROM
-     * return does not reset it. The target must cover that rate's voltage. */
-    struct a733_cpu_clock_report r;
-    REQUIRE(a733_cpu_clock_report(cpu_read, NULL, &r), "clock report");
-    const struct a733_cpu_clock_domain *b = &r.domain[A733_CPU_BIG];
-    const uint32_t b_mv = b->decoded && b->source == 3u && !(b->hz % 1000000u) ?
-        row_mv(A733_CPU_BIG, (uint32_t)(b->hz / 1000000u), entry.bin) : 0;
-    REQUIRE(b_mv && b_mv <= mv, "CPU-B rate above the DCDC3 target");
+    /* Admission found CPU-B at 1014 MHz, which every DCDC3 point covers, and
+     * the clock lease held here keeps it there; no plan with a DCDC3 write
+     * changes CPU-B. */
+    REQUIRE(now_mhz[A733_CPU_BIG] == BASE_MHZ, "CPU-B not at 1014 MHz for the DCDC3 write");
     struct a733_pmic_snapshot s;
     dcdc3_request(&rail, 0, 0, 0, &s);
     REQUIRE(s.enabled && s.decoded && s.programmed_uv == rail_mv[1] * 1000u, "DCDC3 before the write");
@@ -526,15 +515,6 @@ static void check_temperature(void)
 }
 
 /* The highest voltage of a domain's column, from the driver's tables. */
-static uint32_t row_mv(enum a733_cpu_domain d, uint32_t mhz, unsigned bin)
-{
-    unsigned count;
-    const struct a733_cpu_opp *t = a733_cpu_clock_opps(d, &count);
-    for (unsigned i = 0; t && i < count; ++i)
-        if (t[i].mhz == mhz)
-            return a733_cpu_clock_opp_mv(&t[i], bin);
-    return 0;
-}
 static uint32_t top_mv(enum a733_cpu_domain d, unsigned bin)
 {
     unsigned count;
@@ -595,7 +575,7 @@ static void client(void *unused)
         rail_mv[r] = plan.entry_mv[r] ? plan.entry_mv[r] : BOOT_MV;
     if (cpu.rail_uv[1] != rail_mv[1] * 1000u || cpu.rail_uv[0] != rail_mv[0] * 1000u)
         refuse("CPU supplies");
-    if (!plan.any_b && (!entry.domain[A733_CPU_BIG].decoded || entry.domain[A733_CPU_BIG].hz != BASE_MHZ * 1000000ull))
+    if (!entry.domain[A733_CPU_BIG].decoded || entry.domain[A733_CPU_BIG].hz != BASE_MHZ * 1000000ull)
         refuse("CPU-B rate");
     for (unsigned d = 0; d < A733_CPU_DOMAINS; ++d) {
         const struct a733_cpu_clock_domain *x = &entry.domain[d];
@@ -605,10 +585,10 @@ static void client(void *unused)
         if ((cpu.words[d][0] & (3u << 29)) || (cpu.words[d][1] >> 31) || (cpu.words[d][2] >> 31))
             refuse("pattern or LFM enabled");
     }
-#if OPP_BUNDLE == 26
-    /* The boot words that the ROM return restores and that the workload's
-     * relock then requires (bundle 14 on port 3-3): CPU-L and the DSU at
-     * 494 MHz, CPU-B at 1014 MHz. */
+#if OPP_BUNDLE == 26 || OPP_BUNDLE == 27
+    /* The boot words (bundle 14 on port 3-3): CPU-L and the DSU at 494 MHz,
+     * which the ROM return restores, and CPU-B at 1014 MHz, which bundle 25
+     * never changes and the workload restores before its return. */
     static const uint32_t boot_words[A733_CPU_DOMAINS][2] = {
         {0xf8802600u, 0x03010000u}, {0xf8802700u, 0x03000000u}, {0xf8802600u, 0x03010105u}};
     for (unsigned d = 0; d < A733_CPU_DOMAINS; ++d)

@@ -133,7 +133,8 @@ EXPECT = {
     'opp-25': 'COMPLETE board bundle 25: CPU-L 1794 MHz and DCDC5 1000 mV, the DSU 1274 MHz, DCDC3 1050 mV with '
               'CPU-B at 1014 MHz',
     'opp-26': 'COMPLETE board bundle 26: DCDC5 1000 mV and DCDC3 1050 mV kept across the ROM return, read only',
-    'opp-27': 'COMPLETE board bundle 27: CPU-B back to 1014 MHz at 1050 mV after the top-point workload',
+    'opp-27': 'COMPLETE board bundle 27: temperatures, rails and boot clock words after the top-point workload, '
+              'read only',
     'dram': 'COMPLETE board bundle 8:',
 }
 POWER_UNITS = ['apps/board-bundles-power/power.c', 'apps/board-bundles-power/trace.c',
@@ -559,7 +560,7 @@ def bundle8_outcomes(elf):
 
 
 def opp_step_outcomes(bundle):
-    """Refusals before any clock or PMIC write (bundle 26 also refuses clock words other than the boot words), and
+    """Refusals before any clock or PMIC write (bundles 26 and 27 also refuse clock words other than the boot words), and
     the thermal stop after the step lowered what it raised; each with the converter disabled and the PMIC service
     parked."""
     refusals = [dict(name=f'step-refused-{slug}', status=1, interrupt=None, fail_lines=0, fault=None,
@@ -569,7 +570,7 @@ def opp_step_outcomes(bundle):
                                    ('rate-not-on-pll', 'CPU rate not on its PLL'),
                                    ('pattern-or-lfm', 'pattern or LFM enabled'),
                                    ('voltage-above-bin', "voltage above the bin's top point")) +
-                                  ((('boot-clock-words', 'boot clock words'),) if bundle == 26 else ())]
+                                  ((('boot-clock-words', 'boot clock words'),) if bundle in (26, 27) else ())]
     return refusals + [dict(name='step-stopped-thermal-limit', status=1, interrupt=None, fail_lines=0, fault=None,
                             log_contains=[f'BEGIN board bundle {bundle}:',
                                           f'STOPPED board bundle {bundle}: thermal limit'])]

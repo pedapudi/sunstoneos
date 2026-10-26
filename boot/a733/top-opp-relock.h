@@ -29,8 +29,17 @@
 #define TOP_OPP_REFUSED_SUPPLY 10u    /* Another PMIC, DCDC3 or DCDC5 off, or not at 1050 and 1000 mV. */
 #define TOP_OPP_FAULT 0x100u          /* | domain index << 4 | 1 park readback, 2 update, 3 lock,
                                        * 4 select readback, 5 final words, 6 deadline in a settle. */
+/* The CPU-B lowering record: four words in the identity header's reserved
+ * words 4 to 7 (report offset 0x60). */
+#define TOP_OPP_LOWER_OFFSET 0x60u
+#define TOP_OPP_LOWER_RESULT_WORD 0u
+#define TOP_OPP_LOWER_ENTRY_WORD 1u
+#define TOP_OPP_LOWER_FINAL_WORD 2u
+#define TOP_OPP_LOWER_PARKED_WORD 3u
+#define TOP_OPP_BOOT_B_N 39u /* CPU-B 1014 MHz, boot0's word 0xf8802700. */
 #ifndef __ASSEMBLER__
 #include <stdint.h>
 uint64_t top_opp_relock(volatile uint64_t *record, uint64_t deadline);
+uint64_t top_opp_lower_b(volatile uint64_t *lower, uint64_t deadline);
 #endif
 #endif

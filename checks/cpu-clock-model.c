@@ -482,24 +482,27 @@ static void lifetime_cases(void)
     puts("PASS lifetime of steps 2, 4 and 5: CPU-L 1196 and DSU 780 MHz at 800 mV, CPU-B 2002 MHz at 1050 mV "
          "with the DSU at 910 then 598 MHz and back, CPU-L 1794 MHz at 1000 mV and the DSU 1274 MHz, then the "
          "thermal-stop lowering to 800 mV");
-    /* Bundle 27 after the step 6 workload: the ROM return keeps CPU-B at the
-     * relock's 2002 MHz and DCDC3 at 1050 mV. Lowering CPU-B to 1014 MHz
-     * keeps DCDC3 at the image's first reading, 1050 mV, with no PMIC write. */
-    const struct a733_cpu_clock_grant g27={1,2,{0,1014},1};
+    /* CPU-B inherited at 2002 MHz, as an image that returned with it raised
+     * would leave it (the FEL ROM return does not reset CPU-B). With DCDC3 at
+     * 1050 mV, inspection applies the point and a lowering to 1014 MHz keeps
+     * DCDC3 at the image's first reading, with no PMIC write. */
+    const struct a733_cpu_clock_grant g27={1,2,{0,1014},2};
     board33(&g27);pm.pmic[REG_DCDC3]=55;pm.pmic[REG_DCDC5]=50;cm.ramp[1].from_uv=cm.ramp[1].to_uv=1050000;
     cm.ramp[0].from_uv=cm.ramp[0].to_uv=1000000;*word(PLL(1))=LOCKED|(77u<<8);cm.count=0;
     assert(a733_cpu_clock_inspect(&cpu,A733_CPU_BIG,pm.now+120000)==A733_CPU_CLOCK_PENDING);
     assert(run(400)==A733_CPU_CLOCK_COMPLETE && cpu.rail_uv[1]==1050000 && cpu.applied_mhz[A733_CPU_BIG]==2002);
     assert(settle_run(A733_CPU_BIG,1014)==A733_CPU_CLOCK_COMPLETE && *word(PLL(1))==(LOCKED|(39u<<8)) &&
         pm.pmic[REG_DCDC3]==55 && cpu.rail_uv[1]==1050000 && !pmic_writes() && released());
-    /* The same lowering when the image's first reading was 800 mV and the
-     * PLL was inherited at 2002 MHz cannot happen: inspection then finds the
-     * inherited point uncovered and applies no rate. */
-    board33(&g27);*word(PLL(1))=LOCKED|(77u<<8);
+    /* With DCDC3 at 800 mV, below the inherited point's 1050 mV, inspection
+     * applies no rate; a lowering to 1014 MHz still runs, frequency first,
+     * and needs no PMIC write because 800 mV covers 1014 MHz. */
+    board33(&g27);*word(PLL(1))=LOCKED|(77u<<8);cm.count=0;
     assert(a733_cpu_clock_inspect(&cpu,A733_CPU_BIG,pm.now+120000)==A733_CPU_CLOCK_PENDING);
     assert(run(400)==A733_CPU_CLOCK_COMPLETE && cpu.applied_mhz[A733_CPU_BIG]==0);
-    puts("PASS bundle 27 after the workload: CPU-B inherited at 2002 MHz goes to 1014 MHz with DCDC3 kept at "
-         "1050 mV and no PMIC write; an inherited 2002 MHz above an 800 mV rail is not applied");
+    assert(settle_run(A733_CPU_BIG,1014)==A733_CPU_CLOCK_COMPLETE && *word(PLL(1))==(LOCKED|(39u<<8)) &&
+        pm.pmic[REG_DCDC3]==30 && !pmic_writes() && released());
+    puts("PASS inherited CPU-B at 2002 MHz: lowered to 1014 MHz with no PMIC write, DCDC3 kept at 1050 mV; above "
+         "an 800 mV rail the point is not applied and the lowering still runs frequency first");
 }
 int main(int argc,char **argv)
 {

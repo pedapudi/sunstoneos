@@ -391,35 +391,38 @@ CPU-B at 2002 MHz across a return is safe only while DCDC3 stays at
   defined at boot0's rate, and the step images, which admit only CPU-B at
   1014 MHz.
 - **Never return with CPU-B raised** (chosen). Every image that raises
-  CPU-B lowers it to 1014 MHz before its return, so the state that boot0
-  leaves holds at every ROM return, as every other image assumes. Bundle 25
-  no longer changes CPU-B: it raises DCDC5 through CPU-L's top point and
-  DCDC3 with CPU-B held at 1014 MHz, the change step 3 qualified. The
-  workload's relock raises CPU-B, and bundle 27, the next image after the
-  workload, returns it to 1014 MHz with DCDC3 kept at 1050 mV.
+  CPU-B lowers it to 1014 MHz before a successful return, so the state that
+  boot0 leaves holds at every such ROM return, as every other image
+  assumes. Bundle 25 does not change CPU-B: it raises DCDC5 through CPU-L's
+  top point and DCDC3 with CPU-B held at 1014 MHz, the change step 3
+  qualified. The workload's relock raises CPU-B, and on the completed path,
+  after all seven secondaries are OFF, CPU0 lowers CPU-B to 1014 MHz
+  (N = 39) at EL3 with the relock's own sequence before the return
+  (`top_opp_lower_b` in `boot/a733/top-opp-relock.c`). Bundle 27 then only
+  reads the boot words. Steps 1 and 4 lowered CPU-B themselves, as before.
 
-A failure can still return with CPU-B raised: a deadline return of the
-workload after its relock, or a step image that fails between raising and
-lowering CPU-B. DCDC3 is then at least at the raised point's voltage,
-because every raise writes the voltage first. Every path that could lower
-DCDC3 or that assumes CPU-B at 1014 MHz checks the CPU-B PLL itself:
+Only a failed run can return with CPU-B raised: a deadline return of the
+workload after its relock, a completed workload whose lowering refused or
+failed (the run then reports a failure), or a step image that fails between
+raising and lowering CPU-B. DCDC3 is then at least at the raised point's
+voltage, because every raise writes the voltage first, and each such
+outcome ends the lifetime with a power removal before any other image runs.
+The paths that could lower DCDC3, or that assume CPU-B at 1014 MHz, refuse
+a raised CPU-B:
 
 - the CPU clock driver lowers DCDC3 only after lowering CPU-B in the same
-  transition, never below the rail's first reading in the image, and
-  applies no inherited CPU-B point that DCDC3 does not cover
-  (`checks/cpu-clock-model.c`, bundle 27 cases);
-- the step images' direct DCDC3 write (`dcdc3_change` in
-  `apps/board-bundles-power/cpu-opp-step.c`) reads the CPU-B PLL with the
-  CPU-B clock lease held and fails unless the target covers that rate;
-- the step images' admission refuses CPU-B other than 1014 MHz, except
-  bundles 26 and 27; bundle 26 refuses any clock word other than the boot
-  words;
+  transition and never below the rail's first reading in the image; with
+  CPU-B inherited at 2002 MHz it lowers CPU-B first with no PMIC write
+  (`checks/cpu-clock-model.c`, inherited CPU-B cases);
+- every step image admits CPU-B only at 1014 MHz, and its direct DCDC3
+  write (`dcdc3_change`) runs with the CPU-B clock lease held and requires
+  that admitted rate; no plan with a DCDC3 write changes CPU-B;
+- bundles 26 and 27 refuse any clock word other than the boot words;
 - the integrated OS image refuses to start unless CPU-B reads boot0's
-  1014 MHz (`os_cpu_admit` in `apps/os/cpu.c`), and `apps/os/prepare.py`
-  refuses a B1 record whose CPU-B words are not `0xf8802700` and
-  `0x03000000`, so B1 and steps A1 to A3 and `TOP` start from boot0's point;
+  1014 MHz (`os_cpu_admit` in `apps/os/cpu.c`), so B1 and steps A1 to A3
+  and `TOP` start from boot0's point;
 - the workload's relock reads DCDC3 itself and refuses unless it is at
-  1050 mV.
+  1050 mV, and its lowering refuses unless CPU-B reads the relock's word.
 
 The performance-mode toggle of the default path follows the same rule: an
 image may raise CPU-B for its own run, and lowers it before any ROM return.
@@ -448,7 +451,7 @@ after bundle 26 has read it on the board:
    words that bundle 14 recorded (CPU-L `0xf8802600`/`0x03010000`, CPU-B
    `0xf8802700`/`0x03000000`, DSU `0xf8802600`/`0x03010105`). It refuses,
    and the lifetime ends before the workload, if a rail or a word differs.
-3. **The workload** (`bundle-deadline-top-3`) is the returning deadline
+3. **The workload** (`bundle-deadline-top-4`) is the returning deadline
    profile on the refrozen native image `6fd7af86` with one change: before
    it releases any secondary, CPU0 at EL3 relocks CPU-B to 2002 MHz, CPU-L
    to 1794 MHz and the DSU to 1274 MHz (`boot/a733/top-opp-relock.c`). The
@@ -464,10 +467,15 @@ after bundle 26 has read it on the board:
    identity header at `0x42018180`. The overlay's 16 KiB reservation had
    288 bytes left, so the 2,647-byte relock and its tables sit in the
    3.5 KiB gap between the 512-byte base overlay and the extension.
-4. **Bundle 27**, after a completed workload, finds CPU-B still at the
-   relock's 2002 MHz and returns it to 1014 MHz; the driver keeps DCDC3 at
-   1050 mV, its first reading in the image. It reads the temperatures and
-   the rails before and after.
+4. **The workload's completed path**, after all seven secondaries are OFF,
+   lowers CPU-B to 1014 MHz with the same sequence and records it in the
+   identity header at `0x42018160` (result, entry and final words, parked
+   time and lock reads); the runner's decoder refuses a completed run
+   without it.
+5. **Bundle 27** reads, with no write, the temperatures, the rails and the
+   boot words of all three domains, and refuses on any other word. It runs
+   only after the workload completed with DRAM restored; every other
+   outcome of the workload ends the lifetime with a power removal.
 
 The workload reads no temperature itself: it lasts about 32 ticks, shorter
 than one conversion period of the temperature sensor, about 100 ms. The
@@ -487,7 +495,8 @@ Predictions, against the ten boot-rate runs on port 3-3 of 2026-10-25
 | Background progress, cores 6 and 7 | 130,100 to 137,300 | About 2 times, 255,000 to 270,000 |
 | Relock record | — | Result 1; final words `0xf8804d00`/`0x03000000`, `0xf8804500`/`0x03000000`, `0xf8803100`/`0x03000105`; at least three lock reads per domain; parked about 60 µs each |
 | Hottest sensor, bundles 25 to 27 | 42 °C in step 5; 37 °C in bundle 25 of the first step 6 run | Below 50 °C |
-| CPU-B after bundle 27 | — | `0xf8802700`/`0x03000000` (1014 MHz) with DCDC3 at 1050 mV and no PMIC write |
+| CPU-B lowering record | — | Result 1; entry `0xf8804d00`/`0x03000000`, final `0xf8802700`/`0x03000000`; at least three lock reads; parked about 60 µs |
+| Bundle 27 | — | Boot words in all three domains, DCDC5 1000 mV and DCDC3 1050 mV |
 
 Board 3-3 has run neither secondary at a top point. A non-return of the
 workload ends the lifetime with the A76 cores possibly running at 2002 MHz
@@ -502,16 +511,18 @@ runner stops with `No new FEL instance`, or 12 s after the launch if it has
 not reported by then.
 
 The frozen set is
-`~/.cache/sunstoneos/evidence/cpu-top-opp-20261025/step6/step6-set-3/` for one
+`~/.cache/sunstoneos/evidence/cpu-top-opp-20261025/step6/step6-set-4/` for one
 fresh port 3-3 lifetime: power removal, cold DDR start, the base image,
-bundles 25 and 26, the workload (`../bundle-deadline-top-3/`, its own runbook,
-binding script and root-review draft, with `bundle-deadline-top-3.sha256`),
+bundles 25 and 26, the workload (`../bundle-deadline-top-4/`, its own runbook,
+binding script and root-review draft, with `bundle-deadline-top-4.sha256`),
 bundle 27, the Read bundle 14 and a power removal. The workload's source is
-the archive `step6/source-2cf94d7a`; the overlay built without `--top-opp`
+the archive `step6/source-SRC`; the overlay built without `--top-opp`
 equals the frozen deadline overlay byte for byte. This set replaces
-`step6/step6-set-2/` and `step6/bundle-deadline-top-2/`, whose bundle 25
-returned with CPU-B raised, and the earlier `step6-set/`; those must not
-run. The binding script refuses
+`step6-set-3` and `bundle-deadline-top-3`, whose workload returned with
+CPU-B raised for bundle 27 to lower, `step6-set-2`, whose bundle 25 returned
+with CPU-B raised, and `step6-set`; those must not run. Bundle 27's order
+entry names the workload as a gate (`after_external` in the set's lifetime
+order). The binding script refuses
 port 3-1, whose bin, oscillator and supplies have not been read, and requires
 that bundle 26's run record and every later record belong to the current
 survey's instance chain: each launch starts on the instance of the record
@@ -521,12 +532,14 @@ returned to.
 The host models: `checks/top-opp-relock-check.c` runs the relock against
 modeled PLLs and a modeled AXP8191 behind S_TWI0 (the order, the 20 µs
 waits, three lock reads 3 µs apart, P before the select, both supplies read
-before any clock write, 23 refusals with no clock write and the timeouts),
-and `checks/workload-bisect-probe.py` runs the overlay with the native image
-in the instruction model, with modeled CPU PLLs and PMIC bus, in all nine
-deadline cases.
-`checks/workload-bisect-host.py` validates the relock record in the runner's
-decoder.
+before any clock write, 23 refusals with no clock write and the timeouts,
+then CPU-B's lowering with no PMIC access, its refusals and a lock
+timeout), and `checks/workload-bisect-probe.py` runs the overlay with the
+native image in the instruction model, with modeled CPU PLLs and PMIC bus,
+in all nine deadline cases; the model allows the completed path's CPU-B
+accesses only after every secondary is observed OFF.
+`checks/workload-bisect-host.py` validates the relock and lowering records
+in the runner's decoder.
 
 ## Step 7: B1, then the OS image at the top points
 

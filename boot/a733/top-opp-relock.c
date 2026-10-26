@@ -5,7 +5,8 @@
 // leaves CPU-B as the last image set it, which bundle 26 requires at the boot
 // word. The CPU rail voltages, which the ROM keeps, were raised by bundle 25
 // earlier in the same lifetime and read back by bundle 26 after a ROM return.
-// The workload returns with CPU-B at 2002 MHz; bundle 27 lowers it.
+// On the completed path, after the secondaries are OFF, top_opp_lower_b
+// returns CPU-B to 1014 MHz before the return.
 //
 // The routine does not rely on that history. Before its first clock write it
 // requires the 26 MHz oscillator, speed-bin code 0x04, every domain on its
@@ -161,6 +162,58 @@ AI int bus_stop(uint64_t deadline, uint32_t *status)
     }
 }
 
+/* One domain's change to N, P = 0, in the CPU clock driver's sequence. Writes
+ * park-to-select ticks << 32 | lock reads to *parked and PLL << 32 | mux to
+ * *final. Returns 0, or the fault step: 1 park readback, 2 update, 3 lock,
+ * 4 select readback, 5 final words, 6 deadline in a settle. */
+__attribute__((section(".text.top_opp.domain"), noinline))
+static uint64_t top_opp_domain(uintptr_t pll, unsigned target, uint64_t deadline, volatile uint64_t *parked_word,
+                               volatile uint64_t *final_word)
+{
+    const uintptr_t sel = pll + 0x1c;
+    const uint32_t mux = TOP_OPP_READ(sel), parked = mux & ~MUX;
+    TOP_OPP_WRITE(sel, parked);
+    if (TOP_OPP_READ(sel) != parked) return 1;
+    const uint64_t park = TOP_OPP_NOW();
+    if (!wait_until(park + SETTLE_TICKS, deadline)) return 6;
+    const uint32_t word = (TOP_OPP_READ(pll) & ~(255u << 8)) | (uint32_t)target << 8;
+    TOP_OPP_WRITE(pll, word);
+    TOP_OPP_WRITE(pll, word | UPDATE);
+    const uint64_t update = TOP_OPP_NOW();
+    uint32_t value;
+    while ((value = TOP_OPP_READ(pll)) & UPDATE)
+        if (TOP_OPP_NOW() >= update + UPDATE_TICKS || TOP_OPP_NOW() >= deadline) return 2;
+    const uint64_t lock = TOP_OPP_NOW();
+    unsigned locked = 0, reads = 0;
+    uint64_t last = 0;
+    while (locked < 3) {
+        const uint64_t now = TOP_OPP_NOW();
+        if (now >= lock + LOCK_TICKS || now >= deadline) return 3;
+        if (locked && now < last + GAP_TICKS) continue;
+        value = TOP_OPP_READ(pll);
+        ++reads;
+        if (((value >> 8) & 255) != target) return 3;
+        if (value & LOCK) {
+            ++locked;
+            last = now;
+        } else {
+            locked = 0;
+        }
+    }
+    if (!wait_until(TOP_OPP_NOW() + SETTLE_TICKS, deadline)) return 6;
+    const uint32_t divided = parked & ~DIVP, selected = divided | 3u << 24;
+    TOP_OPP_WRITE(sel, divided);
+    if (TOP_OPP_READ(sel) != divided) return 4;
+    TOP_OPP_WRITE(sel, selected);
+    if (TOP_OPP_READ(sel) != selected) return 4;
+    *parked_word = (TOP_OPP_NOW() - park) << 32 | reads;
+    if (!wait_until(TOP_OPP_NOW() + SETTLE_TICKS, deadline)) return 6;
+    const uint32_t final = TOP_OPP_READ(pll);
+    *final_word = (uint64_t)final << 32 | TOP_OPP_READ(sel);
+    if ((final & (PLL_ON | UPDATE)) != PLL_ON || ((final >> 8) & 255) != target) return 5;
+    return 0;
+}
+
 __attribute__((section(".text.top_opp")))
 uint64_t top_opp_relock(volatile uint64_t *record, uint64_t deadline)
 {
@@ -226,51 +279,33 @@ uint64_t top_opp_relock(volatile uint64_t *record, uint64_t deadline)
     if (TOP_OPP_NOW() >= deadline)
         return record[TOP_OPP_RESULT_WORD] = TOP_OPP_REFUSED_DEADLINE;
     for (unsigned i = 0; i < TOP_OPP_DOMAINS; ++i) {
-        const uintptr_t pll = pll_word(i), sel = pll + 0x1c;
-        const uint64_t fault = TOP_OPP_FAULT | (uint64_t)i << 4;
-        const uint32_t mux = TOP_OPP_READ(sel), parked = mux & ~MUX;
-        TOP_OPP_WRITE(sel, parked);
-        if (TOP_OPP_READ(sel) != parked) return record[TOP_OPP_RESULT_WORD] = fault | 1;
-        const uint64_t park = TOP_OPP_NOW();
-        if (!wait_until(park + SETTLE_TICKS, deadline)) return record[TOP_OPP_RESULT_WORD] = fault | 6;
-        const uint32_t word = (TOP_OPP_READ(pll) & ~(255u << 8)) | (uint32_t)TARGET_N(i) << 8;
-        TOP_OPP_WRITE(pll, word);
-        TOP_OPP_WRITE(pll, word | UPDATE);
-        const uint64_t update = TOP_OPP_NOW();
-        uint32_t value;
-        while ((value = TOP_OPP_READ(pll)) & UPDATE)
-            if (TOP_OPP_NOW() >= update + UPDATE_TICKS || TOP_OPP_NOW() >= deadline)
-                return record[TOP_OPP_RESULT_WORD] = fault | 2;
-        const uint64_t lock = TOP_OPP_NOW();
-        unsigned locked = 0, reads = 0;
-        uint64_t last = 0;
-        while (locked < 3) {
-            const uint64_t now = TOP_OPP_NOW();
-            if (now >= lock + LOCK_TICKS || now >= deadline) return record[TOP_OPP_RESULT_WORD] = fault | 3;
-            if (locked && now < last + GAP_TICKS) continue;
-            value = TOP_OPP_READ(pll);
-            ++reads;
-            if (((value >> 8) & 255) != TARGET_N(i)) return record[TOP_OPP_RESULT_WORD] = fault | 3;
-            if (value & LOCK) {
-                ++locked;
-                last = now;
-            } else {
-                locked = 0;
-            }
-        }
-        if (!wait_until(TOP_OPP_NOW() + SETTLE_TICKS, deadline)) return record[TOP_OPP_RESULT_WORD] = fault | 6;
-        const uint32_t divided = parked & ~DIVP, selected = divided | 3u << 24;
-        TOP_OPP_WRITE(sel, divided);
-        if (TOP_OPP_READ(sel) != divided) return record[TOP_OPP_RESULT_WORD] = fault | 4;
-        TOP_OPP_WRITE(sel, selected);
-        if (TOP_OPP_READ(sel) != selected) return record[TOP_OPP_RESULT_WORD] = fault | 4;
-        record[TOP_OPP_PARKED_WORD + i] = (TOP_OPP_NOW() - park) << 32 | reads;
-        if (!wait_until(TOP_OPP_NOW() + SETTLE_TICKS, deadline)) return record[TOP_OPP_RESULT_WORD] = fault | 6;
-        const uint32_t final = TOP_OPP_READ(pll);
-        record[TOP_OPP_FINAL_WORD + i] = (uint64_t)final << 32 | TOP_OPP_READ(sel);
-        if ((final & (PLL_ON | UPDATE)) != PLL_ON || ((final >> 8) & 255) != TARGET_N(i))
-            return record[TOP_OPP_RESULT_WORD] = fault | 5;
+        const uint64_t fault = top_opp_domain(pll_word(i), TARGET_N(i), deadline, &record[TOP_OPP_PARKED_WORD + i],
+                                              &record[TOP_OPP_FINAL_WORD + i]);
+        if (fault) return record[TOP_OPP_RESULT_WORD] = TOP_OPP_FAULT | (uint64_t)i << 4 | fault;
     }
     record[TOP_OPP_END_WORD] = TOP_OPP_NOW();
     return record[TOP_OPP_RESULT_WORD] = TOP_OPP_DONE;
+}
+
+/* CPU-B back to boot0's 1014 MHz (N 39) on the completed workload's path,
+ * after all seven secondaries are OFF and before the return: the ROM return
+ * resets CPU-L and the DSU but not CPU-B, and no image returns with CPU-B
+ * raised. A lowering at the kept 1050 mV needs no voltage change. CPU-B must
+ * read the relock's word, locked, with modulation off; otherwise nothing is
+ * written. Its four-word record: result, entry and final PLL << 32 | mux,
+ * and park-to-select ticks << 32 | lock reads. */
+__attribute__((section(".text.top_opp.lower")))
+uint64_t top_opp_lower_b(volatile uint64_t *lower, uint64_t deadline)
+{
+    const uintptr_t pll = 0x08872000u;
+    const uint32_t word = TOP_OPP_READ(pll), mux = TOP_OPP_READ(pll + 0x1c);
+    lower[TOP_OPP_LOWER_ENTRY_WORD] = (uint64_t)word << 32 | mux;
+    if ((word & (PLL_ON | UPDATE)) != PLL_ON || ((word >> 8) & 255) != TARGET_N(0) || mux != 0x03000000u ||
+        (TOP_OPP_READ(pll + 4) & (3u << 29)) || (TOP_OPP_READ(pll + 8) >> 31) || (TOP_OPP_READ(pll + 0x18) >> 31))
+        return lower[TOP_OPP_LOWER_RESULT_WORD] = TOP_OPP_REFUSED_STATE;
+    if (TOP_OPP_NOW() >= deadline)
+        return lower[TOP_OPP_LOWER_RESULT_WORD] = TOP_OPP_REFUSED_DEADLINE;
+    const uint64_t fault = top_opp_domain(pll, TOP_OPP_BOOT_B_N, deadline, &lower[TOP_OPP_LOWER_PARKED_WORD],
+                                          &lower[TOP_OPP_LOWER_FINAL_WORD]);
+    return lower[TOP_OPP_LOWER_RESULT_WORD] = fault ? TOP_OPP_FAULT | fault : TOP_OPP_DONE;
 }
