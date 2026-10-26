@@ -72,7 +72,7 @@ def refused(action):
     raise AssertionError('refusal expected')
 
 
-def clock_cases(raw, record, put, target, identities, prepare, refused, out, cases, gpu=False):
+def clock_cases(raw, record, put, target, identities, prepare, refused, out, cases, gpu=False, top_only=False):
     """A2 on a modeled board 3-3: CPU-B to 2,002 MHz (fuse word 0x00000496,
     column vf0400) under an approval bound to this board, image and session,
     which cites that board's read-only B1 record. Each refusal changes one
@@ -128,6 +128,8 @@ def clock_cases(raw, record, put, target, identities, prepare, refused, out, cas
     session = (out / 'MODEL-NOT-DEPLOYABLE-clock-top/board/session.bin').read_bytes()
     assert prep.grant_fields(session)['max_mhz'] == (1794, 2002) and prep.grant_fields(session)['clusters'] == 3
     cases['prepared-top-grant-both-clusters-at-the-bin-tops'] = True
+    if top_only:
+        return out / 'MODEL-NOT-DEPLOYABLE-clock-top'
     refusals.update({
         'top-with-one-cluster': granted('top-one', top, maxima=(0, 2002), clusters=2, changes=4),
         'top-below-the-bin-tops': granted('top-low', dict(top, highest_mhz={'cpu-l': 1404, 'cpu-b': 2002}),
@@ -143,8 +145,8 @@ def clock_cases(raw, record, put, target, identities, prepare, refused, out, cas
         cases['refuses-clock-' + name] = True
     assert refused(lambda: prepare('cn', entry=out / 'MODEL-admission-clock-nothing.json'))
     cases['refuses-clock-approval-without-grant'] = True
-    return out / 'MODEL-NOT-DEPLOYABLE-clock-top'
     assert not any((out / ('c%d' % i)).exists() for i in range(len(refusals))) and not (out / 'cn').exists()
+    return out / 'MODEL-NOT-DEPLOYABLE-clock-top'
 
 
 def perf_clock_cases(raw, record, put, target, identities, prepare, refused, out, cases):
@@ -196,6 +198,7 @@ def main():
         parser.add_argument('--' + name, type=Path, required=True)
     parser.add_argument('--staged', action='store_true', help='explicit USB0-only recorded workload 2')
     parser.add_argument('--accelerators-only', action='store_true', help='only combined GPU/NPU session, authority and asset admission')
+    parser.add_argument('--gpu-workers-only', action='store_true', help='only eight-worker GPU capability and combined admission')
     parser.add_argument('--gpu-cpu-only', action='store_true', help='only combined GPU and CPU-grant admission')
     parser.add_argument('--gpu-only', action='store_true', help='only supervised GPU artifact, entry and frozen-launch admission')
     parser.add_argument('--clang', type=Path, default=Path('/usr/bin/clang-21'))
@@ -207,16 +210,18 @@ def main():
     link_check = args.build / 'os-image/link-check.json'
     manifest = json.loads(link_check.read_text())
     audio = manifest['audio']
-    assert sum((args.gpu_only, args.gpu_cpu_only, args.accelerators_only)) <= 1
+    assert sum((args.gpu_only, args.gpu_cpu_only, args.accelerators_only, args.gpu_workers_only)) <= 1
     npu = manifest.get('npu', False)
     if args.accelerators_only:
         assert npu and manifest.get('gpu_linear') and not audio
-    if args.gpu_only or args.gpu_cpu_only:
+    if args.gpu_only or args.gpu_cpu_only or args.gpu_workers_only:
         assert manifest.get('gpu_linear') and not audio
     # The CPU clock build appends the driver's 96-byte grant record.
     cpu_clock = 'SUNSTONE_A733_OS_CPU_CLOCK:BOOL=ON' in (args.build / 'CMakeCache.txt').read_text()
     if args.gpu_cpu_only:
         assert cpu_clock and not manifest.get('perf_modes')
+    if args.gpu_workers_only:
+        assert cpu_clock and manifest['inference']['workers'] == 8
     image_hash = hashlib.sha256(image.read_bytes()).hexdigest()
     cases = {}
 
@@ -409,6 +414,39 @@ def main():
         (out/'result.json').write_text(json.dumps(dict(passed=True,physical_access=False,image_sha256=image_hash,
             cases=cases,limits='Synthetic physical assertions exercise actual producers/validators; no board authority or transport.'),indent=2)+'\n')
         print('PASS combined GPU/NPU preparation:',len(cases),'focused cases');return
+    if args.gpu_workers_only:
+        from harness import refused as reject
+        top = clock_cases(raw, record, put, target, identities, prepare, refused, out, cases, gpu=True, top_only=True)
+        for label, selected in (('read-only', bundle), ('top', top)):
+            frozen = tool.freeze_bundle(selected, 1)
+            tool.entry_check(frozen, target['identity'], target['port'])
+            cases['frozen-eight-gpu-' + label] = True
+        prepared = tool.freeze_bundle(bundle, 1)
+        for label, change in (
+                ('missing-inference', lambda v: v.pop('inference')),
+                ('pair-inference', lambda v: v['inference'].update(workers=2)),
+                ('service-priority', lambda v: v['inference'].update(a55_priority=3)),
+                ('owner-core', lambda v: v['inference'].update(owner_core=2))):
+            value = copy.deepcopy(record);change(value)
+            entry = out / ('MODEL-' + label + '.json');entry.write_text(json.dumps(value))
+            reject(lambda: prepare('refuse-' + label, entry=entry), 'exact eight-worker placement')
+            frozen = dict(prepared['_combined_frozen'])
+            frozen['board/admission.json'] = json.dumps(value).encode()
+            reject(lambda: tool.entry_check(dict(prepared, _combined_frozen=frozen), target['identity'], target['port']),
+                   'exact eight-worker placement')
+            cases['fresh-and-frozen-refuse-' + label] = True
+        for label, field, value in (('count', 'workers', 2), ('mask', 'core_mask', 192), ('priority', 'a55_priority', 3)):
+            altered = copy.deepcopy(manifest);altered['inference'][field] = value
+            reject(lambda: prep.image_manifest_check(altered, image.read_bytes()), 'differs from the linked adapter')
+            cases['refuse-manifest-' + label] = True
+        altered = image.read_bytes().replace(b'mimus_parallel_configuration\0', b'mimus_parallel_configuratioX\0')
+        reject(lambda: prep.image_manifest_check(manifest, altered), 'Legacy image does not contain')
+        cases['missing-native-record-cannot-downgrade'] = True
+        (out / 'result.json').write_text(json.dumps(dict(passed=True, physical_access=False,
+            image_sha256=image_hash, build_id=manifest['build_id'], cases=cases,
+            limits='Synthetic exact-image GPU/CPU entry facts; no transport or physical authority.'), indent=2) + '\n')
+        print('PASS eight-worker GPU admission:', len(cases), 'focused outcomes')
+        return
     if args.gpu_cpu_only:
         # Reuse accepted GPU tampering checks; select only the new CPU-grant
         # composition, with actual preparation and frozen-entry admission.

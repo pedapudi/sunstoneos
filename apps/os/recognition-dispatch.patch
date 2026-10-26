@@ -20,7 +20,7 @@
 @@ -23,4 +34,6 @@
  void recognize(void *)
  {
-+    /* The engine's second worker runs on the pair's other core. */
++    /* The adapter owns the selected worker count and fixed placement. */
 +    mimus_parallel_bind();
      /* Board owners establish the selected USB readiness. Hashing is
       * EL0 CPU work; publication in EL3 alone does not authenticate inputs. */
@@ -54,7 +54,7 @@
 +{
 +    if(!mimus_board_live())failed();
 +    /* One bounded sleep per real checkpoint; a stuck engine or GPU cannot
-+     * earn progress by looping here. Both inference tasks use this hook. */
++     * earn progress by looping here. Every inference task uses this hook. */
 +    if(os_thermal_throttled()){
 +        vTaskDelay(1);
 +        if(!mimus_board_live())failed();
@@ -74,9 +74,9 @@
 +    /* The recognizer shares the recognition core with the GPU worker and
 +     * INTID 95, so a completion needs no inter-processor interrupt. */
 +    runtime_smp_init();runtime_init();
-+    /* Recognition and its inference worker run on the recognition pair. */
++    /* The owner pair and optional priority-2 A55 workers retain fixed placement. */
 +    mimus_parallel_init(A733_SMP_RECOGNITION_CORE,A733_SMP_INFERENCE_CORE);
-+    os_recognizer=xTaskCreateStaticAffinitySet(recognize,"mimus-recorded",16384,nullptr,3,stack,&task,
++    os_recognizer=xTaskCreateStaticAffinitySet(recognize,"mimus-recorded",16384,nullptr,kMimusOwnerPriority,stack,&task,
 +        UBaseType_t{1}<<OS_RECOGNITION_CORE);
 +    return os_recognizer!=nullptr;
 +}

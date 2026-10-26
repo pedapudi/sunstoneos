@@ -7,7 +7,8 @@
 #if defined(SUNSTONE_A733_OS) && SUNSTONE_MIMUS_WORKERS == 8
 #if !defined(A733_A76_ADMITTED) || \
     defined(SUNSTONE_A733_OS_AUDIO) || defined(SUNSTONE_A733_OS_RADIO) || \
-    defined(SUNSTONE_A733_OS_HEADSET) || defined(SUNSTONE_A733_OS_GPU_LINEAR)
+    defined(SUNSTONE_A733_OS_HEADSET) || \
+    (defined(SUNSTONE_A733_OS_GPU_LINEAR) && defined(SUNSTONE_BOARD_RESIDENT))
 #error Eight OS inference workers require admitted recorded recognition
 #endif
 #endif
