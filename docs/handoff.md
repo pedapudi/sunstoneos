@@ -153,7 +153,7 @@ pointer constant high word first, so the shader's first load went to address
 `0x80` and the firmware reset the context. A read-only FEL capture of the
 firmware memory identified the fault. Set 29 stores the constants low word first. A failed job now still
 ends with the GPU off: an unacknowledged stop runs upstream's hard reset.
-`work/gpu-first-job-1025` is being merged with bringup.
+`work/gpu-first-job-1025` is merged; the job is bundle row 28.
 
 **P-state-0-only DRAM capture, port 3-3** (`board-session-20261025-25/port-3-3`,
 set `dram-training-capture-v5-20261025`, build `ddr-pstate0`): boot0 trained
