@@ -30,8 +30,8 @@ static void begin(struct uhs *u, struct sunxi_mmc *h, unsigned caps)
     u->caps = caps; u->s18a = 1; u->sdr104 = 1; u->bank_polls = 3; u->fatal_delay = 99; u->done_delay = 1000;
     u->window[0][0] = 20; u->window[0][1] = 24;
     struct sunxi_mmc_config c = {{uhs_read, uhs_write, barrier, now_us, admit, retained, uhs_module,
-        uhs_read_fifo, model_write_fifo, uhs_signal}, u, 0xa733, SUNXI_MMC_SD, 800000, 0x300000,
-        SUNXI_MMC_SD_UHS_SDR104};
+        uhs_read_fifo, model_write_fifo, uhs_signal, NULL}, u, 0xa733, SUNXI_MMC_SD, 800000, 0x300000,
+        SUNXI_MMC_SD_UHS_SDR104, NULL};
     assert(sunxi_mmc_init(h, &c) && sunxi_mmc_open(h, 100000000));
 }
 static void drive(struct uhs *u, struct sunxi_mmc *h)
@@ -136,8 +136,8 @@ int main(void)
     begin(u, &h, 3); u->fatal_delay = 5; faulted(u, &h, SUNXI_MMC_CONTROLLER);
     /* The profile requires the voltage callback. */
     struct sunxi_mmc probe = {0}; struct sunxi_mmc_config c = {{uhs_read, uhs_write, barrier, now_us, admit,
-        retained, uhs_module, uhs_read_fifo, model_write_fifo, NULL}, u, 0xa733, SUNXI_MMC_SD, 800000, 0x300000,
-        SUNXI_MMC_SD_UHS_SDR104};
+        retained, uhs_module, uhs_read_fifo, model_write_fifo, NULL, NULL}, u, 0xa733, SUNXI_MMC_SD, 800000, 0x300000,
+        SUNXI_MMC_SD_UHS_SDR104, NULL};
     assert(!sunxi_mmc_init(&probe, &c));
     printf("PASS UHS-I: S18R/CMD11/1.8 V switch with 1 ms and 10 ms waits, SDR104 at 150 and 100 MHz, "
            "%u CMD19 for a 24-delay window centered at 32, eight declines or fallbacks to high speed without "

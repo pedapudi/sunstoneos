@@ -15,9 +15,9 @@ is already signed, so no approval carries into the next lifetime.
 input writes the 2192-byte input that the image reads at 0x43000000
 (apps/storage-read-returning/sdrt.h): SD profile 2 or 3, fresh owner, handoff
 and topology identifiers, the fabric words the image will find, the PMIC and PF pin
-configurations of CONFIG, and the read plan of check-a733-storage-read-supervised.py's
-throughput_plan(0, 4194304): 128 sequential and 96 random eight-sector reads
-and 32 single sectors. It refuses unless the approval is signed for this DDR
+configurations of CONFIG, and a 240-read DMA plan: sequential and random
+4 KiB, 32 KiB and 128 KiB requests, plus single sectors. The first 64 reads
+repeat the accepted PIO run; the largest request is 256 blocks. It refuses unless the approval is signed for this DDR
 start and survey, newer than the DDR record, names the profile's bundle and
 sets every field that approval-request.json lists for it to true.
 
@@ -39,8 +39,10 @@ active bus master (codes 8 to 10) or a failure, not for the other skips.
 
 decode reads the runner's kernel.log and result record, checks every read line
 against the input's plan, and writes the card registers, the selected mode and
-the throughput summary that the supervised checker computes from the same
-per-read times (throughput_summary). No board, USB or queue access.
+per-class throughput, observed command/data phases and sequential fixed-cost
+and per-block fits with and without cache costs. Saturated timings are excluded.
+Version-1 PIO captures remain decodable; --reference checks the repeated CRCs
+against a decoded accepted PIO run on the same card. No board, USB or queue access.
 """
 import argparse
 import hashlib
@@ -55,7 +57,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 MAGIC = 0x314e525445524453  # "SDRETRN1", apps/storage-read-returning/sdrt.h
-VERSION = 1
+VERSION = 2
 INPUT_BYTES = 2192
 PLAN = 256
 PORT = '3-3'
@@ -96,6 +98,65 @@ def digest(path): return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 def throughput():
     """The supervised checker's read plan and summary, unchanged."""
     return module('storage_read_returning_checker', ROOT / 'tools/check-a733-storage-read-supervised.py')
+
+
+# The first 64 requests repeat the accepted programmed-I/O run.
+DMA_CLASSES = ((64, 8, 'sequential-4k'), (64, 8, 'random-4k'), (32, 64, 'sequential-32k'),
+               (32, 64, 'random-32k'), (8, 256, 'sequential-128k'), (8, 256, 'random-128k'), (32, 1, 'single'))
+
+
+def dma_plan():
+    plan = []; state = 4194304
+    for count, blocks, name in DMA_CLASSES:
+        for i in range(count):
+            if name.startswith('random'):
+                state = (state * 1103515245 + 12345) & 0x7fffffff
+                first = blocks * (state % (4194304 // blocks))
+            else:
+                first = i * blocks
+            plan.append((first, blocks))
+    return plan
+
+
+def dma_summary(reads, hz):
+    """Observed costs; cache-subtracted values are estimates, not bus measurements."""
+    require([(r['first'], r['blocks']) for r in reads] == dma_plan(), 'DMA throughput plan mismatch')
+    out = {}; index = 0; sequential = []
+    for count, blocks, name in DMA_CLASSES:
+        part = reads[index:index + count]; index += count
+        observed=[r for r in part if not r['timing_saturated']]
+        elapsed=sum(r['elapsed_us'] for r in observed)
+        require(hz>0, 'zero card clock rate')
+        out[name]=dict(requests=count, measured_requests=len(observed), saturated_requests=count-len(observed),
+                       bytes=512*blocks*len(observed), elapsed_us=elapsed,
+                       mb_per_s=round(512*blocks*len(observed)/elapsed,3) if elapsed else None,
+                       mean_command_to_first_us=(sum(r['first_byte_us']-r['command_us'] for r in observed)/len(observed)
+                                                 if observed else None),
+                       mean_data_us=(sum(r['done_us']-r['first_byte_us'] for r in observed)/len(observed) if observed else None),
+                       bus_us_per_block=1042*1000000/hz)
+        if name.startswith('sequential') or name == 'single': sequential += part
+    def fit(cache):
+        points = [(r['blocks'], r['elapsed_us'] - (r['clean_us'] + r['invalidate_us'] if cache else 0))
+                  for r in sequential if not r['timing_saturated']]
+        if len(points)<=1: return None
+        mx = sum(x for x, y in points) / len(points); my = sum(y for x, y in points) / len(points)
+        variance = sum((x - mx)**2 for x, y in points)
+        if variance<=0: return None
+        slope = sum((x - mx) * (y - my) for x, y in points) / variance
+        return dict(per_request_us=my - slope * mx, per_block_us=slope, requests=len(points))
+    out['fit_with_cache'] = fit(False); out['fit_without_cache'] = fit(True)
+    return out
+
+
+def compare_reference(value, reference):
+    """Match repeated sectors and card identity against a decoded accepted PIO run."""
+    require(reference.get('complete') is True and
+            reference.get('card', {}).get('cid') == value.get('card', {}).get('cid'),
+            'reference must be complete and name the same card')
+    mine, prior = value['reads'][:64], reference.get('reads', [])[:64]
+    require(len(mine) == len(prior) == 64 and all((a['first'], a['blocks'], a['crc32']) ==
+            (b['first'], b['blocks'], b['crc32']) for a, b in zip(mine, prior)), 'reference CRC mismatch')
+    return {'matched_reads': 64, 'matched_bytes': 64 * 4096}
 
 
 def lifetime(ddr, survey):
@@ -197,7 +258,7 @@ def pins(values, count):
 def input_bytes(profile, generation, config, plan, ids=None):
     """The image's input (sdrt.h): header, configuration and plan."""
     require(profile in BUNDLES and type(generation) is int and 0 < generation < 2**64, 'invalid profile or generation')
-    require(0 < len(plan) <= PLAN and all(0 <= f < 2**32 and 1 <= b <= 8 for f, b in plan), 'invalid plan')
+    require(0 < len(plan) <= PLAN and all(0 <= f < 2**32 and 1 <= b <= 256 and f+b <= 2**32 for f, b in plan), 'invalid plan')
     owner, handoff, topology = ids or [secrets.randbits(63) | 1 for _ in range(3)]
     for name, count in (('fabric', 3), ('fabric_hz', 3)):
         require(len(config[name]) == count and all(type(v) is int and 0 <= v < 2**32 for v in config[name]),
@@ -214,9 +275,10 @@ def input_bytes(profile, generation, config, plan, ids=None):
 def parse_input(raw):
     require(len(raw) == INPUT_BYTES, 'input size')
     magic, version, size, generation, owner, handoff, topology, profile, mask, reads, _ = struct.unpack_from('<4Q3Q4I', raw)
-    require(magic == MAGIC and version == VERSION and size == INPUT_BYTES and 0 < reads <= PLAN, 'not an SD0 returning input')
+    require(magic == MAGIC and version in (1, VERSION) and size == INPUT_BYTES and 0 < reads <= PLAN, 'not an SD0 returning input')
     plan = [struct.unpack_from('<2I', raw, 144 + 8 * i) for i in range(reads)]
-    return {'generation': generation, 'profile': profile, 'voltage_mask': mask, 'plan': plan}
+    require(profile in BUNDLES and all(0 <= f < 2**32 and 1 <= b <= (8 if version == 1 else 256) and f+b <= 2**32 for f,b in plan), 'invalid plan')
+    return {'version': version, 'generation': generation, 'profile': profile, 'voltage_mask': mask, 'plan': plan}
 
 
 # SD_REASON values (apps/storage-read-returning/README.md); SD_STAGE values
@@ -230,6 +292,7 @@ PROTOCOLS = ('IDLE', 'SD_IF', 'SD_APP', 'SD_OCR', 'MMC_QUERY', 'MMC_OCR', 'CID',
              'SD_SCR_APP', 'SD_SCR', 'SD_WIDTH_APP', 'SD_WIDTH', 'SD_SWITCH_CHECK', 'SD_SWITCH_SET', 'SD_CLOCK',
              'SD_MODE_STATUS', 'SD_VOLTAGE', 'SD_SIGNAL', 'SD_UHS_CHECK', 'SD_UHS_SET', 'SD_TUNE', 'SD_TUNE_RECOVER')
 LINE = re.compile(r'R ([0-9a-f]{3}) ([0-9a-f]{8}) ([0-9a-f]{2}) ([0-9a-f]{8}) ([0-9a-f]{8})')
+DMA_LINE = re.compile(r'R ([0-9a-f]{3}) ([0-9a-f]{5}) ([0-9a-f]{4}) ([0-9a-f]{5}) ([0-9a-f]{5}) ([0-9a-f]{3}) ([0-9a-f]{3}) ([0-9a-f]{4}) ([0-9a-f]{8})')
 CARD = re.compile(r'CARD ([0-9a-f]{32}) ([0-9a-f]{32}) ([0-9a-f]{8}) ([0-9a-f]{4}) ([0-9a-f]{16}) ([0-9a-f]{16}) '
                   r'([0-9a-f]{8}) ([0-9a-f]{8}) ([0-9a-f]{8}) ([0-9a-f]{16}) ([0-9a-f]{8})')
 
@@ -244,15 +307,30 @@ def decode_log(log, raw_input, status=None):
     for line in lines:
         if line.startswith(('SD_', 'SD0 returning start')) and '=' in line:
             key, number = line.split('=', 1)
+            require(key not in words,'duplicate result word: '+key)
             words[key] = int(number, 16)
         elif line.startswith('R '):
-            match = LINE.fullmatch(line); require(match is not None, 'malformed read line: ' + line)
-            index, first, blocks, elapsed, crc = (int(x, 16) for x in match.groups())
-            require(index == len(value['reads']) and index < len(plan) and (first, blocks) == tuple(plan[index]),
-                    f'read line {index} differs from the input plan')
-            value['reads'].append({'first': first, 'blocks': blocks, 'bytes': 512 * blocks, 'elapsed_us': elapsed,
-                                   'crc32': crc})
+            match = (LINE if given['version']==1 else DMA_LINE).fullmatch(line)
+            require(match is not None, 'malformed read line: ' + line)
+            fields = [int(x,16) for x in match.groups()];index=fields[0]
+            require(index == len(value['reads']) and index < len(plan), f'read line {index} differs from the input plan')
+            first,blocks=plan[index]
+            if given['version']==1:
+                _,f,b,elapsed,crc=fields
+                require((f,b)==(first,blocks), f'read line {index} differs from the input plan')
+                timing={}
+            else:
+                _,elapsed,command,first_byte,done,clean,invalidate,polls,crc=fields
+                saturated=any(x==limit for x,limit in zip(fields[1:8],(0xfffff,0xffff,0xfffff,0xfffff,0xfff,0xfff,0xffff)))
+                require(elapsed>0 and polls>0 and (clean<=command or command==0xffff) and
+                        (command<=first_byte or first_byte==0xfffff) and
+                        (first_byte<=done or done==0xfffff) and (done<=elapsed or elapsed==0xfffff) and
+                        (clean+invalidate<=elapsed or elapsed==0xfffff), 'invalid DMA timing order')
+                timing=dict(command_us=command,first_byte_us=first_byte,done_us=done,clean_us=clean,
+                            invalidate_us=invalidate,polls=polls,timing_saturated=saturated)
+            value['reads'].append(dict(first=first,blocks=blocks,bytes=512*blocks,elapsed_us=elapsed,crc32=crc,**timing))
         elif line.startswith('CARD '):
+            require(value['card'] is None,'duplicate card line')
             match = CARD.fullmatch(line); require(match is not None, 'malformed card line')
             g = match.groups()
             mode, hz, uhs = int(g[6], 16), int(g[7], 16), int(g[8], 16)
@@ -269,8 +347,10 @@ def decode_log(log, raw_input, status=None):
             before, after, code = line.split()[1:4]
             value['mbus'] = {'before': int(before, 16), 'after': int(after, 16), 'result': int(code, 16)}
         elif line == COMPLETE:
+            require(value['outcome'] is None,'duplicate terminal line')
             value['outcome'] = 'complete'
         elif line.startswith(INCOMPLETE):
+            require(value['outcome'] is None,'duplicate terminal line')
             value['outcome'] = line[len(INCOMPLETE):]
     value['words'] = words
     require(words.get('SD_READS') == len(value['reads']) and words.get('SD_PLAN') == len(plan), 'read count lines')
@@ -284,7 +364,9 @@ def decode_log(log, raw_input, status=None):
                          else protocol, 'clock_off': words.get('SD_CLOCK_OFF')}
     value['complete'] = value['outcome'] == 'complete' and len(value['reads']) == len(plan) and status in (0, None)
     if value['complete']:
-        value['throughput'] = throughput().throughput_summary(value['reads'])
+        require(value['card'] is not None, 'missing card line')
+        value['throughput'] = (throughput().throughput_summary(value['reads']) if given['version']==1 else
+                               dma_summary(value['reads'],value['card']['card_hz']) if plan==dma_plan() else {})
     return value
 
 
@@ -307,9 +389,10 @@ def main(argv=None):
     i = sub.add_parser('input')
     for name in ('approval', 'request', 'ddr', 'survey', 'fabric_read', 'config', 'output'):
         i.add_argument('--' + name.replace('_', '-'), type=Path, required=True)
-    i.add_argument('--profile', type=int, choices=(2, 3), required=True)
+    i.add_argument('--profile', type=int, choices=(2, 3), default=3)
     d = sub.add_parser('decode')
     for name in ('run', 'input', 'output'): d.add_argument('--' + name, type=Path, required=True)
+    d.add_argument('--reference', type=Path, help='decoded accepted PIO result for the same card')
     args = parser.parse_args(argv)
     if args.operation == 'sign':
         print(json.dumps(sign(args.approval, args.ddr, args.survey, args.signer), indent=1)); return 0
@@ -320,7 +403,7 @@ def main(argv=None):
         config = json.loads(args.config.read_text())
         require('fabric' not in config and 'fabric_hz' not in config, 'the fabric words come from this lifetime\'s read')
         (config['fabric'], config['fabric_hz']), registers = fabric_read(args.fabric_read, args.ddr)
-        raw = input_bytes(args.profile, secrets.randbits(63) | 1, config, throughput().throughput_plan(0, 4194304))
+        raw = input_bytes(args.profile, secrets.randbits(63) | 1, config, dma_plan())
         args.output.write_bytes(raw)
         args.output.with_suffix('.json').write_text(json.dumps({
             'input_sha256': hashlib.sha256(raw).hexdigest(), 'profile': args.profile,
@@ -331,6 +414,9 @@ def main(argv=None):
             'survey_session_sha256': digest(args.survey / 'session.json'), 'tool_sha256': digest(__file__)}, indent=1) + '\n')
         print(args.output); return 0
     value = decode(args.run, args.input.read_bytes())
+    if args.reference:
+        value['reference_crc'] = compare_reference(value,json.loads(args.reference.read_text()))
+        value['reference_sha256'] = digest(args.reference)
     args.output.write_text(json.dumps(value, indent=1) + '\n')
     print(json.dumps({k: value[k] for k in ('status', 'outcome', 'complete')} |
                      ({'throughput': value['throughput']} if value.get('throughput') else {}) |

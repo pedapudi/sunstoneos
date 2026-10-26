@@ -30,6 +30,11 @@ struct a733_mmc_platform_config {
      * caller supplies source-qualified drive/pull fields. Reset is never driven. */
     struct a733_pin_config expected[12], desired[12];
     enum a733_mmc_emmc_host emmc_host; /* SD requires zero. eMMC mux3/4 respectively. */
+    /* NULL: reads use programmed I/O. Otherwise the IDMAC descriptor area
+     * (sunxi_mmc.h): identity-mapped, non-cacheable, 64-byte aligned, outside
+     * the result page [0x42000000, 0x42004000) and below 16 GiB; reads then
+     * use IDMAC, up to SUNXI_MMC_MAX_DMA_BLOCKS, and no update can bind. */
+    volatile struct sunxi_mmc_dma_descriptor *dma;
 };
 /* Fixed ROM JTAG route, not permission to take over a debugger. The caller's
  * physical authority must exclude debug clients before this exact handoff.
@@ -70,6 +75,10 @@ struct a733_mmc_platform_ops {
      * same admission as read/write performed once per burst. */
     int (*read_fifo)(void *,uintptr_t,uint32_t *,unsigned);
     int (*write_fifo)(void *,uintptr_t,const uint32_t *,unsigned);
+    /* DMA configurations only: the core's dma_sync (sunxi_mmc.h) for a read
+     * buffer the platform has admitted. The image supplies it; the native
+     * adapter does not link cache maintenance. */
+    int (*dma_sync)(void *,uint8_t *,size_t,unsigned);
 };
 struct a733_storage_update;
 struct a733_mmc_platform {

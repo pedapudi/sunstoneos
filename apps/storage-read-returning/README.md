@@ -1,11 +1,13 @@
 # Returning microSD reads
 
-Status: **qualified at high speed; SDR104 not qualified.** Lifetime A on
-port 3-3 (`board-session-20261025-30`) completed all 256 reads in profile 2.
-Lifetime B (`board-session-20261025-32`) stopped at CMD11 in profile 3; the
-driver fix is in the emulation, not on a board
-([design](../../docs/designs/sd-uhs.md), "Lifetime B: CMD11 completion").
-DMA reads are designed, not built ([design](../../docs/designs/sd-dma.md)).
+Status: **DMA implemented and checked in software; physical DMA and SDR104
+qualification pending.** The earlier programmed-I/O image completed 256
+high-speed reads on port 3-3 (`board-session-20261025-30`). Its SDR104 run
+stopped at CMD11 (`board-session-20261025-32`). The corrected switch and this
+DMA image have native instruction-model evidence, not board evidence. See
+[the DMA design](../../docs/designs/sd-dma.md) for the measured PIO baseline
+and predicted DMA costs. Every DMA lifetime requires whole-board power
+removal before another operation until the first physical qualification.
 
 The image reads
 the microSD card on SDC0 in SD profile 2 (high speed, 3.3 V) or profile 3
@@ -40,8 +42,11 @@ line). Two tasks run on core 0:
 - The SD task runs the production SD0 provider (`drivers/storage/`) with the
   production clock, pin and rail providers. It identifies the card in the
   input's profile and runs the input's read plan. For each read it records the
-  time from the first poll after submission to completion, and the CRC-32 of
-  the data. It then asks the PMIC task to park and waits for it until the end
+  time from submission to completion, command/first-byte/completion
+  observations, cache-maintenance durations, and the CRC-32 of the data.
+  Reads use IDMAC with a 128 KiB write-back buffer and 33 non-cacheable
+  descriptors at `0x42100000`; every page is checked for writable identity
+  translation before admission. CRC instructions run outside the timed read. It then asks the PMIC task to park and waits for it until the end
   deadline, checks that the park happened and that no PMIC request, rail
   borrow or register lock is outstanding, stops the card clock, writes its
   report and exits.
@@ -53,8 +58,10 @@ onto DAT1 and DAT2, which the ROM's return turns into the JTAG TMS and TCK
 inputs. The steps follow the vendor driver (`sunxi-mmc-v5p3x.c`,
 `__sunxi_mmc_do_oclk_onoff`, and its FIFO and DMA interface resets):
 
-1. If a read is outstanding, or a command or the data state machine is
-   busy, reset the FIFO and the DMA interface and wait for the reset.
+1. If DMA is enabled, clear its status, disable interrupts, reset IDMAC and
+   wait for its reset and state machine to become idle. Reset the DMA
+   interface and FIFO and disable DMA. An outstanding non-DMA transfer
+   also resets the interface and FIFO. Wait for those resets.
 2. Clear the card clock enable and low-power bits and set MASK_DATA0 (CLKCR
    bits 16, 17 and 31), so the update does not wait on DAT0.
 3. Issue the clock-update command and wait for it; write back RINT's set
@@ -62,15 +69,16 @@ inputs. The steps follow the vendor driver (`sunxi-mmc-v5p3x.c`,
 4. Clear MASK_DATA0.
 
 If the reset or the update does not complete within 10 ms, the image gates
-the controller's module clock (CCU SMHC0 word bit 31) instead, which stops the
-card clock at its source. After a provider fault the provider keeps its
+the controller's module clock (CCU SMHC0 word bit 31) and asserts its bus
+reset (CCU `0xd0c` bit 16). The module gate stops the card clock; the bus
+reset stops the independently bus-clocked IDMAC. After a provider fault the provider keeps its
 register lock retained, so this step writes the controller directly; the
 PMIC task, parked or not, uses only the S_TWI0 bus.
 
 Two exits run no image code and so do not stop the clock: the monitor's
 secure timer at 2 s (status 2, `monitor-window`), and an exception. After
-either, the card may still be clocked with its lines on the JTAG functions,
-and the lifetime ends with whole-board power removal before anything else
+either, IDMAC may still write to the buffer or descriptors and the card may
+still drive its lines on the JTAG functions. The lifetime ends with whole-board power removal before anything else
 runs. The two refusals before the scheduler starts (`input`, `providers`)
 make no controller access at all, because the controller has not been
 enabled.
@@ -92,11 +100,13 @@ read cannot see the monitor's other conditions, MSI_LITE0 released and no
 active bus master. When the monitor skips the restore for any reason, the
 SD0 provider refuses the predicted MBUS word and the report says so
 (`SD_REASON=3`, with the provider's stage and fault); the monitor's `MBUS`
-line precedes the report only for codes 8 to 10. The plan is the supervised service's
-throughput plan, `throughput_plan(0, 4194304)` in
-`tools/check-a733-storage-read-supervised.py`: 128 sequential eight-sector
-reads from sector 0, 96 eight-sector reads at fixed pseudo-random offsets
-below sector 4,194,304, and 32 single sectors.
+line precedes the report only for codes 8 to 10. Input version 2 selects a
+240-read plan: 64 sequential and 64 random 4 KiB reads, 32 sequential and
+32 random 32 KiB reads, eight sequential and eight random 128 KiB reads,
+and 32 single sectors. Random starts align to the request size below sector
+4,194,304. Sequential classes start at sector zero. The first 64 reads
+repeat the accepted PIO run's sectors for CRC comparison. Profile 3 is the
+input tool's default; profile 2 remains explicit.
 
 **Report.** The log lines of the result page:
 
@@ -104,17 +114,18 @@ below sector 4,194,304, and 32 single sectors.
   width, CMD6 access mode, module divisor), the card clock, the UHS-I word
   (outcome, 1.8 V flag, capabilities, sample delay, tuning window) and the
   identification time;
-- `R`: one line per read, with its index, first sector, block count, time in
-  microseconds and CRC-32;
-- `D0` to `D7`: sector 0 in hex;
+- `R`: index, total elapsed microseconds, command time, first-byte time,
+  completion time, clean and invalidate durations, poll count and CRC-32.
+  The input supplies sector and block count. Compact fields saturate at
+  their all-ones value; those reads are excluded from timing statistics;
 - `SD_READS`, `SD_PLAN`, `SD_PMIC_PARKED`, `SD_CLOCK_OFF`, then
   `COMPLETE SD0 returning read`, or `INCOMPLETE SD0 returning read:` followed
   by `window` or `stopped`; a stop also prints `SD_REASON`, the provider's
   stage, fault, last command and result.
 
 `SD_CLOCK_OFF` values: 1, the clock update completed and CLKCR reads back
-with the card clock off; 3, the update did not complete and the module clock
-reads back gated; 2, the controller was never enabled and the image wrote
+with the card clock off; 3, the stop needed the module gate and bus reset,
+and both read back stopped; 2, the controller was never enabled and the image wrote
 nothing; 0, neither stop read back, so the card may still be clocked.
 
 `SD_REASON` values: 1, the end deadline passed or a provider failed; 2, the
@@ -127,8 +138,14 @@ neither stop (`SD_CLOCK_OFF=0`). Reasons 9 and 10 turn a completed plan into
 status 1 with `stopped`.
 
 `tools/storage-read-returning.py decode` checks every `R` line against the
-input's plan and computes the supervised checker's throughput summary
-(`throughput_summary`) from the same per-read times.
+input's plan and reports per-class throughput and observed card/data phases.
+It fits fixed request cost plus per-block cost over the sequential classes,
+with and without measured cache maintenance. Censored values are excluded,
+with explicit counts. The decoder also accepts version-1 PIO captures.
+For the first physical DMA qualification, pass `--reference` with the
+accepted PIO run's decoded `sd-result.json`; it requires the same card CID
+and matching CRCs for the 64 repeated reads. Without that argument the
+report makes no reference-parity claim.
 
 ## Time window
 
@@ -143,19 +160,17 @@ deadlines, measured from the start of `kernel_main()`:
 | Provider lifetime | 1.65 s | Every SD0 provider operation, including the last read |
 | End | 1.8 s | PMIC parking and the report |
 
-The SD task polls the provider for up to 1 ms per scheduler wake during
-identification and during each read, and submits, completes and takes each
-read and starts the next without waiting for a tick. One poll per 1 ms tick
-would not fit the 1280 tuning commands of profile 3, or four ticks per read
-the 256 reads, in the window.
+Identification polls for up to 1 ms per wake and yields to the PMIC task.
+During each read the SD task runs above the PMIC task and polls to completion
+or the provider's 100 ms deadline, with no tick sleep. The controller moves
+all data; no CPU FIFO read occurs during DMA transfers. CMD13 follows only
+an open-ended CMD18 ending at the card's last sector.
 
-The plan fits the window when the card answers promptly. At high speed a
-4 KiB read moves its data in about 0.2 ms, so the 256 reads take tens of
-milliseconds. The SD specification allows up to 100 ms of read latency per
-read, so a slow card can exceed the plan end. The report then gives the reads
-that completed, and the remaining reads need another lifetime; the image
-cannot continue the plan after a return, because a new launch would have to
-initialize the card again with CMD0.
+The 4.52 MiB plan's physical time remains unmeasured. The design predicts
+about 21–23 MB/s for 128 KiB reads at high speed and 50–60 MB/s at SDR104,
+subject to card streaming speed and cache costs. A slow card can exceed the
+plan window; the report then gives only completed reads. A new lifetime
+requires power removal and fresh initialization.
 
 ## What the forced-FEL return changes
 
@@ -220,6 +235,8 @@ PYTHONDONTWRITEBYTECODE=1 ~/.cache/sunstoneos/venv/bin/python checks/storage-rea
   --image /absolute/new/directory/build/probe.elf --board-config BOARD_CONFIG.json --output /absolute/new/check
 PYTHONDONTWRITEBYTECODE=1 ~/.cache/sunstoneos/venv/bin/python checks/storage-read-returning-host.py \
   --read-record /absolute/accepted-read/session.json --output /absolute/new/host-check
+PYTHONDONTWRITEBYTECODE=1 ~/.cache/sunstoneos/venv/bin/python checks/storage-read-returning-host.py \
+  --dma-native /absolute/new/check --output /absolute/new/dma-host-check
 ```
 
 `build.py` refuses unless this tree's `platform/a733/monitor.c`, compiled

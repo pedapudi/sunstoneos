@@ -20,7 +20,8 @@ static const uint32_t parent_mhz[3][8]={
 };
 static int outside(const struct a733_mmc_platform *p,const void *v,size_t n)
 {
-    return a733_ranges_disjoint(p,sizeof(*p),v,n)&&a733_ranges_disjoint(p->clocks,sizeof(*p->clocks),v,n)&&
+    return (!p->config.dma||a733_ranges_disjoint((const void *)p->config.dma,
+        SUNXI_MMC_DMA_DESCRIPTORS*sizeof(*p->config.dma),v,n))&&a733_ranges_disjoint(p,sizeof(*p),v,n)&&a733_ranges_disjoint(p->clocks,sizeof(*p->clocks),v,n)&&
         a733_ranges_disjoint(p->pins,sizeof(*p->pins),v,n)&&a733_ranges_disjoint(p->rails,sizeof(*p->rails),v,n)&&
         a733_ranges_disjoint(p->pmic,sizeof(*p->pmic),v,n)&&
         a733_ranges_disjoint(p->rails->binding.gpu,sizeof(*p->rails->binding.gpu),v,n)&&p->ops.outside(p->cookie,v,n)==1&&a733_pmic_outside(p->pmic,v,n)==1;
@@ -222,8 +223,64 @@ static int core_guard(struct a733_mmc_platform *p)
 {return p->core_call&&p->held&&!p->fault&&!atomic_load_explicit(&p->clocks->failed,memory_order_acquire)&&(!p->update||a733_storage_update_alive(p->update))&&p->ops.current(p->cookie)==1&&timely(p);}
 static int core_read(void *v,uint32_t off,uint32_t *out)
 {struct a733_mmc_platform *p=v;int ok=core_guard(p)&&rd(p,p->base+off,out);if(!ok)fail(p);return ok;}
+/* The IDMAC registers take only the values of a DMA read, and only with a
+ * descriptor area: list base the area, interrupts off, IDMAC off, reset or on
+ * (0x82). Before a data command with DMA enabled the platform refuses the
+ * write direction and walks the chain the core built: every buffer inside the
+ * read's borrowed buffer, the sizes summing to the byte count, the last
+ * descriptor pointing at the zeroed spare slot. So IDMAC writes nowhere else. */
+static int dma_value(const struct a733_mmc_platform *p,uint32_t off,uint32_t value)
+{
+    uintptr_t area=(uintptr_t)p->config.dma;
+    switch(off) {
+    case SUNXI_SMHC_FTRGL:return area&&value==SUNXI_SMHC_FTRGL_VALUE;
+    case SUNXI_SMHC_DLBA:return area&&value==(uint32_t)(area>>2);
+    case SUNXI_SMHC_IDST:return area&&!(value&~SUNXI_SMHC_IDST_CLEAR);
+    case SUNXI_SMHC_IDIE:return !value;
+    case SUNXI_SMHC_DMAC:return !value||(area&&(value==SUNXI_SMHC_DMAC_RESET||value==SUNXI_SMHC_DMAC_ON));
+    case SUNXI_SMHC_GCTRL:return area||!(value&SUNXI_SMHC_GCTRL_DMA_ENABLE);
+    default:return 1;
+    }
+}
+static int dma_chain(struct a733_mmc_platform *p,uint32_t command)
+{
+    uint32_t g,dlba,count;
+    if(!rd(p,p->base+SUNXI_SMHC_GCTRL,&g))return 0;
+    if(!(g&SUNXI_SMHC_GCTRL_DMA_ENABLE))return 1;
+    if(!p->config.dma||(command&SUNXI_SMHC_CMD_WRITE)||!p->core.borrowed||
+       !rd(p,p->base+SUNXI_SMHC_DLBA,&dlba)||dlba!=(uint32_t)((uintptr_t)p->config.dma>>2)||
+       !rd(p,p->base+SUNXI_SMHC_BCNT,&count))return 0;
+    uintptr_t first=(uintptr_t)p->core.borrowed;
+    if(!count||count!=p->core.borrowed_bytes||count>SUNXI_MMC_MAX_DMA_BLOCKS*512u)return 0;
+    unsigned n=(count+SUNXI_MMC_DMA_SEGMENT-1)/SUNXI_MMC_DMA_SEGMENT;
+    for(unsigned i=0;i<n;++i) {
+        volatile const struct sunxi_mmc_dma_descriptor *d=&p->config.dma[i];
+        uint32_t expected=SUNXI_SMHC_DES_OWN|SUNXI_SMHC_DES_CH|SUNXI_SMHC_DES_DIC;
+        if(!i)expected|=SUNXI_SMHC_DES_FD;
+        if(i==n-1)expected=(expected|SUNXI_SMHC_DES_LD)&~SUNXI_SMHC_DES_DIC;
+        uint32_t left=count-i*SUNXI_MMC_DMA_SEGMENT;
+        if(d->config!=expected||d->size!=(left<SUNXI_MMC_DMA_SEGMENT?left:SUNXI_MMC_DMA_SEGMENT)||
+           d->buffer!=(uint32_t)((first+(uintptr_t)i*SUNXI_MMC_DMA_SEGMENT)>>2)||
+           d->next!=(uint32_t)((uintptr_t)&p->config.dma[i+1]>>2))return 0;
+    }
+    volatile const struct sunxi_mmc_dma_descriptor *spare=&p->config.dma[n];
+    return !spare->config&&!spare->size&&!spare->buffer&&!spare->next;
+}
 static int core_write(void *v,uint32_t off,uint32_t value)
-{struct a733_mmc_platform *p=v;int ok=core_guard(p)&&wr(p,p->base+off,value);if(!ok)fail(p);return ok;}
+{
+    struct a733_mmc_platform *p=v;
+    int ok=core_guard(p)&&dma_value(p,off,value)&&
+        (off!=SUNXI_SMHC_CMD||!(value&SUNXI_SMHC_CMD_DATA)||dma_chain(p,value))&&wr(p,p->base+off,value);
+    if(!ok)fail(p);return ok;
+}
+static int core_dma_sync(void *v,uint8_t *buffer,size_t bytes,unsigned phase)
+{
+    struct a733_mmc_platform *p=v;
+    int ok=core_guard(p)&&p->config.dma&&buffer==p->core.borrowed&&bytes==p->core.borrowed_bytes&&
+        (phase==SUNXI_MMC_DMA_BEFORE||phase==SUNXI_MMC_DMA_AFTER)&&
+        p->ops.dma_sync(p->cookie,buffer,bytes,phase)==1&&timely(p);
+    if(!ok)fail(p);return ok;
+}
 static int core_barrier(void *v)
 {struct a733_mmc_platform *p=v;int ok=core_guard(p)&&p->ops.barrier(p->cookie)==1&&timely(p);if(!ok)fail(p);return ok;}
 static int core_read_fifo(void *v,uint32_t *words,unsigned n)
@@ -324,6 +381,18 @@ int a733_mmc_platform_init(struct a733_mmc_platform *p,const struct a733_mmc_pla
        !a733_ranges_disjoint(p,sizeof(*p),pins,sizeof(*pins))||!a733_ranges_disjoint(p,sizeof(*p),rails,sizeof(*rails))||
        !a733_ranges_disjoint(p,sizeof(*p),pmic,sizeof(*pmic))||
        !a733_ranges_disjoint(p,sizeof(*p),rails->binding.gpu,sizeof(*rails->binding.gpu))||o->outside(cookie,p,sizeof(*p))!=1)return 0;
+    if(c->dma) {
+        uintptr_t a=(uintptr_t)c->dma;size_t n=SUNXI_MMC_DMA_DESCRIPTORS*sizeof(*c->dma);
+        if(!o->dma_sync||(a&63u)||(uint64_t)a>(UINT64_C(1)<<34)-n||
+           !a733_ranges_disjoint((const void *)a,n,(const void *)(uintptr_t)UINT32_C(0x42000000),0x4000)||
+           !a733_ranges_disjoint(p,sizeof(*p),(const void *)a,n)||
+           !a733_ranges_disjoint(clocks,sizeof(*clocks),(const void *)a,n)||
+           !a733_ranges_disjoint(pins,sizeof(*pins),(const void *)a,n)||
+           !a733_ranges_disjoint(rails,sizeof(*rails),(const void *)a,n)||
+           !a733_ranges_disjoint(pmic,sizeof(*pmic),(const void *)a,n)||
+           !a733_ranges_disjoint(rails->binding.gpu,sizeof(*rails->binding.gpu),(const void *)a,n)||
+           a733_pmic_outside(pmic,(const void *)a,n)!=1||o->outside(cookie,(const void *)a,n)!=1)return 0;
+    }
     unsigned sd=c->kind==SUNXI_MMC_SD,count=sd?7:12,bank=sd?A733_PIN_F:A733_PIN_C;
     if(sd&&!a733_mmc_sd0_inherited_mux(c->expected))return 0;
     for(unsigned i=0;i<count;++i) {
@@ -340,8 +409,9 @@ int a733_mmc_platform_init(struct a733_mmc_platform *p,const struct a733_mmc_pla
         .rails=rails,.pmic=pmic,.power=identity,.shared=shared,.deadline=c->deadline_us,
         .base=A733_MMC_BASE(slot),.module=A733_MMC_MODULE(slot),.bus=A733_MMC_BUS(slot),.running_module=0x8000001d};
     struct sunxi_mmc_config cfg={{core_read,core_write,core_barrier,core_now,core_admit,core_retained,core_sd_module,
-        core_read_fifo,core_write_fifo,c->sd_profile==SUNXI_MMC_SD_UHS_SDR104?core_sd_signal:NULL},
-        p,(uintptr_t)p,c->kind,800000,c->voltage_mask,c->sd_profile};
+        core_read_fifo,core_write_fifo,c->sd_profile==SUNXI_MMC_SD_UHS_SDR104?core_sd_signal:NULL,
+        c->dma?core_dma_sync:NULL},
+        p,(uintptr_t)p,c->kind,800000,c->voltage_mask,c->sd_profile,c->dma};
     if(!sunxi_mmc_init(&p->core,&cfg))return 0;
     atomic_init(&p->busy,0);p->initialized=1;return 1;
 }
@@ -501,7 +571,8 @@ static enum a733_mmc_platform_result command(struct a733_mmc_platform *p,unsigne
        (p->core.borrowed&&!a733_ranges_disjoint(out,bytes,p->core.borrowed,p->core.borrowed_bytes)))return finish(p,A733_MMC_INVALID);
     if(operation==0||operation==3) {
         const struct sunxi_mmc_card *c=&p->core.card;
-        if(!blocks||blocks>SUNXI_MMC_MAX_BLOCKS||bytes!=(size_t)blocks*512||
+        if(!blocks||blocks>(operation==0&&p->config.dma?SUNXI_MMC_MAX_DMA_BLOCKS:SUNXI_MMC_MAX_BLOCKS)||
+           bytes!=(size_t)blocks*512||
            first>=c->sectors||blocks>c->sectors-first)
             return finish(p,A733_MMC_INVALID);
         uint64_t last=first+blocks-1;
@@ -546,7 +617,7 @@ enum a733_mmc_platform_result a733_mmc_platform_poll(struct a733_mmc_platform *p
 int a733_mmc_platform_update_bind(struct a733_mmc_platform *p,struct a733_storage_update *u)
 {
     if(!p||!p->initialized||!u||!outside(p,u,sizeof(*u))||!a733_storage_update_owned(u,p)||!enter_api(p))return 0;
-    int ok=!p->update&&!p->fault&&p->stage==READY&&p->core.state==SUNXI_MMC_READY&&p->ops.current(p->cookie)==1;
+    int ok=!p->update&&!p->config.dma&&!p->fault&&p->stage==READY&&p->core.state==SUNXI_MMC_READY&&p->ops.current(p->cookie)==1;
     if(ok)p->update=u;
     atomic_store_explicit(&p->busy,0,memory_order_release);return ok;
 }

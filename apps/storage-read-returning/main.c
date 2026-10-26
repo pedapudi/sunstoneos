@@ -48,8 +48,12 @@ struct sdrt sdrt;
 /* The functions checks/storage-read-returning.py calls stay out of line and
  * linked, so the check runs the same code as the tasks. */
 #define SDRT_ENTRY __attribute__((used,retain,noinline))
-static uint8_t buffer[4096] __attribute__((aligned(4096)));
-static uint32_t crc_table[256];
+/* IDMAC writes each read here: 128 KiB, write-back, cleaned before and
+ * invalidated after every transfer. The descriptors live in the result
+ * block, which the EL1 map makes non-cacheable (platform/a733/platform.c),
+ * 1 MiB above the result page. */
+static uint8_t buffer[SUNXI_MMC_MAX_DMA_BLOCKS*512u] __attribute__((aligned(4096)));
+#define SDRT_DESCRIPTORS ((volatile struct sunxi_mmc_dma_descriptor *)(uintptr_t)UINT64_C(0x42100000))
 static StaticTask_t tasks[2];
 static StackType_t stacks[2][4096];
 
@@ -81,7 +85,8 @@ static int mappings(void)
         0x020000f0,0x02000344,0x03400118,0x03400218,0x03400318};
     if(!memory(0x04020000,0x304,0,2))return 0;
     for(unsigned i=0;i<sizeof(words)/sizeof(words[0]);++i)if(!memory(words[i],1,0,2))return 0;
-    return memory((uintptr_t)buffer,sizeof(buffer),0xff,3);
+    return memory((uintptr_t)buffer,sizeof(buffer),0xff,3)&&
+        memory((uintptr_t)SDRT_DESCRIPTORS,SUNXI_MMC_DMA_DESCRIPTORS*sizeof(*SDRT_DESCRIPTORS),0x44,2);
 }
 static int admit(void *cookie,const struct a733_mmc_platform_config *c,const struct a733_clock_token *t)
 {
@@ -89,11 +94,25 @@ static int admit(void *cookie,const struct a733_mmc_platform_config *c,const str
         t->owner==sdrt.config.owner&&a733_clock_token_status(&sdrt.clocks,t)==A733_CLOCK_OK;
 }
 
+/* CRC-32 (IEEE, reflected), with the ARMv8 CRC32 instructions, which use
+ * the same polynomial; n is a multiple of 512. */
 static uint32_t crc32(const uint8_t *p,size_t n)
 {
     uint32_t c=UINT32_MAX;
-    while(n--)c=crc_table[(c^*p++)&255]^(c>>8);
+    for(size_t i=0;i<n;i+=8){
+        uint64_t v;memcpy(&v,p+i,8);
+        __asm__(".arch_extension crc\n crc32x %w0, %w0, %x1" : "+r"(c) : "r"(v));
+    }
     return ~c;
+}
+/* The core's dma_sync: clean before the transfer, invalidate after it. */
+static int dma_sync(void *cookie,uint8_t *b,size_t n,unsigned phase)
+{
+    (void)cookie;
+    uintptr_t start=(uintptr_t)b,base=(uintptr_t)buffer;
+    return (phase==SUNXI_MMC_DMA_BEFORE||phase==SUNXI_MMC_DMA_AFTER)&&
+        start>=base&&start<=base+sizeof(buffer)&&n<=base+sizeof(buffer)-start&&
+        aarch64_device_cache(phase==SUNXI_MMC_DMA_BEFORE?AARCH64_CACHE_CLEAN:AARCH64_CACHE_INVALIDATE,(uintptr_t)b,n)==1;
 }
 static char *hex(char *p,uint64_t v,unsigned digits)
 {
@@ -116,10 +135,6 @@ SDRT_ENTRY int sdrt_setup(void)
        !c->reads||c->reads>SDRT_PLAN)return 0;
     for(unsigned i=0;i<c->reads;++i)
         if(!c->plan[i].blocks||c->plan[i].blocks>sizeof(buffer)/512)return 0;
-    for(uint32_t i=0;i<256;++i){
-        uint32_t v=i;for(unsigned k=0;k<8;++k)v=(v>>1)^(v&1?UINT32_C(0xedb88320):0);
-        crc_table[i]=v;
-    }
     atomic_init(&sdrt.failed,0);atomic_init(&sdrt.pmic_stop,0);atomic_init(&sdrt.pmic_parked,0);
     if(!a733_counter_clock_init(&sdrt.counter,24000000)||
        !a733_platform_locks_init(&sdrt.locks,a733_counter_clock_now,&sdrt.counter)||
@@ -140,7 +155,8 @@ SDRT_ENTRY int sdrt_setup(void)
         .startup_deadline=sdrt.end,.pins={c->pmic_pins[0],c->pmic_pins[1]}};
     sdrt.config=(struct a733_mmc_platform_config){.owner=c->owner,.handoff=c->handoff,.topology=c->topology,
         .deadline_us=sdrt.start+SDRT_IDENTIFY_US,.lifetime_deadline_us=sdrt.start+SDRT_LIFETIME_US,
-        .kind=SUNXI_MMC_SD,.voltage_mask=c->voltage_mask,.sd_profile=(enum sunxi_mmc_sd_profile)c->profile};
+        .kind=SUNXI_MMC_SD,.voltage_mask=c->voltage_mask,.sd_profile=(enum sunxi_mmc_sd_profile)c->profile,
+        .dma=SDRT_DESCRIPTORS};
     memcpy(sdrt.config.fabric,c->fabric,sizeof(c->fabric));
     memcpy(sdrt.config.fabric_hz,c->fabric_hz,sizeof(c->fabric_hz));
     memcpy(sdrt.config.expected,c->expected,sizeof(c->expected));
@@ -168,8 +184,9 @@ SDRT_ENTRY int sdrt_step(void)
     switch(sdrt.stage){
     case SDRT_CONSTRUCT:
         if(!a733_mmc_platform_native_init_selected(&sdrt.native,&sdrt.locks,xTaskGetCurrentTaskHandle(),
-               SUNXI_MMC_SD,A733_MMC_EMMC_SDC2,admit,&sdrt)||
-           !a733_mmc_platform_init(&sdrt.platform,&sdrt.config,&sdrt.native.operations,&sdrt.native,
+               SUNXI_MMC_SD,A733_MMC_EMMC_SDC2,admit,&sdrt))return stop(2);
+        sdrt.native.operations.dma_sync=dma_sync;
+        if(!a733_mmc_platform_init(&sdrt.platform,&sdrt.config,&sdrt.native.operations,&sdrt.native,
                &sdrt.clocks,&sdrt.pins,&sdrt.rails,&sdrt.pmic))return stop(2);
         sdrt.stage=SDRT_IDENTIFY;return 2;
     case SDRT_IDENTIFY: {
@@ -196,18 +213,17 @@ SDRT_ENTRY int sdrt_step(void)
         uint64_t now=now_us();
         if(now>=sdrt.start+SDRT_PLAN_END_US)return 1;
         const struct sdrt_read *q=&sdrt.input.plan[sdrt.done];
+        sdrt.started=sdrt_ticks();
         r=a733_mmc_platform_read(&sdrt.platform,q->first,q->blocks,buffer,q->blocks*512u,
             now+SDRT_READ_US<sdrt.config.lifetime_deadline_us?now+SDRT_READ_US:sdrt.config.lifetime_deadline_us);
         if(r==A733_MMC_BUSY)return 0;
         if(r!=A733_MMC_PENDING)return stop(5);
-        sdrt.started=0;sdrt.stage=SDRT_POLL;return 2;
+        sdrt.stage=SDRT_POLL;return 2;
     }
-    case SDRT_POLL: {
-        /* Poll for up to 1 ms in one wake, so the time measures the
-         * controller path rather than tick pacing, as the supervised SD0
-         * service does (apps/storage-read/native.c, stage 4). */
-        uint64_t wake=sdrt_ticks();
-        if(!sdrt.started)sdrt.started=wake;
+    case SDRT_POLL:
+        /* Poll the read to completion with no scheduler wait: the time from
+         * submission measures the driver and the card. The provider's own
+         * deadline ends a read that never completes. */
         for(;;){
             r=a733_mmc_platform_poll(&sdrt.platform);
             if(r==A733_MMC_COMPLETE){
@@ -215,16 +231,16 @@ SDRT_ENTRY int sdrt_step(void)
                 sdrt.elapsed[sdrt.done]=us>UINT32_MAX?UINT32_MAX:(uint32_t)us;sdrt.stage=SDRT_TAKE;return 2;
             }
             if(r!=A733_MMC_PENDING&&r!=A733_MMC_BUSY)return stop(6);
-            if((sdrt_ticks()-wake)/24>=1000)return 0;
         }
-    }
     case SDRT_TAKE: {
         const struct sdrt_read *q=&sdrt.input.plan[sdrt.done];
         r=a733_mmc_platform_take(&sdrt.platform,&sdrt.result,sdrt.config.lifetime_deadline_us);
         if(r==A733_MMC_BUSY)return 0;
         if(r!=A733_MMC_READY||sdrt.result.error!=SUNXI_MMC_OK||sdrt.result.received!=q->blocks*512u)return stop(7);
         sdrt.crc[sdrt.done]=crc32(buffer,q->blocks*512u);
-        if(!sdrt.done)memcpy(sdrt.first,buffer,sizeof(sdrt.first));
+        const struct sunxi_mmc_result *t=&sdrt.result;
+        sdrt.timing[sdrt.done]=(struct sdrt_timing){t->command_us,t->first_byte_us,t->done_us,t->clean_us,
+            t->invalidate_us,t->polls};
         sdrt.done++;sdrt.stage=SDRT_READ;return 2;
     }
     default:return stop(8);
@@ -276,26 +292,39 @@ static int wait_clear(uintptr_t address,uint32_t bits)
     while(mmio_read(address)&bits)if(sdrt_ticks()>=end)return 0;
     return 1;
 }
+static int wait_idle(uintptr_t address)
+{
+    uint64_t end=sdrt_ticks()+10*24000;
+    while(SUNXI_SMHC_IDST_STATE(mmio_read(address)))if(sdrt_ticks()>=end)return 0;
+    return 1;
+}
 SDRT_ENTRY int sdrt_clock_off(void)
 {
-    const uintptr_t base=A733_MMC_BASE(0),module=A733_MMC_MODULE(0);
+    const uintptr_t base=A733_MMC_BASE(0),module=A733_MMC_MODULE(0),bus=A733_MMC_BUS(0);
     const uint32_t card_on=UINT32_C(1)<<16,low_power=UINT32_C(1)<<17,mask_data0=UINT32_C(1)<<31;
-    const uint32_t resets=(UINT32_C(1)<<1)|(UINT32_C(1)<<2);
-    if((mmio_read(A733_MMC_BUS(0))&0x10001u)!=0x10001u||!(mmio_read(module)&(UINT32_C(1)<<31)))return 2;
-    int stalled=sdrt.stage==SDRT_POLL||sdrt.stage==SDRT_TAKE||
+    const uint32_t resets=SUNXI_SMHC_GCTRL_FIFO_RESET|SUNXI_SMHC_GCTRL_DMA_RESET;
+    if((mmio_read(bus)&0x10001u)!=0x10001u||!(mmio_read(module)&(UINT32_C(1)<<31)))return 2;
+    int dma=(mmio_read(base+SUNXI_SMHC_DMAC)&0x80u)||(mmio_read(base+SUNXI_SMHC_GCTRL)&SUNXI_SMHC_GCTRL_DMA_ENABLE);
+    int stalled=dma||sdrt.stage==SDRT_POLL||sdrt.stage==SDRT_TAKE||
         (mmio_read(base+SUNXI_SMHC_CMD)&SUNXI_SMHC_CMD_START)||(mmio_read(base+SUNXI_SMHC_STATUS)&SUNXI_SMHC_STATUS_BUSY);
     int ok=1;
-    if(stalled){
-        mmio_write(base+SUNXI_SMHC_GCTRL,mmio_read(base+SUNXI_SMHC_GCTRL)|resets);
-        ok=wait_clear(base+SUNXI_SMHC_GCTRL,resets);
-    }
+    if(dma){
+        /* The board kernel's IDMAC teardown (sunxi-mmc.c:1171-1180), then
+         * the IDMAC reset and its state machine idle. */
+        mmio_write(base+SUNXI_SMHC_IDST,SUNXI_SMHC_IDST_CLEAR);
+        mmio_write(base+SUNXI_SMHC_IDIE,0);
+        mmio_write(base+SUNXI_SMHC_DMAC,SUNXI_SMHC_DMAC_RESET);
+        ok=wait_clear(base+SUNXI_SMHC_DMAC,SUNXI_SMHC_DMAC_RESET)&&wait_idle(base+SUNXI_SMHC_IDST);
+        mmio_write(base+SUNXI_SMHC_GCTRL,(mmio_read(base+SUNXI_SMHC_GCTRL)|resets)&~SUNXI_SMHC_GCTRL_DMA_ENABLE);
+    } else if(stalled)mmio_write(base+SUNXI_SMHC_GCTRL,mmio_read(base+SUNXI_SMHC_GCTRL)|resets);
+    if(stalled)ok=ok&&wait_clear(base+SUNXI_SMHC_GCTRL,resets);
     if(ok){
-        mmio_write(base+SUNXI_SMHC_CLKCR,(mmio_read(base+SUNXI_SMHC_CLKCR)&~(card_on|low_power))|mask_data0);
-        __asm__ volatile("dsb sy":::"memory");
         /* During the voltage switch the board kernel's clock updates carry
          * the voltage-switch bit (sunxi-mmc-v5p3x.c:378-379). */
-        mmio_write(base+SUNXI_SMHC_CMD,SUNXI_SMHC_UPDATE|
-            (sdrt.platform.core.signal_window?SUNXI_SMHC_CMD_VOLTAGE_SWITCH:0u));
+        uint32_t update=SUNXI_SMHC_UPDATE|(sdrt.platform.core.signal_window?SUNXI_SMHC_CMD_VOLTAGE_SWITCH:0u);
+        mmio_write(base+SUNXI_SMHC_CLKCR,(mmio_read(base+SUNXI_SMHC_CLKCR)&~(card_on|low_power))|mask_data0);
+        __asm__ volatile("dsb sy":::"memory");
+        mmio_write(base+SUNXI_SMHC_CMD,update);
         ok=wait_clear(base+SUNXI_SMHC_CMD,SUNXI_SMHC_CMD_START);
         mmio_write(base+SUNXI_SMHC_RINT,mmio_read(base+SUNXI_SMHC_RINT)&~SUNXI_SMHC_INT_SDIO);
     }
@@ -303,9 +332,12 @@ SDRT_ENTRY int sdrt_clock_off(void)
         mmio_write(base+SUNXI_SMHC_CLKCR,mmio_read(base+SUNXI_SMHC_CLKCR)&~mask_data0);
         return !(mmio_read(base+SUNXI_SMHC_CLKCR)&card_on);
     }
+    /* Gate the module clock and assert the bus reset: the module gate stops
+     * the card clock, and the reset stops IDMAC, which runs on the bus clock. */
     mmio_write(module,mmio_read(module)&~(UINT32_C(1)<<31));
+    mmio_write(bus,mmio_read(bus)&~(UINT32_C(1)<<16));
     __asm__ volatile("dsb sy":::"memory");
-    return mmio_read(module)&(UINT32_C(1)<<31)?0:3;
+    return (mmio_read(module)&(UINT32_C(1)<<31))||(mmio_read(bus)&(UINT32_C(1)<<16))?0:3;
 }
 
 /* The result lines; host tool tools/storage-read-returning.py parses them. */
@@ -327,15 +359,20 @@ SDRT_ENTRY void sdrt_report(int outcome)
         *p++=' ';p=hex(p,c->tuning_map,16);*p++=' ';p=hex(p,sdrt.identified_us,8);
         *p++='\n';*p=0;platform_puts(text);
     }
+    /* One line per read: index, total time from submission (24 MHz counter),
+     * the core's first-observed command, first-byte and completion times, the
+     * clean and invalidate times (microseconds), the poll count and the CRC-32.
+     * The host knows each read's sectors from the plan. */
     for(unsigned i=0;i<sdrt.done;++i){
-        const struct sdrt_read *q=&sdrt.input.plan[i];
-        p=text;*p++='R';*p++=' ';p=hex(p,i,3);*p++=' ';p=hex(p,q->first,8);*p++=' ';p=hex(p,q->blocks,2);
-        *p++=' ';p=hex(p,sdrt.elapsed[i],8);*p++=' ';p=hex(p,sdrt.crc[i],8);*p++='\n';*p=0;platform_puts(text);
-    }
-    for(unsigned row=0;sdrt.done&&row<sizeof(sdrt.first)/64;++row){
-        p=text;*p++='D';p=hex(p,row,1);*p++=' ';
-        for(unsigned i=0;i<64;++i)p=hex(p,sdrt.first[row*64+i],2);
-        *p++='\n';*p=0;platform_puts(text);
+        const struct sdrt_timing *t=&sdrt.timing[i];
+        p=text;*p++='R';*p++=' ';p=hex(p,i,3);*p++=' ';p=hex(p,sdrt.elapsed[i]>0xfffffu?0xfffffu:sdrt.elapsed[i],5);
+        *p++=' ';p=hex(p,t->command_us>0xffffu?0xffffu:t->command_us,4);
+        *p++=' ';p=hex(p,t->first_byte_us>0xfffffu?0xfffffu:t->first_byte_us,5);
+        *p++=' ';p=hex(p,t->done_us>0xfffffu?0xfffffu:t->done_us,5);
+        *p++=' ';p=hex(p,t->clean_us>0xfffu?0xfffu:t->clean_us,3);
+        *p++=' ';p=hex(p,t->invalidate_us>0xfffu?0xfffu:t->invalidate_us,3);
+        *p++=' ';p=hex(p,t->polls>0xffffu?0xffffu:t->polls,4);
+        *p++=' ';p=hex(p,sdrt.crc[i],8);*p++='\n';*p=0;platform_puts(text);
     }
     line("SD_READS=",sdrt.done);line("SD_PLAN=",sdrt.input.reads);
     line("SD_PMIC_PARKED=",atomic_load_explicit(&sdrt.pmic_parked,memory_order_acquire));
@@ -400,7 +437,9 @@ void kernel_main(void)
     if(!sdrt_setup()){platform_puts("INCOMPLETE SD0 returning read: input\n");platform_exit(1);}
     line("SD_PROFILE=",sdrt.input.profile);line("SD_GENERATION=",sdrt.input.generation);
     TaskHandle_t pmic=xTaskCreateStatic(pmic_task,"sd-pmic",4096,NULL,2,stacks[0],&tasks[0]);
-    TaskHandle_t sd=xTaskCreateStatic(sd_task,"sd-read",4096,NULL,2,stacks[1],&tasks[1]);
+    /* Above the PMIC task: it does not run while a read is polled to
+     * completion, and identification yields to it every millisecond. */
+    TaskHandle_t sd=xTaskCreateStatic(sd_task,"sd-read",4096,NULL,3,stacks[1],&tasks[1]);
     if(!pmic||!sd||!sdrt_bind(pmic)){platform_puts("INCOMPLETE SD0 returning read: providers\n");platform_exit(1);}
     vTaskStartScheduler();
     platform_panic("scheduler returned",0);

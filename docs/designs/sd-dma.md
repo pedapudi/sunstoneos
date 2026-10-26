@@ -1,9 +1,11 @@
 # Design: SD reads with descriptor DMA
 
-Status: **designed, not built.** The performance and simplicity panel
-(three lenses, two rounds) accepted the design with no open blocking finding.
-An unbuilt first pass of the code is on `work/sd-dma-1025` (`29bc8a2c`);
-"Next steps" in `docs/board-runbooks/sd-uhs.md` lists what remains. The design changes how the SD0 driver reads: one CMD18 per
+Status: **implemented and checked in software; physical qualification pending.**
+The native returning image runs both read profiles against an IDMAC model,
+including delayed OWN/reset/idle completion, retained failures, exact
+chain admission, cache publication and host report checks. The prior draft
+(`29bc8a2c`) was adapted after the separately reviewed CMD11 correction.
+The design changes how the SD0 driver reads: one CMD18 per
 request of up to 128 KiB, moved by the controller's internal DMA engine
 (IDMAC) in the board kernel's order, with no CMD13 after a read, and a
 returning image that measures each read without scheduler gaps. The card is
@@ -95,8 +97,11 @@ is in `~/.cache/sunstoneos/evidence/sd-dma-20261025/vendor-idmac-sequence.md`;
      whether `IDST` showed receive. Any `RINT` error bit, or `IDST`
      fatal-bus-error, descriptor-unavailable, card-error or abnormal-summary
      bit, faults the read; the read deadline bounds every wait.
-  5. Teardown as the vendor's; then `dma_sync` invalidates the buffer and the
-     read is DONE.
+  5. Re-read IDST for late errors and acknowledge only the sampled bits,
+     preserving errors that arrive before W1C. Reset IDMAC and wait for reset
+     clear and idle; reset the DMA interface and wait; disable DMA, reset the
+     FIFO and wait. Then `dma_sync` invalidates the buffer and the read is
+     DONE. These three additional bounded poll states precede CPU ownership.
 - **Differences from the vendor, with reasons.** `IDIE` stays 0: SD0's
   interrupt stays disabled, and a pending receive interrupt would fail the
   platform's per-poll interrupt check (`a733_mmc_platform.c:166`). Completion
@@ -130,7 +135,7 @@ is in `~/.cache/sunstoneos/evidence/sd-dma-20261025/vendor-idmac-sequence.md`;
   below 16 GiB and outside every provider's state.
 - On the core's `CMD` write, when `GCTRL` DMA enable reads set, the platform
   refuses a command with the write bit and walks the descriptor chain from
-  `DLBA` (at most 33 uncached reads): every buffer must lie in the read's
+  `DLBA` (at most 33 descriptors, four uncached fields each): every buffer must lie in the read's
   borrowed buffer, the sizes must sum to `BYTCNT`, and the chain must end at
   the zeroed spare slot. The walk adds about 10–20 µs to the fixed cost.
 - The adapter admits `FTRGL`, `DLBA` (only the area's address >> 2), `IDST`,
@@ -180,7 +185,7 @@ is in `~/.cache/sunstoneos/evidence/sd-dma-20261025/vendor-idmac-sequence.md`;
 
 The time for one sequential read of n blocks is
 t = F + S(n) + n × max(bus, card stream), with F the fixed cost per request
-(240–400 µs with the per-poll re-checks kept), S(n) the cache maintenance
+(240–400 µs predicted before the additional drain waits), S(n) the cache maintenance
 (about 5, 40–100 and 170–415 µs for 4, 32 and 128 KiB at the 494 MHz boot
 clock), and a bus time of 20.8 µs per block at 50 MHz and 6.95 µs at
 150 MHz. The SDR104 column assumes the card streams at 75 MB/s or faster.
@@ -194,14 +199,22 @@ clock), and a bus time of 20.8 µs per block at 50 MHz and 6.95 µs at
 
 Random reads add about 300 µs per request, as lifetime A measured.
 
+The three added drain states retain the existing provider rechecks. Their
+physical fixed cost is unmeasured, so the ranges above are predictions, not
+acceptance measurements. Each descriptor is validated once before the data
+command; no per-poll digest, translation or cache operation was added.
+
 ## Budgets
 
 - Static memory in the returning image: 128 KiB buffer and 528 bytes of
   descriptors; the 4 KiB PIO buffer goes away.
-- Code: the DMA path in the core, about 120 lines; the platform checks and
-  filter, about 60; the image, about 80 changed.
-- Images without a descriptor area change only in the removed CMD13 after a
-  read and the `THLD` mask.
+- Code: about 145 added core lines, 80 platform lines and 85 image lines.
+  The increase over the initial 120/60/80 estimate covers reset/idle waits,
+  checked timestamps, exact descriptor fields and exclusion of provider state.
+- Images without descriptors also record read timing: three checked clock
+  samples (submission, command, completion) and one poll-count increment per
+  read poll, in addition to removing non-tail CMD13 and changing `THLD`.
+  Their small fixed bookkeeping cost has not been measured physically.
 
 ## Checks
 

@@ -95,9 +95,8 @@ def log_for(raw, outcome='complete', reads=None, profile=2, first=None):
              '00000000 0000000000000000 0001e240']
     for i in range(reads):
         f, b = plan[i]
-        if first is not None and i == 0: f = first
-        lines.append(f'R {i:03x} {f:08x} {b:02x} {100 + 10 * b:08x} {binascii.crc32(bytes(512 * b)):08x}')
-    lines += [f'D{r} ' + '00' * 64 for r in range(8)] if reads else []  # the image dumps sector 0 only after a read
+        index=first if first is not None and i==0 else i
+        lines.append(f'R {index:03x} {100+12*b:05x} {10+b:04x} {30+b:05x} {80+11*b:05x} {b:03x} {b:03x} 000c {binascii.crc32(bytes(512*b)):08x}')
     lines += [f'SD_READS=0x{reads:016x}', f'SD_PLAN=0x{len(plan):016x}', 'SD_PMIC_PARKED=0x0000000000000001']
     lines.append('COMPLETE SD0 returning read' if outcome == 'complete' else 'INCOMPLETE SD0 returning read: ' + outcome)
     return '\n'.join(lines) + '\n'
@@ -116,7 +115,7 @@ def main(out, real):
         refused(lambda: tool.sign(a, ddr, failed, 'MODEL'), 'survey did not pass'),
         refused(lambda: tool.sign(a, ddr, bad_port, 'MODEL'), 'another port'),
         refused(lambda: tool.sign(a, ddr, other_survey, 'MODEL'), 'another node or ROM identity')]
-    plan = tool.throughput().throughput_plan(0, 4194304)
+    plan = tool.dma_plan()
     input_refusals = [refused(lambda: tool.approved(a, request, ddr, survey, 'A'), 'not signed for this lifetime')]
     tool.sign(a, other_ddr, other_survey, 'MODEL')
     input_refusals.append(refused(lambda: tool.approved(a, request, ddr, survey, 'A'), 'not signed for this lifetime'))
@@ -133,19 +132,19 @@ def main(out, real):
     input_refusals.append(refused(lambda: tool.approved(false, request, ddr, survey, 'A'), 'not approved'))
     results['input_refusals'] = input_refusals
     raw = tool.input_bytes(2, 0x55, CONFIG, plan, ids=(3, 5, 7))
-    assert len(raw) == 2192 and struct.unpack_from('<4I', raw, 56)[:3] == (2, 0x00300000, 256)
+    assert len(raw) == 2192 and struct.unpack_from('<4I', raw, 56)[:3] == (2, 0x00300000, 240)
     given = tool.parse_input(raw)
     assert given['plan'] == [tuple(p) for p in plan] and given['profile'] == 2 and given['generation'] == 0x55
     assert struct.unpack_from('<3I', raw, 72) == tuple(CONFIG['fabric']) and raw[96:102] == bytes([2, 1, 1, 2, 1, 1])
     (out / 'input.bin').write_bytes(raw)
     complete = tool.decode_log(log_for(raw), raw, 0)
-    assert complete['complete'] and len(complete['reads']) == 256 and complete['card']['card_hz'] == 50000000
-    assert set(complete['throughput']) >= {'sequential', 'random', 'single', 'per_block_us', 'per_request_us'}
+    assert complete['complete'] and len(complete['reads']) == 240 and complete['card']['card_hz'] == 50000000
+    assert set(complete['throughput']) >= {'sequential-4k','random-4k','single','fit_with_cache','fit_without_cache'}
     window = tool.decode_log(log_for(raw, 'window', reads=10), raw, 1)
     assert not window['complete'] and window['outcome'] == 'window' and len(window['reads']) == 10
     results['decode_refusals'] = [
         refused(lambda: tool.decode_log(log_for(raw, first=99), raw, 0), 'differs from the input plan'),
-        refused(lambda: tool.decode_log(log_for(raw).replace('SD_READS=0x0000000000000100\n', ''), raw, 0), 'read count'),
+        refused(lambda: tool.decode_log(log_for(raw).replace('SD_READS=0x00000000000000f0\n', ''), raw, 0), 'read count'),
         refused(lambda: tool.decode_log(log_for(raw, profile=3), raw, 0), 'another profile')]
     results['complete_throughput'] = complete['throughput']
     # A stopped run decodes, with its stop described (lifetime B, board-session-20261025-32).
@@ -220,9 +219,53 @@ def main(out, real):
     print('PASS returning SD0 host tool: signing, input and decoding')
 
 
+def dma_checks(out, native):
+    out.mkdir(parents=True,exist_ok=False)
+    plan=tool.dma_plan()
+    assert len(plan)==240 and sum(b*512 for f,b in plan)==4734976
+    assert plan[:64]==tool.throughput().throughput_plan(0,4194304)[:64]
+    assert all(f%b==0 and f+b<=4194304 for f,b in plan)
+    raw=tool.input_bytes(2,1,CONFIG,plan,ids=(3,5,7));text=log_for(raw)
+    value=tool.decode_log(text,raw,0)
+    fit=value['throughput']
+    assert abs(fit['fit_with_cache']['per_request_us']-100)<1e-6
+    assert abs(fit['fit_with_cache']['per_block_us']-12)<1e-6
+    assert abs(fit['fit_without_cache']['per_block_us']-10)<1e-6
+    # Compact fields use their maximum as a censored value, never a measured rate.
+    line=next(l for l in text.splitlines() if l.startswith('R '));fields=line.split()
+    fields[2]='fffff';censored=tool.decode_log(text.replace(line,' '.join(fields)),raw,0)
+    assert censored['throughput']['sequential-4k']['measured_requests']==63
+    assert censored['throughput']['sequential-4k']['saturated_requests']==1
+    fields=line.split();fields[8]='ffff';fields[3]='ffff';fields[4]='00001'
+    errors=[refused(lambda:tool.decode_log(text.replace(line,' '.join(fields)),raw,0),'invalid DMA timing order'),
+            refused(lambda:tool.decode_log(text+tool.COMPLETE+'\n',raw,0),'duplicate terminal'),
+            refused(lambda:tool.decode_log(text+line+'\n',raw,0),'differs from the input plan'),
+            refused(lambda:tool.decode_log(text.replace('R 000','R z00'),raw,0),'malformed read line'),
+            refused(lambda:tool.input_bytes(2,1,CONFIG,[(0,257)]),'invalid plan')]
+    # The real linked image's native-model log, not a hand-written success report.
+    logs=sorted(native.glob('profile-*.log'));assert logs
+    captures={}
+    for log in logs:
+        incoming=log.with_suffix('.input.bin').read_bytes()
+        decoded=tool.decode_log(log.read_text(),incoming,0);assert decoded['complete']
+        reference=dict(complete=True,card=decoded['card'],reads=decoded['reads'][:64])
+        assert tool.compare_reference(decoded,reference)['matched_reads']==64
+        reference['reads']=[dict(r) for r in reference['reads']];reference['reads'][0]['crc32']^=1
+        errors.append(refused(lambda:tool.compare_reference(decoded,reference),'reference CRC mismatch'))
+        captures[log.name]=dict(log_sha256=tool.digest(log),input_sha256=tool.digest(log.with_suffix('.input.bin')),
+                               reads=len(decoded['reads']),throughput=decoded['throughput'])
+    (out/'result.json').write_text(json.dumps(dict(passed=True,physical_access=False,errors=errors,
+        synthetic_fit=fit,captures=captures),indent=1)+'\n')
+    print('PASS DMA host plan, censored timing, fits, strict reports and native-produced logs')
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--read-record', type=Path, required=True)
+    parser.add_argument('--read-record', type=Path)
+    parser.add_argument('--dma-native',type=Path,help='check only DMA changes using this native capture directory')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
-    main(args.output, json.loads(args.read_record.read_text()))
+    if args.dma_native: dma_checks(args.output,args.dma_native)
+    else:
+        if args.read_record is None: parser.error('--read-record is required without --dma-native')
+        main(args.output, json.loads(args.read_record.read_text()))

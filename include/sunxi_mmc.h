@@ -5,6 +5,17 @@
 
 #define SUNXI_MMC_BLOCK_BYTES 512u
 #define SUNXI_MMC_MAX_BLOCKS 8u
+/* Reads through the controller's internal DMA (IDMAC): up to 128 KiB in 4 KiB
+ * descriptors, plus the spare slot the last descriptor points at. */
+#define SUNXI_MMC_MAX_DMA_BLOCKS 256u
+#define SUNXI_MMC_DMA_SEGMENT 4096u
+#define SUNXI_MMC_DMA_DESCRIPTORS 33u
+#define SUNXI_MMC_DMA_BEFORE 0u /* dma_sync: clean the buffer before the transfer. */
+#define SUNXI_MMC_DMA_AFTER 1u  /* dma_sync: invalidate it after the transfer. */
+/* One IDMAC descriptor (board kernel sunxi-mmc.h:335-340): addresses are
+ * physical addresses shifted right by two (v5p3x, controller 0x50300 and
+ * later). */
+struct sunxi_mmc_dma_descriptor { uint32_t config, size, buffer, next; };
 /* FIFO words moved by one bounded poll: one 512-byte block. */
 #define SUNXI_MMC_FIFO_WORDS 128u
 /* Explicit physical slot selection; SDC1 belongs to the radio driver. */
@@ -81,6 +92,10 @@ struct sunxi_mmc_ops {
      * once the bank reports 1.8 V and 0 while it is still changing. Exactly 1
      * means the operation itself succeeded; uncertainty is terminal. */
     int (*sd_signal)(void *,uintptr_t token,unsigned operation,unsigned *state);
+    /* DMA reads only; NULL otherwise. Cache maintenance of an identity-mapped
+     * read buffer: SUNXI_MMC_DMA_BEFORE cleans it to the point of coherency,
+     * SUNXI_MMC_DMA_AFTER invalidates it. Exactly 1 succeeds. */
+    int (*dma_sync)(void *,uint8_t *buffer,size_t bytes,unsigned phase);
 };
 struct sunxi_mmc_config {
     struct sunxi_mmc_ops ops;
@@ -90,6 +105,10 @@ struct sunxi_mmc_config {
     uint32_t module_hz; /* Even 200000..800000; SDR card clock = module / 2. */
     uint32_t voltage_mask; /* Admitted 3.2–3.4 V OCR bits: nonzero subset 0x00300000. */
     enum sunxi_mmc_sd_profile sd_profile; /* SD only; zero preserves initial profile. */
+    /* NULL: reads use programmed I/O. Otherwise SUNXI_MMC_DMA_DESCRIPTORS
+     * entries of identity-mapped, non-cacheable memory, 64-byte aligned, below
+     * 16 GiB, that only this core writes, and every read uses IDMAC. */
+    volatile struct sunxi_mmc_dma_descriptor *dma;
 };
 struct sunxi_mmc_card {
     uint32_t cid[4], csd[4]; /* Card bit 127 is word 0 bit 31. */
@@ -113,6 +132,12 @@ struct sunxi_mmc_result {
     size_t submitted; /* FIFO bytes attempted; never evidence of media contents. */
     uint32_t confirmed_blocks; /* CMD13 reported READY+TRAN after these writes. */
     unsigned write_started; /* Sticky before attempting the first CMD24 write. */
+    /* Read timing, in clock-callback microseconds from the read's start, each
+     * the first poll that observed the event: command written, nonzero card
+     * byte count (DMA reads only), completion; the cache clean and invalidate
+     * durations (DMA reads only); and the number of polls. */
+    uint32_t command_us, first_byte_us, done_us, clean_us, invalidate_us, polls;
+    uint32_t dma_status; /* Last IDST read of a DMA read. */
 };
 struct sunxi_mmc_write_request {
     uintptr_t policy_token;
@@ -151,6 +176,8 @@ struct sunxi_mmc {
     uint16_t setup, protocol;
     uint8_t command_step, response_seen, entered, initialized, admitted;
     uint8_t read_tail; /* Open-ended CMD18 ending at the last sector. */
+    uint8_t dma_read; /* The current read uses IDMAC. */
+    uint64_t read_start_us;
     struct sunxi_mmc_write_request write_request;
     struct sunxi_mmc_write_identity write_identity;
     struct sunxi_mmc_write_authority write_authority;
@@ -174,6 +201,8 @@ int sunxi_mmc_open(struct sunxi_mmc *, uint64_t absolute_deadline_us);
 /* Entire range and byte/sector command argument are validated before MMIO.
  * Borrowed storage must remain exclusive through DONE or terminal FAULT.
  */
+/* With a DMA configuration, up to SUNXI_MMC_MAX_DMA_BLOCKS and a 64-byte
+ * aligned buffer; otherwise up to SUNXI_MMC_MAX_BLOCKS. */
 int sunxi_mmc_read(struct sunxi_mmc *, uint64_t first_sector, uint32_t blocks,
                    uint8_t *buffer, size_t bytes, uint64_t absolute_deadline_us);
 /* Low-level, default-denied write primitive, below boot/update policy. A missing

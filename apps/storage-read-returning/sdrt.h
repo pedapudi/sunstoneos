@@ -16,7 +16,7 @@
 #include "a733_mmc_platform_native.h"
 #define SDRT_INPUT_ADDRESS UINT64_C(0x43000000)
 #define SDRT_MAGIC UINT64_C(0x314e525445524453) /* "SDRETRN1" */
-#define SDRT_VERSION 1u
+#define SDRT_VERSION 2u
 #define SDRT_PLAN 256u
 struct sdrt_read { uint32_t first, blocks; };
 /* Configuration, not authority: the coordinator's signed approval of the
@@ -34,6 +34,7 @@ _Static_assert(offsetof(struct sdrt_input,fabric)==72,"fabric wire offset");
 _Static_assert(offsetof(struct sdrt_input,pmic_pins)==96,"pin wire offset");
 _Static_assert(offsetof(struct sdrt_input,plan)==144,"plan wire offset");
 _Static_assert(sizeof(struct sdrt_input)==2192,"input wire size");
+struct sdrt_timing { uint32_t command_us, first_byte_us, done_us, clean_us, invalidate_us, polls; };
 enum sdrt_stage { SDRT_CONSTRUCT, SDRT_IDENTIFY, SDRT_CARD, SDRT_READ, SDRT_POLL, SDRT_TAKE };
 struct sdrt {
     struct sdrt_input input;
@@ -58,7 +59,7 @@ struct sdrt {
     uint64_t start, end, started, identified_us;
     unsigned stage, done, reason, card_valid, clock_off;
     uint32_t elapsed[SDRT_PLAN], crc[SDRT_PLAN];
-    uint8_t first[512];
+    struct sdrt_timing timing[SDRT_PLAN];
 };
 extern struct sdrt sdrt;
 int sdrt_setup(void);

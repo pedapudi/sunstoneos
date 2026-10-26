@@ -49,7 +49,7 @@ static void start(struct sd_model *s,struct sunxi_mmc *h,unsigned profile,unsign
 {
  memset(s,0,sizeof(*s));seed(&s->base,h,SUNXI_MMC_SD,sector);
  field(s->base.csd,84,12,5|(1u<<10));field(s->base.csd,96,8,speed);s->scr[0]=2;s->scr[1]=5;
- struct sunxi_mmc_config c={{mode_read,mode_write,barrier,now_us,admit,retained,module,mode_read_fifo,model_write_fifo,NULL},s,0xa733,SUNXI_MMC_SD,800000,0x300000,(enum sunxi_mmc_sd_profile)profile};
+ struct sunxi_mmc_config c={{mode_read,mode_write,barrier,now_us,admit,retained,module,mode_read_fifo,model_write_fifo,NULL,NULL},s,0xa733,SUNXI_MMC_SD,800000,0x300000,(enum sunxi_mmc_sd_profile)profile,NULL};
  assert(sunxi_mmc_init(h,&c)&&sunxi_mmc_open(h,1000000));
 }
 static void expect_fault(struct sd_model *s,struct sunxi_mmc *h)
