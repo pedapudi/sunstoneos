@@ -231,7 +231,7 @@ def retain_failure(record, save, quarantine, error, helper):
                 helper.hold_ownership()
 
 
-def main(argv=None, observe=None):
+def main(argv=None, observe=None, validate_result=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fel", type=Path, required=True)
     parser.add_argument("--image", type=Path, default=CACHE / "build/qemu-virt/a733-kernel-check.bin")
@@ -459,6 +459,16 @@ def main(argv=None, observe=None):
                     raise RuntimeError("Kernel did not report successful completion.")
                 if args.mode == "timeout" and (values[7] != 29 or "CHECK recovery:" not in log):
                     raise RuntimeError("Recovery was not the expected secure timer interrupt.")
+                # A validator returns serializable evidence or raises ValueError.
+                # Rejection precedes success and uses the existing failure policy.
+                if validate_result is not None:
+                    try:
+                        record["application_result"] = validate_result(record["result"], log)
+                    except ValueError as error:
+                        record["application_result"] = {"accepted": False, "failure": str(error)}
+                        save()
+                        raise RuntimeError(f"Application result rejected: {error}") from error
+                    save()
                 record["complete"] = True
                 save()
                 if outcome is not None:

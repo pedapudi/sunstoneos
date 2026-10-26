@@ -65,17 +65,17 @@ SCHEMA = 'board-gpu-returning-bundle-v1'
 PROVIDER_READY = '3adfa4ad6ba386ce8d39f76646f540107c2a5d02ce42db6c1c35c90de68a75ed'
 FAILED_POWER_ID = 'fd3d5839f700b5e0f569b0ce722e186c33beba65512815b136d9c969a7341afe'
 # The firmware-start images: the start alone, the stop, the first job and the job session.
-FWS_VARIANTS = ('fw-start', 'fw-stop', 'fw-job', 'fw-session')
+FWS_VARIANTS = ('fw-start', 'fw-stop', 'fw-job', 'fw-session', 'fw-mimus')
 CASES = {'provider-ready': 11, 'power-only': 11, 'identity': 12, 'wrapper-read': 7, 'probe-read': 13, 'fw-start': 11,
-         'fw-stop': 12, 'fw-job': 13, 'fw-session': 15}
+         'fw-stop': 12, 'fw-job': 13, 'fw-session': 15, 'fw-mimus': 5}
 # ON/OFF cycles of the client's normal run: the power-only and identity
 # variants power the GPU on twice, so the second ON shows that OFF left a
 # state from which ON succeeds again.
-CYCLES = {'power-only': 2, 'identity': 2, 'wrapper-read': 1, 'probe-read': 0, 'fw-start': 0, 'fw-stop': 1, 'fw-job': 1, 'fw-session': 1}
+CYCLES = {'power-only': 2, 'identity': 2, 'wrapper-read': 1, 'probe-read': 0, 'fw-start': 0, 'fw-stop': 1, 'fw-job': 1, 'fw-session': 1, 'fw-mimus': 1}
 # The host-check case that completes ON and OFF in each variant.
 NORMAL = {'power-only': 'normal', 'identity': 'normal', 'wrapper-read': 'wrapper-on', 'probe-read': 'pr-board',
           'fw-start': 'fs-board', 'fw-stop': 'fx-board', 'fw-job': 'fj-board',
-          'fw-session': 'fq-board'}
+          'fw-session': 'fq-board', 'fw-mimus': 'good'}
 # The only GPU-window addresses of the wrapper-read image, in read order.
 WRAPPER_WORDS = [0x01880104, 0x01880100, 0x01880018, 0x0188001c]
 # The probe-read image's access table: address, value, kind (0 read32, 1
@@ -246,6 +246,9 @@ def prepare_bundle(row, build, check, output):
     tools.mkdir(parents=True)
     for name, rel in HOST_TOOLS.items():
         shutil.copyfile(ROOT / rel, tools / name)
+    if variant_of(record) == 'fw-mimus':
+        shutil.copyfile(ROOT / 'tools/check-a733-kernel.py', tools / 'returning-kernel.py')
+        shutil.copyfile(ROOT / 'apps/gpu-power-id/mimus-host.py', tools / 'check-a733-kernel.py')
     source = PROVIDER_READY if variant_of(record) != 'provider-ready' else record.get('base_image_sha256')
     origin = {PROVIDER_READY: 'gpu-provider-ready', FAILED_POWER_ID: 'gpu-power-id-fd3d5839'}.get(source)
     require(origin is not None, 'The build reuses objects of an unrecorded image.')
@@ -286,6 +289,10 @@ def validate(row, output):
              'reused_objects': sum(o['origin'] != 'new' for o in equivalence['objects'].values()),
              'reused_from': sorted({o['origin'] for o in equivalence['objects'].values()} - {'new'}),
              'check_cases': len(checked['cases']), 'power_order': None}
+    if variant == 'fw-mimus':
+        require(sha256(output / 'host/tools/check-a733-kernel.py') == sha256(ROOT / 'apps/gpu-power-id/mimus-host.py') and
+                sha256(output / 'host/tools/returning-kernel.py') == sha256(ROOT / 'tools/check-a733-kernel.py'),
+                'The exact-sum host capture tools differ from their admitted sources.')
     if variant != 'provider-ready':
         normal = [case for case in checked['cases'] if case.get('case') == NORMAL[variant]]
         require(len(normal) == 1 and normal[0].get('cycles') == CYCLES[variant],
@@ -325,9 +332,16 @@ def validate(row, output):
             value['probe_steps'] = [[hex(a), hex(v), k] for a, v, k in PROBE_STEPS]
         fws = 'fws_rows' in names or 'fws_access' in names
         require(fws == (variant in FWS_VARIANTS) and
-                ('fws_stop_run' in names) == (variant in ('fw-stop', 'fw-job', 'fw-session')) and
-                ('job_backing' in names) == (variant in ('fw-job', 'fw-session')),
+                ('fws_stop_run' in names) == (variant in ('fw-stop', 'fw-job', 'fw-session', 'fw-mimus')) and
+                ('job_backing' in names) == (variant in ('fw-job', 'fw-session', 'fw-mimus')),
                 'The image\'s firmware-start or firmware-stop client does not match its variant.')
+        require(('mimus_session' in names) == (variant == 'fw-mimus'),
+                'The exact-sum session does not match the selected variant.')
+        if variant == 'fw-mimus':
+            require({c['case'] for c in checked['cases']} == {'good', 'tag', 'sum', 'guard', 'timeline'},
+                    'The exact-sum check is missing a required case.')
+            require(normal[0]['exit_status'] == 0 and normal[0]['failure'] is None,
+                    'The exact-sum normal case did not return successfully.')
         if variant in FWS_VARIANTS:
             rows = table(output / 'image.elf', 'fws_rows', 12 * len(FWS_ROWS))
             require([struct.unpack_from('<3I', rows, 12 * i) for i in range(len(FWS_ROWS))] == FWS_ROWS,

@@ -680,7 +680,13 @@ static _Noreturn void fws_stop_run(void)
     const enum fws_off off = fws_shutdown(1);
     if (off != FWS_OFF_SOFT) fws_report_failure("GPU shutdown", off);
 #ifdef FWS_JOB
-#if FWS_JOBS > 1
+#ifdef FWS_MIMUS
+    if (job_result != 1) bb_power_fail("GPU exact sums: not complete, GPU OFF and provider parked");
+    if (job_cleanup_status != 1)
+        bb_power_fail("GPU exact sums: context cleanup not confirmed, GPU OFF and provider parked");
+    platform_puts("COMPLETE GPU exact sums: 2 jobs, tags and sums match, context cleaned up, firmware stopped, OFF and "
+                  "provider parked\n");
+#elif FWS_JOBS > 1
     if (job_result != 1) bb_power_fail("GPU job session: not complete, GPU OFF and provider parked");
     if (job_cleanup_status != 1)
         bb_power_fail("GPU job session: 8 jobs as computed, context cleanup not confirmed, GPU OFF and provider parked");

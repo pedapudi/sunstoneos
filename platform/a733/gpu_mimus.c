@@ -144,8 +144,10 @@ struct pvr_mimus_service *a733_gpu_mimus_prepare(struct a733_gpu_mimus *s, struc
     memcpy(context.switch_registers, s->program_result.switch_registers, sizeof(context.switch_registers));
     if (!pvr_compute_context_build(&context, contexts)) return failed(s, g);
     s->stage = BUILT;
-    c->session = (struct pvr_mimus_session_config){payload, payload + PAGE, (uintptr_t)l->arena,
-        (uintptr_t)l->output, JOB_GPU, PROGRAM_GPU, heap_base[0], heap_base[1], 0};
+    c->session = (struct pvr_mimus_session_config){
+        .job_cpu = payload, .program_cpu = payload + PAGE, .arena_cpu = (uintptr_t)l->arena,
+        .output_cpu = (uintptr_t)l->output, .job_gpu = JOB_GPU, .program_gpu = PROGRAM_GPU,
+        .pds_heap = heap_base[0], .usc_heap = heap_base[1]};
     c->vm = &s->vm;
     c->tensors = l->tensors;
     c->tensor_count = l->tensor_count;
