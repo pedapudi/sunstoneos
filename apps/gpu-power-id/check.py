@@ -700,7 +700,7 @@ def fws_case_sequence(case, boot, timer_reads):
     return expected
 
 
-def run_fws(image, case, stop=False, raw=False):
+def run_fws(image, case, stop=False, unchecked=False):
     """One firmware-start case, or with stop a firmware-stop case. Only the
     client's platform calls are modeled: the ON and OFF, the clock,
     translations, cache maintenance and the log; for the stop variant also
@@ -955,7 +955,7 @@ def run_fws(image, case, stop=False, raw=False):
         u.hook_add(UC_HOOK_MEM_READ, snapshot_read, begin=page, end=page + 0xfff)
     u.reg_write(UC_ARM64_REG_VBAR_EL1, image.address('_freertos_vector_table'))
     u.emu_start(image.address('gpu_power_id_client'), 0, count=60000000)
-    if raw:
+    if unchecked:
         return state
     return check_fwx(u, image, state, case, timer_reads) if stop else check_fws(u, image, state, case, timer_reads)
 
