@@ -37,9 +37,9 @@ The implementation differs from this design in these places:
   EL0 send by disassembly of the QEMU port. The QEMU round trip, which
   lock-wait interleaving amplifies, is recorded with a regression guard of
   24 instructions per send.
-- The settle waits for its first time reading plus 3 µs, because the time
-  source counts whole microseconds; a 2 µs wait on a quantized reading can
-  end about 1 µs after the write.
+- The settle waits for its first time reading plus 21 µs, because the time
+  source counts whole microseconds; a 20 µs wait on a quantized reading can
+  end about 19 µs after the write.
 - The burst bounds its polls, as the settle bounds its time reads, so a
   stopped time source ends in RETAINED.
 - The engine's inference-progress hook is defined once in `apps/os/cpu.c`.
@@ -85,7 +85,7 @@ its table's rate, after THROTTLE or on a lower bin, does worse.
 
 The A55 pair at 494 MHz models at 3.438 s. This package does not reach the
 goal; it supplies the core placement and the clock that the other levers
-assume. The model ignores the DSU (L3) clock, which the driver never changes.
+assume. The model ignores the DSU (L3) clock, which this package never changes.
 
 ## Data flow and ownership
 
@@ -169,22 +169,22 @@ pass, the owner repeats driver steps while they make progress, for at most
 after that budget:
 
 1. Park the mux on the oscillator and read it back.
-2. Wait 2 µs on raw counter ticks, twice the fixed delay that the mainline
-   sunxi-ng CPU mux notifier makes after each switch (`ccu_mux.c`
-   `ccu_mux_notifier_cb`, `delay_us = 1` in `ccu-sun50i-a64.c` and
-   `ccu-sun50i-h6.c`, Linux `e5f0a698`).
-3. Write N, then N with the update bit; poll update and lock.
-4. Write P, select the PLL, read back, and wait 2 µs again.
+2. Wait 20 µs on raw counter ticks, as boot0 waits after each CPU mux
+   switch ([top operating points](cpu-top-opp.md)).
+3. Write N, then N with the update bit; poll update, then lock until three
+   reads at least 3 µs apart show it, and wait 20 µs, as the vendor CCU
+   helper does (`ccu_common.c` lines 47–64).
+4. Write P, select the PLL, read back, and wait 20 µs again.
 
 With a lock of about 20 µs the cluster stays parked for tens of
 microseconds and the owner sleeps no tick while parked. The worst case is
 about 90 ms: the 10 ms update bound, the 70 ms lock bound and the 10 ms
 margin. A RETAINED result leaves the cluster on the oscillator until the
 session halts. Voltage ramps happen outside the parked window and take
-`|target − present| ÷ 250 µV/µs`; on board `3-3` the A2 ramp is
-`(1,050 mV − B1's DCDC3 reading) ÷ 250 µV/µs`, at most 1 ms from 800 mV. A
-longer wait only delays the frequency change, so ramp waits sleep whole
-ticks.
+`|target − present| ÷ 250 µV/µs` rounded up to whole milliseconds, as the
+vendor regulator driver waits: on board `3-3` the A2 ramp from 800 mV to
+1,050 mV waits 1 ms. A longer wait only delays the frequency change, so ramp
+waits sleep whole ticks.
 
 A CRITICAL reading is delayed by at most one clock step, 200 µs, because the
 thermal step runs first in each pass. After CRITICAL the owner stops calling
@@ -197,7 +197,7 @@ Driver state and the record word are static in `apps/os/cpu.c`; only the
 thermal task writes them. No DMA buffer, device memory or cache maintenance
 is added. The register adapter in `apps/os/cpu.c` uses plain 32-bit
 accessors on the Device-nGnRnE pages, which the peripheral observes in
-program order. It issues one `DSB SY` after each mux write, before the 2 µs
+program order. It issues one `DSB SY` after each mux write, before the 20 µs
 wait that assumes the write arrived (section 1.2): three per frequency
 change.
 
@@ -257,7 +257,7 @@ the diagnostic built from this branch after the bringup merge.
 | Call sites that place work on cores 6 or 7 (A76 build) | Every task without affinity | Three: recognizer, inference worker, GPU worker | Compile-time default; the call sites named above |
 | A76 admission | No path | 8 reads, no writes, once per boot; the clock build adds 22 inspection reads and 2 read-only PMIC snapshots | `cpu-clock-model.c` with the OS owner |
 | CPU-B raise with a voltage write | No path | 5 clock register writes, 2 PMIC requests, 3 adapter `DSB SY` | Same |
-| Owner ticks while parked | No path | 0 when the PLL locks in about 20 µs; the model rejects a PLL write without the 2 µs settle | Same |
+| Owner ticks while parked | No path | 0 when the PLL locks in about 20 µs; the model rejects a PLL write without the 20 µs settle | Same |
 | Longest park | No path | About 90 ms; RETAINED stays parked until the halt | Same |
 | Owner wake-ups added | — | 0 | Same |
 | Transitions per boot | — | At most twice the grant's change count: each THROTTLE lowering follows a raise | Model |
@@ -287,8 +287,9 @@ task sends; that send must still take `SVC 117`.
 ## Left out
 
 - **A load-based governor**: no consumer, and the power cost is unmeasured.
-- **DSU clock changes**: they return if board timing shows the A76 pair
-  limited by the L3.
+- **DSU clock changes in this package**: the driver supports them under the
+  vendor rule, and [the top operating-point design](cpu-top-opp.md) orders
+  them after the cluster raises.
 - **Operating-point changes in the resident lifetime, and so in the GPU
   build**: they need a standing user approval of a qualified point and a
   grant that names the slot generation in place of the epoch.
@@ -307,17 +308,17 @@ the supervisor call. The clock and voltage sequences are the driver's, with
 the sources that [cpu-clock.md](../cpu-clock.md) cites (linux-orangepi
 `2ac08e8c` `ccu-sun60iw2-cpupll.c`, `ccu_nkmp.c`, `sun60iw2p1-cpu-vf.dtsi`
 V0.9, the SID node, the board device tree; u-boot `b791be84`
-`pmu_axp8191.c`). The 2 µs mux settle cites the mainline notifier above; the
-implementation pins `ccu_mux.c`, `ccu-sun50i-a64.c` and `ccu-sun50i-h6.c`. No
+`pmu_axp8191.c`). The 20 µs mux settle and the lock confirmation follow boot0
+and the vendor CCU helper ([top operating points](cpu-top-opp.md)). No
 source proves:
 
-- parking a cluster's mux on the oscillator while that cluster executes. The
-  pinned A733 driver changes N in place with LFM and never reparents at run
-  time; the mainline precedent is for other Allwinner SoCs;
+- parking a cluster's mux on the oscillator while that cluster executes at
+  run time. The pinned A733 driver changes N in place with LFM and never
+  reparents; boot0 parks each CPU mux while it programs the PLLs from CPU0;
 - that lock reports the final rate with the pattern and LFM enables clear;
-- DCDC3 and DCDC5 settling at the device tree's 250 µV/µs;
-- the CPU-B rate and the pattern and LFM words that boot0 leaves, and board
-  `3-1`'s fuse code;
+- DCDC3 and DCDC5 settling within the vendor's 1 ms wait;
+- board `3-1`'s fuse code and the words that boot0 leaves on it. On port
+  `3-3`, bundles 14 and 15 recorded them (below);
 - application SGI delivery on this board. The supervisor-call path writes
   the same register at the same exception level and is also unproven.
 
@@ -419,7 +420,7 @@ specific to that board through its approval record:
 | `include/a733_smp_placement.h` (new) | Yes | No; `start.c` checks the GPU build's `OS_RECOGNITION_CORE` against it |
 
 This package also changes `drivers/clock/a733_cpu_clock.c` and its header
-(the 2 µs settles, the parked time, the read-only inspection and the burst),
+(the mux settles, the parked time, the read-only inspection and the burst),
 `platform/a733-smp-cached/FreeRTOSConfig.h`,
 `platform/a733-smp/FreeRTOSConfig.h`, `patches/freertos-smp-c.patch`,
 `patches/freertos-smp-tasks.patch`, `checks/cpu-clock-model.c`,

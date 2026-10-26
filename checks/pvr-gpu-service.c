@@ -306,7 +306,8 @@ static int sync_read(void *ctx, uint32_t *out)
 static int isolate(void *ctx)
 {
     callback(ctx); configASSERT(stopping && service.queue.phase == PVR_CCB_RETIRED);
-    configASSERT(word(registers + 0x100, 8) == UINT64_C(0xffeffffffffffc3d));
+    /* The vendor RGXStop asserts no reset: SOFT_RESET keeps the start's release value. */
+    configASSERT(!word(registers + 0x100, 8));
     running = 0; __atomic_fetch_add(&isolated, 1, __ATOMIC_RELEASE);
 #ifdef SUNSTONE_GPU_ASYNC_POWER
     /* The fixture models quiescence above; clock-off is not isolation proof.

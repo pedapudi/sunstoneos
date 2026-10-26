@@ -5,9 +5,11 @@ policy, reads its permission from a grant record that an OS session can
 carry, and times work in cycles of the cluster that ran it. The integrated OS
 image calls it only in the supervised build with `SUNSTONE_A733_OS_CPU_CLOCK`,
 which is off by default ([the OS owner](#the-integrated-os-image-owns-the-driver-in-its-thermal-task)).
-No prepared session carries a grant that names a cluster. Nothing in it has
-run on the board. Any physical use needs the user's approval for each clock or
-voltage change.
+No prepared OS session carries a grant that names a cluster. Board bundle 20
+runs the driver in a returning CPU0 image with a fixed grant of two CPU-B
+changes at 800 mV ([top operating points](designs/cpu-top-opp.md)); it is
+frozen and has not run. Nothing in the driver has run on a board. Any
+physical use needs the user's approval for each clock or voltage change.
 
 The A733 has two CPU clusters and a shared DynamIQ unit:
 
@@ -38,7 +40,7 @@ Each domain has a PLL word and a word that holds its clock source selector
 | --- | --- | --- | --- |
 | CPU-L | `0x08871000` | `0x0887101c` | yes |
 | CPU-B | `0x08872000` | `0x0887201c` | yes |
-| DSU | `0x08873000` | `0x0887301c` | no |
+| DSU | `0x08873000` | `0x0887301c` | yes |
 
 In the PLL word, bits 31 to 27 are enable, LDO enable, lock enable, lock and
 output enable; bit 26 requests an update; N is bits 15:8. In the mux word,
@@ -85,6 +87,10 @@ row is admitted only when every column supports it, at the highest voltage
 among the columns. On CPU-L this admits 416, 1014, 1196 and 1404 MHz at 800,
 800, 850 and 950 mV.
 
+Every block defaults to the highest point of its column; lower points are
+optional modes. [The top operating-point design](designs/cpu-top-opp.md)
+derives those points for each bin and the board steps that reach them.
+
 A PLL program for a point uses P=0 and N = rate ÷ 26 MHz at or above
 676 MHz, and P=1 below it. These are the values that the pinned driver's
 search chooses, within its 26 MHz range of N = 26–84 for CPU-L and 26–86 for
@@ -94,7 +100,8 @@ CPU-B.
 
 `a733_cpu_clock_request` refuses every transition unless the configuration
 carries a grant with a nonzero session, the cluster's bit, a maximum rate at
-or above the target, and an unused change. Each admitted request consumes one
+or above the target, and an unused change. A grant of CPU-L also admits the
+DSU, which shares DCDC5, under the DSU rules below. Each admitted request consumes one
 change, whatever its outcome. No current image or session supplies a grant.
 A supervised session that grants one must record the user's approval for
 that specific change.
@@ -131,10 +138,11 @@ fails any rule leaves the configuration unchanged.
 reads the policy's level and the channels that have had a valid reading;
 both are published for any task. A request needs a valid reading from the
 cluster's own sensor, CPUL for CPU-L and CPUB for CPU-B, in addition to the
-grant. The policy reports NORMAL before its first reading, so this rule keeps
-an unmeasured cluster at its present rate. With a reading, NORMAL admits
-granted points; THROTTLE admits only points at or below 1014 MHz, which needs
-800 mV in every bin; CRITICAL refuses every transition. The driver keeps
+grant; the DSU, which has no sensor, uses CPUL. The policy reports NORMAL
+before its first reading, so this rule keeps an unmeasured cluster at its
+present rate. With a reading, NORMAL admits granted points; THROTTLE admits
+only cluster points at or below 1014 MHz and DSU points at or below 780 MHz,
+each of which needs 800 mV in every bin; CRITICAL refuses every transition. The driver keeps
 CRITICAL once it has read it.
 
 While idle, the owner's poll applies the level:
@@ -187,10 +195,11 @@ envelope.
 ## A transition orders voltage and frequency
 
 One owner task calls `a733_cpu_clock_poll`. Each call performs one bounded
-step and never waits in a loop:
+step and waits at most 20 µs:
 
-1. Acquire the cluster's clock scope exclusively. CPU-L also holds the DSU
-   scope shared, because its voltage depends on the DSU rate.
+1. Acquire the domain's clock scope exclusively. CPU-L also holds the DSU
+   scope shared, because its voltage depends on the DSU rate; the DSU holds
+   both cluster scopes shared, because their rates bound it.
 2. Acquire the cluster's rail exclusively in the rail ledger.
 3. Read and check the inherited state: a 26 MHz oscillator that is enabled
    and stable, a mapped speed bin, the cluster PLL enabled and locked with no
@@ -208,9 +217,13 @@ step and never waits in a loop:
    950 mV when a lower point needs only 900 mV. The driver records the floor
    before it reaps the snapshot request, so a ledger held on another core
    only delays both steps to the next poll.
-6. When raising the rate, write a higher voltage first, then wait for the
-   ramp of `|ΔV| ÷ 250 µV/µs`, the board device tree's ramp delay. No write
-   is made when the present voltage is already enough.
+6. When raising the rate, write a higher voltage first, then wait
+   `|ΔV| ÷ 250 µV/µs`, the board device tree's ramp delay, rounded up to whole
+   milliseconds as the vendor regulator driver rounds it
+   (`axp2101-regulator.c` lines 383–409): any raise of up to 250 mV waits
+   1 ms. No write is made when the present voltage is already enough. The DSU
+   writes no voltage: its target must already be covered by DCDC5, or the
+   transition is refused before any write.
 7. Recheck the current thermal policy before the first mux or PLL write.
    A policy change during the PMIC read or voltage ramp can now refuse the
    target. Refusal preserves the old frequency and any confirmed higher
@@ -219,11 +232,14 @@ step and never waits in a loop:
    The remaining time before the caller's deadline
    must cover both PLL waits and a 10 ms margin for the owner polls that
    follow lock, 90 ms in total; otherwise the transition ends EXPIRED here,
-   before any PLL or mux write. Then park the mux on the DCXO, write N, set
-   the update bit, wait up to 10 ms for it to clear and up to 70 ms for lock
-   (the pinned driver's limits), write P, and select the PLL again. Every mux
-   and P write is read back, and the final words must decode to the target
-   rate.
+   before any PLL or mux write. Then park the mux on the DCXO and wait 20 µs,
+   write N, set the update bit, wait up to 10 ms for it to clear and up to
+   70 ms (the pinned driver's limits) for three lock reads at least 3 µs
+   apart, wait 20 µs, write P, select the PLL again and wait 20 µs. The lock
+   rule is the vendor CCU helper's with `CONFIG_AW_STANDARD_CCU=y`, which the
+   board kernel configuration sets (`ccu_common.c` lines 47–64), and boot0's;
+   the 20 µs waits are boot0's after each mux switch. Every mux and P write is
+   read back, and the final words must decode to the target rate.
 8. When lowering the rate, write the lower voltage after the frequency
    change and wait for the same ramp.
 9. Release both leases.
@@ -239,25 +255,32 @@ The pinned Linux driver changes N in place with linear frequency modulation
 With any of these enabled, N alone may not define the rate, and lock may be
 reported before the PLL reaches its final rate. A lowering could then
 reselect the PLL while it still runs fast and lower the voltage under it.
-This driver reads the three words for the cluster and refuses the transition
+This driver reads the three words for the domain and refuses the transition
 when PAT0 bit 29 or 30, PAT1 bit 31 or LFM bit 31 is set. It never writes
-them. Their values after boot0 are unknown, so the first physical trial
-shows whether this check admits the board's inherited state. Parking on the
-oscillator keeps the cluster on a stable clock while the PLL relocks. After
-each mux write, the park and the reselection, the driver spins at least 2 µs
-on its time source before the next register write. The time source counts
+them. On port 3-3, bundle 14 read them clear for CPU-L and CPU-B after boot0.
+Parking on the oscillator keeps the domain on a stable clock while the PLL
+relocks, as boot0 does when it programs the CPU PLLs. After each mux write,
+the park and the reselection, the driver spins at least 20 µs on its time
+source before the next register write, boot0's wait. The time source counts
 whole microseconds, so the spin runs until the reading exceeds its first
-value by 3. That is twice the fixed 1 µs delay of
-the mainline sunxi-ng CPU mux notifier (Linux `e5f0a698`, `ccu_mux.c`
-`ccu_mux_notifier_cb`; `delay_us = 1` in `ccu-sun50i-a64.c` and
-`ccu-sun50i-h6.c`). No A733 source states a delay, because the pinned driver
-never reparents at run time, so parking a running cluster stays unproven. The
-driver records the time from the park write to the select readback of each
-frequency change, and its largest value. A transition to the present rate
-completes without writes.
+value by 21; the 3 µs gap between counted lock reads is kept the same way.
+The pinned kernel driver never reparents at run time, so parking a running
+cluster has only boot0 as precedent. The driver records the time from the
+park write to the select readback of each frequency change, and its largest
+value. A transition to the present rate completes without writes.
 
-`a733_cpu_clock_inspect` runs a read-only pass over one cluster without a
-grant: the leases, the report and the cluster's pattern and LFM words, and
+The DSU follows the vendor dsufreq rule (`sunxi-dsufreq.c` lines 178–295): a
+DSU point is admitted only at or below three quarters of the faster
+cluster's present rate, rounded down to a multiple of 26 MHz, and only when
+its voltage does not exceed that of CPU-L's granted maximum. The vendor sets
+the DSU after a cluster raise and before a cluster lowering, and the owner
+orders its requests the same way. A CPU-L lowering keeps DCDC5 at the
+voltage of the present DSU point. The A733 board kernel configuration leaves
+dsufreq out (`CONFIG_AW_SUNXI_DSUFREQ` is not set), so no shipped Orange Pi
+kernel moves the DSU from the rate that the boot firmware leaves.
+
+`a733_cpu_clock_inspect` runs a read-only pass over one domain without a
+grant: the leases, the report and the domain's pattern and LFM words, and
 one PMIC snapshot, whose voltage it keeps and which records the rail's boot
 floor. It also records supported inherited points for granted thermal control.
 The inspection writes no clock or PMIC register and consumes no change.
@@ -423,9 +446,17 @@ In separate manual runs, each of these altered drivers failed the model:
   lowering across episodes;
 - one that ignores the grant's epoch, one that ignores its approval hash and
   one that accepts timing samples from two cores;
-- one without the settle after the park, and one that waits 2 µs from its
-  first quantized reading: the model keeps time in nanoseconds, returns
-  whole microseconds and rejects a PLL write less than 2 µs after the park;
+- one without the settle after the park, and one that waits 2 µs: the model
+  keeps time in nanoseconds, returns whole microseconds and rejects a PLL
+  write less than 20 µs after the park;
+- one that selects the PLL after a single lock read, one without the 20 µs
+  after lock, and one whose lock reads are not kept 3 µs apart: the model
+  rejects a reselection without three such reads and 20 µs after the third,
+  including when the lock reads clear twice after it first sets;
+- one that waits the unrounded ramp: a 10 mV raise must wait 1 ms;
+- one whose DSU transition raises DCDC5, one that puts the DSU on DCDC3,
+  one without the three-quarters cap and one without the CPU-L voltage
+  ceiling;
 - one whose burst has no poll bound, which never returns when the time
   source stops while the cluster is parked;
 - one whose burst polls only once, which leaves the cluster parked at a tick
@@ -434,9 +465,12 @@ In separate manual runs, each of these altered drivers failed the model:
 The model also runs a read-only inspection of both clusters with no grant,
 and an A2 raise on a modeled board `3-3` (fuse word `0x00000496`, vf0400):
 CPU-B from 1,014 to 2,002 MHz with DCDC3 from 900 to 1,050 mV, 5 clock
-register writes and one PMIC write, the cluster parked 23 µs of model time
+register writes and one PMIC write, the cluster parked 69 µs of model time
 and no owner tick inside the parked window with a 20 µs lock. With a 300 µs
-lock the owner sleeps one tick while parked.
+lock the owner sleeps one tick while parked. On the recorded port 3-3 state
+it also runs CPU-B to 1,404 MHz and back at 800 mV with ten clock writes and
+no PMIC write, then CPU-B to 2,002 MHz at 1,050 mV, CPU-L to 1,794 MHz at
+1,000 mV and the DSU to 1,274 MHz with no voltage write.
 
 Altered native cycle code failed the instruction model when it restored DAIF
 after all reads, ignored the filter, wrote a counter reset or kept `D` set.
@@ -450,8 +484,8 @@ writes and one PMIC write in its voltage-raising case.
 
 `checks/os-cpu-clock-native.py --build BUILD --output OUTPUT` uses a configured
 CPU-clock-enabled OS build to compile and execute the actual OS register
-adapter under AArch64 emulation. It verifies the admission report, all 14
-allowed reads, four allowed writes, the barrier after each mux write, and
+adapter under AArch64 emulation. It verifies the admission report, all 17
+allowed reads, six allowed writes, the barrier after each mux write, and
 refusals for other addresses or owners. The CPU-clock-enabled supervised OS
 also builds and passes its link check. Existing recognition thermal-checkpoint
 evidence remains applicable because this change does not alter that code.

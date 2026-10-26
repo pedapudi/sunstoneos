@@ -2017,6 +2017,7 @@
   "docs": [
    "apps/usb-returning/README.md",
    "docs/designs/board-bundles-next.md",
+   "docs/designs/cpu-top-opp.md",
    "docs/designs/pmic-access.md"
   ],
   "library": false,
@@ -2030,7 +2031,7 @@
    "--tree",
    "--output"
   ],
-  "summary": "Build and check the base image and the returning images of bundles 4, 6, 7 and 8.",
+  "summary": "Build and check the base image and the returning images of bundles 4, 6, 7, 8, 15 and 20 to 24.",
   "usb": true
  },
  "board-bundles.py": {
@@ -2045,6 +2046,7 @@
    "docs/designs/board-bundles-measurements.md",
    "docs/designs/board-bundles-next.md",
    "docs/designs/board-bundles.md",
+   "docs/designs/cpu-top-opp.md",
    "docs/designs/mbus-restore.md",
    "docs/reference-backsolve-npu.md",
    "docs/vendor-firmware/action-plan.md"
@@ -2623,6 +2625,7 @@
    "docs/designs/cpu-a76-dvfs.md",
    "docs/designs/cpu-pmu-measurements.md",
    "docs/designs/cpu-pmu.md",
+   "docs/designs/cpu-top-opp.md",
    "docs/designs/pmic-access-measurements.md",
    "docs/designs/power-authority-measurements.md"
   ],
@@ -7052,6 +7055,20 @@
   "summary": "Check linked NPU interrupt routing and ownership without accessing hardware.",
   "usb": false
  },
+ "npu-job-cost.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/npu-job-overhead.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--output"
+  ],
+  "summary": "Count the CPU work of one NPU job in a linked finite image, without hardware.",
+  "usb": false
+ },
  "npu-large-host.py": {
   "cache_areas": [
    "evidence",
@@ -7115,6 +7132,7 @@
  "npu-nn-pool-native.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/npu-job-overhead.md",
    "docs/npu-relative-shift.md"
   ],
   "library": false,
@@ -8260,6 +8278,7 @@
  "pvr-gpu-start-reference.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/gpu-firmware-start.md",
    "docs/gpu-start.md",
    "docs/vendor-firmware/gpu-and-npu-binaries.md"
   ],
@@ -8276,6 +8295,7 @@
  "pvr-gpu-stop-reference.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/gpu-firmware-stop.md",
    "docs/gpu-stop.md",
    "docs/vendor-firmware/gpu-and-npu-binaries.md"
   ],

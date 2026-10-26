@@ -383,6 +383,9 @@ capture equals the clean capture.
 
 ### 2. Firmware start through the open-source host driver
 
+[The firmware-start design](gpu-firmware-start.md) now derives the complete
+vendor sequence and replaces the plan below.
+
 The GPU firmware's license (`LICENSE.powervr` line 14) forbids reverse
 engineering, decompiling or disassembling it. The firmware start is
 therefore derived only from the open-source BXM DDK host driver

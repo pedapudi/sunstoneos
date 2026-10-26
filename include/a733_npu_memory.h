@@ -8,11 +8,15 @@
 /* READ buffers may change between jobs and are cleaned at every publication.
  * CONSTANT buffers are device-read data, such as weights and descriptors,
  * that the CPU must not write after the bootstrap publication; like tables
- * and command streams they are cleaned only by that publication. */
+ * and command streams they are cleaned only by that publication. SCRATCH
+ * buffers, such as a graph's intermediate pool, are device-read and -written
+ * memory that the CPU neither reads nor writes after the bootstrap
+ * publication, which cleans and invalidates them once; no job maintains or
+ * invalidates them. */
 enum a733_npu_buffer_role {
     A733_NPU_BUFFER_READ, A733_NPU_BUFFER_WRITE,
     A733_NPU_BUFFER_COMMAND, A733_NPU_BUFFER_BOOTSTRAP,
-    A733_NPU_BUFFER_CONSTANT
+    A733_NPU_BUFFER_CONSTANT, A733_NPU_BUFFER_SCRATCH
 };
 enum a733_npu_memory_state {
     A733_NPU_MEMORY_EMPTY, A733_NPU_MEMORY_IDLE,

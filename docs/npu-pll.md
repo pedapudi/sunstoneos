@@ -91,14 +91,19 @@ LOCK refuse before any write; the pinned profile has no rate-change step.
 
 ## Two profiles and the rate change
 
-`a733_npu_startup_rate` selects one of two profiles before the scheduler.
-Both come from the 24 MHz reference, inside the board source's N range of
-53–105, and both run at the inherited 800 mV:
+By default the register pass selects the operating point the vendor driver
+selects for the SID speed bin ([job overhead design](designs/npu-job-overhead.md#default-operating-point)):
+852 MHz at 800 mV for vf0201, vf0400 and vf0500, which includes both boards
+(code 4). It refuses every other bin before any write, because that bin's
+point needs another DCDC2 voltage or it has no row. `a733_npu_startup_rate`
+selects an optional mode instead, before the scheduler: 492 MHz, or 852 MHz.
+Both profiles come from the 24 MHz reference, inside the board source's N
+range of 53–105, and both run at the inherited 800 mV:
 
 | Rate | N | P0 | Oscillator | Factor field |
 | --- | --- | --- | --- | --- |
-| 492 MHz (default) | 82 | 4 | 1,968 MHz | `0x00305100` |
-| 852 MHz | 71 | 2 | 1,704 MHz | `0x00104600` |
+| 492 MHz (optional mode) | 82 | 4 | 1,968 MHz | `0x00305100` |
+| 852 MHz (the vendor point for vf0201, vf0400 and vf0500) | 71 | 2 | 1,704 MHz | `0x00104600` |
 
 The 852 MHz profile is admitted only for a speed bin whose column lists
 800 mV for it. The register pass reads SID word `0x0300624c`: the code is

@@ -834,20 +834,19 @@ The probe-read variant (`apps/gpu-power-id/probe-read.c`, build and check
 option `--probe-read`, bundle row 17) runs the power-only ON sequence
 through the reset release and reads the core identity as the vendor's
 probe does. It then makes the vendor's secure configuration and reads the
-identity again. One run thus separates the access width from the secure
-configuration while the clock and voltage stay at 400 MHz and 800 mV. It
-is implemented and host-checked; it has not run on a board.
+identity again. It first ran before the default path existed and stalled
+at one of its first five reads ("The probe-read run stalled at a read that
+no record names" below). It now runs on the default path, which reads the
+identity on the board, and is the first step of the firmware start
+([the firmware-start design](designs/gpu-firmware-start.md)).
 
 Sequence:
 
 1. Snapshot 0, then ON with the client deadline as the controller's bound.
-   The CORE6 status poll for 8 runs at most 200 ms as an observation;
-   `GPU PROBE core6` prints whether status 8 came, the last status and the
-   wait.
-2. Snapshot 1 and the controller and CORE6 lines. The accesses are refused
-   unless the controller is ON or has read MISR after the reset release,
-   the step before its final status poll: the GPU clock is then open and
-   its reset released, as before the vendor's probe-time read.
+   The ON must reach CORE6 status 8 within 200 ms; `GPU PROBE core6` prints
+   whether it did, the last status and the wait. Otherwise the client stops
+   with `GPU ON deadline` (or `GPU ON poll`) before any GPU-window access.
+2. Snapshot 1 and the controller and CORE6 lines.
 3. Identity Device-nGnRnE mapping checks of the wrapper and SMC0 pages for
    read and write, and of the GPU core page for read.
 4. The rows of `probe_steps`, in order. Before each access the client
@@ -876,17 +875,13 @@ next image puts the two writes before the read.
 
 5. A `GPU PROBE result` line reports whether each identity matched
    `36.56.104.183` (`0x240038006800b7`) and whether the restore readbacks
-   equal the entry values. `COMPLETE GPU probe read: identity
-   36.56.104.183 before and after the secure configuration, restored, GPU
-   left powered` (status 0) requires both identities, both restore
-   readbacks and no pending asynchronous abort. Anything else ends with
-   `FAIL GPU probe read: identity or restore not as expected, GPU left
-   powered` (status 1).
-
-The image makes no OFF and no provider park. CORE6 never acknowledged ON,
-and turning it and TOP5 off from that state has no board evidence; the
-run ends after the restore, and the lifetime ends with the power removal
-that the runbook requires anyway.
+   equal the entry values. A mismatch ends with `FAIL GPU probe read:
+   identity or restore not as expected, GPU left powered` (status 1).
+6. The OFF, the supply end and the provider park of the power-only image,
+   then `COMPLETE GPU probe read: identity 36.56.104.183 before and after
+   the secure configuration, restored, OFF and provider parked` (status 0),
+   which requires both identities, both restore readbacks and no pending
+   asynchronous abort. The lifetime can then continue.
 
 **The write window restores on every exception the image takes.** From
 the first write (row 6) to the last restore readback (row 15) the client:

@@ -287,7 +287,7 @@ bytes of text and 320 of read-only data, and the G2D application by 344 and
 `~/.cache/sunstoneos/evidence/board-bundles-20261025-mbus-qual-2/` holds, for
 ports 3-3 and 3-1, the kernel check of bundle 2 rebuilt from `3f09ec2c`
 (`kernel-check-counter-option`, `image.elf` `1bfe345e…`, which links the
-restore and its log line) and the clock-audit dump (bundle 21), prepared by
+restore and its log line) and the clock-audit dump (frozen as bundle 21; bundle 27 since the merge with bringup), prepared by
 `tools/prepare-board-bundles.py`, with its runbook. Each port runs, in one
 lifetime with power-removal recovery staged:
 

@@ -293,7 +293,7 @@ driver compares the live word with its session.
 
 ## A read-only dump measures the clock tree
 
-The Read bundle `clock-audit-words` (bundle 21 in `tools/prepare-board-bundles.py`)
+The Read bundle `clock-audit-words` (bundle 27 in `tools/prepare-board-bundles.py`, frozen as bundle 21 in the sets of 2026-10-25)
 reads 380 words through the boot ROM's FEL `readl` command and writes no device
 register:
 

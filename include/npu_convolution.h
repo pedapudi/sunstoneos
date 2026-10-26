@@ -99,9 +99,8 @@ struct npu_convolution {
  *
  * Any admitted initialization failure is terminal; reservations remain owned.
  * No teardown/reinitialization is provided. Model/weights/commands stay immutable.
- * Startup, activation, bootstrap publication and stop check the model copy,
- * weight digests and both command streams; a job publication checks the
- * weights and the job command stream only. Input/output are accessed only
+ * The bootstrap publication and CLOSE check the model copy, weight digests
+ * and both command streams; a job publication checks only the selection. Input/output are accessed only
  * through the client API below. Full mapped command tails contain END pairs.
  *
  * Successful preparation admits the selected trusted compiled artifact only;

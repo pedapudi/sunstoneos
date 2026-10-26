@@ -71,8 +71,34 @@ def files(root):
 ADAPTER_FILES = {Path('drivers/power/a733_pmic_native.c'), Path('include/a733_pmic_native.h'),
                  Path('drivers/power/a733_pmic.c'), Path('include/a733_pmic.h'),
                  Path('apps/board-bundles-power/power.c'), Path('apps/board-bundles-power/power.h')}
-# The only callers of the selector write, with the rails each writes.
-WRITERS = {Path('drivers/gpu/a733_gpu_platform.c'), Path('drivers/clock/a733_cpu_clock.c')}
+# The only callers of the selector write, with the rail argument each call
+# may pass: the GPU platform writes DCDC4 before the GPU's first ON; the CPU
+# clock driver writes its domain's rail, DCDC3 or DCDC5; and the CPU
+# operating-point step image of board bundle 25 (docs/designs/cpu-top-opp.md)
+# writes DCDC3 alone, with CPU-B's clock held.
+WRITERS = {Path('drivers/gpu/a733_gpu_platform.c'): {'A733_RAIL_DCDC4'},
+           Path('drivers/clock/a733_cpu_clock.c'): {'rail_of(c->cluster)'},
+           Path('apps/board-bundles-power/cpu-opp-step.c'): {'A733_RAIL_DCDC3'}}
+
+
+def write_rails(text):
+    """The rail argument (the fourth) of each a733_pmic_submit_write call in text."""
+    rails = []
+    for m in re.finditer(r'a733_pmic_submit_write\(', text):
+        depth, i, args, start = 1, m.end(), [], m.end()
+        while depth:
+            c = text[i]
+            if c in '([':
+                depth += 1
+            elif c in ')]':
+                depth -= 1
+            elif c == ',' and depth == 1:
+                args.append(text[start:i].strip())
+                start = i + 1
+            i += 1
+        args.append(text[start:i - 1].strip())
+        rails.append(args[3] if len(args) == 8 else None)
+    return rails
 
 
 def strip_comments(text):
@@ -128,9 +154,18 @@ def main():
         problems.append('drivers/power/a733_pmic.c: writable() admits DCDC4 other than at a GPU operating-point voltage')
     for path in files(root):
         rel = path.relative_to(root)
-        if rel not in WRITERS and rel not in ADAPTER_FILES and 'a733_pmic_submit_write(' in strip_comments(
-                path.read_text(errors='replace')):
+        own = strip_comments(path.read_text(errors='replace'))
+        if rel in ADAPTER_FILES or 'a733_pmic_submit_write(' not in own:
+            continue
+        if rel not in WRITERS:
             problems.append(f'{rel}: submits a PMIC selector write')
+            continue
+        for rail in write_rails(own):
+            if rail not in WRITERS[rel]:
+                problems.append(f'{rel}: a PMIC selector write names rail {rail}, outside {sorted(WRITERS[rel])}')
+    for rel in WRITERS:
+        if not (root / rel).is_file() or not write_rails(strip_comments((root / rel).read_text())):
+            problems.append(f'{rel}: listed selector writer has no selector write')
     native = (root / 'include/a733_pmic_native.h').read_text()
     allow = re.search(r'if\(writing\)return (.*?);', native)
     if not allow or set(re.findall(r'0x[0-9a-fA-F]+', allow[1])) != {'0x07083008', '0x0708300c'}:
@@ -170,8 +205,8 @@ def main():
         print(p)
     assert not problems, f'{len(problems)} problem(s)'
     print(f'PASS PMIC tree facts: no PSCI CPU_OFF or suspend in {scanned} sources, selector writes '
-          'only to DCDC3 and DCDC5 and to DCDC4 at GPU operating-point voltages, from the CPU clock driver and the GPU '
-          'platform only, INTID 235 only in the provider, no lock in the native adapter\'s '
+          'only to DCDC3 and DCDC5 and to DCDC4 at GPU operating-point voltages, from the CPU clock driver, the GPU '
+          'platform and the CPU operating-point step image (DCDC3) only, each call naming only its rails, INTID 235 only in the provider, no lock in the native adapter\'s '
           'per-phase time read or per-access ownership check, no task check per access, the adapter\'s '
           'barrier placement, adapter '
           'operations named only by the provider, its adapter and the bundle forwarders')

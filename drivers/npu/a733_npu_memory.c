@@ -25,13 +25,19 @@ static int translated(const struct a733_npu_memory *m, uintptr_t cpu,
     }
     return 1;
 }
-static int live_mappings(const struct a733_npu_memory *m)
+static int device_writes(const struct a733_npu_buffer *b)
+{ return b->role == A733_NPU_BUFFER_WRITE || b->role == A733_NPU_BUFFER_SCRATCH; }
+/* Every page of the tables and buffers at initialization and around the
+ * bootstrap; around a job, only the READ and WRITE buffers that the job's
+ * cache maintenance touches. The vendor maps buffers once and maintains only
+ * the input and output per run (examples/vpm_run/vpm_run.c:2628, :2672-2704). */
+static int live_mappings(const struct a733_npu_memory *m, int all)
 {
-    if (!translated(m, m->arena, m->image.physical, m->capacity, 1)) return 0;
+    if (all && !translated(m, m->arena, m->image.physical, m->capacity, 1)) return 0;
     for (size_t i = 0; i < m->count; ++i) {
         const struct a733_npu_buffer *b = &m->buffers[i];
-        if (!translated(m, b->cpu, b->physical, b->bytes,
-                        b->role == A733_NPU_BUFFER_WRITE)) return 0;
+        if (!all && b->role != A733_NPU_BUFFER_READ && b->role != A733_NPU_BUFFER_WRITE) continue;
+        if (!translated(m, b->cpu, b->physical, b->bytes, device_writes(b))) return 0;
     }
     return 1;
 }
@@ -65,7 +71,7 @@ int a733_npu_memory_init(struct a733_npu_memory *m, void *arena, size_t capacity
         const struct a733_npu_buffer *b = &buffers[i];
         if (!a733_span_incl_nonempty((void *)b->cpu, b->bytes) || !b->device ||
             ((b->cpu | b->physical | b->bytes | b->device) & (PAGE - 1)) ||
-            (unsigned)b->role > A733_NPU_BUFFER_CONSTANT ||
+            (unsigned)b->role > A733_NPU_BUFFER_SCRATCH ||
             b->physical >= PA_LIMIT || b->bytes > PA_LIMIT - b->physical ||
             b->bytes > VA_LIMIT - b->device ||
             a733_extents_intersect(b->cpu, b->bytes, (uintptr_t)m, sizeof(*m)) ||
@@ -88,11 +94,11 @@ int a733_npu_memory_init(struct a733_npu_memory *m, void *arena, size_t capacity
         }
         next.buffers[at] = *b;
     }
-    if (bootstraps != 1 || !live_mappings(&next)) return 0;
+    if (bootstraps != 1 || !live_mappings(&next, 1)) return 0;
     for (size_t i = 0; i < count; ++i) {
         const struct a733_npu_buffer *b = &next.buffers[i];
         regions[i] = (struct a733_npu_region){b->physical, b->bytes, b->device,
-            A733_NPU_PAGE_4K, b->role == A733_NPU_BUFFER_WRITE};
+            A733_NPU_PAGE_4K, device_writes(b)};
     }
     if (!a733_npu_mmu_build(arena, capacity, physical, regions, count, &next.image)) return 0;
     next.state = A733_NPU_MEMORY_IDLE;
@@ -168,7 +174,7 @@ static int canonical(const struct a733_npu_memory *m)
                 const struct a733_npu_buffer *b = &m->buffers[region];
                 uint64_t pa = b->physical + va - b->device;
                 expected = (uint32_t)pa | (uint32_t)((pa >> 32) << 4) | 3u |
-                           (b->role == A733_NPU_BUFFER_WRITE ? 4u : 0);
+                           (device_writes(b) ? 4u : 0);
             }
             if (word(arena + used + slot * 4u) != expected) return 0;
         }
@@ -203,7 +209,7 @@ int a733_npu_memory_publish(struct a733_npu_memory *m, const struct a733_npu_mmu
     const struct a733_npu_buffer *b = &m->buffers[found];
     if (b->role != (bootstrap ? A733_NPU_BUFFER_BOOTSTRAP : A733_NPU_BUFFER_COMMAND) ||
         cmd->device != b->device || cmd->readable_bytes != b->bytes ||
-        (!bootstrap && !m->booted) || !live_mappings(m) || !canonical(m)) return fault(m);
+        (!bootstrap && !m->booted) || !live_mappings(m, bootstrap) || !canonical(m)) return fault(m);
     m->active = *cmd; m->active_index = found; m->state = A733_NPU_MEMORY_DEVICE;
     /* Validate everything before publishing any range. A partial failure
      * retains the complete session even if the controller never triggers.
@@ -216,7 +222,7 @@ int a733_npu_memory_publish(struct a733_npu_memory *m, const struct a733_npu_mmu
         if (!bootstrap && ((b->role != A733_NPU_BUFFER_READ && b->role != A733_NPU_BUFFER_WRITE) ||
                            !maintained(m, i, found)))
             continue;
-        enum aarch64_cache_op op = b->role == A733_NPU_BUFFER_WRITE ?
+        enum aarch64_cache_op op = device_writes(b) ?
             AARCH64_CACHE_CLEAN_INVALIDATE : AARCH64_CACHE_CLEAN;
         if (!m->ops.cache(m->cookie, op, b->cpu, b->bytes)) return fault(m);
     }
@@ -227,10 +233,10 @@ int a733_npu_memory_publish(struct a733_npu_memory *m, const struct a733_npu_mmu
 int a733_npu_memory_finish(struct a733_npu_memory *m, const struct a733_npu_command *cmd)
 {
     if (!m || m->state == A733_NPU_MEMORY_EMPTY || m->state == A733_NPU_MEMORY_FAULT) return 0;
-    if (m->state != A733_NPU_MEMORY_DEVICE || !same_command(cmd, &m->active) ||
-        !live_mappings(m)) return fault(m);
+    if (m->state != A733_NPU_MEMORY_DEVICE || !same_command(cmd, &m->active)) return fault(m);
     const struct a733_npu_buffer *active = m->active.token;
     int bootstrap = active->role == A733_NPU_BUFFER_BOOTSTRAP;
+    if (!live_mappings(m, bootstrap)) return fault(m);
     for (size_t i = 0; i < m->count; ++i) {
         const struct a733_npu_buffer *b = &m->buffers[i];
         if (b->role == A733_NPU_BUFFER_WRITE && (bootstrap || maintained(m, i, m->active_index)) &&

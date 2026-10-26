@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and check the base image and the returning images of bundles 4, 6, 7 and 8.
+"""Build and check the base image and the returning images of bundles 4, 6, 7, 8, 15 and 20 to 24.
 
 docs/designs/board-bundles-next.md specifies the bundles. Every image links
 objects of an image that passed on the board, objects of the set's own base
@@ -13,10 +13,13 @@ image, which runs first, and its declared new units:
 - bundle 4 (apps/board-bundles-cpu/) on the base: its checks/kernel.c object
   is replaced by the bundle's main.c, platform/a733/cpu_pmu.c and
   arch/aarch64/device_memory.c, and every other object equals the base's;
-- bundles 6, 7 and 15 (apps/board-bundles-power/) on rank-9-usb-v4 and the
-  base: the 13 returning platform objects and 14 provider objects, without
-  the USB units, plus the bundle's main file, power.c, trace.c, the
-  power-domain owner, its native adapter and device_memory.c, with bundle
+- bundles 6, 7, 15 and 20 (apps/board-bundles-power/) on rank-9-usb-v4 and
+  the base: the 13 returning platform objects and 14 provider objects,
+  without the USB units, plus the bundle's main file, power.c, trace.c, the
+  power-domain owner, its native adapter and device_memory.c; bundles 20 to
+  24, one source built with -DOPP_BUNDLE=n, add the CPU clock driver, the
+  thermal driver, its native adapter, the ADC native binding and the PMU
+  region code (docs/designs/cpu-top-opp.md), with bundle
   6's completing-poll window compiled in only under --complete-window. The PMIC
   provider, its native adapter and its consumer changed with the PMIC access
   path (docs/designs/pmic-access.md). They and the GPU resource adapter are
@@ -121,11 +124,21 @@ EXPECT = {
     'pmic': 'COMPLETE board bundle 6: PMIC service and domain adoption reads',
     'domain': 'COMPLETE board bundle 7:',
     'supply': 'COMPLETE board bundle 15: DCDC3 and DCDC5 snapshots, reaped and provider parked',
+    'opp-step': 'COMPLETE board bundle 20: CPU-B 1404 MHz and back to 1014 MHz at 800 mV, no PMIC write',
+    'opp-21': 'COMPLETE board bundle 21: DCDC3 1050 mV and back to 800 mV, CPU-B held at 1014 MHz',
+    'opp-22': 'COMPLETE board bundle 22: CPU-L 1196 MHz and the DSU 780 MHz at 800 mV',
+    'opp-23': 'COMPLETE board bundle 23: CPU-B 2002 MHz at 1050 mV with the DSU at 910 MHz, then CPU-B 1014 MHz '
+              'at 800 mV',
+    'opp-24': 'COMPLETE board bundle 24: CPU-L 1794 MHz at 1000 mV and the DSU 1274 MHz',
     'dram': 'COMPLETE board bundle 8:',
 }
 POWER_UNITS = ['apps/board-bundles-power/power.c', 'apps/board-bundles-power/trace.c',
                'drivers/power/a733_power_domains.c', 'drivers/power/a733_power_domains_native.c',
                'arch/aarch64/device_memory.c']
+# Bundle 20: the CPU operating-point step on bundle 15's image.
+OPP_STEP_UNITS = POWER_UNITS + ['apps/board-bundles-power/cpu-opp-step.c', 'drivers/clock/a733_cpu_clock.c',
+                                'drivers/thermal/a733_thermal.c', 'drivers/thermal/a733_thermal_native.c',
+                                'drivers/adc/a733_adc_native.c', 'platform/a733/cpu_pmu.c']
 DRAM_UNITS = ['apps/board-bundles-dram/main.c', 'apps/board-bundles-dram/sequence.c', 'drivers/dram/a733_dram.c',
               'arch/aarch64/device_memory.c']
 # Synchronous external abort on a data access: EC 0x25, DFSC 0b010000.
@@ -541,6 +554,21 @@ def bundle8_outcomes(elf):
     return outcomes
 
 
+def opp_step_outcomes(bundle):
+    """Refusals before any clock or PMIC write, and the thermal stop after the step lowered what it raised; each
+    with the converter disabled and the PMIC service parked."""
+    refusals = [dict(name=f'step-refused-{slug}', status=1, interrupt=None, fail_lines=0, fault=None,
+                     log_contains=[f'BEGIN board bundle {bundle}:', f'REFUSED board bundle {bundle}: {text}'])
+                for slug, text in (('thermal-level', 'thermal level'), ('speed-bin', 'speed bin'),
+                                   ('supplies', 'CPU supplies'), ('cpu-b-rate', 'CPU-B rate'),
+                                   ('rate-not-on-pll', 'CPU rate not on its PLL'),
+                                   ('pattern-or-lfm', 'pattern or LFM enabled'),
+                                   ('voltage-above-bin', "voltage above the bin's top point"))]
+    return refusals + [dict(name='step-stopped-thermal-limit', status=1, interrupt=None, fail_lines=0, fault=None,
+                            log_contains=[f'BEGIN board bundle {bundle}:',
+                                          f'STOPPED board bundle {bundle}: thermal limit'])]
+
+
 def usb_origins(usb, origins, provider_new, v4_monitor, linked_elsewhere=(), work=None):
     """Each object of a native USB image built from this tree: its origin and, for the platform and provider
     objects, its unit. Platform and provider objects must come from an image that passed, the base or bundle
@@ -662,6 +690,11 @@ def main():
              ('-DBB6_COMPLETE_WINDOW=1',) if args.complete_window else (), None),
             ('domain', POWER_UNITS + ['apps/board-bundles-power/bundle7.c'], (), None),
             ('supply', POWER_UNITS + ['apps/board-bundles-power/cpu-supply.c'], (), None),
+            ('opp-step', OPP_STEP_UNITS, ('-DOPP_BUNDLE=20',), None),
+            ('opp-21', OPP_STEP_UNITS, ('-DOPP_BUNDLE=21',), None),
+            ('opp-22', OPP_STEP_UNITS, ('-DOPP_BUNDLE=22',), None),
+            ('opp-23', OPP_STEP_UNITS, ('-DOPP_BUNDLE=23',), None),
+            ('opp-24', OPP_STEP_UNITS, ('-DOPP_BUNDLE=24',), None),
             ('dram', DRAM_UNITS, ('-DSUNSTONE_DRAM_PRIORITY=2',), ('FREERTOS/tasks.c', 'FREERTOS/queue.c'))):
         units_provider = {u: p for u, p in provider.items() if keep is None or u in keep}
         directory, entry = build_v4_image(name, rp, units, platform, units_provider, list(flags), origins, out,
@@ -672,6 +705,9 @@ def main():
             entry['controlled'] = {'schema': 'kernel-controlled-outcomes-v1', 'outcomes': bundle6_outcomes()}
         elif name == 'domain':
             entry['controlled'] = {'schema': 'kernel-controlled-outcomes-v1', 'outcomes': bundle7_outcomes()}
+        elif name == 'opp-step' or name.startswith('opp-'):
+            bundle = 20 if name == 'opp-step' else int(name[4:])
+            entry['controlled'] = {'schema': 'kernel-controlled-outcomes-v1', 'outcomes': opp_step_outcomes(bundle)}
         elif name == 'dram':
             entry['controlled'] = {'schema': 'kernel-controlled-outcomes-v1',
                                    'outcomes': bundle8_outcomes(Path(entry['elf']))}
