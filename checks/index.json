@@ -9739,6 +9739,21 @@
   "summary": "",
   "usb": false
  },
+ "top-opp-workload-bind.py": {
+  "cache_areas": [
+   "venv"
+  ],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--bundle",
+   "--session",
+   "--output"
+  ],
+  "summary": "Run a frozen step 6 workload binding on a real session's records.",
+  "usb": false
+ },
  "uart-dma-native.py": {
   "cache_areas": [],
   "docs": [],
