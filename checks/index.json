@@ -2196,7 +2196,8 @@
   "cache_areas": [],
   "docs": [
    "docs/board-test-queue.md",
-   "docs/designs/board-bundles.md"
+   "docs/designs/board-bundles.md",
+   "docs/handoff.md"
   ],
   "library": false,
   "pure_host": false,
