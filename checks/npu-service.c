@@ -21,11 +21,16 @@ extern void check_migrating_context(struct context *, struct context *, struct g
 _Static_assert(sizeof(struct context) == 800 && offsetof(struct context, nzcv) == 768, "assembly context");
 _Static_assert(offsetof(struct gate, observed_core) == 8, "assembly gate");
 
+/* Default timing remains unchanged. Explicit cancellation fixtures suppress
+ * automatic bootstrap completion, optionally injecting it at cancel assertion. */
+enum { BOOTSTRAP_TIMED, BOOTSTRAP_NO_EVENT, BOOTSTRAP_CANCEL_EVENT };
 static struct {
     uint32_t regs[0x800 / 4];
     unsigned running, bootstrap, event_sent, canceled;
     uint64_t launched;
     uint32_t allow_event, allow_idle, allow_cancel_idle, finished, accesses, validated, clock_samples;
+    unsigned bootstrap_completion, cancel_events;
+    uint32_t last_event_read;
 } model;
 
 static uint32_t get(const uint32_t *p) { return __atomic_load_n(p, __ATOMIC_ACQUIRE); }
@@ -61,7 +66,8 @@ static void advance(void)
         if (get(&model.allow_cancel_idle)) { model.running = 0; model.regs[1] = IDLE; }
         return;
     }
-    if (!model.event_sent && elapsed >= 200 && (model.bootstrap || get(&model.allow_event))) {
+    if (!model.event_sent && elapsed >= 200 &&
+        (model.bootstrap ? model.bootstrap_completion==BOOTSTRAP_TIMED : get(&model.allow_event))) {
         model.regs[0x10/4] |= 1; model.event_sent = 1;
     }
     if (model.event_sent && (model.bootstrap || get(&model.allow_idle))) {
@@ -73,7 +79,7 @@ static int read32(void *unused, unsigned offset, uint32_t *value)
     (void)unused; privileged(); configASSERT(offset < sizeof(model.regs));
     __atomic_fetch_add(&model.accesses, 1, __ATOMIC_RELEASE);
     advance(); *value = model.regs[offset / 4];
-    if (offset == 0x10) model.regs[offset / 4] = 0;
+    if (offset == 0x10) { model.last_event_read = *value; model.regs[offset / 4] = 0; }
     return 1;
 }
 static int write32(void *unused, unsigned offset, uint32_t value)
@@ -84,6 +90,11 @@ static int write32(void *unused, unsigned offset, uint32_t value)
     model.regs[offset / 4] = value;
     if (offset == 0x3a8) {
         if (value & 1) { model.regs[0x388/4] = 0; model.regs[1] = IDLE; model.running = 0; }
+        if (model.bootstrap && model.bootstrap_completion==BOOTSTRAP_CANCEL_EVENT &&
+            !(previous & 8) && (value & 8)) {
+            ++model.cancel_events;model.regs[0x10/4]|=1;model.event_sent=1;
+            model.regs[1]=IDLE;model.running=0;
+        }
         if ((previous & 8) && !(value & 8)) { model.canceled = 1; model.regs[offset / 4] |= 16; }
     }
     if (offset == 0x3a4) {

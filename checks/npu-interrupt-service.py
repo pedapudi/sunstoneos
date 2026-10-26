@@ -5,7 +5,7 @@ from pathlib import Path
 from elftools.elf.elffile import ELFFile
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--elf',type=Path,required=True);p.add_argument('--output',type=Path,required=True)
-p.add_argument('--cases',default=','.join(map(str,range(20))))
+p.add_argument('--cases',default=','.join(map(str,range(21))))
 p.add_argument('--qemu',type=Path,default=Path.home()/'.cache/sunstoneos/host/usr/bin/qemu-system-aarch64')
 a=p.parse_args();a.output.mkdir(parents=True,exist_ok=True);result=a.output/'service-result.json'
 values=json.loads(result.read_text()) if result.exists() else {'physical_access':False,'cases':{}}
@@ -16,7 +16,7 @@ labels=['notified-bootstrap-two-jobs-deferred-stop','event-without-notification-
         'stop-pending-expires','shared-stop-pending-expires','runtime-stop-pending-expires',
         'independent-transient-rearm-waits','stationary-backend-clock-mask-expires',
         'runtime-deferred-stop-completes','shared-deferred-stop-completes',
-        'notification-ends-pending-rearm-episode']
+        'notification-ends-pending-rearm-episode','cancel-unnotified-completion-retains-at-close']
 with a.elf.open('rb') as stream:
     elf=ELFFile(stream)
     assert not any(s['p_vaddr']<=0x47fff000<s['p_vaddr']+s['p_memsz'] for s in elf.iter_segments() if s['p_type']=='PT_LOAD')

@@ -7,6 +7,7 @@
 #define npu_irq_case (*(volatile unsigned *)UINT64_C(0x47fff000))
 static unsigned mask_calls,rearm_calls,stop_calls,masked,delivered,critical_rearm;
 static unsigned runtime_closed,runtime_failed;
+static int cancel_case(void){return npu_irq_case==8 || npu_irq_case==20;}
 static TickType_t pending_start;
 static int shared_case(void)
 {return npu_irq_case==13 || npu_irq_case==14 || npu_irq_case==17 || npu_irq_case==18;}
@@ -56,7 +57,7 @@ static int irq_rearm(void *cookie)
     if(npu_irq_case==11)return timed_pending();
     if(npu_irq_case==15 && (rearm_calls&1))return 0;
     masked=0;
-    if(npu_irq_case==1 || npu_irq_case==8)return 1;
+    if(npu_irq_case==1 || cancel_case())return 1;
     /* An event becomes visible during the rearm window. Its notification must
      * survive the callback and be consumed next, without another trigger. */
     model.regs[0x10/4]|=npu_irq_case==3?UINT32_C(0x40000000):1;
@@ -102,18 +103,33 @@ static struct npu_service_reply irq_hold(void)
     reply_ticks=irq_ticks();vTaskDelay(2);configASSERT(!uxQueueMessagesWaiting(service.clients[0].replies));
     return r;
 }
+static void cancel_trace(const char *where,struct npu_service_reply r)
+{
+    /* Inspect the model directly: reading device +0x10 would consume evidence. */
+    platform_puts("CANCEL ");platform_puts(where);
+    platform_puts(" result=");platform_hex(r.result);platform_puts(" state=");platform_hex(r.state);
+    platform_puts(" fault=");platform_hex(r.fault);platform_puts(" owns=");platform_hex(r.owns_session);
+    platform_puts(" stops=");platform_hex(stop_calls);platform_puts(" event=");platform_hex(model.regs[0x10/4]);
+    platform_puts(" sampled=");platform_hex(model.last_event_read);
+    platform_puts(" notified=");platform_hex(atomic_load(&service.irq_pending));
+    platform_puts(" injected=");platform_hex(model.cancel_events);platform_puts("\n");
+}
 static void irq_owner(void *unused)
 {
-    (void)unused;configASSERT(npu_irq_case<=19);
+    (void)unused;configASSERT(npu_irq_case<=20);
     struct npu_service_reply r=irq_request(NPU_SERVICE_OPEN,0,100000);
     if(npu_irq_case==4 || npu_irq_case==10 || npu_irq_case==16)configASSERT(r.result==NPU_SERVICE_FAULT);
     else configASSERT(r.result==NPU_SERVICE_OK);
     if(shared_case()){
         r=irq_wait(A733_NPU_READY);configASSERT(r.state==A733_NPU_READY);
-    }else if(npu_irq_case==8){
-        r=irq_request(NPU_SERVICE_CANCEL,0,100000);configASSERT(r.result==NPU_SERVICE_OK);
-        r=irq_wait(A733_NPU_CANCELED);configASSERT(r.state==A733_NPU_CANCELED);
-        r=irq_request(NPU_SERVICE_REAP,0,0);configASSERT(r.result==NPU_SERVICE_OK && r.canceled);
+    }else if(cancel_case()){
+        r=irq_request(NPU_SERVICE_CANCEL,0,100000);cancel_trace("request",r);configASSERT(r.result==NPU_SERVICE_OK);
+        r=irq_wait(A733_NPU_CANCELED);cancel_trace("finished",r);configASSERT(r.state==A733_NPU_CANCELED);
+        r=irq_request(NPU_SERVICE_REAP,0,0);cancel_trace("reaped",r);
+        configASSERT(r.result==NPU_SERVICE_OK && r.canceled && r.owns_session);
+        configASSERT(model.regs[0x10/4]==(npu_irq_case==20) && model.event_sent==(npu_irq_case==20));
+        configASSERT(model.cancel_events==(npu_irq_case==20) && !model.last_event_read);
+        configASSERT(!delivered && !atomic_load(&service.irq_pending) && !npu_service_irq_completions(&service));
     }else if(npu_irq_case==0 || npu_irq_case==6 || npu_irq_case==9 || npu_irq_case==12 || npu_irq_case==15 || npu_irq_case==19){
         r=npu_irq_case==9?irq_hold():irq_wait(A733_NPU_READY);configASSERT(r.state==A733_NPU_READY);
         for(unsigned j=0;j<2;++j){
@@ -148,6 +164,17 @@ static void irq_owner(void *unused)
         platform_puts("PASS NPU IRQ retained failure\n");platform_exit(0);
     }
     r=irq_request(NPU_SERVICE_CLOSE,0,0);
+    if(cancel_case())cancel_trace("close",r);
+    if(npu_irq_case==20) {
+        configASSERT(r.result==NPU_SERVICE_FAULT && r.state==A733_NPU_FAULT && r.fault==A733_NPU_IRQ);
+        configASSERT(r.owns_session && !stop_calls && !npu_service_irq_stopped(&service));
+        configASSERT(model.last_event_read==1 && !model.regs[0x10/4] && model.cancel_events==1);
+        unsigned accesses=model.accesses;
+        vTaskDelay(4);r=irq_request(NPU_SERVICE_STATUS,0,0);cancel_trace("retained",r);
+        configASSERT(r.result==NPU_SERVICE_FAULT && r.fault==A733_NPU_IRQ && r.owns_session);
+        configASSERT(model.accesses==accesses && !stop_calls);
+        platform_puts("PASS NPU IRQ unnotified bootstrap completion retains ownership at CLOSE\n");platform_exit(0);
+    }
     if(stop_timeout()) {
         configASSERT(r.result==NPU_SERVICE_FAULT && r.fault==A733_NPU_IRQ && r.owns_session);
         configASSERT(service.irq_retained && !npu_service_irq_stopped(&service));
@@ -170,6 +197,10 @@ static void irq_owner(void *unused)
 void kernel_main(void)
 {
     platform_init();memset(data,0x69,sizeof(data));set(&model.validated,1);
+    if(cancel_case()) {
+        model.bootstrap_completion=npu_irq_case==20?BOOTSTRAP_CANCEL_EVENT:BOOTSTRAP_NO_EVENT;
+        set(&model.allow_cancel_idle,1);
+    }
     struct a733_npu_buffer buffers[4];
     for(unsigned i=0;i<3;++i)buffers[i]=(struct a733_npu_buffer){(uintptr_t)command_memory[i],
         (uintptr_t)command_memory[i],sizeof(command_memory[i]),0x10000000+i*524288,
