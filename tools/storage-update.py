@@ -512,7 +512,12 @@ def plan(slot_plan_path, allocation_path, card_image, card, output):
         record_units = slots.training_units(slot_allocation)
         for copy, unit in record_units.items():
             owned['training-record' + ('' if copy == 'single' else '-'+copy)] = (unit['first'], unit['blocks'])
+        helper_plan = kind == RECORD_PLAN_KIND and 'helper_bytes' in slot_plan
         paired_record = kind == RECORD_PLAN_KIND and 'record_copy' in slot_plan
+        require(not (helper_plan and paired_record), 'Ambiguous helper/record plan')
+        if helper_plan:
+            records = tool_module('training_record', 'training-record.py')
+            records.validate_helper_plan(slots, slot_plan, record_units, slot_plan_path.parent)
         if paired_record:
             records = tool_module('training_record', 'training-record.py')
             records.validate_standby_plan(slots, slot_plan, record_units, fd, slot_plan_path.parent)
@@ -524,7 +529,9 @@ def plan(slot_plan_path, allocation_path, card_image, card, output):
             require(len(data) == blocks * 512 and slots.sha(data) == record['sha256'],
                     'Boot-slot plan file identity mismatch: ' + name)
             if kind == RECORD_PLAN_KIND:
-                if paired_record:
+                if helper_plan:
+                    region = 'training-record-' + name[-1]
+                elif paired_record:
                     region = 'training-record-' + slot_plan['record_copy']
                 else:
                     require(name in RECORD_WRITES and 'training-record' in owned,

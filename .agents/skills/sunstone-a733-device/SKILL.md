@@ -268,3 +268,12 @@ Hand off changed behavior, frozen artifacts, checks and their limits, unresolved
 physical prerequisites, and the smallest next board procedure. Use existing
 evidence tools and component records; do not add a parallel reporting system.
 Leave performance measurement until required hardware functionality is established.
+
+## Early boot0 storage reads and parameter slots
+
+Before DRAM training, use the pinned boot0 single-sector PIO interface. Larger
+reads enter a DMA path whose descriptors are in untrained DRAM. Keep the first
+word of each unused DRAM parameter slot zero: the selector treats a nonzero word
+as a populated timing set. Use the source audit and bounded-read contract in
+[the DRAM restore design](../../../docs/designs/dram-training-restore.md#card-boots-need-a-host-built-boot0-variant)
+before changing either early boot hook.

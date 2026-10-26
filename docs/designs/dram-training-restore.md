@@ -179,11 +179,17 @@ the `init_DRAM` call. The restore uses two patch sites:
   included only if the kind 2 and kind 3 diff shows values there), set
   `MicroContMuxSel` to 1 and call `0x4bca8` as boot0 would.
 
-Whether the firmware accepts the device-initialization-only value, and
-whether a second `init_DRAM` call after a failed restore trains correctly,
-are the first two prototype tests on the FEL path.
+The first physical prototype must establish whether the firmware accepts the
+device-initialization-only value. Retrying `init_DRAM` after partial restore
+is outside the accepted implementation and qualification plan.
 
-**Quick check.** Part A, in the AArch32 hook below 4 GiB: a short burst
+**Future qualification proposal, not implemented.** The wider Part A/Part B
+checks and RTC reset policy below need separate design and physical evidence.
+The accepted implementation uses the uncached 8 KiB check described under
+RAM-only restore and terminal failure behavior; it does not implement this
+reset proposal.
+
+Part A, in the AArch32 hook below 4 GiB: a short burst
 test per channel, rank and byte lane with walking-ones and pseudo-random
 patterns over 1 MiB per rank, written with cached `LDM`/`STM` bursts after
 the cache setup that boot0's parser uses, then cleaned and invalidated by
@@ -199,7 +205,7 @@ loop. The flag is cleared only when part B passes. The check
 catches gross restore errors only. Marginal timing shows only in the
 qualification runs, and the safety of the restore rests on them.
 
-## Every mismatch falls back to full training
+## Pre-admission rejection trains fully; post-edit failure stops
 
 | Check, before any parameter edit | Mismatch |
 | --- | --- |
@@ -208,16 +214,20 @@ qualification runs, and the safety of the restore rests on them.
 | Chip ID, SID `0x03006200`–`0x0300620c` | Full training |
 | Strap: selected set index and CRC of parameter words 0–31 | Full training |
 | Temperature: THS DDR sensor (channel 1), calibrated as in [thermal.md](../thermal.md), within the record's limit of the capture | Full training |
-| Retrain flag set by part B after a restored boot | Full training; the flag stays set until part B passes |
+| Future Part B retrain flag (not implemented) | Proposed full training; requires a qualified reset/flag contract |
 
-After the call, a firmware result other than 7, a size mismatch, a restore
-read-back mismatch or a part A failure falls back in place, as above. On
-the FEL path a warm reset would boot from the card instead of returning to
-FEL, so the FEL prototype reports part B failures to the host instead. The
-temperature check needs THS clock, reset and enable writes that boot0 never
-makes. The FEL prototype takes the temperature from the host's thermal
-reading; the card variant adds the THS read once the drift data set the
-limit.
+The accepted SRAM implementation rejects an invalid record before changing any
+parameter. Once restore changes parameters or PHY registers, readback, size
+and sampled-memory failures stop the attempt. The FEL wrapper reports the
+error through its SRAM mailbox and returns through the normal FEL swap; the
+card hook stops in SRAM. Neither path retrains in place. A warm reset has no
+qualified recovery destination.
+
+Runtime temperature admission remains unimplemented. Current captures contain
+unknown temperature and no qualified range. A default card image therefore
+uses full training; the experimental image described below requires an explicit
+host build option. Future THS admission requires capture data establishing the
+allowed drift before the card hook can enable it.
 
 ## The record format
 
@@ -270,22 +280,193 @@ below passes.
 
 ## Card boots need a host-built boot0 variant
 
-boot0 trains during a card boot before any SunstoneOS code runs, so a card
-restore needs boot0 changed. A host tool builds a variant from the pinned
-image: the hook in the empty parameter slots 8–15 (`0x476f4`–`0x47af3`,
-1,024 bytes; the strap always selects slot 5), the calls at `0x5e216` and
-`0x56142` redirected to it, and the eGON checksum recomputed. The hook
-reads the record with one multi-sector call to boot0's card read
-`0x5db08`. The pinned image is not committed, as today. This changes the
-[microSD package](../microsd-boot-package.md)'s property that boot0 is
-unmodified and needs the coordinator's decision. The boards boot the
-unsigned `eGON.BT0` format, so the ROM checks only the additive checksum
-(inferred; secure-boot fuses are unconfirmed, as in
-[boot-rom-and-boot0.md](../vendor-firmware/boot-rom-and-boot0.md)). If the
-1,024 bytes do not hold both patch sites, the hook loads its body from the
-record's extent into SRAM. The FEL path needs no variant: the DDR wrapper
-patches boot0 in RAM, as `tools/prepare-ddr.py` already patches its UART
-output, and the host supplies the record.
+Status: host-built and instruction-checked; physical card restore remains
+unqualified. `tools/prepare-card-ddr.py` derives an optional image from the
+pinned 245,760-byte boot0 and leaves the default microSD packager input unchanged. It recomputes the eGON
+additive checksum and publishes the original and derived identities. This
+does not establish ROM acceptance, secure-boot fuse state or physical boot.
+
+The source audit corrects the earlier multi-sector read proposal:
+
+| Pinned boot0 address | Derived contract |
+| --- | --- |
+| `0x5db08` | Thumb function: `r0` sector, `r1 = 1`, `r2` SRAM destination. Returns zero on success; rejects any count other than one. |
+| `0x5baa8` | Lower reader: controller, sector, count, destination in `r0..r3`; returns the completed count or zero. It is not the pre-training hook's interface. |
+| `0x5b88c..0x5b896` | Transfers above 512 bytes enter the DMA branch; `0x5d5e8` places its descriptor buffer at untrained DRAM `0x42000000`. Single-sector reads select PIO. |
+| `0x49ab4..0x49ade` | boot0 initializes storage and performs four single-sector reads into SRAM before `init_DRAM`. The initialized flag is at `0x83c14`. |
+| `0x5da64` | Returns the boot storage selector; the hook admits only selector zero, SD0. |
+| `0x4b372..0x4b37e` | A parameter slot's first word determines whether it is populated. Code in empty slots must preserve those words as zero. |
+| `0x47b1c..0x47b34` | Card entry disables translation/data cache/instruction cache and starts its stack at `0x8d000`. |
+| `0x5e216`, `0x56142` | Calls to `init_DRAM` and per-P-state timing; the two redirected existing calls. The timer entry at `0x48d6c` is also patched as described below. |
+
+The audit uses boot0 SHA-256
+`829ea8e3b65d71a02f2d0e094bc073de3a10869f948f62db49dbf023d07fabe3`.
+Raw instruction excerpts stay in
+`~/.cache/sunstoneos/evidence/dram-card-restore-20261026/`.
+
+### The bootstrap loads a separately reserved helper
+
+Only 1,024 bytes in parameter slots 8–15 (`0x476f4..0x47af4`) are
+available. A small Thumb bootstrap occupies these slots while leaving the
+first four bytes of every slot zero. Branches skip those words. The selected
+set 5 at `0x47574` remains untouched. A separate timing trampoline calls
+boot0's original `0x4bca8` whenever restore mode is inactive, preserving all
+four-P-state training calls after a pre-admission rejection.
+
+Each paired 4 MiB record unit reserves its first 49 sectors for the record
+and sectors 64–127 for a maximum 32 KiB helper. The record format remains
+version 1. A dedicated helper plan writes these two helper extents through
+the existing backup-first storage sessions. It writes no record header,
+payload, boot slot or partition data. The derived boot0 embeds the unit
+addresses, helper length and CRC. A stale helper cannot execute merely
+because a record is valid. Helper and boot0 update ordering can temporarily
+force full training without invalidating either saved record.
+
+The bootstrap uses the proven one-sector PIO interface to load a helper
+into `0x92000..0x9a000`. It checks the complete helper CRC before entering
+it. A successful read with a bad helper CRC may try the other reserved
+copy; a card-read error or deadline expiry stores an SRAM error and terminal-stops.
+It does not retry storage or enter full training with uncertain controller state. The host producer must
+validate paired allocation geometry against an ordinary-file backup and
+must never infer a physical reservation from that file.
+
+The bootstrap saves `r0`, `r1`, callee-saved registers, return address and the
+original stack pointer before calling storage or the helper. It restores that
+context before the one original `init_DRAM` call on fallback, including the
+original two arguments. The inactive timing trampoline resides in boot0, so it
+remains usable even when no helper passes CRC.
+
+### Restore reads have one full-width deadline
+
+The vendor timer at `0x48d6c` divides only the low 32 bits of the 24 MHz
+physical counter. Its result wraps about every 179 seconds. PIO also refreshes
+its timeout after every word. Neither mechanism bounds the complete transfer.
+The optional image redirects this timer entry to a small bootstrap shim.
+An active flag starts at zero in loaded boot0 bytes, outside every slot's
+presence word. Inactive calls reproduce the original counter instruction and
+continue at `0x48d70`, preserving ordinary boot timing behavior.
+
+Before its first sector read, restore captures the full 64-bit counter. Every
+subsequent read shares a 240,000,000-tick deadline: ten seconds at the required
+24 MHz counter frequency. The wrapper checks elapsed time before and after
+each read. While a read is active, each vendor timer call checks the same
+full-width elapsed value, which FIFO progress cannot refresh. Expiry records
+an SRAM error and stops with interrupts masked. This bounds a blocking read
+by the remaining attempt budget plus one finite poll iteration, assuming the
+counter advances and MMIO accesses return. It does not claim protection from
+a stalled bus or stopped CPU. The wrapper requires the vendor zero-success result before returning.
+
+The focused call graph is `0x5db08` → `0x5baa8` → `0x5b9cc`/`0x5ba1c` →
+`0x5b32c`. The single-sector branch skips DMA descriptor preparation and the
+multi-sector stop/status loop. PIO FIFO, command completion, data completion, controller-reset and error-path
+clock-reset waits all call `0x48d6c`;
+the last is in `0x5d0d8`. The shared busy-response loop also calls the timer,
+although single-sector CMD17 does not request that response. Before reading,
+admission checks the initialized SD0
+controller, 512-byte block size, nonzero chunk limit, pinned host function
+pointer, SD0 register/FIFO addresses, card capacity and 32-bit LBA arithmetic. Those checks prevent malformed metadata from selecting DMA or a
+zero-progress outer loop.
+
+UART output has a separate unbounded wait. The wrapper saves and clears the
+existing log-enable byte at `0x60670` during each read, then restores it on
+success. Both reachable log functions, `0x498e4` and `0x4993c`, return before
+formatting or UART access when that byte is zero. The timer's active flag is
+also cleared on return. Focused evidence is preserved in `boot0-pio-focused.txt`,
+`boot0-read-waits-focused.txt` and `boot0-read-callgraph.txt` in the audit cache.
+No additional SD reader or ordinary-boot timeout policy is introduced.
+
+The helper uses a private stack at `0x9b000..0x9f000`. Record A and B
+buffers occupy `0xa0000..0xa7000` and `0xa7000..0xae000`; each has room for
+a 24 KiB record and a final padded sector. The original card-boot stack,
+boot0 body/BSS, mailbox at `0x86000` and ROM scratch intervals remain
+disjoint. The build rejects allocated sections outside those intervals or
+uninitialized sections that the raw loader would not initialize.
+
+### Admission, fallback and temperature limits
+
+The helper checks both copies without editing parameters, using the existing
+fixed address/mask profile, actual SID, original firmware identity, selected
+parameter CRC and highest nonzero generation, with A first on a tie. Only
+the selected record is applied. The record continues to name the original
+boot0 checksum; the derivative's checksum necessarily differs. The host
+producer pins every unchanged byte and the allowed call and timer patches. A
+fixed configuration block at `0x47ac8` supplies the experimental temperature
+policy, unit sectors, helper length/CRC and deadline to the executing code.
+The packager checks those bytes against the manifest and the helper artifact;
+a JSON policy edit cannot relabel an enabled image as the default variant.
+
+A missing, corrupt, stale, wrong-board or otherwise ineligible record
+calls the original `init_DRAM` once with the original parameters. The
+inactive timing trampoline preserves boot0's normal training path. After
+restore starts, a readback, size or sampled-memory failure stores its error
+in SRAM and stops without returning to boot0 or retraining. No warm-reset
+or autonomous recovery destination is assumed.
+
+Current records have unknown capture temperature and no qualified thermal
+range. The default derived image therefore falls back to full training.
+An explicitly requested experimental build may exercise the existing
+room-temperature restore profile, with false physical/thermal qualification
+fields in its manifest. It has no runtime temperature measurement. That
+build is an offline prototype, not permission to boot a board; physical
+use still requires the supervised cold-start and memory-test prerequisites.
+Runtime temperature admission needs new capture data before a production
+card-restore policy can be enabled.
+
+The host interface takes `--boot0`, `--restore-set`, `--allocation`, `--backup`
+and a new `--output` directory. The allocation must bind the complete ordinary
+backup's hash and capacity and contain two disjoint reserved record units.
+`--experimental-unknown-temperature` enables the unqualified restore policy;
+omitting it produces a zero-read, full-training image. The output includes
+`boot0-card-restore.bin`, `card-ddr-helper.bin`, `manifest.json` and a
+`helper-plan/plan.json` accepted by `tools/storage-update.py plan`.
+`tools/prepare-microsd-boot.py --restore-variant manifest.json` explicitly selects
+the derivative while still requiring the original pinned `--boot0` input.
+
+Helper updates occupy only their two reserved subextents. Each has its own
+backup-first write session. The old or new boot0 executes only a helper whose
+complete CRC matches its embedded configuration; an interrupted helper write
+can cause full training after successful reads. A transport error stops.
+Existing record headers and payloads are not part of the helper plan. These
+ordinary-file plans establish neither physical reservation nor card-write
+qualification.
+
+The accepted offline evidence is in
+`~/.cache/sunstoneos/evidence/dram-card-restore-20261026/`. The experimental
+boot0 SHA-256 is
+`e4a5ba15cb9f8ae494b5374463e210925496fa363b566ce7f4b86a3db45837ae`;
+the default image is
+`a31525f3843c2b2e0f051833113e03959cceda51221ddafe910ddb1d3a117117`.
+Both load the same 10,472-byte helper, SHA-256
+`3e3bc281037d580018429e86293a62757fedcd9e14db2635d7c45885da34c1ae`.
+Its single initialized section occupies `0x92000..0x948e8`. Bootstrap sections
+use 120, 76, 72, 64, 124, 80, 20 and 112 bytes in slots 8–15. Every section
+fits after its zero presence word; no raw-loader BSS is admitted.
+
+`checks/card-ddr.py` passed twenty experimental cases and the default fallback
+case. It executes selection, fallback and terminal failures with
+modeled boot0 training and MMIO. It checks original arguments, stack and
+callee-saved registers, four fallback timing calls, helper/record corruption,
+wrong-board rejection and stop-before-continuation after partial restore.
+`checks/card-ddr-pio.py` executes the pinned PIO wait instructions and the
+actual timer shim: thirteen cases include inactive-timer equivalence,
+low-word wrap, slow FIFO progress, command/data/reset/clock-reset expiry and
+a direct busy-loop check. `checks/card-ddr-host.py` passed nineteen cases
+covering the actual producer, package/parser, exact helper ranges, stale/torn
+resume refusal and preserved backup. The default instruction case performs
+no restore reads. These checks model MMIO and stop at the terminal `WFE`;
+they do not establish physical timing, ROM acceptance or DRAM margins.
+
+For the actual record, the first valid helper uses 21 sectors and the two
+records use 56 sectors: 39,424 bytes read. A bad first helper followed by a
+valid second uses 50,176 bytes. The format caps both-helper/both-record reads
+at 226 sectors, or 115,712 bytes. One non-refreshable ten-second counter
+budget covers the attempt. Restore performs 1,016 masked PHY writes with
+immediate readback, followed by a separate 1,016-read final pass. The memory
+sample writes and reads 278,528 bytes each. The instruction fixture caps each
+case at five million instructions; the largest observed case uses 4,860,609.
+This count is not a hardware performance measure.
+The accepted RAM helper rebuilt byte-for-byte identically, so its earlier
+physical prerequisites and offline evidence remain applicable.
 
 ## Periodic retraining every N boots
 
@@ -316,8 +497,9 @@ fresh trainings.
    work.
 3. **Fallback cases** on the FEL path: a wrong CRC, another board's chip ID,
    a changed strap CRC, a temperature limit of zero, a forced read-back
-   mismatch and a forced part A failure each end in a full training in the
-   same boot.
+   mismatch and a forced part A failure. Pre-admission rejection must leave parameters
+   unchanged and run full training once. Post-edit readback and memory failures
+   must stop before caller continuation, with no in-place retraining.
 4. **Boot time**: ten restored and ten fully trained boots per board,
    comparing boot0's `DRAM BOOT DRIVE INFO` to `Actual DRAM SIZE` interval.
 5. **Card**: host backup, record write through the new region, then the
@@ -328,12 +510,12 @@ fresh trainings.
 | Quantity | Budget | Basis |
 | --- | --- | --- |
 | DRAM interval with restore | 500 ms; prediction about 60 ms | 40 ms measured for the initialization-only path on both boards, plus *estimated* writes and the quick check |
-| Record read | 10 ms for 64 KiB in one multi-sector read | *Estimated* from boot0's card transfer mode |
-| CRC over the record | Measured in the FEL prototype | Depends on boot0's clock and cache state |
-| Temperature read | 5 ms | Unmeasured; card variant only |
-| Quick check part A and B | 20 ms | *Estimated* |
-| Hook code in boot0 | 1,024 bytes, or a loader stub plus a body in the record | Empty parameter slots |
-| Fallback cost | One full training in the same boot, about 5.1 s | Measured training time |
+| Helper and record reads | At most 115,712 bytes; one ten-second attempt deadline | Single-sector PIO; physical latency unmeasured |
+| CRC over the record | Bounded by the 24 KiB record limit | Instruction-checked; physical cost unmeasured |
+| Temperature admission | Default full-training fallback | Runtime measurement and allowed range unqualified |
+| Current quick check | 8 KiB sample; 278,528 bytes read and written each | Wider Part A/B checks remain future proposals |
+| Hook code | 668 bytes in 1,024 bytes of slots; separate 10,472-byte helper | Eight zero presence words; reserved helper extents |
+| Pre-admission fallback | One full training in the same boot, about 5.1 s plus any successful reads | Measured full-training time; read latency unmeasured |
 
 A restored boot counts only with a passing quick check, and the restore
 path counts only after qualification step 2 passes on both boards.
@@ -343,8 +525,6 @@ path counts only after qualification step 2 passes on both boards.
 The first answered: the firmware accepts the device-initialization-only
 step value (result 7 after 36 ms on both boards). These remain:
 
-- Whether a second `init_DRAM` call after a failed restore trains
-  correctly; the first FEL test therefore stops instead of retraining.
 - The RTC general-purpose register for part B's flag, and whether it
   survives the warm reset.
 - The coordinator's decision on a modified boot0 for card boots, and on the
@@ -542,9 +722,10 @@ Implementation and remaining physical work:
    design gate, then run it when power cycles are possible.
 6. **Card deployment**, only after FEL qualification: the host tools now
    allocate two copies, select the newest eligible generation and plan
-   standby updates payload first and header last. Remaining work is the
-   boot0 card-read/selection hook, runtime temperature admission, the
-   qualified recovery behavior and physical reservations. Every write
+   standby updates payload first and header last. The host-built boot0 hook
+   and helper plans are implemented and instruction-checked. Remaining
+   prerequisites are runtime temperature admission, qualified recovery,
+   physical reservations and board-specific backups. Every write
    session still needs a host backup.
 7. **Qualification** as listed above: ten restored lifetimes per board with
    March C-, cold and warm lifetimes with stress runs (which also set the

@@ -7,7 +7,11 @@
 typedef uint32_t u32;
 typedef uint16_t u16;
 typedef uint8_t u8;
+#ifdef CARD_RESTORE
+#define RECORD ((const u8 *)0xa0000)
+#else
 #define RECORD ((const u8 *)0x87000)
+#endif
 #define MAIL ((volatile u32 *)0x86000)
 #define PARAM ((volatile u32 *)0x831f8)
 #define MUX ((volatile u16 *)0x0aaa0000)
@@ -29,9 +33,15 @@ static u32 crc(const u8 *p, u32 n)
 }
 static void barrier(void) { __asm__ volatile("dsb sy" ::: "memory"); }
 
+#ifdef CARD_RESTORE
+u32 card_admit(const u8 *r, u32 apply)
+{
+    const u8 *p = r + 128;
+#else
 u32 restore_admit(void)
 {
     const u8 *r = RECORD, *p = r + 128;
+#endif
     if (word(r) != 0x33375341 || word(r+4) != 0x4e525444 || word(r+8) != 1 || word(r+12) != 128)
         return GEOMETRY;
     if (crc(r, 124) != word(r+124)) return HEADER_CRC;
@@ -41,7 +51,10 @@ u32 restore_admit(void)
     for (u32 i = 100; i < 124; i += 4) if (word(r+i)) return GEOMETRY;
     for (u32 i = 0; i < 4; ++i)
         if (word(r+32+4*i) != ((volatile u32 *)0x03006200)[i]) return CHIP;
-    if (word(r+48) != BOOT0_CHECKSUM || *(volatile u32 *)0x4700c != BOOT0_CHECKSUM) return BOOT0;
+    if (word(r+48) != BOOT0_CHECKSUM) return BOOT0;
+#ifndef CARD_RESTORE
+    if (*(volatile u32 *)0x4700c != BOOT0_CHECKSUM) return BOOT0;
+#endif
     if (word(r+52) != 5 || word(r+56) != STRAP_CRC || crc((const u8 *)PARAM,128) != STRAP_CRC)
         return STRAP;
     if (word(r+60) != 0x80000000 || word(r+64) || word(r+68) != 0x125f || word(r+72) != 12288)
@@ -69,6 +82,9 @@ u32 restore_admit(void)
     }
     if (offset != mo || index != PROFILE_COUNT+40 || word(p) != 0x83278 || word(p+4) != 40)
         return GEOMETRY;
+#ifdef CARD_RESTORE
+    if (!apply) return 0;
+#endif
     /* No edit precedes complete admission. The first run contains 20 u32s. */
     for (u32 i = 0; i < 20; ++i) PARAM[32+i] = word(p+8+4*i);
     PARAM[30] &= ~4u;
