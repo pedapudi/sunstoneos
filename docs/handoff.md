@@ -69,6 +69,8 @@ does not establish recovery from a fault.
 | Multicore mimus | `work/resume-mimus-multicore-1025` | Integrate the accepted eight-worker engine into supervised OS recognition with service-aware priorities |
 | DRAM restoration | `work/resume-dram-restore-1025` | Implement the card-boot loader using verified early single-sector reads and explicit helper storage |
 | Radio startup | New isolated branch from `bringup` | Resolve supply topology and pin-state prerequisites from primary sources before changing startup |
+| Camera shutdown | New isolated branch from `bringup` | Derive receiver and DMA drain from primary references before changing retained shutdown |
+| NPU restart | New isolated branch from `bringup` | Assess and implement normal stop/reconstruction within a powered lifetime, preserving domain and SRAM ownership |
 
 Independent reviewers cover CPU/thermal/DRAM, accelerator operation and peripheral
 integration. Workers reuse successful evidence and submit focused checks. The
@@ -168,6 +170,10 @@ be pruned.
   CPU-only and combined CPU/NPU native builds and focused owner, planner and
   host checks pass under
   `~/.cache/sunstoneos/evidence/resume-perf-modes-1025/final-snapshot/`.
+  A combined CPU/NPU performance build also passes with the new mimus source
+  pin and default two workers; actual compile flags, linked worker count and
+  image capabilities are recorded under
+  `~/.cache/sunstoneos/evidence/integrate-perf-pin-1026/`.
   USB operation 8 carries performance control; operation 7 retains thermal
   reporting. This profile reports GPU state but has no GPU runtime owner.
   Physical switching, thermal response and recovery remain unqualified.
