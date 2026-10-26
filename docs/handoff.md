@@ -67,7 +67,6 @@ does not establish recovery from a fault.
 | Work | Branch | Immediate deliverable |
 | --- | --- | --- |
 | Storage read service DMA | `work/resume-storage-read-dma-1026` | Connect the existing DMA reader to copied 64-sector service requests while preserving client acknowledgment and profile-specific bounds |
-| Shared camera/accelerator integration | Coordinator and existing device owners | Reconcile compiled dependencies after merging approved camera modes and GPU power control; run only affected integration checks |
 | Radio integration assessment | Radio owner | Identify the next native Wi-Fi/Bluetooth gap from current consumers and accepted evidence; preserve unresolved fitted-supply and physical-operation requirements |
 
 Independent reviewers cover CPU/thermal/DRAM, accelerator operation and peripheral
@@ -271,6 +270,9 @@ be pruned.
   the pool boundary, four card extents and 1,176-byte session remain unchanged.
   The accepted 32,456-byte monitor is reused. Physical live switching, thermal
   response, concurrent workloads and cold reset/retirement remain unqualified.
+  The merged camera memory changes preprocess identically in both accelerator
+  profiles; their accepted images remain applicable without rebuilds. Exact
+  commands and input identities are under `gpu-camera-reuse-1026/result.json`.
 - **OS thermal qualification support is implemented.** The session can lower
   the CPU critical threshold to 70 °C; zero retains the normal policy. A
   bounded binary report preserves the first recognition interval's temperature
@@ -422,6 +424,10 @@ be pruned.
   checks pass under `camera-modes-1026/final-snapshot/`. Existing capture and
   transport evidence is reused where relevant inputs remain unchanged. Physical
   capture, memory visibility, timing and drain remain unqualified.
+  Integration with GPU power changes affects four camera compiler inputs. One
+  maximum-stream rebuild, actual ELF admission and focused provider success/
+  voltage-refusal checks pass under `camera-modes-1026/gpu-integration/`, before
+  sensor traffic. Text grows by eight bytes; data and BSS remain unchanged.
 - **Do not run GPU set `board-bundles-20261025-31`.** It repeats the qualified
   eight-job session with the older image, which lacks the shutdown on every
   failure path.
