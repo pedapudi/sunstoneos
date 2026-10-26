@@ -14,7 +14,12 @@ followed by one request for the NPU report (USB0 operation 6), which is saved
 with its decoding and classification from apps/os/npu-report.py; other
 images never send operation 6. CPU-clock images also return the first
 recognition's immutable thermal window through paged operation 7; it is saved
-separately as thermal-report.bin and thermal-report.json. Host checks of this tool
+separately as thermal-report.bin and thermal-report.json.
+With --perf-sequence, for an image whose
+link check records the performance-mode service, each recognition is
+preceded by one switch to the next listed mode through USB0 operation 8
+(tools/sunstone-perf.py), and the capture ends with one readback; each
+report is saved with its decoding. Host checks of this tool
 (checks/os-image-launch.py) stop before any device access.
 """
 import argparse
@@ -44,6 +49,7 @@ faults = module('os_supervised_fault_report', ROOT / 'tools/fault-report.py')
 fault_decoder = module('os_supervised_fault_decode', ROOT / 'checks/fault-decode.py')
 npu_report = module('os_supervised_npu_report', ROOT / 'apps/os/npu-report.py')
 thermal_report = module('os_supervised_thermal_report', ROOT / 'apps/os/thermal-report.py')
+perf_modes = module('os_supervised_perf_modes', ROOT / 'tools/sunstone-perf.py')
 supervisor = combined.supervisor
 require, digest, reference_bytes = combined.require, combined.digest, combined.reference_bytes
 PREREQUISITES = {'supervised-ram-recovery', 'os-supervised-software'}
@@ -66,6 +72,7 @@ def source_files():
             ('fault-report.py', Path(faults.__file__)), ('fault-decode.py', Path(fault_decoder.__file__)),
             ('npu-report.py', Path(npu_report.__file__)),
             ('thermal-report.py', Path(thermal_report.__file__)),
+            ('sunstone-perf.py', Path(perf_modes.__file__)),
             ('usb-access.py', ROOT / 'tools/usb-access.py')]
 
 
@@ -168,7 +175,8 @@ def entry_check(prepared, identity, port):
     cache = {path: frozen['board/' + item['name']] for path, item in prepared['entry_evidence'].items()}
     template = frozen['board/session-template.bin']
     preparation.validate_admission(admission, prepared['image_sha256'], hashlib.sha256(template).hexdigest(),
-                                   template, prepared['audio'], cache, True)
+                                   template, prepared['audio'], cache, True,
+                                   perf_modes=json.loads(frozen['board/image-input-manifest.json']).get('perf_modes', False))
     require(admission['identity'] == identity and admission['port'] == port, 'OS entry covers another USB instance.')
 
 
@@ -277,6 +285,35 @@ def read_thermal_report(device, same, deadline, prepared, evidence, record, save
     save()
 
 
+def perf_sequence(prepared, text, generations):
+    """The modes to switch to, one per recognition; only for an image whose
+    link check records the performance-mode service."""
+    if text is None:
+        return None
+    manifest = json.loads(prepared['_combined_frozen']['board/image-input-manifest.json'])
+    perf_modes.manifest_check(manifest)
+    modes = text.split(',')
+    require(len(modes) == generations and all(m in perf_modes.MODES for m in modes),
+            'Name one mode, high or low, per recognition.')
+    return modes
+
+
+def perf_exchange(device, same, deadline, evidence, record, save, name, command, mode=None):
+    """One performance-mode command; every answer is saved before decoding."""
+    answers = []
+
+    def retain(raw):
+        path = evidence / ('%s-%d.bin' % (name, len(answers)))
+        supervisor.durable_frame(path, raw)
+        answers.append({'path': path.name, 'sha256': digest(path)})
+    entry = {'command': name, 'mode': mode, 'answers': answers, 'state': 'unobserved'}
+    record.setdefault('perf_modes', []).append(entry)
+    save()
+    report = perf_modes.run(perf_modes.device_exchange(device, same, deadline, retain), command, mode)
+    entry.update(state='observed', report=report)
+    save()
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('bundle', 'fel', 'evidence', 'database'):
@@ -285,6 +322,7 @@ def main(argv=None):
     parser.add_argument('--owner', required=True)
     parser.add_argument('--generations', type=int, default=1)
     parser.add_argument('--supervised-manual-reconnect', action='store_true', required=True)
+    parser.add_argument('--perf-sequence', help='modes to switch to before each recognition, for example high,low,high')
     parser.add_argument('--fault-report', action='store_true',
                         help="request the previous boot's fault report once before the capture")
     args = parser.parse_args(argv)
@@ -294,11 +332,16 @@ def main(argv=None):
         require_fault_report(prepared)
     npu = npu_profile(prepared)
     thermal = thermal_profile(prepared)
+    modes = perf_sequence(prepared, args.perf_sequence, args.generations)
 
     def capture(device, same, deadline, record, save):
         if args.fault_report:
             read_fault_report(device, same, deadline, args.evidence, record, save)
-        combined.capture_device(device, same, deadline, prepared, args.evidence, record, save)
+        before = None if modes is None else lambda g: perf_exchange(
+            device, same, deadline, args.evidence, record, save, 'perf-switch-%d' % g, perf_modes.SWITCH, modes[g - 1])
+        combined.capture_device(device, same, deadline, prepared, args.evidence, record, save, before=before)
+        if modes is not None:
+            perf_exchange(device, same, deadline, args.evidence, record, save, 'perf-status', perf_modes.READ)
         if npu:
             read_npu_report(device, same, deadline, prepared, args.evidence, record, save)
         if thermal:

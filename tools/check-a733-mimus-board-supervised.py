@@ -203,8 +203,11 @@ def claimed(database, test_id, owner, bundle, prepared):
 
 
 def capture_device(device, same, deadline, prepared, evidence, record, save,
-                   *, now=time.monotonic, pause=time.sleep):
-    """Preserve raw fragments and complete outputs durably before each ACK write."""
+                   *, now=time.monotonic, pause=time.sleep, before=None):
+    """Preserve raw fragments and complete outputs durably before each ACK write.
+
+    before(generation), when given, runs before each recognition's first
+    request; the OS launcher switches performance modes there."""
     session = prepared['_combined_frozen']['board/session.bin']
     epoch, attachment = struct.unpack_from('<2Q', session, 24)
     keyboard = prepared['workload'] == 4
@@ -221,6 +224,8 @@ def capture_device(device, same, deadline, prepared, evidence, record, save,
     try:
         for generation in range(1, prepared['_recognitions'] + 1):
             require(now() < deadline, 'Combined capture deadline expired.')
+            if before is not None:
+                before(generation)
             current = {**identity, 'recognition_generation': generation,
                        'state': 'unobserved', 'frames': [], 'fragments': []}
             record['recognitions'].append(current)

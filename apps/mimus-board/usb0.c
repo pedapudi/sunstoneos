@@ -27,6 +27,12 @@ _Static_assert(sizeof(frame)>=OS_NPU_REPORT_BYTES,"frame holds the NPU report");
 #ifdef SUNSTONE_A733_OS_CPU_CLOCK
 #include "../os/thermal-report.h"
 #endif
+#ifdef SUNSTONE_A733_OS_PERF
+#include "../os/perf.h"
+/* Operation 8 returns the performance-mode report alone, without the 64-byte
+ * frame header (apps/os/perf.h). It reads no recognizer state. */
+_Static_assert(sizeof(frame)>=OS_PERF_REPORT_BYTES,"frame holds the performance-mode report");
+#endif
 static unsigned frame_bytes,sent,transferred,request_used,frame_success;
 /* USB0 owner only. Receipt publication follows the final TX completion. */
 static unsigned delivery_generation,delivered_text,delivered_sector,delivered_trigger;
@@ -91,6 +97,17 @@ static void exchange(void)
         for(unsigned i=0;i<8;++i){frame[32+i]=(uint8_t)(board.session.epoch>>(8*i));frame[40+i]=(uint8_t)(board.session.generation>>(8*i));}
         /* Diagnostic reads neither acknowledge nor gate recognizer output. */
         frame_success=0;sent=transferred=0;frame_bytes=64+(unsigned)copied;return;
+    }
+#endif
+#ifdef SUNSTONE_A733_OS_PERF
+    if(op==OS_PERF_OP){
+        /* Framing: no count; a report or read back carries no selection or
+         * epoch; a switch carries only the defined selection bits. */
+        const unsigned command=request[1];
+        if(bytes||command>OS_PERF_SWITCH||(command!=OS_PERF_SWITCH&&(offset||expected))||
+           (offset&~OS_PERF_SELECTION_MASK))stop();
+        os_perf_usb(command,offset,expected,frame);
+        frame_success=0;sent=transferred=0;frame_bytes=OS_PERF_REPORT_BYTES;return;
     }
 #endif
     if(op>(keyboard?4u:mimus_board_staged()?1u:2u)||request[1]||bytes>1024)stop();

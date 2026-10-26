@@ -274,7 +274,7 @@ exec "$REAL" "$@"
         self.assertIn('other-image', central)
         self.assertNotIn('clean', central)
         self.assertNotIn('ignored.o', central)
-        self.assertEqual(sum(c[0] == 'cfg.sh' for c in calls), 11)  # central and ten OS variants
+        self.assertEqual(sum(c[0] == 'cfg.sh' for c in calls), 13)  # central and twelve OS variants
         runs = [c for c in calls if c[0] == 'python']
         self.assertEqual(len(runs), 8)
         soak = next(c for c in runs if 'tools/check-smp.py' in c)

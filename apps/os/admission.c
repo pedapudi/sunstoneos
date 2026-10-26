@@ -54,7 +54,14 @@ int os_session_valid(const struct os_session *s)
     struct a733_cpu_clock_config cpu;
     if(!a733_cpu_clock_grant_load(&s->cpu_clock,s->board.epoch,s->board.generation,&cpu)||
        cpu.owner==s->thermal_owner)return 0;
+#ifdef SUNSTONE_A733_OS_PERF
+    /* The performance-mode service switches both clusters, or none. */
+    if(cpu.grant.clusters==1||cpu.grant.clusters==2)return 0;
+#endif
     for(unsigned i=0;i<4;++i)if(owners[i]==cpu.owner)return 0;
+#ifdef SUNSTONE_A733_OS_NPU
+    if(cpu.owner==s->npu.owner)return 0;
+#endif
 #ifdef SUNSTONE_A733_OS_AUDIO
     if(cpu.owner==s->audio.dma.owner)return 0;
 #endif

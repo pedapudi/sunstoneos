@@ -15,6 +15,9 @@
 #include "../mimus-board/application.h"
 #include "a733_cpu_clock.h"
 #include "a733_mmio.h"
+#ifdef SUNSTONE_A733_OS_PERF
+#include "perf.h"
+#endif
 #include "FreeRTOS.h"
 #include <stdatomic.h>
 #include <stdio.h>
@@ -125,6 +128,18 @@ int os_cpu_clock_step(const struct a733_thermal_policy *policy)
         return 1;
     }
     enum a733_cpu_clock_status r=a733_cpu_clock_burst(c,BURST_US);
+#ifdef SUNSTONE_A733_OS_PERF
+    /* The performance-mode service replaces the one-request-per-cluster
+     * start: its boot switch moves the CPU domains to the boot mode, and it
+     * then serves USB0 operation 8 (apps/os/perf.c). It sees every burst
+     * result, including a retained driver, before the session ends. */
+    if(owner.phase==FOLLOW) {
+        int ready=os_perf_step(c,policy,(int)r);
+        if(ready<0)return -1;
+        if(ready && !atomic_load_explicit(&owner.ready,memory_order_relaxed))
+            atomic_store_explicit(&owner.ready,1,memory_order_release);
+    }
+#endif
     if(r==A733_CPU_CLOCK_RETAINED||r==A733_CPU_CLOCK_INVALID)return -1;
     if(r==A733_CPU_CLOCK_PENDING)return 1;
     if(r==A733_CPU_CLOCK_COMPLETE&&owner.phase!=INSPECT)++owner.count;
@@ -135,7 +150,11 @@ int os_cpu_clock_step(const struct a733_thermal_policy *policy)
             owner.cluster=A733_CPU_BIG;
             return a733_cpu_clock_inspect(c,A733_CPU_BIG,later(REQUEST_US))==A733_CPU_CLOCK_PENDING?1:-1;
         }
+#ifdef SUNSTONE_A733_OS_PERF
+        owner.phase=FOLLOW;return 1;
+#else
         owner.phase=REQUEST;owner.cluster=0;
+#endif
     }
     if(owner.phase==REQUEST){
         /* One request per granted domain once its sensor has a reading (CPUL

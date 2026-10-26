@@ -218,9 +218,12 @@ domain 4 and every token stay held.
 
 Domain 4 rejects an OFF request before publishing it to the owner. Local
 stop therefore preserves the admitted row, its rail pin and every lease.
-The selected operating point stays fixed during the image lifetime; there
-is no runtime NPU frequency or voltage transition API. A stopped or faulted
-startup cannot restart in place, and faults retain resources until whole-board
+After local stop, `a733_npu_startup_retune` moves PLL_NPU between 492 and
+852 MHz in the vendor's rate change while the NPU's gates stay closed and its
+resets asserted, as the vendor changes the NPU clock only while no core is
+powered ([performance modes](designs/performance-modes.md)). No NPU voltage
+transition exists; both points run at 800 mV. A stopped or faulted startup
+cannot restart in place, and faults retain resources until whole-board
 power removal. A later image in the same power lifetime starts again by
 adoption. The board image supplies
 [thermal admission and orderly stop](designs/npu-board.md#thermal-admission-and-orderly-stop),
@@ -228,8 +231,8 @@ and the optional [finite thermal image](../apps/npu-finite/ENTRY.md) supplies
 polling admission and bounded cleanup through the same sensor policy.
 The supervised OS profile also supplies an NPU client with thermal admission
 and an orderly-stop gate in `apps/os/npu.c`. The ordinary numerical image has
-no thermal integration. Frequency/voltage transitions, in-place recovery and
-thermal qualification remain open. Repeated startup across finite images,
+no thermal integration. Stopped-PLL retuning has software coverage only;
+voltage transitions, in-place recovery and thermal qualification remain open. Repeated startup across finite images,
 including 492 and 852 MHz runs with matching outputs, passed in
 `board-session-20261025-15/port-3-3`. That evidence does not establish restart
 inside a faulted or stopped service instance.
@@ -339,7 +342,10 @@ Integration follows this order:
   refusals, two incoherent-state refusals, retention after a failed write,
   and retained ownership after local stop and a refused OFF request. Its
   `--second-start` cases run a second startup over the stopped state, with
-  the reserved PLL bit 24 clear and set, and ten adoption refusals.
+  the reserved PLL bit 24 clear and set, and ten adoption refusals. Its
+  `--retune` cases change the rate of a stopped NPU in both directions,
+  with five writes in the vendor order, five refusals before any write and
+  a lock failure that retains; `checks/perf-mode.py` runs them.
 - [`checks/npu-startup.c`](../checks/npu-startup.c) runs it on two QEMU cores
   with real FreeRTOS tasks and the real counter, registry, ledger and register
   lock. The success mode reaches service activation; the readback mode shows a

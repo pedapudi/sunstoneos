@@ -80,6 +80,41 @@ static int watch(uint64_t *now)
 int os_npu_stopping(void)
 {return !live()||(atomic_load_explicit(&npu.gate,memory_order_acquire)&STOP)!=0;}
 unsigned os_npu_stopped(void){return atomic_load_explicit(&npu.stopped,memory_order_acquire);}
+#ifdef SUNSTONE_A733_OS_PERF
+/* Performance modes: the request number and rate in one word, the answer
+ * number and result in another; the bootstrap serves requests only after the
+ * local stop. */
+static atomic_uint perf_request,perf_answer,perf_ready;
+int os_npu_perf_ready(void)
+{return atomic_load_explicit(&perf_ready,memory_order_acquire) && !atomic_load_explicit(&npu.failed,memory_order_acquire);}
+int os_npu_perf_stopped(void){return os_npu_perf_ready() && os_npu_stopped();}
+int os_npu_perf_retune(unsigned mhz,unsigned sequence)
+{
+    if(!npu.bootstrap || (mhz!=492 && mhz!=852) || !sequence || sequence>0xffff)return 0;
+    atomic_store_explicit(&perf_request,sequence<<16|mhz,memory_order_release);
+    xTaskNotifyGive(npu.bootstrap);return 1;
+}
+unsigned os_npu_perf_answer(unsigned sequence)
+{
+    const unsigned a=atomic_load_explicit(&perf_answer,memory_order_acquire);
+    return a>>2==sequence ? (a&3) : 0;
+}
+/* Bootstrap task after the local stop: one request, then wait for the next. */
+static void perf_serve(void)
+{
+    for(;;) {
+        (void)ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
+        const unsigned request=atomic_exchange_explicit(&perf_request,0,memory_order_acq_rel);
+        if(!request)continue;
+        const int r=a733_npu_startup_retune(&npu.startup,request&0xffff);
+        atomic_store_explicit(&perf_answer,(request>>16)<<2|(r==1 ? 1u : r==0 ? 2u : 3u),memory_order_release);
+        if(r<0){(void)fail();vTaskSuspend(NULL);}
+    }
+}
+#define STOPPED_WAIT() perf_serve()
+#else
+#define STOPPED_WAIT() vTaskSuspend(NULL)
+#endif
 static int caller(void)
 {return live()&&npu.client&&xTaskGetSchedulerState()==taskSCHEDULER_RUNNING&&xTaskGetCurrentTaskHandle()==npu.client;}
 /* A stalled or mismatched reply retains the outstanding runtime ticket;
@@ -144,7 +179,7 @@ static void bootstrap(void *unused)
             if(os_npu_stopping()) {
                 /* No startup step or activation has occurred. */
                 atomic_store_explicit(&npu.stopped,1,memory_order_release);
-                xTaskNotifyGive(npu.client);vTaskSuspend(NULL);return;
+                xTaskNotifyGive(npu.client);STOPPED_WAIT();return;
             }
             if(!claim()){(void)ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(25));continue;}
             complete();begun=1;
@@ -154,6 +189,9 @@ static void bootstrap(void *unused)
         if(r==A733_NPU_PLATFORM_READY) {
             enum npu_service_result activated=npu_service_activate(&npu.runtime.service);
             if(activated==NPU_SERVICE_OK) {
+#ifdef SUNSTONE_A733_OS_PERF
+                atomic_store_explicit(&perf_ready,1,memory_order_release);
+#endif
                 atomic_store_explicit(&npu.active,1,memory_order_release);xTaskNotifyGive(npu.client);
                 for(;;) {
                     if(!watch(&now))goto failed;
@@ -162,7 +200,7 @@ static void bootstrap(void *unused)
                         if(r==A733_NPU_PLATFORM_RETAINED)goto failed;
                         if(r==A733_NPU_PLATFORM_READY) {
                             atomic_store_explicit(&npu.stopped,1,memory_order_release);
-                            xTaskNotifyGive(npu.client);vTaskSuspend(NULL);return;
+                            xTaskNotifyGive(npu.client);STOPPED_WAIT();return;
                         }
                         vTaskDelay(1);
                     } else (void)ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(25));
@@ -214,6 +252,10 @@ int os_npu_start(void)
     const struct a733_npu_startup_providers p={&providers.shared.counter,&providers.shared.clocks,
         &providers.shared.locks,&providers.shared.gpu,&providers.shared.rails,&providers.domains};
     if(!a733_npu_startup_init(&npu.startup,&startup,&p,NULL,NULL))return 0;
+#if defined(SUNSTONE_A733_OS_PERF) && OS_PERF_BOOT_MODE==2
+    /* The low boot mode: the NPU starts at its 492 MHz point. */
+    if(!a733_npu_startup_rate(&npu.startup,492))return 0;
+#endif
     creating=1;
     npu.bootstrap=xTaskCreateStaticAffinitySet(bootstrap,"os-npu-boot",STACK,NULL,4,npu.stacks[0],&npu.tasks[0],2);
     npu.client=xTaskCreateStaticAffinitySet(os_npu_client_task,"os-npu-app",STACK,NULL,3,npu.stacks[1],&npu.tasks[1],2);
