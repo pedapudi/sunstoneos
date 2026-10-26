@@ -132,12 +132,12 @@ no board has read them yet.
 
 ## The board step
 
-Step (d) runs in the lifetime of set `board-bundles-20261025-25`, after its
-step (c) passed (bundle 26), with no power removal: set
-`board-bundles-20261025-27` holds bundle 27 alone (it replaces set 26, whose admission
-said that no firmware had run in the lifetime), with that lifetime's
-earlier runs as its warm-return chain. The job's `seed` is 0x12345678 and
-its `factor` 0x9e3779b1.
+Set 27 ran the job in the lifetime of set `board-bundles-20261025-25` and
+failed (below). The corrected job runs in set `board-bundles-20261025-29`,
+first in a new lifetime on port 3-1: the cold DDR start, the
+provider-readiness checkpoint, then bundle 27 (image `0a8918be…`, loadable
+bytes `95a12630…`, from `ddce218a`). The job's `seed` is 0x12345678 and its
+`factor` 0x9e3779b1.
 
 Predictions:
 
@@ -147,22 +147,20 @@ Predictions:
 - `output[0]` = (0x12345678 + 0x9e3779b1) XOR 0x9e3779b9 = `0x2e5ca990`,
   `output[1]` = `0xd09b3063`, `output[31]` = `0x4775f521`, every word by the
   formula, both 64-byte guards `0x6d35a7c1`;
-- the cleanup's return word 1, `kccb_done=0x3` after the cleanup (health,
-  KICK, cleanup), and the stop and OFF as in set 23;
+- `MMUCACHE` executed before the KICK and no recovery record;
+- the cleanup's return word 1, `kccb_done=0x4` after the cleanup (health
+  check, MMUCACHE, KICK, cleanup), and the stop and OFF as in set 23;
 - `COMPLETE GPU first job: 32 words as computed, context cleaned up,
   firmware stopped, OFF and provider parked`.
 
 A wrong output with intact guards would mean the program ran with wrong
 inputs or state; an unchanged timeline with the KICK consumed would mean
-the firmware could not run the command. In both cases the image still
-attempts the stop and the OFF, but the lifetime continues only if the
-firmware acknowledges the forced-idle and power-off requests. With the
-job's context still live, and possibly still running, the firmware may
-not reach FORCED_IDLE or OFF within the stop's 300 ms; the stop then fails
-before the power-off acknowledgement, the GPU stays on, and a power removal
-follows.
+the firmware could not run the command; a context reset prints its reason
+and fault address. In each case the stop and OFF still run: with the
+firmware's acknowledgements, or without them when the idle checks pass.
 
-The USC program is first executed on the board. The host checks compare
+The USC program first executed on the board in set 27, where it faulted
+on its first load. The host checks compare
 its bytes with the pinned compiler's output and model the GPU's writes,
 but no check executes it.
 
