@@ -126,3 +126,35 @@ mode, points, image/SID, budget or startup-only evidence. Reuse the unchanged
 card generation/stamping and arithmetic evidence. Build the complete intended
 resident composition once the GPU source is ready; no hardware access or
 inference replay is part of this work.
+
+
+## Reproduce the stopped-retune mailbox check
+
+From the repository root, use an existing configured NPU OS build for its
+FreeRTOS and application include paths. The host fixture includes the actual
+OS NPU source and models only scheduler calls and the provider answer.
+`BUILD` names that build directory; `OUTPUT` names a new executable outside
+the repository. This check does not build or run an inference image.
+
+```sh
+python3 - "$BUILD" "$OUTPUT" <<'PYTHON'
+import json, shlex, subprocess, sys
+from pathlib import Path
+sys.path.insert(0, 'checks')
+from harness import CLANG, SANITIZE, environment
+root = Path.cwd()
+rows = json.loads((Path(sys.argv[1]) / 'compile_commands.json').read_text())
+row = next(r for r in rows if r['file'].endswith('/apps/os/npu.c'))
+source_root = str(Path(row['file']).parents[2])
+includes = [a.replace(source_root, str(root)) for a in shlex.split(row['command'])
+            if a.startswith('-I') and 'newlib' not in a]
+flags = ['-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
+         '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections']
+defines = ['SUNSTONE_BOARD_SUPERVISED=1', 'SUNSTONE_BOARD_RESIDENT=1',
+           'SUNSTONE_A733_OS_NPU=1', 'SUNSTONE_A733_OS_PERF=1', 'OS_PERF_BOOT_MODE=1']
+subprocess.run([str(CLANG), *flags, *SANITIZE, *includes,
+                *['-D' + d for d in defines], 'checks/os-npu-perf-mailbox.c',
+                '-o', sys.argv[2]], check=True, env=environment())
+subprocess.run([str(Path(sys.argv[2]).resolve())], check=True, env=environment())
+PYTHON
+```
