@@ -9565,7 +9565,8 @@
   "docs": [
    "apps/storage-read-returning/README.md",
    "docs/board-runbooks/sd-uhs.md",
-   "docs/designs/mbus-restore.md"
+   "docs/designs/mbus-restore.md",
+   "docs/designs/sd-dma.md"
   ],
   "library": false,
   "pure_host": false,

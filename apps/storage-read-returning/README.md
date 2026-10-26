@@ -22,7 +22,11 @@ restore when the GPU or NPU is clocked, DMA0 is busy or CE has a task loaded
 of the result page only when the word changed, a skip had one of those
 codes, or the restore failed. A word that already holds boot0's value, a
 word with other field values, and an MSI_LITE0 that is not released all
-skip the restore with code 0 and no line. Two tasks run on core 0:
+skip the restore with code 0 and no line. The first returning run after a
+cold DDR start is the first case: boot0 left MBUS at `0x81000000`, and only a
+return through the ROM's forced-FEL entry sets `0x84000000` again
+(lifetime A of 2026-10-25 read `0x81000000` before its launch and logged no
+line). Two tasks run on core 0:
 
 - The PMIC task polls the production PMIC provider until the SD task asks it
   to park.
