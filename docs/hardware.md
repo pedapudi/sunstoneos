@@ -12,6 +12,8 @@ Status meanings: **planned** has no implementation; **implemented** has code;
 **tested** has a functional result under stated conditions; **qualified** meets
 its recorded operational and recovery criteria on physical hardware.
 
+**No row is fully qualified across its required functions.**
+
 Qualification applies to the specific image, operation and recovery conditions
 in its evidence. The current physical results are summarized below; the detailed
 inventory that follows also records earlier implementations and their remaining
@@ -1268,7 +1270,10 @@ to the stated scope:
   mirroring (the pinned set lacks `g2d_rotate.c`), YUV color-space conversion, other
   pixel sizes and a translucent solid background remain required. Physical pixels, DMA confinement/visibility, IRQ
   delivery, startup, recovery and performance remain unqualified.
-- GPU: **implemented** native [firmware decoding and staging](gpu.md) for the
+- GPU: **tested** for firmware restart and eight correct compute jobs in the
+  returning diagnostic at 1008 MHz. The diagnostic shut down the GPU and returned
+  to ROM. The application profiles below retain their separate qualification
+  requirements. Native [firmware decoding and staging](gpu.md) is implemented for the
   board software's target revision. The integrated [single-core compute
   application](gpu-application.md) permits initial physical validation independently
   of SMP. The earlier returning profile's healthy CLOSE validates firmware power

@@ -30,7 +30,8 @@ class Check(unittest.TestCase):
 
     def test_inventory_and_evidence(self):
         rows, parser = progress.parse_hardware((ROOT / 'docs/hardware.md').read_text())
-        inventory = [line for line in (ROOT / 'docs/hardware.md').read_text().splitlines()
+        inventory_text = (ROOT / 'docs/hardware.md').read_text().split('| Hardware |', 1)[1].split('\n\n', 1)[0]
+        inventory = [line for line in inventory_text.splitlines()
                      if line.startswith('| ') and not line.startswith(('| Hardware', '| ---'))]
         self.assertEqual(len(rows), len(inventory))
         self.assertEqual(parser['status'], 'ok')
@@ -44,8 +45,21 @@ class Check(unittest.TestCase):
         self.assertFalse([w for w in parser['warnings'] if 'Physical-result anchor' in w], parser['warnings'])
         self.assertIn('ddr', progress.PHYSICAL_SCOPES)
         self.assertIn('rtc and watchdog', progress.PHYSICAL_SCOPES)
-        for name in ('DDR and CPU memory management', 'RTC and watchdog'):
+        for name in ('DDR and CPU memory management', 'RTC and watchdog', 'GPU', 'NPU'):
             self.assertIn('board', by_name[name]['evidence'])
+        missing_declaration = (ROOT / 'docs/hardware.md').read_text().replace(
+            '**No row is fully qualified across its required functions.**', '')
+        unknown, declaration_state = progress.parse_hardware(missing_declaration)
+        self.assertTrue(all(row['qualification'] == 'not_recorded' for row in unknown))
+        self.assertIn('The matrix-wide qualification declaration changed; qualification is not inferred.',
+                      declaration_state['warnings'])
+        for device in ('gpu', 'npu'):
+            reworded_device = (ROOT / 'docs/hardware.md').read_text().replace(
+                progress.PHYSICAL_SCOPES[device], '**implemented** with physical work pending')
+            changed_rows, changed_state = progress.parse_hardware(reworded_device)
+            self.assertNotIn('board', next(row for row in changed_rows if row['name'] == device.upper())['evidence'])
+            self.assertIn('Physical-result anchor no longer matches its update: ' + device,
+                          changed_state['warnings'])
         reworded = (ROOT / 'docs/hardware.md').read_text().replace(
             'coherent RTC reads in inherited normal RC mode', 'RTC reads in RC mode')
         _, changed = progress.parse_hardware(reworded)

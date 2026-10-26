@@ -36,8 +36,9 @@ retain the canonical prose and documentation links.
 Implementation, evidence, and qualification are separate fields. An implemented
 row means that some of its scope has code. A physical result applies only to its
 recorded conditions. Host or emulator evidence does not establish physical
-operation. The current matrix explicitly declares no qualification evidence for
-any row; the dashboard therefore shows zero qualified rows.
+operation. The current matrix states that no row is fully qualified across all
+its required functions. The dashboard shows partial physical results, including
+GPU compute and NPU inference, while retaining zero fully qualified rows.
 
 Physical-result labels require known explicit statements in the matrix, such as
 boot-CPU instruction execution or USB high-speed exchanges. A host DMA test does
