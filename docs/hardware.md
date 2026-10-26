@@ -842,6 +842,11 @@ to the stated scope:
   including a sixty-four-sector read plus tail, write/readback sequencing and
   complete USB delivery. The image adds 2,040 code bytes and 107,776 live BSS
   bytes, with a 2 MiB noncacheable reservation using 528 bytes for descriptors.
+  Bounded USB progress bursts reduce the same modeled 32 KiB response from
+  sixty-six ticks to eight while preserving one-pass idle behavior, transfer
+  completion ownership and deadlines. Actual-ELF and focused compatibility
+  checks pass under `resume-maintenance-usb-1026/snapshot/`; added cost is
+  100 code bytes and 32 task-frame bytes with no additional buffers.
   No profile has written physical media or measured DMA backup throughput. The separate
   [supervised read-only SD service](storage-read-application.md) identifies the
   card and serves repeated ranges of one to eight sectors to two native clients.
@@ -2264,7 +2269,12 @@ to the stated scope:
   application also composes with eight-worker GPU recognition and CPU clock
   grants; it has its own combined lifetime/clock prerequisites. All newly
   generated OS NPU profiles place payloads in initialized non-executable RAM.
-  NPU mimus acceleration remains separate outstanding work.
+  Stopped retuning now accepts a fresh bounded command deadline while preserving
+  finite application/restart bounds and retained ownership. Focused retune,
+  PLL-wait expiry, mailbox and native caller checks pass under
+  `resident-performance-1026/retune-snapshot/`. Resident runtime policy and
+  physical transitions remain unqualified. NPU mimus acceleration remains
+  separate outstanding work.
   The application clock admission accepts the board's normalized
   reference and recorded PERI0 settings. Six focused final-image cases pass
   under `npu-single-core-20261018/reference-refresh/`; unchanged startup and

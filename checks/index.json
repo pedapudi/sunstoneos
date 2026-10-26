@@ -9847,6 +9847,21 @@
   "summary": "Execute the linked maintenance DMA adapter and USB framing; no hardware access.",
   "usb": false
  },
+ "storage-maintenance-usb-burst.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/storage-maintenance-launch.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--before",
+   "--after",
+   "--output"
+  ],
+  "summary": "Compare actual maintenance USB tasks with one bounded FIFO/packet model.",
+  "usb": false
+ },
  "storage-read-binding.py": {
   "cache_areas": [],
   "docs": [],

@@ -67,7 +67,6 @@ does not establish recovery from a fault.
 | Work | Branch | Immediate deliverable |
 | --- | --- | --- |
 | GPU performance control | `work/resume-gpu-performance-1026` | Derive and review bounded runtime clock/voltage changes through existing owners and firmware notification |
-| Maintenance USB delivery | `work/resume-maintenance-usb-1026` | Review bounded progress bursts for large backup responses while preserving completion ownership and scheduler fairness |
 | Resident performance service | `work/resume-resident-performance-1026` | Implement runtime clock authority and bounded stopped-NPU retuning for the microSD-booted service, then compose with GPU control |
 | Native camera resolutions | `work/resume-camera-modes-1026` | Implement the reviewed full OV5640 UYVY size range, bounded memory profile and table capacity for still and finite-stream capture |
 
@@ -220,6 +219,15 @@ be pruned.
   card producer, twenty entry cases and three late-fault cases pass under
   `resident-npu-cpu8-1026/`. This does not implement NPU acceleration of mimus.
   Physical combined execution and cold reset/retirement remain unqualified.
+- **Stopped NPU retunes use the command deadline.** The provider no longer
+  limits a later clock change to the original finite application deadline.
+  Its retained ownership and stopped state remain mandatory, including for
+  same-rate requests. The OS mailbox keeps one command outstanding until its
+  matching answer; uncertain changes retain resources. Twelve focused cases,
+  PLL-wait expiry, actual mailbox sanitizer checks and native caller compilation
+  pass under `resident-performance-1026/retune-snapshot/`. The application and
+  restart deadline remain unchanged. Resident performance card admission is
+  still in progress; this dependency does not establish physical retuning.
 - **The supervised eight-worker CPU/GPU/NPU image is integrated.**
   GPU recognition and the finite ShuffleNet NPU application start independently.
   Admission rejects shared-client and fixed-owner collisions before provider
@@ -292,8 +300,14 @@ be pruned.
   `resume-maintenance-dma-1026/snapshot-final/`. The image adds 2,040 code bytes
   and 107,776 live BSS bytes, and enables a 2 MiB noncacheable reservation using
   528 descriptor bytes. Storage command count falls eightfold for large backups;
-  physical throughput, DMA, writes and recovery remain unqualified. The USB
-  task still waits one tick per pass; bounded progress bursts are the next step.
+  physical throughput, DMA, writes and recovery remain unqualified. USB delivery
+  now makes bounded progress bursts before yielding. The same modeled 32 KiB
+  payload takes eight ticks instead of sixty-six, with 365 passes instead of
+  sixty-six; steady idle remains one pass per tick. Checked time and a sixty-four
+  pass cap bound each burst. Final-IN-only completion and original deadlines
+  remain intact. Actual-ELF comparison and four affected compatibility cases
+  pass under `resume-maintenance-usb-1026/snapshot/`. Added cost is 100 code
+  bytes and 32 bytes in the task frame, with no added buffers or BSS.
 - **Paired DRAM training records are implemented.** Selection chooses the newest
   eligible record; updates write the standby payload before its header and
   preserve the other copy. Thirty-two focused cases, including interruption
