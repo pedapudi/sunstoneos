@@ -11,12 +11,14 @@ logic and its read set, not the state a physical board leaves.
 """
 import argparse
 import json
+import struct
 from pathlib import Path
 import subprocess
 import sys
 
 from elftools.elf.elffile import ELFFile
-from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE
+from capstone import Cs, CS_ARCH_ARM64, CS_MODE_ARM
+from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE
 from unicorn import arm64_const as a64
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -127,11 +129,107 @@ def names(mask):
     return sorted(n for n in WRITERS if mask & BIT[n])
 
 
+def stage2_checks(build, output):
+    """Actual linked admission predicates and early refusal; no card model runs."""
+    elf = build / 'a733-stage2.elf'
+    with elf.open('rb') as stream:
+        image = ELFFile(stream)
+        segments = [(p['p_vaddr'], p.data()) for p in image.iter_segments() if p['p_type'] == 'PT_LOAD']
+        symbols = {s.name: s['st_value'] for s in image.get_section_by_name('.symtab').iter_symbols()}
+    code = (build / 'a733-stage2.bin').read_bytes()
+    disassembler = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
+    system = {}
+    for offset in range(0, len(code) - 3, 4):
+        i = next(disassembler.disasm(code[offset:offset + 4], 0x47000000 + offset), None)
+        if i and i.mnemonic in ('mrs', 'msr', 'wfe'): system[i.address] = (i.mnemonic, i.op_str)
+    cases = []
+
+    def case(name, entry, expected, controls=None, changes=None, grant_remote=False):
+        uc = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
+        uc.mem_map(0x47000000, 0x400000); uc.mem_map(SENTINEL, 0x1000)
+        for address, data in segments: uc.mem_write(address, data)
+        regs = defaults()
+        regs.update({a: 0 for a in (0x02050010, 0x02050014, 0x070501c0, 0x070501c4,
+                                   0x070501d4, 0x07090108, 0x08001004, 0x08001008, 0x03000024)})
+        regs.update(changes or {})
+        pages = PAGES + [(0x02050000, 0x1000), (0x07090000, 0x1000),
+                         (0x08001000, 0x1000), (0x03000000, 0x1000)]
+        for base, size in pages: uc.mem_map(base, size)
+        for address, value in regs.items(): uc.mem_write(address, value.to_bytes(4, 'little'))
+        values = dict(currentel=12, mpidr_el1=0x81000000, midr_el1=0x412fd050,
+                      sctlr_el3=0x30c50832, daif=0x3c0, cntfrq_el0=0, cntpct_el0=24000123)
+        values.update(controls or {})
+        reads, writes, reset = [], [], []
+
+        def instruction(u, address, size, unused):
+            mnemonic, operands = system[address]
+            if mnemonic == 'wfe': raise AssertionError('unexpected park')
+            first, second = operands.lower().split(', ')
+            if mnemonic == 'mrs':
+                u.reg_write(getattr(a64, 'UC_ARM64_REG_' + first.upper()), values[second])
+                if second == 'cntpct_el0': values[second] += 24
+            elif first == 'rmr_el3':
+                reset.append(True); u.emu_stop(); return
+            else: assert first == 'daifset', first
+            u.reg_write(a64.UC_ARM64_REG_PC, address + 4)
+
+        def read(u, access, address, size, value, unused):
+            if any(b <= address < b + n for b, n in pages):
+                assert size == 4 and address in regs, hex(address)
+                reads.append(address)
+
+        def write(u, access, address, size, value, unused):
+            if not 0x47008000 <= address < 0x47400000:
+                writes.append(address)
+                assert address in (0x08001004, 0x08001008), hex(address)
+
+        if grant_remote:
+            def grant(u, address, size, unused):
+                u.reg_write(a64.UC_ARM64_REG_X0, 1)
+                u.reg_write(a64.UC_ARM64_REG_PC, u.reg_read(a64.UC_ARM64_REG_X30))
+            remote = symbols['a733_stage2_remote_writers_excluded']
+            uc.hook_add(UC_HOOK_CODE, grant, begin=remote, end=remote)
+        for address in system: uc.hook_add(UC_HOOK_CODE, instruction, begin=address, end=address)
+        uc.hook_add(UC_HOOK_MEM_READ, read); uc.hook_add(UC_HOOK_MEM_WRITE, write)
+        uc.reg_write(a64.UC_ARM64_REG_SP, 0x473fff00); uc.reg_write(a64.UC_ARM64_REG_X30, SENTINEL)
+        uc.emu_start(symbols[entry], SENTINEL, count=100000)
+        if entry == 'a733_stage2_main':
+            report = list(struct.unpack('<5Q', uc.mem_read(symbols['a733_stage2_report'], 40)))
+            assert reset and report[3:] == [10 if grant_remote else 9, expected], report
+            assert not any(0x04020000 <= a < 0x04021000 for a in reads), reads
+        else:
+            assert uc.reg_read(a64.UC_ARM64_REG_PC) == SENTINEL and uc.reg_read(a64.UC_ARM64_REG_X0) == expected, name
+            assert not writes
+        assert 0x03000024 not in reads  # Normal-card policy does not sample BOOT.
+        cases.append(dict(case=name, expected=expected, reads=[hex(a) for a in reads], writes=[hex(a) for a in writes]))
+
+    for label, change, expected in [('zero-frequency-metadata', {}, 1), ('24MHz-metadata', {'cntfrq_el0': 24000000}, 1),
+        ('wrong-frequency', {'cntfrq_el0': 25000000}, 0), ('wrong-EL', {'currentel': 4}, 0),
+        ('secondary-core', {'mpidr_el1': 0x81000100}, 0), ('wrong-CPU', {'midr_el1': 0x410fd0b0}, 0),
+        ('unmasked', {'daif': 0}, 0), ('data-cache', {'sctlr_el3': 0x30c50836}, 0)]:
+        case(label, 'a733_stage2_entry_state', expected, controls=change)
+    case('normal-card-reset-policy', 'a733_stage2_reset_policy', 1, changes={0x03000024: 0x100})
+    for address, value in ((0x02050014, 1), (0x02050010, 0x100), (0x070501c0, 1),
+                           (0x070501c4, 0x20), (0x070501d4, 1), (0x07090108, 1)):
+        case('prior-owner-' + hex(address), 'a733_stage2_reset_policy', 0, changes={address: value})
+    case('CPU-cache-authority-unresolved', 'a733_stage2_cpu_cache_owned', 0)
+    case('CPU-cache-refused-before-SD', 'a733_stage2_main', 0, grant_remote=True)
+    case('OR100-refused-before-SD', 'a733_stage2_main', BIT['OR100'])
+    case('CE-out-of-reset-refused-before-SD', 'a733_stage2_main', BIT['OR100'] | BIT['CE'], changes={CCU + 0xac4: 0x30003})
+    (output / 'stage2-admission.json').write_text(json.dumps(dict(passed=True, physical_access=False, cases=cases,
+        scope='Local system registers and hardware reads modeled; no ownership, cache publication or reset qualification.'), indent=1) + '\n')
+    print('PASS stage-2 admission:', len(cases), 'focused instruction cases')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--stage2-build', type=Path, help='only changed stage-2 admission using its already-built ELF')
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
+    if args.stage2_build:
+        stage2_checks(args.stage2_build, args.output)
+        return
     image = load(build(args.output))
     results = []
 

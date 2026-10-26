@@ -1,0 +1,12 @@
+--- boot.c
++++ boot-resident.c
+@@ -80,8 +80,7 @@
+        read32(0x07090108)!=admission.fel_flag ||
+        read32(0x070501c0)!=admission.redirect_flag ||
+        read32(0x070501c4)!=admission.redirect_entry ||
+-       read32(0x070501d4)!=admission.alternate_flag ||
+-       (read32(0x03000024)&0x100))a733_smp_stop(1,2);
++       read32(0x070501d4)!=admission.alternate_flag)a733_smp_stop(1,2);
+     volatile uint64_t *r=(volatile uint64_t *)RESULT;
+     for(unsigned i=0;i<sizeof(*RESULT)/8;++i)r[i]=0;
+     RESULT->magic=A733_SMP_RESULT_MAGIC;RESULT->epoch=admission.epoch;

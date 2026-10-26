@@ -2,8 +2,8 @@
  * It reads two fixed slot headers through the polled SD core, copies and
  * hashes the newest valid slot in place and publishes a report. It never
  * writes storage or enables caches. Entering the loaded image needs the
- * entry prerequisites in admission.c, which refuse until remote-writer
- * exclusion, watchdog recovery and the entry state are established; with
+ * entry prerequisites in admission.c: remote-writer and CPU/cache ownership
+ * before card access, the normal-card reset policy and local entry state; with
  * them, the loader arms the watchdog, builds the integrated OS image's
  * resident contract and branches to the image entry.
  * Every other reported outcome requests the ROM forced-FEL return of the RAM
@@ -33,7 +33,7 @@
 #define COUNTER_SAMPLES 4096u /* Far longer than one 24 MHz tick with caches off. */
 
 enum { LOADED = 1, CARD = 2, NO_SLOT = 3, LOAD_FAILED = 4, COUNTER = 5, ENTERED = 6,
-       ENTRY_REFUSED = 7, WATCHDOG = 8 };
+       ENTRY_REFUSED = 7, WATCHDOG = 8, REMOTE_WRITERS = 9, CPU_CACHE = 10 };
 enum { HEADER_UNREAD, HEADER_VALID, HEADER_READ, HEADER_ABSENT, HEADER_DIGEST,
        HEADER_FIELDS };
 enum { LOAD_NONE, LOAD_DONE, LOAD_READ, LOAD_DIGEST };
@@ -92,7 +92,9 @@ int a733_stage2_card_present(void);
  * (admission.c). Calls across units keep every one a separate decision that
  * the instruction model can grant or refuse. */
 int a733_stage2_remote_writers_excluded(void);
-int a733_stage2_watchdog_recovery(void);
+uint32_t a733_stage2_remote_writers_mask(void);
+int a733_stage2_cpu_cache_owned(void);
+int a733_stage2_reset_policy(void);
 int a733_stage2_entry_state(void);
 
 static int admit(void *context, uintptr_t token, enum sunxi_mmc_kind kind, uint32_t module_hz)
@@ -191,7 +193,7 @@ static void record(void)
 static int card_open(void)
 {
     struct sunxi_mmc_config config = {
-        .ops = {read32, write32, barrier, now_us, admit, retained, 0, read_fifo, write_fifo, 0},
+        .ops = {read32, write32, barrier, now_us, admit, retained, 0, read_fifo, write_fifo, 0, 0},
         .token = (uintptr_t)&card, .kind = SUNXI_MMC_SD,
         .module_hz = 400000, .voltage_mask = 0x00300000,
     };
@@ -333,7 +335,7 @@ static void wr(uintptr_t address, uint32_t value)
 static int arm(uint64_t *armed)
 {
     if ((rd(0x02050014) & 1) || (rd(0x02050010) & 0x100) || rd(0x070501c0) ||
-        rd(0x070501c4) || rd(0x070501d4) || rd(0x07090108) || (rd(0x03000024) & 0x100))
+        rd(0x070501c4) || rd(0x070501d4) || rd(0x07090108))
         return 0;
     wr(0x02050018, 0x16aa0002);
     wr(0x02050010, 0x16aa0001);
@@ -429,6 +431,9 @@ _Noreturn void a733_stage2_main(void)
     a733_stage2_report.selected = UINT64_MAX;
     a733_stage2_report.start_counter = counter();
     if (!counter_runs()) finish(COUNTER, 0);
+    if (a733_stage2_remote_writers_excluded() != 1)
+        finish(REMOTE_WRITERS, a733_stage2_remote_writers_mask());
+    if (a733_stage2_cpu_cache_owned() != 1) finish(CPU_CACHE, 0);
     if (!card_open()) finish(CARD, a733_stage2_report.mmc_error);
     unsigned valid = 0;
     for (unsigned s = 0; s < 2; ++s) {
@@ -452,9 +457,9 @@ _Noreturn void a733_stage2_main(void)
         if (r == LOAD_DONE) {
             a733_stage2_report.selected = s;
             a733_stage2_report.generation = headers[s].generation;
-            /* Boundary: no entry prerequisite is established yet, so the
-             * verified image is normally not entered. */
-            if (a733_stage2_remote_writers_excluded() != 1 || a733_stage2_watchdog_recovery() != 1 ||
+            /* Remote and CPU/cache ownership preceded the first card access.
+             * These local checks do not grant missing ownership evidence. */
+            if (a733_stage2_reset_policy() != 1 ||
                 a733_stage2_entry_state() != 1) finish(LOADED, headers[s].entry);
             enter(&headers[s]);
         }

@@ -11,6 +11,7 @@ add_executable(a733-stage2 EXCLUDE_FROM_ALL
   "${stage2_root}/boot/a733/cold-entry.S"
   "${stage2_root}/boot/a733/stage2/loader.c"
   "${stage2_root}/boot/a733/stage2/admission.c"
+  "${stage2_root}/platform/a733/remote_writers.c"
   "${stage2_root}/drivers/storage/sunxi_mmc.c"
   "${stage2_root}/drivers/storage/storage_digest.c"
   "${stage2_root}/runtime/memory.c")

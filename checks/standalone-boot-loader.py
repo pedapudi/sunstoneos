@@ -7,6 +7,9 @@ cold SD admission and card detection, SD core, SHA-256 and the ROM-return
 request. System registers, the counter, the SD controller and card, and the
 SMHC0 clock and PF bank registers that boot0 leaves are modeled.
 Card images come from tools/boot-slots.py.
+Remote and CPU/cache ownership are modeled as granted for card loading; reset policy
+is modeled as refused to stop before OS entry. The actual admission predicates
+and early ownership refusals are checked by remote-writers-model.py --stage2-build.
 """
 import argparse
 import contextlib
@@ -343,6 +346,10 @@ def main():
             entered.append(address)
             u.emu_stop()
 
+        def prerequisite(u, address, size, context):
+            u.reg_write(a64.UC_ARM64_REG_X0, context)
+            u.reg_write(a64.UC_ARM64_REG_PC, u.reg_read(a64.UC_ARM64_REG_LR))
+
         # With the MMU off every data access is Device memory, which faults
         # when unaligned; the emulator does not enforce that by itself.
         def aligned(u, access, address, size, value, context):
@@ -365,6 +372,9 @@ def main():
         for address in system:
             cpu.hook_add(UC_HOOK_CODE, instruction, begin=address, end=address)
         cpu.hook_add(UC_HOOK_CODE, stage2, begin=table['a733_stage2_main'], end=table['a733_stage2_main'])
+        for symbol, granted in (('a733_stage2_remote_writers_excluded', 1), ('a733_stage2_cpu_cache_owned', 1),
+                                ('a733_stage2_reset_policy', 0)):
+            cpu.hook_add(UC_HOOK_CODE, prerequisite, user_data=granted, begin=table[symbol], end=table[symbol])
         cpu.hook_add(UC_HOOK_CODE, loaded, begin=RAM, end=0x46ffffff)
         cpu.hook_add(UC_HOOK_MEM_WRITE, write)
         cpu.hook_add(UC_HOOK_MEM_READ, aligned)

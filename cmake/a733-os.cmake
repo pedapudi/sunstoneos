@@ -116,7 +116,11 @@ list(APPEND os_sources "${os_build}/application.c")
 if(SUNSTONE_A733_OS_RESIDENT)
   # The armed board boot reads the watchdog, redirect and FEL registers back
   # against the contract; the resident contract arms the first and zeroes the rest.
-  set(os_boot_base "${board_build}/boot.c")
+  # Card reset uses the normal ROM boot selection, without a diagnostic
+  # requirement to hold BOOT low. All contract/WDT readbacks remain intact.
+  apply_build_patch("${os_build}/boot-resident.c" "${board_build}/boot.c"
+    "${os_root}/apps/os/boot-resident.patch")
+  set(os_boot_base "${os_build}/boot-resident.c")
   set(os_contract_magic 0x415337334f524331ULL)
   set(os_result_magic 0x415337334f525231ULL)
 else()
@@ -131,6 +135,9 @@ set(os_added apps/os/admission.c apps/os/identity.c apps/os/irq.c apps/os/servic
   apps/os/thermal.c apps/os/watchdog.c platform/a733-smp-cached/irq_table.c drivers/thermal/a733_thermal.c
   drivers/thermal/a733_thermal_native.c drivers/gpu/gicv3_spi.c platform/a733/fault.S platform/a733/fault.c)
 set(os_patches "${os_root}/apps/os/boot.patch" "${os_root}/apps/os/application.patch")
+if(SUNSTONE_A733_OS_RESIDENT)
+  list(APPEND os_patches "${os_root}/apps/os/boot-resident.patch")
+endif()
 set(os_generated "${os_build}/boot.c" "${os_build}/application.c")
 if(SUNSTONE_A733_OS_RADIO)
   # The board's own radio composition serves workload 1; its owner and client

@@ -2,12 +2,16 @@
  * unit keeps each decision out of the loader's optimization, so the
  * instruction models can substitute modeled evidence at these calls. */
 #include "sunxi_smhc.h"
+#include "a733_cpu_entry.h"
+#include "a733_remote_writers.h"
 #include <stdint.h>
 
 int a733_stage2_card_admission(uint32_t module_hz);
 int a733_stage2_card_present(void);
 int a733_stage2_remote_writers_excluded(void);
-int a733_stage2_watchdog_recovery(void);
+uint32_t a733_stage2_remote_writers_mask(void);
+int a733_stage2_cpu_cache_owned(void);
+int a733_stage2_reset_policy(void);
 int a733_stage2_entry_state(void);
 
 /* Cold SD admission. boot0 has just read the monitor package through SDC0,
@@ -140,27 +144,60 @@ int a733_stage2_card_present(void)
     return retained() && !(rd(PF_DAT) & (UINT32_C(1) << 6));
 }
 
-/* Prerequisites for entering a verified image. The loader checks all of
- * them after loading and before the watchdog is armed or any launch
- * authority is built. Each one returns 1 only with its own evidence; none is
- * established, so entry is refused. */
-
-/* No stop or drain procedure exists for the E902 core or other DMA-capable
- * agents, and the boot0 staging area at 0x42e00000 has no owner
- * (docs/cold-entry.md). */
+/* Sample before the loader mutates SDC0 or copies any slot extent. The mask
+ * is diagnostic state, not a grant to restart or stop another agent. OR100
+ * remains unproven, and CE is admitted only with both resets asserted. */
+static uint32_t remote_mask;
+static int remote_sampled;
+static int remote_read(void *unused, uint64_t address, uint32_t *value)
+{
+    (void)unused;
+    if (!value || address > UINT32_MAX || (address & 3)) return 0;
+    *value = rd((uint32_t)address);
+    return 1;
+}
 int a733_stage2_remote_writers_excluded(void)
 {
-    return 0;
+    const struct a733_remote_writers_ops ops = {remote_read, 0};
+    remote_mask = a733_remote_writers_excluded(&ops);
+    remote_sampled = 1;
+    return remote_mask == 0;
 }
-/* A watchdog expiry after a cold boot has not been shown to restart the
- * board into this monitor with both cards preserved. */
-int a733_stage2_watchdog_recovery(void)
+uint32_t a733_stage2_remote_writers_mask(void)
 {
-    return 0;
+    return remote_sampled ? remote_mask : A733_REMOTE_WRITERS_ALL;
 }
-/* The CPU, GIC and timer state that boot0 leaves at EL3 has not been
- * compared with the reset state that FEL-launched images see. */
+/* The pinned boot0 monitor path cleans/invalidates the primary's CLIDR-visible
+ * caches and orders its uncached monitor-header stores before the AArch64 jump.
+ * It does not establish all secondary Arm cores OFF or complete shared/system
+ * cache coverage. Local SCTLR and non-Arm exclusion cannot supply either fact.
+ * Keep this separate from the remote mask and refuse before SD or slot writes. */
+int a733_stage2_cpu_cache_owned(void) { return 0; }
+/* The fixed resident contract selects ordinary card boot after system reset:
+ * no FEL flag or CPU redirect and no prior watchdog owner. The loader repeats
+ * these reads immediately before keyed arming. This admits a reset policy;
+ * it does not establish physical watchdog expiry or successful reboot. The
+ * BOOT input may select storage normally or FEL if the user holds it low. */
+int a733_stage2_reset_policy(void)
+{
+    return !(rd(0x02050014) & 1) && !(rd(0x02050010) & 0x100) &&
+        !rd(0x070501c0) && !rd(0x070501c4) && !rd(0x070501d4) && !rd(0x07090108);
+}
+/* Local entry conditions only. The cold entry already checked these before
+ * any memory write; check them again at the branch boundary. The OS supplies
+ * its own stack/vectors, disables timers and establishes its GIC state.
+ * CNTFRQ can be zero after boot0: loader deadlines use the fixed 24 MHz
+ * platform counter, checked for progress before SD access. OS entry writes
+ * CNTFRQ=24000000. None of this proves remote exclusion or cache publication. */
 int a733_stage2_entry_state(void)
 {
-    return 0;
+    uint64_t el, mpidr, midr, sctlr, daif, frequency;
+    __asm__ volatile("mrs %0, CurrentEL" : "=r"(el));
+    if (el != 12) return 0;
+    __asm__ volatile("mrs %0, mpidr_el1\n mrs %1, midr_el1\n mrs %2, sctlr_el3\n"
+                     "mrs %3, daif\n mrs %4, cntfrq_el0"
+                     : "=r"(mpidr), "=r"(midr), "=r"(sctlr), "=r"(daif), "=r"(frequency));
+    return !(mpidr & ~UINT64_C(0xc1000000)) && (midr & UINT64_C(0xff0ffff0)) == UINT64_C(0x410fd050) &&
+        !(sctlr & A733_ENTRY_SCTLR_REJECT) && (daif & 0x3c0) == 0x3c0 &&
+        (!frequency || frequency == 24000000);
 }

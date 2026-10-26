@@ -5,7 +5,7 @@ The linked AArch64 monitor runs as in checks/standalone-boot-loader.py: the
 actual boot0 header cleanup, cold-entry gate, stage-2 loader, cold SD
 admission against the modeled boot0 controller state, SD core and SHA-256,
 against a card image written by tools/boot-slots.py. The slot holds an image,
-the integrated OS session page and an asset. The three entry prerequisites
+the integrated OS session page and an asset. The four entry prerequisites
 are modeled as granted unless a case refuses one. WDT0, the ROM redirect and
 RTC FEL registers and CCU word 0x24 are modeled. The check confirms the
 watchdog arming sequence, the resident contract, the stamped session and the
@@ -47,10 +47,10 @@ CARD_SECTORS, RAM, RAM_END, SDC0, RVBAR = (loader.CARD_SECTORS, loader.RAM, load
 HZ = 24000000
 SESSION, CONTRACT, RESULT = 0x41f00000, 0x42004000, 0x42000000
 SESSION_BYTES, AUDIO_SESSION_BYTES = 808, 992
-PREREQUISITES = ('a733_stage2_remote_writers_excluded', 'a733_stage2_watchdog_recovery',
-                 'a733_stage2_entry_state')
+PREREQUISITES = ('a733_stage2_remote_writers_excluded', 'a733_stage2_reset_policy',
+                 'a733_stage2_entry_state', 'a733_stage2_cpu_cache_owned')
 CONTRACT_MAGIC, RESULT_MAGIC = 0x415337334f524331, 0x415337334f525231
-STATUS = {1: 'loaded', 6: 'entered', 7: 'entry-refused', 8: 'watchdog'}
+STATUS = {1: 'loaded', 6: 'entered', 7: 'entry-refused', 8: 'watchdog', 9: 'remote-writers', 10: 'cpu-cache'}
 ARM_WRITES = [(0x02050018, 0x16aa0002), (0x02050010, 0x16aa0001),
               (0x02050014, 0x16aa0041), (0x0205000c, 0x14af)]
 
@@ -85,6 +85,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--build', type=Path, required=True, help='CMake build directory with a733-stage2')
     parser.add_argument('--boot0', type=Path, required=True)
+    parser.add_argument('--policy-only', action='store_true', help='only changed normal-card reset and early refusal cases')
     parser.add_argument('--model', type=Path, required=True,
                         help='checks/os-image-model.c built for the resident lifetime')
     parser.add_argument('--output', type=Path, required=True)
@@ -92,11 +93,12 @@ def main():
     args.output.mkdir(parents=True, exist_ok=False)
     # The same model for the resident microphone build, whose session is 992 bytes.
     audio_model = args.output / 'os-image-model-resident-audio'
-    subprocess.run(['clang', '-std=c11', '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
-                    '-Iinclude', '-Iplatform/a733-smp-cached', '-Iapps/os', '-DSUNSTONE_BOARD_SUPERVISED=1',
-                    '-DSUNSTONE_BOARD_USB2_DUAL=1', '-DSUNSTONE_BOARD_RESIDENT=1', '-DSUNSTONE_A733_OS_AUDIO=1',
-                    '-DA733_SMP_CONTRACT_MAGIC=%#xULL' % CONTRACT_MAGIC, 'checks/os-image-model.c',
-                    'drivers/storage/storage_digest.c', '-o', str(audio_model)], cwd=ROOT, check=True)
+    if not args.policy_only:
+        subprocess.run(['clang', '-std=c11', '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
+                        '-Iinclude', '-Iplatform/a733-smp-cached', '-Iapps/os', '-DSUNSTONE_BOARD_SUPERVISED=1',
+                        '-DSUNSTONE_BOARD_USB2_DUAL=1', '-DSUNSTONE_BOARD_RESIDENT=1', '-DSUNSTONE_A733_OS_AUDIO=1',
+                        '-DA733_SMP_CONTRACT_MAGIC=%#xULL' % CONTRACT_MAGIC, 'checks/os-image-model.c',
+                        'drivers/storage/storage_digest.c', '-o', str(audio_model)], cwd=ROOT, check=True)
     raw = (args.build / 'a733-stage2.bin').read_bytes()
     table = loader.symbols(args.build / 'a733-stage2.elf')
     inherited, _ = cold.inherited_payload(args.boot0.read_bytes(), raw, args.output)
@@ -191,7 +193,7 @@ def main():
             u.reg_write(a64.UC_ARM64_REG_PC, address + 4)
 
         def grant(u, address, size, context):
-            u.reg_write(a64.UC_ARM64_REG_X0, 1)
+            u.reg_write(a64.UC_ARM64_REG_X0, int(context in granted))
             u.reg_write(a64.UC_ARM64_REG_PC, u.reg_read(a64.UC_ARM64_REG_LR))
 
         def image_entry(u, address, size, context):
@@ -217,8 +219,8 @@ def main():
 
         for address in system:
             cpu.hook_add(UC_HOOK_CODE, instruction, begin=address, end=address)
-        for symbol in granted:
-            cpu.hook_add(UC_HOOK_CODE, grant, begin=table[symbol], end=table[symbol])
+        for symbol in PREREQUISITES:
+            cpu.hook_add(UC_HOOK_CODE, grant, user_data=symbol, begin=table[symbol], end=table[symbol])
         cpu.hook_add(UC_HOOK_CODE, image_entry, begin=RAM, end=0x46ffffff)
         cpu.hook_add(UC_HOOK_MEM_WRITE, write)
         cpu.emu_start(0x47000000, 0, count=60000000)
@@ -231,7 +233,10 @@ def main():
                   'granted': list(granted), 'session_bytes': session_bytes,
                   'watchdog_writes': [[hex(a), hex(v)] for a, v in registers.writes]}
         assert fields[0] == loader.REPORT_MAGIC and STATUS.get(status) == expected, (name, result)
-        assert [w[:2] for w in board.writes] == loader.SELECTED and board.detect_reads, name
+        if expected in ('remote-writers', 'cpu-cache'):
+            assert not board.writes and not board.detect_reads, name
+        else:
+            assert [w[:2] for w in board.writes] == loader.SELECTED and board.detect_reads, name
         contract = bytes(cpu.mem_read(CONTRACT, 224))
         if expected == 'entered':
             assert entered == [0x41000000] and not stops and controls[-1] == ['daifset', '#0xf']
@@ -281,13 +286,29 @@ def main():
         return result
 
     nominal, _ = card('nominal')
+    if args.policy_only:
+        run('card-reset-high-boot-input', nominal, 'entered', preset={0x03000024: 0x100})
+        run('card-reset-low-boot-input', nominal, 'entered')
+        run('remote-refused-before-card', nominal, 'remote-writers', granted=PREREQUISITES[1:])
+        run('reset-policy-refused', nominal, 'loaded', granted=tuple(p for p in PREREQUISITES if p != 'a733_stage2_reset_policy'))
+        run('entry-state-refused', nominal, 'loaded', granted=tuple(p for p in PREREQUISITES if p != 'a733_stage2_entry_state'))
+        run('cpu-cache-refused-before-card', nominal, 'cpu-cache', granted=PREREQUISITES[:3])
+        run('watchdog-already-enabled', nominal, 'watchdog', preset={0x02050014: 1})
+        run('rom-redirect-present', nominal, 'watchdog', preset={0x070501c0: 0xfa50392f})
+        run('mode-not-read-back', nominal, 'watchdog', stuck=(0x02050014,))
+        (args.output / 'result.json').write_text(json.dumps({'passed': True, 'physical_access': False,
+            'physical_boot_qualified': False, 'monitor_sha256': hashlib.sha256(raw).hexdigest(), 'cases': cases,
+            'limitations': ['Prerequisites and hardware effects are modeled; actual arming and contract code execute.']}, indent=2) + '\n')
+        print('PASS selected stage-2 normal-card reset policy:', len(cases), 'instruction-model cases')
+        return
     previous = struct.pack('<16Q', RESULT_MAGIC, 77, 1, 5, 3, 0x30a, 1000, 0, 2000, *([0] * 7))
     run('entered', nominal, 'entered')
     run('entered-after-retained-result', nominal, 'entered', retained=previous)
     # Entry needs every prerequisite; each one alone refuses it.
-    run('prerequisites-refused', nominal, 'loaded', granted=())
+    run('prerequisites-refused', nominal, 'remote-writers', granted=())
     for refused in PREREQUISITES:
-        run(refused[len('a733_stage2_'):].replace('_', '-') + '-refused', nominal, 'loaded',
+        run(refused[len('a733_stage2_'):].replace('_', '-') + '-refused', nominal,
+            'remote-writers' if refused == PREREQUISITES[0] else 'cpu-cache' if refused == PREREQUISITES[3] else 'loaded',
             granted=tuple(p for p in PREREQUISITES if p != refused))
     audio, _ = card('audio', model=audio_model)
     run('entered-audio-session', audio, 'entered', model=audio_model, session_bytes=AUDIO_SESSION_BYTES)
@@ -308,7 +329,7 @@ def main():
     result = {'passed': True, 'physical_access': False, 'physical_boot_qualified': False,
               'monitor_sha256': hashlib.sha256(raw).hexdigest(), 'cases': cases,
               'limitations': [
-                  'The entry prerequisites are modeled as granted unless a case refuses one; the native functions refuse. Card admission runs against the modeled boot0 controller state.',
+                  'The entry prerequisites are modeled as granted unless a case refuses one. Native remote exclusion remains unproven. Card admission runs against the modeled boot0 controller state.',
                   'Watchdog, redirect, RTC and CCU registers are modeled; no reset, expiry or ROM behavior is exercised.',
                   'The branch target is observed; the image itself is not executed here.']}
     (args.output / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
