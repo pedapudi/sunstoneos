@@ -33,6 +33,8 @@ def main():
     parser.add_argument("--build", type=Path, required=True)
     parser.add_argument("--ddr-evidence", type=Path, required=True,
                         help="the run-ddr.py evidence directory of this FEL lifetime")
+    parser.add_argument("--stages", type=int, default=0,
+                        help="run only the first N stages, for a board whose last stage stopped the bus")
     parser.add_argument("--temperature-note", default="",
                         help="the coordinator's temperature observation, recorded unchanged")
     parser.add_argument("--evidence", type=Path,
@@ -45,6 +47,10 @@ def main():
         content = (args.build / name).read_bytes()
         if len(content) != expected["size"] or hashlib.sha256(content).hexdigest() != expected["sha256"]:
             sys.exit(f"Payload mismatch: {name}")
+    if args.stages:
+        if not 1 <= args.stages <= len(manifest["stages"]):
+            sys.exit("--stages is out of range.")
+        manifest["stages"] = manifest["stages"][:args.stages]
     ddr = json.loads((args.ddr_evidence / "session.json").read_text())
     result = ddr.get("result", {})
     if not (ddr.get("complete") and result.get("magic") == 0x53524444 and result.get("stage") == 5

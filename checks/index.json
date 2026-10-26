@@ -9761,6 +9761,20 @@
   "summary": "",
   "usb": false
  },
+ "training-record.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/dram-training-restore.md",
+   "docs/storage-update.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Check the DRAM training record format and its card update plans on an image file.",
+  "usb": false
+ },
  "uart-dma-native.py": {
   "cache_areas": [],
   "docs": [],

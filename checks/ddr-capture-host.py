@@ -43,7 +43,7 @@ class Loader(importlib.abc.Loader):
         self.fill(module)
 
 
-def run_case(case, build, out):
+def run_case(case, build, out, extra=()):
     out.mkdir()
     ddr = out / "ddr"
     ddr.mkdir()
@@ -144,7 +144,7 @@ def run_case(case, build, out):
     guard.check_health = lambda: None
     evidence = out / "capture"
     argv = [str(RUNNER), "--fel", str(build / "manifest.json"), "--build", str(build),
-            "--ddr-evidence", str(ddr), "--evidence", str(evidence), "--temperature-note", "fixture"]
+            "--ddr-evidence", str(ddr), "--evidence", str(evidence), "--temperature-note", "fixture", *extra]
     outcome = "returned"
     with patch.object(sys, "argv", argv), patch.dict(sys.modules, {"usb_guard": guard}), \
             patch.dict("os.environ", {"SUNSTONE_USB_PORT": "3-3"}), \
@@ -179,6 +179,11 @@ def main():
     assert record["parameter_block"][:2] == ["0x00001000", "0x00001001"]
     assert record["port"] == "3-3" and record["temperature_note"] == "fixture"
 
+    outcome, record, log, events = run_case("nominal", args.build, args.evidence / "first-stages", ["--stages", "2"])
+    assert outcome == "returned" and record["complete"]
+    assert [s["name"] for s in record["stages"]] == [s["name"] for s in stages[:2]]
+    assert [entry for entry in log if entry[0] == "exe"] == [("exe", 0x71000)] + [("exe", 0x85000)] * 2
+
     outcome, record, log, events = run_case("ddr-incomplete", args.build, args.evidence / "ddr-incomplete")
     assert outcome == "exit" and record is None and not log
 
@@ -191,7 +196,7 @@ def main():
     refused = [s["name"] for s in stages].index("phy-blocks") + 1
     assert [s["name"] for s in record["stages"]] == [s["name"] for s in stages[:refused]]
     assert not record["stages"][-1]["done"]
-    print("PASS: nominal capture order; incomplete DDR evidence, another lifetime's mailbox "
+    print("PASS: nominal capture order; a stage limit; incomplete DDR evidence, another lifetime's mailbox "
           "and an incomplete stage stop as required")
 
 

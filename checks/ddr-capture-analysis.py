@@ -39,18 +39,19 @@ def value(kind, board, lifetime, capture):
             "status": 0x40 + 4 * board + 2 * lifetime + capture}[kind]
 
 
-def make(root, board, lifetime, capture, complete=True, extra=False):
+def make(root, board, lifetime, capture, complete=True, extra=False, truncated=False):
     ddr = root / f"b{board}-l{lifetime}-ddr"
     ddr.mkdir(exist_ok=True)
     (ddr / "firmware.log").write_text(LOG)
     out = root / f"b{board}-l{lifetime}-c{capture}"
     out.mkdir()
-    layout = stages(extra)
+    layout = stages(extra)[:2] if truncated else stages(extra)
     (out / "stage1-identity.bin").write_bytes(struct.pack("<4I", 0xabc0 + board, 1, 2, 3))
     kinds = ("constant", "board", "lifetime", "status")
     phy = [value(k, board, lifetime, capture) for k in kinds] + [0] * extra
     (out / "stage2-phy.bin").write_bytes(struct.pack("<%dH" % len(phy), *phy).ljust(layout[1]["output_bytes"], b"\0"))
-    (out / "stage3-controller.bin").write_bytes(struct.pack("<4I", *(value(k, board, lifetime, capture) for k in kinds)))
+    if not truncated:
+        (out / "stage3-controller.bin").write_bytes(struct.pack("<4I", *(value(k, board, lifetime, capture) for k in kinds)))
     words = ["0x%08x" % w for w in [0x7f8, 9] + [0] * 126]
     words[7] = "0x%08x" % (0x30001001 if lifetime or board else 0x1001)
     session = {"complete": complete, "port": f"3-{1 + 2 * board}", "temperature_note": "fixture",
@@ -105,7 +106,13 @@ def main():
     other = make(data, 3, 0, 0, extra=True)
     completed, _ = analyse(full + [other], args.output / "other-tables.json")
     assert completed.returncode != 0 and "different stage tables" in completed.stderr
-    print("PASS: constant, board, lifetime and status registers classified; reduced sets merge "
+    short = make(data, 4, 0, 0, truncated=True)
+    completed, report = analyse(full + [short], args.output / "prefix.json")
+    assert completed.returncode == 0, completed.stderr
+    assert report["stages_compared"] == ["identity", "phy"]
+    assert not any(key.startswith("0x0a11") for key in report["varying"])
+    print("PASS: constant, board, lifetime and status registers classified; a stage-limited capture is "
+          "compared over the shared stages; reduced sets merge "
           "classes as stated; incomplete captures and different tables refused")
 
 

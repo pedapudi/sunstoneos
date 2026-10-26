@@ -1,11 +1,13 @@
 # Design: restoring DRAM training from a record on the microSD card
 
-Status: **design, reviewed once; not implemented.** The independent review
-of 2026-10-25 found two blocking and six major issues, and this text
+Status: **design, reviewed once; restore not implemented.** The independent
+review of 2026-10-25 found two blocking and six major issues, and this text
 includes the changes it proposed; it needs a second review before any board
-run beyond the read-only captures. The capture tooling, its classifier and
-their checks exist. The restore hook, the record writer and the storage
-change follow that review and the first capture analysis.
+run beyond the read-only captures. Implemented and host-checked: the capture
+tooling and its classifier, the record format (`tools/training-record.py`)
+and the card region in the boot-slot allocation and `tools/storage-update.py`
+(`checks/training-record.py`). The restore hook follows that review and the
+first capture analysis.
 
 The user approved replacing boot0's 5.1 s DRAM training with a restore of
 saved training results kept on the microSD card. The
@@ -133,14 +135,16 @@ Little-endian, in one contiguous card extent.
 | 52, 56 | Selected parameter-set index; CRC-32 of parameter words 0–31 |
 | 60, 64 | Capture temperature in m°C; allowed difference in m°C |
 | 68, 72 | Training-step value of the reference training; DRAM size in MiB |
-| 76..119 | Section offsets and counts: register runs, masks, mode-register writes |
+| 76..99 | Section offsets and counts: register runs, masks, mode-register writes |
+| 100..123 | Reserved, zero |
 | 124 | Header CRC-32 over bytes 0–123 |
 
 Registers are stored as runs: base address, count, then 16-bit values,
-with a separate list of `(address, mask)` for registers restored under a
-mask. Mode-register writes are `(channel, rank, register, value)` in write
-order, including MR16. At about 2 bytes per register, 64 KiB holds over
-30,000 registers.
+padded to 4 bytes, with a separate list of `(address, u16 mask, u16 zero)`
+for registers restored under a mask. Mode-register writes are `(channel,
+rank, register, value)` in write order, including MR16. At about 2 bytes per
+register, 64 KiB holds over 30,000 registers. On the card the header fills
+the unit's first sector and the payload starts at the second.
 
 ## The record has its own 4 MiB unit on the card
 
@@ -150,9 +154,10 @@ beside it. That unit, 16,384–24,575, holds the slot B header, which
 from other writes, and the vendor's SD parameter sector 24,504 and tuning
 pattern 24,512–24,571. The record therefore gets one 4 MiB unit at or
 beyond sector 40,960, assigned by the boot-slot allocation record like the
-slot regions. `tools/storage-update.py` gains a `training-record` owned
-region taken from that allocation. Its plan input is a training-record plan
-from a new host tool, every write lies inside the region, a host backup of
+slot regions (`boot-slots.py allocate --training-record`).
+`tools/storage-update.py` takes the `training-record` owned region from that
+allocation. Its plan input is a plan from `tools/training-record.py plan` or
+`invalidate`, every write lies inside the region, a host backup of
 the region precedes the write session under [docs/goal.md](../goal.md)
 section 4, and the payload is written before the header, so an interrupted
 write leaves a header whose CRC fails and boot0 trains fully. Slot fallback

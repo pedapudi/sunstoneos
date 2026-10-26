@@ -46,7 +46,9 @@ described with the [install procedure](#install-update-and-rollback), assigns
 each region explicitly. The tool refuses regions that overlap the boot area,
 each other or any primary MBR partition, and regions that are not whole 4 MiB
 units. Cards with a GPT are refused, because boot0 at sector 16 overlaps the
-GPT entry array.
+GPT entry array. `allocate --training-record FIRST:BLOCKS` also assigns one
+4 MiB unit to the DRAM training record
+([restore design](designs/dram-training-restore.md)), under the same rules.
 
 ## Slot header
 

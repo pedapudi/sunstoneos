@@ -13,6 +13,7 @@ Every register, and every word of the parameter block, gets one class:
 - board: stable on each board, different between boards;
 - constant: equal in every capture.
 
+Captures run with a stage limit are compared over the stages they share.
 A class needs the data to separate it: with one capture per lifetime no
 register can be called status, and with one lifetime per board the lifetime
 and board classes merge. The summary records both counts. PHY registers of
@@ -124,8 +125,15 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     captures = [load(path) for path in args.captures]
-    if len({json.dumps(c["layout"]) for c in captures}) != 1:
+    # Captures limited with --stages share a prefix of the stage tables;
+    # only those stages are compared.
+    common = min(len(c["layout"]) for c in captures)
+    if len({json.dumps(c["layout"][:common]) for c in captures}) != 1:
         fail("the captures use different stage tables")
+    keep = {address + width * n for _, entries in captures[0]["layout"][:common]
+            for address, count, width in entries for n in range(count)}
+    for c in captures:
+        c["values"] = {k: v for k, v in c["values"].items() if k < 0 or k in keep}
     classes, lifetimes, boards = classify(captures)
     counts = Counter(classes.values())
     by_block = defaultdict(Counter)
@@ -143,6 +151,7 @@ def main():
         "kind": "a733-ddr-capture-analysis",
         "captures": [{key: c[key] for key in ("path", "port", "board", "lifetime", "temperature_note", "training")}
                      for c in captures],
+        "stages_compared": [name for name, _ in captures[0]["layout"][:common]],
         "boards": len(boards), "lifetimes": len(lifetimes),
         "resolution": {
             "status_separable": min(per_lifetime_captures) >= 2,

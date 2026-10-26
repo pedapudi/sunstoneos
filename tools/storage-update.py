@@ -33,6 +33,10 @@ BOOT0_REGION = (16, 480)
 PACKAGE_REGION = (32800, 8160)
 STOCK_BACKUP_UNIT = (24576, 8192)
 PLAN_KIND = 'a733-storage-update-plan'
+# A tools/training-record.py plan writes only inside the allocation's
+# training-record unit: the payload first, then the header sector.
+RECORD_PLAN_KIND = 'a733-training-record-plan'
+RECORD_WRITES = ('record-payload', 'record-header', 'record-invalidate')
 ALLOCATION_KIND = 'a733-storage-update-allocation'
 
 
@@ -492,7 +496,8 @@ def plan(slot_plan_path, allocation_path, card_image, card, output):
     slot_plan = json.loads(plan_raw)
     allocation_raw = Path(allocation_path).read_bytes()
     slot_allocation = json.loads(allocation_raw)
-    require(slot_plan.get('kind') == slots.PLAN_KIND, 'Not a boot-slot plan.')
+    kind = slot_plan.get('kind')
+    require(kind in (slots.PLAN_KIND, RECORD_PLAN_KIND), 'Not a boot-slot or training-record plan.')
     require(slot_plan.get('allocation_sha256', slots.sha(allocation_raw)) == slots.sha(allocation_raw),
             'Boot-slot plan was made with another allocation.')
     fd, sectors = slots.open_image(card_image)
@@ -504,6 +509,9 @@ def plan(slot_plan_path, allocation_path, card_image, card, output):
         for s in 'AB':
             owned['header-' + s] = (slots.HEADER_SECTORS[s], 1)
             owned['slot-' + s] = (regions[s]['first'], regions[s]['blocks'])
+        if 'training_record' in slot_allocation:
+            record_unit = slot_allocation['training_record']
+            owned['training-record'] = (record_unit['first'], record_unit['blocks'])
         stock = slots.read_at(fd, *STOCK_BACKUP_UNIT)
         sessions, skipped = [], []
         for record in slot_plan['writes']:
@@ -511,7 +519,12 @@ def plan(slot_plan_path, allocation_path, card_image, card, output):
             first, blocks, name = record['first_sector'], record['sectors'], record['name']
             require(len(data) == blocks * 512 and slots.sha(data) == record['sha256'],
                     'Boot-slot plan file identity mismatch: ' + name)
-            region = plan_region(name, slot_plan['slot'])
+            if kind == RECORD_PLAN_KIND:
+                require(name in RECORD_WRITES and 'training-record' in owned,
+                        'Training-record write without a training-record allocation: ' + name)
+                region = 'training-record'
+            else:
+                region = plan_region(name, slot_plan['slot'])
             low, count = owned[region]
             require(low <= first and first + blocks <= low + count and
                     not slots.overlaps(first, blocks, *STOCK_BACKUP_UNIT),

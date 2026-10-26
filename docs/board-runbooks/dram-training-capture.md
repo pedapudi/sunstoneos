@@ -6,30 +6,33 @@ Each lifetime trains DRAM with the unchanged FEL DDR step and then captures
 twice: the parameter block that boot0 leaves in SRAM, the SID chip ID and
 thermal calibration, and the DRAM controller and PHY registers.
 `tools/analyse-ddr-captures.py` then classifies every register as constant,
-board, lifetime or status. The earlier single-board set
-`~/.cache/sunstoneos/evidence/dram-fast-boot-20261025` is superseded and is
-not used.
+board, lifetime or status. These are the four-P-state captures, the first
+of the three capture kinds in the restore design; the P-state-0-only and
+device-initialization-only kinds need wrapper variants that follow the
+design's second review. The earlier sets
+`~/.cache/sunstoneos/evidence/dram-fast-boot-20261025` and
+`dram-training-capture-20261025` are superseded and are not used.
 
 The run writes no storage and changes no training input. After training,
 each capture writes SRAM at `0x71000` (the cache-off helper) and `0x85000`
-(the reader), DRAM at `0x43000000`–`0x43201000` (tables and results), and
-two PHY registers: `MicroContMuxSel` (`0x0aaa0000`) and, in stages 4 and 5,
-`UcclkHclkEnables` (`0x0aa80100`). The reader restores both to the values
-it read. boot0 makes the first write on every boot, when it reads two PHY
+(the reader), DRAM at `0x43000000`–`0x43258000` (tables and results), and
+two PHY registers: `MicroContMuxSel` (`0x0aaa0000`) and, in stages 4 to 6,
+`UcclkHclkEnables` (`0x0aa80100`), which the reader reads only after
+clearing `MicroContMuxSel`. It restores both to the values it read. boot0 makes the first write on every boot, when it reads two PHY
 registers after training (`0x5767a`–`0x5768a`), and in its training-save
 routine (`0x576e4`); NXP's published driver for this PHY makes both.
 
 ## Frozen inputs
 
-`F=~/.cache/sunstoneos/evidence/dram-training-capture-20261025`
+`F=~/.cache/sunstoneos/evidence/dram-training-capture-v2-20261025`
 
 | Input | Port 3-1 | Port 3-3 |
 | --- | --- | --- |
 | Capture set | `$F/port-3-1` | `$F/port-3-3` |
-| Build manifest `capture-build/manifest.json` | `975b6653…` | `975b6653…` |
-| Reader `ddr-capture.bin`, 388 bytes at `0x85000` | `b8513eff…` | `b8513eff…` |
+| Build manifest `capture-build/manifest.json` | `5ec01fd9…` | `5ec01fd9…` |
+| Reader `ddr-capture.bin`, 388 bytes at `0x85000` | `0da3194f…` | `0da3194f…` |
 
-Both sets come from `work/dram-fast-boot-1025` at `89e6c948`, whose tree is
+Both sets come from `work/dram-fast-boot-1025` at `1082199b`, whose tree is
 `$F/source`, and hold byte-identical builds. They share these inputs:
 
 | Input | Identity |
@@ -55,6 +58,7 @@ synthetic captures (`$F/check-ddr-capture-analysis.txt`).
 | 3 | Controller words at `0x0a020000`, `0x0a021800`, `0x0a021d00`, `0x0a030000`, `0x0a110000` and `0x0a510000` | 1,842 | 7,368 |
 | 4 | PHY blocks over boot0's extents: APB-only, DRTUB, master, two `0x30000` blocks, four byte lanes, ACSM, initialization engine, four P-state copies of `0xa0000` | 32,007 | 64,040 |
 | 5 | Training firmware message block at `0x0a9b0000` | 1,233 | 2,468 |
+| 6 | PHY registers `0x0000`–`0xbfff` (`0x0a900000`–`0x0a917fff`), where the published PHY keeps address/command delays; boot0 never accesses them, so the stage runs last | 49,152 | 98,304 |
 
 ## Commands for one lifetime
 
@@ -86,7 +90,7 @@ T="<temperature note: room temperature, minutes since power-on, any load or heat
    ```sh
    $PY -B $V/common/bundle-run.py $PORT $S/dc-capture-1 300 \
      "Board $PORT: DRAM parameter block, chip ID and controller and PHY register capture" \
-     "The mailbox equals dc-ddr's; stages 1 to 5 complete with MicroContMuxSel read as 1." \
+     "The mailbox equals dc-ddr's; stages 1 to 6 complete with MicroContMuxSel read as 1." \
      --artifact $C/freeze.json --artifact $C/capture-build/manifest.json \
      -- $PY -B $F/source/tools/run-ddr-capture.py --fel $FEL --build $C/capture-build \
         --ddr-evidence $S/dc-ddr --evidence $S/dc-capture-1 --temperature-note "$T"
@@ -99,7 +103,9 @@ Each command runs once. A nonzero exit stops that board's session: the
 runner keeps the port lock, quarantines the instance and waits for the
 coordinator. A stage that stops the bus leaves the ROM unable to answer,
 and the board then needs a power removal; earlier stages are already on the
-host. The other board continues independently.
+host. Stage 6 carries that risk most, because boot0 never reads its range;
+if it stops a board, later captures of that board add `--stages 5` to the
+runner and the analysis uses stages 1 to 5. The other board continues independently.
 
 ## Schedule
 
@@ -121,7 +127,7 @@ $PY -B $F/source/tools/analyse-ddr-captures.py <every dc-capture-N directory> \
 | Item | Prediction | Source |
 | --- | --- | --- |
 | `dc-ddr/firmware.log` | Results 7 for P-states 1, 2, 3 and 0; 12,288 MiB; `DRAM BOOT DRIVE INFO` to `Actual DRAM SIZE` 5,083–5,103 ms; `select dram para5` | 58 earlier logs |
-| Each capture's `session.json` | `complete` true; five stages with `done` true and `progress` equal to the last entry; `port` equal to `PORT` | Reader and runner checks |
+| Each capture's `session.json` | `complete` true; six stages with `done` true and `progress` equal to the last entry; `port` equal to `PORT` | Reader and runner checks |
 | `muxsel` in every PHY stage | 1 | boot0's last PHY read after training sets it to 1 (`0x5768a`) |
 | `ucclk` | Recorded; no prediction | Not written by boot0 after training |
 | Stage 1 chip ID | Equal in every capture of a board, different between the boards | SID |
