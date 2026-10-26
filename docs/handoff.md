@@ -114,6 +114,23 @@ be pruned.
   `~/.cache/sunstoneos/build/gate-resume-npu-lifecycle-1025/`.
   Physical faults, thermal response, in-place restart and domain OFF remain
   unqualified.
+- **microSD follow-ups.** The CMD11 fix is merged and passes emulation, but
+  has not run on a board. Before rerunning SDR104 lifetime B, which needs a
+  power removal:
+  - Make `sd_signal` wait for the clock-restart update and clear its flags in
+    one step, as the vendor does (`sunxi-mmc-v5p3x.c:378-388`). Today steps 3
+    and 4 (`sunxi_mmc.c:651-658`) can be a scheduler tick apart and lose the
+    switch-done bits.
+  - Add model cases for that gap and for a switch that ends on bit 10 alone.
+    Both mutants survive today.
+  - Start the end-of-switch 10 ms timeout after the 1 ms delay.
+
+  The review's scratch work is in
+  `~/.cache/sunstoneos/evidence/sd-cmd11-review-20261025/`.
+  - SD DMA: its design is accepted, and a first pass of the code is on
+    `work/sd-dma-1025`. The code is unbuilt and unreviewed.
+  - The host-check command in `apps/storage-read-returning/README.md` is
+    missing `--read-record`.
 - **Do not run GPU set `board-bundles-20261025-31`.** It repeats the qualified
   eight-job session with the older image, which lacks the shutdown on every
   failure path.
