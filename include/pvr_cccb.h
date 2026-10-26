@@ -87,7 +87,9 @@ int pvr_cccb_begin(struct pvr_cccb *, const struct pvr_cccb_command *, unsigned 
 /* One bounded step: format 32 bytes, sample ring space, write at most 256 bytes,
  * publish, submit one KICK, or collect its return. The owner must separately
  * service firmware control/events and pvr_ccb_poll while this operation waits.
- * Returning OK after a sequence means firmware accepted the KICK (status 1).
+ * Returning OK after a sequence means firmware accepted the KICK: it consumed
+ * the command (status 0, no return word, as the open firmware leaves it) or
+ * wrote a return word of 1. The owner's pvr_ccb_poll samples the read offset.
  * It does not establish GPU completion, data visibility or safe resource reuse.
  * IDLE and FAILED polls do not call callbacks. No allocation, reset or retry.
  */

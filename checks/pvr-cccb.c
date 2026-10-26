@@ -133,9 +133,14 @@ static void pressure_cases(void)
     for(unsigned i=0;i<127;++i) {uint32_t v;assert(pvr_ccb_collect(&queue,tokens[i],&v)==PVR_CCB_OK && v==1);}
     finish();assert(kicks==1 && writes==before);
     setup();hold_return=1;begin(24);until(PVR_CCCB_WAIT);
-    put(qmem[0]+128,get(qmem[0])); /* Read progress alone is not a return. */
     assert(tick()==PVR_CCCB_AGAIN && client.phase==PVR_CCCB_WAIT && kicks==1);
-    put(qmem[2],1);finish();assert(kicks==1);
+    put(qmem[2],1);finish();assert(kicks==1 && client.status==1);
+    /* The open firmware consumes a KICK without writing its return word
+     * (board-session-20261025-18): accepted with status 0 once the queue's
+     * poll, which each tick makes first, has sampled the read offset past it. */
+    setup();hold_return=1;begin(24);until(PVR_CCCB_WAIT);
+    put(qmem[0]+128,get(qmem[0]));
+    assert(tick()==PVR_CCCB_OK && kicks==1 && client.status==0 && client.phase==PVR_CCCB_IDLE);
 }
 static void failure_cases(void)
 {
@@ -183,5 +188,5 @@ static void refusal_cases(void)
 int main(void)
 {
     reference_cases();pressure_cases();failure_cases();refusal_cases();
-    puts("PASS GPU client commands: reference ring/KICK bytes, wrap, pressure, delayed return, retained faults and atomic refusals");
+    puts("PASS GPU client commands: reference ring/KICK bytes, wrap, pressure, delayed return, KICK consumed without a return word, retained faults and atomic refusals");
 }

@@ -188,9 +188,13 @@ enum pvr_cccb_result pvr_cccb_poll(struct pvr_cccb *s)
         break;
     }
     case PVR_CCCB_WAIT: {
-        enum pvr_ccb_result r=pvr_ccb_collect(s->queue,s->token,&s->status);
+        /* Upstream sends the KICK without a return slot
+         * (pvr_cccb_send_kccb_kick) and the open firmware writes no return
+         * word for it: the KICK is accepted once the firmware has consumed it
+         * (status 0), or with a return word of 1. */
+        enum pvr_ccb_result r=pvr_ccb_settle(s->queue,s->token,&s->status);
         if (r==PVR_CCB_OK) {
-            if (s->status!=1) return fail(s,PVR_CCCB_COMMAND);
+            if (s->status>1) return fail(s,PVR_CCCB_COMMAND);
             s->phase=PVR_CCCB_IDLE;
         } else if (r!=PVR_CCB_AGAIN) return fail(s,PVR_CCCB_QUEUE);
         break;
@@ -215,10 +219,10 @@ static int pair_fault(struct pvr_cccb_pair *p)
 }
 int pvr_cccb_pair_reusable(const struct pvr_cccb_pair *p)
 {
-    if(!a733_span_excl_nonempty(p,sizeof(*p)) || p->phase!=3 || p->status!=1 || !p->geometry || !p->fragment)return 0;
+    if(!a733_span_excl_nonempty(p,sizeof(*p)) || p->phase!=3 || p->status>1 || !p->geometry || !p->fragment)return 0;
     const struct pvr_cccb *g=p->geometry,*f=p->fragment;
     return a733_span_excl_nonempty(g,sizeof(*g)) && a733_span_excl_nonempty(f,sizeof(*f)) && g!=f &&
-        g->phase==PVR_CCCB_IDLE && f->phase==PVR_CCCB_IDLE && g->status==1 && f->status==1 &&
+        g->phase==PVR_CCCB_IDLE && f->phase==PVR_CCCB_IDLE && g->status==p->status && f->status==p->status &&
         g->paired==1 && f->paired==1 && g->serial &&
         g->serial==p->geometry_serial && f->serial==p->fragment_serial &&
         g->serial<UINT64_MAX && f->serial<UINT64_MAX &&
@@ -319,9 +323,10 @@ int pvr_cccb_pair_poll(struct pvr_cccb_pair *p)
             } else if (r != PVR_CCB_AGAIN) return pair_fault(p);
         }
     } else {
-        enum pvr_ccb_result r = pvr_ccb_collect(q, p->token, &p->status);
+        /* The combined KICK is accepted as the single one is (status 0 or 1). */
+        enum pvr_ccb_result r = pvr_ccb_settle(q, p->token, &p->status);
         if (r == PVR_CCB_OK) {
-            if (p->status != 1) return pair_fault(p);
+            if (p->status > 1) return pair_fault(p);
             g->status = f->status = p->status;
             g->phase = f->phase = PVR_CCCB_IDLE; p->phase = 3;
         } else if (r != PVR_CCB_AGAIN) return pair_fault(p);
