@@ -2,6 +2,7 @@
 """Prepare an unqualified microSD monitor container using the pinned host packer."""
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -190,6 +191,11 @@ def publish(output, files):
 def prepare(args):
     monitor, identity = load_monitor(args.input)
     boot0 = pinned(args.boot0, BOOT0_BYTES, BOOT0_HASH)
+    variant = None
+    if getattr(args, 'restore_variant', None):
+        spec = importlib.util.spec_from_file_location('card_ddr', Path(__file__).with_name('prepare-card-ddr.py'))
+        tool = importlib.util.module_from_spec(spec); spec.loader.exec_module(tool)
+        boot0, variant = tool.validate_variant(args.restore_variant, boot0)
     packer = pinned(args.packer, PACKER_BYTES, PACKER_HASH)
     # Execute a verified private copy, never a path that can change after hashing.
     with tempfile.TemporaryDirectory(prefix='sunstone-monitor-package-') as temporary:
@@ -237,6 +243,8 @@ def prepare(args):
                 'command': ['dragonsecboot', '-pack', 'boot_package.cfg'],
                 'files': {name: {'bytes': len(data), 'sha256': digest(data)}
                           for name, data in files.items()}}
+    if variant:
+        manifest['restore_variant'] = variant
     files['manifest.json'] = (json.dumps(manifest, indent=2) + '\n').encode()
     publish(args.output, files)
     return manifest
@@ -246,6 +254,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--input', type=Path, required=True, help='Typed JSON monitor contract')
     parser.add_argument('--boot0', type=Path, required=True, help='Exact pinned unmodified board boot0')
+    parser.add_argument('--restore-variant', type=Path, help='Explicit unqualified card restore manifest')
     parser.add_argument('--packer', type=Path, required=True, help='Exact pinned dragonsecboot executable')
     parser.add_argument('--output', type=Path, required=True, help='New filename prefix under an existing ordinary parent')
     args = parser.parse_args()

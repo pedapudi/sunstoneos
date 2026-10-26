@@ -381,6 +381,26 @@ def validate_standby_plan(slots, plan, units, fd, directory):
         raise ValueError('Paired record generation differs from its plan')
 
 
+def validate_helper_plan(slots, plan, units, directory):
+    """Admit only identical helper copies in the reserved subextents."""
+    size = plan.get('helper_bytes')
+    if set(units) != {'A', 'B'} or type(size) is not int or not 0 < size <= 32768:
+        raise ValueError('Helper plan requires paired units and a bounded image')
+    writes = plan['writes']
+    if [w['name'] for w in writes] != ['helper-A', 'helper-B']:
+        raise ValueError('Helper plan must contain exactly copies A and B')
+    copies = []
+    for name, write in zip('AB', writes):
+        data = Path(directory, write['file']).read_bytes()
+        if (write['first_sector'] != units[name]['first']+64
+                or write['sectors'] != (size+511)//512 or len(data) != write['sectors']*512
+                or slots.sha(data[:size]) != plan.get('helper_sha256') or any(data[size:])):
+            raise ValueError('Helper plan violates its identity or reserved extent')
+        copies.append(data)
+    if copies[0] != copies[1]:
+        raise ValueError('Helper copies differ')
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)

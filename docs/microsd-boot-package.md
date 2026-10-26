@@ -134,3 +134,19 @@ the actual wrapper and packer, then checks changed bounds and preservation
 conditions locally. Its output proves host packaging only. Production monitor
 instructions, cold entry, physical storage/security and board boot require
 separate root-owned evidence.
+
+## Optional card DRAM restore image
+
+`--restore-variant` accepts the manifest from `tools/prepare-card-ddr.py` while
+`--boot0` still supplies the pinned original. The packager verifies the derived
+image hash, eGON checksum, allowed branch destinations and unchanged bytes.
+It also binds the manifest's temperature policy, helper identity and unit
+locations to the configuration consumed by the bootstrap. The output manifest
+records the derivative separately from its original dependency. Without this
+option the package contains the original boot0.
+
+The [restore design](designs/dram-training-restore.md#card-boots-need-a-host-built-boot0-variant)
+defines the reserved helper extents and backup-first preparation. Packaging does
+not install those helpers, reserve physical card space or qualify the modified
+boot path. Current default variants perform full training because capture
+temperature limits remain unqualified.

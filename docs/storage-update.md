@@ -89,6 +89,16 @@ The target ranges retain the original-or-candidate comparison below.
 `checks/training-record-copies.py` exercises selection and these plans with
 actual captured training records on ordinary card-image files.
 
+The optional card restore producer also emits `helper-A` and `helper-B`
+plans. Both contain the same CRC-bound helper, at most 32 KiB, starting at
+sector 64 within each paired record unit. Conversion checks both exact
+subextents, identical bytes and zero sector padding. Each helper range uses
+its own backup-first session and the same original-or-candidate resume rule.
+Record headers and payloads remain outside these writes. The
+[card restore design](designs/dram-training-restore.md#card-boots-need-a-host-built-boot0-variant)
+describes boot0/helper update ordering and the outstanding physical reservation
+and qualification requirements.
+
 Each write of the boot-slot plan must lie inside its own region, or planning
 stops. A range whose card bytes already equal the planned bytes is listed as
 skipped. Every other range must still hold the bytes that the boot-slot plan
