@@ -15,7 +15,26 @@ int camera_live(void *v){(void)v;return !atomic_load(&app.fatal)&&ticks/24<app.s
 void camera_fail(void *v){(void)v;atomic_store(&app.fatal,1);}
 int a733_counter_clock_now(void *v,uint64_t *out){(void)v;*out=ticks/24;return 1;}
 int camera_session_valid(const struct camera_session *s,uint64_t n){(void)s;(void)n;return admitted;}
+#ifdef SUNSTONE_CAMERA_STREAM
+static unsigned stream_stopping,stream_mode;
+int a733_camera_native_poll(struct a733_camera_native *n)
+{
+ ++polled;
+ if(stream_stopping){n->capture.sensor.state=stream_mode==1?OV5640_STREAMING:OV5640_READY;return -1;}
+ return 1;
+}
+int a733_camera_native_stream_copy(struct a733_camera_native *n,struct device_memory_lease l)
+{
+ (void)n;(void)l;
+ if(polled!=copies+1 || copies>=150)return -1;
+ memset(pixels+4096*copies,0x41,4096);++copies;
+ return stream_mode==2&&copies==2?-1:copies==150;
+}
+int a733_camera_native_stream_stop(struct a733_camera_native *n)
+{(void)n;if(copies!=150)return -1;stream_stopping=1;return 1;}
+#else
 int a733_camera_native_poll(struct a733_camera_native *n){(void)n;++polled;return 1;}
+#endif
 int a733_camera_native_copy(struct a733_camera_native *n,unsigned plane,unsigned offset,
  struct device_memory_lease l,size_t destination,size_t bytes)
 {
@@ -58,6 +77,24 @@ void camera_check_run(unsigned mode)
  app.handles[2]=(TaskHandle_t)1;app.session.deadline_us=100000;
  app.pixels.cpu=(uintptr_t)pixels;app.pixels.bytes=sizeof(pixels);app.stage=3;
  atomic_store(&app.shared.pmic_ready,1);atomic_store(&app.result,1);
+#ifdef SUNSTONE_CAMERA_STREAM
+ stream_mode=mode;
+ if(mode==3)atomic_store(&app.cancel,1);
+ for(unsigned i=0;i<152 && atomic_load(&app.result)<3;++i){
+  check(!camera_output(0,chunk,1),50);
+  (void)camera_capture_step();
+ }
+ if(mode>=2){
+  check(atomic_load(&app.result)==3&&!camera_output(0,chunk,1),51);
+  check(copies==(mode==2?2u:0u),52);
+ }else{
+  check(copies==150 && polled==151 && atomic_load(&app.result)==4,53);
+  check(app.retained_status==(mode==1?4u:5u),54);
+  check(camera_output(0,chunk,sizeof(chunk))&&chunk[0]==0x41&&chunk[4095]==0x41,55);
+  check(camera_capture_step()==-1&&polled==151&&copies==150,56);
+ }
+ camera_check_result=1;__asm__ volatile("brk #0");for(;;){}
+#endif
  if(mode==4){
   admitted=1;app.session.camera.owner=6;app.camera.boot=app.session.camera;
   struct a733_clock_token token={.owner=6};struct a733_gpu_resource_lease lease={0};

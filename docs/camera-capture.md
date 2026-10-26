@@ -292,15 +292,20 @@ Whether the address registers latch at frame start, and whether frame done
 precedes the next frame start in every mode, needs a module on the board. The
 1080p and QSXGA modes have only 24 lines of vertical blanking, so a frame-done
 flag after the next start is most likely there; it drops frames.
-The native application does not use continuous capture yet. Its binding
-allocates one image per plane and calls `open_retained`; it supplies no
-`sync_slot` callback. Continuous capture needs ring allocation and admission,
-per-slot cache synchronization, bounded polling and deadline renewal, and
-application ownership through `take` and `give`. The native receiver write
-policy must also admit video stop, and the current `no_drain` callbacks need
-real packet-quiescence and transaction-drain providers before stream closure.
-Concurrent USB frame delivery additionally needs the shared-master IOMMU
-policy described above.
+The [native application](camera-application.md#finite-streaming-copies-one-frame-and-retains-the-hardware)
+can select a finite supervised stream with two guarded slots per plane. Its
+owner polls once per tick and copies a selected slot in 4 KiB pieces, polling
+capture between pieces. The native binding invalidates each completed slot
+before it becomes readable. It holds the source slot through the complete
+copy and gives it back before requesting sensor stop.
+
+The native packet-quiescence and transaction-drain providers still refuse.
+After sensor stop, the application therefore reports copied output with
+retained hardware and no drain proof. No parser-stop write, resource release
+or ROM return follows that refusal. The CPU-driven USB0 transport reads only
+the separate immutable copy; all other system-IOMMU DMA masters remain
+excluded. Concurrent DMA masters require the shared-master policy described
+above.
 
 ## Faults retain resources without automatic rollback
 

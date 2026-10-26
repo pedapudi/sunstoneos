@@ -116,3 +116,41 @@ of the retained copy. They verify that publication covers both session bytes and
 the readiness receipt. Cache publication and the first provider boundary are
 modeled; no camera provider, sensor or pixel work was repeated. The generated
 camera boot hook precedes cached setup and is the target's sole boot object.
+
+## Finite streaming copies one frame and retains the hardware
+
+Configure the dedicated camera application with `SUNSTONE_CAMERA_SUPERVISED=ON`
+and `SUNSTONE_CAMERA_STREAM=ON` to select continuous capture. The stream option
+requires supervised retention and is included in the build identity. The
+ordinary still-image profile remains available without that option.
+
+The privileged owner polls the native camera every tick, consumes any admitted
+discard frames, and copies one delivered frame in 4 KiB pieces. It publishes
+nothing until the entire copy completes. The owner gives the slot back before
+requesting sensor stop. The existing packet-quiescence provider refuses, so the
+image keeps all source buffers, mappings, clocks and power leases retained.
+Physical sensor, slot timing, coherence, guard and drain qualification still
+require an attached module.
+
+The stream response uses version 2 and an 80-byte header. Its first 72 bytes
+retain the existing layout. State 4 means that a complete immutable frame is
+available while hardware remains retained. The word at offset 72 reports
+sensor stop confirmed in bit 0, drain proved in bit 1, and hardware retained
+in bit 2. Bit 1 remains clear; offset 76 is zero. State 4 may carry flags 4 or
+5, so output availability alone never claims sensor-stop completion. A partial
+copy reports state 3 and supplies no output. Cancellation still prevents reads.
+
+The host decoder and collector preserve those distinctions. They save the
+complete NV16 output with `camera_result=copied-frame-stream-retained` and
+separate sensor-stop, drain and retention fields. The supervised runner does
+not classify that retained result as successful lifecycle completion. Version
+1 still-image responses keep their existing states and 72-byte header.
+
+The native stream image links successfully. Focused AArch64 instruction-model
+checks cover capture polling between all 150 copy pieces, withheld partial
+output, retained sensor-stop failure, cancellation, and actual USB response
+framing. The host decoder consumes the native encoded response; the collector
+saves a complete modeled frame and rejects unsupported drain-status claims.
+The existing still-output framing cases pass. Evidence is under
+`~/.cache/sunstoneos/evidence/resume-camera-native-1025/application/` and
+`host-collection/`. No physical camera execution is claimed.

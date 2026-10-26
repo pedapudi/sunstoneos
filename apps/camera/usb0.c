@@ -15,7 +15,14 @@ static _Noreturn void stop(void){camera_fail(NULL);for(;;)vTaskDelay(1);}
  * byte offset, payload bytes(up to4096). Response: magic/version/state/offset/
  * payload bytes/total bytes, epoch/generation, immutable session SHA256,
  * then payload. One request remains in flight until the device reports TX. */
-static uint8_t response[4168],request[12];
+#ifdef SUNSTONE_CAMERA_STREAM
+#define RESPONSE_HEADER 80u
+#define RESPONSE_VERSION 2u
+#else
+#define RESPONSE_HEADER 72u
+#define RESPONSE_VERSION 1u
+#endif
+static uint8_t response[RESPONSE_HEADER+4096],request[12];
 static unsigned response_bytes,response_sent,response_transferred,request_bytes;
 static void put32(uint8_t *p,uint32_t n){for(unsigned i=0;i<4;++i)p[i]=(uint8_t)(n>>(8*i));}
 static uint32_t get32(const uint8_t *p){return (uint32_t)p[0]|(uint32_t)p[1]<<8|(uint32_t)p[2]<<16|(uint32_t)p[3]<<24;}
@@ -46,10 +53,10 @@ static void exchange(void)
  if(op==2)atomic_store_explicit(&app.cancel,1,memory_order_release);
  unsigned result=atomic_load_explicit(&app.result,memory_order_acquire);
  if(atomic_load_explicit(&app.cancel,memory_order_acquire))result=3;
- unsigned count=0;if(op==1&&result==2&&bytes){
-  if(camera_output(offset,response+72,bytes))count=bytes;else result=3;
+ unsigned count=0;if(op==1&&(result==2||result==4)&&bytes){
+  if(camera_output(offset,response+RESPONSE_HEADER,bytes))count=bytes;else result=3;
  }
- put32(response,0x524d4143);put32(response+4,1);put32(response+8,result);put32(response+12,offset);
+ put32(response,0x524d4143);put32(response+4,RESPONSE_VERSION);put32(response+8,result);put32(response+12,offset);
  put32(response+16,count);put32(response+20,CAMERA_FRAME_BYTES);
  put32(response+24,(uint32_t)app.session.epoch);put32(response+28,(uint32_t)(app.session.epoch>>32));
  put32(response+32,(uint32_t)app.session.generation);put32(response+36,(uint32_t)(app.session.generation>>32));
@@ -60,7 +67,10 @@ static void exchange(void)
  &app.session,sizeof(app.session),
 #endif
  response+40);
- response_sent=response_transferred=0;response_bytes=72+count;
+#ifdef SUNSTONE_CAMERA_STREAM
+ put32(response+72,result==4?app.retained_status:0);put32(response+76,0);
+#endif
+ response_sent=response_transferred=0;response_bytes=RESPONSE_HEADER+count;
 }
 void camera_usb0_task(void *unused)
 {

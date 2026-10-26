@@ -16,7 +16,7 @@ struct camera_application {
     struct a733_watchdog_window window;
     StaticTask_t tasks[3];StackType_t stacks[3][2048];TaskHandle_t handles[3];
     atomic_uint fatal,result,cancel;
-    unsigned stage,held;
+    unsigned stage,held,output_ready,retained_status;
 };
 extern struct camera_application app;
 int camera_live(void *);
