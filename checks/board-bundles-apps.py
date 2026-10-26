@@ -135,6 +135,7 @@ EXPECT = {
     'opp-31': 'COMPLETE board bundle 31: DCDC5 1000 mV and DCDC3 1050 mV kept across the ROM return, read only',
     'opp-32': 'COMPLETE board bundle 32: temperatures, rails and boot clock words after the top-point workload, '
               'read only',
+    'opp-33': 'COMPLETE board bundle 33: DCDC3 and DCDC5 restored to 800 mV at boot clock words',
     'dram': 'COMPLETE board bundle 8:',
 }
 POWER_UNITS = ['apps/board-bundles-power/power.c', 'apps/board-bundles-power/trace.c',
@@ -560,7 +561,7 @@ def bundle8_outcomes(elf):
 
 
 def opp_step_outcomes(bundle):
-    """Refusals before any clock or PMIC write (bundles 31 and 32 also refuse clock words other than the boot words), and
+    """Refusals before any clock or PMIC write (bundles 31 to 33 also refuse clock words other than the boot words), and
     the thermal stop after the step lowered what it raised; each with the converter disabled and the PMIC service
     parked."""
     refusals = [dict(name=f'step-refused-{slug}', status=1, interrupt=None, fail_lines=0, fault=None,
@@ -570,7 +571,7 @@ def opp_step_outcomes(bundle):
                                    ('rate-not-on-pll', 'CPU rate not on its PLL'),
                                    ('pattern-or-lfm', 'pattern or LFM enabled'),
                                    ('voltage-above-bin', "voltage above the bin's top point")) +
-                                  ((('boot-clock-words', 'boot clock words'),) if bundle in (31, 32) else ())]
+                                  ((('boot-clock-words', 'boot clock words'),) if bundle in (31, 32, 33) else ())]
     return refusals + [dict(name='step-stopped-thermal-limit', status=1, interrupt=None, fail_lines=0, fault=None,
                             log_contains=[f'BEGIN board bundle {bundle}:',
                                           f'STOPPED board bundle {bundle}: thermal limit'])]
@@ -705,6 +706,7 @@ def main():
             ('opp-30', OPP_STEP_UNITS, ('-DOPP_BUNDLE=30',), None),
             ('opp-31', OPP_STEP_UNITS, ('-DOPP_BUNDLE=31',), None),
             ('opp-32', OPP_STEP_UNITS, ('-DOPP_BUNDLE=32',), None),
+            ('opp-33', OPP_STEP_UNITS, ('-DOPP_BUNDLE=33',), None),
             ('dram', DRAM_UNITS, ('-DSUNSTONE_DRAM_PRIORITY=2',), ('FREERTOS/tasks.c', 'FREERTOS/queue.c'))):
         units_provider = {u: p for u, p in provider.items() if keep is None or u in keep}
         directory, entry = build_v4_image(name, rp, units, platform, units_provider, list(flags), origins, out,

@@ -48,7 +48,12 @@ history.
 - **DRAM training restore:** captures from ten lifetimes fix a per-board
   restore set of 1,036 registers (`restore-set-v3.json`). Initialization without training takes
   36 ms, against 5.1 s to train all four P-states. The restore itself is
-  designed but not built.
+  implemented and independently reviewed for RAM-only execution. Seventeen
+  native instruction cases, nineteen host cases, both board record producers
+  and seven capture-refusal cases pass under
+  `~/.cache/sunstoneos/evidence/resume-dram-restore-1025/`. Physical memory
+  validation and card-boot integration remain outstanding. The 36 ms figure
+  excludes training and does not establish working restored memory.
 
 ## Active branches
 
@@ -60,18 +65,20 @@ does not establish recovery from a fault.
 
 | Work | Branch | Immediate deliverable |
 | --- | --- | --- |
-| CPU returning image | `work/resume-cpu-return-1025` | Restore both supply rails after verified successful clock lowering |
+| Multicore mimus | `work/resume-mimus-multicore-1025` | Extend the existing two-worker execution path while preserving exact results |
 | OS thermal protection | `work/resume-thermal-1025` | Admit and enforce the qualification session's 70 °C CPU stop |
-| GPU exact-sum application | `work/resume-gpu-application-1025` | Connect the existing mimus kernel to the demonstrated job path and compare exact outputs |
-| DRAM restoration | `work/resume-dram-restore-1025` | Build the capture-derived record and SRAM restore path with failure checks |
+| microSD reads | `work/resume-sd-completion-1025` | Correct the remaining voltage-switch timing gaps, then complete descriptor DMA |
+| DRAM restoration | `work/resume-dram-restore-1025` | Add persistent record selection and standby updates using existing storage contracts |
 | Radio startup | `work/resume-radio-native-1025` | Compose the native SDIO diagnostic with explicit pin, supply and inherited-state authority |
 | Continuous camera capture | `work/resume-camera-native-1025` | Bind the existing stream coordinator to native buffers and per-slot synchronization |
 
 Three independent reviewers cover CPU/thermal/DRAM, GPU/NPU, and radio/camera.
 Workers own separate source paths, reuse successful evidence and submit focused
 checks. The coordinator integrates changes, updates this handoff and the hardware
-matrix, and pushes reviewed results. The microSD merge remains a separate ongoing
-assignment; these workers do not edit its storage paths.
+matrix, and pushes reviewed results. Returning microSD reads and the initial
+CMD11 completion correction are merged. The storage worker owns the remaining
+switch and DMA changes; the boot worker coordinates record-storage interfaces
+without editing the SD driver.
 
 The branch notes under "Next steps" in each design document say what remains.
 - **`work/cpu-top-opp-step6-1025`:** CPU top points, step 6 and its
@@ -94,7 +101,11 @@ be pruned.
   the top-point profile has 68 bytes free. Both builds and nine instruction
   cases plus eight host-runner cases per profile pass. Evidence is under
   `~/.cache/sunstoneos/evidence/resume-cpu-return-20261025/`.
-  Restoring the raised supply rails remains separate. A failed top-point
+  A separate reviewed helper now restores DCDC3 and DCDC5 to 800 mV after
+  verifying boot clock settings and acquiring the corresponding clock and rail
+  ownership. Thirteen actual-provider cases and native variants 33, 21 and 30
+  pass under `~/.cache/sunstoneos/evidence/resume-cpu-rails-20261025/`.
+  Physical voltage restoration remains unqualified. A failed top-point
   workload can also retain raised clocks, so this layout repair does not
   authorize a top-point run in the current board sessions.
 - **GPU failure cleanup is corrected in software.** The reviewed shutdown
@@ -140,7 +151,13 @@ be pruned.
   1. Two, then eight, inference workers at the qualified top clocks. The
      two-worker path passes in QEMU (`docs/mimus-smp.md`).
   2. The first board execution of the exact-sum GPU kernel
-     (`docs/gpu-mimus.md`), which is implemented and host-modeled only.
+     (`docs/gpu-mimus.md`). Its returning diagnostic and host validator are
+     implemented, reviewed and frozen under
+     `~/.cache/sunstoneos/evidence/gpu-exact-sum-20261025/`. Bundle 34 runs
+     two shapes and requires exact sums, tags, guards, cleanup and shutdown.
+     Five native caller cases, 204 modeled parity jobs and focused host
+     admission/capture cases pass. GPU execution remains unqualified for this
+     kernel; no new board test ran during this integration.
 
   The target in `docs/mimus.md` is 0.44 s of compute for that recording. The
   NPU path is research only (`docs/npu-mimus-linear.md`).

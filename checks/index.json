@@ -2924,6 +2924,7 @@
  "ddr-host-retention.py": {
   "cache_areas": [],
   "docs": [
+   "docs/board-runbooks/dram-restore-test-1.md",
    "docs/board-runbooks/dram-training-capture.md",
    "docs/designs/dram-training-restore.md"
   ],
@@ -2935,9 +2936,24 @@
   "summary": "Run the production DDR script with fake FEL and a real private file lock.",
   "usb": true
  },
+ "ddr-restore.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "build",
+   "--record",
+   "--other-record",
+   "--output"
+  ],
+  "summary": "Execute real restore admission, patched BLX and abort in Unicorn.",
+  "usb": false
+ },
  "ddr-wrapper.py": {
   "cache_areas": [],
   "docs": [
+   "docs/board-runbooks/dram-restore-test-1.md",
    "docs/board-runbooks/dram-training-capture.md",
    "docs/boot.md",
    "docs/designs/dram-training-restore.md"
@@ -4495,6 +4511,7 @@
  "gpu-mimus-layers.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/gpu-exact-sum-caller.md",
    "docs/designs/gpu-mimus-compute-measurements.md",
    "docs/gpu-mimus.md"
   ],
@@ -9892,6 +9909,21 @@
    "--output"
   ],
   "summary": "Run a frozen step 6 workload binding on a real session's records.",
+  "usb": false
+ },
+ "training-record-capture.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/board-runbooks/dram-restore-test-1.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--restore-set",
+   "--boot0",
+   "--output"
+  ],
+  "summary": "Build both real reference records and reject changed capture identities.",
   "usb": false
  },
  "training-record.py": {

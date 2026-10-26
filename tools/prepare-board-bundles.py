@@ -352,7 +352,8 @@ RTC_CLOCK_OFFSETS = (0x000, 0x004, 0x060, 0x160, 0x16c)  # LOSC, auto switch, 32
 OPP_STEP_OVERLAY = POWER_OVERLAY + ['apps/board-bundles-power/cpu-opp-step.c.obj', 'drivers/clock/a733_cpu_clock.c.obj',
                                     'drivers/thermal/a733_thermal.c.obj', 'drivers/thermal/a733_thermal_native.c.obj',
                                     'drivers/adc/a733_adc_native.c.obj', 'platform/a733/cpu_pmu.c.obj']
-OPP_STEP_SOURCES = POWER_SOURCES + ['apps/board-bundles-power/cpu-opp-step.c', 'drivers/clock/a733_cpu_clock.c',
+OPP_STEP_SOURCES = POWER_SOURCES + ['apps/board-bundles-power/cpu-opp-step.c',
+                                    'apps/board-bundles-power/cpu-rail-change.h', 'drivers/clock/a733_cpu_clock.c',
                                     'include/a733_cpu_clock.h', 'drivers/thermal/a733_thermal.c',
                                     'drivers/thermal/a733_thermal_native.c', 'drivers/adc/a733_adc_native.c',
                                     'platform/a733/cpu_pmu.c', 'include/a733_cpu_pmu.h', 'checks/cpu-clock-model.c',
@@ -1097,6 +1098,17 @@ ROWS = [
             'for the boot clock words or the CPU-B rate means CPU-B is still raised: remove power at once.',
             ('cpu-rails-held-read',), entry=('DCDC5 at 1,000 mV and DCDC3 at 1,050 mV, CPU-B at 1,014 MHz',
                                              'dcdc5_uv=1000000 dcdc3_uv=1050000'), writes=False),
+    opp_row('cpu-rails-boot-return', 33, 'Restore both CPU rails to 800 mV after a successful workload return',
+            'DCDC3 and DCDC5 restored to 800 mV at boot clock words',
+            'VOLT dcdc3_selector=0x9e dcdc3_uv=800000 and VOLT dcdc5_selector=0x9e dcdc5_uv=800000',
+            'After the completed workload and bundle 32, require all three boot PLL and mux words before any '
+            'selector write. Restore DCDC3 with CPU-B held exclusively, then DCDC5 with CPU-L and the DSU held '
+            'exclusively. Recheck the supplied clocks immediately before each write and keep ownership through '
+            'the provider readback, at least 1 ms of settling and a final snapshot. The final inspections '
+            'require both rails at 800 mV and all boot clock words. A deadline or fatal workload failure is '
+            'not an input to this bundle; this successful-set cleanup does not make such failures recoverable.',
+            ('cpu-after-workload-read',), entry=('DCDC5 at 1,000 mV and DCDC3 at 1,050 mV, CPU-B at 1,014 MHz',
+                                               'dcdc5_uv=1000000 dcdc3_uv=1050000')),
     dict(gpu_row('gpu-exact-sum', 34, 'Two GPU integer matrix products with exact sums, followed by cleanup and OFF',
             'fw-mimus', 'COMPLETE GPU exact sums: 2 jobs, tags and sums match, context cleaned up, firmware stopped, OFF and '
             'provider parked',
