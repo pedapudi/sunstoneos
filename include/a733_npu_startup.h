@@ -119,6 +119,11 @@ enum a733_npu_platform_result a733_npu_startup_stop(struct a733_npu_startup *);
  * state other than the stopped one); -1 after a fault, which retains the
  * startup as every startup fault does. */
 int a733_npu_startup_retune(struct a733_npu_startup *, unsigned mhz);
+/* A new stopped-provider command, with its own fixed absolute deadline.
+ * The caller grants this operation under its still-live lifetime authority.
+ * Checks retained ownership and time even at the current rate. Does not alter
+ * config.deadline_us, reopen the register window or authorize a restart. */
+int a733_npu_startup_retune_until(struct a733_npu_startup *, unsigned mhz, uint64_t deadline_us);
 /* The service activation check, on the bound task: 1 when READY and no
  * shared provider has failed, 0 before READY, -1 after a failure or from
  * another task. No register access. */

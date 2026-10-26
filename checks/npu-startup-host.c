@@ -69,6 +69,7 @@ static struct {
      * reads during a step, and counter reads. */
     unsigned reads,lock_samples,owner_reads,clock_reads,pck_reads;
     uintptr_t last_write;
+    unsigned register_busy,expire_at_write; /* Stopped-retune fault injection only. */
 } r;
 static uint32_t *word(uintptr_t a)
 {assert(a>=CCU && a<CCU+0x2000 && !(a&3));return &r.ccu[(a-CCU)/4];}
@@ -111,6 +112,7 @@ static int reg_write(void *v,uintptr_t a,uint32_t value)
     assert(a==CCU+0xb00 || a==CCU+0xb04 || a==CCU+0x1920 || a==CCU+0x2a0 || a==SYSCTRL);
     if(!r.writes)r.ppu_before_first_write=d.ppu_writes;
     ++r.writes;r.last_write=a;
+    if(r.expire_at_write==r.writes)m.now+=50000;
     if(a==SYSCTRL) {
         assert(!((r.sysctrl^value)&~2u));
         if(!(value&2) && !r.route_at)r.route_at=r.writes;
@@ -135,7 +137,7 @@ static int now_us(void *v,uint64_t *out){assert(v==&r);++r.clock_reads;return pm
 /* Raw counter for the LOCK spacing: one modeled microsecond per read. */
 static uint64_t spin_us(void *v){assert(v==&r);return ++m.now;}
 static int enter(void *v,uint64_t deadline)
-{assert(v==&r && !r.held && m.now<deadline);++r.enters;r.held=1;return 1;}
+{assert(v==&r && !r.held && m.now<deadline);++r.enters;if(r.register_busy)return 0;r.held=1;return 1;}
 static void leave(void *v){assert(v==&r && r.held);r.held=0;}
 static void retain(void *v){assert(v==&r && r.held);r.retained=1;}
 /* The power service's notification: the bootstrap runs after the service's step. */
@@ -500,6 +502,53 @@ static int retune(void)
     puts("PASS stopped NPU retune: both directions in the vendor order with the gates closed, five refusals before any write, and a retained lock failure");
     return 0;
 }
+static int resident_retune(unsigned first)
+{
+    unsigned passed=0;
+    /* The real startup/stop establishes every token and row. Only elapsed
+     * idle time is advanced; the old work deadline stays unchanged. */
+    for(unsigned variant=first;variant<13;++variant) {
+        stopped_npu(852);m.now=70000000;
+        const uint64_t original=s.config.deadline_us,deadline=m.now+(variant==12 ? 50 : 50000);
+        const unsigned writes=r.writes,reads=r.reads,clocks=r.clock_reads;
+        const uint64_t before_us=m.now;
+        const struct a733_clock_token clock=s.clock;
+        const struct a733_rail_token rail=s.rail;
+        const struct a733_gpu_resource_lease pck=s.pck;
+        unsigned target=variant==0 || variant==10 || variant==11 || variant==12 ? 492 : 852;
+        if(variant==4)++s.clock.id;
+        if(variant==5)++s.rail.id;
+        if(variant==6)++s.pck.token;
+        if(variant==7)++s.row.owner;
+        if(variant==8)atomic_store(&m.clocks.busy,1);
+        if(variant==9)r.register_busy=1;
+        if(variant==10)r.expire_at_write=writes+1;
+        if(variant==11)s.last_now=m.now+1;
+        bootstrap_running=1;
+        const int result=variant==2 ? a733_npu_startup_retune(&s,target) :
+            a733_npu_startup_retune_until(&s,target,variant==3 ? m.now : deadline);
+        bootstrap_running=0;
+        if(variant==8)atomic_store(&m.clocks.busy,0);
+        const int wanted=variant<2 ? 1 : (variant>=4 && variant<=7) || variant==10 || variant==12 ? -1 : 0;
+        assert(result==wanted && s.config.deadline_us==original);
+        assert((s.failed!=0)==(wanted<0));
+        assert(r.writes-writes==(variant==0 ? 5u : variant==10 ? 1u : variant==12 ? 4u : 0u));
+        assert(a733_clock_token_status(&m.clocks,&clock)==A733_CLOCK_OK &&
+            a733_rail_status(&m.rails,&rail)==A733_RAIL_READY &&
+            a733_gpu_resources_status(&m.gpu,s.config.pck_client,&pck)==A733_GPU_RESOURCE_OK);
+        assert(s.row.counted && d.owner.domain[1].count==1 && !atomic_load(&s.window_open));
+        if(variant<2) {
+            assert(s.last_now>=before_us && r.reads>reads && !r.held);
+            printf("{\"case\":%u,\"writes\":%u,\"reads\":%u,\"clock_reads\":%u,\"elapsed_us\":%llu}\n",
+                variant,r.writes-writes,r.reads-reads,r.clock_reads-clocks,(unsigned long long)(m.now-before_us));
+        }
+        if(variant==10)assert(r.held && r.retained);
+        if(variant==12)assert(!r.held && m.now>=deadline && m.now<=deadline+1);
+        ++passed;
+    }
+    printf("PASS resident stopped-retune: %u cases; old work bound unchanged, deadline/ownership and retained failure checked\n",passed);
+    return 0;
+}
 static int restart(void)
 {
     for(unsigned variant=0;variant<6;++variant) {
@@ -536,6 +585,8 @@ int main(int argc,char **argv)
 
 {
     (void)unused_boot;
+    if(argc==2 && !strcmp(argv[1],"--resident-retune"))return resident_retune(0);
+    if(argc==2 && !strcmp(argv[1],"--resident-retune-wait"))return resident_retune(12);
     if(argc==2 && !strcmp(argv[1],"--restart"))return restart();
     if(argc==2 && !strcmp(argv[1],"--inherited-on"))return inherited_on();
     if(argc==2 && !strcmp(argv[1],"--inherited-pll"))return inherited_pll();

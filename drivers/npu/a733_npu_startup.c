@@ -167,13 +167,15 @@ static void native_wake(void *v)
 static void row_wake(void *v)
 {struct a733_npu_startup *s=v;if(s->ops.wake)s->ops.wake(s->cookie);}
 
-static int now(struct a733_npu_startup *s,uint64_t *out)
+static int before(struct a733_npu_startup *s,uint64_t *out,uint64_t deadline)
 {
     uint64_t t;
-    if(s->ops.now(s->cookie,&t)!=1 || !a733_deadline_admit(t,&s->last_now,s->config.deadline_us))return 0;
+    if(s->ops.now(s->cookie,&t)!=1 || !a733_deadline_admit(t,&s->last_now,deadline))return 0;
     if(out)*out=t;
     return 1;
 }
+static int now(struct a733_npu_startup *s,uint64_t *out)
+{return before(s,out,s->config.deadline_us);}
 static int rd(struct a733_npu_startup *s,uintptr_t a,uint32_t *v){return s->ops.registers.read(s->cookie,a,v)==1;}
 /* Apply the steps in order with a readback of each write; a field that
  * already holds its value is not written. Consecutive steps on one word use
@@ -577,21 +579,82 @@ void a733_npu_startup_retain(struct a733_npu_startup *s)
  * and npu_clk_init (vip_drv_device_platform.c:822-886). After local stop the
  * same rate change as the enable stage runs: output gate off, factors, lock
  * enable cleared and set, LOCK, output gate on (ccu_nm.c:250-344). */
-int a733_npu_startup_retune(struct a733_npu_startup *s,unsigned mhz)
+/* Only a stopped-retune command uses this deadline. The original startup
+ * and restart bound stays in config; retained tokens have no time expiry. */
+struct retune_wait { struct a733_npu_startup *startup; uint64_t spin_until; };
+static int retune_read(void *v,uint32_t *out)
+{return rd(((struct retune_wait *)v)->startup,PLL,out);}
+static int retune_now(void *v,uint64_t *out)
 {
-    if(!owner_task(s) || s->stage!=A733_NPU_STARTUP_STOPPED || (mhz!=492 && mhz!=852))return 0;
+    struct retune_wait *w=v;
+    *out=w->startup->ops.spin_us(w->startup->cookie);return *out<w->spin_until;
+}
+static int retune_apply(struct a733_npu_startup *s,const struct step *steps,unsigned count,uint64_t deadline)
+{
+    for(unsigned i=0;i<count;++i)
+        if(!before(s,0,deadline) || !apply(s,steps+i,1))return 0;
+    return 1;
+}
+static void retune_leave(struct a733_npu_startup *s)
+{s->ops.leave(s->cookie);s->register_held=0;}
+int a733_npu_startup_retune_until(struct a733_npu_startup *s,unsigned mhz,uint64_t deadline)
+{
+    if(!owner_task(s) || s->stage!=A733_NPU_STARTUP_STOPPED || (mhz!=492 && mhz!=852) ||
+       !deadline || !before(s,0,deadline))return 0;
+    if(atomic_load_explicit(&s->window_open,memory_order_acquire) ||
+       s->row.domains!=s->providers.domains || s->row.rail!=&s->rail ||
+       s->row.wake_context!=s || s->row.owner!=s->config.owner || s->row.domain!=4 ||
+       a733_power_domain_state(&s->row)!=A733_POWER_ROW_ON){(void)fault(s);return -1;}
+    enum a733_clock_result clock=a733_clock_token_status(s->providers.clocks,&s->clock);
+    enum a733_rail_result rail=a733_rail_status(s->providers.rails,&s->rail);
+    enum a733_gpu_resource_result pck=a733_gpu_resources_status(s->providers.pck,s->config.pck_client,&s->pck);
+    if((clock!=A733_CLOCK_OK && clock!=A733_CLOCK_BUSY) ||
+       (rail!=A733_RAIL_READY && rail!=A733_RAIL_BUSY) ||
+       (pck!=A733_GPU_RESOURCE_OK && pck!=A733_GPU_RESOURCE_BUSY)){(void)fault(s);return -1;}
+    if(clock==A733_CLOCK_BUSY || rail==A733_RAIL_BUSY || pck==A733_GPU_RESOURCE_BUSY)return 0;
     const uint32_t target=mhz==852 ? FACTORS_852 : FACTORS_492;
-    if(target==s->pll_factors)return 1;
     uint32_t sid;
     if(target==FACTORS_852 && !(rd(s,SID_DVFS,&sid) && bin_allows_852(sid)))return 0;
-    int held=enter(s);
+    if(!before(s,0,deadline))return 0;
+    int held=s->ops.enter(s->cookie,deadline);
     if(held!=1){if(held)(void)fault(s);return held ? -1 : 0;}
-    if(!now(s,0) || !stopped(s))return leave(s) ? 0 : (fault(s),-1);
+    s->register_held=1;
+    unsigned domain=0;
+    if(!before(s,0,deadline)){retune_leave(s);return 0;}
+    if(a733_power_domain_check(s->providers.domains,4,&domain)!=1 || domain!=8){(void)fault(s);return -1;}
+    if(!stopped(s)){retune_leave(s);return 0;}
+    if(!before(s,0,deadline)){retune_leave(s);return 0;}
+    if(target==s->pll_factors){retune_leave(s);return before(s,0,deadline) ? 1 : 0;}
+    /* Read the raw clock first: translating the remaining command budget
+     * onto it is conservative even if the validated clock read takes time.
+     * Keep the established raw-counter PLL loop, without wrapped time reads
+     * for each 3 us lock sample. */
+    struct retune_wait wait={s,0};
+    const uint64_t spin=s->ops.spin_us(s->cookie);uint64_t t;
+    if(!before(s,&t,deadline) || !a733_deadline_after(spin,deadline-t,&wait.spin_until)){
+        retune_leave(s);return 0;
+    }
+    struct step steps[STEPS(pll_retune)];
+    for(unsigned i=0;i<STEPS(steps);++i)steps[i]=pll_retune[i];
+    steps[PLL_RETUNE_FACTOR_STEP].value=target;
     s->pll_factors=target;s->pll_adopted=0;
-    if(!apply_factors(s,pll_retune,STEPS(pll_retune),PLL_RETUNE_FACTOR_STEP) || !leave(s) || !lock_wait(s) ||
-       enter(s)!=1 || !now(s,0) || !apply(s,pll_open,STEPS(pll_open)) || !stopped(s)){(void)fault(s);return -1;}
-    return leave(s) ? 1 : (fault(s),-1);
+    if(!apply(s,steps,1) || !retune_apply(s,steps+1,STEPS(steps)-1,deadline)){(void)fault(s);return -1;}
+    retune_leave(s);
+    if(!a733_pll_lock_wait(retune_read,retune_now,&wait,pll_word(s)) || !before(s,0,deadline)){
+        (void)fault(s);return -1;
+    }
+    held=s->ops.enter(s->cookie,deadline);
+    if(held!=1){(void)fault(s);return -1;}
+    s->register_held=1;
+    if(!retune_apply(s,pll_open,STEPS(pll_open),deadline) || !stopped(s)){
+        (void)fault(s);return -1;
+    }
+    retune_leave(s);
+    if(!before(s,0,deadline)){(void)fault(s);return -1;}
+    return 1;
 }
+int a733_npu_startup_retune(struct a733_npu_startup *s,unsigned mhz)
+{return a733_npu_startup_retune_until(s,mhz,s ? s->config.deadline_us : 0);}
 int a733_npu_startup_prepared(struct a733_npu_startup *s)
 {
     if(!owner_task(s))return -1;

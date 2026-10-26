@@ -102,12 +102,17 @@ unsigned os_npu_stopped(void)
  * number and result in another; the bootstrap serves requests only after the
  * local stop. */
 static atomic_uint perf_request,perf_answer,perf_ready;
+static uint64_t perf_deadline; /* Single thermal producer; request owns it until answer. */
 int os_npu_perf_ready(void)
 {return atomic_load_explicit(&perf_ready,memory_order_acquire) && !atomic_load_explicit(&npu.failed,memory_order_acquire);}
 int os_npu_perf_stopped(void){return os_npu_perf_ready() && os_npu_stopped();}
-int os_npu_perf_retune(unsigned mhz,unsigned sequence)
+int os_npu_perf_retune(unsigned mhz,unsigned sequence,uint64_t deadline)
 {
-    if(!npu.bootstrap || (mhz!=492 && mhz!=852) || !sequence || sequence>0xffff)return 0;
+    uint64_t now;
+    if(!npu.bootstrap || !live() || !os_npu_perf_stopped() || (mhz!=492 && mhz!=852) ||
+       !sequence || sequence>0xffff || atomic_load_explicit(&perf_request,memory_order_acquire) ||
+       !clock_now(&now) || now>=deadline || deadline>board.session.deadline_us-10000)return 0;
+    perf_deadline=deadline;
     atomic_store_explicit(&perf_request,sequence<<16|mhz,memory_order_release);
     xTaskNotifyGive(npu.bootstrap);return 1;
 }
@@ -121,10 +126,14 @@ static void perf_serve(void)
 {
     for(;;) {
         (void)ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
-        const unsigned request=atomic_exchange_explicit(&perf_request,0,memory_order_acq_rel);
+        const unsigned request=atomic_load_explicit(&perf_request,memory_order_acquire);
         if(!request)continue;
-        const int r=a733_npu_startup_retune(&npu.startup,request&0xffff);
+        uint64_t now;
+        const int r=!live() || !os_npu_perf_stopped() ? -1 :
+            !clock_now(&now) ? -1 : now>=perf_deadline ? 0 :
+            a733_npu_startup_retune_until(&npu.startup,request&0xffff,perf_deadline);
         atomic_store_explicit(&perf_answer,(request>>16)<<2|(r==1 ? 1u : r==0 ? 2u : 3u),memory_order_release);
+        atomic_store_explicit(&perf_request,0,memory_order_release);
         if(r<0){(void)fail();vTaskSuspend(NULL);}
     }
 }

@@ -86,7 +86,8 @@ void os_npu_report_copy(uint8_t out[OS_NPU_REPORT_BYTES]);
  * written, 3 failed (the NPU then fails the board). */
 int os_npu_perf_ready(void);
 int os_npu_perf_stopped(void);
-int os_npu_perf_retune(unsigned mhz,unsigned sequence);
+/* Thermal task only; one outstanding request until the bootstrap answers. */
+int os_npu_perf_retune(unsigned mhz,unsigned sequence,uint64_t deadline_us);
 unsigned os_npu_perf_answer(unsigned sequence);
 #endif
 #endif

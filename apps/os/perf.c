@@ -205,7 +205,7 @@ static enum a733_perf_status act(void *v,enum a733_perf_action a,enum a733_perf_
         if(b!=A733_PERF_NPU)return A733_PERF_REFUSED;
         if(start) {
             perf.npu_sequence=perf.npu_sequence%0xffffu+1u;
-            if(!os_npu_perf_retune(value,perf.npu_sequence))return A733_PERF_REFUSED;
+            if(!os_npu_perf_retune(value,perf.npu_sequence,deadline))return A733_PERF_REFUSED;
         }
         switch(os_npu_perf_answer(perf.npu_sequence)) {
         case 1:return A733_PERF_DONE;

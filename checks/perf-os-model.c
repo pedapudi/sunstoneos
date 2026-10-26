@@ -149,8 +149,9 @@ uint32_t a733_mmio_read32(uintptr_t a)
 #ifdef SUNSTONE_A733_OS_NPU
 int os_npu_perf_ready(void){return (int)m.npu_ready;}
 int os_npu_perf_stopped(void){return m.npu_ready && m.npu_stopped;}
-int os_npu_perf_retune(unsigned mhz,unsigned sequence)
+int os_npu_perf_retune(unsigned mhz,unsigned sequence,uint64_t deadline)
 {
+    (void)deadline;
     assert(m.npu_stopped && (mhz==492 || mhz==852) && sequence);
     ++m.retunes;m.retune_mhz=mhz;m.retune_seq=sequence;m.retune_steps=2;return 1;
 }
