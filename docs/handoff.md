@@ -113,8 +113,12 @@ host sources (`docs/designs/gpu-firmware-start.md`).
 laid down. The first kernel check passed with no `MBUS` line, since MBUS was
 still at boot0's 600 MHz. The second, after a ROM return, logged
 `MBUS 0x84000000 0x81000000 0`, so it restored 600 MHz from the SRAM window,
-and its kernel check passed. The pattern then read back unchanged. Port 3-3
-(steps 1–6) is next, before the merge.
+and its kernel check passed. The pattern then read back unchanged. Port 3-3 then passed the same steps (`board-session-20261025-24/port-3-3`):
+the second kernel check logged `MBUS 0x84000000 0x81000000 0`, and the
+pattern verified. The full clock dump (`clock-audit-b`) matched all 49
+predicted words, including speed bin `0x496` (code 4); the decode is in
+`decoded-clocks.json`. The merge waits on row and index conflicts that are
+being resolved on the branch.
 
 **GPU firmware lifecycle passed on port 3-1** (set `board-bundles-20261025-23`,
 `board-session-20261025-20/port-3-1`, branch `work/gpu-fw-stop-1025`).
