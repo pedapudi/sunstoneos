@@ -37,7 +37,8 @@ struct pvr_gpu_control {
     void *context;
     uint64_t deadline, last_now;
     struct pvr_ccb_token health_token;
-    uint32_t phase, error, health_done, health_status;
+    int (*executed)(void *, uint32_t *);
+    uint32_t phase, error, health_done, health_status, executed_before, executed_after;
     unsigned char compatibility[64], last_event[PVR_CCB_COMMAND_BYTES];
 };
 
@@ -51,6 +52,15 @@ struct pvr_gpu_control {
  */
 int pvr_gpu_control_init(struct pvr_gpu_control *, const struct pvr_gpu_start *,
                          struct pvr_ccb *, const struct pvr_gpu_control_ops *, void *, uint64_t deadline);
+/* Before the first poll, judge the health check by the firmware's executed
+ * kernel-command count, which executed acquires (OS data +568), as upstream
+ * judges it (pvr_power.c, pvr_watchdog_kccb_stalled): the count advanced by
+ * exactly one and the firmware's read offset passed the command. A return
+ * word is recorded when the firmware wrote one and must then be 1; the
+ * open firmware on the A733 wrote none (board-session-20261025-18). Without
+ * this call the return word must be 1. Refused after the compatibility
+ * record is accepted. */
+int pvr_gpu_control_count_executed(struct pvr_gpu_control *, int (*executed)(void *, uint32_t *));
 /* Bounded worker poll. event_budget is 1..31. At most two IRQ-status reads,
  * one acknowledgement, event_budget receives/handlers, and one return scan.
  * AGAIN requests further service; OK means READY with no observed backlog.

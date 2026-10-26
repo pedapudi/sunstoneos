@@ -206,3 +206,11 @@ int a733_gpu_memory_power_state(void *ctx, uint32_t *out)
     *out = a733_mmio_read32_dsb_sy_after((uintptr_t)address(m, PVR_FW_SYSTEM_DATA, 8));
     return 1;
 }
+int a733_gpu_memory_executed(void *ctx, uint32_t *out)
+{
+    struct a733_gpu_memory *m = ctx;
+    if (!ready(m) || m->phase != A733_GPU_MEMORY_PUBLISHED || !external(m, out, sizeof(*out)) ||
+        !shared(m, PVR_FW_OS_DATA, 568, 4, 0)) return fail(m);
+    *out = a733_mmio_read32_dsb_sy_after((uintptr_t)address(m, PVR_FW_OS_DATA, 568));
+    return 1;
+}

@@ -1,7 +1,7 @@
 # Stopping the GPU firmware and its first command
 
-Status: **step (a)+(b) implemented, host-checked and frozen for port 3-1;
-not yet run on a board.**
+Status: **step (a)+(b) ran on port 3-1 and stopped at the health check;
+the fix is implemented, host-checked and frozen for port 3-1, not yet run.**
 
 The firmware start passed on port 3-1: the open firmware reported started
 672 µs after the release of its processor
@@ -92,14 +92,21 @@ firmware touches nothing but its own queues and data to execute it. The
 vendor driver sends it as the first command when it connects to running
 firmware (`rgxpower.c:715–723, 739–747`).
 
-The completion comes back through the kernel CCB, not the firmware CCB: the
-host clears the command's 32-bit return slot before the kick, and the
-firmware sets `RGXFWIF_KCCB_RTN_SLOT_CMD_EXECUTED` (bit 0) in it after
-executing the command (`include/rogue/rgx_fwif_km.h:1466–1470`; upstream
-`pvr_kccb_wait_for_completion`, `pvr_ccb.c:404–413`). It also increments
-`kccb_cmds_executed` in OS data. The firmware CCB carries requests that the
-firmware starts itself, such as a free-list grow or a context reset; no
-command issued at initialisation is answered there.
+The completion is in the kernel CCB's shared state, not the firmware CCB.
+The firmware advances the kernel CCB's read offset past the command and
+increments `kccb_cmds_executed` in OS data. The return slot carries
+`RGXFWIF_KCCB_RTN_SLOT_CMD_EXECUTED` (bit 0) for the commands whose callers
+wait on it, such as the cleanup command (`include/rogue/rgx_fwif_km.h:1466–1470`;
+upstream `pvr_fw.c:1149–1158`, `pvr_kccb_wait_for_completion`,
+`pvr_ccb.c:404–413`). Neither driver waits on a health check's return slot:
+upstream sends it without a slot (`pvr_kccb_send_cmd_powered(pvr_dev,
+&health_check_cmd, NULL)`, `pvr_power.c:180`) and judges the firmware alive
+by `kccb_cmds_executed` advancing (`pvr_watchdog_kccb_stalled`,
+`pvr_power.c:149–187`); the vendor schedules it with no slot
+(`RGXScheduleCommand`, `rgxfwutils.h:720–721`; `rgxfwutils.c:4966–4976`).
+The firmware CCB carries requests that the firmware starts itself, such as
+a free-list grow or a context reset; no command issued at initialisation is
+answered there.
 
 The command types are the open firmware's: the health check is 115
 (`ROGUE_FWIF_KCCB_CMD_HEALTH_CHECK`, upstream `pvr_rogue_fwif.h:1188`),
@@ -109,19 +116,58 @@ power-off request 1 and forced-idle request 2. The open firmware's power
 states are OFF 0, ON 1, FORCED_IDLE 2 and IDLE 3 (upstream
 `pvr_rogue_fwif.h:105–110`).
 
+## The first board run stopped at the health check
+
+Set `board-bundles-20261025-21` ran on port 3-1
+(`board-session-20261025-18`, `s18-gfx-run`). The start passed (started in
+667 µs). The control read the compatibility record, submitted the health
+check and kicked once: `MTS_SCHEDULE` ← 0 and its read-back, then an
+interrupt (status 1), cleared. It then waited 200 ms and failed with
+`error=3` (its deadline), `health=0 health_status=0x0`, while the shared
+state read `kccb_done=0x1 pow_state=0x3`.
+
+- **Completion path.** The firmware executed the command: it counted it in
+  `kccb_cmds_executed` and raised its interrupt. The control waited only for
+  bit 0 of the return slot, which the open firmware did not set for the
+  health check. That is the wrong completion test for this command; the
+  drivers' own test is the executed count.
+- **OS connection.** None is needed. The open firmware executed the command
+  with the connection's OS state 0, which upstream never writes. The
+  vendor's `KM_SET_OS_CONNECTION` belongs to its own firmware's
+  virtualisation interface (`rgxpower.c:760–800`, `rgxfwutils.h:1243–1271`).
+  Power state 3 is `ROGUE_FWIF_POW_IDLE`, "idle waiting for host
+  handshake": the firmware finished the command and has no work, the state
+  upstream treats as idle (`pvr_power_is_idle`, `pvr_power.c:137–147`). A
+  forced-idle request is accepted from it.
+- **Kick.** One kick per command is correct, and none was missing: the
+  compatibility record needs no command, and the health check was the only
+  command. The firmware acted on the kick (count and interrupt), so the
+  write of 0 with the vendor's read-back reaches it.
+
+**The fix.** The control can now judge the health check as upstream does:
+`pvr_gpu_control_count_executed` gives it the executed count, and the
+command completes when the count has advanced by exactly one and the
+firmware's read offset has passed the command; `pvr_ccb_settle` then frees
+the slot, and a return word, if the firmware wrote one, must be 1. The
+firmware-stop image uses it and also prints the kernel CCB's offsets, the
+health check's return word and the counts. The stop and the OFF are
+unchanged; the stop already accepts power acknowledgements without return
+words.
+
 ## What SunstoneOS uses
 
 SunstoneOS already carries the upstream-derived control and stop
 components: `pvr_gpu_control.c` reads the firmware's compatibility record,
-starts the queues, submits one health check and waits for its return slot;
+starts the queues, submits one health check and waits for its completion;
 `pvr_gpu_stop.c` sends the forced-idle and power-off requests, waits for
-each acknowledgement, and runs the register sequence. Three changes bring
-them to the vendor's flow:
+each acknowledgement, and runs the register sequence. These changes bring
+them to the drivers' flow:
 
 | Item | Vendor DDK | Upstream Linux | A733 |
 | --- | --- | --- | --- |
 | Stop registers | `RGXStop`: interrupt acknowledgement, early `SLC_IDLE` poll, thread-0 associations, no reset | No interrupt acknowledgement, thread-0 and thread-1 associations, `SOFT_RESET` asserted | The vendor's (`pvr_gpu_stop.c`, 14 steps) |
 | Kick | `MTS_SCHEDULE` ← 0, read back | Write only | Write, read back (the firmware-stop image's callback) |
+| Health-check completion | Not waited for | `kccb_cmds_executed` advancing | The executed count advanced by one and the read offset past the command |
 | Power state after each acknowledgement | `POW_OFF` required before `RGXStop` | Not checked | FORCED_IDLE (2) after the idle request, OFF (0) after the power-off request, both required |
 | A failed register stop after the power-off acknowledgement | Logged; the GPU is powered off | The error is returned | The image powers the GPU off and reports the failure |
 
@@ -148,15 +194,16 @@ the GPU off as the vendor does, even when an idle check fails.
 The firmware-stop image (`apps/gpu-power-id/fw-start.c` built with
 `FWS_STOP`; build and check option `--fw-stop`; bundle row 20) runs on port
 3-1 after a power removal, the cold DDR start and the provider-readiness
-checkpoint. It is frozen in set `board-bundles-20261025-21` for lifetime
-`board-session-20261025-18`:
+checkpoint. The fixed image is frozen in set `board-bundles-20261025-23`
+for lifetime `board-session-20261025-20`:
 
 1. The firmware start of the firmware-start image, with the vendor's
    500 ms bound on the started word.
 2. The control, within 200 ms: the compatibility record at OS init +40
    (structure versions 3 and BVNC `36.56.104.183`), the queues, one health
    check (type 115) kicked through `MTS_SCHEDULE` with a read-back, and its
-   return slot. Between polls it reads the MIPS wrapper interrupt status and
+   execution: the executed count advanced by one and the read offset past
+   it. Between polls it reads the MIPS wrapper interrupt status and
    clears a pending event.
 3. The stop, within 300 ms: the forced-idle request, acknowledged with power
    state FORCED_IDLE; the forced power-off request, acknowledged with power
@@ -170,10 +217,13 @@ read that repeats the previous read of the same register is a poll; the
 progress record names it, and the log prints its value only when it
 changes, so that a poll until a deadline does not fill the 16 KiB log.
 
-Predictions: `GPU FWS control result=0 phase=4 error=0 health=1
-health_status=0x1` within a few milliseconds; `GPU FWS power ack_idle=0x1
-ack_off=0x1 state_idle=0x2 state_off=0x0 status_idle=0x1 status_off=0x1`;
-`GPU FWS after kccb_done=0x3 pow_state=0x0`; `GPU FWS stop result=0
+Predictions, from the first run: `GPU FWS control result=0 phase=4 error=0
+health=1 health_status=0x0` within a few milliseconds, `GPU FWS compat ...
+kccb_done=0x1 pow_state=0x3`, and `GPU FWS kccb write=0x1 read=0x1 rtn0=0x0
+executed_before=0x0 executed_after=0x1`; `GPU FWS power ack_idle=0x1
+ack_off=0x1 state_idle=0x2 state_off=0x0` (each `status_` 0x0 unless the
+firmware writes the power commands' return words); `GPU FWS after
+kccb_done=0x3 pow_state=0x0 kccb_read=0x3`; `GPU FWS stop result=0
 phase=10 error=0 step=14 count=14`; then `COMPLETE GPU firmware stop:
 started, health check executed, forced idle and power off acknowledged,
 idle, OFF and provider parked`, status 0 and a responsive ROM.
@@ -212,12 +262,22 @@ deadline, and keep the monitor's 500 ms margin.
   event, 118 retained faults, and the upstream comparison with each of the
   four vendor differences checked
   (`~/.cache/sunstoneos/evidence/gpu-stop-20261025/`).
-- `apps/gpu-power-id/check.py --fw-stop`: eight cases on the linked image,
+- `checks/pvr-gpu-control.c`: the board's behaviour (executed, no return
+  word) ends at the deadline when only the return word counts, and
+  completes with the executed count; a return word of 1 is recorded; two
+  executions or a bad return word refuse; a count without the read offset
+  past the command waits (81 retained faults,
+  `~/.cache/sunstoneos/evidence/gpu-control-20261025/`).
+- `apps/gpu-power-id/check.py --fw-stop`: nine cases on the linked image,
   with a model of the firmware's side of the kernel CCB, power-sync word and
-  interrupt status. Covered: the complete run; an incompatible record; no
-  health completion; a firmware event; a denied power-off; no power-off
+  interrupt status that, as on the board, writes no return words and leaves
+  power state IDLE after the health check. Covered: the complete run, also
+  with return words written; an incompatible record; a health check never
+  consumed; a firmware event; a denied power-off; no power-off
   acknowledgement; a held idle register after the acknowledgement; a
-  platform OFF fault. The start of every case is the firmware-start
+  platform OFF fault. With `--board-log`, the same model run on the image of
+  set 21 reproduces the board's start, control, compatibility and failure
+  lines. The start of every case is the firmware-start
   sequence access for access; after it, every access must be an interrupt
   read or clear, a kick with its read-back, or the next stop step.
 - The GPU service host checks rerun at the stop change; three fixtures that

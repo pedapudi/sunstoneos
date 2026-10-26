@@ -415,6 +415,12 @@ static int control_write32(void *context, uint32_t offset, uint32_t value)
 }
 static int control_compat(void *context, uint32_t offset, void *out, size_t bytes)
 { (void)context; return a733_gpu_memory_compat(&memory, offset, out, bytes); }
+/* The executed kernel-command count, by which upstream judges a health
+ * check (pvr_power.c:150-185): on port 3-1 the firmware counted the health
+ * check executed without writing its return word
+ * (board-session-20261025-18, s18-gfx-run). */
+static int control_executed(void *context, uint32_t *out)
+{ (void)context; return a733_gpu_memory_executed(&memory, out); }
 static int stop_read(void *context, uint32_t offset, uint32_t width, uint64_t *out)
 {
     (void)context;
@@ -471,6 +477,15 @@ static void print_control(enum pvr_gpu_control_result result, uint64_t waited)
     bb_line_hex(&line, "kccb_done", *shared_word(PVR_FW_OS_DATA, 568));
     bb_line_hex(&line, "pow_state", *shared_word(PVR_FW_SYSTEM_DATA, 8));
     bb_line_end(&line); bb_power_print(&line);
+    /* The kernel CCB as the firmware left it: its read offset, the return
+     * word of the health check's slot and the executed count before it. */
+    bb_line_start(&line, "GPU FWS kccb");
+    bb_line_hex(&line, "write", *shared_word(PVR_FW_HOST_CONTROL, 0));
+    bb_line_hex(&line, "read", *shared_word(PVR_FW_HOST_CONTROL, 128));
+    bb_line_hex(&line, "rtn0", *shared_word(PVR_FW_RETURNS, 0));
+    bb_line_hex(&line, "executed_before", control.executed_before);
+    bb_line_hex(&line, "executed_after", control.executed_after);
+    bb_line_end(&line); bb_power_print(&line);
 }
 static void print_stop(enum pvr_gpu_stop_result result, uint64_t waited)
 {
@@ -489,6 +504,9 @@ static void print_stop(enum pvr_gpu_stop_result result, uint64_t waited)
     bb_line_start(&line, "GPU FWS after");
     bb_line_hex(&line, "kccb_done", *shared_word(PVR_FW_OS_DATA, 568));
     bb_line_hex(&line, "pow_state", *shared_word(PVR_FW_SYSTEM_DATA, 8));
+    bb_line_hex(&line, "kccb_read", *shared_word(PVR_FW_HOST_CONTROL, 128));
+    bb_line_hex(&line, "rtn1", *shared_word(PVR_FW_RETURNS, 4));
+    bb_line_hex(&line, "rtn2", *shared_word(PVR_FW_RETURNS, 8));
     bb_line_end(&line); bb_power_print(&line);
 }
 /* After the OFF: the supply end and the provider park of the power-only
@@ -516,7 +534,8 @@ static _Noreturn void fws_stop_run(void)
     static const struct pvr_gpu_stop_ops stop_ops = {fws_now, stop_read, stop_write, stop_sync_write,
                                                      stop_sync_read, stop_isolate, stop_isolate_poll};
     uint64_t begun = bb_power_now();
-    if (!pvr_gpu_control_init(&control, &start, &queue, &control_ops, NULL, begun + FWS_CONTROL_US))
+    if (!pvr_gpu_control_init(&control, &start, &queue, &control_ops, NULL, begun + FWS_CONTROL_US) ||
+        !pvr_gpu_control_count_executed(&control, control_executed))
         bb_power_fail("GPU firmware control refused, GPU left running");
     enum pvr_gpu_control_result c;
     while ((c = pvr_gpu_control_poll(&control, 4)) == PVR_GPU_CONTROL_AGAIN) vTaskDelay(1);
