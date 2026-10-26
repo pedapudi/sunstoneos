@@ -40,7 +40,8 @@ endif()
 option(A733_A76_ADMITTED "Integrated OS with recognition on the admitted Cortex-A76 cores" OFF)
 if(SUNSTONE_MIMUS_WORKERS STREQUAL "8" AND
    (NOT A733_A76_ADMITTED OR SUNSTONE_A733_OS_AUDIO OR
-    SUNSTONE_A733_OS_RADIO OR SUNSTONE_A733_OS_HEADSET OR SUNSTONE_A733_OS_GPU_LINEAR))
+    SUNSTONE_A733_OS_RADIO OR SUNSTONE_A733_OS_HEADSET OR
+    (SUNSTONE_A733_OS_GPU_LINEAR AND SUNSTONE_A733_OS_RESIDENT)))
   message(FATAL_ERROR "Eight OS inference workers require admitted recorded recognition")
 endif()
 # CPU operating points granted by a sealed supervised session; each change

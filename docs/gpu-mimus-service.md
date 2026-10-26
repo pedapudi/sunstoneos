@@ -88,9 +88,9 @@ uncached pages. Nothing is released; a failure retains every page.
    every sum with an int64 sum that a scalar CPU loop computes from the same
    codes and weights. It hands the engine the job's rows and the address, row
    stride and width (4 or 8 bytes) of its sums. The engine reads them out
-   with its own code on both inference workers, half of the rows each, and
+   with its own code over the admitted independent row ranges, and
    then asks for the call's next job, which reuses the output region. The
-   design's "Synchronization across cores" gives why the second worker reads
+   design's "Synchronization across cores" gives why the other workers read
    the sums coherently.
 
 The hang bound `max_job_us` is 1 s from the kick, the most that bind accepts.
@@ -272,7 +272,7 @@ for its address, load and branch. OPEN and thermal reconciliation also check
 the flag. No normal-path queue transaction, cache operation or device access
 is added. The source of the engine borrow boundary is mimus `9c57286b7`,
 `kernels.cc:HookedSums` and `parallel.h:ForRowRanges`. The installed
-`apps/mimus/parallel_runtime.cc:dispatch` waits for the second worker's matching
+`apps/mimus/parallel_runtime.cc:dispatch` waits for every submitted worker's matching
 completion before returning. These sources are preserved with the evidence.
 
 ## Lifecycle and power limits
@@ -281,11 +281,13 @@ The shared power controller uses the vendor top point, 1008 MHz at 960 mV.
 Native backend binding makes both firmware clock fields describe that rate
 before startup. The initial 400 MHz staging field is not the running clock.
 Supervised recorded recognition can combine the GPU with the existing CPU
-clock owner and two admitted A76 workers. The recognizer waits at most one
+clock owner and two or eight inference workers, with admitted A76 ownership. The recognizer waits at most one
 second for initial CPU requests to resolve before GPU OPEN. CPU and GPU owners
 hold distinct rail leases and use the shared PMIC provider; their retained
 failure rules remain independent. See [the composition design](designs/gpu-cpu-clock.md)
-for scheduling, exact grant admission and software evidence.
+for scheduling, exact grant admission and software evidence. The
+[eight-worker extension](designs/gpu-eight-workers.md) preserves owner-only GPU
+calls and joins every sum readout before the producer reuses its output.
 Startup and acknowledged shutdown
 exist, including explicit healthy thermal park and reopen. Automatic idle
 parking and full fault recovery remain

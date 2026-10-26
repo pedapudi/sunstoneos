@@ -183,7 +183,7 @@ def gpu_configuration(elf, required=False):
     assert values[:5] == (1, 2000000, 1000000, 10, 4) and values[5] in (2, 6), 'GPU caller configuration differs'
     assert values[6:] == (1008000000, 960000), 'GPU operating point differs'
     inference = inference_configuration(elf)
-    assert inference['workers'] == 2 and inference['owner_core'] == result['core'], 'GPU inference placement differs'
+    assert inference['workers'] in (2, 8) and inference['owner_core'] == result['core'], 'GPU inference placement differs'
     assert elf.read(one('os_recognition_core')['value'], 1)[0] == result['core'], 'GPU interrupt owner differs'
     routes = one('a733_irq_routes')
     assert routes['size'] % ROUTE_BYTES == 0, 'GPU interrupt table geometry differs'
@@ -342,7 +342,7 @@ def main():
             result['contract_profile'] = profile
         assert result['inference']['workers'] == args.workers, 'Linked worker count differs from build selection'
         if args.workers == 8:
-            assert not any((audio, radio, headset, gpu_linear)), 'Unsupported eight-worker OS profile'
+            assert not any((audio, radio, headset, gpu_linear and args.lifetime != 'supervised')), 'Unsupported eight-worker OS profile'
         if gpu_linear and args.lifetime == 'supervised':
             assert not any((audio, radio, headset, args.npu == '1', args.perf == '1')), 'Unsupported supervised GPU profile'
     except AssertionError as error:
