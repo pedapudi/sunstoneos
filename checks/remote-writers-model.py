@@ -151,6 +151,7 @@ def stage2_checks(build, output):
         regs = defaults()
         regs.update({a: 0 for a in (0x02050010, 0x02050014, 0x070501c0, 0x070501c4,
                                    0x070501d4, 0x07090108, 0x08001004, 0x08001008, 0x03000024)})
+        regs[0x0701022c] = 0  # Unsupported CPU configuration bus: clean refusal.
         regs.update(changes or {})
         pages = PAGES + [(0x02050000, 0x1000), (0x07090000, 0x1000),
                          (0x08001000, 0x1000), (0x03000000, 0x1000)]
@@ -183,6 +184,12 @@ def stage2_checks(build, output):
                 writes.append(address)
                 assert address in (0x08001004, 0x08001008), hex(address)
 
+        if grant_remote or entry == 'a733_stage2_cpu_cache_owned':
+            def time_grant(u, address, size, unused):
+                u.reg_write(a64.UC_ARM64_REG_X0, 1)
+                u.reg_write(a64.UC_ARM64_REG_PC, u.reg_read(a64.UC_ARM64_REG_X30))
+            timer = symbols['a733_stage2_time_valid']
+            uc.hook_add(UC_HOOK_CODE, time_grant, begin=timer, end=timer)
         if grant_remote:
             def grant(u, address, size, unused):
                 u.reg_write(a64.UC_ARM64_REG_X0, 1)
@@ -212,7 +219,7 @@ def stage2_checks(build, output):
     for address, value in ((0x02050014, 1), (0x02050010, 0x100), (0x070501c0, 1),
                            (0x070501c4, 0x20), (0x070501d4, 1), (0x07090108, 1)):
         case('prior-owner-' + hex(address), 'a733_stage2_reset_policy', 0, changes={address: value})
-    case('CPU-cache-authority-unresolved', 'a733_stage2_cpu_cache_owned', 0)
+    case('CPU-cache-refuses-unavailable-bus', 'a733_stage2_cpu_cache_owned', 0)
     case('CPU-cache-refused-before-SD', 'a733_stage2_main', 0, grant_remote=True)
     case('E902-refused-before-SD', 'a733_stage2_main', BIT['E902'], changes={RISCV_BGR: 1})
     case('CE-out-of-reset-refused-before-SD', 'a733_stage2_main', BIT['CE'], changes={CCU + 0xac4: 0x30003})
@@ -221,14 +228,171 @@ def stage2_checks(build, output):
     print('PASS stage-2 admission:', len(cases), 'focused instruction cases')
 
 
+
+def stage2_cpu_checks(build, output, selected=()):
+    """Actual static-OFF owner and joined loader failure; other owners are granted."""
+    with (build / 'a733-stage2.elf').open('rb') as stream:
+        image = ELFFile(stream)
+        segments = [(p['p_vaddr'], p.data()) for p in image.iter_segments() if p['p_type'] == 'PT_LOAD']
+        symbols = {s.name: s['st_value'] for s in image.get_section_by_name('.symtab').iter_symbols()}
+    code = (build / 'a733-stage2.bin').read_bytes()
+    dis = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
+    system = {}
+    for offset in range(0, len(code)-3, 4):
+        op = next(dis.disasm(code[offset:offset+4], 0x47000000+offset), None)
+        if op and op.mnemonic in ('mrs', 'msr', 'dc', 'dsb', 'isb', 'wfe'):
+            system[op.address] = (op.mnemonic, op.op_str)
+    results = []
+    ppu = lambda core: 0x07052000 + core*0x1000
+    control = lambda core: 0x07050200 + core*4
+
+    def case(name, change=None, fault='', expected=0, retained=False, main=False):
+        if selected and name not in selected: return
+        uc = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
+        uc.mem_map(0x47000000, 0x400000); uc.mem_map(SENTINEL, 0x1000)
+        for address, data in segments: uc.mem_write(address, data)
+        for address, size in ((0x07010000, 0x1000), (0x07050000, 0x10000), (0x08001000, 0x1000)):
+            uc.mem_map(address, size)
+        regs = {0x0701022c: 0x10001, 0x08001004: 0, 0x08001008: 0}
+        for core in range(1,8):
+            regs.update({ppu(core): 0x100, ppu(core)+4: 0, ppu(core)+8: 0x100,
+                         ppu(core)+0xfb0: 0x10110100, ppu(core)+0xfc8: 0x0b61043b,
+                         ppu(core)+0xfcc: 0x11, control(core): 0x40, control(core)+0x20: 0x80})
+        regs.update(change or {})
+        for address, value in regs.items(): uc.mem_write(address, value.to_bytes(4,'little'))
+        values = dict(currentel=12, mpidr_el1=0x81000000, midr_el1=0x412fd050,
+                      sctlr_el3=0x30c50832, daif=0x3c0, cntfrq_el0=0, cntpct_el0=24000123,
+                      clidr_el1=0xc3000123, csselr_el1=0)
+        geometries = [0x700fe01a, 0x703fe01a, 0x707fe07a]
+        if fault=='geometry': geometries[2] ^= 8
+        writes, maintenance, reads = [], [], []
+        cache_operands=set()
+        held, polls = set(), {}
+        parks, resets, barriers = [], [], []
+
+        def gpr(name): return 0 if name=='xzr' else uc.reg_read(getattr(a64,'UC_ARM64_REG_'+name.upper()))
+        def hook_return(value):
+            def hook(u, address, size, unused):
+                u.reg_write(a64.UC_ARM64_REG_X0,value)
+                u.reg_write(a64.UC_ARM64_REG_PC,u.reg_read(a64.UC_ARM64_REG_X30))
+            return hook
+        # Unchanged clock/remote contracts are explicit fixture inputs. This
+        # check cannot establish those separate physical prerequisites.
+        for symbol in ('a733_stage2_time_valid','a733_stage2_remote_writers_excluded'):
+            address=symbols[symbol];uc.hook_add(UC_HOOK_CODE,hook_return(1),begin=address,end=address)
+        if main and fault=='card':
+            address=symbols['sunxi_mmc_init'];uc.hook_add(UC_HOOK_CODE,hook_return(0),begin=address,end=address)
+
+        def instruction(u,address,size,unused):
+            mnemonic,operands=system[address]
+            if mnemonic=='wfe': parks.append(True);u.emu_stop();return
+            if mnemonic=='mrs':
+                target,source=operands.lower().split(', ')
+                value=geometries[values['csselr_el1']//2] if source=='ccsidr_el1' else values[source]
+                u.reg_write(getattr(a64,'UC_ARM64_REG_'+target.upper()),value)
+                if source=='cntpct_el0':
+                    if fault=='freeze' and writes: pass
+                    else: values[source] += 2400000 if (fault=='deadline' and writes) or (fault=='cache-deadline' and maintenance) else 24
+            elif mnemonic=='msr':
+                target,source=operands.lower().split(', ')
+                if target=='rmr_el3': resets.append(True);u.emu_stop();return
+                assert target in ('csselr_el1','daifset'),target
+                if target=='csselr_el1': values[target]=gpr(source)
+            elif mnemonic=='dc':
+                kind,source=operands.lower().split(', ');assert kind=='cisw'
+                assert len(held)==7 and all(regs[ppu(c)]==regs[ppu(c)+8]==0 for c in range(1,8))
+                operand=gpr(source);assert operand not in cache_operands
+                cache_operands.add(operand);maintenance.append(operand)
+            else: barriers.append((mnemonic,len(maintenance)))
+            u.reg_write(a64.UC_ARM64_REG_PC,address+4)
+
+        def read(u,access,address,size,value,unused):
+            if not 0x07000000<=address<0x09000000:return
+            assert size==4 and address in regs,hex(address)
+            reads.append(address)
+            if fault=='control-readback' and address==control(1) and (address,0x42) in writes:
+                regs[address]=0x40;u.mem_write(address,(0x40).to_bytes(4,'little'))
+            for core in range(1,8):
+                if address==ppu(core)+8 and core in polls:
+                    polls[core]+=1
+                    if fault not in ('freeze','deadline') or core!=1:
+                        if polls[core]>=3:
+                            regs[address]=0;held.add(core)
+                        else: regs[address]=0x108 if fault=='wake' else 0x100
+                    if fault=='request' and core==1: regs[control(1)]|=1
+                    uc.mem_write(address,regs[address].to_bytes(4,'little'))
+                    uc.mem_write(control(core),regs[control(core)].to_bytes(4,'little'))
+                    break
+
+        def write(u,access,address,size,value,unused):
+            if not 0x07000000<=address<0x09000000:return
+            assert size==4 and address in regs,hex(address)
+            writes.append((address,value));regs[address]=value
+            for core in range(1,8):
+                if address==ppu(core):
+                    assert value==0 and not maintenance
+                    polls[core]=0
+                    if fault=='denial' and core==1:
+                        regs[address]=0x100
+                        # Unicorn performs the original store after this hook;
+                        # inject denial at the following policy read instead.
+                    break
+                if address==control(core):
+                    assert core in held and value==0x42
+                    break
+            else: assert address in (0x08001004,0x08001008),hex(address)
+        def denial(u,access,address,size,value,unused):
+            if fault=='denial' and address==ppu(1) and 1 in polls:
+                u.mem_write(address,(0x100).to_bytes(4,'little'))
+        for address in system: uc.hook_add(UC_HOOK_CODE,instruction,begin=address,end=address)
+        uc.hook_add(UC_HOOK_MEM_READ,read);uc.hook_add(UC_HOOK_MEM_READ,denial);uc.hook_add(UC_HOOK_MEM_WRITE,write)
+        uc.reg_write(a64.UC_ARM64_REG_SP,0x473fff00);uc.reg_write(a64.UC_ARM64_REG_X30,SENTINEL)
+        uc.emu_start(symbols['a733_stage2_main' if main else 'a733_stage2_cpu_cache_owned'],SENTINEL,count=12000000)
+        if main:
+            report=list(struct.unpack('<5Q',uc.mem_read(symbols['a733_stage2_report'],40)))
+            assert parks and not resets and report[3]==12,report
+        else:
+            assert uc.reg_read(a64.UC_ARM64_REG_PC)==SENTINEL,name
+            assert uc.reg_read(a64.UC_ARM64_REG_X0)==expected,name
+        policy_writes=[a for a,v in writes if a in [ppu(c) for c in range(1,8)]]
+        assert bool(policy_writes)==retained,(name,writes)
+        if expected or fault=='card':
+            assert len(maintenance)==18944 and len(held)==7
+            assert ('dsb',18944) in barriers and ('isb',18944) in barriers
+        elif fault=='cache-deadline': assert 0<len(maintenance)<18944
+        else: assert not maintenance
+        results.append(dict(case=name,passed=True,retained=retained,maintenance=len(maintenance),
+                            policy_writes=len(policy_writes),status_polls=sum(polls.values()),parked=bool(parks)))
+
+    case('normal',expected=1,retained=True)
+    case('already-static-OFF',{a:0 for c in range(1,8) for a in (ppu(c),ppu(c)+8)},expected=1,retained=True)
+    case('mismatched-static-policy',{ppu(7):0})
+    case('mismatched-dynamic-policy',{ppu(7)+8:0})
+    case('wake-before-static-ack',fault='wake',expected=1,retained=True)
+    for label,change in [('bus',{0x0701022c:0}),('identity',{ppu(7)+0xfc8:0}),
+                         ('architecture',{ppu(7)+0xfcc:0x10}),('capability',{ppu(7)+0xfb0:0}),
+                         ('operating-mode',{ppu(7)+0xfb0:0x10110110}),('emulation',{ppu(7)+4:1}),
+                         ('policy',{ppu(7):8}),('active',{ppu(7)+8:0x108}),
+                         ('request',{control(7):1})]: case('preflight-'+label,change)
+    case('preflight-geometry',fault='geometry')
+    for fault in ('denial','request','deadline','freeze','cache-deadline','control-readback'):case(fault,fault=fault,retained=True)
+    case('loader-retains-policy-timeout',fault='deadline',retained=True,main=True)
+    case('loader-retains-after-card-refusal',fault='card',retained=True,main=True)
+    (output/'stage2-cpu.json').write_text(json.dumps(dict(passed=True,physical_access=False,cases=results,
+        scope='Actual linked PPU owner and loader retention; system-register/MMIO/cache effects modeled; remote and clock prerequisites granted.'),indent=2)+'\n')
+    print('PASS static-OFF/cache owner:',len(results),'focused native cases')
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--stage2-build', type=Path, help='only changed stage-2 admission using its already-built ELF')
+    parser.add_argument('--cpu-case', action='append', default=[], help='select added CPU owner cases without replaying accepted cases')
+    parser.add_argument('--cpu-only', action='store_true', help='changed static-OFF owner in --stage2-build')
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
     if args.stage2_build:
-        stage2_checks(args.stage2_build, args.output)
+        if args.cpu_only: stage2_cpu_checks(args.stage2_build, args.output, args.cpu_case)
+        else: stage2_checks(args.stage2_build, args.output)
         return
     image = load(build(args.output))
     results = []

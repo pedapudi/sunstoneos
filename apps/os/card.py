@@ -38,31 +38,125 @@ EVIDENCE = {'qualification': 80, 'wiring': 216, 'memory': 248, 'recovery': 280,
             'thermal_clocks': 696, 'thermal_supervision': 728}
 
 
+NPU_WORK_US = 60000000
+
+
+def evidence_offsets(raw):
+    offsets = dict(EVIDENCE)
+    if host.npu_session(raw):
+        offsets.update({'npu_' + name: 808 + offset for name, offset in
+                        zip(('admission', 'clock', 'power', 'supervision', 'ddr'), (112, 144, 176, 208, 240))})
+    return offsets
+
+
+def npu_summary(raw):
+    owner, command, supervisor = struct.unpack_from('<3Q', raw, 832)
+    pck, model, jobs = struct.unpack_from('<3I', raw, 856)
+    return {'owner': owner, 'command_admission': command, 'supervisor': supervisor,
+            'pck_client': pck, 'client_model': model, 'jobs': jobs,
+            'catalogue': bytes(raw[888:920]).hex(), 'pool': host.NPU_RANGE,
+            'work_us': NPU_WORK_US, 'mhz': 852, 'supply_uv': 800000}
+
+
+def linked_npu_assets(elf):
+    """Authenticate the actual embedded model and vectors, using linked pointers."""
+    def one(name):
+        rows = [s for s in elf.symbols if s['name'] == name and s['shndx'] != 0]
+        require(len(rows) == 1, 'NPU linked symbol is absent or ambiguous: ' + name)
+        return rows[0]
+    def value(name):
+        symbol = one(name)
+        require(symbol['size'] == 4, 'NPU linked count size differs.')
+        return struct.unpack('<I', elf.read(symbol['value'], 4))[0]
+    model = value('os_npu_client_model')
+    catalogue = json.loads((ROOT / 'tools/npu-session-models.json').read_text())['models']
+    require(model < len(catalogue), 'NPU linked catalogue entry differs.')
+    selected = catalogue[model]
+    for symbol, entries in [('os_npu_models', [selected['model']]),
+                            ('os_npu_inputs', [v['reference'] for v in selected['inputs']]),
+                            ('os_npu_references', [v['reference'] for v in selected['outputs']])]:
+        table = one(symbol)
+        require(table['size'] == 16 * len(entries), 'NPU linked vector table size differs.')
+        for i, expected in enumerate(entries):
+            pointer, size = struct.unpack('<2Q', elf.read(table['value'] + 16*i, 16))
+            require(size == expected['bytes'] and sha(elf.read(pointer, size)) == expected['sha256'],
+                    'NPU embedded asset differs from the authenticated catalogue.')
+    require(value('os_npu_input_count') == len(selected['inputs']) and
+            value('os_npu_output_count') == len(selected['outputs']), 'NPU linked vector counts differ.')
+
+
+def npu_policy(policy, raw, directory, frozen):
+    if not host.npu_session(raw):
+        require('npu' not in policy, 'NPU cold authority supplied without NPU.')
+        return
+    require(policy.get('npu') == npu_summary(raw), 'Cold NPU owner/catalogue/jobs/pool/operating point differs.')
+    rules = host.module('card_npu_rules', ROOT / 'apps/npu-board/prepare.py')
+    conditions = {k: set(v) for k, v in rules.CONDITIONS.items()}
+    conditions['clock'].remove('supervised-cross-pll-disturbance-risk')
+    conditions['clock'].add('cold-boot-cross-pll-disturbance-qualified')
+    conditions['supervision'] = {'watchdog-reset-retires-npu-and-memory',
+        'cold-entry-excludes-remote-writers', 'retain-until-qualified-cold-reset', 'stop-after-first-failure'}
+    def evidence(name, ref):
+        require(isinstance(ref, dict) and set(ref) == {'path', 'sha256'} and isinstance(ref['path'], str),
+                'Invalid cold NPU condition reference.')
+        data = package.read_regular(directory / ref['path'], 16 << 20)
+        require(sha(data) == ref['sha256'], 'Cold NPU condition evidence changed.')
+        frozen[name] = data
+    for name in ('admission', 'clock', 'power', 'supervision', 'ddr'):
+        fact = json.loads(frozen['npu_' + name])
+        require(fact.get('identity') == policy['identity'] and fact.get('image_sha256') == policy['image_sha256'] and
+                fact.get('sid_authority') == policy['sid_authority'] and fact.get('evidence_class') == policy['evidence_class'] and
+                fact.get('reviewed') is True, 'Cold NPU record is not bound to this board/image/evidence class.')
+        if policy['evidence_class'] == 'board-records':
+            rules.physical_authority(fact)
+        if name == 'ddr':
+            require(fact.get('schema') == 'a733-ddr-reservation-v1' and fact.get('ranges') == [host.NPU_RANGE] and
+                    fact.get('exclusive') is True and fact.get('published_cache_disabled') is True and
+                    fact.get('remote_writers_excluded') is True and fact.get('evidence'), 'Cold NPU DDR reservation differs.')
+            for i, ref in enumerate(fact['evidence']): evidence('npu_ddr_' + str(i), ref)
+            continue
+        require(fact.get('schema') == 'a733-os-card-npu-' + name + '-v1' and
+                isinstance(fact.get('conditions'), dict) and set(fact['conditions']) == conditions[name],
+                'Cold NPU condition set differs: ' + name)
+        for condition, ref in fact['conditions'].items(): evidence('npu_' + name + '_' + condition, ref)
+        if name == 'admission':
+            require(fact.get('ddr_sha256') == policy['evidence']['npu_ddr']['sha256'], 'Cold NPU admission names another pool record.')
+        if name == 'power': require(fact.get('supply_uv') == 800000, 'Cold NPU rail must be 800 mV.')
+        if name == 'clock':
+            word = fact.get('sid_dvfs_word')
+            require(type(word) is int and 0 <= word < 2**32 and
+                    (((word >> 16) & 255) or ((word >> 8) & 255)) in (0x12, 0x04, 0x05) and
+                    fact.get('mhz') == 852, 'Cold NPU vendor top point is unsupported by the fixed 800 mV provider.')
+        if name == 'supervision':
+            require(fact.get('supervisor') == policy['npu']['supervisor'] and fact.get('work_us') == NPU_WORK_US and
+                    fact.get('one_attempt_per_boot') is True, 'Cold NPU finite-work supervision differs.')
+
+
 def canonical_session(raw):
-    require(len(raw) in (808, 904), 'Recorded card sessions have exactly 808 or 904 bytes.')
+    require(len(raw) in (808, 904, 1080, 1176), 'Recorded card session size is unsupported.')
     result = bytearray(raw)
     result[24:40] = bytes(16)
-    if len(raw) == 904:
-        result[840:856] = bytes(16)
-        result[872:904] = bytes(32)
+    if host.session_layout(raw)[1]:
+        result[-64:-48] = bytes(16)
+        result[-32:] = bytes(32)
     return bytes(result)
 
 
 def template_check(raw):
-    require(len(raw) in (808, 904) and struct.unpack_from('<2Q', raw, 24) == (0, 0) and
+    require(len(raw) in (808, 904, 1080, 1176) and struct.unpack_from('<2Q', raw, 24) == (0, 0) and
             struct.unpack_from('<I', raw, 400)[0] == 2,
             'Cold recorded template requires workload 2 and zero epoch/generation.')
     require(struct.unpack_from('<Q', raw, 312)[0] and any(raw[320:352]), 'Cold SID binding required.')
-    if len(raw) == 904:
-        require(struct.unpack_from('<2Q', raw, 840) == (0, 0) and
-                struct.unpack_from('<I', raw, 856)[0] == 3,
+    if host.session_layout(raw)[1]:
+        require(struct.unpack_from('<2Q', raw, len(raw) - 64) == (0, 0) and
+                struct.unpack_from('<I', raw, len(raw) - 48)[0] == 3,
                 'Cold CPU grant requires both clusters and zero epoch/generation.')
     # Reuse the native admission's existing host statement with private,
     # representative identities. These bytes never enter the output or hashes.
     representative = bytearray(raw)
     struct.pack_into('<2Q', representative, 24, 1, 1)
-    if len(raw) == 904:
-        struct.pack_into('<2Q', representative, 840, 1, 1)
+    if host.session_layout(raw)[1]:
+        struct.pack_into('<2Q', representative, len(raw) - 64, 1, 1)
     host.session_check(representative, False)
 
 
@@ -118,18 +212,19 @@ def policy_check(policy_path, raw, image, manifest, monitor, model_fixture):
             all(type(w) is int and 0 <= w < 2**32 for w in words) and
             hashlib.sha256(struct.pack('<4I', *words)).digest() == raw[320:352], 'Cold SID identity differs.')
     refs = p.get('evidence', {})
-    require(set(refs) == set(EVIDENCE) | ({'cpu_b1'} if len(raw) == 904 else set()), 'Cold evidence set differs.')
+    offsets = evidence_offsets(raw)
+    require(set(refs) == set(offsets) | ({'cpu_b1'} if host.session_layout(raw)[1] else set()), 'Cold evidence set differs.')
     frozen = {}
     for name, ref in refs.items():
         require(isinstance(ref, dict) and set(ref) == {'path', 'sha256'} and
                 isinstance(ref['path'], str), 'Invalid cold evidence reference.')
         data = package.read_regular(policy_path.parent / ref['path'], 16 << 20)
         require(sha(data) == ref['sha256'], 'Cold evidence changed: ' + name)
-        if name in EVIDENCE:
-            offset = EVIDENCE[name]
+        if name in offsets:
+            offset = offsets[name]
             require(hashlib.sha256(data).digest() == raw[offset:offset + 32], 'Session evidence differs: ' + name)
         frozen[name] = data
-    if len(raw) == 904:
+    if host.session_layout(raw)[1]:
         b1, cpu = json.loads(frozen['cpu_b1']), p.get('cpu', {})
         require(b1.get('schema') == host.B1_SCHEMA and b1.get('passed') is True and
                 b1.get('identity') == p['identity'] and b1.get('grant_clusters') == 0 and
@@ -145,6 +240,7 @@ def policy_check(policy_path, raw, image, manifest, monitor, model_fixture):
                 g['approval'] == hashlib.sha256(policy_raw).digest(), 'Cold CPU policy/grant differs from vendor maxima.')
     else:
         require('cpu' not in p, 'CPU policy supplied without a linked grant.')
+    npu_policy(p, raw, policy_path.parent, frozen)
     return p, policy_raw, frozen
 
 
@@ -160,7 +256,7 @@ def prepare(a):
             manifest.get('lifetime') == profile['lifetime'] == 'resident' and
             manifest.get('image_sha256') == sha(image) and manifest.get('contract_profile') == profile and
             manifest.get('inference') == inference and
-            not any(manifest.get(k) for k in ('audio', 'radio', 'headset', 'gpu_linear', 'npu', 'perf_modes')),
+            not any(manifest.get(k) for k in ('audio', 'radio', 'headset', 'gpu_linear', 'perf_modes')),
             'Expected the linked resident recorded OS profile.')
     runtime, build_id = flat_runtime(image)
     raw = a.session.read_bytes()
@@ -174,9 +270,11 @@ def prepare(a):
     assets_header = SimpleNamespace(read_text=lambda: 'mimus_asset_address[3]={0x44000000,0x44800000,0x45000000};\n' +
                                    'mimus_asset_bytes[3]={' + ','.join(str(e['bytes']) for e in declared) + '};\n')
     linked = host.os_link.check(SimpleNamespace(read_bytes=lambda: image), assets_header, ROOT / 'apps/mimus/recorded.h',
-                               ROOT / 'boot/a733/stage2/loader.c', cpu_clock=len(raw) == 904)
+                               ROOT / 'boot/a733/stage2/loader.c', cpu_clock=host.session_layout(raw)[1], npu=host.npu_session(raw))
     require(all(manifest.get(k) == v for k, v in linked.items() if k != 'perf_boot_mode' or v is not None),
             'The actual linked services, capability or layout differs from the manifest.')
+    if host.npu_session(raw):
+        linked_npu_assets(elf)
     assets = [a.base_model.read_bytes(), a.overlay_model.read_bytes(), a.wav.read_bytes()]
     for value, entry in zip(assets, declared):
         require(len(value) == entry['bytes'] and sha(value) == entry['sha256'], 'Recognition input identity differs.')
@@ -213,7 +311,7 @@ def prepare(a):
     updates.plan(out / 'slot/plan.json', out / 'allocation.json', a.card_image,
                  json.loads(card_raw), out / 'storage')
     result = {'schema': SCHEMA, 'physical_qualified': False, 'model_fixture': policy['evidence_class'] == 'model-fixture',
-              'inference': inference, 'cpu_vendor_top_policy': len(raw) == 904, 'generation': plan['generation'],
+              'inference': inference, 'cpu_vendor_top_policy': host.session_layout(raw)[1], 'npu': npu_summary(raw) if host.npu_session(raw) else None, 'generation': plan['generation'],
               'slot': plan['slot'], 'runtime_bytes': len(runtime), 'models_bytes': len(models),
               'files': {str(p.relative_to(out)): sha(p.read_bytes()) for p in sorted(out.rglob('*')) if p.is_file()},
               'physical_prerequisites': ['reviewed card allocation and backup-first range sessions',

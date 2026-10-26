@@ -77,9 +77,26 @@ static int watch(uint64_t *now)
     }
     return !(word&STOP)||*now<word>>3;
 }
+static int progress(uint64_t *now)
+{
+    if(!watch(now))return fail();
+    BOARD_PROGRESS(OS_SERVICE_NPU);return 1;
+}
+int os_npu_progress(void)
+{uint64_t now;return progress(&now);}
 int os_npu_stopping(void)
 {return !live()||(atomic_load_explicit(&npu.gate,memory_order_acquire)&STOP)!=0;}
-unsigned os_npu_stopped(void){return atomic_load_explicit(&npu.stopped,memory_order_acquire);}
+unsigned os_npu_stopped(void)
+{
+    /* A late IRQ or worker fault revokes the stopped proof even after the
+     * finite client has published its immutable report and suspended. */
+    return atomic_load_explicit(&npu.stopped,memory_order_acquire)&&
+        !atomic_load_explicit(&npu.failed,memory_order_acquire)&&
+        !atomic_load_explicit(&npu.runtime.failed,memory_order_acquire)&&
+        !atomic_load_explicit(&npu.runtime.service.irq_pending,memory_order_acquire)&&
+        (!atomic_load_explicit(&npu.active,memory_order_acquire)||
+         atomic_load_explicit(&npu.runtime.service.irq_stopped,memory_order_acquire));
+}
 #ifdef SUNSTONE_A733_OS_PERF
 /* Performance modes: the request number and rate in one word, the answer
  * number and result in another; the bootstrap serves requests only after the
@@ -123,7 +140,7 @@ static int call(enum npu_service_operation op,unsigned model,uint64_t timeout)
 {
     uint64_t now,ticket;
     struct npu_service_reply reply;
-    if(!watch(&now))return fail();
+    if(progress(&now)!=1)return -1;
     uint64_t end=npu.end,word=atomic_load_explicit(&npu.gate,memory_order_acquire);
     if((word&STOP)&&(word>>3)<end)end=word>>3;
     if(end<=now)return fail();
@@ -247,6 +264,11 @@ int os_npu_start(void)
     device_memory_lookup(&npu.pool,npu.lease)->state=DEVICE_MEMORY_DEVICE;
     const struct a733_board_session *b=&s->board;
     npu.end=board.session.deadline_us-10000;
+#ifdef SUNSTONE_BOARD_RESIDENT
+    uint64_t begun;
+    if(!clock_now(&begun)||begun>UINT64_MAX-OS_NPU_WORK_US)return 0;
+    if(npu.end>begun+OS_NPU_WORK_US)npu.end=begun+OS_NPU_WORK_US;
+#endif
     const struct a733_npu_startup_config startup={{{b->fabric[0],b->fabric[1],b->fabric[2]},
         {b->fabric_hz[0],b->fabric_hz[1],b->fabric_hz[2]}},g->owner,npu.end,g->pck_client};
     const struct a733_npu_startup_providers p={&providers.shared.counter,&providers.shared.clocks,

@@ -183,6 +183,7 @@ def emulate(elf_path):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--evidence', type=Path, required=True)
+    p.add_argument("--resident-owner", action="store_true", help="only changed static-OFF release/mailbox composition")
     args = p.parse_args()
     out = args.evidence.resolve()
     assert ROOT not in [out, *out.parents]
@@ -200,12 +201,19 @@ def main():
         dest = out / 'source' / source
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / source, dest)
-    run(['clang-21', '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
+    run(['clang-21', *(['-DSUNSTONE_BOARD_RESIDENT=1'] if args.resident_owner else []), '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
          '-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-I', str(ROOT / 'include'),
          *[str(ROOT / p) for p in ['checks/a733-cpu-entry.c', 'platform/a733/cpu_entry.c', 'platform/a733/cpu_start.c']],
          '-o', str(out / 'owner-check')], 'owner-build.log')
     run([str(out / 'owner-check')], 'owner-run.log')
-    flags = ['clang-21', '--target=aarch64-none-elf', '-march=armv8-a', '-mstrict-align', '-mgeneral-regs-only',
+    if args.resident_owner:
+        result = {'passed': True, 'scope': 'Resident power/mailbox owner with immediate wake; no physical qualification',
+                  'commands': commands, 'inputs': {s: digest(ROOT / s) for s in SOURCES},
+                  'executable_sha256': digest(out / 'owner-check')}
+        (out / 'results.json').write_text(json.dumps(result, indent=2) + '\n')
+        print('PASS resident immediate-wake arrival stays parked until POWERED and mailbox release')
+        return
+    flags = ['clang-21' , '--target=aarch64-none-elf', '-march=armv8-a', '-mstrict-align', '-mgeneral-regs-only',
              '-O2', '-ffreestanding', '-fno-stack-protector', '-Wall', '-Wextra', '-Werror', '-fstack-usage', '-I', str(ROOT / 'include')]
     for source, name in [('platform/a733/cpu_entry.c', 'owner'), ('platform/a733/cpu_entry_native.c', 'native'), ('platform/a733/cpu_entry.S', 'entry')]:
         run(flags + ['-c', str(ROOT / source), '-o', str(out / (name + '.o'))], name + '-target.log')

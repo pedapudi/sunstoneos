@@ -216,12 +216,6 @@ uint32_t a733_stage2_remote_writers_mask(void)
 {
     return remote_sampled ? remote_mask : A733_REMOTE_WRITERS_ALL;
 }
-/* The pinned boot0 monitor path cleans/invalidates the CLIDR-visible caches,
- * including the A733's documented DSU L3, and orders its uncached header stores
- * before the AArch64 jump. Secondary exclusion still needs actual OFF plus
- * stable wake/start policy: local SCTLR and a clear non-Arm mask cannot prove
- * that no secondary can start after a snapshot. Refuse before SD/slot writes. */
-int a733_stage2_cpu_cache_owned(void) { return 0; }
 /* The fixed resident contract selects ordinary card boot after system reset:
  * no FEL flag or CPU redirect and no prior watchdog owner. The loader repeats
  * these reads immediately before keyed arming. This admits a reset policy;

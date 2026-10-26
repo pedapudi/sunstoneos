@@ -279,19 +279,20 @@ def container_writes(manifest_path):
 
 def os_session_generation(raw, generation):
     """Bind only the recorded-card template's generation; epochs stay zero."""
-    if (len(raw) not in (808, 904) or struct.unpack_from('<3Q', raw) !=
+    if (len(raw) not in (808, 904, 1080, 1176) or struct.unpack_from('<3Q', raw) !=
             (0x4153373342535332, 2, 592) or struct.unpack_from('<2Q', raw, 24) != (0, 0) or
             struct.unpack_from('<I', raw, 400)[0] != 2 or
             struct.unpack_from('<3Q', raw, 592) != (0x415337334f534131, 1, len(raw))):
         raise ValueError('Expected an unassigned zero-epoch recorded OS template')
     result = bytearray(raw)
     struct.pack_into('<Q', result, 32, generation)
-    if len(raw) == 904:
-        if (struct.unpack_from('<3Q', raw, 808) != (0x4153373343505531, 1, 96) or
-                struct.unpack_from('<2Q', raw, 840) != (0, 0) or
-                struct.unpack_from('<I', raw, 856)[0] != 3):
+    if len(raw) in (904, 1176):
+        base = len(raw) - 96
+        if (struct.unpack_from('<3Q', raw, base) != (0x4153373343505531, 1, 96) or
+                struct.unpack_from('<2Q', raw, base + 32) != (0, 0) or
+                struct.unpack_from('<I', raw, base + 48)[0] != 3):
             raise ValueError('Expected an unassigned recorded-card CPU grant')
-        struct.pack_into('<Q', result, 848, generation)
+        struct.pack_into('<Q', result, base + 40, generation)
     return bytes(result)
 
 

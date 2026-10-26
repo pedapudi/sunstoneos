@@ -8,13 +8,18 @@ struct model {
     struct a733_cpu_entry entry;
     struct a733_cpu_start power;
     uint64_t now;
-    uint32_t arch, lo, hi, control, mode;
+    uint32_t arch, lo, hi, control, mode, policy, powered;
+    unsigned published;
     unsigned calls, mailbox_calls, fail_at, late_at, power_fail, suppress, report_bad;
     unsigned release_count, arm_count;
 };
 static void arrival(struct model *m)
 {
     if(m->slot.report.state || m->suppress)return;
+#ifdef SUNSTONE_BOARD_RESIDENT
+    assert(m->published && m->arm_count==1 && m->slot.command.state==A733_ENTRY_ARMED);
+    assert(!m->release_count); /* Immediate wake can arrive, never continue. */
+#endif
     unsigned core=m->power.config.core;
     m->slot.report=(struct a733_cpu_report){.epoch=m->entry.config.epoch,.core=core,
         .midr=core<6?0x412fd052:0x413fd0b1,.mpidr=UINT64_C(0x81000000)+(core<<8),
@@ -41,6 +46,9 @@ static uint32_t *reg(struct model *m,uintptr_t address)
     if(address==0x08001008+core*0x1000)return &m->hi;
     if(address==0x07050200+core*4)return &m->control;
     if(address==0x07050220+core*4)return &m->mode;
+#ifdef SUNSTONE_BOARD_RESIDENT
+    if(address==0x07052000+core*0x1000)return &m->policy;
+#endif
     assert(0);return NULL;
 }
 static int read_reg(void *ctx,uintptr_t address,uint32_t *value)
@@ -48,13 +56,27 @@ static int read_reg(void *ctx,uintptr_t address,uint32_t *value)
     struct model *m=ctx;++m->calls;
     if(m->power_fail)return 0;
     if(address==0x07052008+(uintptr_t)m->power.config.core*0x1000) {
+#ifdef SUNSTONE_BOARD_RESIDENT
+        *value=m->powered|(m->policy&0x100);if(m->powered)arrival(m);
+#else
         *value=(m->control&1)?8:0;if(*value)arrival(m);
+#endif
     } else *value=*reg(m,address);
     return 1;
 }
 static int write_reg(void *ctx,uintptr_t address,uint32_t value)
-{struct model *m=ctx;++m->calls;*reg(m,address)=value;return 1;}
-static int barrier(void *ctx) {++((struct model *)ctx)->calls;return 1;}
+{
+    struct model *m=ctx;++m->calls;*reg(m,address)=value;
+#ifdef SUNSTONE_BOARD_RESIDENT
+    if(address==0x07052000+(uintptr_t)m->power.config.core*0x1000) {
+        assert(value==0x100 && m->published && m->arm_count==1);
+        assert(m->lo==m->power.config.entry && !m->hi && (m->arch&1));
+        m->powered=8;arrival(m); /* Wake before the explicit hotplug request. */
+    }
+#endif
+    return 1;
+}
+static int barrier(void *ctx) {struct model *m=ctx;++m->calls;m->published=1;return 1;}
 static int mailbox_result(struct model *m)
 {
     ++m->calls;++m->mailbox_calls;
@@ -77,8 +99,11 @@ static int arm(void *ctx,unsigned core,const struct a733_cpu_command *command)
 static int release(void *ctx,unsigned core,uint64_t epoch)
 {
     struct model *m=ctx;assert(core==m->power.config.core && epoch==m->slot.command.epoch);
-    assert(m->power.state==A733_CPU_START_POWERED && !m->control && !m->mode);
+    assert(m->power.state==A733_CPU_START_POWERED && !(m->control&1) && !m->mode);
     assert(m->entry.report.state==A733_ENTRY_ARRIVED);
+#ifdef SUNSTONE_BOARD_RESIDENT
+    assert(m->control==2); /* Continuation may clear wake-disable only now. */
+#endif
     ++m->release_count;m->slot.command.state=A733_ENTRY_RELEASE;
     m->slot.report.state=A733_ENTRY_RELEASED;
     return mailbox_result(m);
@@ -86,6 +111,9 @@ static int release(void *ctx,unsigned core,uint64_t epoch)
 static void setup(struct model *m,unsigned core)
 {
     memset(m,0,sizeof(*m));m->now=1;
+#ifdef SUNSTONE_BOARD_RESIDENT
+    m->control=2;
+#endif
     struct a733_cpu_start_config p={.ops={read_reg,write_reg,barrier,clock_read},
         .context=m,.boot_mpidr=0x81000000,.entry=0x48000000,.lease=17,.deadline=1000,.core=core};
     assert(a733_cpu_start_init(&m->power,&p));
@@ -113,7 +141,13 @@ int main(void)
         setup(&m,c);assert(run(&m)==A733_CPU_ENTRY_DISPATCHED);
         assert(m.arm_count==1 && m.release_count==1 && m.mailbox_calls==5);
         assert(m.entry.report.core==c && m.entry.report.state==A733_ENTRY_RELEASED);
-        assert(m.entry.writes_attempted==2 && m.power.writes_attempted==7);quiet(&m);
+        assert(m.entry.writes_attempted==2 && m.power.writes_attempted==
+#ifdef SUNSTONE_BOARD_RESIDENT
+        8
+#else
+        7
+#endif
+        );quiet(&m);
     }
     for(unsigned op=1;op<=5;++op) {
         setup(&m,3);m.fail_at=op;assert(run(&m)==A733_CPU_ENTRY_RETAINED);

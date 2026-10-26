@@ -27,12 +27,18 @@ void os_npu_report_copy(uint8_t out[OS_NPU_REPORT_BYTES])
     if(atomic_load_explicit(&published.finished,memory_order_acquire)){memcpy(out,&published,OS_NPU_REPORT_BYTES);return;}
     struct os_npu_report pending={0};header(&pending);memcpy(out,&pending,OS_NPU_REPORT_BYTES);
 }
+int os_npu_complete(void)
+{
+    return atomic_load_explicit(&published.finished,memory_order_acquire)&&
+        published.stopped&&!published.retained&&os_npu_stopped();
+}
 void os_npu_client_task(void *unused)
 {
     (void)unused;struct os_npu_report report={0},*r=&report;
     const struct os_session *s=os_session();
     header(r);r->model=os_npu_client_model;r->jobs_selected=s->npu.jobs;r->pattern=OS_NPU_OUTPUT_PATTERN;
     for(;;) {
+        if(os_npu_progress()!=1)goto retained;
         int opened=os_npu_open();
         if(opened==1)break;
         if(opened<0||!board_live(NULL))goto retained;
@@ -74,7 +80,7 @@ void os_npu_client_task(void *unused)
 close:
     if(os_npu_close()!=1)goto retained;
     while(!os_npu_stopped()) {
-        if(!board_live(NULL))goto retained;
+        if(os_npu_progress()!=1)goto retained;
         (void)ulTaskNotifyTake(pdTRUE,pdMS_TO_TICKS(25));
     }
 done:

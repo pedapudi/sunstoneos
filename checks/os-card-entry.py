@@ -26,8 +26,12 @@ def main():
     with (a.build/'a733-stage2.elf').open('rb') as stream:
         elf = ELFFile(stream)
         symbols = {s.name:int(s['st_value']) for s in elf.get_section_by_name('.symtab').iter_symbols() if s['st_shndx'] != 'SHN_UNDEF'}
+    runtime = (bundle/'runtime.bin').read_bytes()
+    assert 0 < len(runtime) <= 0xf00000, 'Runtime overlaps session page'
+    runtime_span = (len(runtime) + 4095) & ~4095
     session = (bundle/'slot/os-session.bin').read_bytes()
     header = (bundle/'slot/header.bin').read_bytes()
+    grant_base = len(session) - 96
     policy = json.loads((bundle/'cold-policy.json').read_text())
     cs = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
     system = {}
@@ -38,13 +42,13 @@ def main():
     def run(name, change=None, status=7, detail=None, readback=False, no_grant=False):
         s, h = bytearray(session), bytearray(header)
         if no_grant:
-            s = s[:808]; struct.pack_into('<Q', s, 608, 808); struct.pack_into('<Q', h, 136, 808)
+            s = s[:grant_base]; struct.pack_into('<Q', s, 608, grant_base); struct.pack_into('<Q', h, 136, grant_base)
         if change: change(s,h)
         u = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
-        for address,size in ((0x47000000,0x400000),(0x41f00000,0x1000),(0x42000000,0x10000),(0x41000000,0x300000)):
+        for address,size in ((0x47000000,0x400000),(0x41f00000,0x1000),(0x42000000,0x10000),(0x41000000,runtime_span)):
             u.mem_map(address,size)
         u.mem_write(0x47000000,raw);u.mem_write(0x41f00000,bytes(s));u.mem_write(0x47200000,bytes(h))
-        u.mem_write(0x41000000,(bundle/'runtime.bin').read_bytes())
+        u.mem_write(0x41000000,runtime)
         sid = dict(zip(range(0x200,0x210,4),policy['sid_words']))
         writes,reads,stop = [],[],[]
         state = {'counter':24000123,'instructions':0}
@@ -89,7 +93,7 @@ def main():
         if status==6:
             assert stop==['os-entry'] and reads==[0x200,0x204,0x208,0x20c]
             epoch=struct.unpack_from('<Q',result,24)[0]
-            assert epoch and (no_grant or struct.unpack_from('<Q',result,840)[0]==epoch)
+            assert epoch and (no_grant or struct.unpack_from('<Q',result,grant_base+32)[0]==epoch)
             assert struct.unpack_from('<2Q',c,24)==(epoch,1)
             assert c[192:224]==hashlib.sha256(result).digest()
             assert struct.unpack_from('<Q',c)[0]==0x415337334f524331
@@ -102,19 +106,19 @@ def main():
             assert stop==['rom-return'] and result==bytes(s) and not any(c)
             if status==7: assert not writes
         cases.append({'name':name,'status':got,'detail':why,'instructions':state['instructions'],'watchdog_writes':len(writes)})
-    run('actual904-fresh-cpu-authority',status=6)
-    run('compatible808-recorded',status=6,no_grant=True)
+    run(f'actual{len(session)}-fresh-cpu-authority',status=6)
+    run(f'compatible{grant_base}-recorded',status=6,no_grant=True)
     for name,offset,fmt,value,detail in (
             ('persisted-board-epoch',24,'Q',9,3),('slot-generation-mismatch',32,'Q',9,2),
             ('sid-authority-absent',312,'Q',0,3),('wrong-board',320,'I',0,4),
-            ('persisted-grant-epoch',840,'Q',9,5),('grant-generation-mismatch',848,'Q',9,5),
-            ('grant-magic',808,'Q',0,5),('grant-version',816,'Q',2,5),('grant-size',824,'Q',95,5),
-            ('grant-owner',832,'Q',0,5),('grant-one-cluster',856,'I',1,5),('grant-zero-max',860,'I',0,5),
-            ('grant-zero-budget',868,'I',0,5),('grant-over-budget',868,'I',65,5),
+            ('persisted-grant-epoch',grant_base+32,'Q',9,5),('grant-generation-mismatch',grant_base+40,'Q',9,5),
+            ('grant-magic',grant_base,'Q',0,5),('grant-version',grant_base+8,'Q',2,5),('grant-size',grant_base+16,'Q',95,5),
+            ('grant-owner',grant_base+24,'Q',0,5),('grant-one-cluster',grant_base+48,'I',1,5),('grant-zero-max',grant_base+52,'I',0,5),
+            ('grant-zero-budget',grant_base+60,'I',0,5),('grant-over-budget',grant_base+60,'I',65,5),
             ('nonrecorded-grant',400,'I',4,3)):
         run(name,lambda s,h,o=offset,f=fmt,v=value:struct.pack_into('<'+f,s,o,v),detail=detail)
-    run('empty-policy-digest',lambda s,h:s.__setitem__(slice(872,904),bytes(32)),detail=5)
-    run('unknown-extent-size',lambda s,h:struct.pack_into('<Q',h,136,905),detail=1)
+    run('empty-policy-digest',lambda s,h:s.__setitem__(slice(grant_base+64,grant_base+96),bytes(32)),detail=5)
+    run('unknown-extent-size',lambda s,h:struct.pack_into('<Q',h,136,grant_base+97),detail=1)
     run('watchdog-readback-stops',status=8,readback=True)
     result={'passed':True,'physical_access':False,'cases':cases,'stage2_sha256':hashlib.sha256(raw).hexdigest(),
             'bundle_sha256':hashlib.sha256((bundle/'bundle.json').read_bytes()).hexdigest(),

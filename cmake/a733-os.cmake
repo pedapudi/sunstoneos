@@ -48,7 +48,7 @@ endif()
 option(SUNSTONE_A733_OS_CPU_CLOCK "Integrated OS with granted CPU operating-point changes" OFF)
 if(SUNSTONE_A733_OS_CPU_CLOCK AND SUNSTONE_A733_OS_RESIDENT AND
    (SUNSTONE_A733_OS_AUDIO OR SUNSTONE_A733_OS_RADIO OR SUNSTONE_A733_OS_HEADSET OR
-    SUNSTONE_A733_OS_GPU_LINEAR OR SUNSTONE_A733_OS_NPU))
+    SUNSTONE_A733_OS_GPU_LINEAR))
   message(FATAL_ERROR "Resident CPU grants require the recorded-card session profile")
 endif()
 if(SUNSTONE_A733_OS_CPU_CLOCK AND NOT A733_A76_ADMITTED)
@@ -71,10 +71,10 @@ if(NOT SUNSTONE_A733_OS_PERF_BOOT STREQUAL "high" AND NOT SUNSTONE_A733_OS_PERF_
 endif()
 if(SUNSTONE_A733_OS_NPU)
   # With the performance-mode service, the NPU profile also accepts the CPU grant.
-  if(SUNSTONE_A733_OS_RESIDENT OR SUNSTONE_A733_OS_AUDIO OR SUNSTONE_A733_OS_RADIO OR
-     SUNSTONE_A733_OS_HEADSET OR (SUNSTONE_A733_OS_CPU_CLOCK AND NOT SUNSTONE_A733_OS_PERF) OR
+  if(SUNSTONE_A733_OS_AUDIO OR SUNSTONE_A733_OS_RADIO OR
+     SUNSTONE_A733_OS_HEADSET OR (SUNSTONE_A733_OS_CPU_CLOCK AND NOT SUNSTONE_A733_OS_PERF AND NOT SUNSTONE_A733_OS_RESIDENT) OR
      SUNSTONE_A733_OS_GPU_LINEAR)
-    message(FATAL_ERROR "The initial NPU OS profile is supervised recorded audio, without other optional devices")
+    message(FATAL_ERROR "The NPU OS profile requires recorded audio, without other optional devices")
   endif()
   set(SUNSTONE_OS_NPU_CATALOGUE "" CACHE FILEPATH "Authenticated five-model NPU artifacts map")
   set(SUNSTONE_OS_NPU_CLIENT_MODEL "0" CACHE STRING "Catalogue entry used by the separate NPU application")
@@ -170,9 +170,14 @@ if(SUNSTONE_A733_OS_AUDIO)
     drivers/audio/a733_audio_leases.c drivers/audio/dma_service_i2s_irq.c)
 endif()
 if(SUNSTONE_A733_OS_NPU)
+  set(os_npu_asset_option)
+  if(SUNSTONE_A733_OS_RESIDENT)
+    # Const data stays in the flat image but does not consume the fixed RX block.
+    set(os_npu_asset_option --ram-assets)
+  endif()
   execute_process(COMMAND "${Python3_EXECUTABLE}" "${os_root}/apps/os/npu-catalogue.py"
     --artifacts "${SUNSTONE_OS_NPU_CATALOGUE}" --model "${SUNSTONE_OS_NPU_CLIENT_MODEL}"
-    --output "${os_build}/npu-models.c" COMMAND_ERROR_IS_FATAL ANY)
+    --output "${os_build}/npu-models.c" ${os_npu_asset_option} COMMAND_ERROR_IS_FATAL ANY)
   list(APPEND os_sources "${os_build}/npu-models.c")
   list(APPEND os_added apps/os/npu.c apps/os/npu-client.c apps/os/npu-irq.c
     platform/a733/npu_native.c runtime/counter_clock.c drivers/npu/a733_npu_runtime.c drivers/npu/a733_npu_runtime_interim.c

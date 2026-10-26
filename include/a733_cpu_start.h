@@ -39,6 +39,10 @@ int a733_cpu_index(uint64_t mpidr, unsigned *out);
  * boot CPU must be core 0; this component admits cores 1..7 and a 4-byte-aligned
  * DRAM entry below 4 GiB. The entry runs at reset privilege and must park without
  * touching hotplug words until the boot owner hands off after POWERED.
+ * The resident cold profile also requires acknowledged static OFF and GIC
+ * wake-disable before the first register write. It restores dynamic OFF/ON
+ * policy only after the entry/architecture publication barrier. An immediate
+ * wake must obey the same parked-entry/mailbox handoff.
  * Callbacks return exactly 1, are bounded/non-reentrant, and preserve their
  * original context. They perform ordered, privileged physical register access.
  * One serialized owner; callback state/storage must remain disjoint and live.

@@ -64,6 +64,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--firmware", type=Path, required=True)
     parser.add_argument("--evidence", type=Path, required=True)
+    parser.add_argument("--resident", action="store_true", help="only cold static-OFF release cases; no firmware replay")
     args = parser.parse_args()
     evidence = args.evidence.resolve()
     assert ROOT not in [evidence, *evidence.parents]
@@ -73,6 +74,7 @@ def main():
     command = ["clang-21", "-std=c11", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
                "-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-I", str(ROOT / "include"),
                *[str(ROOT / x) for x in sources], "-o", str(evidence / "check")]
+    if args.resident: command.insert(1, "-DSUNSTONE_BOARD_RESIDENT=1")
     build = subprocess.run(command, capture_output=True, text=True)
     (evidence / "compile.log").write_text(build.stdout + build.stderr)
     build.check_returncode()
@@ -84,15 +86,17 @@ def main():
         if line.startswith("TRACE "):
             _, c, a, v = line.split()
             traces[int(c)].append((int(a, 16), int(v, 16)))
-    for core, trace in traces.items():
-        assert trace == reference(args.firmware.read_bytes(), core), core
-    result = {"passed": True, "compile_command": command, "run_returncode": run.returncode,
+    if not args.resident:
+        for core, trace in traces.items():
+            assert trace == reference(args.firmware.read_bytes(), core), core
+    result = {"passed": True, "resident": args.resident, "compile_command": command, "run_returncode": run.returncode,
               "firmware_sha256": FIRMWARE_SHA, "firmware_helpers": ["0xc4a0", "0xc298", "0xc314"],
               "scope": "Modeled register accesses only; seven secondary targets; no CPU execution/power or physical board qualification",
               "traces": traces, "inputs": {p: digest(ROOT / p) for p in sources + ["include/a733_cpu_start.h", "checks/a733-cpu-start.py"]},
               "executable_sha256": digest(evidence / "check")}
     (evidence / "results.json").write_text(json.dumps(result, indent=2) + "\n")
-    print("PASS native retained-failure checks and complete writes match isolated board firmware for cores1..7")
+    print("PASS resident bounded static-OFF release and immediate wake" if args.resident else
+          "PASS native retained-failure checks and complete writes match isolated board firmware for cores1..7")
 
 
 if __name__ == "__main__":
