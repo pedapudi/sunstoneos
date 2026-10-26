@@ -1,7 +1,7 @@
 /* CPU cluster record of the integrated OS image with the Cortex-A76 cores
  * admitted (docs/designs/cpu-a76-dvfs.md). Before the scheduler, the thermal
  * start reads the clock configuration once and refuses a CPU-B cluster that
- * is not on its locked PLL with a decodable rate. The recognizer prints the
+ * is not on its PLL at boot0's 1014 MHz. The recognizer prints the
  * record before and after each recognition (apps/mimus/recorded.cc).
  *
  * With SUNSTONE_A733_OS_CPU_CLOCK the thermal task also owns the CPU clock
@@ -47,7 +47,11 @@ int os_cpu_admit(void)
 {
     if(!a733_cpu_clock_report(read_word,NULL,&report))return 0;
     const struct a733_cpu_clock_domain *big=&report.domain[A733_CPU_BIG];
-    if(!big->decoded||big->source!=3)return 0;
+    /* CPU-B at boot0's 1014 MHz point. The FEL ROM resets only the CPU-L and
+     * DSU PLLs on a return, so an earlier image of the same lifetime can leave
+     * CPU-B raised; B1's baseline and every grant start from boot0's point
+     * (docs/designs/cpu-top-opp.md). */
+    if(!big->decoded||big->source!=3||big->hz!=UINT64_C(1014000000))return 0;
     const uint32_t points[2]={mhz(A733_CPU_LITTLE),mhz(A733_CPU_BIG)},mv[2]={0,0};
     atomic_store_explicit(&record,pack(points,mv,0),memory_order_release);
     return 1;

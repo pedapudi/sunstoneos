@@ -9,13 +9,20 @@
  *   23  step 4: CPU-B to 2002 MHz at 1050 mV, the DSU to 910 MHz, then the
  *       DSU to 598 MHz and CPU-B back to 1014 MHz at 800 mV;
  *   24  step 5: CPU-L to 1794 MHz at 1000 mV, then the DSU to 1274 MHz;
- *   25  step 6, first image: CPU-B 2002 MHz at 1050 mV, CPU-L 1794 MHz at
- *       1000 mV and the DSU 1274 MHz, left in place for the ROM return;
+ *   25  step 6, first image: CPU-L 1794 MHz at 1000 mV and the DSU 1274 MHz,
+ *       then DCDC3 1050 mV with CPU-B held at 1014 MHz; the rails stay for
+ *       the ROM return;
  *   26  step 6, read-back before the workload: DCDC5 1000 mV and DCDC3
  *       1050 mV must have survived the ROM return, and the three domains
  *       must read the boot PLL and mux words; no write;
- *   27  step 6, read-back after the workload: temperatures and rails; no
- *       write.
+ *   27  step 6, after the workload: CPU-B, which the workload left at
+ *       2002 MHz, back to 1014 MHz with DCDC3 kept at 1050 mV.
+ *
+ * The FEL ROM's clock setup writes the CPU-L and DSU PLLs only: on each
+ * return CPU-L and the DSU read 494 MHz again, but CPU-B keeps the PLL word
+ * the last image left (board-session-cpu-top-opp-7, bundle 26). Every plan
+ * therefore ends with CPU-B at 1014 MHz, and the DCDC3 write requires CPU-B
+ * at a rate whose voltage the target covers, read from the PLL itself.
  *
  * The client task owns the thermal driver, the thermal policy and the CPU
  * clock driver. It reads one full sensor set and inspects the three CPU
@@ -97,20 +104,26 @@ static const struct plan plan = {"CPU-L 1794 MHz at 1000 mV and the DSU 1274 MHz
     {{OP_RATE, 0, 0, 0}, {OP_CLOCK, A733_CPU_LITTLE, 1794, 1000}, {OP_RATE, 0, 0, 0},
      {OP_CLOCK, A733_CPU_DSU, 1274, 1000}}, {0, 0}, 0};
 #elif OPP_BUNDLE == 25
-/* Step 6, before the workload: the top points of all three domains, left in
- * place. The ROM return resets the clocks and keeps the rails, which bundle
- * 26 then reads back. */
-static const struct plan plan = {"CPU-B 2002 MHz at 1050 mV, CPU-L 1794 MHz at 1000 mV and the DSU 1274 MHz, left in place",
-    (1u << A733_CPU_LITTLE) | (1u << A733_CPU_BIG), {1794, 2002}, 3,
-    {{OP_CLOCK, A733_CPU_BIG, 2002, 1050}, {OP_CLOCK, A733_CPU_LITTLE, 1794, 1000},
-     {OP_CLOCK, A733_CPU_DSU, 1274, 1000}}, {0, 0}, 0};
-#elif OPP_BUNDLE == 26 || OPP_BUNDLE == 27
-/* Step 6 read-back, with no clock or PMIC write: before the workload (26),
- * DCDC5 1000 mV and DCDC3 1050 mV kept across the ROM return; after it (27),
- * the same rails and the temperatures. */
-static const struct plan plan = {OPP_BUNDLE == 26 ? "DCDC5 1000 mV and DCDC3 1050 mV kept across the ROM return, read only"
-                                                  : "temperatures and rails after the top-point workload, read only",
+/* Step 6, before the workload: DCDC5 to 1000 mV through CPU-L's top point
+ * and the DSU's, then DCDC3 to 1050 mV with CPU-B held at 1014 MHz. The ROM
+ * return resets CPU-L and the DSU and keeps the rails, which bundle 26 reads
+ * back; CPU-B, which the ROM does not reset, never leaves 1014 MHz here. */
+static const struct plan plan = {"CPU-L 1794 MHz and DCDC5 1000 mV, the DSU 1274 MHz, DCDC3 1050 mV with CPU-B at 1014 MHz",
+    1u << A733_CPU_LITTLE, {1794, 0}, 3,
+    {{OP_CLOCK, A733_CPU_LITTLE, 1794, 1000}, {OP_CLOCK, A733_CPU_DSU, 1274, 1000},
+     {OP_VOLT, A733_CPU_BIG, 0, 1050}}, {0, 0}, 0};
+#elif OPP_BUNDLE == 26
+/* Step 6 read-back before the workload, with no clock or PMIC write:
+ * DCDC5 1000 mV and DCDC3 1050 mV kept across the ROM return. */
+static const struct plan plan = {"DCDC5 1000 mV and DCDC3 1050 mV kept across the ROM return, read only",
     0, {0, 0}, 0, {{OP_RATE, 0, 0, 0}}, {1000, 1050}, 1};
+#elif OPP_BUNDLE == 27
+/* Step 6 after the workload: its relock left CPU-B at 2002 MHz, which the
+ * ROM return keeps. CPU-B goes back to 1014 MHz; the driver keeps DCDC3 at
+ * this image's first reading, 1050 mV, so the lifetime ends with CPU-B at
+ * its boot rate. */
+static const struct plan plan = {"CPU-B back to 1014 MHz at 1050 mV after the top-point workload",
+    1u << A733_CPU_BIG, {0, 1014}, 1, {{OP_CLOCK, A733_CPU_BIG, 1014, 1050}}, {1000, 1050}, 1};
 #else
 #error OPP_BUNDLE names no step
 #endif
@@ -409,6 +422,7 @@ static void dcdc3_request(const struct a733_rail_token *t, int write, uint8_t ex
 
 /* DCDC3 to mv with CPU-B's clock held exclusively, so its rate stays at
  * 1014 MHz, which both 800 and 1050 mV cover; then the vendor's 1 ms. */
+static uint32_t row_mv(enum a733_cpu_domain d, uint32_t mhz, unsigned bin);
 static void dcdc3_change(uint32_t mv)
 {
     struct a733_clock_token hold = {0};
@@ -422,6 +436,15 @@ static void dcdc3_change(uint32_t mv)
         REQUIRE(rr == A733_RAIL_PENDING || rr == A733_RAIL_BUSY, "DCDC3 lease poll");
         bb_power_pause("DCDC3 lease deadline");
     }
+    /* CPU-B's present rate, from its PLL with the clock lease held: an
+     * earlier image of this lifetime may have left it raised, since the ROM
+     * return does not reset it. The target must cover that rate's voltage. */
+    struct a733_cpu_clock_report r;
+    REQUIRE(a733_cpu_clock_report(cpu_read, NULL, &r), "clock report");
+    const struct a733_cpu_clock_domain *b = &r.domain[A733_CPU_BIG];
+    const uint32_t b_mv = b->decoded && b->source == 3u && !(b->hz % 1000000u) ?
+        row_mv(A733_CPU_BIG, (uint32_t)(b->hz / 1000000u), entry.bin) : 0;
+    REQUIRE(b_mv && b_mv <= mv, "CPU-B rate above the DCDC3 target");
     struct a733_pmic_snapshot s;
     dcdc3_request(&rail, 0, 0, 0, &s);
     REQUIRE(s.enabled && s.decoded && s.programmed_uv == rail_mv[1] * 1000u, "DCDC3 before the write");
@@ -503,6 +526,15 @@ static void check_temperature(void)
 }
 
 /* The highest voltage of a domain's column, from the driver's tables. */
+static uint32_t row_mv(enum a733_cpu_domain d, uint32_t mhz, unsigned bin)
+{
+    unsigned count;
+    const struct a733_cpu_opp *t = a733_cpu_clock_opps(d, &count);
+    for (unsigned i = 0; t && i < count; ++i)
+        if (t[i].mhz == mhz)
+            return a733_cpu_clock_opp_mv(&t[i], bin);
+    return 0;
+}
 static uint32_t top_mv(enum a733_cpu_domain d, unsigned bin)
 {
     unsigned count;

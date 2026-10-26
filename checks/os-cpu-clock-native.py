@@ -84,6 +84,12 @@ def call(mode, addr=0, value=0):
 cases = []
 assert call(4) == 1 and len(events) == 8 and all(e[0] == 'read' and e[2] == 4 for e in events)
 cases.append('actual-os-admission-report')
+# CPU-B left at 2002 MHz by an earlier image of the lifetime: the FEL ROM
+# return does not reset it, and the admission refuses it.
+m.mem_write(0x08872000, (0xf8004d00).to_bytes(4, 'little'))
+assert call(4) == 0
+m.mem_write(0x08872000, registers[0x08872000].to_bytes(4, 'little'))
+cases.append('admission-refuses-cpu-b-above-boot0-rate')
 reads = [*registers, *[base + offset for base in (0x08871000, 0x08872000, 0x08873000) for offset in (4, 8, 0x18)]]
 for addr in reads:
     assert call(0, addr) == 1 and len(events) == 1 and events[0][:3] == ('read', addr, 4)
@@ -104,4 +110,4 @@ result = dict(status='PASS', cases=cases, elf_sha256=hashlib.sha256(elf.read_byt
             (*units, 'checks/os-cpu-clock-native.py', 'apps/os/cpu.c', 'include/a733_cpu_clock.h', 'include/a733_mmio.h')},
     limits='Actual AArch64 adapters with modeled MMIO storage. No physical clock, rail or thermal qualification.')
 (a.output / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
-print('PASS actual OS CPU adapter: report, seventeen reads, six writes, mux DSB, refusals')
+print('PASS actual OS CPU adapter: report, CPU-B above boot0 refused, seventeen reads, six writes, mux DSB, refusals')

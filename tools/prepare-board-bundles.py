@@ -815,32 +815,36 @@ ROWS = [
             '1,000 mV, waits 1 ms and relocks CPU-L at 1,794 MHz, measured by CPU0; the DSU then goes to 1,274 MHz '
             'with no voltage write. CPU-L, the DSU and DCDC5 stay at the top points of vf0400, so this step ends its '
             'lifetime.', ('cpu-b-top-step',)),
-    opp_row('cpu-top-hold-step', 25, 'CPU-B 2,002, CPU-L 1,794 and the DSU 1,274 MHz, left for the ROM return',
-            'CPU-B 2002 MHz at 1050 mV, CPU-L 1794 MHz at 1000 mV and the DSU 1274 MHz, left in place',
-            'CPU-B set pll=0xf8804d00 mhz=2002 with STEP dcdc3_uv=1050000, a TEMP line below 70000, CPU-L set '
-            'pll=0xf8804500 mux=0x3000000 mhz=1794 with STEP dcdc5_uv=1000000, a TEMP line, DSU set pll=0xf8803100 '
-            'mux=0x3000105 mhz=1274',
-            'Step 6 of docs/designs/cpu-top-opp.md, first image: with cores 6 and 7 off, the driver raises DCDC3 to '
-            '1,050 mV and CPU-B to 2,002 MHz, then DCDC5 to 1,000 mV and CPU-L to 1,794 MHz, then the DSU to '
-            '1,274 MHz, and leaves all of them. The ROM return that follows resets the CPU PLLs and keeps the rails, '
-            'which bundle 26 reads back; the workload relocks the PLLs itself. Steps 1 to 5 passed on port 3-3 in '
-            'earlier lifetimes.', ()),
+    opp_row('cpu-top-hold-step', 25, 'CPU-L 1,794 and the DSU 1,274 MHz with DCDC5 1,000 mV, then DCDC3 1,050 mV '
+            'with CPU-B at 1,014 MHz, for the ROM return',
+            'CPU-L 1794 MHz and DCDC5 1000 mV, the DSU 1274 MHz, DCDC3 1050 mV with CPU-B at 1014 MHz',
+            'CPU-L set pll=0xf8804500 mux=0x3000000 mhz=1794 with STEP dcdc5_uv=1000000, a TEMP line below 70000, '
+            'DSU set pll=0xf8803100 mux=0x3000105 mhz=1274, VOLT dcdc3_selector=0xb7 dcdc3_uv=1050000, a TEMP line',
+            'Step 6 of docs/designs/cpu-top-opp.md, first image: with cores 6 and 7 off, the driver raises DCDC5 to '
+            '1,000 mV and CPU-L to 1,794 MHz, then the DSU to 1,274 MHz; the image then raises DCDC3 to 1,050 mV '
+            'with CPU-B held at 1,014 MHz, as step 3 did. The ROM return that follows resets CPU-L and the DSU and '
+            'keeps the rails, which bundle 26 reads back; it does not reset CPU-B, which this image never changes. '
+            'The workload relocks all three itself. Steps 1 to 5 passed on port 3-3 in earlier lifetimes.', ()),
     opp_row('cpu-rails-held-read', 26, 'DCDC5 1,000 mV and DCDC3 1,050 mV after the ROM return, read only',
             'DCDC5 1000 mV and DCDC3 1050 mV kept across the ROM return, read only',
             'CPU-L before pll=0xf8802600 mux=0x3010000 mhz=494, CPU-B before pll=0xf8802700 mux=0x3000000 mhz=1014 '
-            'and DSU before pll=0xf8802600 mux=0x3010105 mhz=494: the PLLs the ROM resets',
+            'and DSU before pll=0xf8802600 mux=0x3010105 mhz=494, which the image requires',
             'Step 6 of docs/designs/cpu-top-opp.md, the gate before the workload: after bundle 25 and one ROM return, '
             'the rails must still read DCDC5 1,000 mV and DCDC3 1,050 mV, the voltages that the workload\'s relock '
-            'to the top points needs; a REFUSED line for the CPU supplies ends the lifetime before the workload.',
+            'to the top points needs, and the three domains their boot PLL and mux words; a REFUSED line for the '
+            'CPU supplies or the boot clock words ends the lifetime before the workload.',
             ('cpu-top-hold-step',), entry=('DCDC5 at 1,000 mV and DCDC3 at 1,050 mV, CPU-B at any rate on its PLL',
                                            'dcdc5_uv=1000000 dcdc3_uv=1050000'), writes=False),
-    opp_row('cpu-after-workload-read', 27, 'Temperatures and rails after the top-point workload, read only',
-            'temperatures and rails after the top-point workload, read only',
-            'the CPU before lines at the PLL words the ROM resets',
-            'Step 6 of docs/designs/cpu-top-opp.md, after the workload: two temperature sets and the rails, still at '
-            'DCDC5 1,000 mV and DCDC3 1,050 mV.', ('cpu-rails-held-read',),
+    opp_row('cpu-after-workload-read', 27, 'CPU-B back to 1,014 MHz at 1,050 mV after the top-point workload',
+            'CPU-B back to 1014 MHz at 1050 mV after the top-point workload',
+            'CPU-B before pll=0xf8804d00 mux=0x3000000 mhz=2002 (the relock\'s word, which the ROM return keeps), '
+            'then CPU-B set pll=0xf8802700 mux=0x3000000 mhz=1014 with STEP dcdc3_uv=1050000',
+            'Step 6 of docs/designs/cpu-top-opp.md, after a completed workload: the workload\'s relock left CPU-B '
+            'at 2,002 MHz, which the ROM return does not reset. The driver lowers CPU-B to 1,014 MHz and keeps '
+            'DCDC3 at its first reading in the image, 1,050 mV, with no PMIC write, so the lifetime ends with CPU-B '
+            'at its boot rate; temperature sets come before and after.', ('cpu-rails-held-read',),
             entry=('DCDC5 at 1,000 mV and DCDC3 at 1,050 mV, CPU-B at any rate on its PLL',
-                   'dcdc5_uv=1000000 dcdc3_uv=1050000'), writes=False),
+                   'dcdc5_uv=1000000 dcdc3_uv=1050000')),
     # `admission` maps fields of the value prepare() returns to the values that
     # identify this row's build. None refuses the row: no owning package has
     # named those values yet.

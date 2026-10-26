@@ -332,10 +332,13 @@ The CPU rails and clocks:
   (no timeout), waits 20 µs, ungates and waits 20 µs (`@0x2098`, `@0x2114`). It
   then selects the PLL in each mux, with 20 µs after each. The 1800 MHz variant
   has the same CPU clock and PMIC code.
-- **Unresolved rate.** The board reads CPU-B N = 39 (`0xf8802700`), which
-  matches one of boot0's two targets. CPU-L and the DSU read N = 38
-  (`0xf8802600`), which matches neither target as the disassembly reads them.
-  `docs/cpu-clock.md` decodes CPU-L as 26 MHz × 38 ÷ 2 = 494 MHz.
+- **Which stage writes each rate.** The board reads CPU-B N = 39
+  (`0xf8802700`), which matches one of boot0's two targets. CPU-L and the DSU
+  read N = 38 (`0xf8802600`), the boot ROM's value: the ROM's clock setup
+  writes only the CPU-L and DSU PLLs, again on every FEL return, and never
+  CPU-B ([boot ROM and boot0](vendor-firmware/boot-rom-and-boot0.md)). CPU-B
+  therefore keeps whatever the last image wrote until a power cycle's boot0
+  board setup. `docs/cpu-clock.md` decodes CPU-L as 26 MHz × 38 ÷ 2 = 494 MHz.
 - **Registers.** PLL_CPU_L, PLL_CPU_B and PLL_CPU_DSU are at `0x08871000`,
   `0x08872000` and `0x08873000`; each mux is at `+0x1c`
   (`ccu-sun60iw2-cpupll.c:22`–`43`). Rate = reference × N ÷ 2^P, with P in mux

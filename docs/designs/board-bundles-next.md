@@ -491,13 +491,17 @@ step, and after a write it lowers what the step raised and returns STOPPED, a
 controlled outcome. Bundles 22 and 24 measure CPU0's rate with the PMU code
 of bundle 4 (`platform/a733/cpu_pmu.c`).
 
-Bundles 25 to 27 belong to step 6. Bundle 25 raises the three CPU domains to
-their top points and leaves them for the ROM return, which resets the clocks;
-bundle 26 reads, with no write, that DCDC5 and DCDC3 kept 1,000 and 1,050 mV
-and that the three domains are back at their boot PLL and mux words, and
-refuses otherwise; the returning deadline workload with the CPU0 relock
-(`~/.cache/sunstoneos/evidence/cpu-top-opp-20261025/step6/bundle-deadline-top-2`)
-then runs, and bundle 27 reads the temperatures and rails after it.
+Bundles 25 to 27 belong to step 6. Bundle 25 raises CPU-L and the DSU to
+their top points with DCDC5 at 1,000 mV, then DCDC3 to 1,050 mV with CPU-B
+held at 1,014 MHz, and returns; the ROM resets CPU-L and the DSU and keeps
+the rails. It leaves CPU-B alone because the ROM return does not reset
+CPU-B. Bundle 26 reads, with no write, that DCDC5 and DCDC3 kept 1,000 and
+1,050 mV and that the three domains are at their boot PLL and mux words,
+and refuses otherwise; the returning deadline workload with the CPU0 relock
+(`~/.cache/sunstoneos/evidence/cpu-top-opp-20261025/step6/bundle-deadline-top-3`)
+then runs, and bundle 27 returns CPU-B from the relock's 2,002 MHz to
+1,014 MHz with DCDC3 kept at 1,050 mV, with temperature sets before and
+after.
 
 ## Bundles that wait
 

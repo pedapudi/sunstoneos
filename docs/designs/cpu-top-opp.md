@@ -1,7 +1,9 @@
 # Design: CPU clusters and the DSU default to the vendor's top operating points
 
 Status: **driver changes implemented and host-modeled. Steps 1 to 5 passed
-on port 3-3 on 2026-10-25. Step 6 is built and frozen and has not run. Step
+on port 3-3 on 2026-10-25. Step 6's first run stopped as designed at
+bundle 26, which found CPU-B not reset by the ROM return; step 6 is
+refrozen with CPU-B lowered before every return and has not run again. Step
 7's grant of both clusters is implemented and host-checked; it cannot be
 frozen until the integrated OS image has a reviewed physical entry record
 and B1 has passed (below).** Every hardware block defaults to the highest
@@ -284,8 +286,9 @@ Steps 2 to 5 are bundles 22, 21, 23 and 24, built from the same source as
 step 1 with `-DOPP_BUNDLE=n` (below). They passed on port 3-3 in one lifetime
 (`board-session-20261025-19/port-3-3`), every clock word as predicted and the
 hottest sensor at 42 °C. Every image's `before` lines showed CPU-L and the
-DSU at 494 MHz and CPU-B at 1014 MHz: the ROM resets the CPU PLLs on each
-return, as the read-back after bundle 24 also showed.
+DSU at 494 MHz and CPU-B at 1014 MHz. The ROM return resets CPU-L and the
+DSU; CPU-B read 1014 MHz only because steps 1 and 4 had lowered it again
+themselves (next section).
 
 ## Steps 2 to 5 share one lifetime
 
@@ -357,26 +360,95 @@ The host model runs the three driver steps in sequence with the bundles'
 grants (`lifetime_cases` in `checks/cpu-clock-model.c`), followed by a
 thermal stop of step 5 that returns DCDC5 to 800 mV.
 
+## The FEL ROM return resets CPU-L and the DSU, not CPU-B
+
+The first run of step 6 (`board-session-cpu-top-opp-7/port-3-3`, set
+`step6-set-2`) showed it. Bundle 25 left CPU-B at 2002 MHz, CPU-L at
+1794 MHz and the DSU at 1274 MHz, with DCDC3 at 1050 mV and DCDC5 at
+1000 mV. After its ROM return, bundle 26 read CPU-L and the DSU back at
+`0xf8802600` (494 MHz) but CPU-B still at `0xf8804d00` (2002 MHz), and
+refused with `boot clock words`; the Read bundle 14 that followed read the
+same CPU-B word. The rails kept their voltages.
+
+The boot ROM explains it. Its clock setup programs two PLLs from its
+literal pool: `0x08871000` (CPU-L) and `0x08873000` (DSU), through the
+routine at `0x1898` that calls the PLL writer at `0x1774` once for each
+with N = 38, then selects both muxes at `0x1af0`. The pool holds no
+`0x08872000`, and no routine writes CPU-B (`a8e31821…`, literals at
+`0x1f78`–`0x1fa0`; [boot ROM and boot0](../vendor-firmware/boot-rom-and-boot0.md)).
+CPU-B's boot word `0xf8802700` (N = 39, 1014 MHz) comes from boot0's board
+setup, which the cold DDR start runs once per lifetime. Every earlier
+lifetime had lowered CPU-B to 1014 MHz before its return (steps 1 and 4),
+so the ROM never had a raised CPU-B to keep.
+
+CPU-B at 2002 MHz across a return is safe only while DCDC3 stays at
+1050 mV. Two fixes were weighed:
+
+- **Accept a raised CPU-B after a return** (bundle 26 and the relock accept
+  the top word with the rail at 1050 mV). The raised state would then
+  persist through every later image of the lifetime, and each of them would
+  need to know it: an image that lowers DCDC3, B1's baseline, which is
+  defined at boot0's rate, and the step images, which admit only CPU-B at
+  1014 MHz.
+- **Never return with CPU-B raised** (chosen). Every image that raises
+  CPU-B lowers it to 1014 MHz before its return, so the state that boot0
+  leaves holds at every ROM return, as every other image assumes. Bundle 25
+  no longer changes CPU-B: it raises DCDC5 through CPU-L's top point and
+  DCDC3 with CPU-B held at 1014 MHz, the change step 3 qualified. The
+  workload's relock raises CPU-B, and bundle 27, the next image after the
+  workload, returns it to 1014 MHz with DCDC3 kept at 1050 mV.
+
+A failure can still return with CPU-B raised: a deadline return of the
+workload after its relock, or a step image that fails between raising and
+lowering CPU-B. DCDC3 is then at least at the raised point's voltage,
+because every raise writes the voltage first. Every path that could lower
+DCDC3 or that assumes CPU-B at 1014 MHz checks the CPU-B PLL itself:
+
+- the CPU clock driver lowers DCDC3 only after lowering CPU-B in the same
+  transition, never below the rail's first reading in the image, and
+  applies no inherited CPU-B point that DCDC3 does not cover
+  (`checks/cpu-clock-model.c`, bundle 27 cases);
+- the step images' direct DCDC3 write (`dcdc3_change` in
+  `apps/board-bundles-power/cpu-opp-step.c`) reads the CPU-B PLL with the
+  CPU-B clock lease held and fails unless the target covers that rate;
+- the step images' admission refuses CPU-B other than 1014 MHz, except
+  bundles 26 and 27; bundle 26 refuses any clock word other than the boot
+  words;
+- the integrated OS image refuses to start unless CPU-B reads boot0's
+  1014 MHz (`os_cpu_admit` in `apps/os/cpu.c`), and `apps/os/prepare.py`
+  refuses a B1 record whose CPU-B words are not `0xf8802700` and
+  `0x03000000`, so B1 and steps A1 to A3 and `TOP` start from boot0's point;
+- the workload's relock reads DCDC3 itself and refuses unless it is at
+  1050 mV.
+
+The performance-mode toggle of the default path follows the same rule: an
+image may raise CPU-B for its own run, and lowers it before any ROM return.
+The integrated OS image ends at a terminal halt and a power removal, so it
+needs no lowering.
+
 ## Step 6: the workload relocks its own clocks
 
-Every launch starts from the ROM, and the ROM resets the CPU PLLs on each
-return. A setter image cannot hand its clocks to the workload with no ROM
-return in between, because the host loads every image through the ROM.
-The workload's own launch must therefore set the clocks. The rails are
-expected to differ: neither ROM description lists a PMIC access
+Every launch starts from the ROM, which resets CPU-L and the DSU on each
+return and leaves CPU-B as the last image set it. A setter image cannot
+hand CPU-L and the DSU to the workload with no ROM return in between,
+because the host loads every image through the ROM. The workload's own
+launch must therefore set the clocks. The rails are expected to differ:
+neither ROM description lists a PMIC access
 ([boot ROM and boot0](../vendor-firmware/boot-rom-and-boot0.md)), so a voltage
-that an earlier image writes should survive the return. Step 6 relies on
-that only after bundle 26 has read it on the board:
+that an earlier image writes should survive the return; the first run of
+step 6 confirmed it for DCDC3 and DCDC5. Step 6 still relies on it only
+after bundle 26 has read it on the board:
 
-1. **Bundle 25** raises DCDC3 to 1050 mV and CPU-B to 2002 MHz, DCDC5 to
-   1000 mV and CPU-L to 1794 MHz, and the DSU to 1274 MHz, through the
-   driver, and leaves them. Its ROM return resets the clocks.
+1. **Bundle 25** raises DCDC5 to 1000 mV and CPU-L to 1794 MHz, then the
+   DSU to 1274 MHz, through the driver, then DCDC3 to 1050 mV with CPU-B
+   held at 1014 MHz, and leaves the rails. Its ROM return resets CPU-L and
+   the DSU.
 2. **Bundle 26** reads, with no write, that DCDC5 is still at 1000 mV and
    DCDC3 at 1050 mV and that the three domains read the boot PLL and mux
    words that bundle 14 recorded (CPU-L `0xf8802600`/`0x03010000`, CPU-B
    `0xf8802700`/`0x03000000`, DSU `0xf8802600`/`0x03010105`). It refuses,
    and the lifetime ends before the workload, if a rail or a word differs.
-3. **The workload** (`bundle-deadline-top-2`) is the returning deadline
+3. **The workload** (`bundle-deadline-top-3`) is the returning deadline
    profile on the refrozen native image `6fd7af86` with one change: before
    it releases any secondary, CPU0 at EL3 relocks CPU-B to 2002 MHz, CPU-L
    to 1794 MHz and the DSU to 1274 MHz (`boot/a733/top-opp-relock.c`). The
@@ -392,7 +464,10 @@ that only after bundle 26 has read it on the board:
    identity header at `0x42018180`. The overlay's 16 KiB reservation had
    288 bytes left, so the 2,647-byte relock and its tables sit in the
    3.5 KiB gap between the 512-byte base overlay and the extension.
-4. **Bundle 27** reads the temperatures and the rails after the workload.
+4. **Bundle 27**, after a completed workload, finds CPU-B still at the
+   relock's 2002 MHz and returns it to 1014 MHz; the driver keeps DCDC3 at
+   1050 mV, its first reading in the image. It reads the temperatures and
+   the rails before and after.
 
 The workload reads no temperature itself: it lasts about 32 ticks, shorter
 than one conversion period of the temperature sensor, about 100 ms. The
@@ -411,13 +486,15 @@ Predictions, against the ten boot-rate runs on port 3-3 of 2026-10-25
 | Background progress, cores 0 to 5 | 82,600 to 88,200 (run 1: 187,600 to 196,700) | About 3.6 times, 300,000 to 320,000, less where memory bounds the loop |
 | Background progress, cores 6 and 7 | 130,100 to 137,300 | About 2 times, 255,000 to 270,000 |
 | Relock record | — | Result 1; final words `0xf8804d00`/`0x03000000`, `0xf8804500`/`0x03000000`, `0xf8803100`/`0x03000105`; at least three lock reads per domain; parked about 60 µs each |
-| Hottest sensor, bundles 25 to 27 | 42 °C in step 5 | Below 50 °C |
+| Hottest sensor, bundles 25 to 27 | 42 °C in step 5; 37 °C in bundle 25 of the first step 6 run | Below 50 °C |
+| CPU-B after bundle 27 | — | `0xf8802700`/`0x03000000` (1014 MHz) with DCDC3 at 1050 mV and no PMIC write |
 
 Board 3-3 has run neither secondary at a top point. A non-return of the
 workload ends the lifetime with the A76 cores possibly running at 2002 MHz
 and CPU0 at 1794 MHz; only a power removal recovers it. A deadline return
-resets CPU0 into the ROM, which resets the CPU PLLs, so any secondary still
-running then runs at the boot rates; it also needs a power removal. The
+resets CPU0 into the ROM, which resets CPU-L and the DSU but not CPU-B: a
+secondary still running on CPU-B runs at 2002 MHz with DCDC3 at 1050 mV,
+and the lifetime also ends with a power removal, before any other image. The
 deadline unit returns CPU0 1.5 s after the launch (the 1 s startup deadline
 plus 0.5 s), and the runner waits 10 s after its `exe` transaction for the
 returned FEL instance. The operator therefore removes power at once when the
@@ -425,15 +502,16 @@ runner stops with `No new FEL instance`, or 12 s after the launch if it has
 not reported by then.
 
 The frozen set is
-`~/.cache/sunstoneos/evidence/cpu-top-opp-20261025/step6/step6-set-2/` for one
+`~/.cache/sunstoneos/evidence/cpu-top-opp-20261025/step6/step6-set-3/` for one
 fresh port 3-3 lifetime: power removal, cold DDR start, the base image,
-bundles 25 and 26, the workload (`../bundle-deadline-top-2/`, its own runbook,
-binding script and root-review draft, with `bundle-deadline-top-2.sha256`),
+bundles 25 and 26, the workload (`../bundle-deadline-top-3/`, its own runbook,
+binding script and root-review draft, with `bundle-deadline-top-3.sha256`),
 bundle 27, the Read bundle 14 and a power removal. The workload's source is
-the archive `step6/source-e8a03b30`; the overlay built without `--top-opp`
+the archive `step6/source-SRC`; the overlay built without `--top-opp`
 equals the frozen deadline overlay byte for byte. This set replaces
-`step6/step6-set/` and `step6/bundle-deadline-top/`, whose relock read no
-board state itself; those must not run. The binding script refuses
+`step6/step6-set-2/` and `step6/bundle-deadline-top-2/`, whose bundle 25
+returned with CPU-B raised, and the earlier `step6-set/`; those must not
+run. The binding script refuses
 port 3-1, whose bin, oscillator and supplies have not been read, and requires
 that bundle 26's run record and every later record belong to the current
 survey's instance chain: each launch starts on the instance of the record

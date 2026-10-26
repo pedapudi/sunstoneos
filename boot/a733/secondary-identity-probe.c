@@ -49,8 +49,9 @@ int identity_primary_run(void)
     HEADER->bytes=IDENTITY_REPORT_BYTES;HEADER->epoch=admission->epoch;
     HEADER->deadline=admission->startup_deadline;HEADER->state=1;barrier();
 #ifdef SUNSTONE_TOP_OPP
-    // The ROM resets the CPU PLLs on each return: relock CPU-B, CPU-L and the
-    // DSU to the top points before any secondary is released.
+    // The ROM resets CPU-L and the DSU on each return and every image returns
+    // CPU-B to its boot point: relock CPU-B, CPU-L and the DSU to the top
+    // points before any secondary is released.
     if(top_opp_relock(&HEADER->reserved[TOP_OPP_RECORD_OFFSET/8-8],HEADER->deadline)!=TOP_OPP_DONE)return 0;
 #endif
 #ifdef SUNSTONE_SECONDARY_LOCAL

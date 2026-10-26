@@ -354,7 +354,8 @@ def main():
             assert results[0][4] >= 32
             if machine.top_opp:
                 # CPU0 relocked CPU-B, CPU-L and the DSU before the first release
-                # (boot/a733/top-opp-relock.c); the ROM, not the image, resets them.
+                # (boot/a733/top-opp-relock.c); the ROM resets CPU-L and the DSU,
+                # and bundle 27 lowers CPU-B after the return.
                 opp = struct.unpack_from('<16Q', raw, 0x180)
                 finals = {2: (0xf8804d00, 0x03000000), 1: (0xf8804500, 0x03000000), 3: (0xf8803100, 0x03000105)}
                 assert opp[0] == TOP_OPP_MAGIC and opp[1] == 1 and opp[2] < opp[3], opp

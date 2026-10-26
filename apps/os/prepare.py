@@ -400,6 +400,10 @@ def cpu_clock_admission(record, image_hash, raw, profile, evidence):
             b1.get('port') == record['port'] and b1.get('pattern_lfm_clear') is True and
             all(isinstance(b1.get(k), int) and 800 <= b1[k] <= 1050 for k in ('dcdc3_mv', 'dcdc5_mv')) and
             isinstance(b1.get('sid_word'), int), "The approval must cite this board's B1 record.")
+    # B1's time is the baseline at boot0's CPU-B point. The FEL ROM return does
+    # not reset CPU-B, so a record taken after an image raised it is refused.
+    require(b1.get('cpu_b_pll') == 0xf8802700 and b1.get('cpu_b_mux') == 0x03000000,
+            "B1 did not run with CPU-B at boot0's 1014 MHz word.")
     column = bin_column(b1['sid_word'])
     require(column is not None, 'B1 recorded a fuse code without a table column.')
     if cluster == 'both':

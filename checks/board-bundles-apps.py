@@ -130,10 +130,10 @@ EXPECT = {
     'opp-23': 'COMPLETE board bundle 23: CPU-B 2002 MHz at 1050 mV with the DSU at 910 MHz, then CPU-B 1014 MHz '
               'at 800 mV',
     'opp-24': 'COMPLETE board bundle 24: CPU-L 1794 MHz at 1000 mV and the DSU 1274 MHz',
-    'opp-25': 'COMPLETE board bundle 25: CPU-B 2002 MHz at 1050 mV, CPU-L 1794 MHz at 1000 mV and the DSU 1274 MHz, '
-              'left in place',
+    'opp-25': 'COMPLETE board bundle 25: CPU-L 1794 MHz and DCDC5 1000 mV, the DSU 1274 MHz, DCDC3 1050 mV with '
+              'CPU-B at 1014 MHz',
     'opp-26': 'COMPLETE board bundle 26: DCDC5 1000 mV and DCDC3 1050 mV kept across the ROM return, read only',
-    'opp-27': 'COMPLETE board bundle 27: temperatures and rails after the top-point workload, read only',
+    'opp-27': 'COMPLETE board bundle 27: CPU-B back to 1014 MHz at 1050 mV after the top-point workload',
     'dram': 'COMPLETE board bundle 8:',
 }
 POWER_UNITS = ['apps/board-bundles-power/power.c', 'apps/board-bundles-power/trace.c',

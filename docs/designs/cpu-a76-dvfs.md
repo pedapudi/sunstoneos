@@ -347,6 +347,10 @@ Without a clock or voltage change:
   the recognition time from counter ticks at boot0's CPU-B rate, the `CLOCK`
   lines before and after it, the fuse code, the CPU-B PLL, mux, pattern and
   LFM words, and the DCDC3 and DCDC5 readings. This time is A2's baseline.
+  The FEL ROM return does not reset CPU-B, so `apps/os/prepare.py` refuses a
+  B1 record whose CPU-B words (`cpu_b_pll`, `cpu_b_mux`) are not boot0's
+  `0xf8802700` and `0x03000000`, and the image refuses to start with CPU-B
+  at another rate ([cpu-top-opp.md](cpu-top-opp.md)).
 
 B1 has a read-only part that needs no core 6 or 7: the fuse (bin) code, the
 CPU-L, CPU-B and DSU PLL and mux/P words, the CPU-L and CPU-B pattern and LFM

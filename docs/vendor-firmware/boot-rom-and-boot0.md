@@ -158,27 +158,37 @@ input-independent NPU output of an earlier run.
 
 ### Registers the BROM initialises
 
-The ROM programs the CPU PLLs during its clock-init routine (offset `0x21cc`).
-It reads a two-bit speed grade from bits 15:14 of RTC/boot register
-`0x07090160`, selects a base multiplier (25 for grade 1, 19 for grade 2, else
-20) and scales it by a grade multiplier, then programs each CPU PLL
-(observed, `a8e31821@0x21cc`, `0x13f4`, `0x1960`). The clock
-registers are in the CPU_PLL_CFG block at `0x08870000`.
+The ROM programs the CPU-L and DSU PLLs during its clock-init routine
+(offset `0x21cc`), and not the CPU-B PLL. It reads a two-bit speed grade from
+bits 15:14 of RTC/boot register `0x07090160`, selects a base multiplier (25
+for grade 1, 19 for grade 2, else 20) and scales it by a grade multiplier
+(observed, `a8e31821@0x21cc`, `0x13f4`). The routine at `0x1898` then calls
+the PLL writer at `0x1774` twice with that N, for `0x08871000` (CPU-L) and
+`0x08873000` (DSU), the two PLL addresses in its literal pool
+(`0x1f78`–`0x1fa0`); `0x1af0` selects both muxes, and `0x1960` programs a
+fourth PLL word at `0x08870000` on one branch. No routine and no literal
+names `0x08872000`, the CPU-B PLL. The clock registers are in the
+CPU_PLL_CFG block at `0x08870000`.
 
-| Address | Value on the board | Order | Delay | Purpose |
-| --- | --- | --- | --- | --- |
-| `0x08871000` ctrl | `0xf8802600` (N=38) | before mux | 10 µs lock waits | CPU-L PLL enable, N and lock |
-| `0x0887101c` mux | `0x03010000` (src 3, P=2) | after ctrl | 10 µs | CPU-L runs from its PLL ÷2 |
-| `0x08872000` ctrl | `0xf8802700` (N=39) | with CPU-L | 10 µs | CPU-B PLL |
-| `0x0887201c` mux | `0x03000000` (src 3, P=1) | after ctrl | 10 µs | CPU-B runs from its PLL ÷1 |
-| `0x08873000` ctrl | `0xf8802600` (N=38) | with CPU-L | 10 µs | DSU PLL |
-| `0x0887301c` mux | `0x03010105` (src 3, P=2) | after ctrl | 10 µs | DSU runs from its PLL ÷2 |
+| Address | Value on the board | Written by | Purpose |
+| --- | --- | --- | --- |
+| `0x08871000` ctrl | `0xf8802600` (N=38) | ROM, on every entry | CPU-L PLL enable, N and lock |
+| `0x0887101c` mux | `0x03010000` (src 3, P=2) | ROM | CPU-L runs from its PLL ÷2 |
+| `0x08873000` ctrl | `0xf8802600` (N=38) | ROM | DSU PLL |
+| `0x0887301c` mux | `0x03010105` (src 3, P=2) | ROM | DSU runs from its PLL ÷2 |
+| `0x08872000` ctrl | `0xf8802700` (N=39) | boot0's board setup, not the ROM | CPU-B PLL |
+| `0x0887201c` mux | `0x03000000` (src 3, P=1) | boot0's board setup | CPU-B runs from its PLL ÷1 |
 
 The values in the table are confirmed on a board
 (`~/.cache/sunstoneos/evidence/cpu-clock-initial.json` and
 `board-session-20261025-1/port-3-3` bundle 14). The computed CPU-L rate is
-26 MHz × 38 ÷ 2 = 494 MHz; see the N=38 note under boot0 below, which applies to
-whichever stage last wrote the PLL. The ROM also sets the progress record at
+26 MHz × 38 ÷ 2 = 494 MHz. Each FEL return enters the ROM again, which
+writes CPU-L and the DSU back to these words and leaves CPU-B as the last
+image set it: in `board-session-cpu-top-opp-7/port-3-3`, after an image left
+all three at their top points, the next image read CPU-L and the DSU at
+`0xf8802600` and CPU-B still at `0xf8804d00` (2002 MHz). CPU-B's boot word
+comes from boot0's board setup, which the SunstoneOS cold DDR start runs once
+per power cycle. The ROM also sets the progress record at
 `0x07090304` and de-asserts module gates, including both crypto-engine bus
 gates, in its secondary clock setup (observed, `a8e31821@0x264`,
 `0x2444`; reported for remote-writer ownership in
@@ -197,7 +207,8 @@ path is in the absent BROM Monitor (observed, `a8e31821@0x2a0c`,
 `0x24d8`). On exit the ROM leaves:
 
 - the shared SRAM routed to the CPU;
-- the CPU PLLs running as above;
+- the CPU-L and DSU PLLs running as above, and the CPU-B PLL as the last
+  writer left it;
 - the crypto engine out of reset;
 - the FEL stack and scratchpad live in SRAM for a FEL client;
 - for a media boot, boot0 copied to `0x47000` and entered in AArch32.
@@ -261,9 +272,11 @@ either binary. The BROM clock-init reads the speed grade from bits 15:14 of
 gives 38 (inferred from `a8e31821@0x21cc` and `@0x13f4`, which perform the
 multiply; the board PLL word `0xf8802600` agrees). CPU-B runs at 1014 MHz with
 N=39 and a ÷1 post-divider. boot0 reprograms the CPU PLLs unless bit 14 of
-`0x07090160` is set. The [CPU backsolve](../reference-backsolve-cpu.md) reads
-boot0's two rate targets as matching CPU-B's N=39 but not N=38, so which stage
-makes the final CPU-L and DSU write remains open.
+`0x07090160` is set; the board's word has bit 14 clear. The
+[CPU backsolve](../reference-backsolve-cpu.md) reads boot0's two rate targets
+as matching CPU-B's N=39 but not N=38. The ROM is the last writer of CPU-L
+and the DSU: it rewrites them with N=38 on every entry after boot0, and it
+never writes CPU-B, so CPU-B keeps boot0's N=39.
 
 ### PMIC rails over TWI
 
@@ -392,9 +405,6 @@ SunstoneOS uses these binaries as follows:
 - **SYSCTRL `0x03000008` semantics.** The manual does not document the register.
   Bit 1 routing the shared SRAM to the CPU is inferred from the BROM and from
   U-Boot source; the other bits and the exact transition rules are unknown.
-- **Which stage performs the final CPU PLL write.** The BROM computes N=38, and
-  boot0 reprograms the CPU PLLs unless `0x07090160` bit 14 is set. Which write
-  leaves the board's CPU-L and DSU value is not resolved from the binaries alone.
 - **The DRAM firewall and SMC0/SMC1 programming.** boot0 writes the MEMC and SMC
   registers during training, but the register fields are undocumented, so the
   secure-region and QoS configuration cannot be decoded

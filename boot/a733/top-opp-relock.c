@@ -1,9 +1,11 @@
 // CPU0's relock of the three CPU clock domains to the top operating points
 // of speed bin vf0400 before the returning eight-core workload releases any
-// secondary (docs/designs/cpu-top-opp.md, step 6). The ROM resets the CPU
-// PLLs on every return, so the workload's own launch sets them; the CPU rail
-// voltages, which the ROM keeps, were raised by bundle 25 earlier in the same
-// lifetime and read back by bundle 26 after a ROM return.
+// secondary (docs/designs/cpu-top-opp.md, step 6). The ROM resets the CPU-L
+// and DSU PLLs on every return, so the workload's own launch sets them; it
+// leaves CPU-B as the last image set it, which bundle 26 requires at the boot
+// word. The CPU rail voltages, which the ROM keeps, were raised by bundle 25
+// earlier in the same lifetime and read back by bundle 26 after a ROM return.
+// The workload returns with CPU-B at 2002 MHz; bundle 27 lowers it.
 //
 // The routine does not rely on that history. Before its first clock write it
 // requires the 26 MHz oscillator, speed-bin code 0x04, every domain on its
