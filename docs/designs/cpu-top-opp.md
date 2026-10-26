@@ -405,6 +405,15 @@ Board 3-3 has run neither secondary at a top point. A non-return of the
 workload ends the lifetime with the A76 cores possibly running at 2002 MHz
 and CPU0 at 1794 MHz; only a power removal recovers it.
 
+The frozen set is
+`~/.cache/sunstoneos/evidence/cpu-top-opp-20261025/step6/step6-set/` for one
+fresh port 3-3 lifetime: power removal, cold DDR start, the base image,
+bundles 25 and 26, the workload (`../bundle-deadline-top/`, its own runbook,
+binding script and root-review draft, with `bundle-deadline-top.sha256`),
+bundle 27, the Read bundle 14 and a power removal. The workload's source is
+the archive `step6/source-d25b6950`; the overlay built without `--top-opp`
+equals the frozen deadline overlay byte for byte.
+
 The host models: `checks/top-opp-relock-check.c` runs the relock against
 modeled PLLs (the order, the 20 µs waits, three lock reads 3 µs apart, P
 before the select, five refusals with no write and the timeouts), and
