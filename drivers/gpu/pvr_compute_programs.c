@@ -48,11 +48,16 @@ static void copy_words(void *p, const uint32_t *w, size_t n)
 { for (size_t i = 0; i < n; ++i) put32(p, 4 * i, w[i]); }
 static void shared_program(void *p, uint64_t state, uint32_t usc)
 {
-    /* Original DOUTW constants place address high/low words in that order. */
-    put32(p, 0, (uint32_t)(state >> 32)); put32(p, 4, (uint32_t)state);
+    /* DOUTW constants low word first: DOUTW writes data word 0 to the even
+     * register, which Mesa's store and load programs read as the low half
+     * (usclib/common.cl:181, pvr_iface.h:117-122). Mesa's save-restore
+     * generator stores the high word first (pvr_pds.c:3664-3667), which
+     * disagrees with its own shader; port 3-1 showed the rule on the job's
+     * PDS constants (docs/designs/gpu-first-job.md, set 27 post-mortem). */
+    put32(p, 0, (uint32_t)state); put32(p, 4, (uint32_t)(state >> 32));
     put32(p, 8, 2);
-    put32(p, 16, (uint32_t)((state + 48) >> 32));
-    put32(p, 20, (uint32_t)(state + 48)); put32(p, 24, 0x80004002u);
+    put32(p, 16, (uint32_t)(state + 48));
+    put32(p, 20, (uint32_t)((state + 48) >> 32)); put32(p, 24, 0x80004002u);
     /* DOUTU uses an ordinary low/high pair; ten temps allocate three blocks. */
     put32(p, 32, usc); put32(p, 36, ((PVR_COMPUTE_USC_TEMPS + 3u) / 4u) << 3);
     /* IF0->IF1 branch, predicated halt, restore IF0, two DOUTWs, DOUTU/end. */

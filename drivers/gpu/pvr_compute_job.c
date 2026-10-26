@@ -48,13 +48,14 @@ static void put32(void *p,size_t off,uint32_t v)
 static void put64(void *p,size_t off,uint64_t v)
 { put32(p,off,(uint32_t)v);put32(p,off+4,(uint32_t)(v>>32)); }
 /* A 64-bit DOUTW constant: DOUTW writes data word 0 to the even destination
- * register and word 1 to the odd one, as Mesa's clear-colour and end-of-tile
+ * register and word 1 to the odd one, as Mesa's end-of-tile and clear-colour
  * DOUTWs use it (pvr_pds.c:570-573 and 3238-3247), and the USC programs take
  * the low half from the even register. Port 3-1 showed the opposite order
  * fault: with the high word first, the probe read GPU address 0x80, the high
  * half of its input pointer (board-session-20261025-22, s22-gfj-postmortem).
- * Mesa's save-restore generator, which stored the high word first, is not
- * the reference for kernel arguments. */
+ * Mesa's save-restore generator stores the high word first
+ * (pvr_pds.c:3664-3667) while its shader reads the low half from register 0;
+ * that path is likely wrong in Mesa and is not the reference. */
 static void doutw_pair(void *p,size_t off,uint64_t v) { put64(p,off,v); }
 static void clear(void *p,size_t n)
 { unsigned char *b=p;for(size_t i=0;i<n;++i)b[i]=0; }

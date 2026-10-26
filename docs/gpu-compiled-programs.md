@@ -75,13 +75,16 @@ requires the final timeline sequence and intact guards.
 
 A DOUTW writes data word 0 of its 64-bit constant to the even destination
 register and word 1 to the odd one, and the programs read the low half from
-the even register. Mesa's clear-colour and end-of-tile DOUTWs use it so
+the even register. Mesa's end-of-tile and clear-colour DOUTWs use it so
 (`pvr_pds.c:570–573`, `3238–3247` in the producer's Mesa tree). Port 3-1
 showed it: with the high word first, as Mesa's save-restore generator stores
 it (`pvr_pds.c:3664–3667`), the first job's program read GPU address `0x80`,
 the high half of its input pointer ([first GPU job](designs/gpu-first-job.md)).
-Native constants are therefore stored low word first, and the byte checks pass
-Mesa's generator each value with its halves exchanged. The tile pair keeps the
+Mesa's store and load shaders read the low half from register 0
+(`usclib/common.cl:181`), so that generator's order is likely wrong in Mesa.
+Native constants, the context store and load programs' included, are therefore
+stored low word first, and the byte checks pass Mesa's generator each value
+with its halves exchanged. The tile pair keeps the
 first index in the low half and the count in the high half: the native bytes at
 PDS slot offsets 32 and 36 hold the first index and the count.
 

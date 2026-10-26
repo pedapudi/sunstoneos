@@ -292,30 +292,39 @@ the input and `0x80`, `0x01190040` for the output. A DOUTW writes data word
 register. The input pointer therefore became `0x0114000000000080`, whose
 40-bit bus address is `0x80`, the fault address; the output pointer would
 have given `0x4000000080`, so the fault was the program's first load, of
-`seed` and `factor`. Mesa's clear-colour and end-of-tile DOUTWs put word 0
-in the destination register (`pvr_pds.c:570–573`, `3238–3247`); only its
-save-restore generator, whose layout the job's PDS reference followed,
-stores the high word first (`pvr_pds.c:3664–3667`).
+`seed` and `factor`. The DOUTU task word in the same data segment is stored
+low word first, and the USC did run. Mesa's end-of-tile and clear-colour
+DOUTWs put word 0 in the destination register (`pvr_pds.c:570–573`,
+`3238–3247`). Only its save-restore generator, whose layout the job's PDS
+reference followed, stores the high word first (`pvr_pds.c:3664–3667`),
+while Mesa's own store and load shaders read the low half from register 0
+(`usclib/common.cl:181`, `pvr_iface.h:117–122`): that Mesa path is likely
+wrong. The other programs in the capture do not fit the fault: the context
+store and load programs' constants are `0xda`, `0x00240000` and `0xda`,
+`0x00290000`, which would fault near `0xd0`; the fence and end programs
+have no DOUTW constants; the context resume stream is zero.
 
 **The payload is unchanged.** The payload and the page tables are byte for
 byte what the set-27 image composed, replayed in the host model with no GPU
-write: the output page holds the image's fill, and no other byte of the 88
+write (`evidence/gpu-first-job-postmortem-20261025`): the output page holds the image's fill, and no other byte of the 88
 pages changed. In the shared pages only firmware-owned words differ: the
 queue offsets, the recovery record, system and OS data counters, the client
 CCB's offsets, one word of the context state and the VM record's
-catalogue-register field (`0xffffffff` to 0). The trace buffers are
+catalogue-register field (`0xffffffff` to 0; the MMU status names catalogue
+base 1, which this decode does not explain). The trace buffers are
 unchanged.
 
 **Fix.** The job's PDS constants are stored low word first
 (`pvr_compute_job.c`, `doutw_pair`), in the single-dispatch, grid and
 multi-dispatch forms, and the tile pair keeps the first index in the low
-half. The byte references (`checks/pvr-compute-job.c`,
-`checks/pvr-compute-package.c`) pass Mesa's generator each value with its
-halves exchanged, and `check.py --fw-job` checks the constants in the
-linked image; the set-27 image fails that check. The context store and
-resume programs still follow Mesa's save-restore order; the firmware runs
-them only when it stores or resumes a compute context, which one job on a
-new context does not do, so they are left unchanged and recorded as open.
+half. The context store and load programs (`pvr_compute_programs.c`) are
+stored low word first too: the firmware runs them only when it stores or
+resumes a compute context, which one job on a new context does not do, but
+they would fault the first time it did. The byte references
+(`checks/pvr-compute-job.c`, `checks/pvr-compute-package.c`,
+`checks/pvr-compute-programs.c`) pass Mesa's generator each value with its
+halves exchanged, and `check.py --fw-job` checks the job's constants in the
+linked image; the set-27 image fails that check.
 
 ## Design gate
 
