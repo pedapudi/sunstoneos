@@ -1678,9 +1678,7 @@
  },
  "audit-consolidate-apps-a-h-equivalence.py": {
   "cache_areas": [],
-  "docs": [
-   "docs/designs/mbus-restore.md"
-  ],
+  "docs": [],
   "library": false,
   "pure_host": true,
   "required_arguments": [
@@ -3578,7 +3576,7 @@
   "required_arguments": [
    "sys.argv"
   ],
-  "summary": "Check the EL3 MBUS restore against a register model and the pinned ROM and boot0 sequences.",
+  "summary": "Check the EL3 MBUS restore: its admission, its SRAM window and the pinned ROM and boot0 sequences.",
   "usb": false
  },
  "elf-memory-hazards.py": {
@@ -9174,6 +9172,7 @@
  "secondary-local-probe.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/mbus-restore.md",
    "docs/designs/workload-bisect.md"
   ],
   "library": false,

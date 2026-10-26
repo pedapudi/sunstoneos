@@ -45,20 +45,57 @@ the same lifetimes; port 3-1 read `0x84000000` in a lifetime without boot0.
 The SRAM survey before each returning image returns with `bx lr` to the FEL
 loop and does not rerun the clock setup.
 
-## The restore repeats the ROM's sequence with boot0's source
+## The restore repeats the ROM's sequence with boot0's source, from SRAM
 
 `a733_el3_mbus_restore()` in
-[`include/a733_el3_mbus.h`](../../include/a733_el3_mbus.h) runs at EL3,
-before the security setup, in both EL3 monitors
-(`platform/a733/monitor.c`, `apps/storage-read-single-core/monitor.c`) and
-both SMP boots (`platform/a733-smp/boot.c`, `platform/a733-smp-cached/boot.c`).
-No driver has started an MBUS master at that point.
+[`include/a733_el3_mbus.h`](../../include/a733_el3_mbus.h) runs at EL3 in
+both EL3 monitors (`platform/a733/monitor.c`,
+`apps/storage-read-single-core/monitor.c`), before their security setup, and
+in both SMP boots (`platform/a733-smp/boot.c`,
+`platform/a733-smp-cached/boot.c`) and the secondary identity probe
+(`boot/a733/secondary-identity-probe.c`) before any secondary core is
+released. No driver has started an MBUS master at that point.
 
 - **Admission.** It acts only when the masked word (gate, DFS enable, update,
   source and divider) is the ROM's `0x84000000` and MSI_LITE0's gate and both
-  resets read released. At `0x81000000` it does nothing. Any other value is
-  left alone, so a lifetime without boot0 keeps its inherited state and the
-  drivers' fabric checks decide.
+  resets read released. At `0x81000000` it does nothing, and any other value
+  is left alone for the drivers' fabric checks. The ROM's clock setup runs on
+  every forced-FEL entry whether or not boot0 ran in the power cycle, so a
+  lifetime without boot0, such as port 3-1's read without a DDR start, also
+  starts at `0x84000000` and is restored. That is intended: under the
+  performance policy 600 MHz is right whenever the bus starts at the ROM's
+  400 MHz, and PERI0_600M runs in both cases.
+- **Bus masters.** Before any write it requires the masters that an earlier
+  image could have left running to be idle, and otherwise returns with no
+  write:
+  - GPU (8): module clock gate (CCU `+0xb20` bit 31) and bus gate (`+0xb24`
+    bit 0) off, so neither the GPU nor its firmware processor runs;
+  - NPU (8): module clock gate (`+0xb00` bit 31) and bus gate (`+0xb04` bit
+    0) off;
+  - DMA0 (9): with its bus gate and reset released (`+0x704` bits 0 and 16),
+    `DMA_STA_REG` (`0x04601030`) zero, every channel idle and the MBUS FIFO
+    empty (manual 13.1.7.3);
+  - CE (10), which reaches DRAM through MSI_LITE0: with its bus gate and
+    reset released (`+0xac4` bits 0 and 16), no task load bit (mask
+    `0x8421`, the bits the CE driver requires clear) in `CE_TLR_NS` or
+    `CE_TLR_S` (`0x04603010`, `0x04603810`; manual 19.1.7.5).
+
+  The ROM leaves CE clocked and out of reset, so CE is judged by its task
+  registers. The GPU and NPU have no documented idle register that is cheap
+  to read with their clocks off, so their clocks decide. Board reads after
+  NPU images show `+0xb00` = 0 and `+0xb04` = `0x00080000`, so an NPU image
+  that stopped normally passes.
+- **Window in SRAM.** Every image executes from DRAM with the caches off, and
+  during the window MBUS is gated and MSI_LITE0 held in reset. The window is
+  therefore [`boot/a733/mbus-window.S`](../../boot/a733/mbus-window.S):
+  position-independent, register-only and without a stack. The restore copies
+  its 340 bytes (`a733_mbus_window_code[]`) to SRAM at `0x5f000`, invalidates
+  the instruction cache and calls it there; the window touches only
+  `MBUS_CLK_REG` and `MSI_LITE0_BGR_REG`. `0x5f000`–`0x5ffff` lies in SRAM A2
+  outside every launcher (`0x52000`–`0x55fff`), the FEL scratch (`0x71000`),
+  the SRAM survey (`0x73000`), the ROM's executed-call frame (below
+  `0x70000`) and its FEL stack in the shared SRAM; the forced-FEL return
+  clears it.
 - **Sequence.** The ROM's six steps in the ROM's order, with source 1 in step
   4. The divider is written before the source, as the manual's rule for
   raising a bus clock requires (4.1.4.3). Each update is polled for at most
@@ -66,25 +103,26 @@ No driver has started an MBUS master at that point.
   counts the 24 MHz system counter.
 - **Read-back.** MBUS must then read `0x81000000` and MSI_LITE0 its released
   state.
-- **Failure.** A wait that times out returns its step (1, 3, 4 or 6); a wrong
-  read-back returns 7. Before returning it releases MSI_LITE0's reset and sets
-  the gate, so the bus runs and the next ROM return starts from the ROM's
-  usual state. The monitors then finish with status 4 and the SMP boots stop
-  with status 2 and detail `0x200` plus the step.
-- **Record.** The returning monitor writes `MBUS <before> <after> <result>`
-  as the first log line when the word changed. A FEL read after the image
-  returns cannot show the restored rate, because the return reruns the ROM's
-  clock setup.
+- **Failure.** A wait that times out returns its step (1, 3, 4 or 6); the
+  window first releases MSI_LITE0's reset and sets the gate, still from SRAM,
+  so the bus runs before it returns to DRAM. A wrong read-back returns 7.
+  The monitors then finish with status 4, the SMP boots stop with status 2
+  and detail `0x200` plus the code, and the identity probe returns before it
+  starts any core.
+- **Record.** The returning monitor writes `MBUS <before> <after> <code>` as
+  the first log line when the word changed or the restore refused or failed;
+  the code is one hex digit. A FEL read after the image returns cannot show
+  the restored rate, because the return reruns the ROM's clock setup.
 
 **DRAM and interconnect ordering.** boot0 changes MBUS with the NSI and the
 DRAM controller in reset, as part of DRAM initialization; SunstoneOS cannot
-use that sequence with DRAM live and does not need to. The ROM changes MBUS
-with DRAM contents live on every forced-FEL return, and images loaded before
-such returns keep running from the same DRAM afterwards, so the ROM's
-sequence is the reference for a live change. MBUS_DFS_EN stays clear, the
-divider-before-source rule holds, and the NSI clock, the DRAM clock and
-PLL_DDR are not touched. The CPU keeps executing from DRAM during the gated
-window because it reaches DRAM through the NSI, not MBUS (4.1.6.83).
+use that sequence with DRAM live. The ROM changes MBUS with DRAM contents live
+on every forced-FEL return, executing from ROM with its stack in SRAM, and
+images loaded before such returns keep running from the same DRAM afterwards.
+That shows the DRAM contents survive the change; it does not show that the
+CPU may fetch from DRAM during it, which is why the window runs from SRAM.
+MBUS_DFS_EN stays clear, the divider-before-source rule holds, and the NSI
+clock, the DRAM clock and PLL_DDR are not touched.
 
 ## Sessions name 600 MHz
 
@@ -157,79 +195,119 @@ The supply stays DCDC2 at 800 mV.
 
 | Item | Budget | Result |
 | --- | --- | --- |
-| Restore code, AArch64 `-O2` | 512 bytes | 508 bytes (`checks/el3-mbus.py`) |
-| Time at EL3 from the ROM's value | under 100 µs | Three 10 µs settles and four update polls; the model's ROM-state case spans 738 counter ticks, 31 µs |
+| Restore, AArch64 `-O2` | 512 bytes of text and 512 of read-only data | 352 bytes of text; the window's 340 bytes of data (`checks/el3-mbus.py`) |
+| Time at EL3 from the ROM's value | under 100 µs | Three 10 µs settles and four update polls; the window's ROM-state run under Unicorn spans 731 counter ticks, 30 µs, plus the 340-byte copy |
 | Time at boot0's value | One register read | One read |
-| Accesses from the ROM's value | 6 writes, at most 4 polls of reads, 2 read-backs | As budgeted in every passing model case |
+| Accesses from the ROM's value | 2 admission reads, at most 9 master reads, 6 window writes, the update polls, 2 read-backs | As budgeted in every passing case |
 
 ## Gate and image comparison
 
-The integration gate built `01ec4800` with every central target and the ten
+The integration gate built `68c496e5` with every central target and the ten
 OS variants, and passed the kernel, eight-core soak, mimus SMP,
-shared-helper and progress checks; its index check failed only on the new
-check, which the next commit indexes. The parent `e3d5bf48` passed the same
-gate. Evidence, including the per-image comparison, is in
+shared-helper and progress checks; the index, PMIC-tree and power-domain-tree
+checks pass at the documentation commit that follows. The parent `e3d5bf48`
+passed the same gate. Evidence is in
 `~/.cache/sunstoneos/evidence/clock-audit-mbus-20261025/`.
 
 Of 64 images built on both revisions, 30 are byte-identical and 5 QEMU
-models differ only in debug information. The other 29 gain `.text` only,
-in one of two new functions:
+models differ only in debug information. The other 29 add only
+`a733_el3_mbus_restore`, `a733_mbus_window_code` and, in the returning
+monitor, `log_mbus`:
 
-| Images | `.text` change | Added |
+| Images | `.text` | `.rodata` |
 | --- | --- | --- |
-| Eleven SMP images and OS variants | +512 bytes (one OS variant +448) | `a733_el3_mbus_restore` |
-| Four board application images | +508 bytes | `a733_el3_mbus_restore` |
-| Five SMP diagnostic and device images | 0, inside section padding | `a733_el3_mbus_restore` |
-| Six returning-monitor images (kernel check, memory qualification, mimus, probes) | +768 bytes | the restore inlined and `log_mbus` |
-| Two USB returning images | +1,024 bytes | the same |
-| Storage maintenance image | +2,048 bytes, section alignment | `a733_el3_mbus_restore` |
+| Ten OS variants and the supervised SMP image | +320 to +512 bytes | +336 to +352 bytes |
+| Four board application images | +352 bytes | +336 to +344 bytes |
+| Five SMP diagnostic and device images | 0, inside section padding | +336 bytes |
+| Eight returning-monitor images (kernel check, memory qualification, mimus, USB, probes) | +768 bytes | +336 to +352 bytes |
+| Storage maintenance image | +2,048 bytes, section alignment | +344 bytes |
 
-`.rodata` grows by 8 or 16 bytes in four returning images (the log text).
-The G2D application, a separate project, grows by 500 bytes of `.text`, and
-its `.rodata` shrinks by 24 bytes.
+Two images built as separate projects compare the same way: the read-only
+storage single-core image (`apps/storage-read-single-core`) grows by 256
+bytes of text and 320 of read-only data, and the G2D application by 344 and
+328.
 
 ## Checks
 
-- `checks/el3-mbus.py OUTPUT` builds `checks/el3-mbus.c` with address and
-  undefined-behavior sanitizers and runs fifteen cases: the ROM's state with
-  the update bit clearing on the first, tenth and thousandth read; seven
-  states the restore leaves alone; a stuck update bit at each of the four
-  waits, each bounded at 10 ms with the bridge released and the gate on; and
-  a source write that does not take effect. It pins the sixteen ROM and boot0
-  words that the header cites.
-- `checks/a733-monitor-are.py` runs the returning monitor's instructions; its
-  new case starts from the ROM's value and requires the six MBUS writes
-  before the BL31 security writes and the log line
-  `MBUS 0x84000000 0x81000000 0`. Its other 32 cases are unchanged.
+- `checks/el3-mbus.py OUTPUT`:
+  - builds `checks/el3-mbus.c` with address and undefined-behavior sanitizers
+    and runs 21 cases of the admission, the master checks and the read-back:
+    the ROM's state with DMA0 in reset and out of reset; seven states the
+    restore leaves alone; a clocked or bus-gated GPU and NPU, a busy DMA0
+    channel or FIFO, and a CE task in either world, each refused with no
+    window; DMA0 and CE in reset, which pass; a window failure; and an
+    ignored source write;
+  - assembles `boot/a733/mbus-window.S`, requires it to be free of
+    relocations and its bytes to equal the header's array, and runs those
+    bytes under Unicorn at `0x5f000` with only that page, the two registers
+    and an unmapped stack pointer: the ROM's write order with the update bit
+    clearing on the first, tenth and thousandth read, the 10 µs settles, and a
+    stuck update bit at each of the four waits, bounded at 240,000 ticks with
+    the bridge released and the gate on;
+  - pins the sixteen ROM and boot0 words that the header cites.
+- `checks/a733-monitor-are.py` runs the returning monitor's instructions,
+  with the window executed from the mapped SRAM page: from the ROM's value it
+  requires the six MBUS writes before the BL31 security writes and the log
+  line `MBUS 0x84000000 0x81000000 0`; with the GPU clocked or DMA0 busy it
+  requires status 4, the log line with code 8 or 9, no MBUS and no security
+  write, and a restored GIC. Its other 32 cases are unchanged.
 - `checks/a733-smp-cached.py`, which the SMP image checks share, models
-  boot0's value, so the restore makes no write there.
-- `checks/board-bundles.py` passes with the row numbering that allows gaps,
-  and `checks/audit-consolidate-apps-a-h-equivalence.py` passes.
-- G2D: a session regenerated with the updated producer from the earlier
-  model fixture, with the physical fabric record of a ROM return, names G2D at
-  300 MHz and MBUS at `0x81000000`, 600 MHz
-  (`~/.cache/sunstoneos/evidence/g2d-clock-audit-20261025/`).
-  `checks/g2d-power-native.py` passes its four cases on the image built from
-  this revision, writing `0x80000000` (PERI0_300M, divider 1) to the G2D
-  clock; it now models the PERI0 gate words both boards read, because the
-  pinned task model enables only the 400 MHz output's gates.
-  `checks/g2d-modes-native.py` passes its 39 validator cases and 10 RCQ
-  images with that session, and refuses the earlier 100 MHz session at its
-  first case. The success, scale and blend checks replay states pinned to
-  the 2026-10-20 image by hash and are not rerun.
+  boot0's value, so the restore makes no write there;
+  `checks/secondary-local-probe.py` admits the restore's two reads.
+- `checks/board-bundles.py` passes; the row numbers with
+  `RESERVED_POSITIONS` (19 and 20) must count from 1 without a gap.
+- G2D: a session regenerated with the updated producer from the earlier model
+  fixture, with the fabric record of a ROM return, names G2D at 300 MHz and
+  MBUS at 600 MHz (`~/.cache/sunstoneos/evidence/g2d-clock-audit-20261025-2/`).
+  On the image built from `68c496e5`, `checks/g2d-power-native.py` passes its
+  four cases, writing `0x80000000` (PERI0_300M, divider 1) to the G2D clock;
+  it models the PERI0 gate words both boards read, because the pinned task
+  model enables only the 400 MHz output's gates. `checks/g2d-modes-native.py`
+  passes its 39 validator cases and 10 RCQ images with that session and
+  refuses the earlier 100 MHz session at its first case. The success, scale
+  and blend checks replay states pinned to the 2026-10-20 image by hash and
+  are not rerun.
 
-## Board verification
+## Board qualification is frozen and has not run
 
-The refrozen clock-audit dump (`board-bundles-20261025-clock-audit-2`, port
-3-3) reads MBUS right after the cold DDR start and again after a returning
-image's return. A returning image built from this revision then logs
-`MBUS 0x84000000 0x81000000 0`. The ShuffleNetV2 timing at 492 and 852 MHz,
-with sessions naming 600 MHz for MBUS, measures the effect on the NPU's
-memory-bound time. The G2D application's output digests must equal those at
-100 MHz.
+`~/.cache/sunstoneos/evidence/board-bundles-20261025-mbus-qual/` holds, for
+ports 3-3 and 3-1, the kernel check of bundle 2 rebuilt from `68c496e5`
+(`kernel-check-counter-option`, `image.elf` `bd92ec3d…`, which links the
+restore and its log line) and the clock-audit dump (bundle 21), prepared by
+`tools/prepare-board-bundles.py`, with its runbook. Each port runs, in one
+lifetime with power-removal recovery staged:
+
+1. cold DDR start;
+2. `tools/mbus-dram-pattern.py write`: two 4 MiB regions at `0x60000000` and
+   `0xc0000000`, each 64-bit word its own address XOR a constant, through
+   FEL;
+3. the kernel check once, which finds boot0's 600 MHz and logs no MBUS line;
+   its return to the ROM sets 400 MHz;
+4. the kernel check again, whose log must start with
+   `MBUS 0x84000000 0x81000000 0` and pass its 100 rounds;
+5. `tools/mbus-dram-pattern.py verify`: both regions read back unchanged
+   after two gated windows and two ROM returns;
+6. port 3-3 only: the dump, read B of `board-bundles-20261025-clock-audit-2`,
+   which must read MBUS `0x84000000` after the return; then one SMP OS
+   image.
+
+The memory qualification image (`apps/memtest`) writes and checks its
+patterns within one run and its row is not admitted by the bundle tool, so
+the pattern that spans the restore is written and read through FEL. The SMP
+OS image is not frozen in the set: its returning bundle is prepared through
+the native-image refreeze procedure
+(`~/.cache/sunstoneos/evidence/refreeze-el3-20261025/README.txt`), from the
+supervised OS image built at `68c496e5` by the gate.
+
+Further measurements follow the qualification: the ShuffleNetV2 timing at
+492 and 852 MHz, with sessions naming 600 MHz for MBUS, measures the effect on
+the NPU's memory-bound time, and the G2D application's output digests must
+equal those at 100 MHz.
 
 ## Review
 
-An independent review follows this note. It should check the ROM and boot0
-readings, the claim that the CPU is not an MBUS master, the failure path's
-final state, the session change, and the G2D gate bits.
+The first independent review found the window running from DRAM, the claim
+about lifetimes without boot0, the missing bus-master checks, the G2D mask's
+PERI0_480M bits, the missing storage single-core comparison and identity-probe
+restore, and the bundle gap rule; this revision addresses each. A further
+review follows.
