@@ -1,6 +1,7 @@
 # Several timed GPU jobs in one firmware session
 
-Status: **implemented and host-checked; not yet run on a board.** It follows the first GPU job, which
+Status: **implemented, host-checked and frozen for port 3-1 as set
+`board-bundles-20261025-30`; not yet run on a board.** It follows the first GPU job, which
 passed on port 3-1 in set 29 ([first GPU job](gpu-first-job.md)): one
 32-lane compute job between the firmware's health check and its stop. This
 step runs eight jobs on one context in one firmware session, times each
@@ -197,6 +198,14 @@ sessions: the image ends at the OFF.
 - per-job latency: no measurement exists. A 32-lane job at 1,008 MHz is
   expected well under 1 ms; a first job much slower than the others would
   point at cold MMU and system-level caches.
+
+## The board step
+
+Set `board-bundles-20261025-30` runs first in a new lifetime on port 3-1:
+the cold DDR start, the provider-readiness checkpoint, then bundle 29, the
+session image (`850d833f…`, loadable bytes `80fa9d1a…`, from `5c4420d2`).
+Its runbook gives the predictions above as the log lines they produce and
+what each departure means.
 
 ## The step after: a larger dispatch
 
