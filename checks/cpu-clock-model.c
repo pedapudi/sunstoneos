@@ -435,6 +435,10 @@ static void top_cases(void)
     assert(settle_run(A733_CPU_BIG,2002)==A733_CPU_CLOCK_COMPLETE && heat(95000)==A733_THERMAL_THROTTLE);
     assert(run(400)==A733_CPU_CLOCK_COMPLETE && rate(1)==1014000000);
     assert(a733_cpu_clock_request(&cpu,A733_CPU_DSU,910,pm.now+120000)==A733_CPU_CLOCK_REFUSED);
+    /* The DSU point the OS owner requests after the clusters (vendor dsufreq rule). */
+    assert(a733_cpu_clock_dsu_top(4,1794,2002)==1274 && a733_cpu_clock_dsu_top(4,1196,2002)==910);
+    assert(a733_cpu_clock_dsu_top(4,1014,1014)==598 && a733_cpu_clock_dsu_top(4,1196,1014)==780);
+    assert(!a733_cpu_clock_dsu_top(4,494,1014) && a733_cpu_clock_dsu_top(1,1612,1794)==1222);
     puts("PASS top operating points: step 1 at 800 mV with a flickering lock, whole-millisecond settle, "
          "CPU-B 2002 and CPU-L 1794 MHz, DSU 1274 MHz after both with no voltage write, DSU refusals");
 }

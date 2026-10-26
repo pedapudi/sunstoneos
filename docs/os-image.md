@@ -680,8 +680,10 @@ default; the [design](designs/cpu-a76-dvfs.md) and its
   `A733_A76_ADMITTED` only. The session appends the CPU clock driver's
   96-byte grant record and is 904 bytes, or 1,088 with the microphone. The
   admission loads the record against the board session's epoch and
-  generation and refuses a grant owner equal to any other owner and a grant
-  that names both clusters. The
+  generation and refuses a grant owner equal to any other owner. Only
+  approval step `TOP` grants both clusters, at the bin's top points, and
+  then the owner also raises the DSU
+  ([CPU top points](designs/cpu-top-opp.md#the-default-path)). The
   thermal task owns the driver ([CPU clock](cpu-clock.md#the-integrated-os-image-owns-the-driver-in-its-thermal-task));
   a record that names no cluster changes no clock or voltage. The recognizer
   starts each timed run only after the owner has finished its requests; an

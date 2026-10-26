@@ -7347,7 +7347,8 @@
  "os-cpu-clock-native.py": {
   "cache_areas": [],
   "docs": [
-   "docs/cpu-clock.md"
+   "docs/cpu-clock.md",
+   "docs/designs/cpu-top-opp.md"
   ],
   "library": false,
   "pure_host": false,
@@ -7453,6 +7454,7 @@
    "docs/designs/cpu-a76-dvfs.md",
    "docs/designs/cpu-leftovers-measurements.md",
    "docs/designs/cpu-leftovers.md",
+   "docs/designs/cpu-top-opp.md",
    "docs/handoff.md",
    "docs/os-image.md"
   ],

@@ -114,6 +114,19 @@ uint32_t a733_cpu_clock_opp_mv(const struct a733_cpu_opp *o,unsigned bin)
     for(unsigned i=0;i<A733_CPU_VF_BINS;++i){if(!o->mv[i])return 0;if(o->mv[i]>mv)mv=o->mv[i];}
     return mv;
 }
+uint32_t a733_cpu_clock_dsu_top(unsigned bin,uint32_t little_mhz,uint32_t big_mhz)
+{
+    uint32_t ceiling=0,top=0;
+    for(unsigned i=0;i<sizeof(little)/sizeof(*little);++i)
+        if(little[i].mhz==little_mhz)ceiling=a733_cpu_clock_opp_mv(&little[i],bin);
+    uint64_t cap=(uint64_t)(little_mhz>big_mhz ? little_mhz : big_mhz)*1000000u*3u/4u;
+    cap-=cap%26000000u;
+    for(unsigned i=0;ceiling && i<sizeof(dsu)/sizeof(*dsu);++i) {
+        uint32_t mv=a733_cpu_clock_opp_mv(&dsu[i],bin);
+        if(mv && mv<=ceiling && (uint64_t)dsu[i].mhz*1000000u<=cap && dsu[i].mhz>top)top=dsu[i].mhz;
+    }
+    return top;
+}
 int a733_cpu_clock_bin(uint32_t word,unsigned *bin)
 {
     /* vf_mapping_table code -> column; 0x11 and 0x12 have no column. */

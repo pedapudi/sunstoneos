@@ -1,8 +1,10 @@
 # Design: CPU clusters and the DSU default to the vendor's top operating points
 
 Status: **driver changes implemented and host-modeled. Steps 1 to 5 passed
-on port 3-3 on 2026-10-25. Step 6 is built and frozen and has not run; step 7
-waits for the integrated OS image's first board run.** Every hardware block defaults to the highest
+on port 3-3 on 2026-10-25. Step 6 is built and frozen and has not run. Step
+7's grant of both clusters is implemented and host-checked; it cannot be
+frozen until the integrated OS image has a reviewed physical entry record
+and B1 has passed (below).** Every hardware block defaults to the highest
 operating point that the vendor uses for the chip's speed bin, with the
 vendor's voltage; lower points are optional modes ([AGENTS.md](../../AGENTS.md),
 "Implementation"). The user approved CPU clock and voltage changes on
@@ -211,17 +213,21 @@ Lower points are optional modes:
   lowering follows the vendor order: the DSU first, then the cluster, then
   its voltage.
 
-Three changes outside the driver remain for the default path, after the
-board steps:
+The integrated OS image carries the default path as approval step `TOP`:
 
-- The integrated OS image's owner (`apps/os/cpu.c`) requests each granted
-  cluster's maximum; it must also request the DSU after CPU-L.
-- Preparation and admission refuse a grant that names both clusters
-  ([cpu-a76-dvfs.md](cpu-a76-dvfs.md)); the default needs both, and the
-  record format already carries them.
-- Each grant needs an approval record for one session. The default needs a
-  standing record per board for its top points, which the resident lifetime
-  also needs.
+- `apps/os/prepare.py` admits a `TOP` approval only with both clusters at
+  the top rows of the board's bin column, as B1 recorded it; it still
+  refuses both clusters for steps A1 to A3.
+- `apps/os/admission.c` accepts a grant of both clusters.
+- The clock owner (`apps/os/cpu.c`) requests CPU-B, then CPU-L, each once its
+  own sensor has a reading, and, for a grant of both clusters only, then the
+  DSU at the point that `a733_cpu_clock_dsu_top` derives by the rule above
+  from the rates that CPU-L and CPU-B reached. A one-cluster grant leaves the
+  DSU at its boot point.
+
+One change remains: each grant needs an approval record for one session. The
+default needs a standing record per board for its top points, which the
+resident lifetime also needs.
 
 ## Prerequisites that remain from the A76 design
 
@@ -259,7 +265,7 @@ and DCDC3 1050 mV in vf0400). The steps change one variable at a time.
 | 4 | DCDC3 to 1050 mV, CPU-B 1014 → 2002 MHz, then the DSU to 910 MHz; then the DSU to 598 MHz, CPU-B to 1014 MHz and DCDC3 to 800 mV, cores 6 and 7 off; the DSU stays at 598 MHz | CPU-B PLL `0xf8804d00`, DCDC3 `0xb7`, DSU PLL `0xf8802300`, mux `0x03000105`; then DSU PLL `0xf8802e00`, mux `0x03010105`, CPU-B `0xf8802700`, DCDC3 `0x9e` |
 | 5 | DCDC5 to 1000 mV, CPU-L → 1794 MHz, then the DSU → 1274 MHz | DCDC5 1000 mV (`0xb2`); CPU-L PLL `0xf8804500`, CPU0 measures 1794 MHz ± 1%; DSU PLL `0xf8803100`, mux `0x03000105`; the hottest sensor below 50 °C |
 | 6 | The all-core returning workload with CPU-B at 2002 MHz, CPU-L at 1794 MHz and the DSU at 1274 MHz, set by the workload's own CPU0 before any secondary starts | 32 rounds on every core, 32 ticks on CPU0 and 33 SGIs on each secondary, as at the boot rates; background progress about 3.6 times the boot-rate count on cores 0 to 5 and about 2 times on cores 6 and 7; the relock record reads the three top-point PLL words; every sensor below 70 °C before and after |
-| 7 | B1, then the OS image with both clusters and the DSU at their top points | Recognition on the A76 pair at about 1.2 s for the bench recording ([cpu-a76-dvfs.md](cpu-a76-dvfs.md), A2) |
+| 7 | B1, then the OS image with both clusters and the DSU at their top points | Recognition on the A76 pair at about 2.10 s in B1 and about 1.20 s at the top points for the bench recording ([cpu-a76-dvfs.md](cpu-a76-dvfs.md), A2) |
 
 Step 1 changes nothing that a running core uses, so it tests the park,
 relock and lock rule on real hardware at the lowest risk. Step 2 is the first
@@ -421,6 +427,63 @@ before the select, five refusals with no write and the timeouts), and
 the instruction model, with modeled CPU PLLs, in all nine deadline cases.
 `checks/workload-bisect-host.py` validates the relock record in the runner's
 decoder.
+
+## Step 7: B1, then the OS image at the top points
+
+Step 7 is two supervised runs of the integrated OS image built with
+`A733_A76_ADMITTED` and `SUNSTONE_A733_OS_CPU_CLOCK`, each in its own power
+cycle, because the image takes over USB0 and ends at a terminal halt:
+
+1. **B1**: a grant of no cluster, the recognizer on core 6 and its worker on
+   core 7, at the boot rates.
+2. **TOP**: approval step `TOP`, citing B1's record; the clock owner raises
+   CPU-B to 2002 MHz at 1050 mV, CPU-L to 1794 MHz at 1000 mV and the DSU to
+   1274 MHz before the timed recognition.
+
+Neither run can be frozen yet. `apps/os/prepare.py` needs a reviewed
+physical entry record: the thermal owner's facts from a fresh reading and the
+DDR reservation of the recognition inputs ([os-image.md](../os-image.md)).
+No such record exists, and no integrated OS image has run on a board. The
+other B1 prerequisites of [cpu-a76-dvfs.md](cpu-a76-dvfs.md) also remain for
+the same power cycle on port 3-3:
+
+- rank 5, the forced-stall return;
+- the rank 7 and rank 8 bundles refrozen with the status-masked comparison
+  (`~/.cache/sunstoneos/evidence/refreeze-el3-20261025/`);
+- after B1, its record of schema `a733-os-cpu-clock-b1-v1`, which the `TOP`
+  approval must cite.
+
+The 70 °C stop is not yet built for these runs. The OS thermal policy's
+trips are compiled constants, the vendor's THROTTLE at 90 °C and CRITICAL at
+110 °C (`drivers/thermal/a733_thermal.c`). The session's hardware alarm
+thresholds are not inputs to the policy. A 70 °C stop therefore needs a
+policy change before step 7 is frozen: a CRITICAL trip at 70 °C on every CPU
+sensor for these runs, which ends the session. The run's record must also
+carry the thermal task's readings, taken about every 100 ms, through the
+timed recognition.
+
+Predictions for the bench recording, from the A2 estimate of
+[cpu-a76-dvfs.md](cpu-a76-dvfs.md) (14.894 s × 494 ÷ (2 × 2 × f) for the
+linear stage plus 0.283 s for the other stages, with f the CPU-B rate in
+MHz):
+
+| Run | CPU-B, CPU-L, DSU | Recognition time | Other |
+| --- | --- | --- | --- |
+| B1 | 1014, 494, 494 MHz | About 2.10 s | Text and CRCs equal to the host reference |
+| TOP | 2002, 1794, 1274 MHz | About 1.20 s, 1.75 times faster | The same text and CRCs; `CLOCK` lines show the three top-point PLL words; every sensor below 70 °C |
+
+A ratio below 1.75 shows a limit outside the A76 cores. The DSU at 1274 MHz
+instead of 494 MHz should raise the ratio if L3 bandwidth bounds the linear
+stage.
+
+The host checks of the `TOP` grant: `checks/os-image-launch.py` prepares a
+`TOP` bundle and refuses a `TOP` approval with one cluster, a `TOP` approval
+below the bin's top points and both clusters for step A2 (48 cases);
+`checks/cpu-clock-check.py` checks the DSU rule's points, including 1274 MHz
+for vf0400 with CPU-L at 1794 MHz and CPU-B at 2002 MHz.
+`checks/os-cpu-clock-native.py` passes on the same build but covers the
+register adapter only; no check yet drives the owner's request order for a
+grant of both clusters.
 
 ## Step 1: bundle 20
 

@@ -6,8 +6,9 @@
  *
  * With SUNSTONE_A733_OS_CPU_CLOCK the thermal task also owns the CPU clock
  * driver. It inspects both clusters read-only, then requests each cluster
- * that the session's grant names at the grant's highest point once, and
- * afterwards lets the driver follow the thermal level. A grant that names
+ * that the session's grant names at the grant's highest point once (and, for
+ * a grant of both clusters, the DSU), and afterwards lets the driver follow
+ * the thermal level. A grant that names
  * no cluster leaves every clock and voltage unchanged. */
 #include "os.h"
 #include "../board/application.h"
@@ -130,18 +131,30 @@ int os_cpu_clock_step(const struct a733_thermal_policy *policy)
             owner.cluster=A733_CPU_BIG;
             return a733_cpu_clock_inspect(c,A733_CPU_BIG,later(REQUEST_US))==A733_CPU_CLOCK_PENDING?1:-1;
         }
-        owner.phase=REQUEST;owner.cluster=A733_CPU_LITTLE;
+        owner.phase=REQUEST;owner.cluster=0;
     }
     if(owner.phase==REQUEST){
-        /* One request per granted cluster once its own sensor has a reading
-         * (CPUL is physical channel 3, CPUB channel 0). */
-        static const unsigned sensor[2]={1u<<3,1u<<0};
+        /* One request per granted domain once its sensor has a reading (CPUL
+         * is physical channel 3, CPUB channel 0), in the default path's order
+         * (docs/designs/cpu-top-opp.md): CPU-B, CPU-L, then the DSU at the
+         * vendor dsufreq point for the granted cluster maxima. Only a grant
+         * of both clusters (the top points) moves the DSU; a one-cluster grant
+         * keeps the boot DSU point, as before. */
+        static const unsigned order[3]={A733_CPU_BIG,A733_CPU_LITTLE,A733_CPU_DSU};
+        static const unsigned sensor[3]={1u<<0,1u<<3,1u<<3};
         const struct a733_cpu_clock_grant *g=&c->config.grant;
-        for(;owner.cluster<2;++owner.cluster){
-            if(!(g->clusters&(1u<<owner.cluster)))continue;
+        for(;owner.cluster<3;++owner.cluster){
+            const unsigned d=order[owner.cluster];
+            const unsigned granted=d==A733_CPU_DSU ? g->clusters==3u : g->clusters&(1u<<d);
+            if(!granted)continue;
             if(!(a733_thermal_policy_seen(policy)&sensor[owner.cluster]))return 1;
-            enum a733_cpu_clock_status q=a733_cpu_clock_request(c,owner.cluster,g->max_mhz[owner.cluster],
-                later(REQUEST_US));
+            uint32_t target=d==A733_CPU_DSU ? 0 : g->max_mhz[d];
+            if(d==A733_CPU_DSU){
+                const uint32_t big=c->applied_mhz[A733_CPU_BIG] ? c->applied_mhz[A733_CPU_BIG] : mhz(A733_CPU_BIG);
+                target=c->report.binned ? a733_cpu_clock_dsu_top(c->report.bin,c->applied_mhz[A733_CPU_LITTLE],big) : 0;
+                if(!target)continue;
+            }
+            enum a733_cpu_clock_status q=a733_cpu_clock_request(c,(enum a733_cpu_domain)d,target,later(REQUEST_US));
             ++owner.cluster;
             if(q==A733_CPU_CLOCK_PENDING)return 1;
             if(q==A733_CPU_CLOCK_RETAINED||q==A733_CPU_CLOCK_INVALID)return -1;

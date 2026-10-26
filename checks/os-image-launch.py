@@ -113,6 +113,19 @@ def clock_cases(raw, record, put, target, identities, prepare, refused, out, cas
         'two-changes-for-one': granted('changes', changes=2),
         'little-cluster-for-cpu-b-step': granted('cluster', maxima=(2002, 0), clusters=1),
     }
+    # TOP, the default path of docs/designs/cpu-top-opp.md: both clusters at
+    # the top rows of vf0400, CPU-L 1794 and CPU-B 2002 MHz.
+    top = dict(approval, step='TOP', cluster='both', highest_mhz={'cpu-l': 1794, 'cpu-b': 2002}, changes=4)
+    prepare('MODEL-NOT-DEPLOYABLE-clock-top', **granted('top', top, maxima=(1794, 2002), clusters=3, changes=4))
+    session = (out / 'MODEL-NOT-DEPLOYABLE-clock-top/board/session.bin').read_bytes()
+    assert prep.grant_fields(session)['max_mhz'] == (1794, 2002) and prep.grant_fields(session)['clusters'] == 3
+    cases['prepared-top-grant-both-clusters-at-the-bin-tops'] = True
+    refusals.update({
+        'top-with-one-cluster': granted('top-one', top, maxima=(0, 2002), clusters=2, changes=4),
+        'top-below-the-bin-tops': granted('top-low', dict(top, highest_mhz={'cpu-l': 1404, 'cpu-b': 2002}),
+                                          maxima=(1404, 2002), clusters=3, changes=4),
+        'both-clusters-for-a2': granted('a2-both', maxima=(1794, 2002), clusters=3),
+    })
     nothing = dict(record, cpu_clock_approval=approval['b1'])
     (out / 'MODEL-admission-clock-nothing.json').write_text(json.dumps(nothing))
     for index, (name, files) in enumerate(refusals.items()):
