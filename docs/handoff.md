@@ -67,8 +67,8 @@ does not establish recovery from a fault.
 | Work | Branch | Immediate deliverable |
 | --- | --- | --- |
 | Cold entry | `work/cold-arm-cache-audit-1026` | Establish a source-backed secondary wake/reset ownership sequence; non-Arm writer exclusion remains separate |
-| Bluetooth startup | `work/radio-bootstrap-rate-1026` | Audit the remaining bootstrap deadline and first-readiness semantics after integrating fast SDIO startup |
-| Resident NPU | implementation design | Extend the existing OS NPU application and cold-card session with bounded resident health and thermal ownership |
+| GPU CPU clocks | `work/resume-gpu-cpu-clock-1026` | Reuse the existing CPU-ready wait and operating-point grant in the supervised GPU image |
+| Resident NPU | `work/resident-npu-1026` | Extend the existing OS NPU application and cold-card session; resolve selected-model image size without reducing the supported model scope |
 | Cold non-Arm ownership | source audit | Establish OR100 and crypto-engine exclusion without assuming an idle snapshot proves drain |
 
 Independent reviewers cover CPU/thermal/DRAM, accelerator operation and peripheral
@@ -269,7 +269,13 @@ be pruned.
   existing time budget. The native combined image and focused owner, session,
   preparation and budget checks pass under `radio-bootstrap-rate-1026/`.
   Host preparation requires the verified parent clock and linked fast-mode
-  capability. Physical firmware loading and timing remain unqualified.
+  capability. Bluetooth now rejects first readiness observed at or after the
+  original bootstrap deadline. Accepted readiness anchors resident stage timing;
+  UART, wake and module waits cannot extend HCI initialization. Seventeen
+  startup cases, one stage-arithmetic case and the affected native build pass
+  under `bluetooth-startup-deadline-1026/`. The change reduces text by 52 bytes
+  without changing state sizes. Physical firmware loading and timing remain
+  unqualified.
   The camera stream uses two slots and polls capture during each copied chunk.
   It exports one immutable frame, then reports retained hardware because packet
   drain is unproven. Native/model/host evidence is frozen under

@@ -1945,6 +1945,22 @@
   "summary": "Run changed mode2 serializer/ACK/security cases in the actual native ELF.",
   "usb": false
  },
+ "bluetooth-startup-deadline.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/bluetooth-native.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--output",
+   "--native-recipe",
+   "--hci-reference",
+   "--native-build"
+  ],
+  "summary": "Bluetooth first-readiness and HCI startup deadlines only.",
+  "usb": false
+ },
  "bluetooth-usb-native.py": {
   "cache_areas": [
    "evidence"

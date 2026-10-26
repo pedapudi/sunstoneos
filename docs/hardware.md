@@ -1820,7 +1820,12 @@ to the stated scope:
   SDIO and reject slow fallback before borrowing the card. Bluetooth batches
   advancing bootstrap steps within the existing time budget. The combined
   native build and focused owner/session/preparation checks pass under
-  `radio-bootstrap-rate-1026/`; physical loading and timing remain unqualified. [Identity-message encoding and decoding](radio-codec.md)
+  `radio-bootstrap-rate-1026/`. Bluetooth first readiness must also arrive before
+  its original bootstrap deadline. Resident stage timing starts at accepted
+  readiness, and provider waits cannot extend HCI initialization. Seventeen
+  startup cases, one arithmetic case and the native build pass under
+  `bluetooth-startup-deadline-1026/`; physical loading and timing remain
+  unqualified. [Identity-message encoding and decoding](radio-codec.md)
   are implemented, with host sanitizer and AArch64 compile evidence. The
   [bootstrap and board mapping](radio.md) remains source-based research, with a
   host-tested Bluetooth patch-table inspector. Published software identifies
