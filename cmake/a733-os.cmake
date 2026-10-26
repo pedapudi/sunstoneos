@@ -87,8 +87,8 @@ if(SUNSTONE_A733_OS_GPU_LINEAR)
   # supported new composition is the existing recorded two-worker path.
   if(NOT SUNSTONE_A733_OS_RESIDENT AND
      (SUNSTONE_A733_OS_AUDIO OR SUNSTONE_A733_OS_RADIO OR SUNSTONE_A733_OS_HEADSET OR
-      SUNSTONE_A733_OS_CPU_CLOCK OR SUNSTONE_A733_OS_PERF))
-    message(FATAL_ERROR "Supervised GPU linear requires recorded recognition without other optional devices or CPU clock controls")
+      SUNSTONE_A733_OS_PERF))
+    message(FATAL_ERROR "Supervised GPU linear requires recorded recognition without other optional devices or performance commands")
   endif()
   # This branch maps 0x46C00000-0x47000000 read-only itself (below); a value
   # given on the command line could only disagree with it.

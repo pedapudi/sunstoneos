@@ -71,7 +71,7 @@ def refused(action):
     raise AssertionError('refusal expected')
 
 
-def clock_cases(raw, record, put, target, identities, prepare, refused, out, cases):
+def clock_cases(raw, record, put, target, identities, prepare, refused, out, cases, gpu=False):
     """A2 on a modeled board 3-3: CPU-B to 2,002 MHz (fuse word 0x00000496,
     column vf0400) under an approval bound to this board, image and session,
     which cites that board's read-only B1 record. Each refusal changes one
@@ -99,11 +99,12 @@ def clock_cases(raw, record, put, target, identities, prepare, refused, out, cas
         entry_path = out / ('MODEL-admission-clock-' + name + '.json')
         entry_path.write_text(json.dumps(entry))
         return {'session': path, 'entry': entry_path}
-    bundle = prepare('MODEL-NOT-DEPLOYABLE-clock-a2', **granted('a2'))
-    session = (out / 'MODEL-NOT-DEPLOYABLE-clock-a2/board/session.bin').read_bytes()
-    assert bundle['audio'] is prep.session_layout(session)[0]
-    assert prep.grant_fields(session)['max_mhz'] == (0, 2002)
-    cases['prepared-a2-grant-bound-to-board-image-session-and-b1'] = True
+    if not gpu:
+        bundle = prepare('MODEL-NOT-DEPLOYABLE-clock-a2', **granted('a2'))
+        session = (out / 'MODEL-NOT-DEPLOYABLE-clock-a2/board/session.bin').read_bytes()
+        assert bundle['audio'] is prep.session_layout(session)[0]
+        assert prep.grant_fields(session)['max_mhz'] == (0, 2002)
+        cases['prepared-a2-grant-bound-to-board-image-session-and-b1'] = True
     other_b1 = put('cpu-clock-b1-envelope', dict(b1, sid_word=0))
     failed_b1 = put('cpu-clock-b1-failed', dict(b1, passed=False))
     granted_b1 = put('cpu-clock-b1-granted', dict(b1, grant_clusters=2))
@@ -134,11 +135,14 @@ def clock_cases(raw, record, put, target, identities, prepare, refused, out, cas
     })
     nothing = dict(record, cpu_clock_approval=approval['b1'])
     (out / 'MODEL-admission-clock-nothing.json').write_text(json.dumps(nothing))
+    if gpu:
+        refusals = {key: refusals[key] for key in ('approval-for-another-port', 'grant-without-approval-record', 'top-with-one-cluster')}
     for index, (name, files) in enumerate(refusals.items()):
         assert refused((lambda f, n: lambda: prepare(n, **f))(files, 'c%d' % index)), name
         cases['refuses-clock-' + name] = True
     assert refused(lambda: prepare('cn', entry=out / 'MODEL-admission-clock-nothing.json'))
     cases['refuses-clock-approval-without-grant'] = True
+    return out / 'MODEL-NOT-DEPLOYABLE-clock-top'
     assert not any((out / ('c%d' % i)).exists() for i in range(len(refusals))) and not (out / 'cn').exists()
 
 
@@ -190,6 +194,7 @@ def main():
     for name in ('build', 'base', 'overlay', 'wav', 'output'):
         parser.add_argument('--' + name, type=Path, required=True)
     parser.add_argument('--staged', action='store_true', help='explicit USB0-only recorded workload 2')
+    parser.add_argument('--gpu-cpu-only', action='store_true', help='only combined GPU and CPU-grant admission')
     parser.add_argument('--gpu-only', action='store_true', help='only supervised GPU artifact, entry and frozen-launch admission')
     parser.add_argument('--clang', type=Path, default=Path('/usr/bin/clang-21'))
     parser.add_argument('--lld', type=Path, default=Path.home() / '.cache/sunstoneos/host/usr/bin/ld.lld-21')
@@ -200,10 +205,13 @@ def main():
     link_check = args.build / 'os-image/link-check.json'
     manifest = json.loads(link_check.read_text())
     audio = manifest['audio']
-    if args.gpu_only:
+    assert not (args.gpu_only and args.gpu_cpu_only)
+    if args.gpu_only or args.gpu_cpu_only:
         assert manifest.get('gpu_linear') and not audio
     # The CPU clock build appends the driver's 96-byte grant record.
     cpu_clock = 'SUNSTONE_A733_OS_CPU_CLOCK:BOOL=ON' in (args.build / 'CMakeCache.txt').read_text()
+    if args.gpu_cpu_only:
+        assert cpu_clock and not manifest.get('perf_modes')
     image_hash = hashlib.sha256(image.read_bytes()).hexdigest()
     cases = {}
 
@@ -327,6 +335,34 @@ def main():
     (out / 'changed-size-contract.bin').write_bytes(changed)
     assert not admit(out / 'changed-size-contract.bin', armed + HZ // 10)
     cases['image-admission-accepts-launched-contract'] = True
+    if args.gpu_cpu_only:
+        # Reuse accepted GPU tampering checks; select only the new CPU-grant
+        # composition, with actual preparation and frozen-entry admission.
+        top_bundle = clock_cases(raw, record, put, target, identities, prepare, refused, out, cases, gpu=True)
+        for label, selected in (('read-only', bundle), ('top', top_bundle)):
+            frozen = tool.freeze_bundle(selected, 1)
+            tool.entry_check(frozen, target['identity'], target['port'])
+            cases['frozen-gpu-cpu-' + label] = True
+        tail = len(raw) - prep.GRANT_BYTES
+        for label, owner in (('firmware', 0x4f53475055464d31), ('session', 0x4f534731)):
+            value = bytearray(raw)
+            struct.pack_into('<Q', value, tail + 24, owner)
+            path = out / ('MODEL-owner-' + label + '.bin');path.write_bytes(value)
+            entry = dict(record, session_template_sha256=hashlib.sha256(value).hexdigest())
+            entry_path = out / ('MODEL-owner-' + label + '.json');entry_path.write_text(json.dumps(entry))
+            assert refused(lambda: prepare('refused-owner-' + label, session=path, entry=entry_path))
+            cases['refuses-gpu-' + label + '-cpu-owner'] = True
+        for label, change in (('cpu-feature-off', {'cpu_clock': False}),
+                              ('cpu-feature-integer', {'cpu_clock': 1}),
+                              ('cpu-grant-size', {'contract_profile': {'lifetime': 'supervised', 'session_bytes': 808}})):
+            altered = dict(manifest, **change)
+            assert refused(lambda: prep.image_manifest_check(altered, image.read_bytes()))
+            cases['refuses-' + label] = True
+        (out / 'result.json').write_text(json.dumps(dict(passed=True, physical_access=False,
+            image_sha256=image_hash, build_id=manifest['build_id'], cases=cases,
+            limits='Synthetic grant/GPU entry facts; actual preparation, native contract admission and frozen validation, without transport.'), indent=2) + '\n')
+        print('PASS combined GPU/CPU preparation:', len(cases), 'focused cases')
+        return
     if args.gpu_only:
         from harness import refused as reject
         prepared = tool.freeze_bundle(bundle, 1)

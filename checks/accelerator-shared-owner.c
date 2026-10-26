@@ -9,6 +9,7 @@
 #include "npu-startup-host.c"
 #undef main
 #include "a733_pmic_consumer.h"
+#include "a733_cpu_clock.h"
 
 static struct a733_gpu_power gpu;
 static struct a733_pmic_consumer supply;
@@ -68,6 +69,15 @@ static int power_update(void *v,enum a733_gpu_power_bank bank,uint32_t off,uint3
 static void composed_setup(unsigned mode)
 {
     setup();memset(&gpu,0,sizeof(gpu));memset(&supply,0,sizeof(supply));
+    if(mode>=5) {
+        /* CPU OPPs use the admitted 26 MHz source; REF remains 24 MHz. Set
+         * the same physical words in each adapter before provider polling. */
+        r.osc=0x10008002;r.ccu[0]=0xf8000000|(95u<<8)|(103u<<16);
+        *pmic_model_word(&m,0x07090160)=r.osc;
+        *pmic_model_word(&m,0x02002000)=r.ccu[0];
+        *pmic_model_word(&m,0x07010010)=0x04000000;
+        m.pmic[0x14]=m.pmic[0x16]=30;
+    }
     m.pmic[0x15]=0x2e; /* DCDC4 at 960 mV, as the GPU platform raises it */
     memset(core,0,sizeof(core));core[8]=0x010101ff;
     gpu_token=0;delegated=core_pending=both_pending=0;gpu_deadline=100000;
@@ -222,9 +232,128 @@ static int dcdc2_first(void)
         (unsigned long long)b.row_on_us,(unsigned long long)b.elapsed_us,done_at_ready);
     return 0;
 }
+/* CPU/GPU coexistence adds no scheduler or device abstraction. The actual
+ * CPU controller shares the existing provider model; only its PLL register
+ * responses are modeled. Existing CPU checks establish ramp/settle timing. */
+static struct a733_cpu_clock cpu_owner;
+static struct a733_thermal_policy cpu_policy;
+static uint32_t cpu_words[3][8];
+static unsigned cpu_stuck,cpu_writes,cpu_gpu_pending;
+static int cpu_notify(void *v,enum a733_thermal_level level){(void)v;(void)level;return 1;}
+static int cpu_time(void *v,uint64_t *out)
+{assert(v==&cpu_owner);++m.now;return pmic_model_now(&m,out);}
+static uint32_t *cpu_word(uintptr_t a)
+{
+    assert(a>=0x08871000 && a<0x08874000 && ((a&0xfff)<=0x1c) && !(a&3));
+    return &cpu_words[(a-0x08871000)/0x1000][(a&0xfff)/4];
+}
+static int cpu_read(void *v,uintptr_t a,uint32_t *out)
+{
+    assert(v==&cpu_owner && a733_cpu_clock_address(a,0));
+    *out=a==0x07090160 ? r.osc : a==0x0300624c ? r.sid : *cpu_word(a);
+    return 1;
+}
+static int cpu_write(void *v,uintptr_t a,uint32_t value)
+{
+    assert(v==&cpu_owner && a733_cpu_clock_address(a,1));++cpu_writes;
+    if(!(a&0xfff))value=(value&~((1u<<26)|(1u<<28)))|(cpu_stuck?0:1u<<28);
+    *cpu_word(a)=value;return 1;
+}
+static void cpu_setup(void)
+{
+    memset(&cpu_owner,0,sizeof(cpu_owner));memset(&cpu_policy,0,sizeof(cpu_policy));
+    memset(cpu_words,0,sizeof(cpu_words));cpu_stuck=cpu_writes=cpu_gpu_pending=0;
+    cpu_words[0][0]=0xf8802600;cpu_words[0][7]=0x03010000;
+    cpu_words[1][0]=0xf8002700;cpu_words[1][7]=0x03000000;
+    cpu_words[2][0]=0xf8001e00;cpu_words[2][7]=0x03000000;
+    assert(a733_thermal_policy_init(&cpu_policy,m.now,cpu_notify,0));
+    struct a733_thermal_sample sample={.observed_us=m.now,.sequence=1,.valid=31};
+    for(unsigned i=0;i<5;++i)sample.millicelsius[i]=50000;
+    assert(a733_thermal_policy_update(&cpu_policy,m.now,A733_THERMAL_SAMPLE,&sample)==A733_THERMAL_NORMAL);
+    const struct a733_cpu_clock_config config={4242,{77,3,{1794,2002},8}};
+    const struct a733_cpu_clock_ops ops={cpu_time,cpu_read,cpu_write};
+    assert(a733_cpu_clock_init(&cpu_owner,&config,&ops,&cpu_owner,&m.clocks,&m.rails,&m.provider,&cpu_policy));
+}
+static void cpu_gpu_on(void)
+{
+    const uint64_t deadline=m.now+1000000;
+    /* Native reopen retains the sampled supply and checks its health; it
+     * does not begin a new sample under a different operation deadline. */
+    assert(a733_pmic_consumer_health(&supply)==1);
+    assert(a733_pmic_consumer_arm(&supply,deadline)==1);
+    assert(a733_gpu_resources_acquire(&m.gpu,9,A733_GPU_RESOURCE_GPU,deadline,
+        &gpu_token,&ready_gpu)==A733_GPU_RESOURCE_OK);
+    assert(a733_gpu_power_on(&gpu,deadline)==A733_GPU_POWER_AGAIN);
+}
+static void cpu_gpu_run(unsigned fault)
+{
+    enum a733_cpu_clock_status cr=A733_CPU_CLOCK_PENDING;
+    enum a733_gpu_power_result gr=A733_GPU_POWER_AGAIN;
+    for(unsigned i=0;i<300;++i) {
+        if(cr==A733_CPU_CLOCK_PENDING)cr=a733_cpu_clock_burst(&cpu_owner,200);
+        if(cpu_owner.request.id && supply.request.id)++cpu_gpu_pending;
+        if(fault==6 && cpu_owner.request.id && !m.fail_phase) {
+            m.fail_phase=2;m.fail_status=0x38;
+        }
+        if(cr==A733_CPU_CLOCK_RETAINED) {
+            assert(fault && cpu_owner.clock.id && cpu_owner.rail.id && gpu_token && delegated && supply.rail.id);
+            /* The OS closes board admission here. No GPU stop or further
+             * device poll can establish completion of retained work. */
+            return;
+        }
+        assert(cr==A733_CPU_CLOCK_PENDING || cr==A733_CPU_CLOCK_COMPLETE);
+        if(gr==A733_GPU_POWER_AGAIN)gr=a733_gpu_power_poll(&gpu);
+        if(gr==A733_GPU_POWER_FAULT) {
+            /* Either task can observe a shared-provider fault first. Close
+             * admission on that observation, retaining both owners. */
+            assert(fault && m.provider.retained && cpu_owner.clock.id &&
+                cpu_owner.rail.id && gpu_token && delegated && supply.rail.id);
+            return;
+        }
+        assert(gr==A733_GPU_POWER_AGAIN || gr==A733_GPU_POWER_OK);
+        if(cr==A733_CPU_CLOCK_COMPLETE && gr==A733_GPU_POWER_OK){assert(!fault);return;}
+        service_step();m.now+=TICK_US;
+    }
+    assert(0);
+}
+static int cpu_gpu_case(unsigned mode)
+{
+    composed_setup(mode);cpu_setup();cpu_gpu_on();
+    assert(a733_cpu_clock_request(&cpu_owner,A733_CPU_BIG,2002,m.now+120000)==A733_CPU_CLOCK_PENDING);
+    if(mode==7)cpu_stuck=1;
+    cpu_gpu_run(mode==5 ? 0 : mode);
+    if(mode==5) {
+        assert(cpu_owner.applied_mhz[A733_CPU_BIG]==2002 && m.pmic[0x14]==55);
+        /* Quiescence is an external precondition, as in the earlier power
+         * cases. This is not a firmware-drain or thermal-lifecycle test. */
+        assert(a733_gpu_power_off(&gpu,m.now+1000000)==A733_GPU_POWER_AGAIN);
+        assert(a733_cpu_clock_request(&cpu_owner,A733_CPU_LITTLE,1794,m.now+120000)==A733_CPU_CLOCK_PENDING);
+        cpu_gpu_run(0);
+        assert(cpu_owner.applied_mhz[A733_CPU_LITTLE]==1794 && m.pmic[0x16]==50);
+        assert(!delegated && !gpu.row.counted && supply.rail.id);
+        assert(a733_gpu_resources_release(&m.gpu,9,gpu_token,m.now+10000)==A733_GPU_RESOURCE_OK);gpu_token=0;
+        cpu_gpu_on();
+        assert(a733_cpu_clock_request(&cpu_owner,A733_CPU_DSU,1274,m.now+120000)==A733_CPU_CLOCK_PENDING);
+        cpu_gpu_run(0);
+        assert(cpu_owner.applied_mhz[A733_CPU_DSU]==1274 && delegated && gpu.row.counted);
+        assert(!cpu_owner.clock.id && !cpu_owner.rail.id && cpu_gpu_pending);
+    } else if(mode==6) {
+        struct a733_pmic_snapshot snapshot;
+        assert(m.provider.retained && m.i2c_held && m.retained);
+        assert(cpu_owner.request.id && supply.request.id && !cpu_writes);
+        assert(a733_pmic_result(&m.provider,&cpu_owner.request,&snapshot)==A733_PMIC_RETAINED);
+        assert(a733_pmic_result(&m.provider,&supply.request,&snapshot)==A733_PMIC_RETAINED);
+    } else assert(cpu_writes && !m.provider.retained);
+    assert(m.pmic[0x15]==0x2e && supply.rail.id && gpu_token);
+    printf("{\"case\":%u,\"pass\":true,\"cpu_register_writes\":%u,\"pmic_bus_writes\":%u,"
+        "\"cpu_requests_with_gpu_snapshot_held\":%u,\"retained\":%s}\n",
+        mode,cpu_writes,m.writes,cpu_gpu_pending,mode==5?"false":"true");
+    return 0;
+}
 int main(int argc,char **argv)
 {
-    assert(argc==2);unsigned mode=(unsigned)strtoul(argv[1],0,10);assert(mode<5);
+    assert(argc==2);unsigned mode=(unsigned)strtoul(argv[1],0,10);assert(mode<8);
+    if(mode>=5)return cpu_gpu_case(mode);
     if(mode==4)return dcdc2_first();
     composed_setup(mode);unsigned ticks=boot_pair(mode);
     const unsigned wire=m.writes;const uint32_t ahb=d.ccu_5c0,mbus=d.ccu_5e0,pck=d.rccu_1ac;

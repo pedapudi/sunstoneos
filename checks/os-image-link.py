@@ -344,7 +344,7 @@ def main():
         if args.workers == 8:
             assert not any((audio, radio, headset, gpu_linear)), 'Unsupported eight-worker OS profile'
         if gpu_linear and args.lifetime == 'supervised':
-            assert not any((audio, radio, headset, cpu_clock, args.npu == '1', args.perf == '1')), 'Unsupported supervised GPU profile'
+            assert not any((audio, radio, headset, args.npu == '1', args.perf == '1')), 'Unsupported supervised GPU profile'
     except AssertionError as error:
         print('FAIL integrated OS link check:', error, file=sys.stderr)
         return 1

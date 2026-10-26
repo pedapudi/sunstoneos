@@ -280,6 +280,12 @@ completion before returning. These sources are preserved with the evidence.
 The shared power controller uses the vendor top point, 1008 MHz at 960 mV.
 Native backend binding makes both firmware clock fields describe that rate
 before startup. The initial 400 MHz staging field is not the running clock.
+Supervised recorded recognition can combine the GPU with the existing CPU
+clock owner and two admitted A76 workers. The recognizer waits at most one
+second for initial CPU requests to resolve before GPU OPEN. CPU and GPU owners
+hold distinct rail leases and use the shared PMIC provider; their retained
+failure rules remain independent. See [the composition design](designs/gpu-cpu-clock.md)
+for scheduling, exact grant admission and software evidence.
 Startup and acknowledged shutdown
 exist, including explicit healthy thermal park and reopen. Automatic idle
 parking and full fault recovery remain

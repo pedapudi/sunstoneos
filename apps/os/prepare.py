@@ -207,19 +207,26 @@ def image_gpu(manifest, raw):
             json.dumps(manifest.get('gpu_profile'), sort_keys=True) == json.dumps(config, sort_keys=True),
             'GPU manifest differs from the linked configuration.')
     if enabled:
-        require(contract == {'lifetime': 'supervised', 'session_bytes': OS_BYTES} and
+        cpu_clock = manifest.get('cpu_clock')
+        require(type(cpu_clock) is bool, 'GPU CPU-clock feature must be boolean.')
+        expected_bytes = OS_BYTES + (GRANT_BYTES if cpu_clock else 0)
+        require(contract == {'lifetime': 'supervised', 'session_bytes': expected_bytes} and
                 manifest.get('contract_profile') == contract,
                 'Supervised GPU requires the actual linked supervised contract and session size.')
         require(manifest.get('lifetime') == 'supervised' and
-                not any(manifest.get(k) for k in ('audio', 'radio', 'headset', 'npu', 'cpu_clock', 'perf_modes')),
-                'Supervised GPU requires recorded recognition without other optional devices or CPU clock controls.')
+                not any(manifest.get(k) for k in ('audio', 'radio', 'headset', 'npu', 'perf_modes')),
+                'Supervised GPU requires recorded recognition without other optional devices or performance commands.')
     return config
 
 
-def gpu_admission(record, config, evidence):
+def gpu_admission(record, config, evidence, grant):
     if config is None:
         require('gpu' not in record, 'GPU authority supplied for an image without GPU.')
         return
+    # Fixed native GPU identities in apps/os/gpu.c; its pre-provider check
+    # excludes the sealed CPU grant owner from both.
+    require(grant is None or grant['owner'] not in (0x4f53475055464d31, 0x4f534731),
+            'CPU clock owner aliases a GPU owner.')
     value = record.get('gpu')
     require(isinstance(value, dict) and set(value) == {'configuration', 'conditions'} and
             json.dumps(value['configuration'], sort_keys=True) == json.dumps(config, sort_keys=True),
@@ -454,7 +461,7 @@ def validate_admission(record, image_hash, template_hash, raw, audio, cache=None
         return data
     require(isinstance(record.get('mimus_ddr'), dict), 'Recognition input DDR reservation required.')
     mimus.input_admission(record, image_hash, evidence)
-    gpu_admission(record, gpu, evidence)
+    gpu_admission(record, gpu, evidence, grant_fields(raw))
     if npu_session(raw):
         npu_admission(record, image_hash, raw, evidence)
     else:

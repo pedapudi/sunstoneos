@@ -22,8 +22,10 @@ the exact-sum hook; supervised admission verifies that hook is linked. The desig
 gives the hook's original integration. No board has run integrated OS GPU
 recognition. The option is off by default. It supports the existing resident
 compositions and supervised recorded recognition with two inference workers.
-The supervised GPU profile excludes capture, radio, headset, NPU and CPU clock
-controls; eight-worker GPU recognition remains unsupported.
+The supervised GPU profile supports the existing CPU clock owner with admitted
+A76 workers. It excludes capture, radio, headset, NPU and performance-mode
+commands; eight-worker GPU recognition remains unsupported. See
+[CPU/GPU ownership and startup](designs/gpu-cpu-clock.md).
 
 ## Parts in this package
 
@@ -222,7 +224,8 @@ worker EL1 and creates it before the scheduler starts.
 stops unless:
 
 - supervised builds use recorded recognition with two workers and exclude
-  capture, radio, headset, NPU and CPU clock/performance controls;
+  capture, radio, headset, NPU and performance-mode commands; CPU clock control
+  additionally requires admitted A76 workers and its exact session grant;
 - `A733_GPU_OUTPUT_EL0_READ_ONLY` is not given: the branch sets it itself,
   which maps `0x46C00000`–`0x47000000` read-only at EL0 and EL1 as two 2 MiB
   blocks, so no CPU store can leave a dirty line whose eviction overwrites

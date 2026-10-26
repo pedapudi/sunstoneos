@@ -1,10 +1,14 @@
 --- recognition.cc
 +++ recognition-dispatch.cc
-@@ -3,5 +3,12 @@
+@@ -3,5 +3,16 @@
  #include "../mimus/recorded.h"
  #include "runtime.h"
 +#include "../mimus/parallel_runtime.h"
 +#include "a733_smp_placement.h"
++#ifdef SUNSTONE_A733_OS_CPU_CLOCK
++extern "C" int os_cpu_clock_ready(void);
++extern "C" void platform_puts(const char *);
++#endif
  extern "C" {
 +#include "dispatch.h"
 +/* mimus allocates only from the first 12 MiB; the GPU owns the output region
@@ -13,23 +17,33 @@
 +    "the mimus arena overlaps the GPU output region");
  #include "a733_storage_digest.h"
  #include "FreeRTOS.h"
-@@ -23,4 +30,6 @@
+@@ -23,4 +34,6 @@
  void recognize(void *)
  {
 +    /* The engine's second worker runs on the pair's other core. */
 +    mimus_parallel_bind();
      /* Board owners establish the selected USB readiness. Hashing is
       * EL0 CPU work; publication in EL3 alone does not authenticate inputs. */
-@@ -36,4 +45,8 @@
+@@ -36,4 +49,18 @@
          if(std::memcmp(hash,mimus_asset_sha256[i],32)){failed();}
      }
++#ifdef SUNSTONE_A733_OS_CPU_CLOCK
++    /* Resolve the initial CPU requests before GPU power-up and inference.
++     * This is the existing finite CPU-owner wait; readiness does not claim
++     * that a thermally refused request reached its target. */
++    for(TickType_t waited=0;!os_cpu_clock_ready();++waited){
++        if(waited>=pdMS_TO_TICKS(1000)){platform_puts("ERROR cpu clock owner unfinished\n");failed();}
++        if(!mimus_board_live()){failed();}
++        mimus_board_progress();vTaskDelay(1);
++    }
++#endif
 +    /* Every model hash matched: open the GPU session once, when the engine
 +     * declares its exact-sum hook. A pre-queue refusal keeps layers on the
 +     * CPU; accepted-request uncertainty suspends with ownership retained. */
 +    os_gpu_open();
      std::span<const uint8_t> input[3];for(unsigned i=0;i<3;++i)
          input[i]={reinterpret_cast<const uint8_t *>(mimus_asset_address[i]),mimus_asset_bytes[i]};
-@@ -66,6 +79,21 @@
+@@ -66,6 +93,21 @@
  }
  }
 +/* GPU failure or caller timeout suspends through the same retained path. */
@@ -52,7 +66,7 @@
 +extern "C" void mimus_native_inference_progress(void){mimus_board_progress();}
  extern "C" void platform_puts(const char *text)
  {
-@@ -79,5 +107,14 @@
+@@ -79,5 +121,14 @@
  {char b[17];static const char h[]="0123456789abcdef";for(unsigned i=0;i<16;++i)b[i]=h[(x>>(60-4*i))&15];b[16]=0;platform_puts(b);}
  extern "C" int mimus_board_start(void)
 -{runtime_smp_init();runtime_init();return xTaskCreateStatic(recognize,"mimus-recorded",16384,nullptr,3,stack,&task)!=nullptr;}

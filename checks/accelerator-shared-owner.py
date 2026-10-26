@@ -9,7 +9,7 @@ import subprocess
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("output", type=Path)
 parser.add_argument("--compiler", default="/usr/bin/clang-21")
-parser.add_argument("--case", type=int, choices=range(5), action="append", dest="cases")
+parser.add_argument("--case", type=int, choices=range(8), action="append", dest="cases")
 args = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
 output = args.output.resolve()
@@ -21,7 +21,7 @@ sources = [
     "drivers/clock/a733_clock_leases.c", "drivers/gpu/a733_gpu_resources.c",
     "drivers/pinctrl/a733_pins.c", "drivers/pinctrl/a733_pin_tables.c",
     "drivers/power/a733_power_domains.c", "drivers/power/a733_pmic_consumer.c",
-    "drivers/gpu/a733_gpu_power.c",
+    "drivers/gpu/a733_gpu_power.c", "drivers/clock/a733_cpu_clock.c", "drivers/thermal/a733_thermal.c",
 ]
 command = [args.compiler, "-std=c11", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
            "-fsanitize=address,undefined", "-fno-sanitize-recover=all",
