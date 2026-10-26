@@ -206,13 +206,12 @@ buffer copy is added by this composition.
 
 ## Subsequent compositions and file ownership
 
-Eight-worker GPU execution remains a required follow-on. The generic engine
+Eight-worker GPU execution is implemented by the [admission extension](gpu-eight-workers.md).
+The generic engine
 and OS eight-worker placement already exist, with A55 inference at priority 2
-below the PMIC and thermal services. The GPU-specific recognizer patch, owner
-assertions and host exclusions still encode a pair. Extending them requires
-checking that only the recognizer calls the exact-sum hook while generic CPU
-ranges use all workers, and that GPU completion and service tasks make
-progress. It does not require a new scheduler.
+below the PMIC and thermal services. The extension binds the GPU-specific recognizer and host admission to that
+placement. Its focused checks cover owner-only hook calls, all worker joins
+and service progress. Physical eight-core GPU recognition remains unqualified.
 
 PERF is a different ownership extension. The current planner can describe GPU
 hold/rate/voltage actions, but `apps/os/perf.c` only implements accelerator

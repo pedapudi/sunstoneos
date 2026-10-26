@@ -21,10 +21,11 @@ the exact-sum hook; supervised admission verifies that hook is linked. The desig
 ["Changes needed in the mimus engine"](designs/gpu-recognition.md#changes-needed-in-the-mimus-engine)
 gives the hook's original integration. No board has run integrated OS GPU
 recognition. The option is off by default. It supports the existing resident
-compositions and supervised recorded recognition with two inference workers.
+compositions and supervised recorded recognition with two or eight inference
+workers. Eight workers require admitted A76 cores.
 The supervised GPU profile supports the existing CPU clock owner with admitted
 A76 workers. It excludes capture, radio, headset, NPU and performance-mode
-commands; eight-worker GPU recognition remains unsupported. See
+commands. See [eight-worker GPU ownership](designs/gpu-eight-workers.md) and
 [CPU/GPU ownership and startup](designs/gpu-cpu-clock.md).
 
 ## Parts in this package
@@ -223,7 +224,7 @@ worker EL1 and creates it before the scheduler starts.
 `SUNSTONE_A733_OS_GPU_LINEAR` is off by default. With it on, configuration
 stops unless:
 
-- supervised builds use recorded recognition with two workers and exclude
+- supervised builds use recorded recognition with two or eight workers and exclude
   capture, radio, headset, NPU and performance-mode commands; CPU clock control
   additionally requires admitted A76 workers and its exact session grant;
 - `A733_GPU_OUTPUT_EL0_READ_ONLY` is not given: the branch sets it itself,

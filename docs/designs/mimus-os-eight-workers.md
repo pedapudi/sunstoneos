@@ -8,10 +8,11 @@ its existing model, weights, arithmetic, producer scratch and session format.
 
 The supported OS composition uses supervised recorded recognition and
 requires `A733_A76_ADMITTED=ON`. It retains the existing CPU clock and performance
-mode options, including their supported NPU composition. Resident operation,
-microphone capture, radio, headset and GPU-linear placement remain outside this
-change and must reject eight workers. Two-worker configurations remain supported
-under their existing rules.
+mode options, including their supported NPU composition. The
+[GPU extension](gpu-eight-workers.md) also admits supervised recorded GPU
+recognition. Resident recorded CPU/NPU operation uses its separate cold entry
+contract; resident GPU, microphone capture, radio and headset remain excluded.
+Two-worker configurations remain supported under their existing rules.
 
 The owner runs on A76 core 6 and the first worker on A76 core 7, both at priority
 3. The remaining workers run on A55 cores 0 through 5 at priority 2. The actual

@@ -180,7 +180,7 @@ def image_inference(manifest, raw):
     require(same_inference(manifest.get('inference'), config), 'Inference manifest differs from the linked adapter.')
     if config and config['workers'] == 8:
         require(manifest.get('lifetime') == 'supervised' and
-                not any(manifest.get(k) for k in ('audio', 'radio', 'headset', 'gpu_linear')),
+                not any(manifest.get(k) for k in ('audio', 'radio', 'headset')),
                 'Eight workers require the supervised recorded OS profile.')
     return config
 

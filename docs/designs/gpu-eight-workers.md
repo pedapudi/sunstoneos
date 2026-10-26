@@ -1,10 +1,9 @@
 # Eight inference workers with GPU recognition
 
-Status: design approved; implementation awaits coordinator authorization. The first supported composition is
+Status: implemented and software-tested; physical execution remains unqualified. The first supported composition is
 supervised recorded recognition with `SUNSTONE_MIMUS_WORKERS=8`, GPU linear
 placement and admitted A76 cores. Existing CPU clock grants remain available.
-Two workers remain the default. Physical execution and performance remain
-unqualified.
+Two workers remain the default. No throughput improvement is claimed.
 
 ## The pinned engine already joins GPU readout across eight workers
 
@@ -51,10 +50,9 @@ USB and thermal services use priority 4. The GPU service remains at priority
 retains its core-6 route. Neither the IRQ nor GPU reply ownership moves to an
 inference worker.
 
-The GPU recognition patch already calls the count-aware adapter's init and
-bind functions. Its task priority is still written as the literal 3. Use the
-existing `kMimusOwnerPriority` constant so task creation and linked metadata
-have one source, and replace its pair-only comments. Its actual checkpoint,
+The GPU recognition patch calls the count-aware adapter's init and
+bind functions. Its task priority uses the existing `kMimusOwnerPriority`
+constant so task creation and linked metadata have one source. Its checkpoint,
 CPU-ready wait and terminal failure logic need no behavioral change.
 
 The generated placement table still uses the historical A76-pair cost model.
@@ -65,12 +63,11 @@ the worker count makes no throughput or deadline-success claim.
 
 ## Remove composition refusals while preserving exact admission
 
-The actual blockers are the GPU exclusions in the eight-worker CMake and
+Admission is implemented in the eight-worker CMake and
 `parallel_runtime.h` guards, `prepare.py:image_inference`, the final link
-check, and `gpu_configuration`'s requirement for exactly two workers. They
-encode an untested composition rather than a missing worker implementation.
+check, and `gpu_configuration`'s binding to the actual inference record.
 
-Permit the supervised eight-worker GPU composition in those existing checks.
+Those checks permit the supervised eight-worker GPU composition.
 Continue requiring A76 admission, recorded input and the existing exclusions
 for capture, radio and headset. Keep resident eight-worker GPU refused: cold
 GPU authority is outside the supervised entry contract. The separate
@@ -138,4 +135,48 @@ GPU/NPU owner holds optional-device conditions, combined session and asset
 admission, device-owner collisions and shared-provider lifecycle changes.
 Both workers agreed this section-level split; shared files will be integrated
 sequentially. Neither design changes the other's unreviewed condition.
-Production edits begin only after design review and the coordinator's approval.
+Independent design review approved this scope before implementation.
+
+## Recorded software results
+
+Evidence is preserved under
+`~/.cache/sunstoneos/evidence/resume-gpu-eight-workers-20261026/`.
+The native GPU/CPU eight-worker ELF has SHA-256
+`a20a0a3d03e9d8b822157eab68d384308b4c3cb7a6d0647a0c260aecf0481322`.
+It binds the 904-byte supervised contract and the expected eight-worker
+configuration. GPU firmware, placement, rate and voltage match the accepted
+pair image.
+
+`workers.json` records one focused FreeRTOS run using eight emulated A76 CPUs.
+The actual pinned engine's int32 partial-channel and int64 residual outputs
+match its CPU path for three jobs, including a short tail. The adapter reports
+56 completed worker jobs, core mask 255 and no asynchronous jobs. The fixture
+counts service progress only while all eight readout callbacks remain active.
+Closing board liveness before core 0 acknowledges invokes the generated GPU
+recognizer checkpoint's terminal path. The owner retains its stack context
+and sum storage with only one Finish call issued. The emulated homogeneous
+CPUs establish software ordering, not A55/A76 timing or GPU hardware behavior.
+
+`host/result.json` records thirteen focused outcomes, including actual
+preparation and frozen admission of read-only and TOP CPU grants. Missing or
+pair inference records, wrong service priority and wrong owner refuse in both
+fresh and frozen admission. Count, mask and priority relabeling and removal
+of linked metadata refuse. `guards/result.json` records four CMake/header
+refusals for missing A76 admission and resident GPU-eight. The accepted
+GPU/CPU pair ELF passes current host admission without rebuilding it.
+
+`layout.json` verifies the native heap, pools, worker slots/stacks and fixed
+model/arena/GPU extents. The fixture has eight distinct 32 KiB exception stacks
+and retains its 4 MiB heap below the existing RAM limit. Native worker stacks
+occupy 458,752 bytes and slots occupy 6,720 bytes.
+
+`cost.json` compares actual linked sections with the accepted GPU/CPU pair.
+Executable bytes rise by 6,336 and mutable sections by 401,440; read-only
+sections shrink by 16. The existing eight-worker engine instantiations add
+6,612 executable bytes; removal of the unavailable asynchronous path reduces
+adapter code by 340 bytes. Added worker stacks and slots account for 398,976
+bytes, offset by nine unused asynchronous-state bytes. The engine's larger
+worker-scratch descriptor array adds 96 bytes. Output-section alignment
+accounts for the remaining 2,377 mutable bytes and 64 executable bytes.
+The GPU caller and recognizer input-section sizes do not increase. These
+static costs do not establish a throughput improvement.

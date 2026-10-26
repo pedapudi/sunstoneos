@@ -55,9 +55,10 @@ for value in (True, 1.0):
 changed = copy.deepcopy(manifest)
 del changed['inference']
 refused('missing-manifest-record', lambda: prep.image_inference(changed, raw))
-for field, value in [('lifetime', 'resident'), ('audio', True), ('radio', True), ('headset', True), ('gpu_linear', True)]:
+for field, value in [('lifetime', 'resident'), ('audio', True), ('radio', True), ('headset', True)]:
     changed = dict(manifest, **{field: value})
     refused('unsupported-' + field, lambda: prep.image_inference(changed, raw))
+refused('gpu-feature-without-native-gpu', lambda: prep.image_manifest_check(dict(manifest, gpu_linear=True), raw))
 for name, record in [('missing', {}), ('pair', {'inference': dict(config, workers=2)}),
                      ('priority', {'inference': dict(config, a55_priority=3)}),
                      ('mapping', {'inference': dict(config, core_mask=0xc0)})]:
