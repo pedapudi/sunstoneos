@@ -3,6 +3,7 @@
 #include "task.h"
 #include "tusb.h"
 #include "device/dcd.h"
+#include "device/usbd_pvt.h"
 #include <string.h>
 
 #define MESSAGE_MAGIC UINT32_C(0x53534f53)
@@ -144,6 +145,56 @@ static void receive(void)
         if(tud_vendor_available())stop();accept();
     }
 }
+/* Same 200 us / 64-pass budget and 125 us recent-progress window as the
+ * shared board USB0 service. Our controller-before-TinyUSB order may consume
+ * a completion and refill the FIFO in one pass, so count actual byte/sequence
+ * changes rather than relying on FIFO levels. No queued byte is a completed IN. */
+static void service_pass(void)
+{
+    if(!live()||!initialized)stop();
+    a733_usb_poll();wait_health();tud_task_ext(0,false);if(!live())stop();
+    if(sequence&&!tud_mounted())stop();
+    if(response_bytes&&transferred==response_bytes) {
+        if(atomic_load_explicit(&runtime->transport.accepted_command,memory_order_seq_cst)==A733_STORAGE_FINISH)stop();
+        response_bytes=sent=transferred=0;
+    }
+    if(!response_bytes&&atomic_load_explicit(&runtime->channel.state,memory_order_acquire)==3) {
+        size_t bytes;
+        if(!a733_storage_channel_response(&runtime->channel,response+16,A733_STORAGE_BODY,&bytes)||
+           bytes<56||get32(response+16)!=sequence||get32(response+20))stop();
+        put32(response,MESSAGE_MAGIC);put32(response+4,sequence);
+        put32(response+8,UPDATE_COMMAND|UINT32_C(0x80000000));put32(response+12,(uint32_t)bytes);
+        response_bytes=(unsigned)bytes+16;sent=transferred=0;
+        publish_begin();atomic_store_explicit(&runtime->transport.response_sequence,sequence,memory_order_seq_cst);publish_end();
+    }
+    if(response_bytes&&sent<response_bytes) {
+        wait_health();
+        sent+=tud_vendor_write(response+sent,response_bytes-sent);tud_vendor_write_flush();
+    }
+    wait_health();
+    receive();
+    if(!a733_maintenance_poll(runtime->maintenance))stop();
+}
+static uint64_t service_now(void)
+{
+    uint64_t now;
+    if(!a733_counter_clock_now(&runtime->providers.counter,&now)||now>=runtime->boot.grant.deadline_us)stop();
+    return now;
+}
+static void service_burst(void)
+{
+    uint64_t start=service_now(),active=start,previous=start;unsigned moved=0;
+    for(unsigned pass=0;pass<64;++pass) {
+        unsigned rx=received,tx=sent,done=transferred,seq=sequence;
+        int pending=tud_task_event_ready();bool armed=usbd_edpt_busy(0,0x81);
+        service_pass();
+        int progress=rx!=received||tx!=sent||done!=transferred||seq!=sequence||
+            pending||tud_task_event_ready()||(!armed&&usbd_edpt_busy(0,0x81));
+        uint64_t now=service_now();if(now<previous)stop();previous=now;
+        if(progress){moved=1;active=now;}
+        if(!moved||now-start>=200||now-active>=125)return;
+    }
+}
 void a733_storage_native_usb_task(void *p)
 {
     runtime=p;
@@ -157,30 +208,5 @@ void a733_storage_native_usb_task(void *p)
     tusb_rhport_init_t init={.role=TUSB_ROLE_DEVICE,.speed=TUSB_SPEED_HIGH};
     wait_health();
     if(!live()||!tusb_init(0,&init))stop();initialized=1;
-    for(;;) {
-        if(!live()||!initialized)stop();
-        a733_usb_poll();wait_health();tud_task_ext(0,false);if(!live())stop();
-        if(sequence&&!tud_mounted())stop();
-        if(response_bytes&&transferred==response_bytes) {
-            if(atomic_load_explicit(&runtime->transport.accepted_command,memory_order_seq_cst)==A733_STORAGE_FINISH)stop();
-            response_bytes=sent=transferred=0;
-        }
-        if(!response_bytes&&atomic_load_explicit(&runtime->channel.state,memory_order_acquire)==3) {
-            size_t bytes;
-            if(!a733_storage_channel_response(&runtime->channel,response+16,A733_STORAGE_BODY,&bytes)||
-               bytes<56||get32(response+16)!=sequence||get32(response+20))stop();
-            put32(response,MESSAGE_MAGIC);put32(response+4,sequence);
-            put32(response+8,UPDATE_COMMAND|UINT32_C(0x80000000));put32(response+12,(uint32_t)bytes);
-            response_bytes=(unsigned)bytes+16;sent=transferred=0;
-            publish_begin();atomic_store_explicit(&runtime->transport.response_sequence,sequence,memory_order_seq_cst);publish_end();
-        }
-        if(response_bytes&&sent<response_bytes) {
-            wait_health();
-            sent+=tud_vendor_write(response+sent,response_bytes-sent);tud_vendor_write_flush();
-        }
-        wait_health();
-        receive();
-        if(!a733_maintenance_poll(runtime->maintenance))stop();
-        vTaskDelay(1);
-    }
+    for(;;){service_burst();vTaskDelay(1);}
 }

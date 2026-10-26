@@ -212,11 +212,12 @@ so it ends with a short packet.
 A 1 MiB backup needs 32 read requests at the DMA stride instead of 256 at the
 PIO stride. Four permanent read/response buffers grow by 112 KiB in total;
 limiting the two request buffers to their unchanged 632-byte maximum saves
-7,040 bytes. A 32 KiB response takes 17 FIFO writes when each accepts 2 KiB.
-Using the core's full 256-sector capacity would quadruple those four buffers
-without removing the USB task's per-iteration delivery limit. These are source
-and model operation counts, not measured card or USB throughput. Hashing and
-three payload copies per response remain unchanged.
+7,040 bytes. The USB task streams responses through the same 2 KiB FIFO in
+bounded progress bursts. Using the core's full 256-sector capacity would
+quadruple those four buffers; the 64-sector batch reduces host round trips
+without that allocation. These are source and model operation counts, not
+measured card or USB throughput. Hashing and three payload copies per response
+remain unchanged.
 
 A WRITE request carries one sector at every profile. A conforming SDXC card may
 stay busy programming one block for 500 ms, and the maintenance watchdog fixes

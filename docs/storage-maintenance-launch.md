@@ -125,6 +125,20 @@ existing `USBExchange`, `Client`, `backup` or `apply` implementation. USB revisi
 permanently ends communication and quarantines that instance. No reconnect retry
 resumes a partially completed storage session.
 
+The active USB task follows the [shared USB0 burst policy](../apps/board/usb0_service.h):
+at most 200 microseconds or 64 passes, with up to 125 microseconds of polling
+after recent progress, then a one-tick fairness delay. An idle first pass ends
+the burst immediately. Maintenance polls the controller before TinyUSB
+and detects changes in received, queued and completed bytes and request sequence,
+as well as pending events and newly armed IN transfers. This detects completion
+even when a pass refills the FIFO to its previous level. Each burst starts with
+fresh progress state. Provider waits inside a pass still yield; their elapsed
+time exhausts the burst budget when the pass returns. One already-started pass
+may finish beyond the time limit. The checked counter must remain monotonic and
+within the original grant deadline; failure retains the session. No burst
+extends an operation or watchdog deadline, and only the final completed IN
+publishes response completion.
+
 The storage implementation fsyncs its completion receipt before the launcher
 begins observing ROM return. A distinct accessible ROM response is recorded
 separately. It does not establish the reset cause, storage durability after power
@@ -154,3 +168,13 @@ and source comparison reused the saved ELF without another build or runtime chec
 
 Instruction models do not implement A733 cache coherence, peripheral timing,
 physical USB enumeration or independent recovery. Those remain physical prerequisites.
+
+The focused `checks/storage-maintenance-usb-burst.py` comparison executes the
+burst loop and the former one-pass-per-tick loop with the same modeled 2 KiB
+FIFO, 512-byte endpoint and host turnaround. A 32,840-byte framed response takes
+8 scheduler ticks rather than 66, and a one-packet response takes one rather
+than two. Idle remains one
+pass per tick. Delayed or abandoned hosts, counter stalls and failures, expiry,
+and provider loss or waiting exercise the burst and retention boundaries.
+These counts establish scheduling behavior under the model, not physical
+throughput. The existing DMA and storage-command evidence is reused.

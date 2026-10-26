@@ -41,7 +41,7 @@ class Native(base.Native):
         self.put(self.n+self.nl['active'],1,4)
         self.put(self.n+self.nl['boot']+self.layouts['a733_storage_native_boot']['grant']+self.layouts['a733_storage_grant']['deadline_us'],1000000000)
         self.live=1;self.scheduler=2;self.current=3;self.cache=[];self.pages=[];self.bad_page=None;self.bad_attr=False
-        self.cache_ok=1;self.failed=False;self.construct=False;self.bound_dma=None;self.sent_bytes=bytearray();self.incoming=bytearray();self.copies=[];self.tasks=0
+        self.cache_ok=1;self.failed=False;self.construct=False;self.bound_dma=None;self.sent_bytes=bytearray();self.write_sizes=[];self.incoming=bytearray();self.copies=[];self.tasks=0
         self.fakes={self.symbols[n]:n for n in ('a733_storage_native_live','a733_maintenance_alive','a733_counter_clock_now','a733_clock_token_status',
             'aarch64_device_cache','aarch64_device_translate','xTaskGetSchedulerState','xTaskGetCurrentTaskHandle',
             'a733_storage_native_usb_step','a733_storage_native_usb_health','tusb_rhport_init','tud_task_ext','tud_mounted',
@@ -86,7 +86,7 @@ class Native(base.Native):
             count=min(a[2],len(self.incoming));self.u.mem_write(a[1],bytes(self.incoming[:count]));del self.incoming[:count]
             self.copies.append(count);self.ret(count)
         elif name=='tud_vendor_n_write':
-            count=min(2048,a[2]);self.sent_bytes.extend(self.u.mem_read(a[1],count));self.ret(count)
+            count=min(2048,a[2]);self.write_sizes.append(count);self.sent_bytes.extend(self.u.mem_read(a[1],count));self.ret(count)
         elif name=='a733_storage_native_fail':self.failed=True;self.ret()
         elif name=='vTaskDelay':self.ret();self.stop='failed' if self.failed else 'tick';u.emu_stop()
         else:raise AssertionError(name)
@@ -146,6 +146,14 @@ def run(image,observed,out):
         assert started==1,(profile,started,m.tasks,m.bound_dma,m.get(m.n+m.nl['failed'],4))
         assert m.bound_dma==(0x41c00000 if profile==2 else 0) and m.tasks==3
     cases.append('actual bootstrap selects private DMA only for profile 2 and binds its callback; unchanged provider constructors are modeled separately')
+    cases.extend(usb_cases(image,out))
+    result=dict(result='pass',physical=False,image_sha256=hashlib.sha256(image.read_bytes()).hexdigest(),
+                observed_session_sha256=hashlib.sha256(observed.read_bytes()).hexdigest(),checks=cases,
+                memory=dict(service=Native(image).types['a733_storage_update'],channel=Native(image).types['a733_storage_channel']))
+    (out/'result.json').write_text(json.dumps(result,indent=2)+'\n');print('\n'.join('PASS: '+x for x in cases))
+
+def usb_cases(image,out):
+    cases=[]
     # Native mailbox bound rejects before copying into the now smaller request.
     m=Native(image);channel=m.n+m.nl['channel'];size=m.types['a733_storage_channel']
     m.u.mem_write(channel,b'\xa5'*size)
@@ -166,11 +174,15 @@ def run(image,observed,out):
     m.call('a733_storage_native_usb_task',(m.n,));iterations=0;delivered=0
     while delivered<16+len(body):
         assert m.stop=='tick' and not m.failed;iterations+=1
-        count=len(m.sent_bytes)-delivered;assert 0<count<=2048
-        state=m.u.context_save();m.call('tud_vendor_tx_cb',(0,count));m.u.context_restore(state);delivered+=count
-        assert m.get(transport+tl['completed_sequence'])==(1 if delivered==16+len(body) else 0)
+        assert len(m.sent_bytes)>delivered
+        # A progress burst may enqueue several FIFO pieces before yielding.
+        # Keep completion separate and check each piece's final-IN authority.
+        while delivered<len(m.sent_bytes):
+            count=min(2048,len(m.sent_bytes)-delivered)
+            state=m.u.context_save();m.call('tud_vendor_tx_cb',(0,count));m.u.context_restore(state);delivered+=count
+            assert m.get(transport+tl['completed_sequence'])==(1 if delivered==16+len(body) else 0)
         if delivered<16+len(body):m.resume()
-    assert iterations==17 and bytes(m.sent_bytes)==struct.pack('<4I',0x53534f53,1,0x53555044|0x80000000,len(body))+body
+    assert m.write_sizes==[2048]*16+[72] and bytes(m.sent_bytes)==struct.pack('<4I',0x53534f53,1,0x53555044|0x80000000,len(body))+body
     (out/'response.bin').write_bytes(m.sent_bytes)
     host=module('storage_dma_host',ROOT/'tools/storage-update.py')
     frame=bytes(m.sent_bytes)
@@ -198,10 +210,7 @@ def run(image,observed,out):
     m.call('a733_storage_native_usb_task',(m.n,))
     assert m.stop=='failed' and m.copies==[16] and bytes(m.u.mem_read(request+16,632))==b'\xa5'*632
     cases.append('oversized USB body refuses immediately after its header without copying payload')
-    result=dict(result='pass',physical=False,image_sha256=hashlib.sha256(image.read_bytes()).hexdigest(),
-                observed_session_sha256=hashlib.sha256(observed.read_bytes()).hexdigest(),checks=cases,
-                memory=dict(service=Native(image).types['a733_storage_update'],channel=Native(image).types['a733_storage_channel']))
-    (out/'result.json').write_text(json.dumps(result,indent=2)+'\n');print('\n'.join('PASS: '+x for x in cases))
+    return cases
 
 if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--image',type=Path,required=True)
