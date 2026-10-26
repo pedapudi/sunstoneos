@@ -159,6 +159,10 @@ Completion permits access to this still image; it does not prove that every
 system transaction and page walk has drained. Existing close-and-release APIs
 retain their separate drain requirements.
 
+The [stop and drain source audit](camera-stop.md) describes the documented
+parser frame boundary and the missing receiver, DMA and IOMMU retirement
+conditions. Vendor stream-off does not establish the complete release contract.
+
 ## Finite streaming keeps one slot held across the copied frame
 
 `a733_camera_native_supervised_stream_init` selects two slots per plane for
