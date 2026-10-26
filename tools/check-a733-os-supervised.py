@@ -64,6 +64,10 @@ NPU_REPORT_MIN_SECONDS = 0.1
 def source_files():
     return [('os-host-tool.py', Path(__file__)), ('os-preparation.py', Path(preparation.__file__)),
             ('os-link-configuration.py', Path(preparation.os_link.__file__)),
+            ('os-radio-assets.py', Path(preparation.radio_assets.__file__)),
+            ('bluetooth-preparation.py', Path(preparation.bluetooth.__file__)),
+            ('bluetooth-model-pins.json', ROOT / 'apps/bluetooth/recognition-models.json'),
+            ('radio-firmware-catalogue.c', ROOT / 'drivers/net/aic8800_firmware.c'),
             ('mimus-board-host-tool.py', Path(combined.__file__)),
             ('mimus-board-preparation.py', Path(preparation.mimus.__file__)),
             ('mimus-board-transport.py', Path(preparation.host.__file__)),
@@ -91,7 +95,8 @@ def freeze_bundle(bundle, count):
     outer = preparation.validate_bundle(bundle)
     require(json.loads(metadata) == outer, 'OS metadata changed during validation.')
     board = preparation.validate_board(bundle / 'board')
-    combined.generation_count(count, board['workload'])
+    # Radio workload 1 adds the module to workload 0's single recognition.
+    combined.generation_count(count, 0 if board['workload'] == 1 else board['workload'])
     require(not board['audio'] or count <= MAX_AUDIO_GENERATIONS,
             f'At most {MAX_AUDIO_GENERATIONS} audio recognitions fit the capture window.')
     board_metadata = (bundle / 'board/prepared.json').read_bytes()

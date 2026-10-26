@@ -169,9 +169,9 @@ The session layout is unchanged. Older images reject the zero-mask form;
 complete records remain compatible. The returning identity producer still
 requires the complete mask and historical provenance. The OS Bluetooth profile
 accepts the same zero-mask form; standalone Bluetooth still requires a complete
-record. OS host preparation
-continues to refuse radio/headset images until their profiles and firmware
-can be staged; this pin change does not supply those assets or physical facts.
+record. [OS host preparation](os-image.md#supervised-preparation-and-launch)
+stages the authenticated profiles and pinned firmware while retaining the
+fitted-rail, PM2 and lifetime evidence requirements.
 
 The Bluetooth power source is GPL-2.0-or-later; its build files are GPL-2.0.
 Their original notices remain in the external cached files. They are startup
