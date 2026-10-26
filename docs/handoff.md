@@ -156,11 +156,21 @@ for all four P-states, and reported 12,288 MiB, `dram_tpr13` 0x10061 and
 This is the first reference lifetime of the restore design; its analysis is
 on `work/dram-fast-boot-1025`.
 
-**CPU step 6 (eight cores at the top points)** is refrozen as
-`cpu-top-opp-20261025/step6/step6-set-2` on `work/cpu-top-opp-step6-1025`.
-The second-round review confirmed all three fixes. It runs on port 3-3 after
-a power removal, with an operator present who removes power if nothing has
-returned 12 s after the workload's launch.
+**CPU step 6 stopped before the workload on port 3-3**
+(`board-session-cpu-top-opp-7/port-3-3`, set `step6-set-2`). Bundle 25 set
+CPU-B to 2002 MHz at 1050 mV, CPU-L to 1794 MHz at 1000 mV and the DSU to
+1274 MHz, with every temperature below 37 °C. After the ROM return, bundle 26
+read both rails held. It also read CPU-L and the DSU back at their 494 MHz
+boot words, but the CPU-B PLL still at 2002 MHz (`0xf8804d00`), so it
+refused as designed. **The FEL ROM return does not reset the CPU-B PLL.**
+Any image that lowers DCDC3 after a top-point bundle in the same lifetime
+must first reset or check the CPU-B PLL. The fix and the refreeze are on
+`work/cpu-top-opp-step6-1025`. Step 6 still needs an operator at the board.
+
+**Four-P-state DRAM capture, port 3-1** (`board-session-20261025-26/port-3-1`,
+v5 set): DDR passed with result 7 for all four P-states, 12,288 MiB and
+5,093 ms of training, and both captures passed. This is port 3-1's first
+capture lifetime.
 
 **DRAM training capture, port 3-3** (`board-session-20261025-21/port-3-3`,
 set `dram-training-capture-v3-20261025`): cold DDR (12,288 MiB), then two
