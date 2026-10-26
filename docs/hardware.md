@@ -631,7 +631,11 @@ to the stated scope:
   CPU/GPU/ShuffleNet-NPU image also builds within its existing mappings. Sixteen
   host cases, four native admission cases and one current-provider overlap/stop
   case pass under `concurrent-gpu-npu-1026/`. Physical recognition, simultaneous
-  accelerator operation and cross-PLL behavior remain unqualified.
+  accelerator operation and cross-PLL behavior remain unqualified. The resident
+  eight-worker CPU/GPU/ShuffleNet image also builds; four linked startup and
+  thirty-four card-preparation cases pass under `resident-gpu-cold-1026/`. Its
+  existing four extents reuse the unchanged stage-2 monitor. Physical cold
+  startup, reset retirement and combined thermal behavior remain unqualified.
   A supervised launcher and session preparation exist. Preparation requires a
   reviewed entry record from physical evidence and stages authenticated radio
   and headset profiles and firmware for those builds. [The recorded-audio launch](os-image.md#first-bounded-launch-with-recorded-audio)

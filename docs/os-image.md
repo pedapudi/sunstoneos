@@ -12,9 +12,8 @@ thermal service together. Four optional builds add more services:
 - the headset build recognizes speech from a Bluetooth headset in place of
   the recorded WAV. An mSBC option adds wideband headset speech;
 - the GPU linear build places mimus linear layers on the CPU or the GPU
-  ([recognition dispatch](recognition-dispatch.md)). It needs the resident
-  lifetime, and no call reaches the GPU until the mimus engine has its
-  exact-sum hook.
+  ([recognition dispatch](recognition-dispatch.md)). Recorded recognition
+  supports supervised and resident lifetimes with the pinned exact-sum hook.
 
 The radio build combines with either capture build. With the headset, one
 owner of the AIC8800 module loads the firmware once and serves the Wi-Fi
@@ -33,9 +32,10 @@ adds three fixed parts to it:
 - a resident lifetime, in which the armed hardware watchdog is renewed only
   while every listed service makes progress.
 
-Status: implemented. Every build listed under [Build and checks](#build-and-checks)
-configures and links in both lifetimes, except the GPU linear build, which is
-resident only; the host checks listed there model them. No board has run any of these builds. The sources are in
+Status: implemented for the combinations listed under [Build and checks](#build-and-checks).
+Recorded GPU recognition and the separate NPU application compose in both
+lifetimes; performance commands remain restricted to the supervised CPU/NPU profiles. Native builds and focused
+software checks do not establish physical OS operation. The sources are in
 [apps/os](../apps/os) and the build is [cmake/a733-os.cmake](../cmake/a733-os.cmake).
 
 ## Lifetimes
@@ -387,6 +387,8 @@ authority, initialized non-executable assets, bounded health and the combined
 eight-worker ShuffleNet evidence. [Concurrent GPU/NPU integration](designs/os-gpu-npu.md)
 adds the supervised eight-worker GPU path with independent startup, fixed-owner
 and client checks, and distinct combined clock authority.
+[Resident GPU integration](designs/resident-gpu.md) carries the same composition
+through the existing card format, with cold reset and shared-clock prerequisites.
 `SUNSTONE_OS_NPU_CLIENT_MODEL` selects the catalogue entry of
 `tools/npu-session-models.json` that the client runs (default 0, the
 192-byte to 72-byte convolution). Only that model and its input and
@@ -1258,9 +1260,9 @@ No integrated OS physical execution is established by these checks.
   linear option integrates recognition compute into the OS.
 - **NPU recognition acceleration.** Both OS lifetimes integrate a finite NPU
   catalogue application. It does not produce the exact sums required by the
-  mimus recognition path. Supervised eight-worker GPU/NPU composition is
-  implemented; resident cold-card GPU authority and physical concurrent
-  qualification remain outstanding.
+  mimus recognition path. Eight-worker GPU/NPU composition is implemented in
+  both lifetimes, with cold-card preparation for the resident image. Physical
+  concurrent operation and resident reset retirement remain unqualified.
 - **Physical use.** The supervised image needs a reviewed entry record
   from physical evidence and a queued board test; the microphone build also
   needs a connected, reviewed microphone. The radio and headset builds need

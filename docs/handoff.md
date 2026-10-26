@@ -66,7 +66,6 @@ does not establish recovery from a fault.
 
 | Work | Branch | Immediate deliverable |
 | --- | --- | --- |
-| Resident GPU | `work/resident-gpu-cold-1026` | Extend the complete eight-worker CPU/GPU/NPU composition to the cold-card path with explicit reset, mapping and clock prerequisites |
 | GPU performance control | `work/resume-gpu-performance-1026` | Derive and review bounded runtime clock/voltage changes through existing owners and firmware notification |
 | Second camera connector | `work/resume-camera-stream-native-1026` | Bind the existing OV5640 application to CAM2 using authenticated port selection and existing TWI9/clock providers |
 
@@ -78,9 +77,9 @@ coordinator integrates accepted work, updates the canonical records and pushes
 The latest merged work includes paired training-record selection and updates,
 read-only microSD DMA, eight-worker supervised OS recognition, CPU/NPU
 performance controls, normal NPU restart and optional card-boot DRAM restoration.
-The resident eight-worker CPU/NPU image and the supervised eight-worker
-CPU/GPU/NPU image build and pass selected checks. Their evidence is under
-`resident-npu-cpu8-1026/` and `concurrent-gpu-npu-1026/`.
+The resident and supervised eight-worker CPU/GPU/NPU images build and pass
+selected checks. Their evidence is under `resident-gpu-cold-1026/` and
+`concurrent-gpu-npu-1026/`.
 
 The branch notes under "Next steps" in each design document say what remains.
 - **`work/cpu-top-opp-step6-1025`:** CPU top points, step 6 and its
@@ -231,8 +230,16 @@ be pruned.
   888,832 bytes remain before the fixed noncacheable pool. The merged source
   matches the reviewed tree, so no integration rebuild or runtime replay was
   needed. Physical concurrency and cross-PLL behavior remain unqualified;
-  synthetic bundles cannot supply that authority. Resident GPU card support is
-  the next implementation step.
+  synthetic bundles cannot supply that authority.
+- **The resident eight-worker CPU/GPU/NPU card image is integrated.**
+  The actual linked GPU firmware, placement and selected ShuffleNet model are
+  authenticated within the existing four card extents. GPU and NPU share the
+  same cold clock evidence; reset authority must establish transaction retirement
+  before memory reuse. Four linked startup cases and thirty-four focused card
+  cases pass under `resident-gpu-cold-1026/final-snapshot/`. The resident image
+  adds 1,664 code bytes, 208 read-only bytes and 128 state bytes relative to the
+  supervised composition. Stage 2 is reused unchanged. Physical cold startup,
+  reset retirement, combined clock behavior and thermal operation remain open.
 - **OS thermal qualification support is implemented.** The session can lower
   the CPU critical threshold to 70 °C; zero retains the normal policy. A
   bounded binary report preserves the first recognition interval's temperature
