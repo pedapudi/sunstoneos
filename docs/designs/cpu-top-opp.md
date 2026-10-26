@@ -430,8 +430,10 @@ fresh port 3-3 lifetime: power removal, cold DDR start, the base image,
 bundles 25 and 26, the workload (`../bundle-deadline-top-2/`, its own runbook,
 binding script and root-review draft, with `bundle-deadline-top-2.sha256`),
 bundle 27, the Read bundle 14 and a power removal. The workload's source is
-the archive `step6/source-SOURCE`; the overlay built without `--top-opp`
-equals the frozen deadline overlay byte for byte. The binding script refuses
+the archive `step6/source-e8a03b30`; the overlay built without `--top-opp`
+equals the frozen deadline overlay byte for byte. This set replaces
+`step6/step6-set/` and `step6/bundle-deadline-top/`, whose relock read no
+board state itself; those must not run. The binding script refuses
 port 3-1, whose bin, oscillator and supplies have not been read, and requires
 that bundle 26's run record and every later record belong to the current
 survey's instance chain: each launch starts on the instance of the record
