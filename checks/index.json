@@ -9743,7 +9743,9 @@
   "cache_areas": [
    "venv"
   ],
-  "docs": [],
+  "docs": [
+   "docs/designs/cpu-top-opp.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [

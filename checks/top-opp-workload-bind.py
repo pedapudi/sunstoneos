@@ -85,23 +85,22 @@ def main():
     cases['real-records-bind-from-a-read-only-template'] = True
 
     # Refusals, each on copies of the real records with one change.
-    def refused(name, change, port='3-3', names=CONTINUITY):
+    def refused(name, expected, change, port='3-3', names=CONTINUITY):
         copy = out / ('refusal-' + name) / 'port-3-3'
         copy_records(session, copy)
         change(copy)
         result = bind(bundle, copy, review, out / ('refusal-' + name) / 'c6-tw-prepare', port, names)
-        assert result.returncode != 0, name
+        assert result.returncode != 0 and expected in result.stdout + result.stderr, (name, result.stderr[-400:])
         cases['refuses-' + name] = True
-        return result.stderr.strip().splitlines()[-1] if result.stderr.strip() else result.stdout
 
-    refused('port-3-1', lambda c: None, port='3-1')
-    refused('bundle-26-named-by-its-elf-hash',
+    refused('port-3-1', "port 3-1's speed bin", lambda c: None, port='3-1')
+    refused('bundle-26-named-by-its-elf-hash', 'The bundle 26 record names another image',
             lambda c: edit(c / 'c6-opp26-run/session.json', image_sha256=binding['bundle26']['elf_sha256']))
     survey = json.loads((session / 'c6-tw-survey/session.json').read_text())
-    refused('survey-on-another-instance',
+    refused('survey-on-another-instance', "The survey is not on the instance that bundle 26's run returned to",
             lambda c: edit(c / 'c6-tw-survey/session.json', identity=survey['identity'][:1] + [survey['identity'][1] + 4]
                            + survey['identity'][2:]))
-    refused('no-bundle-26', lambda c: None, names=tuple(n for n in CONTINUITY if not n.startswith('c6-opp26')))
+    refused('no-bundle-26', "is not bundle 26's pass", lambda c: None, names=tuple(n for n in CONTINUITY if not n.startswith('c6-opp26')))
     # The same copies with no change bind: the refusals come from the changes.
     copy = out / 'copies-unchanged' / 'port-3-3'
     copy_records(session, copy)

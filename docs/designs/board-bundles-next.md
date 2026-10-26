@@ -498,7 +498,7 @@ the rails. It leaves CPU-B alone because the ROM return does not reset
 CPU-B. Bundle 26 reads, with no write, that DCDC5 and DCDC3 kept 1,000 and
 1,050 mV and that the three domains are at their boot PLL and mux words,
 and refuses otherwise; the returning deadline workload with the CPU0 relock
-(`~/.cache/sunstoneos/evidence/cpu-top-opp-20261025/step6/bundle-deadline-top-4`)
+(`~/.cache/sunstoneos/evidence/cpu-top-opp-20261025/step6/bundle-deadline-top-5`)
 then runs and lowers CPU-B to 1,014 MHz again before its return, and bundle
 27 reads, with no write, the temperatures, the rails and the boot words.
 

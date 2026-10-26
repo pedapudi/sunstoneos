@@ -451,7 +451,7 @@ after bundle 26 has read it on the board:
    words that bundle 14 recorded (CPU-L `0xf8802600`/`0x03010000`, CPU-B
    `0xf8802700`/`0x03000000`, DSU `0xf8802600`/`0x03010105`). It refuses,
    and the lifetime ends before the workload, if a rail or a word differs.
-3. **The workload** (`bundle-deadline-top-4`) is the returning deadline
+3. **The workload** (`bundle-deadline-top-5`) is the returning deadline
    profile on the refrozen native image `6fd7af86` with one change: before
    it releases any secondary, CPU0 at EL3 relocks CPU-B to 2002 MHz, CPU-L
    to 1794 MHz and the DSU to 1274 MHz (`boot/a733/top-opp-relock.c`). The
@@ -515,29 +515,44 @@ runner stops with `No new FEL instance`, or 12 s after the launch if it has
 not reported by then.
 
 The frozen set is
-`~/.cache/sunstoneos/evidence/cpu-top-opp-20261025/step6/step6-set-4/` for one
+`~/.cache/sunstoneos/evidence/cpu-top-opp-20261025/step6/step6-set-5/` for one
 fresh port 3-3 lifetime: power removal, cold DDR start, the base image,
-bundles 25 and 26, the workload (`../bundle-deadline-top-4/`, its own runbook,
-binding script and root-review draft, with `bundle-deadline-top-4.sha256`),
+bundles 25 and 26, the workload (`../bundle-deadline-top-5/`, its own runbook,
+binding script and root-review draft, with `bundle-deadline-top-5.sha256`),
 bundle 27, the Read bundle 14 and a power removal. The workload's source is
 the archive `step6/source-3244504c`; the overlay built without `--top-opp`
-equals the frozen deadline overlay byte for byte. This set replaces
-`step6-set-3` and `bundle-deadline-top-3`, whose workload returned with
-CPU-B raised for bundle 27 to lower, `step6-set-2`, whose bundle 25 returned
-with CPU-B raised, and `step6-set`; those must not run. Bundle 27's order
-entry names the workload as a gate (`after_external` in the set's lifetime
-order). After review round two, two runbook passages were corrected
-without changing any image, build, host or binding file: the set runbook's
-bundle 26 action now covers the CPU-B rate refusal, and the workload
-runbook adds the lowering-failure outcome. The correction record,
-`step6/step6-set-4-runbook-corrected.json`, gives both files' previous and
-new SHA-256; `bundle-deadline-top-4.sha256` changed only in the runbook
-line. The binding script refuses
-port 3-1, whose bin, oscillator and supplies have not been read, and requires
-that bundle 26's run record and every later record belong to the current
-survey's instance chain: each launch starts on the instance of the record
-before it, and the survey's node and identity are the ones bundle 26's run
-returned to.
+equals the frozen deadline overlay byte for byte. Bundle 27's order entry
+names the workload as a gate (`after_external` in the set's lifetime order).
+
+The binding script is `tools/top-opp-workload-bind.py`, frozen byte for
+byte as the bundle's `cpu-prepare.py` with `binding.json` beside it (the
+source archive and bundle 26's frozen row with the SHA-256 of its uploaded
+`probe.bin` and of its `image.elf`). It refuses port 3-1, whose bin,
+oscillator and supplies have not been read, and requires that bundle 26's
+run record and every later record belong to the current survey's instance
+chain: each launch starts on the instance of the record before it, and the
+survey's node and identity are the ones bundle 26's run returned to. Bundle
+26's run record names the uploaded `probe.bin`, as every run record does;
+the script takes that hash from the row's `artifacts.json` and requires the
+file and `binding.json` to agree with it. It copies the read-only frozen
+template by contents, so the prepared files are writable.
+`checks/top-opp-workload-bind.py` runs the frozen binding on a real
+session's records into a new directory, and refuses port 3-1, a bundle 26
+record named by its ELF hash, a survey on another instance and a list
+without bundle 26, each on changed copies of the records.
+
+Step 6's second run (`board-session-cpu-top-opp-8/port-3-3`, set
+`step6-set-4`) passed bundles 2, 25 and 26: bundle 26 read CPU-B at
+`0xf8802700` (1014 MHz), CPU-L and the DSU at their boot words and DCDC5
+1000 mV and DCDC3 1050 mV. The workload did not launch: that set's binding
+compared bundle 26's record with the ELF hash, and its copy of the frozen
+template kept the read-only modes, so the replacement admission record
+could not be written. The check above binds that session's real records
+with `bundle-deadline-top-5` (`step6/binding-check-5b`). `step6-set-5`
+differs from `step6-set-4` only in the workload's runbook path and the
+session directory; every image is byte-identical. It replaces
+`step6-set-4`, `step6-set-3`, `step6-set-2` and `step6-set`, and their
+workload bundles; those must not run.
 
 The host models: `checks/top-opp-relock-check.c` runs the relock against
 modeled PLLs and a modeled AXP8191 behind S_TWI0 (the order, the 20 µs
