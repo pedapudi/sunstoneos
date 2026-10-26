@@ -12,7 +12,8 @@
  *   25  step 6, first image: CPU-B 2002 MHz at 1050 mV, CPU-L 1794 MHz at
  *       1000 mV and the DSU 1274 MHz, left in place for the ROM return;
  *   26  step 6, read-back before the workload: DCDC5 1000 mV and DCDC3
- *       1050 mV must have survived the ROM return; no write;
+ *       1050 mV must have survived the ROM return, and the three domains
+ *       must read the boot PLL and mux words; no write;
  *   27  step 6, read-back after the workload: temperatures and rails; no
  *       write.
  *
@@ -572,6 +573,16 @@ static void client(void *unused)
         if ((cpu.words[d][0] & (3u << 29)) || (cpu.words[d][1] >> 31) || (cpu.words[d][2] >> 31))
             refuse("pattern or LFM enabled");
     }
+#if OPP_BUNDLE == 26
+    /* The boot words that the ROM return restores and that the workload's
+     * relock then requires (bundle 14 on port 3-3): CPU-L and the DSU at
+     * 494 MHz, CPU-B at 1014 MHz. */
+    static const uint32_t boot_words[A733_CPU_DOMAINS][2] = {
+        {0xf8802600u, 0x03010000u}, {0xf8802700u, 0x03000000u}, {0xf8802600u, 0x03010105u}};
+    for (unsigned d = 0; d < A733_CPU_DOMAINS; ++d)
+        if (entry.domain[d].pll != boot_words[d][0] || entry.domain[d].select != boot_words[d][1])
+            refuse("boot clock words");
+#endif
     /* No planned voltage may exceed the bin's top point on its rail: DCDC5
      * feeds CPU-L and the DSU, DCDC3 CPU-B (1000 and 1050 mV in vf0400). */
     uint32_t limit = top_mv(A733_CPU_LITTLE, entry.bin);

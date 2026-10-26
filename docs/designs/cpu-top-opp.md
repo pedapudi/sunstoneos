@@ -372,20 +372,26 @@ that only after bundle 26 has read it on the board:
    1000 mV and CPU-L to 1794 MHz, and the DSU to 1274 MHz, through the
    driver, and leaves them. Its ROM return resets the clocks.
 2. **Bundle 26** reads, with no write, that DCDC5 is still at 1000 mV and
-   DCDC3 at 1050 mV and that the CPU PLLs are back at their boot words. It
-   refuses, and the lifetime ends before the workload, if either rail
-   differs.
+   DCDC3 at 1050 mV and that the three domains read the boot PLL and mux
+   words that bundle 14 recorded (CPU-L `0xf8802600`/`0x03010000`, CPU-B
+   `0xf8802700`/`0x03000000`, DSU `0xf8802600`/`0x03010105`). It refuses,
+   and the lifetime ends before the workload, if a rail or a word differs.
 3. **The workload** (`bundle-deadline-top`) is the returning deadline
    profile on the refrozen native image `6fd7af86` with one change: before
    it releases any secondary, CPU0 at EL3 relocks CPU-B to 2002 MHz, CPU-L
    to 1794 MHz and the DSU to 1274 MHz (`boot/a733/top-opp-relock.c`). The
-   relock follows the driver's sequence, checks every domain before its
-   first write and refuses on any difference, which ends the run through
-   the deadline unit before any secondary starts. It records the entry and
-   final words, the parked time and the lock reads in the identity header
-   at `0x42018180`. The overlay's 16 KiB reservation had 288 bytes left, so
-   the 1,404-byte relock sits in the 2 KiB gap between the 512-byte base
-   overlay and the extension, as the interrupt profile's vectors do.
+   relock follows the driver's sequence. Before its first clock write it
+   checks the board itself: the DCXO enabled and stable at 26 MHz, speed-bin
+   code `0x04`, every domain on its locked PLL with modulation off, and
+   DCDC3 at 1050 mV and DCDC5 at 1000 mV, which it reads from the AXP8191
+   over S_TWI0 with the PMIC provider's bus checks and phase order (page 0,
+   chip 3 and revision 0 before the selectors). Any difference ends the run
+   with a refusal code through the deadline unit before any secondary
+   starts. It records the entry and final words, the parked time, the lock
+   reads, the oscillator and SID words and the seven PMIC bytes in the
+   identity header at `0x42018180`. The overlay's 16 KiB reservation had
+   288 bytes left, so the 2,647-byte relock and its tables sit in the
+   3.5 KiB gap between the 512-byte base overlay and the extension.
 4. **Bundle 27** reads the temperatures and the rails after the workload.
 
 The workload reads no temperature itself: it lasts about 32 ticks, shorter
@@ -409,22 +415,36 @@ Predictions, against the ten boot-rate runs on port 3-3 of 2026-10-25
 
 Board 3-3 has run neither secondary at a top point. A non-return of the
 workload ends the lifetime with the A76 cores possibly running at 2002 MHz
-and CPU0 at 1794 MHz; only a power removal recovers it.
+and CPU0 at 1794 MHz; only a power removal recovers it. A deadline return
+resets CPU0 into the ROM, which resets the CPU PLLs, so any secondary still
+running then runs at the boot rates; it also needs a power removal. The
+deadline unit returns CPU0 1.5 s after the launch (the 1 s startup deadline
+plus 0.5 s), and the runner waits 10 s after its `exe` transaction for the
+returned FEL instance. The operator therefore removes power at once when the
+runner stops with `No new FEL instance`, or 12 s after the launch if it has
+not reported by then.
 
 The frozen set is
-`~/.cache/sunstoneos/evidence/cpu-top-opp-20261025/step6/step6-set/` for one
+`~/.cache/sunstoneos/evidence/cpu-top-opp-20261025/step6/step6-set-2/` for one
 fresh port 3-3 lifetime: power removal, cold DDR start, the base image,
-bundles 25 and 26, the workload (`../bundle-deadline-top/`, its own runbook,
-binding script and root-review draft, with `bundle-deadline-top.sha256`),
+bundles 25 and 26, the workload (`../bundle-deadline-top-2/`, its own runbook,
+binding script and root-review draft, with `bundle-deadline-top-2.sha256`),
 bundle 27, the Read bundle 14 and a power removal. The workload's source is
-the archive `step6/source-d25b6950`; the overlay built without `--top-opp`
-equals the frozen deadline overlay byte for byte.
+the archive `step6/source-SOURCE`; the overlay built without `--top-opp`
+equals the frozen deadline overlay byte for byte. The binding script refuses
+port 3-1, whose bin, oscillator and supplies have not been read, and requires
+that bundle 26's run record and every later record belong to the current
+survey's instance chain: each launch starts on the instance of the record
+before it, and the survey's node and identity are the ones bundle 26's run
+returned to.
 
 The host models: `checks/top-opp-relock-check.c` runs the relock against
-modeled PLLs (the order, the 20 µs waits, three lock reads 3 µs apart, P
-before the select, five refusals with no write and the timeouts), and
-`checks/workload-bisect-probe.py` runs the overlay with the native image in
-the instruction model, with modeled CPU PLLs, in all nine deadline cases.
+modeled PLLs and a modeled AXP8191 behind S_TWI0 (the order, the 20 µs
+waits, three lock reads 3 µs apart, P before the select, both supplies read
+before any clock write, 23 refusals with no clock write and the timeouts),
+and `checks/workload-bisect-probe.py` runs the overlay with the native image
+in the instruction model, with modeled CPU PLLs and PMIC bus, in all nine
+deadline cases.
 `checks/workload-bisect-host.py` validates the relock record in the runner's
 decoder.
 

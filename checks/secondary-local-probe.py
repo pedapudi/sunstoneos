@@ -55,8 +55,11 @@ class Local(survey.Survey):
 
     def memory(self,u,access,address,size,value,core):
         write=access==UC_MEM_WRITE
-        if self.top_opp and 0x08871000<=address<0x08874000:
-            # The top-operating-point relock (survey.Survey.pll_access).
+        if self.top_opp_address(address):
+            # The top-operating-point relock (survey.Survey.pll_access and
+            # twi_access).
+            if not 0x08871000<=address<0x08874000:
+                return self.twi_access(u,access,address,size,value,core)
             self.pll_access(access,address,size,value,core)
             return model.Machine.memory(self,u,access,address,size,value,core)
         if address in model.EL3_SECURITY_ADDRESSES:

@@ -145,9 +145,10 @@ def report_area(f):
 
 
 def extension_address(f):
-    # The interrupt vectors and the top-operating-point relock use the gap
-    # between the 512-byte base overlay and the extension.
-    return 0x41020800 if f.interrupts or f.top_opp else EXTENSION
+    # The interrupt vectors use the 2 KiB-aligned gap before the extension;
+    # the top-operating-point relock and its tables start right after the
+    # 512-byte base overlay.
+    return 0x41020200 if f.top_opp else 0x41020800 if f.interrupts else EXTENSION
 
 
 def patch_plan(native,hooks,f):
@@ -272,7 +273,7 @@ def prepare(args):
     link=args.output/'identity.ld'
     vectors=' . = 0x41020800; .irq_vectors : { KEEP(*(.irq_vectors)) }\n ASSERT(. == 0x41021000, "Vector table extent differs")\n' if interrupts else ''
     if top_opp:
-        vectors=' . = 0x41020800; .top_opp : { KEEP(*(.text.top_opp)) }\n ASSERT(. <= 0x41021000, "Relock exceeds its gap")\n'
+        vectors=' . = 0x41020200; .top_opp : { KEEP(*(.text.top_opp)) KEEP(*(.rodata.top_opp)) }\n ASSERT(. <= 0x41021000, "Relock exceeds its gap")\n'
     link.write_text('ENTRY(identity_primary_gate)\nSECTIONS {\n'+vectors+'''
  . = 0x41021000;
  .text : { *(.text .text.*) *(.rodata .rodata.*) }
@@ -387,10 +388,15 @@ def prepare(args):
             'record':{'address':DEADLINE_RECORD[0],'bytes':DEADLINE_RECORD[1]},
             'pending':'Instruction cases, host validation and root review required before physical use.'}
     if top_opp:
-        manifest['top_opp']={'record':{'address':REPORT[0]+0x80,'words':13},'targets':TOP_OPP_TARGETS,
+        manifest['top_opp']={'record':{'address':REPORT[0]+0x80,'words':16},'targets':TOP_OPP_TARGETS,
             'relock':hooks.get('top_opp_relock'),
-            'voltages':'DCDC3 1050 mV and DCDC5 1000 mV, set by bundle 25 and read back by bundle 15 after a ROM return '
-                       'in the same lifetime; the overlay reads no PMIC register',
+            'voltages':'DCDC3 1050 mV and DCDC5 1000 mV, set by bundle 25 and read back by bundle 26 after a ROM return '
+                       'in the same lifetime; the relock reads both selectors over S_TWI0 and refuses before any clock '
+                       'write unless they are at those voltages',
+            'entry_checks':['DCXO enabled and stable at 26 MHz','speed-bin code 0x04',
+                            'every domain on its locked PLL with modulation off',
+                            'S_TWI0 in the PMIC provider baseline and route',
+                            'PMIC page 0, chip 3, revision 0; DCDC3 and DCDC5 enabled at 1050 and 1000 mV'],
             'pending':'Instruction cases, host validation and root review required before physical use.'}
     (args.output/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
     print('Prepared '+('first FreeRTOS task entry for all eight cores' if first_task else 'production pre-scheduler for all eight cores' if pre_scheduler else 'timer and peer IRQs for cores1..7' if interrupts else 'concurrent cached exchange for cores1..7' if coherent else 'cached EL1 entry for cores1..7' if cached else 'local initialization for cores1..7' if local else 'identity survey for cores2..7')+'; no board access.')

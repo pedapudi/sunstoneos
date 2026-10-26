@@ -114,29 +114,48 @@ def deadline_record(raw, nonce, park=None):
 
 
 # The top-operating-point profile (docs/designs/cpu-top-opp.md, step 6): CPU0's
-# relock record in identity header words 16 to 28 (boot/a733/top-opp-relock.h),
+# relock record in identity header words 16 to 31 (boot/a733/top-opp-relock.h),
 # at this offset of the combined report, which starts 0x100 before the header.
-TOP_OPP_OFFSET, TOP_OPP_WORDS, TOP_OPP_MAGIC = 0x180, 13, 0x3130505054504f54
+TOP_OPP_OFFSET, TOP_OPP_WORDS, TOP_OPP_MAGIC = 0x180, 16, 0x3130505054504f54
 TOP_OPP_FINAL = ((0xf8804d00, 0x03000000), (0xf8804500, 0x03000000), (0xf8803100, 0x03000105))
 TOP_OPP_DOMAINS = ('cpu_b', 'cpu_l', 'dsu')
-TOP_OPP_SCOPE = {'record': {'address': 0x42018180, 'words': 13},
+TOP_OPP_SCOPE = {'record': {'address': 0x42018180, 'words': 16},
                  'targets': {'cpu_b': {'pll': 0x08872000, 'n': 77, 'mhz': 2002},
                              'cpu_l': {'pll': 0x08871000, 'n': 69, 'mhz': 1794},
                              'dsu': {'pll': 0x08873000, 'n': 49, 'mhz': 1274}},
-                 'voltages': 'DCDC3 1050 mV and DCDC5 1000 mV, set by bundle 25 and read back by bundle 15 after a ROM '
-                             'return in the same lifetime; the overlay reads no PMIC register',
+                 'voltages': 'DCDC3 1050 mV and DCDC5 1000 mV, set by bundle 25 and read back by bundle 26 after a ROM '
+                             'return in the same lifetime; the relock reads both selectors over S_TWI0 and refuses before '
+                             'any clock write unless they are at those voltages',
+                 'entry_checks': ['DCXO enabled and stable at 26 MHz', 'speed-bin code 0x04',
+                                  'every domain on its locked PLL with modulation off',
+                                  'S_TWI0 in the PMIC provider baseline and route',
+                                  'PMIC page 0, chip 3, revision 0; DCDC3 and DCDC5 enabled at 1050 and 1000 mV'],
                  'pending': 'Instruction cases, host validation and root review required before physical use.'}
 
 
 def top_opp_record(raw):
     """The relock record: magic, result, start and end counters, entry and
     final PLL << 32 | mux words, and park-to-select ticks << 32 | lock reads,
-    each in the order CPU-B, CPU-L, DSU."""
-    words = struct.unpack_from('<13Q', raw, TOP_OPP_OFFSET)
+    each in the order CPU-B, CPU-L, DSU; then the oscillator and SID words,
+    the seven PMIC bytes (page, chip, revision, output enables, DCDC3 and
+    DCDC5 selectors, page) and the S_TWI0 divider, reads completed and last
+    bus status."""
+    words = struct.unpack_from('<16Q', raw, TOP_OPP_OFFSET)
     return {'magic': words[0], 'result': words[1], 'start': words[2], 'end': words[3],
             'entry': [[w >> 32, w & 0xffffffff] for w in words[4:7]],
             'final': [[w >> 32, w & 0xffffffff] for w in words[7:10]],
-            'parked_ticks': [w >> 32 for w in words[10:13]], 'lock_reads': [w & 0xffffffff for w in words[10:13]]}
+            'parked_ticks': [w >> 32 for w in words[10:13]], 'lock_reads': [w & 0xffffffff for w in words[10:13]],
+            'oscillator': words[13] >> 32, 'sid': words[13] & 0xffffffff,
+            'pmic': list(words[14].to_bytes(8, 'little')[:7]),
+            'divider': words[15] >> 32, 'pmic_reads': (words[15] >> 8) & 0xffffff, 'bus_status': words[15] & 255}
+
+
+def top_opp_supplies(relock):
+    """The relock's own reading: page 0, chip 3, revision 0, DCDC3 and DCDC5
+    enabled, at 1050 mV (code 55) and 1000 mV (code 50), page 0."""
+    page, chip, revision, enable, dcdc3, dcdc5, after = relock['pmic']
+    return (relock['pmic_reads'] == 7 and (page, chip, revision, after) == (0, 3, 0, 0) and enable & 0x14 == 0x14 and
+            dcdc3 & 127 == 55 and dcdc5 & 127 == 50)
 
 
 def decode(raw, nonce, manifest):
@@ -148,7 +167,8 @@ def decode(raw, nonce, manifest):
     if relock:
         require(relock['magic'] == TOP_OPP_MAGIC and relock['result'] == 1 and relock['start'] < relock['end'] and
                 relock['final'] == [list(f) for f in TOP_OPP_FINAL] and
-                all(n >= 3 for n in relock['lock_reads']) and all(t < 24000 for t in relock['parked_ticks']),
+                all(n >= 3 for n in relock['lock_reads']) and all(t < 24000 for t in relock['parked_ticks']) and
+                (relock['oscillator'] >> 14) & 3 == 2 and top_opp_supplies(relock),
                 'Top-operating-point relock record differs.')
         # The identity header's other reserved words stay checked as zero.
         raw = raw[:TOP_OPP_OFFSET]+bytes(8*TOP_OPP_WORDS)+raw[TOP_OPP_OFFSET+8*TOP_OPP_WORDS:]
@@ -179,7 +199,7 @@ def load(build, image, manifest):
     top_opp = 'top_opp' in manifest
     if top_opp:
         require(not quiet and manifest['top_opp'] == dict(TOP_OPP_SCOPE, relock=manifest['hooks'].get('top_opp_relock')) and
-                manifest['hooks'].get('top_opp_relock') == 0x41020800, 'Top-operating-point profile scope changed.')
+                manifest['hooks'].get('top_opp_relock') == 0x41020200, 'Top-operating-point profile scope changed.')
     return base.load(build, image, manifest, return_deadline=True, quiet=quiet, top_opp=top_opp)
 
 

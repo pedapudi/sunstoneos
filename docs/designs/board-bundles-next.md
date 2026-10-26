@@ -493,9 +493,10 @@ of bundle 4 (`platform/a733/cpu_pmu.c`).
 
 Bundles 25 to 27 belong to step 6. Bundle 25 raises the three CPU domains to
 their top points and leaves them for the ROM return, which resets the clocks;
-bundle 26 reads, with no write, that DCDC5 and DCDC3 kept 1,000 and 1,050 mV;
-the returning deadline workload with the CPU0 relock
-(`~/.cache/sunstoneos/evidence/cpu-top-opp-20261025/step6/bundle-deadline-top`)
+bundle 26 reads, with no write, that DCDC5 and DCDC3 kept 1,000 and 1,050 mV
+and that the three domains are back at their boot PLL and mux words, and
+refuses otherwise; the returning deadline workload with the CPU0 relock
+(`~/.cache/sunstoneos/evidence/cpu-top-opp-20261025/step6/bundle-deadline-top-2`)
 then runs, and bundle 27 reads the temperatures and rails after it.
 
 ## Bundles that wait

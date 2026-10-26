@@ -355,7 +355,7 @@ def main():
             if machine.top_opp:
                 # CPU0 relocked CPU-B, CPU-L and the DSU before the first release
                 # (boot/a733/top-opp-relock.c); the ROM, not the image, resets them.
-                opp = struct.unpack_from('<13Q', raw, 0x180)
+                opp = struct.unpack_from('<16Q', raw, 0x180)
                 finals = {2: (0xf8804d00, 0x03000000), 1: (0xf8804500, 0x03000000), 3: (0xf8803100, 0x03000105)}
                 assert opp[0] == TOP_OPP_MAGIC and opp[1] == 1 and opp[2] < opp[3], opp
                 assert machine.pll_order == [2, 1, 3], machine.pll_order
@@ -363,6 +363,13 @@ def main():
                     pll = 0x08870000+0x1000*d
                     assert (machine.mmio[pll], machine.mmio[pll+0x1c]) == finals[d]
                     assert opp[7+i] == finals[d][0] << 32 | finals[d][1] and opp[10+i] & 0xffffffff >= 3
+                # Its own entry reading: the oscillator and SID words, then the
+                # seven PMIC bytes with DCDC3 at 0xb7 (1050 mV) and DCDC5 at
+                # 0xb2 (1000 mV), all seven reads complete with the idle status.
+                assert opp[13] == 0x983fb0f7 << 32 | 0x496, hex(opp[13])
+                assert list(opp[14].to_bytes(8, 'little')) == [0, 3, 0, 0xff, 0xb7, 0xb2, 0, 0], hex(opp[14])
+                assert opp[15] == 0x29 << 32 | 7 << 8 | 0xf8, hex(opp[15])
+                assert machine.twi['regs'] == [0xff, 0x0e, 0x0f, 0x10, 0x14, 0x16, 0xff] and machine.pll_written
                 top_opp_record = list(opp)
         else:
             if a.case == 'stalled-no-tick' or machine.cpu0_parked:

@@ -559,15 +559,17 @@ def bundle8_outcomes(elf):
 
 
 def opp_step_outcomes(bundle):
-    """Refusals before any clock or PMIC write, and the thermal stop after the step lowered what it raised; each
-    with the converter disabled and the PMIC service parked."""
+    """Refusals before any clock or PMIC write (bundle 26 also refuses clock words other than the boot words), and
+    the thermal stop after the step lowered what it raised; each with the converter disabled and the PMIC service
+    parked."""
     refusals = [dict(name=f'step-refused-{slug}', status=1, interrupt=None, fail_lines=0, fault=None,
                      log_contains=[f'BEGIN board bundle {bundle}:', f'REFUSED board bundle {bundle}: {text}'])
                 for slug, text in (('thermal-level', 'thermal level'), ('speed-bin', 'speed bin'),
                                    ('supplies', 'CPU supplies'), ('cpu-b-rate', 'CPU-B rate'),
                                    ('rate-not-on-pll', 'CPU rate not on its PLL'),
                                    ('pattern-or-lfm', 'pattern or LFM enabled'),
-                                   ('voltage-above-bin', "voltage above the bin's top point"))]
+                                   ('voltage-above-bin', "voltage above the bin's top point")) +
+                                  ((('boot-clock-words', 'boot clock words'),) if bundle == 26 else ())]
     return refusals + [dict(name='step-stopped-thermal-limit', status=1, interrupt=None, fail_lines=0, fault=None,
                             log_contains=[f'BEGIN board bundle {bundle}:',
                                           f'STOPPED board bundle {bundle}: thermal limit'])]
