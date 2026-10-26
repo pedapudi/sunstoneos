@@ -2871,6 +2871,7 @@
  "ddr-capture-analysis.py": {
   "cache_areas": [],
   "docs": [
+   "docs/board-runbooks/dram-training-capture.md",
    "docs/designs/dram-fast-boot.md"
   ],
   "library": false,
