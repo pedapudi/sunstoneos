@@ -89,19 +89,22 @@ be pruned.
 
 ## Known problems and next steps
 
-- **Returning overlay overflow.** The MBUS restore merged into bringup adds
-  about 870 bytes to the returning overlay. The return-deadline workload
-  profile then overflows its 16 KiB reservation, with or without the top-point
-  relock. Its next freeze needs a new layout (`docs/designs/cpu-top-opp.md`,
-  "Next steps").
-- **GPU shutdown on every failure is unmerged.** Commit `52e8c75c` on
-  `work/gpu-job-session-1025` (head `2081c682`) routes each failure after GPU
-  ON through one shutdown path. Its review found a high-severity risk: the
-  forced soft reset and OFF, used when idle checks fail, can hang the memory
-  bus and lose the board. The review recommends leaving the GPU on unless a
-  fresh read shows the bus idle. The findings are in
-  `~/.cache/sunstoneos/evidence/gpu-off-review-20261025/review.md`. Fix them,
-  rerun the review, then merge.
+- **CPU returning image layout is repaired.** Both workload profiles fit
+  the existing 16 KiB reservation. The ordinary profile has 3,004 bytes free;
+  the top-point profile has 68 bytes free. Both builds and nine instruction
+  cases plus eight host-runner cases per profile pass. Evidence is under
+  `~/.cache/sunstoneos/evidence/resume-cpu-return-20261025/`.
+  Restoring the raised supply rails remains separate. A failed top-point
+  workload can also retain raised clocks, so this layout repair does not
+  authorize a top-point run in the current board sessions.
+- **GPU failure cleanup is corrected in software.** The reviewed shutdown
+  path retains power and ownership when idle cannot be proved. It no longer
+  forces reset/OFF after failed idle checks or bypasses idle checks solely on
+  a firmware power-off acknowledgement. Three native builds and twenty focused
+  ELF-model cases pass under
+  `~/.cache/sunstoneos/evidence/gpu-recovery-20261025/`.
+  Physical failure recovery remains unqualified. A retained failure ends GPU
+  use for that powered lifetime; it does not establish reusable GPU state.
 - **Do not run GPU set `board-bundles-20261025-31`.** It repeats the qualified
   eight-job session with the older image, which lacks the shutdown on every
   failure path.
