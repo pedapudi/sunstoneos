@@ -646,15 +646,23 @@ MAGIC = 0x2abc0000
 STOP_PAGE = GPU + 0x1000
 FWX_COMPLETE = ('COMPLETE GPU firmware stop: started, health check executed, forced idle and power off '
                 'acknowledged, idle, OFF and provider parked')
-FWX_CONTROL_FAIL = 'GPU firmware control: compatibility or health check not complete, GPU left running'
-FWX_STOP_FAIL = 'GPU firmware stop: not complete, GPU left powered'
+# Every failure after the ON powers the GPU off (fws_shutdown): a failed
+# control by the stop without acknowledgements.
+FWX_CONTROL_FAIL = ('GPU firmware control: compatibility or health check not complete; firmware stop: not '
+                    'acknowledged, idle checks met, GPU OFF and provider parked')
+FWX_STOP_FAIL = 'GPU firmware stop: isolation failed, GPU left powered'
 # Without the firmware's acknowledgements, the stop of upstream's hard reset:
 # the register sequence, then the OFF when every idle poll matches.
 FWX_HARD = 'GPU firmware stop: not acknowledged, idle checks met, GPU OFF and provider parked'
-FWX_HARD_BUSY = 'GPU firmware stop: not acknowledged and the GPU not idle, GPU left powered'
+FWX_HARD_BUSY = 'GPU firmware stop: not acknowledged and the GPU not idle, soft reset and OFF forced, provider parked'
 FWX_REASONS = {'fx-board': None, 'fx-health-return': None, 'fx-incompatible': FWX_CONTROL_FAIL, 'fx-no-health': FWX_CONTROL_FAIL,
                'fx-event': FWX_CONTROL_FAIL, 'fx-denied': FWX_HARD, 'fx-no-ack': FWX_HARD,
                'fx-no-ack-busy': FWX_HARD_BUSY, 'fx-off-fault': FWX_STOP_FAIL,
+               # A start that fails and an identity refused, on the stop image.
+               'fs-timeout': 'GPU firmware start: started word not 1; firmware stop: not acknowledged, idle checks '
+                             'met, GPU OFF and provider parked',
+               'fs-bad-id': 'GPU firmware start: identity not 36.56.104.183, nothing written; no firmware started, '
+                            'GPU OFF and provider parked',
                'fx-idle-held': 'GPU firmware stop: idle check not met after the power-off acknowledgement, '
                                'GPU OFF and provider parked'}
 # The stop's register plan (pvr_gpu_stop.c, the vendor RGXStop) as 32-bit
@@ -1076,7 +1084,7 @@ def run_fws(image, case, stop=False, unchecked=False, job=False):
                 (write and address == GPU + 0xb00 and value == 0 and not 100 <= step < 200) or \
                 (100 <= step < 200 and (int(write), address - GPU) in FWX_STOP_PLAN and (not write or value == 0 or
                                                                                     address == GPU + 0x8b0)) or \
-                (step == 164 and write and (address, value) in ((GPU + 0x100, 0xfffffc3d), (GPU + 0x104, 0xffefffff)))
+                (step in (164, 199) and write and (address, value) in ((GPU + 0x100, 0xfffffc3d), (GPU + 0x104, 0xffefffff)))
             if not ok:
                 state['refused'] = [hex(address), size, int(write), hex(value) if write else None, n]
                 uc.emu_stop()
@@ -1315,6 +1323,18 @@ def check_fwx(u, image, state, case, timer_reads):
     assert not state.get('exception'), output[-2000:]
     assert 'refused' not in state, (state['refused'], output[-3000:])
     assert state['failure'] == FWX_REASONS[case], (state['failure'], output[-3000:])
+    if case in ('fs-timeout', 'fs-bad-id'):
+        # The GPU goes off whatever failed: after a start that never set its
+        # word, by the stop without acknowledgements and its soft reset.
+        assert calls.index('a733_gpu_platform_off_begin') < calls.index('a733_gpu_platform_supply_end') < \
+            calls.index('bb_power_park'), calls
+        assert state['exit_status'] is None and 'COMPLETE' not in output
+        resets = [v for (w, a, v), step in zip(accesses, state['steps']) if w and a == GPU + 0x100 and step == 164]
+        assert resets == ([0xfffffc3d] if case == 'fs-timeout' else []), resets
+        assert not state['commands'], state['commands']
+        state['cycles'] = calls.count('a733_gpu_platform_off_begin')
+        state['memory_flushes'] = state.pop('cache')
+        return state
     writes, boot = fws_boot(u, image)
     start = fws_case_sequence(case, boot, timer_reads)
     got = [(w, a, v) for w, a, v in accesses]
@@ -1327,7 +1347,8 @@ def check_fwx(u, image, state, case, timer_reads):
     # Each kick is read back at once.
     assert all(post[i + 1][0][:2] == (0, GPU + 0xb00) for i in kicks), post
     # The stop's register accesses follow its plan; a poll may repeat a read.
-    stop_steps = [((w, a - GPU), step) for (w, a, v), step in post if 100 <= step < 200]
+    # Step 199 is the forced reset, apart from the stop's plan.
+    stop_steps = [((w, a - GPU), step) for (w, a, v), step in post if 100 <= step < 199]
     stop_accesses = [x for x, _ in stop_steps]
     plan = [x for x in FWX_STOP_PLAN if x != (1, 0x8b0) or (1, 0x8b0) in stop_accesses]
     # A poll repeats its read within one step; a 64-bit poll repeats both halves.
@@ -1354,7 +1375,9 @@ def check_fwx(u, image, state, case, timer_reads):
                f'{returned:#x} status_off={returned:#x} ' in output, output[-2500:]
         assert 'GPU FWS after kccb_done=0x3 pow_state=0x0 kccb_read=0x3' in output, output[-2500:]
     hard = case in ('fx-denied', 'fx-no-ack')
-    if case in ('fx-board', 'fx-health-return', 'fx-idle-held') or hard:
+    off = case in ('fx-board', 'fx-health-return', 'fx-idle-held', 'fx-no-ack-busy', 'fx-incompatible',
+                   'fx-no-health', 'fx-event') or hard
+    if off:
         # The OFF follows the last stop access; the supply end and the park follow it.
         assert calls.index('a733_gpu_platform_off_begin') < calls.index('a733_gpu_platform_off_poll') < \
             calls.index('a733_gpu_platform_supply_end') < calls.index('bb_power_park'), calls
@@ -1370,7 +1393,9 @@ def check_fwx(u, image, state, case, timer_reads):
     if case in ('fx-incompatible', 'fx-no-health', 'fx-event'):
         errors = {'fx-incompatible': 4, 'fx-no-health': 3, 'fx-event': 7}
         assert f'GPU FWS control result=3 phase=5 error={errors[case]} ' in output, output[-2500:]
-        assert not stop_accesses and 'GPU FWS stop' not in output
+        # The stop without acknowledgements: the register plan and its reset.
+        assert stop_accesses and all(step >= 150 for _, step in stop_steps), stop_steps
+        assert 'GPU FWS stop result=0 phase=10 error=0 step=15 count=15 ' in output, output[-2500:]
         assert state['commands'] == ([] if case == 'fx-incompatible' else [[115, 0, 0]]), state['commands']
     if case in ('fx-denied', 'fx-no-ack', 'fx-no-ack-busy'):
         # The power-off request was sent; its acknowledgement was refused or
@@ -1388,8 +1413,12 @@ def check_fwx(u, image, state, case, timer_reads):
             assert 'GPU FWS stop result=0 phase=10 error=0 step=15 count=15 ' in output and \
                 ' unacknowledged=1' in output, output[-2500:]
         else:
+            # An idle check never matched: the soft reset forced (step 199),
+            # then the OFF.
             assert compressed in ([(0, 0x8a8), (0, 0x3c8)], [(0, 0x8a8), (1, 0x8b0), (0, 0x3c8)]), compressed
-            assert 'a733_gpu_platform_off_begin' not in calls
+            forced = [(a - GPU, v) for (w, a, v), step in post if step == 199 and w]
+            assert forced == [(0x100, 0xfffffc3d), (0x104, 0xffefffff)], forced
+            assert 'GPU FWS forced ' in output, output[-2500:]
     state['cycles'] = calls.count('a733_gpu_platform_off_begin')
     state['memory_flushes'] = state.pop('cache')
     return state
@@ -1437,14 +1466,17 @@ def check_fwj(u, image, state, case, timer_reads):
                          [115, 102, 101, 107]), state['commands']
         assert stop_accesses and all(step >= 150 for (w, a, v), step in post if 100 <= step < 200), post
         # Upstream's final soft reset ends the plan only when every idle poll matched.
-        reset = [(w, a - GPU, v) for (w, a, v), step in post if step >= 150 and w and a in (GPU + 0x100, GPU + 0x104)]
+        reset = [(w, a - GPU, v) for (w, a, v), step in post if step == 164 and w and a in (GPU + 0x100, GPU + 0x104)]
         assert reset == ([] if case == 'fj-not-idle' else [(1, 0x100, 0xfffffc3d), (1, 0x104, 0xffefffff)]), reset
         assert ' unacknowledged=1' in output, output[-2500:]
-        assert ('a733_gpu_platform_off_begin' in calls) == (case != 'fj-not-idle'), calls
+        # Every outcome ends with the GPU off; a GPU that never reports idle
+        # gets the forced soft reset (step 199) first.
+        assert calls.index('a733_gpu_platform_off_begin') < calls.index('a733_gpu_platform_supply_end') < \
+            calls.index('bb_power_park'), calls
+        forced = [(a - GPU, v) for (w, a, v), step in post if step == 199 and w]
+        assert forced == ([(0x100, 0xfffffc3d), (0x104, 0xffefffff)] if case == 'fj-not-idle' else []), forced
         if case != 'fj-not-idle':
             assert 'GPU FWS stop result=0 phase=10 error=0 step=15 count=15 ' in output, output[-2500:]
-            assert calls.index('a733_gpu_platform_off_begin') < calls.index('a733_gpu_platform_supply_end') < \
-                calls.index('bb_power_park'), calls
         assert state['exit_status'] is None and 'COMPLETE' not in output
         if case in ('fj-restart-event', 'fj-kick-bad-word'):
             errors = {'fj-restart-event': 6, 'fj-kick-bad-word': 5}

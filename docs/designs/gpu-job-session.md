@@ -1,12 +1,13 @@
 # Several timed GPU jobs in one firmware session
 
-Status: **implemented, host-checked and frozen for port 3-1 as set
-`board-bundles-20261025-30`; not yet run on a board.** It follows the first GPU job, which
-passed on port 3-1 in set 29 ([first GPU job](gpu-first-job.md)): one
-32-lane compute job between the firmware's health check and its stop. This
-step runs eight jobs on one context in one firmware session, times each
-one from the board counter, and makes the client CCB wrap. The step after
-it runs a larger dispatch (last section).
+Status: **qualified on port 3-1** in set `board-bundles-20261025-30`
+(`board-session-20261025-29/port-3-1`, record `s29-gjs-run`). Eight
+32-lane jobs ran on one context in one firmware session; all 32 output
+words matched, with no firmware event or reset; the cleanup and the stop
+were acknowledged and the GPU powered off. The step follows the first GPU
+job ([first GPU job](gpu-first-job.md)): it runs eight jobs on one context
+in one firmware session, times each from the board counter, and makes the
+client CCB wrap.
 
 ## Why this step
 
@@ -207,16 +208,83 @@ session image (`850d833f…`, loadable bytes `80fa9d1a…`, from `5c4420d2`).
 Its runbook gives the predictions above as the log lines they produce and
 what each departure means.
 
-## The step after: a larger dispatch
+## Set 30 on port 3-1
 
-The compiled-package path (`pvr_compute_package.c`, profile 2) runs a
-Mesa-compiled kernel over up to 992 elements in 31 dispatches of 32 lanes,
-each dispatch with its own PDS slot (first index and count) and a final
-fence. On the board it would show the multi-dispatch CDM stream, the
-first-index and count order fixed after set 27 and never run, and a real
-workload's throughput. It needs the package's input and output regions in
-the image's payload and a host case per profile, and is proposed once this
-step passes.
+Kick to timeline, on the 24 MHz counter:
+
+| Job | Time |
+| --- | --- |
+| 1, after `MMUCACHE` | 113 µs |
+| 2 to 5, 7 and 8 | 80 to 83 µs each |
+| 6, the first after the ring wrapped | 87 µs |
+
+Preparation took 1.45 ms and the eight jobs 2.39 ms in all, kick of job 1
+to timeline of job 8. A job's time includes the firmware's scheduling, the
+CDM work, the timeline UPDATE and its write reaching the CPU; the first
+read's floor (`first`) includes the `MTS_SCHEDULE` read-back and its log
+lines.
+
+## Every outcome ends with the GPU off
+
+After the boards' last power cycle no image may leave the GPU on: a GPU
+left powered with its firmware running blocks the lifetime until a power
+removal. Every failure after the GPU's ON now goes through one shutdown
+(`fws_shutdown` in `apps/gpu-power-id/fw-start.c`), in this order:
+
+1. the acknowledged stop, when the control is READY;
+2. the vendor's OFF after a power-off acknowledgement whose idle checks
+   failed (`rgxpower.c:333–341`);
+3. upstream's hard reset with the control latched failed: the register
+   plan, the soft reset, the OFF (`pvr_power.c:518–531`);
+4. when an idle check never matches, or that stop is refused: the full
+   soft reset of every unit and the OFF anyway, logged as `GPU FWS forced`
+   and marked as step 199 in the progress record. No reference does this:
+   upstream marks the device lost and the vendor leaves it on. It is
+   chosen because a GPU left on now costs the board until the user is back;
+   its risk is a GPU bus left mid-transfer at the OFF.
+
+A failed start (the started word never 1), a refused or failed control, a
+refused identity and a failed mapping take the same path; the refusal for
+a near deadline powers the GPU off before it returns. Only a power
+controller that fails during the ON or the OFF itself, or a GPU register
+access that never completes, can still leave the GPU on or the board
+without a return. The stop variant's host check gains two cases (a start
+whose word never arrives, a refused identity) and twelve pass; the
+first-job and session variants' cases now expect the forced OFF.
+
+## Next steps
+
+For the next agent on the GPU:
+
+- **The larger Mesa-compiled dispatch.** The compiled-package path
+  (`drivers/gpu/pvr_compute_package.c`, profile 2) runs a Mesa-compiled
+  kernel over up to 992 elements in 31 dispatches of 32 lanes, each with
+  its own PDS slot (first index and count), and a final fence. It shows the
+  multi-dispatch CDM stream, the first-index and count order fixed after
+  set 27 (stored low word first; never run on a board), and a real
+  workload's throughput. It needs the package's input and output regions
+  in the image payload, a session variant that loads a package instead of
+  the fixed program, and host cases per profile, then the usual panel,
+  review and gate. Every set now continues a long-lived lifetime
+  (`board-session-20261025-36/port-3-1`): no cold DDR start, no power
+  removal, a warm-return chain from the lifetime's records.
+- **Clock and DVFS.** The GPU runs only at the vendor's top operating
+  point, 1,008 MHz from PLL_GPU0 with DCDC4 at 960 mV (the highest node of
+  `gpu_opp_table`, `include/a733_gpu_opp.h`). No DVFS: the 800, 600 and
+  400 MHz nodes are unused, and the power service admits DCDC4 only at the
+  node's voltages.
+- **Startup cost.** The CORE6 power-on to status 8 took 7.11 ms (set 27)
+  and 11.09 ms (set 29) on port 3-1. It dominates a session's startup
+  beside the firmware start (0.67 ms) and the health check (1.92 ms);
+  a service that powers the GPU per job pays it each time.
+- **License.** The PowerVR firmware binary is under `LICENSE.powervr`,
+  which forbids disassembly. Decode it only through the host driver
+  sources and the firmware-interface headers, and the board's own records.
+- **Open post-mortem field.** In set 27's capture the MMU status of the
+  recovery record names catalogue base 1, while the job's VM record shows
+  the catalogue-register field 0 after the firmware wrote it
+  ([first GPU job](gpu-first-job.md), "Set 27 post-mortem"). It did not
+  affect the fault's cause and is unexplained.
 
 ## Design panel
 
