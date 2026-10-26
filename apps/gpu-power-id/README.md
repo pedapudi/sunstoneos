@@ -272,6 +272,21 @@ of the firmware and GPU that runs the job's client CCB commands;
 `--board-log` with `--board-cases` compares a board log with chosen
 models.
 
+## The session variant runs eight timed jobs on one context
+
+`--fw-session` builds the first-job variant with `FWS_JOBS=8`
+([the job-session design](../../docs/designs/gpu-job-session.md)): after
+the first job, `pvr_compute_job_repeat` runs seven more on the same
+context, the client CCB wrapping before job 6. Each job is timed in
+counter ticks from its `MTS_SCHEDULE` write to the first read of its
+timeline value, by a spin that touches no register, and the image logs the
+times of its preparation, publication, `MMUCACHE`, jobs, cleanup and park.
+The first job that does not complete ends the sequence; the cleanup runs
+only when the firmware has finished with the context, and the stop powers
+the GPU off as in the first-job variant. The completion text is `COMPLETE
+GPU job session: 8 jobs as computed, context cleaned up, firmware stopped,
+OFF and provider parked`. `check.py --fw-session` runs twelve cases.
+
 A wrapper-write variant was refused before any board run and removed
 ([gpu-power.md](../../docs/gpu-power.md#the-wrapper-write-probe-was-refused)).
 

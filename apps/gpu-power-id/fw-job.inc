@@ -59,6 +59,18 @@ static struct pvr_ccb_token job_cleanup_token;
 static uint32_t job_mmu_status = UINT32_MAX;
 static struct pvr_ccb_token job_mmu_token;
 static uint32_t job_output_words[4];
+/* The job session (docs/designs/gpu-job-session.md): FWS_JOBS jobs on one
+ * context, each timed in counter ticks from the MTS_SCHEDULE write of its
+ * KICK (fws_mts_tick) to the first read of its timeline value. */
+#ifndef FWS_JOBS
+#define FWS_JOBS 1u
+#endif
+_Static_assert(FWS_JOBS >= 1 && FWS_JOBS <= 8, "one to eight jobs per session");
+/* A repeat starts only while this much of the timeline wait remains. */
+#define JOB_REPEAT_RESERVE_US 10000u
+static struct { uint64_t ticks, first; uint32_t passes, write; } job_runs[FWS_JOBS];
+static unsigned job_jobs;
+static uint64_t job_prepare_ticks, job_phase_ticks[4]; /* publish, mmu, jobs, cleanup */
 
 static uint64_t job_address(unsigned program, unsigned i)
 {
@@ -75,7 +87,15 @@ static int job_admit(void *context, const struct pvr_compute_job_config *c)
 /* Appends the six firmware objects to objects[from..], which pvr_mips_prepare
  * then maps. nc is the first free Normal-NC page. Returns 1 when every
  * allocation is placed, translated as required and built. */
+static int fws_job_build(uintptr_t nc, struct pvr_mips_object *objects);
 static int fws_job_prepare(uintptr_t nc, struct pvr_mips_object *objects)
+{
+    const uint64_t begun = fws_counter();
+    const int built = fws_job_build(nc, objects);
+    job_prepare_ticks = fws_counter() - begun;
+    return built;
+}
+static int fws_job_build(uintptr_t nc, struct pvr_mips_object *objects)
 {
     for (unsigned i = 0; i < JOB_OBJECTS; ++i) {
         job_object_pages[i] = nc + i * 4096u;
@@ -262,13 +282,34 @@ static int job_output_matches(void)
  * would fail the shared kernel CCB and with it the stop: the job's own
  * deadline is the session's, and the job reads its output only after this
  * function has found it correct. Returns 1 for a complete job. */
-static unsigned job_outcome; /* 1 complete, 2 no timeline, 3 output differs, 4 transport, 5 firmware event */
+static unsigned job_outcome; /* 1 complete, 2 no timeline, 3 output differs, 4 transport, 5 firmware event,
+                               * 6 too little of the wait left for another job */
+/* The timed wait for job n's timeline, entered in the loop pass that wrote
+ * its KICK: one counter read and one Normal-NC load per pass, no register
+ * access, no clock lock, no log line and no yield. It ends at the first read
+ * of n or at end (counter ticks). */
+static void job_spin(uint32_t n, uint64_t end)
+{
+    const volatile uint32_t *timeline = job_objects[5].storage.cpu;
+    const uint64_t kick = fws_mts_tick;
+    uint32_t passes = 0;
+    uint64_t first = 0, t;
+    for (;;) {
+        t = fws_counter();
+        const uint32_t value = *timeline;
+        if (!passes++) first = t - kick;
+        if (value == n || t >= end) break;
+    }
+    if (n >= 1 && n <= FWS_JOBS)
+        job_runs[n - 1] = (typeof(job_runs[0])){*timeline == n ? t - kick : 0, first, passes, job_client.write};
+}
 static int fws_job_run(uint64_t deadline)
 {
     struct bb_line line;
     int result = -1;
     unsigned stage = 1;
     const uint64_t wait_end = deadline - JOB_CLEANUP_US;
+    uint64_t phase_begun = fws_counter(), first_kick = 0, last_done = 0;
     for (unsigned i = 0; i < PVR_PROGRAM_REGIONS + PVR_JOB_REGIONS && stage; ++i) {
         const struct pvr_mips_buffer *d = i < PVR_PROGRAM_REGIONS ? &job_programs_backing[i] :
             &job_backing[i - PVR_PROGRAM_REGIONS];
@@ -283,6 +324,8 @@ static int fws_job_run(uint64_t deadline)
             if (bb_power_now() >= deadline) break;
         stage = r == A733_GPU_VM_MEMORY_OK ? 2 : 0;
     } else stage = 0;
+    job_phase_ticks[0] = fws_counter() - phase_begun;
+    phase_begun = fws_counter();
     /* pvr_mmu_flush_exec before the first KICK (pvr_job.c:806,
      * pvr_mmu.c:124-158): MMUCACHE (102) with the level-2 flags that a new
      * page catalogue requests (PT, PD, PC, TLB and the interrupt,
@@ -312,6 +355,7 @@ static int fws_job_run(uint64_t deadline)
             }
         }
     }
+    job_phase_ticks[1] = fws_counter() - phase_begun;
     static const struct pvr_cccb_ops client_ops = {fws_now, job_read, job_write, job_barrier};
     static const struct pvr_compute_job_ops job_ops = {fws_now, job_publish, job_read_fence, job_read_output};
     if (stage == 2 && pvr_cccb_init(&job_client, &client_ops, NULL, &queue, JOB_RING_BYTES,
@@ -322,6 +366,10 @@ static int fws_job_run(uint64_t deadline)
     } else stage = 0;
     if (stage == 3 && pvr_compute_job_init(&job, &job_config, &job_image, &job_ops, NULL, &job_client,
                                            bb_power.deadline)) {
+        /* The timed wait's end in counter ticks: the timeline wait's end. */
+        const uint64_t now = bb_power_now();
+        const uint64_t spin_end = fws_counter() + (wait_end > now ? wait_end - now : 0) * 24u;
+        uint32_t spun = 0;
         stage = 4;
         job_outcome = 4;
         for (;;) {
@@ -334,10 +382,26 @@ static int fws_job_run(uint64_t deadline)
                 if (value != job.sequence && bb_power_now() >= wait_end) { job_outcome = 2; break; }
             } else if (job.phase != PVR_JOB_READ_OUTPUT && bb_power_now() >= wait_end) break;
             result = pvr_compute_job_poll(&job);
-            if (result) { job_outcome = result == 1 ? 1 : 4; break; }
-            if (job.phase == PVR_JOB_WAIT_FENCE || job.phase == PVR_JOB_KICK) vTaskDelay(1);
+            /* The pass that wrote this job's KICK: time it at once. */
+            if (!result && job.phase == PVR_JOB_KICK && job_client.phase == PVR_CCCB_WAIT &&
+                job_client.serial == job.serial && spun != job.sequence) {
+                spun = job.sequence;
+                if (!first_kick) first_kick = fws_mts_tick;
+                job_spin(job.sequence, spin_end);
+                if (job_runs[job.sequence - 1].ticks) last_done = fws_mts_tick + job_runs[job.sequence - 1].ticks;
+            }
+            if (result == 1) {
+                ++job_jobs;
+                if (job_jobs == FWS_JOBS) { job_outcome = 1; break; }
+                if (bb_power_now() + JOB_REPEAT_RESERVE_US >= wait_end) { job_outcome = 6; result = -1; break; }
+                if (!pvr_compute_job_repeat(&job, bb_power.deadline)) { result = -1; break; }
+                result = 0;
+                continue;
+            }
+            if (result) { job_outcome = 4; break; }
         }
     }
+    job_phase_ticks[2] = last_done > first_kick ? last_done - first_kick : 0;
     /* A KICK the firmware has consumed is settled now, so the job line
      * reports its status and its slot is free before the cleanup. */
     if (job_client.phase == PVR_CCCB_WAIT && control.phase == PVR_GPU_CONTROL_READY) {
@@ -359,7 +423,15 @@ static int fws_job_run(uint64_t deadline)
     bb_line_dec(&line, "phase", job.phase); bb_line_dec(&line, "error", job.error);
     bb_line_dec(&line, "client", job_client.phase); bb_line_dec(&line, "client_error", job_client.error);
     bb_line_hex(&line, "kick_status", job_client.status); bb_line_hex(&line, "timeline", timeline);
+    bb_line_dec(&line, "jobs", job_jobs);
     bb_line_end(&line); bb_power_print(&line);
+    for (unsigned i = 0; i < FWS_JOBS && job_runs[i].passes; ++i) {
+        bb_line_start(&line, "GPU FWJ run");
+        bb_line_dec(&line, "n", i + 1); bb_line_dec(&line, "ticks", job_runs[i].ticks);
+        bb_line_dec(&line, "first", job_runs[i].first); bb_line_dec(&line, "passes", job_runs[i].passes);
+        bb_line_hex(&line, "write", job_runs[i].write);
+        bb_line_end(&line); bb_power_print(&line);
+    }
     /* The firmware events, the last one the control read (also one it
      * refused), and the first context reset notification's words. */
     const unsigned char *e = control.last_event;
@@ -414,11 +486,18 @@ static int fws_job_run(uint64_t deadline)
      * slot's own deadline is the end of the stop's acknowledged part, so a
      * cleanup the firmware consumes late fails the kernel CCB no sooner than
      * the acknowledged stop would end: the power requests queue behind it. */
-    /* The cleanup once the firmware has finished with the context: the job
-     * complete, never submitted, its timeline reached, or the context reset
-     * by the firmware. */
+    /* The cleanup once the firmware has finished with the context
+     * (docs/designs/gpu-job-session.md, "The image", step 4): the current
+     * job's timeline reached, the context reset by the firmware, or the
+     * current job never kicked (its client CCB serial still the previous
+     * job's, the timeline at the previous sequence). A kicked job whose
+     * timeline never arrived keeps the context live. */
+    const int never_kicked = job.phase == PVR_JOB_NEW ||
+        ((job_client.serial != job.serial || (job_client.phase != PVR_CCCB_WAIT && job_client.phase != PVR_CCCB_IDLE)) &&
+         timeline == job.sequence - 1);
+    phase_begun = fws_counter();
     if (stage >= 3 && queue.phase == PVR_CCB_ACTIVE && control.phase == PVR_GPU_CONTROL_READY &&
-        (result == 1 || job.phase == PVR_JOB_NEW || timeline == job.sequence || job_resets)) {
+        (timeline == job.sequence || job_resets || never_kicked)) {
         const uint32_t command[PVR_CCB_COMMAND_BYTES / 4] = {PVR_CCB_MAGIC | 106u, 0, 0, job_object_address[0]};
         uint64_t now = bb_power_now();
         if (pvr_ccb_submit(&queue, command, now, deadline + FWS_STOP_US - FWS_HARD_US, &job_cleanup_token) ==
@@ -431,6 +510,12 @@ static int fws_job_run(uint64_t deadline)
             }
         }
     }
+    job_phase_ticks[3] = fws_counter() - phase_begun;
+    bb_line_start(&line, "GPU FWJ phases");
+    bb_line_dec(&line, "prepare", job_prepare_ticks); bb_line_dec(&line, "publish", job_phase_ticks[0]);
+    bb_line_dec(&line, "mmu", job_phase_ticks[1]); bb_line_dec(&line, "jobs", job_phase_ticks[2]);
+    bb_line_dec(&line, "cleanup", job_phase_ticks[3]);
+    bb_line_end(&line); bb_power_print(&line);
     bb_line_start(&line, "GPU FWJ cleanup");
     bb_line_hex(&line, "status", job_cleanup_status); bb_line_dec(&line, "events", job_events);
     bb_line_hex(&line, "kccb_done", *shared_word(PVR_FW_OS_DATA, 568));

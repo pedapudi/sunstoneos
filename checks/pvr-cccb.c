@@ -128,12 +128,19 @@ static void session_cases(void)
         struct pvr_cccb_command cmds[]={command(96),{PVR_CCB_MAGIC|213u,8,0,0,payload}};
         ref_control.read_offset=ref.write_offset;put(control+4,ref.write_offset);
         assert(pvr_cccb_cmdseq_fits(&ref,184));
+        if(n==5) {
+            /* The firmware still at the start of job 5 (read offset 736):
+             * job 6 needs 184 bytes plus the 104 padded, and 839 are free,
+             * so the space check passes at once. Sequential jobs never wait
+             * for ring space; pressure_cases covers the wait. */
+            put(control+4,736);
+        }
         assert(pvr_cccb_begin(&client,cmds,2,NULL,0,now+1000));
         for(unsigned i=0;i<2;++i)pvr_cccb_write_command_with_header(&ref,cmds[i].type,cmds[i].bytes,
             (void *)cmds[i].payload,cmds[i].external_reference,cmds[i].internal_reference);
         finish();assert(client.status==1 && client.write==ref.write_offset);
         assert(client.write==(n<5 ? 184u*(n+1) : 184u*(n-4)));
-        assert(!memcmp(ring+32,expected,1024) && get(last_kick+12)==client.write);
+        assert(!memcmp(ring+32,expected,1024) && get(last_kick+12)==client.write && get(last_kick+16)==1023);
         if(n==5) {
             assert(get(ring+32+920)==(PVR_CCB_MAGIC|221u) && get(ring+32+924)==64);
             assert(get(ring+32)==(PVR_CCB_MAGIC|PVR_CCCB_TASK|205u) && get(ring+32+136)==(PVR_CCB_MAGIC|213u));

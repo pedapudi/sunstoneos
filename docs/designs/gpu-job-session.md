@@ -1,6 +1,6 @@
 # Several timed GPU jobs in one firmware session
 
-Status: **designed; not implemented.** It follows the first GPU job, which
+Status: **implemented and host-checked; not yet run on a board.** It follows the first GPU job, which
 passed on port 3-1 in set 29 ([first GPU job](gpu-first-job.md)): one
 32-lane compute job between the firmware's health check and its stop. This
 step runs eight jobs on one context in one firmware session, times each
@@ -149,9 +149,13 @@ sessions: the image ends at the OFF.
 - `checks/pvr-cccb.c`: eight two-command jobs through the 1,024-byte ring,
   compared with upstream's bytes after every job: the padding command at
   920 (type 221, size 64) before job 6, job 6 at 0, each KICK's write
-  offset and wrap mask; and a firmware read offset that lags at job 6, so
-  that the space check waits.
-- `apps/gpu-power-id/check.py --fw-session` on the eight-job image, with a
+  offset and wrap mask; and a firmware read offset still at job 5's start
+  (736) when job 6 is written, which leaves 839 bytes free for the 288
+  needed. Because each job completes before the next is written, the ring
+  never waits for space in this session; the existing pressure cases cover
+  the wait.
+- `apps/gpu-power-id/check.py --fw-session` (twelve cases) on the
+  eight-job image, with a
   firmware model that runs every KICK and follows the padding command:
   - eight complete jobs: timeline 8, every job's words, `kccb_done=0xb`
     after the cleanup, the per-job, phase and park lines;
@@ -163,7 +167,8 @@ sessions: the image ends at the OFF.
     completes);
   - a timeline that jumps, so job 6's publish refuses before its KICK: the
     never-kicked branch of the cleanup rule;
-  - the worst-case log under 16,128 bytes.
+  - the worst-case log under 16,128 bytes: eight jobs, a reset at job 8
+    and no power acknowledgement, 13,683 bytes in the host model.
 - The set-29 image (`--fw-job`, one job) still passes its thirteen cases.
 
 ## Predictions
