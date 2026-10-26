@@ -250,26 +250,24 @@ to the stated scope:
   remote-writer exclusion, memory ownership/publication, physical reset/boot,
   media loading/writes or recovery.
   A [stage-2 loader and two-slot card layout](boot-slots.md) are **implemented**.
-  The loader verifies both slot headers and their SHA-256 extent hashes, loads
-  the newest valid slot and reports the outcome; the host tool plans installs,
-  updates and rollback as one storage session per changed card range. With its
-  entry prerequisites granted, the loader arms WDT0, builds the resident
-  contract of the [integrated OS image](os-image.md), for the 808-byte session
-  or the microphone build's 992-byte session, and branches to it. Host and
-  instruction-model checks pass.
+  The loader verifies slot headers and SHA-256 extent hashes and selects the
+  newest valid slot. The resident recorded bundle includes the actual monitor,
+  OS, session, both models and recording through the existing backup-first
+  storage plans. Eight inference workers and CPU operating-point grants are
+  supported; entry binds the board identity and derives fresh session/grant
+  epochs. Twenty-four producer cases and twenty linked entry/admission cases
+  pass under `resume-card-os-1026/`. The monitor occupies 32,560 of 32,768 bytes.
   [Cold SD admission](boot-slots.md#cold-sd-admission-starts-from-boot0s-controller-state)
-  is **implemented**. The loader compares the SDC0 bus, clock, pin, bank-voltage
-  and controller state that boot0 leaves with the pinned boot0 and the manual.
-  It then makes PF6 a card-detect input and sets the SDC0 module clock to
-  400 kHz, reading back each write. Host models cover the comparison and its
-  refusals. The card supply after boot0, boot0's module clock and exclusive use
-  of SDC0 need a board observation. Admitted slots load at about 25 KB/s, so a
-  multi-megabyte slot takes several minutes. The three entry prerequisites still
-  refuse: remote-writer exclusion, watchdog recovery after a cold boot and a
-  comparison of the boot0 entry state. The loader therefore enters no image on
-  a board. No card has been written and no board has run the loader. Standalone OS boot
-  therefore remains incomplete; packer licensing and exact source equivalence
-  remain unresolved.
+  checks inherited controller and pin state. Loading then uses the existing
+  3.3 V, 50 MHz, four-bit DMA path, with bounded transfers and guarded tails.
+  Sixteen linked cases pass under `resume-stage2-sd-1026/`. Physical DMA
+  throughput and cold-card supply/controller state remain unqualified.
+  Local entry and normal-card reset-policy checks are implemented. Stable
+  secondary-core exclusion and non-Arm memory-writer exclusion still refuse
+  physical boot. Boot0 covers the documented shared L3 cache; the remaining
+  Arm issue is preventing secondary wake during ownership transfer. No card
+  installation or physical autonomous OS boot has occurred. Packer licensing
+  and exact source equivalence remain unresolved.
   The [cache-wrapper audit](cold-entry.md#the-parser-cleans-cpu-caches-before-returning)
   separately executes the actual parser enable/clean-disable wrappers and all
   twenty expected set/way operations for one synthetic hierarchy. Earlier parser
@@ -605,16 +603,20 @@ to the stated scope:
   its link check. The local mimus revision `9c57286b7` supplies the exact-sum
   hook; publishing that revision still requires user approval. Physical GPU
   execution and end-to-end recognition qualification remain outstanding.
-  A supervised launcher and session preparation exist; preparation needs a reviewed entry record from physical evidence and
-  refuses the radio and headset builds until it stages their profile and
-  firmware. [The recorded-audio launch](os-image.md#first-bounded-launch-with-recorded-audio)
+  Supervised recorded two-worker GPU preparation and bounded caller waits are
+  now implemented. Timeout or uncertain completion retains buffers and device
+  ownership. Five linked cases and seventeen host cases pass under
+  `resume-gpu-wait-20261026/`; physical integrated recognition remains unqualified.
+  A supervised launcher and session preparation exist. Preparation requires a
+  reviewed entry record from physical evidence and stages authenticated radio
+  and headset profiles and firmware for those builds. [The recorded-audio launch](os-image.md#first-bounded-launch-with-recorded-audio)
   states which build admits board workload 2, staged recorded recognition
   without a USB disk. The supervised radio and headset builds also need a
   qualified faster SDIO mode for firmware loading
   ([remaining OS work](os-image.md#not-yet-integrated)). The resident
   image depends on the stage-2 entry prerequisites.
-  No board has run any variant. Display, camera and NPU remain separate
-  images; GPU linear execution is an optional OS build.
+  No board has run any variant. Display and camera remain separate images;
+  GPU linear execution and the NPU service are optional OS builds.
 - Timers and recovery: **tested** for the nonsecure tick and an EL3 secure-timer
   timeout that returns a stalled EL1 to FEL. This does not qualify the independent
   hardware watchdog, every interrupt source, or arbitrary failure recovery.
@@ -1814,8 +1816,11 @@ to the stated scope:
   `radio-startup-facts-1026/`. This does not resolve fitted rails, PM2 suitability
   or physical operation. OS firmware/profile staging and frozen validation are
   implemented with 38 focused cases under `radio-os-staging-1026/`, using the
-  accepted native image. The supervised bootstrap still needs the existing
-  fast SDIO mode selected and qualified. [Identity-message encoding and decoding](radio-codec.md)
+  accepted native image. Normal firmware owners now select four-bit 25 MHz
+  SDIO and reject slow fallback before borrowing the card. Bluetooth batches
+  advancing bootstrap steps within the existing time budget. The combined
+  native build and focused owner/session/preparation checks pass under
+  `radio-bootstrap-rate-1026/`; physical loading and timing remain unqualified. [Identity-message encoding and decoding](radio-codec.md)
   are implemented, with host sanitizer and AArch64 compile evidence. The
   [bootstrap and board mapping](radio.md) remains source-based research, with a
   host-tested Bluetooth patch-table inspector. Published software identifies
@@ -1986,11 +1991,11 @@ to the stated scope:
   `a733_deadline_after_saturating()`.
   The [native radio platform](radio-platform.md) composes SDC1/card, pin, clock,
   rail and PMIC ownership with bounded power/reset timing and a borrowed card
-  lifetime. Host checks and native compilation pass. Its initial profile uses
-  one data line at 400 kHz. An optional four-bit 25 MHz SDIO profile is
-  **implemented** with the bootloader's default-speed delays and verified
-  readback; host checks pass. No image requests it until a physical identity
-  read qualifies it, so radio bootstrap still exceeds the 40 s supervised bound.
+  lifetime. Host checks and native compilation pass. Initial identification uses
+  one data line at 400 kHz. Normal OS firmware owners then request the existing
+  four-bit 25 MHz profile, using the bootloader's default-speed delays and
+  verified readback. Slow fallback is rejected before firmware transfer.
+  Physical fast-bus operation and startup duration remain unqualified.
   Receive accepts aggregates of up to 112 blocks, read with one CMD53 of up to
   57,344 bytes whose deadline scales with its length. Firmware upload can write
   long patch-table runs as block writes; that option stays off until a hardware

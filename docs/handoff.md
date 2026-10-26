@@ -66,11 +66,9 @@ does not establish recovery from a fault.
 
 | Work | Branch | Immediate deliverable |
 | --- | --- | --- |
-| Cold OS bundle | `work/resume-card-os-1026` | Bind the actual stage-2 monitor, resident OS, fresh session and mimus assets into one install bundle |
-| Cold SD reads | `work/resume-stage2-sd-1026` | Reuse high-speed four-bit reads and DMA under explicit cold ownership and cache prerequisites |
-| Cold entry | `work/cold-admission-audit-1026` | Separate normal card reset policy from FEL diagnostics and establish entry/writer/cache prerequisites |
-| Radio startup | `work/radio-bootstrap-rate-1026` | Select the existing fast SDIO path with honest prerequisites and viable firmware-loading bounds |
-| GPU recognition | `work/resume-gpu-wait-1026` | Bound caller waits and integrate supervised recorded recognition without relying on watchdog expiry |
+| Cold entry | `work/cold-arm-cache-audit-1026` | Establish a source-backed secondary wake/reset ownership sequence; non-Arm writer exclusion remains separate |
+| Bluetooth startup | `work/radio-bootstrap-rate-1026` | Audit the remaining bootstrap deadline and first-readiness semantics after integrating fast SDIO startup |
+| GPU integration | `work/resume-gpu-wait-1026` | Verify the merged link checker against the frozen supervised GPU image |
 
 Independent reviewers cover CPU/thermal/DRAM, accelerator operation and peripheral
 integration. Workers reuse successful evidence and submit focused checks. The
@@ -101,16 +99,25 @@ be pruned.
 
 ## Known problems and next steps
 
-- **An autonomous OS card bundle is not complete.** The restore packager's
-  accepted monitor was a 268-byte host fixture, not the actual stage-2 OS
-  loader. Current stage-2 entry checks still refuse, and no producer yet binds
-  the resident OS, session, models and recording into a complete install.
-  Resident recorded recognition also needs supervision of its selected tasks;
-  the existing service list waits for tasks that this workload does not start.
-  Stage 2 still uses identification-speed SD reads. Separate workstreams now
-  address the bundle, fast reads and cold admission. OR100/CE exclusion and
-  other-core/shared-cache ownership remain genuine prerequisites; local cache
-  disable or a non-Arm writer mask does not establish them.
+- **The resident recorded OS card bundle is implemented and software-checked.**
+  It binds the actual stage-2 monitor, resident OS, session, models and recording
+  into the existing backup-first slot plan. Eight inference workers and the
+  existing CPU operating-point policy are supported. Each boot derives fresh
+  session and CPU-grant epochs; supervision follows the tasks actually selected.
+  Twenty-four host cases and twenty linked entry/admission cases pass under
+  `~/.cache/sunstoneos/evidence/resume-card-os-1026/`. The combined monitor is
+  32,560 bytes, leaving 208 bytes in its fixed 32 KiB reservation.
+  Stage 2 now uses the existing 3.3 V, 50 MHz, four-bit DMA reader with bounded
+  transfers and guarded partial sectors. Sixteen focused linked cases pass under
+  `~/.cache/sunstoneos/evidence/resume-stage2-sd-1026/`; physical throughput is
+  unmeasured. Local cold-entry and normal-card reset checks are implemented.
+  Actual boot still refuses until non-Arm memory writers and stable secondary
+  CPU exclusion are established. The documented shared L3 cache is covered by
+  boot0 maintenance; it is no longer an unresolved cache-hierarchy question.
+  An OFF observation alone cannot exclude a later autonomous wake. Reset-hold
+  initialization also needs a race-free assertion and an owned OS release.
+  Source evidence is under `cold-arm-cache-followup-1026/`. No card installation
+  or physical autonomous OS boot has occurred.
 
 - **CPU returning image layout is repaired.** Both workload profiles fit
   the existing 16 KiB reservation. The ordinary profile has 3,004 bytes free;
@@ -138,6 +145,15 @@ be pruned.
   path selected 1008 MHz. The power sequence is unchanged. A focused actual
   bind-to-serializer check verifies both firmware fields and unchanged refusals
   under `~/.cache/sunstoneos/evidence/resume-gpu-wait-20261026/clock/`.
+- **GPU recognition waits and supervised preparation are implemented.**
+  Accepted requests have bounded caller waits. Timeout or uncertain completion
+  retains the job buffer and device ownership. Recorded two-worker preparation
+  binds the actual linked lifetime/session metadata and concrete entry evidence.
+  Five linked cases, seventeen host cases and selected caller/lifecycle checks
+  pass under `~/.cache/sunstoneos/evidence/resume-gpu-wait-20261026/`.
+  Added storage is 1,288 executable bytes, 56 mutable bytes and 32 read-only
+  bytes. Completion copies one eight-byte reply; workload buffers are not copied.
+  Physical GPU recognition, failure drain and recovery remain unqualified.
 - **NPU interrupt waits are bounded in software.** Pending mask, rearm and
   stop callbacks expire after 10 ms plus one scheduler tick, observed on the
   next worker pass. Expiry retains resources; it does not prove hardware drain.
@@ -244,9 +260,13 @@ be pruned.
   to exact images, session facts and fixed nonoverlapping ranges. Frozen
   validation re-derives the upload plan without live-path fallback. Thirty-eight
   focused cases pass under `~/.cache/sunstoneos/evidence/radio-os-staging-1026/`;
-  the accepted native radio/headset image is reused. The default slow SDIO
-  profile cannot meet supervised firmware-loading deadlines, so fast-mode
-  selection and physical qualification remain outstanding.
+  the accepted native radio/headset image is reused. Normal firmware owners now
+  select the existing four-bit 25 MHz mode and reject slow fallback before
+  borrowing the card. Bluetooth bootstrap batches advancing steps within its
+  existing time budget. The native combined image and focused owner, session,
+  preparation and budget checks pass under `radio-bootstrap-rate-1026/`.
+  Host preparation requires the verified parent clock and linked fast-mode
+  capability. Physical firmware loading and timing remain unqualified.
   The camera stream uses two slots and polls capture during each copied chunk.
   It exports one immutable frame, then reports retained hardware because packet
   drain is unproven. Native/model/host evidence is frozen under
