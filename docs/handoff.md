@@ -1,3 +1,92 @@
+# Start here
+
+This section states where SunstoneOS bring-up stands. The sections after it
+are the dated record that produced it; read them only for a subsystem's
+history.
+
+## Board access
+
+- **Boards:** two Allwinner A733 boards, on USB ports 3-1 and 3-3. Both are
+  powered only through USB, and both are in speed bin 4.
+- **Power cycles:** the user cannot power-cycle either board until further
+  notice (since 2026-10-25).
+- **Current lifetimes:** each board holds one lifetime in
+  `~/.cache/sunstoneos/evidence/board-session-20261025-36/port-3-<n>`: a
+  standard cold DDR start (`s7-ddr`), then two read-only DRAM captures. Until
+  the user returns, only images that return to FEL and continue these
+  lifetimes may run, with warm-return lists that start from those records.
+- **What waits for the user:** anything that needs a fresh lifetime, an
+  operator at the board, or a power removal at the end.
+- **Who runs boards:** only the coordinating agent operates the boards,
+  through `tools/board-test-queue.py` with the coordinator token at
+  `~/.cache/sunstoneos/board-test-coordinator.token`.
+
+## Qualified on the boards
+
+- **CPU:**
+  - All eight cores ran a timer and interrupt workload at the vendor top
+    points for bin 4: A76 at 2002 MHz and 1050 mV (DCDC3), A55 at 1794 MHz
+    and 1000 mV (DCDC5), DSU at 1274 MHz (CPU step 6, port 3-3).
+  - A return to the boot ROM resets the CPU-L and DSU PLLs but not the CPU-B
+    PLL, so every image lowers CPU-B before a successful return.
+- **Memory bus:** the MBUS restore to 600 MHz at every EL3 entry passed on both
+  boards.
+- **GPU:**
+  - Power on and off, firmware start, health check and stop, all from the
+    open DDK only.
+  - One compute job, then eight jobs in one firmware session (80 to 113 µs
+    per job), on port 3-1.
+  - The GPU runs at the vendor top point, 1,008 MHz at 960 mV.
+- **NPU:**
+  - Startup in 4.0 ms, with completion signalled by interrupt.
+  - ShuffleNetV2 in 2.91 ms at 852 MHz, the vendor top point; the per-job
+    overhead is 0.24 ms.
+- **microSD:** returning reads at high speed (3.3 V, 50 MHz, 4-bit); all 256
+  reads completed.
+  - SDR104 is not qualified: its 1.8 V switch stopped at CMD11.
+  - Throughput is 1.4 to 1.7 MB/s until DMA is built.
+- **DRAM training restore:** captures from ten lifetimes fix a per-board
+  restore set of 1,069 registers. Initialization without training takes
+  36 ms, against 5.1 s to train all four P-states. The restore itself is
+  designed but not built.
+
+## Active branches
+
+The branch notes under "Next steps" in each design document say what remains.
+- **`work/cpu-top-opp-step6-1025`:** CPU top points, step 6 and its
+  analysis. Step 7, the sustained load, needs the 70 °C OS thermal stop and an
+  operator.
+- **`work/sd-returning-1025`:** returning SD reads, the CMD11 diagnosis and
+  the DMA design.
+- **`work/dram-fast-boot-1025`:** DRAM captures and analysis, the restore
+  design and the `dram-restore-test-1` runbook.
+- **`work/perf-modes-1025`:** the high/low performance-mode toggle. It needs
+  its independent review, and its board run follows CPU step 7.
+
+Most of the other `work/*` branches are superseded or already merged and can
+be pruned.
+
+## Rules every agent follows
+
+- **No `rm`:** use `~/.cache/sunstoneos/bin/clean-generated.py`, or move
+  files to `~/.cache/sunstoneos/trash/`.
+- **Reference first:** derive every board sequence from the vendor sources,
+  Linux, TF-A and vendor blobs before a board run. Check a blob's license
+  first: the PowerVR firmware and the Vivante libOpenVX forbid disassembly.
+- **Vendor top points by default:** default every block to the vendor's
+  highest operating point for the chip's speed bin. Lower clocks are optional
+  modes, never the default. The user has approved the CPU, GPU and NPU clock
+  and voltage changes, and 1.8 V microSD signalling.
+- **The gate for every change:**
+  - a design note through the performance and simplicity panel;
+  - the implementation;
+  - an independent three-lens review that converges;
+  - measurement;
+  - `tools/integration-gate.py` with an explicit `--reason`.
+
+  Then merge into `bringup` without piping `git merge`, checking for unmerged
+  paths, and push after a secret scan. No co-author lines.
+
 # Current work
 
 **Development resumed on 2026-10-24 at the user's request.** The board-free
