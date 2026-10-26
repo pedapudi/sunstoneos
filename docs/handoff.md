@@ -119,8 +119,8 @@ After cold DDR and readiness, one image ran:
 - the 14-step stop, then OFF and provider park.
 
 The image returned to a responsive ROM with the GPU off, so a firmware run
-no longer needs a power removal. The merge into `bringup` waits on a
-`tools/prepare-board-bundles.py` row conflict with the CPU rows.
+no longer needs a power removal. `work/gpu-fw-stop-1025` is merged; its
+bundle row is now 25, while frozen sets 21 and 23 call it 20.
 
 **DRAM training capture, port 3-3** (`board-session-20261025-21/port-3-3`,
 set `dram-training-capture-v3-20261025`): cold DDR (12,288 MiB), then two
