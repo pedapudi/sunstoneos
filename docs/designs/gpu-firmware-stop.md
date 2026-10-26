@@ -1,7 +1,7 @@
 # Stopping the GPU firmware and its first command
 
-Status: **step (a)+(b) ran on port 3-1 and stopped at the health check;
-the fix is implemented, host-checked and frozen for port 3-1, not yet run.**
+Status: **steps (a) and (b) passed on port 3-1 after one fix; step (c) is
+frozen for port 3-1, not yet run.**
 
 The firmware start passed on port 3-1: the open firmware reported started
 672 µs after the release of its processor
@@ -243,10 +243,19 @@ Controlled failure states:
 
 ### Step (c): a second start in the same lifetime
 
-After step (a)+(b) passes, the same image runs again in that lifetime,
-without a power removal. Its start then begins from a stopped firmware and
-an OFF GPU, so a second COMPLETE line shows that the stop leaves a state
-from which the firmware starts again. This step is planned, not frozen.
+Set `board-bundles-20261025-23` passed on port 3-1
+(`board-session-20261025-20`, `s20-gfx-run`) with every predicted line: the
+health check completed in 1.9 ms with the executed count going from 0 to 1
+and no return word, both power requests were acknowledged with
+FORCED_IDLE and OFF, and the stop took its 14 steps in 23 ms before the OFF
+and the park.
+
+Step (c) runs that image (bundle 25, loadable bytes `c88ba19c…`) and then
+the same image again as bundle 26 in the same lifetime, without a power
+removal. The second start begins from a stopped firmware and an OFF GPU,
+so a second COMPLETE line shows that the stop leaves a state from which
+the firmware starts again. It is frozen in set `board-bundles-20261025-25`
+for lifetime `board-session-20261025-22`.
 
 ## Design gate
 
