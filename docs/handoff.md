@@ -67,7 +67,9 @@ does not establish recovery from a fault.
 | Work | Branch | Immediate deliverable |
 | --- | --- | --- |
 | GPU performance control | `work/resume-gpu-performance-1026` | Derive and review bounded runtime clock/voltage changes through existing owners and firmware notification |
-| Maintenance backup DMA | `work/resume-maintenance-dma-1026` | Use the existing bounded DMA reader for larger backup requests while preserving single-sector writes and backup-first authority |
+| Maintenance USB delivery | `work/resume-maintenance-usb-1026` | Review bounded progress bursts for large backup responses while preserving completion ownership and scheduler fairness |
+| Resident performance service | `work/resume-resident-performance-1026` | Implement runtime clock authority and bounded stopped-NPU retuning for the microSD-booted service, then compose with GPU control |
+| Native camera resolutions | `work/resume-camera-modes-1026` | Implement the reviewed full OV5640 UYVY size range, bounded memory profile and table capacity for still and finite-stream capture |
 
 Independent reviewers cover CPU/thermal/DRAM, accelerator operation and peripheral
 integration. Workers reuse successful evidence and submit focused checks. The
@@ -281,6 +283,17 @@ be pruned.
   Focused producer and decoder checks pass under
   `~/.cache/sunstoneos/evidence/sd-first-read-host-1026/`; the existing 240-read
   measurement mode remains available. No physical test ran.
+- **Maintenance backups use the existing SD DMA reader.** High-speed SD
+  reads take up to sixty-four sectors; legacy profiles retain eight-sector PIO
+  reads. Writes remain one-sector PIO with DMA readback in the high-speed
+  profile. Private buffers and descriptors, cache-line isolation and request
+  bounds preserve the existing backup-first and failure-retention rules.
+  Focused host/provider sanitizer and linked native/cache/USB cases pass under
+  `resume-maintenance-dma-1026/snapshot-final/`. The image adds 2,040 code bytes
+  and 107,776 live BSS bytes, and enables a 2 MiB noncacheable reservation using
+  528 descriptor bytes. Storage command count falls eightfold for large backups;
+  physical throughput, DMA, writes and recovery remain unqualified. The USB
+  task still waits one tick per pass; bounded progress bursts are the next step.
 - **Paired DRAM training records are implemented.** Selection chooses the newest
   eligible record; updates write the standby payload before its header and
   preserve the other copy. Thirty-two focused cases, including interruption

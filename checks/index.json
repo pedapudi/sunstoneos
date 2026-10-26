@@ -9832,6 +9832,21 @@
   "summary": "Compare the portable storage SHA-256 with hashlib on the host and AArch64.",
   "usb": false
  },
+ "storage-maintenance-dma.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/storage-update.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--observed-session",
+   "--output"
+  ],
+  "summary": "Execute the linked maintenance DMA adapter and USB framing; no hardware access.",
+  "usb": false
+ },
  "storage-read-binding.py": {
   "cache_areas": [],
   "docs": [],

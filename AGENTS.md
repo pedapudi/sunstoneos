@@ -149,8 +149,11 @@ second build while preserving checks for the actual requested application.
 - For each integration, keep one implementation owner and one reviewer. Review concrete
   ownership, concurrency and device behavior before execution; report only new
   findings. Integrate completed work before adding another workstream.
-- A message to a running reviewer updates its current task; a reviewer that has
-  finished needs a new follow-up request.
+- Activate a reviewer when its concrete design or final source/evidence is ready.
+  For shared team reviewers, the coordinator starts each review turn from that
+  submission. A message to a completed reviewer does not start work; use a
+  follow-up request. Relay through the coordinator after a sibling lookup fails
+  instead of repeating the lookup or assuming that review is running.
 - Give implementation and debugging to an implementation agent, and focused
   correctness review to a separate reviewer agent. Use lower reasoning effort
   only for mechanical edits and evidence reconciliation. Give each agent concise

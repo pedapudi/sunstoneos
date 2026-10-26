@@ -833,11 +833,16 @@ to the stated scope:
   pass. The complete [maintenance image and launcher](storage-maintenance-launch.md)
   are integrated; focused instruction and host checks pass. A session word now
   lets the maintenance image select the four-bit default-speed or high-speed SD
-  profile; zero keeps one data line at 400 kHz. Backup reads take up to eight
-  sectors per request, while writes stay at one sector per request because the
-  one-second operation deadline must cover SD programming busy time. Connected
-  host checks pass, including a high-speed backup, update and restoration of 20
-  sectors against modeled media. No profile has written physical media. The separate
+  profile; zero keeps one data line at 400 kHz. High-speed SD backups now use
+  up to sixty-four sectors per DMA read; legacy profiles retain eight-sector PIO.
+  Writes remain one-sector PIO, followed by DMA readback in the high-speed
+  profile under the same deadline. The existing backup-first authority, cache
+  isolation and uncertain-completion retention remain required. Focused native
+  and host/provider checks pass under `resume-maintenance-dma-1026/snapshot-final/`,
+  including a sixty-four-sector read plus tail, write/readback sequencing and
+  complete USB delivery. The image adds 2,040 code bytes and 107,776 live BSS
+  bytes, with a 2 MiB noncacheable reservation using 528 bytes for descriptors.
+  No profile has written physical media or measured DMA backup throughput. The separate
   [supervised read-only SD service](storage-read-application.md) identifies the
   card and serves repeated ranges of one to eight sectors to two native clients.
   One controller owner copies results into separate client slots; matching
