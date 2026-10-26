@@ -138,6 +138,16 @@ one lifetime with no power removal between, and both runs completed: the
 firmware restarts cleanly. `work/gpu-fw-stop-1025` is merged; its
 bundle row is now 25, while frozen sets 21 and 23 call it 20.
 
+**First GPU compute job failed on port 3-1** (set `board-bundles-20261025-27`,
+`board-session-20261025-22/port-3-1`, record `s22-gfj-run`). Firmware start
+and the health check passed. The fixed 32-lane job then did not complete:
+outcome 4, timeline word 0x1, and output word 0 is the bitwise inverse of the
+expected value. Cleanup returned 0xffffffff and the firmware stop was refused,
+so the image returned to FEL with the GPU still powered. The stop does not yet
+power off the GPU after a failed job; that is a defect. The fix and the
+diagnosis against the open DDK are in progress on `work/gpu-first-job-1025`,
+which stays unmerged.
+
 **DRAM training capture, port 3-3** (`board-session-20261025-21/port-3-3`,
 set `dram-training-capture-v3-20261025`): cold DDR (12,288 MiB), then two
 read-only captures, each with all six stages complete. This is the first
