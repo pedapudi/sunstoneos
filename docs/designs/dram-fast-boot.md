@@ -149,10 +149,15 @@ Two parameter bits connect the region to training:
   `SequenceCtrl` does not change, so the firmware still runs every
   training step.
 
-The board runs with `dram_tpr1` = 0, `dram_tpr10` = `0x925f0000` (bit 29
-clear) and `dram_tpr13` = `0x10065` (bits 0, 2, 5, 6 and 16; bit 6 selects
-two channels at `0x578ac`). The vendor path therefore seeds training with
-saved Vref values and cannot remove the 4.4 s run.
+The board runs with `dram_tpr1` = 0 and `dram_tpr13` = `0x10065` (bits 0,
+2, 5, 6 and 16; bit 6 selects two channels at `0x578ac`). The stored
+parameter set 5 holds `dram_tpr10` = `0xb25f0000`, so bit 29 is set during
+training and boot0 runs the save on every boot; it then clears the bit,
+which is why the reported value is `0x925f0000` (confirmed on a board: the
+first port 3-3 capture, `board-session-20261025-21`, reads words 32–51
+filled and equal in both captures of the lifetime). With bit 29 set during
+training, the block at `0x55a98` does not run. The vendor path therefore
+saves and seeds Vref values and cannot remove the 4.4 s run.
 
 Other Allwinner loaders show the same family of mechanisms:
 
@@ -234,9 +239,8 @@ lifetime after a power removal, except where a run continues one.
    `MicroContMuxSel` and `UcclkHclkEnables`, each restored. boot0 itself
    clears and sets `MicroContMuxSel` around PHY reads after every training
    (`0x5767a`–`0x5768a`), and NXP's driver writes both. *Predictions:* training as in the table,
-   12,288 MiB, four stages complete, `MicroContMuxSel` read as 1, words
-   0–31 of the parameter block equal to earlier captures and words 32–127
-   zero.
+   12,288 MiB, all stages complete, `MicroContMuxSel` read as 1 and words
+   0–31 of the parameter block equal to earlier captures.
 2. **Second capture** in another lifetime. Registers that differ between
    the two captures are trained values; equal ones are configuration or
    values that training reproduces.

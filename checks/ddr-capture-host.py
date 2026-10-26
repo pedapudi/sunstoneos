@@ -48,8 +48,10 @@ def run_case(case, build, out, extra=()):
     ddr = out / "ddr"
     ddr.mkdir()
     complete = case != "ddr-incomplete"
-    (ddr / "session.json").write_text(json.dumps({"complete": complete, "result": {
-        "magic": 0x53524444, "stage": 5, "board_result": 0, "dram_mib": 12288}}))
+    untrained = case.startswith("untrained")
+    (ddr / "session.json").write_text(json.dumps({"complete": complete, "untrained": untrained,
+        "manifest": {"variant": "init-only"} if untrained else {}, "result": {
+        "magic": 0x53524444, "stage": 5, "board_result": 0, "dram_mib": 0 if untrained else 12288}}))
     (ddr / "mailbox.bin").write_bytes(MAILBOX)
     memory = {}
     manifest = json.loads((build / "manifest.json").read_text())
@@ -184,6 +186,12 @@ def main():
     assert [s["name"] for s in record["stages"]] == [s["name"] for s in stages[:2]]
     assert [entry for entry in log if entry[0] == "exe"] == [("exe", 0x71000)] + [("exe", 0x85000)] * 2
 
+    outcome, record, log, events = run_case("untrained", args.build, args.evidence / "untrained",
+                                            ["--allow-untrained"])
+    assert outcome == "returned" and record["complete"] and record["ddr_variant"] == "init-only"
+    outcome, record, log, events = run_case("untrained-refused", args.build, args.evidence / "untrained-refused")
+    assert outcome == "exit" and record is None and not log
+
     outcome, record, log, events = run_case("ddr-incomplete", args.build, args.evidence / "ddr-incomplete")
     assert outcome == "exit" and record is None and not log
 
@@ -196,7 +204,7 @@ def main():
     refused = [s["name"] for s in stages].index("phy-blocks") + 1
     assert [s["name"] for s in record["stages"]] == [s["name"] for s in stages[:refused]]
     assert not record["stages"][-1]["done"]
-    print("PASS: nominal capture order; a stage limit; incomplete DDR evidence, another lifetime's mailbox "
+    print("PASS: nominal capture order; a stage limit; an init-only DDR return only with --allow-untrained; incomplete DDR evidence, another lifetime's mailbox "
           "and an incomplete stage stop as required")
 
 

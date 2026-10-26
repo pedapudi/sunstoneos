@@ -67,7 +67,7 @@ Set the variables of [the README](README.md#names-used-in-every-runbook)
 with `PORT` set to the board, then:
 
 ```sh
-F=~/.cache/sunstoneos/evidence/dram-training-capture-20261025
+F=~/.cache/sunstoneos/evidence/dram-training-capture-v3-20261025
 C=$F/port-$PORT
 S=<a new session directory for a fresh lifetime of this board>
 T="<temperature note: room temperature, minutes since power-on, any load or heating>"
@@ -110,11 +110,29 @@ runner and the analysis uses stages 1 to 5. The other board continues independen
 
 ## Schedule
 
-- At room temperature, at least three lifetimes per board, so that the
-  classifier separates lifetime registers from board registers on each.
-- Later, the same steps at a different temperature, with `T` describing it,
-  for the drift study. The analysis groups captures by lifetime and chip ID
-  and records each capture's note.
+A register that training sets to one of two equally likely values looks
+constant over n lifetimes with probability 2 × 0.5^n: 1/16 for five
+lifetimes on one board and 1/512 over ten lifetimes when both boards behave alike. The
+diff between the P-state-0-only and initialization-only captures in the
+restore design catches registers that training sets to a repeating value,
+so the lifetime count only has to find the varying ones and estimate each
+one's spread.
+
+- **Room temperature:** five lifetimes per board of the four-P-state
+  captures above. The first port 3-3 lifetime ran on 2026-10-25
+  (`board-session-20261025-21`).
+- **Cold:** three lifetimes per board after at least one hour unpowered in
+  the coolest available place, with `T` giving that place's temperature.
+- **Warm:** three lifetimes per board started within a minute of removing
+  power after a sustained CPU and memory load, with `T` giving the load and
+  its duration.
+- **Reference kinds**, after the restore design's second review: three
+  P-state-0-only lifetimes and two initialization-only lifetimes per board,
+  as in [the variant section](#p-state-0-only-and-initialization-only-captures).
+
+The analysis groups captures by lifetime and chip ID and records each
+capture's note. A temperature reading needs a later THS read in the same
+lifetime; until one exists the note is the only temperature record.
 
 After each batch, on the host:
 
@@ -133,7 +151,7 @@ $PY -B $F/source/tools/analyse-ddr-captures.py <every dc-capture-N directory> \
 | `ucclk` | Recorded; no prediction | Not written by boot0 after training |
 | Stage 1 chip ID | Equal in every capture of a board, different between the boards | SID |
 | `parameter_block` words 0–31 | Equal to `dc-ddr/dram-parameters.bin` and to earlier captures, `dram_tpr13` = `0x10065` | boot0 copies 128 bytes into a zeroed buffer |
-| `parameter_block` words 32–127 | Zero | `dram_tpr10` bit 29 is clear, so `0x576e4` does not run |
+| `parameter_block` words 32–51 | Nonzero and equal in the two captures of a lifetime; words 52–127 zero | boot0's save routine `0x576e4` runs every boot, because stored set 5 has `dram_tpr10` bit 29 set (the first port 3-3 lifetime showed this; the prediction before it said zero) |
 | Stage 2 values | Each halfword below `0x80` | 7-bit fields that boot0's save routine masks |
 | Classifier, after three lifetimes per board | Controller words mostly constant; PHY byte-lane and message-block registers include lifetime-class values; status registers few and confined to the APB-only, DRTUB and message-block areas | The PHY's training writes lane registers; the mailbox and handshake registers change on their own |
 | Classifier, both boards | Board-class registers include stage 1 and part of the byte-lane registers | Chip ID and per-chip training |

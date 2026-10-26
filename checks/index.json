@@ -2933,7 +2933,7 @@
    "build"
   ],
   "summary": "Check wrapper control flow and FEL preservation with simulated blob calls.",
-  "usb": false
+  "usb": true
  },
  "deinterlace-boot.py": {
   "cache_areas": [],

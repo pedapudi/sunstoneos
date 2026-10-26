@@ -46,14 +46,15 @@ lifetime, board or constant. Three kinds of capture feed the restore set:
    registers, minus the status class, each with the bit mask of the bits
    that differ.
 
-The capture must also record the LPDDR5 mode registers. Parameter words 50
-and 51 stay zero in every normal capture (`dram_tpr10` bit 29 is clear, and
-the fill at `0x49c00` is for LPDDR4 only), so a capture variant of the DDR
-wrapper reads MR12, MR14 and MR15 of each channel and rank through boot0's
-mode-register read `0x4b5ac` right after `init_DRAM`, with MR16 set the way
-`0x576e4` sets it (`0x57796`), and records the frequency-set-point state.
-That variant runs boot0 code and changes MR16 temporarily, so it waits for
-the second review.
+The capture must also record the LPDDR5 mode registers. boot0's stored
+parameter set has `dram_tpr10` bit 29 set, so every boot runs the save
+routine `0x576e4`: parameter words 32–49 hold the receive Vref values and
+words 50 and 51 MR14 and MR15 of each channel and rank, read with MR16 set
+to 5 (`0x57796`). Every capture therefore already carries them (confirmed in
+the first port 3-3 capture). MR12 is not saved; a capture variant of the
+DDR wrapper would read it through boot0's mode-register read `0x4b5ac`
+after `init_DRAM`, in the same MR16 state. That variant runs boot0 code, so
+it waits for the second review.
 
 ## The hook wraps init_DRAM and writes the PHY registers inside it
 

@@ -322,8 +322,9 @@ P-states and, when clear, P-state 0 alone (observed, `@0x55990`). boot0 also
 reads a 2 KiB boot parameter region from card sectors 24,496–24,499 and, when
 it is valid, trains from its parameter block instead of the selected set; the
 vendor U-Boot writes that region only in its card-production path. With
-`dram_tpr10` bit 29 boot0 saves trained Vref values into words 32–51 of the
-block, and `dram_tpr1` bit 31 reuses them as training inputs; no parameter
+`dram_tpr10` bit 29, which the stored set 5 has set, boot0 saves trained
+Vref values and MR14/MR15 into words 32–51 of the block on every boot and
+then clears the bit (confirmed on a board, `board-session-20261025-21`), and `dram_tpr1` bit 31 reuses them as training inputs; no parameter
 skips the training run (observed, `@0x49ab4`, `@0x576e4`, `@0x5a08e`). The
 [DRAM fast-boot design](../designs/dram-fast-boot.md) gives the derivation,
 the timing table and the options.

@@ -30,7 +30,7 @@ import struct
 import sys
 
 PHY_BLOCKS = [  # (first byte address, last byte address, block name)
-    (0x0a920000, 0x0a927fff, "dbyte"), (0x0a940000, 0x0a94ffff, "master"),
+    (0x0a900000, 0x0a917fff, "csr-0x0000-0xbfff"), (0x0a920000, 0x0a927fff, "dbyte"), (0x0a940000, 0x0a94ffff, "master"),
     (0x0a960000, 0x0a963fff, "csr-0x30000"), (0x0a980000, 0x0a98ffff, "acsm"),
     (0x0a9b0000, 0x0a9bffff, "message-block"), (0x0aa20000, 0x0aa2ffff, "initeng"),
     (0x0aa40000, 0x0aa47fff, "csr-0xa0000"), (0x0aa80000, 0x0aa8ffff, "drtub"),

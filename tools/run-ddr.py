@@ -18,8 +18,12 @@ parser.add_argument("--fel", type=Path, required=True)
 parser.add_argument("--build", type=Path, default=CACHE / "build/a733-ddr")
 parser.add_argument("--evidence", type=Path,
                     default=CACHE / "evidence" / time.strftime("ddr-%Y%m%d-%H%M%S"))
+parser.add_argument("--allow-untrained", action="store_true",
+                    help="init-only capture variant: accept a wrapper return without trained DRAM")
 args = parser.parse_args()
 manifest = json.loads((args.build / "manifest.json").read_text())
+if args.allow_untrained != (manifest.get("variant") == "init-only"):
+    sys.exit("--allow-untrained goes with, and only with, an init-only variant build.")
 for name, expected in manifest["files"].items():
     content = (args.build / name).read_bytes()
     if len(content) != expected["size"] or hashlib.sha256(content).hexdigest() != expected["sha256"]:
@@ -111,24 +115,33 @@ try:
             (args.evidence / "firmware.log").write_text(log)
             print(log, end="", flush=True)
             save()
-            if values[0] != 0x53524444 or values[1] != 5 or values[3] != 0 or values[2] < 64:
-                raise RuntimeError(f"DDR initialization did not succeed: {record['result']}")
-            pages = [(0x41000000, 0xa55a5aa5), (0x42000000, 0x73307330)]
-            commands = []
-            for address, seed in pages:
-                payload = struct.pack("<1024I", *((seed ^ address ^ (i * 0x10201)) & 0xffffffff for i in range(1024)))
-                path = args.evidence / f"ram-{address:x}.bin"
-                path.write_bytes(payload)
-                commands.extend(["write", hex(address), path])
-            for address, _ in pages:
-                commands.extend(["read", hex(address), "4096", args.evidence / f"ram-{address:x}-read.bin"])
-            transaction(*commands)
-            for address, _ in pages:
-                if (args.evidence / f"ram-{address:x}.bin").read_bytes() != (args.evidence / f"ram-{address:x}-read.bin").read_bytes():
-                    raise RuntimeError(f"RAM page comparison failed: {address:#x}")
-            record["complete"] = True
-            save()
-            print(f"PASS: DDR reports {values[2]} MiB; both 4 KiB pages match. Evidence: {args.evidence}")
+            if args.allow_untrained:
+                # The init-only variant leaves DRAM untrained; the capture that
+                # follows reads only the PHY and controller.
+                if values[0] != 0x53524444 or values[1] != 5 or values[3] != 0:
+                    raise RuntimeError(f"Wrapper did not return normally: {record['result']}")
+                record.update(untrained=True, complete=True)
+                save()
+                print(f"PASS: init-only wrapper returned, DRAM untrained ({values[2]} MiB reported). Evidence: {args.evidence}")
+            else:
+                if values[0] != 0x53524444 or values[1] != 5 or values[3] != 0 or values[2] < 64:
+                    raise RuntimeError(f"DDR initialization did not succeed: {record['result']}")
+                pages = [(0x41000000, 0xa55a5aa5), (0x42000000, 0x73307330)]
+                commands = []
+                for address, seed in pages:
+                    payload = struct.pack("<1024I", *((seed ^ address ^ (i * 0x10201)) & 0xffffffff for i in range(1024)))
+                    path = args.evidence / f"ram-{address:x}.bin"
+                    path.write_bytes(payload)
+                    commands.extend(["write", hex(address), path])
+                for address, _ in pages:
+                    commands.extend(["read", hex(address), "4096", args.evidence / f"ram-{address:x}-read.bin"])
+                transaction(*commands)
+                for address, _ in pages:
+                    if (args.evidence / f"ram-{address:x}.bin").read_bytes() != (args.evidence / f"ram-{address:x}-read.bin").read_bytes():
+                        raise RuntimeError(f"RAM page comparison failed: {address:#x}")
+                record["complete"] = True
+                save()
+                print(f"PASS: DDR reports {values[2]} MiB; both 4 KiB pages match. Evidence: {args.evidence}")
         except BaseException as error:
             if record["device_access_attempted"]:
                 try:

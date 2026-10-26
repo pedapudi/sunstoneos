@@ -155,7 +155,7 @@
    "dram_tpr13 bit6": "two channels (0x578ac)",
    "dram_tpr13 bit14": "skip the rank/width scan inside the auto scan (0x57e56)",
    "dram_tpr10 bits28:16": "SequenceCtrl, the firmware's training-step bitmap (0x59d6a)",
-   "dram_tpr10 bit29": "save trained Vref after init: 0x576e4 packs PHY csr 0x4e/0x4f of 9 lanes x 4 blocks into words 32-49, MR14/MR15 into words 50-51; cleared unless bit30 (0x49c82)",
+   "dram_tpr10 bit29": "save trained Vref after init: 0x576e4 packs PHY csr 0x4e/0x4f of 9 lanes x 4 blocks into words 32-49, MR14/MR15 into words 50-51; cleared unless bit30 (0x49c82); stored set 5 has tpr10 = 0xb25f0000, so this runs every boot and the reported value is 0x925f0000 (board-session-20261025-21)",
    "dram_tpr1 bit31": "vendor 'not training' flag set by U-Boot; P-state 0 message block takes MR14/MR15 from words 50-51 (0x59ec4, 0x5a08e); SequenceCtrl unchanged",
    "dram_para2 bit31": "size fixed in bits 30:16; otherwise 0x4b74c measures it (0x49ca0)"
   },

@@ -35,6 +35,8 @@ def main():
                         help="the run-ddr.py evidence directory of this FEL lifetime")
     parser.add_argument("--stages", type=int, default=0,
                         help="run only the first N stages, for a board whose last stage stopped the bus")
+    parser.add_argument("--allow-untrained", action="store_true",
+                        help="capture after the init-only DDR variant, which leaves DRAM untrained")
     parser.add_argument("--temperature-note", default="",
                         help="the coordinator's temperature observation, recorded unchanged")
     parser.add_argument("--evidence", type=Path,
@@ -53,15 +55,19 @@ def main():
         manifest["stages"] = manifest["stages"][:args.stages]
     ddr = json.loads((args.ddr_evidence / "session.json").read_text())
     result = ddr.get("result", {})
+    trained = result.get("dram_mib") == EXPECTED_MIB and not ddr.get("untrained")
     if not (ddr.get("complete") and result.get("magic") == 0x53524444 and result.get("stage") == 5
-            and result.get("board_result") == 0 and result.get("dram_mib") == EXPECTED_MIB):
-        sys.exit("The DDR evidence does not record a completed 12,288 MiB training.")
+            and result.get("board_result") == 0
+            and (trained or (args.allow_untrained and ddr.get("untrained") is True))):
+        sys.exit("The DDR evidence does not record a completed 12,288 MiB training"
+                 " (or, with --allow-untrained, an init-only return).")
     ddr_mailbox = (args.ddr_evidence / "mailbox.bin").read_bytes()
     args.evidence.mkdir(parents=True, exist_ok=False)
     record = {"manifest": manifest, "build": str(args.build), "ddr_evidence": str(args.ddr_evidence),
               "tool_sha256": hashlib.sha256(args.fel.read_bytes()).hexdigest(),
               "runner_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
               "port": os.environ.get("SUNSTONE_USB_PORT", ""), "temperature_note": args.temperature_note,
+              "ddr_variant": ddr.get("manifest", {}).get("variant", "four-p-state"),
               "transactions": [], "stages": [], "complete": False,
               "launch_attempted": False, "device_access_attempted": False}
 

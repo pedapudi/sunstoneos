@@ -13,7 +13,13 @@ ROOT = Path(__file__).resolve().parents[1]
 CACHE = Path.home() / ".cache/sunstoneos"
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--output", type=Path, default=CACHE / "build/a733-ddr")
+# Capture variants (docs/designs/dram-training-restore.md). Without
+# --variant the wrapper is byte-identical to the reviewed one.
+VARIANTS = {"pstate0": (0, 0), "init-only": (0x1fff0000, 0x00010000)}
+parser.add_argument("--variant", choices=sorted(VARIANTS))
 args = parser.parse_args()
+if args.variant and args.output == CACHE / "build/a733-ddr":
+    sys.exit("A variant needs its own --output directory.")
 args.output.mkdir(parents=True, exist_ok=True)
 blob_path = Path(subprocess.check_output(
     ["python3", str(ROOT / "tools/fetch-sources.py"), "board-boot0"], text=True).strip())
@@ -36,7 +42,12 @@ for name, address in (("ddr-entry", 0x85000), ("cache-off", 0x71000)):
     source = ROOT / f"boot/a733/{name}.S"
     obj = args.output / f"{name}.o"
     elf = args.output / f"{name}.elf"
-    subprocess.run(["clang", "--target=arm-none-eabi", "-march=armv8-a", "-c",
+    defines = []
+    if args.variant and name == "ddr-entry":
+        clear, value = VARIANTS[args.variant]
+        defines = [f"-Wa,--defsym,DDR_PARAM_PATCH=1", f"-Wa,--defsym,TPR10_CLEAR={clear:#x}",
+                   f"-Wa,--defsym,TPR10_SET={value:#x}"]
+    subprocess.run(["clang", "--target=arm-none-eabi", "-march=armv8-a", "-c", *defines,
                     str(source), "-o", str(obj)], check=True)
     subprocess.run([linker, f"-Ttext={address:#x}", "-e", "_start", str(obj),
                     "-o", str(elf)], check=True)
@@ -60,6 +71,8 @@ if ((args.output / "ddr-entry.bin").stat().st_size > 0x1000
 manifest = {"boot0_sha256": expected, "load": 0x47000, "head_shadow": 0x8e000,
             "wrapper": 0x85000, "mailbox": 0x86000, "log": 0xe0000,
             "log_character": log_address, "files": {}}
+if args.variant:
+    manifest["variant"] = args.variant
 for name in (*payloads, "ddr-entry.bin", "cache-off.bin"):
     data = (args.output / name).read_bytes()
     manifest["files"][name] = {"size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
