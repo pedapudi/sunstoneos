@@ -62,8 +62,12 @@ int a733_board_session_valid(const struct a733_board_session *s,uint64_t now)
         if(!s->sid_authority||!present(s->sid_evidence,32))return 0;
         if(s->radio_profile_address!=UINT64_C(0x43000000)||!s->radio_profile_bytes||
            s->radio_profile_bytes>65536||!present(s->radio_profile_digest,32)||
-           !s->latch_m_identity||!s->latch_m_owner||s->latch_m_known_mask!=0x3f||
-           (s->latch_m_value&~UINT32_C(0x3f)))return 0;
+           !s->latch_m_identity||!s->latch_m_owner||
+           (s->latch_m_known_mask!=0x3f
+#ifdef SUNSTONE_BOARD_SUPERVISED
+            &&s->latch_m_known_mask!=0
+#endif
+           )||(s->latch_m_value&~s->latch_m_known_mask))return 0;
     }else if(s->radio_profile_address||s->radio_profile_bytes||present(s->radio_profile_digest,32)||
              s->latch_m_identity||s->latch_m_owner||s->latch_m_known_mask||s->latch_m_value)return 0;
     uint64_t owner[]={s->pmic_owner,s->usb0_owner,s->typec_owner,s->usb2_owner};

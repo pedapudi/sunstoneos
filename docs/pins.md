@@ -100,16 +100,31 @@ the latch before selecting output mode. Main PIO uses owned-bit SET/CLR writes;
 the manual defines these aliases even though the pinned kernel descriptor does
 not enable its optional atomic-data helper.
 
-Always-on output requires a complete platform-authenticated latch record for
-its bank. The record contains an identity, owner, known-pin mask and initial
-value. The platform must establish these values and exclude other DATA writers
+Always-on output requires a platform-authenticated latch record for its bank.
+The record contains an identity, owner, known-pin mask and initial value.
+A full mask preserves every inherited latch, including inactive pins.
+The platform must establish those values and exclude other DATA and mux writers
 for the manager's lifetime. Numeric identities alone do not prove provenance.
-The manager refuses output without this handoff. It never initializes the
-shadow from input or alternate-function DATA reads, whose values do not identify
-latent output latches.
+The manager refuses output without this handoff.
+
+For PM, a nonzero identity and owner with both mask and value zero instead
+authorizes initialization of inactive latches. Before the first DATA write,
+the manager reads the bank's muxes under its shared lock. It preserves the
+software-written value of every current GPIO output and initializes other
+latches to zero. It then applies the requested output levels and records the
+complete intended shadow. Input samples and undefined alternate-function DATA
+never supply historical latch values. PL still requires a full record.
+
+This PM contract requires all later GPIO-output transitions to use the
+manager's existing latch-priming sequence. An inactive latch may change while
+its mux and pull remain intact; its previous value is not restored. Live
+outputs on unleased pins remain unchanged. An inherited output on a leased
+pin is sampled before its mux is disabled and restored from that sample.
+The complete-record contract remains available for returning diagnostics that
+must preserve dormant latch values too.
 
 Before an always-on DATA write, the manager compares all currently selected
-GPIO outputs with its bank shadow. It changes only leased bits in that shadow
+GPIO outputs with its established bank shadow. It changes only leased bits in that shadow
 and writes the complete bank value. Missing provenance or an unexpected output
 value prevents a write. A failed write retains the intended shadow and all
 leases for platform recovery.

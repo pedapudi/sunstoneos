@@ -53,11 +53,15 @@ int a733_pins_init_banks(struct a733_pins *m,const struct a733_pins_operations *
         const struct a733_pin_latch_handoff *l=&h->latch[i];
         if (!l->identity && !l->owner && !l->known_mask && !l->value) continue;
         uint32_t valid=a733_pin_bank_mask(A733_PIN_L+i);
-        if (!l->identity || !l->owner || l->known_mask!=valid || (l->value & ~valid)) return 0;
+        if (!l->identity || !l->owner || (l->value & ~l->known_mask) ||
+            (l->known_mask!=valid && (i!=1 || l->known_mask))) return 0;
     }
     /* The caller supplies zero-initialized private storage, as for the PB API. */
     m->operations=*ops; m->cookie=cookie; m->handoff=*h;
-    for (unsigned i=0;i<2;++i) m->banks[A733_PIN_L+i].latch=h->latch[i].value;
+    for (unsigned i=0;i<2;++i) {
+        m->banks[A733_PIN_L+i].latch=h->latch[i].value;
+        if (h->latch[i].known_mask) m->established_latches|=1u<<(A733_PIN_L+i);
+    }
     m->next_id=1; m->initialized=1;
     return 1;
 }
@@ -122,8 +126,9 @@ static enum a733_pins_result put(struct a733_pins *m,uintptr_t a,uint32_t bits,
     if (!m->operations.write(m->cookie,a,bits) || !in_time(m,deadline)) return A733_PINS_RECOVERY;
     return A733_PINS_OK;
 }
-/* Only GPIO outputs have meaningful latch readback. Input and alternate DATA
- * readings cannot initialize or repair the always-on bank shadow. */
+/* Only GPIO outputs have meaningful latch readback. A normal PM lifetime may
+ * initialize inactive latches, but never infer them from input/alternate DATA.
+ * All mux/DATA writers share this lock and prime any later output selection. */
 static enum a733_pins_result latch_consistent(struct a733_pins *m,unsigned b,uint64_t deadline)
 {
     uint32_t outputs=0,v,valid=a733_pin_bank_mask(b);
@@ -135,7 +140,11 @@ static enum a733_pins_result latch_consistent(struct a733_pins *m,unsigned b,uin
     }
     if (!in_time(m,deadline)) return A733_PINS_BUSY;
     if (!rd(m,bank_base(b)+0x10,&v)) return A733_PINS_RECOVERY;
-    if ((v&outputs)!=(m->banks[b].latch&outputs)) return A733_PINS_RECOVERY;
+    if (m->established_latches&(1u<<b)) {
+        if ((v&outputs)!=(m->banks[b].latch&outputs)) return A733_PINS_RECOVERY;
+    } else {
+        m->banks[b].latch=v&outputs;
+    }
     return in_time(m,deadline) ? A733_PINS_OK : A733_PINS_BUSY;
 }
 static enum a733_pins_result output_latch(struct a733_pins *m,unsigned b,uint32_t mask,
@@ -157,7 +166,10 @@ static enum a733_pins_result output_latch(struct a733_pins *m,unsigned b,uint32_
     uint32_t value=(m->banks[b].latch&~mask)|levels;
     r=put(m,bank_base(b)+0x10,value,deadline,attempted);
     /* Preserve the intended full-bank value even if the write is uncertain. */
-    if (*attempted) m->banks[b].latch=value;
+    if (*attempted) {
+        m->banks[b].latch=value;
+        m->established_latches|=1u<<b;
+    }
     return r;
 }
 static uint16_t uart_routes(unsigned b,unsigned p,struct a733_pin_config c)
@@ -336,7 +348,8 @@ static enum a733_pins_result acquire_banked(struct a733_pins *m,uint64_t owner,
         if (q->old.function==1) {
             if (!rd(m,bank_base(q->b)+0x10,&value)) return leave(m,fault(m));
             old_output[i]=(value>>q->p)&1;
-            if (q->b>=A733_PIN_L && old_output[i]!=((m->banks[q->b].latch>>q->p)&1)) return leave(m,fault(m));
+            if (q->b>=A733_PIN_L && (m->established_latches&(1u<<q->b)) &&
+                old_output[i]!=((m->banks[q->b].latch>>q->p)&1)) return leave(m,fault(m));
             if ((expected.masks[q->b]&(1u<<q->p)) &&
                 old_output[i]!=((expected.levels[q->b]>>q->p)&1)) return leave(m,A733_PINS_CONFLICT);
         }

@@ -12,6 +12,7 @@ if not __debug__:raise SystemExit('checks require assertions; unset PYTHONOPTIMI
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--sources',type=pathlib.Path,default=pathlib.Path.home()/'.cache/sunstoneos/sources')
 parser.add_argument('--evidence',type=pathlib.Path,required=True)
+parser.add_argument('--pm-startup-only',action='store_true',help='run only changed PM startup cases and native compilation')
 args=parser.parse_args()
 root=pathlib.Path(__file__).resolve().parents[1]
 args.evidence.mkdir(parents=True,exist_ok=False)
@@ -142,13 +143,15 @@ for source in implementation:
     obj=args.evidence/(pathlib.Path(source).stem+'-host.o')
     run(common+['-MD','-MF',str(obj.with_suffix('.d')),'-c',source,'-o',str(obj)])
     objects.append(str(obj))
-for name,source in [('expanded',root/'checks/pins-expanded.c'),('reference',reference),
-                    ('legacy',root/'checks/a733-pins.c'),('legacy-deadline',root/'checks/a733-pins-deadline.c')]:
+cases=[('expanded',root/'checks/pins-expanded.c')]
+if not args.pm_startup_only:
+    cases += [('reference',reference),('legacy',root/'checks/a733-pins.c'),('legacy-deadline',root/'checks/a733-pins-deadline.c')]
+for name,source in cases:
     binary=args.evidence/name
     obj=args.evidence/(name+'.o')
     run(common+['-MD','-MF',str(obj.with_suffix('.d')),'-c',str(source),'-o',str(obj)])
     run(common+[str(obj)]+objects+['-o',str(binary)])
-    run([str(binary)])
+    run([str(binary)]+(['--pm-startup'] if args.pm_startup_only else []))
 for source in implementation+[str(root/'drivers/pinctrl/a733_pins_native.c')]:
     obj=args.evidence/(pathlib.Path(source).stem+'-native.o')
     run(['clang','--target=aarch64-none-elf','-std=c11','-O2','-ffreestanding','-Wall','-Wextra','-Werror',

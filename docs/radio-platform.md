@@ -107,8 +107,10 @@ The binding does not request signal-voltage switching.
 
 PM1 drives Wi-Fi enable and PM0 reads Wi-Fi wake. The guarded wake API samples
 PM0 through the actual owned GPIO input and returns its current level.
-The bank-qualified pin manager owns both pins. PM1 output requires the manager's authenticated complete PM bank
-latch record, which preserves other outputs during always-on DATA writes.
+The bank-qualified pin manager owns both pins. PM1 output requires an
+authenticated PM bank record. A complete record preserves inherited latches.
+Normal OS ownership can instead authorize initialization of inactive latches
+while preserving all live outputs, as described in the [pin contract](pins.md#configuration-preserves-neighbors-and-primes-output-latches).
 Expected inherited pin functions are input or disabled. The pin manager
 establishes PM1 low. The radio binding waits at least ten milliseconds after
 validated supplies, then drives PM1 high. The source power helper supplies
@@ -124,6 +126,64 @@ Physical admission must establish stable inherited behavior for those controls.
 Changing PM2, module power or another reset invalidates the borrowed radio
 lifetime. Independent Wi-Fi and Bluetooth power writers must be excluded;
 the shared module's controls cannot be managed as unrelated devices.
+
+## Published startup and inherited boot state
+
+The pinned Orange Pi kernel recipe enables `CONFIG_AW_RFKILL=y`.
+Its [rfkill parent][rfkill] initializes Wi-Fi and then Bluetooth; the
+[Makefile][rfkill-build] links both power helpers. The Wi-Fi helper configures
+PM1 low during probe. Its power-on path enables the named supplies, waits
+10 ms and drives PM1 high. The [Bluetooth helper][bt-power] configures PM2 as
+an active-low reset output and initializes it low with rfkill blocked.
+Bluetooth power-on enables its supplies, waits 10 ms and drives PM2 high.
+The board device tree supplies no clock handle to either helper.
+
+These are Linux driver operations. They do not establish which instructions
+ran in a ROM/DDR boot or the state inherited by SunstoneOS. The cached early
+boot configuration has no PM0–PM5 entries; that absence is not a complete
+writer history. The native borrowed radio lifetime therefore still preserves
+PM2 and requires its inherited reset/oscillator behavior to be suitable.
+
+Schematic sheet 14 labels the PM2-derived net `HOST_WAKE_WLAN`. R61 connects it
+to module pin 34, `BT_RST_N`; R1130 connects it to pin 23, `LPO`. Both are drawn
+as zero-ohm resistors. The schematic does not establish their fitted population
+or the module's electrical response. Likewise, the schematic's DCDC8 supply
+map and the DTS's BLDO5/CLDO1 declarations cannot identify the fitted assembly.
+No default rail map or PM2 level follows from these sources.
+
+The normal PM ownership contract avoids an unrelated requirement to recover
+dormant latch history. Its effect on each neighboring pin is explicit:
+
+| Pin | Documented role | Behavior during another pin's DATA write |
+| --- | --- | --- |
+| PM0 | Wi-Fi wake input | Mux and pull remain intact; input samples do not become latch evidence |
+| PM2 | Reset/LPO net | Any live GPIO-output level is preserved; mux and pull remain intact |
+| PM3 | Host wake to Bluetooth | Any live GPIO-output level is preserved; mux and pull remain intact |
+| PM4 | Bluetooth wake input | Mux and pull remain intact; input samples do not become latch evidence |
+| PM5 | No external net drawn on sheet 9 | Any live GPIO-output level and its configuration are preserved |
+
+The native supervised board and OS session validators accept a nonzero PM
+record identity and owner with `known_mask=value=0`. Resident OS builds inherit
+the same `SUNSTONE_BOARD_SUPERVISED` definition and add `SUNSTONE_BOARD_RESIDENT`.
+The session layout is unchanged. Older images reject the zero-mask form;
+complete records remain compatible. The returning identity producer still
+requires the complete mask and historical provenance. The OS Bluetooth profile
+accepts the same zero-mask form; standalone Bluetooth still requires a complete
+record. OS host preparation
+continues to refuse radio/headset images until their profiles and firmware
+can be staged; this pin change does not supply those assets or physical facts.
+
+The Bluetooth power source is GPL-2.0-or-later; its build files are GPL-2.0.
+Their original notices remain in the external cached files. They are startup
+references and are not linked into SunstoneOS. Revision, URLs and SHA-256
+identities are pinned as `radio-platform-bluetooth-power`,
+`radio-platform-rfkill-build` and `radio-platform-rfkill-config` in
+[sources.lock.json](../sources.lock.json). The GPIO readback rule comes from
+A733 User Manual V1.00 section 18.14.7.8 and the pinned pinctrl sources.
+
+[rfkill]: https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/misc/sunxi-rf/sunxi-rfkill.c
+[rfkill-build]: https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/misc/sunxi-rf/Makefile
+[bt-power]: https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/misc/sunxi-rf/sunxi-bluetooth.c
 
 ## The borrowed card keeps actual resources owned
 
@@ -203,3 +263,19 @@ four-bit 25 MHz profile is implemented and covered by the register model only.
 High-speed timing, DMA, interrupt service and suspend/resume require separate
 implementation and qualification. Board startup must connect the borrowed
 card and live guard to the transport worker before firmware loading.
+
+The normal PM startup checks are recorded in
+`~/.cache/sunstoneos/evidence/radio-startup-facts-1026/`. The focused pin model
+checks live outputs outside the claimed pin mask, neighboring configuration,
+later output priming, inherited-output restoration and first-write failure.
+Sanitizer admission checks cover supervised, resident and returning board
+records, plus OS and standalone Bluetooth profiles. The existing returning
+constructor and CMD53 evidence is reused for its unchanged application path;
+it does not establish physical radio operation or execute the new PM mode.
+
+The native supervised radio/headset OS profile builds with the current pinned
+Mimus source and rebuilt pin-manager consumers. The manager grows by eight
+bytes; its isolated AArch64 `-O2` object gains 104 text bytes. The existing
+mux/DATA scan performs the same number of MMIO accesses. Initialization adds
+no sampling task or polling loop. Exact build, dependency and artifact
+identities accompany the focused evidence.
