@@ -107,6 +107,26 @@ The image leaves the GPU running, so port 3-1 needs a power removal before
 its next run. Nothing from the firmware binary was used, only the open DDK
 host sources (`docs/designs/gpu-firmware-start.md`).
 
+**GPU firmware lifecycle passed on port 3-1** (set `board-bundles-20261025-23`,
+`board-session-20261025-20/port-3-1`, branch `work/gpu-fw-stop-1025`).
+After cold DDR and readiness, one image ran:
+- firmware start: started word 1 after 665 µs;
+- the compatibility check;
+- the health check, executed in 1.9 ms (executed count 0 to 1; the open
+  firmware writes no return word, so completion is judged by the count, as
+  upstream does);
+- forced idle and power-off, both acknowledged;
+- the 14-step stop, then OFF and provider park.
+
+The image returned to a responsive ROM with the GPU off, so a firmware run
+no longer needs a power removal. The merge into `bringup` waits on a
+`tools/prepare-board-bundles.py` row conflict with the CPU rows.
+
+**DRAM training capture, port 3-3** (`board-session-20261025-21/port-3-3`,
+set `dram-training-capture-v3-20261025`): cold DDR (12,288 MiB), then two
+read-only captures, each with all six stages complete. This is the first
+lifetime of the capture plan.
+
 **CPU top operating points, steps 2–5 passed on port 3-3** (set
 `cpu-top-opp-20261025/steps2-5-set-r2`, `board-session-20261025-19/port-3-3`).
 In one lifetime, with CPU0 running and every other core off:
