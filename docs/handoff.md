@@ -44,7 +44,8 @@ history.
 - **microSD:** returning reads at high speed (3.3 V, 50 MHz, 4-bit); all 256
   reads completed.
   - SDR104 is not qualified: its 1.8 V switch stopped at CMD11.
-  - Throughput is 1.4 to 1.7 MB/s until DMA is built.
+  - Measured PIO throughput is 1.4 to 1.7 MB/s. Read-only DMA is now
+    implemented and software-checked; its physical throughput is unmeasured.
 - **DRAM training restore:** captures from ten lifetimes fix a per-board
   restore set of 1,036 registers (`restore-set-v3.json`). Initialization without training takes
   36 ms, against 5.1 s to train all four P-states. The restore itself is
@@ -65,19 +66,20 @@ does not establish recovery from a fault.
 
 | Work | Branch | Immediate deliverable |
 | --- | --- | --- |
-| Multicore mimus | `work/resume-mimus-multicore-1025` | Extend the existing two-worker execution path while preserving exact results |
-| OS integration | `work/resume-thermal-1025` | Rebuild the supported NPU profile against the shared service and thermal changes |
-| microSD reads | `work/resume-sd-completion-1025` | Correct the remaining voltage-switch timing gaps, then complete descriptor DMA |
-| DRAM restoration | `work/resume-dram-restore-1025` | Add persistent record selection and standby updates using existing storage contracts |
-| Performance modes | `work/resume-perf-modes-1025` | Integrate the existing high/low mode controls with current thermal and ownership rules |
+| Multicore mimus | `work/resume-mimus-multicore-1025` | Integrate the accepted eight-worker engine into supervised OS recognition with service-aware priorities |
+| DRAM restoration | `work/resume-dram-restore-1025` | Implement the card-boot loader using verified early single-sector reads and explicit helper storage |
+| Radio startup | New isolated branch from `bringup` | Resolve supply topology and pin-state prerequisites from primary sources before changing startup |
 
-Three independent reviewers cover CPU/thermal/DRAM, GPU/NPU, and radio/camera.
-Workers own separate source paths, reuse successful evidence and submit focused
-checks. The coordinator integrates changes, updates this handoff and the hardware
-matrix, and pushes reviewed results. Returning microSD reads and the initial
-CMD11 completion correction are merged. The storage worker owns the remaining
-switch and DMA changes; the boot worker coordinates record-storage interfaces
-without editing the SD driver.
+Independent reviewers cover CPU/thermal/DRAM, accelerator operation and peripheral
+integration. Workers reuse successful evidence and submit focused checks. The
+coordinator integrates accepted work, updates the canonical records and pushes
+`bringup`. No board command has run during this continuation.
+
+The latest merged work includes paired training-record selection and updates,
+read-only microSD DMA, optional eight-worker mimus outside the integrated OS,
+and CPU/NPU performance controls. The supported NPU OS image also rebuilds
+successfully against the shared service and thermal changes; its evidence is
+under `~/.cache/sunstoneos/evidence/resume-thermal-npu-integration-1025/`.
 
 The branch notes under "Next steps" in each design document say what remains.
 - **`work/cpu-top-opp-step6-1025`:** CPU top points, step 6 and its
@@ -87,8 +89,10 @@ The branch notes under "Next steps" in each design document say what remains.
   the DMA design.
 - **`work/dram-fast-boot-1025`:** DRAM captures and analysis, the restore
   design and the `dram-restore-test-1` runbook.
-- **`work/perf-modes-1025`:** the high/low performance-mode toggle. It needs
-  its independent review, and its board run follows CPU step 7.
+- **`work/perf-modes-1025`:** the original high/low performance-mode work.
+  Its reviewed integration is
+  now merged from `work/resume-perf-modes-1025`; physical qualification remains
+  outstanding and follows CPU step 7.
 
 Most of the other `work/*` branches are superseded or already merged and can
 be pruned.
@@ -141,9 +145,32 @@ be pruned.
   non-UHS compilation pass under
   `~/.cache/sunstoneos/evidence/resume-sd-completion-1025/cmd11/`.
   The README command now includes `--read-record`. No new physical switch ran;
-  the next SDR104 lifetime still needs power removal. The storage worker is
-  completing the accepted DMA design from the preserved first implementation,
-  including descriptor validation, drain waits and cache publication.
+  the next SDR104 lifetime still needs power removal. Read-only descriptor DMA
+  is now implemented for up to 256 sectors per
+  transfer. It validates descriptor ranges, waits for controller drain and
+  publishes received data only after cache synchronization. Focused models,
+  affected sanitizer checks, host decoding and native builds pass under
+  `~/.cache/sunstoneos/evidence/resume-sd-completion-1025/snapshot/`.
+  Physical DMA, cache coherence, SDR104 and throughput remain unqualified.
+- **Paired DRAM training records are implemented.** Selection chooses the newest
+  eligible record; updates write the standby payload before its header and
+  preserve the other copy. Thirty-two focused cases, including interruption
+  at all 28 sector boundaries, pass under
+  `~/.cache/sunstoneos/evidence/resume-dram-record-copies-1025/`.
+  The exercised allocation and backup are ordinary-file fixtures. Neither
+  physical card has an established training-record allocation or full backup.
+  The boot worker is implementing the card hook; physical restoration and
+  temperature qualification remain outstanding.
+- **CPU/NPU performance modes are integrated in software.** The optional service
+  selects the highest operating points for the speed bin by default, with a
+  lower-power mode and thermal overrides. It changes NPU clocks only after
+  local stop, bounds cleanup waits and retains ownership on uncertain replies.
+  CPU-only and combined CPU/NPU native builds and focused owner, planner and
+  host checks pass under
+  `~/.cache/sunstoneos/evidence/resume-perf-modes-1025/final-snapshot/`.
+  USB operation 8 carries performance control; operation 7 retains thermal
+  reporting. This profile reports GPU state but has no GPU runtime owner.
+  Physical switching, thermal response and recovery remain unqualified.
 - **Radio and camera native application paths are implemented in software.**
   The radio diagnostic composes actual shared providers, card and transport
   constructors. Its native build, twelve modeled application cases, constructor
@@ -162,8 +189,17 @@ be pruned.
 - **Mimus acceleration.** Only single-core recognition is board-qualified:
   19.5 s of compute for an 8.87 s recording at the old 494 MHz clock. The next
   steps, in order:
-  1. Two, then eight, inference workers at the qualified top clocks. The
-     two-worker path passes in QEMU (`docs/mimus-smp.md`).
+  1. Qualify two, then eight, inference workers at the established top clocks.
+     Optional eight-worker native builds and exact QEMU recognition parity now
+     pass (`docs/mimus-smp.md`). Independent row work and aligned matrix
+     multiplication use eight workers; stages with two scratch contexts remain
+     limited to two. Evidence is under
+     `~/.cache/sunstoneos/evidence/resume-mimus-eight-20261025/`.
+     The integrated OS still refuses eight workers until its task placement,
+     service priorities and image admission are implemented and reviewed.
+     Builds use the local unpublished mimus pin `967747f10dcf038aadc2961b5990d540f6b76455`;
+     set `MIMUS_DIR=/home/sunil/git/mimus-worktrees/sunstoneos-eight-workers-1025`.
+     Do not publish the separate mimus repository without user approval.
   2. The first board execution of the exact-sum GPU kernel
      (`docs/gpu-mimus.md`). Its returning diagnostic and host validator are
      implemented, reviewed and frozen under

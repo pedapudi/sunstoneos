@@ -7895,6 +7895,37 @@
   "summary": "Execute linked client/application/native-access instructions, without startup.",
   "usb": false
  },
+ "perf-mode.py": {
+  "cache_areas": [
+   "sources"
+  ],
+  "docs": [
+   "docs/board-runbooks/performance-modes.md",
+   "docs/designs/performance-modes-measurements.md",
+   "docs/designs/performance-modes.md",
+   "docs/npu-startup.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "output"
+  ],
+  "summary": "Check the performance-mode table against pinned sources and run its host models.",
+  "usb": false
+ },
+ "perf-native.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--build",
+   "--cpu-session",
+   "--output"
+  ],
+  "summary": "Linked combined performance/NPU admission and USB diagnostics.",
+  "usb": false
+ },
  "pins-expanded.py": {
   "cache_areas": [
    "sources"
@@ -9593,6 +9624,15 @@
   "summary": "Actual SD0 producer/package/fragment decoder, with software-only authority.",
   "usb": false
  },
+ "storage-read-idmac.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": true,
+  "pure_host": false,
+  "required_arguments": [],
+  "summary": "IDMAC model for the returning native image. CPU data becomes visible only",
+  "usb": false
+ },
  "storage-read-initialization-policy.py": {
   "cache_areas": [],
   "docs": [],
@@ -9656,7 +9696,6 @@
   "library": false,
   "pure_host": false,
   "required_arguments": [
-   "--read-record",
    "--output"
   ],
   "summary": "The host tool of the returning SD0 read image: signing, input and decoding.",
@@ -9954,6 +9993,21 @@
    "--output"
   ],
   "summary": "Build both real reference records and reject changed capture identities.",
+  "usb": false
+ },
+ "training-record-copies.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/storage-update.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--restore-set",
+   "--boot0",
+   "--output"
+  ],
+  "summary": "Check paired record selection and backup-first plans on ordinary files.",
   "usb": false
  },
  "training-record.py": {

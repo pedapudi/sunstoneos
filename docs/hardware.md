@@ -38,6 +38,21 @@ unavailable until further notice. New software results remain separate from
 physical qualification; the coordinator admits each proposed board test against
 its return and failure paths.
 
+## Current software integration
+
+- Optional eight-worker mimus passes exact recognition parity in QEMU and
+  native compilation. Physical multicore recognition remains unqualified.
+  The integrated OS still admits two workers while its eight-worker scheduling
+  and admission changes are developed; see [mimus SMP](mimus-smp.md).
+- [Performance modes](performance-modes.md) integrate CPU clock and voltage
+  control, stopped-NPU retuning and thermal overrides. Both native profiles
+  and focused software checks pass. GPU runtime control and physical
+  switching qualification remain outstanding.
+- [DRAM restoration](designs/dram-training-restore.md) includes a RAM-only
+  helper and paired persistent records with interruption-safe update planning.
+  Card-boot integration is in development. Physical restoration, memory checks
+  and temperature coverage remain outstanding.
+
 ## Implementation inventory
 
 Unless stated below, implementation is **planned**. Partial results apply only
@@ -736,8 +751,11 @@ to the stated scope:
   four-bit, 3.3 V. All 256 reads in the recorded session completed.
   The CMD11 completion and clock-restart timing corrections pass focused
   software checks, including the full post-delay timeout and both required
-  completion bits. SDR104 remains physically unqualified. DMA completion,
-  descriptor and cache-ownership work continues separately.
+  completion bits. [Read-only descriptor DMA](designs/sd-dma.md) is implemented
+  for transfers of up to 256 sectors. Focused software checks cover descriptor
+  ranges, controller drain, cache publication and measurement parsing; native
+  builds pass. Physical DMA, cache coherence, SDR104 and throughput remain
+  unqualified. Evidence is under `resume-sd-completion-1025/snapshot/`.
   [SD/eMMC identification and bounded reads](mmc.md) are **implemented**
   for the one-bit legacy-speed profile and negotiated read-only SD profiles.
   Host checks and source comparisons cover capacity, full-range
