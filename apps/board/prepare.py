@@ -98,6 +98,21 @@ def session_check(raw,usb_reference_modes=(1,2)):
     workload=struct.unpack_from('<I',raw,400)[0];require(workload in (0,1,2,3,4,6,8,10,12) and (workload not in (4,6,8,10,12) or struct.unpack_from('<Q',raw)[0]==0x4153373342535332),'Unsupported fixed workload.')
     topology=struct.unpack_from('<I',raw,404)[0]
     require(topology in (0,1) and (not topology or workload in (6,8,10,12)),'Unsupported fixed USB topology.')
+    # Common native invariants (apps/board/admission.c), including templates
+    # before preparation fills their image identity. Evidence identifies facts;
+    # these wire checks do not establish the referenced physical conditions.
+    require(all(any(raw[o:o+32]) for o in (80,216,248,280)) and raw[80:112]==raw[280:312] and
+            all(struct.unpack_from('<4Q',raw,184)),'Missing or conflicting board authority.')
+    host_workload=workload<2 or workload in (4,6,8,10,12)
+    owners=struct.unpack_from('<4Q',raw,456)[:4 if host_workload else 2]
+    require(all(owners) and len(set(owners))==len(owners) and not any(raw[582:588]) and
+            struct.unpack_from('<2I',raw,512)==(3300000,3300000) and all(struct.unpack_from('<3I',raw,500)),
+            'Invalid board owners, reserved fields, supplies or fabric.')
+    if not host_workload:
+        require(not any(raw[408:432]+raw[472:488]+raw[528:532]+raw[536:564]+raw[570:582]),
+                'A workload without USB host tasks carries host authority or supplies.')
+    if not workload&1:
+        require(not any(raw[352:400]+raw[432:456]),'A workload without radio carries radio state.')
     return workload
 
 def profile_spans(data,session,payload_spans=None):
