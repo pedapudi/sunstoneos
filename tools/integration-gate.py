@@ -39,6 +39,13 @@ VARIANTS = {
     # inputs are: the OS build verifies every file it names against
     # tools/npu-session-models.json. {cache} is the --cache directory.
     'npu': ['-DSUNSTONE_A733_OS_NPU=ON', '-DSUNSTONE_OS_NPU_CATALOGUE={cache}/' + NPU_CATALOGUE],
+    # The performance-mode service (docs/designs/performance-modes.md) on the
+    # supervised A76 CPU clock build, with the high boot mode; and with the
+    # NPU profile and the low boot mode.
+    'perf': ['-DA733_A76_ADMITTED=ON', '-DSUNSTONE_A733_OS_CPU_CLOCK=ON', '-DSUNSTONE_A733_OS_PERF=ON'],
+    'perf-npu-low': ['-DA733_A76_ADMITTED=ON', '-DSUNSTONE_A733_OS_CPU_CLOCK=ON', '-DSUNSTONE_A733_OS_PERF=ON',
+                     '-DSUNSTONE_A733_OS_PERF_BOOT=low', '-DSUNSTONE_A733_OS_NPU=ON',
+                     '-DSUNSTONE_OS_NPU_CATALOGUE={cache}/' + NPU_CATALOGUE],
 }
 DEPENDENCIES = {'kernel': 'kernel-check', 'soak8': 'smp8-soak-model',
                 'mimus-smp': 'smp-mimus-model'}
@@ -91,7 +98,7 @@ def main(argv=None):
     parser.add_argument('--target', action='append', default=[], help='central CMake target; repeat to add targets')
     parser.add_argument('--variant', choices=VARIANTS, action='append', default=[])
     parser.add_argument('--check', choices=CHECKS, action='append', default=[])
-    parser.add_argument('--full', action='store_true', help='explicit broad integration milestone: all central targets, the ten OS variants and all listed checks')
+    parser.add_argument('--full', action='store_true', help='explicit broad integration milestone: all central targets, every OS variant and all listed checks')
     parser.add_argument('--cache', type=Path, default=Path(os.environ.get('SUNSTONE_CACHE', Path.home() / '.cache/sunstoneos')))
     parser.add_argument('--trials', type=int, default=1, help='predeclared soak8 trials, not failure retries (default: 1)')
     parser.add_argument('--allow-dirty', action='store_true', help='build a tree with uncommitted changes; the status and diff hash are recorded')
@@ -112,7 +119,7 @@ def main(argv=None):
         parser.error('source must be a SunstoneOS checkout')
     targets = list(dict.fromkeys(args.target))
     variants = list(VARIANTS) if args.full else list(dict.fromkeys(args.variant))
-    if 'npu' in variants and not (cache / NPU_CATALOGUE).is_file():
+    if any('npu' in v for v in variants) and not (cache / NPU_CATALOGUE).is_file():
         parser.error('the npu variant needs the NPU catalogue map ' + str(cache / NPU_CATALOGUE))
     checks = list(CHECKS) if args.full else list(dict.fromkeys(args.check))
     for check in checks:
@@ -173,7 +180,7 @@ def main(argv=None):
                        str(len(changes.splitlines())) + ' changed paths'))
     if changes:
         (output / 'status.txt').write_text(changes)
-    if 'npu' in variants:
+    if any('npu' in v for v in variants):
         note('npu-catalogue-sha256: ' + hashlib.sha256((cache / NPU_CATALOGUE).read_bytes()).hexdigest())
 
     def unchanged(when):

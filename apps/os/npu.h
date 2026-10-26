@@ -82,4 +82,17 @@ struct os_npu_report {
 _Static_assert(sizeof(struct os_npu_report)==OS_NPU_REPORT_BYTES,"OS NPU report geometry");
 /* USB0 owner: copies the published report, or the pending header. */
 void os_npu_report_copy(uint8_t out[OS_NPU_REPORT_BYTES]);
+#ifdef SUNSTONE_A733_OS_PERF
+/* Performance modes (docs/designs/performance-modes.md). The NPU's rate
+ * changes only after its session has stopped, on the bootstrap task.
+ * ready: 1 once the startup reached READY and the NPU has not failed.
+ * stopped: ready and the local stop complete. retune: posts request number
+ * sequence (1 to 65535) for 492 or 852 MHz and wakes the bootstrap; 1 posted.
+ * answer: for that number, 0 while pending, 1 done, 2 refused with nothing
+ * written, 3 failed (the NPU then fails the board). */
+int os_npu_perf_ready(void);
+int os_npu_perf_stopped(void);
+int os_npu_perf_retune(unsigned mhz,unsigned sequence);
+unsigned os_npu_perf_answer(unsigned sequence);
+#endif
 #endif

@@ -110,6 +110,15 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *);
 /* After a successful controller CLOSE, the bound task only: the local stop
  * table in one locked pass. READY when stopped. */
 enum a733_npu_platform_result a733_npu_startup_stop(struct a733_npu_startup *);
+/* After local stop, the bound task only: PLL_NPU to 492 or 852 MHz in the
+ * vendor's rate change, while the NPU's gates stay closed and its resets
+ * asserted, as the vendor changes the NPU clock only while no NPU core is
+ * powered. 852 MHz needs a speed bin whose column lists it at 800 mV. 1 when
+ * PLL_NPU runs at mhz (no write when it already did); 0 when nothing was
+ * written (another stage, another rate or bin, the register lock busy, or a
+ * state other than the stopped one); -1 after a fault, which retains the
+ * startup as every startup fault does. */
+int a733_npu_startup_retune(struct a733_npu_startup *, unsigned mhz);
 /* The service activation check, on the bound task: 1 when READY and no
  * shared provider has failed, 0 before READY, -1 after a failure or from
  * another task. No register access. */

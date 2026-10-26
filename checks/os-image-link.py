@@ -134,7 +134,7 @@ def layout(elf, assets, recognizer, loader, profile=False, gpu_linear=False):
 
 
 def check(path, assets, recognizer, loader, audio=False, radio=False, headset=False, gpu_linear=False,
-          cpu_clock=False, npu=False):
+          cpu_clock=False, npu=False, perf=False):
     elf = Elf(path.read_bytes())
     defined = [s for s in elf.symbols if s['name'] and s['shndx'] not in (0, 0xfff1)]
     functions = {}
@@ -205,7 +205,7 @@ def check(path, assets, recognizer, loader, audio=False, radio=False, headset=Fa
     assert not any(thermal) or cpu_clock, 'Thermal report outside CPU-clock profile'
     npu_profile = None
     if npu:
-        assert not any((audio, radio, headset, gpu_linear, cpu_clock)), 'Unsupported combined NPU profile'
+        assert not any((audio, radio, headset, gpu_linear, cpu_clock and not perf)), 'Unsupported combined NPU profile'
         symbols = {s['name']: s for s in elf.symbols if s['shndx'] != 0}
         start, end = (symbols[n]['value'] for n in ('__os_npu_pool_start', '__os_npu_pool_end'))
         assert (start, end) == (0x47400000, 0x47c00000), 'NPU reservation differs'
@@ -217,8 +217,21 @@ def check(path, assets, recognizer, loader, audio=False, radio=False, headset=Fa
         selected = one('os_npu_client_model')
         npu_profile = {'range': [start, end], 'catalogue': elf.read(catalogue['value'], 32).hex(),
                        'client_model': struct.unpack('<I', elf.read(selected['value'], 4))[0]}
+    # The performance-mode service and its boot mode (apps/os/perf.c), which
+    # preparation and the host command read from this record.
+    boot = [s for s in defined if s['name'] == 'os_perf_boot_mode']
+    assert bool(boot) == perf and (not perf or cpu_clock), 'os_perf_boot_mode linked: %s, performance-mode build: %s' % (
+        bool(boot), perf)
+    perf_operation = None
+    perf_boot = None
+    if perf:
+        value = struct.unpack('<I', elf.read(one('os_perf_boot_mode')['value'], 4))[0]
+        assert value in (1, 2), 'performance boot mode %d' % value
+        perf_boot = 'high' if value == 1 else 'low'
+        perf_operation = struct.unpack('<I', elf.read(one('os_perf_usb_operation')['value'], 4))[0]
+        assert perf_operation == 8, 'Performance opcode collides with thermal diagnostic'
     return {'thermal_report': all(thermal), 'cpu_critical_trip': 'a733_thermal_policy_cpu_limit' in names,
-            'npu_profile': npu_profile, 'interrupts': interrupts, 'applications': applications,
+            'npu_profile': npu_profile, 'perf_boot_mode': perf_boot, 'perf_operation': perf_operation, 'interrupts': interrupts, 'applications': applications,
             'layout': layout(elf, assets, recognizer, loader, radio or headset, gpu_linear)}
 
 
@@ -236,19 +249,23 @@ def main():
     parser.add_argument('--gpu-linear', choices=('0', '1'), default='0')
     parser.add_argument('--npu', choices=('0', '1'), default='0')
     parser.add_argument('--cpu-clock', choices=('0', '1'), default='0')
+    parser.add_argument('--perf', choices=('0', '1'), default='0')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     audio, radio, headset = args.audio == '1', args.radio == '1', args.headset == '1'
     gpu_linear, cpu_clock = args.gpu_linear == '1', args.cpu_clock == '1'
     try:
         result = check(args.image, args.assets, args.recognizer, args.loader, audio, radio, headset, gpu_linear,
-                       cpu_clock, args.npu == '1')
+                       cpu_clock, args.npu == '1', args.perf == '1')
     except AssertionError as error:
         print('FAIL integrated OS link check:', error, file=sys.stderr)
         return 1
     result.update({'passed': True, 'target': 'sunstone-a733-os', 'lifetime': args.lifetime, 'audio': audio,
                    'radio': radio, 'headset': headset, 'gpu_linear': gpu_linear, 'cpu_clock': cpu_clock, 'npu': args.npu == '1',
+                   'perf_modes': args.perf == '1',
                    'image_sha256': hashlib.sha256(args.image.read_bytes()).hexdigest()})
+    if result['perf_boot_mode'] is None:
+        del result['perf_boot_mode']
     if args.build_id:
         result['build_id'] = args.build_id.read_text().strip()
     args.output.write_text(json.dumps(result, indent=2) + '\n')

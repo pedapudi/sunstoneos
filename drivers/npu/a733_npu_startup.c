@@ -531,6 +531,38 @@ enum a733_npu_platform_result a733_npu_startup_stop(struct a733_npu_startup *s)
     s->stage=A733_NPU_STARTUP_STOPPED;
     return READY;
 }
+/* The state local stop leaves (a733_npu_startup_stop): the NPU module and
+ * bus gates closed, its core, AXI and AHB resets asserted, the shared SRAM
+ * back with the CPU, and PLL_NPU locked at its profile with its gate
+ * controls set and its output gate open. */
+static int stopped(struct a733_npu_startup *s)
+{
+    uint32_t v;
+    return check(s,SRAM_ROUTING,SRAM_TO_CPU,SRAM_TO_CPU) && check(s,CCU+0xb00,BIT(31),0) &&
+        check(s,CCU+0xb04,UINT32_C(0x70001),0) && check(s,CCU+0x1920,0x10001,0x10001) &&
+        check(s,CCU+0x19a0,BIT(16),BIT(16)) &&
+        rd(s,PLL,&v) && v==(PLL_OPEN(s->pll_factors)|PLL_LOCK|s->pll_inherited);
+}
+/* The vendor changes the NPU clock only while no NPU core is powered
+ * (vipdrv_clkfreq_set, vip_drv_os_debug.c:411-461), between npu_clk_uninit
+ * and npu_clk_init (vip_drv_device_platform.c:822-886). After local stop the
+ * same rate change as the enable stage runs: output gate off, factors, lock
+ * enable cleared and set, LOCK, output gate on (ccu_nm.c:250-344). */
+int a733_npu_startup_retune(struct a733_npu_startup *s,unsigned mhz)
+{
+    if(!owner_task(s) || s->stage!=A733_NPU_STARTUP_STOPPED || (mhz!=492 && mhz!=852))return 0;
+    const uint32_t target=mhz==852 ? FACTORS_852 : FACTORS_492;
+    if(target==s->pll_factors)return 1;
+    uint32_t sid;
+    if(target==FACTORS_852 && !(rd(s,SID_DVFS,&sid) && bin_allows_852(sid)))return 0;
+    int held=enter(s);
+    if(held!=1){if(held)(void)fault(s);return held ? -1 : 0;}
+    if(!now(s,0) || !stopped(s))return leave(s) ? 0 : (fault(s),-1);
+    s->pll_factors=target;s->pll_adopted=0;
+    if(!apply_factors(s,pll_retune,STEPS(pll_retune),PLL_RETUNE_FACTOR_STEP) || !leave(s) || !lock_wait(s) ||
+       enter(s)!=1 || !now(s,0) || !apply(s,pll_open,STEPS(pll_open)) || !stopped(s)){(void)fault(s);return -1;}
+    return leave(s) ? 1 : (fault(s),-1);
+}
 int a733_npu_startup_prepared(struct a733_npu_startup *s)
 {
     if(!owner_task(s))return -1;

@@ -64,6 +64,9 @@ AUDIO_CONDITIONS = {
 # audio facts in the SUNSTONE_A733_OS_CPU_CLOCK build.
 GRANT_MAGIC, GRANT_BYTES, GRANT_CHANGES = 0x4153373343505531, 96, 64
 APPROVAL_SCHEMA = 'a733-os-cpu-clock-approval-v1'
+# The performance-mode build's grant names both clusters at the bin's high
+# points (docs/designs/performance-modes.md).
+PERF_APPROVAL_SCHEMA = 'a733-os-perf-modes-approval-v1'
 B1_SCHEMA = 'a733-os-cpu-clock-b1-v1'
 # TOP is the default path of docs/designs/cpu-top-opp.md: both clusters at
 # their bin's highest points; the OS owner then sets the DSU by the vendor rule.
@@ -101,8 +104,8 @@ def supported(cluster, column):
 def session_layout(raw):
     """(audio, grant): the session sizes that apps/os/os.h defines."""
     extra = len(raw) - OS_BYTES
-    if extra == NPU_BYTES:
-        return False, False
+    if extra in (NPU_BYTES, NPU_BYTES + GRANT_BYTES):
+        return False, extra != NPU_BYTES
     require(extra in (0, AUDIO_BYTES, GRANT_BYTES, AUDIO_BYTES + GRANT_BYTES), 'Unknown OS session size.')
     return extra >= AUDIO_BYTES, extra in (GRANT_BYTES, AUDIO_BYTES + GRANT_BYTES)
 
@@ -131,13 +134,24 @@ def manifest_cpu_clock(manifest, raw):
             'Invalid thermal image capabilities.')
     require(not struct.unpack_from('<I', raw, 804)[0] or trip,
             'The linked image does not support a session CPU critical trip.')
-    npu = len(raw) == OS_BYTES + NPU_BYTES
+    npu = npu_session(raw)
     require(manifest.get('npu', False) is npu, 'NPU image/session profile differs.')
+    # The performance-mode build admits both clusters or a read-only grant.
+    perf = manifest.get('perf_modes', False)
+    g = grant_fields(raw)
+    require(type(perf) is bool and (not perf or (cpu_clock and manifest.get('perf_operation') == 8 and manifest.get('perf_boot_mode') in ('high', 'low'))) and
+            (not perf or g is not None and g['clusters'] in (0, 3)),
+            'The performance-mode record and the CPU grant disagree.')
     if npu:
         profile = manifest.get('npu_profile', {})
         require(profile.get('range') == NPU_RANGE and profile.get('catalogue') == bytes(raw[888:920]).hex() and
                 profile.get('client_model') == struct.unpack_from('<I', raw, 860)[0],
                 'NPU linked reservation/catalogue/client differs.')
+
+
+def npu_session(raw):
+    """True when the session carries the NPU extension, with or without the grant."""
+    return len(raw) - OS_BYTES in (NPU_BYTES, NPU_BYTES + GRANT_BYTES)
 
 
 def image_manifest_check(manifest, raw):
@@ -191,15 +205,17 @@ def session_check(raw, audio):
     if g is not None:
         # a733_cpu_clock_grant_load and the owner rule of apps/os/admission.c.
         dma_owner = struct.unpack_from('<Q', raw, AUDIO_DMA + 48)[0] if audio else 0
+        npu_owner = struct.unpack_from('<Q', raw, OS_BYTES + 24)[0] if npu_session(raw) else 0
         require((g['magic'], g['version'], g['bytes']) == (GRANT_MAGIC, 1, GRANT_BYTES) and g['owner'] and
-                g['owner'] not in owners + (owner, dma_owner) and not g['clusters'] & ~3, 'Invalid CPU clock grant.')
+                g['owner'] not in owners + (owner, dma_owner, npu_owner) and not g['clusters'] & ~3,
+                'Invalid CPU clock grant.')
         if not g['clusters']:
             require(not (g['epoch'] or g['generation'] or any(g['max_mhz']) or g['changes'] or any(g['approval'])),
                     'A grant that names no cluster carries nothing else.')
         else:
             require((g['epoch'], g['generation']) == (epoch, generation) and 0 < g['changes'] <= GRANT_CHANGES and
                     any(g['approval']), 'The CPU clock grant must name this session and an approval.')
-    if len(raw) == OS_BYTES + NPU_BYTES:
+    if npu_session(raw):
         npu_session_check(raw)
     if not audio:
         return
@@ -221,7 +237,7 @@ def session_check(raw, audio):
 
 def npu_session_check(raw):
     npu_rules = module('os_npu_preparation', ROOT / 'apps/npu-board/prepare.py')
-    n = raw[OS_BYTES:]
+    n = raw[OS_BYTES:OS_BYTES + NPU_BYTES]
     require(len(n) == NPU_BYTES and struct.unpack_from('<3Q', n) == (NPU_MAGIC, 1, NPU_BYTES),
             'Invalid OS NPU extension.')
     owner, command, supervisor = struct.unpack_from('<3Q', n, 24)
@@ -328,7 +344,7 @@ def build_launcher(out, session_bytes, clang, lld):
     require(0 < (out / 'launch.bin').stat().st_size <= 0xc00, 'OS launcher exceeds reserved SRAM.')
 
 
-def validate_admission(record, image_hash, template_hash, raw, audio, cache=None, frozen=False):
+def validate_admission(record, image_hash, template_hash, raw, audio, cache=None, frozen=False, perf_modes=False):
     """Every fact the session names is bound to a reviewed record of this image."""
     require(record.get('schema') == ENTRY_SCHEMA, 'Reviewed OS entry record required.')
     profile = capture_profile(raw)
@@ -350,11 +366,11 @@ def validate_admission(record, image_hash, template_hash, raw, audio, cache=None
         return data
     require(isinstance(record.get('mimus_ddr'), dict), 'Recognition input DDR reservation required.')
     mimus.input_admission(record, image_hash, evidence)
-    if len(raw) == OS_BYTES + NPU_BYTES:
+    if npu_session(raw):
         npu_admission(record, image_hash, raw, evidence)
     else:
         require('npu' not in record, 'NPU authority supplied for an image without NPU.')
-    cpu_clock_admission(record, image_hash, raw, profile, evidence)
+    cpu_clock_admission(record, image_hash, raw, profile, evidence, perf_modes)
     if not audio:
         require('audio' not in record and 'dma_nonsecure_access' not in record,
                 'Audio authority supplied for an image without audio.')
@@ -385,7 +401,7 @@ def validate_admission(record, image_hash, template_hash, raw, audio, cache=None
     return cache
 
 
-def cpu_clock_admission(record, image_hash, raw, profile, evidence):
+def cpu_clock_admission(record, image_hash, raw, profile, evidence, perf_modes=False):
     """A grant that names a cluster is bound to one reviewed approval of one
     step on one board, which cites that board's read-only B1 record."""
     g = grant_fields(raw)
@@ -395,6 +411,10 @@ def cpu_clock_admission(record, image_hash, raw, profile, evidence):
     require(isinstance(record.get('cpu_clock_approval'), dict), 'Reviewed CPU clock approval record required.')
     data = evidence(record['cpu_clock_approval'])
     a = json.loads(data)
+    if perf_modes:
+        require(g['clusters'] == 3, 'Performance modes require both clusters.')
+        perf_admission(record, image_hash, profile, evidence, g, data, a)
+        return
     require(a.get('schema') == APPROVAL_SCHEMA and a.get('identity') == record['identity'] and
             a.get('port') == record['port'] and a.get('image_sha256') == image_hash and
             all(a.get(k) == profile[k] for k in ('epoch', 'generation', 'lease')) and
@@ -430,6 +450,37 @@ def cpu_clock_admission(record, image_hash, raw, profile, evidence):
             g['approval'] == hashlib.sha256(data).digest(), 'The session grant differs from the approval record.')
 
 
+def b1_column(record, evidence, a):
+    """The bin column of the board's read-only B1 record that the approval cites."""
+    b1 = json.loads(evidence(a.get('b1')))
+    # B1 ran this build with a grant that named no cluster, and passed.
+    require(b1.get('schema') == B1_SCHEMA and b1.get('passed') is True and b1.get('grant_clusters') == 0 and
+            b1.get('identity') == record['identity'] and
+            b1.get('port') == record['port'] and b1.get('pattern_lfm_clear') is True and
+            all(isinstance(b1.get(k), int) and 800 <= b1[k] <= 1050 for k in ('dcdc3_mv', 'dcdc5_mv')) and
+            isinstance(b1.get('sid_word'), int), "The approval must cite this board's B1 record.")
+    column = bin_column(b1['sid_word'])
+    require(column == 4, 'B1 recorded a fuse code without a table column.')
+    return column
+
+
+def perf_admission(record, image_hash, profile, evidence, g, data, a):
+    """The performance-mode grant: both clusters up to the bin's high points,
+    bound to one reviewed approval of the mode service on one board."""
+    require(a.get('schema') == PERF_APPROVAL_SCHEMA and a.get('identity') == record['identity'] and
+            a.get('port') == record['port'] and a.get('image_sha256') == image_hash and
+            all(a.get(k) == profile[k] for k in ('epoch', 'generation', 'lease')) and
+            isinstance(a.get('approval_text'), str) and a['approval_text'].strip() and
+            isinstance(a.get('approval_date'), str),
+            'The performance-mode approval names another board, image or session.')
+    column = b1_column(record, evidence, a)
+    high = (supported('cpu-l', column)[-1], supported('cpu-b', column)[-1])
+    require(a.get('high_mhz') == {'cpu-l': high[0], 'cpu-b': high[1]} and isinstance(a.get('changes'), int) and
+            0 < a['changes'] <= GRANT_CHANGES, "The approval's high points do not fit this board's bin.")
+    require(g['max_mhz'] == high and g['changes'] == a['changes'] and g['approval'] == hashlib.sha256(data).digest(),
+            'The session grant differs from the performance-mode approval.')
+
+
 def prepare(image, link_check, admission, template, assets, output, clang, lld):
     snapshots = {name: Path(path).read_bytes() for name, path in [
         ('image.elf', image), ('image-input-manifest.json', link_check), ('admission.json', admission),
@@ -440,7 +491,8 @@ def prepare(image, link_check, admission, template, assets, output, clang, lld):
     session_check(raw, audio)
     manifest_cpu_clock(json.loads(snapshots['image-input-manifest.json']), raw)
     record = json.loads(snapshots['admission.json'])
-    cache = validate_admission(record, image_hash, hashlib.sha256(raw).hexdigest(), raw, audio)
+    cache = validate_admission(record, image_hash, hashlib.sha256(raw).hexdigest(), raw, audio,
+                               perf_modes=json.loads(snapshots['image-input-manifest.json']).get('perf_modes', False))
     output = Path(output)
     output.mkdir(parents=True, exist_ok=False)
     out = output / 'board'
@@ -513,7 +565,8 @@ def validate_board(bundle):
     manifest_cpu_clock(json.loads((out / 'image-input-manifest.json').read_text()), raw)
     cache = {path: (out / item['name']).read_bytes() for path, item in p['entry_evidence'].items()}
     validate_admission(json.loads((out / 'admission.json').read_text()), p['image_sha256'],
-                       hashlib.sha256(template).hexdigest(), template, audio, cache, True)
+                       hashlib.sha256(template).hexdigest(), template, audio, cache, True,
+                       perf_modes=json.loads((out / 'image-input-manifest.json').read_text()).get('perf_modes', False))
     segments, address, identity = base.image_parts(out / 'image.elf')
     require(identity.hex() == p['build_id'], 'Build identity changed.')
     derived = bytearray(template)

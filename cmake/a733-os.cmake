@@ -47,9 +47,23 @@ endif()
 if(SUNSTONE_A733_OS_CPU_CLOCK AND NOT A733_A76_ADMITTED)
   message(FATAL_ERROR "CPU operating-point grants need A733_A76_ADMITTED")
 endif()
+# High and low performance modes (docs/designs/performance-modes.md): the
+# thermal task's CPU clock owner switches the CPU domains, and the NPU when
+# the image has it, between the speed bin's vendor points. The boot mode is
+# the image manifest's perf_boot_mode.
+option(SUNSTONE_A733_OS_PERF "Integrated OS with the high and low performance-mode service" OFF)
+set(SUNSTONE_A733_OS_PERF_BOOT "high" CACHE STRING "Performance mode at boot: high or low")
+if(SUNSTONE_A733_OS_PERF AND NOT SUNSTONE_A733_OS_CPU_CLOCK)
+  message(FATAL_ERROR "The performance-mode service runs in the CPU clock owner; it needs SUNSTONE_A733_OS_CPU_CLOCK")
+endif()
+if(NOT SUNSTONE_A733_OS_PERF_BOOT STREQUAL "high" AND NOT SUNSTONE_A733_OS_PERF_BOOT STREQUAL "low")
+  message(FATAL_ERROR "SUNSTONE_A733_OS_PERF_BOOT is high or low")
+endif()
 if(SUNSTONE_A733_OS_NPU)
+  # With the performance-mode service, the NPU profile also accepts the CPU grant.
   if(SUNSTONE_A733_OS_RESIDENT OR SUNSTONE_A733_OS_AUDIO OR SUNSTONE_A733_OS_RADIO OR
-     SUNSTONE_A733_OS_HEADSET OR SUNSTONE_A733_OS_CPU_CLOCK OR SUNSTONE_A733_OS_GPU_LINEAR)
+     SUNSTONE_A733_OS_HEADSET OR (SUNSTONE_A733_OS_CPU_CLOCK AND NOT SUNSTONE_A733_OS_PERF) OR
+     SUNSTONE_A733_OS_GPU_LINEAR)
     message(FATAL_ERROR "The initial NPU OS profile is supervised recorded audio, without other optional devices")
   endif()
   set(SUNSTONE_OS_NPU_CATALOGUE "" CACHE FILEPATH "Authenticated five-model NPU artifacts map")
@@ -249,6 +263,10 @@ if(A733_A76_ADMITTED)
   list(APPEND os_added apps/os/cpu.c drivers/clock/a733_cpu_clock.c)
   list(APPEND os_external_inputs "${os_root}/include/a733_cpu_clock.h")
 endif()
+if(SUNSTONE_A733_OS_PERF)
+  list(APPEND os_added apps/os/perf.c drivers/power/a733_perf_mode.c)
+  list(APPEND os_external_inputs "${os_root}/include/a733_perf_mode.h" "${os_root}/include/a733_clock_reference.h")
+endif()
 if(SUNSTONE_A733_OS_GPU_LINEAR)
   # The placement table comes from the models the image embeds by hash, for
   # the recognition core pair: cores 6 and 7 once the A76 cores are admitted,
@@ -347,6 +365,10 @@ if(A733_A76_ADMITTED)
   target_compile_definitions(sunstone-a733-os PRIVATE A733_A76_ADMITTED=1
     "$<$<BOOL:${SUNSTONE_A733_OS_CPU_CLOCK}>:SUNSTONE_A733_OS_CPU_CLOCK=1>")
 endif()
+if(SUNSTONE_A733_OS_PERF)
+  target_compile_definitions(sunstone-a733-os PRIVATE SUNSTONE_A733_OS_PERF=1
+    OS_PERF_BOOT_MODE=$<IF:$<STREQUAL:${SUNSTONE_A733_OS_PERF_BOOT},low>,2,1>)
+endif()
 if(SUNSTONE_A733_OS_MSBC)
   target_compile_definitions(sunstone-a733-os PRIVATE SUNSTONE_A733_OS_MSBC=1 SUNSTONE_BLUETOOTH_MSBC=1)
   set_source_files_properties(${os_sbc_sources} TARGET_DIRECTORY sunstone-a733-os
@@ -382,6 +404,9 @@ endforeach()
 if(A733_A76_ADMITTED)
   string(APPEND os_identity ";a76=1;cpu_clock=${SUNSTONE_A733_OS_CPU_CLOCK}")
 endif()
+if(SUNSTONE_A733_OS_PERF)
+  string(APPEND os_identity ";perf=1;perf_boot=${SUNSTONE_A733_OS_PERF_BOOT}")
+endif()
 string(SHA256 os_build_id "${os_identity}")
 string(REGEX REPLACE "(..)" "0x\\1," os_id_bytes "${os_build_id}")
 file(WRITE "${os_build}/build-id.c" "const unsigned char a733_smp_build_id[32]={${os_id_bytes}};\n")
@@ -400,5 +425,6 @@ add_custom_command(TARGET sunstone-a733-os POST_BUILD
     --audio "$<BOOL:${SUNSTONE_A733_OS_AUDIO}>" --radio "$<BOOL:${SUNSTONE_A733_OS_RADIO}>"
     --headset "$<BOOL:${SUNSTONE_A733_OS_HEADSET}>" --gpu-linear "$<BOOL:${SUNSTONE_A733_OS_GPU_LINEAR}>"
     --cpu-clock "$<BOOL:${SUNSTONE_A733_OS_CPU_CLOCK}>" --npu "$<BOOL:${SUNSTONE_A733_OS_NPU}>"
+    --perf "$<BOOL:${SUNSTONE_A733_OS_PERF}>"
     --output "${os_build}/link-check.json"
   VERBATIM)

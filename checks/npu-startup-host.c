@@ -25,7 +25,9 @@
  * stalled PPU and a readback mismatch retain the tokens; local stop, which
  * routes the SRAM back to the CPU. --second-start runs a second startup over
  * the state that local stop leaves, which adopts PLL_NPU and domain 4, and
- * the adoption and routing refusals. Output: JSON lines, then PASS. */
+ * the adoption and routing refusals. --retune changes the rate of a stopped
+ * NPU (a733_npu_startup_retune) in both directions, with its refusals and a
+ * lock failure. Output: JSON lines, then PASS. */
 #include "power-domains-model.h"
 /* The model boots the service itself; it does not use domains_boot(). */
 static void unused_boot(void){(void)domains_boot;}
@@ -92,7 +94,7 @@ static int reg_read(void *v,uintptr_t a,uint32_t *out)
     }
     *out=*word(a);
     if(a==CCU+0x2a0) {
-        if((*out&0xa0000000)==0xa0000000 && !r.never_lock) {
+        if((*out&0xa0000000)==0xa0000000 && r.never_lock!=1) {
             if(!r.locked_at)r.locked_at=m.now+r.lock_us;
             if(m.now>=r.locked_at)*out|=1u<<28;
         }
@@ -120,6 +122,8 @@ static int reg_write(void *v,uintptr_t a,uint32_t value)
         assert(!((*word(a)^value)&(1u<<24)));++r.pll_writes;
         /* New factors or a cleared lock enable: LOCK returns lock_us later. */
         if(((*word(a)^value)&0x0070ff02) || !(value&(1u<<29)))r.locked_at=0;
+        /* 2: LOCK stops once new factors are written. */
+        if(r.never_lock==2 && ((*word(a)^value)&0x0070ff02))r.never_lock=1;
         if(r.pll_log_n<16)r.pll_log[r.pll_log_n++]=value;
         if((value&(1u<<27)) && !r.pll_open_at)r.pll_open_at=r.writes;
     }
@@ -431,6 +435,71 @@ static int rate_852(void)
     puts("PASS NPU 852 MHz profile: cold enable, speed-bin admission, and rate changes in the vendor order");
     return 0;
 }
+/* The retune of a stopped NPU (a733_npu_startup_retune): after local stop,
+ * PLL_NPU moves between the two profiles in the vendor's rate change while
+ * the NPU's gates stay closed and its resets asserted. The refusals write
+ * nothing; a lock that never comes retains with the output gate closed. */
+static int stopped_npu(unsigned mhz)
+{
+    setup_mhz=mhz;setup();
+    struct run b=boot(200,1,0);assert(b.result==A733_NPU_PLATFORM_READY);
+    /* Before the stop the NPU runs: refused, nothing written. */
+    const unsigned writes=r.writes;
+    bootstrap_running=1;assert(a733_npu_startup_retune(&s,mhz==852 ? 492 : 852)==0);
+    assert(a733_npu_startup_stop(&s)==A733_NPU_PLATFORM_READY);bootstrap_running=0;
+    assert(r.writes>writes && s.stage==A733_NPU_STARTUP_STOPPED);
+    return 1;
+}
+static int retune(void)
+{
+    static const struct { unsigned from,to; uint32_t want; } runs[]={{852,492,0xe8305100},{492,852,0xe8104600}};
+    unsigned refusals=0;
+    printf("{");
+    for(unsigned i=0;i<2;++i) {
+        stopped_npu(runs[i].from);
+        const uint32_t b00=r.ccu[0xb00/4],b04=r.ccu[0xb04/4],from=r.ccu[0x2a0/4],f=runs[i].want&0x0070ff02;
+        const unsigned writes=r.writes,enters=r.enters,samples=r.lock_samples,reads=r.reads;
+        const uint64_t t0=m.now;r.pll_log_n=0;
+        bootstrap_running=1;const int x=a733_npu_startup_retune(&s,runs[i].to);bootstrap_running=0;
+        /* Output gate off, factors, lock enable off and on, LOCK, output
+         * gate on; the module and bus gates, the resets and the routing stay. */
+        assert(x==1 && r.ccu[0x2a0/4]==runs[i].want && r.ccu[0xb00/4]==b00 && r.ccu[0xb04/4]==b04 && r.sysctrl==2);
+        assert(!(b00&(1u<<31)) && !(b04&0x70001));
+        assert(r.pll_log_n==5 && r.pll_log[0]==(from&~(1u<<27)) && r.pll_log[1]==(0xe0000000|f) &&
+            r.pll_log[2]==(0xc0000000|f) && r.pll_log[3]==(0xe0000000|f) && r.pll_log[4]==runs[i].want);
+        assert(r.writes-writes==5 && r.enters-enters==2 && !r.held && r.lock_samples-samples>=3 &&
+            s.stage==A733_NPU_STARTUP_STOPPED && !s.failed && tokens_held());
+        printf("\"retune_%u_to_%u\":{\"pll_writes\":%u,\"register_reads\":%u,\"lock_samples\":%u,\"lock_acquisitions\":%u,\"elapsed_us\":%llu},",
+            runs[i].from,runs[i].to,r.writes-writes,r.reads-reads-(r.lock_samples-samples),r.lock_samples-samples,
+            r.enters-enters,(unsigned long long)(m.now-t0));
+        /* The same rate again, and a rate outside the two profiles, write nothing. */
+        bootstrap_running=1;
+        assert(a733_npu_startup_retune(&s,runs[i].to)==1 && r.writes-writes==5);
+        assert(a733_npu_startup_retune(&s,600)==0 && r.writes-writes==5);
+        bootstrap_running=0;refusals+=1;
+    }
+    /* Another task: refused. */
+    assert(a733_npu_startup_retune(&s,492)==0);++refusals;
+    /* 852 MHz on a bin whose column lists another voltage (vf0401, code
+     * 0x14): refused before any write. */
+    stopped_npu(492);r.sid=0x1400;
+    unsigned writes=r.writes;
+    bootstrap_running=1;assert(a733_npu_startup_retune(&s,852)==0 && r.writes==writes && !r.held);bootstrap_running=0;
+    ++refusals;
+    /* A state other than the one local stop leaves (the module gate open):
+     * refused, nothing written, the register lock released. */
+    stopped_npu(852);r.ccu[0xb00/4]|=1u<<31;writes=r.writes;
+    bootstrap_running=1;assert(a733_npu_startup_retune(&s,492)==0 && r.writes==writes && !r.held && !s.failed);bootstrap_running=0;
+    ++refusals;
+    /* LOCK never seen: retained after 100 observations, the output gate
+     * closed at the new factors and every token held. */
+    stopped_npu(852);r.never_lock=2;
+    bootstrap_running=1;assert(a733_npu_startup_retune(&s,492)==-1);bootstrap_running=0;
+    assert(s.failed && r.ccu[0x2a0/4]==0xe0305100 && tokens_held() && !r.held);
+    printf("\"refusals\":%u,\"lock_failure_retained\":1}\n",refusals);
+    puts("PASS stopped NPU retune: both directions in the vendor order with the gates closed, five refusals before any write, and a retained lock failure");
+    return 0;
+}
 int main(int argc,char **argv)
 
 {
@@ -439,6 +508,7 @@ int main(int argc,char **argv)
     if(argc==2 && !strcmp(argv[1],"--inherited-pll"))return inherited_pll();
     if(argc==2 && !strcmp(argv[1],"--second-start"))return second_start();
     if(argc==2 && !strcmp(argv[1],"--rate-852"))return rate_852();
+    if(argc==2 && !strcmp(argv[1],"--retune"))return retune();
     assert(argc==1);
     /* Boot to READY. */
     setup();

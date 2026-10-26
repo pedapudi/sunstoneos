@@ -25,7 +25,13 @@ then checks that:
 - in the CPU clock build (docs/designs/cpu-a76-dvfs.md), a grant that names
   a cluster is prepared only with an approval record bound to one board, the
   image, the session and one step, which cites that board's B1 record, and
-  every changed binding is refused.
+  every changed binding is refused;
+- in the performance-mode build (docs/designs/performance-modes.md), only a
+  grant of both clusters at the bin's high points is prepared, bound to a
+  performance-mode approval, and a single-cluster grant is refused;
+- --perf-sequence is refused for an image without the performance-mode
+  service and for a count other than the generations, and otherwise makes
+  one switch before each recognition and one readback after the capture.
 
 Every physical fact is a labeled synthetic record. No device, USB, queue
 database or FEL program is opened; the launcher's transport is never called.
@@ -136,6 +142,49 @@ def clock_cases(raw, record, put, target, identities, prepare, refused, out, cas
     assert not any((out / ('c%d' % i)).exists() for i in range(len(refusals))) and not (out / 'cn').exists()
 
 
+def perf_clock_cases(raw, record, put, target, identities, prepare, refused, out, cases):
+    """The performance-mode grant on a modeled board 3-3 (fuse word 0x496,
+    column vf0400): both clusters up to 1794 and 2002 MHz under one approval
+    of the mode service, which cites the board's B1 record."""
+    tail = len(raw) - prep.GRANT_BYTES
+    b1 = {**target, 'schema': prep.B1_SCHEMA, 'passed': True, 'grant_clusters': 0, 'sid_word': 0x496,
+          'dcdc3_mv': 800, 'dcdc5_mv': 800, 'pattern_lfm_clear': True,
+          'warning': 'Synthetic fixture only. Never physical authority.'}
+    approval = {**target, **identities, 'schema': prep.PERF_APPROVAL_SCHEMA,
+                'high_mhz': {'cpu-l': 1794, 'cpu-b': 2002}, 'changes': 64,
+                'approval_text': 'MODEL: no user approval exists', 'approval_date': '2026-10-25',
+                'b1': put('perf-b1', b1)}
+
+    def granted(name, facts=approval, maxima=(1794, 2002), clusters=3, changes=64):
+        ref = put('perf-approval-' + name, facts)
+        value = bytearray(raw)
+        struct.pack_into('<2Q', value, tail + 32, identities['epoch'], identities['generation'])
+        struct.pack_into('<4I', value, tail + 48, clusters, *maxima, changes)
+        value[tail + 64:tail + 96] = bytes.fromhex(ref['sha256'])
+        path = out / ('MODEL-session-perf-' + name + '.bin')
+        path.write_bytes(value)
+        entry = dict(record, session_template_sha256=hashlib.sha256(value).hexdigest(), cpu_clock_approval=ref)
+        entry_path = out / ('MODEL-admission-perf-' + name + '.json')
+        entry_path.write_text(json.dumps(entry))
+        return {'session': path, 'entry': entry_path}
+    prepare('MODEL-NOT-DEPLOYABLE-perf', **granted('both'))
+    session = (out / 'MODEL-NOT-DEPLOYABLE-perf/board/session.bin').read_bytes()
+    assert prep.grant_fields(session)['max_mhz'] == (1794, 2002) and prep.grant_fields(session)['clusters'] == 3
+    cases['prepared-performance-mode-grant-of-both-clusters'] = True
+    refusals = {
+        'single-cluster-grant': granted('single', maxima=(0, 2002), clusters=2),
+        'high-points-of-another-bin': granted('points', dict(approval, high_mhz={'cpu-l': 1794, 'cpu-b': 1976})),
+        'grant-below-the-high-points': granted('below', maxima=(1794, 1950)),
+        'approval-for-another-session': granted('lease', dict(approval, lease=identities['lease'] + 1)),
+        'cpu-clock-step-approval': granted('step', dict(approval, schema=prep.APPROVAL_SCHEMA)),
+        'changes-differ': granted('changes', changes=63),
+    }
+    for index, (name, files) in enumerate(refusals.items()):
+        assert refused((lambda f, n: lambda: prepare(n, **f))(files, 'p%d' % index)), name
+        cases['refuses-perf-' + name] = True
+    assert not any((out / ('p%d' % i)).exists() for i in range(len(refusals)))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('build', 'base', 'overlay', 'wav', 'output'):
@@ -163,6 +212,7 @@ def main():
                '-DSUNSTONE_BOARD_USB2_DUAL=1', '-DA733_SMP_CONTRACT_MAGIC=0x415337334f534331ULL',
                '-DOS_MODEL_BUILD_ID=' + ','.join(str(b) for b in build_id),
                *(['-DSUNSTONE_A733_OS_AUDIO=1'] if audio else []),
+               *(['-DSUNSTONE_A733_OS_PERF=1'] if manifest.get('perf_modes') else []),
                *(['-DA733_A76_ADMITTED=1', '-DSUNSTONE_A733_OS_CPU_CLOCK=1', '-ffunction-sections',
                   '-Wl,--gc-sections', 'drivers/clock/a733_cpu_clock.c'] if cpu_clock else []),
                'checks/os-image-model.c', 'drivers/storage/storage_digest.c', '-o', str(model)]
@@ -360,7 +410,9 @@ def main():
     assert not any((out / n).exists() for n in ('r1', 'r2', 'r3', 'r4', 'r5', 'r6', 'r7', 'r8', 'r9', 'r10', 'a1', 'a2', 'a3',
                                                  'a4', 'a5', 'a6', 'a7', 'n1'))
 
-    if cpu_clock:
+    if cpu_clock and manifest.get('perf_modes'):
+        perf_clock_cases(raw, record, put, target, identities, prepare, refused, out, cases)
+    elif cpu_clock:
         clock_cases(raw, record, put, target, identities, prepare, refused, out, cases)
 
     # The frozen bundle no longer depends on the original evidence files.
@@ -477,7 +529,9 @@ def main():
     capture_error = []
     window = [60]
 
-    def captured(device, same, deadline, prepared_value, evidence, record, save):
+    def captured(device, same, deadline, prepared_value, evidence, record, save, before=None):
+        for generation in range(1, prepared_value['_recognitions'] + 1) if before else ():
+            before(generation)
         calls.append(('capture', len(device.writes)))
         if capture_error:
             raise ValueError(capture_error[0])
@@ -601,6 +655,32 @@ def main():
         capture_error.clear()
         assert not device.writes and 'npu_report' not in records[-1]
         cases['failed-capture-sends-no-operation-6'] = True
+
+        # Performance modes: refused for an image without the service, and
+        # for a count other than the generations; otherwise one switch before
+        # each recognition and one readback after the capture.
+        without_perf = dict(prepared, _combined_frozen=dict(frozen, **{
+            'board/image-input-manifest.json': json.dumps(dict(check, perf_modes=False)).encode()}))
+        assert refused(lambda: launch('perf-refused', without_perf, '--perf-sequence', 'low'))
+        assert calls == [] and not (out / 'perf-refused').exists()
+        with_perf = dict(prepared, _combined_frozen=dict(frozen, **{
+            'board/image-input-manifest.json': json.dumps(dict(check, perf_modes=True, perf_operation=8, perf_boot_mode='high')).encode()}))
+        assert refused(lambda: launch('perf-count', with_perf, '--perf-sequence', 'high,low'))
+        assert refused(lambda: launch('perf-mode-name', with_perf, '--perf-sequence', 'mixed'))
+        saved_run = tool.perf_modes.run
+        tool.perf_modes.run = lambda exchange, command, mode=None, *unused, **kw: (
+            calls.append(('perf', command, mode)) or {'mode': 2, 'result': 2})
+        try:
+            device = Device({})
+            record = launch('perf-switch', with_perf, '--perf-sequence', 'low')
+        finally:
+            tool.perf_modes.run = saved_run
+        perf_calls = [c for c in calls if isinstance(c, tuple)]
+        assert perf_calls == [('perf', 2, 'low'), ('capture', 0), ('perf', 1, None)], perf_calls
+        assert [e['command'] for e in record['perf_modes']] == ['perf-switch-1', 'perf-status']
+        assert all(e['state'] == 'observed' for e in record['perf_modes'])
+        cases['perf-sequence-refused-without-service-or-count'] = True
+        cases['perf-sequence-switches-before-each-recognition'] = True
 
         for name, seconds in (('npu-window-ended', 0), ('npu-window-short', 0.05)):
             device = Device({6: matched})

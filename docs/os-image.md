@@ -764,6 +764,78 @@ the approval's, and the grant's approval hash is the record's SHA-256. The
 session size must agree with the link check's `cpu_clock` record. No new start entry, interrupt, task or resident service is
 added.
 
+## Performance-mode service: USB0 operation 8
+
+`SUNSTONE_A733_OS_PERF=ON` adds the high and low performance modes
+([user guide](performance-modes.md), [design](designs/performance-modes.md)).
+It needs `SUNSTONE_A733_OS_CPU_CLOCK` and may be combined with
+`SUNSTONE_A733_OS_NPU`, whose profile then also carries the CPU grant; the
+session is then 1,176 bytes. `SUNSTONE_A733_OS_PERF_BOOT=high|low` (default
+`high`) sets the boot mode, which the image keeps in `os_perf_boot_mode` and
+the link check records as `perf_boot_mode`, beside `perf_modes: true` and `perf_operation: 8`. Every
+link check records `perf_modes`; the host requires the exact opcode capability.
+
+- **Owner.** The thermal task's CPU clock owner (`apps/os/cpu.c`) runs one
+  service step (`apps/os/perf.c`) after each driver burst, once per tick. It
+  replaces the start's one request per granted cluster: once every sensor has
+  a reading at NORMAL (at most 500 ms), it reads every block back and
+  switches the CPU domains to the boot mode, and only then reports ready to
+  the recognizer. The NPU starts at the boot mode's rate.
+- **Grant.** This build accepts a grant of both clusters, or of none.
+  Other CPU-clock builds retain their TOP and B1 admission rules. Preparation binds a two-cluster grant to an approval record
+  of schema `a733-os-perf-modes-approval-v1`: the board, port, image, session
+  identities, the user's approval, the board's B1 record, the bin's high
+  points of both clusters and the change count.
+- **NPU.** After its session's local stop, the NPU bootstrap task waits for
+  retune requests instead of suspending, and changes PLL_NPU with
+  `a733_npu_startup_retune`.
+
+A request with operation 8 carries its command in the flags byte: 0 report,
+1 read back, 2 switch. A switch names the mode in offset bits 9:8 (1 high,
+2 low), the blocks in bits 4:0 (CPU-L 0, CPU-B 1, GPU 3, NPU 4) and the
+session's epoch in the generation field. A nonzero count, a command above 2,
+a report or read back with any offset or epoch, or offset bits outside
+`0x31f` stop USB0, as for every other operation; images without the service
+stop USB0 on operation 8. The answer is the 192-byte `struct os_perf_report`
+of `apps/os/perf.h` alone, without the 64-byte frame header:
+
+| Offset | Bytes | Field |
+| --- | --- | --- |
+| 0 | 4 | magic `0x4d465250` ("PRFM") |
+| 4 | 4 | version 1 |
+| 8 | 4 | size, 192 |
+| 12 | 4 | publication sequence, even |
+| 16 | 8 | session epoch |
+| 24 | 8 | session generation |
+| 32 | 4 | answer to this request: 0 report, 1 accepted, 2 busy, 3 stale epoch |
+| 36 | 4 | number USB0 gave the accepted command, else 0 |
+| 40 | 4 | number of the command last taken by the service |
+| 44 | 4 | number of the command last completed |
+| 48 | 4 | state: 1 while a command or the boot switch runs |
+| 52 | 4 | command: 1 read back, 2 switch |
+| 56 | 4 | result: 2 done, 3 refused, 4 stopped |
+| 60 | 4 | reason (`enum a733_perf_reason`), 0 when none |
+| 64 | 4 | failed block, 5 when none |
+| 68 | 4 | boot mode: 1 high, 2 low |
+| 72 | 4 | mode the readback shows: 1 high, 2 low, 3 mixed, 0 unknown |
+| 76 | 4 | speed-bin column, `0x0400` for vf0400; 0 without a table entry |
+| 80 | 4 | CPU grant changes left |
+| 84, 88, 92 | 4 each | masks of the owned blocks, the blocks read and the stopped clocks (bit 0 CPU-L, 1 CPU-B, 2 DSU, 3 GPU, 4 NPU) |
+| 96 | 80 | per block: target MHz and mV, read-back MHz and mV |
+| 176 | 4 | the command's block selection |
+| 180 | 4 | the command's mode |
+| 184 | 4 | the command's elapsed microseconds |
+| 188 | 4 | reserved |
+
+USB0 copies the publication with at most four attempts; a copy that does
+not settle, and any request before the first publication, is answered busy.
+USB0 accepts a read back or a switch into a one-slot mailbox only while no
+command runs and the mailbox is empty, and otherwise answers busy. A switch
+that names another epoch is answered as stale and posts nothing.
+`tools/sunstone-perf.py` sends these requests; the supervised launcher's
+`--perf-sequence` switches before each recognition and reads back after the
+capture.
+
 ## Build and checks
 
 Each row below builds in the supervised lifetime and, with
@@ -780,6 +852,7 @@ the interrupt table follow the options:
 | `SUNSTONE_A733_OS_RADIO`, `SUNSTONE_A733_OS_HEADSET`, with or without `SUNSTONE_A733_OS_MSBC` | `mimus`, `thermal`, `radio`, `headset` | 71 |
 | `SUNSTONE_A733_OS_GPU_LINEAR`, resident only, with any row above | That row's entries, then `gpu-linear` | That row's INTIDs, then 95 |
 | `SUNSTONE_A733_OS_NPU`, supervised only, alone | `mimus`, `thermal`, `npu` | 71, 97 |
+| `SUNSTONE_A733_OS_PERF` with `SUNSTONE_A733_OS_CPU_CLOCK`, supervised only, with or without `SUNSTONE_A733_OS_NPU` | That build's entries | That build's INTIDs |
 
 Configuration stops when `SUNSTONE_A733_OS_AUDIO` and
 `SUNSTONE_A733_OS_HEADSET` are both set, and when `SUNSTONE_A733_OS_MSBC` is
