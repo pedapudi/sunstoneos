@@ -259,14 +259,18 @@ nine cases with a model of the firmware's side of the queues.
 [the first-job design](../../docs/designs/gpu-first-job.md), between the
 firmware-stop variant's health check and its stop. It builds the job's
 workload VM, context programs, context and job in its own memory before any
-power change, kicks the job after the health check, waits at most 200 ms
-for the timeline word, checks the 32 output words and their guards, cleans
-the context up, and then attempts the firmware stop and the OFF whatever the
-job's result; after a failed job they complete only if the firmware
-acknowledges both power requests. The completion text is `COMPLETE GPU first job: 32 words
-as computed, context cleaned up, firmware stopped, OFF and provider
-parked`. `check.py --fw-job` runs eight cases with a model of the firmware
-and GPU that runs the job's client CCB commands.
+power change, sends the MMU cache command and kicks the job after the
+health check, waits at most 200 ms for the timeline word, checks the 32
+output words and their guards, cleans the context up, and then stops the
+firmware and powers the GPU off whatever the job's result. When the control
+has failed or the firmware acknowledges neither power request, the stop
+runs without the acknowledgements (upstream's hard reset) and powers off
+only when every idle poll matches. The completion text is `COMPLETE GPU
+first job: 32 words as computed, context cleaned up, firmware stopped, OFF
+and provider parked`. `check.py --fw-job` runs thirteen cases with a model
+of the firmware and GPU that runs the job's client CCB commands;
+`--board-log` with `--board-cases` compares a board log with chosen
+models.
 
 A wrapper-write variant was refused before any board run and removed
 ([gpu-power.md](../../docs/gpu-power.md#the-wrapper-write-probe-was-refused)).

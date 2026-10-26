@@ -12,9 +12,9 @@
  *   0xc0800000 + n * 0x10000, so the firmware reaches only them;
  * - the context programs and the job's programs, control stream, input,
  *   output and border table take 88 write-back pages of image RAM, mapped
- *   once each in the workload GPU VM; programs and inputs are GPU read-only,
- *   and the output page bypasses the GPU's system-level cache so that its
- *   writes reach DRAM;
+ *   once each in the workload GPU VM with no access restriction, as upstream
+ *   maps them; the output page bypasses the GPU's system-level cache so that
+ *   its writes reach DRAM;
  * - the workload VM's page tables take write-back image RAM.
  * The job's own GPU addresses lie in the PDS, USC and general heaps that
  * system init names (0xda00000000, 0xe000000000, 0x8000000000). */
@@ -52,6 +52,9 @@ static int job_admitted;
 /* The cleanup command's return word, and its slot. */
 static uint32_t job_cleanup_status = UINT32_MAX;
 static struct pvr_ccb_token job_cleanup_token;
+/* The MMU cache command's return word, and its slot. */
+static uint32_t job_mmu_status = UINT32_MAX;
+static struct pvr_ccb_token job_mmu_token;
 static uint32_t job_output_words[4];
 
 static uint64_t job_address(unsigned program, unsigned i)
@@ -110,8 +113,9 @@ static int fws_job_prepare(uintptr_t nc, struct pvr_mips_object *objects)
         const uint64_t va = job_address(program, j);
         const struct pvr_compute_program_span span = {d->storage.cpu, n, va};
         if (program) p->buffers[j] = span; else job_config.buffers[j] = span;
-        const unsigned flags = (program ? j < PVR_PROGRAM_SHARED_A : j != PVR_JOB_OUTPUT) ? PVR_GPU_VM_READ_ONLY :
-            !program && j == PVR_JOB_OUTPUT ? PVR_GPU_VM_SLC_BYPASS : 0;
+        /* Upstream sets neither the read-only nor the cache-coherent bit
+         * (pvr_mmu.c:2601-2603): only the output's cache bypass. */
+        const unsigned flags = !program && j == PVR_JOB_OUTPUT ? PVR_GPU_VM_SLC_BYPASS : 0;
         for (unsigned k = 0; k < d->page_count; ++k) {
             if (count == JOB_PAYLOAD_PAGES) return 0;
             job_maps[count++] = (struct pvr_gpu_mapping){va + k * 4096u, d->pages[k], 4096, 12, flags};
@@ -275,6 +279,26 @@ static int fws_job_run(uint64_t deadline)
             if (bb_power_now() >= deadline) break;
         stage = r == A733_GPU_VM_MEMORY_OK ? 2 : 0;
     } else stage = 0;
+    /* pvr_mmu_flush_exec before the first KICK (pvr_job.c:806,
+     * pvr_mmu.c:124-158): MMUCACHE (102) with the level-2 flags that a new
+     * page catalogue requests (PT, PD, PC, TLB and the interrupt,
+     * pvr_mmu.c:71-75 and 924), the MMU sync object and update value 0;
+     * upstream waits for it. The vendor DDK also invalidates before every
+     * kick (RGXPreKickCacheCommand, rgxfwutils.c:4065). */
+    if (stage == 2) {
+        const uint32_t command[PVR_CCB_COMMAND_BYTES / 4] = {PVR_CCB_MAGIC | 102u, 0, 0x400001fu,
+                                                             pvr_fw_state_layout(PVR_FW_MMU_SYNC)->address, 0};
+        stage = 0;
+        if (pvr_ccb_submit(&queue, command, bb_power_now(), deadline, &job_mmu_token) == PVR_CCB_OK) {
+            for (;;) {
+                if (pvr_gpu_control_poll(&control, 4) == PVR_GPU_CONTROL_FAULT) break;
+                enum pvr_ccb_result r = pvr_ccb_settle(&queue, job_mmu_token, &job_mmu_status);
+                if (r == PVR_CCB_OK) { if (job_mmu_status <= 1) stage = 2; break; }
+                if (r != PVR_CCB_AGAIN || bb_power_now() >= deadline) break;
+                vTaskDelay(1);
+            }
+        }
+    }
     static const struct pvr_cccb_ops client_ops = {fws_now, job_read, job_write, job_barrier};
     static const struct pvr_compute_job_ops job_ops = {fws_now, job_publish, job_read_fence, job_read_output};
     if (stage == 2 && pvr_cccb_init(&job_client, &client_ops, NULL, &queue, JOB_RING_BYTES,
@@ -342,6 +366,23 @@ static int fws_job_run(uint64_t deadline)
     }
     /* How far the firmware read the client CCB, and the KICK slot's
      * return word. */
+    /* The firmware's recovery record (struct rogue_fwif_hwrinfobuf,
+     * pvr_rogue_fwif.h:395-440): the count, the next index and the first
+     * record's type, data master, event status and its first two fault
+     * status words (BIF request and MMU status). */
+    bb_line_start(&line, "GPU FWJ hwr");
+    bb_line_hex(&line, "mmu_status", job_mmu_status);
+    bb_line_dec(&line, "count", *shared_word(PVR_FW_RECOVERY_INFO, 2176));
+    bb_line_dec(&line, "index", *shared_word(PVR_FW_RECOVERY_INFO, 2180));
+    bb_line_dec(&line, "type", *shared_word(PVR_FW_RECOVERY_INFO, 72));
+    bb_line_dec(&line, "dm", *shared_word(PVR_FW_RECOVERY_INFO, 76));
+    bb_line_hex(&line, "event", *shared_word(PVR_FW_RECOVERY_INFO, 64));
+    bb_line_hex(&line, "s0", (uint64_t)*shared_word(PVR_FW_RECOVERY_INFO, 4) << 32 | *shared_word(PVR_FW_RECOVERY_INFO, 0));
+    bb_line_end(&line); bb_power_print(&line);
+    bb_line_start(&line, "GPU FWJ hwr status");
+    bb_line_hex(&line, "s1", (uint64_t)*shared_word(PVR_FW_RECOVERY_INFO, 12) << 32 | *shared_word(PVR_FW_RECOVERY_INFO, 8));
+    bb_line_hex(&line, "pc", (uint64_t)*shared_word(PVR_FW_RECOVERY_INFO, 20) << 32 | *shared_word(PVR_FW_RECOVERY_INFO, 16));
+    bb_line_end(&line); bb_power_print(&line);
     bb_line_start(&line, "GPU FWJ ring");
     bb_line_hex(&line, "cccb_read", a733_mmio_read32_dsb_sy_after((uintptr_t)job_objects[2].storage.cpu + 4));
     bb_line_hex(&line, "cccb_write", job_client.write);

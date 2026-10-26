@@ -1,7 +1,8 @@
 # The first GPU job on the A733
 
-Status: **implemented, host-checked and frozen for port 3-1; not yet run
-on a board.** The firmware lifecycle passed on port 3-1
+Status: **failed on port 3-1 in set 27 (see "Set 27 on port 3-1"); the
+failure path is fixed and host-checked; the job's cause is not yet
+known.** The firmware lifecycle passed on port 3-1
 ([firmware stop design](gpu-firmware-stop.md)): start, one health check,
 forced idle, power off, idle checks, OFF. This note plans the first job that
 makes the GPU compute something the host can check, from the upstream Linux
@@ -59,11 +60,21 @@ it, or with a return word of 1, single and paired. The job's completion
 stays its timeline word. The cleanup keeps its return-word wait, because
 upstream waits on it.
 
-**The MMU cache.** The workload VM's tables are written and cleaned before
-the firmware starts, and nothing changes them while the firmware runs, so
-the GPU's MMU caches are cold when the job runs. No `MMUCACHE` command is
-needed for this job; one is needed when a running firmware sees a mapping
-change.
+**The MMU cache.** Set 27 skipped `MMUCACHE`, reasoning that the tables
+were written before the firmware started. Neither reference ever skips it:
+upstream flushes the requested MMU caches before the first submission
+(`pvr_job.c:806`, `pvr_mmu.c:124–158`), and the vendor DDK invalidates
+before every kick (`RGXPreKickCacheCommand`, `rgxfwutils.c:4065`). The image
+now sends `MMUCACHE` (102) with the flags a new page catalogue requests (PT,
+PD, PC, TLB and the interrupt, `0x400001f`, `pvr_mmu.c:71–75`), the MMU sync
+object at `0xc0109000` and update value 0, and waits until the firmware has
+consumed it before the KICK.
+
+**Access bits.** Set 27 mapped the programs, control stream, input and
+border table GPU read-only. Upstream sets neither the read-only nor the
+cache-coherent bit on any job mapping (`pvr_mmu.c:2601–2603`); the image now
+maps every page without restriction, and only the output keeps its
+system-level-cache bypass.
 
 **The output and the system-level cache.** The output page is mapped with
 the GPU's system-level-cache bypass, so the GPU's writes reach DRAM, where
@@ -88,7 +99,8 @@ the health check and the stop:
    RAM. Every page's translation is checked first. The job's GPU addresses
    lie in the PDS, USC and general heaps that system init names.
 2. **After the health check**: the workload pages are cleaned and the tables
-   published; the client CCB control is formatted; the job publishes its
+   published; `MMUCACHE` is sent and consumed; the client CCB control is
+   formatted; the job publishes its
    output guards, checks the timeline is 0, writes the CDM command and the
    UPDATE of the timeline to 1, and kicks.
 3. **The wait** ends at 200 ms. The image checks the 32 words and both guards
@@ -96,14 +108,21 @@ the health check and the stop:
    they are correct. A timeline that stays 0, or a wrong word, ends the job
    without failing its transport: a failed transport would fail the shared
    kernel CCB, and with it the stop.
-4. **Cleanup**: `CLEANUP` (106) of the context, with its return word.
-5. **The stop and OFF** of the firmware-stop image, attempted whatever the
-   job's result. After a failed job the firmware may refuse or not finish
-   the power requests with the context live, and then the GPU stays on.
+4. **Cleanup**: `CLEANUP` (106) of the context, with its return word, once
+   the firmware has finished with the context: the job complete, its
+   timeline reached, or the context reset.
+5. **The stop and OFF** of the firmware-stop image, whatever the job's
+   result. When the control has failed, or the firmware acknowledges
+   neither power request, the stop runs without the acknowledgements: the
+   register sequence and, when every idle poll matches, the OFF. Only a GPU
+   that never reports idle stays powered.
 
-Firmware events during the job: a debug dump, statistics or a core clock
-notice (upstream types 106–108) are counted; any other event, such as a
-context-reset notice, fails the control, and then the stop cannot run.
+Firmware events during the job: every event of types 101–108 is recorded
+and none fails the control, as upstream processes the firmware CCB without
+failing on a type it does not handle (`pvr_ccb.c:139–160`). A context-reset
+notice (105) ends the job as failed and its words are printed. A restart
+request (109) or a firmware page fault (112) fails the kernel CCB; the stop
+then runs without the firmware's acknowledgements (below).
 
 The job runs on the single-core profile that the A733 user manual
 documents (MC1). The image does not read the core-count registers
@@ -146,6 +165,86 @@ The USC program is first executed on the board. The host checks compare
 its bytes with the pinned compiler's output and model the GPU's writes,
 but no check executes it.
 
+## Set 27 on port 3-1
+
+Set `board-bundles-20261025-27` ran in the lifetime of set 25
+(`board-session-20261025-22/port-3-1/s22-gfj-run`). The start and the health
+check passed as before. Then:
+
+```text
+GPU FWJ job complete=0 outcome=4 stage=4 phase=4 error=0 client=7 client_error=0 kick_status=0x0 timeline=0x1
+GPU FWJ output w0=0xd1a3566f w1=0x2f64cf9c w31=0xb88a0ade guard=0x6d35a7c1 expected0=0x2e5ca990 expected31=0x4775f521
+GPU FWJ cleanup status=0xffffffff events=0 kccb_done=0x2 pow_state=0x3
+FAIL GPU firmware stop refused, GPU left running
+```
+
+- Stage 4 means the job had started; phase 4 is `PVR_JOB_KICK`, and client
+  7 is `PVR_CCCB_WAIT`: the KICK had been sent and was waiting to be
+  settled. Outcome 4 is the transport: the loop ended because the control
+  failed, not on the timeline or the output.
+- The firmware consumed the KICK: the executed count went from 1 to 2. It
+  set the timeline to 1, the value of the job's UPDATE command, and raised
+  its interrupt; the image read the interrupt and cleared it (accesses 104
+  and 105).
+- The output is the image's own fill: before the KICK it writes the
+  complement of each expected word, and w0, w1 and w31 are each the exact
+  complement (`0xd1a3566f XOR 0x2e5ca990 = 0xffffffff`, likewise for w1 and
+  w31); the guards are intact. No GPU store reached those words.
+- The progress record ends at access 105, the interrupt clear. The next
+  access of the control's poll, the second interrupt read, never came, so
+  the control failed between them: on a firmware event it refused, on a
+  restart request, or on a KICK return word with bits beyond 0–2. The host
+  model reproduces every logged line with each of these
+  (`check.py --fw-job --board-log`); the log cannot tell them apart. The
+  firmware CCB in the image's Normal-NC pages, still in DRAM while the
+  board waits in FEL, can.
+- The cleanup was not sent (0xffffffff is the image's initial value): the
+  image sent it only after a complete job. With the control failed, the stop
+  refused to start, and the GPU stayed powered with the firmware running.
+
+The completion check did not miss the timeline: the job never reached its
+wait, and had it, the output check would have found the fill.
+
+**Likely cause.** A job that runs normally, or never launches its USC
+program, raises no firmware event. If the event was a context reset (105),
+the GPU faulted in the job within about a millisecond, too soon for the
+lockup detector (the context's limit is 30,000 ms): an MMU page fault or a
+USC error. The firmware reset the context, skipped the CDM command and
+still ran the UPDATE after it. No host source documents that last step; it
+fits the timeline of 1 and the untouched output. A step-by-step comparison
+of the kick path with upstream, the DDK and Mesa found the context, client
+CCB commands, KICK, page-table entry formats, CDM stream, cleanup and CPU
+cache maintenance matching, and these differences, most likely first:
+
+1. The USC program has never executed on hardware.
+2. No `MMUCACHE` before the first KICK; both references always send it.
+3. Read-only bits on the program, stream, input and border pages, which
+   upstream never sets.
+4. The CDM command's flags `0x24` (prevent overlap, single core), which
+   Mesa sets for barriers or atomics.
+
+The pointer constants of the job's PDS program are stored high word first.
+That matches Mesa's DOUTW constants (`pvr_pds.c:3664–3667`), whose
+save-restore shader reads the low half from the even input register
+(`pvr_iface.h:117–124` in the producer's Mesa tree), so it is not counted
+as a difference. The context reset's words (reason, page-fault flag, page
+catalogue and fault address) decide between these; the next run prints
+them, and the firmware CCB still in DRAM holds set 27's.
+
+**Changes.** The job image records events 101–108 without failing the
+control; it settles a consumed KICK after the job, so its pending slot cannot
+fail the kernel CCB; it sends the cleanup whenever the firmware has finished
+with the context. When the control has failed or the firmware acknowledges
+neither power request, the stop runs without the acknowledgements, as
+upstream's hard reset does ([GPU stop](../gpu-stop.md)): the register
+sequence and, when every idle poll matches, the OFF. Only a GPU that never
+reports idle now stays powered. New lines report the control error, the
+events, a context reset's words, the client CCB's read offset and the
+KICK's return word, the MMU command's status and the firmware's first
+recovery record. Differences 2 and 3 are removed (see "What SunstoneOS
+changes"); 1 and 4 stay, because the program and the command bytes are
+compared with Mesa's output.
+
 ## Design gate
 
 **Cost.** One job per run; it adds two KCCB commands (the KICK and the
@@ -158,12 +257,20 @@ margin. The image's log for a complete run in the host check is 10,813 of
 
 - `checks/pvr-cccb.py`: the ring's reference bytes and the KICK consumed
   without a return word.
-- `apps/gpu-power-id/check.py --fw-job`: eight cases on the linked image,
+- `apps/gpu-power-id/check.py --fw-job`: thirteen cases on the linked image,
   with a model of the firmware and GPU that runs the client CCB's CDM and
   UPDATE commands. Covered: the complete job, also with a KICK return word
   and with a statistics event; a timeline that never moves; a wrong word;
-  a broken guard; a cleanup without a return word; a context-reset event.
+  a broken guard; a cleanup without a return word; a context-reset event
+  with and without the output; set 27's signature (`fj-board-1025`); a
+  restart request; a bad KICK return word; no acknowledgement of the power
+  requests, with and without an idle GPU. With `--board-log`, the
+  set-27 image reproduces every logged line of set 27 under three of
+  these models.
   Every case's start is the firmware-start sequence access for access, and
   every later GPU access is an interrupt read or clear, a kick and its
   read-back, or the next stop step.
-- The firmware-stop image's loadable bytes are unchanged (`c88ba19c…`).
+- The firmware-stop image changes with the stop without acknowledgements;
+  `check.py --fw-stop` passes ten cases, three of them new or changed.
+- `checks/pvr-gpu-stop.c` (121 retained faults) and
+  `checks/pvr-gpu-stop-reference.py` pass.

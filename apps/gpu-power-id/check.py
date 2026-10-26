@@ -1243,8 +1243,8 @@ def check_fwj(u, image, state, case, timer_reads):
         # stop runs without the acknowledgements, the register plan and,
         # when every idle poll matches, the OFF.
         kinds = [c[0] for c in state['commands']]
-        assert kinds == ([115, 101] if case in ('fj-restart-event', 'fj-kick-bad-word') else
-                         [115, 101, 107]), state['commands']
+        assert kinds == ([115, 102, 101] if case in ('fj-restart-event', 'fj-kick-bad-word') else
+                         [115, 102, 101, 107]), state['commands']
         assert stop_accesses and all(step >= 150 for (w, a, v), step in post if 100 <= step < 200), post
         assert ' unacknowledged=1' in output, output[-2500:]
         assert ('a733_gpu_platform_off_begin' in calls) == (case != 'fj-not-idle'), calls
@@ -1258,7 +1258,7 @@ def check_fwj(u, image, state, case, timer_reads):
             assert 'GPU FWJ job complete=0 outcome=4 stage=4 phase=4 error=0 client=7 client_error=0 kick_status=0x0 ' \
                    'timeline=0x1\n' in output, output[-2500:]
             assert f'GPU FWJ events control=5 control_error={errors[case]} n=0 last=0x0 ' in output, output[-2500:]
-            assert 'GPU FWJ cleanup status=0xffffffff events=0 kccb_done=0x2' in output, output[-2500:]
+            assert 'GPU FWJ cleanup status=0xffffffff events=0 kccb_done=0x3' in output, output[-2500:]
         state['cycles'] = calls.count('a733_gpu_platform_off_begin')
         state['memory_flushes'] = state.pop('cache')
         return state
@@ -1277,13 +1277,16 @@ def check_fwj(u, image, state, case, timer_reads):
             inverse = [w ^ 0xffffffff for w in (JOB_WORDS[0], JOB_WORDS[1], JOB_WORDS[31])]
             assert f'GPU FWJ output w0={inverse[0]:#x} w1={inverse[1]:#x} w31={inverse[2]:#x} guard={JOB_GUARD:#x}' \
                 in output, output[-2500:]
-        assert 'GPU FWJ cleanup status=0x1 events=1 kccb_done=0x3' in output, output[-2500:]
+        assert 'GPU FWJ cleanup status=0x1 events=1 kccb_done=0x4' in output, output[-2500:]
     complete = case in ('fj-board', 'fj-kick-word', 'fj-stats-event', 'fj-cleanup-no-word')
     kinds = [c[0] for c in state['commands']]
+    # The MMU cache command precedes the KICK: PT, PD, PC, TLB and the
+    # interrupt, the MMU sync object, update value 0.
+    assert state['commands'][1] == [102, 0x400001f, 0xc0109000], state['commands']
     # The cleanup follows whenever the firmware has finished with the
     # context: the timeline reached, or the context reset.
     cleaned = case not in FWJ_NO_TIMELINE
-    assert kinds == ([115, 101, 106, 107, 107] if cleaned else [115, 101, 107, 107]), state['commands']
+    assert kinds == ([115, 102, 101, 106, 107, 107] if cleaned else [115, 102, 101, 107, 107]), state['commands']
     assert len(kicks) == len(kinds), kicks
     assert state['client_commands'] == [0x8000 | 205, 213], state['client_commands']
     timeline = int.from_bytes(u.mem_read(JOB_OBJECTS[5], 4), 'little')
@@ -1296,7 +1299,7 @@ def check_fwj(u, image, state, case, timer_reads):
         assert f'GPU FWJ output w0={JOB_WORDS[0]:#x} w1={JOB_WORDS[1]:#x} w31={JOB_WORDS[31]:#x} ' \
                f'guard={JOB_GUARD:#x}' in output, output[-2500:]
         cleanup = 0 if case == 'fj-cleanup-no-word' else 1
-        assert f'GPU FWJ cleanup status={cleanup:#x} events={int(case == "fj-stats-event")} kccb_done=0x3' \
+        assert f'GPU FWJ cleanup status={cleanup:#x} events={int(case == "fj-stats-event")} kccb_done=0x4' \
             in output, output[-2500:]
     else:
         # The job stays waiting for its timeline, with no transport fault,
