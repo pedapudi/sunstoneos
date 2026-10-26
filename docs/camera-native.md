@@ -254,7 +254,7 @@ write to that file. A separate short case covers S_TWI1 register width and
 retained cancellation. Models do not qualify wiring, prefetch, timing,
 coherence, reset, camera output or physical recovery.
 
-Wider resolutions, continuous capture, the CAM2 connector, alternate sensors,
+Wider resolutions, the CAM2 connector, alternate sensors,
 ISP processing, interrupt-driven service, buffer reclamation and a general
 application service remain required hardware capabilities outside this reference
 capture profile.
