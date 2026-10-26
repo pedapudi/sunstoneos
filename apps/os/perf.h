@@ -38,7 +38,8 @@ struct a733_cpu_clock;
 struct a733_thermal_policy;
 /* Thermal task, in os_cpu_clock_step after each driver burst, with that
  * burst's result: one bounded service step. Returns 1 once the boot switch
- * has finished, whatever its result, and 0 before. */
+ * has finished, 0 before, and -1 after publishing a terminal failure. The
+ * caller must end the session on -1, preserving retained ownership. */
 int os_perf_step(struct a733_cpu_clock *, const struct a733_thermal_policy *, int burst);
 /* USB0 task: answers one operation 8 request that passed the framing rules. */
 void os_perf_usb(unsigned command, uint32_t selection, uint64_t epoch, uint8_t out[OS_PERF_REPORT_BYTES]);
