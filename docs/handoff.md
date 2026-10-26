@@ -168,6 +168,15 @@ analysis is on `work/cpu-top-opp-step6-1025`. An earlier attempt
 (`board-session-cpu-top-opp-8`) stopped before launch because its binding
 compared the wrong hash kind; set 5 fixed it.
 
+**microSD set 28 on port 3-3.**
+- **Lifetime A passed** (`board-session-20261025-30`): high speed at 50 MHz, 4-bit, 3.3 V. All 256 reads completed and the card clock stopped on exit. Throughput was 1.4 to 1.7 MB/s, limited by per-request polling, and DMA is designed in `docs/designs/sd-dma.md` on `work/sd-returning-1025`.
+- **Lifetime B stopped** (`board-session-20261025-32`) at the CMD11 voltage switch, before any read, with `SD_REASON=3`, platform stage 13, and the card clock stopped by the module-clock fallback. Its diagnosis is pending.
+
+**Initialization-only DRAM capture, port 3-1** (`board-session-20261025-33`):
+boot0 initialized without training (result 7, 12,288 MiB, `dram_tpr13`
+0x10061, simple test FAIL, as predicted), and both SRAM captures completed
+five stages.
+
 **P-state-0-only DRAM capture, port 3-1** (`board-session-20261025-31`):
 training took 4,451 ms, 12,288 MiB, and both captures passed.
 
