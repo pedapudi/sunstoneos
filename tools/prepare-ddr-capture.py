@@ -94,10 +94,18 @@ STAGES = [
 ]
 
 
-def build_tables():
+# The SRAM build keeps tables and results in boot0's body area, which is
+# free after the DDR wrapper returns, for captures after the
+# initialization-only run, whose DRAM is untrained. It omits the last stage.
+SRAM_TABLE, SRAM_OUTPUT, SRAM_LIMIT = 0x4a000, 0x4b000, 0x82000
+
+
+def build_tables(memory="dram"):
     stages = []
-    for index, stage in enumerate(STAGES):
-        output = OUTPUT + OUTPUT_STRIDE * index
+    table_address = TABLE if memory == "dram" else SRAM_TABLE
+    next_output = SRAM_OUTPUT
+    for index, stage in enumerate(STAGES if memory == "dram" else STAGES[:-1]):
+        output = OUTPUT + OUTPUT_STRIDE * index if memory == "dram" else next_output
         table = bytearray(struct.pack("<8I", MAGIC, 1, len(stage["entries"]), output,
                                       0xffffffff, 0xffffffff, 0xffffffff, 0))
         layout = []
@@ -113,11 +121,15 @@ def build_tables():
                            "phy": bool(flags & PHY), "ucclk": bool(flags & UCCLK),
                            "offset": offset, "note": note})
             offset = (offset + count * width + 3) & ~3
-        if offset > OUTPUT_STRIDE or len(table) > 0x10000:
+        if offset > OUTPUT_STRIDE or len(table) > 0x1000:
             sys.exit(f"{stage['name']}: output or table too large")
+        if memory == "sram":
+            next_output = (output + offset + 0xfff) & ~0xfff
+            if next_output > SRAM_LIMIT:
+                sys.exit("SRAM results exceed boot0's body area")
         stages.append({"name": stage["name"], "purpose": stage["purpose"],
                        "table": bytes(table), "output": output, "output_bytes": offset,
-                       "entries": layout})
+                       "entries": layout, "table_address": table_address})
     return stages
 
 
@@ -125,6 +137,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True,
                         help="new directory for the reader, tables and manifest")
+    parser.add_argument("--memory", choices=("dram", "sram"), default="dram",
+                        help="where the tables and results live; sram for untrained DRAM")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
     linker = shutil.which("ld.lld") or str(CACHE / "host/usr/lib/llvm-21/bin/ld.lld")
@@ -132,7 +146,9 @@ def main():
     for name, address in (("ddr-capture", READER), ("cache-off", 0x71000)):
         source = ROOT / f"boot/a733/{name}.S"
         obj, elf = args.output / f"{name}.o", args.output / f"{name}.elf"
-        subprocess.run(["clang", "--target=arm-none-eabi", "-march=armv8-a", "-c",
+        defines = ([f"-Wa,--defsym,TABLE_ADDR={SRAM_TABLE:#x}"]
+                   if args.memory == "sram" and name == "ddr-capture" else [])
+        subprocess.run(["clang", "--target=arm-none-eabi", "-march=armv8-a", "-c", *defines,
                         str(source), "-o", str(obj)], check=True)
         subprocess.run([linker, f"-Ttext={address:#x}", "-e", "_start", str(obj), "-o", str(elf)],
                        check=True)
@@ -142,15 +158,16 @@ def main():
         sys.exit("Reader exceeds its 1 KiB SRAM interval.")
     files = ["ddr-capture.bin", "cache-off.bin"]
     manifest_stages = []
-    for index, stage in enumerate(build_tables()):
+    for index, stage in enumerate(build_tables(args.memory)):
         name = f"stage{index + 1}-{stage['name']}.bin"
         (args.output / name).write_bytes(stage["table"])
         files.append(name)
-        manifest_stages.append({key: value for key, value in stage.items() if key != "table"}
-                               | {"file": name})
+        manifest_stages.append({key: value for key, value in stage.items()
+                                if key not in ("table", "table_address")} | {"file": name})
     manifest = {
         "kind": "a733-ddr-capture-build",
-        "reader": READER, "table": TABLE, "cache_off": 0x71000,
+        "reader": READER, "table": TABLE if args.memory == "dram" else SRAM_TABLE,
+        "memory": args.memory, "cache_off": 0x71000,
         "sources": {name: hashlib.sha256((ROOT / f"boot/a733/{name}.S").read_bytes()).hexdigest()
                     for name in ("ddr-capture", "cache-off")}
         | {"prepare-ddr-capture.py": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()},

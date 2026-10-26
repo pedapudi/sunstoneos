@@ -176,29 +176,48 @@ other fields than the design assumes; record it and continue.
 
 ## P-state-0-only and initialization-only captures
 
-**Gate:** these change boot0's training input, so they run only after the
-restore design's second independent review closes. Each uses a fresh
-lifetime; the commands differ from the four-P-state ones only as listed.
+**Gate:** these change boot0's training input. The second independent
+review (2026-10-25) closed the gate for the P-state-0-only run. It kept it
+open for the initialization-only run until its capture moved out of
+untrained DRAM; the SRAM capture build below does that and needs the
+reviewer's short re-check before it runs. Each run uses a fresh lifetime;
+the commands differ from the four-P-state ones only as listed.
 
 - **P-state 0 only** (three lifetimes per board): step 1 uses
   `--build $C/ddr-pstate0` and the record name `p0-ddr`; steps 2 and 3
   name `p0-capture-1` and `p0-capture-2` and pass `--ddr-evidence $S/p0-ddr`.
-  *Predictions:* one `Training result is = 7` line, then `DRAM Pstate 0
-  training, frequency is 2040 Mhz`; 12,288 MiB; `DRAM BOOT DRIVE INFO` to
-  `Actual DRAM SIZE` 4,400–4,600 ms; `dram_tpr13` reported as `0x10061`;
-  both 4 KiB pages read back; six stages complete in each capture. A
-  P-state 0 run much shorter than 4.4 s is a finding about boot0's
-  multi-P-state firmware runs, and the timing must be recorded.
-- **Initialization only** (two lifetimes per board): step 1 uses
-  `--build $C/ddr-init-only --allow-untrained` and the record name
-  `in-ddr`; steps 2 and 3 name `in-capture-1` and `in-capture-2` and add
-  `--allow-untrained` with `--ddr-evidence $S/in-ddr`. *Predictions:* the
-  wrapper returns to FEL with stage 5; the firmware reports a result
-  (7 expected if it accepts the step value `0x0001`); boot0 may then report
-  `DRAM initial error` or a size of 0, because DRAM is untrained, and the
-  runner records `untrained` true without testing RAM pages; six stages
-  complete in each capture. The lifetime ends there: the next use of the
-  board needs a power removal.
+  *Predictions:*
+  - one `Training result is = 7` line, then `DRAM Pstate 0 training,
+    frequency is 2040 Mhz`, and no P-state 1 to 3 lines;
+  - 12,288 MiB and `DRAM simple test OK.`;
+  - `DRAM BOOT DRIVE INFO` to `Actual DRAM SIZE` about 4,424 ms
+    (2 + 4,417 + 5 from the first lifetime), within 4,400–4,650 ms;
+  - `dram_tpr13` reported as `0x10061`, `dram_tpr10` as `0x925f0000`;
+  - message-block training-step value `0x125f` at `0x0a9b0010` and
+    parameter words 32–51 nonzero;
+  - both 4 KiB pages read back and six stages complete in each capture.
+
+  A P-state 0 run much shorter than 4.4 s is a finding about boot0's
+  multi-P-state runs and must be recorded. A firmware failure returns 0
+  from `0x56132`, the wrapper reports 0 MiB and `run-ddr.py` quarantines
+  the board.
+- **Initialization only** (two lifetimes per board, after the re-check):
+  step 1 uses `--build $C/ddr-init-only --allow-untrained` and the record
+  name `in-ddr`; steps 2 and 3 use the SRAM build, name `in-capture-1` and
+  `in-capture-2`, and add `--allow-untrained` with
+  `--build $C/capture-sram --ddr-evidence $S/in-ddr`. The SRAM build keeps
+  its tables at `0x4a000` and results at `0x4b000`–`0x5f9a4`, in boot0's
+  body area, which is free after the wrapper returns, and omits stage 6.
+  *Predictions:* the wrapper returns to FEL with stage 5, or does not
+  return; a return that the host's 30 s limit does not see stops the
+  session with quarantine. With firmware result 7, the log shows
+  `Actual DRAM SIZE =12288 M`, `dram_tpr13 = 10061` and most likely
+  `DRAM simple test FAIL… read 10 times again`; `dram_mib` is 0 and
+  `dram_tpr10` reads `0x80010000` (bit 29 cleared at `0x49c9a`). With any
+  other result the log shows `DRAM initial error : 1 !` and `dram_tpr10`
+  stays `0xa0010000`. Parameter words 32–51 hold values read from
+  untrained DRAM and are not used. Five stages complete in each capture.
+  The lifetime ends there: the next use of the board needs a power removal.
 
 The restore set is the PHY registers that differ between the P-state-0-only
 and initialization-only captures of a board, minus the status class.

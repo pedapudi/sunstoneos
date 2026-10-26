@@ -33,14 +33,14 @@ def pattern(address, width):
     return value & 0xffff if width == 2 else value
 
 
-def run(build, table, entries):
+def run(build, table, entries, table_address=0x43000000, output_bytes=0x40000):
     cpu = Uc(UC_ARCH_ARM, UC_MODE_ARM)
     cpu.mem_map(0x40000, 0xc0000)
     cpu.mem_map(0x0a000000, 0x01000000)
     cpu.mem_map(0x03006000, 0x1000)                # SID shadow
     cpu.mem_map(0x43000000, 0x00400000)
     cpu.mem_write(0x85000, (build / "ddr-capture.bin").read_bytes())
-    cpu.mem_write(0x43000000, table)
+    cpu.mem_write(table_address, table)
     for entry in entries:
         for index in range(entry["count"]):
             address = entry["address"] + entry["width"] * index
@@ -63,7 +63,8 @@ def run(build, table, entries):
     def on_write(uc, access, address, size, value, data):
         if register(address):
             writes.append((address, size, value & ((1 << 8 * size) - 1)))
-        elif 0x43000010 <= address < 0x43000020 or output <= address < output + 0x40000:
+        elif (table_address + 16 <= address < table_address + 32
+              or output <= address < output + output_bytes):
             pass
         elif 0xf2000 <= address < 0xf3000:
             pass                                   # Stack below the entry SP.
@@ -79,7 +80,7 @@ def run(build, table, entries):
     for index, reg in enumerate(SAVED):
         assert cpu.reg_read(reg) == 0x12340000 + index
     assert not other, other
-    header = struct.unpack("<8I", cpu.mem_read(0x43000000, 32))
+    header = struct.unpack("<8I", cpu.mem_read(table_address, 32))
     final = (struct.unpack("<H", cpu.mem_read(MUXSEL, 2))[0],
              struct.unpack("<H", cpu.mem_read(UCCLK, 2))[0])
     return cpu, header, reads, writes, final
@@ -118,10 +119,15 @@ def main():
         table = (args.build / stage["file"]).read_bytes()
         entries = stage["entries"]
         assert struct.unpack_from("<4I", table) == (0x50414344, 1, len(entries), stage["output"])
+        if manifest.get("memory") == "sram":
+            assert 0x4b000 <= stage["output"] and stage["output"] + stage["output_bytes"] <= 0x82000
         for position, entry in enumerate(entries):
             flags = struct.unpack_from("<4I", table, 32 + 16 * position)
             assert flags[:2] == (entry["address"], entry["count"]) and flags[3] == 0
-        cpu, header, reads, writes, final = run(args.build, table, entries)
+        for low, high in ((0x71000, 0x71040), (0x85000, 0x85400), (0x82dd0, 0x83c28)):
+            assert stage["output"] + stage["output_bytes"] <= low or stage["output"] >= high, stage["name"]
+        cpu, header, reads, writes, final = run(args.build, table, entries, manifest["table"],
+                                                stage["output_bytes"])
         want_reads, want_writes, phy = expected_accesses(entries)
         uses_ucclk = any(entry["ucclk"] for entry in entries)
         assert reads == want_reads, stage["name"]
@@ -147,14 +153,16 @@ def main():
     # Wrong magic: no register access and no header write.
     table = bytearray(base)
     table[0] ^= 1
-    _, header, reads, writes, final = run(args.build, bytes(table), entries)
+    _, header, reads, writes, final = run(args.build, bytes(table), entries, manifest["table"],
+                                          phy_stage["output_bytes"])
     assert not reads and not writes and header[4] == 0xffffffff and header[7] == 0
     # A bad width or a zero count in entry 2 refuses at that entry, restores
     # both controls and leaves the completion word clear.
     for word, value in ((2, 3), (1, 0)):
         table = bytearray(base)
         struct.pack_into("<I", table, 32 + 16 * 2 + 4 * word, value)
-        _, header, reads, writes, final = run(args.build, bytes(table), entries)
+        _, header, reads, writes, final = run(args.build, bytes(table), entries, manifest["table"],
+                                              phy_stage["output_bytes"])
         want_reads, want_writes, _ = expected_accesses(entries, stop=2)
         assert reads == want_reads and writes == want_writes and final == (1, 2)
         assert header[4] == 2 and header[7] == 0

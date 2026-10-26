@@ -33,8 +33,9 @@ lifetime, board or constant. Three kinds of capture feed the restore set:
    lifetime variation and the status class. They are not the restore
    reference, because the restore runs boot0's P-state-0-only path, which
    differs: message byte 4 is `0x30` (`0x59de6`), `0x4bca8` branches on
-   `dram_tpr13` bit 2 (`0x4bcb2`), and the block at `0x55a98` and the call
-   `0x581b4` (`0x57a08`) do not run.
+   `dram_tpr13` bit 2 (`0x4bcb2`), and the call `0x581b4` (`0x57a08`) does
+   not run. (The block at `0x55a98` does not run on either path on this
+   board, because `dram_tpr10` bit 29 is set during training, `0x55a9e`.)
 2. **P-state-0-only captures**, taken after a training with `dram_tpr13`
    bit 2 clear (run 3 of the fast-boot plan, here qualification step 0).
    These are the reference values.
@@ -100,8 +101,9 @@ the `init_DRAM` call. The restore uses two patch sites:
   the saved parameter words and call `0x49bdc` again for a full training in
   the same boot.
 - **The call at `0x56142`**: clear `MicroContMuxSel`, write the restore set
-  under its masks in record order (byte lanes, master, address/command, the
-  per-P-state block, then the `0x0000`–`0xbfff` range), set
+  under its masks in record order (byte lanes, master, address/command and
+  the per-P-state block; the `0x0000`–`0xbfff` range read zero and is
+  included only if the kind 2 and kind 3 diff shows values there), set
   `MicroContMuxSel` to 1 and call `0x4bca8` as boot0 would.
 
 Whether the firmware accepts the device-initialization-only value, and
@@ -110,12 +112,17 @@ are the first two prototype tests on the FEL path.
 
 **Quick check.** Part A, in the AArch32 hook below 4 GiB: a short burst
 test per channel, rank and byte lane with walking-ones and pseudo-random
-patterns over 1 MiB per rank, written and read with cached `LDM`/`STM` bursts
-after the cache setup that boot0's parser uses. Part B, in the stage-2
-monitor at EL3: the same pattern over the 12,288 MiB map, one 64 KiB window
-per 256 MiB, excluding the monitor's own image. Part B failing sets a retrain
-flag in an RTC general-purpose register other than indexes 1 and 2, which
-boot0 uses (`0x4a940`, `0x4a95c`), and requests a warm reset. The check
+patterns over 1 MiB per rank, written with cached `LDM`/`STM` bursts after
+the cache setup that boot0's parser uses, then cleaned and invalidated by
+address (`DCCIMVAC`) before the read phase, so that the reads reach DRAM
+and not the cluster caches. Part B, in the stage-2 monitor at EL3: the same
+pattern and cache maintenance (`DC CIVAC`) over the 12,288 MiB map, one
+64 KiB window per 256 MiB, excluding the monitor's own image. After a
+restored boot, part B failing sets a retrain flag in an RTC general-purpose
+register other than indexes 1 and 2, which boot0 uses (`0x4a940`,
+`0x4a95c`), and requests a warm reset. After a full-training boot, part B
+failing stops with a report and no reset, so a bad full training cannot
+loop. The flag is cleared only when part B passes. The check
 catches gross restore errors only. Marginal timing shows only in the
 qualification runs, and the safety of the restore rests on them.
 
@@ -128,7 +135,7 @@ qualification runs, and the safety of the restore rests on them.
 | Chip ID, SID `0x03006200`–`0x0300620c` | Full training |
 | Strap: selected set index and CRC of parameter words 0–31 | Full training |
 | Temperature: THS DDR sensor (channel 1), calibrated as in [thermal.md](../thermal.md), within the record's limit of the capture | Full training |
-| Retrain flag set by part B | Full training, flag cleared |
+| Retrain flag set by part B after a restored boot | Full training; the flag stays set until part B passes |
 
 After the call, a firmware result other than 7, a size mismatch, a restore
 read-back mismatch or a part A failure falls back in place, as above. On

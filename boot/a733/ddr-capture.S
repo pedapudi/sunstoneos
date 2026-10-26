@@ -24,7 +24,11 @@
 // are restored at the end. No other register is written. Each entry's
 // output starts on a 4-byte boundary.
 
+.ifdef TABLE_ADDR
+.equ TABLE, TABLE_ADDR          // SRAM build for captures without trained DRAM.
+.else
 .equ TABLE, 0x43000000
+.endif
 .equ MAGIC, 0x50414344
 .equ DONE, 0x454e4f44
 .equ MUXSEL, 0x0aaa0000        // PHY CSR 0xd0000, MicroContMuxSel

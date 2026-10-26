@@ -22,7 +22,7 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = Path.home() / ".cache/sunstoneos"
-MAILBOX, BOOTPARAM, READER, TABLE = 0x86000, 0x82df8, 0x85000, 0x43000000
+MAILBOX, BOOTPARAM, READER = 0x86000, 0x82df8, 0x85000
 MAGIC, DONE = 0x50414344, 0x454e4f44
 EXPECTED_MIB = 12288
 
@@ -49,6 +49,9 @@ def main():
         content = (args.build / name).read_bytes()
         if len(content) != expected["size"] or hashlib.sha256(content).hexdigest() != expected["sha256"]:
             sys.exit(f"Payload mismatch: {name}")
+    TABLE = manifest["table"]
+    if args.allow_untrained and manifest.get("memory") != "sram":
+        sys.exit("--allow-untrained needs a capture build with --memory sram: DRAM is untrained.")
     if args.stages:
         if not 1 <= args.stages <= len(manifest["stages"]):
             sys.exit("--stages is out of range.")

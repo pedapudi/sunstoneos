@@ -71,13 +71,14 @@ def run_case(case, build, out, extra=()):
         if address == 0x71000:
             return
         assert address == 0x85000 and get(0x85000, 4) == (build / "ddr-capture.bin").read_bytes()[:4]
-        count, output = struct.unpack("<II", get(0x43000008, 8))
+        table = manifest["table"]
+        count, output = struct.unpack("<II", get(table + 8, 8))
         stage = next(s for s in manifest["stages"] if s["output"] == output)
         put(output, bytes(stage["output_bytes"]))
         if case == "stage-refused" and stage["name"] == "phy-blocks":
-            put(0x43000010, struct.pack("<I", 2))
+            put(table + 16, struct.pack("<I", 2))
             return
-        put(0x43000010, struct.pack("<4I", count - 1, 1, 2, 0x454e4f44))
+        put(table + 16, struct.pack("<4I", count - 1, 1, 2, 0x454e4f44))
 
     def fake_run(command, capture_output, text, timeout):
         assert command[1] == "-d" and capture_output and text and timeout == 30
@@ -165,6 +166,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("build", type=Path)
     parser.add_argument("--evidence", type=Path, required=True)
+    parser.add_argument("--sram-build", type=Path, help="a --memory sram capture build for the untrained case")
     args = parser.parse_args()
     args.evidence.mkdir(parents=True, exist_ok=False)
     stages = json.loads((args.build / "manifest.json").read_text())["stages"]
@@ -186,9 +188,17 @@ def main():
     assert [s["name"] for s in record["stages"]] == [s["name"] for s in stages[:2]]
     assert [entry for entry in log if entry[0] == "exe"] == [("exe", 0x71000)] + [("exe", 0x85000)] * 2
 
-    outcome, record, log, events = run_case("untrained", args.build, args.evidence / "untrained",
+    # An init-only DDR return needs --allow-untrained and an SRAM capture build.
+    outcome, record, log, events = run_case("untrained-dram", args.build, args.evidence / "untrained-dram",
                                             ["--allow-untrained"])
-    assert outcome == "returned" and record["complete"] and record["ddr_variant"] == "init-only"
+    assert outcome == "exit" and not log
+    if args.sram_build:
+        outcome, record, log, events = run_case("untrained", args.sram_build, args.evidence / "untrained",
+                                                ["--allow-untrained"])
+        assert outcome == "returned" and record["complete"] and record["ddr_variant"] == "init-only"
+        assert all(s["done"] for s in record["stages"]) and len(record["stages"]) == 5
+        assert all(entry[1] < 0x100000 for entry in log if entry[0] in ("read", "write")
+                   and entry[1] != 0x86000), "SRAM build touched DRAM"
     outcome, record, log, events = run_case("untrained-refused", args.build, args.evidence / "untrained-refused")
     assert outcome == "exit" and record is None and not log
 
@@ -204,7 +214,7 @@ def main():
     refused = [s["name"] for s in stages].index("phy-blocks") + 1
     assert [s["name"] for s in record["stages"]] == [s["name"] for s in stages[:refused]]
     assert not record["stages"][-1]["done"]
-    print("PASS: nominal capture order; a stage limit; an init-only DDR return only with --allow-untrained; incomplete DDR evidence, another lifetime's mailbox "
+    print("PASS: nominal capture order; a stage limit; an init-only DDR return only with --allow-untrained and an SRAM build; incomplete DDR evidence, another lifetime's mailbox "
           "and an incomplete stage stop as required")
 
 
