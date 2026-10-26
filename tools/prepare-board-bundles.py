@@ -197,13 +197,15 @@ SRAM_ROUTING = 0x03000008
 
 
 def returning_row(name, position, component, overlay, expect, controlled, expected, intro, admission=True, needs=None,
-                  passes=True, sources=(), base=None, after=(), failures=()):
+                  passes=True, sources=(), base=None, after=(), failures=(), approval=None):
     """passes: a status-0 run with the expect text is one of the bundle's outcomes, beside any controlled one.
     base: the row whose image this row links objects of, prepared in the same run and run first; after: further
     rows of the same run that must pass first. failures: the image's own failure lines, which the runbook lists
-    among the paths that end in a quarantine."""
+    among the paths that end in a quarantine. approval: the schema of the reviewed approval record that a row
+    changing a clock or voltage requires; the record names the row, the port and the image's SHA-256, and the
+    bundle carries it as approval.json."""
     return {'name': name, 'class': 'monitor', 'returning': True, 'position': position, 'component': component,
-            'base': base, 'after': list(after), 'failures': list(failures),
+            'base': base, 'after': list(after), 'failures': list(failures), 'approval': approval,
             'module': 'tools/prepare-board-bundles.py', 'function': 'prepare_returning',
             'runner': 'tools/check-a733-kernel.py', 'prerequisite': SUPERVISED_PREREQUISITE,
             'admission': {'schema': 'board-returning-bundle-v1', 'row': name} if admission else None,
@@ -291,6 +293,38 @@ POWER_SOURCES = ['apps/board-bundles-power/power.c', 'apps/board-bundles-power/p
                  'drivers/gpu/a733_gpu_resources_native.c', 'include/a733_pmic.h', 'include/a733_pmic_native.h',
                  'arch/aarch64/device_memory.c', 'checks/board-bundles-apps-model.c']
 BASE_ROW = 'kernel-check-counter-option'
+# The CPU operating-point steps of docs/designs/cpu-top-opp.md: one source,
+# apps/board-bundles-power/cpu-opp-step.c, built with -DOPP_BUNDLE=n.
+OPP_STEP_OVERLAY = POWER_OVERLAY + ['apps/board-bundles-power/cpu-opp-step.c.obj', 'drivers/clock/a733_cpu_clock.c.obj',
+                                    'drivers/thermal/a733_thermal.c.obj', 'drivers/thermal/a733_thermal_native.c.obj',
+                                    'drivers/adc/a733_adc_native.c.obj', 'platform/a733/cpu_pmu.c.obj']
+OPP_STEP_SOURCES = POWER_SOURCES + ['apps/board-bundles-power/cpu-opp-step.c', 'drivers/clock/a733_cpu_clock.c',
+                                    'include/a733_cpu_clock.h', 'drivers/thermal/a733_thermal.c',
+                                    'drivers/thermal/a733_thermal_native.c', 'drivers/adc/a733_adc_native.c',
+                                    'platform/a733/cpu_pmu.c', 'include/a733_cpu_pmu.h', 'checks/cpu-clock-model.c',
+                                    'checks/cpu-clock-check.py']
+OPP_APPROVAL = 'cpu-operating-point-approval-v1'
+
+
+def opp_row(name, position, component, text, lines, intro, after):
+    """One CPU operating-point step after bundle 20: admission, thermal stop and end checks as the source states."""
+    return returning_row(
+        name, position, component, OPP_STEP_OVERLAY, f'COMPLETE board bundle {position}: {text}', True,
+        f'Monitor status 0 with TEMP set=0 below 70000 at level 0; the SUPPLY line (dcdc5_uv=800000 '
+        f'dcdc3_uv=800000 sid=0x496 bin=4 dcxo_hz=26000000); {lines}; the CPU-L, CPU-B and DSU after lines; a last '
+        f'TEMP line below 70000; and COMPLETE board bundle {position}: {text}; then a responsive ROM.',
+        intro + ' The image admits the step only at the NORMAL thermal level with every sensor below 70 C, on '
+        'vf0400, with DCDC3 and DCDC5 at 800 mV, CPU-B at 1,014 MHz, CPU-L and the DSU on their PLLs and every '
+        'pattern and LFM enable clear, and no planned voltage above the bin\'s top voltage for its rail (DCDC5 '
+        '1000 mV, DCDC3 1050 mV in vf0400), and otherwise returns REFUSED before any write. A sensor set follows each '
+        'raise and at the end; a sensor at 70 C or more stops the step, which lowers what it raised (DSU 598 MHz, clusters '
+        '1,014 MHz, DCDC3 800 mV) and returns STOPPED. Both are controlled outcomes. At the end it requires the '
+        'planned rates and rails. Approved by the user on 2026-10-24 (CPU clock and voltage); bundle/approval.json '
+        'binds the values to port 3-3 and this image.',
+        sources=OPP_STEP_SOURCES, base=BASE_ROW, after=after, approval=OPP_APPROVAL,
+        failures=['a `FAIL` line of the provider, the thermal driver, the PMIC requests or the CPU clock driver, '
+                  'after a `STEP` line naming the driver state; one after a park or a selector write leaves that '
+                  'domain or rail where the log last shows it, which only a power removal restores'])
 
 ROWS = [
     # The single-core bundles of docs/designs/board-bundles-next.md, in the
@@ -712,6 +746,71 @@ ROWS = [
                       'that never completes stops the CPU, the monitor does not return and only a power removal '
                       'recovers the board; the firmware may write its own pages after the image returns, which no '
                       'later step of the lifetime reads.'),
+    returning_row('cpu-b-800mv-step', 20, 'CPU-B 1,014 -> 1,404 -> 1,014 MHz at 800 mV with cores 6 and 7 off',
+                  OPP_STEP_OVERLAY,
+                  'COMPLETE board bundle 20: CPU-B 1404 MHz and back to 1014 MHz at 800 mV, no PMIC write', True,
+                  'Monitor status 0 with two TEMP lines at level 0, the SUPPLY line (dcdc5_uv=800000 dcdc3_uv=800000 '
+                  'sid=0x496 bin=4 dcxo_hz=26000000), the CPU-L, DSU and CPU-B words before, CPU-B raised with '
+                  'pll=0xf8803600 mux=0x3000000 mhz=1404, CPU-B restored and CPU-B after with pll=0xf8802700 '
+                  'mux=0x3000000 mhz=1014, each STEP line with dcdc3_uv=800000, and COMPLETE board bundle 20, then a '
+                  'responsive ROM.',
+                  'The first CPU operating-point step of docs/designs/cpu-top-opp.md, on the image of bundle 15 '
+                  '(apps/board-bundles-power/cpu-opp-step.c). With cores 6 and 7 powered off, the client starts the '
+                  'thermal driver and the thermal policy, reads one full sensor set, inspects CPU-L, the DSU and '
+                  'CPU-B read-only through the CPU clock driver (DCDC5 and DCDC3 snapshots; PLL, mux, pattern and LFM '
+                  'words), and admits the step only at the NORMAL thermal level on speed bin vf0400 with DCDC3 and '
+                  'DCDC5 at 800 mV, CPU-B at 1,014 MHz and every pattern and LFM enable clear. The driver then raises '
+                  'CPU-B to 1,404 MHz and lowers it to 1,014 MHz. Each change parks the CPU-B mux on the 26 MHz '
+                  'oscillator for 20 us, writes N with the update bit, waits for update and for three lock reads 3 us '
+                  'apart, waits 20 us, selects the PLL and waits 20 us. Both points need 800 mV in vf0400, so no PMIC '
+                  'register is written; after each change the image requires DCDC3 to have kept 800 mV. A second inspection of '
+                  'the three domains must read every PLL and mux word and both rails as before, then a second sensor set '
+                  'follows, the thermal converter is disabled and the PMIC service parked. Approved by the user on 2026-10-24 (CPU clock and voltage); '
+                  'bundle/approval.json binds the values to port 3-3 and this image.',
+                  sources=OPP_STEP_SOURCES, base=BASE_ROW, approval=OPP_APPROVAL,
+                  failures=['a `FAIL` line of the provider, the thermal driver or the CPU clock driver, after a `STEP` '
+                            'line naming the driver state: `transition` after the park leaves CPU-B on the oscillator '
+                            'or the PLL, which only a power removal restores']),
+    opp_row('dcdc3-1050mv-step', 21, 'DCDC3 800 -> 1,050 -> 800 mV with CPU-B held at 1,014 MHz',
+            'DCDC3 1050 mV and back to 800 mV, CPU-B held at 1014 MHz',
+            'VOLT dcdc3_selector=0xb7 dcdc3_uv=1050000, a TEMP line below 70000 at level 0, then VOLT '
+            'dcdc3_selector=0x9e dcdc3_uv=800000; CPU-L, CPU-B and DSU after with the words they had before',
+            'Step 3 of docs/designs/cpu-top-opp.md, the first DCDC3 selector write. Under an exclusive CPU-B clock '
+            'lease, so CPU-B stays at 1,014 MHz, and an exclusive DCDC3 lease, the client reads DCDC3, writes '
+            'selector 0x37 (1,050 mV) through the PMIC provider, which requires the inherited 0x1e first, keeps bit '
+            '7 and reads the byte back, waits 1 ms and reads it again; after a sensor set it writes 0x1e (800 mV) the '
+            'same way. 1,014 MHz needs 800 mV, so both voltages cover it. No clock register is written.', ()),
+    opp_row('cpu-l-800mv-step', 22, 'CPU-L 494 -> 1,196 MHz and the DSU 494 -> 780 MHz at 800 mV',
+            'CPU-L 1196 MHz and the DSU 780 MHz at 800 mV',
+            'RATE cpu0_hz near 494000000, CPU-L set pll=0xf8802e00 mux=0x3000000 mhz=1196, RATE cpu0_hz near '
+            '1196000000, a TEMP line below 70000, DSU set pll=0xf8801e00 mux=0x3000105 mhz=780, every STEP line with '
+            'dcdc5_uv=800000 and dcdc3_uv=800000',
+            'Step 2 of docs/designs/cpu-top-opp.md: the first park of the cluster that runs the image, as boot0 parks '
+            'it. CPU0 measures its own rate with the cycle counter against CNTPCT over 1 ms before and after the '
+            'change and requires it within 1% of the configured rate. The DSU then goes to 780 MHz, under three '
+            'quarters of 1,196 MHz. Both points need 800 mV in vf0400, so no PMIC register is written. CPU-L and the '
+            'DSU stay at their new rates.', ('dcdc3-1050mv-step',)),
+    opp_row('cpu-b-top-step', 23, 'CPU-B to 2,002 MHz at 1,050 mV with the DSU at 910 MHz, then back',
+            'CPU-B 2002 MHz at 1050 mV with the DSU at 910 MHz, then CPU-B 1014 MHz at 800 mV',
+            'CPU-B set pll=0xf8804d00 mhz=2002 with STEP dcdc3_uv=1050000, a TEMP line below 70000, DSU set '
+            'pll=0xf8802300 mux=0x3000105 mhz=910, a TEMP line, DSU set pll=0xf8802e00 mux=0x3010105 mhz=598, CPU-B '
+            'set pll=0xf8802700 mhz=1014 with STEP dcdc3_uv=800000',
+            'Step 4 of docs/designs/cpu-top-opp.md, with cores 6 and 7 off: the driver raises DCDC3 to 1,050 mV, '
+            'waits 1 ms and relocks CPU-B at 2,002 MHz, the top point of vf0400; the DSU then goes to 910 MHz, the '
+            'rate at which the vendor holds the DSU while CPU-B runs at 1,488 MHz or more, which the driver\'s '
+            'three-quarters cap admits only after CPU-B is above 1,214 MHz. The DSU then goes to 598 MHz, the '
+            'fastest 800 mV DSU row at or below three quarters of 1,014 MHz whatever CPU-L\'s rate, and CPU-B back '
+            'to 1,014 MHz, after which the driver writes DCDC3 back to 800 mV. The DSU stays at 598 MHz.',
+            ('cpu-l-800mv-step',)),
+    opp_row('cpu-l-dsu-top-step', 24, 'CPU-L to 1,794 MHz at 1,000 mV, then the DSU to 1,274 MHz',
+            'CPU-L 1794 MHz at 1000 mV and the DSU 1274 MHz',
+            'RATE cpu0_hz near the entry rate, CPU-L set pll=0xf8804500 mux=0x3000000 mhz=1794 with STEP '
+            'dcdc5_uv=1000000, RATE cpu0_hz near 1794000000, a TEMP line below 70000, DSU set pll=0xf8803100 '
+            'mux=0x3000105 mhz=1274 with dcdc5_uv=1000000',
+            'Step 5 of docs/designs/cpu-top-opp.md: the driver raises DCDC5, which feeds CPU-L and the DSU, to '
+            '1,000 mV, waits 1 ms and relocks CPU-L at 1,794 MHz, measured by CPU0; the DSU then goes to 1,274 MHz '
+            'with no voltage write. CPU-L, the DSU and DCDC5 stay at the top points of vf0400, so this step ends its '
+            'lifetime.', ('cpu-b-top-step',)),
     # `admission` maps fields of the value prepare() returns to the values that
     # identify this row's build. None refuses the row: no owning package has
     # named those values yet.
@@ -982,11 +1081,22 @@ def validate_read(row, output):
             'reader_sha256': sha256(output / 'board-read.py'), 'words_sha256': sha256(output / 'WORDS.json')}
 
 
-def prepare_returning(row, build, output):
-    """A returning bundle from the image builder's build.json: image, binary, runner closure, equivalence and
-    controlled outcomes."""
+def prepare_returning(row, build, output, approval=None):
+    """A returning bundle from the image builder's build.json: image, binary, runner closure, equivalence,
+    controlled outcomes and, for a row that changes a clock or voltage, the approval record."""
     record = json.loads(Path(build).read_text())
+    require((approval is None) == (row.get('approval') is None),
+            'An approval record is required exactly for a row that names an approval schema.')
+    if approval is not None:
+        value = json.loads(Path(approval).read_text())
+        require(value.get('schema') == row['approval'] and value.get('row') == row['name']
+                and value.get('image_sha256') == record['elf_sha256'] and value.get('port') in ('3-1', '3-3')
+                and isinstance(value.get('approval'), dict) and value['approval'].get('text')
+                and value['approval'].get('date'),
+                'The approval record does not name this row, its image, a port and the user\'s approval.')
     output.mkdir()
+    if approval is not None:
+        shutil.copyfile(approval, output / 'approval.json')
     shutil.copyfile(record['elf'], output / 'image.elf')
     shutil.copyfile(record['bin'], output / 'probe.bin')
     tools = dict(record['host_tools'])
