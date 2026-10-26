@@ -207,7 +207,7 @@ The supply stays DCDC2 at 800 mV.
 
 ## Gate and image comparison
 
-The integration gate built `68c496e5` with every central target and the ten
+The integration gate built `68c496e5`, and again `3f09ec2c`, with every central target and the ten
 OS variants, and passed the kernel, eight-core soak, mimus SMP,
 shared-helper and progress checks; the index, PMIC-tree and power-domain-tree
 checks pass at the documentation commit that follows. The parent `e3d5bf48`
@@ -284,9 +284,9 @@ bytes of text and 320 of read-only data, and the G2D application by 344 and
 
 ## Board qualification is frozen and has not run
 
-`~/.cache/sunstoneos/evidence/board-bundles-20261025-mbus-qual/` holds, for
-ports 3-3 and 3-1, the kernel check of bundle 2 rebuilt from `68c496e5`
-(`kernel-check-counter-option`, `image.elf` `bd92ec3d…`, which links the
+`~/.cache/sunstoneos/evidence/board-bundles-20261025-mbus-qual-2/` holds, for
+ports 3-3 and 3-1, the kernel check of bundle 2 rebuilt from `3f09ec2c`
+(`kernel-check-counter-option`, `image.elf` `1bfe345e…`, which links the
 restore and its log line) and the clock-audit dump (bundle 21), prepared by
 `tools/prepare-board-bundles.py`, with its runbook. Each port runs, in one
 lifetime with power-removal recovery staged:
@@ -308,10 +308,11 @@ lifetime with power-removal recovery staged:
 The memory qualification image (`apps/memtest`) writes and checks its
 patterns within one run and its row is not admitted by the bundle tool, so
 the pattern that spans the restore is written and read through FEL. The SMP
-OS image is not frozen in the set: its returning bundle is prepared through
-the native-image refreeze procedure
-(`~/.cache/sunstoneos/evidence/refreeze-el3-20261025/README.txt`), from the
-supervised OS image built at `68c496e5` by the gate.
+OS image is not frozen in the set: its returning bundle needs the
+native-image refreeze procedure
+(`~/.cache/sunstoneos/evidence/refreeze-el3-20261025/README.txt`) rerun for
+the native image built at `3f09ec2c`, whose binding script is fixed to the
+earlier image and source archive; the set's runbook lists the steps.
 
 Further measurements follow the qualification: the ShuffleNetV2 timing at
 492 and 852 MHz, with sessions naming 600 MHz for MBUS, measures the effect on
