@@ -60,14 +60,20 @@ sha = lambda x: hashlib.sha256(Path(x).read_bytes()).hexdigest()
 ref = lambda x: {"path": str(Path(x).resolve()), "sha256": sha(x)}
 read = lambda x: json.loads(Path(x).read_text())
 def save(x, v): Path(x).write_text(json.dumps(v, indent=2) + "\n")
+def require(condition, message):
+    """A refusal that python -O cannot remove."""
+    if not condition:
+        raise SystemExit(f"Refused: {message}")
 def bundle26_probe():
     """The probe.bin SHA-256 that bundle 26's run record must name, from its frozen row."""
     row = Path(BINDING["bundle26"]["row"])
     listed = {Path(x["path"]).relative_to(row / "bundle").as_posix(): x["sha256"] for x in read(row / "artifacts.json")}
     probe, elf = BINDING["bundle26"]["probe_sha256"], BINDING["bundle26"]["elf_sha256"]
-    assert listed.get("probe.bin") == probe == sha(row / "bundle/probe.bin"), "Bundle 26's frozen probe.bin differs"
-    assert listed.get("image.elf") == elf == sha(row / "bundle/image.elf"), "Bundle 26's frozen image.elf differs"
-    assert probe != elf
+    require(listed.get("probe.bin") == probe == sha(row / "bundle/probe.bin"),
+            "Bundle 26's frozen probe.bin differs")
+    require(listed.get("image.elf") == elf == sha(row / "bundle/image.elf"),
+            "Bundle 26's frozen image.elf differs")
+    require(probe != elf, "Bundle 26's pinned probe.bin and image.elf hashes are equal")
     return probe
 def module(n, path):
     s = importlib.util.spec_from_file_location(n, path); m = importlib.util.module_from_spec(s); s.loader.exec_module(m); return m
@@ -83,7 +89,7 @@ hosts = {"a733-all-core-pre-scheduler-probe-v1": "all-core-pre-scheduler-host.py
          "a733-all-core-task-switch-probe-v1": "all-core-task-switch-host.py",
          "a733-all-core-task-workload-probe-v1": "workload-bisect-host.py" if deadline else "all-core-task-workload-host.py",
          "a733-primary-cache-probe-v1": "primary-cache-host.py"}
-assert schema in hosts, schema
+require(schema in hosts, schema)
 host = module("cpu_host", R / "tools" / hosts[schema])
 if deadline:
     quiet = manifest["workload_bisect"]["quiet_background"]
@@ -107,44 +113,52 @@ host.load(F / "build", T / "prepared/image.elf", manifest)
 host.validate_software(read(F / "host/software.json"), hashlib.sha256(manifest_raw).hexdigest())
 survey = read(a.survey)
 identity, node = survey["identity"], survey["node"]
-assert survey["port"] == a.port and survey["complete"] and survey["sram_restored"] and survey["rom_usable"]
-assert all(survey["result"]["launcher_gates"].values()), "Launcher gates fail; run the cache-off helper and a new survey"
+require(survey["port"] == a.port and survey["complete"] and survey["sram_restored"] and survey["rom_usable"],
+        "The survey is of another port, incomplete, or left SRAM or the ROM unusable")
+require(all(survey["result"]["launcher_gates"].values()),
+        "Launcher gates fail; run the cache-off helper and a new survey")
 runner.caller_interval(survey)
 for x in a.continuity:
-    assert read(x).get("complete") is True, f"Continuity record incomplete: {x}"
+    require(read(x).get("complete") is True, f"Continuity record incomplete: {x}")
 if "top_opp" in manifest:
     # The relock needs DCDC3 1050 mV and DCDC5 1000 mV, which no part of this
     # launch reads: bundle 26 read them after a ROM return, as the last image
     # before it. Captures and reads without a kernel log may follow it.
     images = [Path(x) for x in a.continuity if (Path(x).parent / "kernel.log").is_file()]
     text = (images[-1].parent / "kernel.log").read_text(errors="replace") if images else ""
-    assert ("COMPLETE board bundle 26: DCDC5 1000 mV and DCDC3 1050 mV kept across the ROM return, read only" in text
-            and "SUPPLY dcdc5_uv=1000000 dcdc3_uv=1050000" in text), "The last image of the continuity records is not bundle 26's pass"
+    require("COMPLETE board bundle 26: DCDC5 1000 mV and DCDC3 1050 mV kept across the ROM return, read only" in text
+            and "SUPPLY dcdc5_uv=1000000 dcdc3_uv=1050000" in text,
+            "The last image of the continuity records is not bundle 26's pass")
     b26 = read(images[-1])
-    assert (b26.get("image_sha256") == bundle26_probe() and b26.get("port") == a.port and b26.get("complete") is True and
-            b26.get("transport_failed") is False), "The bundle 26 record names another image or port, or did not complete"
+    require(b26.get("image_sha256") == bundle26_probe() and b26.get("port") == a.port and b26.get("complete") is True and
+            b26.get("transport_failed") is False,
+            "The bundle 26 record names another image or port, or did not complete")
     # One lifetime of this port: one session directory, and an unbroken chain
     # of USB instances from the first record that names one to the survey.
     home = Path(a.survey).resolve().parent.parent
-    assert all(Path(x).resolve().parent.parent == home for x in a.continuity), \
-        "A continuity record lies outside the survey's session directory"
+    require(all(Path(x).resolve().parent.parent == home for x in a.continuity),
+            "A continuity record lies outside the survey's session directory")
     current = None
     for x in a.continuity:
         r = read(x)
-        assert r.get("port", a.port) == a.port, f"Continuity record of another port: {x}"
+        require(r.get("port", a.port) == a.port, f"Continuity record of another port: {x}")
         if "initial_identity" in r:
             start = (r["initial_node"], r["initial_identity"])
-            assert current in (None, start), f"Launch not on the instance of the record before it: {x}"
+            require(current in (None, start), f"Launch not on the instance of the record before it: {x}")
             current = (r["returned_node"], r["returned_identity"])
         elif "identity" in r and "node" in r:
             here = (r["node"], r["identity"])
-            assert current in (None, here), f"Record on another USB instance: {x}"
+            require(current in (None, here), f"Record on another USB instance: {x}")
             current = here
-    assert (b26["returned_node"], b26["returned_identity"]) == (node, identity) == current, \
-        "The survey is not on the instance that bundle 26's run returned to"
-P.mkdir(parents=True, exist_ok=False)
+    require((b26["returned_node"], b26["returned_identity"]) == (node, identity) == current,
+            "The survey is not on the instance that bundle 26's run returned to")
+require(P.name.endswith("-prepare"), "Name the output <stem>-prepare")
 review = read(a.root_review)
-assert review.get("status", "").startswith("Coordinator reviewed"), "Root review record must state the coordinator's review"
+require(review.get("status", "").startswith("Coordinator reviewed"),
+        "Root review record must state the coordinator's review")
+# Every check above runs before the output exists. A failure after this point
+# leaves a partial <stem>-prepare; a rerun first moves it to the trash.
+P.mkdir(parents=True, exist_ok=False)
 proof = [a.survey, a.root_review, F / "build/manifest.json", F / "host/software.json", *a.continuity]
 if cpu0:
     ownership = (f"The coordinator reserves 0x41000000..0x42200000 and port {a.port}. CPU0 runs alone: the diagnostic releases no "
@@ -208,10 +222,10 @@ m.update(epoch=epoch, generation=generation, lease=lease, reservation=admission[
 m["files"] = {n: s.digest(B / n) for n in m["files"]}
 save(B / "prepared.json", m)
 prepared = s.validate_bundle(B)
-assert prepared["image_sha256"] == host.probe.NATIVE and prepared["launcher_sha256"] == runner.LAUNCH
+require(prepared["image_sha256"] == host.probe.NATIVE and prepared["launcher_sha256"] == runner.LAUNCH,
+        "The prepared bundle names another image or launcher")
 # The run records beside the preparation, as <stem>-run for an output
 # <stem>-prepare, so that a later returning image names it as a warm return.
-assert P.name.endswith("-prepare"), "Name the output <stem>-prepare"
 run = P.parent / (P.name[:-len("-prepare")] + "-run")
 expected = ("CPU0 completes the diagnostic and restores its controls; saved DRAM is restored and the ROM answers." if cpu0 else
             "All eight cores complete the diagnostic, clean their owned memory and stop; CPU0 restores its controls, seven secondaries reach OFF, saved DRAM is restored and the ROM answers."

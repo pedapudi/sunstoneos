@@ -10,7 +10,12 @@ from a template whose frozen files are read-only, and that it refuses:
 port 3-1; a bundle 26 record that names the image.elf hash instead of the
 uploaded probe.bin; a survey on another USB instance; and a continuity list
 without bundle 26. Each refusal runs on copies of the real records with one
-field changed. The real session's records are only read."""
+field changed. The frozen cpu-prepare.py must equal the tree script at the
+commit that binding.json names. Four more refusals run the frozen script in
+a writable copy of the bundle whose pins disagree with bundle 26's frozen
+row: binding.json's probe.bin hash, the row's probe.bin, the row's
+artifacts.json, and an ELF pin equal to the probe pin. The real session's
+records and the frozen bundle are only read."""
 import argparse
 import hashlib
 import json
@@ -19,6 +24,8 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
 
 # The step 6 lifetime's records from the cold DDR start to the workload's
 # cache-off helper, in time order (step6-set runbooks); the survey is passed
@@ -47,6 +54,17 @@ def bind(bundle, session, review, out, port='3-3', names=CONTINUITY):
     return subprocess.run(command, capture_output=True, text=True, env=dict(os.environ, PYTHONDONTWRITEBYTECODE='1'))
 
 
+def copy_tree(source, target):
+    """A writable copy of a directory's contents."""
+    for x in sorted(source.rglob('*')):
+        y = target / x.relative_to(source)
+        if x.is_dir():
+            y.mkdir(parents=True, exist_ok=True)
+        else:
+            y.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(x, y)
+
+
 def edit(path, **fields):
     record = json.loads(path.read_text())
     record.update(fields)
@@ -62,12 +80,19 @@ def main():
     bundle, session, out = a.bundle.resolve(), a.session.resolve(), a.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
     binding = json.loads((bundle / 'binding.json').read_text())
+    # The frozen script is the tree script at the commit binding.json names.
+    source = binding['binding_source']
+    frozen = (bundle / 'cpu-prepare.py').read_bytes()
+    at_commit = subprocess.run(['git', '-C', str(ROOT), 'show', f"{source['commit']}:{source['path']}"],
+                               capture_output=True, check=True).stdout
+    assert frozen == at_commit, 'the frozen cpu-prepare.py differs from the tree script at its recorded commit'
+    tree_now = (ROOT / source['path']).read_bytes() == frozen
     template = bundle / 'template/prepared/admission.json'
     assert not os.access(template, os.W_OK), 'the frozen template must be read-only for this check'
     review = out / 'MODEL-root-review.json'
     review.write_text(json.dumps({'status': 'Coordinator reviewed this offline binding check only; not an admission '
                                             'record.'}))
-    cases = {}
+    cases = {'frozen-binding-equals-the-tree-script-at-its-commit': True}
 
     # The real records, bound into a scratch <stem>-prepare directory.
     prepare = out / 'c6-tw-prepare'
@@ -101,6 +126,48 @@ def main():
             lambda c: edit(c / 'c6-tw-survey/session.json', identity=survey['identity'][:1] + [survey['identity'][1] + 4]
                            + survey['identity'][2:]))
     refused('no-bundle-26', "is not bundle 26's pass", lambda c: None, names=tuple(n for n in CONTINUITY if not n.startswith('c6-opp26')))
+    # Pins that disagree with bundle 26's frozen row, in a writable copy of the
+    # bundle; the run records are the real ones.
+    row = Path(binding['bundle26']['row'])
+
+    def pin_refused(name, expected, pins=None, row_change=None):
+        base = out / ('pins-' + name)
+        copy_tree(bundle, base / 'bundle')
+        changed = json.loads(json.dumps(binding))
+        if row_change:
+            copy_tree(row, base / 'row')
+            listed = json.loads((base / 'row/artifacts.json').read_text())
+            for item in listed:
+                item['path'] = str(base / 'row' / Path(item['path']).relative_to(row))
+            (base / 'row/artifacts.json').write_text(json.dumps(listed))
+            row_change(base / 'row')
+            changed['bundle26']['row'] = str(base / 'row')
+        changed['bundle26'].update(pins or {})
+        (base / 'bundle/binding.json').write_text(json.dumps(changed))
+        result = bind(base / 'bundle', session, review, base / 'c6-tw-prepare')
+        assert result.returncode != 0 and expected in result.stdout + result.stderr, (name, result.stderr[-400:])
+        assert not (base / 'c6-tw-prepare').exists(), name
+        cases['refuses-' + name] = True
+
+    def flip(path):
+        data = bytearray(path.read_bytes())
+        data[-1] ^= 1
+        path.write_bytes(bytes(data))
+
+    def relist(r):
+        listed = json.loads((r / 'artifacts.json').read_text())
+        for item in listed:
+            if item['path'].endswith('/bundle/probe.bin'):
+                item['sha256'] = '0' * 64
+        (r / 'artifacts.json').write_text(json.dumps(listed))
+
+    pin_refused('binding-probe-pin-differs', "Bundle 26's frozen probe.bin differs",
+                pins={'probe_sha256': hashlib.sha256(b'other').hexdigest()})
+    pin_refused('row-probe-bin-differs', "Bundle 26's frozen probe.bin differs",
+                row_change=lambda r: flip(r / 'bundle/probe.bin'))
+    pin_refused('row-artifacts-list-differs', "Bundle 26's frozen probe.bin differs", row_change=relist)
+    pin_refused('elf-pin-equals-probe-pin', "Bundle 26's frozen image.elf differs",
+                pins={'elf_sha256': binding['bundle26']['probe_sha256']})
     # The same copies with no change bind: the refusals come from the changes.
     copy = out / 'copies-unchanged' / 'port-3-3'
     copy_records(session, copy)
@@ -110,9 +177,12 @@ def main():
 
     (out / 'result.json').write_text(json.dumps({
         'pass': True, 'physical_access': False, 'cases': cases, 'bundle': str(bundle), 'session': str(session),
-        'binding_sha256': hashlib.sha256((bundle / 'cpu-prepare.py').read_bytes()).hexdigest()}, indent=1) + '\n')
-    print(f'PASS step 6 workload binding: real records of {session.parent.name} bind from a read-only template; '
-          f'{len(cases) - 2} refusals on changed copies')
+        'binding_sha256': hashlib.sha256(frozen).hexdigest(), 'binding_source': source,
+        'tree_script_unchanged_since': tree_now}, indent=1) + '\n')
+    print(f'PASS step 6 workload binding: frozen script equals {source["path"]} at {source["commit"]}; real records '
+          f'of {session.parent.name} bind from a read-only template; '
+          f'{sum(k.startswith("refuses-") for k in cases)} refusals'
+          + ('' if tree_now else '; the tree script has changed since that commit'))
 
 
 if __name__ == '__main__':

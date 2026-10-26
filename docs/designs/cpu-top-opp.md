@@ -536,10 +536,20 @@ survey's node and identity are the ones bundle 26's run returned to. Bundle
 the script takes that hash from the row's `artifacts.json` and requires the
 file and `binding.json` to agree with it. It copies the read-only frozen
 template by contents, so the prepared files are writable.
-`checks/top-opp-workload-bind.py` runs the frozen binding on a real
-session's records into a new directory, and refuses port 3-1, a bundle 26
-record named by its ELF hash, a survey on another instance and a list
-without bundle 26, each on changed copies of the records.
+`checks/top-opp-workload-bind.py` requires the frozen script to equal the
+tree script at the commit `binding.json` names, runs it on a real session's
+records into a new directory, and requires eight refusals: port 3-1, a
+bundle 26 record named by its ELF hash, a survey on another instance and a
+list without bundle 26, each on changed copies of the records; and, in a
+writable copy of the bundle, a `binding.json` probe pin, a row `probe.bin`
+or a row `artifacts.json` that disagrees, and an ELF pin equal to the probe
+pin. The tree script now refuses through explicit checks that `python -O`
+keeps and makes every check before it creates the output directory; set 5
+keeps the frozen copy from `5a334288`, whose checks are `assert`
+statements, run without `-O`. A binding that stops after creating
+`<stem>-prepare` needs that directory moved to the trash before a rerun;
+the workload runbook says so (`step6/step6-set-5-runbook-corrected.json`
+records the runbook's and the hash list's previous and new SHA-256).
 
 Step 6's second run (`board-session-cpu-top-opp-8/port-3-3`, set
 `step6-set-4`) passed bundles 2, 25 and 26: bundle 26 read CPU-B at
