@@ -273,7 +273,7 @@ controller, monitor and supply copies the default path replaced, were
 removed after the vendor-state image read the identity.
 
 `prepare.py` turns a build and its check result into a board bundle for
-`tools/prepare-board-bundles.py` (rows 11 to 13, 16, 17, 19 and 20 of
+`tools/prepare-board-bundles.py` (rows 11 to 13, 16, 17, 19 and 25 of
 [board-bundles-next.md](../../docs/designs/board-bundles-next.md)). For both
 power variants it reads `on_steps` and `off_steps` from the image and
 requires the domain-5 (TOP5) ON request before the first CORE6 access, the

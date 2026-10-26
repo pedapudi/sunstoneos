@@ -192,7 +192,8 @@ the GPU off as the vendor does, even when an idle check fails.
 ### Steps (a) and (b): start, one health check, stop, OFF
 
 The firmware-stop image (`apps/gpu-power-id/fw-start.c` built with
-`FWS_STOP`; build and check option `--fw-stop`; bundle row 20) runs on port
+`FWS_STOP`; build and check option `--fw-stop`; bundle row 25, frozen as
+bundle 20 in sets 21 and 23) runs on port
 3-1 after a power removal, the cold DDR start and the provider-readiness
 checkpoint. The fixed image is frozen in set `board-bundles-20261025-23`
 for lifetime `board-session-20261025-20`:

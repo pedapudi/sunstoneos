@@ -361,12 +361,16 @@ latency window of the memory-bus priority design measures the effect.
 
 **Finding.** The vendor's dsufreq lowers the DSU clock before a cluster
 change and raises it after (`sunxi-dsufreq.c:298`–`368`). The pinned table
-gives the DSU 780 MHz at 800 mV in every column. Boot0 leaves it at 494 MHz,
-which bounds L3 and snoop bandwidth for all eight cores.
+gives the DSU 780 MHz at 800 mV in every column, and the dsufreq rule gives
+bin vf0400 910 MHz at 800 mV and 1274 MHz at 1000 mV
+([top operating points](../designs/cpu-top-opp.md)). The A733 board kernel
+configuration does not build dsufreq, so the shipped kernel keeps the DSU
+where boot0 leaves it, at 494 MHz, which bounds L3 and snoop bandwidth for
+all eight cores.
 
-**SunstoneOS today.** Absent. The driver refuses DSU writes
-(`drivers/clock/a733_cpu_clock.c:145`) and covers the DSU only by the CPU-L
-voltage.
+**SunstoneOS today.** The driver changes the DSU under the vendor rule with
+no voltage write of its own ([CPU clocks](../cpu-clock.md)); no image
+requests it yet.
 
 **Change.** After action 3, make the DSU a writable domain with the vendor
 order. Use N=30 (26 MHz × 30 = 780 MHz) and the PLL sequence the driver
@@ -418,10 +422,10 @@ Board: the read of action 4 on both ports gives the rate per lifetime.
 **Finding.** The vendor regulator driver rounds every settle time up to whole
 milliseconds (`axp2101-regulator.c:383`–`409`).
 
-**SunstoneOS today.** |ΔV| ÷ 250 µV/µs: a 100 mV raise waits 400 µs
-(`drivers/clock/a733_cpu_clock.c:26`, `:438`).
+**SunstoneOS today.** The driver waits |ΔV| ÷ 250 µV/µs rounded up to whole
+milliseconds, as the vendor driver does ([CPU clocks](../cpu-clock.md)).
 
-**Change.** Wait the larger of that value and 1,000 µs.
+**Change.** Done: every raise of up to 250 mV waits 1 ms.
 
 **Verification.** Host: the driver model records a settle of at least 1 ms
 for a 10 mV step. No board run until a voltage-raising change.

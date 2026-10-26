@@ -2014,6 +2014,7 @@
   "docs": [
    "apps/usb-returning/README.md",
    "docs/designs/board-bundles-next.md",
+   "docs/designs/cpu-top-opp.md",
    "docs/designs/pmic-access.md"
   ],
   "library": false,
@@ -2027,7 +2028,7 @@
    "--tree",
    "--output"
   ],
-  "summary": "Build and check the base image and the returning images of bundles 4, 6, 7 and 8.",
+  "summary": "Build and check the base image and the returning images of bundles 4, 6, 7, 8, 15 and 20 to 24.",
   "usb": true
  },
  "board-bundles.py": {
@@ -2041,6 +2042,8 @@
    "docs/designs/board-bundles-measurements.md",
    "docs/designs/board-bundles-next.md",
    "docs/designs/board-bundles.md",
+   "docs/designs/cpu-top-opp.md",
+   "docs/handoff.md",
    "docs/reference-backsolve-npu.md",
    "docs/vendor-firmware/action-plan.md"
   ],
@@ -2618,6 +2621,7 @@
    "docs/designs/cpu-a76-dvfs.md",
    "docs/designs/cpu-pmu-measurements.md",
    "docs/designs/cpu-pmu.md",
+   "docs/designs/cpu-top-opp.md",
    "docs/designs/pmic-access-measurements.md",
    "docs/designs/power-authority-measurements.md"
   ],

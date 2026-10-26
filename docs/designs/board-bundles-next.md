@@ -115,7 +115,7 @@ that [the runbook README](../board-runbooks/README.md) requires.
 | 17 | Returning, port 3-1, after 11 | GPU core identity as the vendor's probe reads it, then after the vendor's secure configuration (`apps/gpu-power-id/probe-read.c`) | The identity as two 32-bit loads after the default ON; then the SMC0 `0x0a0000b0` and wrapper `drm_ctrl` writes and the read again; both words written back, then the OFF and the provider park | The entry values of `drm_ctrl`, `irq_ctrl` and SMC0 `+0xb0`; the identity before and after the writes; or a non-return |
 | 18 | Read | CCMU_SEC_SWITCH_REG `0x02003f00`, PRCM_SEC_SWITCH_REG `0x07010290`, S_TZMA `0x07003000`–`+0x8` and SPC `0x020540e0` through the FEL interface. Set `board-bundles-20261025-4` used the number for the removed `gpu-vendor-clk` row | Read-only; no device write; first board read of S_TZMA | Whether an EL3 entry of this lifetime made the security setup's writes 11, 13, 14 and 17 (`include/a733_el3_security.h`): the switches 0 after a power removal and 7 after, S_TZMA 0 after, SPC `0x1060` before and `0xfffffbff` after |
 | 19 | Returning, port 3-1, after 11, last of its lifetime | GPU firmware start after the vendor's timer record and secure configuration (`apps/gpu-power-id/fw-start.c`) | After the default ON: the identity, one `RGX_CR_TIMER` read, SMC0 `+0xb0` ← 2 and `drm_ctrl` ← 0 never written back, the 29-step start of `pvr_gpu_start.c` in 32-bit accesses, the firmware processor released; no OFF | The 32-bit started word within 1 s, the firmware's first shared state, `SOFT_RESET` and the MIPS wrapper registers; or a non-return |
-| 20 | Returning, port 3-1, after 11 | GPU firmware start, one health-check command, firmware stop and OFF (`apps/gpu-power-id/fw-start.c` with `FWS_STOP`) | Bundle 19's start; one health check and the forced-idle and power-off requests through the kernel CCB; the vendor `RGXStop` registers; the platform OFF and provider park | The health check's return slot, both power acknowledgements with power states FORCED_IDLE and OFF, the idle registers, and the GPU off with the provider parked; or a non-return |
+| 25 | Returning, port 3-1, after 11 | GPU firmware start, one health-check command, firmware stop and OFF (`apps/gpu-power-id/fw-start.c` with `FWS_STOP`). Sets `board-bundles-20261025-21` and `-23` froze it as bundle 20, before the CPU operating-point bundles took 20 to 24 | Bundle 19's start; one health check and the forced-idle and power-off requests through the kernel CCB; the vendor `RGXStop` registers; the platform OFF and provider park | The health check's return slot, both power acknowledgements with power states FORCED_IDLE and OFF, the idle registers, and the GPU off with the provider parked; or a non-return |
 
 **S_TWI0 interrupt.** Bundle 6 records the TWI controller's interrupt flag
 and leaves out the distributor pending bit of S_TWI0's interrupt (SPI 203 in
@@ -458,6 +458,39 @@ The A76 operating-point runs and the DCDC3 selector write are not in the
 set. They need ranks 7 and 8 to pass on the board and the per-board record
 of the supervised A76 build with the CPU clock option (B1 in
 [cpu-a76-dvfs.md](cpu-a76-dvfs.md)); neither exists.
+
+## Bundle 20: the first CPU operating-point step
+
+Bundle 20 (`cpu-b-800mv-step`) is step 1 of
+[the top operating-point design](cpu-top-opp.md): bundle 15's image with the
+CPU clock driver, the thermal driver, its native adapter and the ADC native
+binding (`apps/board-bundles-power/cpu-opp-step.c`). With cores 6 and 7
+powered off, it raises CPU-B from 1,014 to 1,404 MHz and lowers it to
+1,014 MHz again, both points at the 800 mV of bin vf0400, so it writes no
+PMIC register. It reads a temperature set and the CPU-L, DSU and CPU-B words
+before the change, and after it requires every PLL and mux word and both
+rails to read as before and reads a second set. Its admission refuses,
+before any write and with a controlled warm return, a board that is not at
+the NORMAL thermal level, not on vf0400, not at 800 mV on DCDC3 and DCDC5,
+not at 1,014 MHz on CPU-B or with a pattern or LFM enable set. The row
+requires an approval record of schema `cpu-operating-point-approval-v1`,
+which the bundle carries as `approval.json`. It links the base row's monitor
+and platform objects, so the base runs first in its lifetime.
+
+In the row table the five rows follow bundle 19 (`gpu-fw-start`), the last
+row before them, so their numbers are unchanged: bundles 20 to 24 are the
+numbers the frozen sets `step1-set` and `steps2-5-set-r2` under
+`~/.cache/sunstoneos/evidence/cpu-top-opp-20261025/` use.
+
+Bundle 20 passed on port 3-3 on 2026-10-25, and bundles 21 to 24 passed in
+one lifetime the same day (`board-session-20261025-19/port-3-3`). Bundles 21 to 24 are steps 3,
+2, 4 and 5 of the same design, built from the same source with
+`-DOPP_BUNDLE=n` and run in one lifetime in that order (`dcdc3-1050mv-step`,
+`cpu-l-800mv-step`, `cpu-b-top-step`, `cpu-l-dsu-top-step`). Each adds a
+thermal stop at 70 °C: a sensor at or above it before any write refuses the
+step, and after a write it lowers what the step raised and returns STOPPED, a
+controlled outcome. Bundles 22 and 24 measure CPU0's rate with the PMU code
+of bundle 4 (`platform/a733/cpu_pmu.c`).
 
 ## Bundles that wait
 

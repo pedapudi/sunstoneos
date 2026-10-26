@@ -76,6 +76,22 @@ It also shows that CORE6 does power with the vendor state; the earlier
 failures to reach status 8 came from the missing vendor state, not from the PPU.
 Which of the three differences is necessary is not yet separated.
 
+**Next steps (2026-10-25 17:10, before the usage-window reset):**
+1. CPU steps 2–5 (`cpu-top-opp-20261025/steps2-5-set`) passed independent
+   review as safe to run. First fix `cpu-top-opp.md:250-253,260` (a stale rule
+   that a CPU-L change ends the lifetime). Add the prediction that a ROM return
+   with CPU-L above 494 MHz is untested, and remove power promptly after the
+   top-point step. Then run the set on port 3-3 after a power removal.
+2. Port 3-1 needs a power removal (the GPU firmware-start image left the GPU
+   running). Then run the DRAM training captures on both ports
+   (`work/dram-fast-boot-1025`) and GPU firmware stop (a), once that is frozen
+   and reviewed.
+3. In flight:
+   - the MBUS 600 MHz fix and peripheral clocks (`work/clock-audit-1025`);
+   - the performance-mode toggle (`work/perf-modes-1025`);
+   - the FEL-returning microSD variant;
+   - GPU firmware stop and the first command.
+
 **The GPU firmware starts** (set `board-bundles-20261025-20`,
 `board-session-20261025-16/port-3-1`, record `s16-gfs-run`;
 `work/gpu-fw-start-1025` merged). After cold DDR and readiness, the start
@@ -90,6 +106,43 @@ It ended `COMPLETE GPU firmware start: started word 1`, and the ROM answered.
 The image leaves the GPU running, so port 3-1 needs a power removal before
 its next run. Nothing from the firmware binary was used, only the open DDK
 host sources (`docs/designs/gpu-firmware-start.md`).
+
+**GPU firmware lifecycle passed on port 3-1** (set `board-bundles-20261025-23`,
+`board-session-20261025-20/port-3-1`, branch `work/gpu-fw-stop-1025`).
+After cold DDR and readiness, one image ran:
+- firmware start: started word 1 after 665 µs;
+- the compatibility check;
+- the health check, executed in 1.9 ms (executed count 0 to 1; the open
+  firmware writes no return word, so completion is judged by the count, as
+  upstream does);
+- forced idle and power-off, both acknowledged;
+- the 14-step stop, then OFF and provider park.
+
+The image returned to a responsive ROM with the GPU off, so a firmware run
+no longer needs a power removal. The merge into `bringup` waits on a
+`tools/prepare-board-bundles.py` row conflict with the CPU rows.
+
+**DRAM training capture, port 3-3** (`board-session-20261025-21/port-3-3`,
+set `dram-training-capture-v3-20261025`): cold DDR (12,288 MiB), then two
+read-only captures, each with all six stages complete. This is the first
+lifetime of the capture plan.
+
+**CPU top operating points, steps 2–5 passed on port 3-3** (set
+`cpu-top-opp-20261025/steps2-5-set-r2`, `board-session-20261025-19/port-3-3`).
+In one lifetime, with CPU0 running and every other core off:
+- DCDC3 went to 1050 mV and back to 800 mV, with CPU-B held at 1014 MHz;
+- CPU-L reached 1196 MHz and the DSU 780 MHz at 800 mV;
+- CPU-B reached 2002 MHz (PLL read back) at 1050 mV, with the DSU at
+  910 MHz, then returned to 1014 MHz and 800 mV;
+- CPU-L reached 1794 MHz at 1000 mV and the DSU 1274 MHz, left there
+  until the power removal that followed.
+
+Every clock word read back as predicted, every ROM return worked,
+including returns with CPU-L above 494 MHz, and the hottest sensor read
+42 °C. The ROM resets CPU-L to 494 MHz on each return, as it does MBUS,
+so each image must set its own clocks. A76 execution at 2002 MHz (steps 6
+and 7, B1) is still to do. The merge into `bringup` waits on integration
+fixes; it is now merged (`work/merge-cpu-top-opp-1025`).
 
 **CPU top operating points, step 1 passed on port 3-3** (set
 `cpu-top-opp-20261025/step1-set`, `board-session-20261025-17/port-3-3`,
