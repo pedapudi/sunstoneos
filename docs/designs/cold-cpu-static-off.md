@@ -1,6 +1,6 @@
 # Cold CPU ownership through static OFF
 
-Status: implemented, software validation in progress. This is a normal cold-card boot contract, not a returning diagnostic. Non-Arm exclusion remains an independent prerequisite. No physical operation is established by this design.
+Status: implemented and covered by focused software checks; physical startup remains unqualified. This is a normal cold-card boot contract, not a returning diagnostic. Non-Arm exclusion remains an independent prerequisite. No physical operation is established by this design.
 
 The stage2 loader must own all secondary cores before SD DMA and slot writes. An OFF sample alone is insufficient if the power controller can wake the core afterward. The owner uses the existing PPU protocol to acknowledge static OFF, retains that policy through loading, and releases it only after the resident OS has published a valid secondary entry. It does not assert CORE_RESET.
 
@@ -55,16 +55,25 @@ remains unqualified.
 ## Component evidence and integration boundary
 
 The focused evidence is under
-`~/.cache/sunstoneos/evidence/cold-cpu-static-off-1026/`. Twenty owner cases cover
-static acknowledgment, an in-flight wake, admission failures, changed requests,
-deadlines, stopped counter, bounded cache cleanup and retained loader exits.
-Three additional native cases cover already-static OFF and mismatched policy
-acknowledgments. Resident startup and mailbox checks cover immediate arrival
-while the target remains parked, zero writes on missing ownership, and terminal
-retention. System-register, cache and MMIO effects are modeled.
+`~/.cache/sunstoneos/evidence/cold-cpu-static-off-1026/`. All 23 CPU owner cases
+pass against the combined stage2 image. They cover both admitted OFF profiles,
+an in-flight wake, invalid identities and policy acknowledgments, changed
+requests, deadlines, stopped counter, bounded cache cleanup and retained exits.
+The combined resident ELF also passes actual native startup cases for immediate
+wake, zero writes on missing ownership and terminal retention, plus 41 native
+address-permission checks. The existing mailbox owner checks establish that an
+arriving target stays parked until primary cleanup and release. System-register,
+cache and MMIO effects are modeled.
 
-The component stage2 image occupies 32,624 bytes after the A733 applicability
-correction and static-profile addition. Its final combined NPU session extension
-and resident eight-worker image require the coordinated integration build.
-Source review and these component checks permit that build; they do not establish
-physical power transitions, DMA coherence, watchdog recovery or autonomous boot.
+The final combined stage2 image occupies 32,688 bytes, leaving 80 bytes below
+the existing 32 KiB boundary. It includes the NPU session extension and A733
+applicability correction. Its SHA-256 is
+`53caaaf19f8876d772c89e2d0b42a54a120cafc120759ddd910022d0fe926a80`.
+The resident image uses eight workers, CPU clock control, the admitted A76 path
+and the selected ShuffleNet NPU client. Actual linked startup and admission
+objects carry the resident build definition. SD and SHA-256 retain `-O2`;
+loader, admission and the cold CPU helper use `-Os`.
+
+These checks do not establish physical power transitions, DMA coherence,
+watchdog recovery or autonomous boot. The pre-stage2 predecessor and remote-write
+requirements remain separate from the implemented subsequent-load ownership.
