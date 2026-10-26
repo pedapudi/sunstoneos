@@ -2504,6 +2504,20 @@
   "summary": "Only camera admission-to-consumption binding; providers and publication are modeled.",
   "usb": false
  },
+ "camera-stream-application.py": {
+  "cache_areas": [
+   "host"
+  ],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--build",
+   "--output"
+  ],
+  "summary": "Check finite stream scheduling and USB output using an already built camera profile.",
+  "usb": false
+ },
  "camera-supervised-host.py": {
   "cache_areas": [],
   "docs": [],
@@ -7438,7 +7452,8 @@
   "cache_areas": [],
   "docs": [
    "docs/cpu-clock.md",
-   "docs/designs/cpu-top-opp.md"
+   "docs/designs/cpu-top-opp.md",
+   "docs/os-image.md"
   ],
   "library": false,
   "pure_host": false,
@@ -7647,6 +7662,21 @@
    "--output"
   ],
   "summary": "Execute actual AArch64 readiness, result-copy and USB0 protocol for OS workload2.",
+  "usb": false
+ },
+ "os-thermal-report.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/os-image.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--build",
+   "--session",
+   "--output"
+  ],
+  "summary": "Actual linked thermal producer, window hooks, admission and USB report pages.",
   "usb": false
  },
  "os-thermal-throttle.py": {

@@ -66,11 +66,10 @@ does not establish recovery from a fault.
 | Work | Branch | Immediate deliverable |
 | --- | --- | --- |
 | Multicore mimus | `work/resume-mimus-multicore-1025` | Extend the existing two-worker execution path while preserving exact results |
-| OS thermal protection | `work/resume-thermal-1025` | Admit and enforce the qualification session's 70 °C CPU stop |
+| OS integration | `work/resume-thermal-1025` | Rebuild the supported NPU profile against the shared service and thermal changes |
 | microSD reads | `work/resume-sd-completion-1025` | Correct the remaining voltage-switch timing gaps, then complete descriptor DMA |
 | DRAM restoration | `work/resume-dram-restore-1025` | Add persistent record selection and standby updates using existing storage contracts |
-| Radio startup | `work/resume-radio-native-1025` | Compose the native SDIO diagnostic with explicit pin, supply and inherited-state authority |
-| Continuous camera capture | `work/resume-camera-native-1025` | Bind the existing stream coordinator to native buffers and per-slot synchronization |
+| Performance modes | `work/resume-perf-modes-1025` | Integrate the existing high/low mode controls with current thermal and ownership rules |
 
 Three independent reviewers cover CPU/thermal/DRAM, GPU/NPU, and radio/camera.
 Workers own separate source paths, reuse successful evidence and submit focused
@@ -125,23 +124,38 @@ be pruned.
   `~/.cache/sunstoneos/build/gate-resume-npu-lifecycle-1025/`.
   Physical faults, thermal response, in-place restart and domain OFF remain
   unqualified.
-- **microSD follow-ups.** The CMD11 fix is merged and passes emulation, but
-  has not run on a board. Before rerunning SDR104 lifetime B, which needs a
-  power removal:
-  - Make `sd_signal` wait for the clock-restart update and clear its flags in
-    one step, as the vendor does (`sunxi-mmc-v5p3x.c:378-388`). Today steps 3
-    and 4 (`sunxi_mmc.c:651-658`) can be a scheduler tick apart and lose the
-    switch-done bits.
-  - Add model cases for that gap and for a switch that ends on bit 10 alone.
-    Both mutants survive today.
-  - Start the end-of-switch 10 ms timeout after the 1 ms delay.
-
-  The review's scratch work is in
-  `~/.cache/sunstoneos/evidence/sd-cmd11-review-20261025/`.
-  - SD DMA: its design is accepted, and a first pass of the code is on
-    `work/sd-dma-1025`. The code is unbuilt and unreviewed.
-  - The host-check command in `apps/storage-read-returning/README.md` is
-    missing `--read-record`.
+- **OS thermal qualification support is implemented.** The session can lower
+  the CPU critical threshold to 70 °C; zero retains the normal policy. A
+  bounded binary report preserves the first recognition interval's temperature
+  and freshness records without enlarging the transcript. The report is a
+  separate USB diagnostic operation, admitted only when the image declares it.
+  The CPU-clock/A76 build and focused policy, admission, owner-order and
+  report checks pass under `~/.cache/sunstoneos/evidence/resume-thermal-1025/`.
+  Physical thermal response remains unqualified. Critical termination can stop
+  USB, so successful delivery of a terminal temperature report is not guaranteed.
+- **microSD voltage-switch corrections are implemented.** Clock-restart
+  completion and flag clearing now occur in one driver poll, and the full
+  10 ms completion timeout starts after the 1 ms delay. Focused time-driven
+  cases reject the prior scheduling gap, premature deadline and bit-10-only
+  completion behavior. Source-backed core/platform checks and both UHS and
+  non-UHS compilation pass under
+  `~/.cache/sunstoneos/evidence/resume-sd-completion-1025/cmd11/`.
+  The README command now includes `--read-record`. No new physical switch ran;
+  the next SDR104 lifetime still needs power removal. The storage worker is
+  completing the accepted DMA design from the preserved first implementation,
+  including descriptor validation, drain waits and cache publication.
+- **Radio and camera native application paths are implemented in software.**
+  The radio diagnostic composes actual shared providers, card and transport
+  constructors. Its native build, twelve modeled application cases, constructor
+  composition and nine producer refusals pass under
+  `~/.cache/sunstoneos/evidence/radio-native-20261025/`. Fitted supply topology,
+  PM output-latch provenance and inherited PM2 behavior still prevent physical
+  admission. Missing authority produces a refusal image before provider startup.
+  The camera stream uses two slots and polls capture during each copied chunk.
+  It exports one immutable frame, then reports retained hardware because packet
+  drain is unproven. Native/model/host evidence is frozen under
+  `~/.cache/sunstoneos/evidence/resume-camera-native-1025/final-snapshot/`.
+  No camera is attached; no physical capture or drain is qualified.
 - **Do not run GPU set `board-bundles-20261025-31`.** It repeats the qualified
   eight-job session with the older image, which lacks the shutdown on every
   failure path.

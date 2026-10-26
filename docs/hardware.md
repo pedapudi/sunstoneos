@@ -665,8 +665,16 @@ to the stated scope:
   on port `3-3` on 2026-10-24. Evidence is under
   `board-session-20261023/port-3-3/set5-bb4-run/`. Broader per-core event
   validation remains outstanding.
-- Thermal and frequency control: **implemented** [controller](thermal.md) and
-  [native application](thermal-application.md). The controller
+- Thermal and frequency control: **implemented** session-limited CPU critical
+  trips and bounded temperature reporting for OS qualification. A 70 °C trip
+  applies to the CPU sensors; the session cannot raise the normal critical
+  threshold. The first recognition interval has a separate binary diagnostic
+  report, with explicit image capability admission and no transcript growth.
+  Focused policy, native admission, CPU clock-owner ordering and report checks
+  pass under `resume-thermal-1025/`. Physical response remains unqualified, and
+  critical termination does not guarantee report delivery over USB.
+  The [controller](thermal.md) and
+  [native application](thermal-application.md) are also implemented. The controller
   implements calibrated sampling for CPU, DDR, NPU and GPU sensors, alarm and
   critical thresholds, and interrupt-status acknowledgement. Host checks, source
   comparisons and native compilation pass. The native application connects shared
@@ -724,14 +732,21 @@ to the stated scope:
   on 2026-10-23 and on port `3-1` before the 2026-10-24 CPU workload.
   The latter evidence is under
   `processor-completion-20261024/port-3-1/thermal-before-workload/`.
-- Storage: **implemented** [SD/eMMC identification and bounded reads](mmc.md)
+- Storage: **tested** for returning microSD high-speed reads at 50 MHz,
+  four-bit, 3.3 V. All 256 reads in the recorded session completed.
+  The CMD11 completion and clock-restart timing corrections pass focused
+  software checks, including the full post-delay timeout and both required
+  completion bits. SDR104 remains physically unqualified. DMA completion,
+  descriptor and cache-ownership work continues separately.
+  [SD/eMMC identification and bounded reads](mmc.md) are **implemented**
   for the one-bit legacy-speed profile and negotiated read-only SD profiles.
   Host checks and source comparisons cover capacity, full-range
   addressing, automatic stop, completion/status and retained partial buffers;
   native compilation passes. Controller access, pin/clock restoration, and ROM
   return are **tested** in the earlier eMMC probe; CMD1 received no response.
-  [Physical storage evidence](storage.md) records that negative result. No media
-  device is physically identified. The [native storage binding](mmc-platform.md)
+  [Physical storage evidence](storage.md) records that negative result. That
+  eMMC probe identified no media; neither current board has populated eMMC.
+  The [native storage binding](mmc-platform.md)
   composes SDC0 reads and explicitly selected SDC2 or SDC3 eMMC reads with actual
   clock, pin, rail and PMIC ownership. Both eMMC selections reserve the two
   controllers together because they share one card. The corrected PC route uses
@@ -1754,8 +1769,14 @@ to the stated scope:
   native frame/panel binding, read transactions and
   physical qualification remain outstanding.
 
-- Radio: **implemented** [identity-message encoding and decoding](radio-codec.md),
-  with host sanitizer and AArch64 compile evidence. The
+- Radio: **implemented** a [returning SDIO diagnostic](../apps/radio-sdio-id/README.md)
+  that composes the actual shared providers, card and transport constructors.
+  The native build, twelve modeled application cases, constructor composition
+  and nine producer refusals pass under `radio-native-20261025/`. Fitted supply
+  topology and complete PM output-latch/PM2 authority remain unresolved; missing
+  evidence produces only a refusal image. Neither Wi-Fi nor Bluetooth has been
+  demonstrated physically. [Identity-message encoding and decoding](radio-codec.md)
+  are implemented, with host sanitizer and AArch64 compile evidence. The
   [bootstrap and board mapping](radio.md) remains source-based research, with a
   host-tested Bluetooth patch-table inspector. Published software identifies
   an AIC8800D80 candidate and loads Bluetooth patches over SDIO before UART use.
@@ -2037,7 +2058,15 @@ to the stated scope:
   generation after a healthy reconnect. The integrated OS image uses this to
   serve Wi-Fi and the headset from one module owner.
 
-- Camera: The [native application](camera-application.md) connects actual provider
+- Camera: **implemented** opt-in native streaming with two slots and per-slot
+  synchronization. The application copies one completed frame while continuing
+  capture polling, then reports retained hardware because packet quiescence and
+  drain are unproven. The stream image, native resource/controller models,
+  application/USB cases and host collection pass under
+  `resume-camera-native-1025/final-snapshot/`; unchanged still-image behavior
+  has a selected integration build. No camera is attached and physical capture,
+  coherence and drain remain unqualified.
+  The [native application](camera-application.md) connects actual provider
   startup, completed frame copies and USB0 capture. Its supervised mode includes
   explicit manual-power-removal admission, frozen host packaging and durable
   full-frame collection. Native linking and focused mode, admission, launcher and
