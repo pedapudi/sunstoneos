@@ -149,10 +149,21 @@ def main():
         assert bytes(commands)==(e/'commands.bin').read_bytes()
         results.append(dict(synthetic=bool(i),pbe2_in_xe=pbe,xt_top_infrastructure=xt,reference_operations=count,
             native_operations=len(trace['plan']),firmware_sha256=hashlib.sha256(raw).hexdigest()))
+    # The stop without the firmware's acknowledgements (trace 2, pinned
+    # firmware): the same vendor plan, then upstream's final soft reset with
+    # the mask of the firmware's pbe2_in_xe feature.
+    raw=firmware; pbe=bool(raw[122880+48+4]&1); xt=bool(raw[122880+48+8]&32)
+    out=(Event*32)(); commands=(C.c_uint8*176)(); count=lib.reference(pbe,xt,out,commands)
+    upstream=[{k:getattr(v,k) for k in ['kind','offset','width','mask','value']} for v in out[:count]]
+    reset=upstream[-1]; assert reset['offset']==0x100 and reset['kind']==1 and reset['width']==8
+    hard=json.loads((e/'trace-2.json').read_text())
+    first=json.loads((e/'trace-0.json').read_text())['plan']
+    assert hard['plan']==first+[reset],(hard['plan'][-1],reset)
+    results.append(dict(unacknowledged=True,reset_value=reset['value'],native_operations=len(hard['plan'])))
     (e/'comparison.json').write_text(json.dumps(dict(result='pass',sources=hashes,compiler_command=command,
         variants=results,command_comparison='Original functions assign defined fields; unused reference bytes zeroed in capture shim.',
         native_differences='Vendor RGXStop: interrupt acknowledgement, early SLC_IDLE poll, thread-0 DM associations only, no SOFT_RESET; mandatory platform isolation callback',physical_access=False),indent=2)+'\n')
-    print('PASS shutdown commands match the pinned functions and the idle plans match them with the vendor RGXStop differences, for both feature profiles')
+    print('PASS shutdown commands match the pinned functions and the idle plans match them with the vendor RGXStop differences, for both feature profiles; the unacknowledged plan adds upstream\'s final soft reset')
 
 
 if __name__=='__main__': main()

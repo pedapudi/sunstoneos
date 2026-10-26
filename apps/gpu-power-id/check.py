@@ -926,7 +926,8 @@ def run_fws(image, case, stop=False, unchecked=False, job=False):
                 (write and address == GPU + 0x8b0 and value == 1 and state['irq_reads'] and state['irq_reads'][-1] & 1) or \
                 (write and address == GPU + 0xb00 and value == 0 and not 100 <= step < 200) or \
                 (100 <= step < 200 and (int(write), address - GPU) in FWX_STOP_PLAN and (not write or value == 0 or
-                                                                                    address == GPU + 0x8b0))
+                                                                                    address == GPU + 0x8b0)) or \
+                (step == 164 and write and (address, value) in ((GPU + 0x100, 0xfffffc3d), (GPU + 0x104, 0xffefffff)))
             if not ok:
                 state['refused'] = [hex(address), size, int(write), hex(value) if write else None, n]
                 uc.emu_stop()
@@ -1201,8 +1202,12 @@ def check_fwx(u, image, state, case, timer_reads):
         assert 'GPU FWS stop result=3 phase=11 ' in output and 'ack_off=0x0 ' in output, output[-2500:]
         assert all(step >= 150 for _, step in stop_steps), stop_steps
         if hard:
-            assert compressed == plan or compressed == [x for x in plan if x != (1, 0x8b0)], (compressed, plan)
-            assert 'GPU FWS stop result=0 phase=10 error=0 step=14 count=14 ' in output and \
+            # The vendor plan, then upstream's final soft reset, low word first.
+            reset = [(1, 0x100), (1, 0x104)]
+            assert compressed in (plan + reset, [x for x in plan if x != (1, 0x8b0)] + reset), (compressed, plan)
+            assert [v for (w, a, v), step in post if step >= 150 and w and a in (GPU + 0x100, GPU + 0x104)] == \
+                [0xfffffc3d, 0xffefffff], post
+            assert 'GPU FWS stop result=0 phase=10 error=0 step=15 count=15 ' in output and \
                 ' unacknowledged=1' in output, output[-2500:]
         else:
             assert compressed in ([(0, 0x8a8), (0, 0x3c8)], [(0, 0x8a8), (1, 0x8b0), (0, 0x3c8)]), compressed
@@ -1246,10 +1251,13 @@ def check_fwj(u, image, state, case, timer_reads):
         assert kinds == ([115, 102, 101] if case in ('fj-restart-event', 'fj-kick-bad-word') else
                          [115, 102, 101, 107]), state['commands']
         assert stop_accesses and all(step >= 150 for (w, a, v), step in post if 100 <= step < 200), post
+        # Upstream's final soft reset ends the plan only when every idle poll matched.
+        reset = [(w, a - GPU, v) for (w, a, v), step in post if step >= 150 and w and a in (GPU + 0x100, GPU + 0x104)]
+        assert reset == ([] if case == 'fj-not-idle' else [(1, 0x100, 0xfffffc3d), (1, 0x104, 0xffefffff)]), reset
         assert ' unacknowledged=1' in output, output[-2500:]
         assert ('a733_gpu_platform_off_begin' in calls) == (case != 'fj-not-idle'), calls
         if case != 'fj-not-idle':
-            assert 'GPU FWS stop result=0 phase=10 error=0 step=14 count=14 ' in output, output[-2500:]
+            assert 'GPU FWS stop result=0 phase=10 error=0 step=15 count=15 ' in output, output[-2500:]
             assert calls.index('a733_gpu_platform_off_begin') < calls.index('a733_gpu_platform_supply_end') < \
                 calls.index('bb_power_park'), calls
         assert state['exit_status'] is None and 'COMPLETE' not in output

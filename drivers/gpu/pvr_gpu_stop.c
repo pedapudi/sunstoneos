@@ -27,7 +27,8 @@ static int plan(struct pvr_gpu_stop *s, struct pvr_gpu_control *c, const void *i
     const uint32_t control = acknowledged ? PVR_GPU_CONTROL_READY : PVR_GPU_CONTROL_FAILED;
     const uint32_t queue = acknowledged ? PVR_CCB_ACTIVE : PVR_CCB_FAILED;
     if (!a733_span_excl_nonempty(s,sizeof(*s)) || (s->phase != PVR_GPU_STOP_NEW && s->phase != PVR_GPU_STOP_FAILED) ||
-        (s->phase == PVR_GPU_STOP_FAILED && (acknowledged || s->index || s->isolation_started)) ||
+        (s->phase == PVR_GPU_STOP_FAILED &&
+         (acknowledged || s->index || s->isolation_started || s->acknowledgement[1])) ||
         !outside(s,c,sizeof(*c)) || !outside(s,ops,sizeof(*ops)) ||
         c->phase != control || !outside(s,c->queue,sizeof(*c->queue)) ||
         c->queue->phase != queue || !deadline ||
@@ -57,6 +58,12 @@ static int plan(struct pvr_gpu_stop *s, struct pvr_gpu_control *c, const void *i
     add(&result,POLL,0x3870,8,UINT64_C(0x800003ff03ffffff),0);
     add(&result,POLL,0x3898,4,0xff,0xff);
     add(&result,POLL,0x3c8,4,0x78,0x78); add(&result,POLL,0x3c8,4,4,4);
+    /* Without the acknowledgements the firmware processor still runs: as
+     * upstream's pvr_fw_stop ends (pvr_fw_startstop.c:315-320), assert the
+     * soft reset of every unit, with the mask its pbe2_in_xe feature
+     * selects, so that the GPU and the firmware are halted before the OFF. */
+    if (!acknowledged)
+        add(&result,WRITE,0x100,8,0,f[4]&1 ? UINT64_C(0xffeffffffffffc3d) : UINT64_C(0x00e7fffffffffc3d));
     *s=result; return 1;
 }
 int pvr_gpu_stop_init(struct pvr_gpu_stop *s, struct pvr_gpu_control *c,

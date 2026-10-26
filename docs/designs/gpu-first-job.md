@@ -67,8 +67,8 @@ upstream flushes the requested MMU caches before the first submission
 before every kick (`RGXPreKickCacheCommand`, `rgxfwutils.c:4065`). The image
 now sends `MMUCACHE` (102) with the flags a new page catalogue requests (PT,
 PD, PC, TLB and the interrupt, `0x400001f`, `pvr_mmu.c:71–75`), the MMU sync
-object at `0xc0109000` and update value 0, and waits until the firmware has
-consumed it before the KICK.
+object at `0xc0109000` and update value 0, and before the KICK waits, as for
+the health check, until the firmware's executed count has passed it.
 
 **Access bits.** Set 27 mapped the programs, control stream, input and
 border table GPU read-only. Upstream sets neither the read-only nor the
@@ -103,9 +103,9 @@ the health check and the stop:
    formatted; the job publishes its
    output guards, checks the timeline is 0, writes the CDM command and the
    UPDATE of the timeline to 1, and kicks.
-3. **The wait** ends at 200 ms. The image checks the 32 words and both guards
-   itself when the timeline reaches 1, and lets the job read them only when
-   they are correct. A timeline that stays 0, or a wrong word, ends the job
+3. **The wait** ends at 150 ms, leaving 50 ms for the cleanup. The image
+   checks the 32 words and both guards itself when the timeline reaches 1,
+   and lets the job read them only when they are correct. A timeline that stays 0, or a wrong word, ends the job
    without failing its transport: a failed transport would fail the shared
    kernel CCB, and with it the stop.
 4. **Cleanup**: `CLEANUP` (106) of the context, with its return word, once
@@ -114,8 +114,9 @@ the health check and the stop:
 5. **The stop and OFF** of the firmware-stop image, whatever the job's
    result. When the control has failed, or the firmware acknowledges
    neither power request, the stop runs without the acknowledgements: the
-   register sequence and, when every idle poll matches, the OFF. Only a GPU
-   that never reports idle stays powered.
+   register sequence, and when every idle poll matches, upstream's final
+   soft reset and the OFF. Only a GPU that never reports idle stays
+   powered.
 
 Firmware events during the job: every event of types 101–108 is recorded
 and none fails the control, as upstream processes the firmware CCB without
@@ -247,11 +248,12 @@ compared with Mesa's output.
 
 ## Design gate
 
-**Cost.** One job per run; it adds two KCCB commands (the KICK and the
-cleanup), 88 page cleans, the table publication and a 200 ms bound to the
-firmware-stop image, inside the 1.5 s session with the monitor's 500 ms
-margin. The image's log for a complete run in the host check is 10,813 of
-16,128 bytes.
+**Cost.** One job per run; it adds three KCCB commands (`MMUCACHE`, the
+KICK and the cleanup), 88 page cleans, the table publication and a 200 ms
+bound to the firmware-stop image, inside the 1.5 s session with the
+monitor's 500 ms margin; the stop keeps its 300 ms, of which the stop
+without acknowledgements takes the last 100 ms. The image's log in the host
+check is at most 11,311 of 16,128 bytes.
 
 **Checks.**
 
@@ -272,5 +274,6 @@ margin. The image's log for a complete run in the host check is 10,813 of
   read-back, or the next stop step.
 - The firmware-stop image changes with the stop without acknowledgements;
   `check.py --fw-stop` passes ten cases, three of them new or changed.
-- `checks/pvr-gpu-stop.c` (121 retained faults) and
-  `checks/pvr-gpu-stop-reference.py` pass.
+- `checks/pvr-gpu-stop.c` (122 retained faults) and
+  `checks/pvr-gpu-stop-reference.py` pass; the second compares the
+  unacknowledged plan with upstream's `pvr_fw_stop`, final reset included.

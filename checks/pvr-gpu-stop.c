@@ -257,16 +257,23 @@ int main(int argc,char **argv)
      * the control is READY, admitted once the control and queue are latched
      * failed, from NEW or from a stop that failed before its first register
      * step; the same register plan and isolation follow, and no command. */
-    prepare(image); before=s;
+    prepare(image); memset(&s,0,sizeof(s)); before=s;
+    assert(c.phase==PVR_GPU_CONTROL_READY && q.phase==PVR_CCB_ACTIVE);
     assert(!pvr_gpu_stop_init_unacknowledged(&s,&c,image,image_bytes,&ops,&m,10000) && !memcmp(&s,&before,sizeof(s)));
+    assert(pvr_gpu_stop_init(&s,&c,image,image_bytes,&ops,&m,10000));
     m.no_ack=1;
     while(s.phase!=PVR_GPU_STOP_WAIT_IDLE)assert(pvr_gpu_stop_poll(&s)==PVR_GPU_STOP_AGAIN);
     m.now=s.deadline; assert(run()==PVR_GPU_STOP_FAULT); stopped(PVR_GPU_STOP_TIMEOUT);
     unsigned sent=m.sent; m.events_count=0;
     assert(pvr_gpu_stop_init_unacknowledged(&s,&c,image,image_bytes,&ops,&m,m.now+10000));
-    assert(s.phase==PVR_GPU_STOP_REGISTERS && s.unacknowledged && !s.index && s.count==14);
+    /* The vendor plan, then upstream's final soft reset of every unit. */
+    assert(s.phase==PVR_GPU_STOP_REGISTERS && s.unacknowledged && !s.index && s.count==15);
+    assert(s.steps[14].kind==1 && /* WRITE */ s.steps[14].offset==0x100 && s.steps[14].width==8 &&
+           s.steps[14].value==UINT64_C(0xffeffffffffffc3d));
     assert(run()==PVR_GPU_STOP_OK && m.isolation==1 && m.sent==sent && m.irq_cleared && m.events_count==s.count);
+    assert(m.events[14].write && m.events[14].offset==0x100 && m.events[14].value==s.steps[14].value);
     assert(c.phase==PVR_GPU_CONTROL_FAILED && q.phase==PVR_CCB_FAILED);
+    save(argv[2],2);
     /* From NEW, after an external control failure. */
     prepare(image); memset(&s,0,sizeof(s)); assert(pvr_gpu_control_abort(&c)==PVR_GPU_CONTROL_FAULT);
     assert(pvr_gpu_stop_init_unacknowledged(&s,&c,image,image_bytes,&ops,&m,m.now+10000));
@@ -276,6 +283,15 @@ int main(int argc,char **argv)
     while(s.phase!=PVR_GPU_STOP_REGISTERS || s.steps[s.index].offset!=held[0])
         assert(pvr_gpu_stop_poll(&s)==PVR_GPU_STOP_AGAIN);
     m.now=s.deadline; assert(run()==PVR_GPU_STOP_FAULT); stopped(PVR_GPU_STOP_TIMEOUT); before=s;
+    assert(!pvr_gpu_stop_init_unacknowledged(&s,&c,image,image_bytes,&ops,&m,m.now+10000) &&
+           !memcmp(&s,&before,sizeof(s)));
+    /* Not after the power-off acknowledgement: that stop's owner powers off
+     * as the vendor does, without this entry. */
+    prepare(image); m.hold_register=held[0];
+    while(s.phase!=PVR_GPU_STOP_REGISTERS || s.steps[s.index].offset!=held[0])
+        assert(pvr_gpu_stop_poll(&s)==PVR_GPU_STOP_AGAIN);
+    m.now=s.deadline; assert(run()==PVR_GPU_STOP_FAULT); stopped(PVR_GPU_STOP_TIMEOUT);
+    s.index=0; assert(s.acknowledgement[1]); before=s;
     assert(!pvr_gpu_stop_init_unacknowledged(&s,&c,image,image_bytes,&ops,&m,m.now+10000) &&
            !memcmp(&s,&before,sizeof(s)));
     /* A held idle poll ends the unacknowledged stop at its deadline, before

@@ -462,7 +462,15 @@ static int stop_read(void *context, uint32_t offset, uint32_t width, uint64_t *o
 static int stop_write(void *context, uint32_t offset, uint32_t width, uint64_t value)
 {
     (void)context;
-    if (!stop_current(offset, width) || width != 4 ||
+    if (!stop_current(offset, width)) return 0;
+    /* The stop without acknowledgements ends with the full soft reset,
+     * written as the vendor writes a 64-bit register: low word first. */
+    if (stop.unacknowledged && offset == 0x100 && width == 8 && value == stop.steps[stop.index].value &&
+        stop.index + 1 == stop.count) {
+        gpu_write64(offset, value);
+        return 1;
+    }
+    if (width != 4 ||
         !(((offset == 0xb40 || offset == 0xb30) && !value) || (offset == 0x8b0 && value == 1))) return 0;
     (void)fws_access(GPU_BASE + offset, 1, (uint32_t)value);
     return 1;

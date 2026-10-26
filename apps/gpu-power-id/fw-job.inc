@@ -30,6 +30,9 @@
 #define JOB_RING_BYTES 1024u
 #define JOB_SEED UINT32_C(0x12345678)
 #define JOB_FACTOR UINT32_C(0x9e3779b1)
+/* The last 50 ms of the job's 200 ms are the cleanup's: the MMU command
+ * and the timeline wait end before them. */
+#define JOB_CLEANUP_US 50000u
 static const uint32_t job_object_bytes[JOB_OBJECTS] = {232, 4, 32, JOB_RING_BYTES, 32, 64};
 static const uint64_t job_heap[3] = {UINT64_C(0xda00000000), UINT64_C(0xe000000000), UINT64_C(0x8000000000)};
 static unsigned char job_payload[JOB_PAYLOAD_PAGES * 4096u] __attribute__((aligned(4096)));
@@ -255,7 +258,7 @@ static int job_output_matches(void)
  * workload pages and VM tables, the client CCB format, the job (publish,
  * timeline check, CDM and UPDATE commands, KICK, timeline wait, output
  * check), then the context cleanup. The wait for the timeline and the
- * output check end at deadline without failing the job's transport, which
+ * output check end 50 ms before deadline without failing the job's transport, which
  * would fail the shared kernel CCB and with it the stop: the job's own
  * deadline is the session's, and the job reads its output only after this
  * function has found it correct. Returns 1 for a complete job. */
@@ -265,6 +268,7 @@ static int fws_job_run(uint64_t deadline)
     struct bb_line line;
     int result = -1;
     unsigned stage = 1;
+    const uint64_t wait_end = deadline - JOB_CLEANUP_US;
     for (unsigned i = 0; i < PVR_PROGRAM_REGIONS + PVR_JOB_REGIONS && stage; ++i) {
         const struct pvr_mips_buffer *d = i < PVR_PROGRAM_REGIONS ? &job_programs_backing[i] :
             &job_backing[i - PVR_PROGRAM_REGIONS];
@@ -283,18 +287,27 @@ static int fws_job_run(uint64_t deadline)
      * pvr_mmu.c:124-158): MMUCACHE (102) with the level-2 flags that a new
      * page catalogue requests (PT, PD, PC, TLB and the interrupt,
      * pvr_mmu.c:71-75 and 924), the MMU sync object and update value 0;
-     * upstream waits for it. The vendor DDK also invalidates before every
-     * kick (RGXPreKickCacheCommand, rgxfwutils.c:4065). */
+     * upstream waits for its execution. The firmware writes no return word
+     * here unless asked, so the image waits, as for the health check, for
+     * the executed count to pass it. The vendor DDK also invalidates before
+     * every kick (RGXPreKickCacheCommand, rgxfwutils.c:4065). */
     if (stage == 2) {
         const uint32_t command[PVR_CCB_COMMAND_BYTES / 4] = {PVR_CCB_MAGIC | 102u, 0, 0x400001fu,
                                                              pvr_fw_state_layout(PVR_FW_MMU_SYNC)->address, 0};
+        uint32_t before = 0, after = 0;
+        int consumed = 0;
         stage = 0;
-        if (pvr_ccb_submit(&queue, command, bb_power_now(), deadline, &job_mmu_token) == PVR_CCB_OK) {
+        if (a733_gpu_memory_executed(&memory, &before) &&
+            pvr_ccb_submit(&queue, command, bb_power_now(), deadline, &job_mmu_token) == PVR_CCB_OK) {
             for (;;) {
                 if (pvr_gpu_control_poll(&control, 4) == PVR_GPU_CONTROL_FAULT) break;
-                enum pvr_ccb_result r = pvr_ccb_settle(&queue, job_mmu_token, &job_mmu_status);
-                if (r == PVR_CCB_OK) { if (job_mmu_status <= 1) stage = 2; break; }
-                if (r != PVR_CCB_AGAIN || bb_power_now() >= deadline) break;
+                if (!consumed) {
+                    enum pvr_ccb_result r = pvr_ccb_settle(&queue, job_mmu_token, &job_mmu_status);
+                    if (r == PVR_CCB_OK) { if (job_mmu_status > 1) break; consumed = 1; }
+                    else if (r != PVR_CCB_AGAIN) break;
+                }
+                if (consumed && a733_gpu_memory_executed(&memory, &after) && after != before) { stage = 2; break; }
+                if (bb_power_now() >= wait_end) break;
                 vTaskDelay(1);
             }
         }
@@ -318,15 +331,15 @@ static int fws_job_run(uint64_t deadline)
                 uint32_t value = 0;
                 (void)job_read_fence(NULL, &value);
                 if (value == job.sequence && !job_output_matches()) { job_outcome = 3; break; }
-                if (value != job.sequence && bb_power_now() >= deadline) { job_outcome = 2; break; }
-            } else if (job.phase != PVR_JOB_READ_OUTPUT && bb_power_now() >= deadline) break;
+                if (value != job.sequence && bb_power_now() >= wait_end) { job_outcome = 2; break; }
+            } else if (job.phase != PVR_JOB_READ_OUTPUT && bb_power_now() >= wait_end) break;
             result = pvr_compute_job_poll(&job);
             if (result) { job_outcome = result == 1 ? 1 : 4; break; }
             if (job.phase == PVR_JOB_WAIT_FENCE || job.phase == PVR_JOB_KICK) vTaskDelay(1);
         }
     }
-    /* A KICK the firmware has consumed is settled now: a slot left pending
-     * would fail the kernel CCB at its deadline, and with it the stop. */
+    /* A KICK the firmware has consumed is settled now, so the job line
+     * reports its status and its slot is free before the cleanup. */
     if (job_client.phase == PVR_CCCB_WAIT && control.phase == PVR_GPU_CONTROL_READY) {
         (void)pvr_gpu_control_poll(&control, 4);
         (void)pvr_cccb_poll(&job_client);
@@ -368,8 +381,9 @@ static int fws_job_run(uint64_t deadline)
      * return word. */
     /* The firmware's recovery record (struct rogue_fwif_hwrinfobuf,
      * pvr_rogue_fwif.h:395-440): the count, the next index and the first
-     * record's type, data master, event status and its first two fault
-     * status words (BIF request and MMU status). */
+     * record's type, data master, event status and the first three words
+     * of its type's data (for a BIF fault: request status, MMU status, page
+     * catalogue). */
     bb_line_start(&line, "GPU FWJ hwr");
     bb_line_hex(&line, "mmu_status", job_mmu_status);
     bb_line_dec(&line, "count", *shared_word(PVR_FW_RECOVERY_INFO, 2176));
@@ -377,10 +391,10 @@ static int fws_job_run(uint64_t deadline)
     bb_line_dec(&line, "type", *shared_word(PVR_FW_RECOVERY_INFO, 72));
     bb_line_dec(&line, "dm", *shared_word(PVR_FW_RECOVERY_INFO, 76));
     bb_line_hex(&line, "event", *shared_word(PVR_FW_RECOVERY_INFO, 64));
-    bb_line_hex(&line, "s0", (uint64_t)*shared_word(PVR_FW_RECOVERY_INFO, 4) << 32 | *shared_word(PVR_FW_RECOVERY_INFO, 0));
+    bb_line_hex(&line, "d0", (uint64_t)*shared_word(PVR_FW_RECOVERY_INFO, 4) << 32 | *shared_word(PVR_FW_RECOVERY_INFO, 0));
     bb_line_end(&line); bb_power_print(&line);
     bb_line_start(&line, "GPU FWJ hwr status");
-    bb_line_hex(&line, "s1", (uint64_t)*shared_word(PVR_FW_RECOVERY_INFO, 12) << 32 | *shared_word(PVR_FW_RECOVERY_INFO, 8));
+    bb_line_hex(&line, "d1", (uint64_t)*shared_word(PVR_FW_RECOVERY_INFO, 12) << 32 | *shared_word(PVR_FW_RECOVERY_INFO, 8));
     bb_line_hex(&line, "pc", (uint64_t)*shared_word(PVR_FW_RECOVERY_INFO, 20) << 32 | *shared_word(PVR_FW_RECOVERY_INFO, 16));
     bb_line_end(&line); bb_power_print(&line);
     bb_line_start(&line, "GPU FWJ ring");
@@ -396,7 +410,10 @@ static int fws_job_run(uint64_t deadline)
     bb_line_end(&line); bb_power_print(&line);
     /* pvr_fw_structure_cleanup: KCCB 106, flags 0, cleanup type 0
      * (FWCOMMONCONTEXT), the context's firmware address; upstream waits for
-     * its return word (pvr_fw.c:1127-1158). Bounded by the same deadline. */
+     * its return word (pvr_fw.c:1127-1158). The wait ends at deadline; the
+     * slot's own deadline is the end of the stop's acknowledged part, so a
+     * cleanup the firmware consumes late fails the kernel CCB no sooner than
+     * the acknowledged stop would end: the power requests queue behind it. */
     /* The cleanup once the firmware has finished with the context: the job
      * complete, never submitted, its timeline reached, or the context reset
      * by the firmware. */
@@ -404,7 +421,8 @@ static int fws_job_run(uint64_t deadline)
         (result == 1 || job.phase == PVR_JOB_NEW || timeline == job.sequence || job_resets)) {
         const uint32_t command[PVR_CCB_COMMAND_BYTES / 4] = {PVR_CCB_MAGIC | 106u, 0, 0, job_object_address[0]};
         uint64_t now = bb_power_now();
-        if (pvr_ccb_submit(&queue, command, now, deadline, &job_cleanup_token) == PVR_CCB_OK) {
+        if (pvr_ccb_submit(&queue, command, now, deadline + FWS_STOP_US - FWS_HARD_US, &job_cleanup_token) ==
+            PVR_CCB_OK) {
             for (;;) {
                 if (pvr_gpu_control_poll(&control, 4) == PVR_GPU_CONTROL_FAULT) break;
                 enum pvr_ccb_result r = pvr_ccb_settle(&queue, job_cleanup_token, &job_cleanup_status);
