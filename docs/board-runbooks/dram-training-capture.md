@@ -10,8 +10,9 @@ board, lifetime or status. These are the four-P-state captures, the first
 of the three capture kinds in the restore design; the P-state-0-only and
 device-initialization-only kinds need wrapper variants that follow the
 design's second review. The earlier sets
-`~/.cache/sunstoneos/evidence/dram-fast-boot-20261025` and
-`dram-training-capture-20261025` are superseded and are not used.
+`~/.cache/sunstoneos/evidence/dram-fast-boot-20261025`,
+`dram-training-capture-20261025` and `dram-training-capture-v2-20261025` are
+superseded and are not used.
 
 The run writes no storage and changes no training input. After training,
 each capture writes SRAM at `0x71000` (the cache-off helper) and `0x85000`
@@ -24,7 +25,7 @@ routine (`0x576e4`); NXP's published driver for this PHY makes both.
 
 ## Frozen inputs
 
-`F=~/.cache/sunstoneos/evidence/dram-training-capture-v2-20261025`
+`F=~/.cache/sunstoneos/evidence/dram-training-capture-v3-20261025`
 
 | Input | Port 3-1 | Port 3-3 |
 | --- | --- | --- |
@@ -32,13 +33,13 @@ routine (`0x576e4`); NXP's published driver for this PHY makes both.
 | Build manifest `capture-build/manifest.json` | `5ec01fd9…` | `5ec01fd9…` |
 | Reader `ddr-capture.bin`, 388 bytes at `0x85000` | `0da3194f…` | `0da3194f…` |
 
-Both sets come from `work/dram-fast-boot-1025` at `1082199b`, whose tree is
+Both sets come from `work/dram-fast-boot-1025` at `8c96e99b`, whose tree is
 `$F/source`, and hold byte-identical builds. They share these inputs:
 
 | Input | Identity |
 | --- | --- |
-| Runner `$F/source/tools/run-ddr-capture.py` | `8d072c1e…` |
-| Classifier `$F/source/tools/analyse-ddr-captures.py` | `ac85548a…` |
+| Runner `$F/source/tools/run-ddr-capture.py` | `ab828777…` |
+| Classifier `$F/source/tools/analyse-ddr-captures.py` | `64d01ef0…` |
 | DDR runner `$F/source/tools/run-ddr.py`, equal to `bringup` | `783ac662…` |
 | DDR build `~/.cache/sunstoneos/build/a733-ddr/manifest.json`, wrapper `a401ce2b…` | `4f20beed…` |
 | `sunxi-fel` | `4a54cdc1…` |
@@ -47,8 +48,8 @@ Each set's `freeze.json` holds the full hashes and the check results. On
 each build `checks/ddr-capture.py` passed: every stage reads each listed
 register once, in table order, and writes only the two controls; a wrong
 magic, a bad width and a zero count refuse. `checks/ddr-capture-host.py`
-passed: the runner binds to the DDR mailbox before any execution and stops
-at the first incomplete stage. `checks/ddr-capture-analysis.py` passed on
+passed: the runner binds to the DDR mailbox before any execution, honours
+`--stages` and stops at the first incomplete stage. `checks/ddr-capture-analysis.py` passed on
 synthetic captures (`$F/check-ddr-capture-analysis.txt`).
 
 | Stage | Content | Registers | Output bytes |
