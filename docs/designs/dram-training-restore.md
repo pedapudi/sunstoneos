@@ -328,13 +328,102 @@ fresh trainings.
 A restored boot counts only with a passing quick check, and the restore
 path counts only after qualification step 2 passes on both boards.
 
-## Open questions for the second review
+## Open questions
 
-- Whether the firmware accepts the device-initialization-only value, and
-  whether a second `init_DRAM` call after a failed restore trains correctly.
-- Whether the restore set needs the controller registers as well, which the
-  kind 2 and kind 3 diff also shows.
+The first answered: the firmware accepts the device-initialization-only
+step value (result 7 after 36 ms on both boards). These remain:
+
+- Whether a second `init_DRAM` call after a failed restore trains
+  correctly; the first FEL test therefore stops instead of retraining.
+- Whether the four or five controller words in the diff need restoring, or
+  whether boot0 recomputes them from the restored state.
 - The RTC general-purpose register for part B's flag, and whether it
   survives the warm reset.
 - The coordinator's decision on a modified boot0 for card boots, and on the
   record's own 4 MiB unit in place of the `bootpara` sectors.
+
+## Next steps
+
+Status of the work on `work/dram-fast-boot-1025`:
+
+| Part | Status |
+| --- | --- |
+| Capture reader, stage tables, runner, DRAM and SRAM builds, wrapper variants | Implemented, host-checked, frozen (v5 sets), run in ten lifetimes |
+| `tools/analyse-ddr-captures.py`, kind diff and block exclusion | Implemented, host-checked |
+| Restore set | Fixed: `~/.cache/sunstoneos/evidence/dram-training-analysis-20261025/restore-set-final.json` |
+| Record format and card region (`tools/training-record.py`, one unit) | Implemented, host-checked; card stage not started |
+| Record builder from a capture | Not built |
+| Restore wrapper variant | Not built |
+| March C- runs on the restored and P-state-0-only paths | Image implemented and host-modeled, never run on a board |
+| First restore test, [runbook](../board-runbooks/dram-restore-test-1.md) | Designed, not built |
+
+**Facts the next steps rest on**, all measured on both boards on
+2026-10-25 except where marked:
+
+- boot0's initialization-only path reaches firmware result 7 in 36 ms and
+  the size line in 40 ms; P-state-0-only training takes 4,437–4,451 ms and
+  four-P-state training 5,088–5,102 ms.
+- The restore set is 1,069 registers: the union of both boards'
+  P-state-0-only minus initialization-only diffs, without the `0xa0000`
+  block and without the status word `0x0a51022c`.
+- The values come from one capture of each board's later P-state-0-only
+  lifetime: `board-session-20261025-27/port-3-3` and
+  `board-session-20261025-35/port-3-1`.
+- The `0xa0000` block is left out: the P-state-0-only path leaves it at its
+  power-on contents, and the four-P-state path writes it, probably through
+  `0x581b4` (inferred).
+- MR14 and MR15 travel in parameter words 50 and 51 through boot0's
+  `dram_tpr1` bit 31 path, which needs `dram_tpr10` bit 29 cleared as well
+  (`0x5a08e` runs only with bit 29 clear).
+
+**Work in order:**
+
+1. **Record builder.** `tools/training-record.py from-capture`: read a
+   P-state-0-only capture and `restore-set-final.json`, refuse a capture
+   whose SID chip ID, training kind or stage tables differ, and emit the
+   record with the chip ID, the pinned boot0 checksum, the CRC of boot0's
+   parameter set 5 (the strap check; both boards select it), unknown
+   temperature fields, register runs and parameter words 32–51. Add a run
+   width flag, because the set holds a few 32-bit controller words, or
+   leave those words out after deciding the open question above. Leave
+   APB-only and DRTUB registers out of the written set, because they are
+   firmware controls.
+2. **Restore wrapper variant.** `tools/prepare-ddr.py --variant restore`:
+   record in SRAM at `0x87000`, record checks before any edit (magic,
+   version, both CRCs, chip ID, boot0 checksum, strap CRC), the parameter
+   edits (`dram_tpr13` bit 2 clear, `dram_tpr10` bits 29:16 set to
+   `0x0001`, `dram_tpr1` bit 31 set, words 32–51), a Thumb-to-Arm `BLX` at
+   `0x56142` into a table-driven writer that clears `MicroContMuxSel`,
+   writes and reads back the set, sets it to 1 and calls `0x4bca8`, then
+   after `init_DRAM` a sampled pattern check below 4 GiB. Any failure stops
+   and reports in the mailbox; there is no in-place retraining.
+   `tools/run-ddr.py` gains a `--record` upload for that variant.
+3. **Host checks.** Extend `checks/ddr-wrapper.py` with a model of the
+   restore path, and `checks/ddr-host-retention.py` with its runner cases:
+   a wrong-board record, a corrupt record, a read-back mismatch and a
+   memory-check failure must each stop with their code before any further
+   DRAM use.
+4. **March C-.** Prepare the [memory qualification image](../memory-qualification.md)
+   for two board runs: after a P-state-0-only training (the reference
+   path's baseline, which has never had a full memory test) and after the
+   restore. It needs the user's acceptance of its three residuals before
+   `apps/memtest/check.py prepare` runs.
+5. **Review and freeze** `dram-restore-test-1` for both boards under the
+   design gate, then run it when power cycles are possible.
+6. **Card stage**, only after FEL qualification: two record copies in two
+   4 MiB units of the allocation (extending the present single unit), each
+   with its own generation and CRCs, the newest valid copy selected and the
+   standby copy written payload first and header last; a host backup before
+   every session; and the host-built boot0 variant, which needs the
+   coordinator's decision.
+7. **Qualification** as listed above: ten restored lifetimes per board with
+   March C-, cold and warm lifetimes with stress runs (which also set the
+   record's temperature limit and the retraining interval), the fallback
+   cases, and boot-time measurement against full training.
+
+**Open risks:** a trained register that equals its untrained value on both
+boards (about two expected), registers outside the captured address ranges,
+the excluded `0xa0000` block, MR12 and other mode registers that the
+message block does not carry, temperature (every capture is a
+room-temperature cold start), the P-state-0-only path's untested full
+memory behaviour, and the modified boot0 that a card restore needs.
