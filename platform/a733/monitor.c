@@ -1,5 +1,6 @@
 #include "boot.h"
 #include "a733_el3_security.h"
+#include "a733_el3_mbus.h"
 
 // State is outside the BSS cleared by EL1 startup. EL1 does not write it, but
 // it can: cleanup re-checks the values it uses as bounds.
@@ -29,6 +30,29 @@ static void wait_clear(uintptr_t address, uint32_t bits)
             finish(4);
     }
 }
+
+#ifndef MONITOR_QEMU
+// "MBUS 0x84000000 0x81000000 0\n": the word before and after the restore and
+// its result as one hex digit, written where platform_puts() starts the log.
+static void log_mbus(uint32_t before, uint32_t after, unsigned failed)
+{
+    static const char hex[] = "0123456789abcdef";
+    volatile char *log = (volatile char *)(RESULT_BASE + LOG_OFFSET);
+    uint64_t n = 0;
+    const char *text = "MBUS ";
+    while (*text) log[n++] = *text++;
+    for (unsigned w = 0; w < 2; ++w) {
+        uint32_t v = w ? after : before;
+        log[n++] = '0'; log[n++] = 'x';
+        for (int i = 28; i >= 0; i -= 4) log[n++] = hex[(v >> i) & 15];
+        log[n++] = ' ';
+    }
+    log[n++] = hex[failed & 15];
+    log[n++] = '\n';
+    log[n] = 0;
+    RESULT->log_length = n;
+}
+#endif
 
 void monitor_init(void)
 {
@@ -134,7 +158,20 @@ void monitor_init(void)
     if (unproven & ~MEMTEST_WRITERS_ACCEPTED)
         finish(4);
 #endif
-    // The vendor's cold-boot security setup, the last step before EL1.
+    // MBUS back to boot0's 600 MHz after the ROM's 400 MHz, then the vendor's
+    // cold-boot security setup, the last step before EL1. A change, a skip
+    // (an active bus master, codes 8-10) or a failure is logged as the image's
+    // first line, because the next return to the ROM sets 400 MHz again and a
+    // later FEL read cannot see it. Only a failure stops the image.
+#ifndef MONITOR_QEMU
+    uint32_t mbus_before = mmio_read(A733_MBUS_CLK);
+    unsigned mbus_failed = a733_el3_mbus_restore();
+    uint32_t mbus_after = mmio_read(A733_MBUS_CLK);
+    if (mbus_before != mbus_after || mbus_failed)
+        log_mbus(mbus_before, mbus_after, mbus_failed);
+    if (A733_MBUS_FAILED(mbus_failed))
+        finish(4);
+#endif
     a733_el3_security_setup();
     RESULT->stage = 2;
 }

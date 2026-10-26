@@ -1,5 +1,6 @@
 #include "a733_npu_startup.h"
 #include "a733_clock_reference.h"
+#include "a733_pll_lock.h"
 #include "a733_npu_platform_native.h"
 #include "a733_range.h"
 
@@ -68,12 +69,6 @@ static uint32_t vendor_top(uint32_t word)
  * board.c:248-252). Images loaded through FEL never run U-Boot. */
 #define SRAM_ROUTING UINT32_C(0x03000008)
 #define SRAM_TO_CPU BIT(1)
-/* LOCK sampling (manual §4.1.4.2 and the lock helper of the pinned board
- * clock source): three locked observations in a row, 3 us apart, at most 100
- * observations, then a 20 us wait. */
-#define PLL_SAMPLE_US 3u
-#define PLL_SAMPLES 100u
-#define PLL_SETTLE_US 20u
 /* One register write of a table: the masked field takes value, every other
  * bit keeps its read value. Bits in status are read-only status: they are
  * written as zero and ignored by the readback, as PLL LOCK is. */
@@ -319,27 +314,15 @@ static int pass(struct a733_npu_startup *s)
 static uint32_t pll_word(const struct a733_npu_startup *s)
 {return (s->pll_adopted ? PLL_OPEN(s->pll_factors) : PLL_ENABLED(s->pll_factors))|s->pll_inherited;}
 /* LOCK without the register lock: the exclusive PLL_NPU token makes this
- * task the only writer of the control word. At most 100 observations 3 us
- * apart, about 320 us with the 20 us settle, so the spin does not yield.
- * An adopted PLL passes the same three consecutive observations. */
+ * task the only writer of the control word. The shared wait
+ * (a733_pll_lock.h) spaces every read 3 us after the previous one and makes
+ * at most 100, about 420 us with the 20 us settle, so the spin does not
+ * yield. An adopted PLL passes the same three consecutive observations. */
+static int lock_read(void *v,uint32_t *out){return rd(v,PLL,out);}
+static int lock_now(void *v,uint64_t *out)
+{struct a733_npu_startup *s=v;*out=s->ops.spin_us(s->cookie);return 1;}
 static int lock_wait(struct a733_npu_startup *s)
-{
-    unsigned consecutive=0;
-    uint64_t next=s->ops.spin_us(s->cookie);
-    for(unsigned samples=0;samples<PLL_SAMPLES;++samples) {
-        while(s->ops.spin_us(s->cookie)<next){}
-        uint32_t v;
-        if(!rd(s,PLL,&v) || (v&~PLL_LOCK)!=pll_word(s))return 0;
-        consecutive=(v&PLL_LOCK) ? consecutive+1 : 0;
-        next+=PLL_SAMPLE_US;
-        if(consecutive==3) {
-            next+=PLL_SETTLE_US-PLL_SAMPLE_US;
-            while(s->ops.spin_us(s->cookie)<next){}
-            return now(s,0);
-        }
-    }
-    return 0;
-}
+{return a733_pll_lock_wait(lock_read,lock_now,s,pll_word(s)) && now(s,0);}
 /* Route the shared SRAM to the NPU, with readback. The register pass found
  * the boot ROM's CPU routing, the NPU's AHB, AXI and core resets asserted
  * and its bus and module gates closed, and the exclusive NPU-local clock

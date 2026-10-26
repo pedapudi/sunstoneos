@@ -34,7 +34,23 @@ struct a733_video_unit_config {
     unsigned power_client;
     uint64_t owner, handoff;
     uint32_t module, module_hz, fabric[3], fabric_hz[3];
+    /* Nonzero: the binding's cold start programs the selected PLL_VE to the
+     * vendor profile (A733_VIDEO_VENDOR_MODULE at A733_VIDEO_VENDOR_HZ),
+     * which needs that PLL as an exclusive scope. Zero: the PLL is a shared,
+     * already running parent. */
+    unsigned program_pll;
 };
+/* The vendor operating point of both units on every speed bin: 624 MHz at
+ * 800 mV (sun60iw2p1-cpu-vf.dtsi ve-opp-table, lines 2142-2189). VDD-VE is on
+ * DCDC2 with VDD-SYS and VDD-DRAM (board schematic v1.2, sheet 6, and the
+ * power sequence on sheet 2), which the applications admit at 800 mV. Module
+ * mux 1 at divider 1 selects the vendor parent: PLL_VE0 for the decoder
+ * (sun60iw2p1.dtsi ve node), PLL_VE1 for the encoder (ve2 node). Only the
+ * decoder's cold start programs its PLL: N=78, P0=3, M1=1, a 1,872 MHz
+ * oscillator divided by 3. */
+#define A733_VIDEO_VENDOR_MODULE UINT32_C(0x01000000)
+#define A733_VIDEO_VENDOR_HZ UINT32_C(624000000)
+#define A733_VIDEO_PLL_FACTORS UINT32_C(0x00204d00)
 /* enter returns 1 acquired, 0 effect-free busy, -1 uncertain; leave exactly 1.
  * read/write return exactly 1 after the access and its completion barrier;
  * write takes width 1 or 4. */
@@ -54,14 +70,22 @@ struct a733_video_unit {
     a733_clock_mask_t shared;
     uint32_t selected_mhz[3];
     unsigned initialized,failed,locked;
+    /* PLL programming: the entry state, bit 24 as read, and progress. */
+    uint32_t pll_inherited;
+    unsigned pll_state,pll_started,pll_locked,pll_done;
 };
 extern const struct a733_video_unit_desc a733_video_decoder_unit,a733_video_encoder_unit;
 
-/* Pure scope derivation: fabric sources/rates, the selected VE PLL and PERI0. */
+/* Pure scope derivation: fabric sources/rates, the selected VE PLL and PERI0.
+ * A programmed PLL is left out of the shared scopes. */
 int a733_video_unit_scopes(const struct a733_video_unit_desc *,const struct a733_video_unit_config *,
     a733_clock_mask_t *);
-/* Requires the descriptor's exclusive scope, exact shared scopes and a stable
- * OSC|PCK lease. Returns 1 initialized, 0 refused without effects. */
+/* The exclusive scopes: the descriptor's, plus the selected PLL_VE when the
+ * configuration programs it. */
+a733_clock_mask_t a733_video_unit_exclusive(const struct a733_video_unit_desc *,
+    const struct a733_video_unit_config *);
+/* Requires the exclusive scopes, exact shared scopes and a stable OSC|PCK
+ * lease. Returns 1 initialized, 0 refused without effects. */
 int a733_video_unit_init(struct a733_video_unit *,const struct a733_video_unit_desc *,
     const struct a733_video_unit_config *,const struct a733_video_unit_ops *,void *);
 /* Mark terminal failure; every later operation refuses. Returns -1. */
@@ -83,6 +107,26 @@ int a733_video_unit_update(struct a733_video_unit *,uintptr_t,uint32_t mask,uint
 /* Fabric words, DCXO/reference, selected VE PLL, PERI0 outputs and the shared
  * PCK clock gate, in that order. Returns 1 when all match the configuration. */
 int a733_video_unit_clocks(struct a733_video_unit *);
+/* The same checks for a cold start. A programmed PLL may instead be disabled
+ * (enable, lock enable, LOCK and output gate clear, lock levels zero, nothing
+ * set outside the documented fields but reserved bit 24, which is kept), or
+ * enabled at the vendor factors with its output closed and lock enable either
+ * way. One that already runs
+ * the vendor profile with its output open is adopted. */
+int a733_video_unit_clocks_entry(struct a733_video_unit *);
+/* PLL_VE0 programming after a733_video_unit_clocks_entry, with the module
+ * gate closed. Each returns 1 at once when nothing is programmed or the PLL
+ * was adopted, 1 when its part is done and 0 refused; uncertain accesses fail
+ * the unit.
+ * start, under the held mutex: the module selector and divider, then the
+ * manual's enable method 2 up to lock enable, or for a PLL left enabled with
+ * its output closed, lock enable cleared and set again.
+ * wait, without the mutex: the shared LOCK qualification (a733_pll_lock.h),
+ * at most about 420 us of spinning.
+ * open, under the held mutex: the output gate. */
+int a733_video_unit_pll_start(struct a733_video_unit *);
+int a733_video_unit_pll_wait(struct a733_video_unit *);
+int a733_video_unit_pll_open(struct a733_video_unit *);
 /* Clocks plus PCK ON, module/bus/local gates, autonomous power control and a
  * masked, inactive, level-triggered interrupt. No VE register is read. */
 int a733_video_unit_baseline(struct a733_video_unit *);

@@ -1,8 +1,9 @@
 # The first GPU job on the A733
 
-Status: **failed on port 3-1 in set 27; the post-mortem capture found the
-cause, a swapped pointer constant (see "Set 27 post-mortem"); fixed and
-host-checked.** The firmware lifecycle passed on port 3-1
+Status: **qualified on port 3-1.** Set 27 failed on a swapped pointer
+constant ("Set 27 post-mortem"); the corrected job passed in set 29 ("Set 29
+on port 3-1"): 32 words as computed, context cleaned up, firmware stopped,
+GPU off and provider parked. The firmware lifecycle passed on port 3-1
 ([firmware stop design](gpu-firmware-stop.md)): start, one health check,
 forced idle, power off, idle checks, OFF. This note plans the first job that
 makes the GPU compute something the host can check, from the upstream Linux
@@ -86,7 +87,8 @@ same bypass to buffers the host reads (`DRM_PVR_BO_BYPASS_DEVICE_CACHE`,
 
 The first-job variant (`apps/gpu-power-id/fw-start.c` built with
 `FWS_STOP` and `FWS_JOB`, the job in `fw-job.inc`; build and check option
-`--fw-job`; bundle row 27) is the firmware-stop image with the job between
+`--fw-job`; bundle row 28, frozen as bundle 27 in sets 27 and 29) is the
+firmware-stop image with the job between
 the health check and the stop:
 
 1. **Before any power change**, in the image's own memory: the six firmware
@@ -135,7 +137,7 @@ no board has read them yet.
 Set 27 ran the job in the lifetime of set `board-bundles-20261025-25` and
 failed (below). The corrected job runs in set `board-bundles-20261025-29`,
 first in a new lifetime on port 3-1: the cold DDR start, the
-provider-readiness checkpoint, then bundle 27 (image `0a8918be…`, loadable
+provider-readiness checkpoint, then bundle 27, now row 28 (image `0a8918be…`, loadable
 bytes `95a12630…`, from `ddce218a`). The job's `seed` is 0x12345678 and its
 `factor` 0x9e3779b1.
 
@@ -323,6 +325,57 @@ they would fault the first time it did. The byte references
 `checks/pvr-compute-programs.c`) pass Mesa's generator each value with its
 halves exchanged, and `check.py --fw-job` checks the job's constants in the
 linked image; the set-27 image fails that check.
+
+## Set 29 on port 3-1
+
+Set `board-bundles-20261025-29` ran first in a new lifetime on port 3-1,
+session `board-session-20261025-28/port-3-1` (records `s7-ddr`, `s27-gpr-*`,
+`s27-gfj-*`; the coordinator used session 28 because 27 was taken). The cold
+DDR start reported stage 5 and 12,288 MiB; provider readiness returned
+COMPLETE. The job image returned status 0 with every prediction met:
+
+```text
+GPU FWS core6 on=1 status=0x8 waited_us=11087
+GPU FWS start result=0 phase=3 error=0 step=29 count=29 waited_us=669 memory=2
+GPU FWS control result=0 phase=4 error=0 health=1 health_status=0x0 waited_us=1919
+GPU FWJ job complete=1 outcome=1 stage=4 phase=7 error=0 client=2 client_error=0 kick_status=0x0 timeline=0x1
+GPU FWJ events control=4 control_error=0 n=0 last=0x0 read=0x0 resets=0 unexpected=0
+GPU FWJ hwr mmu_status=0x1 count=0 index=0 type=0 dm=0 event=0x0 d0=0x0
+GPU FWJ ring cccb_read=0xb8 cccb_write=0xb8 kick_rtn=0x0
+GPU FWJ output w0=0x2e5ca990 w1=0xd09b3063 w31=0x4775f521 guard=0x6d35a7c1 expected0=0x2e5ca990 expected31=0x4775f521
+GPU FWJ cleanup status=0x1 events=0 kccb_done=0x4 pow_state=0x3
+GPU FWS stop result=0 phase=10 error=0 step=14 count=14 waited_us=22989 unacknowledged=0
+GPU FWS power ack_idle=0x1 ack_off=0x1 state_idle=0x2 state_off=0x0 status_idle=0x0 status_off=0x0 irq=0x0 isolated=1
+GPU FWS after kccb_done=0x6 pow_state=0x0 kccb_read=0x6 rtn1=0x1 rtn2=0x0
+COMPLETE GPU first job: 32 words as computed, context cleaned up, firmware stopped, OFF and provider parked
+```
+
+`mmu_status=0x1` is the return word of the `MMUCACHE` command,
+`ROGUE_FWIF_KCCB_RTN_SLOT_CMD_EXECUTED` (`pvr_rogue_fwif.h:1765`). The
+firmware wrote 1 for `MMUCACHE` and the cleanup (and `rtn1=0x1` for the
+forced-idle request) but none for the health check or the KICK, which
+upstream also sends without waiting on a slot. It is not a recovery field,
+nor the catalogue-base field left open by the post-mortem; `count=0` is the recovery record's count, and the record is
+empty. Six kernel commands ran in all: the health check, `MMUCACHE`, the
+KICK, the cleanup and the two power requests.
+
+Times, from the image's log and the board's 24 MHz counter, which runs on
+across warm returns:
+
+| Step | Time |
+| --- | --- |
+| Provider readiness, image entry to return | 8.29 ms |
+| Job image, entry to return | 62.42 ms |
+| — CORE6 power-on to status 8 | 11.09 ms (set 27: 7.11 ms) |
+| — firmware start, to the started word | 0.67 ms |
+| — control: compatibility and health check | 1.92 ms |
+| — stop: both power requests, `RGXStop`, OFF | 22.99 ms |
+| — the rest: preparation, the job, cleanup, park, report | 25.75 ms |
+| Provider readiness return to the job's survey | 2.46 s |
+| Job survey to the job's start (USB spacing guard of 13 s) | 14.40 s |
+
+The image logs no time for the job itself, so the KICK-to-timeline time
+is bounded only by the 25.75 ms remainder.
 
 ## Design gate
 

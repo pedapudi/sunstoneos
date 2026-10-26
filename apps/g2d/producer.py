@@ -16,10 +16,16 @@ def preparation():
     spec=importlib.util.spec_from_file_location('g2d_producer_preparation',Path(__file__).with_name('prepare.py'))
     value=importlib.util.module_from_spec(spec);spec.loader.exec_module(value);return value
 
+# Sessions name MBUS at boot0's 600 MHz, which every EL3 entry restores (tools/vendor-mbus.py).
+def _vendor_mbus():
+    import importlib.util as u
+    s=u.spec_from_file_location('vendor_mbus',Path(__file__).resolve().parents[2]/'tools/vendor-mbus.py')
+    m=u.module_from_spec(s);s.loader.exec_module(m);return m
 
 def extend(board,source,*,owner,authority,client,initial,memory,electrical,supervision,
            width,height,stride,operation,dx,dy,w,h,sx=0,sy=0,color=0,
            sw=0,sh=0,bx=0,by=0,alpha=0,source_format=0,output_format=0):
+    board=_vendor_mbus().board_session(board) if len(board)==592 else board
     prep=preparation()
     geometry=(width,height,stride,source_format,operation,dx,dy,w,h,sx,sy,color)
     extension=(sw,sh,bx,by,alpha,output_format,0,0)
@@ -29,7 +35,7 @@ def extend(board,source,*,owner,authority,client,initial,memory,electrical,super
     facts=b''.join(hashlib.sha256(data).digest() for data in (initial,memory,electrical,supervision))
     raw=board+struct.pack('<6Q',0x4153373347324131,1,904,owner,authority,client)+facts
     raw+=hashlib.sha256(source).digest()+struct.pack('<8I',*extension)
-    raw+=struct.pack('<6I',0x01000003,100000000,0x10007,0x10007,800000,1)
+    raw+=struct.pack('<6I',0,300000000,0x10007,0x10007,800000,1)
     raw+=struct.pack('<12I',*geometry)
     prep.session_check(raw)
     return raw

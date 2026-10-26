@@ -23,6 +23,12 @@ TARGET = 'sunstone-a733-mimus-native'
 REQUEST_MAGIC = 0x415337334d494c31
 
 
+def _vendor_mbus():
+    """tools/vendor-mbus.py: sessions name MBUS as the restored image finds it."""
+    spec = importlib.util.spec_from_file_location('vendor_mbus', Path(__file__).resolve().parent / 'vendor-mbus.py')
+    value = importlib.util.module_from_spec(spec); spec.loader.exec_module(value); return value
+
+
 def session_bytes(config, image, assets, paced, epoch, generation, lease, nonce=None):
     minimum, maximum, guard, reset, deadline = (config[k] for k in
         ('minimum_reload_us', 'maximum_recovery_us', 'guard_us', 'reset_by_us', 'deadline_us'))
@@ -51,8 +57,9 @@ def session_bytes(config, image, assets, paced, epoch, generation, lease, nonce=
     b[424:456] = bytes.fromhex(config['topology_artifact'])
     struct.pack_into('<4I', b, 488, *config['usb_supply_uv'])
     struct.pack_into('<2Q', b, 512, *config['owners'])
-    struct.pack_into('<3I', b, 528, *config['fabric'])
-    struct.pack_into('<3I', b, 540, *config['fabric_hz'])
+    fabric, fabric_hz = _vendor_mbus().fabric(config['fabric'], config['fabric_hz'])
+    struct.pack_into('<3I', b, 528, *fabric)
+    struct.pack_into('<3I', b, 540, *fabric_hz)
     struct.pack_into('<I', b, 556, config['usb_cold_reference'])
     require(len(config['pmic_expected']) == 2 and all(len(p) == 3 for p in config['pmic_expected']), 'Invalid PMIC pin route.')
     struct.pack_into('<6B', b, 632, *(v for p in config['pmic_expected'] for v in p))

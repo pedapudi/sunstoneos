@@ -8,8 +8,10 @@
 
 /* Privileged immutable configuration. Borrow exact live tokens from the ONE
  * clock registry and PCK resource manager; neither may be released until a
- * separate recovery/drain owner proves all codec effects finished. Parent
- * clocks and fabric are adopted at observed rates, never retuned here.
+ * separate recovery/drain owner proves all codec effects finished. Fabric is
+ * adopted at observed rates. Parent clocks are too, except that a cold start
+ * at the vendor operating point (module selector and divider
+ * A733_VIDEO_VENDOR_MODULE, module_hz A733_VIDEO_VENDOR_HZ) programs PLL_VE0.
  * module contains source/divider/gate bits only. First binding accepts VE0/VE1
  * parents. fabric[] contains AHB, NSI and MBUS source/divider/gate fields.
  * The authority callback must validate the board rail and operating point at
@@ -87,10 +89,15 @@ struct a733_video_platform {
     struct a733_video_platform_ops ops;
     void *cookie;
 };
-/* Pure scope derivation; requires exclusive VE_DEC and exact shared result.
+/* Pure scope derivation; requires the exclusive scopes below and the exact
+ * shared result.
  * Preparation never releases, powers down, or claims physical qualification.
  */
 int a733_video_platform_scopes(const struct a733_video_platform_config *,a733_clock_mask_t *);
+/* The exclusive scopes to acquire with the shared ones: VE_DEC, and PLL_VE0
+ * for a cold start at the vendor operating point, which programs it. 0 for
+ * a refused configuration. */
+a733_clock_mask_t a733_video_platform_exclusive(const struct a733_video_platform_config *);
 int a733_video_platform_init(struct a733_video_platform *,
     const struct a733_video_platform_config *,const struct a733_video_platform_ops *,void *);
 /* Immutable adapter table for a733_video_jpeg_begin(...,p,...). */
@@ -109,6 +116,11 @@ int a733_video_platform_retained_copy(void *,uint64_t,uint64_t,
  */
 int a733_video_platform_native_read(void *,uintptr_t,uint32_t *);
 int a733_video_platform_native_write(void *,uintptr_t,unsigned,uint32_t);
+/* The native write allowlist as a pure rule, for native_write and models:
+ * returns 1 allowed with the owned mask for a733_video_unit_native_write, 0
+ * refused and -1 when read fails. read observes the PLL_VE0 consumers. */
+int a733_video_platform_write_policy(uintptr_t,unsigned,uint32_t,int (*read)(void *,uintptr_t,uint32_t *),
+    void *,uint32_t *owned);
 
 /* One fixed H.264 consumer of the same decoder sequencing and leases. The
  * H.264 job stays typed and is never presented as a JPEG picture or scan.

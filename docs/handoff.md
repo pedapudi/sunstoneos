@@ -107,6 +107,19 @@ The image leaves the GPU running, so port 3-1 needs a power removal before
 its next run. Nothing from the firmware binary was used, only the open DDK
 host sources (`docs/designs/gpu-firmware-start.md`).
 
+**MBUS restore qualified on port 3-1** (set `board-bundles-20261025-mbus-qual-2`,
+`board-session-20261025-23/port-3-1`, branch `work/clock-audit-1025` at
+`4950b025`). After the cold DDR start, a FEL-written pattern (2 × 4 MiB) was
+laid down. The first kernel check passed with no `MBUS` line, since MBUS was
+still at boot0's 600 MHz. The second, after a ROM return, logged
+`MBUS 0x84000000 0x81000000 0`, so it restored 600 MHz from the SRAM window,
+and its kernel check passed. The pattern then read back unchanged. Port 3-3 then passed the same steps (`board-session-20261025-24/port-3-3`):
+the second kernel check logged `MBUS 0x84000000 0x81000000 0`, and the
+pattern verified. The full clock dump (`clock-audit-b`) matched all 49
+predicted words, including speed bin `0x496` (code 4); the decode is in
+`decoded-clocks.json`. The merge waits on row and index conflicts that are
+being resolved on the branch.
+
 **GPU firmware lifecycle passed on port 3-1** (set `board-bundles-20261025-23`,
 `board-session-20261025-20/port-3-1`, branch `work/gpu-fw-stop-1025`).
 After cold DDR and readiness, one image ran:
@@ -119,8 +132,45 @@ After cold DDR and readiness, one image ran:
 - the 14-step stop, then OFF and provider park.
 
 The image returned to a responsive ROM with the GPU off, so a firmware run
-no longer needs a power removal. `work/gpu-fw-stop-1025` is merged; its
+no longer needs a power removal. Set `board-bundles-20261025-25`
+(`board-session-20261025-22/port-3-1`) then ran the whole lifecycle twice in
+one lifetime with no power removal between, and both runs completed: the
+firmware restarts cleanly. `work/gpu-fw-stop-1025` is merged; its
 bundle row is now 25, while frozen sets 21 and 23 call it 20.
+
+**First GPU compute job failed on port 3-1** (set `board-bundles-20261025-27`,
+`board-session-20261025-22/port-3-1`, record `s22-gfj-run`). Firmware start
+and the health check passed. The fixed 32-lane job then did not complete:
+outcome 4, timeline word 0x1, and output word 0 is the bitwise inverse of the
+expected value. Cleanup returned 0xffffffff and the firmware stop was refused,
+so the image returned to FEL with the GPU still powered. The stop does not yet
+power off the GPU after a failed job; that is a defect. The fix and the
+diagnosis against the open DDK are in progress on `work/gpu-first-job-1025`,
+which stays unmerged.
+
+**P-state-0-only DRAM capture, port 3-3** (`board-session-20261025-25/port-3-3`,
+set `dram-training-capture-v5-20261025`, build `ddr-pstate0`): boot0 trained
+P-state 0 alone at 2040 MHz (result 7) in 4,441 ms, against about 5,090 ms
+for all four P-states, and reported 12,288 MiB, `dram_tpr13` 0x10061 and
+`dram_tpr10` 0x925f0000. Both read-only captures completed all six stages.
+This is the first reference lifetime of the restore design; its analysis is
+on `work/dram-fast-boot-1025`.
+
+**CPU step 6 stopped before the workload on port 3-3**
+(`board-session-cpu-top-opp-7/port-3-3`, set `step6-set-2`). Bundle 25 set
+CPU-B to 2002 MHz at 1050 mV, CPU-L to 1794 MHz at 1000 mV and the DSU to
+1274 MHz, with every temperature below 37 °C. After the ROM return, bundle 26
+read both rails held. It also read CPU-L and the DSU back at their 494 MHz
+boot words, but the CPU-B PLL still at 2002 MHz (`0xf8804d00`), so it
+refused as designed. **The FEL ROM return does not reset the CPU-B PLL.**
+Any image that lowers DCDC3 after a top-point bundle in the same lifetime
+must first reset or check the CPU-B PLL. The fix and the refreeze are on
+`work/cpu-top-opp-step6-1025`. Step 6 still needs an operator at the board.
+
+**Four-P-state DRAM capture, port 3-1** (`board-session-20261025-26/port-3-1`,
+v5 set): DDR passed with result 7 for all four P-states, 12,288 MiB and
+5,093 ms of training, and both captures passed. This is port 3-1's first
+capture lifetime.
 
 **DRAM training capture, port 3-3** (`board-session-20261025-21/port-3-3`,
 set `dram-training-capture-v3-20261025`): cold DDR (12,288 MiB), then two

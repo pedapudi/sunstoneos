@@ -60,6 +60,11 @@ def el3_security_writes(prcm=0,dma=(False,False)):
     writes+=[(a,0xffff) for a,open_ in zip((0x04601020,0x04024020),dma) if open_]
     return writes+[(0x020540e0,0xfffffbff)]
 EL3_SECURITY_ADDRESSES=frozenset(a for a,_ in el3_security_writes(dma=(True,True)))|frozenset(EL3_SECURITY_READS)
+# The MBUS restore of include/a733_el3_mbus.h reads MBUS_CLK and MSI_LITE0_BGR.
+# The model holds boot0's 600 MHz, the state of the first image after a cold
+# DDR start, so the restore makes no write; checks/el3-mbus.py and
+# checks/a733-monitor-are.py execute the restore from the ROM's 400 MHz.
+EL3_MBUS_READS={0x02002588:0x81000000,0x02002594:0x00030001}
 
 def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
 
@@ -164,7 +169,7 @@ class Machine:
         self.wfi_waiting=[None]*8
         self.mmio={0x02050014:0x41,0x02050010:1,0x02050018:2,0x07090108:0x5aa5a55a,
             0x070501c0:0xfa50392f,0x070501c4:0x20,0x070501d4:0,0x03000024:0,
-            0x03400000:0,0x03400004:1,**EL3_SECURITY_READS}
+            0x03400000:0,0x03400004:1,**EL3_SECURITY_READS,**EL3_MBUS_READS}
         self.security=[]
         self.rdist=[0x03460000+c*0x20000 for c in range(8)]
         for c,r in enumerate(self.rdist):
@@ -281,6 +286,7 @@ class Machine:
                     if a==r+0x14:value &= ~4
                     if a==r+0x10180:self.mmio[r+0x10100]=self.mmio[r+0x10100]&~value
                     if a==r+0x10100:value |= self.mmio[a]
+                if a==0x02002588:value&=~(1<<27)  # MBUS_UPD clears once applied.
                 self.mmio[a]=value
             else:
                 assert a in self.mmio,('unknown MMIO read',c,hex(a),size)
