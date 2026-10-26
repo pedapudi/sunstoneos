@@ -720,6 +720,53 @@ for vf0400 with CPU-L at 1794 MHz and CPU-B at 2002 MHz.
 register adapter only; no check yet drives the owner's request order for a
 grant of both clusters.
 
+## Next steps
+
+- **Step 7, the sustained load.** The OS-image runs above (B1, then `TOP`)
+  wait for three things. First, a 70 °C stop in the OS thermal policy: a
+  session field for a CRITICAL trip at or below the vendor's, validated by
+  `apps/os/prepare.py` and used by the policy as the lower of the two.
+  Second, B1: rank 5, the reviewed physical entry record, and a producer of
+  the `a733-os-cpu-clock-b1-v1` record. Third, power cycles: the integrated
+  OS image ends at a terminal halt that only a power removal clears, and
+  the boards cannot be power-cycled until further notice. Review the
+  policy change, the session format change and the clock owner's order for
+  a grant of both clusters, which no check drives yet, before any freeze.
+  Until power cycles return, a CPU set must continue an existing lifetime
+  and return on every reachable outcome with the clocks and rails at boot
+  values. Step 6's sets left DCDC3 at 1050 mV and DCDC5 at 1000 mV for the
+  power removal, so a continuing set also needs a last image that lowers
+  both rails with the clocks at their boot rates. For DCDC5 that needs a
+  write like `dcdc3_change` with CPU-L and the DSU held, which does not
+  exist yet.
+- **CPU-B after a ROM return.** The ROM resets CPU-L and the DSU but not
+  CPU-B. Every image that raises CPU-B lowers it to 1014 MHz before a
+  successful return; a failed return can leave it raised, with DCDC3 at
+  the raised point's voltage. Step images admit CPU-B only at 1014 MHz,
+  the OS image refuses any other rate, and the CPU clock driver lowers
+  CPU-B before DCDC3.
+- **The workload binding.** `tools/top-opp-workload-bind.py` has the
+  `-O`-proof checks and names the rail read-back image bundle 31; the next
+  freeze takes it, with `binding.json` beside it, and
+  `checks/top-opp-workload-bind.py` then runs against that freeze.
+- **The returning overlay no longer links on bringup.** Bringup's MBUS
+  restore in `identity_primary_run` (`3f09ec2c`) grows the overlay's
+  `identity-c.o` by about 870 bytes. The return-deadline workload profile
+  now exceeds its 16 KiB reservation, with or without `--top-opp`. That
+  profile's next freeze needs a new layout, for example the extension
+  placed in the gap after the base overlay when no relock or vector table
+  uses it, or the MBUS window moved into the native image the overlay
+  calls.
+- **The performance-mode toggle.** The default path is CPU-B, CPU-L and the
+  DSU at the top points through the driver, in the order and with the
+  waits above. The toggle lowers through the same driver: the DSU first,
+  then the clusters, then their rails. In a returning image it must lower
+  CPU-B to 1014 MHz before the return. In the OS it needs the `TOP` grant,
+  which `apps/os/prepare.py` admits, and a standing per-board approval
+  record instead of the per-session one. With the boot0 rates as the
+  baseline, step 6 measured about 3.85 times the A55 throughput and 2.06
+  times the A76 throughput of a CPU-bound loop at the top points.
+
 ## Step 1: bundle 20
 
 `apps/board-bundles-power/cpu-opp-step.c` runs on bundle 15's image with the
