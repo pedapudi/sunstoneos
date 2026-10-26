@@ -66,6 +66,27 @@ The branch notes under "Next steps" in each design document say what remains.
 Most of the other `work/*` branches are superseded or already merged and can
 be pruned.
 
+## Known problems and next steps
+
+- **Returning overlay overflow.** The MBUS restore merged into bringup adds
+  about 870 bytes to the returning overlay. The return-deadline workload
+  profile then overflows its 16 KiB reservation, with or without the top-point
+  relock. Its next freeze needs a new layout (`docs/designs/cpu-top-opp.md`,
+  "Next steps").
+- **Do not run GPU set `board-bundles-20261025-31`.** It repeats the qualified
+  eight-job session with the older image, which lacks the shutdown on every
+  failure path.
+- **Mimus acceleration.** Only single-core recognition is board-qualified:
+  19.5 s of compute for an 8.87 s recording at the old 494 MHz clock. The next
+  steps, in order:
+  1. Two, then eight, inference workers at the qualified top clocks. The
+     two-worker path passes in QEMU (`docs/mimus-smp.md`).
+  2. The first board execution of the exact-sum GPU kernel
+     (`docs/gpu-mimus.md`), which is implemented and host-modeled only.
+
+  The target in `docs/mimus.md` is 0.44 s of compute for that recording. The
+  NPU path is research only (`docs/npu-mimus-linear.md`).
+
 ## Rules every agent follows
 
 - **No `rm`:** use `~/.cache/sunstoneos/bin/clean-generated.py`, or move
