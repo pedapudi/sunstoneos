@@ -172,6 +172,20 @@ counts rose 3.85 and 2.06 times for clock ratios of 3.63 and 1.97
 (`board-session-cpu-top-opp-8`) stopped before launch because its binding
 compared the wrong hash kind; set 5 fixed it.
 
+**Board access is limited until further notice (2026-10-25).** The user cannot
+power-cycle either board. Each board holds one long-lived lifetime in
+`board-session-20261025-36/port-3-<n>`: a standard cold DDR start (`s7-ddr`,
+5,088 ms on 3-3 and 5,102 ms on 3-1, 12,288 MiB) and two read-only four-P-state
+DRAM captures (`lc-capture-1`, `lc-capture-2`). Until the user returns, only
+returning images that continue these lifetimes may run. Runs that need a
+fresh lifetime, an operator or a power removal wait. Those include further
+DRAM capture lifetimes, the microSD 1.8 V retry, SD sets and CPU step 7.
+
+**DRAM capture lifetimes on record** (v5 set): each board has two four-P-state,
+two P-state-0-only and one initialization-only lifetime. Initialization
+without training took 36 ms on port 3-3 (`board-session-20261025-34`),
+against about 4.4 s to train P-state 0 and 5.1 s to train all four.
+
 **microSD set 28 on port 3-3.**
 - **Lifetime A passed** (`board-session-20261025-30`): high speed at 50 MHz, 4-bit, 3.3 V. All 256 reads completed and the card clock stopped on exit. Throughput was 1.4 to 1.7 MB/s, limited by per-request polling, and DMA is designed in `docs/designs/sd-dma.md` on `work/sd-returning-1025`.
 - **Lifetime B stopped** (`board-session-20261025-32`) at the CMD11 voltage switch, before any read, with `SD_REASON=3`, platform stage 13, and the card clock stopped by the module-clock fallback. Its diagnosis is pending.
