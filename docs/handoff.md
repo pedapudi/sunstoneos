@@ -67,19 +67,21 @@ does not establish recovery from a fault.
 | Work | Branch | Immediate deliverable |
 | --- | --- | --- |
 | Storage read service DMA | `work/resume-storage-read-dma-1026` | Connect the existing DMA reader to copied 64-sector service requests while preserving client acknowledgment and profile-specific bounds |
-| Radio integration assessment | Radio owner | Identify the next native Wi-Fi/Bluetooth gap from current consumers and accepted evidence; preserve unresolved fitted-supply and physical-operation requirements |
+| Headset idle audio | `work/radio-assess-1026` | Close confirmed idle SCO/eSCO audio and reopen on the existing paired control connection, with drained records and a fresh generation |
+| Native SPI3 DMA design | SPI owner | Connect the existing DMA provider to transfers beyond FIFO capacity, preserving exact peer-command authority and the 1.8 V route |
+| HDMI audio streaming design | HDMI audio owner | Extend the existing finite playback path with bounded refill, DMA ownership and underrun/stop handling using existing audio services |
 
 Independent reviewers cover CPU/thermal/DRAM, accelerator operation and peripheral
 integration. Workers reuse successful evidence and submit focused checks. The
 coordinator integrates accepted work, updates the canonical records and pushes
 `bringup`. No board command has run during this continuation.
 
-The latest merged work includes paired training-record selection and updates,
-read-only microSD DMA, eight-worker supervised OS recognition, CPU/NPU
-performance controls, normal NPU restart and optional card-boot DRAM restoration.
-The resident and supervised eight-worker CPU/GPU/NPU images build and pass
-selected checks. Their evidence is under `resident-gpu-cold-1026/` and
-`concurrent-gpu-npu-1026/`.
+The latest merged work includes full native OV5640 UYVY sizes, GPU and resident
+CPU/GPU/NPU performance controls, maintenance microSD DMA and bounded USB progress
+bursts. Both eight-worker accelerator performance images build and pass selected
+checks; evidence is under `resume-gpu-performance-20261026/` and
+`resident-performance-1026/`. Shared camera/accelerator dependencies are reconciled
+as described below. Physical qualification remains separate.
 
 The branch notes under "Next steps" in each design document say what remains.
 - **`work/cpu-top-opp-step6-1025`:** CPU top points, step 6 and its
