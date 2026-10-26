@@ -180,8 +180,12 @@ firmware generation from `a733_radio_session_bootstrap`, which a full session
 reports while Wi-Fi is in management, online, reconnecting or recovering. A
 client failure retains UART1, H4 and the upper layers and sets only the
 client latch. A session or platform fault ends the client at its next poll.
-Before the firmware first becomes ready, the client gives up at its own
-bootstrap bound.
+The client must first observe a healthy, nonzero firmware generation before
+its own bootstrap bound. It samples time after the readiness query; a first
+observation at or after the bound is refused even if the module has already
+renewed its runtime lease. An on-time observation survives subsequent UART or
+wake-pin contention, but HCI identification must still finish before its bound.
+Temporary module unavailability and provider contention cannot extend that bound.
 
 ## Supervised and resident lifetimes
 
@@ -193,14 +197,17 @@ which no counter value reaches.
 | Bound | Supervised | Resident |
 | --- | --- | --- |
 | Firmware ready | 30 s for version 3 and wideband playback profiles, 40 s otherwise | 120 s after the session start |
-| Schedule origin | Session start | Firmware readiness minus the supervised firmware bound |
-| HCI identification, headset setup | Fixed offsets from the origin | The same offsets from the moved origin |
+| Schedule anchor | Session start | First accepted firmware readiness |
+| HCI identification, headset setup | Fixed offsets from the session start | Readiness plus the stage offset minus the firmware offset |
 | Repeated capture window | 38 s after the origin | None |
 | First audio link open in a voice-recognition activation | Two line timeouts plus two response timeouts, at most 40 s after the origin | Two line timeouts plus two response timeouts |
 | Closing after capture stops | 40 s after the origin | 2 s after the stop |
 
-The resident origin keeps each stage's supervised time budget after the
-firmware becomes ready. The module owner requests four-bit 25 MHz operation
+The resident anchor is fixed at the first accepted readiness observation,
+before UART or wake-pin contention can delay HCI initialization. Each stage
+keeps its supervised time budget after that observation, including when startup
+occurs before 30 or 40 seconds of absolute counter time. Resident additions
+saturate and are capped by the application lifetime. The module owner requests four-bit 25 MHz operation
 before polling and rejects a slow fallback before firmware transport setup.
 During its own bootstrap, it repeats advancing session polls within the
 [board radio polling budget](board-radio.md). It keeps one session poll per
@@ -208,6 +215,14 @@ iteration after bootstrap; an attached client leaves module polling to its owner
 The resident 120 s bound remains unchanged. Neither the bus-time lower bound
 nor these configured deadlines establish measured startup time. The Bluetooth
 image itself remains supervised.
+
+[bluetooth-startup-deadline.py](../checks/bluetooth-startup-deadline.py)
+checks the first-readiness boundary, a query crossing the boundary, clock and
+generation refusal, UART/wake/module waits through HCI expiry, the resident anchor, and pending firmware beyond the provisional HCI offset. Its 17 startup cases execute the application with modeled module
+readiness and real UART/H4/HCI code. One additional case checks the resident
+headset stage arithmetic, lifetime cap and unchanged supervised offsets. These
+checks do not establish physical startup time or change the six-command HCI
+identity required for success.
 
 [bluetooth-application.py](../checks/bluetooth-application.py) runs
 [bluetooth-module-owner.c](../checks/bluetooth-module-owner.c) with the real

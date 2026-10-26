@@ -250,7 +250,29 @@ int bluetooth_application_poll(struct bluetooth_application *a)
     }
     uint64_t generation;int ready=a733_radio_session_bootstrap(a->module_session,&generation);
     if(ready<0)return bluetooth_application_retain(a);
-    if(!ready)return a->stage==1&&now>=a->bootstrap_deadline?bluetooth_application_retain(a):0;
+    if(a->stage==1){
+        /* Readiness can follow the session's switch to a runtime lease. Bind
+         * its first observation to this client's original bootstrap bound. */
+        if(!a733_counter_clock_now(&a->shared->counter,&now))return bluetooth_application_retain(a);
+        if(!a->firmware_generation){
+            if(now>=a->bootstrap_deadline)return bluetooth_application_retain(a);
+            if(ready){
+                if(!generation)return bluetooth_application_retain(a);
+                a->firmware_generation=generation;
+                if(a->resident){
+                    a->started=now;
+                    uint64_t end=a733_deadline_after_saturating(now,hci_offset(a->profile)-bootstrap_offset(a->profile));
+                    a->hci_deadline=end<a->deadline?end:a->deadline;
+                }
+            }
+        }
+    }
+    /* An on-time observation survives UART/wake contention, but neither that
+     * contention nor temporary module unavailability extends HCI startup. */
+    if(a->firmware_generation&&!atomic_load_explicit(&a->result,memory_order_acquire)&&now>=a->hci_deadline)
+        return bluetooth_application_retain(a);
+    if(!ready)return 0;
+    if(generation!=a->firmware_generation)return bluetooth_application_retain(a);
     enum a733_uart_platform_result u=a733_uart_platform_live(&a->uart,a->deadline);
     if(u==A733_UART_PLATFORM_BUSY)return 0;if(u!=A733_UART_PLATFORM_READY)return bluetooth_application_retain(a);
     enum a733_radio_platform_result wake=a733_radio_platform_bluetooth_wake(a->module_radio,&a->module_session->borrow,
@@ -264,12 +286,6 @@ int bluetooth_application_poll(struct bluetooth_application *a)
     }
 #endif
     if(a->stage==1){
-        if(a->resident){
-            /* Place the origin where the supervised firmware bound would fall. */
-            uint64_t offset=bootstrap_offset(a->profile);
-            a->started=now>offset?now-offset:0;a->hci_deadline=a->started+hci_offset(a->profile);
-        }
-        a->firmware_generation=generation;
         a->binding=(struct bt_h4_binding){a733_uart_platform_controller(&a->uart),generation,a->uart_generation,
             a->profile->frame_timeout_us,1500000,binding_current,a};
         if(bt_hci_init(&a->hci,&a->binding,a->slots,4,a->hci_deadline,a->profile->command_timeout_us)!=1)
