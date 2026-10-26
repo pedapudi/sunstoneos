@@ -247,17 +247,16 @@ Each step is a returning CPU0 image on the provider path of bundle 15
 five temperature sensors and inspects the CPU domains read-only. It then
 makes the step's change, inspects again, reads a second sensor set and
 returns to the ROM. Each step's admission refuses, before any write, a board whose bin,
-supplies, rates or modulation enables differ from the record. The steps run
-in this order, one variable at a time. A step that leaves CPU-L or the DSU
-changed is the last of its lifetime, because later images assume CPU-L at
-494 MHz.
+supplies, rates or modulation enables differ from the record, or whose plan
+would take a rail above the bin's top voltage for that rail (DCDC5 1000 mV
+and DCDC3 1050 mV in vf0400). The steps change one variable at a time.
 
 | Step | Change | Prediction |
 | --- | --- | --- |
 | 1 | CPU-B 1014 → 1404 → 1014 MHz at 800 mV, cores 6 and 7 off (bundle 20) | CPU-B PLL `0xf8803600`, then `0xf8802700`; mux `0x03000000` throughout; DCDC3 800 mV before and after; parked under 1 ms per change; CPU-L and DSU words unchanged |
 | 2 | CPU-L 494 → 1196 MHz at 800 mV, then the DSU 494 → 780 MHz | CPU-L PLL `0xf8802e00`, mux `0x03000000`; CPU0's cycle counter measures 1196 MHz ± 1% (494 MHz before); DSU PLL `0xf8801e00`, mux `0x03000105`; no PMIC write |
 | 3 | DCDC3 800 → 1050 mV and back, CPU-B held at 1014 MHz | DCDC3 selector `0xb7`, then `0x9e`; every clock word unchanged; temperatures within 1 °C |
-| 4 | DCDC3 to 1050 mV, CPU-B 1014 → 2002 MHz, then the DSU to 910 MHz; then the DSU to 598 MHz (the 800 mV row under three quarters of 1014 MHz), CPU-B to 1014 MHz and DCDC3 to 800 mV, cores 6 and 7 off; the DSU stays changed, so the step ends its lifetime | CPU-B PLL `0xf8804d00`, DCDC3 `0xb7`, DSU PLL `0xf8802300`, mux `0x03000105`; then DSU PLL `0xf8802e00`, mux `0x03010105`, CPU-B `0xf8802700`, DCDC3 `0x9e` |
+| 4 | DCDC3 to 1050 mV, CPU-B 1014 → 2002 MHz, then the DSU to 910 MHz; then the DSU to 598 MHz, CPU-B to 1014 MHz and DCDC3 to 800 mV, cores 6 and 7 off; the DSU stays at 598 MHz | CPU-B PLL `0xf8804d00`, DCDC3 `0xb7`, DSU PLL `0xf8802300`, mux `0x03000105`; then DSU PLL `0xf8802e00`, mux `0x03010105`, CPU-B `0xf8802700`, DCDC3 `0x9e` |
 | 5 | DCDC5 to 1000 mV, CPU-L → 1794 MHz, then the DSU → 1274 MHz | DCDC5 1000 mV (`0xb2`); CPU-L PLL `0xf8804500`, CPU0 measures 1794 MHz ± 1%; DSU PLL `0xf8803100`, mux `0x03000105`; the hottest sensor below 50 °C |
 | 6 | The all-core workload with the top point applied before the tasks start | Workload passes with the status-masked capture; core 6 measures 2002 MHz and core 0 1794 MHz; the hottest sensor stays below 90 °C |
 | 7 | B1, then the OS image with both clusters and the DSU at their top points | Recognition on the A76 pair at about 1.2 s for the bench recording ([cpu-a76-dvfs.md](cpu-a76-dvfs.md), A2) |
@@ -275,8 +274,8 @@ Step 1 passed on port 3-3 (`board-session-20261025-17/port-3-3`, record
 1014 MHz, the longest park was 59 µs, DCDC3 stayed at 800 mV and the hottest
 sensor read 39.7 °C before and 39.6 °C after.
 
-Steps 2 to 5 are bundles 22, 21, 23 and 24, built from the step-1 source with
-`-DOPP_BUNDLE=n` (below). Step 6 needs the driver in the all-core workload
+Steps 2 to 5 are bundles 22, 21, 23 and 24, built from the same source as
+step 1 with `-DOPP_BUNDLE=n` (below). Step 6 needs the driver in the all-core workload
 image and is not built.
 
 ## Steps 2 to 5 share one lifetime
@@ -314,6 +313,25 @@ CNTPCT over 1 ms, with the PMU code that bundle 4 ran on port 3-3, before
 and after each CPU-L change. The cycle counter counts core clocks during
 memory stalls too, so no step depends on the memory bus clock, which the
 clock audit finds at 400 MHz after each ROM return.
+
+In step 4 the DSU goes to 910 MHz, the rate at which the vendor's dsufreq
+holds the DSU while CPU-B runs at 1488 MHz or more; the vendor sets it just
+before the CPU-B change, and the driver's three-quarters cap admits it only
+once CPU-B runs above 1214 MHz, so the step sets it right after. The DSU then
+goes to 598 MHz before CPU-B is lowered, in the vendor order: 598 MHz is the
+fastest 800 mV DSU row at or below three quarters of 1014 MHz (754 MHz), so
+the cap admits it whether CPU-L runs at 494 or 1196 MHz.
+
+**A ROM return with CPU-L above 494 MHz has never run.** It first happens
+after bundle 22, with CPU-L at 1196 MHz, and again after bundle 24, at
+1794 MHz. The prediction is that the ROM answers both times: the next
+survey's responsive-ROM check and the Read bundle after bundle 24 show it. If
+the ROM times its USB or FEL delays by counting CPU cycles, those delays
+shrink by 494/1196 and 494/1794, and a return can then fail to enumerate; a
+missing FEL instance after bundle 22 or 24 is that failure, and only a power
+removal recovers it. After bundle 24 the ROM idles with CPU-L at 1794 MHz,
+the DSU at 1274 MHz and DCDC5 at 1000 mV, and nothing reads the sensors, so
+the runbook removes power promptly after the Read bundle that follows it.
 
 Step 3 writes DCDC3 through the PMIC provider itself, because the driver
 changes a voltage only together with a clock. It holds CPU-B's clock lease

@@ -478,6 +478,20 @@ static void check_temperature(void)
         stop();
 }
 
+/* The highest voltage of a domain's column, from the driver's tables. */
+static uint32_t top_mv(enum a733_cpu_domain d, unsigned bin)
+{
+    unsigned count;
+    const struct a733_cpu_opp *t = a733_cpu_clock_opps(d, &count);
+    uint32_t mv = 0;
+    for (unsigned i = 0; t && i < count; ++i) {
+        const uint32_t v = a733_cpu_clock_opp_mv(&t[i], bin);
+        if (v > mv)
+            mv = v;
+    }
+    return mv;
+}
+
 static void client(void *unused)
 {
     (void)unused;
@@ -533,6 +547,15 @@ static void client(void *unused)
         if ((cpu.words[d][0] & (3u << 29)) || (cpu.words[d][1] >> 31) || (cpu.words[d][2] >> 31))
             refuse("pattern or LFM enabled");
     }
+    /* No planned voltage may exceed the bin's top point on its rail: DCDC5
+     * feeds CPU-L and the DSU, DCDC3 CPU-B (1000 and 1050 mV in vf0400). */
+    uint32_t limit = top_mv(A733_CPU_LITTLE, entry.bin);
+    if (top_mv(A733_CPU_DSU, entry.bin) > limit)
+        limit = top_mv(A733_CPU_DSU, entry.bin);
+    const uint32_t limits[2] = {limit, top_mv(A733_CPU_BIG, entry.bin)};
+    for (unsigned i = 0; i < plan.count; ++i)
+        if (plan.ops[i].kind != OP_RATE && plan.ops[i].mv > limits[supply((enum a733_cpu_domain)plan.ops[i].domain)])
+            refuse("voltage above the bin's top point");
 
     for (unsigned i = 0; i < plan.count; ++i) {
         const struct op *o = &plan.ops[i];
@@ -562,7 +585,8 @@ static void client(void *unused)
         if (now_mhz[d] * 1000000ull == y->hz)
             REQUIRE(x->pll == y->pll && x->select == y->select, "clock words of an unchanged domain");
     }
-    REQUIRE(sensor_set() == A733_THERMAL_NORMAL && hottest_mc < OPP_LIMIT_MC, "thermal level at the end");
+    /* The last sensor set stops the step as the earlier ones do. */
+    check_temperature();
     thermal_stop();
     bb_power_park();
     platform_puts("COMPLETE " BUNDLE ": ");

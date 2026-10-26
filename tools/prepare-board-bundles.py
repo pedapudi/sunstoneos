@@ -312,8 +312,9 @@ def opp_row(name, position, component, text, lines, intro, after):
         f'TEMP line below 70000; and COMPLETE board bundle {position}: {text}; then a responsive ROM.',
         intro + ' The image admits the step only at the NORMAL thermal level with every sensor below 70 C, on '
         'vf0400, with DCDC3 and DCDC5 at 800 mV, CPU-B at 1,014 MHz, CPU-L and the DSU on their PLLs and every '
-        'pattern and LFM enable clear, and otherwise returns REFUSED before any write. A sensor set follows each '
-        'raise; a sensor at 70 C or more stops the step, which lowers what it raised (DSU 598 MHz, clusters '
+        'pattern and LFM enable clear, and no planned voltage above the bin\'s top voltage for its rail (DCDC5 '
+        '1000 mV, DCDC3 1050 mV in vf0400), and otherwise returns REFUSED before any write. A sensor set follows each '
+        'raise and at the end; a sensor at 70 C or more stops the step, which lowers what it raised (DSU 598 MHz, clusters '
         '1,014 MHz, DCDC3 800 mV) and returns STOPPED. Both are controlled outcomes. At the end it requires the '
         'planned rates and rails. Approved by the user on 2026-10-24 (CPU clock and voltage); bundle/approval.json '
         'binds the values to port 3-3 and this image.',
@@ -643,9 +644,11 @@ ROWS = [
             'set pll=0xf8802700 mhz=1014 with STEP dcdc3_uv=800000',
             'Step 4 of docs/designs/cpu-top-opp.md, with cores 6 and 7 off: the driver raises DCDC3 to 1,050 mV, '
             'waits 1 ms and relocks CPU-B at 2,002 MHz, the top point of vf0400; the DSU then goes to 910 MHz, the '
-            'vendor floor for a CPU-B at 1,488 MHz or more. The DSU then goes to 598 MHz, under three quarters of '
-            '1,014 MHz, and CPU-B back to 1,014 MHz, after which the driver writes DCDC3 back to 800 mV. The DSU '
-            'stays at 598 MHz.', ('cpu-l-800mv-step',)),
+            'rate at which the vendor holds the DSU while CPU-B runs at 1,488 MHz or more, which the driver\'s '
+            'three-quarters cap admits only after CPU-B is above 1,214 MHz. The DSU then goes to 598 MHz, the '
+            'fastest 800 mV DSU row at or below three quarters of 1,014 MHz whatever CPU-L\'s rate, and CPU-B back '
+            'to 1,014 MHz, after which the driver writes DCDC3 back to 800 mV. The DSU stays at 598 MHz.',
+            ('cpu-l-800mv-step',)),
     opp_row('cpu-l-dsu-top-step', 24, 'CPU-L to 1,794 MHz at 1,000 mV, then the DSU to 1,274 MHz',
             'CPU-L 1794 MHz at 1000 mV and the DSU 1274 MHz',
             'RATE cpu0_hz near the entry rate, CPU-L set pll=0xf8804500 mux=0x3000000 mhz=1794 with STEP '
