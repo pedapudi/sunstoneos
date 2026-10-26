@@ -163,13 +163,14 @@ def main():
     parser.add_argument('--fw-session', action='store_true',
                         help='the first-job variant running eight timed jobs on one context '
                              '(docs/designs/gpu-job-session.md)')
+    parser.add_argument('--fw-mimus', action='store_true', help='two bounded exact-sum kernel jobs')
     args = parser.parse_args()
     if args.power_only + args.wrapper_read + args.probe_read + args.fw_start + args.fw_stop + args.fw_job + \
-            args.fw_session > 1:
+            args.fw_session + args.fw_mimus > 1:
         parser.error('choose one variant')
     # The session variant is the first-job variant built with FWS_JOBS.
     session = args.fw_session
-    args.fw_job = args.fw_job or session
+    args.fw_job = args.fw_job or session or args.fw_mimus
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
     baseline = harness.CACHE / 'evidence/gpu-provider-ready-20261024/image-1'
@@ -219,7 +220,8 @@ def main():
         unit_flags = monitor_flags if source == 'platform/a733/monitor.c' else flags
         variant = ['-DGPU_POWER_ONLY=1'] if args.power_only and source == 'apps/gpu-power-id/main.c' else \
             ['-DFWS_STOP=1'] if args.fw_stop and source == 'apps/gpu-power-id/fw-start.c' else \
-            ['-DFWS_STOP=1', '-DFWS_JOB=1'] + ([f'-DFWS_JOBS={FWS_SESSION_JOBS}'] if session else []) \
+            ['-DFWS_STOP=1', '-DFWS_JOB=1'] + ([f'-DFWS_JOBS={FWS_SESSION_JOBS}'] if session else
+             ['-DFWS_JOBS=2', '-DFWS_MIMUS=1'] if args.fw_mimus else []) \
             if args.fw_job and source == 'apps/gpu-power-id/fw-start.c' else []
         command = unit_flags + variant + ['-MD', '-MF', str(obj) + '.d', '-c', str(ROOT / source), '-o', str(obj)]
         subprocess.run(command, check=True, cwd=ROOT)
@@ -258,6 +260,8 @@ def main():
                             f'.incbin "{firmware}"\n.global gpu_firmware_end\ngpu_firmware_end:\n')
         extra = FWS_STOP_UNITS if args.fw_stop or args.fw_job else []
         extra = extra + (FWS_JOB_UNITS if args.fw_job else [])
+        if args.fw_mimus:
+            extra += ['drivers/gpu/pvr_compute_mimus.c', 'drivers/gpu/pvr_compute_mimus_usc.c']
         for i, source in enumerate(FWS_UNITS + extra + [str(assembly)]):
             obj = out / f'added-{i}.obj'
             path = Path(source) if source.startswith('/') else ROOT / source
@@ -326,11 +330,12 @@ def main():
               'variant': ('power-only' if args.power_only else 'wrapper-read' if args.wrapper_read
                           else 'probe-read' if args.probe_read else 'fw-start' if args.fw_start
                           else 'fw-stop' if args.fw_stop else 'fw-session' if session
-                          else 'fw-job' if args.fw_job else 'identity'),
+                          else 'fw-mimus' if args.fw_mimus else 'fw-job' if args.fw_job else 'identity'),
               'expect': ('COMPLETE GPU power only: CORE status 8, OFF and provider parked' if args.power_only
                          else 'COMPLETE GPU wrapper read: CORE status 8, four wrapper words, OFF and provider parked'
                          if args.wrapper_read else PROBE_EXPECT if args.probe_read else FWS_EXPECT if args.fw_start
                          else FWS_STOP_EXPECT if args.fw_stop else FWS_SESSION_EXPECT if session
+                         else 'COMPLETE GPU exact sums: 2 jobs, tags and sums match, context cleaned up, firmware stopped, OFF and provider parked' if args.fw_mimus
                          else FWS_JOB_EXPECT if args.fw_job
                          else 'COMPLETE GPU power identity: 36.56.104.183 in two ON/OFF cycles, provider parked'),
               'local_authority_required': ('Exclusive GPU CCU, PLL_GPU0 (CCU 0x0e0) and PCK CORE6 policy/PWCR; TOP5 '

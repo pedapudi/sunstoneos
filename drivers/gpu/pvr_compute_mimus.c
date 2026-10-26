@@ -33,26 +33,30 @@ static int heap_offset(uint64_t address, uint64_t heap, uint64_t bytes, uint64_t
 int pvr_mimus_session_open(struct pvr_mimus_session *s, const struct pvr_mimus_session_config *c)
 {
     uint32_t code = pvr_compute_mimus_usc_bytes, temps = pvr_compute_mimus_usc_temps;
-    if (!a733_span_excl_nonempty(s, sizeof(*s)) || !a733_span_excl_nonempty(c, sizeof(*c)) ||
+    if (!a733_span_excl_nonempty(c, sizeof(*c))) return 0;
+    const size_t arena = c->arena_bytes ? c->arena_bytes : PVR_MIMUS_ARENA_BYTES;
+    const size_t output = c->output_bytes ? c->output_bytes : PVR_MIMUS_OUTPUT_BYTES;
+    if (!a733_span_excl_nonempty(s, sizeof(*s)) ||
         !a733_span_excl_nonempty(c->job_cpu, PVR_MIMUS_JOB_PAGE_BYTES) ||
         !a733_span_excl_nonempty(c->program_cpu, PVR_MIMUS_PROGRAM_BYTES) ||
         ((uintptr_t)c->job_cpu & 4095) || ((uintptr_t)c->program_cpu & 4095) ||
         !c->arena_cpu || !c->output_cpu || (c->arena_cpu & (SPAN_ALIGN - 1)) ||
         (c->output_cpu & (SPAN_ALIGN - 1)) ||
-        c->arena_cpu > UINTPTR_MAX - PVR_MIMUS_ARENA_BYTES ||
-        c->output_cpu > UINTPTR_MAX - PVR_MIMUS_OUTPUT_BYTES ||
+        !arena || arena > PVR_MIMUS_ARENA_BYTES || (arena & 4095) ||
+        output <= PVR_MIMUS_TAG_BYTES || output > PVR_MIMUS_OUTPUT_BYTES || (output & 4095) ||
+        c->arena_cpu > UINTPTR_MAX - arena || c->output_cpu > UINTPTR_MAX - output ||
         !a733_ranges_disjoint_nonempty(c->job_cpu, PVR_MIMUS_JOB_PAGE_BYTES,
                                        c->program_cpu, PVR_MIMUS_PROGRAM_BYTES) ||
-        !a733_ranges_disjoint_nonempty((const void *)c->arena_cpu, PVR_MIMUS_ARENA_BYTES,
-                                       (const void *)c->output_cpu, PVR_MIMUS_OUTPUT_BYTES))
+        !a733_ranges_disjoint_nonempty((const void *)c->arena_cpu, arena,
+                                       (const void *)c->output_cpu, output))
         return 0;
     const void *pages[2] = { c->job_cpu, c->program_cpu };
     const size_t sizes[2] = { PVR_MIMUS_JOB_PAGE_BYTES, PVR_MIMUS_PROGRAM_BYTES };
     for (unsigned i = 0; i < 2; ++i)
         if (!a733_ranges_disjoint_nonempty(pages[i], sizes[i], (const void *)c->arena_cpu,
-                                           PVR_MIMUS_ARENA_BYTES) ||
+                                           arena) ||
             !a733_ranges_disjoint_nonempty(pages[i], sizes[i], (const void *)c->output_cpu,
-                                           PVR_MIMUS_OUTPUT_BYTES) ||
+                                           output) ||
             !a733_ranges_disjoint_nonempty(pages[i], sizes[i], s, sizeof(*s)) ||
             !a733_ranges_disjoint_nonempty(pages[i], sizes[i], c, sizeof(*c)))
             return 0;
@@ -86,6 +90,8 @@ int pvr_mimus_session_open(struct pvr_mimus_session *s, const struct pvr_mimus_s
     pvr_compute_job_fence_pds(c->job_cpu + PVR_MIMUS_FENCE);
     struct pvr_mimus_session value = { .c = *c, .state = PVR_MIMUS_IDLE,
                                        .last_sequence = c->last_sequence };
+    value.c.arena_bytes = arena;
+    value.c.output_bytes = output;
     if (!aarch64_device_cache(AARCH64_CACHE_CLEAN, (uintptr_t)c->program_cpu, PVR_MIMUS_PROGRAM_BYTES) ||
         !aarch64_device_cache(AARCH64_CACHE_CLEAN, (uintptr_t)c->job_cpu, PVR_MIMUS_JOB_PAGE_BYTES))
         return 0;
@@ -125,7 +131,9 @@ int pvr_mimus_submit(struct pvr_mimus_session *s, const struct pvr_mimus_tensor 
         stride < 2 * k || stride > 0xffff)
         return 0;
     uint64_t extent = (uint64_t)(rows - 1) * stride + 2 * k;
-    if (!a733_extent_within(0, PVR_MIMUS_ARENA_BYTES, j->x_offset, extent)) return 0;
+    const uint64_t sums = (uint64_t)rows * t->n_gpu * (k > 512 ? 8u : 4u);
+    if (!a733_extent_within(0, s->c.arena_bytes, j->x_offset, extent) ||
+        sums > s->c.output_bytes - PVR_MIMUS_TAG_BYTES) return 0;
     unsigned char *words = s->c.job_cpu + PVR_MIMUS_WORDS;
     put64(words, t->weights);
     put64(words + 8, PVR_MIMUS_ARENA_GPU + j->x_offset);

@@ -214,9 +214,9 @@ struct Inject { int64_t missing_lane = -1; bool reset = false, lost = false; };
 // The runtime's kick: the GPU reads the job page from memory only.
 Outcome gpu_job(const Inject &inject) {
     const uint8_t *pds = m.job_mem + PVR_MIMUS_PDS_DATA, *cdm = m.job_mem + PVR_MIMUS_CDM;
-    // DOUTW H32/L32 order: the even register receives the low word.
-    gpu_vtxin[0] = rd32(pds + 84); gpu_vtxin[1] = rd32(pds + 80);
-    gpu_vtxin[2] = rd32(pds + 100); gpu_vtxin[3] = rd32(pds + 96);
+    // DOUTW constants are stored low word first, as in the native encoder.
+    gpu_vtxin[0] = rd32(pds + 80); gpu_vtxin[1] = rd32(pds + 84);
+    gpu_vtxin[2] = rd32(pds + 96); gpu_vtxin[3] = rd32(pds + 100);
     REQUIRE(rd32(cdm + 4) == kJobGpu - kPdsHeap + PVR_MIMUS_PDS_DATA && rd32(cdm + 8) == rd32(cdm + 4) + 128);
     REQUIRE((rd32(pds) | (uint64_t)(rd32(pds + 4) & 7) << 32) == kProgramGpu - kUscHeap);
     REQUIRE(std::memcmp(m.program_mem, pvr_compute_mimus_usc, pvr_compute_mimus_usc_bytes) == 0);
@@ -507,6 +507,25 @@ void case_refusals() {
     refused({ 0, 32, 2 * t.k - 4, 1 }, t.gpu);                    // stride below 2K
     refused({ 0, 32, 0x10000, 1 }, t.gpu);                        // stride beyond 16 bits
     refused({ PVR_MIMUS_ARENA_BYTES - 31 * 2 * t.k - 2 * t.k + 4, 32, 2 * t.k, 1 }, t.gpu);  // past the arena
+    const auto full = session.c;
+    auto bounded = full;
+    bounded.arena_bytes = 128 * 1024;
+    bounded.output_bytes = 128 * 1024;
+    REQUIRE(pvr_mimus_session_open(&session, &bounded) == 1);
+    refused({ bounded.arena_bytes - 31 * 2 * t.k - 2 * t.k + 4, 32, 2 * t.k, 1 }, t.gpu);
+    // The tensor's full-region row bound must not bypass the smaller output.
+    session.c.output_bytes = PVR_MIMUS_TAG_BYTES + 4096;
+    refused({ 0, 32, 2 * t.k, 1 }, t.gpu);
+    for (size_t bytes : {size_t(1), size_t(4095), size_t(PVR_MIMUS_ARENA_BYTES + 4096)}) {
+        auto bad = bounded; bad.arena_bytes = bytes;
+        REQUIRE(!pvr_mimus_session_open(&session, &bad));
+    }
+    for (size_t bytes : {size_t(4096), size_t(PVR_MIMUS_TAG_BYTES),
+                         size_t(PVR_MIMUS_TAG_BYTES + 1), size_t(PVR_MIMUS_OUTPUT_BYTES + 4096)}) {
+        auto bad = bounded; bad.output_bytes = bytes;
+        REQUIRE(!pvr_mimus_session_open(&session, &bad));
+    }
+    REQUIRE(pvr_mimus_session_open(&session, &full) == 1);
     pvr_mimus_job edge{ PVR_MIMUS_ARENA_BYTES - 31 * 2 * t.k - 2 * t.k, 32, 2 * t.k, 1 };
     REQUIRE(pvr_mimus_submit(&session, &t.gpu, &edge) == 1);   // ends exactly at the span's end
     refused({ 0, 32, 2 * t.k, 2 }, t.gpu);                       // a job already in flight

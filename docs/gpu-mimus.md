@@ -119,11 +119,12 @@ None translates an address, hashes, allocates or kicks the GPU.
   below 2^16, the weight offset and stride multiples of 4 with
   K ≤ stride < 2^16, and every weight byte inside its model region (checked
   with `a733_extent_within`, because the two regions are adjacent).
-- `pvr_mimus_submit` makes nine compares before any store: the session is
+- `pvr_mimus_submit` makes ten compares before any store: the session is
   idle; rows are nonzero and at most the tensor's bound; the sequence exceeds
   every earlier sequence of the boot; the activation offset and stride are
   multiples of 4; the stride lies in [2K, 2^16); and the activation extent
-  lies inside the arena span. It then writes the argument record and the CDM
+  lies inside the arena span; and the sums fit the admitted output extent.
+  It then writes the argument record and the CDM
   stream and makes two `aarch64_device_cache` calls: DC CVAC over the
   activation extent rounded outward to 64-byte lines, and over the job-word
   area. A refusal, including a refusal by the cache helper, happens before any
@@ -215,6 +216,10 @@ $PY checks/gpu-mimus-time-model.py --calls OUT/layers/calls.txt \
   checks tags with `pvr_mimus_tags_complete`, and the engine runs its CPU
   channels, reads the sums out with its own `Combine()` and computes the rows
   no job returned ([gpu-recognition.md](designs/gpu-recognition.md)).
+
+The returning [exact-sum caller](designs/gpu-exact-sum-caller.md) prepares two
+bounded jobs through the firmware submission path. It is an offline candidate
+for the first physical execution; its host model does not qualify the kernel.
 
 ## Board evidence that would confirm it
 

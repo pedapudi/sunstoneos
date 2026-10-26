@@ -63,6 +63,9 @@ struct pvr_mimus_session_config {
     uint64_t job_gpu, program_gpu, pds_heap, usc_heap;
     /* Highest sequence any job of this boot used; 0 at the first open. */
     uint32_t last_sequence;
+    /* Zero selects the full region. A bounded caller may own a smaller,
+     * page-aligned prefix; every admitted job must fit that prefix. */
+    size_t arena_bytes, output_bytes;
 };
 /* One tensor, admitted at open. weights is the GPU address of channel 0. */
 struct pvr_mimus_tensor {
