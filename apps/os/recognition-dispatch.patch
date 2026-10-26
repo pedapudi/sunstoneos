@@ -24,15 +24,15 @@
          if(std::memcmp(hash,mimus_asset_sha256[i],32)){failed();}
      }
 +    /* Every model hash matched: open the GPU session once, when the engine
-+     * declares its exact-sum hook. A refused or failed OPEN keeps every
-+     * layer on the CPU for this boot. */
++     * declares its exact-sum hook. A pre-queue refusal keeps layers on the
++     * CPU; accepted-request uncertainty suspends with ownership retained. */
 +    os_gpu_open();
      std::span<const uint8_t> input[3];for(unsigned i=0;i<3;++i)
          input[i]={reinterpret_cast<const uint8_t *>(mimus_asset_address[i]),mimus_asset_bytes[i]};
 @@ -66,6 +79,21 @@
  }
  }
-+/* A RESET or LOST GPU completion ends the boot through the same path. */
++/* GPU failure or caller timeout suspends through the same retained path. */
 +extern "C" void os_dispatch_stop(void){failed();}
 +extern "C" int os_thermal_throttled(void);
  extern "C" void mimus_native_checkpoint(void)

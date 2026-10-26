@@ -29,7 +29,9 @@ int os_dispatch_open(void)
 {
     if(os_dispatch_record.opened||os_dispatch_record.open_failed)return os_dispatch_record.opened;
     atomic_store_explicit(&gpu_state,OS_DISPATCH_GPU_WAITING,memory_order_release);
-    if(a733_gpu_mimus_open()!=1){
+    int opened=a733_gpu_mimus_open();
+    if(opened<0)os_dispatch_failed(opened==OS_GPU_CALL_TIMEOUT?OS_DISPATCH_TIMEOUT:OS_DISPATCH_LOST);
+    if(opened!=1){
         os_dispatch_record.open_failed=1;atomic_store_explicit(&gpu_state,OS_DISPATCH_GPU_IDLE,memory_order_release);return 0;
     }
     atomic_store_explicit(&gpu_state,OS_DISPATCH_GPU_IDLE,memory_order_release);
@@ -50,7 +52,8 @@ void os_dispatch_failed(unsigned state)
     /* The models and the code span are trustworthy after a GPU fault only if
      * the GPU MMU enforces its read-only mappings, which the board has not
      * shown; RESET therefore ends the boot like LOST. */
-    os_dispatch_record.failure=state==OS_DISPATCH_RESET?OS_DISPATCH_RESET:OS_DISPATCH_LOST;
+    os_dispatch_record.failure=state==OS_DISPATCH_RESET?OS_DISPATCH_RESET:
+        state==OS_DISPATCH_TIMEOUT?OS_DISPATCH_TIMEOUT:OS_DISPATCH_LOST;
     os_dispatch_active=0;
     atomic_store_explicit(&gpu_state,OS_DISPATCH_GPU_FAULT,memory_order_release);
     os_dispatch_stop();

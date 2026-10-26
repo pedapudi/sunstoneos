@@ -11,9 +11,10 @@ The [design](designs/gpu-recognition.md) states the budgets and
 result with them.
 
 Status: **implemented** and host-modeled. The GPU option's image links and
-passes its link check and host checks. The local mimus engine at `9c57286b7`
+passes its link check and host checks. The local mimus engine pinned in
+[source.json](../apps/mimus/source.json)
 provides the exact-sum hook consumed by `apps/os/gpu_hook.cc`. No board has
-executed the GPU path; the engine hook's availability establishes source
+executed integrated OS GPU recognition; the engine hook's availability establishes source
 integration only.
 
 ## Parts
@@ -62,7 +63,7 @@ uncached pages. Nothing is released; a failure retains every page.
    as usual. The engine then computes its own channels.
 2. The worker, one priority above the recognizer on the same core, takes the
    slot by compare-and-swap from SUBMITTED to TAKEN with acquire order and
-   copies it once into its own memory; every later check and use reads that
+   copies it once into its own memory. Every later check and use reads that
    copy, because `pvr_mimus_submit` reads the code offset twice. In one step,
    under one interrupt mask and re-enable, it looks up the admitted tensor
    (one bounds compare), assigns the next sequence, checks that the timeline
@@ -93,11 +94,26 @@ uncached pages. Nothing is released; a failure retains every page.
    the sums coherently.
 
 The hang bound `max_job_us` is 1 s from the kick, the most that bind accepts.
-A missed deadline, a context-reset event, a timeline value other than the
-previous sequence before a submit or other than the previous or current one
-while a job runs, a failed completion maintenance, or any service failure
-posts LOST for an owed record and sets the lost flag, which makes later
-submits return -1.
+A separate two-second caller deadline starts before slot publication, covering
+the service's ring-admission and kick stages without an unbounded reply wait.
+It is shortened by the current board and session deadlines. The caller checks
+time and admission before and after each ten-tick receive; a late OK record
+cannot lend output. FreeRTOS elapsed ticks also bound a stopped architectural
+counter, and a finite observation count prevents a broken queue from spinning
+forever with both clocks stopped. No observation renews the deadline or reports
+recognition progress.
+
+Caller timeout is `OS_DISPATCH_TIMEOUT`, distinct from a worker LOST record.
+It fails the board and suspends the recognizer with its in-flight job and
+borrowed context retained. It never resets the device, closes an uncertain
+job, releases resources or falls back to CPU work. A late reply cannot resume
+the caller. See the [bounded reply design](designs/gpu-recognition-wait.md)
+for the scheduling assumptions and supervised entry requirements.
+
+A missed deadline, context reset, failed completion maintenance or service
+failure posts LOST for an owed record and makes later submits return -1.
+A timeline mismatch has the same result: before submission it must equal the
+previous sequence, and during a job it must equal the previous or current one.
 Completion at the deadline is late, including when output cache maintenance
 consumes the remaining time. A failed or backward final clock sample also
 faults. These checks retain the slot until output acquisition succeeds within
@@ -160,12 +176,16 @@ Classes follow section 1.8 of
 | Failure | Class | Result | Retained |
 | --- | --- | --- | --- |
 | Start refused: previous-boot GPU loss, owner or client collision, tensor admission, pools, firmware | 1 | OPEN refused; CPU for the boot | Acquired pool pages |
-| OPEN fails after power or firmware access | 3 | CPU for the boot | Everything the service holds; the GPU can write only the output region and firmware memory |
+| An accepted OPEN has a failed, mismatched, missing or late reply or ready record | 3 | Terminal board failure; no CPU fallback | Accepted request identity and everything the service holds |
 | Job refused before the first client-ring write, including a failed wake send | 1 | REFUSED; slot IDLE; the engine computes the rows | Nothing |
 | Completed record has an unexpected sequence, missing tag or incorrect sum | 2 only after acknowledged shutdown | `os_dispatch_incomplete` closes placement; the recognizer retires the session before removing the hook and allowing CPU fallback | All backing remains allocated; no reopen for this boot |
 | Terminal retirement refuses CLOSE, misses its deadline, loses authority or lacks same-epoch STOPPED | 3 | LOST and the existing board-failure path before CPU fallback | Everything uncertain, including pending replies and backing |
-| After the client ring is published: deadline missed, context reset, timeline mismatch, failed maintenance, service failure | 3 | LOST; `os_dispatch_failed`, `board_fail`, watchdog reset; the supervisor records a GPU loss and the next boot keeps OPEN refused | Everything |
-| No record | Unknown | The recognizer's 3 s service window expires; watchdog reset; a GPU loss when it was waiting for OPEN or a job's record | Everything |
+| After the client ring is published: deadline missed, context reset, timeline mismatch, failed maintenance, service failure | 3 | LOST; `os_dispatch_failed`, `board_fail`, recognizer suspension | Everything |
+| No record or observation after the caller deadline | 3 | Distinct caller TIMEOUT; board failure and recognizer suspension without treating it as completion | In-flight job, borrowed context, mappings and all uncertain ownership |
+
+Supervised execution requires manual whole-board power removal before reuse,
+after either success or failure. Resident execution also keeps its watchdog
+and GPU-loss stop-detail behavior; caller bounds no longer depend on it.
 
 ## Checks
 
@@ -257,9 +277,10 @@ completion before returning. These sources are preserved with the evidence.
 
 ## Lifecycle and power limits
 
-The current image fixes the GPU at 400 MHz and 800 mV. The
-[runtime design](designs/gpu-runtime.md) reserves 600 MHz and thermal rate
-fallback for later board qualification. Startup and acknowledged shutdown
+The shared power controller uses the vendor top point, 1008 MHz at 960 mV.
+Native backend binding makes both firmware clock fields describe that rate
+before startup. The initial 400 MHz staging field is not the running clock.
+Startup and acknowledged shutdown
 exist, including explicit healthy thermal park and reopen. Automatic idle
 parking and full fault recovery remain
 [unimplemented designs](gpu-recovery.md). Deadline failure retains resources;

@@ -264,7 +264,9 @@ def configure_cases(out, build, models):
     model_dir = '-DSUNSTONE_A733_OS_MODEL_DIR=' + str(models[0].parent)
     # CMake sets the read-only view's constant itself.
     cases = [
-        ('supervised', ['-DSUNSTONE_A733_OS_RESIDENT=OFF', model_dir], 'resident lifetime'),
+        ('supervised', ['-DSUNSTONE_A733_OS_RESIDENT=OFF', model_dir], None),
+        ('supervised-audio', ['-DSUNSTONE_A733_OS_RESIDENT=OFF', '-DSUNSTONE_A733_OS_AUDIO=ON', model_dir],
+         'Supervised GPU linear requires recorded recognition'),
         ('user-read-only', ['-DSUNSTONE_A733_OS_RESIDENT=ON', '-DA733_GPU_OUTPUT_EL0_READ_ONLY=ON',
                             model_dir], 'A733_GPU_OUTPUT_EL0_READ_ONLY'),
         ('resident', ['-DSUNSTONE_A733_OS_RESIDENT=ON', model_dir], None),

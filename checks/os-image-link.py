@@ -162,6 +162,52 @@ def layout(elf, assets, recognizer, loader, profile=False, gpu_linear=False):
             'image_end': hex(max(end for _, _, end in sections))}
 
 
+def gpu_configuration(elf, required=False):
+    """Actual bounded caller, task placement and immutable GPU inputs in this ELF."""
+    def one(name):
+        found = [s for s in elf.symbols if s['name'] == name and s['shndx'] not in (0, 0xfff1)]
+        assert len(found) == 1, 'Missing or ambiguous GPU symbol: ' + name
+        return found[0]
+
+    present = [s for s in elf.symbols if s['name'] == 'os_gpu_configuration' and s['shndx'] != 0]
+    if not present:
+        linked = any(s['name'] in ('a733_gpu_mimus_finish', 'os_gpu_linear_start', 'gpu_firmware') and s['shndx'] != 0
+                     for s in elf.symbols)
+        assert not required and not linked, 'GPU image lacks the bounded caller configuration'
+        return None
+    config = one('os_gpu_configuration')
+    assert config['size'] == 32, 'GPU configuration size differs'
+    values = struct.unpack('<8I', elf.read(config['value'], 32))
+    keys = ('version', 'reply_us', 'lifecycle_us', 'wait_ticks', 'worker_priority', 'core', 'core_hz', 'supply_uv')
+    result = dict(zip(keys, values))
+    assert values[:5] == (1, 2000000, 1000000, 10, 4) and values[5] in (2, 6), 'GPU caller configuration differs'
+    assert values[6:] == (1008000000, 960000), 'GPU operating point differs'
+    inference = inference_configuration(elf)
+    assert inference['workers'] == 2 and inference['owner_core'] == result['core'], 'GPU inference placement differs'
+    assert elf.read(one('os_recognition_core')['value'], 1)[0] == result['core'], 'GPU interrupt owner differs'
+    routes = one('a733_irq_routes')
+    assert routes['size'] % ROUTE_BYTES == 0, 'GPU interrupt table geometry differs'
+    irq = [row for row in struct.iter_unpack('<HBB4xQ', elf.read(routes['value'], routes['size'])) if row[0] == 95]
+    assert irq == [(95, result['core'], 0xd8, one('a733_gpu_mimus_irq')['value'])], 'GPU interrupt route differs'
+    start = one('os_applications')
+    assert start['size'] % APPLICATION_BYTES == 0, 'GPU start table geometry differs'
+    entries = [hooks for name, *hooks in struct.iter_unpack('<4Q', elf.read(start['value'], start['size']))
+               if elf.cstring(name) == 'gpu-linear']
+    assert entries == [[one(n)['value'] for n in ('os_gpu_linear_task_privileged', 'os_gpu_linear_pins', 'os_gpu_linear_start')]], 'GPU start entry differs'
+    assert any('SetExactSumHook' in s['name'] and s['shndx'] != 0 and s['type'] == 2 for s in elf.symbols), 'GPU engine hook is absent'
+    start, end = one('gpu_firmware')['value'], one('gpu_firmware_end')['value']
+    assert 0 < end - start <= 2 << 20, 'GPU firmware extent differs'
+    result['firmware_sha256'] = hashlib.sha256(elf.read(start, end - start)).hexdigest()
+    assert result['firmware_sha256'] == '1db1c399c17401d1f79d46c880db81c724d748c784d4639433b076aba2f9c0d2', 'GPU firmware differs'
+    tables = {}
+    for name in ('os_placement_table', 'os_placement_tensors', 'os_placement_gpu_ordinals'):
+        symbol = one(name)
+        assert 0 < symbol['size'] <= 640 * 16, 'GPU placement extent differs'
+        tables[name] = hashlib.sha256(elf.read(symbol['value'], symbol['size'])).hexdigest()
+    result['placement_sha256'] = tables
+    return result
+
+
 def check(path, assets, recognizer, loader, audio=False, radio=False, headset=False, gpu_linear=False,
           cpu_clock=False, npu=False, perf=False):
     elf = Elf(path.read_bytes())
@@ -259,7 +305,9 @@ def check(path, assets, recognizer, loader, audio=False, radio=False, headset=Fa
         perf_boot = 'high' if value == 1 else 'low'
         perf_operation = struct.unpack('<I', elf.read(one('os_perf_usb_operation')['value'], 4))[0]
         assert perf_operation == 8, 'Performance opcode collides with thermal diagnostic'
-    return {'inference': inference_configuration(elf), 'thermal_report': all(thermal), 'cpu_critical_trip': 'a733_thermal_policy_cpu_limit' in names,
+    gpu_profile = gpu_configuration(elf, required=gpu_linear)
+    assert bool(gpu_profile) == gpu_linear, 'GPU configuration differs from build selection'
+    return {'inference': inference_configuration(elf), 'gpu_profile': gpu_profile, 'thermal_report': all(thermal), 'cpu_critical_trip': 'a733_thermal_policy_cpu_limit' in names,
             'npu_profile': npu_profile, 'perf_boot_mode': perf_boot, 'perf_operation': perf_operation, 'interrupts': interrupts, 'applications': applications,
             'layout': layout(elf, assets, recognizer, loader, radio or headset, gpu_linear)}
 
@@ -295,6 +343,8 @@ def main():
         assert result['inference']['workers'] == args.workers, 'Linked worker count differs from build selection'
         if args.workers == 8:
             assert not any((audio, radio, headset, gpu_linear)), 'Unsupported eight-worker OS profile'
+        if gpu_linear and args.lifetime == 'supervised':
+            assert not any((audio, radio, headset, cpu_clock, args.npu == '1', args.perf == '1')), 'Unsupported supervised GPU profile'
     except AssertionError as error:
         print('FAIL integrated OS link check:', error, file=sys.stderr)
         return 1

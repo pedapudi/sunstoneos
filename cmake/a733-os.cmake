@@ -13,8 +13,8 @@
 # and serves Wi-Fi and the Bluetooth client from one firmware load. The mSBC
 # option adds wideband headset speech through the pinned libsbc. The GPU
 # linear option places mimus linear layers on the CPU or the GPU from a
-# generated table (docs/recognition-dispatch.md). It needs the resident
-# lifetime; until the board shows GPU cache invalidation at job start,
+# generated table (docs/recognition-dispatch.md). Recorded supervised GPU
+# replies have bounded retained-failure waits. Until the board shows GPU cache invalidation at job start,
 # cross-core code writes, GPU read-only enforcement and fault-slot retention
 # across a WDT0 reset, its hook compares every GPU sum with a CPU sum.
 option(SUNSTONE_A733_OS "Build the integrated OS image" OFF)
@@ -83,10 +83,12 @@ if(SUNSTONE_A733_OS_NPU)
   endif()
 endif()
 if(SUNSTONE_A733_OS_GPU_LINEAR)
-  # The recognizer waits for GPU replies without a timer of its own; only the
-  # resident lifetime's mimus service window and watchdog bound those waits.
-  if(NOT SUNSTONE_A733_OS_RESIDENT)
-    message(FATAL_ERROR "GPU linear layers need the resident lifetime, whose watchdog bounds every GPU wait")
+  # Supervised GPU replies have their own retained-failure deadline. The
+  # supported new composition is the existing recorded two-worker path.
+  if(NOT SUNSTONE_A733_OS_RESIDENT AND
+     (SUNSTONE_A733_OS_AUDIO OR SUNSTONE_A733_OS_RADIO OR SUNSTONE_A733_OS_HEADSET OR
+      SUNSTONE_A733_OS_CPU_CLOCK OR SUNSTONE_A733_OS_PERF))
+    message(FATAL_ERROR "Supervised GPU linear requires recorded recognition without other optional devices or CPU clock controls")
   endif()
   # This branch maps 0x46C00000-0x47000000 read-only itself (below); a value
   # given on the command line could only disagree with it.

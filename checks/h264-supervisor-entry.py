@@ -30,6 +30,14 @@ def main():
     assert len(calls) == 1
     policy = {item.arg: ast.literal_eval(item.value) for item in calls[0].keywords
               if item.arg in ('capture_seconds', 'result_key')}
+    def identity_constant(node):
+        if isinstance(node, ast.Name):
+            return getattr(host, node.id)
+        if isinstance(node, ast.Attribute):
+            return getattr(identity_constant(node.value), node.attr)
+        return ast.literal_eval(node)
+    identity = {item.arg: identity_constant(item.value) for item in calls[0].keywords
+                if item.arg in ('product', 'serial', 'bcd_device')}
     reached = []
     class ReadinessReached(Exception):
         pass
@@ -52,7 +60,7 @@ def main():
         reached.clear()
         try:
             host.supervisor.run_session(settings, unused, {}, ready, forbidden, forbidden,
-                product=host.PRODUCT, serial=host.SERIAL, bcd_device=0x0100,
+                **identity,
                 capture_seconds=seconds, result_key=key)
         except ReadinessReached:
             assert accepted and reached == [True]

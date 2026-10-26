@@ -38,7 +38,7 @@ bool Submit() {
   call.job = {call.x_offset + call.next * call.stride, call.ordinal, static_cast<uint32_t>(rows),
               static_cast<uint32_t>(call.stride)};
   const int submitted = a733_gpu_mimus_begin(&call.job);
-  if (submitted < 0) os_dispatch_failed(OS_DISPATCH_LOST);
+  if (submitted < 0) os_dispatch_failed(submitted == OS_GPU_CALL_TIMEOUT ? OS_DISPATCH_TIMEOUT : OS_DISPATCH_LOST);
   if (submitted == 0) {
     os_dispatch_refused();
     call.stopped = true;
@@ -75,7 +75,7 @@ size_t Begin(void*, uint32_t ordinal, const int8_t* weights, size_t weight_strid
   call = {};
   if (!os_dispatch_active) return 0;
   const int ready = a733_gpu_mimus_thermal();
-  if (ready < 0) os_dispatch_failed(OS_DISPATCH_LOST);
+  if (ready < 0) os_dispatch_failed(ready == OS_GPU_CALL_TIMEOUT ? OS_DISPATCH_TIMEOUT : OS_DISPATCH_LOST);
   if (!ready) return 0;
   const os_placement p = os_dispatch_place(ordinal);
   if (!p.n_gpu || !p.job_rows || !rows) return 0;
@@ -104,7 +104,8 @@ bool Finish(void*, mimus::asr::ExactSumJob* out) {
   // Only this wait counts as waiting on the GPU for the supervisor's stop
   // detail; the engine's own channels ran before it.
   os_dispatch_waiting(1);
-  a733_gpu_mimus_finish(&done);
+  const int received = a733_gpu_mimus_finish(&done);
+  if (received != 1) os_dispatch_failed(received == OS_GPU_CALL_TIMEOUT ? OS_DISPATCH_TIMEOUT : OS_DISPATCH_LOST);
   if (done.result == PVR_MIMUS_LOST) os_dispatch_failed(OS_DISPATCH_LOST);
   os_dispatch_waiting(0);
   call.in_flight = false;

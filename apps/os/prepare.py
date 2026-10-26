@@ -49,6 +49,13 @@ COMBINED_SCHEMA = 'a733-os-supervised-combined-v1'
 ENTRY_SCHEMA = 'a733-os-supervised-entry-v1'
 AUDIO_SCHEMA = 'a733-os-audio-entry-v1'
 EXECUTION_PROFILE = 'os-supervised-v1'
+GPU_CONDITIONS = {
+    'gpu-and-remote-users-excluded-prior-work-drained',
+    'gpu-top5-core6-initial-state-and-local-authority',
+    'dcdc4-800-to-960mv-and-pll-gpu0-1008mhz-authority',
+    'shared-pmic-and-register-ownership', 'irq95-route-disabled-inactive-clear',
+    'gpu-device-mappings-and-memory-alias-exclusion',
+    'manual-whole-board-power-removal-and-no-reuse'}
 CONTRACT_MAGIC = 0x415337334f534331
 REQUEST_MAGIC = 0x415337334f534c31
 SESSION_MAGIC = 0x415337334f534131
@@ -186,9 +193,47 @@ def inference_admission(record, config):
         require(same_inference(record['inference'], config), 'Reviewed inference configuration differs.')
 
 
+def image_gpu(manifest, raw):
+    """Read the bounded caller and immutable GPU inputs from the actual linked image."""
+    enabled = manifest.get('gpu_linear', False)
+    require(type(enabled) is bool, 'GPU profile must be boolean.')
+    try:
+        elf = os_link.Elf(raw)
+        config = os_link.gpu_configuration(elf, required=enabled)
+        contract = os_link.contract_profile(elf) if enabled else None
+    except (AssertionError, ValueError, IndexError, struct.error) as error:
+        require(False, 'Invalid linked GPU configuration: ' + str(error))
+    require(bool(config) is enabled and
+            json.dumps(manifest.get('gpu_profile'), sort_keys=True) == json.dumps(config, sort_keys=True),
+            'GPU manifest differs from the linked configuration.')
+    if enabled:
+        require(contract == {'lifetime': 'supervised', 'session_bytes': OS_BYTES} and
+                manifest.get('contract_profile') == contract,
+                'Supervised GPU requires the actual linked supervised contract and session size.')
+        require(manifest.get('lifetime') == 'supervised' and
+                not any(manifest.get(k) for k in ('audio', 'radio', 'headset', 'npu', 'cpu_clock', 'perf_modes')),
+                'Supervised GPU requires recorded recognition without other optional devices or CPU clock controls.')
+    return config
+
+
+def gpu_admission(record, config, evidence):
+    if config is None:
+        require('gpu' not in record, 'GPU authority supplied for an image without GPU.')
+        return
+    value = record.get('gpu')
+    require(isinstance(value, dict) and set(value) == {'configuration', 'conditions'} and
+            json.dumps(value['configuration'], sort_keys=True) == json.dumps(config, sort_keys=True),
+            'Reviewed GPU entry must name the exact linked configuration.')
+    require(isinstance(value['conditions'], dict) and set(value['conditions']) == GPU_CONDITIONS,
+            'Incomplete GPU physical entry conditions.')
+    for item in value['conditions'].values():
+        evidence(item)
+
+
 def image_manifest_check(manifest, raw):
     """The OS link check of these exact bytes; returns whether audio is built in."""
     image_inference(manifest, raw)
+    gpu = image_gpu(manifest, raw)
     audio = manifest.get('audio')
     # A link check from before the NPU profile has no 'npu' key: NPU is off.
     npu = manifest.get('npu', False)
@@ -201,8 +246,8 @@ def image_manifest_check(manifest, raw):
             'Passed supervised OS link check of this image required.')
     require([a.get('name') for a in manifest.get('applications', [])] ==
             ['mimus', 'thermal'] + (['npu'] if npu else []) + (['audio'] if audio else []) +
-            (['radio'] if flags['radio'] else []) + (['headset'] if flags['headset'] else []) and
-            [i.get('intid') for i in manifest.get('interrupts', [])] == [71] + ([97] if npu else []) + ([143] if audio else []),
+            (['radio'] if flags['radio'] else []) + (['headset'] if flags['headset'] else []) + (['gpu-linear'] if gpu else []) and
+            [i.get('intid') for i in manifest.get('interrupts', [])] == [71] + ([97] if npu else []) + ([143] if audio else []) + ([95] if gpu else []),
             'OS start list or interrupt table differs from the link check.')
     return audio
 
@@ -386,7 +431,7 @@ def build_launcher(out, session_bytes, clang, lld):
     require(0 < (out / 'launch.bin').stat().st_size <= 0xc00, 'OS launcher exceeds reserved SRAM.')
 
 
-def validate_admission(record, image_hash, template_hash, raw, audio, cache=None, frozen=False, perf_modes=False, inference=None):
+def validate_admission(record, image_hash, template_hash, raw, audio, cache=None, frozen=False, perf_modes=False, inference=None, gpu=None):
     """Every fact the session names is bound to a reviewed record of this image."""
     require(record.get('schema') == ENTRY_SCHEMA, 'Reviewed OS entry record required.')
     inference_admission(record, inference)
@@ -409,6 +454,7 @@ def validate_admission(record, image_hash, template_hash, raw, audio, cache=None
         return data
     require(isinstance(record.get('mimus_ddr'), dict), 'Recognition input DDR reservation required.')
     mimus.input_admission(record, image_hash, evidence)
+    gpu_admission(record, gpu, evidence)
     if npu_session(raw):
         npu_admission(record, image_hash, raw, evidence)
     else:
@@ -538,7 +584,8 @@ def prepare(image, link_check, admission, template, assets, output, clang, lld):
     record = json.loads(snapshots['admission.json'])
     cache = validate_admission(record, image_hash, hashlib.sha256(raw).hexdigest(), raw, audio,
                                perf_modes=json.loads(snapshots['image-input-manifest.json']).get('perf_modes', False),
-                               inference=image_inference(json.loads(snapshots['image-input-manifest.json']), snapshots['image.elf']))
+                               inference=image_inference(json.loads(snapshots['image-input-manifest.json']), snapshots['image.elf']),
+                               gpu=image_gpu(json.loads(snapshots['image-input-manifest.json']), snapshots['image.elf']))
     radio_uploads = radio_assets.validate(record, raw, flags, cache, board, bluetooth, require)
     output = Path(output)
     output.mkdir(parents=True, exist_ok=False)
@@ -617,7 +664,8 @@ def validate_board(bundle):
     validate_admission(json.loads((out / 'admission.json').read_text()), p['image_sha256'],
                        hashlib.sha256(template).hexdigest(), template, audio, cache, True,
                        perf_modes=json.loads((out / 'image-input-manifest.json').read_text()).get('perf_modes', False),
-                       inference=image_inference(json.loads((out / 'image-input-manifest.json').read_text()), image))
+                       inference=image_inference(json.loads((out / 'image-input-manifest.json').read_text()), image),
+                       gpu=image_gpu(json.loads((out / 'image-input-manifest.json').read_text()), image))
     radio_uploads = radio_assets.validate(json.loads((out / 'admission.json').read_text()),
                                          template, flags, cache, board, bluetooth, require, frozen=True)
     segments, address, identity = base.image_parts(out / 'image.elf')

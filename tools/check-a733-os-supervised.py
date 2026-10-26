@@ -184,7 +184,9 @@ def entry_check(prepared, identity, port):
                                    template, prepared['audio'], cache, True,
                                    perf_modes=json.loads(frozen['board/image-input-manifest.json']).get('perf_modes', False),
                                    inference=preparation.image_inference(json.loads(frozen['board/image-input-manifest.json']),
-                                                                         frozen['board/image.elf']))
+                                                                         frozen['board/image.elf']),
+                                   gpu=preparation.image_gpu(json.loads(frozen['board/image-input-manifest.json']),
+                                                             frozen['board/image.elf']))
     require(admission['identity'] == identity and admission['port'] == port, 'OS entry covers another USB instance.')
 
 

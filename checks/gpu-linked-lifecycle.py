@@ -62,13 +62,14 @@ for case in (('retire', 'close-busy', 'critical-during-close') if a.profile == '
         setf(board, 'board_application', 'live_until', 3000000, 8)
         setf(field(board, 'board_application', 'session'), 'a733_board_session', 'deadline_us', 60000000, 8)
         hooks = {image.address(n): n for n in ('board_live', 'a733_smp_counter', 'xTaskGetCurrentTaskHandle',
-            'os_thermal_throttled', 'os_dispatch_waiting', 'vTaskDelay', 'pvr_gpu_service_send_epoch', 'pvr_gpu_service_collect')}
+            'xTaskGetTickCount', 'os_thermal_throttled', 'os_dispatch_waiting', 'vTaskDelay', 'pvr_gpu_service_send_epoch', 'pvr_gpu_service_collect')}
         def hook(machine, address, size, unused):
             name = hooks.get(address)
             if not name: return
             args = [machine.reg_read(UC_ARM64_REG_X0 + i) for i in range(5)]
             if name == 'board_live': ret(state['live'])
             elif name == 'a733_smp_counter': ret(state['time'] * 24)
+            elif name == 'xTaskGetTickCount': ret(state['time'] // 1000)
             elif name == 'xTaskGetCurrentTaskHandle': ret(0x1234)
             elif name == 'os_thermal_throttled': ret(0)
             elif name == 'os_dispatch_waiting': state['waiting'] = args[0]; ret()

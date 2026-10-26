@@ -16,15 +16,14 @@ configures, links and passes its link check; the GPU
 runtime and its session component are described in
 [gpu-mimus-service.md](gpu-mimus-service.md) and measured in
 [the GPU recognition measurements](designs/gpu-recognition-measurements.md).
-No call reaches the GPU until the image build's pinned mimus engine
-declares the exact-sum hook; with an engine that lacks it the recognizer
-never opens the session. The design's
+The image build's [pinned mimus engine](../apps/mimus/source.json) declares
+the exact-sum hook; supervised admission verifies that hook is linked. The design's
 ["Changes needed in the mimus engine"](designs/gpu-recognition.md#changes-needed-in-the-mimus-engine)
-gives the engine commit that provides the hook. No board has run any part
-of it. The
-option is off by default. With it off, the default OS images differ from
-their earlier builds only by the inference worker on core 3 (about 1.6 KiB
-of code and a 64 KiB stack) and the build identity.
+gives the hook's original integration. No board has run integrated OS GPU
+recognition. The option is off by default. It supports the existing resident
+compositions and supervised recorded recognition with two inference workers.
+The supervised GPU profile excludes capture, radio, headset, NPU and CPU clock
+controls; eight-worker GPU recognition remains unsupported.
 
 ## Parts in this package
 
@@ -96,7 +95,7 @@ measurements replace, are:
 | --- | --- |
 | A55 NEON rate | 4,167,910,560 MACs in 14.894 s at 494 MHz, 0.280 G MAC/s per core |
 | A76 NEON rate | Twice the A55's per clock |
-| GPU rate | 32 lanes at 400 MHz, 3.39 instructions per MAC (217 instruction groups per 64 MACs, the built program), over a grid padded to 32 rows by 16 channels; `--load-cycles` adds a load-latency bound |
+| Historical placement-model GPU rate | 32 lanes at 400 MHz, 3.39 instructions per MAC (217 instruction groups per 64 MACs, the built program), over a grid padded to 32 rows by 16 channels; `--load-cycles` adds a load-latency bound. The current hardware clock is 1008 MHz; this unchanged model is not a measurement of it. |
 | Read-out | 3.0 instructions per GPU output, the engine's compiled read-out counted on the placed shapes ([measurements](designs/gpu-recognition-measurements.md#with-the-engines-hook)); 1 per clock on an A55, 2 on an A76 |
 | Cache maintenance | 20 cycles per 64-byte line |
 | Per-job overhead | 25 µs submit, 25 µs firmware, 25 µs wake; 10 µs to hand work to the second worker |
@@ -105,7 +104,8 @@ The recognition core pair is a build constant. Until the A76 cores are
 admitted it is cores 2 and 3 at 494 MHz; with `A733_A76_ADMITTED` it is cores
 6 and 7 at 2,002 MHz. The recognizer runs on the first core and the engine's
 second inference worker (`apps/mimus/parallel_runtime.cc`) on the second,
-in the GPU build and in every other OS build. The emitted tables for the
+in the two-worker GPU build. Other supported OS profiles can use eight
+workers, as described in [the multicore recognition guide](mimus-smp.md). The emitted tables for the
 bench models are:
 
 | Layer, K → N | A55 pair: n_gpu, job_rows | A76 pair: n_gpu, job_rows |
@@ -160,8 +160,9 @@ recognizer is its only writer.
 ## Session lifecycle and failures
 
 Before every model hash matches there is no OPEN and every row reads as
-CPU-only. A refused or failed OPEN keeps the CPU for the boot and is not
-retried. A refused job runs on the CPU and the session stays open. A missing
+CPU-only. An OPEN refused before queue acceptance keeps the CPU for the boot
+and is not retried. An accepted OPEN with an uncertain reply fails the board
+and retains ownership. A refused job runs on the CPU and the session stays open. A missing
 tag, unexpected sequence or sum that differs from the CPU's makes
 `os_dispatch_incomplete` clear the active count at once. Before removing itself
 from the engine, the hook requires acknowledged terminal shutdown through the
@@ -172,17 +173,22 @@ retirement keeps all backing and permanently closes GPU admission, so later
 calls use the engine's CPU paths without a reopen. A lost
 job makes `os_dispatch_failed` record it, clear the active count and take the
 recognizer's failure path (`board_fail`, then suspension) before any CPU row
-of the failed job; the watchdog resets the board. A reply that never comes
-stops the recognizer's progress, and the watchdog resets the board within 4 s
-of the last renewal. [gpu-mimus-service.md](gpu-mimus-service.md#failure-classes)
+of the failed job. A missing or late reply reaches the same retained failure
+path through a distinct caller timeout, without claiming GPU completion.
+[gpu-mimus-service.md](gpu-mimus-service.md#failure-classes)
 gives each failure's class and what stays retained.
 
 RESET ends the boot like LOST because the models and the code span are
 trustworthy after a GPU fault only if the GPU's MMU enforces its read-only
-mappings, which no board has shown. The recognizer has no timer of its own:
-the resident lifetime's service window bounds every GPU wait, so CMake
-refuses the option in the supervised lifetime. After a GPU fault, or when the
-recognizer's window expires while the session is being opened or places
+mappings, which no board has shown for this recognition path. Caller waits
+now have fixed deadlines: two seconds from job submission and one second
+for a complete OPEN or CLOSE, shortened by session admission. Neither polling
+nor a later lifetime renewal extends them. Supervised preparation binds the
+actual ELF's configuration, firmware, placement and interrupt/start entries
+to a reviewed GPU entry with explicit manual power removal and retention.
+See [the bounded reply design](designs/gpu-recognition-wait.md). In a resident
+image, after a GPU fault or when the recognizer's service window expires while
+the session is being opened or places
 calls, the supervisor's stop detail is `OS_STOP_DETAIL_GPU_LOSS`, and the next
 boot reads it from the retained fault slot and keeps OPEN refused.
 
@@ -215,7 +221,8 @@ worker EL1 and creates it before the scheduler starts.
 `SUNSTONE_A733_OS_GPU_LINEAR` is off by default. With it on, configuration
 stops unless:
 
-- `SUNSTONE_A733_OS_RESIDENT` is on;
+- supervised builds use recorded recognition with two workers and exclude
+  capture, radio, headset, NPU and CPU clock/performance controls;
 - `A733_GPU_OUTPUT_EL0_READ_ONLY` is not given: the branch sets it itself,
   which maps `0x46C00000`–`0x47000000` read-only at EL0 and EL1 as two 2 MiB
   blocks, so no CPU store can leave a dirty line whose eviction overwrites
@@ -232,12 +239,13 @@ it ([gpu-mimus-service.md](gpu-mimus-service.md#one-job)).
 
 ```sh
 cmake -S . -B BUILD ... -DSUNSTONE_MIMUS_BOARD_APPLICATION=ON -DSUNSTONE_A733_OS=ON \
-  -DSUNSTONE_A733_OS_RESIDENT=ON -DSUNSTONE_A733_OS_GPU_LINEAR=ON \
-  -DSUNSTONE_GPU_FIRMWARE=<gpu.fw> -DSUNSTONE_A733_OS_MODEL_DIR=<models> [-DSUNSTONE_A733_OS_AUDIO=ON]
+  -DSUNSTONE_A733_OS_GPU_LINEAR=ON \
+  -DSUNSTONE_GPU_FIRMWARE=<gpu.fw> -DSUNSTONE_A733_OS_MODEL_DIR=<models>
 ```
 
-The recognizer patch applies after the microphone or headset capture patch,
-so the option combines with either capture source.
+Resident builds additionally set `SUNSTONE_A733_OS_RESIDENT=ON` and retain
+their existing microphone and headset capture options. The recognizer patch
+applies after the selected capture patch.
 
 ## What other owners provide
 
@@ -287,7 +295,9 @@ PYTHONDONTWRITEBYTECODE=1 ~/.cache/sunstoneos/venv/bin/python checks/os-image-di
 - An EL0 store into `0x46C00000`–`0x47000000` faults, and the check in
   `mimus_board_pins` passes.
 - INTID 95 arrives on the recognition core for every job.
-- An injected hang ends in LOST, `board_fail`, a watchdog reset and a
+- A supervised missing reply ends in caller TIMEOUT and retained recognizer
+  suspension; the board remains unavailable until whole-board power removal.
+- In a resident image, an injected hang ends in LOST, `board_fail`, a watchdog reset and a
   CPU-only next boot; after it, the loader's model hashes match. This is an
   intentional watchdog expiry, which waits for a qualified reset destination
   and recovery. A one-hour resident run never stops watchdog renewal.

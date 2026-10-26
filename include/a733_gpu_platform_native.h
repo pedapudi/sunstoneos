@@ -9,8 +9,12 @@ struct a733_gpu_platform_native {
 };
 /* AArch64 EL1; zero storage first. Uses the same globally shared locks as the
  * native resource adapter. Init reads CNTFRQ only and requires 24 MHz. Callbacks
- * require identity Device mappings, qualified watchdog recovery, and a live
- * platform LOCAL lease. They are private to that platform, not raw user APIs. */
+ * require identity Device mappings and a live platform LOCAL lease. Legacy
+ * callers require qualified watchdog recovery. The integrated OS's supervised
+ * recorded GPU caller instead requires its exact reviewed GPU entry and manual
+ * whole-board power removal, retaining every resource until then; see
+ * docs/designs/gpu-recognition-wait.md. No other caller inherits that exception.
+ * Callbacks are private to that platform, not raw user APIs. */
 /* Counter callback for constructing shared locks before either native adapter.
  * Do not use it for device work until native init validates the counter rate. */
 int a733_gpu_platform_native_now(void *, uint64_t *);

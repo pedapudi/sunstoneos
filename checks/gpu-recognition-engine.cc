@@ -104,14 +104,14 @@ extern "C" int a733_gpu_mimus_begin(const struct pvr_mimus_request *job)
     busy = true;
     return 1;
 }
-extern "C" void a733_gpu_mimus_finish(struct pvr_mimus_record *done)
+extern "C" int a733_gpu_mimus_finish(struct pvr_mimus_record *done)
 {
     CHECK(busy);
     busy = false;
     unsigned index = submitted_jobs - 1;
     CHECK(os_dispatch_gpu_state() == OS_DISPATCH_GPU_WAITING);
-    if (index == script.job && script.fault == REFUSE_RECORD) { *done = {sequence + 1, PVR_MIMUS_REFUSED}; return; }
-    if (index == script.job && script.fault == LOSE) { *done = {sequence + 1, PVR_MIMUS_LOST}; return; }
+    if (index == script.job && script.fault == REFUSE_RECORD) { *done = {sequence + 1, PVR_MIMUS_REFUSED}; return 1; }
+    if (index == script.job && script.fault == LOSE) { *done = {sequence + 1, PVR_MIMUS_LOST}; return 1; }
     os_gpu_tensor t;
     CHECK(a733_gpu_mimus_tensor(in_flight.ordinal, &t));
     const uint32_t k = t.k, stride = t.stride;
@@ -137,6 +137,7 @@ extern "C" void a733_gpu_mimus_finish(struct pvr_mimus_record *done)
     if (index == script.job && script.fault == DROP_TAG) tag[tags / 2] = sequence - 1;
     *done = {sequence, PVR_MIMUS_OK};
     if (index == script.job && script.fault == STALE_RECORD) --done->sequence;
+    return 1;
 }
 
 // ---- Engine model ---------------------------------------------------------

@@ -27,7 +27,9 @@ extern const uint32_t os_placement_rows;
 extern const uint8_t os_placement_gpu_ordinals[];
 
 /* Completion states the hook reports (GPU kernel design). */
-enum { OS_DISPATCH_RESET = 1, OS_DISPATCH_LOST = 2 };
+enum { OS_DISPATCH_RESET = 1, OS_DISPATCH_LOST = 2, OS_DISPATCH_TIMEOUT = 3 };
+/* Caller outcomes, distinct from the worker's actual completion record. */
+enum { OS_GPU_CALL_LOST = -1, OS_GPU_CALL_TIMEOUT = -2 };
 /* Why the resident supervisor stopped renewal after a GPU loss: a value
  * outside the service numbers 1..OS_SERVICES (apps/os/services.c). The next
  * boot reads it from the retained fault slot and keeps the GPU closed. */
@@ -37,8 +39,8 @@ struct os_dispatch_record {
     uint64_t placed;      /* calls that placed channels on the GPU */
     uint64_t refused;     /* jobs refused before device access, computed on the CPU */
     uint32_t opened;      /* 1 after OPEN succeeded */
-    uint32_t open_failed; /* 1 after OPEN was refused or failed */
-    uint32_t failure;     /* OS_DISPATCH_RESET or OS_DISPATCH_LOST, recorded before board_fail */
+    uint32_t open_failed; /* 1 after OPEN was refused before queue acceptance */
+    uint32_t failure;     /* RESET, LOST or caller TIMEOUT, before board_fail */
     uint32_t incomplete;  /* 1 after a completed job fails output validation */
 };
 extern struct os_dispatch_record os_dispatch_record;
@@ -46,8 +48,9 @@ extern struct os_dispatch_record os_dispatch_record;
 extern uint32_t os_dispatch_active;
 
 /* Recognizer task, once, after every model hash matched. Asks the GPU worker
- * to OPEN the session; on success every table row becomes active, otherwise
- * every tensor stays on the CPU for the boot. Returns 1 when opened. */
+ * to OPEN the session; on success every table row becomes active. A refusal
+ * before queue acceptance keeps tensors on the CPU; uncertainty after
+ * acceptance enters the terminal failure path. Returns 1 when opened. */
 int os_dispatch_open(void);
 /* Hook, per layer: the tensor's row while the session is open and thermal
  * throttling is clear, else n_gpu = 0. An admitted layer may finish its
@@ -71,7 +74,7 @@ enum { OS_DISPATCH_GPU_IDLE, OS_DISPATCH_GPU_WAITING, OS_DISPATCH_GPU_FAULT };
 unsigned os_dispatch_gpu_state(void);
 /* Hook, on a RESET or LOST completion and before it computes any row on the
  * CPU: records the state and ends the boot through the recognizer's failure
- * path (board_fail, then the watchdog reset). Does not return. */
+ * path (board_fail, then suspension retaining all ownership). Does not return. */
 __attribute__((noreturn)) void os_dispatch_failed(unsigned state);
 
 /* Provided by the recognizer (apps/os/recognition-dispatch.patch). */
@@ -86,7 +89,8 @@ extern struct tskTaskControlBlock *os_recognizer;
  * open: the recognizer, initially and after healthy thermal park; the worker
  * powers the GPU, starts the firmware,
  * publishes the session and formats its client ring. 1 when the session is
- * ready. Its waits record no service progress. */
+ * ready, 0 refused before queue acceptance, negative caller outcome on
+ * retained failure. Its waits record no service progress. */
 int a733_gpu_mimus_start(unsigned core);
 int a733_gpu_mimus_open(void);
 /* Recognizer only, between complete matmul calls after all output reads.
@@ -100,10 +104,11 @@ int a733_gpu_mimus_thermal(void);
 int a733_gpu_mimus_retire(void);
 /* One job of a placed call. begin writes the slot and wakes the worker
  * without waiting: 1 submitted (finish returns its record), 0 refused before
- * any device access (the caller computes the rows), -1 the session is lost.
- * finish waits for the record. */
+ * any device access (the caller computes the rows), negative caller outcome
+ * on retained failure. finish returns 1 only for an actual timely record;
+ * a negative caller outcome leaves ownership pending. */
 int a733_gpu_mimus_begin(const struct pvr_mimus_request *);
-void a733_gpu_mimus_finish(struct pvr_mimus_record *);
+int a733_gpu_mimus_finish(struct pvr_mimus_record *);
 /* The tensor admitted at start: K, N, weight stride and the CPU address of
  * weight row 0; 0 when the tensor is not on the GPU. */
 struct os_gpu_tensor { uint32_t k, n, stride; const int8_t *weights; };

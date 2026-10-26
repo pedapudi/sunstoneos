@@ -190,6 +190,7 @@ def main():
     for name in ('build', 'base', 'overlay', 'wav', 'output'):
         parser.add_argument('--' + name, type=Path, required=True)
     parser.add_argument('--staged', action='store_true', help='explicit USB0-only recorded workload 2')
+    parser.add_argument('--gpu-only', action='store_true', help='only supervised GPU artifact, entry and frozen-launch admission')
     parser.add_argument('--clang', type=Path, default=Path('/usr/bin/clang-21'))
     parser.add_argument('--lld', type=Path, default=Path.home() / '.cache/sunstoneos/host/usr/bin/ld.lld-21')
     args = parser.parse_args()
@@ -199,6 +200,8 @@ def main():
     link_check = args.build / 'os-image/link-check.json'
     manifest = json.loads(link_check.read_text())
     audio = manifest['audio']
+    if args.gpu_only:
+        assert manifest.get('gpu_linear') and not audio
     # The CPU clock build appends the driver's 96-byte grant record.
     cpu_clock = 'SUNSTONE_A733_OS_CPU_CLOCK:BOOL=ON' in (args.build / 'CMakeCache.txt').read_text()
     image_hash = hashlib.sha256(image.read_bytes()).hexdigest()
@@ -253,6 +256,9 @@ def main():
                            'one_attempt': True, 'evidence': [marker]}}
     if manifest.get('inference', {}).get('workers') == 8:
         record['inference'] = manifest['inference']
+    if manifest.get('gpu_linear'):
+        record['gpu'] = {'configuration': manifest['gpu_profile'],
+                         'conditions': {key: marker for key in sorted(prep.GPU_CONDITIONS)}}
     for key, offset in zip(thermal_facts, (632, 664, 696, 728)):
         ref = put('thermal-' + key, {**target, 'schema': 'a733-thermal-' + key + '-v1', 'reviewed': True,
                                      **dict.fromkeys(thermal_facts[key], True)})
@@ -321,6 +327,82 @@ def main():
     (out / 'changed-size-contract.bin').write_bytes(changed)
     assert not admit(out / 'changed-size-contract.bin', armed + HZ // 10)
     cases['image-admission-accepts-launched-contract'] = True
+    if args.gpu_only:
+        from harness import refused as reject
+        prepared = tool.freeze_bundle(bundle, 1)
+        tool.entry_check(prepared, target['identity'], target['port'])
+        cases['frozen-launch-entry'] = True
+        # Frozen admission must use the retained bytes even if every original
+        # evidence path is unavailable. Preserve all fixture files on disk.
+        original_read = Path.read_bytes
+        try:
+            def no_read(path):
+                raise AssertionError('Frozen entry reopened a path: ' + str(path))
+            Path.read_bytes = no_read
+            tool.entry_check(prepared, target['identity'], target['port'])
+        finally:
+            Path.read_bytes = original_read
+        cases['frozen-entry-needs-no-original-files'] = True
+
+        def entry_case(name, change, reason):
+            altered = copy.deepcopy(record)
+            change(altered)
+            frozen = dict(prepared['_combined_frozen'])
+            frozen['board/admission.json'] = json.dumps(altered).encode()
+            reject(lambda: tool.entry_check(dict(prepared, _combined_frozen=frozen),
+                                             target['identity'], target['port']), reason)
+            cases[name] = True
+
+        entry_case('missing-gpu-entry', lambda value: value.pop('gpu'), 'Reviewed GPU entry')
+        entry_case('changed-entry-deadline', lambda value: value['gpu']['configuration'].update(reply_us=1), 'Reviewed GPU entry')
+        entry_case('missing-gpu-condition', lambda value: value['gpu']['conditions'].pop(next(iter(prep.GPU_CONDITIONS))),
+                   'Incomplete GPU physical entry conditions')
+        entry_case('changed-gpu-evidence', lambda value: value['gpu']['conditions'][next(iter(prep.GPU_CONDITIONS))].update(sha256='0' * 64),
+                   'Evidence changed')
+        entry_case('no-power-removal', lambda value: value.update(whole_board_power_removal=False), 'complete-power-removal')
+        source = image.read_bytes()
+        altered_manifest = copy.deepcopy(manifest)
+        altered_manifest['gpu_profile']['core'] = 2
+        reject(lambda: prep.image_manifest_check(altered_manifest, source), 'GPU manifest differs')
+        cases['changed-manifest-placement'] = True
+        missing = source.replace(b'os_gpu_configuration\0', b'xs_gpu_configuration\0')
+        assert missing != source
+        reject(lambda: prep.image_manifest_check(manifest, missing), 'lacks the bounded caller configuration')
+        downgraded = dict(manifest, gpu_linear=False, gpu_profile=None)
+        reject(lambda: prep.image_manifest_check(downgraded, missing), 'lacks the bounded caller configuration')
+        cases['missing-capability-and-downgrade-refused'] = True
+        elf = prep.os_link.Elf(source)
+
+        def changed_symbol(name, offset):
+            symbol = next(s for s in elf.symbols if s['name'] == name and s['shndx'] != 0)
+            section = elf.sections[symbol['shndx']]
+            index = section[4] + symbol['value'] - section[3] + offset
+            data = bytearray(source)
+            data[index] ^= 1
+            return bytes(data)
+
+        for name, offset, reason in (('gpu_firmware', 0, 'GPU firmware differs'),
+                                    ('os_placement_table', 0, 'GPU manifest differs'),
+                                    ('a733_irq_routes', 16 + 2, 'GPU interrupt route differs'),
+                                    ('os_applications', 2 * 32 + 24, 'GPU start entry differs')):
+            changed = changed_symbol(name, offset)
+            reject(lambda: prep.image_manifest_check(manifest, changed), reason)
+            cases['changed-' + name] = True
+        profile = next(s for s in elf.symbols if s['name'] == 'os_contract_profile' and s['shndx'] != 0)
+        section = elf.sections[profile['shndx']]
+        at = section[4] + profile['value'] - section[3]
+        resident = bytearray(source)
+        struct.pack_into('<Q', resident, at, 0x415337334f524331)
+        reject(lambda: prep.image_manifest_check(manifest, resident), 'actual linked supervised contract')
+        cases['resident-elf-cannot-claim-supervised'] = True
+        missing_contract = source.replace(b'os_contract_profile\0', b'xs_contract_profile\0')
+        reject(lambda: prep.image_manifest_check(manifest, missing_contract), 'linked OS contract profile')
+        cases['missing-contract-record-refused'] = True
+        (out / 'result.json').write_text(json.dumps(dict(passed=True, physical_access=False,
+            image_sha256=image_hash, build_id=manifest['build_id'], cases=cases,
+            limits='Synthetic entry facts only. Actual preparation, native admission and frozen launcher validation; no transport.'), indent=2) + '\n')
+        print('PASS supervised GPU preparation and frozen entry:', len(cases), 'focused cases')
+        return
     if args.staged:
         # Reseal mutated sessions so refusal comes from native field rules.
         for name, offset, value in (('rom-takeover',532,2),('host-revision',536,1),
