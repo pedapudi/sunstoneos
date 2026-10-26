@@ -110,7 +110,8 @@ int a733_video_unit_clocks(struct a733_video_unit *);
 /* The same checks for a cold start. A programmed PLL may instead be disabled
  * (enable, lock enable, LOCK and output gate clear, lock levels zero, nothing
  * set outside the documented fields but reserved bit 24, which is kept), or
- * enabled at the vendor factors with its output closed. One that already runs
+ * enabled at the vendor factors with its output closed and lock enable either
+ * way. One that already runs
  * the vendor profile with its output open is adopted. */
 int a733_video_unit_clocks_entry(struct a733_video_unit *);
 /* PLL_VE0 programming after a733_video_unit_clocks_entry, with the module

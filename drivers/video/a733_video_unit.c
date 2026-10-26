@@ -174,14 +174,15 @@ static int parents(struct a733_video_unit *u,int entry)
         const uint32_t running=PLL_OPEN|PLL_LOCK;
         /* Entry states: running the vendor profile with its output open,
          * which an earlier image in this power lifetime leaves (adopted);
-         * enabled at the vendor factors with its output closed, which a
-         * start that failed in the lock wait leaves (its lock is qualified
+         * enabled at the vendor factors with its output closed, lock enable
+         * either way, which a start that failed after its enable write
+         * leaves (lock enable is cleared and set and the lock qualified
          * again); disabled, with the lock levels zero and nothing set
          * outside the documented fields but bit 24. */
         if(entry) {
             const uint32_t w=pll&~PLL_INHERITED;
             u->pll_inherited=pll&PLL_INHERITED;
-            u->pll_state=w==running?PLL_ADOPTED:(w&~PLL_LOCK)==PLL_ENABLED?PLL_ENABLED_CLOSED:
+            u->pll_state=w==running?PLL_ADOPTED:(w&~(PLL_LOCK|BIT(29)))==(PLL_ENABLED&~BIT(29))?PLL_ENABLED_CLOSED:
                 !(w&UINT32_C(0xb8000000))&&!(w&~PLL_FIELDS)?PLL_OFF:0;
             if(!u->pll_state)return 0;
         }else if(!u->pll_done||pll!=(running|u->pll_inherited))return 0;
@@ -249,6 +250,8 @@ int a733_video_unit_pll_start(struct a733_video_unit *u)
     if(u->pll_state==PLL_ADOPTED){u->pll_done=1;return 1;}
     static const uint32_t enable[4][2]={{BIT(30),BIT(30)},{0x0070ff02u,A733_VIDEO_PLL_FACTORS},
         {BIT(31),BIT(31)},{BIT(29),BIT(29)}};
+    /* A PLL left enabled: lock enable cleared (skipped when already clear)
+     * and set again. */
     static const uint32_t relock[2][2]={{BIT(29),0},{BIT(29),BIT(29)}};
     const uint32_t (*table)[2]=u->pll_state==PLL_OFF?enable:relock;
     const unsigned steps=u->pll_state==PLL_OFF?4:2;

@@ -50,7 +50,9 @@ encoder, which also serves JPEG encoding, keeps its inherited start; the
   lists VDD-VE under DCDC2 at 0.8 V. The vendor U-Boot device tree's
   `ve-supply` names DCDC5 (`u-boot-current.dts` lines 1949 and 4197–4204),
   which contradicts both sheets; the board kernel's device tree has no
-  `ve-supply`. The schematic is the wiring, so SunstoneOS takes DCDC2: the
+  `ve-supply`. One row of the sheet 2 table lists VDD-CPUL on DC-DC3, which
+  contradicts sheet 6 (DCDC5 to VDD-CPUL); sheet 6, the PMIC wiring, governs.
+  The schematic is the wiring, so SunstoneOS takes DCDC2: the
   H.264, HEVC and JPEG decode admissions require the DCDC2 lease at 800 mV
   (`apps/jpeg/admission.c:15`, `apps/hevc/admission.c:20`,
   `apps/h264/admission.c:24`). DCDC2 also feeds DRAM, so no CPU-L operating
@@ -93,9 +95,10 @@ names PLL_VE0 and nothing else.
   - disabled: enable, lock enable, LOCK and the output gate clear, the
     lock-level fields (bits 7:5) zero, and no other bit set but the LDO, the
     factors and reserved bit 24;
-  - enabled at the vendor factors with its output closed, LOCK either way,
-    which a start that failed in its lock wait leaves; its lock is qualified
-    again, so a failure never needs a power cycle;
+  - enabled at the vendor factors with its output closed, lock enable and
+    LOCK either way, which a start that failed after its enable write leaves;
+    lock enable is cleared and set and the lock qualified again, so a failure
+    never needs a power cycle;
   - running the vendor profile with LOCK and its output open, which an earlier
     image in the same power lifetime leaves; it is adopted without a PLL
     write.
@@ -113,7 +116,8 @@ names PLL_VE0 and nothing else.
      4:0, gate closed.
   2. For a disabled PLL: LDO (bit 30, already on in the dumped word), factors
      `0x00204d00` into N, P0 and M1, enable (bit 31), lock enable (bit 29).
-     For a PLL left enabled: lock enable cleared, then set.
+     For a PLL left enabled: lock enable cleared (skipped when already
+     clear), then set.
 - **Wait**, the next poll, without the register lock. The exclusive PLL_VE0
   token makes the decoder the only writer of the word, as the PLL_NPU token
   does for the NPU startup. The lock wait is the one the CPU clock and the NPU
@@ -192,39 +196,46 @@ clock driver, device trees, operating-point table, `cedar_ve.c`, U-Boot and
 kernel device trees and the schematic's text, including the order of the
 vendor's enable, lock wait, lock-enable toggle and module clock gates, and
 with the port 3-3 dump words. It then builds and runs two models with
-address and undefined-behavior sanitizers and fourteen driver mutants that
+address and undefined-behavior sanitizers and seventeen driver mutants that
 the cold model must refuse. It checks the three session producers' defaults.
 It compiles the H.264, HEVC and JPEG applications' `native.c` with their
-configured flags and warnings as errors, and the changed drivers for
-AArch64.
+configured flags and warnings as errors, and fails unless all three compile;
+`--app-compile-commands` names the configured application builds. It also
+compiles the changed drivers for AArch64.
 
 - `checks/a733-video-cold.c` keeps its seven earlier cases with unchanged
-  output and adds fifteen. From the dumped FEL state it programs PLL_VE0 in
+  output and adds sixteen. From the dumped FEL state it programs PLL_VE0 in
   the table's order, skipping the LDO that is already on. It also writes the
   LDO when it is off, keeps a clear bit 24 clear, runs on the 26 MHz board
   and restarts the count when LOCK drops once. It relocks a PLL left enabled
-  with its output closed, with LOCK clear or set. It adopts a running vendor
-  PLL without a PLL write. It refuses before any write a PLL running at other
-  factors, a clear gate control, and entry words with enable, lock enable or
-  a lock level set. With no LOCK, or with a changed word during the wait, it
+  with its output closed: with lock enable and LOCK set, with LOCK clear, and
+  with lock enable clear. It adopts a running vendor PLL without a PLL write.
+  It refuses before any write a PLL running at other factors, a clear gate
+  control, and entry words at other factors with enable, lock enable or a
+  lock level set. With no LOCK, or with a changed word during the wait, it
   stops with the PLL enabled and the output and module gates closed. Every
   cold-start write passes the native write rule and stays in its owned bits;
   the rule is also checked against each PLL_VE0 consumer. The lock-wait reads
-  must come without the register lock. The model clock advances 1 µs per
-  eight reads of it, so only the binding's explicit waits can space the
-  reads.
-- The fourteen mutants: entry with enable or lock enable admitted, the lock
+  must come without the register lock. The model clock is the binding's
+  whole-microsecond counter and advances once per 64 reads of it, so only
+  the binding's explicit waits can space the reads. Because a reading t is
+  some instant in [t, t+1), the model requires 4 counter microseconds
+  between lock reads and 21 from the third LOCK read to the end of the wait,
+  which it checks at the open step's register-lock entry and at the output
+  gate write.
+- The seventeen mutants: entry with enable or lock enable admitted, the lock
   levels admitted, bit 24 forced on, enable before factors, LOCK written
-  back, no whole-word check per LOCK read, a LOCK drop ignored, reads 2 µs
-  apart, a 17 µs settle, a 50-read limit, the encoder or NPU consumer
-  ignored, and the lock wait under the register lock.
+  back, no whole-word check per LOCK read, a LOCK drop ignored, a 2 µs gap,
+  the gap or the settle without the extra microsecond, a 19 µs and an 18 µs
+  settle, a 50-read limit, the encoder or NPU consumer ignored, and the lock
+  wait under the register lock.
 - `checks/a733-video-platform.c`, the inherited-start model, writes the same
   traces as before the change. `checks/cpu-clock-check.py` passes with the
   shared constants. The NPU startup host model passes in all five modes with
   the same register reads and writes.
 
 The result is in
-`~/.cache/sunstoneos/evidence/video-pll-20261025/check-r2/result.json`.
+`~/.cache/sunstoneos/evidence/video-pll-20261025/check-r3/result.json`.
 
 ## Board plan
 

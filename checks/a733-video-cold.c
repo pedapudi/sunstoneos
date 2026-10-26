@@ -17,7 +17,7 @@ struct cold_model {
      * the lock-enable toggle, the position in the expected write sequence,
      * reads since lock enable was last set, consecutive LOCK reads, and the
      * times of the last of those reads and of the third LOCK read. */
-    unsigned pll,relock,pll_seq,pll_writes,pll_reads,pll_locked,waiting;
+    unsigned pll,relock,pll_seq,pll_writes,pll_reads,pll_locked,waiting,settle_seen;
     uint64_t pll_lock_at,pll_read_at;
 };
 #define PLL_LOCKS 1u   /* LOCK appears from the third read after lock enable. */
@@ -31,11 +31,13 @@ static int pll_read(struct cold_model *c,uint32_t *out)
     if(c->waiting) {
         ++c->pll_reads;
         /* The lock wait reads without the register mutex, each read after
-         * its first at least 3 us after the one before. The lock-enable
-         * readback precedes the wait, as the kernel's first lock read
-         * follows its write at once. */
+         * its first at least 3 us after the one before. The model's clock is
+         * the binding's whole-microsecond counter: a reading t is some
+         * instant in [t, t+1), so 3 us are guaranteed only 4 readings apart,
+         * and 20 us only 21 apart. The lock-enable readback precedes the
+         * wait, as the kernel's first lock read follows its write at once. */
         if(c->pll_reads>1&&c->pll_locked<3) {
-            assert(!m->lock&&(c->pll_reads==2||m->now>=c->pll_read_at+3));
+            assert(!m->lock&&(c->pll_reads==2||m->now>=c->pll_read_at+4));
             c->pll_read_at=m->now;
         }
         if(c->pll_reads>2&&c->pll!=PLL_NEVER&&!(c->pll==PLL_DROP&&c->pll_reads==4))v|=LOCKBIT;
@@ -62,7 +64,7 @@ static void pll_write(struct cold_model *c,uint32_t value)
     assert((m->ccu[0xa88/4]&0x0700001f)==0x01000000&&!(value&LOCKBIT));
     while(c->pll_seq<n-1&&(old&seq[c->pll_seq][0])==seq[c->pll_seq][1])++c->pll_seq;
     assert(c->pll_seq<n&&value==((old&~seq[c->pll_seq][0])|seq[c->pll_seq][1])&&value!=old);
-    if(c->pll_seq==n-1)assert(c->pll_locked==3&&m->now>=c->pll_lock_at+20);
+    if(c->pll_seq==n-1)assert(c->pll_locked==3&&m->now>=c->pll_lock_at+21);
     c->waiting=(value&0xa0000000u)==0xa0000000u&&c->pll_seq==n-2;
     if(c->waiting)c->pll_reads=c->pll_locked=0;
     m->ccu[0x220/4]=value|(c->pll_seq==n-1?LOCKBIT:0);
@@ -73,16 +75,25 @@ static int policy_read(void *v,uintptr_t a,uint32_t *out)
     struct model *m=&((struct cold_model *)v)->m;
     assert(a>=CCU&&a<CCU+sizeof(m->ccu));*out=m->ccu[(a-CCU)/4];return 1;
 }
-/* In the PLL cases the binding's clock advances 1 us per eight calls, so
- * that only its explicit waits, and not the time checks around each access,
- * space the LOCK reads and the settle. */
+/* In the PLL cases the binding's clock advances 1 us per 64 calls, so that
+ * only its explicit waits, and not the time checks around each access, space
+ * the LOCK reads and the settle, and a reading taken just after an access
+ * usually equals the reading during it. */
 static int cold_now(void *v,uint64_t *n)
 {
     struct cold_model *c=v;
     if(!c->pll)return now(v,n);
     static unsigned calls;
-    if(++calls%8==0)++c->m.now;
+    if(++calls%64==0)++c->m.now;
     *n=c->m.now;return 1;
+}
+/* The first register-lock entry after the third LOCK read is the open step,
+ * which follows the end of the lock wait: the settle must already hold. */
+static int cold_enter(void *v,uint64_t d)
+{
+    struct cold_model *c=v;
+    if(c->pll&&c->pll_locked==3&&!c->settle_seen){assert(c->m.now>=c->pll_lock_at+21);c->settle_seen=1;}
+    return enter(v,d);
 }
 static int cold_read(void *v,uintptr_t a,uint32_t *out)
 {
@@ -179,7 +190,7 @@ int main(int argc,char **argv)
 {
     assert(argc==3||(argc==4&&!strcmp(argv[3],"--reset")));uint8_t bytes[65536];
     FILE*f=fopen(argv[1],"rb");assert(f);size_t n=fread(bytes,1,sizeof(bytes),f);assert(n&&n<sizeof(bytes));fclose(f);
-    /* Cases 7-21 start at the vendor operating point with PLL_VE0 as the
+    /* Cases 7-22 start at the vendor operating point with PLL_VE0 as the
      * port 3-3 clock dump read it at FEL entry (board-session-20261025-24,
      * clock-audit-b): disabled at 0x41305a00, gate controls 0x00030003 and
      * status 0x00030000, module word 0. Each row gives the entry word, the
@@ -201,13 +212,14 @@ int main(int argc,char **argv)
         {0x41305a00u,PLL_CHANGED,0,3,0xe1204d00u,"a changed word during the wait"},
         {0xe1204d00u,PLL_LOCKS,1,3,0xf9204d00u,"left enabled by a failed start: relocked"},
         {0xf1204d00u,PLL_LOCKS,1,3,0xf9204d00u,"left enabled and locked: relocked"},
+        {0xc1204d00u,PLL_LOCKS,1,2,0xf9204d00u,"left enabled before lock enable: relocked"},
     };
     const unsigned cases=7+sizeof(vendor_cases)/sizeof(vendor_cases[0]);
     for(unsigned test=0;test<cases;++test) {
         if(argc==4&&test)continue;
         const unsigned vendor=test>=7,row=vendor?test-7:0;
         struct cold_model c={.fault=vendor?0:test,.pll=vendor?vendor_cases[row].scenario:0,
-            .relock=vendor&&(vendor_cases[row].entry&0xa0000000u)==0xa0000000u};struct model*m=&c.m;
+            .relock=vendor&&(vendor_cases[row].entry&0x80000000u)};struct model*m=&c.m;
         setup(m,argc==4?UINT64_C(0x3331000021320):UINT64_C(0x3332100021321));
         f=fopen(argv[2],"rb");assert(f);assert(fread(c.rom,1,sizeof(c.rom),f)==sizeof(c.rom));assert(fgetc(f)==EOF);fclose(f);
         m->ccu[0xa88/4]&=~0x80000000u;m->ccu[0xa8c/4]=0x10001;
@@ -248,7 +260,7 @@ int main(int argc,char **argv)
         assert(a733_clock_acquire(&clocks,100,scopes,A733_CLOCK_VE_DEC,100000,&conflict)!=A733_CLOCK_OK);
         /* Another PLL_VE0 consumer cannot share the PLL being programmed. */
         if(vendor)assert(a733_clock_acquire(&clocks,101,A733_CLOCK_PLL_VE0,A733_CLOCK_NPU,100000,&conflict)==A733_CLOCK_BUSY);
-        struct a733_video_platform_ops ops={cold_now,admit,memory,drain,enter,leave,cold_read,cold_codec_write};
+        struct a733_video_platform_ops ops={cold_now,admit,memory,drain,cold_enter,leave,cold_read,cold_codec_write};
         struct a733_video_platform p={0};assert(a733_video_platform_init(&p,&config,&ops,&c));
         struct a733_video_jpeg_job job={bytes,n,0x81000000,65536,0x82000000,2048,0x83000000,1024};
         struct a733_video_jpeg_run run={0};assert(a733_video_jpeg_begin(&run,a733_video_platform_jpeg_ops(),&p,&job,100000));
@@ -298,5 +310,5 @@ int main(int argc,char **argv)
         else printf("case%u result%d cold_writes%u ROM_reads%u drain%u\n",test,result,test%6?m->writes:14,c.rom_reads,m->drain);
     }
     puts("PASS: immutable-ROM cold admission, reset held through power acknowledgement, preserved counterpart gates, JPEG completion with independent drain, 24/26MHz DCXO references, retained failures. Model only.");
-    if(argc==3){policy();puts("PASS: PLL_VE0 at the vendor 624 MHz from the dumped FEL state and fourteen other entry and lock cases; the lock wait without the register mutex; the native write allowlist on every cold-start write and against every PLL_VE0 consumer; exclusive PLL scope. Model only.");}
+    if(argc==3){policy();puts("PASS: PLL_VE0 at the vendor 624 MHz from the dumped FEL state and fifteen other entry and lock cases; the lock wait without the register mutex; the native write allowlist on every cold-start write and against every PLL_VE0 consumer; exclusive PLL scope. Model only.");}
 }

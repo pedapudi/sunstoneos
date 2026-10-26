@@ -16,8 +16,8 @@ CACHE = Path.home()/'.cache/sunstoneos'
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--output', type=Path, required=True)
 p.add_argument('--clang', default='clang')
-p.add_argument('--app-compile-commands', type=Path, nargs='*', default=[],
-               help='compile_commands.json of configured apps/{h264,hevc,jpeg} builds; their native.c is compiled')
+p.add_argument('--app-compile-commands', type=Path, nargs='+', required=True,
+               help='compile_commands.json of configured apps/{h264,hevc,jpeg} builds; each native.c must compile')
 a = p.parse_args()
 a.output.mkdir(parents=True, exist_ok=False)
 paths = {
@@ -202,8 +202,12 @@ MUTANTS = [
     ('include/a733_pll_lock.h', "if(read(cookie,&v)!=1 || (v&~A733_PLL_LOCK_BIT)!=word || now(cookie,&t)!=1)return 0;",
      "if(read(cookie,&v)!=1 || now(cookie,&t)!=1)return 0;", 'no whole-word check per LOCK read'),
     ('include/a733_pll_lock.h', 'if(!locked){l->locked=0;return 0;}', 'if(!locked)return 0;', 'LOCK drop ignored'),
-    ('include/a733_pll_lock.h', '#define A733_PLL_LOCK_GAP_US 3u', '#define A733_PLL_LOCK_GAP_US 1u', 'reads 2 us apart'),
-    ('include/a733_pll_lock.h', '#define A733_PLL_LOCK_SETTLE_US 20u', '#define A733_PLL_LOCK_SETTLE_US 16u', 'settle of 17 us'),
+    ('include/a733_pll_lock.h', '#define A733_PLL_LOCK_GAP_US 3u', '#define A733_PLL_LOCK_GAP_US 2u', 'a 2 us gap'),
+    ('include/a733_pll_lock.h', 'next=t+A733_PLL_LOCK_GAP_US+1u;', 'next=t+A733_PLL_LOCK_GAP_US;', 'gap without the extra microsecond'),
+    ('include/a733_pll_lock.h', '#define A733_PLL_LOCK_SETTLE_US 20u', '#define A733_PLL_LOCK_SETTLE_US 19u', 'a 19 us settle'),
+    ('include/a733_pll_lock.h', '#define A733_PLL_LOCK_SETTLE_US 20u', '#define A733_PLL_LOCK_SETTLE_US 18u', 'an 18 us settle'),
+    ('include/a733_pll_lock.h', '{return l->counted_at+A733_PLL_LOCK_SETTLE_US+1u;}', '{return l->counted_at+A733_PLL_LOCK_SETTLE_US;}',
+     'settle without the extra microsecond'),
     ('include/a733_pll_lock.h', '#define A733_PLL_LOCK_MAX_READS 100u', '#define A733_PLL_LOCK_MAX_READS 50u', '50 reads'),
     ('drivers/video/a733_video_platform.c', '{{0xa80,0},{0xa88,1},{0xb00,4}}', '{{0xa88,1},{0xb00,4}}', 'encoder consumer ignored'),
     ('drivers/video/a733_video_platform.c', '{{0xa80,0},{0xa88,1},{0xb00,4}}', '{{0xa80,0},{0xa88,1}}', 'NPU consumer ignored'),
@@ -257,6 +261,7 @@ for commands in a.app_compile_commands:
         r = subprocess.run(args + ['-Werror'], cwd=e['directory'], capture_output=True, text=True)
         assert r.returncode == 0, r.stderr
         applications[e['file'].split('/')[-2]] = 'compiled with -Werror'
+assert sorted(applications) == ['h264', 'hevc', 'jpeg'], ('application native.c compiles missing', sorted(applications))
 for target in ('drivers/video/a733_video_unit.c', 'drivers/video/a733_video_platform.c',
                'drivers/video/a733_video_encode_platform.c'):
     subprocess.run([a.clang, '--target=aarch64-none-elf', '-std=c11', '-Wall', '-Wextra', '-Werror', '-O2',

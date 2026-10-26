@@ -10098,7 +10098,8 @@
   "library": false,
   "pure_host": false,
   "required_arguments": [
-   "--output"
+   "--output",
+   "--app-compile-commands"
   ],
   "summary": "Check the video PLL profile against pinned sources and the board dump, then run the decoder cold-start model.",
   "usb": false
