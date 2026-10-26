@@ -76,25 +76,25 @@ struct plan {
 #if OPP_BUNDLE == 20
 static const struct plan plan = {"CPU-B 1404 MHz and back to 1014 MHz at 800 mV, no PMIC write",
     1u << A733_CPU_BIG, {0, 1404}, 2,
-    {{OP_CLOCK, A733_CPU_BIG, 1404, 800}, {OP_CLOCK, A733_CPU_BIG, 1014, 800}}};
+    {{OP_CLOCK, A733_CPU_BIG, 1404, 800}, {OP_CLOCK, A733_CPU_BIG, 1014, 800}}, {0, 0}, 0};
 #elif OPP_BUNDLE == 21
 static const struct plan plan = {"DCDC3 1050 mV and back to 800 mV, CPU-B held at 1014 MHz",
-    0, {0, 0}, 2, {{OP_VOLT, A733_CPU_BIG, 0, 1050}, {OP_VOLT, A733_CPU_BIG, 0, 800}}};
+    0, {0, 0}, 2, {{OP_VOLT, A733_CPU_BIG, 0, 1050}, {OP_VOLT, A733_CPU_BIG, 0, 800}}, {0, 0}, 0};
 #elif OPP_BUNDLE == 22
 static const struct plan plan = {"CPU-L 1196 MHz and the DSU 780 MHz at 800 mV",
     1u << A733_CPU_LITTLE, {1196, 0}, 4,
     {{OP_RATE, 0, 0, 0}, {OP_CLOCK, A733_CPU_LITTLE, 1196, 800}, {OP_RATE, 0, 0, 0},
-     {OP_CLOCK, A733_CPU_DSU, 780, 800}}};
+     {OP_CLOCK, A733_CPU_DSU, 780, 800}}, {0, 0}, 0};
 #elif OPP_BUNDLE == 23
 static const struct plan plan = {"CPU-B 2002 MHz at 1050 mV with the DSU at 910 MHz, then CPU-B 1014 MHz at 800 mV",
     (1u << A733_CPU_LITTLE) | (1u << A733_CPU_BIG), {1196, 2002}, 4,
     {{OP_CLOCK, A733_CPU_BIG, 2002, 1050}, {OP_CLOCK, A733_CPU_DSU, 910, 800},
-     {OP_CLOCK, A733_CPU_DSU, 598, 800}, {OP_CLOCK, A733_CPU_BIG, 1014, 800}}};
+     {OP_CLOCK, A733_CPU_DSU, 598, 800}, {OP_CLOCK, A733_CPU_BIG, 1014, 800}}, {0, 0}, 0};
 #elif OPP_BUNDLE == 24
 static const struct plan plan = {"CPU-L 1794 MHz at 1000 mV and the DSU 1274 MHz",
     1u << A733_CPU_LITTLE, {1794, 0}, 4,
     {{OP_RATE, 0, 0, 0}, {OP_CLOCK, A733_CPU_LITTLE, 1794, 1000}, {OP_RATE, 0, 0, 0},
-     {OP_CLOCK, A733_CPU_DSU, 1274, 1000}}};
+     {OP_CLOCK, A733_CPU_DSU, 1274, 1000}}, {0, 0}, 0};
 #elif OPP_BUNDLE == 25
 /* Step 6, before the workload: the top points of all three domains, left in
  * place. The ROM return resets the clocks and keeps the rails, which bundle
@@ -109,7 +109,7 @@ static const struct plan plan = {"CPU-B 2002 MHz at 1050 mV, CPU-L 1794 MHz at 1
  * the same rails and the temperatures. */
 static const struct plan plan = {OPP_BUNDLE == 26 ? "DCDC5 1000 mV and DCDC3 1050 mV kept across the ROM return, read only"
                                                   : "temperatures and rails after the top-point workload, read only",
-    0, {0, 0}, 0, {{0}}, {1000, 1050}, 1};
+    0, {0, 0}, 0, {{OP_RATE, 0, 0, 0}}, {1000, 1050}, 1};
 #else
 #error OPP_BUNDLE names no step
 #endif
