@@ -70,11 +70,11 @@ if(NOT SUNSTONE_A733_OS_PERF_BOOT STREQUAL "high" AND NOT SUNSTONE_A733_OS_PERF_
   message(FATAL_ERROR "SUNSTONE_A733_OS_PERF_BOOT is high or low")
 endif()
 if(SUNSTONE_A733_OS_NPU)
-  # With the performance-mode service, the NPU profile also accepts the CPU grant.
+  # CPU grants compose with resident NPU, supervised GPU/NPU, or performance modes.
   if(SUNSTONE_A733_OS_AUDIO OR SUNSTONE_A733_OS_RADIO OR
-     SUNSTONE_A733_OS_HEADSET OR (SUNSTONE_A733_OS_CPU_CLOCK AND NOT SUNSTONE_A733_OS_PERF AND NOT SUNSTONE_A733_OS_RESIDENT) OR
-     SUNSTONE_A733_OS_GPU_LINEAR)
-    message(FATAL_ERROR "The NPU OS profile requires recorded audio, without other optional devices")
+     SUNSTONE_A733_OS_HEADSET OR (SUNSTONE_A733_OS_CPU_CLOCK AND NOT SUNSTONE_A733_OS_PERF AND NOT SUNSTONE_A733_OS_RESIDENT AND NOT SUNSTONE_A733_OS_GPU_LINEAR) OR
+     (SUNSTONE_A733_OS_GPU_LINEAR AND SUNSTONE_A733_OS_RESIDENT))
+    message(FATAL_ERROR "The NPU OS profile requires recorded recognition and a supported GPU/CPU composition")
   endif()
   set(SUNSTONE_OS_NPU_CATALOGUE "" CACHE FILEPATH "Authenticated five-model NPU artifacts map")
   set(SUNSTONE_OS_NPU_CLIENT_MODEL "0" CACHE STRING "Catalogue entry used by the separate NPU application")
@@ -170,14 +170,9 @@ if(SUNSTONE_A733_OS_AUDIO)
     drivers/audio/a733_audio_leases.c drivers/audio/dma_service_i2s_irq.c)
 endif()
 if(SUNSTONE_A733_OS_NPU)
-  set(os_npu_asset_option)
-  if(SUNSTONE_A733_OS_RESIDENT)
-    # Const data stays in the flat image but does not consume the fixed RX block.
-    set(os_npu_asset_option --ram-assets)
-  endif()
   execute_process(COMMAND "${Python3_EXECUTABLE}" "${os_root}/apps/os/npu-catalogue.py"
     --artifacts "${SUNSTONE_OS_NPU_CATALOGUE}" --model "${SUNSTONE_OS_NPU_CLIENT_MODEL}"
-    --output "${os_build}/npu-models.c" ${os_npu_asset_option} COMMAND_ERROR_IS_FATAL ANY)
+    --output "${os_build}/npu-models.c" COMMAND_ERROR_IS_FATAL ANY)
   list(APPEND os_sources "${os_build}/npu-models.c")
   list(APPEND os_added apps/os/npu.c apps/os/npu-client.c apps/os/npu-irq.c
     platform/a733/npu_native.c runtime/counter_clock.c drivers/npu/a733_npu_runtime.c drivers/npu/a733_npu_runtime_interim.c

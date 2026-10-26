@@ -8,6 +8,11 @@
 #include <stdint.h>
 #include "pvr_mimus_job.h"
 
+/* Fixed registry and pool identities, shared with combined session admission. */
+#define OS_GPU_CLIENT 7u
+#define OS_GPU_FIRMWARE_OWNER UINT64_C(0x4f53475055464d31)
+#define OS_GPU_SESSION_OWNER UINT32_C(0x4f534731)
+
 /* One row per tensor of the merged model, indexed by the tensor's ordinal:
  * base tensors in file order with overlay replacements in place, then the
  * overlay's new tensors (apps/os/placement.py). n_gpu output channels

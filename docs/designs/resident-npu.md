@@ -70,7 +70,7 @@ and optional CPU grant. The linked OS then validates the complete session.
 The monitor retains its fixed 32 KiB initialized-image limit.
 
 The selected ShuffleNet entry contains a 964,224-byte model, a 150,528-byte
-input and a two-byte expected output. Resident generation places those const,
+input and a two-byte expected output. OS generation places those const,
 64-byte-aligned arrays in `.data.os_npu_assets`, which the existing linker
 collects into initialized RAM starting at `0x41200000`. Metadata and executable
 code remain in the fixed 2 MiB CODE block. The flat runtime extent includes the

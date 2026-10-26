@@ -58,31 +58,7 @@ def npu_summary(raw):
             'work_us': NPU_WORK_US, 'mhz': 852, 'supply_uv': 800000}
 
 
-def linked_npu_assets(elf):
-    """Authenticate the actual embedded model and vectors, using linked pointers."""
-    def one(name):
-        rows = [s for s in elf.symbols if s['name'] == name and s['shndx'] != 0]
-        require(len(rows) == 1, 'NPU linked symbol is absent or ambiguous: ' + name)
-        return rows[0]
-    def value(name):
-        symbol = one(name)
-        require(symbol['size'] == 4, 'NPU linked count size differs.')
-        return struct.unpack('<I', elf.read(symbol['value'], 4))[0]
-    model = value('os_npu_client_model')
-    catalogue = json.loads((ROOT / 'tools/npu-session-models.json').read_text())['models']
-    require(model < len(catalogue), 'NPU linked catalogue entry differs.')
-    selected = catalogue[model]
-    for symbol, entries in [('os_npu_models', [selected['model']]),
-                            ('os_npu_inputs', [v['reference'] for v in selected['inputs']]),
-                            ('os_npu_references', [v['reference'] for v in selected['outputs']])]:
-        table = one(symbol)
-        require(table['size'] == 16 * len(entries), 'NPU linked vector table size differs.')
-        for i, expected in enumerate(entries):
-            pointer, size = struct.unpack('<2Q', elf.read(table['value'] + 16*i, 16))
-            require(size == expected['bytes'] and sha(elf.read(pointer, size)) == expected['sha256'],
-                    'NPU embedded asset differs from the authenticated catalogue.')
-    require(value('os_npu_input_count') == len(selected['inputs']) and
-            value('os_npu_output_count') == len(selected['outputs']), 'NPU linked vector counts differ.')
+linked_npu_assets = host.linked_npu_assets
 
 
 def npu_policy(policy, raw, directory, frozen):

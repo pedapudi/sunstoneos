@@ -280,7 +280,7 @@ def check(path, assets, recognizer, loader, audio=False, radio=False, headset=Fa
     assert not any(thermal) or cpu_clock, 'Thermal report outside CPU-clock profile'
     npu_profile = None
     if npu:
-        assert not any((audio, radio, headset, gpu_linear, cpu_clock and not perf and contract_profile(elf)['lifetime'] != 'resident')), 'Unsupported combined NPU profile'
+        assert not any((audio, radio, headset, gpu_linear and contract_profile(elf)['lifetime'] != 'supervised', cpu_clock and not perf and not gpu_linear and contract_profile(elf)['lifetime'] != 'resident')), 'Unsupported combined NPU profile'
         symbols = {s['name']: s for s in elf.symbols if s['shndx'] != 0}
         start, end = (symbols[n]['value'] for n in ('__os_npu_pool_start', '__os_npu_pool_end'))
         assert (start, end) == (0x47400000, 0x47c00000), 'NPU reservation differs'
@@ -344,7 +344,7 @@ def main():
         if args.workers == 8:
             assert not any((audio, radio, headset, gpu_linear)), 'Unsupported eight-worker OS profile'
         if gpu_linear and args.lifetime == 'supervised':
-            assert not any((audio, radio, headset, args.npu == '1', args.perf == '1')), 'Unsupported supervised GPU profile'
+            assert not any((audio, radio, headset, args.perf == '1')), 'Unsupported supervised GPU profile'
     except AssertionError as error:
         print('FAIL integrated OS link check:', error, file=sys.stderr)
         return 1

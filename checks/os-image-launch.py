@@ -43,6 +43,7 @@ import importlib.util
 import json
 from pathlib import Path
 import shutil
+import shlex
 import struct
 import subprocess
 import sys
@@ -194,6 +195,7 @@ def main():
     for name in ('build', 'base', 'overlay', 'wav', 'output'):
         parser.add_argument('--' + name, type=Path, required=True)
     parser.add_argument('--staged', action='store_true', help='explicit USB0-only recorded workload 2')
+    parser.add_argument('--accelerators-only', action='store_true', help='only combined GPU/NPU session, authority and asset admission')
     parser.add_argument('--gpu-cpu-only', action='store_true', help='only combined GPU and CPU-grant admission')
     parser.add_argument('--gpu-only', action='store_true', help='only supervised GPU artifact, entry and frozen-launch admission')
     parser.add_argument('--clang', type=Path, default=Path('/usr/bin/clang-21'))
@@ -205,7 +207,10 @@ def main():
     link_check = args.build / 'os-image/link-check.json'
     manifest = json.loads(link_check.read_text())
     audio = manifest['audio']
-    assert not (args.gpu_only and args.gpu_cpu_only)
+    assert sum((args.gpu_only, args.gpu_cpu_only, args.accelerators_only)) <= 1
+    npu = manifest.get('npu', False)
+    if args.accelerators_only:
+        assert npu and manifest.get('gpu_linear') and not audio
     if args.gpu_only or args.gpu_cpu_only:
         assert manifest.get('gpu_linear') and not audio
     # The CPU clock build appends the driver's 96-byte grant record.
@@ -218,7 +223,7 @@ def main():
     # The image's admission, compiled on the host with the image's identity.
     build_id = bytes.fromhex(manifest['build_id'])
     model = out / 'os-image-model'
-    command = ['clang', '-std=c11', '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
+    command = [str(args.clang), '-std=c11', '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
                '-Iinclude', '-Iplatform/a733-smp-cached', '-Iapps/os', '-DSUNSTONE_BOARD_SUPERVISED=1',
                '-DSUNSTONE_BOARD_USB2_DUAL=1', '-DA733_SMP_CONTRACT_MAGIC=0x415337334f534331ULL',
                '-DOS_MODEL_BUILD_ID=' + ','.join(str(b) for b in build_id),
@@ -227,11 +232,20 @@ def main():
                *(['-DA733_A76_ADMITTED=1', '-DSUNSTONE_A733_OS_CPU_CLOCK=1', '-ffunction-sections',
                   '-Wl,--gc-sections', 'drivers/clock/a733_cpu_clock.c'] if cpu_clock else []),
                'checks/os-image-model.c', 'drivers/storage/storage_digest.c', '-o', str(model)]
+    if npu:
+        commands = json.loads((args.build/'compile_commands.json').read_text())
+        native = next(row for row in commands if row['file'] == str(ROOT/'apps/os/admission.c'))
+        includes = [arg for arg in shlex.split(native['command']) if arg.startswith('-I') and
+                    ('FreeRTOS-Kernel' in arg or 'freertos-a733' in arg or arg.endswith('/apps/board'))]
+        command += ['-DSUNSTONE_A733_OS_NPU=1', *includes, str(args.build/'os-image/npu-models.c')]
+        if manifest.get('gpu_linear'):
+            command += ['-DSUNSTONE_A733_OS_GPU_LINEAR=1', '-DOS_RECOGNITION_CORE=6']
+    (out/'native-command.json').write_text(json.dumps(command,indent=2)+'\n')
     subprocess.run(command, cwd=ROOT, check=True)
     subprocess.run([str(model), '--write-staged-session' if args.staged else '--write-session',
                     str(out / 'model-session.bin'), '9'], check=True)
     raw = bytearray((out / 'model-session.bin').read_bytes())
-    assert len(raw) == (992 if audio else 808) + (prep.GRANT_BYTES if cpu_clock else 0)
+    assert len(raw) == (992 if audio else 1080 if npu else 808) + (prep.GRANT_BYTES if cpu_clock else 0)
     if args.staged:
         assert not audio and struct.unpack_from('<I', raw, 400)[0] == 2
         assert struct.unpack_from('<I', raw, 532)[0] == 1
@@ -283,6 +297,30 @@ def main():
            'remote_writers_excluded': True, 'evidence': [marker]}
     record['ddr'] = put('ddr', {**ddr, 'ranges': [[0x41000000, 0x42200000]]})
     record['mimus_ddr'] = put('mimus-ddr', {**ddr, 'ranges': prep.mimus.RANGES})
+    if npu:
+        rules = prep.module('combined_fixture_npu_rules', ROOT/'apps/npu-board/prepare.py')
+        # Synthetic records exercise the parser's asserted fields. Their marker
+        # identifies modeled evidence; these bundles are never deployable.
+        record.update(physical_authority=True, modeled=False, warning='MODEL ONLY; no physical authority exists')
+        refs = {}
+        for name, offset in (('ddr',1048),('admission',920),('clock',952),('power',984),('supervision',1016)):
+            fact = {**target, **identities, 'physical_authority':True, 'modeled':False, 'reviewed':True,
+                    'warning':'MODEL ONLY; no physical authority exists', 'schema':'a733-npu-board-'+name+'-v1'}
+            if name == 'ddr': fact.update(schema='a733-ddr-reservation-v1',ranges=[prep.NPU_RANGE],
+                exclusive=True,published_cache_disabled=True,remote_writers_excluded=True,evidence=[marker])
+            else: fact['conditions']={key:marker for key in sorted(rules.CONDITIONS[name])}
+            if name == 'admission': fact['ddr_sha256']=refs['ddr']['sha256']
+            if name == 'power': fact['supply_uv']=800000
+            if name == 'supervision': fact.update(supervisor=struct.unpack_from('<Q',raw,848)[0],one_attempt=True)
+            refs[name]=put('npu-'+name,fact);raw[offset:offset+32]=bytes.fromhex(refs[name]['sha256'])
+        record['npu']=refs
+        if manifest.get('gpu_linear'):
+            concurrent={**target,**identities,'schema':prep.GPU_NPU_SCHEMA,'scope':'simultaneous-powered-lifetime',
+                'physical_authority':True,'modeled':False,'reviewed':True,'warning':'MODEL ONLY',
+                'gpu':{'core_hz':manifest['gpu_profile']['core_hz'],'supply_uv':manifest['gpu_profile']['supply_uv']},
+                'npu':{'mhz':852,'supply_uv':800000},'npu_pll_enable_with_gpu_active':True,
+                'gpu_pll_start_stop_with_npu_active':True,'cpu_ddr_clocks_remain_admitted':True,'evidence':[marker]}
+            record['gpu']['conditions'][prep.GPU_NPU_CONDITION]=put('combined-authority',concurrent)
     if audio:
         dma_sha256 = hashlib.sha256(raw[prep.AUDIO_DMA:prep.AUDIO_DMA + prep.AUDIO_DMA_BYTES]).hexdigest()
         audio_cold, samples = struct.unpack_from('<2I', raw, prep.AUDIO_TAIL)
@@ -335,6 +373,42 @@ def main():
     (out / 'changed-size-contract.bin').write_bytes(changed)
     assert not admit(out / 'changed-size-contract.bin', armed + HZ // 10)
     cases['image-admission-accepts-launched-contract'] = True
+    if args.accelerators_only:
+        from harness import refused as reject
+        frozen = tool.freeze_bundle(bundle, 1)
+        tool.entry_check(frozen, target['identity'], target['port'])
+        cases['complete-combined-frozen-entry'] = True
+        for name,offset,fmt,value in (('firmware-owner',832,'Q',0x4f53475055464d31),
+                ('session-owner',832,'Q',0x4f534731),('pck-client',856,'I',7)):
+            changed=bytearray(raw);struct.pack_into('<'+fmt,changed,offset,value)
+            path=out/('MODEL-bad-'+name+'.bin');path.write_bytes(changed)
+            entry=dict(record,session_template_sha256=hashlib.sha256(changed).hexdigest())
+            entry_path=out/('MODEL-bad-'+name+'.json');entry_path.write_text(json.dumps(entry))
+            reject(lambda:prepare('refused-'+name,session=path,entry=entry_path),'NPU owner or PCK client aliases the GPU.')
+            bound=bytearray(contract);bound[192:224]=hashlib.sha256(changed).digest()
+            bound_path=out/('MODEL-contract-'+name+'.bin');bound_path.write_bytes(bound)
+            assert not admit(bound_path,armed+HZ//10,path)
+            cases['host-and-native-'+name]=True
+        for name,field,value in (('single-device-schema','schema','a733-npu-board-clock-v1'),
+                ('other-scope','scope','single-device'),('other-generation','generation',generation+1),
+                ('other-board','identity','another-board'),('modeled','modeled',True),
+                ('wrong-point','npu',{'mhz':492,'supply_uv':800000}),
+                ('missing-gpu-transition','gpu_pll_start_stop_with_npu_active',False)):
+            fact={**concurrent,field:value};entry=copy.deepcopy(record)
+            entry['gpu']['conditions'][prep.GPU_NPU_CONDITION]=put('bad-'+name,fact)
+            path=out/('MODEL-bad-'+name+'.json');path.write_text(json.dumps(entry))
+            reason='Combined GPU/NPU clock authority is incomplete.' if name in ('wrong-point','missing-gpu-transition') else 'Combined GPU/NPU authority names another scope or lifetime.'
+            reject(lambda:prepare('refused-'+name,entry=path),reason);cases['refuses-'+name]=True
+        elf=prep.os_link.Elf(image.read_bytes())
+        table=next(s for s in elf.symbols if s['name']=='os_npu_inputs' and s['shndx']!=0)
+        pointer,size=struct.unpack('<2Q',elf.read(table['value'],16))
+        section=next(s for s in elf.sections if s[1]!=8 and s[3]<=pointer<s[3]+s[5])
+        changed=bytearray(image.read_bytes());changed[section[4]+pointer-section[3]]^=1
+        reject(lambda:prep.linked_npu_assets(prep.os_link.Elf(bytes(changed))),'NPU embedded asset differs')
+        cases['actual-linked-npu-input-bytes']=True
+        (out/'result.json').write_text(json.dumps(dict(passed=True,physical_access=False,image_sha256=image_hash,
+            cases=cases,limits='Synthetic physical assertions exercise actual producers/validators; no board authority or transport.'),indent=2)+'\n')
+        print('PASS combined GPU/NPU preparation:',len(cases),'focused cases');return
     if args.gpu_cpu_only:
         # Reuse accepted GPU tampering checks; select only the new CPU-grant
         # composition, with actual preparation and frozen-entry admission.

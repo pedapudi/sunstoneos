@@ -80,6 +80,9 @@ int os_session_valid(const struct os_session *s)
        n->owner==s->thermal_owner||n->owner==s->board.latch_owner||n->owner==s->board.latch_m_owner)
         return 0;
     for(unsigned i=0;i<4;++i)if(n->owner==owners[i])return 0;
+#ifdef SUNSTONE_A733_OS_GPU_LINEAR
+    if(n->pck_client==OS_GPU_CLIENT||n->owner==OS_GPU_FIRMWARE_OWNER||n->owner==OS_GPU_SESSION_OWNER)return 0;
+#endif
 #endif
     return 1;
 }
