@@ -2028,7 +2028,7 @@
    "--tree",
    "--output"
   ],
-  "summary": "Build and check the base image and the returning images of bundles 4, 6, 7, 8, 15 and 20 to 24.",
+  "summary": "Build and check the base image and the returning images of bundles 4, 6, 7, 8, 15 and 20 to 27.",
   "usb": true
  },
  "board-bundles.py": {
@@ -10106,6 +10106,7 @@
  "workload-bisect-host.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/cpu-top-opp.md",
    "docs/designs/multicore-correctness-1025.md",
    "docs/designs/workload-bisect.md"
   ],
@@ -10125,6 +10126,7 @@
  "workload-bisect-probe.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/cpu-top-opp.md",
    "docs/designs/multicore-correctness-1025.md",
    "docs/designs/workload-bisect.md"
   ],

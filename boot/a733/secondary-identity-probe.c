@@ -5,6 +5,9 @@
 #ifdef SUNSTONE_SECONDARY_LOCAL
 #include "secondary-local-probe.h"
 #endif
+#ifdef SUNSTONE_TOP_OPP
+#include "top-opp-relock.h"
+#endif
 
 #define HEADER ((volatile struct identity_header *)IDENTITY_REPORT)
 #define SLOTS ((volatile struct identity_slot *)IDENTITY_SLOTS)
@@ -45,6 +48,11 @@ int identity_primary_run(void)
     HEADER->magic=IDENTITY_MAGIC;HEADER->version=1;
     HEADER->bytes=IDENTITY_REPORT_BYTES;HEADER->epoch=admission->epoch;
     HEADER->deadline=admission->startup_deadline;HEADER->state=1;barrier();
+#ifdef SUNSTONE_TOP_OPP
+    // The ROM resets the CPU PLLs on each return: relock CPU-B, CPU-L and the
+    // DSU to the top points before any secondary is released.
+    if(top_opp_relock(&HEADER->reserved[TOP_OPP_RECORD_OFFSET/8-8],HEADER->deadline)!=TOP_OPP_DONE)return 0;
+#endif
 #ifdef SUNSTONE_SECONDARY_LOCAL
     if(!secondary_distributor_begin(HEADER->deadline))return 0;
 #endif

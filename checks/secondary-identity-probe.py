@@ -50,11 +50,78 @@ class Survey(primary.Probe):
             self.mmio[0x08001008+c*0x1000] = c
             self.mmio[0x07050200+c*4] = 0x20+c*4
             self.mmio[0x07050220+c*4] = 0x40+c*2
+        # Top-operating-point profile: CPU PLL, pattern and mux words with port
+        # 3-3's recorded boot values (docs/designs/cpu-top-opp.md).
+        self.top_opp = manifest.get('top_opp')
+        self.init_top_opp()
         self.original_mmio = copy.deepcopy(self.mmio)
         self.epoch = self.q(0x42004000+24)
         self.deadline = self.q(0x42004000+88)
 
+    def init_top_opp(self):
+        """Board 3-3's boot words of the three CPU clock domains; called again
+        after a prefix restore replaces the modeled MMIO."""
+        self.pll_state, self.pll_order = {}, []
+        if not self.top_opp:
+            return
+        for d, (pll, mux) in {1: (0xf8802600, 0x03010000), 2: (0xf8802700, 0x03000000),
+                              3: (0xf8802600, 0x03010105)}.items():
+            base = 0x08870000+0x1000*d
+            self.mmio.update({base: pll, base+4: 0, base+8: 0x30000000, base+0x18: 0x40000001, base+0x1c: mux})
+            self.pll_state[d] = dict(update_reads=0, lock_reads=0, run=0, last=None, third=None, park=None)
+
+    def pll_access(self, access, address, size, value, core):
+        """One CPU PLL access of the top-operating-point relock. The update bit
+        clears at the second read after it is set and lock sets at the second
+        read after that. The model requires the CPU clock driver's sequence:
+        CPU0 at EL3 before any secondary starts; a PLL write only while its mux
+        is parked and 20 us after the park; the PLL selected again only after
+        three lock reads at least 3 us apart and 20 us after the third, with
+        P = 0 written first; and the domains in the order CPU-B, CPU-L, DSU."""
+        d, offset = (address-0x08870000) >> 12, address & 0xfff
+        assert self.in_survey and core == 0 and not self.started and size == 4 and d in (1, 2, 3)
+        assert offset in (0, 4, 8, 0x18, 0x1c), ('unexpected CPU PLL word', hex(address))
+        pll, sel, st = 0x08870000+0x1000*d, 0x08870000+0x1000*d+0x1c, self.pll_state[d]
+        parked = not (self.mmio[sel] >> 24) & 7
+        if access != UC_MEM_WRITE:
+            if offset == 0 and parked:
+                word = self.mmio[pll]
+                if word & (1 << 26):
+                    st['update_reads'] += 1
+                    if st['update_reads'] >= 2:
+                        self.mmio[pll] = word & ~(1 << 26)
+                elif not word & (1 << 28):
+                    st['lock_reads'] += 1
+                    if st['lock_reads'] >= 2:
+                        self.mmio[pll] = word | (1 << 28)
+                word = self.mmio[pll]
+                if not word & (1 << 26):
+                    if not word & (1 << 28):
+                        st['run'] = 0
+                    elif not st['run'] or self.clock >= st['last']+72:
+                        st['last'] = self.clock
+                        st['run'] += 1
+                        if st['run'] == 3:
+                            st['third'] = self.clock
+            return
+        assert offset in (0, 0x1c), ('CPU PLL write outside PLL and mux', hex(address))
+        if offset == 0:
+            assert parked and self.clock >= st['park']+480, 'PLL written while selected or within 20 us of the park'
+            self.mmio[pll] = value & ~(1 << 28)
+            st.update(update_reads=0, lock_reads=0, run=0)
+            return
+        was, now = (self.mmio[sel] >> 24) & 7, (value >> 24) & 7
+        if was and not now:
+            st['park'] = self.clock
+            self.pll_order.append(d)
+        if now == 3 and not was:
+            assert st['run'] >= 3 and self.clock >= st['third']+480, 'PLL selected before three lock reads and 20 us'
+            assert not (value >> 16) & 3 and not (self.mmio[sel] >> 16) & 3, 'P written with the select'
+
     def memory(self, u, access, address, size, value, core):
+        if self.top_opp and 0x08871000 <= address < 0x08874000:
+            self.pll_access(access, address, size, value, core)
+            return model.Machine.memory(self, u, access, address, size, value, core)
         if not self.in_survey:
             return primary.Probe.memory(self, u, access, address, size, value, core)
         if address < 0x41000000:

@@ -1,8 +1,8 @@
 # Design: CPU clusters and the DSU default to the vendor's top operating points
 
-Status: **driver changes implemented and host-modeled. Step 1 passed on port
-3-3 on 2026-10-25; steps 2 to 5 are built and frozen in one lifetime and have
-not run.** Every hardware block defaults to the highest
+Status: **driver changes implemented and host-modeled. Steps 1 to 5 passed
+on port 3-3 on 2026-10-25. Step 6 is built and frozen and has not run; step 7
+waits for the integrated OS image's first board run.** Every hardware block defaults to the highest
 operating point that the vendor uses for the chip's speed bin, with the
 vendor's voltage; lower points are optional modes ([AGENTS.md](../../AGENTS.md),
 "Implementation"). The user approved CPU clock and voltage changes on
@@ -258,7 +258,7 @@ and DCDC3 1050 mV in vf0400). The steps change one variable at a time.
 | 3 | DCDC3 800 → 1050 mV and back, CPU-B held at 1014 MHz | DCDC3 selector `0xb7`, then `0x9e`; every clock word unchanged; temperatures within 1 °C |
 | 4 | DCDC3 to 1050 mV, CPU-B 1014 → 2002 MHz, then the DSU to 910 MHz; then the DSU to 598 MHz, CPU-B to 1014 MHz and DCDC3 to 800 mV, cores 6 and 7 off; the DSU stays at 598 MHz | CPU-B PLL `0xf8804d00`, DCDC3 `0xb7`, DSU PLL `0xf8802300`, mux `0x03000105`; then DSU PLL `0xf8802e00`, mux `0x03010105`, CPU-B `0xf8802700`, DCDC3 `0x9e` |
 | 5 | DCDC5 to 1000 mV, CPU-L → 1794 MHz, then the DSU → 1274 MHz | DCDC5 1000 mV (`0xb2`); CPU-L PLL `0xf8804500`, CPU0 measures 1794 MHz ± 1%; DSU PLL `0xf8803100`, mux `0x03000105`; the hottest sensor below 50 °C |
-| 6 | The all-core workload with the top point applied before the tasks start | Workload passes with the status-masked capture; core 6 measures 2002 MHz and core 0 1794 MHz; the hottest sensor stays below 90 °C |
+| 6 | The all-core returning workload with CPU-B at 2002 MHz, CPU-L at 1794 MHz and the DSU at 1274 MHz, set by the workload's own CPU0 before any secondary starts | 32 rounds on every core, 32 ticks on CPU0 and 33 SGIs on each secondary, as at the boot rates; background progress about 3.6 times the boot-rate count on cores 0 to 5 and about 2 times on cores 6 and 7; the relock record reads the three top-point PLL words; every sensor below 70 °C before and after |
 | 7 | B1, then the OS image with both clusters and the DSU at their top points | Recognition on the A76 pair at about 1.2 s for the bench recording ([cpu-a76-dvfs.md](cpu-a76-dvfs.md), A2) |
 
 Step 1 changes nothing that a running core uses, so it tests the park,
@@ -275,8 +275,11 @@ Step 1 passed on port 3-3 (`board-session-20261025-17/port-3-3`, record
 sensor read 39.7 °C before and 39.6 °C after.
 
 Steps 2 to 5 are bundles 22, 21, 23 and 24, built from the same source as
-step 1 with `-DOPP_BUNDLE=n` (below). Step 6 needs the driver in the all-core workload
-image and is not built.
+step 1 with `-DOPP_BUNDLE=n` (below). They passed on port 3-3 in one lifetime
+(`board-session-20261025-19/port-3-3`), every clock word as predicted and the
+hottest sensor at 42 °C. Every image's `before` lines showed CPU-L and the
+DSU at 494 MHz and CPU-B at 1014 MHz: the ROM resets the CPU PLLs on each
+return, as the read-back after bundle 24 also showed.
 
 ## Steps 2 to 5 share one lifetime
 
@@ -347,6 +350,68 @@ with its approval record, then the Read bundle 14 as the host-side capture.
 The host model runs the three driver steps in sequence with the bundles'
 grants (`lifetime_cases` in `checks/cpu-clock-model.c`), followed by a
 thermal stop of step 5 that returns DCDC5 to 800 mV.
+
+## Step 6: the workload relocks its own clocks
+
+Every launch starts from the ROM, and the ROM resets the CPU PLLs on each
+return. A setter image cannot hand its clocks to the workload with no ROM
+return in between, because the host loads every image through the ROM.
+The workload's own launch must therefore set the clocks. The rails are
+expected to differ: neither ROM description lists a PMIC access
+([boot ROM and boot0](../vendor-firmware/boot-rom-and-boot0.md)), so a voltage
+that an earlier image writes should survive the return. Step 6 relies on
+that only after bundle 26 has read it on the board:
+
+1. **Bundle 25** raises DCDC3 to 1050 mV and CPU-B to 2002 MHz, DCDC5 to
+   1000 mV and CPU-L to 1794 MHz, and the DSU to 1274 MHz, through the
+   driver, and leaves them. Its ROM return resets the clocks.
+2. **Bundle 26** reads, with no write, that DCDC5 is still at 1000 mV and
+   DCDC3 at 1050 mV and that the CPU PLLs are back at their boot words. It
+   refuses, and the lifetime ends before the workload, if either rail
+   differs.
+3. **The workload** (`bundle-deadline-top`) is the returning deadline
+   profile on the refrozen native image `6fd7af86` with one change: before
+   it releases any secondary, CPU0 at EL3 relocks CPU-B to 2002 MHz, CPU-L
+   to 1794 MHz and the DSU to 1274 MHz (`boot/a733/top-opp-relock.c`). The
+   relock follows the driver's sequence, checks every domain before its
+   first write and refuses on any difference, which ends the run through
+   the deadline unit before any secondary starts. It records the entry and
+   final words, the parked time and the lock reads in the identity header
+   at `0x42018180`. The overlay's 16 KiB reservation had 288 bytes left, so
+   the 1,404-byte relock sits in the 2 KiB gap between the 512-byte base
+   overlay and the extension, as the interrupt profile's vectors do.
+4. **Bundle 27** reads the temperatures and the rails after the workload.
+
+The workload reads no temperature itself: it lasts about 32 ticks, shorter
+than one conversion period of the temperature sensor, about 100 ms. The
+sensor sets of bundles 25, 26 and 27 bracket it in the same lifetime, and
+the 70 °C thermal stop applies in each of them. The relock and the workload
+do not use the memory bus clock; the workload's own clocks are the three it
+sets.
+
+Predictions, against the ten boot-rate runs on port 3-3 of 2026-10-25
+(`board-session-20261025-3/port-3-3`, `tw1` to `tw10`):
+
+| Quantity | Boot rates | Top points |
+| --- | --- | --- |
+| Rounds per core, ticks on CPU0, SGIs per secondary | 32, 32, 33 | Same: the rounds wait on the tick |
+| Time per round | One tick | One tick |
+| Background progress, cores 0 to 5 | 82,600 to 88,200 (run 1: 187,600 to 196,700) | About 3.6 times, 300,000 to 320,000, less where memory bounds the loop |
+| Background progress, cores 6 and 7 | 130,100 to 137,300 | About 2 times, 255,000 to 270,000 |
+| Relock record | — | Result 1; final words `0xf8804d00`/`0x03000000`, `0xf8804500`/`0x03000000`, `0xf8803100`/`0x03000105`; at least three lock reads per domain; parked about 60 µs each |
+| Hottest sensor, bundles 25 to 27 | 42 °C in step 5 | Below 50 °C |
+
+Board 3-3 has run neither secondary at a top point. A non-return of the
+workload ends the lifetime with the A76 cores possibly running at 2002 MHz
+and CPU0 at 1794 MHz; only a power removal recovers it.
+
+The host models: `checks/top-opp-relock-check.c` runs the relock against
+modeled PLLs (the order, the 20 µs waits, three lock reads 3 µs apart, P
+before the select, five refusals with no write and the timeouts), and
+`checks/workload-bisect-probe.py` runs the overlay with the native image in
+the instruction model, with modeled CPU PLLs, in all nine deadline cases.
+`checks/workload-bisect-host.py` validates the relock record in the runner's
+decoder.
 
 ## Step 1: bundle 20
 

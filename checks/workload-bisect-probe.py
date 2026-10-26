@@ -76,6 +76,8 @@ MASK = (1 << 64)-1
 PROBE = {name: int(value, 0) for name, value in re.findall(
     r'^#define (\w+) (0x[0-9a-fA-F]+|\d+)\b', (ROOT/'boot/a733/secondary-local-probe.h').read_text(), re.M)}
 RECORD = PROBE['DEADLINE_RECORD']
+# The top-operating-point relock record (boot/a733/top-opp-relock.h).
+TOP_OPP_MAGIC = 0x3130505054504f54
 RECORD_MAGIC = PROBE['DEADLINE_RECORD_MAGIC']
 DEADLINE_TICKS = PROBE['DEADLINE_TICKS']
 STALLED_CORE = 5
@@ -350,6 +352,18 @@ def main():
             for rounds, background, sgis, failed, ticks in results:
                 assert rounds == 32 and background > 0 and sgis > 0 and failed == 0
             assert results[0][4] >= 32
+            if machine.top_opp:
+                # CPU0 relocked CPU-B, CPU-L and the DSU before the first release
+                # (boot/a733/top-opp-relock.c); the ROM, not the image, resets them.
+                opp = struct.unpack_from('<13Q', raw, 0x180)
+                finals = {2: (0xf8804d00, 0x03000000), 1: (0xf8804500, 0x03000000), 3: (0xf8803100, 0x03000105)}
+                assert opp[0] == TOP_OPP_MAGIC and opp[1] == 1 and opp[2] < opp[3], opp
+                assert machine.pll_order == [2, 1, 3], machine.pll_order
+                for i, d in enumerate((2, 1, 3)):
+                    pll = 0x08870000+0x1000*d
+                    assert (machine.mmio[pll], machine.mmio[pll+0x1c]) == finals[d]
+                    assert opp[7+i] == finals[d][0] << 32 | finals[d][1] and opp[10+i] & 0xffffffff >= 3
+                top_opp_record = list(opp)
         else:
             if a.case == 'stalled-no-tick' or machine.cpu0_parked:
                 # CPU0 took no interrupt after the deadline: without a tick, or
@@ -383,6 +397,7 @@ def main():
         'deadline': machine.deadline+DEADLINE_TICKS, 'fiq_taken': machine.fiq_taken,
         'stalled_core': getattr(machine, 'stalled', None), 'cpu0_parked': machine.cpu0_parked, 'identity_park': machine.survey_hooks['identity_park'], 'injected_reads': machine.rwp_seen, 'parked_secondaries': sorted(getattr(machine, 'target_parked', ())),
         'workload_results': results, 'off': machine.stopped,
+        'top_opp_record': locals().get('top_opp_record'),
         'clean_complete': sorted(machine.clean_complete), 'helper_lines': machine.helper_lines,
         'limits': __doc__}, indent=2)+'\n')
     print('PASS return-deadline workload:', a.case, flush=True)

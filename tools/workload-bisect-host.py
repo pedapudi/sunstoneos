@@ -113,12 +113,49 @@ def deadline_record(raw, nonce, park=None):
     return record
 
 
+# The top-operating-point profile (docs/designs/cpu-top-opp.md, step 6): CPU0's
+# relock record in identity header words 16 to 28 (boot/a733/top-opp-relock.h),
+# at this offset of the combined report, which starts 0x100 before the header.
+TOP_OPP_OFFSET, TOP_OPP_WORDS, TOP_OPP_MAGIC = 0x180, 13, 0x3130505054504f54
+TOP_OPP_FINAL = ((0xf8804d00, 0x03000000), (0xf8804500, 0x03000000), (0xf8803100, 0x03000105))
+TOP_OPP_DOMAINS = ('cpu_b', 'cpu_l', 'dsu')
+TOP_OPP_SCOPE = {'record': {'address': 0x42018180, 'words': 13},
+                 'targets': {'cpu_b': {'pll': 0x08872000, 'n': 77, 'mhz': 2002},
+                             'cpu_l': {'pll': 0x08871000, 'n': 69, 'mhz': 1794},
+                             'dsu': {'pll': 0x08873000, 'n': 49, 'mhz': 1274}},
+                 'voltages': 'DCDC3 1050 mV and DCDC5 1000 mV, set by bundle 25 and read back by bundle 15 after a ROM '
+                             'return in the same lifetime; the overlay reads no PMIC register',
+                 'pending': 'Instruction cases, host validation and root review required before physical use.'}
+
+
+def top_opp_record(raw):
+    """The relock record: magic, result, start and end counters, entry and
+    final PLL << 32 | mux words, and park-to-select ticks << 32 | lock reads,
+    each in the order CPU-B, CPU-L, DSU."""
+    words = struct.unpack_from('<13Q', raw, TOP_OPP_OFFSET)
+    return {'magic': words[0], 'result': words[1], 'start': words[2], 'end': words[3],
+            'entry': [[w >> 32, w & 0xffffffff] for w in words[4:7]],
+            'final': [[w >> 32, w & 0xffffffff] for w in words[7:10]],
+            'parked_ticks': [w >> 32 for w in words[10:13]], 'lock_reads': [w & 0xffffffff for w in words[10:13]]}
+
+
 def decode(raw, nonce, manifest):
     record = deadline_record(raw, nonce, manifest['hooks']['identity_park'])
     if record:
+        # The saved report keeps the relock record (top_opp_record) for review.
         raise DeadlineReturn(record)
+    relock = top_opp_record(raw) if 'top_opp' in manifest else None
+    if relock:
+        require(relock['magic'] == TOP_OPP_MAGIC and relock['result'] == 1 and relock['start'] < relock['end'] and
+                relock['final'] == [list(f) for f in TOP_OPP_FINAL] and
+                all(n >= 3 for n in relock['lock_reads']) and all(t < 24000 for t in relock['parked_ticks']),
+                'Top-operating-point relock record differs.')
+        # The identity header's other reserved words stay checked as zero.
+        raw = raw[:TOP_OPP_OFFSET]+bytes(8*TOP_OPP_WORDS)+raw[TOP_OPP_OFFSET+8*TOP_OPP_WORDS:]
     result = base.decode(raw, nonce, manifest)
     result.update(deadline_disarmed=True, quiet_background=manifest['workload_bisect']['quiet_background'])
+    if relock:
+        result['top_opp'] = relock
     return result
 
 
@@ -139,7 +176,11 @@ def load(build, image, manifest):
         'record': {'address': RECORD[0], 'bytes': RECORD[1]},
         'pending': 'Instruction cases, host validation and root review required before physical use.'},
         'Return-deadline profile scope changed.')
-    return base.load(build, image, manifest, return_deadline=True, quiet=quiet)
+    top_opp = 'top_opp' in manifest
+    if top_opp:
+        require(not quiet and manifest['top_opp'] == dict(TOP_OPP_SCOPE, relock=manifest['hooks'].get('top_opp_relock')) and
+                manifest['hooks'].get('top_opp_relock') == 0x41020800, 'Top-operating-point profile scope changed.')
+    return base.load(build, image, manifest, return_deadline=True, quiet=quiet, top_opp=top_opp)
 
 
 def validate_software(software, manifest_hash):

@@ -306,22 +306,26 @@ OPP_STEP_SOURCES = POWER_SOURCES + ['apps/board-bundles-power/cpu-opp-step.c', '
 OPP_APPROVAL = 'cpu-operating-point-approval-v1'
 
 
-def opp_row(name, position, component, text, lines, intro, after):
-    """One CPU operating-point step after bundle 20: admission, thermal stop and end checks as the source states."""
+def opp_row(name, position, component, text, lines, intro, after, entry=None, writes=True):
+    """One CPU operating-point step after bundle 20: admission, thermal stop and end checks as the source states.
+    entry names the admitted rails and CPU-B rate when they are not the boot values; a row without writes needs no
+    approval record."""
+    entry = entry or ('DCDC3 and DCDC5 at 800 mV, CPU-B at 1,014 MHz', 'dcdc5_uv=800000 dcdc3_uv=800000')
     return returning_row(
         name, position, component, OPP_STEP_OVERLAY, f'COMPLETE board bundle {position}: {text}', True,
-        f'Monitor status 0 with TEMP set=0 below 70000 at level 0; the SUPPLY line (dcdc5_uv=800000 '
-        f'dcdc3_uv=800000 sid=0x496 bin=4 dcxo_hz=26000000); {lines}; the CPU-L, CPU-B and DSU after lines; a last '
+        f'Monitor status 0 with TEMP set=0 below 70000 at level 0; the SUPPLY line ({entry[1]} sid=0x496 bin=4 '
+        f'dcxo_hz=26000000); {lines}; the CPU-L, CPU-B and DSU after lines; a last '
         f'TEMP line below 70000; and COMPLETE board bundle {position}: {text}; then a responsive ROM.',
         intro + ' The image admits the step only at the NORMAL thermal level with every sensor below 70 C, on '
-        'vf0400, with DCDC3 and DCDC5 at 800 mV, CPU-B at 1,014 MHz, CPU-L and the DSU on their PLLs and every '
+        f'vf0400, with {entry[0]}, CPU-L and the DSU on their PLLs and every '
         'pattern and LFM enable clear, and no planned voltage above the bin\'s top voltage for its rail (DCDC5 '
         '1000 mV, DCDC3 1050 mV in vf0400), and otherwise returns REFUSED before any write. A sensor set follows each '
         'raise and at the end; a sensor at 70 C or more stops the step, which lowers what it raised (DSU 598 MHz, clusters '
         '1,014 MHz, DCDC3 800 mV) and returns STOPPED. Both are controlled outcomes. At the end it requires the '
-        'planned rates and rails. Approved by the user on 2026-10-24 (CPU clock and voltage); bundle/approval.json '
-        'binds the values to port 3-3 and this image.',
-        sources=OPP_STEP_SOURCES, base=BASE_ROW, after=after, approval=OPP_APPROVAL,
+        'planned rates and rails.' + (' Approved by the user on 2026-10-24 (CPU clock and voltage); '
+        'bundle/approval.json binds the values to port 3-3 and this image.' if writes else
+        ' It writes no clock or PMIC register.'),
+        sources=OPP_STEP_SOURCES, base=BASE_ROW, after=after, approval=OPP_APPROVAL if writes else None,
         failures=['a `FAIL` line of the provider, the thermal driver, the PMIC requests or the CPU clock driver, '
                   'after a `STEP` line naming the driver state; one after a park or a selector write leaves that '
                   'domain or rail where the log last shows it, which only a power removal restores'])
@@ -811,6 +815,31 @@ ROWS = [
             '1,000 mV, waits 1 ms and relocks CPU-L at 1,794 MHz, measured by CPU0; the DSU then goes to 1,274 MHz '
             'with no voltage write. CPU-L, the DSU and DCDC5 stay at the top points of vf0400, so this step ends its '
             'lifetime.', ('cpu-b-top-step',)),
+    opp_row('cpu-top-hold-step', 25, 'CPU-B 2,002, CPU-L 1,794 and the DSU 1,274 MHz, left for the ROM return',
+            'CPU-B 2002 MHz at 1050 mV, CPU-L 1794 MHz at 1000 mV and the DSU 1274 MHz, left in place',
+            'CPU-B set pll=0xf8804d00 mhz=2002 with STEP dcdc3_uv=1050000, a TEMP line below 70000, CPU-L set '
+            'pll=0xf8804500 mux=0x3000000 mhz=1794 with STEP dcdc5_uv=1000000, a TEMP line, DSU set pll=0xf8803100 '
+            'mux=0x3000105 mhz=1274',
+            'Step 6 of docs/designs/cpu-top-opp.md, first image: with cores 6 and 7 off, the driver raises DCDC3 to '
+            '1,050 mV and CPU-B to 2,002 MHz, then DCDC5 to 1,000 mV and CPU-L to 1,794 MHz, then the DSU to '
+            '1,274 MHz, and leaves all of them. The ROM return that follows resets the CPU PLLs and keeps the rails, '
+            'which bundle 26 reads back; the workload relocks the PLLs itself.', ('cpu-l-dsu-top-step',)),
+    opp_row('cpu-rails-held-read', 26, 'DCDC5 1,000 mV and DCDC3 1,050 mV after the ROM return, read only',
+            'DCDC5 1000 mV and DCDC3 1050 mV kept across the ROM return, read only',
+            'CPU-L before pll=0xf8802600 mux=0x3010000 mhz=494, CPU-B before pll=0xf8802700 mux=0x3000000 mhz=1014 '
+            'and DSU before pll=0xf8802600 mux=0x3010105 mhz=494: the PLLs the ROM resets',
+            'Step 6 of docs/designs/cpu-top-opp.md, the gate before the workload: after bundle 25 and one ROM return, '
+            'the rails must still read DCDC5 1,000 mV and DCDC3 1,050 mV, the voltages that the workload\'s relock '
+            'to the top points needs; a REFUSED line for the CPU supplies ends the lifetime before the workload.',
+            ('cpu-top-hold-step',), entry=('DCDC5 at 1,000 mV and DCDC3 at 1,050 mV, CPU-B at any rate on its PLL',
+                                           'dcdc5_uv=1000000 dcdc3_uv=1050000'), writes=False),
+    opp_row('cpu-after-workload-read', 27, 'Temperatures and rails after the top-point workload, read only',
+            'temperatures and rails after the top-point workload, read only',
+            'the CPU before lines at the PLL words the ROM resets',
+            'Step 6 of docs/designs/cpu-top-opp.md, after the workload: two temperature sets and the rails, still at '
+            'DCDC5 1,000 mV and DCDC3 1,050 mV.', ('cpu-rails-held-read',),
+            entry=('DCDC5 at 1,000 mV and DCDC3 at 1,050 mV, CPU-B at any rate on its PLL',
+                   'dcdc5_uv=1000000 dcdc3_uv=1050000'), writes=False),
     # `admission` maps fields of the value prepare() returns to the values that
     # identify this row's build. None refuses the row: no owning package has
     # named those values yet.
