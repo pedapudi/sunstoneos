@@ -507,7 +507,7 @@ fresh port 3-3 lifetime: power removal, cold DDR start, the base image,
 bundles 25 and 26, the workload (`../bundle-deadline-top-3/`, its own runbook,
 binding script and root-review draft, with `bundle-deadline-top-3.sha256`),
 bundle 27, the Read bundle 14 and a power removal. The workload's source is
-the archive `step6/source-SRC`; the overlay built without `--top-opp`
+the archive `step6/source-2cf94d7a`; the overlay built without `--top-opp`
 equals the frozen deadline overlay byte for byte. This set replaces
 `step6/step6-set-2/` and `step6/bundle-deadline-top-2/`, whose bundle 25
 returned with CPU-B raised, and the earlier `step6-set/`; those must not
