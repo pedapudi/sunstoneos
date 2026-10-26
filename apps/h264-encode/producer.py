@@ -18,11 +18,14 @@ def extend(board,raw,*,owner,authority,client,initial,memory,electrical,supervis
     result+=hashlib.sha256(raw).digest()+bytes(32)+struct.pack('<6I',module,hz,0x10007,0x10007,800000,1)
     assert len(result)==856
     return result
+# The vendor operating point (sun60iw2p1-cpu-vf.dtsi ve-opp-table): module mux 1,
+# divider 1, 624 MHz. The decoder's mux 1 is PLL_VE0 and the encoder's PLL_VE1.
+VENDOR={'module':0x01000000,'hz':624000000}
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     for name in ('board','input','initial','memory','electrical','supervision','output'):p.add_argument('--'+name,type=Path,required=True)
-    for name in ('owner','authority','client','module','hz'):p.add_argument('--'+name,type=lambda x:int(x,0),required=True)
+    for name in ('owner','authority','client','module','hz'):p.add_argument('--'+name,type=lambda x:int(x,0),required=name not in VENDOR,default=VENDOR.get(name))
     a=p.parse_args();kw={n:getattr(a,n) for n in ('owner','authority','client','module','hz')}
     kw.update({n:getattr(a,n).read_bytes() for n in ('initial','memory','electrical','supervision')})
     a.output.write_bytes(extend(a.board.read_bytes(),a.input.read_bytes(),**kw))

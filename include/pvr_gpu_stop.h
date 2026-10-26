@@ -2,7 +2,7 @@
 #define SUNSTONE_PVR_GPU_STOP_H
 #include "pvr_gpu_control.h"
 #include "a733_gpu_spin.h"
-#define PVR_GPU_STOP_MAX_STEPS 14u
+#define PVR_GPU_STOP_MAX_STEPS 15u
 
 enum pvr_gpu_stop_phase { PVR_GPU_STOP_NEW, PVR_GPU_STOP_CLEAR_IDLE,
     PVR_GPU_STOP_SEND_IDLE, PVR_GPU_STOP_WAIT_IDLE, PVR_GPU_STOP_CLEAR_OFF,
@@ -22,9 +22,10 @@ enum pvr_gpu_stop_error { PVR_GPU_STOP_NO_ERROR, PVR_GPU_STOP_IO,
  * isolate completes platform teardown after firmware shutdown and the idle
  * checks. As in the vendor RGXStop, the controller asserts no reset; the
  * platform OFF removes the power. The native backend verifies fresh
- * forced-idle/OFF state alongside each ACK, then powers down before reclaim. These callbacks provide
- * healthy orderly stop, not recovery from failed or uncertain DMA. A standalone
- * reset or power-OFF observation cannot replace the preceding sequence.
+ * forced-idle/OFF state alongside each ACK, then powers down before reclaim. The
+ * acknowledged stop is the healthy orderly stop. The unacknowledged entry below
+ * has only the idle polls as evidence that no GPU memory access is in flight;
+ * a standalone reset or power-OFF observation cannot replace them.
  */
 struct pvr_gpu_stop_ops {
     int (*now)(void *, uint64_t *);
@@ -47,6 +48,7 @@ struct pvr_gpu_stop {
     uint64_t deadline, last_now;
     uint32_t phase, error, index, count;
     uint32_t acknowledgement[2], command_status[2], isolation_observed, isolation_started, irq_status;
+    uint32_t unacknowledged;
     struct pvr_ccb_token tokens[2];
     struct pvr_gpu_stop_step steps[PVR_GPU_STOP_MAX_STEPS];
 };
@@ -77,4 +79,20 @@ int pvr_gpu_stop_init(struct pvr_gpu_stop *, struct pvr_gpu_control *,
  * resource release only after the complete orderly shutdown contract.
  */
 enum pvr_gpu_stop_result pvr_gpu_stop_poll(struct pvr_gpu_stop *);
+/* The stop without the firmware's acknowledgements: upstream's hard reset
+ * (pvr_power.c:496-531, pvr_power_fw_disable with hard_reset), which runs
+ * pvr_fw_stop, soft reset included, and then powers the GPU down without the
+ * forced-idle and power-off requests. Admitted only with the control and its
+ * queue latched failed, so no command can follow; from NEW, or from FAILED
+ * when that stop failed before its power-off acknowledgement, its first
+ * register step and isolation. It starts at the register sequence: the same
+ * interrupt acknowledgement, idle polls and DM association clears, then, as
+ * upstream's pvr_fw_stop ends, the soft reset of every unit (a 64-bit write
+ * of SOFT_RESET), which halts the still running firmware processor, then
+ * the isolation callback. The idle polls are the evidence that no GPU memory access is
+ * in flight; when one does not match before the deadline the stop fails,
+ * and the GPU must stay powered until a power removal. */
+int pvr_gpu_stop_init_unacknowledged(struct pvr_gpu_stop *, struct pvr_gpu_control *,
+                                     const void *image, size_t bytes, const struct pvr_gpu_stop_ops *,
+                                     void *context, uint64_t deadline);
 #endif

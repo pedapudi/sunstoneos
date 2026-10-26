@@ -223,7 +223,10 @@ GPU_SOURCES = ['apps/gpu-power-id/prepare.py', 'apps/gpu-power-id/build.py', 'ap
                'drivers/gpu/pvr_fw_state.c', 'drivers/gpu/pvr_ccb.c', 'drivers/gpu/pvr_gpu_start.c',
                'platform/a733/gpu_memory.c', 'include/pvr_gpu_start.h', 'include/a733_gpu_memory.h',
                'drivers/gpu/pvr_gpu_control.c', 'drivers/gpu/pvr_gpu_stop.c', 'include/pvr_gpu_control.h',
-               'include/pvr_gpu_stop.h', 'include/pvr_ccb.h',
+               'include/pvr_gpu_stop.h', 'include/pvr_ccb.h', 'apps/gpu-power-id/fw-job.inc',
+               'drivers/gpu/pvr_compute_job.c', 'drivers/gpu/pvr_compute_programs.c', 'drivers/gpu/pvr_compute_context.c',
+               'drivers/gpu/pvr_compute_package.c', 'drivers/gpu/pvr_cccb.c', 'drivers/gpu/pvr_gpu_vm.c',
+               'platform/a733/gpu_vm_memory.c', 'include/pvr_cccb.h',
                'drivers/power/a733_pmic.c', 'drivers/power/a733_pmic_consumer.c',
                'platform/a733/monitor.c', 'include/a733_el3_security.h', 'include/a733_gpu_opp.h',
                'apps/gpu-provider-ready/main.c', 'apps/gpu-provider-ready/build.py',
@@ -233,7 +236,7 @@ GPU_SOURCES = ['apps/gpu-power-id/prepare.py', 'apps/gpu-power-id/build.py', 'ap
                'include/a733_gpu_power.h', 'checks/a733-gpu-core-owner.c', 'tools/prepare-board-bundles.py',
                'tools/check-a733-kernel.py', *HOST_TOOLS]
 GPU_PREREQUISITES = ('Admission (apps/gpu-power-id/README.md, "Physical admission is separate"): a cold DDR start '
-                     'of this lifetime; no GPU firmware or command has run since power was applied; the coordinator '
+                     'of this lifetime; {history}; the coordinator '
                      'grants the 18 MiB RAM interval [0x41000000, 0x42200000), the PMIC inputs (S_TWI0 gate and '
                      'reset, APBS route, PL0/PL1, settled supplies, no other PMU writer) and, for the power rows, '
                      'exclusive GPU-local authority over the GPU CCU words, PLL_GPU0 (CCU 0x0e0) and the CORE6 power '
@@ -266,14 +269,21 @@ GPU_FAILURES = ['`FAIL GPU ON begin`, `GPU ON deadline` or `GPU ON poll`, after 
                 'verification deadline`, `service park deadline`, `provider not quiescent at park`, `PMIC clock`)']
 
 
-def gpu_row(name, position, component, variant, expect, expected, intro, after=(), failures=(), admission=''):
+# What a GPU row's lifetime holds before it runs; the rows after a firmware
+# run in the same lifetime name those runs instead.
+GPU_FRESH = 'no GPU firmware or command has run since power was applied'
+
+
+def gpu_row(name, position, component, variant, expect, expected, intro, after=(), failures=(), admission='',
+            history=GPU_FRESH):
     """A returning GPU image of port 3-1, prepared by apps/gpu-power-id/prepare.py from its own build record.
-    admission: text added to the shared GPU admission, such as a row's own exception."""
+    admission: text added to the shared GPU admission, such as a row's own exception. history: what GPU firmware
+    has run earlier in the lifetime."""
     row = returning_row(name, position, component, [], expect, False, expected, intro, after=after,
                         failures=list(failures) + GPU_FAILURES)
     row.update(module='apps/gpu-power-id/prepare.py', function='prepare_bundle', variant=variant,
                admission={'schema': 'board-gpu-returning-bundle-v1', 'row': name}, sources=list(GPU_SOURCES),
-               admission_text=GPU_PREREQUISITES + (' ' + admission if admission else ''))
+               admission_text=GPU_PREREQUISITES.format(history=history) + (' ' + admission if admission else ''))
     return row
 
 
@@ -350,22 +360,27 @@ OPP_STEP_SOURCES = POWER_SOURCES + ['apps/board-bundles-power/cpu-opp-step.c', '
 OPP_APPROVAL = 'cpu-operating-point-approval-v1'
 
 
-def opp_row(name, position, component, text, lines, intro, after):
-    """One CPU operating-point step after bundle 20: admission, thermal stop and end checks as the source states."""
+def opp_row(name, position, component, text, lines, intro, after, entry=None, writes=True):
+    """One CPU operating-point step after bundle 20: admission, thermal stop and end checks as the source states.
+    entry names the admitted rails and CPU-B rate when they are not the boot values; a row without writes needs no
+    approval record."""
+    entry = entry or ('DCDC3 and DCDC5 at 800 mV, CPU-B at 1,014 MHz', 'dcdc5_uv=800000 dcdc3_uv=800000')
     return returning_row(
         name, position, component, OPP_STEP_OVERLAY, f'COMPLETE board bundle {position}: {text}', True,
-        f'Monitor status 0 with TEMP set=0 below 70000 at level 0; the SUPPLY line (dcdc5_uv=800000 '
-        f'dcdc3_uv=800000 sid=0x496 bin=4 dcxo_hz=26000000); {lines}; the CPU-L, CPU-B and DSU after lines; a last '
+        f'Monitor status 0 with TEMP set=0 below 70000 at level 0; the SUPPLY line ({entry[1]} sid=0x496 bin=4 '
+        f'dcxo_hz=26000000); {lines}; the CPU-L, CPU-B and DSU after lines; a last '
         f'TEMP line below 70000; and COMPLETE board bundle {position}: {text}; then a responsive ROM.',
         intro + ' The image admits the step only at the NORMAL thermal level with every sensor below 70 C, on '
-        'vf0400, with DCDC3 and DCDC5 at 800 mV, CPU-B at 1,014 MHz, CPU-L and the DSU on their PLLs and every '
+        f'vf0400, with {entry[0]}, CPU-L and the DSU on their PLLs and every '
         'pattern and LFM enable clear, and no planned voltage above the bin\'s top voltage for its rail (DCDC5 '
-        '1000 mV, DCDC3 1050 mV in vf0400), and otherwise returns REFUSED before any write. A sensor set follows each '
-        'raise and at the end; a sensor at 70 C or more stops the step, which lowers what it raised (DSU 598 MHz, clusters '
-        '1,014 MHz, DCDC3 800 mV) and returns STOPPED. Both are controlled outcomes. At the end it requires the '
-        'planned rates and rails. Approved by the user on 2026-10-24 (CPU clock and voltage); bundle/approval.json '
-        'binds the values to port 3-3 and this image.',
-        sources=OPP_STEP_SOURCES, base=BASE_ROW, after=after, approval=OPP_APPROVAL,
+        '1000 mV, DCDC3 1050 mV in vf0400), and otherwise returns REFUSED before any write. ' +
+        ('A sensor set follows each raise and at the end; a sensor at 70 C or more stops the step, which lowers what '
+         'it raised (DSU 598 MHz, clusters 1,014 MHz, DCDC3 800 mV if it raised DCDC3) and returns STOPPED.' if writes
+         else 'Sensor sets come at the start and the end; a sensor at 70 C or more at the end returns STOPPED.') +
+        ' Both are controlled outcomes. At the end it requires the planned rates and rails.' + (' Approved by the user on 2026-10-24 (CPU clock and voltage); '
+        'bundle/approval.json binds the values to port 3-3 and this image.' if writes else
+        ' It writes no clock or PMIC register.'),
+        sources=OPP_STEP_SOURCES, base=BASE_ROW, after=after, approval=OPP_APPROVAL if writes else None,
         failures=['a `FAIL` line of the provider, the thermal driver, the PMIC requests or the CPU clock driver, '
                   'after a `STEP` line naming the driver state; one after a park or a selector write leaves that '
                   'domain or rail where the log last shows it, which only a power removal restores'])
@@ -924,6 +939,9 @@ ROWS = [
             'the lifetime can continue. Every GPU-window access is a 32-bit access after its progress record. It '
             'runs after the cold DDR start and the provider-readiness row, in a lifetime of its own.',
             after=['gpu-provider-ready', 'gpu-fw-stop'],
+            history=('one complete GPU firmware cycle has run in this lifetime, bundle 25: firmware start, one '
+                     'health check, the forced-idle and power-off requests, the stop and the OFF, with the GPU OFF '
+                     'and the provider parked at its end'),
             failures=['`FAIL GPU firmware control: compatibility or health check not complete, GPU left running`, '
                       'after the `GPU FWS control` and `compat` lines: error 4 an incompatible record, 3 the '
                       '200 ms deadline, 7 a firmware event; the firmware stays running and a power removal follows',
@@ -956,6 +974,129 @@ ROWS = [
              [word(0x07090000 + o, condition=R_CCU_RTC, note=f'RTC +0x{o:x}') for o in RTC_CLOCK_OFFSETS],
              'Every word is read, the RTC words only after the R_CCU RTC gate reads open and its reset released, '
              'and the 128 scratch bytes are restored and equal.'),
+    gpu_row('gpu-first-job', 28, 'The first GPU job: the fixed 32-lane compute job, then the firmware stop and OFF',
+            'fw-job', 'COMPLETE GPU first job: 32 words as computed, context cleaned up, firmware stopped, OFF and '
+            'provider parked',
+            'Status 0 with GPU FWJ job complete=1 outcome=1 timeline=0x1, GPU FWJ events control=4 control_error=0 '
+            'n=0, GPU FWJ hwr mmu_status=0x0 count=0, GPU FWJ output w0=0x2e5ca990 w1=0xd09b3063 w31=0x4775f521 '
+            'guard=0x6d35a7c1 (expected0 and expected31 equal), GPU FWJ cleanup status=0x1, GPU FWS stop result=0 '
+            'phase=10 and COMPLETE GPU first job: 32 words as computed, context cleaned up, firmware stopped, OFF and '
+            'provider parked; or one of the controlled failures below; or no return. Record every line of kernel.log '
+            'and the progress record at result.bin offset 128.',
+            'apps/gpu-power-id, first-job variant (apps/gpu-power-id/fw-start.c built with FWS_STOP and FWS_JOB, with '
+            'apps/gpu-power-id/fw-job.inc), docs/designs/gpu-first-job.md. The firmware lifecycle image of bundle 25 '
+            'with the fixed numerical compute job between the health check and the stop, corrected after set 27 '
+            '(docs/designs/gpu-first-job.md, "Set 27 post-mortem"): the job\'s PDS pointer constants are stored low '
+            'word first, an MMUCACHE command precedes the KICK, no page is mapped GPU read-only, every firmware event '
+            '101-108 is recorded without failing the control, and a stop the firmware does not acknowledge runs '
+            'upstream\'s hard reset (the idle checks, the full soft reset, then the OFF). Before any power change it '
+            'builds, in its own memory, the workload GPU VM (88 write-back pages, the output page bypassing the GPU '
+            'system-level cache), the context programs, the compute context and the job (seed 0x12345678, factor '
+            '0x9e3779b1), and maps the six firmware objects for the firmware at 0xc0800000 + n * 0x10000 in its '
+            'Normal-NC block. After the health check it publishes the workload pages and tables, sends MMUCACHE and '
+            'waits for its execution, formats the client CCB, writes a CDM command and a timeline UPDATE, kicks, '
+            'waits at most 150 ms for the timeline word, checks all 32 words and both guards, sends the context '
+            'cleanup, and then stops the firmware and powers the GPU off whatever the job\'s result. It runs first '
+            'in a new lifetime, after the provider-readiness checkpoint.',
+            after=['gpu-provider-ready'],
+            failures=['`FAIL GPU first job: not complete, GPU OFF and provider parked`, after the `GPU FWJ job`, '
+                      '`events`, `hwr`, `ring` and `output` lines: outcome 2 the timeline did not reach 1 within '
+                      '150 ms, 3 an output word or guard differs, 4 a transport fault, 5 a firmware event (a `GPU FWJ '
+                      'reset` line gives the reason, data master, page-fault flag and fault address); the firmware '
+                      'acknowledged the stop, and the GPU is off',
+                      '`FAIL GPU firmware stop: not acknowledged, idle checks met, GPU OFF and provider parked`: the '
+                      'control failed or the firmware acknowledged neither power request; the stop ran upstream\'s '
+                      'hard reset (`GPU FWS stop ... unacknowledged=1`) and the GPU is off',
+                      '`FAIL GPU firmware stop: not acknowledged and the GPU not idle, GPU left powered`: an idle '
+                      'check never matched; a power removal follows',
+                      '`FAIL GPU first job: 32 words as computed, context cleanup not confirmed, GPU OFF and provider '
+                      'parked`: the cleanup command returned no word of 1',
+                      'every failure line of bundle 25'],
+            admission='GPU job exception: this row runs one GPU compute job. Its data and programs are 88 write-back '
+                      'pages of the image\'s own RAM, mapped only in the job\'s GPU VM, whose tables are also image '
+                      'RAM; the firmware reaches only its own mappings plus the six job objects in the image\'s '
+                      'Normal-NC block. The GPU reads the programs, control stream and input and writes only the '
+                      '256-byte output page; no other memory is mapped for the GPU. It sends MMUCACHE, the KICK and '
+                      'the context cleanup through the kernel CCB, besides bundle 25\'s commands. On set 27 the USC '
+                      'program ran and faulted on its first load because its input pointer\'s halves were exchanged; '
+                      'the GPU MMU refused the access and the firmware reset the context. Risk: as bundle 25; a GPU '
+                      'that never reports idle after a failed job stays on until a power removal.'),
+    gpu_row('gpu-job-session', 29, 'Eight timed GPU compute jobs on one context in one firmware session, then the '
+            'firmware stop and OFF',
+            'fw-session', 'COMPLETE GPU job session: 8 jobs as computed, context cleaned up, firmware stopped, OFF and '
+            'provider parked',
+            'Status 0 with GPU FWJ job complete=1 outcome=1 timeline=0x8 jobs=8, eight GPU FWJ run lines n=1 to 8 '
+            'with write=0xb8 0x170 0x228 0x2e0 0x398 0xb8 0x170 0x228, GPU FWJ ring cccb_read=0x228 '
+            'cccb_write=0x228, GPU FWJ output w0=0x2e5ca990 w1=0xd09b3063 w31=0x4775f521 guard=0x6d35a7c1, GPU FWJ '
+            'cleanup status=0x1 kccb_done=0xb, GPU FWS stop result=0 phase=10 and COMPLETE GPU job session: 8 jobs '
+            'as computed, context cleaned up, firmware stopped, OFF and provider parked; or one of the controlled '
+            'failures below; or no return. Record every line of kernel.log and the progress record at result.bin '
+            'offset 128.',
+            'apps/gpu-power-id, session variant (apps/gpu-power-id/fw-start.c built with FWS_STOP, FWS_JOB and '
+            'FWS_JOBS=8), docs/designs/gpu-job-session.md. The first-job image of bundle 28 (qualified on port 3-1 '
+            'in set board-bundles-20261025-29), with seven more jobs on the same context by pvr_compute_job_repeat: '
+            'each job refills and cleans the output, writes the CDM command and a timeline UPDATE to its number, '
+            'and kicks; the client CCB wraps before job 6 with a padding command. Each job is timed in 24 MHz '
+            'counter ticks from the MTS_SCHEDULE write of its KICK to the first read of its timeline value, by a '
+            'spin that touches no register, and the image logs the ticks of its preparation, publication, '
+            'MMUCACHE, jobs, cleanup and park. The GPU stays at 1,008 MHz with DCDC4 at 960 mV, the vendor top '
+            'operating point. It runs first in a new lifetime, after the provider-readiness checkpoint.',
+            after=['gpu-provider-ready'],
+            failures=['`FAIL GPU job session: not complete, GPU OFF and provider parked`, after the `GPU FWJ job` '
+                      'line with `jobs=` the completed jobs: outcome 2 a kicked job\'s timeline did not arrive '
+                      'within 150 ms (its run line shows ticks=0; no cleanup), 3 an output word or guard differs, 4 a '
+                      'transport fault or a job never kicked, 5 a firmware event (a `GPU FWJ reset` line gives the '
+                      'reason, data master, page-fault flag and fault address), 6 too little of the wait left for '
+                      'another job; the firmware acknowledged the stop, and the GPU is off',
+                      '`FAIL GPU firmware stop: not acknowledged, idle checks met, GPU OFF and provider parked`: the '
+                      'control failed or the firmware acknowledged neither power request; the stop ran upstream\'s '
+                      'hard reset and the GPU is off',
+                      '`FAIL GPU firmware stop: not acknowledged and the GPU not idle, GPU left powered`: an idle '
+                      'check never matched; a power removal follows',
+                      '`FAIL GPU job session: 8 jobs as computed, context cleanup not confirmed, GPU OFF and provider '
+                      'parked`: the cleanup command returned no word of 1',
+                      'every failure line of bundle 25'],
+            admission='GPU job exception: this row runs eight GPU compute jobs on one context, the job of bundle 28 '
+                      'repeated. Its data and programs are 88 write-back pages of the image\'s own RAM, mapped only in '
+                      'the job\'s GPU VM, whose tables are also image RAM; the firmware reaches only its own mappings '
+                      'plus the six job objects in the image\'s Normal-NC block. The GPU reads the programs, control '
+                      'stream and input and writes only the 256-byte output page. It sends MMUCACHE, eight KICKs and '
+                      'the context cleanup through the kernel CCB, besides bundle 25\'s commands. The client CCB '
+                      'wraps for the first time on the board. Risk: as bundle 28; a GPU that never reports idle after '
+                      'a failed job stays on until a power removal.'),
+    opp_row('cpu-top-hold-step', 30, 'CPU-L 1,794 and the DSU 1,274 MHz with DCDC5 1,000 mV, then DCDC3 1,050 mV '
+            'with CPU-B at 1,014 MHz, for the ROM return',
+            'CPU-L 1794 MHz and DCDC5 1000 mV, the DSU 1274 MHz, DCDC3 1050 mV with CPU-B at 1014 MHz',
+            'CPU-L set pll=0xf8804500 mux=0x3000000 mhz=1794 with STEP dcdc5_uv=1000000, a TEMP line below 70000, '
+            'DSU set pll=0xf8803100 mux=0x3000105 mhz=1274, VOLT dcdc3_selector=0xb7 dcdc3_uv=1050000, a TEMP line',
+            'Step 6 of docs/designs/cpu-top-opp.md, first image: with cores 6 and 7 off, the driver raises DCDC5 to '
+            '1,000 mV and CPU-L to 1,794 MHz, then the DSU to 1,274 MHz; the image then raises DCDC3 to 1,050 mV '
+            'with CPU-B held at 1,014 MHz, as step 3 did. The ROM return that follows resets CPU-L and the DSU and '
+            'keeps the rails, which bundle 31 reads back; it does not reset CPU-B, which this image never changes. '
+            'The workload relocks all three itself and lowers CPU-B to 1,014 MHz again before its return. Steps 1 '
+            'to 5 passed on port 3-3 in earlier lifetimes. Set step6-set-5 ran this image as bundle 25, before the GPU '
+            'and clock-audit rows took 25 to 29.', ()),
+    opp_row('cpu-rails-held-read', 31, 'DCDC5 1,000 mV and DCDC3 1,050 mV after the ROM return, read only',
+            'DCDC5 1000 mV and DCDC3 1050 mV kept across the ROM return, read only',
+            'CPU-L before pll=0xf8802600 mux=0x3010000 mhz=494, CPU-B before pll=0xf8802700 mux=0x3000000 mhz=1014 '
+            'and DSU before pll=0xf8802600 mux=0x3010105 mhz=494, which the image requires',
+            'Step 6 of docs/designs/cpu-top-opp.md, the gate before the workload: after bundle 30 and one ROM return, '
+            'the rails must still read DCDC5 1,000 mV and DCDC3 1,050 mV, the voltages that the workload\'s relock '
+            'to the top points needs, and the three domains their boot PLL and mux words; a REFUSED line for the '
+            'CPU supplies or the boot clock words ends the lifetime before the workload.',
+            ('cpu-top-hold-step',), entry=('DCDC5 at 1,000 mV and DCDC3 at 1,050 mV, CPU-B at 1,014 MHz',
+                                           'dcdc5_uv=1000000 dcdc3_uv=1050000'), writes=False),
+    opp_row('cpu-after-workload-read', 32, 'Temperatures, rails and boot clock words after the top-point workload, '
+            'read only',
+            'temperatures, rails and boot clock words after the top-point workload, read only',
+            'CPU-L before pll=0xf8802600 mux=0x3010000 mhz=494, CPU-B before pll=0xf8802700 mux=0x3000000 mhz=1014 '
+            'and DSU before pll=0xf8802600 mux=0x3010105 mhz=494, which the image requires',
+            'Step 6 of docs/designs/cpu-top-opp.md, after a completed workload: the workload lowered CPU-B to '
+            '1,014 MHz before its return and the ROM return reset CPU-L and the DSU, so the three domains must read '
+            'their boot words, with DCDC5 at 1,000 mV and DCDC3 at 1,050 mV; two temperature sets. A REFUSED line '
+            'for the boot clock words or the CPU-B rate means CPU-B is still raised: remove power at once.',
+            ('cpu-rails-held-read',), entry=('DCDC5 at 1,000 mV and DCDC3 at 1,050 mV, CPU-B at 1,014 MHz',
+                                             'dcdc5_uv=1000000 dcdc3_uv=1050000'), writes=False),
     # `admission` maps fields of the value prepare() returns to the values that
     # identify this row's build. None refuses the row: no owning package has
     # named those values yet.
@@ -1312,6 +1453,12 @@ def gates(row):
                     if name != row.get('base')]
 
 
+def external_gates(entry, lifetime):
+    """The external entries of the order that must have completed before a row's order entry: (stem, name, run)."""
+    externals = {e['stem']: e for e in (lifetime or {}).get('order', []) if 'external' in e}
+    return [(stem, externals[stem]['external'], externals[stem]['run']) for stem in (entry or {}).get('after_external', [])]
+
+
 def stops(entry):
     """The controlled outcomes of earlier rows that stop an order entry, as text."""
     return [f'`{name}` ended in `{outcome}`' for name, outcomes in (entry or {}).get('stop_if', {}).items()
@@ -1337,7 +1484,7 @@ def runbook(row, bundle, value, artifacts, prerequisites, timeout, lifetime=None
     else:
         lines += [row['intro'], '']
     required, stopped = gates(row), stops(entry)
-    if required or stopped:
+    if required or stopped or external_gates(entry, lifetime):
         lines += ['## Run only after', '']
         passed = (lifetime or {}).get('passed', {})
         lines += [(f'- `{name}` passed earlier in this lifetime, from an earlier set, as `$S/{passed[name]}`: '
@@ -1346,6 +1493,9 @@ def runbook(row, bundle, value, artifacts, prerequisites, timeout, lifetime=None
                    f'- `{name}` of this set passed in this lifetime ({reason}): status 0 with its success text. A '
                    'controlled outcome of that row is not a pass.') for name, reason in required]
         lines += [f'- Do not run it when {text}.' for text in stopped]
+        lines += [f'- `{name}` (external entry `{stem}`) completed in this lifetime: `$S/{run}/session.json` has '
+                  '`complete`, `rom_usable` and `dram_restored` true. Any other outcome of it ends the lifetime with '
+                  'a power removal instead of this bundle.' for stem, name, run in external_gates(entry, lifetime)]
         lines += ['', 'The operator applies these gates; the runner does not check them.', '']
     lines += ['## Bundle', '', '| File | SHA-256 |', '| --- | --- |']
     lines += [f'| `{Path(a["path"]).relative_to(bundle)}` | `{a["sha256"]}` |' for a in artifacts]
@@ -1490,6 +1640,7 @@ def set_runbook(run_dir, lifetime, rows, table):
             after = entry.get('after', [])
         passed = lifetime.get('passed', {})
         gate = [f'`{a}` passed' + (f' (`{passed[a]}`, already in the chain)' if a in passed else '') for a in after]
+        gate += [f'`{stem}` completed with DRAM restored' for stem, _, _ in external_gates(entry, lifetime)]
         gate += [f'not if {text}' for text in stops(entry)]
         lines.append(f'| {i} | {what} | `$S/{entry["stem"]}-*`; link `{entry["run"]}` | '
                      + ('; '.join(gate) or 'none') + ' |')
@@ -1790,12 +1941,12 @@ def check_lifetime(lifetime, names, inputs):
     require(all(isinstance(x, str) for x in lifetime.get('start', [])), 'start is a list of runbook lines.')
     require(all(isinstance(x, str) and x and '/' not in x for x in [lifetime['ddr'], *lifetime['chain']]),
             'The DDR record and the chain are record directory names of the session directory.')
-    stems, runs, placed = set(), set(lifetime['chain']), list(lifetime.get('passed', {}))
+    stems, runs, placed, placed_externals = set(), set(lifetime['chain']), list(lifetime.get('passed', {})), set()
     for entry in lifetime['order']:
         require(isinstance(entry, dict) and ('row' in entry) != ('external' in entry), 'Each order entry names a row '
                 'or an external bundle.')
-        keys = {'row', 'stem', 'run', 'stop_if'} if 'row' in entry else {'external', 'stem', 'run', 'runbook', 'after',
-                                                                         'stop_if'}
+        keys = {'row', 'stem', 'run', 'stop_if', 'after_external'} if 'row' in entry else {
+            'external', 'stem', 'run', 'runbook', 'after', 'stop_if'}
         require(set(entry) <= keys, f'Order entry {entry} has keys outside {sorted(keys)}; a row\'s gates are its '
                 'base and after fields.')
         require('row' not in entry or (entry['row'] in inputs and names[entry['row']].get('returning')),
@@ -1812,6 +1963,11 @@ def check_lifetime(lifetime, names, inputs):
         required = [g for g, _ in gates(names[entry['row']])] if 'row' in entry else list(entry.get('after', []))
         late = [g for g in required + list(stop_if) if g not in placed]
         require(not late, f'Order entry {entry} names gate rows that are not placed before it: ' + ', '.join(late))
+        late = [g for g in entry.get('after_external', []) if g not in placed_externals]
+        require(not late, f'Order entry {entry} names external entries that are not placed before it: '
+                + ', '.join(late))
+        if 'external' in entry:
+            placed_externals.add(entry['stem'])
         stems.add(entry['stem'])
         runs.add(entry['run'])
         if 'row' in entry:

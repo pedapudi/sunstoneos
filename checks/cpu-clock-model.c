@@ -435,6 +435,10 @@ static void top_cases(void)
     assert(settle_run(A733_CPU_BIG,2002)==A733_CPU_CLOCK_COMPLETE && heat(95000)==A733_THERMAL_THROTTLE);
     assert(run(400)==A733_CPU_CLOCK_COMPLETE && rate(1)==1014000000);
     assert(a733_cpu_clock_request(&cpu,A733_CPU_DSU,910,pm.now+120000)==A733_CPU_CLOCK_REFUSED);
+    /* The DSU point the OS owner requests after the clusters (vendor dsufreq rule). */
+    assert(a733_cpu_clock_dsu_top(4,1794,2002)==1274 && a733_cpu_clock_dsu_top(4,1196,2002)==910);
+    assert(a733_cpu_clock_dsu_top(4,1014,1014)==598 && a733_cpu_clock_dsu_top(4,1196,1014)==780);
+    assert(!a733_cpu_clock_dsu_top(4,494,1014) && a733_cpu_clock_dsu_top(1,1612,1794)==1222);
     puts("PASS top operating points: step 1 at 800 mV with a flickering lock, whole-millisecond settle, "
          "CPU-B 2002 and CPU-L 1794 MHz, DSU 1274 MHz after both with no voltage write, DSU refusals");
 }
@@ -478,6 +482,27 @@ static void lifetime_cases(void)
     puts("PASS lifetime of steps 2, 4 and 5: CPU-L 1196 and DSU 780 MHz at 800 mV, CPU-B 2002 MHz at 1050 mV "
          "with the DSU at 910 then 598 MHz and back, CPU-L 1794 MHz at 1000 mV and the DSU 1274 MHz, then the "
          "thermal-stop lowering to 800 mV");
+    /* CPU-B inherited at 2002 MHz, as an image that returned with it raised
+     * would leave it (the FEL ROM return does not reset CPU-B). With DCDC3 at
+     * 1050 mV, inspection applies the point and a lowering to 1014 MHz keeps
+     * DCDC3 at the image's first reading, with no PMIC write. */
+    const struct a733_cpu_clock_grant g27={1,2,{0,1014},2};
+    board33(&g27);pm.pmic[REG_DCDC3]=55;pm.pmic[REG_DCDC5]=50;cm.ramp[1].from_uv=cm.ramp[1].to_uv=1050000;
+    cm.ramp[0].from_uv=cm.ramp[0].to_uv=1000000;*word(PLL(1))=LOCKED|(77u<<8);cm.count=0;
+    assert(a733_cpu_clock_inspect(&cpu,A733_CPU_BIG,pm.now+120000)==A733_CPU_CLOCK_PENDING);
+    assert(run(400)==A733_CPU_CLOCK_COMPLETE && cpu.rail_uv[1]==1050000 && cpu.applied_mhz[A733_CPU_BIG]==2002);
+    assert(settle_run(A733_CPU_BIG,1014)==A733_CPU_CLOCK_COMPLETE && *word(PLL(1))==(LOCKED|(39u<<8)) &&
+        pm.pmic[REG_DCDC3]==55 && cpu.rail_uv[1]==1050000 && !pmic_writes() && released());
+    /* With DCDC3 at 800 mV, below the inherited point's 1050 mV, inspection
+     * applies no rate; a lowering to 1014 MHz still runs, frequency first,
+     * and needs no PMIC write because 800 mV covers 1014 MHz. */
+    board33(&g27);*word(PLL(1))=LOCKED|(77u<<8);cm.count=0;
+    assert(a733_cpu_clock_inspect(&cpu,A733_CPU_BIG,pm.now+120000)==A733_CPU_CLOCK_PENDING);
+    assert(run(400)==A733_CPU_CLOCK_COMPLETE && cpu.applied_mhz[A733_CPU_BIG]==0);
+    assert(settle_run(A733_CPU_BIG,1014)==A733_CPU_CLOCK_COMPLETE && *word(PLL(1))==(LOCKED|(39u<<8)) &&
+        pm.pmic[REG_DCDC3]==30 && !pmic_writes() && released());
+    puts("PASS inherited CPU-B at 2002 MHz: lowered to 1014 MHz with no PMIC write, DCDC3 kept at 1050 mV; above "
+         "an 800 mV rail the point is not applied and the lowering still runs frequency first");
 }
 int main(int argc,char **argv)
 {

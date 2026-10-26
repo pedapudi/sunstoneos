@@ -1,6 +1,8 @@
 int fixed_fixture_main(int,char **);
 #define main fixed_fixture_main
 #include "pvr-compute-job.c"
+/* A 64-bit value with its 32-bit halves exchanged. */
+#define HALVES(v) ((uint64_t)(v)<<32|(uint64_t)(v)>>32)
 #undef main
 #ifdef UPSTREAM
 #include "pvr_rogue_pds_encode.h"
@@ -38,8 +40,12 @@ int main(int argc,char **argv)
             pds[12+i]=package.grid.groups[i];
         }
         assert(p.num_workgroups_indirect_src==16&&p.num_workgroups_indirect_src_dma==6);
+        /* Halves exchanged: Mesa's DOUTW generator stores the high word
+         * first, and DOUTW writes word 0 to the even (low) register
+         * (pvr_compute_job.c doutw_pair). */
         struct pvr_pds_doutw_control pointers={.dest_store=PDS_UNIFIED_STORE,.num_const64=2,
-            .doutw_data={config.buffers[PVR_JOB_INPUT].gpu,config.buffers[PVR_JOB_OUTPUT].gpu+64}};
+            .doutw_data={(uint64_t)config.buffers[PVR_JOB_INPUT].gpu<<32|config.buffers[PVR_JOB_INPUT].gpu>>32,
+                (uint64_t)(config.buffers[PVR_JOB_OUTPUT].gpu+64)<<32|(config.buffers[PVR_JOB_OUTPUT].gpu+64)>>32}};
         pvr_pds_generate_doutw(&pointers,pds+20,PDS_GENERATE_DATA_SEGMENT,dev);
         assert(pointers.data_size==8);
         pds[26]&=~PVR_ROGUE_PDSINST_DOUT_FIELDS_DOUTW_SRC1_LAST_EN;
@@ -80,9 +86,12 @@ int main(int argc,char **argv)
             unsigned first=group*32,count=package.count-first;
             if(count>32)count=32;
             uint32_t code[16]={0};
+            /* Halves exchanged: Mesa's save-restore generator stores the high
+             * word first, and DOUTW writes word 0 to the even (low) register
+             * (pvr_compute_job.c doutw_pair). */
             struct pvr_pds_shared_storing_program p={.cc_enable=true,.doutw_control={.dest_store=PDS_UNIFIED_STORE,
-                .num_const64=3,.doutw_data={config.buffers[PVR_JOB_INPUT].gpu,config.buffers[PVR_JOB_OUTPUT].gpu+64,
-                    ((uint64_t)count<<32)|first}}};
+                .num_const64=3,.doutw_data={HALVES(config.buffers[PVR_JOB_INPUT].gpu),
+                    HALVES(config.buffers[PVR_JOB_OUTPUT].gpu+64),HALVES(((uint64_t)count<<32)|first)}}};
             pvr_pds_setup_doutu(&p.usc_task.usc_task_control,config.buffers[0].gpu-programs.usc.base,package.precomp[0],0,false);
             pvr_pds_generate_shared_storing_program(&p,pds+group*32,PDS_GENERATE_DATA_SEGMENT,dev);
             uint32_t *end=pvr_pds_generate_compute_barrier_conditional(code,PDS_GENERATE_CODE_SEGMENT);
@@ -105,8 +114,9 @@ int main(int argc,char **argv)
         puts("PASS all multidispatch PDS/CDM bytes and final fence match upstream");return 0;
     }
     uint32_t data[128]={0};
+    /* Halves exchanged, as above (pvr_compute_job.c doutw_pair). */
     struct pvr_pds_shared_storing_program p={.cc_enable=true,.doutw_control={.dest_store=PDS_UNIFIED_STORE,
-      .num_const64=2,.doutw_data={config.buffers[PVR_JOB_INPUT].gpu,config.buffers[PVR_JOB_OUTPUT].gpu+64}}};
+      .num_const64=2,.doutw_data={HALVES(config.buffers[PVR_JOB_INPUT].gpu),HALVES(config.buffers[PVR_JOB_OUTPUT].gpu+64)}}};
     pvr_pds_setup_doutu(&p.usc_task.usc_task_control,config.buffers[0].gpu-programs.usc.base,package.precomp[0],0,false);
     pvr_pds_generate_shared_storing_program(&p,data,PDS_GENERATE_DATA_SEGMENT,dev);
     uint32_t *end=pvr_pds_generate_compute_barrier_conditional(data+ALIGN_POT(p.data_size,4),PDS_GENERATE_CODE_SEGMENT);
@@ -141,8 +151,8 @@ int main(int argc,char **argv)
         unsigned covered=0;
         for(unsigned group=0;group<package.dispatch_count;++group) {
             size_t slot=(size_t)group*128;
-            unsigned first=get(config.buffers[PVR_JOB_PDS].cpu,slot+36);
-            unsigned count=get(config.buffers[PVR_JOB_PDS].cpu,slot+32);
+            unsigned first=get(config.buffers[PVR_JOB_PDS].cpu,slot+32);
+            unsigned count=get(config.buffers[PVR_JOB_PDS].cpu,slot+36);
             assert(first==covered&&count>0&&count<=32&&count<=package.count-first);
             assert(first*package.output_element_bytes<=package.output_bytes&&
                 count*package.output_element_bytes<=package.output_bytes-first*package.output_element_bytes);

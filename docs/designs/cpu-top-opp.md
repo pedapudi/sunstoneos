@@ -1,8 +1,13 @@
 # Design: CPU clusters and the DSU default to the vendor's top operating points
 
-Status: **driver changes implemented and host-modeled. Step 1 passed on port
-3-3 on 2026-10-25; steps 2 to 5 are built and frozen in one lifetime and have
-not run.** Every hardware block defaults to the highest
+Status: **driver changes implemented and host-modeled. Steps 1 to 5 passed
+on port 3-3 on 2026-10-25, and step 6, all eight cores at the top points,
+passed there the same day (`board-session-cpu-top-opp-10`); its first run
+had stopped as designed at bundle 26, which found CPU-B not reset by the ROM
+return. Step
+7's grant of both clusters is implemented and host-checked; it cannot be
+frozen until the integrated OS image has a reviewed physical entry record
+and B1 has passed (below).** Every hardware block defaults to the highest
 operating point that the vendor uses for the chip's speed bin, with the
 vendor's voltage; lower points are optional modes ([AGENTS.md](../../AGENTS.md),
 "Implementation"). The user approved CPU clock and voltage changes on
@@ -211,17 +216,21 @@ Lower points are optional modes:
   lowering follows the vendor order: the DSU first, then the cluster, then
   its voltage.
 
-Three changes outside the driver remain for the default path, after the
-board steps:
+The integrated OS image carries the default path as approval step `TOP`:
 
-- The integrated OS image's owner (`apps/os/cpu.c`) requests each granted
-  cluster's maximum; it must also request the DSU after CPU-L.
-- Preparation and admission refuse a grant that names both clusters
-  ([cpu-a76-dvfs.md](cpu-a76-dvfs.md)); the default needs both, and the
-  record format already carries them.
-- Each grant needs an approval record for one session. The default needs a
-  standing record per board for its top points, which the resident lifetime
-  also needs.
+- `apps/os/prepare.py` admits a `TOP` approval only with both clusters at
+  the top rows of the board's bin column, as B1 recorded it; it still
+  refuses both clusters for steps A1 to A3.
+- `apps/os/admission.c` accepts a grant of both clusters.
+- The clock owner (`apps/os/cpu.c`) requests CPU-B, then CPU-L, each once its
+  own sensor has a reading, and, for a grant of both clusters only, then the
+  DSU at the point that `a733_cpu_clock_dsu_top` derives by the rule above
+  from the rates that CPU-L and CPU-B reached. A one-cluster grant leaves the
+  DSU at its boot point.
+
+One change remains: each grant needs an approval record for one session. The
+default needs a standing record per board for its top points, which the
+resident lifetime also needs.
 
 ## Prerequisites that remain from the A76 design
 
@@ -258,8 +267,8 @@ and DCDC3 1050 mV in vf0400). The steps change one variable at a time.
 | 3 | DCDC3 800 → 1050 mV and back, CPU-B held at 1014 MHz | DCDC3 selector `0xb7`, then `0x9e`; every clock word unchanged; temperatures within 1 °C |
 | 4 | DCDC3 to 1050 mV, CPU-B 1014 → 2002 MHz, then the DSU to 910 MHz; then the DSU to 598 MHz, CPU-B to 1014 MHz and DCDC3 to 800 mV, cores 6 and 7 off; the DSU stays at 598 MHz | CPU-B PLL `0xf8804d00`, DCDC3 `0xb7`, DSU PLL `0xf8802300`, mux `0x03000105`; then DSU PLL `0xf8802e00`, mux `0x03010105`, CPU-B `0xf8802700`, DCDC3 `0x9e` |
 | 5 | DCDC5 to 1000 mV, CPU-L → 1794 MHz, then the DSU → 1274 MHz | DCDC5 1000 mV (`0xb2`); CPU-L PLL `0xf8804500`, CPU0 measures 1794 MHz ± 1%; DSU PLL `0xf8803100`, mux `0x03000105`; the hottest sensor below 50 °C |
-| 6 | The all-core workload with the top point applied before the tasks start | Workload passes with the status-masked capture; core 6 measures 2002 MHz and core 0 1794 MHz; the hottest sensor stays below 90 °C |
-| 7 | B1, then the OS image with both clusters and the DSU at their top points | Recognition on the A76 pair at about 1.2 s for the bench recording ([cpu-a76-dvfs.md](cpu-a76-dvfs.md), A2) |
+| 6 | The all-core returning workload with CPU-B at 2002 MHz, CPU-L at 1794 MHz and the DSU at 1274 MHz, set by the workload's own CPU0 before any secondary starts | 32 rounds on every core, 32 ticks on CPU0 and 33 SGIs on each secondary, as at the boot rates; background progress about 3.6 times the boot-rate count on cores 0 to 5 and about 2 times on cores 6 and 7; the relock record reads the three top-point PLL words; every sensor below 70 °C before and after |
+| 7 | B1, then the OS image with both clusters and the DSU at their top points | Recognition on the A76 pair at about 2.10 s in B1 and about 1.20 s at the top points for the bench recording ([cpu-a76-dvfs.md](cpu-a76-dvfs.md), A2) |
 
 Step 1 changes nothing that a running core uses, so it tests the park,
 relock and lock rule on real hardware at the lowest risk. Step 2 is the first
@@ -275,8 +284,12 @@ Step 1 passed on port 3-3 (`board-session-20261025-17/port-3-3`, record
 sensor read 39.7 °C before and 39.6 °C after.
 
 Steps 2 to 5 are bundles 22, 21, 23 and 24, built from the same source as
-step 1 with `-DOPP_BUNDLE=n` (below). Step 6 needs the driver in the all-core workload
-image and is not built.
+step 1 with `-DOPP_BUNDLE=n` (below). They passed on port 3-3 in one lifetime
+(`board-session-20261025-19/port-3-3`), every clock word as predicted and the
+hottest sensor at 42 °C. Every image's `before` lines showed CPU-L and the
+DSU at 494 MHz and CPU-B at 1014 MHz. The ROM return resets CPU-L and the
+DSU; CPU-B read 1014 MHz only because steps 1 and 4 had lowered it again
+themselves (next section).
 
 ## Steps 2 to 5 share one lifetime
 
@@ -347,6 +360,412 @@ with its approval record, then the Read bundle 14 as the host-side capture.
 The host model runs the three driver steps in sequence with the bundles'
 grants (`lifetime_cases` in `checks/cpu-clock-model.c`), followed by a
 thermal stop of step 5 that returns DCDC5 to 800 mV.
+
+## The FEL ROM return resets CPU-L and the DSU, not CPU-B
+
+The first run of step 6 (`board-session-cpu-top-opp-7/port-3-3`, set
+`step6-set-2`) showed it. Bundle 25 left CPU-B at 2002 MHz, CPU-L at
+1794 MHz and the DSU at 1274 MHz, with DCDC3 at 1050 mV and DCDC5 at
+1000 mV. After its ROM return, bundle 26 read CPU-L and the DSU back at
+`0xf8802600` (494 MHz) but CPU-B still at `0xf8804d00` (2002 MHz), and
+refused with `boot clock words`; the Read bundle 14 that followed read the
+same CPU-B word. The rails kept their voltages.
+
+The boot ROM explains it. Its clock setup programs two PLLs from its
+literal pool: `0x08871000` (CPU-L) and `0x08873000` (DSU), through the
+routine at `0x1898` that calls the PLL writer at `0x1774` once for each
+with N = 38, then selects both muxes at `0x1af0`. The pool holds no
+`0x08872000`, and no routine writes CPU-B (`a8e31821…`, literals at
+`0x1f78`–`0x1fa0`; [boot ROM and boot0](../vendor-firmware/boot-rom-and-boot0.md)).
+CPU-B's boot word `0xf8802700` (N = 39, 1014 MHz) comes from boot0's board
+setup, which the cold DDR start runs once per lifetime. Every earlier
+lifetime had lowered CPU-B to 1014 MHz before its return (steps 1 and 4),
+so the ROM never had a raised CPU-B to keep.
+
+CPU-B at 2002 MHz across a return is safe only while DCDC3 stays at
+1050 mV. Two fixes were weighed:
+
+- **Accept a raised CPU-B after a return** (bundle 26 and the relock accept
+  the top word with the rail at 1050 mV). The raised state would then
+  persist through every later image of the lifetime, and each of them would
+  need to know it: an image that lowers DCDC3, B1's baseline, which is
+  defined at boot0's rate, and the step images, which admit only CPU-B at
+  1014 MHz.
+- **Never return with CPU-B raised** (chosen). Every image that raises
+  CPU-B lowers it to 1014 MHz before a successful return, so the state that
+  boot0 leaves holds at every such ROM return, as every other image
+  assumes. Bundle 25 does not change CPU-B: it raises DCDC5 through CPU-L's
+  top point and DCDC3 with CPU-B held at 1014 MHz, the change step 3
+  qualified. The workload's relock raises CPU-B, and on the completed path,
+  after all seven secondaries are OFF, CPU0 lowers CPU-B to 1014 MHz
+  (N = 39) at EL3 with the relock's own sequence before the return
+  (`top_opp_lower_b` in `boot/a733/top-opp-relock.c`). Bundle 27 then only
+  reads the boot words. Steps 1 and 4 lowered CPU-B themselves, as before.
+
+Only a failed run can return with CPU-B raised: a deadline return of the
+workload after its relock, a completed workload whose lowering refused or
+failed (the run then reports a failure), or a step image that fails between
+raising and lowering CPU-B. DCDC3 is then at least at the raised point's
+voltage, because every raise writes the voltage first, and each such
+outcome ends the lifetime with a power removal before any other image runs.
+The paths that could lower DCDC3, or that assume CPU-B at 1014 MHz, refuse
+a raised CPU-B:
+
+- the CPU clock driver lowers DCDC3 only after lowering CPU-B in the same
+  transition and never below the rail's first reading in the image; with
+  CPU-B inherited at 2002 MHz it lowers CPU-B first with no PMIC write
+  (`checks/cpu-clock-model.c`, inherited CPU-B cases);
+- every step image admits CPU-B only at 1014 MHz, and its direct DCDC3
+  write (`dcdc3_change`) runs with the CPU-B clock lease held and requires
+  that admitted rate; no plan with a DCDC3 write changes CPU-B;
+- bundles 26 and 27 refuse any clock word other than the boot words;
+- the integrated OS image refuses to start unless CPU-B reads boot0's
+  1014 MHz (`os_cpu_admit` in `apps/os/cpu.c`), so B1 and steps A1 to A3
+  and `TOP` start from boot0's point;
+- the workload's relock reads DCDC3 itself and refuses unless it is at
+  1050 mV, and its lowering refuses unless CPU-B reads the relock's word.
+
+The performance-mode toggle of the default path follows the same rule: an
+image may raise CPU-B for its own run, and lowers it before any ROM return.
+The integrated OS image ends at a terminal halt and a power removal, so it
+needs no lowering.
+
+## Step 6: the workload relocks its own clocks
+
+Every launch starts from the ROM, which resets CPU-L and the DSU on each
+return and leaves CPU-B as the last image set it. A setter image cannot
+hand CPU-L and the DSU to the workload with no ROM return in between,
+because the host loads every image through the ROM. The workload's own
+launch must therefore set the clocks. The rails are expected to differ:
+neither ROM description lists a PMIC access
+([boot ROM and boot0](../vendor-firmware/boot-rom-and-boot0.md)), so a voltage
+that an earlier image writes should survive the return; the first run of
+step 6 confirmed it for DCDC3 and DCDC5. Step 6 still relies on it only
+after bundle 26 has read it on the board:
+
+1. **Bundle 25** raises DCDC5 to 1000 mV and CPU-L to 1794 MHz, then the
+   DSU to 1274 MHz, through the driver, then DCDC3 to 1050 mV with CPU-B
+   held at 1014 MHz, and leaves the rails. Its ROM return resets CPU-L and
+   the DSU.
+2. **Bundle 26** reads, with no write, that DCDC5 is still at 1000 mV and
+   DCDC3 at 1050 mV and that the three domains read the boot PLL and mux
+   words that bundle 14 recorded (CPU-L `0xf8802600`/`0x03010000`, CPU-B
+   `0xf8802700`/`0x03000000`, DSU `0xf8802600`/`0x03010105`). It refuses,
+   and the lifetime ends before the workload, if a rail or a word differs.
+3. **The workload** (`bundle-deadline-top-5`) is the returning deadline
+   profile on the refrozen native image `6fd7af86` with one change: before
+   it releases any secondary, CPU0 at EL3 relocks CPU-B to 2002 MHz, CPU-L
+   to 1794 MHz and the DSU to 1274 MHz (`boot/a733/top-opp-relock.c`). The
+   relock follows the driver's sequence. Before its first clock write it
+   checks the board itself: the DCXO enabled and stable at 26 MHz, speed-bin
+   code `0x04`, every domain on its locked PLL with modulation off, and
+   DCDC3 at 1050 mV and DCDC5 at 1000 mV, which it reads from the AXP8191
+   over S_TWI0 with the PMIC provider's bus checks and phase order (page 0,
+   chip 3 and revision 0 before the selectors). Any difference ends the run
+   with a refusal code through the deadline unit before any secondary
+   starts. It records the entry and final words, the parked time, the lock
+   reads, the oscillator and SID words and the seven PMIC bytes in the
+   identity header at `0x42018180`. The overlay's 16 KiB reservation had
+   288 bytes left, so the 2,647-byte relock and its tables sit in the
+   3.5 KiB gap between the 512-byte base overlay and the extension.
+4. **The workload's completed path**, after all seven secondaries are OFF,
+   lowers CPU-B to 1014 MHz with the same sequence and records it in the
+   identity header at `0x42018160` (result, entry and final words, parked
+   time and lock reads); the runner's decoder refuses a completed run
+   without it.
+5. **Bundle 27** reads, with no write, the temperatures, the rails and the
+   boot words of all three domains, and refuses on any other word. It runs
+   only after the workload completed with DRAM restored; every other
+   outcome of the workload ends the lifetime with a power removal.
+
+The workload reads no temperature itself: it lasts about 32 ticks, shorter
+than one conversion period of the temperature sensor, about 100 ms. The
+sensor sets of bundles 25, 26 and 27 bracket it in the same lifetime, and
+the 70 °C thermal stop applies in each of them. The relock and the workload
+do not use the memory bus clock; the workload's own clocks are the three it
+sets.
+
+Predictions, against the ten boot-rate runs on port 3-3 of 2026-10-25
+(`board-session-20261025-3/port-3-3`, `tw1` to `tw10`):
+
+| Quantity | Boot rates | Top points |
+| --- | --- | --- |
+| Rounds per core, ticks on CPU0, SGIs per secondary | 32, 32, 33 | Same: the rounds wait on the tick |
+| Time per round | One tick | One tick |
+| Background progress, cores 0 to 5 | 82,600 to 88,200 (run 1: 187,600 to 196,700) | About 3.6 times, 300,000 to 320,000, less where memory bounds the loop |
+| Background progress, cores 6 and 7 | 130,100 to 137,300 | About 2 times, 255,000 to 270,000 |
+| Relock record | — | Result 1; final words `0xf8804d00`/`0x03000000`, `0xf8804500`/`0x03000000`, `0xf8803100`/`0x03000105`; at least three lock reads per domain; parked about 60 µs each |
+| Hottest sensor, bundles 25 to 27 | 42 °C in step 5; 37 °C in bundle 25 of the first step 6 run | Below 50 °C |
+| CPU-B lowering record | — | Result 1; entry `0xf8804d00`/`0x03000000`, final `0xf8802700`/`0x03000000`; at least three lock reads; parked about 60 µs |
+| Bundle 27 | — | Boot words in all three domains, DCDC5 1000 mV and DCDC3 1050 mV |
+
+Board 3-3 has run neither secondary at a top point. A non-return of the
+workload ends the lifetime with the A76 cores possibly running at 2002 MHz
+and CPU0 at 1794 MHz; only a power removal recovers it. A deadline return
+resets CPU0 into the ROM, which resets CPU-L and the DSU but not CPU-B: a
+secondary still running on CPU-B runs at 2002 MHz with DCDC3 at 1050 mV,
+and the lifetime also ends with a power removal, before any other image.
+A deadline return with every secondary completed (mask `0xfe`) means the
+lowering refused or failed: no secondary runs, CPU-B is at 2002 MHz or
+parked on the oscillator at 1050 mV, the lowering record at report offset
+`0x160` gives the code, and the lifetime ends with a power removal. The
+deadline unit returns CPU0 1.5 s after the launch (the 1 s startup deadline
+plus 0.5 s), and the runner waits 10 s after its `exe` transaction for the
+returned FEL instance. The operator therefore removes power at once when the
+runner stops with `No new FEL instance`, or 12 s after the launch if it has
+not reported by then.
+
+The frozen set is
+`~/.cache/sunstoneos/evidence/cpu-top-opp-20261025/step6/step6-set-5/` for one
+fresh port 3-3 lifetime: power removal, cold DDR start, the base image,
+bundles 25 and 26, the workload (`../bundle-deadline-top-5/`, its own runbook,
+binding script and root-review draft, with `bundle-deadline-top-5.sha256`),
+bundle 27, the Read bundle 14 and a power removal. The workload's source is
+the archive `step6/source-3244504c`; the overlay built without `--top-opp`
+equals the frozen deadline overlay byte for byte. Bundle 27's order entry
+names the workload as a gate (`after_external` in the set's lifetime order).
+
+The binding script is `tools/top-opp-workload-bind.py`, frozen byte for
+byte as the bundle's `cpu-prepare.py` with `binding.json` beside it (the
+source archive and bundle 26's frozen row with the SHA-256 of its uploaded
+`probe.bin` and of its `image.elf`). It refuses port 3-1, whose bin,
+oscillator and supplies have not been read, and requires that bundle 26's
+run record and every later record belong to the current survey's instance
+chain: each launch starts on the instance of the record before it, and the
+survey's node and identity are the ones bundle 26's run returned to. Bundle
+26's run record names the uploaded `probe.bin`, as every run record does;
+the script takes that hash from the row's `artifacts.json` and requires the
+file and `binding.json` to agree with it. It copies the read-only frozen
+template by contents, so the prepared files are writable.
+`checks/top-opp-workload-bind.py` requires the frozen script to equal the
+tree script at the commit `binding.json` names, runs it on a real session's
+records into a new directory, and requires eight refusals: port 3-1, a
+bundle 26 record named by its ELF hash, a survey on another instance and a
+list without bundle 26, each on changed copies of the records; and, in a
+writable copy of the bundle, a `binding.json` probe pin, a row `probe.bin`
+or a row `artifacts.json` that disagrees, and an ELF pin equal to the probe
+pin. The tree script now refuses through explicit checks that `python -O`
+keeps and makes every check before it creates the output directory; set 5
+keeps the frozen copy from `5a334288`, whose checks are `assert`
+statements, run without `-O`. A binding that stops after creating
+`<stem>-prepare` needs that directory moved to the trash before a rerun;
+the workload runbook says so (`step6/step6-set-5-runbook-corrected.json`
+records the runbook's and the hash list's previous and new SHA-256).
+
+Step 6's second run (`board-session-cpu-top-opp-8/port-3-3`, set
+`step6-set-4`) passed bundles 2, 25 and 26: bundle 26 read CPU-B at
+`0xf8802700` (1014 MHz), CPU-L and the DSU at their boot words and DCDC5
+1000 mV and DCDC3 1050 mV. The workload did not launch: that set's binding
+compared bundle 26's record with the ELF hash, and its copy of the frozen
+template kept the read-only modes, so the replacement admission record
+could not be written. The check above binds that session's real records
+with `bundle-deadline-top-5` (`step6/binding-check-5b`). `step6-set-5`
+differs from `step6-set-4` only in the workload's runbook path and the
+session directory; every image is byte-identical. It replaces
+`step6-set-4`, `step6-set-3`, `step6-set-2` and `step6-set`, and their
+workload bundles; those must not run.
+
+The host models: `checks/top-opp-relock-check.c` runs the relock against
+modeled PLLs and a modeled AXP8191 behind S_TWI0 (the order, the 20 µs
+waits, three lock reads 3 µs apart, P before the select, both supplies read
+before any clock write, 23 refusals with no clock write and the timeouts,
+then CPU-B's lowering with no PMIC access, its refusals and a lock
+timeout), and `checks/workload-bisect-probe.py` runs the overlay with the
+native image in the instruction model, with modeled CPU PLLs and PMIC bus,
+in all nine deadline cases; the model allows the completed path's CPU-B
+accesses only after every secondary is observed OFF.
+`checks/workload-bisect-host.py` validates the relock and lowering records
+in the runner's decoder.
+
+## Step 6 passed on port 3-3
+
+This design and the step 6 sets name the step images bundles 25, 26 and
+27. In the tree they are now bundles 30, 31 and 32 (`OPP_BUNDLE`,
+`tools/prepare-board-bundles.py`), because bringup's GPU and clock-audit
+rows took 25 to 29; a later set prints the new numbers.
+
+Set `step6-set-5` ran in one fresh port 3-3 lifetime on 2026-10-25
+(`~/.cache/sunstoneos/evidence/board-session-cpu-top-opp-10/port-3-3/`),
+with the frozen binding of `bundle-deadline-top-5`:
+
+| Phase | Records | Wall time (end) | Result |
+| --- | --- | --- | --- |
+| Cold DDR start | `s7-ddr` | 22:01:46 | 12,288 MiB |
+| Bundle 2 | `c6-bb2-*` | 22:01:49 | Kernel check passed |
+| Bundle 25 | `c6-opp25-*` | 22:02:07 | CPU-L 1794 MHz at DCDC5 1000 mV in 10.98 ms (the longest park 143 µs), the DSU 1274 MHz in 5.94 ms, DCDC3 `0xb7` (1050 mV) with CPU-B at 1014 MHz; the hottest sensor 35.7 °C |
+| Bundle 26 | `c6-opp26-*` | 22:02:24 | Boot words in all three domains, DCDC5 1000 mV, DCDC3 1050 mV |
+| Capture, cache-off, survey, binding | `c6-tw-state-before`, `c6-tw-cache-off`, `c6-tw-survey`, `c6-tw-prepare` | 22:02:36 | All passed; the binding refused nothing |
+| Workload | `c6-tw-run` | 22:02:43 to 22:02:50 | `complete`, `rom_usable` and `dram_restored` true, completed mask 254 |
+| Bundle 27 | `c6-opp27-*` | 22:03:13 | Boot words in all three domains, both rails held; the hottest sensor 37.1 °C |
+| Read bundle 14 | `bb14-read` | 22:03:14 | Passed; then the power removal |
+
+The workload's own record, in 24 MHz counter ticks:
+
+- **Relock.** Entry words: CPU-B `0xf8802700`/`0x03000000`, CPU-L
+  `0xf8802600`/`0x03010000`, DSU `0xf8802600`/`0x03010105`, the boot
+  words. Final words: CPU-B `0xf8804d00` (N 77, 2002 MHz), CPU-L
+  `0xf8804500` (N 69, 1794 MHz), DSU `0xf8803100`/`0x03000105` (N 49,
+  1274 MHz). Its own reads: DCXO word `0x983fb0f7` (26 MHz), SID `0x496`
+  (bin 4), PMIC page 0, chip 3, revision 0, enables `0xff`, DCDC3 `0xb7`
+  and DCDC5 `0xb2`, all seven reads with the idle status `0xf8`, S_TWI0
+  divider `0x28`, 400 kHz, which the route check admits only from the
+24 MHz PLL_REF. From the first board
+  read to the last select took 25,901 ticks (1.08 ms), most of it the PMIC
+  reads. Each domain was parked 1308, 1668 and 1651 ticks (55, 70 and
+  69 µs), with 7, 3 and 3 lock reads.
+- **Workload.** 32 rounds on every core; CPU0 32 ticks and 1 SGI; 33 SGIs
+  on each secondary; no failure.
+- **Lowering.** After every secondary was OFF: entry `0xf8804d00`, final
+  `0xf8802700`/`0x03000000` (1014 MHz), parked 1292 ticks (54 µs), 12 lock
+  reads.
+
+### The background-progress prediction used the wrong image
+
+The predicted counts (300,000 to 320,000 on cores 0 to 5, 255,000 to
+270,000 on cores 6 and 7) scaled the ten boot-rate runs of
+`board-session-20261025-3` by the clock ratios. Those runs used the native
+image `762237cd…`, not `6fd7af86…`, which step 6 runs. The two images'
+background loops are identical, an exclusive increment of the core's
+counter between two calls of `ucPortGetCoreID`, but that routine differs:
+in `762237cd…` it is a supervisor call from the EL0 task, and in
+`6fd7af86…` it reads `TPIDRRO_EL0` and returns. At the boot rates the old
+image spends about 188 cycles per iteration on the A55 cores and 248 on the
+A76 cores, the new one about 23 and 20, assuming the 32 ms window of 32
+ticks. The unit, the counter and the 32-tick window are the same in both.
+
+The correct baseline is the same image and profile at the boot rates:
+`board-session-20261025-8`, runs `r4` to `r6` (`6fd7af86…`, overlay
+manifest `582c76f5…`), with 687,505 to 697,371 on the A55 cores (mean
+692,204) and 1,583,985 to 1,598,607 on the A76 cores (mean 1,589,962).
+Against it:
+
+| Cores | Boot rates | Top points | Ratio | Clock ratio |
+| --- | --- | --- | --- | --- |
+| 0 to 5, A55 | 692,204 | 2,664,229 (2,660,665 to 2,671,333) | 3.85 | 1794/494 = 3.63 |
+| 6 and 7, A76 | 1,589,962 | 3,275,263 (3,273,698 and 3,276,827) | 2.06 | 2002/1014 = 1.97 |
+
+The counts scale about 6% and 4% above the clock ratios. A fixed amount of
+other work per window explains it: the workers' rounds, the tick and the
+SGIs cost a number of cycles, which take less time at the higher rate and
+leave more of the window to the background task. Fitting count = k (f W −
+O) to both rates with W = 32 ms gives O = 1.21 million cycles (2.4 ms at
+494 MHz) on the A55 cores and 2.62 million cycles (2.6 ms at 1014 MHz) on
+the A76 cores, and 21 and 19 cycles per iteration. Both core types lose
+about the same 2.5 ms at the boot rates, which fits clocks of 1794 and
+2002 MHz; the clocks themselves come from the relock's final PLL words,
+locked and read back. The A76/A55 count ratio is 2.30 at the boot rates
+(clock ratio 2.05) and 1.23 at the top points (clock ratio 1.12): at both
+rates an A76 core runs 1.10 to 1.12 times as many iterations per cycle as
+an A55 core. The predicted 0.85 came from the wrong baseline.
+
+The prediction for cores 0 to 5 and 6 and 7 was wrong because of that
+baseline, not because of the clocks or the measurement. Every other
+prediction held: rounds, ticks and SGIs, the relock and lowering words,
+parks under 100 µs, and the hottest sensor below 50 °C.
+
+## Step 7: B1, then the OS image at the top points
+
+Step 7 is two supervised runs of the integrated OS image built with
+`A733_A76_ADMITTED` and `SUNSTONE_A733_OS_CPU_CLOCK`, each in its own power
+cycle, because the image takes over USB0 and ends at a terminal halt:
+
+1. **B1**: a grant of no cluster, the recognizer on core 6 and its worker on
+   core 7, at the boot rates.
+2. **TOP**: approval step `TOP`, citing B1's record; the clock owner raises
+   CPU-B to 2002 MHz at 1050 mV, CPU-L to 1794 MHz at 1000 mV and the DSU to
+   1274 MHz before the timed recognition.
+
+Neither run can be frozen yet. `apps/os/prepare.py` needs a reviewed
+physical entry record: the thermal owner's facts from a fresh reading and the
+DDR reservation of the recognition inputs ([os-image.md](../os-image.md)).
+No such record exists, and no integrated OS image has run on a board. The
+other B1 prerequisites of [cpu-a76-dvfs.md](cpu-a76-dvfs.md) also remain for
+the same power cycle on port 3-3:
+
+- rank 5, the forced-stall return;
+- the rank 7 and rank 8 bundles refrozen with the status-masked comparison
+  (`~/.cache/sunstoneos/evidence/refreeze-el3-20261025/`);
+- after B1, its record of schema `a733-os-cpu-clock-b1-v1`, which the `TOP`
+  approval must cite.
+
+The 70 °C stop is not yet built for these runs. The OS thermal policy's
+trips are compiled constants, the vendor's THROTTLE at 90 °C and CRITICAL at
+110 °C (`drivers/thermal/a733_thermal.c`). The session's hardware alarm
+thresholds are not inputs to the policy. A 70 °C stop therefore needs a
+policy change before step 7 is frozen: a CRITICAL trip at 70 °C on every CPU
+sensor for these runs, which ends the session. The run's record must also
+carry the thermal task's readings, taken about every 100 ms, through the
+timed recognition.
+
+Predictions for the bench recording, from the A2 estimate of
+[cpu-a76-dvfs.md](cpu-a76-dvfs.md) (14.894 s × 494 ÷ (2 × 2 × f) for the
+linear stage plus 0.283 s for the other stages, with f the CPU-B rate in
+MHz):
+
+| Run | CPU-B, CPU-L, DSU | Recognition time | Other |
+| --- | --- | --- | --- |
+| B1 | 1014, 494, 494 MHz | About 2.10 s | Text and CRCs equal to the host reference |
+| TOP | 2002, 1794, 1274 MHz | About 1.20 s, 1.75 times faster | The same text and CRCs; `CLOCK` lines show the three top-point PLL words; every sensor below 70 °C |
+
+A ratio below 1.75 shows a limit outside the A76 cores. The DSU at 1274 MHz
+instead of 494 MHz should raise the ratio if L3 bandwidth bounds the linear
+stage.
+
+The host checks of the `TOP` grant: `checks/os-image-launch.py` prepares a
+`TOP` bundle and refuses a `TOP` approval with one cluster, a `TOP` approval
+below the bin's top points and both clusters for step A2 (48 cases);
+`checks/cpu-clock-check.py` checks the DSU rule's points, including 1274 MHz
+for vf0400 with CPU-L at 1794 MHz and CPU-B at 2002 MHz.
+`checks/os-cpu-clock-native.py` passes on the same build but covers the
+register adapter only; no check yet drives the owner's request order for a
+grant of both clusters.
+
+## Next steps
+
+- **Step 7, the sustained load.** The OS-image runs above (B1, then `TOP`)
+  wait for three things. First, a 70 °C stop in the OS thermal policy: a
+  session field for a CRITICAL trip at or below the vendor's, validated by
+  `apps/os/prepare.py` and used by the policy as the lower of the two.
+  Second, B1: rank 5, the reviewed physical entry record, and a producer of
+  the `a733-os-cpu-clock-b1-v1` record. Third, power cycles: the integrated
+  OS image ends at a terminal halt that only a power removal clears, and
+  the boards cannot be power-cycled until further notice. Review the
+  policy change, the session format change and the clock owner's order for
+  a grant of both clusters, which no check drives yet, before any freeze.
+  Until power cycles return, a CPU set must continue an existing lifetime
+  and return on every reachable outcome with the clocks and rails at boot
+  values. Step 6's sets left DCDC3 at 1050 mV and DCDC5 at 1000 mV for the
+  power removal, so a continuing set also needs a last image that lowers
+  both rails with the clocks at their boot rates. For DCDC5 that needs a
+  write like `dcdc3_change` with CPU-L and the DSU held, which does not
+  exist yet.
+- **CPU-B after a ROM return.** The ROM resets CPU-L and the DSU but not
+  CPU-B. Every image that raises CPU-B lowers it to 1014 MHz before a
+  successful return; a failed return can leave it raised, with DCDC3 at
+  the raised point's voltage. Step images admit CPU-B only at 1014 MHz,
+  the OS image refuses any other rate, and the CPU clock driver lowers
+  CPU-B before DCDC3.
+- **The workload binding.** `tools/top-opp-workload-bind.py` has the
+  `-O`-proof checks and names the rail read-back image bundle 31; the next
+  freeze takes it, with `binding.json` beside it, and
+  `checks/top-opp-workload-bind.py` then runs against that freeze.
+- **The returning overlay no longer links on bringup.** Bringup's MBUS
+  restore in `identity_primary_run` (`01308e9e`, `3f09ec2c`) grows the overlay's
+  `identity-c.o` by about 870 bytes. The return-deadline workload profile
+  now exceeds its 16 KiB reservation, with or without `--top-opp`. That
+  profile's next freeze needs a new layout, for example the extension
+  placed in the gap after the base overlay when no relock or vector table
+  uses it, or the MBUS window moved into the native image the overlay
+  calls.
+- **The performance-mode toggle.** The default path is CPU-B, CPU-L and the
+  DSU at the top points through the driver, in the order and with the
+  waits above. The toggle lowers through the same driver: the DSU first,
+  then the clusters, then their rails. In a returning image it must lower
+  CPU-B to 1014 MHz before the return. In the OS it needs the `TOP` grant,
+  which `apps/os/prepare.py` admits, and a standing per-board approval
+  record instead of the per-session one. With the boot0 rates as the
+  baseline, step 6 measured about 3.85 times the A55 throughput and 2.06
+  times the A76 throughput of a CPU-bound loop at the top points.
 
 ## Step 1: bundle 20
 

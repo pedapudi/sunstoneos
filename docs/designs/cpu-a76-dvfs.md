@@ -347,6 +347,9 @@ Without a clock or voltage change:
   the recognition time from counter ticks at boot0's CPU-B rate, the `CLOCK`
   lines before and after it, the fuse code, the CPU-B PLL, mux, pattern and
   LFM words, and the DCDC3 and DCDC5 readings. This time is A2's baseline.
+  The FEL ROM return does not reset CPU-B, so the image refuses to start
+  with CPU-B at any rate but boot0's 1014 MHz, which keeps this baseline at
+  boot0's point ([cpu-top-opp.md](cpu-top-opp.md)).
 
 B1 has a read-only part that needs no core 6 or 7: the fuse (bin) code, the
 CPU-L, CPU-B and DSU PLL and mux/P words, the CPU-L and CPU-B pattern and LFM

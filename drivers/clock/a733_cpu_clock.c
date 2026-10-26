@@ -33,13 +33,8 @@
  * PLL routine of docs/reference-backsolve-cpu.md). */
 #define SETTLE_US 20u
 /* Lock counts once three reads 3 us apart all show it, then 20 us pass
- * before the PLL drives a clock: the vendor CCU helper with
- * CONFIG_AW_STANDARD_CCU=y, which the A733 board kernel configuration sets
- * (ccu_common.c ccu_helper_wait_for_lock, lines 47-64), and boot0's three
- * lock reads and 20 us wait. */
-#define LOCK_READS 3u
-#define LOCK_GAP_US 3u
-#define LOCK_SETTLE_US 20u
+ * before the PLL drives a clock (a733_pll_lock.h), as boot0 also does with
+ * its three lock reads and 20 us wait. */
 #define SETTLE_READS 100000u /* A counter that stops is a fault. */
 #define BURST_POLLS 100000u  /* Polls per burst; a counter that stops is a fault. */
 #define RELEASE_US 100000u
@@ -113,6 +108,19 @@ uint32_t a733_cpu_clock_opp_mv(const struct a733_cpu_opp *o,unsigned bin)
     uint32_t mv=0;
     for(unsigned i=0;i<A733_CPU_VF_BINS;++i){if(!o->mv[i])return 0;if(o->mv[i]>mv)mv=o->mv[i];}
     return mv;
+}
+uint32_t a733_cpu_clock_dsu_top(unsigned bin,uint32_t little_mhz,uint32_t big_mhz)
+{
+    uint32_t ceiling=0,top=0;
+    for(unsigned i=0;i<sizeof(little)/sizeof(*little);++i)
+        if(little[i].mhz==little_mhz)ceiling=a733_cpu_clock_opp_mv(&little[i],bin);
+    uint64_t cap=(uint64_t)(little_mhz>big_mhz ? little_mhz : big_mhz)*1000000u*3u/4u;
+    cap-=cap%26000000u;
+    for(unsigned i=0;ceiling && i<sizeof(dsu)/sizeof(*dsu);++i) {
+        uint32_t mv=a733_cpu_clock_opp_mv(&dsu[i],bin);
+        if(mv && mv<=ceiling && (uint64_t)dsu[i].mhz*1000000u<=cap && dsu[i].mhz>top)top=dsu[i].mhz;
+    }
+    return top;
 }
 int a733_cpu_clock_bin(uint32_t word,unsigned *bin)
 {
@@ -625,7 +633,7 @@ enum a733_cpu_clock_status a733_cpu_clock_poll(struct a733_cpu_clock *c)
         if(!rd(c,pll_word(c->cluster),&pll) || (pll&(PLL_ON|UPDATE))!=PLL_ON ||
            !rd(c,select_word(c->cluster),&select) || select!=c->select ||
            !wr(c,select_word(c->cluster),c->select&~MUX))return fault(c);
-        c->park_at=c->last_now;c->locks=0;
+        c->park_at=c->last_now;c->lock=(struct a733_pll_lock){0,0};
         if(!settle(c,SETTLE_US))return fault(c);
         pll=(pll&~FIELD_N)|(c->n<<8);
         if(!put(c,pll_word(c->cluster),pll) || !put(c,pll_word(c->cluster),pll|UPDATE))return fault(c);
@@ -636,16 +644,14 @@ enum a733_cpu_clock_status a733_cpu_clock_poll(struct a733_cpu_clock *c)
         uint32_t pll;
         if(!rd(c,pll_word(c->cluster),&pll) || ((pll>>8)&255)!=c->n)return fault(c);
         if(c->state==S_UPDATE ? (pll&UPDATE)!=0 : (pll&LOCK)==0) {
-            c->locks=0;
+            if(c->state==S_LOCK)(void)a733_pll_lock_count(&c->lock,c->last_now,0);
             return c->last_now<c->timer ? A733_CPU_CLOCK_PENDING : fault(c);
         }
         if(c->state==S_UPDATE){c->timer=c->last_now+LOCK_US;c->state=S_LOCK;return A733_CPU_CLOCK_PENDING;}
-        /* A lock read sooner than LOCK_GAP_US after the last counted one
-         * does not count. Readings are whole microseconds, so one more
-         * guarantees the gap, as in settle(). */
-        if(!c->locks || c->last_now>=c->lock_at+LOCK_GAP_US+1u){c->lock_at=c->last_now;++c->locks;}
-        if(c->locks<LOCK_READS)return c->last_now<c->timer ? A733_CPU_CLOCK_PENDING : fault(c);
-        if(!settle(c,LOCK_SETTLE_US))return fault(c);
+        /* A lock read sooner than the gap after the last counted one does
+         * not count; polls come faster than the gap in a burst. */
+        if(!a733_pll_lock_count(&c->lock,c->last_now,1))return c->last_now<c->timer ? A733_CPU_CLOCK_PENDING : fault(c);
+        if(!settle(c,A733_PLL_LOCK_SETTLE_US))return fault(c);
         c->state=S_UNPARK;return A733_CPU_CLOCK_PENDING;
     }
     case S_UNPARK: {

@@ -12,6 +12,10 @@ from unicorn.arm_const import *
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("build", type=Path)
 args = parser.parse_args()
+import json
+# A capture variant patches dram_tpr13 bit 2 and dram_tpr10 bits 28:16 after
+# the copy (tools/prepare-ddr.py --variant); the default build patches nothing.
+variant = json.loads((args.build / "manifest.json").read_text()).get("variant")
 
 for board_result, dram_result in ((0, 4096), (0, 0), (0xffffffff, 0)):
     cpu = Uc(UC_ARCH_ARM, UC_MODE_ARM)
@@ -28,7 +32,15 @@ for board_result, dram_result in ((0, 4096), (0, 0), (0xffffffff, 0)):
                  UC_ARM_REG_R8, UC_ARM_REG_R9, UC_ARM_REG_R10, UC_ARM_REG_R11)
     for index, reg in enumerate(registers):
         cpu.reg_write(reg, 0x12340000 + index)
-    selected = struct.pack("<32I", *range(1800, 1832))
+    words = list(range(1800, 1832))
+    words[27], words[30] = 0xb25f0000, 0x10065
+    selected = struct.pack("<32I", *words)
+    expected = list(words)
+    if variant:
+        expected[30] &= ~4
+    if variant == "init-only":
+        expected[27] = (expected[27] & ~0x1fff0000) | 0x00010000
+    expected = struct.pack("<32I", *expected)
     called = []
 
     def call(uc, address, size, data):
@@ -43,7 +55,7 @@ for board_result, dram_result in ((0, 4096), (0, 0), (0xffffffff, 0)):
         elif address == 0x49bdc:
             assert uc.reg_read(UC_ARM_REG_R0) == 0
             assert uc.reg_read(UC_ARM_REG_R1) == 0x831f8
-            assert bytes(uc.mem_read(0x831f8, 128)) == selected
+            assert bytes(uc.mem_read(0x831f8, 128)) == expected
             result = dram_result
         else:
             result = 0

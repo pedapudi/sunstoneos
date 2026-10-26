@@ -1,3 +1,121 @@
+# Start here
+
+This section states where SunstoneOS bring-up stands. The sections after it
+are the dated record that produced it; read them only for a subsystem's
+history.
+
+## Board access
+
+- **Boards:** two Allwinner A733 boards, on USB ports 3-1 and 3-3. Both are
+  powered only through USB, and both are in speed bin 4.
+- **Power cycles:** the user cannot power-cycle either board until further
+  notice (since 2026-10-25).
+- **Current lifetimes:** each board holds one lifetime in
+  `~/.cache/sunstoneos/evidence/board-session-20261025-36/port-3-<n>`: a
+  standard cold DDR start (`s7-ddr`), then two read-only DRAM captures. Until
+  the user returns, only images that return to FEL and continue these
+  lifetimes may run, with warm-return lists that start from those records.
+- **What waits for the user:** anything that needs a fresh lifetime, an
+  operator at the board, or a power removal at the end.
+- **Who runs boards:** only the coordinating agent operates the boards,
+  through `tools/board-test-queue.py` with the coordinator token at
+  `~/.cache/sunstoneos/board-test-coordinator.token`.
+
+## Qualified on the boards
+
+- **CPU:**
+  - All eight cores ran a timer and interrupt workload at the vendor top
+    points for bin 4: A76 at 2002 MHz and 1050 mV (DCDC3), A55 at 1794 MHz
+    and 1000 mV (DCDC5), DSU at 1274 MHz (CPU step 6, port 3-3).
+  - A return to the boot ROM resets the CPU-L and DSU PLLs but not the CPU-B
+    PLL, so every image lowers CPU-B before a successful return.
+- **Memory bus:** the MBUS restore to 600 MHz at every EL3 entry passed on both
+  boards.
+- **GPU:**
+  - Power on and off, firmware start, health check and stop, all from the
+    open DDK only.
+  - One compute job, then eight jobs in one firmware session (80 to 113 µs
+    per job), on port 3-1.
+  - The GPU runs at the vendor top point, 1,008 MHz at 960 mV.
+- **NPU:**
+  - Startup in 4.0 ms, with completion signalled by interrupt.
+  - ShuffleNetV2 in 2.91 ms at 852 MHz, the vendor top point; the per-job
+    overhead is 0.24 ms.
+- **microSD:** returning reads at high speed (3.3 V, 50 MHz, 4-bit); all 256
+  reads completed.
+  - SDR104 is not qualified: its 1.8 V switch stopped at CMD11.
+  - Throughput is 1.4 to 1.7 MB/s until DMA is built.
+- **DRAM training restore:** captures from ten lifetimes fix a per-board
+  restore set of 1,036 registers (`restore-set-v3.json`). Initialization without training takes
+  36 ms, against 5.1 s to train all four P-states. The restore itself is
+  designed but not built.
+
+## Active branches
+
+The branch notes under "Next steps" in each design document say what remains.
+- **`work/cpu-top-opp-step6-1025`:** CPU top points, step 6 and its
+  analysis. Step 7, the sustained load, needs the 70 °C OS thermal stop and an
+  operator.
+- **`work/sd-returning-1025`:** returning SD reads, the CMD11 diagnosis and
+  the DMA design.
+- **`work/dram-fast-boot-1025`:** DRAM captures and analysis, the restore
+  design and the `dram-restore-test-1` runbook.
+- **`work/perf-modes-1025`:** the high/low performance-mode toggle. It needs
+  its independent review, and its board run follows CPU step 7.
+
+Most of the other `work/*` branches are superseded or already merged and can
+be pruned.
+
+## Known problems and next steps
+
+- **Returning overlay overflow.** The MBUS restore merged into bringup adds
+  about 870 bytes to the returning overlay. The return-deadline workload
+  profile then overflows its 16 KiB reservation, with or without the top-point
+  relock. Its next freeze needs a new layout (`docs/designs/cpu-top-opp.md`,
+  "Next steps").
+- **GPU shutdown on every failure is unmerged.** Commit `52e8c75c` on
+  `work/gpu-job-session-1025` (head `2081c682`) routes each failure after GPU
+  ON through one shutdown path. Its review found a high-severity risk: the
+  forced soft reset and OFF, used when idle checks fail, can hang the memory
+  bus and lose the board. The review recommends leaving the GPU on unless a
+  fresh read shows the bus idle. The findings are in
+  `~/.cache/sunstoneos/evidence/gpu-off-review-20261025/review.md`. Fix them,
+  rerun the review, then merge.
+- **Do not run GPU set `board-bundles-20261025-31`.** It repeats the qualified
+  eight-job session with the older image, which lacks the shutdown on every
+  failure path.
+- **Mimus acceleration.** Only single-core recognition is board-qualified:
+  19.5 s of compute for an 8.87 s recording at the old 494 MHz clock. The next
+  steps, in order:
+  1. Two, then eight, inference workers at the qualified top clocks. The
+     two-worker path passes in QEMU (`docs/mimus-smp.md`).
+  2. The first board execution of the exact-sum GPU kernel
+     (`docs/gpu-mimus.md`), which is implemented and host-modeled only.
+
+  The target in `docs/mimus.md` is 0.44 s of compute for that recording. The
+  NPU path is research only (`docs/npu-mimus-linear.md`).
+
+## Rules every agent follows
+
+- **No `rm`:** use `~/.cache/sunstoneos/bin/clean-generated.py`, or move
+  files to `~/.cache/sunstoneos/trash/`.
+- **Reference first:** derive every board sequence from the vendor sources,
+  Linux, TF-A and vendor blobs before a board run. Check a blob's license
+  first: the PowerVR firmware and the Vivante libOpenVX forbid disassembly.
+- **Vendor top points by default:** default every block to the vendor's
+  highest operating point for the chip's speed bin. Lower clocks are optional
+  modes, never the default. The user has approved the CPU, GPU and NPU clock
+  and voltage changes, and 1.8 V microSD signalling.
+- **The gate for every change:**
+  - a design note through the performance and simplicity panel;
+  - the implementation;
+  - an independent three-lens review that converges;
+  - measurement;
+  - `tools/integration-gate.py` with an explicit `--reason`.
+
+  Then merge into `bringup` without piping `git merge`, checking for unmerged
+  paths, and push after a secret scan. No co-author lines.
+
 # Current work
 
 **Development resumed on 2026-10-24 at the user's request.** The board-free
@@ -138,15 +256,82 @@ one lifetime with no power removal between, and both runs completed: the
 firmware restarts cleanly. `work/gpu-fw-stop-1025` is merged; its
 bundle row is now 25, while frozen sets 21 and 23 call it 20.
 
-**First GPU compute job failed on port 3-1** (set `board-bundles-20261025-27`,
-`board-session-20261025-22/port-3-1`, record `s22-gfj-run`). Firmware start
-and the health check passed. The fixed 32-lane job then did not complete:
-outcome 4, timeline word 0x1, and output word 0 is the bitwise inverse of the
-expected value. Cleanup returned 0xffffffff and the firmware stop was refused,
-so the image returned to FEL with the GPU still powered. The stop does not yet
-power off the GPU after a failed job; that is a defect. The fix and the
-diagnosis against the open DDK are in progress on `work/gpu-first-job-1025`,
-which stays unmerged.
+**GPU eight-job session passed on port 3-1** (set `board-bundles-20261025-30`,
+`board-session-20261025-29/port-3-1`, record `s29-gjs-run`). One firmware
+session ran eight 32-lane jobs on one context, timed from the kick to the
+timeline word on the 24 MHz counter:
+- job 1 took 113 µs, including the MMU cache flush;
+- jobs 2 to 5, 7 and 8 took 80 to 83 µs each;
+- job 6, the first after the command ring wrapped, took 87 µs.
+
+All 32 output words matched, with no firmware events or resets. Cleanup and
+the stop were acknowledged, and the GPU powered off. Preparation took 1.45 ms
+and the eight jobs 2.39 ms in total.
+
+**CPU step 6 passed on port 3-3** (`board-session-cpu-top-opp-10/port-3-3`,
+set `step6-set-5`). In one lifetime, with an operator present:
+- bundle 25 raised CPU-L to 1794 MHz at 1000 mV and the DSU to 1274 MHz, and
+  set DCDC3 to 1050 mV with CPU-B kept at 1014 MHz;
+- bundle 26 read the boot words after the ROM return;
+- the workload relocked CPU-B to 2002 MHz, CPU-L and the DSU, and ran all
+  eight cores: 32 rounds each, 32 ticks on CPU0 and 33 SGIs on each
+  secondary. It powered the secondaries off, lowered CPU-B to 1014 MHz at
+  EL3, and returned with DRAM restored in 7 s;
+- bundle 27 read the three boot words and both rails afterwards, at 37 °C at
+  most.
+
+The background progress counts (about 2.66 million per A55 core and 3.27
+million per A76 core) were far above the predicted 300,000 and 260,000
+because the prediction scaled runs of the older native image `762237cd…`,
+whose core-ID read was a supervisor call. Against the same image `6fd7af86…`
+at the boot rates (`board-session-20261025-8`, 692,000 and 1,590,000), the
+counts rose 3.85 and 2.06 times for clock ratios of 3.63 and 1.97
+(`docs/designs/cpu-top-opp.md`, "Step 6 passed on port 3-3"). An earlier attempt
+(`board-session-cpu-top-opp-8`) stopped before launch because its binding
+compared the wrong hash kind; set 5 fixed it.
+
+**Board access is limited until further notice (2026-10-25).** The user cannot
+power-cycle either board. Each board holds one long-lived lifetime in
+`board-session-20261025-36/port-3-<n>`: a standard cold DDR start (`s7-ddr`,
+5,088 ms on 3-3 and 5,102 ms on 3-1, 12,288 MiB) and two read-only four-P-state
+DRAM captures (`lc-capture-1`, `lc-capture-2`). Until the user returns, only
+returning images that continue these lifetimes may run. Runs that need a
+fresh lifetime, an operator or a power removal wait. Those include further
+DRAM capture lifetimes, the microSD 1.8 V retry, SD sets and CPU step 7.
+
+**DRAM capture lifetimes on record** (v5 set): each board has two four-P-state,
+two P-state-0-only and one initialization-only lifetime. Initialization
+without training took 36 ms on port 3-3 (`board-session-20261025-34`),
+against about 4.4 s to train P-state 0 and 5.1 s to train all four.
+
+**microSD set 28 on port 3-3.**
+- **Lifetime A passed** (`board-session-20261025-30`): high speed at 50 MHz, 4-bit, 3.3 V. All 256 reads completed and the card clock stopped on exit. Throughput was 1.4 to 1.7 MB/s, limited by per-request polling, and DMA is designed in `docs/designs/sd-dma.md` on `work/sd-returning-1025`.
+- **Lifetime B stopped** (`board-session-20261025-32`) at the CMD11 voltage switch, before any read, with `SD_REASON=3`, platform stage 13, and the card clock stopped by the module-clock fallback. Its diagnosis is pending.
+
+**Initialization-only DRAM capture, port 3-1** (`board-session-20261025-33`):
+boot0 initialized without training (result 7, 12,288 MiB, `dram_tpr13`
+0x10061, simple test FAIL, as predicted), and both SRAM captures completed
+five stages.
+
+**P-state-0-only DRAM capture, port 3-1** (`board-session-20261025-31`):
+training took 4,451 ms, 12,288 MiB, and both captures passed.
+
+**First GPU compute job passed on port 3-1** (set `board-bundles-20261025-29`,
+`board-session-20261025-28/port-3-1`, record `s27-gfj-run`). After the cold DDR
+start and provider readiness, one power-on did all of the following:
+- firmware start in 0.7 ms and the health check in 1.9 ms;
+- MMUCACHE, then one 32-lane compute job, with the timeline completed and all
+  32 output words equal to the formula;
+- no firmware events and no recovery records;
+- context cleanup, then the 14-step stop acknowledged in 23 ms, OFF and provider
+  park.
+
+The first attempt (set 27) faulted. The job's setup program stored each 64-bit
+pointer constant high word first, so the shader's first load went to address
+`0x80` and the firmware reset the context. A read-only FEL capture of the
+firmware memory identified the fault. Set 29 stores the constants low word first. A failed job now still
+ends with the GPU off: an unacknowledged stop runs upstream's hard reset.
+`work/gpu-first-job-1025` is merged; the job is bundle row 28.
 
 **P-state-0-only DRAM capture, port 3-3** (`board-session-20261025-25/port-3-3`,
 set `dram-training-capture-v5-20261025`, build `ddr-pstate0`): boot0 trained
@@ -156,11 +341,21 @@ for all four P-states, and reported 12,288 MiB, `dram_tpr13` 0x10061 and
 This is the first reference lifetime of the restore design; its analysis is
 on `work/dram-fast-boot-1025`.
 
-**CPU step 6 (eight cores at the top points)** is refrozen as
-`cpu-top-opp-20261025/step6/step6-set-2` on `work/cpu-top-opp-step6-1025`.
-The second-round review confirmed all three fixes. It runs on port 3-3 after
-a power removal, with an operator present who removes power if nothing has
-returned 12 s after the workload's launch.
+**CPU step 6 stopped before the workload on port 3-3**
+(`board-session-cpu-top-opp-7/port-3-3`, set `step6-set-2`). Bundle 25 set
+CPU-B to 2002 MHz at 1050 mV, CPU-L to 1794 MHz at 1000 mV and the DSU to
+1274 MHz, with every temperature below 37 °C. After the ROM return, bundle 26
+read both rails held. It also read CPU-L and the DSU back at their 494 MHz
+boot words, but the CPU-B PLL still at 2002 MHz (`0xf8804d00`), so it
+refused as designed. **The FEL ROM return does not reset the CPU-B PLL.**
+Any image that lowers DCDC3 after a top-point bundle in the same lifetime
+must first reset or check the CPU-B PLL. The fix and the refreeze are on
+`work/cpu-top-opp-step6-1025`. Step 6 still needs an operator at the board.
+
+**Four-P-state DRAM capture, port 3-1** (`board-session-20261025-26/port-3-1`,
+v5 set): DDR passed with result 7 for all four P-states, 12,288 MiB and
+5,093 ms of training, and both captures passed. This is port 3-1's first
+capture lifetime.
 
 **DRAM training capture, port 3-3** (`board-session-20261025-21/port-3-3`,
 set `dram-training-capture-v3-20261025`): cold DDR (12,288 MiB), then two
@@ -179,8 +374,14 @@ In one lifetime, with CPU0 running and every other core off:
 
 Every clock word read back as predicted, every ROM return worked,
 including returns with CPU-L above 494 MHz, and the hottest sensor read
-42 °C. The ROM resets CPU-L to 494 MHz on each return, as it does MBUS,
-so each image must set its own clocks. A76 execution at 2002 MHz (steps 6
+42 °C. The ROM resets CPU-L and the DSU to 494 MHz on each return, as it
+does MBUS, so each image must set its own clocks. It does not reset CPU-B:
+the first step 6 run (`board-session-cpu-top-opp-7/port-3-3`) read CPU-B
+still at 2002 MHz after bundle 25's return, and the boot ROM's clock setup
+writes only the CPU-L and DSU PLLs. Every image that raises CPU-B lowers it
+to 1014 MHz before a successful return, the step 6 workload included; a
+failed return can leave it raised and ends the lifetime with a power
+removal (`docs/designs/cpu-top-opp.md`). A76 execution at 2002 MHz (steps 6
 and 7, B1) is still to do. The merge into `bringup` waits on integration
 fixes; it is now merged (`work/merge-cpu-top-opp-1025`).
 

@@ -28,13 +28,16 @@ def extend(board,clip,*,first_bytes,owner,authority,client,initial,memory,electr
     preparation().session_check(raw)
     return raw
 
+# The vendor operating point (sun60iw2p1-cpu-vf.dtsi ve-opp-table): module mux 1,
+# divider 1, 624 MHz. The decoder's mux 1 is PLL_VE0 and the encoder's PLL_VE1.
+VENDOR={'module':0x01000000,'hz':624000000}
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     for name in ('board','input','initial','memory','electrical','supervision','output'):
         parser.add_argument('--'+name,type=Path,required=True)
     for name in ('first-bytes','owner','authority','client','module','hz'):
-        parser.add_argument('--'+name,type=lambda value:int(value,0),required=True)
+        parser.add_argument('--'+name,type=lambda value:int(value,0),required=name not in VENDOR,default=VENDOR.get(name))
     args=parser.parse_args()
     values={name:getattr(args,name) for name in ('first_bytes','owner','authority','client','module','hz')}
     values.update({name:getattr(args,name).read_bytes() for name in ('initial','memory','electrical','supervision')})
