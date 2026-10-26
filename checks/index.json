@@ -8269,6 +8269,7 @@
  "pvr-gpu-stop-reference.py": {
   "cache_areas": [],
   "docs": [
+   "docs/designs/gpu-firmware-stop.md",
    "docs/gpu-stop.md",
    "docs/vendor-firmware/gpu-and-npu-binaries.md"
   ],
