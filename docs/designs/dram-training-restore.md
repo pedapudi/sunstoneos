@@ -67,6 +67,33 @@ kind 2 and kind 3 diff. `UcclkHclkEnables` read 0 after training.
 `analyse-ddr-captures.py` output:
 `~/.cache/sunstoneos/evidence/dram-training-analysis-20261025/port-3-3-lifetime-1-blocks.json`.
 
+**The first P-state-0-only lifetime** (`board-session-20261025-25`) and the
+four-P-state lifetime differ in 13,717 registers
+(`dram-training-analysis-20261025/port-3-3-two-lifetimes.json`). They fall
+into two groups:
+
+- **Programmed differently for the two kinds, about 13,500:** every one of
+  the four `0xa0000` copies (about 3,300 each), 163 address/command
+  sequencer words that move between positions, twelve master registers
+  shifted by exactly `0x38`, the multi-P-state message-block fields at
+  `0x0a9b00f0`–`0x0a9b041a` (zero after the P-state-0-only run), byte 4 of
+  the message block (`0xa0` against `0x30`, as predicted) and seven
+  controller words. boot0 writes these itself on the restore's own path, so
+  they are configuration and stay out of the restore set; the `0xa0000`
+  block behaves like sequence memory loaded per kind.
+- **Training results, about 250:** 219 byte-lane registers, 186 of which
+  moved by at most 4 codes (lane offsets `0x20`–`0x26`, `0x40`–`0x42`,
+  `0x4c`–`0x4e`, `0x9c`–`0x9e` and `0x1a4`–`0x1be`), the message-block result
+  fields at `0x0a9b0036`–`0x0a9b0058` and `0x0a9b00d0`–`0x0a9b00de`, three
+  master registers (`0x0a940058`–`0x0a940060`, `0x82f` against `0x833`), six
+  `0x30000` registers, controller word `0x0a020040` (`0x2f2f` against
+  `0x2e2e`, the MR14 pattern) and parameter words 32–51.
+
+The training-step value at `0x0a9b0010` read `0x125f` in both kinds. With
+one lifetime per kind on one board, the second group mixes kind and
+lifetime effects; P-state-0-only lifetimes alone will give each register's
+spread, and the initialization-only diff will give the trained set.
+
 The capture must also record the LPDDR5 mode registers. boot0's stored
 parameter set has `dram_tpr10` bit 29 set, so every boot runs the save
 routine `0x576e4`: parameter words 32–49 hold the receive Vref values and

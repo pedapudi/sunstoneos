@@ -43,6 +43,9 @@ def make(root, board, lifetime, capture, complete=True, extra=False, truncated=F
     ddr = root / f"b{board}-l{lifetime}-ddr"
     ddr.mkdir(exist_ok=True)
     (ddr / "firmware.log").write_text(LOG)
+    # Lifetime 1 of each board is a P-state-0-only training, lifetime 0 an
+    # initialization-only run, so the design's kind diff has two kinds.
+    (ddr / "session.json").write_text(json.dumps({"manifest": {"variant": "pstate0" if lifetime else "init-only"}}))
     out = root / f"b{board}-l{lifetime}-c{capture}"
     out.mkdir()
     layout = stages(extra)[:2] if truncated else stages(extra)
@@ -61,8 +64,8 @@ def make(root, board, lifetime, capture, complete=True, extra=False, truncated=F
     return out
 
 
-def analyse(paths, output):
-    completed = subprocess.run([sys.executable, str(TOOL), *map(str, paths), "--output", str(output)],
+def analyse(paths, output, *extra):
+    completed = subprocess.run([sys.executable, str(TOOL), *map(str, paths), "--output", str(output), *extra],
                                capture_output=True, text=True)
     report = json.loads(output.read_text()) if completed.returncode == 0 else None
     return completed, report
@@ -87,7 +90,15 @@ def main():
     assert report["varying"]["param[7]"]["class"] == "lifetime"
     assert sorted(report["restore_candidates"]) == ["0x%08x" % PHY["board"], "0x%08x" % PHY["lifetime"]]
     assert all(report["resolution"][k] for k in ("status_separable", "lifetime_separable", "board_separable"))
-    assert report["training_run_median_ms"] == [151, 176, 346, 4414]
+    assert report["training_by_kind"]["pstate0"]["runs_median_ms"] == [151, 176, 346, 4414]
+    assert report["training_kinds"] == ["init-only", "pstate0"]
+
+    completed, report = analyse(full, args.output / "kind-diff.json", "--trained-kind", "pstate0",
+                                "--baseline-kind", "init-only")
+    assert completed.returncode == 0, completed.stderr
+    diff = report["kind_diff"]["registers"]
+    assert sorted(diff) == ["0x%08x" % CONTROLLER["lifetime"], "0x%08x" % PHY["lifetime"]], sorted(diff)
+    assert all(entry["mask"] == 3 for entry in diff.values())
     assert report["boards"] == 2 and report["lifetimes"] == 4
 
     one_capture = [p for p in full if p.name.endswith("-c0")]
@@ -111,7 +122,8 @@ def main():
     assert completed.returncode == 0, completed.stderr
     assert report["stages_compared"] == ["identity", "phy"]
     assert not any(key.startswith("0x0a11") for key in report["varying"])
-    print("PASS: constant, board, lifetime and status registers classified; a stage-limited capture is "
+    print("PASS: constant, board, lifetime and status registers classified; the trained-minus-baseline "
+          "kind diff finds the planted registers with their masks; a stage-limited capture is "
           "compared over the shared stages; reduced sets merge "
           "classes as stated; incomplete captures and different tables refused")
 

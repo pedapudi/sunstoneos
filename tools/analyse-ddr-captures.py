@@ -18,7 +18,13 @@ A class needs the data to separate it: with one capture per lifetime no
 register can be called status, and with one lifetime per board the lifetime
 and board classes merge. The summary records both counts. PHY registers of
 the lifetime and board classes are the candidates for a training restore
-(docs/designs/dram-training-restore.md). The output is a new JSON file.
+(docs/designs/dram-training-restore.md). Captures are grouped by the
+training kind of their DDR run: four-p-state, pstate0 or init-only. With
+--trained-kind and --baseline-kind the report adds the design's diff: the
+registers whose values in the trained kind all differ from those in the
+baseline kind, with the differing bits as a mask. Classes computed across
+kinds count a kind difference as a lifetime difference. The output is a
+new JSON file.
 """
 import argparse
 from collections import Counter, defaultdict
@@ -72,12 +78,14 @@ def load(directory):
     chip = tuple(values.get(0x03006200 + 4 * n) for n in range(4))
     ddr = Path(record["ddr_evidence"]).resolve()
     log = (ddr / "firmware.log").read_text(errors="replace") if (ddr / "firmware.log").exists() else ""
+    ddr_session = json.loads((ddr / "session.json").read_text()) if (ddr / "session.json").exists() else {}
+    kind = ddr_session.get("manifest", {}).get("variant") or record.get("ddr_variant") or "four-p-state"
     return {"path": str(directory), "values": values, "port": record.get("port", ""),
             "temperature_note": record.get("temperature_note", ""), "lifetime": str(ddr),
             "board": "chip-" + "-".join("%08x" % (w or 0) for w in chip),
             "layout": [(s["name"], [(e["address"], e["count"], e["width"]) for e in s["entries"]])
                        for s in stages],
-            "training": training_times(log)}
+            "training": training_times(log), "training_kind": kind}
 
 
 def training_times(log):
@@ -123,6 +131,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("captures", type=Path, nargs="+")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--trained-kind", help="training kind whose captures hold trained values, e.g. pstate0")
+    parser.add_argument("--baseline-kind", help="training kind to diff against, e.g. init-only")
     args = parser.parse_args()
     captures = [load(path) for path in args.captures]
     # Captures limited with --stages share a prefix of the stage tables;
@@ -146,11 +156,47 @@ def main():
                for key, kind in classes.items() if kind != "constant"}
     candidates = [name(key) for key, kind in classes.items()
                   if kind in ("lifetime", "board") and block_of(key).startswith("phy-")]
-    runs = [c["training"]["runs_ms"] for c in captures if c["training"].get("runs_ms")]
+    by_kind = defaultdict(list)
+    for c in captures:
+        if c["training"].get("runs_ms"):
+            by_kind[c["training_kind"]].append(c["training"])
+    training = {kind: {"captures": len(items),
+                       "runs_median_ms": [statistics.median(t["runs_ms"][i] for t in items)
+                                          for i in range(min(len(t["runs_ms"]) for t in items))],
+                       "total_median_ms": statistics.median(t["total_ms"] for t in items if t["total_ms"])}
+                for kind, items in by_kind.items()}
+    kind_diff = None
+    if args.trained_kind or args.baseline_kind:
+        # The restore design's diff: a register is set by training when every
+        # value in the trained kind differs from every value in the baseline
+        # kind. Status registers are excluded; the mask holds the bits that
+        # differ in any pair.
+        trained = [c for c in captures if c["training_kind"] == args.trained_kind]
+        baseline = [c for c in captures if c["training_kind"] == args.baseline_kind]
+        if not trained or not baseline:
+            fail("--trained-kind and --baseline-kind each need at least one capture")
+        registers = {}
+        for key, kind in classes.items():
+            if kind == "status":
+                continue
+            a = {c["values"][key] for c in trained}
+            b = {c["values"][key] for c in baseline}
+            if a.isdisjoint(b):
+                mask = 0
+                for x in a:
+                    for y in b:
+                        mask |= x ^ y
+                registers[name(key)] = {"block": block_of(key), "mask": mask,
+                                        "trained": sorted(a), "baseline": sorted(b)}
+        kind_diff = {"trained_kind": args.trained_kind, "baseline_kind": args.baseline_kind,
+                     "count": len(registers),
+                     "by_block": dict(Counter(r["block"] for r in registers.values())),
+                     "registers": registers}
     report = {
         "kind": "a733-ddr-capture-analysis",
-        "captures": [{key: c[key] for key in ("path", "port", "board", "lifetime", "temperature_note", "training")}
-                     for c in captures],
+        "captures": [{key: c[key] for key in ("path", "port", "board", "lifetime", "temperature_note",
+                                              "training", "training_kind")} for c in captures],
+        "training_kinds": sorted({c["training_kind"] for c in captures}),
         "stages_compared": [name for name, _ in captures[0]["layout"][:common]],
         "boards": len(boards), "lifetimes": len(lifetimes),
         "resolution": {
@@ -161,7 +207,8 @@ def main():
             "lifetimes_per_board_min": min(per_board_lifetimes)},
         "counts": dict(counts),
         "counts_by_block": {block: dict(count) for block, count in sorted(by_block.items())},
-        "training_run_median_ms": [statistics.median(r[i] for r in runs) for i in range(len(runs[0]))] if runs else [],
+        "training_by_kind": training,
+        "kind_diff": kind_diff,
         "restore_candidates": candidates,
         "varying": varying,
     }

@@ -1,8 +1,13 @@
 # DRAM training captures on ports 3-1 and 3-3
 
-Status: **frozen for both boards; the first port 3-3 lifetime ran on
-2026-10-25 with the v3 set** (`board-session-20261025-21`: all six stages
-in both captures). These
+Status: **frozen for both boards; two port 3-3 lifetimes have run.** On
+2026-10-25 a four-P-state lifetime with the v3 set
+(`board-session-20261025-21`) and a P-state-0-only lifetime with the v5 set
+(`board-session-20261025-25`) completed all six stages in both captures,
+and every checked prediction held. The P-state-0-only training took
+4,441 ms from `DRAM BOOT DRIVE INFO` to `Actual DRAM SIZE`, against 5,098 ms
+for the four-P-state one: the 2040 MHz run costs about 4.4 s whether it
+runs alone or last. Port 3-1 has not run. These
 are the captures of [the training-restore design](../designs/dram-training-restore.md#captures-identify-which-registers-training-sets).
 Each lifetime trains DRAM with the unchanged FEL DDR step and then captures
 twice: the parameter block that boot0 leaves in SRAM, the SID chip ID and
@@ -132,28 +137,45 @@ restore design catches registers that training sets to a repeating value,
 so the lifetime count only has to find the varying ones and estimate each
 one's spread.
 
-- **Room temperature:** five lifetimes per board of the four-P-state
-  captures above. The first port 3-3 lifetime ran on 2026-10-25
-  (`board-session-20261025-21`).
-- **Cold:** three lifetimes per board after at least one hour unpowered in
-  the coolest available place, with `T` giving that place's temperature.
-- **Warm:** three lifetimes per board started within a minute of removing
-  power after a sustained CPU and memory load, with `T` giving the load and
-  its duration.
-- **Reference kinds**, after the restore design's second review: three
-  P-state-0-only lifetimes and two initialization-only lifetimes per board,
-  as in [the variant section](#p-state-0-only-and-initialization-only-captures).
+The restore uses boot0's P-state-0-only path, so that kind is the reference
+and carries most lifetimes. A four-P-state and a P-state-0-only lifetime
+differ in about 13,500 registers that boot0 programs differently for the
+two kinds (the `0xa0000` block, the address/command sequencer, a group of
+master registers and the multi-P-state message-block fields), so lifetime
+variation is measured within one kind only.
+
+| Kind, per board | Room temperature | Cold | Warm | Run so far on 3-3 | On 3-1 |
+| --- | --- | --- | --- | --- | --- |
+| P-state 0 only (`p0-`) | 5 | 3 | 3 | 1 | 0 |
+| Initialization only (`in-`) | 2 | — | — | 0 | 0 |
+| Four P-states (`dc-`) | 2 | — | — | 1 | 0 |
+
+So port 3-3 still needs four room-temperature, three cold and three warm
+P-state-0-only lifetimes, two initialization-only lifetimes and one more
+four-P-state lifetime; port 3-1 needs the full column. A cold lifetime
+starts after at least one hour unpowered in the coolest available place, a
+warm one within a minute of removing power after a sustained CPU and memory
+load; `T` records either. The four-P-state lifetimes serve the status class
+and the vendor path's own variation; two per board are enough for that.
 
 The analysis groups captures by lifetime and chip ID and records each
 capture's note. A temperature reading needs a later THS read in the same
 lifetime; until one exists the note is the only temperature record.
 
-After each batch, on the host:
+After each batch, on the host, once per kind for the lifetime and status
+classes, and once over the reference kinds for the restore set:
 
 ```sh
-$PY -B $F/source/tools/analyse-ddr-captures.py <every dc-capture-N directory> \
+$PY -B $F/source/tools/analyse-ddr-captures.py <every p0-capture-N directory> \
   --output <new report path>.json
+$PY -B $F/source/tools/analyse-ddr-captures.py <every p0- and in-capture-N directory> \
+  --trained-kind pstate0 --baseline-kind init-only --output <new report path>.json
 ```
+
+The tool reads each capture's training kind from its DDR record. Parameter
+words *n* in this runbook are the parameter block's words, which
+`session.json` lists as `parameter_block` and which start at offset `0x400`
+of `bootparam-buffer.bin`: words 32–51 are that file's 32-bit words 288–307.
 
 ## Predictions and pass criteria
 
