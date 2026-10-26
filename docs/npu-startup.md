@@ -2,20 +2,21 @@
 
 The [startup sequencer](../drivers/npu/a733_npu_startup.c) powers, clocks and
 releases the A733 NPU from reset, then lets the [NPU service](npu-service.md)
-activate. One privileged bootstrap task calls one step function once per tick
-until it returns READY. The sequencer borrows the image's providers: the
+activate. One privileged bootstrap task advances the sequencer until READY,
+waiting on provider notifications and the settle deadline between steps. The sequencer borrows the image's providers: the
 counter clock, the clock registry, the register lock, the image's one GPU/PCK
 resource manager, the rail ledger with its power-authority word, and the
 [power-domain owner](power-domains.md). It constructs none of them.
 
-Status: implemented, checked in a host model, in two-core QEMU and in the
-linked images under Unicorn. No board has run this sequence; the shared SRAM
-routing in it ran on port 3-3 in a separate variant of the finite image. The
-design and its budgets are in [designs/npu-board.md](designs/npu-board.md),
+Status: implemented and board-qualified in the finite interrupt image on
+port 3-3. Startup took 4.0 ms, and all four ShuffleNetV2 outputs matched in
+`board-session-20261025-15/port-3-3`. At the default 852 MHz operating point,
+inference took 2.91 ms from doorbell to interrupt and about 3.3 ms end to end.
+The design and its budgets are in [designs/npu-board.md](designs/npu-board.md),
 the routing, power order and adoption in
-[designs/npu-sram-route.md](designs/npu-sram-route.md), and the measured
+[designs/npu-sram-route.md](designs/npu-sram-route.md), and the software-model
 counts in [designs/npu-board-measurements.md](designs/npu-board-measurements.md).
-The initial operating point is 492 MHz at 800 mV.
+Both boards are speed bin 4, whose vendor maximum is 852 MHz at 800 mV.
 
 ## Construction before the scheduler
 
@@ -123,13 +124,14 @@ list each change's effect.
 
 ### Two operating points
 
-`a733_npu_startup_rate`, after init and before the scheduler, selects 492 MHz
-(the default) or 852 MHz. Both run at the inherited 800 mV; nothing writes
-DCDC2. The register pass admits 852 MHz only for a SID speed bin whose
-operating-point column lists 800 mV for it and refuses every other bin before
-any write ([PLL table](npu-pll.md#two-profiles-and-the-rate-change)). The
-finite image selects 852 MHz when built with `apps/npu-finite/build.py
---rate-852`.
+By default, startup selects the vendor maximum supported at the inherited
+800 mV for the SID speed bin. Both populated boards use 852 MHz. Bins that
+require another voltage are refused before a write; nothing writes DCDC2.
+The supported bin table is documented in the
+[operating-point analysis](designs/npu-job-overhead.md#default-operating-point).
+`a733_npu_startup_rate`, after init and before task binding, optionally selects
+492 or 852 MHz. An explicit 852 MHz selection still requires a compatible bin.
+The finite image exposes these options as `--rate-492` and `--rate-852`.
 
 ## The register pass refuses before any write
 
@@ -179,12 +181,12 @@ if the remaining conditions passed.
 Local stop leaves PLL_NPU enabled, locked at the profile and with its output
 gate open, and domain 4 ON. An image started later in the same power
 lifetime finds that state. The register pass adopts PLL_NPU only in exactly
-that state: control word `0xf8305100` apart from the inherited bit 24, with
-the gate controls at `+0x1920` and `+0x19a0` set. Adoption writes neither the
+that state: control word `0xf8305100` at 492 MHz or `0xf8104600` at 852 MHz, apart
+from the inherited bit 24, with the gate controls at `+0x1920` and `+0x19a0` set. Adoption writes neither the
 PLL nor its gate controls; the step still samples LOCK three times. The
 vendor clock driver's PLL enable helper also returns without a write when the
-PLL's enable, LDO and output gate bits are set (`ccu_gate.c:171-174`). Any
-other enabled PLL state refuses before a write. The owner adopts domain 4 ON
+PLL's enable, LDO and output gate bits are set (`ccu_gate.c:171-174`). A PLL at the other supported profile instead follows the vendor rate-change
+sequence. Any other enabled PLL state refuses before a write. The owner adopts domain 4 ON
 as before. In the host model a second start takes 12,001 modeled
 microseconds and 6 writes: the routing bit and five local open writes.
 
@@ -216,19 +218,21 @@ domain 4 and every token stay held.
 
 Domain 4 rejects an OFF request before publishing it to the owner. Local
 stop therefore preserves the admitted row, its rail pin and every lease.
-The supported operating point remains fixed at 492 MHz and 800 mV; there
-is no NPU frequency or voltage transition API. A stopped or faulted startup
-cannot restart in place, and faults retain resources until whole-board
+The selected operating point stays fixed during the image lifetime; there
+is no runtime NPU frequency or voltage transition API. A stopped or faulted
+startup cannot restart in place, and faults retain resources until whole-board
 power removal. A later image in the same power lifetime starts again by
 adoption. The board image supplies
 [thermal admission and orderly stop](designs/npu-board.md#thermal-admission-and-orderly-stop),
 and the optional [finite thermal image](../apps/npu-finite/ENTRY.md) supplies
 polling admission and bounded cleanup through the same sensor policy.
-The ordinary numerical image has no thermal integration, and the OS has no
-NPU service entry. Frequency/voltage transitions, in-place recovery and
-thermal qualification remain open; repeated startup across images is
-implemented and not yet run on a board
-([three-start runbook](board-runbooks/npu-starts.md)).
+The supervised OS profile also supplies an NPU client with thermal admission
+and an orderly-stop gate in `apps/os/npu.c`. The ordinary numerical image has
+no thermal integration. Frequency/voltage transitions, in-place recovery and
+thermal qualification remain open. Repeated startup across finite images,
+including 492 and 852 MHz runs with matching outputs, passed in
+`board-session-20261025-15/port-3-3`. That evidence does not establish restart
+inside a faulted or stopped service instance.
 
 ### CLOSE and power-off establish different boundaries
 
@@ -290,10 +294,11 @@ A documented interface description or qualified trace exposing those handshake
 boundaries would decide the sequence. Until then, keep the row, DCDC2 rail pin,
 PLL/local/fabric/reference clock leases and SRAM state retained. Restart also
 requires a consumer that retires and reconstructs terminal backend, service,
-startup and IRQ ownership; calling OPEN again does not do that. The immediate
-bounded observation remains the already prepared stopped-RAM capture for the
-numerical failure. This audit adds no runtime code or device operations; its
-source identities are in `npu-lifecycle-audit-20261024`.
+startup and IRQ ownership; calling OPEN again does not do that.
+The local-stop source audit remains applicable; its identities are in
+`npu-lifecycle-audit-20261024`. The service separately bounds pending interrupt
+mask, rearm and retirement callbacks while retaining resources on failure
+([service deadline](npu-service.md#pending-interrupt-callbacks-have-a-service-deadline)).
 
 ## Service activation
 

@@ -4,14 +4,15 @@ The NPU service is **implemented** and passes a two-core FreeRTOS emulator check
 Application tasks at EL0, the unprivileged execution level, send copied requests
 to one preemptible driver task at EL1. That task exclusively calls the
 [controller core](npu-controller.md) and its [native CPU adapter](npu-native.md).
-Physical NPU execution, board resource setup, model loading, and numerical
-inference remain unimplemented or untested.
+The finite interrupt image uses this service for physically qualified
+ShuffleNetV2 inference. The runtime also supplies the board and supervised OS
+profiles; those application profiles retain their separate qualification limits.
 
 The [interface](../include/npu_service.h) uses static storage and FreeRTOS queues.
 The [implementation](../drivers/npu/npu_service.c) owns the controller state,
 session owner, command catalogue, request tickets, and reply queues. It performs
-no dynamic allocation. The service is excluded from default builds and is not
-linked into a physical board image.
+no dynamic allocation. NPU applications select the service explicitly at build
+time.
 
 ## Startup reserves one worker and a fixed command catalogue
 
@@ -28,9 +29,9 @@ client. Initialization and client binding refuse after the scheduler starts.
 
 Commands must already have validated semantics, register permissions, relocations,
 and termination. Registration does not validate arbitrary compiled-model commands.
-Native model loading and a controlled way to replace the startup command
-catalogue remain required. Platform power, clocks, reset ownership, masked NPU
-interrupts, reserved RAM, and independent watchdog recovery must precede OPEN.
+The [runtime](npu-application.md) supplies native model loading and controls
+command-catalogue replacement. Platform power, clocks, reset ownership, masked
+NPU interrupts, reserved RAM and the admitted recovery plan must precede OPEN.
 
 ## Requests preserve task and session ownership
 
@@ -299,11 +300,9 @@ reopen an interrupt binding. Requests and replies retain their existing layout.
 The callbacks run in the worker task and must act on the CPU that receives
 interrupt 97. The caller therefore passes the affinity mask of that one CPU,
 and binding is refused unless the worker was created pinned to exactly that
-CPU. The board binding passes CPU0, where the EL3 installer routes the
-interrupt and the only CPU on which its callbacks run. An all-core profile
-that pins the worker to core 1 therefore cannot bind the interrupt and keeps
-polled completion. Routing the interrupt to another core would also require
-the EL3 installer, its restore path and the callbacks to target that core.
+CPU. The single-core finite binding passes CPU0. The board runtime and OS
+profile route the interrupt and worker to CPU1 through their platform
+installers and callback configuration.
 
 The platform ISR masks interrupt 97 and calls
 `npu_service_irq_notify_from_isr`. This latches an event notification or a sticky
@@ -312,7 +311,8 @@ copy or cache operation. Pre-binding delivery is a retained platform failure.
 
 The worker alone reads the destructive event register. Ordinary deadline and
 idle checks do not consume an unnotified event. A successful completion still
-requires event zero, full idle, a second error check and output synchronization.
+requires the completion event without error bits, full idle and output
+synchronization.
 The service counts only successful notified bootstrap and job completions; the
 finite client requires three, covering bootstrap and both inference jobs. Missing
 notifications expire with all borrowed memory retained. Cancellation progresses
@@ -328,17 +328,20 @@ The callback contract is specific to this source and consumer:
 | `stop` | Only after successful controller CLOSE has disabled device events and proved full idle. Success proves the owned source disabled, inactive and pending clear. |
 
 Each callback returns 1 for completion, 0 for deferred progress or -1 for a
-retained fault. Deferred work resumes through the worker's bounded waits, without
-a spin loop. A retained callback is never retried. Notifications arriving before
-rearm remain latched for service. Client queue insertion also wakes the worker,
+retained fault. Deferred work resumes after a worker notification or one tick.
+Each callback has its own deadline, starting with its first deferred result.
+The budget is `pdMS_TO_TICKS(10) + 1` ticks; the extra tick covers the initial
+tick phase. Expiry retains the service on the next worker pass, before another
+callback invocation. A retained callback is never retried. Notifications
+arriving before rearm remain latched for service. Client queue insertion also wakes the worker,
 and request traffic cannot suppress deadline checks.
 
 CLOSE remains a worker-owned pending request while mask or stop is deferred. The
 service publishes its stopped receipt and releases the session owner only after
 stop succeeds. A failure keeps the owner and buffers retained. Controller faults
-allow status replies while deferred architecture masking continues; they permit
-no further NPU backend access. A late interrupt revokes the stopped receipt and
-latches failure. The finite application requires that receipt before suspending
+allow status replies while interrupt masking is pending within that same
+budget; they permit no further NPU register or cache access. A late interrupt
+revokes the stopped receipt and latches failure. The finite application requires that receipt before suspending
 workers and again before normal return.
 
 Focused checks use the real FreeRTOS service, controller, native memory policy
@@ -350,5 +353,45 @@ event IRQ. They also refuse binding with a route of no CPU, two CPUs or a CPU
 other than the worker's, and complete bootstrap plus two jobs with the worker
 and the modeled route both on core 1. Changed controller cases also pass address/undefined-behavior
 sanitizers. Results and exact inputs reside under
-`~/.cache/sunstoneos/evidence/npu-interrupt-service-20261019/`. Physical delivery,
-cache visibility, numerical execution and recovery remain unqualified.
+`~/.cache/sunstoneos/evidence/npu-interrupt-service-20261019/`.
+The finite image subsequently qualified interrupt completion and matching
+ShuffleNetV2 outputs on port 3-3 at 852 MHz. Startup took 4.0 ms and end-to-end
+inference about 3.3 ms (`board-session-20261025-15/port-3-3`). These successful
+runs do not qualify injected interrupt faults or recovery.
+
+### Pending interrupt callbacks have a service deadline
+
+The deadline prevents a stuck interrupt-controller write or active-handler bit
+from holding OPEN or CLOSE forever. The controller's job deadline cannot cover
+these waits: OPEN has not started its bootstrap, and CLOSE has already stopped
+the controller. A successful mask also ends any interrupted rearm wait, so a
+later job starts with a fresh rearm budget.
+
+This is an availability policy, not a hardware completion guarantee. Expiry
+latches `A733_NPU_IRQ`, retains the existing session ownership and all resources,
+and prevents further interrupt-adapter calls. An OPEN refused before acquiring
+a session leaves that session unowned. A CLOSE failure preserves its owner and
+withholds the stopped receipt and runtime CLOSE notification. The scheduler
+must continue running for any worker deadline to advance.
+
+The scheduler tick bounds the wait independently of the backend microsecond
+clock. Unsigned tick subtraction handles counter wrap. The successful immediate
+callback path adds no time read, register access, barrier, copy or wake-up.
+Each pending retry adds one tick read before the callback. The first pending
+result adds one tick read after the callback. The ordinary one-tick retry
+interval remains unchanged.
+
+The focused FreeRTOS model covers permanent pending mask before OPEN, pending
+rearm, and pending CLOSE in ordinary, shared and runtime services. Each faults
+without releasing an existing owner or issuing further adapter calls. A constant
+backend clock still permits mask expiry. Transient rearm waits in successive
+jobs and deferred CLOSE in all three service modes complete normally. A
+notification during pending rearm ends that wait through successful masking;
+a later job receives a fresh deadline.
+Evidence is in `~/.cache/sunstoneos/evidence/resume-npu-lifecycle-1025/` and its
+`runtime-setup-corrected/` and `rearm-notification/` subdirectories. The runtime
+fixture enables shared mode before runtime mode; earlier passing cases are
+preserved with their original image hashes.
+The model exercises real task scheduling, controller and memory ownership with
+simulated device events. Physical interrupt-drain failure, fault recovery,
+thermal response and in-place restart remain unqualified.
