@@ -1,8 +1,15 @@
 #include "a733_cpu_start.h"
 #include <stddef.h>
 
-enum { OFF, CONTROL, MODE, ARCH, ENTRY_LO, ENTRY_HI, ENTRY_LO_CHECK,
-    ENTRY_HI_CHECK, ARCH_WRITE, ARCH_CHECK, PUBLISH, MODE_ON, CONTROL_ON,
+enum { OFF, CONTROL, MODE,
+#ifdef SUNSTONE_BOARD_RESIDENT
+    HELD_POLICY, HELD_STATUS,
+#endif
+    ARCH, ENTRY_LO, ENTRY_HI, ENTRY_LO_CHECK, ENTRY_HI_CHECK, ARCH_WRITE, ARCH_CHECK, PUBLISH,
+#ifdef SUNSTONE_BOARD_RESIDENT
+    DYNAMIC_RELEASE, DYNAMIC_POLICY, DYNAMIC_ACK,
+#endif
+    MODE_ON, CONTROL_ON,
     POWER_WAIT, CONTROL_CLEAR, MODE_CLEAR, CONTROL_CHECK, MODE_CHECK, FINISH };
 static uintptr_t cfg(unsigned c) {return UINT32_C(0x08001000)+(uintptr_t)c*0x1000;}
 static uintptr_t ctrl(unsigned c) {return UINT32_C(0x07050200)+(uintptr_t)c*4;}
@@ -80,6 +87,28 @@ enum a733_cpu_start_state a733_cpu_start_poll(struct a733_cpu_start *s)
     case PUBLISH: case FINISH:
         if(s->config.ops.barrier(s->config.context)!=1)fail(s,A733_CPU_START_IO);
         break;
+#ifdef SUNSTONE_BOARD_RESIDENT
+    /* Admission precedes every startup write, including RVBAR. */
+    case HELD_POLICY:
+        if(!(s->control&2)) {fail(s,A733_CPU_START_INITIAL_STATE);break;}
+        if(read_reg(s,status(c)-8,&v) && v)fail(s,A733_CPU_START_INITIAL_STATE);
+        break;
+    case HELD_STATUS:
+        if(read_reg(s,status(c),&v) && v)fail(s,A733_CPU_START_INITIAL_STATE);
+        break;
+    /* cpu_entry armed the mailbox before POWER. PUBLISH completed the entry
+     * stores; an immediate wake parks until POWERED/request cleanup. */
+    case DYNAMIC_RELEASE: (void)write_reg(s,status(c)-8,0x100);break;
+    case DYNAMIC_POLICY:
+        if(read_reg(s,status(c)-8,&v) && v!=0x100)fail(s,A733_CPU_START_VERIFY);
+        break;
+    case DYNAMIC_ACK:
+        if(read_reg(s,status(c),&v)) {
+            if(v&~0x108u)fail(s,A733_CPU_START_VERIFY);
+            advance=!!(v&0x100);
+        }
+        break;
+#endif
     case MODE_ON: (void)write_reg(s,mode(c),s->mode|1);break;
     case CONTROL_ON: (void)write_reg(s,ctrl(c),s->control|1);break;
     case POWER_WAIT:

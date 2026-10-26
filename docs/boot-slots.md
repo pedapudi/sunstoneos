@@ -133,6 +133,7 @@ the header state, generation, load state and failing extent.
 | 9 | Remote-writer ownership refused before SD access | Unproven-master mask |
 | 10 | CPU/cache ownership refused before SD access | Zero |
 | 11 | SD ownership remains retained; the loader parks | Original loader status; SD diagnostic fields remain available |
+| 12 | CPU static-OFF ownership remains retained; the loader parks | Original loader status; no ROM return |
 
 Report words at offsets 320 through 360 hold the selected CMD6 timing,
 configured card rate, completed read count, completed bytes, clean-stop flag
@@ -239,11 +240,15 @@ changing another agent's reset or clock state.
   whose exclusion is unproven. The A733 device inventory excludes OR100; its
   historical bit 1 remains reserved. CE requires both resets asserted. The mask prevents a bundle or session from substituting a host
   assertion for hardware exclusion.
-- **CPU/cache ownership.** The pinned boot0 cache loop covers the documented
-  CPU cache hierarchy, including the DSU L3. Stable exclusion of every
-  secondary Arm core remains unproven: an OFF snapshot alone does not rule
-  out an autonomous wake or start request. The separate predicate still
-  refuses. See [cold entry](cold-entry.md).
+- **CPU/cache ownership.** The loader identifies each secondary PPU, admits
+  the fixed OFF policy and clear start requests, then waits for acknowledged
+  static OFF. It retains that policy through loading and cleans the documented
+  CPU/DSU hierarchy before DMA. The resident OS publishes each target's entry
+  before restoring dynamic policy. A policy-write failure retains ownership
+  and parks; an OFF sample alone never admits memory. See the
+  [cold CPU contract](designs/cold-cpu-static-off.md). This protects subsequent
+  stage2 loads, not monitor bytes already loaded by boot0; the pinned
+  predecessor and prior remote-write contract remain separate prerequisites.
 
 Before OS entry, the loader checks the local EL3/core-0/A55 state, masked
 interrupts, disabled data cache and translation, and the counter-frequency

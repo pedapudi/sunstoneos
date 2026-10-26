@@ -104,6 +104,7 @@ int a733_stage2_time_valid(void);
 int a733_stage2_remote_writers_excluded(void);
 uint32_t a733_stage2_remote_writers_mask(void);
 int a733_stage2_cpu_cache_owned(void);
+int a733_stage2_cpu_retained(void);
 int a733_stage2_reset_policy(void);
 int a733_stage2_entry_state(void);
 
@@ -417,6 +418,10 @@ static _Noreturn void finish(uint64_t status, uint64_t detail)
 {
     if (!card_stop()) {
         publish(11,status);
+        for (;;) __asm__ volatile("wfe");
+    }
+    if (a733_stage2_cpu_retained()) {
+        publish(12,status);
         for (;;) __asm__ volatile("wfe");
     }
     publish(status, detail);
