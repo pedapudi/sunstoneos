@@ -476,7 +476,13 @@ requires an approval record of schema `cpu-operating-point-approval-v1`,
 which the bundle carries as `approval.json`. It links the base row's monitor
 and platform objects, so the base runs first in its lifetime.
 
-Bundle 20 passed on port 3-3 on 2026-10-25. Bundles 21 to 24 are steps 3,
+In the row table the five rows follow bundle 19 (`gpu-fw-start`), the last
+row before them, so their numbers are unchanged: bundles 20 to 24 are the
+numbers the frozen sets `step1-set` and `steps2-5-set-r2` under
+`~/.cache/sunstoneos/evidence/cpu-top-opp-20261025/` use.
+
+Bundle 20 passed on port 3-3 on 2026-10-25, and bundles 21 to 24 passed in
+one lifetime the same day (`board-session-20261025-19/port-3-3`). Bundles 21 to 24 are steps 3,
 2, 4 and 5 of the same design, built from the same source with
 `-DOPP_BUNDLE=n` and run in one lifetime in that order (`dcdc3-1050mv-step`,
 `cpu-l-800mv-step`, `cpu-b-top-step`, `cpu-l-dsu-top-step`). Each adds a
