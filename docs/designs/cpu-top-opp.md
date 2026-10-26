@@ -376,7 +376,7 @@ that only after bundle 26 has read it on the board:
    words that bundle 14 recorded (CPU-L `0xf8802600`/`0x03010000`, CPU-B
    `0xf8802700`/`0x03000000`, DSU `0xf8802600`/`0x03010105`). It refuses,
    and the lifetime ends before the workload, if a rail or a word differs.
-3. **The workload** (`bundle-deadline-top`) is the returning deadline
+3. **The workload** (`bundle-deadline-top-2`) is the returning deadline
    profile on the refrozen native image `6fd7af86` with one change: before
    it releases any secondary, CPU0 at EL3 relocks CPU-B to 2002 MHz, CPU-L
    to 1794 MHz and the DSU to 1274 MHz (`boot/a733/top-opp-relock.c`). The
