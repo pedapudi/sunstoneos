@@ -97,7 +97,9 @@ the health check and the stop:
    without failing its transport: a failed transport would fail the shared
    kernel CCB, and with it the stop.
 4. **Cleanup**: `CLEANUP` (106) of the context, with its return word.
-5. **The stop and OFF** of the firmware-stop image, whatever the job's result.
+5. **The stop and OFF** of the firmware-stop image, attempted whatever the
+   job's result. After a failed job the firmware may refuse or not finish
+   the power requests with the context live, and then the GPU stays on.
 
 Firmware events during the job: a debug dump, statistics or a core clock
 notice (upstream types 106–108) are counted; any other event, such as a
@@ -131,8 +133,17 @@ Predictions:
 
 A wrong output with intact guards would mean the program ran with wrong
 inputs or state; an unchanged timeline with the KICK consumed would mean
-the firmware could not run the command. In both cases the stop and OFF
-still run and the lifetime continues.
+the firmware could not run the command. In both cases the image still
+attempts the stop and the OFF, but the lifetime continues only if the
+firmware acknowledges the forced-idle and power-off requests. With the
+job's context still live, and possibly still running, the firmware may
+not reach FORCED_IDLE or OFF within the stop's 300 ms; the stop then fails
+before the power-off acknowledgement, the GPU stays on, and a power removal
+follows.
+
+The USC program is first executed on the board. The host checks compare
+its bytes with the pinned compiler's output and model the GPU's writes,
+but no check executes it.
 
 ## Design gate
 
