@@ -14,7 +14,7 @@
 @@ -23,4 +29,6 @@
  void recognize(void *)
  {
-+    /* The engine's second worker runs on the pair's other core. */
++    /* The adapter owns the selected worker count and their fixed placement. */
 +    mimus_parallel_bind();
      /* Board owners establish the selected USB readiness. Hashing is
       * EL0 CPU work; publication in EL3 alone does not authenticate inputs. */
@@ -44,7 +44,7 @@
 +{
 +    if(!mimus_board_live())failed();
 +    /* One bounded sleep per real checkpoint; a stuck engine or GPU cannot
-+     * earn progress by looping here. Both inference tasks use this hook. */
++     * earn progress by looping here. Every inference task uses this hook. */
 +    if(os_thermal_throttled()){
 +        vTaskDelay(1);
 +        if(!mimus_board_live())failed();
@@ -61,12 +61,12 @@
  extern "C" int mimus_board_start(void)
 -{runtime_smp_init();runtime_init();return xTaskCreateStatic(recognize,"mimus-recorded",16384,nullptr,3,stack,&task)!=nullptr;}
 +{
-+    /* Recognition and its inference worker run on the recognition pair, A55
-+     * cores 2 and 3 or the admitted A76 cores 6 and 7; every other task keeps
-+     * the A55 default affinity. */
++    /* The owner and first worker use the recognition pair. An eight-worker
++     * build adds priority-2 workers on A55 cores 0..5; service placement
++     * remains unchanged. */
 +    runtime_smp_init();runtime_init();
 +    mimus_parallel_init(A733_SMP_RECOGNITION_CORE,A733_SMP_INFERENCE_CORE);
-+    return xTaskCreateStaticAffinitySet(recognize,"mimus-recorded",16384,nullptr,3,stack,&task,
++    return xTaskCreateStaticAffinitySet(recognize,"mimus-recorded",16384,nullptr,kMimusOwnerPriority,stack,&task,
 +        UBaseType_t{1}<<A733_SMP_RECOGNITION_CORE)!=nullptr;
 +}
  extern "C" unsigned mimus_board_started(void){return started.load(std::memory_order_acquire);}

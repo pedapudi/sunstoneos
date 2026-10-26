@@ -36,6 +36,7 @@ def module(name, path):
 mimus = module('os_mimus_board_preparation', ROOT / 'apps/mimus-board/prepare.py')
 thermal = module('os_thermal_preparation', ROOT / 'apps/thermal/prepare.py')
 security_authority = module('os_dma_security', ROOT / 'tools/dma-nonsecure-access.py')
+os_link = module('os_link_configuration', ROOT / 'checks/os-image-link.py')
 board, host = mimus.board, mimus.host
 base = board.base
 require, digest, save_json = base.require, base.digest, base.save_json
@@ -154,8 +155,36 @@ def npu_session(raw):
     return len(raw) - OS_BYTES in (NPU_BYTES, NPU_BYTES + GRANT_BYTES)
 
 
+def same_inference(value, expected):
+    return value == expected and (expected is None or
+            isinstance(value, dict) and all(type(v) is int for v in value.values()))
+
+
+def image_inference(manifest, raw):
+    """Bind the host capability to the actual adapter record, never a JSON count alone."""
+    try:
+        config = os_link.inference_configuration(os_link.Elf(raw), legacy=True)
+    except (AssertionError, ValueError, IndexError, struct.error) as error:
+        require(False, 'Invalid linked inference configuration: ' + str(error))
+    require(same_inference(manifest.get('inference'), config), 'Inference manifest differs from the linked adapter.')
+    if config and config['workers'] == 8:
+        require(manifest.get('lifetime') == 'supervised' and
+                not any(manifest.get(k) for k in ('audio', 'radio', 'headset', 'gpu_linear')),
+                'Eight workers require the supervised recorded OS profile.')
+    return config
+
+
+def inference_admission(record, config):
+    if config and config['workers'] == 8:
+        require(same_inference(record.get('inference'), config),
+                'Reviewed entry must name the exact eight-worker placement and priorities.')
+    elif 'inference' in record:
+        require(same_inference(record['inference'], config), 'Reviewed inference configuration differs.')
+
+
 def image_manifest_check(manifest, raw):
     """The OS link check of these exact bytes; returns whether audio is built in."""
+    image_inference(manifest, raw)
     audio = manifest.get('audio')
     # A link check from before the NPU profile has no 'npu' key: NPU is off.
     npu = manifest.get('npu', False)
@@ -344,9 +373,10 @@ def build_launcher(out, session_bytes, clang, lld):
     require(0 < (out / 'launch.bin').stat().st_size <= 0xc00, 'OS launcher exceeds reserved SRAM.')
 
 
-def validate_admission(record, image_hash, template_hash, raw, audio, cache=None, frozen=False, perf_modes=False):
+def validate_admission(record, image_hash, template_hash, raw, audio, cache=None, frozen=False, perf_modes=False, inference=None):
     """Every fact the session names is bound to a reviewed record of this image."""
     require(record.get('schema') == ENTRY_SCHEMA, 'Reviewed OS entry record required.')
+    inference_admission(record, inference)
     profile = capture_profile(raw)
     require(all(record.get(k) == profile[k] for k in ('epoch', 'generation', 'lease')),
             'Reviewed entry names other session identities.')
@@ -492,7 +522,8 @@ def prepare(image, link_check, admission, template, assets, output, clang, lld):
     manifest_cpu_clock(json.loads(snapshots['image-input-manifest.json']), raw)
     record = json.loads(snapshots['admission.json'])
     cache = validate_admission(record, image_hash, hashlib.sha256(raw).hexdigest(), raw, audio,
-                               perf_modes=json.loads(snapshots['image-input-manifest.json']).get('perf_modes', False))
+                               perf_modes=json.loads(snapshots['image-input-manifest.json']).get('perf_modes', False),
+                               inference=image_inference(json.loads(snapshots['image-input-manifest.json']), snapshots['image.elf']))
     output = Path(output)
     output.mkdir(parents=True, exist_ok=False)
     out = output / 'board'
@@ -566,7 +597,8 @@ def validate_board(bundle):
     cache = {path: (out / item['name']).read_bytes() for path, item in p['entry_evidence'].items()}
     validate_admission(json.loads((out / 'admission.json').read_text()), p['image_sha256'],
                        hashlib.sha256(template).hexdigest(), template, audio, cache, True,
-                       perf_modes=json.loads((out / 'image-input-manifest.json').read_text()).get('perf_modes', False))
+                       perf_modes=json.loads((out / 'image-input-manifest.json').read_text()).get('perf_modes', False),
+                       inference=image_inference(json.loads((out / 'image-input-manifest.json').read_text()), image))
     segments, address, identity = base.image_parts(out / 'image.elf')
     require(identity.hex() == p['build_id'], 'Build identity changed.')
     derived = bytearray(template)

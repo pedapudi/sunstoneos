@@ -3,12 +3,15 @@
 #ifndef SUNSTONE_MIMUS_WORKERS
 #define SUNSTONE_MIMUS_WORKERS 2
 #endif
-// The integrated OS launch metadata and service placement admit a pair only.
-// This guard is target-local: standalone native/QEMU eight-worker builds remain
-// available even when the OS target exists in the same CMake configuration.
-#if defined(SUNSTONE_A733_OS) && SUNSTONE_MIMUS_WORKERS != 2
-#error Integrated OS currently requires two inference workers
+// Eight-worker OS support is the admitted, supervised recorded composition.
+#if defined(SUNSTONE_A733_OS) && SUNSTONE_MIMUS_WORKERS == 8
+#if !defined(A733_A76_ADMITTED) || defined(SUNSTONE_BOARD_RESIDENT) || \
+    defined(SUNSTONE_A733_OS_AUDIO) || defined(SUNSTONE_A733_OS_RADIO) || \
+    defined(SUNSTONE_A733_OS_HEADSET) || defined(SUNSTONE_A733_OS_GPU_LINEAR)
+#error Eight OS inference workers require admitted supervised recorded recognition
 #endif
+#endif
+inline constexpr unsigned kMimusOwnerPriority = 3;
 // Initialize before the scheduler; bind and report from the recognition task,
 // which runs on the owner core. Index 1 uses worker_core; an eight-worker
 // build assigns indices 2..7 to the remaining cores in ascending order.

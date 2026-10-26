@@ -6,8 +6,10 @@
  * (docs/designs/smp-heterogeneous.md, docs/designs/cpu-a76-dvfs.md). Cores
  * 0-5 are Cortex-A55 and cores 6-7 Cortex-A76; cached entry checks MIDR_EL1
  * once. Every task without an explicit placement stays on the A55 cluster.
- * Recognition and its inference worker run on the A76 pair once
+ * Recognition and its first worker run on the A76 pair once
  * A733_A76_ADMITTED is defined, and on A55 cores 2 and 3 until then. The
+ * admitted eight-worker OS composition adds priority-2 inference workers on
+ * cores 0-5, below the fixed service tasks, without moving those services. The
  * shared-peripheral interrupts and the PMIC task are on core 0; other
  * unplaced tasks may run on any A55 core, including the recognition pair. */
 #define A733_SMP_A55_MASK 0x3Fu

@@ -105,11 +105,13 @@ and focused runners. The coordinator retains OS thermal and session ownership.
 Configure with `-DSUNSTONE_MIMUS_WORKERS=8` to select eight workers in the SMP
 engine and its linked callers. Omitting the option selects two. These public
 compile definitions also reach the integrated OS through its board composition.
-The integrated OS currently supports only two inference workers: its launch
-metadata and service placement have not been extended to eight. Its adapter
-therefore refuses compilation with eight workers, regardless of A76 admission.
-This target-local refusal leaves standalone native and QEMU eight-worker builds
-available in the same CMake configuration. Native eight-worker
+The integrated OS admits eight workers for supervised recorded recognition
+with A76 admission. Its A55 inference workers run at priority 2, below the OS
+services, while the A76 pair remains at priority 3. Linked configuration and
+host entry checks bind that placement; other OS profiles retain two workers.
+The [OS extension](mimus-os-eight-workers.md) records its supported composition,
+resource bounds and focused evidence. Standalone native and QEMU eight-worker
+builds retain the adapter behavior described here. Native eight-worker
 builds also require `-DA733_A76_ADMITTED=ON`; their recognition owner uses core 6,
 and their first worker uses core 7. This build selection does not qualify a
 physical session or change the existing clock, rail or failure-recovery rules.
@@ -149,10 +151,10 @@ compiled dependencies, tool identities and effective build flags. Existing
 two-worker recognition evidence remains the baseline; only the changed
 adapter/arithmetic cases and the selected eight-worker recognition ran here.
 
-The OS propagation guard has separate compile evidence in
+The earlier blanket OS refusal has historical compile evidence in
 `~/.cache/sunstoneos/evidence/resume-mimus-os-worker-guard-20261026/`.
-Generated OS compile arguments reject eight workers with A76 admission; removing
-that admission also rejects eight workers. The default two-worker OS adapter
-compiles. Standalone native and QEMU eight-worker adapters compile in the same
-configuration, and their preprocessed source is unchanged by the guard. The
-original execution artifacts and evidence above remain preserved.
+That boundary amendment rejected eight workers with or without A76 admission
+and accepted the two-worker OS adapter. Standalone native and QEMU adapters
+compiled unchanged. The later OS extension above replaces that blanket refusal
+with explicit supported-profile admission; the historical artifacts remain
+preserved.

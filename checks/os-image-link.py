@@ -74,6 +74,24 @@ class Elf:
         raise AssertionError('string %#x is not in image data' % address)
 
 
+def inference_configuration(elf, legacy=False):
+    """The adapter's actual linked count, placement and task priorities."""
+    found = [s for s in elf.symbols if s['name'] == 'mimus_parallel_configuration' and s['shndx'] != 0]
+    if not found and legacy:
+        # The established adapter exposes WorkersFn as exactly "mov w0, #2;
+        # ret". Do not turn a missing record into an eight-worker downgrade.
+        pair = [s for s in elf.symbols if s['name'] == '_ZN12_GLOBAL__N_17workersEv' and s['shndx'] != 0]
+        assert len(pair) == 1 and pair[0]['size'] == 8 and elf.read(pair[0]['value'], 8) == bytes.fromhex('40008052c0035fd6'), 'Legacy image does not contain the established two-worker adapter'
+        return None
+    assert len(found) == 1 and found[0]['bind'] == 1 and found[0]['size'] == 28, 'Missing or malformed inference configuration'
+    words = struct.unpack('<7I', elf.read(found[0]['value'], 28))
+    allowed = ((1, 2, 2, 0x0c, 3, 3, 0), (1, 2, 6, 0xc0, 3, 0, 3),
+               (1, 8, 6, 0xff, 3, 2, 3))
+    assert words in allowed, 'Unsupported inference count, placement or priority'
+    return dict(zip(('version', 'workers', 'owner_core', 'core_mask', 'owner_priority',
+                     'a55_priority', 'a76_priority'), words))
+
+
 def number(text):
     """An unsigned integer literal or a product of them, as the headers write sizes."""
     assert re.fullmatch(r'[0-9a-fx* ]+', text), text
@@ -230,7 +248,7 @@ def check(path, assets, recognizer, loader, audio=False, radio=False, headset=Fa
         perf_boot = 'high' if value == 1 else 'low'
         perf_operation = struct.unpack('<I', elf.read(one('os_perf_usb_operation')['value'], 4))[0]
         assert perf_operation == 8, 'Performance opcode collides with thermal diagnostic'
-    return {'thermal_report': all(thermal), 'cpu_critical_trip': 'a733_thermal_policy_cpu_limit' in names,
+    return {'inference': inference_configuration(elf), 'thermal_report': all(thermal), 'cpu_critical_trip': 'a733_thermal_policy_cpu_limit' in names,
             'npu_profile': npu_profile, 'perf_boot_mode': perf_boot, 'perf_operation': perf_operation, 'interrupts': interrupts, 'applications': applications,
             'layout': layout(elf, assets, recognizer, loader, radio or headset, gpu_linear)}
 
@@ -250,6 +268,7 @@ def main():
     parser.add_argument('--npu', choices=('0', '1'), default='0')
     parser.add_argument('--cpu-clock', choices=('0', '1'), default='0')
     parser.add_argument('--perf', choices=('0', '1'), default='0')
+    parser.add_argument('--workers', type=int, choices=(2, 8), default=2)
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     audio, radio, headset = args.audio == '1', args.radio == '1', args.headset == '1'
@@ -257,6 +276,9 @@ def main():
     try:
         result = check(args.image, args.assets, args.recognizer, args.loader, audio, radio, headset, gpu_linear,
                        cpu_clock, args.npu == '1', args.perf == '1')
+        assert result['inference']['workers'] == args.workers, 'Linked worker count differs from build selection'
+        if args.workers == 8:
+            assert args.lifetime == 'supervised' and not any((audio, radio, headset, gpu_linear)), 'Unsupported eight-worker OS profile'
     except AssertionError as error:
         print('FAIL integrated OS link check:', error, file=sys.stderr)
         return 1

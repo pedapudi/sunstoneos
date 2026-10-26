@@ -5,6 +5,9 @@
 #include "platform.h"
 #include "mimus/asr/parallel.h"
 #include <cstdio>
+#ifdef SUNSTONE_A733_OS
+#include "a733_smp_placement.h"
+#endif
 #ifdef SUNSTONE_MIMUS_NATIVE
 #include "native.h"
 #endif
@@ -19,6 +22,25 @@ constexpr unsigned kWorkers = SUNSTONE_MIMUS_WORKERS;
 static_assert(kWorkers == mimus::asr::kMaxWorkers);
 static_assert(kWorkers == 2 || kWorkers == 8);
 static_assert(kWorkers <= configNUMBER_OF_CORES);
+constexpr unsigned worker_priority(unsigned core) {
+#if defined(SUNSTONE_A733_OS) && SUNSTONE_MIMUS_WORKERS == 8
+    // The OS PMIC owner on core 0 and NPU client on core 1 run at priority 3.
+    if (core < 6) return 2;
+#else
+    (void)core;
+#endif
+    return kMimusOwnerPriority;
+}
+#ifdef SUNSTONE_A733_OS
+constexpr unsigned inference_mask = kWorkers == 8 ? 0xffu :
+    (1u << A733_SMP_RECOGNITION_CORE) | (1u << A733_SMP_INFERENCE_CORE);
+// Read from the linked ELF by the OS link check and host preparation.
+extern "C" __attribute__((used,retain)) const uint32_t mimus_parallel_configuration[7] = {
+    1, kWorkers, A733_SMP_RECOGNITION_CORE, inference_mask, kMimusOwnerPriority,
+    inference_mask & 0x3fu ? worker_priority(0) : 0,
+    inference_mask & 0xc0u ? worker_priority(6) : 0
+};
+#endif
 #if defined(SUNSTONE_MIMUS_NATIVE) && SUNSTONE_MIMUS_WORKERS == 8 && !defined(A733_A76_ADMITTED)
 #error Eight native inference workers require admitted A76 placement
 #endif
@@ -149,7 +171,9 @@ void mimus_parallel_init(unsigned owner_index, unsigned worker_index) {
     configASSERT(owner_index != worker_index && owner_index < configNUMBER_OF_CORES &&
                  worker_index < configNUMBER_OF_CORES);
     owner_core = owner_index;
-#if defined(SUNSTONE_MIMUS_NATIVE) && SUNSTONE_MIMUS_WORKERS == 8
+#ifdef SUNSTONE_A733_OS
+    configASSERT(owner_index == A733_SMP_RECOGNITION_CORE && worker_index == A733_SMP_INFERENCE_CORE);
+#elif defined(SUNSTONE_MIMUS_NATIVE) && SUNSTONE_MIMUS_WORKERS == 8
     configASSERT(owner_index == 6 && worker_index == 7);
 #endif
     unsigned assigned = (1u << owner_index) | (1u << worker_index);
@@ -165,7 +189,7 @@ void mimus_parallel_init(unsigned owner_index, unsigned worker_index) {
         slot.jobs = xQueueCreateStatic(1, sizeof(Job), slot.jobs_storage, &slot.jobs_state);
         slot.done = xQueueCreateStatic(1, sizeof(uint64_t), slot.done_storage, &slot.done_state);
         configASSERT(slot.jobs && slot.done);
-        configASSERT(xTaskCreateStaticAffinitySet(worker, "asr_worker", 8192, &slot, 3,
+        configASSERT(xTaskCreateStaticAffinitySet(worker, "asr_worker", 8192, &slot, worker_priority(slot.core),
                     worker_stacks[i - 1], &slot.state, UBaseType_t{1} << slot.core));
     }
 }
