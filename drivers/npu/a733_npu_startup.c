@@ -543,6 +543,35 @@ static int stopped(struct a733_npu_startup *s)
         check(s,CCU+0x19a0,BIT(16),BIT(16)) &&
         rd(s,PLL,&v) && v==(PLL_OPEN(s->pll_factors)|PLL_LOCK|s->pll_inherited);
 }
+enum a733_npu_platform_result a733_npu_startup_restart(struct a733_npu_startup *s)
+{
+    if(!owner_task(s) || s->stage!=A733_NPU_STARTUP_STOPPED)return RETAINED;
+    if(!now(s,0) || atomic_load_explicit(&s->window_open,memory_order_acquire) ||
+       s->row.domains!=s->providers.domains || s->row.rail!=&s->rail ||
+       s->row.wake_context!=s || s->row.owner!=s->config.owner || s->row.domain!=4 ||
+       a733_power_domain_state(&s->row)!=A733_POWER_ROW_ON)return fault(s);
+    enum a733_clock_result clock=a733_clock_token_status(s->providers.clocks,&s->clock);
+    enum a733_rail_result rail=a733_rail_status(s->providers.rails,&s->rail);
+    enum a733_gpu_resource_result pck=a733_gpu_resources_status(s->providers.pck,s->config.pck_client,&s->pck);
+    if((clock!=A733_CLOCK_OK && clock!=A733_CLOCK_BUSY) ||
+       (rail!=A733_RAIL_READY && rail!=A733_RAIL_BUSY) ||
+       (pck!=A733_GPU_RESOURCE_OK && pck!=A733_GPU_RESOURCE_BUSY))return fault(s);
+    if(clock==A733_CLOCK_BUSY || rail==A733_RAIL_BUSY || pck==A733_GPU_RESOURCE_BUSY)return PENDING;
+    int held=enter(s);
+    if(held!=1)return held==0 && now(s,0) ? PENDING : fault(s);
+    unsigned domain=0;
+    if(!now(s,0) || a733_power_domain_check(s->providers.domains,4,&domain)!=1 || domain!=8 ||
+       !stopped(s) || !check(s,CCU+0xb04,0xf0001,BIT(19)))return fault(s);
+    if(!leave(s))return fault(s);
+    /* The ON row and its rail pin remain counted. Never enter PASS, whose
+     * pre-write refusal releases tokens. This is the existing adoption path. */
+    s->pll_adopted=1;s->pll_locked=0;s->stage=A733_NPU_STARTUP_ENABLE;
+    return a733_npu_startup_step(s);
+}
+void a733_npu_startup_retain(struct a733_npu_startup *s)
+{
+    if(owner_task(s))(void)fault(s);
+}
 /* The vendor changes the NPU clock only while no NPU core is powered
  * (vipdrv_clkfreq_set, vip_drv_os_debug.c:411-461), between npu_clk_uninit
  * and npu_clk_init (vip_drv_device_platform.c:822-886). After local stop the

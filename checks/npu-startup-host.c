@@ -500,10 +500,43 @@ static int retune(void)
     puts("PASS stopped NPU retune: both directions in the vendor order with the gates closed, five refusals before any write, and a retained lock failure");
     return 0;
 }
+static int restart(void)
+{
+    for(unsigned variant=0;variant<6;++variant) {
+        setup();assert(boot(200,1,0).result==A733_NPU_PLATFORM_READY);
+        bootstrap_running=1;assert(a733_npu_startup_stop(&s)==A733_NPU_PLATFORM_READY);
+        const uint64_t clock=s.clock.id,rail=s.rail.id,pck=s.pck.token,deadline=s.config.deadline_us;
+        const unsigned request=atomic_load(&s.row.request),writes=d.ppu_writes,pll=r.pll_writes;
+        const unsigned reads=r.reads,local_writes=r.writes;const uint64_t start=m.now;
+        if(variant==1)r.sysctrl=0;
+        if(variant==2)m.now=s.config.deadline_us;
+        if(variant==3)atomic_store(&s.providers.clocks->failed,1);
+        if(variant==4)r.sysctrl_stuck=1;
+        if(variant==5)r.never_lock=1;
+        enum a733_npu_platform_result result=a733_npu_startup_restart(&s);
+        for(unsigned polls=0;result==A733_NPU_PLATFORM_PENDING && polls<20;++polls) {
+            m.now+=1000;result=a733_npu_startup_step(&s);
+        }
+        assert(s.clock.id==clock && s.rail.id==rail && s.pck.token==pck && s.config.deadline_us==deadline &&
+            atomic_load(&s.row.request)==request && s.row.counted && s.row.wake_context==&s &&
+            s.row.rail==&s.rail && d.ppu_writes==writes && r.pll_writes==pll);
+        if(!variant) {
+            assert(result==A733_NPU_PLATFORM_READY && atomic_load(&s.window_open) && tokens_held());
+            printf("{\"restart_register_reads\":%u,\"restart_local_writes\":%u,\"elapsed_us\":%llu}\n",
+                r.reads-reads,r.writes-local_writes,(unsigned long long)(m.now-start));
+            assert(a733_npu_startup_restart(&s)==A733_NPU_PLATFORM_RETAINED && !s.failed);
+            assert(a733_npu_startup_stop(&s)==A733_NPU_PLATFORM_READY);
+        } else assert(result==A733_NPU_PLATFORM_RETAINED && s.failed && !atomic_load(&s.window_open));
+        bootstrap_running=0;
+    }
+    puts("PASS same-lifetime NPU restart: retained identities, no PCK/PLL writes, local-open and five retained failures");
+    return 0;
+}
 int main(int argc,char **argv)
 
 {
     (void)unused_boot;
+    if(argc==2 && !strcmp(argv[1],"--restart"))return restart();
     if(argc==2 && !strcmp(argv[1],"--inherited-on"))return inherited_on();
     if(argc==2 && !strcmp(argv[1],"--inherited-pll"))return inherited_pll();
     if(argc==2 && !strcmp(argv[1],"--second-start"))return second_start();

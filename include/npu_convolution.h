@@ -72,6 +72,7 @@ struct npu_convolution {
     enum npu_service_operation pending_operation;
     atomic_uint failed, closed;
     unsigned prepared, bound, opened, ready, output_ready;
+    unsigned restarting;
     /* The latest job's timing, written by the service worker before the DONE
      * reply that a client then reads. At publication, just before the
      * trigger, and at the worker's completion observation: the NPU adapter's
@@ -108,6 +109,15 @@ struct npu_convolution {
  * confinement, SRAM ownership/routing, independent recovery, remote exclusion,
  * power/clock/reset and secure attribution remain independent prerequisites. */
 int npu_convolution_prepare(struct npu_convolution *,const struct npu_convolution_config *);
+/* Opt in before scheduling, after binding the single client and IRQ. The
+ * callback is the owned route's stopped-to-masked restart operation. */
+int npu_convolution_restart_enable(struct npu_convolution *,int (*irq)(void *));
+/* Original bootstrap only, after collected CLOSE and successful local stop.
+ * Poll under the original lifetime deadline. READY permits a fresh OPEN;
+ * immutable tables, allocations and native counter history stay intact. */
+enum a733_npu_platform_result npu_convolution_restart_poll(struct npu_convolution *);
+/* Bound bootstrap failure exit: withdraw a pending resume before suspension. */
+void npu_convolution_restart_retain(struct npu_convolution *);
 
 /* Pre-scheduler, an initialized startup with its bootstrap task bound; one
  * live client. This constructs the deferred service with a fixed two-command
@@ -128,9 +138,10 @@ enum a733_npu_platform_result npu_convolution_startup_poll(struct npu_convolutio
  * left BOOTING/RUNNING, without STATUS polling.
  *
  * CLOSE requires READY after every job has been reaped. Its copied reply must
- * report CLOSED with no session/job ownership. It permanently stops admission;
- * reopening the context is unsupported. Allocations and platform leases remain
- * owned. CLOSE alone does not restore local clocks/resets.
+ * report CLOSED with no session/job ownership. It stops admission until the
+ * optional normal-restart handshake above completes; without that opt-in,
+ * CLOSE is terminal. Allocations and platform leases remain owned. CLOSE alone
+ * does not restore local clocks/resets (docs/npu-startup.md).
  *
  * Only copied replies establish READY/DONE; there are no reads of worker-owned
  * controller state. One pending request at a time. Failed collect preserves its

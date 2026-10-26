@@ -222,9 +222,10 @@ After local stop, `a733_npu_startup_retune` moves PLL_NPU between 492 and
 852 MHz in the vendor's rate change while the NPU's gates stay closed and its
 resets asserted, as the vendor changes the NPU clock only while no core is
 powered ([performance modes](designs/performance-modes.md)). No NPU voltage
-transition exists; both points run at 800 mV. A stopped or faulted startup
-cannot restart in place, and faults retain resources until whole-board
-power removal. A later image in the same power lifetime starts again by
+transition exists; both points run at 800 mV. Faults retain resources until
+whole-board power removal. Normal stopped startup can use the explicit
+[restart handshake](#normal-restart-within-one-powered-lifetime) below; ordinary
+bindings remain terminal. A later image in the same power lifetime starts again by
 adoption. The board image supplies
 [thermal admission and orderly stop](designs/npu-board.md#thermal-admission-and-orderly-stop),
 and the optional [finite thermal image](../apps/npu-finite/ENTRY.md) supplies
@@ -295,13 +296,81 @@ contract and permitted ordering of local clocks/resets against PCK completion.
 An observed full-idle value or PCK state alone cannot supply that contract.
 A documented interface description or qualified trace exposing those handshake
 boundaries would decide the sequence. Until then, keep the row, DCDC2 rail pin,
-PLL/local/fabric/reference clock leases and SRAM state retained. Restart also
-requires a consumer that retires and reconstructs terminal backend, service,
-startup and IRQ ownership; calling OPEN again does not do that.
+PLL/local/fabric/reference clock leases and SRAM state retained. Calling OPEN
+again does not retire the stopped software owners. The optional normal-restart
+consumer below explicitly rearms their per-run state while retaining those
+platform-lifetime identities.
 The local-stop source audit remains applicable; its identities are in
 `npu-lifecycle-audit-20261024`. The service separately bounds pending interrupt
 mask, rearm and retirement callbacks while retaining resources on failure
 ([service deadline](npu-service.md#pending-interrupt-callbacks-have-a-service-deadline)).
+
+### Normal restart within one powered lifetime
+
+The baseline interrupt consumer has an opt-in software composition for two
+inference requests separated by CLOSE, local stop and restart. Build it with
+`apps/npu-interrupt/build.py --restart --evidence PATH`. Its identity is
+`npu-interrupt-restart-software-v1`; it accepts neither the large graph nor the
+thermal or checkpoint profile. The existing board host admission does not
+accept this profile. Same-instance physical restart remains unqualified.
+
+The service must be deferred, IRQ-bound and bound to exactly one client. A
+successful inference must reach DONE and be reaped before normal READY-to-CLOSE.
+Canceled, unreaped and faulted work cannot authorize restart. The worker masks
+and retires the interrupt, parks before publishing CLOSE, and makes no further
+backend callbacks while parked. The bootstrap proceeds only after the client
+collects that reply and all request, reply, deferred and held slots are empty.
+Local stop then uses the existing clock/reset sequence and returns SRAM routing
+to the CPU. Its ownership grant continues to exclude other SRAM users.
+
+`a733_npu_startup_restart` authenticates the retained clock, rail and PCK tokens,
+the registered ON row and stopped register state. It enters the existing
+adopted-PLL ENABLE, ROW, OPEN, SETTLE and FINAL stages. The vendor's paired
+`npu_clk_uninit`/`npu_clk_init` sequence supplies the local stop/open ordering
+(`vip_drv_device_platform.c:265–359,822–886`, pinned revision above). The latter
+pair is in the frequency-update branch with `CONFIG_AW_PM_DOMAINS` disabled;
+it does not establish deployed Linux PM behavior. This path
+never enters the initial PASS refusal path, acquires another token, requests a
+domain transition or extends the original deadline. Every failure retains the
+row and leases. The existing PLL lock sampling and 2 ms local settle still run.
+
+After startup and metadata admission, the same worker validates that its IRQ
+route is stopped, masked, disabled, inactive and pending-clear. It leaves the
+route masked and does not clear pending. A single authorized OPEN consumes the
+stopped marker inside the routed-core critical section, then performs device
+work outside that section. Fresh bootstrap
+publication cleans the existing immutable tables and command buffers. The native
+memory backend is already IDLE, so its table arena and counter history survive.
+The singleton, queues, worker, client ticket counters, row address, wake context,
+tokens, deadline and buffer reservations also survive. Only the closed/opened
+wrapper state and per-run restart eligibility are cleared.
+
+An interrupt while parked, preparing or awaiting OPEN is a retained failure.
+Atomic state transitions prevent bootstrap or worker publication from replacing
+that failure. Both tasks check the original absolute deadline. The bootstrap's
+failure exit withdraws a pending resume and closes software register admission
+before suspension, so delayed worker scheduling cannot revive it. Uncertain
+states have no restart path.
+
+The AArch64 layout adds 24 bytes to the service and 32 bytes to the containing
+convolution object, including alignment; startup storage and all data buffers
+are unchanged. With the native image's compiler flags, the three driver objects
+add 3,788 bytes of function text before linker garbage collection. No task,
+queue or allocation is added. Ordinary submission adds no translation, job
+digest or cache operation. The worker adds an opt-in branch per pass, and an enabled
+ISR checks the activation state. Successful REAP records one eligibility bit.
+These fixed software costs have not been timed on hardware. The startup model
+counts 32 register reads and six local writes over 2,036 microseconds, including
+the existing settle, with no PCK or PLL write. A restarted run also pays the
+normal bootstrap publication and controller-open costs once.
+
+Focused evidence is under `resume-npu-restart-1026`: sanitizer-backed execution
+of the real startup and providers, native FreeRTOS service/controller/cache
+composition, and linked IRQ callback/client instruction checks. The native
+composition preserves ticket and object identities, copies and reaps both
+outputs, and exercises retained interrupts, canceled work and delayed-worker
+failures. Device arithmetic, interrupt delivery and register effects are modeled;
+the existing numerical fixtures and physical captures remain separate evidence.
 
 ## Service activation
 

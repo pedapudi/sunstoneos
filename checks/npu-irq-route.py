@@ -15,7 +15,8 @@ SERVICE=0x50020000
 CASES=['route-roundtrip','capture-enabled','capture-pending','capture-active','capture-lpi',
        'install-ignored','restore-active','expired','lifecycle','rearm-ignored',
        'stop-before-close','stop-pending','dispatch','unexpected-irq','bind-priority','mask-ignored',
-       'monitor-return','monitor-pending']
+       'monitor-return','monitor-pending','restart','restart-pending','restart-active','restart-enabled',
+       'restart-rwp','restart-fault','restart-not-stopped','restart-not-masked']
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
@@ -44,6 +45,7 @@ def main():
                     name=die.attributes.get('DW_AT_name')
                     if name and name.value in (b'npu_finite_receipt',b'a733_smp_contract'):layouts[name.value.decode()]=members
                     if 'npu_irq' in members and 'spi_enabled' in members:layouts['saved']=members
+                    if set(members)=={'service','masked','stopped','fault'}:layouts['binding']=members
         assert len(offsets)==1,offsets
         state_offset=offsets.pop()
     def addr(name):
@@ -56,9 +58,10 @@ def main():
            'xTaskGetSchedulerState','npu_service_bind_irq','npu_service_irq_notify_from_isr','platform_panic',
            'sd_single_core_exception','a733_smp_stop','npu_finite_rom_return','npu_finite_receipt','admission','saved','__npu_clean_start','__device_pool_end']
     syms={n:addr(n) for n in names}
+    if any(c.startswith('restart') for c in (a.case or [])):syms['npu_application_irq_restart']=addr('npu_application_irq_restart')
     for n in ['mask','rearm','stop','binding']:assert n in locals,n
     a.output.mkdir(parents=True,exist_ok=True)
-    for case in a.case or CASES:
+    for case in a.case or [c for c in CASES if not c.startswith('restart')]:
         cpu=Uc(UC_ARCH_ARM64,UC_MODE_ARM)
         # The CCU and SYSCTRL pages read zero: the NPU resets held, its module
         # gate closed and the shared SRAM routed to the NPU, which the monitor
@@ -179,6 +182,22 @@ def main():
             assert call('npu_application_irq_bind',SERVICE)==(0 if case=='bind-priority' else 1)
             if case!='bind-priority':
                 cookie=locals['binding']
+                if case.startswith('restart'):
+                    cpu.mem_write(SERVICE+state_offset,(9).to_bytes(4,'little'))
+                    assert call('stop',cookie)==1
+                    if case in ('restart-pending','restart-active','restart-enabled','restart-rwp'):
+                        regs[D+{'restart-pending':0x20c,'restart-active':0x30c,'restart-enabled':0x10c,'restart-rwp':0}[case]]=1<<31 if case=='restart-rwp' else 2
+                    if case in ('restart-fault','restart-not-stopped','restart-not-masked'):
+                        field={'restart-fault':'fault','restart-not-stopped':'stopped','restart-not-masked':'masked'}[case]
+                        cpu.mem_write(cookie+layouts['binding'][field],(1 if case=='restart-fault' else 0).to_bytes(4,'little'))
+                    before=len(writes)
+                    assert call('npu_application_irq_restart',cookie)==(1 if case=='restart' else -1)
+                    assert len(writes)==before
+                    if case=='restart':assert not regs.get(D+0x10c,0)
+                    if case=='restart':assert int.from_bytes(cpu.mem_read(cookie+layouts['binding']['stopped'],4),'little')==0
+                    result={'case':case,'passed':True,'image_sha256':digest,'physical_access':False,'writes':writes,
+                            'scope':'Actual linked restart callback; GIC/EL/core and prior stop modeled. No GIC writes during restart.'}
+                    (a.output/(case+'.json')).write_text(json.dumps(result,indent=2)+'\n');continue
                 if case=='rearm-ignored':ignored=D+0x10c
                 regs[D+0x20c]=2
                 assert call('rearm',cookie)==(-1 if ignored else 1)

@@ -294,8 +294,10 @@ The emulator must exit with status zero and print `PASS NPU service:`.
 
 The finite single-core interrupt profile binds copied private callbacks before
 scheduling through `npu_service_bind_irq`. The existing unbound service remains
-polled. The binding and worker remain pinned; successful terminal CLOSE cannot
-reopen an interrupt binding. Requests and replies retain their existing layout.
+polled. The binding and worker remain pinned. CLOSE is terminal unless the
+single-client consumer explicitly enables the
+[normal restart handshake](npu-startup.md#normal-restart-within-one-powered-lifetime).
+Requests and replies retain their existing layout.
 
 The callbacks run in the worker task and must act on the CPU that receives
 interrupt 97. The caller therefore passes the affinity mask of that one CPU,

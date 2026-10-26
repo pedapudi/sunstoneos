@@ -3,7 +3,8 @@
 
 static struct npu_service *instance;
 static unsigned creating_worker;
-enum { SERVICE_WAITING, SERVICE_CHECKING, SERVICE_ACTIVE, SERVICE_RETAINED };
+enum { SERVICE_WAITING, SERVICE_CHECKING, SERVICE_ACTIVE, SERVICE_RETAINED,
+       SERVICE_PARKED, SERVICE_PREPARING, SERVICE_RESUMING };
 static void worker(void *);
 
 BaseType_t npu_service_task_privileged(TaskFunction_t entry, void *argument)
@@ -116,15 +117,27 @@ static enum npu_service_result execute(struct npu_service *s,
     if (r->operation == NPU_SERVICE_STATUS)
         return c->state == A733_NPU_FAULT ? NPU_SERVICE_FAULT : NPU_SERVICE_OK;
     if (r->operation == NPU_SERVICE_OPEN) {
-        if(s->irq_bound && (c->state==A733_NPU_CLOSED || c->state==A733_NPU_FAULT))return NPU_SERVICE_FAULT;
+        int reopening=s->reopening && c->state==A733_NPU_CLOSED;
+        if(s->irq_bound && ((c->state==A733_NPU_CLOSED && !reopening) || c->state==A733_NPU_FAULT))return NPU_SERVICE_FAULT;
         if(s->irq_bound && irq_mask(s)!=1)
             return c->state==A733_NPU_FAULT ? NPU_SERVICE_FAULT : SERVICE_DEFERRED;
         if (s->owner != NPU_SERVICE_CLIENTS) return NPU_SERVICE_BUSY;
         if (c->state != A733_NPU_COLD && c->state != A733_NPU_CLOSED) return NPU_SERVICE_BUSY;
+        if(reopening) {
+            taskENTER_CRITICAL();
+            int ready=!atomic_load_explicit(&s->irq_pending,memory_order_acquire) &&
+                atomic_load_explicit(&s->activation_state,memory_order_acquire)==SERVICE_ACTIVE &&
+                !s->irq_retained && s->restart_ready(s->activation.context)==1;
+            s->reopening=0;
+            if(ready)atomic_store_explicit(&s->irq_stopped,0,memory_order_release);
+            taskEXIT_CRITICAL();
+            if(!ready){irq_fault(s);return NPU_SERVICE_FAULT;}
+        }
         s->owner = m->client; s->job_ticket = m->ticket;
         if (a733_npu_open(c, &s->ops, s->cookie, &s->image, &s->commands[0], r->timeout_us))
             return NPU_SERVICE_OK;
         if (c->state == A733_NPU_FAULT) return NPU_SERVICE_FAULT;
+        if(reopening){irq_fault(s);return NPU_SERVICE_FAULT;}
         /* Controller validation refused before borrowing or hardware access. */
         s->owner = NPU_SERVICE_CLIENTS; s->job_ticket = 0;
         return NPU_SERVICE_INVALID;
@@ -155,6 +168,7 @@ static enum npu_service_result execute(struct npu_service *s,
         void *token; int stopped;
         if (!a733_npu_reap(c, &token, &stopped)) return NPU_SERVICE_BUSY;
         (void)token; *canceled = (unsigned)stopped;
+        if(s->restart_irq)s->restart_reaped=!stopped;
         return NPU_SERVICE_OK;
     }
     case NPU_SERVICE_CLOSE:
@@ -162,6 +176,7 @@ static enum npu_service_result execute(struct npu_service *s,
             !(s->irq_bound && c->state==A733_NPU_CLOSED)) return NPU_SERVICE_BUSY;
         if(s->irq_bound && irq_mask(s)!=1)
             return c->state==A733_NPU_FAULT ? NPU_SERVICE_FAULT : SERVICE_DEFERRED;
+        if(s->restart_irq && c->state==A733_NPU_DRAINED)s->restart_reaped=0;
         if (c->state==A733_NPU_CLOSED || a733_npu_close(c)) {
             if(s->irq_bound) {
                 int r=irq_call(s, IRQ_STOP_WAIT, s->irq_ops.stop);
@@ -169,7 +184,13 @@ static enum npu_service_result execute(struct npu_service *s,
                 if(!r)return SERVICE_DEFERRED;
                 atomic_store_explicit(&s->irq_stopped,1,memory_order_release);
             }
-            s->owner = NPU_SERVICE_CLIENTS; s->job_ticket = 0; return NPU_SERVICE_OK;
+            s->owner = NPU_SERVICE_CLIENTS; s->job_ticket = 0;
+            if(s->restart_irq) {
+                unsigned expected=SERVICE_ACTIVE;
+                if(!atomic_compare_exchange_strong_explicit(&s->activation_state,&expected,SERVICE_PARKED,
+                    memory_order_acq_rel,memory_order_acquire)){irq_fault(s);return NPU_SERVICE_FAULT;}
+            }
+            return NPU_SERVICE_OK;
         }
         break;
     default: return NPU_SERVICE_INVALID;
@@ -492,6 +513,23 @@ static void worker(void *argument)
 #endif
     if (s->runtime) s->runtime->loop(s);
     for (;;) {
+        if(s->restart_irq && atomic_load_explicit(&s->activation_state,memory_order_acquire)==SERVICE_RESUMING) {
+            taskENTER_CRITICAL();
+            unsigned expected=SERVICE_RESUMING;
+            int ready=!atomic_load_explicit(&s->irq_pending,memory_order_acquire) &&
+                !s->irq_retained && s->restart_ready(s->activation.context)==1 &&
+                s->restart_irq(s->irq_cookie)==1 && s->restart_ready(s->activation.context)==1;
+            if(ready) {
+                s->restart_reaped=0;s->reopening=1;
+                ready=atomic_compare_exchange_strong_explicit(&s->activation_state,&expected,SERVICE_ACTIVE,
+                    memory_order_acq_rel,memory_order_acquire);
+            }
+            if(!ready) {
+                atomic_store_explicit(&s->activation_state,SERVICE_RETAINED,memory_order_release);
+                irq_fault(s);
+            }
+            taskEXIT_CRITICAL();
+        }
         if (atomic_load_explicit(&s->activation_state,memory_order_acquire)!=SERVICE_ACTIVE) {
             (void)ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
             continue;
@@ -631,13 +669,64 @@ enum npu_service_result npu_service_activate(struct npu_service *s)
         return expected==SERVICE_RETAINED ? NPU_SERVICE_FAULT : NPU_SERVICE_BUSY;
     int ready=s->activation.prepared(s->activation.context,&s->ops,s->cookie,&s->image,s->commands,s->command_count);
     unsigned state=ready==1 ? SERVICE_ACTIVE : ready==0 ? SERVICE_WAITING : SERVICE_RETAINED;
-    atomic_store_explicit(&s->activation_state,state,memory_order_release);
+    expected=SERVICE_CHECKING;
+    if(!atomic_compare_exchange_strong_explicit(&s->activation_state,&expected,state,
+        memory_order_acq_rel,memory_order_acquire))return NPU_SERVICE_FAULT;
     if(state==SERVICE_ACTIVE){xTaskNotifyGive(s->worker);return NPU_SERVICE_OK;}
     return state==SERVICE_WAITING ? NPU_SERVICE_BUSY : NPU_SERVICE_FAULT;
 }
+int npu_service_restart_enable(struct npu_service *s,int (*irq)(void *),int (*ready)(void *))
+{
+    if(!s || s!=instance || !s->initialized || !irq || !ready || s->restart_irq ||
+       !s->irq_bound || s->shared || s->runtime || !s->activation.bootstrap || !s->clients[0].task ||
+       xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED)return 0;
+    for(unsigned i=1;i<NPU_SERVICE_CLIENTS;++i)if(s->clients[i].task)return 0;
+    s->restart_irq=irq;s->restart_ready=ready;return 1;
+}
+static int restart_caller(struct npu_service *s)
+{
+    uint64_t level;__asm__ volatile("mrs %0,CurrentEL":"=r"(level));
+    return s && s==instance && s->restart_irq && !s->shared && !s->runtime && level==4 &&
+        xTaskGetSchedulerState()==taskSCHEDULER_RUNNING &&
+        xTaskGetCurrentTaskHandle()==s->activation.bootstrap;
+}
+void npu_service_restart_retain(struct npu_service *s)
+{
+    if(!restart_caller(s))return;
+    atomic_store_explicit(&s->activation_state,SERVICE_RETAINED,memory_order_release);
+    xTaskNotifyGive(s->worker);
+}
+enum npu_service_result npu_service_restart_prepare(struct npu_service *s)
+{
+    if(!restart_caller(s))return NPU_SERVICE_DENIED;
+    unsigned state=atomic_load_explicit(&s->activation_state,memory_order_acquire);
+    if(state==SERVICE_RETAINED)return NPU_SERVICE_FAULT;
+    if(state!=SERVICE_PARKED)return NPU_SERVICE_BUSY;
+    if(!s->restart_reaped || s->controller.state!=A733_NPU_CLOSED || s->controller.fault ||
+       s->owner!=NPU_SERVICE_CLIENTS || s->job_ticket || s->has_deferred || s->has_held ||
+       s->clients[0].pending || uxQueueMessagesWaiting(s->requests) ||
+       uxQueueMessagesWaiting(s->clients[0].replies) || !npu_service_irq_stopped(s))return NPU_SERVICE_INVALID;
+    return atomic_compare_exchange_strong_explicit(&s->activation_state,&state,SERVICE_PREPARING,
+        memory_order_acq_rel,memory_order_acquire) ? NPU_SERVICE_OK : NPU_SERVICE_FAULT;
+}
+enum npu_service_result npu_service_restart_resume(struct npu_service *s)
+{
+    if(!restart_caller(s))return NPU_SERVICE_DENIED;
+    unsigned state=atomic_load_explicit(&s->activation_state,memory_order_acquire);
+    if(state==SERVICE_ACTIVE && s->reopening)return NPU_SERVICE_OK;
+    if(state==SERVICE_RETAINED)return NPU_SERVICE_FAULT;
+    if(state==SERVICE_RESUMING)return NPU_SERVICE_BUSY;
+    if(state!=SERVICE_PREPARING)return NPU_SERVICE_INVALID;
+    int ready=s->activation.prepared(s->activation.context,&s->ops,s->cookie,&s->image,s->commands,s->command_count);
+    if(ready<0){npu_service_restart_retain(s);return NPU_SERVICE_FAULT;}
+    if(!ready)return NPU_SERVICE_BUSY;
+    if(!atomic_compare_exchange_strong_explicit(&s->activation_state,&state,SERVICE_RESUMING,
+        memory_order_acq_rel,memory_order_acquire))return NPU_SERVICE_FAULT;
+    xTaskNotifyGive(s->worker);return NPU_SERVICE_BUSY;
+}
 int npu_service_share(struct npu_service *s)
 {
-    if (!s || s != instance || !s->initialized || s->shared ||
+    if (!s || s != instance || !s->initialized || s->shared || s->restart_irq ||
         xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED) return 0;
     /* The controller refuses a command touching internal SRAM before any
      * device access; rejecting it here keeps dispatch refusals impossible. */
@@ -688,7 +777,7 @@ void npu_service_retain(struct npu_service *s)
 }
 int npu_service_bind(struct npu_service *s, unsigned slot, TaskHandle_t task, uint32_t commands)
 {
-    if (!s || s != instance || !s->initialized || slot >= NPU_SERVICE_CLIENTS || !task ||
+    if (!s || s != instance || !s->initialized || s->restart_irq || slot >= NPU_SERVICE_CLIENTS || !task ||
         task == s->worker || s->clients[slot].task || (commands & 1u) ||
         (s->command_count < 32 && (commands >> s->command_count)) ||
         xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED) return 0;
@@ -710,6 +799,11 @@ void npu_service_irq_notify_from_isr(struct npu_service *s,int mask_ok,BaseType_
 {
     configASSERT(s && s==instance && s->initialized && s->irq_bound && woken);
     unsigned stopped=atomic_exchange_explicit(&s->irq_stopped,0,memory_order_acq_rel);
+    if(s->restart_irq && (stopped ||
+       atomic_load_explicit(&s->activation_state,memory_order_acquire)!=SERVICE_ACTIVE)) {
+        atomic_store_explicit(&s->activation_state,SERVICE_RETAINED,memory_order_release);
+        mask_ok=0;
+    }
     atomic_fetch_or_explicit(&s->irq_pending,IRQ_EVENT|(mask_ok==1&&!stopped?0:IRQ_FAILED),memory_order_release);
     vTaskNotifyGiveFromISR(s->worker,woken);
 }

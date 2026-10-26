@@ -513,3 +513,60 @@ int npu_convolution_output(struct npu_convolution *c,void *out,size_t bytes)
  * Only the startup's task can use its platform callbacks and shared locks. */
 enum a733_npu_platform_result npu_convolution_stop_poll(struct npu_convolution *c)
 {return platform_step(c,1);}
+
+/* The platform clock is absolute and concurrency-safe; the retained native
+ * backend counter has a different epoch and remains owned by the worker. */
+static int restart_live(void *cookie)
+{
+    struct npu_convolution *c=cookie;uint64_t t;
+    return good(c) && c->startup &&
+        !atomic_load_explicit(&c->startup->providers.clocks->failed,memory_order_acquire) &&
+        !atomic_load_explicit(&c->startup->providers.locks->retained,memory_order_acquire) &&
+        a733_counter_clock_now(c->startup->providers.counter,&t)==1 && t<c->startup->config.deadline_us;
+}
+static int restart_ready(void *cookie)
+{
+    struct npu_convolution *c=cookie;
+    return restart_live(c) && a733_npu_startup_window_open(c->startup);
+}
+int npu_convolution_restart_enable(struct npu_convolution *c,int (*irq)(void *))
+{
+    return good(c) && c->bound && npu_service_restart_enable(&c->service,irq,restart_ready);
+}
+void npu_convolution_restart_retain(struct npu_convolution *c)
+{
+    if(!c || !c->bound || !c->startup || xTaskGetSchedulerState()!=taskSCHEDULER_RUNNING ||
+       xTaskGetCurrentTaskHandle()!=c->startup->task)return;
+    npu_service_restart_retain(&c->service);a733_npu_startup_retain(c->startup);fault(c);
+}
+enum a733_npu_platform_result npu_convolution_restart_poll(struct npu_convolution *c)
+{
+    if(!c || !c->bound || !c->startup || !c->service.restart_irq ||
+       xTaskGetSchedulerState()!=taskSCHEDULER_RUNNING || xTaskGetCurrentTaskHandle()!=c->startup->task ||
+       !atomic_load_explicit(&c->closed,memory_order_acquire))return A733_NPU_PLATFORM_RETAINED;
+    if(!restart_live(c))goto retained;
+    if(!c->restarting) {
+        if(c->startup->stage!=A733_NPU_STARTUP_STOPPED || c->pending || c->job || c->output_ready ||
+           c->native.memory.state!=A733_NPU_MEMORY_IDLE || c->native.memory.active.device ||
+           npu_service_restart_prepare(&c->service)!=NPU_SERVICE_OK)goto retained;
+        c->restarting=1;
+    }
+    if(c->restarting==1) {
+        enum a733_npu_platform_result result=c->startup->stage==A733_NPU_STARTUP_STOPPED ?
+            a733_npu_startup_restart(c->startup) : a733_npu_startup_step(c->startup);
+        if(result==A733_NPU_PLATFORM_RETAINED)goto retained;
+        if(result!=A733_NPU_PLATFORM_READY)return result;
+        c->restarting=2;
+    }
+    enum npu_service_result result=npu_service_restart_resume(&c->service);
+    if(result==NPU_SERVICE_BUSY)return A733_NPU_PLATFORM_PENDING;
+    if(result!=NPU_SERVICE_OK || !restart_live(c))goto retained;
+    /* Client is excluded by closed until this release. Every job timing field
+     * is overwritten by the existing publication; tickets and counters persist. */
+    c->opened=0;c->ready=0;c->observed=(struct npu_service_reply){0};c->restarting=0;
+    atomic_store_explicit(&c->closed,0,memory_order_release);
+    return A733_NPU_PLATFORM_READY;
+retained:
+    npu_convolution_restart_retain(c);
+    return A733_NPU_PLATFORM_RETAINED;
+}

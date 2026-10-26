@@ -10,6 +10,7 @@ from unicorn import Uc,UC_ARCH_ARM64,UC_MODE_ARM,UC_HOOK_CODE
 from unicorn.arm64_const import UC_ARM64_REG_X0,UC_ARM64_REG_PC,UC_ARM64_REG_SP,UC_ARM64_REG_LR
 p=argparse.ArgumentParser(description=__doc__)
 for name in ('elf','evidence'):p.add_argument('--'+name,type=Path,required=True)
+p.add_argument('--restart',action='store_true',help='check the distinct software-only local-restart variant')
 a=p.parse_args();r=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('layout',r/'checks/storage-read-native.py');layout=importlib.util.module_from_spec(spec);spec.loader.exec_module(layout)
 spec=importlib.util.spec_from_file_location('host',r/'apps/npu-finite/host.py');host=importlib.util.module_from_spec(spec);spec.loader.exec_module(host)
@@ -32,7 +33,7 @@ for variant in ('matched','mismatch','missing-IRQ-completion','missing-IRQ-stop'
     c=0x43000000
     service=c+image.layouts['npu_convolution']['service'];sl=image.layouts['npu_service']
     put(image.address('instance'),service);put(service+sl['irq_bound'],1,4)
-    put(service+sl['irq_completions'],2 if variant=='missing-IRQ-completion' else 3,4)
+    put(service+sl['irq_completions'],(4 if a.restart else 3)-(variant=='missing-IRQ-completion'),4)
     put(image.address('a733_observe_identity')+image.layouts['a733_observe_identity']['deadline'],480000000)
     names=['a733_npu_application_ready','a733_npu_application_client','npu_convolution_send','npu_convolution_collect','npu_convolution_output','a733_npu_application_stopped','a733_npu_application_quiesce','a733_npu_application_quiescent','vPortEnterCritical','platform_exit','vTaskSuspend','vTaskDelay','a733_npu_application_fail','platform_puts','platform_hex']
     hooks={image.address(name):name for name in names}
@@ -60,7 +61,7 @@ for variant in ('matched','mismatch','missing-IRQ-completion','missing-IRQ-stop'
             if op==2:
                 assert not state['closed'];state['submits']+=1;state['job']=state['ticket']
             if op==4:assert state['copied']==state['submits'];state['reaps']+=1
-            if op==5:assert state['reaps']==2 and state['copied']==2
+            if op==5:assert state['reaps']==state['copied'] and state['reaps'] in ((1,2) if a.restart else (2,))
             ret(1)
         elif name=='npu_convolution_collect':
             op=state['operation'];out=args[2];u.mem_write(out,bytes(40));put(out+reply['ticket'],args[1])
@@ -69,6 +70,7 @@ for variant in ('matched','mismatch','missing-IRQ-completion','missing-IRQ-stop'
             for key,value in [('job_ticket',0 if op in (1,5) else state['job']),('result',result),('state',st),('owns_session',0 if op==5 and not result else 1)]:put(out+reply[key],value,8 if key=='job_ticket' else 4)
             if op==5 and not result:
                 state['closed']=True;put(service+sl['irq_stopped'],0 if variant=='missing-IRQ-stop' else 1,4)
+                if a.restart:put(c+image.layouts['npu_convolution']['closed'],1,4)
             ret(1)
         elif name=='npu_convolution_output':
             assert args[0]==c and state['job'];state['copied']+=1
@@ -91,6 +93,8 @@ for variant in ('matched','mismatch','missing-IRQ-completion','missing-IRQ-stop'
         elif name=='vPortEnterCritical':
             assert state['quiesced'] and variant!='quiescence-lost';state['critical']=True;ret()
         elif name=='vTaskDelay':
+            if a.restart and state['closed'] and state['reaps']==1:
+                state['closed']=False;put(c+image.layouts['npu_convolution']['closed'],0,4)
             state['ticks']+=240000000 if variant=='stop-never-ready' and state['closed'] else 24000;ret()
         elif name=='a733_npu_application_fail':put(image.address('a733_npu_application_failed'),args[0],4);ret()
         elif name=='vTaskSuspend':state['retained']=True;u.emu_stop()
@@ -102,7 +106,10 @@ for variant in ('matched','mismatch','missing-IRQ-completion','missing-IRQ-stop'
     if variant in ('matched','mismatch'):assert state['exit']==(variant=='mismatch') and not state['retained'],state
     else:assert state['retained'] and state['exit'] is None and not state['critical'],state
     assert state['submits']==2 and state['copied']==2 and state['reaps']==2,state
-    assert state['operations']==[1,2,6,4,2,6,4]+([] if variant=='missing-IRQ-completion' else [5]),state
+    assert state['operations']==[1,2,6,4]+([5,1] if a.restart else [])+[2,6,4]+([] if variant=='missing-IRQ-completion' else [5]),state
+    if a.restart:
+        assert state['log'].count('NPU_STAGE=FIRST_CLOSE\n')==1 and state['log'].count('NPU_STAGE=RESTART_OPEN\n')==1
+        if variant=='matched':assert 'PASS NPU two matched jobs across normal local restart and parked providers\n' in state['log']
     if variant!='missing-IRQ-completion':
         timing=host.timing(state['log'])
         assert timing['job_us']==[20,20] and timing['publication_gap_us']==2000,timing

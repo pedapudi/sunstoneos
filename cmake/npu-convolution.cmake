@@ -36,6 +36,7 @@ if(NPU_CONVOLUTION_FIXTURES)
   target_compile_options(npu-convolution-model PRIVATE ${SUNSTONE_KERNEL_FLAGS} -Werror -fstack-usage)
   target_link_options(npu-convolution-model PRIVATE -nostdlib -static -Wl,--gc-sections
     -Wl,--wrap=a733_npu_native_operations -Wl,--wrap=a733_npu_startup_prepared
+    -Wl,--wrap=a733_npu_startup_stop -Wl,--wrap=a733_npu_startup_restart -Wl,--wrap=a733_counter_clock_now
     -Wl,--wrap=aarch64_device_translate
     "-Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/platform/qemu-smp/link.ld"
     "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/npu-convolution-model.map")
