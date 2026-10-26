@@ -93,16 +93,16 @@ void a733_smp_boot(void)
     /* GICv3 security/routing sequence follows the existing EL3 monitor. */
     uint32_t ctlr=read32(0x03400000),banks=(read32(0x03400004)&31)+1;
     if(ctlr&(1u<<6))a733_smp_stop(2,2);
+    /* MBUS back to boot0's 600 MHz before any secondary core is released:
+     * the window runs from SRAM, and released cores would spin in DRAM
+     * (include/a733_el3_mbus.h). */
+    {unsigned mbus=a733_el3_mbus_restore();if(mbus)a733_smp_stop(2,0x200u|mbus);}
     write32(0x03400000,ctlr&~7u);wait_clear(0x03400000,1u<<31);
     for(unsigned i=1;i<banks;++i)write32(0x03400180+i*4,UINT32_MAX);
     wait_clear(0x03400000,1u<<31);
     write32(0x03400000,(ctlr&~7u)|0x30);wait_clear(0x03400000,1u<<31);
     write32(0x03400000,(ctlr&~7u)|0x33);wait_clear(0x03400000,1u<<31);
     if((read32(0x03400000)&0x73)!=0x33)a733_smp_stop(2,3);
-    /* MBUS back to boot0's 600 MHz before any secondary core is released:
-     * the window runs from SRAM, and released cores would spin in DRAM
-     * (include/a733_el3_mbus.h). */
-    {unsigned mbus=a733_el3_mbus_restore();if(mbus)a733_smp_stop(2,0x200u|mbus);}
     uint64_t mpidr;__asm__ volatile("mrs %0, mpidr_el1":"=r"(mpidr));
     for(unsigned c=1;c<8;++c) {
         targets[c-1]=c;
