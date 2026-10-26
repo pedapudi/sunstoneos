@@ -3,7 +3,14 @@
 import argparse,hashlib,struct
 from pathlib import Path
 
+# Sessions name MBUS at boot0's 600 MHz, which every EL3 entry restores (tools/vendor-mbus.py).
+def _vendor_mbus():
+    import importlib.util as u
+    s=u.spec_from_file_location('vendor_mbus',Path(__file__).resolve().parents[2]/'tools/vendor-mbus.py')
+    m=u.module_from_spec(s);s.loader.exec_module(m);return m
+
 def extend(board,raw,*,owner,authority,client,initial,memory,electrical,supervision,module,hz):
+    board=_vendor_mbus().board_session(board) if len(board)==592 else board
     if len(board)!=592 or len(raw)!=460800 or not owner or not authority or not 0<=client<16:
         raise ValueError('Encoder requires board592, VGA NV12 bytes and nonzero owners.')
     facts=[hashlib.sha256(x).digest() for x in (initial,memory,electrical,supervision)]

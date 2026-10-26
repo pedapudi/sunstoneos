@@ -95,7 +95,9 @@ class Local(survey.Survey):
                     assert target==core and self.shutdown_steps[core]==['power','dsb','isb']
                     self.shutdown_steps[core].append('control')
             else:
-                allowed={0x08001004,0x08001008}
+                # MBUS_CLK and MSI_LITE0_BGR: the MBUS restore's two reads;
+                # the model holds boot0's value, so it writes neither.
+                allowed={0x08001004,0x08001008,0x02002588,0x02002594}
                 for c in range(1,8):
                     allowed.update((0x08001000+c*0x1000,0x08001004+c*0x1000,0x08001008+c*0x1000,
                                     0x07050200+c*4,0x07050220+c*4,0x07052008+c*0x1000))

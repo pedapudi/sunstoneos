@@ -11,8 +11,14 @@ def preparation():
     spec=importlib.util.spec_from_file_location('hevc_producer_preparation',Path(__file__).with_name('prepare.py'))
     value=importlib.util.module_from_spec(spec);spec.loader.exec_module(value);return value
 
+# Sessions name MBUS at boot0's 600 MHz, which every EL3 entry restores (tools/vendor-mbus.py).
+def _vendor_mbus():
+    import importlib.util as u
+    s=u.spec_from_file_location('vendor_mbus',Path(__file__).resolve().parents[2]/'tools/vendor-mbus.py')
+    m=u.module_from_spec(s);s.loader.exec_module(m);return m
 
 def extend(board,clip,*,first_bytes,owner,authority,client,initial,memory,electrical,supervision,module,hz):
+    board=_vendor_mbus().board_session(board) if len(board)==592 else board
     if len(board)!=592 or not 0<first_bytes<len(clip):
         raise ValueError('HEVC requires the board592 prefix and two nonempty clip ranges.')
     facts=b''.join(hashlib.sha256(data).digest() for data in (initial,memory,electrical,supervision))

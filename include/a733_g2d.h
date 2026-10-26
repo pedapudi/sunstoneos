@@ -8,7 +8,10 @@
 #define A733_G2D_SOURCE_IOVA UINT32_C(0x10000000)
 #define A733_G2D_OUTPUT_IOVA UINT32_C(0x10400000)
 #define A733_G2D_RCQ_IOVA UINT32_C(0x10800000)
-#define A733_G2D_MODULE UINT32_C(0x01000003)
+/* PERI0_300M divided by one: 300 MHz, the vendor rate (sun60iw2p1.dtsi:3383-3384,
+ * assigned-clock-rates of the g2d node; g2d_parents[0] in ccu-sun60iw2.c). */
+#define A733_G2D_MODULE UINT32_C(0x00000000)
+#define A733_G2D_MODULE_HZ UINT32_C(300000000)
 /* One immutable job, no reclamation or reset on any outcome. RCQ memory is a
  * separate zeroed, uncached 4096-byte READ-only IOMMU mapping. */
 int a733_g2d_commands(void *,size_t,const struct a733_g2d_session *);

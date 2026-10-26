@@ -29,8 +29,14 @@ def field_pattern(mode=1,repeats=0):
 
 STRENGTHS=('fixed','low','middle','high')
 
+# Sessions name MBUS at boot0's 600 MHz, which every EL3 entry restores (tools/vendor-mbus.py).
+def _vendor_mbus():
+    import importlib.util as u
+    s=u.spec_from_file_location('vendor_mbus',Path(__file__).resolve().parents[2]/'tools/vendor-mbus.py')
+    m=u.module_from_spec(s);s.loader.exec_module(m);return m
 
 def extend(board,source,*,owner,authority,client,initial,memory,electrical,supervision,mode=1,strength=0,repeats=0):
+    board=_vendor_mbus().board_session(board) if len(board)==592 else board
     prep=preparation()
     if len(board)!=592 or mode not in (1,2,3) or not 0<=repeats<=3 or len(source)!=460800*(repeats+(1 if mode==1 else 2)) or not (0<owner<2**64 and 0<authority<2**64 and 0<=client<16):
         raise ValueError('Deinterlace requires board592, nonzero owner/authority and exact mode-specific NV12 bytes.')

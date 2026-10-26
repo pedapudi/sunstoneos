@@ -29,7 +29,8 @@ def session_check(raw):
     require(owner and authority and client<16 and owner not in struct.unpack_from('<2Q',raw,456),'Invalid G2D owner.')
     require(all(any(raw[o:o+32]) for o in (640,672,704,736,768)),'Missing G2D physical or fixture evidence.')
     module,hz,g0,g1,uv,rail=struct.unpack_from('<6I',raw,832)
-    require((module,hz)==(0x01000003,100000000) and
+    # PERI0_300M / 1, 300 MHz: the vendor's assigned G2D rate (include/a733_g2d.h).
+    require((module,hz)==(0,300000000) and
         (g0,g1,uv,rail)==(0x10007,0x10007,800000,1),'Unsupported inherited G2D clock/rail state.')
     geometry_check(*session_geometry(raw))
 

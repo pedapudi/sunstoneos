@@ -511,7 +511,13 @@ def check_table():
     names = [r['name'] for r in tool.ROWS]
     assert len(names) == len(set(names))
     positioned = [r for r in tool.ROWS if 'position' in r]
-    assert [r['position'] for r in positioned] == list(range(1, len(positioned) + 1)), 'single-core plan order'
+    # Positions rise strictly, and together with the numbers that unmerged
+    # branches hold (tool.RESERVED_POSITIONS) they count 1, 2, 3, ... with no
+    # gap, so a dropped row is still caught.
+    numbers = [r['position'] for r in positioned]
+    reserved = set(tool.RESERVED_POSITIONS)
+    assert all(a < b for a, b in zip(numbers, numbers[1:])) and not reserved & set(numbers), 'single-core plan order'
+    assert sorted(set(numbers) | reserved) == list(range(1, max(numbers) + 1)), 'a bundle number is missing'
     assert tool.ROWS[:len(positioned)] == positioned, 'the single-core rows come first'
     classes = [r['class'] for r in tool.ROWS[len(positioned):]]
     assert classes == sorted(classes, key=['monitor', 'terminal', 'excluded'].index), 'rows follow the plan order'

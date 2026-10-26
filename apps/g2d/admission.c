@@ -1,4 +1,5 @@
 #include "a733_g2d_application.h"
+#include "a733_g2d.h"
 #include "a733_rail_leases.h"
 #include "boot-record.h"
 #include "a733_device_memory_layout.h"
@@ -22,7 +23,7 @@ int a733_g2d_session_valid(const struct a733_g2d_session *s)
         s->magic==A733_G2D_SESSION_MAGIC&&s->version==1&&s->bytes==sizeof(*s)&&
         s->owner&&s->owner!=s->board.pmic_owner&&s->owner!=s->board.usb0_owner&&
         s->authority&&s->pck_client<16&&
-        s->module==UINT32_C(0x01000003)&&s->module_hz==100000000&&
+        s->module==A733_G2D_MODULE&&s->module_hz==A733_G2D_MODULE_HZ&&
         s->supply_uv==800000&&s->supply_rail==A733_RAIL_DCDC2&&
         s->iommu_gates[0]==0x10007&&s->iommu_gates[1]==0x10007&&
         present(s->initial,32)&&present(s->memory,32)&&present(s->electrical,32)&&
