@@ -272,18 +272,19 @@ path counts only with a passing memory test over the full map; any training
 result other than 7 or a size other than 12,288 MiB stops it. The capture
 tooling adds no step to the normal boot path.
 
-## The capture reads registers in five stages ordered by risk
+## The capture reads registers in six stages ordered by risk
 
 - [`boot/a733/ddr-capture.S`](../../boot/a733/ddr-capture.S): a 388-byte
   table-driven reader run from FEL at `0x85000`. It reads the listed
   registers into DRAM at `0x43100000` and above and publishes a completion
   word last.
 - [`tools/prepare-ddr-capture.py`](../../tools/prepare-ddr-capture.py):
-  builds the reader and five stage tables, ordered by risk: the SID chip ID
+  builds the reader and six stage tables, ordered by risk: the SID chip ID
   and thermal calibration (7 words), boot0's own save window (72 registers), the controller (1,842 words), the PHY blocks
   over boot0's address extents (32,007 registers) and the firmware message
-  block (1,233 registers). Each range is bounded by addresses that boot0
-  accesses.
+  block (1,233 registers), then PHY registers `0x0000`–`0xbfff` (49,152),
+  where the published PHY keeps address/command delays. Every range except
+  the last is bounded by addresses that boot0 accesses.
 - [`tools/run-ddr-capture.py`](../../tools/run-ddr-capture.py): requires the
   DDR run's mailbox in SRAM, reads the 2 KiB boot parameter buffer, then
   runs each stage with one FEL execution and stops at the first failure.

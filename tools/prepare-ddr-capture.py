@@ -85,6 +85,12 @@ STAGES = [
      "entries": [
          (*halfwords(0x0a9b0000, 0x0a9b09a0), H16 | PHY | UCCLK, "DMEM (CSR 0x58000); 0x59d00"),
      ]},
+    {"name": "anib",
+     "purpose": "CSRs 0x0000-0xbfff, where the published PHY keeps address/command delays; boot0 never accesses them, so this stage runs last.",
+     "entries": [
+         (*halfwords(0x0a900000 + 0x2000 * block, 0x0a901ffe + 0x2000 * block), H16 | PHY | UCCLK,
+          f"CSR 0x{0x1000 * block:04x}-0x{0x1000 * block + 0xfff:04x}") for block in range(12)
+     ]},
 ]
 
 

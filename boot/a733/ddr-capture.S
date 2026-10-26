@@ -14,7 +14,7 @@
 //   +12  output address
 //   +16  progress: index of the entry being read, written before its reads
 //   +20  MicroContMuxSel value read before the first PHY entry
-//   +24  UcclkHclkEnables value read before the first PHY entry
+//   +24  UcclkHclkEnables value read before the first bit-9 entry
 //   +28  0x454e4f44 written last, after the PHY controls are restored
 //   +32  entries of 16 bytes: address, count (1..0x10000), flags, zero
 // Flags bits 1:0 select 16-bit (1) or 32-bit (2) reads. Bit 8 makes the
@@ -80,8 +80,6 @@ width_ok:
     bne 1f
     ldrh r3, [r10]
     str r3, [r4, #20]
-    ldrh r3, [r11]
-    str r3, [r4, #24]
     mov r3, #0
     strh r3, [r10]
     orr r9, r9, #1
@@ -90,6 +88,8 @@ width_ok:
     beq read_entry
     tst r9, #2
     bne read_entry
+    ldrh r3, [r11]                // Read only once the mux is cleared, as NXP does.
+    str r3, [r4, #24]
     mov r3, #3
     strh r3, [r11]
     orr r9, r9, #2

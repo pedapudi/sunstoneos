@@ -1,177 +1,184 @@
 # Design: restoring DRAM training from a record on the microSD card
 
-Status: **design; not implemented; independent review required before any
-board run beyond the read-only captures.** The capture tooling, its
-classifier and their checks exist; the restore hook, the record writer and
-the storage-region change follow the review and the first capture analysis.
+Status: **design, reviewed once; not implemented.** The independent review
+of 2026-10-25 found two blocking and six major issues, and this text
+includes the changes it proposed; it needs a second review before any board
+run beyond the read-only captures. The capture tooling, its classifier and
+their checks exist. The restore hook, the record writer and the storage
+change follow that review and the first capture analysis.
 
 The user approved replacing boot0's 5.1 s DRAM training with a restore of
-saved training results, kept on the microSD card. The
+saved training results kept on the microSD card. The
 [DRAM fast-boot design](dram-fast-boot.md) derives boot0's training flow and
-measures the cost; this design specifies the captures that identify the
-training results, the restore sequence, its fallbacks, the record format,
-its place on the card, periodic retraining and the qualification plan.
-P-state 0 stays at 2040 MHz throughout. Addresses written `0x5xxxx` are
-load addresses in the pinned boot0 `829ea8e3…`.
+measures the cost. This design specifies how the training results are
+identified, the restore sequence, its fallbacks, the record and its card
+region, periodic retraining and the qualification plan. P-state 0 stays at
+2040 MHz throughout. Addresses written `0x5xxxx` are load addresses in the
+pinned boot0 `829ea8e3…`.
 
-## Captures identify which registers training sets
+## The restore set comes from three kinds of capture
 
-[The capture runbook](../board-runbooks/dram-training-capture.md) runs the
-read-only capture on both boards, twice in each cold-start lifetime, in
-several lifetimes per board and later at different temperatures. Each
-capture reads the parameter block, the chip ID and thermal calibration, the
-controller and the PHY over boot0's own address extents (35,161 registers).
-`tools/analyse-ddr-captures.py` classifies every register:
+The read-only capture ([runbook](../board-runbooks/dram-training-capture.md))
+reads the parameter block, the SID chip ID and thermal calibration, the
+controller, the PHY over boot0's own address extents, the firmware message
+block and, last, PHY registers `0x0000`–`0xbfff`, which boot0 never
+accesses but where the published PHY keeps address/command delays.
+`tools/analyse-ddr-captures.py` classifies each register as status,
+lifetime, board or constant. Three kinds of capture feed the restore set:
 
-- **status**: two captures in one lifetime differ;
-- **lifetime**: stable in a lifetime, different between lifetimes of a board;
-- **board**: stable on a board, different between boards;
-- **constant**: equal in every capture.
+1. **Four-P-state captures** after boot0's normal training, two per
+   lifetime, several lifetimes per board, both boards. They give chip and
+   lifetime variation and the status class. They are not the restore
+   reference, because the restore runs boot0's P-state-0-only path, which
+   differs: message byte 4 is `0x30` (`0x59de6`), `0x4bca8` branches on
+   `dram_tpr13` bit 2 (`0x4bcb2`), and the block at `0x55a98` and the call
+   `0x581b4` (`0x57a08`) do not run.
+2. **P-state-0-only captures**, taken after a training with `dram_tpr13`
+   bit 2 clear (run 3 of the fast-boot plan, here qualification step 0).
+   These are the reference values.
+3. **Device-initialization-only captures**, taken after a run with the
+   training-step value `0x0001`; this is also the first restore-prototype
+   test. Every PHY register that differs between kinds 2 and 3 was set by
+   training, including values that repeat in every training, which the
+   classifier alone would call constant. The restore set is those
+   registers, minus the status class, each with the bit mask of the bits
+   that differ.
 
-The restore set is the PHY registers of the lifetime and board classes. A
-constant register is either fixed configuration, which boot0's own code
-rewrites on every boot, or a training result that happened to repeat; the
-captures at other temperatures separate the second case before the restore
-set is frozen. Status registers are never restored. A lifetime register
-whose spread across lifetimes exceeds a few codes also bounds how far a
-restored value may sit from a fresh training, which the drift study
-quantifies.
+The capture must also record the LPDDR5 mode registers. Parameter words 50
+and 51 stay zero in every normal capture (`dram_tpr10` bit 29 is clear, and
+the fill at `0x49c00` is for LPDDR4 only), so a capture variant of the DDR
+wrapper reads MR12, MR14 and MR15 of each channel and rank through boot0's
+mode-register read `0x4b5ac` right after `init_DRAM`, with MR16 set the way
+`0x576e4` sets it (`0x57796`), and records the frequency-set-point state.
+That variant runs boot0 code and changes MR16 temporarily, so it waits for
+the second review.
 
-## The restore replaces only the training run, in boot0's order
+## The hook wraps init_DRAM and writes the PHY registers inside it
 
-boot0's LPDDR5 path, with `dram_tpr13` bit 2 clear (P-state 0 only), runs:
+boot0's P-state-0-only LPDDR5 path runs `init_DRAM` (`0x49bdc`): DRAM
+supply (`0x4b618`), clock and reset setup (`0x57a4c`), controller setup
+(`0x578a4`, `0x57238`, `0x570d4`), then `0x55990`: PHY setup (`0x55654`,
+`0x4f57c`), P-state 0 clocks (`0x4f58c`, `0x4f500`), message block
+(`0x59d00`, which reads the training-step value at `0x59d6a`), firmware load
+(`0x4bbb8`, `0x4b97c`), firmware run (`0x4f47c`), per-P-state timing
+(`0x4bca8`, called at `0x56142`) and the final PHY stage (`0x4f46c`), then
+post-training settings (`0x57310`, `0x4b7ec`, `0x561a0`). A firmware result
+other than 7 returns 0 from `0x55990` (`0x5612e`) and `main` then stops
+without a reset (`0x5e21e`), so every check and fallback must live around
+the `init_DRAM` call. The restore uses two patch sites:
 
-1. `init_DRAM` `0x49bdc`: DRAM supply (`0x4b618`), then `0x57b7c`.
-2. `0x57a4c`: DRAM clock and reset setup; `0x578a4`: controller setup and
-   `0x57238`, `0x570d4` per channel.
-3. `0x55990`: PHY setup (`0x55654`, `0x4f57c`); P-state 0 clocks
-   (`0x4f58c`, `0x4f500`); message block (`0x59d00`); firmware load
-   (`0x4bbb8`, `0x4b97c`); firmware run (`0x4f47c`); per-P-state timing
-   (`0x4bca8`, called at `0x56142`); final PHY stage (`0x4f46c`).
-4. Post-training reads and settings (`0x57310`, `0x4b7ec`, `0x561a0`), size
-   and boot0's simple test.
+- **Around `init_DRAM`** (the call at `0x5e216` on a card boot; the DDR
+  wrapper on the FEL path). Before the call: compute the strap CRC over
+  parameter words 0–31 as boot0 selected them, run every record check
+  below, and only then edit the parameter block: clear `dram_tpr13` bit 2,
+  set `dram_tpr10` bits 28:16 to `0x0001`, set `dram_tpr1` bit 31 and words
+  50–51 to the recorded MR14 and MR15 values (boot0's own path, `0x5a08e`).
+  After the call: require a nonzero size equal to the record's, write the
+  remaining recorded mode registers with `0x4b554` in recorded order, read
+  the restore set back, and run quick-check part A. On any failure, restore
+  the saved parameter words and call `0x49bdc` again for a full training in
+  the same boot.
+- **The call at `0x56142`**: clear `MicroContMuxSel`, write the restore set
+  under its masks in record order (byte lanes, master, address/command, the
+  per-P-state block, then the `0x0000`–`0xbfff` range), set
+  `MicroContMuxSel` to 1 and call `0x4bca8` as boot0 would.
 
-The restore changes three things and leaves the rest to boot0:
+Whether the firmware accepts the device-initialization-only value, and
+whether a second `init_DRAM` call after a failed restore trains correctly,
+are the first two prototype tests on the FEL path.
 
-- **Firmware steps.** `dram_tpr10` bits 28:16 become `0x0001`, so the
-  firmware performs only device initialization: DRAM reset and the
-  mode-register writes that the message block describes. Whether the
-  firmware accepts this value is the first prototype test; message 7 is
-  required.
-- **LPDDR5 mode-register state.** The record carries the message-block
-  mode-register fields of the capture (stage 5 of the capture, at
-  `0x0a9b0000`); the hook writes them into the message block after
-  `0x59d00` and before the run, so device initialization programs the
-  trained values. MR14 and MR15 also travel through boot0's own path:
-  parameter words 50 and 51 with `dram_tpr1` bit 31 (`0x5a08e`). Any trained
-  mode register that the message block does not carry is written after the
-  run with boot0's mode-register write routine `0x4b554`, in the order the
-  record lists.
-- **Trained PHY registers.** The hook replaces the call at `0x56142`: it
-  clears `MicroContMuxSel`, writes the restore set in record order (byte
-  lanes, then master, address/command and the per-P-state block, the order
-  boot0 programs them), sets `MicroContMuxSel` to 1 and then calls `0x4bca8`
-  as boot0 would.
-
-After `init_DRAM` returns, the **quick check** writes and reads back a
-64-byte pattern and its inverse at 64 sampled addresses: one per address
-bit from bit 6 to bit 33 (both values of each bit), plus the first and last
-line of each GiB. In the AArch32 boot0 context only addresses below 4 GiB
-are reachable, so the check splits: part A in the boot0 hook covers the
-first 3 GiB, and part B in the stage-2 monitor at EL3 covers the full
-12,288 MiB before any slot is loaded. Budget: 20 ms for both parts.
+**Quick check.** Part A, in the AArch32 hook below 4 GiB: a short burst
+test per channel, rank and byte lane with walking-ones and pseudo-random
+patterns over 1 MiB per rank, written and read with cached `LDM`/`STM` bursts
+after the cache setup that boot0's parser uses. Part B, in the stage-2
+monitor at EL3: the same pattern over the 12,288 MiB map, one 64 KiB window
+per 256 MiB, excluding the monitor's own image. Part B failing sets a retrain
+flag in an RTC general-purpose register other than indexes 1 and 2, which
+boot0 uses (`0x4a940`, `0x4a95c`), and requests a warm reset. The check
+catches gross restore errors only. Marginal timing shows only in the
+qualification runs, and the safety of the restore rests on them.
 
 ## Every mismatch falls back to full training
 
-The hook checks, before writing anything:
+| Check, before any parameter edit | Mismatch |
+| --- | --- |
+| Record magic, version, header CRC and payload CRC | Full training |
+| Pinned boot0 checksum, a constant in the hook, equal to the record's | Full training |
+| Chip ID, SID `0x03006200`–`0x0300620c` | Full training |
+| Strap: selected set index and CRC of parameter words 0–31 | Full training |
+| Temperature: THS DDR sensor (channel 1), calibrated as in [thermal.md](../thermal.md), within the record's limit of the capture | Full training |
+| Retrain flag set by part B | Full training, flag cleared |
 
-| Check | Source of the current value | Mismatch |
-| --- | --- | --- |
-| Record header and payload CRC-32 | The record | Full training |
-| Record version and boot0 header checksum (word `0x0c`) | boot0's header at `0x47000` | Full training |
-| Chip ID | SID `0x03006200`–`0x0300620c` | Full training |
-| DRAM-select strap | Selected set index and CRC-32 of parameter words 0–31 after `0x4b2e8` | Full training |
-| Temperature | THS DDR sensor (channel 1), calibrated as in [thermal.md](../thermal.md) | Full training when it differs from the capture by more than the record's limit, initially 15 °C |
-| Retrain request | A SunstoneOS flag in an RTC general-purpose register that neither the ROM nor boot0 uses | Full training, flag cleared |
-
-After the restore, a firmware result other than 7, a failed part A or a
-size other than the record's sets the retrain flag and requests a warm
-reset; the next boot trains fully. Part B failing in the stage-2 monitor
-does the same. A full-training boot never reads the record's register set.
-The temperature read needs the THS clock, reset and enable writes that
-boot0 never makes; the review must accept them, or the first prototype uses
-the capture-time limit only on the FEL path, where the host supplies the
-temperature from a preceding thermal reading.
+After the call, a firmware result other than 7, a size mismatch, a restore
+read-back mismatch or a part A failure falls back in place, as above. On
+the FEL path a warm reset would boot from the card instead of returning to
+FEL, so the FEL prototype reports part B failures to the host instead. The
+temperature check needs THS clock, reset and enable writes that boot0 never
+makes. The FEL prototype takes the temperature from the host's thermal
+reading; the card variant adds the THS read once the drift data set the
+limit.
 
 ## The record format
 
-Little-endian. The header occupies the first 256 bytes of sector 24,496,
-the sector where boot0 looks for `bootpara`; the payload occupies sectors
-24,432–24,495 and 24,497–24,499 as needed.
+Little-endian, in one contiguous card extent.
 
 | Offset | Field |
 | --- | --- |
 | 0 | Magic `AS73DTRN` |
-| 8, 12 | Version 1; header size 256 |
+| 8, 12 | Version 1; header size 128 |
 | 16, 20 | Payload length; payload CRC-32 |
 | 24 | Generation, incremented by every record write |
 | 32 | Chip ID, four words |
-| 48 | boot0 header checksum, word `0x0c` of the image the record was made with |
+| 48 | Pinned boot0 checksum (eGON word `0x0c` of `829ea8e3…`) |
 | 52, 56 | Selected parameter-set index; CRC-32 of parameter words 0–31 |
 | 60, 64 | Capture temperature in m°C; allowed difference in m°C |
-| 68 | `dram_tpr10` training-step value of the capture's training |
-| 72 | DRAM size in MiB |
-| 76..103 | Payload section offsets and counts: PHY registers, message-block fields, mode-register writes, parameter words 32–51 |
-| 104..251 | Reserved, zero |
-| 252 | Header CRC-32 over bytes 0–251 |
+| 68, 72 | Training-step value of the reference training; DRAM size in MiB |
+| 76..119 | Section offsets and counts: register runs, masks, mode-register writes |
+| 124 | Header CRC-32 over bytes 0–123 |
 
-Payload entries are `(u32 address, u16 value, u16 flags)`; mode-register
-writes are `(u8 channel, u8 rank, u8 register, u8 value)`. 4,000 PHY
-registers need 32,000 bytes, so the 34,560 bytes available hold the restore
-set if it stays below about 4,300 registers; a larger set needs a second
-extent and a format version. Writing the header with this magic makes
-boot0's own `bootpara` check fail, which leaves boot0's normal behaviour
-unchanged; boot0 never writes the card.
+Registers are stored as runs: base address, count, then 16-bit values,
+with a separate list of `(address, mask)` for registers restored under a
+mask. Mode-register writes are `(channel, rank, register, value)` in write
+order, including MR16. At about 2 bytes per register, 64 KiB holds over
+30,000 registers.
 
-## The record's card region and its update
+## The record has its own 4 MiB unit on the card
 
-Sectors 24,432–24,499 lie in the boot area and in the 4 MiB unit
-16,384–24,575 that also holds the slot B header. The vendor layout uses
-sector 24,504 (SD parameter region) and 24,512–24,571 (tuning pattern) in
-the same unit; the record avoids both. `tools/storage-update.py` gains a
-`training-record` owned region `(24432, 68)` with these rules:
-
-- the plan input is a training-record plan from a new host tool, separate
-  from boot-slot plans, and every write must lie inside the region;
-- a host backup of the region and of the slot B header precedes the write
-  session, under [docs/goal.md](../goal.md) section 4;
-- slot A must hold a valid header before the session, so that a damaged
-  unit still leaves a selectable slot; after the session the host reads the
-  slot B header back and compares it with the backup, restoring it through
-  its own session on any difference;
-- the payload is written before the header, so an interrupted update leaves
-  a header whose CRC fails, and boot0 trains fully.
-
-No card write happens until restored boots have passed the qualification
-below. Each card's backup must also show sectors 24,432–24,499 zero or
-holding only an earlier record; any other content stops the plan.
+The coordinator proposed the `bootpara` region at sectors 24,496–24,499 or
+beside it. That unit, 16,384–24,575, holds the slot B header, which
+[boot-slots.md](../boot-slots.md#card-layout) keeps in a 4 MiB unit apart
+from other writes, and the vendor's SD parameter sector 24,504 and tuning
+pattern 24,512–24,571. The record therefore gets one 4 MiB unit at or
+beyond sector 40,960, assigned by the boot-slot allocation record like the
+slot regions. `tools/storage-update.py` gains a `training-record` owned
+region taken from that allocation. Its plan input is a training-record plan
+from a new host tool, every write lies inside the region, a host backup of
+the region precedes the write session under [docs/goal.md](../goal.md)
+section 4, and the payload is written before the header, so an interrupted
+write leaves a header whose CRC fails and boot0 trains fully. Slot fallback
+is unaffected, because the record shares no unit with a slot header. Each
+card's backup must show the unit unallocated by partitions and zero or
+holding an earlier record. No card write happens before the qualification
+below passes.
 
 ## Card boots need a host-built boot0 variant
 
-boot0 always trains during a card boot, before any SunstoneOS code runs.
-A card restore therefore needs boot0 changed: a host tool builds a variant
-from the pinned image with the hook in the empty parameter slots 8–15
-(`0x476f4`–`0x47af3`, 1,024 bytes; the strap always selects slot 5), the
-call at `0x56142` redirected to it and the eGON checksum recomputed. The
-pinned image itself is not committed, as today. This changes the
+boot0 trains during a card boot before any SunstoneOS code runs, so a card
+restore needs boot0 changed. A host tool builds a variant from the pinned
+image: the hook in the empty parameter slots 8–15 (`0x476f4`–`0x47af3`,
+1,024 bytes; the strap always selects slot 5), the calls at `0x5e216` and
+`0x56142` redirected to it, and the eGON checksum recomputed. The hook
+reads the record with one multi-sector call to boot0's card read
+`0x5db08`. The pinned image is not committed, as today. This changes the
 [microSD package](../microsd-boot-package.md)'s property that boot0 is
-unmodified, and it needs the coordinator's decision. The boards boot the
+unmodified and needs the coordinator's decision. The boards boot the
 unsigned `eGON.BT0` format, so the ROM checks only the additive checksum
 (inferred; secure-boot fuses are unconfirmed, as in
-[boot-rom-and-boot0.md](../vendor-firmware/boot-rom-and-boot0.md)). The FEL
-path needs none of this: the DDR wrapper patches boot0 in RAM, as
-`tools/prepare-ddr.py` already patches its UART output, and the host
-supplies the record.
+[boot-rom-and-boot0.md](../vendor-firmware/boot-rom-and-boot0.md)). If the
+1,024 bytes do not hold both patch sites, the hook loads its body from the
+record's extent into SRAM. The FEL path needs no variant: the DDR wrapper
+patches boot0 in RAM, as `tools/prepare-ddr.py` already patches its UART
+output, and the host supplies the record.
 
 ## Periodic retraining every N boots
 
@@ -179,26 +186,31 @@ A boot counter must survive power removal without a card write on every
 boot. The OS keeps the count in its data partition, which section 4 permits
 once the card has a host backup and the image confines its writes there.
 When the count reaches N, the OS clears the record header through the
-backup-first path, one sector, and the next boot trains fully; the stage-2
-monitor then captures the restore set into DRAM and the OS writes a new
-record. Until a native backup-first writer is qualified, the coordinator
-does both writes from the host. N comes from the drift data: the number of
-boots, or the time and temperature span, over which restored values stay
-within the spread of fresh trainings.
+backup-first path, and the next boot trains fully; a capture of the restore
+set after that training produces the new record. Until a native
+backup-first writer is qualified, the coordinator does both steps from the
+host. N comes from the drift data: the number of boots, or the time and
+temperature span, over which restored values stay within the spread of
+fresh trainings.
 
 ## Qualification before any card write
 
-1. **Captures** on both boards, several lifetimes each and two
-   temperatures, analysed; the restore set and the mode-register list
-   frozen and reviewed.
-2. **FEL restore prototype**, port 3-3 then 3-1: each restored boot followed
-   by the full March C- run of the
-   [memory qualification image](../memory-qualification.md) and a stress
-   run, hot (after a sustained CPU and memory load) and cold (after a long
-   power-off at room temperature or below). Any bit error stops the work.
-3. **Fallback cases** on the FEL path: a record with a wrong CRC, another
-   board's chip ID, a changed strap hash, a temperature limit of zero and a
-   forced quick-check failure must each train fully.
+0. **P-state 0 only**, both boards: full training of P-state 0 alone, its
+   timing, the March C- run of the
+   [memory qualification image](../memory-qualification.md), and the
+   reference captures.
+1. **Captures** of all three kinds on both boards, several lifetimes each
+   and two temperatures, analysed; the restore set, masks and mode-register
+   list frozen and reviewed.
+2. **FEL restore prototype**, port 3-3 then 3-1: the device-initialization
+   run, then restored boots, each followed by the full March C- run and a
+   stress run, hot (after sustained CPU and memory load) and cold (after a
+   long power-off at room temperature or below). Any bit error stops the
+   work.
+3. **Fallback cases** on the FEL path: a wrong CRC, another board's chip ID,
+   a changed strap CRC, a temperature limit of zero, a forced read-back
+   mismatch and a forced part A failure each end in a full training in the
+   same boot.
 4. **Boot time**: ten restored and ten fully trained boots per board,
    comparing boot0's `DRAM BOOT DRIVE INFO` to `Actual DRAM SIZE` interval.
 5. **Card**: host backup, record write through the new region, then the
@@ -206,25 +218,26 @@ within the spread of fresh trainings.
 
 ## Budgets
 
-| Quantity | Budget | Today |
+| Quantity | Budget | Basis |
 | --- | --- | --- |
-| DRAM interval with restore | 500 ms (prediction 200–500 ms, *estimated*) | 5,094 ms |
-| Record read and CRC | 10 ms | none |
-| Temperature read | 5 ms | none |
-| Quick check, parts A and B | 20 ms | 7 ms simple test |
-| Hook code in boot0 | 1,024 bytes | none |
-| Fallback cost | One warm reset plus full training, about 6 s | none |
+| DRAM interval with restore | 500 ms; prediction 200–500 ms | *Estimated*: the 151 ms P-state 1 run includes PHY setup and firmware load |
+| Record read | 10 ms for 64 KiB in one multi-sector read | *Estimated* from boot0's card transfer mode |
+| CRC over the record | Measured in the FEL prototype | Depends on boot0's clock and cache state |
+| Temperature read | 5 ms | Unmeasured; card variant only |
+| Quick check part A and B | 20 ms | *Estimated* |
+| Hook code in boot0 | 1,024 bytes, or a loader stub plus a body in the record | Empty parameter slots |
+| Fallback cost | One full training in the same boot, about 5.1 s | Measured training time |
 
-The measurement is the boot0 interval above, from boot0's own log. A
-restored boot counts only with a passing quick check, and the restore path
-counts only after step 2 above passes on both boards.
+A restored boot counts only with a passing quick check, and the restore
+path counts only after qualification step 2 passes on both boards.
 
-## Open questions for the review
+## Open questions for the second review
 
-- Whether the firmware accepts a device-initialization-only step value, and
-  which trained mode registers it does not carry in the message block.
-- Whether constant-class registers include training results that repeat at
-  one temperature; the temperature captures decide it.
-- The RTC general-purpose register for the retrain flag, and whether its
-  value survives the warm reset that the fallback uses.
-- The coordinator's decision on a modified boot0 for card boots.
+- Whether the firmware accepts the device-initialization-only value, and
+  whether a second `init_DRAM` call after a failed restore trains correctly.
+- Whether the restore set needs the controller registers as well, which the
+  kind 2 and kind 3 diff also shows.
+- The RTC general-purpose register for part B's flag, and whether it
+  survives the warm reset.
+- The coordinator's decision on a modified boot0 for card boots, and on the
+  record's own 4 MiB unit in place of the `bootpara` sectors.

@@ -92,10 +92,11 @@ def expected_accesses(entries, stop=None):
         if stop is not None and position == stop:
             break
         if entry["phy"] and not muxsel:
-            reads += [(MUXSEL, 2), (UCCLK, 2)]
+            reads.append((MUXSEL, 2))
             writes.append((MUXSEL, 2, 0))
             muxsel = True
         if entry["ucclk"] and not ucclk:
+            reads.append((UCCLK, 2))
             writes.append((UCCLK, 2, 3))
             ucclk = True
         reads += [(entry["address"] + entry["width"] * index, entry["width"])
@@ -122,11 +123,12 @@ def main():
             assert flags[:2] == (entry["address"], entry["count"]) and flags[3] == 0
         cpu, header, reads, writes, final = run(args.build, table, entries)
         want_reads, want_writes, phy = expected_accesses(entries)
+        uses_ucclk = any(entry["ucclk"] for entry in entries)
         assert reads == want_reads, stage["name"]
         assert writes == want_writes, (stage["name"], writes)
         assert final == (1, 2)
         assert header[4] == len(entries) - 1 and header[7] == DONE
-        assert header[5:7] == ((1, 2) if phy else (0xffffffff, 0xffffffff))
+        assert header[5:7] == ((1 if phy else 0xffffffff), (2 if uses_ucclk else 0xffffffff))
         # The two controls read back the values the reader wrote into them.
         written = {MUXSEL: 0, UCCLK: 3 if any(entry["ucclk"] for entry in entries) else 2}
         for entry in entries:
