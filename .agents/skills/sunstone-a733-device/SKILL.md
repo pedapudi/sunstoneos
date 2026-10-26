@@ -48,6 +48,13 @@ for the pinned selection chain; preserve its distinction between a default build
 recipe and an identified installed image. A source sequence does not establish
 that the corresponding instructions executed on a failed board.
 
+Keep firmware command numbers and payload layouts tied to the interface selected
+by the native build. A sequencing reference from another DDK can use different
+command numbers: its GPU clock-change command is 202, while the selected native
+interface uses 204. Compare new command bytes, offsets and shared-memory layouts
+with the pinned native header; a model that repeats implementation literals
+cannot detect this mismatch.
+
 Trace normal completion through the effective interrupt handler, waiter and
 caller before defining output ownership. Retained buffers do not by themselves
 justify omitting an upstream reset or stop: G2D pulses mixer reset before waking
