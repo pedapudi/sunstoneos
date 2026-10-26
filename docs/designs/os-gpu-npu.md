@@ -147,9 +147,8 @@ they are labeled nondeployable and supply no board authority. An initial
 fixture failed on a malformed DWARF layout key before executing a case. Its
 log is retained; correcting that checker lookup required no image rebuild.
 
-Resident GPU-plus-NPU card operation remains a separate admission gap. Current
-card preparation rejects GPU, and supervised manual power-removal authority
-cannot qualify cold GPU firmware retirement, retained faults or remote-writer
-exclusion after watchdog reset. The resident NPU cold condition also needs a
-record explicitly covering the active GPU. This design adds no guessed reset,
-OFF sequence or successful ownership release.
+The [resident cold-card GPU path](resident-gpu.md) now accepts this composition
+through the existing four-extent card producer. It requires distinct qualified
+cold GPU retirement and a shared GPU/NPU clock record; supervised manual power
+removal cannot supply that authority. Physical cold startup, reset retirement,
+combined PLL behavior and thermal operation remain unqualified.

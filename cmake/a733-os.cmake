@@ -40,16 +40,14 @@ endif()
 option(A733_A76_ADMITTED "Integrated OS with recognition on the admitted Cortex-A76 cores" OFF)
 if(SUNSTONE_MIMUS_WORKERS STREQUAL "8" AND
    (NOT A733_A76_ADMITTED OR SUNSTONE_A733_OS_AUDIO OR
-    SUNSTONE_A733_OS_RADIO OR SUNSTONE_A733_OS_HEADSET OR
-    (SUNSTONE_A733_OS_GPU_LINEAR AND SUNSTONE_A733_OS_RESIDENT)))
+    SUNSTONE_A733_OS_RADIO OR SUNSTONE_A733_OS_HEADSET))
   message(FATAL_ERROR "Eight OS inference workers require admitted recorded recognition")
 endif()
-# CPU operating points granted by a sealed supervised session; each change
-# needs the user's approval before the run (docs/cpu-clock.md).
+# CPU operating points granted by the sealed supervised or resident session
+# policy (docs/cpu-clock.md).
 option(SUNSTONE_A733_OS_CPU_CLOCK "Integrated OS with granted CPU operating-point changes" OFF)
 if(SUNSTONE_A733_OS_CPU_CLOCK AND SUNSTONE_A733_OS_RESIDENT AND
-   (SUNSTONE_A733_OS_AUDIO OR SUNSTONE_A733_OS_RADIO OR SUNSTONE_A733_OS_HEADSET OR
-    SUNSTONE_A733_OS_GPU_LINEAR))
+   (SUNSTONE_A733_OS_AUDIO OR SUNSTONE_A733_OS_RADIO OR SUNSTONE_A733_OS_HEADSET))
   message(FATAL_ERROR "Resident CPU grants require the recorded-card session profile")
 endif()
 if(SUNSTONE_A733_OS_CPU_CLOCK AND NOT A733_A76_ADMITTED)
@@ -71,10 +69,9 @@ if(NOT SUNSTONE_A733_OS_PERF_BOOT STREQUAL "high" AND NOT SUNSTONE_A733_OS_PERF_
   message(FATAL_ERROR "SUNSTONE_A733_OS_PERF_BOOT is high or low")
 endif()
 if(SUNSTONE_A733_OS_NPU)
-  # CPU grants compose with resident NPU, supervised GPU/NPU, or performance modes.
+  # CPU grants compose with recorded resident/supervised GPU/NPU, or performance modes.
   if(SUNSTONE_A733_OS_AUDIO OR SUNSTONE_A733_OS_RADIO OR
-     SUNSTONE_A733_OS_HEADSET OR (SUNSTONE_A733_OS_CPU_CLOCK AND NOT SUNSTONE_A733_OS_PERF AND NOT SUNSTONE_A733_OS_RESIDENT AND NOT SUNSTONE_A733_OS_GPU_LINEAR) OR
-     (SUNSTONE_A733_OS_GPU_LINEAR AND SUNSTONE_A733_OS_RESIDENT))
+     SUNSTONE_A733_OS_HEADSET OR (SUNSTONE_A733_OS_CPU_CLOCK AND NOT SUNSTONE_A733_OS_PERF AND NOT SUNSTONE_A733_OS_RESIDENT AND NOT SUNSTONE_A733_OS_GPU_LINEAR))
     message(FATAL_ERROR "The NPU OS profile requires recorded recognition and a supported GPU/CPU composition")
   endif()
   set(SUNSTONE_OS_NPU_CATALOGUE "" CACHE FILEPATH "Authenticated five-model NPU artifacts map")
@@ -84,8 +81,8 @@ if(SUNSTONE_A733_OS_NPU)
   endif()
 endif()
 if(SUNSTONE_A733_OS_GPU_LINEAR)
-  # Supervised GPU replies have their own retained-failure deadline. The
-  # supported new composition is the existing recorded two-worker path.
+  # GPU replies retain bounded failure handling for the recorded two- and
+  # eight-worker compositions.
   if(NOT SUNSTONE_A733_OS_RESIDENT AND
      (SUNSTONE_A733_OS_AUDIO OR SUNSTONE_A733_OS_RADIO OR SUNSTONE_A733_OS_HEADSET OR
       SUNSTONE_A733_OS_PERF))

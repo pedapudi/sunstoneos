@@ -21,13 +21,38 @@ def save(path, value):
     path.write_text(json.dumps(value, indent=2) + '\n')
 
 
-def npu_records(out, raw, refs, image_hash):
+def gpu_records(out, image_hash, stage2_hash, config, combined):
+    source=out/'gpu-source.json';save(source,{'fixture':'MODEL ONLY; no physical authority'})
+    reference={'path':str(source.resolve()),'sha256':card.sha(source.read_bytes())}
+    result={'configuration':config,'conditions':{}}
+    conditions=card.GPU_CONDITIONS | ({card.GPU_NPU_CLOCK} if combined else set())
+    for condition in sorted(conditions):
+        fact={'schema':'a733-os-card-gpu-condition-v1','condition':condition,'reviewed':True,
+              'identity':'model-board','sid_authority':0x434f4c44,'image_sha256':image_hash,
+              'stage2_sha256':stage2_hash,'evidence_class':'model-fixture','modeled':True,
+              'physical_authority':False,'evidence':[reference]}
+        if condition==card.GPU_RESET:
+            fact.update(after_uncertain_loss=True,before_stage2_reload=True,
+                        before_reserved_memory_reuse=True,firmware_and_bus_transactions_retired=True,
+                        pll_gpu0_disabled=True,gpu_gates_closed=True,gpu_bus_reset_asserted=True,initial_supply_uv=800000)
+        if condition==card.GPU_NPU_CLOCK:
+            fact.update(schema='a733-os-card-gpu-npu-clock-v1',scope='simultaneous-powered-cold-lifetime',
+                        gpu={'core_hz':config['core_hz'],'supply_uv':config['supply_uv']},
+                        npu={'mhz':852,'supply_uv':800000},npu_pll_enable_with_gpu_active=True,
+                        gpu_pll_start_stop_with_npu_active=True,cpu_ddr_clocks_remain_admitted=True)
+        path=out/('gpu-'+condition+'.json');save(path,fact)
+        result['conditions'][condition]={'path':str(path.resolve()),'sha256':card.sha(path.read_bytes())}
+    return result
+
+
+def npu_records(out, raw, refs, image_hash, gpu=None):
     rules = card.host.module('card_fixture_npu_rules', ROOT/'apps/npu-board/prepare.py')
     evidence = out/'npu-condition.json';save(evidence, {'fixture':'MODEL ONLY; no hardware evidence'})
     ref = {'path':str(evidence.resolve()), 'sha256':card.sha(evidence.read_bytes())}
     conditions = {k:set(v) for k,v in rules.CONDITIONS.items()}
     conditions['clock'].remove('supervised-cross-pll-disturbance-risk')
     conditions['clock'].add('cold-boot-cross-pll-disturbance-qualified')
+    if gpu:conditions['clock'].add(card.GPU_NPU_CLOCK)
     conditions['supervision'] = {'watchdog-reset-retires-npu-and-memory', 'cold-entry-excludes-remote-writers',
                                'retain-until-qualified-cold-reset', 'stop-after-first-failure'}
     for name in ('ddr','admission','clock','power','supervision'):
@@ -36,7 +61,7 @@ def npu_records(out, raw, refs, image_hash):
         if name=='ddr':
             fact.update(schema='a733-ddr-reservation-v1',ranges=[card.host.NPU_RANGE],exclusive=True,
                         published_cache_disabled=True,remote_writers_excluded=True,evidence=[ref])
-        else: fact['conditions']={key:ref for key in sorted(conditions[name])}
+        else: fact['conditions']={key:(gpu['conditions'][key] if key==card.GPU_NPU_CLOCK else ref) for key in sorted(conditions[name])}
         if name=='admission':fact['ddr_sha256']=refs['npu_ddr']['sha256']
         if name=='power':fact['supply_uv']=800000
         if name=='clock':fact.update(mhz=852,sid_dvfs_word=0x400)
@@ -64,15 +89,83 @@ def npu_cases(card, args, raw, manifest, refused):
     refused('actual-linked-npu-model-bytes',lambda:card.linked_npu_assets(card.host.os_link.Elf(bytes(bad))))
 
 
+def gpu_cases(args, raw, manifest, model):
+    image=args.image.read_bytes();monitor=args.stage2.read_bytes()
+    original=json.loads(args.policy.read_text());out=args.policy.parent
+    cases=['actual-cold-GPU-bundle','four-extents','bound-generation','explicit-model-only']
+    def refused(name, action, reason=None):
+        try: action()
+        except (ValueError,AssertionError) as error:
+            assert reason is None or reason in str(error),(name,str(error))
+            cases.append(name);return
+        raise AssertionError('Expected refusal: '+name)
+    def check(name, change, reason):
+        policy=json.loads(json.dumps(original));change(policy)
+        path=out/('gpu-bad-'+name+'.json');save(path,policy)
+        bound=bytearray(raw);bound[-32:]=hashlib.sha256(path.read_bytes()).digest()
+        refused(name,lambda:card.policy_check(path,bound,image,manifest,monitor,True),reason)
+    check('missing-GPU',lambda p:p.pop('gpu'),'Cold NPU condition set differs')
+    check('linked-GPU-configuration',lambda p:p['gpu']['configuration'].__setitem__('core_hz',1),'Cold GPU configuration differs')
+    check('missing-reset-condition',lambda p:p['gpu']['conditions'].pop(card.GPU_RESET),'Cold GPU condition set differs')
+    check('canonical-session',lambda p:p.__setitem__('canonical_session_sha256','00'*32),'Cold policy binding differs')
+    check('monitor-identity',lambda p:p.__setitem__('stage2_sha256','00'*32),'Cold policy binding differs')
+    def fact_change(name, condition, change, reason):
+        def mutate(policy):
+            ref=policy['gpu']['conditions'][condition]
+            fact=json.loads(Path(ref['path']).read_text());change(fact)
+            path=out/('gpu-fact-'+name+'.json');save(path,fact)
+            policy['gpu']['conditions'][condition]={'path':str(path.resolve()),'sha256':card.sha(path.read_bytes())}
+        check(name,mutate,reason)
+    for field in ('after_uncertain_loss','before_stage2_reload','before_reserved_memory_reuse','firmware_and_bus_transactions_retired',
+                  'pll_gpu0_disabled','gpu_gates_closed','gpu_bus_reset_asserted'):
+        fact_change('reset-'+field,card.GPU_RESET,lambda f,k=field:f.__setitem__(k,False),'Cold GPU reset must retire')
+    fact_change('reset-supply',card.GPU_RESET,lambda f:f.__setitem__('initial_supply_uv',900000),'Cold GPU reset must retire')
+    for field,value in [('identity','another-board'),('sid_authority',1),('image_sha256','00'*32),('stage2_sha256','00'*32)]:
+        fact_change('record-'+field,card.GPU_RESET,lambda f,k=field,v=value:f.__setitem__(k,v),'Cold GPU condition is not bound')
+    fact_change('unreviewed',card.GPU_RESET,lambda f:f.__setitem__('reviewed',False),'Cold GPU condition is not bound')
+    fact_change('model-claims-physical',card.GPU_RESET,lambda f:f.__setitem__('physical_authority',True),'explicitly nondeployable')
+    fact_change('missing-source',card.GPU_RESET,lambda f:f.__setitem__('evidence',[]),'source evidence is missing')
+    fact_change('source-hash',card.GPU_RESET,lambda f:f['evidence'][0].__setitem__('sha256','00'*32),'Cold condition evidence changed')
+    fact_change('shared-clock-different-bytes',card.GPU_NPU_CLOCK,lambda f:f.__setitem__('note','different'),'must reference the same evidence')
+    fact_change('combined-clock-rate',card.GPU_NPU_CLOCK,lambda f:f['gpu'].__setitem__('core_hz',1),'combined GPU/NPU clock authority differs')
+    fact_change('combined-clock-scope',card.GPU_NPU_CLOCK,lambda f:f.__setitem__('scope','supervised'),'combined GPU/NPU clock authority differs')
+    refused('model-is-not-board-qualification',lambda:card.policy_check(args.policy,raw,image,manifest,monitor,False),
+            'explicit --model-fixture')
+    return cases + gpu_owner_cases(args, raw, manifest, model)
+
+
+def gpu_owner_cases(args, raw, manifest, model):
+    original=json.loads(args.policy.read_text());out=args.policy.parent;cases=[]
+    frozen={name:Path(ref['path']).read_bytes() for name,ref in original['evidence'].items()}
+    for name,offset,fmt,value in [('cpu-owner',len(raw)-72,'Q',0x4f53475055464d31),
+                                  ('npu-owner',832,'Q',0x4f534731),('npu-client',856,'I',7),
+                                  ('thermal-owner',616,'Q',0x4f534731)]:
+        bad=bytearray(raw);struct.pack_into('<'+fmt,bad,offset,value)
+        try: card.gpu_policy(original,manifest['gpu_profile'],bad,out,dict(frozen))
+        except ValueError as error: assert 'aliases' in str(error),(name,str(error))
+        else: raise AssertionError('Expected refusal: '+name)
+        cases.append(name)
+    bound=bytearray((args.output/'slot/os-session.bin').read_bytes())
+    struct.pack_into('<Q',bound,24,1);struct.pack_into('<Q',bound,len(bound)-64,1)
+    path=out/'native-bound-session.bin';path.write_bytes(bound)
+    subprocess.run([model,'--check-session',path],check=True)
+    cases.append('actual-native-session-admission')
+    return cases
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     for name in ('build', 'base-model', 'overlay-model', 'wav', 'boot0', 'packer', 'output'):
         p.add_argument('--' + name, type=Path, required=True)
+    p.add_argument('--stage2-build', type=Path, help='Reuse an accepted monitor build without rebuilding unchanged stage2')
+    p.add_argument('--gpu-only', action='store_true', help='Only changed cold GPU authority and actual bundle cases')
     p.add_argument('--prepare-only', action='store_true', help='Bind a final integration image without replaying mutation cases')
     a = p.parse_args(); out = a.output; out.mkdir(parents=True, exist_ok=False)
     image = a.build / 'sunstone-a733-os.elf'
     manifest = json.loads((a.build / 'os-image/link-check.json').read_text())
     npu = manifest.get('npu', False)
+    gpu = manifest.get('gpu_linear', False)
+    stage2 = a.stage2_build or a.build
     _, build_id = card.flat_runtime(image.read_bytes())
     model = out / 'native-admission'
     command = [str(CLANG), '-std=c11', '-D_GNU_SOURCE', '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections',
@@ -81,6 +174,9 @@ def main():
                '-DA733_A76_ADMITTED=1', '-DSUNSTONE_A733_OS_CPU_CLOCK=1', '-DA733_SMP_CONTRACT_MAGIC=0x415337334f524331ULL',
                '-DOS_MODEL_BUILD_ID=' + ','.join(str(v) for v in build_id), 'checks/os-image-model.c',
                'drivers/storage/storage_digest.c', 'drivers/clock/a733_cpu_clock.c', '-o', str(model)]
+    if gpu:
+        command += ['-DSUNSTONE_A733_OS_GPU_LINEAR=1',
+                    '-DOS_RECOGNITION_CORE=' + str(manifest['inference']['owner_core'])]
     if npu:
         commands = json.loads((a.build/'compile_commands.json').read_text())
         native = next(row for row in commands if row['file'] == str(ROOT/'apps/os/admission.c'))
@@ -101,8 +197,10 @@ def main():
         save(path, {'fixture': 'MODEL ONLY; no physical fact established', 'subject': name})
         digest = card.sha(path.read_bytes()); raw[offset:offset+32] = bytes.fromhex(digest)
         refs[name] = {'path': str(path.resolve()), 'sha256': digest}
+    gpu_facts = gpu_records(out, card.sha(image.read_bytes()), card.sha((stage2/'a733-stage2.bin').read_bytes()),
+                            manifest['gpu_profile'], npu) if gpu else None
     if npu:
-        npu_records(out, raw, refs, card.sha(image.read_bytes()))
+        npu_records(out, raw, refs, card.sha(image.read_bytes()), gpu_facts)
     raw[80:112] = raw[280:312]; refs['qualification'] = refs['recovery']
     b1 = out / 'cpu-b1.json'
     save(b1, {'schema': card.host.B1_SCHEMA, 'fixture': 'MODEL ONLY', 'identity': 'model-board',
@@ -113,10 +211,11 @@ def main():
     manifest = json.loads((a.build / 'os-image/link-check.json').read_text())
     policy = {'schema': card.POLICY, 'scope': 'resident-recorded-cold-boot', 'identity': 'model-board',
               'evidence_class': 'model-fixture', 'sid_authority': 0x434f4c44, 'sid_words': sid,
-              'image_sha256': card.sha(image.read_bytes()), 'stage2_sha256': card.sha((a.build/'a733-stage2.bin').read_bytes()),
+              'image_sha256': card.sha(image.read_bytes()), 'stage2_sha256': card.sha((stage2/'a733-stage2.bin').read_bytes()),
               'inference': manifest['inference'], 'canonical_session_sha256': card.sha(card.canonical_session(raw)),
               'cpu': {'clusters': 3, 'max_mhz': maxima, 'changes_per_boot': 8}, 'evidence': refs}
     if npu: policy['npu'] = card.npu_summary(raw)
+    if gpu: policy['gpu'] = gpu_facts
     save(out / 'policy.json', policy); raw[-32:] = hashlib.sha256((out/'policy.json').read_bytes()).digest()
     (out / 'session.bin').write_bytes(raw)
     backup = out / 'original-backup.img'
@@ -129,8 +228,8 @@ def main():
     save(out/'card.json', {'kind': 1, 'host': 0, 'cid': [1,2,3,4], 'sectors': (128 << 20)//512,
                           'target': {'port': 'MODEL-NO-PORT', 'sysfs': 'MODEL-NO-SYSFS'}})
     working = out/'working.img'; shutil.copyfile(backup, working)
-    args = SimpleNamespace(image=image, manifest=a.build/'os-image/link-check.json', stage2=a.build/'a733-stage2.bin',
-                           stage2_elf=a.build/'a733-stage2.elf', session=out/'session.bin', policy=out/'policy.json',
+    args = SimpleNamespace(image=image, manifest=a.build/'os-image/link-check.json', stage2=stage2/'a733-stage2.bin',
+                           stage2_elf=stage2/'a733-stage2.elf', session=out/'session.bin', policy=out/'policy.json',
                            base_model=a.base_model, overlay_model=a.overlay_model, wav=a.wav, allocation=allocation,
                            backup=backup, card_image=working, card=out/'card.json', boot0=a.boot0, packer=a.packer,
                            output=out/'bundle', model_fixture=True)
@@ -150,6 +249,12 @@ def main():
     bound = (args.output/'slot/os-session.bin').read_bytes()
     assert struct.unpack_from('<2Q', bound, 24) == struct.unpack_from('<2Q', bound, grant + 32) == (0,1)
     assert card.canonical_session(bound) == card.canonical_session(raw) and len(plan['extents']) == 4
+    if a.gpu_only:
+        assert gpu and npu and result['gpu']==manifest['gpu_profile']
+        cases=gpu_cases(args,raw,manifest,model)
+        save(out/'result.json',{'passed':True,'physical_access':False,'cases':cases,
+             'workers':manifest['inference']['workers'],'bundle_sha256':card.sha((args.output/'bundle.json').read_bytes())})
+        print('PASS cold GPU card producer:',len(cases),'focused cases');return
     if a.prepare_only:
         save(out/'result.json', {'passed':True, 'physical_access':False,
              'scope':'Actual producer and linked layout; mutation cases reused from component evidence.',

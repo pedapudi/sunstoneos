@@ -39,6 +39,80 @@ EVIDENCE = {'qualification': 80, 'wiring': 216, 'memory': 248, 'recovery': 280,
 
 
 NPU_WORK_US = 60000000
+GPU_RESET = 'watchdog-reset-retires-gpu-before-reload-and-reuse'
+GPU_NPU_CLOCK = 'cold-concurrent-gpu-npu-cross-pll-qualified'
+GPU_CONDITIONS = (host.GPU_CONDITIONS - {'manual-whole-board-power-removal-and-no-reuse'}) | {
+    GPU_RESET, 'cold-entry-excludes-prior-gpu-writers',
+    'retain-until-qualified-cold-reset', 'stop-after-first-failure'}
+
+
+def condition_bytes(name, ref, directory, frozen):
+    require(isinstance(ref, dict) and set(ref) == {'path', 'sha256'} and isinstance(ref['path'], str),
+            'Invalid cold condition reference.')
+    data = package.read_regular(directory / ref['path'], 16 << 20)
+    require(sha(data) == ref['sha256'], 'Cold condition evidence changed.')
+    frozen[name] = data
+    return data
+
+
+def gpu_policy(policy, config, raw, directory, frozen):
+    if config is None:
+        require('gpu' not in policy, 'GPU cold authority supplied without GPU.')
+        return
+    gpu = policy.get('gpu')
+    require(isinstance(gpu, dict) and set(gpu) == {'configuration', 'conditions'} and
+            gpu['configuration'] == config, 'Cold GPU configuration differs from the actual linked image.')
+    combined = host.npu_session(raw)
+    # Same fixed identities as dispatch.h and the native pre-provider guard.
+    owners = list(struct.unpack_from('<4Q', raw, 456))
+    owners += [struct.unpack_from('<Q', raw, offset)[0] for offset in (416, 440, 616)]
+    grant = host.grant_fields(raw)
+    if grant: owners.append(grant['owner'])
+    if combined:
+        owners.append(struct.unpack_from('<Q', raw, 832)[0])
+        require(struct.unpack_from('<I', raw, 856)[0] != 7, 'Cold NPU PCK client aliases GPU.')
+    require(not any(owner in (0x4f53475055464d31, 0x4f534731) for owner in owners) and
+            struct.unpack_from('<I', raw, 540)[0] != 7, 'Cold GPU owner/client aliases another provider.')
+    conditions = GPU_CONDITIONS | ({GPU_NPU_CLOCK} if combined else set())
+    require(isinstance(gpu['conditions'], dict) and set(gpu['conditions']) == conditions,
+            'Cold GPU condition set differs.')
+    for condition, ref in gpu['conditions'].items():
+        fact = json.loads(condition_bytes('gpu_' + condition, ref, directory, frozen))
+        require(fact.get('reviewed') is True and all(fact.get(k) == policy[k] for k in
+                ('identity', 'sid_authority', 'image_sha256', 'stage2_sha256', 'evidence_class')),
+                'Cold GPU condition is not bound to this board, SID, image and stage2.')
+        if policy['evidence_class'] == 'board-records':
+            require(fact.get('physical_authority') is True and fact.get('modeled') is False,
+                    'Cold GPU condition lacks physical authority.')
+        else:
+            require(fact.get('modeled') is True and fact.get('physical_authority') is False,
+                    'Cold GPU model condition must be explicitly nondeployable.')
+        if condition == GPU_NPU_CLOCK:
+            require(fact.get('schema') == 'a733-os-card-gpu-npu-clock-v1' and
+                    fact.get('scope') == 'simultaneous-powered-cold-lifetime' and
+                    fact.get('gpu') == {'core_hz': config['core_hz'], 'supply_uv': config['supply_uv']} and
+                    fact.get('npu') == {'mhz': 852, 'supply_uv': 800000} and
+                    fact.get('npu_pll_enable_with_gpu_active') is True and
+                    fact.get('gpu_pll_start_stop_with_npu_active') is True and
+                    fact.get('cpu_ddr_clocks_remain_admitted') is True,
+                    'Cold combined GPU/NPU clock authority differs.')
+            clock = json.loads(frozen['npu_clock'])
+            shared = clock.get('conditions', {}).get(GPU_NPU_CLOCK)
+            require(isinstance(shared, dict) and shared.get('sha256') == ref['sha256'],
+                    'Cold GPU and NPU clock records must reference the same evidence.')
+        else:
+            require(fact.get('schema') == 'a733-os-card-gpu-condition-v1' and
+                    fact.get('condition') == condition, 'Cold GPU condition record differs.')
+        if condition == GPU_RESET:
+            require(all(fact.get(k) is True for k in ('after_uncertain_loss', 'before_stage2_reload',
+                    'before_reserved_memory_reuse', 'firmware_and_bus_transactions_retired',
+                    'pll_gpu0_disabled', 'gpu_gates_closed', 'gpu_bus_reset_asserted')) and
+                    fact.get('initial_supply_uv') in (800000, 960000),
+                    'Cold GPU reset must retire uncertain writes before reuse and restore the admitted entry profile.')
+        require(isinstance(fact.get('evidence'), list) and fact['evidence'], 'Cold GPU source evidence is missing.')
+        for i, item in enumerate(fact['evidence']):
+            condition_bytes('gpu_' + condition + '_' + str(i), item, directory, frozen)
+
 
 
 def evidence_offsets(raw):
@@ -70,14 +144,9 @@ def npu_policy(policy, raw, directory, frozen):
     conditions = {k: set(v) for k, v in rules.CONDITIONS.items()}
     conditions['clock'].remove('supervised-cross-pll-disturbance-risk')
     conditions['clock'].add('cold-boot-cross-pll-disturbance-qualified')
+    if policy.get('gpu') is not None: conditions['clock'].add(GPU_NPU_CLOCK)
     conditions['supervision'] = {'watchdog-reset-retires-npu-and-memory',
         'cold-entry-excludes-remote-writers', 'retain-until-qualified-cold-reset', 'stop-after-first-failure'}
-    def evidence(name, ref):
-        require(isinstance(ref, dict) and set(ref) == {'path', 'sha256'} and isinstance(ref['path'], str),
-                'Invalid cold NPU condition reference.')
-        data = package.read_regular(directory / ref['path'], 16 << 20)
-        require(sha(data) == ref['sha256'], 'Cold NPU condition evidence changed.')
-        frozen[name] = data
     for name in ('admission', 'clock', 'power', 'supervision', 'ddr'):
         fact = json.loads(frozen['npu_' + name])
         require(fact.get('identity') == policy['identity'] and fact.get('image_sha256') == policy['image_sha256'] and
@@ -89,12 +158,12 @@ def npu_policy(policy, raw, directory, frozen):
             require(fact.get('schema') == 'a733-ddr-reservation-v1' and fact.get('ranges') == [host.NPU_RANGE] and
                     fact.get('exclusive') is True and fact.get('published_cache_disabled') is True and
                     fact.get('remote_writers_excluded') is True and fact.get('evidence'), 'Cold NPU DDR reservation differs.')
-            for i, ref in enumerate(fact['evidence']): evidence('npu_ddr_' + str(i), ref)
+            for i, ref in enumerate(fact['evidence']): condition_bytes('npu_ddr_' + str(i), ref, directory, frozen)
             continue
         require(fact.get('schema') == 'a733-os-card-npu-' + name + '-v1' and
                 isinstance(fact.get('conditions'), dict) and set(fact['conditions']) == conditions[name],
                 'Cold NPU condition set differs: ' + name)
-        for condition, ref in fact['conditions'].items(): evidence('npu_' + name + '_' + condition, ref)
+        for condition, ref in fact['conditions'].items(): condition_bytes('npu_' + name + '_' + condition, ref, directory, frozen)
         if name == 'admission':
             require(fact.get('ddr_sha256') == policy['evidence']['npu_ddr']['sha256'], 'Cold NPU admission names another pool record.')
         if name == 'power': require(fact.get('supply_uv') == 800000, 'Cold NPU rail must be 800 mV.')
@@ -217,6 +286,9 @@ def policy_check(policy_path, raw, image, manifest, monitor, model_fixture):
     else:
         require('cpu' not in p, 'CPU policy supplied without a linked grant.')
     npu_policy(p, raw, policy_path.parent, frozen)
+    config = host.os_link.gpu_configuration(host.os_link.Elf(image), required=manifest.get('gpu_linear', False))
+    require(manifest.get('gpu_profile') == config, 'Cold GPU manifest differs from the linked image.')
+    gpu_policy(p, config, raw, policy_path.parent, frozen)
     return p, policy_raw, frozen
 
 
@@ -228,11 +300,12 @@ def prepare(a):
     elf = host.os_link.Elf(image)
     profile = host.os_link.contract_profile(elf)
     inference = host.os_link.inference_configuration(elf)
+    require(type(manifest.get('gpu_linear', False)) is bool, 'GPU profile must be boolean.')
     require(manifest.get('passed') is True and manifest.get('target') == 'sunstone-a733-os' and
             manifest.get('lifetime') == profile['lifetime'] == 'resident' and
             manifest.get('image_sha256') == sha(image) and manifest.get('contract_profile') == profile and
             manifest.get('inference') == inference and
-            not any(manifest.get(k) for k in ('audio', 'radio', 'headset', 'gpu_linear', 'perf_modes')),
+            not any(manifest.get(k) for k in ('audio', 'radio', 'headset', 'perf_modes')),
             'Expected the linked resident recorded OS profile.')
     runtime, build_id = flat_runtime(image)
     raw = a.session.read_bytes()
@@ -246,7 +319,7 @@ def prepare(a):
     assets_header = SimpleNamespace(read_text=lambda: 'mimus_asset_address[3]={0x44000000,0x44800000,0x45000000};\n' +
                                    'mimus_asset_bytes[3]={' + ','.join(str(e['bytes']) for e in declared) + '};\n')
     linked = host.os_link.check(SimpleNamespace(read_bytes=lambda: image), assets_header, ROOT / 'apps/mimus/recorded.h',
-                               ROOT / 'boot/a733/stage2/loader.c', cpu_clock=host.session_layout(raw)[1], npu=host.npu_session(raw))
+                               ROOT / 'boot/a733/stage2/loader.c', gpu_linear=manifest.get('gpu_linear', False), cpu_clock=host.session_layout(raw)[1], npu=host.npu_session(raw))
     require(all(manifest.get(k) == v for k, v in linked.items() if k != 'perf_boot_mode' or v is not None),
             'The actual linked services, capability or layout differs from the manifest.')
     if host.npu_session(raw):
@@ -287,7 +360,8 @@ def prepare(a):
     updates.plan(out / 'slot/plan.json', out / 'allocation.json', a.card_image,
                  json.loads(card_raw), out / 'storage')
     result = {'schema': SCHEMA, 'physical_qualified': False, 'model_fixture': policy['evidence_class'] == 'model-fixture',
-              'inference': inference, 'cpu_vendor_top_policy': host.session_layout(raw)[1], 'npu': npu_summary(raw) if host.npu_session(raw) else None, 'generation': plan['generation'],
+              'inference': inference, 'cpu_vendor_top_policy': host.session_layout(raw)[1], 'npu': npu_summary(raw) if host.npu_session(raw) else None,
+              'gpu': linked['gpu_profile'], 'generation': plan['generation'],
               'slot': plan['slot'], 'runtime_bytes': len(runtime), 'models_bytes': len(models),
               'files': {str(p.relative_to(out)): sha(p.read_bytes()) for p in sorted(out.rglob('*')) if p.is_file()},
               'physical_prerequisites': ['reviewed card allocation and backup-first range sessions',
