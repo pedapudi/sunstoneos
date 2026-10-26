@@ -50,9 +50,11 @@ def capture(exchange,session,evidence,record,save,deadline,*,now=time.monotonic,
         require(now()<deadline,'camera response arrived after deadline.')
         if value['state']==3:
             record['camera_result']='observed-failure';save();return
-        if value['state']!=2:
+        if value['state'] not in (2,4):
             require(not ready,'camera result regressed during copy.')
             pause(min(.01,max(0,deadline-now())));continue
+        if value['state']==4:
+            record['camera_stream']={key:value[key] for key in ('sensor_stopped','drain_proved','stream_retained')}
         if not ready:ready=True;continue
         output.extend(value['payload']);offset+=count
         if offset==614400:
@@ -61,7 +63,7 @@ def capture(exchange,session,evidence,record,save,deadline,*,now=time.monotonic,
                   'width':640,'height':480,'planes':[307200,307200],'physical_qualification_established':False}
             supervisor.save_json(evidence/'frame.json',info)
             require(now()<deadline,'camera durable output exceeded deadline.')
-            record['copied_camera_output']=info;record['durable_result']=entry.copy();record['camera_result']='observed-success'
+            record['copied_camera_output']=info;record['durable_result']=entry.copy();record['camera_result']='copied-frame-stream-retained' if value['state']==4 else 'observed-success'
             try:save()
             except BaseException:
                 record['camera_result']='unobserved';record.pop('durable_result',None);record.pop('copied_camera_output',None);raise

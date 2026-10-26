@@ -23,10 +23,15 @@ static struct a733_rail_token supply;
 static struct a733_camera_boot_record boot;
 static struct device_memory_pool pool;
 static uint32_t common[0x2000/4],parser[0x1000/4],route[0x100/4],vipp[0x140/4],dma[0x1000/4],mmu[0x20000/4];
-static uint8_t sensor[65536],device_image[2*(307200+4096)];
+static uint8_t sensor[65536],device_image[4*(307200+4096)];
 static unsigned wire,selected,frames,cache_syncs,io_count,writes,stops,mode,fills,busy_seen;
 static unsigned reading_bus,block_writes,longest_block,rearms,scap_writes,checked_frame;
 static uint64_t pwdn_released,identity_read,busy_until;
+#define STREAM (mode>=21)
+#define IMAGE_BYTES ((STREAM?4u:2u)*(307200u+4096u))
+static uint64_t next_frame,frame_end,status_at,max_status_gap;
+static unsigned latched[2],writing_frame,copy_calls;
+static void stream_engine(void);
 static FILE *trace; /* Optional record of every modeled register write. */
 /* Modes 15-18 discard two images before the readable one. Mode 16 changes
  * DMA status, mode 17 reports a packet during the quiet interval and mode 18
@@ -45,7 +50,7 @@ static unsigned preparation=1,reject_camera;
  * leaves after a bounded interval; mode 13 never leaves before the deadline. */
 int a733_counter_clock_now(void *context,uint64_t *out)
 {
-    assert(context==&counter);*out=++pm.now;
+    assert(context==&counter);*out=++pm.now;if(STREAM)stream_engine();
     if(busy_until && pm.now>=busy_until)atomic_store(&pm.clocks.busy,0);
     if(busy_until && pm.now>=busy_until+20){atomic_store(&pm.rails.busy,0);busy_until=0;}
     return 1;
@@ -87,7 +92,7 @@ static void emit(void)
 {
     assert(camera.capture.packets_granted && parser[3]==1 && frames==camera.discarded);
     /* Every image starts from a published fill, never from an earlier image. */
-    for(size_t i=0;i<sizeof(device_image);i++)assert(device_image[i]==A733_CAMERA_NATIVE_FILL);
+    for(size_t i=0;i<IMAGE_BYTES;i++)assert(device_image[i]==A733_CAMERA_NATIVE_FILL);
     assert((route[0x40/4]&15)==0 && (route[0xa0/4]&15)==4);
     assert((vipp[0]&3)==3 && (vipp[0x40/4]&1));
     assert((dma[0]&1) && (dma[0x200/4]&1));
@@ -112,11 +117,34 @@ static void emit(void)
     dma[0x254/4]=mode==2?7:3;
     if(mode==6)mmu[0xb0/4]=1;
 }
+static void stream_engine(void)
+{
+    if(!next_frame || sensor[0x4202] || sensor[0x300e]!=0x45)return;
+    if(writing_frame && pm.now>=frame_end){
+        for(unsigned plane=0;plane<2;++plane){
+            unsigned slot=latched[plane];
+            assert(camera.capture.dma.ring.state[slot]<A733_SLOT_SYNC);
+            for(unsigned i=0;i<307200;++i)device_image[(plane*2+slot)*311296+i]=payload(frames,plane,i);
+        }
+        ++frames;dma[0x254/4]|=2;writing_frame=0;
+    }
+    if(pm.now>=next_frame){
+        assert(!writing_frame && (parser[3]&3)==2);
+        for(unsigned plane=0;plane<2;++plane){
+            uint64_t address=(uint64_t)dma[(plane?0x228:0x220)/4]<<2;
+            uint64_t base=camera.capture.config.memory[plane+1].iova;
+            assert(address>=base && (address-base)%311296==0 && (address-base)/311296<2);
+            latched[plane]=(unsigned)((address-base)/311296);
+            assert(camera.capture.dma.ring.state[latched[plane]]<A733_SLOT_SYNC);
+        }
+        dma[0x254/4]|=0x80;writing_frame=1;frame_end=next_frame+25000;next_frame+=33333;
+    }
+}
 /* The previous image stays in the CPU planes until the rearm refills them. */
 static void rearm_checks(uintptr_t a,uint32_t *word,int store,uint32_t value)
 {
     enum a733_capture_state c=camera.capture.state;
-    if(c<A733_CAPTURE_REARM_QUIET)return;
+    if(STREAM || c<A733_CAPTURE_REARM_QUIET)return;
     if(checked_frame!=frames){
         const uint8_t *cpu=(const uint8_t *)(camera.extent.cpu+32768+8192);
         for(unsigned p=0;p<2;p++)for(unsigned i=0;i<307200;i++)assert(cpu[p*(307200+4096)+i]==payload(frames-1,p,i));
@@ -143,6 +171,10 @@ uint32_t a733_camera_model_load(uintptr_t a)
         busy_seen=1;busy_until=mode==12?pm.now+40:0;
     }
     if(a==0x05810004 && (common[1]&2))common[1]=(common[1]&0x1f7)|8|((common[1]&0x1f0)<<12);
+    if(STREAM && a==0x05830254 && camera.capture.dma.state==A733_CAM_DMA_STREAMING){
+        if(status_at && pm.now-status_at>max_status_gap)max_status_gap=pm.now-status_at;
+        status_at=pm.now;
+    }
     return *camera_word(a);
 }
 void a733_camera_model_store(uintptr_t a,uint32_t value)
@@ -162,7 +194,9 @@ void a733_camera_model_store(uintptr_t a,uint32_t value)
             else if(wire==3){selected|=data;status=0x28;}
             else if(!reading_bus){
                 assert(wire<4+OV5640_BLOCK_BYTES);sensor[selected]=(uint8_t)data;status=0x28;
-                if(selected==0x4202 && !data && sensor[0x300e]==0x45)emit();
+                if(selected==0x4202 && !data && sensor[0x300e]==0x45){
+                    if(STREAM)next_frame=pm.now+1000;else emit();
+                }
                 ++selected;
             }
             else if(wire==5){assert(data==0x79);status=0x40;}
@@ -188,9 +222,19 @@ int aarch64_device_cache(enum aarch64_cache_op op,uintptr_t a,size_t bytes)
 {
     assert(camera.memory.generation && bytes && !(a&63) && !(bytes&63));
     assert(a>=camera.extent.cpu && bytes<=camera.extent.cpu+camera.extent.bytes-a);
+    if(STREAM && op==AARCH64_CACHE_INVALIDATE){
+        uintptr_t offset=a-camera.extent.cpu-32768-8192;
+        unsigned plane=(unsigned)(offset/(2*311296));unsigned slot=(unsigned)((offset%(2*311296))/311296);
+        assert(plane<2 && slot<2 && offset%311296==0 && bytes==307200);
+        assert(camera.capture.dma.ring.state[slot]==A733_SLOT_SYNC);
+        assert(!writing_frame || latched[plane]!=slot);
+        assert(((uint64_t)dma[(plane?0x228:0x220)/4]<<2)!=camera.capture.config.memory[plane+1].iova+slot*311296);
+        ++cache_syncs;if(mode==23)return 0;
+        memcpy((void *)a,device_image+offset,bytes);return 1;
+    }
     if(op==AARCH64_CACHE_INVALIDATE){
         assert(frames==camera.discarded+1 && camera.capture.scanned && camera.capture.fenced);
-        assert(a==camera.extent.cpu+32768+8192 && bytes==sizeof(device_image));++cache_syncs;
+        assert(a==camera.extent.cpu+32768+8192 && bytes==IMAGE_BYTES);++cache_syncs;
         if(mode==4)return 0;
         memcpy((void *)a,device_image,bytes);
         if(mode==5)atomic_store(&pm.clocks.failed,1);
@@ -201,7 +245,7 @@ int aarch64_device_cache(enum aarch64_cache_op op,uintptr_t a,size_t bytes)
             camera.capture.dma.state==A733_CAM_DMA_REARM && !(dma[0x254/4]) && sensor[0x4202]==15));
         if(op==AARCH64_CACHE_CLEAN_INVALIDATE && a==camera.extent.cpu+32768+8192){
             /* The fill reaches memory before publication; the device starts from it. */
-            assert(bytes==sizeof(device_image));
+            assert(bytes==IMAGE_BYTES);
             for(size_t i=0;i<bytes;i++)assert(((uint8_t *)a)[i]==A733_CAMERA_NATIVE_FILL);
             memcpy(device_image,(void *)a,bytes);++fills;
         }
@@ -284,7 +328,7 @@ static void setup(void)
     assert(a733_pmic_identity(&pm.provider,&pm.lifetime)==A733_PMIC_READY);
     while(a733_pmic_live(&pm.provider,&pm.lifetime)!=A733_PMIC_READY)assert(pmic_model_step(&pm)!=A733_PMIC_RETAINED);
     boot=(struct a733_camera_boot_record){.version=1,.bytes=sizeof(boot),.owner=50,.epoch=2,.generation=3,
-        .lease=99,.deadline_us=1000000,.build={1,2,3,4},.evidence={5,6,7,8},.proof=A733_CAMERA_REQUIRED_PROOF,
+        .lease=99,.deadline_us=STREAM?2000000:1000000,.build={1,2,3,4},.evidence={5,6,7,8},.proof=A733_CAMERA_REQUIRED_PROOF,
         .origin=A733_CAMERA_COLD_RESET,.excluded_masters=A733_IOMMU_REAL_MASTERS,.powered_masters=A733_IOMMU_REAL_MASTERS,
         .raw_trim=0xb00,.parameter_guard_bytes=4096,.plane_guard_bytes=4096,.apb1=0,.apb1_hz=24000000,
         .settle=20,.deskew=2,.reset_bank=A733_PIN_G,.reset_pin=10,.test_pattern=mode==10,.discard_frames=(uint8_t)DISCARDS,
@@ -338,7 +382,11 @@ static void setup(void)
         for(size_t i=0;i<A733_CAMERA_NATIVE_BYTES;i++)assert(!((uint8_t *)ram)[i]);
         return;
     }
-    assert(a733_camera_native_init(&camera,&config)==1);preparation=0;
+    if(STREAM){
+        boot.version=2;boot.proof=A733_CAMERA_SUPERVISED_PROOF;
+        assert(a733_camera_native_supervised_stream_init(&camera,&config)==1);
+    }else assert(a733_camera_native_init(&camera,&config)==1);
+    preparation=0;
     assert(camera.extent.physical==POOL_PHYSICAL && camera.extent.cpu==(uintptr_t)ram);
     pm.worker=1;assert(a733_camera_native_poll(&camera)==-1 && camera.state==A733_CAMERA_NATIVE_CLOCK && !camera.entered);pm.worker=0;
 }
@@ -387,11 +435,64 @@ static void short_case(void)
     assert(a733_twi_retain(&s)==-1 && a733_twi_poll(&s)==-1 && b.retained==1 && b.stops==1);
     puts("PASS S_TWI1 byte address, copied result, wrong-task refusal and retained cancellation");
 }
+static void stream_case(void)
+{
+    struct device_memory_lease output;struct device_memory_extent out;
+    assert(camera.extent.bytes==A733_CAMERA_NATIVE_STREAM_BYTES);
+    assert(device_memory_acquire(&pool,boot.owner,614400,&output,&out));
+    int result=0,ready=0;
+    for(unsigned poll=0;poll<20000 && !ready && result>=0;++poll){
+        result=a733_camera_native_poll(&camera);
+        if(result==1){
+            if(mode==22 && camera.copy_active && camera.copy_bytes>=4096)dma[0x254/4]|=4;
+            if(mode==24 && camera.copy_active && camera.copy_bytes>=4096){
+                struct device_memory_lease wrong=output;++wrong.generation;
+                unsigned before=camera.copy_bytes;
+                assert(a733_camera_native_stream_copy(&camera,wrong)==-1 && camera.copy_bytes==before);
+                mode=21; /* Continue only with the original, still pinned lease. */
+            }
+            unsigned before=camera.copy_bytes;
+            int copied=a733_camera_native_stream_copy(&camera,output);
+            assert(copied>=0);
+            if(camera.copy_bytes>before)++copy_calls;
+            if(copied)ready=1;
+        }
+        if((!pm.i2c_held || pm.provider.held) && result>=0)assert(pmic_model_step(&pm)!=A733_PMIC_RETAINED);
+        pm.now+=1000;
+        if(camera.capture.sensor.wait_until>pm.now)pm.now=camera.capture.sensor.wait_until;
+    }
+    fprintf(stderr,"stream result=%d time=%llu state=%u capture=%u sensor=%u DMA=%u frames=%u bytes=%u owed=%u gap=%llu\n",
+        result,(unsigned long long)pm.now,camera.state,camera.capture.state,camera.capture.sensor.state,
+        camera.capture.dma.state,frames,camera.copy_bytes,camera.capture.dma.ring.owed,(unsigned long long)max_status_gap);
+    if(mode==22 || mode==23){
+        assert(!ready && result<0 && camera.state==A733_CAMERA_NATIVE_FAULT);
+        if(mode==22)assert(camera.copy_active && camera.copy_bytes<614400);
+    }else{
+        assert(ready && !camera.copy_active && camera.copy_bytes==614400 && copy_calls==150);
+        unsigned frame=camera.capture.dma.ring.sequence[camera.copy_slot]-1;
+        for(unsigned plane=0;plane<2;++plane)for(unsigned i=0;i<307200;++i)
+            assert(((uint8_t *)out.cpu)[plane*307200+i]==payload(frame,plane,i));
+        assert(max_status_gap<camera.capture.status_us);
+        assert(a733_camera_native_stream_stop(&camera)==1);
+        for(unsigned i=0;i<100 && camera.state!=A733_CAMERA_NATIVE_FAULT;++i){
+            (void)a733_camera_native_poll(&camera);pm.now+=1000;
+        }
+        assert(camera.state==A733_CAMERA_NATIVE_FAULT && sensor[0x4202]==15 && sensor[0x300e]==0x40);
+        assert(!camera.capture.quiet && !camera.capture.drained && (parser[3]&3)==2);
+        for(unsigned plane=0;plane<2;++plane)for(unsigned i=0;i<307200;++i)
+            assert(((uint8_t *)out.cpu)[plane*307200+i]==payload(frame,plane,i));
+    }
+    unsigned before=io_count;assert(a733_camera_native_poll(&camera)==-1 && io_count==before);
+    assert(camera.memory.generation && !device_memory_release(&pool,camera.memory));
+    printf("PASS native stream frames=%u copy_calls=%u bytes=%u max_status_gap_us=%llu retained=1 drain=0\n",
+        frames,copy_calls,camera.copy_bytes,(unsigned long long)max_status_gap);
+}
 int main(int argc,char **argv)
 {
-    assert(argc==2 || argc==3);mode=(unsigned)strtoul(argv[1],NULL,10);assert(mode<=20);if(mode==7){short_case();return 0;}
+    assert(argc==2 || argc==3);mode=(unsigned)strtoul(argv[1],NULL,10);assert(mode<=24);if(mode==7){short_case();return 0;}
     if(argc==3)assert((trace=fopen(argv[2],"w")));
     setup();
+    if(STREAM){stream_case();return 0;}
     if(mode==20){puts("PASS native camera scenario20, allocation across 2^34 refused before the fill");return 0;}
     /* One 4 MiB window and one leaf word per page: parameters 2, planes 2 x 76. */
     unsigned windows=0,leaves=0;

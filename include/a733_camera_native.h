@@ -10,6 +10,7 @@
 #define A733_CAMERA_NATIVE_PIN_COUNT 15u
 #define A733_CAMERA_NATIVE_PLANE_BYTES 307200u
 #define A733_CAMERA_NATIVE_GUARD_BYTES 4096u
+#define A733_CAMERA_NATIVE_STREAM_BYTES 1286144u /* Two guarded slots per plane. */
 #define A733_CAMERA_NATIVE_BYTES 663552u /* Tables 8 + parameters 2 + two 76-page planes. */
 /* Fixed device address of the parameters. The planes follow at +8192 and
  * +319488, all three inside one 4 MiB IOMMU window below 4 GiB. The IOMMU
@@ -78,6 +79,8 @@ struct a733_camera_native {
     struct device_memory_extent extent;
     uint64_t last_now;
     unsigned snapshot,index,held,entered,started,discarded;
+    unsigned stream,copy_active,copy_slot,copy_bytes;
+    struct device_memory_lease copy_destination;
     enum a733_camera_native_state state;
 };
 /* Actual singleton allocation during serialized primary preparation, before
@@ -95,12 +98,26 @@ int a733_camera_native_init(struct a733_camera_native *,const struct a733_camera
  * controllers. Manual whole-board power removal replaces watchdog admission,
  * never actual reset/drain/exclusion, mapped guards or live ownership. */
 int a733_camera_native_supervised_init(struct a733_camera_native *,const struct a733_camera_native_config *);
+/* Finite supervised continuous mode: two guarded VGA slots per plane, using
+ * the same all-master exclusion and absolute session deadline. No drain or
+ * resource release is implemented; stop reaches retained failure. */
+int a733_camera_native_supervised_stream_init(struct a733_camera_native *,const struct a733_camera_native_config *);
+/* Copy one delivered frame into this owner's CPU allocation, at most 4096
+ * bytes per call. Poll capture between calls. Returns 0 while awaiting a slot,
+ * discarding an admitted frame or copying, 1 after both planes and give, -1
+ * on failure. The destination lease must remain identical and pinned through
+ * every call; partial output is untrusted. The source slot stays HELD until
+ * completion and remains retained on a fault. No arbitrary views escape. */
+int a733_camera_native_stream_copy(struct a733_camera_native *,struct device_memory_lease);
+/* Request sensor stop only with no held copy. Subsequent polls retain at the
+ * missing packet-quiescence provider; no stopped/drained success is promised. */
+int a733_camera_native_stream_stop(struct a733_camera_native *);
 /* Designated EL1 task advances actual media-token delegation, rail borrows and
  * queued PMIC observations, checked pins, TWI, MCLK and the full capture path.
  * PMIC's existing provider task must run independently. Missing/faulted/late
  * prerequisites refuse before the dependent operation. No rollback/retry;
  * only a registry status read that reports BUSY is repeated, until deadline.
- * Returns 0 pending, 1 retained read-only frame ready, -1 retained fault. */
+ * Returns 0 pending, 1 retained read-only frame ready (or streaming), -1 retained fault. */
 int a733_camera_native_poll(struct a733_camera_native *);
 /* Serialized privileged consumer. Copies only admitted image payload into a
  * distinct actual CPU-owned lease from the same native singleton, registered

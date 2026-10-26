@@ -65,7 +65,9 @@ void a733_smp_diagnostic_start(void)
  app.media.config=s->media;app.media.registry=&app.shared.clocks;app.rail.owner=s->camera.owner;
  struct a733_camera_native_config config={&s->camera,&app.media,&app.shared.clocks,&app.shared.pins,
   &app.shared.rails,&app.rail,&app.shared.pmic,&app.shared.locks,app.handles[2]};
-#ifdef SUNSTONE_CAMERA_SUPERVISED
+#ifdef SUNSTONE_CAMERA_STREAM
+ int constructed=a733_camera_native_supervised_stream_init(&app.camera,&config);
+#elif defined(SUNSTONE_CAMERA_SUPERVISED)
  int constructed=a733_camera_native_supervised_init(&app.camera,&config);
 #else
  int constructed=a733_camera_native_init(&app.camera,&config);

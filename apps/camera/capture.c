@@ -61,11 +61,17 @@ static int fault(void)
 {
  /* No close/release operation proves drain. Retain every allocation and lease.
   * Cancellation stops producer advancement without attempting unsafe bus STOP. */
+#ifdef SUNSTONE_CAMERA_STREAM
+ if(app.output_ready){
+  app.retained_status=4u|(app.camera.capture.sensor.state==OV5640_READY?1u:0u);
+  atomic_store_explicit(&app.result,4,memory_order_release);return -1;
+ }
+#endif
  atomic_store_explicit(&app.result,3,memory_order_release);return -1;
 }
 int camera_capture_step(void)
 {
- if(atomic_load_explicit(&app.result,memory_order_acquire)==3)return -1;
+ if(atomic_load_explicit(&app.result,memory_order_acquire)>=3)return -1;
  if(!current())return fault();
  if(atomic_load_explicit(&app.result,memory_order_acquire)==2)return 1;
  if(!atomic_load_explicit(&app.shared.pmic_ready,memory_order_acquire))return 0;
@@ -93,7 +99,23 @@ int camera_capture_step(void)
   atomic_store_explicit(&app.result,1,memory_order_release);++app.stage;return 0;}
  case 3:{
   int r=a733_camera_native_poll(&app.camera);
-  if(r<0)return fault();if(!r)return 0;++app.stage;return 0;}
+  if(r<0)return fault();if(!r)return 0;
+#ifdef SUNSTONE_CAMERA_STREAM
+  r=a733_camera_native_stream_copy(&app.camera,app.output);
+  if(r<0)return fault();if(!r)return 0;
+  app.output_ready=1;
+  if(a733_camera_native_stream_stop(&app.camera)!=1)return fault();
+  app.stage=7;return 0;
+#else
+  ++app.stage;return 0;
+#endif
+ }
+#ifdef SUNSTONE_CAMERA_STREAM
+ case 7:
+  /* Sensor stop advances, then the absent packet/drain proof retains. */
+  if(a733_camera_native_poll(&app.camera)<0)return fault();
+  return 0;
+#endif
  case 4:case 5:{
   unsigned plane=app.stage-4;
   if(a733_camera_native_copy(&app.camera,plane,0,app.output,
@@ -111,10 +133,12 @@ int camera_output(unsigned offset,void *out,unsigned bytes)
 {
  if(!out||bytes>4096||offset>CAMERA_FRAME_BYTES||bytes>CAMERA_FRAME_BYTES-offset||
     !camera_live(NULL)||atomic_load_explicit(&app.cancel,memory_order_acquire)||
-    atomic_load_explicit(&app.result,memory_order_acquire)!=2)return 0;
+    (atomic_load_explicit(&app.result,memory_order_acquire)!=2 &&
+     atomic_load_explicit(&app.result,memory_order_acquire)!=4))return 0;
  /* Output is CPU-owned and immutable; the USB task does not access allocator
   * metadata concurrently with the owner. Publication follows both plane copies. */
  memcpy(out,(const void *)(app.pixels.cpu+offset),bytes);
  return camera_live(NULL)&&!atomic_load_explicit(&app.cancel,memory_order_acquire)&&
-  atomic_load_explicit(&app.result,memory_order_acquire)==2;
+  (atomic_load_explicit(&app.result,memory_order_acquire)==2 ||
+   atomic_load_explicit(&app.result,memory_order_acquire)==4);
 }

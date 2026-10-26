@@ -20,10 +20,16 @@
 #define Y_IOVA (PARAMETER_IOVA+PARAMETER_BYTES)
 #define UV_IOVA (Y_IOVA+PLANE_BYTES)
 _Static_assert(TABLE_BYTES+PARAMETER_BYTES+2u*PLANE_BYTES==A733_CAMERA_NATIVE_BYTES,"camera allocation layout");
+_Static_assert(TABLE_BYTES+PARAMETER_BYTES+4u*PLANE_BYTES==A733_CAMERA_NATIVE_STREAM_BYTES,"camera stream allocation layout");
+_Static_assert(PARAMETER_IOVA>>22==(Y_IOVA+4u*PLANE_BYTES-1)>>22,"stream fits one IOMMU window");
 _Static_assert(PARAMETER_IOVA>>22==(UV_IOVA+PLANE_BYTES-1)>>22 && UV_IOVA+PLANE_BYTES<=A733_IOMMU_IOVA_LIMIT,
     "camera spans need one 4 MiB IOMMU window below the IOVA limit");
 #define MCLK1 UINT32_C(0x02003804)
 static struct a733_camera_native *instance;
+static size_t plane_span(const struct a733_camera_native *n)
+{return PLANE_BYTES*(n->stream?2u:1u);}
+static uint64_t uv_iova(const struct a733_camera_native *n)
+{return Y_IOVA+plane_span(n);}
 #ifdef SUNSTONE_CAMERA_MODEL
 extern int a733_camera_model_current(void *);
 extern uint32_t a733_camera_model_load(uintptr_t);
@@ -149,7 +155,8 @@ static int native_handoff(void *v,uint64_t t,enum a733_capture_handoff h,
        c->route.state!=A733_ROUTE_ARMED || c->sensor.state!=OV5640_READY)return -1;
     if(h==A733_CAPTURE_LOCAL)return c->dma.state==A733_CAM_DMA_ARMED && c->receiver.state==A733_CSI_NEW?1:-1;
     return h==A733_CAPTURE_PACKETS && c->local_granted && c->receiver.state==A733_CSI_ARMED &&
-        c->receiver.image_mode && c->dma.state==A733_CAM_DMA_START?1:-1;
+        c->receiver.image_mode==!n->stream &&
+        c->dma.state==(n->stream?A733_CAM_DMA_ARMED:A733_CAM_DMA_START)?1:-1;
 }
 /* The retained path never requests global drain, close or release. Refusal
  * makes an accidental transition explicit instead of manufacturing proof. */
@@ -310,8 +317,8 @@ static int csi_write(void *v,uint64_t t,enum a733_csi_region r,uint16_t o,uint32
 static int dma_admit(void *v,const struct a733_camera_dma_config *c,uint64_t d,uint64_t *t)
 {
     struct a733_camera_native *n=v;
-    if(c->block || c->frame_id!=n->boot.lease || c->y.bus_address!=Y_IOVA || c->uv.bus_address!=UV_IOVA ||
-       c->y.mapped_bytes!=PLANE_BYTES || c->uv.mapped_bytes!=PLANE_BYTES ||
+    if(c->block || c->frame_id!=n->boot.lease || c->y.bus_address!=Y_IOVA || c->uv.bus_address!=uv_iova(n) ||
+       c->y.mapped_bytes!=plane_span(n) || c->uv.mapped_bytes!=plane_span(n) ||
        !authority(n) || !timely(n,d))return -1;
     *t=n->boot.lease;
     uintptr_t planes=n->extent.cpu+TABLE_BYTES+PARAMETER_BYTES;
@@ -323,7 +330,7 @@ static int dma_admit(void *v,const struct a733_camera_dma_config *c,uint64_t d,u
            n->state!=A733_CAMERA_NATIVE_CAPTURE)return -1;
         memset((void *)planes,A733_CAMERA_NATIVE_FILL,2u*PLANE_BYTES);
     }
-    return cache(n,AARCH64_CACHE_CLEAN_INVALIDATE,planes,2u*PLANE_BYTES,d);
+    return cache(n,AARCH64_CACHE_CLEAN_INVALIDATE,planes,2u*plane_span(n),d);
 }
 static int dma_read(void *v,uint64_t t,uint16_t o,uint32_t *x,uint64_t d)
 {return o<0x1000?read_word(v,t,0x05830000u+o,x,d):-1;}
@@ -335,6 +342,16 @@ static int dma_sync(void *v,uint64_t t,uint64_t d)
     if(t!=n->boot.lease || !n->capture.retained_readout || !n->capture.scanned ||
        !n->capture.sampled || !n->capture.fenced || n->capture.route.events!=0x100)return -1;
     return cache(n,AARCH64_CACHE_INVALIDATE,n->extent.cpu+TABLE_BYTES+PARAMETER_BYTES,2u*PLANE_BYTES,d);
+}
+static int dma_sync_slot(void *v,uint64_t t,unsigned slot,uint64_t d)
+{
+    struct a733_camera_native *n=v;
+    if(!n->stream || t!=n->boot.lease || slot>=2 ||
+       n->capture.dma.ring.state[slot]!=A733_SLOT_SYNC)return -1;
+    uintptr_t p=n->extent.cpu+TABLE_BYTES+PARAMETER_BYTES+slot*PLANE_BYTES;
+    for(unsigned plane=0;plane<2;++plane)
+        if(cache(n,AARCH64_CACHE_INVALIDATE,p+plane*plane_span(n),A733_CAMERA_NATIVE_PLANE_BYTES,d)!=1)return -1;
+    return 1;
 }
 static int boot_valid(const struct a733_camera_boot_record *b,unsigned supervised)
 {
@@ -369,7 +386,7 @@ static int boot_valid(const struct a733_camera_boot_record *b,unsigned supervise
     return 1;
 }
 extern int a733_smp_device_preparation_admitted(void);
-static int initialize(struct a733_camera_native *n,const struct a733_camera_native_config *c,unsigned supervised)
+static int initialize(struct a733_camera_native *n,const struct a733_camera_native_config *c,unsigned supervised,unsigned stream)
 {
     if(!n || n->self || instance || !c || !c->boot || !c->media || !c->clocks || !c->pins ||
        !c->rails || !c->rail_parent || !c->pmic || !c->locks || !c->task ||
@@ -399,45 +416,48 @@ static int initialize(struct a733_camera_native *n,const struct a733_camera_nati
     if(!pool || !a733_ranges_disjoint(n,sizeof(*n),(void *)pool->backing.cpu,pool->backing.bytes) ||
        !a733_ranges_disjoint(c,sizeof(*c),(void *)pool->backing.cpu,pool->backing.bytes) ||
        !a733_ranges_disjoint(c->boot,sizeof(*c->boot),(void *)pool->backing.cpu,pool->backing.bytes))return 0;
-    *n=(struct a733_camera_native){.self=n,.config=*c,.boot=*c->boot,.pool=pool,.state=A733_CAMERA_NATIVE_CLOCK};
+    *n=(struct a733_camera_native){.self=n,.config=*c,.boot=*c->boot,.pool=pool,.state=A733_CAMERA_NATIVE_CLOCK,.stream=stream};
     instance=n;
-    if(!device_memory_acquire_aligned(n->pool,n->boot.owner,A733_CAMERA_NATIVE_BYTES,16384,&n->memory,&n->extent))return fail(n);
+    size_t bytes=stream?A733_CAMERA_NATIVE_STREAM_BYTES:A733_CAMERA_NATIVE_BYTES;
+    if(!device_memory_acquire_aligned(n->pool,n->boot.owner,bytes,16384,&n->memory,&n->extent))return fail(n);
     struct device_memory_allocation *a=device_memory_lookup(n->pool,n->memory);
     if(!a || a->state!=DEVICE_MEMORY_CPU)return fail(n);
     /* Validate the geometry before any write. IOMMU entries encode physical
      * bits 33:32, so the device sees fixed IOVAs wherever the allocation lies.
      * A refused extent stays device owned, as it did when this check followed
      * the fill. */
-    if(n->extent.bytes!=A733_CAMERA_NATIVE_BYTES ||
+    if(n->extent.bytes!=bytes ||
        !a733_extent_within(0,A733_IOMMU_PHYSICAL_LIMIT,n->extent.physical,n->extent.bytes)){
         a->state=DEVICE_MEMORY_DEVICE;return fail(n);}
     /* Unwritten payload or guard bytes then cannot repeat stale DRAM, such as
      * an earlier image. dma_admit's clean/invalidate publishes this fill. */
-    memset((void *)(n->extent.cpu+TABLE_BYTES+PARAMETER_BYTES),A733_CAMERA_NATIVE_FILL,2u*PLANE_BYTES);
+    memset((void *)(n->extent.cpu+TABLE_BYTES+PARAMETER_BYTES),A733_CAMERA_NATIVE_FILL,2u*plane_span(n));
     a->state=DEVICE_MEMORY_DEVICE;
     uintptr_t p=n->extent.cpu;uint64_t pa=n->extent.physical;
     struct a733_camera_capture_config capture={
         .ops={time_read,native_acquire,native_handoff,no_drain},.context=n,
         .memory={{(void *)(p+TABLE_BYTES),PARAMETER_IOVA,pa+TABLE_BYTES,PARAMETER_BYTES},
-          {(void *)(p+TABLE_BYTES+PARAMETER_BYTES),Y_IOVA,pa+TABLE_BYTES+PARAMETER_BYTES,PLANE_BYTES},
-          {(void *)(p+TABLE_BYTES+PARAMETER_BYTES+PLANE_BYTES),UV_IOVA,pa+TABLE_BYTES+PARAMETER_BYTES+PLANE_BYTES,PLANE_BYTES}},
+          {(void *)(p+TABLE_BYTES+PARAMETER_BYTES),Y_IOVA,pa+TABLE_BYTES+PARAMETER_BYTES,plane_span(n)},
+          {(void *)(p+TABLE_BYTES+PARAMETER_BYTES+plane_span(n)),uv_iova(n),pa+TABLE_BYTES+PARAMETER_BYTES+plane_span(n),plane_span(n)}},
         .table_words=(void *)p,.table_physical=pa,.frame_id=n->boot.lease,
         .receiver={0,0,n->boot.settle,n->boot.deskew,324000000},.mode=ov5640_vga_mode,
-        .color_bars=n->boot.test_pattern,
+        .color_bars=n->boot.test_pattern,.slots=stream?2:0,.slot_bytes=stream?PLANE_BYTES:0,
         .sensor={time_read,sensor_acquire,sensor_line,sensor_read,sensor_write,sensor_receiver,no_drain,sensor_write_block},
         .analog={time_read,analog_admit,analog_read,analog_write},
         .iommu={time_read,mmu_admit,mmu_read,mmu_write,mmu_publish},
         .route={time_read,route_admit,route_publish,route_read,route_write,no_drain,no_drain,no_drain},
         .csi={time_read,csi_admit,csi_read,csi_write,no_drain,no_drain,no_drain},
-        .dma={time_read,dma_admit,dma_read,dma_write,no_drain,no_drain,no_drain,dma_sync,no_drain,NULL,NULL}};
+        .dma={time_read,dma_admit,dma_read,dma_write,no_drain,no_drain,no_drain,dma_sync,no_drain,NULL,stream?dma_sync_slot:NULL}};
     if((supervised?a733_camera_capture_supervised_init(&n->capture,&capture):a733_camera_capture_init(&n->capture,&capture))!=1 ||
        (n->boot.pwdn_only && ov5640_pwdn_only(&n->capture.sensor)!=1))return fail(n);
     return 1;
 }
 int a733_camera_native_init(struct a733_camera_native *n,const struct a733_camera_native_config *c)
-{return initialize(n,c,0);}
+{return initialize(n,c,0,0);}
 int a733_camera_native_supervised_init(struct a733_camera_native *n,const struct a733_camera_native_config *c)
-{return initialize(n,c,1);}
+{return initialize(n,c,1,0);}
+int a733_camera_native_supervised_stream_init(struct a733_camera_native *n,const struct a733_camera_native_config *c)
+{return initialize(n,c,1,1);}
 /* A PWDN-only module claims the first fourteen pins; RESETB needs no GPIO. */
 static int pin_acquire(struct a733_camera_native *n)
 {
@@ -530,11 +550,16 @@ int a733_camera_native_poll(struct a733_camera_native *n)
         n->state=A733_CAMERA_NATIVE_MCLK;break;
     }
     case A733_CAMERA_NATIVE_MCLK:
-        if(mclk_enable(n)!=1 || a733_camera_capture_open_retained(&n->capture,n->boot.deadline_us)!=1){r=-1;break;}
+        if(mclk_enable(n)!=1 || (n->stream?a733_camera_capture_open_stream(&n->capture,n->boot.deadline_us):
+           a733_camera_capture_open_retained(&n->capture,n->boot.deadline_us))!=1){r=-1;break;}
         n->state=A733_CAMERA_NATIVE_CAPTURE;break;
     case A733_CAMERA_NATIVE_CAPTURE:
         if(!authority(n)){r=-1;break;}
         r=a733_camera_capture_poll(&n->capture);
+        if(r==1 && n->stream){
+            if(n->capture.state!=A733_CAPTURE_STREAMING || !authority(n))r=-1;
+            break;
+        }
         if(r==1){
             if(n->capture.state!=A733_CAPTURE_READABLE || n->capture.dma.owner!=A733_CAMERA_DEVICE ||
                !authority(n)){r=-1;break;}
@@ -549,7 +574,7 @@ int a733_camera_native_poll(struct a733_camera_native *n)
     }
     n->entered=0;
     if(r<0 || !timely(n,n->boot.deadline_us))return fail(n);
-    return n->state==A733_CAMERA_NATIVE_READABLE?1:0;
+    return n->state==A733_CAMERA_NATIVE_READABLE || (n->stream && n->capture.state==A733_CAPTURE_STREAMING)?1:0;
 }
 int a733_camera_native_copy(struct a733_camera_native *n,unsigned plane,unsigned offset,
     struct device_memory_lease destination,size_t destination_offset,size_t bytes)
@@ -572,4 +597,50 @@ int a733_camera_native_copy(struct a733_camera_native *n,unsigned plane,unsigned
     }
     n->entered=0;
     return timely(n,n->boot.deadline_us) && authority(n)?1:fail(n);
+}
+
+int a733_camera_native_stream_copy(struct a733_camera_native *n,struct device_memory_lease destination)
+{
+    struct device_memory_extent out;enum device_memory_state owner;
+    if(!n || n->self!=n || !n->stream || n->entered ||
+       n->state!=A733_CAMERA_NATIVE_CAPTURE || n->capture.state!=A733_CAPTURE_STREAMING ||
+       destination.owner!=n->boot.owner ||
+       !device_memory_describe(n->pool,destination,&out,&owner) || owner!=DEVICE_MEMORY_CPU ||
+       out.bytes<2u*A733_CAMERA_NATIVE_PLANE_BYTES || !authority(n) || !timely(n,n->boot.deadline_us))return -1;
+    if(n->copy_active && (destination.pool!=n->copy_destination.pool ||
+       destination.owner!=n->copy_destination.owner || destination.slot!=n->copy_destination.slot ||
+       destination.generation!=n->copy_destination.generation))return -1;
+    n->entered=1;
+    if(!n->copy_active){
+        unsigned slot;uint32_t sequence;const uint8_t *y,*uv;
+        int r=a733_camera_capture_take(&n->capture,&slot,&sequence,&y,&uv);
+        if(r<=0){n->entered=0;return r;}
+        if(n->discarded<n->boot.discard_frames){
+            ++n->discarded;r=a733_camera_capture_give(&n->capture,slot);
+            n->entered=0;return r==1?0:fail(n);
+        }
+        n->copy_slot=slot;n->copy_bytes=0;n->copy_destination=destination;n->copy_active=1;
+    }
+    if(n->copy_slot>=2 || n->capture.dma.ring.state[n->copy_slot]!=A733_SLOT_HELD){
+        n->entered=0;return fail(n);
+    }
+    unsigned plane=n->copy_bytes/A733_CAMERA_NATIVE_PLANE_BYTES;
+    unsigned offset=n->copy_bytes%A733_CAMERA_NATIVE_PLANE_BYTES;
+    size_t count=A733_CAMERA_NATIVE_PLANE_BYTES-offset;if(count>4096)count=4096;
+    uintptr_t src=n->extent.cpu+TABLE_BYTES+PARAMETER_BYTES+plane*plane_span(n)+n->copy_slot*PLANE_BYTES+offset;
+    memcpy((void *)(out.cpu+n->copy_bytes),(const void *)src,count);
+    n->copy_bytes+=(unsigned)count;
+    if(!timely(n,n->boot.deadline_us) || !authority(n)){n->entered=0;return fail(n);}
+    int result=0;
+    if(n->copy_bytes==2u*A733_CAMERA_NATIVE_PLANE_BYTES){
+        if(a733_camera_capture_give(&n->capture,n->copy_slot)!=1){n->entered=0;return fail(n);}
+        n->copy_active=0;result=1;
+    }
+    n->entered=0;return result;
+}
+int a733_camera_native_stream_stop(struct a733_camera_native *n)
+{
+    if(!n || n->self!=n || !n->stream || n->entered || n->copy_active ||
+       n->state!=A733_CAMERA_NATIVE_CAPTURE || !authority(n) || !timely(n,n->boot.deadline_us))return -1;
+    return a733_camera_capture_stop(&n->capture,n->boot.deadline_us);
 }

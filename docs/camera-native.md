@@ -159,6 +159,61 @@ Completion permits access to this still image; it does not prove that every
 system transaction and page walk has drained. Existing close-and-release APIs
 retain their separate drain requirements.
 
+## Finite streaming keeps one slot held across the copied frame
+
+`a733_camera_native_supervised_stream_init` selects two slots per plane for
+the existing VGA mode. The parent reservation is 1,286,144 bytes: 32 KiB of
+tables, 8 KiB of parameters and four 311,296-byte guarded slots. Together with
+the 614,400-byte CPU output, it fits the application's existing 2 MiB pool.
+The constructor fills and publishes both spans and derives their IOVAs from
+the same allocation. The supervised boot record still requires all-master
+exclusion, admitted guards and manual power removal. The image identity binds
+the stream build option; the record format is unchanged.
+
+The native packet handoff admits the coordinator's continuous video mode.
+A delivered slot receives cache invalidation over its 307,200-byte payload in
+each plane. The coordinator supplies the completion and address-ownership
+checks before that callback. Guard bytes remain outside the copied payload.
+
+`a733_camera_native_stream_copy` takes the oldest delivered slot and copies at
+most 4 KiB per call into a CPU-owned allocation from the same owner and pool.
+The destination lease, including its generation, stays fixed across calls.
+The slot remains held until all 614,400 bytes have been copied and checked.
+A failure leaves any partial destination untrusted and retains the source.
+The boot record's discard count consumes complete delivered slots without
+copying them, while the sensor continues running.
+
+The application polls capture before every copy call. It therefore makes
+150 copy calls without withholding DMA status checks for 150 ticks. Holding
+one of the two slots can cause frames in the other slot to be overwritten;
+the existing ring counts those drops and protects the held slot. The finite
+session uses its admitted absolute deadline throughout preparation and copying.
+There is no unbounded renewal or in-place restart.
+
+After giving the copied slot back, `a733_camera_native_stream_stop` requests
+the existing sensor-stop sequence. The absent packet-quiescence provider
+then refuses, retaining the parser, DMA, IOMMU and every hardware lease.
+Sensor register readback does not establish transaction drain. The separate
+CPU copy remains usable; the application reports sensor-stop status and the
+absence of drain proof independently.
+
+The native model completed the copy in 150 pieces, with a maximum observed
+DMA status-read gap of 4,044 modeled microseconds, below the mode's roughly
+16,500 µs limit. It copied 614,400 bytes and invalidated each copied plane
+once. DMA failure during copying, slot-cache failure and a changed destination
+generation preserved ownership. The still-image nominal case also passed.
+These checks reuse the actual native providers and controllers with modeled
+registers, cache visibility and task identity. They do not measure hardware
+latency. Earlier coordinator tests retain their delayed-start and frame-race
+coverage; their implementation is unchanged.
+
+Evidence is under `~/.cache/sunstoneos/evidence/resume-camera-native-1025/`.
+The initial stream fixture's one-second session expired after preparation and
+39 copy pieces; the finite stream fixture now admits two seconds to cover
+preparation plus the 150 scheduled copy pieces. Production deadlines did not
+change. Another fixture correction uses the DMA error bit instead of a normal
+status bit. Earlier passing cases keep their original artifact identities.
+
 ## Sources and focused verification
 
 The pinned A733 manual defines TWI0-compatible instances in §18.11.7, the

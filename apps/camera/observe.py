@@ -16,14 +16,21 @@ def decode(frame,session,operation,offset=0,count=0):
         raise ValueError('Invalid camera request shape')
     if len(frame)<72:raise ValueError('Short camera response')
     magic,version,state,actual,size,total,epoch,generation=struct.unpack_from('<6I2Q',frame)
-    if (magic,version,total,epoch,generation)!=(0x524d4143,1,614400,*struct.unpack_from('<2Q',session,24)):
+    if version not in (1,2) or (magic,total,epoch,generation)!=(0x524d4143,614400,*struct.unpack_from('<2Q',session,24)):
         raise ValueError('camera response identity mismatch')
-    if frame[40:72]!=hashlib.sha256(session).digest() or actual!=offset or state not in (0,1,2,3):
+    if frame[40:72]!=hashlib.sha256(session).digest() or actual!=offset or state not in ((0,1,2,3) if version==1 else (0,1,3,4)):
         raise ValueError('camera response session, offset or state mismatch')
-    expected=count if operation==1 and state==2 else 0
-    if size!=expected or len(frame)!=72+size or (operation==2 and state!=3):
+    header=72 if version==1 else 80
+    if len(frame)<header:raise ValueError('Short camera header')
+    retained_status=struct.unpack_from('<I',frame,72)[0] if version==2 else 0
+    if version==2 and (any(frame[76:80]) or (retained_status not in (4,5) if state==4 else retained_status!=0)):
+        raise ValueError('Invalid retained stream status')
+    expected=count if operation==1 and state in (2,4) else 0
+    if size!=expected or len(frame)!=header+size or (operation==2 and state!=3):
         raise ValueError('camera response extent or cancellation mismatch')
-    return {'state':state,'offset':actual,'bytes':size,'payload':frame[72:]}
+    return {'state':state,'offset':actual,'bytes':size,'payload':frame[header:],
+            'sensor_stopped':bool(retained_status&1),'drain_proved':bool(retained_status&2),
+            'stream_retained':bool(retained_status&4)}
 
 def planes(image):
     """Split NV16: a 640x480 luma plane, then 640x480 interleaved U,V bytes."""
