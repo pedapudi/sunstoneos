@@ -43,7 +43,11 @@
  * when that step's update wait timed out (the routine has then released the
  * bridge and turned the gate on); 7 when the final read-back differs; 8 when
  * the GPU or NPU is clocked; 9 when DMA0 is busy; 10 when CE has a task
- * loaded. Codes 8 to 10 make no write. */
+ * loaded. Codes 8 to 10 skip the restore with no write: MBUS stays at the
+ * ROM's 400 MHz and the image continues, so an image that returned with a
+ * master still clocked does not stop every later image of the lifetime; the
+ * drivers' fabric checks then see 400 MHz. A733_MBUS_FAILED() is true only
+ * for codes 1 to 7, which stop the image. */
 #include <stdint.h>
 
 #define A733_MBUS_CLK UINT32_C(0x02002588)
@@ -55,11 +59,13 @@
 #define A733_MBUS_BOOT0 UINT32_C(0x81000000)
 #define A733_MBUS_ROM UINT32_C(0x84000000)
 #define A733_MSI_LITE0_RELEASED UINT32_C(0x00030001)
+#define A733_MBUS_FAILED(code) ((code) != 0u && (code) < 8u)
 /* 4 KiB of SRAM A2 (0x00040000-0x00073fff) that no image or monitor uses:
  * the launchers occupy 0x52000-0x55fff, the FEL scratch 0x71000, the SRAM
  * survey 0x73000, the ROM's frame for an executed FEL call ends at 0x70000 and
  * its FEL stack lies in the shared SRAM (0xf0f00-0xf3400). The forced-FEL
- * return clears it with the rest of 0x44000-0xf3fff. */
+ * return clears it with the rest of 0x44000-0xf3fff. checks/
+ * sram-window-reservation.py fails when any SRAM layout overlaps the page. */
 #define A733_MBUS_SRAM UINT32_C(0x0005f000)
 
 /* boot/a733/mbus-window.S, assembled for AArch64; checks/el3-mbus.py

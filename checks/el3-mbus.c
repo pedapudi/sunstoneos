@@ -88,5 +88,10 @@ int main(void)
     /* The window's own failures and the read-back. */
     idle(); window_result = 4; run("window-step-4", 0x84000000u, 4, 1, 0x84000000u | 0x80000000u);
     idle(); window_ignores_source = 1; run("source-ignored", 0x84000000u, 7, 1, 0x84000000u);
+    /* Codes 1 to 7 stop the image; 8 to 10 skip the restore and continue. */
+    for (unsigned code = 0; code <= 10; ++code)
+        if (A733_MBUS_FAILED(code) != (code >= 1 && code <= 7)) ++failures;
+    printf("{\"case\":\"failure-codes\",\"result\":0,\"window_calls\":0,\"mbus\":\"0x00000000\",\"reads\":0,\"pass\":%s}\n",
+           failures ? "false" : "true");
     return failures != 0;
 }

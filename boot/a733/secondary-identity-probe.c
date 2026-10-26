@@ -49,9 +49,9 @@ int identity_primary_run(void)
     // MBUS back to boot0's 600 MHz, as the native image's SMP boot does, and
     // like it before any secondary core is released: the restore's gated
     // window runs from SRAM while the released cores would spin in DRAM
-    // (include/a733_el3_mbus.h). A refusal or failure returns before any core
-    // is started.
-    if(a733_el3_mbus_restore())return 0;
+    // (include/a733_el3_mbus.h). A failure returns before any core is started;
+    // an active bus master skips the restore and leaves 400 MHz.
+    if(A733_MBUS_FAILED(a733_el3_mbus_restore()))return 0;
 #ifdef SUNSTONE_SECONDARY_LOCAL
     if(!secondary_distributor_begin(HEADER->deadline))return 0;
 #endif

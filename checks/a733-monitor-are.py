@@ -5,8 +5,9 @@ The physical build must make the vendor BL31's cold-boot security writes
 (include/a733_el3_security.h) in their order before EL1 entry, the DMA
 security words only when the controller's bus gate and reset are open; the
 QEMU build makes none. Before them, a start that finds MBUS at the boot ROM's
-400 MHz restores boot0's 600 MHz (include/a733_el3_mbus.h); with any other
-MBUS value it makes no MBUS write."""
+400 MHz restores boot0's 600 MHz (include/a733_el3_mbus.h) from SRAM; with a
+bus master active it skips the restore, logs the code and continues; with any
+other MBUS value it makes no MBUS write."""
 import argparse
 import hashlib
 import json
@@ -269,7 +270,7 @@ for model in (False, True):
         cpu.emu_start(symbols['monitor_init'], 0, count=100000)
         refused = not model and original & 0x30 != 0x30
         cleanup_started = ticks[0]
-        if not refused and not early_timeout and not mbus_refused:
+        if not refused and not early_timeout:
             assert stopped == ['initialized'], (case, stopped)
             phase[0] = 'finish'
             # Model the kernel's tick and a peripheral source, then the owned
@@ -286,7 +287,9 @@ for model in (False, True):
         assert stopped[-1] == ('semihost-exit' if model else 'reset'), (case, stopped)
         # Every admitted physical start makes the security writes, after the GIC
         # setup; a refused start and the QEMU build make none.
-        expected_security = [] if model or refused or early_timeout or mbus_refused else (
+        # A skipped restore (an active bus master) makes no MBUS write and the
+        # start continues.
+        expected_security = [] if model or refused or early_timeout else (
             (MBUS_WRITES if mbus_rom else []) + security_writes(dma_open))
         assert security == expected_security, (case, [(hex(a), hex(v)) for a, v in security])
         status = int.from_bytes(cpu.mem_read(0x42000010, 8), 'little')
@@ -297,9 +300,7 @@ for model in (False, True):
                        f'MBUS 0x84000000 0x84000000 {mbus_refused:x}\n' if mbus_refused else ''), (case, log)
         replaced = int.from_bytes(cpu.mem_read(0x42000078, 8), 'little')
         failed_cleanup = bool(fault and fault != 'delayed-rwp') or early_timeout
-        # A refused MBUS restore finishes with status 4 after the GIC setup,
-        # which the finish path's cleanup restores.
-        expected_status = 4 if refused or mbus_refused else 6 if failed_cleanup else requested_status
+        expected_status = 4 if refused else 6 if failed_cleanup else requested_status
         assert not fault or fault_applied, (case, 'fault not reached')
         row = {'case': case, 'mode': name, 'initial_ctlr': original, 'status': status, 'replaced_status': replaced,
                'security_writes': len(security), 'dma_open': dma_open,

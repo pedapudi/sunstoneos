@@ -9351,6 +9351,19 @@
   "summary": "Check the linked SPI3 interrupt route and CPU dispatch with modeled GIC state.",
   "usb": false
  },
+ "sram-window-reservation.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/designs/mbus-restore.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "sys.argv"
+  ],
+  "summary": "Check that no SRAM layout overlaps the MBUS restore's window page.",
+  "usb": true
+ },
  "sram_launcher.py": {
   "cache_areas": [],
   "docs": [

@@ -92,7 +92,7 @@ void a733_smp_boot(void)
     /* MBUS back to boot0's 600 MHz before any secondary core is released:
      * the window runs from SRAM, and released cores would spin in DRAM
      * (include/a733_el3_mbus.h). */
-    {unsigned mbus=a733_el3_mbus_restore();if(mbus)a733_smp_stop(2,0x200u|mbus);}
+    {unsigned mbus=a733_el3_mbus_restore();if(A733_MBUS_FAILED(mbus))a733_smp_stop(2,0x200u|mbus);}
     write32(0x03400000,ctlr&~7u);wait_clear(0x03400000,1u<<31);
     for(unsigned i=1;i<banks;++i)write32(0x03400180+i*4,UINT32_MAX);
     wait_clear(0x03400000,1u<<31);

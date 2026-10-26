@@ -159,16 +159,17 @@ void monitor_init(void)
         finish(4);
 #endif
     // MBUS back to boot0's 600 MHz after the ROM's 400 MHz, then the vendor's
-    // cold-boot security setup, the last step before EL1. A change is logged
-    // as the image's first line, because the next return to the ROM sets
-    // 400 MHz again and a later FEL read cannot see it.
+    // cold-boot security setup, the last step before EL1. A change, a skip
+    // (an active bus master, codes 8-10) or a failure is logged as the image's
+    // first line, because the next return to the ROM sets 400 MHz again and a
+    // later FEL read cannot see it. Only a failure stops the image.
 #ifndef MONITOR_QEMU
     uint32_t mbus_before = mmio_read(A733_MBUS_CLK);
     unsigned mbus_failed = a733_el3_mbus_restore();
     uint32_t mbus_after = mmio_read(A733_MBUS_CLK);
     if (mbus_before != mbus_after || mbus_failed)
         log_mbus(mbus_before, mbus_after, mbus_failed);
-    if (mbus_failed)
+    if (A733_MBUS_FAILED(mbus_failed))
         finish(4);
 #endif
     a733_el3_security_setup();

@@ -66,8 +66,12 @@ released. No driver has started an MBUS master at that point.
   performance policy 600 MHz is right whenever the bus starts at the ROM's
   400 MHz, and PERI0_600M runs in both cases.
 - **Bus masters.** Before any write it requires the masters that an earlier
-  image could have left running to be idle, and otherwise returns with no
-  write:
+  image could have left running to be idle. Otherwise it skips the restore
+  with no write and returns the code below: MBUS stays at the ROM's 400 MHz,
+  the monitor logs the code, and the image continues, so an image that
+  returned with the GPU still clocked does not stop every later image of the
+  lifetime. The drivers' fabric checks then see 400 MHz and refuse sessions
+  that name 600 MHz.
   - GPU (8): module clock gate (CCU `+0xb20` bit 31) and bus gate (`+0xb24`
     bit 0) off, so neither the GPU nor its firmware processor runs;
   - NPU (8): module clock gate (`+0xb00` bit 31) and bus gate (`+0xb04` bit
@@ -95,7 +99,7 @@ released. No driver has started an MBUS master at that point.
   outside every launcher (`0x52000`–`0x55fff`), the FEL scratch (`0x71000`),
   the SRAM survey (`0x73000`), the ROM's executed-call frame (below
   `0x70000`) and its FEL stack in the shared SRAM; the forced-FEL return
-  clears it.
+  clears it. `checks/sram-window-reservation.py` enforces the reservation.
 - **Sequence.** The ROM's six steps in the ROM's order, with source 1 in step
   4. The divider is written before the source, as the manual's rule for
   raising a bus clock requires (4.1.4.3). Each update is polled for at most
@@ -106,11 +110,12 @@ released. No driver has started an MBUS master at that point.
 - **Failure.** A wait that times out returns its step (1, 3, 4 or 6); the
   window first releases MSI_LITE0's reset and sets the gate, still from SRAM,
   so the bus runs before it returns to DRAM. A wrong read-back returns 7.
-  The monitors then finish with status 4, the SMP boots stop with status 2
-  and detail `0x200` plus the code, and the identity probe returns before it
-  starts any core.
+  Only these codes, 1 to 7 (`A733_MBUS_FAILED`), stop the image: the
+  monitors finish with status 4, the SMP boots stop with status 2 and detail
+  `0x200` plus the code, and the identity probe returns before it starts any
+  core.
 - **Record.** The returning monitor writes `MBUS <before> <after> <code>` as
-  the first log line when the word changed or the restore refused or failed;
+  the first log line when the word changed or the restore skipped or failed;
   the code is one hex digit. A FEL read after the image returns cannot show
   the restored rate, because the return reruns the ROM's clock setup.
 
@@ -231,12 +236,12 @@ bytes of text and 320 of read-only data, and the G2D application by 344 and
 
 - `checks/el3-mbus.py OUTPUT`:
   - builds `checks/el3-mbus.c` with address and undefined-behavior sanitizers
-    and runs 21 cases of the admission, the master checks and the read-back:
+    and runs 22 cases of the admission, the master checks and the read-back:
     the ROM's state with DMA0 in reset and out of reset; seven states the
     restore leaves alone; a clocked or bus-gated GPU and NPU, a busy DMA0
     channel or FIFO, and a CE task in either world, each refused with no
     window; DMA0 and CE in reset, which pass; a window failure; and an
-    ignored source write;
+    ignored source write; and the rule that only codes 1 to 7 stop the image;
   - assembles `boot/a733/mbus-window.S`, requires it to be free of
     relocations and its bytes to equal the header's array, and runs those
     bytes under Unicorn at `0x5f000` with only that page, the two registers
@@ -249,11 +254,20 @@ bytes of text and 320 of read-only data, and the G2D application by 344 and
   with the window executed from the mapped SRAM page: from the ROM's value it
   requires the six MBUS writes before the BL31 security writes and the log
   line `MBUS 0x84000000 0x81000000 0`; with the GPU clocked or DMA0 busy it
-  requires status 4, the log line with code 8 or 9, no MBUS and no security
-  write, and a restored GIC. Its other 32 cases are unchanged.
+  requires the log line `MBUS 0x84000000 0x84000000` with code 8 or 9, no
+  MBUS write, the security writes and a normal start. Its other 32 cases are
+  unchanged.
 - `checks/a733-smp-cached.py`, which the SMP image checks share, models
   boot0's value, so the restore makes no write there;
   `checks/secondary-local-probe.py` admits the restore's two reads.
+- `checks/sram-window-reservation.py` reads the window's address and size
+  from the header and fails when any linker script's region or location,
+  any `ldr sp` stack, any SRAM region table of a Python tool or any
+  hexadecimal literal outside the owning files overlaps the page
+  `0x5f000`–`0x5ffff`. The DDR start (`tools/run-ddr.py`,
+  `boot/a733/ddr-entry.S`) loads boot0 over the page before any image runs
+  and is listed as allowed with that reason. It passes over 45 SRAM layouts
+  and fails on an injected launcher region, region table entry or stack.
 - `checks/board-bundles.py` passes; the row numbers with
   `RESERVED_POSITIONS` (19 and 20) must count from 1 without a gap.
 - G2D: a session regenerated with the updated producer from the earlier model

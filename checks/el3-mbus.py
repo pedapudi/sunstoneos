@@ -59,7 +59,7 @@ def model_cases(out):
     (out / 'model.jsonl').write_text(ran.stdout)
     require(ran.returncode == 0, 'model cases failed: ' + ran.stdout + ran.stderr)
     cases = {c['case']: c for c in map(json.loads, ran.stdout.splitlines())}
-    require(len(cases) == 21 and all(c['pass'] for c in cases.values()), 'model case list')
+    require(len(cases) == 22 and all(c['pass'] for c in cases.values()), 'model case list')
     return sorted(cases)
 
 

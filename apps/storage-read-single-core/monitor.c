@@ -322,7 +322,7 @@ void sd_single_core_monitor_init(void)
     __asm__ volatile("msr cntps_ctl_el1, %0\n isb" :: "r"(value) : "memory");
     /* MBUS back to boot0's 600 MHz (include/a733_el3_mbus.h), then the
      * vendor's cold-boot security setup, the last step before EL1. */
-    {unsigned mbus=a733_el3_mbus_restore();if(mbus)a733_smp_stop(2,0x200u|mbus);}
+    {unsigned mbus=a733_el3_mbus_restore();if(A733_MBUS_FAILED(mbus))a733_smp_stop(2,0x200u|mbus);}
     a733_el3_security_setup();
     RESULT->stage = 2;
     REPORT->stage = 2;
