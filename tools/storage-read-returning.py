@@ -3,7 +3,8 @@
 
   storage-read-returning.py sign --approval APPROVAL --ddr DDR_DIR --survey SURVEY_DIR --signer NAME
   storage-read-returning.py input --approval APPROVAL --request REQUEST --ddr DDR_DIR --survey SURVEY_DIR
-                                  --fabric-read READ_DIR --config CONFIG --profile 2|3 --output INPUT.bin
+                                  --fabric-read READ_DIR --config CONFIG --profile 2|3
+                                  --plan measurement|first-read --output INPUT.bin
   storage-read-returning.py decode --run RUN_DIR --input INPUT.bin --output RESULT.json
 
 sign records, in the coordinator's approval of one lifetime, the SHA-256 of
@@ -15,11 +16,13 @@ is already signed, so no approval carries into the next lifetime.
 input writes the 2192-byte input that the image reads at 0x43000000
 (apps/storage-read-returning/sdrt.h): SD profile 2 or 3, fresh owner, handoff
 and topology identifiers, the fabric words the image will find, the PMIC and PF pin
-configurations of CONFIG, and a 240-read DMA plan: sequential and random
+configurations of CONFIG, and, with --plan measurement (the default), a 240-read DMA plan: sequential and random
 4 KiB, 32 KiB and 128 KiB requests, plus single sectors. The first 64 reads
 repeat the accepted PIO run; the largest request is 256 blocks. It refuses unless the approval is signed for this DDR
 start and survey, newer than the DDR record, names the profile's bundle and
 sets every field that approval-request.json lists for it to true.
+--plan first-read requires --profile 2 and reads only sector 0, eight blocks
+(4096 bytes). It uses the same lifetime admission and native input format.
 
 The fabric words come from this lifetime's own read of CCU 0x500, 0x580 and
 0x588 (READ_DIR, the board-read-session-v1 record that
@@ -42,7 +45,9 @@ against the input's plan, and writes the card registers, the selected mode and
 per-class throughput, observed command/data phases and sequential fixed-cost
 and per-block fits with and without cache costs. Saturated timings are excluded.
 Version-1 PIO captures remain decodable; --reference checks the repeated CRCs
-against a decoded accepted PIO run on the same card. No board, USB or queue access.
+against a decoded accepted PIO run on the same card. Successful first-read
+decoding requires --reference and compares its first 4096-byte read;
+measurement plans still require 64 matching reads. No board, USB or queue access.
 """
 import argparse
 import hashlib
@@ -64,6 +69,7 @@ PORT = '3-3'
 COMPLETE = 'COMPLETE SD0 returning read'
 INCOMPLETE = 'INCOMPLETE SD0 returning read: '
 BUNDLES = {2: 'A', 3: 'B'}
+FIRST_READ_PLAN = [(0, 8)]
 # The SD0 provider's fabric words, masks and parent rates in MHz
 # (drivers/storage/a733_mmc_platform.c: fabric_off, fabric_mask, parent_mhz).
 # The image only reads these words; no unit of it writes CCU 0x500, 0x580 or 0x588.
@@ -148,15 +154,31 @@ def dma_summary(reads, hz):
     return out
 
 
-def compare_reference(value, reference):
+def compare_reference(value, reference, first_read=False):
     """Match repeated sectors and card identity against a decoded accepted PIO run."""
-    require(reference.get('complete') is True and
-            reference.get('card', {}).get('cid') == value.get('card', {}).get('cid'),
+    require(isinstance(value, dict) and value.get('complete') is True and
+            isinstance(reference, dict) and reference.get('complete') is True,
+            'result and reference must be complete')
+    card, prior_card = value.get('card'), reference.get('card')
+    require(isinstance(card, dict) and isinstance(prior_card, dict) and
+            isinstance(card.get('cid'), str) and re.fullmatch(r'[0-9a-fA-F]{32}', card['cid']) and
+            prior_card.get('cid') == card['cid'],
             'reference must be complete and name the same card')
-    mine, prior = value['reads'][:64], reference.get('reads', [])[:64]
-    require(len(mine) == len(prior) == 64 and all((a['first'], a['blocks'], a['crc32']) ==
-            (b['first'], b['blocks'], b['crc32']) for a, b in zip(mine, prior)), 'reference CRC mismatch')
-    return {'matched_reads': 64, 'matched_bytes': 64 * 4096}
+    count = 1 if first_read else 64
+    mine, prior = value.get('reads'), reference.get('reads')
+    require(isinstance(mine, list) and isinstance(prior, list) and
+            len(mine) >= count and len(prior) >= count, 'reference read coverage')
+    if first_read:
+        require(len(mine) == 1 and value.get('profile') == 2 and card.get('profile') == 2 and
+                reference.get('status') == 0 and prior_card.get('profile') == 2,
+                'first-read requires a successful profile-2 reference')
+    for a, b in zip(mine[:count], prior[:count]):
+        require(all(isinstance(r, dict) and all(type(r.get(k)) is int for k in ('first', 'blocks', 'bytes', 'crc32'))
+                    and 0 <= r['first'] < 2**32 and r['blocks'] == 8 and r['bytes'] == 4096 and
+                    0 <= r['crc32'] < 2**32 for r in (a, b)), 'malformed reference read')
+        require(not first_read or a['first'] == b['first'] == 0, 'first-read reference sector')
+        require((a['first'], a['crc32']) == (b['first'], b['crc32']), 'reference CRC mismatch')
+    return {'matched_reads': count, 'matched_bytes': count * 4096}
 
 
 def lifetime(ddr, survey):
@@ -276,6 +298,7 @@ def parse_input(raw):
     require(len(raw) == INPUT_BYTES, 'input size')
     magic, version, size, generation, owner, handoff, topology, profile, mask, reads, _ = struct.unpack_from('<4Q3Q4I', raw)
     require(magic == MAGIC and version in (1, VERSION) and size == INPUT_BYTES and 0 < reads <= PLAN, 'not an SD0 returning input')
+    require(generation and owner and owner != 2 and handoff and topology, 'invalid input identities')
     plan = [struct.unpack_from('<2I', raw, 144 + 8 * i) for i in range(reads)]
     require(profile in BUNDLES and all(0 <= f < 2**32 and 1 <= b <= (8 if version == 1 else 256) and f+b <= 2**32 for f,b in plan), 'invalid plan')
     return {'version': version, 'generation': generation, 'profile': profile, 'voltage_mask': mask, 'plan': plan}
@@ -390,6 +413,8 @@ def main(argv=None):
     for name in ('approval', 'request', 'ddr', 'survey', 'fabric_read', 'config', 'output'):
         i.add_argument('--' + name.replace('_', '-'), type=Path, required=True)
     i.add_argument('--profile', type=int, choices=(2, 3), default=3)
+    i.add_argument('--plan', choices=('measurement', 'first-read'), default='measurement',
+                   help='measurement: existing 240 reads; first-read: profile 2, sector 0, eight blocks')
     d = sub.add_parser('decode')
     for name in ('run', 'input', 'output'): d.add_argument('--' + name, type=Path, required=True)
     d.add_argument('--reference', type=Path, help='decoded accepted PIO result for the same card')
@@ -397,13 +422,15 @@ def main(argv=None):
     if args.operation == 'sign':
         print(json.dumps(sign(args.approval, args.ddr, args.survey, args.signer), indent=1)); return 0
     if args.operation == 'input':
+        require(args.plan != 'first-read' or args.profile == 2, 'first-read requires profile 2')
         lifetime(args.ddr, args.survey)
         approved(args.approval, args.request, args.ddr, args.survey, BUNDLES[args.profile])
         require(not args.output.exists(), 'output exists')
         config = json.loads(args.config.read_text())
         require('fabric' not in config and 'fabric_hz' not in config, 'the fabric words come from this lifetime\'s read')
         (config['fabric'], config['fabric_hz']), registers = fabric_read(args.fabric_read, args.ddr)
-        raw = input_bytes(args.profile, secrets.randbits(63) | 1, config, dma_plan())
+        raw = input_bytes(args.profile, secrets.randbits(63) | 1, config,
+                          FIRST_READ_PLAN if args.plan == 'first-read' else dma_plan())
         args.output.write_bytes(raw)
         args.output.with_suffix('.json').write_text(json.dumps({
             'input_sha256': hashlib.sha256(raw).hexdigest(), 'profile': args.profile,
@@ -413,9 +440,13 @@ def main(argv=None):
             'ddr_session_sha256': digest(args.ddr / 'session.json'),
             'survey_session_sha256': digest(args.survey / 'session.json'), 'tool_sha256': digest(__file__)}, indent=1) + '\n')
         print(args.output); return 0
-    value = decode(args.run, args.input.read_bytes())
+    raw = args.input.read_bytes(); given = parse_input(raw)
+    first_read = given['version'] == VERSION and given['profile'] == 2 and given['plan'] == FIRST_READ_PLAN
+    value = decode(args.run, raw)
+    require(not (first_read and value['complete']) or args.reference is not None,
+            'successful first-read requires --reference')
     if args.reference:
-        value['reference_crc'] = compare_reference(value,json.loads(args.reference.read_text()))
+        value['reference_crc'] = compare_reference(value,json.loads(args.reference.read_text()),first_read)
         value['reference_sha256'] = digest(args.reference)
     args.output.write_text(json.dumps(value, indent=1) + '\n')
     print(json.dumps({k: value[k] for k in ('status', 'outcome', 'complete')} |
