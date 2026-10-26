@@ -43,7 +43,10 @@ Cases:
   template (0x03000002, 0xc3000000, 0x81000000): sdrt_setup() refuses it,
   because bit 30 of 0xc3000000 is outside every provider's fabric mask;
 - stall-update: profile 2, then the clock-update command never completes;
-  the image gates the module clock instead (result 3).
+  the image gates the module clock instead (result 3);
+- stall-reset: the crc-read stop in the middle of a read, then the FIFO and
+  DMA interface reset never clears; the image issues no clock update and
+  gates the module clock (result 3).
 
 Every case then runs sdrt_clock_off(), the image's last step before its own
 exit, and requires the vendor driver's order: FIFO and DMA interface reset
@@ -194,12 +197,14 @@ class Card(modes.UhsMachine):
     # Profile 3 uses the UHS-I card; profile 2 the high-speed card of the same check.
     def read_mmio(self, cpu, access, a, size, value, unused):
         (modes.UhsMachine if self.profile == 3 else modes.Machine).read_mmio(self, cpu, access, a, size, value, unused)
-        if self.variant == 'crc-read' and a == 0x04020038 and self.data_command in (17, 18) and self.fifo >= 64:
+        if self.variant in ('crc-read', 'crc-read-stall-reset') and a == 0x04020038 and self.data_command in (17, 18) and self.fifo >= 64:
             v = self.read(a) | (1 << 7); self.write(a, v); self.trace[-1][2] = v  # data CRC error
 
     def write_mmio(self, cpu, access, a, size, value, unused):
         if self.final and a == 0x04020018 and value & (1 << 21) and self.variant == 'stall-update':
             self.trace.append(['write', a, value]); self.regs[a] = value; return  # START never clears
+        if self.final and a == 0x04020000 and value & 6 and self.variant == 'stall-reset':
+            self.trace.append(['write', a, value]); self.regs[a] = value; return  # the reset bits never clear
         if self.final and a == 0x02002d00:
             self.trace.append(['write', a, value]); self.regs[a] = value; return  # module clock gate
         (modes.UhsMachine if self.profile == 3 else modes.Machine).write_mmio(self, cpu, access, a, size, value, unused)
@@ -242,6 +247,7 @@ def run_case(image, raw, profile, variant, registers=None):
     # after every provider has stopped; waive the model's lock assertion.
     before = len(m.trace); m.held = True; m.final = True
     if variant == 'stall-update-final': m.variant = 'stall-update'
+    if variant == 'crc-read-stall-reset': m.variant = 'stall-reset'
     clock_off = m.call('sdrt_clock_off'); m.held = False; m.final = False
     m.write(m.base + m.layout['clock_off'], clock_off)
     m.clock_writes = m.trace[before:]
@@ -261,7 +267,8 @@ def run(elf, board, out):
                                    ('absent', 2, 'absent'), ('crc-identify', 2, 'crc-identify'),
                                    ('crc-read', 2, 'crc-read'), ('not-parked', 2, 'not-parked'),
                                    ('board-3', 3, 'nominal'), ('board-mbus-skip', 2, 'nominal'),
-                                   ('stall-update', 2, 'stall-update-final')]:
+                                   ('stall-update', 2, 'stall-update-final'),
+                                   ('stall-reset', 2, 'crc-read-stall-reset')]:
         registers = dict(PORT_3_3)
         if name.startswith('board-'):
             (fabric, fabric_hz) = host.fabric(host.restored([PORT_3_3[a] for a in host.FABRIC]))
@@ -283,13 +290,17 @@ def run(elf, board, out):
             assert name in ('absent', 'board-mbus-skip') and not writes, name
         else:
             expected = [0x04020000] if stalled else []
-            expected += [0x04020004, 0x04020018, 0x04020038]
-            expected += [0x02002d00] if name == 'stall-update' else [0x04020004]
+            if name == 'stall-reset':
+                expected += [0x02002d00]
+            else:
+                expected += [0x04020004, 0x04020018, 0x04020038]
+                expected += [0x02002d00] if name == 'stall-update' else [0x04020004]
             assert [a for a, _ in writes] == expected, (name, [hex(a) for a, _ in writes])
             if stalled: assert writes[0][1] & 6 == 6
-            clkcr = writes[1 if stalled else 0][1]
-            assert clkcr & (1 << 31) and not clkcr & (3 << 16) and writes[1 + stalled][1] == 0x80202000
-            if name == 'stall-update':
+            if name != 'stall-reset':
+                clkcr = writes[1 if stalled else 0][1]
+                assert clkcr & (1 << 31) and not clkcr & (3 << 16) and writes[1 + stalled][1] == 0x80202000
+            if name in ('stall-update', 'stall-reset'):
                 assert value['words']['SD_CLOCK_OFF'] == 3 and not writes[-1][1] & (1 << 31)
             else:
                 assert value['words']['SD_CLOCK_OFF'] == 1 and not writes[-1][1] & ((1 << 31) | (1 << 16)), name
@@ -317,7 +328,7 @@ def run(elf, board, out):
         elif name == 'crc-identify':
             assert r == -1 and not reads and value['outcome'] == 'stopped' and value['words']['SD_REASON'] == 3
             assert value['words']['SD_PLATFORM_FAULT'] == 1 and m.retained
-        elif name == 'crc-read':
+        elif name in ('crc-read', 'stall-reset'):
             assert r == -1 and not reads and value['outcome'] == 'stopped' and value['words']['SD_REASON'] in (6, 7)
             assert value['words']['SD_PLATFORM_FAULT'] == 1 and m.retained and value['card'] is not None
         elif name == 'board-mbus-skip':

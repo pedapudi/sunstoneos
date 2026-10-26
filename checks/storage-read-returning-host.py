@@ -26,7 +26,10 @@ plan, and requires:
 - fabric: the tool's masks and parent rates equal those of
   drivers/storage/a733_mmc_platform.c, its read schema equals the schema
   the read tool's main() writes and the real record's, and its MBUS rule
-  equals include/a733_el3_mbus.h's two values; port 3-3's pre-launch words
+  uses the mask, ROM value and boot0 value of include/a733_el3_mbus.h, which
+  a733_el3_mbus_restore() compares with: a word whose fields hold the ROM's
+  value gets boot0's fields and keeps its other bits, and a word with any
+  other field value, such as DFS enabled, stays; port 3-3's pre-launch words
   0x03000002, 0xc3000000 and 0x84000000 give 0x03000002, 0x83000000 and,
   after the monitor's restore, 0x81000000 at 200, 600 and 600 MHz, and a word
   of 0x81000000 stays; the input command takes the words from a read record
@@ -167,7 +170,13 @@ def main(out, real):
     written = re.findall(r"r = \{'schema': '([^']+)'", reader)
     assert written == [tool.READ_SCHEMA] == [real['schema']], (written, real['schema'])
     mbus = (ROOT / 'include/a733_el3_mbus.h').read_text()
-    assert f'0x{tool.MBUS_ROM:08x}' in mbus and f'0x{tool.MBUS_RESTORED:08x}' in mbus
+    for name, value in (('A733_MBUS_FIELDS', tool.MBUS_FIELDS), ('A733_MBUS_ROM', tool.MBUS_ROM),
+                        ('A733_MBUS_BOOT0', tool.MBUS_RESTORED)):
+        assert f'#define {name} UINT32_C(0x{value:08x})' in mbus, name
+    restore = mbus.split('static inline unsigned a733_el3_mbus_restore(void)', 1)[1].split('#else', 1)[0]
+    assert '(mbus & A733_MBUS_FIELDS) != A733_MBUS_ROM' in restore and 'A733_MBUS_BOOT0' in restore
+    assert tool.restored([1, 2, 0xc4000000])[2] == 0xc1000000  # bit 30 is outside the fields
+    assert tool.restored([1, 2, 0x94000000])[2] == 0x94000000  # DFS enable (bit 28) set: not the ROM's fields
     assert tool.restored([1, 2, 0x84000000]) == [1, 2, 0x81000000] and tool.restored([1, 2, 0x81000000])[2] == 0x81000000
     good = read_record('fabric-read')
     assert tool.fabric_read(good, ddr) == (([0x03000002, 0x83000000, 0x81000000], [200000000, 600000000, 600000000]),

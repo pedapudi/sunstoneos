@@ -26,13 +26,16 @@ The fabric words come from this lifetime's own read of CCU 0x500, 0x580 and
 tools/board-bundles-next-read.py writes, on the DDR start's node and ROM
 identity), masked and converted to rates as the SD0 provider does. Every
 image's EL3 monitor restores MBUS before EL1 starts
-(include/a733_el3_mbus.h): it changes only the ROM's exact value
-0x84000000 (400 MHz) to boot0's 0x81000000 (600 MHz). The ROM sets
-0x84000000 again on every return, so a read before the launch sees it while
-the image sees the restored word; the tool applies the same rule. When the
-monitor skips the restore (a bus master active), the SD0 provider refuses
-the fabric word and the image stops with the monitor's MBUS line first in
-its log.
+(include/a733_el3_mbus.h): when the MBUS word under A733_MBUS_FIELDS equals
+the ROM's A733_MBUS_ROM (400 MHz), it sets those fields to boot0's
+A733_MBUS_BOOT0 (600 MHz). The ROM sets 400 MHz again on every return, so a
+read before the launch sees it while the image sees the restored word; the
+tool applies the same rule with the constants read from that header. The
+monitor also requires MSI_LITE0 released and the GPU, NPU, DMA0 and CE idle,
+which a FEL read before the launch does not see. When it skips the restore
+for any of these, the SD0 provider refuses the predicted MBUS word and the
+image stops (SD_REASON 3); the monitor writes its MBUS line only for an
+active bus master (codes 8 to 10) or a failure, not for the other skips.
 
 decode reads the runner's kernel.log and result record, checks every read line
 against the input's plan, and writes the card registers, the selected mode and
@@ -64,7 +67,16 @@ BUNDLES = {2: 'A', 3: 'B'}
 # The image only reads these words; no unit of it writes CCU 0x500, 0x580 or 0x588.
 FABRIC = (0x02002500, 0x02002580, 0x02002588)
 READ_SCHEMA = 'board-read-session-v1'  # tools/board-bundles-next-read.py, main()
-MBUS_ROM, MBUS_RESTORED = 0x84000000, 0x81000000  # include/a733_el3_mbus.h
+
+
+def header_constants(path=ROOT / 'include/a733_el3_mbus.h'):
+    """The #define NAME UINT32_C(0x...) constants of the monitor's MBUS header."""
+    found = re.findall(r'^#define (A733_\w+) UINT32_C\((0x[0-9a-fA-F]+)\)$', Path(path).read_text(), re.M)
+    return {name: int(value, 16) for name, value in found}
+
+
+_MBUS = header_constants()
+MBUS_FIELDS, MBUS_ROM, MBUS_RESTORED = _MBUS['A733_MBUS_FIELDS'], _MBUS['A733_MBUS_ROM'], _MBUS['A733_MBUS_BOOT0']
 FABRIC_MASK = (0x0300001f, 0x8700001f, 0x8700001f)
 PARENT_MHZ = ((24, 0, 0, 600, 0, 0, 0, 0), (24, 0, 800, 600, 480, 0, 0, 0), (24, 600, 0, 480, 400, 0, 0, 0))
 
@@ -154,8 +166,10 @@ def fabric(words):
 
 
 def restored(words):
-    """The words the image finds after the monitor's MBUS restore: only MBUS 0x84000000 changes."""
-    return [MBUS_RESTORED if i == 2 and w == MBUS_ROM else w for i, w in enumerate(words)]
+    """The words the image finds after the monitor's MBUS restore (a733_el3_mbus_restore): the MBUS
+    word's fields become boot0's value when they hold the ROM's; every other word stays."""
+    return [(w & ~MBUS_FIELDS) | MBUS_RESTORED if i == 2 and w & MBUS_FIELDS == MBUS_ROM else w
+            for i, w in enumerate(words)]
 
 
 def fabric_read(read, ddr):

@@ -13,11 +13,16 @@ The image runs on the returning platform: the EL3 monitor, EL1 platform and
 FreeRTOS kernel of the rank 9 native USB image (`rank-9-usb-v4`), with the
 monitor and platform objects of the kernel check that passed on port 3-3 with
 the vendor EL3 security writes and the MBUS restore (`build.py` lists each
-object's origin). Before EL1 starts, that monitor changes the MBUS clock word
-from the ROM's `0x84000000` (400 MHz) to boot0's `0x81000000` (600 MHz) when
-no bus master is active, and logs `MBUS <before> <after> <result>` as the
-first line of the result page (`include/a733_el3_mbus.h`). Two tasks run on
-core 0:
+object's origin). Before EL1 starts, that monitor restores MBUS
+(`include/a733_el3_mbus.h`): when the word's gate, DFS, update, source and
+divider fields hold the ROM's `0x84000000` (400 MHz) and MSI_LITE0 is
+released, it sets them to boot0's `0x81000000` (600 MHz). It skips the
+restore when the GPU or NPU is clocked, DMA0 is busy or CE has a task loaded
+(codes 8 to 10). It writes `MBUS <before> <after> <code>` as the first line
+of the result page only when the word changed, a skip had one of those
+codes, or the restore failed. A word that already holds boot0's value, a
+word with other field values, and an MSI_LITE0 that is not released all
+skip the restore with code 0 and no line. Two tasks run on core 0:
 
 - The PMIC task polls the production PMIC provider until the SD task asks it
   to park.
@@ -69,10 +74,14 @@ handoff and topology identifiers, the fabric words and rates, the PMIC and PF
 pin configurations, and the read plan. The fabric words come from the
 lifetime's own FEL read of CCU `0x500`, `0x580` and `0x588`
 (`tools/board-bundles-next-read.py`) on the DDR start's node and ROM
-identity. The tool applies the monitor's MBUS rule (only `0x84000000`
-becomes `0x81000000`), then masks the words and computes their rates as the
-SD0 provider does. If the monitor skips the restore, the provider refuses
-the MBUS word and the report says so, after the monitor's `MBUS` line. The plan is the supervised service's
+identity. The tool applies the monitor's MBUS rule with the mask and values
+of the monitor's header (fields equal to the ROM's value become boot0's),
+then masks the words and computes their rates as the SD0 provider does. The
+read cannot see the monitor's other conditions, MSI_LITE0 released and no
+active bus master. When the monitor skips the restore for any reason, the
+SD0 provider refuses the predicted MBUS word and the report says so
+(`SD_REASON=3`, with the provider's stage and fault); the monitor's `MBUS`
+line precedes the report only for codes 8 to 10. The plan is the supervised service's
 throughput plan, `throughput_plan(0, 4194304)` in
 `tools/check-a733-storage-read-supervised.py`: 128 sequential eight-sector
 reads from sector 0, 96 eight-sector reads at fixed pseudo-random offsets
@@ -235,4 +244,6 @@ other unit writes them. On port 3-3 a pre-launch read gives `0x03000002`,
 `0xc3000000` and `0x84000000`; the image's configuration is then
 `0x03000002`, `0x83000000` and `0x81000000` at 200, 600 and 600 MHz. Bit 30
 of `0xc3000000` is outside the mask, and `0x81000000` is the restored MBUS
-word.
+word. Every difference between the tool's prediction and the monitor's
+decision ends the same way: the provider refuses the word before any SD
+command.

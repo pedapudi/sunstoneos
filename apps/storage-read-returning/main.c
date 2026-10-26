@@ -245,9 +245,9 @@ SDRT_ENTRY int sdrt_quiet(void)
 /* The last step before the image's own exit after the SD task: stop the
  * card clock, so that a card left in the middle of a read stops clocking data
  * onto DAT1 and DAT2, which the ROM's return makes the JTAG TMS and TCK
- * inputs. The order is the vendor driver's (sunxi-mmc-v5p3x.c,
- * __sunxi_mmc_do_oclk_onoff, lines 364-400, and its FIFO and DMA interface
- * resets, sunxi_mmc_reset_fifo and the error path at lines 936-951):
+ * inputs. The order is the vendor driver's: the clock update of
+ * sunxi-mmc-v5p3x.c lines 364-400, and the FIFO and DMA interface resets of
+ * sunxi-mmc.c lines 669-680 (sunxi_mmc_reset_fifo) and 936-951:
  *   1. if a transfer is outstanding (a read submitted and not taken, a
  *      command still started, or a busy data or command state machine),
  *      reset the FIFO and the DMA interface (GCTRL bits 1 and 2) and wait
