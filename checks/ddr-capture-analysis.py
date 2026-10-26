@@ -99,6 +99,9 @@ def main():
     diff = report["kind_diff"]["registers"]
     assert sorted(diff) == ["0x%08x" % CONTROLLER["lifetime"], "0x%08x" % PHY["lifetime"]], sorted(diff)
     assert all(entry["mask"] == 3 for entry in diff.values())
+    completed, report = analyse(full, args.output / "kind-diff-excluded.json", "--trained-kind", "pstate0",
+                                "--baseline-kind", "init-only", "--exclude-block", "controller")
+    assert completed.returncode == 0 and sorted(report["kind_diff"]["registers"]) == ["0x%08x" % PHY["lifetime"]]
     assert report["boards"] == 2 and report["lifetimes"] == 4
 
     one_capture = [p for p in full if p.name.endswith("-c0")]

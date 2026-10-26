@@ -89,10 +89,37 @@ into two groups:
   `0x30000` registers, controller word `0x0a020040` (`0x2f2f` against
   `0x2e2e`, the MR14 pattern) and parameter words 32–51.
 
-The training-step value at `0x0a9b0010` read `0x125f` in both kinds. With
-one lifetime per kind on one board, the second group mixes kind and
-lifetime effects; P-state-0-only lifetimes alone will give each register's
-spread, and the initialization-only diff will give the trained set.
+The training-step value at `0x0a9b0010` read `0x125f` in both kinds.
+
+**Eight lifetimes on both boards** (the [runbook status](../board-runbooks/dram-training-capture.md)
+lists them) give the first restore sets:
+
+- **The firmware accepts the initialization-only step value.** It reported
+  result 7 after 36 ms on both boards, and `init_DRAM` reached the size line
+  after 40 ms; the simple test then failed, because DRAM was untrained.
+- **The `0xa0000` block is left out of the set.** Between two
+  P-state-0-only lifetimes of one board, 3,474 of the 3,575 words of its
+  P-state 0 copy changed, mostly by one or two bits, including words that
+  boot0 writes with fixed values. That behaviour is neither configuration
+  nor a training result; its function needs the vendor reference, and the
+  restore relies on boot0 rewriting the block on its own path.
+- **The restore sets agree.** Without that block, the P-state-0-only minus
+  initialization-only diff holds 1,026 registers on 3-3 and 1,052 on 3-1,
+  1,008 of them on both: about 500 byte-lane registers, 440 address/command
+  sequencer words, 45 message-block fields, 20 `0x30000` registers, the
+  saved Vref and MR words, four or five controller words and a few others.
+  About 660 of them never varied between lifetimes. The record carries the
+  union of 1,070 with each board's values.
+- **The chip IDs differ in their last word only** (`0x40892413` on 3-3,
+  `0x40792413` on 3-1). Trained byte-lane values differ between the boards
+  by a median of 2 codes, so a record belongs to one board, as the chip-ID
+  check requires.
+
+**Projected DRAM time with a restore:** 40 ms for boot0's
+initialization-only path, plus about 1 ms for some 1,070 16-bit PHY writes
+and a few mode-register writes (*estimated* at 1 µs per APB write), plus the
+20 ms quick check: about 60 ms against 5,093 ms of training today, a saving
+of about 5.0 s per cold boot.
 
 The capture must also record the LPDDR5 mode registers. boot0's stored
 parameter set has `dram_tpr10` bit 29 set, so every boot runs the save
@@ -280,7 +307,7 @@ fresh trainings.
 
 | Quantity | Budget | Basis |
 | --- | --- | --- |
-| DRAM interval with restore | 500 ms; prediction 200–500 ms | *Estimated*: the 151 ms P-state 1 run includes PHY setup and firmware load |
+| DRAM interval with restore | 500 ms; prediction about 60 ms | 40 ms measured for the initialization-only path on both boards, plus *estimated* writes and the quick check |
 | Record read | 10 ms for 64 KiB in one multi-sector read | *Estimated* from boot0's card transfer mode |
 | CRC over the record | Measured in the FEL prototype | Depends on boot0's clock and cache state |
 | Temperature read | 5 ms | Unmeasured; card variant only |

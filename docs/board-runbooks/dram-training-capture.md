@@ -1,13 +1,19 @@
 # DRAM training captures on ports 3-1 and 3-3
 
-Status: **frozen for both boards; two port 3-3 lifetimes have run.** On
-2026-10-25 a four-P-state lifetime with the v3 set
-(`board-session-20261025-21`) and a P-state-0-only lifetime with the v5 set
-(`board-session-20261025-25`) completed all six stages in both captures,
-and every checked prediction held. The P-state-0-only training took
-4,441 ms from `DRAM BOOT DRIVE INFO` to `Actual DRAM SIZE`, against 5,098 ms
-for the four-P-state one: the 2040 MHz run costs about 4.4 s whether it
-runs alone or last. Port 3-1 has not run. These
+Status: **frozen for both boards; eight lifetimes have run, and every
+command and checked prediction passed.** All on 2026-10-25:
+
+| Board | Four P-states | P-state 0 only | Initialization only |
+| --- | --- | --- | --- |
+| 3-3 | `board-session-20261025-21` | `-25`, `-27` | `-34` |
+| 3-1 | `board-session-20261025-26` | `-31`, `-35` | `-33` |
+
+From `DRAM BOOT DRIVE INFO` to `Actual DRAM SIZE`, the four-P-state
+training took 5,093–5,098 ms and the P-state-0-only one 4,437–4,451 ms, so
+the 2040 MHz run costs about 4.4 s alone as well. The initialization-only
+run reached `Training result is = 7` after 36 ms and the size line after
+40 ms on both boards, with `dram_tpr10` `0x80010000` and a failing simple
+test, as predicted. These
 are the captures of [the training-restore design](../designs/dram-training-restore.md#captures-identify-which-registers-training-sets).
 Each lifetime trains DRAM with the unchanged FEL DDR step and then captures
 twice: the parameter block that boot0 leaves in SRAM, the SID chip ID and
@@ -144,19 +150,70 @@ two kinds (the `0xa0000` block, the address/command sequencer, a group of
 master registers and the multi-P-state message-block fields), so lifetime
 variation is measured within one kind only.
 
-| Kind, per board | Room temperature | Cold | Warm | Run so far on 3-3 | On 3-1 |
-| --- | --- | --- | --- | --- | --- |
-| P-state 0 only (`p0-`) | 5 | 3 | 3 | 1 | 0 |
-| Initialization only (`in-`) | 2 | — | — | 0 | 0 |
-| Four P-states (`dc-`) | 2 | — | — | 1 | 0 |
+The eight lifetimes settle the room-temperature questions, so the schedule
+is reduced to temperature lifetimes only:
 
-So port 3-3 still needs four room-temperature, three cold and three warm
-P-state-0-only lifetimes, two initialization-only lifetimes and one more
-four-P-state lifetime; port 3-1 needs the full column. A cold lifetime
-starts after at least one hour unpowered in the coolest available place, a
-warm one within a minute of removing power after a sustained CPU and memory
-load; `T` records either. The four-P-state lifetimes serve the status class
-and the vendor path's own variation; two per board are enough for that.
+| Kind, per board | Room temperature | Cold | Warm | Still needed per board |
+| --- | --- | --- | --- | --- |
+| P-state 0 only (`p0-`) | 2, done | 2 | 2 | 2 cold, 2 warm |
+| Initialization only (`in-`) | 1, done | — | — | none |
+| Four P-states (`dc-`) | 1, done | — | — | none |
+
+That is eight more power cycles in all, four per board, against about 25
+in the earlier schedule. The reasons, from
+`~/.cache/sunstoneos/evidence/dram-training-analysis-20261025/`:
+
+- **The restore set agrees across boards.** The P-state-0-only minus
+  initialization-only diff, without the `0xa0000` block, gives 1,026
+  registers on 3-3 and 1,052 on 3-1; 1,008 are in both. The union of 1,070
+  registers is restored on each board with that board's values; a register
+  outside one board's diff holds its initialization value there, so
+  restoring it is harmless.
+- **Trained values move by a few codes between lifetimes.** Across the two
+  P-state-0-only lifetimes of each board, the largest per-board change of a
+  byte-lane register in the set has median 2 codes; 265 of 348 changed by at
+  most 2 and 307 by at most 8. The saved Vref bytes (parameter words 32–51)
+  changed by at most 13 codes, 52 of 80 by at most 2. More room-temperature
+  lifetimes would refine these spreads, which only inform the retraining
+  interval; the restore's safety rests on the memory tests.
+- **About 660 registers of the set never varied** across the four
+  P-state-0-only lifetimes; only the initialization-only diff finds them,
+  which a larger lifetime count would not.
+- **The residual risk** is a trained register that equals its
+  initialization value in every captured lifetime on both boards. On each
+  board 2–4% of the union equals the initialization value; if the boards
+  are independent, about 2 of the 1,070 registers could be missed by both,
+  and the restored-boot memory tests are the check for that.
+- **The unknown is temperature.** Cold and warm lifetimes set the record's
+  temperature limit and the retraining interval, so they have the most
+  value next: cold first, because a cold start is the common case after a
+  long power-off, then warm.
+
+A cold lifetime starts after at least one hour unpowered in the coolest
+available place, a warm one within a minute of removing power after a
+sustained CPU and memory load; `T` records either.
+
+**A watchdog relaunch does not replace a power-cycled lifetime yet.** boot0
+resets the DRAM side on every initialization: `0x57a4c` gates the MBUS clock
+and asserts the NSI and DRAM resets (CCU `0x588`, `0x584` bit 16 and
+`0x0c0c` bit 16, named `MBUS_CLK_REG`, `NSI_BGR_REG` and `DRAM_BGR_REG` in
+the vendor U-Boot header
+`arch/arm/include/asm/arch-sunxi/plat-sun60iw1p1/clock_autogen.h` lines 1723,
+1733 and 2896, of the sister chip; the A733 map is assumed to match),
+reprograms PLL_DDR (`0x020` at `0x57b74`) and releases the resets; the
+firmware then runs device initialization (step bit 0 of `0x125f`), which
+writes every mode register from the message block. boot0 has no standby
+or self-refresh resume path (no such string, unlike the H616 boot0's
+"Use rtc to store dram tuning para"), so a reset retrains exactly as a cold
+start does. What a SoC reset does not repeat is the power cycle itself:
+DRAM supply and data stay up, the PHY's power-on state is not recreated
+(the `0xa0000` block, which changes in most words between power-cycled
+lifetimes, would show whether its contents survive), and the board starts
+warm. Retraining within one lifetime has also never been run on these
+boards, and intentional watchdog expiry is not qualified. A relaunch can
+replace room-temperature lifetimes once one lifetime compares a power-on
+capture with a capture after a relaunch and finds the trained registers
+within their lifetime spread.
 
 The analysis groups captures by lifetime and chip ID and records each
 capture's note. A temperature reading needs a later THS read in the same
@@ -171,8 +228,8 @@ analysis touches no board, so it uses the classifier from
 ```sh
 A=/home/sunil/git/sunstoneos-worktrees/dram-fast-boot-1025/tools/analyse-ddr-captures.py
 $PY -B $A <every p0-capture-N directory> --output <new report path>.json
-$PY -B $A <every p0- and in-capture-N directory> \
-  --trained-kind pstate0 --baseline-kind init-only --output <new report path>.json
+$PY -B $A <one board's p0- and in-capture-N directories> --trained-kind pstate0 \
+  --baseline-kind init-only --exclude-block phy-csr-0xa0000 --output <new report path>.json
 ```
 
 The tool reads each capture's training kind from its DDR record. Parameter

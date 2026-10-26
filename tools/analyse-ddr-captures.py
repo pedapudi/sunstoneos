@@ -133,6 +133,8 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--trained-kind", help="training kind whose captures hold trained values, e.g. pstate0")
     parser.add_argument("--baseline-kind", help="training kind to diff against, e.g. init-only")
+    parser.add_argument("--exclude-block", action="append", default=[],
+                        help="leave a block out of the kind diff, e.g. phy-csr-0xa0000")
     args = parser.parse_args()
     captures = [load(path) for path in args.captures]
     # Captures limited with --stages share a prefix of the stage tables;
@@ -177,7 +179,7 @@ def main():
             fail("--trained-kind and --baseline-kind each need at least one capture")
         registers = {}
         for key, kind in classes.items():
-            if kind == "status":
+            if kind == "status" or block_of(key) in args.exclude_block:
                 continue
             a = {c["values"][key] for c in trained}
             b = {c["values"][key] for c in baseline}
@@ -189,6 +191,7 @@ def main():
                 registers[name(key)] = {"block": block_of(key), "mask": mask,
                                         "trained": sorted(a), "baseline": sorted(b)}
         kind_diff = {"trained_kind": args.trained_kind, "baseline_kind": args.baseline_kind,
+                     "excluded_blocks": sorted(args.exclude_block),
                      "count": len(registers),
                      "by_block": dict(Counter(r["block"] for r in registers.values())),
                      "registers": registers}
