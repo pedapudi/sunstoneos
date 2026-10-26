@@ -1,9 +1,16 @@
 # Design: UHS-I SDR104 on the microSD slot
 
-Status: **implemented and host-checked**. No board has run it, and no SD
-command has yet run on either board, so the existing default-speed and
-high-speed profiles are unqualified as well. The user approved switching the
-microSD signalling to 1.8 V on 2026-10-25 ([handoff](../handoff.md)).
+Status:
+- **High speed (profile 2): qualified for returning reads** on port 3-3 by
+  lifetime A (`board-session-20261025-30/port-3-3/sd-ret-a`): 256 reads, every
+  CRC recorded, card clock stopped at exit.
+- **UHS-I SDR104 (profile 3): not qualified.** Lifetime B
+  (`board-session-20261025-32/port-3-3/sd-ret-b`) stopped at CMD11 before any
+  read; "Lifetime B: CMD11 completion" below gives the diagnosis. The fix is
+  in the driver and its emulation, with no board run yet.
+
+The user approved switching the microSD signalling to 1.8 V on 2026-10-25
+([handoff](../handoff.md)).
 
 The read-only SD service gains a fourth bus profile, UHS-I SDR104 (profile 3).
 It asks the card for 1.8 V signalling during identification, switches the
@@ -290,6 +297,87 @@ state. Goal section 4 therefore needs no host backup and no data-partition
 confinement for this test; the existing host backup remains the preservation
 record. [The board runbook](../board-runbooks/sd-uhs.md) gives the commands
 and predictions.
+
+## Lifetime B: CMD11 completion
+
+Port 3-3 ran profile 3 on 2026-10-25 in the returning image
+(`board-session-20261025-32/port-3-3/sd-ret-b`). The image stopped after
+1.16 s, before any read. Its report, decoded from the code:
+
+| Field | Value | Meaning |
+| --- | --- | --- |
+| `SD_REASON`, `SD_STAGE` | 3, 1 | The provider returned RETAINED while the image polled identification (`apps/storage-read-returning/main.c`, `stop(3)`); reason 3 covers every identification failure, including the fabric refusal |
+| `SD_PLATFORM_STAGE`, `SD_PLATFORM_FAULT` | `0xd`, 1 | Stage IDENTIFY; the provider failed at its identification deadline (1.15 s) |
+| `SD_SIGNAL` | 0 | The PF selector was never written; the bank stayed at 3.3 V |
+| `SD_CORE_STATE`, `SD_RESULT_ERROR` | 1, 0 | The core was still identifying and had not faulted |
+| `SD_CORE_COMMAND`, `SD_CORE_ARGUMENT` | `0x9000014b`, 0 | CMD11 with START, VOLTAGE_SWITCH (bit 28), CRC and response |
+| `SD_CORE_PROTOCOL`, `SD_CORE_STEP` | `0x1b`, 2 | `P_SD_VOLTAGE`, waiting for the command's completion bits |
+| `SD_RESULT_INTERRUPTS` | `0x10400` | Raw interrupts: voltage switch (bit 10) and SDIO (bit 16); no command done (bit 2), no error |
+| `SD_RESULT_STATUS` | `0x1f906` | Read before CMD11 was written: response index `0x3f` (ACMD41's R3), DAT3 high, FIFO empty, no busy |
+| `SD_RESULT_RESPONSE` | `0x120` | The last response the core stored: CMD55's R1 (APP_CMD, READY_FOR_DATA), not CMD11's |
+| `SD_CLOCK_OFF` | 3 | The clock update did not complete; the module clock was gated |
+
+The reference sequence, step by step ("K" is the board kernel's
+`bsp/drivers/mmc/sunxi-mmc.c`, "V" its `sunxi-mmc-v5p3x.c`, "H" its
+`sunxi-mmc.h`, "C" its `drivers/mmc/core/core.c`, at `2ac08e8c`; mainline
+`core.c` at v6.12 has the same lines):
+
+1. **CMD11.** The core sends it with R1 (C:1220-1226). The host adds
+   VOLTAGE_SWITCH (bit 28) to the command and masks only the errors and the
+   voltage-switch bit (10) (K:2656-2659). The interrupt handler finishes the
+   request when a done bit is set; the done bits include bit 10
+   (K:1333-1338, H:221-223), and command done is not unmasked for CMD11.
+   **CMD11 therefore completes on bit 10**, and the handler clears it by
+   writing the bits back (K:1345).
+2. **DAT[3:0] low.** The core waits 1 ms and requires the card busy
+   (C:1235-1239); the host's busy check reads DAT3 low while switching
+   (K:2291-2311).
+3. **Card clock stop.** `mmc_host_set_uhs_voltage` sets the clock to 0
+   (C:1190-1192); the host's clock update carries VOLTAGE_SWITCH and masks
+   DAT0 (V:364-379).
+4. **1.8 V.** The PF pin state and selector change (K:2161-2246; on this
+   board, `GPIO_POW_VAL_SET_CTL`, as the design's PF section describes).
+5. **Clock gated at least 10 ms, then restarted** (C:1194-1200), again with
+   VOLTAGE_SWITCH in the update (V:378-379).
+6. **DAT[3:0] high, 1 ms later** (C:1250-1258): the host's busy check waits
+   up to 10 ms for both bit 10 and command done (H:226-227, K:2283-2311).
+   Command done arrives only here, at the end of the switch.
+7. **Failure** after CMD11 power-cycles the card (C:1262-1265).
+
+**The failed step is 1.** The core waited for command done after CMD11
+(`drivers/storage/sunxi_mmc.c`, command step 2), as for every other command.
+The controller had reported CMD11 with bit 10 and withholds command done
+until step 6, which the core never reached, so the wait ran until the
+identification deadline. The emulation's card model reported command done at
+CMD11, so the checks passed; the model now reports bit 10 there, as the board
+did, and command done with bit 10 again at the end of the switch.
+
+**State left.** The PF bank stayed at 3.3 V. No error or timeout bit was
+set, so the card most likely answered CMD11 and then drove its lines low,
+waiting for the clock to stop. The clock ran at the identification rate until
+the image's clock stop gated the module clock, 1.16 s after start. A card that
+had accepted CMD11 may then have switched its outputs to 1.8 V while the bank
+stayed at 3.3 V. The specification allows only a power cycle to leave this
+state (C:1262-1265), so whole-board power removal is the right recovery.
+
+**Fix (driver and emulation, not run on a board).**
+- CMD11 completes on bit 10 and reads its R1 then; nothing else is checked
+  after it, as in the vendor driver (`sunxi_mmc.c`, command steps 2 and 3).
+- After the clock restart the core clears every flag the update set, as the
+  vendor does after each clock update (V:386-388), and the switch ends only
+  on DAT3 high with both bit 10 and command done arriving afterwards
+  (`sd_signal`, steps 4 and 5), as K:2296-2307 requires.
+- The returning image's clock stop carries VOLTAGE_SWITCH while a switch is
+  in progress (V:378-379).
+- `checks/storage-read-sd-modes.py`'s UHS card model reports CMD11 as the
+  board did, and the switch's end only after the clock restart;
+  `checks/storage-read-returning.py` profile 3 passes with the fix, and the
+  image of set 28 stops in that model at CMD11, as on the board.
+
+**Still open.** The fix has not run on a board, so the board's own behavior
+at the switch's end is not confirmed: whether bit 10 and command done arrive
+after the restarted clock as K:2296-2307 expects, and whether this card
+accepts the switch at all.
 
 ## Sources
 

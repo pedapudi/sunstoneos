@@ -292,7 +292,10 @@ SDRT_ENTRY int sdrt_clock_off(void)
     if(ok){
         mmio_write(base+SUNXI_SMHC_CLKCR,(mmio_read(base+SUNXI_SMHC_CLKCR)&~(card_on|low_power))|mask_data0);
         __asm__ volatile("dsb sy":::"memory");
-        mmio_write(base+SUNXI_SMHC_CMD,SUNXI_SMHC_UPDATE);
+        /* During the voltage switch the board kernel's clock updates carry
+         * the voltage-switch bit (sunxi-mmc-v5p3x.c:378-379). */
+        mmio_write(base+SUNXI_SMHC_CMD,SUNXI_SMHC_UPDATE|
+            (sdrt.platform.core.signal_window?SUNXI_SMHC_CMD_VOLTAGE_SWITCH:0u));
         ok=wait_clear(base+SUNXI_SMHC_CMD,SUNXI_SMHC_CMD_START);
         mmio_write(base+SUNXI_SMHC_RINT,mmio_read(base+SUNXI_SMHC_RINT)&~SUNXI_SMHC_INT_SDIO);
     }

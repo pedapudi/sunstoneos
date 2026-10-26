@@ -9549,7 +9549,8 @@
  "storage-read-returning-host.py": {
   "cache_areas": [],
   "docs": [
-   "apps/storage-read-returning/README.md"
+   "apps/storage-read-returning/README.md",
+   "docs/board-runbooks/sd-uhs.md"
   ],
   "library": false,
   "pure_host": false,
@@ -9566,7 +9567,7 @@
    "apps/storage-read-returning/README.md",
    "docs/board-runbooks/sd-uhs.md",
    "docs/designs/mbus-restore.md",
-   "docs/designs/sd-dma.md"
+   "docs/designs/sd-uhs.md"
   ],
   "library": false,
   "pure_host": false,
@@ -9603,7 +9604,9 @@
  },
  "storage-read-sd-modes.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/designs/sd-uhs.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [

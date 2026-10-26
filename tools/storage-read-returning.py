@@ -219,6 +219,16 @@ def parse_input(raw):
     return {'generation': generation, 'profile': profile, 'voltage_mask': mask, 'plan': plan}
 
 
+# SD_REASON values (apps/storage-read-returning/README.md); SD_STAGE values
+# (sdrt.h, enum sdrt_stage); SD_CORE_PROTOCOL values (drivers/storage/sunxi_mmc.c).
+REASONS = {1: 'end deadline or provider failure', 2: 'provider construction', 3: 'identification or mode selection',
+           4: 'card registers', 5: 'read submission', 6: 'read in progress', 7: 'read result',
+           9: 'PMIC not parked or request outstanding', 10: 'card clock stop not confirmed'}
+STAGES = ('construct', 'identify', 'card', 'read', 'poll', 'take')
+PROTOCOLS = ('IDLE', 'SD_IF', 'SD_APP', 'SD_OCR', 'MMC_QUERY', 'MMC_OCR', 'CID', 'RCA', 'CSD', 'SELECT', 'STATUS',
+             'BLOCKLEN', 'EXT', 'EXT_STATUS', 'READ', 'READ_STATUS', 'WRITE_PRE', 'WRITE', 'WRITE_STATUS',
+             'SD_SCR_APP', 'SD_SCR', 'SD_WIDTH_APP', 'SD_WIDTH', 'SD_SWITCH_CHECK', 'SD_SWITCH_SET', 'SD_CLOCK',
+             'SD_MODE_STATUS', 'SD_VOLTAGE', 'SD_SIGNAL', 'SD_UHS_CHECK', 'SD_UHS_SET', 'SD_TUNE', 'SD_TUNE_RECOVER')
 LINE = re.compile(r'R ([0-9a-f]{3}) ([0-9a-f]{8}) ([0-9a-f]{2}) ([0-9a-f]{8}) ([0-9a-f]{8})')
 CARD = re.compile(r'CARD ([0-9a-f]{32}) ([0-9a-f]{32}) ([0-9a-f]{8}) ([0-9a-f]{4}) ([0-9a-f]{16}) ([0-9a-f]{16}) '
                   r'([0-9a-f]{8}) ([0-9a-f]{8}) ([0-9a-f]{8}) ([0-9a-f]{16}) ([0-9a-f]{8})')
@@ -266,6 +276,12 @@ def decode_log(log, raw_input, status=None):
     require(words.get('SD_READS') == len(value['reads']) and words.get('SD_PLAN') == len(plan), 'read count lines')
     if value['first_sector_hex'] is not None:
         require(len(value['first_sector_hex']) == 1024 and value['reads'], 'first sector dump')
+    if value['outcome'] == 'stopped':
+        reason, stage, protocol = words.get('SD_REASON'), words.get('SD_STAGE'), words.get('SD_CORE_PROTOCOL')
+        value['stop'] = {'reason': reason, 'reason_text': REASONS.get(reason),
+                         'stage': STAGES[stage] if isinstance(stage, int) and stage < len(STAGES) else stage,
+                         'core_protocol': PROTOCOLS[protocol] if isinstance(protocol, int) and protocol < len(PROTOCOLS)
+                         else protocol, 'clock_off': words.get('SD_CLOCK_OFF')}
     value['complete'] = value['outcome'] == 'complete' and len(value['reads']) == len(plan) and status in (0, None)
     if value['complete']:
         value['throughput'] = throughput().throughput_summary(value['reads'])
@@ -317,8 +333,10 @@ def main(argv=None):
     value = decode(args.run, args.input.read_bytes())
     args.output.write_text(json.dumps(value, indent=1) + '\n')
     print(json.dumps({k: value[k] for k in ('status', 'outcome', 'complete')} |
-                     ({'throughput': value['throughput']} if value.get('throughput') else {}), indent=1))
-    return 0 if value['complete'] else 2
+                     ({'throughput': value['throughput']} if value.get('throughput') else {}) |
+                     ({'stop': value['stop']} if value.get('stop') else {}), indent=1))
+    # A decoded run exits 0 whatever its outcome; a log that does not decode exits nonzero.
+    return 0
 
 
 if __name__ == '__main__':

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The returning SD0 read image's actual setup, SD task and report under the SD card models.
 
-usage: storage-read-returning.py --image ELF --board-config CONFIG --output NEW_DIRECTORY
+usage: storage-read-returning.py --image ELF --board-config CONFIG --output NEW_DIRECTORY [--case NAME]...
 
 Runs, under Unicorn, the linked image's sdrt_setup(), sdrt_bind(), sdrt_step()
 until it ends, sdrt_quiet() and sdrt_report() for each case, with the card
@@ -20,7 +20,11 @@ Cases:
 - profile-2: high speed at 50 MHz, all 256 reads, each read's CRC-32 equal to
   that of the model's payload, the throughput summary computed;
 - profile-3: S18R, CMD11, one PF selector write, SDR104 at 150 MHz, the
-  64-delay CMD19 sweep, then the same 256 reads;
+  64-delay CMD19 sweep, then the same 256 reads. The card model reports
+  CMD11's response with the voltage-switch bit only and command done only
+  at the end of the switch, as port 3-3 did in lifetime B
+  (board-session-20261025-32: RINT 0x10400 while waiting); an image that
+  waits for command done after CMD11 stops at the identification deadline;
 - window: the clock passes the plan's end after 10 reads; the image stops
   starting reads and reports 10 of 256 with "INCOMPLETE ... window";
 - absent: card detect reports no card; the provider stops and the report
@@ -255,7 +259,7 @@ def run_case(image, raw, profile, variant, registers=None):
     return m, r, quiet, steps
 
 
-def run(elf, board, out):
+def run(elf, board, out, only=()):
     out.mkdir(parents=True, exist_ok=False)
     image = harness.Image(elf, LAYOUTS)
     for name in HOOKS + ('sdrt_setup', 'sdrt_bind', 'sdrt_step', 'sdrt_quiet', 'sdrt_report', 'sdrt'):
@@ -269,6 +273,7 @@ def run(elf, board, out):
                                    ('board-3', 3, 'nominal'), ('board-mbus-skip', 2, 'nominal'),
                                    ('stall-update', 2, 'stall-update-final'),
                                    ('stall-reset', 2, 'crc-read-stall-reset')]:
+        if only and name not in only: continue
         registers = dict(PORT_3_3)
         if name.startswith('board-'):
             (fabric, fabric_hz) = host.fabric(host.restored([PORT_3_3[a] for a in host.FABRIC]))
@@ -341,6 +346,10 @@ def run(elf, board, out):
                          'pf_selector_writes': m.pf_writes, 'log_bytes': len(m.log.encode()),
                          'throughput': value.get('throughput')}
         assert len(m.log.encode()) <= 16127 - 200, 'log does not fit the result page with the start lines'
+    if only:
+        (out / 'result.json').write_text(json.dumps({'passed': True, 'physical_access': False, 'cases': results,
+            'image_sha256': hashlib.sha256(Path(elf).read_bytes()).hexdigest(), 'selected': list(only)}, indent=1) + '\n')
+        print('PASS returning SD0 read image: ' + ', '.join(only)); return
     # Lifetime A's template words: 0xc3000000 has bit 30 outside the fabric mask.
     old = dict(board, fabric=[0x03000002, 0xc3000000, 0x81000000], fabric_hz=[200000000, 600000000, 600000000])
     m = Card(image, 2); m.regs.update(PORT_3_3)
@@ -360,5 +369,6 @@ def run(elf, board, out):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     for name in ('image', 'board_config', 'output'): parser.add_argument('--' + name.replace('_', '-'), type=Path, required=True)
+    parser.add_argument('--case', action='append', default=[], help='run only the named cases')
     a = parser.parse_args()
-    run(a.image, json.loads(a.board_config.read_text()), a.output)
+    run(a.image, json.loads(a.board_config.read_text()), a.output, tuple(a.case))

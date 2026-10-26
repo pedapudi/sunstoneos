@@ -1,6 +1,13 @@
 # Returning microSD reads
 
-Status: **implemented and host-checked; not run on a board.** The image reads
+Status: **qualified at high speed; SDR104 not qualified.** Lifetime A on
+port 3-3 (`board-session-20261025-30`) completed all 256 reads in profile 2.
+Lifetime B (`board-session-20261025-32`) stopped at CMD11 in profile 3; the
+driver fix is in the emulation, not on a board
+([design](../../docs/designs/sd-uhs.md), "Lifetime B: CMD11 completion").
+DMA reads are designed, not built ([design](../../docs/designs/sd-dma.md)).
+
+The image reads
 the microSD card on SDC0 in SD profile 2 (high speed, 3.3 V) or profile 3
 (UHS-I SDR104, 1.8 V), returns to the boot ROM, and leaves its result in DRAM
 for the host to read over FEL. It is the result path for boards whose USB-C

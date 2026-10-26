@@ -1,177 +1,225 @@
-# Design note: larger SD reads with descriptor DMA
+# Design: SD reads with descriptor DMA
 
-Status: **proposed for the performance panel**; nothing here is implemented.
-The first board measurement of SD reads, at high speed, shows that the fixed
-cost of each request and the read task's tick yield set the rate, while
-programmed I/O (PIO) keeps up with the 50 MHz bus. Larger requests through the
-controller's descriptor DMA (IDMAC) are needed to approach the bus rate.
+Status: **designed, not built.** The performance and simplicity panel
+(three lenses, two rounds) accepted the design with no open blocking finding.
+An unbuilt first pass of the code is on `work/sd-dma-1025` (`29bc8a2c`);
+"Next steps" in `docs/board-runbooks/sd-uhs.md` lists what remains. The design changes how the SD0 driver reads: one CMD18 per
+request of up to 128 KiB, moved by the controller's internal DMA engine
+(IDMAC) in the board kernel's order, with no CMD13 after a read, and a
+returning image that measures each read without scheduler gaps. The card is
+never written.
 
-## What lifetime A measured
+## What the first board measurement showed
 
-Port 3-3 ran the returning SD image in SD profile 2 (four-bit high speed,
-50 MHz) on 2026-10-25 (`board-session-20261025-30/port-3-3/sd-ret-a`). Each of
-the 256 reads records the time from the first poll after submission to
-completion (`apps/storage-read-returning/main.c:205-220`). The supervised
-checker's summary of those times gives 1.40 MB/s for 4 KiB sequential reads,
-1.66 MB/s for 4 KiB random reads and 1.16 MB/s for single sectors, which it
-splits into 355 µs per block and 85 µs per request.
+Port 3-3 read 256 requests in SD profile 2 (four-bit high speed, 50 MHz) on
+2026-10-25 with the returning image (`board-session-20261025-30/port-3-3/sd-ret-a`):
 
-That split comes from means that two populations dominate:
+- **Programmed I/O nearly kept up with the bus.** Seven more blocks added
+  (610 − 438) / 7 ≈ 25 µs each, against 20.8 µs per 512-byte block on the
+  bus (1,042 clocks with CRC and start and end bits). The difference fits 128
+  FIFO reads of about 190 ns each.
+- **Each request cost about 417 µs** beyond its bus time. The driver part is
+  about 120–170 µs: every platform poll re-checks about 25–30 clock, GIC and
+  pin registers (`drivers/storage/a733_mmc_platform.c:102-150`, `:439-458`),
+  every register access checks the task context and reads the clock twice,
+  and every read is followed by CMD13 (`drivers/storage/sunxi_mmc.c:841-842`).
+  The card's access time is the rest, about 250 µs; random reads add about
+  300 µs.
+- **113 of 256 reads were rounded to 2 ms steps.** The read task polls a
+  transfer for at most 1 ms per wake and then sleeps a tick
+  (`apps/storage-read-returning/main.c:218`, `:374`), so a longer read is
+  seen only at the next wake.
 
-- **Reads that completed within one poll budget.** The 32 single-sector reads
-  took 438–444 µs. The fastest 4 KiB reads took 610–1000 µs (74 of 128
-  sequential, 36 of 96 random). From the minima, seven more blocks cost
-  (610 − 438) / 7 ≈ 25 µs each, against 20.5 µs for 512 bytes on the bus,
-  so PIO keeps up with the bus. The fixed cost of a request is about 413 µs.
-- **Reads that outlasted it.** The other 113 reads took 1.25–13.9 ms, and most
-  of them exactly 1,890, 3,890, 5,890 or 7,890 µs. The read task polls a
-  transfer for at most 1 ms per wake (`main.c:218`) and then sleeps one
-  scheduler tick (`main.c:374`), so each further wake adds 2 ms, and a
-  transfer that completes during a sleep is seen only at the next wake. These
-  times bound when the card finished, not how long it took. In the sequential
-  pattern they come in runs of eight consecutive reads (reads 16–31, 48–55,
-  72–79, 96–103 and later), that is in whole 32 KiB ranges, which points to
-  the card's internal reads rather than the host.
+## The vendor read path
 
-The 413 µs fixed cost of a request has three parts:
+The board kernel's SD0 driver (`allwinner,sunxi-mmc-v5p3x`) reads every data
+command through IDMAC. The full sequence, with every register and citation,
+is in `~/.cache/sunstoneos/evidence/sd-dma-20261025/vendor-idmac-sequence.md`;
+"K" below is the board kernel's `bsp/drivers/mmc/sunxi-mmc.c`, "V" its
+`sunxi-mmc-v5p3x.c` and "H" its `sunxi-mmc.h`, at `2ac08e8c`.
 
-- **Platform polls.** In the model of `checks/storage-read-returning.py`, a
-  single-sector read takes 17 platform polls and 828 checked register
-  accesses. Every poll checks card presence, takes the register lock and
-  re-reads the clock, fabric and pin state (`drivers/storage/a733_mmc_platform.c:102-150`,
-  `controller()` at `:439-458`), and every access checks the task context
-  (`a733_mmc_platform_native.c:10-33`). On the board this is likely 150–250 µs.
-- **Two commands per read.** After each CMD17 or CMD18 the driver confirms
-  the card's state with CMD13 (`drivers/storage/sunxi_mmc.c:841-842`).
-- **The card's access time** before the first data block, typically
-  100–300 µs for a read.
+- **FIFO path:** `GCTRL` bit 31 (FIFO accessed by the CPU) stays clear, so
+  the FIFO feeds IDMAC (H:156-157, K:729-735).
+- **Once:** FIFO thresholds `FTRGL` = `0x200700F8` (8-word bursts, receive
+  threshold 7; K:719, V:52) and the descriptor list base `DLBA` = physical
+  address >> 2 (K:727, V:914-916). The shift of 2 applies because the
+  controller version, `0x050530`, is at least `0x50300`.
+- **Per read:** `BLKSZ` 512 and `BYTCNT` (K:2737-2738); the read threshold
+  `THLD` at SDR104, `(512 << 16) | 1` with bit 2 clear (V:669-701);
+  descriptors in non-cacheable memory, then a barrier (K:787-813); FIFO,
+  DMA-interface and IDMAC resets, each waited (K:932-934); `GCTRL` DMA enable
+  (bit 5); `IDIE` = receive (bit 1); `DMAC` = fixed burst and IDMAC on
+  (`0x82`; K:951-958); then `CARG` and `CMD` = `0x80003352` for CMD18 with
+  automatic CMD12, or `0x80002351` for CMD17 (K:2643, 2766-2769).
+- **Descriptor:** 16 bytes, {config, size, buffer >> 2, next >> 2}, chained;
+  every one OWN, chain and no-interrupt, the first also first-descriptor, the
+  last also last-descriptor with the no-interrupt bit cleared, its next
+  pointer at the following, unused slot; at most 4,096 bytes each
+  (K:787-806, V:55).
+- **Completion:** both the automatic-command-done bit (CMD18; data-over for
+  CMD17) in `RINT` and the receive bit in `IDST`, or an error bit
+  (K:1286-1338). No CMD13 follows a successful read.
+- **Teardown:** `IDST` = `0x337`, `IDIE` = 0, `DMAC` = IDMAC reset, then DMA
+  reset, DMA disable and FIFO reset in `GCTRL` (K:1171-1180); each descriptor's
+  OWN bit is polled clear (K:826-847). The buffer is cleaned before the
+  transfer and invalidated after it (inferred: the board kernel's arm64 DMA
+  mapping source is not in the tree).
 
-## What the vendor driver does
+## The design
 
-The board kernel's driver moves data with IDMAC and chained descriptors
-(`bsp/drivers/mmc/sunxi-mmc.c:746-806`, started at `:924-960` with `DMAC`
-fixed burst and IDMAC on). It sends one CMD18 with automatic CMD12 for each
-multi-block request, as large as the block layer's request, and no CMD13
-after a read. It programs the FIFO thresholds in `FTRGL` to `0x20070008`
-(`sunxi-mmc.c:719`): bursts of 8 words, receive threshold 7, transmit 8.
-SunstoneOS today reads by PIO at most eight sectors per request
-(`SUNXI_MMC_MAX_BLOCKS`), leaves `FTRGL` at its reset value and confirms every
-read with CMD13.
+### Driver core (`drivers/storage/sunxi_mmc.c`)
 
-## Proposed change
+- **A DMA read path, chosen by configuration.** `struct sunxi_mmc_config`
+  gains one field, the descriptor area (an identity-mapped pointer), and the
+  operations gain `dma_sync`. With both, every read uses IDMAC and may be up
+  to 256 blocks (128 KiB, `SUNXI_MMC_MAX_DMA_BLOCKS`); the area holds
+  `SUNXI_MMC_DMA_DESCRIPTORS` = 33 entries, 32 of 4 KiB and the spare slot the
+  last one points at, which the core zeroes on every read. Without them, reads
+  keep programmed I/O and the 8-block limit, which also sizes the write path.
+- **Per read, in the vendor order:**
+  1. In the existing reset write, set `GCTRL` FIFO and DMA reset (bits 1 and
+     2) with bit 31 clear, and `DMAC` = 1; the next step waits for all three
+     bits to clear. Programmed I/O keeps writing bit 31 set in its own reset
+     write, so its data commands (CMD6, ACMD51, CMD19) keep the FIFO on the
+     CPU path even after a DMA read. Setup refuses a descriptor area on a
+     controller older than version `0x50300`.
+  2. Write `FTRGL`, `DLBA`, `BLKSZ`, `BYTCNT` and `THLD`; write `IDST` =
+     `0x337` and require it to read 0; build the descriptors; barrier.
+     `FTRGL` and `DLBA` are written per read, two writes, because tuning
+     recovery resets the controller (`sunxi_mmc.c:672`) and the vendor
+     rewrites both after every reset (K:4547).
+  3. `GCTRL` |= DMA enable; `IDIE` = 0; `DMAC` = `0x82`; `CARG`; `CMD`.
+  4. Complete when `RINT` shows the response, data over and, for CMD18, the
+     automatic CMD12, and then every descriptor's OWN bit reads clear (read
+     only after the `RINT` bits, not on every poll); record
+     whether `IDST` showed receive. Any `RINT` error bit, or `IDST`
+     fatal-bus-error, descriptor-unavailable, card-error or abnormal-summary
+     bit, faults the read; the read deadline bounds every wait.
+  5. Teardown as the vendor's; then `dma_sync` invalidates the buffer and the
+     read is DONE.
+- **Differences from the vendor, with reasons.** `IDIE` stays 0: SD0's
+  interrupt stays disabled, and a pending receive interrupt would fail the
+  platform's per-poll interrupt check (`a733_mmc_platform.c:166`). Completion
+  rests on the OWN bits, which IDMAC clears as it closes each descriptor,
+  because the receive bit's latching with `IDIE` = 0 is inferred, not
+  documented. The `IDST` error bits are checked, which the vendor does not.
+  The vendor's retry path is not reproduced: a fault retains every lease.
+- **`dma_sync(context, buffer, bytes, phase)`:** `SUNXI_MMC_DMA_BEFORE`
+  cleans the buffer to the point of coherency, `SUNXI_MMC_DMA_AFTER`
+  invalidates it. The image supplies it,
+  because several images link the SD adapter without the cache maintenance
+  code (`arch/aarch64/device_memory.c`).
+- **No CMD13 after a read**, for programmed I/O and DMA alike, except after an
+  open-ended CMD18 that ends at the card's last sector (`read_tail`), whose
+  OUT_OF_RANGE bit would otherwise appear in the next read's response.
+- **`THLD`** uses the vendor's mask (`(t & ~0x0fff0004) | (512 << 16) | 1`)
+  for programmed I/O as well.
+- **Timestamps:** the core records, from its clock callback, when it wrote
+  the command, when it first saw a nonzero card byte count (`CBCR`, 0x48),
+  and when it first saw completion, with the number of platform polls between
+  them. Each is a first observation, late by up to one poll.
 
-1. **Measure without the yield.** In the returning image, poll a transfer
-   until it completes or its deadline passes, instead of for 1 ms per wake;
-   the PMIC task has no work during reads. This changes only the image's
-   read loop and gives the card's true per-read times. It is an image change,
-   so it needs a new set; the frozen set 28 measures lifetime B with the same
-   2 ms quantization as lifetime A.
-2. **IDMAC with large CMD18 reads**, as below: descriptors from the
-   device-memory pool, `FTRGL` at the vendor's `0x20070008`, `DLBA`, `DMAC`
-   and `IDIE` admitted only in a DMA profile, completion by polling `IDST`.
-3. **No CMD13 after a successful read**, which the vendor driver does not
-   send; a read's own R1 response and data CRC report its errors.
+### Platform (`drivers/storage/a733_mmc_platform*.c`)
 
-| Request size | High speed, 50 MHz | SDR104, 150 MHz |
+- The configuration gains the descriptor area. `command()` admits up to
+  `SUNXI_MMC_MAX_DMA_BLOCKS` per read when an area is bound and keeps
+  `SUNXI_MMC_MAX_BLOCKS` otherwise (`a733_mmc_platform.c:504`). The platform
+  refuses an area
+  while a storage update is bound, an area that overlaps the 16 KiB result
+  page at `0x42000000`, and a DMA read whose buffer is not 64-byte aligned,
+  below 16 GiB and outside every provider's state.
+- On the core's `CMD` write, when `GCTRL` DMA enable reads set, the platform
+  refuses a command with the write bit and walks the descriptor chain from
+  `DLBA` (at most 33 uncached reads): every buffer must lie in the read's
+  borrowed buffer, the sizes must sum to `BYTCNT`, and the chain must end at
+  the zeroed spare slot. The walk adds about 10–20 µs to the fixed cost.
+- The adapter admits `FTRGL`, `DLBA` (only the area's address >> 2), `IDST`,
+  `IDIE` (only 0) and `DMAC` (only 0, 1 and `0x82`) writes, `CBCR` reads and
+  `GCTRL` DMA enable only on a platform initialized with an area.
+- The per-poll re-checks of clocks, pins and presence stay as they are; moving
+  them to once per request is a separate, separately measured change.
+
+### Returning image (`apps/storage-read-returning/`)
+
+- **Times each read from submission**, with the 24 MHz counter, and polls it
+  to completion with no per-wake budget and no tick sleep. The SD task runs
+  at a higher priority than the PMIC task, so the PMIC task does not run
+  during a read; identification still yields to it.
+- **Reads through IDMAC** into a 128 KiB write-back buffer aligned to 4 KiB,
+  with the 33 descriptors in the non-cacheable result block at `0x42100000`.
+  The image's mapping check covers both once, at admission: write-back
+  inner-shareable for the buffer, non-cacheable outer-shareable for the area.
+- **The plan** has seven classes, 4.5 MiB in all: 64 sequential and 64 random
+  4 KiB reads, 32 sequential and 32 random 32 KiB reads, 8 sequential and
+  8 random 128 KiB reads, and 32 single sectors. Sequential classes start at
+  sector 0, so the first 64 4 KiB reads repeat lifetime A's sectors and their
+  CRCs must match. Random reads start at request-size boundaries below sector
+  4,194,304.
+- **CRC-32 with the ARMv8 CRC instructions**, about 2 ms for the plan instead
+  of about 80 ms with the table, outside the measured time.
+- **Each read line** gives the total time, the core's three first-observed
+  times, the cache clean and invalidate times, and the poll count. The host
+  tool fits t = F + b × blocks across the sequential classes of each mode,
+  which gives the fixed cost F and the per-block time b, once with the
+  recorded clean and invalidate times and once without them, and reports per class
+  the rate, the mean command-to-first-byte time (the card's access time plus
+  up to one poll) and the data time against the bus time.
+- **SDR104 by default.** The default input selects profile 3; a card without
+  UHS-I, or a failed switch before CMD11, falls back to high speed at 3.3 V
+  (existing rule). A set runs one lifetime per mode: profile 2, then profile 3.
+- **The clock stop stops IDMAC first.** When `DMAC` bit 7 or `GCTRL` bit 5
+  reads set, it runs the vendor teardown and waits for `DMAC` bit 0 to clear
+  and the `IDST` state field (bits 16:13) to read idle.
+  If the stop does not complete, it asserts the SD0 bus reset (CCU `0xd0c`
+  bit 16) as well as gating the module clock, because the module gate alone
+  does not stop the bus-clocked IDMAC. After the monitor's 2 s exit or an
+  exception, which run no image code, IDMAC may still write into the buffer
+  or the area, so in both profiles the next step is power removal.
+
+## Predictions
+
+The time for one sequential read of n blocks is
+t = F + S(n) + n × max(bus, card stream), with F the fixed cost per request
+(240–400 µs with the per-poll re-checks kept), S(n) the cache maintenance
+(about 5, 40–100 and 170–415 µs for 4, 32 and 128 KiB at the 494 MHz boot
+clock), and a bus time of 20.8 µs per block at 50 MHz and 6.95 µs at
+150 MHz. The SDR104 column assumes the card streams at 75 MB/s or faster.
+
+| Request | High speed, 50 MHz | SDR104, 150 MHz |
 | --- | --- | --- |
-| 4 KiB, today (from the fast reads) | 6.7 MB/s | not measured |
-| 32 KiB, IDMAC | 1.7 ms, 19 MB/s | 0.86 ms, 38 MB/s |
-| 128 KiB, IDMAC | 5.7 ms, 23 MB/s | 2.2 ms, 60 MB/s |
+| 4 KiB | 7.1–9.9 MB/s | 8.7–13.6 MB/s |
+| 32 KiB | 17.4–20.3 MB/s | 34–45 MB/s |
+| 128 KiB | 20.7–22.8 MB/s | 50–60 MB/s |
+| Single sector | 1.2–2.0 MB/s | 1.25–2.1 MB/s |
 
-Each figure is 413 µs of fixed cost plus the bus time, 20.5 µs per block at
-50 MHz and 6.9 µs at 150 MHz; removing CMD13 and the per-poll checks lowers
-the fixed cost further. The card's own rate may be lower, and it decides the
-sequential runs that took more than 1 ms in lifetime A. PIO at 150 MHz would
-need each 512-byte block drained in 6.9 µs, 128 device reads, which the
-present 25 µs per block at 50 MHz does not suggest; IDMAC is therefore needed
-for SDR104 to gain over high speed.
+Random reads add about 300 µs per request, as lifetime A measured.
 
-The sections below give the eight-block limit change and the IDMAC
-interface, written before the measurement.
+## Budgets
 
-## Step 1: raise the eight-block read limit
+- Static memory in the returning image: 128 KiB buffer and 528 bytes of
+  descriptors; the 4 KiB PIO buffer goes away.
+- Code: the DMA path in the core, about 120 lines; the platform checks and
+  filter, about 60; the image, about 80 changed.
+- Images without a descriptor area change only in the removed CMD13 after a
+  read and the `THLD` mask.
 
-A read request is at most eight sectors (`SUNXI_MMC_MAX_BLOCKS` in
-`include/sunxi_mmc.h`, `STORAGE_READ_MAX_BLOCKS` in
-`apps/storage-read/storage_read_service.h`). Each request pays a fixed cost of
-50–110 µs in commands and platform polls, plus the card's first-block latency
-(assumed 100 µs sequential, 300 µs random), so at 4 KiB the fixed cost is
-40–60% of the request time.
+## Checks
 
-The change separates the read limit from the write limit. Writes keep eight
-sectors, because the write snapshot (`write_payload`, 4,096 bytes in every
-`struct sunxi_mmc`) and the one-second programming deadline size them. Reads
-rise to 64 sectors (32 KiB). One CMD18 with automatic CMD12 covers the
-request; `SMHC_BCNT` is 32 bits wide, so the controller imposes no lower limit.
+The emulation check gains an IDMAC model: on a data command with DMA enabled
+it reads the descriptor chain from memory, checks every field against the
+vendor format, writes the card model's data through it, clears the OWN bits
+and sets the `RINT` and `IDST` bits; it records the register order and
+requires the sequence above. Cases cover every request class in both
+profiles, an `IDST` fatal bus error, a chain that does not end at the spare
+slot, a write-bit command with DMA enabled, a stalled transfer stopped at the
+clock stop, an IDMAC that does not stop (bus reset), and the `read_tail` CMD13.
+The host check covers the plan, the log format, the fit and the CRC
+comparison with lifetime A.
 
-Costs and interfaces:
+## Deferred
 
-- The read service's borrowed buffer, both client slots' copies and the USB
-  response buffer grow from 4 KiB to 32 KiB each, about 112 KiB of static
-  memory in that image.
-- The request wire (`blocks` up to 8) and the observer's 4,096-byte maximum
-  change, so records become version 5.
-- A 32 KiB PIO read takes 0.9–2.2 ms, longer than the 1 ms poll budget, so the
-  budget rises to 3 ms per wake for reads of more than eight sectors, or the
-  measurement keeps the first-poll-to-completion time across wakes.
-
-| Prediction, PIO, 32 KiB requests | High speed, 50 MHz | SDR104, 150 MHz |
-| --- | --- | --- |
-| Sequential | 13.7–22 MB/s | 13.7–31 MB/s |
-| Random | 12.7–19.5 MB/s | 12.7–26 MB/s |
-
-The lower bound is the slow PIO case, 34 µs per block, which equals the
-high-speed figure; then step 2 is required.
-
-## Step 2: the vendor's chained-descriptor DMA
-
-The board kernel's SMHC moves data with its internal DMA controller (IDMAC)
-through a chain of descriptors (`bsp/drivers/mmc/sunxi-mmc.c` at `2ac08e8c`):
-
-- **Descriptors** (`sunxi-mmc.c:746–806`; layout `struct sunxi_idma_des`,
-  `sunxi-mmc.h:335`). Each holds a configuration word with OWN (bit 31),
-  chain (bit 4) and disable-interrupt-on-completion (bit 1); the first adds
-  first-descriptor (bit 3), the last adds last-descriptor (bit 2) and clears
-  bit 1. It also holds the buffer size, at most `1 << idma_des_size_bits`
-  bytes (12, 4 KiB, for v5p3x: `sunxi-mmc-v5p3x.c:55`), the buffer address and
-  the next descriptor's address. Controller versions 5.3 and later store
-  addresses shifted right by two (`des_addr_shift`,
-  `sunxi-mmc-v5p3x.c:914–915`), which reaches 16 GiB.
-- **Start** (`sunxi-mmc.c:924–960`): reset FIFO, DMA interface and DMA
-  controller; set `GCTRL` DMA enable; enable the receive interrupt in `IDIE`;
-  write `DMAC` with fixed burst (bit 1) and IDMAC on (bit 7). The descriptor
-  list base goes to `DLBA` once (`sunxi-mmc.c:727`), and `FTRGL` holds the
-  FIFO thresholds `(2 << 28) | (7 << 16) | 248` (`sunxi-mmc-v5p3x.c:51`).
-
-SunstoneOS would add these, each a reviewed change:
-
-- **Buffers.** Descriptors and data come from the device-memory pool, with
-  ownership handed to the controller for the transfer. A read writes straight
-  into the client slot's buffer, which removes the present borrowed-buffer
-  copy. Cache maintenance invalidates the exact destination bytes by virtual
-  address before and after the transfer.
-- **Admission.** The platform today requires DMA disabled and the native
-  filter refuses `DLBA`, `DMAC`, `IDIE` and `FTRGL` writes. A DMA profile
-  admits them only with a pool lease, an address check against the 16 GiB
-  reach and the descriptor list inside the lease.
-- **Completion.** IRQ 193 stays masked until its delivery is qualified;
-  completion is observed by polling `IDST` within the read budget. Every
-  IDMAC error bit (fatal bus error, destination invalid, card error summary,
-  abnormal summary) is terminal and retains the buffer and leases.
-
-| Prediction, DMA, SDR104 at 150 MHz | 32 KiB requests | 128 KiB requests |
-| --- | --- | --- |
-| Sequential | 50–55 MB/s | 66–68 MB/s |
-| Random | 38–41 MB/s | 60–62 MB/s |
-
-The bus moves a 512-byte block in 6.9 µs, so 64 blocks take 442 µs; the
-fixed cost (50–110 µs) and the card latency make up the rest. High speed
-stays at its bus limit, about 22 MB/s at 32 KiB. The card's own read rate may
-be lower than these figures.
-
-## Measurement
-
-The supervised launcher's throughput plan gains 32 KiB and, with step 2,
-128 KiB request classes, read from the same sectors, with digests compared
-against the 4 KiB reads. Each step is accepted only if both patterns are at
-least as fast as before.
+- **Per-request re-checks** in the platform, instead of per poll, about 60 µs
+  less per request.
+- **The supervised read service** moves to DMA after this image has run on
+  the board; programmed I/O then stays only for identification reads and
+  writes.

@@ -1,10 +1,23 @@
 # microSD UHS-I SDR104 qualification and read throughput
 
-Status: **not frozen**. The coordinator freezes the image, sessions and
-authority records after review. [The UHS-I design](../designs/sd-uhs.md) gives
-the sequence, its sources and the fallback rules. One lifetime has run: lifetime
-A on port 3-3 on 2026-10-25, through the supervised image, which stopped before
-any SD command ("How the result reaches the host").
+Status:
+
+- **Returning reads at high speed (profile 2): qualified** on port 3-3,
+  lifetime A of 2026-10-25 (`board-session-20261025-30/port-3-3/sd-ret-a`):
+  256 reads completed, card clock stopped at exit, throughput 1.4–1.7 MB/s
+  at 4 KiB.
+- **UHS-I SDR104 (profile 3): not qualified.** Lifetime B
+  (`board-session-20261025-32/port-3-3/sd-ret-b`) stopped at CMD11 before
+  any read; the driver waited for command done, which the controller
+  withholds until the switch ends. The fix is in the driver and the
+  emulation, not yet run on a board ([the UHS-I design](../designs/sd-uhs.md),
+  "Lifetime B: CMD11 completion").
+- **DMA reads: designed, not built** ([the DMA design](../designs/sd-dma.md),
+  accepted by the panel; unbuilt work in progress on `work/sd-dma-1025`).
+
+[The UHS-I design](../designs/sd-uhs.md) gives the sequence, its sources and
+the fallback rules. The first lifetime A on port 3-3 ran the supervised image
+and stopped before any SD command ("How the result reaches the host").
 
 On boards whose USB-C cable is their only power supply, the run uses the
 returning SD image (`apps/storage-read-returning/`, "The returning run"
@@ -212,6 +225,26 @@ cache-off helper and the survey, then:
 
 A prepared set gives these commands with every path filled in.
 
+
+## Next steps
+
+Both steps below end in a lifetime that needs whole-board power removal
+afterwards (lifetime B after the 1.8 V switch; any SD DMA run before its
+first board pass), so neither can run while the boards cannot be
+power-cycled.
+
+1. **Rerun lifetime B with the CMD11 fix.** Build the returning image from
+   this branch (`apps/storage-read-returning/build.py`), run
+   `checks/storage-read-returning.py` and `checks/storage-read-returning-host.py`,
+   freeze a set from set 28's runbook with the new image, and run profile 3
+   after a power removal, cold DDR start, fabric read, cache-off and survey.
+   Predictions are in "Predictions" below; the stop conditions are unchanged.
+2. **Build the SD DMA design.** `work/sd-dma-1025` holds the accepted design
+   (`c1d0b802`) and an unbuilt first pass of the core, platform and image
+   changes (`29bc8a2c`), which also carries the CMD11 fix. What remains: the
+   IDMAC model in the emulation check, the host tool's plan and log format,
+   the three-lens code review, the gate, a set, and board runs in profile 2
+   and then profile 3.
 
 ## Predictions
 

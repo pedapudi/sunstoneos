@@ -404,7 +404,14 @@ static int command_step(struct sunxi_mmc *h)
         if((h->command&WRITE)&&(h->seen&DTC)&&h->position<h->data_bytes) {
             fault(h,SUNXI_MMC_CONTROLLER);return 0;
         }
-        if ((h->seen & CC) && !h->response_seen) {
+        /* CMD11 with the voltage-switch bit completes on the controller's
+         * voltage-switch bit (10), not command done: the board kernel masks
+         * only that bit and the errors for CMD11 and finishes the request on
+         * it (sunxi-mmc.c:2656-2659, :1333-1338; sunxi-mmc.h:221-223). Command
+         * done follows only at the end of the switch, with bit 10 again
+         * (sunxi-mmc.h:226-227, sunxi-mmc.c:2296-2307). */
+        uint32_t command_done = (UHS_ON && h->protocol == P_SD_VOLTAGE) ? VSD : CC;
+        if ((h->seen & command_done) && !h->response_seen) {
             if (h->command & LONG) {
                 for (unsigned i = 0; i < 4; ++i)
                     if (!rd(h, 0x2c - 4 * i, &h->response[i])) return 0;
@@ -419,14 +426,15 @@ static int command_step(struct sunxi_mmc *h)
         }
         if (h->position < h->data_bytes && (!(h->command & WRITE) || h->response_seen) &&
             !fifo_step(h)) return 0;
-        v = CC | (h->data_bytes ? DTC : 0) | ((h->command & AUTO) ? ACD : 0);
+        v = command_done | (h->data_bytes ? DTC : 0) | ((h->command & AUTO) ? ACD : 0);
         if ((h->seen & v) != v || h->position != h->data_bytes) return 0;
         h->command_step = 3; return 0;
     case 3:
+        /* The board kernel checks nothing more after CMD11's voltage-switch
+         * bit; the switch sequence (sd_signal) follows. */
+        if (UHS_ON && h->protocol == P_SD_VOLTAGE) return interrupts(h);
         if (!rd(h, 0x18, &v) || (v & START)) return 0;
-        /* After the CMD11 response the card holds DAT0 low by design. */
-        if (!rd(h, 0x3c, &h->result.status) ||
-            (h->result.status & BUSY & ~(UHS_ON && h->protocol == P_SD_VOLTAGE ? 1u << 9 : 0u))) return 0;
+        if (!rd(h, 0x3c, &h->result.status) || (h->result.status & BUSY)) return 0;
         if (h->data_bytes && !(h->result.status & FIFO_EMPTY)) { fault(h, SUNXI_MMC_CONTROLLER); return 0; }
         if (!interrupts(h)) return 0;
         if (h->command & AUTO) {
@@ -634,15 +642,19 @@ static void sd_signal(struct sunxi_mmc *h)
         ++h->sd_sig;return;
     case 4:
         if(!rd(h,0x18,&v)||(v&START))return;
-        /* Clear the update's flags; keep an early switch-done bit. */
-        if(!interrupts(h)||!wr(h,0x38,h->result.interrupts&0xffffu&~VSD)||!wr(h,4,1u<<16)||!rd(h,4,&v))return;
+        /* Clear every flag the update set, as the board kernel does after each
+         * clock update (sunxi-mmc-v5p3x.c:386-388); the switch's own
+         * voltage-switch and command-done bits arrive after the clock restart. */
+        if(!interrupts(h)||!wr(h,0x38,h->result.interrupts&0xffffu)||!wr(h,4,1u<<16)||!rd(h,4,&v))return;
         if(v!=(1u<<16)){fault(h,SUNXI_MMC_CONTROLLER);return;}
         defer_command(h,1000);h->signal_us=h->last_us;++h->sd_sig;return;
     case 5:
         if(!rd(h,0x3c,&h->result.status)||!rd(h,0x38,&r))return;
         h->result.interrupts=r;
         if(r&ERRORS&~VSD){fault(h,SUNXI_MMC_CONTROLLER);return;}
-        if((h->result.status&DAT3)&&(r&VSD)){
+        /* Switch done: DAT3 high, and both the voltage-switch and command-done
+         * bits, as the board kernel's card_busy requires (sunxi-mmc.c:2296-2307). */
+        if((h->result.status&DAT3)&&(r&(VSD|CC))==(VSD|CC)){
             if(!wr(h,0x38,r&0xffffu))return;
             h->signal_window=0;queue(h,P_CID,2u|RESP|LONG|CRC,0,0,0);return;
         }

@@ -20,7 +20,8 @@ plan, and requires:
   approval and writes a 2192-byte input whose header and plan decode back;
 - decode: accepts a complete log and computes the throughput summary;
   refuses a read line whose sector differs from the plan, a missing read count
-  and a card line for another profile; reports a window stop as incomplete;
+  and a card line for another profile; reports a window stop as incomplete,
+  and decodes a stopped run with its reason, stage and core protocol;
 - apps/storage-read-returning/controlled.json: the kernel runner's parser
   accepts it, and a stopped log matches only the sd-stopped outcome;
 - fabric: the tool's masks and parent rates equal those of
@@ -96,7 +97,7 @@ def log_for(raw, outcome='complete', reads=None, profile=2, first=None):
         f, b = plan[i]
         if first is not None and i == 0: f = first
         lines.append(f'R {i:03x} {f:08x} {b:02x} {100 + 10 * b:08x} {binascii.crc32(bytes(512 * b)):08x}')
-    lines += [f'D{r} ' + '00' * 64 for r in range(8)]
+    lines += [f'D{r} ' + '00' * 64 for r in range(8)] if reads else []  # the image dumps sector 0 only after a read
     lines += [f'SD_READS=0x{reads:016x}', f'SD_PLAN=0x{len(plan):016x}', 'SD_PMIC_PARKED=0x0000000000000001']
     lines.append('COMPLETE SD0 returning read' if outcome == 'complete' else 'INCOMPLETE SD0 returning read: ' + outcome)
     return '\n'.join(lines) + '\n'
@@ -147,6 +148,14 @@ def main(out, real):
         refused(lambda: tool.decode_log(log_for(raw).replace('SD_READS=0x0000000000000100\n', ''), raw, 0), 'read count'),
         refused(lambda: tool.decode_log(log_for(raw, profile=3), raw, 0), 'another profile')]
     results['complete_throughput'] = complete['throughput']
+    # A stopped run decodes, with its stop described (lifetime B, board-session-20261025-32).
+    stopped_log = log_for(raw, 'stopped', reads=0) + ''.join(f'{k}=0x{v:016x}\n' for k, v in
+        (('SD_REASON', 3), ('SD_STAGE', 1), ('SD_CORE_PROTOCOL', 0x1b), ('SD_CLOCK_OFF', 3)))
+    stopped = tool.decode_log(stopped_log, raw, 1)
+    assert not stopped['complete'] and stopped['outcome'] == 'stopped' and stopped['stop'] == {
+        'reason': 3, 'reason_text': 'identification or mode selection', 'stage': 'identify',
+        'core_protocol': 'SD_VOLTAGE', 'clock_off': 3}, stopped['stop']
+    results['stopped_decode'] = stopped['stop']
     # Fabric: the tool's tables are the provider's, and each lifetime's read binds the words.
     source = (ROOT / 'drivers/storage/a733_mmc_platform.c').read_text()
     def array(name):
