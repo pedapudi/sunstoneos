@@ -237,6 +237,21 @@ and the secure configuration, GPU left running for the power removal`.
 preparation requires the table, the embedded firmware's hash and that no
 case writes anything but the secure configuration and the start registers.
 
+## The firmware-stop variant stops the firmware and powers the GPU off
+
+`fw-start.c` built with `FWS_STOP` (build and check option `--fw-stop`) is
+the firmware-stop variant of
+[the firmware-stop design](../../docs/designs/gpu-firmware-stop.md). After
+the firmware start, with the vendor's 500 ms bound, it brings the firmware
+control up (the compatibility record and one health-check command through
+the kernel CCB), stops the firmware with the forced-idle and power-off
+requests and the vendor `RGXStop` register sequence, and then makes the
+OFF, the supply end and the provider park of the power-only variant. It
+links the control and stop units as well. The completion text is `COMPLETE
+GPU firmware stop: started, health check executed, forced idle and power
+off acknowledged, idle, OFF and provider parked`. `check.py --fw-stop` runs
+eight cases with a model of the firmware's side of the queues.
+
 A wrapper-write variant was refused before any board run and removed
 ([gpu-power.md](../../docs/gpu-power.md#the-wrapper-write-probe-was-refused)).
 
@@ -252,12 +267,13 @@ Run with the existing host Python environment containing pyelftools and Unicorn:
 
 Add `--power-only` to both commands for the power-only variant,
 `--wrapper-read` for the wrapper-read variant, `--probe-read` for the
-probe-read variant or `--fw-start` for the firmware-start variant. The vendor-clock-order and vendor-state variants, whose
+probe-read variant, `--fw-start` for the firmware-start variant or
+`--fw-stop` for the firmware-stop variant. The vendor-clock-order and vendor-state variants, whose
 controller, monitor and supply copies the default path replaced, were
 removed after the vendor-state image read the identity.
 
 `prepare.py` turns a build and its check result into a board bundle for
-`tools/prepare-board-bundles.py` (rows 11 to 13, 16, 17 and 19 of
+`tools/prepare-board-bundles.py` (rows 11 to 13, 16, 17, 19 and 20 of
 [board-bundles-next.md](../../docs/designs/board-bundles-next.md)). For both
 power variants it reads `on_steps` and `off_steps` from the image and
 requires the domain-5 (TOP5) ON request before the first CORE6 access, the

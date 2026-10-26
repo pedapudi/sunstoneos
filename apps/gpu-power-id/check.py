@@ -15,7 +15,12 @@ restores both written words before the image's own handler runs. With
 --fw-start the image must be the firmware-start variant: the firmware
 preparation, the start controller and the shared-memory adapter run as
 linked, and every wrapper, SMC0 and GPU access is the next 32-bit access of
-the case's expected sequence, after its progress record and log line. Without a
+the case's expected sequence, after its progress record and log line. With
+--fw-stop the image must be the firmware-stop variant: the same start, then
+the control, the stop, the OFF and the park, with a model of the firmware's
+side of the kernel CCB, the power-sync word and the interrupt status; after
+the start every access must be an interrupt read or clear, a kick with its
+read-back, or the next stop step. Without a
 variant option the image must be the identity variant: in each of two ON/OFF
 cycles its only GPU-window accesses are two 32-bit loads, 0x01800024 and
 then 0x01800020. The PMIC, rail and GPU platform calls are modeled."""
@@ -625,6 +630,34 @@ FWS_REASONS = {'fs-board': None, 'fs-timer-wrap': None, 'fs-timeout': 'GPU firmw
                'fs-memory': 'GPU firmware start preparation, nothing powered', 'fs-row-mutant': None}
 
 
+# The firmware-stop variant (fw-start.c built with FWS_STOP). Shared
+# resources it reads besides system init: the queues, the power-sync word,
+# system data, OS data and OS init, each at the first page of its allocation.
+def nc_page(resource):
+    return NC_BASE + 4096 * sum(NC_ALLOCATION[:resource])
+
+
+HOST_CONTROL, HOST_COMMANDS, RETURNS, FW_CONTROL, FW_COMMANDS = (nc_page(i) for i in range(5))
+POWER_SYNC, SYSTEM_DATA, OS_DATA, OS_INIT = nc_page(5), nc_page(8), nc_page(15), nc_page(17)
+MAGIC = 0x2abc0000
+STOP_PAGE = GPU + 0x1000
+FWX_COMPLETE = ('COMPLETE GPU firmware stop: started, health check executed, forced idle and power off '
+                'acknowledged, idle, OFF and provider parked')
+FWX_CONTROL_FAIL = 'GPU firmware control: compatibility or health check not complete, GPU left running'
+FWX_STOP_FAIL = 'GPU firmware stop: not complete, GPU left powered'
+FWX_REASONS = {'fx-board': None, 'fx-incompatible': FWX_CONTROL_FAIL, 'fx-no-health': FWX_CONTROL_FAIL,
+               'fx-event': FWX_CONTROL_FAIL, 'fx-denied': FWX_STOP_FAIL, 'fx-no-ack': FWX_STOP_FAIL,
+               'fx-off-fault': FWX_STOP_FAIL,
+               'fx-idle-held': 'GPU firmware stop: idle check not met after the power-off acknowledgement, '
+                               'GPU OFF and provider parked'}
+# The stop's register plan (pvr_gpu_stop.c, the vendor RGXStop) as 32-bit
+# accesses: (write, offset). The interrupt clear appears only after a pending
+# status; a poll repeats its read until it matches.
+FWX_STOP_PLAN = [(0, 0x8a8), (1, 0x8b0), (0, 0x3c8), (0, 0x3898), (1, 0xb40), (1, 0xb30), (0, 0x1358),
+                 (0, 0x1350), (0, 0x1320), (0, 0x1338), (0, 0x3874), (0, 0x3870), (0, 0x3898), (0, 0x3c8),
+                 (0, 0x3c8)]
+
+
 def split(write, offset, width, value):
     """One register access as the vendor's 32-bit accesses: OSWriteHWReg64
     writes the low word first, OSReadHWReg64 reads the high word first."""
@@ -667,14 +700,17 @@ def fws_case_sequence(case, boot, timer_reads):
     return expected
 
 
-def run_fws(image, case):
-    """One firmware-start case. Only the client's platform calls are modeled:
-    the ON, the clock, translations, cache maintenance and the log. The
-    firmware preparation, the controller and the shared-memory adapter run
-    as linked."""
+def run_fws(image, case, stop=False):
+    """One firmware-start case, or with stop a firmware-stop case. Only the
+    client's platform calls are modeled: the ON and OFF, the clock,
+    translations, cache maintenance and the log; for the stop variant also
+    the firmware's side of the kernel CCB, the power-sync word and the
+    interrupt status. The firmware preparation, the start, control and stop
+    controllers and the shared-memory adapter run as linked."""
     u = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
     u.mem_map(0x41000000, 0x1200000)
-    for page in GPU_PAGES + (WRAPPER_PAGE, SMC0_PAGE) + SNAPSHOT_PAGES:
+    pages = GPU_PAGES + (WRAPPER_PAGE, SMC0_PAGE) + ((STOP_PAGE,) if stop else ())
+    for page in pages + SNAPSHOT_PAGES:
         u.mem_map(page, 0x1000)
     for address, data in image.parts:
         u.mem_write(address, data)
@@ -696,7 +732,12 @@ def run_fws(image, case):
     deadline = 1500000
     state = {'case': case, 'calls': [], 'time': 100, 'messages': [], 'exit_status': None, 'failure': None,
              'accesses': [], 'on_polls': 0, 'snapshot_reads': [], 'started_reads': 0, 'released': None,
-             'cache': [], 'record_at': None, 'gpu_reads': [], 'gpu_writes': []}
+             'cache': [], 'record_at': None, 'gpu_reads': [], 'gpu_writes': [], 'steps': [],
+             'commands': [], 'irq_reads': []}
+    row = power + L['a733_gpu_power']['row']
+    consumer = gpu + L['a733_gpu_platform']['pmic']
+    domains = bb + L['bb_power']['domains']
+    domain5 = domains + L['a733_power_domains']['domain'] + 2 * 32
 
     def put(address, value, size=4):
         u.mem_write(address, value.to_bytes(size, 'little'))
@@ -705,6 +746,18 @@ def run_fws(image, case):
         put(base + L[typ][name], value, size)
 
     field(bb, 'bb_power', 'deadline', deadline, 8)
+    if stop:
+        # The OFF proof's entry state, as the power-only check models it.
+        field(row, 'a733_power_domain_row', 'domains', domains, 8)
+        field(row, 'a733_power_domain_row', 'domain', 5)
+        field(consumer, 'a733_pmic_consumer', 'rail', 32, 8)
+        field(domain5, 'a733_power_domain', 'id', 5)
+        # Idle status words that the stop polls (SIDEKICK_IDLE, SLC_IDLE);
+        # the BIF and SLC status words read 0.
+        put(GPU + 0x3c8, 0x7f)
+        put(GPU + 0x3898, 0xff)
+        if case == 'fx-idle-held':
+            put(GPU + 0x1358, 1)
 
     def ret(value=1):
         u.reg_write(UC_ARM64_REG_X0, value)
@@ -748,7 +801,7 @@ def run_fws(image, case):
             elif 0x41000000 <= address < NC_BASE:
                 attributes = 0xff
             else:
-                assert page in GPU_PAGES + (WRAPPER_PAGE, SMC0_PAGE) + SNAPSHOT_PAGES, hex(address)
+                assert page in pages + SNAPSHOT_PAGES, hex(address)
                 attributes = 0
             wrong = case == 'fs-mapping' and page == SMC0_PAGE
             u.mem_write(target, struct.pack('<QII', address + (4096 if wrong else 0), attributes, 3))
@@ -771,12 +824,30 @@ def run_fws(image, case):
         elif name == 'platform_exception':
             state['exception'] = True
             u.emu_stop()
+        elif name == 'a733_gpu_platform_off_poll':
+            if case == 'fx-off-fault':
+                ret((1 << 64) - 1)
+                return
+            field(gpu, 'a733_gpu_platform', 'phase', 6)
+            field(gpu, 'a733_gpu_platform', 'token', 0, 8)
+            field(gpu, 'a733_gpu_platform', 'delegated', 0)
+            field(power, 'a733_gpu_power', 'phase', 4)
+            field(row, 'a733_power_domain_row', 'state', 3)
+            field(row, 'a733_power_domain_row', 'counted', 0)
+            field(domain5, 'a733_power_domain', 'state', 1)
+            ret()
+        elif name == 'bb_power_park':
+            field(bb, 'bb_power', 'parked', 1)
+            ret()
         else:
             ret()
 
     modeled = ['bb_power_wait_ready', 'bb_power_now', 'vTaskDelay', 'a733_gpu_platform_begin',
                'a733_gpu_platform_poll', 'aarch64_device_translate', 'aarch64_device_cache_stride',
                'aarch64_device_cache', 'bb_power_fail', 'platform_puts', 'platform_exit', 'platform_exception']
+    if stop:
+        modeled += ['a733_gpu_platform_off_begin', 'a733_gpu_platform_off_poll', 'a733_gpu_platform_supply_end',
+                    'bb_power_park', 'a733_power_service_idle']
     for name in modeled:
         address = image.address(name)
         u.hook_add(UC_HOOK_CODE, lambda uc, a, size, n: call(n), name, begin=address, end=address)
@@ -786,24 +857,51 @@ def run_fws(image, case):
         progress record and log line, then modeled."""
         write = kind == UC_MEM_WRITE
         n = len(state['accesses']) + 1
-        magic, named, count, at, stored = struct.unpack('<5Q', bytes(u.mem_read(PROGRESS, 40)))
+        magic, named, count, at, stored, step = struct.unpack('<6Q', bytes(u.mem_read(PROGRESS, 48)))
         line = (f'GPU FWS writing n={n} a={address:#x} v={value:#x}\n' if write
                 else f'GPU FWS reading n={n} a={address:#x}\n')
+        # In the stop variant a read that repeats the previous read is a poll,
+        # named by the progress record alone: since that read, at most its
+        # changed value was printed.
+        previous = state['accesses'][-1] if state['accesses'] else None
+        since = state['messages'][state.get('printed', 0):]
+        quiet = stop and not write and previous == [0, address, None] and \
+            all(m.startswith(f'GPU FWS n={n - 1} v=') for m in since)
         if not (size == 4 and magic == FWS_MAGIC and named == n and count == n - 1 and at == address and
-                (not write or stored == value) and state['messages'] and state['messages'][-1] == line):
+                (not write or stored == value) and (quiet or (state['messages'] and state['messages'][-1] == line))):
             state['refused'] = [hex(address), size, int(write), hex(value) if write else None, n]
             uc.emu_stop()
             return
         if 'expected' not in state:
             state['expected'] = fws_case_sequence(case, fws_boot(u, image)[1], timer_reads)
-        expected = state['expected'][n - 1] if n <= len(state['expected']) else None
-        if expected is None or expected[:2] != (int(write), address) or \
-                (expected[2] is not None and expected[2] != value):
-            state['refused'] = [hex(address), size, int(write), hex(value) if write else None, n]
-            uc.emu_stop()
-            return
+        if stop and n > len(state['expected']):
+            # After the start: the control's interrupt status and clear, the
+            # kernel CCB kick with its read-back, and the stop's registers.
+            last = state['accesses'][-1]
+            kick = last[0] == 1 and last[1] == GPU + 0xb00
+            ok = (address == GPU + 0xb00 and not write) if kick else \
+                (not write and address == GPU + 0x8a8) or \
+                (write and address == GPU + 0x8b0 and value == 1 and state['irq_reads'] and state['irq_reads'][-1] & 1) or \
+                (write and address == GPU + 0xb00 and value == 0 and not 100 <= step < 200) or \
+                (100 <= step < 200 and (int(write), address - GPU) in FWX_STOP_PLAN and (not write or value == 0 or
+                                                                                    address == GPU + 0x8b0))
+            if not ok:
+                state['refused'] = [hex(address), size, int(write), hex(value) if write else None, n]
+                uc.emu_stop()
+                return
+        else:
+            expected = state['expected'][n - 1] if n <= len(state['expected']) else None
+            if expected is None or expected[:2] != (int(write), address) or \
+                    (expected[2] is not None and expected[2] != value):
+                state['refused'] = [hex(address), size, int(write), hex(value) if write else None, n]
+                uc.emu_stop()
+                return
         (state['gpu_writes'] if write else state['gpu_reads']).append([hex(address), size])
         state['accesses'].append([int(write), address, value if write else None])
+        state['steps'].append(step)
+        state['printed'] = len(state['messages'])
+        if stop:
+            fws_firmware(u, state, case, write, address, value, put)
         if address == 0x0a0000b0 and not write:
             # SMC0 +0xb0 read 0 at entry and 0 right after a write of 2 on the board.
             put(address, 0)
@@ -815,7 +913,7 @@ def run_fws(image, case):
                 int.from_bytes(u.mem_read(GPU + 0x100, 4), 'little') == 0:
             state['released'] = n
 
-    for page in GPU_PAGES + (WRAPPER_PAGE, SMC0_PAGE):
+    for page in pages:
         u.hook_add(UC_HOOK_MEM_READ, access, begin=page, end=page + 0xfff)
         u.hook_add(UC_HOOK_MEM_WRITE, access, begin=page, end=page + 0xfff)
 
@@ -828,6 +926,16 @@ def run_fws(image, case):
             value = 1
         elif state['released'] is not None and state['started_reads'] >= 3 and case != 'fs-timeout':
             value = 2 if case == 'fs-bad-flag' else 1
+            if stop and 'booted' not in state:
+                # The firmware's boot: its compatibility record at OS init
+                # +40 (the fields the control checks) and power state ON.
+                state['booted'] = True
+                record = bytearray(64)
+                struct.pack_into('<IIQIIQ', record, 0, 2 if case == 'fx-incompatible' else 3, 0,
+                                 0x00240038006800b7, 3, 0, 0x00240038006800b7)
+                record[56] = 1
+                u.mem_write(OS_INIT + 40, bytes(record))
+                put(SYSTEM_DATA + 8, 1)
         put(STARTED, value)
 
     u.hook_add(UC_HOOK_MEM_READ, started, begin=STARTED, end=STARTED + 3)
@@ -847,7 +955,112 @@ def run_fws(image, case):
         u.hook_add(UC_HOOK_MEM_READ, snapshot_read, begin=page, end=page + 0xfff)
     u.reg_write(UC_ARM64_REG_VBAR_EL1, image.address('_freertos_vector_table'))
     u.emu_start(image.address('gpu_power_id_client'), 0, count=60000000)
-    return check_fws(u, image, state, case, timer_reads)
+    return check_fwx(u, image, state, case, timer_reads) if stop else check_fws(u, image, state, case, timer_reads)
+
+
+def fws_firmware(u, state, case, write, address, value, put):
+    """The firmware's side of one register access of the stop variant: a
+    kernel CCB kick runs every pending command, writes its return slot,
+    counts it executed and raises the interrupt; a power request also sets
+    the power state and the power-sync word. Clearing the interrupt event
+    clears the status."""
+    if not write and address == GPU + 0x8a8:
+        state['irq_reads'].append(int.from_bytes(u.mem_read(address, 4), 'little'))
+    if write and address == GPU + 0x8b0:
+        put(GPU + 0x8a8, 0)
+    if not (write and address == GPU + 0xb00):
+        return
+    word = lambda a: int.from_bytes(u.mem_read(a, 4), 'little')
+    host_write, read = word(HOST_CONTROL), word(HOST_CONTROL + 128)
+    while read != host_write:
+        command = bytes(u.mem_read(HOST_COMMANDS + read * 88, 88))
+        kind, pow_type, request = struct.unpack_from('<I4xII', command)
+        state['commands'].append([kind - MAGIC, pow_type, request])
+        answered = True
+        if kind == MAGIC | 115:
+            answered = case != 'fx-no-health'
+            if case == 'fx-event':
+                # One firmware event: the control has no handler for it.
+                u.mem_write(FW_COMMANDS, struct.pack('<I', MAGIC | 101) + bytes(84))
+                put(FW_CONTROL, 1)
+        elif kind == MAGIC | 107:
+            off = pow_type == 1
+            if not (off and case == 'fx-no-ack'):
+                put(SYSTEM_DATA + 8, 2 if not off else 2 if case == 'fx-denied' else 0)
+                put(POWER_SYNC, 1)
+        if answered:
+            put(RETURNS + read * 4, 1)
+            put(OS_DATA + 568, word(OS_DATA + 568) + 1)
+        read = (read + 1) & 127
+        put(HOST_CONTROL + 128, read)
+    put(GPU + 0x8a8, 1)
+
+
+def check_fwx(u, image, state, case, timer_reads):
+    """The firmware-stop variant's outcome for one case."""
+    output = ''.join(state['messages'])
+    calls = state['calls']
+    accesses = state['accesses']
+    assert not state.get('exception'), output[-2000:]
+    assert 'refused' not in state, (state['refused'], output[-3000:])
+    assert state['failure'] == FWX_REASONS[case], (state['failure'], output[-3000:])
+    writes, boot = fws_boot(u, image)
+    start = fws_case_sequence(case, boot, timer_reads)
+    got = [(w, a, v) for w, a, v in accesses]
+    # The start is the firmware-start variant's, access for access.
+    assert len(got) >= len(start) and all(g[:2] == e[:2] and (e[2] is None or g[2] == e[2])
+                                         for g, e in zip(got, start)), 'start sequence'
+    assert 'GPU FWS start result=0 phase=3 error=0 ' in output, output[-2500:]
+    post = list(zip(got[len(start):], state['steps'][len(start):]))
+    kicks = [i for i, ((w, a, v), _) in enumerate(post) if w and a == GPU + 0xb00]
+    # Each kick is read back at once.
+    assert all(post[i + 1][0][:2] == (0, GPU + 0xb00) for i in kicks), post
+    # The stop's register accesses follow its plan; a poll may repeat a read.
+    stop_steps = [((w, a - GPU), step) for (w, a, v), step in post if 100 <= step < 200]
+    stop_accesses = [x for x, _ in stop_steps]
+    plan = [x for x in FWX_STOP_PLAN if x != (1, 0x8b0) or (1, 0x8b0) in stop_accesses]
+    # A poll repeats its read within one step; a 64-bit poll repeats both halves.
+    compressed, seen = [], set()
+    for access, step in stop_steps:
+        if (access, step) not in seen:
+            compressed.append(access)
+            seen.add((access, step))
+    held = case == 'fx-idle-held'
+    if case in ('fx-board', 'fx-idle-held', 'fx-off-fault'):
+        assert state['commands'] == [[115, 0, 0], [107, 2, 1], [107, 1, 1]], state['commands']
+        assert len(kicks) == 3, kicks
+        expected_plan = plan[:plan.index((0, 0x1358)) + 1] if held else plan
+        assert compressed == expected_plan, (compressed, expected_plan)
+        assert 'GPU FWS control result=0 phase=4 error=0 health=1 health_status=0x1 ' in output, output[-2500:]
+        assert 'GPU FWS power ack_idle=0x1 ack_off=0x1 state_idle=0x2 state_off=0x0 status_idle=0x1 ' \
+               'status_off=0x1 ' in output, output[-2500:]
+        assert 'GPU FWS after kccb_done=0x3 pow_state=0x0' in output, output[-2500:]
+    if case in ('fx-board', 'fx-idle-held'):
+        # The OFF follows the last stop access; the supply end and the park follow it.
+        assert calls.index('a733_gpu_platform_off_begin') < calls.index('a733_gpu_platform_off_poll') < \
+            calls.index('a733_gpu_platform_supply_end') < calls.index('bb_power_park'), calls
+        assert calls.count('a733_gpu_platform_off_begin') == 1
+    else:
+        assert 'a733_gpu_platform_supply_end' not in calls and 'bb_power_park' not in calls, calls
+        assert ('a733_gpu_platform_off_begin' in calls) == (case == 'fx-off-fault'), calls
+    if case == 'fx-board':
+        assert state['exit_status'] == 0 and FWX_COMPLETE in output, output[-2000:]
+        assert 'GPU FWS stop result=0 phase=10 error=0 step=14 count=14 ' in output, output[-2500:]
+    else:
+        assert state['exit_status'] is None and 'COMPLETE' not in output, output[-2000:]
+    if case in ('fx-incompatible', 'fx-no-health', 'fx-event'):
+        errors = {'fx-incompatible': 4, 'fx-no-health': 3, 'fx-event': 7}
+        assert f'GPU FWS control result=3 phase=5 error={errors[case]} ' in output, output[-2500:]
+        assert not stop_accesses and 'GPU FWS stop' not in output
+        assert state['commands'] == ([] if case == 'fx-incompatible' else [[115, 0, 0]]), state['commands']
+    if case in ('fx-denied', 'fx-no-ack'):
+        # The power-off request was sent; its acknowledgement was refused or
+        # never came, so no register of the stop was touched and the GPU stays on.
+        assert state['commands'] == [[115, 0, 0], [107, 2, 1], [107, 1, 1]] and not stop_accesses, state['commands']
+        assert 'GPU FWS stop result=3 phase=11 ' in output and 'ack_off=0x0 ' in output, output[-2500:]
+    state['cycles'] = 0
+    state['memory_flushes'] = state.pop('cache')
+    return state
 
 
 def check_fws(u, image, state, case, timer_reads):
@@ -915,7 +1128,7 @@ def check_fws(u, image, state, case, timer_reads):
     else:
         assert state['exit_status'] is None and 'COMPLETE' not in output
     assert state['snapshot_reads'] == SNAPSHOT * (0 if case == 'fs-memory' else 2), len(state['snapshot_reads'])
-    state['cycles'] = 0
+    state['cycles'] = calls.count('a733_gpu_platform_off_begin')
     state['memory_flushes'] = state.pop('cache')
     return state
 
@@ -992,8 +1205,9 @@ def main():
     p.add_argument('--wrapper-read', action='store_true', help='check the wrapper-read variant')
     p.add_argument('--probe-read', action='store_true', help='check the probe-read variant')
     p.add_argument('--fw-start', action='store_true', help='check the firmware-start variant')
+    p.add_argument('--fw-stop', action='store_true', help='check the firmware-stop variant')
     a = p.parse_args()
-    assert a.power_only + a.wrapper_read + a.probe_read + a.fw_start <= 1, 'choose one variant'
+    assert a.power_only + a.wrapper_read + a.probe_read + a.fw_start + a.fw_stop <= 1, 'choose one variant'
     # The shared owner added delays_ready in existing padding. Reused objects
     # retain the old DWARF member list; consume the actual replacement owner's
     # layout, and verify every old member and the total size still agree.
@@ -1005,8 +1219,10 @@ def main():
     probe_image = bool(image.symbols.get('probe_steps', set()) - {0})
     assert probe_image == a.probe_read, 'image variant does not match --probe-read'
     fws_image = bool(image.symbols.get('fws_rows', set()) - {0})
-    assert fws_image == a.fw_start, 'image variant does not match --fw-start'
-    assert identity == (not a.power_only and not a.wrapper_read and not a.probe_read and not a.fw_start), \
+    stop_image = bool(image.symbols.get('fws_stop_run', set()) - {0})
+    assert fws_image == (a.fw_start or a.fw_stop) and stop_image == a.fw_stop, \
+        'image variant does not match --fw-start or --fw-stop'
+    assert identity == (not a.power_only and not a.wrapper_read and not a.probe_read and not fws_image), \
         'image variant does not match the options'
     assert wrapper_image == a.wrapper_read, 'image variant does not match --wrapper-read'
     from elftools.elf.elffile import ELFFile
@@ -1038,18 +1254,21 @@ def main():
         cases = [*PROBE_PATHS, 'pr-table-mutant', 'pr-restore-mutant']
     if a.fw_start:
         cases = list(FWS_REASONS)
+    if a.fw_stop:
+        cases = list(FWX_REASONS)
     if a.cases:
         assert set(a.cases) <= set(cases)
         cases = a.cases
     result = {'physical_access': False,
               'variant': ('power-only' if a.power_only else 'wrapper-read' if a.wrapper_read
-                          else 'probe-read' if a.probe_read else 'fw-start' if a.fw_start else 'identity'),
+                          else 'probe-read' if a.probe_read else 'fw-start' if a.fw_start
+                          else 'fw-stop' if a.fw_stop else 'identity'),
               'scope': 'actual ELF client and ID access; modeled provider/power transitions',
               'image_sha256': hashlib.sha256(a.image.read_bytes()).hexdigest(),
               'cases': []}
     for case in cases:
         try:
-            result['cases'].append(run_fws(image, case) if a.fw_start else
+            result['cases'].append(run_fws(image, case, a.fw_stop) if a.fw_start or a.fw_stop else
                                    run(image, case, a.power_only, a.wrapper_read, a.probe_read))
         except Exception as error:
             result['failed_case'] = case
