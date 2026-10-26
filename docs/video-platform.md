@@ -121,7 +121,8 @@ apply this rule through the shared `a733_clock_reference.h` helper; the 26 MHz
 board's reference uses multiplier 96 and divider 104. The resulting rate must match private
 startup metadata and remain at or below 720 MHz. The authority provider must
 independently approve that frequency and rail combination for the board.
-The binding does not retune PLLs or change voltage.
+The binding changes no voltage. It programs a PLL only in a cold start at the
+vendor's 624 MHz, described below; otherwise it retunes no PLL.
 
 For selected VE PLLs, the binding requires enable, LDO, lock-enable, lock and
 output-gate fields; it rejects modulation. At CCU `0x1918`, the selected low bit
@@ -269,8 +270,11 @@ remain part of the hardware objective.
 ## Cold startup identifies a fixed ROM profile before power-on
 
 `A733_VIDEO_COLD_NS_ROM` implements decoder startup from an admitted OFF state.
-The selected PLL, fabric and shared PCK clock must already be stable under the
-existing leases. This mode does not initialize those shared resources.
+Fabric and the shared PCK clock must already be stable under the existing
+leases. The selected PLL must be stable too, except at the vendor's operating
+point: with module word `0x81000000` and 624 MHz, the cold start holds PLL_VE0
+exclusively and runs its enable table before opening the module gate
+([video PLL design](designs/video-pll.md)).
 The admission service must establish exclusive decoder ownership, both master
 reservations, prior transaction drain, independent recovery and genuine fixed
 ROM mappings. The binding then observes ROM bytes itself.

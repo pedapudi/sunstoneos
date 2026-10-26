@@ -2627,7 +2627,8 @@
    "docs/designs/cpu-pmu.md",
    "docs/designs/cpu-top-opp.md",
    "docs/designs/pmic-access-measurements.md",
-   "docs/designs/power-authority-measurements.md"
+   "docs/designs/power-authority-measurements.md",
+   "docs/designs/video-pll.md"
   ],
   "library": false,
   "pure_host": false,
@@ -10083,6 +10084,24 @@
   "pure_host": true,
   "required_arguments": [],
   "summary": "Validate the vendor firmware manifest, its README table and every link they document.",
+  "usb": false
+ },
+ "video-pll.py": {
+  "cache_areas": [
+   "evidence",
+   "sources",
+   "video-codecs"
+  ],
+  "docs": [
+   "docs/designs/video-pll.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--output",
+   "--app-compile-commands"
+  ],
+  "summary": "Check the video PLL profile against pinned sources and the board dump, then run the decoder cold-start model.",
   "usb": false
  },
  "watchdog-configuration.py": {
