@@ -340,7 +340,7 @@ exclusive DCDC3 lease. The provider requires the inherited selector `0x1e`
 before the write, keeps bit 7 and reads the byte back.
 
 The frozen set is
-`~/.cache/sunstoneos/evidence/cpu-top-opp-20261025/steps2-5-set/`: power
+`~/.cache/sunstoneos/evidence/cpu-top-opp-20261025/steps2-5-set-r2/`: power
 removal, cold DDR start, the base image, then bundles 21, 22, 23 and 24, each
 with its approval record, then the Read bundle 14 as the host-side capture.
 
