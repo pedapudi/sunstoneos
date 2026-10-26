@@ -9,6 +9,7 @@ from unicorn.arm64_const import UC_ARM64_REG_SP, UC_ARM64_REG_X0
 ROOT=Path(__file__).resolve().parents[1]
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--build',type=Path,required=True);p.add_argument('--output',type=Path,required=True)
+p.add_argument('--admission-only',action='store_true',help='Check compiled connector admission only')
 p.add_argument('--response-dir',type=Path,help='Check only host collection from previously saved native responses')
 a=p.parse_args();a.output.mkdir(parents=True,exist_ok=False)
 flags=(a.build/'CMakeFiles/sunstone-a733-camera.dir/flags.make').read_text()
@@ -17,10 +18,12 @@ base=['/usr/bin/clang-21','--target=aarch64-none-elf',*flag('C_DEFINES'),*flag('
 assert '-DSUNSTONE_CAMERA_STREAM=1' in base and '-DSUNSTONE_CAMERA_SUPERVISED=1' in base
 linker=Path.home()/'.cache/sunstoneos/host/usr/lib/llvm-21/bin/ld.lld'
 result={'physical_access':False,'cases':{},'image_sha256':hashlib.sha256((a.build/'sunstone-a733-camera.elf').read_bytes()).hexdigest()}
-for label,units,cases in ([] if a.response_dir else [('stream-owner',['checks/camera-application.c'],4),
+for label,units,cases in ([] if a.response_dir else
+                        [('connector-admission',['checks/camera-supervised-admission.c','apps/camera/admission.c','drivers/storage/storage_digest.c'],1),
+                         ('ordinary-admission',['checks/camera-application-admission.c','apps/camera/admission.c','drivers/storage/storage_digest.c'],1)] if a.admission_only else [('stream-owner',['checks/camera-application.c'],4),
                          ('stream-output',['checks/camera-application-output.c','apps/camera/capture.c','drivers/storage/storage_digest.c'],3),
                          ('still-output',['checks/camera-application-output.c','apps/camera/capture.c','drivers/storage/storage_digest.c'],3)]):
-    selected=base if label!='still-output' else [x for x in base if x not in ('-DSUNSTONE_CAMERA_STREAM=1','-DSUNSTONE_CAMERA_SUPERVISED=1')]
+    selected=base if label not in ('still-output','ordinary-admission') else [x for x in base if x not in ('-DSUNSTONE_CAMERA_STREAM=1','-DSUNSTONE_CAMERA_SUPERVISED=1')]
     elf_path=a.output/(label+'.elf')
     cmd=[*selected,*[str(ROOT/x) for x in units],str(ROOT/'runtime/memory.c'),'-nostdlib',f'-fuse-ld={linker}',
          '-Wl,-Ttext=0x41000000','-Wl,-e,camera_check_run','-Wl,--gc-sections','-o',str(elf_path)]
@@ -36,6 +39,7 @@ for label,units,cases in ([] if a.response_dir else [('stream-owner',['checks/ca
             for page in range(address&~4095,(address+size+4095)&~4095,4096):
                 if page not in pages:uc.mem_map(page,4096);pages.add(page)
             uc.mem_write(address,data)
+        if label in ('connector-admission','ordinary-admission'):uc.mem_map(0x41f00000,0x1000)
         uc.mem_map(0x50000000,0x10000);uc.reg_write(UC_ARM64_REG_SP,0x5000f000);uc.reg_write(UC_ARM64_REG_X0,case)
         uc.hook_add(UC_HOOK_INTR,lambda m,i,c:m.emu_stop())
         uc.emu_start(symbols['camera_check_run'],0,count=5000000)
@@ -53,6 +57,13 @@ for label,units,cases in ([] if a.response_dir else [('stream-owner',['checks/ca
             decoded=decoder.decode(frame,session,1,307199,4096)
             assert decoded['state']==4 and decoded['sensor_stopped'] and decoded['stream_retained'] and not decoded['drain_proved']
             assert decoded['payload']==bytes(((307199+i)*17)&255 for i in range(4096))
+if a.admission_only:
+    result['source_sha256']={name:hashlib.sha256((ROOT/name).read_bytes()).hexdigest() for name in
+        ('checks/camera-stream-application.py','checks/camera-supervised-admission.c',
+         'checks/camera-application-admission.c','apps/camera/admission.c','include/a733_camera_native.h')}
+    (a.output/'result.json').write_text(json.dumps(result,indent=2)+'\n')
+    print('PASS compiled CAM1/CAM2 session admission and authenticated selector changes')
+    raise SystemExit(0)
 native=a.response_dir or a.output
 frame=(native/'native-frame.bin').read_bytes();session=(native/'native-session.bin').read_bytes()
 spec=importlib.util.spec_from_file_location('camera_stream_host',ROOT/'tools/check-a733-camera-supervised.py')

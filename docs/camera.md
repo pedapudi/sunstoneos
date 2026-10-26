@@ -271,7 +271,7 @@ the multi-mode results are under
 `~/.cache/sunstoneos/build/audit-camera-streaming/dev/ov5640-modes/`.
 
 The [native capture path](camera-native.md) captures retained still images from
-CAM1 in the VGA UYVY mode. Its boot record can request up to fifteen discarded
+CAM1 or CAM2 in the VGA UYVY mode. Its boot record can request up to fifteen discarded
 images before the readable one. Each discarded still image uses a complete
 sensor stop and start through the [retained rearm sequence](camera-capture.md).
 The [capture coordinator](camera-capture.md) accepts any UYVY or YUYV mode;
@@ -289,13 +289,12 @@ Native, application and host checks cover this finite stream path with modeled
 hardware. Sensor wiring, slot timing, coherence, guards and drain remain
 physically unqualified without an attached module.
 
-CAM2 has no native binding. The receiver, route and capture coordinator accept
-port and parser one, and the media clock provider can prepare MCLK2 at
-`0x02003808`. The native TWI provider and clock registry already support TWI9
-at `0x02519000`, using PE14/PE15. A CAM2 profile still needs the camera binding
-and application admission to select those resources, port one and its pins.
-It also needs a qualified deskew count for port one. The pinned device tree
-places CAM2 data on PK10–PK19, MCLK2 on PE9 and module control on PE10.
+The [native connector selection](camera-native.md#boot-admission-and-wiring)
+uses the authenticated MCLK mask: 2 selects CAM1 and 4 selects CAM2. CAM2 uses
+TWI9 at `0x02519000`, PE14/PE15, MCLK2 at `0x02003808`, and receiver/parser one.
+Its data pins are PK10–PK19, MCLK2 is PE9 and module power-down is PE10.
+The explicit reset, pin, supply and receiver timing fields must be qualified
+for the selected connector; no CAM2 deskew value is inferred from CAM1.
 
 Physical validation requires an electrically matched OV5640 module,
 independent recovery and a coordinator-owned board test. The first

@@ -25,6 +25,12 @@ void camera_check_run(unsigned mode)
  s->media.owner=6;s->media.handoff=3;s->media.deadline_us=s->deadline_us;
  s->media.groups=A733_MEDIA_VI|A733_MEDIA_IOMMU;s->media.camera_mclk_mask=2;
  check(camera_session_valid(s,2402),10);
+ s->media.camera_mclk_mask=4;check(camera_session_valid(s,2402),20);
+ for(unsigned mask=0;mask<9;mask++){
+  s->media.camera_mclk_mask=mask;
+  check(camera_session_valid(s,2402)==(mask==2||mask==4),21);
+ }
+ s->media.camera_mclk_mask=4; /* The actual contract below authenticates CAM2. */
  struct a733_smp_contract *c=&contract;
  c->magic=CAMERA_CONTRACT_MAGIC;c->version=1;c->bytes=sizeof(*c);c->epoch=1;c->generation=2;
  c->inverse_generation=~c->generation;memcpy(c->build_id,a733_smp_build_id,32);
@@ -36,6 +42,9 @@ void camera_check_run(unsigned mode)
  memcpy((void *)A733_STORAGE_SESSION_ADDRESS,s,sizeof(*s));
  storage_digest_bytes(s,sizeof(*s),(void *)&c->reserved[2]);
  check(a733_smp_contract_valid(c,2402),11);
+ ((struct camera_session *)A733_STORAGE_SESSION_ADDRESS)->media.camera_mclk_mask=2;
+ check(!a733_smp_contract_valid(c,2402),22);
+ ((struct camera_session *)A733_STORAGE_SESSION_ADDRESS)->media.camera_mclk_mask=4;
  s->image[0]^=0x80;memcpy(s->camera.build,s->image,32);
  memcpy((void *)A733_STORAGE_SESSION_ADDRESS,s,sizeof(*s));storage_digest_bytes(s,sizeof(*s),(void *)&c->reserved[2]);
  check(!a733_smp_contract_valid(c,2402),12);

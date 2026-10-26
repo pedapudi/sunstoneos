@@ -34,7 +34,7 @@ int camera_session_valid(const struct camera_session *s,uint64_t now)
        s->shared.pmic.identity!=s->generation||s->shared.pmic.startup_deadline!=s->deadline_us||
        s->shared.usb.handoff!=s->generation||s->shared.usb.deadline_us!=s->deadline_us||
        s->media.owner!=b->owner||s->media.handoff!=s->lease||s->media.deadline_us!=s->deadline_us||
-       s->media.groups!=(A733_MEDIA_VI|A733_MEDIA_IOMMU)||s->media.camera_mclk_mask!=2||
+       s->media.groups!=(A733_MEDIA_VI|A733_MEDIA_IOMMU)||(s->media.camera_mclk_mask!=2&&s->media.camera_mclk_mask!=4)||
        memcmp(s->media.fabric,s->shared.usb.fabric,sizeof(s->media.fabric))||
        memcmp(s->media.rate_hz,s->shared.usb.rate_hz,sizeof(s->media.rate_hz)))return 0;
 #ifdef SUNSTONE_CAMERA_SUPERVISED

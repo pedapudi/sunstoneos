@@ -1,6 +1,7 @@
 # Native reference camera capture
 
-The native camera binding prepares OV5640 exposures and copies the completed
+The native camera binding selects CAM1 or CAM2, prepares OV5640 exposures and
+copies the completed
 640 × 480 NV16 image into an application-owned memory reservation. NV16 stores
 307,200 luminance bytes followed by 307,200 interleaved chroma bytes in separate
 planes. The sensor sends two-lane UYVY; the pass-through route and camera DMA
@@ -38,7 +39,8 @@ binding:
   accessible through the final fault scan. Retain shared fabric and parent
   clocks for the complete operation.
 - Admit the media controller for VI and IOMMU, including its shared register
-  words and parent clocks. Reserve TWI11 independently in the same registry.
+  words and parent clocks. Reserve the selected TWI11 or TWI9 independently
+  in the same registry.
 - Authenticate camera-module supplies, bank voltages, pullups, analog trim,
   receiver timing, reset safety and independent recovery. Supply readback
   confirms programmed PMIC settings; it does not measure physical voltage.
@@ -46,12 +48,26 @@ binding:
   Qualify the four-kibibyte prefetch guards for this camera profile. A mapped
   guard does not itself establish the hardware's maximum prefetch extent.
 
-CAM1 uses PK0–PK9 for CSI, PE5 for MCLK1, PE6 for power-down and PE7/PE8 for
-TWI11. PE6 starts asserted. The connector carries no other module-control
-signal, so the record names one of two module profiles:
+The authenticated media record selects exactly one connector through
+`camera_mclk_mask`: 2 selects CAM1 and 4 selects CAM2. Other masks are refused
+before allocation. The native object freezes that port and refuses a changed
+selector before provider preparation or subsequent access. Host admission binds
+the media and camera configuration hashes to the same reviewed facts, including
+module wiring and the explicit `settle` and `deskew` fields. CAM2 has no default
+or physically qualified deskew value.
 
-- **Separate reset.** The record names an admitted reset GPIO outside PE5–PE8
-  and PK0–PK9, initially asserted. The binding claims it as a fifteenth pin and
+| Connector | CSI pins | MCLK | Power-down | Sensor bus |
+| --- | --- | --- | --- | --- |
+| CAM1 | PK0–PK9 | PE5, MCLK1 | PE6 | TWI11, PE7/PE8 |
+| CAM2 | PK10–PK19 | PE9, MCLK2 | PE10 | TWI9, PE14/PE15 |
+
+Power-down starts asserted high on the selected connector. Its inherited pin
+entries describe ten CSI pins, MCLK, power-down, two bus pins and optional reset,
+in that order. The connector carries no other module-control signal, so the
+record names one of two module profiles:
+
+- **Separate reset.** The record names an admitted reset GPIO outside all
+  selected CSI, MCLK, power-down and bus pins, initially asserted low. The binding claims it as a fifteenth pin and
   releases RESETB 1 ms after power-down release.
 - **Power-down only.** The module provides its own RESETB, for example through a
   pull-up. The record sets the power-down-only flag and leaves the reset bank,
@@ -67,7 +83,7 @@ outputs and never changes their voltages.
 
 One designated privileged FreeRTOS task advances capture. The existing PMIC
 provider task must run independently to complete queued supply observations.
-Each register access rechecks the media, TWI11 clock and rail leases. When the
+Each register access rechecks the media, selected TWI clock and rail leases. When the
 clock registry or rail ledger reports BUSY, another task holds its metadata lock;
 the binding then repeats only the status read until the boot deadline. Any other
 result, or the deadline, faults the capture with all resources retained.
@@ -89,7 +105,7 @@ The native camera-bus provider drives TWI11 for CAM1 (pins PE7/PE8) or TWI9 for
 CAM2 (pins PE14/PE15, function 8 in the pinned manual and device tree). One
 instance exists per image, and its transactions hold the camera bus mutex
 `A733_PLATFORM_I2C11_LOCK` on either controller. The camera binding selects
-TWI11; no CAM2 binding exists yet. On modeled registers, `checks/twi-busy.c`
+the matching native provider and byte engine from the authenticated connector. On modeled registers, `checks/twi-busy.c`
 runs the same prepare, write and read through a TWI9 binding and finds the
 same store sequence at the TWI9 controller and gate word. No board run covers
 TWI9.
@@ -254,7 +270,21 @@ write to that file. A separate short case covers S_TWI1 register width and
 retained cancellation. Models do not qualify wiring, prefetch, timing,
 coherence, reset, camera output or physical recovery.
 
-Wider resolutions, the CAM2 connector, alternate sensors,
+Wider resolutions, alternate sensors,
 ISP processing, interrupt-driven service, buffer reclamation and a general
 application service remain required hardware capabilities outside this reference
 capture profile.
+
+
+## CAM2 uses the existing capture and retention contracts
+
+CAM2 selects parser 1, the PHY at `0x05810200`, the packet port at
+`0x05811400` and the parser at `0x05821000`. ISP1, VIPP0, DMA0 and the
+all-master IOMMU exclusion remain the same exclusive path. Both still and
+finite continuous modes use the existing copy and retained-stop contracts.
+The [connector design](designs/camera-cam2-native.md) records routing sources,
+per-port authority, costs and focused checks. Its model covers CAM2 still
+capture, power-down-only modules, retained rearm, finite streaming, selector
+changes and incorrect inherited power-down. Local programming targets only
+the selected connector after shared analog preparation. No camera is attached;
+these checks establish no sensor compatibility, image quality or physical timing.

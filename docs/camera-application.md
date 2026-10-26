@@ -1,7 +1,7 @@
 # Native OV5640 capture and supervised observation
 
 The dedicated `sunstone-a733-camera` image connects the existing OV5640 binding,
-shared providers and USB0 device transport. It retains one readable 640 × 480
+shared providers and USB0 device transport on CAM1 or CAM2. It retains one readable 640 × 480
 NV16 frame: 307,200 luminance bytes followed by 307,200 interleaved chroma
 bytes. No MIPI camera is connected; physical capture waits for the accessory and
 remains unqualified.
@@ -154,3 +154,13 @@ saves a complete modeled frame and rejects unsupported drain-status claims.
 The existing still-output framing cases pass. Evidence is under
 `~/.cache/sunstoneos/evidence/resume-camera-native-1025/application/` and
 `host-collection/`. No physical camera execution is claimed.
+
+
+The authenticated media field `camera_mclk_mask` selects CAM1 (2) or CAM2 (4)
+for both still and finite-stream images. Other masks refuse. The host binds
+that media configuration and the camera's explicit pin/reset/timing record to
+the same reviewed entry facts; changing the connector invalidates those facts.
+The boot/session layout and NV16 USB response are unchanged. Host image admission
+accepts the actual supervised still or stream initializer retained in executable
+ELF sections,
+so linker removal of the unused still initializer does not reject a stream image.

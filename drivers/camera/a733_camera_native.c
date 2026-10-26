@@ -25,6 +25,8 @@ _Static_assert(PARAMETER_IOVA>>22==(Y_IOVA+4u*PLANE_BYTES-1)>>22,"stream fits on
 _Static_assert(PARAMETER_IOVA>>22==(UV_IOVA+PLANE_BYTES-1)>>22 && UV_IOVA+PLANE_BYTES<=A733_IOMMU_IOVA_LIMIT,
     "camera spans need one 4 MiB IOMMU window below the IOVA limit");
 #define MCLK1 UINT32_C(0x02003804)
+static uintptr_t mclk(const struct a733_camera_native *n){return MCLK1+4u*n->port;}
+static unsigned pwdn_pin(const struct a733_camera_native *n){return n->port?10u:6u;}
 static struct a733_camera_native *instance;
 static size_t plane_span(const struct a733_camera_native *n)
 {return PLANE_BYTES*(n->stream?2u:1u);}
@@ -104,6 +106,7 @@ static int leases_live(struct a733_camera_native *n)
 static int authority(struct a733_camera_native *n)
 {
     return n && n->self==n && instance==n && n->state!=A733_CAMERA_NATIVE_FAULT &&
+        n->config.media->config.camera_mclk_mask==(2u<<n->port) &&
         !memcmp(n->config.boot,&n->boot,sizeof(n->boot)) && current(n) && memory_owned(n) && pins_healthy(n) &&
         n->config.media->successor==n && !n->config.media->transferred &&
         a733_media_clock_prepared(n->config.media) &&
@@ -219,7 +222,7 @@ static int sensor_line(void *v,uint64_t t,enum ov5640_line line,int asserted,uin
     struct a733_camera_native *n=v;
     if(t!=n->boot.lease || !authority(n) || !timely(n,d) || (asserted!=0 && asserted!=1))return -1;
     unsigned b,p,value;
-    if(line==OV5640_PWDN_LINE){b=A733_PIN_E;p=6;value=(unsigned)asserted;}
+    if(line==OV5640_PWDN_LINE){b=A733_PIN_E;p=pwdn_pin(n);value=(unsigned)asserted;}
     else if(line==OV5640_RESET_LINE && !n->boot.pwdn_only){b=n->boot.reset_bank;p=n->boot.reset_pin;value=!asserted;}
     else return -1;
     return a733_pins_write_outputs(n->config.pins,&n->pin,b,1u<<p,value<<p,d)==A733_PINS_OK &&
@@ -259,7 +262,7 @@ static int sensor_receiver(void *v,uint64_t t,uint64_t rt,const struct ov5640_mo
 static int route_admit(void *v,const struct a733_route_config *c,uint64_t d,uint64_t *t)
 {
     struct a733_camera_native *n=v;
-    if(c->parser || c->parameter_address!=PARAMETER_IOVA ||
+    if(c->parser!=n->port || c->parameter_address!=PARAMETER_IOVA ||
        c->mapped_bytes!=PARAMETER_BYTES || !authority(n) || !timely(n,d))return -1;
     *t=n->boot.lease;return 1;
 }
@@ -285,20 +288,21 @@ static int route_write(void *v,uint64_t t,enum a733_route_region r,uint16_t o,ui
 static int csi_admit(void *v,const struct a733_csi_config *c,uint64_t d,uint64_t *t)
 {
     struct a733_camera_native *n=v;
-    if(c->port || c->parser || c->settle!=n->boot.settle || c->deskew!=n->boot.deskew ||
+    if(c->port!=n->port || c->parser!=n->port || c->settle!=n->boot.settle || c->deskew!=n->boot.deskew ||
        c->top_hz!=324000000 || !n->capture.local_granted || !authority(n) || !timely(n,d))return -1;
     *t=n->boot.lease;return 1;
 }
-static uintptr_t csi_address(enum a733_csi_region r,uint16_t o)
+static uintptr_t csi_address(const struct a733_camera_native *n,enum a733_csi_region r,uint16_t o)
 {
     static const uintptr_t base[]={0x05810000,0x05810100,0x05811000,0x05820000};
-    return (unsigned)r<4 && o<(r==A733_CSI_PORT?0x400:0x100)?base[r]+o:0;
+    static const unsigned stride[]={0,0x100,0x400,0x1000};
+    return (unsigned)r<4 && o<(r==A733_CSI_PORT?0x400:0x100)?base[r]+n->port*stride[r]+o:0;
 }
 static int csi_read(void *v,uint64_t t,enum a733_csi_region r,uint16_t o,uint32_t *x,uint64_t d)
-{uintptr_t a=csi_address(r,o);return a?read_word(v,t,a,x,d):-1;}
+{uintptr_t a=csi_address(v,r,o);return a?read_word(v,t,a,x,d):-1;}
 static int csi_write(void *v,uint64_t t,enum a733_csi_region r,uint16_t o,uint32_t x,uint64_t d)
 {
-    struct a733_camera_native *n=v;uintptr_t a=csi_address(r,o);
+    struct a733_camera_native *n=v;uintptr_t a=csi_address(v,r,o);
     if(!a || r==A733_CSI_TOP || !n->capture.local_granted)return -1;
     if(n->capture.packets_granted) {
         /* After the first image only status acknowledgement and the SCAP
@@ -353,7 +357,7 @@ static int dma_sync_slot(void *v,uint64_t t,unsigned slot,uint64_t d)
         if(cache(n,AARCH64_CACHE_INVALIDATE,p+plane*plane_span(n),A733_CAMERA_NATIVE_PLANE_BYTES,d)!=1)return -1;
     return 1;
 }
-static int boot_valid(const struct a733_camera_boot_record *b,unsigned supervised)
+static int boot_valid(const struct a733_camera_boot_record *b,unsigned supervised,unsigned port)
 {
     if(b->version!=(supervised?2u:1u) || b->bytes!=sizeof(*b) || !b->owner || !b->epoch || !b->generation ||
        !b->lease || !b->deadline_us || !(b->build[0]|b->build[1]|b->build[2]|b->build[3]) ||
@@ -370,8 +374,10 @@ static int boot_valid(const struct a733_camera_boot_record *b,unsigned supervise
         if(b->reset_bank || b->reset_pin || r->function || r->pull || r->drive)return 0;
     } else if(b->reset_bank<A733_PIN_B || b->reset_bank>A733_PIN_K || b->reset_pin>=32 ||
        !(a733_pin_bank_mask(b->reset_bank)&(1u<<b->reset_pin)) ||
-       (b->reset_bank==A733_PIN_E && b->reset_pin>=5 && b->reset_pin<=8) ||
-       (b->reset_bank==A733_PIN_K && b->reset_pin<10) ||
+       (b->reset_bank==A733_PIN_E && (port?
+          (b->reset_pin==9 || b->reset_pin==10 || b->reset_pin==14 || b->reset_pin==15):
+          (b->reset_pin>=5 && b->reset_pin<=8))) ||
+       (b->reset_bank==A733_PIN_K && b->reset_pin>=10u*port && b->reset_pin<10u*(port+1)) ||
        b->inherited[14].function!=1)return 0;
     for(unsigned i=0;i<3;i++){
         if(!b->programmed_uv[i])return 0;
@@ -395,10 +401,10 @@ static int initialize(struct a733_camera_native *n,const struct a733_camera_nati
        c->clocks->now!=c->locks->now || c->clocks->context!=c->locks->context ||
        c->media->registry!=c->clocks || c->media->config.owner!=c->boot->owner ||
        (c->media->config.groups&(A733_MEDIA_VI|A733_MEDIA_IOMMU))!=(A733_MEDIA_VI|A733_MEDIA_IOMMU) ||
-       c->media->config.camera_mclk_mask!=2 || c->media->config.deadline_us!=c->boot->deadline_us ||
+       (c->media->config.camera_mclk_mask!=2 && c->media->config.camera_mclk_mask!=4) || c->media->config.deadline_us!=c->boot->deadline_us ||
        c->pmic->clocks!=c->clocks || c->pmic->rails!=c->rails || c->pmic->pins!=c->pins ||
        c->rail_parent->owner!=c->boot->owner ||
-       !boot_valid(c->boot,supervised) || !a733_ranges_disjoint(n,sizeof(*n),c,sizeof(*c)) ||
+       !boot_valid(c->boot,supervised,c->media->config.camera_mclk_mask==4) || !a733_ranges_disjoint(n,sizeof(*n),c,sizeof(*c)) ||
        !a733_ranges_disjoint(n,sizeof(*n),c->boot,sizeof(*c->boot)) ||
        !a733_ranges_disjoint(n,sizeof(*n),c->media,sizeof(*c->media)) ||
        !a733_ranges_disjoint(n,sizeof(*n),c->clocks,sizeof(*c->clocks)) ||
@@ -416,7 +422,8 @@ static int initialize(struct a733_camera_native *n,const struct a733_camera_nati
     if(!pool || !a733_ranges_disjoint(n,sizeof(*n),(void *)pool->backing.cpu,pool->backing.bytes) ||
        !a733_ranges_disjoint(c,sizeof(*c),(void *)pool->backing.cpu,pool->backing.bytes) ||
        !a733_ranges_disjoint(c->boot,sizeof(*c->boot),(void *)pool->backing.cpu,pool->backing.bytes))return 0;
-    *n=(struct a733_camera_native){.self=n,.config=*c,.boot=*c->boot,.pool=pool,.state=A733_CAMERA_NATIVE_CLOCK,.stream=stream};
+    *n=(struct a733_camera_native){.self=n,.config=*c,.boot=*c->boot,.pool=pool,.state=A733_CAMERA_NATIVE_CLOCK,.stream=stream,
+        .port=c->media->config.camera_mclk_mask==4};
     instance=n;
     size_t bytes=stream?A733_CAMERA_NATIVE_STREAM_BYTES:A733_CAMERA_NATIVE_BYTES;
     if(!device_memory_acquire_aligned(n->pool,n->boot.owner,bytes,16384,&n->memory,&n->extent))return fail(n);
@@ -440,7 +447,7 @@ static int initialize(struct a733_camera_native *n,const struct a733_camera_nati
           {(void *)(p+TABLE_BYTES+PARAMETER_BYTES),Y_IOVA,pa+TABLE_BYTES+PARAMETER_BYTES,plane_span(n)},
           {(void *)(p+TABLE_BYTES+PARAMETER_BYTES+plane_span(n)),uv_iova(n),pa+TABLE_BYTES+PARAMETER_BYTES+plane_span(n),plane_span(n)}},
         .table_words=(void *)p,.table_physical=pa,.frame_id=n->boot.lease,
-        .receiver={0,0,n->boot.settle,n->boot.deskew,324000000},.mode=ov5640_vga_mode,
+        .receiver={(uint8_t)n->port,(uint8_t)n->port,n->boot.settle,n->boot.deskew,324000000},.mode=ov5640_vga_mode,
         .color_bars=n->boot.test_pattern,.slots=stream?2:0,.slot_bytes=stream?PLANE_BYTES:0,
         .sensor={time_read,sensor_acquire,sensor_line,sensor_read,sensor_write,sensor_receiver,no_drain,sensor_write_block},
         .analog={time_read,analog_admit,analog_read,analog_write},
@@ -463,14 +470,14 @@ static int pin_acquire(struct a733_camera_native *n)
 {
     struct a733_pin_request_banked r[A733_CAMERA_NATIVE_PIN_COUNT]={0};
     unsigned count=n->boot.pwdn_only?A733_CAMERA_NATIVE_PIN_COUNT-1:A733_CAMERA_NATIVE_PIN_COUNT;
-    for(unsigned i=0;i<10;i++){r[i].bank=A733_PIN_K;r[i].pin=i;r[i].desired=(struct a733_pin_config){2,0,0};}
-    r[10].bank=A733_PIN_E;r[10].pin=5;r[10].desired=(struct a733_pin_config){2,0,0};
-    r[11].bank=A733_PIN_E;r[11].pin=6;r[11].desired=(struct a733_pin_config){1,0,0};r[11].output_value=1;
-    for(unsigned i=12;i<14;i++){r[i].bank=A733_PIN_E;r[i].pin=i-5;r[i].desired=(struct a733_pin_config){8,0,0};}
+    for(unsigned i=0;i<10;i++){r[i].bank=A733_PIN_K;r[i].pin=i+10u*n->port;r[i].desired=(struct a733_pin_config){2,0,0};}
+    r[10].bank=A733_PIN_E;r[10].pin=n->port?9:5;r[10].desired=(struct a733_pin_config){2,0,0};
+    r[11].bank=A733_PIN_E;r[11].pin=pwdn_pin(n);r[11].desired=(struct a733_pin_config){1,0,0};r[11].output_value=1;
+    for(unsigned i=12;i<14;i++){r[i].bank=A733_PIN_E;r[i].pin=i-5+(n->port?7:0);r[i].desired=(struct a733_pin_config){8,0,0};}
     if(!n->boot.pwdn_only){r[14].bank=n->boot.reset_bank;r[14].pin=n->boot.reset_pin;r[14].desired=(struct a733_pin_config){1,0,0};}
     for(unsigned i=0;i<count;i++)r[i].expected=n->boot.inherited[i];
     struct a733_pin_output_condition condition={0};
-    condition.masks[A733_PIN_E]=1u<<6;condition.levels[A733_PIN_E]=1u<<6;
+    condition.masks[A733_PIN_E]=1u<<pwdn_pin(n);condition.levels[A733_PIN_E]=1u<<pwdn_pin(n);
     if(!n->boot.pwdn_only)condition.masks[n->boot.reset_bank]|=1u<<n->boot.reset_pin;
     enum a733_pins_result result=a733_pins_acquire_banked_checked(n->config.pins,n->boot.owner,
         r,count,&condition,&n->pin,n->boot.deadline_us);
@@ -480,10 +487,10 @@ static int mclk_enable(struct a733_camera_native *n)
 {
     uint64_t d=n->boot.deadline_us;
     if(!io_enter(n,n->boot.lease,d))return -1;
-    uint32_t v=load(MCLK1);
+    uint32_t v=load(mclk(n));
     if(v&0x87001f1fu)return fail(n); /* Prepared 24 MHz, both dividers 1, gate off. */
-    store(MCLK1,v|0x80000000u);
-    if(load(MCLK1)!=(v|0x80000000u))return fail(n);
+    store(mclk(n),v|0x80000000u);
+    if(load(mclk(n))!=(v|0x80000000u))return fail(n);
     return io_end(n,d);
 }
 int a733_camera_native_poll(struct a733_camera_native *n)
@@ -491,7 +498,8 @@ int a733_camera_native_poll(struct a733_camera_native *n)
     if(!n || n->self!=n || instance!=n || n->state==A733_CAMERA_NATIVE_FAULT)return -1;
     if(!current(n))return -1;
     if(n->entered)return fail(n);
-    if(memcmp(n->config.boot,&n->boot,sizeof(n->boot)) ||
+    if(n->config.media->config.camera_mclk_mask!=(2u<<n->port) ||
+       memcmp(n->config.boot,&n->boot,sizeof(n->boot)) ||
        !timely(n,n->boot.deadline_us))return fail(n);
     if(n->state==A733_CAMERA_NATIVE_READABLE)return authority(n)?1:fail(n);
     n->entered=1;int r=0;
@@ -505,7 +513,7 @@ int a733_camera_native_poll(struct a733_camera_native *n)
         a733_clock_mask_t shared=A733_CLOCK_FABRIC|A733_CLOCK_REF|A733_CLOCK_OSC;
         if(n->boot.apb1>>24==3)shared|=A733_CLOCK_PERI0;
         enum a733_clock_result c=a733_clock_acquire(n->config.clocks,n->boot.owner,shared,
-            A733_CLOCK_TWI11,n->boot.deadline_us,&n->twi_clock);
+            (n->port?A733_CLOCK_TWI9:A733_CLOCK_TWI11),n->boot.deadline_us,&n->twi_clock);
         if(c==A733_CLOCK_BUSY)break;
         if(c!=A733_CLOCK_OK){r=-1;break;}n->state=A733_CAMERA_NATIVE_RAIL;break;
     }
@@ -542,11 +550,12 @@ int a733_camera_native_poll(struct a733_camera_native *n)
     case A733_CAMERA_NATIVE_TWI: {
         struct a733_twi_native_config c={n->config.clocks,n->twi_clock,n->config.pins,n->pin,
             n->config.rails,&n->rail,n->config.locks,n->config.task,n->boot.apb1,n->boot.apb1_hz,
-            A733_TWI_MAIN11};
+            n->port?A733_TWI_MAIN9:A733_TWI_MAIN11};
         if(!n->twi_native.self && !a733_twi_native_init(&n->twi_native,&c)){r=-1;break;}
         int ready=a733_twi_native_prepare(&n->twi_native,n->boot.deadline_us);
         if(!ready)break;
-        if(ready!=1 || !a733_twi_init(&n->twi,&n->twi_native.operations,&n->twi_native,n->twi_native.divider)){r=-1;break;}
+        if(ready!=1 || !a733_twi_init_controller(&n->twi,&n->twi_native.operations,&n->twi_native,
+                n->twi_native.divider,c.controller,2)){r=-1;break;}
         n->state=A733_CAMERA_NATIVE_MCLK;break;
     }
     case A733_CAMERA_NATIVE_MCLK:

@@ -28,7 +28,7 @@
  * Current memory-only boot admission does NOT produce this authority.
  * test_pattern 0 captures the ordinary sensor image; 1 selects the OV5640
  * color bars (register 0x503d = 0x84). pwdn_only 1 admits a module whose
- * RESETB has no separate GPIO: PE6 power-down is its only control, reset_bank,
+ * RESETB has no separate GPIO: the selected power-down pin is its only control, reset_bank,
  * reset_pin and inherited[14] are zero, and only fourteen pins are claimed.
  * discard_frames (at most A733_CAMERA_NATIVE_DISCARD_LIMIT) images are captured
  * and rearmed over, unread, before the image that becomes readable; zero keeps
@@ -46,6 +46,10 @@ struct a733_camera_boot_record {
     enum a733_rail rails[3];
     uint32_t programmed_uv[3];
 };
+/* Exactly one connector: media.camera_mclk_mask 2 selects CAM1; 4 selects
+ * CAM2. The authenticated media and camera records bind this choice to the
+ * inherited pin roles, reset wiring, settle/deskew and electrical evidence.
+ * Other masks refuse before allocation. The session/boot record ABI is unchanged. */
 struct a733_camera_native_config {
     const struct a733_camera_boot_record *boot; /* Protected retained record. */
     struct a733_media_clock *media;
@@ -80,6 +84,7 @@ struct a733_camera_native {
     uint64_t last_now;
     unsigned snapshot,index,held,entered,started,discarded;
     unsigned stream,copy_active,copy_slot,copy_bytes;
+    unsigned port; /* Frozen from media.camera_mclk_mask: 2 selects CAM1, 4 CAM2. */
     struct device_memory_lease copy_destination;
     enum a733_camera_native_state state;
 };

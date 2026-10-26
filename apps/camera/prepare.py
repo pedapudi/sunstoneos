@@ -95,7 +95,16 @@ def image_data(raw):
                 return a,p['data'][a-p['address']:a-p['address']+n]
         raise ValueError('camera immutable input lacks file backing')
     address,identity=read('a733_smp_build_id',32)
-    require(0x41000000<=address<=0x411fffe0 and {'camera_capture_step','camera_session_valid','camera_output','a733_camera_native_supervised_init'}<=set(symbols),'Wrong native application identity')
+    def executable(symbol):
+        section=symbol['st_shndx'];start=int(symbol['st_value']);size=int(symbol['st_size'])
+        return (symbol['st_info']['type']=='STT_FUNC' and isinstance(section,int) and
+            0<section<elf.num_sections() and elf.get_section(section)['sh_flags']&4 and size>0 and
+            any(p['flags']&1 and p['address']<=start and start+size<=p['address']+len(p['data']) for p in parts))
+    functions={name for name,symbol in symbols.items() if executable(symbol)}
+    native={'a733_camera_native_supervised_init','a733_camera_native_supervised_stream_init'}
+    require(0x41000000<=address<=0x411fffe0 and
+        {'camera_capture_step','camera_session_valid','camera_output'}<=functions and
+        native.intersection(functions),'Wrong native application identity')
     return parts,address,identity,session_layout(elf)
 
 def field(raw,layout,name):
@@ -135,18 +144,22 @@ def session_profile(raw,layout,identity):
     require(values['camera.test_pattern'] in (0,1) and values['camera.pwdn_only'] in (0,1),'Camera test pattern or module profile differs')
     # Images captured and discarded before the readable one, each a full sensor stop/start.
     require(values['camera.discard_frames']<=15,'Camera discard count exceeds the native limit')
+    mclk=values['media.camera_mclk_mask']
+    require(mclk in (2,4),'Exactly one camera connector must be selected')
+    connector=0 if mclk==2 else 1
+    control_pins=(5,6,7,8) if connector==0 else (9,10,14,15)
     bank,pin=values['camera.reset_bank'],values['camera.reset_pin'];inherited=field(raw,layout,'camera.inherited')
     if values['camera.pwdn_only']:
         require(bank==pin==0 and inherited[14*3:15*3]==bytes(3),'PWDN-only camera module names reset wiring')
         require(inherited[11*3]==1,'Camera inherited powerdown GPIO must be asserted')
     else:
-        require(1<=bank<=10 and pin<(0,11,17,24,16,7,15,20,17,28,26)[bank] and not(bank==4 and 5<=pin<=8) and not(bank==10 and pin<10),'Camera reset wiring conflicts')
+        require(1<=bank<=10 and pin<(0,11,17,24,16,7,15,20,17,28,26)[bank] and not(bank==4 and pin in control_pins) and not(bank==10 and 10*connector<=pin<10*(connector+1)),'Camera reset wiring conflicts')
         require(inherited[11*3]==inherited[14*3]==1,'Camera inherited reset/powerdown GPIO must be asserted')
     rails=struct.unpack('<3I',field(raw,layout,'camera.rails'));uv=struct.unpack('<3I',field(raw,layout,'camera.programmed_uv'))
     require(len(set(rails))==3 and set(rails)<={0,1,3,7,16,19,20,24,38} and all(uv),'Unsupported camera supply profile')
     apb=values['camera.apb1'];parent=600000000 if apb>>24==3 else 24000000;div=(apb&31)+1
     require(not apb&~0x0300001f and apb>>24 in (0,3) and parent%div==0 and values['camera.apb1_hz']==parent//div,'Camera APB1 profile differs')
-    require(values['media.groups']==9 and values['media.camera_mclk_mask']==2 and
+    require(values['media.groups']==9 and mclk in (2,4) and
         field(raw,layout,'media.fabric')==field(raw,layout,'shared.usb.fabric') and
         field(raw,layout,'media.rate_hz')==field(raw,layout,'shared.usb.rate_hz'),'Camera media/USB fabric profile differs')
     return {k:values[k] for k in ('epoch','generation','lease')}

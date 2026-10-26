@@ -6,6 +6,7 @@ import hashlib
 import importlib.util
 import json
 import inspect
+import io
 from pathlib import Path
 import shutil
 import sqlite3
@@ -25,6 +26,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     for n in ('image','manifest','evidence','clang','lld','objcopy'):p.add_argument('--'+n,type=Path,required=True)
     p.add_argument('--setup-only',action='store_true')
+    p.add_argument('--connector-only',action='store_true',help='Run only connector admission and evidence binding')
     a=p.parse_args();out=a.evidence;out.mkdir(parents=True,exist_ok=True)
     host=load(ROOT/'tools/check-a733-camera-supervised.py');prep=host.preparation;sup=host.supervisor
     paths=[Path(__file__),Path(host.__file__),Path(prep.__file__),Path(host.decoder.__file__),Path(sup.__file__),Path(sup.base.__file__),Path(sup.observer.__file__),ROOT/'checks/a733-smp-supervised-launch.py',ROOT/'platform/a733-smp-supervised/launch.c',ROOT/'platform/a733-smp-observe/launch.S',ROOT/'platform/a733-smp-observe/launch.ld',ROOT/'platform/a733-smp-cached/boot.h',a.image,a.manifest,a.clang,a.lld,a.objcopy]
@@ -87,6 +89,63 @@ def main():
     sup.save_json(out/'setup.json',{'physical_access':False,'mismatches':errors,'session_bytes':len(session),'payload_bytes':len(pixels) if 'pixels' in locals() else 614400,'image_sha256':prep.sha(image)})
     assert not errors,'; '.join(errors)
     if a.setup_only:return
+    def executable_admission(d):
+        elf=prep.ELFFile(io.BytesIO(image));table=elf.get_section_by_name('.symtab')
+        indices={symbol.name:i for i,symbol in enumerate(table.iter_symbols())}
+        native=next(n for n in ('a733_camera_native_supervised_init','a733_camera_native_supervised_stream_init') if n in indices)
+        data_section=next(i for i,section in enumerate(elf.iter_sections()) if section.name=='.debug_info')
+        refused_symbols=[]
+        for name in ('camera_capture_step','camera_session_valid','camera_output',native):
+            offset=table['sh_offset']+indices[name]*table['sh_entsize']
+            for mutation in ('object','undefined','debug','non-executable'):
+                b=bytearray(image)
+                if mutation=='object':b[offset+4]=(b[offset+4]&0xf0)|1
+                elif mutation=='undefined':struct.pack_into('<H',b,offset+6,0)
+                elif mutation=='debug':struct.pack_into('<H',b,offset+6,data_section)
+                else:struct.pack_into('<Q',b,offset+8,address)
+                refused(lambda:prep.image_data(bytes(b)))
+                refused_symbols.append(name+':'+mutation)
+        return {'refused':refused_symbols,'accepted':'actual executable camera entries'}
+    case('executable-admission',executable_admission)
+    def connector_admission(d):
+        b=bytearray(session)
+        def set_field(name,value):
+            f=layout['fields'][name];b[f['offset']:f['offset']+f['size']]=value if isinstance(value,bytes) else value.to_bytes(f['size'],'little')
+        for mask in (0,1,6,8):
+            set_field('media.camera_mclk_mask',mask)
+            refused(lambda:prep.session_profile(bytes(b),layout,identity))
+        set_field('media.camera_mclk_mask',4)
+        assert prep.session_profile(bytes(b),layout,identity)==profile
+        # Valid CAM2 geometry cannot reuse CAM1 electrical/timing facts.
+        refused(lambda:prep.validate_admission(Path(admission['path']).read_bytes(),bytes(b),layout,identity,prep.sha(image)))
+        set_field('camera.deskew',7)  # Explicit modeled value, never a board default.
+        good=bytes(b)
+        for name,value in [('camera.deskew',0),('camera.deskew',32),('camera.settle',0)]:
+            set_field(name,value);refused(lambda:prep.session_profile(bytes(b),layout,identity));b[:]=good
+        for bank,pins in ((4,(9,10,14,15)),(10,range(10,20))):
+            for pin in pins:
+                set_field('camera.reset_bank',bank);set_field('camera.reset_pin',pin)
+                refused(lambda:prep.session_profile(bytes(b),layout,identity));b[:]=good
+        # Rebind the actual typed camera AND media configurations in the
+        # existing software-only fixture facts and entry record.
+        facts=json.loads(Path(recovery['path']).read_bytes())
+        entry=json.loads(Path(admission['path']).read_bytes())
+        for obj in (facts,entry):
+            obj['camera_sha256']=prep.camera_configuration_sha256(bytes(b),layout)
+            obj['media_sha256']=prep.sha(prep.field(bytes(b),layout,'media'))
+        facts_raw=json.dumps(facts,sort_keys=True).encode();facts_path=(d/'cam2-facts.json').resolve();facts_path.write_bytes(facts_raw)
+        entry['recovery']={'path':str(facts_path),'sha256':prep.sha(facts_raw)}
+        entry_raw=json.dumps(entry,sort_keys=True).encode()
+        set_field('recovery',hashlib.sha256(facts_raw).digest())
+        set_field('evidence',hashlib.sha256(entry_raw).digest());set_field('camera.evidence',hashlib.sha256(entry_raw).digest())
+        prep.validate_admission(entry_raw,bytes(b),layout,identity,prep.sha(image))
+        (d/'cam2-session.bin').write_bytes(b);(d/'cam2-admission.json').write_bytes(entry_raw)
+        set_field('media.camera_mclk_mask',2)
+        refused(lambda:prep.validate_admission(entry_raw,bytes(b),layout,identity,prep.sha(image)))
+        return {'accepted':'CAM2 with explicit modeled deskew and rebound camera/media facts',
+                'refused':['invalid connector masks','missing timing','selected-route reset conflicts','other connector evidence']}
+    case('connector-admission',connector_admission)
+    if a.connector_only:return
     bundle=out/'bundle'
     def package(d):
         if not bundle.exists():prep.prepare(a.image,a.manifest,setup/'session.bin',Path(admission['path']),bundle,a.clang,a.lld,a.objcopy)

@@ -31,6 +31,7 @@ def main():
     p.add_argument('--clang', default='/usr/bin/clang-21')
     p.add_argument('--cases', default=','.join(map(str,range(25))))
     p.add_argument('--skip-native', action='store_true')
+    p.add_argument('--port', choices=(0,1), type=int, default=0)
     a = p.parse_args()
     out = a.evidence.resolve();out.mkdir(parents=True, exist_ok=False)
     compiler = Path(shutil.which(a.clang)).resolve()
@@ -89,7 +90,7 @@ def main():
     binary = out/'camera-native'
     run('host-link', [*host, *objects, '-o', binary])
     save(binary)
-    results = {case:run('scenario-'+case, [binary, case]) for case in a.cases.split(',')}
+    results = {case:run('scenario-'+case, [binary, case, *(['cam2'] if a.port else [])]) for case in a.cases.split(',')}
     if not a.skip_native:
         port = out/'smp-port';port.mkdir()
         save(kernel/'portable/GCC/ARM_CR82/portmacro.h')
