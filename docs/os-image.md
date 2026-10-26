@@ -372,16 +372,19 @@ Power and thermal integration remains incomplete:
   while retaining the power-domain and PLL ownership; it does not establish
   reusable whole-device power recovery.
 
-CPU clock and PMIC voltage board changes still need their existing individual
-approvals. Supervised manual recovery, resident watchdog recovery and physical
+CPU clock and PMIC voltage changes require their existing session grants
+and resource ownership. Supervised manual recovery, resident watchdog recovery and physical
 thermal qualification remain separate prerequisites and evidence gaps.
 
 ## Optional NPU service
 
 `SUNSTONE_A733_OS_NPU=ON` links the NPU runtime and one application client
-into the supervised OS with recorded input. Configuration stops when it is
-combined with the resident lifetime, the microphone, the radio, the headset,
-CPU operating-point grants or GPU linear layers.
+into either OS lifetime with recorded input. The resident profile accepts CPU
+operating-point grants; the supervised combination requires the performance
+service. Configuration refuses the microphone, radio, headset and GPU linear
+options. [Resident NPU integration](designs/resident-npu.md) describes cold-card
+authority, initialized non-executable assets, bounded health and the combined
+eight-worker ShuffleNet evidence.
 `SUNSTONE_OS_NPU_CLIENT_MODEL` selects the catalogue entry of
 `tools/npu-session-models.json` that the client runs (default 0, the
 192-byte to 72-byte convolution). Only that model and its input and
@@ -857,19 +860,19 @@ the interrupt table follow the options:
 | `SUNSTONE_A733_OS_AUDIO`, `SUNSTONE_A733_OS_RADIO` | `mimus`, `thermal`, `audio`, `radio` | 71, 143 |
 | `SUNSTONE_A733_OS_HEADSET`, with or without `SUNSTONE_A733_OS_MSBC` | `mimus`, `thermal`, `headset` | 71 |
 | `SUNSTONE_A733_OS_RADIO`, `SUNSTONE_A733_OS_HEADSET`, with or without `SUNSTONE_A733_OS_MSBC` | `mimus`, `thermal`, `radio`, `headset` | 71 |
-| `SUNSTONE_A733_OS_GPU_LINEAR`, resident only, with any row above | That row's entries, then `gpu-linear` | That row's INTIDs, then 95 |
-| `SUNSTONE_A733_OS_NPU`, supervised only, alone | `mimus`, `thermal`, `npu` | 71, 97 |
+| `SUNSTONE_A733_OS_GPU_LINEAR`, resident with permitted peripheral rows or supervised recorded input | That row's entries, then `gpu-linear` | That row's INTIDs, then 95 |
+| `SUNSTONE_A733_OS_NPU`, recorded input in either lifetime | `mimus`, `thermal`, `npu` | 71, 97 |
 | `SUNSTONE_A733_OS_PERF` with `SUNSTONE_A733_OS_CPU_CLOCK`, supervised only, with or without `SUNSTONE_A733_OS_NPU` | That build's entries | That build's INTIDs |
 
 Configuration stops when `SUNSTONE_A733_OS_AUDIO` and
 `SUNSTONE_A733_OS_HEADSET` are both set, and when `SUNSTONE_A733_OS_MSBC` is
-set without the headset. With `SUNSTONE_A733_OS_GPU_LINEAR` it stops unless
-the lifetime is resident,
-`A733_GPU_OUTPUT_EL0_READ_ONLY` is not given, `SUNSTONE_GPU_FIRMWARE` names the
-pinned firmware and `SUNSTONE_A733_OS_MODEL_DIR` holds the models
-([recognition dispatch](recognition-dispatch.md#build-gate)). The supervised radio and headset builds link, but at
-the admitted SDIO clock firmware loading cannot finish within their bootstrap
-bounds (see [Radio station](#radio-station)).
+set without the headset. GPU builds require the pinned firmware and model
+inputs and set their own output mapping; callers must not override
+`A733_GPU_OUTPUT_EL0_READ_ONLY`. Supervised GPU builds use recorded input,
+optionally with CPU clock control, and exclude other optional devices and the
+performance-command service ([recognition dispatch](recognition-dispatch.md#build-gate)).
+Supervised radio and headset builds request the existing fast SDIO mode;
+physical firmware-loading time remains unqualified (see [Radio station](#radio-station)).
 
 ```sh
 cmake -S . -B BUILD ... -DSUNSTONE_MIMUS_BOARD_APPLICATION=ON -DSUNSTONE_A733_OS=ON \
@@ -1249,10 +1252,10 @@ No integrated OS physical execution is established by these checks.
   no part of the image submits hash or cipher requests.
 - **HDMI, camera and GPU graphics.** These remain separate images. The GPU
   linear option integrates recognition compute into the OS.
-- **Resident NPU and recognition acceleration.** The supervised OS integrates
-  a finite NPU application with its existing model catalogue. Resident NPU
-  startup and cold-card authority are not yet integrated. The NPU does not
-  produce the exact sums required by the mimus recognition path.
+- **NPU recognition acceleration.** Both OS lifetimes integrate a finite NPU
+  catalogue application. It does not produce the exact sums required by the
+  mimus recognition path. Concurrent GPU/NPU and eight-worker GPU integration
+  remain separate work.
 - **Physical use.** The supervised image needs a reviewed entry record
   from physical evidence and a queued board test; the microphone build also
   needs a connected, reviewed microphone. The radio and headset builds need

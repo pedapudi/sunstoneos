@@ -256,17 +256,20 @@ to the stated scope:
   storage plans. Eight inference workers and CPU operating-point grants are
   supported; entry binds the board identity and derives fresh session/grant
   epochs. Twenty-four producer cases and twenty linked entry/admission cases
-  pass under `resume-card-os-1026/`. The monitor occupies 32,560 of 32,768 bytes.
+  pass under `resume-card-os-1026/`. The combined CPU/NPU monitor occupies 32,688 of 32,768 bytes.
   [Cold SD admission](boot-slots.md#cold-sd-admission-starts-from-boot0s-controller-state)
   checks inherited controller and pin state. Loading then uses the existing
   3.3 V, 50 MHz, four-bit DMA path, with bounded transfers and guarded tails.
   Sixteen linked cases pass under `resume-stage2-sd-1026/`. Physical DMA
   throughput and cold-card supply/controller state remain unqualified.
-  Local entry and normal-card reset-policy checks are implemented. Stable
-  secondary-core exclusion and non-Arm memory-writer exclusion still refuse
-  physical boot. Boot0 covers the documented shared L3 cache; the remaining
-  Arm issue is preventing secondary wake during ownership transfer. No card
-  installation or physical autonomous OS boot has occurred. Packer licensing
+  Local entry, normal-card reset policy and stable secondary ownership are
+  implemented. The power controller holds the seven secondary cores in static
+  OFF through loading. Cache cleanup follows acknowledged OFF, and resident
+  startup releases policy after publishing entry state. Twenty-three ownership
+  cases and actual resident startup/permission checks pass under
+  `cold-cpu-static-off-1026/combined-frozen/`. Crypto-engine predecessor accounting
+  and physical boot qualification remain open. No card installation or physical
+  autonomous OS boot has occurred. Packer licensing
   and exact source equivalence remain unresolved.
   The [cache-wrapper audit](cold-entry.md#the-parser-cleans-cpu-caches-before-returning)
   separately executes the actual parser enable/clean-disable wrappers and all
@@ -607,6 +610,11 @@ to the stated scope:
   now implemented. Timeout or uncertain completion retains buffers and device
   ownership. Five linked cases and seventeen host cases pass under
   `resume-gpu-wait-20261026/`; physical integrated recognition remains unqualified.
+  The supervised GPU image now also accepts CPU clock control on the A76 pair,
+  with a finite readiness wait before GPU OPEN and exact combined-session/owner
+  checks. The selected native build and focused startup, host and shared-provider
+  cases pass under `resume-gpu-cpu-clock-20261026/`. Eight-worker GPU and concurrent
+  GPU/NPU operation remain under development.
   A supervised launcher and session preparation exist. Preparation requires a
   reviewed entry record from physical evidence and stages authenticated radio
   and headset profiles and firmware for those builds. [The recorded-audio launch](os-image.md#first-bounded-launch-with-recorded-audio)
@@ -2208,6 +2216,15 @@ to the stated scope:
 - NPU: **tested** for interrupt completion and matching ShuffleNetV2 outputs
   in the returning diagnostics described above. The resident runtime and OS
   profiles below retain their separate qualification requirements.
+  The resident OS now runs the finite NPU client alongside eight CPU recognition
+  workers, with CPU clock grants and cold-card loading. Selected ShuffleNet
+  assets fit in existing initialized non-executable RAM; metadata remains in
+  read-only code storage. Deadline checks cannot be bypassed by health reports,
+  and late IRQ/fault state revokes the completed-client health exemption.
+  The combined build, actual card producer, twenty entry cases and three
+  late-fault cases pass under `resident-npu-cpu8-1026/`. Physical combined
+  execution and cold-reset retirement remain unqualified. NPU mimus acceleration
+  is separate outstanding work.
   The application clock admission accepts the board's normalized
   reference and recorded PERI0 settings. Six focused final-image cases pass
   under `npu-single-core-20261018/reference-refresh/`; unchanged startup and

@@ -66,10 +66,10 @@ does not establish recovery from a fault.
 
 | Work | Branch | Immediate deliverable |
 | --- | --- | --- |
-| Cold entry | `work/cold-arm-cache-audit-1026` | Establish a source-backed secondary wake/reset ownership sequence; non-Arm writer exclusion remains separate |
-| GPU CPU clocks | `work/resume-gpu-cpu-clock-1026` | Reuse the existing CPU-ready wait and operating-point grant in the supervised GPU image |
-| Resident NPU | `work/resident-npu-1026` | Extend the existing OS NPU application and cold-card session; resolve selected-model image size without reducing the supported model scope |
-| Cold non-Arm ownership | `work/resume-remote-cold-1026` | Account for crypto-engine submissions before the monitor is loaded; OR100 is inapplicable to A733 |
+| Cold crypto ownership | `work/resume-remote-cold-1026` | Complete selected boot-path accounting and define the supported predecessor contract before DRAM reuse |
+| Eight-worker GPU | `work/resume-gpu-eight-workers-1026` | Reuse the existing owner-only GPU hook and synchronous eight-worker dispatch; remove only unsupported restrictions justified by source and linked evidence |
+| Concurrent GPU/NPU | `work/concurrent-gpu-npu-design-1026` | Resolve shared client/owner admission and clock-disturbance prerequisites in the existing OS services |
+| microSD DMA return | `work/resume-sd-return-1026` | Complete bounded normal drain/restoration and retain ownership on uncertain exception paths |
 
 Independent reviewers cover CPU/thermal/DRAM, accelerator operation and peripheral
 integration. Workers reuse successful evidence and submit focused checks. The
@@ -79,8 +79,9 @@ coordinator integrates accepted work, updates the canonical records and pushes
 The latest merged work includes paired training-record selection and updates,
 read-only microSD DMA, eight-worker supervised OS recognition, CPU/NPU
 performance controls, normal NPU restart and optional card-boot DRAM restoration.
-The combined CPU/NPU OS also builds against the changed service and pin layouts;
-evidence is under `~/.cache/sunstoneos/evidence/integrate-shared-layouts-1026/`.
+The combined resident eight-worker CPU/NPU image and supervised GPU image with
+CPU clock control also build and pass their selected checks. Their evidence is
+under `resident-npu-cpu8-1026/` and `resume-gpu-cpu-clock-20261026/`.
 
 The branch notes under "Next steps" in each design document say what remains.
 - **`work/cpu-top-opp-step6-1025`:** CPU top points, step 6 and its
@@ -106,18 +107,24 @@ be pruned.
   existing CPU operating-point policy are supported. Each boot derives fresh
   session and CPU-grant epochs; supervision follows the tasks actually selected.
   Twenty-four host cases and twenty linked entry/admission cases pass under
-  `~/.cache/sunstoneos/evidence/resume-card-os-1026/`. The combined monitor is
-  32,560 bytes, leaving 208 bytes in its fixed 32 KiB reservation.
+  `~/.cache/sunstoneos/evidence/resume-card-os-1026/`. With cold CPU ownership
+  and resident NPU integration, the combined monitor is 32,688 bytes, leaving
+  80 bytes in its fixed 32 KiB reservation.
   Stage 2 now uses the existing 3.3 V, 50 MHz, four-bit DMA reader with bounded
   transfers and guarded partial sectors. Sixteen focused linked cases pass under
   `~/.cache/sunstoneos/evidence/resume-stage2-sd-1026/`; physical throughput is
   unmeasured. Local cold-entry and normal-card reset checks are implemented.
-  Actual boot still refuses until non-Arm memory writers and stable secondary
-  CPU exclusion are established. The documented shared L3 cache is covered by
-  boot0 maintenance; it is no longer an unresolved cache-hierarchy question.
-  An OFF observation alone cannot exclude a later autonomous wake. Reset-hold
-  initialization also needs a race-free assertion and an owned OS release.
-  Source evidence is under `cold-arm-cache-followup-1026/`. Device-specific
+  Secondary CPU ownership is implemented: identify the actual power controller,
+  hold all seven secondaries in acknowledged static OFF, then clean the shared
+  caches before loading. Resident startup validates that policy before its first
+  register write and releases it only after publishing the entry state.
+  Twenty-three linked ownership cases and actual resident startup/permission
+  checks pass under `cold-cpu-static-off-1026/combined-frozen/`. Control code uses
+  size optimization; SD and SHA code retain their normal optimization.
+  Physical boot remains unqualified, and crypto-engine exclusion still refuses.
+  The fixed supported boot/reset contract and predecessor accounting remain
+  under review; arbitrary warm/FEL jumps are outside that proposed contract.
+  Device-specific
   applicability now excludes OR100 from the required writer mask, while its
   historical bit remains reserved. All 25 real-device checks remain; 113 native
   provider cases and pinned source assertions pass under `cold-remote-followup-1026/`.
@@ -161,6 +168,13 @@ be pruned.
   bytes. Completion copies one eight-byte reply; workload buffers are not copied.
   The merged link checker accepts both the frozen GPU image and the resident
   eight-worker image; no rebuild or runtime replay was needed for integration.
+  The supervised GPU image also supports the existing CPU clock owner on the
+  A76 pair. Initial GPU OPEN waits for CPU readiness; host/native admission
+  rejects owner aliases and binds the exact 904-byte combined session. Seven
+  startup cases, fourteen host cases and shared-provider success/fault cases
+  pass under `resume-gpu-cpu-clock-20261026/`. The composition adds 88 executable
+  bytes and no state beyond the existing CPU feature. Eight-worker GPU and
+  concurrent GPU/NPU integration remain active work.
   Physical GPU recognition, failure drain and recovery remain unqualified.
 - **NPU interrupt waits are bounded in software.** Pending mask, rearm and
   stop callbacks expire after 10 ms plus one scheduler tick, observed on the
@@ -183,6 +197,18 @@ be pruned.
   completion retains ownership. Both focused cases pass under
   `~/.cache/sunstoneos/evidence/npu-cancel-fixture-1026/`.
   Production cancellation behavior is unchanged.
+- **The resident NPU application and cold-card assets are integrated.**
+  The existing finite client runs one catalogue model alongside CPU recognition.
+  The selected ShuffleNet payload occupies initialized non-executable RAM;
+  metadata stays in read-only code storage. The selected model bytes are
+  preserved, and the existing page-table ranges suffice. Payload immutability
+  relies on ownership. Cold NPU/CPU grants receive fresh per-boot epochs.
+  Readiness and stop waits enforce the work deadline independently of health
+  reports. A late interrupt or atomic fault revokes the completed-client health
+  exemption. One combined eight-worker/A76/CPU-clock/ShuffleNet build, the actual
+  card producer, twenty entry cases and three late-fault cases pass under
+  `resident-npu-cpu8-1026/`. This does not implement NPU acceleration of mimus.
+  Physical combined execution and cold reset/retirement remain unqualified.
 - **OS thermal qualification support is implemented.** The session can lower
   the CPU critical threshold to 70 °C; zero retains the normal policy. A
   bounded binary report preserves the first recognition interval's temperature

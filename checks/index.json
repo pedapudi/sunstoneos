@@ -2722,6 +2722,7 @@
    "docs/designs/cpu-pmu-measurements.md",
    "docs/designs/cpu-pmu.md",
    "docs/designs/cpu-top-opp.md",
+   "docs/designs/gpu-cpu-clock.md",
    "docs/designs/pmic-access-measurements.md",
    "docs/designs/power-authority-measurements.md",
    "docs/designs/video-pll.md"
@@ -7578,6 +7579,7 @@
   "docs": [
    "docs/cpu-clock.md",
    "docs/designs/cpu-top-opp.md",
+   "docs/designs/gpu-cpu-clock.md",
    "docs/os-image.md"
   ],
   "library": false,
@@ -7587,6 +7589,18 @@
    "--output"
   ],
   "summary": "Exercise actual compiled OS CPU register access policy and mux completion barrier.",
+  "usb": false
+ },
+ "os-gpu-cpu-start.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--output"
+  ],
+  "summary": "Check actual combined OS GPU startup ordering and owner exclusion; no inference or MMIO.",
   "usb": false
  },
  "os-gpu-thermal.py": {
@@ -7781,6 +7795,20 @@
    "--output"
   ],
   "summary": "Check linked OS worker capabilities and exact entry binding without hardware.",
+  "usb": false
+ },
+ "os-npu-resident.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--fixture",
+   "--entry",
+   "--output"
+  ],
+  "summary": "Run linked resident NPU wait/deadline code and cold-authority checks.",
   "usb": false
  },
  "os-npu.py": {
