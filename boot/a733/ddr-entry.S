@@ -58,6 +58,21 @@ _start:
     str r3, [r1], #4
     subs r2, r2, #1
     bne 3b
+.ifdef DDR_PARAM_PATCH
+    // Capture variants (docs/designs/dram-training-restore.md): clear
+    // dram_tpr13 bit 2 to train P-state 0 only, and optionally replace the
+    // training-step value in dram_tpr10 bits 28:16.
+    ldr r1, =0x831f8
+    ldr r3, [r1, #0x78]
+    bic r3, r3, #4
+    str r3, [r1, #0x78]
+    ldr r3, [r1, #0x6c]
+    ldr r0, =TPR10_CLEAR
+    bic r3, r3, r0
+    ldr r0, =TPR10_SET
+    orr r3, r3, r0
+    str r3, [r1, #0x6c]
+.endif
     mov r0, #3
     str r0, [r11, #4]
     mov r0, #0

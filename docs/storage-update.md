@@ -62,12 +62,22 @@ SunstoneOS owns these regions of a microSD boot card:
 | 16384 | Slot B header | Fixed layout |
 | 32800..40959 | Monitor TOC1 package | Fixed layout |
 | Slot A and slot B regions, at or beyond 40960 | Slot payloads | Boot-slot allocation record |
+| One 4 MiB unit at or beyond 40960, when allocated | DRAM training record | Boot-slot allocation record, `training_record` |
 
 No session writes any other sector. In particular, sectors 0..15 hold the
 partition table, and the 4 MiB unit at sectors 24576..32767 holds the backup
 package sector that the stock U-Boot header names. Whether a stock backup
 package exists there is a property of each card, so `plan.json` records the
 hash of that unit in the card image and whether it is all zero.
+
+The planner also accepts a plan from `tools/training-record.py`, whose
+writes `record-payload`, `record-header` and `record-invalidate` must lie in
+the allocation's training-record unit; an allocation without that unit
+refuses them. The record plan lists the payload before the header, so its
+sessions update the header last
+([restore design](designs/dram-training-restore.md#the-record-has-its-own-4-mib-unit-on-the-card)).
+The unit shares no 4 MiB unit with a slot header, so a record session never
+endangers slot fallback. `checks/training-record.py` covers these plans.
 
 Each write of the boot-slot plan must lie inside its own region, or planning
 stops. A range whose card bytes already equal the planned bytes is listed as

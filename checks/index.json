@@ -2196,7 +2196,8 @@
   "cache_areas": [],
   "docs": [
    "docs/board-test-queue.md",
-   "docs/designs/board-bundles.md"
+   "docs/designs/board-bundles.md",
+   "docs/handoff.md"
   ],
   "library": false,
   "pure_host": false,
@@ -2877,9 +2878,55 @@
   "summary": "",
   "usb": false
  },
+ "ddr-capture-analysis.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/board-runbooks/dram-training-capture.md",
+   "docs/designs/dram-fast-boot.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Check the DRAM capture classifier on synthetic captures with planted registers.",
+  "usb": false
+ },
+ "ddr-capture-host.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/board-runbooks/dram-training-capture.md",
+   "docs/designs/dram-fast-boot.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "build",
+   "--evidence"
+  ],
+  "summary": "Run the DRAM capture runner against a modeled FEL device and lock.",
+  "usb": true
+ },
+ "ddr-capture.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/board-runbooks/dram-training-capture.md",
+   "docs/designs/dram-fast-boot.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "build"
+  ],
+  "summary": "Check the DRAM capture reader's register accesses against its stage tables.",
+  "usb": true
+ },
  "ddr-host-retention.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/board-runbooks/dram-training-capture.md",
+   "docs/designs/dram-training-restore.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -2891,7 +2938,9 @@
  "ddr-wrapper.py": {
   "cache_areas": [],
   "docs": [
-   "docs/boot.md"
+   "docs/board-runbooks/dram-training-capture.md",
+   "docs/boot.md",
+   "docs/designs/dram-training-restore.md"
   ],
   "library": false,
   "pure_host": false,
@@ -2899,7 +2948,7 @@
    "build"
   ],
   "summary": "Check wrapper control flow and FEL preservation with simulated blob calls.",
-  "usb": false
+  "usb": true
  },
  "deinterlace-boot.py": {
   "cache_areas": [],
@@ -9795,6 +9844,21 @@
    "--output"
   ],
   "summary": "Run a frozen step 6 workload binding on a real session's records.",
+  "usb": false
+ },
+ "training-record.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/board-runbooks/dram-restore-test-1.md",
+   "docs/designs/dram-training-restore.md",
+   "docs/storage-update.md"
+  ],
+  "library": false,
+  "pure_host": true,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "Check the DRAM training record format and its card update plans on an image file.",
   "usb": false
  },
  "uart-dma-native.py": {

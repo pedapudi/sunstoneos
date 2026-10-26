@@ -170,9 +170,21 @@ def check_allocation(allocation, card_sectors, sector0):
             raise ValueError('Slot %s is not whole allocation units beyond the boot area' % name)
     if overlaps(slots['A']['first'], slots['A']['blocks'], slots['B']['first'], slots['B']['blocks']):
         raise ValueError('Slots overlap')
+    owned = list(slots.values())
+    record = allocation.get('training_record')
+    if record is not None:
+        # The DRAM training record has one allocation unit of its own
+        # (docs/designs/dram-training-restore.md).
+        if (set(record) != {'first', 'blocks'} or record['first'] % ALLOCATION_UNIT
+                or record['blocks'] != ALLOCATION_UNIT or record['first'] < BOOT_AREA_SECTORS
+                or record['first'] + record['blocks'] > card_sectors):
+            raise ValueError('The training record is not one allocation unit beyond the boot area')
+        if any(overlaps(record['first'], record['blocks'], s['first'], s['blocks']) for s in slots.values()):
+            raise ValueError('The training record overlaps a slot')
+        owned.append(record)
     for p in mbr_partitions(sector0) or []:
         if overlaps(p['first'], p['blocks'], 0, BOOT_AREA_SECTORS) or any(
-                overlaps(p['first'], p['blocks'], s['first'], s['blocks']) for s in slots.values()):
+                overlaps(p['first'], p['blocks'], s['first'], s['blocks']) for s in owned):
             raise ValueError('Partition %#x at sector %d overlaps the boot area or a slot'
                              % (p['type'], p['first']))
     return slots
@@ -208,6 +220,7 @@ def allocate(args):
     allocation = {'schema': 1, 'kind': ALLOCATION_KIND, 'owner': 'SunstoneOS',
                   'card_sectors': card_sectors, 'headers': HEADER_SECTORS,
                   'slots': {'A': parse_extent(args.slot_a), 'B': parse_extent(args.slot_b)},
+                  **({'training_record': parse_extent(args.training_record)} if args.training_record else {}),
                   'backup': {'bytes': card_sectors * SECTOR, 'sha256': digest.hexdigest()},
                   'mbr_sha256': sha(sector0),
                   'partition_table': 'mbr' if mbr_partitions(sector0) is not None else 'none'}
@@ -404,6 +417,8 @@ def main(argv=None):
     p.add_argument('--backup', required=True)
     p.add_argument('--slot-a', required=True, metavar='FIRST:BLOCKS')
     p.add_argument('--slot-b', required=True, metavar='FIRST:BLOCKS')
+    p.add_argument('--training-record', metavar='FIRST:BLOCKS',
+                   help='one allocation unit for the DRAM training record')
     p.add_argument('--output', required=True)
     p = sub.add_parser('plan', help='Prepare the standby slot without writing the image')
     p.add_argument('--allocation', required=True)

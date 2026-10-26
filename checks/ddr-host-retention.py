@@ -22,8 +22,12 @@ build=a.evidence/'build';build.mkdir();files={}
 for name,size in [('boot0-head.bin',12288),('boot0-body.bin',233472),('ddr-entry.bin',128),('cache-off.bin',40)]:
     data=bytes([size%251])*size;(build/name).write_bytes(data);files[name]={'size':size,'sha256':hashlib.sha256(data).hexdigest()}
 (build/'manifest.json').write_text(json.dumps({'files':files}));fel=a.evidence/'fake-fel';fel.write_bytes(b'Never executed')
+# The init-only capture variant (tools/prepare-ddr.py --variant init-only) runs with --allow-untrained.
+init_build=a.evidence/'build-init-only';init_build.mkdir()
+for name in files:(init_build/name).write_bytes((build/name).read_bytes())
+(init_build/'manifest.json').write_text(json.dumps({'files':files,'variant':'init-only'}))
 results=[]
-for case in ('nominal','pre-device-refusal','version-timeout','upload-mismatch','post-exe-timeout','RAM-mismatch','quarantine-failure','journal-failure'):
+for case in ('nominal','pre-device-refusal','version-timeout','upload-mismatch','post-exe-timeout','RAM-mismatch','quarantine-failure','journal-failure','init-only','init-only-flag-missing'):
     out=a.evidence/case;out.mkdir();lock=out/'private.lock';events=[];memory={};node=Path('/fixture-usb/003/072')
     @contextmanager
     def board_lock():
@@ -59,7 +63,7 @@ for case in ('nominal','pre-device-refusal','version-timeout','upload-mismatch',
             op,address=arguments[i],int(arguments[i+1],16)
             if op=='read':
                 size=int(arguments[i+2]);data=memory.get(address,bytes(size))[:size]
-                if address==0x86000:data=struct.pack('<7I',0x53524444,5,4096,0,0,0,0)+bytes(100)
+                if address==0x86000:data=struct.pack('<7I',0x53524444,5,0 if case=='init-only' else 4096,0,0,0,0)+bytes(100)
                 if (case=='upload-mismatch' and address==0x8e000 and address in memory) or (case=='RAM-mismatch' and address==0x41000000):data=bytes([data[0]^1])+data[1:]
                 Path(arguments[i+3]).write_bytes(data);i+=4
             elif op=='write':memory[address]=Path(arguments[i+2]).read_bytes();i+=3
@@ -70,16 +74,19 @@ for case in ('nominal','pre-device-refusal','version-timeout','upload-mismatch',
         if case=='journal-failure' and path.name=='session.json' and '"failure"' in data:raise OSError('Modeled journal failure')
         return real_write(path,data,*args,**kwargs)
     guard=types.ModuleType('usb_guard');guard.check_health=lambda:None
-    argv=[str(ROOT/'tools/run-ddr.py'),'--fel',str(fel),'--build',str(build),'--evidence',str(out/'runtime')]
+    argv=[str(ROOT/'tools/run-ddr.py'),'--fel',str(fel),'--build',str(init_build if case.startswith('init-only') else build),'--evidence',str(out/'runtime')]+(['--allow-untrained'] if case=='init-only' else [])
     error=None
     with patch.object(sys,'argv',argv),patch.object(importlib.util,'spec_from_file_location',selected_spec),patch.object(base,'stop_after_failure',stop),patch.object(base,'hold_ownership',hold),patch.object(subprocess,'run',fake_fel),patch.object(Path,'write_text',write),patch.dict(sys.modules,{'usb_guard':guard}):
         try:runpy.run_path(str(ROOT/'tools/run-ddr.py'),run_name='__main__')
         except (SystemExit,OSError) as failure:error=str(failure)
-    assert (error is None)==(case=='nominal'),(case,error)
-    retained=case not in ('nominal','pre-device-refusal')
+    assert (error is None)==(case in ('nominal','init-only')),(case,error)
+    retained=case not in ('nominal','pre-device-refusal','init-only','init-only-flag-missing')
     assert events.count('hold')==int(retained),(case,events)
     assert events.count('quarantine')==int(retained and case!='journal-failure'),(case,events)
-    if case=='pre-device-refusal':assert not events
+    if case in ('pre-device-refusal','init-only-flag-missing'):assert not events
+    if case=='init-only':
+        record=json.loads((out/'runtime/session.json').read_text())
+        assert record['complete'] and record['untrained'] and not any(isinstance(x,list) and '0x41000000' in x for x in events)
     if case=='nominal':assert json.loads((out/'runtime/session.json').read_text())['complete']
     with lock.open('a') as released:fcntl.flock(released,fcntl.LOCK_EX|fcntl.LOCK_NB)
     results.append({'case':case,'pass':True,'retained':retained,'FEL_requests':sum(isinstance(x,list) for x in events)})
