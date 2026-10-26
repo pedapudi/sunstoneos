@@ -6,14 +6,11 @@
 #include "a733_media_clock.h"
 #include "a733_pmic.h"
 #include "device_memory_pool.h"
+#include "a733_camera_profile.h"
 
 #define A733_CAMERA_NATIVE_PIN_COUNT 15u
-#define A733_CAMERA_NATIVE_PLANE_BYTES 307200u
-#define A733_CAMERA_NATIVE_GUARD_BYTES 4096u
-#define A733_CAMERA_NATIVE_STREAM_BYTES 1286144u /* Two guarded slots per plane. */
-#define A733_CAMERA_NATIVE_BYTES 663552u /* Tables 8 + parameters 2 + two 76-page planes. */
-/* Fixed device address of the parameters. The planes follow at +8192 and
- * +319488, all three inside one 4 MiB IOMMU window below 4 GiB. The IOMMU
+/* Fixed device address of the parameters. Guarded planes follow at +8192;
+ * the largest stream uses five 4 MiB windows below 4 GiB. The IOMMU
  * translates them to the allocation, which may lie anywhere below 2^34. */
 #define A733_CAMERA_NATIVE_IOVA UINT64_C(0x10000000)
 #define A733_CAMERA_NATIVE_FILL 0xa5u /* Plane payload/guard fill before each device write. */
@@ -103,7 +100,7 @@ int a733_camera_native_init(struct a733_camera_native *,const struct a733_camera
  * controllers. Manual whole-board power removal replaces watchdog admission,
  * never actual reset/drain/exclusion, mapped guards or live ownership. */
 int a733_camera_native_supervised_init(struct a733_camera_native *,const struct a733_camera_native_config *);
-/* Finite supervised continuous mode: two guarded VGA slots per plane, using
+/* Finite supervised continuous mode: two guarded selected-size slots per plane, using
  * the same all-master exclusion and absolute session deadline. No drain or
  * resource release is implemented; stop reaches retained failure. */
 int a733_camera_native_supervised_stream_init(struct a733_camera_native *,const struct a733_camera_native_config *);

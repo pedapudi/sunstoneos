@@ -15,7 +15,7 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('camera_observe',ROOT/'apps/camera/observe.py')
 observe=importlib.util.module_from_spec(spec);spec.loader.exec_module(observe)
-W,H=observe.WIDTH,observe.HEIGHT
+W,H=observe.dimensions(None)
 BARS=[(180,128,128),(162,44,142),(131,156,44),(112,72,58),(84,184,198),(65,100,212),(35,212,114),(16,128,128)]
 
 def bars():

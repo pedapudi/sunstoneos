@@ -7,6 +7,17 @@ option(SUNSTONE_CAMERA_STREAM "Finite supervised capture from a continuous two-s
 if(SUNSTONE_CAMERA_STREAM AND NOT SUNSTONE_CAMERA_SUPERVISED)
  message(FATAL_ERROR "Continuous camera capture requires the retained supervised profile")
 endif()
+set(SUNSTONE_CAMERA_SIZE "VGA" CACHE STRING "OV5640 size: QQVGA QCIF QVGA VGA NTSC PAL XGA 720P 1080P QSXGA")
+set(camera_sizes QQVGA QCIF QVGA VGA NTSC PAL XGA 720P 1080P QSXGA)
+list(FIND camera_sizes "${SUNSTONE_CAMERA_SIZE}" camera_size)
+if(camera_size LESS 0)
+ message(FATAL_ERROR "Unsupported OV5640 size: ${SUNSTONE_CAMERA_SIZE}")
+endif()
+# Still fits through PAL; the two-slot stream fits through VGA.
+set(camera_external OFF)
+if(camera_size GREATER 5 OR (SUNSTONE_CAMERA_STREAM AND camera_size GREATER 3))
+ set(camera_external ON)
+endif()
 set(camera_root "${SUNSTONE_SOURCE_ROOT}")
 set(camera_build "${CMAKE_CURRENT_BINARY_DIR}/camera-application")
 file(MAKE_DIRECTORY "${camera_build}")
@@ -33,7 +44,7 @@ apply_build_patch("${camera_build}/boot.c" "${camera_boot}" "${camera_root}/apps
 list(APPEND camera_sources "${camera_build}/boot.c")
 # Retain maintained boot/platform/EL3 return mechanics. Its boot patch publishes
 # the immutable 4KiB session page and does not decode a storage grant.
-foreach(source IN ITEMS apps/camera/main.c apps/camera/admission.c apps/camera/snapshot.c apps/camera/capture.c apps/camera/usb0.c
+foreach(source IN ITEMS apps/camera/main.c apps/camera/profile.c apps/camera/admission.c apps/camera/snapshot.c apps/camera/capture.c apps/camera/usb0.c
  drivers/camera/ov5640.c drivers/camera/a733_camera_platform.c drivers/camera/a733_csi_receiver.c
  drivers/camera/a733_camera_route.c drivers/camera/a733_camera_dma.c drivers/camera/a733_camera_capture.c
  drivers/camera/a733_camera_native.c drivers/iommu/a733_iommu.c drivers/i2c/a733_twi.c
@@ -49,7 +60,7 @@ target_include_directories(sunstone-a733-camera BEFORE PRIVATE "${camera_root}/a
  "${camera_root}/drivers/usb" "${TINYUSB_DIR}/src" "${camera_root}/include"
  "${camera_root}/runtime/include" "${FREERTOS_DIR}/include" "${storage_base}")
 target_compile_definitions(sunstone-a733-camera PRIVATE SUNSTONE_SECURE_MONITOR=1 SUNSTONE_A733_SMP_DIAGNOSTIC=1
- SUNSTONE_A733_USB=1)
+ SUNSTONE_A733_USB=1 SUNSTONE_CAMERA_APPLICATION=1 SUNSTONE_CAMERA_SIZE=${camera_size})
 if(NOT SUNSTONE_CAMERA_SUPERVISED)
  target_compile_definitions(sunstone-a733-camera PRIVATE
   A733_SMP_CONTRACT_MAGIC=0x4153373343414332ULL A733_SMP_RESULT_MAGIC=0x4153373343415232ULL)
@@ -62,13 +73,22 @@ endif()
 if(SUNSTONE_CAMERA_STREAM)
  target_compile_definitions(sunstone-a733-camera PRIVATE SUNSTONE_CAMERA_STREAM=1)
 endif()
+set(camera_link "${storage_build}/link.ld")
+if(camera_external)
+ apply_build_patch("${camera_build}/link.ld" "${storage_build}/link.ld" "${camera_root}/apps/camera/link.patch")
+ set(camera_link "${camera_build}/link.ld")
+else()
+ target_link_options(sunstone-a733-camera PRIVATE -Wl,--defsym=__device_pool_size=2097152)
+endif()
 file(GLOB camera_headers "${camera_root}/apps/camera/*.h")
 # usb0.c compiles the shared USB0 service header, so it is part of the identity.
 set(camera_inputs ${camera_sources} ${camera_headers} ${storage_inputs}
+ "${camera_root}/include/a733_camera_profile.h" "${camera_root}/include/a733_device_memory_layout.h"
+ "${camera_root}/include/a733_iommu.h" "${camera_root}/apps/camera/link.patch" "${camera_link}"
  "${camera_root}/apps/board/usb0_service.h" "${camera_root}/apps/camera/boot.patch"
  "${CMAKE_CURRENT_LIST_FILE}" "${camera_root}/apps/camera/CMakeLists.txt" "${camera_root}/platform/a733-smp-supervised/boot.patch")
 list(REMOVE_DUPLICATES camera_inputs)
-set(camera_identity "native-camera-1;${SUNSTONE_CAMERA_SUPERVISED};${SUNSTONE_CAMERA_STREAM};${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};8;OV5640;640x480;NV16;USB0-sink;retained")
+set(camera_identity "native-camera-1;${SUNSTONE_CAMERA_SUPERVISED};${SUNSTONE_CAMERA_STREAM};${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};8;OV5640;${SUNSTONE_CAMERA_SIZE};${camera_external};NV16;USB0-sink;retained")
 foreach(input IN LISTS camera_inputs)
  file(SHA256 "${input}" camera_digest)
  string(APPEND camera_identity "${camera_digest}")
@@ -80,5 +100,5 @@ file(WRITE "${camera_build}/build-id.txt" "${camera_build_id}\n")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${camera_inputs})
 target_sources(sunstone-a733-camera PRIVATE "${camera_build}/build-id.c")
 target_link_options(sunstone-a733-camera PRIVATE -nostdlib -static -Wl,--gc-sections
- -Wl,--defsym=__device_pool_size=2097152 "-Wl,-T,${storage_build}/link.ld" "-Wl,-Map,${camera_build}/image.map")
-set_target_properties(sunstone-a733-camera PROPERTIES SUFFIX ".elf" LINK_DEPENDS "${storage_build}/link.ld")
+ "-Wl,-T,${camera_link}" "-Wl,-Map,${camera_build}/image.map")
+set_target_properties(sunstone-a733-camera PROPERTIES SUFFIX ".elf" LINK_DEPENDS "${camera_link}")

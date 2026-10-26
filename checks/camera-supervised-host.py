@@ -25,6 +25,7 @@ class Clock:
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     for n in ('image','manifest','evidence','clang','lld','objcopy'):p.add_argument('--'+n,type=Path,required=True)
+    p.add_argument('--modes-only',action='store_true',help='Selected image geometry, DDR binding and capability cases')
     p.add_argument('--setup-only',action='store_true')
     p.add_argument('--connector-only',action='store_true',help='Run only connector admission and evidence binding')
     a=p.parse_args();out=a.evidence;out.mkdir(parents=True,exist_ok=True)
@@ -63,7 +64,7 @@ def main():
         data=value if isinstance(value,bytes) else json.dumps(value,sort_keys=True).encode();path=(setup/name).resolve();path.write_bytes(data);return {'path':str(path),'sha256':prep.sha(data)}
     proof=write('software-only.txt',b'SOFTWARE FIXTURE ONLY. No board ownership, power, mapping, drain or isolation established. Never deploy.\n')
     common={'identity':[0,0,0,0,0],'port':'software-only-never-deploy','image_sha256':prep.sha(image)}
-    ddr=write('ddr.json',{**common,'schema':'a733-ddr-reservation-v1','ranges':[[0x41000000,0x42200000]],'exclusive':True,'published_cache_disabled':True,'remote_writers_excluded':True,'evidence':[proof]})
+    ddr=write('ddr.json',{**common,'schema':'a733-ddr-reservation-v1','ranges':layout['image_profile']['ddr_ranges'],'exclusive':True,'published_cache_disabled':True,'remote_writers_excluded':True,'evidence':[proof]})
     conditions={'source-backed-cpu-dsu-transition','cold-cache-and-dirty-alias-exclusion','dual-pas-dram','exclusive-cpus-memory-dma','remote-writers-excluded','usb-clock-power-reset-ownership','usb-device-mapping','physical-counter-continuity'}
     platform=write('platform.json',{**common,'schema':'a733-smp-observer-platform-v1','conditions':dict.fromkeys(conditions,proof),'entry_conditions_established':True,'physical_coherence_result':'under-test'})
     profile={'epoch':31,'generation':37,'lease':41}
@@ -81,7 +82,7 @@ def main():
         try:check()
         except BaseException as ex:errors.append(name+': '+str(ex))
     for name,check in [
-        ('capture-signature',lambda:sup.require(set(inspect.signature(host.capture).parameters)=={'exchange','session','evidence','record','save','deadline','now','pause'},'Collector signature differs')),
+        ('capture-signature',lambda:sup.require(set(inspect.signature(host.capture).parameters)=={'exchange','session','evidence','record','save','deadline','now','pause','profile'},'Collector signature differs')),
         ('runner-prerequisites',lambda:sup.require(host.PREREQUISITES=={'supervised-ram-recovery','camera-supervised-software'},'Lifecycle prerequisites differ')),
         ('launcher-source',lambda:sup.require(all(x in (ROOT/'platform/a733-smp-supervised/launch.c').read_text() for x in ('0x4153373353554c33','CONTRACT->reserved[0] && !CONTRACT->reserved[1]','20*A733_SMP_COUNTER_HZ')),'Maintained launcher baseline differs'))]:
         try:check()
@@ -107,6 +108,32 @@ def main():
                 refused_symbols.append(name+':'+mutation)
         return {'refused':refused_symbols,'accepted':'actual executable camera entries'}
     case('executable-admission',executable_admission)
+    if a.modes_only:
+        def geometry_cases(d):
+            elf=prep.ELFFile(io.BytesIO(image));table=elf.get_section_by_name('.symtab')
+            symbol=next(x for x in table.iter_symbols() if x.name=='a733_camera_image_profile')
+            address=int(symbol['st_value']);offset=None
+            for segment in elf.iter_segments():
+                if segment['p_type']=='PT_LOAD' and segment['p_vaddr']<=address<segment['p_vaddr']+segment['p_filesz']:
+                    offset=int(segment['p_offset']+address-segment['p_vaddr'])
+            assert offset is not None
+            for i in range(18):
+                changed=bytearray(image);changed[offset+4*i]^=0x80
+                refused(lambda:prep.image_data(changed))
+            # A present malformed profile cannot become the legacy VGA fallback.
+            changed=bytearray(image);changed[offset:offset+72]=bytes(72)
+            refused(lambda:prep.image_data(changed))
+            entry=json.loads(Path(admission['path']).read_bytes());cache=prep.validate_admission(Path(admission['path']).read_bytes(),session,layout,identity,prep.sha(image))
+            wrong=json.loads(Path(ddr['path']).read_bytes());wrong['ranges']=[[0x41000000,0x42200000]] if len(layout['image_profile']['ddr_ranges'])>1 else [[0x41000000,0x42200000],[0x48000000,0x4a000000]]
+            wrong_raw=json.dumps(wrong).encode();new=bytearray(session);f=layout['fields']['memory'];new[f['offset']:f['offset']+32]=hashlib.sha256(wrong_raw).digest()
+            entry['ddr']['sha256']=prep.sha(wrong_raw);entry_raw=json.dumps(entry).encode()
+            for key in ('evidence','camera.evidence'):
+                f=layout['fields'][key];new[f['offset']:f['offset']+32]=hashlib.sha256(entry_raw).digest()
+            cache[str(Path(ddr['path']))]=wrong_raw
+            refused(lambda:prep.validate_admission(entry_raw,bytes(new),layout,identity,prep.sha(image),cache))
+            return {'profile':layout['image_profile'],'malformed_profile_fields':18,'ddr_geometry_refused':True}
+        case('mode-geometry',geometry_cases)
+        state['status']='PASS';sup.save_json(state_path,state);print('PASS actual image profile, session, DDR ranges, executable capability and malformed profile refusal');return
     def connector_admission(d):
         b=bytearray(session)
         def set_field(name,value):

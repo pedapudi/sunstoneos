@@ -3,6 +3,16 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "a733_dram.h"
+#if defined(SUNSTONE_CAMERA_APPLICATION)
+#include "a733_camera_profile.h"
+#if defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY) || defined(SUNSTONE_NPU_LARGE_GRAPH) || defined(A733_GPU_OUTPUT_EL0_READ_ONLY)
+#error Camera memory cannot share another device pool profile
+#endif
+#if A733_CAMERA_LARGE_MEMORY
+#define SUNSTONE_CAMERA_EXTERNAL_POOL 1
+int a733_camera_memory_admitted(void);
+#endif
+#endif
 /* The large NPU graph uses existing identity-mapped image RAM. This fixed
  * exception grants no external-memory, cache, device or physical authority.
  * Either the retained runtime (USB input) or the finite returning image

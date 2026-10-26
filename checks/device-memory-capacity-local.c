@@ -42,7 +42,17 @@ static void check(int condition,unsigned line)
     say_hex("FAIL ",line);fixture_exit(1,line);
 }
 #define CHECK(x) check(!!(x),__LINE__)
+#if defined(SUNSTONE_CAMERA_EXTERNAL_POOL)
+extern uint64_t a733_cached_el1_table_sum[8];
+static int decode_passes(void){return 0;}
+int a733_camera_memory_admitted(void){return fixture_mode!=2;}
+static unsigned translations;
+int __real_aarch64_device_translate(uintptr_t,int,struct aarch64_translation *);
+int __wrap_aarch64_device_translate(uintptr_t a,int write,struct aarch64_translation *t)
+{++translations;return __real_aarch64_device_translate(a,write,t);}
+#else
 static int decode_passes(void){return fixture_mode==0;}
+#endif
 static struct a733_dram_range decode_seen[4];
 static unsigned decode_count,decode_calls;
 int a733_dram_decode_check(const struct a733_dram_range *r,unsigned n)
@@ -51,7 +61,11 @@ int a733_dram_decode_check(const struct a733_dram_range *r,unsigned n)
     ++decode_calls;decode_count=n;
     for(unsigned i=0;i<n && i<4;++i)decode_seen[i]=r[i];
     say("TRACE decode end\n");
+#if defined(SUNSTONE_CAMERA_EXTERNAL_POOL)
+    return 1; /* A broad decode grant must not widen this camera image. */
+#else
     return decode_passes();
+#endif
 }
 uint64_t a733_smp_counter(void)
 {uint64_t v;__asm__ volatile("isb\n mrs %0,cntpct_el0":"=r"(v));return v;}
@@ -70,7 +84,11 @@ static uint64_t golden_l2(unsigned i)
     if(i==54 || i==55)return normal|4|(UINT64_C(3)<<6)|BIT(53)|BIT(54);
 #endif
     if(i<64)return normal|4|BIT(6)|BIT(53)|BIT(54);       /* EL0/EL1 RW, XN. */
+#if defined(SUNSTONE_CAMERA_EXTERNAL_POOL)
+    return i<80?A733_EL1_DRAM_BLOCK(a):0;
+#else
     return decode_passes() && i<456?A733_EL1_DRAM_BLOCK(a):0;
+#endif
 }
 static void golden_tables(void)
 {
@@ -78,9 +96,13 @@ static void golden_tables(void)
     CHECK(a733_cached_el1_l1[1]==((uintptr_t)a733_cached_el1_l2|3));
     /* Two ranges, level-2 first; the builder wrote exactly their entries
      * when the check passed. */
+#if defined(SUNSTONE_CAMERA_EXTERNAL_POOL)
+    CHECK(!decode_calls && !decode_count);
+#else
     CHECK(decode_calls==1 && decode_count==2 &&
           decode_seen[0].base==UINT64_C(0x48000000) && decode_seen[0].size==UINT64_C(0x31000000) &&
           decode_seen[1].base==UINT64_C(0x80000000) && decode_seen[1].size==A733_DRAM_MAP_END-UINT64_C(0x80000000));
+#endif
     uint64_t mapped=0,valid=0;
     for(unsigned i=2;i<512;++i) {
         uint64_t pa=(uint64_t)i<<30;
@@ -96,7 +118,12 @@ static void golden_tables(void)
         if(v&1){CHECK((v&3)==1);mapped+=2;++valid;}
         CHECK(!(v&1) || (v&BIT(7)) || ((v&BIT(53)) && (v&BIT(54))));
         /* EL3 maps nothing above the boot image. */
+#if defined(SUNSTONE_CAMERA_EXTERNAL_POOL)
+        if(i>=64 && i<80)CHECK(a733_cached_el3_l2[i]==(v&~BIT(53))+(BIT(5)|BIT(6)));
+        else if(i>=80)CHECK(!a733_cached_el3_l2[i]);
+#else
         if(i>=64)CHECK(!a733_cached_el3_l2[i]);
+#endif
     }
 #if defined(A733_GPU_OUTPUT_EL0_READ_ONLY)
     /* EL3 keeps its read/write view of the GPU output region. */
@@ -104,7 +131,11 @@ static void golden_tables(void)
 #endif
     /* 126 MiB below 0x48000000 (the monitor block is invalid), plus
      * 0x48000000-0x79000000 and 11 GiB when the check passes. */
+#if defined(SUNSTONE_CAMERA_EXTERNAL_POOL)
+    CHECK(mapped==158);
+#else
     CHECK(mapped==(decode_passes()?12174u:126u));
+#endif
     say_hex("MEASURE el1_mapped_mib=",mapped);
     say_hex("MEASURE el1_valid_blocks=",valid);
     say_hex("MEASURE tables_bytes=",(uint64_t)(__tables_end-__tables_start));
@@ -113,12 +144,26 @@ void fixture_el3_prepare(unsigned core)
 {
     if(core)fixture_exit(1,0xc0de); /* One core. */
     memset(__bss_start,0,(size_t)(__bss_end-__bss_start));
+#if defined(SUNSTONE_CAMERA_EXTERNAL_POOL)
+    CHECK(fixture_mode<=2);
+#else
     CHECK(fixture_mode<=1);
+#endif
     say("TRACE prepare\n");
     int prepared=a733_cached_memory_prepare();
     say("TRACE prepare end\n");
+#if defined(SUNSTONE_CAMERA_EXTERNAL_POOL)
+    if(fixture_mode==2){CHECK(!prepared);CHECK(!a733_memory_reservations_init());
+        say("PASS unadmitted camera mapping refused\n");fixture_exit(0,0);}
+#endif
     CHECK(prepared==1);
     golden_tables();
+#if defined(SUNSTONE_CAMERA_EXTERNAL_POOL)
+    if(fixture_mode==1){
+        a733_cached_el1_table_sum[0]-=a733_cached_el1_l2[70];
+        a733_cached_el1_l2[70]=0;
+    }
+#endif
     CHECK(a733_cpu_coherence_publish(0x41000000,0x200000,UINT32_MAX)==1);
     CHECK(a733_cpu_coherence_publish(0x41200000,(uintptr_t)__bss_end-0x41200000,UINT32_MAX)==1);
 }
@@ -137,6 +182,10 @@ void fixture_el1(unsigned core)
     (void)core;
     struct aarch64_translation t;
     int ro=0,high=decode_passes();
+#if defined(SUNSTONE_CAMERA_EXTERNAL_POOL)
+    if(fixture_mode==1){CHECK(!a733_memory_local_prepare() && !a733_memory_reservations_init());
+        CHECK(!a733_memory_local_prepare());say("PASS missing camera block retained refusal\n");fixture_exit(0,0);}
+#endif
 #if defined(A733_GPU_OUTPUT_EL0_READ_ONLY)
     ro=1;
 #endif
@@ -146,7 +195,11 @@ void fixture_el1(unsigned core)
         {0x46fff000,1,!ro,1,!ro},
         {0x46a00000,1,1,1,1},                 /* Boot assets beside it. */
         {0x47000000,1,1,1,1},
-        {0x48000000,high,high,0,0},           /* New EL1-only blocks. */
+#if defined(SUNSTONE_CAMERA_EXTERNAL_POOL)
+        {0x48000000,1,1,0,0},{0x49fff000,1,1,0,0},{0x4a000000,0,0,0,0},
+#else
+        {0x48000000,high,high,0,0},
+#endif           /* New EL1-only blocks. */
         {0x78fff000,high,high,0,0},
         {0x79000000,0,0,0,0},                 /* No owner. */
         {0x80000000,high,high,0,0},
@@ -166,7 +219,13 @@ void fixture_el1(unsigned core)
     /* The getters return NULL until the boot prepares the pools. */
     CHECK(!a733_memory_reservations_init() && !a733_memory_uncached_init());
     say("TRACE local prepare\n");
+#if defined(SUNSTONE_CAMERA_EXTERNAL_POOL)
+    translations=0;
+#endif
     int prepared=a733_memory_local_prepare();
+#if defined(SUNSTONE_CAMERA_EXTERNAL_POOL)
+    CHECK(translations==16);say_hex("MEASURE camera_prepare_translations=",translations);
+#endif
     say("TRACE local prepare end\n");
     CHECK(prepared==1);
     say("TRACE getter\n");

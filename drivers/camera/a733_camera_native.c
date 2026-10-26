@@ -12,18 +12,18 @@
 #include "a733_task_context.h"
 #endif
 #include <string.h>
-#define TABLE_BYTES 32768u
+#define TABLE_BYTES A733_CAMERA_TABLE_BYTES
 #define PARAMETER_BYTES 8192u
-#define PLANE_BYTES (A733_CAMERA_NATIVE_PLANE_BYTES+A733_CAMERA_NATIVE_GUARD_BYTES)
+#define PLANE_BYTES A733_CAMERA_SLOT_BYTES
 /* Device addresses: parameters, then the Y and UV planes with their guards. */
 #define PARAMETER_IOVA A733_CAMERA_NATIVE_IOVA
 #define Y_IOVA (PARAMETER_IOVA+PARAMETER_BYTES)
 #define UV_IOVA (Y_IOVA+PLANE_BYTES)
 _Static_assert(TABLE_BYTES+PARAMETER_BYTES+2u*PLANE_BYTES==A733_CAMERA_NATIVE_BYTES,"camera allocation layout");
 _Static_assert(TABLE_BYTES+PARAMETER_BYTES+4u*PLANE_BYTES==A733_CAMERA_NATIVE_STREAM_BYTES,"camera stream allocation layout");
-_Static_assert(PARAMETER_IOVA>>22==(Y_IOVA+4u*PLANE_BYTES-1)>>22,"stream fits one IOMMU window");
-_Static_assert(PARAMETER_IOVA>>22==(UV_IOVA+PLANE_BYTES-1)>>22 && UV_IOVA+PLANE_BYTES<=A733_IOMMU_IOVA_LIMIT,
-    "camera spans need one 4 MiB IOMMU window below the IOVA limit");
+_Static_assert(PARAMETER_BYTES+4u*PLANE_BYTES <= ((TABLE_BYTES-16384u)/4096u)*4194304u,
+    "stream exceeds selected IOMMU capacity");
+_Static_assert(Y_IOVA+4u*PLANE_BYTES<=A733_IOMMU_IOVA_LIMIT,"camera IOVA overflow");
 #define MCLK1 UINT32_C(0x02003804)
 static uintptr_t mclk(const struct a733_camera_native *n){return MCLK1+4u*n->port;}
 static unsigned pwdn_pin(const struct a733_camera_native *n){return n->port?10u:6u;}
@@ -257,7 +257,12 @@ static int sensor_receiver(void *v,uint64_t t,uint64_t rt,const struct ov5640_mo
     struct a733_camera_native *n=v;
     return t==n->boot.lease && rt==t && authority(n) && timely(n,d) &&
         n->capture.packets_granted && n->capture.receiver.state==A733_CSI_ARMED &&
-        m->width==640 && m->height==480 && m->lanes==2 && m->xclk_hz==24000000?1:-1;
+        m->xclk_hz==n->capture.config.mode.xclk_hz && m->link_hz==n->capture.config.mode.link_hz &&
+        m->pixel_hz==n->capture.config.mode.pixel_hz && m->width==A733_CAMERA_WIDTH &&
+        m->height==A733_CAMERA_HEIGHT && m->htotal==n->capture.config.mode.htotal &&
+        m->vtotal==n->capture.config.mode.vtotal && m->lanes==2 && m->virtual_channel==0 &&
+        m->csi_data_type==0x1e && m->bytes_per_pixel==2 && m->format==OV5640_UYVY &&
+        m->size==SUNSTONE_CAMERA_SIZE?1:-1;
 }
 static int route_admit(void *v,const struct a733_route_config *c,uint64_t d,uint64_t *t)
 {
@@ -418,6 +423,8 @@ static int initialize(struct a733_camera_native *n,const struct a733_camera_nati
        a733_pmic_outside(c->pmic,n,sizeof(*n))!=1 ||
        a733_pmic_outside(c->pmic,c,sizeof(*c))!=1 ||
        a733_pmic_outside(c->pmic,c->boot,sizeof(*c->boot))!=1)return 0;
+    struct ov5640_mode selected_mode;
+    if(!a733_camera_selected_mode(&selected_mode))return 0;
     struct device_memory_pool *pool=a733_memory_reservations_init();
     if(!pool || !a733_ranges_disjoint(n,sizeof(*n),(void *)pool->backing.cpu,pool->backing.bytes) ||
        !a733_ranges_disjoint(c,sizeof(*c),(void *)pool->backing.cpu,pool->backing.bytes) ||
@@ -446,8 +453,8 @@ static int initialize(struct a733_camera_native *n,const struct a733_camera_nati
         .memory={{(void *)(p+TABLE_BYTES),PARAMETER_IOVA,pa+TABLE_BYTES,PARAMETER_BYTES},
           {(void *)(p+TABLE_BYTES+PARAMETER_BYTES),Y_IOVA,pa+TABLE_BYTES+PARAMETER_BYTES,plane_span(n)},
           {(void *)(p+TABLE_BYTES+PARAMETER_BYTES+plane_span(n)),uv_iova(n),pa+TABLE_BYTES+PARAMETER_BYTES+plane_span(n),plane_span(n)}},
-        .table_words=(void *)p,.table_physical=pa,.frame_id=n->boot.lease,
-        .receiver={(uint8_t)n->port,(uint8_t)n->port,n->boot.settle,n->boot.deskew,324000000},.mode=ov5640_vga_mode,
+        .table_words=(void *)p,.table_bytes=TABLE_BYTES,.table_physical=pa,.frame_id=n->boot.lease,
+        .receiver={(uint8_t)n->port,(uint8_t)n->port,n->boot.settle,n->boot.deskew,324000000},.mode=selected_mode,
         .color_bars=n->boot.test_pattern,.slots=stream?2:0,.slot_bytes=stream?PLANE_BYTES:0,
         .sensor={time_read,sensor_acquire,sensor_line,sensor_read,sensor_write,sensor_receiver,no_drain,sensor_write_block},
         .analog={time_read,analog_admit,analog_read,analog_write},

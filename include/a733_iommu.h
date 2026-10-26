@@ -11,6 +11,8 @@
 #define A733_IOMMU_MAX_SPANS 8u
 #define A733_IOMMU_L2_TABLES 4u
 #define A733_IOMMU_TABLE_BYTES 32768u
+#define A733_IOMMU_LARGE_TABLE_BYTES 36864u
+#define A733_IOMMU_MAX_L2_TABLES 5u
 #define A733_IOMMU_READ 1u
 #define A733_IOMMU_WRITE 2u
 
@@ -28,8 +30,9 @@ struct a733_iommu_span {
     unsigned access; /* Device permissions; READ, WRITE, or both. */
 };
 struct a733_iommu_tables {
-    uint32_t *words; /* Exclusive 32KiB, CPU and physical aligned to 16KiB. */
+    uint32_t *words; /* Exclusive arena, CPU and physical aligned to 16KiB. */
     uint64_t physical;
+    size_t bytes; /* Typed arena capacity: 32768 or 36864, frozen at build. */
     struct a733_iommu_span spans[A733_IOMMU_MAX_SPANS];
     unsigned count;
 };
@@ -41,6 +44,11 @@ struct a733_iommu_tables {
  */
 int a733_iommu_build(struct a733_iommu_tables *, uint32_t *words,
     uint64_t table_physical, const struct a733_iommu_span *, unsigned count);
+/* Camera's larger ring needs five windows. The legacy entry above retains its
+ * four-window bound. Invalid capacity/refused mappings change neither output. */
+int a733_iommu_build_sized(struct a733_iommu_tables *, uint32_t *words,
+    size_t table_bytes, uint64_t table_physical,
+    const struct a733_iommu_span *, unsigned count);
 int a733_iommu_validate(const struct a733_iommu_tables *);
 int a733_iommu_translate(const struct a733_iommu_tables *, uint64_t iova,
     unsigned access, uint64_t *physical);

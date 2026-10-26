@@ -35,28 +35,28 @@ static int bounds(uint64_t a,uint64_t n,uint64_t minimum,uint64_t limit)
     return a>=minimum && a<limit && n && n<=limit-a && !(a&(PAGE-1)) && !(n&(PAGE-1));
 }
 /* Returns number of unique L2 windows, first-use order. */
-static int windows(const struct a733_iommu_tables *t,uint16_t slots[4])
+static int windows(const struct a733_iommu_tables *t,uint16_t slots[A733_IOMMU_MAX_L2_TABLES])
 {
     unsigned used=0;
-    if(!t || !t->words || ((uintptr_t)t->words&16383) ||
-       (t->physical&16383) || !bounds(t->physical,A733_IOMMU_TABLE_BYTES,0x40000000,A733_IOMMU_PHYSICAL_LIMIT) ||
+    if(!t || (t->bytes!=A733_IOMMU_TABLE_BYTES && t->bytes!=A733_IOMMU_LARGE_TABLE_BYTES) || !t->words || ((uintptr_t)t->words&16383) ||
+       (t->physical&16383) || !bounds(t->physical,t->bytes,0x40000000,A733_IOMMU_PHYSICAL_LIMIT) ||
        !t->count || t->count>A733_IOMMU_MAX_SPANS)return -1;
-    if(a733_ranges_overlap_or_wrap(t,sizeof(*t),t->words,A733_IOMMU_TABLE_BYTES))return -1;
+    if(a733_ranges_overlap_or_wrap(t,sizeof(*t),t->words,t->bytes))return -1;
     for(unsigned i=0;i<t->count;++i) {
         const struct a733_iommu_span *p=&t->spans[i];
         if(!bounds(p->iova,p->bytes,PAGE,IOVA_SPACE) ||
            !bounds(p->physical,p->bytes,0x40000000,A733_IOMMU_PHYSICAL_LIMIT) ||
            !p->access || (p->access&~3u) ||
-           a733_extents_overlap_or_wrap(p->physical,p->bytes,t->physical,A733_IOMMU_TABLE_BYTES))return -1;
+           a733_extents_overlap_or_wrap(p->physical,p->bytes,t->physical,t->bytes))return -1;
         for(unsigned j=0;j<i;++j)
             if(a733_extents_overlap_or_wrap(p->iova,p->bytes,t->spans[j].iova,t->spans[j].bytes) ||
                a733_extents_overlap_or_wrap(p->physical,p->bytes,t->spans[j].physical,t->spans[j].bytes))return -1;
         uint64_t first=p->iova>>22,last=(p->iova+p->bytes-1)>>22;
-        if(last-first>=A733_IOMMU_L2_TABLES)return -1;
+        if(last-first>=(t->bytes-16384)/PAGE)return -1;
         for(uint64_t w=first;w<=last;++w) {
             unsigned k=0;while(k<used && slots[k]!=w)++k;
             if(k==used) {
-                if(used==A733_IOMMU_L2_TABLES)return -1;
+                if(used==(t->bytes-16384)/PAGE)return -1;
                 slots[used++]=(uint16_t)w;
             }
         }
@@ -92,21 +92,26 @@ static uint32_t expected(const struct a733_iommu_tables *t,const uint16_t *slots
 int a733_iommu_build(struct a733_iommu_tables *out,uint32_t *words,uint64_t pa,
                     const struct a733_iommu_span *spans,unsigned count)
 {
-    struct a733_iommu_tables t={.words=words,.physical=pa,.count=count};
-    uint16_t slots[4];
-    if(!out || !words || !spans || !count || count>A733_IOMMU_MAX_SPANS ||
-       a733_ranges_overlap_or_wrap(out,sizeof(*out),words,A733_IOMMU_TABLE_BYTES) ||
-       a733_ranges_overlap_or_wrap(spans,count*sizeof(*spans),words,A733_IOMMU_TABLE_BYTES) ||
+    return a733_iommu_build_sized(out,words,A733_IOMMU_TABLE_BYTES,pa,spans,count);
+}
+int a733_iommu_build_sized(struct a733_iommu_tables *out,uint32_t *words,size_t bytes,
+                    uint64_t pa,const struct a733_iommu_span *spans,unsigned count)
+{
+    struct a733_iommu_tables t={.words=words,.physical=pa,.bytes=bytes,.count=count};
+    uint16_t slots[A733_IOMMU_MAX_L2_TABLES];
+    if((bytes!=A733_IOMMU_TABLE_BYTES && bytes!=A733_IOMMU_LARGE_TABLE_BYTES) || !out || !words || !spans || !count || count>A733_IOMMU_MAX_SPANS ||
+       a733_ranges_overlap_or_wrap(out,sizeof(*out),words,bytes) ||
+       a733_ranges_overlap_or_wrap(spans,count*sizeof(*spans),words,bytes) ||
        a733_ranges_overlap_or_wrap(out,sizeof(*out),spans,count*sizeof(*spans)))return -1;
     for(unsigned i=0;i<count;++i)t.spans[i]=spans[i];
     int used=windows(&t,slots);if(used<0)return -1;
-    for(unsigned i=0;i<A733_IOMMU_TABLE_BYTES/4;++i)words[i]=expected(&t,slots,(unsigned)used,i);
+    for(unsigned i=0;i<bytes/4;++i)words[i]=expected(&t,slots,(unsigned)used,i);
     *out=t;return 1;
 }
 int a733_iommu_validate(const struct a733_iommu_tables *t)
 {
-    uint16_t slots[4];int used=windows(t,slots);if(used<0)return -1;
-    for(unsigned i=0;i<A733_IOMMU_TABLE_BYTES/4;++i)
+    uint16_t slots[A733_IOMMU_MAX_L2_TABLES];int used=windows(t,slots);if(used<0)return -1;
+    for(unsigned i=0;i<t->bytes/4;++i)
         if(t->words[i]!=expected(t,slots,(unsigned)used,i))return -1;
     return 1;
 }
@@ -115,7 +120,7 @@ int a733_iommu_translate(const struct a733_iommu_tables *t,uint64_t va,
 {
     if(!pa || !access || (access&~3u) || va>=IOVA_SPACE || a733_iommu_validate(t)!=1 ||
        a733_ranges_overlap_or_wrap(pa,sizeof(*pa),t,sizeof(*t)) ||
-       a733_ranges_overlap_or_wrap(pa,sizeof(*pa),t->words,A733_IOMMU_TABLE_BYTES))return -1;
+       a733_ranges_overlap_or_wrap(pa,sizeof(*pa),t->words,t->bytes))return -1;
     for(unsigned i=0;i<t->count;++i) {
         const struct a733_iommu_span *p=&t->spans[i];
         if(va>=p->iova && va-p->iova<p->bytes && (p->access&access)==access) {
@@ -155,10 +160,11 @@ int a733_iommu_init(struct a733_iommu *s,const struct a733_iommu_ops *ops,
                     void *ctx,const struct a733_iommu_tables *t)
 {
     if(!s || !ops || !t || s->initialized || s->state!=A733_IOMMU_NEW ||
+       (t->bytes!=A733_IOMMU_TABLE_BYTES && t->bytes!=A733_IOMMU_LARGE_TABLE_BYTES) ||
        !ops->now_us || !ops->admit || !ops->read || !ops->write || !ops->publish ||
        a733_ranges_overlap_or_wrap(s,sizeof(*s),ops,sizeof(*ops)) ||
        a733_ranges_overlap_or_wrap(s,sizeof(*s),t,sizeof(*t)) ||
-       a733_ranges_overlap_or_wrap(s,sizeof(*s),t->words,A733_IOMMU_TABLE_BYTES) ||
+       a733_ranges_overlap_or_wrap(s,sizeof(*s),t->words,t->bytes) ||
        (ctx && a733_ranges_overlap_or_wrap(s,sizeof(*s),ctx,1)) || a733_iommu_validate(t)!=1)return -1;
     /* Master IOVA policy is narrower than the hardware's 34-bit IOVA space. */
     for(unsigned i=0;i<t->count;++i)
@@ -345,7 +351,7 @@ int a733_iommu_poll(struct a733_iommu *s)
         if(v)return fail(s);
         ++s->index;return 0;
     case A733_IOMMU_PUBLISH:
-        r=s->ops.publish(s->context,s->admission.token,s->tables.words,A733_IOMMU_TABLE_BYTES,s->deadline);
+        r=s->ops.publish(s->context,s->admission.token,s->tables.words,s->tables.bytes,s->deadline);
         if(r<0 || r>1 || tick(s)!=1)return fail(s);
         if(r) { s->index=0;s->state=A733_IOMMU_PROGRAM; }return 0;
     case A733_IOMMU_PROGRAM:return program(s);

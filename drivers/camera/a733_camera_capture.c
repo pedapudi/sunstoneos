@@ -143,9 +143,11 @@ static int callbacks(const struct a733_camera_capture_config *c){
 }
 static int initialize(struct a733_camera_capture *s,const struct a733_camera_capture_config *c,unsigned supervised){
     const struct ov5640_mode *mode=c?&c->mode:NULL;
+    size_t table_bytes=c && c->table_bytes?c->table_bytes:A733_IOMMU_TABLE_BYTES;
     struct a733_camera_format format={mode?mode->width:0,mode?mode->height:0,
         (uint8_t)(mode && mode->format==OV5640_YUYV?A733_CAMERA_YUYV:A733_CAMERA_UYVY)};
-    if(!s || !c || s->initialized || s->state!=A733_CAPTURE_NEW ||
+    if((table_bytes!=A733_IOMMU_TABLE_BYTES && table_bytes!=A733_IOMMU_LARGE_TABLE_BYTES) ||
+       !s || !c || s->initialized || s->state!=A733_CAPTURE_NEW ||
        (mode->format!=OV5640_UYVY && mode->format!=OV5640_YUYV) ||
        !mode->pixel_hz || !a733_camera_format_valid(&format) || c->slots>A733_CAMERA_DMA_SLOTS ||
        (c->slots && (c->slots<2 || !c->dma.sync_slot || (c->slot_bytes&4095) ||
@@ -157,8 +159,8 @@ static int initialize(struct a733_camera_capture *s,const struct a733_camera_cap
        c->receiver.port>1 || c->receiver.parser!=c->receiver.port ||
        !c->receiver.settle || !c->receiver.deskew || c->receiver.deskew>31 ||
        c->receiver.top_hz!=324000000 || (c->color_bars!=0 && c->color_bars!=1) ||
-       a733_ranges_overlap_or_wrap(s,sizeof(*s),c->table_words,A733_IOMMU_TABLE_BYTES) ||
-       a733_ranges_overlap_or_wrap(c,sizeof(*c),c->table_words,A733_IOMMU_TABLE_BYTES))return -1;
+       a733_ranges_overlap_or_wrap(s,sizeof(*s),c->table_words,table_bytes) ||
+       a733_ranges_overlap_or_wrap(c,sizeof(*c),c->table_words,table_bytes))return -1;
     struct a733_iommu_span spans[3];
     for(unsigned i=0;i<3;i++){
         const struct a733_capture_span *m=&c->memory[i];
@@ -167,7 +169,7 @@ static int initialize(struct a733_camera_capture *s,const struct a733_camera_cap
            m->bytes<(i?a733_camera_plane_bytes(&format):4096u) || (m->bytes&4095) || m->bytes>SIZE_MAX ||
            a733_ranges_overlap_or_wrap(s,sizeof(*s),m->cpu,(size_t)m->bytes) ||
            a733_ranges_overlap_or_wrap(c,sizeof(*c),m->cpu,(size_t)m->bytes) ||
-           a733_ranges_overlap_or_wrap(c->table_words,A733_IOMMU_TABLE_BYTES,m->cpu,(size_t)m->bytes))
+           a733_ranges_overlap_or_wrap(c->table_words,table_bytes,m->cpu,(size_t)m->bytes))
             return -1;
         for(unsigned j=0;j<i;j++)
             if(a733_ranges_overlap_or_wrap(c->memory[j].cpu,(size_t)c->memory[j].bytes,m->cpu,(size_t)m->bytes))
@@ -175,7 +177,7 @@ static int initialize(struct a733_camera_capture *s,const struct a733_camera_cap
         spans[i]=(struct a733_iommu_span){m->iova,m->physical,m->bytes,i?A733_IOMMU_WRITE:A733_IOMMU_READ};
     }
     s->config=*c;s->initialized=1;
-    if(a733_iommu_build(&s->tables,c->table_words,c->table_physical,spans,3)!=1)return fail(s);
+    if(a733_iommu_build_sized(&s->tables,c->table_words,table_bytes,c->table_physical,spans,3)!=1)return fail(s);
     struct a733_camera_platform_ops a={clock_read,analog_admit,analog_read,analog_write};
     struct a733_iommu_ops i={clock_read,mmu_admit,mmu_read,mmu_write,mmu_publish};
     struct ov5640_ops o={clock_read,sensor_acquire,sensor_line,sensor_read,sensor_write,sensor_receiver,sensor_release,

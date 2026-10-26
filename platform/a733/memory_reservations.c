@@ -37,6 +37,10 @@ static int check_local(void)
 {
     uintptr_t start = (uintptr_t)__device_pool_start, end = (uintptr_t)__device_pool_end;
     if (start == end) return 1; /* The image links no pool. */
+#if defined(SUNSTONE_CAMERA_EXTERNAL_POOL)
+    if(start!=A733_CAMERA_POOL_START || end!=A733_CAMERA_POOL_END ||
+       !a733_camera_memory_admitted() || !aarch64_device_cache_stride())return 0;
+#else
 #if defined(SUNSTONE_NPU_LARGE_GRAPH)
     if (!a733_device_memory_local_pool_valid(start, end)) return 0;
 #endif
@@ -44,6 +48,7 @@ static int check_local(void)
         end > UINT32_C(0x41f00000) || end < start ||
         ((start | end) & 4095) || end - start > A733_LOCAL_DEVICE_POOL_BYTES ||
         !aarch64_device_cache_stride()) return 0;
+#endif
     /* Write-back identity mapping, inner shareable; one write translation per
      * 2 MiB block or per page (a733_memory_local_check()). */
     static const struct a733_mapping_rule wb = {A733_MAPPING_WRITE, 1,

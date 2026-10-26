@@ -30,6 +30,8 @@ def main():
     p.add_argument('--evidence', type=Path, required=True)
     p.add_argument('--clang', default='/usr/bin/clang-21')
     p.add_argument('--cases', default=','.join(map(str,range(25))))
+    p.add_argument('--layout-only',action='store_true',help='Cheap mode derivation and actual IOMMU layout for all ten sizes')
+    p.add_argument('--size',type=int,choices=range(10),default=3)
     p.add_argument('--skip-native', action='store_true')
     p.add_argument('--port', choices=(0,1), type=int, default=0)
     a = p.parse_args()
@@ -53,6 +55,19 @@ def main():
         (out/'commands.json').write_text(json.dumps(commands, indent=2)+'\n')
         if r.returncode:raise RuntimeError(f'{name}: {r.stdout}{r.stderr}')
         return r.stdout
+    if a.layout_only:
+        cases={}
+        for mode in range(10):
+            binary=out/('mode-'+str(mode))
+            run('compile-'+str(mode),[compiler,'-O1','-g','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',
+                '-Iinclude','-DSUNSTONE_CAMERA_SIZE='+str(mode),'checks/camera-mode-layout.c',
+                'drivers/camera/ov5640.c','drivers/iommu/a733_iommu.c','-o',binary])
+            cases[mode]=run('mode-'+str(mode),[binary]);save(binary)
+        for name in ('checks/camera-mode-layout.c','checks/a733-camera-native.py','include/a733_camera_profile.h',
+                     'include/ov5640.h','include/a733_iommu.h','drivers/camera/ov5640.c','drivers/camera/ov5640_tables.h','drivers/iommu/a733_iommu.c'):
+            save(ROOT/name)
+        (out/'results.json').write_text(json.dumps({'status':'PASS','physical':False,'cases':cases,'inputs':inputs},indent=2)+'\n')
+        print('PASS all ten source-derived modes, still/ring spans and actual IOMMU boundaries');return
     # Archive before execution. Dependencies discovered by the compiler are
     # added afterward; these private inputs must not change during the batch.
     for name in [*SOURCES, 'checks/a733-camera-native.c', 'checks/a733-camera-native.py',
@@ -77,7 +92,7 @@ def main():
     includes = ['-Iinclude', '-I'+str(kernel/'include'), '-I'+str(kernel/'portable/GCC/ARM_AARCH64_SRE')]
     defs = ['-DINCLUDE_xSemaphoreGetMutexHolder=1', '-DINCLUDE_xTaskGetCurrentTaskHandle=1',
             '-DINCLUDE_xTaskGetSchedulerState=1']
-    common = [compiler, '-std=c11', '-Wall', '-Wextra', '-Werror', *defs]
+    common = [compiler, '-DSUNSTONE_CAMERA_SIZE='+str(a.size), '-std=c11', '-Wall', '-Wextra', '-Werror', *defs]
     host = [*common, '-O1', '-g', '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
             '-DSUNSTONE_CAMERA_MODEL=1', *includes]
     objects = []

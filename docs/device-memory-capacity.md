@@ -165,8 +165,12 @@ about 115 MiB beyond that provisional budget.
 Each device must enforce its own complete-span, alignment and address-width
 constraints. Current DMA descriptors must remain below `0xfffff800`; CE and NPU
 physical fields and GPU mappings retain their existing validators. Camera's
-current IOMMU builder covers only four 4 MiB windows and eight spans. Enlarging
-the CPU pool does not enlarge that mapping coverage. GPU free-list growth and
+legacy IOMMU builder covers four 4 MiB windows and eight spans; the explicit
+36 KiB camera arena covers five windows for the maximum ring. Enlarging the CPU
+pool does not enlarge that mapping coverage. The camera application uses its
+own [bounded 32 MiB profile](designs/camera-native-modes.md), with sealed image
+admission and sixteen matching EL1/EL3 blocks, independently of this general
+extended reservation. GPU free-list growth and
 future camera or codec modes may require further bounded consumer work.
 
 ## Focused validation covers the changed native path

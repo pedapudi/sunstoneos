@@ -49,7 +49,8 @@ struct a733_camera_capture_config {
     struct a733_capture_ops ops;
     void *context; /* Shared by the supplied platform callbacks. */
     struct a733_capture_span memory[3]; /* READ parameters; WRITE Y and UV. */
-    uint32_t *table_words; /* Exclusive 32KiB CPU/physical arena, 16KiB aligned. */
+    uint32_t *table_words; /* Exclusive CPU/physical arena, 16KiB aligned. */
+    size_t table_bytes; /* Zero keeps the legacy 32KiB arena; otherwise typed capacity. */
     uint64_t table_physical,frame_id;
     struct a733_csi_config receiver; /* Matching port/parser 0 or 1. */
     /* From ov5640_mode_get in UYVY or YUYV; sets every controller's frame

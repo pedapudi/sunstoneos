@@ -76,14 +76,17 @@ until whole-board power removal.
 
 The [public interface](../include/a733_iommu.h) accepts up to eight disjoint
 page-aligned spans. Each specifies device address, physical address, length,
-and device read/write permissions. Up to four distinct 4 MiB device-address
-windows can be represented. These capacity limits bound the initial camera
-profile; broader allocation and multi-client policies remain implementation work.
+and device read/write permissions. The legacy builder admits four distinct
+4 MiB device-address windows in 32 KiB. The sized builder also accepts a 36 KiB
+arena with five windows for the maximum native camera ring. A sixth window is
+refused. Both APIs keep eight spans and fixed offline mappings.
 
 The directory has 4096 32-bit entries and occupies 16 KiB. Each second-level
 table has 1024 32-bit entries and occupies 4 KiB. The caller supplies one
 exclusive 32 KiB arena, aligned to 16 KiB in both CPU and physical address space.
-The builder emits the directory followed by four table slots. Unused entries
+The legacy builder emits the directory followed by four table slots. The sized
+camera arena has five slots; its admitted length also governs overlap checks,
+validation, translation-output exclusion, and publication. Unused entries
 and unused slots are zero.
 
 A device address uses bits 33:22 for the directory index, bits 21:12 for the
@@ -113,9 +116,10 @@ Canonical validation compares every directory and leaf word with the admitted
 spans, including unused entries. The platform must additionally reserve the
 CPU aliases and prove that every physical span is authorized RAM.
 
-For the current camera path, the video image postprocessor (VIPP) parameter
-image occupies a separate 4 KiB read-only page. Each 640 by 480 NV16 plane uses
-307200 bytes, or 75 write-only pages. Parameter, Y, and UV mappings remain
+For the native camera path, the video image postprocessor (VIPP) parameter
+image has a read-only allocation including a guard. Each default 640 by 480
+NV16 plane has 307200 payload bytes plus a mapped guard. Larger modes use the
+[explicit native layout](designs/camera-native-modes.md). Parameter, Y, and UV mappings remain
 separate. A device-specific tail or prefetch requirement must be established
 before choosing additional mapped guard space. An unmapped adjacent page detects
 an out-of-bounds access but does not prove that a device will avoid that access.

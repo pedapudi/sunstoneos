@@ -161,6 +161,8 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--reuse-production', type=Path)
+    p.add_argument('--camera-build',type=Path,help='Only camera fixed-pool and compact regression cases')
+    p.add_argument('--camera-cases',default='0,1,2',help='Selected camera mapping cases; compact comparison also runs')
     p.add_argument('--images', type=Path, action='append', default=[],
                    help='build directory whose ELF images are scanned')
     for name in ('clang', 'ld', 'qemu', 'freertos'):
@@ -215,6 +217,41 @@ def main():
         data = obj.with_suffix('.d').read_text().replace('\\\n', ' ')
         dependencies.update(Path(x).resolve() for x in shlex.split(data.split(':', 1)[1]))
         return obj
+
+    if a.camera_build:
+        a.port=a.camera_build/'freertos-a733-smp-cached'
+        units=['checks/device-memory-capacity-local.c','checks/device-memory-capacity.S',
+               'runtime/device_memory_pool.c','runtime/memory.c','platform/a733/memory_reservations.c',
+               'platform/a733/memory_uncached.c','platform/a733-smp-cached/memory.c',
+               'platform/a733/cpu_start.c','platform/a733/cpu_coherence.c',
+               'platform/a733/cpu_coherence.S','arch/aarch64/device_memory.c']
+        results={};rom=out/'reset-rom.bin';rom.write_bytes(struct.pack('<IIQ',0x58000040,0xd61f0000,0x41000000))
+        for label,camera in [('camera',True),('compact',False)]:
+            extra=['-DDEVICE_MEMORY_POOL_SINGLE_THREAD']
+            if camera:extra+=['-DSUNSTONE_CAMERA_APPLICATION=1','-DSUNSTONE_CAMERA_SIZE=9','-DSUNSTONE_CAMERA_STREAM=1']
+            objs=[compile_source(u,label+'-'+str(i),extended=False,extra=extra) for i,u in enumerate(units)]
+            script=a.camera_build/'camera-application/link.ld' if camera else ROOT/'platform/a733-smp-cached/link.ld'
+            dependencies.add(script);image=out/(label+'.elf')
+            link=['--wrap=aarch64_device_translate'] if camera else ['--defsym=__device_pool_size=2097152']
+            run('link-'+label,[str(a.ld),'-static','--gc-sections',*link,'-T',str(script),*map(str,objs),'-o',str(image)])
+            with image.open('rb') as f:
+                elf=ELFFile(f);symbols={x.name:int(x['st_value']) for x in elf.get_section_by_name('.symtab').iter_symbols()}
+                segments=[(int(x['p_vaddr']),bytes(x.data())) for x in elf.iter_segments() if x['p_type']=='PT_LOAD' and x['p_filesz']]
+            for mode in (list(map(int,a.camera_cases.split(','))) if camera else [1]):
+                name=label+'-'+str(mode);loaders=[]
+                for i,(address,data) in enumerate(segments):
+                    value=bytearray(data)
+                    if address<=symbols['fixture_mode']<address+len(value):struct.pack_into('<I',value,symbols['fixture_mode']-address,mode)
+                    path=out/(name+'-'+str(i)+'.bin');path.write_bytes(value)
+                    loaders+=['-device',f'loader,file={path},addr={address},force-raw=on']
+                run('native-'+name,[str(a.qemu),'-machine','virt,secure=on,virtualization=on','-cpu','cortex-a53','-smp','1',
+                    '-icount','shift=0','-m','1024M','-nographic','-monitor','none','-serial','none',
+                    '-semihosting-config','enable=on,target=native','-bios',str(rom),*loaders],timeout=60)
+                results[name]=(out/('native-'+name+'.log')).read_text()
+        (out/'inputs.json').write_text(json.dumps({str(p):digest(p) for p in sorted(dependencies)},indent=2)+'\n')
+        (out/'camera-results.json').write_text(json.dumps({'physical':False,'cases':results},indent=2)+'\n')
+        print('PASS camera exact maps, privileges, 16 translations, refused preparation, and compact maps')
+        return
 
     # Build the actual large image once. Reuse its native objects in the
     # architectural fixture; only the fixture entry/control units differ.

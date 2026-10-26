@@ -12,7 +12,7 @@ int camera_session_prepare(const struct a733_smp_contract *contract)
 {
     if(admitted.attempted)return 0;
     admitted.attempted=1;
-    if(!contract||contract->magic!=CAMERA_CONTRACT_MAGIC||
+    if(!camera_memory_profile_valid()||!contract||contract->magic!=CAMERA_CONTRACT_MAGIC||
        contract->reserved[0]!=A733_STORAGE_SESSION_ADDRESS||
        contract->reserved[1]!=sizeof(admitted.session))return 0;
     const volatile uint8_t *source=(const void *)A733_STORAGE_SESSION_ADDRESS;

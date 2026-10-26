@@ -26,6 +26,7 @@ extern unsigned char __uncached_pool_start[], __uncached_pool_end[];
  * passes: level-2 blocks below 0x80000000, level-1 blocks from there. The same
  * table is the list the check receives and drives the entry writes. The
  * extended layout already maps 0x48000000-0x79000000 with its pools. */
+#if !defined(SUNSTONE_CAMERA_EXTERNAL_POOL)
 static const struct a733_dram_range dram_map[] = {
 #if !defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
     {UINT64_C(0x48000000), UINT64_C(0x79000000) - UINT64_C(0x48000000)},
@@ -33,6 +34,7 @@ static const struct a733_dram_range dram_map[] = {
     {UINT64_C(0x80000000), A733_DRAM_MAP_END - UINT64_C(0x80000000)},
 };
 #define DRAM_MAP_RANGES (unsigned)(sizeof dram_map / sizeof dram_map[0])
+#endif
 /* No image links drivers/dram/a733_dram_decode.c yet, so this default is the
  * one definition in every image: no decode evidence, so no entry above the
  * current map. The driver's definition, which has the same declaration in
@@ -59,6 +61,10 @@ int a733_cached_memory_prepare(void)
     if (!a733_device_memory_tables_admitted(&layout) ||
         (uintptr_t)__bss_end > (uintptr_t)__heap_end || (uintptr_t)__heap_end > 0x42000000 ||
         wb != layout.wb_start || we != layout.wb_end || nc != layout.nc_start || ne != layout.nc_end) return 0;
+#elif defined(SUNSTONE_CAMERA_EXTERNAL_POOL)
+    if(!a733_camera_memory_admitted() || wb!=A733_CAMERA_POOL_START || we!=A733_CAMERA_POOL_END ||
+       nc!=ne || (uintptr_t)__bss_end>(uintptr_t)__heap_end ||
+       (uintptr_t)__heap_end>0x41f00000)return 0;
 #else
 #if defined(SUNSTONE_NPU_LARGE_GRAPH)
     if (!a733_device_memory_local_pool_valid(wb, we)) return 0;
@@ -86,6 +92,13 @@ int a733_cached_memory_prepare(void)
             (a < we ? UINT64_C(4) : UINT64_C(8));
         a733_cached_el3_l2[i] = common | BIT(5) | BIT(6);
         a733_cached_el1_l2[i] = common | BIT(53);
+    }
+#elif defined(SUNSTONE_CAMERA_EXTERNAL_POOL)
+    for(uintptr_t a=wb;a<we;a+=0x200000){
+        unsigned i=(unsigned)((a-0x40000000)>>21);
+        uint64_t common=a|BIT(54)|BIT(10)|(UINT64_C(3)<<8)|5;
+        a733_cached_el3_l2[i]=common|BIT(5)|BIT(6);
+        a733_cached_el1_l2[i]=common|BIT(53);
     }
 #else
     if (ne != nc) {
@@ -120,6 +133,7 @@ int a733_cached_memory_prepare(void)
      * executable. A mapped block receives speculative reads, so it is written
      * only when this boot's decode is linear there with no protected region.
      * EL3 entries stay invalid: EL3 does not access that range. */
+#if !defined(SUNSTONE_CAMERA_EXTERNAL_POOL)
     if (a733_dram_decode_check(dram_map, DRAM_MAP_RANGES) == 1)
         for (unsigned r = 0; r < DRAM_MAP_RANGES; ++r) {
             uint64_t base = dram_map[r].base, level1 = base >= UINT64_C(0x80000000);
@@ -129,6 +143,7 @@ int a733_cached_memory_prepare(void)
             for (uint64_t v = A733_EL1_DRAM_BLOCK(base), end = v + dram_map[r].size; v < end; v += step)
                 *entry++ = v;
         }
+#endif
     /* Last table step: each core compares this with its own readback. */
     uint64_t sum = 0;
     for (unsigned i = 0; i < 512; ++i) sum += a733_cached_el1_l1[i] + a733_cached_el1_l2[i];

@@ -1,10 +1,10 @@
 # Native reference camera capture
 
 The native camera binding selects CAM1 or CAM2, prepares OV5640 exposures and
-copies the completed
-640 × 480 NV16 image into an application-owned memory reservation. NV16 stores
-307,200 luminance bytes followed by 307,200 interleaved chroma bytes in separate
-planes. The sensor sends two-lane UYVY; the pass-through route and camera DMA
+copies one completed NV16 image into an application-owned memory reservation.
+The build selects any of the sensor's ten existing sizes, up to 2592 × 1944;
+the default is 640 × 480. NV16 stores equally sized luminance and interleaved
+chroma planes, each containing width × height bytes. The sensor sends two-lane UYVY; the pass-through route and camera DMA
 produce these planes without an ISP image-processing pipeline.
 
 The implementation uses the existing clock registry, media controller, rail
@@ -123,7 +123,7 @@ health is inspected under the common register mutex before acquiring I2C and
 after releasing it. An in-flight transaction may reach that final boundary;
 a pin-manager fault prevents its result from becoming available.
 
-A 16 KiB-aligned parent reservation contains 32 KiB of IOMMU tables, 8 KiB of
+For the default VGA mode, a 16 KiB-aligned parent reservation contains 32 KiB of IOMMU tables, 8 KiB of
 parameter memory and two 311,296-byte plane allocations. Each plane includes
 307,200 payload bytes and a 4 KiB guard. The 663,552-byte parent uses 162 pages
 and one allocator record. The camera reaches the parent through the system
@@ -132,7 +132,7 @@ the Y plane at `0x1000_2000` and the UV plane at `0x1004_E000`
 (`A733_CAMERA_NATIVE_IOVA` and fixed offsets). The IOMMU translates each IOVA to
 the parent's physical pages, which may lie anywhere below 2^34, the limit of
 the IOMMU entry encoding. The CPU address of the parent need not equal its
-physical address. The three spans use one of the IOMMU builder's four 4 MiB
+physical address. The default VGA spans use one of the IOMMU builder's four 4 MiB
 windows and 154 leaf words at any placement. The constructor checks the parent's
 size and physical range before it writes any byte. A refused parent stays
 DEVICE-owned and the constructor faults. The native constructor refuses insufficient capacity; it does not
@@ -182,7 +182,7 @@ conditions. Vendor stream-off does not establish the complete release contract.
 ## Finite streaming keeps one slot held across the copied frame
 
 `a733_camera_native_supervised_stream_init` selects two slots per plane for
-the existing VGA mode. The parent reservation is 1,286,144 bytes: 32 KiB of
+the selected UYVY mode. For default VGA, the parent reservation is 1,286,144 bytes: 32 KiB of
 tables, 8 KiB of parameters and four 311,296-byte guarded slots. Together with
 the 614,400-byte CPU output, it fits the application's existing 2 MiB pool.
 The constructor fills and publishes both spans and derives their IOVAs from
@@ -191,20 +191,20 @@ exclusion, admitted guards and manual power removal. The image identity binds
 the stream build option; the record format is unchanged.
 
 The native packet handoff admits the coordinator's continuous video mode.
-A delivered slot receives cache invalidation over its 307,200-byte payload in
+A delivered slot receives cache invalidation over its width × height payload in
 each plane. The coordinator supplies the completion and address-ownership
 checks before that callback. Guard bytes remain outside the copied payload.
 
 `a733_camera_native_stream_copy` takes the oldest delivered slot and copies at
 most 4 KiB per call into a CPU-owned allocation from the same owner and pool.
 The destination lease, including its generation, stays fixed across calls.
-The slot remains held until all 614,400 bytes have been copied and checked.
+The slot remains held until both complete payloads have been copied and checked.
 A failure leaves any partial destination untrusted and retains the source.
 The boot record's discard count consumes complete delivered slots without
 copying them, while the sensor continues running.
 
-The application polls capture before every copy call. It therefore makes
-150 copy calls without withholding DMA status checks for 150 ticks. Holding
+The application polls capture before every copy call. VGA needs 150 calls;
+the largest mode needs 2462 calls, including a short tail in each plane. Holding
 one of the two slots can cause frames in the other slot to be overwritten;
 the existing ring counts those drops and protects the held slot. The finite
 session uses its admitted absolute deadline throughout preparation and copying.
@@ -217,7 +217,7 @@ Sensor register readback does not establish transaction drain. The separate
 CPU copy remains usable; the application reports sensor-stop status and the
 absence of drain proof independently.
 
-The native model completed the copy in 150 pieces, with a maximum observed
+The earlier VGA native model completed the copy in 150 pieces, with a maximum observed
 DMA status-read gap of 4,044 modeled microseconds, below the mode's roughly
 16,500 µs limit. It copied 614,400 bytes and invalidated each copied plane
 once. DMA failure during copying, slot-cache failure and a changed destination
@@ -288,3 +288,51 @@ capture, power-down-only modules, retained rearm, finite streaming, selector
 changes and incorrect inherited power-down. Local programming targets only
 the selected connector after shared analog preparation. No camera is attached;
 these checks establish no sensor compatibility, image quality or physical timing.
+
+## All native sizes use bounded memory and complete output
+
+`SUNSTONE_CAMERA_SIZE` selects QQVGA, QCIF, QVGA, VGA, NTSC, PAL, XGA, 720P,
+1080P, or QSXGA. Native construction derives the existing two-lane UYVY mode
+before allocating. The selected geometry is immutable for the session.
+[The layout and admission design](designs/camera-native-modes.md) lists every
+size and its guarded reservation.
+
+Still sizes through PAL and stream sizes through VGA retain the compact 2 MiB
+pool. Larger images reserve only `0x48000000..0x4a000000`, a 32 MiB write-back
+pool. Sealed session and profile admission precede the sixteen external CPU
+mapping blocks and allocator publication. Other memory profiles are incompatible,
+and the camera branch does not call the general DRAM map expansion.
+The largest stream uses 36 KiB of IOMMU tables, 8 KiB of parameters, four
+5,046,272-byte guarded slots, and a 10,080,256-byte output allocation. Their total
+is 30,310,400 bytes. Image data occupies 10,077,696 bytes; padding and guards are
+excluded from copies and USB output. Its five IOMMU windows map parameters and
+source slots only. Existing clients retain the four-window builder.
+
+Software evidence is under `~/.cache/sunstoneos/evidence/camera-modes-1026/`.
+Cheap compiled layout checks cover all ten modes and both operations. The
+actual native still and stream paths execute for default VGA and QSXGA. Maximum
+still output passes in `native-max-geometry`; maximum streaming and an injected
+DMA failure pass in `native-max-stream`. Earlier VGA routing, sensor tables,
+interval-opening, and retained-stop evidence remain applicable.
+
+| Modeled native stream cost | VGA | QSXGA |
+| --- | ---: | ---: |
+| Register accesses | 8126 | 10471 |
+| Register writes | 2359 | 2425 |
+| Delivered-plane invalidations | 2 | 2 |
+| Copy calls | 150 | 2462 |
+| Copied bytes | 614,400 | 10,077,696 |
+| Largest status-read gap | 4044 µs | 4044 µs |
+
+VGA counts match the accepted preceding native evidence. Larger payloads need
+more bounded copy steps and longer capture polling; source mode tables account
+for additional configuration writes. With the same compiler flags, the native
+binding grows from 14,460 to 14,662 text/constant bytes, and the IOMMU object from
+6829 to 6977 bytes. The native binding retains eight bytes of global storage.
+The five-table scan covers 9216 words instead of 8192. QEMU verifies all CPU map
+entries and permissions, sixteen pool-preparation translations, admission and
+missing-map refusals, and the unchanged compact map.
+
+These counts do not measure physical cache duration, DDR bandwidth, image
+quality, receiver timing, or throughput. Every size and connector still requires
+its actual electrical, settle/deskew, exclusion, guard, and recovery evidence.

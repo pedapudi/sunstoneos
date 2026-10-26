@@ -1,9 +1,9 @@
 # Native OV5640 capture and supervised observation
 
 The dedicated `sunstone-a733-camera` image connects the existing OV5640 binding,
-shared providers and USB0 device transport on CAM1 or CAM2. It retains one readable 640 × 480
-NV16 frame: 307,200 luminance bytes followed by 307,200 interleaved chroma
-bytes. No MIPI camera is connected; physical capture waits for the accessory and
+shared providers and USB0 device transport on CAM1 or CAM2. It retains one readable, build-selected
+NV16 frame. Each of its luminance and interleaved-chroma planes contains
+width × height bytes; the default VGA frame contains 614,400 bytes in total. No MIPI camera is connected; physical capture waits for the accessory and
 remains unqualified.
 
 The default image preserves its qualified watchdog admission requirements.
@@ -71,8 +71,8 @@ with product `sunstoneos native camera` and serial `sunstoneos-a733-camera`.
 `apps/camera/observe.py` decodes saved responses offline and opens no device.
 Physical preparation and capture remain the board coordinator's responsibility.
 
-The wire format retains the existing twelve-byte request and seventy-two-byte
-response header. Reads return at most 4,096 bytes. USB0 uses the shared board
+The wire format retains the existing twelve-byte request. Still responses have
+a 72-byte header; finite-stream responses have an 80-byte header. Reads return at most 4,096 bytes. USB0 uses the shared board
 service in `apps/board/usb0_service.h` for its descriptors, provider startup
 and polling loop, which repeats passes within one tick while the transfer makes
 progress. The camera image's build identity hashes that header. When an IN
@@ -80,8 +80,8 @@ transfer completes, the transmit callback refills the vendor FIFO before the
 TinyUSB vendor class decides whether to send a zero-length packet, so a
 response cannot end early on a 512-byte boundary. The collector validates epoch,
 generation and the immutable session digest on every response. It records all
-fragments and requires all 150 chunks before publishing a 614,400-byte NV16
-artifact and metadata. A failed transfer, inconsistent response, deadline or
+fragments and requires the entire selected payload before publishing an NV16
+artifact and its dimensions. The final request may be shorter than 4096 bytes. A failed transfer, inconsistent response, deadline or
 journal failure leaves success unestablished and requires manual recovery.
 
 The root CMake fragment selects the supervised mode without a separate startup
@@ -164,3 +164,42 @@ The boot/session layout and NV16 USB response are unchanged. Host image admissio
 accepts the actual supervised still or stream initializer retained in executable
 ELF sections,
 so linker removal of the unused still initializer does not reject a stream image.
+
+## Image-bound sizes and full-frame USB capture
+
+Build with `-DSUNSTONE_CAMERA_SIZE=QSXGA` for 2592 × 1944, or select another
+existing size listed in the [native layout](designs/camera-native-modes.md).
+The default remains VGA. Both still and supervised finite-stream builds support
+the full size range. No session or wire-layout extension is needed.
+
+The immutable ELF profile binds dimensions, formats, operation, payload/slot/table
+lengths, and linker pool endpoints. Preparation validates that profile against
+the actual executable entry and supported sensor sizes. A present malformed
+profile is refused. Preserved images without the profile retain legacy VGA
+interpretation. The existing image and memory digests bind the selected image
+and its exact compact or external DDR ownership record.
+
+Larger profiles require reviewed DDR evidence for `0x41000000..0x42200000` and
+`0x48000000..0x4a000000`. Preparation admits the latter only as a distinct,
+non-executable NOLOAD reservation. Uploads contain initialized image segments and
+the existing session; the pool is not uploaded. The existing boot and supervised
+session deadlines remain unchanged.
+
+Host collection derives the 72/80-byte header from the response version, including
+when a header spans multiple reads. It checks that version against the selected
+image and uses one absolute deadline through all fragments. At maximum size it
+collects 2461 payload responses, ending with 1536 bytes. Saved-frame decoding
+accepts `--elf` to obtain dimensions from the validated native image.
+
+`camera-modes-1026/host-final-*` evidence checks actual VGA, maximum-still and
+maximum-stream ELF/session/DDR admission and malformed profiles. The actual
+maximum-stream boot hook rejects an unsealed session and changed profile fields
+before external memory admission. Compiled application/USB checks collect both
+maximum payloads through fragmented transport and exercise the final short
+response. Hardware transactions and image content in these checks are modeled.
+
+The final maximum-stream image also passes the actual offline `prepare` and
+`validate_bundle` path, including SRAM-launcher compilation and frozen evidence.
+`prepared-max-stream-result.json` records that the 32 MiB NOLOAD pool is retained
+in the reservation list and excluded from upload bytes. Its fixture records do
+not establish physical DDR or camera authority.

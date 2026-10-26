@@ -60,7 +60,7 @@ The sensor handles automatic exposure, gain and white balance. The initial
 anti-flicker setting is 50 Hz. Initialization selects ordinary images or the
 sensor's color-bar test pattern, which register `0x503d` = `0x84` enables as in
 the Linux driver. The [native binding](camera-native.md) takes this selection
-from its boot record and uses the VGA UYVY mode. Runtime exposure controls,
+from its boot record and uses a build-selected UYVY mode, defaulting to VGA. Runtime exposure controls,
 autofocus, orientation controls and the JPEG and RGB formats remain to be
 implemented. The A733 receiver driver has no RGB565 input format.
 
@@ -271,11 +271,12 @@ the multi-mode results are under
 `~/.cache/sunstoneos/build/audit-camera-streaming/dev/ov5640-modes/`.
 
 The [native capture path](camera-native.md) captures retained still images from
-CAM1 or CAM2 in the VGA UYVY mode. Its boot record can request up to fifteen discarded
+CAM1 or CAM2 in any of the ten existing UYVY sizes. Its boot record can request up to fifteen discarded
 images before the readable one. Each discarded still image uses a complete
 sensor stop and start through the [retained rearm sequence](camera-capture.md).
 The [capture coordinator](camera-capture.md) accepts any UYVY or YUYV mode;
-the native application selects VGA UYVY.
+the native application selects its UYVY size at build time. Both still and finite
+streaming support the full range with [bounded reservations](designs/camera-native-modes.md).
 
 The [supervised stream application](camera-application.md#finite-streaming-copies-one-frame-and-retains-the-hardware)
 uses continuous capture into two slots per plane. It consumes any requested

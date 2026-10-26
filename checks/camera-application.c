@@ -17,6 +17,7 @@ int a733_counter_clock_now(void *v,uint64_t *out){(void)v;*out=ticks/24;return 1
 int camera_session_valid(const struct camera_session *s,uint64_t n){(void)s;(void)n;return admitted;}
 #ifdef SUNSTONE_CAMERA_STREAM
 static unsigned stream_stopping,stream_mode;
+#define COPY_STEPS ((CAMERA_FRAME_BYTES+4095)/4096)
 int a733_camera_native_poll(struct a733_camera_native *n)
 {
  ++polled;
@@ -26,19 +27,20 @@ int a733_camera_native_poll(struct a733_camera_native *n)
 int a733_camera_native_stream_copy(struct a733_camera_native *n,struct device_memory_lease l)
 {
  (void)n;(void)l;
- if(polled!=copies+1 || copies>=150)return -1;
- memset(pixels+4096*copies,0x41,4096);++copies;
- return stream_mode==2&&copies==2?-1:copies==150;
+ if(polled!=copies+1 || copies>=COPY_STEPS)return -1;
+ unsigned offset=4096*copies,count=CAMERA_FRAME_BYTES-offset;if(count>4096)count=4096;
+ memset(pixels+offset,0x41,count);++copies;
+ return stream_mode==2&&copies==2?-1:copies==COPY_STEPS;
 }
 int a733_camera_native_stream_stop(struct a733_camera_native *n)
-{(void)n;if(copies!=150)return -1;stream_stopping=1;return 1;}
+{(void)n;if(copies!=COPY_STEPS)return -1;stream_stopping=1;return 1;}
 #else
 int a733_camera_native_poll(struct a733_camera_native *n){(void)n;++polled;return 1;}
 #endif
 int a733_camera_native_copy(struct a733_camera_native *n,unsigned plane,unsigned offset,
  struct device_memory_lease l,size_t destination,size_t bytes)
 {
- (void)n;(void)l;++copies;if(offset||plane>1||destination!=plane*307200||bytes!=307200)return -1;
+ (void)n;(void)l;++copies;if(offset||plane>1||destination!=plane*A733_CAMERA_NATIVE_PLANE_BYTES||bytes!=A733_CAMERA_NATIVE_PLANE_BYTES)return -1;
  memset(pixels+destination,(int)(plane+0x41),bytes);
  return copies==fail_copy?-1:1;
 }
@@ -80,7 +82,7 @@ void camera_check_run(unsigned mode)
 #ifdef SUNSTONE_CAMERA_STREAM
  stream_mode=mode;
  if(mode==3)atomic_store(&app.cancel,1);
- for(unsigned i=0;i<152 && atomic_load(&app.result)<3;++i){
+ for(unsigned i=0;i<COPY_STEPS+2 && atomic_load(&app.result)<3;++i){
   check(!camera_output(0,chunk,1),50);
   (void)camera_capture_step();
  }
@@ -88,10 +90,10 @@ void camera_check_run(unsigned mode)
   check(atomic_load(&app.result)==3&&!camera_output(0,chunk,1),51);
   check(copies==(mode==2?2u:0u),52);
  }else{
-  check(copies==150 && polled==151 && atomic_load(&app.result)==4,53);
+  check(copies==COPY_STEPS && polled==COPY_STEPS+1 && atomic_load(&app.result)==4,53);
   check(app.retained_status==(mode==1?4u:5u),54);
   check(camera_output(0,chunk,sizeof(chunk))&&chunk[0]==0x41&&chunk[4095]==0x41,55);
-  check(camera_capture_step()==-1&&polled==151&&copies==150,56);
+  check(camera_capture_step()==-1&&polled==COPY_STEPS+1&&copies==COPY_STEPS,56);
  }
  camera_check_result=1;__asm__ volatile("brk #0");for(;;){}
 #endif
@@ -117,12 +119,12 @@ void camera_check_run(unsigned mode)
   r=camera_capture_step();
   if(mode==1){
    check(r==-1&&copies==2&&atomic_load(&app.result)==3,15);
-   check(!camera_output(307200,chunk,sizeof(chunk))&&camera_capture_step()==-1&&copies==2,16);
+   check(!camera_output(A733_CAMERA_NATIVE_PLANE_BYTES,chunk,sizeof(chunk))&&camera_capture_step()==-1&&copies==2,16);
   }else{
    check(r==0&&copies==2&&!camera_output(0,chunk,sizeof(chunk)),17);
    check(camera_capture_step()==1&&atomic_load(&app.result)==2,18);
    check(camera_output(0,chunk,sizeof(chunk))&&chunk[0]==0x41&&chunk[4095]==0x41,19);
-   check(camera_output(307200,chunk,sizeof(chunk))&&chunk[0]==0x42,20);
+   check(camera_output(A733_CAMERA_NATIVE_PLANE_BYTES,chunk,sizeof(chunk))&&chunk[0]==0x42,20);
    check(!camera_output(CAMERA_FRAME_BYTES-1,chunk,2)&&!camera_output(0,chunk,4097),21);
    atomic_store(&app.cancel,1);check(!camera_output(0,chunk,1)&&camera_capture_step()==-1,22);
   }

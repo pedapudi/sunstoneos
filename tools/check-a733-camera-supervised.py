@@ -35,32 +35,34 @@ def bundle_bytes(bundle, prepared, name):
     return data
 
 
-def capture(exchange,session,evidence,record,save,deadline,*,now=time.monotonic,pause=time.sleep):
+def capture(exchange,session,evidence,record,save,deadline,*,now=time.monotonic,pause=time.sleep,profile=None):
     """Persist the complete copied NV16 payload; guards never become image bytes."""
     record['camera_retention']='whole-board-power-removal';record['camera_result']='unobserved';save()
-    output=bytearray();offset=0;ready=False
-    for sequence in range(1,605):
+    width,height=decoder.dimensions(profile);total=2*width*height
+    output=bytearray();offset=0;ready=False;pending=0
+    for sequence in range(1,455+(total+4095)//4096):
         require(now()<deadline,'camera capture deadline expired.')
-        operation=1 if ready else 0;count=4096 if ready else 0
+        operation=1 if ready else 0;count=min(4096,total-offset) if ready else 0
         frame=exchange(struct.pack('<III',operation,offset,count),min(500,max(1,int((deadline-now())*1000))))
         path=evidence/f'camera-{sequence:03}.bin';supervisor.durable_frame(path,frame)
         entry={'path':path.name,'sha256':hashlib.sha256(frame).hexdigest(),'operation':operation,'offset':offset}
         record.setdefault('camera_frames',[]).append(entry);save()
-        value=decoder.decode(frame,session,operation,offset,count)
+        value=decoder.decode(frame,session,operation,offset,count,profile=profile)
         require(now()<deadline,'camera response arrived after deadline.')
         if value['state']==3:
             record['camera_result']='observed-failure';save();return
         if value['state'] not in (2,4):
             require(not ready,'camera result regressed during copy.')
+            pending+=1;require(pending<=450,'camera pending query budget exhausted.')
             pause(min(.01,max(0,deadline-now())));continue
         if value['state']==4:
             record['camera_stream']={key:value[key] for key in ('sensor_stopped','drain_proved','stream_retained')}
         if not ready:ready=True;continue
         output.extend(value['payload']);offset+=count
-        if offset==614400:
-            target=evidence/'frame-640x480-nv16.bin';supervisor.durable_frame(target,output)
+        if offset==total:
+            target=evidence/f'frame-{width}x{height}-nv16.bin';supervisor.durable_frame(target,output)
             info={'path':target.name,'bytes':len(output),'sha256':digest(target),'format':'NV16',
-                  'width':640,'height':480,'planes':[307200,307200],'physical_qualification_established':False}
+                  'width':width,'height':height,'planes':[width*height,width*height],'physical_qualification_established':False}
             supervisor.save_json(evidence/'frame.json',info)
             require(now()<deadline,'camera durable output exceeded deadline.')
             record['copied_camera_output']=info;record['durable_result']=entry.copy();record['camera_result']='copied-frame-stream-retained' if value['state']==4 else 'observed-success'
@@ -71,12 +73,12 @@ def capture(exchange,session,evidence,record,save,deadline,*,now=time.monotonic,
     raise supervisor.CaptureWindowExpired('camera pending query budget exhausted.')
 
 
-def capture_device(device,same,deadline,session,evidence,record,save):
+def capture_device(device,same,deadline,session,evidence,record,save,*,profile=None):
     serial=[0]
     def exchange(packet,timeout):
         same();require(time.monotonic()<deadline,'camera deadline before write.')
         require(device.write(0x02,packet,timeout=timeout)==12,'Incomplete camera request.')
-        serial[0]+=1;frame=bytearray();extent=4168;part=0;header=False
+        serial[0]+=1;frame=bytearray();extent=4176;part=0;header=False
         while len(frame)<extent:
             same();remaining=int((deadline-time.monotonic())*1000);require(remaining>0,'camera deadline during response.')
             raw=bytes(device.read(0x81,extent-len(frame),timeout=min(timeout,remaining)))
@@ -84,11 +86,13 @@ def capture_device(device,same,deadline,session,evidence,record,save):
             record.setdefault('camera_fragments',[]).append({'path':path.name,'sha256':hashlib.sha256(raw).hexdigest()});save()
             require(0<len(raw)<=extent-len(frame),'Invalid camera fragment extent.')
             frame.extend(raw)
-            if not header and len(frame)>=72:
-                header=True;size=struct.unpack_from('<I',frame,16)[0];require(size<=4096,'Oversized camera response.');extent=72+size
+            if not header and len(frame)>=20:
+                header=True;version=struct.unpack_from('<I',frame,4)[0]
+                size=struct.unpack_from('<I',frame,16)[0];require(size<=4096,'Oversized camera response.')
+                extent=decoder.header_bytes(version)+size
                 require(len(frame)<=extent,'camera response exceeds header extent.')
         return bytes(frame)
-    return capture(exchange,session,evidence,record,save,deadline)
+    return capture(exchange,session,evidence,record,save,deadline,profile=profile)
 
 
 def source_files():
@@ -138,7 +142,7 @@ def main(argv=None):
     return supervisor.run_session(args, bundle, prepared,
         lambda: claimed(args.database, args.claim, args.owner, bundle,prepared), validate_entry,
         lambda device, same, deadline, record, save: capture_device(
-            device, same, deadline, session, args.evidence, record, save),
+            device, same, deadline, session, args.evidence, record, save,profile=layout['image_profile']),
         product='sunstoneos native camera', serial='sunstoneos-a733-camera',
         bcd_device=0x0100, capture_seconds=59, result_key='camera_result',
         source_files=source_files(), description='Supervised native camera; retain all resources until whole-board power removal')

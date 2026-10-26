@@ -75,7 +75,7 @@ def image_data(raw):
     for s in elf.iter_segments():
         if s['p_type']!='PT_LOAD':continue
         a,m,n,o,flags=(int(s[k]) for k in ('p_vaddr','p_memsz','p_filesz','p_offset','p_flags'))
-        require(a==s['p_paddr'] and 0x41000000<=a<a+m<=0x42200000 and 0<=n<=m and 0<=o<=o+n<=len(raw) and flags&4 and not flags&~7 and flags&3!=3,'camera segment outside compact DDR ownership')
+        require(a==s['p_paddr'] and (0x41000000<=a<a+m<=0x42200000 or (a==0x48000000 and m==0x2000000 and n==0 and flags==6)) and 0<=n<=m and 0<=o<=o+n<=len(raw) and flags&4 and not flags&~7 and flags&3!=3,'camera segment outside compact DDR ownership')
         require(not flags&1 or a+m<=0x41200000,'Executable camera data outside code prefix')
         require(not n or a+n<=SESSION_ADDRESS,'camera initialized bytes overlap session or monitor')
         require(all(a+m<=p['address'] or p['address']+p['memory_bytes']<=a for p in parts),'Overlapping camera ELF allocations')
@@ -85,7 +85,9 @@ def image_data(raw):
     for name,address in [('__a733_smp_result',0x42000000),('__a733_smp_contract',0x42004000),('__a733_smp_contract_end',0x42005000),('__storage_session_start',SESSION_ADDRESS),('__storage_session_end',SESSION_ADDRESS+4096)]:
         require(name in symbols and symbols[name]['st_value']==address,'camera linker reservation differs: '+name)
     first,last=(int(symbols[n]['st_value']) for n in ('__device_pool_start','__device_pool_end'))
-    require(0x41200000<=first<last<=SESSION_ADDRESS and last-first==2097152 and not (first|last)&4095,'camera DMA pool ownership differs')
+    require(all(n in symbols for n in ('__uncached_pool_start','__uncached_pool_end')) and
+        symbols['__uncached_pool_start']['st_value']==symbols['__uncached_pool_end']['st_value'],
+        'Camera image must not reserve an uncached pool')
     def read(name,n):
         require(name in symbols and symbols[name]['st_size']>=n,'Missing camera immutable symbol: '+name)
         a=int(symbols[name]['st_value'])
@@ -95,6 +97,29 @@ def image_data(raw):
                 return a,p['data'][a-p['address']:a-p['address']+n]
         raise ValueError('camera immutable input lacks file backing')
     address,identity=read('a733_smp_build_id',32)
+    modes=[(160,120),(176,144),(320,240),(640,480),(720,480),(720,576),(1024,768),(1280,720),(1920,1080),(2592,1944)]
+    def page(n):return (n+4095)&~4095
+    profile={'size':3,'width':640,'height':480,'output':614400,'legacy':True,'stream':None,
+             'pool_start':first,'pool_end':last}
+    if 'a733_camera_image_profile' in symbols:
+        _,value=read('a733_camera_image_profile',72)
+        keys=('magic','version','size','width','height','input_format','output_format','stream',
+              'plane','slot','table','source','output','bytes','pool_start','pool_end')
+        profile=dict(zip(keys,struct.unpack('<14I2Q',value)))
+        k=profile['size'];require(0<=k<len(modes),'Unsupported camera size enum')
+        w,h=modes[k];plane=w*h;slot=page(plane)+4096;table=36864 if k==9 else 32768
+        require(profile['stream'] in (0,1),'Unsupported camera operation')
+        source=table+8192+(4 if profile['stream'] else 2)*slot
+        expected=(0x43414d50,1,k,w,h,0,0x3631564e,profile['stream'],plane,slot,table,source,2*plane,72,first,last)
+        require(tuple(profile.values())==expected,'Camera immutable geometry differs')
+        profile['legacy']=False
+    large=not profile['legacy'] and profile['source']+page(profile['output'])>2097152
+    if large:
+        require((first,last)==(0x48000000,0x4a000000) and any(p['address']==first and p['memory_bytes']==last-first and p['flags']==6 and not p['data'] for p in parts),'Camera external reservation differs')
+    else:
+        require(0x41200000<=first<last<=SESSION_ADDRESS and last-first==2097152 and not (first|last)&4095 and all(p['address']<0x48000000 for p in parts),'camera compact DMA pool ownership differs')
+    profile['ddr_ranges']=[[0x41000000,0x42200000]]+([[first,last]] if large else [])
+
     def executable(symbol):
         section=symbol['st_shndx'];start=int(symbol['st_value']);size=int(symbol['st_size'])
         return (symbol['st_info']['type']=='STT_FUNC' and isinstance(section,int) and
@@ -102,10 +127,14 @@ def image_data(raw):
             any(p['flags']&1 and p['address']<=start and start+size<=p['address']+len(p['data']) for p in parts))
     functions={name for name,symbol in symbols.items() if executable(symbol)}
     native={'a733_camera_native_supervised_init','a733_camera_native_supervised_stream_init'}
+    if not profile['legacy']:
+        selected='a733_camera_native_supervised_stream_init' if profile['stream'] else 'a733_camera_native_supervised_init'
+        require(selected in functions,'Camera profile differs from executable operation')
     require(0x41000000<=address<=0x411fffe0 and
         {'camera_capture_step','camera_session_valid','camera_output'}<=functions and
         native.intersection(functions),'Wrong native application identity')
-    return parts,address,identity,session_layout(elf)
+    layout=session_layout(elf);layout['image_profile']=profile
+    return parts,address,identity,layout
 
 def field(raw,layout,name):
     f=layout['fields'][name];return raw[f['offset']:f['offset']+f['size']]
@@ -188,7 +217,7 @@ def validate_admission(admission_raw,raw,layout,identity,image_hash,cache=None,f
     ddr_raw=evidence(record['ddr']);ddr=json.loads(ddr_raw)
     require(field(raw,layout,'memory')==hashlib.sha256(ddr_raw).digest() and ddr.get('schema')=='a733-ddr-reservation-v1' and
         ddr.get('identity')==target and ddr.get('port')==port and ddr.get('image_sha256')==image_hash and
-        ddr.get('ranges')==[[0x41000000,0x42200000]] and all(ddr.get(k) is True for k in ('exclusive','published_cache_disabled','remote_writers_excluded')) and ddr.get('evidence'),'Actual camera compact DDR/alias ownership required')
+        ddr.get('ranges')==layout.get('image_profile',{}).get('ddr_ranges',[[0x41000000,0x42200000]]) and all(ddr.get(k) is True for k in ('exclusive','published_cache_disabled','remote_writers_excluded')) and ddr.get('evidence'),'Actual camera compact DDR/alias ownership required')
     for ref in ddr['evidence']:evidence(ref)
     platform=json.loads(evidence(record['platform']));original=supervisor.observer.validate_platform
     validate=types.FunctionType(original.__code__,{**original.__globals__,'artifact':evidence})

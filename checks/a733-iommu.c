@@ -12,7 +12,7 @@ static struct a733_iommu_span maps[] = {
     {0x10800000,0x180000000,307200,A733_IOMMU_WRITE}
 };
 struct model {
-    uint32_t regs[0x20000/4], published[A733_IOMMU_TABLE_BYTES/4];
+    uint32_t regs[0x20000/4], published[A733_IOMMU_LARGE_TABLE_BYTES/4];
     uint64_t now,flush_start;
     unsigned writes,reads,publications,admissions,admit_pending,publish_pending;
     unsigned drop,late,late_read,deny,unresolved,undrained,regression,token_change;
@@ -59,9 +59,10 @@ static int write_reg(void *p,uint64_t token,uint32_t off,uint32_t v,uint64_t d)
     }
     m->regs[off/4]=v;if(m->late)m->now=d;return 1;
 }
+static size_t publication_bytes=A733_IOMMU_TABLE_BYTES;
 static int publish(void *p,uint64_t token,const void *v,size_t n,uint64_t d)
 {
-    struct model *m=p;(void)d;assert(token==37 && n==sizeof(arena));
+    struct model *m=p;(void)d;assert(token==37 && n==publication_bytes);
     if(m->publish_pending) { --m->publish_pending;return 0; }
     memcpy(m->published,v,n);++m->publications;return 1;
 }
@@ -198,8 +199,48 @@ static void inherited_walk_checks(void)
     free(m);
     puts("A733 IOMMU: isolated inherited L1/L2 walk faults in both banks refuse before publication; token retained");
 }
+static void capacity_checks(void)
+{
+    static _Alignas(16384) uint32_t large[A733_IOMMU_LARGE_TABLE_BYTES/4];
+    static uint32_t snapshot[A733_IOMMU_LARGE_TABLE_BYTES/4];
+    struct a733_iommu_span spans[6];
+    for(unsigned i=0;i<6;++i)spans[i]=(struct a733_iommu_span){0x10000000u+4194304u*i,0x49000000u+4096u*i,4096,2};
+    struct a733_iommu_tables t={0},before={0};
+    memset(large,0xa5,sizeof large);memcpy(snapshot,large,sizeof large);
+    assert(a733_iommu_build(&t,large,0x48000000,spans,5)==-1);
+    for(size_t bytes=0;bytes<65536;bytes+=4096){
+        if(bytes==A733_IOMMU_LARGE_TABLE_BYTES)continue;
+        assert(a733_iommu_build_sized(&t,large,bytes,0x48000000,spans,5)==-1);
+        assert(!memcmp(&t,&before,sizeof t) && !memcmp(large,snapshot,sizeof large));
+    }
+    assert(a733_iommu_build_sized(&t,large,sizeof large,0x48000000,spans,6)==-1);
+    assert(!memcmp(&t,&before,sizeof t) && !memcmp(large,snapshot,sizeof large));
+    assert(a733_iommu_build_sized(&t,large,sizeof large,0x48000000,spans,5)==1);
+    assert(t.bytes==sizeof large && a733_iommu_validate(&t)==1);
+    uint64_t pa;
+    for(unsigned i=0;i<5;++i){
+        assert(a733_iommu_translate(&t,spans[i].iova+4095,2,&pa)==1 && pa==spans[i].physical+4095);
+        assert(a733_iommu_translate(&t,spans[i].iova+4096,2,&pa)==-1);
+    }
+    assert(a733_iommu_translate(&t,spans[4].iova,2,(void *)((char *)large+32768))==-1);
+    before=t;memcpy(snapshot,large,sizeof large);
+    spans[4].physical=0x48008000; /* Last table page is also excluded. */
+    assert(a733_iommu_build_sized(&t,large,sizeof large,0x48000000,spans,5)==-1);
+    assert(a733_iommu_build_sized((void *)((char *)large+32768),large,sizeof large,0x48000000,spans,5)==-1);
+    assert(!memcmp(&t,&before,sizeof t) && !memcmp(large,snapshot,sizeof large));
+    large[sizeof large/4-1]=1;assert(a733_iommu_validate(&t)==-1);large[sizeof large/4-1]=0;
+    t.bytes=40960;assert(a733_iommu_validate(&t)==-1);
+    struct a733_iommu controller={0};struct model m={0};
+    assert(a733_iommu_init(&controller,&ops,&m,&t)==-1 && !controller.initialized);
+    t=before;publication_bytes=sizeof large;
+    assert(a733_iommu_init(&controller,&ops,&m,&t)==1 && a733_iommu_open(&controller,10000)==1);
+    assert(run(&controller)==1 && m.publications==1 && !memcmp(m.published,large,sizeof large));
+    publication_bytes=A733_IOMMU_TABLE_BYTES;
+    puts("PASS fifth window, legacy/sixth-window refusal, typed capacity, table overlap, translation and publication");
+}
 int main(int argc,char **argv)
 {
+    if(argc==2 && !strcmp(argv[1],"--capacity-only")){capacity_checks();return 0;}
     if(argc==2 && !strcmp(argv[1],"--inherited-walk-only")) {
         inherited_walk_checks();return 0;
     }

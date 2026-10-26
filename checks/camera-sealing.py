@@ -29,14 +29,15 @@ def run(image,session,out):
   if suffix:
    values=set().union(*(v for (u,n),v in functions.items() if n==name and u.endswith(suffix))) if any(n==name and u.endswith(suffix) for u,n in functions) else set()
   assert len(values)==1,(name,suffix,values);return next(iter(values))
- names={n:address(n) for n in ('app','a733_cached_runtime','camera_session_valid','camera_session_prepare','camera_admitted_session','a733_smp_contract_valid','a733_smp_counter','a733_smp_device_preparation_admitted','a733_native_usb_init','platform_panic')}
+ names={n:address(n) for n in ('app','a733_cached_runtime','camera_session_valid','camera_session_prepare','camera_admitted_session','a733_camera_image_profile','a733_smp_contract_valid','a733_smp_counter','a733_smp_device_preparation_admitted','a733_native_usb_init','platform_panic')}
+ if len(layout['image_profile']['ddr_ranges'])>1:names['a733_camera_memory_admitted']=address('a733_camera_memory_admitted')
  names['a733_smp_diagnostic_start']=address('a733_smp_diagnostic_start','apps/camera/main.c')
  app_layout=layouts['camera_application'];assert all(v==app_layout[0] for v in app_layout);app_layout=app_layout[0]
  _,contract=prep.request_bytes(entry,identity,raw,profile);contract=bytearray(contract[:224]);struct.pack_into('<Q',contract,0,0x4153373343414333);struct.pack_into('<4Q',contract,80,100,24000100,1440000100,1440000100)
  # Complete nominal inputs use the actual linked build ID and producer-validated evidence hashes.
  assert raw[48:80]==identity
  results={}
- for variant in ('unsealed-refused','precopy-owner-refused','precopy-evidence-refused','publication-failed','sealed-copy-consumed'):
+ for variant in ('unsealed-refused','precopy-owner-refused','precopy-evidence-refused','publication-failed','bad-profile','bad-profile-pool','sealed-copy-consumed'):
   cpu=Uc(UC_ARCH_ARM64,UC_MODE_ARM);cpu.mem_map(0x40000000,0x4000000);cpu.mem_map(0x50000000,0x1000000)
   for a,data in segments:cpu.mem_write(a,data)
   cpu.mem_write(0x41f00000,raw);cpu.mem_write(0x50001000,bytes(contract));cpu.mem_write(names['a733_cached_runtime'],struct.pack('<3Q',profile['epoch'],24000100,1440000100))
@@ -62,6 +63,12 @@ def run(image,session,out):
   def call(name,arg=0,arg1=101):
    finished.clear();cpu.reg_write(UC_ARM64_REG_X0,arg);cpu.reg_write(UC_ARM64_REG_X1,arg1);cpu.reg_write(UC_ARM64_REG_SP,0x50ffeff0);cpu.reg_write(UC_ARM64_REG_LR,0x50fff000);cpu.emu_start(names[name],0,count=1000000);assert finished,(variant,name);return cpu.reg_read(UC_ARM64_REG_X0)&0xffffffff
   assert call('a733_smp_contract_valid',0x50001000)==1
+  def mapping_admitted():return call('a733_camera_memory_admitted') if 'a733_camera_memory_admitted' in names else bool(call('camera_admitted_session'))
+  assert mapping_admitted()==0
+  if variant in ('bad-profile','bad-profile-pool'):
+   offset=12 if variant=='bad-profile' else 56
+   first=names['a733_camera_image_profile']+offset
+   value=bytearray(cpu.mem_read(first,4));value[0]^=1;cpu.mem_write(first,bytes(value))
   if variant!='unsealed-refused':
    changed=bytearray(raw)
    if variant=='precopy-owner-refused':
@@ -70,7 +77,8 @@ def run(image,session,out):
    if variant=='precopy-evidence-refused':
     for field in ('evidence','camera.evidence'):changed[layout['fields'][field]['offset']]^=1
    cpu.mem_write(0x41f00000,bytes(changed));assert call('camera_session_valid',0x41f00000)==1
-   sealed=call('camera_session_prepare',0x50001000);assert sealed==(variant=='sealed-copy-consumed')
+   sealed=call('camera_session_prepare',0x50001000);assert sealed==(variant=='sealed-copy-consumed'),(variant,sealed)
+   assert mapping_admitted()==sealed
    if not sealed:assert call('camera_admitted_session')==0 and call('camera_session_prepare',0x50001000)==0
    else:
     changed=bytearray(raw)
