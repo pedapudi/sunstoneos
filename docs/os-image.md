@@ -362,11 +362,11 @@ Power and thermal integration remains incomplete:
   until the prescribed reset or power removal.
 - **NPU integration.** Only the optional
   [NPU service](#optional-npu-service) adds the NPU to
-  the OS start list. NPU images use a fixed 492 MHz clock and 800 mV supply
-  configuration. The
-  [finite board profile](designs/npu-board.md#thermal-admission-and-orderly-stop)
-  integrates thermal admission and orderly stop; the other NPU images have
-  no thermal-policy callback. Their startup routes the shared SRAM to the NPU
+  the OS start list. The default operating point is 852 MHz at 800 mV; the
+  optional low performance mode uses 492 MHz at the same voltage. The
+  OS service gates jobs on thermal freshness and stops on thermal refusal.
+  The [finite board profile](designs/npu-board.md#thermal-admission-and-orderly-stop)
+  also integrates thermal admission and orderly stop. Startup routes the shared SRAM to the NPU
   ([routing design](designs/npu-sram-route.md)). Their healthy CLOSE disables
   local clocks, asserts engine resets and routes the SRAM back to the CPU
   while retaining the power-domain and PLL ownership; it does not establish
