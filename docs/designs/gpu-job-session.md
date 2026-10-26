@@ -91,8 +91,9 @@ record already stamps:
 
 Each job also logs the ticks from kick to the spin's first read and the
 pass count: with one pass, the job's time is an upper bound, not a
-latency. The counter is read before the timeline load, so a time is right
-to within one pass. The spin ends early at any value other than *n* − 1.
+latency. `first` includes the `MTS_SCHEDULE` read-back and its two log
+lines, the floor of every time. The counter is read before the timeline
+load, so a time is right to within one pass. The spin ends early at any value other than *n* − 1.
 The image keeps FreeRTOS preemption, and the power service runs above it,
 so each job also logs the scheduler ticks crossed between its KICK pass
 and *done*: a nonzero count marks a time that a tick or a service step may

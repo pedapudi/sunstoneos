@@ -1689,6 +1689,11 @@ def main():
     assert job_image == a.fw_job, 'image variant does not match --fw-job'
     # The session image carries its own completion text.
     assert (FWQ_COMPLETE.encode() in a.image.read_bytes()) == session, 'image variant does not match --fw-session'
+    assert fws_image == (a.fw_start or a.fw_stop or a.fw_job) and stop_image == (a.fw_stop or a.fw_job), \
+        'image variant does not match --fw-start or --fw-stop'
+    assert identity == (not a.power_only and not a.wrapper_read and not a.probe_read and not fws_image), \
+        'image variant does not match the options'
+    assert wrapper_image == a.wrapper_read, 'image variant does not match --wrapper-read'
     from elftools.elf.elffile import ELFFile
     layouts = []
     with a.image.open('rb') as stream:
