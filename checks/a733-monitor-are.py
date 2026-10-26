@@ -74,7 +74,8 @@ for model in (False, True):
               'final-ctlr-dropped', 'final-rwp', 'dist-read-at-deadline',
               'local-read-at-deadline', 'spi-read-after-deadline', 'final-read-at-deadline')
     cases = [(f'are-{value:x}', value, False, '', 0) for value in (0, 0x10, 0x20, 0x30, 0x37)] + [
-        ('are-37-mbus-rom', 0x37, False, '', 0)] if not model else [
+        ('are-37-mbus-rom', 0x37, False, '', 0), ('are-37-mbus-gpu-clocked', 0x37, False, '', 0),
+        ('are-37-mbus-dma-busy', 0x37, False, '', 0)] if not model else [
         ('qemu-cold', 0, False, '', 0), ('qemu-init-timeout', 0, True, '', 0)]
     if not model:
         cases += [('cleanup-' + fault, 0x37, False, fault, 0) for fault in faults]
@@ -106,10 +107,18 @@ for model in (False, True):
         # MBUS at the ROM's value in the -mbus-rom case; zero, which the
         # restore leaves alone, in every other case. Its update bit clears
         # before the next read.
+        # The restore copies its window to SRAM and runs it there.
+        mbus_case = '-mbus-' in case
         mbus_rom = case.endswith('-mbus-rom')
-        if mbus_rom:
+        mbus_refused = 8 if case.endswith('-gpu-clocked') else 9 if case.endswith('-dma-busy') else 0
+        cpu.mem_map(0x0005f000, 0x1000)
+        if mbus_case:
             cpu.mem_write(0x02002588, (0x84000000).to_bytes(4, 'little'))
             cpu.mem_write(0x02002594, (0x30001).to_bytes(4, 'little'))
+        if mbus_refused == 8:
+            cpu.mem_write(0x02002b20, (0x80000000).to_bytes(4, 'little'))
+        if mbus_refused == 9:
+            cpu.mem_write(0x04601030, (1).to_bytes(4, 'little'))
         def read_mbus(uc, access, address, size, value, unused):
             word = int.from_bytes(uc.mem_read(0x02002588, 4), 'little')
             uc.mem_write(0x02002588, (word & ~(1 << 27)).to_bytes(4, 'little'))
@@ -148,6 +157,10 @@ for model in (False, True):
             if address == symbols['monitor_reset']:
                 stopped.append('reset'); uc.emu_stop(); return
             text = ops.get(address, '')
+            if 0x0005f000 <= address < 0x00060000:
+                # The SRAM window's own counter reads (mrs xN, cntpct_el0).
+                code = int.from_bytes(uc.mem_read(address, 4), 'little')
+                text = f'mrs x{code & 31}, cntpct_el0' if code & 0xffffffe0 == 0xd53be020 else ''
             read = re.match(r'mrs\s+x(\d+),\s*(\S+)', text, re.I)
             if read:
                 key = read[2].lower()
@@ -256,7 +269,7 @@ for model in (False, True):
         cpu.emu_start(symbols['monitor_init'], 0, count=100000)
         refused = not model and original & 0x30 != 0x30
         cleanup_started = ticks[0]
-        if not refused and not early_timeout:
+        if not refused and not early_timeout and not mbus_refused:
             assert stopped == ['initialized'], (case, stopped)
             phase[0] = 'finish'
             # Model the kernel's tick and a peripheral source, then the owned
@@ -273,17 +286,20 @@ for model in (False, True):
         assert stopped[-1] == ('semihost-exit' if model else 'reset'), (case, stopped)
         # Every admitted physical start makes the security writes, after the GIC
         # setup; a refused start and the QEMU build make none.
-        expected_security = [] if model or refused or early_timeout else (
+        expected_security = [] if model or refused or early_timeout or mbus_refused else (
             (MBUS_WRITES if mbus_rom else []) + security_writes(dma_open))
         assert security == expected_security, (case, [(hex(a), hex(v)) for a, v in security])
         status = int.from_bytes(cpu.mem_read(0x42000010, 8), 'little')
         # The restore's log line opens the log; other cases start it empty.
         log_length = int.from_bytes(cpu.mem_read(0x42000018, 8), 'little')
         log = bytes(cpu.mem_read(0x42000100, log_length)).decode()
-        assert log == ('MBUS 0x84000000 0x81000000 0\n' if mbus_rom else ''), (case, log)
+        assert log == ('MBUS 0x84000000 0x81000000 0\n' if mbus_rom else
+                       f'MBUS 0x84000000 0x84000000 {mbus_refused:x}\n' if mbus_refused else ''), (case, log)
         replaced = int.from_bytes(cpu.mem_read(0x42000078, 8), 'little')
         failed_cleanup = bool(fault and fault != 'delayed-rwp') or early_timeout
-        expected_status = 4 if refused else 6 if failed_cleanup else requested_status
+        # A refused MBUS restore finishes with status 4 after the GIC setup,
+        # which the finish path's cleanup restores.
+        expected_status = 4 if refused or mbus_refused else 6 if failed_cleanup else requested_status
         assert not fault or fault_applied, (case, 'fault not reached')
         row = {'case': case, 'mode': name, 'initial_ctlr': original, 'status': status, 'replaced_status': replaced,
                'security_writes': len(security), 'dma_open': dma_open,

@@ -23,7 +23,7 @@ function(a733_smp_observer target tag)
   # Private patches preserve the original cached image and its evidence.
   file(SHA256 "${cached}/boot.c" boot_hash)
   file(SHA256 "${cached}/continue.S" vector_hash)
-  if(NOT boot_hash STREQUAL "3b8d8e19ff67929b919ba5a37a2c6c08146f864449c344312b37d56b5dc8b6bc" OR
+  if(NOT boot_hash STREQUAL "f8bf9b0515a8b2e922d1e5febbf99c9cac007b3e31297052738625ae0e26df2f" OR
      NOT vector_hash STREQUAL "da0a16b31d65479202cf49cf4dc23b63e2924ce1a2279f220f750b4626ef2a91")
     message(FATAL_ERROR "Observer hooks require review against changed cached boot/vector inputs")
   endif()

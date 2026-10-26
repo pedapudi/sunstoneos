@@ -99,6 +99,10 @@ void a733_smp_boot(void)
     write32(0x03400000,(ctlr&~7u)|0x30);wait_clear(0x03400000,1u<<31);
     write32(0x03400000,(ctlr&~7u)|0x33);wait_clear(0x03400000,1u<<31);
     if((read32(0x03400000)&0x73)!=0x33)a733_smp_stop(2,3);
+    /* MBUS back to boot0's 600 MHz before any secondary core is released:
+     * the window runs from SRAM, and released cores would spin in DRAM
+     * (include/a733_el3_mbus.h). */
+    {unsigned mbus=a733_el3_mbus_restore();if(mbus)a733_smp_stop(2,0x200u|mbus);}
     uint64_t mpidr;__asm__ volatile("mrs %0, mpidr_el1":"=r"(mpidr));
     for(unsigned c=1;c<8;++c) {
         targets[c-1]=c;
@@ -111,9 +115,7 @@ void a733_smp_boot(void)
         if(owners[c-1].state!=A733_CPU_ENTRY_DISPATCHED)a733_smp_stop(2,c+32);
     }
     /* The vendor's cold-boot security setup, before any core enters EL1:
-     * the secondaries wait for the primary's continuation below. MBUS goes
-     * back to boot0's 600 MHz first (include/a733_el3_mbus.h). */
-    {unsigned mbus=a733_el3_mbus_restore();if(mbus)a733_smp_stop(2,0x200u|mbus);}
+     * the secondaries wait for the primary's continuation below. */
     a733_el3_security_setup();
     RESULT->stage=2;barrier();
     a733_cpu_primary_continue(admission.epoch);

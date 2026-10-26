@@ -1,4 +1,5 @@
 // One sequential batch through the original power and entry controllers.
+#include "a733_el3_mbus.h"
 #include "secondary-identity-probe.h"
 #include "a733_cpu_entry.h"
 #include "boot.h"
@@ -45,6 +46,12 @@ int identity_primary_run(void)
     HEADER->magic=IDENTITY_MAGIC;HEADER->version=1;
     HEADER->bytes=IDENTITY_REPORT_BYTES;HEADER->epoch=admission->epoch;
     HEADER->deadline=admission->startup_deadline;HEADER->state=1;barrier();
+    // MBUS back to boot0's 600 MHz, as the native image's SMP boot does, and
+    // like it before any secondary core is released: the restore's gated
+    // window runs from SRAM while the released cores would spin in DRAM
+    // (include/a733_el3_mbus.h). A refusal or failure returns before any core
+    // is started.
+    if(a733_el3_mbus_restore())return 0;
 #ifdef SUNSTONE_SECONDARY_LOCAL
     if(!secondary_distributor_begin(HEADER->deadline))return 0;
 #endif

@@ -107,8 +107,8 @@ static int parents(void)
      * (manual 4.1.6.249: bits 27, 25, 21, 20 and 11, 9, 5, 4), and the
      * status register must show the software gates (4.1.6.258). */
     unsigned n=((peri>>8)&255)+1,div=(((peri>>20)&7)+1)*4;
-    if(n<53||n>105||24*n!=300*div||!bits(CCU+0x1908,0x0b300b30,0x0b300b30)||
-       !bits(CCU+0x1988,0x0b300000,0x0b300000))return 0;
+    if(n<53||n>105||24*n!=300*div||!bits(CCU+0x1908,0x0a300a30,0x0a300a30)||
+       !bits(CCU+0x1988,0x0a300000,0x0a300000))return 0;
     /* The row reads ON: the power-domain owner powered or adopted domain 1.
      * Fabric leaf gates remain inherited under the sealed authority. */
     if(!bits(CCU+0x5c0,1u<<5,1u<<5)||!bits(CCU+0x5e0,1u<<11,1u<<11))return 0;

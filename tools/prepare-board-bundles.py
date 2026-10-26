@@ -288,6 +288,12 @@ POWER_SOURCES = ['apps/board-bundles-power/power.c', 'apps/board-bundles-power/p
                  'drivers/gpu/a733_gpu_resources_native.c', 'include/a733_pmic.h', 'include/a733_pmic_native.h',
                  'arch/aarch64/device_memory.c', 'checks/board-bundles-apps-model.c']
 BASE_ROW = 'kernel-check-counter-option'
+# Bundle numbers that unmerged branches hold. The bundle check requires the
+# positioned rows and these numbers together to count 1, 2, 3, ... without a
+# gap, so a dropped row is still caught; a merge moves a number from here
+# into the table.
+RESERVED_POSITIONS = {19: 'gpu-vendor-state on work/gpu-core6-c-1024',
+                      20: 'cpu-b-800mv-step on work/cpu-top-opp-1025'}
 
 # The clock audit's dump (docs/clock-audit.md): every documented register of the CCU (manual 4.1.5 with the
 # offsets of the board kernel's ccu-sun60iw2.c), of the PRCM below the reader's 0x340 bound (manual 4.2.4 with

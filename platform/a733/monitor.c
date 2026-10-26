@@ -33,7 +33,7 @@ static void wait_clear(uintptr_t address, uint32_t bits)
 
 #ifndef MONITOR_QEMU
 // "MBUS 0x84000000 0x81000000 0\n": the word before and after the restore and
-// its result, written where platform_puts() starts the log.
+// its result as one hex digit, written where platform_puts() starts the log.
 static void log_mbus(uint32_t before, uint32_t after, unsigned failed)
 {
     static const char hex[] = "0123456789abcdef";
@@ -47,7 +47,7 @@ static void log_mbus(uint32_t before, uint32_t after, unsigned failed)
         for (int i = 28; i >= 0; i -= 4) log[n++] = hex[(v >> i) & 15];
         log[n++] = ' ';
     }
-    log[n++] = (char)('0' + (failed & 7));
+    log[n++] = hex[failed & 15];
     log[n++] = '\n';
     log[n] = 0;
     RESULT->log_length = n;
@@ -166,7 +166,7 @@ void monitor_init(void)
     uint32_t mbus_before = mmio_read(A733_MBUS_CLK);
     unsigned mbus_failed = a733_el3_mbus_restore();
     uint32_t mbus_after = mmio_read(A733_MBUS_CLK);
-    if (mbus_before != mbus_after)
+    if (mbus_before != mbus_after || mbus_failed)
         log_mbus(mbus_before, mbus_after, mbus_failed);
     if (mbus_failed)
         finish(4);
