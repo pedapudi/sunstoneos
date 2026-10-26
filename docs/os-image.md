@@ -1013,8 +1013,6 @@ session and hook ([gpu-mimus-service.md](gpu-mimus-service.md)).
 ## Supervised preparation and launch
 
 [prepare.py](../apps/os/prepare.py) freezes one supervised session offline.
-It refuses radio and headset builds: it does not yet stage their profile and
-firmware span.
 It requires the passed link check of the exact image, a reviewed session
 template of 808 or 992 bytes and a reviewed entry record
 (`a733-os-supervised-entry-v1`), and refuses to prepare without them. The
@@ -1028,12 +1026,64 @@ record names the session identities and carries:
   holds and which names the DMA handoff, the inherited pins, the capture
   profile and the microphone, clock, DMA prior-drain and retention
   conditions, and the DMA0 nonsecure-access authority for the session's
-  identities.
+  identities;
+- in radio or headset builds, the profile and firmware evidence described
+  below, and the exclusive radio DDR reservation `0x43000000..0x43100000`.
 
 The bundle holds the image, the session with the linked build identity, the
 board's SRAM launcher rebuilt for the OS request magic `0x415337334f534c31`,
 the OS contract magic and the session size, every evidence byte the record
 cites, and the three recognition inputs.
+
+Radio and headset preparation uses [radio-assets.py](../apps/os/radio-assets.py).
+The entry record's `radio_assets` field is an absolute `path` and `sha256`
+reference to an `a733-os-radio-assets-v1` JSON record. That record has
+`reviewed: true`, the entry's `identity`, `port`, `image_sha256`, `epoch`,
+`generation` and `lease`, and a nonempty `lifetime` shared by its platform
+facts. It describes these existing inputs:
+
+| Field | Required input |
+| --- | --- |
+| `radio_profile` | Path and SHA-256 of the immutable board radio profile, only when radio is linked |
+| `headset_profile` | Path and SHA-256 of the 832-byte Bluetooth recognition profile, only when headset is linked |
+| `platform` | Path and SHA-256 of an `a733-radio-sdio-id-v1` record referencing the reviewed topology, pins, startup, bootstrap and recovery facts |
+| `chip_id`, `sid_authority`, `radio_sid` | With radio, the four secure chip-ID words, session SID authority and path/hash of its evidence |
+| `radio_ce`, `radio_entropy` | With radio, path/hash references matching the profile's crypto-engine and entropy evidence digests |
+| `bluetooth_wiring`, `bluetooth_sid`, `bluetooth_transport`, `bluetooth_scheduling` | With headset, path/hash references matching the profile's wiring, SID, fresh-transport and scheduling evidence digests |
+| `payloads` | Four objects with absolute `path`, `sha256` and integer `address`, in ADID, Bluetooth patch, patch-table and Wi-Fi firmware order |
+
+The existing [radio firmware catalogue](radio-firmware.md) fixes each payload's
+size and hash; the profile's decoded chip identity selects the Wi-Fi variant.
+The profiles must agree on shared module owners, topology, PM authority, chip
+identity and firmware spans. Radio uses workload 1 and its profile at
+`0x43000000`; headset alone uses workload 0 or 4 at that address. With both,
+the headset profile goes at `0x43008000`. The four shared firmware spans stay
+inside `0x43010000..0x43100000`. Upload ranges cannot overlap one another,
+the image, the session or the recognition inputs.
+
+The platform facts retain the [radio qualification prerequisites](radio-sdio-qualification.md).
+Fitted supply routing and stable inherited PM2 behavior remain mandatory.
+An authenticated PM record with zero mask and value selects the normal OS
+[pin ownership contract](pins.md#configuration-preserves-neighbors-and-primes-output-latches).
+A complete mask still requires verified latch history or a verified reset
+contract. Neither form supplies fitted-board facts or authorizes another
+module power/reset writer.
+
+Preparation freezes every referenced evidence file, profile and firmware blob
+once. The upload list refers to those frozen files, including only one copy of
+each firmware role when both clients share the module. Before launch, bundle
+validation derives the same list from frozen bytes without reading the original
+input paths. The existing launcher preloads and verifies those segments with
+the recognition inputs. This staging does not change the supervised bootstrap
+deadline limitation described under [Radio station](#radio-station).
+
+[os-radio-staging.py](../checks/os-radio-staging.py) checks combined preparation,
+frozen verification, preload bytes and range/identity refusals with labeled
+synthetic facts. It also checks single-profile selection, standalone Bluetooth
+and plain OS compatibility. The native Bluetooth profile validator, compiled
+for the OS headset profile, admits the staged headset bytes. These checks reuse
+the linked radio/headset image and unchanged runtime evidence; their synthetic
+facts cannot authorize a board run.
 
 [check-a733-os-supervised.py](../tools/check-a733-os-supervised.py) launches
 one bundle under an existing coordinator claim. It revalidates the frozen
@@ -1044,6 +1094,7 @@ attempt. Capture is the mimus board protocol over USB0; the microphone build
 allows at most two recognitions in the 59-second capture window. Recorded
 workload 2 permits one recognition and requests only its transcript and final
 status. The mode comes from the frozen session; missing storage never selects it.
+Radio workload 1 also permits one recognition.
 For an image with the NPU profile, the capture is followed by one NPU report
 request ([operation 6](#npu-report-usb0-operation-6)).
 

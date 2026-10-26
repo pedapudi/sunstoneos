@@ -10,7 +10,9 @@ approval record bound to one board, this image, this session and that
 board's read-only B1 record (docs/designs/cpu-a76-dvfs.md). The reviewed entry record is
 mandatory: it carries the board's supervised entry facts, the thermal owner's
 facts, the DDR reservation of the recognition inputs and, for the audio build,
-the I2S receive and DMA0 authority. The session identities come from the
+the I2S receive and DMA0 authority. Radio and headset builds also freeze their
+authenticated profiles and pinned firmware in the existing radio reservation.
+The session identities come from the
 reviewed template, so the DMA0 authority can name them; only the linked build
 identity is written here.
 """
@@ -37,6 +39,8 @@ mimus = module('os_mimus_board_preparation', ROOT / 'apps/mimus-board/prepare.py
 thermal = module('os_thermal_preparation', ROOT / 'apps/thermal/prepare.py')
 security_authority = module('os_dma_security', ROOT / 'tools/dma-nonsecure-access.py')
 os_link = module('os_link_configuration', ROOT / 'checks/os-image-link.py')
+radio_assets = module('os_radio_assets', ROOT / 'apps/os/radio-assets.py')
+bluetooth = module('os_bluetooth_preparation', ROOT / 'apps/bluetooth/prepare.py')
 board, host = mimus.board, mimus.host
 base = board.base
 require, digest, save_json = base.require, base.digest, base.save_json
@@ -189,25 +193,34 @@ def image_manifest_check(manifest, raw):
     # A link check from before the NPU profile has no 'npu' key: NPU is off.
     npu = manifest.get('npu', False)
     require(type(npu) is bool, 'The link check records the NPU profile as a boolean.')
-    require(not manifest.get('radio') and not manifest.get('headset'),
-            'Preparation does not yet stage the radio or Bluetooth profile and firmware.')
+    flags = radio_assets.features(manifest, raw, os_link.Elf, require)
+    require(not (audio and flags['headset']), 'Microphone and headset profiles cannot be combined.')
     require(manifest.get('passed') is True and manifest.get('target') == 'sunstone-a733-os' and
             manifest.get('lifetime') == 'supervised' and type(audio) is bool and
             manifest.get('image_sha256') == hashlib.sha256(raw).hexdigest(),
             'Passed supervised OS link check of this image required.')
     require([a.get('name') for a in manifest.get('applications', [])] ==
-            ['mimus', 'thermal'] + (['npu'] if npu else []) + (['audio'] if audio else []) and
+            ['mimus', 'thermal'] + (['npu'] if npu else []) + (['audio'] if audio else []) +
+            (['radio'] if flags['radio'] else []) + (['headset'] if flags['headset'] else []) and
             [i.get('intid') for i in manifest.get('interrupts', [])] == [71] + ([97] if npu else []) + ([143] if audio else []),
             'OS start list or interrupt table differs from the link check.')
     return audio
 
 
-def session_check(raw, audio):
+def session_check(raw, audio, flags=None):
     """Python statement of apps/os/admission.c os_session_valid for the bundle."""
     require(session_layout(raw)[0] is audio, 'OS session size differs from the image.')
     workload = board.session_check(raw[:BOARD_BYTES], usb_reference_modes=(1,))
-    require(workload in ((0, 4) if audio else (0, 2, 4)),
-            'Workload 2 requires supervised recorded audio; storage modes are 0 and 4.')
+    flags = flags or {'radio': False, 'headset': False}
+    require(workload in ((1,) if flags['radio'] else (0, 4) if audio or flags['headset'] else (0, 2, 4)),
+            'Workload differs from the recorded, radio or headset image.')
+    if flags['radio']:
+        identity, latch_owner, known, value = struct.unpack_from('<2Q2I', raw, 432)
+        require(identity and latch_owner and known in (0, 63) and not value & ~known and
+                struct.unpack_from('<Q', raw, 312)[0] and any(raw[320:352]),
+                'Radio PM ownership or SID authority absent.')
+    else:
+        require(not any(raw[352:400] + raw[432:456]), 'Non-radio session carries radio profile or PM authority.')
     if workload == 2:
         # Native a733_board_session_valid requires no host/latch/Type-C authority.
         require(not any(raw[408:432] + raw[472:488] + raw[528:532] + raw[536:564] + raw[570:582]),
@@ -516,14 +529,17 @@ def prepare(image, link_check, admission, template, assets, output, clang, lld):
         ('image.elf', image), ('image-input-manifest.json', link_check), ('admission.json', admission),
         ('session-template.bin', template)]}
     image_hash = hashlib.sha256(snapshots['image.elf']).hexdigest()
-    audio = image_manifest_check(json.loads(snapshots['image-input-manifest.json']), snapshots['image.elf'])
+    manifest = json.loads(snapshots['image-input-manifest.json'])
+    audio = image_manifest_check(manifest, snapshots['image.elf'])
+    flags = radio_assets.features(manifest, snapshots['image.elf'], os_link.Elf, require)
     raw = bytearray(snapshots['session-template.bin'])
-    session_check(raw, audio)
+    session_check(raw, audio, flags)
     manifest_cpu_clock(json.loads(snapshots['image-input-manifest.json']), raw)
     record = json.loads(snapshots['admission.json'])
     cache = validate_admission(record, image_hash, hashlib.sha256(raw).hexdigest(), raw, audio,
                                perf_modes=json.loads(snapshots['image-input-manifest.json']).get('perf_modes', False),
                                inference=image_inference(json.loads(snapshots['image-input-manifest.json']), snapshots['image.elf']))
+    radio_uploads = radio_assets.validate(record, raw, flags, cache, board, bluetooth, require)
     output = Path(output)
     output.mkdir(parents=True, exist_ok=False)
     out = output / 'board'
@@ -550,6 +566,7 @@ def prepare(image, link_check, admission, template, assets, output, clang, lld):
         name = f'entry-evidence-{index}.bin'
         (out / name).write_bytes(data)
         evidence[path] = {'name': name, 'sha256': hashlib.sha256(data).hexdigest()}
+    uploads += [{'name': evidence[path]['name'], 'address': address} for path, address in radio_uploads]
     epoch, generation, lease = struct.unpack_from('<3Q', raw, 24)
     inner = {'schema': SCHEMA, 'physical_access': False, 'execution_profile': EXECUTION_PROFILE, 'audio': audio,
              'image_sha256': image_hash, 'launcher_sha256': digest(out / 'launch.bin'), 'build_id': identity.hex(),
@@ -583,7 +600,9 @@ def validate_board(bundle):
     image = (out / 'image.elf').read_bytes()
     require(hashlib.sha256(image).hexdigest() == p['image_sha256'] and digest(out / 'launch.bin') == p['launcher_sha256'],
             'OS image or launcher changed.')
-    audio = image_manifest_check(json.loads((out / 'image-input-manifest.json').read_text()), image)
+    manifest = json.loads((out / 'image-input-manifest.json').read_text())
+    audio = image_manifest_check(manifest, image)
+    flags = radio_assets.features(manifest, image, os_link.Elf, require)
     require(p['audio'] is audio, 'Audio selection changed.')
     sizes = {name: (out / name).stat().st_size for name in p['files']}
     require(p.get('backup_sizes') == {name: n for name, a, n in base.REGIONS} and 0 < sizes['launch.bin'] <= 0xc00,
@@ -592,13 +611,15 @@ def validate_board(bundle):
             'Initial report backing changed.')
     template = (out / 'session-template.bin').read_bytes()
     raw = (out / 'session.bin').read_bytes()
-    session_check(raw, audio)
+    session_check(raw, audio, flags)
     manifest_cpu_clock(json.loads((out / 'image-input-manifest.json').read_text()), raw)
     cache = {path: (out / item['name']).read_bytes() for path, item in p['entry_evidence'].items()}
     validate_admission(json.loads((out / 'admission.json').read_text()), p['image_sha256'],
                        hashlib.sha256(template).hexdigest(), template, audio, cache, True,
                        perf_modes=json.loads((out / 'image-input-manifest.json').read_text()).get('perf_modes', False),
                        inference=image_inference(json.loads((out / 'image-input-manifest.json').read_text()), image))
+    radio_uploads = radio_assets.validate(json.loads((out / 'admission.json').read_text()),
+                                         template, flags, cache, board, bluetooth, require, frozen=True)
     segments, address, identity = base.image_parts(out / 'image.elf')
     require(identity.hex() == p['build_id'], 'Build identity changed.')
     derived = bytearray(template)
@@ -612,6 +633,7 @@ def validate_board(bundle):
             require((out / name).read_bytes() == segment['data'], 'ELF segment changed.')
             expected.append({'name': name, 'address': segment['address']})
     expected.append({'name': 'session.bin', 'address': SESSION_ADDRESS})
+    expected += [{'name': p['entry_evidence'][path]['name'], 'address': address} for path, address in radio_uploads]
     require(p['segments'] == expected, 'Unsealed or changed upload.')
     for name, data in zip(('request.bin', 'contract.bin'), request_bytes(address, identity, raw)):
         require((out / name).read_bytes() == data, 'Launch request or contract changed.')

@@ -19,7 +19,7 @@ MODEL_PIN=json.loads((Path(__file__).with_name("recognition-models.json")).read_
 SCHEMA = 'a733-bluetooth-supervised-bundle-v1'
 
 
-def profile_check(data, session):
+def profile_check(data, session, *, workloads=(2,)):
     require(len(data) in (624,752,832) and struct.unpack_from('<QII', data) == (0x3150465442535353, {624:1,752:2,832:3}.get(len(data),0), len(data)), 'Bluetooth profile geometry differs.')
     if len(data)>=752:
         mode,incoming=struct.unpack_from('<2I',data,624)
@@ -38,7 +38,7 @@ def profile_check(data, session):
         require(struct.unpack_from('<2Q',data,752)==tuple(m['bytes'] for m in MODEL_PIN['models']) and
                 data[768:832]==b''.join(bytes.fromhex(m['sha256']) for m in MODEL_PIN['models']),
                 'Unchanged admitted Mimus model identities required.')
-    require(struct.unpack_from('<I', session, 400)[0] == 2 and hashlib.sha256(data).digest() == session[320:352], 'Bluetooth profile/session identity differs.')
+    require(struct.unpack_from('<I', session, 400)[0] in workloads and hashlib.sha256(data).digest() == session[320:352], 'Bluetooth profile/session identity differs.')
     require(struct.unpack_from('<Q', data, 24)[0] == struct.unpack_from('<Q', session, 312)[0] != 0, 'Actual secure SID authority required.')
     require(all(struct.unpack_from('<Q', data, offset)[0] == 0 for offset in (184, 192, 200, 360, 368)), 'Runtime handoffs/deadlines must be absent from immutable input.')
     addresses, sizes = struct.unpack_from('<4Q', data, 512), struct.unpack_from('<4Q', data, 544)
