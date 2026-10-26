@@ -20,7 +20,8 @@ SECTIONS {
     } > RAM
     .stacks (NOLOAD) : ALIGN(16) {
         __exception_stacks = .;
-        . += 2 * 32768;
+        . += (DEFINED(__smp_cores) ? __smp_cores : 2) * 32768;
+        __exception_stacks_end = .;
     } > RAM
     .heap (NOLOAD) : ALIGN(64) {
         __heap_start = .;

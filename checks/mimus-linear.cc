@@ -6,6 +6,8 @@
 #include "mimus/asr/kernels.h"
 #include "mimus/asr/scratch.h"
 #include <array>
+#include <atomic>
+#include "timing.h"
 #include <cstring>
 #include <vector>
 
@@ -14,6 +16,11 @@ namespace {
 using namespace mimus::asr;
 struct Case { unsigned columns, inner, rows, padding, offset; bool grouped, narrow; };
 constexpr Case cases[] = {
+    {32, 176, 128, 0, 0, false, false}, // all eight aligned matrix ranges
+    {256, 16, 128, 0, 0, false, false}, // eight private residual accumulators
+    {32, 176, 129, 1, 1, false, false}, // two-range gap repair stays bounded
+    {33, 176, 128, 0, 0, false, false}, // partial group with eight-row quantizer
+
     {32, 176, 15, 0, 0, false, false}, // below parallel row threshold
     {32, 176, 16, 0, 0, false, false},
     {176, 704, 33, 0, 0, false, false},
@@ -30,6 +37,54 @@ constexpr Case cases[] = {
 alignas(64) uint8_t fast_memory[97280];
 StaticTask_t task_state;
 StackType_t task_stack[16384];
+StaticTask_t service_state;
+StackType_t service_stack[1024];
+TaskHandle_t service_task;
+std::atomic<unsigned> entered, service_progress;
+void service(void *) {
+    configASSERT(portGET_CORE_ID() == 0);
+    configASSERT(ulTaskNotifyTake(pdTRUE, portMAX_DELAY) == 1);
+    configASSERT(entered.load(std::memory_order_acquire) == (1u << kMaxWorkers) - 1);
+    service_progress.store(1, std::memory_order_release);
+    vTaskSuspend(nullptr);
+    platform_panic("service resumed", 0);
+}
+void adapter_check() {
+    struct alignas(64) Output { unsigned visits, core; } slots[kMaxWorkers]{};
+    struct Context { Output *slots; uint64_t deadline; } ctx{slots, counter() + COUNTER_HZ};
+    ParallelFor(kMaxWorkers, [](void *opaque, size_t a, size_t b, int worker) {
+        auto &c = *static_cast<Context *>(opaque);
+        configASSERT(a == unsigned(worker) && b == a + 1);
+        c.slots[worker].core = portGET_CORE_ID();
+        entered.fetch_or(1u << worker, std::memory_order_release);
+        if (worker == 0) {
+            while (entered.load(std::memory_order_acquire) != (1u << kMaxWorkers) - 1)
+                configASSERT(counter() < c.deadline);
+            xTaskNotifyGive(service_task);
+        }
+        while (!service_progress.load(std::memory_order_acquire))
+            configASSERT(counter() < c.deadline);
+        c.slots[worker].visits = 1;
+    }, &ctx);
+    for (unsigned i = 0; i < kMaxWorkers; ++i)
+        configASSERT(slots[i].visits == 1 && slots[i].core == i);
+    // Reuse borrowed stack contexts after each complete join, including counts
+    // below capacity and counts not divisible by the worker count.
+    for (unsigned repeat = 0; repeat < 16; ++repeat) {
+        for (size_t n : {size_t(1), size_t(2), size_t(7), size_t(8), size_t(9), size_t(17)}) {
+            struct alignas(64) Item { unsigned value; } result[17]{};
+            ParallelFor(n, [](void *opaque, size_t a, size_t b, int worker) {
+                auto *out = static_cast<Item *>(opaque);
+                configASSERT(portGET_CORE_ID() == unsigned(worker));
+                for (size_t i = a; i < b; ++i) out[i].value = unsigned(i + 1);
+            }, result);
+            for (size_t i = 0; i < 17; ++i) configASSERT(result[i].value == (i < n ? i + 1 : 0));
+        }
+    }
+    configASSERT(kMaxWorkers == 2 || !AsyncAvailable());
+    platform_puts("PASS SMP adapter: private joins, short ranges and core-0 service progress\n");
+}
+
 
 template<class T> T *aligned(std::vector<uint8_t> &storage, size_t count) {
     storage.resize(count * sizeof(T) + 64);
@@ -90,16 +145,20 @@ void check(void *) {
     for (size_t i = 0; i < count; ++i)
         for (unsigned acc = 0; acc < 2; ++acc) expected[2 * i + acc] = run(cases[i], acc);
     mimus_parallel_bind();
+    adapter_check();
     for (size_t i = 0; i < count; ++i)
         for (unsigned acc = 0; acc < 2; ++acc) configASSERT(expected[2 * i + acc] == run(cases[i], acc));
     mimus_parallel_report();
-    platform_puts("PASS SMP linear: serial parity and output guards; 12 shapes, plain and residual output\n");
+    platform_puts("PASS SMP linear: serial parity and output guards; 16 shapes, plain and residual output\n");
     platform_exit(0);
 }
 }
 extern "C" void vApplicationStackOverflowHook(TaskHandle_t, char *name) { platform_panic(name, 0); }
 extern "C" void kernel_main(void) {
     platform_init(); runtime_smp_init(); runtime_init(); mimus_parallel_init();
+    service_task = xTaskCreateStaticAffinitySet(service, "service_check", 1024, nullptr, 4,
+                                                service_stack, &service_state, 1);
+    configASSERT(service_task);
     configASSERT(xTaskCreateStaticAffinitySet(check, "linear_check", 16384, nullptr, 3,
                                               task_stack, &task_state, 1));
     vTaskStartScheduler();

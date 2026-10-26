@@ -135,7 +135,11 @@ extern "C" void mimus_application_start(void)
 #endif
     runtime_init();
 #ifdef SUNSTONE_SMP_NEWLIB
+#if defined(SUNSTONE_MIMUS_NATIVE) && SUNSTONE_MIMUS_WORKERS == 8
+    mimus_parallel_init(6, 7);
+#else
     mimus_parallel_init();
+#endif
 #endif
 #if defined(SUNSTONE_MIMUS_USB) || defined(SUNSTONE_MIMUS_PACED)
     mimus_replay_init();
@@ -148,7 +152,12 @@ extern "C" void mimus_application_start(void)
     configASSERT(xTaskCreateStatic(keep_recovery, "recovery", 1024, nullptr, 5, recovery_stack, &tasks[0]));
 #ifdef SUNSTONE_SMP_NEWLIB
     configASSERT(xTaskCreateStaticAffinitySet(recognize, "mimus", 16384, nullptr, 3,
-                                              recognition_stack, &tasks[1], 1));
+                                              recognition_stack, &tasks[1],
+#if defined(SUNSTONE_MIMUS_NATIVE) && SUNSTONE_MIMUS_WORKERS == 8
+                                              UBaseType_t{1} << 6));
+#else
+                                              1));
+#endif
 #else
     configASSERT(xTaskCreateStatic(recognize, "mimus", 16384, nullptr, 3, recognition_stack, &tasks[1]));
 #endif

@@ -15,33 +15,49 @@ using mimus::asr::TaskFn;
 // A job is either a range of a ParallelFor (function) or one async item
 // (task); exactly one of the two is set.
 struct Job { RangeFn function; TaskFn task; void *context; size_t begin, end; uint64_t sequence; };
-StaticQueue_t jobs_state, done_state;
-uint8_t jobs_storage[sizeof(Job)], done_storage[sizeof(uint64_t)];
-QueueHandle_t jobs, done;
-StaticTask_t worker_state;
-StackType_t worker_stack[8192];
+constexpr unsigned kWorkers = SUNSTONE_MIMUS_WORKERS;
+static_assert(kWorkers == mimus::asr::kMaxWorkers);
+static_assert(kWorkers == 2 || kWorkers == 8);
+static_assert(kWorkers <= configNUMBER_OF_CORES);
+#if defined(SUNSTONE_MIMUS_NATIVE) && SUNSTONE_MIMUS_WORKERS == 8 && !defined(A733_A76_ADMITTED)
+#error Eight native inference workers require admitted A76 placement
+#endif
+struct alignas(64) Worker {
+    StaticQueue_t jobs_state, done_state;
+    uint8_t jobs_storage[sizeof(Job)], done_storage[sizeof(uint64_t)];
+    QueueHandle_t jobs, done;
+    StaticTask_t state;
+    unsigned index, core;
+    uint64_t expected;
+};
+static_assert(sizeof(Worker) * (kWorkers - 1) < 16 * 1024);
+Worker slots[kWorkers - 1];
+alignas(64) StackType_t worker_stacks[kWorkers - 1][8192];
 TaskHandle_t owner;
-// Cores of the owner (the recognition task) and of the worker.
-unsigned owner_core, worker_core = 1;
+unsigned owner_core, completed_core_mask;
 uint64_t submitted, completed, async_jobs;
 bool busy, async_pending;
 
-void worker(void *) {
+void worker(void *argument) {
+    auto &slot = *static_cast<Worker *>(argument);
+    uint64_t previous = 0;
     for (;;) {
         Job job;
-        configASSERT(xQueueReceive(jobs, &job, portMAX_DELAY) == pdTRUE);
-        configASSERT(portGET_CORE_ID() == worker_core);
+        configASSERT(xQueueReceive(slot.jobs, &job, portMAX_DELAY) == pdTRUE);
+        configASSERT(portGET_CORE_ID() == slot.core);
 #ifdef SUNSTONE_MIMUS_SUPERVISED
         mimus_native_checkpoint();
 #endif
+        configASSERT(job.sequence > previous);
+        previous = job.sequence;
         if (job.task) job.task(job.context);
-        else job.function(job.context, job.begin, job.end, 1);
+        else job.function(job.context, job.begin, job.end, slot.index);
 #ifdef SUNSTONE_MIMUS_SUPERVISED
         mimus_native_checkpoint();
 #endif
         // Publishing completion releases all callback stores. The caller
         // keeps the borrowed context and buffers alive until this message.
-        configASSERT(xQueueSend(done, &job.sequence, portMAX_DELAY) == pdTRUE);
+        configASSERT(xQueueSend(slot.done, &job.sequence, portMAX_DELAY) == pdTRUE);
     }
 }
 void dispatch(size_t count, RangeFn function, void *context, bool /*sync*/) {
@@ -51,24 +67,36 @@ void dispatch(size_t count, RangeFn function, void *context, bool /*sync*/) {
     mimus_native_checkpoint();
 #endif
     busy = true;
-    if (count < 2) {
+    const unsigned active = count < kWorkers ? unsigned(count) : kWorkers;
+    if (active < 2) {
         function(context, 0, count, 0);
     } else {
-        const size_t middle = count / 2;
-        const Job job{function, nullptr, context, middle, count, ++submitted};
-        // Cacheable, inner-shareable memory and the FreeRTOS queue barriers
-        // publish CPU stores. The one noncoherent producer is the GPU of the
-        // GPU linear build: its runtime's DC CIVAC over each completed job's
-        // tags and sums (pvr_mimus_complete) reaches every core's cache before
-        // the recognizer reads them, so the sums this worker reads out are
-        // coherent.
-        configASSERT(xQueueSend(jobs, &job, 0) == pdTRUE);
-        function(context, 0, middle, 0);
-        uint64_t sequence;
-        configASSERT(xQueueReceive(done, &sequence, portMAX_DELAY) == pdTRUE);
-        configASSERT(sequence == submitted);
-        completed = sequence;
+        // Preserve the original lower/upper half split with two workers.
+        // Queue publication releases callback inputs; every private completion
+        // acquires the corresponding stores before this stack context returns.
+        auto boundary = [=](unsigned i) {
+            return count / active * i + count % active * i / active;
+        };
+        for (unsigned i = 1; i < active; ++i) {
+            auto &slot = slots[i - 1];
+            configASSERT(submitted != UINT64_MAX);
+            slot.expected = ++submitted;
+            const Job job{function, nullptr, context, boundary(i),
+                          boundary(i + 1), slot.expected};
+            configASSERT(xQueueSend(slot.jobs, &job, 0) == pdTRUE);
+        }
+        function(context, 0, count / active, 0);
+        for (unsigned i = 1; i < active; ++i) {
+            auto &slot = slots[i - 1];
+            uint64_t sequence;
+            configASSERT(xQueueReceive(slot.done, &sequence, portMAX_DELAY) == pdTRUE);
+            // Failure is terminal: never return a borrowed context early.
+            configASSERT(sequence == slot.expected);
+            ++completed;
+            completed_core_mask |= 1u << slot.core;
+        }
     }
+    completed_core_mask |= 1u << owner_core;
 #ifdef SUNSTONE_MIMUS_SUPERVISED
     mimus_native_checkpoint();
 #endif
@@ -77,7 +105,7 @@ void dispatch(size_t count, RangeFn function, void *context, bool /*sync*/) {
     mimus_native_inference_progress();
 #endif
 }
-int workers() { return 2; }
+int workers() { return kWorkers; }
 
 // The engine's two-core pipeline (attention scores/softmax split, input
 // handoff) runs one item on the worker while the owner continues. While an
@@ -85,7 +113,7 @@ int workers() { return 2; }
 // queue never holds a range and an item at the same time. The caller keeps
 // the item's context alive until async_wait, as for dispatch.
 bool async_available() {
-    return owner == xTaskGetCurrentTaskHandle() && !busy && !async_pending;
+    return kWorkers == 2 && owner == xTaskGetCurrentTaskHandle() && !busy && !async_pending;
 }
 bool async_start(TaskFn task, void *context, bool /*sync*/) {
     if (!async_available()) return false;
@@ -93,18 +121,23 @@ bool async_start(TaskFn task, void *context, bool /*sync*/) {
 #ifdef SUNSTONE_MIMUS_SUPERVISED
     mimus_native_checkpoint();
 #endif
-    const Job job{nullptr, task, context, 0, 0, ++submitted};
-    configASSERT(xQueueSend(jobs, &job, 0) == pdTRUE);
+    configASSERT(submitted != UINT64_MAX);
+    auto &slot = slots[0];
+    slot.expected = ++submitted;
+    const Job job{nullptr, task, context, 0, 0, slot.expected};
+    configASSERT(xQueueSend(slot.jobs, &job, 0) == pdTRUE);
     async_pending = true;
     ++async_jobs;
     return true;
 }
 void async_wait() {
     configASSERT(owner == xTaskGetCurrentTaskHandle() && async_pending && !busy);
+    auto &slot = slots[0];
     uint64_t sequence;
-    configASSERT(xQueueReceive(done, &sequence, portMAX_DELAY) == pdTRUE);
-    configASSERT(sequence == submitted);
-    completed = sequence;
+    configASSERT(xQueueReceive(slot.done, &sequence, portMAX_DELAY) == pdTRUE);
+    configASSERT(sequence == slot.expected);
+    ++completed;
+    completed_core_mask |= (1u << owner_core) | (1u << slot.core);
     async_pending = false;
 #ifdef SUNSTONE_MIMUS_SUPERVISED
     mimus_native_checkpoint();
@@ -116,13 +149,25 @@ void mimus_parallel_init(unsigned owner_index, unsigned worker_index) {
     configASSERT(owner_index != worker_index && owner_index < configNUMBER_OF_CORES &&
                  worker_index < configNUMBER_OF_CORES);
     owner_core = owner_index;
-    worker_core = worker_index;
-    jobs = xQueueCreateStatic(1, sizeof(Job), jobs_storage, &jobs_state);
-    done = xQueueCreateStatic(1, sizeof(uint64_t), done_storage, &done_state);
-    configASSERT(jobs && done);
-    configASSERT(xTaskCreateStaticAffinitySet(worker, "asr_worker", 8192, nullptr, 3,
-                                              worker_stack, &worker_state,
-                                              UBaseType_t{1} << worker_core));
+#if defined(SUNSTONE_MIMUS_NATIVE) && SUNSTONE_MIMUS_WORKERS == 8
+    configASSERT(owner_index == 6 && worker_index == 7);
+#endif
+    unsigned assigned = (1u << owner_index) | (1u << worker_index);
+    for (unsigned i = 1; i < kWorkers; ++i) {
+        auto &slot = slots[i - 1];
+        slot.index = i;
+        slot.core = worker_index;
+        if (i > 1) {
+            for (slot.core = 0; assigned & (1u << slot.core); ++slot.core) {}
+            configASSERT(slot.core < configNUMBER_OF_CORES);
+            assigned |= 1u << slot.core;
+        }
+        slot.jobs = xQueueCreateStatic(1, sizeof(Job), slot.jobs_storage, &slot.jobs_state);
+        slot.done = xQueueCreateStatic(1, sizeof(uint64_t), slot.done_storage, &slot.done_state);
+        configASSERT(slot.jobs && slot.done);
+        configASSERT(xTaskCreateStaticAffinitySet(worker, "asr_worker", 8192, &slot, 3,
+                    worker_stacks[i - 1], &slot.state, UBaseType_t{1} << slot.core));
+    }
 }
 void mimus_parallel_bind() {
     configASSERT(!owner && portGET_CORE_ID() == owner_core);
@@ -136,8 +181,8 @@ void mimus_parallel_report() {
     configASSERT(owner == xTaskGetCurrentTaskHandle() && !busy && !async_pending &&
                  completed == submitted);
     char line[96];
-    snprintf(line, sizeof(line), "WORKERS count=2 jobs=%llu core_mask=%x\n",
-             static_cast<unsigned long long>(completed), (1u << owner_core) | (1u << worker_core));
+    snprintf(line, sizeof(line), "WORKERS count=%u jobs=%llu core_mask=%x\n", kWorkers,
+             static_cast<unsigned long long>(completed), completed_core_mask);
     platform_puts(line);
     // Separate record: existing checks match the WORKERS line exactly.
     snprintf(line, sizeof(line), "WORKERS async=%llu\n",
