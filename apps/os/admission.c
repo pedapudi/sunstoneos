@@ -53,7 +53,7 @@ int os_session_valid(const struct os_session *s)
      * rail leases. */
     struct a733_cpu_clock_config cpu;
     if(!a733_cpu_clock_grant_load(&s->cpu_clock,s->board.epoch,s->board.generation,&cpu)||
-       cpu.owner==s->thermal_owner||cpu.grant.clusters==3)return 0; /* One cluster per approved step. */
+       cpu.owner==s->thermal_owner)return 0;
     for(unsigned i=0;i<4;++i)if(owners[i]==cpu.owner)return 0;
 #ifdef SUNSTONE_A733_OS_AUDIO
     if(cpu.owner==s->audio.dma.owner)return 0;

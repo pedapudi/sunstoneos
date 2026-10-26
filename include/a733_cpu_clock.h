@@ -22,6 +22,11 @@ struct a733_cpu_opp { uint32_t mhz; uint16_t mv[A733_CPU_VF_BINS]; };
 const struct a733_cpu_opp *a733_cpu_clock_opps(enum a733_cpu_domain,unsigned *count);
 /* Voltage of one row for a bin column or the envelope; 0 if unsupported. */
 uint32_t a733_cpu_clock_opp_mv(const struct a733_cpu_opp *,unsigned bin);
+/* The vendor dsufreq rule's DSU point for the bin with the clusters at these
+ * rates (CPU-L at a row of its table): the fastest supported DSU row whose
+ * voltage does not exceed CPU-L's and whose rate is at most three quarters of
+ * the faster cluster, rounded down to 26 MHz. 0 when none qualifies. */
+uint32_t a733_cpu_clock_dsu_top(unsigned bin,uint32_t little_mhz,uint32_t big_mhz);
 /* SID word 0x0300624c: code = bits23:16 (dvfs_bak) if nonzero, else bits15:8
  * (dvfs_ori), mapped through vf_mapping_table. Code 0 selects the envelope
  * because an unprogrammed fuse also reads 0. Codes without a column in the

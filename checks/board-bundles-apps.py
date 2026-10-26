@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and check the base image and the returning images of bundles 4, 6, 7, 8, 15 and 20 to 24.
+"""Build and check the base image and the returning images of bundles 4, 6, 7, 8, 15, 20 to 24 and 30 to 32.
 
 docs/designs/board-bundles-next.md specifies the bundles. Every image links
 objects of an image that passed on the board, objects of the set's own base
@@ -17,7 +17,7 @@ image, which runs first, and its declared new units:
   the base: the 13 returning platform objects and 14 provider objects,
   without the USB units, plus the bundle's main file, power.c, trace.c, the
   power-domain owner, its native adapter and device_memory.c; bundles 20 to
-  24, one source built with -DOPP_BUNDLE=n, add the CPU clock driver, the
+  27, one source built with -DOPP_BUNDLE=n, add the CPU clock driver, the
   thermal driver, its native adapter, the ADC native binding and the PMU
   region code (docs/designs/cpu-top-opp.md), with bundle
   6's completing-poll window compiled in only under --complete-window. The PMIC
@@ -130,6 +130,11 @@ EXPECT = {
     'opp-23': 'COMPLETE board bundle 23: CPU-B 2002 MHz at 1050 mV with the DSU at 910 MHz, then CPU-B 1014 MHz '
               'at 800 mV',
     'opp-24': 'COMPLETE board bundle 24: CPU-L 1794 MHz at 1000 mV and the DSU 1274 MHz',
+    'opp-30': 'COMPLETE board bundle 30: CPU-L 1794 MHz and DCDC5 1000 mV, the DSU 1274 MHz, DCDC3 1050 mV with '
+              'CPU-B at 1014 MHz',
+    'opp-31': 'COMPLETE board bundle 31: DCDC5 1000 mV and DCDC3 1050 mV kept across the ROM return, read only',
+    'opp-32': 'COMPLETE board bundle 32: temperatures, rails and boot clock words after the top-point workload, '
+              'read only',
     'dram': 'COMPLETE board bundle 8:',
 }
 POWER_UNITS = ['apps/board-bundles-power/power.c', 'apps/board-bundles-power/trace.c',
@@ -555,15 +560,17 @@ def bundle8_outcomes(elf):
 
 
 def opp_step_outcomes(bundle):
-    """Refusals before any clock or PMIC write, and the thermal stop after the step lowered what it raised; each
-    with the converter disabled and the PMIC service parked."""
+    """Refusals before any clock or PMIC write (bundles 31 and 32 also refuse clock words other than the boot words), and
+    the thermal stop after the step lowered what it raised; each with the converter disabled and the PMIC service
+    parked."""
     refusals = [dict(name=f'step-refused-{slug}', status=1, interrupt=None, fail_lines=0, fault=None,
                      log_contains=[f'BEGIN board bundle {bundle}:', f'REFUSED board bundle {bundle}: {text}'])
                 for slug, text in (('thermal-level', 'thermal level'), ('speed-bin', 'speed bin'),
                                    ('supplies', 'CPU supplies'), ('cpu-b-rate', 'CPU-B rate'),
                                    ('rate-not-on-pll', 'CPU rate not on its PLL'),
                                    ('pattern-or-lfm', 'pattern or LFM enabled'),
-                                   ('voltage-above-bin', "voltage above the bin's top point"))]
+                                   ('voltage-above-bin', "voltage above the bin's top point")) +
+                                  ((('boot-clock-words', 'boot clock words'),) if bundle in (31, 32) else ())]
     return refusals + [dict(name='step-stopped-thermal-limit', status=1, interrupt=None, fail_lines=0, fault=None,
                             log_contains=[f'BEGIN board bundle {bundle}:',
                                           f'STOPPED board bundle {bundle}: thermal limit'])]
@@ -695,6 +702,9 @@ def main():
             ('opp-22', OPP_STEP_UNITS, ('-DOPP_BUNDLE=22',), None),
             ('opp-23', OPP_STEP_UNITS, ('-DOPP_BUNDLE=23',), None),
             ('opp-24', OPP_STEP_UNITS, ('-DOPP_BUNDLE=24',), None),
+            ('opp-30', OPP_STEP_UNITS, ('-DOPP_BUNDLE=30',), None),
+            ('opp-31', OPP_STEP_UNITS, ('-DOPP_BUNDLE=31',), None),
+            ('opp-32', OPP_STEP_UNITS, ('-DOPP_BUNDLE=32',), None),
             ('dram', DRAM_UNITS, ('-DSUNSTONE_DRAM_PRIORITY=2',), ('FREERTOS/tasks.c', 'FREERTOS/queue.c'))):
         units_provider = {u: p for u, p in provider.items() if keep is None or u in keep}
         directory, entry = build_v4_image(name, rp, units, platform, units_provider, list(flags), origins, out,
