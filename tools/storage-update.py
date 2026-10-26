@@ -509,9 +509,13 @@ def plan(slot_plan_path, allocation_path, card_image, card, output):
         for s in 'AB':
             owned['header-' + s] = (slots.HEADER_SECTORS[s], 1)
             owned['slot-' + s] = (regions[s]['first'], regions[s]['blocks'])
-        if 'training_record' in slot_allocation:
-            record_unit = slot_allocation['training_record']
-            owned['training-record'] = (record_unit['first'], record_unit['blocks'])
+        record_units = slots.training_units(slot_allocation)
+        for copy, unit in record_units.items():
+            owned['training-record' + ('' if copy == 'single' else '-'+copy)] = (unit['first'], unit['blocks'])
+        paired_record = kind == RECORD_PLAN_KIND and 'record_copy' in slot_plan
+        if paired_record:
+            records = tool_module('training_record', 'training-record.py')
+            records.validate_standby_plan(slots, slot_plan, record_units, fd, slot_plan_path.parent)
         stock = slots.read_at(fd, *STOCK_BACKUP_UNIT)
         sessions, skipped = [], []
         for record in slot_plan['writes']:
@@ -520,9 +524,12 @@ def plan(slot_plan_path, allocation_path, card_image, card, output):
             require(len(data) == blocks * 512 and slots.sha(data) == record['sha256'],
                     'Boot-slot plan file identity mismatch: ' + name)
             if kind == RECORD_PLAN_KIND:
-                require(name in RECORD_WRITES and 'training-record' in owned,
-                        'Training-record write without a training-record allocation: ' + name)
-                region = 'training-record'
+                if paired_record:
+                    region = 'training-record-' + slot_plan['record_copy']
+                else:
+                    require(name in RECORD_WRITES and 'training-record' in owned,
+                            'Training-record write without a training-record allocation: ' + name)
+                    region = 'training-record'
             else:
                 region = plan_region(name, slot_plan['slot'])
             low, count = owned[region]

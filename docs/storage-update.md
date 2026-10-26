@@ -62,7 +62,7 @@ SunstoneOS owns these regions of a microSD boot card:
 | 16384 | Slot B header | Fixed layout |
 | 32800..40959 | Monitor TOC1 package | Fixed layout |
 | Slot A and slot B regions, at or beyond 40960 | Slot payloads | Boot-slot allocation record |
-| One 4 MiB unit at or beyond 40960, when allocated | DRAM training record | Boot-slot allocation record, `training_record` |
+| One or two separate 4 MiB units at or beyond 40960, when allocated | DRAM training record copies | Boot-slot allocation record, legacy `training_record` or paired `training_records` |
 
 No session writes any other sector. In particular, sectors 0..15 hold the
 partition table, and the 4 MiB unit at sectors 24576..32767 holds the backup
@@ -78,6 +78,16 @@ sessions update the header last
 ([restore design](designs/dram-training-restore.md#the-record-has-its-own-4-mib-unit-on-the-card)).
 The unit shares no 4 MiB unit with a slot header, so a record session never
 endangers slot fallback. `checks/training-record.py` covers these plans.
+
+Paired allocations use `training_records` with exactly copies A and B and
+cannot also contain the legacy field. `training-record.py plan-standby`
+produces `record-A-payload` followed by `record-A-header`, or the B equivalents.
+The storage planner verifies that order, placement and generation and binds
+every inspected non-target header/payload sector to its hash. A changed
+non-target copy refuses conversion even if it was invalid during selection.
+The target ranges retain the original-or-candidate comparison below.
+`checks/training-record-copies.py` exercises selection and these plans with
+actual captured training records on ordinary card-image files.
 
 Each write of the boot-slot plan must lie inside its own region, or planning
 stops. A range whose card bytes already equal the planned bytes is listed as

@@ -49,6 +49,12 @@ units. Cards with a GPT are refused, because boot0 at sector 16 overlaps the
 GPT entry array. `allocate --training-record FIRST:BLOCKS` also assigns one
 4 MiB unit to the DRAM training record
 ([restore design](designs/dram-training-restore.md)), under the same rules.
+The paired form uses `--training-record-a FIRST:8192` and
+`--training-record-b FIRST:8192` together. It records `training_records`
+with A and B extents and rejects overlap between them. The paired and
+legacy forms are mutually exclusive; existing allocations keep their format.
+A produced allocation describes the supplied backup file. Physical use still
+requires that card's preserved full backup and reviewed reservation.
 
 ## Slot header
 

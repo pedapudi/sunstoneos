@@ -2,13 +2,14 @@
 
 Status: **RAM-only restore implemented and host-checked; no physical restore
 has run.** The capture tools, fixed restore set, record builder, SRAM
-admission and restore helper are implemented. The card allocation and
-record planner retain their existing single-unit format; the two-copy
-card stage below remains future work. Independent code review and physical
-prerequisites are recorded in the [first-test runbook](../board-runbooks/dram-restore-test-1.md).
+admission and restore helper are implemented. The card allocation and record
+planner support legacy single-unit records
+and paired records in separate units. Physical card integration remains
+unqualified. Independent code review and physical prerequisites are recorded in the [first-test runbook](../board-runbooks/dram-restore-test-1.md).
 
 Training restore improves boot time; the existing full-training path
-continues to provide DRAM initialization. The user approved replacing boot0's 5.1 s DRAM training with a restore of
+continues to provide DRAM initialization. The user approved replacing boot0's
+5.1 s DRAM training with a restore of
 saved training results kept on the microSD card. The
 [DRAM fast-boot design](dram-fast-boot.md) derives boot0's training flow and
 measures the cost. This design specifies how the training results are
@@ -246,8 +247,8 @@ the unit's first sector and the payload starts at the second.
 
 ## The record has its own 4 MiB unit on the card
 
-This is the existing planner format. Physical card work remains deferred;
-the later two-copy design in the next steps extends this allocation.
+This is the legacy planner format. The paired-copy host tools below extend
+this allocation; physical card work remains unqualified.
 
 The coordinator proposed the `bootpara` region at sectors 24,496–24,499 or
 beside it. That unit, 16,384–24,575, holds the slot B header, which
@@ -400,6 +401,77 @@ require exact fault codes and zero later memory accesses for wrong-board,
 CRC, readback and sampled-memory failures. These checks establish software
 ordering only; they do not qualify the PHY or authorize a launch.
 
+## Two-copy host selection and standby update contract
+
+The implemented host tools reuse `boot-slots.py` allocations and
+`storage-update.py` backup-first sessions. The record bytes remain version
+1. Existing single-unit allocations and commands keep their behavior.
+A new allocation field, `training_records`, assigns copies A and B to two
+separate 4 MiB units. It cannot coexist with `training_record`. Both units
+must lie beyond the boot area, outside slots and partitions, and inside
+the backed-up image. Allocation reads the actual ordinary-file backup and
+records its capacity and hash; it does not establish a physical reservation.
+No physical allocation or full-card backup has been identified for this stage.
+
+The selector command is `training-record.py select --allocation ALLOCATION
+--card-image IMAGE --record REFERENCE --restore-set ANALYSIS`. The reference
+is a record from `from-capture`; the fixed analysis file remains
+`restore-set-v3.json`. `plan-standby` takes the same arguments and an
+`--output DIRECTORY`. Its `plan.json` becomes the `--slot-plan` input to
+`storage-update.py plan`, which produces the existing per-range sessions.
+
+Selection reads each header before its bounded payload. It checks both
+CRCs and the admitted RAM-restore profile: chip ID, boot0 identity, selected
+parameter CRC, temperature sentinel, size, register addresses and masks.
+The target identity comes from a real capture-derived reference record.
+Among eligible copies it chooses the highest 64-bit generation, with A
+first on a tie. No eligible copy means `full-training`, before any restore
+parameter or PHY edit. This host selector specifies the later card hook's
+behavior; it does not implement a card boot or retry a partial restore.
+
+`training-record.py plan-standby` targets the other copy, or A when neither
+copy is eligible. It refuses a valid record from another board, a repeated
+active payload and generation exhaustion. The planner assigns generation
+one above the eligible copies and recomputes the header CRC. It writes the
+standby payload first and the header sector last. Each range remains an
+existing independent backup-first session. The non-target copy's inspected
+header and payload hashes bind selection to the current card image when
+`storage-update.py plan` converts the writes into sessions. A changed source
+copy requires a fresh plan, including when that copy was invalid or no
+copy was selected. Target ranges must equal their original bytes or the
+planned bytes. A torn range matching neither refuses conversion and needs
+a fresh backup and plan.
+
+The update leaves the non-target copy intact. A CRC-invalid standby copy
+cannot replace an eligible older copy. Once the new header and payload
+validate, the new generation is selected. This can happen after the first
+128 bytes of a header sector change, when its remaining bytes already match. Resuming uses the same plan; preparing a
+fresh identical update is refused so that it cannot overwrite the fallback.
+Coordinator serialization and a fresh read-only backup remain required for
+each physical session. Plan ordering and CRCs do not establish card power-loss
+atomicity or physical recovery qualification.
+
+The fixed-profile read budget is two header sectors and at most two 24 KiB
+records. The observed 13,836-byte records require 28,672 card-image bytes
+in total, including sector padding. Selection bounds CRC and profile work by these records, with no device
+access. Checks use records from the actual captures and
+allocations from the actual producer on ordinary-file fixtures. They cover
+blank copies, generation ordering and ties, bad CRCs and board identity,
+interruption after each written sector, unchanged active bytes, stale-image
+refusal, malformed allocations and generation exhaustion. Shared storage
+wire formats and native drivers require no changes. The accepted RAM-only
+restore artifacts retain their earlier evidence.
+
+Host evidence is in `~/.cache/sunstoneos/evidence/resume-dram-record-copies-1025/`.
+`check-final` passes 32 named cases and 28 sector interruption points, with
+the original ordinary-file backup preserved and hashed. `legacy` passes the
+existing single-copy planner check, and `boot-slots` passes its 19 cases.
+The paired allocation assigns sectors 57,344–65,535 and 65,536–73,727;
+these are fixture reservations, not physical card reservations. No physical
+card allocation or backup authority is inferred from them. Independent
+correctness review approved the host implementation; physical qualification
+remains outstanding.
+
 ## Next steps
 
 Implementation and remaining physical work:
@@ -409,7 +481,7 @@ Implementation and remaining physical work:
 | Capture reader, stage tables, runner, DRAM and SRAM builds, wrapper variants | Implemented, host-checked, frozen (v5 sets), run in ten lifetimes |
 | `tools/analyse-ddr-captures.py`, kind diff and block exclusion | Implemented, host-checked |
 | Restore set | Fixed: `~/.cache/sunstoneos/evidence/dram-training-analysis-20261025/restore-set-v3.json`, command in `restore-set-v3.command` |
-| Record format and card region (`tools/training-record.py`, one unit) | Implemented, host-checked; card stage not started |
+| Record format, paired selection and standby plans | Implemented and host-checked; physical card stage not started |
 | Record builder from a capture | Implemented; both actual board references and identity refusals checked |
 | Restore wrapper variant | Implemented; instruction and host-runner cases checked |
 | March C- runs on the restored and P-state-0-only paths | Image implemented and host-modeled, never run on a board |
@@ -468,12 +540,12 @@ Implementation and remaining physical work:
    `apps/memtest/check.py prepare` runs.
 5. **Review and freeze** `dram-restore-test-1` for both boards under the
    design gate, then run it when power cycles are possible.
-6. **Card stage**, only after FEL qualification: two record copies in two
-   4 MiB units of the allocation (extending the present single unit), each
-   with its own generation and CRCs, the newest valid copy selected and the
-   standby copy written payload first and header last; a host backup before
-   every session; and the host-built boot0 variant, which needs the
-   coordinator's decision.
+6. **Card deployment**, only after FEL qualification: the host tools now
+   allocate two copies, select the newest eligible generation and plan
+   standby updates payload first and header last. Remaining work is the
+   boot0 card-read/selection hook, runtime temperature admission, the
+   qualified recovery behavior and physical reservations. Every write
+   session still needs a host backup.
 7. **Qualification** as listed above: ten restored lifetimes per board with
    March C-, cold and warm lifetimes with stress runs (which also set the
    record's temperature limit and the retraining interval), the fallback
