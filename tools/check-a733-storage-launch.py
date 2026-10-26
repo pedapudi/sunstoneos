@@ -66,6 +66,12 @@ def storage_inputs(store):
     return raw,grant,sha(store_api.canonical(manifest))
 
 
+def _vendor_mbus():
+    """tools/vendor-mbus.py: sessions name MBUS as the restored image finds it."""
+    spec = importlib.util.spec_from_file_location('vendor_mbus', Path(__file__).resolve().parent / 'vendor-mbus.py')
+    value = importlib.util.module_from_spec(spec); spec.loader.exec_module(value); return value
+
+
 def session_bytes(raw,config,image,epoch,generation,lease):
     g=store_api.grant_decode(raw)
     minimum,maximum,guard,reset=(config[k] for k in ('minimum_reload_us','maximum_recovery_us','guard_us','reset_by_us'))
@@ -89,7 +95,8 @@ def session_bytes(raw,config,image,epoch,generation,lease):
     struct.pack_into('<I',b,456,profile)
     struct.pack_into('<4I',b,488,*config['usb_supply_uv'])
     struct.pack_into('<3Q',b,504,*config['owners'])
-    struct.pack_into('<3I',b,528,*config['fabric']);struct.pack_into('<3I',b,540,*config['fabric_hz'])
+    fabric,fabric_hz=_vendor_mbus().fabric(config['fabric'],config['fabric_hz'])
+    struct.pack_into('<3I',b,528,*fabric);struct.pack_into('<3I',b,540,*fabric_hz)
     struct.pack_into('<2I',b,552,config['mmc_voltage_mask'],config['usb_cold_reference'])
     for offset,key,count in ((560,'mmc_expected',12),(596,'mmc_desired',12),(632,'pmic_expected',2)):
         pins=config[key];require(len(pins)==count and all(len(p)==3 for p in pins),'Pin configuration extent differs.')

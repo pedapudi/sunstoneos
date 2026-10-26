@@ -86,13 +86,47 @@ divider-before-source rule holds, and the NSI clock, the DRAM clock and
 PLL_DDR are not touched. The CPU keeps executing from DRAM during the gated
 window because it reaches DRAM through the NSI, not MBUS (4.1.6.83).
 
-**Sessions must name 600 MHz.** Every driver that checks the bus fabric
-compares the live MBUS word with its session's fabric record. Sessions built
-from earlier captures name `0x84000000` and 400,000,000 Hz (for example the
-ShuffleNetV2 starts of 2026-10-25), and an image from this revision refuses
-them. Session preparation must name `0x81000000` and 600,000,000 Hz for MBUS;
-every driver's parent table already admits source 1. The drivers stay
-read-only on MBUS.
+## Sessions name 600 MHz
+
+Every driver that checks the bus fabric compares the live MBUS word with its
+session's fabric record, and every driver's parent table already admits
+source 1. The drivers stay read-only on MBUS. Sessions built from captures
+taken after a ROM return name `0x84000000` and 400,000,000 Hz, and an image
+from this revision refuses them.
+
+[`tools/vendor-mbus.py`](../../tools/vendor-mbus.py) holds boot0's word and
+rate and rewrites a fabric record that names the ROM's word and rate; it
+returns any other record unchanged, as the restore leaves any other register
+value alone, so software-only fixtures keep the fabric they model. Every
+session producer in the repository passes its record through it:
+
+- the seven application producers that extend a board session
+  (`apps/{deinterlace,displayport,g2d,h264-encode,hevc,isp0,jpeg-encode}/producer.py`);
+- the three producers that build a session from a board configuration
+  (`tools/check-a733-storage-launch.py`, `tools/check-a733-mimus-native.py`,
+  `apps/usb-returning/prepare.py`).
+
+The coordinator's set tools that write fabric records (for example
+`tools/prepare-review.py` in the NPU sets) live with the frozen sets, outside
+the repository, and need the same rule when the sets are rebuilt.
+
+**Frozen bundles that name 400 MHz.** A frozen bundle keeps its own image,
+which predates the restore and runs at 400 MHz after a ROM return, so each
+still admits its session as frozen. Rebuilding its image from this revision
+needs a session that names 600 MHz. These sets name MBUS `0x84000000`:
+
+| Set in `~/.cache/sunstoneos/evidence/` | Bundles |
+| --- | --- |
+| `board-bundles-20261023`; `board-bundles-20261024/board-bundles-20261024-{4,5,6}`; `board-bundles-20261024-13` | The native USB images `rank-9-usb` through `rank-9-usb-v7` (`fixture-config.json`) |
+| `board-bundles-20261025-7` | NPU numerical run with the shared SRAM routed to the NPU |
+| `board-bundles-20261025-8` | Three NPU starts in one lifetime |
+| `board-bundles-20261025-11`, `-13` | Two interrupt-completed NPU starts |
+| `board-bundles-20261025-16`, `-19` | Two ShuffleNetV2 starts |
+| `board-bundles-20261025-22` | Returning microSD reads (`config.json`) |
+
+The physical configurations `usb-returning-20261018/physical/config.json` and
+`usb-first-fault-20261018/physical-06{3,4}/config.json` name it too.
+`board-bundles-20261025-14` already names `0x81000000`.
 
 ## G2D runs at 300 MHz
 
@@ -171,9 +205,18 @@ its `.rodata` shrinks by 24 bytes.
   boot0's value, so the restore makes no write there.
 - `checks/board-bundles.py` passes with the row numbering that allows gaps,
   and `checks/audit-consolidate-apps-a-h-equivalence.py` passes.
-- The G2D native checks run the linked image against saved sessions, which
-  name the old 100 MHz clock; they need sessions from the updated
-  `apps/g2d/producer.py` before they run again.
+- G2D: a session regenerated with the updated producer from the earlier
+  model fixture, with the physical fabric record of a ROM return, names G2D at
+  300 MHz and MBUS at `0x81000000`, 600 MHz
+  (`~/.cache/sunstoneos/evidence/g2d-clock-audit-20261025/`).
+  `checks/g2d-power-native.py` passes its four cases on the image built from
+  this revision, writing `0x80000000` (PERI0_300M, divider 1) to the G2D
+  clock; it now models the PERI0 gate words both boards read, because the
+  pinned task model enables only the 400 MHz output's gates.
+  `checks/g2d-modes-native.py` passes its 39 validator cases and 10 RCQ
+  images with that session, and refuses the earlier 100 MHz session at its
+  first case. The success, scale and blend checks replay states pinned to
+  the 2026-10-20 image by hash and are not rerun.
 
 ## Board verification
 

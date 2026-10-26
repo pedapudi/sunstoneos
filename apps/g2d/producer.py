@@ -16,10 +16,16 @@ def preparation():
     spec=importlib.util.spec_from_file_location('g2d_producer_preparation',Path(__file__).with_name('prepare.py'))
     value=importlib.util.module_from_spec(spec);spec.loader.exec_module(value);return value
 
+# Sessions name MBUS at boot0's 600 MHz, which every EL3 entry restores (tools/vendor-mbus.py).
+def _vendor_mbus():
+    import importlib.util as u
+    s=u.spec_from_file_location('vendor_mbus',Path(__file__).resolve().parents[2]/'tools/vendor-mbus.py')
+    m=u.module_from_spec(s);s.loader.exec_module(m);return m
 
 def extend(board,source,*,owner,authority,client,initial,memory,electrical,supervision,
            width,height,stride,operation,dx,dy,w,h,sx=0,sy=0,color=0,
            sw=0,sh=0,bx=0,by=0,alpha=0,source_format=0,output_format=0):
+    board=_vendor_mbus().board_session(board) if len(board)==592 else board
     prep=preparation()
     geometry=(width,height,stride,source_format,operation,dx,dy,w,h,sx,sy,color)
     extension=(sw,sh,bx,by,alpha,output_format,0,0)
