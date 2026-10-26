@@ -47,9 +47,12 @@ its return and failure paths.
   scheduling, failure retention, image admission and layout checks pass; see
   [mimus SMP](mimus-smp.md). Two workers remain the default.
 - [Performance modes](performance-modes.md) integrate CPU clock and voltage
-  control, stopped-NPU retuning and thermal overrides. Both native profiles
-  and focused software checks pass. GPU runtime control and physical
-  switching qualification remain outstanding.
+  control, acknowledged GPU rate/voltage changes, stopped-NPU retuning and
+  thermal overrides. Combined eight-worker CPU/GPU/NPU builds and focused
+  software checks pass for supervised and resident lifetimes. GPU high/low
+  points are 1008 MHz/960 mV and 600 MHz/800 mV. Resident card admission binds
+  runtime authority and finite CPU-change budgets. Physical switching,
+  concurrent workloads and thermal qualification remain outstanding.
 - [DRAM restoration](designs/dram-training-restore.md) includes a RAM-only
   helper and paired persistent records with interruption-safe update planning.
   The optional boot0 card-restore hook is implemented, including a shared bounded
@@ -2170,8 +2173,9 @@ to the stated scope:
   reference driver's ten two-lane output sizes, from 160 × 120 to 2592 × 1944, in
   UYVY, YUYV and 8-bit raw Bayer, with a selectable frame length. Complete register
   images and derived rates of 36 modes match the pinned driver's own mode
-  functions; lifecycle checks and native compilation pass. The native application
-  uses 640 × 480 UYVY at nominal 30 frames/s. The [CSI controller](csi-receiver.md)
+  functions; lifecycle checks and native compilation pass. Native still and
+  finite-stream applications support all ten UYVY sizes, with 640 × 480 at
+  nominal 30 frames/s as the default. The [CSI controller](csi-receiver.md)
   configures local PHY, packet-port and parser state for both exposed port groups;
   complete register images match source functions. The [camera DMA controller](camera-dma.md)
   configures one NV16 image and retains buffers until capture, drain and cache
@@ -2218,6 +2222,14 @@ to the stated scope:
   defined executable function symbols. Connector-specific electrical and deskew
   evidence remain required; the reference sensor node establishes routing, not
   OV5640 module compatibility.
+  Native maximum-size capture uses a camera-only 32 MiB memory reservation and
+  a sized IOMMU table supporting five windows. The actual mode and both memory
+  ranges are authenticated before mapping; the uninitialized frame reservation
+  is excluded from uploads. Maximum output is 10,077,696 bytes. Focused layout,
+  native capture, mapping, image admission, fragmented USB and real prepared-
+  bundle checks pass under `camera-modes-1026/final-snapshot/`. No per-frame
+  allocation or extra copy is added; physical memory visibility, timing and
+  capture remain unqualified.
   No MIPI camera is connected; physical capture qualification awaits a module.
   Continuous capture is **implemented** in the [capture coordinator](camera-capture.md#continuous-capture-delivers-complete-ring-slots)
   for any UYVY or YUYV mode, whose size now reaches the receiver, VIPP and DMA.
@@ -2272,8 +2284,10 @@ to the stated scope:
   Stopped retuning now accepts a fresh bounded command deadline while preserving
   finite application/restart bounds and retained ownership. Focused retune,
   PLL-wait expiry, mailbox and native caller checks pass under
-  `resident-performance-1026/retune-snapshot/`. Resident runtime policy and
-  physical transitions remain unqualified. NPU mimus acceleration remains
+  `resident-performance-1026/retune-snapshot/`. Resident runtime policy is
+  implemented and software-checked in the combined CPU/GPU/NPU image; it binds
+  the actual operating points and cold clock/recovery authority. Physical
+  transitions remain unqualified. NPU mimus acceleration remains
   separate outstanding work.
   The application clock admission accepts the board's normalized
   reference and recorded PERI0 settings. Six focused final-image cases pass

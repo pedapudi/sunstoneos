@@ -66,9 +66,9 @@ does not establish recovery from a fault.
 
 | Work | Branch | Immediate deliverable |
 | --- | --- | --- |
-| GPU performance control | `work/resume-gpu-performance-1026` | Derive and review bounded runtime clock/voltage changes through existing owners and firmware notification |
-| Resident performance service | `work/resume-resident-performance-1026` | Implement runtime clock authority and bounded stopped-NPU retuning for the microSD-booted service, then compose with GPU control |
-| Native camera resolutions | `work/resume-camera-modes-1026` | Implement the reviewed full OV5640 UYVY size range, bounded memory profile and table capacity for still and finite-stream capture |
+| Storage read service DMA | `work/resume-storage-read-dma-1026` | Connect the existing DMA reader to copied 64-sector service requests while preserving client acknowledgment and profile-specific bounds |
+| Shared camera/accelerator integration | Coordinator and existing device owners | Reconcile compiled dependencies after merging approved camera modes and GPU power control; run only affected integration checks |
+| Radio integration assessment | Radio owner | Identify the next native Wi-Fi/Bluetooth gap from current consumers and accepted evidence; preserve unresolved fitted-supply and physical-operation requirements |
 
 Independent reviewers cover CPU/thermal/DRAM, accelerator operation and peripheral
 integration. Workers reuse successful evidence and submit focused checks. The
@@ -226,8 +226,8 @@ be pruned.
   matching answer; uncertain changes retain resources. Twelve focused cases,
   PLL-wait expiry, actual mailbox sanitizer checks and native caller compilation
   pass under `resident-performance-1026/retune-snapshot/`. The application and
-  restart deadline remain unchanged. Resident performance card admission is
-  still in progress; this dependency does not establish physical retuning.
+  restart deadline remain unchanged. The resident performance integration below
+  uses this interface; physical retuning remains unqualified.
 - **The supervised eight-worker CPU/GPU/NPU image is integrated.**
   GPU recognition and the finite ShuffleNet NPU application start independently.
   Admission rejects shared-client and fixed-owner collisions before provider
@@ -250,6 +250,27 @@ be pruned.
   adds 1,664 code bytes, 208 read-only bytes and 128 state bytes relative to the
   supervised composition. Stage 2 is reused unchanged. Physical cold startup,
   reset retirement, combined clock behavior and thermal operation remain open.
+- **GPU and resident performance control are implemented and independently reviewed.**
+  The GPU owner switches between the default 1008 MHz/960 mV and optional
+  600 MHz/800 mV after acknowledged firmware idle. It orders voltage and clock
+  changes, publishes the firmware's new rate and time correlation, and waits
+  for idle cancellation before admitting work. Uncertain completion retains
+  resources. The existing thermal owner and service queues handle requests;
+  no task or heap allocation is added. Focused firmware, power-provider, engine,
+  service and actual-image checks pass under `resume-gpu-performance-20261026/`.
+  The supervised eight-worker CPU/GPU/NPU low-boot image builds; its code growth
+  is 28,480 bytes against the fixed-rate combined image, including CPU/NPU
+  performance support.
+  The resident eight-worker CPU/GPU/NPU high-boot image also builds. Card
+  admission binds its linked operating points, finite CPU-change budget,
+  exclusive GPU rail control and runtime clock/recovery authority. Twenty-one
+  card cases and six actual native admission/USB cases pass under
+  `resident-performance-1026/final-snapshot/`. The latter exercise requests
+  after seventy seconds, with thermal publication modeled. The image adds
+  28,512 code bytes and 1,536 BSS bytes against the fixed-rate resident image;
+  the pool boundary, four card extents and 1,176-byte session remain unchanged.
+  The accepted 32,456-byte monitor is reused. Physical live switching, thermal
+  response, concurrent workloads and cold reset/retirement remain unqualified.
 - **OS thermal qualification support is implemented.** The session can lower
   the CPU critical threshold to 70 °C; zero retains the normal policy. A
   bounded binary report preserves the first recognition interval's temperature
@@ -391,6 +412,16 @@ be pruned.
   functions; actual streaming and preserved still images pass. No camera is
   attached; electrical compatibility, physical images, coherence and drain
   remain unqualified.
+  Native still and finite-stream capture now support all ten existing OV5640
+  UYVY sizes through 2592 × 1944; VGA remains the default. Large modes use a
+  camera-only 32 MiB memory reservation and a sized IOMMU table that covers up
+  to five windows. Admission binds the actual linked mode and memory ranges
+  before mapping them. The 10,077,696-byte maximum frame passes the modeled
+  capture, held-slot copy and fragmented USB path without per-frame allocation.
+  Focused layout, mapping, actual-image admission, capture and prepared-bundle
+  checks pass under `camera-modes-1026/final-snapshot/`. Existing capture and
+  transport evidence is reused where relevant inputs remain unchanged. Physical
+  capture, memory visibility, timing and drain remain unqualified.
 - **Do not run GPU set `board-bundles-20261025-31`.** It repeats the qualified
   eight-job session with the older image, which lacks the shutdown on every
   failure path.

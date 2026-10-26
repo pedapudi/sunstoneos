@@ -4667,6 +4667,30 @@
   "summary": "Per-core time model of mimus linear layers with exact sums on the GPU.",
   "usb": false
  },
+ "gpu-performance-linked.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--output"
+  ],
+  "summary": "Execute the actual OS GPU performance bridge with bounded service effects.",
+  "usb": false
+ },
+ "gpu-performance.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--output",
+   "--sources"
+  ],
+  "summary": "Check the selected firmware ABI, GPU transition providers and shared engine.",
+  "usb": false
+ },
  "gpu-recognition-engine.py": {
   "cache_areas": [],
   "docs": [
@@ -8119,7 +8143,6 @@
   "pure_host": false,
   "required_arguments": [
    "--build",
-   "--cpu-session",
    "--output"
   ],
   "summary": "Linked combined performance/NPU admission and USB diagnostics.",
