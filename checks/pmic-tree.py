@@ -15,8 +15,8 @@ supply consumer accept. This check fails when:
   include/a733_gpu_opp.h), or its native adapter can write any register
   other than the S_TWI0 data and control registers. The user approved the
   GPU's 960 mV on 2026-10-25;
-- a source other than the GPU platform (drivers/gpu/a733_gpu_platform.c) and
-  the CPU clock driver submits a selector write;
+- a source other than the GPU platform (drivers/gpu/a733_gpu_platform.c),
+  the CPU clock driver and the CPU step's private rail helper submits a selector write;
 - a source outside drivers/power names the S_TWI0 interrupt (GIC-600 INTID
   235), which only the provider may use;
 - the native adapter's register accessors leave the barrier placement of
@@ -74,11 +74,11 @@ ADAPTER_FILES = {Path('drivers/power/a733_pmic_native.c'), Path('include/a733_pm
 # The only callers of the selector write, with the rail argument each call
 # may pass: the GPU platform writes DCDC4 before the GPU's first ON; the CPU
 # clock driver writes its domain's rail, DCDC3 or DCDC5; and the CPU
-# operating-point step images of board bundles 20 to 24 and 30 to 32 (docs/designs/cpu-top-opp.md)
-# write DCDC3 alone, with CPU-B's clock held.
+# operating-point steps use a private helper for DCDC3 with CPU-B held and
+# the final rail-return bundle's DCDC5 with CPU-L and the DSU held.
 WRITERS = {Path('drivers/gpu/a733_gpu_platform.c'): {'A733_RAIL_DCDC4'},
            Path('drivers/clock/a733_cpu_clock.c'): {'rail_of(c->cluster)'},
-           Path('apps/board-bundles-power/cpu-opp-step.c'): {'A733_RAIL_DCDC3'}}
+           Path('apps/board-bundles-power/cpu-rail-change.h'): {'rail'}}
 
 
 def write_rails(text):
@@ -206,7 +206,7 @@ def main():
     assert not problems, f'{len(problems)} problem(s)'
     print(f'PASS PMIC tree facts: no PSCI CPU_OFF or suspend in {scanned} sources, selector writes '
           'only to DCDC3 and DCDC5 and to DCDC4 at GPU operating-point voltages, from the CPU clock driver, the GPU '
-          'platform and the CPU operating-point step image (DCDC3) only, each call naming only its rails, INTID 235 only in the provider, no lock in the native adapter\'s '
+          'platform and the CPU step rail helper (DCDC3 and DCDC5) only, each call naming only its rails, INTID 235 only in the provider, no lock in the native adapter\'s '
           'per-phase time read or per-access ownership check, no task check per access, the adapter\'s '
           'barrier placement, adapter '
           'operations named only by the provider, its adapter and the bundle forwarders')
