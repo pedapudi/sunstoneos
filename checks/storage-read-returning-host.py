@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""The host tool of the returning SD0 read image: signing, input and decoding.
+
+usage: storage-read-returning-host.py --output NEW_DIRECTORY
+
+Runs tools/storage-read-returning.py on model DDR and survey records, an
+approval request and approvals written here, and logs built from the input's
+plan, and requires:
+
+- sign: refuses a survey that failed, ran on another port, or ran on another
+  node or ROM identity than the DDR start, and an approval already signed;
+- input: refuses an unsigned approval, an approval signed for another
+  lifetime, an approval older than the DDR record, an approval for the other
+  bundle and an approval with one requested field not true; accepts the signed
+  approval and writes a 2192-byte input whose header and plan decode back;
+- decode: accepts a complete log and computes the throughput summary;
+  refuses a read line whose sector differs from the plan, a missing read count
+  and a card line for another profile; reports a window stop as incomplete;
+- apps/storage-read-returning/controlled.json: the kernel runner's parser
+  accepts it, and a stopped log matches only the sd-stopped outcome.
+
+No board, USB or queue access.
+"""
+import argparse
+import binascii
+import importlib.util
+import json
+import os
+from pathlib import Path
+import struct
+import time
+
+ROOT = Path(__file__).resolve().parents[1]
+spec = importlib.util.spec_from_file_location('sd_returning_tool', ROOT / 'tools/storage-read-returning.py')
+tool = importlib.util.module_from_spec(spec); spec.loader.exec_module(tool)
+CONFIG = {'fabric': [0x03000002, 0x83000000, 0x84000000], 'fabric_hz': [200000000, 600000000, 400000000],
+          'pmic_pins': [[2, 1, 1], [2, 1, 1]], 'expected_pins': [[3, 0, 1], [3, 0, 1], [15, 0, 1], [3, 0, 1],
+                                                                  [15, 0, 1], [3, 0, 1], [15, 0, 1]],
+          'desired_pins': [[2, 1, 0], [2, 1, 0], [2, 1, 2], [2, 1, 0], [2, 1, 0], [2, 1, 0], [0, 1, 0]]}
+REQUEST = {'fields': {'A': {'initial': ['authorize_one_cmd0_initialization']}, 'B': {'topology': ['pf_bank_voltage_writer_exclusive']}}}
+
+
+def refused(call, text):
+    try: call()
+    except ValueError as error:
+        assert text in str(error), (text, str(error)); return str(error)
+    raise AssertionError('accepted: ' + text)
+
+
+def lifetime(root, name, node='/dev/bus/usb/003/051', identity=(7, 2142, 1097010, 0, 0), port='3-3', passed=True):
+    ddr, survey = root / f'{name}-ddr', root / f'{name}-survey'
+    ddr.mkdir(); survey.mkdir()
+    (ddr / 'session.json').write_text(json.dumps({'complete': True, 'device': node, 'node_identity': list(identity),
+        'result': {'magic': 0x53524444, 'stage': 5, 'board_result': 0, 'dram_mib': 4096}, 'model': 'MODEL-NOT-PHYSICAL'}))
+    past = time.time() - 60; os.utime(ddr / 'session.json', (past, past))
+    gates = {k: True for k in ('svc', 'little_endian', 'mmu_caches_endian_off', 'primary_mpidr', 'frequency',
+                               'counter_monotonic')}
+    (survey / 'session.json').write_text(json.dumps({'complete': passed, 'sram_restored': True, 'rom_usable': True,
+        'node': node, 'identity': list(identity), 'port': port, 'result': {'launcher_gates': gates},
+        'model': 'MODEL-NOT-PHYSICAL'}))
+    return ddr, survey
+
+
+def approval(path, bundle, fields):
+    path.write_text(json.dumps({'bundle': bundle, 'reviewer': 'MODEL', 'reviewed_at': '2026-10-25T00:00:00+00:00',
+                                'fields': fields, 'signature': None}))
+    return path
+
+
+def log_for(raw, outcome='complete', reads=None, profile=2, first=None):
+    given = tool.parse_input(raw); plan = given['plan']
+    reads = len(plan) if reads is None else reads
+    lines = ['SD0 returning start', f'SD_PROFILE=0x{profile:016x}',
+             'CARD ' + '1' * 32 + ' ' + '2' * 32 + ' c0ff8000 aaaa 0000000001dacc00 0235800300000000 '
+             f'{(profile | 4 << 8 | (1 if profile == 2 else 3) << 16):08x} {50000000 if profile == 2 else 150000000:08x} '
+             '00000000 0000000000000000 0001e240']
+    for i in range(reads):
+        f, b = plan[i]
+        if first is not None and i == 0: f = first
+        lines.append(f'R {i:03x} {f:08x} {b:02x} {100 + 10 * b:08x} {binascii.crc32(bytes(512 * b)):08x}')
+    lines += [f'D{r} ' + '00' * 64 for r in range(8)]
+    lines += [f'SD_READS=0x{reads:016x}', f'SD_PLAN=0x{len(plan):016x}', 'SD_PMIC_PARKED=0x0000000000000001']
+    lines.append('COMPLETE SD0 returning read' if outcome == 'complete' else 'INCOMPLETE SD0 returning read: ' + outcome)
+    return '\n'.join(lines) + '\n'
+
+
+def main(out):
+    out.mkdir(parents=True, exist_ok=False)
+    request = out / 'approval-request.json'; request.write_text(json.dumps(REQUEST))
+    results = {}
+    ddr, survey = lifetime(out, 'a')
+    other_ddr, other_survey = lifetime(out, 'other', node='/dev/bus/usb/003/060', identity=(7, 9, 9, 0, 0))
+    bad_port = lifetime(out, 'port', port='3-1')[1]
+    failed = lifetime(out, 'failed', passed=False)[1]
+    a = approval(out / 'approval-A.json', 'A', {'initial': {'authorize_one_cmd0_initialization': True}})
+    results['sign_refusals'] = [
+        refused(lambda: tool.sign(a, ddr, failed, 'MODEL'), 'survey did not pass'),
+        refused(lambda: tool.sign(a, ddr, bad_port, 'MODEL'), 'another port'),
+        refused(lambda: tool.sign(a, ddr, other_survey, 'MODEL'), 'another node or ROM identity')]
+    plan = tool.throughput().throughput_plan(0, 4194304)
+    input_refusals = [refused(lambda: tool.approved(a, request, ddr, survey, 'A'), 'not signed for this lifetime')]
+    tool.sign(a, other_ddr, other_survey, 'MODEL')
+    input_refusals.append(refused(lambda: tool.approved(a, request, ddr, survey, 'A'), 'not signed for this lifetime'))
+    a = approval(out / 'approval-A2.json', 'A', {'initial': {'authorize_one_cmd0_initialization': True}})
+    tool.sign(a, ddr, survey, 'MODEL')
+    results['sign_refusals'].append(refused(lambda: tool.sign(a, ddr, survey, 'MODEL'), 'already signed'))
+    tool.approved(a, request, ddr, survey, 'A')
+    value = json.loads(a.read_text()); value['signature']['signed_at'] = '2026-01-01T00:00:00+00:00'
+    old = out / 'approval-A3.json'; old.write_text(json.dumps(value))
+    input_refusals.append(refused(lambda: tool.approved(old, request, ddr, survey, 'A'), 'older than'))
+    input_refusals.append(refused(lambda: tool.approved(a, request, ddr, survey, 'B'), 'another bundle'))
+    false = approval(out / 'approval-A4.json', 'A', {'initial': {'authorize_one_cmd0_initialization': False}})
+    tool.sign(false, ddr, survey, 'MODEL')
+    input_refusals.append(refused(lambda: tool.approved(false, request, ddr, survey, 'A'), 'not approved'))
+    results['input_refusals'] = input_refusals
+    raw = tool.input_bytes(2, 0x55, CONFIG, plan, ids=(3, 5, 7))
+    assert len(raw) == 2192 and struct.unpack_from('<4I', raw, 56)[:3] == (2, 0x00300000, 256)
+    given = tool.parse_input(raw)
+    assert given['plan'] == [tuple(p) for p in plan] and given['profile'] == 2 and given['generation'] == 0x55
+    assert struct.unpack_from('<3I', raw, 72) == tuple(CONFIG['fabric']) and raw[96:102] == bytes([2, 1, 1, 2, 1, 1])
+    (out / 'input.bin').write_bytes(raw)
+    complete = tool.decode_log(log_for(raw), raw, 0)
+    assert complete['complete'] and len(complete['reads']) == 256 and complete['card']['card_hz'] == 50000000
+    assert set(complete['throughput']) >= {'sequential', 'random', 'single', 'per_block_us', 'per_request_us'}
+    window = tool.decode_log(log_for(raw, 'window', reads=10), raw, 1)
+    assert not window['complete'] and window['outcome'] == 'window' and len(window['reads']) == 10
+    results['decode_refusals'] = [
+        refused(lambda: tool.decode_log(log_for(raw, first=99), raw, 0), 'differs from the input plan'),
+        refused(lambda: tool.decode_log(log_for(raw).replace('SD_READS=0x0000000000000100\n', ''), raw, 0), 'read count'),
+        refused(lambda: tool.decode_log(log_for(raw, profile=3), raw, 0), 'another profile')]
+    results['complete_throughput'] = complete['throughput']
+    # The image's controlled outcomes, as the kernel runner reads them.
+    spec = importlib.util.spec_from_file_location('sd_returning_runner', ROOT / 'tools/check-a733-kernel.py')
+    runner = importlib.util.module_from_spec(spec); spec.loader.exec_module(runner)
+    outcomes = runner.controlled_outcomes((ROOT / 'apps/storage-read-returning/controlled.json').read_text())
+    terminal = {'magic': 0x534b4552, 'stage': 5, 'status': 1, 'end_counter': 1}
+    stopped = log_for(raw, 'stopped', reads=0)
+    found = [t for o in outcomes for t in o['log_contains'] if t in stopped]
+    assert [o['name'] for o in outcomes if runner.controlled_match(o, terminal, runner.fault_lines(stopped),
+            [t for t in o['log_contains'] if t in stopped])] == ['sd-stopped'], found
+    results['controlled_outcomes'] = [o['name'] for o in outcomes]
+    (out / 'result.json').write_text(json.dumps({'passed': True, 'physical_access': False, 'results': results,
+        'scope': 'tools/storage-read-returning.py on model records and logs; no runner, image or board.'}, indent=1) + '\n')
+    print('PASS returning SD0 host tool: signing, input and decoding')
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--output', type=Path, required=True)
+    main(parser.parse_args().output)

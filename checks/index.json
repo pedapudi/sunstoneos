@@ -9489,6 +9489,33 @@
   "summary": "Build and execute only the additive MMC retain API against existing real managers.",
   "usb": false
  },
+ "storage-read-returning-host.py": {
+  "cache_areas": [],
+  "docs": [
+   "apps/storage-read-returning/README.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--output"
+  ],
+  "summary": "The host tool of the returning SD0 read image: signing, input and decoding.",
+  "usb": true
+ },
+ "storage-read-returning.py": {
+  "cache_areas": [],
+  "docs": [
+   "apps/storage-read-returning/README.md",
+   "docs/board-runbooks/sd-uhs.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "'--' + name.replace('_', '-')"
+  ],
+  "summary": "The returning SD0 read image's actual setup, SD task and report under the SD card models.",
+  "usb": false
+ },
  "storage-read-rom-pins.py": {
   "cache_areas": [],
   "docs": [],
