@@ -1,10 +1,9 @@
 # Resident CPU and accelerator performance service
 
-Status: proposed software integration; physical cold-boot and runtime operating
-point qualification remain prerequisites. The target is recorded resident OS
-with eight recognition workers, CPU clock grants, performance commands and the
-selected ShuffleNet NPU application. The GPU performance owner composes with
-this profile when its reviewed implementation lands.
+Status: implemented and checked in the recorded resident OS with eight
+recognition workers, admitted Cortex-A76 cores, CPU clock grants, GPU and
+ShuffleNet model 3. The performance service defaults to HIGH. Physical cold-boot,
+live operating-point transitions and recovery remain unqualified.
 
 ## Reuse the resident owners and command path
 
@@ -15,22 +14,20 @@ startup-only CPU requests. Recognition waits for `os_cpu_clock_ready`.
 The service defaults to HIGH; explicit LOW selects the vendor low points.
 No task, service queue, session field or card extent is required.
 
-Two build/host exclusions currently block this composition: the PERF+RESIDENT
-CMake guard and the card producer's `perf_modes` rejection. Removing them alone
-would leave a real NPU lifecycle defect. `apps/os/npu.c` bounds its finite work
-at 60 seconds and passes that bound to the startup provider. The stopped
-bootstrap remains available to performance requests, but the provider's
-`now`, register-lock entry, lock completion and unlock checks use the expired
-startup deadline. Retunes therefore stop working after that finite workload.
+The resident build admits the performance service. Card preparation requires
+runtime authority in addition to cold-start authority. The NPU application
+still bounds its finite work at 60 seconds; its stopped provider accepts fresh
+command deadlines after that work ends. The provider retains the ownership
+needed to serve those commands for the resident lifetime.
 
 ## Separate finite work from stopped provider operations
 
-Keep the application's work deadline, startup and normal-restart deadline,
+The application keeps its work deadline, startup and normal-restart deadline,
 thermal stop bound and immutable completion report. Local stop retains the
 NPU row, clock, rail, PCK and memory ownership for the resident lifetime.
 Those tokens do not expire merely because the application's work ends.
 
-Add one deadline-taking stopped-retune entry to the existing startup provider:
+The existing startup provider exposes the stopped-retune entry
 `a733_npu_startup_retune_until(startup, mhz, deadline_us)`. The existing retune
 entry remains a wrapper using its original startup deadline. The new entry
 uses a command-local deadline throughout its time, lock and completion checks;
@@ -39,18 +36,18 @@ The existing register sequence, five PLL writes and bounded lock observation
 remain the hardware implementation.
 
 The caller must be the bound bootstrap task in STOPPED with the register
-window closed. Before even same-rate success, verify fresh monotonic time,
+window closed. Before even same-rate success, the provider verifies fresh monotonic time,
 retained clock/rail/PCK tokens, the registered domain-4 row and the stopped
-hardware state. Preserve `last_now` across operations. Expired or invalid
+hardware state. It preserves `last_now` across operations. Expired or invalid
 commands refuse before writes. Lost ownership or uncertainty after a write
 retains the provider and ends the board lifetime. This entry permits no
 restart, new inference, resource release or fault recovery.
 
 The thermal owner passes the engine's existing absolute RATE deadline through
 `os_npu_perf_retune`. The deadline is published before the request's release
-store and consumed after its acquire load. Keep the request occupied until
-the matching answer is published; clearing it on pickup must not permit the
-producer to overwrite the deadline. There is one producer and at most one
+store and consumed after its acquire load. The request remains occupied until
+the matching answer is published, preventing the producer from overwriting
+the deadline during execution. There is one producer and at most one
 outstanding command. The bootstrap checks board liveness, live stopped proof
 and the fixed deadline before invoking the provider. An engine timeout ends
 the board lifetime and cannot authorize another command.
@@ -63,7 +60,7 @@ the CPU grant's approval identity. Stage 2 stamps fresh board/grant epochs and
 the slot generation before authenticating the complete session. The existing
 904- and 1,176-byte CPU and CPU+NPU session forms remain adequate.
 
-Add an explicit performance section to that policy. It binds the linked boot
+An explicit performance section in that policy binds the linked boot
 mode and operation 8, the owned blocks, vendor high/low points and the CPU
 change budget per boot. Runtime-transition evidence must cover thermal
 interruption, retained failure and watchdog recovery. A startup-only policy
@@ -109,30 +106,41 @@ An uncertain transition publishes failure, calls `board_fail` through the
 thermal owner, stops watchdog renewal and retains resources for qualified
 cold recovery. Idle service operation requires no artificial NPU heartbeat.
 
-## Ownership, costs and focused validation
+## Bounds and software validation
 
-The resident integration owns `card.py`, resident-specific admission and host
-fixtures, the PERF+RESIDENT guard, and the NPU stopped-retune deadline path.
-The GPU integration owns `perf.c/.h`, the shared mode engine, GPU transition
-providers and GPU capability guards. It will apply the agreed deadline
-argument at the NPU call site; shared changes are integrated sequentially.
+The complete resident image adds 28,512 allocated CODE bytes and 1,536 BSS
+bytes relative to the accepted fixed-point resident CPU/GPU/NPU image.
+Initialized data remains 1,118,048 bytes, including the NPU payloads in
+non-executable RAM. CODE has 732,848 bytes free within its existing 2 MiB
+mapping. The write-back device pool still ends at `0x41b27000`, leaving
+888,832 bytes before the uncached pool. The reused monitor is 32,456 bytes
+within its fixed 32 KiB limit. The session remains 1,176 bytes with four card
+extents. No task, stack, heap allocation or model copy was added.
 
-The runtime addition is one deadline publication per NPU retune and constant
-ownership/time checks per command. It adds no work per inference, frame or
-idle tick, and no new task, buffer copy or repeated model authentication.
-Record actual linked code/data costs and preserve fixed CODE, pool and
-32 KiB monitor bounds. No stage-2 sequence or session-layout change is planned.
+The stopped NPU command adds an eight-byte deadline mailbox and constant
+ownership/time checks. A modeled 852-to-492 MHz retune after 70 seconds
+performs the existing five writes, 65 register reads and 11 validated clock
+reads in 236 modeled microseconds. Same-rate success performs no writes,
+seven register reads and five validated clock reads. These counts include
+ownership checks; modeled elapsed time does not establish physical latency.
+Inference and idle ticks incur no new retune work.
 
-Focused checks cover a stopped retune after 60 seconds, stale deadlines,
-same-rate ownership checks, mailbox exclusion and retained post-write failure.
-Native resident checks exercise operation 8's epoch and report behavior,
-finite CPU budget refusal, thermal precedence and terminal watchdog health.
-The actual card producer must bind runtime authority and reject wrong boot
-mode, points, image/SID, budget or startup-only evidence. Reuse the unchanged
-card generation/stamping and arithmetic evidence. Build the complete intended
-resident composition once the GPU source is ready; no hardware access or
-inference replay is part of this work.
+Thirteen selected provider cases cover late lifetime, same-rate ownership,
+expired commands, busy locks and retained failure, including expiry during
+PLL completion. The actual OS mailbox fixture covers queued/executing
+exclusion and matching answers. The final resident card producer passes
+21 focused authority/admission cases. Six linked native cases cover resident
+admission and operation 8 after 70 seconds, including stale epochs and an
+occupied mailbox. Those native cases model the thermal task's publication;
+they do not claim a completed hardware transition.
 
+The accepted GPU service, shared-engine and CPU/NPU owner checks supply the
+transition, exhausted-budget and thermal-interruption evidence. Their reviewed
+sources are integrated unchanged. Cold monitor, card generation/stamping and
+recognition arithmetic evidence are reused without replay. All generated card
+records are explicitly modeled and nondeployable. Physical runtime switching,
+thermal recovery and cold retirement still require the bound evidence described
+above.
 
 ## Reproduce the stopped-retune mailbox check
 
