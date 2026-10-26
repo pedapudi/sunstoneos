@@ -66,7 +66,6 @@ does not establish recovery from a fault.
 
 | Work | Branch | Immediate deliverable |
 | --- | --- | --- |
-| Storage read service DMA | `work/resume-storage-read-dma-1026` | Connect the existing DMA reader to copied 64-sector service requests while preserving client acknowledgment and profile-specific bounds |
 | Headset idle audio | `work/radio-assess-1026` | Close confirmed idle SCO/eSCO audio and reopen on the existing paired control connection, with drained records and a fresh generation |
 | Native SPI3 DMA design | SPI owner | Connect the existing DMA provider to transfers beyond FIFO capacity, preserving exact peer-command authority and the 1.8 V route |
 | HDMI audio streaming design | HDMI audio owner | Extend the existing finite playback path with bounded refill, DMA ownership and underrun/stop handling using existing audio services |
@@ -333,6 +332,20 @@ be pruned.
   remain intact. Actual-ELF comparison and four affected compatibility cases
   pass under `resume-maintenance-usb-1026/snapshot/`. Added cost is 100 code
   bytes and 32 bytes in the task frame, with no added buffers or BSS.
+- **The ordinary SD read service uses DMA for high-speed profiles.** Two native
+  clients and copied USB reads can request up to sixty-four sectors. Legacy SD
+  and optional eMMC retain eight-sector PIO. Private descriptors, complete cache
+  synchronization and successful controller take precede copied-slot publication;
+  the correct client's acknowledgment permits reuse. Profile limits come from
+  the authenticated session and actual image, not returned metadata.
+  Fifteen linked cases, native SD/eMMC builds and focused host/capture checks
+  pass under `resume-storage-read-dma-1026/snapshot-final/`. For the same modeled
+  32 KiB read, commands fall from eight to one, CPU FIFO reads from 8,192 words
+  to zero, and worker ticks from forty to five. Five fixed buffers add 143,360
+  BSS bytes; function code grows by 744 bytes, within the existing linked text
+  extent. The separately integrated power changes add 48 function bytes.
+  Existing DMA core evidence is reused. Physical DMA, cache visibility and
+  throughput remain unqualified; no card writes or board operations ran.
 - **Paired DRAM training records are implemented.** Selection chooses the newest
   eligible record; updates write the standby payload before its header and
   preserve the other copy. Thirty-two focused cases, including interruption

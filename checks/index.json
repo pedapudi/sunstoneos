@@ -9910,6 +9910,38 @@
   "summary": "Check host completion against preserved actual native SD serialization frames.",
   "usb": false
  },
+ "storage-read-dma-host.py": {
+  "cache_areas": [
+   "host"
+  ],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--fixture",
+   "--native",
+   "--output",
+   "--emmc",
+   "--emmc-evidence"
+  ],
+  "summary": "Profile-specific admission and host capture of actual native DMA records.",
+  "usb": false
+ },
+ "storage-read-dma.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--case",
+   "--image",
+   "--session",
+   "--output"
+  ],
+  "summary": "Actual supervised SD service with the existing card/IDMAC ownership model.",
+  "usb": false
+ },
  "storage-read-fixture.py": {
   "cache_areas": [
    "evidence"

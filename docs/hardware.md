@@ -852,11 +852,19 @@ to the stated scope:
   100 code bytes and 32 task-frame bytes with no additional buffers.
   No profile has written physical media or measured DMA backup throughput. The separate
   [supervised read-only SD service](storage-read-application.md) identifies the
-  card and serves repeated ranges of one to eight sectors to two native clients.
+  card and serves repeated ranges to two native clients: up to sixty-four sectors
+  through DMA in high-speed profiles, or eight sectors through PIO in legacy
+  profiles. Optional eMMC remains eight-sector PIO.
   One controller owner copies results into separate client slots; matching
   acknowledgments permit slot reuse. The native task reads its configured range
-  twice, and USB uses the same API. One image, eleven modeled native cases and
-  host/package checks pass under `storage-read-service-20261018/`.
+  twice, and USB uses the same API. Actual image and session admission bind the
+  transfer limits and private memory ranges. Fifteen linked cases, native SD/eMMC
+  builds and focused host/capture checks pass under
+  `resume-storage-read-dma-1026/snapshot-final/`. The same modeled 32 KiB read uses
+  one command instead of eight, no CPU FIFO word reads instead of 8,192, and five
+  worker ticks instead of forty. Fixed buffers add 143,360 BSS bytes; function
+  code grows by 744 bytes. Physical DMA, cache visibility and throughput remain
+  unqualified. Earlier PIO evidence remains under `storage-read-service-20261018/`.
   Negotiated SD profiles now select four-bit default speed up to the card's CSD
   limit and 25 MHz, or require four-bit high speed at 50 MHz. The original
   one-bit 400 kHz profile is preserved. Native SCR/ACMD6/CMD6, actual provider,
