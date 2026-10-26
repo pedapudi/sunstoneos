@@ -16,9 +16,13 @@
 #define SUNXI_SMHC_IMASK 0x30u
 #define SUNXI_SMHC_RINT 0x38u
 #define SUNXI_SMHC_STATUS 0x3cu
+#define SUNXI_SMHC_FTRGL 0x40u /* FIFO watermarks and IDMAC burst size. */
+#define SUNXI_SMHC_CBCR 0x48u /* Bytes moved between card and controller. */
 #define SUNXI_SMHC_A12A 0x58u
 #define SUNXI_SMHC_NTSR 0x5cu
 #define SUNXI_SMHC_DMAC 0x80u
+#define SUNXI_SMHC_DLBA 0x84u
+#define SUNXI_SMHC_IDST 0x88u
 #define SUNXI_SMHC_IDIE 0x8cu
 #define SUNXI_SMHC_THLD 0x100u
 #define SUNXI_SMHC_EDSD 0x104u
@@ -65,4 +69,25 @@
 #define SUNXI_SMHC_STATUS_BUSY ((1u << 10) | (1u << 9) | (15u << 4)) /* Data FSM, card DAT0, command FSM. */
 #define SUNXI_SMHC_STATUS_FIFO_LEVEL(status) (((status) >> 17) & 0x7ffu)
 #define SUNXI_SMHC_FIFO_DEPTH 256u /* Words; FIFOTH documents 256 x 32 bits. */
+
+/* Internal DMA (IDMAC), as the board kernel's sunxi-mmc.c and sunxi-mmc.h use
+ * it at 2ac08e8c (H:148-149, 254-291). GCTRL bit 31 routes the FIFO to the CPU;
+ * IDMAC needs it clear. */
+#define SUNXI_SMHC_GCTRL_FIFO_RESET (1u << 1)
+#define SUNXI_SMHC_GCTRL_DMA_RESET (1u << 2)
+#define SUNXI_SMHC_GCTRL_DMA_ENABLE (1u << 5)
+#define SUNXI_SMHC_GCTRL_CPU_FIFO (1u << 31)
+#define SUNXI_SMHC_DMAC_RESET (1u << 0)
+#define SUNXI_SMHC_DMAC_ON 0x82u /* Fixed burst and IDMAC on (K:958). */
+#define SUNXI_SMHC_FTRGL_VALUE 0x200700f8u /* 8-word bursts, receive 7, transmit 248 (V:52). */
+#define SUNXI_SMHC_IDST_RECEIVE (1u << 1)
+/* Fatal bus error, descriptor unavailable, card error summary, abnormal summary. */
+#define SUNXI_SMHC_IDST_ERRORS ((1u << 2) | (1u << 4) | (1u << 5) | (1u << 9))
+#define SUNXI_SMHC_IDST_CLEAR 0x337u /* K:1171. */
+#define SUNXI_SMHC_IDST_STATE(v) (((v) >> 13) & 15u) /* 0: idle. */
+#define SUNXI_SMHC_DES_DIC (1u << 1)
+#define SUNXI_SMHC_DES_LD (1u << 2)
+#define SUNXI_SMHC_DES_FD (1u << 3)
+#define SUNXI_SMHC_DES_CH (1u << 4)
+#define SUNXI_SMHC_DES_OWN (1u << 31)
 #endif

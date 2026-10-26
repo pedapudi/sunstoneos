@@ -111,7 +111,7 @@ static void storage_setup_selected(enum sunxi_mmc_kind kind,enum a733_mmc_emmc_h
     }
     const struct a733_mmc_platform_ops o={storage_now,storage_current,storage_admit,storage_enter,
         storage_leave,storage_retain,storage_read,storage_write,storage_barrier,storage_outside,
-        storage_read_fifo,storage_write_fifo};
+        storage_read_fifo,storage_write_fifo,NULL};
     assert(a733_mmc_platform_init(&m.platform,&c,&o,&m,&m.power.clocks,&m.power.pins,&m.power.rails,&m.power.provider));
     assert(!m.accesses);
 }

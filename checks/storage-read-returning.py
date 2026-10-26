@@ -85,10 +85,11 @@ def module(name, path):
 
 modes = module('sd_returning_modes', ROOT / 'checks/storage-read-sd-modes.py')
 service = modes.service
+idmac = module('sd_returning_idmac', ROOT / 'checks/storage-read-idmac.py')
 host = module('sd_returning_host', ROOT / 'tools/storage-read-returning.py')
 LAYOUTS = ('sdrt', 'a733_mmc_platform', 'sunxi_mmc', 'sunxi_mmc_card', 'a733_pmic', 'a733_pmic_slot',
-           'a733_pmic_snapshot', 'a733_platform_locks')
-HOOKS = ('a733_counter_clock_now', 'sdrt_ticks', 'aarch64_device_translate',
+           'a733_pmic_snapshot', 'a733_platform_locks', 'sunxi_mmc_config', 'a733_mmc_platform_config')
+HOOKS = ('a733_counter_clock_now', 'sdrt_ticks', 'aarch64_device_translate', 'aarch64_device_cache',
          'xTaskGetCurrentTaskHandle', 'xTaskGetSchedulerState', 'xQueueGetMutexHolder', 'xQueueCreateMutexStatic',
          'vTaskDelay', 'a733_platform_lock_enter', 'a733_platform_lock_leave', 'a733_platform_lock_retain',
          'a733_rail_acquire', 'a733_rail_poll', 'a733_rail_status', 'a733_rail_retain', 'a733_pmic_identity',
@@ -109,13 +110,13 @@ PORT_3_3 = {0x020020a0: 0xff126310, 0x02003908: 0x8fff0fff, 0x02003988: 0x0fff00
             0x02002500: 0x03000002, 0x02002580: 0xc3000000, 0x02002588: 0x84000000}
 
 
-class Card(modes.UhsMachine):
+class Card(idmac.Idmac, modes.UhsMachine):
     """The UHS-capable card, PF bank and controller models of the supervised SD0 checks, driving this image."""
 
     def __init__(self, image, profile, variant='nominal'):
         # The models' state, set as their constructors set it; the board
         # image's fields that those constructors poke do not exist here.
-        self.image = image; self.variant = variant; self.profile = profile
+        self.image = image; self.variant = variant; self.profile = profile; self.dma_init()
         self.cpu = Uc(UC_ARCH_ARM64, UC_MODE_ARM); self.cpu.reg_write(UC_ARM64_REG_PSTATE, 5)
         # CNTFRQ_EL0 at the board's 24 MHz, which the counter clock and the
         # GPU resource adapter check at initialization.
@@ -145,6 +146,7 @@ class Card(modes.UhsMachine):
         csd = (1 << 126) | (9 << 80) | ((5 | (1 << 10)) << 84) | (0x7fff << 48) | (0x32 << 96)
         self.csd = [(csd >> (96 - 32 * i)) & 0xffffffff for i in range(4)]; self.cid = [0x12345678 + i for i in range(4)]
         self.hooks = {image.address(n): n for n in HOOKS}
+        if variant=='write-bit': self.hooks[image.address('core_write')]='core_write'
         self.base = image.address('sdrt'); self.layout = image.layouts['sdrt']
         self.cpu.hook_add(UC_HOOK_CODE, self.code)
         self.cpu.hook_add(UC_HOOK_MEM_READ, self.read_mmio, begin=0x02000000, end=0x07ffffff)
@@ -160,13 +162,19 @@ class Card(modes.UhsMachine):
         name = self.hooks.get(a)
         if not name: return
         args = [cpu.reg_read(UC_ARM64_REG_X0 + i) for i in range(8)]
-        if name == 'a733_counter_clock_now': self.write(args[1], self.time, 8); self.ret(1)
+        if name == 'core_write':
+            if args[1]==0x18 and args[2]&(1<<9) and args[2]&63 in (17,18):
+                cpu.reg_write(UC_ARM64_REG_X0+2,args[2]|(1<<10))
+            return
+        if name == 'a733_counter_clock_now': self.time += 1; self.write(args[1], self.time, 8); self.ret(1)
         # Model time advances 10 us at each counter read, so a read's
         # first-poll-to-completion time counts its polls and is never zero.
         elif name == 'sdrt_ticks': self.time += 10; self.ret(self.time * 24)
+        elif name == 'aarch64_device_cache': self.ret(self.dma_cache(*args[:3]))
         elif name == 'aarch64_device_translate':
-            self.cpu.mem_write(args[2], struct.pack('<Q2I', args[0], 0xff if args[0] >= 0x40000000 else 0,
-                                                    3 if args[0] >= 0x40000000 else 2)); self.ret(1)
+            nc = 0x42000000 <= args[0] < 0x42200000
+            self.cpu.mem_write(args[2], struct.pack('<Q2I', args[0], 0x44 if nc else 0xff if args[0] >= 0x40000000 else 0,
+                                                    2 if nc or args[0] < 0x40000000 else 3)); self.ret(1)
         elif name == 'xTaskGetCurrentTaskHandle': self.ret(1)
         elif name == 'xTaskGetSchedulerState': self.ret(2)
         elif name == 'xQueueGetMutexHolder': self.ret(1 if self.held else 0)
@@ -200,16 +208,18 @@ class Card(modes.UhsMachine):
 
     # Profile 3 uses the UHS-I card; profile 2 the high-speed card of the same check.
     def read_mmio(self, cpu, access, a, size, value, unused):
+        self.dma_read_progress(a)
         (modes.UhsMachine if self.profile == 3 else modes.Machine).read_mmio(self, cpu, access, a, size, value, unused)
         if self.variant in ('crc-read', 'crc-read-stall-reset') and a == 0x04020038 and self.data_command in (17, 18) and self.fifo >= 64:
             v = self.read(a) | (1 << 7); self.write(a, v); self.trace[-1][2] = v  # data CRC error
 
     def write_mmio(self, cpu, access, a, size, value, unused):
+        if self.dma_write_mmio(a, value): return
         if self.final and a == 0x04020018 and value & (1 << 21) and self.variant == 'stall-update':
             self.trace.append(['write', a, value]); self.regs[a] = value; return  # START never clears
         if self.final and a == 0x04020000 and value & 6 and self.variant == 'stall-reset':
             self.trace.append(['write', a, value]); self.regs[a] = value; return  # the reset bits never clear
-        if self.final and a == 0x02002d00:
+        if self.final and a in (0x02002d00,0x02002d0c):
             self.trace.append(['write', a, value]); self.regs[a] = value; return  # module clock gate
         (modes.UhsMachine if self.profile == 3 else modes.Machine).write_mmio(self, cpu, access, a, size, value, unused)
 
@@ -250,6 +260,7 @@ def run_case(image, raw, profile, variant, registers=None):
     # The final quiesce writes the controller without the register lock,
     # after every provider has stopped; waive the model's lock assertion.
     before = len(m.trace); m.held = True; m.final = True
+    m.dma_at_stop=bool(m.regs.get(0x04020080,0)&0x80 or m.regs.get(0x04020000,0)&32)
     if variant == 'stall-update-final': m.variant = 'stall-update'
     if variant == 'crc-read-stall-reset': m.variant = 'stall-reset'
     clock_off = m.call('sdrt_clock_off'); m.held = False; m.final = False
@@ -259,21 +270,53 @@ def run_case(image, raw, profile, variant, registers=None):
     return m, r, quiet, steps
 
 
+def admission(image):
+    raw=host.input_bytes(2,1,FIXTURE,[(0,8)],ids=(7,9,11))
+    m=Card(image,2);m.cpu.mem_write(0x43000000,raw)
+    assert m.call('sdrt_setup')==1 and m.call('sdrt_bind',2)==1 and m.call('sdrt_step')==2
+    platform=m.base+m.layout['platform'];core=platform+image.layouts['a733_mmc_platform']['core']
+    config=core+image.layouts['sunxi_mmc']['config'];layout=image.layouts['sunxi_mmc_config']
+    original=bytes(m.cpu.mem_read(config,layout['dma']+8));target,copy=0x50070000,0x50072000
+    for area in (0xffffffffffffffc0,1<<34,(1<<34)-512,target):
+        m.cpu.mem_write(target,bytes(4096));m.cpu.mem_write(copy,original);m.write(copy+layout['dma'],area,8)
+        assert m.call('sunxi_mmc_init',target,copy)==0
+        assert bytes(m.cpu.mem_read(target,4096))==bytes(4096)
+    m.cpu.mem_write(copy,original);assert m.call('sunxi_mmc_init',target,copy)==1
+    h=image.layouts['sunxi_mmc'];card=target+h['card'];c=image.layouts['sunxi_mmc_card']
+    m.write(target+h['state'],2);m.write(card+c['sectors'],4096,8);m.write(card+c['sector_addressed'],1,1)
+    before=len(m.trace)
+    for buffer,blocks in ((idmac.AREA,1),(image.address('buffer')+1,1),(1<<34,1),(image.address('buffer'),257)):
+        assert m.call('sunxi_mmc_read',target,0,blocks,buffer,blocks*512,m.time+100000)==0
+    assert len(m.trace)==before and not m.cache_events
+    for area in (0xffffffffffffffc0,1<<34,0x42000000):
+        n=Card(image,2);n.cpu.mem_write(0x43000000,raw)
+        assert n.call('sdrt_setup')==1 and n.call('sdrt_bind',2)==1
+        cfg=n.base+n.layout['config'];n.write(cfg+image.layouts['a733_mmc_platform_config']['dma'],area,8)
+        assert n.call('sdrt_step')==-1 and not n.trace and not n.cache_events
+    return dict(passed=True,core_ranges=8,platform_ranges=3,physical_access=False)
+
+
 def run(elf, board, out, only=()):
     out.mkdir(parents=True, exist_ok=False)
     image = harness.Image(elf, LAYOUTS)
     for name in HOOKS + ('sdrt_setup', 'sdrt_bind', 'sdrt_step', 'sdrt_quiet', 'sdrt_report', 'sdrt'):
         image.address(name)
     checker = host.throughput()
-    plan = checker.throughput_plan(0, 4194304)
+    full_plan=host.dma_plan()
     results = {}
+    if not only or 'admission' in only: results['admission']=admission(image)
     for name, profile, variant in [('profile-2', 2, 'nominal'), ('profile-3', 3, 'nominal'), ('window', 2, 'window'),
                                    ('absent', 2, 'absent'), ('crc-identify', 2, 'crc-identify'),
                                    ('crc-read', 2, 'crc-read'), ('not-parked', 2, 'not-parked'),
                                    ('board-3', 3, 'nominal'), ('board-mbus-skip', 2, 'nominal'),
                                    ('stall-update', 2, 'stall-update-final'),
-                                   ('stall-reset', 2, 'crc-read-stall-reset')]:
+                                   ('stall-reset', 2, 'crc-read-stall-reset')] + [(n,2,n) for n in
+        ('idst-error','idst-late','idst-clear-race','own-stuck','dma-stall','reset-stuck','idle-stuck',
+         'chain-next','chain-flags','chain-buffer','chain-size','chain-spare','write-bit',
+         'cache-before-fail','cache-after-fail','no-idst-receive','tail')]:
         if only and name not in only: continue
+        plan=full_plan if name in ('profile-2','profile-3','board-3','window','not-parked','stall-update') else [(0,8)]
+        if name=='tail': plan=[(33554432-256,256)]
         registers = dict(PORT_3_3)
         if name.startswith('board-'):
             (fabric, fabric_hz) = host.fabric(host.restored([PORT_3_3[a] for a in host.FABRIC]))
@@ -284,41 +327,37 @@ def run(elf, board, out, only=()):
         raw = host.input_bytes(profile, 0x1234567, config, plan, ids=(7, 9, 11))
         m, r, quiet, steps = run_case(image, raw, profile, variant, registers if name.startswith('board-') else None)
         (out / f'{name}.log').write_text(m.log)
+        (out / f'{name}.input.bin').write_bytes(raw)
         value = host.decode_log(m.log, raw, 0 if r > 0 and quiet and m.field('done') == len(plan) else 1)
         reads = value['reads']
         for item in reads:
             assert item['crc32'] == binascii.crc32(service.payload(item['first'], item['blocks'])), item
         writes = [(a, v) for kind, a, v in m.clock_writes if kind == 'write']
-        stalled = r == -1 and value['words'].get('SD_STAGE') in (4, 5)
-        if value['words']['SD_CLOCK_OFF'] == 2:
-            # Stopped before the controller's clock, bus gate and reset were enabled.
-            assert name in ('absent', 'board-mbus-skip') and not writes, name
+        stalled = r == -1 and value['words'].get('SD_STAGE') in (4,5)
+        clock_off=value['words']['SD_CLOCK_OFF']
+        if clock_off==2:
+            assert name in ('absent','board-mbus-skip') and not writes,name
+        elif clock_off==3:
+            assert [a for a,v in writes][-2:]==[0x02002d00,0x02002d0c]
+            assert not writes[-2][1]&(1<<31) and not writes[-1][1]&(1<<16)
         else:
-            expected = [0x04020000] if stalled else []
-            if name == 'stall-reset':
-                expected += [0x02002d00]
-            else:
-                expected += [0x04020004, 0x04020018, 0x04020038]
-                expected += [0x02002d00] if name == 'stall-update' else [0x04020004]
-            assert [a for a, _ in writes] == expected, (name, [hex(a) for a, _ in writes])
-            if stalled: assert writes[0][1] & 6 == 6
-            if name != 'stall-reset':
-                clkcr = writes[1 if stalled else 0][1]
-                assert clkcr & (1 << 31) and not clkcr & (3 << 16) and writes[1 + stalled][1] == 0x80202000
-            if name in ('stall-update', 'stall-reset'):
-                assert value['words']['SD_CLOCK_OFF'] == 3 and not writes[-1][1] & (1 << 31)
-            else:
-                assert value['words']['SD_CLOCK_OFF'] == 1 and not writes[-1][1] & ((1 << 31) | (1 << 16)), name
+            assert clock_off==1 and writes[-1][0]==0x04020004 and not writes[-1][1]&((1<<31)|(1<<16)),name
+            if stalled and m.dma_at_stop:
+                assert [a for a,v in writes][:4]==[0x04020088,0x0402008c,0x04020080,0x04020000],name
+        # A failed DMA read never publishes CPU ownership, even if final
+        # clock-off subsequently stops the engine safely.
+        if r<0: assert not any(e[0]=='invalidate' for e in m.cache_events)
         if name in ('profile-2', 'profile-3', 'board-3', 'stall-update'):
-            assert r == 1 and quiet == 1 and value['complete'] and len(reads) == 256, (name, r, quiet, value['outcome'])
+            assert r == 1 and quiet == 1 and value['complete'] and len(reads) == len(plan), (name, r, quiet, value['outcome'])
             card = value['card']
             assert card['sectors'] == 33554432 and card['bus_width'] == 4
             assert card['card_hz'] == (50000000 if profile == 2 else 150000000)
             if name.startswith('board-'):
                 assert host.parse_input(raw)['profile'] == profile and struct.unpack_from('<3I', raw, 72) == tuple(config['fabric'])
             assert card['timing'] == (1 if profile == 2 else 3)
-            assert value['first_sector_hex'] == service.payload(0, 1).hex()
-            assert set(value['throughput']) >= {'sequential', 'random', 'single'}, value['throughput']
+            assert len(m.cache_events) == 2 * len(plan) and len(m.dma_reads) == len(plan)
+            assert not any(kind == 'read' and a == 0x04020200 for kind,a,v in m.trace[m.trace.index(next(t for t in m.trace if t[0]=='write' and t[1]==0x04020018 and t[2]&63 in (17,18))):])
+            assert set(value['throughput']) >= {'sequential-4k', 'random-4k', 'sequential-32k', 'random-32k', 'sequential-128k', 'random-128k', 'single'}, value['throughput']
             if profile == 3:
                 assert m.pf_writes == 1 and m.phase == 3 and m.sdr == 3 and m.cmd19 == 12 * 20 + 52
                 assert (card['uhs_outcome'], card['signal_1v8'], card['tuning_start'], card['tuning_width'],
@@ -326,6 +365,16 @@ def run(elf, board, out, only=()):
             else:
                 assert m.pf_writes == 0 and m.card_hs == 1
             assert not any(a == 0x04020018 and v & (1 << 10) for kind, a, v in m.trace if kind == 'write')
+        elif name in ('no-idst-receive','tail'):
+            assert r==1 and quiet==1 and value['complete'] and len(m.dma_reads)==1
+            assert len(m.cache_events)==2
+            assert m.commands[-1][0]==(13 if name=='tail' else 18)
+        elif name in ('idst-error','idst-late','idst-clear-race','own-stuck','dma-stall','reset-stuck','idle-stuck',
+                       'chain-next','chain-flags','chain-buffer','chain-size','chain-spare','write-bit',
+                       'cache-before-fail','cache-after-fail'):
+            assert r==-1 and not reads and m.retained and value['words']['SD_REASON']==6, (name,r,value['words'])
+            assert not value['complete'] and value['words']['SD_PLATFORM_FAULT']==1
+            if name.startswith('chain-') or name=='write-bit': assert not any(c in (17,18,24,25) for c,a in m.commands)
         elif name == 'window':
             assert r == 1 and len(reads) == 10 and value['outcome'] == 'window' and not value['complete']
         elif name == 'absent':
@@ -339,12 +388,14 @@ def run(elf, board, out, only=()):
         elif name == 'board-mbus-skip':
             assert r == -1 and not reads and value['outcome'] == 'stopped' and value['words']['SD_PLATFORM_FAULT'] == 1
         elif name == 'not-parked':
-            assert r == 1 and quiet == 0 and len(reads) == 256
+            assert r == 1 and quiet == 0 and len(reads) == len(plan)
         results[name] = {'passed': True, 'steps': steps, 'tick_waits': m.ticks,
                          'model_elapsed_us': m.time - m.field('start', 8), 'commands': len(m.commands), 'mmio_accesses': len(m.trace),
                          'reads': len(reads), 'outcome': value['outcome'], 'quiet': quiet,
                          'pf_selector_writes': m.pf_writes, 'log_bytes': len(m.log.encode()),
-                         'throughput': value.get('throughput')}
+                         'throughput': value.get('throughput'), 'cache_events':len(m.cache_events),
+                         'dma_reads':len(m.dma_reads), 'clock_off':clock_off}
+        (out/'completed-cases.json').write_text(json.dumps(results,indent=1)+'\n')
         assert len(m.log.encode()) <= 16127 - 200, 'log does not fit the result page with the start lines'
     if only:
         (out / 'result.json').write_text(json.dumps({'passed': True, 'physical_access': False, 'cases': results,

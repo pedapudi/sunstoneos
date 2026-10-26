@@ -188,7 +188,7 @@ int a733_mmc_platform_native_init_selected(struct a733_mmc_platform_native *n,
        (kind==SUNXI_MMC_SD&&host))return 0;
     n->emmc_host=host;n->kind=kind;n->locks=locks;n->owner_task=task;n->admit=admission;n->admission_cookie=cookie;
     n->operations=(struct a733_mmc_platform_ops){now,current,admit,enter,leave,retain,read32,write32,barrier,outside,
-        read_fifo,write_fifo};
+        read_fifo,write_fifo,NULL};
     n->update=NULL;n->holding=0;n->initialized=1;return 1;
 }
 

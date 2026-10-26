@@ -12,8 +12,8 @@ Status:
   withholds until the switch ends. The fix is in the driver and the
   emulation, not yet run on a board ([the UHS-I design](../designs/sd-uhs.md),
   "Lifetime B: CMD11 completion").
-- **DMA reads: designed, not built** ([the DMA design](../designs/sd-dma.md),
-  accepted by the panel; unbuilt work in progress on `work/sd-dma-1025`).
+- **DMA reads: implemented and checked in software, not physically qualified**
+  ([the DMA design](../designs/sd-dma.md)).
 
 [The UHS-I design](../designs/sd-uhs.md) gives the sequence, its sources and
 the fallback rules. The first lifetime A on port 3-3 ran the supervised image
@@ -239,12 +239,14 @@ power-cycled.
    freeze a set from set 28's runbook with the new image, and run profile 3
    after a power removal, cold DDR start, fabric read, cache-off and survey.
    Predictions are in "Predictions" below; the stop conditions are unchanged.
-2. **Build the SD DMA design.** `work/sd-dma-1025` holds the accepted design
-   (`c1d0b802`) and an unbuilt first pass of the core, platform and image
-   changes (`29bc8a2c`), which also carries the CMD11 fix. What remains: the
-   IDMAC model in the emulation check, the host tool's plan and log format,
-   the three-lens code review, the gate, a set, and board runs in profile 2
-   and then profile 3.
+2. **Qualify the DMA image in separate high-speed and SDR104 lifetimes.**
+   Build `apps/storage-read-returning`, use its version-2 input and 240-read
+   plan, and decode with `--reference` pointing to lifetime A's accepted
+   `sd-result.json`. Both profiles require power removal afterwards. The
+   native model and host checks cover software ordering and report validity;
+   they do not prove IDMAC bus addresses, cache visibility or card throughput.
+   Use the DMA design's size classes for one fixed-cost/per-block fit; do not
+   repeat unchanged high-speed PIO measurements.
 
 ## Predictions
 

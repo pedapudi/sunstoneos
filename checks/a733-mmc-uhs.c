@@ -83,7 +83,7 @@ static void begin(unsigned pf_mode, unsigned fast, unsigned caps)
     for (unsigned i = 0; i < 7; ++i) { c.desired[i].function = i < 6 ? 2 : 0; c.desired[i].pull = 1; }
     const struct a733_mmc_platform_ops o = {storage_now, storage_current, storage_admit, storage_enter,
         storage_leave, storage_retain, uhs_platform_read, uhs_platform_write, storage_barrier, storage_outside,
-        storage_read_fifo, storage_write_fifo};
+        storage_read_fifo, storage_write_fifo, NULL};
     assert(a733_mmc_platform_init(&m.platform, &c, &o, &m, &m.power.clocks, &m.power.pins, &m.power.rails,
                                   &m.power.provider));
 }

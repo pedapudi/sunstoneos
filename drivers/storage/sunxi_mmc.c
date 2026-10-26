@@ -156,6 +156,9 @@ int sunxi_mmc_init(struct sunxi_mmc *h, const struct sunxi_mmc_config *c)
         (unsigned)c->sd_profile>UHS ||
         (c->sd_profile&&(c->kind!=SUNXI_MMC_SD||!c->ops.sd_module)) ||
         (c->sd_profile==UHS&&(!UHS_ON||!c->ops.sd_signal)) ||
+        (c->dma&&(!c->ops.dma_sync||((uintptr_t)c->dma&63u)||
+                  (uint64_t)(uintptr_t)c->dma>(UINT64_C(1)<<34)-SUNXI_MMC_DMA_DESCRIPTORS*sizeof(*c->dma)||
+                  !a733_ranges_disjoint(h,sizeof(*h),(const void *)c->dma,SUNXI_MMC_DMA_DESCRIPTORS*sizeof(*c->dma)))) ||
         !c->voltage_mask || (c->voltage_mask & ~0x00300000u)) return 0;
     struct sunxi_mmc fresh = {0};
     fresh.config = *c; fresh.initialized = 1; *h = fresh; return 1;
@@ -177,9 +180,12 @@ static void queue(struct sunxi_mmc *h, unsigned protocol, uint32_t cmd, uint32_t
 int sunxi_mmc_read(struct sunxi_mmc *h, uint64_t first, uint32_t blocks,
                    uint8_t *buffer, size_t bytes, uint64_t deadline)
 {
+    unsigned dma = h && h->config.dma;
     if (!h || !h->initialized || h->entered || h->state != SUNXI_MMC_READY ||
-        deadline <= h->last_us || !blocks || blocks > SUNXI_MMC_MAX_BLOCKS ||
+        deadline <= h->last_us || !blocks || blocks > (dma ? SUNXI_MMC_MAX_DMA_BLOCKS : SUNXI_MMC_MAX_BLOCKS) ||
         bytes != blocks * 512u || !a733_span_excl(buffer, bytes) ||
+        (dma && (((uintptr_t)buffer & 63u) || (uint64_t)(uintptr_t)buffer > (UINT64_C(1) << 34)-bytes ||
+                 !a733_ranges_disjoint(buffer,bytes,(const void *)h->config.dma,SUNXI_MMC_DMA_DESCRIPTORS*sizeof(*h->config.dma)))) ||
         a733_extents_overlap_prechecked((uintptr_t)h, sizeof(*h), (uintptr_t)buffer, bytes) ||
         first >= h->card.sectors || blocks > h->card.sectors - first) return 0;
     uint64_t last = first + blocks - 1;
@@ -189,6 +195,12 @@ int sunxi_mmc_read(struct sunxi_mmc *h, uint64_t first, uint32_t blocks,
     h->result = (struct sunxi_mmc_result){0}; h->deadline_us = deadline;
     h->borrowed = buffer; h->borrowed_bytes = bytes; h->state = SUNXI_MMC_READING;
     h->read_tail = blocks > 1 && blocks == h->card.sectors - first;
+    h->dma_read = (uint8_t)dma;
+    h->entered=1;
+    int timed=time_ok(h);
+    h->entered=0;
+    if (!timed) return 0;
+    h->read_start_us = h->last_us;
     queue(h, P_READ, (blocks == 1 ? 17u : (18u | AUTO)) | RESP | CRC | DATA | WAIT,
           arg, buffer, bytes);
     return 1;
@@ -366,6 +378,70 @@ static int fifo_step(struct sunxi_mmc *h)
     }
     return 1;
 }
+static int dma_command(const struct sunxi_mmc *h)
+{ return h->dma_read && h->protocol == P_READ && h->data_bytes; }
+static int since_read(struct sunxi_mmc *h,uint32_t *out)
+{
+    if (!time_ok(h)) return 0;
+    uint64_t n = h->last_us-h->read_start_us;
+    *out = n > UINT32_MAX ? UINT32_MAX : (uint32_t)n;
+    return 1;
+}
+/* The board kernel's per-read IDMAC start after the resets (K:2737-2738,
+ * K:787-813, K:951-958): watermarks, list base, stale status cleared,
+ * descriptors chained in the non-cacheable area with the last one pointing at
+ * the zeroed spare slot, the buffer cleaned, DMA enabled, IDMAC on. IDIE stays
+ * 0: SD0's interrupt is not used, and completion rests on the OWN bits. */
+static int dma_start(struct sunxi_mmc *h)
+{
+    volatile struct sunxi_mmc_dma_descriptor *d = h->config.dma;
+    uintptr_t buffer = (uintptr_t)h->data;
+    unsigned n = (unsigned)((h->data_bytes + SUNXI_MMC_DMA_SEGMENT - 1) / SUNXI_MMC_DMA_SEGMENT);
+    uint32_t v, t0, t1;
+    if (!wr(h, SUNXI_SMHC_FTRGL, SUNXI_SMHC_FTRGL_VALUE) || !wr(h, SUNXI_SMHC_DLBA, (uint32_t)((uintptr_t)d >> 2)) ||
+        !wr(h, SUNXI_SMHC_IDST, SUNXI_SMHC_IDST_CLEAR) || !rd(h, SUNXI_SMHC_IDST, &v)) return 0;
+    if (v & SUNXI_SMHC_IDST_CLEAR) { fault(h, SUNXI_MMC_CONTROLLER); return 0; }
+    for (unsigned i = 0; i < n; ++i) {
+        size_t left = h->data_bytes - (size_t)i * SUNXI_MMC_DMA_SEGMENT;
+        uint32_t config = SUNXI_SMHC_DES_OWN | SUNXI_SMHC_DES_CH | SUNXI_SMHC_DES_DIC;
+        if (!i) config |= SUNXI_SMHC_DES_FD;
+        if (i == n - 1) config = (config | SUNXI_SMHC_DES_LD) & ~SUNXI_SMHC_DES_DIC;
+        d[i].size = (uint32_t)(left < SUNXI_MMC_DMA_SEGMENT ? left : SUNXI_MMC_DMA_SEGMENT);
+        d[i].buffer = (uint32_t)((buffer + (uintptr_t)i * SUNXI_MMC_DMA_SEGMENT) >> 2);
+        d[i].next = (uint32_t)((uintptr_t)&d[i + 1] >> 2);
+        d[i].config = config;
+    }
+    d[n].config = 0; d[n].size = 0; d[n].buffer = 0; d[n].next = 0;
+    if (!fence(h)) return 0;
+    if (!since_read(h,&t0)) return 0;
+    if (h->config.ops.dma_sync(h->config.context, h->data, h->data_bytes, SUNXI_MMC_DMA_BEFORE) != 1) {
+        fault(h, SUNXI_MMC_IO); return 0;
+    }
+    if (!since_read(h,&t1)) return 0;
+    h->result.clean_us = t1 - t0;
+    return rd(h, SUNXI_SMHC_GCTRL, &v) && wr(h, SUNXI_SMHC_GCTRL, v | SUNXI_SMHC_GCTRL_DMA_ENABLE) &&
+        wr(h, SUNXI_SMHC_IDIE, 0) && wr(h, SUNXI_SMHC_DMAC, SUNXI_SMHC_DMAC_ON);
+}
+/* Every used descriptor's OWN bit is clear: IDMAC has closed each one. */
+static int dma_closed(const struct sunxi_mmc *h)
+{
+    unsigned n = (unsigned)((h->data_bytes + SUNXI_MMC_DMA_SEGMENT - 1) / SUNXI_MMC_DMA_SEGMENT);
+    for (unsigned i = 0; i < n; ++i) if (h->config.dma[i].config & SUNXI_SMHC_DES_OWN) return 0;
+    return 1;
+}
+/* Called only after the reset and idle proof: return buffer ownership to
+ * the CPU through the concrete caller's cache adapter. */
+static int dma_finish(struct sunxi_mmc *h)
+{
+    uint32_t t0,t1;
+    if (!fence(h) || !since_read(h,&t0)) return 0;
+    if (h->config.ops.dma_sync(h->config.context,h->data,h->data_bytes,SUNXI_MMC_DMA_AFTER)!=1) {
+        fault(h,SUNXI_MMC_IO);return 0;
+    }
+    if (!since_read(h,&t1)) return 0;
+    h->result.invalidate_us=t1-t0;
+    return 1;
+}
 static int command_step(struct sunxi_mmc *h)
 {
     uint32_t v;
@@ -379,28 +455,51 @@ static int command_step(struct sunxi_mmc *h)
         /* Acknowledge stale command/data flags only; leave card-detect/SDIO. */
         if (!wr(h, 0x38, h->result.interrupts & 0xffffu)) return 0;
         h->seen = 0;
-        if (h->data_bytes && !wr(h, 0, START | 2u)) return 0;
+        /* Programmed I/O routes the FIFO to the CPU (bit 31); a DMA read
+         * leaves it to IDMAC and also resets the DMA interface and IDMAC. */
+        if (dma_command(h)) {
+            if (!wr(h, SUNXI_SMHC_GCTRL, SUNXI_SMHC_GCTRL_FIFO_RESET | SUNXI_SMHC_GCTRL_DMA_RESET) ||
+                !wr(h, SUNXI_SMHC_DMAC, SUNXI_SMHC_DMAC_RESET)) return 0;
+        } else if (h->data_bytes && !wr(h, 0, START | 2u)) return 0;
         h->command_step = 1; return 0;
     case 1:
-        if (h->data_bytes) {
+        if (dma_command(h)) {
+            uint32_t d;
+            if (!rd(h, 0, &v) || (v & 6u) || !rd(h, SUNXI_SMHC_DMAC, &d) || (d & SUNXI_SMHC_DMAC_RESET)) return 0;
+            if (v & (START | (1u << 5) | 7u)) { fault(h, SUNXI_MMC_CONTROLLER); return 0; }
+        } else if (h->data_bytes) {
             if (!rd(h, 0, &v) || (v & 2u)) return 0;
             if ((v & (START | (1u << 5) | 7u)) != START) { fault(h, SUNXI_MMC_CONTROLLER); return 0; }
+        }
+        if (h->data_bytes) {
             uint32_t block = h->data_bytes < 512 ? (uint32_t)h->data_bytes : 512;
             if (!wr(h, 0x10, block) || !wr(h, 0x14, (uint32_t)h->data_bytes)) return 0;
             /* SDR104 read threshold: start a block only with room for all of
              * it, sized to the block as the board kernel's thld_ctl does. */
             if (UHS_ON && h->card.timing == 3 && !(h->command & WRITE)) {
                 uint32_t t;
-                if (!rd(h, 0x100, &t) || !wr(h, 0x100, (t & ~0x1fff0001u) | (block << 16) | 1u)) return 0;
+                /* The vendor's mask (V:676-701): bits 27:16 and the write
+                 * threshold enable (bit 2) cleared, the read threshold on. */
+                if (!rd(h, 0x100, &t) || !wr(h, 0x100, (t & ~0x0fff0004u) | (block << 16) | 1u)) return 0;
             }
         }
         if ((h->command & AUTO) && !wr(h, 0x58, 0)) return 0;
+        if (dma_command(h) && !dma_start(h)) return 0;
         if (!wr(h, 0x1c, h->argument) || !fence(h)) return 0;
         if(h->command&WRITE)h->result.write_started=1;
         if(!wr(h, 0x18, h->command))return 0;
+        if (h->protocol == P_READ && !since_read(h,&h->result.command_us)) return 0;
         h->command_step = 2; return 0;
     case 2:
         if (!interrupts(h)) return 0;
+        if (dma_command(h)) {
+            if (!rd(h, SUNXI_SMHC_IDST, &h->result.dma_status)) return 0;
+            if (h->result.dma_status & SUNXI_SMHC_IDST_ERRORS) { fault(h, SUNXI_MMC_CONTROLLER); return 0; }
+            if (!h->result.first_byte_us) {
+                if (!rd(h, SUNXI_SMHC_CBCR, &v)) return 0;
+                if (v && !since_read(h,&h->result.first_byte_us)) return 0;
+            }
+        }
         if((h->command&WRITE)&&(h->seen&DTC)&&h->position<h->data_bytes) {
             fault(h,SUNXI_MMC_CONTROLLER);return 0;
         }
@@ -424,10 +523,17 @@ static int command_step(struct sunxi_mmc *h)
                 if (h->response[0] & CARD_ERRORS) { fault(h, SUNXI_MMC_CARD); return 0; }
             }
         }
-        if (h->position < h->data_bytes && (!(h->command & WRITE) || h->response_seen) &&
+        if (!dma_command(h) && h->position < h->data_bytes && (!(h->command & WRITE) || h->response_seen) &&
             !fifo_step(h)) return 0;
         v = command_done | (h->data_bytes ? DTC : 0) | ((h->command & AUTO) ? ACD : 0);
-        if ((h->seen & v) != v || h->position != h->data_bytes) return 0;
+        if ((h->seen & v) != v) return 0;
+        if (dma_command(h)) {
+            /* The done bits first, then the OWN bits (uncached reads). */
+            if (!dma_closed(h)) return 0;
+            h->position = h->data_bytes; h->result.received = h->data_bytes;
+        }
+        if (h->position != h->data_bytes) return 0;
+        if (h->protocol == P_READ && !since_read(h,&h->result.done_us)) return 0;
         h->command_step = 3; return 0;
     case 3:
         /* The board kernel checks nothing more after CMD11's voltage-switch
@@ -446,7 +552,32 @@ static int command_step(struct sunxi_mmc *h)
                 fault(h, SUNXI_MMC_CARD); return 0;
             }
         }
-        return 1;
+        if (!dma_command(h)) return 1;
+        /* Do not erase an error arriving after the final completion poll. */
+        if (!rd(h,SUNXI_SMHC_IDST,&v)) return 0;
+        h->result.dma_status|=v;
+        if (v&SUNXI_SMHC_IDST_ERRORS) { fault(h,SUNXI_MMC_CONTROLLER);return 0; }
+        /* Snapshot W1C preserves errors arriving after this sample for the
+         * post-reset check; unlike the vendor teardown's constant clear. */
+        if (!wr(h,SUNXI_SMHC_IDST,v&SUNXI_SMHC_IDST_CLEAR) || !wr(h,SUNXI_SMHC_IDIE,0) ||
+            !wr(h,SUNXI_SMHC_DMAC,SUNXI_SMHC_DMAC_RESET)) return 0;
+        h->command_step=4;return 0;
+    case 4:
+        if (!rd(h,SUNXI_SMHC_DMAC,&v) || (v&SUNXI_SMHC_DMAC_RESET)) return 0;
+        if (!rd(h,SUNXI_SMHC_IDST,&v)) return 0;
+        if (v&SUNXI_SMHC_IDST_ERRORS) { fault(h,SUNXI_MMC_CONTROLLER);return 0; }
+        if (SUNXI_SMHC_IDST_STATE(v)) return 0;
+        if (!rd(h,SUNXI_SMHC_GCTRL,&v) || !wr(h,SUNXI_SMHC_GCTRL,v|SUNXI_SMHC_GCTRL_DMA_RESET)) return 0;
+        h->command_step=5;return 0;
+    case 5:
+        if (!rd(h,SUNXI_SMHC_GCTRL,&v) || (v&SUNXI_SMHC_GCTRL_DMA_RESET)) return 0;
+        v &= ~SUNXI_SMHC_GCTRL_DMA_ENABLE;
+        if (!wr(h,SUNXI_SMHC_GCTRL,v) || !wr(h,SUNXI_SMHC_GCTRL,v|SUNXI_SMHC_GCTRL_FIFO_RESET)) return 0;
+        h->command_step=6;return 0;
+    case 6:
+        if (!rd(h,SUNXI_SMHC_GCTRL,&v) || (v&SUNXI_SMHC_GCTRL_FIFO_RESET)) return 0;
+        if (v&(SUNXI_SMHC_GCTRL_DMA_ENABLE|SUNXI_SMHC_GCTRL_DMA_RESET)) { fault(h,SUNXI_MMC_CONTROLLER);return 0; }
+        return interrupts(h)&&dma_finish(h);
     default: fault(h, SUNXI_MMC_CONTROLLER); return 0;
     }
 }
@@ -863,7 +994,12 @@ static void protocol(struct sunxi_mmc *h)
     case P_SD_MODE_STATUS:
         if(ready(h))h->state=SUNXI_MMC_READY;return;
     case P_READ:
-        if (card_response(h)) ready_status(h, P_READ_STATUS);
+        /* No CMD13 after a read, as the board kernel's block driver; only an
+         * open-ended CMD18 that reached the card's last sector confirms the
+         * card's state, so its OUT_OF_RANGE cannot reach the next read. */
+        if (!card_response(h)) return;
+        if (h->read_tail) ready_status(h, P_READ_STATUS);
+        else h->state = SUNXI_MMC_DONE;
         return;
     case P_READ_STATUS:
         /* The same end-of-card rule covers a status bit not yet cleared. */
@@ -899,6 +1035,7 @@ void sunxi_mmc_poll(struct sunxi_mmc *h)
         fault(h, SUNXI_MMC_ADMISSION); goto out;
     }
     if(h->writing&&(!write_admitted(h)||!time_ok(h)))goto out;
+    if (h->state == SUNXI_MMC_READING) ++h->result.polls;
     if (h->setup < 6) setup(h);
     else if(h->protocol==P_SD_CLOCK)sd_clock(h);
     else if(h->last_us<h->retry_us){}
