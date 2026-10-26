@@ -94,6 +94,7 @@ def performance_records(out, policy, configuration):
     reference={'path':str(source.resolve()),'sha256':card.sha(source.read_bytes())}
     result={'configuration':configuration,'conditions':{}}
     conditions=card.PERF_CONDITIONS | ({card.PERF_CROSS} if {'gpu','npu'} <= set(configuration['owned']) else set())
+    if 'gpu' in configuration['owned']:conditions.add(card.host.GPU_PERF_CONDITION)
     for condition in sorted(conditions):
         fact={key:policy[key] for key in ('identity','sid_authority','image_sha256','stage2_sha256','canonical_session_sha256','evidence_class')}
         fact.update(schema='a733-os-card-performance-condition-v1',scope='resident-runtime-operating-points',
@@ -125,6 +126,9 @@ def performance_cases(args, raw, manifest, model):
               'Cold runtime performance policy differs')
     check('configuration-wrong-point',lambda p:p['performance']['configuration']['points']['high']['npu'].__setitem__(0,851),
           'Cold runtime performance policy differs')
+    if 'gpu' in original['performance']['configuration']['owned']:
+        check('missing-runtime-GPU-rail-authority',lambda p:p['performance']['conditions'].pop(card.host.GPU_PERF_CONDITION),
+              'Cold runtime performance policy differs')
     condition=sorted(card.PERF_CONDITIONS)[0]
     def mutate_fact(policy,name,field,value):
         fact=json.loads(Path(policy['performance']['conditions'][condition]['path']).read_text())

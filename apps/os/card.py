@@ -62,7 +62,7 @@ PERF_CROSS = 'concurrent-gpu-npu-runtime-cross-pll-qualified'
 
 
 def performance_configuration(elf, manifest, raw):
-    """Actual linked mode row and the existing finite CPU authority."""
+    """Actual linked mode row ([MHz, mV] points) and finite CPU authority."""
     perf = manifest.get('perf_modes', False)
     require(type(perf) is bool, 'Performance capability must be boolean.')
     if not perf:
@@ -99,6 +99,8 @@ def performance_policy(policy, configuration, directory, frozen):
         return
     perf = policy.get('performance')
     conditions = PERF_CONDITIONS | ({PERF_CROSS} if {'gpu', 'npu'} <= set(configuration['owned']) else set())
+    if 'gpu' in configuration['owned']:
+        conditions.add(host.GPU_PERF_CONDITION)
     require(isinstance(perf, dict) and set(perf) == {'configuration', 'conditions'} and
             perf['configuration'] == configuration and isinstance(perf['conditions'], dict) and
             set(perf['conditions']) == conditions, 'Cold runtime performance policy differs.')
