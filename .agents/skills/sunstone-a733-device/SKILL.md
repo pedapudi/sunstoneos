@@ -23,7 +23,7 @@ Resolve device applicability before treating a family diagram or generated
 register map as an implemented processor. The A733 manual explicitly defers
 module availability to the device datasheet; its OR100 labels do not add a
 second A733 control processor. Preserve contrary family references and the
-separate CE ownership requirement in the [remote-writer audit](../../../docs/remote-writers.md#device-applicability-excludes-or100-ce-ownership-remains-open).
+separate CE ownership requirement in the [remote-writer audit](../../../docs/remote-writers.md#device-applicability-excludes-or100-ce-requires-predecessor-accounting).
 
 Reuse suitable open-source implementations through FreeRTOS adapters. Pin new
 references in the existing component manifest or `sources.lock.json`, preserve

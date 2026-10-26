@@ -68,6 +68,7 @@ does not establish recovery from a fault.
 | --- | --- | --- |
 | GPU performance control | `work/resume-gpu-performance-1026` | Derive and review bounded runtime clock/voltage changes through existing owners and firmware notification |
 | Second camera connector | `work/resume-camera-stream-native-1026` | Bind the existing OV5640 application to CAM2 using authenticated port selection and existing TWI9/clock providers |
+| Maintenance backup DMA | `work/resume-maintenance-dma-1026` | Use the existing bounded DMA reader for larger backup requests while preserving single-sector writes and backup-first authority |
 
 Independent reviewers cover CPU/thermal/DRAM, accelerator operation and peripheral
 integration. Workers reuse successful evidence and submit focused checks. The

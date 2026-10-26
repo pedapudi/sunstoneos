@@ -165,6 +165,9 @@ second build while preserving checks for the actual requested application.
 - Assign complete device paths: native image, host launch and capture, focused
   checks, and a bounded physical test request. Agree on their shared interfaces
   early so host integration can proceed alongside native implementation.
+- Verify a proposed missing function in the current native binding, application
+  and accepted component evidence before assigning implementation. Correct stale
+  overview claims instead of duplicating an existing path or rerunning its checks.
 - Integrate completed assignments promptly. Choose the number of active device
   paths from independent file ownership, available implementation/review capacity
   and coordinator integration capacity; do not impose a fixed three-path limit.
