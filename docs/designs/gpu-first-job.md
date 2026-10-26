@@ -114,7 +114,8 @@ no board has read them yet.
 
 Step (d) runs in the lifetime of set `board-bundles-20261025-25`, after its
 step (c) passed (bundle 26), with no power removal: set
-`board-bundles-20261025-26` holds bundle 27 alone, with that lifetime's
+`board-bundles-20261025-27` holds bundle 27 alone (it replaces set 26, whose admission
+said that no firmware had run in the lifetime), with that lifetime's
 earlier runs as its warm-return chain. The job's `seed` is 0x12345678 and
 its `factor` 0x9e3779b1.
 
