@@ -29,7 +29,9 @@ def modeled(prep):
 
 def fixture(prep,args):
     image=args.image.read_bytes();original=args.session.read_bytes();pcm=args.pcm.read_bytes();edid=args.edid.read_bytes()
-    prep.image_metadata(image,session_size=816);fields=prep.session_check(original,pcm);prep.sink_lpcm(edid)
+    size=prep.base.image_data(image)[3];stream=size==848
+    prep.image_metadata(image,session_size=size)
+    fields=prep.session_check(original,pcm);prep.sink_lpcm(edid)
     out=args.output/'MODEL-NOT-PHYSICAL-fixture';out.mkdir()
     image_hash=prep.sha(image)
     target=dict(image_sha256=image_hash,physical_authority=False,modeled=True,reviewed=True,
@@ -45,7 +47,7 @@ def fixture(prep,args):
         data=record(key+'.json',dict(**target,kind=key));pattern[offset:offset+32]=hashlib.sha256(data).digest()
     memory=record('memory.json',dict(**target,schema='a733-hdmi-audio-memory-v1',authority=fields['authority'],
         **{key:True for key in prep.MEMORY_FACTS},dma_handoff_sha256=prep.sha(original[552:656]),
-        dma_pool_ranges=[[0x41c00000,0x41e00000]],pcm_sha256=prep.sha(pcm),pcm_range=[0x41f10000,0x41f10000+len(pcm)]))
+        dma_pool_ranges=[[0x41c00000,0x41e00000]],pcm_sha256=prep.sha(pcm),pcm_range=[0x41f10000,0x41f10000+len(prep.manifest_bytes(pcm) if stream else pcm)]))
     electrical=record('electrical.json',dict(**target,schema='a733-hdmi-audio-electrical-v1',authority=fields['authority'],
         **{key:True for key in prep.ELECTRICAL_FACTS},sink_edid_sha256=prep.sha(edid)))
     (out/'sink.edid').write_bytes(edid)
@@ -80,9 +82,9 @@ def fixture(prep,args):
         clock_profile=dict(raw_dcxo_hz=raw_hz,reference_hz=24000000,sfr_source=0,sfr_hz=24000000,
             pixel_hz={'720p60':raw_hz*n//32,'1080p60':raw_hz*n//16})))
     raw=prep.session_bytes(pattern,pcm,memory=memory,electrical=electrical,authority=fields['authority'],
-        dma=original[552:656],admission=admission,usb=bytes(usb))
+        dma=original[552:656],admission=admission,usb=bytes(usb),stream=stream)
     (out/'session.bin').write_bytes(raw);(out/'input.pcm').write_bytes(pcm)
-    _,address,identity,_=prep.image_metadata(image,session_size=816)
+    _,address,identity,_=prep.image_metadata(image,session_size=size)
     request,contract=prep.base.request_bytes(address,identity,raw,fields['epoch'],fields['generation'],fields['lease'],fields['supervisor'])
     (out/'request.bin').write_bytes(request);(out/'contract.bin').write_bytes(contract)
     (out/'baseline-session.bin').write_bytes(original)

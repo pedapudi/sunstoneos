@@ -10,6 +10,8 @@ enum { ACQUIRE,CONFIGURE,FLUSH,ACTIVE,DRAIN,PUBLISH,STOP,CLOSE,EOF_FIFO };
 #define IO(s) ((s)->profile.operations.io)
 #define COOKIE(s) ((s)->profile.cookie)
 static int tx(const struct a733_i2s_stream *s) {return s->profile.direction==A733_I2S_TRANSMIT;}
+static int hdmi(const struct a733_i2s_stream *s) {return s->profile.route==A733_I2S_ROUTE_HDMI3;}
+static uintptr_t base(const struct a733_i2s_stream *s) {return hdmi(s)?UINT32_C(0x02535000):A733_I2S0_BASE;}
 static unsigned errors(const struct a733_i2s_stream *s) {return tx(s)?0x60:6;}
 static unsigned flush(const struct a733_i2s_stream *s) {return 1u<<(tx(s)?25:24);}
 static unsigned drq(const struct a733_i2s_stream *s) {return tx(s)?128:8;}
@@ -38,9 +40,9 @@ static int health(struct a733_i2s_stream *s)
     return r==A733_I2S_RESOURCE_READY ? 1 : r==A733_I2S_RESOURCE_BUSY ? 0 : -1;
 }
 static int rd(struct a733_i2s_stream *s,unsigned a,uint32_t *v)
-{return now(s) && IO(s).read(COOKIE(s),A733_I2S0_BASE+a,v) && now(s);}
+{return now(s) && IO(s).read(COOKIE(s),base(s)+a,v) && now(s);}
 static int wr(struct a733_i2s_stream *s,unsigned a,uint32_t v)
-{return now(s) && IO(s).write(COOKIE(s),A733_I2S0_BASE+a,v) && now(s);}
+{return now(s) && IO(s).write(COOKIE(s),base(s)+a,v) && now(s);}
 /* io.write verifies its own readback (a733_i2s_stream.h), so writes are not
  * read again here. Only the serialized worker changes CTL/ICTL; preserve the
  * peer's enable and request bits at every start, handoff, cancellation and
@@ -63,7 +65,11 @@ int a733_i2s_stream_valid(const struct a733_i2s_stream_profile *p,const struct a
 {
     struct a733_i2s_plan plan;
     if(!p || !a733_i2s_plan(&p->format,&plan) || (unsigned)p->direction>A733_I2S_TRANSMIT ||
-        p->cyclic>1 || !p->operation_us || p->operation_us>INT64_MAX || !p->operations.health ||
+        p->cyclic>1 || (unsigned)p->route>A733_I2S_ROUTE_HDMI3 ||
+        (p->route==A733_I2S_ROUTE_HDMI3 && (p->cyclic || p->direction!=A733_I2S_TRANSMIT ||
+         p->format.module_hz!=24576000 || p->format.rate_hz!=48000 || p->format.mclk_hz ||
+         p->format.container_bits!=16 || p->format.slot_bits!=32 || p->format.channels!=2 || p->format.first_slot)) ||
+        !p->operation_us || p->operation_us>INT64_MAX || !p->operations.health ||
         !p->operations.io.acquire || !p->operations.io.acquire_poll || !p->operations.io.release ||
         !p->operations.io.read || !p->operations.io.write || !p->operations.io.now_us ||
         !t || t->count<2 || t->count>A733_I2S_STREAM_PERIODS || t->mapping_count!=t->count ||
@@ -79,8 +85,9 @@ int a733_i2s_stream_valid(const struct a733_i2s_stream_profile *p,const struct a
         if(!a733_dma_mapping_shape(m) || m->access!=(p->direction==A733_I2S_RECEIVE?A733_DMA_WRITE:A733_DMA_READ) ||
             !g->bytes || g->bytes>A733_DMA_MAX_SEGMENT_BYTES || g->bytes!=t->segments[0].bytes ||
             g->bytes%plan.frame_bytes || g->bytes%(plan.dma_width*8) || g->bytes>m->bytes || ram->address!=m->bus || ram->request ||
-            fifo->address!=(p->direction==A733_I2S_RECEIVE?A733_I2S0_RXFIFO:A733_I2S0_TXFIFO) ||
-            fifo->request!=3 || fifo->width!=plan.dma_width || ram->width!=plan.dma_width ||
+            fifo->address!=(p->route==A733_I2S_ROUTE_HDMI3?UINT32_C(0x02535020):
+                p->direction==A733_I2S_RECEIVE?A733_I2S0_RXFIFO:A733_I2S0_TXFIFO) ||
+            fifo->request!=(p->route==A733_I2S_ROUTE_HDMI3?6u:3u) || fifo->width!=plan.dma_width || ram->width!=plan.dma_width ||
             fifo->burst!=8 || ram->burst!=8 || a733_dma_mappings_overlap(m,&t->descriptors) ||
             (p->cyclic && (g->bytes!=m->bytes || (p->direction==A733_I2S_RECEIVE &&
              (t->count<4 || g->bytes!=4096 || m->bus>UINT32_MAX-m->bytes)))))return 0;
@@ -117,7 +124,7 @@ static enum a733_i2s_status configure(struct a733_i2s_stream *s)
         !wr(s,RXMAP1,0) || !wr(s,RXMAP2,0) || !wr(s,RXMAP3,s->plan.rxmap3)))return fault(s);
     /* Trigger levels: RX >= 8 entries; TX empty space >= 64 entries. TXIM=1, RXOM=1.
      * Both 16-bit and 32-bit sample words use the source-defined packing. */
-    if(!wr(s,FCTL,(fc&~UINT32_C(0x7f3f7))|(64u<<12)|(7u<<4)|5u) ||
+    if(!wr(s,FCTL,(fc&~UINT32_C(0x7f3f7))|(64u<<12)|(7u<<4)|5u|(hdmi(s)?1u<<31:0)) ||
         !now(s))return fault(s);
     s->deadline=0;return s->status=A733_I2S_READY;
 }
@@ -126,12 +133,13 @@ static enum a733_i2s_status open_stream(struct a733_i2s_stream *s,
     struct a733_dma_controller *dma,unsigned channel,uint64_t deadline,
     unsigned duplex,struct a733_i2s_stream *peer)
 {
-    if(!s || s->self || !a733_i2s_stream_valid(p,t) || !dma || !dma->initialized ||
+    if(!s || s->self || !a733_i2s_stream_valid(p,t) || (duplex && p->route!=A733_I2S_ROUTE_I2S0) || !dma || !dma->initialized ||
         dma->base!=0x04601000u || channel>=A733_DMA_CHANNELS || !deadline)return A733_I2S_INVALID;
     struct a733_i2s_plan plan;if(!a733_i2s_plan(&p->format,&plan))return A733_I2S_INVALID;
     if(p->direction==A733_I2S_TRANSMIT) {
         plan.pb_mask=(plan.pb_mask&~(1u<<8))|(1u<<7);plan.ctl|=1u<<8;
     }
+    if(p->route==A733_I2S_ROUTE_HDMI3)plan.pb_mask=0;
     if(duplex){plan.pb_mask|=(1u<<7)|(1u<<8);plan.ctl|=1u<<8;}
     if(peer && (!duplex || !valid(peer) || !peer->duplex || peer->peer ||
         peer->status!=A733_I2S_READY || peer->dma!=dma || peer->channel==channel ||
@@ -174,6 +182,16 @@ static enum a733_i2s_status stop(struct a733_i2s_stream *s,enum a733_i2s_status 
     }
     return s->status;
 }
+/* A missed FIFO handoff is a failed stream, but live operation authority
+ * still permits the existing bounded stop/drain. A failed clock or health
+ * callback instead prohibits further MMIO and retains recovery ownership. */
+static enum a733_i2s_status bridge_failure(struct a733_i2s_stream *s)
+{
+    if(!valid(s) || !s->deadline || !now(s))return fault(s);
+    int h=health(s);if(h!=1)return fault(s);
+    s->bridge_deadline=s->bridge_until=0;
+    return stop(s,A733_I2S_FAILED);
+}
 static enum a733_i2s_status arm(struct a733_i2s_stream *s)
 {
     unsigned i=s->next;
@@ -208,12 +226,14 @@ static enum a733_i2s_status arm(struct a733_i2s_stream *s)
         if(d==A733_DMA_RECOVERY)return fault(s);
         return stop(s,A733_I2S_FAILED);
     }
-    if(s->bridge_deadline && s->time>=s->bridge_deadline)return stop(s,A733_I2S_FAILED);
+    if(s->bridge_deadline && (s->time>=s->bridge_deadline || (hdmi(s)&&s->time>=s->bridge_until)))
+        return hdmi(s)?bridge_failure(s):stop(s,A733_I2S_FAILED);
     if(!requests(s,1))return fault(s);
     if(!tx(s) && !control(s,1|2))return fault(s);
     if(!now(s))return fault(s);
-    if(s->bridge_deadline && s->time>=s->bridge_deadline)return stop(s,A733_I2S_FAILED);
-    s->bridge_deadline=0;s->stage=ACTIVE;s->status=A733_I2S_ACTIVE;return s->status;
+    if(s->bridge_deadline && (s->time>=s->bridge_deadline || (hdmi(s)&&s->time>=s->bridge_until)))
+        return hdmi(s)?bridge_failure(s):stop(s,A733_I2S_FAILED);
+    s->bridge_deadline=s->bridge_until=0;s->stage=ACTIVE;s->status=A733_I2S_ACTIVE;return s->status;
 }
 enum a733_i2s_status a733_i2s_stream_start(struct a733_i2s_stream *s,uint64_t timeout)
 {
@@ -233,13 +253,21 @@ enum a733_i2s_status a733_i2s_stream_start(struct a733_i2s_stream *s,uint64_t ti
     /* Keep this deadline until the self-clearing FIFO operation completes. */
     return s->status;
 }
+static int bridge_live(struct a733_i2s_stream *s)
+{
+    if(!hdmi(s) || !s->bridge_deadline)return 1;
+    if(!now(s)){fault(s);return 0;}
+    return s->time<s->bridge_deadline && s->time<s->bridge_until;
+}
 static enum a733_i2s_status publish(struct a733_i2s_stream *s)
 {
-    int h=health(s);if(h<0)return fault(s);if(!h)return s->status;
+    if(!bridge_live(s))return bridge_failure(s);
+    int h=health(s);if(h<0)return fault(s);if(!bridge_live(s))return bridge_failure(s);if(!h)return s->status;
     uint32_t status,counter;
     if(!rd(s,ISTA,&status) || !rd(s,tx(s)?TXCNT:RXCNT,&counter))return fault(s);
     if(status&errors(s))return stop(s,A733_I2S_FAILED);
-    if(s->bridge_deadline && s->time>=s->bridge_deadline)return stop(s,A733_I2S_FAILED);
+    if(s->bridge_deadline && (s->time>=s->bridge_deadline || (hdmi(s)&&s->time>=s->bridge_until)))
+        return hdmi(s)?bridge_failure(s):stop(s,A733_I2S_FAILED);
     struct a733_i2s_stream_slot *slot=&s->slots[s->current];
     unsigned frames=s->active_segment.bytes/s->plan.frame_bytes;
     if(s->frames>UINT64_MAX-frames)return fault(s);
@@ -328,7 +356,8 @@ enum a733_i2s_status a733_i2s_stream_poll(struct a733_i2s_stream *s)
     }
     if(s->status!=A733_I2S_PREPARING && s->status!=A733_I2S_ACTIVE && s->status!=A733_I2S_STOPPING)
         return s->status;
-    int h=health(s);if(h<0)return fault(s);if(!h)return s->status;
+    if(hdmi(s) && s->bridge_deadline && (++s->bridge_passes>64 || !bridge_live(s)))return bridge_failure(s);
+    int h=health(s);if(h<0)return fault(s);if(!bridge_live(s))return bridge_failure(s);if(!h)return s->status;
     if(s->stage==FLUSH) {
         uint32_t fc;if(!rd(s,FCTL,&fc))return fault(s);
         if(fc&flush(s))return s->status;
@@ -390,12 +419,24 @@ enum a733_i2s_status a733_i2s_stream_poll(struct a733_i2s_stream *s)
         if(available<2)return stop(s,A733_I2S_FAILED);
         uint64_t us=((uint64_t)(available-1)*1000000)/(s->profile.format.rate_hz*s->profile.format.channels);
         if(!us || !a733_deadline_after(before,us,&s->bridge_deadline))return stop(s,A733_I2S_FAILED);
+        if(hdmi(s)){
+            if(!a733_deadline_after(before,200,&s->bridge_until))return fault(s);
+            if(s->bridge_until>s->bridge_deadline)s->bridge_until=s->bridge_deadline;
+            s->bridge_polls=s->bridge_passes=0;
+        }
         s->slots[s->current].result.observed_before_us=before;
         s->stage=DRAIN;
         }
     }
     if(s->stage==DRAIN) {
-        enum a733_dma_control_status d=a733_dma_poll(s->dma,s->channel);
+        enum a733_dma_control_status d;
+        do {
+            if(!bridge_live(s) || (hdmi(s)&&s->bridge_deadline&&s->bridge_polls>=64))return bridge_failure(s);
+            if(hdmi(s)&&s->bridge_deadline)++s->bridge_polls;
+            d=a733_dma_poll(s->dma,s->channel);
+            if(hdmi(s)&&d==A733_DMA_RECOVERY)return fault(s);
+            if(!bridge_live(s))return bridge_failure(s);
+        } while(hdmi(s)&&s->bridge_deadline&&d==A733_DMA_STOPPING);
         if(!now(s) || d==A733_DMA_RECOVERY)return fault(s);
         if(d==A733_DMA_STOPPING) {
             if(s->bridge_deadline&&s->time>=s->bridge_deadline)return stop(s,A733_I2S_FAILED);

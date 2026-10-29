@@ -10,7 +10,9 @@ static int present(const uint8_t *p)
 int hdmi_session_valid(const struct hdmi_session *s)
 {
     return s&&s->magic==HDMI_SESSION_MAGIC&&s->version==
-#if SUNSTONE_HDMI_AUDIO_USB
+#if SUNSTONE_HDMI_AUDIO_STREAM
+        3&&s->bytes==sizeof(*s)&&present(s->manifest_sha256)
+#elif SUNSTONE_HDMI_AUDIO_USB
         2&&s->bytes==sizeof(*s)
 #else
         1&&s->bytes==sizeof(*s)

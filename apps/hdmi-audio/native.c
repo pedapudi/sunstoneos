@@ -15,6 +15,10 @@
 #include "a733_range.h"
 #include "boot.h"
 #include <string.h>
+#if SUNSTONE_HDMI_AUDIO_STREAM
+#include "stream.h"
+static struct a733_i2s_stream_operations stream_operations(void);
+#endif
 #define CCU UINT32_C(0x02002000)
 #define I2S UINT32_C(0x02535000)
 #define MODULE (CCU+0x1230)
@@ -39,7 +43,13 @@ int hdmi_audio_session_valid(const struct hdmi_audio_session *s)
 }
 static int current(void)
 {return audio.initialized&&!atomic_load_explicit(&audio.failed,memory_order_acquire)&&hdmi_live(NULL)&&
-    xTaskGetCurrentTaskHandle()==app.handles[1];}
+    xTaskGetCurrentTaskHandle()==
+#if SUNSTONE_HDMI_AUDIO_STREAM
+        (atomic_load_explicit(&audio.stream_owner,memory_order_acquire)?audio.service.worker:app.handles[1]);
+#else
+        app.handles[1];
+#endif
+}
 static int now(void *v,uint64_t *out)
 {
     uint64_t t;
@@ -50,15 +60,23 @@ static int now(void *v,uint64_t *out)
 static int enter(void *v,uint64_t deadline)
 {
     uint64_t t;
-    if(v!=&audio||deadline!=app.stop_at||audio.held||!now(v,&t))return -1;
+    if(v!=&audio||(deadline>app.stop_at||!deadline)||audio.held||!now(v,&t))return -1;
     int r=a733_platform_lock_enter(&app.locks,A733_PLATFORM_REGISTER_LOCK,deadline);
     if(r==1)audio.held=1;
     return r;
 }
+static int io_time(uint64_t);
 static void leave(void *v)
 {
     uint64_t t;
-    if(v!=&audio||!audio.held||!now(v,&t)){atomic_store_explicit(&audio.failed,1,memory_order_release);return;}
+    if(v!=&audio||!audio.held){atomic_store_explicit(&audio.failed,1,memory_order_release);return;}
+    if(!now(v,&t)||!io_time(t)){
+#if SUNSTONE_HDMI_AUDIO_STREAM
+        if(atomic_load_explicit(&audio.stream_owner,memory_order_acquire))
+            (void)a733_platform_lock_retain(&app.locks,A733_PLATFORM_REGISTER_LOCK);
+#endif
+        atomic_store_explicit(&audio.failed,1,memory_order_release);return;
+    }
     a733_platform_lock_leave(&app.locks,A733_PLATFORM_REGISTER_LOCK);audio.held=0;
 }
 static int parent_read(void *v,uintptr_t a,uint32_t *out)
@@ -87,23 +105,39 @@ static int address(uintptr_t a,unsigned write)
     default:return 0;
     }
 }
+/* Every stream MMIO checks the worker's current operation deadline, including
+ * reads/writes inside the module/reset sequence before OPEN completes. */
+static int io_time(uint64_t t)
+{
+#if SUNSTONE_HDMI_AUDIO_STREAM
+    if(atomic_load_explicit(&audio.stream_owner,memory_order_acquire))
+        return audio.stream_deadline && t<audio.stream_deadline;
+#endif
+    (void)t;return 1;
+}
 static int rd(uintptr_t a,uint32_t *out)
 {
     uint64_t t;
     /* Device identity mapping for reads, any shareability. */
     static const struct a733_mapping_rule rule={A733_MAPPING_READ,1,{{A733_MAIR_DEVICE_NGNRNE,A733_SH_ANY}},0,1};
-    if(!audio.held||!owns()||!address(a,0)||!out||!now(&audio,&t))return 0;
+    if(!audio.held||!owns()||!address(a,0)||!out||!now(&audio,&t)||!io_time(t))return 0;
     if(!a733_mapping_check(aarch64_device_translate,a,a,&rule))return 0;
-    *out=a733_mmio_read32_dsb_sy_both(a);return now(&audio,&t);
+#if SUNSTONE_HDMI_AUDIO_STREAM
+    if(!now(&audio,&t)||!io_time(t))return 0;
+#endif
+    *out=a733_mmio_read32_dsb_sy_both(a);return now(&audio,&t)&&io_time(t);
 }
 static int wr(uintptr_t a,uint32_t value)
 {
     uint64_t t;
     /* Device identity mapping for writes, any shareability. */
     static const struct a733_mapping_rule rule={A733_MAPPING_WRITE,1,{{A733_MAIR_DEVICE_NGNRNE,A733_SH_ANY}},0,1};
-    if(!audio.held||!owns()||!address(a,1)||!now(&audio,&t))return 0;
+    if(!audio.held||!owns()||!address(a,1)||!now(&audio,&t)||!io_time(t))return 0;
     if(!a733_mapping_check(aarch64_device_translate,a,a,&rule))return 0;
-    a733_mmio_write32_dsb_sy_both(a,value);return now(&audio,&t);
+#if SUNSTONE_HDMI_AUDIO_STREAM
+    if(!now(&audio,&t)||!io_time(t))return 0;
+#endif
+    a733_mmio_write32_dsb_sy_both(a,value);return now(&audio,&t)&&io_time(t);
 }
 static int update(uintptr_t a,uint32_t mask,uint32_t value)
 {
@@ -122,7 +156,13 @@ static int parent_memory(void)
         r->state==DEVICE_MEMORY_DEVICE&&r->owner==app.session.audio.authority&&
         audio.memory.pool==(uintptr_t)audio.pool&&audio.memory.owner==r->owner&&
         audio.memory.generation==r->generation&&
-        audio.pcm_span==((app.session.audio.frames*4+4095)&~UINT64_C(4095))&&
+        audio.pcm_span==
+#if SUNSTONE_HDMI_AUDIO_STREAM
+        4*4096
+#else
+        ((app.session.audio.frames*4+4095)&~UINT64_C(4095))
+#endif
+        &&
         audio.extent.bytes==4096+audio.pcm_span&&audio.extent.cpu==0x41c00000+(uintptr_t)r->first*4096&&
         audio.extent.physical==audio.extent.cpu&&audio.extent.bytes==(size_t)r->pages*4096;
 }
@@ -152,11 +192,19 @@ static int nc_mapping(const struct a733_dma_mapping *m)
        (((uintptr_t)m->cpu|m->bus|m->bytes)&63)||
        m->bytes>UINTPTR_MAX-(uintptr_t)m->cpu||m->bus>=(UINT64_C(1)<<35)||
        m->bytes>(UINT64_C(1)<<35)-m->bus)return 0;
+#if SUNSTONE_HDMI_AUDIO_STREAM
+    uintptr_t offset=(uintptr_t)m->cpu-audio.extent.cpu;
+    int descriptor=m->bus==(uintptr_t)m->cpu && m->access==A733_DMA_DESCRIPTORS &&
+        ((offset==0&&m->bytes==4096)||(offset<4*64&&!(offset%64)&&m->bytes==64));
+    int pcm=m->bus==(uintptr_t)m->cpu && m->access==A733_DMA_READ &&
+        offset>=4096 && offset<5*4096 && !(offset%4096) && m->bytes==4096;
+#else
     int descriptor=(uintptr_t)m->cpu==audio.extent.cpu&&m->bus==audio.extent.physical&&
         m->bytes==4096&&m->access==A733_DMA_DESCRIPTORS&&
         m->bus<UINT64_C(0xfffff800)&&m->bytes<=UINT64_C(0xfffff800)-m->bus;
     int pcm=(uintptr_t)m->cpu==audio.extent.cpu+4096&&m->bus==audio.extent.physical+4096&&
         m->bytes==audio.pcm_span&&m->access==A733_DMA_READ;
+#endif
     if(!descriptor&&!pcm)return 0;
     /* PAR_EL1 reports Normal-NC as outer shareable (2), whatever the
      * descriptor says; accept inner (3) as well, like the uncached pool. The
@@ -170,7 +218,7 @@ static void dma_cache(void *v,enum a733_dma_cache op,void *p,size_t bytes)
 {
     if(v!=&audio)dma_fatal(NULL);worker();
     struct a733_dma_mapping m={p,(uintptr_t)p,bytes,
-        (uintptr_t)p==audio.extent.cpu?A733_DMA_DESCRIPTORS:A733_DMA_READ};
+        (uintptr_t)p>=audio.extent.cpu&&(uintptr_t)p<audio.extent.cpu+4096?A733_DMA_DESCRIPTORS:A733_DMA_READ};
     if(op!=A733_DMA_CLEAN||!nc_mapping(&m))dma_fatal(NULL);
     /* There are no cacheable aliases and no writes after immutable handoff.
      * DSB orders Normal-NC PCM/descriptor stores before DMA enable. */
@@ -201,25 +249,44 @@ int hdmi_audio_boot(void)
     const struct hdmi_audio_session *s=&app.session.audio;
     if(audio.initialized||!hdmi_audio_session_valid(s)||xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED)return 0;
     uint8_t digest[32];size_t bytes=(size_t)s->frames*4;
+#if SUNSTONE_HDMI_AUDIO_STREAM
+    size_t upload_bytes=hdmi_stream_manifest_bytes();
+#else
+    size_t upload_bytes=bytes;
+#endif
     /* Write-back identity pages, inner shareable; the read translation is
      * checked. */
     static const struct a733_mapping_rule wb={A733_MAPPING_READ,1,{{A733_MAIR_NORMAL_WB,A733_SH_INNER}},0,1};
-    if(!a733_mapping_check_stride(aarch64_device_translate,HDMI_AUDIO_PCM_ADDRESS,HDMI_AUDIO_PCM_ADDRESS,bytes,4096,&wb))
+    if(!a733_mapping_check_stride(aarch64_device_translate,HDMI_AUDIO_PCM_ADDRESS,HDMI_AUDIO_PCM_ADDRESS,upload_bytes,4096,&wb))
         return 0;
+#if SUNSTONE_HDMI_AUDIO_STREAM
+    (void)digest;
+    if(!hdmi_stream_manifest_valid())return 0;
+    audio.pcm_span=4*4096;
+#else
     storage_digest_bytes((const void *)HDMI_AUDIO_PCM_ADDRESS,bytes,digest);
     if(memcmp(digest,s->pcm_sha256,32))return 0;
-    audio.pool=a733_memory_uncached_init();audio.pcm_span=(bytes+4095)&~(size_t)4095;
+    audio.pcm_span=(bytes+4095)&~(size_t)4095;
+#endif
+    audio.pool=a733_memory_uncached_init();
     if(!audio.pool||!device_memory_acquire(audio.pool,s->authority,4096+audio.pcm_span,&audio.memory,&audio.extent))return 0;
     /* Sole boot writer; publish permanent ownership before the worker exists. */
     memset((void *)audio.extent.cpu,0,audio.extent.bytes);
+#if !SUNSTONE_HDMI_AUDIO_STREAM
     memcpy((void *)(audio.extent.cpu+4096),(const void *)HDMI_AUDIO_PCM_ADDRESS,bytes);
+#endif
     struct device_memory_allocation *record=device_memory_lookup(audio.pool,audio.memory);
     if(!record)return 0;record->state=DEVICE_MEMORY_DEVICE;audio.record=*record;
+#if SUNSTONE_HDMI_AUDIO_STREAM
+    struct dma_memory_window windows[5]={{audio.extent.cpu,audio.extent.physical,4096,DMA_MEMORY_ROLE(A733_DMA_DESCRIPTORS)}};
+    for(unsigned i=0;i<4;++i)windows[i+1]=(struct dma_memory_window){audio.extent.cpu+4096*(i+1),audio.extent.physical+4096*(i+1),4096,DMA_MEMORY_ROLE(A733_DMA_READ)};
+#else
     struct dma_memory_window windows[]={
         {audio.extent.cpu,audio.extent.physical,4096,DMA_MEMORY_ROLE(A733_DMA_DESCRIPTORS)},
         {audio.extent.cpu+4096,audio.extent.physical+4096,audio.pcm_span,DMA_MEMORY_ROLE(A733_DMA_READ)}};
+#endif
     const struct dma_fifo_port port={I2S+0x20,6,1u<<2,1u<<8,A733_DMA_WRITE};
-    if(!a733_dma_native_init(&audio.dma,s->dma.controller,s->dma.controller,windows,2,&port,1,dma_fatal,NULL))return 0;
+    if(!a733_dma_native_init(&audio.dma,s->dma.controller,s->dma.controller,windows,sizeof(windows)/sizeof(windows[0]),&port,1,dma_fatal,NULL))return 0;
     struct a733_dma_handoff handoff=s->dma;handoff.allowed.deadline_us=app.stop_at;
     if(!a733_dma_startup_supervised_init(&audio.startup,&handoff,&app.counter,&app.clocks,&app.locks)||
        !a733_dma_startup_bind_task(&audio.startup,app.handles[1]))return 0;
@@ -227,17 +294,33 @@ int hdmi_audio_boot(void)
     audio.mapping=(struct a733_dma_mapping){(void *)(audio.extent.cpu+4096),audio.extent.physical+4096,audio.pcm_span,A733_DMA_READ};
     audio.job=(struct dma_service_job){.kind=DMA_SERVICE_FIFO,.channel=0,
         .transfer={{(void *)audio.extent.cpu,audio.extent.physical,4096,A733_DMA_DESCRIPTORS},&audio.segment,1,&audio.mapping,1}};
+#if SUNSTONE_HDMI_AUDIO_STREAM
+    for(unsigned i=0;i<4;++i){
+        uintptr_t p=audio.extent.cpu+4096*(i+1);
+        audio.periods[i]=(struct a733_dma_segment){{p,0,2,8},{I2S+0x20,6,2,8},4096};
+        audio.period_maps[i]=(struct a733_dma_mapping){(void *)p,p,4096,A733_DMA_READ};
+    }
+    audio.stream_profile.stream=(struct a733_i2s_stream_profile){
+        .format={24576000,48000,0,16,32,2,0},.operations=stream_operations(),.cookie=&audio,
+        .direction=A733_I2S_TRANSMIT,.operation_us=10000,.route=A733_I2S_ROUTE_HDMI3};
+    audio.job=(struct dma_service_job){.kind=DMA_SERVICE_I2S_STREAM,.channel=0,
+        .transfer={{(void *)audio.extent.cpu,audio.extent.physical,4096,A733_DMA_DESCRIPTORS},audio.periods,4,audio.period_maps,4},
+        .stream=&audio.stream_profile};
+#endif
     const struct dma_service_protected protected[]={
         {0x41000000,0x41000000,0xc00000},{0x41e00000,0x41e00000,0x400000}};
     const struct dma_service_activation activation={app.handles[1],prepared,&audio};
     if(!dma_service_init_deferred(&audio.service,&dma_ops,&audio,s->dma.controller,1,240000,
-        &audio.job,1,protected,2,4,1,&activation)||!dma_service_bind(&audio.service,0,app.handles[1],1))return 0;
+        &audio.job,1,protected,2,SUNSTONE_HDMI_AUDIO_STREAM?5:4,1,&activation)||!dma_service_bind(&audio.service,0,app.handles[1],1))return 0;
+#if SUNSTONE_HDMI_AUDIO_STREAM
+    if(!dma_service_i2s_irq_bind(&audio.irq,&audio.service,24000000))return 0;
+#endif
     const struct a733_audio_operations backend={.enter=enter,.leave=leave,.now_us=now,.read=parent_read,.write=parent_write};
     const struct a733_i2s_format format={24576000,48000,0,16,32,2,0};
     if(!a733_audio_leases_init(&audio.leases,&app.clocks,s->authority,&backend,&audio)||
        !a733_audio_parent_init(&audio.parent,&audio.leases.operations,&audio.leases,0,app.stop_at)||
        !a733_i2s_plan(&format,&audio.plan)||!a733_hdmi_audio_init(&audio.sampler,&app.hdmi.controller))return 0;
-    hdmi_audio_result=(struct hdmi_audio_result){.magic=HDMI_AUDIO_RESULT_MAGIC,.version=1,.bytes=160,
+    hdmi_audio_result=(struct hdmi_audio_result){.magic=HDMI_AUDIO_RESULT_MAGIC,.version=SUNSTONE_HDMI_AUDIO_STREAM?2:1,.bytes=160,
         .stage=HDMI_AUDIO_PENDING,.frames=s->frames,.source_bytes=bytes,.rate_hz=48000,
         .tmds_hz=app.session.request.phy_reference_hz==26000000?73937500:74250000};
     memcpy(hdmi_audio_result.pcm_sha256,s->pcm_sha256,32);
@@ -246,21 +329,27 @@ int hdmi_audio_boot(void)
 }
 static int publish(unsigned stage)
 {
-    if(audio.published)return stage==HDMI_AUDIO_INPUT_ENDED_RETAINED?1:-1;
+    if(audio.published)return (stage==HDMI_AUDIO_INPUT_ENDED_RETAINED||stage==HDMI_AUDIO_CANCELED_RETAINED)?1:-1;
     hdmi_audio_result.stage=stage;
     if(!a733_cpu_coherence_publish((uintptr_t)&hdmi_audio_result,sizeof(hdmi_audio_result),app.deadline*24))return -1;
     atomic_store_explicit(&hdmi_audio_result_ready,1,memory_order_release);
     if(!a733_cpu_coherence_publish((uintptr_t)&hdmi_audio_result_ready,64,app.deadline*24))return -1;
-    audio.published=1;return stage==HDMI_AUDIO_INPUT_ENDED_RETAINED?1:-1;
+    audio.published=1;return (stage==HDMI_AUDIO_INPUT_ENDED_RETAINED||stage==HDMI_AUDIO_CANCELED_RETAINED)?1:-1;
 }
 void hdmi_audio_retain(void)
 {
     /* Uncertain DMA remains owned. No reset, forced completion or reclamation.
      * Do not make further device writes after authority/time failure. */
-    atomic_store_explicit(&audio.failed,1,memory_order_release);if(!audio.published)(void)publish(HDMI_AUDIO_FAULT_RETAINED);
+    atomic_store_explicit(&audio.failed,1,memory_order_release);
+#if SUNSTONE_HDMI_AUDIO_STREAM
+    if(!audio.published)hdmi_audio_result.source_consumed_bytes=
+        atomic_load_explicit(&stream.consumed,memory_order_acquire)*4;
+#endif
+    if(!audio.published)(void)publish(HDMI_AUDIO_FAULT_RETAINED);
 }
 static int fail(void)
 {hdmi_audio_retain();return -1;}
+#if !SUNSTONE_HDMI_AUDIO_STREAM
 static int request(enum dma_service_operation op,uint64_t timeout,struct dma_service_reply *reply)
 {
     if(!audio.ticket){const struct dma_service_request r={.operation=op,.job=0,.timeout=timeout};
@@ -268,9 +357,14 @@ static int request(enum dma_service_operation op,uint64_t timeout,struct dma_ser
     if(!dma_service_collect(&audio.service,audio.ticket,reply,0))return 0;
     audio.ticket=0;return reply->result==DMA_SERVICE_OK?1:-1;
 }
+#endif
 static int i2s_prepare(void)
 {
-    int lock=enter(&audio,app.stop_at);if(lock!=1)return lock;
+    uint64_t deadline=app.stop_at;
+#if SUNSTONE_HDMI_AUDIO_STREAM
+    deadline=audio.stream_deadline;
+#endif
+    int lock=enter(&audio,deadline);if(lock!=1)return lock;
     int ok=1;uint32_t x,y;
     if(!audio.index){
         ok=rd(MODULE,&x)&&rd(BUS,&y)&&!(x&(1u<<31))&&!(y&BUS_MASK)&&
@@ -282,6 +376,9 @@ static int i2s_prepare(void)
             if(ok)audio.index=2;
         }
     }else{
+#if SUNSTONE_HDMI_AUDIO_STREAM
+        leave(&audio);return atomic_load_explicit(&audio.failed,memory_order_acquire)?-1:1;
+#else
         static const struct {unsigned off,mask,value;} fields[]={
             {0,0x00070137,0x00060010},{4,0xffff,0x1f73},{8,0,0},
             {0x24,0x1ff,0x50},{0x30,0xf,1},{0x34,0x00ff000f,0x00110003},
@@ -301,9 +398,18 @@ static int i2s_prepare(void)
             ok=rd(I2S+0x14,&x)&&rd(I2S+0x18,&y);
             if(ok&&!(x&(1u<<25))&&((y>>16)&255)==128){leave(&audio);return atomic_load_explicit(&audio.failed,memory_order_acquire)?-1:1;}
         }
+#endif
     }
+#if SUNSTONE_HDMI_AUDIO_STREAM
+    uint64_t t;
+    if(!ok || !now(&audio,&t) || !io_time(t)){
+        (void)a733_platform_lock_retain(&app.locks,A733_PLATFORM_REGISTER_LOCK);
+        atomic_store_explicit(&audio.failed,1,memory_order_release);return -1;
+    }
+#endif
     leave(&audio);return ok&&!atomic_load_explicit(&audio.failed,memory_order_acquire)?0:-1;
 }
+#if !SUNSTONE_HDMI_AUDIO_STREAM
 /* Start enables the controller and FIFO requests with TX still off, so DMA
  * primes the FIFO before transmit() starts the serializer, as the I2S0 stream
  * driver does. */
@@ -403,3 +509,7 @@ int hdmi_audio_step(void)
     default:return fail();
     }
 }
+
+#else
+#include "stream-native.inc"
+#endif

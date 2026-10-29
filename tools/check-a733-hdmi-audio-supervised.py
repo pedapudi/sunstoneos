@@ -47,8 +47,8 @@ def freeze_bundle(bundle):
     prepared['_source_hashes']={name:digest(path) for name,path in software_sources().items()}
     prepared['_sizes']={name:len(data) for name,data in frozen.items()}
     session=frozen['source-session.bin']
-    require(len(session)==816,'Version1 HDMI audio is offline-only.')
-    preparation.image_metadata(frozen['image.elf'],session_size=816)
+    require(len(session) in (816,848),'Version1 HDMI audio is offline-only.')
+    preparation.image_metadata(frozen['image.elf'],session_size=len(session))
     preparation.session_check(session,frozen['input.pcm'])
     prepared['_frozen']=frozen
     return prepared

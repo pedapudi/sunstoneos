@@ -4,6 +4,7 @@
 
 #define A733_I2S_STREAM_PERIODS 8u
 #define A733_I2S0_TXFIFO (A733_I2S0_BASE + 0x20u)
+enum a733_i2s_route { A733_I2S_ROUTE_I2S0, A733_I2S_ROUTE_HDMI3 };
 enum a733_i2s_direction { A733_I2S_RECEIVE, A733_I2S_TRANSMIT };
 enum a733_i2s_period_kind { A733_I2S_NO_PERIOD, A733_I2S_CAPTURED,
     A733_I2S_TX_FILL, A733_I2S_TX_MEMORY_CONSUMED, A733_I2S_TX_REPEAT_PROGRESS, A733_I2S_CAPTURED_COPY };
@@ -35,6 +36,7 @@ struct a733_i2s_stream_profile {
     enum a733_i2s_direction direction;
     uint64_t operation_us; /* Finite health/register operation budget. */
     unsigned cyclic; /* Fixed private ring; live RX is checked-copy only. */
+    enum a733_i2s_route route; /* Zero preserves I2S0; HDMI3 is fixed finite TX. */
 };
 /* Catalogue: 2..8 equal whole-frame segments, one disjoint full allocation per
  * period, and one separate 64-byte descriptor slot per period. All metadata is
@@ -68,7 +70,8 @@ struct a733_i2s_stream {
     struct a733_i2s_period snapshot_result;
     unsigned snapshot_state, cyclic_started;
     unsigned input_ended, end_slot, end_frames;
-    uint64_t fifo_deadline;
+    uint64_t fifo_deadline, bridge_until;
+    unsigned bridge_polls, bridge_passes;
     _Alignas(64) unsigned char snapshot[4096];
 };
 enum a733_i2s_status a733_i2s_stream_open(struct a733_i2s_stream *,

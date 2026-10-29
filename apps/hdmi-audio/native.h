@@ -6,6 +6,9 @@
 #include "dma_service.h"
 #include "a733_memory_uncached.h"
 #include "session.h"
+#if SUNSTONE_HDMI_AUDIO_STREAM
+#include "dma_service_i2s_irq.h"
+#endif
 struct hdmi_audio_native {
     struct a733_audio_parent parent;
     struct a733_audio_leases leases;
@@ -22,6 +25,14 @@ struct hdmi_audio_native {
     struct a733_dma_mapping mapping;
     struct dma_service_job job;
     struct a733_i2s_plan plan;
+#if SUNSTONE_HDMI_AUDIO_STREAM
+    struct a733_dma_segment periods[4];
+    struct a733_dma_mapping period_maps[4];
+    struct dma_service_i2s_stream_profile stream_profile;
+    struct dma_service_i2s_irq irq;
+    atomic_uint stream_owner;
+    uint64_t stream_deadline;
+#endif
     uint64_t ticket,last_now,wait_until;
     size_t pcm_span;
     atomic_uint failed;
@@ -34,4 +45,8 @@ int hdmi_audio_session_valid(const struct hdmi_audio_session *);
 int hdmi_audio_boot(void);
 int hdmi_audio_step(void); /*1 input ended and retained,0 pending,-1 retained fault*/
 void hdmi_audio_retain(void);
+#if SUNSTONE_HDMI_AUDIO_STREAM
+int hdmi_audio_stream_request(enum dma_service_operation,uint64_t,uint64_t,struct dma_service_reply *);
+int hdmi_audio_stream_publish(unsigned);
+#endif
 #endif

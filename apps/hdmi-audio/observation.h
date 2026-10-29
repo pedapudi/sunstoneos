@@ -21,6 +21,10 @@ struct hdmi_audio_observation_mailbox {
     atomic_uint state;
     uint32_t request_id,requests;
     uint64_t request_deadline;
+#if SUNSTONE_HDMI_AUDIO_STREAM
+    uint64_t sequence;
+    unsigned operation,payload_bytes;
+#endif
     struct hdmi_audio_observation reply;
 };
 _Static_assert(sizeof(struct hdmi_audio_observation)==512&&
@@ -29,4 +33,7 @@ _Static_assert(sizeof(struct hdmi_audio_observation)==512&&
 extern struct hdmi_audio_observation_mailbox observation;
 int hdmi_audio_observation_request(const void *,size_t,uint64_t);
 void hdmi_audio_observation_poll(void);
+#if SUNSTONE_HDMI_AUDIO_STREAM
+int hdmi_audio_observation_uploaded(void);
+#endif
 #endif

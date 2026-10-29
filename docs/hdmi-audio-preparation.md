@@ -129,8 +129,9 @@ referenced observation. The supervised caller checks those same frozen bytes
 again when binding the actual board identity and port.
 
 `tools/check-a733-hdmi-audio-supervised.py` uses the existing supervisor and its
-reviewed queue entry. It accepts only the version-2 copied-USB image. It never
-reads running native RAM through FEL. Each sequential 32-byte request names the
+reviewed queue entry. It accepts the version-2 finite copied-USB image and the version-3 streaming
+image described below. It never
+reads running native RAM through FEL. In finite mode, each sequential 32-byte request names the
 epoch and generation. The 512-byte reply binds that request, the image build ID,
 the complete admitted-session digest, the remaining native lifetime and an
 optional immutable 160-byte audio result. All 224 reserved bytes must be zero.
@@ -138,7 +139,7 @@ The host reads 513 bytes so the native terminal zero-length packet completes the
 512-byte response.
 
 The evidence directory must be new, and its parent must already exist. The
-caller synchronizes that parent before receiving replies. It allows at most 200
+caller synchronizes that parent before receiving replies. Finite capture allows at most 200
 requests, one second per exchange and 19 seconds for the whole capture. Every returned byte string is saved and synchronized
 before decoding or rejecting a late response. Success requires the published
 input-ended result, stopped HDMI, ready USB and no fatal application flag.
@@ -168,3 +169,82 @@ The copied-capture host results and selected immutable inputs are preserved at
 The source provenance record distinguishes the Python bytes included in the
 native image identity from the external producer and capture implementation.
 These software results do not qualify physical USB, HDMI audio or recovery.
+
+## Authenticated streaming preparation and capture
+
+The streaming image accepts stereo S16LE PCM at 48 kHz, with one to 576,000
+frames within the admitted 20-second lifetime. Its version-3 session contains
+848 bytes. The final 32 bytes authenticate a period manifest; the existing PCM
+digest authenticates the complete original file. Preparation requires the linked
+128-byte streaming geometry marker and the matching image identity.
+
+The manifest has a 64-byte header and one SHA-256 digest for each ordered
+1,024-frame period. The final digest covers only the supplied frames. The header
+binds the full PCM digest, frame count, format and exact manifest length. Its
+maximum size is 18,080 bytes. The bundle uploads `manifest.bin` at `0x41f10000`
+and preserves `input.pcm` for the USB producer. The memory authority's
+`pcm_range` covers that manifest extent in a streaming session. Bundle validation
+reconstructs the manifest and checks every upload address and frozen file.
+
+The supervised caller accepts either the finite copied-USB session or the
+streaming session. Streaming uses version-2 requests with a 48-byte header.
+Each WRITE supplies the next complete period. Host writes contain at most
+512 bytes, and all fragments share one absolute exchange deadline. The native
+producer publishes a staging slot only after receiving the complete payload.
+The host sends END after the last accepted period, including an exact short
+final period. STATUS uses the accepted period count and waits 22 milliseconds
+between queries when staging credits are exhausted. The request budget is twice
+the declared period count plus 64; each exchange retains the one-second bound
+and the capture retains the 19-second bound.
+
+Streaming replies retain the 512-byte copied response and terminal zero-length
+packet. Their 40-byte extension reports staging credits, command disposition,
+accepted, committed and consumed frames, and the echoed command sequence.
+The host verifies those counters against its submissions and earlier replies.
+It saves each raw response before decoding, including malformed and late
+responses. A transport failure ends capture without retry or cancellation.
+
+The version-2 audio result permits partial source consumption in retained failure
+and adds a canceled stage. Healthy completion requires explicit END, all declared
+frames accepted, committed and consumed, DMA completion, an empty FIFO, stopped
+HDMI and ready USB. Cancellation requires the native service's actual CANCELED
+result and remains a separate retained outcome. The host never
+interprets cancellation, a timeout, FIFO emptiness or USB delivery as serializer
+completion. All outcomes retain resources until whole-board power removal.
+
+The host protocol model exercises a 49,153-frame input with a short final period,
+manifest and session corruption, invalid commands and counters, early EOF,
+fragmented device writes, retained cancellation, stale or late replies and failed
+archive writes. The preserved finite copied response also passes the existing
+host refusal and durability checks. Results are under
+`~/.cache/sunstoneos/evidence/finish-hdmi-host-1028/`. These checks use modeled
+transport and establish no physical USB throughput, audio continuity or recovery.
+
+The streaming ELF used for the native completion checks, with SHA-256
+`5c3c32840187ded24a755873da51012c28c475780bc80da752b18f19ffff3f90`,
+passes preparation with a 50,177-frame model input. The actual producer creates
+an 848-byte session, exact manifest and supervised launcher bundle. Production
+preparation refuses the model authority. With only that authority boundary
+replaced, the actual supervisor caller accepts the frozen bundle and reaches
+readiness before queue or device access. The evidence is in
+`finish-hdmi-host-1028/mmio-image/` and `finish-hdmi-host-1028/mmio-entry.json`
+under the evidence directory above. Targeted cancellation checks refuse pending,
+complete and failed DMA dispositions when a copied result claims cancellation.
+
+The host decoder also accepts the actual full-speed and high-speed terminal
+replies from that image's native USB fixture. Each reports 50,177 frames accepted,
+committed and consumed, with 200,708 source bytes consumed, completed DMA, an
+empty FIFO and `wire_drained=0`. The host durably archives both copied replies
+and the decoded result with the exact image, session and PCM. This evidence is
+in `finish-hdmi-host-1028/actual-reply/result.json`; native playback and USB
+completion remain instruction-emulated observations with modeled devices.
+
+The provider's controlled-stop correction uses the successor ELF with SHA-256
+`54abd2ead295d72bb575d1c682e6b93a09ec48a8cd2d3cb3ec083c5dd39c94d3`.
+Preparation and the actual supervisor entry pass for its generated session
+`0ec2470e8d1f2b67ac57044d431358e03dee392cbccee0d50755d8a294d4b272`.
+The bundle and entry evidence are in `controlled-stop-image/` and
+`controlled-stop-entry.json` under the same host evidence directory. The host
+and USB code are unchanged; the copied-reply evidence above retains its original
+image and session identities. The native component evidence covers the affected
+provider stop cases.

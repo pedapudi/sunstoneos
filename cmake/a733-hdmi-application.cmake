@@ -2,6 +2,10 @@
 option(SUNSTONE_HDMI_FRAMEBUFFER "Build fixed720p RGB565 framebuffer HDMI image" OFF)
 option(SUNSTONE_HDMI_AUDIO "Build finite fixed48kHz stereo PCM over internal I2S3" OFF)
 option(SUNSTONE_HDMI_AUDIO_USB "Copy finite HDMI audio results through USB0 PIO" OFF)
+option(SUNSTONE_HDMI_AUDIO_STREAM "Stream bounded stereo PCM uploads through I2S3 period leases" OFF)
+if(SUNSTONE_HDMI_AUDIO_STREAM AND (NOT SUNSTONE_HDMI_AUDIO OR NOT SUNSTONE_HDMI_AUDIO_USB))
+ message(FATAL_ERROR "HDMI streaming requires audio and USB")
+endif()
 if(SUNSTONE_HDMI_AUDIO_USB AND NOT SUNSTONE_HDMI_AUDIO)
  message(FATAL_ERROR "HDMI audio observation requires the finite audio profile")
 endif()
@@ -67,9 +71,14 @@ if(SUNSTONE_HDMI_AUDIO_USB)
   "${TINYUSB_DIR}/src/common/tusb_fifo.c" "${TINYUSB_DIR}/src/device/usbd.c"
   "${TINYUSB_DIR}/src/class/vendor/vendor_device.c")
 endif()
+if(SUNSTONE_HDMI_AUDIO_STREAM)
+ foreach(source IN ITEMS apps/hdmi-audio/stream.c apps/hdmi-audio/irq.c drivers/audio/dma_service_i2s_irq.c drivers/gpu/gicv3_spi.c platform/a733-smp-cached/irq_table.c)
+  list(APPEND hdmi_sources "${hdmi_root}/${source}")
+ endforeach()
+endif()
 list(REMOVE_DUPLICATES hdmi_sources)
 add_executable(sunstone-a733-hdmi EXCLUDE_FROM_ALL ${hdmi_sources})
-target_compile_definitions(sunstone-a733-hdmi PRIVATE SUNSTONE_HDMI_FRAMEBUFFER=$<BOOL:${SUNSTONE_HDMI_FRAMEBUFFER}> SUNSTONE_HDMI_AUDIO=$<BOOL:${SUNSTONE_HDMI_AUDIO}> SUNSTONE_HDMI_AUDIO_USB=$<BOOL:${SUNSTONE_HDMI_AUDIO_USB}>)
+target_compile_definitions(sunstone-a733-hdmi PRIVATE SUNSTONE_HDMI_AUDIO_STREAM=$<BOOL:${SUNSTONE_HDMI_AUDIO_STREAM}> SUNSTONE_HDMI_FRAMEBUFFER=$<BOOL:${SUNSTONE_HDMI_FRAMEBUFFER}> SUNSTONE_HDMI_AUDIO=$<BOOL:${SUNSTONE_HDMI_AUDIO}> SUNSTONE_HDMI_AUDIO_USB=$<BOOL:${SUNSTONE_HDMI_AUDIO_USB}>)
 if(SUNSTONE_HDMI_AUDIO_USB)
  target_compile_definitions(sunstone-a733-hdmi PRIVATE SUNSTONE_A733_USB=1)
  target_include_directories(sunstone-a733-hdmi PRIVATE "${TINYUSB_DIR}/src"
@@ -80,6 +89,9 @@ set_property(TARGET sunstone-a733-hdmi PROPERTY COMPILE_OPTIONS "${hdmi_options}
 target_include_directories(sunstone-a733-hdmi BEFORE PRIVATE "${hdmi_root}/apps/hdmi"
  "${hdmi_root}/platform/a733-smp-cached" "${hdmi_root}/include" "${hdmi_root}/runtime/include"
  "${FREERTOS_DIR}/include" "${storage_base}")
+if(SUNSTONE_HDMI_AUDIO_STREAM)
+ target_compile_definitions(sunstone-a733-hdmi PRIVATE SUNSTONE_A733_IRQ_TABLE=1)
+endif()
 target_compile_definitions(sunstone-a733-hdmi PRIVATE SUNSTONE_SECURE_MONITOR=1
  SUNSTONE_A733_SMP_DIAGNOSTIC=1 A733_SMP_CONTRACT_MAGIC=0x4153373348444331ULL
  A733_SMP_RESULT_MAGIC=0x4153373348445231ULL)
@@ -98,7 +110,7 @@ if(SUNSTONE_HDMI_AUDIO)
   "${hdmi_root}/apps/hdmi-audio/prepare.py" "${hdmi_root}/apps/hdmi-audio/capture.py"
   "${hdmi_root}/apps/hdmi-audio/observe.py")
  file(GLOB audio_headers "${hdmi_root}/apps/hdmi-audio/*.h")
- list(APPEND hdmi_headers ${audio_headers} "${hdmi_root}/include/a733_hdmi_audio.h")
+ list(APPEND hdmi_headers "${hdmi_root}/apps/hdmi-audio/stream-native.inc" ${audio_headers} "${hdmi_root}/include/a733_hdmi_audio.h")
 endif()
 set(hdmi_inputs ${hdmi_sources} ${hdmi_headers} ${storage_inputs}
  "${CMAKE_CURRENT_LIST_FILE}" "${hdmi_root}/apps/hdmi/CMakeLists.txt"
@@ -111,7 +123,7 @@ if(SUNSTONE_HDMI_FRAMEBUFFER)
 else()
  set(hdmi_profile "TV0-pattern;no-DMA")
 endif()
-set(hdmi_identity "native-hdmi-3;audio=${SUNSTONE_HDMI_AUDIO};audio-usb=${SUNSTONE_HDMI_AUDIO_USB};framebuffer=${SUNSTONE_HDMI_FRAMEBUFFER};${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};8;720p60;limited;${hdmi_profile};supervised")
+set(hdmi_identity "native-hdmi-3;audio=${SUNSTONE_HDMI_AUDIO};audio-usb=${SUNSTONE_HDMI_AUDIO_USB};audio-stream=${SUNSTONE_HDMI_AUDIO_STREAM};framebuffer=${SUNSTONE_HDMI_FRAMEBUFFER};${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};8;720p60;limited;${hdmi_profile};supervised")
 foreach(input IN LISTS hdmi_inputs)
  file(SHA256 "${input}" hdmi_digest)
  string(APPEND hdmi_identity "${hdmi_digest}")

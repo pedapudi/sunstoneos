@@ -1,6 +1,9 @@
 #include "application.h"
 #include "../hdmi-audio/usb.h"
 #include "../hdmi-audio/observation.h"
+#if SUNSTONE_HDMI_AUDIO_STREAM
+#include "stream.h"
+#endif
 #include "a733_storage_digest.h"
 struct hdmi_audio_usb usb;
 #include "a733_usb_platform_native.h"
@@ -13,7 +16,12 @@ struct hdmi_audio_usb usb;
 _Static_assert(CFG_TUD_VENDOR_TX_BUFSIZE>=sizeof(struct hdmi_audio_observation),"Observation reply requires one bounded FIFO write");
 static unsigned polling,received,sent,transferred,tx_active,tx_zlp;
 static uint64_t exchange_deadline;
+#if SUNSTONE_HDMI_AUDIO_STREAM
+static uint8_t request[48];
+static unsigned payload_received;
+#else
 static uint8_t request[32];
+#endif
 static int terminal_idle_expired(void)
 {
     return atomic_load_explicit(&app.state,memory_order_acquire)==2&&
@@ -189,6 +197,9 @@ void tud_vendor_tx_cb(uint8_t interface,uint32_t bytes)
         if(bytes&&!(bytes&(packet-1))){tx_zlp=1;return;}
         if(!bytes&&!tx_zlp)stop();
         tx_active=tx_zlp=sent=transferred=received=0;
+#if SUNSTONE_HDMI_AUDIO_STREAM
+        payload_received=0;
+#endif
         atomic_store_explicit(&observation.state,0,memory_order_release);
     }
 }
@@ -209,6 +220,18 @@ static void exchange(void)
         }
         return;
     }
+#if SUNSTONE_HDMI_AUDIO_STREAM
+    if(state==4){
+        if(!tud_mounted()||!tud_vendor_available()||!hdmi_stream_credits())return;
+        unsigned count=tud_vendor_available();
+        if(count>observation.payload_bytes-payload_received)count=observation.payload_bytes-payload_received;
+        void *buffer=hdmi_stream_upload_buffer(observation.sequence,payload_received,count);
+        if(!buffer||!count)stop();
+        unsigned got=tud_vendor_read(buffer,count);if(got>count)stop();payload_received+=got;
+        if(payload_received==observation.payload_bytes&&!hdmi_audio_observation_uploaded())stop();
+        return;
+    }
+#endif
     if(state||!tud_mounted()||!tud_vendor_available())return;
     if(!received)exchange_deadline=app.deadline-time<1000000?app.deadline:time+1000000;
     unsigned count=tud_vendor_available();if(count>sizeof(request)-received)count=sizeof(request)-received;
@@ -223,7 +246,11 @@ void hdmi_audio_usb_task(void *unused)
     if(!tusb_init(0,&init))stop();
     atomic_store_explicit(&usb.ready,1,memory_order_release);
     for(;;){
-        if(!owner())stop();int r=providers();if(r<0)stop();if(!r){vTaskDelay(1);continue;}
+        if(!owner())stop();
+        uint64_t time;
+        if(!a733_counter_clock_now(&app.counter,&time)||
+           ((received||atomic_load_explicit(&observation.state,memory_order_acquire)||tx_active)&&time>=exchange_deadline))stop();
+        int r=providers();if(r<0)stop();if(!r){vTaskDelay(1);continue;}
         for(unsigned i=0;i<8;++i){tud_task_ext(0,false);if(polling)dcd_int_handler(0);exchange();}
         vTaskDelay(1);
     }

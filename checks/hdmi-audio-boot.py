@@ -12,17 +12,20 @@ p.add_argument('--session',type=Path,required=True)
 p.add_argument('--contract',type=Path,required=True)
 p.add_argument('--output',type=Path,required=True)
 p.add_argument('--usb',action='store_true',help='Check only the copied-USB profile and its new interrupt guard')
+p.add_argument('--stream',action='store_true',help='Check fixed I2S3 DMA route and both inherited interrupt guards')
 args=p.parse_args();P=args.image;O=args.output;O.mkdir(parents=True,exist_ok=False)
 session=args.session.read_bytes();contract=args.contract.read_bytes()
 assert len(contract) in (224,4096) and not any(contract[224:])
 contract=contract[:224]
-expected=(2,816) if args.usb else (1,656)
+expected=(3,848) if args.stream else (2,816) if args.usb else (1,656)
 assert len(contract)==224 and len(session)==expected[1] and struct.unpack_from('<3Q',session)==(0x4153373348444131,*expected)
 spec=importlib.util.spec_from_file_location('hdmi_audio_irq_image',R/'checks/storage-read-native.py');n=importlib.util.module_from_spec(spec);spec.loader.exec_module(n);e=n.Image(P,layout_names=('a733_smp_contract',))
-if args.usb:
+if args.usb or args.stream:
  address=e.address('a733_hdmi_audio_geometry')
- geometry=next(data[address-base:address-base+96] for base,data in e.parts if base<=address and address+96<=base+len(data))
- assert struct.unpack('<12Q',geometry)==(2,816,440,216,0x41f10000,192000,48000,2,16,32,656,160)
+ count=16 if args.stream else 12
+ geometry=next(data[address-base:address-base+8*count] for base,data in e.parts if base<=address and address+8*count<=base+len(data))
+ expected_geometry=(3,848,440,216,0x41f10000,18080,48000,2,16,32,656,160,816,32,576000,1024) if args.stream else (2,816,440,216,0x41f10000,192000,48000,2,16,32,656,160)
+ assert struct.unpack('<'+str(count)+'Q',geometry)==expected_geometry
 # The producer leaves magic/timestamps for the SRAM launcher. Supply that
 # arming step once; native model continuations reuse the saved exact contract.
 contract=bytearray(contract)
@@ -40,6 +43,7 @@ for line in subprocess.check_output(['/usr/lib/llvm-21/bin/llvm-objdump','-d','-
 assert ops
 results={}
 cases=('usb-quiet-with-neighboring-interrupts','usb-enabled','usb-pending','usb-active') if args.usb else ('quiet-with-neighboring-interrupts','dma-enabled','dma-pending','dma-active')
+if args.stream:cases=('quiet-with-neighboring-interrupts','dma-enabled','dma-pending','dma-active','usb-enabled','usb-pending','usb-active')
 for case in cases:
  u=Uc(UC_ARCH_ARM64,UC_MODE_ARM);u.reg_write(UC_ARM64_REG_PSTATE,13);u.reg_write(UC_ARM64_REG_TPIDR_EL1,0)
  for a,z in [(0x41000000,0x1200000),(0x90000000,0x200000),(0x03400000,0x10000),(0x02050000,0x1000),(0x07050000,0x1000)]:u.mem_map(a,z)
@@ -62,9 +66,11 @@ for case in cases:
    reg,kind=ops[a];u.reg_write(getattr(arm,"UC_ARM64_REG_X"+str(reg)),12 if kind=='currentel' else 200 if kind=='cntpct_el0' else 0);u.reg_write(UC_ARM64_REG_PC,a+4)
   elif name=='a733_smp_counter':ret(200)
   elif name in ('a733_smp_contract_valid','hdmi_session_prepare','a733_cpu_coherence_publish'):ret(1)
-  elif name=='a733_cached_prepare':ret()
+  elif name in ('a733_cached_prepare','a733_el3_mbus_restore'):ret()
   else:terminal.append(name);u.emu_stop()
  hooks={e.address(name):name for name in ('a733_smp_counter','a733_smp_contract_valid','hdmi_session_prepare','a733_cpu_coherence_publish','a733_cached_prepare','a733_cpu_start_init','a733_smp_stop')}
+ # MBUS restore is independently qualified; this fixture isolates IRQ routing.
+ if 'a733_el3_mbus_restore' in e.symbols:hooks[e.address('a733_el3_mbus_restore')]='a733_el3_mbus_restore'
  hooks[0x901ff000]='return'
  for a in set(hooks)|set(ops):u.hook_add(UC_HOOK_CODE,hook,begin=a,end=a)
  def read(cpu,access,a,size,value,unused):cpu.mem_write(a,regs.get(a,0).to_bytes(size,'little'))
@@ -79,10 +85,15 @@ for case in cases:
  u.emu_start(e.address(name),0x901ff004,count=50000)
  if case in ('quiet-with-neighboring-interrupts','usb-quiet-with-neighboring-interrupts'):
   assert terminal==['a733_cpu_start_init'],(case,terminal,hex(u.reg_read(UC_ARM64_REG_PC)),writes)
+  if args.stream:
+   assert regs[0x03400090]&(1<<15) and not regs[0x03400d10]&(1<<15)
+   assert regs[0x0340048c]>>24==0xd8 and regs[0x03406478]==0
+   assert not regs[0x03400110]&(1<<15)
+   assert (0x03406478,0) in writes and writes.index((0x03406478,0))<writes.index((0x03400000,0x33))
  else:
   assert terminal==['a733_smp_stop'] and writes==[],(case,terminal,writes)
   assert (u.reg_read(UC_ARM64_REG_X0),u.reg_read(UC_ARM64_REG_X1))==(3,0x30b)
  results[case]=dict(passed=True,terminal=terminal,register_writes=len(writes))
  (O/'cases.json').write_text(json.dumps(results,indent=2)+'\n')
  print('PASS',case,flush=True)
-(O/'result.json').write_text(json.dumps(dict(passed=True,physical_access=False,usb_profile=args.usb,image_sha256=hashlib.sha256(P.read_bytes()).hexdigest(),cases=results,scope='Actual HDMI audio inherited-interrupt refusals before GIC writes; neighboring bits do not cause refusal. USB selection is bound to linked profile metadata. Session validation, cache prep, system registers and GIC effects modeled. Stops before CPU start constructor; no secondary, USB controller or physical execution. Existing HDMI startup and video-only evidence remain separately scoped without replay.'),indent=2)+'\n')
+(O/'result.json').write_text(json.dumps(dict(passed=True,physical_access=False,usb_profile=args.usb,stream_profile=args.stream,image_sha256=hashlib.sha256(P.read_bytes()).hexdigest(),cases=results,scope='Actual HDMI audio inherited-interrupt refusals before GIC writes; neighboring bits do not cause refusal. USB selection is bound to linked profile metadata. Session validation, cache prep, MBUS restore, system registers and GIC effects modeled. Stops before CPU start constructor; no secondary, USB controller or physical execution. Existing HDMI startup and video-only evidence remain separately scoped without replay.'),indent=2)+'\n')

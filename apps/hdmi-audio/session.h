@@ -2,7 +2,11 @@
 #define SUNSTONE_HDMI_AUDIO_SESSION_H
 #include "a733_dma_startup.h"
 #define HDMI_AUDIO_PCM_ADDRESS UINT64_C(0x41f10000)
+#if SUNSTONE_HDMI_AUDIO_STREAM
+#define HDMI_AUDIO_MAX_FRAMES UINT64_C(576000)
+#else
 #define HDMI_AUDIO_MAX_FRAMES UINT64_C(48000)
+#endif
 #define HDMI_AUDIO_RATE 48000u
 #define HDMI_AUDIO_CHANNELS 2u
 #define HDMI_AUDIO_FRAME_BYTES 4u
@@ -21,7 +25,7 @@ _Static_assert(sizeof(struct hdmi_audio_session)==216&&
     offsetof(struct hdmi_audio_session,dma)==112,"HDMI audio suffix ABI");
 #define HDMI_AUDIO_RESULT_MAGIC UINT64_C(0x4153373348415231)
 enum hdmi_audio_result_stage { HDMI_AUDIO_PENDING=0,HDMI_AUDIO_RUNNING=1,
-    HDMI_AUDIO_INPUT_ENDED_RETAINED=2,HDMI_AUDIO_FAULT_RETAINED=3 };
+    HDMI_AUDIO_INPUT_ENDED_RETAINED=2,HDMI_AUDIO_FAULT_RETAINED=3, HDMI_AUDIO_CANCELED_RETAINED=4 };
 /* Copied diagnostic observations. Source consumption/DMA drain/FIFO empty are
  * not serializer completion, transmitted packets or rendered sound. */
 struct hdmi_audio_result {

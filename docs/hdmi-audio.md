@@ -1,10 +1,11 @@
-# Finite HDMI PCM playback
+# HDMI PCM playback
 
 The opt-in HDMI audio image sends one immutable caller file of pulse-code modulation (PCM)
 samples through DMA0 and the internal I2S3 serial audio controller to the HDMI audio sampler. It accepts interleaved signed
 16-bit little-endian stereo at 48 kHz, from one to 48,000 frames. The image uses
-the existing limited-range 720p TV0 pattern while audio runs. It has no streaming
-interface, reconnect, replay or resource-release path. Software execution over a
+the existing limited-range 720p TV0 pattern while audio runs. The default finite
+profile has no refill interface. An additional streaming build is described below.
+Neither profile provides reconnect, replay or resource release. Software execution over a
 hardware model does not establish transmitted audio or rendered sound.
 
 Build `apps/hdmi-audio` with the existing A733 toolchain and select the
@@ -12,8 +13,8 @@ Build `apps/hdmi-audio` with the existing A733 toolchain and select the
 image remains video-only. Audio and the retained framebuffer option cannot be
 combined in this image. The [host preparation guide](hdmi-audio-preparation.md)
 describes the immutable file, typed admission records and offline result decoder.
-There is no executable live capture transport. Never use FEL memory reads
-against running native firmware.
+The USB option supplies copied results through the application transport. Never
+use FEL memory reads against running native firmware.
 
 ## Source route and clocks
 
@@ -202,3 +203,143 @@ transfer completion. It establishes neither physical USB operation nor sound,
 serializer drain or DMA visibility. The original finite-operation evidence
 retains its original scope. Root's four new pre-GIC guard cases and the separate
 [host checks](hdmi-audio-preparation.md) cover their respective boundaries.
+
+
+## Bounded streaming uses four reusable DMA periods
+
+`SUNSTONE_HDMI_AUDIO_STREAM=ON` requires the audio and USB options. It accepts
+one caller file of up to 576,000 stereo frames at 48 kHz, or twelve seconds,
+within the existing twenty-second supervised lifetime. The
+[reviewed design](designs/hdmi-audio-streaming.md) defines the admission and
+performance budgets. The default finite and copied-observation builds remain
+available.
+
+The streaming session is version 3 and occupies 848 bytes. Its final 32 bytes
+bind a manifest in the existing upload window at `0x41f10000`. The manifest
+contains the full-file digest, format and frame count, followed by one SHA-256
+per ordered period. Boot authenticates the manifest once; the output task
+hashes each completed USB staging slot before committing its corresponding
+DMA lease. The final hash covers only the declared final frames. USB cannot
+address the immutable manifest or any DMA allocation.
+
+Four 4,096-byte staging slots receive TinyUSB fragments directly. A release
+publication exposes a complete slot to the output task. The task obtains a
+fresh GET ticket, authenticates and copies the period, then queues PUT or END.
+It performs no memory access through the lease after queuing that command.
+The DMA catalogue occupies five non-cacheable pages: one descriptor page and
+four period pages. Its private adapter validates those page identities and
+four distinct 64-byte descriptor slots. All allocations remain reserved after
+completion or failure.
+
+The output task prepares DMA0 and the existing AUDIO1/I2S3 clock leases, then
+transfers I2S3 register ownership to the DMA worker. It performs no further
+I2S3 accesses. The worker configures the fixed internal stereo TX route;
+both direct and service duplex entry points refuse this route. The output
+task continues HDMI sampler and sink health operations. The existing DMA0
+interrupt handler masks INTID 143 and notifies the worker without DMA MMIO.
+Boot routes the interrupt to core 0 at priority `0xd8`, with delivery disabled
+until service activation. The worker runs at priority 5 on core 0; output and
+USB run at priority 4 on an A55 core. No task or stack is added.
+
+Playback starts after four committed periods, or after the complete shorter
+file and explicit host END. At each finite transfer boundary, the provider
+uses the FIFO occupancy deadline and one captured budget of at most 64 DMA
+polls and 200 microseconds. Health BUSY cannot refresh either deadline.
+Exhaustion with live operation authority disables TX and enters the existing
+failed-stop and drain path. A failed or backward clock retains uncertainty
+without further MMIO.
+Missing committed input fails without inserting silence or replaying a period.
+
+The version-2 USB exchange accepts STATUS, WRITE, END and CANCEL with a
+48-byte header. Each request binds the epoch, generation, increasing request
+ID and next period sequence. A WRITE supplies one period with its exact
+length. A copied 512-byte response reports staging credits and accepted,
+committed and consumed frames. Its ownership continues through the final USB
+zero-length packet. Each exchange has one absolute one-second deadline,
+clipped to the session lifetime; at most twice the period count plus 64
+requests are admitted.
+
+Host END is required before the final service END, including a full final
+period. Healthy EOF requires all declared frames consumed, actual service
+completion after controller drain and an empty I2S FIFO. The output task
+mutes HDMI and retains the stopped video session. CANCEL closes input and
+requests the service's potentially truncating stop. Only an actual drained
+CANCELED service result produces result stage 4. Partial staging, client
+leases and outstanding replies remain owned on interruption or uncertainty.
+The result format is version 2; the finite decoder refuses it.
+
+These observations describe source consumption and FIFO state.
+`wire_drained` remains zero. Physical USB throughput, interrupt latency, FIFO
+continuity, DMA visibility, transmission, sink rendering and recovery remain
+unqualified. Every launch still requires supervised whole-board power removal.
+
+The composed streaming image allocates 20,480 bytes from the existing
+non-cacheable pool, compared with 196,608 bytes for the largest finite file.
+It adds 16,384 bytes of write-back staging and 960 bytes of other linked BSS.
+The linked text grows by 9,620 bytes against the finite USB build made with
+the same compiler and dependency selection. Both builds retain the same
+four tasks and stack allocations. The existing two-megabyte non-cacheable
+pool reservation is unchanged; the smaller active allocation does not release
+that reservation to another owner. The largest manifest occupies 18,080 bytes
+of the existing immutable upload window.
+
+
+## Streaming software evidence preserves each execution boundary
+
+Evidence is under `~/.cache/sunstoneos/evidence/hdmi-stream-1028/`. The
+`native-irq-fixed/result.json` run executes the linked constructor and actual
+PMIC, output and DMA task bodies for 50,177 frames, or 1.045 seconds of source
+audio. Fifty DMA periods include a short final period. The producer calls the
+native USB upload APIs; it does not model concurrent USB transport. The model
+supplies architectural services, serialized scheduling, electrical readbacks,
+FIFO and DMA effects, and interrupt delivery.
+
+That run copies 200,708 payload bytes to DMA memory and hashes those same
+200,708 bytes once. It observes 49 modeled interrupt deliveries, 50 controller
+polls, 2,812 stream-provider polls, 5,988 I2S register reads and 590
+request/reply pairs. The trace does not preserve the exact BUSY reply count.
+These counts
+include the existing tick fallback and client polling. They are software work
+counts, not measured hardware latency or CPU utilization. Stack write depths
+are 2,120 bytes for PMIC, 1,064 for output, 1,072 for DMA and 520 for USB
+preparation, against existing allocations of 16,384 bytes per application
+task and 32,768 bytes for DMA. These observed writes include native task and
+provider code; the modeled RTOS excludes its own stack use.
+
+`actual-usb/result.json` separately executes the real USB task, TinyUSB and
+native staging/observation callbacks from saved native checkpoints. Thirteen
+cases cover full- and high-speed fragmentation, terminal copied responses,
+partial input, cancellation, provider BUSY, late data and zero-length packets,
+and a four-byte final upload followed by explicit END. USB transport writes
+at most 432 stack bytes in these cases. The model supplies DCD completion,
+scheduling, time and provider health; it does not establish concurrent USB/DMA
+continuity or physical throughput. The host decodes and archives the actual
+full- and high-speed terminal responses, as recorded in the
+[preparation evidence](hdmi-audio-preparation.md).
+
+Saved task checkpoints also exercise corrupt input, cancellation with an
+outstanding GET or PUT, underrun, unknown drain, repeated queue BUSY, and
+expiration during native address translation before a register access. These cases retain ownership;
+they do not convert a timeout into successful completion. The deadline case
+keeps the acquired register mutex and performs no later MMIO.
+
+The provider fixture covers ring wraps, short END, direct and service duplex
+refusal, and one I2S0 compatibility case. The final controlled-stop delta
+checks ordinary handoff-budget exhaustion with live authority, followed by
+actual modeled drain into FAILED. Failed clocks, expired operation authority,
+health BUSY and DMA recovery prohibit later device writes. The original
+seven boot cases execute the linked fixed interrupt route and inherited
+interrupt refusals. Their unchanged compiled boot inputs are recorded in
+`boot-evidence-reuse.json`.
+
+The final controlled-stop image is SHA-256
+`54abd2ead295d72bb575d1c682e6b93a09ec48a8cd2d3cb3ec083c5dd39c94d3`.
+Its complete compiler closure records 215 dependencies and 79 linked objects
+in `compiled-inputs.json`. Nominal task, USB and host reply execution retains
+its original image identity,
+`5c3c32840187ded24a755873da51012c28c475780bc80da752b18f19ffff3f90`.
+The only changed compiled repository source is the provider's controlled-stop
+correction; its seven affected cases supply the additional evidence.
+`final-evidence-reuse.json` records that boundary. The successor host bundle
+and supervisor-entry check bind the final image separately. Neither image has
+physical streaming qualification.

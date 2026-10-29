@@ -21,6 +21,7 @@ supervisor=importlib.util.module_from_spec(spec);spec.loader.exec_module(supervi
 SCHEMA='a733-hdmi-audio-supervised-bundle-v1'
 GEOMETRY=(1,656,440,216,0x41f10000,192000,48000,2,16,32)
 USB_GEOMETRY=(2,816,440,216,0x41f10000,192000,48000,2,16,32,656,160)
+STREAM_GEOMETRY=(3,848,440,216,0x41f10000,18080,48000,2,16,32,656,160,816,32,576000,1024)
 USB_FACTS={
  'initial':('cold_usb0_usb1_reset_gates_held','remote_usb_phy_consumers_excluded',
     'prior_usb_dma_drained','external_usb_dma_writers_excluded',
@@ -49,7 +50,7 @@ def physical_authority(record):
 
 def image_metadata(image,session_size=None):
     parts,address,identity,size=base.image_data(image)
-    require(size in (656,816) and (session_size is None or size==session_size) and
+    require(size in (656,816,848) and (session_size is None or size==session_size) and
         base.framebuffer_metadata(image)==(0,0),
         'HDMI audio requires the matching offline or copied-USB pattern image.')
     # Audio adopts the same complete NC reservation, without DE/framebuffer use.
@@ -72,8 +73,8 @@ def image_metadata(image,session_size=None):
             return start,bytes(p.data()[offset:offset+size])
         build_address,build_identity=marker('a733_smp_build_id',32)
         require(build_address==address and build_identity==identity,'HDMI build identity differs.')
-        _,geometry=marker('a733_hdmi_audio_geometry',80 if size==656 else 96)
-        require(struct.unpack('<10Q' if size==656 else '<12Q',geometry)==(GEOMETRY if size==656 else USB_GEOMETRY),'Linked HDMI audio geometry differs.')
+        _,geometry=marker('a733_hdmi_audio_geometry',{656:80,816:96,848:128}[size])
+        require(struct.unpack('<'+str(len(geometry)//8)+'Q',geometry)=={656:GEOMETRY,816:USB_GEOMETRY,848:STREAM_GEOMETRY}[size],'Linked HDMI audio geometry differs.')
         pool_symbols={name:[int(s['st_value']) for s in symbols if s.name==name] for name in
             ('__uncached_pool_start','__uncached_pool_end')}
         require(pool_symbols=={'__uncached_pool_start':[0x41c00000],'__uncached_pool_end':[0x41e00000]},
@@ -86,15 +87,15 @@ def image_metadata(image,session_size=None):
 
 
 def session_check(raw,pcm):
-    require(len(raw) in (656,816),'HDMI audio session must be656 or816 bytes.')
+    require(len(raw) in (656,816,848),'HDMI audio session must be656,816 or848 bytes.')
     magic,version,size,epoch,generation,lease=struct.unpack_from('<6Q',raw)
     supervisor,owner=struct.unpack_from('<2Q',raw,208)
-    require((magic,version,size) in ((base.SESSION_MAGIC,1,656),(base.SESSION_MAGIC,2,816)) and size==len(raw) and
+    require((magic,version,size) in ((base.SESSION_MAGIC,1,656),(base.SESSION_MAGIC,2,816),(base.SESSION_MAGIC,3,848)) and size==len(raw) and
         all((epoch,generation,lease,supervisor,owner)),'HDMI audio session identity differs.')
     require(struct.unpack_from('<3I',raw,288)==(4,0,0),
         'HDMI audio requires the limited-range720p60 hardware pattern.')
     authority,frames=struct.unpack_from('<2Q',raw,536)
-    require(authority and 1<=frames<=48000 and len(pcm)==frames*4 and
+    require(authority and 1<=frames<=(576000 if len(raw)==848 else 48000) and len(pcm)==frames*4 and
         hashlib.sha256(pcm).digest()==raw[440:472],'HDMI audio PCM identity or frame extent differs.')
     require(any(raw[472:504]) and any(raw[504:536]),'HDMI audio memory/electrical records absent.')
     controller,evidence,established,owned,service=struct.unpack_from('<2QI2H',raw,632)
@@ -104,7 +105,7 @@ def session_check(raw,pcm):
         'HDMI audio requires the immutable supervised DMA0 handoff.')
     fields=dict(epoch=epoch,generation=generation,lease=lease,supervisor=supervisor,
         authority=authority,frames=frames,source_bytes=len(pcm))
-    if len(raw)==816:
+    if len(raw)>=816:
         usb_owner,handoff=struct.unpack_from('<2Q',raw,656)
         require(usb_owner and handoff and usb_owner not in
             (owner,struct.unpack_from('<Q',raw,304)[0],authority,struct.unpack_from('<Q',raw,600)[0]),
@@ -114,18 +115,33 @@ def session_check(raw,pcm):
             struct.unpack_from('<4I',raw,776)==(3300000,3300000,1200000,900000),
             'HDMI audio requires cold USB reference1, exact rails and three evidence digests.')
         fields.update(usb_owner=usb_owner,usb_handoff=handoff)
+    if len(raw)==848:
+        require(raw[816:848]==hashlib.sha256(manifest_bytes(pcm)).digest(),
+            "HDMI audio manifest identity differs.")
     return fields
 
 
-def session_bytes(pattern,pcm,*,memory,electrical,authority,dma,admission,usb=None):
+def manifest_bytes(pcm):
+    require(len(pcm)%4==0 and 0<len(pcm)<=576000*4,'Invalid streaming PCM extent.')
+    count=(len(pcm)+4095)//4096
+    return (struct.pack('<QIIQII',0x4153373348534d31,1,64+count*32,len(pcm)//4,4,1024)+
+        hashlib.sha256(pcm).digest()+b''.join(hashlib.sha256(pcm[n:n+4096]).digest()
+        for n in range(0,len(pcm),4096)))
+
+
+def session_bytes(pattern,pcm,*,memory,electrical,authority,dma,admission,usb=None,stream=False):
     require(len(pattern)==440 and len(dma)==104 and len(pcm)%4==0,
         'HDMI audio producer requires pattern440, DMA104 and complete stereo frames.')
     require(usb is None or len(usb)==160,'HDMI audio USB authority must be160 bytes.')
+    require(not stream or usb is not None,'Streaming requires USB authority.')
     raw=bytearray(pattern);struct.pack_into('<2Q',raw,8,1 if usb is None else 2,656 if usb is None else 816)
     raw[80:112]=hashlib.sha256(admission).digest()
     raw+=hashlib.sha256(pcm).digest()+hashlib.sha256(memory).digest()+hashlib.sha256(electrical).digest()
     raw+=struct.pack('<2Q',authority,len(pcm)//4)+dma
     if usb is not None:raw+=usb
+    if stream:
+        struct.pack_into('<2Q',raw,8,3,848)
+        raw+=hashlib.sha256(manifest_bytes(pcm)).digest()
     session_check(raw,pcm)
     return bytes(raw)
 
@@ -208,14 +224,14 @@ def validate_data(image,raw,admission,pcm,records):
         if kind=='memory':
             require(fact.get('dma_handoff_sha256')==sha(raw[552:656]) and
                 fact.get('dma_pool_ranges')==[[0x41c00000,0x41e00000]] and
-                fact.get('pcm_sha256')==sha(pcm) and fact.get('pcm_range')==[0x41f10000,0x41f10000+len(pcm)],
+                fact.get('pcm_sha256')==sha(pcm) and fact.get('pcm_range')==[0x41f10000,0x41f10000+len(manifest_bytes(pcm) if len(raw)==848 else pcm)],
                 'HDMI audio memory authority covers another handoff/PCM range.')
         else:
             require(fact.get('sink_edid_sha256')==sha(records['sink_edid']),
                 'HDMI audio electrical authority covers another sink.')
     require(record['sink_edid']['sha256']==sha(records['sink_edid']), 'Sink EDID admission differs.')
     sink_lpcm(records['sink_edid'])
-    if len(raw)==816:
+    if len(raw)>=816:
         paths=json.loads(records['entry-index'])
         require(isinstance(paths,list) and len(set(paths))==len(paths),'Invalid HDMI audio entry index.')
         validate_entry(record,image_hash,{path:records['entry-evidence-'+str(i)] for i,path in enumerate(paths)},True)
@@ -266,7 +282,7 @@ def validate(image,session,admission,pcm):
     for key in ('analog','power','supervision','audio_memory','audio_electrical'):
         records[key]=(admission.parent/record[key]).resolve().read_bytes()
     records['sink_edid']=(admission.parent/record['sink_edid']['path']).resolve().read_bytes()
-    if len(raw)==816:
+    if len(raw)>=816:
         for key in ('usb_initial','usb_electrical','usb_supervision'):
             records[key]=(admission.parent/record[key]).resolve().read_bytes()
     require('dma_nonsecure_access' in record,'HDMI audio DMA nonsecure authority is missing.')
@@ -283,7 +299,7 @@ def validate(image,session,admission,pcm):
     require(isinstance(security,dict) and isinstance(security.get('evidence'),list),
         'Invalid HDMI audio DMA security authority.')
     for i,ref in enumerate(security['evidence']):records['dma_security_evidence_'+str(i)]=load(ref)
-    if len(raw)==816:
+    if len(raw)>=816:
         entry=validate_entry(record,sha(image_data))
         records['entry-index']=json.dumps(list(entry)).encode()
         for i,data in enumerate(entry.values()):records['entry-evidence-'+str(i)]=data
@@ -316,14 +332,15 @@ def prepare(image,session,admission,pcm,output,clang,lld,objcopy):
             name=f'segment-{i}.bin';(out/name).write_bytes(data);payloads.append(dict(name=name,address=start))
     request,contract=base.request_bytes(address,identity,snapshots['session'],fields['epoch'],fields['generation'],fields['lease'],fields['supervisor'])
     fixed={'session.bin':(snapshots['session']+bytes(4096-len(snapshots['session'])),0x41f00000),
-        'input.pcm':(snapshots['pcm'],0x41f10000),'request.bin':(request,0x52c00),
+        ('manifest.bin' if len(snapshots['session'])==848 else 'input.pcm'):(manifest_bytes(snapshots['pcm']) if len(snapshots['session'])==848 else snapshots['pcm'],0x41f10000),'request.bin':(request,0x52c00),
         'contract.bin':(contract,0x42004000),'result-zero.bin':(bytes(16384),0x42000000),
         'report-zero.bin':(bytes(128),0x52d00),'launch.bin':((out/'launch.bin').read_bytes(),0x52000)}
     for name,(data,start) in fixed.items():(out/name).write_bytes(data);payloads.append(dict(name=name,address=start))
+    (out/'input.pcm').write_bytes(snapshots['pcm'])
     for key,data in snapshots.items():
         name='source-session.bin' if key=='session' else key+'.bin'
         (out/name).write_bytes(data)
-    if len(snapshots['session'])==816:
+    if len(snapshots['session'])>=816:
         (out/'image.elf').write_bytes(snapshots['image_elf'])
         (out/'admission.json').write_bytes(snapshots['admission'])
     authority_record=json.loads(snapshots['admission'])
@@ -333,8 +350,8 @@ def prepare(image,session,admission,pcm,output,clang,lld,objcopy):
         **fields,**locations,payloads=payloads,reservations=[dict(address=a,bytes=n) for a,n,_ in parts],
         files={p.name:sha(p.read_bytes()) for p in out.iterdir() if p.is_file()},
         tools={str(tool.absolute()):sha(tool.read_bytes()) for tool in (clang,lld,objcopy)})
-    if len(snapshots['session'])==816:
-        metadata['segments']=[p for p in payloads if p['name'].startswith('segment-') or p['name'] in ('session.bin','input.pcm')]
+    if len(snapshots['session'])>=816:
+        metadata['segments']=[p for p in payloads if p['name'].startswith('segment-') or p['name'] in ('session.bin','manifest.bin' if len(snapshots['session'])==848 else 'input.pcm')]
     (out/'prepared.json').write_text(json.dumps(metadata,indent=2)+'\n')
     return validate_bundle(out)
 
@@ -360,19 +377,21 @@ def validate_bundle(bundle):
         require(key+'.bin' in frozen,'Missing frozen HDMI audio DMA security evidence.')
         records[key]=frozen[key+'.bin']
     raw=frozen['source-session.bin'];session_size=len(raw)
-    if session_size==816:
+    if session_size>=816:
         for key in ('usb_initial','usb_electrical','usb_supervision'):
             require(key+'.bin' in frozen,'Missing frozen HDMI audio USB authority.')
             records[key]=frozen[key+'.bin']
         require(frozen.get('image.elf')==frozen['image_elf.bin'] and frozen.get('admission.json')==frozen['admission.bin'],
             'HDMI audio supervised aliases differ from admitted bytes.')
-    if session_size==816:
+    if session_size>=816:
         records['entry-index']=frozen['entry-index.bin']
         for i in range(len(json.loads(records['entry-index']))):
             records['entry-evidence-'+str(i)]=frozen['entry-evidence-'+str(i)+'.bin']
     parts,address,identity,fields,locations=validate_data(frozen['image_elf.bin'],raw,frozen['admission.bin'],frozen['pcm.bin'],records)
     require(frozen['session.bin']==raw+bytes(4096-session_size),'Invalid HDMI audio session page.')
     require(frozen['input.pcm']==frozen['pcm.bin'],'HDMI audio PCM upload differs.')
+    if session_size==848:
+        require(frozen.get('manifest.bin')==manifest_bytes(frozen['pcm.bin']),'HDMI audio manifest upload differs.')
     require(metadata['build_id']==identity.hex() and metadata['image_sha256']==sha(frozen['image_elf.bin']) and
         metadata['session_sha256']==sha(raw) and
         all(metadata.get(k)==v for k,v in {**fields,**locations}.items()),'HDMI audio metadata changed.')
@@ -382,13 +401,13 @@ def validate_bundle(bundle):
     for i,(start,size,data) in enumerate(parts):
         if data:
             name=f'segment-{i}.bin';require(frozen[name]==data,'HDMI audio image segment changed.');expected.append(dict(name=name,address=start))
-    expected += [dict(name=name,address=start) for name,start in [('session.bin',0x41f00000),('input.pcm',0x41f10000),
+    expected += [dict(name=name,address=start) for name,start in [('session.bin',0x41f00000),('manifest.bin' if session_size==848 else 'input.pcm',0x41f10000),
         ('request.bin',0x52c00),('contract.bin',0x42004000),('result-zero.bin',0x42000000),('report-zero.bin',0x52d00),('launch.bin',0x52000)]]
     require(metadata['reservations']==[dict(address=a,bytes=n) for a,n,_ in parts] and
         metadata['payloads']==expected and frozen['result-zero.bin']==bytes(16384) and
         frozen['report-zero.bin']==bytes(128) and 0<len(frozen['launch.bin'])<=0xc00,'HDMI audio upload layout differs.')
-    if session_size==816:
-        require(metadata.get('segments')==[p for p in expected if p['name'].startswith('segment-') or p['name'] in ('session.bin','input.pcm')],
+    if session_size>=816:
+        require(metadata.get('segments')==[p for p in expected if p['name'].startswith('segment-') or p['name'] in ('session.bin','manifest.bin' if session_size==848 else 'input.pcm')],
             'HDMI audio supervised upload segments differ.')
     authority_record=json.loads(frozen['admission.bin'])
     require(all(metadata.get(k)==authority_record.get(k) for k in ('physical_authority','modeled')),

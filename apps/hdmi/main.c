@@ -7,7 +7,9 @@
 struct hdmi_application app;
 const uint64_t a733_hdmi_session_bytes=sizeof(struct hdmi_session);
 const uint64_t a733_hdmi_framebuffer_mode=SUNSTONE_HDMI_FRAMEBUFFER;
-#if SUNSTONE_HDMI_AUDIO_USB
+#if SUNSTONE_HDMI_AUDIO_STREAM
+const uint64_t a733_hdmi_audio_geometry[16]={3,848,440,216,HDMI_AUDIO_PCM_ADDRESS,18080,48000,2,16,32,656,160,816,32,576000,1024};
+#elif SUNSTONE_HDMI_AUDIO_USB
 const uint64_t a733_hdmi_audio_geometry[12]={2,816,440,216,HDMI_AUDIO_PCM_ADDRESS,192000,48000,2,16,32,656,160};
 #elif SUNSTONE_HDMI_AUDIO
 const uint64_t a733_hdmi_audio_geometry[10]={1,656,440,216,HDMI_AUDIO_PCM_ADDRESS,192000,48000,2,16,32};
@@ -100,7 +102,11 @@ void a733_smp_diagnostic_start(void)
         app.handles[i]=xTaskCreateStatic(functions[i],names[i],2048,NULL,i?4:3,app.stacks[i],&app.tasks[i]);
         if(!app.handles[i])platform_panic("HDMI tasks",8);
 #if configNUMBER_OF_CORES > 1
+        #if SUNSTONE_HDMI_AUDIO_STREAM
+        vTaskCoreAffinitySet(app.handles[i],i?2:1);
+#else
         if(!i)vTaskCoreAffinitySet(app.handles[i],1);
+#endif
 #endif
     }
     struct a733_pmic_config pmic=app.session.pmic;pmic.startup_deadline=app.deadline;

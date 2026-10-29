@@ -28,7 +28,7 @@ enum a733_i2s_status dma_service_i2s_stream_close(struct a733_i2s_stream *s,uint
 int dma_service_i2s_stream_pair(const struct dma_service_i2s_stream_profile *a,
     const struct dma_service_i2s_stream_profile *b)
 {
-    if(!a || !b || a->duplex!=1 || b->duplex!=1 ||
+    if(!a || !b || a->stream.route!=A733_I2S_ROUTE_I2S0 || b->stream.route!=A733_I2S_ROUTE_I2S0 || a->duplex!=1 || b->duplex!=1 ||
        a->stream.direction==b->stream.direction || a->stream.cookie!=b->stream.cookie ||
        a->stream.operation_us!=b->stream.operation_us)return 0;
     const struct a733_i2s_format *x=&a->stream.format,*y=&b->stream.format;

@@ -37,8 +37,13 @@ struct hdmi_session {
 #if SUNSTONE_HDMI_AUDIO_USB
     struct hdmi_audio_usb_authority usb;
 #endif
+#if SUNSTONE_HDMI_AUDIO_STREAM
+    uint8_t manifest_sha256[32];
+#endif
 };
-#if SUNSTONE_HDMI_AUDIO_USB
+#if SUNSTONE_HDMI_AUDIO_STREAM
+_Static_assert(sizeof(struct hdmi_session)==848&&offsetof(struct hdmi_session,manifest_sha256)==816,"audio stream session ABI");
+#elif SUNSTONE_HDMI_AUDIO_USB
 _Static_assert(sizeof(struct hdmi_session)==816&&offsetof(struct hdmi_session,audio)==440&&offsetof(struct hdmi_session,usb)==656,"audio USB session ABI");
 #elif SUNSTONE_HDMI_AUDIO
 _Static_assert(sizeof(struct hdmi_session)==656&&offsetof(struct hdmi_session,audio)==440,"audio session ABI");
