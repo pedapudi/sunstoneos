@@ -79,6 +79,59 @@ def claim(args, expected=None):
         db.close()
 
 
+def gpu_authority(a, p):
+    """Opt in only to the exact GPU capability already validated by CPU host."""
+    geometry = p['qualification'].get('gpu')
+    if geometry is None:
+        require('gpu_return' not in a, 'GPU authority supplied for a CPU-only profile.')
+        return None
+    value = a.get('gpu_return')
+    require(isinstance(value, dict), 'CPU-only profile review does not authorize GPU continuation.')
+    manifest = json.loads((Path(a['cpu_bundle']) / 'board/image-input-manifest.json').read_text())
+    config = manifest.get('gpu_profile')
+    require(set(value) == {'configuration', 'retirement_review_sha256', 'report'} and
+            isinstance(config, dict) and config.get('return') == geometry and
+            json.dumps(value['configuration'], sort_keys=True) == json.dumps(config, sort_keys=True) and
+            value['retirement_review_sha256'] == a['cpu_return_review']['sha256'] and
+            Path(value['report']).is_absolute() and
+            value['report'] == str(Path(a['return_session']).parent / 'gpu-retirement.bin'),
+            'Exact GPU continuation configuration, review and capture path required.')
+    return geometry
+
+
+def gpu_returned(a, p, r):
+    geometry = gpu_authority(a, p)
+    if geometry is None:
+        return None
+    raw_path = Path(a['gpu_return']['report'])
+    require(raw_path.is_file() and digest(raw_path) == r.get('gpu_report_sha256'),
+            'Copied GPU retirement report changed.')
+    decoded = cpu.os_image.gpu_return_rules.decode(raw_path.read_bytes(), p['epoch'], p['generation'], require)
+    # The CPU host already compared and restored every backup before recording
+    # dram_restored. Bind this GPU's ranges to those exact recorded chunks;
+    # no reread of retired device RAM or new backup operation occurs here.
+    rows = r.get('dram_backups')
+    require(isinstance(rows, list), 'GPU pool backup coverage is absent.')
+    require(all(isinstance(row, dict) and type(row.get('address')) is int and
+                type(row.get('bytes')) is int and row['bytes'] > 0 for row in rows),
+            'Invalid GPU backup extent.')
+    rows = sorted(rows, key=lambda item: item['address'])
+    for low, high in (geometry['write_back_pool'], geometry['uncached_pool']):
+        require(0x41000000 <= low < high <= 0x42200000, 'GPU pool is outside retired private RAM.')
+        cursor = low
+        for row in rows:
+            start, size = row['address'], row['bytes']
+            end = start + size
+            if start <= cursor < end:
+                require(0x41000000 <= start < end <= 0x42200000 and size <= cpu.CHUNK,
+                        'GPU backup extent exceeds the original private reservation.')
+                cursor = min(high, end)
+            if cursor == high:
+                break
+        require(cursor == high, 'GPU pool backup coverage is incomplete.')
+    return decoded
+
+
 def authority(args, snapshot):
     require(digest(args.fel) == base.FEL_HASH, 'FEL executable changed.')
     a = json.loads(args.review.read_text())
@@ -97,8 +150,7 @@ def authority(args, snapshot):
     require(all(str((ROOT / name).resolve()) in paths for name in SOURCES),
             'Compound executable/source closure is not reviewed.')
     p = cpu.validate_bundle(Path(a['cpu_bundle']))
-    require('gpu' not in p['qualification'],
-            'Compound follow-up is initially qualified in software for the CPU-only profile.')
+    gpu_authority(a, p)
     require(evidence(a['cpu_prepared']).resolve() == (Path(a['cpu_bundle']) / 'prepared.json').resolve() and
             p['image_sha256'] == a['image_sha256'] and p['build_id'] == a['build_id'] and
             all(p[k] == a[k] for k in ('epoch', 'generation', 'lease')) and
@@ -180,6 +232,9 @@ def returned(a, p):
     require(digest(report) == r['report_sha256'] and digest(output) == r['output_sha256'],
             'Copied CPU report/output changed.')
     decoded = cpu.decode_report(report.read_bytes(), p['epoch'])
+    gpu = gpu_returned(a, p, r)
+    if gpu is not None:
+        decoded['gpu'] = gpu
     require(decoded['secondaries_off'] == 7 and r.get('result') == decoded,
             'CPU secondary retirement or receipt summary differs.')
     text = cpu.decode_output(output.read_bytes(), p['epoch'], p['generation'])
@@ -352,7 +407,11 @@ def run(args):
     save()
     try:
         r, text = returned(a, p)
-        state['cpu_return_sha256'] = digest(Path(a['return_session'])); save()
+        state['cpu_return_sha256'] = digest(Path(a['return_session']))
+        if 'gpu' in p['qualification']:
+            state['gpu_return'] = r['result']['gpu']
+            state['gpu_report_sha256'] = r['gpu_report_sha256']
+        save()
         begin('parity'); parity(a, p, r, text, args.evidence / 'parity'); end()
         begin('cache-off'); observe('cache-off', evidence(a['cache_off']).read_bytes(), cache_capture); end()
         begin('survey'); observe('survey', evidence(a['survey']['binary']).read_bytes(), survey_capture); end()
