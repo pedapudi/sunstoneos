@@ -1,6 +1,8 @@
 #ifndef SUNSTONE_NPU_ENTRY_CHECKPOINT_H
 #define SUNSTONE_NPU_ENTRY_CHECKPOINT_H
 #include <stdint.h>
+#define NPU_ENTRY_MBUS_MAGIC UINT64_C(0x4e50554d42555331)
+extern uint64_t npu_entry_checkpoint_mbus[4];
 #define NPU_ENTRY_MEMORY_READY UINT64_C(0x4e50554e)
 #define NPU_ENTRY_RECEIPT_MAGIC UINT64_C(0x4e505543484b3031)
 /* Scalar checks only: safe at EL3 after the complete private interval is clean.

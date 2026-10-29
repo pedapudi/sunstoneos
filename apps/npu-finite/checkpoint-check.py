@@ -2,7 +2,7 @@
 """Execute checkpoint admission, caller, publication and return with modeled CPU/MMIO."""
 import argparse,hashlib,importlib.util,json,struct
 from pathlib import Path
-from unicorn import Uc,UC_ARCH_ARM64,UC_MODE_ARM,UC_HOOK_CODE,UC_HOOK_MEM_WRITE,UC_HOOK_MEM_READ
+from unicorn import Uc,UC_ARCH_ARM64,UC_MODE_ARM,UC_HOOK_CODE,UC_HOOK_MEM_WRITE,UC_HOOK_MEM_READ,UC_MEM_READ,UC_MEM_WRITE
 from unicorn.arm64_const import UC_ARM64_REG_X0,UC_ARM64_REG_PC,UC_ARM64_REG_SP,UC_ARM64_REG_LR
 p=argparse.ArgumentParser(description=__doc__);p.add_argument('--native',type=Path,required=True);p.add_argument('--evidence',type=Path,required=True);a=p.parse_args();a.evidence.mkdir(parents=True,exist_ok=False)
 r=Path(__file__).resolve().parents[2]
@@ -18,12 +18,15 @@ for name,value in [('magic',h.original.CONTRACT_MAGIC),('armed_at',armed),('star
 for n in ('a733_npu_application_init','npu_convolution_startup_poll','npu_service_activate','vTaskStartScheduler','a733_pmic_poll','a733_npu_startup_step'):
  assert n not in im.symbols,n
 results=[]
-def machine():
+def machine(mbus=0x81000000, busy_gpu=False):
  u=Uc(UC_ARCH_ARM64,UC_MODE_ARM);u.mem_map(0x02000000,0x07000000);u.mem_map(0x40000000,0x04000000)
  for at,data in im.parts:
   if data:u.mem_write(at,data)
  u.mem_write(0x41f00000,bytes(raw));u.mem_write(0x42004000,bytes(contract))
  u.mem_write(0x03400000,struct.pack('<II',0x30,3))
+ u.mem_map(0x50000,0x30000)
+ u.mem_write(0x02002588,struct.pack('<I',mbus));u.mem_write(0x02002594,struct.pack('<I',0x30001))
+ if busy_gpu:u.mem_write(0x02002b20,struct.pack('<I',0x80000000))
  state={'el':12,'sctlr':0,'now':11000000,'mode':5,'smc':None,'return':False,'retained':False,'panics':[],'clean':[],'mmio':[],'translations':0,'phase':'monitor','inject':None}
  def put(at,value,n=8):u.mem_write(at,int(value).to_bytes(n,'little'))
  def get(at,n=8):return int.from_bytes(u.mem_read(at,n),'little')
@@ -42,6 +45,7 @@ def machine():
   if name in ('a733_smp_stop','npu_finite_rom_return'):
    state['retained']=name=='a733_smp_stop';state['return']=name=='npu_finite_rom_return';u.emu_stop();return
   word=get(at,4);kind=word&0xffffffe0;reg=word&31
+  if kind==0xd53be020:state['now']+=24
   values={0xd5384240:state['el'],0xd53800a0:0,0xd53e1000:0,0xd5381000:state['sctlr'],0xd53b4220:0x3c0,
    0xd5384600:0xf0,0xd53be020:state['now'],0xd53b0020:0x8444c004,0xd53e5200:0x17<<26,0xd53e4000:state['mode']|0x3c0}
   if kind in values:
@@ -55,7 +59,15 @@ def machine():
   if word&0xfff00000==0xd5300000:raise AssertionError(('unmodeled register read',hex(word),hex(at)))
  def mmio(cpu,access,at,size,value,cookie):
   state['mmio'].append([state['phase'],access,at,size])
-  assert not (0x02002000<=at<0x02004000 or 0x03600000<=at<0x03700000 or 0x07064000<=at<0x07065000 or 0x07081400<=at<0x07082000),hex(at)
+  assert not (0x03600000<=at<0x03700000 or 0x07064000<=at<0x07065000 or 0x07081400<=at<0x07082000 or at==0x03000008),hex(at)
+  if 0x02002000<=at<0x02004000:
+   assert state['phase']=='monitor',('late CCU access',hex(at))
+   if access==UC_MEM_READ:
+    assert at in (0x02002588,0x02002594,0x02002b20,0x02002b24,0x02002b00,0x02002b04,0x02002704,0x0200270c,0x02002ac4),hex(at)
+    if at==0x02002588 and get(at,4)&(1<<27):put(at,get(at,4)&~(1<<27),4)
+   else:
+    assert access==UC_MEM_WRITE and at in (0x02002588,0x02002594,0x02003f00),('forbidden CCU write',hex(at))
+    if at==0x02003f00:assert value==7 # Existing cold security permission setup.
  u.hook_add(UC_HOOK_CODE,code);u.hook_add(UC_HOOK_MEM_WRITE,mmio,begin=0x02000000,end=0x08ffffff);u.hook_add(UC_HOOK_MEM_READ,mmio,begin=0x02000000,end=0x08ffffff)
  def call(name,*args,count=5000000):
   for i,value in enumerate(args):u.reg_write(UC_ARM64_REG_X0+i,value)
@@ -93,11 +105,22 @@ for variant in variants:
  assert state['return']==(variant=='success') and state['retained']==(variant!='success'),(variant,state)
  if variant=='success':
   frames=[bytes(u.mem_read(at,size)) for at,size in ((0x42000000,128),(g['log'],16384),(g['receipt'],88))]
-  parsed=h.validate_reports(*frames,{'execution_profile':h.CHECKPOINT,'geometry':g,**profile})
+  parsed=h.validate_reports(*frames,{'execution_profile':h.geometry_profile(g),'geometry':g,**profile})
   assert parsed['jobs']==0 and not parsed['functional_success'] and parsed['normal_return']
+  assert parsed['mbus']=={'before':0x81000000,'restore_result':0,'after':0x81000000}
   for name,data in zip(('monitor','platform','receipt'),frames):(a.evidence/(name+'.bin')).write_bytes(data)
   results.append({'case':'actual-final-writer-to-host-parser','passed':True,'result':parsed})
  results.append({'case':variant,'passed':True,'normal_return':state['return']})
+# Exercise the actual existing normalization and its safe skip through the
+# checkpoint wrapper. Only MBUS/MSI writes are allowed by the MMIO hook.
+for label,busy,expected in [('normalized',False,(0x84000000,0,0x81000000)),('busy-master-skip',True,(0x84000000,8,0x84000000))]:
+ u,state,put,get,call=machine(0x84000000,busy);call('sd_single_core_monitor_init');assert not state['retained'],state
+ observed=tuple(get(im.address('npu_entry_checkpoint_mbus')+8*i) for i in (1,2,3));assert observed==expected,(label,observed)
+ state['el']=4;state['phase']='kernel';call('kernel_main');assert state['smc']==[0x733,0] and not state['panics'],state
+ state.update(el=12,sctlr=0,phase='return');call('sd_single_core_exception',0x733,0,1);assert state['return'] and not state['retained'],state
+ frames=[bytes(u.mem_read(at,size)) for at,size in ((0x42000000,128),(g['log'],16384),(g['receipt'],88))]
+ parsed=h.validate_reports(*frames,{'execution_profile':h.geometry_profile(g),'geometry':g,**profile});assert tuple(parsed['mbus'].values())==expected
+ results.append({'case':'actual-MBUS-'+label+'-publication-and-return','passed':True,'diagnostic':parsed['mbus']})
 for corruption in ('app','ledger'):
  u,state,put,get,call=machine();u.mem_write(0x41000000,sealed_ram);state.update(el=4,phase='kernel',inject=corruption)
  call('kernel_main');assert state['smc']==[0x733,4] and not state['return'],state

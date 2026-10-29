@@ -1,11 +1,32 @@
 /* Reuse authenticated retention, secondary-OFF admission, protected page-table
  * construction, GIC/timer initialization and all retained failure paths.
  * Replace only the terminal exception entry for a matched successful receipt. */
+#ifdef SUNSTONE_NPU_ENTRY_CHECKPOINT
+#include "checkpoint.h"
+#include "a733_el3_mbus.h"
+/* The base monitor clears retained RAM before this call. Its existing entry
+ * DSB publishes these scalars before EL1; no provider or task can write them. */
+static unsigned checkpoint_mbus_restore(void)
+{
+    uint32_t before=a733_el3_mbus_read(A733_MBUS_CLK);
+    unsigned result=a733_el3_mbus_restore();
+    uint32_t after=a733_el3_mbus_read(A733_MBUS_CLK);
+    npu_entry_checkpoint_mbus[1]=before;
+    npu_entry_checkpoint_mbus[2]=result;
+    npu_entry_checkpoint_mbus[3]=after;
+    npu_entry_checkpoint_mbus[0]=NPU_ENTRY_MBUS_MAGIC;
+    return result;
+}
+#define a733_el3_mbus_restore checkpoint_mbus_restore
+#endif
 #define sd_single_core_exception npu_finite_retained_exception
 #ifdef SUNSTONE_NPU_FINITE_THERMAL
 #define sd_single_core_monitor_init npu_finite_base_monitor_init
 #endif
 #include "../storage-read-single-core/monitor.c"
+#ifdef SUNSTONE_NPU_ENTRY_CHECKPOINT
+#undef a733_el3_mbus_restore
+#endif
 #ifdef SUNSTONE_NPU_FINITE_THERMAL
 #undef sd_single_core_monitor_init
 extern unsigned npu_finite_thermal_irq_admitted;
@@ -81,6 +102,7 @@ static int return_gic(uint64_t deadline)
  * asserted with its bus gate closed and the module gate at +0xb00 is closed.
  * A held-reset check or a readback that fails parks with status 7 instead of
  * returning. */
+#ifndef SUNSTONE_NPU_ENTRY_CHECKPOINT
 #define SRAM_ROUTING UINT32_C(0x03000008)
 #define SRAM_TO_CPU UINT32_C(2)
 static void return_sram_to_cpu(void)
@@ -98,6 +120,7 @@ static void return_sram_to_cpu(void)
     }
     if(!(value&SRAM_TO_CPU))a733_smp_stop(7,SRAM_ROUTING);
 }
+#endif
 _Noreturn void sd_single_core_exception(uint64_t operation,uint64_t status,uint64_t kind)
 {
     uint64_t esr,control;
@@ -141,7 +164,9 @@ _Noreturn void sd_single_core_exception(uint64_t operation,uint64_t status,uint6
     uint64_t completed_at=counter();
     if(completed_at>=r->thermal_deadline || completed_at>=deadline)a733_smp_stop(7,operation);
 #endif
+#ifndef SUNSTONE_NPU_ENTRY_CHECKPOINT
     return_sram_to_cpu();
+#endif
     REPORT->status=status;
 #ifdef SUNSTONE_NPU_ENTRY_CHECKPOINT
     REPORT->detail=NPU_ENTRY_MEMORY_READY;

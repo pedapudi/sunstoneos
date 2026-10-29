@@ -118,7 +118,7 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
    path=write('thermal-'+name+'.json',{**common,'schema':'a733-thermal-'+name+'-v1','reviewed':True,'owner':0x12345,'authority':0x23456,**dict.fromkeys(keys,True)})
    thermal_facts[name]=ref(path);raw[at+16+32*index:at+48+32*index]=hashlib.sha256(path.read_bytes()).digest()
  if checkpoint:
-  required['clock']={'npu-clock-power-registers-not-accessed'}
+  required['clock']=({'read-only-NPU-clock-guard-before-MBUS-normalization','MBUS-source-restore-with-idle-masters-and-exclusive-SRAM-window'} if g.get('checkpoint_mbus') else {'npu-clock-power-registers-not-accessed'})
   required['power']={'providers-never-constructed','unconsumed-typed-boot-no-provider-grant'}
   required['supervision'].remove('successful-close-stop-quiescence-ROM-retirement');required['supervision'].add('checkpoint-normal-return-retirement')
  boot_hash=sha(raw[boot:boot+boot_bytes]);facts={}
@@ -128,7 +128,7 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
  conditions={'cold-cache-and-dirty-alias-exclusion','dual-pas-dram','exclusive-cpus-memory-dma','remote-writers-excluded','usb-clock-power-reset-ownership','physical-counter-continuity','npu-startup-sram-confinement-drain-ownership','pmic-bus-rail-pin-ownership','primary-cache-transition-and-secondary-off','usb-supplies-stable-and-writers-excluded'}
  if checkpoint:
   conditions-= {'npu-startup-sram-confinement-drain-ownership','pmic-bus-rail-pin-ownership'}
-  conditions|= {'providers-never-constructed','npu-clock-power-registers-not-accessed'}
+  conditions|= {'providers-never-constructed','read-only-NPU-clock-guard-before-MBUS-normalization' if g.get('checkpoint_mbus') else 'npu-clock-power-registers-not-accessed'}
  platform=write('platform.json',{**common,**profile,'schema':'a733-npu-checkpoint-platform-v1' if checkpoint else 'a733-npu-convolution-platform-v1','conditions':{k:ref(fact) for k in conditions},'entry_conditions_established':True,'physical_coherence_result':'under-test'})
  launcher=Path.home()/'.cache/sunstoneos/evidence/npu-single-core-20261018/package-final/bundle/launch.bin'
  review=write('root.json',{**common,'schema':'a733-npu-finite-return-review-v1','reviewed':True,'execution_profile':execution,'build_id':build.hex(),'supervisor':profile['supervisor'],'launcher_sha256':sha(launcher.read_bytes()),'host_sources':{n:sha((r/n).read_bytes()) for n in h.HOST_SOURCES},'conditions':{k:ref(fact) for k in ('architecture-reset-reviewed','software-handoff-reviewed','normal-return-retirement-reviewed','failure-retention-reviewed')}})
@@ -187,7 +187,7 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
  if checkpoint:
   rejected('checkpoint-cannot-use-numerical-profile',lambda:h.image_profile(data,{**json.loads(manifest.read_bytes()),'execution_profile':h.PROFILE}))
   saved_platform=platform.read_bytes()
-  for key in ('remote-writers-excluded','providers-never-constructed','npu-clock-power-registers-not-accessed'):
+  for key in ('remote-writers-excluded','providers-never-constructed','read-only-NPU-clock-guard-before-MBUS-normalization' if g.get('checkpoint_mbus') else 'npu-clock-power-registers-not-accessed'):
    changed=json.loads(saved_platform);del changed['conditions'][key];platform.write_text(json.dumps(changed))
    encoded=json.dumps({**entry,'platform':ref(platform)}).encode();mutated=bytearray(raw);mutated[80:112]=hashlib.sha256(encoded).digest()
    rejected('checkpoint-missing-'+key,lambda:h.validate_admission(encoded,mutated,build,layout,sha(data),execution_profile=execution))
@@ -224,7 +224,12 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
   if a.interrupt:text=text.replace('NPU_STAGE=QUIESCENT\n',IRQ_RECEIPTS+'NPU_STAGE=QUIESCENT\n',1)
   if checkpoint:
    text='NPU_CHECKPOINT=ENTRY_MEMORY_READY; providers never constructed; jobs=0\n'
+   if g.get('checkpoint_mbus'):text+='NPU_MBUS=\n0x0000000084000000\n0x0000000000000000\n0x0000000081000000\n'
    if variant=='false-success':text=text.replace('jobs=0','jobs=1')
+   if variant=='missing-MBUS':text=text.split('NPU_MBUS=')[0]
+   if variant=='truncated-MBUS':text=text.rsplit('0x0000000081000000\n',1)[0]
+   if variant=='bad-MBUS-result':text=text.replace('NPU_MBUS=\n0x0000000084000000\n0x0000000000000000','NPU_MBUS=\n0x0000000084000000\n0x0000000000000001')
+   if variant=='duplicate-MBUS':text+=text[text.index('NPU_MBUS='):]
   if variant=='duplicate-log':text+=text
   monitor=list(native_report);monitor[3:9]=[5,status,0x4e50554e if checkpoint else 0,11000000,1,12000000]
   if variant=='old-generic-monitor-magic':monitor[0]=0x4153373343525331
@@ -246,6 +251,7 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
  variants=['nominal','old-generic-monitor-magic','mismatch','unwritten-second','unwritten-tail','stale-generation','stale-lease','unclean-receipt','pending-monitor','wrong-status','invalid-time','oversized-log','false-success','duplicate-log','no-new-ROM','capture-transport-failure','restore-readback-failure','changed-backup','wrong-ROM-entry']
  if g.get('stopped_capture'):variants+=['capture-metadata-invalid','capture-parent-short','capture-extent-transport-failure','capture-durability-failure','capture-output-differs']
  if checkpoint or thermal:variants.append('ordinary-receipt')
+ if g.get('checkpoint_mbus'):variants+=['missing-MBUS','truncated-MBUS','bad-MBUS-result','duplicate-MBUS']
  if thermal:variants+=['thermal-zero','thermal-one','thermal-one-mismatch','thermal-late-drain','thermal-fault-reason']
  assert not set(a.case)-set(variants),'Unknown selected case'
  for variant in variants:

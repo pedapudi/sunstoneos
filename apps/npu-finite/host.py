@@ -11,7 +11,8 @@ original=module('finite_npu_original',ROOT/'apps/npu-convolution/prepare-supervi
 base=original.supervisor.base
 require,sha=base.require,original.sha
 RESTART='npu-interrupt-restart-return-v1'
-PROFILE='npu-finite-return-v1';CHECKPOINT='npu-entry-memory-checkpoint-v1';THERMAL='npu-finite-thermal-return-v1';PROFILES=(PROFILE,CHECKPOINT,THERMAL);SCHEMA='a733-npu-finite-entry-v1';DRAM=(0x41000000,0x1200000)
+MBUS_CHECKPOINT='npu-entry-mbus-checkpoint-v1'
+PROFILE='npu-finite-return-v1';CHECKPOINT='npu-entry-memory-checkpoint-v1';THERMAL='npu-finite-thermal-return-v1';PROFILES=(PROFILE,CHECKPOINT,THERMAL,MBUS_CHECKPOINT);SCHEMA='a733-npu-finite-entry-v1';DRAM=(0x41000000,0x1200000)
 HOST_SOURCES=('apps/npu-finite/host.py','apps/npu-finite/stopped-capture.py','tools/a733-returning-host.py','apps/npu-convolution/prepare-supervised.py','apps/npu-convolution/observe.py','tools/check-a733-smp.py','tools/check-a733-smp-supervised.py','tools/check-a733-smp-observe.py','tools/check-a733-kernel.py','tools/usb-access.py','tools/npu-models.json','platform/a733-smp-supervised/launch.c','platform/a733-smp-observe/launch.S','platform/a733-smp-observe/launch.ld','platform/a733-smp-cached/boot.h')
 def save(path,value):base.save_json(path,value)
 def evidence_ref(item,cache=None):
@@ -30,7 +31,7 @@ def image_profile(data,manifest):
   if s['st_info']['type']=='STT_FUNC' and s['st_shndx']!='SHN_UNDEF']
  require(not any('usb' in n.lower() or n.startswith(('tud_','tuh_','dcd_','hcd_')) or
   n=='a733_observe_service_start' for n in functions),'Finite image contains native USB functions.')
- checkpoint=manifest['execution_profile']==CHECKPOINT;thermal=manifest['execution_profile']==THERMAL
+ checkpoint=manifest['execution_profile'] in (CHECKPOINT,MBUS_CHECKPOINT);thermal=manifest['execution_profile']==THERMAL
  for name in ('npu_finite_receipt','npu_finite_smc','npu_finite_rom_return', 'npu_entry_checkpoint_ready' if checkpoint else 'a733_npu_application_quiescent'):
   require(name in symbols and symbols[name]['st_value'],'Missing returning producer: '+name)
  def address_of(name):return int(symbols[name]['st_value'])
@@ -62,11 +63,16 @@ def image_profile(data,manifest):
   geometry['thermal']=True
  else:require('npu_finite_thermal_profile' not in symbols and layout[:3]==(456,224,232),'Ordinary profile cannot consume thermal suffix.')
  if checkpoint:geometry['checkpoint']=True
+ if manifest['execution_profile']==MBUS_CHECKPOINT:
+  require(read('npu_entry_checkpoint_mbus_profile')==struct.pack('<4Q',0x4e50554d42555331,1,3,0),
+   'MBUS checkpoint immutable marker differs.')
+  geometry['checkpoint_mbus']=True
+ else:require('npu_entry_checkpoint_mbus_profile' not in symbols,'MBUS checkpoint requires its distinct profile.')
  capture=stopped.layout(sha(data),symbols,read,lo,hi)
  if capture is not None:geometry['stopped_capture']=capture
  return parts,address,build,layout,geometry
 
-def geometry_profile(g):return RESTART if g.get('restart') else CHECKPOINT if g.get('checkpoint') else THERMAL if g.get('thermal') else PROFILE
+def geometry_profile(g):return MBUS_CHECKPOINT if g.get('checkpoint_mbus') else RESTART if g.get('restart') else CHECKPOINT if g.get('checkpoint') else THERMAL if g.get('thermal') else PROFILE
 
 def validate_admission(admission_raw,raw,build,layout,image_hash,cache=None,*,execution_profile=PROFILE):
  """Preserve original NPU facts; require a distinct reviewed returning lifetime.
@@ -75,7 +81,8 @@ def validate_admission(admission_raw,raw,build,layout,image_hash,cache=None,*,ex
  Its supervision schema is explicit; old retained-only flags are never translated.
  """
  require(execution_profile in PROFILES,'Unsupported execution profile.')
- checkpoint=execution_profile==CHECKPOINT
+ checkpoint=execution_profile in (CHECKPOINT,MBUS_CHECKPOINT)
+ mbus_checkpoint=execution_profile==MBUS_CHECKPOINT
  record=json.loads(admission_raw);collected={}
  def evidence(item):
   data=evidence_ref(item,cache);collected[item['path']]=data;return data
@@ -96,7 +103,7 @@ def validate_admission(admission_raw,raw,build,layout,image_hash,cache=None,*,ex
  conditions={'cold-cache-and-dirty-alias-exclusion','dual-pas-dram','exclusive-cpus-memory-dma',
   'remote-writers-excluded','usb-clock-power-reset-ownership','physical-counter-continuity',
   'primary-cache-transition-and-secondary-off','usb-supplies-stable-and-writers-excluded'}
- conditions|=({'providers-never-constructed','npu-clock-power-registers-not-accessed'} if checkpoint else
+ conditions|=({'providers-never-constructed','read-only-NPU-clock-guard-before-MBUS-normalization' if mbus_checkpoint else 'npu-clock-power-registers-not-accessed'} if checkpoint else
   {'npu-startup-sram-confinement-drain-ownership','pmic-bus-rail-pin-ownership'})
  require(platform.get('schema')==('a733-npu-checkpoint-platform-v1' if checkpoint else 'a733-npu-convolution-platform-v1') and
   platform.get('identity')==identity and platform.get('port')==port and
@@ -111,7 +118,7 @@ def validate_admission(admission_raw,raw,build,layout,image_hash,cache=None,*,ex
   required['supervision'].remove('successful-close-stop-quiescence-ROM-retirement')
   required['supervision'].add('matched-close-local-stop-or-proved-never-started-with-configured-THS-stop-and-provider-park')
  if checkpoint:
-  required['clock']={'npu-clock-power-registers-not-accessed'}
+  required['clock']=({'read-only-NPU-clock-guard-before-MBUS-normalization','MBUS-source-restore-with-idle-masters-and-exclusive-SRAM-window'} if mbus_checkpoint else {'npu-clock-power-registers-not-accessed'})
   required['power']={'providers-never-constructed','unconsumed-typed-boot-no-provider-grant'}
   required['supervision'].remove('successful-close-stop-quiescence-ROM-retirement')
   required['supervision'].add('checkpoint-normal-return-retirement')
@@ -271,9 +278,9 @@ def validate_reports(monitor,platform,receipt,p):
  require(len(monitor)==128 and len(platform)==16384 and len(receipt)==(112 if thermal else 88),'Incomplete returned reports.')
  m=struct.unpack('<16Q',monitor);h=struct.unpack_from('<16Q',platform);r=struct.unpack('<14Q' if thermal else '<11Q',receipt);g=p['geometry']
  magic=0x415337334e505231
- require(m[0]==magic and (m[1],m[2])==(p['epoch'],p['generation']) and m[3]==5 and m[4] in ((0,1,2) if thermal else (0,1)) and m[5]==(0x4e50554e if p.get('execution_profile')==CHECKPOINT else 0) and m[7]==1,'No matched normal monitor completion.')
+ require(m[0]==magic and (m[1],m[2])==(p['epoch'],p['generation']) and m[3]==5 and m[4] in ((0,1,2) if thermal else (0,1)) and m[5]==(0x4e50554e if p.get('execution_profile') in (CHECKPOINT,MBUS_CHECKPOINT) else 0) and m[7]==1,'No matched normal monitor completion.')
  status=m[4];deadline=r[9];armed=deadline-480000000
- checkpoint=p.get('execution_profile')==CHECKPOINT
+ checkpoint=p.get('execution_profile') in (CHECKPOINT,MBUS_CHECKPOINT)
  require(p.get('execution_profile',PROFILE) in PROFILES and bool(g.get('checkpoint'))==checkpoint and bool(g.get('thermal'))==thermal,'Report profile differs.')
  require(r[:6]==(0x4e505543484b3031 if checkpoint else 0x4e50555448533031 if thermal else 0x4e50555245543031,p['epoch'],p['generation'],p['lease'],status,0x4e50554e if checkpoint else status+1) and
   r[6:9]==(g['clean_start'],g['clean_end'],(g['clean_end']-g['clean_start'])//64) and
@@ -281,8 +288,17 @@ def validate_reports(monitor,platform,receipt,p):
  require(h[0]==0x534b4552 and h[1]==5 and h[2]==status and h[9]==m[8] and h[3]==r[10] and h[3]<=16127 and m[6]<=h[8]<=h[9] and h[4:8]==(0,0,0,0),'Platform completion/log differs.')
  text=platform[256:256+h[3]].decode('ascii');require(platform[256+h[3]]==0,'Unterminated returned log.')
  if checkpoint:
-  require(status==0 and text=='NPU_CHECKPOINT=ENTRY_MEMORY_READY; providers never constructed; jobs=0\n','Checkpoint log or status differs.')
-  return {'normal_return':True,'checkpoint':'ENTRY_MEMORY_READY','functional_success':False,'controlled_negative':False,'jobs':0,'status':0,'diagnostic_deadline':deadline,'log':text}
+  prefix='NPU_CHECKPOINT=ENTRY_MEMORY_READY; providers never constructed; jobs=0\n'
+  mbus={}
+  if p.get('execution_profile')==MBUS_CHECKPOINT:
+   match=re.fullmatch(re.escape(prefix)+r'NPU_MBUS=\n(0x[0-9a-f]{16})\n(0x[0-9a-f]{16})\n(0x[0-9a-f]{16})\n',text)
+   require(match is not None,'Missing or ambiguous MBUS checkpoint log.')
+   before,result,after=(int(v,16) for v in match.groups())
+   require(before<=0xffffffff and after<=0xffffffff and result in (0,8,9,10),'Invalid MBUS checkpoint result.')
+   mbus={'mbus':{'before':before,'restore_result':result,'after':after}}
+  else:require(text==prefix,'Checkpoint log or status differs.')
+  require(status==0,'Checkpoint log or status differs.')
+  return {'normal_return':True,'checkpoint':'ENTRY_MEMORY_READY','functional_success':False,'controlled_negative':False,'jobs':0,'status':0,'diagnostic_deadline':deadline,'log':text,**mbus}
  passed='PASS NPU two matched jobs across normal local restart and parked providers' if p.get('execution_profile')==RESTART else 'PASS NPU two matched jobs, copied output, REAP, CLOSE, local stop and parked providers'
  pattern=r'NPU_STAGE=QUIESCENT\nNPU_FIRST_DIGEST=\n((?:0x[0-9a-f]{16}\n){32})NPU_SECOND_OUTPUT=\n((?:0x[0-9a-f]{16}\n)+)('+re.escape(passed)+r'|FAIL NPU numerical comparison|REFUSED NPU thermal admission; configured sensor disabled and providers parked)\n'
  matches=list(re.finditer(pattern,text));require(len(matches)==1 and matches[0].end()==len(text),'Missing or ambiguous finite output/terminal marker.')

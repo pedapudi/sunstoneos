@@ -8,6 +8,9 @@
 struct a733_npu_application_result a733_npu_application_result;
 __attribute__((used,retain)) const uint64_t npu_entry_checkpoint_profile[4]={
     NPU_ENTRY_RECEIPT_MAGIC,1,NPU_ENTRY_MEMORY_READY,0};
+__attribute__((used,retain)) const uint64_t npu_entry_checkpoint_mbus_profile[4]={
+    NPU_ENTRY_MBUS_MAGIC,1,3,0};
+uint64_t npu_entry_checkpoint_mbus[4] __attribute__((section(".npu_runtime_retained")));
 static struct {
     uint64_t complete,epoch,generation,lease,armed_at,deadline;
     struct device_memory_pool *pool;
@@ -33,7 +36,11 @@ int npu_entry_checkpoint_ready(uint64_t epoch,uint64_t generation,uint64_t lease
     const struct a733_smp_contract *c=sd_single_core_contract();
     if(!published(&checkpoint,sizeof(checkpoint)))return 0;
     const struct device_memory_pool *p=checkpoint.pool;
-    return published(s,sizeof(*s)) &&
+    return published(npu_entry_checkpoint_mbus,sizeof(npu_entry_checkpoint_mbus)) &&
+        npu_entry_checkpoint_mbus[0]==NPU_ENTRY_MBUS_MAGIC &&
+        npu_entry_checkpoint_mbus[1]<=UINT32_MAX && npu_entry_checkpoint_mbus[3]<=UINT32_MAX &&
+        (npu_entry_checkpoint_mbus[2]==0 || (npu_entry_checkpoint_mbus[2]>=8 && npu_entry_checkpoint_mbus[2]<=10)) &&
+        published(s,sizeof(*s)) &&
         published(c,sizeof(*c)) && published(&app,sizeof(app)) &&
         published(&a733_npu_application_result,sizeof(a733_npu_application_result)) &&
         published(&a733_npu_application_failed,sizeof(a733_npu_application_failed)) &&
@@ -70,6 +77,8 @@ void a733_smp_diagnostic_start(void)
     checkpoint.armed_at=c->armed_at;checkpoint.deadline=c->diagnostic_deadline;
     checkpoint.complete=NPU_ENTRY_MEMORY_READY;
     platform_puts("NPU_CHECKPOINT=ENTRY_MEMORY_READY; providers never constructed; jobs=0\n");
+    platform_puts("NPU_MBUS=\n");
+    for(unsigned i=1;i<4;++i){platform_hex(npu_entry_checkpoint_mbus[i]);platform_puts("\n");}
     platform_exit(0);
 }
 void vApplicationStackOverflowHook(TaskHandle_t task,char *name)

@@ -101,39 +101,79 @@ satisfy that contract.
 ## Return before constructing providers
 
 `build.py --entry-checkpoint --evidence <directory>` produces
-`npu-entry-memory-checkpoint-v1`. It uses the finite image's monitor, authenticated
-session copy and seal, CPU entry, platform initialization and local memory-pool
-preparation. Its diagnostic entry creates no task and constructs no provider.
-The linker removes the NPU, PMIC and scheduler startup functions.
+`npu-entry-mbus-checkpoint-v1`. It uses the finite image's authenticated
+session, CPU/GIC entry, write-back mappings and memory reservation. It constructs
+no task or provider. The linker removes the NPU, PMIC and scheduler startup
+functions. The historical `npu-entry-memory-checkpoint-v1` profile remains
+accepted for its original frozen images.
+
+The EL3 monitor records the MBUS control word before and after its existing
+source restoration, together with the restore result. The source restoration
+can normalize the ROM's 400 MHz state to 600 MHz through the existing SRAM
+window. It first checks the bridge and bus-master guards. Results 8, 9 and 10
+leave the bus unchanged when a master is clocked or busy. The checkpoint can
+return those results because it starts no device. Results 1 through 7 still
+retain the image before EL1; they do not authorize a diagnostic return.
+
+The checkpoint log includes `ENTRY_MEMORY_READY`, zero jobs and a mandatory
+`NPU_MBUS` block containing the three captured values. An immutable marker binds
+that log format to the image. The host reports `functional_success=false` and
+the actual before/result/after values. A zero restore result alone does not
+establish 600 MHz: the helper can also leave an unsupported incoming state
+unchanged. Interpret the captured word with the source and divider fields.
 
 Before return, the checkpoint requires zero native application and job-result
 storage, an initialized empty write-back pool, and no non-cacheable pool. Its
-published identities must match the secure monitor's admitted contract. The
-monitor accepts this pre-scheduler caller only in EL1h. It uses the existing
-bounded cache publication, GIC restoration and forced ROM return path.
+published identities and MBUS record must match the secure monitor's admitted
+state. The monitor accepts this pre-scheduler caller only in EL1h. It uses the
+existing bounded cache publication, GIC restoration and forced ROM return.
+The checkpoint omits the numerical image's SRAM-routing restoration entirely:
+it never changed that routing, and admission requires fresh ROM lineage plus
+exclusion of other routing writers.
 
-The checkpoint has a distinct immutable marker, receipt magic and completion
-value. The host reports `ENTRY_MEMORY_READY`, zero jobs and
-`functional_success=false`. This proves execution reached the memory checkpoint;
-it does not establish NPU inference, inherited engine inactivity or power state.
-The ordinary numerical profile cannot accept this receipt. The selected image
-uses 56 bytes of checkpoint state and scans the 140,096-byte native application
-storage twice, once before publication and once at EL3. It cleans 35,840 cache
-lines and creates zero tasks or provider transactions.
+The same `host.py session`, `prepare`, `validate` and `run` operations consume
+the diagnostic manifest. The session and receipt sizes stay 456 and 88 bytes.
+The existing `a733-npu-checkpoint-platform-v1` schema requires
+`providers-never-constructed` and
+`read-only-NPU-clock-guard-before-MBUS-normalization`. Its clock record also
+requires `MBUS-source-restore-with-idle-masters-and-exclusive-SRAM-window`.
+Power admission requires `providers-never-constructed` and
+`unconsumed-typed-boot-no-provider-grant`. Typed boot fields retain their syntax
+and grant no provider operation. Current CPU, cache, DDR, secondary-OFF, ROM
+transport and remote-writer exclusion evidence remain necessary.
 
-The same `host.py session`, `prepare`, `validate` and `run` operations consume the
-checkpoint manifest. Admission requires current CPU, cache, DDR, secondary-OFF,
-ROM transport and remote-writer exclusion evidence. The checkpoint platform
-schema is `a733-npu-checkpoint-platform-v1`. Its source-bound conditions
-`providers-never-constructed` and `npu-clock-power-registers-not-accessed` replace
-the numerical profile's startup and PMIC grants. The power record also requires
-`unconsumed-typed-boot-no-provider-grant`. Typed boot fields retain their original
-syntax; their presence grants no provider operation. No NPU, PLL, power-domain
-or PMIC register is accessed by the checkpoint. Native USB mappings, PIO
-takeover and IRQ188/189/190 state are not checkpoint prerequisites because it
-constructs no USB provider. ROM USB clock, power, supply and writer-exclusion
-authority still applies. The CPU/GIC entry and return accesses also require
-physical authority.
+The diagnostic performs no NPU-engine, PLL factor/gate, PCK policy or SRAM-routing
+write. Its existing MBUS helper reads NPU/GPU clock state and conditionally reads
+DMA0/CE idle state before changing only MBUS and its MSI bridge. The shared
+monitor also performs the existing vendor security-permission setup before
+EL1; those permission writes are part of entry, not NPU initialization. Native
+USB mappings, PIO takeover and IRQ188/189/190 state are unnecessary because the
+checkpoint constructs no USB provider. ROM USB clock, power, supply and writer
+exclusion authority still applies.
+
+This change adds a 32-byte immutable marker, a 32-byte retained record, two CCU
+reads at entry and three printed values. It adds no task, allocation, queue or
+per-inference operation. The selected build still cleans 35,840 cache lines.
+Nineteen native checkpoint cases cover publication, normalization, a busy-master
+skip and retained corruption; selected host cases reject missing, partial,
+invalid and duplicate diagnostic blocks. The historical checkpoint still passes
+its selected host preparation and nominal-return cases. Hardware effects remain
+modeled. Evidence is under
+`~/.cache/sunstoneos/evidence/sol-npu-entry-diagnostic-1029/`.
+
+The physically accepted checkpoint on port 3-1 used image `9afb6738…` and the
+same 1,804-byte ARM32 launcher `3a754016…` as the failed normal-restart capsule.
+That checkpoint has neither the current MBUS SRAM-window symbol nor IRQ97
+installation. The failed capsule adds those entry paths and later provider
+execution. The new diagnostic exercises the current shared entry and MBUS
+normalization, then returns before providers or IRQ97 installation. Its result
+cannot qualify the failed capsule's remaining paths.
+
+An early contract, architectural, secondary, GIC or MBUS failure still parks.
+No safe normal-return proof exists for those refusal states, so the diagnostic
+does not relax their retention. No diagnostic is available before successful
+checkpoint entry. A missing return therefore remains ambiguous and requires
+physical recovery; it does not authorize another launch.
 
 ## Finite thermal admission bounds work and cleanup
 

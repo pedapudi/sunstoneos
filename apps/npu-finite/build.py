@@ -21,6 +21,7 @@ p.add_argument('--shufflenet',action='store_true',help='the published ShuffleNet
 p.add_argument('--sdk-reference',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/npu-complete-graph-proposal-20261019/sdk-reference',
  help='directory with network_binary.nb, published-input.dat and output0_2_1.dat')
 a=p.parse_args()
+if a.entry_checkpoint and a.interrupt:p.error('Entry checkpoint constructs no interrupt provider')
 if a.restart and (not a.interrupt or a.shufflenet or a.thermal or a.entry_checkpoint):p.error('Restart requires the baseline interrupt profile')
 if a.shufflenet and not a.interrupt:p.error('The large graph profile requires --interrupt')
 if sum((a.interrupt,a.entry_checkpoint,a.thermal))>1:p.error('Checkpoint, interrupt and thermal profiles are separate')
@@ -91,7 +92,7 @@ else:
 if a.shufflenet:
  identity['model']='shufflenet-v2-published';identity['large_graph']=True
 if a.entry_checkpoint:
- identity['profile']='npu-entry-memory-checkpoint-v1'
+ identity['profile']='npu-entry-mbus-checkpoint-v1'
  identity['checkpoint_sources']={str(x.relative_to(root)):sha(x) for x in (root/'apps/npu-finite/checkpoint.c',root/'apps/npu-finite/checkpoint.h')}
 build_id=hashlib.sha256(json.dumps(identity,sort_keys=True).encode()).hexdigest();source=e/'build-id.c';source.write_text('const unsigned char a733_smp_build_id[32]={'+','.join('0x'+build_id[i:i+2] for i in range(0,64,2))+'};\n')
 build_obj=compile_like('/npu-single-core/build-id.c',source,'build-id')
