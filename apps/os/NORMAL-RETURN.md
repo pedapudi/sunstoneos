@@ -230,3 +230,73 @@ its binary SHA-256 is
 `f48a6be72b336c8990a124fd608bba5fddb5c8617ec62eac5642b2d50fb27c75`.
 Independent source review found no blocking defect. None of these software
 records grants physical execution or qualifies normal return.
+
+The first CPU-only run keeps one compound queue claim through rail restoration.
+`apps/os/cpu-return-followup.py` is the dedicated continuation. Its initial scope
+is the CPU-only image; GPU follow-up is explicitly excluded. The ordinary
+survey command keeps its existing exact prerequisite and recovery-identity
+checks. Neither that command nor `bundle-run.py` can be used to finish the
+CPU claim between native return and rail restoration.
+
+Before CLAIM, root reviews the `cpu-return-compound-followup` prerequisite with
+schema `a733-os-cpu-return-compound-followup-v1`. It pins the original prepared
+bundle, clock/return approvals, exact host/source closure, accepted 40-byte
+cache-off helper, survey binary/software, reference/comparator, conditional
+entry800 rail helper, fixed evidence paths and private 18 MiB helper reservation.
+The queue proposal hashes immutable image/helper/source inputs and fixed paths
+first. After its ID is known, root finalizes claim-bound approval/session and
+prepared bytes; queue REVIEW pins their final hashes before CLAIM. No claim
+field is normalized out and no claimed review is edited.
+
+The continuation reads the same SQL row, owner and port and checks immutable
+submission/review hashes before every phase. The actual copied CPU report,
+output, epoch/generation, seven secondary OFF observations and restored-DRAM
+receipt authorize only that receipt's actual returned ROM instance. Its sequence
+is fixed and attempted once: reference parity, cache-off, SRAM survey, the exact
+rail helper, then final proof. Cache-off and survey preserve their bounded SRAM
+backup/readback operations and existing survey decoder. Live identity is checked
+under the port lock before every SRAM request. The new survey supplies all six
+launcher gates on the successor instance; old entry identity is never relabeled.
+
+The helper uses the existing kernel runner with that fresh survey and the full
+DDR/warm-return chain, extended by the actual CPU receipt. Its private
+`0x41000000..0x42200000` RAM is **retired and overwritten**, not restored to
+pre-helper bytes. The CPU capture's earlier DRAM restoration remains true for
+that earlier stage. The helper establishes initialized-RAM continuity and its
+own completed state; these are separate facts. Never restore old ROM-owned SRAM
+across either native return.
+
+Final proof requires the exact helper image, a new responsive ROM instance,
+monitor status zero, one exact completion line, matching before/after boot clocks
+and clear modulation controls, the sole DCDC5 800 mV selector readback and the
+helper's final rail inspections/quiescence. Controlled outcomes, refusals,
+missing/duplicate proof and changed artifacts retain the claim. The compound
+receipt alone can set rail restoration pending false and permit **root** to
+finish the claim. The script performs no queue mutation or automatic finish;
+every later device still requires its own authority. Any failure stops remaining
+phases without retry, fallback helper or recovery guarantee.
+
+```sh
+~/.cache/sunstoneos/venv/bin/python apps/os/cpu-return-followup.py \
+  --database QUEUE_DATABASE --claim ORIGINAL_CPU_CLAIM --owner coordinator \
+  --review COMPOUND_REVIEW.json --fel PINNED_FEL --evidence FIXED_FOLLOWUP_DIRECTORY
+```
+
+The command runs only under the already reviewed and claimed CPU compound
+proposal with `SUNSTONE_USB_PORT` set to its physical port. An existing evidence
+directory refuses a second attempt. Source checks cover temporary SQL claim
+bindings and modeled SRAM/helper proofs; full composition checks use the actual
+frozen CPU bundle and new GPU-aware host reader with modeled access/helper
+transport. These checks do not qualify a physical continuation.
+
+Use `--check-review-only` on the same command after finalizing claim-bound inputs
+and before queue REVIEW/CLAIM. It validates the finalized artifact/session
+contract without opening the queue or device and creates no attempt directory.
+It is not a queue claim check or a physical success receipt. The actual command
+without that flag always requires the unchanged claimed row.
+
+The final compound authority pins the finalized CPU prepared bundle. Original
+CPU approval/return-review sources therefore refer to independent immutable
+follow-up policy and source evidence, not the final compound-authority record.
+Finalize the original CPU bundle first, then the compound authority, then queue
+REVIEW. This also avoids a prepared-bundle/compound-authority hash cycle.
