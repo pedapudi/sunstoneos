@@ -37,14 +37,21 @@ int bluetooth_profile_valid(const struct bluetooth_profile *p,const uint8_t dige
         return 0;
 #else
         const struct bluetooth_headset_profile *h=&p->headset;
+#ifndef SUNSTONE_BLUETOOTH_A2DP
+        if(h->mode==6)return 0;
+#endif
 #ifndef SUNSTONE_BLUETOOTH_MSBC
+#ifdef SUNSTONE_BLUETOOTH_A2DP
+        if(p->version!=2||h->mode!=6||!h->incoming||(h->samples&1))return 0;
+#else
         if(h->mode>=3)return 0;
 #endif
-        if(!((h->mode==1)||(h->mode==4&&p->version==2)||((h->mode==2||h->mode==3||h->mode==5)&&p->version==3))||h->incoming>1||!present(h->peer,6)||h->pin[16]||h->allow_just_works>1||
+#endif
+        if(!((h->mode==1)||(h->mode==6&&p->version==2)||(h->mode==4&&p->version==2)||((h->mode==2||h->mode==3||h->mode==5)&&p->version==3))||h->incoming>1||!present(h->peer,6)||h->pin[16]||h->allow_just_works>1||
             h->minimum_security<2||h->minimum_security>3||!h->server_channel||h->server_channel>30||
             !h->scheduling_authority||!present(h->scheduling_evidence,32)||!h->receive_latency_us||
             !h->response_timeout_us||h->receive_latency_us>=1000000||h->response_timeout_us>=1000000||
-            !h->samples||h->samples>24000||(h->mode>=3&&h->samples%120)||h->mtu<48||h->mtu>512||h->accept_slots<0x00a0||
+            !h->samples||h->samples>24000||(h->mode>=3&&h->mode!=6&&h->samples%120)||h->mtu<48||h->mtu>512||h->accept_slots<0x00a0||
             h->page_interval<0x12||h->page_interval>0x1000||(h->page_interval&1)||
             h->page_window<0x11||h->page_window>h->page_interval||!h->line_timeout_us||
             !h->capture_timeout_us||h->capture_timeout_us>5000000||h->peer_page_scan_mode>2||h->peer_role_switch>1||h->reserved2)return 0;

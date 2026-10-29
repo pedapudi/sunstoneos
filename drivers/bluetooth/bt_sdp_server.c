@@ -27,7 +27,8 @@ int bt_sdp_server_init(struct bt_sdp_server *s,struct bt_l2cap *l,const struct b
 {
     if(!s || !l || !p || !policy || s->initialized || l->state!=BT_L2CAP_OFF || !response || query<response ||
        !bt_range_disjoint_empty(s,sizeof(*s),l,sizeof(*l)) || !bt_range_disjoint_empty(s,sizeof(*s),p,sizeof(*p)) ||
-       p->handle<0x10000 || !p->rfcomm_channel || p->rfcomm_channel>30 || p->version!=0x0109 ||
+       (p->handle && (p->handle<0x10000 || !p->rfcomm_channel || p->rfcomm_channel>30 || p->version!=0x0109)) ||
+       (!p->handle && (!p->sink_handle || p->rfcomm_channel || p->version || p->brsf_features || p->supported_features || p->network)) ||
        p->supported_features>63 || p->supported_features!=((p->brsf_features&31)|((p->brsf_features>>4)&32)) ||
        p->network!=((p->brsf_features>>5)&1) || (p->brsf_features&~0x3ffu) ||
        (p->sink_handle && (p->sink_handle<0x10000 || p->sink_handle==p->handle || !p->sink_features)) ||
@@ -171,6 +172,7 @@ static void request(struct bt_sdp_server *s,struct bt_sdp_server_session *q,
         if(handle!=0 && handle!=s->profile.handle && (!s->profile.sink_handle || handle!=s->profile.sink_handle)){error(q,tid,2);return;}
         mask=!handle?1:handle==s->profile.handle?2:4;
     } else {mask=matches(p,n,&at,s->profile.sink_handle!=0);if(mask==MALFORMED){error(q,tid,3);return;}}
+    if(!s->profile.handle)mask&=~2u;
     if(n-at<2){error(q,tid,4);return;}maximum=b16(p+at);at+=2;
     if(maximum<(kind==2?1u:7u)){error(q,tid,3);return;}
     struct ranges r={0};if(kind!=2){unsigned e=ranges(p,n,&at,&r);if(e){error(q,tid,e);return;}}

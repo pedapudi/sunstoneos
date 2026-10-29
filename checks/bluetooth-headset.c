@@ -118,8 +118,14 @@ r[7]=0x80;r[9]=0x20;r[10]=8;}
     event(&wire,0x0e,r,length);
     if(op==0x0c19&&handoff){const uint8_t partial[]={4,0xff};bytes(&wire,partial,2);}
 }
+#ifdef BLUETOOTH_CHECK_A2DP
+static void a2dp_peer_acl(const uint8_t *,unsigned);
+#endif
 static void peer_acl(const uint8_t *p,unsigned n)
 {
+#ifdef BLUETOOTH_CHECK_A2DP
+    a2dp_peer_acl(p,n);return;
+#endif
     assert(n>=4);unsigned cid=get16(p+2);p+=4;n-=4;
     if(cid==1){assert(n>=4);unsigned code=p[0],id=p[1];const uint8_t *body=p+4;
         if(code==3){assert(get16(body+4)==0);local_cid=(uint16_t)get16(body);}
@@ -231,6 +237,10 @@ static void setup(void)
 #ifdef BLUETOOTH_CHECK_PLAYBACK
     profile.headset.mode=playback_fixture_mode;profile.headset.samples=1200;
     if(playback_fixture_mode==4){profile.version=2;profile.bytes=752;}
+#endif
+#ifdef BLUETOOTH_CHECK_A2DP
+    profile.headset.mode=6;profile.headset.samples=600;profile.headset.mtu=512;
+    profile.headset.capture_timeout_us=5000000;
 #endif
     uint8_t digest[32];storage_digest_bytes(&profile,profile.bytes,digest);
     assert(bluetooth_application_init(&app,&profile,&providers,&chip,owner,&recovery,0,

@@ -9,9 +9,10 @@ in [bt_avdtp.c](../drivers/bluetooth/bt_avdtp.c), with its interface in
 record of the [local SDP server](bluetooth-sdp-server.md). This document assumes
 familiarity with those components.
 
-Status: the protocol layer is implemented and passes composed host checks. No
-native application uses it yet, so no image decodes or delivers A2DP audio, and
-no physical source device has been tested.
+Status: the optional native Bluetooth image decodes real SBC media into a
+bounded PCM capture and delivers it through the existing USB observation path.
+Composed host checks cover the complete native producer and host capture.
+Physical source interoperability and audio output remain unqualified.
 
 ## One SBC sink endpoint accepts a source's commands
 
@@ -158,9 +159,99 @@ compare against.
 
 ## Remaining work
 
-- A native application mode that publishes the sink record, admits PSM 25,
-  decodes SBC with libsbc and delivers PCM to its consumer.
 - Content protection, delay reporting and the initiator role, if a source
   requires them.
 - Pinned copies of the AVDTP 1.3 and A2DP 1.3 specifications.
 - Physical qualification with a real source device.
+
+## Native finite capture design
+
+The optional Bluetooth image uses profile version 2, mode 6 for a finite SBC
+capture. The existing authenticated ACL owner admits SDP and AVDTP, then copies
+PCM through the existing post-disconnect USB result. The sample count counts
+interleaved signed 16-bit samples; it must be even and cannot exceed 24,000.
+The result carries the decoded sampling rate and channel count. This mode
+observes real decoded audio; speaker playback remains a separate integration.
+
+The decoder reuses the pinned LGPL-2.1-or-later BlueZ libsbc 2.0 source in
+`apps/bluetooth/msbc-source.json`. A separate compilation redirects only its
+allocation calls to one fixed 6,144-byte arena. The pinned generic decoder
+requests 5,615 bytes including alignment padding. Initialization occurs once;
+no packet allocates memory. The image retains the source license and relinkable
+objects with its external build artifacts.
+
+Each owner poll consumes at most one media packet, with at most 15 SBC frames.
+The 1 kHz owner task permits four polls per tick. This covers 3,000 shortest
+frames per second even when the source sends one frame per packet.
+It decodes directly into the 48,000-byte capture buffer. The pinned decoder
+limits a final partial frame to complete sample groups within the remaining
+capacity. The existing four 1,024-byte compressed slots bound backlog. The
+first decoded frame fixes rate and channels independently of later AVDTP state.
+A changed geometry, bad CRC, sequence gap, invalid packet or full-slot drop
+fails capture and retains resources. The owner closes media and signaling and
+waits for confirmed closure before publishing immutable PCM. Capturing ends
+within the existing profile deadline. There is no sustained playback claim.
+
+The design budget is 15 decoder calls and 7,680 decoded bytes per poll, one
+compressed-packet copy in AVDTP, zero intermediate PCM copies, and one USB
+copy per requested result chunk. The existing owner stack is 32 KiB. Native compiler stack-use records bound the
+owner-to-decoder call chain at 1,088 bytes, excluding interrupt nesting and the
+unchanged lower-stack branches. Finite capture has 1,500 packet records, enough
+for 48,000 PCM bytes in the smallest mono frames sent one per packet.
+The inherited application also reserves two unused repeated-capture buffers
+and its HFP workers; the complete `voice` object is 456,320 bytes. This is
+separate from the finite PCM, compressed-slot and decoder budgets.
+An independent review accepted the design after requiring explicit mode
+admission, independent geometry, bounded packet draining and loss refusal.
+
+
+## Native build and accepted host evidence
+
+Select `SUNSTONE_BLUETOOTH_APPLICATION=ON` and `SUNSTONE_BLUETOOTH_A2DP=ON`,
+with `SUNSTONE_BT_SECURITY_DIR` and `SUNSTONE_BT_SBC_DIR` pointing to the pinned
+security and SBC sources. A2DP excludes Mimus recognition and mSBC. The image
+accepts only version 2, mode 6 profiles with an incoming, authenticated peer.
+The finite sample count counts interleaved samples, so stereo duration is
+`samples / (rate * 2)`. SDP publishes only the recorder sink, with no AG record.
+
+The PCM response retains its 160-byte header. For mode 6, the final three
+32-bit header fields carry sampling rate, channel count and codec value 1
+(SBC). Every 24-byte packet record carries compressed bytes, decoded bytes
+and `(rate << 8) | channels` in its reserved field. The host checks these
+fields, the full PCM digest and the immutable result identity. It writes a
+file named for the actual rate and channels. No device output or acoustic
+quality is inferred from copied PCM.
+
+`checks/bluetooth-a2dp.py` compiles the actual application, security and
+transport workers with address and undefined-behavior sanitizers. It extracts
+the production USB serialization function directly from `apps/bluetooth/usb0.c`.
+The passing evidence is under
+`~/.cache/sunstoneos/evidence/bluetooth-a2dp-20261028/final/`:
+
+- Stereo capture trims the final decoded frame to 1,200 bytes.
+- Short-frame capture produces 48,000 bytes from 100 packets.
+- Single-frame packets produce 48,000 bytes from 1,500 packets. Three packets
+  arrive per modeled millisecond and fit within the owner's four-poll budget.
+- Damaged CRC, fragmented media, sequence gaps, encryption revocation and early
+  media closure retain incomplete capture without publishing success.
+- SDP queries return the sink and omit AG. PCM stays pending until both AVDTP
+  channels have confirmed closure; later polls preserve completed capture.
+- Actual native USB result frames pass profile admission, host parsing,
+  durable PCM copying and hash validation. Damaged geometry and record metadata
+  are refused.
+
+The native image has 717,516 text bytes, 153 initialized data bytes and
+6,333,904 BSS bytes. Against the baseline Bluetooth components linked with the
+same unchanged providers, A2DP adds 23,948 text bytes and 20,480 BSS bytes;
+initialized data is unchanged. The comparison recompiles only the five changed
+baseline components from `fe7bfb81`; it does not rerun an unchanged HFP workload.
+The commands, baseline image and stack-use files accompany the frozen native
+image. The runtime cost remains bounded by 60 decoder calls per tick, with no
+per-frame allocation or intermediate PCM copy. Board throughput is unmeasured.
+
+Physical qualification requires a reviewed phone or other SBC source, its peer
+identity and security policy, the existing radio/UART scheduling evidence and
+a supervised session with the recorded recovery procedure. A useful first test
+captures one finite stream, verifies the copied PCM digest and format, and
+confirms media/signaling closure. Speaker playback requires a separate audio
+consumer and remains outside this observation mode.

@@ -77,12 +77,16 @@ def capture_pcm(exchange,session,profile,evidence,record,save,deadline,now=time.
             captured[kind].extend(data)
     require(hashlib.sha256(captured[0]).hexdigest()==identity['sha256'],'Copied PCM digest differs.')
     cursor=0;acquired=0
+    a2dp=struct.unpack_from('<I',profile,624)[0]==6
     for serial,offset,source,copied,status,reserved in struct.iter_unpack('<QIHHII',captured[1]):
-        require(serial>acquired and offset==cursor and 0<source<=255 and 0<=copied<=source and not status and not reserved,
+        geometry=((identity['sample_rate']<<8)|identity['channels']) if a2dp else 0
+        valid=(0<source<=1024 and 0<copied<=7680 and copied%(identity['channels']*2)==0 and reserved==geometry) if a2dp else (0<source<=255 and 0<=copied<=source and not reserved)
+        require(serial and (serial>=acquired if a2dp else serial>acquired) and offset==cursor and valid and not status,
                 'Capture record ordering, segmentation or loss differs.')
         cursor+=copied;acquired=serial
     require(cursor==len(captured[0]),'Record extents do not cover copied PCM.')
-    for name,data in [('bluetooth-8k-s16le.pcm',captured[0]),('bluetooth-pcm-records.bin',captured[1])]:
+    pcm_name=f'bluetooth-{identity["sample_rate"]}hz-{identity["channels"]}ch-s16le.pcm' if a2dp else 'bluetooth-8k-s16le.pcm'
+    for name,data in [(pcm_name,captured[0]),('bluetooth-pcm-records.bin',captured[1])]:
         supervisor.durable_frame(evidence/name,data)
     require(now()<deadline,'Headset capture deadline expired before durable publication.')
     record['bluetooth_result']='capture-complete' if len(profile)==832 else 'observed-success';record['durable_result']=identity.copy()

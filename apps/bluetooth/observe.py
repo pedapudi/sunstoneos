@@ -47,19 +47,25 @@ def decode_pcm(frame,session,profile,kind,offset,count):
         raise ValueError('Invalid copied capture frame.')
     if (epoch,generation)!=struct.unpack_from('<2Q',session,24) or frame[32:64]!=session[320:352] or hashlib.sha256(profile).digest()!=session[320:352]:
         raise ValueError('Capture session/profile identity differs.')
-    if any(frame[148:160]):
+    a2dp=struct.unpack_from('<I',profile,624)[0]==6
+    if any(frame[148:160]) and not a2dp:
         raise ValueError('Capture reserved bytes differ.')
     result={'state':['pending','captured','retained-failure'][state]}
     if state!=1:
-        if length or any(frame[64:148]):
+        if length or any(frame[64:160]):
             raise ValueError('Incomplete capture published producer metadata.')
         return result,b''
     firmware,uart,acl,audio=struct.unpack_from('<4Q',frame,64)
     total,records,loss,actual_kind,actual_offset=struct.unpack_from('<5I',frame,96)
     expected=struct.unpack_from('<I',profile,720)[0]*2
     extent=records*24 if kind else total
-    if not firmware or not uart or firmware==uart or not acl or not audio or total!=expected or not 0<records<=1024 or loss or (actual_kind,actual_offset,length)!=(kind,offset,count) or offset+length>extent:
+    if not firmware or not uart or firmware==uart or not acl or not audio or total!=expected or not 0<records<=(1500 if a2dp else 1024) or loss or (actual_kind,actual_offset,length)!=(kind,offset,count) or offset+length>extent:
         raise ValueError('Capture identity, loss, or requested range differs.')
+    if a2dp:
+        rate,channels,codec=struct.unpack_from('<3I',frame,148)
+        if rate not in (44100,48000) or channels not in (1,2) or codec!=1 or total%(channels*2):
+            raise ValueError('Invalid A2DP PCM geometry.')
+        result.update(sample_rate=rate,channels=channels,codec='SBC',sample_format='s16le')
     result.update(firmware_generation=firmware,uart_generation=uart,acl_generation=acl,audio_generation=audio,
                   bytes=total,records=records,loss_packets=loss,sha256=frame[116:148].hex())
     return result,frame[160:]

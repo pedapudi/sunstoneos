@@ -1,4 +1,7 @@
 #include "application.h"
+#ifdef SUNSTONE_BLUETOOTH_A2DP
+#include "a2dp.h"
+#endif
 #include "aarch64_device_memory.h"
 #include "a733_mapping_check.h"
 #include "boot.h"
@@ -21,8 +24,15 @@ static void bluetooth_owner(void *context)
 {
     (void)context;for(;;){
         if(!board_live(NULL))(void)bluetooth_application_retain(&bluetooth);
-        else if(atomic_load_explicit(&providers.shared.pmic_ready,memory_order_acquire))
+        else if(atomic_load_explicit(&providers.shared.pmic_ready,memory_order_acquire)){
+#ifdef SUNSTONE_BLUETOOTH_A2DP
+            /* Four bounded turns cover 3,000 shortest SBC frames/s at the
+             * 1 kHz tick even when a source sends one frame per packet. */
+            for(unsigned turn=0;turn<4;++turn)if(bluetooth_application_poll(&bluetooth)<0)break;
+#else
             (void)bluetooth_application_poll(&bluetooth);
+#endif
+        }
         vTaskDelay(1);
     }
 }
@@ -62,6 +72,9 @@ int board_application_start(void)
     if(ready&&p->version==2&&p->headset.mode==4)ready=bluetooth_playback_runtime_start(&bluetooth);
     if(ready&&p->version==3)
         ready=bluetooth_recognition_start(&bluetooth,&p->recognition,bluetooth.deadline);
+#endif
+#ifdef SUNSTONE_BLUETOOTH_A2DP
+    if(ready)ready=bluetooth_a2dp_init();
 #endif
     return ready;
 }

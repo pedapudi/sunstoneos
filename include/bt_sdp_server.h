@@ -4,6 +4,7 @@
 #include "bt_l2cap.h"
 #define BT_SDP_SERVER_RECORD_BYTES 256u
 struct bt_sdp_ag_profile {
+    /* handle0 omits AG; then all AG fields are zero and sink_handle is set. */
     uint32_t handle, brsf_features;
     uint16_t version, supported_features;
     uint8_t rfcomm_channel, network;

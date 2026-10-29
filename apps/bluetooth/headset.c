@@ -1,4 +1,7 @@
 #include "headset.h"
+#ifdef SUNSTONE_BLUETOOTH_A2DP
+#include "a2dp.h"
+#endif
 #include "bluetooth.h"
 #include "bt_security.h"
 #include "bt_sdp_server.h"
@@ -47,11 +50,18 @@ static struct {
     struct bt_sdp discovery;
     struct bt_rfcomm rfcomm;
     struct bt_hfp_ag ag;
+    #ifdef SUNSTONE_BLUETOOTH_A2DP
+    struct bt_avdtp sink;
+    #endif
     struct bt_sco audio;
     struct bt_sco_binding audio_binding;
     struct storage_digest digest;
     struct bluetooth_pcm_snapshot snapshot;
+#ifdef SUNSTONE_BLUETOOTH_A2DP
+    struct bluetooth_pcm_record records[1500];
+#else
     struct bluetooth_pcm_record records[BLUETOOTH_PCM_RECORDS];
+#endif
     uint8_t pcm[BLUETOOTH_PCM_BYTES],silence[254];
     struct {
         struct bluetooth_segment_snapshot snapshot;
@@ -78,10 +88,20 @@ static int policy(void *ctx,uint64_t link,uint16_t psm,unsigned incoming)
     (void)incoming;if(ctx!=&context||link!=voice.link)return -1;
     uint64_t generation;unsigned sc;
     if(security(link,&generation,&sc)!=1)return -1;
+#ifdef SUNSTONE_BLUETOOTH_A2DP
+    return psm==1||psm==BT_AVDTP_PSM;
+#else
     return psm==1||psm==3;
+#endif
 }
 static int psm(void *ctx,uint64_t link,uint16_t value,unsigned incoming)
-{return value==1&&incoming?bt_sdp_server_admit(&voice.server,link,value,incoming):policy(ctx,link,value,incoming);}
+{if(value==1&&incoming)return bt_sdp_server_admit(&voice.server,link,value,incoming);
+#ifdef SUNSTONE_BLUETOOTH_A2DP
+ return bt_avdtp_admit(&voice.sink,link,value,incoming);
+#else
+ return policy(ctx,link,value,incoming);
+#endif
+}
 static int service(void *ctx,uint64_t link,uint16_t uuid,uint8_t channel)
 {
     if(ctx!=&context||!channel||channel>30||!voice.app)return -1;
@@ -148,11 +168,18 @@ static int upper_init(struct bluetooth_application *a)
     ag.network=1;
 #endif
     voice.audio_binding=(struct bt_sco_binding){p->scheduling_authority,p->receive_latency_us,p->response_timeout_us,audio_current,audio_security,&context};
+#ifdef SUNSTONE_BLUETOOTH_A2DP
+    ag=(struct bt_sdp_ag_profile){.sink_handle=0x10001,.sink_features=4};
+    static const uint8_t capabilities[4]={0x3f,0xff,2,53};
+    if(bt_avdtp_init(&voice.sink,&voice.l2cap,capabilities,p->response_timeout_us,policy,&context)!=1)return fail();
+#endif
     if(bt_acl_init(&voice.acl,&a->hci)!=1||bt_security_init(&voice.security,&voice.acl,a->owner,a->recovery_state,&sec,a->profile->command_timeout_us)!=1||
         bt_rfcomm_registry_init(&voice.registry,&voice.l2cap,psm,service,&context)!=1||
         bt_sdp_server_init(&voice.server,&voice.l2cap,&ag,1000000,2000000,policy,&context)!=1||
-        bt_l2cap_init_bootstrap(&voice.l2cap,&voice.acl,p->mtu,1000000,60000000,bt_rfcomm_admit,&voice.registry,&a->hci.transport.binding)!=1||
-        bt_sco_init(&voice.audio,&voice.acl,&voice.audio_binding)!=1)return fail();
+        bt_l2cap_init_bootstrap(&voice.l2cap,&voice.acl,p->mtu,1000000,60000000,bt_rfcomm_admit,&voice.registry,&a->hci.transport.binding)!=1)return fail();
+#ifndef SUNSTONE_BLUETOOTH_A2DP
+    if(bt_sco_init(&voice.audio,&voice.acl,&voice.audio_binding)!=1)return fail();
+#endif
     return 1;
 }
 /* Reserve the profile peer's next ACL generation and attach it to security. */
@@ -179,10 +206,38 @@ static int recognition(struct bluetooth_application *,uint64_t,unsigned);
 static void voice_admission(uint64_t,unsigned);
 static void idle(const struct bluetooth_application *);
 static int finished(void);
+#ifdef SUNSTONE_BLUETOOTH_A2DP
+static int a2dp_poll(struct bluetooth_application *a,uint64_t now)
+{
+    if(voice.stage==DONE)return 1;
+    if(bt_sdp_server_step(&voice.server,64,a->deadline)!=1||
+       bt_avdtp_step(&voice.sink,64,a->deadline)<0||bt_security_service(&voice.security,a->deadline)!=1)return fail();
+    if(voice.stage==CLOSE){
+        if(voice.sink.signal||voice.sink.media)return 0;
+        voice.snapshot.firmware=a->firmware_generation;voice.snapshot.uart=a->uart_generation;
+        voice.snapshot.acl=voice.link;voice.snapshot.state=3;
+        storage_digest_bytes(voice.pcm,voice.snapshot.bytes,voice.snapshot.sha256);
+        voice.stage=DONE;atomic_store_explicit(&voice.terminal,1,memory_order_release);return 1;
+    }
+    if(now>=voice.capture_deadline)return fail();
+    if(voice.snapshot.records>=1500)return fail();
+    if(bluetooth_a2dp_decode(&voice.sink,voice.pcm,a->profile->headset.samples*2,
+        &voice.snapshot,&voice.records[voice.snapshot.records],now)<0)return fail();
+    if(voice.snapshot.bytes==a->profile->headset.samples*2){
+        voice.operation_deadline=stage_deadline(a,59500000);
+        if(bt_avdtp_close(&voice.sink,voice.operation_deadline)!=1)return fail();
+        voice.stage=CLOSE;
+    }
+    return 0;
+}
+#endif
 int bluetooth_headset_poll(struct bluetooth_application *a,uint64_t now)
 {
     if(!a||a->profile->version<2||!a->iteration_live||xTaskGetCurrentTaskHandle()!=a->owner)return -1;
     if(!voice.app){voice.app=a;context.app=a;voice.last_owner=now;}
+#ifdef SUNSTONE_BLUETOOTH_A2DP
+    if(atomic_load_explicit(&voice.terminal,memory_order_acquire))return live(a)?1:-1;
+#endif
     if(!live(a)||now<voice.last_owner||now-voice.last_owner>a->profile->headset.receive_latency_us)return fail();
     voice.last_owner=now;
 #ifdef SUNSTONE_BLUETOOTH_MSBC
@@ -190,7 +245,7 @@ int bluetooth_headset_poll(struct bluetooth_application *a,uint64_t now)
      * in-flight command/UART ownership; cancellation is not a disconnect. */
     if(bluetooth_playback_mode(a)&&voice.stage<=AUDIO&&bluetooth_playback_cancelled(a))return fail();
 #endif
-    if(a->profile->headset.mode<2&&atomic_load_explicit(&voice.terminal,memory_order_acquire))return 1;
+    if((a->profile->headset.mode<2||a->profile->headset.mode==6)&&atomic_load_explicit(&voice.terminal,memory_order_acquire))return 1;
     voice.stop=atomic_load_explicit(&voice.segment_stop,memory_order_acquire);
     /* Before the AG first reaches idle a stop retains the transports: setup
      * commands may be in flight. After it, every stage through CAPTURE,
@@ -201,11 +256,17 @@ int bluetooth_headset_poll(struct bluetooth_application *a,uint64_t now)
     unsigned word=0;
     const struct bluetooth_headset_profile *p=&a->profile->headset;
     if(voice.operation_deadline&&now>=voice.operation_deadline)return fail();
+#ifdef SUNSTONE_BLUETOOTH_A2DP
+    if(voice.stage>=CAPTURE)return a2dp_poll(a,now);
+#endif
     if(voice.stage==CONFIGURE){
         voice.incoming=(struct bt_hci_incoming_config){.accept_timeout_slots=p->accept_slots,
             .page_interval_slots=p->page_interval,.page_window_slots=p->page_window,
             .service_generation=p->scheduling_authority,.receive_latency_us=p->receive_latency_us,.synchronous_audio=1,
             .current=scheduling,.context=&context};
+#ifdef SUNSTONE_BLUETOOTH_A2DP
+        voice.incoming.synchronous_audio=0;
+#endif
         voice.operation_deadline=stage_deadline(a,48000000);
         if(bt_hci_configure_incoming(&a->hci,&voice.incoming,voice.operation_deadline)!=1)return fail();
         voice.stage=CONFIGURING;return 0;
@@ -241,6 +302,10 @@ int bluetooth_headset_poll(struct bluetooth_application *a,uint64_t now)
             voice.auth_started=1;voice.stage=AUTHENTICATE;
         }
         uint64_t generation;unsigned sc;int r=security(voice.link,&generation,&sc);if(r<0)return fail();if(!r)return 0;
+#ifdef SUNSTONE_BLUETOOTH_A2DP
+        voice.capture_deadline=cap(now,p->capture_timeout_us,stage_deadline(a,59000000));
+        voice.operation_deadline=voice.capture_deadline;voice.stage=CAPTURE;return 0;
+#endif
         voice.operation_deadline=stage_deadline(a,56000000);
         if(p->incoming){
             if(bt_rfcomm_listen(&voice.rfcomm,&voice.registry,voice.link,0x111f,(uint8_t)p->server_channel,p->mtu,voice.operation_deadline)!=1)return fail();

@@ -12,6 +12,9 @@
 #undef tud_descriptor_string_cb
 #undef tud_vendor_tx_cb
 #include "bluetooth.h"
+#ifdef SUNSTONE_BLUETOOTH_A2DP
+#include "a2dp.h"
+#endif
 #include "result.h"
 #ifdef SUNSTONE_BLUETOOTH_HEADSET
 #include "headset.h"
@@ -84,6 +87,10 @@ static void pcm_exchange(const uint8_t request[8])
         put64(identity_frame+80,s.acl);put64(identity_frame+88,s.audio);
         put32(identity_frame+96,s.bytes);put32(identity_frame+100,s.records);
         put32(identity_frame+104,s.loss_packets);put32(identity_frame+108,kind);put32(identity_frame+112,offset);
+#ifdef SUNSTONE_BLUETOOTH_A2DP
+        put32(identity_frame+148,bluetooth_a2dp_rate());put32(identity_frame+152,bluetooth_a2dp_channels());
+        put32(identity_frame+156,1);
+#endif
         memcpy(identity_frame+116,s.sha256,32);memcpy(identity_frame+160,pcm,copied);}
     identity_sent=identity_transferred=0;identity_bytes=(unsigned)(160+(r==1?copied:0));
 }
