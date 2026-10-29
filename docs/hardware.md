@@ -68,8 +68,14 @@ Focused linked, provider and host checks pass under `resume-sd-return-1026/`;
 physical return and eligibility for the preserved board sessions remain open.
 
 Normal NPU stop/restart now preserves the same registered providers and service
-objects; focused software checks pass. Physical same-instance restart and domain
-power-off remain unqualified. The native GPU backend also now publishes the
+objects; focused software checks pass. The returning restart diagnostic now has
+host preparation and capture, requiring exact lifetime/owner evidence, ordered
+close/reopen stages and four interrupt completions. It retains its unqualified
+physical status. Physical same-instance restart and domain power-off remain
+unqualified. GPU service failure now completes an accepted performance request
+once while preserving the original error and retained device resources. Four
+focused FreeRTOS cases and the combined eight-worker build pass; physical failure
+recovery remains unqualified. The native GPU backend also now publishes the
 actual 1008 MHz operating rate to firmware before startup; it previously
 published the initial 400 MHz value. See [NPU startup](npu-startup.md) and
 [GPU backend](gpu-backend.md) for scope and evidence.
@@ -1109,10 +1115,15 @@ to the stated scope:
   host groups pass under `adc-application-20261018/`. Integration reuses the frozen
   image with an unrelated additive PWM pin helper recorded separately.
   Physical sampling, voltage/reference accuracy and recovery remain unqualified.
-  The GPADC driver implements compare-window threshold mode for channels 0–3,
-  latching low and high events; host and instruction-model checks pass. No
-  application selects windows, and the native adapter refuses the compare
-  registers. Repeated/concurrent monitoring and FIFO/DMA remain required.
+  Optional ADC session version 3 now selects one caller-supplied raw-code window
+  on a mask of channels 0–3. The application configures the existing threshold
+  core, latches low/high events through the native adapter and copies the masks
+  through the existing USB result. Seven linked compare cases, legacy GPADC and
+  LRADC compatibility, and producer/host checks pass under
+  `adc-compare-20261028/`. The session and report sizes remain unchanged; added
+  application state is 48 bytes and text grows by 2,792 bytes. Physical compare
+  boundaries and IRQ delivery remain unqualified. Repeated/concurrent monitoring
+  and FIFO/DMA remain required.
   GPADC4 reaches the display connector; the remaining GPADC channels have no
   documented usable connection. Accessory GPADC4 qualification remains outstanding.
   [LRADC0 raw observation](adc-application.md#lradc0-raw-observations-require-separate-electrical-authority)

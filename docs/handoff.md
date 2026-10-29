@@ -71,6 +71,28 @@ streaming. Their focused native/host checks and independent reviews are recorded
 below. Successful earlier evidence was reused; affected cases cover the new
 behavior and final corrections.
 
+Four further changes have passed focused checks and independent Sol 6.1 reviews:
+
+- The existing mimus USB launcher accepts the current DDR/warm-return admission
+  records, freezes its inputs and retains ownership on unresolved failure.
+  Eleven modeled cases pass under `sol-mimus-session-1028/`. Native/FEL exchange
+  counts are unchanged. Physical reuse remains outstanding; mimus must run last
+  because its return record is not admitted as another shared continuity link.
+- GPU service failure completes an accepted performance request once, preserving
+  the original error and retained resources. The missing reply was reproduced
+  before repair; four focused FreeRTOS cases and the native eight-worker
+  GPU/NPU/performance build pass under `sol-gpu-robustness-1028/`. Executable cost
+  grows by 48 bytes with no added mutable storage. Hardware recovery is unqualified.
+- ADC session version 3 connects caller-selected compare windows to the existing
+  threshold core, native register policy and copied USB observations. Linked
+  compare, legacy GPADC/LRADC and host checks pass under `adc-compare-20261028/`.
+  Physical sampling, comparison boundaries and interrupt delivery remain unqualified.
+- The bounded NPU same-instance restart diagnostic has host preparation/capture
+  with exact under-test ownership evidence, ordered close/reopen stages and four
+  interrupt completions. Native, linked-client and affected host checks pass under
+  `sol-npu-restart-host-1028/`. The image adds 32 immutable bytes; physical
+  admission remains false. Fresh DDR alone does not establish restart authority.
+
 After the user's 2026-10-28 reconnect confirmation, the coordinator checked both
 ports and permissions, then ran one previously demonstrated standard DDR start
 per board. Both passed and their queue claims are closed. Each proposed device
