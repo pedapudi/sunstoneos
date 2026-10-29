@@ -330,3 +330,38 @@ selected cases execute that image's actual caller for healthy retirement,
 CLOSE refusal and lifetime loss during CLOSE. They model service replies and
 scheduling, and do not establish physical firmware execution or drain. The
 existing OS link check also passes for the GPU start list and INT95 route.
+
+## Retire performance requests when the service fails
+
+An accepted performance request belongs to the GPU worker until its reply is
+queued. Service failure publishes one failed reply for that ticket, preserving
+the original GPU error. This includes a firmware reset while HOLD waits for an
+accepted Mimus job to drain. The failed worker stops advancing controllers, so
+its failure handler must complete the request before waiting for new messages.
+
+A shared reply helper clears the ticket and stage before queue publication.
+Performance-specific failure enters the same failure handler and publishes one
+reply. The worker remains the sole writer of performance request state. Device
+failure retains firmware memory, job buffers, power and ownership under the
+existing failure policy. The reply supplies no evidence that the GPU stopped.
+
+Normal performance replies perform one queue send and one reply copy. Compute
+submission and completion add zero checks, locks, barriers, translations,
+digests, copies or wake-ups. Failure adds one conditional ticket check and,
+only with an accepted request, one queue send. No mutable storage is added.
+The performance-enabled native service grows from 22,832 to 22,880 bytes of
+code and read-only data; its nine mutable bytes are unchanged. The build without
+performance control keeps the same code and storage sizes; only assertion line
+numbers change in its instructions.
+
+Evidence is preserved under
+`~/.cache/sunstoneos/evidence/sol-gpu-robustness-1028/`. With the original service,
+the two-core FreeRTOS fixture's firmware reset leaves the performance waiter
+without a reply until its bounded wait fails. With the repaired service, the
+same case receives the failed performance reply and a LOST Mimus job. It checks
+the original control error, cleared ticket and stage, no duplicate reply and
+held allocations and session ownership. The successful transition and reopen,
+missing forced-idle acknowledgement and missing cancel acknowledgement cases
+also pass. These four cases use modeled firmware and synthetic job results.
+The supervised eight-worker GPU/NPU OS image builds at the high default;
+its link check passes. Physical fault response and recovery remain unqualified.

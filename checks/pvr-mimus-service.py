@@ -36,7 +36,7 @@ CASES = {1: 'bench, exact sums', 2: 'bench, pattern sums', 3: 'bench, jobs compl
          19: 'reserved-slot CLOSE and abort', 20: 'lost CLOSE',
          21: 'two healthy retained reopens', 22: 'reopen proof refusals', 23: 'reopen cache failure',
          24: 'reopen result publication failure', 25: 'performance transition and reopen', 26: 'accepted job drains before forced idle',
-         27: 'forced idle acknowledgement absent', 28: 'cancel acknowledgement absent', 29: 'clean drain refusal'}
+         27: 'forced idle acknowledgement absent', 28: 'cancel acknowledgement absent', 29: 'clean drain refusal', 30: 'firmware reset while performance HOLD drains a job'}
 COUNTED = ('aarch64_device_translate', 'aarch64_device_cache', 'vTaskEnterCritical', 'vTaskEnterCriticalFromISR',
            'xQueueGenericSend', 'xQueueReceive', 'xQueueGenericSendFromISR', 'gicv3_spi_mask', 'gicv3_spi_rearm',
            'advance', 'external', 'now', 'pvr_mimus_service_submit', 'pvr_mimus_service_receive', 'kick',

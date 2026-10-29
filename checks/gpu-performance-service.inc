@@ -57,19 +57,26 @@ static enum a733_perf_status perf_request(enum a733_perf_action action,unsigned 
     struct pvr_gpu_service_reply reply;
     while(!pvr_gpu_service_collect(&service,ticket,&reply,1)) {
         configASSERT(now_us()<end+20000);
-        if(mimus_service_case==26 && action==A733_PERF_HOLD && atomic_load(&hold_completion) && end-now_us()<40000) {
+        if((mimus_service_case==26 || mimus_service_case==30) && action==A733_PERF_HOLD && atomic_load(&hold_completion) && end-now_us()<40000) {
             configASSERT(!perf_commands && mimus->phase==PVR_MIMUS_SERVICE_IN_FLIGHT);
+            configASSERT(service.performance.ticket==ticket && service.performance.stage==1);
             atomic_store(&hold_completion,0);
         }
     }
     perf_elapsed[action]=now_us()-started;
+    if(mimus_service_case==30) {
+        configASSERT(reply.result==PVR_GPU_SERVICE_FAULT && reply.phase==PVR_GPU_SERVICE_FAILED &&
+            reply.error==PVR_GPU_SERVICE_CONTROL && service.error==PVR_GPU_SERVICE_CONTROL);
+        configASSERT(!service.performance.ticket && !service.performance.stage && !perf_commands);
+        configASSERT(!service.clients[1].pending && !uxQueueMessagesWaiting(service.clients[1].replies));
+    }
     return reply.performance_status;
 }
 static void performance_owner(void *arg)
 {
     (void)arg;while(!atomic_load(&perf_go))vTaskDelay(1);
     enum a733_perf_status held=perf_request(A733_PERF_HOLD,0);
-    if(mimus_service_case==27)configASSERT(held==A733_PERF_FAILED);
+    if(mimus_service_case==27 || mimus_service_case==30)configASSERT(held==A733_PERF_FAILED);
     else if(mimus_service_case==29) {
         configASSERT(held==A733_PERF_EXPIRED && !perf_commands && perf_request(A733_PERF_RELEASE,0)==A733_PERF_DONE);
     } else {
@@ -88,15 +95,16 @@ static void performance_client(void)
     const struct pvr_mimus_request job={0,fixture_jobs[0].ordinal,fixture_jobs[0].rows,2*fixture_jobs[0].k};
     configASSERT(pvr_gpu_service_performance_state(&service)==(PVR_GPU_PERF_OWNER|PVR_GPU_PERF_READY));
     if(mimus_service_case==29)atomic_store(&mimus->slot_state,PVR_MIMUS_SLOT_RESERVED);
-    if(mimus_service_case==26) {
+    if(mimus_service_case==26 || mimus_service_case==30) {
         atomic_store(&hold_completion,1);
         configASSERT(pvr_mimus_service_submit(mimus,&job)==1);
         while(mimus->phase!=PVR_MIMUS_SERVICE_IN_FLIGHT)vTaskDelay(1);
     }
     atomic_store(&perf_go,1);
-    if(mimus_service_case==26) {
+    if(mimus_service_case==26 || mimus_service_case==30) {
         struct pvr_mimus_record record=receive();
-        configASSERT(record.result==PVR_MIMUS_OK && record.sequence==1 && sums_equal(0,1));
+        if(mimus_service_case==30)configASSERT(record.result==PVR_MIMUS_LOST && record.sequence==1);
+        else configASSERT(record.result==PVR_MIMUS_OK && record.sequence==1 && sums_equal(0,1));
         completed=1;
     }
     while(!atomic_load(&perf_done)) {
@@ -107,7 +115,15 @@ static void performance_client(void)
         }
         vTaskDelay(1);
     }
-    if(mimus_service_case==27 || mimus_service_case==28) {
+    if(mimus_service_case==27 || mimus_service_case==28 || mimus_service_case==30) {
+        configASSERT(!service.performance.ticket && !service.performance.stage);
+        struct pvr_gpu_service_reply extra;
+        configASSERT(xQueueReceive(service.clients[1].replies,&extra,0)==pdFALSE);
+        struct device_memory_extent extent; enum device_memory_state state;
+        configASSERT(device_memory_describe((void *)session.payload_lease.pool,session.payload_lease,&extent,&state));
+        configASSERT(state!=DEVICE_MEMORY_FREE);
+        configASSERT(device_memory_describe((void *)session.table_lease.pool,session.table_lease,&extent,&state));
+        configASSERT(state!=DEVICE_MEMORY_FREE && service.firmware_fixture_owner==0 && !isolated);
         configASSERT(service.phase==PVR_GPU_SERVICE_FAILED && atomic_load(&mimus->slot_state)!=PVR_MIMUS_SLOT_IDLE);
         configASSERT(pvr_gpu_service_performance_state(&service)==(PVR_GPU_PERF_OWNER|PVR_GPU_PERF_FAILED));
         configASSERT(close_reply().result==PVR_GPU_SERVICE_FAULT);

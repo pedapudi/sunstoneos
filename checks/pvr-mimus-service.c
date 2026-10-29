@@ -225,7 +225,7 @@ static void model(void *unused)
         while (now_us() < started + duration) {}
         while (atomic_load(&hold_completion)) {}
         __asm__ volatile("dsb sy" ::: "memory");
-        if (c == 4 || c == 9) {
+        if (c == 4 || c == 9 || c == 30) {
             unsigned write = get((uint32_t *)resource(PVR_FW_EVENT_CONTROL));
             unsigned char *e = resource(PVR_FW_EVENTS) + (write & 31) * 88;
             memset(e, 0, 88);
@@ -233,7 +233,7 @@ static void model(void *unused)
             else { put(e, 4, PVR_CCB_MAGIC | 105); put(e + 8, 4, mimus->config->firmware_address[0]); }
             __atomic_store_n((uint32_t *)resource(PVR_FW_EVENT_CONTROL), (write + 1) & 31, __ATOMIC_RELEASE);
         }
-        if (c != 8 && c != 9) put(mimus->config->firmware[5].storage.cpu, 4, sequence);
+        if (c != 8 && c != 9 && c != 30) put(mimus->config->firmware[5].storage.cpu, 4, sequence);
         __asm__ volatile("dsb sy" ::: "memory");
         set(&gpu_status, 1);
         /* Level interrupt: pending until the handler masks it. */
@@ -666,7 +666,7 @@ void fixture_unused(void)
 void kernel_main(void)
 {
     platform_init(); first_publish = 0;
-    configASSERT(mimus_service_case >= 1 && mimus_service_case <= 29);
+    configASSERT(mimus_service_case >= 1 && mimus_service_case <= 30);
     /* Synthetic weights over both 8 MiB model regions. */
     uint64_t *weights = (uint64_t *)(uintptr_t)0x44000000u;
     if (mimus_service_case == 1) for (size_t i = 0; i < (16u << 20) / 8; ++i) weights[i] = next_random();

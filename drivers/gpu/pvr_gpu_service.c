@@ -155,6 +155,20 @@ int pvr_gpu_service_interrupt(struct pvr_gpu_service *s, BaseType_t *woken)
     taskEXIT_CRITICAL_FROM_ISR(saved);
     return ok;
 }
+#ifdef SUNSTONE_A733_OS_PERF
+static int performance_reply(struct pvr_gpu_service *s, enum a733_perf_status status,
+    struct a733_perf_point point)
+{
+    struct pvr_gpu_service_reply reply={.ticket=s->performance.ticket,.epoch=s->epoch,
+        .result=status==A733_PERF_FAILED ? PVR_GPU_SERVICE_FAULT : PVR_GPU_SERVICE_OK,
+        .phase=s->phase,.error=s->error,.performance_status=status,.performance_point=point};
+    unsigned client=s->performance.client;
+    /* Retire before publication: a failed send may enter fail(), which also
+     * completes accepted performance work. The worker owns these fields. */
+    s->performance.ticket=0;s->performance.stage=0;
+    return xQueueSend(s->clients[client].replies,&reply,0)==pdTRUE;
+}
+#endif
 static void fail(struct pvr_gpu_service *s, enum pvr_gpu_service_error error)
 {
 #ifdef SUNSTONE_A733_OS_PERF
@@ -169,6 +183,12 @@ static void fail(struct pvr_gpu_service *s, enum pvr_gpu_service_error error)
     (void)pvr_gpu_start_cancel(&s->start);
     (void)pvr_gpu_control_abort(&s->control);
     (void)pvr_ccb_abort(&s->queue);
+#ifdef SUNSTONE_A733_OS_PERF
+    /* A fault before performance_step must still release its client's wait.
+     * The reply reports failure; device ownership remains retained. */
+    if(s->performance.ticket)
+        (void)performance_reply(s,A733_PERF_FAILED,(struct a733_perf_point){0});
+#endif
 }
 /* The worker owns one monotonic clock. Startup, control, shutdown, the queue
  * users, free lists, compute and render all sample time through it, so
@@ -419,14 +439,8 @@ static int performance_controlling(const struct pvr_gpu_service *s)
 static void performance_finish(struct pvr_gpu_service *s,enum a733_perf_status status,
     struct a733_perf_point point)
 {
-    if(status==A733_PERF_FAILED)fail(s,PVR_GPU_SERVICE_CONTROL);
-    struct pvr_gpu_service_reply reply={.ticket=s->performance.ticket,.epoch=s->epoch,
-        .result=status==A733_PERF_FAILED ? PVR_GPU_SERVICE_FAULT : PVR_GPU_SERVICE_OK,
-        .phase=s->phase,.error=s->error,.performance_status=status,.performance_point=point};
-    if(xQueueSend(s->clients[s->performance.client].replies,&reply,0)!=pdTRUE) {
-        fail(s,PVR_GPU_SERVICE_CONTROL);return;
-    }
-    s->performance.ticket=0;s->performance.stage=0;
+    if(status==A733_PERF_FAILED) { fail(s,PVR_GPU_SERVICE_CONTROL);return; }
+    if(!performance_reply(s,status,point))fail(s,PVR_GPU_SERVICE_CONTROL);
 }
 static enum pvr_gpu_service_result performance_start(struct pvr_gpu_service *s,
     const struct pvr_gpu_service_message *m)
