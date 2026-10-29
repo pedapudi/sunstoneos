@@ -9,6 +9,9 @@ The native constructor and application failure paths are software-tested.
 Fitted-board supply topology, PM output-latch provenance and inherited PM2
 reset/oscillator behavior remain unresolved. No supplied authority record or
 physical result currently permits this application to run on a board.
+The [reusable discovery design](RETURNING.md) records the source audit, bounded
+initial scope and missing drain/restoration proof required for another test in
+the same powered lifetime.
 
 ## The producer requires supplied board evidence
 

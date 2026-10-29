@@ -1,0 +1,69 @@
+{
+  "description": "Additional effective radio supply-consumer references for RETURNING.md",
+  "sources": [
+    {
+      "path": "bsp/drivers/net/wireless/aic8800/Makefile",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/net/wireless/aic8800/Makefile",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "f7a7e050b522b923b58ec831c9e9e58ed3bfc6e91db1dd80e3b0bad0a4b2ac90",
+      "license": "No file-local license notice; component licensing not independently established in this audit; reference only",
+      "role": "Linux source reference only; not linked into SunstoneOS"
+    },
+    {
+      "path": "bsp/drivers/net/wireless/aic8800/aic8800_bsp/Makefile",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/net/wireless/aic8800/aic8800_bsp/Makefile",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "8bc757332b1540e699e05dba6ecabe0d3e83c405a24fe914886897afc70e4d4a",
+      "license": "No file-local license notice; component licensing not independently established in this audit; reference only",
+      "role": "Linux source reference only; not linked into SunstoneOS"
+    },
+    {
+      "path": "bsp/drivers/net/wireless/aic8800/aic8800_fdrv/Makefile",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/net/wireless/aic8800/aic8800_fdrv/Makefile",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "447e4982d090a6587ef1c321eb6450c8e683a71c204acec3e9df34fc57bbcd03",
+      "license": "No file-local license notice; component licensing not independently established in this audit; reference only",
+      "role": "Linux source reference only; not linked into SunstoneOS"
+    },
+    {
+      "path": "bsp/drivers/net/wireless/aic8800/aic8800_fdrv/rwnx_main.c",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/net/wireless/aic8800/aic8800_fdrv/rwnx_main.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "c33c214992334186b4857090600c8f86a0bb92ca62b923c40f3cc51f48966cf8",
+      "license": "MODULE_LICENSE(\"GPL\"); no file-local versioned license grant; reference only",
+      "role": "Linux source reference only; not linked into SunstoneOS"
+    },
+    {
+      "path": "bsp/drivers/net/wireless/aic8800/aic8800_btlpm/aic8800_btlpm.c",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/net/wireless/aic8800/aic8800_btlpm/aic8800_btlpm.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "f802d8e4004c216478b4fa54519bab9c600ed32e12889e8ba6dd3a06ce26b1a6",
+      "license": "GPL-2.0-only",
+      "role": "Linux source reference only; not linked into SunstoneOS"
+    },
+    {
+      "path": "bsp/drivers/misc/sunxi-rf/sunxi-rfkill.c",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/misc/sunxi-rf/sunxi-rfkill.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "0021261d3f23f16ae1fda6a4a00c17ac8c414c0bdd4e3151157d9cb810894878",
+      "license": "GPL-2.0-or-later",
+      "role": "Linux source reference only; not linked into SunstoneOS"
+    },
+    {
+      "path": "bsp/drivers/power/regulator/axp2101-regulator.c",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/power/regulator/axp2101-regulator.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "531edf18fe85ae9ccfd09e0693f01e162d579ae1aa6d4071a23485013a61ac2c",
+      "license": "GPL-2.0-or-later",
+      "role": "Linux source reference only; not linked into SunstoneOS"
+    },
+    {
+      "path": "drivers/regulator/core.c",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/regulator/core.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "65b39b203c8b8ded5b76e7e9f47a1d743303e8817a9682c6e4a0fe2507319b06",
+      "license": "GPL-2.0-or-later",
+      "role": "Linux source reference only; not linked into SunstoneOS"
+    }
+  ]
+}
