@@ -54,6 +54,11 @@ its return and failure paths.
   transition. Historical mechanism evidence and current target qualification
   are separate. Physical recognition, return and subsequent rail restoration
   remain unqualified; the claim spans both the return and rail helper.
+- The same profile optionally includes GPU recognition. Healthy final GPU
+  parking precedes CPU cleanup; read-only output and both interrupt records
+  are preserved. Focused native/service/host checks and independent review
+  pass under `sol-gpu-return-1028/`. Physical recognition and complete return
+  remain unqualified.
 - A CPU-only [cache-permission probe](../apps/gpu-cache-permission/README.md)
   passed on port 3-1 with production read-only output attributes. The unchanged
   EL1 helper maintained all 4 MiB and preserved initialized bytes before normal
@@ -83,6 +88,12 @@ and exact input/image/reference checks. Uncertain completion parks. Larger DMA
 transfers, sustained throughput and fault recovery remain unqualified; another
 SD operation needs fresh provider/CMD0 admission.
 
+An optional 64 KiB read now uses sixteen existing descriptors and compares
+each 4 KiB chunk with accepted PIO references. Native and strict host checks
+pass; signing and capture also bind ordered provider-free checkpoint returns.
+Physical larger-read qualification is pending. A nonzero destination prefill
+is being added so an omitted DMA write cannot match a zero-filled reference.
+
 Normal NPU stop/restart now preserves the same registered providers and service
 objects; focused software checks pass. The returning restart diagnostic now has
 host preparation and capture, requiring exact lifetime/owner evidence, ordered
@@ -96,6 +107,14 @@ recovery remains unqualified. The native GPU backend also now publishes the
 actual 1008 MHz operating rate to firmware before startup; it previously
 published the initial 400 MHz value. See [NPU startup](npu-startup.md) and
 [GPU backend](gpu-backend.md) for scope and evidence.
+
+The recovered NPU lifetime passed a provider-free entry checkpoint and normal
+ROM return, including full host DRAM restoration. It reported an already
+600 MHz memory bus before and after entry. No NPU jobs or IRQ97 installation
+ran. Current clock observations show all three NPU access gates enabled.
+Startup now explicitly acquires the two fabric gates before PCK access, with
+focused source/model evidence; those observations establish no earlier failure
+cause. IRQ setup and provider startup remain the next diagnostic boundaries.
 
 ## Implementation inventory
 
@@ -2951,6 +2970,14 @@ to the stated scope:
   `crypto-runtime-input-20261018/`. Messages are bounded to 2048 bytes; AES requires
   a positive multiple of 16 bytes. Each retained session accepts one request.
   Optional output references do not replace physical numerical qualification.
+  The authenticated request format now also exposes existing SHA/HMAC choices
+  and AES-128/192/256 ECB, CBC, CTR and GCM. Failed GCM authentication publishes
+  no plaintext; empty authenticated decryption is supported. Thirty-nine
+  application/service vectors, linked native upload/cleanup and actual-frame
+  host checks pass under `crypto-modes-20261028/`, with independent review.
+  The change adds 2,072 text bytes and 4,096 BSS bytes without another DMA
+  allocation. Physical predecessor exclusion, secure-bank access and engine
+  operation remain unqualified.
   [Fixed cold CE provisioning](crypto-application.md#fixed-cold-clock-provisioning-for-caller-requests)
   now supports version-3 caller sessions. After request authentication, it admits
   independently excluded, reset-held/gated CE state, preserves neighboring MBUS
@@ -3148,12 +3175,15 @@ to the stated scope:
   deadline. Writes are excluded, and uncertain recovery retains resources.
   Production files match the accepted `usb-bot-recovery-20261024/` evidence;
   physical recovery remains unqualified.
-  Three admission options are **implemented** for a session: a second tier of
-  high-speed hubs, bus-powered hubs within the USB 2.0 current budget, and
-  capture from one USB Audio Class 1 microphone over one isochronous IN stream
-  in the xHCI core. A ring-level controller model checks them. No board
-  workload selects them, and no check covers isochronous audio with interrupt
-  completion. Full startup, physical power/switch
+  Second-tier high-speed hubs and bus-powered hub admission within the USB 2.0
+  current budget have ring-level model evidence. Native audio workload 14 now
+  selects one directly attached UAC1 microphone at 16 kHz, mono, signed 16-bit
+  PCM. Existing class/adapter/xHCI code supplies one bounded copied block and
+  continuity metadata through the board application's USB observations. Actual
+  stack composition, ten linked application cases, host decoding and separate
+  PCM/metadata durability failures pass under `usb-audio-app-20261028/`.
+  The optional image adds 17,532 text bytes and 8,192 BSS bytes; application
+  buffers, task and queue counts are unchanged. Full startup, physical power/switch
   qualification, actual transfers and report timing, DMA drain, CPU interrupt
   delivery, repeated physical attachment, more leaves, wider classes,
   isochronous OUT, wider SuperSpeed modes, role swaps, USB PD, VCONN and

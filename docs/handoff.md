@@ -10,7 +10,7 @@ history.
   powered only through USB, and both are in speed bin 4.
 - **Power cycles:** the user reconnected both boards on 2026-10-28. Further
   power removal is unavailable unless the user confirms another opportunity.
-- **Last recorded lifetimes:** both fresh standard DDR initializations passed
+- **Initial 2026-10-28 lifetimes:** both standard DDR initializations passed
   under `~/.cache/sunstoneos/evidence/sol-resume-20261028/port-3-<n>/ddr`.
   Each returned to ROM with stage 5, status 0, a reported 12,288 MiB and two
   matching 4 KiB RAM pages. This establishes the initial session baseline,
@@ -41,7 +41,12 @@ history.
   passed under `ddr-after-npu-recovery/`. Only that record admits this new
   lifetime; earlier SD, PMIC and restart-entry facts are historical. No cause
   was established by offline forensics, and the restart will not be repeated
-  unchanged. A narrower entry checkpoint is in development.
+  unchanged. Its narrower provider-free checkpoint now passes under
+  `npu-entry-mbus-checkpoint/`, with normal return to `003/011` and all 18 MiB
+  of saved DRAM restored and compared. Its log reports MBUS `0x81000000`
+  before and after entry, with result 0: already 600 MHz, not a measured
+  400-to-600 transition. This checkpoint is the sole warm-return link after
+  the recovered lifetime's DDR start. It qualifies no NPU job or IRQ97 setup.
 - **RAM ownership:** the legacy GPU and SD returning diagnostics own a private
   18 MiB RAM interval. They restore their documented architecture/peripheral
   state, but do not back up or restore that interval's previous contents.
@@ -90,6 +95,9 @@ history.
     overhead is 0.24 ms.
   - Same-instance normal restart remains unqualified. Its 2026-10-28 attempt
     did not return; no inference or restart result was recovered.
+  - The subsequent provider-free entry checkpoint passed as recorded above.
+    Current clock observations show the NPU AHB, MBUS and PPU access gates
+    enabled. Those new-lifetime observations do not identify the earlier cause.
 - **microSD:** returning reads at high speed (3.3 V, 50 MHz, 4-bit); all 256
   reads completed.
   - SDR104 is not qualified: its 1.8 V switch stopped at CMD11.
@@ -154,8 +162,8 @@ Additional reviewed software now includes:
 - A CPU-only diagnostic for cache maintenance over a read-only mapping with
   production GPU-output permissions. Nineteen focused software cases pass.
   It fits the existing RAM grant and protects ROM-reader scratch before
-  launch. Physical permissions, production addresses and GPU DMA coherence
-  remain separate qualification gaps.
+  launch. The permission operation now passes physically as recorded above.
+  Production addresses and GPU DMA coherence remain separate qualification gaps.
 - Optional NVMe MSI-X completion through the existing task and interrupt route,
   with polling retained by default. No endpoint is attached for qualification.
 - A conservative display-engine rule that refuses reuse of a scanout buffer
@@ -165,6 +173,30 @@ Additional reviewed software now includes:
   Actual driver consumers are traced, but fitted supply routing and the shared
   reset/LPO pin still block physical admission. Do not infer electrical power
   removal from disabling a regulator declared always on.
+- Optional recorded GPU recognition now parks the healthy GPU worker and
+  completes firmware OFF, isolation and final rail-sample retirement before
+  CPU cleanup. Its focused native/service/host evidence and review pass;
+  physical recognition and the complete return remain unqualified. The same
+  queue claim must cover subsequent CPU rail restoration.
+- The native crypto application exposes existing SHA/HMAC choices and
+  AES-128/192/256 ECB, CBC, CTR and GCM through authenticated requests.
+  Failed GCM authentication publishes no plaintext. Application/service,
+  linked capture and admission checks pass under `crypto-modes-20261028/`.
+  Physical engine admission and operation remain unqualified.
+- An optional native USB audio workload copies one bounded block from a direct
+  UAC1 microphone at 16 kHz, mono, signed 16-bit PCM. Actual stack composition,
+  linked application, host capture and durability checks pass under
+  `usb-audio-app-20261028/`. No microphone is attached; physical timing,
+  interrupts, power and DMA visibility remain unqualified.
+- A 64 KiB SD read uses sixteen existing DMA descriptors and compares sixteen
+  chunk CRCs with accepted PIO references. Native and host checks pass under
+  `sol-sd-multidescriptor-1029/`. Ordered provider-free checkpoint continuity
+  is implemented for signing and capture. Physical execution awaits a nonzero
+  destination prefill so missing writes cannot match zero-filled references.
+- NPU startup now explicitly acquires its AHB and MBUS gates before PCK access.
+  Source-backed cold/failure/restart checks pass under `sol-npu-cold-gates-1029/`.
+  Current gates are already enabled; this change establishes no failure cause
+  or justification for repeating the failed restart unchanged.
 
 After the user's 2026-10-28 reconnect confirmation, the coordinator checked both
 ports and permissions, then ran one previously demonstrated standard DDR start
@@ -2180,7 +2212,7 @@ functions and modes beyond these bounded applications.
 | [H.264 encoding](h264-encode-native.md) | Two caller 640×480 NV12 frames, Baseline level 3.1/CAVLC/QP 26 IDR→P; immutable copied outputs with delivery-gated ACK. All input/reference/output resources retained. Actual provider/IOMMU/copy/USB and 140 SDK-reference register-write checks pass with entropy/completion modeled; no opaque CPU library linked. Final image `2e4a93b0…`. Current source encodes sequences of 1 to 30 pictures with ring reuse, and its 2,128 writes for 30 pictures match the library (not frozen; rerun `checks/h264-encode-native.py --case gop --frames 30` and `checks/h264-encode-registers.py`); the supervised capture tool still captures two pictures. Real entropy, reconstruction, numerical encoding, visibility and drain unqualified. Rate control and broader encoding remain required. | `h264-encode-20261020/root/integration.json`; [source provenance](../apps/h264-encode/sources.json) |
 | [JPEG encoding](jpeg-encode-native.md) | One retained caller 640×480 NV12 job, stride 640/quality 75; copied JPEG ≤1 MiB. Inherited PCK3, exclusive encoder lease and IOMMU master 3. Provider/IOMMU/copy checks model completion and entropy; native image linked, not executed. No numerical, burst, visibility, drain or physical claim; all resources retained. Frozen workload 2 uses private USB0, with eight inactive radio/USB-host input deltas. Broader encoding remains required. | `jpeg-encode-native-20261020/root/integration.json`, `closure-summary.json`, `commit-binding.json` |
 | [JPEG](jpeg-application.md) | Authenticated supplied baseline YCbCr420 image and copied pixels with dimensions; independent oracle optional. Current source admits up to 512 KiB of input and 640×480 planes, and version 3 sessions decode up to eight images in order; the supervised tool still sends one image, and neither change is frozen. Pixel correctness and confinement remain physically unqualified. | `jpeg-runtime-input-20261018/` |
-| [Crypto](crypto-application.md#fixed-cold-clock-provisioning-for-caller-requests) | Caller SHA-256/AES-128 ECB; version 3 adds fixed cold CE400 clock/reset provisioning after authenticated reset-held/gated admission. Eighteen owner cases and two separate SRAM cases pass; SHA device output/RTOS effects modeled. One build, prior arithmetic/version-1/2 evidence reused. Current source adds AES-192 and AES-256 keys with CBC, CTR and GCM, SHA-1, SHA-224, SHA-384, SHA-512 and HMAC in the services (not frozen; rerun `checks/a733-ce-modes.py`); the application's request format still offers only SHA-256 and AES-128 ECB. All resources retained; physical exclusion, secure access, operation and drain remain unqualified. | `ce-clock-20261020/root-integration.json`; caller inputs: `crypto-runtime-input-20261018/` |
+| [Crypto](crypto-application.md) | Authenticated requests expose SHA/HMAC choices and AES-128/192/256 ECB, CBC, CTR and GCM; legacy requests remain accepted. Failed GCM authentication publishes no plaintext. Application/service vectors, linked capture/cleanup and host admission checks pass. Fixed cold CE400 provisioning remains separately admitted. Physical predecessor exclusion, secure access, operation and drain remain unqualified. | `crypto-modes-20261028/frozen/`; `ce-clock-20261020/root-integration.json` |
 | [USB HID/CPU IRQ](usb2-host.md) | LS/FS/HS HID copies four reports without desktop events. Supervised board option routes CPU0 INTID187 to the existing owner; other profiles poll. IRQ delivery, DMA/drain, power and attachment reuse remain unqualified. | `usb-host-interrupt-20261018/root-integration.json`; `usb-host-cpu-irq-20261019/root-integration.json` |
 | [Gen1/companion leaf](usb2-host.md#one-gen1-hub-or-the-usb2-companion-root-serves-one-leaf) | One selected root, direct or one self-powered hub/leaf: workloads 6/8 Gen1 MSC/boot keyboard, 10/12 USB2 companion keyboard/HS MSC. Typed topology binds the unchanged 592-byte session. Actual stack/copied-client/host plus six identity/layout and two route cases model hardware/IRQ. Native linked, not physically executed. Root/topology/class, ≥900 mA and hub-power admission remain required; no physical bundle. Simultaneous roots and wider USB remain required. Current USB2 source also admits two hub tiers, bus-powered hubs and USB Audio Class 1 capture, which no workload selects. Mimus remains USB2. | `usb-ss-hub-20261020/root/integration.json`, `handoff.md`; earlier direct HID: `usb-ss-hid-20261020/` |
 | [USB hub/dual leaf](usb2-host.md) | Workload 4: one self-powered HS USB2 hub, one LS/FS/HS HID plus one HS MSC. Joint immutable output requires both results and fresh attachment. Existing IRQ187 route retained; derived profiles keep workloads 0–3. Hub/TT, power, DMA and drain remain unqualified. | `usb-host-dual-leaf-20261019/root-integration.json`; earlier single leaf: `usb-host-hub-20261019/` |
@@ -2460,17 +2492,17 @@ function returns the same result for every input. These copies remain:
 
 | Area | Next deliverable | Reason it remains and owner |
 | --- | --- | --- |
-| Stage-2 entry | Supply the three entry prerequisites in `boot/a733/stage2/admission.c`: remote-writer exclusion, watchdog recovery after a cold boot, and a comparison of boot0's EL3 entry state with the FEL-launched reset state. Call the remote-writer check before the loader reads the card. Add a faster loader SD profile; the 400 kHz one-bit profile reads about 25 KB/s, so 14 MB of models take about ten minutes. | The coordinator runs its board tests. Exclusion needs a source that documents an OR100 reset or removes OR100 from the A733, and a crypto engine idle status or control-flow proof. Do not repeat the E902 search or infer safety by reversing startup writes. |
-| OS image services | Carry a CPU clock grant record in the OS session, by default one that grants nothing, and check it with `a733_cpu_clock_grant_load`. Start the CPU clock driver after the thermal policy, with an owner task that polls within the driver's 10 ms margin, and add a reduced-load response to THROTTLE. Report measured cycle timing with each recognition. Stage the radio and Bluetooth profiles and firmware in supervised preparation, in one span when both are built. Keep the session running after a headset failure while the radio is up. | Application owner. A grant that permits a physical change needs the user's approval for that change. |
+| Stage-2 entry | Physical cold-entry, remote-writer exclusion, reset and card-update/recovery qualification. | The coordinator runs board tests. The loader now implements 3.3 V, 50 MHz, four-bit DMA; OR100 is excluded from the A733 writer inventory. Reuse accepted cold CPU/CE ownership code and source evidence; physical qualification remains open. |
+| OS image services | Physical CPU/GPU/NPU operating-point, thermal and concurrent-workload qualification; physical radio/headset integration. | Application owner. CPU clock grants, thermal policy, staged radio/headset inputs and bounded recognition timing are implemented. The user has authorized source-backed bring-up changes; current runtime admission still applies. |
 | Radio and Bluetooth | Alternate access points in the board profile; route the native A2DP consumer's decoded PCM to an audio output. | The native sink currently delivers bounded PCM through USB. Radio and Bluetooth owners retain physical qualification. WPA3 association needs SAE external authentication and protected management frames; the SAE exchange itself is implemented and host-checked. |
 | I2S receive | An eight-period cyclic receive ring for directions 3 and 5 in `apps/i2s`, and the launch condition in `apps/i2s/prepare.py` restated as a measured margin. | Audio owner. `I2S_PERIODS` also sizes the finite, duplex and USB transfers, so it must not simply be raised. |
-| USB host | Adoption of a new Type-C attachment after VBUS removal; a board workload and copied-audio format for USB audio capture; physical storage-recovery qualification. | USB host owner. One bounded mounted READ10 recovery already implements class reset and both bulk clear-halt operations. |
+| USB host | Adoption of a new Type-C attachment after VBUS removal; physical USB audio and storage-recovery qualification. | USB host owner. Direct UAC1 capture and copied PCM/metadata are implemented. One bounded mounted READ10 recovery implements class reset and both bulk clear-halt operations. |
 | Display | Register domain-1 rows on the power-domain owner (`drivers/power/a733_power_domains.c`) in the DSI and deinterlace images, and give the owner a domain-9 entry for DSI; an application that streams frames through the replay ring; display use of the GPU's lent frame. | Display owner. DSI also needs PCK domains 0, 2, 3 and 8 for its IOMMU group, and domain 8 is USB2. |
 | Camera | Physical module/electrical/deskew qualification and packet drain; sustained multi-frame application delivery beyond the existing single immutable frame. | Camera owner. CAM2 binding and the finite continuous-capture application are implemented; reuse `camera-cam2-1026/final-snapshot/` and `resume-camera-native-1025/` evidence. |
 | GPU | Compute input/output beyond one 4 KiB page; graphics shader selection, general blending, clipping, mipmaps and multisampling. | GPU owner. Arbitrary trusted compute programs already have a native application. Broader graphics uses the separate profile-5 design. |
-| NPU | Complete the FIFO-direct USB path for the [existing runtime board image](designs/npu-board.md), resolve the recorded check failures, then obtain physical inference evidence. | NPU owner. The image already shares the board provider resources and uses extended memory; do not recreate it. Any mimus offload needs an accuracy evaluation. |
+| NPU | Current-image IRQ/startup diagnosis, normal restart, power/thermal management and representative concurrent workloads. | NPU owner. Historical interrupt inference passes; the current provider-free checkpoint also passes. Full current-image startup and native reporting remain separate qualification work. Mimus offload requires accuracy evidence. |
 | Codecs, G2D and DI301 | Supervised capture of H.264 sequences longer than two pictures in `tools/check-a733-h264-encode-supervised.py`; H.264 frame-level rate control; supervised capture of JPEG sequences; repeated JPEG encode; an extended uncached pool for full-HD JPEG; G2D rotation once `g2d_rotate.c` is pinned, and YUV conversion; repeated DI301 jobs in one session, with gain feedback and film detection. | Video and graphics owners. Rate control needs a rate-controlled reference run of the pinned library to check against. Long-term B references stay refused until hardware evidence shows how the engine treats them. |
-| PCIe, storage, serial and timing | Interrupt completion in the NVMe image, which needs GIC routing for INTID 184 or 185; reads of more than one block; a consumer of the FAT filesystem, with its FatFs pin added to `sources.lock.json`; an S_PWM clock-registry scope; GPADC window admission in the native adapter once an application selects windows; an image that runs the SNTP client with the RTC service; the new crypto modes in the crypto application's request format. | Each component owner. |
+| PCIe, storage, serial and timing | Remaining NVMe read coverage, optional filesystem consumers where required, S_PWM clock-registry scope and an SNTP/RTC application. | Component owners. Native NVMe MSI-X, caller-selected GPADC windows and the crypto application mode format are implemented; their physical qualification remains open. |
 
 ### Checks and stale documents
 

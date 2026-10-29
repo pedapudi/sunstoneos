@@ -6,7 +6,9 @@ cleanup timing and subsequent rail restoration remain unqualified.
 The optional `SUNSTONE_A733_OS_CPU_RETURN` profile runs one recorded recognition
 with eight CPU workers, the PMIC provider and the thermal service. It requires
 supervised staged workload 2, Cortex-A76 admission and CPU clock grants for both
-clusters. GPU, NPU, radio, microphone, headset and performance-mode services are
+clusters. The optional `GPU_LINEAR` configuration also supports this return;
+its [final parking sequence](../../docs/designs/gpu-normal-return.md) precedes
+CPU cleanup. NPU, radio, microphone, headset and performance-mode services are
 excluded. Existing supervised and resident profiles keep their existing lifetime.
 
 The first functional attempt may use the dedicated
@@ -121,9 +123,11 @@ submission, lowers DCDC5 to 800 mV, waits at least 1 ms and verifies readback.
 Other entry voltages refuse; this variant does not restore arbitrary inherited
 rail states. The original bundle33 entry at DCDC3 1050 mV remains unchanged.
 
-The claim remains retained until the helper succeeds, its ROM return and DRAM
-restoration complete, and the coordinator records the resulting clock and rail
-state. Subsequent devices still require their own authority. A helper refusal
+The claim remains retained until the helper succeeds, its normal ROM return
+completes, and the coordinator records the resulting clock and rail state.
+The existing helper runner overwrites its private RAM; it does not restore that
+RAM's previous contents. CPU recognition capture has a separate explicit DRAM
+restoration path. Subsequent devices still require their own authority. A helper refusal
 keeps the claim retained. In the recorded OS, a missed acknowledgment, expired
 bound, source/readback mismatch, interrupt drain failure or architectural fault
 keeps the existing halt and retention behavior. This

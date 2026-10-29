@@ -161,8 +161,7 @@
   "cache_areas": [],
   "docs": [
    "docs/crypto-cipher.md",
-   "docs/crypto-hash.md",
-   "docs/handoff.md"
+   "docs/crypto-hash.md"
   ],
   "library": false,
   "pure_host": false,
@@ -2947,6 +2946,48 @@
    "--output"
   ],
   "summary": "Derive CE TRNG health-test register words from an assessed entropy per raw sample.",
+  "usb": false
+ },
+ "crypto-modes-host.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--native",
+   "--vectors",
+   "--output"
+  ],
+  "summary": "Exercise extended native-produced response frames, durable host capture and admission refusals.",
+  "usb": false
+ },
+ "crypto-modes-native.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--session",
+   "--vectors",
+   "--output"
+  ],
+  "summary": "Reuse linked crypto ownership/USB fixture for extended, service-verified requests.",
+  "usb": false
+ },
+ "crypto-modes.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--output",
+   "--sources",
+   "--manual",
+   "--model",
+   "--out"
+  ],
+  "summary": "Focused application request/service vectors; existing CE arithmetic tests are reused.",
   "usb": false
  },
  "crypto-runtime-host.py": {
@@ -7824,6 +7865,18 @@
   "summary": "Check actual combined OS GPU startup ordering and owner exclusion; no inference or MMIO.",
   "usb": false
  },
+ "os-gpu-return.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--output"
+  ],
+  "summary": "Linked hook and GPU finalizer over modeled service replies and stop proof.",
+  "usb": false
+ },
  "os-gpu-thermal.py": {
   "cache_areas": [],
   "docs": [],
@@ -9614,6 +9667,21 @@
   "summary": "Exercise terminal SD close with actual providers and modeled card/MMIO.",
   "usb": false
  },
+ "sd-return-continuity.py": {
+  "cache_areas": [],
+  "docs": [
+   "apps/storage-read-returning/README.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--checkpoint",
+   "--native",
+   "--output"
+  ],
+  "summary": "Actual SD producer/decoder CLI with modeled warm continuity; no USB.",
+  "usb": true
+ },
  "sd-return-host.py": {
   "cache_areas": [],
   "docs": [
@@ -10675,6 +10743,22 @@
    "--evidence"
   ],
   "summary": "Focused native USB first-fault and no-access BUSY cases; no hardware access.",
+  "usb": false
+ },
+ "usb-host-audio-native.py": {
+  "cache_areas": [
+   "evidence",
+   "host"
+  ],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--block",
+   "--output"
+  ],
+  "summary": "Actual linked UAC1 board consumer and serializer; scheduling/provider/API returns modeled.",
   "usb": false
  },
  "usb-host-classes.py": {
