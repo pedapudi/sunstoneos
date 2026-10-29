@@ -69,6 +69,13 @@ def run(bundle,frame_path,out,routing_only=False):
   try:host.decoder.decode(bad,session)
   except ValueError:pass
   else:raise AssertionError('Frame corruption accepted:'+str(offset))
+ if struct.unpack_from('<Q',session,600)[0]==3:
+  assert host.decoder.decode(frame,session)['compare_window']['selected_mask']==session[770]
+  for offset in (152,156):
+   bad=bytearray(frame);struct.pack_into('<I',bad,offset,16);bad[64:96]=hashlib.sha256(bad[128:]).digest()
+   try:host.decoder.decode(bad,session)
+   except ValueError:pass
+   else:raise AssertionError('Unselected compare event accepted')
  altered=bytearray(session);altered[632]^=1
  try:host.decoder.decode(frame,altered)
  except ValueError:pass

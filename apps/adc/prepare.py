@@ -34,14 +34,18 @@ def session_check(raw):
     require(len(raw)==784,'ADC session must be784bytes.')
     require(board.session_check(raw[:592])==2,'ADC requires USB0/provider selection2.')
     magic,version,size=struct.unpack_from('<3Q',raw,592)
-    require(magic==0x4153373341444131 and version in (1,2) and size==784,'Invalid ADC session.')
+    require(magic==0x4153373341444131 and version in (1,2,3) and size==784,'Invalid ADC session.')
     owner,authority=struct.unpack_from('<2Q',raw,616)
     require(owner and authority and owner not in struct.unpack_from('<2Q',raw,456),'Invalid ADC ownership.')
     require(all(any(raw[o:o+32]) for o in (632,664,696,728)),'Missing ADC physical evidence.')
     apb,hz=struct.unpack_from('<2I',raw,760);parent=apb>>24;div=(apb&31)+1;source={0:24000000,3:600000000}.get(parent,0)
     require(not apb&~0x0300001f and source and source%div==0 and hz==source//div,'Invalid ADC APB1 profile.')
     uv,impedance=struct.unpack_from('<2I',raw,776)
-    require((raw[768]==0 if version==2 else raw[768] in (0,1)) and raw[769]==13 and raw[770:776]==bytes(6) and uv==1800000 and 1<=impedance<=1000000,'Invalid nominal ADC supply/acquisition profile.')
+    require((raw[768]==0 if version==2 else raw[768] in (0,1)) and raw[769]==13 and (version==3 or raw[770:776]==bytes(6)) and uv==1800000 and 1<=impedance<=1000000,'Invalid nominal ADC supply/acquisition profile.')
+
+    if version==3:
+        mask,zero,low,high=struct.unpack_from('<BBHH',raw,770)
+        require(1<=mask<=15 and zero==0 and low<high<=4095,'Invalid ADC compare window.')
 
 def request_bytes(address,identity,raw,epoch,generation,lease):
     request,contract=board.request_bytes(address,identity,epoch,generation,lease,raw)

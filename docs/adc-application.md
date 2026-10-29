@@ -30,8 +30,8 @@ impedance of 1 MΩ, this bound is 64 microseconds; 100 microseconds exceeds it.
 The actual divider network and its impedance still require physical admission.
 The divider setting is not a measured conversion rate.
 
-Only channels 0–3 are selected. FIFO, DMA requests, compare interrupts and test
-injection are refused. The internal-reference selector must already be set;
+Only channels 0–3 are selected. FIFO, DMA requests and test injection are
+refused. Compare interrupts require the optional version-3 session below. The internal-reference selector must already be set;
 the driver never writes it, calibration data, test selection, pads or straps.
 Code zero is valid. No default board-ID interpretation or calibrated voltage
 conversion is supplied.
@@ -178,9 +178,9 @@ snapshot, after copy and before queued transmission.
 ## Compare windows report low and high threshold events
 
 The GPADC driver also implements the controller's compare-window threshold
-mode for channels 0 to 3. No application selects windows yet, and the native
-adapter refuses access to the compare registers, so this mode runs only in the
-host check below.
+mode for channels 0 to 3. ADC session version 3 selects a bounded native
+observation through the existing task, interrupt and copied USB report. Versions
+1 and 2 preserve their two-set GPADC and LRADC behavior.
 
 The owner task calls `a733_adc_configure_thresholds` after initialization and
 before the first poll. Each selected channel needs a low code below its high
@@ -202,6 +202,61 @@ latches it.
 `a733_adc_thresholds` returns and clears the latched low and high channel
 masks without register access. Configured disable clears the compare interrupt
 enables with the data interrupt enable and keeps latched events readable.
+
+Version 3 retains the 784-byte session. Bytes 770–775 contain a one-byte
+selected mask from 1 to 15, a zero byte, a little-endian 16-bit low raw code and
+a little-endian 16-bit high raw code. The same caller-supplied window applies to
+each selected channel. Low must be below high, and high must be at most 4,095.
+The existing session seals and bundle digest authenticate these fields. Versions
+1 and 2 require all six bytes to remain zero. All four connected channels still
+supply raw observations; the selected mask controls comparison only.
+
+The owner selects immutable native windows before the first driver poll. The
+native adapter admits selected compare words at offsets `0x40` through `0x4c`
+with mutable mask `0x0fff0fff` and the accepted low/high fields. It preserves
+reserved bits. Compare select and interrupt writes admit only the selected
+mask or configured disable, and low/high acknowledgements admit nonzero subsets
+of that mask. Unselected compare words, reference writes, test injection and
+channels beyond 3 remain inaccessible.
+
+After each SAMPLE or AGAIN service, the owner consumes the actual driver latch
+and accumulates low/high channel masks. Threshold-only service therefore retains
+events even without fresh raw data. Observation ends when the existing two later
+raw sets complete. The owner permanently masks interrupt 70, uses configured
+disable with readback, and then publishes. Its existing supervised deadline
+bounds missing samples, contention and stop. A fault revokes output eligibility
+and retains ownership. Configured disable does not establish analog drain.
+
+The 160-byte report keeps its raw sets and stores accumulated low and high masks
+in 32-bit words at payload offsets 24 and 28. The host obtains the accepted
+window from the authenticated session and rejects reported bits outside its
+selection. Zero masks are a valid observation. These masks describe statuses
+observed before the final raw set completed; they do not count crossings or
+cover later conversions during configured disable. Equality at either boundary,
+voltage accuracy, reference accuracy and physical interrupt delivery remain
+unqualified. The mode adds no calibration, board identification or strap change.
+
+`checks/adc-compare-native.py` executes the linked application, actual GPADC
+core, native register policy and USB serializer with modeled MMIO effects,
+clock/rail/PMIC service results, time, RTOS calls, GIC outcomes and USB transport.
+Seven cases cover accumulated events including threshold-only service, zero
+events, changed windows, unselected pending status, failed stop, cancellation
+and deadline expiry. The original version-1 linked cases pass on the same image.
+Both versions pass actual producer, session admission, sealed bundle and host
+capture checks. The version-3 host also refuses rehashed reports carrying
+unselected event bits. These checks provide software evidence only.
+
+Counted on the linked image with selected mask 5, startup controller accesses
+increase from 31 reads and 6 writes to 43 reads and 10 writes. A four-channel
+service without threshold events increases from 18 reads and 1 write to 20 reads
+and 1 write because it verifies the selected windows. Each nonzero low/high
+status adds one acknowledgement. Consuming the latch adds no MMIO. Completion
+adds 22 reads and 5 writes for configured disable. The session and USB extents,
+heap allocations, task count and service cadence remain unchanged. The native
+object grows by 24 bytes; the application object grows by 48 bytes including
+alignment. Linked text grows by 2,792 bytes and linked BSS remains unchanged.
+Evidence is under `~/.cache/sunstoneos/evidence/adc-compare-20261028/`;
+`costs.json` records the counted comparison. No board timing was measured.
 
 `checks/adc-threshold.c` links the actual driver and clock registry with
 modeled MMIO. Nine cases cover programmed windows, latched events with and
@@ -248,7 +303,7 @@ board power removal; cable reconnection alone permits no resource reuse. There
 is no automatic reset or retry.
 
 Repeated/concurrent monitoring services, calibrated voltage/reference accuracy,
-an application that selects compare windows, burst/FIFO and DMA operation and
+burst/FIFO and DMA operation and
 other usable ADC operating modes remain required. The driver-level threshold
 mode is described in the compare-window section above.
 The accessory-dependent GPADC4, separate LRADC0 interface and actual populations

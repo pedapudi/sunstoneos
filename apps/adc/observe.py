@@ -14,11 +14,15 @@ def decode(frame,session):
  if status!=1:
   if count or len(frame)!=128 or frame[64:96]!=bytes(32):raise ValueError('Non-success carries ADC output')
   return dict(status=status,bytes=0)
- lradc=struct.unpack_from('<Q',session,600)[0]==2
+ mode=struct.unpack_from('<Q',session,600)[0];lradc=mode==2
  payload=frame[128:]
  if count!=160 or len(payload)!=160 or frame[64:96]!=hashlib.sha256(payload).digest():raise ValueError('ADC output hash/extent differs')
- uv,selector,reference,divider_rate,sets,mask,r0,r1=struct.unpack_from('<8I',payload)
- if (uv,selector)!=(struct.unpack_from('<I',session,776)[0],session[769]) or (reference,divider_rate,sets,mask,r0,r1)!=((2,3,2,1,0,0) if lradc else (1,1000,2,15,0,0)):raise ValueError('ADC selection/supply metadata differs')
+ uv,selector,reference,divider_rate,sets,mask,low_seen,high_seen=struct.unpack_from('<8I',payload)
+ if (uv,selector)!=(struct.unpack_from('<I',session,776)[0],session[769]) or (reference,divider_rate,sets,mask)!=((2,3,2,1) if lradc else (1,1000,2,15)):raise ValueError('ADC selection/supply metadata differs')
+ if mode==3:
+  selected=session[770]
+  if (low_seen|high_seen)&~selected:raise ValueError('ADC compare events exceed selected mask')
+ elif low_seen or high_seen:raise ValueError('Unexpected ADC compare events')
  records=[]
  for group in range(2):
   channels=[]
@@ -32,4 +36,7 @@ def decode(frame,session):
  result=dict(status=1,bytes=160,copied_verified=True,cldo3_programmed_uv=uv,observations=records)
  if lradc:result.update(controller='LRADC0',sample_selector=3,calibrated_voltage=False)
  else:result['internal_reference_selected']=True
+ if mode==3:
+  selected,zero,low,high=struct.unpack_from('<BBHH',session,770)
+  result['compare_window']=dict(selected_mask=selected,low_raw_code=low,high_raw_code=high,low_seen_mask=low_seen,high_seen_mask=high_seen)
  return result

@@ -22,7 +22,8 @@ static int authorize(void *cookie,const struct a733_adc_config *c,const struct a
 static int enter(void *cookie,uint64_t deadline)
 {
     struct a733_adc_native *n=cookie;
-    return current(n) && a733_platform_lock_enter(n->locks,A733_PLATFORM_REGISTER_LOCK,deadline);
+    if(!current(n))return 0;
+    n->initialized=2;return a733_platform_lock_enter(n->locks,A733_PLATFORM_REGISTER_LOCK,deadline);
 }
 static void leave(void *cookie)
 {
@@ -44,6 +45,7 @@ static int readable(struct a733_adc_native *n,uintptr_t a)
   case 0x03400000:case 0x03400108:case 0x03400208:case 0x03400308:
   case 0x02524000:case 0x02524004:case 0x02524008:case 0x0252400c:return 1;default:return 0;}
  }
+ if(a>=0x02521040&&a<=0x0252104c&&!(a&3))return !!(n->thresholds.mask&(1u<<((a-0x02521040)/4)));
  return readable_gpadc(a);
 }
 static int readable_gpadc(uintptr_t a)
@@ -89,7 +91,14 @@ static int write_register(void *cookie,uintptr_t a,uint32_t value)
  case 0x02002fc4:mask=0x10001;break;
  case 0x02521000:if(value!=0x5dbf095f)return 0;mask=UINT32_MAX;break;
  case 0x02521004:mask=0x000f0000;if((value&mask)!=0x80000&&(value&mask)!=0x90000)return 0;break;
- case 0x02521008:mask=0x007f007f;if((value&mask)!=15&&(value&mask)!=0)return 0;break;
+ case 0x02521008:mask=0x007f007f;if((value&mask)!=(15u|n->thresholds.mask<<16)&&(value&mask)!=0)return 0;break;
+ case 0x02521020:case 0x02521024:mask=127;if((value&mask)!=n->thresholds.mask&&(value&mask)!=0)return 0;break;
+ case 0x02521040:case 0x02521044:case 0x02521048:case 0x0252104c:{
+  unsigned i=(unsigned)(a-0x02521040)/4;mask=0x0fff0fff;
+  if(!(n->thresholds.mask&(1u<<i))||(value&mask)!=((uint32_t)n->thresholds.high[i]<<16|n->thresholds.low[i]))return 0;break;}
+ case 0x02521030:case 0x02521034:
+  if(!value||(value&~n->thresholds.mask))return 0;
+  a733_mmio_write32_dsb_sy_both(a,value);return 1;
  case 0x02521028:mask=127;if((value&mask)!=15&&(value&mask)!=0)return 0;break;
  case 0x025210d0:mask=1;if(!(value&1))return 0;break;
  case 0x02521038:
@@ -108,8 +117,17 @@ int a733_adc_native_init(struct a733_adc_native *n,struct a733_platform_locks *l
 {
  if(!n||n->initialized||!locks||!locks->initialized||!task||!admit)return 0;
  n->locks=locks;n->owner_task=task;n->admit=admit;n->admission_cookie=cookie;
- n->lradc=0;
+ n->lradc=0;n->thresholds=(struct a733_adc_thresholds){0};
  n->operations=(struct a733_adc_ops){now,current,authorize,enter,leave,retain,read_register,write_register};n->initialized=1;return 1;
+}
+
+int a733_adc_native_thresholds(struct a733_adc_native *n,const struct a733_adc_thresholds *t)
+{
+ if(!n||!t||n->initialized!=1||n->lradc||n->thresholds.mask||!current(n)||!t->mask||(t->mask&~15u))return 0;
+ for(unsigned i=0;i<A733_ADC_CHANNELS;++i)
+  if(t->mask&(1u<<i)){if(t->low[i]>=t->high[i]||t->high[i]>4095)return 0;}
+  else if(t->low[i]||t->high[i])return 0;
+ n->thresholds=*t;return 1;
 }
 
 int a733_lradc_native_init(struct a733_adc_native *n,struct a733_platform_locks *locks,void *task,

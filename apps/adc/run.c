@@ -54,7 +54,7 @@ static int supply_valid(void)
 }
 int adc_publish(void)
 {
- uint32_t header[]={adc.supply.programmed_uv,adc.supply.selector&31,adc.session.version==2?2u:1u,adc.session.version==2?3u:1000u,2,adc.session.version==2?1u:15u,0,0};
+ uint32_t header[]={adc.supply.programmed_uv,adc.supply.selector&31,adc.session.version==2?2u:1u,adc.session.version==2?3u:1000u,2,adc.session.version==2?1u:15u,adc.low_seen,adc.high_seen};
  memcpy(adc.payload,header,sizeof(header));storage_digest_bytes(adc.payload,sizeof(adc.payload),adc.digest);
  unsigned empty=0;if(!adc_live()||!atomic_compare_exchange_strong_explicit(&adc.result,&empty,1,memory_order_release,memory_order_relaxed))return retain_failure();
  if(!adc_live())return retain_failure();return 1;
@@ -95,7 +95,13 @@ int adc_step(void)
   enum a733_clock_result c=a733_clock_acquire(&providers.shared.clocks,adc.session.owner,shared,exclusive,adc.config.startup_deadline_us,&adc.token);
   if(c==A733_CLOCK_BUSY)return 0;if(c!=A733_CLOCK_OK)return retain_failure();adc.stage=6;return 0;}
  case 6:
-  if(!(adc.session.version==2?a733_lradc_init(&adc.lradc,&adc.config,&adc.operations,&adc,&providers.shared.clocks,&adc.token):a733_adc_init(&adc.driver,&adc.config,&adc.operations,&adc,&providers.shared.clocks,&adc.token)))return retain_failure();adc.stage=7;return 0;
+  if(!(adc.session.version==2?a733_lradc_init(&adc.lradc,&adc.config,&adc.operations,&adc,&providers.shared.clocks,&adc.token):a733_adc_init(&adc.driver,&adc.config,&adc.operations,&adc,&providers.shared.clocks,&adc.token)))return retain_failure();
+  if(adc.session.version==3){
+   struct a733_adc_thresholds windows={.mask=adc.session.reserved[0]};
+   for(unsigned i=0;i<A733_ADC_CHANNELS;++i)if(windows.mask&(1u<<i)){
+    windows.low[i]=(uint16_t)adc_window_low(&adc.session);windows.high[i]=(uint16_t)adc_window_high(&adc.session);}
+   if(!a733_adc_native_thresholds(&adc.native,&windows)||!a733_adc_configure_thresholds(&adc.driver,&windows))return retain_failure();
+  }adc.stage=7;return 0;
  case 7:{
   enum a733_adc_result v=adc.session.version==2?a733_lradc_poll(&adc.lradc):a733_adc_poll(&adc.driver);
   if(adc.session.version==2?adc.lradc.fault:adc.driver.fault)return retain_failure();if(v==A733_ADC_PENDING||v==A733_ADC_BUSY)return 0;
@@ -107,13 +113,20 @@ int adc_step(void)
    if(adc.session.version==2?adc.lradc.fault:adc.driver.fault)return retain_failure();adc.next_read=n+25000;
    if(v==A733_ADC_SAMPLE){if(!adc_collect(&sample))return retain_failure();}
    else if(v!=A733_ADC_AGAIN&&v!=A733_ADC_BUSY)return retain_failure();
+   if(adc.session.version==3&&v!=A733_ADC_BUSY){
+    uint32_t low,high;enum a733_adc_result events=a733_adc_thresholds(&adc.driver,&low,&high);
+    if(adc.driver.fault||(events!=A733_ADC_SAMPLE&&events!=A733_ADC_AGAIN))return retain_failure();
+    adc.low_seen|=low;adc.high_seen|=high;
+   }
   }
   if(adc.sets==2){if(!mask())return retain_failure();adc.stage=9;return 0;}
   if(adc.session.version!=2&&!rearm())return retain_failure();return 0;}
  case 9:
   if(adc.session.version==2){enum a733_adc_result v=a733_lradc_stop(&adc.lradc,adc.config.startup_deadline_us);
    if(adc.lradc.fault)return retain_failure();if(v==A733_ADC_BUSY)return 0;if(v!=A733_ADC_STOPPED)return retain_failure();}
-  if(adc.session.version==2){adc.stage=10;return 0;}
+  if(adc.session.version==3){enum a733_adc_result v=a733_adc_stop(&adc.driver,adc.config.startup_deadline_us);
+   if(adc.driver.fault)return retain_failure();if(v==A733_ADC_BUSY)return 0;if(v!=A733_ADC_STOPPED)return retain_failure();}
+  if(adc.session.version==2||adc.session.version==3){adc.stage=10;return 0;}
   /* GPADC preserves its original stage9 publication path. */
   /* fall through */
  case 10:{int ready=provider_ready();if(ready<0)return retain_failure();if(!ready)return 0;return adc_publish();}

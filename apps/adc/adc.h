@@ -12,7 +12,7 @@ struct adc_application {
  struct a733_pmic_lifetime lifetime;struct a733_pmic_request request;struct a733_pmic_snapshot supply;
  StaticTask_t task;StackType_t stack[2048];TaskHandle_t handle;struct gicv3_spi irq;
  atomic_uint result,failed,pending;unsigned stage,rail_retained,clock_retained,masked,rearm_wait,sets,valid,last_sequence;
- uint64_t next_read,last_times[4];
+ uint64_t next_read,last_times[4];uint32_t low_seen,high_seen;
  uint8_t payload[ADC_OUTPUT_BYTES],digest[32],session_digest[32];
 };
 extern struct adc_application adc;

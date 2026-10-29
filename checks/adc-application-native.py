@@ -21,7 +21,7 @@ class Image:
      if not name:continue
      name=name.value.decode()
      if d.tag=='DW_TAG_subprogram' and 'DW_AT_low_pc'in d.attributes:self.functions.setdefault((unit,name),set()).add(int(d.attributes['DW_AT_low_pc'].value))
-     if d.tag=='DW_TAG_structure_type' and name in ('adc_application','board_application','board_provider','a733_native_usb','a733_clock_leases','a733_clock_token','a733_adc_native','a733_adc_ops','a733_adc_config','a733_adc_sample','a733_adc','a733_pmic_snapshot','a733_platform_locks','a733_pmic','a733_pmic_native','a733_pmic_ops','a733_rail_leases','a733_rail_binding','a733_pins','a733_gpu_resource_manager'):
+     if d.tag=='DW_TAG_structure_type' and name in ('adc_application','board_application','board_provider','a733_native_usb','a733_clock_leases','a733_clock_token','a733_adc_native','a733_adc_thresholds','a733_adc_ops','a733_adc_config','a733_adc_sample','a733_adc','a733_pmic_snapshot','a733_platform_locks','a733_pmic','a733_pmic_native','a733_pmic_ops','a733_rail_leases','a733_rail_binding','a733_pins','a733_gpu_resource_manager'):
       fields={c.attributes['DW_AT_name'].value.decode():int(c.attributes['DW_AT_data_member_location'].value) for c in d.iter_children() if c.tag=='DW_TAG_member' and 'DW_AT_name'in c.attributes and 'DW_AT_data_member_location'in c.attributes}
       if fields:
        if name in self.layouts:assert self.layouts[name]==fields,name
@@ -37,7 +37,10 @@ class Machine:
   self.cpu.reg_write(UC_ARM64_REG_PSTATE,5);self.cpu.reg_write(UC_ARM64_REG_TPIDR_EL1,0)
   for a,data in image.segments:self.cpu.mem_write(a,data)
   self.base=image.address('adc');self.layout=image.layouts['adc_application'];self.board=image.address('board');self.provider=image.address('providers');self.time=1000000;self.live=True;self.held=False;self.finished=False;self.calls=[];self.tx=[];self.retain_calls={};self.revoke_read=False;self.reads=0;self.snapshot=False;self.output_checks=0;self.construct_calls=0;self.samples=0;self.rearms=0;self.critical=0;self.inject_irq=False;self.interrupt_context=None;self.task=1;self.override_el=None;self.modeled_level_checks=0;self.level_instruction=image.address('allowed','/drivers/adc/a733_adc_native.c')
-  assert int.from_bytes(self.cpu.mem_read(self.level_instruction,4),'little')&0xffffffe0==0xd5384240
+  # Resolve the architectural instruction within the defining function; its
+  # admission prologue can change when native state changes.
+  instructions=[self.level_instruction+i for i in range(0,128,4) if int.from_bytes(self.cpu.mem_read(self.level_instruction+i,4),'little')&0xffffffe0==0xd5384240]
+  assert len(instructions)==1;self.level_instruction=instructions[0]
   self.cpu.mem_write(0x41f00000,session);self.cpu.mem_write(self.base,session);self.cpu.mem_write(self.board,session[:592]);self.cpu.mem_write(self.board+160,struct.pack('<Q',61000000));self.cpu.mem_write(self.board+168,struct.pack('<Q',24000000));self.field('handle',1,8)
   shared=self.provider+image.layouts['board_provider']['shared'];self.shared=shared;self.objects={name:shared+image.layouts['a733_native_usb'][name] for name in ('locks','clocks','pins','rails','pmic','counter')}
   def setv(obj,kind,field,value,size=8):self.cpu.mem_write(obj+image.layouts[kind][field],value.to_bytes(size,'little'))
@@ -157,12 +160,16 @@ def run(image,session_path,out,nominal_path):
    assert m.call('board_application_pins',0x50002000)==0 and m.call('board_application_start')==0 and not m.calls and m.construct_calls==0
    results[variant]=dict(passed=True,component_calls=0)
   else:
+   if variant=='wrapper-delegation':m.cpu.mem_write(m.native+elf.layouts['a733_adc_native']['thresholds'],bytes([255])*elf.sizes['a733_adc_thresholds'])
    assert m.call('adc_construct')==1
    if variant=='wrapper-delegation':
+    assert bytes(m.cpu.mem_read(m.native+elf.layouts['a733_adc_native']['thresholds'],elf.sizes['a733_adc_thresholds']))==bytes(elf.sizes['a733_adc_thresholds'])
     m.held=True;m.cpu.mem_write(0x02521080,bytes(4));args=(m.base,0x02521080,0x50002000)
     assert m.call('read_register',*args,unit='/apps/adc/native.c')==1
     assert m.call('read_register',m.base,0x02521090,0x50002000,unit='/apps/adc/native.c')==0
     assert m.call('write_register',m.base,0x025210fc,0,unit='/apps/adc/native.c')==0
+    for address,value in ((0x02521040,0),(0x02521020,1),(0x02521024,1),(0x02521030,1),(0x02521034,1)):
+     assert m.call('write_register',m.base,address,value,unit='/apps/adc/native.c')==0
     m.task=2;assert m.call('read_register',*args,unit='/apps/adc/native.c')==0;m.task=1
     before=m.reads;m.override_el=8;assert m.call('read_register',*args,unit='/apps/adc/native.c')==0 and m.reads==before and m.modeled_level_checks==1;m.override_el=None
     m.revoke_read=True;assert m.call('read_register',*args,unit='/apps/adc/native.c')==0;before=m.reads;assert m.call('read_register',*args,unit='/apps/adc/native.c')==0 and m.reads==before

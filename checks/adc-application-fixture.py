@@ -5,12 +5,15 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 def module(name,path):
  s=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
-def produce(image,out):
+def produce(image,out,compare_mask=None,low=None,high=None):
  out.mkdir(parents=True,exist_ok=False);prep=module('adc_fixture_prepare',ROOT/'apps/adc/prepare.py');ih=hashlib.sha256(image.read_bytes()).hexdigest();parts,entry,identity=prep.base.image_parts(image)
  baseline=Path.home()/'.cache/sunstoneos/evidence/board-supervised-20261017/batch1/session-fixture.bin'
  raw=bytearray(baseline.read_bytes());assert len(raw)==592;raw[48:80]=identity;raw.extend(bytes(192));struct.pack_into('<5Q',raw,592,0x4153373341444131,1,784,23,91)
  struct.pack_into('<6I',raw,488,0,0x83000002,0x84000001,24000000,200000000,200000000)
  struct.pack_into('<2I',raw,760,0,24000000);raw[768]=0;raw[769]=13;struct.pack_into('<2I',raw,776,1800000,1000000)
+ if compare_mask is not None or low is not None or high is not None:
+  assert compare_mask is not None and low is not None and high is not None
+  struct.pack_into('<Q',raw,600,3);struct.pack_into('<BBHH',raw,770,compare_mask,0,low,high)
  target=dict(identity='adc-software-only-model',port='no-physical-port',image_sha256=ih)
  def record(name,value):
   data=json.dumps(value,sort_keys=True).encode();p=(out/name).resolve();p.write_bytes(data);return dict(path=str(p),sha256=hashlib.sha256(data).hexdigest())
@@ -32,4 +35,4 @@ def produce(image,out):
  return template,path
 if __name__=='__main__':
  import argparse
- p=argparse.ArgumentParser(description=__doc__);p.add_argument('--image',type=Path,required=True);p.add_argument('--output',type=Path,required=True);a=p.parse_args();produce(a.image,a.output)
+ p=argparse.ArgumentParser(description=__doc__);p.add_argument('--image',type=Path,required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--compare-mask',type=int);p.add_argument('--low',type=int);p.add_argument('--high',type=int);a=p.parse_args();produce(a.image,a.output,a.compare_mask,a.low,a.high)
