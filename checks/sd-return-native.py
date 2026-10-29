@@ -103,7 +103,27 @@ class Machine(old.Card):
         return raw
 
 
-def run(elf, out, inflight_only=False, admission_only=False, busy_only=False, chain_only=False):
+class SentinelMachine(Machine):
+    def __init__(self, image, skip=False):
+        super().__init__(image); self.skip = skip; self.prefill_seen = False; self.expected_payload = None
+
+    def dma_cache(self, operation, buffer, size):
+        if operation == 0:
+            assert size == 65536 and bytes(self.cpu.mem_read(buffer, size)) == bytes([0xa5])*size
+            self.prefill_seen = True
+        else:
+            # Model the known weak reference shape: only the first descriptor
+            # has nonzero data. Suppress one descriptor's device publication
+            # while keeping the existing modeled OWN/drain completion intact.
+            self.expected_payload = self.dma['data'][:4096]+bytes(15*4096)
+            published = bytearray(self.expected_payload)
+            if self.skip:
+                published[7*4096:8*4096] = self.cpu.mem_read(buffer+7*4096, 4096)
+            self.dma['data'] = bytes(published)
+        return super().dma_cache(operation, buffer, size)
+
+
+def run(elf, out, inflight_only=False, admission_only=False, busy_only=False, chain_only=False, sentinel_only=False):
     out.mkdir(parents=True, exist_ok=False)
     image = harness.Image(elf, old.LAYOUTS)
     # Decode actual branches, not source-name assumptions: 16 vector slots and
@@ -127,6 +147,35 @@ def run(elf, out, inflight_only=False, admission_only=False, busy_only=False, ch
         (out / (name+'.log')).write_text(m.log)
         results[name] = dict(terminal=m.terminal, receipt=m.read(RECEIPT+8, 8), **extra)
         (out / 'results.json').write_text(json.dumps(results, indent=2)+'\n')
+
+    if sentinel_only:
+        for name, skip in (('sentinel-chain', False), ('skipped-descriptor-write', True)):
+            m = SentinelMachine(image, skip); raw = m.start([(0, 128)])
+            m.log = ('SD_RETURN_VERSION=0x0000000000000001\n'
+                     'SD_PROFILE=0x0000000000000002\nSD_GENERATION=0x0000000001234567\n')
+            m.call('sd_task', 0)
+            assert m.prefill_seen and m.terminal == 'qualified-monitor' and m.exit == 0
+            assert m.read(RECEIPT+8, 8) == 5 and m.release == ['pins', 'rail']
+            assert len(m.dma_reads) == 1 and len(m.dma_reads[0]['descriptors']) == 16
+            buffer = image.address('buffer')
+            assert m.cache_events == [('clean', buffer, 65536), ('invalidate', buffer, 65536)]
+            value = old.host.decode_log(m.log, raw, 0)
+            reference = dict(complete=True, status=0, card=copy.deepcopy(value['card']), reads=[
+                dict(first=i*8, blocks=8, bytes=4096, crc32=binascii.crc32(m.expected_payload[i*4096:(i+1)*4096]))
+                for i in range(16)])
+            terminal = dict(magic=0x534b4552, stage=5, status=0)
+            if skip:
+                assert value['chunk_crc32'][7] == binascii.crc32(bytes([0xa5])*4096)
+                rejection = harness.refused(lambda: old.host.validate_successful_return(
+                    value, terminal, raw, reference), 'chain-read reference CRC mismatch')
+            else:
+                assert old.host.validate_successful_return(value, terminal, raw, reference)['reference_crc']['matched_bytes'] == 65536
+                rejection = None
+            assert all(value['chunk_crc32'][i] == reference['reads'][i]['crc32'] for i in range(16) if not skip or i != 7)
+            (out/(name+'.input.bin')).write_bytes(raw)
+            save(name, m, prefill_seen=m.prefill_seen, descriptors=16, cache_events=m.cache_events,
+                 skipped_descriptor=7 if skip else None, strict_rejection=rejection, chunk_crc32=value['chunk_crc32'])
+        return
 
     if chain_only:
         for name, blocks in (('nominal', 8), ('chain', 128)):
@@ -235,4 +284,5 @@ if __name__ == '__main__':
     p.add_argument('--admission-only', action='store_true', help='only initialized refusal and receipt-mapping admission')
     p.add_argument('--busy-only', action='store_true', help='only the caller deadline under stuck serialization')
     p.add_argument('--chain-only', action='store_true', help='one sixteen-descriptor read and legacy first-read nominal')
-    p.add_argument('--output', type=Path, required=True); a = p.parse_args(); run(a.image, a.output, a.inflight_only, a.admission_only, a.busy_only, a.chain_only)
+    p.add_argument('--sentinel-only', action='store_true', help='native prefill, complete chain and skipped descriptor payload')
+    p.add_argument('--output', type=Path, required=True); a = p.parse_args(); run(a.image, a.output, a.inflight_only, a.admission_only, a.busy_only, a.chain_only, a.sentinel_only)

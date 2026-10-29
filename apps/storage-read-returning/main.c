@@ -116,9 +116,14 @@ static int dma_sync(void *cookie,uint8_t *b,size_t n,unsigned phase)
 {
     (void)cookie;
     uintptr_t start=(uintptr_t)b,base=(uintptr_t)buffer;
-    return (phase==SUNXI_MMC_DMA_BEFORE||phase==SUNXI_MMC_DMA_AFTER)&&
-        start>=base&&start<=base+sizeof(buffer)&&n<=base+sizeof(buffer)-start&&
-        aarch64_device_cache(phase==SUNXI_MMC_DMA_BEFORE?AARCH64_CACHE_CLEAN:AARCH64_CACHE_INVALIDATE,(uintptr_t)b,n)==1;
+    if((phase!=SUNXI_MMC_DMA_BEFORE&&phase!=SUNXI_MMC_DMA_AFTER)||
+       start<base||start>base+sizeof(buffer)||n>base+sizeof(buffer)-start)return 0;
+    if(phase==SUNXI_MMC_DMA_BEFORE&&chain_read()){
+        if(b!=buffer||n!=65536)return 0;
+        volatile uint64_t *fill=(volatile uint64_t *)b;
+        for(unsigned i=0;i<65536/8;++i)fill[i]=UINT64_C(0xa5a5a5a5a5a5a5a5);
+    }
+    return aarch64_device_cache(phase==SUNXI_MMC_DMA_BEFORE?AARCH64_CACHE_CLEAN:AARCH64_CACHE_INVALIDATE,(uintptr_t)b,n)==1;
 }
 static char *hex(char *p,uint64_t v,unsigned digits)
 {

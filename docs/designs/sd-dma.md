@@ -282,10 +282,14 @@ no native failure is retried or converted into a ROM return.
 
 The design budget was at most 1 KiB of native text, 64 bytes of CRC storage and
 no extra per-poll MMIO, cache operation, command or drain phase. The measured
-increase against the same-platform first-read application is 528 text bytes.
+increase against the same-platform first-read application is 784 text bytes.
 The 64-byte array fits existing alignment padding, leaving total BSS and
 initialized data unchanged. CRC computation adds one 64 KiB CPU read after
-transfer timing; physical CPU cost and transfer timing remain unmeasured.
+transfer timing. A 64 KiB `0xa5` fill immediately before the existing clean
+makes missing payload writes observable for PIO chunks whose CRC matches zero
+memory. It adds 116 instruction bytes and 140 bytes of linked alignment padding;
+the clean-duration field includes the fill. Physical CPU cost and transfer
+timing remain unmeasured.
 
 Independent Sol 6.1 reviews approved the design before implementation and the
 final source. Focused linked cases cover the actual sixteen-descriptor chain,
@@ -295,3 +299,7 @@ PIO fixture, policy binding and missing, reordered, duplicate or corrupt CRC
 refusals. Software evidence and frozen inputs are under
 `sol-sd-multidescriptor-1029/`. These checks model hardware and do not establish
 physical operation of the larger transfer.
+The sentinel image and two affected linked cases are under
+`sol-sd-warm-packet-1029/`. They prove native fill before clean, normal complete
+transfer and strict refusal when one descriptor's payload publication is skipped.
+Unchanged host/parser/continuity and earlier native cases are reused.

@@ -123,6 +123,10 @@ lifetime admission checks.
 127, 64 KiB, through sixteen existing 4096-byte descriptors and automatic CMD12.
 After collecting the completed DMA read, the application computes sixteen
 4096-byte CRCs from the CPU-owned buffer. Indexed `C` lines report these CRCs.
+Immediately before its existing clean, the chain-read buffer is filled with
+`0xa5`. The accepted PIO chunks after the first have the same CRC as zero-filled
+memory; this nonzero fill makes an omitted descriptor payload write observable.
+The AFTER callback only invalidates. No driver zeroing follows the fill.
 The decoder compares every chunk with the accepted PIO run's first sixteen
 records, requiring the same CID, sector range, block count, byte count and CRC.
 Missing, duplicate, reordered or extra chunk lines refuse success. This plan
@@ -241,17 +245,25 @@ admission. Profile 3, measurement plans, failed sessions and uncertain sessions
 retain their existing recovery requirements. The default `power-removal`
 policy continues to require every original approval field.
 
-The chain-read report adds 528 bytes of linked text against the same-platform
-first-read application. It uses 64 bytes of CRC storage within existing BSS
+The chain-read path adds 784 bytes of linked text against the same-platform
+first-read application. The sentinel correction contributes 116 instruction
+bytes and 140 bytes of alignment padding. It uses 64 bytes of CRC storage within existing BSS
 alignment padding; total BSS and initialized data are unchanged. Descriptor and
 buffer allocations, per-poll MMIO, cache calls and card-command count are
-unchanged. One additional 64 KiB CRC pass runs after transfer timing.
+unchanged. One additional 64 KiB CRC pass runs after transfer timing. The
+chain-read clean duration includes the 64 KiB sentinel fill before publication.
 
 Focused evidence under `sol-sd-multidescriptor-1029/` covers the linked sixteen-
 descriptor read, exact clean/invalidate extent, drain and normal return, legacy
 first-read, strict policy binding and exact chunk-reference refusals. The host
 fixture's PIO data and authority are modeled. Physical chain-read operation,
 its timing and fault recovery remain unqualified.
+The stronger image and focused native cases are preserved under
+`sol-sd-warm-packet-1029/sentinel-image` and `sentinel-native`. The positive case
+observes the actual fill at clean and completes all sixteen descriptors. A
+negative case retains the sentinel in descriptor 7's range while allowing
+normal OWN/drain completion; strict comparison refuses its CRC. The earlier
+64 KiB freeze remains historical software evidence with the zero-CRC limitation.
 
 ## Admit a current warm-return instance
 
