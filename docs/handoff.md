@@ -71,7 +71,7 @@ streaming. Their focused native/host checks and independent reviews are recorded
 below. Successful earlier evidence was reused; affected cases cover the new
 behavior and final corrections.
 
-Four further changes have passed focused checks and independent Sol 6.1 reviews:
+Five further changes have passed focused checks and independent Sol 6.1 reviews:
 
 - The existing mimus USB launcher accepts the current DDR/warm-return admission
   records, freezes its inputs and retains ownership on unresolved failure.
@@ -92,6 +92,12 @@ Four further changes have passed focused checks and independent Sol 6.1 reviews:
   interrupt completions. Native, linked-client and affected host checks pass under
   `sol-npu-restart-host-1028/`. The image adds 32 immutable bytes; physical
   admission remains false. Fresh DDR alone does not establish restart authority.
+- An optional native Bluetooth A2DP sink decodes the pinned SBC implementation
+  into bounded PCM capture and delivers it through existing USB observations.
+  Eight composed native cases and three actual-output host capture cases pass
+  under `bluetooth-a2dp-20261028/`. The native image adds 23,948 text bytes and
+  20,480 BSS bytes, with unchanged initialized data. Physical source
+  interoperability, board throughput and speaker output remain unqualified.
 
 After the user's 2026-10-28 reconnect confirmation, the coordinator checked both
 ports and permissions, then ran one previously demonstrated standard DDR start
@@ -2388,7 +2394,7 @@ function returns the same result for every input. These copies remain:
 | --- | --- | --- |
 | Stage-2 entry | Supply the three entry prerequisites in `boot/a733/stage2/admission.c`: remote-writer exclusion, watchdog recovery after a cold boot, and a comparison of boot0's EL3 entry state with the FEL-launched reset state. Call the remote-writer check before the loader reads the card. Add a faster loader SD profile; the 400 kHz one-bit profile reads about 25 KB/s, so 14 MB of models take about ten minutes. | The coordinator runs its board tests. Exclusion needs a source that documents an OR100 reset or removes OR100 from the A733, and a crypto engine idle status or control-flow proof. Do not repeat the E902 search or infer safety by reversing startup writes. |
 | OS image services | Carry a CPU clock grant record in the OS session, by default one that grants nothing, and check it with `a733_cpu_clock_grant_load`. Start the CPU clock driver after the thermal policy, with an owner task that polls within the driver's 10 ms margin, and add a reduced-load response to THROTTLE. Report measured cycle timing with each recognition. Stage the radio and Bluetooth profiles and firmware in supervised preparation, in one span when both are built. Keep the session running after a headset failure while the radio is up. | Application owner. A grant that permits a physical change needs the user's approval for that change. |
-| Radio and Bluetooth | Alternate access points in the board profile; a native consumer of the A2DP sink. | Radio and Bluetooth owners. WPA3 association needs SAE external authentication and protected management frames; the SAE exchange itself is implemented and host-checked. |
+| Radio and Bluetooth | Alternate access points in the board profile; route the native A2DP consumer's decoded PCM to an audio output. | The native sink currently delivers bounded PCM through USB. Radio and Bluetooth owners retain physical qualification. WPA3 association needs SAE external authentication and protected management frames; the SAE exchange itself is implemented and host-checked. |
 | I2S receive | An eight-period cyclic receive ring for directions 3 and 5 in `apps/i2s`, and the launch condition in `apps/i2s/prepare.py` restated as a measured margin. | Audio owner. `I2S_PERIODS` also sizes the finite, duplex and USB transfers, so it must not simply be raised. |
 | USB host | Adoption of a new Type-C attachment after VBUS removal; Bulk-Only Transport reset and bulk clear-halt recovery; a board workload and wire format for audio capture. | USB host owner. Storage recovery needs changes to the pinned TinyUSB storage class and to bulk-endpoint recovery in the core. |
 | Display | Register domain-1 rows on the power-domain owner (`drivers/power/a733_power_domains.c`) in the DSI and deinterlace images, and give the owner a domain-9 entry for DSI; an application that streams frames through the replay ring; display use of the GPU's lent frame. | Display owner. DSI also needs PCK domains 0, 2, 3 and 8 for its IOMMU group, and domain 8 is USB2. |

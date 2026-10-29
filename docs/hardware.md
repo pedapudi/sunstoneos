@@ -1993,10 +1993,14 @@ to the stated scope:
   recording through HFP voice-recognition activation (`AT+BVRA`) in the
   Bluetooth image and the integrated OS image; host checks pass and physical
   button behavior remains unqualified. An [A2DP sink](bluetooth-a2dp.md)
-  for SBC streams is **implemented** in the AVDTP layer, with an optional SDP
-  record and a link security check on every step; no native application uses
-  it. Host checks pass. Physical controller capabilities, headset audio, wired
-  PCM routing and wider codecs remain outstanding.
+  for SBC streams is **implemented** through an optional native application.
+  It publishes only the sink SDP record, checks link security and decodes through
+  the existing pinned SBC implementation into bounded PCM for USB capture.
+  Eight composed native cases and three actual-output host capture cases pass
+  under `bluetooth-a2dp-20261028/`, with independent review. Added image cost is
+  23,948 text bytes and 20,480 BSS bytes; initialized data is unchanged.
+  Physical source interoperability, controller capabilities, headset audio,
+  speaker output, wired PCM routing and wider codecs remain outstanding.
   The [native Bluetooth application](bluetooth-native.md) connects firmware
   bootstrap, UART1, H4/HCI identification and copied USB output. Its headset mode
   reuses Zephyr secure pairing and RAM key policy, requires observed authentication
