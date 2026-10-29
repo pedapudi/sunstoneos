@@ -17,6 +17,10 @@ if(NOT board_tcp_verify EQUAL 0)
 endif()
 include("${SUNSTONE_SOURCE_ROOT}/cmake/radio-security.cmake")
 option(SUNSTONE_BOARD_SUPERVISED "Retained RAM-only board session with manual power-removal recovery" OFF)
+option(SUNSTONE_BOARD_USB_AUDIO "One copied16kHz mono UAC1 block in supervised workload14" OFF)
+if(SUNSTONE_BOARD_USB_AUDIO AND NOT SUNSTONE_BOARD_SUPERVISED)
+  message(FATAL_ERROR "USB audio capture requires the supervised board")
+endif()
 option(SUNSTONE_BOARD_USB2_IRQ "CPU0 interrupt completion for the supervised board USB2 owner" OFF)
 set(board_root "${SUNSTONE_SOURCE_ROOT}")
 set(board_build "${CMAKE_CURRENT_BINARY_DIR}/board-application")
@@ -50,7 +54,7 @@ else()
   list(APPEND board_sources "${board_build}/boot.c")
 endif()
 foreach(source IN ITEMS
-  apps/board/main.c apps/board/session.c apps/board/radio_profile.c apps/board/admission.c apps/board/client.c apps/board/usb0.c apps/board/identity.c
+  apps/board/main.c apps/board/session.c apps/board/radio_profile.c apps/board/admission.c apps/board/client.c apps/board/audio.c apps/board/usb0.c apps/board/identity.c
   drivers/usb/a733_typec.c drivers/usb/a733_typec_pd.c platform/a733/typec_native.c drivers/i2c/a733_twi.c drivers/i2c/a733_twi_native.c
   drivers/usb/a733_usb2_platform.c drivers/usb/a733_usb2_native.c drivers/usb/a733_xhci.c drivers/usb/a733_usb3_phy.c
   platform/a733/memory_uncached.c platform/a733/memory_reservations.c runtime/device_memory_pool.c
@@ -98,7 +102,13 @@ set(board_host_sources "${board_root}/drivers/usb/a733_xhci_tinyusb.c"
   "${board_host_tiny}/tusb.c" "${board_host_tiny}/host/usbh.c"
   "${board_host_tiny}/class/msc/msc_host.c"
   "${board_host_tiny}/class/hid/hid_host.c")
+if(SUNSTONE_BOARD_USB_AUDIO)
+  list(APPEND board_host_sources "${board_host_tiny}/class/audio/audio_host.c" "${board_host_tiny}/common/tusb_fifo.c")
+endif()
 add_library(a733-board-usb2-host OBJECT ${board_host_sources})
+if(SUNSTONE_BOARD_USB_AUDIO)
+ target_compile_definitions(a733-board-usb2-host PRIVATE SUNSTONE_USB_HOST_AUDIO=1)
+endif()
 target_include_directories(a733-board-usb2-host BEFORE PRIVATE "${board_host_tiny}")
 get_target_property(board_options sunstone-a733-storage-maintenance COMPILE_OPTIONS)
 set_property(TARGET a733-board-usb2-host PROPERTY COMPILE_OPTIONS "${board_options}")
@@ -161,6 +171,9 @@ if(SUNSTONE_BOARD_SUPERVISED)
 else()
   set(board_contract_magic 0x41533733424f4331ULL)
   set(board_result_magic 0x41533733424f5231ULL)
+endif()
+if(SUNSTONE_BOARD_USB_AUDIO)
+ target_compile_definitions(sunstone-a733-board PRIVATE "$<$<STREQUAL:$<TARGET_PROPERTY:NAME>,sunstone-a733-board>:SUNSTONE_BOARD_USB_AUDIO=1>")
 endif()
 target_compile_definitions(sunstone-a733-board PRIVATE "$<$<STREQUAL:$<TARGET_PROPERTY:NAME>,sunstone-a733-board>:SUNSTONE_BOARD_USB2_DUAL=1;SUNSTONE_BOARD_USB3=1>" SUNSTONE_SECURE_MONITOR=1
   SUNSTONE_A733_SMP_DIAGNOSTIC=1 SUNSTONE_A733_USB=1

@@ -1030,9 +1030,76 @@ without output. A replugged microphone must be started again.
 
 Images build the audio class only when they compile
 `class/audio/audio_host.c` from the pinned TinyUSB tree and define
-`SUNSTONE_USB_HOST_AUDIO=1`; the current board build does not, so its adapter
-refuses audio admission and returns no audio data. The board application has no
-workload, wire format or host decoder for copied audio yet.
+`SUNSTONE_USB_HOST_AUDIO=1`. The optional board profile below selects that class;
+the default board build continues to refuse audio admission.
+
+## Workload 14 copies one 16 kHz mono audio block
+
+Build `sunstone-a733-board` with `SUNSTONE_BOARD_SUPERVISED=ON` and
+`SUNSTONE_BOARD_USB_AUDIO=ON`. The option links the pinned UAC1 class and its
+FIFO implementation into the existing host namespace. Only the actual board
+target admits workload 14; derivative application targets retain their existing
+workload limits. The producer and frozen-bundle validator require an immutable,
+file-backed capability marker in the selected ELF. Images without the option
+refuse this workload. The 592-byte authenticated session keeps its geometry.
+Workload 14 selects direct USB2, no hub or radio, with the existing source,
+electrical, Type-C, clock, controller, endpoint and DMA ownership requirements.
+Its source admission remains at least 500 mA; a modeled record grants no physical
+authority.
+
+The existing owner starts UAC1 capture at 16,000 Hz, mono, signed 16-bit
+little-endian. It copies the first nonempty whole-frame block, between 1 and
+512 frames, into the existing combined-result backing. Device address,
+interface, endpoint and attachment generation must still match the native owner.
+A final live attachment check precedes publication. An unsupported format,
+failed start or read, controller failure, deadline expiry or attachment loss
+ends the attempt with retained resources. A started capture never restarts on a
+replugged device. The owner continues bounded polling after publication and ends
+on later attachment loss. The eight-TD ring, 128 KiB DMA parent and 4 KiB class
+FIFO are unchanged. No stop, drain or resource-release claim is added.
+
+USB0 response version 5 carries the existing 72-byte board header followed by
+1,088 bytes. The payload contains:
+
+| Offset | Field |
+| --- | --- |
+| 0–12 | Four little-endian 32-bit values: `AUD1` magic, version 1, extent 1,088, PCM byte count |
+| 16–24 | Little-endian 64-bit attachment generation and block sequence |
+| 32–48 | Little-endian 32-bit rate, frame count, dropped intervals, ring overruns and overwritten frames |
+| 52–57 | One-byte device address, interface, endpoint, speed, channels and sample bytes |
+| 58–63 | Zero reserved bytes |
+| 64–1087 | PCM followed by zero padding |
+
+Only full-speed and high-speed devices are admitted. The host validates the
+fixed format, whole-frame extent, endpoint identity and padding, then durably
+saves `audio.s16le` and `audio.json` through the existing board capture path.
+The continuity totals describe the stream before this block; zero totals do not
+qualify lossless physical capture. The result is a historical observation.
+A later failure revokes new snapshots. A copied response already queued to USB0
+may finish transmitting after that failure, as with the existing board results.
+
+The option adds no task, queue, heap allocation or result buffer. It reuses the
+1,088-byte combined backing and 1,160-byte USB response. On the linked image,
+the owner stack frame grows from 256 to 1,264 bytes, including a 1,072-byte block
+local; its task stack remains 16 KiB. Linked text grows by 17,532 bytes and BSS
+by 8,192 bytes for the class/FIFO composition and alignment. The modeled owner
+reaches publication with one start and two read calls in eight polls, including
+one empty read. Active audio uses the existing bounded poll burst without
+extending a deadline or sleep interval. No board timing was measured.
+
+Software evidence is under `~/.cache/sunstoneos/evidence/usb-audio-app-20261028/`.
+The sanitizer composition runs the actual pinned UAC1 class, adapter and xHCI
+core at 16 kHz mono and emits its first driver block plus the actual application
+wire image. The linked board check consumes that block through the actual
+session validator, owner, serializer and USB0 writer; scheduling, lower API
+results and provider observations are modeled. It covers normal capture,
+a hub, wrong class, start refusal, read failure, endpoint mismatch, removal before and
+after copying, deadline expiry and lost authority before publication. The
+actual producer builds a sealed software-only bundle. Host checks cover wire
+refusals, durable PCM and metadata, separate failures of those two writes and
+historical queued replies. The existing full-speed HID consumer still passes on
+the audio-enabled image. Physical microphone operation, electrical authority,
+DMA visibility, isochronous timing and interrupt delivery remain unqualified.
 
 ## Required wider modes and physical qualification
 
@@ -1056,8 +1123,7 @@ blocks remain unsupported. These are implementation limits.
 
 Further required work includes more device records and endpoints per device
 for additional leaves and classes such as CDC-ACM, simultaneous enumeration on
-the USB2 and SuperSpeed roots, a board workload and wire format for copied
-audio, wider xHCI endpoint modes, physical interrupt
+the USB2 and SuperSpeed roots, longer application audio capture, wider xHCI endpoint modes, physical interrupt
 qualification,
 USB2 device/OTG roles, wider SuperSpeed classes and topology, Type-C role/PD
 negotiation where electrically supported, safe shutdown/drain, adoption of a

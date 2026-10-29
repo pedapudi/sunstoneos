@@ -6,6 +6,7 @@
  * each slot through its route string to a modeled USB device tree, and posts
  * events to the event ring the core programmed. No board or USB device is used. */
 #include "a733_usb2_native.h"
+#include "../apps/board/audio.h"
 #include "tusb.h"
 #include <assert.h>
 #include <stdio.h>
@@ -547,6 +548,7 @@ static void replug_child(struct dev *h,unsigned port)
 }
 
 /* ---- Audio capture ---- */
+static const char *audio_block_output;
 static uint64_t frames_read,next_frame;static unsigned gaps,gap_frames,blocks;
 static int audio_collect(unsigned channels,unsigned ms)
 {
@@ -557,6 +559,11 @@ static int audio_collect(unsigned channels,unsigned ms)
         if(r<0)return 0;
         if(!r)continue;
         assert(b.channels==channels&&b.sample_bytes==2&&b.frames&&b.frames*channels*2<=sizeof(b.data)&&b.sequence==++blocks);
+        if(blocks==1&&audio_block_output){
+            uint8_t wire[BOARD_AUDIO_BYTES];assert(board_audio_encode(wire,&b));
+            FILE *file=fopen(audio_block_output,"wb");assert(file);
+            assert(fwrite(&b,1,sizeof(b),file)==sizeof(b)&&fwrite(wire,1,sizeof(wire),file)==sizeof(wire)&&!fclose(file));
+        }
         for(unsigned f=0;f<b.frames;++f){
             uint16_t v=(uint16_t)(b.data[f*channels*2]|b.data[f*channels*2+1]<<8);
             if(channels==2){uint16_t w=(uint16_t)(b.data[f*4+2]|b.data[f*4+3]<<8);assert(w==(uint16_t)(v^0x5555));}
@@ -576,7 +583,9 @@ static void audio_contexts(const struct dev *d,unsigned packet,unsigned interval
 
 int main(int argc,char **argv)
 {
-    mode=argc>1?argv[1]:"nested-msc";setup();
+    mode=argc>1?argv[1]:"nested-msc";
+    if(argc==3){assert(!strcmp(mode,"audio-16k"));audio_block_output=argv[2];}
+    setup();
     n.hub_tiers=(has("nested")&&!has("refused"))||has("third-tier")?2:1;
     n.bus_powered_hubs=has("bus-")&&!has("bus-refused");
     n.audio_capture=has("audio")&&!has("audio-disabled");

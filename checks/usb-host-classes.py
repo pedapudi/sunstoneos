@@ -24,14 +24,16 @@ def main():
     p.add_argument('--sources', type=Path, default=Path.home()/'.cache/sunstoneos/sources')
     p.add_argument('--port', type=Path, required=True, help='FreeRTOS AArch64 port directory for native compiles')
     p.add_argument('--cases', nargs='+', choices=CASES, default=CASES)
+    p.add_argument('--audio-block',type=Path,help='Save the first actual16kmono driver block and application wire image')
     a = p.parse_args()
+    if a.audio_block and 'audio-16k' not in a.cases:p.error('--audio-block requires audio-16k')
     root = Path(__file__).resolve().parents[1]
     out = a.output.resolve()
     out.mkdir(parents=True)
     compiler = Path(shutil.which('clang-21')).resolve()
     tiny = a.sources/'tinyusb-d668b0abb7219b9ce324fa88d46604bb9e869973/src'
     freertos = a.sources/'FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2/include'
-    units = [root/u for u in ['checks/usb-host-classes.c', 'drivers/usb/a733_usb2_platform.c', 'drivers/usb/a733_xhci.c',
+    units = [root/u for u in ['checks/usb-host-classes.c', 'apps/board/audio.c', 'drivers/usb/a733_usb2_platform.c', 'drivers/usb/a733_xhci.c',
         'drivers/usb/a733_xhci_tinyusb.c', 'drivers/usb/a733_usb3_phy.c', 'drivers/power/a733_pmic.c',
         'drivers/power/a733_rail_leases.c', 'drivers/clock/a733_clock_leases.c', 'drivers/pinctrl/a733_pins.c',
         'drivers/pinctrl/a733_pin_tables.c', 'drivers/gpu/a733_gpu_resources.c', 'runtime/device_memory_pool.c',
@@ -67,7 +69,7 @@ def main():
     run('host-build', flags+units+[out/'hub-native.c']+[out/'tinyusb-ss'/c for c in classes]+['-o', out/'classes'])
     env = {'UBSAN_OPTIONS': 'halt_on_error=1:print_stacktrace=1'}
     for case in a.cases:
-        r = subprocess.run([str(out/'classes'), case], capture_output=True, text=True, env=env)
+        r = subprocess.run([str(out/'classes'), case]+([str(a.audio_block.resolve())] if a.audio_block and case=='audio-16k' else []), capture_output=True, text=True, env=env)
         (out/(case+'.log')).write_text(r.stdout+r.stderr)
         steps[case] = {'exit': r.returncode, 'output': r.stdout.strip()}
         (out/'steps.json').write_text(json.dumps(steps, indent=2)+'\n')

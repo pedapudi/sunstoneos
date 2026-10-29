@@ -14,8 +14,10 @@ int a733_board_session_valid(const struct a733_board_session *s,uint64_t now)
        !present(s->qualification,32)||!present(s->wiring,32)||!present(s->memory,32)||
        !present(s->recovery,32)||memcmp(s->qualification,s->recovery,32)||
        s->reserved0||s->usb_topology>1||(s->usb_topology&&
-         s->workload!=6&&s->workload!=8&&s->workload!=10&&s->workload!=12)||s->workload==5||s->workload==7||s->workload==9||s->workload==11||s->workload>
-#if defined(SUNSTONE_BOARD_SUPERVISED) && defined(SUNSTONE_BOARD_USB3)
+         s->workload!=6&&s->workload!=8&&s->workload!=10&&s->workload!=12)||s->workload==5||s->workload==7||s->workload==9||s->workload==11||s->workload==13||s->workload>
+#if defined(SUNSTONE_BOARD_SUPERVISED) && defined(SUNSTONE_BOARD_USB_AUDIO)
+       14
+#elif defined(SUNSTONE_BOARD_SUPERVISED) && defined(SUNSTONE_BOARD_USB3)
        12
 #elif defined(SUNSTONE_BOARD_SUPERVISED) && defined(SUNSTONE_BOARD_USB2_DUAL)
        4

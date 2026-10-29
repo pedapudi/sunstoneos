@@ -50,19 +50,24 @@ def capture(exchange, session, profile, evidence, record, save, deadline,
         save()
         result = decoder.decode(frame, session, profile)
         sector = result.pop('sector')
+        audio = result.pop('audio_pcm',None)
         entry.update(result)
         require(now() < deadline, 'Board response arrived after capture deadline.')
         if result['usb_state'] == 2 or result['radio_state'] == 3:
             record['board_result'] = 'observed-failure'
             save()
             return result
-        host_done = result['usb_state'] == (1 if workload < 2 or workload in (4,6,8,10,12) else 3)
+        host_done = result['usb_state'] == (1 if workload < 2 or workload in (4,6,8,10,12,14) else 3)
         radio_done = result['radio_state'] == (2 if workload & 1 else 0)
         if host_done and radio_done:
             if sector is not None:
                 sector_path = evidence / 'sector.bin'
                 supervisor.durable_frame(sector_path, sector)
                 record['copied_sector'] = {'path': sector_path.name, 'sha256': digest(sector_path)}
+            if audio is not None:
+                pcm_path=evidence/'audio.s16le';supervisor.durable_frame(pcm_path,audio)
+                metadata_path=evidence/'audio.json';supervisor.durable_frame(metadata_path,(json.dumps(result,sort_keys=True)+'\n').encode())
+                record['copied_audio']={'path':pcm_path.name,'sha256':digest(pcm_path),'metadata':metadata_path.name,'metadata_sha256':digest(metadata_path)}
             if result.get('kind') in ('hid-input','storage-and-hid'):
                 hid_path=evidence/'hid-input.json'
                 supervisor.durable_frame(hid_path,(json.dumps(result,sort_keys=True)+'\n').encode())

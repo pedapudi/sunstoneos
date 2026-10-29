@@ -11,15 +11,15 @@ def decode(frame, session, profile=None):
     if len(frame)<72:
         raise ValueError('short frame')
     magic,version,usb_state,usb_bytes,radio_state,radio_bytes,epoch,generation=struct.unpack_from('<IIIIIIQQ',frame)
-    if magic!=0x52414f42 or version not in (1,2,3,4) or usb_state>3 or radio_state>3:
+    if magic!=0x52414f42 or version not in (1,2,3,4,5) or usb_state>3 or radio_state>3:
         raise ValueError('invalid frame header')
     if (epoch,generation)!=struct.unpack_from('<QQ',session,24):
         raise ValueError('session identity mismatch')
-    if usb_bytes!=((544 if version==4 else 1088 if version==3 else 512) if usb_state==1 else 0) or len(frame)!=72+usb_bytes:
+    if usb_bytes!=((544 if version==4 else 1088 if version in (3,5) else 512) if usb_state==1 else 0) or len(frame)!=72+usb_bytes:
         raise ValueError('invalid copied sector extent')
     digest=session[368:400]
     workload=struct.unpack_from('<I',session,400)[0]
-    if workload in (4,6,8,10,12) and struct.unpack_from('<Q',session)[0]!=0x4153373342535332:
+    if workload in (4,6,8,10,12,14) and struct.unpack_from('<Q',session)[0]!=0x4153373342535332:
         raise ValueError('Combined workload requires supervised session')
     if frame[40:72]!=digest:
         raise ValueError('radio profile identity mismatch')
@@ -28,7 +28,7 @@ def decode(frame, session, profile=None):
             raise ValueError('disabled host is not admitted')
     elif workload in (2,3):
         raise ValueError('disabled host reported activity')
-    if workload in (0,2,4,6,8,10,12):
+    if workload in (0,2,4,6,8,10,12,14):
         if profile is not None or radio_state or radio_bytes:
             raise ValueError('unexpected radio result')
     elif workload in (1,3):
@@ -58,6 +58,16 @@ def decode(frame, session, profile=None):
     if workload==4 and usb_state==1 and version!=3:raise ValueError('Combined workload requires combined result')
     if workload in (8,10) and usb_state==1 and version!=2:raise ValueError('SS keyboard workload requires copied HID result')
     if workload==6 and usb_state==1 and version!=4:raise ValueError('SS-required workload needs SS result')
+    if workload==14 and usb_state==1 and version!=5:raise ValueError('USB audio workload requires copied audio result')
+    if version==5:
+        if workload!=14 or usb_state!=1:raise ValueError('USB audio result is not admitted')
+        raw=frame[72:]
+        if struct.unpack_from('<3I',raw)!=(0x31445541,1,1088):raise ValueError('Invalid copied audio header')
+        size=struct.unpack_from('<I',raw,12)[0];attachment,sequence=struct.unpack_from('<2Q',raw,16)
+        rate,frames,dropped,overruns,overwritten=struct.unpack_from('<5I',raw,32)
+        address,interface,endpoint,speed,channels,sample_bytes=raw[52:58]
+        if not attachment or not sequence or rate!=16000 or not 1<=frames<=512 or size!=frames*2 or not 1<=address<=127 or interface>=16 or endpoint&~0x8f or not endpoint&128 or not endpoint&15 or speed not in (1,3) or channels!=1 or sample_bytes!=2 or any(raw[58:64]) or any(raw[64+size:]):raise ValueError('Invalid copied audio format/identity/extent')
+        result.update(kind='usb-audio-capture',sector=None,audio_pcm=raw[64:64+size],attachment_generation=attachment,sequence=sequence,rate=rate,frames=frames,channels=channels,sample_bytes=sample_bytes,device_address=address,device_interface=interface,device_endpoint=endpoint,device_speed='full' if speed==1 else 'high',dropped_intervals=dropped,ring_overruns=overruns,overwritten_frames=overwritten,hardware_retained=True,drain_established=False)
     if version==4:
         if workload!=6 or usb_state!=1:raise ValueError('SS result is not admitted')
         raw=frame[72:]

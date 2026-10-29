@@ -1,4 +1,8 @@
 #include "application.h"
+#include "audio.h"
+#ifdef SUNSTONE_BOARD_USB_AUDIO
+const uint64_t board_usb_audio_capability[4]={UINT64_C(0x4153373341554431),1,14,16000};
+#endif
 #ifdef SUNSTONE_BOARD_USB2_IRQ
 #include "host_irq.h"
 #endif
@@ -82,6 +86,10 @@ void board_host_task(void *unused)
     unsigned burst=0,idle=0;
 #endif
     board.host.dual_leaf=board.session.workload==4;
+    board.host.audio_capture=board.session.workload==14;
+#ifdef SUNSTONE_BOARD_USB_AUDIO
+    __asm__ volatile("" :: "r"(board_usb_audio_capability) : "memory");
+#endif
     for(;;){
         if(!board_live(NULL))break;
 #ifdef SUNSTONE_BOARD_USB2_IRQ
@@ -100,6 +108,35 @@ void board_host_task(void *unused)
            ((board.session.workload==8&&(kind!=A733_USB2_DEVICE_HID||board.host.core.speed!=4||board.host.hid.protocol!=1))||
             ((board.session.workload==6||board.session.workload==12)&&kind!=A733_USB2_DEVICE_MSC)||
             (board.session.workload==10&&(kind!=A733_USB2_DEVICE_HID||board.host.core.speed>3||board.host.hid.protocol!=1))))break;
+
+#ifdef SUNSTONE_BOARD_USB_AUDIO
+        if(board.session.workload==14){
+            /* A started capture never resumes on another attachment. */
+            if(issued&&(r!=A733_USB2_READY||!board.host.audio_mounted||
+               (issued==2&&!board.host.audio.started)))break;
+            if(r==A733_USB2_READY){
+                if(kind!=A733_USB2_DEVICE_AUDIO)break;
+                if(!issued){
+                    const struct a733_xhci_device *root=&board.host.core.devices[0];
+                    if(root->address!=board.host.audio.address||root->parent||root->route||root->tier||root->hub)break;
+                    if(!a733_usb2_audio_start(&board.host,16000,1,board.host.platform.config.lifetime_deadline))break;
+                    issued=1;
+                }
+                if(issued==1&&board.host.audio.started){
+                    struct a733_usb2_audio_block block;int done=a733_usb2_audio_read(&board.host,&block);
+                    if(done<0)break;
+                    if(done==1){
+                        const struct a733_usb2_audio *a=&board.host.audio;
+                        if(block.generation!=board.host.core.generation||block.address!=a->address||
+                           block.interface!=a->interface||block.endpoint!=a->endpoint||
+                           !board_audio_encode(board.dual_result,&block)||!attached(&board.host))break;
+                        atomic_store_explicit(&board.result,1,memory_order_release);issued=2;
+                    }
+                }
+            }
+            goto host_wait;
+        }
+#endif
         /* Removing the single device ends its request without output. Start
          * again when a later attachment mounts. The two-leaf workload still
          * ends, because the other leaf's request may remain outstanding. */
@@ -144,6 +181,10 @@ void board_host_task(void *unused)
                 else if(!a733_usb2_hid_receive(&board.host,board.host.platform.config.lifetime_deadline))break;
             }
         }
+
+#ifdef SUNSTONE_BOARD_USB_AUDIO
+host_wait:
+#endif
         /* The published sector or four-report HID envelope is immutable.
          * Continue observing attachment, controller faults and lifetime. */
 #ifdef SUNSTONE_BOARD_USB2_IRQ
@@ -157,7 +198,7 @@ void board_host_task(void *unused)
          * input or a PMIC supply result, costs one poll per tick. */
         const struct host_progress after=host_progress(issued,reports);
         idle=memcmp(&before,&after,sizeof(after)) ? 0 : idle<4 ? idle+1 : 4;
-        if((r==A733_USB2_PENDING||issued==1)&&idle<4&&++burst<32)continue;
+        if((r==A733_USB2_PENDING||issued==1||board.session.workload==14)&&idle<4&&++burst<32)continue;
         burst=0;vTaskDelay(1);
 #endif
     }

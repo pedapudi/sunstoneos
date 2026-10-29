@@ -69,6 +69,16 @@ def usb3_topology_image_check(raw):
             'Native USB topology capability differs.')
 
 
+def usb_audio_image_check(raw):
+    elf=ELFFile(io.BytesIO(raw));table=elf.get_section_by_name('.symtab')
+    matches=[v for v in table.iter_symbols() if v.name=='board_usb_audio_capability' and v['st_info']['type']=='STT_OBJECT'] if table else []
+    require(len(matches)==1 and matches[0]['st_size']==32,'Native USB audio capability is absent.')
+    address=int(matches[0]['st_value']);parts=[p for p in elf.iter_segments() if p['p_type']=='PT_LOAD' and
+        not p['p_flags']&2 and p['p_vaddr']<=address and address+32<=p['p_vaddr']+p['p_filesz']]
+    require(len(parts)==1,'USB audio capability must be immutable and file backed.')
+    offset=address-parts[0]['p_vaddr']
+    require(struct.unpack('<4Q',parts[0].data()[offset:offset+32])==(0x4153373341554431,1,14,16000),'Native USB audio capability differs.')
+
 def single_core_platform(value,prepared,identity,port):
     require(value.get('schema')=='a733-board-single-core-platform-v1' and value.get('identity')==identity and
             value.get('port')==port and value.get('image_sha256')==prepared['image_sha256'],
@@ -95,7 +105,7 @@ def session_check(raw,usb_reference_modes=(1,2)):
     require(len(raw)==592 and struct.unpack_from('<3Q',raw)==(SESSION_MAGIC,2,592),'Distinct supervised session required.')
     require(raw[112:144]==bytes(32) and raw[144:184]==bytes(40),'Supervised session must contain no timer/deadline claims.')
     require(struct.unpack_from('<I',raw,532)[0] in usb_reference_modes,'Unsupported USB0 reference/takeover mode.')
-    workload=struct.unpack_from('<I',raw,400)[0];require(workload in (0,1,2,3,4,6,8,10,12) and (workload not in (4,6,8,10,12) or struct.unpack_from('<Q',raw)[0]==0x4153373342535332),'Unsupported fixed workload.')
+    workload=struct.unpack_from('<I',raw,400)[0];require(workload in (0,1,2,3,4,6,8,10,12,14) and (workload not in (4,6,8,10,12,14) or struct.unpack_from('<Q',raw)[0]==0x4153373342535332),'Unsupported fixed workload.')
     topology=struct.unpack_from('<I',raw,404)[0]
     require(topology in (0,1) and (not topology or workload in (6,8,10,12)),'Unsupported fixed USB topology.')
     # Common native invariants (apps/board/admission.c), including templates
@@ -103,7 +113,7 @@ def session_check(raw,usb_reference_modes=(1,2)):
     # these wire checks do not establish the referenced physical conditions.
     require(all(any(raw[o:o+32]) for o in (80,216,248,280)) and raw[80:112]==raw[280:312] and
             all(struct.unpack_from('<4Q',raw,184)),'Missing or conflicting board authority.')
-    host_workload=workload<2 or workload in (4,6,8,10,12)
+    host_workload=workload<2 or workload in (4,6,8,10,12,14)
     owners=struct.unpack_from('<4Q',raw,456)[:4 if host_workload else 2]
     require(all(owners) and len(set(owners))==len(owners) and not any(raw[582:588]) and
             struct.unpack_from('<2I',raw,512)==(3300000,3300000) and all(struct.unpack_from('<3I',raw,500)),
@@ -272,6 +282,9 @@ def prepare(image,manifest_path,admission_path,session_template,output,clang,lld
     require(workload!=4 or (execution_profile=='board-supervised-v2' and manifest.get('usb2_combined') is True),'Combined USB image capability required.')
     require(workload!=6 or (execution_profile=='board-supervised-v2' and manifest.get('usb3_gen1') is True),'SuperSpeed image capability required.')
     require(workload!=8 or (execution_profile=='board-supervised-v2' and manifest.get('usb3_gen1') is True and manifest.get('usb3_hid') is True),'SuperSpeed keyboard image capability required.')
+    if workload==14:
+        require(execution_profile=='board-supervised-v2','USB audio requires the supervised board image.')
+        usb_audio_image_check(image_data)
     if workload==8:usb3_hid_image_check(image_data)
     if workload in (10,12):
         require(execution_profile=='board-supervised-v2' and manifest.get('usb3_gen1') is True,'Companion-root image profile required.')
@@ -342,6 +355,9 @@ def validate_bundle(bundle):
     require(not p['workload']&1 or admitted.get('radio_ddr') is not None,'Radio DDR reservation missing.')
     require(p['workload']!=8 or (execution_profile=='board-supervised-v2' and manifest.get('usb3_gen1') is True and manifest.get('usb3_hid') is True),'SuperSpeed keyboard image capability required.')
     raw=(bundle/'session.bin').read_bytes();require(session_check(raw,usb_reference_modes=(2,) if execution_profile=='board-single-core-supervised-v1' else (1,))==p['workload'],'Workload changed.')
+    if p['workload']==14:
+        require(execution_profile=='board-supervised-v2','USB audio requires the supervised board image.')
+        usb_audio_image_check((bundle/'image.elf').read_bytes())
     if p['workload']==8:usb3_hid_image_check((bundle/'image.elf').read_bytes())
     if p['workload'] in (10,12):
         require(execution_profile=='board-supervised-v2' and manifest.get('usb3_gen1') is True,'Companion-root image profile required.')

@@ -53,9 +53,10 @@
 #endif
 /* Existing0/1 include the USB2 source path. Supervised2/3 omit that path;
  * odd selections include radio. Supervised4 requires both USB leaf classes
- * without radio and is admitted only by the board target capability. */
+ * without radio and is admitted only by the board target capability.
+ * Supervised14 captures one16kHz monoS16LE UAC1 block, directUSB2 only. */
 static inline int a733_board_radio_workload(unsigned workload){return !!(workload&1);}
-static inline int a733_board_host_workload(unsigned workload){return workload<2||workload==4||workload==6||workload==8||workload==10||workload==12;}
+static inline int a733_board_host_workload(unsigned workload){return workload<2||workload==4||workload==6||workload==8||workload==10||workload==12||workload==14;}
 /* Immutable little-endian image-owned input. No pointer or storage grant is
  * accepted. Evidence hashes identify externally qualified, reviewed facts;
  * producing this record does not itself establish those facts. */
