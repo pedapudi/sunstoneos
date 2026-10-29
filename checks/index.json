@@ -3343,6 +3343,7 @@
  "device-memory-capacity.py": {
   "cache_areas": [],
   "docs": [
+   "apps/gpu-cache-permission/README.md",
    "docs/cpu-coherence.md",
    "docs/designs/cpu-leftovers-measurements.md",
    "docs/designs/cpu-leftovers.md",
@@ -7724,6 +7725,93 @@
   "summary": "Exercise actual compiled OS CPU register access policy and mux completion barrier.",
   "usb": false
  },
+ "os-cpu-return-clock-review.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--manifest",
+   "--helper",
+   "--out"
+  ],
+  "summary": "Exercise production under-test parser with explicitly modeled authority.",
+  "usb": false
+ },
+ "os-cpu-return-entry-owner.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "elf",
+   "--out"
+  ],
+  "summary": "Execute the actual patched owner ordering and THS readiness accessor.",
+  "usb": false
+ },
+ "os-cpu-return-entry.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "elf",
+   "--out"
+  ],
+  "summary": "Execute the linked initial-state guard; device reads and THS readiness are modeled.",
+  "usb": false
+ },
+ "os-cpu-return-host.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--bundle",
+   "--native-report",
+   "--out"
+  ],
+  "summary": "Exercise actual CPU-return preparation bindings and capture with modeled FEL.",
+  "usb": false
+ },
+ "os-cpu-return-rails.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "elf",
+   "--out"
+  ],
+  "summary": "Execute the linked rail variant's admission up to its first rail acquisition.",
+  "usb": false
+ },
+ "os-cpu-return-services.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "elf",
+   "--out"
+  ],
+  "summary": "Execute linked close coordination with modeled RTOS and completed CPU DVFS.",
+  "usb": false
+ },
+ "os-cpu-return.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "elf",
+   "--out"
+  ],
+  "summary": "Execute the linked OS success terminal with modeled service completion and GIC.",
+  "usb": false
+ },
  "os-gpu-cpu-start.py": {
   "cache_areas": [],
   "docs": [],
@@ -8095,7 +8183,9 @@
  },
  "pcie-irq-route.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/pcie-nvme.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [
@@ -9536,7 +9626,7 @@
    "--output"
   ],
   "summary": "Bind the new return decoder to an actual linked producer log, without USB.",
-  "usb": false
+  "usb": true
  },
  "sd-return-native.py": {
   "cache_areas": [],

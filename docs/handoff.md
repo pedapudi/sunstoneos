@@ -19,7 +19,9 @@ history.
 - **Subsequent returns on port 3-1:** the provider readiness checkpoint and
   first GPU exact-sum caller both passed under the same evidence root, in
   `gpu-provider-ready/` and `gpu-exact-sum/`. Both are required warm-return
-  links after its DDR start. The last recorded ROM node is `003/127`.
+  links after its DDR start. The CPU-only GPU cache-permission probe also
+  passed, including normal return to `003/010`; its `gpu-cache-permission/`
+  session is the third required warm-return link.
   Cache-off and SRAM surveys passed for their recorded instances; new runs
   require current entry records. Port 3-3 subsequently passed
   `sd-dma-first/`: one 4 KiB DMA read, exact PIO reference parity, shutdown,
@@ -27,16 +29,19 @@ history.
   strict decoder and admitted input. A later DCDC2-only snapshot also returned
   normally, at `003/004`, before the failed NPU attempt below. Another SD
   operation requires a new CMD0/provider admission, not the consumed grant.
-- **Port 3-3 is retained:** the NPU same-instance restart attempt did not
+- **Port 3-3 was recovered:** the NPU same-instance restart attempt did not
   produce a new ROM instance within 30 seconds. No native result was retrieved;
   the launch acknowledgment does not establish how far execution progressed.
-  Stop all communication to this board. The runner session `20293` holds its
-  port lock and queue claim
+  The user subsequently removed USB power and reconnected this board. The
+  coordinator verified a distinct instance at `003/009`, recorded the recovery,
+  stopped runner session `20293` and closed the failed queue claim
   `cf5753e4aa2030952c0c41465a338a8555c90458a9cac5fccd7d7077271a329a`.
   Evidence is `sol-resume-20261028/port-3-3/npu-normal-restart/`; the frozen
-  preparation is `sol-npu-board-prep-1028/ready-1/`. Do not retry, release the
-  claim or terminate the runner without the prescribed recovery. Continue
-  offline diagnosis and independent port 3-1 work; no reconnect is pending.
+  preparation is `sol-npu-board-prep-1028/ready-1/`. A fresh standard DDR start
+  passed under `ddr-after-npu-recovery/`. Only that record admits this new
+  lifetime; earlier SD, PMIC and restart-entry facts are historical. No cause
+  was established by offline forensics, and the restart will not be repeated
+  unchanged. A narrower entry checkpoint is in development.
 - **RAM ownership:** the legacy GPU and SD returning diagnostics own a private
   18 MiB RAM interval. They restore their documented architecture/peripheral
   state, but do not back up or restore that interval's previous contents.
@@ -75,6 +80,10 @@ history.
     Context cleanup, acknowledged firmware idle/OFF, isolation, provider park
     and normal ROM return passed without manual reconnection on 2026-10-28.
     This does not establish full GPU recognition or failure recovery.
+  - A CPU-only probe completed the production cache helper over a read-only
+    4 MiB mapping and preserved initialized bytes. Normal return passed.
+    The mapping uses production permissions at a diagnostic address; actual
+    GPU DMA, production-address initialization and recognition remain unqualified.
 - **NPU:**
   - Startup in 4.0 ms, with completion signalled by interrupt.
   - ShuffleNetV2 in 2.91 ms at 852 MHz, the vendor top point; the per-job
@@ -2175,7 +2184,7 @@ functions and modes beyond these bounded applications.
 | [USB HID/CPU IRQ](usb2-host.md) | LS/FS/HS HID copies four reports without desktop events. Supervised board option routes CPU0 INTID187 to the existing owner; other profiles poll. IRQ delivery, DMA/drain, power and attachment reuse remain unqualified. | `usb-host-interrupt-20261018/root-integration.json`; `usb-host-cpu-irq-20261019/root-integration.json` |
 | [Gen1/companion leaf](usb2-host.md#one-gen1-hub-or-the-usb2-companion-root-serves-one-leaf) | One selected root, direct or one self-powered hub/leaf: workloads 6/8 Gen1 MSC/boot keyboard, 10/12 USB2 companion keyboard/HS MSC. Typed topology binds the unchanged 592-byte session. Actual stack/copied-client/host plus six identity/layout and two route cases model hardware/IRQ. Native linked, not physically executed. Root/topology/class, ≥900 mA and hub-power admission remain required; no physical bundle. Simultaneous roots and wider USB remain required. Current USB2 source also admits two hub tiers, bus-powered hubs and USB Audio Class 1 capture, which no workload selects. Mimus remains USB2. | `usb-ss-hub-20261020/root/integration.json`, `handoff.md`; earlier direct HID: `usb-ss-hid-20261020/` |
 | [USB hub/dual leaf](usb2-host.md) | Workload 4: one self-powered HS USB2 hub, one LS/FS/HS HID plus one HS MSC. Joint immutable output requires both results and fresh attachment. Existing IRQ187 route retained; derived profiles keep workloads 0–3. Hub/TT, power, DMA and drain remain unqualified. | `usb-host-dual-leaf-20261019/root-integration.json`; earlier single leaf: `usb-host-hub-20261019/` |
-| [USB MSC/Gen1 BOT](usb2-host.md) | GET_MAX_LUN endpoint reset/dequeue precedes LUN0 fallback and copied READ10; eleven HS cases model hardware, SS recovery is source-reviewed only. Other stalls/uncertainty retain. Workload 6 Gen1 read-only LBA0 refuses USB2 fallback and requires authenticated ≥900 mA plus image-bound COMB0/rail/clock/route/source-switch admission; none exists. The TinyUSB adapter now tears down a disconnected hub child, or a device behind an adapter, through the xHCI detach path (not frozen); a Type-C detach or bulk stall still ends the session. Wider modes and drain remain required. Frozen recovery image retains the older clock policy. | `usb-msc-stall-20261020/root-integration.json`; Gen1: `usb-host-superspeed-20261019/` |
+| [USB MSC/Gen1 BOT](usb2-host.md) | GET_MAX_LUN reset/dequeue precedes LUN0 fallback. A mounted READ10 can recover one matched bulk stall with class reset, IN clear halt and OUT clear halt under the existing deadline and generation. Sixteen callback cases and native builds pass; production files match the frozen evidence. Uncertain recovery retains resources. Gen1 workload 6 requires image-bound power/clock/route/source admission and refuses USB2 fallback. New Type-C attachment adoption and physical recovery remain unqualified. | `usb-bot-recovery-20261024/`; `sol-usb-bot-presence-20261028/presence-audit.json` |
 | [LRADC0 raw observations](adc-application.md#lradc0-raw-observations-require-separate-electrical-authority) | ADC version 2 copies two fresh channel-0 raw codes, then configured disable with permanent retention. Final `7f390582…` passes composed/driver/host checks with analog/RTOS/USB effects modeled; raw 0/63 establish no measured value or sample rate. Physical use is blocked by nominal 1.8 V R23 pull-up versus documented 0–1.35 V range, without overrange authority. No key mapping or voltage conversion. | `lradc-20261020/root-integration.json`, `root-frozen/manifest.json`; original and corrected fixtures retain their scopes |
 | [Thermal](thermal-application.md), [ADC](adc-application.md), [finite USB](usb.md) | Finite applications and return adapters integrated. Thermal/ADC retain configuration and leases; ADC needs fitted-divider electrical admission. The fixed [thermal policy](thermal.md#a-fixed-board-policy-throttles-and-stops-work) ends a thermal session at the critical level. The CPU clock driver lowers raised clusters at the throttle level, but no image runs it, so no image reduces load there. Physical operations/return remain unqualified. | `thermal-adc-returning-source-20261018/integration.json`; `usb-returning-20261018/integration.json` |
 | [RTC source/alarm](rtc-application.md) | Separate source initialization and external-source alarm paths. Source admission precedes alarm use; success requires verified Secure interrupt-state restoration, not only a completion message. | `rtc-source-returning-20261018/integration.json`; `rtc-alarm-returning-20261018/integration.json` |
@@ -2455,10 +2464,10 @@ function returns the same result for every input. These copies remain:
 | OS image services | Carry a CPU clock grant record in the OS session, by default one that grants nothing, and check it with `a733_cpu_clock_grant_load`. Start the CPU clock driver after the thermal policy, with an owner task that polls within the driver's 10 ms margin, and add a reduced-load response to THROTTLE. Report measured cycle timing with each recognition. Stage the radio and Bluetooth profiles and firmware in supervised preparation, in one span when both are built. Keep the session running after a headset failure while the radio is up. | Application owner. A grant that permits a physical change needs the user's approval for that change. |
 | Radio and Bluetooth | Alternate access points in the board profile; route the native A2DP consumer's decoded PCM to an audio output. | The native sink currently delivers bounded PCM through USB. Radio and Bluetooth owners retain physical qualification. WPA3 association needs SAE external authentication and protected management frames; the SAE exchange itself is implemented and host-checked. |
 | I2S receive | An eight-period cyclic receive ring for directions 3 and 5 in `apps/i2s`, and the launch condition in `apps/i2s/prepare.py` restated as a measured margin. | Audio owner. `I2S_PERIODS` also sizes the finite, duplex and USB transfers, so it must not simply be raised. |
-| USB host | Adoption of a new Type-C attachment after VBUS removal; Bulk-Only Transport reset and bulk clear-halt recovery; a board workload and wire format for audio capture. | USB host owner. Storage recovery needs changes to the pinned TinyUSB storage class and to bulk-endpoint recovery in the core. |
+| USB host | Adoption of a new Type-C attachment after VBUS removal; a board workload and copied-audio format for USB audio capture; physical storage-recovery qualification. | USB host owner. One bounded mounted READ10 recovery already implements class reset and both bulk clear-halt operations. |
 | Display | Register domain-1 rows on the power-domain owner (`drivers/power/a733_power_domains.c`) in the DSI and deinterlace images, and give the owner a domain-9 entry for DSI; an application that streams frames through the replay ring; display use of the GPU's lent frame. | Display owner. DSI also needs PCK domains 0, 2, 3 and 8 for its IOMMU group, and domain 8 is USB2. |
-| Camera | A CAM2 binding: a port field in the camera boot record and `apps/camera/prepare.py`, the PK10–PK19 data pins and MCLK2, and a sourced deskew value for receiver port 1. Continuous capture in the native application. | Camera owner. The coordinator's frame-enable interval fix is host-checked; native ring ownership, synchronization and stop/drain still need integration. |
-| GPU | Compute input and output beyond one 4 KiB page, arbitrary trusted shaders, blend factors, clipping, mipmaps and multisampling. | GPU owner. Multi-page compute changes the package wire format, so it is a package of its own. |
+| Camera | Physical module/electrical/deskew qualification and packet drain; sustained multi-frame application delivery beyond the existing single immutable frame. | Camera owner. CAM2 binding and the finite continuous-capture application are implemented; reuse `camera-cam2-1026/final-snapshot/` and `resume-camera-native-1025/` evidence. |
+| GPU | Compute input/output beyond one 4 KiB page; graphics shader selection, general blending, clipping, mipmaps and multisampling. | GPU owner. Arbitrary trusted compute programs already have a native application. Broader graphics uses the separate profile-5 design. |
 | NPU | Complete the FIFO-direct USB path for the [existing runtime board image](designs/npu-board.md), resolve the recorded check failures, then obtain physical inference evidence. | NPU owner. The image already shares the board provider resources and uses extended memory; do not recreate it. Any mimus offload needs an accuracy evaluation. |
 | Codecs, G2D and DI301 | Supervised capture of H.264 sequences longer than two pictures in `tools/check-a733-h264-encode-supervised.py`; H.264 frame-level rate control; supervised capture of JPEG sequences; repeated JPEG encode; an extended uncached pool for full-HD JPEG; G2D rotation once `g2d_rotate.c` is pinned, and YUV conversion; repeated DI301 jobs in one session, with gain feedback and film detection. | Video and graphics owners. Rate control needs a rate-controlled reference run of the pinned library to check against. Long-term B references stay refused until hardware evidence shows how the engine treats them. |
 | PCIe, storage, serial and timing | Interrupt completion in the NVMe image, which needs GIC routing for INTID 184 or 185; reads of more than one block; a consumer of the FAT filesystem, with its FatFs pin added to `sources.lock.json`; an S_PWM clock-registry scope; GPADC window admission in the native adapter once an application selects windows; an image that runs the SNTP client with the RTC service; the new crypto modes in the crypto application's request format. | Each component owner. |

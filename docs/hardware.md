@@ -33,9 +33,10 @@ and board sessions for these results from 2026-10-25 and 2026-10-28:
 | microSD | 256 high-speed PIO reads and one 4 KiB DMA read at 50 MHz, four-bit, 3.3 V; DMA data matched PIO reference and restored normal return passed | Larger/multi-descriptor DMA, sustained throughput, failure recovery, 1.8 V signalling and remaining storage/update paths |
 | DRAM training | Captures across ten lifetimes establish the inputs for the training-restore design | Executing the restore and qualifying memory after it |
 
-Port 3-1 retains an initialized session. Port 3-3 is retained after its NPU
-restart attempt failed to return; no native result was recovered. Physical
-recovery by power removal is unavailable until further notice. New software results remain separate from
+Both ports retain initialized sessions. After the NPU restart failed to return,
+the user power-cycled port 3-3 and its fresh standard DDR start passed. The
+failed attempt produced no native result. Further physical recovery is
+unavailable until confirmed by the user. New software results remain separate from
 physical qualification; the coordinator admits each proposed board test against
 its return and failure paths.
 
@@ -47,6 +48,17 @@ its return and failure paths.
   admission, while other profiles retain their existing limits. Focused service
   scheduling, failure retention, image admission and layout checks pass; see
   [mimus SMP](mimus-smp.md). Two workers remain the default.
+- The optional [recorded CPU return profile](../apps/os/NORMAL-RETURN.md)
+  stops all eight workers, parks its thermal and PMIC owners and returns to ROM
+  on success. A native guard checks the actual target before its first clock
+  transition. Historical mechanism evidence and current target qualification
+  are separate. Physical recognition, return and subsequent rail restoration
+  remain unqualified; the claim spans both the return and rail helper.
+- A CPU-only [cache-permission probe](../apps/gpu-cache-permission/README.md)
+  passed on port 3-1 with production read-only output attributes. The unchanged
+  EL1 helper maintained all 4 MiB and preserved initialized bytes before normal
+  ROM return. Production addresses, GPU DMA coherence and recognition remain
+  separate physical gaps.
 - [Performance modes](performance-modes.md) integrate CPU clock and voltage
   control, acknowledged GPU rate/voltage changes, stopped-NPU retuning and
   thermal overrides. Combined eight-worker CPU/GPU/NPU builds and focused
@@ -76,7 +88,8 @@ objects; focused software checks pass. The returning restart diagnostic now has
 host preparation and capture, requiring exact lifetime/owner evidence, ordered
 close/reopen stages and four interrupt completions. It retains its unqualified
 physical status. Physical same-instance restart and domain power-off remain
-unqualified; the first restart attempt did not return on 2026-10-28. GPU service failure now completes an accepted performance request
+unqualified; the first restart attempt did not return on 2026-10-28. GPU service
+failure now completes an accepted performance request
 once while preserving the original error and retained device resources. Four
 focused FreeRTOS cases and the combined eight-worker build pass; physical failure
 recovery remains unqualified. The native GPU backend also now publishes the
@@ -3129,8 +3142,12 @@ to the stated scope:
   child's disconnect, unmounts the device, and a new device may then mount
   within the startup budget; a single-device client repeats a request it has
   not yet published. Unplugging a device directly from the Type-C connector,
-  or a bulk stall, still ends the session, because adoption of a new Type-C
-  attachment and Bulk-Only Transport reset recovery are not implemented.
+  still ends the session because adoption of a new Type-C attachment is not
+  implemented. A mounted READ10 can recover one matched bulk stall through
+  class reset, IN clear halt and OUT clear halt, with unchanged generation and
+  deadline. Writes are excluded, and uncertain recovery retains resources.
+  Production files match the accepted `usb-bot-recovery-20261024/` evidence;
+  physical recovery remains unqualified.
   Three admission options are **implemented** for a session: a second tier of
   high-speed hubs, bus-powered hubs within the USB 2.0 current budget, and
   capture from one USB Audio Class 1 microphone over one isochronous IN stream

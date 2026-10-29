@@ -219,8 +219,8 @@ $PY checks/gpu-mimus-time-model.py --calls OUT/layers/calls.txt \
   no job returned ([gpu-recognition.md](designs/gpu-recognition.md)).
 
 The returning [exact-sum caller](designs/gpu-exact-sum-caller.md) prepares two
-bounded jobs through the firmware submission path. It is an offline candidate
-for the first physical execution; its host model does not qualify the kernel.
+bounded jobs through the firmware submission path. Both shapes passed on
+physical hardware under the conditions below.
 
 ## Two exact-sum shapes pass on the board
 
@@ -240,6 +240,13 @@ same lifetime's prerequisites. The caller validates these two shapes;
 complete GPU recognition, its read-only output mapping, other model shapes
 and physical fault recovery remain unqualified.
 
+The CPU-only [cache-permission probe](../apps/gpu-cache-permission/README.md)
+also passed on 2026-10-28. It ran the unchanged EL1 cache helper over a read-only
+4 MiB diagnostic mapping and preserved initialized bytes before normal ROM
+return. The mapping has production permissions at a relocated address. This
+result establishes the permission operation; production-address initialization,
+GPU DMA visibility and recognition still need physical evidence.
+
 ## Remaining board evidence
 
 - The bench recording's 204 jobs give text and output bytes identical to the
@@ -250,5 +257,6 @@ and physical fault recovery remain unqualified.
   instruction rate per MAC, the load latency and the resident tasks, and
   shows whether the per-store data fences or the per-load waits limit the
   loop.
-- After boot the tag area reads zero, and DC CIVAC at EL1 on the read-only
-  output region completes without a fault.
+- At the production output address, boot clears the tags and EL1 cache
+  maintenance completes over the read-only region. The relocated permission
+  probe above does not establish this production-address result.
