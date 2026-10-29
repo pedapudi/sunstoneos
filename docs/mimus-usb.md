@@ -143,11 +143,49 @@ order. The tool requires successful host references with matching input hashes.
 The [parity checker](../checks/mimus-parity.py) compares feature and log-probability
 CRCs, frame counts, text, punctuation, capitalization, and formatted output.
 
+For a preserved DDR lifetime, supply the cold DDR record, a returning platform
+survey for the current ROM instance, and every intervening successful return in
+execution order:
+
+```sh
+SUNSTONE_USB_PORT=3-3 "$cache/venv/bin/python" tools/usb-mimus.py \
+  --fel "$cache/build/sunxi-a733/sunxi-fel" \
+  --inputs "$cache/inputs/mimus-bench" \
+  --reference "$cache/evidence/mimus-host.json" \
+  --ddr-evidence "$D/session.json" \
+  --platform-survey "$S/session.json" \
+  --warm-return "$R/session.json"
+```
+
+Here `D` is the selected board's successful cold DDR directory, `S` is its
+current returning launcher survey, and `R` is an intervening returning run.
+Repeat `--warm-return` for additional runs; omit it when DDR and the survey
+identify the same USB instance. The loader uses the kernel runner's
+`validate_platform_admission` to bind the records to the locked physical port,
+USB node identity, launcher gates, and reviewed FEL executable before any FEL
+request. This admits initialized RAM; peripheral ownership still requires the
+selected image's own reviewed procedure. Without the paired DDR and survey
+options, the legacy prior-kernel marker requirement remains active.
+
+The loader copies the image, FEL executable, host references, and admission
+records into its evidence directory before connecting. It uploads and invokes
+those copies, so changes to the original paths cannot change the admitted run.
+The models and WAV bytes are read and verified before connecting.
+
+USB Mimus records use `mode=mimus-usb`. The shared continuity validator does
+not accept them as `--warm-return` links, including explicit successful returns.
+Place Mimus last in a planned chain of launches. Reusing its returned instance
+requires a separate review of that producer's continuity contract; a new survey
+alone cannot supply the missing return link.
+
 The loader identifies ROM, verifies the image upload, requires the session access
 rule, and holds the shared board lock. It then identifies the native runtime by
 its descriptor before sending application commands. Any transport or unexpected
 protocol failure ends communication without a reset retry. The runtime's host
-lease provides the independent return path.
+lease provides the independent return path. A failed transfer or unresolved
+launch quarantines the current instance and retains the port lock for coordinator
+recovery. A returned failure with a copied result releases the lock only after
+quarantining the returned instance.
 
 `--finish recover` sends the recovery command after all recordings.
 `--finish lease` stops requests and verifies a return caused by the 30-second lease. That
@@ -173,6 +211,34 @@ Host-reported request latency starts after the WAV upload and ends after result
 retrieval. It includes model loading when the request loads the model,
 recognition, polling, and USB result transfer. It excludes WAV transfer, capture, and host reference comparison, so it
 does not measure live speech-to-text latency.
+
+## Host admission evidence
+
+`checks/mimus-usb-session.py` models the FEL and native transports while running
+the actual launcher and shared admission/failure helpers. Saved DDR, returning
+kernel, and platform-survey records supply the nominal admission. Model responses
+stand in for native execution and parity comparison; this check establishes host
+behavior only.
+
+The 2026-10-28 evidence is in
+`~/.cache/sunstoneos/evidence/sol-mimus-session-1028`. Its `checks` directory
+records ten cases: legacy and warm admission, wrong port, missing continuity,
+changed FEL executable, legacy marker refusal, FEL loss, native loss, launch
+interruption, and a returned failure. The separate `frozen-source` case replaces
+the original image, executable, references, and admission files after preparation;
+the launcher consumes its preserved copies.
+
+For two modeled recordings, both the baseline launcher and the changed launcher
+perform 7,199 native exchanges, seven FEL requests, two model uploads, and one
+launch attempt. Admission adds no exchanges and runs once before connecting.
+The six-line upload function and 41-line transcription function are byte-identical
+to the baseline. `baseline.json` and `final-metrics.json` record their identities;
+the check directories record input hashes and modeled outcomes.
+
+The physical evidence below applies to its frozen 2026-10-16 image and host
+inputs. A new physical check must establish launch, recognition parity, and
+normal return after admission through a preserved DDR lifetime. Host models do
+not establish that operation or recovery from an arbitrary hardware fault.
 
 ## Physical integration evidence
 

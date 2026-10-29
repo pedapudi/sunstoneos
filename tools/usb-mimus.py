@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Load the USB transcription service, run recorded inputs, and return to FEL."""
 import argparse
-import fcntl
 import hashlib
 import importlib.util
 import json
@@ -28,7 +27,17 @@ parser.add_argument("--reference", type=Path, action="append", required=True, he
 parser.add_argument("--paced", action="store_true", help="Replay on the sample clock; use references from prepare-replay.py")
 parser.add_argument("--finish", choices=("recover", "lease"), default="recover",
                     help="Return by command, or verify recovery after host requests stop")
+parser.add_argument("--ddr-evidence", type=Path, help="Successful DDR session for the selected board")
+parser.add_argument("--platform-survey", type=Path, help="Current-instance returning launcher survey")
+parser.add_argument("--warm-return", type=Path, action="append", default=[],
+                    help="Existing returning-session records since DDR, in execution order")
 args = parser.parse_args()
+if bool(args.ddr_evidence) != bool(args.platform_survey):
+    parser.error("--ddr-evidence and --platform-survey must be supplied together.")
+if args.warm_return and not args.ddr_evidence:
+    parser.error("--warm-return requires --ddr-evidence and --platform-survey.")
+admission = tuple(p.read_bytes() for p in (args.ddr_evidence, args.platform_survey)) if args.ddr_evidence else None
+warm_returns = tuple(p.read_bytes() for p in args.warm_return)
 manifest = json.loads((args.inputs / "inputs.json").read_text())
 models = [(args.inputs / name).read_bytes() for name in ("base.mimus", "overlay.mimus")]
 for name, data in zip(("base.mimus", "overlay.mimus"), models):
@@ -54,25 +63,54 @@ for wav, reference in zip(wavs, args.reference):
         bundle.extend(data)
         bundle.extend(b'\0' * (-len(bundle) % 64))
     bundle_hash = hashlib.sha256(bundle).hexdigest()
-    host = json.loads(reference.read_text())
+    reference_raw = reference.read_bytes()
+    host = json.loads(reference_raw)
     if bool(host.get('paced', False)) != args.paced:
         sys.exit("Reference mode differs from the requested recognition mode.")
     if host.get('exit') != 0 or host['bundle_sha256'] != bundle_hash:
         sys.exit("Host reference failed or its inputs differ.")
     cases.append(dict(wav=str(wav.resolve()), audio_sha256=hashlib.sha256(audio).hexdigest(),
-                      bundle_sha256=bundle_hash, reference=str(reference.resolve()), data=audio))
+                      bundle_sha256=bundle_hash, reference=str(reference.resolve()), data=audio, reference_raw=reference_raw))
 image = args.image.read_bytes()
 if not image or len(image) > 0x100000:
     sys.exit("Runtime image exceeds its load interval.")
 args.evidence.mkdir(parents=True, exist_ok=False)
+image_path = args.evidence / "image.bin"
+image_path.write_bytes(image)
+fel_path = args.evidence / "sunxi-fel"
+fel_path.write_bytes(args.fel.read_bytes())
+fel_path.chmod(0o500)
+for index, case in enumerate(cases):
+    reference_path = args.evidence / f"reference-{index:03d}.json"
+    reference_path.write_bytes(case.pop("reference_raw"))
+    case["source_reference"] = case["reference"]
+    case["reference"] = str(reference_path.resolve())
 record = dict(image_sha256=hashlib.sha256(image).hexdigest(),
-              fel_sha256=hashlib.sha256(args.fel.read_bytes()).hexdigest(),
-              transactions=[], cases=[], finish=args.finish, paced=args.paced, complete=False)
+              fel_sha256=hashlib.sha256(fel_path.read_bytes()).hexdigest(),
+              transactions=[], cases=[], finish=args.finish, paced=args.paced, complete=False,
+              mode="mimus-usb", launch_attempted=False, transport_failed=False)
+record["tool_sha256"] = record["fel_sha256"]
+if admission:
+    record["admission"] = {}
+    for name, raw in zip(("ddr-admission.json", "platform-survey.json"), admission):
+        (args.evidence / name).write_bytes(raw)
+        record["admission"][name] = hashlib.sha256(raw).hexdigest()
+    record["admission"]["warm_returns"] = []
+    for index, raw in enumerate(warm_returns):
+        name = f"warm-return-{index + 1}.json"
+        (args.evidence / name).write_bytes(raw)
+        record["admission"]["warm_returns"].append(dict(file=name, sha256=hashlib.sha256(raw).hexdigest()))
 sequence = 0
 device = None
 spec = importlib.util.spec_from_file_location("access", ROOT / "tools/usb-access.py")
 access = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(access)
+spec = importlib.util.spec_from_file_location("kernel_admission", ROOT / "tools/check-a733-kernel.py")
+platform = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(platform)
+spec = importlib.util.spec_from_file_location("mimus_failure", ROOT / "tools/check-a733-smp.py")
+failure_helper = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(failure_helper)
 sys.path.insert(0, str(Path.home() / "git/mimus/tools"))
 import usb_guard
 
@@ -82,17 +120,25 @@ def save():
 
 
 def fel(*arguments):
-    if access.identity(node) != identity:
-        raise RuntimeError("FEL node identity changed.")
+    if record["transport_failed"]:
+        raise RuntimeError("Transport already failed; no further requests.")
     item = dict(protocol="fel", arguments=list(map(str, arguments)))
     record["transactions"].append(item)
     save()
-    r = subprocess.run([str(args.fel), "-d", f"{int(node.parent.name)}:{int(node.name)}",
-                        *map(str, arguments)], capture_output=True, text=True, timeout=30)
-    item.update(exit=r.returncode, stdout=r.stdout, stderr=r.stderr)
+    try:
+        if access.identity(node) != identity or access.target(node).name != port.name:
+            raise RuntimeError("FEL node identity or physical port changed.")
+        access.require_rom(node)
+        r = subprocess.run([str(fel_path), "-d", f"{int(node.parent.name)}:{int(node.name)}",
+                            *map(str, arguments)], capture_output=True, text=True, timeout=30)
+        item.update(exit=r.returncode, stdout=r.stdout, stderr=r.stderr)
+        if r.returncode:
+            raise RuntimeError(f"FEL request failed: {r.stdout}{r.stderr}")
+    except BaseException as error:
+        record["transport_failed"] = True
+        item["failure"] = str(error)
+        raise
     save()
-    if r.returncode:
-        raise RuntimeError(f"FEL request failed: {r.stdout}{r.stderr}")
     return r.stdout
 
 
@@ -121,14 +167,16 @@ def message(command, payload=b"", timeout=3000):
     global sequence
     if len(payload) > 2048:
         raise RuntimeError("Native request exceeds the protocol limit.")
-    if access.identity(node) != identity:
-        raise RuntimeError("Native USB instance changed; no further protocol requests.")
+    if record["transport_failed"]:
+        raise RuntimeError("Transport already failed; no further requests.")
     sequence += 1
     packet = struct.pack("<4I", 0x53534f53, sequence, command, len(payload)) + payload
     item = dict(command=command, sequence=sequence, payload_size=len(payload), prefix=payload[:12].hex())
     with (args.evidence / 'native.jsonl').open('a') as journal:
         journal.write(json.dumps(dict(item, event='begin')) + '\n')
     try:
+        if access.identity(node) != identity or access.target(node).name != port.name:
+            raise RuntimeError("Native USB instance or physical port changed.")
         if device.write(0x02, packet, timeout=timeout) != len(packet):
             raise RuntimeError("Native USB write was incomplete.")
         response = bytes(device.read(0x81, 4096, timeout=timeout))
@@ -140,7 +188,8 @@ def message(command, payload=b"", timeout=3000):
         with (args.evidence / 'native.jsonl').open('a') as journal:
             journal.write(json.dumps(dict(item, event='complete', response_size=len(response)-16)) + '\n')
         return response[16:]
-    except (OSError, RuntimeError, usb.core.USBError) as error:
+    except BaseException as error:
+        record["transport_failed"] = True
         with (args.evidence / 'native.jsonl').open('a') as journal:
             journal.write(json.dumps(dict(item, event='failed', error=str(error))) + '\n')
         raise
@@ -207,86 +256,105 @@ def transcribe(index, case):
 try:
     usb_guard.check_health()
     with access.board_lock() as node:
-        access.require_session(node)
-        access.require_rom(node)
-        identity = access.identity(node)
-        port = access.target(node)
-        if product_name() == "sunstoneos RAM diagnostics":
-            raise RuntimeError("Runtime is already active; do not send it FEL requests.")
-        port_config = dict(port=port.name, sysfs=str(port.resolve()))
-        record.update(initial_node=str(node), initial_identity=identity, port=port.name)
-        if "soc=00001903(A733)" not in fel("version"):
-            raise RuntimeError("Unexpected target.")
-        fel("read", "0x42000000", "128", args.evidence / "before.bin")
-        if struct.unpack_from("<I", (args.evidence / "before.bin").read_bytes())[0] != 0x534b4552:
-            raise RuntimeError("Establish the physical kernel check before native USB loading.")
-        blank = bytearray(20480)
-        struct.pack_into("<Q", blank, 80, 4)
-        (args.evidence / "blank.bin").write_bytes(blank)
-        fel("write", "0x41000000", args.image,
-            "read", "0x41000000", len(image), args.evidence / "uploaded.bin")
-        if (args.evidence / "uploaded.bin").read_bytes() != image:
-            raise RuntimeError("Runtime upload differs; execution refused.")
-        with usb_guard.reenumeration("sunstoneos-a733", "native USB transcription and host lease recovery", 4):
-            # Preserve the prior result while waiting for the shared USB cooldown.
-            fel("write", "0x42000000", args.evidence / "blank.bin")
-            fel("reset64", "0x41000000")
-            node = wait_service(identity, True, 10)
-            identity = access.identity(node)
-            access.require_session(node)
-            record.update(runtime_node=str(node), runtime_identity=identity)
-            save()
-            device = usb.core.find(idVendor=0x1f3a, idProduct=0xefe8,
-                                   bus=int(node.parent.name), address=int(node.name))
-            if device is None or device.bcdDevice != 0x0100:
-                raise RuntimeError("Device descriptor does not identify the native runtime.")
-            device.set_configuration(1)
-            usb.util.claim_interface(device, 0)
-            status = struct.unpack("<5Q", message(1))
-            record["status"] = dict(zip(("ticks", "CurrentEL", "commands", "speed", "counter"), status))
-            if status[1] != 4:
-                raise RuntimeError("Runtime is not executing at EL1.")
-            application(0x14, expected=5)
-            application(0x12, struct.pack('<2I', 2, 1) + b'x', expected=3)
-            # A complete upload with a wrong CRC must not become usable.
-            application(0x11, struct.pack('<3I', 2, 1, 0))
-            application(0x12, struct.pack('<2I', 2, 0) + b'x')
-            application(0x13, struct.pack('<I', 2), expected=4)
-            for slot, data in enumerate(models):
-                upload(slot, data)
-            for index, case in enumerate(cases):
-                transcribe(index, case)
-            if args.finish == "recover":
-                message(4)
-            else:
-                print("Waiting for the 30-second host lease to return the board to ROM.", flush=True)
-            closing = time.monotonic()
-            usb.util.release_interface(device, 0)
-            usb.util.dispose_resources(device)
-            device = None
-            node = wait_service(identity, False, 40 if args.finish == "lease" else 10)
-            record["return_wait_seconds"] = time.monotonic() - closing
-            identity = access.identity(node)
+        try:
             access.require_session(node)
             access.require_rom(node)
-            record["returned_node"] = str(node)
+            identity = access.identity(node)
+            port = access.target(node)
+            if product_name() == "sunstoneos RAM diagnostics":
+                raise RuntimeError("Runtime is already active; do not send it FEL requests.")
+            port_config = dict(port=port.name, sysfs=str(port.resolve()))
+            record.update(initial_node=str(node), initial_identity=identity, port=port.name)
+            if admission:
+                platform.validate_platform_admission(admission, node, identity, port.name,
+                                                     record["tool_sha256"], failure_helper.FEL_HASH, warm_returns)
             if "soc=00001903(A733)" not in fel("version"):
-                raise RuntimeError("Returned device is not A733 FEL.")
-            fel("read", "0x42000000", "20480", args.evidence / "result.bin")
-        data = (args.evidence / "result.bin").read_bytes()
-        result = struct.unpack_from("<16Q", data)
-        record["result_header"] = result
-        expected_status = 1 if args.finish == "lease" else 0
-        if result[:3] != (0x534b4552, 5, expected_status):
-            raise RuntimeError(f"Runtime did not return successfully: {result}")
-        returned_log = data[256:256 + result[3]].decode(errors="replace")
-        (args.evidence / "returned.log").write_text(returned_log)
-        if args.finish == "lease" and ("FAIL USB host lease expired:" not in returned_log
-                or not 25 <= record["return_wait_seconds"] <= 40):
-            raise RuntimeError("Return was not the expected host lease expiry.")
-        record["complete"] = True
-        save()
-        print(f"PASS: native asset loading, repeated transcription, host parity, and FEL return.\n{args.evidence}")
+                raise RuntimeError("Unexpected target.")
+            fel("read", "0x42000000", "128", args.evidence / "before.bin")
+            if not admission and struct.unpack_from("<I", (args.evidence / "before.bin").read_bytes())[0] != 0x534b4552:
+                raise RuntimeError("Establish the physical kernel check before native USB loading.")
+            blank = bytearray(20480)
+            struct.pack_into("<Q", blank, 80, 4)
+            (args.evidence / "blank.bin").write_bytes(blank)
+            fel("write", "0x41000000", image_path,
+                "read", "0x41000000", len(image), args.evidence / "uploaded.bin")
+            if (args.evidence / "uploaded.bin").read_bytes() != image:
+                raise RuntimeError("Runtime upload differs; execution refused.")
+            with usb_guard.reenumeration("sunstoneos-a733-" + port.name, "native USB transcription and host lease recovery", 4):
+                # Preserve the prior result while waiting for the shared USB cooldown.
+                fel("write", "0x42000000", args.evidence / "blank.bin")
+                record["launch_attempted"] = True
+                save()
+                fel("reset64", "0x41000000")
+                node = wait_service(identity, True, 10)
+                identity = access.identity(node)
+                access.require_session(node)
+                record.update(runtime_node=str(node), runtime_identity=identity)
+                save()
+                device = usb.core.find(idVendor=0x1f3a, idProduct=0xefe8,
+                                       bus=int(node.parent.name), address=int(node.name))
+                if device is None or device.bcdDevice != 0x0100:
+                    raise RuntimeError("Device descriptor does not identify the native runtime.")
+                device.set_configuration(1)
+                usb.util.claim_interface(device, 0)
+                status = struct.unpack("<5Q", message(1))
+                record["status"] = dict(zip(("ticks", "CurrentEL", "commands", "speed", "counter"), status))
+                if status[1] != 4:
+                    raise RuntimeError("Runtime is not executing at EL1.")
+                application(0x14, expected=5)
+                application(0x12, struct.pack('<2I', 2, 1) + b'x', expected=3)
+                # A complete upload with a wrong CRC must not become usable.
+                application(0x11, struct.pack('<3I', 2, 1, 0))
+                application(0x12, struct.pack('<2I', 2, 0) + b'x')
+                application(0x13, struct.pack('<I', 2), expected=4)
+                for slot, data in enumerate(models):
+                    upload(slot, data)
+                for index, case in enumerate(cases):
+                    transcribe(index, case)
+                if args.finish == "recover":
+                    message(4)
+                else:
+                    print("Waiting for the 30-second host lease to return the board to ROM.", flush=True)
+                closing = time.monotonic()
+                usb.util.release_interface(device, 0)
+                usb.util.dispose_resources(device)
+                device = None
+                node = wait_service(identity, False, 40 if args.finish == "lease" else 10)
+                record["return_wait_seconds"] = time.monotonic() - closing
+                identity = access.identity(node)
+                access.require_session(node)
+                access.require_rom(node)
+                record.update(returned_node=str(node), returned_identity=identity, automatic_access=True)
+                save()
+                if "soc=00001903(A733)" not in fel("version"):
+                    raise RuntimeError("Returned device is not A733 FEL.")
+                fel("read", "0x42000000", "20480", args.evidence / "result.bin")
+            data = (args.evidence / "result.bin").read_bytes()
+            result = struct.unpack_from("<16Q", data)
+            record["result_header"] = result
+            names = ("magic", "stage", "status", "log_length", "esr", "elr", "far", "interrupt",
+                     "start_counter", "end_counter", "mode", "gicd_ctlr", "gicd_typer",
+                     "gicr_typer", "priority_mask", "replaced_status")
+            record["result"] = dict(zip(names, result))
+            if result[3] > len(data) - 257:
+                raise RuntimeError("Invalid returned log length.")
+            expected_status = 1 if args.finish == "lease" else 0
+            if result[:3] != (0x534b4552, 5, expected_status):
+                raise RuntimeError(f"Runtime did not return successfully: {result}")
+            returned_log = data[256:256 + result[3]].decode(errors="replace")
+            (args.evidence / "returned.log").write_text(returned_log)
+            if args.finish == "lease" and ("FAIL USB host lease expired:" not in returned_log
+                    or not 25 <= record["return_wait_seconds"] <= 40):
+                raise RuntimeError("Return was not the expected host lease expiry.")
+            record["complete"] = True
+            save()
+            print(f"PASS: native asset loading, repeated transcription, host parity, and FEL return.\n{args.evidence}")
+        except BaseException as error:
+            platform.retain_failure(record, save,
+                lambda: access.quarantine_instance(node, "USB Mimus attempt stopped; coordinator recovery required.", identity),
+                error, failure_helper)
+            raise
+
 except (OSError, ValueError, RuntimeError, usb.core.USBError, subprocess.TimeoutExpired) as error:
     record["failure"] = str(error)
     save()
