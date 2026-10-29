@@ -1,6 +1,10 @@
 # Design: SD reads with descriptor DMA
 
-Status: **implemented and checked in software; physical qualification pending.**
+Status: **one 4096-byte DMA read and normal return physically passed;
+64 KiB descriptor-chain operation is implemented and software-checked.**
+The first-read result is
+`sol-resume-20261028/port-3-3/sd-dma-result.json`. Larger physical transfers
+and DMA fault recovery remain unqualified.
 The native returning image runs both read profiles against an IDMAC model,
 including delayed OWN/reset/idle completion, retained failures, exact
 chain admission, cache publication and host report checks. The prior draft
@@ -257,4 +261,37 @@ terminal and input identity, restoration receipts, card mode, reference CID/CRC
 and the strict decoder command. Evidence is preserved outside the repository
 under `sol-sd-return-policy-1028/host-5`. The existing native image and accepted
 native/provider checks are reused. Physical first-read and normal-return
-observations remain prerequisites for successor admission.
+observations are recorded in the result named above. Each successor still
+needs its own admission and compatibility review.
+
+## A finite sixteen-descriptor read checks exact PIO parity
+
+The optional `chain-read` plan reads sectors 0 through 127 once: 64 KiB through
+sixteen existing IDMAC descriptors, one CMD18 and automatic CMD12. The existing
+engine, buffers, ownership checks and close path already support this extent.
+The application additionally reports sixteen indexed CRCs, one per 4096-byte
+chunk, after the read has been collected and the buffer returned to the CPU.
+The host compares every chunk against the accepted PIO run's first sixteen
+records, including CID, sector range, block count, byte count and CRC.
+
+The explicit `restored-3v3-chain-read` policy binds only this profile-2 plan.
+It preserves the first-read policy and requires the same normal-return receipts
+and retained-failure obligations. A previous first-read's consumed CMD0 approval
+does not authorize this operation. Physical execution requires fresh admission;
+no native failure is retried or converted into a ROM return.
+
+The design budget was at most 1 KiB of native text, 64 bytes of CRC storage and
+no extra per-poll MMIO, cache operation, command or drain phase. The measured
+increase against the same-platform first-read application is 528 text bytes.
+The 64-byte array fits existing alignment padding, leaving total BSS and
+initialized data unchanged. CRC computation adds one 64 KiB CPU read after
+transfer timing; physical CPU cost and transfer timing remain unmeasured.
+
+Independent Sol 6.1 reviews approved the design before implementation and the
+final source. Focused linked cases cover the actual sixteen-descriptor chain,
+cache extents, ownership return, drain and restored return, plus legacy first-read.
+Host cases use actual native-produced chunk lines, an independent card-model
+PIO fixture, policy binding and missing, reordered, duplicate or corrupt CRC
+refusals. Software evidence and frozen inputs are under
+`sol-sd-multidescriptor-1029/`. These checks model hardware and do not establish
+physical operation of the larger transfer.

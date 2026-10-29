@@ -4,7 +4,7 @@
   storage-read-returning.py sign --approval APPROVAL --ddr DDR_DIR --survey SURVEY_DIR --signer NAME
   storage-read-returning.py input --approval APPROVAL --request REQUEST --ddr DDR_DIR --survey SURVEY_DIR
                                   --fabric-read READ_DIR --config CONFIG --profile 2|3
-                                  --plan measurement|first-read --output INPUT.bin
+                                  --plan measurement|first-read|chain-read --output INPUT.bin
   storage-read-returning.py decode --run RUN_DIR --input INPUT.bin --output RESULT.json
 
 sign records, in the coordinator's approval of one lifetime, the SHA-256 of
@@ -23,6 +23,8 @@ start and survey, newer than the DDR record, names the profile's bundle and
 sets every field that approval-request.json lists for it to true.
 --plan first-read requires --profile 2 and reads only sector 0, eight blocks
 (4096 bytes). It uses the same lifetime admission and native input format.
+--plan chain-read requires --profile 2 and reads 128 sectors from sector zero
+(65536 bytes), using sixteen descriptors and sixteen per-4096-byte CRC records.
 
 The fabric words come from this lifetime's own read of CCU 0x500, 0x580 and
 0x588 (READ_DIR, the board-read-session-v1 record that
@@ -48,7 +50,7 @@ Version-1 PIO captures remain decodable; --reference checks the repeated CRCs
 against a decoded accepted PIO run on the same card. Successful first-read
 decoding requires --reference and compares its first 4096-byte read;
 measurement plans still require 64 matching reads. --require-restored-return
-also requires the input producer's explicit restored-3v3-first-read policy
+also requires the input producer's explicit matching restored-return policy
 provenance and exact normal-return receipts before emitting successor eligibility.
 The coordinator binds the frozen image, signed approval and returned ROM record.
 No board, USB or queue access.
@@ -74,9 +76,11 @@ COMPLETE = 'COMPLETE SD0 returning read'
 INCOMPLETE = 'INCOMPLETE SD0 returning read: '
 BUNDLES = {2: 'A', 3: 'B'}
 FIRST_READ_PLAN = [(0, 8)]
+CHAIN_READ_PLAN = [(0, 128)]
 POWER_REMOVAL = 'power-removal'
 RESTORED_RETURN = 'restored-3v3-first-read'
-RETURN_POLICIES = (POWER_REMOVAL, RESTORED_RETURN)
+CHAIN_RETURN = 'restored-3v3-chain-read'
+RETURN_POLICIES = (POWER_REMOVAL, RESTORED_RETURN, CHAIN_RETURN)
 LEGACY_RECOVERY = {'rom_return_state_accepted', 'no_launch_or_reset_before_power_removal',
                    'whole_board_power_removal_after_lifetime'}
 RESTORED_RECOVERY = ('rom_return_state_accepted', 'reviewed_3v3_normal_return',
@@ -166,8 +170,8 @@ def dma_summary(reads, hz):
     return out
 
 
-def compare_reference(value, reference, first_read=False):
-    """Match repeated sectors and card identity against a decoded accepted PIO run."""
+def reference_card(value, reference):
+    """Require complete results and the same identified card."""
     require(isinstance(value, dict) and value.get('complete') is True and
             isinstance(reference, dict) and reference.get('complete') is True,
             'result and reference must be complete')
@@ -176,6 +180,12 @@ def compare_reference(value, reference, first_read=False):
             isinstance(card.get('cid'), str) and re.fullmatch(r'[0-9a-fA-F]{32}', card['cid']) and
             prior_card.get('cid') == card['cid'],
             'reference must be complete and name the same card')
+    return card, prior_card
+
+
+def compare_reference(value, reference, first_read=False):
+    """Match repeated sectors and card identity against a decoded accepted PIO run."""
+    card, prior_card = reference_card(value, reference)
     count = 1 if first_read else 64
     mine, prior = value.get('reads'), reference.get('reads')
     require(isinstance(mine, list) and isinstance(prior, list) and
@@ -191,6 +201,27 @@ def compare_reference(value, reference, first_read=False):
         require(not first_read or a['first'] == b['first'] == 0, 'first-read reference sector')
         require((a['first'], a['crc32']) == (b['first'], b['crc32']), 'reference CRC mismatch')
     return {'matched_reads': count, 'matched_bytes': count * 4096}
+
+
+def compare_chain_reference(value, reference):
+    """Compare every 4 KiB of one 64 KiB DMA read with accepted PIO data."""
+    card, prior_card = reference_card(value, reference)
+    require(value.get('status') == 0 and value.get('profile') == card.get('profile') == 2 and
+            reference.get('status') == 0 and prior_card.get('profile') == 2,
+            'chain-read requires a successful profile-2 reference')
+    reads, prior, chunks = value.get('reads'), reference.get('reads'), value.get('chunk_crc32')
+    require(isinstance(reads, list) and len(reads) == 1 and
+            (reads[0].get('first'), reads[0].get('blocks'), reads[0].get('bytes')) == (0, 128, 65536),
+            'chain-read extent')
+    require(isinstance(chunks, list) and len(chunks) == 16 and
+            isinstance(prior, list) and len(prior) >= 16, 'chain-read reference coverage')
+    for index, (crc, row) in enumerate(zip(chunks, prior[:16])):
+        require(type(crc) is int and 0 <= crc < 2**32 and isinstance(row, dict) and
+                all(type(row.get(k)) is int for k in ('first', 'blocks', 'bytes', 'crc32')) and
+                (row['first'], row['blocks'], row['bytes']) == (index * 8, 8, 4096) and
+                0 <= row['crc32'] < 2**32, 'malformed chain-read reference')
+        require(crc == row['crc32'], 'chain-read reference CRC mismatch')
+    return {'matched_reads': 16, 'matched_bytes': 65536, 'dma_reads': 1}
 
 
 def lifetime(ddr, survey):
@@ -223,7 +254,7 @@ def sign(approval, ddr, survey, signer, return_policy=POWER_REMOVAL, request=Non
                           'ddr_session_sha256': digest(Path(ddr) / 'session.json'),
                           'survey_session_sha256': digest(Path(survey) / 'session.json')}
     if return_policy != POWER_REMOVAL:
-        require(return_policy == RESTORED_RETURN and value['bundle'] == 'A' and request is not None,
+        require(return_policy in (RESTORED_RETURN, CHAIN_RETURN) and value['bundle'] == 'A' and request is not None,
                 'restored return requires bundle A and --request')
         recovery_fields(request, 'A', return_policy)
         value['signature'].update(return_policy=return_policy, request_sha256=digest(request))
@@ -234,7 +265,7 @@ def sign(approval, ddr, survey, signer, return_policy=POWER_REMOVAL, request=Non
 def recovery_fields(request, bundle, return_policy):
     """Replace only the known legacy recovery obligations, explicitly and once."""
     fields = json.loads(Path(request).read_text())['fields'][bundle]
-    if return_policy == RESTORED_RETURN:
+    if return_policy in (RESTORED_RETURN, CHAIN_RETURN):
         require(bundle == 'A' and set(fields.get('recovery', ())) == LEGACY_RECOVERY,
                 'restored return requires the exact reviewed bundle-A recovery request')
         fields['recovery'] = RESTORED_RECOVERY
@@ -252,7 +283,7 @@ def approved(approval, request, ddr, survey, bundle, return_policy=POWER_REMOVAL
     signature = value.get('signature') or {}
     require(signature.get('return_policy', POWER_REMOVAL) == return_policy,
             'approval signed for another return policy')
-    if return_policy == RESTORED_RETURN:
+    if return_policy in (RESTORED_RETURN, CHAIN_RETURN):
         require(signature.get('request_sha256') == digest(request), 'approval signed for another request')
     ddr_path = Path(ddr) / 'session.json'
     require(signature.get('ddr_session_sha256') == digest(ddr_path) and
@@ -359,6 +390,7 @@ def decode_log(log, raw_input, status=None):
     lines = log.splitlines()
     value = {'status': status, 'profile': given['profile'], 'generation': given['generation'], 'complete': False, 'mbus': None,
              'outcome': None, 'reads': [], 'card': None, 'first_sector_hex': None}
+    chunks = []
     words = {}
     for line in lines:
         if line.startswith(('SD_', 'SD0 returning start')) and '=' in line:
@@ -385,6 +417,13 @@ def decode_log(log, raw_input, status=None):
                 timing=dict(command_us=command,first_byte_us=first_byte,done_us=done,clean_us=clean,
                             invalidate_us=invalidate,polls=polls,timing_saturated=saturated)
             value['reads'].append(dict(first=first,blocks=blocks,bytes=512*blocks,elapsed_us=elapsed,crc32=crc,**timing))
+        elif line.startswith('C '):
+            match = re.fullmatch(r'C ([0-9a-f]{2}) ([0-9a-f]{8})', line)
+            require(given['version'] == VERSION and given['profile'] == 2 and plan == CHAIN_READ_PLAN and
+                    match is not None, 'unexpected chain CRC line')
+            index, crc = (int(x, 16) for x in match.groups())
+            require(index == len(chunks) and index < 16, 'chain CRC index')
+            chunks.append(crc)
         elif line.startswith('CARD '):
             require(value['card'] is None,'duplicate card line')
             match = CARD.fullmatch(line); require(match is not None, 'malformed card line')
@@ -409,6 +448,8 @@ def decode_log(log, raw_input, status=None):
             require(value['outcome'] is None,'duplicate terminal line')
             value['outcome'] = line[len(INCOMPLETE):]
     value['words'] = words
+    if given['version'] == VERSION and given['profile'] == 2 and plan == CHAIN_READ_PLAN:
+        value['chunk_crc32'] = chunks
     require(words.get('SD_READS') == len(value['reads']) and words.get('SD_PLAN') == len(plan), 'read count lines')
     if value['first_sector_hex'] is not None:
         require(len(value['first_sector_hex']) == 1024 and value['reads'], 'first sector dump')
@@ -428,6 +469,8 @@ def decode_log(log, raw_input, status=None):
             require(given['profile']==2 and words.get('SD_RESTORED')==1, 'missing SD restoration receipt')
     if value['complete']:
         require(value['card'] is not None, 'missing card line')
+        if plan == CHAIN_READ_PLAN:
+            require(len(chunks) == 16, 'incomplete chain CRC coverage')
         value['throughput'] = (throughput().throughput_summary(value['reads']) if given['version']==1 else
                                dma_summary(value['reads'],value['card']['card_hz']) if plan==dma_plan() else {})
     return value
@@ -451,8 +494,9 @@ def validate_successful_return(value, terminal, raw_input, reference):
     requires a separate authorized CMD0 and complete provider admission.
     """
     given = parse_input(raw_input)
-    require(given['version'] == VERSION and given['profile'] == 2 and given['plan'] == FIRST_READ_PLAN,
-            'restored return requires profile-2 first-read input')
+    require(given['version'] == VERSION and given['profile'] == 2 and
+            given['plan'] in (FIRST_READ_PLAN, CHAIN_READ_PLAN),
+            'restored return requires a profile-2 finite read input')
     require(terminal.get('magic') == 0x534b4552 and terminal.get('stage') == 5 and terminal.get('status') == 0
             and value.get('complete') is True and value.get('status') == 0, 'unsuccessful terminal return')
     words = value['words']
@@ -465,8 +509,9 @@ def validate_successful_return(value, terminal, raw_input, reference):
     require(card['profile'] == 2 and card['bus_width'] == 4 and card['timing'] == 1 and
             card['card_hz'] == 50000000 and not card['signal_1v8'] and card['uhs_outcome'] == 0,
             'return card mode is not 3.3 V high speed')
-    comparison = compare_reference(value, reference, True)
-    return dict(policy=RESTORED_RETURN, normal_successor_eligible=True,
+    chain = given['plan'] == CHAIN_READ_PLAN
+    comparison = compare_chain_reference(value, reference) if chain else compare_reference(value, reference, True)
+    return dict(policy=CHAIN_RETURN if chain else RESTORED_RETURN, normal_successor_eligible=True,
                 input_sha256=hashlib.sha256(raw_input).hexdigest(), reference_crc=comparison,
                 card_remains_powered=True, another_sd_operation_requires_new_admission=True,
                 fault_recovery_qualified=False)
@@ -484,21 +529,24 @@ def main(argv=None):
     for name in ('approval', 'request', 'ddr', 'survey', 'fabric_read', 'config', 'output'):
         i.add_argument('--' + name.replace('_', '-'), type=Path, required=True)
     i.add_argument('--profile', type=int, choices=(2, 3), default=2)
-    i.add_argument('--plan', choices=('measurement', 'first-read'), default='measurement',
-                   help='measurement: existing 240 reads; first-read: profile 2, sector 0, eight blocks')
+    i.add_argument('--plan', choices=('measurement', 'first-read', 'chain-read'), default='measurement',
+                   help='measurement: 240 reads; first-read: 4 KiB; chain-read: 64 KiB; finite plans require profile 2')
     i.add_argument('--return-policy', choices=RETURN_POLICIES, default=POWER_REMOVAL)
     d = sub.add_parser('decode')
     for name in ('run', 'input', 'output'): d.add_argument('--' + name, type=Path, required=True)
     d.add_argument('--reference', type=Path, help='decoded accepted PIO result for the same card')
     d.add_argument('--require-restored-return', action='store_true',
-                   help='require exact first-read normal return and reference before successor admission')
+                   help='require exact finite-plan normal return and reference before successor admission')
     args = parser.parse_args(argv)
     if args.operation == 'sign':
         print(json.dumps(sign(args.approval, args.ddr, args.survey, args.signer, args.return_policy, args.request), indent=1)); return 0
     if args.operation == 'input':
         require(args.plan != 'first-read' or args.profile == 2, 'first-read requires profile 2')
+        require(args.plan != 'chain-read' or args.profile == 2, 'chain-read requires profile 2')
         require(args.return_policy != RESTORED_RETURN or (args.profile == 2 and args.plan == 'first-read'),
                 'restored return requires --profile 2 --plan first-read')
+        require(args.return_policy != CHAIN_RETURN or (args.profile == 2 and args.plan == 'chain-read'),
+                'chain return requires --profile 2 --plan chain-read')
         lifetime(args.ddr, args.survey)
         if args.return_policy == POWER_REMOVAL:
             approved(args.approval, args.request, args.ddr, args.survey, BUNDLES[args.profile])
@@ -509,7 +557,8 @@ def main(argv=None):
         require('fabric' not in config and 'fabric_hz' not in config, 'the fabric words come from this lifetime\'s read')
         (config['fabric'], config['fabric_hz']), registers = fabric_read(args.fabric_read, args.ddr)
         raw = input_bytes(args.profile, secrets.randbits(63) | 1, config,
-                          FIRST_READ_PLAN if args.plan == 'first-read' else dma_plan())
+                          FIRST_READ_PLAN if args.plan == 'first-read' else
+                          CHAIN_READ_PLAN if args.plan == 'chain-read' else dma_plan())
         args.output.write_bytes(raw)
         args.output.with_suffix('.json').write_text(json.dumps({
             'input_sha256': hashlib.sha256(raw).hexdigest(), 'profile': args.profile,
@@ -522,16 +571,22 @@ def main(argv=None):
         print(args.output); return 0
     raw = args.input.read_bytes(); given = parse_input(raw)
     first_read = given['version'] == VERSION and given['profile'] == 2 and given['plan'] == FIRST_READ_PLAN
+    chain_read = given['version'] == VERSION and given['profile'] == 2 and given['plan'] == CHAIN_READ_PLAN
     value = decode(args.run, raw)
     require(not (first_read and value['complete']) or args.reference is not None,
             'successful first-read requires --reference')
+    require(not (chain_read and value['complete']) or args.reference is not None,
+            'successful chain-read requires --reference')
     if args.reference and not args.require_restored_return:
-        value['reference_crc'] = compare_reference(value,json.loads(args.reference.read_text()),first_read)
+        reference = json.loads(args.reference.read_text())
+        value['reference_crc'] = (compare_chain_reference(value, reference) if chain_read else
+                                  compare_reference(value, reference, first_read))
         value['reference_sha256'] = digest(args.reference)
     if args.require_restored_return:
         require(args.reference is not None, 'restored return requires --reference')
         provenance = json.loads(args.input.with_suffix('.json').read_text())
-        require(provenance.get('return_policy') == RESTORED_RETURN and
+        require((first_read or chain_read) and
+                provenance.get('return_policy') == (CHAIN_RETURN if chain_read else RESTORED_RETURN) and
                 provenance.get('input_sha256') == hashlib.sha256(raw).hexdigest(),
                 'input provenance does not authorize restored return')
         for name in ('approval_sha256', 'request_sha256'):

@@ -1,14 +1,17 @@
 # Returning microSD reads
 
-Status: **DMA implemented and checked in software; physical DMA and SDR104
-qualification pending.** The earlier programmed-I/O image completed 256
+Status: **one 4096-byte DMA read and normal restoration physically passed;
+64 KiB descriptor-chain reads are software-checked; SDR104 remains unqualified.**
+The physical first-read result on port 3-3 is recorded in
+`sol-resume-20261028/port-3-3/sd-dma-result.json`, against the accepted PIO CRC.
+The earlier programmed-I/O image completed 256
 high-speed reads on port 3-3 (`board-session-20261025-30`). Its SDR104 run
 stopped at CMD11 (`board-session-20261025-32`). The corrected switch and this
-DMA image have native instruction-model evidence, not board evidence. See
+64 KiB path have native instruction-model evidence, not board evidence. See
 [the DMA design](../../docs/designs/sd-dma.md) for the measured PIO baseline
 and predicted DMA costs. The default admission policy requires whole-board power removal after every
 DMA lifetime. A reviewed exception permits normal continuation after the
-first 3.3 V read under the conditions below.
+bounded 3.3 V read under the conditions below.
 
 The default input selects SD profile 2 (high speed, four-bit, 3.3 V). A
 completed read plan restores the SDC0 module/bus/reset fields and PF pins
@@ -114,7 +117,16 @@ same approval, request, DDR, survey, fabric-read, configuration and output
 arguments. This emits one read of sector 0, eight blocks (4096 bytes), in
 the existing input format. It exercises multi-block DMA and automatic stop
 without a measurement sweep. It refuses profile 3 and preserves all
-lifetime admission checks. The existing native binary accepts both plans.
+lifetime admission checks.
+
+`input --profile 2 --plan chain-read` emits one request for sectors 0 through
+127, 64 KiB, through sixteen existing 4096-byte descriptors and automatic CMD12.
+After collecting the completed DMA read, the application computes sixteen
+4096-byte CRCs from the CPU-owned buffer. Indexed `C` lines report these CRCs.
+The decoder compares every chunk with the accepted PIO run's first sixteen
+records, requiring the same CID, sector range, block count, byte count and CRC.
+Missing, duplicate, reordered or extra chunk lines refuse success. This plan
+has no throughput fit and uses the existing input layout and descriptor engine.
 
 **Report.** The log lines of the result page:
 
@@ -159,7 +171,7 @@ comparison of all 64 repeated reads. Measurement decoding without a
 reference makes no reference-parity claim. Neither plan establishes physical DMA fault recovery. Failed or uncertain
 operation retains ownership until whole-board power removal.
 
-## Reviewed continuation after the first 3.3 V read
+## Reviewed continuation after one bounded 3.3 V read
 
 The original approval request was written for a return that left the controller
 and PF supply state in place. Its recovery fields prohibit every successor and
@@ -198,6 +210,13 @@ only when the coordinator establishes it:
   retain ownership after any transport, native, identity, comparison or
   validation failure; do not reset or launch until whole-board power removal.
 
+For the 64 KiB case, select `--return-policy restored-3v3-chain-read` on both
+`sign` and `input`, with `--profile 2 --plan chain-read` on `input`. It binds a
+separate approval to the same recovery obligations and checks all sixteen PIO
+chunks before successor eligibility. The first-read policy cannot authorize
+this larger plan. A new CMD0 authorization and full provider admission remain
+required even after the previous first-read returned normally.
+
 After the single native attempt, run `decode --require-restored-return` with
 its exact input, producer sidecar, run directory and accepted PIO `--reference`.
 The sidecar must bind the input hash and explicit return policy. The decoded
@@ -206,8 +225,9 @@ the native terminal magic, stage 5 and status 0; complete runner return without
 transport failure; matching input profile and generation; and all six receipt
 words equal to one. Those words are `SD_RETURN_VERSION`, `SD_READS`, `SD_PLAN`,
 `SD_PMIC_PARKED`, `SD_CLOCK_OFF` and `SD_RESTORED`. The card must report profile 2,
-four-bit high speed, 50 MHz and no 1.8 V switch. CID and the sector-zero 4096-byte
-CRC must match the accepted reference. The decoder emits
+four-bit high speed, 50 MHz and no 1.8 V switch. CID and the plan's exact PIO
+coverage must match: 4096 bytes for first-read or all 65536 bytes for chain-read.
+The decoder emits
 `successful_return.normal_successor_eligible=true` only after these checks.
 The coordinator separately verifies the frozen image and record identities;
 a generic runner exit of zero or a restoration marker alone is insufficient.
@@ -221,11 +241,17 @@ admission. Profile 3, measurement plans, failed sessions and uncertain sessions
 retain their existing recovery requirements. The default `power-removal`
 policy continues to require every original approval field.
 
-Native image bytes, read polling, DMA/cache operations and FEL exchange counts
-are unchanged. Host checks cover the policy selection and strict decoder using
-the accepted linked task/monitor log, with modeled startup identity lines and
-reference data. This evidence establishes software admission behavior. Physical
-DMA operation, observed normal restoration and fault recovery remain unqualified.
+The chain-read report adds 528 bytes of linked text against the same-platform
+first-read application. It uses 64 bytes of CRC storage within existing BSS
+alignment padding; total BSS and initialized data are unchanged. Descriptor and
+buffer allocations, per-poll MMIO, cache calls and card-command count are
+unchanged. One additional 64 KiB CRC pass runs after transfer timing.
+
+Focused evidence under `sol-sd-multidescriptor-1029/` covers the linked sixteen-
+descriptor read, exact clean/invalidate extent, drain and normal return, legacy
+first-read, strict policy binding and exact chunk-reference refusals. The host
+fixture's PIO data and authority are modeled. Physical chain-read operation,
+its timing and fault recovery remain unqualified.
 
 ## Time window
 

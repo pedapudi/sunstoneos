@@ -52,6 +52,12 @@ struct sdrt sdrt;
  * block, which the EL1 map makes non-cacheable (platform/a733/platform.c),
  * 1 MiB above the result page. */
 static uint8_t buffer[SUNXI_MMC_MAX_DMA_BLOCKS*512u] __attribute__((aligned(4096)));
+static uint32_t chain_crc[16];
+static int chain_read(void)
+{
+    return sdrt.input.profile==SUNXI_MMC_SD_HIGH_SPEED4&&sdrt.input.reads==1&&
+        sdrt.input.plan[0].first==0&&sdrt.input.plan[0].blocks==128;
+}
 #define SDRT_DESCRIPTORS ((volatile struct sunxi_mmc_dma_descriptor *)(uintptr_t)UINT64_C(0x42100000))
 static StaticTask_t tasks[2];
 static StackType_t stacks[2][4096];
@@ -238,6 +244,7 @@ SDRT_ENTRY int sdrt_step(void)
         if(r==A733_MMC_BUSY)return 0;
         if(r!=A733_MMC_READY||sdrt.result.error!=SUNXI_MMC_OK||sdrt.result.received!=q->blocks*512u)return stop(7);
         sdrt.crc[sdrt.done]=crc32(buffer,q->blocks*512u);
+        if(chain_read())for(unsigned i=0;i<16;++i)chain_crc[i]=crc32(buffer+i*4096u,4096);
         const struct sunxi_mmc_result *t=&sdrt.result;
         sdrt.timing[sdrt.done]=(struct sdrt_timing){t->command_us,t->first_byte_us,t->done_us,t->clean_us,
             t->invalidate_us,t->polls};
@@ -316,6 +323,10 @@ SDRT_ENTRY void sdrt_report(int outcome)
         *p++=' ';p=hex(p,t->invalidate_us>0xfffu?0xfffu:t->invalidate_us,3);
         *p++=' ';p=hex(p,t->polls>0xffffu?0xffffu:t->polls,4);
         *p++=' ';p=hex(p,sdrt.crc[i],8);*p++='\n';*p=0;platform_puts(text);
+    }
+    if(chain_read()&&sdrt.done==1)for(unsigned i=0;i<16;++i){
+        p=text;*p++='C';*p++=' ';p=hex(p,i,2);*p++=' ';p=hex(p,chain_crc[i],8);
+        *p++='\n';*p=0;platform_puts(text);
     }
     line("SD_READS=",sdrt.done);line("SD_PLAN=",sdrt.input.reads);
     line("SD_PMIC_PARKED=",atomic_load_explicit(&sdrt.pmic_parked,memory_order_acquire));

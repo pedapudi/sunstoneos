@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Bind the new return decoder to an actual linked producer log, without USB."""
 import argparse
+import binascii
 import copy
 import contextlib
 import importlib.util
@@ -19,11 +20,71 @@ def load(name, path):
     module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module); return module
 
 
+def check_chain(tool, native, output):
+    raw = (native / 'chain.input.bin').read_bytes(); log = (native / 'chain.log').read_text()
+    given = tool.parse_input(raw); assert given['plan'] == tool.CHAIN_READ_PLAN
+    value = tool.decode_log(log, raw, 0)
+    # Independent card-model bytes, split as PIO eight-sector requests. This
+    # fixture models parity; it is not a physical PIO capture or authority.
+    reference = dict(complete=True, status=0, card=copy.deepcopy(value['card']), reads=[])
+    for index in range(16):
+        first = index*8
+        payload = bytes((((first+i//512)*13+i%512)*37+11)%256 for i in range(4096))
+        reference['reads'].append(dict(first=first, blocks=8, bytes=4096, crc32=binascii.crc32(payload)))
+    terminal = dict(magic=0x534b4552, stage=5, status=0)
+    result = tool.validate_successful_return(value, terminal, raw, reference)
+    assert result['policy'] == tool.CHAIN_RETURN and result['reference_crc']['matched_bytes'] == 65536
+    refusals = []
+    chunks = [line for line in log.splitlines(True) if line.startswith('C ')]
+    for label, bad, reason in (
+        ('missing', log.replace(chunks[-1], ''), 'incomplete chain CRC coverage'),
+        ('duplicate', log+chunks[-1], 'chain CRC index'),
+        ('reordered', log.replace(chunks[0]+chunks[1], chunks[1]+chunks[0]), 'chain CRC index'),
+        ('extra', log+'C 10 00000000\n', 'chain CRC index')):
+        refusals.append([label, harness.refused(lambda: tool.decode_log(bad, raw, 0), reason)])
+    bad = copy.deepcopy(value); bad['chunk_crc32'][-1] ^= 1
+    refusals.append(['last CRC', harness.refused(lambda: tool.validate_successful_return(
+        bad, terminal, raw, reference), 'CRC mismatch')])
+    for label, key, replacement in (('sector', 'first', 128), ('blocks', 'blocks', 7),
+                                     ('bytes', 'bytes', 3584), ('CRC type', 'crc32', True)):
+        prior = copy.deepcopy(reference); prior['reads'][-1][key] = replacement
+        refusals.append([label, harness.refused(lambda: tool.validate_successful_return(
+            value, terminal, raw, prior), 'malformed chain-read reference')])
+    prior = copy.deepcopy(reference); prior['reads'].pop()
+    refusals.append(['coverage', harness.refused(lambda: tool.validate_successful_return(
+        value, terminal, raw, prior), 'reference coverage')])
+    prior = copy.deepcopy(reference); prior['card']['cid'] = '0'*32
+    refusals.append(['CID', harness.refused(lambda: tool.validate_successful_return(
+        value, terminal, raw, prior), 'same card')])
+    run = output / 'chain-run'; run.mkdir()
+    (run / 'kernel.log').write_text(log)
+    (run / 'session.json').write_text(json.dumps(dict(complete=True, launch_attempted=True,
+        transport_failed=False, automatic_access=True, mode='kernel', returned_node='/dev/bus/usb/003/099',
+        result=terminal, model='native producer with modeled hardware/ROM delegation')))
+    inp = output / 'chain.input.bin'; inp.write_bytes(raw)
+    provenance = dict(return_policy=tool.CHAIN_RETURN, input_sha256=tool.digest(inp),
+                      approval_sha256='a'*64, request_sha256='b'*64)
+    inp.with_suffix('.json').write_text(json.dumps(provenance))
+    ref = output / 'chain-reference.json'; ref.write_text(json.dumps(reference))
+    argv = ['decode', '--run', str(run), '--input', str(inp), '--reference', str(ref),
+            '--output', str(output / 'chain-result.json'), '--require-restored-return']
+    with contextlib.redirect_stdout(io.StringIO()): assert tool.main(argv) == 0
+    for policy in (tool.POWER_REMOVAL, tool.RESTORED_RETURN):
+        inp.with_suffix('.json').write_text(json.dumps(provenance | {'return_policy': policy}))
+        refusals.append(['wrong policy', harness.refused(lambda: tool.main(argv), 'does not authorize')])
+    inp.with_suffix('.json').write_text(json.dumps(provenance))
+    no_reference = argv[:argv.index('--reference')] + argv[argv.index('--reference')+2:]
+    refusals.append(['missing reference', harness.refused(lambda: tool.main(no_reference), 'requires --reference')])
+    (output / 'chain-check.json').write_text(json.dumps(dict(passed=True, physical=False,
+        comparison=result['reference_crc'], refusals=refusals), indent=2)+'\n')
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--native', type=Path, required=True); p.add_argument('--output', type=Path, required=True)
     a = p.parse_args(); a.output.mkdir(parents=True, exist_ok=False)
     tool = load('sd_return_host', ROOT / 'tools/storage-read-returning.py')
+    if (a.native / 'chain.input.bin').exists(): check_chain(tool, a.native, a.output)
     raw = (a.native / 'nominal.input.bin').read_bytes(); log = (a.native / 'nominal.log').read_text()
     value = tool.decode_log(log, raw, 0); assert value['complete'] and value['words']['SD_RESTORED'] == 1
     refusals = []
@@ -47,7 +108,9 @@ def main():
     # identity lines, whose format comes from main.c; retain the actual task
     # and monitor output for all restoration and card facts.
     given = tool.parse_input(raw)
-    strict_log = log + f"SD_PROFILE=0x{given['profile']:016x}\nSD_GENERATION=0x{given['generation']:016x}\n"
+    strict_log = log
+    if 'SD_PROFILE=' not in log:
+        strict_log += f"SD_PROFILE=0x{given['profile']:016x}\nSD_GENERATION=0x{given['generation']:016x}\n"
     strict = tool.decode_log(strict_log, raw, 0)
     terminal = dict(magic=0x534b4552, stage=5, status=0)
     reference = copy.deepcopy(strict)
@@ -128,6 +191,20 @@ def main():
     made = json.loads((a.output / 'policy.input.json').read_text())
     assert made['return_policy'] == tool.RESTORED_RETURN and made['request_sha256'] == tool.digest(request)
     assert tool.parse_input((a.output / 'policy.input.bin').read_bytes())['plan'] == tool.FIRST_READ_PLAN
+    chain_approval = fixture.approval(a.output / 'chain-approval.json', 'A', fields)
+    tool.sign(chain_approval, ddr, survey, 'MODEL', tool.CHAIN_RETURN, request)
+    chain_argv = list(input_argv)
+    chain_argv[chain_argv.index('--approval')+1] = str(chain_approval)
+    chain_argv[chain_argv.index('--output')+1] = str(a.output / 'chain-policy.input.bin')
+    chain_argv[chain_argv.index('--plan')+1] = 'chain-read'
+    chain_argv[chain_argv.index('--return-policy')+1] = tool.CHAIN_RETURN
+    with contextlib.redirect_stdout(io.StringIO()): assert tool.main(chain_argv) == 0
+    assert tool.parse_input((a.output / 'chain-policy.input.bin').read_bytes())['plan'] == tool.CHAIN_READ_PLAN
+    assert json.loads((a.output / 'chain-policy.input.json').read_text())['return_policy'] == tool.CHAIN_RETURN
+    strict_refusals.append(harness.refused(lambda: tool.approved(
+        chain_approval, request, ddr, survey, 'A', tool.RESTORED_RETURN), 'another return policy'))
+    bad_chain = list(chain_argv); bad_chain[bad_chain.index('--plan')+1] = 'first-read'
+    strict_refusals.append(harness.refused(lambda: tool.main(bad_chain), '--plan chain-read'))
 
     value = json.loads(approval.read_text())
     for word in tool.RESTORED_RECOVERY:

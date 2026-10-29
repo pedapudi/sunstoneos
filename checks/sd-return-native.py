@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Actual SD task/close and linked private monitor guard; modeled hardware only."""
 import argparse
+import binascii
 import copy
 import hashlib
 import json
@@ -93,16 +94,16 @@ class Machine(old.Card):
             self.trace.append(['write', a, value]); self.regs[a] = value; return
         super().write_mmio(cpu, access, a, size, value, unused)
 
-    def start(self):
+    def start(self, plan=None):
         self.monitor = True; self.call('__wrap_monitor_init'); self.monitor = False
         assert self.read(RECEIPT+8, 8) == 1
-        raw = old.host.input_bytes(2, 0x1234567, old.FIXTURE, [(0, 8)], ids=(7, 9, 11))
+        raw = old.host.input_bytes(2, 0x1234567, old.FIXTURE, plan or [(0, 8)], ids=(7, 9, 11))
         self.cpu.mem_write(0x43000000, raw)
         assert self.call('sdrt_setup') == 1 and self.call('sdrt_bind', 2) == 1 and self.call('sdrt_arm') == 1
         return raw
 
 
-def run(elf, out, inflight_only=False, admission_only=False, busy_only=False):
+def run(elf, out, inflight_only=False, admission_only=False, busy_only=False, chain_only=False):
     out.mkdir(parents=True, exist_ok=False)
     image = harness.Image(elf, old.LAYOUTS)
     # Decode actual branches, not source-name assumptions: 16 vector slots and
@@ -126,6 +127,31 @@ def run(elf, out, inflight_only=False, admission_only=False, busy_only=False):
         (out / (name+'.log')).write_text(m.log)
         results[name] = dict(terminal=m.terminal, receipt=m.read(RECEIPT+8, 8), **extra)
         (out / 'results.json').write_text(json.dumps(results, indent=2)+'\n')
+
+    if chain_only:
+        for name, blocks in (('nominal', 8), ('chain', 128)):
+            m = Machine(image); raw = m.start([(0, blocks)])
+            m.log = ('SD_RETURN_VERSION=0x0000000000000001\n'
+                     'SD_PROFILE=0x0000000000000002\nSD_GENERATION=0x0000000001234567\n')
+            m.call('sd_task', 0)
+            assert m.terminal == 'qualified-monitor' and m.exit == 0 and m.read(RECEIPT+8, 8) == 5
+            assert m.release == ['pins', 'rail'] and m.field('done') == 1 and not m.pf_writes
+            assert len(m.dma_reads) == 1 and len(m.dma_reads[0]['descriptors']) == blocks // 8
+            data = m.dma_reads[0]['data']; buffer = image.address('buffer')
+            assert m.cache_events == [('clean', buffer, blocks*512), ('invalidate', buffer, blocks*512)]
+            value = old.host.decode_log(m.log, raw, 0)
+            assert value['complete'] and value['reads'][0]['crc32'] == binascii.crc32(data)
+            if blocks == 128:
+                assert value['chunk_crc32'] == [binascii.crc32(data[i:i+4096]) for i in range(0, 65536, 4096)]
+            else: assert 'chunk_crc32' not in value
+            command = next(i for i, t in enumerate(m.trace) if t[0] == 'write' and t[1] == 0x04020018 and t[2]&63 == 18)
+            assert not any(t[0] == 'read' and t[1] == 0x04020200 for t in m.trace[command:])
+            assert not any(t[0] == 'write' and t[1] == 0x04020018 and t[2] & (1 << 10) for t in m.trace)
+            assert not m.regs.get(0x03400118, 0)&2 and not m.regs.get(0x0402008c, 0)
+            (out / (name+'.input.bin')).write_bytes(raw)
+            save(name, m, cache_events=m.cache_events, descriptors=len(m.dma_reads[0]['descriptors']),
+                 read_crc=value['reads'][0]['crc32'], chunk_crc32=value.get('chunk_crc32'), close_release=m.release)
+        return
 
     def inflight():
         n = Machine(image); n.start(); n.interrupt_dma = True
@@ -208,4 +234,5 @@ if __name__ == '__main__':
     p.add_argument('--inflight-only', action='store_true', help='only the in-flight interrupt injection')
     p.add_argument('--admission-only', action='store_true', help='only initialized refusal and receipt-mapping admission')
     p.add_argument('--busy-only', action='store_true', help='only the caller deadline under stuck serialization')
-    p.add_argument('--output', type=Path, required=True); a = p.parse_args(); run(a.image, a.output, a.inflight_only, a.admission_only, a.busy_only)
+    p.add_argument('--chain-only', action='store_true', help='one sixteen-descriptor read and legacy first-read nominal')
+    p.add_argument('--output', type=Path, required=True); a = p.parse_args(); run(a.image, a.output, a.inflight_only, a.admission_only, a.busy_only, a.chain_only)
