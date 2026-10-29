@@ -9737,6 +9737,33 @@
   "summary": "Linked SPI application boundaries; controller returns/shared manager state modeled.",
   "usb": false
  },
+ "spi-dma-host.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--bundle",
+   "--frame",
+   "--output"
+  ],
+  "summary": "Offline DMA session authority, frozen bundle and fragmented copied capture.",
+  "usb": false
+ },
+ "spi-dma-native.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--session",
+   "--output",
+   "--nominal"
+  ],
+  "summary": "Linked SPI/DMA application, controller, startup, allocation and native adapters.",
+  "usb": false
+ },
  "spi-interrupt-host.py": {
   "cache_areas": [],
   "docs": [],

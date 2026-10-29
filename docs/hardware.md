@@ -1033,7 +1033,8 @@ to the stated scope:
   data phases after a single-lane prefix, and DMA transfers on requests 23–26
   and 53 with verified request gating and abandonment; host and platform
   models pass. Routes lack IO2/IO3 pins, so the platform refuses quad, and
-  SPI4 has no DMA request in the manual. No application uses these modes.
+  SPI4 has no DMA request in the manual. Dual and quad modes still lack an
+  application consumer; the SPI3 DMA application is described below.
   Board admission, physical peers, three-wire and bit-aligned modes and SPIF
   remain outstanding.
   The [supervised SPI3 application](spi-application.md#deferred-interrupt-software-evidence)
@@ -1050,7 +1051,17 @@ to the stated scope:
   is in a later Type-C task body, not created for SPI workload 2; no hypothetical
   rebuilt-image equivalence is claimed. SPI/GIC, PMIC, scheduling and transport
   effects are modeled. Physical exchange, IRQ delivery, signal timing, electrical
-  compatibility and recovery remain unqualified; application DMA and broader modes remain required.
+  compatibility and recovery remain unqualified; broader wire modes remain required.
+  The native DMA profile sends an authenticated 1–16-byte command and receives
+  4096 bytes through two DMA channels in the existing owner task. Real SPI IRQ
+  delivery, terminal controller checks, request shutdown, both channel drains
+  and RX cache synchronization precede the 4320-byte copied result. Callback
+  failures cannot return into completion and retain all resource ownership.
+  The 960-byte session binds the command and DMA authority. Focused native,
+  failure, mapping, GIC, host and legacy IRQ checks pass under
+  `spi-dma-native-1026/final-snapshot/`. Added cost is 24,868 text bytes and
+  29,152 storage bytes including a 16 KiB DMA allocation; there is no new task
+  or CPU FIFO access. Physical peer, IRQ, DMA/cache and recovery remain unqualified.
 - PWM and ADC: **implemented** [continuous fan and GPIO LED control](pwm.md).
   The complete application has a boot-CPU-only profile under
   `pwm-single-core-20261018/`; one build, sixteen startup/IRQ/profile cases and

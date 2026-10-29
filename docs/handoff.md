@@ -67,7 +67,6 @@ does not establish recovery from a fault.
 
 | Work | Branch | Immediate deliverable |
 | --- | --- | --- |
-| Native SPI3 DMA | `work/resume-spi-dma-native-1026` | Complete focused native execution and host evidence for the implemented 4096-byte DMA response path |
 | HDMI audio streaming | `work/resume-hdmi-stream-1026` | Complete native refill, USB transport and host preparation/capture in isolated worktrees, then validate their composition |
 
 Independent reviewers cover CPU/thermal/DRAM, accelerator operation and peripheral
@@ -381,6 +380,21 @@ be pruned.
   USB operation 8 carries performance control; operation 7 retains thermal
   reporting. This profile reports GPU state but has no GPU runtime owner.
   Physical switching, thermal response and recovery remain unqualified.
+- **Native SPI3 DMA command-response transfers are implemented.** The existing
+  owner sends one authenticated command of 1–16 bytes and receives 4096 bytes
+  through two DMA channels. A real SPI interrupt, terminal controller checks,
+  request shutdown, both channel drains and RX cache synchronization precede
+  copied output. Callback failures close output and retain SPI, DMA, clock and
+  rail ownership. The 960-byte session binds the exact command and DMA authority;
+  the PE0–3 route still requires a compatible 1.8 V peer.
+  The native image, success/failure and mapping cases, GIC handoff, host
+  preparation/capture and legacy IRQ compatibility pass under
+  `spi-dma-native-1026/final-snapshot/`. Independent review approved the
+  implementation and the comment-only header supplement. Added cost is 24,868
+  text bytes and 29,152 storage bytes, including the 16 KiB DMA allocation.
+  There is no added task or CPU FIFO access; one transfer uses five 4 KiB cache
+  operations. Physical peer compatibility, interrupt delivery, DMA/cache behavior
+  and recovery remain unqualified.
 - **Headset audio closes between recognition activations.** The existing paired
   control connection remains live. Reopening requires a successful local audio
   disconnect, drained transport and copied records, unchanged security identity
