@@ -77,9 +77,18 @@ physical return.
 No board, USB or queue access occurred. Physical IRQ delivery, NPU execution,
 cache visibility, numerical output, shutdown and ROM return remain unqualified.
 
-`build.py --restart --evidence PATH` builds the separate software-only baseline
-composition with a normal local stop/restart between the two jobs. It retains
-domain/SRAM ownership and uses four IRQ completions, including two bootstraps.
-The existing host admission rejects its distinct profile; it grants no board
-authority. See the [restart contract](../../docs/npu-startup.md#normal-restart-within-one-powered-lifetime)
-and run the linked client check with `checks/npu-interrupt-client.py --restart`.
+`build.py --restart --evidence PATH` builds the distinct returning diagnostic
+`npu-interrupt-restart-return-v1`. It runs the trusted convolution once, reaps
+and closes it, locally stops and reopens the same owners, then runs the second
+job and retires through the existing finite return. Four IRQ completions cover
+both bootstraps and both jobs. The immutable restart marker prevents relabeling
+an ordinary image.
+
+The same host commands prepare and capture this profile. Its admission adds a
+hashed restart review for the exact retained owners and lifetime, explicitly
+marked `under-test`; built manifests retain `physical_admission=false`.
+See the [returning restart admission](../../docs/npu-startup.md#returning-restart-diagnostic-requires-a-separate-admission-review)
+for required records, validation evidence and physical limits. Run the linked
+client check with `checks/npu-interrupt-client.py --restart`, then the host
+check with `--native IMAGE_DIRECTORY --client-logs CLIENT_CHECK_DIRECTORY
+--evidence NEW_DIRECTORY`. No physical same-instance restart has run.

@@ -12,6 +12,9 @@
 #endif
 #ifdef SUNSTONE_NPU_RESTART
 #define EXPECTED_IRQ_COMPLETIONS 4u
+__attribute__((used,retain)) const uint64_t npu_restart_return_profile[4]={
+    UINT64_C(0x4e50555253543031),1,2,4
+};
 #else
 #define EXPECTED_IRQ_COMPLETIONS 3u
 #endif

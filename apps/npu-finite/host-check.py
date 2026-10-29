@@ -38,7 +38,12 @@ assert h.timing('NPU_STAGE=OPEN\n') is None
 def ref(path):return {'path':str(path.resolve()),'sha256':sha(path.read_bytes())}
 results=[]
 with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
- t=Path(temporary);native=a.native.resolve();image=native/'image.elf';manifest=native/'manifest.json';data=image.read_bytes();parts,address,build,layout,g=h.image_profile(data,json.loads(manifest.read_bytes()));checkpoint=bool(g.get('checkpoint'));thermal=bool(g.get('thermal'));execution=h.geometry_profile(g)
+ t=Path(temporary);native=a.native.resolve();image=native/'image.elf';manifest=native/'manifest.json';data=image.read_bytes();parts,address,build,layout,g=h.image_profile(data,json.loads(manifest.read_bytes()));checkpoint=bool(g.get('checkpoint'));thermal=bool(g.get('thermal'));restart=bool(g.get('restart'));execution=h.geometry_profile(g)
+ completions=4 if restart else 3
+ IRQ_RECEIPTS=f'NPU_IRQ_COMPLETIONS=0x{completions:016x}\nNPU_IRQ_STOPPED=0x0000000000000001\n'
+ if restart:
+  assert a.interrupt
+  restart_conditions=h.validate_admission.__globals__['RESTART_CONDITIONS']
  TAIL=min(100,len(bytes.fromhex(g['reference']))//2)
  # The reviewed 608-byte page, converted to the image's reduced record.
  spec=importlib.util.spec_from_file_location('finite_images',r/'checks/npu-image-checks.py');images=importlib.util.module_from_spec(spec);spec.loader.exec_module(images)
@@ -132,6 +137,10 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
  if a.interrupt:
   irq=write('interrupt.json',{**common,'schema':'a733-npu-interrupt-entry-v1','build_id':build.hex(),'interrupt':97,'cpu':0,'conditions':{k:ref(fact) for k in IRQ_CONDITIONS}})
   entry['interrupt']=ref(irq)
+ if restart:
+  restart_record=write('restart.json',{**common,**profile,'schema':'a733-npu-normal-restart-entry-v1',
+   'build_id':build.hex(),'reviewed':True,'restart_qualification':'under-test','conditions':{k:ref(fact) for k in restart_conditions}})
+  entry['restart']=ref(restart_record)
  admission=write('admission.json',entry);raw[80:112]=hashlib.sha256(admission.read_bytes()).digest();session=t/'session.bin';session.write_bytes(raw)
  boot_path=t/'typed-boot.bin';boot_path.write_bytes(raw[boot:boot+boot_bytes])
  constructed=t/'constructed-session.bin';h.construct_session(image,manifest,boot_path,admission,constructed)
@@ -206,10 +215,12 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
    jobs=int(variant!='thermal-zero');reason=2;status=1 if variant=='thermal-one-mismatch' else 2
    if jobs==0:first=bytes(32);second=bytes(len(reference))
    elif status==1:second=bytes([reference[0]^1])+reference[1:];first=hashlib.sha256(second).digest()
-  text='NPU_STAGE=WAIT_STARTUP\nNPU_STAGE=QUIESCENT\nNPU_FIRST_DIGEST=\n'+''.join(f'0x{x:016x}\n' for x in first)+'NPU_SECOND_OUTPUT=\n'+''.join(f'0x{x:016x}\n' for x in second)+(('REFUSED NPU thermal admission; configured sensor disabled and providers parked' if status==2 else 'FAIL NPU numerical comparison' if status else 'PASS NPU two matched jobs, copied output, REAP, CLOSE, local stop and parked providers')+'\n')
+  text='NPU_STAGE=WAIT_STARTUP\nNPU_STAGE=QUIESCENT\nNPU_FIRST_DIGEST=\n'+''.join(f'0x{x:016x}\n' for x in first)+'NPU_SECOND_OUTPUT=\n'+''.join(f'0x{x:016x}\n' for x in second)+(('PASS NPU two matched jobs across normal local restart and parked providers' if restart and not status else 'REFUSED NPU thermal admission; configured sensor disabled and providers parked' if status==2 else 'FAIL NPU numerical comparison' if status else 'PASS NPU two matched jobs, copied output, REAP, CLOSE, local stop and parked providers')+'\n')
   # The image's startup and job times precede the thermal markers.
   text=text.replace('NPU_STAGE=WAIT_STARTUP\n','NPU_STAGE=WAIT_STARTUP\nNPU_TIME_US=\n'+''.join(f'0x{x:016x}\n' for x in TIMES),1)
   if thermal:text=text.replace('NPU_STAGE=QUIESCENT',f'NPU_THERMAL_REASON=0x{reason:016x}\nNPU_JOBS=0x{jobs:016x}\nNPU_STAGE=QUIESCENT')
+  if restart:text=text.replace('NPU_STAGE=WAIT_STARTUP\n',
+   'NPU_STAGE=WAIT_STARTUP\nNPU_STAGE=OPEN\nNPU_STAGE=SUBMIT job=0x0000000000000001\nNPU_STAGE=FIRST_CLOSE\nNPU_STAGE=RESTART_OPEN\nNPU_STAGE=SUBMIT job=0x0000000000000002\nNPU_STAGE=CLOSE\nNPU_STAGE=WAIT_LOCAL_STOP\n',1)
   if a.interrupt:text=text.replace('NPU_STAGE=QUIESCENT\n',IRQ_RECEIPTS+'NPU_STAGE=QUIESCENT\n',1)
   if checkpoint:
    text='NPU_CHECKPOINT=ENTRY_MEMORY_READY; providers never constructed; jobs=0\n'
@@ -354,12 +365,26 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
   saved_irq=irq.read_bytes();bad=json.loads(saved_irq);bad['interrupt']=98;irq.write_text(json.dumps(bad))
   encoded=json.dumps({**entry,'interrupt':ref(irq)}).encode();mutated=bytearray(raw);mutated[80:112]=hashlib.sha256(encoded).digest()
   rejected('other-route-refused',lambda:h.validate_admission(encoded,mutated,build,layout,sha(data),execution_profile=execution));irq.write_bytes(saved_irq)
+  if restart:
+   for name,changed in [('missing-restart-admission',{k:v for k,v in entry.items() if k!='restart'})]:
+    encoded=json.dumps(changed).encode();mutated=bytearray(raw);mutated[80:112]=hashlib.sha256(encoded).digest()
+    rejected(name,lambda:h.validate_admission(encoded,mutated,build,layout,sha(data),execution_profile=execution))
+   saved_restart=restart_record.read_bytes()
+   for key,value in [('npu_owner',profile['npu_owner']+1),('generation',profile['generation']+1),
+                     ('restart_qualification','qualified'),('reviewed',False),('conditions',{})]:
+    changed=json.loads(saved_restart);changed[key]=value;restart_record.write_text(json.dumps(changed))
+    encoded=json.dumps({**entry,'restart':ref(restart_record)}).encode();mutated=bytearray(raw);mutated[80:112]=hashlib.sha256(encoded).digest()
+    rejected('restart-'+key+'-refused',lambda:h.validate_admission(encoded,mutated,build,layout,sha(data),execution_profile=execution))
+   restart_record.write_bytes(saved_restart)
+   rejected('restart-image-relabel-refused',lambda:h.image_profile(data,{**json.loads(manifest.read_bytes()),'execution_profile':h.PROFILE}))
   # Receipts in logs that the actual client produced (checks/npu-interrupt-client.py).
-  for variant in ('matched','mismatch','missing-completion','missing-stop','wrong-completion','duplicate-completion') if a.client_logs else ():
+  for variant in ('matched','mismatch','missing-completion','missing-stop','wrong-completion','duplicate-completion',*(('missing-restart-stage','reordered-restart-stage') if restart else ())) if a.client_logs else ():
    text=(a.client_logs/('mismatch.log' if variant=='mismatch' else 'matched.log')).read_text();status=int(variant=='mismatch')
-   if variant=='missing-completion':text=text.replace('NPU_IRQ_COMPLETIONS=0x0000000000000003\n','')
+   if variant=='missing-completion':text=text.replace(f'NPU_IRQ_COMPLETIONS=0x{completions:016x}\n','')
    if variant=='missing-stop':text=text.replace('NPU_IRQ_STOPPED=0x0000000000000001\n','')
-   if variant=='wrong-completion':text=text.replace('NPU_IRQ_COMPLETIONS=0x0000000000000003','NPU_IRQ_COMPLETIONS=0x0000000000000002')
+   if variant=='wrong-completion':text=text.replace(f'NPU_IRQ_COMPLETIONS=0x{completions:016x}','NPU_IRQ_COMPLETIONS=0x0000000000000002')
+   if variant=='missing-restart-stage':text=text.replace('NPU_STAGE=FIRST_CLOSE\n','')
+   if variant=='reordered-restart-stage':text=text.replace('NPU_STAGE=FIRST_CLOSE\nNPU_STAGE=RESTART_OPEN\n','NPU_STAGE=RESTART_OPEN\nNPU_STAGE=FIRST_CLOSE\n')
    if variant=='duplicate-completion':text='NPU_IRQ_COMPLETIONS=0x0000000000000002\n'+text
    monitor=list(native_report);monitor[3:9]=[5,status,0,11000000,1,12000000]
    header=[0x534b4552,5,status,len(text),0,0,0,0,11500000,12000000]+[0]*6
@@ -368,8 +393,9 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
    frames=struct.pack('<16Q',*monitor),bytes(plat),struct.pack('<11Q',*receipt)
    if variant in ('matched','mismatch'):
     value=h.validate_reports(*frames,prepared)
-    assert value['functional_success']==(variant=='matched') and value['interrupt_completions']==3 and value['interrupt_stopped']
+    assert value['functional_success']==(variant=='matched') and value['interrupt_completions']==completions and value['interrupt_stopped']
     assert value['timing']['counters'] is not None,value['timing']
+    if restart:assert value['normal_restart'] and 'startup_us' not in value['timing'] and 'initial_entry_to_restart_ready_us' in value['timing']
     results.append({'name':variant+'-producer-log-report','passed':True})
    else:rejected(variant+'-receipt-refused',lambda:h.validate_reports(*frames,prepared))
 (a.evidence/'host-result.json').write_text(json.dumps({'passed':True,'physical_access':False,'native_elf_sha256':sha(image.read_bytes()),'host_sha256':sha(HOST.read_bytes()),'checker_sha256':sha(Path(__file__).read_bytes()),'stopped_capture_sha256':sha((r/'apps/npu-finite/stopped-capture.py').read_bytes()),'execution_profile':execution,'native_initializer':{'raw':'native-initial-report.bin','sha256':sha(initialized),'magic':hex(native_report[0]),'boundary':'Actual linked monitor report initialization; contract-validator success and counter modeled, stopped before session seal. Completion fields are modeled; final receipt/status writer covered separately.'},'cases':results,'scope':'New host packaging/admission/report validation/sealed preload/DRAM restoration/retention with mocked FEL and ROM enumeration. Temporary modeled evidence uses a nonexistent test port and is removed. Existing launcher bytes reused; no full native admission, hardware or queues.'},indent=2)+'\n');print('PASS new NPU returned-RAM host cases:',len(results))

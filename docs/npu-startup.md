@@ -310,9 +310,10 @@ mask, rearm and retirement callbacks while retaining resources on failure
 The baseline interrupt consumer has an opt-in software composition for two
 inference requests separated by CLOSE, local stop and restart. Build it with
 `apps/npu-interrupt/build.py --restart --evidence PATH`. Its identity is
-`npu-interrupt-restart-software-v1`; it accepts neither the large graph nor the
-thermal or checkpoint profile. The existing board host admission does not
-accept this profile. Same-instance physical restart remains unqualified.
+`npu-interrupt-restart-return-v1`; it accepts neither the large graph nor the
+thermal or checkpoint profile. The [interrupt host](../apps/npu-interrupt/host.py)
+prepares and captures this diagnostic using its own exact-image restart admission.
+Same-instance physical restart remains unqualified.
 
 The service must be deferred, IRQ-bound and bound to exactly one client. A
 successful inference must reach DONE and be reaped before normal READY-to-CLOSE.
@@ -371,6 +372,65 @@ composition preserves ticket and object identities, copies and reaps both
 outputs, and exercises retained interrupts, canceled work and delayed-worker
 failures. Device arithmetic, interrupt delivery and register effects are modeled;
 the existing numerical fixtures and physical captures remain separate evidence.
+
+### Returning restart diagnostic requires a separate admission review
+
+The returning restart profile runs one trusted catalogue convolution, copies and
+reaps its output, completes CLOSE and local stop, reopens the same retained
+providers and service, then runs the second inference. It closes and stops again
+before the existing provider parking and ROM return. The original 20-second
+application deadline bounds the entire sequence. A retained or uncertain state
+cannot produce a normal-return receipt.
+
+An immutable 32-byte image marker identifies two runs and four notified
+completions. The host checks the marker and linked restart entry points; an
+ordinary interrupt image cannot acquire restart authority by changing its
+manifest. Built manifests continue to report `physical_admission=false`.
+
+Use `apps/npu-interrupt/host.py session`, `prepare`, `validate` and `run` with
+the existing [finite entry procedure](../apps/npu-finite/ENTRY.md). The session
+remains 456 bytes with a 232-byte boot payload. The entry schema remains
+`a733-npu-interrupt-finite-entry-v1`, with the distinct execution profile above.
+In addition to the ordinary finite and interrupt evidence, its `restart` field
+references a hashed `a733-npu-normal-restart-entry-v1` record. That record binds
+the image, build, target, port, epoch, generation, lease, NPU owner, whole-platform
+owner and supervisor. It requires `reviewed=true` and
+`restart_qualification="under-test"`.
+
+The record's hashed conditions cover the same providers, worker, service, queues,
+buffers and tokens; SRAM exclusion throughout both routing windows; first-job
+REAP, CLOSE and local stop before reopening; and the stopped, masked, disabled,
+inactive and pending-clear IRQ route before rearming. They also cover the
+original absolute deadline, retained domain/PLL/rail ownership and permanent
+retention until manual whole-board power removal after uncertainty. The exact
+condition names are `RESTART_CONDITIONS` in the interrupt host. These are
+source-reviewed entry and ownership requirements. They do not assert prior
+physical restart qualification.
+
+The returned log must contain the ordered first CLOSE, restart OPEN and second
+SUBMIT stages, four successful notified completions, and the final stopped
+receipt. Existing monitor identity, two copied-output comparisons, cleanup
+receipt, ROM return and full DRAM-restoration checks still apply. A numerical
+mismatch remains a failed numerical result even when retirement succeeds.
+The timing field `initial_entry_to_restart_ready_us` includes the first
+inference and its stop/reopen sequence; `restart_ready_us` records the final
+READY timestamp. It is not an isolated startup measurement.
+
+Evidence is frozen under `~/.cache/sunstoneos/evidence/sol-npu-restart-host-1028/`.
+One native returning image, four linked client cases, 54 restart host cases and
+22 selected ordinary interrupt host cases pass. The host cases model admission,
+transport and completion records; the linked client cases model service replies
+and device results. The accepted FreeRTOS service/startup restart evidence above
+remains applicable. Against its preserved restart image, executable text and
+mutable storage are unchanged; immutable storage grows by 32 bytes. No hot-path
+operation, allocation, task, queue, MMIO access or wake-up is added.
+
+A physical proposal still needs current board/lifetime grants, DDR and survey
+continuity, IRQ97 state, stable 800 mV supply, exact-image root review and the
+restart ownership review. Fresh DDR alone supplies none of the other authority.
+Run one supervised RAM-only attempt with manual power recovery available and
+stop after the first transport failure. Normal restart, fault recovery, thermal
+response and full domain OFF remain separate physical qualification gaps.
 
 ## Service activation
 

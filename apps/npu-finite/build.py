@@ -14,7 +14,7 @@ p.add_argument('--baseline',type=Path,default=Path.home()/'.cache/sunstoneos/evi
 p.add_argument('--entry-checkpoint',action='store_true',help='return before any provider construction')
 p.add_argument('--thermal',action='store_true',help='poll THS before and during finite execution')
 p.add_argument('--interrupt',action='store_true',help='build the interrupt-driven variant')
-p.add_argument('--restart',action='store_true',help='software-only IRQ composition: local stop/restart between two baseline jobs')
+p.add_argument('--restart',action='store_true',help='IRQ returning diagnostic: local stop/restart between two baseline jobs')
 p.add_argument('--rate-852',action='store_true',help='PLL_NPU at 852 MHz, admitted only for a speed bin that lists 800 mV for it')
 p.add_argument('--rate-492',action='store_true',help='the optional 492 MHz mode; the default is the vendor operating point for the speed bin')
 p.add_argument('--shufflenet',action='store_true',help='the published ShuffleNetV2 graph in the large NN-pool profile (needs --interrupt)')
@@ -78,7 +78,7 @@ script=Path(__file__).resolve()
 if a.interrupt:
  identity['irq_sources']={str(x.relative_to(root)):sha(x) for x in sorted(root/'apps/npu-interrupt'/n for n in ('irq.c','irq.h','irq-route.c','irq-route.h','build.py'))}
  identity['profile']='npu-interrupt-finite-return-v1';script=root/'apps/npu-interrupt/build.py'
-if a.restart:identity['profile']='npu-interrupt-restart-software-v1'
+if a.restart:identity['profile']='npu-interrupt-restart-return-v1'
 if a.thermal:
  identity['profile']='npu-finite-thermal-return-v1'
  identity['thermal_sources']={str(x.relative_to(root)):sha(x) for x in (root/'apps/npu-finite/thermal.c',root/'apps/npu-finite/thermal.h')}

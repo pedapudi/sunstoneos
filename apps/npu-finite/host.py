@@ -10,6 +10,7 @@ stopped=module('finite_npu_stopped',ROOT/'apps/npu-finite/stopped-capture.py')
 original=module('finite_npu_original',ROOT/'apps/npu-convolution/prepare-supervised.py')
 base=original.supervisor.base
 require,sha=base.require,original.sha
+RESTART='npu-interrupt-restart-return-v1'
 PROFILE='npu-finite-return-v1';CHECKPOINT='npu-entry-memory-checkpoint-v1';THERMAL='npu-finite-thermal-return-v1';PROFILES=(PROFILE,CHECKPOINT,THERMAL);SCHEMA='a733-npu-finite-entry-v1';DRAM=(0x41000000,0x1200000)
 HOST_SOURCES=('apps/npu-finite/host.py','apps/npu-finite/stopped-capture.py','tools/a733-returning-host.py','apps/npu-convolution/prepare-supervised.py','apps/npu-convolution/observe.py','tools/check-a733-smp.py','tools/check-a733-smp-supervised.py','tools/check-a733-smp-observe.py','tools/check-a733-kernel.py','tools/usb-access.py','tools/npu-models.json','platform/a733-smp-supervised/launch.c','platform/a733-smp-observe/launch.S','platform/a733-smp-observe/launch.ld','platform/a733-smp-cached/boot.h')
 def save(path,value):base.save_json(path,value)
@@ -47,7 +48,14 @@ def image_profile(data,manifest):
   require(read('npu_entry_checkpoint_profile')==struct.pack('<4Q',0x4e505543484b3031,1,0x4e50554e,0),'Checkpoint immutable marker differs.')
   require(all(n not in symbols for n in ('a733_npu_application_init','npu_convolution_startup_poll','npu_service_activate','vTaskStartScheduler')),'Checkpoint contains a provider or scheduler constructor.')
  else:require('npu_entry_checkpoint_profile' not in symbols,'Checkpoint image cannot use numerical profile.')
+ restart=manifest['execution_profile']==RESTART
+ if restart:
+  require(read('npu_restart_return_profile')==struct.pack('<4Q',0x4e50555253543031,1,2,4) and
+   all(n in symbols and symbols[n]['st_value'] for n in ('npu_convolution_restart_poll','npu_service_restart_prepare','npu_service_restart_resume','npu_application_irq_restart')),
+   'Missing exact returning restart implementation.')
+ else:require('npu_restart_return_profile' not in symbols,'Restart image requires its distinct profile.')
  geometry={'clean_start':lo,'clean_end':hi,'receipt':receipt,'log':log,'reference':read('a733_npu_application_reference').hex()}
+ if restart:geometry['restart']=True
  if thermal:
   require(read('npu_finite_thermal_profile')==struct.pack('<4Q',0x4e50555448533031,1,160,2) and
    layout[:3]==(616,224,392),'Thermal marker/session layout differs.')
@@ -58,7 +66,7 @@ def image_profile(data,manifest):
  if capture is not None:geometry['stopped_capture']=capture
  return parts,address,build,layout,geometry
 
-def geometry_profile(g):return CHECKPOINT if g.get('checkpoint') else THERMAL if g.get('thermal') else PROFILE
+def geometry_profile(g):return RESTART if g.get('restart') else CHECKPOINT if g.get('checkpoint') else THERMAL if g.get('thermal') else PROFILE
 
 def validate_admission(admission_raw,raw,build,layout,image_hash,cache=None,*,execution_profile=PROFILE):
  """Preserve original NPU facts; require a distinct reviewed returning lifetime.
@@ -275,7 +283,8 @@ def validate_reports(monitor,platform,receipt,p):
  if checkpoint:
   require(status==0 and text=='NPU_CHECKPOINT=ENTRY_MEMORY_READY; providers never constructed; jobs=0\n','Checkpoint log or status differs.')
   return {'normal_return':True,'checkpoint':'ENTRY_MEMORY_READY','functional_success':False,'controlled_negative':False,'jobs':0,'status':0,'diagnostic_deadline':deadline,'log':text}
- pattern=r'NPU_STAGE=QUIESCENT\nNPU_FIRST_DIGEST=\n((?:0x[0-9a-f]{16}\n){32})NPU_SECOND_OUTPUT=\n((?:0x[0-9a-f]{16}\n)+)(PASS NPU two matched jobs, copied output, REAP, CLOSE, local stop and parked providers|FAIL NPU numerical comparison|REFUSED NPU thermal admission; configured sensor disabled and providers parked)\n'
+ passed='PASS NPU two matched jobs across normal local restart and parked providers' if p.get('execution_profile')==RESTART else 'PASS NPU two matched jobs, copied output, REAP, CLOSE, local stop and parked providers'
+ pattern=r'NPU_STAGE=QUIESCENT\nNPU_FIRST_DIGEST=\n((?:0x[0-9a-f]{16}\n){32})NPU_SECOND_OUTPUT=\n((?:0x[0-9a-f]{16}\n)+)('+re.escape(passed)+r'|FAIL NPU numerical comparison|REFUSED NPU thermal admission; configured sensor disabled and providers parked)\n'
  matches=list(re.finditer(pattern,text));require(len(matches)==1 and matches[0].end()==len(text),'Missing or ambiguous finite output/terminal marker.')
  values=lambda raw:[int(x,16) for x in raw.splitlines()]
  first,second=values(matches[0][1]),values(matches[0][2]);require(all(v<256 for v in first+second),'Invalid copied output byte.')
