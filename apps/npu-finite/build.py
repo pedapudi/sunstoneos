@@ -12,6 +12,7 @@ p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--evidence',type=Path,required=True)
 p.add_argument('--baseline',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/npu-finite-quiescence-20261018')
 p.add_argument('--entry-checkpoint',action='store_true',help='return before any provider construction')
+p.add_argument('--entry-irq-checkpoint',action='store_true',help='provider-free checkpoint after private IRQ97 capture and installation')
 p.add_argument('--thermal',action='store_true',help='poll THS before and during finite execution')
 p.add_argument('--interrupt',action='store_true',help='build the interrupt-driven variant')
 p.add_argument('--restart',action='store_true',help='IRQ returning diagnostic: local stop/restart between two baseline jobs')
@@ -21,6 +22,7 @@ p.add_argument('--shufflenet',action='store_true',help='the published ShuffleNet
 p.add_argument('--sdk-reference',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/npu-complete-graph-proposal-20261019/sdk-reference',
  help='directory with network_binary.nb, published-input.dat and output0_2_1.dat')
 a=p.parse_args()
+if a.entry_irq_checkpoint:a.entry_checkpoint=True
 if a.entry_checkpoint and a.interrupt:p.error('Entry checkpoint constructs no interrupt provider')
 if a.restart and (not a.interrupt or a.shufflenet or a.thermal or a.entry_checkpoint):p.error('Restart requires the baseline interrupt profile')
 if a.shufflenet and not a.interrupt:p.error('The large graph profile requires --interrupt')
@@ -57,6 +59,9 @@ def compile_like(suffix,source,name):
  c[c.index('-o')+1]=str(dest);c[c.index('-c')+1]=str(source)
  c += ['-MD','-MF',str(dest)+'.d']
  if a.entry_checkpoint:c += ['-DSUNSTONE_NPU_ENTRY_CHECKPOINT=1']
+ if a.entry_irq_checkpoint:
+  c += ['-DSUNSTONE_NPU_ENTRY_IRQ_CHECKPOINT=1']
+  if source==root/'apps/npu-finite/monitor.c':c += ['-DSUNSTONE_NPU_INTERRUPT=1']
  commands.append(c);run(name,c,cwd=entry['directory']);return dest
 monitor=compile_like('/apps/storage-read-single-core/monitor.c',root/'apps/npu-finite/monitor.c','monitor')
 platform=e/'platform.c';text=(e/'native/npu-single-core/platform.c').read_text();assert text.count('_Noreturn void platform_exit(')==1
@@ -72,6 +77,7 @@ if a.rate_852 or a.rate_492:
  commands.append(c);run(f'native-{rate}',c,cwd=entry['directory'])
 assembly=compile_like('/arch/aarch64/cache.S',root/'apps/npu-finite/return.S','return-assembly')
 checkpoint=compile_like('/apps/npu-convolution/native.c',root/'apps/npu-finite/checkpoint.c','checkpoint') if a.entry_checkpoint else None
+checkpoint_irq=compile_like('/apps/npu-convolution/native.c',root/'apps/npu-interrupt/irq-route.c','checkpoint-irq-route') if a.entry_irq_checkpoint else None
 # Bind the new monitor/cleanup/return sources into the existing authenticated
 # image identity; the original producer identity already covers unchanged inputs.
 identity={'base_build_id':(e/'native/npu-single-core/build-id.txt').read_text().strip(),'sources':{str(x.relative_to(root)):sha(x) for x in sorted(root/'apps/npu-finite'/n for n in ('monitor.c','return.c','return.S','return.h','link.ld','build.py'))},'platform_sha256':sha(platform),'profile':'npu-finite-return-v1'}
@@ -94,6 +100,9 @@ if a.shufflenet:
 if a.entry_checkpoint:
  identity['profile']='npu-entry-mbus-checkpoint-v1'
  identity['checkpoint_sources']={str(x.relative_to(root)):sha(x) for x in (root/'apps/npu-finite/checkpoint.c',root/'apps/npu-finite/checkpoint.h')}
+if a.entry_irq_checkpoint:
+ identity['profile']='npu-entry-irq-checkpoint-v1'
+ identity['checkpoint_irq_sources']={str(x.relative_to(root)):sha(x) for x in (root/'apps/npu-interrupt/irq-route.c',root/'apps/npu-interrupt/irq-route.h')}
 build_id=hashlib.sha256(json.dumps(identity,sort_keys=True).encode()).hexdigest();source=e/'build-id.c';source.write_text('const unsigned char a733_smp_build_id[32]={'+','.join('0x'+build_id[i:i+2] for i in range(0,64,2))+'};\n')
 build_obj=compile_like('/npu-single-core/build-id.c',source,'build-id')
 replacements={'/apps/storage-read-single-core/monitor.c.obj':monitor,'/npu-single-core/platform.c.obj':platform_obj,'/npu-single-core/build-id.c.obj':build_obj}
@@ -110,6 +119,7 @@ for value in link:
  newlink.append(value)
 newlink[-1]=str(e/'image.elf');newlink[-2:-2]=[str(ret),str(assembly),'-Wl,--undefined=a733_npu_application_artifact_hashes']
 if a.thermal:newlink[-2:-2]=['-Wl,--undefined=npu_finite_thermal_profile']
+if checkpoint_irq:newlink[-2:-2]=[str(checkpoint_irq)]
 if a.entry_checkpoint:newlink[-2:-2]=['-Wl,--undefined='+n for n in ('a733_npu_application_model','a733_npu_application_input','a733_npu_application_reference')]
 commands.append(newlink);run('link',newlink,cwd=e/'native')
 copy=['/usr/lib/llvm-21/bin/llvm-objcopy','-O','binary',str(e/'image.elf'),str(e/'image.bin')];commands.append(copy);run('binary',copy)

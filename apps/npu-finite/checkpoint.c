@@ -10,6 +10,10 @@ __attribute__((used,retain)) const uint64_t npu_entry_checkpoint_profile[4]={
     NPU_ENTRY_RECEIPT_MAGIC,1,NPU_ENTRY_MEMORY_READY,0};
 __attribute__((used,retain)) const uint64_t npu_entry_checkpoint_mbus_profile[4]={
     NPU_ENTRY_MBUS_MAGIC,1,3,0};
+#ifdef SUNSTONE_NPU_ENTRY_IRQ_CHECKPOINT
+__attribute__((used,retain)) const uint64_t npu_entry_checkpoint_irq_profile[4]={
+    NPU_ENTRY_IRQ_MAGIC,1,97,0};
+#endif
 uint64_t npu_entry_checkpoint_mbus[4] __attribute__((section(".npu_runtime_retained")));
 static struct {
     uint64_t complete,epoch,generation,lease,armed_at,deadline;

@@ -129,6 +129,7 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
  if checkpoint:
   conditions-= {'npu-startup-sram-confinement-drain-ownership','pmic-bus-rail-pin-ownership'}
   conditions|= {'providers-never-constructed','read-only-NPU-clock-guard-before-MBUS-normalization' if g.get('checkpoint_mbus') else 'npu-clock-power-registers-not-accessed'}
+ if g.get('checkpoint_irq'):conditions.add('exclusive-IRQ97-route-capture-install-restore')
  platform=write('platform.json',{**common,**profile,'schema':'a733-npu-checkpoint-platform-v1' if checkpoint else 'a733-npu-convolution-platform-v1','conditions':{k:ref(fact) for k in conditions},'entry_conditions_established':True,'physical_coherence_result':'under-test'})
  launcher=Path.home()/'.cache/sunstoneos/evidence/npu-single-core-20261018/package-final/bundle/launch.bin'
  review=write('root.json',{**common,'schema':'a733-npu-finite-return-review-v1','reviewed':True,'execution_profile':execution,'build_id':build.hex(),'supervisor':profile['supervisor'],'launcher_sha256':sha(launcher.read_bytes()),'host_sources':{n:sha((r/n).read_bytes()) for n in h.HOST_SOURCES},'conditions':{k:ref(fact) for k in ('architecture-reset-reviewed','software-handoff-reviewed','normal-return-retirement-reviewed','failure-retention-reviewed')}})
@@ -185,9 +186,12 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
   rejected('finite-missing-'+key,lambda:h.validate_admission(encoded,mutated,build,layout,sha(data),execution_profile=execution))
  platform.write_bytes(saved_platform)
  if checkpoint:
+  if g.get('checkpoint_irq'):
+   rejected('IRQ-checkpoint-cannot-use-MBUS-profile',lambda:h.image_profile(data,{**json.loads(manifest.read_bytes()),'execution_profile':h.MBUS_CHECKPOINT}))
+   rejected('IRQ-checkpoint-cannot-use-memory-profile',lambda:h.image_profile(data,{**json.loads(manifest.read_bytes()),'execution_profile':h.CHECKPOINT}))
   rejected('checkpoint-cannot-use-numerical-profile',lambda:h.image_profile(data,{**json.loads(manifest.read_bytes()),'execution_profile':h.PROFILE}))
   saved_platform=platform.read_bytes()
-  for key in ('remote-writers-excluded','providers-never-constructed','read-only-NPU-clock-guard-before-MBUS-normalization' if g.get('checkpoint_mbus') else 'npu-clock-power-registers-not-accessed'):
+  for key in ('remote-writers-excluded','providers-never-constructed','read-only-NPU-clock-guard-before-MBUS-normalization' if g.get('checkpoint_mbus') else 'npu-clock-power-registers-not-accessed')+(('exclusive-IRQ97-route-capture-install-restore',) if g.get('checkpoint_irq') else ()):
    changed=json.loads(saved_platform);del changed['conditions'][key];platform.write_text(json.dumps(changed))
    encoded=json.dumps({**entry,'platform':ref(platform)}).encode();mutated=bytearray(raw);mutated[80:112]=hashlib.sha256(encoded).digest()
    rejected('checkpoint-missing-'+key,lambda:h.validate_admission(encoded,mutated,build,layout,sha(data),execution_profile=execution))

@@ -132,6 +132,9 @@ _Noreturn void sd_single_core_exception(uint64_t operation,uint64_t status,uint6
     if(status || (caller&15)!=5 || !(caller&0x80) ||
        !npu_entry_checkpoint_ready(admission.epoch,admission.generation,admission.lease,
            admission.armed_at,admission.diagnostic_deadline))a733_smp_stop(6,operation);
+#ifdef SUNSTONE_NPU_ENTRY_IRQ_CHECKPOINT
+    if(!npu_irq_route_installed(&saved.npu_irq,deadline))a733_smp_stop(6,operation);
+#endif
 #endif
     if(kind!=1 || (esr>>26)!=0x17 || operation!=0x733 || status>
 #ifdef SUNSTONE_NPU_FINITE_THERMAL

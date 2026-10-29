@@ -10,5 +10,7 @@ struct npu_irq_route_snapshot {
 };
 int npu_irq_route_capture(struct npu_irq_route_snapshot *, uint64_t deadline);
 int npu_irq_route_install(struct npu_irq_route_snapshot *, uint64_t deadline);
+/* Read-only installed-state authentication; groups may already be enabled. */
+int npu_irq_route_installed(const struct npu_irq_route_snapshot *, uint64_t deadline);
 int npu_irq_route_restore(struct npu_irq_route_snapshot *, uint64_t deadline);
 #endif

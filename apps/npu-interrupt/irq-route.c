@@ -71,6 +71,16 @@ int npu_irq_route_install(struct npu_irq_route_snapshot *s,uint64_t deadline)
         !(a733_mmio_read32(GICD+0xc18)&CONFIG_MASK) &&
         (a733_mmio_read32(GICD+0x460)&PRIORITY_MASK)==PRIORITY && read_route()==0;
 }
+int npu_irq_route_installed(const struct npu_irq_route_snapshot *s,uint64_t deadline)
+{
+    /* The provider-free checkpoint authenticates installation before normal
+     * restoration. It neither enables IRQ97 nor clears pending/active state. */
+    return s && s->phase==2 && monitor_ready(deadline,0) &&
+        (a733_mmio_read32(GICD+0x8c)&BIT)==BIT && !(a733_mmio_read32(GICD+0xd0c)&BIT) &&
+        !(a733_mmio_read32(GICD+0xc18)&CONFIG_MASK) &&
+        (a733_mmio_read32(GICD+0x460)&PRIORITY_MASK)==PRIORITY && read_route()==0 &&
+        quiet() && timely(deadline);
+}
 int npu_irq_route_restore(struct npu_irq_route_snapshot *s,uint64_t deadline)
 {
     if(!s || s->phase!=2 || !monitor_ready(deadline,1))return 0;

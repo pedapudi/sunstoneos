@@ -175,6 +175,42 @@ does not relax their retention. No diagnostic is available before successful
 checkpoint entry. A missing return therefore remains ambiguous and requires
 physical recovery; it does not authorize another launch.
 
+### Return after IRQ97 installation
+
+`build.py --entry-irq-checkpoint --evidence DIRECTORY` builds the distinct
+`npu-entry-irq-checkpoint-v1` profile. It adds the existing private EL3 monitor's
+IRQ97 capture and installation to the provider-free MBUS checkpoint. The base
+NPU interrupt application stays disabled. Only the route helper is added;
+there is no ISR entry point, task, device provider or NPU engine access.
+
+Before normal return, the monitor requires protected snapshot phase 2,
+CPU0 affinity, Group1NS, level trigger and priority `0xd8` for IRQ97. It also
+requires the source disabled, inactive and pending-clear, with the deadline
+checked after all field reads. The existing restoration writes the captured
+route fields back and verifies them before restoring the shared GIC state.
+Capture, install, authentication or restoration failure retains the image.
+IRQ97 is never enabled or cleared; the shared monitor keeps its existing timer
+PPI handling. No early guard becomes a normal-return path.
+
+This mode adds a 32-byte immutable profile marker and the existing protected
+route snapshot, with five owned-field writes during installation and five
+during restoration. It adds no task, allocation, DMA buffer or output copy.
+Existing startup and return deadlines bound the register polling. It uses the
+same 456-byte session, 88-byte receipt, ENTRY_MEMORY_READY and MBUS log.
+Host admission additionally requires `exclusive-IRQ97-route-capture-install-restore`;
+the old MBUS and memory profiles cannot label this image.
+
+The focused native check uses `checkpoint-check.py --case irq` and executes
+actual session validation, shared entry, pool preparation, checkpoint publication,
+installed-state authentication, captured-route restoration and host parsing.
+It covers inherited enabled/pending/active sources, a failed install readback,
+corrupted installed fields, a deadline reached after field reads and a failed
+restore readback. Existing generic checkpoint corruption and MBUS-normalization
+cases retain their earlier evidence. GIC effects and privileged registers are
+modeled; physical IRQ installation and return remain unqualified for this image.
+This checkpoint does not authorize a full NPU startup retry or establish the
+cause of the earlier failed restart.
+
 ## Finite thermal admission bounds work and cleanup
 
 `build.py --thermal --evidence DIRECTORY` selects the optional

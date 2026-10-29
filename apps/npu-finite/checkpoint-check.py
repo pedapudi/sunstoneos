@@ -4,7 +4,7 @@ import argparse,hashlib,importlib.util,json,struct
 from pathlib import Path
 from unicorn import Uc,UC_ARCH_ARM64,UC_MODE_ARM,UC_HOOK_CODE,UC_HOOK_MEM_WRITE,UC_HOOK_MEM_READ,UC_MEM_READ,UC_MEM_WRITE
 from unicorn.arm64_const import UC_ARM64_REG_X0,UC_ARM64_REG_PC,UC_ARM64_REG_SP,UC_ARM64_REG_LR
-p=argparse.ArgumentParser(description=__doc__);p.add_argument('--native',type=Path,required=True);p.add_argument('--evidence',type=Path,required=True);a=p.parse_args();a.evidence.mkdir(parents=True,exist_ok=False)
+p=argparse.ArgumentParser(description=__doc__);p.add_argument('--native',type=Path,required=True);p.add_argument('--evidence',type=Path,required=True);p.add_argument('--case',choices=('all','irq'),default='all');a=p.parse_args();a.evidence.mkdir(parents=True,exist_ok=False)
 r=Path(__file__).resolve().parents[2]
 def module(n,p):
  s=importlib.util.spec_from_file_location(n,p);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
@@ -18,16 +18,30 @@ for name,value in [('magic',h.original.CONTRACT_MAGIC),('armed_at',armed),('star
 for n in ('a733_npu_application_init','npu_convolution_startup_poll','npu_service_activate','vTaskStartScheduler','a733_pmic_poll','a733_npu_startup_step'):
  assert n not in im.symbols,n
 results=[]
-def machine(mbus=0x81000000, busy_gpu=False):
+IRQ_FIELDS={0x0340008c:0x55aa0000,0x03400d0c:0xaa55ffff,0x03400c18:0xa5a5a5a5,0x03400460:0x12345678,0x03406308:0x10000}
+irq_offset=None
+if g.get('checkpoint_irq'):
+ from elftools.elf.elffile import ELFFile
+ with (e/'image.elf').open('rb') as f:
+  for cu in ELFFile(f).get_dwarf_info().iter_CUs():
+   for die in cu.iter_DIEs():
+    if die.tag=='DW_TAG_structure_type':
+     fields={c.attributes['DW_AT_name'].value.decode():c.attributes['DW_AT_data_member_location'].value for c in die.iter_children() if c.tag=='DW_TAG_member' and 'DW_AT_name' in c.attributes and 'DW_AT_data_member_location' in c.attributes}
+     if 'npu_irq' in fields and 'spi_enabled' in fields:irq_offset=fields['npu_irq']
+ assert irq_offset is not None and 'npu_application_irq' not in im.symbols
+ assert all(n in im.symbols for n in ('npu_irq_route_capture','npu_irq_route_install','npu_irq_route_installed','npu_irq_route_restore'))
+def machine(mbus=0x81000000, busy_gpu=False,irq_fault=None):
  u=Uc(UC_ARCH_ARM64,UC_MODE_ARM);u.mem_map(0x02000000,0x07000000);u.mem_map(0x40000000,0x04000000)
  for at,data in im.parts:
   if data:u.mem_write(at,data)
  u.mem_write(0x41f00000,bytes(raw));u.mem_write(0x42004000,bytes(contract))
  u.mem_write(0x03400000,struct.pack('<II',0x30,3))
+ if g.get('checkpoint_irq'):
+  for at,value in IRQ_FIELDS.items():u.mem_write(at,value.to_bytes(8 if at==0x03406308 else 4,'little'))
  u.mem_map(0x50000,0x30000)
  u.mem_write(0x02002588,struct.pack('<I',mbus));u.mem_write(0x02002594,struct.pack('<I',0x30001))
  if busy_gpu:u.mem_write(0x02002b20,struct.pack('<I',0x80000000))
- state={'el':12,'sctlr':0,'now':11000000,'mode':5,'smc':None,'return':False,'retained':False,'panics':[],'clean':[],'mmio':[],'translations':0,'phase':'monitor','inject':None}
+ state={'el':12,'sctlr':0,'now':11000000,'mode':5,'smc':None,'return':False,'retained':False,'panics':[],'clean':[],'mmio':[],'translations':0,'phase':'monitor','inject':None,'irq_fault':irq_fault,'irq_writes':[]}
  def put(at,value,n=8):u.mem_write(at,int(value).to_bytes(n,'little'))
  def get(at,n=8):return int.from_bytes(u.mem_read(at,n),'little')
  def ret(value=0):u.reg_write(UC_ARM64_REG_X0,value);u.reg_write(UC_ARM64_REG_PC,u.reg_read(UC_ARM64_REG_LR))
@@ -59,6 +73,17 @@ def machine(mbus=0x81000000, busy_gpu=False):
   if word&0xfff00000==0xd5300000:raise AssertionError(('unmodeled register read',hex(word),hex(at)))
  def mmio(cpu,access,at,size,value,cookie):
   state['mmio'].append([state['phase'],access,at,size])
+  if g.get('checkpoint_irq'):
+   if access==UC_MEM_WRITE and at in IRQ_FIELDS:state['irq_writes'].append((at,size,value))
+   if access==UC_MEM_READ and state['irq_fault']=='install-readback' and at==0x0340008c and state['irq_writes']:
+    put(at,get(at,4)^2,4)
+   if access==UC_MEM_READ and state['irq_fault']=='restore-readback' and at==0x03406308 and any(w[0]==at and w[2]==0x10000 for w in state['irq_writes']):
+    put(at,0x20000)
+   if access==UC_MEM_READ and state['irq_fault']=='late-after-fields' and state['phase']=='return' and at==0x03406308:
+    state['now']=deadline
+   # IRQ97 stays disabled and neither pending nor active is cleared.
+   if access==UC_MEM_WRITE and at in (0x0340010c,0x0340028c,0x0340038c):assert not value&2,(hex(at),hex(value))
+
   assert not (0x03600000<=at<0x03700000 or 0x07064000<=at<0x07065000 or 0x07081400<=at<0x07082000 or at==0x03000008),hex(at)
   if 0x02002000<=at<0x02004000:
    assert state['phase']=='monitor',('late CCU access',hex(at))
@@ -84,10 +109,15 @@ assert state['clean']==list(range(g['clean_start'],g['clean_end'],64))
 assert {x[2] for x in state['mmio'] if x[0]=='kernel'}=={0x0347041e,0x03470100,0x03460000},state['mmio']
 receipt=bytes(u.mem_read(g['receipt'],88));assert struct.unpack('<11Q',receipt)[:6]==(0x4e505543484b3031,profile['epoch'],profile['generation'],profile['lease'],0,0x4e50554e)
 # Snapshot the published state for bounded corruption/late-return cases.
+irq_installed={at:int.from_bytes(u.mem_read(at,8 if at==0x03406308 else 4),'little') for at in (*IRQ_FIELDS,0x03400000,0x0340010c,0x0340020c,0x0340030c)} if g.get('checkpoint_irq') else {}
 ram=bytes(u.mem_read(0x41000000,0x1200000));results.append({'case':'actual-monitor-session-kernel-pool-checkpoint-publication','passed':True,'clean_lines':len(state['clean']),'translations':state['translations'],'provider_mmio':0})
 variants=['success','wrong-caller-mode','stale-secure-generation','late','wrong-receipt-magic','ordinary-completion','app-written','job-published','pool-ledger-live','pool-not-empty','pool-pointer-outside','checkpoint-identity','session-identity']
+if a.case=='irq':variants=['success']
+if g.get('checkpoint_irq'):
+ variants+=['irq-phase','irq-route','irq-group','irq-modifier','irq-trigger','irq-priority','irq-enabled','irq-pending','irq-active','irq-late-after-fields','irq-restore-readback']
 for variant in variants:
  u,state,put,get,call=machine();u.mem_write(0x41000000,ram);state.update(el=12,sctlr=0,phase='return')
+ for at,value in irq_installed.items():put(at,value,8 if at==0x03406308 else 4)
  if variant=='wrong-caller-mode':state['mode']=4
  if variant=='stale-secure-generation':put(im.address('admission')+cl['generation'],profile['generation']+1)
  if variant=='late':state['now']=deadline
@@ -101,9 +131,19 @@ for variant in variants:
  if variant=='pool-pointer-outside':put(im.address('checkpoint')+48,0x43000000)
  if variant=='checkpoint-identity':put(im.address('checkpoint')+8,profile['epoch']+1)
  if variant=='session-identity':put(im.address('session')+24,profile['epoch']+1)
+ if variant.startswith('irq-'):
+  if variant=='irq-phase':put(im.address('saved')+irq_offset+24,1,4)
+  elif variant=='irq-route':put(0x03406308,0x10000)
+  elif variant in ('irq-group','irq-modifier','irq-trigger','irq-priority'):
+   address,mask={'irq-group':(0x0340008c,2),'irq-modifier':(0x03400d0c,2),'irq-trigger':(0x03400c18,4),'irq-priority':(0x03400460,0x100)}[variant];put(address,get(address,4)^mask,4)
+  elif variant in ('irq-enabled','irq-pending','irq-active'):put({'irq-enabled':0x0340010c,'irq-pending':0x0340020c,'irq-active':0x0340030c}[variant],2,4)
+  else:state['irq_fault']=variant[4:]
  call('sd_single_core_exception',0x733,0,1)
  assert state['return']==(variant=='success') and state['retained']==(variant!='success'),(variant,state)
  if variant=='success':
+  if g.get('checkpoint_irq'):
+   assert all(get(at,8 if at==0x03406308 else 4)==value for at,value in IRQ_FIELDS.items())
+   assert get(im.address('saved')+irq_offset+24,4)==3
   frames=[bytes(u.mem_read(at,size)) for at,size in ((0x42000000,128),(g['log'],16384),(g['receipt'],88))]
   parsed=h.validate_reports(*frames,{'execution_profile':h.geometry_profile(g),'geometry':g,**profile})
   assert parsed['jobs']==0 and not parsed['functional_success'] and parsed['normal_return']
@@ -113,7 +153,7 @@ for variant in variants:
  results.append({'case':variant,'passed':True,'normal_return':state['return']})
 # Exercise the actual existing normalization and its safe skip through the
 # checkpoint wrapper. Only MBUS/MSI writes are allowed by the MMIO hook.
-for label,busy,expected in [('normalized',False,(0x84000000,0,0x81000000)),('busy-master-skip',True,(0x84000000,8,0x84000000))]:
+for label,busy,expected in ([] if a.case=='irq' else [('normalized',False,(0x84000000,0,0x81000000)),('busy-master-skip',True,(0x84000000,8,0x84000000))]):
  u,state,put,get,call=machine(0x84000000,busy);call('sd_single_core_monitor_init');assert not state['retained'],state
  observed=tuple(get(im.address('npu_entry_checkpoint_mbus')+8*i) for i in (1,2,3));assert observed==expected,(label,observed)
  state['el']=4;state['phase']='kernel';call('kernel_main');assert state['smc']==[0x733,0] and not state['panics'],state
@@ -121,8 +161,16 @@ for label,busy,expected in [('normalized',False,(0x84000000,0,0x81000000)),('bus
  frames=[bytes(u.mem_read(at,size)) for at,size in ((0x42000000,128),(g['log'],16384),(g['receipt'],88))]
  parsed=h.validate_reports(*frames,{'execution_profile':h.geometry_profile(g),'geometry':g,**profile});assert tuple(parsed['mbus'].values())==expected
  results.append({'case':'actual-MBUS-'+label+'-publication-and-return','passed':True,'diagnostic':parsed['mbus']})
-for corruption in ('app','ledger'):
+for corruption in (() if a.case=='irq' else ('app','ledger')):
  u,state,put,get,call=machine();u.mem_write(0x41000000,sealed_ram);state.update(el=4,phase='kernel',inject=corruption)
  call('kernel_main');assert state['smc']==[0x733,4] and not state['return'],state
  results.append({'case':'actual-caller-refuses-'+corruption,'passed':True,'normal_receipt':False})
+if g.get('checkpoint_irq'):
+ for fault in ('enabled','pending','active','install-readback'):
+  u,state,put,get,call=machine(irq_fault=fault)
+  if fault!='install-readback':put({'enabled':0x0340010c,'pending':0x0340020c,'active':0x0340030c}[fault],2,4)
+  call('sd_single_core_monitor_init')
+  assert state['retained'] and not state['return'],(fault,state)
+  if fault!='install-readback':assert not state['irq_writes']
+  results.append({'case':'IRQ-entry-refuses-'+fault,'passed':True,'normal_return':False})
 (a.evidence/'result.json').write_text(json.dumps({'passed':True,'image_sha256':h.sha((e/'image.elf').read_bytes()),'check_sha256':h.sha(Path(__file__).read_bytes()),'host_sha256':h.sha((r/'apps/npu-finite/host.py').read_bytes()),'cases':results,'scope':'Actual linked monitor/session validation and seal, mapping constructor, kernel/platform caller, local pool preparation, checkpoint, publication and EL3 final writer. Coherence admission, architectural translation, critical sections and privileged registers/effects modeled. ROM tail is reused; no hardware or provider startup.'},indent=2)+'\n');print('PASS checkpoint cases',len(results))
