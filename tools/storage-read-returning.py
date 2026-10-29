@@ -47,7 +47,11 @@ and per-block fits with and without cache costs. Saturated timings are excluded.
 Version-1 PIO captures remain decodable; --reference checks the repeated CRCs
 against a decoded accepted PIO run on the same card. Successful first-read
 decoding requires --reference and compares its first 4096-byte read;
-measurement plans still require 64 matching reads. No board, USB or queue access.
+measurement plans still require 64 matching reads. --require-restored-return
+also requires the input producer's explicit restored-3v3-first-read policy
+provenance and exact normal-return receipts before emitting successor eligibility.
+The coordinator binds the frozen image, signed approval and returned ROM record.
+No board, USB or queue access.
 """
 import argparse
 import hashlib
@@ -70,6 +74,14 @@ COMPLETE = 'COMPLETE SD0 returning read'
 INCOMPLETE = 'INCOMPLETE SD0 returning read: '
 BUNDLES = {2: 'A', 3: 'B'}
 FIRST_READ_PLAN = [(0, 8)]
+POWER_REMOVAL = 'power-removal'
+RESTORED_RETURN = 'restored-3v3-first-read'
+RETURN_POLICIES = (POWER_REMOVAL, RESTORED_RETURN)
+LEGACY_RECOVERY = {'rom_return_state_accepted', 'no_launch_or_reset_before_power_removal',
+                   'whole_board_power_removal_after_lifetime'}
+RESTORED_RECOVERY = ('rom_return_state_accepted', 'reviewed_3v3_normal_return',
+                     'successor_only_after_exact_image_and_reference_validation',
+                     'retain_no_launch_or_reset_until_power_removal_on_failure_or_uncertainty')
 # The SD0 provider's fabric words, masks and parent rates in MHz
 # (drivers/storage/a733_mmc_platform.c: fabric_off, fabric_mask, parent_mhz).
 # The image only reads these words; no unit of it writes CCU 0x500, 0x580 or 0x588.
@@ -201,7 +213,7 @@ def lifetime(ddr, survey):
     return identity, node
 
 
-def sign(approval, ddr, survey, signer):
+def sign(approval, ddr, survey, signer, return_policy=POWER_REMOVAL, request=None):
     lifetime(ddr, survey)
     value = json.loads(Path(approval).read_text())
     require(signer and value.get('reviewer') and value.get('reviewed_at') and value.get('bundle') in BUNDLES.values(),
@@ -210,17 +222,38 @@ def sign(approval, ddr, survey, signer):
     value['signature'] = {'signer': signer, 'signed_at': datetime.now(timezone.utc).isoformat(),
                           'ddr_session_sha256': digest(Path(ddr) / 'session.json'),
                           'survey_session_sha256': digest(Path(survey) / 'session.json')}
+    if return_policy != POWER_REMOVAL:
+        require(return_policy == RESTORED_RETURN and value['bundle'] == 'A' and request is not None,
+                'restored return requires bundle A and --request')
+        recovery_fields(request, 'A', return_policy)
+        value['signature'].update(return_policy=return_policy, request_sha256=digest(request))
     Path(approval).write_text(json.dumps(value, indent=1) + '\n')
     return value['signature']
 
 
-def approved(approval, request, ddr, survey, bundle):
+def recovery_fields(request, bundle, return_policy):
+    """Replace only the known legacy recovery obligations, explicitly and once."""
+    fields = json.loads(Path(request).read_text())['fields'][bundle]
+    if return_policy == RESTORED_RETURN:
+        require(bundle == 'A' and set(fields.get('recovery', ())) == LEGACY_RECOVERY,
+                'restored return requires the exact reviewed bundle-A recovery request')
+        fields['recovery'] = RESTORED_RECOVERY
+    else:
+        require(return_policy == POWER_REMOVAL, 'unsupported return policy')
+    return fields
+
+
+def approved(approval, request, ddr, survey, bundle, return_policy=POWER_REMOVAL):
     """The approval's signature binds this lifetime and every requested field is true."""
     value = json.loads(Path(approval).read_text())
-    fields = json.loads(Path(request).read_text())['fields'][bundle]
+    fields = recovery_fields(request, bundle, return_policy)
     require(value.get('bundle') == bundle and value.get('reviewer') and value.get('reviewed_at'),
             'approval names another bundle or no reviewer')
     signature = value.get('signature') or {}
+    require(signature.get('return_policy', POWER_REMOVAL) == return_policy,
+            'approval signed for another return policy')
+    if return_policy == RESTORED_RETURN:
+        require(signature.get('request_sha256') == digest(request), 'approval signed for another request')
     ddr_path = Path(ddr) / 'session.json'
     require(signature.get('ddr_session_sha256') == digest(ddr_path) and
             signature.get('survey_session_sha256') == digest(Path(survey) / 'session.json'),
@@ -410,28 +443,67 @@ def decode(run, raw_input):
     return value
 
 
+
+def validate_successful_return(value, terminal, raw_input, reference):
+    """Normal 3.3 V continuation only; caller must bind the exact frozen image.
+
+    The card stays powered in high-speed transfer state. Another SD operation
+    requires a separate authorized CMD0 and complete provider admission.
+    """
+    given = parse_input(raw_input)
+    require(given['version'] == VERSION and given['profile'] == 2 and given['plan'] == FIRST_READ_PLAN,
+            'restored return requires profile-2 first-read input')
+    require(terminal.get('magic') == 0x534b4552 and terminal.get('stage') == 5 and terminal.get('status') == 0
+            and value.get('complete') is True and value.get('status') == 0, 'unsuccessful terminal return')
+    words = value['words']
+    require(words.get('SD_PROFILE') == given['profile'] and words.get('SD_GENERATION') == given['generation'],
+            'return identity differs from input')
+    require(all(words.get(name) == 1 for name in
+                ('SD_RETURN_VERSION', 'SD_READS', 'SD_PLAN', 'SD_PMIC_PARKED', 'SD_CLOCK_OFF', 'SD_RESTORED')),
+            'incomplete restored-return receipts')
+    card = value['card']
+    require(card['profile'] == 2 and card['bus_width'] == 4 and card['timing'] == 1 and
+            card['card_hz'] == 50000000 and not card['signal_1v8'] and card['uhs_outcome'] == 0,
+            'return card mode is not 3.3 V high speed')
+    comparison = compare_reference(value, reference, True)
+    return dict(policy=RESTORED_RETURN, normal_successor_eligible=True,
+                input_sha256=hashlib.sha256(raw_input).hexdigest(), reference_crc=comparison,
+                card_remains_powered=True, another_sd_operation_requires_new_admission=True,
+                fault_recovery_qualified=False)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest='operation', required=True)
     s = sub.add_parser('sign')
     for name in ('approval', 'ddr', 'survey'): s.add_argument('--' + name, type=Path, required=True)
     s.add_argument('--signer', required=True)
+    s.add_argument('--return-policy', choices=RETURN_POLICIES, default=POWER_REMOVAL)
+    s.add_argument('--request', type=Path, help='required for restored-return signing')
     i = sub.add_parser('input')
     for name in ('approval', 'request', 'ddr', 'survey', 'fabric_read', 'config', 'output'):
         i.add_argument('--' + name.replace('_', '-'), type=Path, required=True)
     i.add_argument('--profile', type=int, choices=(2, 3), default=2)
     i.add_argument('--plan', choices=('measurement', 'first-read'), default='measurement',
                    help='measurement: existing 240 reads; first-read: profile 2, sector 0, eight blocks')
+    i.add_argument('--return-policy', choices=RETURN_POLICIES, default=POWER_REMOVAL)
     d = sub.add_parser('decode')
     for name in ('run', 'input', 'output'): d.add_argument('--' + name, type=Path, required=True)
     d.add_argument('--reference', type=Path, help='decoded accepted PIO result for the same card')
+    d.add_argument('--require-restored-return', action='store_true',
+                   help='require exact first-read normal return and reference before successor admission')
     args = parser.parse_args(argv)
     if args.operation == 'sign':
-        print(json.dumps(sign(args.approval, args.ddr, args.survey, args.signer), indent=1)); return 0
+        print(json.dumps(sign(args.approval, args.ddr, args.survey, args.signer, args.return_policy, args.request), indent=1)); return 0
     if args.operation == 'input':
         require(args.plan != 'first-read' or args.profile == 2, 'first-read requires profile 2')
+        require(args.return_policy != RESTORED_RETURN or (args.profile == 2 and args.plan == 'first-read'),
+                'restored return requires --profile 2 --plan first-read')
         lifetime(args.ddr, args.survey)
-        approved(args.approval, args.request, args.ddr, args.survey, BUNDLES[args.profile])
+        if args.return_policy == POWER_REMOVAL:
+            approved(args.approval, args.request, args.ddr, args.survey, BUNDLES[args.profile])
+        else:
+            approved(args.approval, args.request, args.ddr, args.survey, BUNDLES[args.profile], args.return_policy)
         require(not args.output.exists(), 'output exists')
         config = json.loads(args.config.read_text())
         require('fabric' not in config and 'fabric_hz' not in config, 'the fabric words come from this lifetime\'s read')
@@ -441,6 +513,7 @@ def main(argv=None):
         args.output.write_bytes(raw)
         args.output.with_suffix('.json').write_text(json.dumps({
             'input_sha256': hashlib.sha256(raw).hexdigest(), 'profile': args.profile,
+            'return_policy': args.return_policy, 'request_sha256': digest(args.request),
             'approval_sha256': digest(args.approval), 'config_sha256': digest(args.config),
             'fabric_registers': [f'0x{w:08x}' for w in registers], 'fabric': [f'0x{w:08x}' for w in config['fabric']],
             'fabric_hz': config['fabric_hz'], 'fabric_read_sha256': digest(args.fabric_read / 'session.json'),
@@ -452,9 +525,29 @@ def main(argv=None):
     value = decode(args.run, raw)
     require(not (first_read and value['complete']) or args.reference is not None,
             'successful first-read requires --reference')
-    if args.reference:
+    if args.reference and not args.require_restored_return:
         value['reference_crc'] = compare_reference(value,json.loads(args.reference.read_text()),first_read)
         value['reference_sha256'] = digest(args.reference)
+    if args.require_restored_return:
+        require(args.reference is not None, 'restored return requires --reference')
+        provenance = json.loads(args.input.with_suffix('.json').read_text())
+        require(provenance.get('return_policy') == RESTORED_RETURN and
+                provenance.get('input_sha256') == hashlib.sha256(raw).hexdigest(),
+                'input provenance does not authorize restored return')
+        for name in ('approval_sha256', 'request_sha256'):
+            require(isinstance(provenance.get(name), str) and re.fullmatch('[0-9a-f]{64}', provenance[name]),
+                    'input provenance lacks approval/request identity')
+        session = json.loads((args.run / 'session.json').read_text())
+        require(session.get('complete') is True and session.get('launch_attempted') is True and
+                session.get('transport_failed') is False and session.get('automatic_access') is True and
+                session.get('mode') == 'kernel' and isinstance(session.get('returned_node'), str),
+                'runner did not establish successful ROM return')
+        value['successful_return'] = validate_successful_return(value, session.get('result') or {}, raw,
+                                                               json.loads(args.reference.read_text()))
+        value['reference_crc'] = value['successful_return']['reference_crc']
+        value['reference_sha256'] = digest(args.reference)
+        value['successful_return'].update(reference_sha256=value['reference_sha256'],
+            approval_sha256=provenance['approval_sha256'], request_sha256=provenance['request_sha256'])
     args.output.write_text(json.dumps(value, indent=1) + '\n')
     print(json.dumps({k: value[k] for k in ('status', 'outcome', 'complete')} |
                      ({'throughput': value['throughput']} if value.get('throughput') else {}) |

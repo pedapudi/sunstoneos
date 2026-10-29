@@ -180,8 +180,11 @@ is in `~/.cache/sunstoneos/evidence/sd-dma-20261025/vendor-idmac-sequence.md`;
   before delegating to the byte-identical qualified monitor. All armed timer,
   exception, incomplete or uncertain exits park with ownership retained.
   See [the return contract](../../apps/storage-read-returning/README.md).
-  Physical DMA restoration and eligibility for another powered lifetime remain
-  unqualified; no preserved board is authorized by these software changes.
+  The explicit first-read success policy permits a reviewed successor only
+  after exact physical terminal, restoration and PIO-reference checks. Failed
+  or uncertain operation retains ownership until whole-board power removal.
+  The card stays powered; another SD operation needs separate authorization
+  and provider admission. See the return contract for the approval obligations.
 
 ## Predictions
 
@@ -238,3 +241,20 @@ comparison with lifetime A.
 - **The supervised read service** moves to DMA after this image has run on
   the board; programmed I/O then stays only for identification reads and
   writes.
+
+## Normal-return admission evidence
+
+The first-read policy changes host admission only. It adds no native code,
+mutable memory, DMA descriptors, cache operations, register accesses or FEL
+exchanges. Host work consists of a fixed set of approval and terminal checks
+plus the existing single-read reference comparison. No physical timing or
+throughput improvement is claimed.
+
+The focused host check uses the accepted linked task/monitor output from
+`resume-sd-return-1026/native-5`, with startup identity lines modeled from
+`kernel_main`. It checks policy/request binding, retained failure obligations,
+terminal and input identity, restoration receipts, card mode, reference CID/CRC
+and the strict decoder command. Evidence is preserved outside the repository
+under `sol-sd-return-policy-1028/host-5`. The existing native image and accepted
+native/provider checks are reused. Physical first-read and normal-return
+observations remain prerequisites for successor admission.

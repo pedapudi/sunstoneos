@@ -6,8 +6,9 @@ high-speed reads on port 3-3 (`board-session-20261025-30`). Its SDR104 run
 stopped at CMD11 (`board-session-20261025-32`). The corrected switch and this
 DMA image have native instruction-model evidence, not board evidence. See
 [the DMA design](../../docs/designs/sd-dma.md) for the measured PIO baseline
-and predicted DMA costs. Every DMA lifetime requires whole-board power
-removal before another operation until the first physical qualification.
+and predicted DMA costs. The default admission policy requires whole-board power removal after every
+DMA lifetime. A reviewed exception permits normal continuation after the
+first 3.3 V read under the conditions below.
 
 The default input selects SD profile 2 (high speed, four-bit, 3.3 V). A
 completed read plan restores the SDC0 module/bus/reset fields and PF pins
@@ -80,9 +81,8 @@ restoration before monitor delegation parks with ownership retained. It performs
 remap, ROM return or memory reuse. Even a timer after READY parks. Input,
 provider-binding and return-admission refusals before task scheduling may
 return status 1 because no task has touched SD or PMIC hardware. A malformed
-or uninitialized receipt cannot use that exception. The current image is
-still physically unqualified; these changes do not authorize a preserved
-board lifetime without its existing recovery prerequisites. The inherited
+or uninitialized receipt cannot use that exception. The current image is physically unqualified. Normal continuation requires
+the explicit admission policy and successful physical observations below. The inherited
 monitor may replace status 0 with status 6 if its GIC restoration fails and
 still reset to ROM. The SD restoration proof precedes that delegation; the
 host requires an explicit final status 0 to report success.
@@ -156,9 +156,76 @@ a reference. First-read reports contain no throughput fit.
 
 For `--plan measurement`, `decode --reference PIO_RESULT` retains the
 comparison of all 64 repeated reads. Measurement decoding without a
-reference makes no reference-parity claim. Neither plan establishes
-physical DMA recovery; whole-board power removal remains required after
-the first DMA lifetime.
+reference makes no reference-parity claim. Neither plan establishes physical DMA fault recovery. Failed or uncertain
+operation retains ownership until whole-board power removal.
+
+## Reviewed continuation after the first 3.3 V read
+
+The original approval request was written for a return that left the controller
+and PF supply state in place. Its recovery fields prohibit every successor and
+require power removal even after success. The current profile-2 image closes
+the controller and verifies restoration before delegating to the monitor.
+The source supports a narrower normal-success exception; it does not establish
+hardware recovery after a failed transfer.
+
+The completed-read path in `drivers/storage/sunxi_mmc.c`, `command_step` states
+2–6, requires command/data/automatic-stop completion, clear descriptor OWN bits,
+no card or controller errors, and an idle command/data interface. It waits for
+IDMAC reset and idle, DMA-interface reset and FIFO reset before AFTER cache
+maintenance returns the data to the CPU. Terminal close in
+`drivers/storage/a733_mmc_platform.c`, `a733_mmc_platform_close`, requires the
+collected successful read and rechecks idle before stopping the clock. It
+restores the initial clock/reset and PF fields. The private monitor guard in
+`return.c` requires READY, idle IRQ193 and S_TWI0, and matching saved SD/PF/PMIC
+fields before printing the restoration receipt. These conditions precede the
+ROM path analyzed below. No reset or clock gate substitutes for DMA completion.
+
+Select `--return-policy restored-3v3-first-read` on both `sign` and `input`.
+Signing additionally requires `--request APPROVAL_REQUEST`. This policy accepts
+only bundle A and `input --profile 2 --plan first-read`. It recognizes only the
+original recovery field set and binds the request hash and policy in the signed
+approval. Every other requested approval field remains required. Replace the
+approval's recovery fields with these reviewed obligations, setting each true
+only when the coordinator establishes it:
+
+- `rom_return_state_accepted`: accept the documented forced-FEL changes.
+- `reviewed_3v3_normal_return`: accept the completed-read, close and monitor
+  invariant described above for the exact frozen image.
+- `successor_only_after_exact_image_and_reference_validation`: keep the queue
+  claim unresolved until image identity, successful ROM response and strict
+  offline decoding against the accepted PIO reference all pass.
+- `retain_no_launch_or_reset_until_power_removal_on_failure_or_uncertainty`:
+  retain ownership after any transport, native, identity, comparison or
+  validation failure; do not reset or launch until whole-board power removal.
+
+After the single native attempt, run `decode --require-restored-return` with
+its exact input, producer sidecar, run directory and accepted PIO `--reference`.
+The sidecar must bind the input hash and explicit return policy. The decoded
+result carries its approval and request hashes for the coordinator to compare. Success requires
+the native terminal magic, stage 5 and status 0; complete runner return without
+transport failure; matching input profile and generation; and all six receipt
+words equal to one. Those words are `SD_RETURN_VERSION`, `SD_READS`, `SD_PLAN`,
+`SD_PMIC_PARKED`, `SD_CLOCK_OFF` and `SD_RESTORED`. The card must report profile 2,
+four-bit high speed, 50 MHz and no 1.8 V switch. CID and the sector-zero 4096-byte
+CRC must match the accepted reference. The decoder emits
+`successful_return.normal_successor_eligible=true` only after these checks.
+The coordinator separately verifies the frozen image and record identities;
+a generic runner exit of zero or a restoration marker alone is insufficient.
+A controlled pre-task refusal does not satisfy this success predicate.
+
+The card remains powered in high-speed transfer state. Success permits a
+reviewed successor compatible with that state; it does not authorize another
+SD operation under the consumed CMD0/client-exclusion approval. A later SD
+consumer needs separate CMD0 authorization, reidentification and full provider
+admission. Profile 3, measurement plans, failed sessions and uncertain sessions
+retain their existing recovery requirements. The default `power-removal`
+policy continues to require every original approval field.
+
+Native image bytes, read polling, DMA/cache operations and FEL exchange counts
+are unchanged. Host checks cover the policy selection and strict decoder using
+the accepted linked task/monitor log, with modeled startup identity lines and
+reference data. This evidence establishes software admission behavior. Physical
+DMA operation, observed normal restoration and fault recovery remain unqualified.
 
 ## Time window
 
@@ -183,8 +250,8 @@ an open-ended CMD18 ending at the card's last sector.
 The 4.52 MiB plan's physical time remains unmeasured. The design predicts
 about 21–23 MB/s for 128 KiB reads at high speed and 50–60 MB/s at SDR104,
 subject to card streaming speed and cache costs. A slow card can exceed the
-plan window; the report then gives only completed reads. A new lifetime
-requires power removal and fresh initialization.
+plan window; the report then gives only completed reads. The default admission policy requires power removal and fresh
+initialization after the plan.
 
 ## What the forced-FEL return changes
 
@@ -214,7 +281,8 @@ dispatcher at `0x2514` into the nonsecure ROM's USB FEL loop found:
 The current profile-2 path restores SD0's initial clock/reset and PF pin
 fields before this ROM path runs. It never reaches ROM from an armed timer
 or exception. The card remains powered at 3.3 V; successful software close
-is not yet physical evidence that another native lifetime is eligible.
+requires the strict physical result checks before another native image
+is eligible.
 
 Earlier frozen profile-3 images returned with the PF bank and card at 1.8 V.
 Those captures and the ROM analysis remain historical evidence. The current
