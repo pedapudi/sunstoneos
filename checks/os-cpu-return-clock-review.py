@@ -14,6 +14,7 @@ def digest(b):return hashlib.sha256(b).hexdigest()
 def main():
  parser=argparse.ArgumentParser(description=__doc__)
  for n in ('image','manifest','helper','out'):parser.add_argument('--'+n,type=Path,required=True)
+ parser.add_argument('--compatibility', action='store_true')
  args=parser.parse_args();args.out.mkdir(parents=True,exist_ok=False)
  image=args.image.read_bytes();manifest=json.loads(args.manifest.read_text())
  p.image_manifest_check(manifest,image,cpu_return=True)
@@ -45,11 +46,11 @@ def main():
   'entry_continuity':{k:record[k] for k in ('ddr','platform','mimus_ddr')},
   'rail_helper':{k:store('helper-'+k,(args.helper/n).read_bytes()) for k,n in [('manifest','input-identities.json'),('image','build/probe.elf'),('binary','probe.bin')]}}
  rows=[]
- def validate(value,returning=True):
+ def validate(value,returning=True,perf=False):
   b=json.dumps(value,sort_keys=True).encode();r=copy.deepcopy(record);r['cpu_clock_approval']=store('approval',b)
   data=bytearray(raw);data[872:904]=hashlib.sha256(b).digest()
   r['normal_return_review']=store('final-review',{'cpu_clock_approval':r['cpu_clock_approval'],'session_template_sha256':digest(data)})
-  p.cpu_clock_admission(r,digest(image),data,p.capture_profile(data),get,cpu_return=returning)
+  p.cpu_clock_admission(r,digest(image),data,p.capture_profile(data),get,perf_modes=perf,cpu_return=returning)
  validate(a);rows.append({'name':'exact-under-test-model-authority','passed':True})
  refused(lambda:validate(a,False),'approval record names another');rows.append({'name':'ordinary-profile-refuses-new-schema','passed':True})
  for name,change,reason in [
@@ -77,6 +78,54 @@ def main():
  value['b1']=store('old-b1',{'schema':p.B1_SCHEMA,'passed':False})
  refused(lambda:validate(value),"board's B1 record")
  rows.append({'name':'legacy-still-requires-passed-B1','passed':True})
+ if args.compatibility:
+  a=copy.deepcopy(a);a['schema']=p.cpu_return_clock.COMPATIBILITY_SCHEMA
+  a['conditions']={k:store('compat-condition-'+k,{'MODEL-NOT-PHYSICAL':True}) for k in p.cpu_return_clock.COMPATIBILITY_CONDITIONS}
+  historical={'schema':'a733-os-cpu-return-historical-mechanism-v1','reviewed':True,
+   'identity':[7,100,200,0,0],'port':'MODEL-HISTORICAL-OTHER-BOARD','date':'MODEL-PAST-DATE',
+   'sid_word':0x400,'bin':4,'steps':[1,2,3,4,5,6],'evidence':history['evidence']}
+  a['historical_qualification']=store('compatible-history',historical)
+  compatibility={**common,'schema':'a733-os-cpu-return-mechanism-compatibility-v1',
+   'reviewed':True,'status':'under-test','execution_profile':'os-cpu-return-v1',
+   'build_id':a['build_id'],'session_template_without_approval_sha256':a['session_template_without_approval_sha256'],
+   'historical_mechanism':a['historical_qualification'],'source_qualification_reused_as':'mechanism_evidence',
+   'target_device_qualification':'under-test','review_basis':'MODEL ONLY compatible sources; no actual mapping',
+   'applicability':{k:store('applicability-'+k,{'MODEL-NOT-PHYSICAL':True}) for k in p.cpu_return_clock.APPLICABILITY},
+   'residuals':{k:'under-test' for k in p.cpu_return_clock.RESIDUALS},'sources':a['sources']}
+  a['mechanism_compatibility']=store('compatibility',compatibility)
+  validate(a);rows.append({'name':'different-historical-board-compatible-mechanism-under-test','passed':True})
+  refused(lambda:validate(a,False),'approval record names another')
+  refused(lambda:validate(a,True,True),'performance-mode approval')
+  rows.extend({'name':n,'passed':True} for n in ('compat-ordinary-caller-refused','compat-perf-caller-refused'))
+  invented=copy.deepcopy(a);invented['same_physical_board']=True
+  refused(lambda:validate(invented),'cannot assert historical board identity')
+  rows.append({'name':'compat-approval-invented-mapping-refused','passed':True})
+  old=copy.deepcopy(a);old['schema']=p.cpu_return_clock.SCHEMA
+  old['conditions']={k:store('old-condition-'+k,{'MODEL-NOT-PHYSICAL':True}) for k in p.cpu_return_clock.CONDITIONS}
+  refused(lambda:validate(old),'board mapping absent');rows.append({'name':'old-schema-still-refuses-other-board','passed':True})
+  for name,change,reason in [
+   ('wrong-target',lambda x:x.update(identity=['OTHER']), 'another target/session'),
+   ('wrong-image',lambda x:x.update(image_sha256='0'*64), 'another target/session'),
+   ('wrong-session',lambda x:x.update(epoch=1), 'another target/session'),
+   ('wrong-build',lambda x:x.update(build_id='0'*64), 'another target/session'),
+   ('wrong-template',lambda x:x.update(session_template_without_approval_sha256='0'*64), 'another target/session'),
+   ('wrong-history',lambda x:x.update(historical_mechanism=a['sources'][0]), 'another target/session'),
+   ('target-passed',lambda x:x.update(target_device_qualification='passed'), 'another target/session'),
+   ('passed-claim',lambda x:x.update(passed=True), 'another target/session'),
+   ('same-board-claim',lambda x:x.update(same_physical_board=True), 'another target/session'),
+   ('missing-applicability',lambda x:x.update(applicability={}), 'applicability'),
+   ('missing-residual',lambda x:x.update(residuals={}), 'applicability'),
+   ('missing-source-pins',lambda x:x.update(sources=[]), 'applicability')]:
+   changed=copy.deepcopy(compatibility);change(changed);value=copy.deepcopy(a)
+   value['mechanism_compatibility']=store('changed-compatibility',changed)
+   refused(lambda:validate(value),reason);rows.append({'name':'compat-'+name,'passed':True})
+  for name,change in [('invented-mapping',lambda x:x.update(same_physical_board=True)),
+                      ('historical-pass-relabel',lambda x:x.update(passed=True)),
+                      ('historical-identity-absent',lambda x:x.pop('identity')),
+                      ('historical-date-absent',lambda x:x.pop('date'))]:
+   changed=copy.deepcopy(historical);change(changed);value=copy.deepcopy(a)
+   value['historical_qualification']=store('changed-history',changed)
+   refused(lambda:validate(value),'actual source identity');rows.append({'name':'compat-'+name,'passed':True})
  save(args.out/'results.json',{'scope':'production parser; modeled authority, actual helper/native markers; no physical admission','cases':rows})
  print('PASS',len(rows),'under-test admission cases')
 if __name__=='__main__':main()

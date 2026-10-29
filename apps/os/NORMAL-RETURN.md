@@ -11,11 +11,27 @@ excluded. Existing supervised and resident profiles keep their existing lifetime
 
 The first functional attempt may use the dedicated
 `a733-os-cpu-return-clock-under-test-v1` approval. It asserts no passed B1
-result. Other profiles retain the existing passed-B1 requirement. Historical
-physical steps 1 through 6 must be cited with an explicit reviewed mapping to
-the same physical board; historical USB identities and rail readings remain
-historical. The integrated recognition, live cluster transitions, thermal
-service and normal return remain under test.
+result. Other profiles retain the existing passed-B1 requirement. This original
+under-test schema still requires historical steps 1 through 6 on the same
+physical board. Its semantics and frozen evidence are unchanged.
+
+The dedicated `a733-os-cpu-return-clock-compatibility-under-test-v1` alternative
+reuses historical steps as mechanism evidence through an exact compatibility
+review. Historical records keep the actual source board identity, port, date,
+SID and evidence. The review binds the current target, image, session and source
+pins, and reviews SoC/CPU implementation and revision, board topology and
+regulator wiring applicability. It asserts no shared physical identity and no
+target-device qualification. Current electrical, thermal, security, continuity
+and writer exclusions remain mandatory. Target regulator transients, runtime
+DVFS, recognition/thermal/IRQ integration and return/restoration remain under
+test. Both under-test schemas preserve exact root-claim and helper-hash binding.
+
+The distinction follows the old binder's actual port 3-1 refusal: its bin,
+oscillator and supplies had not been read (`docs/designs/cpu-top-opp.md:531`).
+The native guard now checks those current configuration predicates. The earlier
+same-board multicore and integrated B1 observations remain separate
+qualification (`docs/designs/cpu-a76-dvfs.md:325–363`). A PMIC snapshot proves
+programmed voltage; it does not measure analog settling on the new target.
 
 Before the first requested transition, the sole CPU clock owner completes
 read-only inspections of both clusters and their enabled, decoded supplies.

@@ -143,7 +143,7 @@ def validate_bundle(bundle):
     entry = json.loads((bundle / 'board/admission.json').read_text())
     approved = entry['cpu_clock_approval']
     clock_review = json.loads((bundle / 'board' / p['entry_evidence'][approved['path']]['name']).read_text())
-    if clock_review.get('schema') == os_image.cpu_return_clock.SCHEMA:
+    if clock_review.get('schema') in os_image.cpu_return_clock.UNDER_TEST_SCHEMAS:
         p['_approved_rail_helper'] = {k: clock_review['rail_helper'][k]['sha256']
                                       for k in ('image', 'binary', 'manifest')}
     return p
@@ -218,7 +218,7 @@ def admit(args, prepared, node, identity, port):
     clock_ref = admission['cpu_clock_approval']
     clock_copy = prepared['entry_evidence'][clock_ref['path']]['name']
     clock_review = json.loads((args.bundle / 'board' / clock_copy).read_text())
-    if clock_review.get('schema') == os_image.cpu_return_clock.SCHEMA:
+    if clock_review.get('schema') in os_image.cpu_return_clock.UNDER_TEST_SCHEMAS:
         require(clock_review.get('root_owned_claim') == args.root_owned_claim,
                 'First-functional entry requires its reviewed root-owned claim.')
     paths = [args.ddr_evidence, args.platform_survey, *args.warm_return]

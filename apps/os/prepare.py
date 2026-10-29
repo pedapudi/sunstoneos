@@ -585,7 +585,7 @@ def cpu_clock_admission(record, image_hash, raw, profile, evidence, perf_modes=F
         require(g['clusters'] == 3, 'Performance modes require both clusters.')
         perf_admission(record, image_hash, profile, evidence, g, data, a)
         return
-    if cpu_return and a.get('schema') == cpu_return_clock.SCHEMA:
+    if cpu_return and a.get('schema') in cpu_return_clock.UNDER_TEST_SCHEMAS:
         cpu_return_clock.validate(a, data, record, image_hash, raw, profile, g, evidence, require, os_link.Elf)
         require(bin_column(a['historical_sid_word']) == 4, 'Historical SID does not select the guarded bin.')
         return

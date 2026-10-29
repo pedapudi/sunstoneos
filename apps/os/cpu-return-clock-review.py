@@ -9,6 +9,8 @@ import json
 import struct
 
 SCHEMA = 'a733-os-cpu-return-clock-under-test-v1'
+COMPATIBILITY_SCHEMA = 'a733-os-cpu-return-clock-compatibility-under-test-v1'
+UNDER_TEST_SCHEMAS = (SCHEMA, COMPATIBILITY_SCHEMA)
 MARKER = (0x31544e4552505543, 1, 4, 8)
 CONDITIONS = {
     'historical-steps-1-through-6-same-physical-board',
@@ -19,9 +21,47 @@ CONDITIONS = {
     'integrated-recognition-dvfs-thermal-and-return-under-test',
     'retained-claim-through-verified-boot-clocks-and-rail-restoration'}
 
+COMPATIBILITY_CONDITIONS = (CONDITIONS - {'historical-steps-1-through-6-same-physical-board'}) | {
+    'historical-mechanism-compatible-with-current-target',
+    'first-device-outcomes-under-test-and-failure-custody-reviewed'}
+APPLICABILITY = {'soc-and-cpu-implementation-revision', 'board-topology-and-regulator-wiring',
+                 'pinned-clock-pmic-thermal-sequences'}
+RESIDUALS = {'target-regulator-transients', 'target-runtime-dvfs',
+             'target-recognition-thermal-irq-integration', 'target-return-and-rail-restoration'}
+
+
+def compatibility(a, historical, record, profile, evidence, require):
+    require(historical.get('schema') == 'a733-os-cpu-return-historical-mechanism-v1' and
+            historical.get('reviewed') is True and
+            isinstance(historical.get('identity'), list) and len(historical['identity']) == 5 and
+            all(type(v) is int for v in historical['identity']) and
+            all(isinstance(historical.get(k), str) and historical[k].strip() for k in ('port', 'date')) and
+            historical.get('sid_word') == a.get('historical_sid_word') and historical.get('bin') == 4 and
+            historical.get('steps') == [1, 2, 3, 4, 5, 6] and historical.get('evidence') and
+            not ({'passed', 'same_physical_board', 'board_mapping_basis'} & historical.keys()),
+            'Historical mechanism evidence must retain its actual source identity and scope.')
+    c = json.loads(evidence(a.get('mechanism_compatibility')))
+    require(c.get('schema') == 'a733-os-cpu-return-mechanism-compatibility-v1' and
+            c.get('reviewed') is True and c.get('status') == 'under-test' and
+            c.get('execution_profile') == 'os-cpu-return-v1' and
+            c.get('identity') == record['identity'] and c.get('port') == record['port'] and
+            all(c.get(k) == a[k] for k in ('image_sha256', 'build_id', 'session_template_without_approval_sha256')) and
+            all(c.get(k) == profile[k] for k in ('epoch', 'generation', 'lease')) and
+            c.get('historical_mechanism') == a['historical_qualification'] and
+            c.get('source_qualification_reused_as') == 'mechanism_evidence' and
+            c.get('target_device_qualification') == 'under-test' and
+            not ({'passed', 'same_physical_board', 'board_mapping_basis'} & c.keys()),
+            'Mechanism compatibility review names another target/session or claims target qualification.')
+    require(set(c.get('applicability', {})) == APPLICABILITY and
+            c.get('residuals') == {k: 'under-test' for k in RESIDUALS} and c.get('sources') and
+            isinstance(c.get('review_basis'), str) and c['review_basis'].strip(),
+            'Mechanism applicability, source pins or first-device residuals absent.')
+    for item in [*c['applicability'].values(), *c['sources']]:
+        evidence(item)
+
 
 def validate(a, data, record, image_hash, raw, profile, grant, evidence, require, Elf):
-    require(a.get('schema') == SCHEMA and a.get('execution_profile') == 'os-cpu-return-v1' and
+    require(a.get('schema') in UNDER_TEST_SCHEMAS and a.get('execution_profile') == 'os-cpu-return-v1' and
             a.get('status') == 'under-test' and a.get('reviewed') is True and 'passed' not in a and
             a.get('identity') == record['identity'] and a.get('port') == record['port'] and
             a.get('image_sha256') == image_hash and
@@ -54,17 +94,22 @@ def validate(a, data, record, image_hash, raw, profile, grant, evidence, require
     require(a.get('one_attempt') is True and a.get('failure_policy') == 'retain-without-retry' and
             all(isinstance(a.get(k), str) and a[k].strip() for k in
                 ('supervisor', 'root_owned_claim', 'approval_text', 'approval_date')) and
-            set(a.get('conditions', {})) == CONDITIONS, 'CPU return under-test review obligations absent.')
+            set(a.get('conditions', {})) == (COMPATIBILITY_CONDITIONS if a['schema'] == COMPATIBILITY_SCHEMA else CONDITIONS), 'CPU return under-test review obligations absent.')
     for item in a['conditions'].values():
         evidence(item)
     historical = json.loads(evidence(a.get('historical_qualification')))
-    require(historical.get('schema') == 'a733-os-cpu-return-historical-qualification-v1' and
-            historical.get('reviewed') is True and historical.get('identity') == record['identity'] and
-            historical.get('port') == record['port'] and historical.get('same_physical_board') is True and
-            isinstance(historical.get('board_mapping_basis'), str) and historical['board_mapping_basis'].strip() and
-            historical.get('sid_word') == a.get('historical_sid_word') and
-            isinstance(a.get('historical_sid_word'), int) and historical.get('steps') == [1, 2, 3, 4, 5, 6] and
-            historical.get('evidence'), 'Historical physical qualification or board mapping absent.')
+    if a['schema'] == COMPATIBILITY_SCHEMA:
+        require(not ({'same_physical_board', 'board_mapping_basis'} & a.keys()),
+                'Compatibility approval cannot assert historical board identity.')
+        compatibility(a, historical, record, profile, evidence, require)
+    else:
+        require(historical.get('schema') == 'a733-os-cpu-return-historical-qualification-v1' and
+                historical.get('reviewed') is True and historical.get('identity') == record['identity'] and
+                historical.get('port') == record['port'] and historical.get('same_physical_board') is True and
+                isinstance(historical.get('board_mapping_basis'), str) and historical['board_mapping_basis'].strip() and
+                historical.get('sid_word') == a.get('historical_sid_word') and
+                isinstance(a.get('historical_sid_word'), int) and historical.get('steps') == [1, 2, 3, 4, 5, 6] and
+                historical.get('evidence'), 'Historical physical qualification or board mapping absent.')
     for item in historical['evidence']:
         evidence(item)
     # This reviewed SID selects the same fixed column that the live native
