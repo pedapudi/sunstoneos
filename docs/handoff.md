@@ -8,13 +8,14 @@ history.
 
 - **Boards:** two Allwinner A733 boards, on USB ports 3-1 and 3-3. Both are
   powered only through USB, and both are in speed bin 4.
-- **Power cycles:** the user cannot power-cycle either board until further
-  notice (since 2026-10-25).
-- **Last recorded lifetimes:** each board has a preserved record in
-  `~/.cache/sunstoneos/evidence/board-session-20261025-36/port-3-<n>`: a
-  standard cold DDR start (`s7-ddr`), then two read-only DRAM captures. Until
-  the user returns, only images that return to FEL and continue these
-  lifetimes may run, with warm-return lists that start from those records.
+- **Power cycles:** the user reconnected both boards on 2026-10-28. Further
+  power removal is unavailable unless the user confirms another opportunity.
+- **Last recorded lifetimes:** both fresh standard DDR initializations passed
+  under `~/.cache/sunstoneos/evidence/sol-resume-20261028/port-3-<n>/ddr`.
+  Each returned to ROM with stage 5, status 0, a reported 12,288 MiB and two
+  matching 4 KiB RAM pages. This establishes the initial session baseline,
+  not complete memory qualification. Returning images must continue these
+  new lifetimes; the older 2026-10-25 warm-return chains are historical.
 - **What waits for the user:** anything that needs a fresh lifetime, an
   operator at the board, or a power removal at the end.
 - **Unattended work:** prioritize useful batches within an established native
@@ -70,10 +71,11 @@ streaming. Their focused native/host checks and independent reviews are recorded
 below. Successful earlier evidence was reused; affected cases cover the new
 behavior and final corrections.
 
-The coordinator has not queried or changed either board since work resumed on
-2026-10-28. Each proposed physical test still needs a reviewed return and failure
-path compatible with a freshly checked board state. A normal ROM return alone
-does not establish recovery from a fault.
+After the user's 2026-10-28 reconnect confirmation, the coordinator checked both
+ports and permissions, then ran one previously demonstrated standard DDR start
+per board. Both passed and their queue claims are closed. Each proposed device
+test still needs a reviewed return and failure path compatible with the new
+board state. A normal ROM return alone does not establish recovery from a fault.
 
 Prior integrated functionality includes full native OV5640 UYVY sizes, GPU and
 resident CPU/GPU/NPU performance controls, microSD DMA and bounded USB progress

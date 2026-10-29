@@ -160,6 +160,8 @@ second build while preserving checks for the actual requested application.
   task-specific context instead of the full thread. Change active workers at a
   safe handoff boundary, preserving edits, live processes and successful evidence.
   Reserve review for substantive correctness risks; routine edits stay with their owner.
+- Use Sol 6.1 for implementation and review agents until the user changes the
+  model selection.
 - Keep handoffs concise: changed behavior, exact inputs, result, remaining gap.
   Use existing evidence tools; do not add a reporting system for bookkeeping.
 
