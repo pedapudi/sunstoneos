@@ -1997,6 +1997,17 @@ to the stated scope:
   the changed finished/status ordering case uses the final image, as recorded in
   `identity-reuse.json`. Physical headset operation, receive-service bounds,
   recognition within the session deadline and wideband mSBC remain unqualified.
+  Audio now closes between recognition activations while the paired control
+  connection remains live. A matched successful local disconnect, drained
+  transport/copied records, unchanged security identity and fresh audio generation
+  permit reopening; uncertain completion retains resources. CVSD/mSBC native
+  builds, focused lifecycle cases and six native-serializer host cases pass under
+  `radio-audio-idle-1026/result-1028.json`. Continuous playback and duplex remain
+  covered. Modeled idle synchronous TX payload falls from 14,340 bytes to zero
+  over 900,864 microseconds; the CVSD OS image adds 1,664 text bytes with no data
+  or BSS growth. Host checks use preserved recognizer output and modeled connection
+  identities. They establish neither a new full recognition run nor physical
+  controller/headset behavior.
   The optional [mSBC profile](bluetooth-native.md#wideband-capture-through-the-existing-recognizer)
   now negotiates transparent eSCO and decodes copied 16 kHz PCM into the unchanged
   repeated recognizer. Explicit CVSD fallback retains its separate codec identity.

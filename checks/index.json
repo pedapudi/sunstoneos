@@ -2414,7 +2414,9 @@
  },
  "bt-sco.py": {
   "cache_areas": [],
-  "docs": [],
+  "docs": [
+   "docs/bluetooth-audio.md"
+  ],
   "library": false,
   "pure_host": false,
   "required_arguments": [

@@ -10,7 +10,7 @@ history.
   powered only through USB, and both are in speed bin 4.
 - **Power cycles:** the user cannot power-cycle either board until further
   notice (since 2026-10-25).
-- **Current lifetimes:** each board holds one lifetime in
+- **Last recorded lifetimes:** each board has a preserved record in
   `~/.cache/sunstoneos/evidence/board-session-20261025-36/port-3-<n>`: a
   standard cold DDR start (`s7-ddr`), then two read-only DRAM captures. Until
   the user returns, only images that return to FEL and continue these
@@ -58,17 +58,17 @@ history.
 
 ## Active branches
 
-Autonomous development has resumed. The coordinator preserves both initialized
-board sessions while implementations and independent reviews proceed without
-hardware access. Each proposed physical test still needs a reviewed return and
+Development resumed on 2026-10-28 after the usage-limit interruption. Preserved
+implementations and accepted evidence are being completed in their original
+worktrees. The coordinator has not queried or changed either board since
+resumption. Each proposed physical test still needs a reviewed return and
 failure path compatible with the current session; a normal ROM return alone
 does not establish recovery from a fault.
 
 | Work | Branch | Immediate deliverable |
 | --- | --- | --- |
-| Headset idle audio | `work/radio-assess-1026` | Close confirmed idle SCO/eSCO audio and reopen on the existing paired control connection, with drained records and a fresh generation |
-| Native SPI3 DMA design | SPI owner | Connect the existing DMA provider to transfers beyond FIFO capacity, preserving exact peer-command authority and the 1.8 V route |
-| HDMI audio streaming design | HDMI audio owner | Extend the existing finite playback path with bounded refill, DMA ownership and underrun/stop handling using existing audio services |
+| Native SPI3 DMA | `work/resume-spi-dma-native-1026` | Complete focused native execution and host evidence for the implemented 4096-byte DMA response path |
+| HDMI audio streaming | `work/resume-hdmi-stream-1026` | Complete native refill, USB transport and host preparation/capture in isolated worktrees, then validate their composition |
 
 Independent reviewers cover CPU/thermal/DRAM, accelerator operation and peripheral
 integration. Workers reuse successful evidence and submit focused checks. The
@@ -381,6 +381,21 @@ be pruned.
   USB operation 8 carries performance control; operation 7 retains thermal
   reporting. This profile reports GPU state but has no GPU runtime owner.
   Physical switching, thermal response and recovery remain unqualified.
+- **Headset audio closes between recognition activations.** The existing paired
+  control connection remains live. Reopening requires a successful local audio
+  disconnect, drained transport and copied records, unchanged security identity
+  and a fresh audio generation. Pending activation and stop requests are bounded;
+  uncertain completion retains resources. The selected codec may remain valid
+  across activations, with explicit reselection supported when required.
+  CVSD and mSBC native builds, focused lifecycle cases and six native-serializer
+  host cases pass under `radio-audio-idle-1026/result-1028.json`. Independent
+  review approved the source and scoped evidence reuse. Continuous playback
+  and duplex remain covered. Modeled idle synchronous TX payload falls from
+  14,340 bytes to zero over 900,864 microseconds. The CVSD OS image adds 1,664
+  text bytes with unchanged data and BSS. The serializer checks use preserved
+  recognition output and modeled connection identities; they do not establish
+  a new complete recognition run. Physical radio and headset operation remain
+  unqualified.
 - **Radio and camera native application paths are implemented in software.**
   The radio diagnostic composes actual shared providers, card and transport
   constructors. Its native build, twelve modeled application cases, constructor
@@ -461,9 +476,10 @@ be pruned.
      The combined CPU/NPU performance image, focused FreeRTOS service/retention
      case, 31 host cases and 13 compiler/configuration cases pass under
      `~/.cache/sunstoneos/evidence/resume-os-eight-20261026/`.
-     Resident, capture, radio, headset and GPU-linear modes still reject eight
-     workers. Physical multicore recognition and service latency remain
-     unqualified; two workers remain the default.
+     Recorded supervised and resident CPU/GPU/NPU compositions now also support
+     eight workers. Microphone, radio and headset profiles retain the two-worker
+     limit. Physical multicore recognition and service latency remain unqualified;
+     two workers remain the default.
      Builds use the local unpublished mimus pin `967747f10dcf038aadc2961b5990d540f6b76455`;
      set `MIMUS_DIR=/home/sunil/git/mimus-worktrees/sunstoneos-eight-workers-1025`.
      The cached `cfg.sh` helper now derives its default from that source record;
