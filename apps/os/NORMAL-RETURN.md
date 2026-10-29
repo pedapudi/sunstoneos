@@ -1,7 +1,24 @@
 # Recorded CPU recognition with successful ROM return
 
-Status: implemented and software-tested. Physical recognition, normal return,
-cleanup timing and subsequent rail restoration remain unqualified.
+Status: the frozen CPU-only image passed one physical eight-worker recognition,
+exact stable reference comparison, normal return and subsequent rail restoration
+on 2026-10-29. GPU-assisted recognition, sustained load, thermal transitions and
+failure recovery remain unqualified.
+
+The physical recording contains 57,440 samples at 16 kHz and produces 90 frames.
+Features, log probabilities, words, punctuation, capitals and formatted text
+match the reference: `There was silence.`. Its reported compute time is
+330,752 microseconds. This single functional recording is not the 8.87-second
+performance qualification fixture.
+
+Evidence is under `sol-resume-20261028/port-3-1/`: `cpu-recognition-return/`
+contains the eight-core cleanup and actual RAM restoration; the compound
+`cpu-recognition-followup/` contains parity, successor survey and successful
+rail restoration. DCDC3 remained at 800 mV, DCDC5 changed from 1000 to 800 mV,
+and all three boot clock words passed the helper guards. These are selector and
+clock-word checks, not an external analog measurement. The board returned to
+ROM without manual reconnection. The frozen ELF is
+`fba722c5e33cbdeccc41b1b09a4a91752506e884c79e5f09f8c533a4cff74b70`.
 
 The optional `SUNSTONE_A733_OS_CPU_RETURN` profile runs one recorded recognition
 with eight CPU workers, the PMIC provider and the thermal service. It requires

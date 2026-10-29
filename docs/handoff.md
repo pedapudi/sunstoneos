@@ -4,69 +4,101 @@ This section states where SunstoneOS bring-up stands. The sections after it
 are the dated record that produced it; read them only for a subsystem's
 history.
 
+## Paused after the 2026-10-29 tranche
+
+The user requested this pause after the current tranche. Resume only when asked.
+All implementation workers have handed off. Both board queues have no active
+claim, and no board operation remains running. Full board support is unfinished.
+
 ## Board access
 
-- **Boards:** two Allwinner A733 boards, on USB ports 3-1 and 3-3. Both are
-  powered only through USB, and both are in speed bin 4.
-- **Power cycles:** the user reconnected both boards on 2026-10-28. Further
-  power removal is unavailable unless the user confirms another opportunity.
-- **Initial 2026-10-28 lifetimes:** both standard DDR initializations passed
-  under `~/.cache/sunstoneos/evidence/sol-resume-20261028/port-3-<n>/ddr`.
-  Each returned to ROM with stage 5, status 0, a reported 12,288 MiB and two
-  matching 4 KiB RAM pages. This establishes the initial session baseline,
-  not complete memory qualification. Returning images must continue these
-  new lifetimes; the older 2026-10-25 warm-return chains are historical.
-- **Subsequent returns on port 3-1:** the provider readiness checkpoint and
-  first GPU exact-sum caller both passed under the same evidence root, in
-  `gpu-provider-ready/` and `gpu-exact-sum/`. Both are required warm-return
-  links after its DDR start. The CPU-only GPU cache-permission probe also
-  passed, including normal return to `003/010`; its `gpu-cache-permission/`
-  session is the third required warm-return link.
-  Cache-off and SRAM surveys passed for their recorded instances; new runs
-  require current entry records. Port 3-3 subsequently passed
-  `sd-dma-first/`: one 4 KiB DMA read, exact PIO reference parity, shutdown,
-  restoration and ROM return. `sd-dma-first-setup/acceptance.json` binds the
-  strict decoder and admitted input. A later DCDC2-only snapshot also returned
-  normally, at `003/004`, before the failed NPU attempt below. Another SD
-  operation requires a new CMD0/provider admission, not the consumed grant.
-- **Port 3-3 was recovered:** the NPU same-instance restart attempt did not
-  produce a new ROM instance within 30 seconds. No native result was retrieved;
-  the launch acknowledgment does not establish how far execution progressed.
-  The user subsequently removed USB power and reconnected this board. The
-  coordinator verified a distinct instance at `003/009`, recorded the recovery,
-  stopped runner session `20293` and closed the failed queue claim
-  `cf5753e4aa2030952c0c41465a338a8555c90458a9cac5fccd7d7077271a329a`.
-  Evidence is `sol-resume-20261028/port-3-3/npu-normal-restart/`; the frozen
-  preparation is `sol-npu-board-prep-1028/ready-1/`. A fresh standard DDR start
-  passed under `ddr-after-npu-recovery/`. Only that record admits this new
-  lifetime; earlier SD, PMIC and restart-entry facts are historical. No cause
-  was established by offline forensics, and the restart will not be repeated
-  unchanged. Its narrower provider-free checkpoint now passes under
-  `npu-entry-mbus-checkpoint/`, with normal return to `003/011` and all 18 MiB
-  of saved DRAM restored and compared. Its log reports MBUS `0x81000000`
-  before and after entry, with result 0: already 600 MHz, not a measured
-  400-to-600 transition. This checkpoint is the sole warm-return link after
-  the recovered lifetime's DDR start. It qualifies no NPU job or IRQ97 setup.
-- **RAM ownership:** the legacy GPU and SD returning diagnostics own a private
-  18 MiB RAM interval. They restore their documented architecture/peripheral
-  state, but do not back up or restore that interval's previous contents.
-  Native NPU and CPU-return hosts have separate explicit DRAM backup/restore
-  paths. Never infer a DRAM-content restoration claim from normal ROM return.
-- **What waits for the user:** anything that needs a fresh lifetime, an
-  operator at the board, or a power removal at the end.
-- **Unattended work:** prioritize useful batches within an established native
-  session and images with a reviewed return compatible with the recorded state.
-  The supervised OS image ends in a halt requiring power removal and is excluded
-  while physical recovery is unavailable. If a board fails, record its recovery
-  requirement here and continue independent work without repeated reconnect
-  requests. Normal return evidence does not establish recovery from every fault.
-- **Who runs boards:** only the coordinating agent operates the boards,
-  through `tools/board-test-queue.py` with the coordinator token at
-  `~/.cache/sunstoneos/board-test-coordinator.token`.
+Both boards use USB-only power and speed bin 4. They last returned to responsive
+ROM with automatic host access. No reconnect is requested. Refresh identity,
+cache/survey and device admission before another native launch.
+
+| Port | Last ROM node | Last host identity | Initialized memory |
+| --- | --- | --- | --- |
+| 3-1 | `003/014` | `[7,2486,1096973,0,0]` | 12,288 MiB reported; training and bounded RAM comparisons passed |
+| 3-3 | `003/015` | `[7,2490,1096974,0,0]` | 12,288 MiB reported; training and bounded RAM comparisons passed |
+
+The evidence root is `~/.cache/sunstoneos/evidence/sol-resume-20261028/`.
+Keep every native warm-return link in order; same-instance observations are not
+warm returns:
+
+- **Port 3-1:** `ddr/` → `gpu-provider-ready/` → `gpu-exact-sum/` →
+  `gpu-cache-permission/` → `cpu-recognition-return/` →
+  `cpu-recognition-followup/rail-helper/`. The compound
+  `cpu-recognition-followup/session.json` proves final rail restoration and
+  ownership retirement; it supplements the native return chain.
+- **Port 3-3:** `ddr-after-npu-recovery/` → `npu-entry-mbus-checkpoint/` →
+  `~/.cache/sunstoneos/evidence/sol-sd-warm-packet-1029/attempt-sentinel64k/` →
+  `~/.cache/sunstoneos/evidence/sol-resume-20261028/port-3-3/npu-entry-irq-checkpoint/`.
+  The strict SD result is `sol-sd-warm-packet-1029/sentinel-physical-result.json`.
+
+The earlier NPU restart failed without a native report. The user removed USB
+power from port 3-3; recovery and new DDR were recorded before these successful
+checkpoints. The old failed claim and runner are closed. Its cause remains
+unresolved. Current gate-ON observations do not prove the earlier gate values.
+
+CPU capture restored its saved image, arena and model RAM. Its later rail helper
+retired/overwrote private 18 MiB RAM instead of restoring previous contents.
+Legacy GPU/SD returns also establish only their stated RAM continuity. Both NPU
+checkpoints restored and compared all saved 18 MiB; none restored old SRAM over
+new ROM. These are distinct claims.
+
+THS remains clocked and configured but stopped on port 3-1. The rail helper was
+its last writer and successfully used the existing warm clock mode. Future
+admission must account for that stopped state. GPU warm-predecessor evidence
+remains unarmed; no analog-drain or filter-flush qualification is claimed.
+
+Only the coordinator operates boards, with the existing per-port locks and
+queues. No eMMC/UFS, MIPI camera/display or microphone is attached. Preserve both
+microSD cards. The former pre-recovery port 3-3 chain is historical.
+
+## Next work when resumed
+
+1. Qualify complete GPU-assisted recognition. Firmware/compute/two exact-sum
+   shapes and the relocated cache-permission operation pass physically; complete
+   GPU recognition and its new return path have software evidence only.
+2. Continue NPU diagnosis after the now-proven shared entry and disabled IRQ97
+   installation/restoration. Provider construction, enabled IRQ delivery and
+   current-image inference/restart remain outside those checkpoint results.
+   Do not repeat the failed full launch without a concrete correction or a
+   narrower source-backed diagnostic.
+3. Broaden CPU/load/concurrency and thermal coverage with a stated new question.
+   Reuse the successful eight-worker recording; a commit or handoff does not
+   justify repeating it. Autonomous boot, accessories, radio fitted wiring and
+   other hardware qualification remain open in the hardware matrix.
+
+## Readiness and validation lessons
+
+Two packet defects were rejected before board commands: the CPU wrapper used
+same-byte evidence aliases absent from its reservation, and the IRQ queue
+proposal omitted the required recovery prerequisite. Their correction records
+are preserved beside the attempts. No native retry was needed for either.
+
+Workers must validate the final queue submission and exercise actual no-device
+admission with the exact launch arguments and captured target identity before
+handoff. Bundle preparation alone did not catch the path mismatch. Preserve
+canonical reservation paths, use the component's actual acceptance decoder and
+submit a runnable package. The coordinator reviews and executes that package.
+
+Focused accepted checks were reused. The new SD sentinel case addressed a real
+weakness: zero-filled references could otherwise match untouched zeroed RAM.
+No repeated performance sweep was run. Keep documentation and issue updates at
+integration boundaries rather than on the board-validation critical path.
 
 ## Qualified on the boards
 
 - **CPU:**
+  - One eight-worker recorded transcription now passes on port 3-1. All 90
+    frames, feature/log-probability CRCs and formatted text match the exact
+    reference: `There was silence.`. The input has 57,440 samples at 16 kHz;
+    its reported compute time is 330,752 microseconds. All seven secondaries
+    stopped, CPU RAM was restored, and the same-claim helper verified boot
+    clocks and restored DCDC5 to 800 mV with DCDC3 already at 800 mV. Both
+    normal returns passed without manual reconnection. This is one functional
+    recording, not sustained-load or complete performance qualification.
   - All eight cores ran a timer and interrupt workload at the vendor top
     points for bin 4: A76 at 2002 MHz and 1050 mV (DCDC3), A55 at 1794 MHz
     and 1000 mV (DCDC5), DSU at 1274 MHz (CPU step 6, port 3-3).
@@ -95,7 +127,11 @@ history.
     overhead is 0.24 ms.
   - Same-instance normal restart remains unqualified. Its 2026-10-28 attempt
     did not return; no inference or restart result was recovered.
-  - The subsequent provider-free entry checkpoint passed as recorded above.
+  - Provider-free entry and disabled IRQ97 installation/authentication/restore
+    checkpoints pass. The IRQ checkpoint also observed MBUS 400-to-600 MHz
+    normalization, completed normal ROM return and restored all saved 18 MiB.
+    Enabled IRQ delivery, provider startup and current-image inference remain
+    outside these checkpoint results.
     Current clock observations show the NPU AHB, MBUS and PPU access gates
     enabled. Those new-lifetime observations do not identify the earlier cause.
 - **microSD:** returning reads at high speed (3.3 V, 50 MHz, 4-bit); all 256
@@ -104,8 +140,11 @@ history.
   - Measured PIO throughput is 1.4 to 1.7 MB/s. One read-only 4 KiB DMA read
     now passes at 3.3 V, 50 MHz and four bits, with matching card identity/CRC,
     close/restoration receipts and normal ROM return. That single read took
-    639 microseconds; sustained throughput, larger transfers and fault recovery
-    remain unqualified. No card write or manual reconnect occurred.
+    639 microseconds. A subsequent 64 KiB read through sixteen descriptors
+    passed with nonzero prefill and exact sixteen-chunk PIO parity in
+    3,332 microseconds. Controller, clocks, pins and provider restoration and
+    normal return passed. Sustained throughput, broader extents and fault
+    recovery remain unqualified. No card write or manual reconnect occurred.
 - **DRAM training restore:** captures from ten lifetimes fix a per-board
   restore set of 1,036 registers (`restore-set-v3.json`). Initialization without training takes
   36 ms, against 5.1 s to train all four P-states. The restore itself is
@@ -156,9 +195,10 @@ Additional reviewed software now includes:
 
 - An opt-in recorded recognition profile with eight CPU workers, a native
   pretransition guard and a successful ROM-return path. Its first-use authority
-  remains explicitly under test. Physical recognition, return, thermal behavior
-  and the subsequent rail-restoration helper remain unqualified; the queue
-  claim must span the return and helper. See `apps/os/NORMAL-RETURN.md`.
+  remains explicitly under test for wider use. The exact CPU-only image now
+  passes one physical recognition and complete rail-restoration follow-up;
+  thermal/fault and broader-profile qualification remain open. The queue claim
+  spans both returns. See `apps/os/NORMAL-RETURN.md`.
 - A CPU-only diagnostic for cache maintenance over a read-only mapping with
   production GPU-output permissions. Nineteen focused software cases pass.
   It fits the existing RAM grant and protects ROM-reader scratch before
@@ -191,8 +231,8 @@ Additional reviewed software now includes:
 - A 64 KiB SD read uses sixteen existing DMA descriptors and compares sixteen
   chunk CRCs with accepted PIO references. Native and host checks pass under
   `sol-sd-multidescriptor-1029/`. Ordered provider-free checkpoint continuity
-  is implemented for signing and capture. Physical execution awaits a nonzero
-  destination prefill so missing writes cannot match zero-filled references.
+  is implemented for signing and capture. The corrected sentinel-prefilled
+  image now passes physically as recorded above.
 - NPU startup now explicitly acquires its AHB and MBUS gates before PCK access.
   Source-backed cold/failure/restart checks pass under `sol-npu-cold-gates-1029/`.
   Current gates are already enabled; this change establishes no failure cause
@@ -227,6 +267,10 @@ Most of the other `work/*` branches are superseded or already merged and can
 be pruned.
 
 ## Known problems and next steps
+
+These older integration notes retain their original image and evidence scope.
+The pause status, current results and resume priorities above take precedence
+over historical completion or qualification claims below.
 
 - **The resident recorded OS card bundle is implemented and software-checked.**
   It binds the actual stage-2 monitor, resident OS, session, models and recording

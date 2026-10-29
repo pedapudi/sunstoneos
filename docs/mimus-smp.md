@@ -1,5 +1,12 @@
 # Mimus recognition on two or eight FreeRTOS cores
 
+One frozen eight-worker CPU image now passes physical recognition and exact
+stable parity for a 57,440-sample recording, followed by eight-core cleanup,
+normal ROM return and CPU rail restoration. See the
+[recorded return evidence](../apps/os/NORMAL-RETURN.md). This qualifies one
+recording and its exact image; other profiles, sustained load, thermal
+transitions and GPU recognition remain unqualified.
+
 Mimus uses the [SMP C/C++ runtime](smp-runtime.md) with two inference workers by
 default. `SUNSTONE_MIMUS_WORKERS=8` selects eight workers for independent row
 stages and aligned packed matrix products. Stateful producers, frontend
@@ -11,8 +18,10 @@ pin, arithmetic parity and memory bounds.
 The integrated OS supports eight workers for admitted, supervised recorded
 recognition. Its A76 owner and first worker use cores 6 and 7 at priority 3;
 six A55 workers use cores 0 through 5 at priority 2, below the OS services.
-Linked worker metadata and the reviewed host entry must agree. Resident,
-capture, radio, headset and GPU-linear profiles currently require two workers.
+Linked worker metadata and the reviewed host entry must agree. Selected resident
+and GPU-linear configurations also have eight-worker software evidence. Their
+physical recognition remains unqualified. Capture, radio and headset profiles
+retain their selected worker limits.
 [OS placement and admission](designs/mimus-os-eight-workers.md) describes that
 boundary and its focused software checks.
 

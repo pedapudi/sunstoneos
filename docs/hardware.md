@@ -26,11 +26,11 @@ and board sessions for these results from 2026-10-25 and 2026-10-28:
 
 | Function | Demonstrated operation | Remaining qualification |
 | --- | --- | --- |
-| CPU | All eight cores ran the timer and interrupt workload at A76 2002 MHz, A55 1794 MHz and DSU 1274 MHz, then returned with the secondaries off | Sustained load, thermal transitions, failure recovery and integrated multicore recognition |
+| CPU | Eight-core top-point timer/interrupt workload; one eight-worker mimus recording with exact 90-frame/reference parity, seven secondary OFF proofs, RAM restoration and boot-clock/CPU-rail restoration | Sustained load, thermal transitions, fault recovery, other inputs/profiles and complete recognition performance qualification |
 | GPU | Firmware start/health/stop/restart, eight compute jobs, and two production exact-sum shapes with all 1,122 sums/tags/guards correct at 1008 MHz; cleanup, shutdown and ROM return passed | Failure recovery, complete GPU recognition, graphics and representative concurrent workloads |
 | NPU | Interrupt completion and matching ShuffleNetV2 outputs at 852 MHz; 2.91 ms inference and about 3.3 ms per job end to end | Full power-off and restart, thermal behavior and broader application integration |
 | Memory bus | Restore to 600 MHz on EL3 entry, with the preserved memory pattern verified on both boards | Broader memory and concurrent-device qualification |
-| microSD | 256 high-speed PIO reads and one 4 KiB DMA read at 50 MHz, four-bit, 3.3 V; DMA data matched PIO reference and restored normal return passed | Larger/multi-descriptor DMA, sustained throughput, failure recovery, 1.8 V signalling and remaining storage/update paths |
+| microSD | High-speed PIO, one 4 KiB DMA read and one 64 KiB/sixteen-descriptor read at 50 MHz/four-bit/3.3 V; sentinel-prefilled chunks match PIO, with restored normal return | Sustained throughput, broader extents/cards, failure recovery, 1.8 V signalling and remaining storage/update paths |
 | DRAM training | Captures across ten lifetimes establish the inputs for the training-restore design | Executing the restore and qualifying memory after it |
 
 Both ports retain initialized sessions. After the NPU restart failed to return,
@@ -43,7 +43,7 @@ its return and failure paths.
 ## Current software integration
 
 - Optional eight-worker mimus passes exact recognition parity in QEMU and
-  native compilation. Physical multicore recognition remains unqualified.
+  native compilation. One exact CPU-only eight-worker recording now passes physically; other profiles and broader recognition qualification remain open.
   Supervised recorded OS recognition now supports eight workers with A76
   admission, while other profiles retain their existing limits. Focused service
   scheduling, failure retention, image admission and layout checks pass; see
@@ -52,8 +52,9 @@ its return and failure paths.
   stops all eight workers, parks its thermal and PMIC owners and returns to ROM
   on success. A native guard checks the actual target before its first clock
   transition. Historical mechanism evidence and current target qualification
-  are separate. Physical recognition, return and subsequent rail restoration
-  remain unqualified; the claim spans both the return and rail helper.
+  are separate. One exact CPU-only recording, normal return and subsequent
+  rail restoration now pass physically; sustained/thermal/fault qualification
+  remains open. The claim spans both the return and rail helper.
 - The same profile optionally includes GPU recognition. Healthy final GPU
   parking precedes CPU cleanup; read-only output and both interrupt records
   are preserved. Focused native/service/host checks and independent review
@@ -91,8 +92,9 @@ SD operation needs fresh provider/CMD0 admission.
 An optional 64 KiB read now uses sixteen existing descriptors and compares
 each 4 KiB chunk with accepted PIO references. Native and strict host checks
 pass; signing and capture also bind ordered provider-free checkpoint returns.
-Physical larger-read qualification is pending. A nonzero destination prefill
-is being added so an omitted DMA write cannot match a zero-filled reference.
+The sentinel-prefilled 64 KiB image now passes physically: all sixteen chunks
+match their PIO references, with clean shutdown and normal return. The single
+transfer took 3,332 microseconds; sustained throughput remains unqualified.
 
 Normal NPU stop/restart now preserves the same registered providers and service
 objects; focused software checks pass. The returning restart diagnostic now has
@@ -114,7 +116,10 @@ ROM return, including full host DRAM restoration. It reported an already
 ran. Current clock observations show all three NPU access gates enabled.
 Startup now explicitly acquires the two fabric gates before PCK access, with
 focused source/model evidence; those observations establish no earlier failure
-cause. IRQ setup and provider startup remain the next diagnostic boundaries.
+cause. A subsequent provider-free IRQ97 installation/quiet-state/restoration
+checkpoint also passes, including observed MBUS 400-to-600 MHz normalization,
+normal ROM return and full saved-DRAM restoration. Enabled interrupt delivery,
+provider startup and current-image inference remain the next boundaries.
 
 ## Implementation inventory
 

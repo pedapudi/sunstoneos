@@ -5,8 +5,13 @@ Orange Pi boot CPU. The native USB application matches the host on 32 developmen
 feature and log-probability checksums, frame count, words, punctuation,
 capitalization, and formatted text. A separate [multicore emulator target](mimus-smp.md)
 also passes whole-recording and paced-reference comparisons with two inference
-workers. Physical paced replay, persistent boot, live input,
-accelerators, and performance qualification remain outstanding.
+workers. A frozen eight-worker CPU image now passes one physical staged
+recognition, exact stable parity and complete CPU return/rail restoration.
+Its 57,440-sample recording produces 90 matching frames and `There was silence.`;
+the reported compute time is 330,752 microseconds. See the
+[recorded return evidence](../apps/os/NORMAL-RETURN.md) for scope and exact inputs.
+Physical paced replay, persistent boot, live input, accelerator-assisted
+recognition and complete performance qualification remain outstanding.
 
 The [native USB application](mimus-usb.md) adds model and recording uploads,
 repeated recognition requests, and result retrieval within one running OS session.

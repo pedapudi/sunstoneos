@@ -187,6 +187,13 @@ second build while preserving checks for the actual requested application.
   integration passes its builds and checks, and first scans the unpublished
   changes for keys, tokens, credential files and session scratch paths.
   Workers commit to their own branches and do not push.
+- Before declaring a board package ready, validate its final queue submission
+  against the actual queue schema and exercise the component's no-device
+  admission with the exact final argv and captured target identity. Bundle
+  preparation alone does not verify launch-path bindings. Preserve canonical
+  reservation paths when freezing; identical bytes at another path may still
+  be inadmissible. Use the real component decoder's success contract rather
+  than adding coordinator-side assumptions about its JSON layout.
 - Freeze each submitted image and its required inputs in the existing evidence
   directory. Workers may continue editing and building in separate directories
   while that image waits or runs. Physical results apply to the frozen inputs.

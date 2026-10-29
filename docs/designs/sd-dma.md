@@ -1,10 +1,16 @@
 # Design: SD reads with descriptor DMA
 
-Status: **one 4096-byte DMA read and normal return physically passed;
-64 KiB descriptor-chain operation is implemented and software-checked.**
-The first-read result is
-`sol-resume-20261028/port-3-3/sd-dma-result.json`. Larger physical transfers
-and DMA fault recovery remain unqualified.
+Status: **one 4 KiB read and one 64 KiB, sixteen-descriptor read pass physically
+at 3.3 V, 50 MHz and four bits, with restored normal ROM return.**
+
+The 64 KiB destination was prefilled with `0xa5`. All sixteen chunk CRCs and
+card identity match accepted PIO references. The single transfer took
+3,332 microseconds; this establishes no sustained-throughput or fault-recovery
+qualification. No card write, voltage switch or extra PIO read occurred.
+Evidence is `sol-sd-warm-packet-1029/sentinel-physical-result.json`; the earlier
+4 KiB result is `sol-resume-20261028/port-3-3/sd-dma-result.json`.
+Larger extents, broader card coverage and DMA fault recovery remain unqualified.
+
 The native returning image runs both read profiles against an IDMAC model,
 including delayed OWN/reset/idle completion, retained failures, exact
 chain admission, cache publication and host report checks. The prior draft

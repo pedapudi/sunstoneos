@@ -2269,8 +2269,7 @@
   "cache_areas": [],
   "docs": [
    "docs/board-test-queue.md",
-   "docs/designs/board-bundles.md",
-   "docs/handoff.md"
+   "docs/designs/board-bundles.md"
   ],
   "library": false,
   "pure_host": false,
@@ -7804,6 +7803,31 @@
   "summary": "Execute the linked initial-state guard; device reads and THS readiness are modeled.",
   "usb": false
  },
+ "os-cpu-return-followup-integration.py": {
+  "cache_areas": [
+   "build",
+   "evidence"
+  ],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--out"
+  ],
+  "summary": "One complete compound composition with explicit model authority/transport.",
+  "usb": true
+ },
+ "os-cpu-return-followup.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--out"
+  ],
+  "summary": "Focused compound admission and SRAM/helper proof checks; no physical access.",
+  "usb": false
+ },
  "os-cpu-return-host.py": {
   "cache_areas": [],
   "docs": [],
@@ -7864,6 +7888,19 @@
   ],
   "summary": "Check actual combined OS GPU startup ordering and owner exclusion; no inference or MMIO.",
   "usb": false
+ },
+ "os-gpu-return-followup.py": {
+  "cache_areas": [
+   "evidence"
+  ],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--out"
+  ],
+  "summary": "GPU opt-in and returned-proof branches with a real frozen linked bundle.",
+  "usb": true
  },
  "os-gpu-return.py": {
   "cache_areas": [],
