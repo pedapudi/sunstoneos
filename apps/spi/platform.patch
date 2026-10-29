@@ -1,11 +1,9 @@
 --- platform.c
 +++ spi-platform.c
-@@ -134,6 +134,8 @@
- void vApplicationIRQHandler(uint64_t interrupt)
+@@ -145,4 +145,6 @@
  {
      unsigned c=core();
 +    extern void spi_interrupt(void);
 +    if(interrupt==59&&!c){spi_interrupt();return;}
      if(a733_smp_counter()>=diagnostic_deadline)a733_smp_exit_privileged(3,interrupt);
      if(interrupt==30 && !c) {
-         ++a733_smp_core_results[c].ticks;FreeRTOS_Tick_Handler();

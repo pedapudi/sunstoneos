@@ -37,7 +37,7 @@ def capture(exchange,session,evidence,record,save,deadline,now=time.monotonic,pa
         if result['status']==1:
             output=evidence/'output.bin';supervisor.durable_frame(output,frame[128:])
             require(now()<deadline,'SPI output became durable after capture deadline.')
-            record['copied_spi_output']={'path':output.name,'bytes':96,'sha256':hashlib.sha256(frame[128:]).hexdigest()}
+            record['copied_spi_output']={'path':output.name,'bytes':len(frame)-128,'sha256':hashlib.sha256(frame[128:]).hexdigest()}
         record['spi_result']='observed-success' if result['status']==1 else 'observed-failure'
         record['durable_result']=entry.copy()
         try:save()
@@ -52,7 +52,21 @@ def capture_device(device,same,deadline,session,evidence,record,save):
         same();require(device.write(0x02,packet,timeout=timeout)==1,'Incomplete SPI request.')
         same();remaining=int((deadline-time.monotonic())*1000)
         require(remaining>0,'SPI capture deadline expired after write.')
-        return bytes(device.read(0x81,224,timeout=min(timeout,remaining)))
+        maximum=4320 if preparation.dma_mode(session) else 224
+        frame=bytearray();expected=maximum
+        for _ in range(maximum):
+            same();remaining=int((deadline-time.monotonic())*1000)
+            require(remaining>0,'SPI capture deadline expired during frame.')
+            chunk=bytes(device.read(0x81,expected-len(frame),timeout=min(timeout,remaining)))
+            require(chunk and len(chunk)<=expected-len(frame),'Invalid SPI fragment.')
+            frame.extend(chunk)
+            if len(frame)>=128:
+                count=struct.unpack_from('<I',frame,12)[0]
+                require(count in (0,maximum-128),'Invalid SPI payload extent.')
+                expected=128+count
+                require(len(frame)<=expected,'Excess SPI payload.')
+                if len(frame)==expected:return bytes(frame)
+        raise ValueError('SPI frame fragment bound exhausted.')
     return capture(exchange,session,evidence,record,save,deadline)
 
 

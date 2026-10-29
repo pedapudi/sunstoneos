@@ -97,8 +97,10 @@ leases only clock, MOSI, MISO and one chip select. A format with `dma` set
 requires a controller with a DMA request line, which excludes SPI4. The core
 admission callback compares both fields with the configured format. Submission
 skips the CPU-buffer checks for a DMA transfer; the core refuses any buffer
-pointer in one. The FIFO-sized interrupt completion refuses DMA transfers, so
-they complete by polling. The native adapter permits reading the DMA handshake
+pointer in one. Interrupt completion admits DMA transfers after exchange starts;
+the CPU FIFO preload and response-size restrictions apply only to CPU transfers.
+The application must independently drain its DMA channels after the core confirms
+request shutdown. The native adapter permits reading the DMA handshake
 register at offset `0x88`.
 
 `a733_spi_platform_dma_stop` abandons an active DMA transfer under the register
@@ -132,9 +134,9 @@ component evidence and central source lock.
 Physical acceptance requires independent watchdog recovery, authenticated boot
 and electrical admission, connected peers, pad exclusion and actual pin/clock
 restoration. The composition also covers lane refusals, a dual DMA read
-through submission, polling, reaping and close, the interrupt-path refusal, DMA
+through submission, polling, reaping and close, DMA
 abandonment and a session without DMA admission. Remaining work includes SPI4
 package routing, additional alternate routes, IO2/IO3 routes for quad
-transfers, interrupt completion for DMA, calibrated high rates and power
+transfers, physical interrupt completion for DMA, calibrated high rates and power
 transitions. The separate SPIF controller remains required. No board access or
 benchmark ran for this implementation.

@@ -1,5 +1,8 @@
 #include "spi.h"
 #include "irq.h"
+#ifdef SUNSTONE_SPI_DMA
+#include "dma.h"
+#endif
 #include "boot.h"
 #include "a733_storage_digest.h"
 #include <string.h>
@@ -8,6 +11,9 @@ static int active(void)
 static int retain_failure(void)
 {
  spi_cancel();
+#ifdef SUNSTONE_SPI_DMA
+ spi_dma_retain();
+#endif
  /* The unwrapped adapter checks only actual owner/task/privilege. Never call
   * healthy platform/core code to manufacture a fault after cancellation. */
  if(spi.native.operations.current(&spi.native)!=1)return -1;
@@ -34,10 +40,15 @@ static int supply_valid(void)
 int spi_publish(void)
 {
  memset(spi.payload,0,sizeof(spi.payload));uint64_t observed=a733_smp_counter()/24;
- unsigned notifications=spi.session.version==2?spi_irq_notifications():0;
- if(spi.session.version==2&&!notifications)return retain_failure();
+ unsigned notifications=SPI_SESSION_USES_IRQ(spi.session.version)?spi_irq_notifications():0;
+ if(SPI_SESSION_USES_IRQ(spi.session.version)&&!notifications)return retain_failure();
  memcpy(spi.payload,&observed,8);uint32_t values[]={spi.platform.spi.plan.actual_hz,spi.session.tx_bytes,spi.session.rx_bytes,A733_SPI_WRITE_READ,3,notifications};
- memcpy(spi.payload+8,values,sizeof(values));memcpy(spi.payload+32,spi.tx,spi.session.tx_bytes);memcpy(spi.payload+64,spi.rx,spi.session.rx_bytes);
+ memcpy(spi.payload+8,values,sizeof(values));memcpy(spi.payload+32,spi.tx,spi.session.tx_bytes);
+#ifdef SUNSTONE_SPI_DMA
+ if(!spi_dma_copy())return retain_failure();
+#else
+ memcpy(spi.payload+64,spi.rx,spi.session.rx_bytes);
+#endif
  storage_digest_bytes(spi.payload,sizeof(spi.payload),spi.digest);
  unsigned empty=0;
  if(!active()||!atomic_compare_exchange_strong_explicit(&spi.result,&empty,1,memory_order_release,memory_order_relaxed))return retain_failure();
@@ -50,6 +61,9 @@ int spi_step(void)
   * while the independent board lifetime bounds later copied observation. */
  if(atomic_load_explicit(&spi.result,memory_order_acquire)==1)return 1;
  if(!active())return retain_failure();
+#ifdef SUNSTONE_SPI_DMA
+ if((spi.stage==7||spi.stage==10||spi.stage==11||spi.stage==12)&&spi_dma_observe()!=1)return retain_failure();
+#endif
  enum a733_spi_platform_result s;enum a733_pmic_status p;enum a733_rail_result r;
  switch(spi.stage){
  case 0:
@@ -79,18 +93,21 @@ int spi_step(void)
   if(s==A733_SPI_PLATFORM_PENDING||s==A733_SPI_PLATFORM_BUSY)return 0;
   if(s!=A733_SPI_PLATFORM_READY)return retain_failure();spi.stage=6;return 0;
  case 6:
+#ifdef SUNSTONE_SPI_DMA
+  {int ready=spi_dma_start();if(ready<0)return retain_failure();if(!ready)return 0;}
+#endif
   {int ready=provider_ready();if(ready<0)return retain_failure();if(!ready)return 0;}
   s=a733_spi_platform_submit(&spi.platform,&spi.transfer,spi.deadline);
   if(spi.platform.fault||spi.platform.spi.state==A733_SPI_FAULT)return retain_failure();
   if(s==A733_SPI_PLATFORM_BUSY)return 0;
   if(s!=A733_SPI_PLATFORM_PENDING)return retain_failure();spi.stage=7;return 0;
  case 7:
-  if(spi.session.version==2&&spi.platform.spi.state==A733_SPI_ACTIVE){spi.stage=12;return 0;}
+  if(SPI_SESSION_USES_IRQ(spi.session.version)&&spi.platform.spi.state==A733_SPI_ACTIVE){spi.stage=12;return 0;}
   s=a733_spi_platform_poll(&spi.platform,32);
   if(spi.platform.fault||spi.platform.spi.state==A733_SPI_FAULT)return retain_failure();
-  if(spi.session.version==2&&spi.platform.spi.state==A733_SPI_ACTIVE){spi.stage=12;return 0;}
+  if(SPI_SESSION_USES_IRQ(spi.session.version)&&spi.platform.spi.state==A733_SPI_ACTIVE){spi.stage=12;return 0;}
   if(s==A733_SPI_PLATFORM_PENDING||s==A733_SPI_PLATFORM_BUSY)return 0;
-  if(s!=A733_SPI_PLATFORM_COMPLETE||spi.session.version==2)return retain_failure();spi.stage=8;return 0;
+  if(s!=A733_SPI_PLATFORM_COMPLETE||SPI_SESSION_USES_IRQ(spi.session.version))return retain_failure();spi.stage=8;return 0;
  case 12:
    s=a733_spi_platform_interrupt_start(&spi.platform);
    if(spi.platform.fault||spi.platform.spi.state==A733_SPI_FAULT)return retain_failure();
@@ -106,6 +123,9 @@ int spi_step(void)
   if(s==A733_SPI_PLATFORM_PENDING||s==A733_SPI_PLATFORM_BUSY)return 0;
   if(s!=A733_SPI_PLATFORM_COMPLETE)return retain_failure();spi.stage=8;return 0;
  case 8:
+#ifdef SUNSTONE_SPI_DMA
+  {int ready=spi_dma_drain();if(ready<0)return retain_failure();if(!ready)return 0;}
+#endif
   s=a733_spi_platform_reap(&spi.platform,spi.deadline);
   if(spi.platform.fault||spi.platform.spi.state==A733_SPI_FAULT)return retain_failure();
   if(s==A733_SPI_PLATFORM_BUSY)return 0;
@@ -120,7 +140,7 @@ void spi_task(void *context)
 {
  (void)context;for(;;){
   spi_step();
-  if(spi.session.version==2&&(spi.stage==10||spi.stage==11)&&
+  if(SPI_SESSION_USES_IRQ(spi.session.version)&&(spi.stage==10||spi.stage==11)&&
      !atomic_load_explicit(&spi.result,memory_order_acquire))spi_irq_wait();
   else vTaskDelay(1);
  }

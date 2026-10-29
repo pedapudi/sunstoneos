@@ -8,10 +8,13 @@ import secrets
 import shutil
 import struct
 import subprocess
+import io
+from elftools.elf.elffile import ELFFile
 ROOT=Path(__file__).resolve().parents[2]
 def module(name,path):
     spec=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
 board=module('spi_board_prepare',ROOT/'apps/board/prepare.py')
+security_authority=module('spi_dma_security',ROOT/'tools/dma-nonsecure-access.py')
 base=board.base
 require=base.require
 SCHEMA='a733-spi-supervised-bundle-v1'
@@ -24,10 +27,30 @@ FACTS={
  'clocks':['stable_sysclk24m_ref_osc_fabric','spi3_gate_off_reset_asserted','no_autonomous_clock_reset_writers'],
  'supervision':['all_peer_power_domains_recovery_reviewed','whole_board_power_removal','permanent_retention','no_reuse','one_attempt']}
 
+def dma_mode(raw):return len(raw)==960
+
+def execution_profile(raw):return 'spi-dma-supervised-v3' if dma_mode(raw) else 'spi-supervised-v1'
+
+def image_profile(image,raw):
+    elf=ELFFile(io.BytesIO(image));symbols=elf.get_section_by_name('.symtab')
+    found=[] if symbols is None else symbols.get_symbol_by_name('spi_dma_image_profile') or []
+    if not dma_mode(raw):require(not found,'DMA image cannot accept a FIFO session.');return
+    require(len(found)==1,'Defined DMA image profile required.')
+    symbol=found[0];index=symbol['st_shndx']
+    require(isinstance(index,int) and symbol['st_info']['type']=='STT_OBJECT' and symbol['st_size']==20,'Invalid DMA profile symbol.')
+    section=elf.get_section(index);offset=symbol['st_value']-section['sh_addr']
+    require(section['sh_type']=='SHT_PROGBITS' and section['sh_flags']&2 and not section['sh_flags']&1 and
+        0<=offset<=section['sh_size']-20,'DMA image profile is not immutable file data.')
+    require(struct.unpack_from('<5I',section.data(),offset)==(3,960,4192,4096,3),'DMA image profile differs.')
+    require(any(segment['p_type']=='PT_LOAD' and not segment['p_flags']&2 and
+        segment['p_vaddr']<=symbol['st_value'] and symbol['st_value']+20<=segment['p_vaddr']+segment['p_filesz']
+        for segment in elf.iter_segments()),'DMA profile is not loaded immutable data.')
+
 def session_check(raw):
-    require(len(raw)==832,'SPI session must be832bytes.')
+    require(len(raw) in (832,960),'SPI session must be 832 or 960 bytes.')
+    dma=dma_mode(raw)
     require(board.session_check(raw[:592])==2,'SPI requires USB0/provider selection2.')
-    require(struct.unpack_from('<Q',raw,592)[0]==0x4153373353504131 and struct.unpack_from('<Q',raw,600)[0] in (1,2) and struct.unpack_from('<Q',raw,608)[0]==832,'Invalid SPI session.')
+    require(struct.unpack_from('<Q',raw,592)[0]==0x4153373353504131 and struct.unpack_from('<Q',raw,600)[0] in ((3,) if dma else (1,2)) and struct.unpack_from('<Q',raw,608)[0]==len(raw),'Invalid SPI session.')
     owner,authority,timeout=struct.unpack_from('<3Q',raw,616)
     require(owner and authority and owner not in struct.unpack_from('<2Q',raw,456) and
         250000<=timeout<=10000000,'Invalid SPI ownership or operation bound.')
@@ -38,15 +61,27 @@ def session_check(raw):
         function,pull,drive=struct.unpack_from('<3B',raw,780+3*i)
         require(function==5 and pull<=2 and drive<=3,'Invalid SPI3 PE configuration.')
     tx,rx=struct.unpack_from('<2I',raw,792)
-    require(1<=tx<=16 and 1<=rx<=32 and raw[800+tx:832]==bytes(32-tx),'Invalid bounded SPI request.')
+    require(1<=tx<=16 and (rx==4096 if dma else 1<=rx<=32) and raw[800+tx:832]==bytes(32-tx),'Invalid bounded SPI request.')
+    if dma:
+        require(struct.unpack_from('<6I',raw,832)==struct.unpack_from('<6I',raw,488),'DMA fabric differs from board authority.')
+        owner2,handoff,controller,evidence=struct.unpack_from('<4Q',raw,880)
+        established,owned,service,timeout2=struct.unpack_from('<IHHQ',raw,912)
+        cpu,mcu,desired_cpu,desired_mcu,change,cold=struct.unpack_from('<6I',raw,856)
+        require(owner2 and owner2 not in (owner,*struct.unpack_from('<2Q',raw,456)) and handoff and evidence==handoff and
+            controller==0x04601000 and established==0x5f and (owned,service)==(0xffff,3) and
+            250000<=timeout2<=timeout and any(raw[928:960]),'Invalid DMA ownership/bound.')
+        require(cold<=1 and not (cpu|mcu|desired_cpu|desired_mcu|change)&~0xffff and
+            desired_cpu&3==3 and not desired_mcu&desired_cpu and not ((cpu^desired_cpu)|(mcu^desired_mcu))&~change and
+            (cold or (cpu,mcu)==(desired_cpu,desired_mcu)),
+            'Invalid DMA routing/cold profile.')
 
 def request_bytes(address,identity,raw,epoch,generation,lease):
     request,contract=board.request_bytes(address,identity,epoch,generation,lease,raw)
     request=struct.pack('<Q',REQUEST_MAGIC)+request[8:]
-    contract=bytearray(contract);struct.pack_into('<Q',contract,184,832)
+    contract=bytearray(contract);struct.pack_into('<Q',contract,184,len(raw))
     return request,bytes(contract)
 
-def build_launcher(out,clang,lld):
+def build_launcher(out,clang,lld,dma=False):
     text=(ROOT/'platform/a733-smp-supervised/launch.c').read_text()
     (out/'base-supervised-launch.c').write_text(text)
     text=board.adapt_launcher(text,{'0x4153373353554c33':'0x4153373353504c31','REQUEST[1]==3':'REQUEST[1]==2','CONTRACT->version==3':'CONTRACT->version==2',
@@ -55,6 +90,7 @@ def build_launcher(out,clang,lld):
     (out/'spi-launch-base.c').write_text(text)
     for name,path in [('launch.c',ROOT/'apps/spi/launch.c'),('launch.S',ROOT/'platform/a733-smp-observe/launch.S'),('launch.ld',ROOT/'platform/a733-smp-observe/launch.ld'),('boot.h',ROOT/'platform/a733-smp-cached/boot.h'),('spi_session.h',ROOT/'apps/spi/spi_session.h'),('a733_board_application.h',ROOT/'include/a733_board_application.h')]:shutil.copy2(path,out/name)
     flags=['--target=arm-none-eabi','-march=armv8-a','-marm','-mfloat-abi=soft','-ffreestanding','-fno-builtin','-fno-stack-protector','-fno-unwind-tables','-fno-asynchronous-unwind-tables','-Os','-g','-Wall','-Wextra','-Werror','-DSUNSTONE_BOARD_SUPERVISED=1',f'-DA733_SMP_CONTRACT_MAGIC={CONTRACT_MAGIC}ULL','-I'+str(out)]
+    if dma:flags+=['-DSUNSTONE_SPI_DMA=1']
     commands=[[clang,*flags,'-c',out/name,'-o',out/(name+'.o')] for name in ('launch.c','launch.S')]
     commands += [[lld,'-T',out/'launch.ld',out/'launch.c.o',out/'launch.S.o','-o',out/'launch.elf'],['/usr/lib/llvm-21/bin/llvm-objcopy','-O','binary',out/'launch.elf',out/'launch.bin']]
     for command in commands:
@@ -64,7 +100,7 @@ def build_launcher(out,clang,lld):
     base.save_json(out/'launcher-commands.json',[[str(x) for x in c] for c in commands])
     require(0<(out/'launch.bin').stat().st_size<=0xc00,'Launcher exceeds SRAM.')
 
-def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=False):
+def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=False,runtime=None):
     # Existing DDR/platform/manual-recovery checks stay exact and byte-snapshotted.
     require(record.get('schema')=='a733-spi-supervised-entry-v1','Wrong SPI admission schema.')
     common={**record,'schema':'a733-board-supervised-entry-v2'}
@@ -81,6 +117,37 @@ def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=Fal
             tx,rx=struct.unpack_from('<2I',raw,792)
             require(fact.get('request_hex')==raw[800:800+tx].hex() and fact.get('response_bytes')==rx and all(isinstance(fact.get(k),str) and fact[k].strip() for k in ('peer_description','protocol_description','effects_description')),'Exact peer/request authority differs.')
         if key=='electrical':require(all(isinstance(fact.get(k),str) and fact[k].strip() for k in ('circuit_description','signal_compatibility_description')),'Peer circuit/translator authority absent.')
+    if dma_mode(raw):
+        item=record['dma'];path=Path(item['path']);require(path.is_absolute(),'DMA evidence path must be absolute.')
+        if str(path) not in cache:
+            require(not frozen,'Missing frozen DMA evidence.');cache[str(path)]=path.read_bytes()
+        data=cache[str(path)];identity=hashlib.sha256(data)
+        require(identity.digest()==raw[928:960] and identity.hexdigest()==item['sha256'],'DMA authority differs.')
+        fact=json.loads(data)
+        require(fact.get('schema')=='a733-spi-dma-authority-v1' and fact.get('identity')==record['identity'] and
+            fact.get('port')==record['port'] and fact.get('image_sha256')==image_hash and fact.get('reviewed') is True and
+            fact.get('configuration_hex')==raw[832:928].hex(),'DMA authority is not bound to exact image/configuration.')
+        require(all(fact.get(k) is True for k in ('cpu_dma0_users_stopped','remote_mcu_users_stopped',
+            'other_fifo_producers_stopped','prior_bus_writes_drained','irq143_owned_masked_inactive',
+            'manual_power_removal_retains_all_dma_resources','four_private_dma_pages_exclusive')),'DMA physical prerequisite absent.')
+        def evidence(ref):
+            require(isinstance(ref,dict) and set(ref)=={'path','sha256'},'Invalid DMA security reference.')
+            path=Path(ref['path']);require(path.is_absolute(),'DMA security path must be absolute.')
+            if str(path) not in cache:
+                require(not frozen,'Missing frozen DMA security evidence.');cache[str(path)]=path.read_bytes()
+            data=cache[str(path)];require(hashlib.sha256(data).hexdigest()==ref['sha256'],'DMA security evidence changed.')
+            return data
+        require('dma_nonsecure_access' in record,'SPI DMA nonsecure authority is missing.')
+        data=evidence(record['dma_nonsecure_access']);proposed=json.loads(data)
+        require(isinstance(proposed,dict),'Invalid SPI DMA security authority.')
+        ids=struct.unpack_from('<3Q',runtime,24) if runtime is not None else tuple(proposed.get(k) for k in ('epoch','generation','lease'))
+        _,handoff,controller,dma_evidence=struct.unpack_from('<4Q',raw,880)
+        expected=dict(zip(('epoch','generation','lease'),ids))
+        expected.update(identity=record['identity'],port=record['port'],image_sha256=image_hash,
+            controller=controller,service_channels=struct.unpack_from('<H',raw,918)[0],
+            dma_evidence=dma_evidence,dma_handoff=handoff,
+            configuration_sha256=hashlib.sha256(raw[832:928]).hexdigest(),session_template_sha256=template_hash)
+        security_authority.validate(data,expected,evidence,require)
     return cache
 
 def prepare(image,manifest,admission,template,output,clang,lld):
@@ -88,16 +155,20 @@ def prepare(image,manifest,admission,template,output,clang,lld):
     raw=bytearray(snapshots['session-template.bin']);session_check(raw)
     ih=hashlib.sha256(snapshots['image.elf']).hexdigest();th=hashlib.sha256(raw).hexdigest()
     mf=json.loads(snapshots['image-input-manifest.json'])
-    require(mf.get('target')=='sunstone-a733-spi' and mf.get('execution_profile')=='spi-supervised-v1' and mf.get('final_elf')==ih,'Tested SPI image manifest required.')
+    require(mf.get('target')=='sunstone-a733-spi' and mf.get('execution_profile')==execution_profile(raw) and mf.get('final_elf')==ih,'Tested SPI image manifest required.')
+    image_profile(snapshots['image.elf'],raw)
     record=json.loads(snapshots['admission.json']);cache=validate_admission(record,ih,th,raw)
-    epoch,generation,lease=(secrets.randbits(64) or 1 for _ in range(3))
+    if dma_mode(raw):
+        authority=json.loads(cache[str(Path(record['dma_nonsecure_access']['path']))])
+        epoch,generation,lease=(authority[k] for k in ('epoch','generation','lease'))
+    else:epoch,generation,lease=(secrets.randbits(64) or 1 for _ in range(3))
     struct.pack_into('<3Q',raw,24,epoch,generation,lease)
     out=Path(output);out.mkdir(parents=True,exist_ok=False)
     for name,data in snapshots.items():(out/name).write_bytes(data)
     segments,address,identity=base.image_parts(out/'image.elf')
     # Runtime authenticates linked build identity, not the ELF file hash.
     raw[48:80]=identity
-    build_launcher(out,clang,lld)
+    build_launcher(out,clang,lld,dma_mode(raw))
     uploads=[]
     for i,segment in enumerate(segments):
         if segment['data']:
@@ -118,13 +189,13 @@ def validate_bundle(bundle):
     for name,h in p['files'].items():require(Path(name).name==name and base.digest(out/name)==h,'SPI bundle input changed.')
     require(base.digest(out/'image.elf')==p['image_sha256'],'SPI image changed.')
     manifest=json.loads((out/'image-input-manifest.json').read_text())
-    require(manifest.get('target')=='sunstone-a733-spi' and manifest.get('execution_profile')=='spi-supervised-v1' and manifest.get('final_elf')==p['image_sha256'],'SPI image manifest differs.')
+    require(manifest.get('target')=='sunstone-a733-spi' and manifest.get('execution_profile')==execution_profile((out/'session.bin').read_bytes()) and manifest.get('final_elf')==p['image_sha256'],'SPI image manifest differs.')
     sizes={name:(out/name).stat().st_size for name in p['files']}
     require(p.get('backup_sizes')=={name:n for name,a,n in base.REGIONS} and 0<sizes.get('launch.bin',0)<=0xc00,'SPI protected SRAM geometry changed.')
     require((out/'result-zero.bin').read_bytes()==bytes(16384) and (out/'report-zero.bin').read_bytes()==bytes(128),'SPI initial report backing changed.')
-    raw=(out/'session.bin').read_bytes();session_check(raw)
+    raw=(out/'session.bin').read_bytes();session_check(raw);image_profile((out/'image.elf').read_bytes(),raw)
     template=(out/'session-template.bin').read_bytes();cache={path:(out/item['name']).read_bytes() for path,item in p['entry_evidence'].items()}
-    validate_admission(json.loads((out/'admission.json').read_text()),p['image_sha256'],hashlib.sha256(template).hexdigest(),template,cache,True)
+    validate_admission(json.loads((out/'admission.json').read_text()),p['image_sha256'],hashlib.sha256(template).hexdigest(),template,cache,True,raw)
     segments,address,identity=base.image_parts(out/'image.elf');require(identity.hex()==p['build_id'],'SPI build identity changed.')
     expected_raw=bytearray(template);struct.pack_into('<3Q',expected_raw,24,p['epoch'],p['generation'],p['lease']);expected_raw[48:80]=identity
     require(raw==expected_raw,'SPI session differs from admitted derivation.')

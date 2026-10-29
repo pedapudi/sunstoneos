@@ -28,12 +28,14 @@ startup. That observation proves no measured voltage, settling or wiring.
 The fixed mode is SPI3/CS0, mode 0, MSB first, active-low CS, a 500 kHz maximum
 and minimum 2 microsecond setup/hold times. The existing 24 MHz clock planner
 selects 500 kHz exactly. The immutable request contains 1–16 command bytes and
-requests 1–32 response bytes. WRITE_READ holds CS across both portions; that
+requests 1–32 response bytes in the FIFO profiles or 4096 bytes in the DMA
+profile. WRITE_READ holds CS across both portions; that
 direction alone says nothing about a peer command's effects. Image/target-bound
 entry records must authorize the exact bytes, selected peer protocol and effects.
 A command with persistent or unsafe effects is outside this diagnostic profile.
 
-The complete 832-byte session binds those request bytes and lengths, inherited
+The FIFO profiles use an 832-byte session; the DMA profile uses 960 bytes.
+Each session binds those request bytes and lengths, inherited
 and desired pin fields, ownership, deadline and physical evidence. Common and
 full application seals retain authenticated copies before any provider use.
 Prefix consistency gates pin authority and constructor entry. Private TX/RX
@@ -118,11 +120,58 @@ There is no automatic retry. Keep the failed claim and backing until qualified
 full board power removal and the peer's separately reviewed power/reset sequence.
 Cable reconnection alone establishes no safe resource reuse or peer reset.
 
-DMA, interrupt-driven transfers beyond this FIFO-sized profile, broader wire
-modes and rates, slave operation,
+Physical DMA qualification, broader wire modes and rates, slave operation,
 SPI1 DBI, SPI4 routing, flash protocols, power transitions and shutdown remain
 required SPI work. The separate SPIF controller remains in scope. This initial
 application does not claim complete SPI support.
+
+## DMA completion requires the SPI interrupt and both channel drains
+
+Building with `SUNSTONE_SPI_DMA=ON` selects session version 3. The existing SPI
+owner reserves four 4096-byte pages and controls DMA0 channels 0 and 1 for RX
+and TX. The session binds the DMA routing, fabric, ownership and evidence to
+the exact command and electrical authority. The FIFO images retain versions
+1 and 2. The [reviewed design](designs/spi-native-dma.md) records the source
+sequence and budgets.
+
+Both channels must become ACTIVE before SPI enables its requests. The owner
+requires a real SPI interrupt notification, transfer-complete status, clear
+exchange state, empty FIFO/internal buffers and confirmed request shutdown.
+It then drains each DMA channel independently. RX completion may arrive after
+the SPI notification. RX invalidation and both released transfer pointers must
+precede the 4096-byte copy into the authenticated output. DMA0 interrupt 143
+stays masked while the owner polls channel events.
+
+A failed cache operation, lost MMIO authority or retained common register lock
+enters a nonreturning failure loop. The loop closes output and retains DMA,
+SPI clock and rail ownership. Missing interrupts, DMA errors and failed drains
+also retain resources. Successful output grants no reuse or recovery authority.
+USB sends a 4320-byte frame; the host assembles short reads under one absolute
+deadline and refuses truncation.
+
+The software evidence is in `~/.cache/sunstoneos/evidence/spi-dma-native-1026/`.
+The native DMA image SHA-256 is
+`c3caa80635a87c620b5a3dad32580f25f6ea1ebb87379c5c2725a866dfd902bb`.
+Linked cases execute the application, SPI core/platform, DMA startup/controller,
+allocator and native adapters. They cover success, delayed RX, missing IRQ,
+DMA error, failed drain, cache failure, common-lock loss, MMIO authority loss
+and output revocation. Separate checks cover native session admission/sealing,
+private launcher admission, SPI/DMA interrupt handoff, CPU dispatch, offline
+bundle freezing and fragmented host capture. One FIFO interrupt success case
+passes on the same-source image with DMA disabled.
+
+The model supplies register effects, address translation, cache primitive
+results, scheduling, PMIC/rail replies and USB transport. It establishes no
+physical cache visibility, interrupt delivery, peer compatibility or recovery.
+The fixture names no physical port and supplies no deployment authority.
+
+Compared with DMA disabled on the same sources, text grows by 24,868 bytes.
+Added named static storage is 12,768 bytes; the private allocation adds 16,384
+bytes, for 29,152 bytes total. No task or stack is added. The nominal model
+uses 36 owner steps, 368 DMA register reads, 20 DMA register writes and five
+4096-byte cache operations. It makes no CPU FIFO access. The response is copied
+once into the payload, then the 4192-byte payload enters USB staging. These
+counts are model costs; physical throughput remains unmeasured.
 
 ## Software evidence covers composition and copied output
 

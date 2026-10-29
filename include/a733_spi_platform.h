@@ -85,8 +85,10 @@ enum a733_spi_platform_result a733_spi_platform_poll(struct a733_spi_platform *,
 enum a733_spi_platform_result a733_spi_platform_submit(struct a733_spi_platform *,
     const struct a733_spi_transfer *,uint64_t deadline);
 enum a733_spi_platform_result a733_spi_platform_reap(struct a733_spi_platform *,uint64_t deadline);
-/* Fixed FIFO-sized interrupt completion: call after SETUP reaches ACTIVE and
- * all TX bytes are queued. RX must fit the192-byte FIFO. Both functions run
+/* Interrupt completion: call after SETUP reaches ACTIVE. CPU transfers must
+ * have all TX bytes queued and RX must fit the 192-byte FIFO. DMA transfers
+ * require the caller's channels active before submission; the caller drains
+ * both channels only after confirmed SPI request shutdown. Both functions run
  * only in the owner task with the source masked/inactive at the GIC.
  * start enables source-defined TC/RX-overflow/RX-underflow/TX-overflow IRQs.
  * The caller then unmasks its configured source and waits for a real ISR claim.

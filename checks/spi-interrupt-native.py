@@ -74,10 +74,10 @@ class Machine(base.Machine):
    assert result==0,(self.variant,result,self.field('stage'))
   raise AssertionError('Unbounded setup')
 
-def run(image,session,out,nominal):
+def run(image,session,out,nominal,cases=None):
  out.mkdir(parents=True,exist_ok=False);elf=base.Image(image);raw=session.read_bytes();nom=json.loads(nominal.read_text());results={}
  assert struct.unpack_from('<Q',raw,600)[0]==2
- for variant in ('success','no-interrupt-deadline','active-deferral','controller-error','unexpected-interrupt'):
+ for variant in cases or ('success','no-interrupt-deadline','active-deferral','controller-error','unexpected-interrupt'):
   m=Machine(elf,raw,variant,nom);m.construct()
   if variant=='unexpected-interrupt':
    m.call('spi_interrupt');assert m.field('failed')==1 and m.field('result')==2 and not m.txbytes
@@ -111,4 +111,5 @@ def run(image,session,out,nominal):
 if __name__=='__main__':
  p=argparse.ArgumentParser(description=__doc__)
  for name in ('image','session','output','nominal'):p.add_argument('--'+name,type=Path,required=True)
- a=p.parse_args();run(a.image,a.session,a.output,a.nominal)
+ p.add_argument('--case',action='append',choices=('success','no-interrupt-deadline','active-deferral','controller-error','unexpected-interrupt'))
+ a=p.parse_args();run(a.image,a.session,a.output,a.nominal,a.case)

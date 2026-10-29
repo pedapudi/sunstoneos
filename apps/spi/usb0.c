@@ -41,7 +41,7 @@ static void spi_exchange(void)
     uint8_t request;if(tud_vendor_available()!=1||tud_vendor_read(&request,1)!=1||request)stop();
     unsigned result=atomic_load_explicit(&spi.result,memory_order_acquire);
     if(result==1&&!spi_output_ready())result=2;
-    put32(spi_response,0x31495053);put32(spi_response+4,1);put32(spi_response+8,result);
+    put32(spi_response,0x31495053);put32(spi_response+4,SPI_WIRE_VERSION);put32(spi_response+8,result);
     put32(spi_response+12,result==1?SPI_OUTPUT_BYTES:0);
     put32(spi_response+16,(uint32_t)board.session.epoch);put32(spi_response+20,(uint32_t)(board.session.epoch>>32));
     put32(spi_response+24,(uint32_t)board.session.generation);put32(spi_response+28,(uint32_t)(board.session.generation>>32));

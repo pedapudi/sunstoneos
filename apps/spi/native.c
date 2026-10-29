@@ -1,5 +1,8 @@
 #include "spi.h"
 #include "irq.h"
+#ifdef SUNSTONE_SPI_DMA
+#include "dma.h"
+#endif
 #include "boot.h"
 #include "a733_mapping_check.h"
 #include "a733_range.h"
@@ -31,6 +34,7 @@ static int admitted(void *v,const struct a733_spi_platform_config *c,
  token->exclusive==A733_CLOCK_SPI3&&token->shared==(A733_CLOCK_OSC|A733_CLOCK_REF|A733_CLOCK_FABRIC)&&
  c->owner==spi.config.owner&&c->handoff==spi.config.handoff&&c->deadline==spi.config.deadline&&
  c->route==A733_SPI3_PE&&c->format.port==3&&!c->format.cs&&!c->format.mode&&!c->format.lsb_first&&
+ c->format.dma==spi.config.format.dma&&c->format.lanes==spi.config.format.lanes&&
  !c->format.active_high&&c->format.max_hz==500000&&c->format.setup_us==2&&c->format.hold_us==2&&
  !memcmp(c->expected,spi.config.expected,sizeof(c->expected))&&
  !memcmp(c->desired,spi.config.desired,sizeof(c->desired))&&mappings();
@@ -70,7 +74,13 @@ int spi_construct(void)
  if(!a733_spi_platform_native_init(&spi.native,&providers.shared.locks,spi.handle,3,admitted,&spi))return 0;
  spi.operations=(struct a733_spi_platform_ops){now,current,authorize,enter,leave,retain,read_register,write_register,read_byte,write_byte};
  memcpy(spi.tx,spi.session.tx,sizeof(spi.tx));
+#ifdef SUNSTONE_SPI_DMA
+ spi.config.format.dma=1;
+ spi.transfer=(struct a733_spi_transfer){A733_SPI_WRITE_READ,NULL,NULL,spi.session.tx_bytes,spi.session.rx_bytes,0,0,1};
+ if(!spi_dma_construct())return 0;
+#else
  spi.transfer=(struct a733_spi_transfer){A733_SPI_WRITE_READ,spi.tx,spi.rx,spi.session.tx_bytes,spi.session.rx_bytes,0,0,0};
+#endif
  storage_digest_bytes(&spi.session,sizeof(spi.session),spi.session_digest);
  return a733_spi_platform_init(&spi.platform,&spi.config,&spi.operations,&spi,&providers.shared.clocks,&providers.shared.pins);
 }

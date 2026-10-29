@@ -19,7 +19,7 @@ int board_application_start(void)
  if(!spi_session_valid(&spi.session)||memcmp(s->board.image,a733_smp_build_id,32))return 0;
  spi.handle=xTaskCreateStatic(spi_task,"spi",2048,NULL,4,spi.stack,&spi.task);
  if(!spi.handle)return 0;
- if(spi.session.version==2)vTaskCoreAffinitySet(spi.handle,1);
+ if(SPI_SESSION_USES_IRQ(spi.session.version))vTaskCoreAffinitySet(spi.handle,1);
  if(!spi_construct())return 0;
- return spi.session.version!=2||spi_irq_bind();
+ return !SPI_SESSION_USES_IRQ(spi.session.version)||spi_irq_bind();
 }

@@ -286,8 +286,9 @@ enum a733_spi_platform_result a733_spi_platform_interrupt_start(struct a733_spi_
     if(!s||!s->initialized)return INVALID;if(!take(s))return BUSY;
     if(s->fault)return finish(s,fault(s));
     if(s->ops.current(s->context)!=1||s->stage!=S_READY||s->spi.state!=A733_SPI_ACTIVE||
-       s->interrupt_armed||s->interrupt_service||s->spi.transfer.dma||s->spi.sent!=s->spi.transfer.tx_bytes||
-       s->spi.transfer.tx_bytes>64||s->spi.transfer.rx_bytes>192)return finish(s,INVALID);
+       s->interrupt_armed||s->interrupt_service||
+       (!s->spi.transfer.dma&&(s->spi.sent!=s->spi.transfer.tx_bytes||
+       s->spi.transfer.tx_bytes>64||s->spi.transfer.rx_bytes>192)))return finish(s,INVALID);
     int g=guard(s);if(g<=0)return finish(s,g==0?BUSY:fault(s));
     int held=lock(s);if(held<0)return finish(s,fault(s));if(!held)return finish(s,BUSY);
     uint32_t enabled;

@@ -19,7 +19,7 @@ static int quiescent(void)
 }
 int spi_irq_bind(void)
 {
- if(spi.session.version!=2||irq.bound||!spi.handle||
+ if(!SPI_SESSION_USES_IRQ(spi.session.version)||irq.bound||!spi.handle||
     xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED||
     (read32(0)&(1u<<31))||
     ((read32(0x104)|read32(0x204)|read32(0x304))&(1u<<27))||
@@ -86,7 +86,15 @@ void spi_irq_stop(void)
  taskEXIT_CRITICAL();
  /* Masking establishes no drain, peer reset or permission to reuse buffers. */
 }
-void spi_irq_wait(void){(void)ulTaskNotifyTake(pdTRUE,1);}
+void spi_irq_wait(void)
+{
+#ifdef SUNSTONE_SPI_DMA
+ /* Fallback detects a DMA error/missing notification without FIFO polling. */
+ (void)ulTaskNotifyTake(pdTRUE,10);
+#else
+ (void)ulTaskNotifyTake(pdTRUE,1);
+#endif
+}
 unsigned spi_irq_notifications(void)
 {
  taskENTER_CRITICAL();

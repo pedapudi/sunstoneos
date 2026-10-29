@@ -3,10 +3,19 @@
 /* Included in private EL3 boot after its ordered MMIO helpers.
  * SPI3 uses INTID59: bank1 bit27, configuration3 bits23:22,
  * priority word14 byte3. Delivery remains masked until the owner arms it. */
+static int spi_dma_irq_quiet(void)
+{
+#ifdef SUNSTONE_SPI_DMA
+    /* DMA0 INTID143 stays masked; channel events are polled by the SPI owner. */
+    return !((read32(0x03400110)|read32(0x03400210)|read32(0x03400310))&(1u<<15));
+#else
+    return 1;
+#endif
+}
 static __attribute__((noinline)) int spi_irq_quiet(void)
 {
     const uint32_t bit=UINT32_C(1)<<27;
-    return ((read32(0x03400004)&31)+1)*32>59 &&
+    return spi_dma_irq_quiet() && ((read32(0x03400004)&31)+1)*32>59 &&
         !(read32(0x03400000)&(UINT32_C(1)<<31)) &&
         !((read32(0x03400104)|read32(0x03400204)|read32(0x03400304))&bit);
 }

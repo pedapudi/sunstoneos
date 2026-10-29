@@ -13,7 +13,8 @@ from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_RE
 from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_PC, UC_ARM64_REG_SP, UC_ARM64_REG_LR, UC_ARM64_REG_PSTATE, UC_ARM64_REG_TPIDR_EL1
 
 ROOT = Path(__file__).resolve().parents[1]
-CASES = ('irq-quiet', 'poll-quiet', 'enabled', 'pending', 'active')
+CASES = ('irq-quiet', 'poll-quiet', 'enabled', 'pending', 'active',
+         'dma-enabled', 'dma-pending', 'dma-active')
 
 
 def main():
@@ -28,7 +29,8 @@ def main():
     spec.loader.exec_module(m)
     e = m.Image(a.image, layout_names=('a733_smp_contract',))
     raw, template = a.session.read_bytes(), a.contract.read_bytes()
-    assert len(raw) == 832 and struct.unpack_from('<3Q', raw, 592) == (0x4153373353504131, 2, 832)
+    assert (len(raw),struct.unpack_from('<3Q', raw, 592)) in (
+        (832,(0x4153373353504131,2,832)), (960,(0x4153373353504131,3,960)))
     assert len(template) >= 224 and not any(template[224:])
     fields = e.layouts['a733_smp_contract']
     ops = {}
@@ -38,7 +40,8 @@ def main():
             ops[int(match[1], 16)] = (int(match[2]), match[3].lower())
     assert ops
     a.output.mkdir(parents=True, exist_ok=True)
-    for case in a.case or CASES:
+    defaults=tuple(c for c in CASES if (c!='poll-quiet' if len(raw)==960 else not c.startswith('dma-')))
+    for case in a.case or defaults:
         output = a.output/(case+'.json')
         assert not output.exists(), ('Preserve completed evidence', output)
         session, contract = bytearray(raw), bytearray(template[:224])
@@ -61,9 +64,10 @@ def main():
         u.mem_write(0x42004000, bytes(contract))
         u.mem_write(0x41f00000, bytes(session))
         regs = {0x03400000: 0x30, 0x03400004: 7}
-        offsets = dict(enabled=0x104, pending=0x204, active=0x304)
+        offsets = dict(enabled=0x104, pending=0x204, active=0x304,
+                       **({'dma-enabled':0x110,'dma-pending':0x210,'dma-active':0x310} if len(raw)==960 else {}))
         if case in offsets:
-            regs[0x03400000+offsets[case]] = 1 << 27
+            regs[0x03400000+offsets[case]] = 1 << (15 if case.startswith('dma-') else 27)
         # Neighboring ownership must not be mistaken for the SPI3 interrupt.
         for offset in (0x104, 0x204, 0x304):
             regs[0x03400000+offset] = regs.get(0x03400000+offset, 0) | (1 << 26)
@@ -77,6 +81,10 @@ def main():
             'a733_smp_counter', 'a733_smp_contract_valid', 'board_session_prepare',
             'spi_session_prepare', 'spi_admitted_session', 'a733_cpu_coherence_publish',
             'a733_cached_prepare', 'a733_cpu_start_init', 'a733_smp_stop')}
+        # MBUS restore has its own accepted evidence; this check stops before
+        # secondary startup and covers only private SPI interrupt admission.
+        try: hooks[e.address('a733_el3_mbus_restore')]='a733_el3_mbus_restore'
+        except (AssertionError, KeyError): pass
 
         def code(cpu, at, size, unused):
             name = hooks.get(at)
@@ -91,7 +99,7 @@ def main():
             elif name in ('a733_smp_contract_valid', 'board_session_prepare',
                           'spi_session_prepare', 'a733_cpu_coherence_publish'):
                 ret(1)
-            elif name == 'a733_cached_prepare':
+            elif name in ('a733_cached_prepare','a733_el3_mbus_restore'):
                 ret()
             else:
                 terminal.append(name)

@@ -21,7 +21,7 @@ class Image:
      if not name:continue
      name=name.value.decode()
      if d.tag=='DW_TAG_subprogram' and 'DW_AT_low_pc'in d.attributes:self.functions.setdefault((unit,name),set()).add(int(d.attributes['DW_AT_low_pc'].value))
-     if d.tag=='DW_TAG_structure_type' and name in ('spi_application','board_application','board_provider','a733_native_usb','a733_clock_leases','a733_clock_token','a733_spi_platform','a733_spi_platform_native','a733_spi_platform_ops','a733_spi_platform_config','a733_spi','a733_pmic_snapshot','a733_platform_locks','a733_pmic','a733_pmic_native','a733_pmic_ops','a733_rail_leases','a733_rail_binding','a733_pins','a733_gpu_resource_manager'):
+     if d.tag=='DW_TAG_structure_type' and name in ('spi_application','board_application','board_provider','a733_native_usb','a733_clock_leases','a733_clock_token','a733_spi_platform','a733_spi_platform_native','a733_spi_platform_ops','a733_spi_platform_config','a733_spi','a733_pmic_snapshot','a733_platform_locks','a733_pmic','a733_pmic_native','a733_pmic_ops','a733_rail_leases','a733_rail_binding','a733_pins','a733_gpu_resource_manager','a733_counter_clock','spi_dma_application','a733_dma_startup','a733_dma_platform','a733_dma_controller','a733_dma_channel','a733_dma_transfer','a733_dma_mapping','device_memory_pool','device_memory_allocation','a733_dma_native'):
       fields={c.attributes['DW_AT_name'].value.decode():int(c.attributes['DW_AT_data_member_location'].value) for c in d.iter_children() if c.tag=='DW_TAG_member' and 'DW_AT_name'in c.attributes and 'DW_AT_data_member_location'in c.attributes}
       if fields:
        if name in self.layouts:assert self.layouts[name]==fields,name

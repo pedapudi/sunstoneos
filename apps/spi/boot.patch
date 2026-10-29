@@ -18,7 +18,7 @@
 +    if(!spi_session_prepare(&admission))a733_smp_stop(3,0x30b);
 +    const struct spi_session *spi_boot_session=spi_admitted_session();
 +    if(!spi_boot_session)a733_smp_stop(3,0x30b);
-+    unsigned spi_uses_irq=spi_boot_session->version==2;
++    unsigned spi_uses_irq=SPI_SESSION_USES_IRQ(spi_boot_session->version);
      if(a733_cpu_coherence_publish(A733_STORAGE_SESSION_ADDRESS,4096,admission.startup_deadline)!=1)
          a733_smp_stop(3,0x308);
      a733_cached_prepare(admission.epoch,admission.startup_deadline,admission.diagnostic_deadline,admission.lease);
