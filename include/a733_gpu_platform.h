@@ -86,6 +86,9 @@ int a733_gpu_platform_off_poll(struct a733_gpu_platform *);
  * The consumer keeps its shared DCDC4 token; a later begin samples again.
  * Returns 1 done (or nothing to end), 0 pending, -1 fault. */
 int a733_gpu_platform_supply_end(struct a733_gpu_platform *);
+/* Final stopped owner only: one distinct park deadline, fixed across retries.
+ * End the completed sample without releasing DCDC4 or admitting another ON. */
+int a733_gpu_platform_park(struct a733_gpu_platform *,uint64_t);
 /* Before concurrency, after PMIC binding. HIGH is the ordinary default;
  * explicit LOW is applied while firmware is stopped during every ON. */
 int a733_gpu_platform_performance_enable(struct a733_gpu_platform *,uint32_t selected_hz);

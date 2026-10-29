@@ -137,6 +137,17 @@ bool Finish(void*, mimus::asr::ExactSumJob* out) {
 const mimus::asr::ExactSumHook hook{Begin, Finish, nullptr};
 }  // namespace
 
+#ifdef SUNSTONE_A733_OS_CPU_RETURN
+extern "C" int os_gpu_retire(void) {
+  // Called after synchronous transcription and every parallel stop ACK.
+  // No engine task can still read a previously lent output descriptor.
+  if (call.in_flight || call.next != call.rows || !completed ||
+      !os_dispatch_record.opened || os_dispatch_record.incomplete || os_dispatch_record.failure) return 0;
+  mimus::asr::SetExactSumHook(nullptr);
+  os_dispatch_active = 0;
+  return a733_gpu_mimus_return(completed);
+}
+#endif
 extern "C" void os_gpu_open(void) {
   if (!os_dispatch_open()) return;
   // The engine offers the hook only the placed tensors' calls; every other
@@ -148,4 +159,7 @@ extern "C" void os_gpu_open(void) {
 // The engine has no exact-sum hook: no call could reach the GPU, so the
 // session is never opened and the GPU stays unpowered.
 extern "C" void os_gpu_open(void) {}
+#ifdef SUNSTONE_A733_OS_CPU_RETURN
+extern "C" int os_gpu_retire(void) { return 0; }
+#endif
 #endif

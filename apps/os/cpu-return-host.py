@@ -60,6 +60,10 @@ def geometry(image):
             output['value'] + OUTPUT_BYTES <= 0x42000000, 'Copied output geometry differs.')
     result['output_address'] = output['value']
     result['output_bytes'] = OUTPUT_BYTES
+    config=os_image.os_link.gpu_configuration(elf)
+    if config:
+        require('return' in config, 'GPU return capability absent.')
+        result['gpu']=config['return']
     return result
 
 
@@ -138,6 +142,14 @@ def validate_bundle(bundle):
     require(geometry(bundle / 'board/image.elf') == record['geometry'], 'CPU return linked layout changed.')
     require(p['workload'] == 2, 'CPU return admits staged workload 2 only.')
     p['qualification'] = record['geometry']
+    if 'gpu' in p['qualification']:
+        manifest=json.loads((bundle/'board/image-input-manifest.json').read_text())
+        def frozen_evidence(item):
+            row=p['entry_evidence'][item['path']]
+            data=(bundle/'board'/row['name']).read_bytes()
+            require(hashlib.sha256(data).hexdigest()==item['sha256'], 'GPU retirement source changed.')
+            return data
+        os_image.gpu_return_rules.validate(review,manifest['gpu_profile'],frozen_evidence,require)
     p['_review'] = review
     p['_assets'] = os_image.host.validate_assets(bundle / 'assets')['assets']
     entry = json.loads((bundle / 'board/admission.json').read_text())
@@ -277,8 +289,11 @@ def run_once(tx, wait, ready, bundle, p, evidence, record, journal):
     wait()
     require('soc=00001903(A733)' in tx('version'), 'Returned service is not A733 ROM.')
     copied = {}
-    for name, address, size in [('return-report', p['qualification']['report_address'], cpu.REPORT_BYTES),
-                                ('recorded-output', p['qualification']['output_address'], OUTPUT_BYTES)]:
+    captures = [('return-report', p['qualification']['report_address'], cpu.REPORT_BYTES),
+                                ('recorded-output', p['qualification']['output_address'], OUTPUT_BYTES)]
+    if 'gpu' in p['qualification']:
+        captures.append(('gpu-retirement',p['qualification']['gpu']['report_address'],64))
+    for name,address,size in captures:
         path = evidence / (name + '.bin')
         tx('read', hex(address), size, path)
         require(path.stat().st_size == size, 'Incomplete copied CPU return output.')
@@ -286,6 +301,9 @@ def run_once(tx, wait, ready, bundle, p, evidence, record, journal):
         copied[name] = path.read_bytes()
     result = decode_report(copied['return-report'], p['epoch'])
     transcript = decode_output(copied['recorded-output'], p['epoch'], p['generation'])
+    if 'gpu' in p['qualification']:
+        result['gpu']=os_image.gpu_return_rules.decode(copied['gpu-retirement'],p['epoch'],p['generation'],require)
+        record['gpu_report_sha256']=hashlib.sha256(copied['gpu-retirement']).hexdigest()
     record.update(report_sha256=hashlib.sha256(copied['return-report']).hexdigest(),
                   output_sha256=hashlib.sha256(copied['recorded-output']).hexdigest(),
                   return_review_sha256=digest(bundle / 'return-review.json'),

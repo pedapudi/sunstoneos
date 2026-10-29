@@ -372,6 +372,11 @@ def main():
                 'failure_policy': 'retain-without-retry',
                 'rail_followup': 'verify-boot-clocks-and-restore-cpu-rails',
                 'conditions': {key: marker for key in review_rules.CONDITIONS}, 'sources': [marker]})
+            if manifest.get('gpu_linear'):
+                facts=json.loads(Path(review['path']).read_text())
+                facts['gpu_retirement']={'configuration':manifest['gpu_profile'],
+                    'conditions':{key:marker for key in prep.gpu_return_rules.CONDITIONS}}
+                review=put('return-review-gpu-'+name,facts)
             current['normal_return_review'] = review
             updated = out / ('MODEL-return-entry-' + name + '.json')
             updated.write_text(json.dumps(current))

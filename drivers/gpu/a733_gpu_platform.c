@@ -331,9 +331,16 @@ int a733_gpu_platform_supply_end(struct a733_gpu_platform *p)
      * OFF is a new bounded operation under the same retained exclusive lease. */
     const int r = p->perf.enabled ?
         a733_pmic_consumer_gpu_begin(&p->pmic,p->deadline,p->perf.current_uv) :
-        a733_pmic_consumer_refresh(&p->pmic, p->deadline);
+        a733_pmic_consumer_gpu_end(&p->pmic, p->deadline);
     if (r < 0) return fail(p);
     if (!r) return 0;
     p->pmic_observed = 0;
     return 1;
+}
+
+int a733_gpu_platform_park(struct a733_gpu_platform *p,uint64_t deadline)
+{
+    if(!p || !p->initialized || p->phase!=A733_GPU_PLATFORM_OFF || p->token || p->delegated)return -1;
+    p->deadline=deadline;
+    return a733_gpu_platform_supply_end(p);
 }

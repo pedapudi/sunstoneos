@@ -55,6 +55,8 @@ def main():
     parser.add_argument('--native-report', type=Path, required=True)
     parser.add_argument('--out', type=Path, required=True)
     parser.add_argument('--case', action='append', help='Run only selected capture cases')
+    parser.add_argument('--native-output',type=Path)
+    parser.add_argument('--gpu-report',type=Path)
     for name in ('helper-image', 'helper-binary', 'helper-manifest'):
         parser.add_argument('--' + name, type=Path)
     args = parser.parse_args()
@@ -62,7 +64,11 @@ def main():
     prepared = host.validate_bundle(args.bundle)
     report = args.native_report.read_bytes()
     host.decode_report(report, prepared['epoch'])
-    output = native_output(args.bundle, prepared)
+    output = args.native_output.read_bytes() if args.native_output else native_output(args.bundle, prepared)
+    if 'gpu' in prepared['qualification']:
+        assert args.gpu_report and args.native_output
+        gpu_report=args.gpu_report.read_bytes()
+        host.os_image.gpu_return_rules.decode(gpu_report,prepared['epoch'],prepared['generation'],host.require)
     (args.out / 'native-output.bin').write_bytes(output)
     rows = []
     manifest = json.loads((args.bundle / 'board/image-input-manifest.json').read_text())
@@ -97,6 +103,12 @@ def main():
     rows.append({'name': 'default-admission-keeps-unconditional-retention', 'passed': True})
     variants = ('success', 'no-new-ROM', 'bad-report', 'truncated-output', 'wrong-output-session',
                 'snapshot-incomplete', 'asset-transfer-failure', 'saved-RAM-changed', 'restore-mismatch')
+    if 'gpu' in prepared['qualification']:
+        variants+=('gpu-report-missing','gpu-report-session','gpu-report-incomplete')
+        review=json.loads((args.bundle/'return-review.json').read_text())
+        missing=copy.deepcopy(review);missing.pop('gpu_retirement')
+        refused(lambda:host.os_image.gpu_return_rules.validate(missing,manifest['gpu_profile'],lambda ref:evidence[ref['path']],host.require),'Exact GPU final-retirement')
+        rows.append({'name':'missing-GPU-source-review-refused','passed':True})
     if args.case:
         assert set(args.case) <= set(variants)
         variants = args.case
@@ -143,6 +155,11 @@ def main():
                             data = bytearray(report)
                             if variant == 'bad-report':
                                 struct.pack_into('<Q', data, 48, 24)
+                        elif state['launched'] and 'gpu' in p['qualification'] and address==p['qualification']['gpu']['report_address']:
+                            data=bytearray(gpu_report)
+                            if variant=='gpu-report-missing':data=data[:-1]
+                            if variant=='gpu-report-session':struct.pack_into('<Q',data,24,p['epoch']+1)
+                            if variant=='gpu-report-incomplete':struct.pack_into('<Q',data,48,31)
                         elif state['launched'] and address == p['qualification']['output_address']:
                             data = bytearray(output)
                             if variant == 'truncated-output':
@@ -167,7 +184,9 @@ def main():
                     path = root / record['dram_backups'][0]['file']
                     raw = path.read_bytes()
                     path.write_bytes(bytes([raw[0] ^ 1]) + raw[1:])
-            reasons = {'no-new-ROM': 'modeled missing ROM', 'bad-report': 'No successful CPU return report',
+            reasons = {'gpu-report-missing':'Incomplete copied CPU return output',
+                       'gpu-report-session':'GPU retirement is incomplete',
+                       'gpu-report-incomplete':'GPU retirement is incomplete', 'no-new-ROM': 'modeled missing ROM', 'bad-report': 'No successful CPU return report',
                        'truncated-output': 'Incomplete copied CPU return output',
                        'wrong-output-session': 'Recorded output belongs',
                        'snapshot-incomplete': 'Incomplete CPU return RAM backup',
@@ -179,6 +198,7 @@ def main():
                 action()
                 assert record['complete'] and record['dram_restored'] and record['rom_usable']
                 assert record['cpu_rail_restoration_pending'] and not record['ownership_release_permitted']
+                if 'gpu' in p['qualification']:assert record['result']['gpu']['gpu_off'] and record['result']['gpu']['jobs']==7 and record['gpu_report_sha256']
                 assert state['writes_after_launch'] == len(record['dram_backups'])
                 assert (root / 'transcript.txt').read_bytes() == output[48:48 + struct.unpack_from('<Q', output, 40)[0]]
                 if args.helper_image:

@@ -139,6 +139,19 @@ int a733_pmic_consumer_refresh(struct a733_pmic_consumer *c,uint64_t deadline)
     c->request=(struct a733_pmic_request){0};c->stage=STABLE;
     return timely(c,deadline);
 }
+/* Final GPU shutdown ends a completed sample after its old acquisition
+ * bound. The caller keeps one separate absolute park deadline across retries. */
+int a733_pmic_consumer_gpu_end(struct a733_pmic_consumer *c,uint64_t deadline)
+{
+    if(!identity(c) || c->config.rail!=A733_RAIL_DCDC4 || c->armed || c->gpu_performance ||
+       c->stage!=SAMPLED || timely(c,deadline)<0)return -1;
+    int r=a733_pmic_consumer_health(c);if(r!=1)return r;
+    enum a733_pmic_status status=a733_pmic_reap(c->config.provider,&c->request);
+    if(status==A733_PMIC_BUSY)return 0;
+    if(status!=A733_PMIC_COMPLETE || timely(c,deadline)<0)return fault(c);
+    c->request=(struct a733_pmic_request){0};c->stage=STABLE;
+    return 1;
+}
 int a733_pmic_consumer_gpu_performance(struct a733_pmic_consumer *c)
 {
     if(!identity(c) || c->config.rail!=A733_RAIL_DCDC4 || c->stage!=NEW || c->deadline ||

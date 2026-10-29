@@ -107,6 +107,12 @@ int a733_gpu_mimus_thermal(void);
  * admission permanently and wait for acknowledged STOPPED, retaining backing.
  * 1 permits CPU fallback; 0 requires LOST/board failure, never silent fallback. */
 int a733_gpu_mimus_retire(void);
+#ifdef SUNSTONE_A733_OS_CPU_RETURN
+int a733_gpu_mimus_return(uint64_t completed);
+int os_gpu_retire(void);
+int os_gpu_return_ready(void);
+int os_gpu_return_started(void);
+#endif
 /* One job of a placed call. begin writes the slot and wakes the worker
  * without waiting: 1 submitted (finish returns its record), 0 refused before
  * any device access (the caller computes the rows), negative caller outcome

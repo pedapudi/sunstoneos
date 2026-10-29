@@ -53,12 +53,12 @@ enum pvr_gpu_service_phase { PVR_GPU_SERVICE_COLD, PVR_GPU_SERVICE_STARTING,
     PVR_GPU_SERVICE_STOPPED, PVR_GPU_SERVICE_FAILED, PVR_GPU_SERVICE_ENABLING,
     PVR_GPU_SERVICE_BUILDING, PVR_GPU_SERVICE_DRAINING, PVR_GPU_SERVICE_PUBLISHING, PVR_GPU_SERVICE_PUBLISHING_GRAPHICS,
     PVR_GPU_SERVICE_COMPUTE_CLEANUP, PVR_GPU_SERVICE_GRAPHICS_CLEANUP, PVR_GPU_SERVICE_DISPOSING, PVR_GPU_SERVICE_DISPOSED,
-    PVR_GPU_SERVICE_RECONSTRUCTING };
+    PVR_GPU_SERVICE_RECONSTRUCTING, PVR_GPU_SERVICE_PARKING, PVR_GPU_SERVICE_PARKED };
 enum pvr_gpu_service_operation { PVR_GPU_SERVICE_STATUS, PVR_GPU_SERVICE_OPEN,
     PVR_GPU_SERVICE_CLOSE, PVR_GPU_SERVICE_COMPUTE, PVR_GPU_SERVICE_RENDER, PVR_GPU_SERVICE_RENDER_OUTPUT,
     PVR_GPU_SERVICE_COMPUTE_OUTPUT, PVR_GPU_SERVICE_COMPUTE_CANCEL, PVR_GPU_SERVICE_COMPUTE_INPUT,
     PVR_GPU_SERVICE_DRAW, PVR_GPU_SERVICE_TEXTURE, PVR_GPU_SERVICE_DISPOSE,
-    PVR_GPU_SERVICE_PERFORMANCE };
+    PVR_GPU_SERVICE_PERFORMANCE, PVR_GPU_SERVICE_PARK };
 enum pvr_gpu_service_result { PVR_GPU_SERVICE_OK, PVR_GPU_SERVICE_INVALID,
     PVR_GPU_SERVICE_DENIED, PVR_GPU_SERVICE_BUSY, PVR_GPU_SERVICE_FAULT };
 enum pvr_gpu_service_error { PVR_GPU_SERVICE_NO_ERROR, PVR_GPU_SERVICE_CLOCK,
@@ -139,6 +139,11 @@ struct pvr_gpu_service_config {
     void *context;
     struct pvr_gpu_service_irq_ops irq;
     struct pvr_gpu_service_enable_ops power;
+#ifdef SUNSTONE_A733_OS_CPU_RETURN
+    /* Optional final owner action after STOPPED; 0 pending, 1 parked, -1 fault.
+     * Called only by the worker under one fixed PARK deadline. */
+    int (*park)(void *,uint64_t);
+#endif
     struct pvr_gpu_service_free_list_config free_lists;
     struct pvr_compute_service *compute; /* Optional fixed native numerical job. */
     /* Mandatory with compute. Bounded worker callback, returning exactly 1

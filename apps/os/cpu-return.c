@@ -18,6 +18,14 @@ static StackType_t terminal_stack[8][1024];
 static TaskHandle_t terminal_handle[8];
 static _Noreturn void fail(unsigned detail)
 {board_fail(NULL);platform_exit(detail);}
+static uint64_t completion_cutoff(void)
+{
+#ifdef SUNSTONE_A733_OS_GPU_LINEAR
+    return (board.session.deadline_us-(OS_CPU_RETURN_RESERVE_US-2000000))*24;
+#else
+    return os_cpu_return_cutoff();
+#endif
+}
 static void bounded(void)
 {if(!board_live(NULL)||a733_smp_counter()/24>=board.session.deadline_us-10000)fail(0x736);}
 uint64_t os_cpu_return_cutoff(void)
@@ -47,7 +55,10 @@ int os_cpu_return_start(void)
 void os_cpu_return_begin(const uint8_t *text,size_t bytes)
 {
     if(!text||!bytes||bytes>sizeof(os_cpu_return_output.text)||os_cpu_return_requested()||
-       a733_smp_counter()>=os_cpu_return_cutoff())fail(0x738);
+       a733_smp_counter()>=completion_cutoff())fail(0x738);
+#ifdef SUNSTONE_A733_OS_GPU_LINEAR
+    if(!os_gpu_return_ready())fail(0x740);
+#endif
     os_cpu_return_output.magic=UINT64_C(0x3152434f33333741);
     os_cpu_return_output.version=1;os_cpu_return_output.bytes=sizeof(os_cpu_return_output);
     os_cpu_return_output.epoch=board.session.epoch;os_cpu_return_output.generation=board.session.generation;
@@ -74,7 +85,13 @@ void os_cpu_return_supervise(void)
 {
     bounded();
     if(!os_cpu_return_requested()){
-        if(a733_smp_counter()>=os_cpu_return_cutoff())fail(0x73c);
+        uint64_t cutoff=os_cpu_return_cutoff();
+#ifdef SUNSTONE_A733_OS_GPU_LINEAR
+        /* The recognizer starts this phase before its original cutoff, after
+         * every inference worker stopped. Recognition itself gets no extension. */
+        if(os_gpu_return_started())cutoff=completion_cutoff();
+#endif
+        if(a733_smp_counter()>=cutoff)fail(0x73c);
         return;
     }
     if(!atomic_load_explicit(&thermal_done,memory_order_acquire))return;

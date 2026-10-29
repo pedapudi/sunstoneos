@@ -41,6 +41,7 @@ security_authority = module('os_dma_security', ROOT / 'tools/dma-nonsecure-acces
 os_link = module('os_link_configuration', ROOT / 'checks/os-image-link.py')
 radio_assets = module('os_radio_assets', ROOT / 'apps/os/radio-assets.py')
 cpu_return_clock = module('os_cpu_return_clock_review', ROOT / 'apps/os/cpu-return-clock-review.py')
+gpu_return_rules = module('os_gpu_return_rules', ROOT / 'apps/os/gpu-return.py')
 bluetooth = module('os_bluetooth_preparation', ROOT / 'apps/bluetooth/prepare.py')
 board, host = mimus.board, mimus.host
 base = board.base
@@ -312,6 +313,7 @@ def image_manifest_check(manifest, raw, *, cpu_return=False):
                 'CPU return initial-state guard capability differs.')
     image_inference(manifest, raw)
     gpu = image_gpu(manifest, raw)
+    require(not gpu or ('return' in gpu) is cpu_return, 'GPU return capability differs from the selected lifetime.')
     audio = manifest.get('audio')
     # A link check from before the NPU profile has no 'npu' key: NPU is off.
     npu = manifest.get('npu', False)
@@ -536,6 +538,9 @@ def validate_admission(record, image_hash, template_hash, raw, audio, cache=None
     require(isinstance(record.get('mimus_ddr'), dict), 'Recognition input DDR reservation required.')
     mimus.input_admission(record, image_hash, evidence)
     gpu_admission(record, gpu, evidence, raw)
+    if cpu_return and gpu:
+        require('return' in gpu, 'GPU return capability absent.')
+        gpu_return_rules.validate(json.loads(evidence(record.get('normal_return_review'))),gpu,evidence,require)
     if npu_session(raw):
         npu_admission(record, image_hash, raw, evidence)
     else:

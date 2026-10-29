@@ -80,7 +80,11 @@ int __wrap_a733_gpu_backend_stopped(struct a733_gpu_backend *backend, struct pvr
 {
     (void)backend;
     ++stopped_proofs;
-    return !refuse_stopped && s == &service && s->phase == PVR_GPU_SERVICE_STOPPED &&
+    return !refuse_stopped && s == &service && (s->phase == PVR_GPU_SERVICE_STOPPED
+#ifdef SUNSTONE_A733_OS_CPU_RETURN
+        || s->phase==PVR_GPU_SERVICE_PARKING || s->phase==PVR_GPU_SERVICE_PARKED
+#endif
+        ) &&
         s->stop.phase == PVR_GPU_STOP_STOPPED && s->stop.isolation_observed &&
         s->stop.acknowledgement[0] == 1 && s->stop.acknowledgement[1] == 1 &&
         s->queue.phase == PVR_CCB_RETIRED && s->control.phase == PVR_GPU_CONTROL_RETIRED &&
@@ -393,6 +397,9 @@ static void closed(void)
     }
 }
 
+#ifdef SUNSTONE_A733_OS_CPU_RETURN
+#include "gpu-return-service.inc"
+#endif
 #ifdef SUNSTONE_A733_OS_PERF
 #include "gpu-performance-service.inc"
 #endif
@@ -417,6 +424,9 @@ static void client(void *unused)
     configASSERT(wb <= 80 && nc <= 52);
 #ifdef SUNSTONE_A733_OS_PERF
     if(c>=25)performance_client();
+#endif
+#ifdef SUNSTONE_A733_OS_CPU_RETURN
+    if(c>=31)return_client();
 #endif
     if (c >= 21 && c <= 24) {
         configASSERT(bench_job(0));
@@ -666,7 +676,7 @@ void fixture_unused(void)
 void kernel_main(void)
 {
     platform_init(); first_publish = 0;
-    configASSERT(mimus_service_case >= 1 && mimus_service_case <= 30);
+    configASSERT(mimus_service_case >= 1 && mimus_service_case <= 33);
     /* Synthetic weights over both 8 MiB model regions. */
     uint64_t *weights = (uint64_t *)(uintptr_t)0x44000000u;
     if (mimus_service_case == 1) for (size_t i = 0; i < (16u << 20) / 8; ++i) weights[i] = next_random();
@@ -704,6 +714,9 @@ void kernel_main(void)
 #ifdef SUNSTONE_A733_OS_PERF
     config.performance_clock=(struct pvr_gpu_clock_ops){boundary_now,sync_write,sync_read,perf_state,perf_publish};
     config.performance_begin=perf_begin;config.performance_poll=perf_poll;config.performance_rate=perf_current;config.performance_client=1;
+#endif
+#ifdef SUNSTONE_A733_OS_CPU_RETURN
+    config.park=final_park;
 #endif
     configASSERT(pvr_gpu_service_init(&service, &config, 4, 1));
     TaskHandle_t a = xTaskCreateStaticAffinitySet(client, "client", 4096, NULL, 3, mimus_stacks[0], &mimus_tasks[0], 1);

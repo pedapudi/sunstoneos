@@ -222,6 +222,14 @@ def gpu_configuration(elf, required=False):
         assert 0 < symbol['size'] <= 640 * 16, 'GPU placement extent differs'
         tables[name] = hashlib.sha256(elf.read(symbol['value'], symbol['size'])).hexdigest()
     result['placement_sha256'] = tables
+    returning = [s for s in elf.symbols if s['name']=='os_gpu_return_report' and s['shndx']!=0]
+    if returning:
+        report=one('os_gpu_return_report')
+        wb=[one('__device_pool_start')['value'],one('__device_pool_end')['value']]
+        nc=[one('__uncached_pool_start')['value'],one('__uncached_pool_end')['value']]
+        assert report['size']==64 and 0x41200000<=report['value']<report['value']+64<=0x41c00000, 'GPU return report geometry differs'
+        assert 0x41200000<=wb[0]<wb[1]<=0x41c00000 and wb[1]-wb[0]<=2097152 and nc==[0x41c00000,0x41e00000], 'GPU return needs backed-up local pools'
+        result['return']={'version':1,'report_address':report['value'],'report_bytes':64,'write_back_pool':wb,'uncached_pool':nc}
     return result
 
 
@@ -364,10 +372,15 @@ def main():
         if gpu_linear and args.lifetime == 'supervised':
             assert not any((audio, radio, headset)), 'Unsupported supervised GPU profile'
         if args.cpu_return == '1':
-            assert args.lifetime == 'supervised' and args.workers == 8 and cpu_clock and not any((audio, radio, headset, gpu_linear, args.npu == '1', args.perf == '1')), 'Unsupported CPU return profile'
+            assert args.lifetime == 'supervised' and args.workers == 8 and cpu_clock and not any((audio, radio, headset, args.npu == '1', args.perf == '1')), 'Unsupported CPU return profile'
             names = {s['name'] for s in Elf(args.image.read_bytes()).symbols if s['shndx'] != 0}
             assert {'os_cpu_return_output', 'a733_qualification_report', 'a733_qualification_success_dispatch', 'os_cpu_return_entry_profile', 'os_cpu_return_entry_guard', 'os_cpu_return_thermal_ready'} <= names, 'CPU return adapter missing'
             assert not ({'a733_native_usb_step', 'tusb_init', 'dcd_init'} & names), 'CPU return starts native USB'
+            if gpu_linear:
+                assert {'os_gpu_retire', 'a733_gpu_mimus_return', 'os_gpu_return_ready', 'os_gpu_return_report',
+                        'a733_gpu_platform_park', 'a733_pmic_consumer_gpu_end'} <= names, 'GPU return retirement missing'
+                report = [s for s in Elf(args.image.read_bytes()).symbols if s['name']=='os_gpu_return_report' and s['shndx']!=0]
+                assert len(report)==1 and report[0]['size']==64, 'GPU return report differs'
     except AssertionError as error:
         print('FAIL integrated OS link check:', error, file=sys.stderr)
         return 1

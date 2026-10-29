@@ -9,12 +9,16 @@
  #include "a733_fault.h"
  .section .text.qualification,"ax"
  .balign 4
-@@ -220,7 +220,7 @@
+@@ -220,7 +220,11 @@
      cmp x2, x3
      b.ne qualification_park
      mov x24, #0x41200000
 -    address x25, __bss_end
++#ifdef SUNSTONE_A733_OS_GPU_LINEAR
++    address x25, __device_pool_end
++#else
 +    address x25, __heap_end
++#endif
      add x25, x25, #63
      and x25, x25, #-64
      mov x2, #0x42000000

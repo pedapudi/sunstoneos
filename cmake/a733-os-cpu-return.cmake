@@ -1,9 +1,9 @@
-# Dedicated staged CPU profile. All adaptation is private to this target.
+# Dedicated staged returning profile, with optional GPU recognition. All adaptation is private to this target.
 if(SUNSTONE_A733_OS_RESIDENT OR SUNSTONE_A733_OS_AUDIO OR SUNSTONE_A733_OS_RADIO OR
-   SUNSTONE_A733_OS_HEADSET OR SUNSTONE_A733_OS_NPU OR SUNSTONE_A733_OS_GPU_LINEAR OR
+   SUNSTONE_A733_OS_HEADSET OR SUNSTONE_A733_OS_NPU OR
    SUNSTONE_A733_OS_PERF OR NOT A733_A76_ADMITTED OR NOT SUNSTONE_A733_OS_CPU_CLOCK OR
    NOT SUNSTONE_MIMUS_WORKERS STREQUAL "8")
-  message(FATAL_ERROR "CPU return requires supervised staged eight-worker A76 CPU-clock recognition without optional services")
+  message(FATAL_ERROR "CPU return requires supervised staged eight-worker A76 CPU-clock recognition with optional GPU only")
 endif()
 set(os_return "${os_root}/apps/os/cpu-return")
 set(os_qualification "${os_root}/apps/cpu-runtime-qualification")

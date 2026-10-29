@@ -10,12 +10,15 @@
  #include "../mimus/parallel_runtime.h"
  #include "a733_smp_placement.h"
  #ifdef SUNSTONE_A733_OS_CPU_CLOCK
-@@ -73,7 +76,9 @@
+@@ -73,7 +76,12 @@
          /* A read finishing after recognition is not overlap. */
          if(!mimus_board_staged()&&overlap.load(std::memory_order_acquire)!=current){failed();}
          state.store(1,std::memory_order_release);
 -        if(!mimus_board_keyboard())for(;;){mimus_board_progress();vTaskDelay(1);}
 +        mimus_parallel_stop();
++#ifdef SUNSTONE_A733_OS_GPU_LINEAR
++        if(!os_gpu_retire())failed();
++#endif
 +        os_cpu_return_begin(transcript,used);
 +        for(;;)vTaskSuspend(nullptr);
          while(acknowledged.load(std::memory_order_acquire)!=current){

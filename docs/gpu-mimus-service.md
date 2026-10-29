@@ -365,3 +365,9 @@ missing forced-idle acknowledgement and missing cancel acknowledgement cases
 also pass. These four cases use modeled firmware and synthetic job results.
 The supervised eight-worker GPU/NPU OS image builds at the high default;
 its link check passes. Physical fault response and recovery remain unqualified.
+
+The optional staged returning OS profile retires validated GPU output, obtains
+acknowledged OFF and final provider parking, then reuses the CPU return terminals
+and host RAM restoration. Its [design and software evidence](designs/gpu-normal-return.md)
+require GPU retirement review and preserve read-only output mappings. Integrated
+recognition and successful physical return remain unqualified.

@@ -42,6 +42,10 @@ int a733_pmic_consumer_gpu_begin(struct a733_pmic_consumer *,uint64_t,uint32_t e
  * task. Both use one absolute acquisition deadline. */
 int a733_pmic_consumer_reserve(struct a733_pmic_consumer *,uint64_t);
 int a733_pmic_consumer_sample(struct a733_pmic_consumer *,uint64_t);
+/* Final DCDC4 owner only, after acknowledged GPU OFF. Authenticate and reap
+ * only a completed sample under a separate fixed park deadline. No bus work,
+ * parent release or renewed admission. Legacy refresh keeps its deadline. */
+int a733_pmic_consumer_gpu_end(struct a733_pmic_consumer *,uint64_t);
 /* End only the completed request, preserving the stable parent lease; the next
  * sample reads again. Caller establishes any required settling interval. */
 int a733_pmic_consumer_refresh(struct a733_pmic_consumer *,uint64_t);

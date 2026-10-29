@@ -138,6 +138,16 @@ static int session_owners_distinct(void)
     return s->pck_client != OS_GPU_CLIENT;
 }
 
+#ifdef SUNSTONE_A733_OS_CPU_RETURN
+static int return_park(void *context,uint64_t deadline);
+#endif
+static int service_init(unsigned core)
+{
+#ifdef SUNSTONE_A733_OS_CPU_RETURN
+    gpu.firmware.config.park=return_park;
+#endif
+    return pvr_gpu_service_init(&gpu.service,&gpu.firmware.config,OS_GPU_PRIORITY,(UBaseType_t)1<<core);
+}
 int a733_gpu_mimus_start(unsigned core)
 {
     if (core >= configNUMBER_OF_CORES || gpu.started || !os_recognizer ||
@@ -164,7 +174,7 @@ int a733_gpu_mimus_start(unsigned core)
                                                  &layout)) ||
         !a733_gpu_backend_bind(&gpu.backend, &gpu.service, &gpu.firmware.config, &gpu.firmware.memory, &gpu.power,
                                &external) ||
-        !pvr_gpu_service_init(&gpu.service, &gpu.firmware.config, OS_GPU_PRIORITY, (UBaseType_t)1 << core) ||
+        !service_init(core) ||
         !pvr_gpu_service_bind(&gpu.service, 0, os_recognizer)
 #ifdef SUNSTONE_A733_OS_PERF
         || !pvr_gpu_service_bind(&gpu.service,1,os_thermal_task_handle())
@@ -333,6 +343,54 @@ int a733_gpu_mimus_retire(void)
     os_dispatch_waiting(0);
     return 1;
 }
+#ifdef SUNSTONE_A733_OS_CPU_RETURN
+#include "cpu-return.h"
+__attribute__((used,retain)) uint64_t os_gpu_return_report[8];
+static atomic_uint return_state;
+int os_gpu_return_ready(void)
+{return atomic_load_explicit(&return_state,memory_order_acquire)==2;}
+int os_gpu_return_started(void)
+{return atomic_load_explicit(&return_state,memory_order_acquire)!=0;}
+static int return_park(void *context,uint64_t deadline)
+{
+    if(context!=&gpu.backend || xTaskGetCurrentTaskHandle()!=gpu.service.worker ||
+       gpu.service.phase!=PVR_GPU_SERVICE_PARKING ||
+       !a733_gpu_backend_stopped(&gpu.backend,&gpu.service))return -1;
+    return a733_gpu_platform_park(&gpu.power,deadline);
+}
+int a733_gpu_mimus_return(uint64_t completed)
+{
+    if(!completed || xTaskGetCurrentTaskHandle()!=os_recognizer || !gpu.started ||
+       gpu.failed || gpu.job_pending || !gpu.epoch || os_gpu_return_started() ||
+       a733_smp_counter()>=os_cpu_return_cutoff())return 0;
+    atomic_store_explicit(&return_state,1,memory_order_release);
+    if(gpu.opened) { if(!runtime_close())return 0; }
+    if(!gpu.parked || gpu.opened || !a733_gpu_backend_stopped(&gpu.backend,&gpu.service))return 0;
+    struct gpu_wait wait;
+    struct pvr_gpu_service_reply reply;
+    if(runtime_window(&wait,OS_GPU_OPEN_US)!=1 ||
+       runtime_request(PVR_GPU_SERVICE_PARK,&wait,&reply)!=1)return 0;
+    while(reply.phase!=PVR_GPU_SERVICE_PARKED) {
+        vTaskDelay(1);
+        if(runtime_request(PVR_GPU_SERVICE_STATUS,&wait,&reply)!=1)return 0;
+    }
+    if(reply.epoch!=gpu.epoch || gpu.component->sequence!=completed || gpu.component->owed ||
+       atomic_load(&gpu.component->slot_state)!=PVR_MIMUS_SLOT_CLOSED ||
+       gpu.service.clients[0].pending || uxQueueMessagesWaiting(gpu.service.requests) ||
+       uxQueueMessagesWaiting(gpu.component->completions) || gpu.service.irq_wake_pending ||
+       gpu.power.pmic_observed || gpu.power.pmic.request.id ||
+       !a733_gpu_backend_stopped(&gpu.backend,&gpu.service) || runtime_live(&wait)!=1)return 0;
+    /* The priority-4 worker has blocked on this same core before priority 3
+     * can collect the final reply. No other owner can resume it. */
+    vTaskSuspend(gpu.service.worker);
+    gpu.retired=1;gpu.accepted_ticket=0;
+    const uint64_t report[8]={UINT64_C(0x3152475033333741),1,sizeof(report),
+        board.session.epoch,board.session.generation,completed,63,A733_GPU_SUPPLY_UV};
+    memcpy(os_gpu_return_report,report,sizeof(report));
+    atomic_store_explicit(&return_state,2,memory_order_release);
+    return 1;
+}
+#endif
 int a733_gpu_mimus_begin(const struct pvr_mimus_request *job)
 {
     if (xTaskGetCurrentTaskHandle() != os_recognizer) return OS_GPU_CALL_LOST;

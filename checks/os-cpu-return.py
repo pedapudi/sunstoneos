@@ -33,6 +33,7 @@ class Model(prior.Model):
                 assert len(matches) == 1, ('ambiguous local native hook', name)
                 self.local[name] = matches[0]['st_value']
         self.spi_corrupt = False
+        self.gpu_spi_corrupt = False
 
     def code(self, uc, address, size, unused):
         ins = self.image.insn(uc, address)
@@ -58,6 +59,8 @@ class Model(prior.Model):
 
     def read(self, uc, access, address, size, value, unused):
         super().read(uc, access, address, size, value, unused)
+        if self.gpu_spi_corrupt and self.clean_started and address==0x0340045c:
+            self.put32(address,self.u32(address)^1)
         if self.spi_corrupt and self.clean_started and address == 0x03400444:
             self.put32(address, self.u32(address) ^ 1)
 
@@ -76,6 +79,12 @@ class Model(prior.Model):
         self.put32(0x03400088, 1 << 7)
         self.put32(0x03400444, 0xd8 << 24)
         self.put32(0x03400208, 1 << 7)
+        if 'os_gpu_return_report' in self.s:
+            self.put32(0x03400088,self.u32(0x03400088)|(1<<31))
+            self.put32(0x0340045c,0xd8<<24)
+            self.put32(0x03400208,self.u32(0x03400208)|(1<<31))
+            for i in (54,55):
+                self.put64(self.s['a733_cached_el1_l2']+i*8,(0x40000000+i*0x200000)|(3<<6)|(1<<53)|(1<<54)|0x705)
         contexts = []
         for c in range(8):
             self.core = c
@@ -115,6 +124,8 @@ def main():
     cases = ('success', 'ordinary-exit-zero', 'wrong-core', 'missing-peer', 'active-interrupt',
                  'unrelated-pending', 'wrong-image-alias', 'wrong-arena-alias', 'expired-deadline',
                  'restore-readback', 'ack-without-off', 'ths-active', 'spi-restore-readback', 'service-not-ready')
+    if 'os_gpu_return_report' in image.symbols:
+        cases += ('gpu-active','gpu-spi-restore-readback','wrong-pool-alias')
     if args.case:
         assert set(args.case) <= set(cases), args.case
         cases = args.case
@@ -152,6 +163,14 @@ def main():
             model.put32(0x03400308, 1 << 7)
         elif case == 'spi-restore-readback':
             model.spi_corrupt = True
+        elif case == 'gpu-active':
+            model.put32(0x03400308,1<<31)
+        elif case == 'gpu-spi-restore-readback':
+            model.gpu_spi_corrupt=True
+        elif case == 'wrong-pool-alias':
+            block=(image.symbols['__device_pool_start']-0x40000000)>>21
+            entry=image.symbols['a733_cached_el3_l2']+block*8
+            model.put64(entry,model.u64(entry)&~32)
         elif case == 'service-not-ready':
             model.put32(model.local['ready'], 0)
         if case != 'success' and case != 'expired-deadline':
@@ -161,7 +180,7 @@ def main():
         assert not model.postclean, (case, model.postclean[:4])
         if case == 'success':
             for ranges in model.ranges:
-                expected = [(0x41200000, image.symbols['__heap_end']), (0x46000000, 0x47000000)]
+                expected = [(0x41200000, image.symbols['__device_pool_end'] if 'os_gpu_return_report' in image.symbols else image.symbols['__heap_end']), (0x46000000, 0x47000000)]
                 merged = []
                 for lo, hi in ranges:
                     if merged and merged[-1][1] == lo:
@@ -170,6 +189,9 @@ def main():
                         merged.append((lo, hi))
                 assert merged == expected, (merged, expected)
             assert model.u32(0x03400088) == model.u32(0x03400444) == model.u32(0x03400208) == 0
+            if 'os_gpu_return_report' in image.symbols:
+                assert model.u32(0x0340045c)==0
+                for i in (54,55):assert model.u64(image.symbols['a733_cached_el1_l2']+i*8)&(3<<6)==3<<6
             raw = bytes(model.uc.mem_read(model.report, 8880))
             (args.out / 'return-report.bin').write_bytes(raw)
         rows.append({'name': case, 'outcome': outcome, 'instructions': model.count,

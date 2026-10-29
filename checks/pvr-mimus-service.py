@@ -36,7 +36,8 @@ CASES = {1: 'bench, exact sums', 2: 'bench, pattern sums', 3: 'bench, jobs compl
          19: 'reserved-slot CLOSE and abort', 20: 'lost CLOSE',
          21: 'two healthy retained reopens', 22: 'reopen proof refusals', 23: 'reopen cache failure',
          24: 'reopen result publication failure', 25: 'performance transition and reopen', 26: 'accepted job drains before forced idle',
-         27: 'forced idle acknowledgement absent', 28: 'cancel acknowledgement absent', 29: 'clean drain refusal', 30: 'firmware reset while performance HOLD drains a job'}
+         27: 'forced idle acknowledgement absent', 28: 'cancel acknowledgement absent', 29: 'clean drain refusal', 30: 'firmware reset while performance HOLD drains a job', 31: 'final PARK',
+         32: 'thermal close and reopen before final PARK', 33: 'final PARK callback failure'}
 COUNTED = ('aarch64_device_translate', 'aarch64_device_cache', 'vTaskEnterCritical', 'vTaskEnterCriticalFromISR',
            'xQueueGenericSend', 'xQueueReceive', 'xQueueGenericSendFromISR', 'gicv3_spi_mask', 'gicv3_spi_rearm',
            'advance', 'external', 'now', 'pvr_mimus_service_submit', 'pvr_mimus_service_receive', 'kick',
@@ -209,7 +210,9 @@ def main():
     for name in ('freertos', 'tinyusb', 'firmware', 'qemu', 'lld'):
         parser.add_argument('--' + name, type=Path, required=True)
     args = parser.parse_args()
-    performance = any(c >= 25 for c in args.cases)
+    performance = any(25 <= c <= 30 for c in args.cases)
+    returning = any(c >= 31 for c in args.cases)
+    assert not returning or all(c >= 31 for c in args.cases) and not args.trace
     assert not performance or all(c >= 25 for c in args.cases) and not args.trace
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=True)
@@ -251,7 +254,7 @@ list(APPEND sources "{platform}" {extra})
 list(REMOVE_DUPLICATES sources)
 set_property(TARGET gpu-service-model PROPERTY SOURCES "${{sources}}")
 target_include_directories(gpu-service-model PRIVATE "{fixtures}" "{ROOT}/checks")
-target_compile_definitions(gpu-service-model PRIVATE SUNSTONE_GPU_NATIVE_MEMORY=1 {"SUNSTONE_A733_OS_PERF=1" if performance else ""})
+target_compile_definitions(gpu-service-model PRIVATE SUNSTONE_GPU_NATIVE_MEMORY=1 {"SUNSTONE_A733_OS_PERF=1" if performance else "SUNSTONE_A733_OS_CPU_RETURN=1" if returning else ""})
 get_target_property(options gpu-service-model LINK_OPTIONS)
 list(FILTER options EXCLUDE REGEX "-Wl,-T,")
 list(APPEND options "-Wl,-T,{linker}" -Wl,--defsym=__device_pool_size=2097152
