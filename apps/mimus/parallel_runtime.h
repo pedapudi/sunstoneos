@@ -18,4 +18,8 @@ inline constexpr unsigned kMimusOwnerPriority = 3;
 void mimus_parallel_init(unsigned owner_core = 0, unsigned worker_core = 1);
 void mimus_parallel_bind();
 void mimus_parallel_report();
+#ifdef SUNSTONE_A733_OS_CPU_RETURN
+// Owner task only after the final recognition. No future submission is legal.
+void mimus_parallel_stop();
+#endif
 #endif

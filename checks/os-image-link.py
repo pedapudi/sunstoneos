@@ -226,7 +226,7 @@ def gpu_configuration(elf, required=False):
 
 
 def check(path, assets, recognizer, loader, audio=False, radio=False, headset=False, gpu_linear=False,
-          cpu_clock=False, npu=False, perf=False):
+          cpu_clock=False, npu=False, perf=False, cpu_return=False):
     elf = Elf(path.read_bytes())
     defined = [s for s in elf.symbols if s['name'] and s['shndx'] not in (0, 0xfff1)]
     functions = {}
@@ -293,7 +293,7 @@ def check(path, assets, recognizer, loader, audio=False, radio=False, headset=Fa
     assert bool(owner) == cpu_clock, 'os_cpu_clock_step linked: %s, CPU clock build: %s' % (bool(owner), cpu_clock)
     names = {s['name'] for s in defined}
     thermal = [name in names for name in ('os_thermal_record_begin', 'os_thermal_record_end', 'os_thermal_report_copy')]
-    assert all(thermal) or not any(thermal), 'Incomplete thermal report implementation'
+    assert all(thermal) or not any(thermal) or cpu_return and thermal == [True, True, False], 'Incomplete thermal report implementation'
     assert not any(thermal) or cpu_clock, 'Thermal report outside CPU-clock profile'
     npu_profile = None
     if npu:
@@ -343,6 +343,7 @@ def main():
     parser.add_argument('--gpu-linear', choices=('0', '1'), default='0')
     parser.add_argument('--npu', choices=('0', '1'), default='0')
     parser.add_argument('--cpu-clock', choices=('0', '1'), default='0')
+    parser.add_argument('--cpu-return', choices=('0', '1'), default='0')
     parser.add_argument('--perf', choices=('0', '1'), default='0')
     parser.add_argument('--workers', type=int, choices=(2, 8), default=2)
     parser.add_argument('--output', type=Path, required=True)
@@ -351,7 +352,7 @@ def main():
     gpu_linear, cpu_clock = args.gpu_linear == '1', args.cpu_clock == '1'
     try:
         result = check(args.image, args.assets, args.recognizer, args.loader, audio, radio, headset, gpu_linear,
-                       cpu_clock, args.npu == '1', args.perf == '1')
+                       cpu_clock, args.npu == '1', args.perf == '1', args.cpu_return == '1')
         profile = contract_profile(Elf(args.image.read_bytes()), legacy=True)
         if profile is not None:
             assert profile['lifetime'] == args.lifetime, 'Linked lifetime differs from build selection'
@@ -362,12 +363,18 @@ def main():
             assert not any((audio, radio, headset)), 'Unsupported eight-worker OS profile'
         if gpu_linear and args.lifetime == 'supervised':
             assert not any((audio, radio, headset)), 'Unsupported supervised GPU profile'
+        if args.cpu_return == '1':
+            assert args.lifetime == 'supervised' and args.workers == 8 and cpu_clock and not any((audio, radio, headset, gpu_linear, args.npu == '1', args.perf == '1')), 'Unsupported CPU return profile'
+            names = {s['name'] for s in Elf(args.image.read_bytes()).symbols if s['shndx'] != 0}
+            assert {'os_cpu_return_output', 'a733_qualification_report', 'a733_qualification_success_dispatch'} <= names, 'CPU return adapter missing'
+            assert not ({'a733_native_usb_step', 'tusb_init', 'dcd_init'} & names), 'CPU return starts native USB'
     except AssertionError as error:
         print('FAIL integrated OS link check:', error, file=sys.stderr)
         return 1
     result.update({'passed': True, 'target': 'sunstone-a733-os', 'lifetime': args.lifetime, 'audio': audio,
                    'radio': radio, 'headset': headset, 'gpu_linear': gpu_linear, 'cpu_clock': cpu_clock, 'npu': args.npu == '1',
                    'perf_modes': args.perf == '1',
+                   'cpu_return': args.cpu_return == '1',
                    'image_sha256': hashlib.sha256(args.image.read_bytes()).hexdigest()})
     if result['perf_boot_mode'] is None:
         del result['perf_boot_mode']

@@ -1,0 +1,35 @@
+--- input
++++ output
+@@ -6,6 +6,8 @@
+  * images stop, resident images stop renewing the watchdog. Faults retain
+  * the clock token, the register mutex and the masked interrupt. */
+ #include "os.h"
++#include "cpu-return.h"
++#include "platform.h"
+ #include "../board/application.h"
+ #include "../board/session.h"
+ #include "a733_thermal.h"
+@@ -280,7 +282,22 @@
+ void os_thermal_task(void *unused)
+ {
+     (void)unused;
+-    for(;;){if(step()==1)BOARD_PROGRESS(OS_SERVICE_THERMAL);vTaskDelay(1);}
++    for(;;){
++        if(step()==1)BOARD_PROGRESS(OS_SERVICE_THERMAL);
++        if(os_cpu_return_requested()&&os_cpu_return_clock_done()){
++            if(!mask()){cancel();platform_exit(6);}
++            while((*(volatile uint32_t *)(uintptr_t)thermal.irq.distributor&(UINT32_C(1)<<31))){
++                if(!live()){cancel();platform_exit(6);}vTaskDelay(1);
++            }
++            enum a733_thermal_result result;
++            do{result=a733_thermal_stop(&thermal.driver,deadline());
++                if(result==A733_THERMAL_BUSY){if(!live()){cancel();platform_exit(6);}vTaskDelay(1);}
++            }while(result==A733_THERMAL_BUSY);
++            if(result!=A733_THERMAL_STOPPED||!live()){cancel();platform_exit(6);}
++            else{os_cpu_return_thermal_done();for(;;)vTaskSuspend(NULL);}
++        }
++        vTaskDelay(1);
++    }
+ }
+ static int construct(const struct os_session *s)
+ {

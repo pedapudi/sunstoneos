@@ -128,8 +128,17 @@ static const struct plan plan = {OPP_BUNDLE == 31 ? "DCDC5 1000 mV and DCDC3 105
 #elif OPP_BUNDLE == 33
 /* Successful-set cleanup only: all boot clocks before either rail falls.
  * A failed workload can retain running secondaries and is not an input. */
+#ifdef OS_CPU_RETURN_DCDC3_800
+/* The OS CPU driver already lowered CPU-B and DCDC3. This exact variant
+ * never writes DCDC3; the common admission still checks all boot clocks. */
+__attribute__((used,retain)) const uint64_t os_cpu_return_rail_profile[4]={
+    UINT64_C(0x31524c4941525043),1,800000,1000000};
+static const struct plan plan = {"DCDC5 restored to 800 mV with DCDC3 already at 800 mV and all boot clock words",
+    0, {0, 0}, 1, {{OP_VOLT, A733_CPU_LITTLE, 0, 800}}, {1000, 800}};
+#else
 static const struct plan plan = {"DCDC3 and DCDC5 restored to 800 mV at boot clock words",
     0, {0, 0}, 2, {{OP_VOLT, A733_CPU_BIG, 0, 800}, {OP_VOLT, A733_CPU_LITTLE, 0, 800}}, {1000, 1050}};
+#endif
 #else
 #error OPP_BUNDLE names no step
 #endif

@@ -1,0 +1,27 @@
+--- input
++++ output
+@@ -355,6 +355,7 @@
+ 1:  dsb sy
+     str x2, [x1, #16]
+     dsb sy
++    cbz x20, a733_qualification_success_dispatch
+     // All fatal paths converge here without using an EL1 stack or RAM.
+     // Ordinary NS WB memory is safe only after every EL3 context adopted it.
+     mrs x3, sctlr_el3
+@@ -497,10 +498,16 @@
+     stp x0, x1, [sp, #-16]!
+     mrs x0, esr_el1
+     and x0, x0, #0xffff
++    mov x1, #0x735
++    cmp x0, x1
++    b.eq .Lqualification
+     cmp x0, #119
+     b.eq .Lexit
+     ldp x0, x1, [sp], #16
+     b FreeRTOS_SWI_Handler
++.Lqualification:
++    ldp x0, x1, [sp], #16
++    b a733_qualification_terminal_privileged
+ .Lexit:
+     ldp x0, x1, [sp], #16
+     b a733_smp_exit_privileged

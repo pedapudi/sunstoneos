@@ -1,0 +1,45 @@
+--- input
++++ output
+@@ -11,6 +11,7 @@
+  * the thermal level. A grant that names
+  * no cluster leaves every clock and voltage unchanged. */
+ #include "os.h"
++#include "cpu-return.h"
+ #include "../board/application.h"
+ #include "../mimus-board/application.h"
+ #include "a733_cpu_clock.h"
+@@ -84,6 +85,9 @@
+     atomic_uint ready;
+ } owner;
+ enum { START, INSPECT, REQUEST, FOLLOW };
++static unsigned return_request;
++static atomic_uint return_done;
++int os_cpu_return_clock_done(void){return atomic_load_explicit(&return_done,memory_order_acquire);}
+ static int clock_now(void *v,uint64_t *out)
+ {return v==&owner&&a733_counter_clock_now(&providers.shared.counter,out);}
+ static int clock_read(void *v,uintptr_t a,uint32_t *out){return v==&owner&&read_word(NULL,a,out);}
+@@ -127,7 +131,24 @@
+         if(a733_cpu_clock_inspect(c,A733_CPU_LITTLE,later(REQUEST_US))!=A733_CPU_CLOCK_PENDING)return -1;
+         return 1;
+     }
++    /* No automatic restoration may raise a clock during successful close.
++     * Existing thermal lowering remains permitted and bounded. */
++    if(os_cpu_return_requested())c->throttled=0;
+     enum a733_cpu_clock_status r=a733_cpu_clock_burst(c,BURST_US);
++    if(os_cpu_return_requested()){
++        if(owner.phase!=FOLLOW||!os_cpu_clock_ready()||r==A733_CPU_CLOCK_RETAINED||r==A733_CPU_CLOCK_INVALID)return -1;
++        if(r==A733_CPU_CLOCK_PENDING)return 1;
++        if(!return_request){
++            if(!c->changes||a733_cpu_clock_request(c,A733_CPU_BIG,1014,later(REQUEST_US))!=A733_CPU_CLOCK_PENDING)return -1;
++            return_request=1;return 1;
++        }
++        if(r!=A733_CPU_CLOCK_COMPLETE)return -1;
++        struct a733_cpu_clock_report final;
++        if(!a733_cpu_clock_report(read_word,NULL,&final)||!final.domain[A733_CPU_BIG].decoded||
++           final.domain[A733_CPU_BIG].source!=3||final.domain[A733_CPU_BIG].hz!=UINT64_C(1014000000)||
++           c->clock.id||c->rail.id||c->request.id)return -1;
++        atomic_store_explicit(&return_done,1,memory_order_release);return 1;
++    }
+ #ifdef SUNSTONE_A733_OS_PERF
+     /* The performance-mode service replaces the one-request-per-cluster
+      * start: its boot switch moves the CPU domains to the boot mode, and it

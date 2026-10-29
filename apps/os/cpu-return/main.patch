@@ -1,0 +1,25 @@
+--- input
++++ output
+@@ -1,4 +1,5 @@
+-#include "application.h"
++#include "../board/application.h"
++#include "cpu-return.h"
+ #ifdef SUNSTONE_BOARD_USB2_IRQ
+ #include "host_irq.h"
+ #endif
+@@ -47,6 +48,7 @@
+ static void pmic(void *unused)
+ {
+     (void)unused;for(;;){
++        os_cpu_return_pmic();
+         if(!board_live(NULL))park();
+         const uint32_t ticks=a733_power_service_step(&providers.domains);
+         const int ready=a733_power_service_ready(&providers.domains);
+@@ -180,6 +182,7 @@
+ static void supervise(void *unused)
+ {
+     (void)unused;for(;;){
++        os_cpu_return_supervise();
+         /* Software observation only. A stopped CPU/interconnect can prevent
+          * this task; confirmed whole-board power removal owns recovery. */
+         if(!board_live(NULL)){

@@ -211,8 +211,15 @@ def validate_admission(record,image_hash,template_hash,cache=None,frozen=False,e
         ['demonstrated_fel','explicit_reconnect_before_resumption','preserve_microsd','one_attempt']) and recovery.get('evidence'),
         'Explicit one-attempt manual recovery record required.')
     for ref in recovery['evidence']:evidence(ref)
-    require(record.get('whole_board_power_removal') is True and record.get('no_resource_reuse_before_power_removal') is True,
-        'Explicit complete-power-removal/retention plan required.')
+    if execution_profile == 'board-cpu-return-supervised-v1':
+        # Only the dedicated OS caller selects this profile after checking
+        # its actual linked return marker. Its exact source review replaces
+        # normal-completion retention; every failure retains the old plan.
+        cpu_return = module('board_cpu_return_review', ROOT/'apps/os/cpu-return-review.py')
+        cpu_return.validate(record, evidence, image_hash, template_hash, require)
+    else:
+        require(record.get('whole_board_power_removal') is True and record.get('no_resource_reuse_before_power_removal') is True,
+            'Explicit complete-power-removal/retention plan required.')
     if record.get('superspeed') is not None:
         ss=json.loads(evidence(record['superspeed']))
         require(ss.get('schema') in ('a733-usb3-gen1-physical-entry-v1','a733-usb3-topology-physical-entry-v2') and ss.get('identity')==identity and ss.get('port')==port and

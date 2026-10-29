@@ -25,6 +25,7 @@ option(SUNSTONE_A733_OS_HEADSET "Integrated OS with Bluetooth headset recognitio
 option(SUNSTONE_A733_OS_MSBC "Integrated OS headset with wideband mSBC speech" OFF)
 option(SUNSTONE_A733_OS_NPU "Integrated OS with a task-bound NPU catalogue service" OFF)
 option(SUNSTONE_A733_OS_GPU_LINEAR "Integrated OS with mimus linear layers on the GPU" OFF)
+option(SUNSTONE_A733_OS_CPU_RETURN "One staged CPU recognition with success-only ROM return" OFF)
 if(NOT SUNSTONE_A733_OS)
   return()
 endif()
@@ -340,8 +341,12 @@ if(NOT os_recognition STREQUAL "${os_root}/apps/mimus-board/recognition.cc")
   list(REMOVE_ITEM os_sources "${os_root}/apps/mimus-board/recognition.cc")
   list(APPEND os_sources "${os_recognition}")
 endif()
+set(os_boot_final "${os_build}/boot.c")
+if(SUNSTONE_A733_OS_CPU_RETURN)
+  include("${os_root}/cmake/a733-os-cpu-return.cmake")
+endif()
 list(TRANSFORM os_added PREPEND "${os_root}/")
-list(APPEND os_sources "${os_build}/boot.c" ${os_added})
+list(APPEND os_sources "${os_boot_final}" ${os_added})
 list(REMOVE_DUPLICATES os_sources)
 add_executable(sunstone-a733-os EXCLUDE_FROM_ALL ${os_sources} $<TARGET_OBJECTS:a733-board-usb2-host>)
 foreach(property COMPILE_OPTIONS INCLUDE_DIRECTORIES COMPILE_DEFINITIONS COMPILE_FEATURES LINK_OPTIONS LINK_LIBRARIES)
@@ -354,6 +359,7 @@ get_target_property(os_definitions sunstone-a733-os COMPILE_DEFINITIONS)
 list(FILTER os_definitions EXCLUDE REGEX "^A733_SMP_(CONTRACT|RESULT)_MAGIC=")
 set_property(TARGET sunstone-a733-os PROPERTY COMPILE_DEFINITIONS "${os_definitions}")
 target_compile_definitions(sunstone-a733-os PRIVATE SUNSTONE_A733_OS=1 SUNSTONE_A733_IRQ_TABLE=1 SUNSTONE_A733_FAULT_PAGE=1
+  "$<$<BOOL:${SUNSTONE_A733_OS_CPU_RETURN}>:SUNSTONE_A733_OS_CPU_RETURN=1>"
   A733_SMP_CONTRACT_MAGIC=${os_contract_magic} A733_SMP_RESULT_MAGIC=${os_result_magic}
   "$<$<BOOL:${SUNSTONE_A733_OS_RESIDENT}>:SUNSTONE_BOARD_RESIDENT=1>"
   "$<$<BOOL:${SUNSTONE_A733_OS_AUDIO}>:SUNSTONE_A733_OS_AUDIO=1>"
@@ -420,6 +426,9 @@ endforeach()
 if(A733_A76_ADMITTED)
   string(APPEND os_identity ";a76=1;cpu_clock=${SUNSTONE_A733_OS_CPU_CLOCK}")
 endif()
+if(SUNSTONE_A733_OS_CPU_RETURN)
+  string(APPEND os_identity ";cpu_return=1")
+endif()
 if(SUNSTONE_A733_OS_PERF)
   string(APPEND os_identity ";perf=1;perf_boot=${SUNSTONE_A733_OS_PERF_BOOT}")
 endif()
@@ -441,6 +450,7 @@ add_custom_command(TARGET sunstone-a733-os POST_BUILD
     --audio "$<BOOL:${SUNSTONE_A733_OS_AUDIO}>" --radio "$<BOOL:${SUNSTONE_A733_OS_RADIO}>"
     --headset "$<BOOL:${SUNSTONE_A733_OS_HEADSET}>" --gpu-linear "$<BOOL:${SUNSTONE_A733_OS_GPU_LINEAR}>"
     --cpu-clock "$<BOOL:${SUNSTONE_A733_OS_CPU_CLOCK}>" --npu "$<BOOL:${SUNSTONE_A733_OS_NPU}>"
+    --cpu-return "$<BOOL:${SUNSTONE_A733_OS_CPU_RETURN}>"
     --perf "$<BOOL:${SUNSTONE_A733_OS_PERF}>" --workers "${SUNSTONE_MIMUS_WORKERS}"
     --output "${os_build}/link-check.json"
   VERBATIM)

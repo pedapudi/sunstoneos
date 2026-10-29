@@ -1,0 +1,18 @@
+--- input
++++ output
+@@ -2,6 +2,7 @@
+ #include "a733_device_memory_layout.h"
+ #endif
+ #include "cached.h"
++#include "cpu-return-runtime.h"
+ #include "a733_cached_memory.h"
+ #include "a733_memory_local.h"
+ #if defined(SUNSTONE_A733_FAULT_PAGE)
+@@ -101,6 +102,7 @@
+ static void local_boot(unsigned c,uint64_t epoch)
+ {
+     if(c>=8 || native_core()!=c || epoch!=boot_values[0] || !epoch)park();
++    if(!a733_qualification_local(c,epoch))failed(c,0x735);
+     if(c)prepare_core(c);
+     uint64_t mpidr;__asm__ volatile("mrs %0,mpidr_el1":"=r"(mpidr));
+     struct a733_cpu_continue s={0};

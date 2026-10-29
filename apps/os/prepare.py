@@ -296,8 +296,12 @@ def gpu_admission(record, config, evidence, raw):
             evidence(item)
 
 
-def image_manifest_check(manifest, raw):
+def image_manifest_check(manifest, raw, *, cpu_return=False):
     """The OS link check of these exact bytes; returns whether audio is built in."""
+    names = {s['name'] for s in os_link.Elf(raw).symbols if s['shndx'] != 0}
+    require(type(cpu_return) is bool and manifest.get('cpu_return', False) is cpu_return and
+            ('os_cpu_return_output' in names) is cpu_return,
+            'CPU return requires its dedicated host adapter.')
     image_inference(manifest, raw)
     gpu = image_gpu(manifest, raw)
     audio = manifest.get('audio')
@@ -499,7 +503,7 @@ def build_launcher(out, session_bytes, clang, lld):
     require(0 < (out / 'launch.bin').stat().st_size <= 0xc00, 'OS launcher exceeds reserved SRAM.')
 
 
-def validate_admission(record, image_hash, template_hash, raw, audio, cache=None, frozen=False, perf_modes=False, inference=None, gpu=None):
+def validate_admission(record, image_hash, template_hash, raw, audio, cache=None, frozen=False, perf_modes=False, inference=None, gpu=None, cpu_return=False):
     """Every fact the session names is bound to a reviewed record of this image."""
     require(record.get('schema') == ENTRY_SCHEMA, 'Reviewed OS entry record required.')
     inference_admission(record, inference)
@@ -509,7 +513,8 @@ def validate_admission(record, image_hash, template_hash, raw, audio, cache=None
     # The thermal check runs the board's DDR, platform and manual-recovery
     # checks, then binds the four thermal evidence hashes at their offsets.
     cache = thermal.validate_admission({**record, 'schema': 'a733-thermal-supervised-entry-v1'}, image_hash,
-                                       template_hash, raw, cache, frozen, 'thermal-supervised-v1')
+                                       template_hash, raw, cache, frozen,
+                                       'thermal-cpu-return-supervised-v1' if cpu_return else 'thermal-supervised-v1')
 
     def evidence(item):
         require(isinstance(item, dict) and set(item) == {'path', 'sha256'} and Path(item['path']).is_absolute(),
@@ -638,13 +643,13 @@ def perf_admission(record, image_hash, profile, evidence, g, data, a):
             'The session grant differs from the performance-mode approval.')
 
 
-def prepare(image, link_check, admission, template, assets, output, clang, lld):
+def prepare(image, link_check, admission, template, assets, output, clang, lld, *, cpu_return=False):
     snapshots = {name: Path(path).read_bytes() for name, path in [
         ('image.elf', image), ('image-input-manifest.json', link_check), ('admission.json', admission),
         ('session-template.bin', template)]}
     image_hash = hashlib.sha256(snapshots['image.elf']).hexdigest()
     manifest = json.loads(snapshots['image-input-manifest.json'])
-    audio = image_manifest_check(manifest, snapshots['image.elf'])
+    audio = image_manifest_check(manifest, snapshots['image.elf'], cpu_return=cpu_return)
     flags = radio_assets.features(manifest, snapshots['image.elf'], os_link.Elf, require)
     raw = bytearray(snapshots['session-template.bin'])
     session_check(raw, audio, flags)
@@ -653,7 +658,8 @@ def prepare(image, link_check, admission, template, assets, output, clang, lld):
     cache = validate_admission(record, image_hash, hashlib.sha256(raw).hexdigest(), raw, audio,
                                perf_modes=json.loads(snapshots['image-input-manifest.json']).get('perf_modes', False),
                                inference=image_inference(json.loads(snapshots['image-input-manifest.json']), snapshots['image.elf']),
-                               gpu=image_gpu(json.loads(snapshots['image-input-manifest.json']), snapshots['image.elf']))
+                               gpu=image_gpu(json.loads(snapshots['image-input-manifest.json']), snapshots['image.elf']),
+                               cpu_return=cpu_return)
     radio_uploads = radio_assets.validate(record, raw, flags, cache, board, bluetooth, require)
     output = Path(output)
     output.mkdir(parents=True, exist_ok=False)
@@ -683,7 +689,7 @@ def prepare(image, link_check, admission, template, assets, output, clang, lld):
         evidence[path] = {'name': name, 'sha256': hashlib.sha256(data).hexdigest()}
     uploads += [{'name': evidence[path]['name'], 'address': address} for path, address in radio_uploads]
     epoch, generation, lease = struct.unpack_from('<3Q', raw, 24)
-    inner = {'schema': SCHEMA, 'physical_access': False, 'execution_profile': EXECUTION_PROFILE, 'audio': audio,
+    inner = {'schema': SCHEMA, 'physical_access': False, 'execution_profile': 'os-cpu-return-v1' if cpu_return else EXECUTION_PROFILE, 'audio': audio,
              'image_sha256': image_hash, 'launcher_sha256': digest(out / 'launch.bin'), 'build_id': identity.hex(),
              'epoch': epoch, 'generation': generation, 'lease': lease, 'reservation': record['reservation'],
              'workload': struct.unpack_from('<I', raw, 400)[0], 'session': 'session.bin', 'profile': None,
@@ -696,16 +702,16 @@ def prepare(image, link_check, admission, template, assets, output, clang, lld):
              'board_prepared_sha256': digest(out / 'prepared.json'),
              'assets_sha256': digest(output / 'assets/assets.json')}
     save_json(output / 'prepared.json', value)
-    return validate_bundle(output)
+    return validate_bundle(output, cpu_return=cpu_return)
 
 
-def validate_board(bundle):
+def validate_board(bundle, *, cpu_return=False):
     """The board-format part: image, session, launcher and frozen evidence."""
     out = Path(bundle)
     metadata = (out / 'prepared.json').read_bytes()
     p = json.loads(metadata)
     require(p.get('schema') == SCHEMA and p.get('physical_access') is False and
-            p.get('execution_profile') == EXECUTION_PROFILE, 'Unsupported OS bundle.')
+            p.get('execution_profile') == ('os-cpu-return-v1' if cpu_return else EXECUTION_PROFILE), 'Unsupported OS bundle.')
     required = {'image.elf', 'image-input-manifest.json', 'admission.json', 'session-template.bin', 'session.bin',
                 'request.bin', 'contract.bin', 'launch.bin', 'result-zero.bin', 'report-zero.bin'}
     require(required <= set(p['files']) and all(item['name'] in p['files'] for item in p['entry_evidence'].values()),
@@ -716,7 +722,7 @@ def validate_board(bundle):
     require(hashlib.sha256(image).hexdigest() == p['image_sha256'] and digest(out / 'launch.bin') == p['launcher_sha256'],
             'OS image or launcher changed.')
     manifest = json.loads((out / 'image-input-manifest.json').read_text())
-    audio = image_manifest_check(manifest, image)
+    audio = image_manifest_check(manifest, image, cpu_return=cpu_return)
     flags = radio_assets.features(manifest, image, os_link.Elf, require)
     require(p['audio'] is audio, 'Audio selection changed.')
     sizes = {name: (out / name).stat().st_size for name in p['files']}
@@ -733,7 +739,8 @@ def validate_board(bundle):
                        hashlib.sha256(template).hexdigest(), template, audio, cache, True,
                        perf_modes=json.loads((out / 'image-input-manifest.json').read_text()).get('perf_modes', False),
                        inference=image_inference(json.loads((out / 'image-input-manifest.json').read_text()), image),
-                       gpu=image_gpu(json.loads((out / 'image-input-manifest.json').read_text()), image))
+                       gpu=image_gpu(json.loads((out / 'image-input-manifest.json').read_text()), image),
+                       cpu_return=cpu_return)
     radio_uploads = radio_assets.validate(json.loads((out / 'admission.json').read_text()),
                                          template, flags, cache, board, bluetooth, require, frozen=True)
     segments, address, identity = base.image_parts(out / 'image.elf')
@@ -758,13 +765,13 @@ def validate_board(bundle):
     return p
 
 
-def validate_bundle(output):
+def validate_bundle(output, *, cpu_return=False):
     output = Path(output)
     value = json.loads((output / 'prepared.json').read_text())
     require(value.get('schema') == COMBINED_SCHEMA and value.get('physical_access') is False, 'Bundle schema differs.')
     require(digest(output / 'board/prepared.json') == value['board_prepared_sha256'] and
             digest(output / 'assets/assets.json') == value['assets_sha256'], 'Bundle identity differs.')
-    inner = validate_board(output / 'board')
+    inner = validate_board(output / 'board', cpu_return=cpu_return)
     host.validate_assets(output / 'assets')
     require(value['audio'] is inner['audio'], 'Audio selection differs.')
     return value

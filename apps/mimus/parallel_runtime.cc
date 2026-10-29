@@ -5,6 +5,11 @@
 #include "platform.h"
 #include "mimus/asr/parallel.h"
 #include <cstdio>
+#ifdef SUNSTONE_A733_OS_CPU_RETURN
+#include <atomic>
+extern "C" uint64_t a733_smp_counter(void);
+extern "C" uint64_t os_cpu_return_cutoff(void);
+#endif
 #ifdef SUNSTONE_A733_OS
 #include "a733_smp_placement.h"
 #endif
@@ -59,6 +64,13 @@ TaskHandle_t owner;
 unsigned owner_core, completed_core_mask;
 uint64_t submitted, completed, async_jobs;
 bool busy, async_pending;
+#ifdef SUNSTONE_A733_OS_CPU_RETURN
+std::atomic<unsigned> parked{0};
+void park_worker(void *) {
+    parked.fetch_add(1, std::memory_order_release);
+    for (;;) vTaskSuspend(nullptr);
+}
+#endif
 
 void worker(void *argument) {
     auto &slot = *static_cast<Worker *>(argument);
@@ -213,3 +225,18 @@ void mimus_parallel_report() {
              static_cast<unsigned long long>(async_jobs));
     platform_puts(line);
 }
+#ifdef SUNSTONE_A733_OS_CPU_RETURN
+void mimus_parallel_stop() {
+    configASSERT(owner == xTaskGetCurrentTaskHandle() && !busy && !async_pending &&
+                 completed == submitted && !parked.load(std::memory_order_acquire));
+    for (auto &slot : slots) {
+        configASSERT(submitted != UINT64_MAX);
+        const Job stop{nullptr, park_worker, nullptr, 0, 0, ++submitted};
+        configASSERT(xQueueSend(slot.jobs, &stop, 0) == pdTRUE);
+    }
+    while (parked.load(std::memory_order_acquire) != kWorkers - 1) {
+        configASSERT(a733_smp_counter() < os_cpu_return_cutoff());
+        vTaskDelay(1);
+    }
+}
+#endif

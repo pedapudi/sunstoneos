@@ -1,0 +1,58 @@
+--- input
++++ output
+@@ -1,7 +1,8 @@
+ /* Success-only shutdown for the finite current-port workload. All state and
+  * cleanup stacks below are Secure Device memory, including while EL3 uses
+  * the current Nonsecure alias for image-RAM cache maintenance. */
+-#include "runtime.h"
++#include "cpu-return-runtime.h"
++#include "cpu-return.h"
+ #include "cached.h"
+ #include "FreeRTOS.h"
+ #include "task.h"
+@@ -81,12 +82,7 @@
+     configASSERT(core<8 && portGET_CORE_ID()==core);
+     uint64_t epoch=a733_cached_runtime[core].epoch;
+     uint64_t deadline=a733_cached_runtime[core].diagnostic_deadline;
+-    while(!__atomic_load_n(&a733_smp_core_results[core].background_progress,__ATOMIC_ACQUIRE)){
+-        configASSERT(a733_smp_counter()<deadline);vTaskDelay(1);
+-    }
+-    configASSERT(a733_smp_core_results[core].task_rounds==32 && a733_smp_core_results[core].sgis &&
+-        !a733_smp_core_results[core].failure && (core ? __atomic_load_n(&a733_smp_core_results[core].ticks,__ATOMIC_ACQUIRE)==1 : a733_smp_core_results[0].ticks>=32));
+-    a733_qualification_idle_stage(core);
++    configASSERT(os_cpu_return_ready());
+     __atomic_store_n(&arrived[core],epoch,__ATOMIC_RELEASE);
+     for(unsigned i=0;i<8;++i)while(__atomic_load_n(&arrived[i],__ATOMIC_ACQUIRE)!=epoch)
+         configASSERT(a733_smp_counter()<deadline);
+@@ -103,12 +99,7 @@
+     const volatile struct a733_fault_record *fault=(const void *)(uintptr_t)(A733_FAULT_SLOTS_ADDRESS+core*128);
+     if(fault->magic!=A733_FAULT_SLOT_MAGIC || fault->info!=A733_FAULT_INFO(A733_FAULT_KIND_EXIT,0,core) ||
+        fault->status || fault->detail || fault->epoch!=r->epoch)retained(core,3);
+-    const struct a733_smp_core_result *v=&a733_smp_core_results[core];
+-    if(v->task_rounds!=32 || !v->background_progress || !v->sgis || v->failure || (core ? v->ticks!=1 : v->ticks<32))retained(core,4);
+-    c->idle_completed=a733_qualification_idle_completed[core];
+-    c->idle_wakes=a733_qualification_idle_wakes[core];
+-    if(!c->idle_completed || c->idle_wakes!=(core?7u:6u))retained(core,8);
+-    c->rounds=v->task_rounds;c->background=v->background_progress;c->sgis=v->sgis;c->failure=v->failure;c->ticks=v->ticks;
++    if(!os_cpu_return_ready())retained(core,4);
+     barrier();c->captured=r->epoch;barrier();
+     for(unsigned i=0;i<8;++i)while(r->cpu[i].captured!=r->epoch){if(!before() || r->error)retained(core,5);barrier();}
+     uintptr_t base=0x03460000+core*0x20000,g=base+0x10000;
+@@ -137,6 +128,9 @@
+     const uintptr_t offsets[]={0x80,0xd00,0xc04,0x400,0x41c};
+     for(unsigned i=0;i<5;++i){wr(g+offsets[i],(uint32_t)c->local[2+i]);
+         if(rd(g+offsets[i])!=c->local[2+i])return 0;}
++    /* TF-A gicv3_cpuif_disable: group disables, ISB/DSB, DPG toggle,
++     * then ProcessorSleep. THS SPI use removes the timer-only exclusion. */
++    barrier();uint32_t ctlr=rd(r);wr(r,ctlr|UINT32_C(0x7000000));wr(r,ctlr&~UINT32_C(0x7000000));
+     if(core){wr(r+0x14,2);if(!wait_word(r+0x14,6,6))return 0;}
+     if(rd(r) || rd(r+0x14)!=c->local[0] || rd(r+0x24)!=c->local[1])return 0;
+     return 1;
+@@ -168,6 +162,7 @@
+     if(!wait_word(GICD,UINT32_C(0x80000000),0))retained(core,27);
+     for(unsigned i=1;i<r->banks;++i)wr(GICD+0x180+4*i,UINT32_MAX);
+     if(!wait_word(GICD,UINT32_C(0x80000000),0))retained(core,28);
++    if(!os_cpu_return_spi_restore())retained(core,32);
+     for(unsigned i=1;i<r->banks;++i){wr(GICD+0x100+4*i,(uint32_t)r->enable[i]);
+         if(rd(GICD+0x100+4*i)!=r->enable[i])retained(core,29);}
+     /* Entry requires both ARE bits; this never performs a forbidden 1->0. */

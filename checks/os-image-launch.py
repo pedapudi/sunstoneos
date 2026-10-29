@@ -197,6 +197,7 @@ def main():
     for name in ('build', 'base', 'overlay', 'wav', 'output'):
         parser.add_argument('--' + name, type=Path, required=True)
     parser.add_argument('--staged', action='store_true', help='explicit USB0-only recorded workload 2')
+    parser.add_argument('--cpu-return-only', action='store_true', help='only the dedicated staged CPU return preparation')
     parser.add_argument('--gpu-performance-only', action='store_true', help='only GPU performance capability and frozen entry admission')
     parser.add_argument('--accelerators-only', action='store_true', help='only combined GPU/NPU session, authority and asset admission')
     parser.add_argument('--gpu-workers-only', action='store_true', help='only eight-worker GPU capability and combined admission')
@@ -277,6 +278,10 @@ def main():
         'clocks': ['stable_apb1_ref_osc', 'no_clock_reset_writers',
                    'gpadc_consumers_excluded' if raw[768] else 'stable_enabled_gpadc24m'],
         'supervision': ['whole_board_power_removal', 'permanent_retention', 'no_reuse', 'one_attempt']}
+    if args.cpu_return_only:
+        assert args.staged and manifest.get('cpu_return') and cpu_clock
+        thermal_facts['supervision'] = ['whole_board_power_removal_on_failure', 'retention_on_failure',
+                                        'no_reuse_on_failure', 'one_attempt']
     record = {**target, **identities, 'schema': prep.ENTRY_SCHEMA, 'reservation': 100,
               'whole_board_power_removal': True, 'no_resource_reuse_before_power_removal': True,
               'recovery': {'mode': 'manual-usb-reconnect', 'demonstrated_fel': True,
@@ -351,7 +356,39 @@ def main():
     assets = [args.base, args.overlay, args.wav]
 
     def prepare(name, session=template, entry=admission, check=link_check):
+        if args.cpu_return_only:
+            from types import SimpleNamespace
+            adapter = module('os_return_fixture_adapter', ROOT/'apps/os/cpu-return-host.py')
+            review_rules = module('os_return_fixture_review', ROOT/'apps/os/cpu-return-review.py')
+            current = json.loads(entry.read_text())
+            current.pop('whole_board_power_removal', None)
+            current.pop('no_resource_reuse_before_power_removal', None)
+            current.update(whole_board_power_removal_on_failure=True,
+                           no_resource_reuse_before_power_removal_on_failure=True)
+            review = put('return-review-' + name, {**target, **identities,
+                'schema': 'a733-os-cpu-return-review-v1', 'execution_profile': adapter.PROFILE,
+                'reviewed': True, 'supervisor': 'MODEL ONLY; no physical authority', 'build_id': manifest['build_id'],
+                'session_template_sha256': hashlib.sha256(session.read_bytes()).hexdigest(),
+                'failure_policy': 'retain-without-retry',
+                'rail_followup': 'verify-boot-clocks-and-restore-cpu-rails',
+                'conditions': {key: marker for key in review_rules.CONDITIONS}, 'sources': [marker]})
+            current['normal_return_review'] = review
+            updated = out / ('MODEL-return-entry-' + name + '.json')
+            updated.write_text(json.dumps(current))
+            return adapter.prepare(SimpleNamespace(image=image, manifest=check, admission=updated,
+                session_template=session, base=args.base, overlay=args.overlay, wav=args.wav,
+                return_review=Path(review['path']), output=out/name, clang=args.clang, lld=args.lld))
         return prep.prepare(image, check, entry, session, assets, out / name, str(args.clang), str(args.lld))
+    if args.cpu_return_only:
+        from harness import refused as reject
+        reject(lambda: prep.image_manifest_check(manifest, image.read_bytes()), 'dedicated host adapter')
+        selected = clock_cases(raw, record, put, target, identities, prepare, refused, out, cases,
+                               gpu=True, top_only=True)
+        cases['ordinary-host-refuses-return-profile'] = True
+        (out/'result.json').write_text(json.dumps({'passed': True, 'physical_access': False,
+            'image_sha256': image_hash, 'bundle': str(selected), 'cases': cases}, indent=2)+'\n')
+        print('PASS dedicated CPU return preparation with labeled modeled authority')
+        return
     bundle = out / 'MODEL-NOT-DEPLOYABLE-bundle'
     value = prepare(bundle.name)
     assert value['audio'] is audio

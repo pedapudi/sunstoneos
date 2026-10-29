@@ -1,0 +1,36 @@
+--- input
++++ output
+@@ -1,7 +1,7 @@
+ /* Current-port success terminal and control preservation. No interrupted
+  * stack access occurs on the fatal path. Success has a distinct SVC and SMC
+  * PC; only that path selects a dedicated Secure Device cleanup stack. */
+-#include "runtime.h"
++#include "cpu-return-runtime.h"
+ #include "a733_fault.h"
+ .section .text.qualification,"ax"
+ .balign 4
+@@ -220,7 +220,7 @@
+     cmp x2, x3
+     b.ne qualification_park
+     mov x24, #0x41200000
+-    address x25, __bss_end
++    address x25, __heap_end
+     add x25, x25, #63
+     and x25, x25, #-64
+     mov x2, #0x42000000
+@@ -248,6 +248,15 @@
+     add x24, x24, #64
+     cmp x24, x25
+     b.lo .Lclean
++    // The recognizer's private arena is also writable WB Normal memory.
++    // Reuse the same block-identity and attribute checks for all 16 MiB.
++    mov x2, #0x42000000
++    cmp x24, x2
++    b.hi .Lclean_finished
++    mov x24, #0x46000000
++    mov x25, #0x47000000
++    b .Lclean
++.Lclean_finished:
+     dsb sy
+     add x2, x23, #688
+     add x2, x2, x20, lsl #10

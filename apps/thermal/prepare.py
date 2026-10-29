@@ -85,8 +85,9 @@ def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=Fal
     # Existing DDR/platform/manual-recovery checks stay exact and byte-snapshotted.
     require(record.get('schema')=='a733-thermal-supervised-entry-v1','Wrong THERMAL admission schema.')
     common={**record,'schema':'a733-board-supervised-entry-v2'}
-    cache=board.validate_admission(common,image_hash,template_hash,cache,frozen,
+    board_profile=('board-cpu-return-supervised-v1' if execution_profile=='thermal-cpu-return-supervised-v1' else
         'board-single-core-supervised-v1' if execution_profile=='thermal-single-core-supervised-v1' else 'board-supervised-v2')
+    cache=board.validate_admission(common,image_hash,template_hash,cache,frozen,board_profile)
     for key,offset in [('initial',632),('electrical',664),('clocks',696),('supervision',728)]:
         item=record[key];path=Path(item['path']);require(path.is_absolute(),'Evidence path must be absolute.')
         if str(path) not in cache:
@@ -98,6 +99,8 @@ def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=Fal
             'electrical':['avcc_adc_digital_supplies_stable','sid_shadows_readable','device_mappings_verified','no_physical_aliases'],
             'clocks':['stable_apb1_ref_osc','no_clock_reset_writers','gpadc_consumers_excluded' if raw[768] else 'stable_enabled_gpadc24m'],
             'supervision':['whole_board_power_removal','permanent_retention','no_reuse','one_attempt']}[key]
+        if key=='supervision' and execution_profile=='thermal-cpu-return-supervised-v1':
+            required=['whole_board_power_removal_on_failure','retention_on_failure','no_reuse_on_failure','one_attempt']
         require(all(fact.get(k) is True for k in required),'Required THERMAL physical fact absent.')
     return cache
 

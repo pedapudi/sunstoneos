@@ -1,0 +1,19 @@
+--- input
++++ output
+@@ -4,6 +4,7 @@
+  * Each hook runs every entry in list order and fails on the first refusal,
+  * so main.c keeps its panic codes. Each entry validates its own session. */
+ #include "os.h"
++#include "cpu-return.h"
+ #include "../board/application.h"
+ #include "../board/session.h"
+ #include "../mimus-board/application.h"
+@@ -58,7 +59,7 @@
+ int board_application_start(void)
+ {
+     for(unsigned i=0;i<OS_APPLICATIONS;++i)if(os_applications[i].start()!=1)return 0;
+-    return 1;
++    return os_cpu_return_start();
+ }
+ /* The OS contract admission accepted only a sealed span of exactly
+  * sizeof(struct os_session) bytes (admission.c). */

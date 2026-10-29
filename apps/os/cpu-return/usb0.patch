@@ -1,0 +1,12 @@
+--- input
++++ output
+@@ -138,7 +138,7 @@
+ void board_usb0_task(void *unused)
+ {
+     (void)unused;
+-    usb0_service_start();
++    /* No native USB takeover in the returning staged CPU profile. */
+     mimus_board_usb0_started();
+-    usb0_service_run(exchange);
++    for(;;)vTaskSuspend(NULL);
+ }

@@ -140,8 +140,17 @@ static void restore(void)
     change(A733_CPU_BIG, 1050, 800);
     change(A733_CPU_LITTLE, 1000, 800);
 }
-int main(void)
+int main(int argc, char **argv)
 {
+    if (argc == 2 && !strcmp(argv[1], "os-return-dcdc3-800")) {
+        setup(); pm.pmic[0x14] = 0x9e;
+        assert(!setjmp(failure));
+        change(A733_CPU_LITTLE, 1000, 800);
+        assert(!failed && writes == 1 && changes == 1 && clock_reads == 20 && written_rails[0] == 0x16);
+        assert(pm.pmic[0x14] == 0x9e && pm.pmic[0x16] == 0x9e);
+        puts("PASS OS return rails: DCDC3 unchanged at 800 mV; one DCDC5 write, three requests, 20 clock reads");
+        return 0;
+    }
     setup();
     assert(!setjmp(failure));
     const uint64_t start = pm.now;
