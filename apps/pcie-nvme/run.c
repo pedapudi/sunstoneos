@@ -1,5 +1,8 @@
 #include "pcie.h"
 #include "boot.h"
+#if SUNSTONE_PCIE_NVME_MSIX
+#include "irq.h"
+#endif
 #include "a733_storage_digest.h"
 #include <string.h>
 #define RECORD_BYTES (PCIE_OUTPUT_BYTES-A733_PCIE_NVME_BYTES)
@@ -9,8 +12,15 @@ _Static_assert(RECORD_BYTES==192,"NVMe identity record");
  * retained even when the driver itself has not failed. */
 static int fail(void)
 {
+#if SUNSTONE_PCIE_NVME_MSIX
+ pcie_nvme_irq_ops.stop(NULL);
+#endif
  pcie_cancel();pcie.retaining=1;
- if(pcie.nvme.self==&pcie.nvme)(void)device_memory_retain(pcie_nvme_pool(),pcie.nvme.lease);
+ if(pcie.nvme.self==&pcie.nvme){
+  (void)device_memory_retain(pcie_nvme_pool(),pcie.nvme.lease);
+  if(pcie.nvme.function.msi_lease.generation)
+   (void)device_memory_retain(pcie_nvme_pool(),pcie.nvme.function.msi_lease);
+ }
  return -1;
 }
 static void retention(void)
@@ -30,6 +40,9 @@ static void put32(uint8_t *p,uint32_t n){for(unsigned i=0;i<4;++i)p[i]=(uint8_t)
 static void put64(uint8_t *p,uint64_t n){for(unsigned i=0;i<8;++i)p[i]=(uint8_t)(n>>(8*i));}
 int pcie_publish(void)
 {
+#if SUNSTONE_PCIE_NVME_MSIX
+ if(!pcie_nvme_irq_health())return fail();
+#endif
  if(!pcie_live())return fail();
  const struct a733_pcie_nvme_identity *id=&pcie.identity;
  const struct a733_pcie_function *f=&pcie.nvme.function;
@@ -44,6 +57,9 @@ int pcie_publish(void)
  put32(p+136,f->ids[pcie.session.function].class_revision);put32(p+140,pcie.session.function);memcpy(p+144,pcie.session.nvme,32);
  memcpy(p+RECORD_BYTES,pcie.data,A733_PCIE_NVME_BYTES);
  storage_digest_bytes(p,PCIE_OUTPUT_BYTES,pcie.digest);
+#if SUNSTONE_PCIE_NVME_MSIX
+ if(!pcie_nvme_irq_health())return fail();
+#endif
  if(!pcie_live())return fail();
  unsigned expected=0;
  if(!atomic_compare_exchange_strong_explicit(&pcie.result,&expected,1,memory_order_release,memory_order_relaxed))return fail();
@@ -51,20 +67,28 @@ int pcie_publish(void)
 }
 int pcie_step(void)
 {
- if(!pcie_live()){pcie_cancel();pcie.retaining=1;}
  if(pcie.retaining){retention();return -1;}
+#if SUNSTONE_PCIE_NVME_MSIX
+ if(!pcie_nvme_irq_health())return fail();
+#endif
+ if(!pcie_live())return fail();
  if(atomic_load_explicit(&pcie.result,memory_order_acquire)==1)return 1;
  if(!atomic_load_explicit(&providers.shared.pmic_ready,memory_order_acquire))return 0;
  enum a733_pcie_result r;int ready;
  switch(pcie.stage){
  case 0: {
   ready=outcome(a733_pcie_poll(&pcie.port));if(ready<=0)return ready;
-  /* Polled completion: INTx stays disabled in the command register and
-   * MSI-X stays off, so no GIC route or handler is linked. */
+#if SUNSTONE_PCIE_NVME_MSIX
+  const unsigned mode=A733_PCIE_IRQ_MSIX,vectors=1;
+  const struct a733_pcie_irq_ops *irq=&pcie_nvme_irq_ops;
+#else
+  const unsigned mode=A733_PCIE_IRQ_POLL,vectors=0;
+  const struct a733_pcie_irq_ops *irq=NULL;
+#endif
   const struct a733_pcie_nvme_config c={.identity=pcie.session.board.generation,
    .timeout_us=pcie.session.command_timeout_us,.vendor=pcie.session.vendor,.device=pcie.session.device,
-   .function=pcie.session.function,.irq=A733_PCIE_IRQ_POLL,.namespace_id=pcie.session.namespace_id};
-  if(!a733_pcie_nvme_init(&pcie.nvme,&pcie.port,&c,pcie_nvme_pool(),NULL))return fail();
+   .function=pcie.session.function,.irq=mode,.vectors=vectors,.namespace_id=pcie.session.namespace_id};
+  if(!a733_pcie_nvme_init(&pcie.nvme,&pcie.port,&c,pcie_nvme_pool(),irq))return fail();
   pcie.stage=1;return 0;
  }
  case 1:
@@ -89,4 +113,12 @@ int pcie_step(void)
  }
 }
 void pcie_task(void *unused)
-{(void)unused;for(;;){(void)pcie_step();vTaskDelay(1);}}
+{(void)unused;for(;;){(void)pcie_step();
+#if SUNSTONE_PCIE_NVME_MSIX
+ /* A notification preceding this wait remains pending. The tick fallback
+  * bounds lost delivery, controller-ready and shutdown transitions. */
+ (void)ulTaskNotifyTake(pdTRUE,1);
+#else
+ vTaskDelay(1);
+#endif
+}}

@@ -20,8 +20,8 @@ and runs these stages in [run.c](../apps/pcie-nvme/run.c):
 1. Bring the port to READY at 2.5 GT/s, as the configuration-only PCIe
    application does.
 2. Initialize the NVMe driver for the admitted vendor, device, function and
-   namespace, with polled completion. INTx stays disabled in the command
-   register and MSI-X stays off, so the image links no GIC route or handler.
+   namespace, using the selected completion mode. Polling is the default.
+   Optional MSI-X uses one vector and the fixed INTID 185 route.
 3. Poll the driver through function scan, BAR assignment, controller enable,
    identify and I/O queue creation.
 4. Submit one read of the admitted LBA, wait for its phase-tagged completion
@@ -44,6 +44,72 @@ the root port's inbound address width is unpublished; the pool lies below
 4 GiB, so the refusal does not fire in this image. A disabled inbound translation unit forwards device
 addresses unchanged, so the controller can reach any address; the admitted
 controller is trusted, as for every PCIe client in this project.
+
+## Optional MSI-X wakes the existing owner task
+
+Configure `SUNSTONE_A733_PCIE_NVME_MSIX=ON` with the NVMe image option to
+select one MSI-X vector. The session, read target and USB result format are
+identical in both modes. The controller must expose a usable MSI-X capability;
+there is no automatic downgrade after admission fails.
+
+The resource budget is one existing owner task, six existing 4096-byte NVMe
+pages, one additional retained 4096-byte MSI target page and a fixed interrupt
+state containing one task handle and three unsigned fields. There is no
+additional task, queue allocation or data copy. A completed read still copies
+4096 bytes once into application memory before serialization. The task waits
+on a notification for at most one scheduler tick. An interrupt can wake it
+earlier; the tick fallback covers lost delivery, controller enable and shutdown.
+No physical latency or throughput result is available.
+
+The pinned A733 manual version 1.00, interrupt table, identifies PCIE0_SII as
+INTID 184 and PCIE0_MSI as INTID 185. The pinned board kernel's
+`sun60iw2p1.dtsi` PCIe node selects level-high SPI 152 and SPI 153 respectively;
+adding the GIC's 32 private interrupt IDs gives those INTIDs. The enabled
+Zero 3W board node has no `msi-map`. When PCI MSI is enabled, the root driver's
+`sunxi_pcie_host_add_port` therefore selects its non-ITS MSI handler.
+Its message composer uses the reserved target address and hardware vector
+number; its handler clears each DesignWare status bit before dispatch.
+The references and hashes are in [the PCIe source record](../drivers/pci/source.json)
+and the manual pin is in [sources.lock.json](../sources.lock.json).
+
+The existing function client programs DBI offsets `0x820/0x824` with the
+retained target page, enables only bit zero at `0x828`, masks every other bit
+at `0x82c`, and writes the endpoint MSI-X table with message data zero.
+The pinned Linux NVMe PCI driver assigns vector zero to the admin CQ and
+sets IEN and IV when creating interrupt-enabled I/O CQs. The native driver
+uses that same vector for its admin queue and I/O CQ. INTx remains disabled.
+
+Private EL3 boot routes level INTID 185 to CPU0 as Group1NS and leaves it
+disabled, refusing inherited enable, pending or active state before common
+GIC setup. The application binds its task before the scheduler starts.
+The ISR masks that SPI, records a wake hint and notifies the owner. It does
+not take the port mutex or touch the endpoint. The common dispatcher owns
+GIC acknowledge, EOI and deactivation. Repeated delivery while the mask
+propagates remains one hint. Delivery outside an armed or observed state
+latches a fault, permanently closes the source and atomically cancels output.
+
+The task uses the existing function client to read and clear the DesignWare
+MSI status before rearming the GIC source. Unsupported vectors retain the
+port. Software notification counts are consumed once even when distributor
+RWP delays rearming. GIC pending state is never cleared during rearm, so an
+MSI arriving after the controller acknowledgment remains observable.
+The GIC adapter's barrier orders acknowledgment before reenable.
+
+A wake hint never completes an NVMe command. Completion still requires the
+expected CQ phase, command ID, queue ID, SQ head and successful status.
+The pinned Linux driver orders phase observation before other CQ fields
+with `dma_rmb`; this image's existing ordered controller-status read supplies
+that ordering for its non-cacheable queue mapping. Queue publication uses
+the existing ordered doorbell write. No cache maintenance is added.
+
+Shutdown retains the existing bounded queue deletions, SHST completion,
+bus-master disable, MSI-X/controller masking and PERST sequence. GIC closure
+issues a mask but does not claim that a pending IRQ or DMA has drained.
+Every uncertain result retains the NVMe pages, MSI target and port resources;
+late IRQ faults revoke output even after STOPPED. Successful shutdown also
+retains those resources for the rest of the boot. A real endpoint, reviewed
+read authority and manual whole-board power recovery remain prerequisites
+for physical qualification.
 
 ## Every failure retains its resources
 
@@ -115,7 +181,8 @@ The USB product string is `sunstoneos PCIe NVMe read`.
 ## Build and checks
 
 Configure with `SUNSTONE_BOARD_SUPERVISED=ON` and `SUNSTONE_A733_PCIE_NVME=ON`
-and build `sunstone-a733-pcie-nvme`. The manifest profile is
+and build `sunstone-a733-pcie-nvme`. Add
+`SUNSTONE_A733_PCIE_NVME_MSIX=ON` for the optional interrupt mode. The manifest profile is
 `pcie-nvme-supervised-v1` and the workload is `nvme-read-one-block`.
 
 The checks run in this order; each consumes the previous output:
@@ -156,6 +223,32 @@ checks/pcie-nvme-host.py --image IMAGE --fixture FIXTURE --frame NATIVE/native-f
   readiness before any queue or device access and confirms that the supervisor
   accepts the capture bounds.
 
+For the optional MSI-X image, the native check also executes the linked ISR,
+GIC mask/rearm adapter and callback state. It covers completion after a wake,
+a wake before the CQ entry, repeated level delivery, lost delivery with CQ
+completion, an unsupported MSI vector, repeated delivery while RWP delays
+rearming, count consumption, a notification before the wait, and a CLOSED
+source fault that revokes output. The NVMe failure cases check that the MSI target
+page and port leases remain retained. Scheduler primitives and GIC register
+side effects are modeled. `checks/pcie-irq-route.py --nvme --image IMAGE
+--output ROUTE` separately executes the linked EL3 route and dispatch branch,
+including enabled, pending, active and RWP refusals and failed readbacks.
+
+The selected MSI-X and default polling builds and focused checks passed on
+2026-10-28. The MSI-X ELF SHA-256 is
+`9a41fe83d5828ae95c436c9053aee1c9ac9c3e910866b78a34be111e27a16c72`;
+its build ID is
+`b812b6c4c1c4e41fe9d06295d31c8dbd378a3eca9df8687b9ba54116db5d38fc`.
+Artifacts and per-case results are under
+`~/.cache/sunstoneos/evidence/sol-nvme-msix-1028/`, with the source and option
+closure in the two build directories named `sol-nvme-msix-1028` and
+`sol-nvme-poll-1028`. The native cases, route cases and host admission,
+serialization, durable capture and frozen launcher checks pass. The default
+polling image also passes its linked nominal read/shutdown/copy case.
+The optional image adds 2204 text bytes relative to that default build;
+reported data and BSS totals are unchanged. It reserves the additional MSI
+page from the existing pool. These are build and modeled behavior results.
+
 Port startup and `a733_pcie_stop` are replaced by their results in the native
 check; [a733-pcie-trace.py](../checks/a733-pcie-trace.py) covers them in the
 host model. Provider status, address translation, the scheduler, the controller
@@ -165,5 +258,5 @@ and USB transport are modeled.
 
 - Physical qualification with a real NVMe device on the FPC connector: link,
   identify, read, shutdown, port stop and DMA visibility.
-- INTx or MSI-X completion, which needs GIC routing for INTID 184 or 185.
+- Physical MSI-X delivery, pending propagation and queue/data visibility.
 - Reads of more than one block, and Gen2 link training for this image.

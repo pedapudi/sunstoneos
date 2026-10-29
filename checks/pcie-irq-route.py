@@ -24,6 +24,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--image', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--nvme', action='store_true', help='Check the optional NVMe MSI-X image')
     parser.add_argument('--case', choices=CASES, action='append')
     args = parser.parse_args()
     digest = hashlib.sha256(args.image.read_bytes()).hexdigest()
@@ -40,7 +41,7 @@ def main():
         return next(iter(values))
     names = ['pcie_test_irq_route', 'vApplicationIRQHandler', 'pcie_test_application_irq',
              'a733_smp_counter', 'a733_smp_exit_privileged', 'diagnostic_deadline']
-    syms = {n: addr(n) for n in names}
+    syms = {n: addr(n.replace('pcie_test','pcie_nvme') if args.nvme else n) for n in names}
     args.output.mkdir(parents=True, exist_ok=True)
     for case in args.case or CASES:
         output = args.output/(case+'.json')

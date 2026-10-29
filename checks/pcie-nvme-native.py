@@ -87,7 +87,7 @@ class Machine:
   cpu.mem_write(BAR0,struct.pack('<3I',0x140100ff,0x20,0x00010400))
   self.layout=image.layouts['pcie_application'];self.base=image.address('pcie');self.board=image.address('board');self.provider=image.address('providers')
   self.port=self.base+self.layout['port'];self.native=self.base+self.layout['native'];self.nvme=self.base+self.layout['nvme']
-  self.time=1000000;self.live=True;self.held=False;self.scheduler=0;self.finished=False
+  self.time=1000000;self.live=True;self.held=False;self.scheduler=1;self.finished=False
   self.retain_calls={};self.stops=0;self.bar_accesses=0;self.dma=0;self.vendor_bytes=bytearray()
   self.ctl=dict(cc=0,csts=0,ready_at=None,shutdown_at=None,sq=[0,0],cq=[0,0],sq_head=[0,0],cq_tail=[0,0],phase=[1,1],created=0,commands=[])
   cpu.mem_write(0x41f00000,session);cpu.mem_write(self.base,session);cpu.mem_write(self.board,session[:592])
@@ -104,12 +104,35 @@ class Machine:
   setv(objects['pmic'],'a733_pmic','self',objects['pmic']);setv(objects['pmic'],'a733_pmic','cookie',objects['pmic_native'])
   cpu.mem_write(shared+L['a733_native_usb']['pmic_ready'],struct.pack('<I',1))
   self.hooks={image.address(name):name for name in self.HOOKS}
+  self.msix='pcie_nvme_irq_bind' in image.symbols
+  self.msi_status=0;self.gic_enabled=False;self.irqs=0;self.notifications=0
+  for n in ('vTaskEnterCritical','vTaskExitCritical','vTaskEnterCriticalFromISR','vTaskExitCriticalFromISR'):
+   self.hooks[image.address(n)]=n
+  if self.msix:
+   for n in ('vTaskGenericNotifyGiveFromISR','ulTaskGenericNotifyTake'):
+    self.hooks[image.address(n)]=n
+   for i in range(8):cpu.mem_write(BAR0+0x2000+16*i+12,struct.pack('<I',1))
+   cpu.hook_add(UC_HOOK_MEM_READ,self.irq_read,begin=0x06000830,end=0x06000830)
+   cpu.hook_add(UC_HOOK_MEM_WRITE,self.irq_write,begin=0x03400000,end=0x06000830)
   cpu.hook_add(UC_HOOK_CODE,self.code)
   cpu.hook_add(UC_HOOK_MEM_READ,self.bar_size,begin=0x20000010,end=0x20000027)
   cpu.hook_add(UC_HOOK_MEM_READ,self.bar_read,begin=BAR0,end=BAR0+0xfffff)
   cpu.hook_add(UC_HOOK_MEM_WRITE,self.bar_write,begin=BAR0,end=BAR0+0xfffff)
   assert self.call('a733_pmic_native_init',objects['pmic_native'],objects['locks'],2)==1
+  assert self.call('a733_memory_uncached_prepare')==1
   data=bytes(cpu.mem_read(objects['pmic_native']+L['a733_pmic_native']['pmic_bus_ops'],image.sizes['a733_pmic_ops']));cpu.mem_write(objects['pmic']+L['a733_pmic']['pmic_bus_ops'],data)
+ def irq_read(self,cpu,access,a,size,value,unused):
+  cpu.mem_write(a,struct.pack('<I',self.msi_status))
+ def irq_write(self,cpu,access,a,size,value,unused):
+  if a==0x06000830:self.msi_status&=~value
+  elif a==0x03400114:self.gic_enabled=bool(value&(1<<25))
+  elif a==0x03400194:self.gic_enabled=False;cpu.mem_write(0x03400114,struct.pack('<I',0))
+ def deliver(self):
+  if self.msix and self.msi_status and self.gic_enabled and self.variant!='lost-irq':
+   self.irqs+=1;self.call('pcie_nvme_application_irq')
+   if self.variant=='repeat-irq':self.call('pcie_nvme_application_irq')
+ def bind(self):
+  if self.msix:assert self.call('pcie_nvme_irq_bind',1)==1
  def field(self,name,value=None,size=4):
   if value is not None:self.cpu.mem_write(self.base+self.layout[name],value.to_bytes(size,'little'))
   return int.from_bytes(self.cpu.mem_read(self.base+self.layout[name],size),'little')
@@ -119,6 +142,10 @@ class Machine:
   L=self.image.layouts;lease=self.nvme+L['a733_pcie_nvme']['lease'];slot=self.u32(lease+L['device_memory_lease']['slot'])
   pool=self.image.address('uncached_pool');at=pool+L['device_memory_pool']['allocations']+slot*self.image.sizes['device_memory_allocation']
   return self.u32(at+L['device_memory_allocation']['state'])
+ def msi_retained(self):
+  L=self.image.layouts;lease=self.nvme+L['a733_pcie_nvme']['function']+L['a733_pcie_function']['msi_lease'];slot=self.u32(lease+L['device_memory_lease']['slot'])
+  pool=self.image.address('uncached_pool');at=pool+L['device_memory_pool']['allocations']+slot*self.image.sizes['device_memory_allocation']
+  return self.u32(at+L['device_memory_allocation']['state'])==self.image.enums['DEVICE_MEMORY_RETAINED']
  def returned(self,n):self.cpu.reg_write(UC_ARM64_REG_X0,n&((1<<64)-1));self.cpu.reg_write(UC_ARM64_REG_PC,self.cpu.reg_read(UC_ARM64_REG_LR))
  # Modeled endpoint: BAR sizing, the NVMe controller and its queue DMA.
  def bar_size(self,cpu,access,a,size,value,unused):
@@ -139,6 +166,11 @@ class Machine:
  def post(self,q,cid,status=0):
   c=self.ctl;at=self.host(c['cq'][q]+16*c['cq_tail'][q],16);self.owned_dma()
   self.cpu.mem_write(at,struct.pack('<4I',0,0,c['sq_head'][q]|q<<16,cid|c['phase'][q]<<16|status<<17))
+  if self.msix:
+   assert self.u32(0x20000090)>>16&0xc000==0x8000
+   assert self.u32(BAR0+0x2000)==self.u32(0x06000820) and not self.u32(BAR0+0x2004) and not self.u32(BAR0+0x2008) and not self.u32(BAR0+0x200c)&1
+   assert self.u32(0x06000828)==1 and not self.u32(0x0600082c)&1
+   self.msi_status|=1
   c['cq_tail'][q]+=1
   if c['cq_tail'][q]==2:c['cq_tail'][q]=0;c['phase'][q]^=1
  def execute(self,q,tail):
@@ -161,7 +193,8 @@ class Machine:
      assert w[10]==0 and w[1]==1;struct.pack_into('<Q',d,0,0x100000);d[130]=9
     self.cpu.mem_write(data,bytes(d));self.post(0,cid)
    elif opcode==9:assert w[10]==7 and not w[11];self.post(0,cid)
-   elif opcode==5:c['cq'][1]=w[7]<<32|w[6];c['created']|=1;self.post(0,cid)
+   elif opcode==5:
+    assert w[11]==(3 if self.msix else 1);c['cq'][1]=w[7]<<32|w[6];c['created']|=1;self.post(0,cid)
    elif opcode==1:assert c['created']&1;c['sq'][1]=w[7]<<32|w[6];c['created']|=2;self.post(0,cid)
    elif opcode==0:c['created']&=~2;self.post(0,cid)
    elif opcode==4:assert not c['created']&2;c['created']&=~1;self.post(0,cid)
@@ -176,7 +209,7 @@ class Machine:
    c['cc']=value
   elif off in (0x1000,0x1008):self.execute((off-0x1000)//8,value)
   elif off in (0x1004,0x100c):pass
-  else:assert off in (0x24,0x28,0x2c,0x30,0x34),hex(off)
+  else:assert off in (0x24,0x28,0x2c,0x30,0x34) or 0x2000<=off<0x2080,hex(off)
  def code(self,cpu,a,size,unused):
   if a==0x50fff000:self.finished=True;cpu.emu_stop();return
   name=self.hooks.get(a)
@@ -210,6 +243,9 @@ class Machine:
   elif name=='a733_gpu_resources_status':self.returned(E['A733_GPU_RESOURCE_OK'])
   elif name in ('a733_clock_retain','a733_rail_retain'):
    self.retain_calls[name]=self.retain_calls.get(name,0)+1;self.returned(E['A733_CLOCK_OK'] if name=='a733_clock_retain' else E['A733_RAIL_READY'])
+  elif name in ('vTaskEnterCritical','vTaskExitCritical','vTaskEnterCriticalFromISR','vTaskExitCriticalFromISR'):self.returned(0)
+  elif name=='vTaskGenericNotifyGiveFromISR':self.notifications+=1;self.returned(0)
+  elif name=='ulTaskGenericNotifyTake':self.returned(self.notifications);self.notifications=0
   elif name=='vTaskDelay':self.finished=True;cpu.emu_stop()
   elif name in ('a733_native_usb_step','a733_native_usb_health','tusb_rhport_init','tud_task_ext','tud_vendor_n_available'):self.returned(1)
   elif name=='tud_vendor_n_read':cpu.mem_write(args[1],bytes(1));self.returned(1)
@@ -233,18 +269,19 @@ class Machine:
  def native_write(self,address,width,value):return self.call('write',self.native,address,width,value,unit='/drivers/pci/a733_pcie_native.c')
  def run(self,limit=400,step_us=1000):
   assert self.call('pcie_session_valid',0x41f00000)==1 and self.call('pcie_construct')==1
-  self.scheduler=2
+  self.bind();self.scheduler=2
   for _ in range(limit):
-   result=self.call('pcie_step');self.time+=step_us
+   if self.variant=='irq-unconfigured' and self.field('stage')==2:self.msi_status|=2
+   self.deliver();result=self.call('pcie_step');self.time+=step_us
    if result in (1,0xffffffff):return result
   raise AssertionError((self.variant,'unbounded application stage',self.field('stage')))
 
 def nominal(m,out,session,decoder):
  E=m.image.enums
- assert m.call('pcie_session_valid',0x41f00000)==1 and m.call('pcie_construct')==1;m.scheduler=2
+ assert m.call('pcie_session_valid',0x41f00000)==1 and m.call('pcie_construct')==1;m.bind();m.scheduler=2
  refusals={}
  for _ in range(400):
-  result=m.call('pcie_step');m.time+=1000
+  m.deliver();result=m.call('pcie_step');m.time+=1000
   if m.field('stage')==2 and not refusals:
    # At READY with the read queued: the native filter keeps the exact rules.
    m.held=True
@@ -262,6 +299,7 @@ def nominal(m,out,session,decoder):
  assert all(refusals.values()) and refusals,refusals
  # Read only: the I/O queue saw exactly one READ; admin commands in order.
  assert m.ctl['commands']==[(0,6),(0,6),(0,9),(0,5),(0,1),(1,2),(0,0),(0,4)],m.ctl['commands']
+ if m.msix:assert m.msi_retained() and not m.gic_enabled and not m.u32(0x06000828) and m.u32(0x20000090)>>16&0xc000==0x4000
  assert m.stops==1 and m.lease_state()==E['DEVICE_MEMORY_RETAINED'] and not m.u32(0x20000004)&7 and (m.ctl['csts']>>2)&3==2
  payload=bytes(m.cpu.mem_read(m.base+m.layout['payload'],4288));(out/'native-payload.bin').write_bytes(payload)
  assert payload[192:]==bytes(pattern(8*512+i) for i in range(4096))
@@ -271,7 +309,7 @@ def nominal(m,out,session,decoder):
  frame=bytes(m.vendor_bytes);assert len(frame)==128+4288 and frame[128:]==payload
  (out/'native-frame.bin').write_bytes(frame);decoded=decoder.decode(frame,session)
  assert decoded['serial']=='S4EWNX0R123456' and decoded['lba']==8 and decoded['bar0']==BAR0 and decoded['bar0_bytes']==0x4000
- return dict(passed=True,decoded=decoded,native_refusals=refusals,dma=m.dma,admin_and_io_commands=m.ctl['commands'],lease='RETAINED',port_stop_calls=m.stops)
+ return dict(passed=True,irqs=m.irqs,notifications=m.notifications,decoded=decoded,native_refusals=refusals,dma=m.dma,admin_and_io_commands=m.ctl['commands'],lease='RETAINED',port_stop_calls=m.stops)
 
 def failure(m,variant):
  # Ten-millisecond steps let the one-second command bound expire.
@@ -279,9 +317,10 @@ def failure(m,variant):
  assert result==0xffffffff and m.field('result')==2 and m.field('retaining')==1,(variant,result,m.field('result'))
  calls=dict(m.retain_calls);m.call('pcie_step');m.call('pcie_step')
  assert m.stops==0 and all(n>=1 for n in m.retain_calls.values()) and len(m.retain_calls)==2,(variant,m.retain_calls)
+ if m.msix:assert m.msi_retained() and not m.gic_enabled
  detail=dict(passed=True,commands=m.ctl['commands'],retention_calls=calls,bar_accesses=m.bar_accesses)
  # The queue memory is retained whether the driver or the application failed.
- assert m.lease_state()==E['DEVICE_MEMORY_RETAINED'] and m.nvme_field('failed')==(variant in ('timeout','shutdown-stuck'))
+ assert m.lease_state()==E['DEVICE_MEMORY_RETAINED'] and m.nvme_field('failed')==(variant in ('timeout','shutdown-stuck','irq-unconfigured'))
  if variant=='unmapped-window':
   # Refused after BAR assignment and before any BAR access or bus mastering.
   assert not m.bar_accesses and not m.ctl['commands'] and not m.u32(0x20000004)&4
@@ -292,17 +331,77 @@ def failure(m,variant):
  if variant=='lba-outside':assert (1,2) not in m.ctl['commands'] and m.u32(0x20000004)&4
  return detail
 
+def irq_lifecycle(m):
+ # Execute the linked ISR, GIC adapter and callbacks. Only RTOS scheduling
+ # primitives and register side effects are modeled.
+ m.bind();m.scheduler=2;unit='/apps/pcie-nvme/irq.c';out=0x50001000
+ assert m.call('arm',0,unit=unit)==1
+ m.call('pcie_nvme_application_irq');m.call('pcie_nvme_application_irq')
+ assert m.notifications==2
+ # Notification arrived before the wait, and remains consumable.
+ assert m.call('ulTaskGenericNotifyTake',0,1,1)==2
+ m.cpu.mem_write(0x03400000,struct.pack('<I',1<<31))
+ assert m.call('event',0,out,unit=unit)==0 and m.u32(out)==1
+ for _ in range(3):
+  m.call('pcie_nvme_application_irq')
+  assert m.call('pcie_nvme_irq_health')==1
+  assert m.call('event',0,out,unit=unit)==0 and m.u32(out)==0
+ m.cpu.mem_write(0x03400000,struct.pack('<I',0))
+ assert m.call('event',0,out,unit=unit)==1 and m.u32(out)==0
+ # Fresh delivery immediately after rearm is a new consumable hint.
+ m.call('pcie_nvme_application_irq')
+ assert m.call('event',0,out,unit=unit)==1 and m.u32(out)==1
+ m.call('stop',0,unit=unit);m.call('pcie_nvme_application_irq')
+ assert m.call('pcie_nvme_irq_health')==0 and m.field('result')==2
+ assert m.call('event',0,out,unit=unit)==0xffffffff
+ assert m.call('arm',0,unit=unit)==0xffffffff
+ return dict(passed=True,scope='Linked mask/rearm, RWP-deferred count consumption, repeat delivery, notification-before-wait and permanent CLOSED fault; scheduler modeled')
+
+def early_irq(m):
+ assert m.call('pcie_construct')==1;m.bind();m.scheduler=2
+ # The timeout variant submits the real READ but withholds its CQ entry.
+ for _ in range(400):
+  m.deliver();assert m.call('pcie_step')==0;m.time+=1000
+  if m.field('stage')==2 and m.nvme_field('pending')==1:break
+ else:raise AssertionError('READ not submitted')
+ assert m.nvme_field('pending')==1
+ m.msi_status|=1;m.deliver()
+ assert m.call('pcie_step')==0 and m.nvme_field('pending')==1 and m.field('result')==0
+ # Actual phase-tagged completion after the early hint permits progress.
+ m.post(1,m.nvme_field('command_id',2))
+ for _ in range(100):
+  m.deliver();r=m.call('pcie_step');m.time+=1000
+  if r:break
+ assert r==1 and m.stops==1
+ # A closed source faults immediately and revokes the published result.
+ m.call('pcie_nvme_application_irq')
+ assert m.field('result')==2 and m.call('pcie_step')==0xffffffff
+ m.call('pcie_step');assert len(m.retain_calls)==2 and m.msi_retained()
+ return dict(passed=True,scope='IRQ before CQ cannot complete read; later CQ and shutdown succeed; CLOSED delivery revokes output')
+
 def main():
  p=argparse.ArgumentParser(description=__doc__)
  for key in ('image','session','output'):p.add_argument('--'+key,type=Path,required=True)
+ p.add_argument('--case',action='append',choices=('nominal','unmapped-window','timeout','shutdown-stuck','lba-outside','repeat-irq','lost-irq','irq-lifecycle','irq-before-cq','irq-unconfigured'))
  a=p.parse_args();out=a.output;out.mkdir(parents=True,exist_ok=True)
  image=Image(a.image);session=a.session.read_bytes();words,fields=registers(out)
  decoder=module('pcie_nvme_native_decode',ROOT/'apps/pcie-nvme/observe.py')
- results={'nominal':nominal(Machine(image,session,words,fields,'nominal'),out,session,decoder)}
- for variant in ('unmapped-window','timeout','shutdown-stuck','lba-outside'):
+ results={};msix='pcie_nvme_irq_bind' in image.symbols
+ cases=a.case or ['nominal','unmapped-window','timeout','shutdown-stuck','lba-outside']+(['repeat-irq','lost-irq','irq-lifecycle','irq-before-cq','irq-unconfigured'] if msix else [])
+ for variant in cases:
   s=bytearray(session)
   if variant=='lba-outside':struct.pack_into('<Q',s,800,0x100000-7)
-  results[variant]=failure(Machine(image,bytes(s),words,fields,variant),variant)
+  m=Machine(image,bytes(s),words,fields,'timeout' if variant=='irq-before-cq' else variant)
+  if variant in ('nominal','repeat-irq','lost-irq'):
+   target=out if variant=='nominal' else out/variant;target.mkdir(exist_ok=True)
+   results[variant]=nominal(m,target,session,decoder)
+   if variant=='lost-irq':assert m.irqs==0
+   elif msix:assert m.irqs>0
+  elif variant=='irq-lifecycle':results[variant]=irq_lifecycle(m)
+  elif variant=='irq-before-cq':results[variant]=early_irq(m)
+  else:results[variant]=failure(m,variant)
+  (out/('case-'+variant+'.json')).write_text(json.dumps(results[variant],indent=2)+'\n')
+  print(variant,'PASS',flush=True)
  record=dict(status='pass',image_sha256=hashlib.sha256(a.image.read_bytes()).hexdigest(),cases=results,physical_access=False,scope=__doc__)
  (out/'native-result.json').write_text(json.dumps(record,indent=2)+'\n')
  print(json.dumps({k:v['passed'] for k,v in results.items()}))
