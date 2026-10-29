@@ -140,7 +140,8 @@ static void disconnect_commit(void *ctx,const struct bt_h4_record *r)
     struct bt_sco *q=ctx;const uint8_t *p=r->storage.bytes;struct bt_sco_link *l=handle(q,le16(p+3));
     l->status=p[2];l->reason=p[5];
     if(p[2])l->phase=BT_SCO_OPEN;
-    else {l->phase=BT_SCO_CLOSED;l->closed_after=r->serial;
+    else {l->local_closed=l->phase==BT_SCO_DISCONNECT_WAIT && r->serial>l->acknowledgement;
+        l->phase=BT_SCO_CLOSED;l->closed_after=r->serial;
         for(unsigned i=0;i<BT_SCO_PACKETS;++i){struct bt_sco_packet *t=&q->tx[i];if(t->link!=l->generation)continue;
             if(t->state==BT_SCO_SENT){t->state=BT_SCO_FLUSHED;++q->credits;}
             else if(t->state==BT_SCO_QUEUED)t->state=BT_SCO_NOT_SENT;
@@ -342,6 +343,35 @@ int bt_sco_open(struct bt_sco *q,const struct bt_hfp_ag *ag,unsigned listening,u
         for(unsigned j=0;j<6;++j)l->address[j]=p->peer.address[j];*id=l->generation;return 1;
     }
     return 0;
+}
+int bt_sco_reopen(struct bt_sco *q,uint64_t old,uint64_t deadline,uint64_t *id)
+{
+    if(!valid(q)||!external(q,id,sizeof(*id))||deadline<=q->acl->hci->transport.now||
+       !q->next_link||q->next_link==UINT64_MAX)return -1;
+    struct bt_sco_link *l=link(q,old);struct bt_sco_security security={0};
+    if(!l||l->phase!=BT_SCO_CLOSED||!l->local_closed||!l->closed_after||!l->handle_valid||
+       (l->ag->local_codecs&&(l->ag->hf_features&128)&&!l->ag->selected_codec)||
+       !ag_current(q,l->ag,l->acl_generation,l->channel,&security)||
+       security.generation!=l->security.generation||security.secure_connections!=l->security.secure_connections||
+       prepare(q)!=1)return -1;
+    struct bt_h4 *h=&q->acl->hci->transport;
+    if(q->active_tx<BT_SCO_PACKETS||q->command_link<BT_SCO_LINKS||q->refuse||
+       q->acl->active_tx<BT_ACL_TX_SLOTS||q->acl->command_link<BT_ACL_LINKS||
+       q->acl->hci->command!=BT_HCI_IDLE||h->tx_offset<h->tx_length||
+       h->assembling<h->count||h->stage_offset<h->staged)return 0;
+    for(unsigned i=0;i<BT_SCO_PACKETS;++i)
+        if((q->tx[i].link==old&&q->tx[i].state!=BT_SCO_FREE)||
+           (q->rx[i].link==old&&q->rx[i].state!=BT_SCO_FREE))return 0;
+    for(unsigned i=0;i<BT_H4_SLOTS;++i)if(q->held_rx[i])return 0;
+    for(unsigned i=0;i<h->count;++i)if(h->records[i].owner!=BT_H4_FREE)return 0;
+    /* The old handle has been deleted by confirmed local disconnect (Core
+     * 5.4 Vol4E 4.3, 5.3, 7.7.5); no old host record can name it on rearm. */
+    struct bt_sco_link next={.ag=l->ag,.security=security,.generation=q->next_link,
+        .acl_generation=l->acl_generation,.channel=l->channel,.deadline=deadline,
+        .acl_handle=l->acl_handle,.handle=0xffff,.listening=l->listening,
+        .codec=l->ag->selected_codec==2?2:1,.phase=BT_SCO_FEATURE_QUEUED};
+    for(unsigned i=0;i<6;++i)next.address[i]=l->address[i];
+    *l=next;++q->next_link;*id=l->generation;return 1;
 }
 int bt_sco_retry_cvsd(struct bt_sco *q,uint64_t old,uint64_t deadline,uint64_t *id)
 {

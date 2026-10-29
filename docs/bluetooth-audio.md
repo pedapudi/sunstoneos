@@ -138,11 +138,34 @@ all unresolved ownership. A late observation cannot publish a usable audio
 link. Confirmed closure retains terminal TX results and received audio until
 explicit release.
 
-Four peer/audio identities are available per controller lifetime. Peers that
-have connected and their handles remain quarantined after closure. This finite bound prevents ambiguous delayed
-handle reuse; sustained reconnect support requires a separate proven identity
-policy or actual controller recovery. Audio control does not complete the
-remaining mandatory HFP call-control functions or establish headset compliance.
+Four peer slots are available per controller lifetime. Ordinary open keeps
+previously connected peers and handles quarantined. `bt_sco_reopen` reuses one
+slot only after a successful local disconnect and a drained host boundary.
+The completion must follow the matching command acknowledgment while the link
+is waiting for that disconnect. Remote release, failed setup and timeout do
+not establish this receipt.
+
+Reopen requires the same live AG, ACL, security generation and controller
+binding. Every old copied TX result and RX packet must be acknowledged. Held
+H4 records, staged bytes, partial frames, active transmissions and outstanding
+commands defer admission. A successful call assigns a fresh nonzero audio
+generation without wrapping; refusal leaves the old link and output generation
+unchanged. Admission performs fixed scans and no UART access.
+
+This policy relies on the ordered H4 transport and a conforming controller.
+Core 5.4 Volume 4, Part E sections 4.3, 5.3, 7.7.5 and 7.7.19 free buffers and
+delete the handle after successful disconnect, permit handle reuse and exclude
+later completed-packet reports for that connection. Host generations cannot
+distinguish a faulty controller's stale packet after it reassigns the same
+numeric handle. HFP 1.9 section 4.12 permits releasing audio while retaining the
+service connection; section 4.11.3 permits retaining its selected codec.
+
+The focused `checks/bt-sco.py --reopen` check exercises five reopens in the
+same slot with controller handle zero. It checks old-generation refusal,
+held/copied data, partial and staged H4 data, pending commands, changed security,
+counter exhaustion and unsuccessful local or remote closure. Evidence is in
+`~/.cache/sunstoneos/evidence/radio-audio-idle-1026/`. These software checks do
+not qualify physical controller ordering or headset operation.
 
 ## Source and validation scope
 

@@ -7,6 +7,7 @@ import pathlib
 import re
 import shutil
 import subprocess
+from harness import SANITIZE, environment
 p=argparse.ArgumentParser()
 p.add_argument('--source',type=pathlib.Path,required=True)
 p.add_argument('--l2cap-source',type=pathlib.Path,required=True)
@@ -14,6 +15,7 @@ p.add_argument('--sdp-source',type=pathlib.Path,required=True)
 p.add_argument('--rfcomm-source',type=pathlib.Path,required=True)
 p.add_argument('--hfp-source',type=pathlib.Path,required=True)
 p.add_argument('--close-held',action='store_true',help='Check only retained RX after confirmed close and compile changed SCO object')
+p.add_argument('--reopen',action='store_true',help='Check only completed local close/reopen and compile the SCO object')
 p.add_argument('--remaining',action='store_true',help='Reuse preserved acknowledgement backlog proof; execute remaining audio cases')
 p.add_argument('--audio-source',type=pathlib.Path,required=True)
 p.add_argument('--core-source',type=pathlib.Path,required=True)
@@ -118,7 +120,7 @@ commands=[]
 def run(args):
     commands.append([str(x) for x in args])
     try:
-        return subprocess.check_output(args,cwd=root,stderr=subprocess.STDOUT,text=True)
+        return subprocess.check_output(args,cwd=root,stderr=subprocess.STDOUT,text=True,env=environment())
     except subprocess.CalledProcessError as error:
         (a.output/'failure.log').write_text(error.output)
         (a.output/'failed-commands.json').write_text(json.dumps(commands,indent=2)+'\n')
@@ -126,12 +128,12 @@ def run(args):
         raise
 cc=shutil.which('clang-21');assert cc
 exe=a.output/'bt-sco-model'
-log=run([cc,'-std=c11','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-g','-Iinclude','-I'+str(a.output),'-Ichecks',
+log=run([cc,'-std=c11','-Wall','-Wextra','-Werror',*SANITIZE,'-g','-Iinclude','-I'+str(a.output),'-Ichecks',
          'drivers/uart/a733_uart.c','drivers/bluetooth/bt_h4.c','drivers/bluetooth/bt_hci.c','drivers/bluetooth/bt_acl.c','drivers/bluetooth/bt_l2cap.c','drivers/bluetooth/bt_sdp.c','drivers/bluetooth/bt_rfcomm.c','drivers/bluetooth/bt_sdp_server.c','drivers/bluetooth/bt_hfp_ag.c','drivers/bluetooth/bt_sco.c','checks/bt-sco.c','-o',str(exe)])
-log+=run([str(exe)]+(['--close-held'] if a.close_held else ['--remaining'] if a.remaining else []))
+log+=run([str(exe)]+(['--reopen'] if a.reopen else ['--close-held'] if a.close_held else ['--remaining'] if a.remaining else []))
 
 objects=[]
-for name in (['bt_sco'] if a.close_held else ['bt_h4','bt_hci','bt_acl','bt_l2cap','bt_sdp','bt_rfcomm','bt_sdp_server','bt_hfp_ag','bt_sco']):
+for name in (['bt_sco'] if a.close_held or a.reopen else ['bt_h4','bt_hci','bt_acl','bt_l2cap','bt_sdp','bt_rfcomm','bt_sdp_server','bt_hfp_ag','bt_sco']):
     obj=a.output/(name+'.o');objects.append(obj)
     log+=run([cc,'--target=aarch64-none-elf','-std=c11','-Wall','-Wextra','-Werror','-ffreestanding','-fno-builtin','-O2','-Iinclude',
               '-c','drivers/bluetooth/'+name+'.c','-o',str(obj)])
@@ -139,7 +141,7 @@ for name in (['bt_sco'] if a.close_held else ['bt_h4','bt_hci','bt_acl','bt_l2ca
 manifest['commands']=commands
 manifest['artifacts']={f.name:hashlib.sha256(f.read_bytes()).hexdigest() for f in [exe,*objects,a.output/'bt-ref.h',a.output/'l2cap-ref.h',a.output/'sdp-ref.h',a.output/'rfcomm-ref.h',a.output/'sdp-fixture.h',a.output/'rfcomm-fixture.h',a.output/'rfcomm-server-fixture.h',a.output/'bt-l2cap.c',a.output/'sco-ref.h',a.output/'hfp-audio-fixture.h']}
 manifest['compiler']={'path':cc,'sha256':hashlib.sha256(pathlib.Path(cc).read_bytes()).hexdigest()}
-manifest['case']='close-held' if a.close_held else 'remaining' if a.remaining else 'all'
+manifest['case']='reopen' if a.reopen else 'close-held' if a.close_held else 'remaining' if a.remaining else 'all'
 manifest['result']='Synchronous audio control/PCM/credits over actual configured UART/HCI/ACL/AG composition with ASan/UBSan and affected native ABI consumers passed; prior suites not executed.'
 (a.output/'results.json').write_text(json.dumps(manifest,indent=2)+'\n')
 print(log,end='');print(manifest['result'])

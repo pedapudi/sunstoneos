@@ -3,7 +3,10 @@
 #define BLUETOOTH_APPLICATION_FIXTURE_ENTRY archived_application_main
 #include "bluetooth-application.c"
 #undef BLUETOOTH_APPLICATION_FIXTURE_ENTRY
-#include "../apps/bluetooth/headset.c"
+#ifndef BLUETOOTH_HEADSET_SOURCE
+#define BLUETOOTH_HEADSET_SOURCE "../apps/bluetooth/headset.c"
+#endif
+#include BLUETOOTH_HEADSET_SOURCE
 /* A repeated case may store a capture stop inside one owner poll, after the
  * poll's first stop check, as another task can: at the notification that
  * follows publication of segment stop_at_publication. */

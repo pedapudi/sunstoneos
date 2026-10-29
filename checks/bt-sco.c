@@ -43,8 +43,9 @@ static void audio_config_ready(struct fixture *f,struct bt_acl *a)
 struct audio_fixture {struct gateway g;struct bt_sco q;unsigned authority,secure;uint64_t link;};
 static int audio_current(void *ctx,const struct bt_h4_binding *b,uint64_t generation,uint64_t latency)
 {struct audio_fixture *f=ctx;return f->authority && b->uart==&f->g.rf.d.lower.f.uart && generation==27 && latency==1000;}
+static uint64_t security_generation=31;
 static int audio_security(void *ctx,const struct bt_hfp_ag *ag,struct bt_sco_security *security)
-{struct audio_fixture *f=ctx;if(!f->authority || ag!=&f->g.ag)return 0;*security=(struct bt_sco_security){31,f->secure};return 1;}
+{struct audio_fixture *f=ctx;if(!f->authority || ag!=&f->g.ag)return 0;*security=(struct bt_sco_security){security_generation,f->secure};return 1;}
 static void audio_start(struct audio_fixture *f,unsigned listen,unsigned secure)
 {
     memset(f,0,sizeof(*f));establish(&f->g);f->authority=1;f->secure=secure;
@@ -253,5 +254,66 @@ static void closed_held_receive(void)
     assert(audio_poll(&f)==-1 && f.q.error==BT_SCO_PROTOCOL);
     puts("Known audio RX retained before disconnect drains after confirmed close; newly acquired late RX remains refused.");
 }
+static void close_local(struct audio_fixture *f,unsigned status_code)
+{
+    assert(bt_sco_close(&f->q,f->link,100000)==1);command(f,0x0406);status(f,0x0406,0);
+    uint8_t done[]={status_code,0,0,0x13};event(&f->g.rf.d.lower.f,5,done,4);assert(audio_poll(f)==1);
+}
+static void reopen_refusal(struct audio_fixture *f,int expected)
+{
+    struct bt_sco_link old=f->q.links[0];uint64_t id=0xfeed;
+    assert(bt_sco_reopen(&f->q,f->link,100000,&id)==expected&&id==0xfeed);
+    assert(!memcmp(&old,&f->q.links[0],sizeof(old)));
+}
+static void reopen_cases(void)
+{
+    struct audio_fixture f;opened(&f);reopen_refusal(&f,-1);
+    /* The close receipt follows actual local status/completion, and old copied
+     * RX plus one classified held H4 record and FLUSHED TX still block rearm. */
+    for(unsigned i=0;i<9;++i){uint8_t x=(uint8_t)i;sco_input(&f,0,0,&x,1);assert(audio_poll(&f)==1);}
+    uint64_t sent=transmit(&f);close_local(&f,0);
+    assert(f.q.links[0].local_closed&&f.q.links[0].closed_after>f.q.links[0].acknowledgement);
+    reopen_refusal(&f,0);
+    for(unsigned i=0;i<9;++i){const struct bt_sco_packet *r=bt_sco_receive(&f.q);
+        assert(r&&r->link==f.link&&r->bytes[0]==i);
+        assert(bt_sco_release_receive(&f.q,r->serial)==1&&audio_poll(&f)==1);}
+    reopen_refusal(&f,0);assert(bt_sco_release_result(&f.q,sent)==1);
+    struct bt_h4 *h=&f.g.rf.d.lower.f.hci.transport;
+    unsigned assembling=h->assembling;h->assembling=0;reopen_refusal(&f,0);h->assembling=assembling;
+    size_t staged=h->staged,offset=h->stage_offset;h->staged=1;h->stage_offset=0;
+    reopen_refusal(&f,0);h->staged=staged;h->stage_offset=offset;
+    h->records[0].owner=BT_H4_OWNED;reopen_refusal(&f,0);h->records[0].owner=BT_H4_FREE;
+    size_t length=h->tx_length,txoffset=h->tx_offset;h->tx_length=1;h->tx_offset=0;
+    reopen_refusal(&f,0);h->tx_length=length;h->tx_offset=txoffset;
+    f.q.command_link=0;reopen_refusal(&f,0);f.q.command_link=BT_SCO_LINKS;
+    security_generation=32;reopen_refusal(&f,-1);security_generation=31;
+    f.secure=1;reopen_refusal(&f,-1);f.secure=0;
+    ++f.g.ag.link;reopen_refusal(&f,-1);--f.g.ag.link;
+    ++f.g.rf.d.lower.a.links[0].generation;reopen_refusal(&f,-1);--f.g.rf.d.lower.a.links[0].generation;
+    unsigned ready=f.g.rf.d.lower.f.hci.synchronous_ready;f.g.rf.d.lower.f.hci.synchronous_ready=0;
+    reopen_refusal(&f,-1);f.g.rf.d.lower.f.hci.synchronous_ready=ready;
+    uint64_t next=f.q.next_link;f.q.next_link=UINT64_MAX;reopen_refusal(&f,-1);
+    f.q.next_link=0;reopen_refusal(&f,-1);f.q.next_link=next;
+    /* More than four reopenings reuse the exact slot, including controller
+     * handle zero, and invalidate old caller generations. */
+    for(unsigned i=0;i<5;++i){
+        uint64_t prior=f.link,new_id=0;
+        assert(bt_sco_reopen(&f.q,prior,100000,&new_id)==1&&new_id==prior+1);
+        assert(f.q.links[0].generation==new_id&&!f.q.links[0].handle_valid&&!f.q.links[0].local_closed);
+        for(unsigned j=1;j<BT_SCO_LINKS;++j)assert(f.q.links[j].phase==BT_SCO_UNUSED);
+        assert(bt_sco_close(&f.q,prior,100000)==-1);
+        f.link=new_id;remote(&f,1);enhanced(&f,0,1);complete(&f,0,0,2);close_local(&f,0);
+    }
+    /* Ordinary open still quarantines the peer. Remote close and a failed
+     * local close do not create a reopen receipt. */
+    uint64_t id=0xfeed;assert(bt_sco_open(&f.q,&f.g.ag,0,100000,&id)==-1&&id==0xfeed);
+    opened(&f);const uint8_t done[]={0,0,0,0x13};event(&f.g.rf.d.lower.f,5,done,4);assert(audio_poll(&f)==1);
+    assert(!f.q.links[0].local_closed);reopen_refusal(&f,-1);
+    opened(&f);close_local(&f,0x0c);assert(!f.q.links[0].local_closed);reopen_refusal(&f,-1);
+    /* A newly acquired late packet is rejected under the closed generation. */
+    opened(&f);close_local(&f,0);uint8_t late=9;sco_input(&f,0,0,&late,1);
+    assert(audio_poll(&f)==-1&&f.q.error==BT_SCO_PROTOCOL);reopen_refusal(&f,-1);
+    puts("PASS local-close receipt, copied/H4 drain, unchanged security, generation refusal and five same-slot/handle reopenings");
+}
 int main(int argc,char **argv)
-{(void)config_ready;if(argc==2 && !strcmp(argv[1],"--close-held")){closed_held_receive();return 0;}if(argc!=2 || strcmp(argv[1],"--remaining"))acknowledgement_backlog();credits_and_audio();mixed_refusal();incoming_and_fallback();refusals_and_partial();stray_refusal();stray_refusal_expiry();puts("New synchronous audio composition passed; prior Bluetooth scenario suites were not executed.");return 0;}
+{(void)config_ready;if(argc==2&&!strcmp(argv[1],"--reopen")){reopen_cases();return 0;}if(argc==2 && !strcmp(argv[1],"--close-held")){closed_held_receive();return 0;}if(argc!=2 || strcmp(argv[1],"--remaining"))acknowledgement_backlog();credits_and_audio();mixed_refusal();incoming_and_fallback();refusals_and_partial();stray_refusal();stray_refusal_expiry();puts("New synchronous audio composition passed; prior Bluetooth scenario suites were not executed.");return 0;}

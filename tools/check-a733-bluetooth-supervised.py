@@ -132,7 +132,7 @@ def capture_recognition(exchange,session,profile,evidence,record,save,deadline,c
 def capture_repeated(exchange,session,profile,evidence,record,save,deadline,segments=2,now=time.monotonic,pause=time.sleep):
     require(1<=segments<=32,'Repeated headset target must be1..32segments.')
     record.update(bluetooth_retention='whole-board-power-removal',bluetooth_result='unobserved');save()
-    queries=0;last=0;cancelled=False;failure=False;previous=(0,0,0,0,0);identity=None
+    queries=0;last=0;cancelled=False;failure=False;previous=(0,0,0,0,0);identity=None;codecs=set()
     # A segment's first sample is the sum of the input samples of all earlier
     # segments, which the consecutive tickets let the host track exactly.
     first_sample=0
@@ -158,7 +158,12 @@ def capture_repeated(exchange,session,profile,evidence,record,save,deadline,segm
             stamp={k:value[k] for k in ('firmware','uart','acl','audio','ticket','first_sample','bytes','input_samples','output_samples',
                    'pcm_sha256','wav_sha256','text_sha256','first_acquired','last_acquired','codec','sample_rate')}
             lifetime=tuple(value[k] for k in ('firmware','uart','acl','audio','codec','sample_rate'))
-            require(identity is None or lifetime==identity,'Repeated headset audio identity changed.');identity=lifetime
+            if identity is not None:
+                require(lifetime[:3]==identity[:3],'Repeated headset service identity changed.')
+                require(lifetime[3]>=identity[3],'Repeated headset audio generation regressed.')
+                require(lifetime[3]!=identity[3] or lifetime[4:]==identity[4:],
+                        'Repeated headset codec changed within one audio generation.')
+            identity=lifetime;codecs.add(value['codec'])
             text=bytearray()
             while len(text)<stamp['bytes'] or not stamp['bytes']:
                 current,data=query(1,stamp['ticket'],len(text),min(1024,stamp['bytes']-len(text)))
@@ -179,7 +184,8 @@ def capture_repeated(exchange,session,profile,evidence,record,save,deadline,segm
         if value['disconnected'] and value['finished'] and not value['ticket']:
             require(value['published']==value['consumed']==last and (failure or last>=segments),'Repeated headset terminal work count differs.')
             result={k:value[k] for k in ('published','consumed','flags','disconnected','finished')}
-            result.update(transcripts=last,wideband=bool(identity and identity[-2]==2),codec=identity[-2] if identity else 0,physical_audio_qualified=False)
+            result.update(transcripts=last,wideband=codecs=={2},codec=next(iter(codecs)) if len(codecs)==1 else 0,
+                          codecs=sorted(codecs),physical_audio_qualified=False)
             if struct.unpack_from('<I',profile,624)[0]==3 and not result['wideband']:failure=True
             result['wideband_fallback']=bool(struct.unpack_from('<I',profile,624)[0]==3 and not result['wideband'])
             record['bluetooth_result']='observed-failure' if failure else 'observed-success';record['repeated_recognition']=result

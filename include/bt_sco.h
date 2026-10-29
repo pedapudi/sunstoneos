@@ -33,7 +33,7 @@ struct bt_sco_link {
     uint64_t request_serial,request_deadline,closed_after;
     uint16_t handle,acl_handle,rx_packet_length,tx_packet_length;
     uint8_t address[6],features[8],status,reason,type,interval,retransmission;
-    unsigned listening,requested,request_type,profile,handle_valid,codec,fallback_allowed;
+    unsigned listening,requested,request_type,profile,handle_valid,codec,fallback_allowed,local_closed;
     enum bt_sco_phase phase;
 };
 struct bt_sco_packet {
@@ -65,7 +65,8 @@ struct bt_sco {
  * All objects, callbacks, context and lower backing are disjoint and survive
  * faults. Register once per controller generation, no unregister/reinit.
  * Four peer/audio identities and eight copied packets per direction; closed
- * handles and peers stay quarantined until real controller recovery. */
+ * handles and peers stay quarantined except for explicit completed local
+ * close/reopen of the same authenticated service connection. */
 int bt_sco_init(struct bt_sco *,struct bt_acl *,const struct bt_sco_binding *);
 /* Bind actual AG READY and live ACL. listening1 awaits an incoming synchronous
  * request after querying remote features;0 initiates. A synchronous request no
@@ -75,6 +76,11 @@ int bt_sco_init(struct bt_sco *,struct bt_acl *,const struct bt_sco_binding *);
  * No active call is fabricated. Exact1 admitted,0 capacity,-1 refusal. */
 int bt_sco_open(struct bt_sco *,const struct bt_hfp_ag *,unsigned listening,
                 uint64_t deadline,uint64_t *generation);
+/* Reopen the exact slot after matched successful local disconnect and release
+ * of all its copied packets. Same live AG/ACL/security, drained H4 receive and
+ * command/TX boundary, fresh nonzero generation. 0 waits for drain; -1 refuses;
+ * neither changes the output or old link identity. No I/O or automatic retry. */
+int bt_sco_reopen(struct bt_sco *,uint64_t old_generation,uint64_t deadline,uint64_t *generation);
 /* One ACL/HCI step, bounded link scans and at most one new command or data
  * submission. Source-defined fallback follows confirmed terminal failures only;
  * uncertain timeouts retain the complete controller/audio lifetime. */

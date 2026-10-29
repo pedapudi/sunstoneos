@@ -15,6 +15,7 @@ static unsigned msbc_hold_bcs;
 #include <sbc/sbc.h>
 static TaskHandle_t reader=(TaskHandle_t)2;
 static const char *latency_codec="mSBC";
+static void idle_closed(void);
 static void inject(const uint8_t *p,unsigned n,unsigned status)
 {uint8_t h[]={3,0,(uint8_t)(status<<4),(uint8_t)n};assert(n<=255);bytes(&wire,h,4);bytes(&wire,p,n);}
 static uint64_t segments(void){return atomic_load(&voice.segment_head);}
@@ -30,11 +31,12 @@ static void connect_audio(void)
 /* An owner-started activation: +BVRA: 1, then the link, opened by the first. */
 static void activate(void)
 {
+    if(voice.stage!=IDLE&&voice.idle_close)idle_closed();
     current_task=reader;assert(bluetooth_headset_segment_request(&app,BLUETOOTH_SEGMENT_START,atomic_load(&voice.segment_head))==1);current_task=owner;
     LATENCY("START to committed on",POLLS(voice.ag.recognition),5);assert(voice.active);
     /* A codec list changed while idle adds the +BCS exchange before setup. */
     if(voice.stage!=CAPTURE){unsigned setups=sco_setups;
-        if(msbc_narrowed)LATENCY("START commit to setup accepted after codec reselection",POLLS(sco_setups==setups+1),13);
+        if(msbc_narrowed)LATENCY("START commit to setup accepted after codec reselection",POLLS(sco_setups==setups+1),voice.stream?16:13);
         else LATENCY("START commit to setup accepted",POLLS(sco_setups==setups+1),4);}
     MSBC_UNTIL(voice.active&&voice.stage==CAPTURE);
 }
@@ -56,7 +58,7 @@ static struct bluetooth_segment_snapshot take(uint64_t ticket,FILE *out)
 }
 static void close_audio(void)
 {
-    assert(bluetooth_headset_segment_stop(&app)==1);until(CLOSE);for(unsigned n=0;n<8;++n)assert(pump()>=0);
+    assert(bluetooth_headset_segment_stop(&app)==1);if(voice.stage==IDLE){until(DONE);return;}until(CLOSE);for(unsigned n=0;n<8;++n)assert(pump()>=0);
     assert(!atomic_load(&voice.segment_disconnected));const uint8_t done[]={0,0,0,0x13};event(&wire,5,done,sizeof(done));until(DONE);
 }
 static void encode(sbc_t *encoder,const uint8_t pcm[240],unsigned sequence,uint8_t frame[60])
@@ -64,25 +66,36 @@ static void encode(sbc_t *encoder,const uint8_t pcm[240],unsigned sequence,uint8
     static const uint8_t h2[]={8,0x38,0xc8,0xf8};memset(frame,0,60);frame[0]=1;frame[1]=h2[sequence&3];ssize_t written=0;
     assert(sbc_encode(encoder,pcm,240,frame+2,57,&written)==240&&written==57);
 }
-/* From a running activation: two activations on one open link, separated by
- * three released frames, with 7-byte packets that split frames. The second
- * activation skips to the next frame boundary and decodes the first whole
- * frame after the gap. */
-static void activations(sbc_t *encoder)
+/* Release the synchronous link while retaining the authenticated HFP link. */
+static void idle_closed(void)
 {
-    enum {FRAMES=10};uint8_t stream[3+60*FRAMES]={0x74,0x22,0x00},pcm[240];
-    for(unsigned k=0;k<FRAMES;++k){for(unsigned i=0;i<240;i+=2){pcm[i]=0;pcm[i+1]=(uint8_t)(k*9+i/16);}encode(encoder,pcm,k,stream+3+60*k);}
-    unsigned at=0;assert(voice.active);
-    while(!segments()){assert(at+7<=sizeof(stream));inject(stream+at,7,0);for(unsigned k=0;k<4;++k)assert(pump()>=0);at+=7;}
-    assert(at==63&&!voice.active);ended(1);
-    /* Frames 1 to 3 and 23 bytes of frame 4 are released without decoding. */
-    while(at<3+60*4+23){inject(stream+at,7,0);for(unsigned k=0;k<4;++k)assert(pump()>=0);at+=7;}
-    assert(at==266&&segments()==1&&!voice.segment_bytes);take(1,NULL);
-    /* The released bytes end 23 bytes into frame 4, so the next activation
-     * skips its other 37 bytes and decodes frame 5 without a header search. */
-    activate();const unsigned next=3+60*5;assert(voice.skip==37&&voice.boundary==63);
-    while(segments()<2){assert(at+7<=next+60+6);inject(stream+at,7,0);for(unsigned k=0;k<4;++k)assert(pump()>=0);at+=7;}
-    assert(at>=next+60&&at-7<next+60&&!atomic_load(&voice.segment_flags));take(2,NULL);
+    MSBC_UNTIL(voice.stage==CLOSE&&stream()->phase==BT_SCO_DISCONNECT_WAIT);
+    assert(!voice.ag.recognition&&!voice.ag.response_length);
+    const uint8_t done[]={0,0,0,0x13};event(&wire,5,done,sizeof(done));until(IDLE);
+    assert(stream()->local_closed&&!atomic_load(&voice.segment_disconnected));
+}
+static void idle_reopen(sbc_t *encoder)
+{
+    uint64_t generation=voice.stream;uint8_t pcm[240]={0},frame[60];
+    for(unsigned pass=0;pass<2;++pass){
+        /* A fresh controller stream may restart its H2 sequence. */
+        encode(encoder,pcm,0,frame);inject(frame,7,0);for(unsigned n=0;n<4;++n)assert(pump()>=0);
+        inject(frame+7,53,0);ended(pass+1);
+        current_task=reader;const uint8_t *copied;struct bluetooth_segment_snapshot snapshot;
+        assert(bluetooth_headset_segment_take(&app,&copied,&snapshot)==1&&!memcmp(copied,pcm,240));current_task=owner;
+        snapshot=take(pass+1,NULL);assert(snapshot.capture.audio==voice.stream&&snapshot.capture.acl==voice.link);
+        idle_closed();uint64_t before=sco_bytes,at=wire.now;jittered(900000);
+        fprintf(stderr,"IDLE mSBC bytes=%llu elapsed_us=%llu\n",(unsigned long long)(sco_bytes-before),(unsigned long long)(wire.now-at));
+        assert(sco_bytes==before&&voice.ag.selected_codec==2);
+        if(!pass){activate();assert(voice.stream>generation&&stream()->handle==0&&stream()->codec==2&&
+            !voice.position&&!voice.skip&&!voice.boundary&&!voice.silence_offset);}
+    }
+    /* One real BAC change invalidates the retained codec on the live HFP link. */
+    const char *narrow="AT+BAC=1\r";rf_in(14,0xef,(const uint8_t *)narrow,(unsigned)strlen(narrow),-1);
+    for(unsigned n=0;n<20;++n)assert(pump()>=0);
+    assert(!voice.ag.selected_codec&&voice.stage==IDLE);msbc_narrowed=1;
+    activate();assert(stream()->codec==1&&voice.ag.selected_codec==1&&msbc_setups==3);
+    close_audio();puts("PASS two mSBC generations, exact silence PCM, zero idle traffic and BAC-triggered CVSD reselection");
 }
 #ifndef BLUETOOTH_MSBC_FIXTURE_ENTRY
 #define BLUETOOTH_MSBC_FIXTURE_ENTRY main
@@ -144,13 +157,14 @@ int BLUETOOTH_MSBC_FIXTURE_ENTRY(int argc,char **argv)
     activate();assert(stream()->codec==(msbc_no_cap||msbc_fallback?1u:2u));
     if(!strcmp(argv[1],"cadence")){
         /* mSBC silence follows the 7.5 ms eSCO frame period on a jittered
-         * poll grid, during an activation and between activations. */
+         * poll grid, during an activation; confirmed idle sends no synchronous packets. */
         for(unsigned phase=0;phase<2;++phase){
             uint64_t start=wire.now,before=sco_bytes;jittered(900000);
             uint64_t frames=(sco_bytes-before)/60,expected=(wire.now-start)/7500;
             fprintf(stderr,"mSBC silence %llu frames over %llu us, expected %llu\n",(unsigned long long)frames,(unsigned long long)(wire.now-start),(unsigned long long)expected);
-            assert(frames<=expected+1&&frames+1>=expected&&!voice.silence_restarts);
-            if(!phase){rf_in(14,0xef,(const uint8_t *)"AT+BVRA=0\r",10,-1);MSBC_UNTIL(!voice.active);}
+            if(!phase)assert(frames<=expected+1&&frames+1>=expected&&!voice.silence_restarts);
+            else assert(!frames);
+            if(!phase){rf_in(14,0xef,(const uint8_t *)"AT+BVRA=0\r",10,-1);MSBC_UNTIL(!voice.active);idle_closed();}
         }
         puts("PASS mSBC silence cadence anchored to its frame period");return 0;
     }
@@ -166,8 +180,8 @@ int BLUETOOTH_MSBC_FIXTURE_ENTRY(int argc,char **argv)
     if(msbc_fallback)assert(msbc_setups==3&&voice.stream==2&&voice.ag.selected_codec==1);
     if(msbc_no_cap||msbc_fallback){uint8_t pcm[240]={0};inject(pcm,sizeof(pcm),0);MSBC_UNTIL(segments()==1);ended(1);take(1,NULL);close_audio();puts("PASS explicit CVSD fallback identity");return 0;}
     sbc_t encoder;assert(!sbc_init_msbc(&encoder,0));encoder.endian=SBC_LE;
-    if(!strcmp(argv[1],"activations")){activations(&encoder);close_audio();sbc_finish(&encoder);
-        puts("PASS a resynchronized activation after an odd number of released frames decodes the next whole frame");return 0;}
+    if(!strcmp(argv[1],"idle-reopen")){idle_reopen(&encoder);sbc_finish(&encoder);return 0;}
+    if(!strcmp(argv[1],"activations")){idle_reopen(&encoder);sbc_finish(&encoder);return 0;}
     uint8_t input[96000]={0};unsigned total=speech?sizeof(input):!strcmp(argv[1],"backlog")||msbc_two_frames?480:240;
     FILE *out=NULL;if(speech){assert(argc==4);FILE *in=fopen(argv[2],"rb");out=fopen(argv[3],"wb");assert(in&&out&&fread(input,1,sizeof(input),in)==sizeof(input)&&fgetc(in)==EOF&&!fclose(in));}
     unsigned seq=0,taken=0;uint64_t published=0;struct bluetooth_segment_snapshot snapshots[2];

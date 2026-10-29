@@ -9,10 +9,13 @@ import shutil
 from pathlib import Path
 import subprocess
 import sys
+from harness import SANITIZE, environment
 ROOT=Path(__file__).resolve().parents[1]
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--output',type=Path,required=True)
 p.add_argument('--build',type=Path,required=True)
+p.add_argument('--security-dir',type=Path,help='Existing generated security and model headers from an OS build')
+p.add_argument('--headset-source',type=Path,help='Preserved baseline headset source for the idle-traffic comparison')
 p.add_argument('--setup-only',action='store_true')
 p.add_argument('--playback',action='store_true',help='New runtime caller PCM composition only')
 p.add_argument('--msbc',action='store_true',help='Build the new actual mSBC stack composition')
@@ -23,21 +26,23 @@ p.add_argument('--call-control',action='store_true',help='Build with the HFP cal
 p.add_argument('--speech-input',type=Path)
 p.add_argument('--speech-output',type=Path)
 p.add_argument('--case',action='append',choices=['success','retry','retry-limit','informational','cadence','bac','justworks','keyreplace','deadline','loss','handoff','security-pending','early-copy','speech','two','backlog','cancel','late-disconnect','revocation','resident','stop-in-poll','fragmented','crc','sequence','bad-bcs','no-capability','fallback','command-refusal','pcm-two','pcm-duplex','pcm-cancel','pcm-starve','pcm-partial','pcm-early-cancel','pcm-publication','pcm-cadence',
-    'button','start','no-voice','early','pending-off','idle-stop','open-stop','setup-stop','ag-stop','window','peer-release','idle-disconnect','idle-disconnect-resident','activations','bac-idle','ag-cancel'])
+    'button','start','no-voice','early','pending-off','idle-stop','open-stop','setup-stop','ag-stop','window','peer-release','idle-disconnect','idle-disconnect-resident','activations','bac-idle','ag-cancel',
+    'idle-reopen','idle-start','idle-stop-close','idle-stop-open','idle-close-timeout','idle-traffic'])
 a=p.parse_args();
 if a.playback:a.msbc=True;a.recognition_profile=True
 out=a.output.resolve();out.mkdir(parents=True,exist_ok=True)
-cache=Path('/home/sunil/.cache/sunstoneos');security=a.build/'bluetooth-application/security'
+cache=Path('/home/sunil/.cache/sunstoneos');security=a.security_dir or a.build/'bluetooth-application/security'
 reference=cache/'evidence/bluetooth-native-20261017/composition'
 cc='/usr/bin/clang-21';commands=[];executing_cases=False
 common=['-std=c11','-Wall','-Wextra','-Wno-unused-function','-Wno-sign-compare','-Wno-for-loop-analysis','-g','-O1',
-        '-ffunction-sections','-fdata-sections','-fsanitize=address,undefined','-fno-omit-frame-pointer',
+        '-ffunction-sections','-fdata-sections',*SANITIZE,
         '-DSUNSTONE_BLUETOOTH_HEADSET=1','-Inetwork/include','-Iinclude','-I'+str(reference),'-I'+str(security),'-I'+str(a.build/'bluetooth-application'),
         '-I'+str(cache/'sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2/include'),
         '-I'+str(cache/'sources/FreeRTOS-Kernel-97f50c0ecf5b3f68aa9d1c1fb27f4ad707ddb5c2/portable/GCC/ARM_AARCH64_SRE'),
         '-I'+str(cache/'sources/radio/stacks/FreeRTOS-Plus-TCP-b86ad086e9870099bb0ac18a75dcb7f6dd508cc7/source/include'),
         '-I'+str(cache/'sources/radio/stacks/FreeRTOS-Plus-TCP-b86ad086e9870099bb0ac18a75dcb7f6dd508cc7/source/portable/Compiler/GCC')]
 if a.recognition_profile:common.append('-DSUNSTONE_BLUETOOTH_RECOGNITION=1')
+if a.headset_source:common+=['-Iapps/bluetooth','-DBLUETOOTH_HEADSET_SOURCE="'+str(a.headset_source.resolve())+'"']
 if a.call_control:common.append('-DSUNSTONE_BT_HFP_CALL_CONTROL=1')
 sources=['drivers/uart/a733_uart.c','drivers/bluetooth/bt_h4.c','drivers/bluetooth/bt_hci.c','drivers/bluetooth/bt_acl.c',
          'drivers/bluetooth/bt_l2cap.c','drivers/bluetooth/bt_sdp.c','drivers/bluetooth/bt_sdp_server.c','drivers/bluetooth/bt_rfcomm.c',
@@ -57,7 +62,7 @@ if a.playback:
     sources.remove('apps/bluetooth/playback.c')
 def run(name,cmd):
     cmd=list(map(str,cmd));commands.append(cmd)
-    r=subprocess.run(cmd,cwd=ROOT,capture_output=True,text=True,env={**os.environ,'PYTHONDONTWRITEBYTECODE':'1','ASAN_OPTIONS':'halt_on_error=1','SUNSTONE_DUPLEX_PCM':str(out/'duplex-copied.pcm')})
+    r=subprocess.run(cmd,cwd=ROOT,capture_output=True,text=True,env={**environment(),'ASAN_OPTIONS':'halt_on_error=1','SUNSTONE_DUPLEX_PCM':str(out/'duplex-copied.pcm')})
     log=out/(name+'.log')
     if log.exists():
         prior=out/'prior'/hashlib.sha256(log.read_bytes()).hexdigest()/log.name;prior.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(log,prior)

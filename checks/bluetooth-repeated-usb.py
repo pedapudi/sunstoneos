@@ -9,7 +9,7 @@ def module(n,p):
 p=argparse.ArgumentParser(description=__doc__)
 for n in ('image','recognizer','output'):p.add_argument('--'+n,type=Path,required=True)
 p.add_argument('--msbc',action='store_true',help='Select mode3 with codec-bound version2 responses')
-p.add_argument('--host-case',action='append',choices=['host-two-results','host-backlog','host-journal-before-ack','host-wrong-session','host-sample-gap','host-missing-disconnect','host-packet-read','host-wrong-codec','host-fallback'])
+p.add_argument('--host-case',action='append',choices=['host-two-results','host-backlog','host-journal-before-ack','host-wrong-session','host-sample-gap','host-missing-disconnect','host-packet-read','host-wrong-codec','host-fallback','host-reopen','host-codec-reopen','host-audio-regression','host-service-change','host-codec-same-generation','host-copy-generation'])
 p.add_argument('--case',action='append',choices=['two-results','early-ack','stale-ack','revoked-copy','terminal-count-order','finished-status-order'])
 a=p.parse_args();out=a.output;out.mkdir(parents=True,exist_ok=False)
 base=module('bluetooth_usb_base_check',ROOT/'checks/bluetooth-usb-native.py');base.ELF_HASH=hashlib.sha256(a.image.read_bytes()).hexdigest()
@@ -23,9 +23,17 @@ observe=module('repeated_usb_observe',ROOT/'apps/bluetooth/observe.py')
 def packet(op,ticket=0,offset=0,count=0):return struct.pack('<BBHIQ',0x80,op,count,offset,ticket)
 def adopt(m,n):
  source=a.recognizer
- if m.variant=='host-fallback':source=Path.home()/'.cache/sunstoneos/evidence/bluetooth-repeated-recognition-20261019/recognizer'
+ if m.variant=='host-fallback' or (n==2 and m.variant in ('host-codec-reopen','host-codec-same-generation')):source=Path.home()/'.cache/sunstoneos/evidence/bluetooth-repeated-recognition-20261019/recognizer'
  data=(source/f'segment-{n}.txt').read_bytes();snapshot=bytearray((source/f'segment-{n}.snapshot.bin').read_bytes());assert len(snapshot)==176
  if m.variant=='host-fallback':struct.pack_into('<I',snapshot,44,1)
+ # Adopt actual recognizer bytes; model only the service/audio lifetime that
+ # the controller and headset fixture independently establish.
+ if m.variant in ('host-reopen','host-codec-reopen','host-copy-generation'):
+  struct.pack_into('<Q',snapshot,24,n)
+ if m.variant=='host-audio-regression':struct.pack_into('<Q',snapshot,24,3-n)
+ if m.variant=='host-service-change' and n==2:struct.pack_into('<Q',snapshot,16,2)
+ if m.variant in ('host-codec-reopen','host-codec-same-generation') and n==2:
+  struct.pack_into('<I',snapshot,44,1)
  assert m.word(m.variables['terminal']['address'])==0
  m.cpu.mem_write(m.service+m.sf['log'],data);m.cpu.mem_write(m.service+m.sf['segment'],bytes(snapshot));m.write(m.service+m.sf['used'],len(data),4)
  m.write(m.voice+m.vf['segment_tail'],n,8);m.write(m.variables['terminal']['address'],1);return data
@@ -120,6 +128,7 @@ if a.host_case:
    if name=='host-wrong-session':frame[32]^=1
    if name=='host-sample-gap':frame[104]^=1
    if name=='host-wrong-codec' and ticket:frame[124]=1
+   if name=='host-copy-generation' and op==1:frame[88]^=2
    return bytes(frame)
   if name=='host-backlog':m.write(m.voice+m.vf['segment_flags'],4)
   def save():
@@ -143,8 +152,21 @@ if a.host_case:
    results[name]={'passed':True,'requested_read_sizes':device.reads,'first_packet_bytes':512}
    (out/'host-results.json').write_text(json.dumps({'image_sha256':base.ELF_HASH,'physical_access':False,'cases':results},indent=2)+'\n');continue
   try:host.capture_repeated(exchange,session,profile,dest,record,save,100.4 if name=='host-missing-disconnect' else 130,2,clock.now,clock.pause)
-  except (ValueError,RuntimeError,OSError):assert name not in ('host-two-results','host-backlog'),name
-  else:assert record['bluetooth_result']==('observed-failure' if name in ('host-backlog','host-fallback') else 'observed-success')
+  except (ValueError,RuntimeError,OSError) as error:
+   assert name in ('host-journal-before-ack','host-wrong-session','host-sample-gap',
+      'host-missing-disconnect','host-wrong-codec','host-audio-regression','host-service-change','host-codec-same-generation','host-copy-generation'),name
+   expected={'host-audio-regression':'Repeated headset audio generation regressed.',
+      'host-service-change':'Repeated headset service identity changed.',
+      'host-codec-same-generation':'Repeated headset codec changed within one audio generation.',
+      'host-copy-generation':'Immutable repeated transcript changed during copy.'}
+   if name in expected:assert str(error)==expected[name],str(error)
+   record['fixture_expected_refusal']=str(error)
+  else:
+   assert name not in ('host-audio-regression','host-service-change','host-codec-same-generation','host-copy-generation'),name
+   assert record['bluetooth_result']==('observed-failure' if name in ('host-backlog','host-fallback','host-codec-reopen') else 'observed-success')
+   if name=='host-reopen':assert [t['audio'] for t in record['transcripts']]==[1,2]
+   if name=='host-codec-reopen':
+    summary=record['repeated_recognition'];assert summary['codecs']==[1,2] and summary['codec']==0 and not summary['wideband'] and summary['wideband_fallback']
   if name=='host-fallback':assert not record['repeated_recognition']['wideband'] and record['repeated_recognition']['wideband_fallback']
   if name=='host-journal-before-ack':assert 2 not in requests and m.word(m.variables['terminal']['address'])==1
   if name=='host-missing-disconnect':assert record['bluetooth_result']!='observed-success' and not m.word(m.voice+m.vf['segment_disconnected'])

@@ -517,10 +517,10 @@ atomic compare-and-exchange. It passes the published-segment count it last
 observed, and the change is refused when a segment was published since: the
 word is read before that count, so a 0 stored at the end of an activation is
 always seen together with that activation's segment. The task changes ACCEPT or START to ACTIVE when
-recognition commits, after the UART accepts the `OK` or `+BVRA: 1`. The first
-activation opens the audio link, which then stays open; the mode-3 CVSD retry
-also happens within it. An activation is admitted only while the commit can
-complete before the supervised capture window ends. The first link open is
+recognition commits, after the UART accepts the `OK` or `+BVRA: 1`. Each
+activation opens an audio link; the mode-3 CVSD retry also happens within it.
+An activation is admitted only while the commit can complete before the
+supervised capture window ends. Each link open is
 bounded by two line timeouts (one AG response and one codec reselection) plus
 two response timeouts (the link open and its CVSD retry), capped in the
 supervised lifetime by the close bound. A stop at any stage from idle through
@@ -532,19 +532,26 @@ An activation ends when its segment holds the profile's sample count, at most
 the largest even byte count, if any, stores 0 in the word with release and
 notifies the consumer's task. After a full segment it sends `+BVRA: 0` at the
 first poll with the serial stream free; a new activation waits for that
-response to commit. A headset cancel therefore never restarts capture; the
-consumer chooses the next request. The recognizer in this image requests
+response to commit and the audio disconnect to complete. A headset cancel
+therefore never restarts capture; the consumer chooses the next request. The recognizer in this image requests
 START once, so an unattended supervised session records one segment and
 exercises both `+BVRA` responses, then requests ACCEPT whenever the word is 0.
 The host tool therefore defaults to one transcript for modes 2 and 3.
 
-Between activations the task releases each received packet without copying,
-decoding or hashing it. Silence transmission continues, each packet bounded by
-the profile's response timeout and the capture window. CVSD packets may have
-odd lengths, so a packet can split a sample. The task counts the bytes
-released since the link opened, and an activation that starts after an odd
-count skips one byte. An mSBC activation skips to the next frame boundary;
-see the wideband section below.
+After an activation, the task completes `+BVRA: 0`, drains any active UART
+transmission and requests synchronous disconnect. It releases received packet
+tails and terminal TX results under the closing generation. Only a matched
+successful local disconnect and drained copied records return the task to
+idle. A pending START or ACCEPT waits; headset activation is refused during
+close. A stop during close converts it to terminal completion within the same
+close deadline. A timeout retains the lifetime.
+
+Idle sends no synchronous packets. The next activation reuses the existing
+HFP/ACL connection through [the bounded reopen API](bluetooth-audio.md#the-owner-task-retains-the-complete-lifetime).
+It assigns a fresh audio generation and resets sample parity, mSBC framing,
+silence offsets and cadence. The selected codec remains valid on the same
+service connection until an AT+BAC change invalidates it. Modes 4 and 5 retain
+continuous playback and duplex capture.
 
 ### Two slots, borrowed in place
 
@@ -645,10 +652,15 @@ when a capture stop flag is set. Authorization failure suppresses its metadata
 and body. Finished means that disconnect is confirmed and all accepted inputs
 have passed through recognition and their transcript acknowledgments.
 The host stores each complete transcript and its digest before acknowledging it.
-It requires matching session/profile identities, consecutive tickets, a first
-sample equal to the input samples of all earlier transcripts, an input sample
-count of at most the profile's, confirmed disconnect, and equal accepted/consumed/acknowledged
-counts.
+It requires matching session/profile and firmware/UART/ACL identities and
+consecutive tickets. Each first sample must equal the input samples of all
+earlier transcripts, and each input sample count must fit the profile.
+Completion requires confirmed disconnect and equal accepted, consumed and
+acknowledged counts. Audio generations may increase between transcripts. Codec and sample
+rate must remain stable within each generation, and each copied transcript
+retains its complete identity. The terminal result lists the observed codecs;
+`codec` is zero for a mixed set and `wideband` is true only when every segment
+used mSBC. A CVSD segment in a requested wideband session reports fallback.
 
 ### Software evidence and remaining qualification
 
@@ -658,8 +670,8 @@ a modeled headset and controller. Its cases cover:
 
 - the headset button and its refusals, owner-started activations with both
   `+BVRA` responses, and a headset without voice recognition;
-- early ends that publish the even prefix or nothing, odd packets released
-  between activations, and a request made before `+BVRA: 0` commits;
+- early ends that publish the even prefix or nothing, sample alignment on
+  reopened links, and a request made before `+BVRA: 0` commits;
 - stops before the AG is ready, while idle with a response in flight, during
   the link open and during capture, and the capture window while idle;
 - backlog, loss, revocation, late disconnect, resident activations and an
@@ -696,10 +708,26 @@ transaction was performed. Physical headset operation, the headset's button
 behavior, receive-service bounds, recognition within the session deadline and
 wideband mSBC remain unqualified.
 
-The audio link stays open from the first activation because the
-synchronous-audio provider cannot yet reopen a link to the same peer. For
-CVSD that costs about 34,100 UART bytes per second in each direction and the
-radio's eSCO slots while no activation runs.
+Focused close/reopen evidence is preserved at
+`~/.cache/sunstoneos/evidence/radio-audio-idle-1026/`. Over the same 900,864 µs
+idle interval, the CVSD fixture's synchronous TX payload decreased from
+14,340 bytes to zero. The mSBC fixture also sends zero bytes after confirmed
+idle-close. These counts measure modeled UART submissions, not radio power.
+The checks cover two generations of byte-exact CVSD capture and mSBC silence PCM, a pending
+START, stops during close and reopen, close timeout, codec reselection, and
+continuous playback/duplex behavior. Native USB-produced transcripts exercise
+ordered generations, immutable service identity and per-generation codecs.
+The six focused host cases passed against the completed mSBC image; their
+records are in `host-final-1028/` and `host-copy-final-1028/` under the same
+evidence directory.
+
+The first START commits in five owner polls; setup submission follows within
+four. A START queued during close reaches capture ten polls after confirmed
+close. Codec reselection on reopen takes fifteen polls from recognition commit
+to setup submission, including the drained control traffic. The CVSD OS
+radio/headset image adds 1,664 text bytes with unchanged data and BSS against
+the accepted startup image. Native OS builds cover CVSD and mSBC; no task,
+allocation or PCM copy is added by close/reopen.
 
 ## Wideband capture through the existing recognizer
 
@@ -775,16 +803,14 @@ CRC error, unexpected sequence, reported HCI loss or later framing error stops
 capture without publishing its partial PCM segment. The implementation does not
 reuse decoder state after a failed candidate or conceal missing samples.
 
-Between activations no packet reaches the decoder. Each activation starts with
-`bluetooth_msbc_resync`, which clears the partial frame, the sequence lock and
-the discard count. Each decoded frame records where the next frame starts, so
-after the first decoded frame on a link an activation skips at most 59 bytes
-to the next frame boundary and decodes from there. The first activation on a
-link uses the header search, which discards at most 59 bytes on an intact
-stream. The libsbc synthesis history is kept, so only the first decoded frame
-of a segment can carry audio from before the gap. Mode 5, with caller playback, records continuously and does
-not advertise voice recognition, because its playback pacing and cancellation
-depend on an open capture.
+Between activations no packet reaches the decoder. Each new audio connection
+starts with `bluetooth_msbc_resync`, which clears the partial frame, sequence
+lock and discard count. Its initial header search discards at most 59 bytes
+on an intact stream. The libsbc synthesis history remains allocated across
+activations, so the first decoded frame can contain history from the previous
+activation. Mode 5 records continuously and does not advertise voice
+recognition, because its playback pacing and cancellation depend on an open
+capture.
 
 H2's two-bit sequence alone cannot rule out every multiple-of-four frame loss.
 Controller packet-status reporting and the admitted receive-service bounds
