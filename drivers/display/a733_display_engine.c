@@ -182,9 +182,10 @@ int a733_de_replay_request(struct a733_de *d,unsigned slot,uint64_t f,uint64_t d
 }
 int a733_de_replay_writable(const struct a733_de *d,unsigned slot,uint64_t f)
 {
- if(!d||!d->initialized||d->entered||d->state!=A733_DE_ARMED||!d->config.ops.rcq_submit)return 0;
- uint64_t ring=0;unsigned n=ring_slots(&d->config,&d->plan,&ring);
- return n&&f==ring&&slot<n&&slot!=d->scanout_slot;
+ /* RCQ finish, address readback and a later frame-end do not establish
+  * completion of old pixel reads or prefetch. No independent proof is
+  * available in this binding. Keep all published pixels immutable. */
+ (void)d;(void)slot;(void)f;return 0;
 }
 static int replay_poll(struct a733_de *d)
 {
@@ -213,9 +214,8 @@ static int replay_poll(struct a733_de *d)
  if(step==13){if(!(v&4))return 1;d->replay_rcq_done=d->last_now;}
  if(step==14&&v!=(uint32_t)(d->config.surface.device_address+d->replay_slot*d->replay_frame_bytes)){fail(d,A733_DE_VERIFY);return 0;}
  if(step==17&&(v&1)){d->step=16;return 1;}
- /* Every frame after a frame-end latched after the post-RCQ clear fetches
-  * from the new address, whether the address applied at once or at the
-  * boundary that frame-end marks, so the previous slot leaves scanout. */
+ /* Record the selected address and later frame boundary. These observations
+  * do not prove that outstanding reads of the previous slot have completed. */
  if(step==18){if(!(v&1))return 1;d->raw_status=v;d->replay_frame_end=d->last_now;
   d->scanout_slot=d->replay_slot;++d->presented;d->state=A733_DE_ARMED;}
  ++d->step;return 1;

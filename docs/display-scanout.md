@@ -397,3 +397,67 @@ reviews retained layout on the selected ELF. Unchanged startup, version 1 and
 provider evidence is reused. No physical display, DMA confinement, visible
 output or retirement is qualified. No panel is selected or attached. Arbitrary
 new-frame streaming and safe old-buffer recycling remain explicit requirements.
+
+
+## Source gap blocks arbitrary-frame streaming
+
+Arbitrary-frame upload and old-slot reuse remain unsupported. The native input
+path commits each of two sealed hashes once, and USB completion restores only
+presentation-request credit. It grants no pixel-write permission. The default
+host order remains 0,1,0. RCQ completion and a later DE frame-end are reported
+observations; they do not prove that the old pixels are no longer being fetched.
+The core retirement query therefore refuses every slot.
+
+The pinned references below are already recorded in `sources.lock.json`.
+Their cached bytes matched the recorded SHA256 values during the 2026-10-28
+audit. Linux sources use revision
+`2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f`; they are host references, not
+additional native runtime dependencies.
+
+- A733 User Manual V1.00, section 14.3, printed pages 641–642
+  (`a733-user-manual-1.00`), describes DE features and RCQ support. It gives no
+  layer-address latch timing or pixel-read/prefetch completion rule.
+- `de_top.c`, `de_top_check_display_rcq_update_finish_with_clear()`, reports
+  RCQ register-update finish. `sunxi_de.c`, `sunxi_de_atomic_flush()`, waits
+  for that update. Neither function observes outstanding old-frame reads.
+- `sunxi_drm_crtc.c`, `sunxi_crtc_event_proc()`, processes the output timing
+  interrupt and calls `sunxi_crtc_finish_page_flip()` only when DE is not busy.
+  `sunxi_de_query_de_busy()` uses the DE busy status for DE352. The timing-line
+  alternative is selected by DE210, not DE352. Native replay observes DE
+  frame-end without this output-interrupt and idle combination. Adding that
+  combination alone would still need a source-backed pixel-read completion rule.
+- `drm_atomic_helper.c`, `drm_atomic_helper_wait_for_vblanks()` and
+  `drm_atomic_helper_wait_for_flip_done()`, document waiting before old
+  framebuffer cleanup. The effective BSP
+  `sunxi_drm_atomic_helper_commit_tail()` in `sunxi_drm_drv.c` comments out
+  its vblank wait and then calls `drm_atomic_helper_cleanup_planes()`.
+  The generic helper contract cannot establish the effective BSP's retirement.
+
+A future producer needs a documented event that excludes all old-slot pixel
+reads, including prefetch and outstanding memory transactions. It must bind
+that event to the precise completed frame identity before granting a new upload.
+An unchanged READ IOMMU mapping confines addresses but cannot distinguish two
+successive pixel contents at the same address. The native uncached pool's
+publication barrier establishes visibility, not retirement. Command pages must
+remain immutable, and ambiguous completion must retain all published pixels.
+
+The bounded design would reuse the existing two-slot bank, single outstanding
+presentation and copied USB response. It needs one upload copy and one digest
+read per padded frame, with the existing 512-byte fragment buffer. It needs no
+extra framebuffer, display server or command-page mutation. These are design
+budgets; no streaming path is enabled and no streaming throughput is measured.
+The conservative query change adds no allocation, copy, MMIO, interrupt or queue
+operation. Immutable replay retains its existing bounded polling and deadlines.
+No panel is selected or attached, so physical pixels, electrical behavior and
+retirement remain unqualified.
+
+
+The focused source/model check and freestanding AArch64 compile pass under
+`~/.cache/sunstoneos/evidence/sol-dsi-stream-1028/`. The model cycles immutable
+contents through two to four slots and refuses rewriting before, during and
+after replay, after stop, and after faults. The AArch64 object text decreases
+from 6,224 to 5,972 bytes, with zero initialized data and BSS in both objects.
+An independent Sol 6.1 review found no substantive issue. No native application
+caller uses the retirement query; the existing frozen DSI application evidence
+remains evidence for immutable replay. This check does not establish physical
+scanout or retirement.

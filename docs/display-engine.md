@@ -212,8 +212,8 @@ therefore fixes the frame size before the engine starts:
 - Zero selects the original two-frame bank, whose layout is unchanged. The
   frame size is then the mapping size minus 8 KiB, divided by two.
 
-`a733_de_replay_request()` and `a733_de_replay_writable()` accept only that
-frame size and refuse every other reading of the mapping. The engine has no CPU
+`a733_de_replay_request()` accepts only that frame size and refuses every
+other reading of the mapping. The engine has no CPU
 view of the ring, so the owner's admission callback must check the published
 command pages with `a733_de_ring_valid()` for the configured frame size before
 `START`.
@@ -245,50 +245,31 @@ the readback after the post-RCQ clear sends the operation back to that clear.
 Frame-end therefore counts only after a readback has shown it clear, and a flag
 that never clears ends at the request deadline as a time fault.
 
-### Recycling a frame slot after it leaves scanout
+### Published frames remain immutable until retirement can be proved
 
-`a733_de_replay_writable()` reports whether the owner may write new pixels
-into a slot. It returns 1 only when the DE is `ARMED`, no request is pending,
-the frame size equals the configured frame size, and the slot differs from the
-scanned slot. After `START` the scanned slot is slot 0. A replay changes the
-scanned slot only when it completes: RCQ finish, a readback of the new layer
-address, and a frame-end latched after a later clear. The DE either applies
-the new address at once or latches it at the frame boundary that this
-frame-end marks. In both cases every frame after the frame-end fetches from
-the new address, so the previous slot is no longer read. A producer can
-therefore stream by writing a slot that the function reports as writable,
-publishing it, and requesting its replay. Only one replay can be pending, and
-no slot is writable while it is pending. Between presentations, a ring of
-three or four slots lets the producer fill more than one slot ahead, so the
-next frame is ready when a presentation completes.
+`a733_de_replay_writable()` always returns zero. RCQ finish establishes a
+register update. The subsequent address readback and DE frame-end establish
+observations of the controller. They do not establish completion of outstanding
+pixel reads or prefetch from the previous slot. Every published frame therefore
+remains immutable throughout replay, `STOP` and faults. The selected slot records
+the completed presentation request; it does not grant permission to rewrite any
+other slot.
 
-Publication is the writer's duty. An uncached mapping needs a completed
-barrier before the replay request; the replay's own barrier precedes RCQ
-submission. A cached alias needs a clean to the point of coherency.
-
-Recycling covers pixel contents only. The command pages stay immutable, and
-the ring stays mapped READ, owned and retained after `STOP` and after every
-fault. `STOP`, a pending request, any fault and a frame size other than the
-configured one all make every slot unwritable. The retirement condition
-assumes that the DE latches the layer address at a frame boundary or applies
-it at once. Both cases leave the old slot unread after the observed frame-end,
-but physical qualification of that assumption is pending. A wrong condition
-would show a torn frame; it cannot release memory to another owner.
-
-This frame-end condition does not prove that the DE has stopped all memory
-access, and it is not used for `STOP`. The pinned Linux `sunxi_de_disable()`
-clears the output enable and gates the clocks without waiting for a drain
-signal, and the manual's DE chapter provides no drain mechanism. The ring
-therefore stays retained after `STOP` until an independent drain proof exists.
+The [DSI source audit](display-scanout.md#source-gap-blocks-arbitrary-frame-streaming)
+records the missing retirement condition. The ring stays mapped READ, owned and
+retained. An uncached publication barrier or a cached clean to the point of
+coherency establishes visibility of new data; neither establishes completion of
+old device reads. Independent transaction-drain evidence also remains required
+for `STOP`.
 
 Replay source authority remains Linux revision
 `2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f`: `de_top.c`, `de_base.h`,
 `sunxi_de.c`, `sunxi_drm_crtc.c`, `sunxi_drm_drv.c` and `drm_atomic_helper.c`,
 with hashes in `sources.lock.json`. Failed admission, uncertain submission,
 readback mismatch, stale completion or deadline retains the bank and resources.
-The host model in `checks/a733-display-engine.c` streams new contents through
-two-, three- and four-slot rings and checks slot retirement after each
-completed replay. It also checks these refusals:
+The host model in `checks/a733-display-engine.c` replays immutable contents
+through two-, three- and four-slot rings. It checks that no lifecycle state
+grants rewrite permission, including successful replay. It also checks these refusals:
 
 - invalid slot counts and ring geometry at initialization;
 - `START` over command pages that do not match the configured ring;
@@ -299,5 +280,5 @@ completed replay. It also checks these refusals:
 
 No application yet writes recycled slots: the GPU-to-HDMI and DSI
 applications still present sealed two-frame banks with a zero
-`ring_frame_bytes`. A streaming producer, physical scanout and the retirement
-assumption above remain unqualified.
+`ring_frame_bytes`. A streaming producer, source-backed retirement and physical
+scanout remain outstanding.

@@ -98,7 +98,7 @@ int a733_de_request(struct a733_de *, enum a733_de_action, uint64_t deadline);
  * REPLAY (see below) submits one RCQ update, waits for RCQ_FINISH, verifies
  * the layer address and then waits for a frame-end latched after a cleared
  * and read-back status. Interrupts stay disabled. No vblank accounting or
- * DMA-drain claim; a733_de_replay_writable() reports slots that left scanout. */
+ * DMA-drain claim; published pixel contents remain immutable. */
 enum a733_de_state a733_de_poll(struct a733_de *);
 /* Optional closed replay ring: [F0]..[Fn-1][4KiB RCQ0]..[4KiB RCQn-1] with
  * 2 <= n <= A733_DE_RING_SLOTS; the surface mapping is exactly n*(F+4096).
@@ -120,16 +120,10 @@ int a733_de_ring_valid(const void *commands,uint64_t bank_iova,uint64_t frame_by
 int a733_de_replay_build(void *commands,uint64_t bank_iova,uint64_t frame_bytes);
 int a733_de_replay_valid(const void *commands,uint64_t bank_iova,uint64_t frame_bytes);
 int a733_de_replay_request(struct a733_de *,unsigned slot,uint64_t frame_bytes,uint64_t deadline);
-/* 1 when the owner may rewrite this slot's pixels: the DE is ARMED with no
- * request pending, and the slot is not the one the last completed replay (or
- * START, for slot 0) selected. Completion requires RCQ finish, address
- * readback and a frame-end latched after a later clear; every frame after
- * that frame-end fetches from the new address, whether the address applied at
- * once or at that frame boundary. Only pixel contents are recycled; the ring
- * stays mapped, owned and retained. The writer publishes the slot (barrier
- * for an uncached mapping, clean to the point of coherency for a cached alias)
- * before its replay request. STOP, a pending request, any fault or a frame
- * size other than the configured F returns 0; no transition after STOP makes
- * a slot writable. */
+/* Reserved retirement query: always returns 0. RCQ finish, layer-address
+ * readback and a later DE frame-end do not establish that outstanding pixel
+ * reads or prefetch from a previous slot have completed. No independent
+ * retirement proof is available. All published pixels and command pages stay
+ * immutable, mapped, owned and retained, including after STOP and faults. */
 int a733_de_replay_writable(const struct a733_de *,unsigned slot,uint64_t frame_bytes);
 #endif

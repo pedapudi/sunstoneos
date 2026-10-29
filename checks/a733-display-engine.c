@@ -13,7 +13,7 @@ static struct model {
     /* Replay model: free-running FRAME_END every frame_period status reads,
      * optionally ignored W1C clears, and RCQ completion on submission. */
     unsigned replay, status_reads, frame_period, stuck_clear, polls, races4, races17;
-    /* Ring model: the content stamp a producer last wrote into each slot and
+    /* Ring model: each slot has an immutable content stamp and
      * the stamp of the slot the RCQ selected. */
     uint32_t stamp[A733_DE_RING_SLOTS], shown;
     /* Published command pages that admission checks before START. */
@@ -194,6 +194,7 @@ static int ring_init(struct a733_de *d,uint64_t mapped,uint64_t frame,int (*subm
 static void ring_setup(struct a733_de *d,uint64_t mapped,uint64_t frame)
 {
     assert(ring_init(d,mapped,frame,rcq_submit));drive(d);assert(d->state==A733_DE_READY);
+    for(unsigned slot=0;slot<A733_DE_RING_SLOTS;slot++)m.stamp[slot]=slot+1;
     assert(a733_de_request(d,A733_DE_START,m.now+10000));drive(d);assert(d->state==A733_DE_ARMED);
     m.inactive=0;m.replay=1;
 }
@@ -257,41 +258,41 @@ static void rings(void)
     assert(!a733_de_ring_build(pages,UINT64_C(0x100000000)-3*(f+4096)+4096,f,3));
     assert(a733_de_ring_build(pages,UINT64_C(0x100000000)-3*(f+4096),f,3));
 
-    struct a733_de d;
+    struct a733_de d={0};
+    assert(!a733_de_replay_writable(NULL,0,f) && !a733_de_replay_writable(&d,0,f));
     /* The two-slot bank fixed by its mapping, and declared rings of two to
      * four slots. */
     for(unsigned k=1;k<=A733_DE_RING_SLOTS;k++){
         unsigned n=k<2?2:k;
         ring_setup(&d,n*(f+4096),k<2?0:f);m.frame_period=3;
-        /* START scans slot 0; every other slot is free and none beyond n. */
-        assert(d.scanout_slot==0 && !d.presented && writable(&d,f)==((1u<<n)-1)-1);
+        /* START selects slot 0. No published slot may be rewritten. */
+        assert(d.scanout_slot==0 && !d.presented && !writable(&d,f));
         assert(!writable(&d,f+4096) && !writable(&d,f-4096) && !writable(&d,2560*720-4096));
-        uint32_t sequence=0;unsigned previous=0;
+        unsigned previous=0;
         for(unsigned i=0;i<3*n;i++){
             unsigned next=(previous+1)%n;
-            assert(a733_de_replay_writable(&d,next,f));
-            m.stamp[next]=++sequence; /* New contents for a retired slot. */
+            assert(!a733_de_replay_writable(&d,next,f));
             assert(!a733_de_replay_request(&d,n,f,m.now+10000));
             assert(a733_de_replay_request(&d,next,f,m.now+10000));
             assert(!writable(&d,f)); /* Nothing is writable while a replay is pending. */
             a733_de_poll(&d);assert(d.state==A733_DE_PENDING && !writable(&d,f));
             drive(&d);
             assert(d.state==A733_DE_ARMED && d.error==A733_DE_OK && d.replay_slots==n);
-            assert(d.replay_frame_end>d.replay_rcq_done && m.shown==sequence);
+            assert(d.replay_frame_end>d.replay_rcq_done && m.shown==next+1);
             assert(m.regs[0x221010/4]==(uint32_t)(base+next*f) && d.scanout_slot==next && d.presented==i+1);
-            assert(writable(&d,f)==(((1u<<n)-1)&~(1u<<next)));
+            assert(!writable(&d,f));
             previous=next;
         }
-        /* Replaying the scanned slot again keeps every other slot free. */
+        /* Replaying the selected slot still grants no rewrite permission. */
         assert(a733_de_replay_request(&d,previous,f,m.now+10000));drive(&d);
-        assert(d.state==A733_DE_ARMED && writable(&d,f)==(((1u<<n)-1)&~(1u<<previous)));
+        assert(d.state==A733_DE_ARMED && !writable(&d,f));
         /* A frame size that does not describe the presented ring is refused,
          * including a two-slot reading of the four-slot mapping whose slot 0
          * would contain the scanned slot 1. */
         assert(!writable(&d,f+4096) && !a733_de_replay_request(&d,0,f+4096,m.now+10000));
         if(n==4){
             assert(a733_de_replay_request(&d,1,f,m.now+10000));drive(&d);
-            assert(writable(&d,f)==13 && !writable(&d,2*f+4096));
+            assert(!writable(&d,f) && !writable(&d,2*f+4096));
         }
         /* STOP keeps every slot retained. */
         m.dsi_stopped=1;m.replay=0;
@@ -315,20 +316,20 @@ static void rings(void)
      * the two-slot reading, whose slot 0 would cover command pages. */
     const uint64_t g=2*f+4096;
     ring_setup(&d,4*(f+4096),f);
-    assert(writable(&d,f)==14 && !writable(&d,g));
+    assert(!writable(&d,f) && !writable(&d,g));
     for(unsigned slot=0;slot<2;slot++)assert(!a733_de_replay_request(&d,slot,g,m.now+10000));
     /* A two-slot bank refuses the four-slot reading, whose command pages
      * would lie inside frame 1, whether the bank is declared or fixed by
      * its mapping. */
     for(unsigned declared=0;declared<2;declared++){
         ring_setup(&d,4*(f+4096),declared?g:0);
-        assert(!writable(&d,f) && writable(&d,g)==2);
+        assert(!writable(&d,f) && !writable(&d,g));
         for(unsigned slot=0;slot<4;slot++)assert(!a733_de_replay_request(&d,slot,f,m.now+10000));
         m.frame_period=3;assert(a733_de_replay_request(&d,1,g,m.now+10000));drive(&d);
         assert(d.state==A733_DE_ARMED && d.replay_slots==2 && m.regs[0x221010/4]==(uint32_t)(base+g));
-        assert(writable(&d,g)==1 && !writable(&d,f) && !a733_de_replay_request(&d,2,f,m.now+10000));
+        assert(!writable(&d,g) && !writable(&d,f) && !a733_de_replay_request(&d,2,f,m.now+10000));
     }
-    /* An uncertain replay retains every slot: the old slot never retires. */
+    /* An uncertain replay grants no rewrite permission. */
     ring_setup(&d,3*(f+4096),f);m.frame_period=1;
     assert(a733_de_replay_request(&d,1,f,m.now+1000));drive(&d);
     assert(d.state==A733_DE_FAULT_RETAINED && d.error==A733_DE_TIME && !d.presented && d.scanout_slot==0 && !writable(&d,f));
@@ -343,6 +344,6 @@ int main(void)
     images();puts("four full source image/lifecycle comparisons and address/timing rejection cases passed");
     faults();puts("ownership, active RCQ, bypass, uncertain write, readback, deadline and reentry cases passed");
     replays();puts("replay with free-running frame-end, persistent frame-end, ignored clear and stale RCQ_FINISH cases passed");
-    rings();puts("two- to four-slot ring streaming, slot retirement, configured ring geometry, alternative-reading and fault/stop refusal cases passed");
+    rings();puts("two- to four-slot immutable replay, rewrite refusal, configured ring geometry, alternative-reading and fault/stop refusal cases passed");
     return 0;
 }
