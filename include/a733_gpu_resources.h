@@ -15,6 +15,9 @@
 #define A733_GPU_RESOURCE_MBUS      (1u << 5)
 #define A733_GPU_RESOURCE_LOCAL     (1u << 6)
 #define A733_GPU_RESOURCE_ALL       127u
+/* NPU AHB/MBUS master gates; separate from the GPU AHB/MBUS bits. */
+#define A733_GPU_RESOURCE_NPU_FABRIC (1u << 7)
+#define A733_GPU_RESOURCE_SUPPORTED (A733_GPU_RESOURCE_ALL | A733_GPU_RESOURCE_NPU_FABRIC)
 /* The GPU controller's LOCAL set: its core runs from PLL_GPU0 under the LOCAL
  * lease, so it holds no PERI0 parent (docs/designs/gpu-vendor-default.md).
  * PARENT stays for the NPU and other PERI0 users. */
@@ -78,7 +81,7 @@ int a733_gpu_resources_init(struct a733_gpu_resource_manager *,
 /* Reserve requested resources, adding oscillator dependencies. LOCAL requires
  * ALL or A733_GPU_RESOURCE_GPU and is exclusive. Other stable leases may share
  * matching resources. Verify inherited clocks/rail and enable requested
- * PCK/AHB/MBUS gates. A requested parent must already be integer-mode
+ * PCK/AHB/MBUS gates, including the NPU pair under NPU_FABRIC. A requested parent must already be integer-mode
  * 400 MHz, and a requested rail DCDC4 enabled at the GPU
  * operating point's 960 mV (a733_gpu_opp.h), which the GPU platform sets.
  * Only LOCAL ownership permits enabling GPU bus gates; shared requests may

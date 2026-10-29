@@ -68,6 +68,8 @@ static struct {
      * them (PLL_NPU reads without the register lock), the owner's register
      * reads during a step, and counter reads. */
     unsigned reads,lock_samples,owner_reads,clock_reads,pck_reads;
+    unsigned fabric_reads,fabric_updates,fabric_fail_update,fabric_bad_readback,fabric_expire;
+    uintptr_t fabric_order[3];
     uintptr_t last_write;
     unsigned register_busy,expire_at_write; /* Stopped-retune fault injection only. */
 } r;
@@ -149,6 +151,7 @@ static int gpu_now(void *v,uint64_t *out){assert(v==&r);return pmic_model_now(&m
 static int gpu_read(void *v,uintptr_t a,uint32_t *out)
 {
     assert(v==&r);
+    if(a==CCU+0x5c0 || a==CCU+0x5e0)++r.fabric_reads;
     if(a==0x07090160)*out=r.osc;
     else if(a==RCCU_BASE+0x1ac)*out=d.rccu_1ac;
     else if(a==CCU+0x5c0)*out=d.ccu_5c0;
@@ -156,7 +159,17 @@ static int gpu_read(void *v,uintptr_t a,uint32_t *out)
     else *out=*word(a);
     return 1;
 }
-static int gpu_update(void *v,uintptr_t a,uint32_t q,uint32_t x,uint64_t t){(void)v;(void)a;(void)q;(void)x;(void)t;assert(0);return 0;}
+static int gpu_update(void *v,uintptr_t a,uint32_t q,uint32_t x,uint64_t t)
+{
+    assert(v==&r && bootstrap_running && !r.held && m.now<t && !q);
+    assert((a==CCU+0x5c0 && x==(1u<<6)) || (a==CCU+0x5e0 && x==(1u<<18)) ||
+           (a==RCCU_BASE+0x1ac && x==1));
+    assert(enter(v,t)==1);uint32_t *w=level_word(a);assert(w);
+    unsigned at=++r.fabric_updates;assert(at<=3);r.fabric_order[at-1]=a;
+    if(r.fabric_bad_readback!=at)*w|=x;
+    if(r.fabric_expire==at)m.now=t;
+    leave(v);return r.fabric_fail_update!=at;
+}
 static int gpu_rail(void *v,struct a733_gpu_resource_rail *o,uint64_t t){(void)v;(void)o;(void)t;assert(0);return 0;}
 static void npu_registers(void)
 {
@@ -581,10 +594,59 @@ static int restart(void)
     puts("PASS same-lifetime NPU restart: retained identities, no PCK/PLL writes, local-open and five retained failures");
     return 0;
 }
+static int cold_fabric(void)
+{
+    const uint32_t ahb=1u<<6,mbus=1u<<18;
+    /* Closed GPU gates and unrelated fields must survive the exact NPU OR.
+     * Include sparse words: no vendor key-pattern inheritance is required. */
+    for(unsigned variant=0;variant<5;++variant){
+        setup();d.ccu_5c0=variant==4 ? 0 : 0xa4000301;d.ccu_5e0=variant==4 ? 0 : 0x92000802;
+        if(variant&1)d.ccu_5c0|=ahb;
+        if(variant&2)d.ccu_5e0|=mbus;
+        d.rccu_1ac&=~1u;
+        const uint32_t before_ahb=d.ccu_5c0,before_mbus=d.ccu_5e0;
+        struct run b=boot(200,1,0);
+        assert(b.result==A733_NPU_PLATFORM_READY && tokens_held());
+        assert(d.ccu_5c0==(before_ahb|ahb) && d.ccu_5e0==(before_mbus|mbus));
+        assert(!(d.ccu_5c0&(1u<<7)) && !(d.ccu_5e0&(1u<<16)));
+        unsigned expected=3-!!(before_ahb&ahb)-!!(before_mbus&mbus);
+        assert(r.fabric_updates==expected && r.fabric_order[expected-1]==RCCU_BASE+0x1ac);
+        if(!(before_ahb&ahb))assert(r.fabric_order[0]==CCU+0x5c0);
+        /* A normal stopped restart adopts both gates and holds exact tokens. */
+        bootstrap_running=1;assert(a733_npu_startup_stop(&s)==A733_NPU_PLATFORM_READY);
+        unsigned writes=r.fabric_updates;
+        enum a733_npu_platform_result result=a733_npu_startup_restart(&s);
+        for(unsigned polls=0;result==A733_NPU_PLATFORM_PENDING && polls<20;++polls){m.now+=1000;result=a733_npu_startup_step(&s);}
+        assert(result==A733_NPU_PLATFORM_READY && r.fabric_updates==writes && tokens_held());bootstrap_running=0;
+    }
+    /* Partial completed writes, rejected readbacks and deadline expiry must
+     * retain the resource slot and existing exclusive NPU clock/rail tokens. */
+    for(unsigned variant=0;variant<6;++variant){
+        setup();d.ccu_5c0&=~ahb;d.ccu_5e0&=~mbus;d.rccu_1ac&=~1u;
+        unsigned at=variant%2+1;
+        if(variant<2)r.fabric_fail_update=at;
+        else if(variant<4)r.fabric_bad_readback=at;
+        else r.fabric_expire=at;
+        struct run b=boot(200,1,0);
+        assert(b.result==A733_NPU_PLATFORM_RETAINED && s.failed && !r.writes && !r.pck_reads);
+        assert(s.clock.id && s.rail.id && s.pck.token && r.fabric_updates==at);
+        assert(m.gpu.failed && m.gpu.leases[s.config.pck_client].mode==A733_GPU_RESOURCE_RETAINED);
+        assert(a733_clock_token_status(&m.clocks,&s.clock)==A733_CLOCK_OK);
+        assert(a733_rail_status(&m.rails,&s.rail)==A733_RAIL_READY);
+        struct a733_clock_token contender={0};
+        assert(a733_clock_acquire(&m.clocks,999,0,A733_CLOCK_NPU,m.now+1000,&contender)==A733_CLOCK_BUSY);
+        unsigned writes=r.fabric_updates;bootstrap_running=1;
+        assert(a733_npu_startup_restart(&s)==A733_NPU_PLATFORM_RETAINED);
+        assert(a733_npu_startup_step(&s)==A733_NPU_PLATFORM_RETAINED);
+        bootstrap_running=0;assert(r.fabric_updates==writes && !(d.rccu_1ac&1));
+    }
+    puts("PASS cold NPU fabric: five acquisitions/restarts and six retained update/readback/deadline failures; neighboring GPU gates preserved");return 0;
+}
 int main(int argc,char **argv)
 
 {
     (void)unused_boot;
+    if(argc==2 && !strcmp(argv[1],"--cold-fabric"))return cold_fabric();
     if(argc==2 && !strcmp(argv[1],"--resident-retune"))return resident_retune(0);
     if(argc==2 && !strcmp(argv[1],"--resident-retune-wait"))return resident_retune(12);
     if(argc==2 && !strcmp(argv[1],"--restart"))return restart();

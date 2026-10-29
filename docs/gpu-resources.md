@@ -120,6 +120,15 @@ implementation requires every affected non-GPU bit already set before enabling
 the GPU gate. The native update verifies that condition again while holding the
 register lock. An unsupported baseline is refused without enabling other blocks.
 
+The NPU startup uses a separate `A733_GPU_RESOURCE_NPU_FABRIC` lease bit for
+AHB master bit 6 and MBUS master bit 18. It enables that fixed pair before
+PCK access through exact-bit updates under the same register mutex. The
+manual specifies independent read/write gate fields, so this path preserves
+closed GPU gates and every unrelated bit instead of applying the broad
+reference constants. `A733_GPU_RESOURCE_ALL` remains 127 and GPU acquisitions
+do not request this NPU resource. See [NPU startup](npu-startup.md#acquire-the-npu-master-gates-before-domain-access)
+for ordering, source rationale and retained failures.
+
 Release preserves all shared gates, oscillator and PLL settings, and the
 always-on DCDC4 rail. Enabled gates remain available for the manager's OS
 lifetime. Releasing GPU-local ownership additionally verifies asserted reset,

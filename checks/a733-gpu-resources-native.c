@@ -78,9 +78,29 @@ static int fresh(void)
 unsigned native_check(void)
 {
     uint64_t token; struct a733_gpu_power_resources ready;
+    /* The NPU pair is independent of GPU gates and of the vendor's broad
+     * key patterns. Exercise the actual native allowlist and register lock. */
+    _Static_assert(A733_GPU_RESOURCE_ALL==127u,"Existing GPU mask");
+    int r=fresh();CHECK(!r);
+    const uint32_t ahb=0xa4000301,mbus=0x92000802;
+    *mmio(0x020025c0)=ahb;*mmio(0x020025e0)=mbus;
+    CHECK(a733_gpu_resources_acquire(&manager,4,A733_GPU_RESOURCE_NPU_FABRIC|A733_GPU_RESOURCE_PCK,
+        1000000,&token,&ready)==A733_GPU_RESOURCE_OK);
+    CHECK(*mmio(0x020025c0)==(ahb|(1u<<6)) && *mmio(0x020025e0)==(mbus|(1u<<18)));
+    CHECK(!reads && !opens && !bus_lock && !register_lock && !issue);
+    uint64_t guard=0;
+    CHECK(a733_gpu_resources_change(&manager,5,A733_GPU_RESOURCE_NPU_FABRIC,&guard)==A733_GPU_RESOURCE_BUSY);
+    CHECK(a733_gpu_resources_release(&manager,4,token,1000000)==A733_GPU_RESOURCE_OK);
+    CHECK(*mmio(0x020025c0)==(ahb|(1u<<6)) && *mmio(0x020025e0)==(mbus|(1u<<18)));
+    CHECK(!fresh());*mmio(0x020025c0)=ahb;*mmio(0x020025e0)=mbus;
+    CHECK(a733_gpu_resources_acquire(&manager,4,A733_GPU_RESOURCE_PCK,1000000,&token,&ready)==A733_GPU_RESOURCE_OK);
+    CHECK(*mmio(0x020025c0)==ahb && *mmio(0x020025e0)==mbus);
+    CHECK(!fresh());*mmio(0x020025c0)=ahb;fail_lock=1;
+    CHECK(a733_gpu_resources_acquire(&manager,4,A733_GPU_RESOURCE_NPU_FABRIC,1000000,&token,&ready)==A733_GPU_RESOURCE_FAULT);
+    CHECK(manager.leases[4].mode==A733_GPU_RESOURCE_RETAINED && *mmio(0x020025c0)==ahb);
     /* With TOP5 ON the GPU owner opens the closed master gates through the
      * adapter; with TOP5 OFF it leaves them (the next acquisition). */
-    int r = fresh(); CHECK(!r); *mmio(0x07065008) = 8;
+    r = fresh(); CHECK(!r); *mmio(0x07065008) = 8;
     CHECK(a733_gpu_resources_acquire(&manager, 0, A733_GPU_RESOURCE_ALL, 1000000, &token, &ready) == A733_GPU_RESOURCE_OK);
     CHECK(ready.parent_hz == 400000000 && ready.supply_uv == 960000);
     CHECK(reads == 6 && opens == 1 && closes == 1 && !bus_lock && !register_lock && !issue);

@@ -207,7 +207,8 @@ static enum a733_npu_platform_result fault(struct a733_npu_startup *s)
     if(s->register_held)s->ops.retain(s->cookie);
     return RETAINED;
 }
-/* Before any NPU write: release every token and stop. */
+/* Before local PLL/NPU writes: release tokens. Established shared gates
+ * persist for the resource manager lifetime. Uncertain gate effects use fault. */
 static enum a733_npu_platform_result refuse(struct a733_npu_startup *s)
 {
     const uint64_t deadline=s->config.deadline_us;
@@ -390,12 +391,15 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
         if(rail!=A733_RAIL_READY)return refuse(s);
         if(!s->pck.token) {
             struct a733_gpu_power_resources ready={0};
-            s->pck.mask=A733_GPU_RESOURCE_OSC|A733_GPU_RESOURCE_PCK|
+            s->pck.mask=A733_GPU_RESOURCE_OSC|A733_GPU_RESOURCE_PCK|A733_GPU_RESOURCE_NPU_FABRIC|
                 ((s->shared&A733_CLOCK_PERI0) ? A733_GPU_RESOURCE_PARENT : 0);
             s->pck.mode=A733_GPU_RESOURCE_STABLE;
             enum a733_gpu_resource_result r=a733_gpu_resources_acquire(s->providers.pck,s->config.pck_client,
                 s->pck.mask,deadline,&s->pck.token,&ready);
             if(r==A733_GPU_RESOURCE_BUSY){s->pck.token=0;return PENDING;}
+            /* FAULT can follow a completed resource-gate write. Preserve its
+             * retained lease and the exclusive NPU clock and rail tokens. */
+            if(r==A733_GPU_RESOURCE_FAULT)return fault(s);
             if(r!=A733_GPU_RESOURCE_OK){s->pck.token=0;return refuse(s);}
         }
         /* The owner's done bit arrives within its own bound; anchor this wait
@@ -419,8 +423,8 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
         break;
     }
     case A733_NPU_STARTUP_PASS: {
-        /* Read-only: the owner's domain-4 check and the register pass. A
-         * refusal has written nothing and releases every token. */
+        /* Read-only: the owner's domain-4 check and the register pass. An
+         * ordinary refusal releases tokens; shared gate enables persist. */
         int held=enter(s);
         if(held==0)return now(s,0) ? PENDING : refuse(s);
         if(held!=1)return fault(s);

@@ -74,7 +74,7 @@ static void npu_retain(void *v)
 static int owner_read(void *v,uintptr_t a,uint32_t *out)
 {
     configASSERT(v==&domains);
-    if(a==CCU+0x5c0)*out=1u<<6;else if(a==CCU+0x5e0)*out=1u<<18;else if(a==0x070101ac)*out=1;
+    if(a==CCU+0x5c0 || a==CCU+0x5e0)*out=*reg(a);else if(a==0x070101ac)*out=1;
     else if(a==PCK || a==PCK+8)*out=pck[a==PCK+8];else configASSERT(0);
     return 1;
 }
@@ -84,7 +84,10 @@ static int manager_now(void *v,uint64_t *out){(void)v;return a733_counter_clock_
 static int manager_read(void *v,uintptr_t a,uint32_t *out)
 {(void)v;*out=a==0x070101ac ? 1 : a==0x07090160 ? 0x10000002 : *reg(a);return 1;}
 static int manager_update(void *v,uintptr_t a,uint32_t q,uint32_t s,uint64_t d)
-{(void)v;(void)a;(void)q;(void)s;(void)d;configASSERT(0);return 0;}
+{
+ (void)v;configASSERT(!q && ((a==CCU+0x5c0 && s==(1u<<6)) || (a==CCU+0x5e0 && s==(1u<<18))));
+ configASSERT(npu_enter(&command_token,d)==1);*reg(a)|=s;npu_leave(&command_token);return 1;
+}
 static int manager_rail(void *v,struct a733_gpu_resource_rail *o,uint64_t d)
 {(void)v;(void)o;(void)d;configASSERT(0);return 0;}
 /* Modeled owner: after two ticks the supply is verified; each row request is

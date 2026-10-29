@@ -11,12 +11,12 @@
 static uint32_t expand(uint32_t mask)
 {
     if (mask & (A733_GPU_RESOURCE_PARENT | A733_GPU_RESOURCE_PCK |
-                A733_GPU_RESOURCE_AHB | A733_GPU_RESOURCE_MBUS)) mask |= A733_GPU_RESOURCE_OSC;
+                A733_GPU_RESOURCE_AHB | A733_GPU_RESOURCE_MBUS | A733_GPU_RESOURCE_NPU_FABRIC)) mask |= A733_GPU_RESOURCE_OSC;
     return mask;
 }
 static int valid(unsigned client, uint32_t mask)
 {
-    return client < A733_GPU_RESOURCE_CLIENTS && mask && !(mask & ~A733_GPU_RESOURCE_ALL) &&
+    return client < A733_GPU_RESOURCE_CLIENTS && mask && !(mask & ~A733_GPU_RESOURCE_SUPPORTED) &&
         (!(mask & A733_GPU_RESOURCE_LOCAL) || mask == A733_GPU_RESOURCE_ALL || mask == A733_GPU_RESOURCE_GPU);
 }
 static enum a733_gpu_resource_result enter(struct a733_gpu_resource_manager *m)
@@ -180,6 +180,12 @@ enum a733_gpu_resource_result a733_gpu_resources_acquire(
     if (ok && (mask & A733_GPU_RESOURCE_LOCAL))
         ok = check(m, CCU + 0xb20, 0x80000000, 0, A733_GPU_RESOURCE_LIVE) &&
              check(m, CCU + 0xb24, 0x10001, 0, A733_GPU_RESOURCE_LIVE);
+    /* Manual 4.1.6.82/83: independent R/W fields. The vendor helper's
+     * broad OR constants overlap other devices' gates; preserve those fields.
+     * Both NPU fabric gates precede every PCK-domain access. */
+    if (ok && (mask & A733_GPU_RESOURCE_NPU_FABRIC))
+        ok = gate(m, CCU + 0x5c0, 1u << 6, 0, 1) &&
+             gate(m, CCU + 0x5e0, 1u << 18, 0, 1);
     if (ok && (mask & A733_GPU_RESOURCE_PCK)) ok = gate(m, RCCU + 0x1ac, 1, 0, 1);
     /* A TOP5 OFF closed the GPU AHB master gate, and it took no write while
      * TOP5 was OFF (board-session-20261025-7, s11-gpo-run: 0x5c0 read

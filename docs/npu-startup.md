@@ -8,10 +8,52 @@ counter clock, the clock registry, the register lock, the image's one GPU/PCK
 resource manager, the rail ledger with its power-authority word, and the
 [power-domain owner](power-domains.md). It constructs none of them.
 
-Status: implemented and board-qualified in the finite interrupt image on
-port 3-3. Startup took 4.0 ms, and all four ShuffleNetV2 outputs matched in
+## Acquire the NPU master gates before domain access
+
+Cold startup reserves the existing exclusive NPU clock scope and shared fabric
+ancestry, then acquires one NPU fabric resource in the existing GPU/PCK
+manager. That resource covers AHB master bit 6 at CCU `0x020025c0` and MBUS
+master bit 18 at `0x020025e0`. Both gates precede the PCK bus enable and the
+first domain-4 register access. They remain enabled for the manager's lifetime.
+No release or restart closes them or infers that the NPU domain is OFF.
+
+The added gate checks require at most two writes, six register reads and two
+acquisitions of the existing register mutex when both gates are OFF. These
+counts come from the code. Already enabled gates
+need two reads and no write. It adds no task, allocation, buffer, copy or wait,
+and keeps the startup deadline. One mask bit represents this fixed gate pair;
+the existing GPU masks keep their meaning and do not acquire NPU gates.
+
+The pinned board kernel marks both NPU master gates `CLK_IS_CRITICAL` and
+enables them during clock registration before NPU domain attachment and probe.
+Its generic gate helper ORs `0x010000ff` and `0x41055800` into the two words.
+Those constants overlap documented gates for other devices, including the GPU.
+The definitions are `ccu-sun60iw2.c:592–595,653–656` and the write is
+`ccu_gate_helper_enable` in `ccu_gate.c:213–247`, at kernel revision
+`2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f`. The source inventory is in
+[the vendor sequence audit](reference-backsolve-npu.md#sources-and-their-gaps).
+The A733 manual version 1.00, sections 4.1.6.82 and 4.1.6.83, specifies each
+NPU gate as an independent read/write field and specifies no key field there.
+The NPU binding therefore performs the narrower `old | NPU_bit` operation
+under the existing shared register mutex, then verifies the gate. It preserves
+every unrelated field, including closed GPU gates. The existing GPU binding's
+key-constrained writes retain their current behavior. This difference
+from the Linux helper prevents an NPU acquisition from enabling other devices.
+
+A failed resource acquisition can follow a completed gate write. A resource
+FAULT therefore keeps its resource token and the NPU clock and rail tokens,
+and prevents later startup or restart. No PCK or NPU access follows that fault.
+A successful acquisition followed by an ordinary admission refusal may release
+its software tokens; the established master gates stay enabled. These rules
+establish software ownership and bounded failure behavior. They do not establish
+physical gate acceptance or identify the cause of an earlier failed board run.
+
+The earlier finite interrupt startup was board-qualified on port 3-3.
+Startup took 4.0 ms, and all four ShuffleNetV2 outputs matched in
 `board-session-20261025-15/port-3-3`. At the default 852 MHz operating point,
 inference took 2.91 ms from doorbell to interrupt and about 3.3 ms end to end.
+The added cold master-gate acquisition is software-tested and remains
+physically unqualified.
 The design and its budgets are in [designs/npu-board.md](designs/npu-board.md),
 the routing, power order and adoption in
 [designs/npu-sram-route.md](designs/npu-sram-route.md), and the software-model
@@ -126,14 +168,15 @@ list each change's effect.
 
 By default, startup selects the vendor maximum supported at the inherited
 800 mV for the SID speed bin. Both populated boards use 852 MHz. Bins that
-require another voltage are refused before a write; nothing writes DCDC2.
+require another voltage are refused before local NPU or PLL writes; nothing
+writes DCDC2. Shared gate enables may already have completed.
 The supported bin table is documented in the
 [operating-point analysis](designs/npu-job-overhead.md#default-operating-point).
 `a733_npu_startup_rate`, after init and before task binding, optionally selects
 492 or 852 MHz. An explicit 852 MHz selection still requires a compatible bin.
 The finite image exposes these options as `--rate-492` and `--rate-852`.
 
-## The register pass refuses before any write
+## The register pass precedes local NPU and PLL writes
 
 The pass reads each word and compares it under a mask with a constant:
 
@@ -186,15 +229,17 @@ from the inherited bit 24, with the gate controls at `+0x1920` and `+0x19a0` set
 PLL nor its gate controls; the step still samples LOCK three times. The
 vendor clock driver's PLL enable helper also returns without a write when the
 PLL's enable, LDO and output gate bits are set (`ccu_gate.c:171-174`). A PLL at the other supported profile instead follows the vendor rate-change
-sequence. Any other enabled PLL state refuses before a write. The owner adopts domain 4 ON
+sequence. Any other enabled PLL state refuses before a local NPU or PLL write. The owner adopts domain 4 ON
 as before. In the host model a second start takes 12,001 modeled
 microseconds and 6 writes: the routing bit and five local open writes.
 
-## Failure keeps everything after the domain-4 request
+## Uncertain gate changes and domain requests retain ownership
 
-A refusal before the domain-4 request releases the PCK lease, the rail
-token and the clock token, and returns RETAINED with nothing written. Any
-failure after the request returns RETAINED and keeps the tokens, the row with
+An ordinary admission refusal before the domain-4 request releases the
+resource lease, rail token and clock token. Established master and PCK gates
+remain enabled. A resource FAULT retains all tokens because a gate write may
+have completed, even before a domain request. Any failure after the domain-4
+request returns RETAINED and keeps the tokens, the row with
 its request, and the register lock if a table stopped midway. A domain that
 does not reach ON keeps every NPU clock, reset and the routing untouched,
 except that a domain the pass read ON has already started PLL_NPU: a refused
@@ -459,11 +504,31 @@ Integration follows this order:
 
 ## Checks
 
+The cold fabric addition passes eleven composed host cases. They run the actual
+startup, clock registry, PMIC, rail ledger, resource manager and domain owner.
+Five cases cover cold/inherited gate combinations with stopped restarts.
+Six failures cover partial updates, wrong readbacks and deadline expiry at each
+gate.
+Closed GPU gates and unrelated bits remain unchanged. The existing restart
+check also passes its normal restart and five retained failures.
+The AArch64 native resource adapter passes the new exact-pair, sparse-word,
+PCK-only and mutex-refusal cases together with its existing GPU checks.
+
+The selected returning interrupt/restart image has ELF SHA-256
+`ae8f892e06b0e5a2c2fb743c063a6fd07e64a506504da1211fe31f93dd735857`
+and build ID
+`ef5617313e5ac6f8c358628a5326c123b277f8f4f271c8cdf8fdbc1b2ad787fb`.
+Its compiled-input closure, focused results and offline root proposal are in
+`~/.cache/sunstoneos/evidence/sol-npu-cold-gates-1029/`. The exact-image task
+profile and returning-image checks pass. The proposal grants no physical
+admission. No board or queue access was performed for this change.
+
+
 - [`checks/npu-startup-host.c`](../checks/npu-startup-host.c) runs the
   sequencer with the actual PMIC provider, rail ledger, clock registry,
   GPU/PCK manager and power-domain owner over a register model that includes
   the routing word. It checks boot to READY with its counts and its order:
-  domain 4's PCK600 command before the first CCU write, and the routing write
+  domain 4's PCK600 command before the first local NPU or PLL write, and the routing write
   between the PLL output gate and the first reset release. It also checks the
   register window, local stop with the routing restore, four refusals before
   any write, five retentions and seven reference-clock cases. Its `--inherited-on` cases

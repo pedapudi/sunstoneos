@@ -31,6 +31,8 @@ static int native_update(void *context, uintptr_t address, uint32_t required,
 {
     struct a733_gpu_resource_native *n = context;
     if (!((address == 0x070101ac && required == 0 && set == 1) ||
+          (address == 0x020025c0 && required == 0 && set == (1u << 6)) ||
+          (address == 0x020025e0 && required == 0 && set == (1u << 18)) ||
           (address == 0x020025c0 && required == 0x0100007f && set == 0x010000ff) ||
           (address == 0x020025e0 && required == 0x41045800 && set == 0x41055800))) return 0;
     uint64_t now;
