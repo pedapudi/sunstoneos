@@ -8,17 +8,18 @@
  #include "../board/application.h"
  #include "../mimus-board/application.h"
  #include "a733_cpu_clock.h"
-@@ -84,6 +85,9 @@
+@@ -84,6 +85,10 @@
      atomic_uint ready;
  } owner;
  enum { START, INSPECT, REQUEST, FOLLOW };
++static unsigned entry_checked;
 +static unsigned return_request;
 +static atomic_uint return_done;
 +int os_cpu_return_clock_done(void){return atomic_load_explicit(&return_done,memory_order_acquire);}
  static int clock_now(void *v,uint64_t *out)
  {return v==&owner&&a733_counter_clock_now(&providers.shared.counter,out);}
  static int clock_read(void *v,uintptr_t a,uint32_t *out){return v==&owner&&read_word(NULL,a,out);}
-@@ -127,7 +131,24 @@
+@@ -127,7 +132,24 @@
          if(a733_cpu_clock_inspect(c,A733_CPU_LITTLE,later(REQUEST_US))!=A733_CPU_CLOCK_PENDING)return -1;
          return 1;
      }
@@ -43,3 +44,17 @@
  #ifdef SUNSTONE_A733_OS_PERF
      /* The performance-mode service replaces the one-request-per-cluster
       * start: its boot switch moves the CPU domains to the boot mode, and it
+@@ -157,6 +179,13 @@
+ #endif
+     }
+     if(owner.phase==REQUEST){
++        if(!entry_checked){
++            uint64_t now;
++            if(!clock_now(&owner,&now))return -1;
++            int admitted=os_cpu_return_entry_guard(c,policy,now,read_word,NULL);
++            if(admitted<=0)return admitted<0?-1:1;
++            entry_checked=1;
++        }
+         /* One request per granted domain once its sensor has a reading (CPUL
+          * is physical channel 3, CPUB channel 0), in the default path's order
+          * (docs/designs/cpu-top-opp.md): CPU-B, CPU-L, then the DSU at the

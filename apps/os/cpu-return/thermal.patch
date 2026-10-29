@@ -9,7 +9,20 @@
  #include "../board/application.h"
  #include "../board/session.h"
  #include "a733_thermal.h"
-@@ -280,7 +282,22 @@
+@@ -122,6 +124,12 @@
+ #else
+ #define record_reading(now,level) ((void)0)
+ #endif
++int os_cpu_return_thermal_ready(void)
++{
++    return thermal.active&&thermal.driver.initialized&&!thermal.driver.fault&&!thermal.retaining&&
++        !atomic_load_explicit(&thermal.failed,memory_order_acquire)&&
++        a733_clock_token_status(&providers.shared.clocks,&thermal.token)==A733_CLOCK_OK;
++}
+ static uint64_t deadline(void){return board.session.deadline_us-10000;}
+ static int live(void)
+ {return board_live(NULL)&&!atomic_load_explicit(&providers.shared.clocks.failed,memory_order_acquire)&&
+@@ -280,7 +288,22 @@
  void os_thermal_task(void *unused)
  {
      (void)unused;

@@ -70,6 +70,10 @@ def main():
             'dedicated host adapter')
     rows.append({'name': 'ordinary-host-refuses-return-profile', 'passed': True})
     entry = json.loads((args.bundle / 'board/admission.json').read_text())
+    if '_approved_rail_helper' in prepared:
+        refused(lambda: host.admit(SimpleNamespace(bundle=args.bundle, root_owned_claim='MODEL WRONG CLAIM'),
+                prepared, None, entry['identity'], entry['port']), 'reviewed root-owned claim')
+        rows.append({'name': 'different-root-claim-refused-before-platform-access', 'passed': True})
     template = (args.bundle / 'board/session-template.bin').read_bytes()
     evidence = {name: (args.bundle / 'board' / value['name']).read_bytes()
                 for name, value in prepared['entry_evidence'].items()}
@@ -180,7 +184,7 @@ def main():
                 if args.helper_image:
                     assert args.helper_binary and args.helper_manifest
                     helper_manifest = json.loads(args.helper_manifest.read_text())
-                    host.rail_followup_check(record, args.helper_image, args.helper_binary, helper_manifest)
+                    host.rail_followup_check(record, args.helper_image, args.helper_binary, helper_manifest, host.digest(args.helper_manifest))
                     rows.append({'name': 'exact-entry800-rail-helper-admitted', 'passed': True})
                     changed = copy.deepcopy(record)
                     changed['cpu_rail_restoration_pending'] = False
@@ -191,6 +195,18 @@ def main():
                                                             changed_manifest), 'artifact or variant')
                     rows.extend({'name': name, 'passed': True} for name in
                                 ('missing-pending-rail-claim-refused', 'legacy-helper-variant-refused'))
+                    if record.get('cpu_clock_entry_status') == 'under-test':
+                        for key in ('image', 'binary', 'manifest'):
+                            changed = copy.deepcopy(record)
+                            changed['approved_rail_helper'][key] = '0' * 64
+                            refused(lambda: host.rail_followup_check(changed, args.helper_image, args.helper_binary,
+                                helper_manifest, host.digest(args.helper_manifest)), 'differs from the reviewed')
+                            rows.append({'name': 'reviewed-helper-' + key + '-changed-refused', 'passed': True})
+                        changed = copy.deepcopy(record)
+                        changed.pop('approved_rail_helper')
+                        refused(lambda: host.rail_followup_check(changed, args.helper_image, args.helper_binary,
+                            helper_manifest, host.digest(args.helper_manifest)), 'differs from the reviewed')
+                        rows.append({'name': 'reviewed-helper-pins-missing-refused', 'passed': True})
                     save(args.out / 'MODEL-return-receipt.json', {'physical_access': False, 'model_record': record})
             else:
                 refused(action, reasons[variant])

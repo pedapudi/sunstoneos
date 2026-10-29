@@ -140,6 +140,12 @@ def validate_bundle(bundle):
     p['qualification'] = record['geometry']
     p['_review'] = review
     p['_assets'] = os_image.host.validate_assets(bundle / 'assets')['assets']
+    entry = json.loads((bundle / 'board/admission.json').read_text())
+    approved = entry['cpu_clock_approval']
+    clock_review = json.loads((bundle / 'board' / p['entry_evidence'][approved['path']]['name']).read_text())
+    if clock_review.get('schema') == os_image.cpu_return_clock.SCHEMA:
+        p['_approved_rail_helper'] = {k: clock_review['rail_helper'][k]['sha256']
+                                      for k in ('image', 'binary', 'manifest')}
     return p
 
 
@@ -169,7 +175,7 @@ def decode_output(raw, epoch, generation):
     return raw[48:48 + used].decode('utf-8', errors='strict')
 
 
-def rail_followup_check(returned, image, binary, manifest):
+def rail_followup_check(returned, image, binary, manifest, manifest_sha256=None):
     """Admit only the existing helper's exact already-800mV DCDC3 variant.
 
     The coordinator keeps the original claim. The helper itself verifies all
@@ -186,6 +192,11 @@ def rail_followup_check(returned, image, binary, manifest):
     require(manifest.get('bundle') == 33 and manifest.get('execution_variant') == 'os-cpu-return-dcdc3-800-v1' and
             manifest.get('elf_sha256') == digest(image) and manifest.get('binary_sha256') == digest(binary),
             'Wrong CPU return rail-helper artifact or variant.')
+    if returned.get('cpu_clock_entry_status') == 'under-test':
+        require(returned.get('approved_rail_helper') ==
+                {'image': digest(image), 'binary': digest(binary),
+                 'manifest': manifest_sha256},
+                'Rail helper differs from the reviewed first-functional approval.')
     elf = os_image.os_link.Elf(Path(image).read_bytes())
     markers = [s for s in elf.symbols if s['name'] == 'os_cpu_return_rail_profile' and s['shndx'] != 0]
     require(len(markers) == 1 and markers[0]['size'] == 32 and
@@ -204,6 +215,12 @@ def admit(args, prepared, node, identity, port):
     require(admission['identity'] == identity and admission['port'] == port and
             prepared['_review'].get('identity') == identity and prepared['_review'].get('port') == port,
             'CPU return review names another live target.')
+    clock_ref = admission['cpu_clock_approval']
+    clock_copy = prepared['entry_evidence'][clock_ref['path']]['name']
+    clock_review = json.loads((args.bundle / 'board' / clock_copy).read_text())
+    if clock_review.get('schema') == os_image.cpu_return_clock.SCHEMA:
+        require(clock_review.get('root_owned_claim') == args.root_owned_claim,
+                'First-functional entry requires its reviewed root-owned claim.')
     paths = [args.ddr_evidence, args.platform_survey, *args.warm_return]
     raw = [p.read_bytes() for p in paths]
     cpu.kernel.validate_platform_admission(tuple(raw[:2]), node, identity, port,
@@ -224,6 +241,8 @@ def run_once(tx, wait, ready, bundle, p, evidence, record, journal):
     extents += [(item['address'], item['bytes']) for item in p['_assets']]
     backups = []
     record.update(dirty=True, dram_restored=False, cpu_rail_restoration_pending=True)
+    if '_approved_rail_helper' in p:
+        record.update(cpu_clock_entry_status='under-test', approved_rail_helper=p['_approved_rail_helper'])
     journal()
     for address, size in extents:
         for offset in range(0, size, CHUNK):
@@ -333,7 +352,7 @@ def main():
         run(args)
     else:
         result = rail_followup_check(json.loads(args.return_session.read_text()), args.image, args.binary,
-                                     json.loads(args.manifest.read_text()))
+                                     json.loads(args.manifest.read_text()), digest(args.manifest))
         base.save_json(args.output, result)
 
 

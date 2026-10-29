@@ -40,6 +40,7 @@ thermal = module('os_thermal_preparation', ROOT / 'apps/thermal/prepare.py')
 security_authority = module('os_dma_security', ROOT / 'tools/dma-nonsecure-access.py')
 os_link = module('os_link_configuration', ROOT / 'checks/os-image-link.py')
 radio_assets = module('os_radio_assets', ROOT / 'apps/os/radio-assets.py')
+cpu_return_clock = module('os_cpu_return_clock_review', ROOT / 'apps/os/cpu-return-clock-review.py')
 bluetooth = module('os_bluetooth_preparation', ROOT / 'apps/bluetooth/prepare.py')
 board, host = mimus.board, mimus.host
 base = board.base
@@ -302,6 +303,13 @@ def image_manifest_check(manifest, raw, *, cpu_return=False):
     require(type(cpu_return) is bool and manifest.get('cpu_return', False) is cpu_return and
             ('os_cpu_return_output' in names) is cpu_return,
             'CPU return requires its dedicated host adapter.')
+    if cpu_return:
+        elf = os_link.Elf(raw)
+        markers = [s for s in elf.symbols if s['shndx'] != 0 and s['name'] == 'os_cpu_return_entry_profile']
+        require(len(markers) == 1 and markers[0]['size'] == 32 and
+                struct.unpack('<4Q', elf.read(markers[0]['value'], 32)) == cpu_return_clock.MARKER and
+                {'os_cpu_return_entry_guard', 'os_cpu_return_thermal_ready'} <= names,
+                'CPU return initial-state guard capability differs.')
     image_inference(manifest, raw)
     gpu = image_gpu(manifest, raw)
     audio = manifest.get('audio')
@@ -532,7 +540,7 @@ def validate_admission(record, image_hash, template_hash, raw, audio, cache=None
         npu_admission(record, image_hash, raw, evidence)
     else:
         require('npu' not in record, 'NPU authority supplied for an image without NPU.')
-    cpu_clock_admission(record, image_hash, raw, profile, evidence, perf_modes)
+    cpu_clock_admission(record, image_hash, raw, profile, evidence, perf_modes, cpu_return=cpu_return)
     if not audio:
         require('audio' not in record and 'dma_nonsecure_access' not in record,
                 'Audio authority supplied for an image without audio.')
@@ -563,7 +571,7 @@ def validate_admission(record, image_hash, template_hash, raw, audio, cache=None
     return cache
 
 
-def cpu_clock_admission(record, image_hash, raw, profile, evidence, perf_modes=False):
+def cpu_clock_admission(record, image_hash, raw, profile, evidence, perf_modes=False, *, cpu_return=False):
     """A grant that names a cluster is bound to one reviewed approval of one
     step on one board, which cites that board's read-only B1 record."""
     g = grant_fields(raw)
@@ -576,6 +584,10 @@ def cpu_clock_admission(record, image_hash, raw, profile, evidence, perf_modes=F
     if perf_modes:
         require(g['clusters'] == 3, 'Performance modes require both clusters.')
         perf_admission(record, image_hash, profile, evidence, g, data, a)
+        return
+    if cpu_return and a.get('schema') == cpu_return_clock.SCHEMA:
+        cpu_return_clock.validate(a, data, record, image_hash, raw, profile, g, evidence, require, os_link.Elf)
+        require(bin_column(a['historical_sid_word']) == 4, 'Historical SID does not select the guarded bin.')
         return
     require(a.get('schema') == APPROVAL_SCHEMA and a.get('identity') == record['identity'] and
             a.get('port') == record['port'] and a.get('image_sha256') == image_hash and

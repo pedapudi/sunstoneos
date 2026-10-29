@@ -43,7 +43,7 @@ foreach(pair "runtime.c|runtime|${os_qualification}/runtime.c"
   list(APPEND os_patches "${patch_file}")
   list(APPEND os_external_inputs "${original}")
 endforeach()
-list(APPEND os_added apps/os/cpu-return.c apps/os/cpu-return-spi.c)
+list(APPEND os_added apps/os/cpu-return.c apps/os/cpu-return-spi.c apps/os/cpu-return-entry.c)
 list(APPEND os_include_dirs "${os_build}")
 list(APPEND os_external_inputs "${os_qualification}/runtime.h" "${os_build}/cpu-return-runtime.h"
   "${os_return}/main-pin.patch" "${CMAKE_CURRENT_LIST_FILE}")

@@ -16,4 +16,9 @@ void os_cpu_return_supervise(void);
 int os_cpu_return_ready(void);
 void os_cpu_return_spi_save(void);
 int os_cpu_return_spi_restore(void);
+struct a733_cpu_clock;
+struct a733_thermal_policy;
+int os_cpu_return_thermal_ready(void);
+int os_cpu_return_entry_guard(const struct a733_cpu_clock *,const struct a733_thermal_policy *,
+    uint64_t,int (*)(void *,uintptr_t,uint32_t *),void *);
 #endif

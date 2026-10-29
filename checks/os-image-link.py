@@ -366,7 +366,7 @@ def main():
         if args.cpu_return == '1':
             assert args.lifetime == 'supervised' and args.workers == 8 and cpu_clock and not any((audio, radio, headset, gpu_linear, args.npu == '1', args.perf == '1')), 'Unsupported CPU return profile'
             names = {s['name'] for s in Elf(args.image.read_bytes()).symbols if s['shndx'] != 0}
-            assert {'os_cpu_return_output', 'a733_qualification_report', 'a733_qualification_success_dispatch'} <= names, 'CPU return adapter missing'
+            assert {'os_cpu_return_output', 'a733_qualification_report', 'a733_qualification_success_dispatch', 'os_cpu_return_entry_profile', 'os_cpu_return_entry_guard', 'os_cpu_return_thermal_ready'} <= names, 'CPU return adapter missing'
             assert not ({'a733_native_usb_step', 'tusb_init', 'dcd_init'} & names), 'CPU return starts native USB'
     except AssertionError as error:
         print('FAIL integrated OS link check:', error, file=sys.stderr)

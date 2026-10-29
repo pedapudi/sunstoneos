@@ -9,6 +9,36 @@ supervised staged workload 2, Cortex-A76 admission and CPU clock grants for both
 clusters. GPU, NPU, radio, microphone, headset and performance-mode services are
 excluded. Existing supervised and resident profiles keep their existing lifetime.
 
+The first functional attempt may use the dedicated
+`a733-os-cpu-return-clock-under-test-v1` approval. It asserts no passed B1
+result. Other profiles retain the existing passed-B1 requirement. Historical
+physical steps 1 through 6 must be cited with an explicit reviewed mapping to
+the same physical board; historical USB identities and rail readings remain
+historical. The integrated recognition, live cluster transitions, thermal
+service and normal return remain under test.
+
+Before the first requested transition, the sole CPU clock owner completes
+read-only inspections of both clusters and their enabled, decoded supplies.
+The profile requires both supplies at 800 mV, no intervening transition, bin 4,
+a valid 26 MHz oscillator, all three exact boot PLL/mux pairs and disabled
+pattern/LFM controls. The thermal driver must have completed calibration and
+startup without fault, and all five policy channels must have fresh valid
+NORMAL readings under the 70 °C CPU critical policy. Missing first readings
+wait; an invalid initial state retains the session. The entry review excludes
+all competing native and external writers. These configured predicates are
+checked by native code before any voltage or frequency request; they are not
+prior captured measurements or physical qualification.
+
+The under-test approval binds the image, build, session identities, fixed
+inference configuration, exact thermal configuration and evidence, grant,
+source obligations, historical qualification, root claim and exact rail helper.
+To avoid a hash cycle, its template hash zeros only the grant approval field
+at bytes 872 through 903 of this exact 904-byte session. The completed return
+review then binds the full template and approval hash. The host refuses a
+claim that differs from the reviewed claim and preserves the approved helper
+hashes in the successful return receipt. Follow-up requires those exact ELF,
+binary and raw manifest hashes.
+
 The dedicated USB0 task publishes staged readiness and suspends before native
 USB startup. The constructor chain creates metadata and PMIC bindings without
 accessing the USB controller. The linked check rejects native USB startup
@@ -162,8 +192,18 @@ Software evidence is under `~/.cache/sunstoneos/evidence/sol-cpu-normal-return-1
   registries: one DCDC5 write, three helper requests, twenty clock reads and
   unchanged DCDC3. Bus registers, time and task yielding are modeled.
 
+The initial terminal, worker and helper records above remain evidence for
+their exact unchanged inputs. The image with the additional entry guard has
+thirty linked guard cases in `entry-guard2/`, nine owner ordering and readiness
+cases in `entry-owner/`, nineteen under-test parser cases in `entry-review/`,
+one selected successful terminal case in `entry-terminal-success/`, and a new
+production preparation/capture path in `entry-model/`, `entry-host/` and
+`entry-host-helper/`. The authority in these preparation records is explicitly
+modeled and cannot admit hardware. The helper integration checks all three
+approved hashes and missing pins. No physical run is recorded.
+
 The frozen OS ELF SHA-256 is
-`02bca686ae088880d9e27b5f59ac68e3dfcfb0b33d8d9ba8cdf9055a3609c0a3`.
+`fba722c5e33cbdeccc41b1b09a4a91752506e884c79e5f09f8c533a4cff74b70`.
 The rail helper ELF SHA-256 is
 `ae00ce1d4a1f82b77ab1e016dc1a08f795e56c9c6f4c92d166f6434d75590098`;
 its binary SHA-256 is
