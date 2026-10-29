@@ -1,52 +1,83 @@
 #include "run.h"
 #include <string.h>
+void crypto_run_clear_clients(struct crypto_run *r)
+{
+ crypto_secret_clear(r->hash.key,sizeof(r->hash.key));
+ crypto_secret_clear(r->hash.buffer,sizeof(r->hash.buffer));
+ crypto_secret_clear(r->cipher.key,sizeof(r->cipher.key));
+ crypto_secret_clear(r->cipher.hash_subkey,sizeof(r->cipher.hash_subkey));
+ crypto_secret_clear(r->cipher.subkey_block,sizeof(r->cipher.subkey_block));
+}
+void crypto_run_clear_secrets(struct crypto_run *r)
+{crypto_request_clear(&r->request);crypto_run_clear_clients(r);}
+static enum a733_ce_hash_result hash_poll(struct crypto_run *r)
+{
+ if(r->request.version==1)return a733_ce_hash_poll(&r->hash,r->generation,r->payload);
+ return a733_ce_hash_poll_digest(&r->hash,r->generation,r->payload,crypto_request_output(&r->request));
+}
 static int runtime_step(struct crypto_run *r,uint64_t deadline)
 {
  enum a733_ce_hash_result h;enum a733_ce_cipher_result c;size_t accepted=0;
+ const struct crypto_request *q=&r->request;
  switch(r->stage){
  case 0:
-  if(r->request.operation==CRYPTO_SHA256){
-   h=a733_ce_hash_begin(&r->hash,deadline,&r->generation);
+  if(q->operation==CRYPTO_SHA256||q->operation==CRYPTO_HASH||q->operation==CRYPTO_HMAC){
+   h=q->version==1?a733_ce_hash_begin(&r->hash,deadline,&r->generation):
+    a733_ce_hash_start(&r->hash,(enum a733_ce_hash_method)q->method,
+     q->operation==CRYPTO_HMAC?q->secret:NULL,q->key_bytes,deadline,&r->generation);
    if(h==A733_CE_HASH_BUSY)return 0;
-   if(h!=A733_CE_HASH_READY)goto fail;
-   r->stage=r->request.bytes?1:3;return 0;
+   crypto_request_clear(&r->request);
+   if(h!=A733_CE_HASH_READY&&h!=A733_CE_HASH_PENDING)goto fail;
+   r->stage=h==A733_CE_HASH_PENDING?9:q->bytes?1:3;return 0;
   }
-  c=a733_ce_cipher_begin(&r->cipher,r->request.key,r->request.input,r->request.bytes,
-   r->request.operation==CRYPTO_AES_DECRYPT,deadline,&r->generation);
+  if(q->version==1)c=a733_ce_cipher_begin(&r->cipher,q->key,q->input,q->bytes,
+    q->operation==CRYPTO_AES_DECRYPT,deadline,&r->generation);
+  else {
+   const struct a733_ce_cipher_params params={.key=q->secret,.iv=q->iv_bytes?q->iv:NULL,.aad=q->aad_bytes?q->aad:NULL,
+    .key_bytes=q->key_bytes,.iv_bytes=q->iv_bytes,.aad_bytes=q->aad_bytes,.tag_bytes=q->tag_bytes,
+    .mode=(enum a733_ce_cipher_mode)q->mode,.decrypt=q->operation==CRYPTO_CIPHER_DECRYPT};
+   c=a733_ce_cipher_start(&r->cipher,&params,q->input,q->bytes,deadline,&r->generation);
+  }
   if(c==A733_CE_CIPHER_BUSY)return 0;
-  crypto_key_clear(r->request.key); /* Driver copied key, or rejected the request. */
+  crypto_request_clear(&r->request);
   if(c!=A733_CE_CIPHER_PENDING)goto fail;
   r->stage=5;return 0;
- case 1:
-  h=a733_ce_hash_update(&r->hash,r->generation,r->request.input,r->request.bytes,&accepted);
-  if(h==A733_CE_HASH_BUSY)return 0;
-  if((h!=A733_CE_HASH_READY&&h!=A733_CE_HASH_PENDING)||accepted!=r->request.bytes)goto fail;
-  r->stage=h==A733_CE_HASH_PENDING?2:3;return 0;
- case 2:
-  h=a733_ce_hash_poll(&r->hash,r->generation,r->payload);
+ case 9:
+  h=hash_poll(r);
   if(h==A733_CE_HASH_PENDING||h==A733_CE_HASH_BUSY)return 0;
   if(h!=A733_CE_HASH_READY)goto fail;
-  r->stage=3;return 0;
+  r->stage=q->bytes?1:3;return 0;
+ case 1:
+  h=a733_ce_hash_update(&r->hash,r->generation,q->input+r->input_offset,q->bytes-r->input_offset,&accepted);
+  if(h==A733_CE_HASH_BUSY)return 0;
+  if((h!=A733_CE_HASH_READY&&h!=A733_CE_HASH_PENDING)||!accepted||accepted>q->bytes-r->input_offset)goto fail;
+  r->input_offset+=(unsigned)accepted;
+  r->stage=h==A733_CE_HASH_PENDING?2:r->input_offset<q->bytes?1:3;return 0;
+ case 2:
+  h=hash_poll(r);
+  if(h==A733_CE_HASH_PENDING||h==A733_CE_HASH_BUSY)return 0;
+  if(h!=A733_CE_HASH_READY)goto fail;
+  r->stage=r->input_offset<q->bytes?1:3;return 0;
  case 3:
   h=a733_ce_hash_final(&r->hash,r->generation);
   if(h==A733_CE_HASH_BUSY)return 0;
   if(h!=A733_CE_HASH_PENDING)goto fail;
   r->stage=4;return 0;
  case 4:
-  h=a733_ce_hash_poll(&r->hash,r->generation,r->payload);
+  h=hash_poll(r);
   if(h==A733_CE_HASH_PENDING||h==A733_CE_HASH_BUSY)return 0;
   if(h!=A733_CE_HASH_DIGEST)goto fail;
-  r->output_bytes=32;r->stage=8;return 1;
+  r->output_bytes=crypto_request_output(q);r->stage=8;return 1;
  case 5:
-  c=a733_ce_cipher_poll(&r->cipher,r->generation,r->payload,r->request.bytes);
+  c=a733_ce_cipher_poll(&r->cipher,r->generation,r->payload,crypto_request_output(q));
   if(c==A733_CE_CIPHER_PENDING||c==A733_CE_CIPHER_BUSY)return 0;
   if(c!=A733_CE_CIPHER_OUTPUT)goto fail;
-  r->output_bytes=r->request.bytes;r->stage=8;return 1;
+  r->output_bytes=crypto_request_output(q);r->stage=8;return 1;
  case 8:return 1;
  default:break;
  }
 fail:
- crypto_key_clear(r->request.key);return -1;
+ crypto_run_clear_secrets(r);return -1;
 }
 int crypto_run_step(struct crypto_run *r,uint64_t deadline)
 {
@@ -90,7 +121,7 @@ int crypto_run_step(struct crypto_run *r,uint64_t deadline)
 int crypto_run_publish(const struct crypto_run *r,uint8_t *output,uint8_t digest[32],atomic_uint *result,int (*eligible)(void *),void *cookie)
 {
  unsigned bytes=r->runtime?r->output_bytes:160;
- if(r->stage!=8||!bytes||bytes>CRYPTO_INPUT_MAX)goto fail;
+ if(r->stage!=8||(!r->runtime&&!bytes)||bytes>CRYPTO_INPUT_MAX)goto fail;
  if(r->runtime){if(bytes!=crypto_request_output(&r->request))goto fail;}
  else if(memcmp(r->payload,crypto_reference,160))goto fail;
  memcpy(output,r->payload,bytes);storage_digest_bytes(output,bytes,digest);

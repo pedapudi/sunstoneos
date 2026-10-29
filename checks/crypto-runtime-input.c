@@ -23,6 +23,12 @@ enum a733_ce_cipher_result a733_ce_cipher_begin(struct a733_ce_cipher *c,const u
  *g=10;return fail()?A733_CE_CIPHER_RETAINED:A733_CE_CIPHER_PENDING;}
 enum a733_ce_cipher_result a733_ce_cipher_poll(struct a733_ce_cipher *c,uint64_t g,uint8_t *p,size_t n)
 {(void)c;assert(g==10&&n==length);if(fail())return A733_CE_CIPHER_RETAINED;memset(p,0x5a,n);return A733_CE_CIPHER_OUTPUT;}
+enum a733_ce_hash_result a733_ce_hash_start(struct a733_ce_hash *h,enum a733_ce_hash_method m,const uint8_t *k,size_t n,uint64_t d,uint64_t *g)
+{(void)h;(void)m;(void)k;(void)n;(void)d;(void)g;assert(0);return A733_CE_HASH_INVALID;}
+enum a733_ce_hash_result a733_ce_hash_poll_digest(struct a733_ce_hash *h,uint64_t g,uint8_t *p,size_t n)
+{(void)h;(void)g;(void)p;(void)n;assert(0);return A733_CE_HASH_INVALID;}
+enum a733_ce_cipher_result a733_ce_cipher_start(struct a733_ce_cipher *c,const struct a733_ce_cipher_params *p,const uint8_t *b,size_t n,uint64_t d,uint64_t *g)
+{(void)c;(void)p;(void)b;(void)n;(void)d;(void)g;assert(0);return A733_CE_CIPHER_INVALID;}
 static int eligible(void *p){return *(int *)p;}
 static void committed(struct crypto_session *s,struct crypto_request *q,unsigned n)
 {s->version=2;storage_digest_bytes(q,48+n,s->fixture);}

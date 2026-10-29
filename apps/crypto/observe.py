@@ -23,8 +23,12 @@ def decode(raw,session,reference=vectors.REFERENCE,request=None):
             if count!=admitted['output_bytes'] or len(raw)!=144+count or raw[112:144]!=hashlib.sha256(raw[144:]).digest():raise ValueError('Crypto copied output differs')
             if any(session[792:824]) and raw[112:144]!=session[792:824]:raise ValueError('Crypto qualification oracle differs')
         elif count or len(raw)!=144 or any(raw[112:144]):raise ValueError('Non-success carries operation output')
-        return dict(status=status,bytes=count,epoch=epoch,generation=generation,request_id=identity,
+        result=dict(status=status,bytes=count,epoch=epoch,generation=generation,request_id=identity,
             operation=op,input_bytes=input_bytes,copied_verified=status==1,oracle_checked=status==1 and any(session[792:824]))
+        result['request_version']=admitted['request_version']
+        if admitted['request_version']==2:
+            result.update({k:admitted[k] for k in ('method','mode','key_bytes','iv_bytes','aad_bytes','tag_bytes')})
+        return result
 
     if len(session)!=824 or reference!=vectors.REFERENCE:raise ValueError('Wrong crypto geometry/reference')
     if struct.unpack_from('<3Q',session,592)!=(0x4153373343524131,1,824):raise ValueError('Wrong crypto session')

@@ -1,7 +1,9 @@
-# Native finite SHA-256 and AES operations
+# Native finite hash, HMAC and AES operations
 
-The supervised crypto image accepts one caller-supplied SHA-256 message or
-AES-128 ECB operation per admitted session. It composes the existing hardware
+The supervised crypto image accepts one caller-supplied hash, HMAC or AES
+operation per admitted session. Extended request wire version 2 selects every
+existing hash method and AES mode described below; request wire version 1
+retains SHA-256 and AES-128 ECB. It composes the existing hardware
 crypto-engine (CE) clients with native FreeRTOS providers and copied USB output.
 Session version 1 retains the fixed diagnostic. It runs
 SHA-256 over `abc`, encrypts the four AES-128 ECB blocks from NIST SP800-38A
@@ -349,3 +351,103 @@ checkpoints, copied response and explicitly nondeployable bundle are preserved
 at `~/.cache/sunstoneos/evidence/ce-clock-20261020/`. The `native-frozen`
 manifest records the compiled image; `operation-frozen` records the composed
 check and its source inputs.
+
+## Extended caller request design
+
+Request wire version 2 reuses the existing hash and cipher clients. It selects
+SHA-1, SHA-224, SHA-256, SHA-384 or SHA-512, optional HMAC with at most 128 key
+bytes, and AES with 128-, 192- or 256-bit keys in ECB, CBC, CTR or GCM mode.
+No service, descriptor, DMA mapping or engine ownership mechanism changes.
+The retained session and complete request digest still precede CE construction.
+
+The fixed request contains 2,824 bytes. Its first 48 bytes and the 2,048-byte
+input slot retain the original offsets. Six 32-bit fields at offset 2,096 select
+hash method, cipher mode, key length, IV length, AAD length and tag length.
+They precede a 128-byte secret slot, a 64-byte IV slot and a 512-byte additional
+authenticated data (AAD) slot. Unused fields and array tails must be zero.
+The old variable-length request remains wire version 1.
+
+GCM accepts at most 2,032 plaintext bytes, so ciphertext plus a 16-byte tag fits
+the existing 2,048-byte private output. Decryption consumes ciphertext followed
+by its tag and publishes plaintext only after successful service authentication.
+An authentication mismatch produces terminal failure with no USB payload.
+Empty plaintext is permitted; success with zero output must still carry the
+SHA-256 digest of the empty output and the full authenticated request identity.
+Callers supply IVs and counters; encryption requires appropriate uniqueness for
+the selected key. This finite application does not allocate nonces or manage keys.
+
+The storage budget adds 728 bytes each to the private request and USB upload
+staging. There is no heap allocation or additional DMA page. Each owner poll
+makes at most one existing client call. Hash input tracks partial acceptance
+because HMAC's initial pad can occupy part of the first 2,048-byte chunk.
+All retention paths erase copied CPU keys and HMAC pad staging under the
+existing mutex. Uncertain DMA backing remains quarantined.
+
+Independent design review requires partial HMAC input handling, complete CPU
+secret cleanup and end-to-end empty GCM decryption checks. Focused validation
+will compose actual request parsing, orchestration, services and descriptor
+models for one vector per newly forwarded mode, plus native USB/host framing.
+Existing service algorithm evidence remains the arithmetic baseline.
+
+
+## Extended request semantics and accepted evidence
+
+Wire version 2 uses operations 4 (hash), 5 (HMAC), 6 (cipher encryption) and
+7 (cipher decryption). Hash method values 1 through 5 select SHA-1, SHA-224,
+SHA-256, SHA-384 and SHA-512. Cipher mode values 0 through 3 select ECB, CBC,
+CTR and GCM. Hash requests require zero cipher fields; cipher requests require
+hash method zero. HMAC accepts an empty key or up to 128 key bytes. AES accepts
+16-, 24- or 32-byte keys.
+
+ECB has no IV, AAD or tag and requires complete nonempty 16-byte blocks. CBC
+has the same block rule and a 16-byte IV. CTR accepts 1 through 2,048 bytes and
+a 16-byte initial counter, with identical data transformation in either direction.
+GCM requires a 1- through 64-byte IV, up to 512 AAD bytes and a 12- through
+16-byte tag. Encryption appends the tag; decryption consumes the appended tag.
+Plaintext is limited to 2,032 bytes. Unused input, key, IV and AAD slot tails
+are zero, as are the original key slot and reserved header field.
+
+`request.py` exposes typed `encode_extended` and `decode` functions. Its CLI
+accepts `hash`, `hmac`, `cipher-encrypt` and `cipher-decrypt`, with `--hash`,
+`--mode`, `--key`, `--iv`, `--aad` and `--tag-bytes` as appropriate. Response
+wire version 2 remains unchanged: its request commitment binds every parameter.
+The host derives the expected output extent from that admitted request and
+reports the selected method, mode and parameter lengths without exposing keys.
+
+The focused evidence is under
+`~/.cache/sunstoneos/evidence/crypto-modes-20261028/`. `service-final` runs the
+actual application parser and state machine through the existing CE services,
+controller, pool and descriptor-engine model. Thirty-nine cases cover all hash
+and HMAC choices, each AES mode/key-width/direction combination, empty GCM,
+tag rejection and legacy SHA/AES requests. Maximum HMAC input covers partial
+acceptance after the inner pad; SHA-1 HMAC also covers long-key initialization.
+Arithmetic answers reuse the accepted service fixture's published vectors,
+OpenSSL AES/GCM helpers and Python hash/HMAC implementations. No algorithm suite
+or physical CE operation was repeated.
+
+`native-final` executes the linked request upload, private task publication,
+CPU secret retention and production USB serializer. It models construction,
+CE completion and RTOS boundaries; it does not establish physical DMA or
+execute the native CE binding. The unchanged native-binding evidence remains
+applicable. Seven successful family requests include empty authenticated
+plaintext. Native authentication failure carries no payload, and the retained
+owner clears complete CPU key/pad buffers while preserving a USB producer's
+unpublished request. `host-final` accepts those actual frames, reproduces their
+requests with the typed producer, makes output durable and refuses seventeen
+re-committed malformed requests in both the host parser and actual C parser.
+
+The single-core image adds 2,072 text bytes and 4,096 BSS bytes against the
+baseline application linked with the same unchanged provider objects. Initialized
+data remains 153 bytes. Its total text is 538,784 bytes and BSS is 5,244,400
+bytes. Fixed-slot growth is 1,456 bytes across request and USB staging; the
+linker's alignment accounts for the larger BSS delta. Compiler stack-use records
+show 128 bytes for the operation runner, 80 for request admission and 112 for
+the owner task. The existing owner stack remains 16 KiB. There is no additional
+DMA allocation, descriptor mechanism or per-operation heap use.
+
+Physical admission remains blocked on predecessor DMA accounting, both-world
+exclusion and secure status-bank permission. Once those facts are independently
+reviewed, a bounded first request can use a committed GCM vector, followed by
+a separately admitted changed-tag decryption that must produce failure without
+plaintext. The coordinator owns preparation, queueing and the one-attempt RAM-only
+capture; resources remain retained under the established recovery procedure.
