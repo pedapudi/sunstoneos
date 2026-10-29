@@ -2,13 +2,15 @@
 
 SunstoneOS implements a bounded controller core for the A733 SDC1 register
 interface, SDIO card enumeration, and CMD52/CMD53 request construction.
-A host register model verifies the implementation. Physical SDC1 access,
+A host register model verifies the implementation. The
+[native identity application](../apps/radio-sdio-id/README.md) connects it to
+the board providers and retained result capture. Physical SDC1 access,
 radio firmware startup, Wi-Fi traffic, and Bluetooth remain unqualified.
 The [radio report](radio.md) lists the firmware and board dependencies.
 
-The existing [storage probe](storage.md) only performs diagnostic eMMC
-identification through SDC2. It does not supply a reusable transfer engine.
-The native SDIO implementation uses separate files and leaves that probe intact.
+The SDIO implementation uses SDC1 independently of the microSD controller SD0.
+The historical SDC2 identification probe is for future populated boards;
+neither current board has eMMC or UFS.
 
 ## SDC1 uses the pinned controller variant with explicit initial timing
 
@@ -256,12 +258,14 @@ python3 checks/sdio-controller.py \
   --evidence /path/outside/repository/sdio-evidence
 ```
 
-No physical board operations or performance measurements were performed.
-No board executable exists for the test queue. Physical qualification requires
-shared-resource admission, the board binding, watchdog protection, and a worker
-that can sustain the FIFO's service requirements. Physical four-bit operation,
-high-speed timing, DMA, arbitrary CMD53 tails, function setup, radio firmware
-upload, and native network/HCI integration remain outstanding.
+The controller checks performed no physical operations or measurements. The
+native identity application exists, but fitted rail/pin authority and reusable
+shutdown remain unresolved; see its [return design](../apps/radio-sdio-id/RETURNING.md).
+Physical qualification needs real shared-resource admission and bounded FIFO
+service. Four-bit operation, high-speed timing, DMA, arbitrary CMD53 tails,
+function setup, firmware upload, network/HCI operation and recovery remain
+physically unqualified. Software implementation and physical operation are
+separate claims.
 
 ## Reference identities
 

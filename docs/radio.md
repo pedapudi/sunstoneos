@@ -1,10 +1,11 @@
 # Radio implementation dependencies
 
-SunstoneOS has a source-based implementation plan for the Orange Pi Zero 3W
-radio and a read-only Bluetooth patch-table inspector. Native Wi-Fi,
-Bluetooth HCI, pairing, headset audio, and radio power management are not
-implemented or physically qualified. HCI is the command and packet interface
-between a Bluetooth host stack and its controller.
+SunstoneOS implements native AIC8800 SDIO and firmware transport, Wi-Fi station
+and network paths, Bluetooth HCI/pairing, headset audio and bounded A2DP capture.
+These paths have native builds and software checks. Physical radio operation
+remains unqualified. Fitted supply routing and the reset/LPO pin function still
+need evidence for these boards. HCI is the command and packet interface between
+a Bluetooth host stack and its controller.
 
 This document is for driver developers. It identifies the board wiring,
 firmware protocol, host responsibilities, and remaining evidence needed before
@@ -251,10 +252,13 @@ queries, scan/connect/authentication, TCP/IP, Bluetooth discovery/pairing, and
 headset audio. Power management, coexistence, and all supported radio modes
 remain hardware-support work even when mimus uses another input source.
 
-Physical work is blocked by independent watchdog qualification and missing
-native SDC1/radio bindings. No radio board executable or test-queue submission
-exists for this investigation. Performance optimization follows functional
-support; no radio benchmarks were run.
+The [native SDIO identity application](../apps/radio-sdio-id/README.md) already
+connects the controller, card, radio platform and shared providers. It retains
+resources on success and failure; reusable shutdown is unqualified. Its
+[return design](../apps/radio-sdio-id/RETURNING.md) records the fitted-supply and
+PM2 reset/LPO uncertainties and missing disposal proof. Independent watchdog
+qualification is not a prerequisite for unrelated work. Radio performance
+measurements remain deferred until functional hardware integration.
 
 ## Source and artifact identities
 

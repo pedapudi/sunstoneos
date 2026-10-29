@@ -222,7 +222,25 @@ The returning [exact-sum caller](designs/gpu-exact-sum-caller.md) prepares two
 bounded jobs through the firmware submission path. It is an offline candidate
 for the first physical execution; its host model does not qualify the kernel.
 
-## Board evidence that would confirm it
+## Two exact-sum shapes pass on the board
+
+On 2026-10-28, the returning caller executed K=512 and K=516, each with
+33 rows and 17 channels, at 1008 MHz and 960 mV on port 3-1. All 1,122
+sums matched the scalar reference, with no bad tags or guards. The context
+cleaned up, firmware acknowledged idle and OFF, isolation completed and the
+provider parked. The board returned to ROM with automatic USB access; no
+manual reconnection was needed.
+
+The frozen binary SHA-256 is
+`305ab703202b95337b06ccaa4de1b3ae9c7fa9f4eb63fee7bde2a30f877e8144`.
+Physical capture and validated terminal records are under
+`~/.cache/sunstoneos/evidence/sol-resume-20261028/port-3-1/gpu-exact-sum/`.
+Its DDR start, provider checkpoint, cache-off and survey records preserve the
+same lifetime's prerequisites. The caller validates these two shapes;
+complete GPU recognition, its read-only output mapping, other model shapes
+and physical fault recovery remain unqualified.
+
+## Remaining board evidence
 
 - The bench recording's 204 jobs give text and output bytes identical to the
   CPU path with no tag mismatch, while cores 6 and 7 rewrite codes at the same

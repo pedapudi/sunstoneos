@@ -22,19 +22,20 @@ gaps. A passing diagnostic does not qualify every application using that device.
 ## Current physical results
 
 The [handoff](handoff.md#qualified-on-the-boards) identifies the frozen images
-and board sessions for these results from 2026-10-25:
+and board sessions for these results from 2026-10-25 and 2026-10-28:
 
 | Function | Demonstrated operation | Remaining qualification |
 | --- | --- | --- |
 | CPU | All eight cores ran the timer and interrupt workload at A76 2002 MHz, A55 1794 MHz and DSU 1274 MHz, then returned with the secondaries off | Sustained load, thermal transitions, failure recovery and integrated multicore recognition |
-| GPU | Firmware start, health check, stop and restart; eight correct compute jobs in one session at 1008 MHz, followed by shutdown | Failure cleanup, exact-sum mimus execution, graphics and representative concurrent workloads |
+| GPU | Firmware start/health/stop/restart, eight compute jobs, and two production exact-sum shapes with all 1,122 sums/tags/guards correct at 1008 MHz; cleanup, shutdown and ROM return passed | Failure recovery, complete GPU recognition, graphics and representative concurrent workloads |
 | NPU | Interrupt completion and matching ShuffleNetV2 outputs at 852 MHz; 2.91 ms inference and about 3.3 ms per job end to end | Full power-off and restart, thermal behavior and broader application integration |
 | Memory bus | Restore to 600 MHz on EL3 entry, with the preserved memory pattern verified on both boards | Broader memory and concurrent-device qualification |
-| microSD | 256 high-speed reads at 50 MHz, four-bit, 3.3 V | DMA, 1.8 V signalling and the remaining storage/update paths |
+| microSD | 256 high-speed PIO reads and one 4 KiB DMA read at 50 MHz, four-bit, 3.3 V; DMA data matched PIO reference and restored normal return passed | Larger/multi-descriptor DMA, sustained throughput, failure recovery, 1.8 V signalling and remaining storage/update paths |
 | DRAM training | Captures across ten lifetimes establish the inputs for the training-restore design | Executing the restore and qualifying memory after it |
 
-Both boards retain initialized sessions. Physical recovery by power removal is
-unavailable until further notice. New software results remain separate from
+Port 3-1 retains an initialized session. Port 3-3 is retained after its NPU
+restart attempt failed to return; no native result was recovered. Physical
+recovery by power removal is unavailable until further notice. New software results remain separate from
 physical qualification; the coordinator admits each proposed board test against
 its return and failure paths.
 
@@ -62,17 +63,20 @@ its return and failure paths.
   prerequisites. The resident OS card bundle is implemented and software-checked;
   physical installation and autonomous boot remain unqualified.
 
-The default 3.3 V read-only microSD DMA diagnostic now restores its controller,
-clock, pins and ownership before normal return. Uncertain completion parks.
-Focused linked, provider and host checks pass under `resume-sd-return-1026/`;
-physical return and eligibility for the preserved board sessions remain open.
+The default 3.3 V read-only microSD DMA diagnostic restores its controller,
+clock and pins before normal return. One 4 KiB physical read now matches the
+same-card PIO reference and passes strict close/restoration/ROM validation under
+`sol-resume-20261028/port-3-3/`. The queue claim remained held through decoding
+and exact input/image/reference checks. Uncertain completion parks. Larger DMA
+transfers, sustained throughput and fault recovery remain unqualified; another
+SD operation needs fresh provider/CMD0 admission.
 
 Normal NPU stop/restart now preserves the same registered providers and service
 objects; focused software checks pass. The returning restart diagnostic now has
 host preparation and capture, requiring exact lifetime/owner evidence, ordered
 close/reopen stages and four interrupt completions. It retains its unqualified
 physical status. Physical same-instance restart and domain power-off remain
-unqualified. GPU service failure now completes an accepted performance request
+unqualified; the first restart attempt did not return on 2026-10-28. GPU service failure now completes an accepted performance request
 once while preserving the original error and retained device resources. Four
 focused FreeRTOS cases and the combined eight-worker build pass; physical failure
 recovery remains unqualified. The native GPU backend also now publishes the
@@ -131,8 +135,11 @@ to the stated scope:
   completion, shuts the controller down, stops the port with PERST held and
   reports the copied block through USB0. Any failure retains the port's leases
   and the queue and data pages. Linked-image and host checks pass against a
-  modeled controller. Interrupt completion in that image needs GIC routing for
-  INTID 184 or 185. No endpoint, NVMe device, interrupt or power transition has
+  modeled controller. Optional MSI-X completion now routes vector zero through
+  INTID 185 and wakes the existing task; CQ validation remains the completion
+  authority. Ten linked native cases, thirteen route/dispatch cases, twenty
+  host checks and default polling validation pass under `sol-nvme-msix-1028/`.
+  Faults retain pages and port leases. No endpoint, NVMe device, interrupt or power transition has
   run on hardware; the endpoint test driver keeps its own BAR and MSI setup. Bridges and switches, ASPM, embedded root DMA, Gen2
   selection by the applications and physical Gen2/Gen3 links remain required.
 - HDMI: **implemented** [controller, PHY and TV0 diagnostic output](hdmi.md)

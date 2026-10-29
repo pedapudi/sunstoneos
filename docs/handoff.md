@@ -16,6 +16,32 @@ history.
   matching 4 KiB RAM pages. This establishes the initial session baseline,
   not complete memory qualification. Returning images must continue these
   new lifetimes; the older 2026-10-25 warm-return chains are historical.
+- **Subsequent returns on port 3-1:** the provider readiness checkpoint and
+  first GPU exact-sum caller both passed under the same evidence root, in
+  `gpu-provider-ready/` and `gpu-exact-sum/`. Both are required warm-return
+  links after its DDR start. The last recorded ROM node is `003/127`.
+  Cache-off and SRAM surveys passed for their recorded instances; new runs
+  require current entry records. Port 3-3 subsequently passed
+  `sd-dma-first/`: one 4 KiB DMA read, exact PIO reference parity, shutdown,
+  restoration and ROM return. `sd-dma-first-setup/acceptance.json` binds the
+  strict decoder and admitted input. A later DCDC2-only snapshot also returned
+  normally, at `003/004`, before the failed NPU attempt below. Another SD
+  operation requires a new CMD0/provider admission, not the consumed grant.
+- **Port 3-3 is retained:** the NPU same-instance restart attempt did not
+  produce a new ROM instance within 30 seconds. No native result was retrieved;
+  the launch acknowledgment does not establish how far execution progressed.
+  Stop all communication to this board. The runner session `20293` holds its
+  port lock and queue claim
+  `cf5753e4aa2030952c0c41465a338a8555c90458a9cac5fccd7d7077271a329a`.
+  Evidence is `sol-resume-20261028/port-3-3/npu-normal-restart/`; the frozen
+  preparation is `sol-npu-board-prep-1028/ready-1/`. Do not retry, release the
+  claim or terminate the runner without the prescribed recovery. Continue
+  offline diagnosis and independent port 3-1 work; no reconnect is pending.
+- **RAM ownership:** the legacy GPU and SD returning diagnostics own a private
+  18 MiB RAM interval. They restore their documented architecture/peripheral
+  state, but do not back up or restore that interval's previous contents.
+  Native NPU and CPU-return hosts have separate explicit DRAM backup/restore
+  paths. Never infer a DRAM-content restoration claim from normal ROM return.
 - **What waits for the user:** anything that needs a fresh lifetime, an
   operator at the board, or a power removal at the end.
 - **Unattended work:** prioritize useful batches within an established native
@@ -44,15 +70,25 @@ history.
   - One compute job, then eight jobs in one firmware session (80 to 113 µs
     per job), on port 3-1.
   - The GPU runs at the vendor top point, 1,008 MHz at 960 mV.
+  - The production exact-sum caller passed two shapes, K=512 and K=516,
+    with 33 rows and 17 channels each. All 1,122 sums, tags and guards matched.
+    Context cleanup, acknowledged firmware idle/OFF, isolation, provider park
+    and normal ROM return passed without manual reconnection on 2026-10-28.
+    This does not establish full GPU recognition or failure recovery.
 - **NPU:**
   - Startup in 4.0 ms, with completion signalled by interrupt.
   - ShuffleNetV2 in 2.91 ms at 852 MHz, the vendor top point; the per-job
     overhead is 0.24 ms.
+  - Same-instance normal restart remains unqualified. Its 2026-10-28 attempt
+    did not return; no inference or restart result was recovered.
 - **microSD:** returning reads at high speed (3.3 V, 50 MHz, 4-bit); all 256
   reads completed.
   - SDR104 is not qualified: its 1.8 V switch stopped at CMD11.
-  - Measured PIO throughput is 1.4 to 1.7 MB/s. Read-only DMA is now
-    implemented and software-checked; its physical throughput is unmeasured.
+  - Measured PIO throughput is 1.4 to 1.7 MB/s. One read-only 4 KiB DMA read
+    now passes at 3.3 V, 50 MHz and four bits, with matching card identity/CRC,
+    close/restoration receipts and normal ROM return. That single read took
+    639 microseconds; sustained throughput, larger transfers and fault recovery
+    remain unqualified. No card write or manual reconnect occurred.
 - **DRAM training restore:** captures from ten lifetimes fix a per-board
   restore set of 1,036 registers (`restore-set-v3.json`). Initialization without training takes
   36 ms, against 5.1 s to train all four P-states. The restore itself is
@@ -98,6 +134,28 @@ Five further changes have passed focused checks and independent Sol 6.1 reviews:
   under `bluetooth-a2dp-20261028/`. The native image adds 23,948 text bytes and
   20,480 BSS bytes, with unchanged initialized data. Physical source
   interoperability, board throughput and speaker output remain unqualified.
+
+Additional reviewed software now includes:
+
+- An opt-in recorded recognition profile with eight CPU workers, a native
+  pretransition guard and a successful ROM-return path. Its first-use authority
+  remains explicitly under test. Physical recognition, return, thermal behavior
+  and the subsequent rail-restoration helper remain unqualified; the queue
+  claim must span the return and helper. See `apps/os/NORMAL-RETURN.md`.
+- A CPU-only diagnostic for cache maintenance over a read-only mapping with
+  production GPU-output permissions. Nineteen focused software cases pass.
+  It fits the existing RAM grant and protects ROM-reader scratch before
+  launch. Physical permissions, production addresses and GPU DMA coherence
+  remain separate qualification gaps.
+- Optional NVMe MSI-X completion through the existing task and interrupt route,
+  with polling retained by default. No endpoint is attached for qualification.
+- A conservative display-engine rule that refuses reuse of a scanout buffer
+  until a source-backed retirement condition exists. Immutable replay remains
+  available; arbitrary-frame streaming is outstanding.
+- A radio return design that reuses the existing native discovery application.
+  Actual driver consumers are traced, but fitted supply routing and the shared
+  reset/LPO pin still block physical admission. Do not infer electrical power
+  removal from disabling a regulator declared always on.
 
 After the user's 2026-10-28 reconnect confirmation, the coordinator checked both
 ports and permissions, then ran one previously demonstrated standard DDR start
@@ -549,14 +607,15 @@ be pruned.
      explicit source overrides still work. Argument checks pass under
      `~/.cache/sunstoneos/evidence/configure-source-pin-20261026/`.
      Do not publish the separate mimus repository without user approval.
-  2. The first board execution of the exact-sum GPU kernel
-     (`docs/gpu-mimus.md`). Its returning diagnostic and host validator are
-     implemented, reviewed and frozen under
-     `~/.cache/sunstoneos/evidence/gpu-exact-sum-20261025/`. Bundle 34 runs
-     two shapes and requires exact sums, tags, guards, cleanup and shutdown.
-     Five native caller cases, 204 modeled parity jobs and focused host
-     admission/capture cases pass. GPU execution remains unqualified for this
-     kernel; no new board test ran during this integration.
+  2. The first two exact-sum GPU shapes now pass on physical hardware
+     (`docs/gpu-mimus.md`). The accepted frozen caller from
+     `~/.cache/sunstoneos/evidence/gpu-exact-sum-20261025/` ran once on port 3-1.
+     Exact sums, tags, guards, cleanup, shutdown and ROM return all passed under
+     `sol-resume-20261028/port-3-1/gpu-exact-sum/`. The five native caller cases,
+     204 modeled parity jobs and host admission/capture evidence remain valid
+     within their original scope. Next qualify the complete GPU recognition
+     service and read-only output mapping; these two shapes do not establish
+     those application results or all model shapes.
 
   The target in `docs/mimus.md` is 0.44 s of compute for that recording. The
   NPU path is research only (`docs/npu-mimus-linear.md`).
