@@ -261,28 +261,25 @@ firmware-stop variant's health check and its stop. It builds the job's
 workload VM, context programs, context and job in its own memory before any
 power change, sends the MMU cache command and kicks the job after the
 health check, waits at most 200 ms for the timeline word, checks the 32
-output words and their guards, cleans the context up, and then stops the
-firmware and powers the GPU off whatever the job's result. When the control
-has failed or the firmware acknowledges neither power request, the stop
-runs without the acknowledgements (upstream's hard reset) and powers off
-only when every idle poll matches. The completion text is `COMPLETE GPU
+output words and their guards, cleans the context up, and then attempts to
+stop the firmware and power the GPU off. An unacknowledged stop is allowed
+only when the control state admits recovery. It powers off only after the
+required idle and isolation checks succeed. The completion text is `COMPLETE GPU
 first job: 32 words as computed, context cleaned up, firmware stopped, OFF
 and provider parked`. `check.py --fw-job` runs thirteen cases with a model
 of the firmware and GPU that runs the job's client CCB commands;
 `--board-log` with `--board-cases` compares a board log with chosen
 models.
 
-## Every failure after the ON powers the GPU off
+## Failure cleanup can retain GPU ownership
 
-In the firmware-stop, first-job and session variants every failure after
-the GPU's ON goes through `fws_shutdown` (`fw-start.c`): the acknowledged
-stop, the vendor OFF after a power-off acknowledgement, the stop without
-acknowledgements, and, when an idle check never matches, a forced full
-soft reset and the OFF. The FAIL line names the failure and then how the
-GPU went off. Only a failing power controller or a GPU register access
-that never completes can leave the GPU on or the board without a return
-([job-session design](../../docs/designs/gpu-job-session.md), "Every
-outcome ends with the GPU off"). `check.py --fw-stop` runs twelve cases.
+The firmware-stop, first-job and session variants attempt shutdown through
+`fws_shutdown` in `fw-start.c`. A successful acknowledged stop parks the
+provider. The unacknowledged stop is attempted only when the control state
+admits recovery. If shutdown cannot establish isolation, or recovery is not
+admissible, the image reports failure and retains ownership. GPU OFF and
+reusable state are not guaranteed. A synchronous GPU register access can
+also prevent return. Physical failure recovery remains unqualified.
 
 ## The session variant runs eight timed jobs on one context
 
@@ -294,8 +291,8 @@ counter ticks from its `MTS_SCHEDULE` write to the first read of its
 timeline value, by a spin that touches no register, and the image logs the
 times of its preparation, publication, `MMUCACHE`, jobs, cleanup and park.
 The first job that does not complete ends the sequence; the cleanup runs
-only when the firmware has finished with the context, and the stop powers
-the GPU off as in the first-job variant. The completion text is `COMPLETE
+only when the firmware has finished with the context. The shutdown attempt
+has the same failure limits as the first-job variant. The completion text is `COMPLETE
 GPU job session: 8 jobs as computed, context cleaned up, firmware stopped,
 OFF and provider parked`. `check.py --fw-session` runs fifteen cases.
 

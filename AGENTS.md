@@ -241,6 +241,14 @@ second build while preserving checks for the actual requested application.
   offline work while it is pending. Order the tests of each connection window
   from the lowest recovery risk, so the test most likely to lose the board runs
   last.
+- When physical recovery is unavailable, exclude tests whose normal completion
+  requires power removal. Prefer useful batches within an established native
+  session and returning images compatible with its recorded hardware state.
+  Review changed hardware behavior separately; a successful normal return does
+  not prove recovery from a fault. Run only cases that resolve an outstanding
+  question. If a board becomes unavailable, record the recovery requirement and
+  continue independent work without repeated reconnect requests. Do not make
+  USB power automation or watchdog experiments prerequisites for this workflow.
 - Before intentional USB re-enumeration, require a reconnect access rule for the
   target port and user. Wait for udev permissions before the next protocol request.
   Do not reset again to work around missing host permissions.

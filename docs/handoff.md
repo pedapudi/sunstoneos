@@ -17,6 +17,12 @@ history.
   lifetimes may run, with warm-return lists that start from those records.
 - **What waits for the user:** anything that needs a fresh lifetime, an
   operator at the board, or a power removal at the end.
+- **Unattended work:** prioritize useful batches within an established native
+  session and images with a reviewed return compatible with the recorded state.
+  The supervised OS image ends in a halt requiring power removal and is excluded
+  while physical recovery is unavailable. If a board fails, record its recovery
+  requirement here and continue independent work without repeated reconnect
+  requests. Normal return evidence does not establish recovery from every fault.
 - **Who runs boards:** only the coordinating agent operates the boards,
   through `tools/board-test-queue.py` with the coordinator token at
   `~/.cache/sunstoneos/board-test-coordinator.token`.
