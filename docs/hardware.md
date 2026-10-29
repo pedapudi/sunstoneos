@@ -188,7 +188,23 @@ to the stated scope:
   All allocations and leases remain retained. FIFO empty does not establish
   serializer drain, transmitted packets or sound. Physical audio, SMP/preemption,
   interrupt delivery, MMIO timing, visibility and recovery remain unqualified;
-  streaming, wider formats/rates and broader HDMI audio remain required.
+  wider formats/rates and broader HDMI audio remain required.
+  Bounded [HDMI audio streaming](hdmi-audio.md) is now implemented for caller
+  stereo S16LE at 48 kHz, up to twelve seconds within the twenty-second native
+  lifetime. Four DMA periods and four USB staging slots support authenticated
+  refill and explicit END. The DMA worker exclusively owns I2S3 after handoff;
+  ordinary refill-budget exhaustion enters bounded failed-stop while authority
+  remains valid. Uncertain state retains resources. Native playback covers
+  50,177 frames and fifty periods; eight native fault cases, thirteen USB cases,
+  seven corrected-provider cases and actual host preparation/entry/capture pass.
+  Independent review approves scoped evidence reuse under
+  `hdmi-stream-1028/frozen-submission/`. Added cost is 9,620 text bytes and
+  17,344 BSS bytes, including 16 KiB staging, with unchanged task/stack reservations.
+  Streaming uses 20 KiB of the existing 2 MiB noncacheable pool, versus 192 KiB
+  for maximum finite input. Nominal execution remains bound to the preserved
+  image; the final provider correction has focused evidence and a separately
+  prepared final image. Physical sound, continuity, DMA/cache behavior, wire
+  drain and recovery remain unqualified.
   The [GPU-to-HDMI application](gpu-display.md#copied-usb-observations) copies
   two trusted 720p RGBA8 renders into separate immutable RGB565 display frames.
   GPU CLOSE precedes HDMI start. RCQ replay 0→1→0 requires fresh queue completion,

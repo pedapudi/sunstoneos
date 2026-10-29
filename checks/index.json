@@ -5578,6 +5578,47 @@
   "summary": "One finite native HDMI audio run, using explicit modeled hardware and RTOS effects.",
   "usb": false
  },
+ "hdmi-audio-stream-host.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--session",
+   "--pcm",
+   "--output"
+  ],
+  "summary": "Exercise host streaming with an explicit transport model and optional native reply.",
+  "usb": false
+ },
+ "hdmi-audio-stream-native.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--output",
+   "--inputs-dir"
+  ],
+  "summary": "Execute HDMI streaming constructors and output/DMA tasks with modeled hardware.",
+  "usb": false
+ },
+ "hdmi-audio-stream-usb.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--session",
+   "--pcm",
+   "--checkpoint",
+   "--output"
+  ],
+  "summary": "Execute streaming uploads and copied responses through the linked TinyUSB task.",
+  "usb": false
+ },
  "hdmi-audio-usb-host.py": {
   "cache_areas": [],
   "docs": [],

@@ -56,30 +56,24 @@ history.
   validation remains outstanding; optional card-boot integration is implemented.
   The 36 ms figure excludes training and does not establish working restored memory.
 
-## Active branches
+## Current integration
 
-Development resumed on 2026-10-28 after the usage-limit interruption. Preserved
-implementations and accepted evidence are being completed in their original
-worktrees. The coordinator has not queried or changed either board since
-resumption. Each proposed physical test still needs a reviewed return and
-failure path compatible with the current session; a normal ROM return alone
+The three implementations interrupted by the usage limit are complete in
+software: headset audio reopening, native SPI3 DMA and bounded HDMI audio
+streaming. Their focused native/host checks and independent reviews are recorded
+below. Successful earlier evidence was reused; affected cases cover the new
+behavior and final corrections.
+
+The coordinator has not queried or changed either board since work resumed on
+2026-10-28. Each proposed physical test still needs a reviewed return and failure
+path compatible with a freshly checked board state. A normal ROM return alone
 does not establish recovery from a fault.
 
-| Work | Branch | Immediate deliverable |
-| --- | --- | --- |
-| HDMI audio streaming | `work/resume-hdmi-stream-1026` | Complete native refill, USB transport and host preparation/capture in isolated worktrees, then validate their composition |
-
-Independent reviewers cover CPU/thermal/DRAM, accelerator operation and peripheral
-integration. Workers reuse successful evidence and submit focused checks. The
-coordinator integrates accepted work, updates the canonical records and pushes
-`bringup`. No board command has run during this continuation.
-
-The latest merged work includes full native OV5640 UYVY sizes, GPU and resident
-CPU/GPU/NPU performance controls, maintenance microSD DMA and bounded USB progress
+Prior integrated functionality includes full native OV5640 UYVY sizes, GPU and
+resident CPU/GPU/NPU performance controls, microSD DMA and bounded USB progress
 bursts. Both eight-worker accelerator performance images build and pass selected
-checks; evidence is under `resume-gpu-performance-20261026/` and
-`resident-performance-1026/`. Shared camera/accelerator dependencies are reconciled
-as described below. Physical qualification remains separate.
+checks. Physical qualification, autonomous card boot and accelerated mimus remain
+outstanding; implementation completion does not establish those results.
 
 The branch notes under "Next steps" in each design document say what remains.
 - **`work/cpu-top-opp-step6-1025`:** CPU top points, step 6 and its
@@ -380,6 +374,25 @@ be pruned.
   USB operation 8 carries performance control; operation 7 retains thermal
   reporting. This profile reports GPU state but has no GPU runtime owner.
   Physical switching, thermal response and recovery remain unqualified.
+- **HDMI audio streams through the existing DMA service.** The bounded native
+  application accepts caller stereo S16LE audio at 48 kHz for up to twelve seconds
+  within its twenty-second lifetime. Four DMA periods and four USB staging slots
+  support authenticated refill; explicit END precedes healthy completion. Only
+  the DMA worker accesses I2S3 after ownership transfer. A missed refill budget
+  enters bounded failed-stop while ownership and the operation deadline remain
+  valid; lost authority, counter failure or uncertain drain retain resources.
+  The final native image and actual host producer/supervisor entry pass.
+  Preserved execution covers 50,177 frames over fifty periods, eight native
+  fault cases and thirteen USB cases. Seven focused provider cases cover the
+  final controlled-stop correction. Independent native and host reviews approve
+  the source and evidence reuse under `hdmi-stream-1028/frozen-submission/` and
+  `finish-hdmi-host-1028/`. The final image adds 9,620 text bytes and 17,344 BSS
+  bytes, including 16 KiB of staging. Streaming uses 20 KiB of the existing
+  2 MiB noncacheable pool, versus 192 KiB for the maximum finite input; task and
+  stack reservations are unchanged. Nominal playback and copied-reply evidence
+  remain tied to the prior image; the final image changes only the reviewed
+  provider stop path and has its own preparation/entry evidence. Physical sound,
+  continuity, DMA/cache behavior, serializer drain and recovery remain unqualified.
 - **Native SPI3 DMA command-response transfers are implemented.** The existing
   owner sends one authenticated command of 1–16 bytes and receives 4096 bytes
   through two DMA channels. A real SPI interrupt, terminal controller checks,
