@@ -8,10 +8,12 @@
   storage-read-returning.py decode --run RUN_DIR --input INPUT.bin --output RESULT.json
 
 sign records, in the coordinator's approval of one lifetime, the SHA-256 of
-that lifetime's cold DDR start and returning survey and the signing time. It
+that lifetime's original cold DDR start and current survey and the signing time. It
 refuses a DDR start or survey that did not pass, a survey on another port than
 3-3 or on another node or ROM identity than the DDR start, and an approval that
-is already signed, so no approval carries into the next lifetime.
+is already signed, so no approval carries into the next lifetime. Repeat
+--warm-return SESSION_JSON on sign and input to bind an ordered restored
+no-provider entry-checkpoint chain from that DDR instance to the current survey.
 
 input writes the 2192-byte input that the image reads at 0x43000000
 (apps/storage-read-returning/sdrt.h): SD profile 2 or 3, fresh owner, handoff
@@ -28,7 +30,7 @@ sets every field that approval-request.json lists for it to true.
 
 The fabric words come from this lifetime's own read of CCU 0x500, 0x580 and
 0x588 (READ_DIR, the board-read-session-v1 record that
-tools/board-bundles-next-read.py writes, on the DDR start's node and ROM
+tools/board-bundles-next-read.py writes, on the admitted current node and ROM
 identity), masked and converted to rates as the SD0 provider does. Every
 image's EL3 monitor restores MBUS before EL1 starts
 (include/a733_el3_mbus.h): when the MBUS word under A733_MBUS_FIELDS equals
@@ -224,8 +226,8 @@ def compare_chain_reference(value, reference):
     return {'matched_reads': 16, 'matched_bytes': 65536, 'dma_reads': 1}
 
 
-def lifetime(ddr, survey):
-    """(identity, node) of a passed cold DDR start and a passed survey after it on port 3-3, same node and identity."""
+def lifetime(ddr, survey, warm_returns=()):
+    """Effective (identity, node) from original DDR, ordered restored checkpoints and current survey."""
     ddr_path, survey_path = Path(ddr) / 'session.json', Path(survey) / 'session.json'
     d = json.loads(ddr_path.read_text()); s = json.loads(survey_path.read_text())
     result = d.get('result') or {}
@@ -239,13 +241,45 @@ def lifetime(ddr, survey):
             gates and all(v is True for v in gates.values()), 'survey did not pass')
     require(s.get('port') == PORT, 'survey ran on another port than 3-3')
     seen = s.get('identity'); seen = json.loads(seen) if isinstance(seen, str) else seen
-    require(s.get('node') == node and seen == identity, 'survey ran on another node or ROM identity than the DDR start')
-    require(survey_path.stat().st_mtime > ddr_path.stat().st_mtime, 'survey is older than the DDR start')
+    if warm_returns:
+        raw = []
+        for path in warm_returns:
+            data = Path(path).read_bytes(); link = json.loads(data)
+            npu = link.get('npu_result') or {}; mbus = npu.get('mbus') or {}
+            require(link.get('execution_profile') == 'npu-entry-mbus-checkpoint-v1' and
+                    link.get('dirty') is False and link.get('dram_restored') is True and
+                    link.get('rom_usable') is True and link.get('ownership_release_permitted') is True and
+                    npu.get('checkpoint') == 'ENTRY_MEMORY_READY' and npu.get('normal_return') is True and
+                    type(npu.get('jobs')) is int and npu['jobs'] == 0 and npu.get('status') == 0 and
+                    type(mbus.get('restore_result')) is int and mbus['restore_result'] == 0,
+                    'warm return is not a quiescent restored entry checkpoint')
+            raw.append(data)
+        runner = module('sd_return_continuity', ROOT / 'tools/check-a733-kernel.py')
+        base = module('sd_return_continuity_base', ROOT / 'tools/check-a733-smp.py')
+        try:
+            runner.validate_platform_admission((ddr_path.read_bytes(), survey_path.read_bytes()),
+                Path(s['node']), seen, PORT, d.get('tool_sha256'), base.FEL_HASH, raw)
+        except RuntimeError as error:
+            raise ValueError(str(error)) from error
+        identity, node = seen, s['node']
+    else:
+        require(s.get('node') == node and seen == identity, 'survey ran on another node or ROM identity than the DDR start')
+    require(survey_path.stat().st_mtime > max([ddr_path.stat().st_mtime] +
+            [Path(p).stat().st_mtime for p in warm_returns]), 'survey is older than the DDR start or warm return')
     return identity, node
 
 
-def sign(approval, ddr, survey, signer, return_policy=POWER_REMOVAL, request=None):
-    lifetime(ddr, survey)
+def warm_binding(warm_returns, survey):
+    if not warm_returns: return {}
+    current = json.loads((Path(survey) / 'session.json').read_text())
+    identity = current.get('identity')
+    if isinstance(identity, str): identity = json.loads(identity)
+    return dict(warm_return_sha256=[digest(p) for p in warm_returns],
+                effective_node=current.get('node'), effective_identity=identity)
+
+
+def sign(approval, ddr, survey, signer, return_policy=POWER_REMOVAL, request=None, warm_returns=()):
+    lifetime(ddr, survey, warm_returns)
     value = json.loads(Path(approval).read_text())
     require(signer and value.get('reviewer') and value.get('reviewed_at') and value.get('bundle') in BUNDLES.values(),
             'approval needs its bundle, reviewer, reviewed_at and a signer')
@@ -253,6 +287,7 @@ def sign(approval, ddr, survey, signer, return_policy=POWER_REMOVAL, request=Non
     value['signature'] = {'signer': signer, 'signed_at': datetime.now(timezone.utc).isoformat(),
                           'ddr_session_sha256': digest(Path(ddr) / 'session.json'),
                           'survey_session_sha256': digest(Path(survey) / 'session.json')}
+    value['signature'].update(warm_binding(warm_returns, survey))
     if return_policy != POWER_REMOVAL:
         require(return_policy in (RESTORED_RETURN, CHAIN_RETURN) and value['bundle'] == 'A' and request is not None,
                 'restored return requires bundle A and --request')
@@ -274,13 +309,16 @@ def recovery_fields(request, bundle, return_policy):
     return fields
 
 
-def approved(approval, request, ddr, survey, bundle, return_policy=POWER_REMOVAL):
+def approved(approval, request, ddr, survey, bundle, return_policy=POWER_REMOVAL, warm_returns=()):
     """The approval's signature binds this lifetime and every requested field is true."""
     value = json.loads(Path(approval).read_text())
     fields = recovery_fields(request, bundle, return_policy)
     require(value.get('bundle') == bundle and value.get('reviewer') and value.get('reviewed_at'),
             'approval names another bundle or no reviewer')
     signature = value.get('signature') or {}
+    binding = warm_binding(warm_returns, survey)
+    require(signature.get('warm_return_sha256', []) == binding.get('warm_return_sha256', []) and
+            all(signature.get(k) == v for k, v in binding.items()), 'approval signed for another warm-return chain')
     require(signature.get('return_policy', POWER_REMOVAL) == return_policy,
             'approval signed for another return policy')
     if return_policy in (RESTORED_RETURN, CHAIN_RETURN):
@@ -319,16 +357,19 @@ def restored(words):
             for i, w in enumerate(words)]
 
 
-def fabric_read(read, ddr):
+def fabric_read(read, ddr, warm_returns=()):
     """(the image's fabric configuration, the read words) of this lifetime's own read of the three words."""
     path, ddr_path = Path(read) / 'session.json', Path(ddr) / 'session.json'
     record, d = json.loads(path.read_text()), json.loads(ddr_path.read_text())
     seen = record.get('identity'); seen = json.loads(seen) if isinstance(seen, str) else seen
     require(record.get('schema') == READ_SCHEMA and record.get('complete') is True and
             record.get('scratch_restored') is True and record.get('port') == PORT, 'fabric read did not pass on 3-3')
-    require(record.get('node') == d.get('device') and seen == d.get('node_identity'),
+    current = json.loads(Path(warm_returns[-1]).read_text()) if warm_returns else {}
+    require(record.get('node') == current.get('returned_node', d.get('device')) and
+            seen == current.get('returned_identity', d.get('node_identity')),
             'fabric read ran on another node or ROM identity than the DDR start')
-    require(path.stat().st_mtime > ddr_path.stat().st_mtime, 'fabric read is older than the DDR start')
+    require(path.stat().st_mtime > max([ddr_path.stat().st_mtime] +
+            [Path(p).stat().st_mtime for p in warm_returns]), 'fabric read is older than the DDR start or warm return')
     words = {int(k, 16): v for k, v in (record.get('words') or {}).items()}
     require(all(a in words for a in FABRIC), 'fabric read lacks a fabric word')
     read_words = [words[a] for a in FABRIC]
@@ -517,6 +558,26 @@ def validate_successful_return(value, terminal, raw_input, reference):
                 fault_recovery_qualified=False)
 
 
+def capture_continuity(provenance, session):
+    expected = provenance.get('warm_return_sha256', [])
+    links = (session.get('admission') or {}).get('warm_returns', [])
+    if not expected and not links: return {}
+    require(isinstance(expected, list) and expected and
+            all(isinstance(h, str) and re.fullmatch('[0-9a-f]{64}', h) for h in expected) and
+            isinstance(links, list) and all(isinstance(x, dict) for x in links) and
+            [x.get('sha256') for x in links] == expected,
+            'capture differs from signed warm-return chain')
+    admission = session['admission']
+    require(all(isinstance(provenance.get(k), str) and re.fullmatch('[0-9a-f]{64}', provenance[k])
+                for k in ('ddr_session_sha256', 'survey_session_sha256')) and
+            admission.get('ddr_sha256') == provenance.get('ddr_session_sha256') and
+            admission.get('survey_sha256') == provenance.get('survey_session_sha256') and
+            session.get('initial_node') == provenance.get('effective_node') and
+            session.get('initial_identity') == provenance.get('effective_identity'),
+            'capture differs from effective warm-return identity')
+    return {k: provenance[k] for k in ('warm_return_sha256', 'effective_node', 'effective_identity')}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest='operation', required=True)
@@ -525,6 +586,8 @@ def main(argv=None):
     s.add_argument('--signer', required=True)
     s.add_argument('--return-policy', choices=RETURN_POLICIES, default=POWER_REMOVAL)
     s.add_argument('--request', type=Path, help='required for restored-return signing')
+    s.add_argument('--warm-return', type=Path, action='append', default=[],
+                   help='accepted restored entry checkpoint session.json; repeat in execution order')
     i = sub.add_parser('input')
     for name in ('approval', 'request', 'ddr', 'survey', 'fabric_read', 'config', 'output'):
         i.add_argument('--' + name.replace('_', '-'), type=Path, required=True)
@@ -532,6 +595,7 @@ def main(argv=None):
     i.add_argument('--plan', choices=('measurement', 'first-read', 'chain-read'), default='measurement',
                    help='measurement: 240 reads; first-read: 4 KiB; chain-read: 64 KiB; finite plans require profile 2')
     i.add_argument('--return-policy', choices=RETURN_POLICIES, default=POWER_REMOVAL)
+    i.add_argument('--warm-return', type=Path, action='append', default=[])
     d = sub.add_parser('decode')
     for name in ('run', 'input', 'output'): d.add_argument('--' + name, type=Path, required=True)
     d.add_argument('--reference', type=Path, help='decoded accepted PIO result for the same card')
@@ -539,7 +603,8 @@ def main(argv=None):
                    help='require exact finite-plan normal return and reference before successor admission')
     args = parser.parse_args(argv)
     if args.operation == 'sign':
-        print(json.dumps(sign(args.approval, args.ddr, args.survey, args.signer, args.return_policy, args.request), indent=1)); return 0
+        print(json.dumps(sign(args.approval, args.ddr, args.survey, args.signer, args.return_policy,
+                              args.request, args.warm_return), indent=1)); return 0
     if args.operation == 'input':
         require(args.plan != 'first-read' or args.profile == 2, 'first-read requires profile 2')
         require(args.plan != 'chain-read' or args.profile == 2, 'chain-read requires profile 2')
@@ -547,15 +612,19 @@ def main(argv=None):
                 'restored return requires --profile 2 --plan first-read')
         require(args.return_policy != CHAIN_RETURN or (args.profile == 2 and args.plan == 'chain-read'),
                 'chain return requires --profile 2 --plan chain-read')
-        lifetime(args.ddr, args.survey)
-        if args.return_policy == POWER_REMOVAL:
+        lifetime(args.ddr, args.survey, args.warm_return)
+        if args.warm_return:
+            approved(args.approval, args.request, args.ddr, args.survey, BUNDLES[args.profile],
+                     args.return_policy, args.warm_return)
+        elif args.return_policy == POWER_REMOVAL:
             approved(args.approval, args.request, args.ddr, args.survey, BUNDLES[args.profile])
         else:
             approved(args.approval, args.request, args.ddr, args.survey, BUNDLES[args.profile], args.return_policy)
         require(not args.output.exists(), 'output exists')
         config = json.loads(args.config.read_text())
         require('fabric' not in config and 'fabric_hz' not in config, 'the fabric words come from this lifetime\'s read')
-        (config['fabric'], config['fabric_hz']), registers = fabric_read(args.fabric_read, args.ddr)
+        (config['fabric'], config['fabric_hz']), registers = (fabric_read(args.fabric_read, args.ddr, args.warm_return)
+            if args.warm_return else fabric_read(args.fabric_read, args.ddr))
         raw = input_bytes(args.profile, secrets.randbits(63) | 1, config,
                           FIRST_READ_PLAN if args.plan == 'first-read' else
                           CHAIN_READ_PLAN if args.plan == 'chain-read' else dma_plan())
@@ -567,7 +636,8 @@ def main(argv=None):
             'fabric_registers': [f'0x{w:08x}' for w in registers], 'fabric': [f'0x{w:08x}' for w in config['fabric']],
             'fabric_hz': config['fabric_hz'], 'fabric_read_sha256': digest(args.fabric_read / 'session.json'),
             'ddr_session_sha256': digest(args.ddr / 'session.json'),
-            'survey_session_sha256': digest(args.survey / 'session.json'), 'tool_sha256': digest(__file__)}, indent=1) + '\n')
+            'survey_session_sha256': digest(args.survey / 'session.json'), 'tool_sha256': digest(__file__),
+            **warm_binding(args.warm_return, args.survey)}, indent=1) + '\n')
         print(args.output); return 0
     raw = args.input.read_bytes(); given = parse_input(raw)
     first_read = given['version'] == VERSION and given['profile'] == 2 and given['plan'] == FIRST_READ_PLAN
@@ -597,12 +667,13 @@ def main(argv=None):
                 session.get('transport_failed') is False and session.get('automatic_access') is True and
                 session.get('mode') == 'kernel' and isinstance(session.get('returned_node'), str),
                 'runner did not establish successful ROM return')
+        continuity = capture_continuity(provenance, session)
         value['successful_return'] = validate_successful_return(value, session.get('result') or {}, raw,
                                                                json.loads(args.reference.read_text()))
         value['reference_crc'] = value['successful_return']['reference_crc']
         value['reference_sha256'] = digest(args.reference)
         value['successful_return'].update(reference_sha256=value['reference_sha256'],
-            approval_sha256=provenance['approval_sha256'], request_sha256=provenance['request_sha256'])
+            approval_sha256=provenance['approval_sha256'], request_sha256=provenance['request_sha256'], **continuity)
     args.output.write_text(json.dumps(value, indent=1) + '\n')
     print(json.dumps({k: value[k] for k in ('status', 'outcome', 'complete')} |
                      ({'throughput': value['throughput']} if value.get('throughput') else {}) |

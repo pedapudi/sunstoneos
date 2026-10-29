@@ -253,6 +253,25 @@ first-read, strict policy binding and exact chunk-reference refusals. The host
 fixture's PIO data and authority are modeled. Physical chain-read operation,
 its timing and fault recovery remain unqualified.
 
+## Admit a current warm-return instance
+
+Signing and input preparation accept repeatable `--warm-return SESSION_JSON`
+arguments in execution order. The original DDR record remains unchanged.
+The shared kernel admission validator connects its instance through each
+successful return to the current survey; the fabric capture must name that
+current instance and follow the last return. The signature and input sidecar
+bind the ordered session hashes and effective identity. Strict decoding matches
+them against the launcher's copied admission records and actual initial identity.
+
+This path admits only the no-provider `npu-entry-mbus-checkpoint-v1` contract:
+`ENTRY_MEMORY_READY`, zero jobs, normal status-zero return, clean state, full
+borrowed DRAM restoration, usable ROM and permitted ownership release. Its
+captured MBUS restore result must be zero; results 8, 9 and 10 retain an active
+predecessor and are refused. Other warm-image profiles need their own reviewed
+peripheral compatibility. Continuity does not authorize SD commands, pin access
+or supply changes; all current lifetime approval fields and native guards remain
+required. The focused host-only check is `checks/sd-return-continuity.py`.
+
 ## Time window
 
 The monitor arms its secure timer for 2 s before EL1 starts. The private
