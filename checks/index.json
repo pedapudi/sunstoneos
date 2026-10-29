@@ -1386,6 +1386,22 @@
   "summary": "Linked ADC application boundaries; controller returns/shared manager state modeled.",
   "usb": false
  },
+ "adc-compare-native.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/adc-application.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--image",
+   "--session",
+   "--nominal",
+   "--output"
+  ],
+  "summary": "Actual ADC owner/core/native MMIO/USB instructions; analog/GIC/providers modeled.",
+  "usb": false
+ },
  "aic8800-association.py": {
   "cache_areas": [],
   "docs": [
@@ -1763,6 +1779,35 @@
    "--output"
   ],
   "summary": "Execute the native maintenance-watchdog admission and reload comparison.",
+  "usb": false
+ },
+ "bluetooth-a2dp-host.py": {
+  "cache_areas": [],
+  "docs": [],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--capture",
+   "--output"
+  ],
+  "summary": "Validate actual native-produced PCM result frames through durable host capture.",
+  "usb": false
+ },
+ "bluetooth-a2dp.py": {
+  "cache_areas": [
+   "evidence",
+   "sources"
+  ],
+  "docs": [
+   "docs/bluetooth-a2dp.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--build",
+   "--output"
+  ],
+  "summary": "Check the optional native finite A2DP consumer without board access.",
   "usb": false
  },
  "bluetooth-application.py": {
@@ -6683,6 +6728,27 @@
   "summary": "Build the root-configured mimus image; execute only new supervised cases.",
   "usb": false
  },
+ "mimus-usb-session.py": {
+  "cache_areas": [],
+  "docs": [
+   "docs/mimus-usb.md"
+  ],
+  "library": false,
+  "pure_host": false,
+  "required_arguments": [
+   "--inputs",
+   "--reference",
+   "--image",
+   "--fel",
+   "--ddr",
+   "--warm-return",
+   "--survey",
+   "--baseline",
+   "--output"
+  ],
+  "summary": "Exercise USB Mimus admission and failure ownership with modeled transports only.",
+  "usb": true
+ },
  "mimus-warm.py": {
   "cache_areas": [
    "evidence",
@@ -10676,6 +10742,7 @@
  "usb-session.py": {
   "cache_areas": [],
   "docs": [
+   "docs/mimus-usb.md",
    "tools/README.md"
   ],
   "library": false,
