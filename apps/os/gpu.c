@@ -71,6 +71,10 @@ static struct {
     uint16_t channels[OS_GPU_TENSORS];
     /* Set once in start; read by the recognizer after the scheduler starts. */
     unsigned started;
+#ifdef SUNSTONE_A733_OS_CPU_RETURN
+    /* Written only by a refused pre-scheduler constructor, never by runtime. */
+    unsigned constructor_refusal, constructor_worker_suspended;
+#endif
     /* Recognizer-owned lifecycle, separate from permanent dispatch admission. */
     unsigned opened, parked, failed, retired;
     uint64_t epoch;
@@ -148,43 +152,58 @@ static int service_init(unsigned core)
 #endif
     return pvr_gpu_service_init(&gpu.service,&gpu.firmware.config,OS_GPU_PRIORITY,(UBaseType_t)1<<core);
 }
+static int start_refused(unsigned reason)
+{
+    if (gpu.service.worker) {
+        vTaskSuspend(gpu.service.worker);
+#ifdef SUNSTONE_A733_OS_CPU_RETURN
+        gpu.constructor_worker_suspended=1;
+#endif
+    }
+    gpu.component=NULL;
+#ifdef SUNSTONE_A733_OS_CPU_RETURN
+    gpu.constructor_refusal=reason;
+#else
+    (void)reason;
+#endif
+    return 1;
+}
 int a733_gpu_mimus_start(unsigned core)
 {
     if (core >= configNUMBER_OF_CORES || gpu.started || !os_recognizer ||
         xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED) return 0;
+#ifdef SUNSTONE_A733_OS_CPU_RETURN
+    if(gpu.constructor_refusal)return 0;
+#endif
     /* Each refusal below leaves OPEN refused and the boot on the CPU; pages
      * acquired before it stay retained. */
     struct a733_pmic_lifetime lifetime;
     static const struct a733_gpu_backend_external external = {.revoked = &board.fatal, .live = board_live};
     const struct a733_gpu_mimus_layout layout = {{OS_DISPATCH_MODELS, OS_DISPATCH_MODELS + OS_DISPATCH_MODEL_BYTES},
         OS_DISPATCH_ARENA, OS_DISPATCH_OUTPUT, gpu.tensors, os_placement_rows, OS_GPU_MAX_JOB_US};
-    if (previous_gpu_loss() || !session_owners_distinct() || !admit_tensors() ||
-        !a733_gpu_platform_native_init(&gpu.native, &providers.shared.locks.callbacks) ||
-        !a733_gpu_platform_init(&gpu.power, &providers.shared.gpu, OS_GPU_CLIENT, &gpu.native.operations, &gpu.native) ||
-        a733_pmic_identity(&providers.shared.pmic, &lifetime) != A733_PMIC_READY ||
-        !a733_gpu_platform_bind_pmic(&gpu.power, &providers.shared.gpu_native, &providers.shared.pmic, &lifetime,
-                                     OS_GPU_FIRMWARE_OWNER) ||
+    if(previous_gpu_loss())return start_refused(1);
+    if(!session_owners_distinct())return start_refused(2);
+    if(!admit_tensors())return start_refused(3);
+    if(!a733_gpu_platform_native_init(&gpu.native,&providers.shared.locks.callbacks))return start_refused(4);
+    if(!a733_gpu_platform_init(&gpu.power,&providers.shared.gpu,OS_GPU_CLIENT,&gpu.native.operations,&gpu.native))return start_refused(5);
+    if(a733_pmic_identity(&providers.shared.pmic,&lifetime)!=A733_PMIC_READY)return start_refused(6);
+    if(!a733_gpu_platform_bind_pmic(&gpu.power,&providers.shared.gpu_native,&providers.shared.pmic,&lifetime,
+                                  OS_GPU_FIRMWARE_OWNER))return start_refused(7);
 #ifdef SUNSTONE_A733_OS_PERF
-        !a733_gpu_platform_performance_enable(&gpu.power,
-            OS_PERF_BOOT_MODE==A733_PERF_LOW ? A733_GPU_LOW_HZ : A733_GPU_CORE_HZ) ||
+    if(!a733_gpu_platform_performance_enable(&gpu.power,
+        OS_PERF_BOOT_MODE==A733_PERF_LOW ? A733_GPU_LOW_HZ : A733_GPU_CORE_HZ))return start_refused(8);
 #endif
-        !a733_gpu_reserved_prepare(&gpu.firmware, OS_GPU_FIRMWARE_OWNER, gpu_firmware,
-                                   (size_t)(gpu_firmware_end - gpu_firmware), 400000000) ||
-        !(gpu.component = a733_gpu_mimus_prepare(&gpu.session, &gpu.firmware, &gpu.service, OS_GPU_SESSION_OWNER,
-                                                 &layout)) ||
-        !a733_gpu_backend_bind(&gpu.backend, &gpu.service, &gpu.firmware.config, &gpu.firmware.memory, &gpu.power,
-                               &external) ||
-        !service_init(core) ||
-        !pvr_gpu_service_bind(&gpu.service, 0, os_recognizer)
+    if(!a733_gpu_reserved_prepare(&gpu.firmware,OS_GPU_FIRMWARE_OWNER,gpu_firmware,
+        (size_t)(gpu_firmware_end-gpu_firmware),400000000))return start_refused(9);
+    if(!(gpu.component=a733_gpu_mimus_prepare(&gpu.session,&gpu.firmware,&gpu.service,OS_GPU_SESSION_OWNER,
+                                            &layout)))return start_refused(10);
+    if(!a733_gpu_backend_bind(&gpu.backend,&gpu.service,&gpu.firmware.config,&gpu.firmware.memory,&gpu.power,
+                             &external))return start_refused(11);
+    if(!service_init(core))return start_refused(12);
+    if(!pvr_gpu_service_bind(&gpu.service,0,os_recognizer))return start_refused(13);
 #ifdef SUNSTONE_A733_OS_PERF
-        || !pvr_gpu_service_bind(&gpu.service,1,os_thermal_task_handle())
+    if(!pvr_gpu_service_bind(&gpu.service,1,os_thermal_task_handle()))return start_refused(14);
 #endif
-        ) {
-        /* A worker that exists but has no client never runs a step. */
-        if (gpu.service.worker) vTaskSuspend(gpu.service.worker);
-        gpu.component = NULL;
-        return 1;
-    }
     gpu.started = 1;
     return 1;
 }
@@ -345,12 +364,70 @@ int a733_gpu_mimus_retire(void)
 }
 #ifdef SUNSTONE_A733_OS_CPU_RETURN
 #include "cpu-return.h"
+__attribute__((used,retain)) const uint32_t os_gpu_untouched_return_version=2;
 __attribute__((used,retain)) uint64_t os_gpu_return_report[8];
 static atomic_uint return_state;
 int os_gpu_return_ready(void)
-{return atomic_load_explicit(&return_state,memory_order_acquire)==2;}
+{unsigned state=atomic_load_explicit(&return_state,memory_order_acquire);return state==2||state==3;}
 int os_gpu_return_started(void)
 {return atomic_load_explicit(&return_state,memory_order_acquire)!=0;}
+static int zero_bytes(const void *address,size_t bytes)
+{
+    const unsigned char *p=address;
+    for(size_t i=0;i<bytes;++i)if(p[i])return 0;
+    return 1;
+}
+/* A constructor refusal precedes the scheduler and every accepted OPEN.
+ * Allocated RAM stays owned until the returning host restores its backup. */
+int a733_gpu_mimus_return_untouched(void)
+{
+    const struct a733_gpu_platform *p=&gpu.power;
+    const struct a733_gpu_backend *b=&gpu.backend;
+    const struct pvr_gpu_service *s=&gpu.service;
+    const struct pvr_mimus_service *m=&gpu.session.component;
+    if(xTaskGetCurrentTaskHandle()!=os_recognizer || !gpu.constructor_refusal ||
+       gpu.constructor_refusal>14 || gpu.started || gpu.opened || gpu.parked || gpu.failed ||
+       gpu.retired || gpu.component || gpu.epoch || gpu.accepted_ticket || gpu.job_pending ||
+       os_gpu_return_started() || a733_smp_counter()>=os_cpu_return_cutoff() ||
+       !os_dispatch_record.open_failed || os_dispatch_record.opened || os_dispatch_record.placed ||
+       os_dispatch_record.refused || os_dispatch_record.incomplete || os_dispatch_record.failure ||
+       os_dispatch_active)return 0;
+    if((!p->initialized&&!zero_bytes(p,sizeof(*p))) ||
+       p->phase!=A733_GPU_PLATFORM_NEW || p->token || p->delegated || p->deadline || p->last_now ||
+       p->power.phase!=A733_GPU_POWER_NEW || p->power.error || p->power.deadline || p->power.last_now ||
+       p->power.lease_attempted || p->power.lease_held || p->power.requested ||
+       p->power.row.counted || atomic_load(&p->power.row.request) || atomic_load(&p->power.row.state) ||
+       p->pmic_observed || p->supply_token.id || p->supply_request.id || p->supply_stage ||
+       p->supply_written || p->supply_settled || p->pmic.rail.id || p->pmic.request.id ||
+       p->pmic.stage || p->pmic.failed || p->pmic.armed || p->pmic.deadline || p->pmic.last_now ||
+       p->pmic.armed_deadline || p->perf.enabled)return 0;
+    if((!b->initialized&&!zero_bytes(b,sizeof(*b))) ||
+       (b->initialized&&(b->phase!=A733_GPU_BACKEND_BOUND || b->service!=s || b->power!=p ||
+                         b->memory!=&gpu.firmware.memory)) ||
+       atomic_load(&b->error) || b->deadline || b->last_now || b->identity || b->identity_step ||
+       !zero_bytes(&b->mode,sizeof(b->mode)))return 0;
+    if(s->phase!=PVR_GPU_SERVICE_COLD || s->error || s->epoch || s->deadline || s->last_now ||
+       atomic_load(&s->published_epoch) || s->irq_fault || s->irq_wake_pending || s->irq_deferred ||
+       m->sequence || m->owed || atomic_load(&m->lost))return 0;
+    if(m->config) {
+        if(m->config!=&gpu.session.config || m->service!=s ||
+           (m->phase!=PVR_MIMUS_SERVICE_BOUND&&m->phase!=PVR_MIMUS_SERVICE_FAILED) ||
+           atomic_load(&m->slot_state)!=PVR_MIMUS_SLOT_CLOSED)return 0;
+    } else if(!zero_bytes(m,sizeof(*m)))return 0;
+    if(s->worker) {
+        if(!s->initialized || !gpu.constructor_worker_suspended ||
+           eTaskGetState(s->worker)!=eSuspended || !s->requests || uxQueueMessagesWaiting(s->requests))return 0;
+        for(unsigned i=0;i<PVR_GPU_SERVICE_CLIENTS;++i)
+            if(s->clients[i].pending || s->clients[i].next_ticket || !s->clients[i].replies ||
+               uxQueueMessagesWaiting(s->clients[i].replies))return 0;
+    } else if(s->initialized || gpu.constructor_worker_suspended || !zero_bytes(s,sizeof(*s)))return 0;
+    if(m->completions&&uxQueueMessagesWaiting(m->completions))return 0;
+    const uint64_t report[8]={UINT64_C(0x3152475033333741),2,sizeof(report),
+        board.session.epoch,board.session.generation,0,0,gpu.constructor_refusal};
+    memcpy(os_gpu_return_report,report,sizeof(report));gpu.retired=1;
+    atomic_store_explicit(&return_state,3,memory_order_release);
+    return 1;
+}
 static int return_park(void *context,uint64_t deadline)
 {
     if(context!=&gpu.backend || xTaskGetCurrentTaskHandle()!=gpu.service.worker ||

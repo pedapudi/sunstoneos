@@ -310,7 +310,8 @@ def run_once(tx, launch, ready, bundle, p, evidence, record, journal):
     result = decode_report(copied['return-report'], p['epoch'])
     transcript = decode_output(copied['recorded-output'], p['epoch'], p['generation'])
     if 'gpu' in p['qualification']:
-        result['gpu']=os_image.gpu_return_rules.decode(copied['gpu-retirement'],p['epoch'],p['generation'],require)
+        result['gpu']=os_image.gpu_return_rules.decode(copied['gpu-retirement'],p['epoch'],p['generation'],require,
+            allow_untouched=p['qualification']['gpu'].get('untouched_report_version')==2)
         record['gpu_report_sha256']=hashlib.sha256(copied['gpu-retirement']).hexdigest()
     if 'thermal' in p['qualification']:
         record['thermal_capture_sha256'] = {name: hashlib.sha256(copied[name]).hexdigest()

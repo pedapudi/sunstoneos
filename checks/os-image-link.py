@@ -230,6 +230,11 @@ def gpu_configuration(elf, required=False):
         assert report['size']==64 and 0x41200000<=report['value']<report['value']+64<=0x41c00000, 'GPU return report geometry differs'
         assert 0x41200000<=wb[0]<wb[1]<=0x41c00000 and wb[1]-wb[0]<=2097152 and nc==[0x41c00000,0x41e00000], 'GPU return needs backed-up local pools'
         result['return']={'version':1,'report_address':report['value'],'report_bytes':64,'write_back_pool':wb,'uncached_pool':nc}
+        untouched=[s for s in elf.symbols if s['name']=='os_gpu_untouched_return_version' and s['shndx']!=0]
+        if untouched:
+            marker=one('os_gpu_untouched_return_version')
+            assert marker['size']==4 and struct.unpack('<I',elf.read(marker['value'],4))==(2,), 'GPU untouched-return capability differs'
+            result['return']['untouched_report_version']=2
     return result
 
 

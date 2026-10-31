@@ -107,7 +107,8 @@ def gpu_returned(a, p, r):
     raw_path = Path(a['gpu_return']['report'])
     require(raw_path.is_file() and digest(raw_path) == r.get('gpu_report_sha256'),
             'Copied GPU retirement report changed.')
-    decoded = cpu.os_image.gpu_return_rules.decode(raw_path.read_bytes(), p['epoch'], p['generation'], require)
+    decoded = cpu.os_image.gpu_return_rules.decode(raw_path.read_bytes(), p['epoch'], p['generation'], require,
+        allow_untouched=geometry.get('untouched_report_version')==2)
     # The CPU host already compared and restored every backup before recording
     # dram_restored. Bind this GPU's ranges to those exact recorded chunks;
     # no reread of retired device RAM or new backup operation occurs here.
@@ -435,6 +436,8 @@ def run(args):
         if 'gpu' in p['qualification']:
             state['gpu_return'] = r['result']['gpu']
             state['gpu_report_sha256'] = r['gpu_report_sha256']
+        state['gpu_qualification_passed'] = ('gpu' not in p['qualification'] or
+            r['result']['gpu'].get('gpu_off') is True and r['result']['gpu'].get('jobs',0)>0)
         save()
         begin('parity')
         # Semantic or host-reporting failure cannot leave known returned CPUs
@@ -476,7 +479,7 @@ def run(args):
                 isinstance(hr.get('returned_identity'), list) and len(hr['returned_identity']) == 5 and
                 hr['returned_identity'] != hr['initial_identity'], 'Helper successor ROM is absent.')
         ready(); end(); state.update(complete=True, cpu_rail_restoration_pending=False, ownership_release_permitted=True,
-            qualification_passed=state['parity_passed'] and state['thermal_evidence_complete'],
+            qualification_passed=state['parity_passed'] and state['thermal_evidence_complete'] and state['gpu_qualification_passed'],
             helper_session_sha256=digest(helper_path), helper_final_proof=proof,
             returned_node=hr['returned_node'], returned_identity=hr['returned_identity'],
             ram_continuity=True, helper_ram_retired=True, helper_dram_restored=False,

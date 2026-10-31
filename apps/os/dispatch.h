@@ -109,6 +109,7 @@ int a733_gpu_mimus_thermal(void);
 int a733_gpu_mimus_retire(void);
 #ifdef SUNSTONE_A733_OS_CPU_RETURN
 int a733_gpu_mimus_return(uint64_t completed);
+int a733_gpu_mimus_return_untouched(void);
 int os_gpu_retire(void);
 int os_gpu_return_ready(void);
 int os_gpu_return_started(void);

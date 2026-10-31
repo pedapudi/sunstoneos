@@ -68,7 +68,7 @@ def main():
     if 'gpu' in prepared['qualification']:
         assert args.gpu_report and args.native_output
         gpu_report=args.gpu_report.read_bytes()
-        host.os_image.gpu_return_rules.decode(gpu_report,prepared['epoch'],prepared['generation'],host.require)
+        host.os_image.gpu_return_rules.decode(gpu_report,prepared['epoch'],prepared['generation'],host.require,allow_untouched=prepared['qualification']['gpu'].get('untouched_report_version')==2)
     (args.out / 'native-output.bin').write_bytes(output)
     rows = []
     manifest = json.loads((args.bundle / 'board/image-input-manifest.json').read_text())
@@ -101,7 +101,7 @@ def main():
             host.hashlib.sha256(template).hexdigest(), template, False, evidence, True,
             inference=manifest['inference']), 'Explicit complete-power-removal/retention plan')
     rows.append({'name': 'default-admission-keeps-unconditional-retention', 'passed': True})
-    variants = ('success', 'thermal-success', 'thermal-malformed', 'no-new-ROM', 'bad-report', 'truncated-output', 'wrong-output-session',
+    variants = ('success', 'gpu-untouched', 'thermal-success', 'thermal-malformed', 'no-new-ROM', 'bad-report', 'truncated-output', 'wrong-output-session',
                 'snapshot-incomplete', 'asset-transfer-failure', 'saved-RAM-changed', 'restore-mismatch')
     if 'gpu' in prepared['qualification']:
         variants+=('gpu-report-missing','gpu-report-session','gpu-report-incomplete')
@@ -211,12 +211,15 @@ def main():
                        'saved-RAM-changed': 'Saved CPU return RAM changed',
                        'restore-mismatch': 'DRAM restoration readback differs'}
             action = lambda: host.run_once(tx, launch, lambda: None, args.bundle, p, root, record, lambda: None)
-            if variant in ('success', 'thermal-success', 'thermal-malformed'):
+            if variant in ('success', 'gpu-untouched', 'thermal-success', 'thermal-malformed'):
                 action()
                 assert record['complete'] and record['dram_restored'] and record['rom_usable']
                 assert record['cpu_rail_restoration_pending'] and not record['ownership_release_permitted']
-                if 'gpu' in p['qualification']:assert record['result']['gpu']['gpu_off'] and record['result']['gpu']['jobs']==7 and record['gpu_report_sha256']
+                if 'gpu' in p['qualification'] and variant!='gpu-untouched':assert record['result']['gpu']['gpu_off'] and record['result']['gpu']['jobs']==7 and record['gpu_report_sha256']
                 assert state['writes_after_launch'] == len(record['dram_backups'])
+                if variant=='gpu-untouched':
+                    assert record['result']['gpu']['gpu_untouched'] and not record['result']['gpu']['qualification_passed']
+                    assert not ({'gpu_off','dcdc4_uv','worker_parked'} & record['result']['gpu'].keys())
                 if variant == 'thermal-malformed':
                     assert record['thermal_capture_status'] == 'malformed' and record['thermal_capture_error']
                     assert set(record['thermal_capture_sha256']) == {'thermal-window', 'thermal-readings'}

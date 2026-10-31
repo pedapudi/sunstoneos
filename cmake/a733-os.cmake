@@ -369,6 +369,9 @@ if(SUNSTONE_A733_OS_NPU)
   target_compile_definitions(sunstone-a733-os PRIVATE SUNSTONE_A733_OS_NPU=1)
 endif()
 if(SUNSTONE_A733_OS_GPU_LINEAR)
+  if(SUNSTONE_A733_OS_CPU_RETURN)
+    target_compile_definitions(sunstone-a733-os PRIVATE INCLUDE_eTaskGetState=1)
+  endif()
   # A733_GPU_OUTPUT_EL0_READ_ONLY makes platform/a733-smp-cached/memory.c map
   # 0x46C00000-0x47000000 read-only at EL0 and EL1.
   target_compile_definitions(sunstone-a733-os PRIVATE SUNSTONE_A733_OS_GPU_LINEAR=1

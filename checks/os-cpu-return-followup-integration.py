@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """One complete compound composition with explicit model authority/transport.
 
-The actual frozen CPU bundle, helper, survey build, SRAM capture functions,
+The actual frozen CPU or GPU bundle, helper, survey build, SRAM capture functions,
 receipt parsers, reference comparator and read-only SQL admission execute.
 USB access, FEL and helper execution are synthetic. Initial RAM-continuity
 validation is an API fixture because the source bundle deliberately names a
@@ -34,8 +34,10 @@ L=Path.home()/'.cache/sunstoneos/evidence/sol-resume-20261028/port-3-1'
 def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--out',type=Path,required=True)
     parser.add_argument('--case', action='append', help='Run only selected compositions.')
+    for name in ('bundle','native-report','gpu-report','thermal-window','thermal-readings'):
+        parser.add_argument('--'+name,type=Path)
     args=parser.parse_args();args.out.mkdir(parents=True,exist_ok=False)
-    bundle=E/'compatibility-model/MODEL-NOT-DEPLOYABLE-bundle';p=f.cpu.validate_bundle(bundle)
+    bundle=args.bundle or E/'compatibility-model/MODEL-NOT-DEPLOYABLE-bundle';p=f.cpu.validate_bundle(bundle)
     command=json.loads((L/'cpu-recognition-survey-setup/command.json').read_text())
     survey_build=Path(command[command.index('--build')+1]);survey_software=Path(command[command.index('--software')+1])
     rows=[];actual_subprocess=f.subprocess;actual_module=f.module
@@ -47,7 +49,7 @@ def main():
     f.cpu.cpu.kernel.validate_platform_admission=lambda *a,**k: None
     sys.modules['usb_guard']=SimpleNamespace(check_health=lambda:None)
     try:
-        variants=('success','thermal-success','thermal-incomplete','parity-failure','bad-CPU-report','changed-helper-artifact','wrong-live-successor',
+        variants=('success','gpu-untouched','thermal-success','thermal-incomplete','parity-failure','bad-CPU-report','changed-helper-artifact','wrong-live-successor',
                   'halt-before-survey','transport-loss','helper-nonzero','gpu-profile-refused','wrong-database')
         if args.case:
             assert set(args.case) <= set(variants)
@@ -63,12 +65,30 @@ def main():
                     initial_identity=p['_review']['identity'],returned_node='/dev/bus/usb/099/002',returned_identity=[0,0,2,0,0],
                     host_source_sha256=f.digest(Path(f.cpu.__file__)), automatic_access=True,
                     tool_sha256=f.base.FEL_HASH)
-                report=(E/'entry-terminal-success/return-report.bin').read_bytes();(saved/'return-report.bin').write_bytes(report)
+                receipt['return_review_sha256']=f.digest(bundle/'return-review.json')
+                if '_approved_rail_helper' in p:receipt['approved_rail_helper']=p['_approved_rail_helper']
+                entry=json.loads((bundle/'board/admission.json').read_text())
+                clock=json.loads((bundle/'board'/p['entry_evidence'][entry['cpu_clock_approval']['path']]['name']).read_text())
+                receipt['root_owned_claim']=clock['root_owned_claim']
+                report=(args.native_report or E/'entry-terminal-success/return-report.bin').read_bytes();(saved/'return-report.bin').write_bytes(report)
+                receipt['result']=f.cpu.decode_report(report,p['epoch'])
                 text=('RESULT feat_crc=ac657a3b lp_crc=a7ade80e frames=90\nTEXT there was silence\nMARKS 002\nCAPS 000\nFORMATTED There was silence.\nPASS mimus: MODEL ONLY fixture\n')
                 if variant=='parity-failure':
                     text=text.replace('There was silence.', 'Different recognition.')
                     receipt['thermal_capture_status']='malformed'
                 thermal_layout=None
+                if variant=='gpu-untouched':
+                    assert args.gpu_report and args.thermal_window and args.thermal_readings and 'gpu' in p['qualification']
+                    raw=args.gpu_report.read_bytes();(saved/'gpu-retirement.bin').write_bytes(raw)
+                    receipt['gpu_report_sha256']=hashlib.sha256(raw).hexdigest()
+                    receipt['result']['gpu']=f.cpu.os_image.gpu_return_rules.decode(raw,p['epoch'],p['generation'],f.require,
+                        allow_untouched=p['qualification']['gpu'].get('untouched_report_version')==2)
+                    assert receipt['result']['gpu']['gpu_untouched']
+                    copied={'thermal-window':args.thermal_window.read_bytes(),'thermal-readings':args.thermal_readings.read_bytes()}
+                    for name,data in copied.items():(saved/(name+'.bin')).write_bytes(data)
+                    receipt['thermal_capture_status']='decoded'
+                    receipt['thermal_capture_sha256']={name:hashlib.sha256(data).hexdigest() for name,data in copied.items()}
+                    receipt['result']['thermal']=f.cpu.thermal_capture.decode(p['qualification']['thermal'],copied,p['epoch'],p['generation'])
                 if variant in ('thermal-success','thermal-incomplete'):
                     thermal_layout=f.cpu.thermal_capture.geometry(bundle/'board/image.elf')
                     native=Path.home()/'.cache/sunstoneos/evidence/sol-cpu-robustness-1031/native-thermal-gpu'
@@ -108,6 +128,9 @@ def main():
                     'helper':{'image':ref(E/'rails-800/build/probe.elf'),'binary':ref(E/'rails-800/probe.bin'),'manifest':ref(E/'rails-800/input-identities.json')},
                     'reference':ref(E/'first-port-3-1-guarded/reference/001.json'),
                     'ddr':placeholder,'initial_survey':placeholder,'warm_returns':[]}
+                if 'gpu' in p['qualification']:
+                    review['gpu_return']={'configuration':json.loads((bundle/'board/image-input-manifest.json').read_text())['gpu_profile'],
+                        'retirement_review_sha256':review['cpu_return_review']['sha256'],'report':str(saved/'gpu-retirement.bin')}
                 if variant=='changed-helper-artifact':review['helper']['binary']['sha256']='0'*64
                 if variant=='wrong-database':review['database']=str(root/'OTHER-QUEUE.sqlite3')
                 f.cpu.validate_bundle=actual_validate
@@ -176,7 +199,7 @@ def main():
                     (out/'session.json').write_text(json.dumps(hr));(out/'kernel.log').write_text(fixtures.helper_log());return 0
                 f.cpu.cpu.kernel.main=kernel_main
                 f.base.stop_after_failure=lambda record,save,quarantine,error,**kw:(save(),quarantine())
-                if variant in ('success','thermal-success','thermal-incomplete','parity-failure'):
+                if variant in ('success','gpu-untouched','thermal-success','thermal-incomplete','parity-failure'):
                     f.authority(run_args,{'port':review['port']})
                     assert not run_args.evidence.exists() and not requests and not helper_calls
                     result=f.run(run_args);assert result['complete'] and result['ownership_release_permitted']
@@ -184,6 +207,11 @@ def main():
                     assert [x['name'] for x in result['phases']]==list(f.PHASES) and all(x['complete'] for x in result['phases'])
                     assert len(helper_calls)==1
                     assert result['qualification_passed'] is (variant in ('success','thermal-success'))
+                    if variant=='gpu-untouched':
+                        assert result['parity_passed'] and result['thermal_evidence_complete']
+                        assert not result['gpu_qualification_passed'] and result['gpu_return']['gpu_untouched']
+                        assert result['thermal_evidence']['classification']=='complete'
+                    save(args.out/(variant+'-cleanup.json'),result)
                     if variant in ('thermal-success','thermal-incomplete'):
                         assert result['parity_passed'] and result['thermal_capture_status']=='decoded'
                         assert result['thermal_evidence']['classification']==('complete' if variant=='thermal-success' else 'incomplete')
@@ -211,7 +239,10 @@ def main():
         else:sys.modules['usb_guard']=previous_guard
         if previous_port is None:os.environ.pop('SUNSTONE_USB_PORT',None)
         else:os.environ['SUNSTONE_USB_PORT']=previous_port
-    save(args.out/'results.json',{'physical_access':False,'scope':__doc__,'cases':rows})
+    artifacts=[bundle/'prepared.json',bundle/'return-review.json']
+    artifacts += [x for x in (args.native_report,args.gpu_report,args.thermal_window,args.thermal_readings) if x]
+    save(args.out/'results.json',{'physical_access':False,'scope':__doc__,'cases':rows,
+        'image_sha256':p['image_sha256'],'inputs':[{'path':str(x.resolve()),'sha256':f.digest(x)} for x in artifacts]})
     print('PASS',len(rows),'modeled compound compositions')
 
 
