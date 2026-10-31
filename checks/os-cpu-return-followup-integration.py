@@ -33,6 +33,7 @@ L=Path.home()/'.cache/sunstoneos/evidence/sol-resume-20261028/port-3-1'
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--out',type=Path,required=True)
+    parser.add_argument('--case', action='append', help='Run only selected compositions.')
     args=parser.parse_args();args.out.mkdir(parents=True,exist_ok=False)
     bundle=E/'compatibility-model/MODEL-NOT-DEPLOYABLE-bundle';p=f.cpu.validate_bundle(bundle)
     command=json.loads((L/'cpu-recognition-survey-setup/command.json').read_text())
@@ -46,8 +47,12 @@ def main():
     f.cpu.cpu.kernel.validate_platform_admission=lambda *a,**k: None
     sys.modules['usb_guard']=SimpleNamespace(check_health=lambda:None)
     try:
-        for variant in ('success','bad-CPU-report','changed-helper-artifact','wrong-live-successor',
-                        'halt-before-survey','transport-loss','helper-nonzero','gpu-profile-refused','wrong-database'):
+        variants=('success','parity-failure','bad-CPU-report','changed-helper-artifact','wrong-live-successor',
+                  'halt-before-survey','transport-loss','helper-nonzero','gpu-profile-refused','wrong-database')
+        if args.case:
+            assert set(args.case) <= set(variants)
+            variants=args.case
+        for variant in variants:
             with tempfile.TemporaryDirectory(prefix='MODEL-compound-full-') as temporary:
                 root=Path(temporary);saved=root/'MODEL-CPU-return';saved.mkdir()
                 def ref(path):return {'path':str(Path(path).resolve()),'sha256':f.digest(path)}
@@ -60,6 +65,9 @@ def main():
                     tool_sha256=f.base.FEL_HASH)
                 report=(E/'entry-terminal-success/return-report.bin').read_bytes();(saved/'return-report.bin').write_bytes(report)
                 text=('RESULT feat_crc=ac657a3b lp_crc=a7ade80e frames=90\nTEXT there was silence\nMARKS 002\nCAPS 000\nFORMATTED There was silence.\nPASS mimus: MODEL ONLY fixture\n')
+                if variant=='parity-failure':
+                    text=text.replace('There was silence.', 'Different recognition.')
+                    receipt['thermal_capture_status']='malformed'
                 encoded=text.encode();output=struct.pack('<6Q',f.cpu.OUTPUT_MAGIC,1,f.cpu.OUTPUT_BYTES,p['epoch'],p['generation'],len(encoded))+encoded+bytes(16384-len(encoded))
                 (saved/'recorded-output.bin').write_bytes(output);(saved/'transcript.txt').write_text(text)
                 receipt.update(report_sha256=hashlib.sha256(report).hexdigest(),output_sha256=hashlib.sha256(output).hexdigest())
@@ -148,13 +156,18 @@ def main():
                     (out/'session.json').write_text(json.dumps(hr));(out/'kernel.log').write_text(fixtures.helper_log());return 0
                 f.cpu.cpu.kernel.main=kernel_main
                 f.base.stop_after_failure=lambda record,save,quarantine,error,**kw:(save(),quarantine())
-                if variant=='success':
+                if variant in ('success','parity-failure'):
                     f.authority(run_args,{'port':review['port']})
                     assert not run_args.evidence.exists() and not requests and not helper_calls
                     result=f.run(run_args);assert result['complete'] and result['ownership_release_permitted']
                     assert not result['cpu_rail_restoration_pending'] and result['helper_ram_retired'] and not result['helper_dram_restored']
                     assert [x['name'] for x in result['phases']]==list(f.PHASES) and all(x['complete'] for x in result['phases'])
                     assert len(helper_calls)==1
+                    assert result['qualification_passed'] is (variant=='success')
+                    if variant=='parity-failure':
+                        assert not result['parity_passed'] and result['parity_error']
+                        assert result['thermal_capture_status']=='malformed'
+                        assert (run_args.evidence/'parity/compare.log').is_file()
                     refused(lambda:f.run(run_args),'File exists',FileExistsError)
                 else:
                     reasons={'bad-CPU-report':'Copied CPU report/output','changed-helper-artifact':'Compound artifact changed',

@@ -412,7 +412,18 @@ def run(args):
             state['gpu_return'] = r['result']['gpu']
             state['gpu_report_sha256'] = r['gpu_report_sha256']
         save()
-        begin('parity'); parity(a, p, r, text, args.evidence / 'parity'); end()
+        begin('parity')
+        # Semantic or host-reporting failure cannot leave known returned CPUs
+        # at their raised rails. Every following phase independently rechecks
+        # native cleanup, artifact authority, queue ownership and live identity.
+        try:
+            parity(a, p, r, text, args.evidence / 'parity')
+            state['parity_passed'] = True
+        except (ValueError, OSError) as error:
+            state['parity_passed'] = False
+            state['parity_error'] = str(error)
+        state['thermal_capture_status'] = r.get('thermal_capture_status', 'not-requested')
+        end()
         begin('cache-off'); observe('cache-off', evidence(a['cache_off']).read_bytes(), cache_capture); end()
         begin('survey'); observe('survey', evidence(a['survey']['binary']).read_bytes(), survey_capture); end()
         begin('rail-helper')
@@ -439,6 +450,7 @@ def run(args):
                 isinstance(hr.get('returned_identity'), list) and len(hr['returned_identity']) == 5 and
                 hr['returned_identity'] != hr['initial_identity'], 'Helper successor ROM is absent.')
         ready(); end(); state.update(complete=True, cpu_rail_restoration_pending=False, ownership_release_permitted=True,
+            qualification_passed=state['parity_passed'] and state['thermal_capture_status'] != 'malformed',
             helper_session_sha256=digest(helper_path), helper_final_proof=proof,
             returned_node=hr['returned_node'], returned_identity=hr['returned_identity'],
             ram_continuity=True, helper_ram_retired=True, helper_dram_restored=False,

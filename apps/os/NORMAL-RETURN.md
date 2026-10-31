@@ -304,8 +304,15 @@ helper's final rail inspections/quiescence. Controlled outcomes, refusals,
 missing/duplicate proof and changed artifacts retain the claim. The compound
 receipt alone can set rail restoration pending false and permit **root** to
 finish the claim. The script performs no queue mutation or automatic finish;
-every later device still requires its own authority. Any failure stops remaining
+every later device still requires its own authority. A device or native-proof failure stops remaining
 phases without retry, fallback helper or recovery guarantee.
+
+A reference mismatch or malformed optional thermal report remains a qualification
+failure. After independently validated native cleanup and normal return, the
+continuation records that failure and completes the mandatory rail helper once.
+Its final receipt distinguishes `qualification_passed` from cleanup completion
+and ownership release. Invalid native cleanup, changed authority or a transport
+failure still stops the continuation and retains ownership.
 
 ```sh
 ~/.cache/sunstoneos/venv/bin/python apps/os/cpu-return-followup.py \
