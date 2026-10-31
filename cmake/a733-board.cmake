@@ -101,9 +101,10 @@ set(board_host_sources "${board_root}/drivers/usb/a733_xhci_tinyusb.c"
   "${board_build}/hub-native.c"
   "${board_host_tiny}/tusb.c" "${board_host_tiny}/host/usbh.c"
   "${board_host_tiny}/class/msc/msc_host.c"
-  "${board_host_tiny}/class/hid/hid_host.c")
+  "${board_host_tiny}/class/hid/hid_host.c"
+  "${board_host_tiny}/common/tusb_fifo.c")
 if(SUNSTONE_BOARD_USB_AUDIO)
-  list(APPEND board_host_sources "${board_host_tiny}/class/audio/audio_host.c" "${board_host_tiny}/common/tusb_fifo.c")
+  list(APPEND board_host_sources "${board_host_tiny}/class/audio/audio_host.c")
 endif()
 add_library(a733-board-usb2-host OBJECT ${board_host_sources})
 if(SUNSTONE_BOARD_USB_AUDIO)
