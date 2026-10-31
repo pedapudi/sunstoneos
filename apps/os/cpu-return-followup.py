@@ -43,7 +43,8 @@ SOURCES = ('apps/os/cpu-return-followup.py', 'apps/os/cpu-return-host.py', 'apps
            'tools/check-a733-kernel.py', 'tools/check-a733-smp.py', 'tools/usb-access.py',
            'checks/mimus-parity.py', 'boot/a733/launch-survey.S', 'apps/os/gpu-return.py',
            'checks/os-image-link.py', 'apps/cpu-runtime-qualification/host.py',
-           'apps/os/cpu-return-review.py')
+           'apps/os/cpu-return-review.py', 'apps/os/cpu-return-thermal.py',
+           'apps/os/thermal-report.py')
 
 
 def evidence(item):
@@ -235,7 +236,9 @@ def returned(a, p):
     gpu = gpu_returned(a, p, r)
     if gpu is not None:
         decoded['gpu'] = gpu
-    require(decoded['secondaries_off'] == 7 and r.get('result') == decoded,
+    summary = dict(r.get('result', {}))
+    summary.pop('thermal', None)
+    require(decoded['secondaries_off'] == 7 and summary == decoded,
             'CPU secondary retirement or receipt summary differs.')
     text = cpu.decode_output(output.read_bytes(), p['epoch'], p['generation'])
     require((path.parent / 'transcript.txt').read_text() == text, 'Copied transcript differs.')
@@ -243,6 +246,27 @@ def returned(a, p):
                            json.loads(evidence(a['helper']['manifest']).read_text()),
                            a['helper']['manifest']['sha256'])
     return r, text
+
+
+def thermal_evidence(a, p, r):
+    """Validate optional telemetry independently of mandatory device cleanup."""
+    if 'thermal' not in p['qualification'] and 'thermal_capture_status' not in r:
+        return {'status': 'not-requested', 'complete': True}
+    try:
+        require('thermal' in p['qualification'], 'Thermal capture geometry absent.')
+        copied = {}
+        for name, _, _ in cpu.thermal_capture.captures(p['qualification']['thermal']):
+            path = Path(a['return_session']).parent / (name + '.bin')
+            require(digest(path) == r.get('thermal_capture_sha256', {}).get(name),
+                    'Copied thermal capture changed.')
+            copied[name] = path.read_bytes()
+        decoded = cpu.thermal_capture.decode(p['qualification']['thermal'], copied, p['epoch'], p['generation'])
+        require(r.get('thermal_capture_status') == 'decoded' and
+                r.get('result', {}).get('thermal') == decoded, 'Thermal receipt summary differs.')
+        return {'status': 'decoded', 'complete': decoded['classification'] == 'complete',
+                'classification': decoded['classification']}
+    except (ValueError, OSError, KeyError, struct.error) as error:
+        return {'status': 'malformed', 'complete': False, 'error': str(error)}
 
 
 def parity(a, p, r, text, out):
@@ -422,10 +446,9 @@ def run(args):
         except (ValueError, OSError) as error:
             state['parity_passed'] = False
             state['parity_error'] = str(error)
-        state['thermal_capture_status'] = r.get('thermal_capture_status', 'not-requested')
-        state['thermal_evidence_complete'] = (state['thermal_capture_status'] == 'not-requested' or
-            state['thermal_capture_status'] == 'decoded' and
-            r.get('result', {}).get('thermal', {}).get('classification') == 'complete')
+        state['thermal_evidence'] = thermal_evidence(a, p, r)
+        state['thermal_capture_status'] = state['thermal_evidence']['status']
+        state['thermal_evidence_complete'] = state['thermal_evidence']['complete']
         end()
         begin('cache-off'); observe('cache-off', evidence(a['cache_off']).read_bytes(), cache_capture); end()
         begin('survey'); observe('survey', evidence(a['survey']['binary']).read_bytes(), survey_capture); end()

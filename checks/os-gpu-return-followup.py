@@ -24,6 +24,7 @@ C = Path.home()/'.cache/sunstoneos/evidence/sol-cpu-normal-return-1028'
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--out', type=Path, required=True)
+    parser.add_argument('--case', action='append', help='Run only selected receipt cases.')
     args = parser.parse_args(); args.out.mkdir(parents=True, exist_ok=False)
     bundle = E/'preparation-delivery/MODEL-NOT-DEPLOYABLE-clock-top'
     p = f.cpu.validate_bundle(bundle)
@@ -62,12 +63,25 @@ def main():
                                'retirement_review_sha256':f.digest(bundle/'return-review.json'),
                                'report':str(root/'gpu-retirement.bin')}}
             return a,r
-        variants = ('success','adjacent-chunks','missing-opt-in','changed-geometry','changed-review',
+        variants = ('success','thermal-success','adjacent-chunks','missing-opt-in','changed-geometry','changed-review',
                     'wrong-capture-path','missing-record','changed-record','wrong-epoch','wrong-generation',
                     'missing-fw-off','no-completed-jobs','wrong-supply','summary-mismatch','missing-backups',
                     'uncached-hole','writeback-hole','oversize-backup','malformed-backup')
+        if args.case:
+            assert set(args.case) <= set(variants)
+            variants=args.case
         for variant in variants:
             a,r = fresh()
+            if variant=='thermal-success':
+                p['qualification']['thermal']=f.cpu.thermal_capture.geometry(bundle/'board/image.elf')
+                native=Path.home()/'.cache/sunstoneos/evidence/sol-cpu-robustness-1031/native-thermal-gpu'
+                copied={name:(native/(name+'.bin')).read_bytes() for name,_,_ in f.cpu.thermal_capture.captures(p['qualification']['thermal'])}
+                window=bytearray(copied['thermal-window']);struct.pack_into('<2Q',window,16,p['epoch'],p['generation'])
+                copied['thermal-window']=bytes(window)
+                for name,data in copied.items():(root/(name+'.bin')).write_bytes(data)
+                r['thermal_capture_status']='decoded'
+                r['thermal_capture_sha256']={name:f.digest(root/(name+'.bin')) for name in copied}
+                r['result']['thermal']=f.cpu.thermal_capture.decode(p['qualification']['thermal'],copied,p['epoch'],p['generation'])
             if variant == 'adjacent-chunks':
                 lo,hi = p['qualification']['gpu']['write_back_pool']; mid=(lo+hi)//2
                 r['dram_backups']=[{'address':lo,'bytes':mid-lo},{'address':mid,'bytes':hi-mid},
@@ -92,8 +106,9 @@ def main():
             if variant == 'oversize-backup':r['dram_backups']=[{'address':0x41000000,'bytes':0x1200000}]
             if variant == 'malformed-backup':r['dram_backups']=[{'address':'invalid','bytes':4096}]
             (root/'session.json').write_text(json.dumps(r))
-            if variant in ('success','adjacent-chunks'):
+            if variant in ('success','thermal-success','adjacent-chunks'):
                 actual,transcript=f.returned(a,p);assert actual['result']['gpu']==gpu and transcript==text
+                if variant=='thermal-success':assert f.thermal_evidence(a,p,r)=={'status':'decoded','complete':True,'classification':'complete'}
             else:
                 reason = ('CPU-only profile' if variant=='missing-opt-in' else
                     'Exact GPU continuation' if variant in ('changed-geometry','changed-review','wrong-capture-path') else
@@ -105,10 +120,11 @@ def main():
                     'exceeds the original' if variant=='oversize-backup' else 'Invalid GPU backup')
                 refused(lambda:f.returned(a,p),reason)
             cases.append({'name':variant,'passed':True,'transport_calls':0})
-        a,_=fresh(); cpu=copy.deepcopy(p);cpu['qualification'].pop('gpu')
-        refused(lambda:f.gpu_authority(a,cpu),'GPU authority supplied for a CPU-only')
-        a.pop('gpu_return');assert f.gpu_authority(a,cpu) is None
-        cases.append({'name':'CPU-only-default-and-extra-proof-refusal','passed':True,'transport_calls':0})
+        if not args.case:
+            a,_=fresh(); cpu=copy.deepcopy(p);cpu['qualification'].pop('gpu')
+            refused(lambda:f.gpu_authority(a,cpu),'GPU authority supplied for a CPU-only')
+            a.pop('gpu_return');assert f.gpu_authority(a,cpu) is None
+            cases.append({'name':'CPU-only-default-and-extra-proof-refusal','passed':True,'transport_calls':0})
     save(args.out/'results.json', {'physical_access':False,'scope':__doc__, 'image_sha256':p['image_sha256'],
         'bundle_clock_authority':'nominal model; compound under-test admission is unchanged and not bypassed',
         'cases':cases,'native_producer_records':{str(E/n):f.digest(E/n) for n in

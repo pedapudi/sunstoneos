@@ -47,7 +47,7 @@ def main():
     f.cpu.cpu.kernel.validate_platform_admission=lambda *a,**k: None
     sys.modules['usb_guard']=SimpleNamespace(check_health=lambda:None)
     try:
-        variants=('success','parity-failure','bad-CPU-report','changed-helper-artifact','wrong-live-successor',
+        variants=('success','thermal-success','thermal-incomplete','parity-failure','bad-CPU-report','changed-helper-artifact','wrong-live-successor',
                   'halt-before-survey','transport-loss','helper-nonzero','gpu-profile-refused','wrong-database')
         if args.case:
             assert set(args.case) <= set(variants)
@@ -68,6 +68,22 @@ def main():
                 if variant=='parity-failure':
                     text=text.replace('There was silence.', 'Different recognition.')
                     receipt['thermal_capture_status']='malformed'
+                thermal_layout=None
+                if variant in ('thermal-success','thermal-incomplete'):
+                    thermal_layout=f.cpu.thermal_capture.geometry(bundle/'board/image.elf')
+                    native=Path.home()/'.cache/sunstoneos/evidence/sol-cpu-robustness-1031/native-thermal-gpu'
+                    copied={name:(native/(name+'.bin')).read_bytes() for name,_,_ in f.cpu.thermal_capture.captures(thermal_layout)}
+                    # Native producer bytes use modeled identity 11/12; bind
+                    # only those identity fields to this composition's bundle.
+                    window=bytearray(copied['thermal-window']);struct.pack_into('<2Q',window,16,p['epoch'],p['generation'])
+                    copied['thermal-window']=bytes(window)
+                    if variant=='thermal-incomplete':
+                        readings=bytearray(copied['thermal-readings']);readings[52]=0
+                        copied['thermal-readings']=bytes(readings)
+                    for name,data in copied.items():(saved/(name+'.bin')).write_bytes(data)
+                    receipt['thermal_capture_status']='decoded'
+                    receipt['thermal_capture_sha256']={name:hashlib.sha256(data).hexdigest() for name,data in copied.items()}
+                    receipt['result']['thermal']=f.cpu.thermal_capture.decode(thermal_layout,copied,p['epoch'],p['generation'])
                 encoded=text.encode();output=struct.pack('<6Q',f.cpu.OUTPUT_MAGIC,1,f.cpu.OUTPUT_BYTES,p['epoch'],p['generation'],len(encoded))+encoded+bytes(16384-len(encoded))
                 (saved/'recorded-output.bin').write_bytes(output);(saved/'transcript.txt').write_text(text)
                 receipt.update(report_sha256=hashlib.sha256(report).hexdigest(),output_sha256=hashlib.sha256(output).hexdigest())
@@ -95,6 +111,10 @@ def main():
                 if variant=='changed-helper-artifact':review['helper']['binary']['sha256']='0'*64
                 if variant=='wrong-database':review['database']=str(root/'OTHER-QUEUE.sqlite3')
                 f.cpu.validate_bundle=actual_validate
+                if thermal_layout is not None:
+                    def thermal_bundle(path):
+                        v=actual_validate(path);v['qualification']['thermal']=thermal_layout;return v
+                    f.cpu.validate_bundle=thermal_bundle
                 if variant=='gpu-profile-refused':
                     def gpu_bundle(path):
                         v=actual_validate(path);v['qualification']['gpu']={'MODEL-ONLY':True};return v
@@ -156,14 +176,17 @@ def main():
                     (out/'session.json').write_text(json.dumps(hr));(out/'kernel.log').write_text(fixtures.helper_log());return 0
                 f.cpu.cpu.kernel.main=kernel_main
                 f.base.stop_after_failure=lambda record,save,quarantine,error,**kw:(save(),quarantine())
-                if variant in ('success','parity-failure'):
+                if variant in ('success','thermal-success','thermal-incomplete','parity-failure'):
                     f.authority(run_args,{'port':review['port']})
                     assert not run_args.evidence.exists() and not requests and not helper_calls
                     result=f.run(run_args);assert result['complete'] and result['ownership_release_permitted']
                     assert not result['cpu_rail_restoration_pending'] and result['helper_ram_retired'] and not result['helper_dram_restored']
                     assert [x['name'] for x in result['phases']]==list(f.PHASES) and all(x['complete'] for x in result['phases'])
                     assert len(helper_calls)==1
-                    assert result['qualification_passed'] is (variant=='success')
+                    assert result['qualification_passed'] is (variant in ('success','thermal-success'))
+                    if variant in ('thermal-success','thermal-incomplete'):
+                        assert result['parity_passed'] and result['thermal_capture_status']=='decoded'
+                        assert result['thermal_evidence']['classification']==('complete' if variant=='thermal-success' else 'incomplete')
                     if variant=='parity-failure':
                         assert not result['parity_passed'] and result['parity_error']
                         assert result['thermal_capture_status']=='malformed'

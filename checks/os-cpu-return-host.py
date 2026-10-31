@@ -101,7 +101,7 @@ def main():
             host.hashlib.sha256(template).hexdigest(), template, False, evidence, True,
             inference=manifest['inference']), 'Explicit complete-power-removal/retention plan')
     rows.append({'name': 'default-admission-keeps-unconditional-retention', 'passed': True})
-    variants = ('success', 'thermal-malformed', 'no-new-ROM', 'bad-report', 'truncated-output', 'wrong-output-session',
+    variants = ('success', 'thermal-success', 'thermal-malformed', 'no-new-ROM', 'bad-report', 'truncated-output', 'wrong-output-session',
                 'snapshot-incomplete', 'asset-transfer-failure', 'saved-RAM-changed', 'restore-mismatch')
     if 'gpu' in prepared['qualification']:
         variants+=('gpu-report-missing','gpu-report-session','gpu-report-incomplete')
@@ -116,8 +116,16 @@ def main():
         with tempfile.TemporaryDirectory(prefix='os-return-fel-model-') as temporary:
             root = Path(temporary)
             p = copy.deepcopy(prepared)
-            if variant == 'thermal-malformed':
+            thermal_raw = {}
+            if variant in ('thermal-success', 'thermal-malformed'):
                 p['qualification']['thermal'] = host.thermal_capture.geometry(args.bundle / 'board/image.elf')
+            if variant == 'thermal-success':
+                native = Path.home() / '.cache/sunstoneos/evidence/sol-cpu-robustness-1031/native-thermal-gpu'
+                thermal_raw = {name: (native / (name + '.bin')).read_bytes()
+                    for name, _, _ in host.thermal_capture.captures(p['qualification']['thermal'])}
+                window = bytearray(thermal_raw['thermal-window'])
+                struct.pack_into('<2Q', window, 16, p['epoch'], p['generation'])
+                thermal_raw['thermal-window'] = bytes(window)
             record = {'complete': False, 'launch_attempted': False, 'transport_failed': False,
                       'execution_profile': host.PROFILE, 'root_owned_claim': 'MODEL ONLY - no live claim'}
             state = {'launched': False, 'reads': 0, 'writes_after_launch': 0, 'calls': 0}
@@ -162,6 +170,10 @@ def main():
                             if variant=='gpu-report-missing':data=data[:-1]
                             if variant=='gpu-report-session':struct.pack_into('<Q',data,24,p['epoch']+1)
                             if variant=='gpu-report-incomplete':struct.pack_into('<Q',data,48,31)
+                        elif state['launched'] and variant == 'thermal-success' and any(
+                                address == a for _, a, _ in host.thermal_capture.captures(p['qualification']['thermal'])):
+                            name = next(name for name, a, _ in host.thermal_capture.captures(p['qualification']['thermal']) if a == address)
+                            data = thermal_raw[name]
                         elif state['launched'] and address == p['qualification']['output_address']:
                             data = bytearray(output)
                             if variant == 'truncated-output':
@@ -196,7 +208,7 @@ def main():
                        'saved-RAM-changed': 'Saved CPU return RAM changed',
                        'restore-mismatch': 'DRAM restoration readback differs'}
             action = lambda: host.run_once(tx, wait, lambda: None, args.bundle, p, root, record, lambda: None)
-            if variant in ('success', 'thermal-malformed'):
+            if variant in ('success', 'thermal-success', 'thermal-malformed'):
                 action()
                 assert record['complete'] and record['dram_restored'] and record['rom_usable']
                 assert record['cpu_rail_restoration_pending'] and not record['ownership_release_permitted']
@@ -206,6 +218,9 @@ def main():
                     assert record['thermal_capture_status'] == 'malformed' and record['thermal_capture_error']
                     assert set(record['thermal_capture_sha256']) == {'thermal-window', 'thermal-readings'}
                     assert 'thermal' not in record['result']
+                if variant == 'thermal-success':
+                    assert record['thermal_capture_status'] == 'decoded'
+                    assert record['result']['thermal']['classification'] == 'complete'
                 assert (root / 'transcript.txt').read_bytes() == output[48:48 + struct.unpack_from('<Q', output, 40)[0]]
                 if args.helper_image:
                     assert args.helper_binary and args.helper_manifest
