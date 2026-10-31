@@ -314,10 +314,17 @@ def run_once(tx, wait, ready, bundle, p, evidence, record, journal):
         result['gpu']=os_image.gpu_return_rules.decode(copied['gpu-retirement'],p['epoch'],p['generation'],require)
         record['gpu_report_sha256']=hashlib.sha256(copied['gpu-retirement']).hexdigest()
     if 'thermal' in p['qualification']:
-        result['thermal'] = thermal_capture.decode(p['qualification']['thermal'], copied,
-                                                    p['epoch'], p['generation'])
         record['thermal_capture_sha256'] = {name: hashlib.sha256(copied[name]).hexdigest()
             for name, _, _ in thermal_capture.captures(p['qualification']['thermal'])}
+        # Telemetry decoding cannot strand restored, responsive hardware with
+        # raised CPU rails. The mandatory return proof above remains separate.
+        try:
+            result['thermal'] = thermal_capture.decode(p['qualification']['thermal'], copied,
+                                                        p['epoch'], p['generation'])
+            record['thermal_capture_status'] = 'decoded'
+        except (ValueError, KeyError, struct.error) as error:
+            record['thermal_capture_status'] = 'malformed'
+            record['thermal_capture_error'] = str(error)
     record.update(report_sha256=hashlib.sha256(copied['return-report']).hexdigest(),
                   output_sha256=hashlib.sha256(copied['recorded-output']).hexdigest(),
                   return_review_sha256=digest(bundle / 'return-review.json'),
