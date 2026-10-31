@@ -14,9 +14,11 @@ def retain_failure(base,record,save,quarantine,error,hold=None):
    if not record.get('launch_attempted'):hold()
 
 def run(args,*,base,profile,validate_bundle,admit,execute,description,access=None,guard=None,return_timeout=30):
- """Call admit(args,p,node,identity,port) before launch and execute(tx,wait,ready,p,record,save).
+ """Call admit(args,p,node,identity,port) before launch and execute(tx,launch,ready,p,record,save).
 
- execute owns protected upload, reports and RAM restoration. Every transport error
+ execute owns protected upload, reports and RAM restoration; launch() alone
+ executes the fixed SRAM launcher and waits for the new permitted ROM instance.
+ Every transport error
  is terminal. No callback creates queue authority; the caller owns the claim.
  Optional access/guard are dependency injection for offline transport fixtures.
  """
@@ -35,12 +37,14 @@ def run(args,*,base,profile,validate_bundle,admit,execute,description,access=Non
  with access.board_lock() as node:
   access.require_session(node);access.require_rom(node);identity=access.identity(node);port=access.target(node);config={'port':port.name,'sysfs':str(port.resolve())};failed=False
   record.update(initial_node=str(node),initial_identity=identity,port=port.name);journal()
+  launch_called=False;transition_active=False;transition_retained=False
   def ready():
    require(not failed,'No admission after transport failure.');validate_bundle(bundle)
    if not record['launch_attempted']:admit(args,p,node,identity,port.name)
   def transaction(*arguments,pass_fds=()):
    nonlocal failed
    require(not failed,'A transport failure forbids all further requests.')
+   require(not any(op in arguments for op in ('exe','reset64')) or transition_active,'Native execution requires the guarded launch callback.')
    entry={'arguments':[str(x) for x in arguments]};record['transactions'].append(entry);journal()
    try:
     require(access.identity(node)==identity and access.target(node).name==port.name,'USB instance or physical port changed before FEL request.');access.require_rom(node)
@@ -62,11 +66,28 @@ def run(args,*,base,profile,validate_bundle,admit,execute,description,access=Non
    node,identity=candidate,current;access.require_session(node);access.require_rom(node)
    require(access.target(node).name==port.name,'Returned instance changed physical port.')
    record.update(returned_node=str(node),returned_identity=identity,automatic_access=True);journal()
+  def launch():
+   nonlocal launch_called,transition_active,transition_retained
+   require(not launch_called and not record['launch_attempted'],'One returning launch callback only.');launch_called=True
+   with guard.reenumeration('sunstoneos-a733-'+port.name,description,2):
+    # Churn admission can wait while RAM is already uploaded. Recheck the
+    # original entry before recording any native launch attempt.
+    ready()
+    record['launch_attempted']=True;journal();transition_active=True
+    try:
+     transaction('exe','0x52000');wait_return()
+    except BaseException as error:
+     # Keep an unresolved transition inside the guard while ownership is held.
+     # A pre-launch refusal above instead retains only this port outside it.
+     transition_retained=True;record['transport_failed']=failed
+     retain_failure(base,record,journal,lambda:access.quarantine_instance(node,'Returning transition unresolved; no requests or retry; root recovery required.',identity),error)
+     raise
+    finally:transition_active=False
   try:
    ready();require('soc=00001903(A733)' in transaction('version'),'Target is not A733.')
-   with guard.reenumeration('sunstoneos-a733-'+port.name,description,2):result=execute(transaction,wait_return,ready,p,record,journal)
+   result=execute(transaction,launch,ready,p,record,journal)
   except BaseException as error:
    record['transport_failed']=failed
-   retain_failure(base,record,journal,lambda:access.quarantine_instance(node,'Returning attempt stopped; no requests or retry; root recovery required.',identity),error)
+   if not transition_retained:retain_failure(base,record,journal,lambda:access.quarantine_instance(node,'Returning attempt stopped; no requests or retry; root recovery required.',identity),error)
    raise
  return result

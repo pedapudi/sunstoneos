@@ -190,7 +190,10 @@ def main():
                     else:
                         raise AssertionError(operation)
                 return ' '.join(result)
-            def wait():
+            def launch():
+                assert not state['launched'] and not record['launch_attempted']
+                record['launch_attempted'] = True
+                tx('exe', '0x52000')
                 assert state['launched']
                 if variant == 'no-new-ROM':
                     raise ValueError('modeled missing ROM return')
@@ -207,7 +210,7 @@ def main():
                        'asset-transfer-failure': 'modeled asset transfer failure',
                        'saved-RAM-changed': 'Saved CPU return RAM changed',
                        'restore-mismatch': 'DRAM restoration readback differs'}
-            action = lambda: host.run_once(tx, wait, lambda: None, args.bundle, p, root, record, lambda: None)
+            action = lambda: host.run_once(tx, launch, lambda: None, args.bundle, p, root, record, lambda: None)
             if variant in ('success', 'thermal-success', 'thermal-malformed'):
                 action()
                 assert record['complete'] and record['dram_restored'] and record['rom_usable']

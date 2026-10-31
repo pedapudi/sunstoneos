@@ -239,7 +239,7 @@ def admit(args, prepared, node, identity, port):
             'Current DDR/survey/warm-return chain is absent from the admitted reservation.')
 
 
-def run_once(transaction, wait_return, ready, bundle, prepared, evidence, record, journal):
+def run_once(transaction, launch, ready, bundle, prepared, evidence, record, journal):
     require(not record.get('launch_attempted'), 'One CPU attempt only.')
     ready()
     # Check immutable ROM code, not the boot-input pin: the native return uses RMR.
@@ -269,10 +269,9 @@ def run_once(transaction, wait_return, ready, bundle, prepared, evidence, record
     base.preload(transaction, bundle, prepared, evidence)
     ready()
     require(int(transaction('readl', '0x02050014').strip(), 16) & 1 == 0, 'Watchdog enabled before CPU execution.')
-    record.update(launch_attempted=True, backup_sha256=prepared['_backup_hashes'].copy())
+    record.update(backup_sha256=prepared['_backup_hashes'].copy())
     journal()
-    transaction('exe', '0x52000')
-    wait_return()
+    launch()
     require('soc=00001903(A733)' in transaction('version'), 'Returned service is not A733 ROM.')
     report = evidence / 'qualification-report.bin'
     transaction('read', hex(prepared['qualification']['report_address']), REPORT_BYTES, report)
@@ -303,7 +302,7 @@ def run_once(transaction, wait_return, ready, bundle, prepared, evidence, record
 
 
 def run(args):
-    def execute(tx, wait, ready, prepared, record, journal):
+    def execute(tx, launch, ready, prepared, record, journal):
         paths = [args.ddr_evidence, args.platform_survey, *args.warm_return]
         record['continuity_inputs'] = []
         for index, path in enumerate(paths):
@@ -315,7 +314,7 @@ def run(args):
                                                'sha256': hashlib.sha256(raw).hexdigest()})
         record['caller_interval'] = list(caller_interval(json.loads(args.platform_survey.read_text())))
         journal()
-        return run_once(tx, wait, ready, args.bundle.resolve(), prepared, args.evidence, record, journal)
+        return run_once(tx, launch, ready, args.bundle.resolve(), prepared, args.evidence, record, journal)
     return returning.run(args, base=base, profile=PROFILE, validate_bundle=validate_bundle,
                          admit=admit, execute=execute, description='Finite current eight-core workload and validated RAM return',
                          return_timeout=RETURN_TIMEOUT_SECONDS)

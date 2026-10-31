@@ -251,7 +251,7 @@ def admit(args, prepared, node, identity, port):
             'Current continuity inputs are absent from the image DDR reservation.')
 
 
-def run_once(tx, wait, ready, bundle, p, evidence, record, journal):
+def run_once(tx, launch, ready, bundle, p, evidence, record, journal):
     require(not record.get('launch_attempted'), 'One CPU return attempt only.')
     ready()
     # Back up every modified DRAM range before any upload. Returned ROM owns
@@ -290,10 +290,9 @@ def run_once(tx, wait, ready, bundle, p, evidence, record, journal):
         base.sync_file(readback)
     ready()
     require(int(tx('readl', '0x02050014').strip(), 16) & 1 == 0, 'Watchdog enabled before native execution.')
-    record.update(launch_attempted=True, backup_sha256=p['_backup_hashes'].copy())
+    record.update(backup_sha256=p['_backup_hashes'].copy())
     journal()
-    tx('exe', '0x52000')
-    wait()
+    launch()
     require('soc=00001903(A733)' in tx('version'), 'Returned service is not A733 ROM.')
     copied = {}
     captures = [('return-report', p['qualification']['report_address'], cpu.REPORT_BYTES),
@@ -352,7 +351,7 @@ def run_once(tx, wait, ready, bundle, p, evidence, record, journal):
 
 
 def run(args):
-    def execute(tx, wait, ready, p, record, journal):
+    def execute(tx, launch, ready, p, record, journal):
         paths = [args.ddr_evidence, args.platform_survey, *args.warm_return]
         record['continuity_inputs'] = []
         for i, path in enumerate(paths):
@@ -363,7 +362,7 @@ def run(args):
             record['continuity_inputs'].append({'path': str(path.resolve()), 'file': saved.name,
                                                'sha256': hashlib.sha256(data).hexdigest()})
         journal()
-        return run_once(tx, wait, ready, args.bundle, p, args.evidence, record, journal)
+        return run_once(tx, launch, ready, args.bundle, p, args.evidence, record, journal)
     return cpu.returning.run(args, base=base, profile=PROFILE, validate_bundle=validate_bundle,
                              admit=admit, execute=execute, description='One recorded CPU recognition and RAM return',
                              return_timeout=90)

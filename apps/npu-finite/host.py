@@ -347,7 +347,7 @@ def transfer(transaction,address,data,destination):
  with base.sealed_source(data) as (source,fd):transaction('write',hex(address),source,'read',hex(address),len(data),destination,pass_fds=(fd,))
  require(destination.read_bytes()==data,'Restoration readback differs.');base.sync_file(destination)
 
-def run_once(transaction,wait_return,ready,bundle,p,evidence,record,save):
+def run_once(transaction,launch,ready,bundle,p,evidence,record,save):
  """Root owns the lock/claim; every transport failure is terminal to this call."""
  require(not record.get('launch_attempted'),'One attempt only.');ready()
  backup=evidence/'before-DRAM.bin';transaction('read',hex(DRAM[0]),DRAM[1],backup)
@@ -359,7 +359,7 @@ def run_once(transaction,wait_return,ready,bundle,p,evidence,record,save):
  words=[int(v,16) for v in transaction(*[a for address in ('0x20','0x24','0x28','0x3c','0x40') for a in ('readl',address)]).split()]
  require(words==[0xeb00008f,0xe3a00911,0xe3a0193d,0xe3a0605c,0xea00004d],'Forced-FEL ROM entry differs from the reviewed instructions.')
  ready();require(int(transaction('readl','0x02050014').strip(),16)&1==0,'Watchdog enabled before execution.')
- record.update(launch_attempted=True,backup_sha256=p['_backup_hashes'].copy());save();transaction('exe','0x52000');wait_return()
+ record.update(backup_sha256=p['_backup_hashes'].copy());save();launch()
  require('soc=00001903(A733)' in transaction('version'),'Returned service is not A733 ROM.')
  reports=[]
  for name,address,size in [('monitor',0x42000000,128),('platform',p['geometry']['log'],16384),('receipt',p['geometry']['receipt'],112 if p['execution_profile']==THERMAL else 88)]:
@@ -393,8 +393,8 @@ def run(args):
   kernel.validate_platform_admission((args.ddr_evidence.read_bytes(),args.platform_survey.read_bytes()),node,identity,port,base.FEL_HASH,base.FEL_HASH,tuple(x.read_bytes() for x in args.warm_return))
   covered={(v['path'],v['sha256']) for v in json.loads(cache[admission['ddr']['path']])['evidence']}
   require(all((str(x.resolve()),sha(x.read_bytes())) in covered for x in [args.ddr_evidence,args.platform_survey,*args.warm_return]),'Live DDR/survey continuity is not covered by returning admission.')
- def execute(transaction,wait_return,ready,p,record,journal):
-  return run_once(transaction,wait_return,ready,args.bundle.resolve(),p,args.evidence,record,journal)
+ def execute(transaction,launch,ready,p,record,journal):
+  return run_once(transaction,launch,ready,args.bundle.resolve(),p,args.evidence,record,journal)
  execution=json.loads((args.bundle/'prepared.json').read_bytes()).get('execution_profile')
  require(execution in PROFILES,'Unsupported execution profile.')
  result=returning.run(args,base=base,profile=execution,validate_bundle=validate_bundle,admit=admit,execute=execute,description='NPU finite inference and validated RAM return')

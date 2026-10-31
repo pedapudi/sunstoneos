@@ -15,7 +15,7 @@ CAPTURE_RANGES=(('CPU',0x41000000,0x1200000),('GPU',0x48000000,0x31000000))
 def transfer(transaction,address,data,destination):
  with base.sealed_source(data) as (source,fd):transaction('write',hex(address),source,'read',hex(address),len(data),destination,pass_fds=(fd,))
  require(destination.read_bytes()==data,'GPU DRAM restoration readback differs.');base.sync_file(destination)
-def run_once(transaction,wait_return,ready,bundle,p,evidence,record,journal):
+def run_once(transaction,launch,ready,bundle,p,evidence,record,journal):
  require(not record.get('launch_attempted'),'One GPU attempt only.');ready();backups=[]
  disposition=json.loads(p['_frozen']['admission.json']).get('ram_disposition','restore')
  require(disposition in ('restore','discard'),'Unknown GPU RAM disposition.')
@@ -31,7 +31,7 @@ def run_once(transaction,wait_return,ready,bundle,p,evidence,record,journal):
  words=[int(x,16) for x in transaction(*[v for address in ('0x20','0x24','0x28','0x3c','0x40') for v in ('readl',address)]).split()]
  require(words==[0xeb00008f,0xe3a00911,0xe3a0193d,0xe3a0605c,0xea00004d],'Forced-FEL ROM entry differs from the reviewed instructions.')
  ready();require(int(transaction('readl','0x02050014').strip(),16)&1==0,'Watchdog enabled before GPU execution.')
- record.update(launch_attempted=True,backup_sha256=p['_backup_hashes'].copy());journal();transaction('exe','0x52000');wait_return()
+ record.update(backup_sha256=p['_backup_hashes'].copy());journal();launch()
  require('soc=00001903(A733)' in transaction('version'),'Returned service is not A733 ROM.')
  reports=[]
  for name,address,size in [('monitor',0x42000000,128),('platform',p['geometry']['log'],16384),('receipt',p['geometry']['receipt'],104),('packet',0x42000100,320)]:
@@ -52,7 +52,7 @@ def admit(args,p,node,identity,port):
  require(all((str(x.resolve()),prepare.sha(x.read_bytes())) in covered for x in [args.ddr_evidence,args.platform_survey,*args.warm_return]),'Live CPU DDR/survey continuity absent from admission.')
 def run(args):
  shared=module('gpu_returning_transport',ROOT/'tools/a733-returning-host.py')
- return shared.run(args,base=base,profile=prepare.PROFILE,validate_bundle=prepare.validate_bundle,admit=admit,execute=lambda tx,wait,ready,p,record,journal:run_once(tx,wait,ready,args.bundle.resolve(),p,args.evidence,record,journal),description='GPU finite computation and validated RAM return',return_timeout=RETURN_TIMEOUT_SECONDS)
+ return shared.run(args,base=base,profile=prepare.PROFILE,validate_bundle=prepare.validate_bundle,admit=admit,execute=lambda tx,launch,ready,p,record,journal:run_once(tx,launch,ready,args.bundle.resolve(),p,args.evidence,record,journal),description='GPU finite computation and validated RAM return',return_timeout=RETURN_TIMEOUT_SECONDS)
 if __name__=='__main__':
  parser=argparse.ArgumentParser(description=__doc__)
  for n in ('bundle','fel','evidence','ddr-evidence','platform-survey'):parser.add_argument('--'+n,type=Path,required=True)
