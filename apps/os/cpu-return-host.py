@@ -23,6 +23,7 @@ def module(name, path):
 
 
 os_image = module('cpu_return_os', 'apps/os/prepare.py')
+thermal_capture = module('cpu_return_thermal', 'apps/os/cpu-return-thermal.py')
 cpu = module('cpu_return_prior', 'apps/cpu-runtime-qualification/host.py')
 base, require, digest = cpu.base, cpu.require, cpu.digest
 PROFILE = 'os-cpu-return-v1'
@@ -60,6 +61,7 @@ def geometry(image):
             output['value'] + OUTPUT_BYTES <= 0x42000000, 'Copied output geometry differs.')
     result['output_address'] = output['value']
     result['output_bytes'] = OUTPUT_BYTES
+    result['thermal'] = thermal_capture.geometry(image)
     config=os_image.os_link.gpu_configuration(elf)
     if config:
         require('return' in config, 'GPU return capability absent.')
@@ -139,7 +141,12 @@ def validate_bundle(bundle):
         name = f'return-source-{i}.bin'
         require(record['sources'].get(name) == item['sha256'] and digest(bundle / name) == item['sha256'],
                 'Frozen CPU return evidence changed.')
-    require(geometry(bundle / 'board/image.elf') == record['geometry'], 'CPU return linked layout changed.')
+    linked_geometry = geometry(bundle / 'board/image.elf')
+    # Older sealed bundles predate thermal capture; their unchanged transport
+    # and result contract remain valid. New preparation always includes it.
+    if 'thermal' not in record['geometry']:
+        linked_geometry.pop('thermal')
+    require(linked_geometry == record['geometry'], 'CPU return linked layout changed.')
     require(p['workload'] == 2, 'CPU return admits staged workload 2 only.')
     p['qualification'] = record['geometry']
     if 'gpu' in p['qualification']:
@@ -293,6 +300,8 @@ def run_once(tx, wait, ready, bundle, p, evidence, record, journal):
                                 ('recorded-output', p['qualification']['output_address'], OUTPUT_BYTES)]
     if 'gpu' in p['qualification']:
         captures.append(('gpu-retirement',p['qualification']['gpu']['report_address'],64))
+    if 'thermal' in p['qualification']:
+        captures.extend(thermal_capture.captures(p['qualification']['thermal']))
     for name,address,size in captures:
         path = evidence / (name + '.bin')
         tx('read', hex(address), size, path)
@@ -304,6 +313,11 @@ def run_once(tx, wait, ready, bundle, p, evidence, record, journal):
     if 'gpu' in p['qualification']:
         result['gpu']=os_image.gpu_return_rules.decode(copied['gpu-retirement'],p['epoch'],p['generation'],require)
         record['gpu_report_sha256']=hashlib.sha256(copied['gpu-retirement']).hexdigest()
+    if 'thermal' in p['qualification']:
+        result['thermal'] = thermal_capture.decode(p['qualification']['thermal'], copied,
+                                                    p['epoch'], p['generation'])
+        record['thermal_capture_sha256'] = {name: hashlib.sha256(copied[name]).hexdigest()
+            for name, _, _ in thermal_capture.captures(p['qualification']['thermal'])}
     record.update(report_sha256=hashlib.sha256(copied['return-report']).hexdigest(),
                   output_sha256=hashlib.sha256(copied['recorded-output']).hexdigest(),
                   return_review_sha256=digest(bundle / 'return-review.json'),
@@ -348,6 +362,25 @@ def run(args):
                              return_timeout=90)
 
 
+def check_admission(args):
+    """Exercise the launch admission with captured identity and no device access."""
+    captured = json.loads(args.check_admission_only.read_text())
+    require(set(captured) == {'node', 'identity', 'port'} and
+            isinstance(captured['node'], str) and captured['node'].startswith('/dev/bus/usb/') and
+            isinstance(captured['identity'], list) and len(captured['identity']) == 5 and
+            all(type(v) is int for v in captured['identity']) and
+            isinstance(captured['port'], str) and captured['port'].strip(),
+            'Captured target identity is incomplete.')
+    require(digest(args.fel) == base.FEL_HASH, 'FEL executable changed.')
+    prepared = validate_bundle(args.bundle)
+    admit(args, prepared, Path(captured['node']), captured['identity'], captured['port'])
+    return {'passed': True, 'physical_access': False, 'queue_access': False,
+            'live_identity_checked': False, 'captured_target': captured,
+            'image_sha256': prepared['image_sha256'],
+            'claim': args.root_owned_claim,
+            'scope': 'Actual bundle and launch admission with recorded identity; live execution rechecks target.'}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='operation', required=True)
@@ -360,6 +393,8 @@ def main():
         live.add_argument('--' + name, type=Path, required=True)
     live.add_argument('--warm-return', type=Path, action='append', default=[])
     live.add_argument('--root-owned-claim', required=True)
+    live.add_argument('--check-admission-only', type=Path,
+                      help='Validate this run with captured node/identity/port JSON; no queue or device access.')
     rails = sub.add_parser('check-rail-followup')
     for name in ['return-session', 'image', 'binary', 'manifest', 'output']:
         rails.add_argument('--' + name, type=Path, required=True)
@@ -367,7 +402,10 @@ def main():
     if args.operation == 'prepare':
         prepare(args)
     elif args.operation == 'run':
-        run(args)
+        if args.check_admission_only:
+            print(json.dumps(check_admission(args), sort_keys=True))
+        else:
+            run(args)
     else:
         result = rail_followup_check(json.loads(args.return_session.read_text()), args.image, args.binary,
                                      json.loads(args.manifest.read_text()), digest(args.manifest))
