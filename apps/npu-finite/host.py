@@ -11,6 +11,7 @@ original=module('finite_npu_original',ROOT/'apps/npu-convolution/prepare-supervi
 base=original.supervisor.base
 require,sha=base.require,original.sha
 RESTART='npu-interrupt-restart-return-v1'
+STARTUP='npu-startup-return-v1'
 MBUS_CHECKPOINT='npu-entry-mbus-checkpoint-v1'
 IRQ_CHECKPOINT='npu-entry-irq-checkpoint-v1'
 PROVIDER_CHECKPOINT='npu-entry-provider-checkpoint-v1'
@@ -33,6 +34,7 @@ def image_profile(data,manifest):
   if s['st_info']['type']=='STT_FUNC' and s['st_shndx']!='SHN_UNDEF']
  require(not any('usb' in n.lower() or n.startswith(('tud_','tuh_','dcd_','hcd_')) or
   n=='a733_observe_service_start' for n in functions),'Finite image contains native USB functions.')
+ startup=manifest['execution_profile']==STARTUP
  checkpoint=manifest['execution_profile'] in (CHECKPOINT,MBUS_CHECKPOINT,IRQ_CHECKPOINT,PROVIDER_CHECKPOINT);thermal=manifest['execution_profile']==THERMAL
  for name in ('npu_finite_receipt','npu_finite_smc','npu_finite_rom_return', 'npu_entry_checkpoint_ready' if checkpoint else 'a733_npu_application_quiescent'):
   require(name in symbols and symbols[name]['st_value'],'Missing returning producer: '+name)
@@ -56,6 +58,11 @@ def image_profile(data,manifest):
   else:
    require('npu_entry_checkpoint_provider_profile' not in symbols and all(n not in symbols for n in ('a733_npu_application_init','npu_convolution_startup_poll','npu_service_activate','vTaskStartScheduler')),'Checkpoint contains a provider or scheduler constructor.')
  else:require('npu_entry_checkpoint_profile' not in symbols,'Checkpoint image cannot use numerical profile.')
+ if startup:
+  require(read('npu_startup_return_profile')==struct.pack('<4Q',0x4e50555354415231,1,0,1) and
+   all(n in symbols for n in ('npu_startup_return_ready','npu_startup_client','npu_service_activate','npu_convolution_stop_poll','vTaskStartScheduler')) and
+   'client' not in symbols,'Startup-only implementation differs.')
+ else:require('npu_startup_return_profile' not in symbols,'Startup-only image requires its distinct profile.')
  restart=manifest['execution_profile']==RESTART
  if restart:
   require(read('npu_restart_return_profile')==struct.pack('<4Q',0x4e50555253543031,1,2,4) and
@@ -63,6 +70,7 @@ def image_profile(data,manifest):
    'Missing exact returning restart implementation.')
  else:require('npu_restart_return_profile' not in symbols,'Restart image requires its distinct profile.')
  geometry={'clean_start':lo,'clean_end':hi,'receipt':receipt,'log':log,'reference':read('a733_npu_application_reference').hex()}
+ if startup:geometry['startup_only']=True
  if restart:geometry['restart']=True
  if thermal:
   require(read('npu_finite_thermal_profile')==struct.pack('<4Q',0x4e50555448533031,1,160,2) and
@@ -86,7 +94,7 @@ def image_profile(data,manifest):
  if capture is not None:geometry['stopped_capture']=capture
  return parts,address,build,layout,geometry
 
-def geometry_profile(g):return PROVIDER_CHECKPOINT if g.get('checkpoint_provider') else IRQ_CHECKPOINT if g.get('checkpoint_irq') else MBUS_CHECKPOINT if g.get('checkpoint_mbus') else RESTART if g.get('restart') else CHECKPOINT if g.get('checkpoint') else THERMAL if g.get('thermal') else PROFILE
+def geometry_profile(g):return STARTUP if g.get('startup_only') else PROVIDER_CHECKPOINT if g.get('checkpoint_provider') else IRQ_CHECKPOINT if g.get('checkpoint_irq') else MBUS_CHECKPOINT if g.get('checkpoint_mbus') else RESTART if g.get('restart') else CHECKPOINT if g.get('checkpoint') else THERMAL if g.get('thermal') else PROFILE
 
 def validate_admission(admission_raw,raw,build,layout,image_hash,cache=None,*,execution_profile=PROFILE):
  """Preserve original NPU facts; require a distinct reviewed returning lifetime.
@@ -289,15 +297,15 @@ def job_counters(text):
 
 
 def validate_reports(monitor,platform,receipt,p):
- thermal=p.get('execution_profile')==THERMAL
+ thermal=p.get('execution_profile')==THERMAL;startup=p.get('execution_profile')==STARTUP
  require(len(monitor)==128 and len(platform)==16384 and len(receipt)==(112 if thermal else 88),'Incomplete returned reports.')
  m=struct.unpack('<16Q',monitor);h=struct.unpack_from('<16Q',platform);r=struct.unpack('<14Q' if thermal else '<11Q',receipt);g=p['geometry']
  magic=0x415337334e505231
- require(m[0]==magic and (m[1],m[2])==(p['epoch'],p['generation']) and m[3]==5 and m[4] in ((0,1,2) if thermal else (0,1)) and m[5]==(0x4e50554e if p.get('execution_profile') in (CHECKPOINT,MBUS_CHECKPOINT,IRQ_CHECKPOINT,PROVIDER_CHECKPOINT) else 0) and m[7]==1,'No matched normal monitor completion.')
+ require(m[0]==magic and (m[1],m[2])==(p['epoch'],p['generation']) and m[3]==5 and m[4] in ((0,1,2) if thermal else (0,1)) and m[5]==(0x4e50554e if p.get('execution_profile') in (CHECKPOINT,MBUS_CHECKPOINT,IRQ_CHECKPOINT,PROVIDER_CHECKPOINT) else 0x4e505553 if startup else 0) and m[7]==1,'No matched normal monitor completion.')
  status=m[4];deadline=r[9];armed=deadline-480000000
  checkpoint=p.get('execution_profile') in (CHECKPOINT,MBUS_CHECKPOINT,IRQ_CHECKPOINT,PROVIDER_CHECKPOINT)
  require(p.get('execution_profile',PROFILE) in PROFILES and bool(g.get('checkpoint'))==checkpoint and bool(g.get('thermal'))==thermal,'Report profile differs.')
- require(r[:6]==(0x4e505543484b3031 if checkpoint else 0x4e50555448533031 if thermal else 0x4e50555245543031,p['epoch'],p['generation'],p['lease'],status,0x4e50554e if checkpoint else status+1) and
+ require(r[:6]==(0x4e505543484b3031 if checkpoint else 0x4e50555448533031 if thermal else 0x4e50555354415231 if startup else 0x4e50555245543031,p['epoch'],p['generation'],p['lease'],status,0x4e50554e if checkpoint else status+1) and
   r[6:9]==(g['clean_start'],g['clean_end'],(g['clean_end']-g['clean_start'])//64) and
   0<=armed<=m[6]<armed+24000000 and m[6]<=m[8]<deadline,'Receipt identity/cleanup/time differs.')
  require(h[0]==0x534b4552 and h[1]==5 and h[2]==status and h[9]==m[8] and h[3]==r[10] and h[3]<=16127 and m[6]<=h[8]<=h[9] and h[4:8]==(0,0,0,0),'Platform completion/log differs.')
@@ -314,6 +322,12 @@ def validate_reports(monitor,platform,receipt,p):
   else:require(text==prefix,'Checkpoint log or status differs.')
   require(status==0,'Checkpoint log or status differs.')
   return {'normal_return':True,'checkpoint':('PROVIDERS_CONSTRUCTED' if p.get('execution_profile')==PROVIDER_CHECKPOINT else 'ENTRY_MEMORY_READY'),'functional_success':False,'controlled_negative':False,'jobs':0,'status':0,'diagnostic_deadline':deadline,'log':text,**mbus}
+ if startup:
+  expected=('NPU_STAGE=WAIT_STARTUP\nNPU_STAGE=OPEN\nNPU_STAGE=BOOTSTRAP_READY\nNPU_STAGE=CLOSE\nNPU_STAGE=WAIT_LOCAL_STOP\n'
+   'NPU_IRQ_COMPLETIONS=0x0000000000000001\nNPU_IRQ_STOPPED=0x0000000000000001\n'
+   'NPU_STAGE=QUIESCENT\nNPU_STARTUP=READY_CLOSED_STOPPED; inference_jobs=0\n')
+  require(status==0 and text==expected,'Startup-only stage, job or IRQ result differs.')
+  return {'normal_return':True,'startup_bootstrap':True,'functional_success':False,'controlled_negative':False,'jobs':0,'status':0,'diagnostic_deadline':deadline,'log':text}
  passed='PASS NPU two matched jobs across normal local restart and parked providers' if p.get('execution_profile')==RESTART else 'PASS NPU two matched jobs, copied output, REAP, CLOSE, local stop and parked providers'
  pattern=r'NPU_STAGE=QUIESCENT\nNPU_FIRST_DIGEST=\n((?:0x[0-9a-f]{16}\n){32})NPU_SECOND_OUTPUT=\n((?:0x[0-9a-f]{16}\n)+)('+re.escape(passed)+r'|FAIL NPU numerical comparison|REFUSED NPU thermal admission; configured sensor disabled and providers parked)\n'
  matches=list(re.finditer(pattern,text));require(len(matches)==1 and matches[0].end()==len(text),'Missing or ambiguous finite output/terminal marker.')
@@ -398,7 +412,7 @@ def run(args):
  execution=json.loads((args.bundle/'prepared.json').read_bytes()).get('execution_profile')
  require(execution in PROFILES,'Unsupported execution profile.')
  result=returning.run(args,base=base,profile=execution,validate_bundle=validate_bundle,admit=admit,execute=execute,description='NPU finite inference and validated RAM return')
- return 0 if result['functional_success'] or result.get('checkpoint') in ('ENTRY_MEMORY_READY','PROVIDERS_CONSTRUCTED') else 2
+ return 0 if result['functional_success'] or result.get('checkpoint') in ('ENTRY_MEMORY_READY','PROVIDERS_CONSTRUCTED') or result.get('startup_bootstrap') else 2
 
 def main(argv=None):
  p=argparse.ArgumentParser(description=__doc__);sub=p.add_subparsers(dest='operation',required=True)

@@ -16,6 +16,7 @@ p.add_argument('--entry-checkpoint',action='store_true',help='return before any 
 p.add_argument('--entry-irq-checkpoint',action='store_true',help='provider-free checkpoint after private IRQ97 capture and installation')
 p.add_argument('--thermal',action='store_true',help='poll THS before and during finite execution')
 p.add_argument('--interrupt',action='store_true',help='build the interrupt-driven variant')
+p.add_argument('--startup-only',action='store_true',help='interrupt bootstrap OPEN/READY/CLOSE with no inference')
 p.add_argument('--restart',action='store_true',help='IRQ returning diagnostic: local stop/restart between two baseline jobs')
 p.add_argument('--rate-852',action='store_true',help='PLL_NPU at 852 MHz, admitted only for a speed bin that lists 800 mV for it')
 p.add_argument('--rate-492',action='store_true',help='the optional 492 MHz mode; the default is the vendor operating point for the speed bin')
@@ -23,6 +24,9 @@ p.add_argument('--shufflenet',action='store_true',help='the published ShuffleNet
 p.add_argument('--sdk-reference',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/npu-complete-graph-proposal-20261019/sdk-reference',
  help='directory with network_binary.nb, published-input.dat and output0_2_1.dat')
 a=p.parse_args()
+if a.startup_only:
+ if a.restart or a.shufflenet or a.thermal or a.entry_checkpoint or a.entry_irq_checkpoint or a.entry_provider_checkpoint:p.error("Startup-only requires the baseline interrupt profile")
+ a.interrupt=True
 if a.entry_provider_checkpoint:a.entry_irq_checkpoint=True
 if a.entry_irq_checkpoint:a.entry_checkpoint=True
 if a.entry_checkpoint and a.interrupt:p.error('Entry checkpoint constructs no interrupt provider')
@@ -61,6 +65,7 @@ def compile_like(suffix,source,name):
  c[c.index('-o')+1]=str(dest);c[c.index('-c')+1]=str(source)
  c += ['-MD','-MF',str(dest)+'.d']
  if a.entry_checkpoint:c += ['-DSUNSTONE_NPU_ENTRY_CHECKPOINT=1']
+ if a.startup_only:c += ['-DSUNSTONE_NPU_STARTUP_ONLY=1']
  if a.entry_provider_checkpoint:c += ['-DSUNSTONE_NPU_ENTRY_PROVIDER_CHECKPOINT=1','-DSUNSTONE_NPU_INTERRUPT=1']
  if a.entry_irq_checkpoint:
   c += ['-DSUNSTONE_NPU_ENTRY_IRQ_CHECKPOINT=1']
@@ -79,6 +84,7 @@ if a.rate_852 or a.rate_492:
  native=obj/f'native-{rate}.obj';c[c.index('-o')+1]=str(native);c+=[f'-DSUNSTONE_NPU_RATE_{rate}=1','-MD','-MF',str(native)+'.d']
  commands.append(c);run(f'native-{rate}',c,cwd=entry['directory'])
 assembly=compile_like('/arch/aarch64/cache.S',root/'apps/npu-finite/return.S','return-assembly')
+startup_main=compile_like('/apps/npu-convolution/main.c',root/'apps/npu-finite/startup.c','startup-client') if a.startup_only else None
 checkpoint=compile_like('/apps/npu-convolution/native.c',root/'apps/npu-finite/checkpoint.c','checkpoint') if a.entry_checkpoint else None
 checkpoint_irq=compile_like('/apps/npu-convolution/native.c',root/'apps/npu-interrupt/irq-route.c','checkpoint-irq-route') if a.entry_irq_checkpoint else None
 # Bind the new monitor/cleanup/return sources into the existing authenticated
@@ -89,6 +95,9 @@ if a.interrupt:
  identity['irq_sources']={str(x.relative_to(root)):sha(x) for x in sorted(root/'apps/npu-interrupt'/n for n in ('irq.c','irq.h','irq-route.c','irq-route.h','build.py'))}
  identity['profile']='npu-interrupt-finite-return-v1';script=root/'apps/npu-interrupt/build.py'
 if a.restart:identity['profile']='npu-interrupt-restart-return-v1'
+if a.startup_only:
+ identity['profile']='npu-startup-return-v1'
+ identity['startup_sources']={str(x.relative_to(root)):sha(x) for x in (root/'apps/npu-finite/startup.c',root/'apps/npu-finite/startup.h')}
 if a.thermal:
  identity['profile']='npu-finite-thermal-return-v1'
  identity['thermal_sources']={str(x.relative_to(root)):sha(x) for x in (root/'apps/npu-finite/thermal.c',root/'apps/npu-finite/thermal.h')}
@@ -114,6 +123,7 @@ build_obj=compile_like('/npu-single-core/build-id.c',source,'build-id')
 replacements={'/apps/storage-read-single-core/monitor.c.obj':monitor,'/npu-single-core/platform.c.obj':platform_obj,'/npu-single-core/build-id.c.obj':build_obj}
 newlink=[]
 for value in link:
+ if startup_main and value.endswith('/apps/npu-convolution/main.c.obj'):value=str(startup_main)
  if a.entry_checkpoint and value.endswith('/apps/npu-convolution/main.c.obj'):continue
  if a.entry_checkpoint and value.endswith('/apps/npu-convolution/native.c.obj'):value=str(checkpoint)
  elif native and value.endswith('/apps/npu-convolution/native.c.obj'):value=str(native)

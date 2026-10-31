@@ -424,3 +424,76 @@ supply libc byte operations and the existing convolution SHA-256 digest. They
 check CPU write bounds and refuse mutated provider, scheduler, allocation and
 IRQ state. Separate host cases cover the new image/admission profile and final
 writer format. These checks do not establish physical operation.
+
+The constructor diagnostic has a physical normal-return result on port 3-3.
+Image `09ec8dd6e736c59f84038c4f28539b343c7c77dcb25cbd4752ccb59de23a906f`
+reported stage 5, status 0 and zero jobs. MBUS normalization reported
+`0x84000000` to `0x81000000`. The host restored and compared all saved 18 MiB
+and retired ownership. The canonical record is
+`~/.cache/sunstoneos/evidence/sol-resume-20261031/port-3-3/npu-provider-construction/session.json`.
+This result establishes provider construction and return before scheduling.
+
+### Return after controller bootstrap without inference
+
+`build.py --startup-only --evidence DIRECTORY` produces
+`npu-startup-return-v1`. This interrupt profile constructs the ordinary native
+application and starts its real scheduler. The unchanged PMIC/power service,
+clock/rail ownership, domain adoption, PLL/local clocks and resets, SRAM routing,
+2 ms settle and service activation run before the client sends OPEN.
+
+The client holds WAIT until the controller reports READY after its bootstrap
+command. That path performs identity/reset checks, configures the NPU MMU,
+publishes the initialization stream and requires one interrupt completion.
+The client submits no inference. It sends ordinary CLOSE from READY, then waits
+for the existing bootstrap task's local stop and the existing provider parking.
+CLOSE accepts READY directly; no fabricated CLOSED state or separate retirement
+API is used.
+
+The final client gate requires the stopped interrupt receipt, exactly one
+completion, a legitimately closed controller, no pending request or job, no
+output-ready state and zero inference result counts/tickets. Existing controller
+CLOSE checks full idle and clear events, disables event reporting and the MMU,
+and verifies idle again. Existing local stop closes gates, asserts local resets
+and routes SRAM back to the CPU. The existing finite path suspends workers and
+parks the PMIC only after its request, ownership and mutex checks pass.
+Domain, PLL and rail leases remain held at return. No domain OFF is requested.
+
+The distinct immutable marker binds zero inference jobs and one interrupt.
+A separate 88-byte receipt magic and monitor detail prevent relabeling the
+result as numerical or restart completion. The ordered log ends with
+`NPU_STARTUP=READY_CLOSED_STOPPED; inference_jobs=0`. The host reports
+`startup_bootstrap=true`, `jobs=0`, `interrupt_completions=1` and
+`functional_success=false`; `jobs` counts inference jobs. Preparation and capture
+use `apps/npu-interrupt/host.py`, including its existing hashed IRQ authority.
+The ordinary finite host refuses this profile.
+
+This diagnostic uses the original 20-second absolute deadline and 1-second OPEN
+budget. It adds no task, queue or allocation. It uses the existing buffer pool,
+cache-clean interval, EL3 return, forced-FEL path and complete 18 MiB host
+restoration. It executes NPU register accesses and a real bootstrap stream;
+a failed startup, bus stall, missing interrupt or uncertain retirement retains
+ownership until manual whole-board power removal. Shared SRAM ownership still
+covers the entire routing interval. There is no inference tensor SRAM workload.
+
+Status: staged for later physical validation. Both boards are unavailable after
+separate retained attempts. The staged package contains no current target
+identity, admission or provider grant. It requires coordinator-established
+recovery, fresh DDR/continuity and clock, PMIC, rail, SRAM and IRQ ownership before
+production preparation or execution. No reconnect or board operation was
+performed for this implementation.
+
+Evidence is under `~/.cache/sunstoneos/evidence/sol-npu-startup-1031/`.
+The source audit compares the actual historical 852 MHz successful image
+`2b4b5e42de395092b166b4e5ce40530be01c0e27aba773d37c33c4551ff5fc91`
+with the current providers and the pinned effective VIPLite configuration.
+It identifies no additional production defect or cause of the earlier nonreturn.
+The controller source is unchanged. Focused linked checks execute the new
+client, scalar gates, native log/receipt writer and EL3 writer through the real
+host parser. Provider completion, scheduling and hardware effects are modeled.
+A focused FreeRTOS composition case also executes the real service, controller
+and memory providers through bootstrap READY and ordinary CLOSE without an
+inference. IRQ delivery and device effects remain modeled. Separate affected
+host cases reject profile relabeling, extra or absent completions, inference
+claims and incorrect receipts or stages. These checks establish software
+composition; physical startup, IRQ delivery and retirement remain unqualified
+for this image.

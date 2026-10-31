@@ -136,6 +136,9 @@ _Noreturn void sd_single_core_exception(uint64_t operation,uint64_t status,uint6
     if(!npu_irq_route_installed(&saved.npu_irq,deadline))a733_smp_stop(6,operation);
 #endif
 #endif
+#ifdef SUNSTONE_NPU_STARTUP_ONLY
+    if(status)a733_smp_stop(6,operation);
+#endif
     if(kind!=1 || (esr>>26)!=0x17 || operation!=0x733 || status>
 #ifdef SUNSTONE_NPU_FINITE_THERMAL
        2 || now>=r->thermal_deadline || r->thermal_deadline>deadline || !npu_finite_thermal_irq_admitted || !thermal_irq_quiet() ||
@@ -173,6 +176,8 @@ _Noreturn void sd_single_core_exception(uint64_t operation,uint64_t status,uint6
     REPORT->status=status;
 #ifdef SUNSTONE_NPU_ENTRY_CHECKPOINT
     REPORT->detail=NPU_ENTRY_MEMORY_READY;
+#elif defined(SUNSTONE_NPU_STARTUP_ONLY)
+    REPORT->detail=NPU_STARTUP_READY;
 #else
     REPORT->detail=0;
 #endif

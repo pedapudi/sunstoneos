@@ -19,7 +19,11 @@ _Noreturn void platform_exit(unsigned status)
        a733_observe_identity.generation,a733_observe_identity.lease,
        a733_observe_identity.armed_at,a733_observe_identity.deadline) ||
 #else
-    if(status>
+    if(
+#ifdef SUNSTONE_NPU_STARTUP_ONLY
+       status || !npu_startup_return_ready() ||
+#endif
+       status>
 #ifdef SUNSTONE_NPU_FINITE_THERMAL
        2 || now>=a733_npu_application_thermal_deadline() || a733_npu_application_result.jobs>2 || a733_npu_application_result.thermal_reason>3 ||
        (status==1 && !a733_npu_application_result.jobs) ||

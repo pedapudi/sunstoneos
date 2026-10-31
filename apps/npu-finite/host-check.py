@@ -38,8 +38,8 @@ assert h.timing('NPU_STAGE=OPEN\n') is None
 def ref(path):return {'path':str(path.resolve()),'sha256':sha(path.read_bytes())}
 results=[]
 with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
- t=Path(temporary);native=a.native.resolve();image=native/'image.elf';manifest=native/'manifest.json';data=image.read_bytes();parts,address,build,layout,g=h.image_profile(data,json.loads(manifest.read_bytes()));checkpoint=bool(g.get('checkpoint'));thermal=bool(g.get('thermal'));restart=bool(g.get('restart'));execution=h.geometry_profile(g)
- completions=4 if restart else 3
+ t=Path(temporary);native=a.native.resolve();image=native/'image.elf';manifest=native/'manifest.json';data=image.read_bytes();parts,address,build,layout,g=h.image_profile(data,json.loads(manifest.read_bytes()));checkpoint=bool(g.get('checkpoint'));thermal=bool(g.get('thermal'));restart=bool(g.get('restart'));startup=bool(g.get('startup_only'));execution=h.geometry_profile(g)
+ completions=4 if restart else 1 if startup else 3
  IRQ_RECEIPTS=f'NPU_IRQ_COMPLETIONS=0x{completions:016x}\nNPU_IRQ_STOPPED=0x0000000000000001\n'
  if restart:
   assert a.interrupt
@@ -185,6 +185,10 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
   encoded=json.dumps({**entry,'platform':ref(platform)}).encode();mutated=bytearray(raw);mutated[80:112]=hashlib.sha256(encoded).digest()
   rejected('finite-missing-'+key,lambda:h.validate_admission(encoded,mutated,build,layout,sha(data),execution_profile=execution))
  platform.write_bytes(saved_platform)
+ if startup:
+  assert a.interrupt and a.client_logs
+  for execution_label in (h.PROFILE,h.RESTART,h.CHECKPOINT,h.PROVIDER_CHECKPOINT):
+   rejected('startup-cannot-use-'+execution_label,lambda:h.image_profile(data,{**json.loads(manifest.read_bytes()),'execution_profile':execution_label}))
  if checkpoint:
   if g.get('checkpoint_irq'):
    rejected('IRQ-checkpoint-cannot-use-MBUS-profile',lambda:h.image_profile(data,{**json.loads(manifest.read_bytes()),'execution_profile':h.MBUS_CHECKPOINT}))
@@ -234,11 +238,18 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
    if variant=='truncated-MBUS':text=text.rsplit('0x0000000081000000\n',1)[0]
    if variant=='bad-MBUS-result':text=text.replace('NPU_MBUS=\n0x0000000084000000\n0x0000000000000000','NPU_MBUS=\n0x0000000084000000\n0x0000000000000001')
    if variant=='duplicate-MBUS':text+=text[text.index('NPU_MBUS='):]
+  if startup:
+   text=(a.client_logs/'matched.log').read_text()
+   if variant=='startup-inference-log':text=text.replace('inference_jobs=0','inference_jobs=1')
+   if variant=='startup-two-IRQs':text=text.replace('NPU_IRQ_COMPLETIONS=0x0000000000000001','NPU_IRQ_COMPLETIONS=0x0000000000000002')
+   if variant=='startup-zero-IRQs':text=text.replace('NPU_IRQ_COMPLETIONS=0x0000000000000001','NPU_IRQ_COMPLETIONS=0x0000000000000000')
+   if variant=='startup-missing-close':text=text.replace('NPU_STAGE=CLOSE\n','')
+   if variant=='startup-restart-log':text=text.replace('NPU_STAGE=CLOSE\n','NPU_STAGE=RESTART_OPEN\n')
   if variant=='duplicate-log':text+=text
-  monitor=list(native_report);monitor[3:9]=[5,status,0x4e50554e if checkpoint else 0,11000000,1,12000000]
+  monitor=list(native_report);monitor[3:9]=[5,status,0x4e50554e if checkpoint else 0x4e505553 if startup else 0,11000000,1,12000000]
   if variant=='old-generic-monitor-magic':monitor[0]=0x4153373343525331
   header=[0x534b4552,5,status,len(text),0,0,0,0,11500000,12000000]+[0]*6
-  receipt=[0x4e505543484b3031 if checkpoint else 0x4e50555448533031 if thermal else 0x4e50555245543031,profile['epoch'],profile['generation'],profile['lease'],status,0x4e50554e if checkpoint else status+1,g['clean_start'],g['clean_end'],(g['clean_end']-g['clean_start'])//64,490000000,len(text)]
+  receipt=[0x4e505543484b3031 if checkpoint else 0x4e50555448533031 if thermal else 0x4e50555354415231 if startup else 0x4e50555245543031,profile['epoch'],profile['generation'],profile['lease'],status,0x4e50554e if checkpoint else status+1,g['clean_start'],g['clean_end'],(g['clean_end']-g['clean_start'])//64,490000000,len(text)]
   if thermal:receipt += [reason,jobs,12000000 if variant=='thermal-late-drain' else 130000000]
   if variant=='thermal-fault-reason':receipt[11]=4
   if variant=='ordinary-receipt':receipt[0]=0x4e50555245543031;receipt[5]=1;monitor[5]=0
@@ -254,7 +265,8 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
  # Real preload/sealed-source/readback logic; only FEL operations and new-ROM event modeled.
  variants=['nominal','old-generic-monitor-magic','mismatch','unwritten-second','unwritten-tail','stale-generation','stale-lease','unclean-receipt','pending-monitor','wrong-status','invalid-time','oversized-log','false-success','duplicate-log','no-new-ROM','capture-transport-failure','restore-readback-failure','changed-backup','wrong-ROM-entry']
  if g.get('stopped_capture'):variants+=['capture-metadata-invalid','capture-parent-short','capture-extent-transport-failure','capture-durability-failure','capture-output-differs']
- if checkpoint or thermal:variants.append('ordinary-receipt')
+ if checkpoint or thermal or startup:variants.append('ordinary-receipt')
+ if startup:variants+=['startup-inference-log','startup-two-IRQs','startup-zero-IRQs','startup-missing-close','startup-restart-log']
  if g.get('checkpoint_mbus'):variants+=['missing-MBUS','truncated-MBUS','bad-MBUS-result','duplicate-MBUS']
  if thermal:variants+=['thermal-zero','thermal-one','thermal-one-mismatch','thermal-late-drain','thermal-fault-reason']
  assert not set(a.case)-set(variants),'Unknown selected case'
@@ -316,6 +328,10 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
     if state['new_ROM'] and size==h.DRAM[1] and variant=='restore-readback-failure':value=bytes([1])+value[1:]
     path.write_bytes(value)
    return '\n'.join(words)
+  def launch():
+   assert not record['launch_attempted'];record['launch_attempted']=True
+   transaction('exe','0x52000')
+   wait_return()
   def wait_return():
    if variant=='no-new-ROM':raise ValueError('Modeled return deadline')
    state['new_ROM']=True
@@ -325,13 +341,13 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
    if variant=='capture-durability-failure' and path.name=='npu-stopped-lengths-buffers.bin':raise OSError('Modeled capture durability loss')
    return real_sync(path)
   try:
-   with patch.object(h.base,'sync_file',sync):result=h.run_once(transaction,wait_return,lambda:None,bundle,p2,out,record,lambda:None)
+   with patch.object(h.base,'sync_file',sync):result=h.run_once(transaction,launch,lambda:None,bundle,p2,out,record,lambda:None)
   except (ValueError,OSError) as error:failure=error
   normal=variant in ('nominal','capture-output-differs') or variant in ('mismatch','unwritten-second','unwritten-tail') and not checkpoint or thermal and variant in ('thermal-zero','thermal-one','thermal-one-mismatch');assert (failure is None)==normal,(variant,failure)
   if normal:
    assert record['complete'] and record['dram_restored'] and record['ownership_release_permitted'] and not record['sram_restored']
-   assert result['functional_success']==(variant=='nominal' and not checkpoint) and result['controlled_negative']==(variant in ('mismatch','unwritten-second','unwritten-tail','thermal-one-mismatch','capture-output-differs'))
-   if not checkpoint:
+   assert result['functional_success']==(variant=='nominal' and not checkpoint and not startup) and result['controlled_negative']==(variant in ('mismatch','unwritten-second','unwritten-tail','thermal-one-mismatch','capture-output-differs'))
+   if not checkpoint and not startup:
     size=len(bytes.fromhex(g['reference']));pattern=result['output_pattern']
     assert not pattern['first_unwritten']
     if variant=='unwritten-second':assert pattern['second_unwritten'] and pattern['second_pattern_ranges']==[[0,size]],pattern
@@ -388,7 +404,7 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
    restart_record.write_bytes(saved_restart)
    rejected('restart-image-relabel-refused',lambda:h.image_profile(data,{**json.loads(manifest.read_bytes()),'execution_profile':h.PROFILE}))
   # Receipts in logs that the actual client produced (checks/npu-interrupt-client.py).
-  for variant in ('matched','mismatch','missing-completion','missing-stop','wrong-completion','duplicate-completion',*(('missing-restart-stage','reordered-restart-stage') if restart else ())) if a.client_logs else ():
+  for variant in (('matched','missing-completion','missing-stop','wrong-completion','duplicate-completion') if startup else ('matched','mismatch','missing-completion','missing-stop','wrong-completion','duplicate-completion',*(('missing-restart-stage','reordered-restart-stage') if restart else ()))) if a.client_logs else ():
    text=(a.client_logs/('mismatch.log' if variant=='mismatch' else 'matched.log')).read_text();status=int(variant=='mismatch')
    if variant=='missing-completion':text=text.replace(f'NPU_IRQ_COMPLETIONS=0x{completions:016x}\n','')
    if variant=='missing-stop':text=text.replace('NPU_IRQ_STOPPED=0x0000000000000001\n','')
@@ -396,15 +412,15 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
    if variant=='missing-restart-stage':text=text.replace('NPU_STAGE=FIRST_CLOSE\n','')
    if variant=='reordered-restart-stage':text=text.replace('NPU_STAGE=FIRST_CLOSE\nNPU_STAGE=RESTART_OPEN\n','NPU_STAGE=RESTART_OPEN\nNPU_STAGE=FIRST_CLOSE\n')
    if variant=='duplicate-completion':text='NPU_IRQ_COMPLETIONS=0x0000000000000002\n'+text
-   monitor=list(native_report);monitor[3:9]=[5,status,0,11000000,1,12000000]
+   monitor=list(native_report);monitor[3:9]=[5,status,0x4e505553 if startup else 0,11000000,1,12000000]
    header=[0x534b4552,5,status,len(text),0,0,0,0,11500000,12000000]+[0]*6
-   receipt=[0x4e50555245543031,profile['epoch'],profile['generation'],profile['lease'],status,status+1,g['clean_start'],g['clean_end'],(g['clean_end']-g['clean_start'])//64,490000000,len(text)]
+   receipt=[0x4e50555354415231 if startup else 0x4e50555245543031,profile['epoch'],profile['generation'],profile['lease'],status,status+1,g['clean_start'],g['clean_end'],(g['clean_end']-g['clean_start'])//64,490000000,len(text)]
    plat=bytearray(16384);struct.pack_into('<16Q',plat,0,*header);plat[256:256+len(text)]=text.encode()
    frames=struct.pack('<16Q',*monitor),bytes(plat),struct.pack('<11Q',*receipt)
    if variant in ('matched','mismatch'):
     value=h.validate_reports(*frames,prepared)
-    assert value['functional_success']==(variant=='matched') and value['interrupt_completions']==completions and value['interrupt_stopped']
-    assert value['timing']['counters'] is not None,value['timing']
+    assert value['functional_success']==(variant=='matched' and not startup) and value['interrupt_completions']==completions and value['interrupt_stopped']
+    if not startup:assert value['timing']['counters'] is not None,value['timing']
     if restart:assert value['normal_restart'] and 'startup_us' not in value['timing'] and 'initial_entry_to_restart_ready_us' in value['timing']
     results.append({'name':variant+'-producer-log-report','passed':True})
    else:rejected(variant+'-receipt-refused',lambda:h.validate_reports(*frames,prepared))

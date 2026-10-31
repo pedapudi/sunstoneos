@@ -116,12 +116,17 @@ static void cancel_trace(const char *where,struct npu_service_reply r)
 }
 static void irq_owner(void *unused)
 {
-    (void)unused;configASSERT(npu_irq_case<=20);
+    (void)unused;configASSERT(npu_irq_case<=21);
     struct npu_service_reply r=irq_request(NPU_SERVICE_OPEN,0,100000);
     if(npu_irq_case==4 || npu_irq_case==10 || npu_irq_case==16)configASSERT(r.result==NPU_SERVICE_FAULT);
     else configASSERT(r.result==NPU_SERVICE_OK);
     if(shared_case()){
         r=irq_wait(A733_NPU_READY);configASSERT(r.state==A733_NPU_READY);
+    }else if(npu_irq_case==21){
+        r=irq_hold();
+        configASSERT(r.state==A733_NPU_READY && r.result==NPU_SERVICE_OK && r.owns_session);
+        configASSERT(npu_service_irq_completions(&service)==1 && delivered==1 && critical_rearm==1);
+        configASSERT(native.memory.state==A733_NPU_MEMORY_IDLE && model.bootstrap && data[4096]==0x69);
     }else if(cancel_case()){
         r=irq_request(NPU_SERVICE_CANCEL,0,100000);cancel_trace("request",r);configASSERT(r.result==NPU_SERVICE_OK);
         r=irq_wait(A733_NPU_CANCELED);cancel_trace("finished",r);configASSERT(r.state==A733_NPU_CANCELED);
@@ -191,6 +196,10 @@ static void irq_owner(void *unused)
         configASSERT(npu_service_irq_stopped(&service));
         if(runtime_case())configASSERT(runtime_closed==1 && !runtime_failed);
         r=irq_request(NPU_SERVICE_OPEN,0,100000);configASSERT(r.result==NPU_SERVICE_FAULT);
+    }
+    if(npu_irq_case==21) {
+        configASSERT(npu_service_irq_completions(&service)==1 && delivered==1 && model.bootstrap);
+        platform_puts("PASS NPU IRQ bootstrap READY to CLOSE without inference\n");platform_exit(0);
     }
     platform_puts("PASS NPU IRQ native ownership, rearm window, repeated jobs, deferred CLOSE and retained failure\n");platform_exit(0);
 }
