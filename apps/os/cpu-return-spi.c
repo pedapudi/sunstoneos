@@ -27,7 +27,10 @@ void os_cpu_return_spi_save(void)
 {
     if(a733_irq_route_count!=sizeof(ids)/sizeof(*ids))return;
     for(unsigned i=0;i<a733_irq_route_count;++i){
-        unsigned id=ids[i],core=i ? OS_RECOGNITION_CORE : 0;
+        unsigned id=ids[i],core=0;
+#ifdef SUNSTONE_A733_OS_GPU_LINEAR
+        if(i)core=OS_RECOGNITION_CORE;
+#endif
         if(a733_irq_routes[i].intid!=id || a733_irq_routes[i].core!=core ||
            ((rd(0x100+id/32*4)|rd(0x200+id/32*4)|rd(0x300+id/32*4))&(1u<<(id%32))))return;
         saved[i].group=rd(0x80+id/32*4);saved[i].modifier=rd(0xd00+id/32*4);
