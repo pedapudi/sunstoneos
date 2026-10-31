@@ -11,6 +11,7 @@ from pathlib import Path
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--evidence',type=Path,required=True)
 p.add_argument('--baseline',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/npu-finite-quiescence-20261018')
+p.add_argument('--entry-provider-checkpoint',action='store_true',help='construct real native providers and tasks, then return before scheduling')
 p.add_argument('--entry-checkpoint',action='store_true',help='return before any provider construction')
 p.add_argument('--entry-irq-checkpoint',action='store_true',help='provider-free checkpoint after private IRQ97 capture and installation')
 p.add_argument('--thermal',action='store_true',help='poll THS before and during finite execution')
@@ -22,6 +23,7 @@ p.add_argument('--shufflenet',action='store_true',help='the published ShuffleNet
 p.add_argument('--sdk-reference',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/npu-complete-graph-proposal-20261019/sdk-reference',
  help='directory with network_binary.nb, published-input.dat and output0_2_1.dat')
 a=p.parse_args()
+if a.entry_provider_checkpoint:a.entry_irq_checkpoint=True
 if a.entry_irq_checkpoint:a.entry_checkpoint=True
 if a.entry_checkpoint and a.interrupt:p.error('Entry checkpoint constructs no interrupt provider')
 if a.restart and (not a.interrupt or a.shufflenet or a.thermal or a.entry_checkpoint):p.error('Restart requires the baseline interrupt profile')
@@ -41,7 +43,7 @@ config=[v.replace(old_root,str(root)).replace(str(base/'native'),str(e/'native')
 if a.restart:
  assert sum(v.startswith('-DCMAKE_C_FLAGS=') for v in config)==1
  config=[v+' -DSUNSTONE_NPU_RESTART=1' if v.startswith('-DCMAKE_C_FLAGS=') else v for v in config]
-if a.interrupt:config+=['-DA733_NPU_INTERRUPT=ON']
+if a.interrupt or a.entry_provider_checkpoint:config+=['-DA733_NPU_INTERRUPT=ON']
 if a.shufflenet:
  # artifacts.py admits these only by their catalogue hashes (tools/npu-models.json).
  sdk=a.sdk_reference.resolve();files={'MODEL':sdk/'network_binary.nb','INPUT':sdk/'published-input.dat','REFERENCE':sdk/'output0_2_1.dat'}
@@ -59,6 +61,7 @@ def compile_like(suffix,source,name):
  c[c.index('-o')+1]=str(dest);c[c.index('-c')+1]=str(source)
  c += ['-MD','-MF',str(dest)+'.d']
  if a.entry_checkpoint:c += ['-DSUNSTONE_NPU_ENTRY_CHECKPOINT=1']
+ if a.entry_provider_checkpoint:c += ['-DSUNSTONE_NPU_ENTRY_PROVIDER_CHECKPOINT=1','-DSUNSTONE_NPU_INTERRUPT=1']
  if a.entry_irq_checkpoint:
   c += ['-DSUNSTONE_NPU_ENTRY_IRQ_CHECKPOINT=1']
   if source==root/'apps/npu-finite/monitor.c':c += ['-DSUNSTONE_NPU_INTERRUPT=1']
@@ -103,6 +106,9 @@ if a.entry_checkpoint:
 if a.entry_irq_checkpoint:
  identity['profile']='npu-entry-irq-checkpoint-v1'
  identity['checkpoint_irq_sources']={str(x.relative_to(root)):sha(x) for x in (root/'apps/npu-interrupt/irq-route.c',root/'apps/npu-interrupt/irq-route.h')}
+if a.entry_provider_checkpoint:
+ identity['profile']='npu-entry-provider-checkpoint-v1'
+ identity['provider_checkpoint_sources']={'apps/npu-finite/provider-checkpoint.h':sha(root/'apps/npu-finite/provider-checkpoint.h')}
 build_id=hashlib.sha256(json.dumps(identity,sort_keys=True).encode()).hexdigest();source=e/'build-id.c';source.write_text('const unsigned char a733_smp_build_id[32]={'+','.join('0x'+build_id[i:i+2] for i in range(0,64,2))+'};\n')
 build_obj=compile_like('/npu-single-core/build-id.c',source,'build-id')
 replacements={'/apps/storage-read-single-core/monitor.c.obj':monitor,'/npu-single-core/platform.c.obj':platform_obj,'/npu-single-core/build-id.c.obj':build_obj}
@@ -119,7 +125,7 @@ for value in link:
  newlink.append(value)
 newlink[-1]=str(e/'image.elf');newlink[-2:-2]=[str(ret),str(assembly),'-Wl,--undefined=a733_npu_application_artifact_hashes']
 if a.thermal:newlink[-2:-2]=['-Wl,--undefined=npu_finite_thermal_profile']
-if checkpoint_irq:newlink[-2:-2]=[str(checkpoint_irq)]
+if checkpoint_irq and not a.entry_provider_checkpoint:newlink[-2:-2]=[str(checkpoint_irq)]
 if a.entry_checkpoint:newlink[-2:-2]=['-Wl,--undefined='+n for n in ('a733_npu_application_model','a733_npu_application_input','a733_npu_application_reference')]
 commands.append(newlink);run('link',newlink,cwd=e/'native')
 copy=['/usr/lib/llvm-21/bin/llvm-objcopy','-O','binary',str(e/'image.elf'),str(e/'image.bin')];commands.append(copy);run('binary',copy)

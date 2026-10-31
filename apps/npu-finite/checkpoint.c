@@ -1,5 +1,5 @@
-/* The ordinary native provider storage is present, but its constructors are
- * unreachable. Linking this unit replaces native.c and the diagnostic main. */
+/* Replace the diagnostic main. The optional provider profile constructs the
+ * real native bindings; the earlier profiles leave their storage untouched. */
 #include "../npu-convolution/native.c"
 #include "checkpoint.h"
 #include "a733_memory_reservations.h"
@@ -15,6 +15,10 @@ __attribute__((used,retain)) const uint64_t npu_entry_checkpoint_irq_profile[4]=
     NPU_ENTRY_IRQ_MAGIC,1,97,0};
 #endif
 uint64_t npu_entry_checkpoint_mbus[4] __attribute__((section(".npu_runtime_retained")));
+#ifdef SUNSTONE_NPU_ENTRY_PROVIDER_CHECKPOINT
+__attribute__((used,retain)) const uint64_t npu_entry_checkpoint_provider_profile[4]={
+    UINT64_C(0x4e505550524f5631),1,4,0};
+#endif
 static struct {
     uint64_t complete,epoch,generation,lease,armed_at,deadline;
     struct device_memory_pool *pool;
@@ -33,13 +37,16 @@ static int zero_bytes(const void *p,size_t bytes)
     for(size_t i=0;i<bytes;++i)value|=b[i];
     return value==0;
 }
+#ifdef SUNSTONE_NPU_ENTRY_PROVIDER_CHECKPOINT
+#include "provider-checkpoint.h"
+#endif
 int npu_entry_checkpoint_ready(uint64_t epoch,uint64_t generation,uint64_t lease,
     uint64_t armed_at,uint64_t deadline)
 {
     const struct npu_session *s=npu_session_get();
     const struct a733_smp_contract *c=sd_single_core_contract();
     if(!published(&checkpoint,sizeof(checkpoint)))return 0;
-    const struct device_memory_pool *p=checkpoint.pool;
+    struct device_memory_pool *p=checkpoint.pool;
     return published(npu_entry_checkpoint_mbus,sizeof(npu_entry_checkpoint_mbus)) &&
         npu_entry_checkpoint_mbus[0]==NPU_ENTRY_MBUS_MAGIC &&
         npu_entry_checkpoint_mbus[1]<=UINT32_MAX && npu_entry_checkpoint_mbus[3]<=UINT32_MAX &&
@@ -61,14 +68,25 @@ int npu_entry_checkpoint_ready(uint64_t epoch,uint64_t generation,uint64_t lease
         a733_observe_identity.deadline==deadline && a733_cached_runtime[0].epoch==epoch &&
         a733_cached_runtime[0].startup_deadline==c->startup_deadline &&
         a733_cached_runtime[0].diagnostic_deadline==deadline &&
-        zero_bytes(&app,sizeof(app)) && zero_bytes(&a733_npu_application_result,sizeof(a733_npu_application_result)) &&
+#ifdef SUNSTONE_NPU_ENTRY_PROVIDER_CHECKPOINT
+        provider_checkpoint_ready() &&
+#else
+        zero_bytes(&app,sizeof(app)) &&
+#endif
+        zero_bytes(&a733_npu_application_result,sizeof(a733_npu_application_result)) &&
         zero_bytes(&a733_npu_application_failed,sizeof(a733_npu_application_failed)) &&
         (uintptr_t)__uncached_pool_start==(uintptr_t)__uncached_pool_end &&
         p->initialized==1 && p->backing.cpu==(uintptr_t)__device_pool_start &&
         p->backing.physical==(uintptr_t)__device_pool_start &&
         p->backing.bytes==(size_t)(__device_pool_end-__device_pool_start) &&
+        p->memory_type==DEVICE_MEMORY_WRITE_BACK &&
+#ifdef SUNSTONE_NPU_ENTRY_PROVIDER_CHECKPOINT
+        p==app.pool && app.reserved.admitted && app.reserved.pool==p &&
+        device_memory_lookup(p,app.lease)!=NULL;
+#else
         p->next_generation==1 && p->clean_end==0 && p->memory_class==DEVICE_MEMORY_CLASS_NONE &&
-        p->memory_type==DEVICE_MEMORY_WRITE_BACK && zero_bytes(p->allocations,sizeof(p->allocations));
+        zero_bytes(p->allocations,sizeof(p->allocations));
+#endif
 }
 void a733_smp_diagnostic_start(void)
 {
@@ -76,11 +94,18 @@ void a733_smp_diagnostic_start(void)
     if(!a733_smp_device_preparation_admitted() || !npu_session_copy() ||
        !a733_npu_application_observer_admit() || xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED ||
        checkpoint.complete || !published(c,sizeof(*c)))platform_panic("NPU checkpoint admission",1);
+    #ifdef SUNSTONE_NPU_ENTRY_PROVIDER_CHECKPOINT
+    provider_checkpoint_construct();
+#endif
     checkpoint.pool=a733_memory_reservations_init();
     checkpoint.epoch=c->epoch;checkpoint.generation=c->generation;checkpoint.lease=c->lease;
     checkpoint.armed_at=c->armed_at;checkpoint.deadline=c->diagnostic_deadline;
     checkpoint.complete=NPU_ENTRY_MEMORY_READY;
+    #ifdef SUNSTONE_NPU_ENTRY_PROVIDER_CHECKPOINT
+    platform_puts("NPU_CHECKPOINT=PROVIDERS_CONSTRUCTED; scheduler never started; jobs=0\n");
+#else
     platform_puts("NPU_CHECKPOINT=ENTRY_MEMORY_READY; providers never constructed; jobs=0\n");
+#endif
     platform_puts("NPU_MBUS=\n");
     for(unsigned i=1;i<4;++i){platform_hex(npu_entry_checkpoint_mbus[i]);platform_puts("\n");}
     platform_exit(0);

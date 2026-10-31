@@ -360,3 +360,67 @@ to execution-time visibility and hardware interpretation. Returned RAM does
 not show what the engine fetched during a job. The nineteen decoder cases in
 `npu-stopped-analysis-20261024` use explicitly synthetic parents and preserved
 historical result bytes; they establish no new physical observation.
+
+### Return after constructing the native providers
+
+`build.py --entry-provider-checkpoint --evidence DIRECTORY` produces the distinct
+`npu-entry-provider-checkpoint-v1` diagnostic. It runs the real
+`a733_npu_application_init` after the accepted private IRQ97 installation. It
+constructs the counter, clock registry, register/I2C mutexes, resource manager,
+pin and rail ledgers, reserved NPU memory, PMIC and power-domain providers,
+startup row, convolution service and IRQ binding. Four static tasks and the
+service queues exist. The scheduler never starts.
+
+The constructor reads the architectural counter and the installed GIC route.
+It copies and authenticates the model, creates command buffers and page tables,
+and fills the 512 KiB bootstrap buffer with END commands before writing its
+bootstrap stream. These writes use the native reservation inside the saved
+`0x41000000..0x42200000` interval. The linker confines the pool below
+`0x41f00000`; task stacks, queues, ledgers and monitor storage also lie within
+the saved interval. No NPU register, PMIC bus, power-domain, PLL or SRAM-routing
+operation executes.
+
+The return guard requires the never-started scheduler, initial startup stage,
+zero startup clock/rail/PCK tokens, no row request or answer, an unopened
+register window, initial PMIC state without requests or held resources, empty
+platform lease ledgers and an inactive service with no job. Exactly one native
+memory allocation remains owned by the constructed service. The guard checks
+its owner, generation, extent and DEVICE state. That software ownership lasts
+through receipt publication and ROM return; the host then restores and compares
+the saved RAM. This diagnostic does not claim a device CLOSE, provider park or
+hardware drain. A failed guard cannot produce a normal-return receipt.
+
+The immutable provider marker prevents relabeling this image as a provider-free
+checkpoint. Its platform conditions require
+`providers-constructed-never-scheduled`, and its power conditions require that
+condition plus `no-provider-hardware-operation-or-lease`. The typed boot record
+contains valid constructor configuration, including pin syntax; those values
+grant no provider hardware operation. IRQ97 remains disabled, inactive and
+pending-clear. The existing EL3 installed-state authentication and captured-route
+restoration still gate return.
+
+A successful returned log begins with
+`NPU_CHECKPOINT=PROVIDERS_CONSTRUCTED; scheduler never started; jobs=0`, followed
+by the existing MBUS diagnostic. The host reports `functional_success=false`.
+This boundary tests the actual memory, task, queue and native-binding path that
+follows IRQ installation. It establishes no scheduler startup, power sequencing,
+IRQ delivery, inference or restart result.
+
+The source audit uses the pinned vendor VIPLite driver and Arm's GIC-600 errata
+notice SDEN-892601 v12.0, pages 12–14. Erratum 2384374's CLEAR case requires a
+recalled SPI and a CPU interrupt-group disable. The finite monitor's return
+clears distributor group enables; it does not clear a CPU group enable. Its
+receipt also requires IRQ97 disabled, inactive and pending-clear. That audit
+identifies no corresponding NPU return defect and does not explain the earlier
+nonreturning restart. The vendor's effective initialization and power sequence
+remain documented in [the reference audit](../../docs/reference-backsolve-npu.md)
+and [startup contract](../../docs/npu-startup.md).
+
+Focused software evidence resides in
+`~/.cache/sunstoneos/evidence/sol-npu-diagnosis-1031/`. Linked instruction checks
+execute the real constructors, receipt and monitor return. They model privileged
+registers, GIC effects, translation and coherence admission. Host equivalents
+supply libc byte operations and the existing convolution SHA-256 digest. They
+check CPU write bounds and refuse mutated provider, scheduler, allocation and
+IRQ state. Separate host cases cover the new image/admission profile and final
+writer format. These checks do not establish physical operation.

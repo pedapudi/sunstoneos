@@ -9,17 +9,17 @@ r=Path(__file__).resolve().parents[2]
 def module(n,p):
  s=importlib.util.spec_from_file_location(n,p);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 h=module('checkpoint_host',r/'apps/npu-finite/host.py');layout=module('checkpoint_layout',r/'checks/storage-read-native.py');images=module('checkpoint_images',r/'checks/npu-image-checks.py')
-e=a.native;im=layout.Image(e/'image.elf',layout_names=('a733_smp_contract','device_memory_pool','device_memory_extent','device_memory_allocation','a733_npu_application_result'))
+e=a.native;im=layout.Image(e/'image.elf',layout_names=('a733_smp_contract','device_memory_pool','device_memory_extent','device_memory_allocation','a733_npu_application_result','a733_npu_startup','a733_pmic','a733_clock_leases','npu_convolution','npu_service','a733_power_domain_row'))
 _,_,build,sl,g=h.image_profile((e/'image.elf').read_bytes(),json.loads((e/'manifest.json').read_text()))
 raw=bytearray(images.npu_page((Path.home()/'.cache/sunstoneos/evidence/npu-single-core-20261018/startup-usb-resume/session-fixture.bin').read_bytes(),sl,3));raw[48:80]=build
 profile=h.original.session_profile(raw,sl);_,contract=h.original.request_bytes(0,build,raw,profile);contract=bytearray(contract)
 cl=im.layouts['a733_smp_contract'];armed=10000000;deadline=armed+480000000
 for name,value in [('magic',h.original.CONTRACT_MAGIC),('armed_at',armed),('startup_deadline',armed+24000000),('diagnostic_deadline',deadline),('expires_at',deadline)]:struct.pack_into('<Q',contract,cl[name],value)
-for n in ('a733_npu_application_init','npu_convolution_startup_poll','npu_service_activate','vTaskStartScheduler','a733_pmic_poll','a733_npu_startup_step'):
+for n in (('vTaskStartScheduler',) if g.get('checkpoint_provider') else ('a733_npu_application_init','npu_convolution_startup_poll','npu_service_activate','vTaskStartScheduler','a733_pmic_poll','a733_npu_startup_step')):
  assert n not in im.symbols,n
 results=[]
 IRQ_FIELDS={0x0340008c:0x55aa0000,0x03400d0c:0xaa55ffff,0x03400c18:0xa5a5a5a5,0x03400460:0x12345678,0x03406308:0x10000}
-irq_offset=None
+irq_offset=None;app_fields=None
 if g.get('checkpoint_irq'):
  from elftools.elf.elffile import ELFFile
  with (e/'image.elf').open('rb') as f:
@@ -28,7 +28,8 @@ if g.get('checkpoint_irq'):
     if die.tag=='DW_TAG_structure_type':
      fields={c.attributes['DW_AT_name'].value.decode():c.attributes['DW_AT_data_member_location'].value for c in die.iter_children() if c.tag=='DW_TAG_member' and 'DW_AT_name' in c.attributes and 'DW_AT_data_member_location' in c.attributes}
      if 'npu_irq' in fields and 'spi_enabled' in fields:irq_offset=fields['npu_irq']
- assert irq_offset is not None and 'npu_application_irq' not in im.symbols
+     if 'pmic_task' in fields and 'startup' in fields:app_fields=fields
+ assert irq_offset is not None and (g.get('checkpoint_provider') or 'npu_application_irq' not in im.symbols)
  assert all(n in im.symbols for n in ('npu_irq_route_capture','npu_irq_route_install','npu_irq_route_installed','npu_irq_route_restore'))
 def machine(mbus=0x81000000, busy_gpu=False,irq_fault=None):
  u=Uc(UC_ARCH_ARM64,UC_MODE_ARM);u.mem_map(0x02000000,0x07000000);u.mem_map(0x40000000,0x04000000)
@@ -41,16 +42,29 @@ def machine(mbus=0x81000000, busy_gpu=False,irq_fault=None):
  u.mem_map(0x50000,0x30000)
  u.mem_write(0x02002588,struct.pack('<I',mbus));u.mem_write(0x02002594,struct.pack('<I',0x30001))
  if busy_gpu:u.mem_write(0x02002b20,struct.pack('<I',0x80000000))
+ write_pages=set();write_extent=[0x42200000,0]
+ def cpu_write(cpu,access,at,size,value,cookie):
+  if 0x43ff0000<=at and at+size<=0x44000000:return
+  assert 0x41000000<=at and at+size<=0x42200000,('CPU write outside restored interval',hex(at),size)
+  write_pages.update(range(at//4096,(at+size-1)//4096+1));write_extent[0]=min(write_extent[0],at);write_extent[1]=max(write_extent[1],at+size)
+ u.hook_add(UC_HOOK_MEM_WRITE,cpu_write,begin=0x40000000,end=0x43ffffff)
  state={'el':12,'sctlr':0,'now':11000000,'mode':5,'smc':None,'return':False,'retained':False,'panics':[],'clean':[],'mmio':[],'translations':0,'phase':'monitor','inject':None,'irq_fault':irq_fault,'irq_writes':[]}
  def put(at,value,n=8):u.mem_write(at,int(value).to_bytes(n,'little'))
  def get(at,n=8):return int.from_bytes(u.mem_read(at,n),'little')
  def ret(value=0):u.reg_write(UC_ARM64_REG_X0,value);u.reg_write(UC_ARM64_REG_PC,u.reg_read(UC_ARM64_REG_LR))
- hooks={im.address(n):n for n in ('a733_cpu_coherence_check_el1','aarch64_device_translate','vPortEnterCritical','vPortExitCritical','platform_panic','a733_smp_stop','npu_finite_rom_return') if n in im.symbols}
+ hooks={im.address(n):n for n in ('a733_cpu_coherence_check_el1','aarch64_device_translate','vPortEnterCritical','vPortExitCritical','platform_panic','a733_smp_stop','npu_finite_rom_return','memset','memcpy','memmove','memcmp','digest') if n in im.symbols}
  def code(cpu,at,size,cookie):
   if at==im.address('a733_smp_diagnostic_start') and state['inject']:
    if state['inject']=='app':put(im.address('app'),1,1)
    elif state['inject']=='ledger':put(im.address('boot_pool')+im.layouts['device_memory_pool']['allocations'],1)
   name=hooks.get(at);args=[u.reg_read(UC_ARM64_REG_X0+i) for i in range(5)]
+  if name=='digest':u.mem_write(args[2],hashlib.sha256(bytes(u.mem_read(args[0],args[1]))).digest());ret();return
+  if name=='memset':
+   cpu_write(u,UC_MEM_WRITE,args[0],args[2],0,None);u.mem_write(args[0],bytes([args[1]&255])*args[2]);ret(args[0]);return
+  if name in ('memcpy','memmove'):
+   cpu_write(u,UC_MEM_WRITE,args[0],args[2],0,None);u.mem_write(args[0],bytes(u.mem_read(args[1],args[2])));ret(args[0]);return
+  if name=='memcmp':
+   left,right=bytes(u.mem_read(args[0],args[2])),bytes(u.mem_read(args[1],args[2]));ret(0 if left==right else (1 if left>right else 0xffffffffffffffff));return
   if name=='a733_cpu_coherence_check_el1':ret(1);return
   if name in ('vPortEnterCritical','vPortExitCritical'):ret();return
   if name=='aarch64_device_translate':
@@ -60,7 +74,7 @@ def machine(mbus=0x81000000, busy_gpu=False,irq_fault=None):
    state['retained']=name=='a733_smp_stop';state['return']=name=='npu_finite_rom_return';u.emu_stop();return
   word=get(at,4);kind=word&0xffffffe0;reg=word&31
   if kind==0xd53be020:state['now']+=24
-  values={0xd5384240:state['el'],0xd53800a0:0,0xd53e1000:0,0xd5381000:state['sctlr'],0xd53b4220:0x3c0,
+  values={0xd53be000:24000000,0xd5384240:state['el'],0xd53800a0:0,0xd53e1000:0,0xd5381000:state['sctlr'],0xd53b4220:0x3c0,
    0xd5384600:0xf0,0xd53be020:state['now'],0xd53b0020:0x8444c004,0xd53e5200:0x17<<26,0xd53e4000:state['mode']|0x3c0}
   if kind in values:
    if reg<31:u.reg_write(UC_ARM64_REG_X0+reg,values[kind])
@@ -73,6 +87,8 @@ def machine(mbus=0x81000000, busy_gpu=False,irq_fault=None):
   if word&0xfff00000==0xd5300000:raise AssertionError(('unmodeled register read',hex(word),hex(at)))
  def mmio(cpu,access,at,size,value,cookie):
   state['mmio'].append([state['phase'],access,at,size])
+  if g.get('checkpoint_provider') and access==UC_MEM_READ and at==0x03400460 and state['el']==4:
+   word=get(at,4);put(at,(word&~0xff00)|(0xb0<<8),4)
   if g.get('checkpoint_irq'):
    if access==UC_MEM_WRITE and at in IRQ_FIELDS:state['irq_writes'].append((at,size,value))
    if access==UC_MEM_READ and state['irq_fault']=='install-readback' and at==0x0340008c and state['irq_writes']:
@@ -94,9 +110,19 @@ def machine(mbus=0x81000000, busy_gpu=False,irq_fault=None):
     assert access==UC_MEM_WRITE and at in (0x02002588,0x02002594,0x02003f00),('forbidden CCU write',hex(at))
     if at==0x02003f00:assert value==7 # Existing cold security permission setup.
  u.hook_add(UC_HOOK_CODE,code);u.hook_add(UC_HOOK_MEM_WRITE,mmio,begin=0x02000000,end=0x08ffffff);u.hook_add(UC_HOOK_MEM_READ,mmio,begin=0x02000000,end=0x08ffffff)
- def call(name,*args,count=5000000):
+ def call(name,*args,count=3000000):
   for i,value in enumerate(args):u.reg_write(UC_ARM64_REG_X0+i,value)
   u.reg_write(UC_ARM64_REG_SP,0x43ffe000);u.reg_write(UC_ARM64_REG_LR,0x43fff000);u.emu_start(im.address(name),0x43fff000,count=count)
+  if u.reg_read(UC_ARM64_REG_PC)!=0x43fff000 and not state['smc'] and not state['retained'] and not state['return']:
+   import pickle
+   (a.evidence/'budget-ram.bin').write_bytes(bytes(u.mem_read(0x41000000,0x1200000)))
+   (a.evidence/'budget-stack.bin').write_bytes(bytes(u.mem_read(0x43ff0000,0x10000)))
+   (a.evidence/'budget-mmio.bin').write_bytes(bytes(u.mem_read(0x02000000,0x07000000)))
+   (a.evidence/'budget-state.json').write_text(json.dumps(state))
+   (a.evidence/'budget-context.pkl').write_bytes(pickle.dumps(u.context_save()))
+   pc=u.reg_read(UC_ARM64_REG_PC);state['budget_pc']=hex(pc)
+   raise AssertionError(('execution budget; state preserved',name,hex(pc)))
+  state['cpu_write_extent']=write_extent;state['cpu_write_pages']=len(write_pages)
   return u.reg_read(UC_ARM64_REG_X0)
  return u,state,put,get,call
 # Actual monitor: validates/hashes/copies/seals the session, constructs tables,
@@ -106,13 +132,16 @@ initial=bytes(u.mem_read(0x42000000,128));(a.evidence/'initial-report.bin').writ
 sealed_ram=bytes(u.mem_read(0x41000000,0x1200000))
 state['el']=4;state['phase']='kernel';call('kernel_main');assert state['smc']==[0x733,0] and not state['panics'],state
 assert state['clean']==list(range(g['clean_start'],g['clean_end'],64))
-assert {x[2] for x in state['mmio'] if x[0]=='kernel'}=={0x0347041e,0x03470100,0x03460000},state['mmio']
+assert {x[2] for x in state['mmio'] if x[0]=='kernel'}==({0x0347041e,0x03470100,0x03460000,0x03400000,0x0340010c,0x0340020c,0x0340030c,0x03400c18,0x03400460,0x03406308} if g.get('checkpoint_provider') else {0x0347041e,0x03470100,0x03460000}),state['mmio']
 receipt=bytes(u.mem_read(g['receipt'],88));assert struct.unpack('<11Q',receipt)[:6]==(0x4e505543484b3031,profile['epoch'],profile['generation'],profile['lease'],0,0x4e50554e)
+if g.get('checkpoint_provider'):put(0x03400460,(get(0x03400460,4)&~0xff00)|(0xd8<<8),4)
 # Snapshot the published state for bounded corruption/late-return cases.
 irq_installed={at:int.from_bytes(u.mem_read(at,8 if at==0x03406308 else 4),'little') for at in (*IRQ_FIELDS,0x03400000,0x0340010c,0x0340020c,0x0340030c)} if g.get('checkpoint_irq') else {}
-ram=bytes(u.mem_read(0x41000000,0x1200000));results.append({'case':'actual-monitor-session-kernel-pool-checkpoint-publication','passed':True,'clean_lines':len(state['clean']),'translations':state['translations'],'provider_mmio':0})
+ram=bytes(u.mem_read(0x41000000,0x1200000));results.append({'case':'actual-monitor-session-kernel-pool-checkpoint-publication','passed':True,'clean_lines':len(state['clean']),'translations':state['translations'],'provider_mmio_writes':0,'cpu_write_extent':state.get('cpu_write_extent')})
 variants=['success','wrong-caller-mode','stale-secure-generation','late','wrong-receipt-magic','ordinary-completion','app-written','job-published','pool-ledger-live','pool-not-empty','pool-pointer-outside','checkpoint-identity','session-identity']
 if a.case=='irq':variants=['success']
+if g.get('checkpoint_provider'):
+ variants+=['provider-startup-token','provider-pmic-started','provider-row-request','provider-service-active','provider-request-pending','provider-task-missing','provider-scheduler-started','provider-pool-pointer','pool-not-empty','pool-ledger-live']
 if g.get('checkpoint_irq'):
  variants+=['irq-phase','irq-route','irq-group','irq-modifier','irq-trigger','irq-priority','irq-enabled','irq-pending','irq-active','irq-late-after-fields','irq-restore-readback']
 for variant in variants:
@@ -123,14 +152,26 @@ for variant in variants:
  if variant=='late':state['now']=deadline
  if variant=='wrong-receipt-magic':put(g['receipt'],0x4e50555245543031)
  if variant=='ordinary-completion':put(g['receipt']+40,1)
- if variant=='app-written':put(im.address('app'),1,1)
+ if variant=='app-written':put(im.address('app'),0 if g.get('checkpoint_provider') else 1,1)
  if variant=='job-published':put(im.address('a733_npu_application_result')+im.layouts['a733_npu_application_result']['jobs'],1,4)
  pool=get(im.address('checkpoint')+48)
- if variant=='pool-ledger-live':put(pool+im.layouts['device_memory_pool']['allocations'],1)
- if variant=='pool-not-empty':put(pool+im.layouts['device_memory_pool']['next_generation'],2)
+ if variant=='pool-ledger-live':
+  at=pool+im.layouts['device_memory_pool']['allocations'];put(at,get(at)^1)
+ if variant=='pool-not-empty':put(pool+im.layouts['device_memory_pool']['next_generation'],0 if g.get('checkpoint_provider') else 2)
  if variant=='pool-pointer-outside':put(im.address('checkpoint')+48,0x43000000)
  if variant=='checkpoint-identity':put(im.address('checkpoint')+8,profile['epoch']+1)
  if variant=='session-identity':put(im.address('session')+24,profile['epoch']+1)
+ if variant.startswith('provider-'):
+  start=im.address('app')+app_fields['startup'];service=im.address('app')+app_fields['reserved']+im.layouts['npu_convolution'].get('service',0)
+  # reserved.convolution is the first member, asserted from its native declaration.
+  if variant=='provider-startup-token':put(start+im.layouts['a733_npu_startup']['clock'],1)
+  elif variant=='provider-pmic-started':put(im.address('app')+app_fields['pmic']+im.layouts['a733_pmic']['stage'],1,4)
+  elif variant=='provider-row-request':put(start+im.layouts['a733_npu_startup']['row']+im.layouts['a733_power_domain_row']['request'],3,4)
+  elif variant=='provider-service-active':put(service+im.layouts['npu_service']['activation_state'],2,4)
+  elif variant=='provider-request-pending':put(service+im.layouts['npu_service']['job_ticket'],1)
+  elif variant=='provider-task-missing':put(im.address('app')+app_fields['pmic_task'],0)
+  elif variant=='provider-scheduler-started':put(im.address('xSchedulerRunning'),1,4)
+  elif variant=='provider-pool-pointer':put(im.address('app')+app_fields['pool'],0x03600000)
  if variant.startswith('irq-'):
   if variant=='irq-phase':put(im.address('saved')+irq_offset+24,1,4)
   elif variant=='irq-route':put(0x03406308,0x10000)
@@ -173,4 +214,4 @@ if g.get('checkpoint_irq'):
   assert state['retained'] and not state['return'],(fault,state)
   if fault!='install-readback':assert not state['irq_writes']
   results.append({'case':'IRQ-entry-refuses-'+fault,'passed':True,'normal_return':False})
-(a.evidence/'result.json').write_text(json.dumps({'passed':True,'image_sha256':h.sha((e/'image.elf').read_bytes()),'check_sha256':h.sha(Path(__file__).read_bytes()),'host_sha256':h.sha((r/'apps/npu-finite/host.py').read_bytes()),'cases':results,'scope':'Actual linked monitor/session validation and seal, mapping constructor, kernel/platform caller, local pool preparation, checkpoint, publication and EL3 final writer. Coherence admission, architectural translation, critical sections and privileged registers/effects modeled. ROM tail is reused; no hardware or provider startup.'},indent=2)+'\n');print('PASS checkpoint cases',len(results))
+(a.evidence/'result.json').write_text(json.dumps({'passed':True,'image_sha256':h.sha((e/'image.elf').read_bytes()),'check_sha256':h.sha(Path(__file__).read_bytes()),'host_sha256':h.sha((r/'apps/npu-finite/host.py').read_bytes()),'cases':results,'scope':'Actual linked monitor/session validation and seal, mapping constructor, kernel/platform caller, local pool preparation, checkpoint, publication and EL3 final writer. Coherence admission, architectural translation, critical sections and privileged registers/effects modeled. Libc byte operations and npu_convolution.c digest use host-equivalent semantics; all provider/task/queue construction executes. CPU writes are confined to saved DRAM apart from fixture stack. ROM tail is reused; no physical hardware or provider startup.'},indent=2)+'\n');print('PASS checkpoint cases',len(results))

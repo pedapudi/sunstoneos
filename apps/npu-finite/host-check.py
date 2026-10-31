@@ -119,7 +119,7 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
    thermal_facts[name]=ref(path);raw[at+16+32*index:at+48+32*index]=hashlib.sha256(path.read_bytes()).digest()
  if checkpoint:
   required['clock']=({'read-only-NPU-clock-guard-before-MBUS-normalization','MBUS-source-restore-with-idle-masters-and-exclusive-SRAM-window'} if g.get('checkpoint_mbus') else {'npu-clock-power-registers-not-accessed'})
-  required['power']={'providers-never-constructed','unconsumed-typed-boot-no-provider-grant'}
+  required['power']=({'providers-constructed-never-scheduled','no-provider-hardware-operation-or-lease'} if g.get('checkpoint_provider') else {'providers-never-constructed','unconsumed-typed-boot-no-provider-grant'})
   required['supervision'].remove('successful-close-stop-quiescence-ROM-retirement');required['supervision'].add('checkpoint-normal-return-retirement')
  boot_hash=sha(raw[boot:boot+boot_bytes]);facts={}
  for name,offset in [('clock',112),('power',144),('supervision',176)]:
@@ -128,7 +128,7 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
  conditions={'cold-cache-and-dirty-alias-exclusion','dual-pas-dram','exclusive-cpus-memory-dma','remote-writers-excluded','usb-clock-power-reset-ownership','physical-counter-continuity','npu-startup-sram-confinement-drain-ownership','pmic-bus-rail-pin-ownership','primary-cache-transition-and-secondary-off','usb-supplies-stable-and-writers-excluded'}
  if checkpoint:
   conditions-= {'npu-startup-sram-confinement-drain-ownership','pmic-bus-rail-pin-ownership'}
-  conditions|= {'providers-never-constructed','read-only-NPU-clock-guard-before-MBUS-normalization' if g.get('checkpoint_mbus') else 'npu-clock-power-registers-not-accessed'}
+  conditions|= {('providers-constructed-never-scheduled' if g.get('checkpoint_provider') else 'providers-never-constructed'),'read-only-NPU-clock-guard-before-MBUS-normalization' if g.get('checkpoint_mbus') else 'npu-clock-power-registers-not-accessed'}
  if g.get('checkpoint_irq'):conditions.add('exclusive-IRQ97-route-capture-install-restore')
  platform=write('platform.json',{**common,**profile,'schema':'a733-npu-checkpoint-platform-v1' if checkpoint else 'a733-npu-convolution-platform-v1','conditions':{k:ref(fact) for k in conditions},'entry_conditions_established':True,'physical_coherence_result':'under-test'})
  launcher=Path.home()/'.cache/sunstoneos/evidence/npu-single-core-20261018/package-final/bundle/launch.bin'
@@ -191,7 +191,7 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
    rejected('IRQ-checkpoint-cannot-use-memory-profile',lambda:h.image_profile(data,{**json.loads(manifest.read_bytes()),'execution_profile':h.CHECKPOINT}))
   rejected('checkpoint-cannot-use-numerical-profile',lambda:h.image_profile(data,{**json.loads(manifest.read_bytes()),'execution_profile':h.PROFILE}))
   saved_platform=platform.read_bytes()
-  for key in ('remote-writers-excluded','providers-never-constructed','read-only-NPU-clock-guard-before-MBUS-normalization' if g.get('checkpoint_mbus') else 'npu-clock-power-registers-not-accessed')+(('exclusive-IRQ97-route-capture-install-restore',) if g.get('checkpoint_irq') else ()):
+  for key in ('remote-writers-excluded',('providers-constructed-never-scheduled' if g.get('checkpoint_provider') else 'providers-never-constructed'),'read-only-NPU-clock-guard-before-MBUS-normalization' if g.get('checkpoint_mbus') else 'npu-clock-power-registers-not-accessed')+(('exclusive-IRQ97-route-capture-install-restore',) if g.get('checkpoint_irq') else ()):
    changed=json.loads(saved_platform);del changed['conditions'][key];platform.write_text(json.dumps(changed))
    encoded=json.dumps({**entry,'platform':ref(platform)}).encode();mutated=bytearray(raw);mutated[80:112]=hashlib.sha256(encoded).digest()
    rejected('checkpoint-missing-'+key,lambda:h.validate_admission(encoded,mutated,build,layout,sha(data),execution_profile=execution))
@@ -227,7 +227,7 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
    'NPU_STAGE=WAIT_STARTUP\nNPU_STAGE=OPEN\nNPU_STAGE=SUBMIT job=0x0000000000000001\nNPU_STAGE=FIRST_CLOSE\nNPU_STAGE=RESTART_OPEN\nNPU_STAGE=SUBMIT job=0x0000000000000002\nNPU_STAGE=CLOSE\nNPU_STAGE=WAIT_LOCAL_STOP\n',1)
   if a.interrupt:text=text.replace('NPU_STAGE=QUIESCENT\n',IRQ_RECEIPTS+'NPU_STAGE=QUIESCENT\n',1)
   if checkpoint:
-   text='NPU_CHECKPOINT=ENTRY_MEMORY_READY; providers never constructed; jobs=0\n'
+   text=('NPU_CHECKPOINT=PROVIDERS_CONSTRUCTED; scheduler never started; jobs=0\n' if g.get('checkpoint_provider') else 'NPU_CHECKPOINT=ENTRY_MEMORY_READY; providers never constructed; jobs=0\n')
    if g.get('checkpoint_mbus'):text+='NPU_MBUS=\n0x0000000084000000\n0x0000000000000000\n0x0000000081000000\n'
    if variant=='false-success':text=text.replace('jobs=0','jobs=1')
    if variant=='missing-MBUS':text=text.split('NPU_MBUS=')[0]
