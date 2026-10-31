@@ -101,7 +101,7 @@ def main():
             host.hashlib.sha256(template).hexdigest(), template, False, evidence, True,
             inference=manifest['inference']), 'Explicit complete-power-removal/retention plan')
     rows.append({'name': 'default-admission-keeps-unconditional-retention', 'passed': True})
-    variants = ('success', 'no-new-ROM', 'bad-report', 'truncated-output', 'wrong-output-session',
+    variants = ('success', 'thermal-malformed', 'no-new-ROM', 'bad-report', 'truncated-output', 'wrong-output-session',
                 'snapshot-incomplete', 'asset-transfer-failure', 'saved-RAM-changed', 'restore-mismatch')
     if 'gpu' in prepared['qualification']:
         variants+=('gpu-report-missing','gpu-report-session','gpu-report-incomplete')
@@ -116,6 +116,8 @@ def main():
         with tempfile.TemporaryDirectory(prefix='os-return-fel-model-') as temporary:
             root = Path(temporary)
             p = copy.deepcopy(prepared)
+            if variant == 'thermal-malformed':
+                p['qualification']['thermal'] = host.thermal_capture.geometry(args.bundle / 'board/image.elf')
             record = {'complete': False, 'launch_attempted': False, 'transport_failed': False,
                       'execution_profile': host.PROFILE, 'root_owned_claim': 'MODEL ONLY - no live claim'}
             state = {'launched': False, 'reads': 0, 'writes_after_launch': 0, 'calls': 0}
@@ -194,12 +196,16 @@ def main():
                        'saved-RAM-changed': 'Saved CPU return RAM changed',
                        'restore-mismatch': 'DRAM restoration readback differs'}
             action = lambda: host.run_once(tx, wait, lambda: None, args.bundle, p, root, record, lambda: None)
-            if variant == 'success':
+            if variant in ('success', 'thermal-malformed'):
                 action()
                 assert record['complete'] and record['dram_restored'] and record['rom_usable']
                 assert record['cpu_rail_restoration_pending'] and not record['ownership_release_permitted']
                 if 'gpu' in p['qualification']:assert record['result']['gpu']['gpu_off'] and record['result']['gpu']['jobs']==7 and record['gpu_report_sha256']
                 assert state['writes_after_launch'] == len(record['dram_backups'])
+                if variant == 'thermal-malformed':
+                    assert record['thermal_capture_status'] == 'malformed' and record['thermal_capture_error']
+                    assert set(record['thermal_capture_sha256']) == {'thermal-window', 'thermal-readings'}
+                    assert 'thermal' not in record['result']
                 assert (root / 'transcript.txt').read_bytes() == output[48:48 + struct.unpack_from('<Q', output, 40)[0]]
                 if args.helper_image:
                     assert args.helper_binary and args.helper_manifest

@@ -185,6 +185,20 @@ image, build identity, session, supervisor and source evidence. Board and therma
 parsers retain unconditional retention by default. The dedicated alternate
 requires explicit failure-only retention and the successful-quiescence review.
 
+New returning bundles also capture the existing immutable thermal window before
+restoring DRAM. The host resolves its local objects from the exact ELF's defining
+compilation unit and DWARF. Raw captures and hashes survive malformed telemetry.
+A decode failure records `thermal_capture_status=malformed`; valid CPU/GPU return
+proof still permits DRAM restoration and the mandatory rail continuation. Thermal
+evidence remains incomplete in that case. Older sealed bundles retain their
+original capture contract.
+
+Before queue REVIEW, append `--check-admission-only CAPTURED_TARGET.json` to the
+exact `run` command. The file contains only `node`, `identity` and `port` from the
+recorded target. This executes the actual bundle and launch admission without
+opening the queue or device. The physical command omits this flag and rechecks
+the live identity under the port lock.
+
 The helper build command is:
 
 ```sh
