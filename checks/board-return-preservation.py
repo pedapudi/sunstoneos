@@ -124,6 +124,7 @@ def main():
             if values==('readl','0x07090160'):return '0x10008002'
             if values==('reset64','0x41000000'):
                 self.helper_running=True
+                self.put(board.POST_RAIL_HELPER_DRAM[0],bytes([109])*board.POST_RAIL_HELPER_DRAM[1])
                 followup=images.load('sdk_real_post_helper_parser',args.tool_tree/'apps/os/cpu-return-followup.py')
                 lines=[f'{name} {phase} pll={pll:#x} mux={mux:#x} mhz={mhz} pat0=0 pat1=0 lfm=0'
                        for name,pll,mux,mhz in board.state.BOOT_ROWS for phase in ('before','after')]
@@ -255,6 +256,7 @@ def main():
             def tx(self,*values):
                 if values==('readl','0x07090160'):return '0x10008002'
                 assert values==('reset64','0x41000000')
+                self.memory[0x41000000]=bytes([109])*len(self.memory[0x41000000])
                 raw=bytearray(16384);struct.pack_into('<4Q',raw,0,0x534b4552,5,0,0)
                 self.memory[0x42000000]=bytes(raw)
                 if variant=='corrupt':
@@ -292,6 +294,7 @@ def main():
             def tx(self,*values):
                 if values==('readl','0x07090160'):return '0x10008002'
                 assert values==('reset64','0x41000000')
+                self.memory[0x41000000]=bytes([109])*len(self.memory[0x41000000])
                 raw=bytearray(16384);struct.pack_into('<4Q',raw,0,0x534b4552,5,0,len(payload))
                 raw[256:256+len(payload)]=payload;self.memory[0x42000000]=bytes(raw)
             def returned(self):return 0xb1,0,{}
