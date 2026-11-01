@@ -1,16 +1,32 @@
 # SunstoneOS layering: application details below the application layer
 
-SunstoneOS is meant to be a general operating system for the Allwinner A733.
-The mimus speech recognizer is one application that runs on it. An audit of
-the `bringup` branch at revision `222b070c` found the reverse arrangement: the
-image called the OS is the mimus board application with OS services added.
-No second application can be built, uploaded, launched and returned without
-editing driver, platform, boot, build and host-tool code.
+SunstoneOS builds OS-only, hello-compute and external-application images.
+Mimus lives under `sunstoneos/` in its own repository, pinned by
+[the source record](../apps/mimus/source.json) to `port/sunstoneos-split`
+at `c2dcb5a9`. The [application interface](designs/app-abi.md) and
+[image guide](os-image.md) describe the merged composition.
 
-This document states the target layering, the defects found against it and a
-refactoring order. Five read-only audits produced the findings: the GPU stack,
-the NPU stack, the composition of the OS image, the core platform and
-non-accelerator services, and the host tooling and build system.
+## Current merged boundary
+
+The OS owns device services, session admission, supervision and generic
+application launch/result handling. The application owns recognition, its
+models, manifests, capture wrappers and recognition checks. The merged
+reference cleanup keeps the shared USB emulator in SunstoneOS and accepts
+explicit application inputs for preparation and validation.
+
+The legacy GPU recognition path still crosses this boundary through
+`drivers/gpu/pvr_mimus_service.c`, `platform/a733/gpu_mimus.c` and their
+interfaces. The generic GPU queue and its mimus port remain unmerged.
+Application separation and host checks establish no new physical qualification;
+[the handoff](handoff.md) records the latest board failures and open work.
+
+## Scope of the original audit
+
+The findings below describe `bringup` at `222b070c`, before application
+separation. Their source paths and line numbers identify that baseline.
+They preserve the target layering and the reasons for the refactoring;
+they are not a claim that every original defect remains in the merged code.
+Inspect current source before assigning work from a historical finding.
 
 ## Target layering
 

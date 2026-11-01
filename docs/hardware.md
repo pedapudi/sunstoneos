@@ -31,23 +31,22 @@ and physical results through 2026-10-31:
 | NPU | Earlier interrupt-driven ShuffleNetV2 inference at 852 MHz; current image passes real provider/task construction before scheduling, disabled IRQ restoration, normal return and saved-RAM restoration | Current scheduled startup, inference/restart, full power-off, thermal behavior and broader integration |
 | Memory bus | Restore to 600 MHz on EL3 entry, with the preserved memory pattern verified on both boards | Broader memory and concurrent-device qualification |
 | microSD | High-speed PIO, one 4 KiB DMA read and one 64 KiB/sixteen-descriptor read at 50 MHz/four-bit/3.3 V; sentinel-prefilled chunks match PIO, with restored normal return | Sustained throughput, broader extents/cards, failure recovery, 1.8 V signalling and remaining storage/update paths |
-| DRAM training and restore | Full training reports 12,288 MiB and restores CPU-L/DSU boot clock words. The restore survey finds all 879 PHY writes hold; boot0 reports 12,288 MiB, but later message-block readback returns zero | Restore error 7 remains unresolved; usable restored memory and temperature policy are unqualified |
+| DRAM training and restore | Full training and explicit-record restores report 12,288 MiB on both boards. The SID-selected default passed twice on 3-1 with 879 writes and 34 ms quick checks; CPU-L/DSU boot clock restoration passed | Full-map restored-memory tests, temperature range, lower P-states and card deployment remain unqualified |
 
-The 2026-10-31 development records under
-`~/.cache/sunstoneos/evidence/dev-runs-1031/` supersede the earlier access
-snapshot. `3-3-ddr-clock-plain-3/session.json` records successful cold training
-and `clock_point_result: 0`. The restore result is in
-`3-1-ddr-v5-survey/session.json` and `survey.json`; the runner resets and
-falls back to full training after the failed message-block readback.
+The [current handoff](handoff.md#board-state-and-recovery) records the
+2026-10-31 development results. The two successful default restores are in
+`~/.cache/sunstoneos/evidence/dram-default-board-1031/3-1-203259/session.json`
+and `3-1-204839/session.json` under the same directory.
+`tools/dev-run.py` now normalizes CPU rails to 800 mV before guarded
+CPU-return launches and after validated normal returns with boot clocks.
 
-CPU rails can remain raised after failure. The retained 1050/1000 mV selectors
-are recorded in `3-3-rail-helper-2/rail-helper/kernel.log`; watchdog reset and
-USB replug do not reset the PMIC in the supplied 2026-10-31 measurement.
-The [current handoff](handoff.md#board-state-and-recovery) records the 800 mV
-CPU-return requirement and incomplete recovery helper. Saved logs do not
-establish live access. Earlier nonreturns and released host claims remain in
-[the historical access record](handoff-history-20261031.md#board-access).
-Each board test requires its own return and failure admission.
+The hello-compute control on 3-1 stopped because the application finished
+before the CPU clock owner reached FOLLOW. The GPU firmware-only diagnostic
+on 3-1 stopped in its frozen build's compatibility callback. Port 3-3 remains
+quarantined after a host error following a normal native return. These are
+recorded runner outcomes, not live access checks. No new complete application
+or hardware qualification follows from the split or these diagnostics.
+The [handoff branch list](handoff.md#open-branches) distinguishes unmerged fixes.
 
 ## Current software integration
 

@@ -8,40 +8,48 @@ qualification. The [hardware matrix](hardware.md) holds the full inventory;
 
 ## Board state and recovery
 
-The latest measurements below are from 2026-10-31. Saved USB identities do
-not establish present board access. Only the coordinator checks live identity,
-permissions, locks and failure records before a device command, under
-[AGENTS.md](../AGENTS.md#hardware-access). Both microSD cards must be preserved;
-neither board has populated eMMC or UFS. Keep the failed UFS probe disabled.
+This page describes the code merged through `dc3d1ccd` and recorded board
+results from 2026-10-31. Evidence paths are relative to
+`~/.cache/sunstoneos/evidence/`. Saved USB identities do not establish live
+access. Only the coordinator checks identity, permissions, locks and failure
+records under [AGENTS.md](../AGENTS.md#hardware-access). Preserve both microSD
+cards. Neither board has populated eMMC or UFS; keep the failed UFS probe disabled.
 
-Evidence paths below are relative to `~/.cache/sunstoneos/evidence/`.
-The latest development records are in `dev-runs-1031/`:
+- **DRAM restore — board-verified.** The default SID-selected restore passed
+  twice on 3-1, with quick checks of 34.116 and 34.117 ms, 879 PHY writes,
+  12,288 MiB reported and `clock_point_result: 0`. Evidence:
+  `dram-default-board-1031/3-1-203259/session.json` and
+  `3-1-204839/session.json` under that same evidence directory.
+  Explicit-record restores also passed on both boards. Temperature coverage,
+  full-map memory testing and lower DRAM frequencies remain unqualified.
+- **CPU clocks and rails — board-verified for the recorded restoration.**
+  DRAM startup restores CPU-L and the DynamIQ shared unit (DSU) to the boot
+  clock words. PMIC rails survive watchdog reset and can retain raised values.
+  `tools/dev-run.py` now normalizes both CPU rails to 800 mV by default
+  before a guarded CPU-return launch and after a validated normal return.
+  The helper checks boot clocks before lowering voltage. Evidence:
+  `dev-runs-1031/3-3-rail-helper-201322/`; code:
+  `apps/board-bundles-power/cpu-opp-step.c` and `tools/dev-run.py`.
+- **Hello-compute CPU-return control — failed.** On 3-1 the application
+  finished while the CPU clock owner was in REQUEST. The return path requires
+  FOLLOW and refused the return. Evidence:
+  `dev-runs-1031/3-1-cpu-return-204119/run/watchdog-report.json`; code:
+  `apps/os/cpu.c` and `apps/os/cpu-return/cpu.patch`. The fix remains unmerged.
+- **GPU firmware diagnostic — failed.** Image `2-firmware` from `ladder-wdt3`
+  stopped in the compatibility callback at
+  `platform/a733/gpu_backend.c:375` in its frozen build. Evidence:
+  `dev-runs-1031/3-1-gpu-return-204909/run/watchdog-report.json`.
+  That image uses the unmerged GPU-reference branch. The cause remains under
+  investigation; the record does not prove a firmware ABI mismatch.
+- **Port 3-3 — quarantined by the runner.** A host-side missing
+  `bundle/return-review.json` error followed a normal native return with
+  `RETURN_ROM` and mode 0. Evidence:
+  `dev-runs-1031/3-3-cpu-return-201331/run/session.json`.
+  A normal return does not establish completed host RAM restoration.
+  The quarantine-scope fix remains unmerged.
 
-- **CPU clocks — board-verified.** Cold DRAM training restores CPU-L and the
-  DynamIQ shared unit (DSU) to the boot ROM clock words. The wrapper reports
-  `clock_point_result: 0`; CPU-L and DSU PLL words are `0xf8802600`.
-  Evidence: `3-3-ddr-clock-plain-3/session.json` under that directory.
-- **CPU rails — board-verified, with a recovery helper.** DCDC3 and DCDC5
-  can remain at 1050 and 1000 mV after a run that raised them. Watchdog
-  reset and USB replug do not reset the PMIC, and boot0 never programs these
-  rails. The CPU-return entry guard requires both at 800 mV. The rail helper
-  (board bundle 33, `work/rails-both-1031`) lowers either rail to 800 mV
-  when the CPU clocks read their boot words. On port 3-3 it read 1000 and
-  1050 mV and wrote both to 800 mV. Evidence: `3-3-rail-helper-201322/`.
-- **DRAM restore — board-verified on both boards.** The restore helper
-  writes the saved PHY training registers, boot0 continues `init_DRAM`, and
-  its memory test passes with 12,288 MiB. A DRAM start then takes about 2 s
-  instead of about 15 s for full training. A failed restore falls back to
-  full training. A restored boot cannot switch DRAM frequency. Evidence:
-  `3-1-ddr-final-survey/` and `3-3-ddr-final-restore/`.
-- **CPU control image — board-verified.** With both rails at 800 mV, the
-  CPU-return control image ran recognition at the top CPU points (CPU-L
-  1794 MHz, CPU-B 2002 MHz) and returned normally, with the reference
-  transcript. Evidence: `3-3-cpu-return-201331/run/`.
-- **Watchdog recovery — board-verified for the recorded stops.**
-  `3-3-cpu-return-191044/run/watchdog-report.json` records an EL3 stop,
-  a 0.5-second reset interval and retained RTC fault words. DRAM is lost;
-  cold training is required before another image uses it.
+Both recent 3-1 failures returned through WDT0. Treat DRAM as uninitialized
+after that reset and run the DDR tool before the next image uses it.
 
 ## Subsystem status
 
@@ -56,7 +64,7 @@ The component documents identify source files and narrower evidence boundaries.
 | ROM/FEL, DDR, RAM-only loading | **Board-verified:** full training and the saved-record restore both report 12,288 MiB; clock restoration and two checked RAM pages pass in the development records above. | [Boot](boot.md), [DRAM](dram.md), [restore design](designs/dram-training-restore.md) |
 | CPU, GIC, timers and SMP | **Board-verified:** eight-core timer/interrupt workload at bin-4 top points; one eight-worker CPU recognition input passes. Sustained load, thermal transitions and fault recovery remain open. | [CPU startup](cpu-start.md), [coherence](cpu-coherence.md), [SMP runtime](smp-runtime.md), [CPU clocks](cpu-clock.md) |
 | Memory bus | **Board-verified:** EL3 entry restores MBUS to 600 MHz on both boards, within the recorded memory-pattern checks. | [MBUS restore](designs/mbus-restore.md) |
-| Clocks, resets, PMIC and power domains | **Implemented:** shared ownership and operating-point control; CPU rail recovery remains incomplete as stated above. | [Clocks](clock-leases.md), [PMIC](pmic-runtime.md), [power](power-domains.md), [performance modes](performance-modes.md) |
+| Clocks, resets, PMIC and power domains | **Implemented:** shared ownership and operating-point control; default development runs normalize CPU rails at boot clocks. | [Clocks](clock-leases.md), [PMIC](pmic-runtime.md), [power](power-domains.md), [performance modes](performance-modes.md) |
 | GPU | **Board-verified:** standalone firmware start/health/stop/restart, eight jobs and two exact-sum shapes at 1008 MHz/960 mV. Full application recognition and failure recovery remain unverified. | [GPU power](gpu-power.md), [backend](gpu-backend.md), [reference comparison](reference-backsolve-gpu.md) |
 | NPU | **Board-verified:** earlier interrupt-driven ShuffleNetV2 at 852 MHz. Current constructor/disabled-IRQ checkpoints pass; current scheduled startup and same-instance restart remain unverified. | [NPU](npu.md), [startup](npu-startup.md), [service](npu-service.md) |
 | microSD | **Board-verified:** 50 MHz/four-bit/3.3 V PIO, one 4 KiB DMA read and one 64 KiB DMA read match PIO references and return normally. SDR104, writes, sustained throughput and recovery remain unverified. | [Storage](storage.md), [MMC](mmc.md), [SD DMA](designs/sd-dma.md), [updates](storage-update.md) |
@@ -74,7 +82,7 @@ The component documents identify source files and narrower evidence boundaries.
 | Crypto, entropy and identity | **Implemented:** native crypto modes, random-source and identity access. Full physical engine and recovery qualification remains open. | [Crypto](crypto-engine.md), [entropy](entropy.md), [identity](board-application.md) |
 | Always-on management processor | **Implemented:** remote-writer ownership accounting; native management-core control and sleep/wake qualification remain open. | [Remote writers](remote-writers.md), [SCP reference](vendor-firmware/scp-firmware.md) |
 | Autonomous microSD OS boot | **Host-verified only:** packaging, cold-entry and slot/update checks; no physical installation or autonomous OS boot is established. | [Cold entry](cold-entry.md), [resident OS design](designs/autonomous-card-os.md) |
-| Generic GPU compute queue | **Host-verified only:** implemented on `work/gpu-queue-1031` with a vector-add example application; under review, not yet merged or run on a board. | [Queue design](designs/gpu-compute-queue.md), [layering audit](layering-audit.md) |
+| Generic GPU compute queue | **Not started in the merged tree:** design and prototype headers only. The implementation remains on an unmerged branch. | [Queue design](designs/gpu-compute-queue.md), [layering audit](layering-audit.md) |
 
 Earlier board results in this table retain their exact input scope. CPU, GPU
 and NPU evidence is indexed in [the preserved board results](handoff-history-20261031.md#qualified-on-the-boards)
@@ -83,6 +91,23 @@ returns are under `sol-resume-20261028/` and `sol-resume-20261031/`.
 The 64 KiB SD result is
 `sol-sd-warm-packet-1029/sentinel-physical-result.json`.
 Host-only autonomous boot evidence is under `resume-card-os-1026/`.
+
+## Merged application and failure-record interfaces
+
+Mimus lives in its own repository under `sunstoneos/`.
+[apps/mimus/source.json](../apps/mimus/source.json) pins
+`port/sunstoneos-split` at `c2dcb5a9`. The application owns recognition,
+models, manifests, capture wrappers and recognition checks. The merged
+reference cleanup supplies explicit OS admission inputs and the shared USB
+emulator; OS-only and hello-compute builds require no mimus sources.
+[The application kit](designs/app-abi.md) defines the interface.
+
+First-failure records are implemented in `apps/board/main.c:board_fail_at`.
+`apps/os/application.c:ss_fail` records the application failure group before
+closing the session. [RTC breadcrumbs](watchdog.md#rtc-words-retain-progress-and-the-first-failure)
+preserve the site, caller and detail through watchdog reset.
+`checks/harness.py:skip_crumbs` steps over both progress SVC `0x5c0d` and
+first-failure SVC `0x5c0e` in function-level instruction models.
 
 ## Build OS and application images
 
@@ -119,92 +144,86 @@ The compatibility GPU path requires `SUNSTONE_A733_OS_GPU_LINEAR=ON` and
 
 ## Coordinator launch and capture
 
-These are command forms for the coordinator. Select one port explicitly;
-never operate the other board as a side effect. Each tool holds
-`tools/usb-access.py:board_lock`, checks the target and records evidence.
-A new USB instance needs reconnect permissions before intentional reset.
-Stop at the first transport failure; do not retry the failed instance.
+The coordinator selects one port and holds `tools/usb-access.py:board_lock`
+through the existing tools. Intentional reset needs reconnect permissions.
+Stop requests at the first transport failure and do not retry that instance.
 The [board skill](../.agents/skills/sunstone-a733-board/SKILL.md) and
-[watchdog mechanism](watchdog.md) define the complete access rules.
+[watchdog record](watchdog.md) define the access and reset rules.
 
-For a plain full-training wrapper produced by `tools/prepare-ddr.py`:
+The DDR runner defaults to restoring the record named by the board's SID:
 
 ```sh
-py="$HOME/.cache/sunstoneos/venv/bin/python"
+py="$HOME/.cache/sunstoneos/venv/bin/python3"
 fel="$HOME/.cache/sunstoneos/build/sunxi-a733/sunxi-fel"
-SUNSTONE_USB_PORT=3-3 "$py" -B tools/run-ddr.py --fel "$fel" \
-  --build "$HOME/.cache/sunstoneos/build/docs-current-1031/ddr" \
+SUNSTONE_USB_PORT=3-1 "$py" -B tools/run-ddr.py --fel "$fel" \
   --evidence "$HOME/.cache/sunstoneos/evidence/docs-current-1031-ddr"
 ```
 
-Expected success: `PASS: DDR reports 12288 MiB; both 4 KiB pages match`;
-the session must also have `clock_point_result: 0`.
-A restore wrapper additionally requires `--record` and `--fallback-build`.
-That path uses WDT0 mode `0x41` (four seconds), then one full-training
-fallback if restoration fails. Exit 3 identifies successful fallback after a
-failed restore.
-See the [DRAM runbook](board-runbooks/dram-restore-test-1.md).
+Success prints `PASS: DRAM restored; quick check … ms; both 4 KiB pages match`
+and exits 0. A missing or unusable record selects full training. A failed
+restore resets through WDT0 and trains fully once; successful fallback exits
+3 and prints that DRAM is trained. Use the printed DDR evidence directory
+for later runners. `--full-training` bypasses restore; `--build DIR` selects
+an explicit build. [The record runbook](board-runbooks/dram-restore-records.md)
+covers setup, SID names, fallback and limitations.
 
-Development returning images use [tools/dev-run.py](../tools/dev-run.py).
-It still requires the older application host API. The generic CPU-return
-module in this checkout lacks that API; select a compatible frozen
-`--host-tree`. Adapting preparation to the external port remains open.
-
-The command form is:
+[tools/dev-run.py](../tools/dev-run.py) now prepares manifest-based CPU-return
+applications directly. Build the hello-compute control as described in
+[the image guide](os-image.md#build-an-os-image), then use this command form:
 
 ```sh
-"$py" -B tools/dev-run.py cpu-return --port 3-3 \
-  --image "$image" --template "$template" --host-tree "$host_tree" \
+"$py" -B tools/dev-run.py cpu-return --port 3-1 \
+  --image "$build/control-hello/sunstone-a733-os-hello.elf" \
   --evidence "$HOME/.cache/sunstoneos/evidence/docs-current-1031-cpu"
 ```
 
-The coordinator supplies a frozen watchdog-admitting ELF, its session/assets
-template and the matching host-source tree. This command requires initialized
-DRAM, boot clocks and 800 mV CPU rails. Success prints `cpu-return: returned`
-and writes `dev-run.json`, the session and transcript. GPU ladder images use
-`gpu-return --stage N --ladder DIR` with their matching host tree/template.
-The `npu` kind currently refuses: watchdog-admitting preparation is incomplete.
-`--check-only` still reads the board unless `--state FILE` supplies a capture.
+The default hello decoder supplies its input. Other applications provide
+`--input FILE` in manifest order and, when needed, `--decoder FILE`.
+`--records FILE` supplies reviewed board/thermal/CPU-clock session records.
+The default rail helper runs before the state capture and after a validated
+normal return with boot clocks. After watchdog reset it waits until DRAM is
+initialized and the next launch normalizes rails. `--no-normalize-rails` and
+`--no-restore-rails` explicitly disable the respective default.
 
-The host arms WDT0 mode `0xb1` (16 seconds) before launch. The CPU0 supervisor
-restarts it while healthy; an EL3 stop shortens it to 0.5 seconds.
-[RTC breadcrumbs](../include/sunstone_crumb.h) retain progress and the first
-failure. [tools/a733-crumbs.py](../tools/a733-crumbs.py) decodes them.
-Normal return requires this session's `RETURN_ROM` and mode 0.
-A watchdog return is a failed run: read breadcrumbs before DRAM, train DRAM
-again, and establish the rails independently. PMIC voltage survives reset.
-No additional board run is requested for this documentation change.
+This command does not yet demonstrate a passing hello-compute control: the
+REQUEST/FOLLOW refusal above remains in the merged code. Current `gpu-return`
+is refused because the existing ladder uses the pre-split application layout;
+its runner is `tools/dev-run.py` at `6a714bcf`. NPU development preparation
+also remains unimplemented. `--check-only` reads the board unless `--state FILE`
+supplies a capture; neither mode writes rails.
+
+The host arms WDT0 mode `0xb1` (16 seconds). The CPU0 supervisor restarts it
+while healthy; an EL3 stop shortens it to 0.5 seconds.
+[tools/a733-crumbs.py](../tools/a733-crumbs.py) decodes progress and the first
+failure. Normal return requires this session's `RETURN_ROM` and mode 0.
+A watchdog return is a failed run; DRAM initialization and rail checks precede
+reuse. No board run is requested for this documentation change.
 
 ## Open problems and files
 
-- **CPU restart readiness:** `apps/os/cpu-return-entry.c` requires 800 mV rails;
-  `apps/board-bundles-power/cpu-opp-step.c` defines both rail sequences; the
-  pinned development helper selects `OS_CPU_RETURN_DCDC3_800` and requires
-  DCDC3 already at 800 mV.
-  `tools/dev-run.py:rails_note` still claims USB power removal resets both rails;
-  the measured retained-rail state above takes precedence. The supplied status
-  reports that the recovery helper to lower both rails is in progress.
-- **DRAM restore:** `boot/a733/ddr-restore.c`, `boot/a733/ddr-entry.S` and
-  `tools/run-ddr.py` must reconcile the successful write survey with the later
-  zero PHY message block. Keep full training as the working path.
-- **GPU service startup and compute:** `drivers/gpu/pvr_gpu_service.c` does not
-  bind the health executed-counter callback or issue the first-job MMUCACHE
-  command. `platform/a733/gpu_backend.c` omits the vendor secure writes before
-  startup. `platform/a733/gpu_mimus.c` still maps workloads with 2 MiB pages
-  and lacks device-cache transfers. The [reference comparison](reference-backsolve-gpu.md)
-  distinguishes this checkout from the analysis branch's 256 KiB fix.
-- **NPU startup/restart:** `apps/npu-finite/` and `drivers/npu/npu_service.c`
-  need current scheduled startup and interrupt evidence beyond constructor
-  checkpoints; the earlier full restart did not return.
-- **Application split and host fixtures:** the [layering audit](layering-audit.md)
-  lists the legacy GPU boundary. `tools/dev-run.py` still imports application
-  host modules at their former OS paths. Existing I2S adapter and Bluetooth
-  admission fixture failures are recorded under
-  `~/.cache/sunstoneos/build/os-refs-1031/` and in the preserved handoff.
-- **Remaining qualification:** sustained CPU load, thermal protection, GPU/NPU
-  concurrency, autonomous card boot and accessory-dependent operation remain
-  required by [the hardware matrix](hardware.md). A passing host model or a
-  normal return does not establish device fault recovery.
+- **Early CPU return:** `apps/os/cpu-return/cpu.patch` refuses completion
+  before the clock owner reaches FOLLOW. The hello-compute failure above
+  exercises this condition; `apps/os/cpu.c` defines the owner phases.
+- **GPU service:** the latest compatibility stop belongs to the frozen
+  unmerged diagnostic. The merged service still has the health-binding,
+  vendor-setup, MMUCACHE, page-size and SLC gaps in
+  [the reference comparison](reference-backsolve-gpu.md).
+- **NPU and hardware qualification:** current scheduled NPU startup/restart,
+  sustained CPU load, thermal protection, accelerator concurrency, autonomous
+  card boot and accessories remain outstanding in [the hardware matrix](hardware.md).
+- **Known host-check failure:** mimus
+  `sunstoneos/checks/os-cpu-return-followup-integration.py` fails with
+  `Accepted survey build/source differs`. Its accepted survey manifest pins
+  an older `tools/run-launch-survey.py` hash. The source/evidence mismatch
+  remains; it is separate from native execution results.
+
+## Open branches
+
+- `work/tool-gates-1031`: simplify host tools and gate device access; under review, unmerged.
+- `work/quarantine-scope-1031`: preserve a normally returned instance after a host-side error; fix prepared, unmerged.
+- `work/early-return-1031`: permit application completion before CPU clock setup finishes; fix prepared, unmerged.
+- `work/gpu-ref-fixes-1031`: align the GPU service with the reference sequence; diagnosis and fixes in progress, unmerged.
+- `work/gpu-queue-1031`, with mimus `port/sunstoneos-gpu-queue`: supply a generic GPU compute queue and application port; unmerged.
 
 ## Review and validation
 

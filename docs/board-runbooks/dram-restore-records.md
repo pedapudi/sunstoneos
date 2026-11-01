@@ -1,8 +1,13 @@
 # DRAM training records for the development flow
 
-Status: **implemented and host-checked; the restore-by-SID default has not run
-on a board.** The restore it runs passed on both boards on 2026-10-31 with
-explicit builds and records (see [the first restore test](dram-restore-test-1.md)).
+Status: **the restore-by-SID default passed twice on port 3-1 on 2026-10-31.**
+The quick checks took 34.116 and 34.117 ms, with 879 PHY writes, 12,288 MiB
+reported and `clock_point_result: 0`. Evidence is under
+`~/.cache/sunstoneos/evidence/dram-default-board-1031/` in
+`3-1-203259/session.json` and `3-1-204839/session.json`.
+Explicit builds and records also passed on both boards
+([first restore test](dram-restore-test-1.md)). Full memory and temperature
+qualification remain outstanding.
 
 `tools/run-ddr.py` without `--build` brings up DRAM by restoring the board's
 recorded training. The restore replaces boot0's 4.4 s P-state 0 training with
@@ -187,10 +192,10 @@ is replaced.
   too (inferred from boot0's code; never tested).
 - **Temperature range.** Every record comes from a room-temperature cold
   start, and its temperature field is "unknown". The runner has no
-  temperature gate: it restores at any temperature. Two restores have
-  passed, one per board on 2026-10-31; the port 3-1 one followed a WDT0
-  reset, so one warm start at room temperature has worked. No restore has
-  run on a cold or hot board. Training compensates for temperature and a restore does not,
+  temperature gate: it restores at any temperature. Explicit-record restores
+  passed on both boards, and the SID-selected default passed twice on 3-1.
+  The earlier explicit 3-1 restore followed a WDT0 reset, so a warm start at
+  room temperature has worked. No qualified cold or hot temperature range exists. Training compensates for temperature and a restore does not,
   so a board far from its capture temperature can fail its quick check or
   corrupt memory that the quick check does not test.
 - **Record ageing.** The records were captured on 2026-10-25 and restored

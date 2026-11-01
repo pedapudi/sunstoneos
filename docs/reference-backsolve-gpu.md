@@ -13,7 +13,7 @@ A nonreturning image can fail before a workload runs; no failing-stage evidence
 identifies the cause of the complete recognition nonreturn.
 
 The vendor driver development kit (DDK) supplies the A733 platform reference.
-This comparison uses the code at `6e082403` and the source analysis in
+This comparison uses the code merged through `dc3d1ccd` and the source analysis in
 `~/.cache/sunstoneos/evidence/ref-gpu-hang-1031/report.md` and `analysis.md`.
 That analysis inspected native commit `9b0c7039` and a separate nine-image
 bisection ladder. Its 256 KiB workload-page correction is absent here:
@@ -346,6 +346,19 @@ The [handoff history](handoff-history-20261031.md#qualified-on-the-boards) index
 those records, including `sol-resume-20261028/port-3-1/gpu-exact-sum/` under
 `~/.cache/sunstoneos/evidence/`. Complete GPU recognition and non-idle recovery remain open.
 
+## The firmware-only diagnostic stops in its compatibility callback
+
+The recorded `ladder-wdt3/2-firmware` image on port 3-1 stopped in `compat()`
+at `platform/a733/gpu_backend.c:375` in that frozen build. The first-failure
+record retains caller `0x41088a50` and value `0x04040201`. Evidence is under
+`~/.cache/sunstoneos/evidence/dev-runs-1031/3-1-gpu-return-204909/` in
+`dev-run.json` and `run/watchdog-report.json`.
+
+That diagnostic comes from the unmerged GPU-reference branch. Its line numbers
+and behavior do not describe the merged backend. The stop localizes the
+callback; it does not prove a firmware ABI mismatch or a workload page fault.
+Diagnosis remains in progress. The omissions below describe the merged code.
+
 ## The service omits steps present in the standalone probe
 
 The October 31 analysis compares native source with the selected DDK and
@@ -398,21 +411,15 @@ The analysis directory's `firmware-metadata.json` and
 retain the decode and image hash. **Unknown:** whether native shader allocations
 reach the resource limits associated with those additional flags.
 
-## The next diagnosis must distinguish startup from workload failure
+## Compatibility must succeed before health or workload diagnosis
 
-**Inferred:** first inspect firmware-started, compatibility, executed count and
-health return-slot state. A started/compatible firmware with executed count 1,
-return 0 and zero jobs supports the missing health-binding diagnosis.
-Constructor-only failure cannot result from workload GPU page faults.
+The frozen firmware-only diagnostic currently stops in the compatibility
+callback. Resolve that boundary before interpreting its later health or
+workload stages. The earlier executed-count/return-slot evidence still supports
+the health-binding gap in the merged service; it does not identify this stop.
 
-**Inferred:** only after startup succeeds can a 256 KiB versus 2 MiB comparison
-test BRN 71317. A shared startup failure in both images is uninformative about
-page size. A first-job timeout after startup also leaves MMUCACHE, SLC and
-register-access differences unresolved.
-
-**Proposed, unapplied:** bind the existing executed-counter callback; perform
-the ordered vendor secure writes and initial timer publication; integrate
-MMUCACHE completion before readiness; and establish SLC bypass or ordered
-flush/invalidate for shared writable buffers. Preserve read-only permissions
-and retain ownership whenever retirement is uncertain. The analysis files
-provide patch outlines; this document makes no implementation or board claim.
+Only after startup succeeds can a 256 KiB versus 2 MiB comparison test
+BRN 71317. A shared startup failure is uninformative about page size.
+First-job failures also leave the MMUCACHE and SLC ownership gaps unresolved.
+Fixes remain outside the merged code. The [handoff](handoff.md#open-branches)
+lists the active branches without granting their artifacts board authority.

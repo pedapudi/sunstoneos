@@ -23,12 +23,13 @@ and branch; it is metadata rather than an OS source dependency.
 
 The existing host configuration supplies Clang 21, cached lld, FreeRTOS,
 TinyUSB, the radio stacks and newlib. Build directories stay outside source.
-For the two assigned checkouts:
+Run from the SunstoneOS repository root. The optional source record pins
+mimus `port/sunstoneos-split` at `c2dcb5a9` in the checkout below:
 
 ```sh
-os=/home/sunil/git/sunstoneos-worktrees/mimus-split-1031
-mimus=/home/sunil/git/mimus-worktrees/sunstoneos-split-1031
-build=$HOME/.cache/sunstoneos/build/mimus-split-1031
+os="$PWD"
+mimus="$HOME/git/mimus-worktrees/os-refs-1031"
+build="$HOME/.cache/sunstoneos/build/docs-current-1031"
 cfg=$HOME/.cache/sunstoneos/bin/cfg.sh
 
 "$cfg" "$os" "$build/os" -DMIMUS_DIR= -DSUNSTONE_A733_OS=ON -DSUNSTONE_APPLICATION=
@@ -45,8 +46,13 @@ cmake --build "$build/mimus" --target sunstone-a733-os -j12
 cmake --build "$build/control-hello" --target sunstone-a733-os-hello -j12
 ```
 
-The last image is hello-compute with the CPU-return lifetime, the default
-image of `tools/dev-run.py`.
+The last image selects hello-compute with the CPU-return lifetime.
+`tools/dev-run.py cpu-return --image "$build/control-hello/sunstone-a733-os-hello.elf"`
+prepares it through the generic application interface and normalizes CPU rails
+by default. Its fixed default image path still names the cached control build.
+The 2026-10-31 board attempt finished the application while the CPU clock owner
+was in REQUEST; the merged return path requires FOLLOW and stopped.
+[The handoff](handoff.md#board-state-and-recovery) records the failure and open fix.
 
 `sunstone-a733-os-core` is an object library built from the board composition
 and OS sources. It does not copy the mimus board target. Application sources

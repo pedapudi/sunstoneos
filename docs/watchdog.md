@@ -72,10 +72,10 @@ The words occupy the RTC general-purpose region at `0x07090000`:
 | `0x100` | Session tag: magic `0x5c0d` and the epoch's low 16 bits |
 | `0x104` | Last stage and the value's low 16 bits |
 | `0x10c` | Core number and a truncated counter sample |
-| `0x110` | First failure tag: core, exception level, vector slot and status byte |
-| `0x114` | Exception syndrome, or the deliberate exit's detail |
-| `0x118` | Exception return address, low 32 bits |
-| `0x11c` | Fault address, low 32 bits |
+| `0x110` | First failure tag: core and exception level, or software-failure level `0xb` |
+| `0x114` | Exception syndrome/exit detail, or software group, site and auxiliary data |
+| `0x118` | Exception return address or software caller, low 32 bits |
+| `0x11c` | Fault address or software failure value, low 32 bits |
 
 Offset `0x108` is the FEL request flag and is never used for breadcrumbs.
 The boot core clears the record and tags the session on EL3 entry.
@@ -83,11 +83,23 @@ EL1 progress calls use SVC `0x5c0d`; EL3 progress writes directly.
 The last-stage word is shared across cores, so later progress can replace it.
 It is not a complete event trace.
 
-The [EL3 vector patch](../apps/os/cpu-return/vectors.patch) records the first
-fault or deliberate nonzero exit while the failure tag is empty. It stores
-detail, return address and fault address before publishing the tag. Subsequent
-handlers preserve a nonzero failure record. A successful SMC records no fault.
-These RTC fields survive a watchdog reset; the DRAM result does not.
+[apps/board/main.c](../apps/board/main.c) implements `board_fail_at()` and
+`board_fail_note()`. An atomic claim selects the first software failure before
+closing admission. SVC `0x5c0e` stores its group, source line or detail, caller
+and value in the RTC failure words. Later failures preserve that record.
+`SUNSTONE_CRUMB_FAIL_APPLICATION` is group 4;
+[ss_fail()](../apps/os/application.c) records its detail and return address
+through that group before ending the session.
+
+The [vector patch](../apps/os/cpu-return/vectors.patch) also records an EL1/EL3
+fault or deliberate nonzero exit when no failure is present. A successful SMC
+records no fault. For software failures, bit 31 of the site word identifies a
+return address; the decoder symbolizes the preceding call instruction.
+CPU-clock records also retain the owner phase, cluster and status/refusal word.
+
+[checks/harness.py](../checks/harness.py) steps over progress SVC `0x5c0d` and
+failure SVC `0x5c0e` in function-level models without exception vectors.
+That model support establishes no physical reset result.
 
 ## A normal return requires RETURN_ROM and mode 0
 
@@ -116,10 +128,12 @@ but the record keeps resource release forbidden and marks DRAM lost.
 ## Reset loses DRAM and preserves PMIC rail settings
 
 After watchdog reset, treat all DRAM as uninitialized. Do not read an old
-result, transcript or saved-memory image. Run cold DRAM training before any
-subsequent DRAM access. The [DDR runner](../tools/run-ddr.py) separately uses
-mode `0x41` for experimental restore, with one full-training fallback after
-failure. That DDR protocol does not use the application's RETURN_ROM record.
+result, transcript or saved-memory image. Initialize DRAM before subsequent
+DRAM access. The [DDR runner](../tools/run-ddr.py) defaults to the SID-selected
+restore, using mode `0x41` and one full-training fallback after restore failure.
+`--full-training` bypasses restore. The
+[record runbook](board-runbooks/dram-restore-records.md) defines the outcomes.
+That DDR protocol does not use the application's RETURN_ROM record.
 
 WDT0 does not reset the PMIC rails. DCDC3 and DCDC5 can remain at 1050 and
 1000 mV after failure, including after USB replug in the supplied 2026-10-31
@@ -128,9 +142,13 @@ measurement. The retained selectors are recorded in
 `~/.cache/sunstoneos/evidence/`.
 boot0 does not set those rails, as documented in
 [the boot0 inventory](vendor-firmware/boot-rom-and-boot0.md#pmic-rails-over-twi).
-CPU-return images require both rails at 800 mV. The supplied 2026-10-31 status
-reports that the recovery helper to lower both rails is in progress.
-The pinned development helper refuses raised DCDC3.
+CPU-return images require both rails at 800 mV. The merged
+[development runner](../tools/dev-run.py) runs the two-rail helper before each
+actual launch whose image links that guard, unless explicitly disabled.
+The helper checks boot clocks and lowers DCDC3 and DCDC5 to 800 mV. It runs
+after a validated normal return only after a new capture proves boot clocks.
+A watchdog-reset outcome requires DRAM initialization first; the next launch
+then normalizes rails. Check-only and captured-state preparation do not write rails.
 
 ## Unresolved transport failures quarantine the failed instance
 
@@ -144,6 +162,13 @@ further request to that instance. It retains unresolved transitions through
 the existing failure handler. A verified watchdog return follows the separate
 classification above. Observation timeouts do not authorize releasing a live
 run's lock or resetting repeatedly.
+
+At `dc3d1ccd`, a host-side error after normal native return can still quarantine
+the returned instance. The port 3-3 record
+`dev-runs-1031/3-3-cpu-return-201331/run/session.json` shows `RETURN_ROM`,
+mode 0, then a missing `return-review.json` error. Its incomplete host record
+establishes no RAM-restoration proof. The fix remains on the unmerged
+`work/quarantine-scope-1031` branch.
 
 ## Launchers arm the watchdog for runtime images
 
