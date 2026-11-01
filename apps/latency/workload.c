@@ -197,7 +197,7 @@ void latency_workload_run(struct latency_result *out)
             sweeps * LATENCY_BYTES_PER_CORE, load[c].digest};
     }
     out->magic = LATENCY_RESULT_MAGIC;
-    out->frequency = ss_latency_frequency;
+    out->frequency = ss_latency_counter_frequency();
     out->elapsed_ticks = (TickType_t)(xTaskGetTickCount() - began);
     out->core_mask = 0xff;
     out->timer_irq_core_mask = 1;

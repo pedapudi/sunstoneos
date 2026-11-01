@@ -28,6 +28,7 @@ extern const uint64_t ss_latency_budget_us[SS_LAT_METRICS];
 /* Initialize once before measurement; each core freezes itself before the
  * coordinator snapshots. A region has one writer per core, including IRQs. */
 void ss_latency_init(uint64_t frequency);
+uint64_t ss_latency_counter_frequency(void);
 void ss_latency_freeze(unsigned core);
 void ss_latency_snapshot(struct ss_latency_core out[8]);
 void ss_latency_record(unsigned core, unsigned region, uint64_t start, uintptr_t site);

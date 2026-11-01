@@ -36,6 +36,8 @@ interleaving and startup; it cannot establish a board overrun or a hardware fix.
 contain no timing calls, counters, buffers or IRQ wrapper. The recorder uses
 `ISB; MRS CNTVCT_EL0`; counter frequency converts ticks to microseconds.
 It records count, maximum, starting counter and call site for each core and region.
+The application kit admits functions declared in the latency header; recorder
+variables remain private. Reading the report's frequency uses an accessor.
 It retains the first over-budget sample's start, duration and call site separately.
 The budget table, core, counter frequency and region identify that check's inputs.
 No average replaces a maximum, and instrumentation overhead is not subtracted.
@@ -114,10 +116,19 @@ shares priority 1 with memory workers; the real DMA service remains priority 4.
 Memory traffic stops after sampling, before the unchanged DMA close deadline.
 The run log, ELF and exact source hashes are under
 `~/.cache/sunstoneos/build/latency-1101/load/final-corrected/`; decoded maxima
-and symbolized locations are under `latency-1101/host-final/` in that build root.
+and symbolized locations are under
+`~/.cache/sunstoneos/build/latency-1101/host-final/`.
 The combined model ELF SHA-256 is
 `d8443ea4cfd309bcffa095e0aba7c26a5da41f9bb2c624c1b0082135331ddc3d`.
-The separate GPU receipt fixture is under `latency-1101/gpu-latency-receipt/`.
+The separate GPU receipt fixture is under
+`~/.cache/sunstoneos/build/latency-1101/gpu-latency-receipt/`.
+The frequency accessor runs after freezing; the preserved measured instructions
+and original ELF remain the timing evidence. Native objects compile with the
+accessor. The three baseline builds, kernel check, eight-core soak, mimus reference
+check and check index pass through `integration/gate-latency-final/` beneath the
+same latency build directory. Both baseline OS symbol inventories contain no
+latency code or storage. The application symbol checks pass with the latency
+header included in the public function inventory.
 Native OS and application objects compile with timing enabled; no native
 diagnostic image is frozen while the board queue is unavailable.
 
@@ -134,3 +145,23 @@ It uses the existing CPU-L 1794 MHz/1000 mV and CPU-B 2002 MHz/1050 mV points.
 `apps/latency/expect.py` writes the existing runner's complete 5,440-byte word
 expectation. `apps/latency/host.py` decodes the result and rejects invented device
 coverage. The CPU control precedes any combined-device run on port 3-3.
+
+The queue status on the shared `bringup` checkout has no paused or queued entry
+on port 3-3, but the daemon lock is unheld. No run is submitted, no diagnostic
+board image is built and no device command is issued. Once the daemon serves,
+build the CPU control and submit it from that checkout:
+
+```sh
+b=/home/sunil/.cache/sunstoneos/build/latency-1101
+cmake --build "$b/native-objects" --target sunstone-a733-os-latency -j8
+/home/sunil/.cache/sunstoneos/venv/bin/python3 -B tools/board.py submit \
+  "$b/native-objects/sunstone-a733-os-latency.elf" --kind cpu-return \
+  --port 3-3 --worker latency-1101 \
+  --hypothesis 'CPU control at existing top points completes eight-core timing and returns' \
+  --expect "$b/cpu-expect.json"
+```
+
+Native linking, runner admission and CPU-control timing remain untested. A combined
+DMA/GPU submission requires its own admitted image and expectations after the
+return-lifetime prerequisite is resolved; there is no executable combined-image
+submission command yet.

@@ -35,6 +35,8 @@ void ss_latency_freeze(unsigned core)
 {
     if (core < 8) __atomic_store_n(&local[core].frozen, 1, __ATOMIC_RELEASE);
 }
+uint64_t ss_latency_counter_frequency(void)
+{ return __atomic_load_n(&ss_latency_frequency, __ATOMIC_ACQUIRE); }
 void ss_latency_snapshot(struct ss_latency_core out[8])
 {
     for (unsigned c = 0; c < 8; ++c) out[c] = ss_latency_results[c];
