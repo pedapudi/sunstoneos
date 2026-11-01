@@ -44,7 +44,17 @@ static int ring_write(void *ctx, enum pvr_cccb_region r, uint32_t off, const voi
         (r == PVR_CCCB_CONTROL && m->phase != PVR_MIMUS_SERVICE_FORMAT)) return 0;
     volatile unsigned char *d = (volatile unsigned char *)m->config->firmware[id].storage.cpu + off;
     const unsigned char *s = in;
-    for (size_t i = 0; i < n; ++i) d[i] = s[i];
+    if (!((off | n) & 7)) {
+        /* The uncached destination requires aligned accesses. memcpy reads
+         * an unaligned caller buffer without imposing an alignment contract. */
+        for (size_t i = 0; i < n; i += 8) {
+            uint64_t word;
+            memcpy(&word, s + i, sizeof(word));
+            *(volatile uint64_t *)(d + i) = word;
+        }
+    } else {
+        for (size_t i = 0; i < n; ++i) d[i] = s[i];
+    }
     return 1;
 }
 static int ring_barrier(void *ctx, enum pvr_ccb_barrier kind)
