@@ -67,7 +67,7 @@ cards. Neither board has populated eMMC or UFS; keep the failed UFS probe disabl
   `dev-runs-1031/3-1-gpu-return-204909/run/watchdog-report.json`.
   That image uses the unmerged GPU-reference branch. The cause remains under
   investigation; the record does not prove a firmware ABI mismatch.
-- **Port 3-3 — quarantined by the runner.** A host-side missing
+- **Earlier 3-3 host cleanup — failed.** A host-side missing
   `bundle/return-review.json` error followed a normal native return with
   `RETURN_ROM` and mode 0. Evidence:
   `dev-runs-1031/3-3-cpu-return-201331/run/session.json`.
@@ -131,7 +131,7 @@ composition. Source-ownership, shared-helper and progress checks pass.
 Focused checks pass for complete memory-map admission, DMA/IOMMU ownership,
 raw PMIC observation, cold-session refusal, SDIO deadlines, HEVC state and
 pixels, RTC alarm lifetime and MD5/SM3 staging/upload ownership. Device effects
-remain modeled. The check index verifies 747 checks; pre-push fixtures reject
+remain modeled. The check index verifies 750 checks; pre-push fixtures reject
 25 blocked cases and accept 12 permitted cases. Test cleanup moves artifacts
 into the trash directory.
 
@@ -140,6 +140,15 @@ The dashboard reads the current handoff's bulleted actions. Memory preparation
 checks refusal of an existing artifact directory before using a fresh one.
 The failed setup logs and successful resumed cases remain in the evidence
 directory. No board was accessed; these results add no physical qualification.
+
+The display and CPU integration checks pass under
+`~/.cache/sunstoneos/build/integrate-streams-1031/followup/`. All three baseline
+images and the native G2D, HDMI framebuffer, DisplayPort, DSI and CPU reliability
+images build. Command-span sanitizer checks preserve 132 command pages;
+pinned G2D/DE comparisons and 18 DisplayPort rate-admission cases pass.
+The seven CPU scheduler-model cases and console-present/absent sanitizer cases
+pass. CPU-return preparation uses saved state, passes its offline checks and
+records no launch. Independent review approved the shared changes.
 
 Memory admission checks every tested block before writes. Cyclic DMA receive
 staging excludes every retained allocation and metadata range. Mapping,

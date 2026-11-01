@@ -77,7 +77,8 @@ cmake --build "$cpu_build/reliability" --target sunstone-a733-os -j8
 Use a new build directory when reproducing these commands. No mimus sources
 are needed. Artifact hashes, full coordinator commands and stage-specific
 failure expectations are in the build directory's `README.md`.
-The coordinator must qualify the queued runner before any physical launch.
+Further launches remain held pending resolution of the recorded failure
+and current runner admission.
 
 The host check uses the real patched FreeRTOS kernel, task creation,
 notifications, delays, interrupt frames and existing floating-point assembly.

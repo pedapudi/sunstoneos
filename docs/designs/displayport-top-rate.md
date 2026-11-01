@@ -54,8 +54,8 @@ fault cases cover AUX timeout, repeated DEFER, short replies, lost clock
 recovery and configuration mutation. Host preparation checks reject the old
 authority and accept only explicit 5.4 Gb/s authority with the linked marker.
 
-A board run needs coordinator approval of this clock point, the shared
-preparer patch, a reviewed watchdog return path, independent AUX host-clock
+A board run needs coordinator approval of this clock point, matching
+preparer validation, a reviewed watchdog return path, independent AUX host-clock
 evidence and a suitable Type-C DisplayPort sink. The current retained image
 has no qualified normal return, so it remains blocked from scheduling.
 
