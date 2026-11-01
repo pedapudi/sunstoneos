@@ -12,6 +12,7 @@ from pathlib import Path
 from elftools.elf.elffile import ELFFile
 from elftools.dwarf.dwarf_expr import DWARFExprParser
 from unicorn import Uc,UC_ARCH_ARM64,UC_MODE_ARM,UC_HOOK_CODE,UC_HOOK_MEM_READ
+from unicorn import arm64_const as arm64
 from unicorn.arm64_const import UC_ARM64_REG_X0,UC_ARM64_REG_SP,UC_ARM64_REG_LR,UC_ARM64_REG_PC
 
 ELF_HASH = None
@@ -141,7 +142,7 @@ class Machine:
         if address in self.counter_reads:
             target, operation = self.counter_reads[address]
             assert target < 31
-            cpu.reg_write(UC_ARM64_REG_X0 + target, 24000000 if operation == 0xd53be000 else self.time * 24)
+            cpu.reg_write(getattr(arm64, 'UC_ARM64_REG_X%d' % target), 24000000 if operation == 0xd53be000 else self.time * 24)
             cpu.reg_write(UC_ARM64_REG_PC, address + 4)
             return
         if address==self.write_return_address:
