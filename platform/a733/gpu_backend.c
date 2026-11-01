@@ -42,7 +42,8 @@ static int device_page(uintptr_t address)
 }
 static int device_pages(void)
 {
-    static const uintptr_t pages[] = {0x01800000, 0x01801000, 0x01803000, 0x0180a000, 0x0180f000, 0x03400000};
+    static const uintptr_t pages[] = {0x01800000, 0x01801000, 0x01803000, 0x0180a000, 0x0180f000, 0x03400000,
+        A733_GPU_DRM_CTRL & ~UINT32_C(4095), A733_GPU_SMC0_GPU & ~UINT32_C(4095)};
     for (unsigned i = 0; i < sizeof(pages) / sizeof(*pages); ++i) {
         if (!device_page(pages[i]) || !device_page(pages[i] + 4092)) return 0;
     }
@@ -307,8 +308,30 @@ static int queue_write(void *context, enum pvr_ccb_region region, uint32_t off, 
 }
 static int barrier(void *context, enum pvr_ccb_barrier operation)
 { struct a733_gpu_backend *b = context; return healthy(b) && memory_result(b, a733_gpu_memory_barrier(b->memory, operation)); }
+/* sunxi_secure_config (sunxi_platform.c:964-979), which the vendor host
+ * calls on every power-on just before RGXStart (rgxpower.c:865-889): 2 to
+ * the SMC0 word, then 0 to drm_ctrl. Each is read back, as the qualified
+ * firmware-start probe does (apps/gpu-power-id/fw-start.c, fws_rows). The
+ * read-backs are recorded, not required: on the board the non-secure CPU
+ * reads the SMC0 word as 0 before and after the write. */
+static int secure_configuration(struct a733_gpu_backend *b)
+{
+    if (!device_page(A733_GPU_SMC0_GPU) || !device_page(A733_GPU_DRM_CTRL))
+        return fail(b, A733_GPU_BACKEND_MAPPING);
+    a733_mmio_write32_dsb_sy_both(A733_GPU_SMC0_GPU, 2);
+    b->secure_smc0 = a733_mmio_read32_dsb_sy_both(A733_GPU_SMC0_GPU);
+    a733_mmio_write32_dsb_sy_both(A733_GPU_DRM_CTRL, 0);
+    b->secure_drm = a733_mmio_read32_dsb_sy_both(A733_GPU_DRM_CTRL);
+    sunstone_crumb(PVR_GPU_CRUMB_SECURE, (b->secure_smc0 & 0xffu) << 8 | (b->secure_drm & 0xffu));
+    return 1;
+}
+/* The start's first step, before any start register write: the shared
+ * memory becomes device-visible, then the secure configuration. */
 static int publish(void *context)
-{ struct a733_gpu_backend *b = context; return active(b) && memory_result(b, a733_gpu_memory_publish(b->memory)); }
+{
+    struct a733_gpu_backend *b = context;
+    return active(b) && memory_result(b, a733_gpu_memory_publish(b->memory)) && secure_configuration(b);
+}
 static int started(void *context, uint32_t *out)
 {
     struct a733_gpu_backend *b = context;

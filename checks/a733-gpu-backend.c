@@ -223,6 +223,8 @@ unsigned backend_check(void)
     CHECK(!accesses(start_trace_0, sizeof(start_trace_0) / sizeof(*start_trace_0), 0));
     CHECK(!accesses(start_trace_1, sizeof(start_trace_1) / sizeof(*start_trace_1), 0));
     CHECK(config.start.publish(&backend) && memory.phase == A733_GPU_MEMORY_PUBLISHED);
+    /* The model's secure pages are plain memory, so both writes read back. */
+    CHECK(backend.secure_smc0 == 2 && !backend.secure_drm);
     *(unsigned char *)((uintptr_t)region(PVR_FW_SYSTEM_INIT) + 352) = 1;
     uint32_t value = 0;
     CHECK(config.start.started(&backend, &value) && value == 1);

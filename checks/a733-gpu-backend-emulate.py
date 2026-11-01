@@ -15,8 +15,12 @@ mode.add_argument('--lifetime-only', action='store_true')
 mode.add_argument('--firmware-clock-only', action='store_true')
 a = p.parse_args()
 u = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
+# The GPU window, the GIC, and the GPU-wrapper and SMC0 pages of the secure
+# configuration.
+SECURE = {0x0a0000b0: 'smc0', 0x01880014: 'drm_ctrl'}
 for address, size in [(0x40000000, 0x400000), (0x00200000, 0x1000),
-                      (0x01800000, 0x10000), (0x03400000, 0x10000)]:
+                      (0x01800000, 0x10000), (0x03400000, 0x10000),
+                      (0x01880000, 0x1000), (0x0a000000, 0x1000)]:
     u.mem_map(address, size)
 with a.elf.open('rb') as f:
     elf = ELFFile(f)
@@ -60,7 +64,8 @@ def instruction(uc, address, size, context):
         value = 0x04040000
     elif masked in (0xd5087800, 0xd5087820):  # AT S1E1R/W
         virtual = uc.reg_read(UC_ARM64_REG_X0 + register)
-        device = 0x01800000 <= virtual < 0x01810000 or 0x03400000 <= virtual < 0x03410000
+        device = (0x01800000 <= virtual < 0x01810000 or 0x03400000 <= virtual < 0x03410000 or
+                  0x01880000 <= virtual < 0x01881000 or 0x0a000000 <= virtual < 0x0a001000)
         attributes = 0 if device else 0x44 if symbols['resource_arena'] <= virtual < symbols['resource_arena'] + 64*4096 else 0xff
         mode = word('mapping_mode')
         physical = virtual
@@ -77,7 +82,14 @@ def instruction(uc, address, size, context):
         assert register < 29
         uc.reg_write(UC_ARM64_REG_X0 + register, value)
         uc.reg_write(UC_ARM64_REG_PC, address + 4)
+secure = []
 def access(uc, operation, address, size, value, context):
+    if address in SECURE:
+        writing = operation == UC_MEM_WRITE
+        assert size == 4 and word('power_enabled') and word('identity_confirmed'), \
+            f'secure configuration access {address:#x} before identity admission'
+        secure.append((SECURE[address], value if writing else None))
+        return
     if not word('observe'):
         return
     if 0x01800000 <= address < 0x01810000:
@@ -104,4 +116,8 @@ u.reg_write(UC_ARM64_REG_LR, 0x403ff000)
 u.emu_start(symbols['backend_firmware_clock_check' if a.firmware_clock_only else 'backend_lifetime_check' if a.lifetime_only else 'backend_clock_check' if a.clock_only else 'backend_event_check' if a.event_only else 'backend_check'], 0x403ff000, timeout=20000000, count=5000000)
 assert u.reg_read(UC_ARM64_REG_PC) == 0x403ff000, 'execution budget exhausted'
 assert u.reg_read(UC_ARM64_REG_X0) == 0, f"backend check failed at line {u.reg_read(UC_ARM64_REG_X0)}"
+# Every start publication makes the vendor secure configuration in its order,
+# each word read back: 2 to SMC0, then 0 to drm_ctrl.
+SEQUENCE = [('smc0', 2), ('smc0', None), ('drm_ctrl', 0), ('drm_ctrl', None)]
+assert secure == SEQUENCE * (len(secure) // 4), f'secure configuration accesses {secure}'
 print('PASS native GPU backend: refused bind preserves config; successful bind serializes both firmware clocks at the top point' if a.firmware_clock_only else 'PASS native GPU backend: expired lifetime permanently refuses later access' if a.lifetime_only else 'PASS native GPU backend: actual firmware event receive and restricted queue-owned destination' if a.event_only else 'PASS native GPU backend: private platform/controller clock regression refusal' if a.clock_only else 'PASS native GPU backend: identity, MMIO trace widths, memory/GIC composition, mapping refusal and retained isolation failures')
