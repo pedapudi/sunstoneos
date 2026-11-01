@@ -77,7 +77,9 @@ int main(void)
     p=(struct a733_gpu_nsi_pmu){0};m=(struct model){.enable=1,.cycle=42,.rd=17};
     begin(&p,&m,&r);assert(r.status==A733_NSI_BUSY && m.writes==0 && m.rd==17 && m.cycle==42);
     p=(struct a733_gpu_nsi_pmu){0};m=(struct model){.stall=1,.cycle=42};
-    begin(&p,&m,&r);assert(r.status==A733_NSI_CLEAR_PENDING && !p.owned && !m.enable && m.cycle==42);
+    begin(&p,&m,&r);assert(r.status==A733_NSI_CLEAR_PENDING && p.owned && m.enable && r.clear_raw==1);
+    a733_gpu_nsi_after_kick(&p,&r);m.rd=100;a733_gpu_nsi_end(&p,&r);
+    assert(r.status==A733_NSI_CLEAR_PENDING && r.samples==63 && !p.owned && !m.enable && m.cycle==42);
     p=(struct a733_gpu_nsi_pmu){0};m=(struct model){.cycle=42};
     begin(&p,&m,&r);m.ticks+=UINT64_C(24000000)*7;a733_gpu_nsi_end(&p,&r);
     assert(r.status==A733_NSI_PERIOD_EXPIRED && !p.owned && !m.enable && m.cycle==42);

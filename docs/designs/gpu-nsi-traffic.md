@@ -84,7 +84,10 @@ counts immediately after disabling, and counts after a further disabled
 `A733_NSI_SAMPLED` means the software sequence completed; it does not certify
 the hardware's counting semantics. Saved clock words permit independent rate
 decoding. The complete parent chain, NSI gate and clock word must agree at
-the two ends of the interval. All counts remain raw in the capture.
+the two ends of the interval. All counts remain raw in the capture. A clear
+word that still has bit 0 set after the vendor delay retains status
+`A733_NSI_CLEAR_PENDING` while all six phases are collected. The vendor does
+not poll that bit, so it is not treated as a completion acknowledgment.
 
 The first board run must pair an idle control with known GPU work under a
 period that cannot expire during either interval. It tests these hypotheses:

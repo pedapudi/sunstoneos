@@ -87,7 +87,8 @@ void a733_gpu_nsi_begin(struct a733_gpu_nsi_pmu *p,const struct a733_gpu_nsi_ops
     if(!read_value(p,A733_NSI_ENABLE,&enabled) || !read_value(p,A733_NSI_CYCLE,&cycle) ||
        enabled!=(p->saved_enable|1u) || cycle!=UINT32_MAX)goto io;
     r->status=(r->clear_raw&1)?A733_NSI_CLEAR_PENDING:A733_NSI_SAMPLED;
-    if(r->status!=A733_NSI_SAMPLED)restore(p,r);
+    /* The vendor does not poll CLEAR. A set raw bit is an observation, not
+     * proof of an unfinished command: retain all later calibration phases. */
     return;
 io:r->status=A733_NSI_IO;restore(p,r);
 }
