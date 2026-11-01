@@ -8,6 +8,7 @@
 struct timing_row {
     struct gpu_queue_timing_record public;
     struct { uint32_t address, pad; } pre, post;
+    uint64_t last_state_sample;
 };
 static struct timing_row rows[GPU_QUEUE_TIMING_CAPACITY];
 static unsigned count;
@@ -31,6 +32,33 @@ int gpu_queue_timing_read(unsigned i,struct gpu_queue_timing_record *out)
 void gpu_queue_timing_stamp(enum gpu_queue_timing_stamp s)
 { if(active && (unsigned)s<GPU_TIMING_STAMPS &&
     ((s!=GPU_TIMING_KICK_BEGIN && s!=GPU_TIMING_KICK_END) || in_ccb_submit))active->public.ticks[s]=ticks(); }
+void gpu_queue_timing_state_sample(unsigned index)
+{
+    if(!active || index>3 || !worker())return;
+    struct timing_row *r=active;
+    struct gpu_queue_timing_state state={0};
+    int middle=index==1;
+    uint64_t now=ticks();
+    /* Dense early observations, then 10 ms spacing through the one-second
+     * maximum job deadline, with a fixed upper bound on diagnostic reads. */
+    uint64_t interval=r->public.mid_samples<16 ? 24000 : 240000;
+    if(middle && (r->public.mid_samples>=128 || now-r->last_state_sample<interval))return;
+    if(!r->public.timestamp_injected || !queue->firmware[5].storage.cpu || queue->firmware[5].storage.bytes<24)return;
+    const volatile uint64_t *slots=(const volatile uint64_t *)((const unsigned char *)queue->firmware[5].storage.cpu+8);
+    state.firmware_pre_raw=slots[0];
+    __asm__ volatile("dmb oshld":::"memory");
+    if(middle && (!state.firmware_pre_raw || slots[1]))return;
+    state.cpu_before=ticks();
+    if(!a733_gpu_backend_timing_state(&state))return;
+    state.cpu_after=ticks();
+    __asm__ volatile("dmb oshld":::"memory");
+    state.firmware_post_raw=slots[1];
+    if(middle && state.firmware_post_raw)return;
+    if(middle) {
+        if(!r->public.mid_samples)r->public.state[1]=state;
+        r->public.state[2]=state;++r->public.mid_samples;r->last_state_sample=now;
+    } else r->public.state[index]=state;
+}
 void gpu_queue_timing_crumb(uint32_t stage,uint32_t sequence)
 {
     if(!worker())return;
@@ -41,7 +69,9 @@ void gpu_queue_timing_crumb(uint32_t stage,uint32_t sequence)
         active=r; r->public.ticks[GPU_TIMING_TAKE]=ticks();
     } else {
         r->public.ticks[GPU_TIMING_COMPLETE]=ticks();
-        if(r->public.ticks[GPU_TIMING_KICK_BEGIN])a733_gpu_backend_timing_sample(2);
+        if(r->public.ticks[GPU_TIMING_KICK_BEGIN]) {
+            a733_gpu_backend_timing_sample(2);gpu_queue_timing_state_sample(3);
+        }
         if(r->public.timestamp_injected) {
             volatile uint64_t *p=(volatile uint64_t *)((unsigned char *)queue->firmware[5].storage.cpu+8);
             __asm__ volatile("dmb oshld":::"memory");
@@ -150,6 +180,7 @@ BaseType_t __wrap_xQueueReceive(QueueHandle_t q,void *out,TickType_t wait)
             }
         }
     }
+    if(track)gpu_queue_timing_state_sample(1);
     return result;
 }
 void gpu_queue_timing_irq(void)

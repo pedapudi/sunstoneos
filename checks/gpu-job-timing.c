@@ -1,10 +1,15 @@
 /* Included after the production source with only architectural reads modeled. */
 #include <assert.h>
 static TaskHandle_t current;
-static unsigned cache_calls, expanded_count, cr_samples, block_next, receive_timeout;
+static unsigned cache_calls, expanded_count, cr_samples, state_samples, block_next, receive_timeout, complete_during_sample;
 static struct pvr_cccb_command expanded[4];
 TaskHandle_t xTaskGetCurrentTaskHandle(void) { return current; }
 void a733_gpu_backend_timing_sample(unsigned p) { ++cr_samples;gpu_queue_timing_cr(p,100+p,10+p,20+p); }
+int a733_gpu_backend_timing_state(struct gpu_queue_timing_state *s)
+{ ++state_samples;s->valid=127;s->pll_raw=0xe8105300;s->clock_raw=0x80000000;s->core_status_raw=8;
+  s->fw_power_raw=1;s->fw_core_hz=1008000000;s->pmic_selector_raw=0x2e;s->pmic_programmed_uv=960000;
+  if(complete_during_sample)((uint64_t *)queue->firmware[5].storage.cpu)[2]=123;
+  s->pmic_retained=1;s->pmic_rail_id=3;s->pmic_request_id=4;return 1; }
 int __real_gpu_queue_submit(struct gpu_queue_context c,const struct gpu_queue_job *j)
 { (void)c;(void)j;return GPU_QUEUE_OK; }
 int __real_gpu_queue_wait(struct gpu_queue_context c,struct gpu_queue_record *r,uint32_t wait)
@@ -70,7 +75,22 @@ int main(void)
     assert(rows[0].public.ticks[GPU_TIMING_WORKER_BLOCKED_IRQ_WAKE]==paired_wake);
     assert(rows[0].public.ticks[GPU_TIMING_BLOCKED_WAKE_IRQ]==paired_irq);
     q.client.phase=PVR_CCCB_WAIT;__wrap_pvr_cccb_poll(&q.client);
-    timeline[1]=0x1122334455667788;timeline[2]=0x8877665544332211;
+    gpu_queue_timing_state_sample(0);assert(state_samples==1);
+    gpu_queue_timing_state_sample(1);assert(state_samples==1); /* PRE not executed */
+    timeline[1]=0x1122334455667788;
+    for(unsigned i=0;i<24000;++i)(void)ticks();
+    gpu_queue_timing_state_sample(1);assert(state_samples==2 && rows[0].public.mid_samples==1);
+    gpu_queue_timing_state_sample(1);assert(state_samples==2); /* cadence bound */
+    for(unsigned i=0;i<24000;++i)(void)ticks();
+    gpu_queue_timing_state_sample(1);assert(state_samples==3 && rows[0].public.mid_samples==2);
+    uint64_t first_sample=rows[0].public.state[1].cpu_before;
+    assert(rows[0].public.state[2].cpu_before>first_sample);
+    for(unsigned i=0;i<24000;++i)(void)ticks();
+    complete_during_sample=1;gpu_queue_timing_state_sample(1);complete_during_sample=0;
+    assert(state_samples==4 && rows[0].public.mid_samples==2); /* POST raced state reads */
+    timeline[2]=0x8877665544332211;
+    for(unsigned i=0;i<24000;++i)(void)ticks();
+    gpu_queue_timing_state_sample(1);assert(state_samples==4); /* POST excludes mid */
     gpu_queue_timing_crumb(SUNSTONE_CRUMB_GPU_COMPLETE,7);assert(!gpu_queue_timing_active());
     struct gpu_queue_record done;__wrap_gpu_queue_wait(ctx,&done,1);
     struct gpu_queue_timing_record r;assert(gpu_queue_timing_read(0,&r));
@@ -78,6 +98,10 @@ int main(void)
     assert(r.worker_irq_wakes==2 && r.worker_blocked_irq_wakes==1 && r.irq_count==2 && r.kick_to_done_us==123);
     assert(r.ticks[GPU_TIMING_COMPLETE]<r.ticks[GPU_TIMING_WAIT_BEGIN]);
     assert(r.firmware_pre_raw==timeline[1] && r.firmware_post_raw==timeline[2]);
+    assert(r.state[1].firmware_pre_raw && !r.state[1].firmware_post_raw);
+    assert(r.state[2].pll_raw==0xe8105300 && r.state[2].clock_raw==0x80000000);
+    assert(r.state[3].pmic_retained && r.state[3].pmic_selector_raw==0x2e);
+    assert(r.mid_samples==2 && state_samples==5);
     assert(r.cr_raw[2]==102 && r.sync_bytes==64 && r.timestamp_injected);
     cmd[0].bytes=88;current=service.worker;active=&rows[0];
     __wrap_pvr_cccb_begin(&q.client,cmd,2,NULL,0,100);assert(expanded_count==2);active=NULL;
@@ -85,7 +109,7 @@ int main(void)
     job.sequence=8;__wrap_gpu_queue_submit(ctx,&job);
     gpu_queue_timing_crumb(SUNSTONE_CRUMB_GPU_SUBMIT,8);
     gpu_queue_timing_crumb(SUNSTONE_CRUMB_GPU_COMPLETE,8);
-    assert(cr_samples==1); /* refusal without a kick must never touch CR MMIO */
+    assert(cr_samples==1 && state_samples==5); /* refusal without a kick must never touch CR MMIO */
     for(unsigned i=2;i<GPU_QUEUE_TIMING_CAPACITY+3;++i){job.sequence=7+i;__wrap_gpu_queue_submit(ctx,&job);}
     assert(gpu_queue_timing_count()==GPU_QUEUE_TIMING_CAPACITY);
     assert(!gpu_queue_timing_read(GPU_QUEUE_TIMING_CAPACITY,&r));

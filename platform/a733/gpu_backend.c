@@ -310,19 +310,25 @@ static int control_write(void *context, uint32_t off, uint32_t value)
 }
 #ifdef SUNSTONE_GPU_TIMING
 static struct a733_gpu_backend *timing_backend;
-void a733_gpu_backend_timing_sample(unsigned position)
+static struct a733_gpu_backend *timing_live(void)
 {
     struct a733_gpu_backend *b=timing_backend;
     /* COMPLETE also covers refused jobs and recovery faults. Diagnostics
      * must never wake a stopped device or turn a missing sample into a fault. */
     if(!b || !b->initialized || !b->service || !b->power || !b->memory ||
-       !gpu_queue_timing_active() || (position<2 && !gpu_queue_timing_kicking()) ||
+       !gpu_queue_timing_active() ||
        b->phase!=A733_GPU_BACKEND_ACTIVE || b->power->phase!=A733_GPU_PLATFORM_ON ||
        !b->power->token || !b->power->delegated || b->memory->phase!=A733_GPU_MEMORY_PUBLISHED ||
        b->service->phase!=PVR_GPU_SERVICE_READY || b->service->queue.phase!=PVR_CCB_ACTIVE ||
        b->recovering || atomic_load_explicit(&b->error,memory_order_acquire) ||
        (b->external.revoked && atomic_load_explicit(b->external.revoked,memory_order_acquire)) ||
-       (b->external.live && b->external.live(b->external.context)!=1))return;
+       (b->external.live && b->external.live(b->external.context)!=1))return NULL;
+    return b;
+}
+void a733_gpu_backend_timing_sample(unsigned position)
+{
+    struct a733_gpu_backend *b=timing_live();
+    if(!b || (position<2 && !gpu_queue_timing_kicking()))return;
     uint64_t begin,end,cr;
     __asm__ volatile("isb; mrs %0, cntpct_el0":"=r"(begin)::"memory");
     if(!raw_read(b,0x160,8,&cr))return;
@@ -332,6 +338,62 @@ void a733_gpu_backend_timing_sample(unsigned position)
     __asm__ volatile("isb; mrs %0, cntpct_el0":"=r"(end)::"memory");
     gpu_queue_timing_cr(position,cr&UINT64_C(0xffffffffffff),begin,end);
 }
+/* All resources below are constructor-validated, retained Normal NC pages.
+ * Read-only diagnostics never call adapters whose refusal latches a fault. */
+int a733_gpu_backend_timing_state(struct gpu_queue_timing_state *s)
+{
+    struct a733_gpu_backend *b=timing_live();
+    if(!b || !s || !b->power->ops.read)return 0;
+    if(b->power->ops.read(b->power->context,A733_GPU_CCU,0xe0,&s->pll_raw)==1)s->valid|=1u;
+    if(b->power->ops.read(b->power->context,A733_GPU_CCU,0xb20,&s->clock_raw)==1)s->valid|=2u;
+    if(b->power->ops.read(b->power->context,A733_GPU_CCU,0xb24,&s->bgr_raw)==1)s->valid|=4u;
+    if(b->power->ops.read(b->power->context,A733_GPU_CORE,0,&s->core_policy_raw)==1 &&
+       b->power->ops.read(b->power->context,A733_GPU_CORE,8,&s->core_status_raw)==1)s->valid|=8u;
+    const struct pvr_fw_buffer *system=&b->memory->resources[PVR_FW_SYSTEM_DATA].storage;
+    const struct pvr_fw_buffer *runtime=&b->memory->resources[PVR_FW_RUNTIME_CONFIG].storage;
+    const struct pvr_fw_buffer *util=&b->memory->resources[PVR_FW_UTILIZATION].storage;
+    if(system->cpu && system->bytes>=3576 && runtime->cpu && runtime->bytes>=16 &&
+       !((uintptr_t)system->cpu&7) && !((uintptr_t)runtime->cpu&3)) {
+        const volatile uint32_t *sy=system->cpu,*rt=runtime->cpu;
+        s->fw_flags_raw=sy[0];s->fw_power_raw=sy[2];
+        s->fw_apm_latency_ms=rt[0];s->fw_apm_flags=rt[1];s->fw_apm_persistent=rt[2];s->fw_core_hz=rt[3];
+        s->firmware_idle_start_raw=*(const volatile uint64_t *)((const unsigned char *)system->cpu+3568);
+        __asm__ volatile("dmb oshld":::"memory");s->valid|=16u;
+    }
+    if(util->cpu && util->bytes>=10280 && !((uintptr_t)util->cpu&7)) {
+        const volatile uint32_t *u32=(const volatile uint32_t *)((const unsigned char *)util->cpu+10240);
+        const volatile uint64_t *u64=(const volatile uint64_t *)((const unsigned char *)util->cpu+10248);
+        uint64_t before=u64[0];
+        __asm__ volatile("dmb oshld":::"memory");
+        s->utilization_sequence=u32[0];s->utilization_flags=u32[1];
+        for(unsigned i=0;i<3;++i)s->utilization_raw[i]=u64[i+1];
+        __asm__ volatile("dmb oshld":::"memory");s->utilization_last_raw=u64[0];
+        if(before==s->utilization_last_raw)s->valid|=32u;
+    }
+    uint64_t sidekick,slc;
+    if(raw_read(b,0x3c8,4,&sidekick) && raw_read(b,0x3898,4,&slc)) {
+        s->sidekick_idle_raw=(uint32_t)sidekick;s->slc_idle_raw=(uint32_t)slc;s->valid|=64u;
+    }
+    s->driver_hz=b->service->config.state.gpu_clock_hz;
+    s->driver_uv=b->power->perf.enabled?b->power->perf.current_uv:A733_GPU_SUPPLY_UV;
+    /* Startup readback retained under its original provider borrow. These
+     * are immutable consumer bytes, not a fresh transaction or analog voltage. */
+    const struct a733_pmic_consumer *pm=&b->power->pmic;
+    s->pmic_observed=b->power->pmic_observed;s->pmic_rail_id=pm->rail.id;s->pmic_request_id=pm->request.id;
+    s->pmic_selector_raw=pm->snapshot.selector;s->pmic_enable_raw=pm->snapshot.enable;
+    s->pmic_programmed_uv=pm->snapshot.programmed_uv;
+    s->pmic_retained=s->pmic_observed && pm->self==pm && !pm->failed && pm->rail.id && pm->request.id &&
+        pm->rail.owner==pm->config.owner && pm->request.owner==pm->config.owner &&
+        pm->config.provider==pm->sealed.provider && pm->config.owner==pm->sealed.owner &&
+        pm->request.lifetime.provider==pm->config.lifetime.provider &&
+        pm->request.lifetime.identity==pm->config.lifetime.identity &&
+        ((pm->rail.shared|pm->rail.exclusive)&A733_RAIL_BIT(A733_RAIL_DCDC4)) &&
+        pm->snapshot.rail==A733_RAIL_DCDC4 && !pm->snapshot.page_before && !pm->snapshot.page_after &&
+        pm->snapshot.chip==3 && !pm->snapshot.revision && pm->snapshot.enabled==1 && pm->snapshot.decoded==1 &&
+        (pm->snapshot.enable&8) && pm->snapshot.programmed_uv==500000+10000*(pm->snapshot.selector&127);
+    return 1;
+}
+
 #endif
 static int kick(void *context, uint32_t off, uint32_t value)
 {
@@ -342,6 +404,7 @@ static int kick(void *context, uint32_t off, uint32_t value)
 #ifdef SUNSTONE_GPU_TIMING
     timing_backend=b;
     a733_gpu_backend_timing_sample(0);
+    if(gpu_queue_timing_kicking())gpu_queue_timing_state_sample(0);
     gpu_queue_timing_stamp(GPU_TIMING_KICK_BEGIN);
 #endif
     int result=raw_write(b, off, 4, value);
