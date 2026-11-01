@@ -32,6 +32,13 @@ optional MJPEG consumption uses the hardware JPEG decoder. Hot-plug inside an
 admitted adapter/hub connection is implemented; removing TYPEC24 requires a
 new source session.
 
+The IRQ owner batches ready xHCI programming and submission steps within a
+32-pass bound. Delayed/stuck register and completion models verify that ready
+steps take no tick sleep. Hardware and idle waits still use a tick timeout;
+physical timing and idle current remain unmeasured. The
+[real-time audit](driver-realtime-audit.md) records the remaining service,
+batching, copy and power gaps.
+
 The corrected class package and composed sanitizer/traffic checks are under
 `~/.cache/sunstoneos/build/integrate-streams-1031/usb/`, including `images/`.
 [The image guide](../usb-host-images.md) lists exact hashes and the superseded
