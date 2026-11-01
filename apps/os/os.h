@@ -52,6 +52,8 @@ struct os_audio_session {
     uint64_t dma_controller,dma_evidence;
     uint32_t dma_established;
     uint16_t dma_owned_channels,dma_service_channels;
+    /* capture_samples belongs to the capture client: admission passes it to
+     * os_audio_client_admit and the image composition to the client. */
     uint32_t audio_cold,capture_samples;
     uint8_t inherited[3][3]; /* PB5 BCLK, PB6 LRCK, PB8 DIN: function, pull, drive */
     uint8_t reserved[7];
@@ -67,9 +69,9 @@ struct os_audio_session {
 _Static_assert(sizeof(struct os_audio_session)==OS_AUDIO_SESSION_BYTES&&
     offsetof(struct os_audio_session,dma)==56&&offsetof(struct os_audio_session,audio_cold)==160,
     "OS audio session geometry");
-/* One finite capture of 1 to 5 s of 16 kHz mono S16 per recognition. */
-#define OS_AUDIO_MIN_SAMPLES 16000u
-#define OS_AUDIO_MAX_SAMPLES 80000u
+/* The capture client's admission of its session parameter, bound by the
+ * image composition (start.c). */
+int os_audio_client_admit(uint32_t capture_samples);
 #define OS_SESSION_BASE_BYTES (A733_OS_SESSION_BYTES+OS_AUDIO_SESSION_BYTES)
 #else
 #define OS_SESSION_BASE_BYTES A733_OS_SESSION_BYTES
@@ -150,16 +152,14 @@ int os_cpu_clock_step(const struct a733_thermal_policy *);
 int os_cpu_clock_ready(void);
 #endif
 #ifdef SUNSTONE_A733_OS_AUDIO
+/* The capture stream (audio-stream.h); its start entry is
+ * os_audio_stream_open, which the composition calls with the client's
+ * configuration. */
+#include "audio-stream.h"
 void os_audio_task(void *);
 int os_audio_task_privileged(void (*)(void *),void *);
 int os_audio_pins(struct a733_pin_handoff *);
-int os_audio_start(void);
 void os_audio_irq(void);
-/* EL0-safe; the recognizer task only. Requests the capture for recognition
- * generation g, which also releases the buffer of every earlier generation.
- * Returns 1 with the complete 16 kHz mono WAV of generation g, 0 while it is
- * being captured and -1 once audio or the board has failed. */
-int os_audio_capture(unsigned g,const uint8_t **wav,size_t *bytes);
 #endif
 #ifdef SUNSTONE_A733_OS_RADIO
 /* The board starts the radio owner and network client for workload 1; this
@@ -200,7 +200,8 @@ void os_headset_task(void *);
 int os_headset_task_privileged(void (*)(void *),void *);
 int os_headset_pins(struct a733_pin_handoff *);
 int os_headset_start(void);
-/* EL0-safe, with the contract of os_audio_capture: the 16 kHz WAV of the
+/* EL0-safe, with the contract of mimus_capture (apps/mimus-board/capture.h):
+ * the 16 kHz WAV of the
  * headset segment recorded for generation g, which the headset button starts
  * (and, in workload 4, the request itself). */
 int os_headset_capture(unsigned g,const uint8_t **wav,size_t *bytes);

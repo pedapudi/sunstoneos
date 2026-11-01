@@ -77,6 +77,11 @@ const struct os_session *os_session_admitted(void){return &service_session;}
 #define OS_MODEL_BUILD_ID 0x4f,0x53,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32
 #endif
 const unsigned char a733_smp_build_id[32]={OS_MODEL_BUILD_ID};
+#ifdef SUNSTONE_A733_OS_AUDIO
+/* The image composition's capture client (apps/os/start.c). */
+#include "../apps/mimus-board/capture.h"
+int os_audio_client_admit(uint32_t capture_samples){return mimus_capture_admit(capture_samples);}
+#endif
 #include "../apps/os/admission.c"
 
 /* The DMA0 interrupt of the audio build. */
@@ -395,8 +400,8 @@ static void admission_cases(void)
     SESSION_REFUSED(a->dma_controller=0x04602000);
     SESSION_REFUSED(a->dma.rate_hz[1]^=1);
     SESSION_REFUSED(a->audio_cold=2);
-    SESSION_REFUSED(a->capture_samples=OS_AUDIO_MIN_SAMPLES-1);
-    SESSION_REFUSED(a->capture_samples=OS_AUDIO_MAX_SAMPLES+1);
+    SESSION_REFUSED(a->capture_samples=MIMUS_CAPTURE_MIN_SAMPLES-1);
+    SESSION_REFUSED(a->capture_samples=MIMUS_CAPTURE_MAX_SAMPLES+1);
     SESSION_REFUSED(a->reserved[6]=1);
     /* A contract for the 808-byte session cannot admit the audio image. */
     CONTRACT_REFUSED(c.reserved[1]=A733_OS_SESSION_BYTES);

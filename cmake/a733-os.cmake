@@ -157,7 +157,7 @@ if(SUNSTONE_A733_OS_RADIO)
 endif()
 if(SUNSTONE_A733_OS_AUDIO)
   # The I2S image's receive composition (cmake/a733-i2s-application.cmake).
-  list(APPEND os_added apps/os/audio.c platform/a733/dma_pool_session.c platform/a733/dma_startup.c
+  list(APPEND os_added apps/os/audio.c apps/mimus-board/capture.c platform/a733/dma_pool_session.c platform/a733/dma_startup.c
     platform/a733/dma_native.c drivers/dma/dma_memory.c drivers/dma/a733_dma.c drivers/dma/a733_dma_controller.c
     drivers/dma/a733_dma_platform.c drivers/dma/a733_dma_platform_native.c drivers/dma/dma_service.c
     drivers/dma/dma_service_i2s.c drivers/dma/dma_service_i2s_stream.c drivers/audio/a733_i2s.c

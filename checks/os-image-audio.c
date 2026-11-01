@@ -1,102 +1,159 @@
-/* The integrated OS image's capture client (apps/os/audio.c) against a modeled
- * DMA service, audio parent and board. Its own state machine, request
- * protocol, WAV publication, generation handoff and resident progress
+/* The integrated OS image's capture stream (apps/os/audio.c) and the
+ * recognizer's WAV adapter (apps/mimus-board/capture.c, linked beside this
+ * unit) against a modeled DMA service, audio parent and board. The stream's
+ * own state machine, request protocol, ring delivery and resident progress
  * reports run unchanged; the runner (checks/os-image-audio.py) executes each
  * mode under unicorn. */
 #include "../apps/os/audio.c"
-struct board_application board;
-struct board_provider providers;
-volatile unsigned os_check_result;
-static unsigned board_up=1,board_failed,parent_polls,mode,phase,produced,puts_done,reaps,closes,silent,reports;
-static uint64_t sent,held_ticket;
-static struct dma_service_request queued;
-static uint8_t memory[PERIODS][PERIOD_BYTES];
-static char log[64];static unsigned logged;
-int board_live(void *v){(void)v;return board_up;}
-void board_fail(void *v){(void)v;board_failed=1;}
-static void check(int ok,unsigned code);
-#ifdef SUNSTONE_BOARD_RESIDENT
-void board_service_progress(unsigned service){check(service==OS_SERVICE_AUDIO,80);++reports;}
-#define REPORTS(n) (n)
-#else
-#define REPORTS(n) 0u /* The supervised lifetime keeps no progress record. */
-#endif
-_Noreturn void platform_panic(const char *file,unsigned line)
-{(void)file;os_check_result=200+line;__asm__ volatile("brk #0");for(;;){}}
-void vTaskDelay(TickType_t ticks){(void)ticks;}
-enum a733_i2s_resource_result a733_audio_parent_poll(struct a733_audio_parent *p)
-{(void)p;return ++parent_polls<3?A733_I2S_RESOURCE_PENDING:A733_I2S_RESOURCE_READY;}
-int a733_audio_parent_ready(const struct a733_audio_parent *p){(void)p;return parent_polls>=3;}
-static void check(int ok,unsigned code){if(!ok){os_check_result=code;__asm__ volatile("brk #0");for(;;){}}}
-static uint8_t pattern(unsigned n){return (uint8_t)(0x40+16*atomic_load(&audio.requested)+n);}
-int dma_service_send(struct dma_service *s,const struct dma_service_request *r,TickType_t wait,uint64_t *ticket)
+#include "../apps/mimus-board/capture.h"
+#include "os-image-audio-model.h"
+/* WAV output of the first two generations, for the runner's comparison with
+ * the capture client of the baseline revision. */
+uint8_t os_check_wav[2][44+2*MIMUS_CAPTURE_MAX_SAMPLES];
+/* Mode 5: candidate rates and whether the stream accepts each one for
+ * 16-bit mono capture with 4,096-byte periods; the runner compares them with
+ * the vendor's table. */
+const uint32_t os_check_rates[]={7999,8000,11025,12000,16000,22050,24000,32000,44100,48000,
+    64000,88200,96000,128000,176400,192000,192001,384000};
+uint8_t os_check_accepted[sizeof(os_check_rates)/sizeof(os_check_rates[0])];
+static _Alignas(8) uint8_t ring_buffer[OS_AUDIO_RING_CAPACITY*OS_AUDIO_PERIOD_CAPACITY];
+
+static void reset(void)
 {
-    check(s==&audio.pool.service&&!wait&&r->job==0&&logged<sizeof(log)-1,10);
-    static const char op[]="SOMCRLGPE";
-    queued=*r;*ticket=++sent;log[logged++]=op[r->operation];return 1;
+    memset(&audio,0,sizeof(audio));
+    phase=DMA_SERVICE_CLOSED;produced=puts_done=reaps=closes=opens=silent=logged=0;
+    sent=held_ticket=0;board_up=1;board_failed=0;parent_polls=0;
+    for(unsigned i=0;i<PERIODS;++i)audio.pool.stream_mappings[i].cpu=memory[i];
+    atomic_store(&audio.pool.state,A733_DMA_POOL_READY);
 }
-int dma_service_collect(struct dma_service *s,uint64_t ticket,struct dma_service_reply *out,TickType_t wait)
+static struct os_audio_stream_config config(uint32_t rate,unsigned channels,unsigned bits,
+    uint32_t period_bytes,uint32_t periods)
+{return (struct os_audio_stream_config){{rate,(uint8_t)channels,(uint8_t)bits,{0}},period_bytes,periods,ring_buffer};}
+static unsigned count(char op){unsigned n=0;for(unsigned i=0;i<logged;++i)n+=log[i]==op;return n;}
+static uint32_t get32(const uint8_t *p){return p[0]|p[1]<<8|p[2]<<16|(uint32_t)p[3]<<24;}
+/* Stream task steps and adapter requests in turn, until generation g is
+ * captured: 1, or -1 once the adapter refuses. */
+static int capture_run(unsigned g,const uint8_t **wav,size_t *bytes)
 {
-    check(s==&audio.pool.service&&ticket==sent&&!wait,11);
-    if(silent)return 0; /* The worker has not answered yet. */
-    memset(out,0,sizeof(*out));out->ticket=ticket;out->result=DMA_SERVICE_OK;
-    switch(queued.operation){
-    case DMA_SERVICE_OPEN:check(phase==DMA_SERVICE_CLOSED&&queued.timeout,12);phase=DMA_SERVICE_OPENING;produced=0;break;
-    case DMA_SERVICE_STATUS:
-        if(phase==DMA_SERVICE_OPENING)phase=DMA_SERVICE_READY;
-        else if(phase==DMA_SERVICE_DRAINING)phase=DMA_SERVICE_RESULT;
-        else if(phase==DMA_SERVICE_CLOSING)phase=DMA_SERVICE_CLOSED;
-        out->phase=phase;out->outcome=mode==2?DMA_SERVICE_FAILED:DMA_SERVICE_CANCELED;
-        out->holds_buffers=phase==DMA_SERVICE_RESULT||phase==DMA_SERVICE_RUNNING;break;
-    case DMA_SERVICE_SUBMIT:check(phase==DMA_SERVICE_READY,13);phase=DMA_SERVICE_RUNNING;break;
-    case DMA_SERVICE_PERIOD_GET:{
-        check(phase==DMA_SERVICE_RUNNING,14);
-        /* Mode 2: the stream stops by itself after two periods. */
-        if(mode==2&&produced==2){out->result=DMA_SERVICE_BUSY;phase=DMA_SERVICE_RESULT;break;}
-        unsigned n=produced++;
-        memset(memory[n%PERIODS],pattern(n),PERIOD_BYTES);
-        out->period=(struct a733_i2s_period){.ticket=1000+sent,.slot=n%PERIODS,.frames=PERIOD_FRAMES,
-            .first_frame=(uint64_t)(mode==1&&n==2?n+1:n)*PERIOD_FRAMES,.kind=A733_I2S_CAPTURED};
-        held_ticket=out->period.ticket;break;}
-    case DMA_SERVICE_PERIOD_PUT:check(queued.period_ticket==held_ticket,15);++puts_done;held_ticket=0;break;
-    case DMA_SERVICE_CANCEL:check(phase==DMA_SERVICE_RUNNING,16);phase=DMA_SERVICE_DRAINING;break;
-    case DMA_SERVICE_REAP:check(phase==DMA_SERVICE_RESULT&&!held_ticket,17);++reaps;phase=DMA_SERVICE_READY;break;
-    case DMA_SERVICE_CLOSE:check(phase==DMA_SERVICE_READY,18);++closes;phase=DMA_SERVICE_CLOSING;break;
-    default:out->result=DMA_SERVICE_INVALID;
-    }
-    return 1;
-}
-/* Steps until the given generation is captured, or step refuses. */
-static int run(unsigned generation)
-{
-    for(unsigned n=0;n<400;++n){
-        if(atomic_load(&audio.captured)==generation)return 1;
-        int r=step();if(r<0)return -1;
+    for(unsigned n=0;n<2000;++n){
+        int r=mimus_capture(g,wav,bytes);if(r)return r;
+        if(step()<0){fail();}
     }
     return 0;
 }
-static uint32_t get32(const uint8_t *p){return p[0]|p[1]<<8|p[2]<<16|(uint32_t)p[3]<<24;}
-static void captured(unsigned generation)
+static void check_wav(unsigned g,unsigned samples,const uint8_t *wav,size_t bytes)
 {
-    const uint8_t *wav;size_t bytes;
-    check(os_audio_capture(generation,&wav,&bytes)==1&&wav==audio.wav&&bytes==44+2*audio.samples,30);
-    check(!memcmp(wav,"RIFF",4)&&get32(wav+4)==36+2*audio.samples&&!memcmp(wav+8,"WAVEfmt ",8)&&
+    check(bytes==44+2*samples,30);
+    check(!memcmp(wav,"RIFF",4)&&get32(wav+4)==36+2*samples&&!memcmp(wav+8,"WAVEfmt ",8)&&
         get32(wav+16)==16&&get32(wav+20)==0x10001&&get32(wav+24)==16000&&get32(wav+28)==32000&&
-        get32(wav+32)==0x100002&&!memcmp(wav+36,"data",4)&&get32(wav+40)==2*audio.samples,31);
-    for(unsigned i=0;i<2*audio.samples;++i)check(wav[44+i]==(uint8_t)(0x40+16*generation+i/PERIOD_BYTES),32);
+        get32(wav+32)==0x100002&&!memcmp(wav+36,"data",4)&&get32(wav+40)==2*samples,31);
+    for(unsigned i=0;i<2*samples;++i)check(wav[44+i]==sample(g,i/4096,i%4096),32);
+    memcpy(os_check_wav[g-1],wav,bytes);
 }
-void os_check_run(unsigned selected)
+/* One run of a stream configuration through the generic interface: read and
+ * release 2 * periods periods, check their place, order, timestamps and
+ * bytes, stop, and start a second run that begins at slot 0 again. */
+static void delivery(struct os_audio_stream_config c,unsigned frame)
 {
-    mode=selected;audio.samples=16000;phase=DMA_SERVICE_CLOSED;
-    for(unsigned i=0;i<PERIODS;++i)audio.pool.stream_mappings[i].cpu=memory[i];
-    atomic_store(&audio.pool.state,A733_DMA_POOL_READY);
+    reset();check(configure(&c),100);
+    model_bytes=c.period_bytes;model_frame=frame;
+    unsigned frames=c.period_bytes/frame;
+    struct os_audio_period p;
+    for(unsigned run=1;run<=2;++run){
+        check(os_audio_stream_start()==1,101);
+        for(unsigned k=0;k<2*c.periods;++k){
+            unsigned n=0;int r;
+            while(!(r=os_audio_stream_read(&p))){check(step()==0&&++n<20,102);}
+            check(r==1&&p.data==c.buffer+(size_t)(k%c.periods)*c.period_bytes&&p.bytes==c.period_bytes&&
+                p.frames==frames&&p.first_frame==(uint64_t)k*frames&&
+                p.observed_before_us==model_before(k)&&p.observed_after_us==model_after(k),103);
+            for(unsigned i=0;i<c.period_bytes;++i)check(p.data[i]==sample(run,k,i),104);
+            check(os_audio_stream_release()==1&&os_audio_stream_release()==-1,105);
+        }
+        check(os_audio_stream_stop()==0,106);
+        unsigned n=0;
+        while(os_audio_stream_stop()!=1)check(step()==0&&++n<20,107);
+        check(phase==DMA_SERVICE_RESULT&&!board_failed&&opens==run,108);
+    }
+    check(reaps==1&&closes==1&&count('G')==count('P'),109);
+}
+void os_check_run(unsigned selected,unsigned samples)
+{
+    mode=selected;reset();
     const uint8_t *wav;size_t bytes;
+    if(mode==5){
+        /* Rates: exactly those whose bit clock divides 24.576 MHz. */
+        for(unsigned i=0;i<sizeof(os_check_rates)/sizeof(os_check_rates[0]);++i){
+            struct os_audio_stream_config c=config(os_check_rates[i],1,16,4096,4);
+            reset();os_check_accepted[i]=(uint8_t)configure(&c);
+        }
+        /* Formats, periods and buffers the stream refuses. */
+        struct os_audio_stream_config bad[]={config(16000,3,16,4096,4),config(16000,1,24,4096,4),
+            config(16000,0,16,4096,4),config(16000,1,16,0,4),config(16000,1,16,4100,4),
+            config(16000,1,16,4098,4),config(16000,1,16,1000,4),config(48000,2,16,1002,4),
+            config(48000,2,32,4088,4),config(16000,1,16,4096,1),
+            config(16000,1,16,4096,OS_AUDIO_RING_CAPACITY+1),config(16000,1,16,4096,4),
+            config(16000,1,16,4096,4),config(16000,1,16,4096,4),config(44100,2,16,4096,4),
+            /* Shorter than 8 ms: 7 ms at 8 kHz, 5.3 ms at 192 kHz. */
+            config(8000,1,16,112,2),config(192000,2,32,4096,8),config(192000,1,32,4096,8)};
+        bad[11].buffer=NULL;bad[12].buffer=ring_buffer+2;bad[13].format.reserved[1]=1;
+        for(unsigned i=0;i<sizeof(bad)/sizeof(bad[0]);++i){reset();check(!configure(&bad[i]),90+i);}
+        struct os_audio_stream_config inside=config(16000,1,16,4096,2);
+        inside.buffer=(uint8_t *)&audio;reset();check(!configure(&inside),110);
+        /* Valid edges: the capacity, the most slots, small stereo periods. */
+        struct os_audio_stream_config good[]={config(16000,1,16,4096,OS_AUDIO_RING_CAPACITY),
+            config(8000,1,16,128,2),config(192000,1,16,4096,8),config(96000,2,16,4096,3)};
+        for(unsigned i=0;i<sizeof(good)/sizeof(good[0]);++i){reset();check(configure(&good[i]),111+i);}
+        /* Configured once only. */
+        check(!configure(&good[0]),115);
+        os_check_result=1;return;
+    }
+    if(mode==6){
+        /* Rates and period sizes through the generic interface. */
+        delivery(config(8000,1,16,512,2),2);
+        delivery(config(16000,1,16,4096,4),2);
+        delivery(config(16000,1,32,2048,5),4);
+        delivery(config(48000,2,16,2048,3),4);
+        delivery(config(96000,1,32,4096,6),4);
+        delivery(config(192000,1,16,4096,8),2);
+        os_check_result=1;return;
+    }
+    if(mode==7){
+        /* A full ring drops periods; the next delivered period shows the
+         * gap. Release follows read order; start and stop handshakes. */
+        struct os_audio_stream_config c=config(16000,1,16,4096,2);
+        check(configure(&c),120);
+        struct os_audio_period p;
+        check(os_audio_stream_release()==-1&&os_audio_stream_read(&p)==0&&os_audio_stream_stop()==1,121);
+        check(os_audio_stream_start()==1&&os_audio_stream_start()==1,122);
+        for(unsigned n=0;n<40&&produced<6;++n)check(step()==0,123);
+        check(produced==6&&atomic_load(&audio.written)==2,124);
+        check(os_audio_stream_read(&p)==1&&p.first_frame==0&&os_audio_stream_read(&p)==1&&p.first_frame==2048,125);
+        check(os_audio_stream_read(&p)==0&&os_audio_stream_release()==1,126);
+        while(produced<8)check(step()==0,127);
+        unsigned gap=0;int r;
+        while(!(r=os_audio_stream_read(&p)))check(step()==0&&++gap<20,128);
+        check(r==1&&p.first_frame>=6*2048&&p.first_frame%2048==0&&p.data==ring_buffer,129);
+        for(unsigned i=0;i<4096;++i)check(p.data[i]==sample(1,(unsigned)(p.first_frame/2048),i),130);
+        /* A stop in progress refuses a new start until the DMA drained. */
+        check(os_audio_stream_stop()==0&&os_audio_stream_start()==0,131);
+        while(os_audio_stream_stop()!=1)check(step()==0,132);
+        check(!board_failed&&count('C')==1,133);
+        /* Stopped before the stream task saw the start: no DMA request. */
+        unsigned before=logged;
+        check(os_audio_stream_start()==1&&os_audio_stream_stop()==0,134);
+        for(unsigned n=0;n<5;++n)check(step()==0,135);
+        check(os_audio_stream_stop()==1&&logged==before,136);
+        os_check_result=1;return;
+    }
+    const struct os_audio_stream_config *c=mimus_capture_configure(samples);
+    check(c&&configure(c)&&!mimus_capture_configure(samples),20);
     if(mode==4){
         /* Each task pass without an unanswered request reports progress; a
          * pass waiting for the worker or after a failure reports none. */
         for(unsigned n=0;n<10;++n)pass();
         check(audio.stage==IDLE&&reports==REPORTS(10),70);
-        check(!os_audio_capture(1,&wav,&bytes),71);
+        check(!mimus_capture(1,&wav,&bytes),71);
         pass();check(audio.stage==OPEN&&!audio.pending&&reports==REPORTS(11),72);
         silent=1;pass();pass();
         check(audio.stage==OPEN&&audio.pending&&reports==REPORTS(11),73);
@@ -107,31 +164,31 @@ void os_check_run(unsigned selected)
         os_check_result=1;return;
     }
     if(mode==3){
-        check(os_audio_capture(0,&wav,&bytes)<0&&os_audio_capture(1,NULL,&bytes)<0,40);
-        check(!os_audio_capture(2,&wav,&bytes)&&os_audio_capture(1,&wav,&bytes)<0,41);
-        board_up=0;check(os_audio_capture(2,&wav,&bytes)<0,42);
+        check(mimus_capture(0,&wav,&bytes)<0&&mimus_capture(1,NULL,&bytes)<0,40);
+        check(!mimus_capture(2,&wav,&bytes)&&mimus_capture(1,&wav,&bytes)<0,41);
+        board_up=0;check(mimus_capture(2,&wav,&bytes)<0,42);
         os_check_result=1;return;
     }
     /* The parent becomes ready on the third poll; nothing is requested yet. */
     for(unsigned n=0;n<10;++n)check(step()==0,50);
     check(atomic_load(&audio.ready)&&audio.stage==IDLE&&!logged,51);
-    check(!os_audio_capture(1,&wav,&bytes),52);
-    int r=run(1);
+    int r=capture_run(1,&wav,&bytes);
     if(mode){
         /* A discontinuous period or a stream that stopped by itself refuses
-         * the capture with the stream, its final period and leases held. */
-        check(r<0&&!atomic_load(&audio.captured)&&!reaps&&!closes,60+mode);
+         * the capture with the stream and its leases held. */
+        check(r<0&&board_failed&&!reaps&&!closes&&mimus_capture(1,&wav,&bytes)<0,60+mode);
         os_check_result=1;return;
     }
-    /* 32,000 bytes: seven full periods and part of an eighth, then CANCEL
-     * with the final period still held. */
-    check(r==1&&produced==8&&puts_done==7&&held_ticket,53);
-    check(logged==20&&!memcmp(log,"OSMGPGPGPGPGPGPGPGCS",20),54);
-    captured(1);
-    /* The next generation returns the final period, reaps, closes and
-     * opens again before it captures. */
-    check(!os_audio_capture(2,&wav,&bytes)&&run(2)==1&&reaps==1&&closes==1&&puts_done==15,55);
-    check(logged==44&&!memcmp(log+20,"PRLSOSMGPGPGPGPGPGPGPGCS",24),56);
-    captured(2);check(os_audio_capture(1,&wav,&bytes)<0&&!board_failed,57);
+    unsigned periods=(2*samples+4095)/4096;
+    check(r==1&&produced>=periods&&count('G')==produced&&count('P')==produced&&count('C')==1,53);
+    check(!memcmp(log,"OSM",3)&&!memcmp(log+logged-2,"CS",2)&&!reaps,54);
+    check_wav(1,samples,wav,bytes);
+    /* The next generation reaps, closes and opens again before it captures;
+     * the first generation's request is then refused. */
+    unsigned first=logged;
+    check(!mimus_capture(2,&wav,&bytes)&&capture_run(2,&wav,&bytes)==1&&reaps==1&&closes==1,55);
+    check(!memcmp(log+first,"RLSOSM",6)&&!memcmp(log+logged-2,"CS",2),56);
+    check_wav(2,samples,wav,bytes);
+    check(mimus_capture(1,&wav,&bytes)<0&&!board_failed,57);
     os_check_result=1;
 }

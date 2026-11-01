@@ -7,6 +7,9 @@
 #include "../board/application.h"
 #include "../board/session.h"
 #include "../mimus-board/application.h"
+#ifdef SUNSTONE_A733_OS_AUDIO
+#include "../mimus-board/capture.h"
+#endif
 #include "boot.h"
 #include "a733_smp_placement.h"
 #include <string.h>
@@ -16,6 +19,17 @@ _Static_assert(OS_RECOGNITION_CORE==A733_SMP_RECOGNITION_CORE,"recognition core 
 #endif
 _Static_assert(BOARD_SERVICE_TYPEC==2&&BOARD_SERVICE_POWER==3&&BOARD_SERVICE_USB2==4,"host service selection IDs");
 _Static_assert(OS_SERVICE_MIMUS==BOARD_SERVICES,"recognizer service follows the board services");
+#ifdef SUNSTONE_A733_OS_AUDIO
+/* The microphone build's capture client is the recognizer's WAV adapter on
+ * the capture stream; the session's capture length is its parameter. */
+int os_audio_client_admit(uint32_t capture_samples){return mimus_capture_admit(capture_samples);}
+static int os_audio_start(void)
+{
+    const struct os_session *s=os_session_admitted();
+    const struct os_audio_stream_config *c=s?mimus_capture_configure(s->audio.capture_samples):NULL;
+    return c&&os_audio_stream_open(c);
+}
+#endif
 struct os_application {
     const char *name;
     int (*task_privileged)(void (*)(void *),void *);
@@ -70,7 +84,7 @@ const struct os_session *os_session_admitted(void)
         !memcmp(s->board.image,a733_smp_build_id,32)?s:NULL;
 }
 #ifdef SUNSTONE_A733_OS_AUDIO
-int os_capture(unsigned g,const uint8_t **wav,size_t *bytes){return os_audio_capture(g,wav,bytes);}
+int os_capture(unsigned g,const uint8_t **wav,size_t *bytes){return mimus_capture(g,wav,bytes);}
 #elif defined(SUNSTONE_A733_OS_HEADSET)
 int os_capture(unsigned g,const uint8_t **wav,size_t *bytes){return os_headset_capture(g,wav,bytes);}
 #endif
