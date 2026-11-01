@@ -2449,23 +2449,21 @@ to the stated scope:
   through USB, then retains hardware because packet and transaction drain remain
   unproved. Live sensor frames do not reach ISP0: raw receiver input,
   parser-to-ISP0 routing and live ISP0 operation remain required.
-  A separate [recorded-image ISP0 application](camera-isp0.md) now accepts one
-  640×480 BGGR12 frame and produces an immutable copied NV16 frame through
-  TOP's DDR reader, ISP600, VIPP0 and camera DMA0. It needs no sensor. Pinned
-  GPL ISP600 defaults/setters run natively; no opaque tuning or runtime blob is
-  required. Guarded mappings retain both IOMMU masters 1 and 2, every parameter
-  extent, input/output buffers and provider leases through completion or ACK.
-  Final image `32eb5b93…` has one nominal EL1h bounded-call result, seven classified
-  failures and five serializer cases. Device effects and output pixels are modeled;
-  the fixtures establish neither numerical processing nor full task scheduling.
-  Old invalid negative runs are excluded. The [host workflow](isp0-preparation.md)
-  passes fifteen stream cases, geometry/input/proof and six allocation refusals,
-  plus readiness; seven root boot guards and three SRAM cases remain separate.
-  Evidence is under `isp0-native-20261020/`. The only current compiled/declared
-  source difference adds an independent CE clock writer without changing existing
-  functions. No full TinyUSB/DCD, physical, numerical, sensor or scheduler
-  qualification is established. Independent pixel comparison, wider processing,
-  scaling, 3A tuning, interrupt completion and physical recovery remain required.
+  The [recorded ISP0 application](camera-isp0.md) has **host-tested** replay of
+  one immutable 640×480 BGGR12 input through TOP, ISP600, VIPP0 and camera DMA0.
+  Each NV16 copy remains immutable through USB completion and sequence-bound
+  acknowledgment. Fresh status and fault checks precede retained buffer reuse;
+  memory, both IOMMU masters and provider leases remain owned. IRQ completion
+  uses DMA0, VIPP0 load and ISP0 SAVE with the original session deadline.
+  Sanitizer, linked-image and FreeRTOS QEMU checks pass, including a second
+  capture after USB acknowledgment and staggered IRQ events. An identified
+  host FFmpeg build supplies independent CPU comparison files; its algorithm
+  is not established as equivalent to ISP600. Evidence and frozen host-only
+  ELFs are under `~/.cache/sunstoneos/build/camera-isp-1031/`. The retained ISP
+  ELF fails the new probe runner's watchdog admission. Source-backed global
+  drain and probe conversion are required before a board run. Physical pixels,
+  interrupts, repeated operation, sensor input, wider processing and tuning
+  remain unqualified. No board was accessed for this work.
 
 - NPU: **tested** for interrupt completion and matching ShuffleNetV2 outputs
   in the returning diagnostics described above. The resident runtime and OS
