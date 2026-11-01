@@ -8,11 +8,13 @@ unqualified. The accepted objective remains incomplete.
 ## Frozen images identify their devices and expected results
 
 The package is under
-`~/.cache/sunstoneos/evidence/usb-host-1031/images/`. Each directory contains
+`~/.cache/sunstoneos/build/integrate-streams-1031/usb/images/`. Each directory contains
 `image.elf`, its native link check and a README with the full hash, source
 revision, accessory, expected result and offline preparation command.
-The source revision is `00afa552`; later documentation and fixture changes
-preserve these image bytes.
+The source revision is `9800a681`, including the reviewed USB host changes
+and three corrective commits. These images supersede the earlier package under
+`~/.cache/sunstoneos/evidence/usb-host-1031/images/`. The earlier images lack
+those fixes.
 
 | Directory | Accessory on TYPEC24 | Expected application result |
 | --- | --- | --- |
@@ -23,10 +25,10 @@ preserve these image bytes.
 
 | Directory | ELF SHA-256 |
 | --- | --- |
-| `input` | `5d177662ea35027b22ae194857796e09055d02d9ff7343a981b90d0b203cdbad` |
-| `serial` | `807467f6aafcd094eec416ab581f813c05d4ca3c3126575c4f2231bbf4f24bed` |
-| `camera` | `a630d1e94f219c2453732d0e535ac8d2293eb9a8dad8b45189da6c04f02cb11e` |
-| `camera-jpeg` | `45d10e676915a14ac188a00bfb5daba704b87e211058606a4789960ca1530b89` |
+| `input` | `e5b9198d85cfdd3d914c79002d034385d12e7a6de2d5ede3955a35c327263400` |
+| `serial` | `82b81bcaccea040c8258643c180fa6c600d5a467a11dba5f3fc73ee91b99d244` |
+| `camera` | `f64f3aa85e8eeef74f0994a396dacb5528d86ec8ab8add8a231bc81bc6a4e15a` |
+| `camera-jpeg` | `0bd0f9389cad310d68be76930cd93f79f4e2f2a5d2339b0220af8268f38b0d56` |
 
 TYPEC24 is the Type-C/DisplayPort connector. Its FUSB302 controls attachment,
 and PL8 enables the SY6280 switch from board 5 V to connector VBUS.
@@ -44,7 +46,7 @@ mimus.
 ```sh
 py="$HOME/.cache/sunstoneos/venv/bin/python3"
 cfg="$HOME/.cache/sunstoneos/bin/cfg.sh"
-build="$HOME/.cache/sunstoneos/build/usb-host-1031/native"
+build="$HOME/.cache/sunstoneos/build/integrate-streams-1031/usb/reproduction/native"
 
 for class in input serial camera; do
   "$cfg" "$PWD" "$build/$class" -DMIMUS_DIR= -DSUNSTONE_A733_OS=ON \
@@ -64,7 +66,7 @@ done
 cmake --build "$build/camera-jpeg" --target sunstone-a733-os-usb-camera -j8
 
 "$py" -B apps/usb-host/package.py --build-root "$build" \
-  --output "$HOME/.cache/sunstoneos/evidence/usb-host-1031/images-rebuild"
+  --output "$HOME/.cache/sunstoneos/build/integrate-streams-1031/usb/reproduction/images"
 ```
 
 The package tool refuses an existing destination and verifies the native link
@@ -76,23 +78,27 @@ selects MJPEG; the default camera image prefers VGA YUYV when available.
 ## Host evidence covers the transport and application boundary
 
 Evidence directories below are relative to
-`~/.cache/sunstoneos/build/usb-host-1031/`. Raw downloads remain in the source
+`~/.cache/sunstoneos/build/integrate-streams-1031/usb/`. Raw downloads remain in the source
 cache named by the component source records.
 
 | Evidence | Result and boundary |
 | --- | --- |
-| `generic-1/result.json` | Six sanitizer cases: actual TinyUSB HID, CP2102 receive/echo/detach/reattach, complete VGA YUYV over ISO and bulk, MJPEG selection and unsupported-format refusal. Controller, peripheral and interrupt delivery are modeled. |
-| `generic-alias/result.json` | The actual application TX adapter reverses the read-only payload alias; the echoed TRB points to the original RX DMA bytes. A held buffer remains readable through detach and is released before reattachment. |
-| `final-broker/` | Clang 21 sanitizer checks for grants, pending results, ownership, disconnect, frame pinning, retirement and explicit release. |
-| `final-serial/result.json` | Actual upstream bridge request encoding, public descriptor layouts, FTDI packet views, backpressure, echo and quiescence. UART timing remains untested. |
-| `serial/capture-final/result.json` | 1,401 public FT2232H IN completions replay to 472,568 payload bytes matching an independent packet decoder. The recorded device uses FPGA/FIFO mode; this does not measure UART speed. |
-| `memory/native1/result.json` | Actual AArch64 table builder and eight modeled cold-entry contexts cover NC mappings, read-only aliases and L3 checksum refusal. Cache effects are modeled. |
-| `memory/legacy/result.json` | The feature-disabled memory code is byte-identical to the preserved legacy image. |
+| `checks/generic/result.json` | Six sanitizer cases: actual TinyUSB HID, CP2102 receive/echo/detach/reattach, complete VGA YUYV over ISO and bulk, MJPEG selection and unsupported-format refusal. Controller, peripheral and interrupt delivery are modeled. |
+| `checks/generic-alias/result.json` | The actual application TX adapter reverses the read-only payload alias; the echoed TRB points to the original RX DMA bytes. A held buffer remains readable through detach and is released before reattachment. |
+| `broker.log` | Clang 21 sanitizer checks for grants, pending results, ownership, disconnect, frame pinning, retirement and explicit release. |
+| `checks/serial/result.json` | Actual upstream bridge request encoding, public descriptor layouts, FTDI packet views, backpressure, echo and quiescence. UART timing remains untested. |
+| `checks/serial-capture/result.json` | 1,401 public FT2232H IN completions replay to 472,568 payload bytes matching an independent packet decoder. The recorded device uses FPGA/FIFO mode; this does not measure UART speed. |
+| `checks/memory/result.json` | Actual AArch64 table builder and eight modeled cold-entry contexts cover NC mappings, read-only aliases and L3 checksum refusal. Cache effects are modeled. |
+| `checks/legacy-memory/result.json` | The feature-disabled memory code is byte-identical to the preserved legacy image. |
 | `native/` | Input, serial, camera and hardware JPEG camera images pass their selected native link checks. |
 
-Independent review reran HID capture replay, serial protocols, DMA ownership,
-UVC payload/control handling and the generic/alias compositions. Its results
-are under `~/.cache/sunstoneos/build/usb-host-1031-review-*`.
+Independent review covered descriptor/report bounds, retained DMA ownership,
+detach, application grants and the VBUS admission path. Separate fixes exclude
+detaching records from reused-address lookup, reject truncated HID report
+descriptors and synchronize legacy keyboard publication. The merged-tree host
+checks cover those regressions, captured traffic and generic/alias composition.
+The keyboard fixture also passes ThreadSanitizer while the application reads
+on another thread.
 Public HID recordings supply 445 reports. The camera fixture preserves all
 38 reported C270 video modes and 11 alternate settings. Nine captured Logitech
 probe responses exercise negotiation; their capture contains no completed image
@@ -102,9 +108,12 @@ The [HID](usb-hid-sources.json), [serial](usb-serial-sources.json) and
 The separate [serial traffic record](usb-serial-traffic-sources.json) pins the
 FT2232H packet capture and its FIFO-mode boundary.
 
-Four peripheral proposals are pending in the existing 3-3 board queue; none
-is claimed or authorized to run. Their source revision and artifact hashes
-are frozen in `~/.cache/sunstoneos/board-test-proposals/usb-host-1031/`.
+The four earlier proposals below remain in the 3-3 board queue. They identify
+pre-review images and do not cover the corrected package. The coordinator must
+replace or revalidate them against the new hashes before any launch. Their
+archived source and artifact records are under
+`~/.cache/sunstoneos/board-test-proposals/usb-host-1031/`; no queue entry was
+changed during this integration.
 
 | Image | Queue proposal ID |
 | --- | --- |
@@ -126,6 +135,8 @@ The new exclusive RAM range is `0x47000000..0x48000000`. The earlier image-RAM
 DDR record does not cover it. The coordinator must establish its ownership,
 remote-writer exclusion and use before launching these images.
 TYPEC24 also needs its existing qualified source, PHY, clock and rail records.
+VBUS enable requires coordinator approval and an explicit admitted source
+session. These host checks grant neither.
 No Type-C source admission record is established by these host checks.
 
 These supervised images retain resources. The protected development
@@ -153,8 +164,3 @@ this change, and no reconnect is requested from a cached board-state conclusion.
 Requested breadcrumb names for coordinator integration are `USB_HOST_ENUM`,
 `USB_HID_REPORT`, `USB_SERIAL_CONFIG`, `USB_SERIAL_RX`, `USB_UVC_CONTROL`,
 `USB_UVC_FRAME` and `USB_JPEG_DECODE`. The shared breadcrumb header is unchanged.
-
-The primary worktree's Git metadata is read-only in the task sandbox. Commits
-were made on its assigned branch using writable task-local Git metadata under
-the build directory. Its original index needs `git reset --mixed HEAD` outside
-that sandbox to reflect the committed tree; this leaves working files intact.

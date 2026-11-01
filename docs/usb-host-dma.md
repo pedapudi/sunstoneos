@@ -114,3 +114,9 @@ The default legacy profile keeps its 128 KiB parent, three device records,
 seven endpoint ring/bounce pairs and one copied 512-byte isochronous stream.
 Borrowed-page APIs refuse this profile. Run the DMA check with `--profile legacy`
 to exercise its copied isochronous path and confirm borrowed-page refusal.
+
+Descriptor lookup selects the active core record when a USB address is reused.
+An old record may remain reserved by a completed application lease after
+Disable Slot. Its release stays bound to the old token; it cannot shadow the
+new attachment's descriptor state. The adapter regression covers either record
+order and refuses lookup when every matching record is detaching.

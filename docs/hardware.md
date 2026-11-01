@@ -3173,7 +3173,11 @@ to the stated scope:
   [image guide](usb-host-images.md) records four native builds and composed host
   checks. Physical source power, peripherals, DMA visibility and sustained
   traffic remain unqualified; supervised runner and RAM admission remain open.
-  Full Type-C detach needs a new admitted session. Focused checks cover attachment, independent power cutoff,
+  The host connector is TYPEC24, the USB-C/DisplayPort port; accessories need
+  a USB-C adapter or hub. VBUS enable requires coordinator approval and an
+  explicit admitted source session. Review corrections and merged-tree checks
+  are recorded in the image guide. Full Type-C detach needs a new admitted
+  session. Focused checks cover attachment, independent power cutoff,
   mass-storage enumeration, copied sector reads, malformed responses,
   cancellation and disconnects. The [native board application](board-application.md)
   connects startup, separate Type-C tasks, host reads and simultaneous USB0

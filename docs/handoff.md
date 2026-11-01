@@ -131,7 +131,7 @@ composition. Source-ownership, shared-helper and progress checks pass.
 Focused checks pass for complete memory-map admission, DMA/IOMMU ownership,
 raw PMIC observation, cold-session refusal, SDIO deadlines, HEVC state and
 pixels, RTC alarm lifetime and MD5/SM3 staging/upload ownership. Device effects
-remain modeled. The check index verifies 750 checks; pre-push fixtures reject
+remain modeled. The check index verifies 760 checks; pre-push fixtures reject
 25 blocked cases and accept 12 permitted cases. Test cleanup moves artifacts
 into the trash directory.
 
@@ -207,10 +207,19 @@ an explicit admitted source session; the images grant no electrical authority.
 Board launch still needs reviewed TYPEC24/VBUS authority, the new exclusive RAM
 reservation and a supervised USB-class route in the protected development
 runner. The images retain resources and refuse the CPU-return lifetime.
-Hot-plug works within an admitted Type-C adapter/hub connection; removing that
-connection requires a new source session. No board access occurred in this task.
-Four proposals are pending in the existing 3-3 queue; the image guide lists
-their IDs and unmet prerequisites.
+Host checks cover hot-plug within an admitted Type-C adapter/hub connection;
+removing that connection requires a new source session. No board access occurred.
+Four earlier proposals in the 3-3 queue identify pre-review images. The
+coordinator must replace or revalidate them with the corrected image hashes;
+the image guide lists their IDs and unmet prerequisites.
+
+Independent review found and corrected reused-address lookup, truncated HID
+report descriptors and legacy keyboard state publication. All USB sanitizer,
+ThreadSanitizer, captured-traffic, memory and composition checks pass under
+`~/.cache/sunstoneos/build/integrate-streams-1031/usb/`. The three baseline
+builds, four USB class images, legacy JPEG image and selected integration gate
+pass. The corrected image package is in that directory's `images/` child.
+Physical device operation, DMA visibility and VBUS behavior remain unqualified.
 
 ## Merged application and failure-record interfaces
 

@@ -100,6 +100,18 @@ recorded fixed report layouts. The receiver mouse uses report ID 2 and packed
 source. [The source record](usb-hid-sources.json) identifies their download URLs,
 hashes, descriptor packets and redistribution limits.
 
+The transport requires the complete advertised HID report descriptor before
+passing it to TinyUSB. A short reply is refused while its control state stays
+retained; bytes left by an earlier enumeration cannot complete the descriptor.
+The adapter regression covers every short length and exact completion.
+
+The legacy `ss_key_report` API preserves the first unread snapshot and one
+pending latest snapshot. Publication and application copying have exclusive
+atomic claims; later updates can coalesce. Detach invalidates snapshots from
+that attachment. The separate input-event queue preserves its existing contract.
+The mailbox regression covers sequential, interrupted and concurrent reads
+under address, undefined-behavior and thread sanitizers.
+
 Physical qualification still requires an attached keyboard, mouse and combined
 receiver on each supported host route. A supervised board run must establish
 interrupt completions, application delivery, held-key and held-button release
