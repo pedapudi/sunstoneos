@@ -155,6 +155,7 @@ apply_build_patch("${os_build}/boot.c" "${os_boot_base}" "${os_root}/apps/os/boo
 # (docs/fault-capture.md); SUNSTONE_A733_FAULT_PAGE enables them.
 set(os_added apps/os/admission.c apps/os/identity.c apps/os/irq.c apps/os/services.c apps/os/start.c
   apps/os/usb-service.c apps/os/application.c apps/os/session.c apps/os/usb0.c apps/os/client.c apps/os/capture.c
+  runtime/deadline.c runtime/deadline-a733.c
   runtime/newlib.c runtime/newlib_smp.c runtime/newlib_syscalls_smp.c runtime/new_delete.cc runtime/cxx_terminate.cc
   apps/os/thermal.c apps/os/watchdog.c platform/a733-smp-cached/irq_table.c drivers/thermal/a733_thermal.c
   drivers/thermal/a733_thermal_native.c drivers/gpu/gicv3_spi.c platform/a733/fault.S platform/a733/fault.c)
@@ -383,7 +384,7 @@ endif()
 if(SUNSTONE_A733_OS_USB_CLASSES)
   target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_USB_CLASSES=1 SUNSTONE_USB_HOST_GENERIC=1 SUNSTONE_USB_APP_ALIAS=1)
 endif()
-target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_BOARD_APPLICATION=1 SUNSTONE_BOARD_USB2_DUAL=1 SUNSTONE_A733_OS=1 SUNSTONE_A733_IRQ_TABLE=1 SUNSTONE_A733_FAULT_PAGE=1
+target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_BOARD_APPLICATION=1 SUNSTONE_BOARD_USB2_DUAL=1 SUNSTONE_A733_OS=1 SUNSTONE_TASK_DEADLINES=1 SUNSTONE_A733_IRQ_TABLE=1 SUNSTONE_A733_FAULT_PAGE=1
   "$<$<BOOL:${SUNSTONE_A733_OS_CPU_RETURN}>:SUNSTONE_A733_OS_CPU_RETURN=1>"
   "$<$<BOOL:${SUNSTONE_A733_OS_CPU_RETURN}>:SUNSTONE_CRUMBS=1>"
   A733_SMP_CONTRACT_MAGIC=${os_contract_magic} A733_SMP_RESULT_MAGIC=${os_result_magic}
@@ -464,7 +465,7 @@ endif()
 set(os_inputs ${board_inputs} ${os_sources} ${os_headers} ${os_generated} ${os_patches} ${os_external_inputs}
   "${os_root}/platform/a733-smp-cached/irq_table.h" "${os_root}/include/a733_fault.h"
   "${os_root}/include/a733_thermal.h" "${os_root}/include/a733_thermal_native.h"
-  "${os_root}/include/gicv3_spi.h" "${CMAKE_CURRENT_LIST_FILE}")
+  "${os_root}/include/gicv3_spi.h" "${os_root}/include/sunstone_deadline.h" "${CMAKE_CURRENT_LIST_FILE}")
 list(REMOVE_ITEM os_inputs "${board_build}/build-id.c")
 list(REMOVE_DUPLICATES os_inputs)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${os_inputs})
