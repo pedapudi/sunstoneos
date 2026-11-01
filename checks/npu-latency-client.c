@@ -48,7 +48,7 @@ void a733_npu_application_fail(unsigned reason){atomic_store(&a733_npu_applicati
 int npu_job_run(unsigned model,const void *in,size_t ni,void *out,size_t no,uint64_t timeout)
 {
     verify(!model&&in==input&&ni==4&&no==4&&timeout==1000000&&!fixture_claimed);
-    ++fixture_calls;fixture_now+=20000;
+    ++fixture_calls;fixture_runtime.doorbell_ticks=fixture_now+1000;fixture_now+=20000;
     fixture_client_cpu+=100;fixture_worker_cpu+=200;
     if((fixture_case==2&&fixture_calls==1)||(fixture_case==3&&current_job==3))return -1;
     memcpy(out,reference,4);if(fixture_case==1&&current_job==4)((unsigned char *)out)[0]=9;
@@ -93,6 +93,7 @@ int npu_queue_submit(struct npu_queue *q,struct npu_queue_job *job,struct npu_qu
     verify(fixture_locks&&q==&active_queue->queue&&c->owner==q&&!after.queue&&!after.value&&timeout==1000000&&!job->held);
     verify(!memcmp(fixture_input,input,4)&&fixture_output[0]==0xa5&&fixture_output[1]==0x3c);
     if(fixture_case==3&&current_job==3)return -1;
+    fixture_runtime.doorbell_ticks=fixture_case==11?fixture_now-100:fixture_now+5;
     ++q->submitted;job->held=1;fixture_job=job;*out=(struct npu_queue_fence){q,q->submitted};return 1;
 }
 int npu_runtime_queue_wait(struct npu_runtime_queue *q,struct npu_queue_fence fence)

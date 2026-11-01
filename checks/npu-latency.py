@@ -104,7 +104,7 @@ def main():
         (output / 'commands.json').write_text(json.dumps(commands, indent=2) + '\n')
         built.check_returncode()
         image = Image(image_path, layout_names=())
-        for case in ((0, 1, 2, 3) if not mode else (0, 1, 2, 3, 4, 5, 8, 9, 10) if mode == 1 else (0, 6, 7)):
+        for case in ((0, 1, 2, 3) if not mode else (0, 1, 2, 3, 4, 5, 8, 9, 10, 11) if mode == 1 else (0, 6, 7)):
             machine = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
             machine.mem_map(0x40000000, 0x04000000)
             machine.mem_map(0x200000, 0x10000)  # ELF header segment from the fixture link.
@@ -149,8 +149,13 @@ def main():
                 assert state == {'stop': 'platform_exit', 'status': status}, state
                 assert len(text) <= 16127 and value('checked') == 1000
                 geometry = {'runtime': True, 'references': ['01020304', '01020304'],
-                            'latency': {'mode': 'queue' if mode else 'legacy', 'measured_jobs': 1000, 'warmup_jobs': 1, 'model': 0, 'sequence_repeats': repeats}}
+                            'latency': {'mode': 'queue' if mode else 'legacy', 'measured_jobs': 1000, 'warmup_jobs': 1, 'model': 0, 'sequence_repeats': repeats, 'doorbell_timing': True}}
                 parsed = host.latency_report(text, status, 480000000, geometry)
+                publish = parsed['timing']['submit_to_doorbell']
+                assert publish['samples'] == 1000
+                expected_publish = 1000 if not mode else 5
+                assert publish['latency_ticks'] == {'p50': expected_publish, 'p99': expected_publish, 'max': expected_publish}
+                assert publish['sum_ticks'] == 1000 * expected_publish
                 assert parsed['functional_success'] == (not status)
                 if case == 10:
                     phases = parsed['timing']['caller_phases']
@@ -194,6 +199,11 @@ def main():
                     changed = list(lines)
                     changed[fields_at + index] = f'0x{replacement:016x}\n'
                     refused(lambda: host.latency_report(''.join(changed), status, 480000000, geometry), reason)
+                publish_at = lines.index('NPU_SUBMIT_TO_DOORBELL=\n') + 1
+                for index, replacement in ((0, 999), (1, 0), (2, 1), (3, 0), (4, 0)):
+                    changed = list(lines)
+                    changed[publish_at + index] = f'0x{replacement:016x}\n'
+                    refused(lambda: host.latency_report(''.join(changed), status, 480000000, geometry), 'doorbell')
                 checksum_at = lines.index('NPU_DURATION_SHA256=\n') + 1
                 changed = list(lines)
                 changed[checksum_at] = ('0' if changed[checksum_at][0] != '0' else '1') + changed[checksum_at][1:]
@@ -211,9 +221,9 @@ def main():
             else:
                 assert state['stop'] == 'vTaskSuspend', state
                 fault = struct.unpack('<6Q', machine.mem_read(image.address('npu_latency_failure'), 48))
-                expected = 40 if case == 2 else 12 if not mode else {3: 43, 4: 44, 5: 37, 6: 55, 8: 31, 9: 31}[case]
-                assert fault[0] == expected and fault[1] == ((1 << 64) - 1 if case in (2, 8, 9) else 1000 if case == 6 else 3), fault
-                assert not value('fixture_closed') and value('checked') == (0 if case in (2, 8, 9) else 1000 if case == 6 else 3)
+                expected = 40 if case == 2 else 12 if not mode else {3: 43, 4: 44, 5: 37, 6: 55, 8: 31, 9: 31, 11: 61}[case]
+                assert fault[0] == expected and fault[1] == ((1 << 64) - 1 if case in (2, 8, 9) else 1000 if case == 6 else 0 if case == 11 else 3), fault
+                assert not value('fixture_closed') and value('checked') == (0 if case in (2, 8, 9) else 1000 if case == 6 else 0 if case == 11 else 3)
                 if case == 6:
                     assert value('fixture_releases') == 1000 and fault[2:4] == (1, 0)
                 elif mode and 3 <= case <= 5:

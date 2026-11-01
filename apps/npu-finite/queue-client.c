@@ -32,7 +32,7 @@ _Static_assert(configGENERATE_RUN_TIME_STATS==1&&sizeof(configRUN_TIME_COUNTER_T
 __attribute__((used,retain)) const uint64_t npu_startup_return_profile[4]={
     NPU_STARTUP_RECEIPT_MAGIC,1,NPU_STARTUP_JOBS,1+NPU_STARTUP_JOBS};
 __attribute__((used,retain)) const uint64_t npu_latency_return_profile[8]={
-    UINT64_C(0x4e50554c41545031),1,SUNSTONE_NPU_LATENCY_QUEUE,JOBS,1,SUNSTONE_NPU_LATENCY_SEQUENCE,4,24000000};
+    UINT64_C(0x4e50554c41545031),2,SUNSTONE_NPU_LATENCY_QUEUE,JOBS,1,SUNSTONE_NPU_LATENCY_SEQUENCE,4,24000000};
 __attribute__((used,retain)) const uint64_t npu_latency_task_stats_profile[4]={UINT64_C(0x4e50554350553031),1,64,24000000};
 struct a733_npu_application_result a733_npu_application_result;
 static StaticTask_t client_state;
@@ -46,7 +46,8 @@ static struct npu_runtime_tensor inputs[NBG_ASSEMBLY_MAX_TENSORS],outputs[NBG_AS
 static size_t input_cache[NBG_ASSEMBLY_MAX_TENSORS],output_cache[NBG_ASSEMBLY_MAX_TENSORS];
 static unsigned input_count,output_count,completed,checked,bad;
 static unsigned char copied[NPU_FINITE_OUTPUT_BYTES];
-static uint32_t durations[JOBS],ordered[JOBS];
+static uint32_t durations[JOBS],ordered[JOBS],doorbells[JOBS];
+static uint64_t doorbell_sum;
 static uint64_t frequency,start,end,sum,submit_ticks,acquire_ticks;
 static uint64_t client_cpu_ticks,worker_cpu_ticks;
 static uint64_t first_bad_job=UINT64_MAX,first_bad_offset=UINT64_MAX,first_bad_byte=UINT64_MAX;
@@ -222,6 +223,11 @@ static void report(const unsigned char output_digest[32])
         atomic_load_explicit(&direct.queue.completed,memory_order_acquire),direct.irq_cpu_ticks,client_cpu_ticks,worker_cpu_ticks};
     platform_puts("NPU_LATENCY=\n");
     for(unsigned i=0;i<sizeof values/sizeof values[0];++i){platform_hex(values[i]);platform_puts("\n");}
+    memcpy(ordered,doorbells,sizeof ordered);
+    for(unsigned i=1;i<JOBS;++i){uint32_t value=ordered[i];unsigned j=i;while(j&&ordered[j-1]>value){ordered[j]=ordered[j-1];--j;}ordered[j]=value;}
+    const uint64_t publish[]={JOBS,ordered[499],ordered[989],ordered[999],doorbell_sum};
+    platform_puts("NPU_SUBMIT_TO_DOORBELL=\n");
+    for(unsigned i=0;i<sizeof publish/sizeof publish[0];++i){platform_hex(publish[i]);platform_puts("\n");}
     platform_puts("NPU_DURATION_LE32=\n");hex_bytes(durations,sizeof durations);
     unsigned char hash[32];storage_digest_bytes(durations,sizeof durations,hash);
     platform_puts("NPU_DURATION_SHA256=\n");hex_bytes(hash,sizeof hash);
@@ -258,10 +264,10 @@ static void npu_latency_client(void *unused)
     const uint64_t client_before=ulTaskGetRunTimeCounter(NULL),worker_before=ulTaskGetRunTimeCounter(runtime->service.worker);
     for(unsigned job=0;job<JOBS;++job) {
         current_job=job;if(!live())retained(24);sunstone_crumb(NPU_CRUMB_SUBMIT,job);
-        const uint64_t before=a733_smp_counter();
+        const uint64_t before=a733_smp_counter();uint64_t entered=before;
         if(SUNSTONE_NPU_LATENCY_QUEUE) {
             prepare();struct npu_queue_fence fence;
-            uint64_t t=a733_smp_counter(),lock=npu_runtime_queue_lock();
+            uint64_t t=a733_smp_counter();entered=t;uint64_t lock=npu_runtime_queue_lock();
             int submitted=npu_queue_submit(&direct.queue,&record,&command,(struct npu_queue_fence){0},1000000,&fence);
             npu_runtime_queue_unlock(lock);submit_ticks+=a733_smp_counter()-t;
             if(submitted!=1)retained(43);
@@ -273,6 +279,9 @@ static void npu_latency_client(void *unused)
         }else if(npu_job_run(0,w->input,w->input_bytes,copied,w->reference_bytes,1000000)!=1)retained(12);
         const uint64_t after=a733_smp_counter(),duration=after-before;
         if(after<=before||duration>frequency||!live())retained(25);
+        const uint64_t doorbell=runtime->doorbell_ticks;
+        if(doorbell<=entered||doorbell>=after||doorbell-entered>duration)retained(61);
+        doorbells[job]=(uint32_t)(doorbell-entered);doorbell_sum+=doorbells[job];
         durations[job]=(uint32_t)duration;sum+=duration;
         mismatch|=check_output(&digest);
     }

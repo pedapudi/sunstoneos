@@ -85,11 +85,11 @@ def latency_extension(startup_marker,names,read):
  require(len(raw)==64,'Latency immutable extension length differs.')
  words=struct.unpack('<8Q',raw)
  repeats=words[5]
- require(words[:2]==(0x4e50554c41545031,1) and words[2] in (0,1) and words[3:5]==(1000,1) and
+ require(words[0]==0x4e50554c41545031 and words[1] in (1,2) and words[2] in (0,1) and words[3:5]==(1000,1) and
   words[6:]==(4,24000000) and (repeats==0 or words[2]==1 and 2<=repeats<=64) and
   (startup_marker[2]==1002)==bool(repeats),
   'Latency immutable extension differs.')
- return {'mode':'queue' if words[2] else 'legacy','measured_jobs':1000,'warmup_jobs':1,'model':0,'sequence_repeats':repeats}
+ return {'mode':'queue' if words[2] else 'legacy','measured_jobs':1000,'warmup_jobs':1,'model':0,'sequence_repeats':repeats,**({'doorbell_timing':True} if words[1]==2 else {})}
 
 
 def image_profile(data,manifest):
@@ -457,15 +457,16 @@ def latency_report(text,status,deadline,g):
  """
  geometry=g.get('latency')
  repeats=geometry.get('sequence_repeats',0) if geometry else 0
+ doorbell_timing=geometry.get('doorbell_timing',False) if geometry else False
  require(g.get('runtime') and len(g['references'])==2 and geometry and
-  geometry=={'mode':geometry['mode'],'measured_jobs':1000,'warmup_jobs':1,'model':0,'sequence_repeats':repeats} and
+  geometry=={'mode':geometry['mode'],'measured_jobs':1000,'warmup_jobs':1,'model':0,'sequence_repeats':repeats,**({'doorbell_timing':True} if doorbell_timing else {})} and
   geometry['mode'] in ('legacy','queue') and (repeats==0 or geometry['mode']=='queue' and 2<=repeats<=64),'Latency network geometry differs.')
  head=('NPU_STAGE=WAIT_STARTUP\nNPU_STAGE=WARMUP\nNPU_STAGE=LATENCY\nNPU_STAGE=CLOSE\n'
   f'NPU_STAGE=WAIT_LOCAL_STOP\nNPU_IRQ_COMPLETIONS=0x{1002+bool(repeats):016x}\n'
   'NPU_IRQ_STOPPED=0x0000000000000001\nNPU_STAGE=QUIESCENT\nNPU_LATENCY=\n')
- pattern=(re.escape(head)+r'((?:0x[0-9a-f]{16}\n){23})NPU_DURATION_LE32=\n'
-  r'((?:[0-9a-f]{128}\n){62}[0-9a-f]{64}\n)NPU_DURATION_SHA256=\n([0-9a-f]{64})\n'
-  r'NPU_OUTPUT_SHA256=\n([0-9a-f]{64})\n'
+ pattern=(re.escape(head)+r'((?:0x[0-9a-f]{16}\n){23})(?:NPU_SUBMIT_TO_DOORBELL=\n(?P<doorbell_values>(?:0x[0-9a-f]{16}\n){5}))?NPU_DURATION_LE32=\n'
+  r'(?P<duration_raw>(?:[0-9a-f]{128}\n){62}[0-9a-f]{64}\n)NPU_DURATION_SHA256=\n(?P<duration_digest>[0-9a-f]{64})\n'
+  r'NPU_OUTPUT_SHA256=\n(?P<output_digest>[0-9a-f]{64})\n'
   r'(?:NPU_REPEATED_SEQUENCE=\n(?P<sequence_values>(?:0x[0-9a-f]{16}\n){11})NPU_SEQUENCE_OUTPUT_SHA256=\n(?P<sequence_digest>[0-9a-f]{64})\n)?'
   r'NPU_INFERENCE=(?P<outcome>MATCH|MISMATCH); inference_jobs='+str(1001+bool(repeats))+r'\n')
  match=re.fullmatch(pattern,text)
@@ -476,15 +477,29 @@ def latency_report(text,status,deadline,g):
   jobs==checked==1000 and warmups==1 and total==1001+bool(repeats) and bad<=jobs,
   'Latency mode, warmup or job/check counters differ.')
  require(submitted==finished==(1000 if mode else 0),'Latency direct fence counters differ.')
- raw=bytes.fromhex(match[2]);durations=list(struct.unpack('<1000I',raw));ordered=sorted(durations)
- require(hashlib.sha256(raw).hexdigest()==match[3],'Latency sample checksum differs.')
+ raw=bytes.fromhex(match['duration_raw']);durations=list(struct.unpack('<1000I',raw));ordered=sorted(durations)
+ require(hashlib.sha256(raw).hexdigest()==match['duration_digest'],'Latency sample checksum differs.')
  require(all(0<t<=frequency for t in durations) and total_ticks==sum(durations) and
   (p50,p99,maximum)==(ordered[499],ordered[989],ordered[999]),'Latency samples or quantiles differ.')
  require(deadline-480000000<=start<end<deadline and total_ticks<=end-start and
   all(t<=total_ticks for t in (submit_ticks,acquire_ticks,irq_ticks)) and (mode or submit_ticks==acquire_ticks==irq_ticks==0),
   'Latency timing intervals or caller phases differ.')
  require(client_cpu+worker_cpu<=end-start,'Latency scheduled task counters exceed the measured window.')
- reference=bytes.fromhex(g['references'][0]);digest=match[4]
+ doorbell=None
+ require(bool(match['doorbell_values'])==doorbell_timing,'Submit-to-doorbell report/marker differs.')
+ if doorbell_timing:
+  count,db50,db99,dbmax,dbsum=(int(v,16) for v in match['doorbell_values'].split())
+  require(count==jobs and 0<db50<=db99<=dbmax<maximum and
+   500*db50+490*db99+10*dbmax>=dbsum and
+   499+490*db50+10*db99+dbmax<=dbsum<=total_ticks,
+   'Submit-to-doorbell counts, quantiles or sum differ.')
+  doorbell={'samples':count,'latency_ticks':{'p50':db50,'p99':db99,'max':dbmax},
+   'mean_ticks':dbsum/count,'sum_ticks':dbsum,
+   'latency_us':{k:v*1000000/frequency for k,v in {'p50':db50,'p99':db99,'max':dbmax}.items()},
+   'mean_us':dbsum*1000000/frequency/count,
+   'scope':'API entry through completed doorbell write and device barrier; includes local lock and queue admission' if mode else
+    'helper API entry through completed doorbell write; includes tensor copies, validation, mailbox and worker scheduling'}
+ reference=bytes.fromhex(g['references'][0]);digest=match['output_digest']
  expected=hashlib.sha256(hashlib.sha256(reference).digest()*1000).hexdigest()
  matched=digest==expected
  require(matched==(bad==0),'Latency status disagrees with output checks/hash.')
@@ -515,12 +530,12 @@ def latency_report(text,status,deadline,g):
   'controlled_negative':not matched,'jobs':total,'measured_jobs':jobs,'warmup_jobs':warmups,
   'outputs_checked':checked,'mismatches':bad,'status':status,'diagnostic_deadline':deadline,
   'first_mismatch':None if not bad else {'job':first_bad,'offset':offset,'byte':value},
-  'output_digest':digest,'duration_digest':match[3],'repeated_sequence':sequence,
+  'output_digest':digest,'duration_digest':match['duration_digest'],'repeated_sequence':sequence,
   'timing':{'frequency_hz':frequency,'start_ticks':start,'end_ticks':end,'duration_ticks':end-start,
    'duration_seconds':(end-start)/frequency,'jobs_per_second':jobs*frequency/(end-start),
    'latency_ticks':{'p50':p50,'p99':p99,'max':maximum},
    'latency_us':{k:v*1000000/frequency for k,v in {'p50':p50,'p99':p99,'max':maximum}.items()},
-   'job_duration_ticks':durations,'warmup_excluded':True,
+   'job_duration_ticks':durations,'warmup_excluded':True,'submit_to_doorbell':doorbell,
    'window':'legacy helper call' if not mode else 'input copy, output poison, tensor cache work, submit, interrupt wait, output acquire and record release',
    'total_window':'measured jobs including output comparison, digest and progress checks; warmup and close excluded',
    'task_runtime':{'client_ticks':client_cpu,'worker_ticks':worker_cpu,'combined_ticks':client_cpu+worker_cpu,
