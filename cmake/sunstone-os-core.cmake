@@ -9,6 +9,8 @@ option(SUNSTONE_A733_OS_HEADSET "OS Bluetooth headset capture service" OFF)
 option(SUNSTONE_A733_OS_MSBC "Integrated OS headset with wideband mSBC speech" OFF)
 option(SUNSTONE_A733_OS_NPU "Integrated OS with a task-bound NPU catalogue service" OFF)
 option(SUNSTONE_A733_OS_GPU "OS GPU compute queue" OFF)
+option(SUNSTONE_A733_OS_GPU_RECOVERY_TEST
+  "Withhold one completion until the ordinary job deadline in a qualification image" OFF)
 set(SUNSTONE_A733_OS_GPU_BISECT "" CACHE STRING
   "GPU diagnostic limit: constructor, firmware, jobs:N or layer:K")
 option(SUNSTONE_A733_OS_CPU_RETURN "Application result with success-only ROM return" OFF)
@@ -18,6 +20,11 @@ if(NOT SUNSTONE_A733_OS AND NOT SUNSTONE_A733_OS_CORE AND NOT SUNSTONE_A733_OS_H
   return()
 endif()
 include_guard(GLOBAL)
+if(SUNSTONE_A733_OS_GPU_RECOVERY_TEST AND
+   (NOT SUNSTONE_A733_OS_GPU OR NOT SUNSTONE_A733_OS_CPU_RETURN OR
+    NOT SUNSTONE_APPLICATION STREQUAL "gpu-lifecycle"))
+  message(FATAL_ERROR "GPU recovery qualification requires the returning GPU lifecycle image")
+endif()
 if(SUNSTONE_A733_OS_USB_CLASSES AND (SUNSTONE_A733_OS_NPU OR SUNSTONE_A733_OS_CPU_RETURN))
   message(FATAL_ERROR "USB class memory conflicts with the NPU pool; returning USB class drain is not qualified")
 endif()
@@ -282,7 +289,7 @@ if(SUNSTONE_A733_OS_GPU)
   # The GPU runtime: the service, compute queue and the A733 platform,
   # backend and firmware memory, as the accelerator image composes them. The
   # service's compute, render and free-list objects come with it.
-  list(APPEND os_added apps/os/gpu.c
+  list(APPEND os_added apps/os/gpu.c apps/os/gpu-share.c
     platform/a733/gpu_reserved.c platform/a733/gpu_queue.c platform/a733/gpu_compute_reserved.c
     platform/a733/gpu_graphics_memory.c platform/a733/gpu_memory.c platform/a733/gpu_vm_memory.c
     platform/a733/gpu_backend.c drivers/gpu/a733_gpu_power.c drivers/gpu/a733_gpu_platform.c
@@ -393,6 +400,9 @@ if(SUNSTONE_A733_OS_GPU)
   endif()
   target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_GPU_LINEAR=1)
   target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_GPU=1 ${os_gpu_bisect_definitions})
+  if(SUNSTONE_A733_OS_GPU_RECOVERY_TEST)
+    target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_GPU_RECOVERY_TEST=1)
+  endif()
   set_source_files_properties("${os_root}/drivers/gpu/a733_gpu_platform_native.c" TARGET_DIRECTORY sunstone-a733-os-core
     PROPERTIES COMPILE_OPTIONS "-iquote${os_root}/platform/a733")
 endif()
