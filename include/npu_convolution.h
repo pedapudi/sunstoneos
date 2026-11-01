@@ -25,6 +25,18 @@
 #define NPU_CONVOLUTION_INPUT_BYTES 192u
 #define NPU_CONVOLUTION_OUTPUT_BYTES 72u
 #define NPU_CONVOLUTION_COMMAND_BYTES 524288u
+#if defined(SUNSTONE_NPU_ACTIVE_CANCEL)
+#if defined(SUNSTONE_NPU_LARGE_GRAPH)
+#error "Active cancellation uses the baseline convolution profile"
+#endif
+#define NPU_CONVOLUTION_COMMANDS 3u
+#define NPU_CONVOLUTION_STREAMS 3u
+#define NPU_CONVOLUTION_WAIT_PAIRS 32768u
+#define NPU_CONVOLUTION_WAIT_BYTES (8u*NPU_CONVOLUTION_WAIT_PAIRS+16u)
+#else
+#define NPU_CONVOLUTION_COMMANDS 2u
+#define NPU_CONVOLUTION_STREAMS 2u
+#endif
 /* SUBMIT fills the job's output bytes with this word, little-endian and
  * repeated from offset zero, before the job publication cleans them to
  * memory. A byte the job does not write keeps its pattern byte, so a job
@@ -33,6 +45,9 @@
 enum npu_convolution_buffer {
     NPU_CONVOLUTION_NN, NPU_CONVOLUTION_COEFF, NPU_CONVOLUTION_COMMAND,
     NPU_CONVOLUTION_INPUT, NPU_CONVOLUTION_OUTPUT, NPU_CONVOLUTION_BOOTSTRAP,
+#if defined(SUNSTONE_NPU_ACTIVE_CANCEL)
+    NPU_CONVOLUTION_WAIT,
+#endif
 #if defined(SUNSTONE_NPU_LARGE_GRAPH)
     NPU_CONVOLUTION_POOL,NPU_CONVOLUTION_PPU,
 #endif
@@ -60,10 +75,10 @@ struct npu_convolution {
     unsigned model_index;
     struct a733_npu_buffer buffers[NPU_CONVOLUTION_BUFFERS];
     unsigned char immutable_digest[4][32];
-    size_t stream_bytes[2]; /* Command, then bootstrap payload before END fill. */
-    unsigned char stream_digest[2][32];
+    size_t stream_bytes[NPU_CONVOLUTION_STREAMS]; /* Real command, bootstrap, optional WAIT. */
+    unsigned char stream_digest[NPU_CONVOLUTION_STREAMS][32];
     struct a733_npu_native native;
-    struct a733_npu_command commands[2];
+    struct a733_npu_command commands[NPU_CONVOLUTION_COMMANDS];
     struct npu_service service;
     struct a733_npu_startup *startup;
     TaskHandle_t client;
@@ -73,6 +88,9 @@ struct npu_convolution {
     atomic_uint failed, closed;
     unsigned prepared, bound, opened, ready, output_ready;
     unsigned restarting;
+#if defined(SUNSTONE_NPU_ACTIVE_CANCEL)
+    unsigned diagnostic_job, diagnostic_canceled, diagnostic_reaped;
+#endif
     /* The latest job's timing, written by the service worker before the DONE
      * reply that a client then reads. At publication, just before the
      * trigger, and at the worker's completion observation: the NPU adapter's
@@ -120,8 +138,8 @@ enum a733_npu_platform_result npu_convolution_restart_poll(struct npu_convolutio
 void npu_convolution_restart_retain(struct npu_convolution *);
 
 /* Pre-scheduler, an initialized startup with its bootstrap task bound; one
- * live client. This constructs the deferred service with a fixed two-command
- * catalogue. Only the startup's task may activate it through
+ * live client. This constructs the deferred service with the selected fixed
+ * command catalogue. Only the startup's task may activate it through
  * npu_service_activate. Keep both tasks alive; task abandonment never
  * releases resources. */
 int npu_convolution_bind(struct npu_convolution *,struct a733_npu_startup *,
@@ -130,8 +148,9 @@ int npu_convolution_bind(struct npu_convolution *,struct a733_npu_startup *,
  * retained startup retains every acquired token and allocation. */
 enum a733_npu_platform_result npu_convolution_startup_poll(struct npu_convolution *);
 
-/* Single designated client task, finite queue waits. Only OPEN, STATUS, WAIT,
- * SUBMIT, REAP and terminal CLOSE are exposed. SUBMIT copies exactly the selected input_bytes and always selects
+/* Single designated client task, finite queue waits. OPEN, STATUS, WAIT,
+ * SUBMIT, REAP and terminal CLOSE are exposed. The active-cancellation profile
+ * also accepts CANCEL for its diagnostic job. SUBMIT copies exactly the selected input_bytes and always selects
  * command 1. Other operations require NULL/zero input. OPEN/SUBMIT require
  * finite positive microsecond deadlines; STATUS/WAIT/REAP/CLOSE use zero
  * timeout. WAIT after OPEN or SUBMIT replies once the bootstrap or job has
@@ -159,6 +178,14 @@ int npu_convolution_collect(struct npu_convolution *,uint64_t ticket,
  * explicit REAP. Refusal preserves output. Reap clears access to that result;
  * all allocations nevertheless remain reserved for the complete session. */
 int npu_convolution_output(struct npu_convolution *,void *,size_t bytes);
+#if defined(SUNSTONE_NPU_ACTIVE_CANCEL)
+/* Sole bound client, READY only. Copies the unchanged input and poisons output
+ * as SUBMIT does, but selects the immutable diagnostic command at index 2.
+ * CANCEL then uses the ordinary request queue. A canceled output is readable
+ * only after the worker's cancel acknowledgment and full-idle finish. */
+int npu_convolution_diagnostic_send(struct npu_convolution *,const void *,size_t,
+    uint64_t timeout_us,TickType_t wait,uint64_t *ticket);
+#endif
 /* Original EL1 bootstrap task only, after the client collected successful CLOSE.
  * Poll local module/bus gate and reset shutdown under the original authority.
  * READY denotes a stopped local engine, not released memory, restored PLLs,
