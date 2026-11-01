@@ -40,16 +40,17 @@ def report_transform(data, dram, case):
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    for name in ('build','bundle','model','survey','fel','output'):
+    for name in ('build','bundle','fel','output'):
         p.add_argument('--'+name,type=Path,required=True)
     p.add_argument('--case',action='append')
+    p.add_argument('--survey',type=Path,help=argparse.SUPPRESS)
+    p.add_argument('--model',type=Path,help=argparse.SUPPRESS)
     a=p.parse_args();a.output.mkdir(parents=True,exist_ok=bool(a.case))
     names=('complete-return','transport-failure-retained','invalid-report-restored',
            'changed-input-refused','incomplete-shutdown-refused')
     proof={'schema':'a733-secondary-identity-software-v1','physical_access':False,
         'manifest_sha256':host.digest(a.build/'manifest.json'),
         'host_sources':{n:host.digest(ROOT/n) for n in host.HOST_SOURCES},
-        'instruction_evidence':{'path':str(a.model.resolve()),'sha256':host.digest(a.model)},
         'host_cases':dict.fromkeys(names,True)}
     fixture=a.output/'MODEL-never-deploy.json';fixture.write_text(json.dumps(proof,indent=2)+'\n')
     accepted_path=a.output/'accepted-cases.json'

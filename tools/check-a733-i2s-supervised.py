@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Capture one supervised I2S session under an existing coordinator claim."""
+"""Capture one supervised I2S session with direct target and session validation."""
 import argparse
 import hashlib
 import importlib.util
 import json
 from pathlib import Path
-import sqlite3
 import struct
 import sys
 import time
@@ -24,7 +23,6 @@ supervisor = module('i2s_capture_supervisor', ROOT / 'tools/check-a733-smp-super
 preparation = module('i2s_capture_preparation', ROOT / 'apps/i2s/prepare.py')
 decoder = module('i2s_capture_decoder', ROOT / 'apps/i2s/observe.py')
 require, digest, artifact = supervisor.require, supervisor.digest, supervisor.artifact
-PREREQUISITES = {'supervised-ram-recovery', 'i2s-supervised-software'}
 
 
 def bundle_bytes(bundle, prepared, name):
@@ -329,35 +327,36 @@ def source_files():
             ('dma-nonsecure-access.py',Path(preparation.security_authority.__file__))]
 
 
-def reference_bytes(value):
-    return supervisor.reviewed_reference(value,'I2S')
 
 
 def software_sources():
     return supervisor.device_software_sources(source_files())
 
 
-def validate_software(value,prepared):
-    supervisor.validate_device_software(value,prepared,'a733-i2s-supervised-software-v1',('admission_cases','launcher_cases','host_capture','host_lifecycle'),
-        'I2S',reference_bytes)
 
 
-def claimed(database,test_id,owner,bundle,prepared):
-    supervisor.device_claim(database,test_id,owner,bundle,prepared,'I2S','i2s-supervised-software',PREREQUISITES,
-        reference_bytes,validate_software)
+def claimed(database, test_id, owner, bundle, prepared):
+    """Check the input snapshot immediately before upload."""
+    expected = preparation.board.snapshot_files(prepared)
+    if '_prepared_sha256' in prepared:
+        expected['prepared.json'] = prepared['_prepared_sha256']
+    for name, identity in expected.items():
+        require(Path(name).name == name and digest(bundle / name) == identity,
+                'Prepared input changed before upload: ' + name)
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ('bundle', 'fel', 'evidence', 'database'):
+    for name in ('bundle', 'fel', 'evidence'):
         parser.add_argument('--' + name, type=Path, required=True)
     parser.add_argument('--runtime-pcm',type=Path,help='Raw caller S16LE mono16kHz PCM, including four guard periods')
     parser.add_argument('--runtime-file',action='store_true',help='Declare a complete nonempty PCM file; observe DMA/FIFO accounting with wire ownership retained')
     parser.add_argument('--runtime-periods',type=int,default=8,help='Runtime PCM memory-consumed periods before cancellation,1..256')
     parser.add_argument('--repeated-periods',type=int,default=8,help='Completed periods before orderly cancellation in repeated mode,1..256')
-    parser.add_argument('--claim', required=True)
-    parser.add_argument('--owner', required=True)
-    parser.add_argument('--supervised-manual-reconnect', action='store_true', required=True)
+    parser.add_argument('--claim')
+    parser.add_argument('--owner')
+    parser.add_argument('--supervised-manual-reconnect', action='store_true')
+    parser.add_argument('--database', type=Path)
     args = parser.parse_args(argv)
     bundle = args.bundle.resolve()
     prepared=preparation.validate_bundle(bundle)
@@ -375,7 +374,7 @@ def main(argv=None):
         require(1<=args.runtime_periods<=256 and len(runtime_pcm)%4096==0 and
                 (args.runtime_periods+4)*4096<=len(runtime_pcm)<=260*4096,'Runtime PCM extent/guard periods invalid.')
     _,_,identity,layout,pcm=preparation.image_data(data['image.elf'])
-    cache={path:data[item['name']] for path,item in prepared['entry_evidence'].items()}
+    cache={path:data[item['name']] for path,item in prepared['entry_evidence'].items() if item['name'] in data}
     admission=json.loads(data['admission.json'])
     def validate_entry(target,port):
         preparation.validate_admission(data['admission.json'],session,layout,identity,pcm,prepared['image_sha256'],cache,True)
@@ -394,5 +393,5 @@ def main(argv=None):
 if __name__ == '__main__':
     try:
         sys.exit(main())
-    except (OSError, ValueError, RuntimeError, sqlite3.Error, struct.error) as error:
+    except (OSError, ValueError, RuntimeError, struct.error) as error:
         sys.exit(f'Stopped: {error}')

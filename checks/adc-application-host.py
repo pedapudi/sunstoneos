@@ -2,6 +2,7 @@
 """New adc copied-output/session binding, durability and actual access routing."""
 import argparse,hashlib,importlib.util,json,sqlite3,struct,sys,time,types
 from pathlib import Path
+from harness import artifact_refused
 from unittest.mock import patch
 from contextlib import ExitStack,nullcontext
 ROOT=Path(__file__).resolve().parents[1]
@@ -44,15 +45,75 @@ def routing(host,bundle,out,session,frame):
         stack.enter_context(patch.object(shared.subprocess,'run',lambda *a,**k:fel.append(a) or types.SimpleNamespace(returncode=0,stdout='soc=00001903(A733)',stderr='')))
         stack.enter_context(patch.object(shared,'launch_once',launch));stack.enter_context(patch.object(shared,'finish_after_observation',lambda *a:None))
         stack.enter_context(patch.object(shared.base,'stop_after_failure',lambda *a:None));stack.enter_context(patch.object(usb.core,'find',find))
-        args=['--bundle',str(bundle),'--fel',str(out/'MODEL-fel'),'--evidence',str(out/'routing-capture'),'--database',str(queue(out/'MODEL-db',port.name)),'--claim','MODEL','--owner','MODEL','--supervised-manual-reconnect']
-        # A queue bound to another port is refused before the first FEL request.
-        other=[x if x!=str(out/'routing-capture') else str(out/'other-port-capture') for x in args]
-        other[other.index('--database')+1]=str(queue(out/'other-port-db','0-0'))
-        try:host.main(other)
-        except ValueError as error:assert 'is not bound to locked USB port' in str(error) and not fel
-        else:raise AssertionError('Queue bound to another port accepted')
+        args=['--bundle',str(bundle),'--fel',str(out/'MODEL-fel'),'--evidence',str(out/'routing-capture'),'--supervised-manual-reconnect']
         assert host.main(args)==0
     assert len(calls)==1 and len(fel)==1
+
+def direct_inputs(out,image=None):
+    """Exercise direct electrical/ownership inputs and their concrete refusals."""
+    from harness import refused,CLANG,LLD
+    import copy
+    host=module('adc_direct_host',ROOT/'apps/adc/capture.py');prep=host.preparation
+    board_check=module('adc_direct_board_fixture',ROOT/'checks/board-supervised-host.py')
+    out=prep.board.unique_directory(out)
+    raw=bytearray(board_check.session(2)[0]+bytes(192))
+    struct.pack_into('<3Q',raw,592,0x4153373341444131,1,784)
+    struct.pack_into('<2Q',raw,616,83,89)
+    for offset in (632,664,696,728):raw[offset:offset+32]=bytes([7])*32
+    struct.pack_into('<2I',raw,760,0,24000000)
+    raw[769]=13;struct.pack_into('<2I',raw,776,1800000,1000)
+    target={'identity':'software-fixture','port':'no-physical-port','reservation':97}
+    def conditions(facts):
+        return {key:{**target,**dict.fromkeys(names,True)} for key,names in facts.items()}
+    record={**target,**conditions(prep.FACTS)}
+    record['electrical'].update(cldo3_uv=1800000,cldo3_selector=13,source_impedance_ohms=1000)
+    record['clocks'].update(configure_adc_clock=0,apb1=0,apb1_hz=24000000)
+    prep.session_check(raw)
+    assert len(prep.validate_admission(copy.deepcopy(record),'no-reviewed-image','no-reviewed-template',raw))==4
+    bad=copy.deepcopy(record);bad['initial']['remote_secure_writers_excluded']=False
+    refused(lambda:prep.validate_admission(bad,'','',raw),'Required ADC physical fact absent')
+    bad=copy.deepcopy(record);bad['electrical']['cldo3_uv']=3300000
+    refused(lambda:prep.validate_admission(bad,'','',raw),'ADC supply/impedance authority differs')
+    bad_raw=bytearray(raw);struct.pack_into('<I',bad_raw,760,1<<23)
+    refused(lambda:prep.session_check(bad_raw),'Invalid ADC APB1 profile')
+    lradc=bytearray(raw);struct.pack_into('<Q',lradc,600,2)
+    lr={**target,**conditions(prep.LRADC_FACTS)}
+    lr['electrical'].update(record['electrical'])
+    lr['clocks'].update(record['clocks'])
+    lr['electrical']['lradc_idle_electrical_authority']={**target,
+        'basis':'independent-board-electrical-determination','nominal_pullup_uv':1800000,
+        'documented_conversion_max_uv':1350000,'safe_idle_overrange_at_admitted_avcc':True,
+        'not_inferred_from_saturation_or_keymap':True}
+    prep.session_check(lradc);prep.validate_admission(copy.deepcopy(lr),'','',lradc)
+    lr['electrical']['lradc_idle_electrical_authority']['safe_idle_overrange_at_admitted_avcc']=False
+    refused(lambda:prep.validate_admission(lr,'','',lradc),'LRADC idle overrange lacks independent electrical authority')
+    packaged=False
+    if image is not None:
+        template=out/'session-template.bin';template.write_bytes(raw)
+        inputs=out/'inputs.json';inputs.write_text(json.dumps(record))
+        prepared=prep.prepare(image,None,inputs,template,out/'prepared',CLANG,LLD)
+        assert json.loads((out/'prepared'/'image-input-manifest.json').read_bytes())=={}
+        assert len(prepared['entry_evidence'])==4
+        artifact_refused(lambda:prep.prepare(image,None,inputs,template,out/'prepared',CLANG,LLD),out/'prepared')
+        for name in ('launch.c','launch.S','launch.ld','boot.h','launcher-build.log','launcher-commands.json','image-input-manifest.json'):
+            archived=out/'prepared'/name
+            if archived.exists():
+                archived.write_bytes(archived.read_bytes()+b'changed archived provenance')
+                prep.validate_bundle(out/'prepared')
+                archived.rename(out/('archived-'+name))
+                prep.validate_bundle(out/'prepared')
+        snapshot=host.freeze_bundle(out/'prepared')
+        assert 'launch.c' not in snapshot['_frozen'] and 'image-input-manifest.json' not in snapshot['_frozen']
+        host.claimed(None,None,None,out/'prepared',snapshot)
+        runtime=out/'prepared'/'session.bin';runtime.write_bytes(runtime.read_bytes()+b'changed')
+        refused(lambda:prep.validate_bundle(out/'prepared'),'ADC bundle input changed')
+        refused(lambda:host.claimed(None,None,None,out/'prepared',snapshot),'Prepared input changed before upload')
+        packaged=True
+    (out/'direct-input-results.json').write_text(json.dumps({'status':'PASS','physical_access':False,
+        'cases':['ADC-direct-inputs-without-schema-or-review','remote-writer-refusal','supply-mismatch-refusal',
+                 'unsupported-clock-refusal','LRADC-direct-electrical-rating','unsafe-idle-overrange-refusal','archive-mutation-and-removal-accepted','uploaded-session-mutation-refused'],
+        'packaged_without_manifest':packaged,'existing_output_refused_without_changes':packaged},indent=2)+'\n')
+    print('PASS: direct ADC/LRADC inputs retain ownership, supply, clock and overrange checks')
 
 def run(bundle,frame_path,out,routing_only=False):
  out.mkdir(parents=True,exist_ok=False);host=module('adc_host_checks',ROOT/'apps/adc/capture.py');host.preparation.validate_bundle(bundle)
@@ -90,6 +151,12 @@ def run(bundle,frame_path,out,routing_only=False):
  (out/'result.json').write_text(json.dumps(dict(status='pass',cases=['native-frame-pending-to-durable-success','frame-session-hash-refusals','durability-fault','actual-selector-discovery-routing'],physical_access=False),indent=2)+'\n')
 if __name__=='__main__':
  p=argparse.ArgumentParser(description=__doc__)
- for key in ('bundle','frame','output'):p.add_argument('--'+key,type=Path,required=True)
+ for key in ('bundle','frame'):p.add_argument('--'+key,type=Path)
+ p.add_argument('--output',type=Path,required=True)
+ p.add_argument('--inputs-only',action='store_true');p.add_argument('--image',type=Path)
  p.add_argument('--routing-only',action='store_true')
- a=p.parse_args();run(a.bundle,a.frame,a.output,a.routing_only)
+ a=p.parse_args()
+ if a.inputs_only:direct_inputs(a.output,a.image)
+ else:
+  if a.bundle is None or a.frame is None:p.error('--bundle and --frame are required for capture checks')
+  run(a.bundle,a.frame,a.output,a.routing_only)

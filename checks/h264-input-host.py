@@ -24,8 +24,30 @@ def refused(call):
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    for name in ('image','inputs','native','launcher','output'):p.add_argument('--'+name,type=Path,required=True)
-    a=p.parse_args();a.output.mkdir(exist_ok=False)
+    for name in ('image','inputs','native','launcher'):p.add_argument('--'+name,type=Path)
+    p.add_argument('--output',type=Path,required=True);p.add_argument('--inputs-only',action='store_true')
+    a=p.parse_args()
+    if a.inputs_only:
+        stream=module('h264_direct_stream',ROOT/'apps/h264/stream.py')
+        fixture=module('h264_direct_fixture',ROOT/'apps/h264/fixture.py')
+        out=stream.unique_directory(a.output)
+        clip=out/'input.h264';clip.write_bytes(fixture.construct()[0])
+        reused=out/'reused';reused.mkdir();(reused/'previous').write_bytes(b'previous input evidence')
+        try:stream.prepare_inputs(clip,reused)
+        except FileExistsError as error:assert str(reused) in str(error)
+        else:raise AssertionError('Existing generated-input destination accepted')
+        assert list(reused.iterdir())==[reused/'previous']
+        assert (reused/'previous').read_bytes()==b'previous input evidence'
+        fresh=out/'generated-inputs';manifest=stream.prepare_inputs(clip,fresh)
+        assert stream.validate_inputs(fresh,manifest)
+        frame=fresh/'frame-000.h264';frame.write_bytes(frame.read_bytes()+b'changed')
+        refused(lambda:stream.validate_inputs(fresh,manifest))
+        (out/'direct-input-results.json').write_text(json.dumps(dict(status='PASS',physical_access=False,
+            cases=['existing-output-refused-without-changes','new-inputs-validate','changed-frame-refused']),indent=2)+'\n')
+        print('PASS: H264 input generation refuses existing destinations and binds actual frame bytes')
+        return
+    if any(getattr(a,name) is None for name in ('image','inputs','native','launcher')):p.error('Capture checks require image, inputs, native and launcher')
+    a.output.mkdir(exist_ok=False)
     prepare=module('h264_prepare',ROOT/'apps/h264/prepare.py');capture=module('h264_capture',ROOT/'tools/check-a733-h264-supervised.py')
     image_hash=hashlib.sha256(a.image.read_bytes()).hexdigest()
     manifest=a.output/'image-manifest.json';manifest.write_text(json.dumps(dict(target='sunstone-a733-h264',execution_profile='h264-supervised-v1',final_elf=image_hash)))

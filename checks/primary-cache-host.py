@@ -23,8 +23,10 @@ harness = module('primary_harness', ROOT/'checks/primary-publication-host.py')
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ('build', 'bundle', 'model', 'survey', 'fel', 'output'):
+    for name in ('build', 'bundle', 'fel', 'output'):
         parser.add_argument('--'+name, type=Path, required=True)
+    parser.add_argument('--survey',type=Path,help=argparse.SUPPRESS)
+    parser.add_argument('--model',type=Path)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
     manifest = json.loads((args.build/'manifest.json').read_text())
@@ -35,6 +37,7 @@ def main():
     cases = host.CONTEXT_CASES if context else host.IRQ_CASES if interrupts else host.EL1_CASES if el1 else host.CASES
     reports = {}
     if el1:
+        assert args.model is not None, 'EL1 report fixtures are required for the EL1 decoder cases'
         model = json.loads(args.model.read_text())
         for name in ('success', 'baseline-refusal', *(['missing-irqs'] if interrupts else [])):
             path = args.model.parent/('report-'+name+'.bin')
@@ -44,7 +47,6 @@ def main():
     proof = {'schema': 'a733-primary-cache-software-v1', 'physical_access': False,
         'el1': el1, 'interrupts': interrupts, 'context': context, 'manifest_sha256': host.digest(args.build/'manifest.json'),
         'host_sources': {n: host.digest(ROOT/n) for n in host.HOST_SOURCES},
-        'instruction_evidence': {'path': str(args.model.resolve()), 'sha256': host.digest(args.model)},
         'host_cases': dict.fromkeys(cases, True)}
     fixture = args.output/'MODEL-never-deploy.json'
     fixture.write_text(json.dumps(proof, indent=2)+'\n')

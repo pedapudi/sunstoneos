@@ -2,7 +2,10 @@
 
 Status: **passed on both boards on 2026-10-31** with the helper that runs
 the PHY microcontroller clock for its readback after `init_DRAM` (below).
-`tools/run-ddr.py` now restores by default
+The SID-selected default also passed twice on port 3-1, with quick checks
+of 34.116 and 34.117 ms, under
+`~/.cache/sunstoneos/evidence/dram-default-board-1031/`.
+`tools/run-ddr.py` restores by default
 ([records runbook](dram-restore-records.md)). March C- on a restored boot
 and the qualification below remain. The record builder,
 SRAM restore helper and runner are implemented. The runner falls back

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Load native USB diagnostics once, exercise the channel, and return to FEL."""
 import argparse
-import fcntl
+from contextlib import contextmanager
 import hashlib
 import importlib.util
 import json
@@ -14,6 +14,9 @@ import time
 import usb.core
 import usb.util
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from host_evidence import unique_directory
+
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = Path.home() / ".cache/sunstoneos"
 parser = argparse.ArgumentParser(description=__doc__)
@@ -24,13 +27,16 @@ args = parser.parse_args()
 image = args.image.read_bytes()
 if not image or len(image) > 0x100000:
     sys.exit("Runtime image exceeds its load interval.")
-args.evidence.mkdir(parents=True, exist_ok=False)
+args.evidence = unique_directory(args.evidence)
 record = dict(image_sha256=hashlib.sha256(image).hexdigest(),
               fel_sha256=hashlib.sha256(args.fel.read_bytes()).hexdigest(),
               transactions=[], complete=False)
 spec = importlib.util.spec_from_file_location("access", ROOT / "tools/usb-access.py")
 access = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(access)
+spec = importlib.util.spec_from_file_location("diagnostic_base", ROOT / "tools/check-a733-smp.py")
+base = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(base)
 sys.path.insert(0, str(ROOT / "tools"))
 import usb_guard
 
@@ -39,14 +45,14 @@ def save():
     (args.evidence / "session.json").write_text(json.dumps(record, indent=2) + "\n")
 
 
-def fel(*arguments):
+def fel(*arguments, pass_fds=()):
     if access.identity(node) != identity:
         raise RuntimeError("FEL node identity changed.")
     item = dict(protocol="fel", arguments=list(map(str, arguments)))
     record["transactions"].append(item)
     save()
     r = subprocess.run([str(args.fel), "-d", f"{int(node.parent.name)}:{int(node.name)}",
-                        *map(str, arguments)], capture_output=True, text=True, timeout=30)
+                        *map(str, arguments)], capture_output=True, text=True, timeout=30, pass_fds=pass_fds)
     item.update(exit=r.returncode, stdout=r.stdout, stderr=r.stderr)
     save()
     if r.returncode:
@@ -96,9 +102,22 @@ def message(command, payload=b""):
     return response[16:]
 
 
+@contextmanager
+def retained_board():
+    with access.board_lock() as target:
+        try:
+            yield target
+        except BaseException as error:
+            if record.get('dram_probe_dirty'):
+                base.stop_after_failure(record, save,
+                    lambda: access.quarantine_instance(target, 'DRAM restoration is unverified; recovery required.', identity),
+                    error)
+            raise
+
+
 try:
     usb_guard.check_health()
-    with access.board_lock() as node:
+    with retained_board() as node:
         access.require_session(node)
         access.require_rom(node)
         identity = access.identity(node)
@@ -110,8 +129,7 @@ try:
         if "soc=00001903(A733)" not in fel("version"):
             raise RuntimeError("Unexpected target.")
         fel("read", "0x42000000", "128", args.evidence / "before.bin")
-        if struct.unpack_from("<I", (args.evidence / "before.bin").read_bytes())[0] != 0x534b4552:
-            raise RuntimeError("Establish the physical kernel check before native USB loading.")
+        base.verify_dram(fel, args.evidence, record, save)
         blank = bytearray(20480)
         struct.pack_into("<Q", blank, 80, 2)
         (args.evidence / "blank.bin").write_bytes(blank)

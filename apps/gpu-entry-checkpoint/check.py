@@ -5,6 +5,9 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import sys
+sys.path.insert(0,str(Path(__file__).resolve().parents[2]/"tools"))
+from host_evidence import unique_directory
 import re
 import struct
 import subprocess
@@ -28,7 +31,7 @@ parser.add_argument('--build', type=Path, required=True)
 parser.add_argument('--output', type=Path, required=True)
 parser.add_argument('--return-only', action='store_true', help='Reuse the accepted unchanged empty-resource cases')
 parser.add_argument('--cases', nargs='+', choices=('normal','wrong-caller','expired-publication','late-irq','late-irq-during-restore'), default=['normal','wrong-caller','expired-publication'])
-args = parser.parse_args(); args.output.mkdir(parents=True, exist_ok=False)
+args = parser.parse_args(); args.output=unique_directory(args.output)
 path = args.build / 'build/checkpoint.elf'; image = prior.layout.Image(path); image.path = path; image.ops = {}
 for line in subprocess.check_output(['/usr/lib/llvm-21/bin/llvm-objdump', '-d', '--no-show-raw-insn', str(path)], text=True).splitlines():
     match = re.match(r'^\s*([0-9a-f]+):\s+(.+)$', line)

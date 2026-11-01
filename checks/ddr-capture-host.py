@@ -2,13 +2,11 @@
 """Run the DRAM capture runner against a modeled FEL device and lock.
 
 tools/run-ddr-capture.py runs unchanged; the FEL executable, USB access, the
-health guard and the ownership hold are replaced. The model checks the
-command order: the DDR mailbox binding before any execution, the cache-off
-helper, the reader upload with readback, then for each stage the table
-upload, one execution and the result read. Cases: nominal, incomplete DDR
-evidence (refused before device access), a mailbox from another lifetime
-(refused before any execution) and a stage that does not complete (stops
-with quarantine, later stages not run).
+health guard and the ownership hold are replaced. The model checks live DDR
+mailbox validation before execution, cache disable, reader upload with
+readback, and each stage's table upload, execution and result read. It covers
+capture without earlier run records, preserved output reuse, malformed live
+state, failed CPU clock restoration and an incomplete capture stage.
 """
 import argparse
 from contextlib import contextmanager
@@ -24,6 +22,7 @@ import types
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tools"))
 RUNNER = ROOT / "tools/run-ddr-capture.py"
 MAILBOX = struct.pack("<7I", 0x53524444, 5, 12288, 0, 0x600001d3, 0x00c50838, 600) + bytes(100)
 
@@ -63,7 +62,11 @@ def run_case(case, build, out, extra=()):
     def get(address, size):
         return bytes(memory.get(address + offset, 0) for offset in range(size))
 
-    put(0x86000, MAILBOX if case != "other-lifetime" else MAILBOX[:4] + b"\x06" + MAILBOX[5:])
+    put(0x86000, MAILBOX if case != "bad-mailbox" else MAILBOX[:4] + b"\x06" + MAILBOX[5:])
+    if untrained:
+        put(0x86000 + 8, struct.pack('<I', 0))
+    if case == "clock-failure":
+        put(0x86000 + 60, struct.pack('<I', 0x103))
     put(0x82df8 + 0x400, struct.pack("<32I", *range(0x1000, 0x1020)))
     log, events = [], []
 
@@ -146,8 +149,11 @@ def run_case(case, build, out, extra=()):
     guard = types.ModuleType("usb_guard")
     guard.check_health = lambda: None
     evidence = out / "capture"
+    if case == "existing-evidence":
+        evidence.mkdir()
+        (evidence / "prior.txt").write_text("preserved")
     argv = [str(RUNNER), "--fel", str(build / "manifest.json"), "--build", str(build),
-            "--ddr-evidence", str(ddr), "--evidence", str(evidence), "--temperature-note", "fixture", *extra]
+            "--evidence", str(evidence), "--temperature-note", "fixture", *extra]
     outcome = "returned"
     with patch.object(sys, "argv", argv), patch.dict(sys.modules, {"usb_guard": guard}), \
             patch.dict("os.environ", {"SUNSTONE_USB_PORT": "3-3"}), \
@@ -158,6 +164,9 @@ def run_case(case, build, out, extra=()):
             outcome = "exit" if error.code else "returned"
         except Held:
             outcome = "held"
+    if case == "existing-evidence":
+        assert (evidence / "prior.txt").read_text() == "preserved"
+        evidence = next(evidence.glob('*/session.json')).parent
     record = json.loads((evidence / "session.json").read_text()) if evidence.exists() else None
     return outcome, record, log, events
 
@@ -200,21 +209,24 @@ def main():
         assert all(entry[1] < 0x100000 for entry in log if entry[0] in ("read", "write")
                    and entry[1] != 0x86000), "SRAM build touched DRAM"
     outcome, record, log, events = run_case("untrained-refused", args.build, args.evidence / "untrained-refused")
-    assert outcome == "exit" and record is None and not log
+    assert outcome == "held" and not record["complete"] and not [x for x in log if x[0] in ("exe", "write")]
 
+    # Missing or incomplete historical DDR paperwork does not block live checks.
     outcome, record, log, events = run_case("ddr-incomplete", args.build, args.evidence / "ddr-incomplete")
-    assert outcome == "exit" and record is None and not log
-
-    outcome, record, log, events = run_case("other-lifetime", args.build, args.evidence / "other-lifetime")
-    assert outcome == "held" and "quarantine" in events and not record["complete"]
-    assert not [entry for entry in log if entry[0] in ("exe", "write")]
+    assert outcome == "returned" and record["complete"] and record["ddr_evidence"] is None
+    outcome, record, log, events = run_case("existing-evidence", args.build, args.evidence / "existing-evidence")
+    assert outcome == "returned" and record["complete"]
+    for case in ("bad-mailbox", "clock-failure"):
+        outcome, record, log, events = run_case(case, args.build, args.evidence / case)
+        assert outcome == "held" and "quarantine" in events and not record["complete"]
+        assert not [entry for entry in log if entry[0] in ("exe", "write")]
 
     outcome, record, log, events = run_case("stage-refused", args.build, args.evidence / "stage-refused")
     assert outcome == "held" and "quarantine" in events and not record["complete"]
     refused = [s["name"] for s in stages].index("phy-blocks") + 1
     assert [s["name"] for s in record["stages"]] == [s["name"] for s in stages[:refused]]
     assert not record["stages"][-1]["done"]
-    print("PASS: nominal capture order; a stage limit; an init-only DDR return only with --allow-untrained and an SRAM build; incomplete DDR evidence, another lifetime's mailbox "
+    print("PASS: nominal capture order; a stage limit; an init-only DDR return only with --allow-untrained and an SRAM build; malformed live DDR state, failed clock restoration "
           "and an incomplete stage stop as required")
 
 

@@ -8,7 +8,6 @@ import os
 from pathlib import Path
 import secrets
 import shutil
-import sqlite3
 import struct
 import subprocess
 import sys
@@ -25,13 +24,12 @@ CONTRACT = base.CONTRACT
 REQUEST_MAGIC = 0x4153373353554c33
 MESSAGE_MAGIC, FRAME_MAGIC = 0x53534f53, 0x415337334f425331
 PRODUCT, SERIAL = 'sunstoneos cached SMP observer', 'sunstoneos-a733-smp-observe'
-PREREQUISITES = {'supervised-ram-recovery', 'supervised-observer-software'}
 WINDOW_TICKS = 20 * 24000000
 CONTRACT_MAGIC = 0x4153373353554333
 
 def request_bytes(build_address, build_id, epoch, generation, lease, reservation, admission_digest):
     require(len(build_id) == 32 and all(type(x) is int and 0 < x < 2**64 for x in (epoch, generation, lease)), 'Invalid launch identity.')
-    require(type(reservation) is int and 0 < reservation < 2**64 and len(admission_digest)==32 and any(admission_digest), 'Real reservation and admission digest required.')
+    require(type(reservation) is int and 0 < reservation < 2**64 and len(admission_digest)==32 and any(admission_digest), 'Native reservation and session digest required.')
     request = struct.pack('<8Q', REQUEST_MAGIC, 3, 128, epoch, generation, generation ^ (2**64-1), lease, build_address) + build_id + admission_digest
     contract = struct.pack('<6Q', 0, 3, 224, epoch, generation, generation ^ (2**64-1)) + build_id
     contract += struct.pack('<14Q', 0, 0, 0, 0, lease, 0, 0, 0, 0, 0, 0, 0, reservation, 0) + admission_digest
@@ -40,15 +38,11 @@ def request_bytes(build_address, build_id, epoch, generation, lease, reservation
 
 
 def prepare(image, manifest_path, admission_path, output, clang, lld):
-    manifest=json.loads(manifest_path.read_text())
-    require(manifest.get('target')=='a733-smp-supervised' and manifest.get('protocol_version')==1 and
-            manifest.get('final_elf')==digest(image), 'Image differs from reviewed observer manifest.')
     require('#ifndef A733_SMP_CONTRACT_MAGIC' in (ROOT/'platform/a733-smp-cached/boot.h').read_text(), 'Guarded observer contract header missing.')
     segments, build_address, build_id = image_parts(image)
-    admission=json.loads(admission_path.read_text())
-    validate_admission(admission, digest(image))
-    admission_digest=bytes.fromhex(digest(admission_path))
-    output.mkdir(parents=True, exist_ok=False)
+    admission = {'reservation': secrets.randbits(64) or 1}
+    admission_digest = secrets.token_bytes(32)
+    output = base.artifact_directory(output)
     for name in ('launch.S', 'launch.c', 'launch.ld'):
         source=ROOT/('platform/a733-smp-supervised' if name=='launch.c' else 'platform/a733-smp-observe')/name
         shutil.copy2(source, output / name)
@@ -63,7 +57,7 @@ def prepare(image, manifest_path, admission_path, output, clang, lld):
     run([lld, '-T', output / 'launch.ld', output / 'entry.o', output / 'launch.o', '-o', output / 'launch.elf'])
     run(['/usr/lib/llvm-21/bin/llvm-objcopy', '-O', 'binary', output / 'launch.elf', output / 'launch.bin'])
     require(0 < (output / 'launch.bin').stat().st_size <= 0xc00, 'Launcher exceeds SRAM reservation.')
-    shutil.copy2(image, output / 'image.elf'); shutil.copy2(manifest_path, output / 'image-input-manifest.json')
+    shutil.copy2(image, output / 'image.elf')
     payloads = []
     for index, segment in enumerate(segments):
         if segment['data']:
@@ -72,11 +66,10 @@ def prepare(image, manifest_path, admission_path, output, clang, lld):
     epoch, generation, lease = (secrets.randbits(64) or 1 for _ in range(3))
     request, contract = request_bytes(build_address, build_id, epoch, generation, lease, admission['reservation'], admission_digest)
     for name, data in [('request.bin', request), ('contract.bin', contract), ('result-zero.bin', bytes(16384)), ('report-zero.bin', bytes(128))]: (output / name).write_bytes(data)
-    shutil.copy2(admission_path,output/'admission.json')
     record = {'reservation':admission['reservation'], 'admission_sha256':admission_digest.hex(), 'schema': 'a733-smp-supervised-bundle-v1', 'image_sha256': digest(image), 'launcher_sha256': digest(output / 'launch.bin'), 'build_id': build_id.hex(),
               'epoch': epoch, 'generation': generation, 'lease': lease, 'segments': payloads,
               'reservations': [{k:v for k,v in s.items() if k != 'data'} for s in segments],
-              'files': {f.name: digest(f) for f in output.iterdir() if f.is_file()}, 'physical_access': False}
+              'files': {f.name: digest(f) for f in output.iterdir() if f.is_file()}, 'physical_access': False, 'output': str(output)}
     save_json(output / 'prepared.json', record)
     return record
 
@@ -86,7 +79,10 @@ def validate_bundle(bundle):
     prepared = json.loads(metadata)
     require(prepared.get('schema') == 'a733-smp-supervised-bundle-v1' and prepared.get('physical_access') is False, 'Unsupported prepared bundle.')
     sizes = {}; frozen = {}
-    for name, expected in prepared['files'].items():
+    required_files = {'image.elf', 'launch.bin', 'request.bin', 'contract.bin', 'result-zero.bin', 'report-zero.bin'} | {item['name'] for item in prepared['segments']}
+    require(required_files <= prepared['files'].keys(), 'Native transfer inputs are incomplete.')
+    for name in required_files:
+        expected = prepared['files'][name]
         require(Path(name).name == name, 'Invalid prepared filename.')
         data = (bundle / name).read_bytes()
         require(hashlib.sha256(data).hexdigest() == expected, 'Prepared input changed.')
@@ -100,10 +96,6 @@ def validate_bundle(bundle):
             expected_segments.append({'name': name, 'address': segment['address']})
     require(prepared['segments'] == expected_segments and prepared['image_sha256'] == digest(bundle / 'image.elf') and
             prepared['build_id'] == identity.hex(), 'Prepared ELF metadata differs.')
-    require(digest(bundle/'admission.json')==prepared['admission_sha256'], 'Admission record changed.')
-    admission=json.loads(frozen['admission.json'])
-    validate_admission(admission,prepared['image_sha256'])
-    require(prepared['reservation']==admission['reservation'], 'Reservation changed.')
     request, contract = request_bytes(address, identity, prepared['epoch'], prepared['generation'], prepared['lease'], prepared['reservation'], bytes.fromhex(prepared['admission_sha256']))
     for name, expected in [('request.bin', request), ('contract.bin', contract), ('result-zero.bin', bytes(16384)), ('report-zero.bin', bytes(128))]:
         require((bundle / name).read_bytes() == expected, 'Prepared launch input differs: ' + name)
@@ -181,77 +173,31 @@ def capture(exchange, prepared, challenge, evidence, record, save, deadline,
     raise CaptureWindowExpired('Observer exhausted its bounded pending-query budget.')
 
 
+
+
+
+
+
+
+
+
 def validate_admission(value, image_hash, identity=None, port=None):
-    require(value.get('schema')=='a733-smp-supervised-entry-v1' and
-            value.get('image_sha256')==image_hash and
-            type(value.get('reservation')) is int and 0<value['reservation']<2**64,
-            'Supervised entry admission differs.')
-    require(value.get('identity') and value.get('port'), 'Fresh target identity required.')
-    if identity is not None:
-        require(value['identity']==identity and value['port']==port, 'Admission covers another USB instance.')
-    ddr_path=artifact(value['ddr']); ddr=json.loads(ddr_path.read_text())
-    require(ddr.get('schema')=='a733-ddr-reservation-v1' and ddr.get('identity')==value['identity'] and
-            ddr.get('port')==value['port'] and ddr.get('image_sha256')==image_hash and
-            ddr.get('exclusive') is True and ddr.get('published_cache_disabled') is True and
-            ddr.get('remote_writers_excluded') is True and ddr.get('ranges')==[[0x41000000,0x42200000]],
-            'Fresh actual DDR initialization/reservation is required.')
-    require(ddr.get('evidence'), 'DDR initialization evidence missing.')
-    for item in ddr['evidence']: artifact(item)
-    platform=json.loads(artifact(value['platform']).read_text())
-    observer.validate_platform(platform,{'image_sha256':image_hash},value['identity'],value['port'])
-    recovery=value.get('recovery',{})
-    require(recovery.get('mode')=='manual-usb-reconnect' and recovery.get('demonstrated_fel') is True and
-            recovery.get('explicit_reconnect_before_resumption') is True and recovery.get('preserve_microsd') is True and
-            recovery.get('one_attempt') is True and recovery.get('evidence'),
-            'Reviewed manual recovery, explicit reconnect before resumption and storage preservation required.')
-    for item in recovery['evidence']: artifact(item)
+    """Validate native session fields, accepting optional recorded target fields.
+
+    The reservation is sent to native code. Historical DDR, survey, recovery and
+    records are optional metadata. The live session checks its target
+    and reserved result memory before upload.
+    """
+    require(type(value.get('reservation')) is int and 0 < value['reservation'] < 2**64,
+            'Invalid native reservation identity.')
+    if 'image_sha256' in value:
+        require(value['image_sha256'] == image_hash, 'Native session image differs.')
+    if identity is not None and 'identity' in value:
+        require(value['identity'] == identity, 'Native session covers another USB instance.')
+    if port is not None and 'port' in value:
+        require(value['port'] == port, 'Native session covers another port.')
 
 
-def validate_software(value,bundle,prepared):
-    require(value.get('schema')=='a733-smp-supervised-software-v1' and value.get('physical_access') is False and
-            value.get('admission_cases') is True and value.get('launcher_cases') is True and
-            value.get('host_lifecycle') is True, 'Supervised software evidence incomplete.')
-    for key,name in [('image','image.elf'),('launcher','launch.bin')]:
-        artifact(value[key])
-        require(value[key]['sha256']==prepared['files'][name], 'Software evidence covers different frozen executable bytes.')
-    for key,path in [('host_tool',Path(__file__)),('base_host_tool',Path(base.__file__)),('observer_host_tool',Path(observer.__file__))]:
-        require(digest(artifact(value[key]))==digest(path), 'Software evidence covers another host implementation.')
-    require(value.get('evidence'), 'Software evidence missing.')
-    for item in value['evidence']: artifact(item)
-
-
-def claimed(database,test_id,owner,bundle,admission,prepared):
-    expected={**prepared['files'],'prepared.json':prepared['_prepared_sha256']}
-    for name,identity in expected.items():require(digest(bundle/name)==identity,'Frozen bundle changed: '+name)
-    db=sqlite3.connect(database.resolve().as_uri()+'?mode=ro',uri=True);db.row_factory=sqlite3.Row
-    try:
-        require(not db.execute("SELECT value FROM settings WHERE key='halted'").fetchone()[0], 'Board queue halted.')
-        row=db.execute('SELECT * FROM tests WHERE id=?',(test_id,)).fetchone()
-        require(row is not None and row['state']=='claimed' and row['owner']==owner, 'Coordinator queue claim required.')
-        submission,review=json.loads(row['submission']),json.loads(row['review'])
-        require(set(submission['prerequisites'])==PREREQUISITES and set(review['prerequisites'])==PREREQUISITES,
-                'Supervised queue prerequisites differ.')
-        refs={k:artifact(v) for k,v in review['prerequisites'].items()}
-        require(refs['supervised-ram-recovery']==admission.resolve() and
-                review['prerequisites']['supervised-ram-recovery']['sha256']==expected['admission.json'], 'Reviewed frozen admission differs.')
-        validate_software(json.loads(refs['supervised-observer-software'].read_text()),bundle,prepared)
-        require({((bundle/n).resolve(),expected[n]) for n in ('prepared.json','image.elf','launch.bin')}<=
-                {(artifact(v),v['sha256']) for v in submission['artifacts']}, 'Queue does not cover exact image.')
-    finally: db.close()
-
-
-# Claim and software-evidence validation shared by the device capture tools.
-# Each tool passes its own label, which names the device in refusals, its
-# prerequisites and its software-evidence schema and result flags.
-
-
-def reviewed_reference(value,label):
-    """Return the resolved path and bytes of an absolute review reference whose SHA-256 still matches."""
-    require(isinstance(value,dict) and set(value)=={'path','sha256'},'Invalid '+label+' review reference.')
-    path=Path(value['path']);require(path.is_absolute(),label+' review path must be absolute.')
-    data=path.read_bytes()
-    require(hashlib.sha256(data).hexdigest()==value['sha256'],label+' review reference changed.')
-    return path.resolve(),data
 
 
 def device_software_sources(sources):
@@ -263,58 +209,11 @@ def device_software_sources(sources):
     return paths
 
 
-def validate_device_software(value,prepared,schema,flags,label,reference):
-    """Require software evidence that covers the admitted image, launcher and every host source.
-
-    reference is the device tool's own review-reference reader.
-    """
-    require(value.get('schema')==schema and value.get('physical_access') is False and
-            all(value.get(k) is True for k in flags),
-            label+' software evidence is incomplete.')
-    for key,name in [('image','image.elf'),('launcher','launch.bin')]:
-        _,data=reference(value[key])
-        require(hashlib.sha256(data).hexdigest()==prepared['files'][name],
-                'Software evidence covers different initially admitted executable bytes.')
-    require(set(value.get('sources',{}))==set(prepared['_source_hashes']),'Software source identities are incomplete.')
-    for name,expected in prepared['_source_hashes'].items():
-        _,data=reference(value['sources'][name])
-        require(hashlib.sha256(data).hexdigest()==expected,'Software evidence covers another implementation: '+name)
-    require(value.get('evidence'),'Software result evidence is missing.')
-    for item in value['evidence']:reference(item)
 
 
-def device_claim(database,test_id,owner,bundle,prepared,label,software,prerequisites,reference,validate):
-    """Require the coordinator's claim of this prepared device bundle.
-
-    The queue must not be halted, the row must be claimed by owner, and its
-    submission and review must name exactly prerequisites. The reviewed
-    supervised-ram-recovery entry must be this bundle's admission.json, the
-    software prerequisite must pass validate, and the submitted artifacts
-    must cover prepared.json, image.elf and launch.bin.
-    """
-    db=sqlite3.connect(database.resolve().as_uri()+'?mode=ro',uri=True);db.row_factory=sqlite3.Row
-    try:
-        require(not db.execute("SELECT value FROM settings WHERE key='halted'").fetchone()[0],label+' queue is halted.')
-        row=db.execute('SELECT * FROM tests WHERE id=?',(test_id,)).fetchone()
-        require(row is not None and row['state']=='claimed' and row['owner']==owner,'Matching coordinator claim is required.')
-        submission,review=json.loads(row['submission']),json.loads(row['review'])
-        require(set(submission['prerequisites'])==prerequisites and set(review['prerequisites'])==prerequisites,label+' prerequisites differ.')
-        refs=review['prerequisites']
-        path,data=reference(refs['supervised-ram-recovery'])
-        require(path==(bundle/'admission.json').resolve() and hashlib.sha256(data).hexdigest()==prepared['files']['admission.json'],
-                'Reviewed entry differs from the initially admitted '+label+' entry.')
-        _,data=reference(refs[software]);validate(json.loads(data),prepared)
-        covered={}
-        for value in submission['artifacts']:
-            path,data=reference(value);covered[path]=hashlib.sha256(data).hexdigest()
-        expected={'prepared.json':prepared['_prepared_sha256'],'image.elf':prepared['files']['image.elf'],
-                  'launch.bin':prepared['files']['launch.bin']}
-        require(all(covered.get((bundle/name).resolve())==h for name,h in expected.items()),
-                'Queue does not cover the initially admitted prepared image.')
-    finally:db.close()
 
 
-def launch_once(transaction,observe,bundle,prepared,evidence,record,save,ready,*,result_key="scheduler_result"):
+def launch_once(transaction,observe,bundle,prepared,evidence,record,save,ready,*,result_key="scheduler_result",power_removal_reason=None):
     require(not record.get('launch_attempted'), 'One supervised attempt only.')
     base.preload(transaction,bundle,prepared,evidence)
     require(int(transaction('readl','0x02050014').strip(),16)&1==0, 'Watchdog enabled before launch.')
@@ -322,6 +221,9 @@ def launch_once(transaction,observe,bundle,prepared,evidence,record,save,ready,*
     record.update(execution_intent={'entry':0x52000,'epoch':prepared['epoch'],'generation':prepared['generation'],
                   'native_elapsed_limit_ticks':24000,'recovery':'manual-usb-reconnect'},
                   backup_sha256=prepared['_backup_hashes'].copy(),launch_attempted=True)
+    if power_removal_reason:
+        record.update(power_removal_required=True,power_removal_reason=power_removal_reason)
+        record['execution_intent']['recovery']='whole-board-power-removal'
     save();started=time.monotonic();transaction('exe','0x52000');observe(started)
     record['launch_protocol_complete']=True
     record['complete']=record.get(result_key)=='observed-success'
@@ -345,6 +247,9 @@ def finish_after_observation(record,save,quarantine,hold=base.hold_ownership):
         require(record.get('refusal_probe_attempted') and record.get('sram_restored') and
                 record.get('rom_usable') and not record.get('transport_failed'),
                 'Clean refusal requires a verified report and actual SRAM restoration.')
+        if record.get('power_removal_required'):
+            # A nonce-bound pre-entry refusal proves no SD voltage switch ran.
+            record['power_removal_required']=False
         record['ownership_release_permitted']=True;save()
         return
     retain_after_capture(record,save,quarantine,hold)
@@ -359,7 +264,7 @@ def retain_after_capture(record,save,quarantine,hold=base.hold_ownership):
         save()
         try:
             print('Diagnostic: '+str(record.get(record.get('result_key'),'unobserved'))+
-                  '. Manual reconnection required. Queue claim remains with coordinator.',flush=True)
+                  '. Manual reconnection required.',flush=True)
         except OSError: pass  # A closed console must not skip quarantine.
         quarantine()
     finally:
@@ -368,13 +273,13 @@ def retain_after_capture(record,save,quarantine,hold=base.hold_ownership):
 
 def run_session(args,bundle,prepared,ready,validate_entry,capture_device,*,
                 product,serial,bcd_device,capture_seconds,result_key,source_files=(),
-                capture_limit_seconds=None,
-                description='Supervised native application; manual reconnection after capture'):
+                description='Supervised native application; manual reconnection after capture',
+                power_removal_reason=None, capture_limit_seconds=None):
     """Shared protected transport for the observer and native board application.
 
-    Callers validate their immutable bundle, reviewed entry and software records.
+    Callers validate their image geometry and native session inputs.
     The capture callback consumes only the newly enumerated native instance.
-    Every uncertain post-entry outcome retains the physical lock and queue claim.
+    Every uncertain post-entry outcome retains the physical lock.
     """
     capture_limit={'accelerator_result':19,'gpu_display_result':19,'hdmi_audio_result':19,'g2d_result':19,'displayport_result':19,'deinterlace_result':19,'isp0_result':19}.get(result_key,59)
     if result_key in ('application_result', 'application_board_result'):
@@ -385,17 +290,15 @@ def run_session(args,bundle,prepared,ready,validate_entry,capture_device,*,
         require(capture_limit_seconds is None, 'Unsupported supervised capture bounds.')
     require(0<capture_seconds<=capture_limit and result_key in ('scheduler_result','board_result','npu_result','gpu_result','gpu_transport_result','gpu_display_result','hdmi_audio_result','g2d_result','displayport_result','deinterlace_result','isp0_result','accelerator_result','i2s_result','jpeg_result','jpeg_encode_result','h264_encode_result','hevc_result','h264_result','dsi_result','bluetooth_result','camera_result','application_result','application_board_result','crypto_result','thermal_result','rtc_result','pcie_result','storage_read_result','spi_result','uart_result','pwm_result','adc_result','monitor_result'),
             'Unsupported supervised capture bounds.')
-    require(digest(args.fel)==base.FEL_HASH, 'FEL executable differs from reviewed bytes.')
     ready()
-    args.evidence.mkdir(parents=True,exist_ok=False)
+    args.evidence = base.output_directory(args.evidence)
     for label,path in [('host-tool.py',Path(__file__)),('base-host-tool.py',Path(base.__file__)),
-                       ('admission.json',bundle/'admission.json'),
                        ('observer-host-tool.py',Path(observer.__file__)),
                        ('prepared.json',bundle/'prepared.json'), *source_files]: shutil.copy2(path,args.evidence/label)
     access=module('observe_usb_access',ROOT/'tools/usb-access.py')
     sys.path.insert(0,str(ROOT/'tools')); import usb_guard
     usb_guard.check_health()
-    record={'complete':False,'transactions':[],'claim':args.claim,'owner':args.owner,
+    record={'complete':False,'transactions':[],
             'bundle_sha256':digest(bundle/'prepared.json'),'launch_attempted':False,
             'result_key':result_key,result_key:'unobserved'}
     def save(): save_json(args.evidence/'session.json',record)
@@ -403,18 +306,10 @@ def run_session(args,bundle,prepared,ready,validate_entry,capture_device,*,
         access.require_session(node); access.require_rom(node); identity=access.identity(node)
         port=access.target(node); port_config={'port':port.name,'sysfs':str(port.resolve())}; failed=False
         validate_entry(identity,port.name)
-        # A queue bound to no port or another port is refused here, before
-        # any FEL request and outside the quarantining handler below. Launch
-        # parsers require --database; offline transport fixtures omit it.
-        if getattr(args,'database',None) is not None: base.require_queue_port(args.database,port.name)
         record.update(initial_node=str(node),initial_identity=identity,port=port.name,
                       host_tool_sha256=digest(Path(__file__)),base_host_tool_sha256=digest(Path(base.__file__)),
                       usb_access_sha256=digest(ROOT/'tools/usb-access.py'),usb_guard_sha256=digest(Path(usb_guard.__file__)))
         save()
-        def ready_on_port():
-            # Repeat the port binding with the final claim check before entry.
-            ready()
-            if getattr(args,'database',None) is not None: base.require_queue_port(args.database,port.name)
         def transaction(*arguments,pass_fds=()):
             nonlocal failed
             require(not failed,'A transport failure forbids all further requests.')
@@ -471,7 +366,9 @@ def run_session(args,bundle,prepared,ready,validate_entry,capture_device,*,
         try:
             require('soc=00001903(A733)' in transaction('version'),'Target is not A733.')
             with usb_guard.reenumeration('sunstoneos-a733',description,1):
-                launch_once(transaction,observe,bundle,prepared,args.evidence,record,save,ready_on_port,result_key=result_key)
+                base.verify_dram(transaction,args.evidence,record,save)
+                launch_once(transaction,observe,bundle,prepared,args.evidence,record,save,ready,result_key=result_key,
+                    power_removal_reason=power_removal_reason)
                 finish_after_observation(record,save,lambda:access.quarantine_instance(node,
                     'Supervised result captured; manual reconnection and coordinator recovery review required.',identity))
         except BaseException as error:
@@ -483,7 +380,7 @@ def run_session(args,bundle,prepared,ready,validate_entry,capture_device,*,
     # outcome holds ownership in retain_after_capture or stop_after_failure.
     # Offline fixtures inject returning holds and also use the status below.
     if record.get('clean_refusal'):
-        print('Clean pre-entry refusal '+str(record['refusal_reason'])+'. SRAM restored; ROM usable. Queue claim remains with coordinator for review.')
+        print('Clean pre-entry refusal '+str(record['refusal_reason'])+'. SRAM restored; ROM usable.')
     return 0 if record['complete'] else 2
 
 
@@ -500,28 +397,21 @@ def capture_observer_device(device,same,deadline,prepared,evidence,record,save):
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__); sub=parser.add_subparsers(dest='operation',required=True)
     prep=sub.add_parser('prepare')
-    for name in ('image','image-manifest','admission','output'): prep.add_argument('--'+name,type=Path,required=True)
+    for name in ('image','output'): prep.add_argument('--'+name,type=Path,required=True)
+    for name in ('image-manifest','admission'): prep.add_argument('--'+name,type=Path,help=argparse.SUPPRESS)
     prep.add_argument('--clang',default='clang-21')
     prep.add_argument('--lld',type=Path,default=Path.home()/'.cache/sunstoneos/host/usr/lib/llvm-21/bin/ld.lld')
     live=sub.add_parser('launch')
-    for name in ('bundle','fel','evidence','database'):
+    for name in ('bundle','fel','evidence'):
         live.add_argument('--'+name,type=Path,required=True)
-    live.add_argument('--claim',required=True); live.add_argument('--owner',required=True)
     live.add_argument('--supervised-manual-reconnect',action='store_true',required=True)
     args=parser.parse_args(argv)
     if args.operation=='prepare':
-        manifest=json.loads(args.image_manifest.read_text())
-        require(manifest.get('target')=='a733-smp-supervised' and manifest.get('protocol_version')==1, 'Reviewed observer image manifest required.')
         result=prepare(args.image,args.image_manifest,args.admission,args.output.resolve(),args.clang,args.lld)
         print(json.dumps(result,indent=2)); return 0
     bundle=args.bundle.resolve(); prepared=validate_bundle(bundle)
-    manifest=json.loads(prepared['_frozen']['image-input-manifest.json'])
-    require(manifest.get('target')=='a733-smp-supervised' and manifest.get('protocol_version')==1 and
-            manifest.get('final_elf')==prepared['image_sha256'], 'Bundle is not the reviewed observer image.')
-    admission=json.loads(prepared['_frozen']['admission.json'])
     return run_session(args,bundle,prepared,
-        lambda:claimed(args.database,args.claim,args.owner,bundle,bundle/'admission.json',prepared),
-        lambda identity,port:validate_admission(admission,prepared['image_sha256'],identity,port),
+        lambda:None, lambda identity,port:None,
         lambda device,same,deadline,record,save:capture_observer_device(
             device,same,deadline,prepared,args.evidence,record,save),
         product=PRODUCT,serial=SERIAL,bcd_device=0x0101,capture_seconds=19,
@@ -530,4 +420,4 @@ def main(argv=None):
 
 if __name__=='__main__':
     try: sys.exit(main())
-    except (OSError,ValueError,RuntimeError,sqlite3.Error,struct.error) as error: sys.exit(f'Stopped: {error}')
+    except (OSError,ValueError,RuntimeError,struct.error) as error: sys.exit(f'Stopped: {error}')

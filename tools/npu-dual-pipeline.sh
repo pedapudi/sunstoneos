@@ -1,11 +1,11 @@
 #!/bin/bash
 # Compile and simulate the two-input, two-output fixture. Run inside the pinned
-# compiler image with the repository mounted read-only. The destination must be
-# new and writable. This script performs no device I/O.
+# compiler image with the repository mounted read-only. Existing destinations
+# receive a unique child. This script performs no device I/O.
 set -euo pipefail
 # --perchannel-int8 selects INT8 tensors with per-channel symmetric weights.
 if [ "$#" -ne 1 ] && ! { [ "$#" -eq 2 ] && [ "$2" = --perchannel-int8 ]; }; then
-    echo "Usage: $0 NEW_OUTPUT_DIRECTORY [--perchannel-int8]" >&2
+    echo "Usage: $0 OUTPUT_DIRECTORY [--perchannel-int8]" >&2
     exit 2
 fi
 quantizer=asymmetric_affine
@@ -19,7 +19,13 @@ fixture_output=$(realpath -m -- "$1")
 fixture_compiler=/root/acuity-toolkit-whl-6.30.22/bin/pegasus.py
 fixture_sdk=/root/Vivante_IDE/VivanteIDE5.11.0/cmdtools
 
-python3 "$fixture_source/tools/npu-dual-fixture.py" "$fixture_output"
+fixture_report=$(python3 "$fixture_source/tools/npu-dual-fixture.py" "$fixture_output")
+printf '%s\n' "$fixture_report"
+fixture_output=$(printf '%s\n' "$fixture_report" | sed -n 's/^Output: //p')
+if [ -z "$fixture_output" ] || [[ "$fixture_output" == *$'\n'* ]] || [ ! -d "$fixture_output" ]; then
+    echo "The generator did not report one output directory." >&2
+    exit 1
+fi
 cd -- "$fixture_output"
 timeout 120 python3 "$fixture_compiler" import onnx --model dual.onnx \
     --output-model dual.json --output-data dual.data > import.log 2>&1

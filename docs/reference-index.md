@@ -10,7 +10,7 @@ Reuse prior reading and inspect relevant changes on subsequent visits.
 | Decision | Read |
 | --- | --- |
 | Scope and user constraints | [Goal](goal.md), [working rules](../AGENTS.md) |
-| Current board state and next work | [Handoff](handoff.md): “Board state and recovery” and “Continuation and evidence reuse” |
+| Current board state and next work | [Handoff](handoff.md): “Board state and recovery”, “Subsystem status” and “Open problems and files” |
 | Device coverage | [Hardware matrix](hardware.md): the relevant device bullet |
 | Physical access and recovery | [Board skill](../.agents/skills/sunstone-a733-board/SKILL.md) |
 | Boot-input admission versus forced-FEL normal return | [Reset-path guard classification](watchdog.md#choose-the-boot-input-guard-from-the-reset-path) and [captured ROM proof](watchdog.md#captured-board-rom-and-reset-ownership); [GPU actual-input audit](../apps/gpu-finite/HOST.md#failed-physical-attempt-and-input-audit) separates accepted inputs from unobserved native execution |

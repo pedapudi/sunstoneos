@@ -31,9 +31,10 @@ def transform(model_report):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    for name in ('build','bundle','model','survey','fel','output','local-model'):
+    for name in ('build','bundle','model','fel','output','local-model'):
         parser.add_argument('--'+name,type=Path,required=True)
     parser.add_argument('--case',action='append')
+    parser.add_argument('--survey',type=Path,help=argparse.SUPPRESS)
     a=parser.parse_args();a.output.mkdir(parents=True,exist_ok=bool(a.case))
     cases=('complete-return','transport-failure-retained','invalid-report-restored','changed-input-refused',
            'incomplete-cache-refused','restored-refusal-distinct')

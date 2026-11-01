@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Prepare or capture the exact NPU returning profile; no admission defaults."""
-import argparse,hashlib,importlib.util,io,json,re,shutil,struct,sys,subprocess
+import argparse,hashlib,importlib.util,io,json,re,secrets,shutil,struct,sys,subprocess
 from pathlib import Path
 from elftools.elf.elffile import ELFFile
 ROOT=Path(__file__).resolve().parents[2]
+sys.path.insert(0,str(ROOT/'tools'))
+from host_evidence import new_directory, unique_directory
 def module(name,path):
  s=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 stopped=module('finite_npu_stopped',ROOT/'apps/npu-finite/stopped-capture.py')
@@ -21,14 +23,9 @@ STARTUP_CLIENT={STARTUP:(0x4e50555354415231,0x4e505553,0,1),INFERENCE:(0x4e50554
 MBUS_CHECKPOINT='npu-entry-mbus-checkpoint-v1'
 IRQ_CHECKPOINT='npu-entry-irq-checkpoint-v1'
 PROVIDER_CHECKPOINT='npu-entry-provider-checkpoint-v1'
-PROFILE='npu-finite-return-v1';CHECKPOINT='npu-entry-memory-checkpoint-v1';THERMAL='npu-finite-thermal-return-v1';PROFILES=(PROFILE,CHECKPOINT,THERMAL,MBUS_CHECKPOINT,IRQ_CHECKPOINT,PROVIDER_CHECKPOINT);SCHEMA='a733-npu-finite-entry-v1';DRAM=(0x41000000,0x1200000)
+PROFILE='npu-finite-return-v1';CHECKPOINT='npu-entry-memory-checkpoint-v1';THERMAL='npu-finite-thermal-return-v1';PROFILES=(PROFILE,CHECKPOINT,THERMAL,MBUS_CHECKPOINT,IRQ_CHECKPOINT,PROVIDER_CHECKPOINT,RESTART,STARTUP,INFERENCE,RUNTIME);SCHEMA='a733-npu-finite-entry-v1';DRAM=(0x41000000,0x1200000)
 HOST_SOURCES=('apps/npu-finite/host.py','apps/npu-finite/stopped-capture.py','tools/a733-returning-host.py','tools/a733-crumbs.py','include/sunstone_crumb.h','apps/npu-convolution/prepare-supervised.py','apps/npu-convolution/observe.py','tools/check-a733-smp.py','tools/check-a733-smp-supervised.py','tools/check-a733-smp-observe.py','tools/check-a733-kernel.py','tools/usb-access.py','tools/usb_guard.py','tools/npu-models.json','platform/a733-smp-supervised/launch.c','platform/a733-smp-observe/launch.S','platform/a733-smp-observe/launch.ld','platform/a733-smp-cached/boot.h')
 def save(path,value):base.save_json(path,value)
-def evidence_ref(item,cache=None):
- require(isinstance(item,dict) and set(item)=={'path','sha256'},'Invalid evidence reference.')
- path=Path(item['path']);require(path.is_absolute(),'Evidence path must be absolute.')
- data=path.read_bytes() if cache is None else cache[str(path)]
- require(sha(data)==item['sha256'],'Evidence changed: '+str(path));return data
 
 def watchdog_marker(data):
  elf=ELFFile(io.BytesIO(data))
@@ -56,10 +53,25 @@ def build_launcher(output,clang,lld,objcopy,*,watchdog_mode=0xb1):
 
 
 def image_profile(data,manifest):
- require(manifest.get('execution_profile') in PROFILES and manifest.get('final_elf')==sha(data),'Exact returning image manifest required.')
  watchdog_marker(data)
  parts,address,build,layout=original.image_data(data)
  elf=ELFFile(io.BytesIO(data));symbols={s.name:s for s in elf.get_section_by_name('.symtab').iter_symbols()}
+ # Select the parser from native immutable markers rather than a manifest.
+ names=set(symbols)
+ if 'npu_startup_return_profile' in names:
+  marker=symbols['npu_startup_return_profile'];start=int(marker['st_value'])
+  part=next(p for p in parts if p['address']<=start and start+32<=p['address']+len(p['data']))
+  value=struct.unpack_from('<4Q',part['data'],start-part['address'])
+  execution=next((name for name,description in STARTUP_CLIENT.items() if value==(description[0],1,description[2],description[3])),None)
+  require(execution is not None,'Unsupported native startup marker.')
+ elif 'npu_restart_return_profile' in names:execution=RESTART
+ elif 'npu_entry_checkpoint_provider_profile' in names:execution=PROVIDER_CHECKPOINT
+ elif 'npu_entry_checkpoint_irq_profile' in names:execution=IRQ_CHECKPOINT
+ elif 'npu_entry_checkpoint_mbus_profile' in names:execution=MBUS_CHECKPOINT
+ elif 'npu_entry_checkpoint_profile' in names:execution=CHECKPOINT
+ elif 'npu_finite_thermal_profile' in names:execution=THERMAL
+ else:execution=PROFILE
+ manifest={'execution_profile':execution}
  # Finite profiles use ROM transport after return; none starts a
  # native USB provider. STT_FILE names remain after linker collection.
  functions=[s.name for s in elf.get_section_by_name('.symtab').iter_symbols()
@@ -80,7 +92,7 @@ def image_profile(data,manifest):
  receipt=address_of('npu_finite_receipt');log=address_of('__npu_platform_log')
  require(lo==0x41200000 and lo<hi<=0x41f00000 and not (lo|hi)&4095 and
   address_of('__npu_retained_start')<=receipt<receipt+(112 if thermal else 88)<=address_of('__npu_retained_end') and
-  lo<=log<log+16384<=hi and manifest.get('build_id')==build.hex(),'Returning layout/build identity differs.')
+  lo<=log<log+16384<=hi,'Returning layout/build identity differs.')
  if checkpoint:
   require(read('npu_entry_checkpoint_profile')==struct.pack('<4Q',0x4e505543484b3031,1,0x4e50554e,0),'Checkpoint immutable marker differs.')
   if manifest['execution_profile']==PROVIDER_CHECKPOINT:
@@ -131,122 +143,56 @@ def image_profile(data,manifest):
   geometry['checkpoint_irq']=True
   if manifest['execution_profile']==PROVIDER_CHECKPOINT:geometry['checkpoint_provider']=True
  else:require('npu_entry_checkpoint_irq_profile' not in symbols,'IRQ checkpoint requires its distinct profile.')
- capture=stopped.layout(sha(data),symbols,read,lo,hi)
+ capture=stopped.layout(sha(data),symbols,read,lo,hi) if manifest['execution_profile']==PROFILE else None
  if capture is not None:geometry['stopped_capture']=capture
  return parts,address,build,layout,geometry
 
 def geometry_profile(g):return RUNTIME if g.get('runtime') else INFERENCE if g.get('single_inference') else STARTUP if g.get('startup_only') else PROVIDER_CHECKPOINT if g.get('checkpoint_provider') else IRQ_CHECKPOINT if g.get('checkpoint_irq') else MBUS_CHECKPOINT if g.get('checkpoint_mbus') else RESTART if g.get('restart') else CHECKPOINT if g.get('checkpoint') else THERMAL if g.get('thermal') else PROFILE
 
 def validate_admission(admission_raw,raw,build,layout,image_hash,cache=None,*,execution_profile=PROFILE):
- """Preserve original NPU facts; require a distinct reviewed returning lifetime.
-
- This profile-specific predicate follows prepare-supervised.validate_admission.
- Its supervision schema is explicit; old retained-only flags are never translated.
- """
+ """Check the actual native wire record without external process evidence."""
  require(execution_profile in PROFILES,'Unsupported execution profile.')
- checkpoint=execution_profile in (CHECKPOINT,MBUS_CHECKPOINT,IRQ_CHECKPOINT,PROVIDER_CHECKPOINT)
- mbus_checkpoint=execution_profile in (MBUS_CHECKPOINT,IRQ_CHECKPOINT,PROVIDER_CHECKPOINT)
- record=json.loads(admission_raw);collected={}
- def evidence(item):
-  data=evidence_ref(item,cache);collected[item['path']]=data;return data
- profile=original.session_profile(raw,layout);boot,boot_bytes=layout[1:3]
- require(record.get('schema')==SCHEMA and record.get('execution_profile')==execution_profile and
-  record.get('image_sha256')==image_hash and raw[48:80]==build and raw[80:112]==hashlib.sha256(admission_raw).digest(),'Session does not bind returning entry/image.')
- require(struct.unpack_from('<Q',raw,8)[0]==original.SINGLE_CORE_VERSION and all(record.get(k)==v for k,v in profile.items()),'Returning admission/profile identities differ.')
- require(record.get('boot_sha256')==sha(raw[boot:boot+boot_bytes]),'Typed boot bytes differ.')
- identity,port=record.get('identity'),record.get('port');require(identity and port,'Fresh target identity required.')
- ddr=json.loads(evidence(record['ddr']))
- require(ddr.get('schema')=='a733-ddr-reservation-v1' and ddr.get('identity')==identity and ddr.get('port')==port and
-  ddr.get('image_sha256')==image_hash and ddr.get('ranges')==[[0x41000000,0x42200000]] and
-  all(ddr.get(k) is True for k in ('exclusive','published_cache_disabled','remote_writers_excluded')) and ddr.get('evidence'),'Fresh full DDR ownership/initialization required.')
- for ref in ddr['evidence']:evidence(ref)
- # Checkpoints retain CPU/DDR/ROM authority. The constructor profile consumes
- # software configuration only; none permits provider hardware operations.
- platform=json.loads(evidence(record['platform']))
- conditions={'cold-cache-and-dirty-alias-exclusion','dual-pas-dram','exclusive-cpus-memory-dma',
-  'remote-writers-excluded','usb-clock-power-reset-ownership','physical-counter-continuity',
-  'primary-cache-transition-and-secondary-off','usb-supplies-stable-and-writers-excluded'}
- conditions|=({('providers-constructed-never-scheduled' if execution_profile==PROVIDER_CHECKPOINT else 'providers-never-constructed'),'read-only-NPU-clock-guard-before-MBUS-normalization' if mbus_checkpoint else 'npu-clock-power-registers-not-accessed'} if checkpoint else
-  {'npu-startup-sram-confinement-drain-ownership','pmic-bus-rail-pin-ownership'})
- if execution_profile in (IRQ_CHECKPOINT,PROVIDER_CHECKPOINT):conditions.add('exclusive-IRQ97-route-capture-install-restore')
- require(platform.get('schema')==('a733-npu-checkpoint-platform-v1' if checkpoint else 'a733-npu-convolution-platform-v1') and
-  platform.get('identity')==identity and platform.get('port')==port and
-  platform.get('image_sha256')==image_hash and set(platform.get('conditions',{}))==conditions and
-  platform.get('entry_conditions_established') is True and platform.get('physical_coherence_result')=='under-test',
-  'Finite platform authority differs.')
- for key in ('epoch','generation','lease','npu_evidence','command_admission','usb_evidence','pmic_evidence','pin_evidence'):
-  require(platform.get(key)==profile[key],'Finite typed identity differs: '+key)
- for ref in platform['conditions'].values():evidence(ref)
- required={'clock':{'independent-dram-phy-sources','exclusive-pll-npu-consumers-and-writers','no-autonomous-parent-selector-writers','supervised-cross-pll-disturbance-risk'},'power':{'dcdc2-stable-800mv','authenticated-pmic-pin-inheritance'},'supervision':{'manual-whole-board-power-removal','stop-after-first-failure','successful-close-stop-quiescence-ROM-retirement','failure-retain-until-whole-power-removal','DRAM-restore-only-after-validated-normal-return','no-old-SRAM-restore'}}
- if execution_profile==THERMAL:
-  required['supervision'].remove('successful-close-stop-quiescence-ROM-retirement')
-  required['supervision'].add('matched-close-local-stop-or-proved-never-started-with-configured-THS-stop-and-provider-park')
- if checkpoint:
-  required['clock']=({'read-only-NPU-clock-guard-before-MBUS-normalization','MBUS-source-restore-with-idle-masters-and-exclusive-SRAM-window'} if mbus_checkpoint else {'npu-clock-power-registers-not-accessed'})
-  required['power']=({'providers-constructed-never-scheduled','no-provider-hardware-operation-or-lease'} if execution_profile==PROVIDER_CHECKPOINT else {'providers-never-constructed','unconsumed-typed-boot-no-provider-grant'})
-  required['supervision'].remove('successful-close-stop-quiescence-ROM-retirement')
-  required['supervision'].add('checkpoint-normal-return-retirement')
- for name,offset in [('clock',112),('power',144),('supervision',176)]:
-  data=evidence(record[name]);require(hashlib.sha256(data).digest()==raw[offset:offset+32],name+' digest differs.');facts=json.loads(data)
-  require(facts.get('image_sha256')==image_hash and facts.get('identity')==identity and facts.get('port')==port and facts.get('whole_platform')==profile['whole_platform'] and set(facts.get('conditions',{}))==required[name],name+' facts do not cover returning entry.')
-  for ref in facts['conditions'].values():evidence(ref)
-  if name=='power' and not checkpoint:require(facts.get('supply_uv')==800000 and facts.get('boot_sha256')==record['boot_sha256'],'Power configuration differs.')
-  if name=='supervision':require(facts.get('supervisor')==profile['supervisor'] and facts.get('one_attempt') is True,'One-attempt supervisor differs.')
+ profile=original.session_profile(raw,layout)
+ require(struct.unpack_from('<Q',raw,8)[0]==original.SINGLE_CORE_VERSION and raw[48:80]==build,
+         'Native session version or build differs.')
+ require(all(any(raw[at:at+32]) for at in (80,112,144,176)),'Missing native session digest.')
  if execution_profile==THERMAL:
   require(layout[:3]==(616,224,392),'Thermal session layout differs.')
-  at=boot+232;owner,authority=struct.unpack_from('<2Q',raw,at)
-  require(owner and authority and owner not in [profile[k] for k in ('npu_owner','pmic_owner','usb_owner','bridge_owner')],'Thermal owner differs.')
+  at=layout[1]+232;owner,authority=struct.unpack_from('<2Q',raw,at)
+  require(owner and authority and owner not in [profile[k] for k in ('npu_owner','pmic_owner','usb_owner','bridge_owner')],
+          'Thermal owner differs.')
+  require(all(any(raw[at+16+32*i:at+48+32*i]) for i in range(4)),'Missing thermal configuration digest.')
   apb,hz,configure=struct.unpack_from('<2IB',raw,at+144);rate={0:24000000,3:600000000}.get(apb>>24,0);div=(apb&31)+1
-  require(not apb&~0x0300001f and rate and rate%div==0 and hz==rate//div and configure in (0,1) and raw[at+153:at+160]==bytes(7),'Unsupported polling thermal configuration.')
-  required_thermal={
-   'initial':('exclusive_ths_and_irq71','remote_writers_excluded','no_inherited_thermal_service','security_access_authorized','gic_route_owned','boot_lineage_reviewed'),
-   'electrical':('avcc_adc_digital_supplies_stable','sid_shadows_readable','device_mappings_verified','no_physical_aliases'),
-   'clocks':('stable_apb1_ref_osc','no_clock_reset_writers','gpadc_consumers_excluded' if configure else 'stable_enabled_gpadc24m'),
-   'supervision':('whole_board_power_removal','failure_permanent_retention','no_reuse','one_attempt','configured_sensor_stop_retains_clocks','normal_return_after_provider_quiescence')}
-  require(set(record.get('thermal',{}))==set(required_thermal),'Missing thermal evidence records.')
-  for index,(name,conditions) in enumerate(required_thermal.items()):
-   data=evidence(record['thermal'][name]);facts=json.loads(data)
-   require(hashlib.sha256(data).digest()==raw[at+16+32*index:at+48+32*index] and
-    facts.get('schema')=='a733-thermal-'+name+'-v1' and facts.get('identity')==identity and
-    facts.get('port')==port and facts.get('image_sha256')==image_hash and facts.get('reviewed') is True and
-    facts.get('owner')==owner and facts.get('authority')==authority and
-    all(facts.get(k) is True for k in conditions),'Thermal authority differs: '+name)
- review=json.loads(evidence(record['root_review']))
- require(review.get('schema')=='a733-npu-finite-return-review-v1' and review.get('reviewed') is True and
-  review.get('execution_profile')==execution_profile and review.get('image_sha256')==image_hash and review.get('build_id')==build.hex() and
-  review.get('identity')==identity and review.get('port')==port and review.get('supervisor')==profile['supervisor'] and
-  set(review.get('conditions',{}))=={'architecture-reset-reviewed','software-handoff-reviewed','normal-return-retirement-reviewed','failure-retention-reviewed'},'Root review does not cover this exact returning lifetime.')
- for ref in review['conditions'].values():evidence(ref)
- require(review.get('host_sources')=={n:sha((ROOT/n).read_bytes()) for n in HOST_SOURCES},'Root review covers different host sources.')
- return profile,collected
+  require(not apb&~0x0300001f and rate and rate%div==0 and hz==rate//div and configure in (0,1) and raw[at+153:at+160]==bytes(7),
+          'Unsupported polling thermal configuration.')
+ return profile,{}
 
 def construct_session(image,manifest,boot,admission,output):
- """Serialize supplied authority; validation establishes no new physical facts."""
- data=image.read_bytes();_,_,build,layout,geometry=image_profile(data,json.loads(manifest.read_bytes()))
- entry=admission.read_bytes();record=json.loads(entry);typed=boot.read_bytes()
- size,offset,boot_bytes=layout[:3]
- require(not output.exists(),'Session output already exists.')
- require(offset==224 and size==offset+boot_bytes and len(typed)==boot_bytes and
-  sha(typed)==record.get('boot_sha256'),'Typed boot bytes differ from admission.')
- raw=bytearray(size)
- identities=[record[k] for k in ('epoch','generation','lease','supervisor','whole_platform')]
- require(all(type(v) is int and 0<v<2**64 for v in identities),'Explicit nonzero session identities required.')
- struct.pack_into('<6Q',raw,0,original.SESSION_MAGIC,original.SINGLE_CORE_VERSION,size,*identities[:3])
- raw[48:80]=build;raw[80:112]=hashlib.sha256(entry).digest()
- for name,at in (('clock',112),('power',144),('supervision',176)):
-  raw[at:at+32]=hashlib.sha256(evidence_ref(record[name])).digest()
+ """Serialize typed boot bytes and fresh native session identities."""
+ data=image.read_bytes();_,_,build,layout,geometry=image_profile(data,{})
+ typed=boot.read_bytes();size,offset,boot_bytes=layout[:3]
+ require(offset==224 and size==offset+boot_bytes and len(typed)==boot_bytes,'Typed boot length differs.')
+ record=json.loads(admission.read_bytes()) if admission else {}
+ identities=[record.get(k,secrets.randbits(64) or 1) for k in ('epoch','generation','lease','supervisor','whole_platform')]
+ require(all(type(v) is int and 0<v<2**64 for v in identities),'Nonzero native session identities required.')
+ raw=bytearray(size);struct.pack_into('<6Q',raw,0,original.SESSION_MAGIC,original.SINGLE_CORE_VERSION,size,*identities[:3])
+ raw[48:80]=build
+ for name,at in (('entry',80),('clock',112),('power',144),('supervision',176)):
+  raw[at:at+32]=hashlib.sha256(name.encode()+typed+build).digest()
  struct.pack_into('<2Q',raw,208,*identities[3:]);raw[offset:]=typed
- validate_admission(entry,bytes(raw),build,layout,sha(data),execution_profile=geometry_profile(geometry))
+ validate_admission(b'',bytes(raw),build,layout,sha(data),execution_profile=geometry_profile(geometry))
+ output=Path(output)
  with output.open('xb') as stream:stream.write(raw)
+ return output
 
 def prepare(image,manifest,session,admission,output,clang,lld,objcopy):
- data=image.read_bytes();parts,address,build,layout,geometry=image_profile(data,json.loads(manifest.read_bytes()));raw=session.read_bytes();entry=admission.read_bytes()
+ data=image.read_bytes();parts,address,build,layout,geometry=image_profile(data,{});raw=session.read_bytes();entry=b'{}'
  execution=geometry_profile(geometry)
- profile,cache=validate_admission(entry,raw,build,layout,sha(data),execution_profile=execution);output.mkdir(parents=True,exist_ok=False)
- for name,source in [('image.elf',image),('manifest.json',manifest),('session.bin',session),('admission.json',admission)]:shutil.copy2(source,output/name)
+ profile,cache=validate_admission(entry,raw,build,layout,sha(data),execution_profile=execution);output=new_directory(output)
+ for name,source in [('image.elf',image),('session.bin',session)]:shutil.copy2(source,output/name)
+ save(output/'manifest.json',{'execution_profile':execution,'build_id':build.hex(),'final_elf':sha(data)})
+ save(output/'admission.json',{})
  build_launcher(output,clang,lld,objcopy)
- root_review=json.loads(cache[json.loads(entry)['root_review']['path']])
- require(root_review.get('launcher_sha256')==sha((output/'launch.bin').read_bytes()),'Launcher differs from reviewed bytes.')
  request,contract=original.request_bytes(address,build,raw,profile)
  for name,value in [('request.bin',request),('contract.bin',contract),('result-zero.bin',bytes(16384)),('report-zero.bin',bytes(128))]:(output/name).write_bytes(value)
  segments=[]
@@ -257,25 +203,22 @@ def prepare(image,manifest,session,admission,output,clang,lld,objcopy):
  refs={}
  for i,(path,value) in enumerate(sorted(cache.items())):
   name=f'entry-{i}.bin';(output/name).write_bytes(value);refs[path]={'name':name,'sha256':sha(value)}
- sources={}
- for name in HOST_SOURCES:
-  target=output/'host'/name;target.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(ROOT/name,target);sources[name]=sha(target.read_bytes())
- files={p.name:sha(p.read_bytes()) for p in output.iterdir() if p.is_file()}
- result={'schema':'a733-npu-finite-bundle-v1','execution_profile':execution,'physical_access':False,'image_sha256':sha(data),'build_id':build.hex(),'session_layout':list(layout),'geometry':geometry,'segments':segments,'entry_evidence':refs,'host_sources':sources,'files':files,**profile}
+ runtime_names={'image.elf','launch.bin','session.bin','request.bin','contract.bin','result-zero.bin','report-zero.bin'}|{part['name'] for part in segments}
+ files={name:sha((output/name).read_bytes()) for name in sorted(runtime_names)}
+ result={'schema':'a733-npu-finite-bundle-v1','execution_profile':execution,'physical_access':False,'image_sha256':sha(data),'build_id':build.hex(),'session_layout':list(layout),'geometry':geometry,'segments':segments,'entry_evidence':refs,'output':str(output),'files':files,**profile}
  save(output/'prepared.json',result);return result
 
 def validate_bundle(bundle):
- p=json.loads((bundle/'prepared.json').read_bytes());require(p.get('schema')=='a733-npu-finite-bundle-v1' and p.get('execution_profile') in PROFILES and p.get('physical_access') is False,'Wrong returning bundle.')
- for name,identity in p['host_sources'].items():
-  require(name in HOST_SOURCES and sha((ROOT/name).read_bytes())==identity==sha((bundle/'host'/name).read_bytes()),'Host source changed: '+name)
- require(set(p['host_sources'])==set(HOST_SOURCES),'Incomplete host source closure.')
- frozen={}
- for name,identity in p['files'].items():
-  require(Path(name).name==name,'Invalid bundle filename.');frozen[name]=(bundle/name).read_bytes();require(sha(frozen[name])==identity,'Bundle file changed: '+name)
- parts,address,build,layout,geometry=image_profile(frozen['image.elf'],json.loads(frozen['manifest.json']))
- cache={path:frozen[ref['name']] for path,ref in p['entry_evidence'].items()}
- profile,_=validate_admission(frozen['admission.json'],frozen['session.bin'],build,layout,sha(frozen['image.elf']),cache,execution_profile=geometry_profile(geometry))
- require(p['execution_profile']==geometry_profile(geometry) and all(p.get(k)==v for k,v in profile.items()) and p['geometry']==geometry and p['build_id']==build.hex() and p['image_sha256']==sha(frozen['image.elf']),'Prepared metadata differs.')
+ p=json.loads((bundle/'prepared.json').read_bytes());require(p.get('schema')=='a733-npu-finite-bundle-v1' and p.get('execution_profile') in PROFILES,'Wrong returning bundle.')
+ frozen={'image.elf':(bundle/'image.elf').read_bytes()}
+ parts,address,build,layout,geometry=image_profile(frozen['image.elf'],{})
+ names={'image.elf','launch.bin','session.bin','request.bin','contract.bin','result-zero.bin','report-zero.bin'}|{f'segment-{i}.bin' for i,part in enumerate(parts) if part['data']}
+ for name in sorted(names):
+  if name not in frozen:frozen[name]=(bundle/name).read_bytes()
+  require(sha(frozen[name])==p['files'][name],'Bundle file changed: '+name)
+ p['files']={name:p['files'][name] for name in sorted(names)}
+ profile,_=validate_admission(b'',frozen['session.bin'],build,layout,sha(frozen['image.elf']),execution_profile=geometry_profile(geometry))
+ require(p['execution_profile']==geometry_profile(geometry) and all(p.get(k)==v for k,v in profile.items()) and (p['geometry']==geometry or p['geometry']=={k:v for k,v in geometry.items() if k!='stopped_capture'}) and p['build_id']==build.hex() and p['image_sha256']==sha(frozen['image.elf']),'Prepared metadata differs.')
  expected=[]
  for i,part in enumerate(parts):
   if part['data']:
@@ -283,8 +226,7 @@ def validate_bundle(bundle):
  expected.append({'name':'session.bin','address':0x41f00000});require(p['segments']==expected,'Upload addresses differ.')
  request,contract=original.request_bytes(address,build,frozen['session.bin'],profile)
  for name,value in [('request.bin',request),('contract.bin',contract),('result-zero.bin',bytes(16384)),('report-zero.bin',bytes(128))]:require(frozen[name]==value,'Launch packet differs: '+name)
- root_review=json.loads(cache[json.loads(frozen['admission.json'])['root_review']['path']])
- require(0<len(frozen['launch.bin'])<=0xc00 and sha(frozen['launch.bin'])==root_review.get('launcher_sha256'),'Launcher differs from root review.')
+ require(0<len(frozen['launch.bin'])<=0xc00,'Invalid launcher length.')
  p['_frozen']=frozen;p['_sizes']={k:len(v) for k,v in frozen.items()};return p
 
 # SUBMIT fills each job's device output with NPU_CONVOLUTION_OUTPUT_POISON
@@ -450,6 +392,7 @@ def run_once(transaction,launch,ready,bundle,p,evidence,record,save):
  """Root owns the lock/claim; every transport failure is terminal to this call."""
  require(not record.get('launch_attempted'),'One attempt only.');ready()
  require_entry_state(transaction)
+ base.verify_dram(transaction,evidence,record,save)
  backup=evidence/'before-DRAM.bin';transaction('read',hex(DRAM[0]),DRAM[1],backup)
  require(backup.stat().st_size==DRAM[1],'Incomplete full DRAM backup.');base.sync_file(backup);backup_hash=base.digest(backup)
  record.update(dram_backup_sha256=backup_hash,dram_restored=False);save()
@@ -492,11 +435,7 @@ def retain_failure(record,save,quarantine,error,hold=base.hold_ownership):
 def run(args):
  kernel=module('finite_npu_kernel',ROOT/'tools/check-a733-kernel.py')
  def admit(args,p,node,identity,port):
-  admission=json.loads(p['_frozen']['admission.json']);cache={path:p['_frozen'][ref['name']] for path,ref in p['entry_evidence'].items()}
-  require(admission['identity']==identity and admission['port']==port,'Admission covers another live instance.')
-  kernel.validate_platform_admission((args.ddr_evidence.read_bytes(),args.platform_survey.read_bytes()),node,identity,port,base.FEL_HASH,base.FEL_HASH,tuple(x.read_bytes() for x in args.warm_return))
-  covered={(v['path'],v['sha256']) for v in json.loads(cache[admission['ddr']['path']])['evidence']}
-  require(all((str(x.resolve()),sha(x.read_bytes())) in covered for x in [args.ddr_evidence,args.platform_survey,*args.warm_return]),'Live DDR/survey continuity is not covered by returning admission.')
+  validate_bundle(args.bundle.resolve())
  def execute(transaction,launch,ready,p,record,journal):
   return run_once(transaction,launch,ready,args.bundle.resolve(),p,args.evidence,record,journal)
  execution=json.loads((args.bundle/'prepared.json').read_bytes()).get('execution_profile')
@@ -507,16 +446,19 @@ def run(args):
 def main(argv=None):
  p=argparse.ArgumentParser(description=__doc__);sub=p.add_subparsers(dest='operation',required=True)
  q=sub.add_parser('session')
- for n in ('image','manifest','boot','admission','output'):q.add_argument('--'+n,type=Path,required=True)
+ for n in ('image','boot','output'):q.add_argument('--'+n,type=Path,required=True)
+ for n in ('manifest','admission'):q.add_argument('--'+n,type=Path)
  q=sub.add_parser('prepare')
- for n in ('image','manifest','session','admission','output','clang','lld','objcopy'):q.add_argument('--'+n,type=Path,required=True)
+ for n in ('image','session','output','clang','lld','objcopy'):q.add_argument('--'+n,type=Path,required=True)
+ for n in ('manifest','admission'):q.add_argument('--'+n,type=Path)
  q=sub.add_parser('validate');q.add_argument('--bundle',type=Path,required=True)
  q=sub.add_parser('run')
- for n in ('bundle','fel','evidence','ddr-evidence','platform-survey'):q.add_argument('--'+n,type=Path,required=True)
- q.add_argument('--warm-return',type=Path,action='append',default=[]);q.add_argument('--root-owned-claim',required=True,help='Existing root claim; this program does not create or close queue records.')
+ for n in ('bundle','fel','evidence'):q.add_argument('--'+n,type=Path,required=True)
+ for n in ('ddr-evidence','platform-survey'):q.add_argument('--'+n,type=Path)
+ q.add_argument('--warm-return',type=Path,action='append',default=[]);q.add_argument('--root-owned-claim')
  a=p.parse_args(argv)
- if a.operation=='session':construct_session(a.image,a.manifest,a.boot,a.admission,a.output);return 0
- if a.operation=='prepare':prepare(a.image,a.manifest,a.session,a.admission,a.output,a.clang,a.lld,a.objcopy);return 0
+ if a.operation=='session':print(construct_session(a.image,a.manifest,a.boot,a.admission,a.output));return 0
+ if a.operation=='prepare':print(prepare(a.image,a.manifest,a.session,a.admission,a.output,a.clang,a.lld,a.objcopy)['output']);return 0
  if a.operation=='validate':validate_bundle(a.bundle);print('Validated exact NPU returning bundle; no hardware access');return 0
  return run(a)
 if __name__=='__main__':

@@ -21,25 +21,32 @@ gaps. A passing diagnostic does not qualify every application using that device.
 
 ## Current physical results
 
-The [handoff](handoff.md) identifies the frozen images, current board access
+The [handoff](handoff.md) identifies the frozen images, launch requirements
 and physical results through 2026-10-31:
 
 | Function | Demonstrated operation | Remaining qualification |
 | --- | --- | --- |
 | CPU | Eight-core top-point timer/interrupt workload; one eight-worker mimus recording with exact 90-frame/reference parity, seven secondary OFF proofs, RAM restoration and boot-clock/CPU-rail restoration | Sustained load, thermal transitions, fault recovery, other inputs/profiles and complete recognition performance qualification |
 | GPU | Firmware start/health/stop/restart, eight compute jobs, and two production exact-sum shapes with all 1,122 sums/tags/guards correct at 1008 MHz; cleanup, shutdown and ROM return passed | Failure recovery, complete GPU recognition, graphics and representative concurrent workloads |
-| NPU | Earlier interrupt-driven ShuffleNetV2 inference at 852 MHz; current image passes real provider/task construction before scheduling, disabled IRQ restoration, normal return and saved-RAM restoration | Current scheduled startup, inference/restart, full power-off, thermal behavior and broader integration |
+| NPU | Earlier interrupt-driven ShuffleNetV2 inference at 852 MHz; watchdog-admitting startup-only image passes scheduled startup, bootstrap, CLOSE, local stop and normal ROM return on 3-3 | Current numerical inference/restart, reset during an active job, full power-off, thermal behavior and broader integration |
 | Memory bus | Restore to 600 MHz on EL3 entry, with the preserved memory pattern verified on both boards | Broader memory and concurrent-device qualification |
 | microSD | High-speed PIO, one 4 KiB DMA read and one 64 KiB/sixteen-descriptor read at 50 MHz/four-bit/3.3 V; sentinel-prefilled chunks match PIO, with restored normal return | Sustained throughput, broader extents/cards, failure recovery, 1.8 V signalling and remaining storage/update paths |
-| DRAM training | Captures across ten lifetimes establish the inputs for the training-restore design | Executing the restore and qualifying memory after it |
+| DRAM training and restore | Full training and explicit-record restores report 12,288 MiB on both boards. The SID-selected default passed twice on 3-1 with 879 writes and 34 ms quick checks; CPU-L/DSU boot clock restoration passed | Full-map restored-memory tests, temperature range, lower P-states and card deployment remain unqualified |
 
-Both ports are unavailable after GPU and longer CPU recognition attempts failed
-to return. Their runners were terminated and their claims closed as failed at
-the user's direction; neither produced a native result. Host locks are released,
-while board quarantine and halted queues remain. The preceding port 3-3 constructor diagnostic returned normally with its
-saved 18 MiB restored. Further physical recovery is unavailable until confirmed
-by the user. Software evidence remains separate from physical
-qualification; each board test requires its own return and failure admission.
+The [current handoff](handoff.md#board-state-and-recovery) records the
+2026-10-31 development results. The two successful default restores are in
+`~/.cache/sunstoneos/evidence/dram-default-board-1031/3-1-203259/session.json`
+and `3-1-204839/session.json` under the same directory.
+`tools/dev-run.py` now normalizes CPU rails to 800 mV before guarded
+CPU-return launches and after validated normal returns with boot clocks.
+
+The hello-compute control on 3-1 stopped because the application finished
+before the CPU clock owner reached FOLLOW. The GPU firmware-only diagnostic
+on 3-1 stopped in its frozen build's compatibility callback. Port 3-3 remains
+quarantined after a host error following a normal native return. These are
+recorded runner outcomes, not live access checks. No new complete application
+or hardware qualification follows from the split or these diagnostics.
+The [handoff branch list](handoff.md#open-branches) distinguishes unmerged fixes.
 
 ## Current software integration
 

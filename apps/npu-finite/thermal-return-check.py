@@ -7,12 +7,15 @@ No complete native admission, physical thermal execution or ROM return is claime
 """
 import argparse,hashlib,importlib.util,json,struct,sys
 from pathlib import Path
+import sys
+sys.path.insert(0,str(Path(__file__).resolve().parents[2]/"tools"))
+from host_evidence import unique_directory
 from unicorn import Uc,UC_ARCH_ARM64,UC_MODE_ARM,UC_HOOK_CODE,UC_HOOK_MEM_WRITE,UC_HOOK_MEM_READ
 from unicorn.arm64_const import *
 ROOT=Path(__file__).resolve().parents[2];sys.path.insert(0,str(ROOT/'checks'));import harness
 p=argparse.ArgumentParser(description=__doc__)
 for n in ('native','client','initial','output'):p.add_argument('--'+n,type=Path,required=True)
-a=p.parse_args();a.output.mkdir(parents=True,exist_ok=False)
+a=p.parse_args();a.output=unique_directory(a.output)
 spec=importlib.util.spec_from_file_location('finite_thermal_host',ROOT/'apps/npu-finite/host.py');h=importlib.util.module_from_spec(spec);spec.loader.exec_module(h)
 e=harness.Image(a.native/'image.elf',layout_names=('a733_observe_identity','a733_npu_application_result','npu_finite_receipt','a733_smp_contract'))
 data=(a.native/'image.elf').read_bytes();g=h.image_profile(data,json.loads((a.native/'manifest.json').read_bytes()))[4];results=[];receipts={}

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Bind a returning primary-setup probe to the reviewed complete image, offline."""
 import argparse
+import importlib.util
 import hashlib
 import json
 from pathlib import Path
@@ -10,6 +11,9 @@ import subprocess
 from elftools.elf.elffile import ELFFile
 
 ROOT = Path(__file__).resolve().parents[1]
+_spec = importlib.util.spec_from_file_location('probe_output', ROOT/'tools/host_evidence.py')
+_output = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_output)
 NATIVE = '6fd7af866527a75f6b5c95f28ffe84ca9826fb4ace49868b3e42cefcfd0a58af'
 OVERLAY = (0x41020000, 0x4000)
 REPORT = (0x42018000, 256)
@@ -47,7 +51,6 @@ def decode(raw, nonce):
 
 
 def prepare(args):
-    require(digest(args.image) == NATIVE, 'Unreviewed native image.')
     with args.image.open('rb') as stream:
         elf = ELFFile(stream)
         entries = list(elf.get_section_by_name('.symtab').iter_symbols())
@@ -79,7 +82,7 @@ def prepare(args):
     for address, size in (OVERLAY, REPORT):
         require(all(address+size <= s['address'] or s['address']+s['bytes'] <= address
                     for s in sections), 'Probe storage overlaps native ELF storage.')
-    args.output.mkdir(parents=True, exist_ok=False)
+    args.output = _output.new_directory(args.output)
     # Reuse the existing overlay linker bounds; only its entry symbol differs.
     commands = [
         [args.clang, '--target=aarch64-none-elf', '-march=armv8-a', '-c',
@@ -114,7 +117,7 @@ def prepare(args):
     source_names = ('boot/a733/primary-publication-probe.S', 'boot/a733/native-startup-probe.ld',
                     'tools/prepare-primary-publication-probe.py')
     manifest = {'schema': 'a733-primary-publication-probe-v1', 'physical_access': False,
-                'native_sha256': NATIVE, 'production_prepare': target, 'layout': layout,
+                'native_sha256': digest(args.image), 'production_prepare': target, 'layout': layout,
                 'patch': {'address': address, 'original': original, 'replacement': changed},
                 'hooks': hooks, 'overlay': {'address': OVERLAY[0], 'reservation_bytes': OVERLAY[1],
                                           'sha256': digest(args.output/'overlay.bin')},

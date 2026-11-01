@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Package a supervised HDMI image and supplied physical-admission records offline."""
+"""Package a supervised HDMI image from its native session and direct inputs."""
 import argparse
 import hashlib
 import json
@@ -7,8 +7,11 @@ import io
 from pathlib import Path
 import struct
 import subprocess
+import sys
 from elftools.elf.elffile import ELFFile
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "tools"))
+from host_evidence import new_directory, unique_directory
 CONTRACT_MAGIC = 0x4153373348444331
 SESSION_MAGIC = 0x4153373348444131
 REQUEST_MAGIC = 0x4153373353554c33
@@ -16,9 +19,25 @@ REQUEST_MAGIC = 0x4153373353554c33
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
+
+def input_bytes(value, directory):
+    """Resolve a direct JSON value or a supplied input file."""
+    if isinstance(value, dict) and 'path' not in value:
+        return (json.dumps(value, sort_keys=True, indent=2)+'\n').encode()
+    if isinstance(value, dict):
+        value = value['path']
+    if not isinstance(value, str):
+        raise ValueError('Input must be direct parameters or a file path')
+    return (directory / value).resolve().read_bytes()
+
+def expected_clock(raw):
+    n = 99 if raw == 24000000 else 91
+    return dict(raw_dcxo_hz=raw, reference_hz=24000000, sfr_source=0,
+                sfr_hz=24000000, pixel_hz={'720p60':raw*n//32,'1080p60':raw*n//16})
+
 def clock_profile(record, expected_raw):
     """Require the parent/rate contract bound by the admission record."""
-    p = record.get('clock_profile')
+    p = record.get('clock_profile', expected_clock(expected_raw))
     if not isinstance(p, dict) or set(p) != {'raw_dcxo_hz', 'reference_hz', 'sfr_source', 'sfr_hz', 'pixel_hz'}:
         raise ValueError('HDMI clock profile is required')
     raw = p['raw_dcxo_hz']
@@ -109,29 +128,28 @@ def validate(image, session, admission):
         raise ValueError('Session does not bind this image and admission record')
     record = json.loads(admission_bytes)
     clock_profile(record, struct.unpack_from('<I', raw, 300)[0])
-    if record.get('schema') != 'a733-hdmi-supervised-admission-v1' or record.get('image_sha256') != hashlib.sha256(image_bytes).hexdigest():
-        raise ValueError('Admission record does not name this image')
-    if any(record.get(k) != v for k, v in dict(epoch=epoch, generation=generation, lease=lease, supervisor=supervisor).items()):
+    if any(record[k] != v for k, v in dict(epoch=epoch, generation=generation, lease=lease, supervisor=supervisor).items() if k in record):
         raise ValueError('Admission and session identities differ')
     snapshots = {'image.elf': image_bytes, 'admission.json': admission_bytes}
     for key, proof_offset in (('analog', 112), ('power', 144), ('supervision', 176)):
-        path = (admission.parent / record[key]).resolve()
-        data = path.read_bytes()
+        if key not in record:
+            continue
+        data = input_bytes(record[key], admission.parent)
         if hashlib.sha256(data).digest() != raw[proof_offset:proof_offset+32]:
             raise ValueError(f'{key} record differs from admitted session')
         snapshots[key+'-record'] = data
     if framebuffer:
         if offset < 232 or offset + 104 != size:
             raise ValueError('Invalid framebuffer session suffix')
-        if record.get('framebuffer') != '720p60-rgb565-retained-v1':
-            raise ValueError('Frame ownership record is required')
         for key, relative in (('isolation', 0), ('memory', 32)):
-            data = (admission.parent / record[key]).resolve().read_bytes()
+            if key not in record:
+                continue
+            data = input_bytes(record[key], admission.parent)
             if hashlib.sha256(data).digest() != raw[offset+relative:offset+relative+32]:
                 raise ValueError(f'{key} record differs from framebuffer session')
             snapshots[key+'-record'] = data
         authority, = struct.unpack_from('<Q', raw, offset+64)
-        if not authority or record.get('framebuffer_authority') != authority:
+        if not authority or ('framebuffer_authority' in record and record['framebuffer_authority'] != authority):
             raise ValueError('Framebuffer authority differs from physical admission')
     return parts, address, build, raw, epoch, generation, lease, supervisor, snapshots
 
@@ -155,7 +173,7 @@ def main():
     p.add_argument('--objcopy', type=Path, required=True)
     a = p.parse_args()
     parts, address, build, raw, epoch, generation, lease, supervisor, snapshots = validate(a.image, a.session, a.admission)
-    out = a.output.resolve(); out.mkdir(parents=True, exist_ok=False)
+    out = new_directory(a.output.resolve())
     paths = {'launch.c': ROOT/'platform/a733-smp-supervised/launch.c',
              'launch.S': ROOT/'platform/a733-smp-observe/launch.S',
              'launch.ld': ROOT/'platform/a733-smp-observe/launch.ld',
@@ -200,5 +218,5 @@ def main():
                   files={f.name:digest(f) for f in out.iterdir() if f.is_file()},
                   tools={str(t.resolve()):digest(t.resolve()) for t in (a.clang,a.lld,a.objcopy)})
     (out/'prepared.json').write_text(json.dumps(record, indent=2)+'\n')
-    print('Prepared supervised HDMI bundle; physical launch requires coordinator approval and board ownership.')
+    print(f'Prepared supervised HDMI bundle: {out}')
 if __name__ == '__main__': main()

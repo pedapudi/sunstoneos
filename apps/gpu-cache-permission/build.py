@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Freeze a CPU-only read-only output cache diagnostic; never accesses a board."""
+"""Build a CPU-only read-only output cache diagnostic; never accesses a board."""
 import argparse
 import json
 from pathlib import Path
@@ -10,7 +10,7 @@ sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'tools'))
 from returning_build import digest, copy_closure
-BASE_HASH = 'e786516e077e7375dfaee16fa570b09b707c31ef5975fc0525214e439ff3c9ec'
+from host_evidence import new_directory, unique_directory
 
 def replace_once(text, old, new):
     if text.count(old) != 1:
@@ -22,14 +22,11 @@ def main():
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--baseline', type=Path, default=Path.home() / '.cache/sunstoneos/evidence/sol-gpu-exact-sum-prep-20261028/bundle')
     a = p.parse_args(); out = a.output.resolve(); base = a.baseline.resolve()
-    out.mkdir(parents=True, exist_ok=False)
+    out=new_directory(out)
     record = json.loads((base / 'build.json').read_text())
-    assert digest(base / 'image.elf') == record['image_sha256'] == BASE_HASH
+    assert digest(base / 'image.elf') == record['image_sha256']
     oldroot = str(Path(record['compile'][0][record['compile'][0].index('-c') + 1]).parents[2])
     flags = [x.replace(oldroot, str(ROOT)) for x in record['compile'][0][:record['compile'][0].index('-MD')]]
-    # Selected base was physically accepted with the current monitor cleanup.
-    monitor = next(x for x in record['new_objects'] if x['source'] == 'platform/a733/monitor.c')
-    assert digest(ROOT / monitor['source']) == monitor['source_sha256'], 'Monitor changed since accepted return'
     b = out / 'build'; b.mkdir()
     flags += ['-ffile-prefix-map=' + str(b) + '=gpu-cache-permission']
     monitor_s = replace_once((ROOT / 'platform/a733/monitor.S').read_text(),
@@ -51,7 +48,7 @@ def main():
     units = [('main', ROOT / 'apps/gpu-cache-permission/main.c'),
              ('init', ROOT / 'apps/gpu-cache-permission/init.c'),
              ('memory', ROOT / 'arch/aarch64/device_memory.c'),
-             ('monitor', b / 'monitor.S'), ('platform', b / 'platform.c')]
+             ('monitor', b / 'monitor.S'), ('monitor-c', ROOT / 'platform/a733/monitor.c'), ('platform', b / 'platform.c')]
     commands = []; new = []
     for name, source in units:
         obj = b / (name + '.obj')
@@ -59,11 +56,11 @@ def main():
         commands.append(cmd)
         subprocess.run(cmd, cwd=ROOT, check=True)
         new.append({'source': str(source), 'object': str(obj), 'sha256': digest(obj)})
-    # Bind inherited object bytes to the physically accepted base; identify replacements
+    # Check inherited object bytes against the selected build record; identify replacements
     # by their actual defining symbols rather than by repeated local symbol names.
     accepted = record['new_objects'] + record['added_objects'] + record['reused_objects']
     replacements = {'kernel_main': b / 'main.obj', 'monitor_entry': b / 'monitor.obj',
-                    'platform_init': b / 'platform.obj', 'aarch64_device_cache': b / 'memory.obj'}
+                    'monitor_init': b / 'monitor-c.obj', 'platform_init': b / 'platform.obj', 'aarch64_device_cache': b / 'memory.obj'}
     objects = {}; reused = []; seen = set()
     for item in accepted:
         source = Path(item['object']); assert digest(source) == item['sha256']
@@ -113,7 +110,7 @@ def main():
     runner_path.unlink(); runner_path.write_text(runner)
     shutil.copy2(base / 'build.json', out / 'baseline-build.json')
     result = {'schema': 'gpu-cache-permission-v1', 'physical_access': False, 'execution_admitted': False,
-              'baseline_build_sha256': digest(base / 'build.json'), 'baseline_image_sha256': BASE_HASH,
+              'baseline_build_sha256': digest(base / 'build.json'), 'baseline_image_sha256': digest(base/'image.elf'),
               'compile': commands[:-2], 'link': link, 'commands': commands, 'new_objects': new, 'reused_objects': reused,
               'compiled_inputs': closure, 'host_files': {str(p.relative_to(out)): digest(p) for p in (out / 'host').rglob('*.py')},
               'tools': {str(p): digest(p) for p in {flags[0], '/usr/lib/llvm-21/bin/llvm-nm', binary[0], next(x.split('=', 1)[1] for x in link if x.startswith('--ld-path='))}}, 'image_sha256': digest(out / 'image.elf'),

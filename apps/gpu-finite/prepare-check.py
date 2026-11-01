@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
-"""Exercise returning GPU bundle production with explicit software-only facts."""
-import argparse,copy,hashlib,importlib.util,json,shutil,struct,tempfile
+"""Check native GPU packaging and damaged input refusals without process records."""
+import sys
+import argparse,copy,hashlib,importlib.util,json,struct
 from pathlib import Path
 if not __debug__:raise SystemExit('GPU preparation checks require assertions enabled.')
 ROOT=Path(__file__).resolve().parents[2]
-def module(name,path):
- spec=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
-prep=module('gpu_finite_prepare_check',ROOT/'apps/gpu-finite/prepare.py')
+sys.path.insert(0,str(ROOT/'checks'))
+from harness import artifact_refused
+spec=importlib.util.spec_from_file_location('finite_prepare_check',ROOT/'apps/gpu-finite/prepare.py')
+prep=importlib.util.module_from_spec(spec);spec.loader.exec_module(prep)
 def marker_cases(current,historical,e):
  """Refuse every malformed write-back span marker, keeping the historical span only for untyped images."""
  from elftools.elf.elffile import ELFFile
  def sha(data):return hashlib.sha256(data).hexdigest()
  def load(directory):
-  path=directory/'build/return.elf';data=path.read_bytes();manifest=json.loads((directory/'manifest.json').read_text())
+  path=directory/'build/return.elf';data=path.read_bytes();manifest={}
   with path.open('rb') as stream:
    elf=ELFFile(stream);symtab=elf.get_section_by_name('.symtab');entries=list(symtab.iter_symbols())
    loads=[(i,x) for i,x in enumerate(elf.iter_segments()) if x['p_type']=='PT_LOAD']
@@ -32,7 +34,7 @@ def marker_cases(current,historical,e):
  cases={}
  data,manifest,layout=load(current);path=current/'build/return.elf'
  geometry=prep.image_profile(path,manifest)[3];assert (geometry['wb_start'],geometry['wb_end'])==(0x48000000,0x48088000);cases['current-marker-accepted']=True
- old=(historical/'build/return.elf').read_bytes();old_manifest=json.loads((historical/'manifest.json').read_text())
+ old=(historical/'build/return.elf').read_bytes();old_manifest={}
  span=prep.image_profile(historical/'build/return.elf',old_manifest)[3];assert (span['wb_start'],span['wb_end'])==(0x48000000,0x48086000);cases['historical-marker-absent-accepted']=True
  marker=entry(layout,'gpu_return_wb_geometry');address=layout['values'][layout['names']['gpu_return_wb_geometry']]
  seg,vaddr,filesz,base=next(x for x in layout['loads'] if x[1]<=address<x[1]+x[2]);offset=base+address-vaddr
@@ -49,117 +51,63 @@ def marker_cases(current,historical,e):
   ('typed-marker-renamed',[('<I',marker,other)],'GPU WB geometry marker does not match the allocator.')]:
   refused(label,data,manifest,edits,message)
  (e/'marker-result.json').write_text(json.dumps({'passed':True,'physical_access':False,'image_sha256':sha(data),'historical_image_sha256':sha(old),'cases':cases,
-  'scope':'Host preparation of the final ELF and of a frozen image built before the marker; each refusal is a single-field ELF edit with a rebound manifest digest.',
+  'scope':'Host preparation of the final ELF and of a frozen image built before the marker; each refusal changes one native ELF field.',
   'source_sha256':{str(x.relative_to(ROOT)):hashlib.sha256(x.read_bytes()).hexdigest() for x in [ROOT/'apps/gpu-finite/prepare.py',Path(__file__).resolve()]}},indent=2)+'\n')
  print('PASS GPU write-back span marker:',len(cases),'cases')
-def main():
- parser=argparse.ArgumentParser(description=__doc__)
- parser.add_argument('--evidence',type=Path,required=True)
- parser.add_argument('--shared-helper',type=Path,required=True)
- selection=parser.add_mutually_exclusive_group()
- selection.add_argument('--producer-only',action='store_true')
- selection.add_argument('--session-envelope-only',action='store_true')
- selection.add_argument('--disposition-only',action='store_true')
- selection.add_argument('--marker-only',action='store_true')
- parser.add_argument('--image-evidence',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/gpu-returning-repeat-fix-20261019')
- parser.add_argument('--historical-evidence',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/gpu-returning-repeat-fix-20261019')
- a=parser.parse_args();e=a.evidence.resolve();e.mkdir(parents=True,exist_ok=True)
- def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
- def dump(name,value):path=e/name;path.write_text(json.dumps(value,indent=2)+'\n');return {'path':str(path),'sha256':sha(path)}
- assert (ROOT/'tools/a733-returning-host.py').read_bytes()==a.shared_helper.read_bytes()
- if a.marker_only:
-  marker_cases(a.image_evidence,a.historical_evidence,e);return
- image=a.image_evidence/'build/return.elf';manifest=a.image_evidence/'manifest.json';parts,address,build,geometry=prep.image_profile(image,json.loads(manifest.read_bytes()));h=sha(image)
- model=e/'MODEL-ONLY.txt';model.write_text('Synthetic test evidence. No physical admission or qualified hardware fact.\n');ref={'path':str(model),'sha256':sha(model)}
- def fact(schema,**fields):return {'schema':schema,'identity':'software-only-model','port':'no-physical-port','image_sha256':h,**fields}
- ddr=dump('ddr.json',fact('a733-ddr-reservation-v1',exclusive=True,published_cache_disabled=True,remote_writers_excluded=True,ranges=[[0x41000000,0x42200000]],evidence=[ref]))
- gpu_ddr=dump('gpu-ddr.json',fact('a733-ddr-reservation-v1',exclusive=True,published_cache_disabled=True,remote_writers_excluded=True,ranges=[[0x48000000,0x79000000]],evidence=[ref]))
- names={'primary-cache-transition-and-secondary-off','cold-cache-and-dirty-alias-exclusion','dual-pas-dram','exclusive-cpus-memory-dma','remote-writers-excluded','physical-code-publication','usb-clock-power-reset-ownership','usb-device-mapping','physical-counter-continuity','rom-usb0-pio-takeover','usb0-irq188-189-190-disabled-inactive-clear','usb-supplies-stable-and-writers-excluded'}
- platform=dump('platform.json',fact('a733-board-single-core-platform-v1',conditions={n:ref for n in names},entry_conditions_established=True,physical_coherence_result='under-test'))
- gpu=dump('gpu.json',fact('a733-gpu-initial-entry-v1',reservation=100,cold_master=200,conditions={n:ref for n in prep.original.GPU_CONDITIONS},entry_conditions_established=True,no_gpu_activity_since_initial_isolation=True))
- template=bytearray((Path.home()/'.cache/sunstoneos/evidence/gpu-single-core-20261018/provider-valid-fixture/fixtures/session-template.bin').read_bytes());template[80:112]=bytes.fromhex(gpu['sha256']);struct.pack_into('<Q',template,192,200);template_path=e/'session-template.bin';template_path.write_bytes(template)
- cases={}
- if not a.producer_only and not a.disposition_only:
-  texture=bytes(template)+struct.pack('<5Q',0x4153373347545831,1,632,32,32)
-  package=bytes(8288)
-  program=bytes(template)+struct.pack('<4Q',0x4153373347505031,1,8944,len(package))+hashlib.sha256(package).digest()+package
-  for name,raw in [('texture',texture),('program',program)]:
-   prep.original.session_check(raw) # Both envelopes pass the shared validator.
-   try:prep.validate_admission({'session_template_sha256':hashlib.sha256(raw).hexdigest()},h,raw,build)
-   except ValueError as error:
-    assert str(error)=='Returning GPU requires exactly 592 session bytes.',str(error)
-   else:raise AssertionError('Expanded '+name+' session accepted.')
-   cases['reject-'+name+'-session']=True
- if a.session_envelope_only:
-  (e/'result.json').write_text(json.dumps({'passed':True,'physical_access':False,'physical_admission_created':False,'image_sha256':h,'cases':cases,'scope':'Expanded sessions accepted by the shared validator are refused at fixed-return admission before evidence access or bundle production.','source_sha256':{str(p.relative_to(ROOT)):sha(p) for p in [ROOT/'apps/gpu-finite/prepare.py',ROOT/'apps/gpu-render/prepare.py',Path(__file__)]}},indent=2)+'\n')
-  print('PASS GPU fixed-return session envelope:',len(cases),'refusals');return
- clang=Path('/usr/lib/llvm-21/bin/clang');lld=Path.home()/'.cache/sunstoneos/host/usr/bin/ld.lld-21';launch=e/'launcher';launch.mkdir(exist_ok=True);prep.original.build_launcher(launch,clang,lld)
- review=dump('root-review-MODELED.json',fact('a733-gpu-finite-return-review-v1',reviewed=True,execution_profile=prep.PROFILE,build_id=build.hex(),supervisor='modeled-supervisor',conditions={n:ref for n in ['architecture-reset-reviewed','software-handoff-reviewed','normal-return-retirement-reviewed','failure-retention-reviewed']},host_sources={n:sha(ROOT/n) for n in prep.HOST_SOURCES},launcher_sha256=sha(launch/'launch.bin')))
- admission=fact('a733-gpu-finite-entry-v1',execution_profile=prep.PROFILE,supervisor='modeled-supervisor',session_template_sha256=sha(template_path),reservation=100,ddr=ddr,gpu_ddr=gpu_ddr,platform=platform,gpu=gpu,root_review=review,one_attempt=True,supervision={n:ref for n in ['successful-close-stop-quiescence-ROM-retirement','failure-retain-until-whole-power-removal','DRAM-restore-only-after-validated-normal-return','no-old-SRAM-restore','manual-whole-board-power-removal','stop-after-first-failure']})
- admission_path=e/'admission-MODELED.json';admission_path.write_text(json.dumps(admission));bundle=e/'bundle';p=prep.prepare(image,manifest,admission_path,template_path,bundle,clang,lld);assert p['_sizes']['session.bin']==592 and p['_sizes']['contract.bin']==4096
- cases['actual-bundle-producer-and-validator']=True
- if a.disposition_only:
-  discard=copy.deepcopy(admission);discard['ram_disposition']='discard'
-  for key in ('ddr','gpu_ddr'):
-   value=json.loads(Path(discard[key]['path']).read_text());value['contents_discardable']=True
-   discard[key]=dump('discard-'+key+'.json',value)
-  value=json.loads(Path(review['path']).read_text());value['ram_disposition']='discard'
-  discard['root_review']=dump('discard-review-MODELED.json',value)
-  discard['supervision']['discardable-DRAM-release-only-after-validated-normal-return']=discard['supervision'].pop('DRAM-restore-only-after-validated-normal-return')
-  discard['platform']=dump('finite-platform.json',fact('a733-gpu-finite-platform-v1',conditions={n:ref for n in prep.FINITE_PLATFORM_CONDITIONS},entry_conditions_established=True,physical_coherence_result='under-test'))
-  discard_path=e/'discard-admission-MODELED.json';discard_path.write_text(json.dumps(discard))
-  q=prep.prepare(image,manifest,discard_path,template_path,e/'discard-bundle',clang,lld)
-  assert q['image_sha256']==p['image_sha256'] and q['launcher_sha256']==p['launcher_sha256']
-  cases['discard-bundle-producer-and-validator']=True
-  def refused(name,bad):
-   try:prep.validate_admission(bad,h,bytes(template),build)
-   except ValueError:cases[name]=True
-   else:raise AssertionError('Accepted '+name)
-  for key,value in [('ram_disposition','unknown'),('root_review',review),('supervision',admission['supervision'])]:
-   bad=copy.deepcopy(discard);bad[key]=value;refused('discard-reject-'+key,bad)
-  for key in ('ddr','gpu_ddr'):
-   for change in ('permission','range'):
-    bad=copy.deepcopy(discard);value=json.loads(Path(bad[key]['path']).read_text())
-    if change=='permission':value.pop('contents_discardable')
-    else:value['ranges'][0][1]-=4096
-    bad[key]=dump('bad-'+key+'-'+change+'.json',value);refused('discard-reject-'+key+'-'+change,bad)
-  for change in ('condition','identity'):
-   bad=copy.deepcopy(discard);value=json.loads(Path(bad['platform']['path']).read_text())
-   if change=='condition':value['conditions'].pop('usb-supplies-stable-and-writers-excluded')
-   else:value['identity']='another-board'
-   bad['platform']=dump('bad-platform-'+change+'.json',value);refused('finite-platform-reject-'+change,bad)
-  (e/'result.json').write_text(json.dumps({'passed':True,'physical_access':False,'physical_admission_created':False,'synthetic_fixtures_only':True,'image_sha256':h,'launcher_sha256':q['launcher_sha256'],'cases':cases,'scope':'Changed discard/platform admission only; actual producer and validator for restore and discard, unchanged native image and launcher.'},indent=2)+'\n')
-  print('PASS GPU RAM disposition/platform:',len(cases),'modeled cases');return
- if a.producer_only:
-  result={'passed':True,'physical_access':False,'physical_admission_created':False,'synthetic_fixtures_only':True,'image_sha256':h,'scope':'Actual returning producer and validator for changed image; unchanged refusal cases reused.','cases':cases}
-  (e/'result.json').write_text(json.dumps(result,indent=2)+'\n');print('PASS GPU returning bundle producer and validator; software-only candidate');return
- for key,value in [('schema','a733-gpu-supervised-entry-v2'),('execution_profile','gpu-single-core-supervised-v2'),('image_sha256','0'*64),('session_template_sha256','0'*64),('one_attempt',False),('reservation',0),('supervision',{}),('root_review',ref),('gpu_ddr',ddr)]:
-  bad=copy.deepcopy(admission);bad[key]=value
-  try:prep.validate_admission(bad,h,bytes(template),build)
-  except (ValueError,KeyError,json.JSONDecodeError):cases['admission-reject-'+key]=True
-  else:raise AssertionError(key)
- for key,value in [('reviewed',False),('schema','retained-profile'),('execution_profile','gpu-single-core-supervised-v2'),('build_id','0'*64),('identity','another-instance'),('port','another-port'),('supervisor','another-supervisor'),('conditions',{}),('host_sources',{})]:
-  changed=json.loads((e/'root-review-MODELED.json').read_bytes());changed[key]=value
-  bad=copy.deepcopy(admission);bad['root_review']=dump('bad-review-'+key+'.json',changed)
-  try:prep.validate_admission(bad,h,bytes(template),build)
-  except ValueError:cases['review-reject-'+key]=True
-  else:raise AssertionError(key)
- for key in ['epoch','generation','lease','reservation','build_id','geometry','segments']:
-  original=(bundle/'prepared.json').read_bytes();bad=json.loads(original)
-  if key in ['epoch','generation','lease','reservation']:bad[key]+=1
-  elif key=='build_id':bad[key]='0'*64
-  else:bad[key]={} if key=='geometry' else []
-  (bundle/'prepared.json').write_text(json.dumps(bad))
-  try:prep.validate_bundle(bundle)
-  except (ValueError,KeyError):cases['bundle-reject-'+key]=True
-  else:raise AssertionError(key)
-  finally:(bundle/'prepared.json').write_bytes(original)
- for name in ['session.bin','contract.bin','request.bin','launch.bin','result-zero.bin','report-zero.bin']:
-  path=bundle/name;original=path.read_bytes();bad=bytearray(original);bad[-1]^=1;path.write_bytes(bad)
-  try:prep.validate_bundle(bundle)
-  except ValueError:cases['bundle-reject-'+name]=True
-  else:raise AssertionError(name)
-  finally:path.write_bytes(original)
- result={'passed':True,'physical_access':False,'physical_admission_created':False,'synthetic_fixtures_only':True,'image_sha256':h,'shared_helper':{'path':str(a.shared_helper.resolve()),'sha256':sha(a.shared_helper)},'cases':cases,'source_sha256':{str(p.relative_to(ROOT)):sha(p) for p in [ROOT/'apps/gpu-finite/prepare.py',Path(__file__)]}}
- (e/'result.json').write_text(json.dumps(result,indent=2)+'\n');print('PASS GPU returning preparation:',len(cases),'modeled cases')
-if __name__=='__main__':main()
+p=argparse.ArgumentParser(description=__doc__)
+p.add_argument('--evidence',type=Path,required=True)
+p.add_argument('--image-evidence',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/gpu-returning-repeat-fix-20261019')
+p.add_argument('--shared-helper',type=Path)
+for flag in ('marker-only','producer-only','disposition-only','session-envelope-only'):p.add_argument('--'+flag,action='store_true')
+p.add_argument('--historical-evidence',type=Path,default=Path.home()/'.cache/sunstoneos/evidence/gpu-returning-repeat-fix-20261019')
+a=p.parse_args();e=prep.unique_directory(a.evidence)
+if a.marker_only:
+ marker_cases(a.image_evidence,a.historical_evidence,e)
+ raise SystemExit(0)
+image=a.image_evidence/'build/return.elf'
+template=Path.home()/'.cache/sunstoneos/evidence/gpu-single-core-20261018/provider-valid-fixture/fixtures/session-template.bin'
+raw=template.read_bytes();parts,address,build,g=prep.image_profile(image,{})
+results={}
+def refused(name,call):
+ try:call()
+ except (ValueError,KeyError):results[name]=True
+ else:raise AssertionError(name)
+for name,change in [('expanded',lambda b:b.extend(bytes(40))),('header',lambda b:struct.pack_into('<Q',b,0,0)),
+                    ('owner-conflict',lambda b:b.__setitem__(slice(464,472),b[456:464])),
+                    ('entry-zero',lambda b:b.__setitem__(slice(80,112),bytes(32))),
+                    ('cold-master-zero',lambda b:struct.pack_into('<Q',b,192,0))]:
+ bad=bytearray(raw);change(bad)
+ refused(name,lambda:prep.validate_admission({},'',bad,build))
+refused('invalid-disposition',lambda:prep.validate_admission({'ram_disposition':'unknown'},'',raw,build))
+refused('invalid-reservation',lambda:prep.validate_admission({'reservation':0},'',raw,build))
+clang=Path('/usr/lib/llvm-21/bin/clang');lld=Path.home()/'.cache/sunstoneos/host/usr/bin/ld.lld-21'
+bundle=e/'bundle';prepared=prep.prepare(image,None,None,template,bundle,clang,lld)
+assert not prepared['entry_evidence'] and 'host_sources' not in prepared
+assert prepared['_frozen']['session.bin'][48:80]==build
+results['package-without-manifest-admission-review-or-evidence']=True
+archive=e/'archived-inputs';archive.mkdir()
+for name in ('launch.c','build.log','manifest.json','session-template.bin'):
+ path=bundle/name
+ if not path.exists():path.write_text('Archived development input.\n')
+ metadata=json.loads((bundle/'prepared.json').read_bytes())
+ metadata['files'][name]=prep.sha(path.read_bytes())
+ (bundle/'prepared.json').write_text(json.dumps(metadata))
+ path.write_text('Changed archived development input.\n')
+ accepted=prep.validate_bundle(bundle)
+ assert name not in accepted['_frozen'] and name not in accepted['files']
+ path.rename(archive/name);prep.validate_bundle(bundle)
+ results['archived-'+name+'-edit-and-removal-accepted']=True
+
+# Artifact destinations refuse reuse before modifying the original bundle.
+artifact_refused(lambda:prep.prepare(image,None,None,template,bundle,clang,lld),bundle)
+results['existing-output-refused-without-changes']=True
+for name in ('session.bin','contract.bin','launch.bin','segment-0.bin'):
+ path=bundle/name;original=path.read_bytes();path.write_bytes(original+b'x')
+ refused('changed-'+name,lambda:prep.validate_bundle(bundle));path.write_bytes(original)
+metadata=json.loads((bundle/'prepared.json').read_bytes())
+for name,field,value in [('upload-address','segments',[{'name':'session.bin','address':0}]),('geometry','geometry',{}),('build-id','build_id','00'*32)]:
+ changed=copy.deepcopy(metadata);changed[field]=value;(bundle/'prepared.json').write_text(json.dumps(changed))
+ refused(name,lambda:prep.validate_bundle(bundle))
+(bundle/'prepared.json').write_text(json.dumps(metadata));prep.validate_bundle(bundle)
+prep.save(e/'result.json',{'passed':True,'physical_access':False,'cases':results,'scope':'Actual launcher build and packaging; no USB, prior probe, manifest, review, claim or evidence file.'})
+print('PASS GPU packaging:',len(results),'cases')

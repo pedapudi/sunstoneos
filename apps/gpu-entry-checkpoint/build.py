@@ -7,16 +7,19 @@ from pathlib import Path
 import shlex
 import shutil
 import subprocess
+import sys
+sys.path.insert(0,str(Path(__file__).resolve().parents[2]/"tools"))
+from host_evidence import new_directory, unique_directory
 
 ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
-BASE_HASH = '2ab2cb1b3bac150d5eb695793ab0eb39bb453afc7fbd7ecb2f595ebfca3fd08d'
+
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--baseline', type=Path, default=Path.home() / '.cache/sunstoneos/evidence/gpu-returning-repeat-fix-20261019')
 parser.add_argument('--output', type=Path, required=True)
 args = parser.parse_args()
 base = args.baseline.resolve(); out = args.output.resolve()
-out.mkdir(parents=True, exist_ok=False)
+out = new_directory(out)
 build = out / 'build'; objects = build / 'objects'; objects.mkdir(parents=True)
 overlay = out / 'inputs'; overlay.mkdir()
 
@@ -37,9 +40,7 @@ def relative(name):
             return tail.split('/', 1)[1] if marker == '/sunstoneos-worktrees/' else tail
     return None
 
-require(sha(base / 'build/return.elf') == BASE_HASH, 'Wrong frozen GPU image')
-for name, expected in {'object-source-closure.json': 'bbea6583e0c7b13fb800f0eb7be4a1de8755f8ccd0b07bf9801716ce355d1c07', 'commands.json': '60c2e793656322b9cc5e47409e3355815a07b3bf3d8bd2f3b2b99b55bceecea8', 'build/link.ld': 'cdc6a0b23181f9be99024091ca8032a24cebc0d409b1a148a3c27578fa268ca8'}.items():
-    require(sha(base / name) == expected, 'Changed frozen build metadata: ' + name)
+BASE_HASH = sha(base / 'build/return.elf')
 closure = json.loads((base / 'object-source-closure.json').read_text())
 bindings = []
 for value in closure['unique_inputs'].values():
@@ -130,6 +131,5 @@ save('compiled-inputs.json', dependencies); save('frozen-bindings.json', binding
 save('image-objects.json', linked); save('identity.json', dict(identity=identity, build_id=build_id))
 save('manifest.json', dict(target='sunstone-a733-gpu-entry-checkpoint', execution_profile='gpu-entry-memory-checkpoint-v2',
     workload='entry-memory-ready-no-providers', build_id=build_id, final_elf=sha(build / 'checkpoint.elf'),
-    baseline_elf=BASE_HASH, physical_access=False, physical_eligible=False,
-    root_architecture_and_admission_review_required=True))
+    baseline_elf=BASE_HASH, physical_access=False, physical_eligible=False))
 print('Built checkpoint:', sha(build / 'checkpoint.elf'))

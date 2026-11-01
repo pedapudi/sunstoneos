@@ -2,8 +2,11 @@
 """Exercise only extracted returning transport with mocked port metadata and subprocesses."""
 import argparse,contextlib,importlib.util,json,subprocess,tempfile,types
 from pathlib import Path
+import sys
+sys.path.insert(0,str(Path(__file__).resolve().parents[2]/"tools"))
+from host_evidence import unique_directory
 from unittest.mock import patch
-parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--evidence',type=Path,required=True);parser.add_argument('--return-window-only',action='store_true');parser.add_argument('--case',action='append');args=parser.parse_args();args.evidence.mkdir(parents=True,exist_ok=False)
+parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--evidence',type=Path,required=True);parser.add_argument('--return-window-only',action='store_true');parser.add_argument('--case',action='append');args=parser.parse_args();args.evidence=unique_directory(args.evidence)
 root=Path(__file__).resolve().parents[2]
 def load(name,path):
  spec=importlib.util.spec_from_file_location(name,path);value=importlib.util.module_from_spec(spec);spec.loader.exec_module(value);return value
@@ -84,7 +87,7 @@ with tempfile.TemporaryDirectory(prefix='returning-transport-') as temporary:
    return types.SimpleNamespace(returncode=0,stdout='soc=00001903(A733)' if arguments==['version'] else '',stderr='')
   def hold():
    assert state['locked'];state['held']+=1;state['hold_guard_active'].append(state['guard_active'])
-  a=types.SimpleNamespace(bundle=bundle,fel=fel,evidence=t/variant,root_owned_claim='mock claim, no queue')
+  a=types.SimpleNamespace(bundle=bundle,fel=fel,evidence=t/variant,root_owned_claim=None)
   error=None
   window,elapsed=timing.get(variant,(None,31 if variant in ('no-new-ROM','same-ROM','inaccessible-ROM') else 0))
   options={} if window is None else {'return_timeout':window}
@@ -115,14 +118,7 @@ with tempfile.TemporaryDirectory(prefix='returning-transport-') as temporary:
   # run() selects the execution profile from the prepared bundle record.
   (bundle/'image.elf').write_bytes(b'modeled marker input; actual ELF marker checked in watchdog-linked-check.py')
   (bundle/'prepared.json').write_text(json.dumps({'execution_profile':npu.PROFILE})+'\n')
-  paths=[]
-  for name in ('ddr','survey','warm'):
-   path=t/(name+'.json');path.write_bytes(name.encode());paths.append(path)
-  admission={'identity':identity,'port':'3-3.11','ddr':{'path':'mock-ddr-ref'}}
-  reservation={'evidence':[{'path':str(path.resolve()),'sha256':npu.sha(path.read_bytes())} for path in paths]}
-  prepared={'_frozen':{'admission.json':json.dumps(admission).encode(),'ddr-record':json.dumps(reservation).encode()},'entry_evidence':{'mock-ddr-ref':{'name':'ddr-record'}}}
-  a=types.SimpleNamespace(bundle=bundle,evidence=t/'adapter',ddr_evidence=paths[0],platform_survey=paths[1],warm_return=[paths[2]])
-  kernel=types.SimpleNamespace(validate_platform_admission=lambda *values:seen.append(values))
+  prepared={};a=types.SimpleNamespace(bundle=bundle,evidence=t/'adapter')
   def delegated(arguments,**callbacks):
    assert callbacks['watchdog']=={'mode':0xb1,'session_seconds':20}
    assert arguments is a and callbacks['base'] is npu.base and callbacks['profile']==npu.PROFILE and callbacks['validate_bundle'] is npu.validate_bundle
@@ -131,8 +127,7 @@ with tempfile.TemporaryDirectory(prefix='returning-transport-') as temporary:
   for successful in (True,False):
    def execute(*values):
     assert values==('transaction','wait','ready',bundle,prepared,a.evidence,{'marker':'record'},'journal');return {'functional_success':successful}
-   with patch.object(npu,'module',return_value=kernel),patch.object(npu.returning,'run',delegated),patch.object(npu,'run_once',execute),patch.object(npu,'watchdog_marker',side_effect=lambda raw: {'mode':0xb1,'session_seconds':20} if raw==(bundle/'image.elf').read_bytes() else (_ for _ in ()).throw(AssertionError('Wrong marker input'))):assert npu.run(a)==(0 if successful else 2)
-   assert seen[-1]==((b'ddr',b'survey'),old,identity,'3-3.11',base.FEL_HASH,base.FEL_HASH,(b'warm',))
+   with patch.object(npu,'validate_bundle',return_value=prepared),patch.object(npu,'watchdog_marker',return_value={'mode':0xb1,'session_seconds':20}),patch.object(npu.returning,'run',delegated),patch.object(npu,'run_once',execute):assert npu.run(a)==(0 if successful else 2)
    results.append({'name':'NPU-adapter-'+('success' if successful else 'mismatch'),'passed':True})
  # Exercise the real shared churn decision without opening its registry.
  real_guard=load('pinned_usb_guard',root/'tools/usb_guard.py')

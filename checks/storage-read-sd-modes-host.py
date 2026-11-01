@@ -12,15 +12,12 @@ def refused(call):
  except (ValueError,RuntimeError):return
  raise AssertionError('Expected mode refusal')
 def authority_refusals(prep,fixture):
- record=json.loads((fixture/'admission.json').read_text());original=(fixture/'session-template.bin').read_bytes()
- key=str(Path(record['topology']['path']));fact=json.loads(Path(key).read_bytes())
- for field in ('four_bit_data_route_authorized','read_only_bus_negotiation_authorized','peri0_400m_stable_owned'):
-  changed={**fact,field:False};data=json.dumps(changed).encode();raw=bytearray(original);raw[728:760]=hashlib.sha256(data).digest()
-  template_hash=hashlib.sha256(raw).hexdigest()
-  modified={**record,'session_template_sha256':template_hash,'topology':{'path':key,'sha256':hashlib.sha256(data).hexdigest()}}
-  try:prep.validate_admission(modified,record['image_sha256'],template_hash,raw,{key:data},False)
-  except ValueError as error:assert str(error)=='Missing negotiated SD0 mode authority.',str(error)
-  else:raise AssertionError('Absent physical mode authority accepted')
+ original=(fixture/'session-template.bin').read_bytes()
+ record={'identity':'software-only-model','port':'no-physical-port','reservation':100}
+ assert prep.validate_admission(record,'unused','unused',original)=={}
+ for offset,value in ((813,0),(817,15),(856,0x80000000)):
+  raw=bytearray(original);struct.pack_into('<I' if offset==856 else '<B',raw,offset,value)
+  refused(lambda:prep.validate_admission(record,'unused','unused',raw))
 def run(image,manifest,evidence):
  host=module('sd_modes_host',ROOT/'tools/check-a733-storage-read-supervised.py');prep=host.preparation
  out=evidence/'host';out.mkdir(parents=True,exist_ok=False);results={}
@@ -36,7 +33,7 @@ def run(image,manifest,evidence):
    bad=bytearray(frames[1]);bad[offset]^=1;refused(lambda:host.decoder.decode(bad,session))
   if profile==1:
    bad=bytearray(frames[1]);bad[80]=0x22;refused(lambda:host.decoder.decode(bad,session))
-  bad=bytearray(session);struct.pack_into('<I',bad,860,3);refused(lambda:prep.session_check(bad))
+  bad=bytearray(session);struct.pack_into('<I',bad,860,4);refused(lambda:prep.session_check(bad))
   bad=bytearray(session);bad[813]=0;refused(lambda:prep.session_check(bad))
   authority_refusals(prep,fixture)
   expected=[b'\0',host.decoder.read_request(19,2,1),host.decoder.read_request(21,1,2)]
@@ -59,6 +56,6 @@ if __name__=='__main__':
  if a.authority_only:
   host=module('sd_modes_authority_host',ROOT/'tools/check-a733-storage-read-supervised.py')
   for label in ('default','hs'):authority_refusals(host.preparation,a.evidence/('fixture-'+label))
-  (a.evidence/'host/authority-result.json').write_text(json.dumps({'passed':True,'physical_access':False,'cases':6,'scope':'Only new wider-route/protocol/PERI0 authority refusals, with all other producer evidence valid and exact rejection reason verified.'},indent=2)+'\n')
-  print('Six selected SD mode authority refusals passed at their exact new predicate.')
+  (a.evidence/'host/authority-result.json').write_text(json.dumps({'passed':True,'physical_access':False,'cases':6,'scope':'Direct target preparation and native pin-route/voltage limits for default and high-speed sessions.'},indent=2)+'\n')
+  print('Six direct SD mode pin and voltage limits passed without process records.')
  else:run(a.image,a.manifest,a.evidence)

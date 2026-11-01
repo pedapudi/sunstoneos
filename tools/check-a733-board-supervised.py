@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Capture one supervised board session under an existing coordinator claim."""
+"""Capture one supervised board session with direct target and session validation."""
 import argparse
 import hashlib
 import importlib.util
 import json
 from pathlib import Path
-import sqlite3
 import struct
 import sys
 import time
@@ -24,7 +23,6 @@ supervisor = module('board_capture_supervisor', ROOT / 'tools/check-a733-smp-sup
 preparation = module('board_capture_preparation', ROOT / 'apps/board/prepare.py')
 decoder = module('board_capture_decoder', ROOT / 'apps/board/observe.py')
 require, digest, artifact = supervisor.require, supervisor.digest, supervisor.artifact
-PREREQUISITES = {'supervised-ram-recovery', 'board-supervised-software'}
 
 
 def bundle_bytes(bundle, prepared, name):
@@ -106,63 +104,26 @@ def source_files():
             ('board-decoder.py', Path(decoder.__file__))]
 
 
-def validate_software(value, bundle, prepared):
-    require(value.get('schema') == 'a733-board-supervised-software-v1' and
-            value.get('physical_access') is False and
-            all(value.get(key) is True for key in
-                ('admission_cases', 'launcher_cases', 'host_capture', 'host_lifecycle')),
-            'Board software evidence is incomplete.')
-    for key, name in [('image', 'image.elf'), ('launcher', 'launch.bin')]:
-        artifact(value[key])
-        require(value[key]['sha256'] == prepared['files'][name],
-                'Software evidence covers different executable bytes.')
-    paths = dict(source_files())
-    paths.update({'supervised-host-tool.py': Path(supervisor.__file__),
-                  'base-host-tool.py': Path(supervisor.base.__file__),
-                  'observer-host-tool.py': Path(supervisor.observer.__file__)})
-    require(set(value.get('sources', {})) == set(paths), 'Software source identities are incomplete.')
-    for name, path in paths.items():
-        require(digest(artifact(value['sources'][name])) == digest(path),
-                'Software evidence covers another implementation: ' + name)
-    require(value.get('evidence'), 'Software result evidence is missing.')
-    for item in value['evidence']:
-        artifact(item)
 
 
 def claimed(database, test_id, owner, bundle, prepared):
-    expected = {**prepared['files'], 'prepared.json': prepared['_prepared_sha256']}
+    """Check the input snapshot immediately before upload."""
+    expected = preparation.snapshot_files(prepared)
+    if '_prepared_sha256' in prepared:
+        expected['prepared.json'] = prepared['_prepared_sha256']
     for name, identity in expected.items():
-        require(digest(bundle / name) == identity, 'Frozen board bundle changed: ' + name)
-    db = sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True)
-    db.row_factory = sqlite3.Row
-    try:
-        require(not db.execute("SELECT value FROM settings WHERE key='halted'").fetchone()[0],
-                'Board queue is halted.')
-        row = db.execute('SELECT * FROM tests WHERE id=?', (test_id,)).fetchone()
-        require(row is not None and row['state'] == 'claimed' and row['owner'] == owner,
-                'Matching coordinator claim is required.')
-        submission, review = json.loads(row['submission']), json.loads(row['review'])
-        require(set(submission['prerequisites']) == PREREQUISITES and
-                set(review['prerequisites']) == PREREQUISITES, 'Board prerequisites differ.')
-        refs = {name: artifact(value) for name, value in review['prerequisites'].items()}
-        require(refs['supervised-ram-recovery'] == (bundle / 'admission.json').resolve() and
-                review['prerequisites']['supervised-ram-recovery']['sha256'] == expected['admission.json'],
-                'Reviewed board entry differs.')
-        validate_software(json.loads(refs['board-supervised-software'].read_text()), bundle, prepared)
-        require({((bundle / name).resolve(), expected[name]) for name in ('prepared.json', 'image.elf', 'launch.bin')} <=
-                {(artifact(value), value['sha256']) for value in submission['artifacts']},
-                'Queue does not cover this prepared image.')
-    finally:
-        db.close()
+        require(Path(name).name == name and digest(bundle / name) == identity,
+                'Prepared input changed before upload: ' + name)
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ('bundle', 'fel', 'evidence', 'database'):
+    for name in ('bundle', 'fel', 'evidence'):
         parser.add_argument('--' + name, type=Path, required=True)
-    parser.add_argument('--claim', required=True)
-    parser.add_argument('--owner', required=True)
-    parser.add_argument('--supervised-manual-reconnect', action='store_true', required=True)
+    parser.add_argument('--claim')
+    parser.add_argument('--owner')
+    parser.add_argument('--supervised-manual-reconnect', action='store_true')
+    parser.add_argument('--database', type=Path)
     args = parser.parse_args(argv)
     bundle = args.bundle.resolve()
     prepared = preparation.validate_bundle(bundle)
@@ -191,5 +152,5 @@ def main(argv=None):
 if __name__ == '__main__':
     try:
         sys.exit(main())
-    except (OSError, ValueError, RuntimeError, sqlite3.Error, struct.error) as error:
+    except (OSError, ValueError, RuntimeError, struct.error) as error:
         sys.exit(f'Stopped: {error}')

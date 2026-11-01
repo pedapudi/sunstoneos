@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Build the monitor-only cold-entry recorder in a new ordinary directory."""
+"""Build the monitor-only cold-entry recorder while preserving earlier output."""
 import argparse
+import importlib.util
 import hashlib
 import json
 from pathlib import Path
@@ -8,6 +9,9 @@ import struct
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
+_spec = importlib.util.spec_from_file_location('probe_output', ROOT/'tools/host_evidence.py')
+_output = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_output)
 
 
 def sha(path):
@@ -21,7 +25,7 @@ def main():
     parser.add_argument("--lld", default="/home/sunil/.cache/sunstoneos/host/usr/bin/ld.lld-21")
     parser.add_argument("--objcopy", default="/usr/lib/llvm-21/bin/llvm-objcopy")
     args = parser.parse_args()
-    args.output.mkdir(parents=True, exist_ok=False)
+    args.output = _output.new_directory(args.output)
     obj, elf, binary = (args.output / name for name in ("cold-entry.o", "cold-entry.elf", "monitor.bin"))
     commands = [
         [args.clang, "--target=aarch64-none-elf", "-g", "-ffreestanding",

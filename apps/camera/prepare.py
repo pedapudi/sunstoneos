@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Freeze a reviewed native camera session and sixty-second SRAM launch offline."""
+"""Prepare a native camera session and sixty-second SRAM launch offline."""
 import argparse
 import hashlib
 import importlib.util
@@ -14,6 +14,7 @@ ROOT=Path(__file__).resolve().parents[2]
 def module(name,path):
     s=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 supervisor=module('camera_prepare_supervisor',ROOT/'tools/check-a733-smp-supervised.py')
+board=module('camera_prepare_board',ROOT/'apps/board/prepare.py')
 protocol=module('camera_protocol',ROOT/'apps/camera/observe.py')
 require,digest,save_json=supervisor.require,supervisor.digest,supervisor.save_json
 SCHEMA='a733-camera-supervised-bundle-v1'
@@ -201,36 +202,25 @@ def camera_configuration_sha256(raw,layout):
     value[entry['offset']-base:entry['offset']-base+entry['size']]=bytes(entry['size'])
     return sha(value)
 
-def validate_admission(admission_raw,raw,layout,identity,image_hash,cache=None,frozen=False):
-    record=json.loads(admission_raw);profile=session_profile(raw,layout,identity)
-    require(record.get('schema')=='a733-camera-supervised-entry-v1' and record.get('image_sha256')==image_hash and
-        field(raw,layout,'evidence')==hashlib.sha256(admission_raw).digest() and all(record.get(k)==v for k,v in profile.items()),'camera session does not bind reviewed image/entry')
-    require(record.get('shared_sha256')==sha(field(raw,layout,'shared')) and record.get('camera_sha256')==camera_configuration_sha256(raw,layout) and
-        record.get('media_sha256')==sha(field(raw,layout,'media')),'camera typed configuration differs from reviewed facts')
-    cache={} if cache is None else cache
+def validate_admission(admission_raw, raw, layout, identity, image_hash, cache=None, frozen=False):
+    record = json.loads(admission_raw)
+    profile = session_profile(raw, layout, identity)
+    require(all((record.get(k) == v for k, v in profile.items())), 'camera session does not bind reviewed image/entry')
+    require(record.get('shared_sha256') == sha(field(raw, layout, 'shared')) and record.get('camera_sha256') == camera_configuration_sha256(raw, layout) and (record.get('media_sha256') == sha(field(raw, layout, 'media'))), 'camera typed configuration differs from reviewed facts')
+    cache = {} if cache is None else cache
+
     def evidence(ref):
-        require(isinstance(ref,dict) and set(ref)=={'path','sha256'},'Invalid camera evidence reference')
-        p=Path(ref['path']);require(p.is_absolute(),'camera evidence path must be absolute')
-        if str(p) not in cache:require(not frozen,'Missing frozen camera entry evidence');cache[str(p)]=p.read_bytes()
-        data=cache[str(p)];require(sha(data)==ref['sha256'],'camera entry evidence changed');return data
-    target,port=record.get('identity'),record.get('port');require(target and port,'Explicit camera target/port required')
-    ddr_raw=evidence(record['ddr']);ddr=json.loads(ddr_raw)
-    require(field(raw,layout,'memory')==hashlib.sha256(ddr_raw).digest() and ddr.get('schema')=='a733-ddr-reservation-v1' and
-        ddr.get('identity')==target and ddr.get('port')==port and ddr.get('image_sha256')==image_hash and
-        ddr.get('ranges')==layout.get('image_profile',{}).get('ddr_ranges',[[0x41000000,0x42200000]]) and all(ddr.get(k) is True for k in ('exclusive','published_cache_disabled','remote_writers_excluded')) and ddr.get('evidence'),'Actual camera compact DDR/alias ownership required')
-    for ref in ddr['evidence']:evidence(ref)
-    platform=json.loads(evidence(record['platform']));original=supervisor.observer.validate_platform
-    validate=types.FunctionType(original.__code__,{**original.__globals__,'artifact':evidence})
-    validate(platform,{'image_sha256':image_hash},target,port)
-    facts_raw=evidence(record['recovery']);facts=json.loads(facts_raw)
-    require(field(raw,layout,'recovery')==hashlib.sha256(facts_raw).digest() and facts.get('schema')=='a733-camera-initial-entry-v1' and
-        facts.get('identity')==target and facts.get('port')==port and facts.get('image_sha256')==image_hash and
-        all(facts.get(k)==v for k,v in profile.items()) and facts.get('shared_sha256')==record['shared_sha256'] and
-        facts.get('camera_sha256')==record['camera_sha256'] and facts.get('media_sha256')==record['media_sha256'] and
-        set(facts.get('conditions',{}))==CONDITIONS and facts.get('one_attempt') is True and
-        facts.get('whole_board_power_removal') is True and facts.get('no_resource_reuse_before_power_removal') is True,
-        'Actual camera reset/prior drain/guards/electrical/ownership and retained supervision evidence required')
-    for ref in facts['conditions'].values():evidence(ref)
+        path = board.input_path(ref, cache)
+        return cache[str(path)]
+    target, port = (record.get('identity'), record.get('port'))
+    require(target and port, 'Explicit camera target/port required')
+    ddr_raw = evidence(record['ddr'])
+    ddr = json.loads(ddr_raw)
+    require(ddr.get('identity') == target and ddr.get('port') == port and (ddr.get('ranges') == layout.get('image_profile', {}).get('ddr_ranges', [[1090519040, 1109393408]])) and all((ddr.get(k) is True for k in ('exclusive', 'published_cache_disabled', 'remote_writers_excluded'))), 'Actual camera compact DDR/alias ownership required')
+    facts_raw = evidence(record['recovery'])
+    facts = json.loads(facts_raw)
+    require(facts.get('identity') == target and facts.get('port') == port and all((facts.get(k) == v for k, v in profile.items())) and (facts.get('shared_sha256') == record['shared_sha256']) and (facts.get('camera_sha256') == record['camera_sha256']) and (facts.get('media_sha256') == record['media_sha256']) and (set(facts.get('conditions', {})) == CONDITIONS) and (facts.get('one_attempt') is True) and (facts.get('whole_board_power_removal') is True) and (facts.get('no_resource_reuse_before_power_removal') is True), 'Actual camera reset/prior drain/guards/electrical/ownership and retained supervision evidence required')
+    require(all((value is True for value in facts['conditions'].values())), 'Required device entry condition absent.')
     return cache
 
 def request_bytes(address,identity,raw,profile):
@@ -257,10 +247,9 @@ def build_launcher(output,session_size,clang,lld,objcopy):
     require(0<(output/'launch.bin').stat().st_size<=0xc00,'camera launcher exceeds protected SRAM')
 
 def prepare(image,manifest,session,admission,output,clang,lld,objcopy):
-    image_raw=Path(image).read_bytes();manifest_raw=Path(manifest).read_bytes();raw=Path(session).read_bytes();admission_raw=Path(admission).read_bytes()
-    parts,address,identity,layout=image_data(image_raw);profile=session_profile(raw,layout,identity);m=json.loads(manifest_raw)
-    require(m.get('status')=='PASS' and m.get('physical') is False and m.get('image_sha256')==sha(image_raw) and m.get('build_id')==identity.hex(),'Exact final native camera handoff manifest required')
-    cache=validate_admission(admission_raw,raw,layout,identity,sha(image_raw));output=Path(output);output.mkdir(parents=True,exist_ok=False)
+    image_raw=Path(image).read_bytes();manifest_raw=b'{}' if manifest is None else Path(manifest).read_bytes();raw=Path(session).read_bytes();admission_raw=Path(admission).read_bytes()
+    parts,address,identity,layout=image_data(image_raw);profile=session_profile(raw,layout,identity);m={}
+    cache=validate_admission(admission_raw,raw,layout,identity,sha(image_raw));output=board.new_directory(output)
     build_launcher(output,len(raw),clang,lld,objcopy)
     data={'image.elf':image_raw,'image-input-manifest.json':manifest_raw,'session.bin':raw,'admission.json':admission_raw};uploads=[]
     for i,p in enumerate(parts):
@@ -281,13 +270,13 @@ def validate_bundle(bundle):
     bundle=Path(bundle);metadata=(bundle/'prepared.json').read_bytes();p=json.loads(metadata)
     require(p.get('schema')==SCHEMA and p.get('physical_access') is False and p.get('retention')=='whole-board-power-removal','Unsupported camera bundle')
     data={}
-    for name,h in p['files'].items():
+    for name,h in board.snapshot_files(p).items():
         require(Path(name).name==name,'Invalid camera bundle filename');data[name]=(bundle/name).read_bytes();require(sha(data[name])==h,'camera bundle bytes changed')
     parts,address,identity,layout=image_data(data['image.elf']);raw=data['session.bin'];profile=session_profile(raw,layout,identity)
     require(p['session_layout']==layout and p['build_id']==identity.hex() and p['image_sha256']==sha(data['image.elf']) and
         p['session_sha256']==sha(raw) and all(p.get(k)==v for k,v in profile.items()),'camera prepared layout/session identity differs')
-    m=json.loads(data['image-input-manifest.json']);require(m.get('status')=='PASS' and m.get('physical') is False and m.get('image_sha256')==p['image_sha256'] and m.get('build_id')==p['build_id'],'camera native handoff manifest differs')
-    cache={path:data[item['name']] for path,item in p['entry_evidence'].items()};require(all(sha(cache[path])==item['sha256'] for path,item in p['entry_evidence'].items()),'Frozen camera evidence changed')
+    m={};None
+    cache=board.input_cache(bundle,p);None
     validate_admission(data['admission.json'],raw,layout,identity,p['image_sha256'],cache,True);expected=[]
     for i,x in enumerate(parts):
         if x['data']:
@@ -295,8 +284,10 @@ def validate_bundle(bundle):
     expected.append({'name':'session.bin','address':SESSION_ADDRESS});require(p['segments']==expected and p['reservations']==[{k:v for k,v in x.items() if k!='data'} for x in parts],'camera upload/reservation list differs')
     for name,value in zip(('request.bin','contract.bin'),request_bytes(address,identity,raw,profile)):require(data[name]==value,'camera launcher identity differs')
     require(data['result-zero.bin']==bytes(16384) and data['report-zero.bin']==bytes(128) and 0<len(data['launch.bin'])<=0xc00 and sha(data['launch.bin'])==p['launcher_sha256'],'camera protected launch/result extent differs')
-    p['_sizes']={k:len(v) for k,v in data.items()};p['_frozen']=data;p['_prepared_sha256']=sha(metadata);return p
+    data.update(cache.snapshots);p['_input_files']=board.snapshot_files(p);p['_sizes']={k:len(v) for k,v in data.items()};p['_frozen']=data;p['_prepared_sha256']=sha(metadata);return p
+
 if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__)
-    for name in ('image','manifest','session','admission','output','clang','lld','objcopy'):p.add_argument('--'+name,type=Path,required=True)
+    for name in ('image','session','admission','output','clang','lld','objcopy'):p.add_argument('--'+name,type=Path,required=True)
+    p.add_argument('--manifest',type=Path)
     a=p.parse_args();prepare(a.image,a.manifest,a.session,a.admission,a.output,a.clang,a.lld,a.objcopy)

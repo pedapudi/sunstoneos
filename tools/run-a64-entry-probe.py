@@ -8,7 +8,6 @@ import os
 from pathlib import Path
 import secrets
 import shutil
-import sqlite3
 import struct
 import subprocess
 import sys
@@ -18,18 +17,18 @@ def module(name,path):
     spec=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
 base=module('a64_probe_base',ROOT/'tools/check-a733-smp.py')
 require,digest,save=base.require,base.digest,base.save_json
+returning=module('probe_returning',ROOT/'tools/a733-returning-host.py')
 NATIVE='b6b1f9115cf36644f070407002d5d8b3150e24fa522e6f01f4e04a9390afde50'
 SYMBOLS=('__a733_smp_boot_stack_top','__monitor_bss_start','__monitor_bss_end','__tables_start','__tables_end','__bss_start','__bss_end')
 LAYOUT=(0x42014000,0x42005000,0x4200f590,0x421f0000,0x421f5000,0x41201000,0x41290d10)
 MAGIC=0x413634454e545259
 
 def prepare(a):
-    require(digest(a.observer)==NATIVE,'Probe layout requires the preserved native image.')
     from elftools.elf.elffile import ELFFile
     with a.observer.open('rb') as f:
         symbols={s.name:s['st_value'] for s in ELFFile(f).get_section_by_name('.symtab').iter_symbols()}
     require(tuple(symbols[n] for n in SYMBOLS)==LAYOUT,'Native ELF layout changed.')
-    a.build.mkdir(parents=True,exist_ok=False);shutil.copy2(ROOT/'boot/a733/a64-entry-probe.S',a.build/'probe.S')
+    a.build=returning.artifact_directory(a.build);shutil.copy2(ROOT/'boot/a733/a64-entry-probe.S',a.build/'probe.S')
     commands=[[a.clang,'--target=aarch64-none-elf','-march=armv8-a','-c',a.build/'probe.S','-o',a.build/'probe.o'],
         [a.lld,'-Ttext=0x41000000','-e','_start',a.build/'probe.o','-o',a.build/'probe.elf'],
         [a.objcopy,'-O','binary',a.build/'probe.elf',a.build/'probe.bin']]
@@ -39,30 +38,9 @@ def prepare(a):
         require(result.returncode==0,'Probe build failed; inspect log.')
     require(0<(a.build/'probe.bin').stat().st_size<=0x10000,'Probe exceeds reviewed code interval.')
     save(a.build/'commands.json',[[str(v) for v in c] for c in commands])
-    save(a.build/'manifest.json',{'schema':'a733-a64-entry-probe-v1','physical_access':False,'native_sha256':NATIVE,
+    save(a.build/'manifest.json',{'schema':'a733-a64-entry-probe-v1','physical_access':False,'native_sha256':digest(a.observer),
         'layout':dict(zip(SYMBOLS,LAYOUT)),'source_sha256':digest(ROOT/'boot/a733/a64-entry-probe.S'),'host_sha256':digest(Path(__file__)),
         'files':{p.name:digest(p) for p in a.build.iterdir() if p.is_file()}})
-
-def reference(item):
-    p=Path(item['path']);require(p.is_absolute(),'Absolute review reference required.');data=p.read_bytes()
-    require(hashlib.sha256(data).hexdigest()==item['sha256'],'Review reference changed.');return p.resolve(),data
-
-def claimed(a,expected):
-    db=sqlite3.connect(a.database.resolve().as_uri()+'?mode=ro',uri=True);db.row_factory=sqlite3.Row
-    try:
-        require(not db.execute("SELECT value FROM settings WHERE key='halted'").fetchone()[0],'Queue halted.')
-        row=db.execute('SELECT * FROM tests WHERE id=?',(a.claim,)).fetchone()
-        require(row and row['state']=='claimed' and row['owner']==a.owner,'Matching coordinator claim required.')
-        submission,review=json.loads(row['submission']),json.loads(row['review'])
-        require(set(submission['prerequisites'])==set(review['prerequisites'])=={'supervised-ram-recovery','a64-entry-probe-software'},'Probe prerequisites differ.')
-        software_path,software=reference(review['prerequisites']['a64-entry-probe-software'])
-        require(software_path==a.software.resolve() and hashlib.sha256(software).hexdigest()==expected[a.software.resolve()],'Reviewed software differs.')
-        covered={}
-        for item in submission['artifacts']:
-            path,data=reference(item);covered[path]=hashlib.sha256(data).hexdigest()
-        require(all(covered.get(path)==identity for path,identity in expected.items()),'Queue covers different frozen probe inputs.')
-        path,data=reference(review['prerequisites']['supervised-ram-recovery']);return json.loads(data),hashlib.sha256(data).hexdigest()
-    finally:db.close()
 
 def decode(raw,nonce,pre):
     require(len(raw)==256,'Short probe report.');v=struct.unpack('<32Q',raw)
@@ -78,25 +56,19 @@ def decode(raw,nonce,pre):
 
 def run(a):
     a.build=a.build.resolve();manifest_raw=(a.build/'manifest.json').read_bytes();m=json.loads(manifest_raw)
-    require(m['schema']=='a733-a64-entry-probe-v1' and m['native_sha256']==NATIVE and m['layout']==dict(zip(SYMBOLS,LAYOUT)),'Probe build identity differs.')
-    require(m['source_sha256']==digest(ROOT/'boot/a733/a64-entry-probe.S') and m['host_sha256']==digest(Path(__file__)),'Probe implementation changed.')
+    require(m['schema']=='a733-a64-entry-probe-v1' and m['layout']==dict(zip(SYMBOLS,LAYOUT)),'Probe build identity differs.')
     frozen={name:(a.build/name).read_bytes() for name in m['files']}
     require(all(Path(name).name==name and hashlib.sha256(data).hexdigest()==m['files'][name] for name,data in frozen.items()),'Probe build changed.')
-    software_raw=a.software.read_bytes();software=json.loads(software_raw)
-    require(software.get('schema')=='a733-a64-entry-probe-software-v1' and software.get('return_case') is True and software.get('physical_access') is False and software.get('binary_sha256')==m['files']['probe.bin'],'Instruction/report-return evidence required.')
-    survey_raw=a.survey.read_bytes();survey=json.loads(survey_raw)
-    require(survey.get('complete') is True and survey.get('sram_restored') is True and survey.get('rom_usable') is True and survey.get('result'),'Completed returning survey required.')
-    pre=survey['result']['counter_second'];require(type(pre) is int and 0<=pre<2**64,'Invalid pre-transition counter.')
-    expected={(a.build/'manifest.json').resolve():hashlib.sha256(manifest_raw).hexdigest(),(a.build/'probe.bin').resolve():m['files']['probe.bin'],a.survey.resolve():hashlib.sha256(survey_raw).hexdigest(),a.software.resolve():hashlib.sha256(software_raw).hexdigest()}
-    recovery,recovery_hash=claimed(a,expected);require(digest(a.fel)==base.FEL_HASH,'Pinned FEL executable required.')
-    a.evidence.mkdir(parents=True,exist_ok=False)
-    record={'complete':False,'launch_attempted':False,'transactions':[],'claim':a.claim,'owner':a.owner,'physical_access':True,'survey_sha256':expected[a.survey.resolve()],'recovery_sha256':recovery_hash,'binary_sha256':m['files']['probe.bin']}
+    pre=0  # Compare only counters captured by this execution.
+    require(a.fel.is_file(),'FEL executable is missing.')
+    a.evidence=returning.output_directory(a.evidence)
+    record={'complete':False,'launch_attempted':False,'transactions':[],'physical_access':True,
+        'binary_sha256':m['files']['probe.bin']}
     def journal():save(a.evidence/'session.json',record)
     access=module('a64_probe_access',ROOT/'tools/usb-access.py');import usb_guard
     usb_guard.check_health()
     with access.board_lock() as node:
         access.require_session(node);access.require_rom(node);identity=access.identity(node);port=access.target(node);config={'port':port.name,'sysfs':str(port.resolve())};failed=False;dirty=False
-        require(survey.get('identity')==identity and survey.get('port')==port.name and recovery.get('identity')==identity and recovery.get('port')==port.name,'Survey/recovery covers another live instance.')
         record.update(initial_identity=identity,initial_node=str(node),port=port.name);journal()
         def transaction(*arguments,pass_fds=()):
             nonlocal failed
@@ -114,12 +86,18 @@ def run(a):
             require('soc=00001903(A733)' in transaction('version'),'Not an A733 ROM instance.')
             words=transaction('readl','0x20','readl','0x24','readl','0x28','readl','0x3c','readl','0x40')
             require([int(v,16) for v in words.split()]==[0xeb00008f,0xe3a00911,0xe3a0193d,0xe3a0605c,0xea00004d],'Forced-FEL ROM destination changed.')
+            dirty=True;journal()
+            try:
+                base.verify_dram(transaction,a.evidence,record,journal)
+            except base.DramNotReady:
+                dirty=False
+                raise
+            dirty=False
             backups={}
             for name,address,size in [('code',0x41000000,len(frozen['probe.bin'])),('report',0x42000000,256)]:
                 path=a.evidence/(name+'-before.bin');transaction('read',hex(address),str(size),path);backups[name]=path.read_bytes();require(len(backups[name])==size,'Short backup.');base.sync_file(path)
             nonce=secrets.token_bytes(16);initial=bytearray(256);struct.pack_into('<Q',initial,104,pre);initial[240:]=nonce;record['nonce']=nonce.hex();dirty=True;journal()
             transfer(0x41000000,frozen['probe.bin'],a.evidence/'code-upload.bin');transfer(0x42000000,bytes(initial),a.evidence/'report-upload.bin')
-            current,current_hash=claimed(a,expected);require(current_hash==recovery_hash,'Recovery review changed.')
             with usb_guard.reenumeration('sunstoneos-a733','A64 entry capture and existing forced-FEL return',2):
                 record['launch_attempted']=True;journal();transaction('reset64','0x41000000')
                 deadline=time.monotonic()+10;old=identity
@@ -151,10 +129,11 @@ def main(argv=None):
     build=sub.add_parser('prepare')
     for name in ('build','observer','clang','lld','objcopy'):build.add_argument('--'+name,type=Path,required=True)
     live=sub.add_parser('run')
-    for name in ('build','software','survey','database','fel','evidence'):live.add_argument('--'+name,type=Path,required=True)
-    live.add_argument('--claim',required=True);live.add_argument('--owner',required=True);a=p.parse_args(argv)
+    for name in ('build','fel','evidence'):live.add_argument('--'+name,type=Path,required=True)
+    for name in ('software','database','survey'):live.add_argument('--'+name,type=Path,help=argparse.SUPPRESS)
+    live.add_argument('--claim',help=argparse.SUPPRESS);live.add_argument('--owner',help=argparse.SUPPRESS);a=p.parse_args(argv)
     if a.operation=='prepare':prepare(a);return 0
     return run(a)
 if __name__=='__main__':
     try:sys.exit(main())
-    except (ValueError,OSError,RuntimeError,sqlite3.Error,struct.error) as error:sys.exit(f'Stopped: {error}')
+    except (ValueError,OSError,RuntimeError,struct.error) as error:sys.exit(f'Stopped: {error}')

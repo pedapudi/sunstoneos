@@ -15,6 +15,9 @@ import shutil
 import struct
 import subprocess
 import sys
+from contextlib import contextmanager
+from types import SimpleNamespace, ModuleType
+from unittest.mock import patch
 ROOT=Path(__file__).resolve().parents[1]
 
 def module(name,path):
@@ -173,36 +176,71 @@ def main():
         try:host.launch_once(transaction,observe,e,prepared,e,record,lambda:None,lambda:None)
         except ValueError:pass
         else:raise AssertionError('Second attempt accepted')
-        return {'result':'pass','cases':5,'limits':'Host lifecycle uses modeled I/O; no physical USB claim.'}
+        # Exercise the shared operational transport without queue, review,
+        # recovery or admission records. The endpoint and discovery are modeled.
+        evidence=e/'shared-session';evidence.mkdir();(evidence/'prior.txt').write_text('preserve prior evidence')
+        port=e/'port';port.mkdir()
+        for name,text in [('bcdDevice','0101'),('product',host.PRODUCT),('serial',host.SERIAL)]:
+            (port/name).write_text(text)
+        initial=Path('/dev/bus/usb/003/051');native=Path('/dev/bus/usb/003/052');held=[];requests=[];memory={}
+        @contextmanager
+        def lock():
+            held.append(True)
+            try:yield initial
+            finally:held.pop()
+        @contextmanager
+        def enumeration(*args):yield
+        access=SimpleNamespace(board_lock=lock,require_session=lambda n:None,require_rom=lambda n:None,
+            identity=lambda n:[1,2,3,4,51 if n==initial else 52],target=lambda n:port,
+            session_node=lambda config:native,quarantine_instance=lambda *a:None)
+        def fel(command,**kwargs):
+            assert held
+            parts=command[3:];requests.append(parts)
+            if parts[0]=='version':return SimpleNamespace(returncode=0,stdout='soc=00001903(A733)',stderr='')
+            if parts[0]=='readl':return SimpleNamespace(returncode=0,stdout='0',stderr='')
+            if parts[0]!='exe':
+                while parts:
+                    op,address=parts[:2];parts=parts[2:]
+                    if op=='read':
+                        size=int(parts[0]);Path(parts[1]).write_bytes(memory.get(address,bytes(size)));parts=parts[2:]
+                    elif op=='write':memory[address]=Path(parts[0]).read_bytes();parts=parts[1:]
+                    else:raise AssertionError(op)
+            return SimpleNamespace(returncode=0,stdout='',stderr='')
+        device=SimpleNamespace(bcdDevice=0x0101,set_configuration=lambda value:None)
+        usb=ModuleType('usb');core=ModuleType('usb.core');usb.core=core;core.find=lambda **kwargs:device
+        guard=SimpleNamespace(check_health=lambda:None,reenumeration=enumeration,__file__=str(ROOT/'tools/usb_guard.py'))
+        def preload_session(*args):prepared['_backup_hashes']={}
+        def capture_device(device,same,deadline,record,save):same();record['scheduler_result']='observed-success';save()
+        def retain_session(record,save,quarantine):
+            assert held and record['complete'];save();quarantine()
+        session_args=SimpleNamespace(fel=e/'unreviewed-fel',evidence=evidence)
+        # The FEL bytes are not a release credential; this fake uses no file.
+        with patch.object(host,'module',lambda *a:access),patch.dict(sys.modules,{'usb_guard':guard,'usb':usb,'usb.core':core}), \
+             patch.object(host.base,'preload',preload_session),patch.object(host.base.subprocess,'run',fel), \
+             patch.object(host.os,'access',lambda *a:True),patch.object(host,'finish_after_observation',retain_session), \
+             patch.object(host.base,'stop_after_failure',lambda record,save,quarantine,error:(_ for _ in ()).throw(error)):
+            assert host.run_session(session_args,bundle,prepared,lambda:None,lambda identity,port:None,capture_device,
+                product=host.PRODUCT,serial=host.SERIAL,bcd_device=0x0101,capture_seconds=19,result_key='scheduler_result')==0
+        assert not held and (evidence/'prior.txt').read_text()=='preserve prior evidence'
+        assert session_args.evidence.parent==evidence and sum(x[0]=='exe' for x in requests)==1
+        saved=json.loads((session_args.evidence/'session.json').read_text())
+        assert saved['complete'] and 'claim' not in saved and 'owner' not in saved
+        return {'result':'pass','cases':6,'without_process_records':True,
+                'limits':'Host lifecycle uses modeled I/O; no physical USB qualification.'}
     step('host',lifecycle)
     def entry_records():
-        import copy
-        target=e/'entry-record-fixtures';target.mkdir(exist_ok=True)
-        fact=target/'software-fixture.txt';fact.write_text('Software-only evidence fixture; establishes no physical facts.\n')
-        def ref(path):return {'path':str(path.resolve()),'sha256':host.digest(path)}
         identity=[1,2,3,4,5];port='fixture-port'
-        ddr={'schema':'a733-ddr-reservation-v1','identity':identity,'port':port,'image_sha256':image_hash,
-            'exclusive':True,'published_cache_disabled':True,'remote_writers_excluded':True,
-            'ranges':[[0x41000000,0x42200000]],'evidence':[ref(fact)]}
-        conditions=['source-backed-cpu-dsu-transition','cold-cache-and-dirty-alias-exclusion','dual-pas-dram',
-            'exclusive-cpus-memory-dma','remote-writers-excluded','usb-clock-power-reset-ownership',
-            'usb-device-mapping','physical-counter-continuity']
-        platform={'schema':'a733-smp-observer-platform-v1','identity':identity,'port':port,
-            'image_sha256':image_hash,'conditions':{key:ref(fact) for key in conditions},
-            'entry_conditions_established':True,'physical_coherence_result':'under-test'}
-        host.save_json(target/'ddr.json',ddr);host.save_json(target/'platform.json',platform)
-        value={'schema':'a733-smp-supervised-entry-v1','image_sha256':image_hash,'reservation':43,
-            'identity':identity,'port':port,'ddr':ref(target/'ddr.json'),'platform':ref(target/'platform.json'),
-            'recovery':{'mode':'manual-usb-reconnect','demonstrated_fel':True,
-                'explicit_reconnect_before_resumption':True,'preserve_microsd':True,'one_attempt':True,'evidence':[ref(fact)]}}
+        host.validate_admission({'reservation':43},image_hash,identity,port)
+        value={'reservation':43, 'image_sha256':image_hash, 'identity':identity, 'port':port}
         host.validate_admission(value,image_hash,identity,port)
         failures=[]
-        for field,replacement in [('identity',[1,2,3,4,6]),('image_sha256','00'*32),('recovery',{}),('reservation',0)]:
-            changed=copy.deepcopy(value);changed[field]=replacement
+        for field,replacement in [('identity',[1,2,3,4,6]),('image_sha256','00'*32),('port','other'),('reservation',0)]:
+            changed=dict(value);changed[field]=replacement
             try:host.validate_admission(changed,image_hash,identity,port)
             except ValueError:failures.append(field)
-            else:raise AssertionError('Invalid admission accepted: '+field)
-        return {'result':'pass','refusals':failures,'limits':'Synthetic artifact fixtures test validation only; no physical admission produced.'}
+            else:raise AssertionError('Invalid native session accepted: '+field)
+        return {'result':'pass','refusals':failures,'without_process_records':True,
+                'limits':'Native session validation only; no physical qualification.'}
     step('entry-records',entry_records)
     def ref(path):return {'path':str(path.resolve()),'sha256':host.digest(path)}
     preserved={}

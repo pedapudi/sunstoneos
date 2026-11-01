@@ -792,7 +792,7 @@ Findings: `runtime-memory-5`, `runtime-memory-7`, `runtime-memory-8`,
   routines in [runtime/memory.c](../../runtime/memory.c). Several component
   records describe link failures from omitting it.
 - **A second DMA ownership mechanism** (`dma-iommu-5`).
-  [platform/a733/dma_reserved.c](../../platform/a733/dma_reserved.c) leases
+  [platform/a733/dma_reserved.c](https://github.com/pedapudi/sunstoneos/blob/5dca0f257317f62ca5ed18b17bd5973a4ecd6e6f/platform/a733/dma_reserved.c) leases
   memory per allocation over one all-roles window, but only a host check uses
   it, and `a733_memory_dma_init` has no caller.
   [docs/memory-reservations.md](../memory-reservations.md) presents it as the
@@ -1444,7 +1444,7 @@ a stale record sends bring-up work to the wrong place.
 | `cpu-startup-8` | Unreachable `.Lreturned` report; repeated SCTLR masks | Remove; use shared macros |
 | `usb-10` | Always-false generator expression on the USB2 host library | Delete line 96 term; keep line 164 |
 | `build-system-14` | TinyUSB treated as optional | Early `FATAL_ERROR` |
-| `buses-pcie-11` | Orphaned [drivers/spi/a733_spi_native.c](../../drivers/spi/a733_spi_native.c) | Delete with its header and check; repoint [docs/spi.md](../spi.md) to [docs/spi-platform.md](../spi-platform.md) |
+| `buses-pcie-11` | Orphaned [drivers/spi/a733_spi_native.c](https://github.com/pedapudi/sunstoneos/blob/78642c9e18d6de593cd884103bc91b1b97e52f45/drivers/spi/a733_spi_native.c) | Delete with its header and check; repoint [docs/spi.md](../spi.md) to [docs/spi-platform.md](../spi-platform.md) |
 | `buses-pcie-13` | SPI uses the TCR `XCH` name for the GCR soft-reset bit; UART DMA uses raw offsets | Add `GCR_SRST` and named UART DMA registers checked against the manual |
 | `checks-harness-15` | Seven identical, unreferenced `checks/*-port.h` headers | Delete |
 | `host-tools-11` | Unreachable success exit in `run_session` | Section 14.1 |

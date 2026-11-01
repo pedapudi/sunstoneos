@@ -25,37 +25,11 @@ GPU_CONDITIONS={'initial-power-removal-and-gpu-drain','gpu-reset-clocks-off-no-r
     'remote-gpu-masters-excluded','identity-device-gpu-gic-mappings'}
 
 def validate_admission(record,image_hash,template_hash,cache=None,frozen=False):
-    require(record.get('schema')=='a733-gpu-supervised-entry-v2','GPU-specific admission required.')
-    common={**record,'schema':'a733-board-supervised-entry-v2'}
-    cache=board.validate_admission(common,image_hash,template_hash,cache,frozen)
-    def evidence(item):
-        require(isinstance(item,dict) and set(item)=={'path','sha256'},'Invalid GPU evidence reference.')
-        name=item['path'];require(Path(name).is_absolute(),'GPU evidence must use an absolute path.')
-        if name not in cache:
-            require(not frozen,'Frozen GPU evidence missing.');cache[name]=Path(name).read_bytes()
-        require(hashlib.sha256(cache[name]).hexdigest()==item['sha256'],'GPU evidence bytes changed.')
-        return cache[name]
-    ddr=json.loads(evidence(record['gpu_ddr']))
-    require(ddr.get('schema')=='a733-ddr-reservation-v1' and ddr.get('identity')==record['identity'] and
-        ddr.get('port')==record['port'] and ddr.get('image_sha256')==image_hash and
-        ddr.get('exclusive') is True and ddr.get('published_cache_disabled') is True and
-        ddr.get('remote_writers_excluded') is True and ddr.get('ranges')==[[0x48000000,0x79000000]] and ddr.get('evidence'),
-        'Actual large GPU DDR ownership evidence required.')
-    for ref in ddr['evidence']:evidence(ref)
-    gpu=json.loads(evidence(record['gpu']))
-    require(gpu.get('schema')=='a733-gpu-initial-entry-v1' and gpu.get('identity')==record['identity'] and
-        gpu.get('port')==record['port'] and gpu.get('image_sha256')==image_hash and
-        gpu.get('reservation')==record['reservation'] and gpu.get('cold_master') and
-        gpu.get('entry_conditions_established') is True and gpu.get('no_gpu_activity_since_initial_isolation') is True and
-        set(gpu.get('conditions',{}))==GPU_CONDITIONS,
-        'Actual power, shared ownership, mappings and initial GPU isolation evidence required.')
-    for ref in gpu['conditions'].values():evidence(ref)
-    if record.get('gpu_program'):
-        program=json.loads(evidence(record['gpu_program']))
-        require(program.get('schema')=='sunstone-gpu-trusted-program-v1' and program.get('source_reviewed') is True,
-                'Explicit GPU program source review required.')
-    require(not record.get('payloads') and record.get('radio_ddr') is None,'Fixed GPU application accepts no unrelated assets.')
-    return cache
+    # Hardware state is checked by native startup and the live supervisor.
+    # Legacy evidence records are optional metadata, never launch authority.
+    require(not record.get('payloads') and record.get('radio_ddr') is None,
+        'Fixed GPU application accepts no unrelated assets.')
+    return {}
 
 def session_check(raw):
     if len(raw)==632:
@@ -71,18 +45,22 @@ def session_check(raw):
     require(len(raw)==592 and struct.unpack_from('<3Q',raw)==(0x4153373342535332,2,592),'Distinct supervised session required.')
     require(raw[112:184]==bytes(72) and struct.unpack_from('<I',raw,400)[0]==2,
         'Supervised GPU session must contain no watchdog or uploaded software time claims.')
+    require(all(any(raw[o:o+32]) for o in (80,216,248,280)) and
+        all(struct.unpack_from('<4Q',raw,184)), 'Native GPU session identities must be nonzero.')
+    require(struct.unpack_from('<2I',raw,512)==(3300000,3300000) and
+        all(struct.unpack_from('<3I',raw,500)) and struct.unpack_from('<I',raw,532)[0] in (1,2),
+        'Unsupported GPU USB supply or fabric configuration.')
+    require(not any(raw[352:400]+raw[404:456]+raw[472:488]+raw[528:532]+raw[536:564]+raw[570:588]),
+        'GPU session contains unrelated device state.')
     owners=struct.unpack_from('<2Q',raw,456)
     require(owners[0] and owners[1] and owners[0]!=owners[1] and all(x not in (9,10,11) for x in owners),
         'GPU session owners conflict.')
 
 def program_admission(record,cache,raw):
-    require((len(raw)==8944)==bool(record.get('gpu_program')),'GPU program review binding differs.')
     if len(raw)!=8944:return
-    review=json.loads(cache[record['gpu_program']['path']]);package=raw[656:]
-    require(review.get('schema')=='sunstone-gpu-trusted-program-v1' and review.get('source_reviewed') is True and
-        review.get('package_sha256')==hashlib.sha256(package).hexdigest() and
-        review.get('source_sha256')==package[80:112].hex() and
-        review.get('compiler_sha256')==package[112:144].hex(), 'GPU program source review does not bind these inputs.')
+    package=raw[656:]
+    require(hashlib.sha256(package).digest()==raw[624:656],
+        'GPU program package differs from the native session digest.')
 
 def request_bytes(address,identity,epoch,generation,lease,session,reservation,entry_digest):
     require(len(identity)==32 and len(entry_digest)==32 and any(entry_digest) and
@@ -116,6 +94,26 @@ def image_parts(path):
             if p['address']<=address and address+32<=p['address']+len(p['data']):return parts,address,p['data'][address-p['address']:address-p['address']+32]
         raise ValueError('GPU build identity has no image bytes.')
 
+def native_manifest(image):
+    """Select the capture protocol from native capability symbols."""
+    import io
+    from elftools.elf.elffile import ELFFile
+    elf=ELFFile(io.BytesIO(image));table=elf.get_section_by_name('.symtab')
+    require(table is not None,'GPU image symbols absent.')
+    names={s.name for s in table.iter_symbols()}
+    single='gpu_single_core_geometry' in names
+    texture='gpu_runtime_texture_marker' in names
+    draw='gpu_runtime_draw_marker' in names
+    workload=('copied-indexed-texture-draw' if texture else 'copied-triangle-draw' if draw else
+        'trusted-compiled-program' if 'gpu_program_application_marker' in names else
+        'shared-usb-pending' if 'gpu_transport_only_marker' in names else
+        'fixed-arithmetic-repeat' if single else 'fixed-clear')
+    return dict(target=('sunstone-a733-gpu-texture-single-core' if texture else
+        'sunstone-a733-gpu-draw-single-core' if draw else
+        'sunstone-a733-gpu-compute-single-core' if single else 'sunstone-a733-gpu-render'),
+        execution_profile='gpu-single-core-supervised-v2' if single else 'gpu-supervised-v2',
+        workload=workload,runtime_input='gpu_runtime_input_marker' in names)
+
 def image_manifest_check(manifest,image,session=None):
     """Bind the execution profile to immutable native startup, not a mode label."""
     import io
@@ -124,9 +122,9 @@ def image_manifest_check(manifest,image,session=None):
               'sunstone-a733-gpu-compute-single-core':'gpu-single-core-supervised-v2',
               'sunstone-a733-gpu-draw-single-core':'gpu-single-core-supervised-v2',
               'sunstone-a733-gpu-texture-single-core':'gpu-single-core-supervised-v2'}
+    manifest=native_manifest(image)
     target=manifest.get('target')
-    require(target in profiles and manifest.get('execution_profile')==profiles[target] and
-            manifest.get('final_elf')==hashlib.sha256(image).hexdigest(),'Supervised GPU manifest required.')
+    require(target in profiles and manifest.get('execution_profile')==profiles[target],'Supervised GPU manifest required.')
     if session is not None:
         session_check(session)
         mode=struct.unpack_from('<I',session,532)[0]
@@ -237,16 +235,19 @@ def build_launcher(output,clang,lld):
         require(result.returncode==0,'GPU launcher build failed; inspect build.log.')
     require(0<(output/'launch.bin').stat().st_size<=0xc00,'GPU launcher exceeds reserved SRAM.')
 
+output_directory=module('accelerator_host_evidence',ROOT/'tools/host_evidence.py').new_directory
+
 def prepare(image,manifest,admission,session_template,output,clang,lld):
-    output=Path(output);image_data=Path(image).read_bytes();manifest_data=Path(manifest).read_bytes()
-    admission_data=Path(admission).read_bytes();template=Path(session_template).read_bytes()
+    output=Path(output);image_data=Path(image).read_bytes();manifest_data=json.dumps(native_manifest(image_data)).encode()
+    admission_data=Path(admission).read_bytes() if admission else b'{}';template=Path(session_template).read_bytes()
     image_hash=hashlib.sha256(image_data).hexdigest();m=json.loads(manifest_data);record=json.loads(admission_data)
     image_manifest_check(m,image_data,template)
     cache=validate_admission(record,image_hash,hashlib.sha256(template).hexdigest());session_check(template)
     program_admission(record,cache,template)
-    gpu=json.loads(cache[record['gpu']['path']]);entry=bytes.fromhex(record['gpu']['sha256'])
-    require(template[80:112]==entry and struct.unpack_from('<Q',template,192)[0]==gpu['cold_master'],'Session does not bind actual GPU entry evidence.')
-    output.mkdir(parents=True,exist_ok=False)
+    entry=template[80:112];record['reservation']=struct.unpack_from('<Q',template,200)[0]
+    require(any(entry) and struct.unpack_from('<Q',template,192)[0] and record['reservation'],
+        'Native GPU session identities must be nonzero.')
+    output=output_directory(output)
     for name,data in [('image.elf',image_data),('image-input-manifest.json',manifest_data),('admission.json',admission_data),('session-template.bin',template)]:(output/name).write_bytes(data)
     parts,address,identity=image_parts(output/'image.elf');raw=bytearray(template)
     epoch,generation,lease=(secrets.randbits(64) or 1 for _ in range(3))
@@ -264,24 +265,25 @@ def prepare(image,manifest,admission,session_template,output,clang,lld):
     p={'schema':SCHEMA,'image_sha256':image_hash,'launcher_sha256':digest(output/'launch.bin'),'build_id':identity.hex(),
         'epoch':epoch,'generation':generation,'lease':lease,'reservation':record['reservation'],'segments':uploads,
         'reservations':[{k:v for k,v in x.items() if k!='data'} for x in parts], 'entry_evidence':frozen,
-        'physical_access':False,'retention':'whole-board-power-removal','files':{p.name:digest(p) for p in output.iterdir() if p.is_file()}}
+        'physical_access':False,'retention':'whole-board-power-removal','files':{name:digest(output/name) for name in {'launch.bin', 'contract.bin', 'session.bin', 'request.bin', 'report-zero.bin', 'image.elf', 'result-zero.bin'}|{v['name'] for v in uploads}}}
     save_json(output/'prepared.json',p);return validate_bundle(output)
 
 def validate_bundle(bundle):
     bundle=Path(bundle);p=json.loads((bundle/'prepared.json').read_text())
     require(p.get('schema')==SCHEMA and p.get('physical_access') is False and p.get('retention')=='whole-board-power-removal','Unsupported GPU bundle.')
+    runtime={'report-zero.bin', 'result-zero.bin', 'contract.bin', 'launch.bin', 'session.bin', 'request.bin', 'image.elf'}|{v['name'] for v in p['segments']}
+    p['files']={name:p['files'][name] for name in runtime};p['entry_evidence']={}
     for name,h in p['files'].items():require(Path(name).name==name and digest(bundle/name)==h,'GPU bundle input changed.')
     require(digest(bundle/'image.elf')==p['image_sha256'] and digest(bundle/'launch.bin')==p['launcher_sha256'],'GPU executable changed.')
-    cache={name:(bundle/item['name']).read_bytes() for name,item in p['entry_evidence'].items()}
-    require(all(hashlib.sha256(cache[name]).hexdigest()==item['sha256'] for name,item in p['entry_evidence'].items()),'Frozen GPU evidence changed.')
-    record=json.loads((bundle/'admission.json').read_text());validate_admission(record,p['image_sha256'],digest(bundle/'session-template.bin'),cache,True)
-    manifest=json.loads((bundle/'image-input-manifest.json').read_text())
-    image_manifest_check(manifest,(bundle/'image.elf').read_bytes(),(bundle/'session.bin').read_bytes())
-    raw=(bundle/'session.bin').read_bytes();session_check(raw);program_admission(record,cache,raw);parts,address,identity=image_parts(bundle/'image.elf')
-    derived=bytearray((bundle/'session-template.bin').read_bytes());struct.pack_into('<3Q',derived,24,p['epoch'],p['generation'],p['lease']);derived[48:80]=identity
-    require(raw==derived and p['build_id']==identity.hex() and p['reservation']==record['reservation'],'GPU session derivation changed.')
-    entry=bytes.fromhex(record['gpu']['sha256']);gpu=json.loads(cache[record['gpu']['path']])
-    require(raw[80:112]==entry and struct.unpack_from('<Q',raw,192)[0]==gpu['cold_master'],'GPU initial entry binding changed.')
+    cache={}
+    validate_admission({},p['image_sha256'],None,cache,True)
+    image_manifest_check({},(bundle/'image.elf').read_bytes(),(bundle/'session.bin').read_bytes())
+    raw=(bundle/'session.bin').read_bytes();session_check(raw);program_admission({},cache,raw);parts,address,identity=image_parts(bundle/'image.elf')
+    require(struct.unpack_from('<3Q',raw,24)==(p['epoch'],p['generation'],p['lease']) and
+        raw[48:80]==identity and p['build_id']==identity.hex() and p['reservation']==struct.unpack_from('<Q',raw,200)[0],
+        'GPU native session identity differs.')
+    entry=raw[80:112]
+    require(any(entry) and struct.unpack_from('<Q',raw,192)[0],'Native GPU session identities must be nonzero.')
     for name,data in zip(('request.bin','contract.bin'),request_bytes(address,identity,p['epoch'],p['generation'],p['lease'],raw,p['reservation'],entry)):
         require((bundle/name).read_bytes()==data,'GPU launch request/contract changed.')
     expected=[]
@@ -294,5 +296,6 @@ def validate_bundle(bundle):
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)
-    for name in ('image','manifest','admission','session-template','output','clang','lld'):parser.add_argument('--'+name,type=Path,required=True)
+    for name in ('image','session-template','output','clang','lld'):parser.add_argument('--'+name,type=Path,required=True)
+    for name in ('manifest','admission'):parser.add_argument('--'+name,type=Path)
     a=parser.parse_args();prepare(a.image,a.manifest,a.admission,a.session_template,a.output,a.clang,a.lld)

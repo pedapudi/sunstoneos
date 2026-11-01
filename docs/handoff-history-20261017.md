@@ -140,7 +140,7 @@ native camera binding and fixed GPU graphics submission are integrated. The
 complete [maintenance image](storage-maintenance-launch.md) connects native
 tasks, immutable launch admission, fatal-fault revocation and protected backups.
 
-The [native mimus image](mimus-smp.md#native-eight-core-application-image) now
+The [native mimus image](mimus-smp.md#native-eight-core-recognition-and-supervised-capture) now
 connects eight-core startup, shared providers, the SMP C++ runtime and existing
 recorded/paced recognition with two inference workers. Ten focused lifecycle,
 packaging and capture cases pass. Central mimus and maintenance builds pass;

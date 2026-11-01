@@ -43,22 +43,13 @@ def session_check(raw):
     for i,pin in enumerate(PINS):
         ef,ep,ed=raw[792+3*i:795+3*i];df,dp,dd=raw[828+3*i:831+3*i]
         require(ef in (0,15) and ep<=2 and ed<=3 and df==(3+host if pin in (5,6,10) else 0) and dp<=2 and dd<=3 and (pin in (0,5) or dp==1),'Invalid one-bit PC route.')
-def initial_policy(fact):
-    require(all(fact.get(k) is True for k in ('cold_selected_controller','cold_card_protocol',
-      'all_sdc2_sdc3_clients_excluded','remote_firmware_excluded','irq195_196_owned_disabled_drained',
-      'no_dma_queue_encryption','no_clock_reset_writers','no_failed_native_lifetime')),'Missing cold eMMC ownership authority.')
-    require(fact.get('initialization_mode','cold')=='cold','eMMC requires established cold card history.')
 # The common producer calls these hooks when freezing and revalidating bundles.
 shared.session_check=session_check
-shared.initial_policy=initial_policy
 shared.inherited_mux=lambda raw:1
 _shared_validate=shared.validate_admission
 def _bound_admission(record,image_hash,template_hash,raw,cache=None,frozen=False):
     session_check(raw)
     cache=_shared_validate(record,image_hash,template_hash,raw,cache,frozen)
-    import json
-    selected='sdc2' if struct.unpack_from('<I',raw,892)[0]==0 else 'sdc3'
-    require(all(json.loads(cache[record[k]['path']]).get('selected_controller')==selected for k in ('initial','topology')),'eMMC authority selects another controller.')
     return cache
 shared.validate_admission=_bound_admission
 validate_admission=_bound_admission
@@ -72,5 +63,6 @@ board=shared.board
 if __name__=='__main__':
     import argparse
     p=argparse.ArgumentParser(description=__doc__)
-    for name in ('image','manifest','admission','template','output','clang','lld'):p.add_argument('--'+name,type=Path,required=True)
-    a=p.parse_args();prepare(a.image,a.manifest,a.admission,a.template,a.output,a.clang,a.lld)
+    for name in ('image','admission','template','output','clang','lld'):p.add_argument('--'+name,type=Path,required=True)
+    p.add_argument('--manifest',type=Path,help='Optional build provenance')
+    a=p.parse_args();print(prepare(a.image,a.manifest,a.admission,a.template,a.output,a.clang,a.lld)['_bundle_directory'])

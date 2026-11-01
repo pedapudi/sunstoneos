@@ -32,6 +32,24 @@ int os_watchdog_reload(void *supervisor)
 uint64_t a733_fault_pending;
 #endif
 #include SERVICES_SOURCE
+#ifdef SUNSTONE_OS_APPLICATION_H
+/* Keep every service selected: the modeled application is present and live,
+ * and workload 4 creates the Type-C, power and USB host service tasks. */
+static const struct ss_manifest model_manifest={0};
+const struct ss_application ss_application={.manifest=&model_manifest};
+int os_application_finished(void){return 0;}
+const struct os_session *os_session_admitted(void)
+{
+    static const struct os_session session={.board={.workload=4}};
+    return &session;
+}
+const struct os_service os_services[OS_SERVICES]={
+    {"board-pmic",1000000},{"board-usb0",1000000},{"board-typec",1000000},
+    {"board-power",1000000},{"board-usb2",1000000},
+    {"application",1000000},{"thermal",1000000}
+};
+_Static_assert(OS_SERVICES==7,"reset model covers every selected service");
+#endif
 
 struct outcome { uint64_t expired,refused,detail,reloads; };
 /* One run in 1 ms steps from scheduler start. Services report every 10 ms

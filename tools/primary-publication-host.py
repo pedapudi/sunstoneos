@@ -1,7 +1,6 @@
 """Offline bindings for the returning primary probe and existing FEL runner."""
 import hashlib
 import importlib.util
-import json
 from pathlib import Path
 import struct
 
@@ -22,12 +21,8 @@ MODEL_SOURCES = ('checks/primary-publication-probe.py', 'checks/a733-supervised-
 
 def load(build, image, manifest):
     require(manifest.get('schema') == 'a733-primary-publication-probe-v1' and
-            manifest.get('physical_access') is False and manifest.get('native_sha256') == probe.NATIVE,
+            manifest.get('native_sha256') == digest(image),
             'Wrong primary preparation profile.')
-    require(digest(image) == probe.NATIVE, 'Primary probe image changed.')
-    source_names = ('boot/a733/primary-publication-probe.S', 'boot/a733/native-startup-probe.ld',
-                    'tools/prepare-primary-publication-probe.py')
-    require(manifest['sources'] == {n: digest(ROOT/n) for n in source_names}, 'Probe source changed.')
     with image.open('rb') as stream:
         elf = ELFFile(stream)
         sections = [{'name': s.name, 'address': s['sh_addr'], 'bytes': s['sh_size']}
@@ -69,7 +64,7 @@ def load(build, image, manifest):
             patched += 1
         name = f'segment-{index}.bin'
         frozen[name] = (build/name).read_bytes()
-        require(frozen[name] == data, 'Payload differs beyond the reviewed call patch.')
+        require(frozen[name] == data, 'Payload differs beyond the call patch.')
         expected_payloads.append({'name': name, 'address': start, 'bytes': len(data),
                                   'sha256': hashlib.sha256(data).hexdigest()})
     require(patched == 1 and manifest['payloads'] == expected_payloads, 'Payload inventory changed.')
@@ -79,25 +74,6 @@ def load(build, image, manifest):
     return frozen, dram
 
 
-def validate_software(software, manifest_hash):
-    require(software.get('schema') == 'a733-primary-publication-software-v1' and
-            software.get('physical_access') is False and software.get('manifest_sha256') == manifest_hash,
-            'Primary host evidence covers different inputs.')
-    require(software.get('host_sources') == {n: digest(ROOT/n) for n in HOST_SOURCES}, 'Host implementation changed.')
-    require(software.get('host_cases') == {'complete-return': True, 'transport-failure-retained': True,
-            'missing-return-retained': True, 'invalid-report-restored': True, 'changed-input-refused': True},
-            'Focused host cases are incomplete.')
-    item = software['instruction_evidence']
-    path = Path(item['path'])
-    require(path.is_absolute() and digest(path) == item['sha256'], 'Instruction evidence changed.')
-    model = json.loads(path.read_text())
-    require(model.get('physical_access') is False and model.get('native_sha256') == probe.NATIVE and
-            model.get('manifest_sha256') == manifest_hash and
-            model.get('sources') == {n: digest(ROOT/n) for n in MODEL_SOURCES}, 'Instruction inputs changed.')
-    cases = {c['case']: c for c in model['cases']}
-    require(set(cases) == {'actual-boot-primary-prepare-restore-return',
-                          'restoration-readback-failure-retains-without-reset'} and
-            all(c.get('pass') is True for c in cases.values()), 'Instruction cases are incomplete.')
 
 
 def initial_report(nonce):

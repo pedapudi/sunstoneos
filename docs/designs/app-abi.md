@@ -181,7 +181,7 @@ service; the NPU client, which runs at EL1, stays one.
 
 | Call | Behaviour | Current equivalent |
 | --- | --- | --- |
-| `ss_grant()` | Immutable record of the grant: devices, main core, worker cores, region spans (actual INPUT lengths), capture length and the finish-by time. | `mimus_asset_*`, `board.session.workload`, `A733_SMP_RECOGNITION_CORE` |
+| `ss_grant()` | Immutable record of the grant: devices, main core, worker cores, region spans (actual INPUT lengths), capture length and the finish-by time. | `mimus_asset_*`, `board.session.workload`, `A733_SMP_APPLICATION_CORE` |
 | `ss_live()` | 1 when the session is live and the granted devices are ready, 0 while they are starting, -1 once the session has ended. | `mimus_board_live`, `mimus_board_session_live` |
 | `ss_progress()` | One atomic store into the application's supervision record. | `mimus_board_progress` |
 | `ss_throttled()` | Thermal load hint. | `os_thermal_throttled` |
@@ -190,7 +190,13 @@ service; the NPU client, which runs at EL1, stays one.
 | `ss_host_recv(&request, wait_us)`, `ss_host_send(&reply)` | A mailbox for one 16-byte request in the application's range, and its reply of up to 1,024 bytes plus a 16-byte application tag. The USB0 owner wakes the waiting task with a task notification. It passes the next request only after the USB transfer of the previous reply completed, so a request also confirms delivery of the previous reply. The OS sends nothing for an application request until the application replies. | `mimus_board_copy` and the mimus USB0 exchange |
 | `ss_storage_read(sector, data)`, `ss_key_report(&report)` | One 512-byte read from the USB storage leaf, and the next boot-keyboard report, both served by the OS USB2 owner. | the generated `mimus-client.c`, a patched copy of `apps/board/client.c` |
 | `ss_finish(result, bytes)` | Copies the result into the OS result record and ends the application. A returning lifetime then returns to the host; the resident lifetime keeps the record readable over the host channel. | `os_cpu_return_begin(transcript, used)` |
-| `ss_fail(detail)` | Ends the session. | `mimus_board_fail` |
+| `ss_fail(detail)` | Records the first application failure and ends the session. | `mimus_board_fail` |
+
+`ss_fail()` calls `board_fail_at()` with the application failure group,
+the detail and the caller's return address. SVC `0x5c0e` preserves that record
+through watchdog reset. [The watchdog record](../watchdog.md#rtc-words-retain-progress-and-the-first-failure)
+defines the fields. `checks/harness.py` steps over that SVC in function-level
+models without exception vectors.
 
 `ss_storage_read` and `ss_key_report` are outside the step-2 list in the
 layering document. They are included because mimus cannot leave the patched

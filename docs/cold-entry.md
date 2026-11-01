@@ -164,7 +164,7 @@ datasheet excludes OR100 from the processor inventory; historical bit 1 remains
 reserved. CE remains unproven when the ROM releases its resets, because prior
 task completion is not established. The stage-2 loader now checks the native
 mask before card access and refuses any unproven writer. See the
-[applicability and CE audit](remote-writers.md#device-applicability-excludes-or100-ce-ownership-remains-open).
+[applicability and CE audit](remote-writers.md#device-applicability-excludes-or100-ce-requires-predecessor-accounting).
 
 ## The EL1 tables need a Nonsecure dirty-line experiment
 

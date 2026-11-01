@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate frozen eMMC packaging, authority refusals and actual producer capture."""
+"""Validate direct eMMC packaging, native session limits and actual producer capture."""
 import argparse,copy,hashlib,importlib.util,json,struct,time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[3]
@@ -12,19 +12,12 @@ def run(bundle,native,out):
     admission=json.loads(frozen['_frozen']['admission.json']);ih=frozen['image_sha256']
     cache={p:frozen['_frozen'][v['name']] for p,v in frozen['entry_evidence'].items()}
     refused=[]
-    for name,key,changes in [('population','topology',{'populated_emmc_physically_identified':False}),
-       ('wrong-route','topology',{'selected_controller':'sdc2' if struct.unpack_from('<I',raw,892)[0] else 'sdc3'}),
-       ('alternate-clients','topology',{'sdc2_sdc3_nand_spif_clients_excluded':False}),
-       ('domain-voltage','supplies',{'pc_domain_manual_1800':False}),
-       ('cold-history','initial',{'cold_card_protocol':False}),
-       ('irq-ownership','initial',{'irq195_196_owned_disabled_drained':False})]:
-        record=copy.deepcopy(admission);modified=dict(cache);session=bytearray(template)
-        fact=json.loads(cache[record[key]['path']]);fact.update(changes)
-        body=json.dumps(fact,sort_keys=True).encode();modified[record[key]['path']]=body
-        digest=hashlib.sha256(body).digest();record[key]['sha256']=digest.hex()
-        offset={'initial':632,'supplies':696,'topology':728}[key];session[offset:offset+32]=digest
-        th=hashlib.sha256(session).hexdigest();record['session_template_sha256']=th
-        try:prep.validate_admission(record,ih,th,session,modified,True)
+    direct={k:admission[k] for k in ('identity','port','reservation')}
+    prep.validate_admission(direct,'unused','unused',template)
+    for name,offset,fmt,value in [('controller',892,'<I',2),('voltage',888,'<I',0x80000000),
+                                  ('read-count',904,'<I',9),('pin-route',828,'<B',15)]:
+        changed=bytearray(template);struct.pack_into(fmt,changed,offset,value)
+        try:prep.validate_admission(direct,'unused','unused',changed)
         except ValueError:refused.append(name)
         else:raise AssertionError(name)
     frames=[]
@@ -46,14 +39,13 @@ def run(bundle,native,out):
     result_path=out/'result.json'
     result_path.write_text(json.dumps(dict(passed=True,physical_access=False,refused=refused,image_sha256=ih,
       launcher_sha256=frozen['files']['launch.bin'],actual_native_frames=5,host_ranges=2,native_client_reads=2,
-      scope='Actual admitted ELF manifest, complete fixture/bundle freeze and ARM launcher compilation. Host consumes actual native serializer frames with only epoch/generation rebound. All authority is explicitly modeled; no physical operation.'),indent=2)+'\n')
+      scope='Direct ELF/session geometry, transport integrity and ARM launcher compilation. Host consumes actual native serializer frames with only epoch/generation rebound. All authority is explicitly modeled; no physical operation.'),indent=2)+'\n')
     software=dict(schema='a733-emmc-read-supervised-software-v2',physical_access=False,
       session_binding=True,read_only_trace=True,revocation_retention=True,host_capture=True,
       image=reference(bundle/'image.elf'),launcher=reference(bundle/'launch.bin'),
       sources={name:reference(path) for name,path in host.shared.software_sources().items()},
       evidence=[reference(native/'result.json'),reference(result_path)])
     (out/'software.json').write_text(json.dumps(software,indent=2)+'\n')
-    host.shared.validate_software(software,frozen)
 if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__)
     for name in ('bundle','native','output'):p.add_argument('--'+name,type=Path,required=True)

@@ -16,13 +16,13 @@ spec.loader.exec_module(host)
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--image', type=Path, required=True)
-    parser.add_argument('--manifest', type=Path, required=True)
+    parser.add_argument('--manifest', type=Path)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--cc', default='cc')
     parser.add_argument('--native-report', type=Path)
     parser.add_argument('--epoch', type=lambda x: int(x, 0))
     args = parser.parse_args()
-    args.output.mkdir(parents=True, exist_ok=False)
+    args.output = host.returning.output_directory(args.output)
     source = args.output / 'abi.c'
     source.write_text('''#include "runtime.h"
 #include <stdio.h>
@@ -39,7 +39,9 @@ int main(void) {
     subprocess.run([args.cc, '-std=c11', '-Wall', '-Wextra', '-Werror', '-I' + str(HERE), str(source), '-o', str(executable)], check=True)
     actual = [int(x) for x in subprocess.check_output([str(executable)], text=True).split()]
     host.require(actual == [host.MAGIC, host.REPORT_BYTES, host.CPU_OFFSET, host.CPU_BYTES, 768, 104, 112, 120], 'Host layout disagrees with actual runtime.h.')
-    g = host.manifest_check(args.image, json.loads(args.manifest.read_text()))
+    g = host.geometry(args.image)
+    if args.manifest is not None:
+        host.manifest_check(args.image, json.loads(args.manifest.read_text()))
     passed = ['native-header-layout', 'linked-report-stacks-and-fault-reservations']
 
     def refused(name, function):
@@ -51,9 +53,9 @@ int main(void) {
             raise AssertionError('Accepted ' + name)
 
     # Exercise the actual preparation entry, before compilation or file output.
-    admission = args.output / 'missing-admission.json'
-    admission.write_text('{}\n')
-    refused('missing-physical-admission', lambda: host.prepare(args.image, args.manifest, admission,
+    admission = args.output / 'invalid-session.json'
+    admission.write_text('{"reservation": 0}\n')
+    refused('zero-native-session-reservation', lambda: host.prepare(args.image, args.manifest, admission,
             args.output / 'must-not-exist', 'unused', 'unused', 'unused'))
     host.require(not (args.output / 'must-not-exist').exists(), 'Refused admission created a bundle.')
     refused('empty-report', lambda: host.decode_report(b'', 1))

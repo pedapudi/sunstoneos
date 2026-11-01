@@ -1,25 +1,38 @@
 #!/usr/bin/env python3
-"""Prepare the actual G2D image with explicit MODEL-NOT-PHYSICAL authority.
+"""Package G2D inputs from direct device conditions and actual native allocations.
 
-Only physical_authority is substituted. Typed facts, source, allocator rows,
-full page-table bytes, image geometry and retained launcher remain production code.
-No native image build, device, queue or proprietary tool executes.
+Geometry, ownership, permissions and full IOMMU table checks use production code.
+No native workload or device access executes.
 """
 import argparse,copy,hashlib,importlib.util,json,struct
 from pathlib import Path
-from unittest.mock import patch
 ROOT=Path(__file__).resolve().parents[1]
 def module(name,path):
     spec=importlib.util.spec_from_file_location(name,path);value=importlib.util.module_from_spec(spec);spec.loader.exec_module(value);return value
 
+def direct_inputs(value):
+    """Flatten typed fixture inputs and omit release-process metadata."""
+    if isinstance(value,list):return [direct_inputs(item) for item in value]
+    if not isinstance(value,dict):return value
+    if set(value)=={'path','sha256'}:
+        data=Path(value['path']).read_bytes()
+        assert hashlib.sha256(data).hexdigest()==value['sha256']
+        try:return direct_inputs(json.loads(data))
+        except (ValueError,UnicodeDecodeError):return dict(value)
+    omitted={'schema','reviewed','image_sha256','session_template_sha256','evidence','physical_access',
+             'physical_authority','modeled','ddr','platform','recovery'}
+    return {key:direct_inputs(item) for key,item in value.items() if key not in omitted}
+
+
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     for name in ('native','table','output','clang','lld'):p.add_argument('--'+name,type=Path,required=True)
+    p.add_argument('--image',type=Path,help='Current compatible ELF; cached allocation geometry is revalidated.')
     a=p.parse_args();a.output.mkdir(parents=True,exist_ok=False)
     prep=module('g2d_fixture_prepare',ROOT/'apps/g2d/prepare.py')
     producer=module('g2d_fixture_producer',ROOT/'apps/g2d/producer.py')
     fixture=a.output/'MODEL-NOT-PHYSICAL-fixture';fixture.mkdir()
-    image=a.native/'build/sunstone-a733-g2d.elf';manifest=a.native/'build/g2d-application/manifest.json'
+    source_image=a.native/'build/sunstone-a733-g2d.elf';image=a.image or source_image;manifest=a.native/'build/g2d-application/manifest.json'
     source=(a.native/'source-64x64.argb').read_bytes()
     original=(a.native/'root-fixture-bound/session.bin').read_bytes();board=bytearray(original[:592])
     ih=hashlib.sha256(image.read_bytes()).hexdigest()
@@ -45,7 +58,8 @@ def main():
         width=geometry[0],height=geometry[1],stride=geometry[2],operation=geometry[4],dx=geometry[5],dy=geometry[6],w=geometry[7],h=geometry[8],sx=geometry[9],sy=geometry[10],color=geometry[11])
     th=hashlib.sha256(raw).hexdigest()
     proof=json.loads((a.native/'allocation-nominal.json').read_bytes())
-    assert proof['physical_authority'] is False and proof['modeled'] is True and proof['image']==ih
+    assert proof['physical_authority'] is False and proof['modeled'] is True and proof['image']==hashlib.sha256(source_image.read_bytes()).hexdigest()
+    proof['source_image']=proof['image'];proof['image']=ih
     assert proof['session']==hashlib.sha256(original).hexdigest()
     assert hashlib.sha256(source).digest()==original[768:800]
     proof['source_session']=proof['session'];proof['session']=th
@@ -60,9 +74,13 @@ def main():
         allocation=allocation,page_table=table_ref,**refs,whole_board_power_removal=True,no_resource_reuse_before_power_removal=True,
         recovery=dict(mode='manual-usb-reconnect',demonstrated_fel=True,explicit_reconnect_before_resumption=True,preserve_microsd=True,one_attempt=True,evidence=[note]))
     record('admission.json',admission);(fixture/'session-template.bin').write_bytes(raw)
-    try:prep.validate_admission(admission,ih,th,raw)
-    except ValueError as error:assert 'Modeled G2D evidence' in str(error)
-    else:raise AssertionError('Production accepted modeled physical authority')
+    admission=direct_inputs(admission)
+    record('admission.json',admission)
+    prep.validate_admission(admission,ih,th,raw)
+    bad_conditions=copy.deepcopy(admission);bad_conditions['initial']['all_masters_excluded']=False
+    try:prep.validate_admission(bad_conditions,ih,th,raw)
+    except ValueError:pass
+    else:raise AssertionError('Missing direct ownership condition accepted')
     refused=[]
     prep.allocation_check(proof,raw,table)
     for change in ('alias','permission','guard','table-hole','session'):
@@ -77,11 +95,10 @@ def main():
         except ValueError:refused.append(change)
         else:raise AssertionError('Bad allocation accepted: '+change)
     bundle=a.output/'MODEL-NOT-PHYSICAL-bundle'
-    with patch.object(prep,'physical_authority',lambda value:None):
-        prep.prepare(image,manifest,fixture/'admission.json',fixture/'session-template.bin',bundle,a.clang,a.lld,a.native/'source-64x64.argb')
+    prep.prepare(image,None,fixture/'admission.json',fixture/'session-template.bin',bundle,a.clang,a.lld,a.native/'source-64x64.argb')
     result=dict(passed=True,physical_access=False,physical_authority=False,scope=__doc__,image_sha256=ih,
         source_sha256=hashlib.sha256(source).hexdigest(),allocation_source=str(a.native/'allocation-nominal.json'),
         allocation_source_sha256=hashlib.sha256((a.native/'allocation-nominal.json').read_bytes()).hexdigest(),
-        launcher_sha256=prep.base.digest(bundle/'launch.bin'),production_refused=True,allocation_refusals=refused,bundle=str(bundle.resolve()))
+        launcher_sha256=prep.base.digest(bundle/'launch.bin'),direct_inputs_accepted=True,allocation_refusals=refused,bundle=str(bundle.resolve()))
     (a.output/'result.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result))
 if __name__=='__main__':main()

@@ -70,7 +70,7 @@ Controller implementation can proceed before those accessories are available.
 
 ## Functional coverage precedes performance optimization
 
-The [integrated component status](handoff.md#integrated-component-status)
+The [integrated component status](handoff.md#subsystem-status)
 lists the implemented GPU, NPU and other device paths with their host, emulator
 or model evidence. GPU firmware boot, graphics and compute runtime, physical
 identity, cold initialization and device isolation remain unqualified. NPU

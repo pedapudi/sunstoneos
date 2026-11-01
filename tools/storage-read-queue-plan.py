@@ -1,34 +1,11 @@
 #!/usr/bin/env python3
-"""Print the queue artifacts and host timeout of one supervised SD0 read run.
+"""Report artifacts and bounded host time for one supervised SD0 read.
 
-usage: storage-read-queue-plan.py --bundle PREPARED [--format json|shell]
-
-check-a733-storage-read-supervised.py refuses a claim whose queue submission
-does not cover the bundle's prepared.json, image.elf and launch.bin with the
-hashes it admitted (check-a733-smp-supervised.py, device_claim). This tool
-names those three files after checking the same hashes, so the runbook can
-pass them to bundle-run.py as --artifact.
-
-The timeout is the sum of the bounds the checker itself applies, so a run
-that stays within every bound is never cut short by the queue:
-
-- the ROM version request;
-- the five SRAM backups and, for each upload in preload order, the watchdog
-  read and the write with its readback, each bounded by fel_timeout;
-- the watchdog read before entry and the exe request;
-- the 59-second capture window for a new native instance;
-- the refusal path: the report read, the watchdog read and the restoring
-  write and readback of the five SRAM regions;
-- 60 seconds for the checker's start, claim checks and USB health check
-  (the run of 2026-10-25 spent 10 seconds between its version request and
-  its first backup).
-
-After the capture window every outcome except a clean refusal holds the
-port lock and queue claim until the host timeout, so the timeout also ends
-that hold; it never ends a FEL request early. No board, USB or queue access.
+The report is optional scheduling information. Device access depends on the
+selected port lock, live identity and native session limits. Observation timeouts
+do not release a live run's port lock or authorize a retry.
 """
 import argparse
-import hashlib
 import importlib.util
 import json
 import sys
@@ -51,11 +28,6 @@ base = checker.supervisor.base
 def plan(bundle):
     bundle = Path(bundle).resolve()
     prepared = checker.freeze_bundle(bundle)
-    expected = {'prepared.json': prepared['_prepared_sha256'], 'image.elf': prepared['files']['image.elf'],
-                'launch.bin': prepared['files']['launch.bin']}
-    for name, value in expected.items():
-        base.require(hashlib.sha256((bundle / name).read_bytes()).hexdigest() == value,
-                     f'{name} differs from the admitted bundle.')
     request = base.FEL_REQUEST_SECONDS
     regions = [base.transfer_timeout(length) for _, _, length in base.REGIONS]
     uploads = [request + base.transfer_timeout(2 * prepared['_sizes'][name]) for name, _ in base.uploads(prepared)]

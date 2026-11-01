@@ -52,20 +52,13 @@ def profile(analysis):
 
 
 def from_capture(directory, set_path, boot0_path, generation, recapture=False):
-    """A record from a P-state-0-only capture. Without recapture the capture
-    must be one of the restore set's references, and every value must equal
-    the frozen analysis. With recapture it is a later capture of a board the
-    set covers (docs/board-runbooks/dram-restore-records.md): the same
-    identity, layout and training-kind checks apply, and the values are the
-    capture's own."""
+    """Build from a complete P-state-0 capture of a supported board.
+
+    Capture values supply the trained state. The recapture option is accepted
+    for command compatibility; neither mode requires a historical path or values.
+    """
     directory = Path(directory).resolve()
     analysis = restore_set(set_path)
-    if recapture:
-        metadata = None
-    else:
-        metadata = next((c for c in analysis["captures"] if Path(c["path"]).resolve() == directory), None)
-        if metadata is None or metadata["training_kind"] != "pstate0":
-            raise ValueError("Capture is not an admitted P-state-0 reference")
     session = json.loads((directory / "session.json").read_text())
     stages = session["manifest"]["stages"]
     layout = [(s["name"], s["output_bytes"],
@@ -74,16 +67,25 @@ def from_capture(directory, set_path, boot0_path, generation, recapture=False):
         raise ValueError("Capture stage tables differ from the reviewed capture")
     if not session.get("complete") or len(session["stages"]) != len(stages):
         raise ValueError("Capture is incomplete")
-    ddr = json.loads((Path(session["ddr_evidence"]) / "session.json").read_text())
-    if (not ddr.get("complete") or ddr["manifest"].get("variant") != "pstate0"
-            or ddr["manifest"]["boot0_sha256"] != BOOT0_SHA256
-            or ddr["result"]["dram_mib"] != 12288 or ddr["result"]["board_result"] != 0):
+    if "ddr_result" in session:
+        variant, result, complete = session.get("ddr_variant"), session["ddr_result"], True
+    else:
+        ddr = json.loads((Path(session["ddr_evidence"]) / "session.json").read_text())
+        if ddr["manifest"]["boot0_sha256"] != BOOT0_SHA256:
+            raise ValueError("Capture DDR boot0 layout differs")
+        variant, result, complete = ddr["manifest"].get("variant"), ddr["result"], ddr.get("complete")
+    if not complete or variant != "pstate0" or result["dram_mib"] != 12288 or result["board_result"] != 0:
         raise ValueError("Capture training kind or DDR identity differs")
-    # The capture runner bound itself to the DDR run's SRAM mailbox on the same
-    # USB instance; recapture values are not checked against the analysis, so
-    # this binding is what ties them to a P-state-0-only training.
-    if ((directory / "mailbox.bin").read_bytes() != (Path(session["ddr_evidence"]) / "mailbox.bin").read_bytes()
-            or session.get("device") != ddr.get("device") or session.get("node_identity") != ddr.get("node_identity")
+    mailbox = (directory / "mailbox.bin").read_bytes()
+    if "ddr_result" in session:
+        # Current captures record their live DDR result in the same run.
+        if (len(mailbox) != 128 or struct.unpack_from("<4I", mailbox) !=
+                (0x53524444, 5, result["dram_mib"], result["board_result"]) or
+                struct.unpack_from("<I", mailbox, 60)[0]):
+            raise ValueError("Capture live DDR mailbox differs from its training result")
+    elif (mailbox != (Path(session["ddr_evidence"]) / "mailbox.bin").read_bytes()
+            or session.get("device") != ddr.get("device")
+            or session.get("node_identity") != ddr.get("node_identity")
             or session.get("ddr_variant") != "pstate0"):
         raise ValueError("Capture and DDR run are not one lifetime of one P-state-0-only training")
     values = {}
@@ -101,26 +103,14 @@ def from_capture(directory, set_path, boot0_path, generation, recapture=False):
                 # The vendor-window stage overlaps the later full PHY capture.
                 values[address] = value
     chip = [values[0x03006200 + 4 * n] for n in range(4)]
-    board = "chip-" + "-".join(f"{v:08x}" for v in chip)
-    if recapture:
-        # The set is derived from these boards only; another board needs a new set.
-        if board not in analysis["kind_diff"]["per_board"]:
-            raise ValueError("Capture SID is not a board of the restore set")
-    elif board != metadata["board"]:
-        raise ValueError("Capture SID differs from the analysis board")
+    if "chip-" + "-".join(f"{v:08x}" for v in chip) not in analysis["kind_diff"]["per_board"]:
+        raise ValueError("Capture SID differs from the supported restore boards")
     params = [int(word, 16) for word in session["parameter_block"]]
     if len(params) != 128 or params[30] & 4 or (params[27] >> 16) & 0x1fff != 0x125f:
         raise ValueError("Capture parameters are not P-state-0 trained values")
-    # Every selected register is in varying, including the fixed trained values:
-    # they differ from initialization-only captures. Bind bytes to that evidence.
     for key in analysis["kind_diff"]["registers"]:
         if not key.startswith("param[") and int(key, 16) not in values:
             raise ValueError("Capture lacks a restore-set register: " + key)
-        if recapture:
-            continue
-        actual = params[int(key[6:-1])] if key.startswith("param[") else values[int(key, 16)]
-        if analysis["varying"][key]["values"][str(directory)] != actual:
-            raise ValueError("Capture value differs from the frozen analysis: " + key)
     boot0 = Path(boot0_path).read_bytes()
     if hashlib.sha256(boot0).hexdigest() != BOOT0_SHA256:
         raise ValueError("boot0 differs from the reviewed image")

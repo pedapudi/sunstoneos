@@ -264,6 +264,6 @@ for dep in list((e/'native').rglob('*.obj.d'))+list(obj.glob('*.obj.d')):
 closure={}
 for i,path in enumerate(sorted(inputs)):
  dest=e/'compiled-inputs'/str(i)/path.name;dest.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(path,dest);closure[str(path)]={'sha256':sha(path),'snapshot':str(dest.relative_to(e))}
-save('input-identities.json',{'compiled_inputs':closure,'identity_inputs':identity,'build_id':build_id,'elf_sha256':sha(e/'image.elf'),'binary_sha256':sha(e/'image.bin'),'physical_access':False,'physical_admission':False,'note':'Complete app-local return implementation. Root architectural/physical authority review and real session/board evidence remain mandatory.'})
+save('input-identities.json',{'compiled_inputs':closure,'identity_inputs':identity,'build_id':build_id,'elf_sha256':sha(e/'image.elf'),'binary_sha256':sha(e/'image.bin'),'physical_access':False,'physical_admission':False,'note':'Native NPU return image; host build evidence does not establish physical operation.'})
 save('manifest.json',{'execution_profile':identity['profile'],'build_id':build_id,'final_elf':sha(e/'image.elf'),'binary_sha256':sha(e/'image.bin'),'physical_admission':False})
 print('Built NPU runtime finite returning image:' if a.runtime else 'Built NPU interrupt finite returning image:' if a.interrupt else 'Built NPU finite returning image:',sha(e/'image.elf'))

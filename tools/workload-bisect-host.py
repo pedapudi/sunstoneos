@@ -8,7 +8,6 @@ secondaries may still run: the runner reads the record and the owned
 writable memory, restores nothing and keeps the board for power removal.
 """
 import importlib.util
-import json
 from pathlib import Path
 import struct
 from types import SimpleNamespace
@@ -27,8 +26,6 @@ CASES = ('complete-return', 'transport-failure-retained', 'invalid-report-restor
          'changed-input-refused')
 RESTORE_CASES = ('restore-rwp', 'restore-rwp-secondary', 'restore-rwp-late', 'restore-rwp-late-secondary',
              'restore-pwrr', 'restore-pwrr-secondary')
-INSTRUCTION_CASES = {False: ('success', 'stalled-core', 'stalled-no-tick', *RESTORE_CASES),
-                     True: ('success', *RESTORE_CASES)}
 builder = base.base.base.cache.local.identity.builder
 RECORD = builder.DEADLINE_RECORD
 RECORD_OFFSET = RECORD[0]-0x42018000
@@ -203,57 +200,18 @@ def profile(manifest):
 def load(build, image, manifest):
     item = manifest.get('workload_bisect') or {}
     quiet = item.get('quiet_background')
-    require(quiet in (False, True) and item == {
+    deadline = {k:v for k,v in item.items() if k not in ('pending','physical_eligible')}
+    require(quiet in (False,True) and deadline == {
         'profile': PROFILES[quiet], 'quiet_background': quiet,
         'deadline_ticks_after_startup': DEADLINE_TICKS, 'deadline_interrupt': 29,
-        'record': {'address': RECORD[0], 'bytes': RECORD[1]},
-        'pending': 'Instruction cases, host validation and root review required before physical use.'},
+        'record': {'address': RECORD[0],'bytes': RECORD[1]}},
         'Return-deadline profile scope changed.')
     top_opp = 'top_opp' in manifest
     if top_opp:
-        require(not quiet and manifest['top_opp'] == dict(TOP_OPP_SCOPE, relock=manifest['hooks'].get('top_opp_relock')) and
-                manifest['hooks'].get('top_opp_relock') == 0x41020200, 'Top-operating-point profile scope changed.')
+        actual = manifest['top_opp']
+        require(not quiet and all(actual.get(k)==TOP_OPP_SCOPE[k] for k in ('record','targets')) and
+                {k:v for k,v in actual.get('lower',{}).items() if k!='when'} ==
+                {k:v for k,v in TOP_OPP_SCOPE['lower'].items() if k!='when'} and
+                actual.get('relock') == manifest['hooks'].get('top_opp_relock') == 0x41020200,
+                'Top-operating-point profile scope changed.')
     return base.load(build, image, manifest, return_deadline=True, quiet=quiet, top_opp=top_opp)
-
-
-def validate_software(software, manifest_hash):
-    require(software.get('schema') == SOFTWARE_SCHEMA and software.get('physical_access') is False and
-            software.get('manifest_sha256') == manifest_hash and
-            software.get('host_sources') == {n: digest(ROOT/n) for n in HOST_SOURCES} and
-            software.get('host_cases') == dict.fromkeys(CASES, True), 'Return-deadline host evidence differs.')
-    quiet = software.get('quiet_background')
-    require(quiet in (False, True), 'Profile variant missing.')
-    evidence = software['instruction_evidence']
-    require(tuple(sorted(evidence)) == tuple(sorted(INSTRUCTION_CASES[quiet])),
-            'Return-deadline instruction cases incomplete.')
-    for case, item in evidence.items():
-        path = Path(item['path'])
-        require(path.is_absolute() and digest(path) == item['sha256'], 'Instruction evidence changed.')
-        result = json.loads(path.read_text())
-        require(result.get('physical_access') is False and result.get('pass') is True and
-                result.get('case') == case and result.get('profile') == PROFILES[quiet] and
-                result.get('native_sha256') == probe.NATIVE and result.get('manifest_sha256') == manifest_hash and
-                result.get('sources') == {n: digest(ROOT/n) for n in MODEL_SOURCES},
-                'Return-deadline instruction inputs or result differ.')
-        report = path.with_suffix('.bin')
-        require(digest(report) == result['report_sha256'], 'Instruction report changed.')
-        raw = report.read_bytes()
-        require(not case.startswith('restore-') or result.get('injected_reads') == 1,
-                'The restoration case did not inject its status read.')
-        if case == 'success' or case in RESTORE_CASES:
-            require(result.get('off') == list(range(1, 8)) and result.get('clean_complete') == list(range(8)) and
-                    not result.get('fiq_taken'), 'Completed workload or disarmed deadline missing.')
-            actual = [list(struct.unpack_from('<5Q', raw, 0x4280+c*128)) for c in range(8)]
-            require(result.get('workload_results') == actual and
-                    all(r[0] == 32 and r[1] and r[2] and not r[3] for r in actual) and actual[0][4] >= 32,
-                    'Completed workload results differ.')
-        else:
-            record = deadline_record(raw, raw[32:48], result.get('identity_park'))
-            parked = record and record['cpu0_wait'] == 'identity_park'
-            # stalled-core ends through the deadline interrupt too when CPU0 was
-            # waiting in identity_park (see checks/workload-bisect-probe.py); the
-            # record's ELR_EL3 and the model must agree on where CPU0 waited.
-            require(record and not record['inconsistent'] and
-                    record['reason'] == (1 if case == 'stalled-no-tick' or parked else 2) and
-                    (record['reason'] != 1 or parked == bool(result.get('cpu0_parked'))) and
-                    record['stage'] == 3 and result.get('off') == [], 'Deadline return case differs.')

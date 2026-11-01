@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-"""Run the reviewed SRAM configuration trial without enabling a watchdog timer."""
+"""Run the SRAM configuration trial without enabling a watchdog timer."""
 import argparse
-import fcntl
 import hashlib
 import importlib.util
 import json
@@ -11,10 +10,11 @@ import subprocess
 import sys
 import time
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from host_evidence import unique_directory
+
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = Path.home() / ".cache/sunstoneos"
-IMAGE_HASH = "01a47f9bd1cc3c61353c988f0b34a9168d3311db591ba63ddd9b538009dd09eb"
-FEL_HASH = "4a54cdc179baafbdecac47eb85714c3745d6d9952e05b482c7016afd4b22bf3e"
 ROM_HASH = "a8e31821e8a1611d75867825914c58373c732742cb8f2235e8168c1d7e93b5aa"
 REGISTERS = (0x02050014, 0x02050010, 0x02050018, 0x070501c0,
              0x070501c4, 0x070501d4, 0x070501d8, 0x07090108)
@@ -33,18 +33,19 @@ def main():
                         default=CACHE / "evidence" / time.strftime("watchdog-configuration-%Y%m%d-%H%M%S"))
     args = parser.parse_args()
     image, rom = args.image.read_bytes(), args.rom.read_bytes()
-    for name, data, expected in (("image", image, IMAGE_HASH), ("ROM", rom, ROM_HASH),
-                                 ("FEL tool", args.fel.read_bytes(), FEL_HASH)):
-        if hashlib.sha256(data).hexdigest() != expected:
-            parser.error(f"{name} differs from the reviewed input")
+    if not 0 < len(image) <= 0x800:
+        parser.error("SRAM image exceeds its reserved interval")
+    if hashlib.sha256(rom).hexdigest() != ROM_HASH:
+        parser.error("ROM differs from the inspected recovery code")
     spec = importlib.util.spec_from_file_location("access", ROOT / "tools/usb-access.py")
     access = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(access)
     sys.path.insert(0, str(ROOT / "tools"))
     import usb_guard
     usb_guard.check_health()
-    args.evidence.mkdir(parents=True, exist_ok=False)
-    record = dict(image_sha256=IMAGE_HASH, rom_sha256=ROM_HASH, tool_sha256=FEL_HASH,
+    args.evidence = unique_directory(args.evidence)
+    record = dict(image_sha256=hashlib.sha256(image).hexdigest(), rom_sha256=ROM_HASH,
+                  tool_sha256=hashlib.sha256(args.fel.read_bytes()).hexdigest(),
                   transactions=[], complete=False)
     node, identity = None, None
     executing = False

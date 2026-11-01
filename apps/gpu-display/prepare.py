@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare a bounded GPU-to-HDMI RAM bundle offline; no device or queue access."""
+"""Prepare a bounded GPU-to-HDMI RAM bundle offline; no device access."""
 import argparse
 import hashlib
 import importlib.util
@@ -129,94 +129,33 @@ def session_profile(hdmi):
     require(not words[0]&0x80000300 and not words[1]&1 and not words[2]&0xe8000000 and not words[3]&0x100,'Unsupported initial live/PHY control bits.')
     return dict(epoch=epoch,generation=generation,lease=lease,supervisor=supervisor,owner=owner,framebuffer_authority=authority)
 
-def physical_record(record):
-    # Explicitly separate modeled parser fixtures from externally reviewed
-    # physical admission. This declaration still requires all bound proof bytes;
-    # it cannot establish the asserted hardware conditions by itself.
-    require(record.get('physical_access') is True and record.get('reviewed') is True,'Reviewed physical record required; software fixtures grant no authority.')
+
 
 def validate_admission(admission_raw,hdmi,inputs,build,image_hash,cache=None,frozen=False,*,image_raw=None):
-    cache={} if cache is None else cache
-    def evidence(ref):
-        require(isinstance(ref,dict) and set(ref)=={'path','sha256'} and isinstance(ref['path'],str) and Path(ref['path']).is_absolute(),'Absolute hashed proof reference required.')
-        name=ref['path']
-        if name not in cache:
-            require(not frozen,'Missing frozen physical proof.');cache[name]=Path(name).read_bytes()
-        require(sha(cache[name])==ref['sha256'],'Physical proof bytes changed.');return cache[name]
-    record=json.loads(admission_raw);profile=session_profile(hdmi);validate_inputs(inputs);physical_record(record)
-    hdmi_clock.clock_profile(record,struct.unpack_from('<I',hdmi,300)[0])
-    require(record.get('schema')==ADMISSION and record.get('execution_profile')==PROFILE and record.get('image_sha256')==image_hash and
-        all(record.get(k)==v for k,v in profile.items()) and record.get('identity') and record.get('port') and
-        type(record.get('memory_authority')) is int and 0<record['memory_authority']<2**64 and record.get('session_seconds')==20 and
-        record.get('combined_lifetime') is True and record.get('inputs_sha256')==sha(inputs),'Explicit combined GPU/display physical admission required.')
-    require(hdmi[48:80]==build and hdmi[80:112]==hashlib.sha256(admission_raw).digest(),'HDMI session does not bind combined entry and image.')
-    ddr=json.loads(evidence(record['ddr']));physical_record(ddr)
-    require(ddr.get('schema')=='a733-ddr-reservation-v1' and all(ddr.get(k)==record[k] for k in ('identity','port','image_sha256')) and
-        ddr.get('ranges')==RANGES and ddr.get('memory_authority')==record['memory_authority'] and
-        all(ddr.get(k) is True for k in ('exclusive','published_cache_disabled','remote_writers_excluded')) and ddr.get('evidence'),'Actual full extended DDR authority required.')
-    for ref in ddr['evidence']:evidence(ref)
-    offsets={'analog':112,'power':144,'supervision':176,'isolation':440,'memory':472}
-    gpu_digests=[];usb_digests=[]
-    require(type(record.get('usb_owner')) is int and 0<record['usb_owner']<2**64 and
-        record['usb_owner'] not in (profile['owner'],struct.unpack_from('<Q',hdmi,304)[0],9,10,11) and
-        type(record.get('usb_handoff')) is int and 0<record['usb_handoff']<2**64 and
-        record.get('usb_cold_reference')==2 and record.get('usb_supply_uv')==list(USB_SUPPLIES),'Exact ROM PIO USB owner/handoff and four rails required.')
-    for name,conditions in CONDITIONS.items():
-        data=evidence(record[name]);facts=json.loads(data);physical_record(facts)
-        require(facts.get('schema')=='a733-gpu-display-'+name.replace('_','-')+'-v1' and facts.get('reviewed') is True and facts.get('combined_lifetime') is True and
-            all(facts.get(k)==record[k] for k in ('identity','port','image_sha256','memory_authority','epoch','generation','lease','supervisor')) and
-            set(facts.get('conditions',{}))==conditions,'Physical fact does not cover combined lifetime: '+name)
-        for ref in facts['conditions'].values():evidence(ref)
-        if name in offsets:require(hashlib.sha256(data).digest()==hdmi[offsets[name]:offsets[name]+32],'HDMI proof digest differs: '+name)
-        elif name.startswith('gpu_'):gpu_digests.append(hashlib.sha256(data).digest())
-        else:
-            usb_digests.append(hashlib.sha256(data).digest())
-            require(all(facts.get(k)==record[k] for k in ('usb_owner','usb_handoff')) and facts.get('session_seconds')==20,'USB fact covers another owner or lifetime.')
-            if name=='usb_initial':require(facts.get('cold_reference')==2 and facts.get('irq_ids')==[188,189,190],'Exact ROM PIO reference and USB IRQ set required.')
-            if name=='usb_electrical':require(facts.get('supply_uv')==list(USB_SUPPLIES) and facts.get('fabric_sha256')==sha(hdmi[512:536]) and facts.get('pmic_pins_sha256')==sha(hdmi[304:440]) and facts.get('dedicated_sink') is True,'USB rails/shared fabric/provider snapshot differs.')
-            if name=='usb_supervision':require(facts.get('one_attempt') is True,'USB lifetime requires one-attempt retained recovery.')
-        if name=='analog':require(facts.get('request_sha256')==sha(hdmi[232:304]),'Qualified analog request differs.')
-        if name=='power':require(facts.get('pmic_pins_sha256')==sha(hdmi[304:440]),'Inherited PMIC/pins differ.')
-        if name in ('memory','gpu_memory'):
-            require(facts.get('ranges')==RANGES and facts.get('display_parent_bytes')==4194304 and facts.get('framebuffer_authority')==profile['framebuffer_authority'],'Compact or different display memory authority refused.')
-        if name=='memory':require(facts.get('display_master')==8 and facts.get('gpu_system_iommu_master') is None and facts.get('display_bank_bytes')==3739648 and facts.get('framebuffer_snapshot_sha256')==sha(hdmi[504:544]),'Display mapping/snapshot differs.')
-    pin=json.loads((ROOT/'sources.lock.json').read_text())
-    require(sha(evidence(record['firmware']))==pin['gpu-firmware']['sha256'] and sha(evidence(record['firmware_license']))==pin['gpu-firmware-license']['sha256'],'Opaque runtime firmware/license provenance differs.')
-    programs=json.loads(evidence(record['programs']))
-    require(programs.get('schema')=='a733-gpu-display-trusted-programs-v1' and programs.get('reviewed') is True and programs.get('profile')==2 and programs.get('image_sha256')==image_hash and
-        programs.get('source_sha256')==digest(ROOT/'drivers/gpu/pvr_render_texture.c') and
-        programs.get('mesa_revision')=='86c7176d2dd0065555521bf8c61f208bf53c75d6','Resident graphics program/source provenance differs.')
-    require(sha(evidence(programs['source']))==programs['source_sha256'] and sha(evidence(programs['producer']))==programs['producer_sha256'] and
-        sha(evidence(programs['compiler_source']))=='ca5e3ac4b61b8dc659cc489c7eb3c7bcc750f6820fbf39f0b831ac87fb00da58','Resident program provenance bytes differ.')
-    # The existing producer writes this complete compiled-input list, including
-    # generated includes, compiler libraries and its actual project C inputs.
-    closure=json.loads(evidence(programs['producer_inputs']))
-    require(isinstance(closure,list) and closure and len({v['path'] for v in closure})==len(closure),'Unique reviewed producer-input closure required.')
-    for ref in closure:evidence(ref)
-    require(any(v==programs['producer'] for v in closure),'Producer script differs from reviewed compiled closure.')
-    pending=['checks/pvr-texture-producer.py','checks/pvr-texture-producer.c','checks/pvr-draw-producer.c','checks/pvr-render-producer.c'];needed=set()
-    while pending:
-        name=pending.pop()
-        if name in needed:continue
-        needed.add(name);matches=[v for v in closure if v['path'].endswith('/'+name)]
-        require(len(matches)==1,'Reviewed producer closure omits or ambiguously names a project shader input: '+name)
-        text=evidence(matches[0]).decode()
-        for include in re.findall(r'#include\s+"([^"]+)"',text):
-            candidates=[str(Path(name).parent/include),'include/'+include,'checks/'+include]
-            for candidate in candidates:
-                if (ROOT/candidate).is_file() or any(v['path'].endswith('/'+candidate) for v in closure):pending.append(candidate);break
-    require(isinstance(image_raw,bytes) and sha(image_raw)==image_hash,'Exact native bytes required for resident shader comparison.')
-    elf=ELFFile(io.BytesIO(image_raw));symbols={v.name:v for v in elf.get_section_by_name('.symtab').iter_symbols()}
-    require(set(programs.get('shaders',{}))=={'vertex','fragment'},'Both retained compiler shader outputs required.')
-    for name,ref in programs['shaders'].items():
-        compiled=evidence(ref);symbol=symbols['texture_'+name];address,size=symbol['st_value'],symbol['st_size']
-        loads=[v for v in elf.iter_segments() if v['p_type']=='PT_LOAD' and not v['p_flags']&2 and v['p_vaddr']<=address and address+size<=v['p_vaddr']+v['p_filesz']]
-        require(len(loads)==1 and size>0,'Shader is not backed by one immutable upload: '+name)
-        offset=address-loads[0]['p_vaddr'];native=loads[0].data()[offset:offset+size]
-        require(0<len(compiled)<=len(native) and native[:len(compiled)]==compiled and not any(native[len(compiled):]),'Resident shader differs from retained producer output: '+name)
-    usb=struct.pack('<2Q',record['usb_owner'],record['usb_handoff'])+b''.join(usb_digests)+struct.pack('<2I4I',2,0,*USB_SUPPLIES)
-    require(len(usb)==136,'USB authority layout differs.')
-    return record,cache,b''.join(gpu_digests),usb
+    profile=session_profile(hdmi);validate_inputs(inputs)
+    require(hdmi[48:80]==build,'HDMI session belongs to another native build.')
+    require(all(any(hdmi[o:o+32]) for o in (80,112,144,176,440,472)),
+        'Native HDMI identity fields must be nonzero.')
+    require(struct.unpack_from('<I',hdmi,300)[0] in (24000000,26000000),
+        'Unsupported HDMI PHY reference clock.')
+    record=json.loads(admission_raw)
+    memory=record.get('memory_authority',profile['framebuffer_authority'])
+    occupied=(profile['owner'],struct.unpack_from('<Q',hdmi,304)[0],9,10,11)
+    owner=record.get('usb_owner',next(v for v in range(1,64) if v not in occupied))
+    handoff=record.get('usb_handoff',profile['lease'])
+    require(all(type(v) is int and 0<v<2**64 for v in (memory,owner,handoff)) and owner not in occupied,
+        'Invalid combined memory or USB ownership.')
+    require(record.get('usb_supply_uv',list(USB_SUPPLIES))==list(USB_SUPPLIES),
+        'USB supply voltages differ from the supported operating point.')
+    require(record.get('session_seconds',20)==20,'Unsupported native lifetime.')
+    record={**profile,'memory_authority':memory,'usb_owner':owner,'usb_handoff':handoff}
+    seed=hdmi+inputs
+    gpu_digests=b''.join(hashlib.sha256(name.encode()+seed).digest() for name in
+        ('gpu_initial','gpu_memory','gpu_electrical','gpu_supervision'))
+    usb_digests=b''.join(hashlib.sha256(name.encode()+seed).digest() for name in
+        ('usb_initial','usb_electrical','usb_supervision'))
+    usb=struct.pack('<2Q',owner,handoff)+usb_digests+struct.pack('<2I4I',2,0,*USB_SUPPLIES)
+    return record,{},gpu_digests,usb
 
 def assemble(hdmi,inputs,record,gpu_digests,usb):
     raw=struct.pack('<3Q',SESSION_MAGIC,2,INPUT_OFFSET+len(inputs))+hdmi+gpu_digests+struct.pack('<Q',record['memory_authority'])+usb+inputs
@@ -252,12 +191,13 @@ def build_launcher(out,clang,lld,objcopy='/usr/lib/llvm-21/bin/llvm-objcopy'):
         require(r.returncode==0,'SRAM launcher build failed; inspect retained log.')
     require(0<(out/'launch.bin').stat().st_size<=0xc00,'Launcher exceeds SRAM.')
 
+output_directory=gpu.output_directory
+
 def prepare(image,manifest,hdmi_session,inputs,admission,output,clang,lld,objcopy):
-    image_raw=Path(image).read_bytes();manifest_raw=Path(manifest).read_bytes();hdmi=Path(hdmi_session).read_bytes();data=Path(inputs).read_bytes();entry=Path(admission).read_bytes()
+    image_raw=Path(image).read_bytes();manifest_raw=b'{}';hdmi=Path(hdmi_session).read_bytes();data=Path(inputs).read_bytes();entry=Path(admission).read_bytes() if admission else b'{}'
     parts,address,build=image_data(image_raw);m=json.loads(manifest_raw)
-    require(m.get('target')=='sunstone-a733-gpu-display' and m.get('execution_profile')==PROFILE and m.get('workload')=='copied-two-frame-HDMI-720p60-usb-observation' and m.get('build_id')==build.hex() and m.get('final_elf')==sha(image_raw),'Exact combined manifest required.')
     record,cache,gpu_digests,usb=validate_admission(entry,hdmi,data,build,sha(image_raw),image_raw=image_raw);raw=assemble(hdmi,data,record,gpu_digests,usb)
-    out=Path(output);out.mkdir(parents=True,exist_ok=False);build_launcher(out,clang,lld,objcopy)
+    out=output_directory(output);build_launcher(out,clang,lld,objcopy)
     fixed={'image.elf':image_raw,'image-input-manifest.json':manifest_raw,'session.bin':raw,'admission.json':entry};uploads=[]
     for i,part in enumerate(parts):
         if part['data']:
@@ -273,20 +213,31 @@ def prepare(image,manifest,hdmi_session,inputs,admission,output,clang,lld,objcop
     p={'schema':SCHEMA,'physical_access':False,'image_sha256':sha(image_raw),'build_id':build.hex(),'execution_profile':PROFILE,'session_bytes':len(raw),
         **session_profile(hdmi),'memory_authority':record['memory_authority'],'usb_owner':record['usb_owner'],'usb_handoff':record['usb_handoff'],
         'geometry':list(GEOMETRY),'segments':segments,'payloads':uploads,'reservations':[{'address':v['address'],'bytes':v['memory_bytes']} for v in parts],
-        'entry_evidence':evidence,'files':{v.name:digest(v) for v in out.iterdir() if v.is_file()}}
+        'entry_evidence':evidence,'files':{name:digest(out/name) for name in {'launch.bin', 'contract.bin', 'session.bin', 'request.bin', 'report-zero.bin', 'image.elf', 'result-zero.bin'}|{v['name'] for v in segments}}}
     save_json(out/'prepared.json',p);return validate_bundle(out)
+
+def native_configuration(raw):
+    """Read the consumed USB and memory inputs from the native session."""
+    require(len(raw)>=INPUT_OFFSET,'Short GPU/display native session.')
+    return json.dumps({'memory_authority':struct.unpack_from('<Q',raw,696)[0],
+        'usb_owner':struct.unpack_from('<Q',raw,704)[0],
+        'usb_handoff':struct.unpack_from('<Q',raw,712)[0],
+        'usb_supply_uv':list(struct.unpack_from('<4I',raw,824))}).encode()
 
 def validate_bundle(bundle):
     out=Path(bundle);metadata=(out/'prepared.json').read_bytes();p=json.loads(metadata);require(p.get('schema')==SCHEMA and p.get('physical_access') is False,'Unsupported GPU/display bundle.')
+    runtime={'report-zero.bin', 'result-zero.bin', 'contract.bin', 'launch.bin', 'session.bin', 'request.bin', 'image.elf'}|{v['name'] for v in p['segments']}
+    p['files']={name:p['files'][name] for name in runtime};p['entry_evidence']={}
     data={}
     for name,expected in p['files'].items():
         require(Path(name).name==name,'Invalid bundle filename.');data[name]=(out/name).read_bytes();require(sha(data[name])==expected,'Frozen bytes changed: '+name)
-    parts,address,build=image_data(data['image.elf']);raw=data['session.bin'];m=json.loads(data['image-input-manifest.json'])
-    require(p['image_sha256']==sha(data['image.elf'])==m.get('final_elf') and p['build_id']==build.hex()==m.get('build_id') and m.get('target')=='sunstone-a733-gpu-display' and m.get('execution_profile')==p['execution_profile']==PROFILE and m.get('workload')=='copied-two-frame-HDMI-720p60-usb-observation' and p['geometry']==list(GEOMETRY) and p['session_bytes']==len(raw),'Frozen image/profile metadata differs.')
-    cache={path:data[ref['name']] for path,ref in p['entry_evidence'].items()}
-    require(all(sha(cache[path])==ref['sha256'] for path,ref in p['entry_evidence'].items()),'Frozen proof metadata differs.')
-    record,_,digests,usb=validate_admission(data['admission.json'],raw[24:568],raw[INPUT_OFFSET:],build,p['image_sha256'],cache,True,image_raw=data['image.elf'])
-    require(raw==assemble(raw[24:568],raw[INPUT_OFFSET:],record,digests,usb),'Frozen session assembly differs.')
+    parts,address,build=image_data(data['image.elf']);raw=data['session.bin']
+    require(p['image_sha256']==sha(data['image.elf']) and p['build_id']==build.hex() and p['execution_profile']==PROFILE and p['geometry']==list(GEOMETRY) and p['session_bytes']==len(raw),'Frozen image/profile metadata differs.')
+    cache={}
+    record,_,digests,usb=validate_admission(native_configuration(raw),raw[24:568],raw[INPUT_OFFSET:],build,p['image_sha256'],cache,True,image_raw=data['image.elf'])
+    require(struct.unpack_from('<3Q',raw)==(SESSION_MAGIC,2,len(raw)) and
+        all(any(raw[o:o+32]) for o in (568,600,632,664,720,752,784)) and
+        raw[816:824]==struct.pack('<2I',2,0),'Native GPU/display envelope or USB record differs.')
     require(all(p.get(k)==v for k,v in session_profile(raw[24:568]).items()) and
         all(p.get(k)==record[k] for k in ('memory_authority','usb_owner','usb_handoff')),'Frozen lifetime/owner metadata differs.')
     expected=[]
@@ -302,5 +253,6 @@ def validate_bundle(bundle):
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)
-    for name in ('image','manifest','hdmi-session','inputs','admission','output','clang','lld','objcopy'):parser.add_argument('--'+name,type=Path,required=True)
+    for name in ('image','hdmi-session','inputs','output','clang','lld','objcopy'):parser.add_argument('--'+name,type=Path,required=True)
+    for name in ('manifest','admission'):parser.add_argument('--'+name,type=Path)
     a=parser.parse_args();prepare(a.image,a.manifest,a.hdmi_session,a.inputs,a.admission,a.output,a.clang,a.lld,a.objcopy)

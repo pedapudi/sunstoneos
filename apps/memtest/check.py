@@ -9,8 +9,8 @@ verify    check a returned result record (magic, checksum, sequence and
           blocks to exclude after an abort.
 
 execute() performs one run through the transaction and wait_return callbacks
-of tools/a733-returning-host.py. Physical admission and the root-owned claim
-belong to the coordinator; no command here opens a USB device.
+of tools/a733-returning-host.py. The caller holds the port lock and checks
+current device state; no command here opens a USB device.
 """
 import argparse
 import ctypes
@@ -20,6 +20,9 @@ from pathlib import Path
 import secrets
 import struct
 import subprocess
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
+from host_evidence import new_directory, unique_directory
 
 ROOT = Path(__file__).resolve().parents[2]
 K = 0xa5c35a3c00000000
@@ -47,13 +50,11 @@ STOPS = ['none', 'scan', 'decode', 'digest', 'budget']
 # Refusals that depend on the CPU, the monitor or the live translation tables;
 # only the image can decide them.
 IMAGE_ONLY = {'dczid', 'dcache', 'writers-unsampled', 'writers', 'mapping', 'record'}
-# Residuals the user accepts, in the run log, before any run: a write by
+# Residuals recorded as optional notes: a write by
 # OR100, CE or USB0 during a run; a denied access that stalls the bus with no
 # watchdog; a partial-page or multi-stuck-bit alias that the scan misses and a
 # later write sends into the monitor.
 RESIDUALS = ('remote-writers-or100-ce-usb0', 'bus-stall', 'partial-page-alias')
-# Stops after which the recovery pages or the address decode are in doubt.
-REVIEW_STOPS = {'scan', 'decode', 'digest'}
 # Run statuses a verified record can carry; any other entry has no trusted record.
 TRUSTED_STATUS = {'pass', 'fail', 'refused', 'stopped'}
 
@@ -230,67 +231,69 @@ def abort_exclusion(progress, phase):
     return sorted(near & set(range(FIRST_BLOCK, END_BLOCK)))
 
 
-def reviewed(run):
-    """True when the run carries a review entry naming who reviewed it and when."""
-    review = run.get('reviewed')
-    return isinstance(review, dict) and bool(review.get('by')) and bool(review.get('date'))
+def unsafe_reason(run, session, excluded):
+    """A concrete unresolved memory or current-session state hazard, if known.
 
-
-def review_reason(run, session):
-    """Why a run blocks further uploads until it is reviewed, or None.
-
-    Any session: a scan hit, decode fault or digest mismatch; a DMA0 phase
-    marker left set; an untrusted or missing record, unless an abort exclusion
-    explains it and a later boot0 upload started a new session. Current
-    session: any other run that did not pass."""
-    if reviewed(run):
-        return None
-    status = run.get('status')
-    if status == 'stopped' and run.get('stop') in REVIEW_STOPS:
-        return f"stopped: {run.get('stop')}"
-    if run.get('dma_phase'):
-        return 'DMA0 phase marker set'
-    if status not in TRUSTED_STATUS:
-        if run.get('abort_excluded') and run['session'] < session:
-            return None
-        return 'untrusted or missing record'
-    if run['session'] == session and status != 'pass':
-        return f'{status} in the current session'
+    Old DMA and uncertain outcomes do not establish current hardware state.
+    A new session still requires the launcher's live idle/reset checks. Review
+    notes never clear an active DMA marker or a damaged recovery map.
+    """
+    current = run['session'] == session
+    status, stop = run.get('status'), run.get('stop')
+    if stop in ('decode', 'digest'):
+        return 'address decode or recovery digest remains unsafe'
+    if current and run.get('dma_phase'):
+        return 'DMA0 phase marker set in the current session'
+    if current and status not in TRUSTED_STATUS:
+        return 'untrusted or missing record in the current session'
+    addresses = [m['address'] for m in run.get('mismatches', []) if 'address' in m]
+    if stop == 'scan':
+        if current:
+            return 'scan fault requires reinitialization before reuse'
+        if not run.get('scan_page'):
+            return 'scan fault has no physical exclusion address'
+        addresses.append(run['scan_page'])
+    progress = run.get('progress', 0)
+    if status not in TRUSTED_STATUS and progress:
+        blocks = abort_exclusion(progress, run.get('phase', 0))
+        if not blocks:
+            return 'abort progress is outside the tested map'
+    else:
+        blocks = []
+    for address in addresses:
+        if type(address) is not int or not DRAM_BASE + (FIRST_BLOCK << BLOCK_SHIFT) <= address < DRAM_BASE + (END_BLOCK << BLOCK_SHIFT):
+            return 'fault address is outside the tested map'
+        blocks.append((address - DRAM_BASE) >> BLOCK_SHIFT)
+    if any(not any(first <= block < end for first, end in excluded) for block in blocks):
+        return 'known fault blocks are not excluded'
+    if status == 'fail' and not addresses:
+        return 'failed run has no physical exclusion address'
+    if current and status == 'stopped' and stop not in ('budget', 'scan'):
+        return 'stopped run has uncertain current-session state'
     return None
 
 
 def acceptance(log):
-    """The user's acceptance of every residual, from the run log."""
-    record = log.get('acceptance')
-    if not isinstance(record, dict) or not record.get('by') or not record.get('date'):
-        raise ValueError('the run log holds no acceptance record with "by" and "date"')
-    missing = [name for name in RESIDUALS if name not in record.get('residuals', [])]
-    if missing:
-        raise ValueError(f'the acceptance record does not name: {", ".join(missing)}')
-    return {'by': record['by'], 'date': record['date'], 'residuals': list(RESIDUALS)}
+    """Return optional residual notes unchanged; notes do not authorize a run."""
+    return log.get('acceptance')
 
 
 def next_contract(log, lib, mask_names, budget_seconds):
-    """Contract for the next run from the session run log.
+    """Make bounded input while preserving known fault exclusions and progress.
 
-    The log holds 'session' (boot0 upload count), 'acceptance' (see
-    acceptance()), 'runs' (each with 'session', 'sequence', 'status', and when
-    the record was trusted 'stop', 'resume' and 'dma_phase'; optionally
-    'abort_excluded' and 'reviewed': {'by', 'date'}) and 'excluded' ranges.
-    Every run checks the data and address lines and marches from the last
-    resume address up to the next excluded range or the end of the map; the
-    first run of a session adds the page signature and the harness.
+    The session log supplies sequence and safe resume positions. Its review
+    and acceptance notes are optional metadata. Native admission checks the
+    current writer, mapping, recovery and cache state at execution.
     """
-    acceptance(log)
+    excluded = [tuple(x) for x in log.get('excluded', [])]
     blocked = [(r['sequence'], reason) for r in log.get('runs', [])
-               if (reason := review_reason(r, log['session']))]
+               if (reason := unsafe_reason(r, log['session'], excluded))]
     if blocked:
-        raise ValueError('review the record of run ' + ', '.join(f'{s} ({why})' for s, why in blocked) +
-                         ' and add a "reviewed" entry before another upload')
-    runs = [r for r in log.get('runs', []) if r['session'] == log['session']]
+        raise ValueError('unsafe memory state after run ' + ', '.join(f'{s} ({why})' for s, why in blocked))
+    runs = [r for r in log.get('runs', []) if r['session'] == log['session'] and
+            (r.get('status') == 'pass' or (r.get('status') == 'stopped' and r.get('stop') == 'budget'))]
     resumes = [r['resume'] for r in runs if r.get('resume')]
     sequence = 1 + max((r['sequence'] for r in log.get('runs', [])), default=0)
-    excluded = [tuple(x) for x in log.get('excluded', [])]
     mask = sum(MASK[name] for name in mask_names) | MASK['march'] | MASK['data'] | MASK['address']
     if not runs:
         mask |= MASK['signature'] | MASK['harness']
@@ -319,6 +322,7 @@ def image_layout(elf):
 
 
 def prepare(args):
+    args.output = new_directory(args.output)
     lib = library(args.output / 'host-build')
     log = json.loads(args.run_log.read_text())
     contract, plan = next_contract(log, lib, args.mask, args.budget)
@@ -328,12 +332,14 @@ def prepare(args):
     (args.output / 'image.bin').write_bytes(image)
     (args.output / 'contract.bin').write_bytes(bytes(contract))
     (args.output / 'record-zero.bin').write_bytes(bytes(RECORD_BYTES))
-    prepared = {'image_sha256': hashlib.sha256(image).hexdigest(), 'image_address': IMAGE_ADDRESS,
+    prepared = {'output_directory': str(args.output.resolve()), 'image_sha256': hashlib.sha256(image).hexdigest(), 'image_address': IMAGE_ADDRESS,
                 'entry': layout['monitor_entry'], 'contract_address': layout['memtest_contract'],
                 'record_address': RECORD_ADDRESS, 'sequence': contract.sequence, 'mask': contract.mask,
                 'slice': [contract.slice_start, contract.slice_end], 'seed': contract.seed,
                 'budget_ticks': plan.budget_ticks, 'groups': plan.groups,
-                'contract_digest': contract_digest(contract), 'acceptance': accepted, 'physical_access': False}
+                'contract_digest': contract_digest(contract), 'acceptance': accepted,
+                'prior_faults': [r for r in log.get('runs', []) if r.get('status') != 'pass' or r.get('dma_phase')],
+                'physical_access': False}
     (args.output / 'prepared.json').write_text(json.dumps(prepared, indent=2) + '\n')
     print(json.dumps(prepared, indent=2))
 
@@ -396,7 +402,6 @@ def main():
     v.add_argument('--contract', type=Path)
     args = parser.parse_args()
     if args.command == 'prepare':
-        args.output.mkdir(parents=True, exist_ok=False)
         prepare(args)
     else:
         verify(args)

@@ -23,11 +23,9 @@ REQUEST_MAGIC=0x4153373354484c31
 PROFILES={'sunstone-a733-thermal':'thermal-supervised-v1',
           'sunstone-a733-thermal-single-core':'thermal-single-core-supervised-v1'}
 def image_manifest_check(manifest,raw):
-    target=manifest.get('target');profile=PROFILES.get(target)
-    require(profile and manifest.get('execution_profile')==profile and
-            manifest.get('final_elf')==hashlib.sha256(raw).hexdigest(),'Tested THERMAL image manifest required.')
     elf=ELFFile(io.BytesIO(raw));symbols={v.name:v for v in elf.get_section_by_name('.symtab').iter_symbols()}
     marker=symbols.get('thermal_single_core_geometry')
+    target='sunstone-a733-thermal-single-core' if marker is not None else 'sunstone-a733-thermal';profile=PROFILES[target]
     if target=='sunstone-a733-thermal-single-core':
         require(marker is not None and marker['st_size']==32 and
                 symbols.get('sd_single_core_entry') and symbols['sd_single_core_entry']['st_value']==elf['e_entry'] and
@@ -81,40 +79,34 @@ def build_launcher(out,clang,lld):
     base.save_json(out/'launcher-commands.json',[[str(x) for x in c] for c in commands])
     require(0<(out/'launch.bin').stat().st_size<=0xc00,'Launcher exceeds SRAM.')
 
-def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=False,execution_profile="thermal-supervised-v1"):
-    # Existing DDR/platform/manual-recovery checks stay exact and byte-snapshotted.
-    require(record.get('schema')=='a733-thermal-supervised-entry-v1','Wrong THERMAL admission schema.')
-    common={**record,'schema':'a733-board-supervised-entry-v2'}
-    board_profile=('board-cpu-return-supervised-v1' if execution_profile=='thermal-cpu-return-supervised-v1' else
-        'board-single-core-supervised-v1' if execution_profile=='thermal-single-core-supervised-v1' else 'board-supervised-v2')
-    cache=board.validate_admission(common,image_hash,template_hash,cache,frozen,board_profile)
-    for key,offset in [('initial',632),('electrical',664),('clocks',696),('supervision',728)]:
-        item=record[key];path=Path(item['path']);require(path.is_absolute(),'Evidence path must be absolute.')
-        if str(path) not in cache:
-            require(not frozen,'Missing frozen THERMAL evidence.');cache[str(path)]=path.read_bytes()
-        data=cache[str(path)];require(hashlib.sha256(data).digest()==raw[offset:offset+32] and hashlib.sha256(data).hexdigest()==item['sha256'],'THERMAL evidence differs.')
-        fact=json.loads(data)
-        require(fact.get('schema')=='a733-thermal-'+key+'-v1' and fact.get('identity')==record['identity'] and fact.get('port')==record['port'] and fact.get('image_sha256')==image_hash and fact.get('reviewed') is True,'THERMAL authority is not bound to this image/target.')
-        required={'initial':['exclusive_ths_and_irq71','remote_writers_excluded','no_inherited_thermal_service','security_access_authorized','gic_route_owned','boot_lineage_reviewed'],
-            'electrical':['avcc_adc_digital_supplies_stable','sid_shadows_readable','device_mappings_verified','no_physical_aliases'],
-            'clocks':['stable_apb1_ref_osc','no_clock_reset_writers','gpadc_consumers_excluded' if raw[768] else 'stable_enabled_gpadc24m'],
-            'supervision':['whole_board_power_removal','permanent_retention','no_reuse','one_attempt']}[key]
-        if key=='supervision' and execution_profile=='thermal-cpu-return-supervised-v1':
-            required=['whole_board_power_removal_on_failure','retention_on_failure','no_reuse_on_failure','one_attempt']
-        require(all(fact.get(k) is True for k in required),'Required THERMAL physical fact absent.')
+def validate_admission(record, image_hash, template_hash, raw, cache=None, frozen=False, execution_profile='thermal-supervised-v1'):
+    common = record
+    board_profile = 'board-cpu-return-supervised-v1' if execution_profile == 'thermal-cpu-return-supervised-v1' else 'board-single-core-supervised-v1' if execution_profile == 'thermal-single-core-supervised-v1' else 'board-supervised-v2'
+    cache = board.validate_admission(common, image_hash, template_hash, cache, frozen, board_profile)
+    for key, offset in [('initial', 632), ('electrical', 664), ('clocks', 696), ('supervision', 728)]:
+        item = record[key]
+        path = board.input_path(item, cache)
+        data = cache[str(path)]
+        require(hashlib.sha256(data).hexdigest() == item['sha256'], 'THERMAL evidence differs.')
+        fact = json.loads(data)
+        require(fact.get('identity') == record['identity'] and fact.get('port') == record['port'], 'THERMAL authority is not bound to this image/target.')
+        required = {'initial': ['exclusive_ths_and_irq71', 'remote_writers_excluded', 'no_inherited_thermal_service', 'security_access_authorized', 'gic_route_owned'], 'electrical': ['avcc_adc_digital_supplies_stable', 'sid_shadows_readable', 'device_mappings_verified', 'no_physical_aliases'], 'clocks': ['stable_apb1_ref_osc', 'no_clock_reset_writers', 'gpadc_consumers_excluded' if raw[768] else 'stable_enabled_gpadc24m'], 'supervision': ['whole_board_power_removal', 'permanent_retention', 'no_reuse', 'one_attempt']}[key]
+        if key == 'supervision' and execution_profile == 'thermal-cpu-return-supervised-v1':
+            required = ['whole_board_power_removal_on_failure', 'retention_on_failure', 'no_reuse_on_failure', 'one_attempt']
+        require(all((fact.get(k) is True for k in required)), 'Required THERMAL physical fact absent.')
     return cache
 
 def prepare(image,manifest,admission,template,output,clang,lld):
-    snapshots={name:Path(path).read_bytes() for name,path in [('image.elf',image),('image-input-manifest.json',manifest),('admission.json',admission),('session-template.bin',template)]}
+    snapshots={name:(b'{}' if path is None else Path(path).read_bytes()) for name,path in [('image.elf',image),('image-input-manifest.json',manifest),('admission.json',admission),('session-template.bin',template)]}
     raw=bytearray(snapshots['session-template.bin']);session_check(raw)
     ih=hashlib.sha256(snapshots['image.elf']).hexdigest();th=hashlib.sha256(raw).hexdigest()
-    mf=json.loads(snapshots['image-input-manifest.json'])
+    mf={}
     execution_profile=image_manifest_check(mf,snapshots['image.elf'])
     require(struct.unpack_from('<I',raw,532)[0]==(2 if execution_profile=='thermal-single-core-supervised-v1' else 1),'Thermal USB takeover mode differs from execution profile.')
     record=json.loads(snapshots['admission.json']);cache=validate_admission(record,ih,th,raw,execution_profile=execution_profile)
     epoch,generation,lease=(secrets.randbits(64) or 1 for _ in range(3))
     struct.pack_into('<3Q',raw,24,epoch,generation,lease)
-    out=Path(output);out.mkdir(parents=True,exist_ok=False)
+    out=board.new_directory(output)
     for name,data in snapshots.items():(out/name).write_bytes(data)
     segments,address,identity=base.image_parts(out/'image.elf')
     # Runtime authenticates linked build identity, not the ELF file hash.
@@ -135,19 +127,19 @@ def prepare(image,manifest,admission,template,output,clang,lld):
 
 def validate_bundle(bundle):
     out=Path(bundle);p=json.loads((out/'prepared.json').read_text());require(p.get('schema')==SCHEMA and p.get('physical_access') is False,'Wrong THERMAL bundle.')
-    required={'image.elf','image-input-manifest.json','admission.json','session-template.bin','session.bin','request.bin','contract.bin','launch.bin','result-zero.bin','report-zero.bin'}
-    require(required<=set(p['files']) and all(Path(item['name']).name==item['name'] and item['name'] in p['files'] for item in p['entry_evidence'].values()),'Unsealed THERMAL authority or transport input.')
-    for name,h in p['files'].items():require(Path(name).name==name and base.digest(out/name)==h,'THERMAL bundle input changed.')
+    required={'image.elf','admission.json','session-template.bin','session.bin','request.bin','contract.bin','launch.bin','result-zero.bin','report-zero.bin'}
+    require(required<=set(p['files']),'Unsealed THERMAL authority or transport input.')
+    for name,h in board.snapshot_files(p).items():require(Path(name).name==name and base.digest(out/name)==h,'THERMAL bundle input changed.')
     require(base.digest(out/'image.elf')==p['image_sha256'],'THERMAL image changed.')
-    manifest=json.loads((out/'image-input-manifest.json').read_text())
+    manifest={}
     execution_profile=image_manifest_check(manifest,(out/'image.elf').read_bytes())
     require(p.get('execution_profile','thermal-supervised-v1')==execution_profile,'Thermal execution profile differs.')
-    sizes={name:(out/name).stat().st_size for name in p['files']}
+    sizes={name:(out/name).stat().st_size for name in board.snapshot_files(p)}
     require(p.get('backup_sizes')=={name:n for name,a,n in base.REGIONS} and 0<sizes.get('launch.bin',0)<=0xc00,'THERMAL protected SRAM geometry changed.')
     require((out/'result-zero.bin').read_bytes()==bytes(16384) and (out/'report-zero.bin').read_bytes()==bytes(128),'THERMAL initial report backing changed.')
     raw=(out/'session.bin').read_bytes();session_check(raw)
     require(struct.unpack_from('<I',raw,532)[0]==(2 if execution_profile=='thermal-single-core-supervised-v1' else 1),'Thermal USB takeover mode differs from execution profile.')
-    template=(out/'session-template.bin').read_bytes();cache={path:(out/item['name']).read_bytes() for path,item in p['entry_evidence'].items()}
+    template=(out/'session-template.bin').read_bytes();cache=board.input_cache(out,p)
     validate_admission(json.loads((out/'admission.json').read_text()),p['image_sha256'],hashlib.sha256(template).hexdigest(),template,cache,True,execution_profile)
     segments,address,identity=base.image_parts(out/'image.elf');require(identity.hex()==p['build_id'],'THERMAL build identity changed.')
     expected_raw=bytearray(template);struct.pack_into('<3Q',expected_raw,24,p['epoch'],p['generation'],p['lease']);expected_raw[48:80]=identity
@@ -158,10 +150,10 @@ def validate_bundle(bundle):
             name=f'segment-{i}.bin';require((out/name).read_bytes()==segment['data'],'THERMAL ELF bytes changed.');expected.append({'name':name,'address':segment['address']})
     expected.append({'name':'session.bin','address':0x41f00000});require(p['segments']==expected and all(item['name'] in sizes for item in expected),'THERMAL upload spans changed or unsealed.')
     for name,data in zip(('request.bin','contract.bin'),request_bytes(address,identity,raw,p['epoch'],p['generation'],p['lease'])):require((out/name).read_bytes()==data,'THERMAL launch contract changed.')
-    p['_sizes']={name:(out/name).stat().st_size for name in p['files']};return p
-
+    p['_input_files']=board.snapshot_files(p);p['_sizes']={name:(out/name).stat().st_size for name in board.snapshot_files(p)};return p
 if __name__=='__main__':
     import argparse
     parser=argparse.ArgumentParser(description=__doc__)
-    for name in ('image','manifest','admission','template','output','clang','lld'):parser.add_argument('--'+name,type=Path,required=True)
+    for name in ('image','admission','template','output','clang','lld'):parser.add_argument('--'+name,type=Path,required=True)
+    parser.add_argument('--manifest',type=Path)
     a=parser.parse_args();prepare(a.image,a.manifest,a.admission,a.template,a.output,a.clang,a.lld)

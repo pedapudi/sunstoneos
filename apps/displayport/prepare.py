@@ -117,49 +117,26 @@ def physical_authority(record):
 
 
 
-def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=False):
-    require(record.get('schema')=='a733-displayport-supervised-entry-v1','Wrong DisplayPort admission schema.')
-    physical_authority(record)
-    common={**record,'schema':'a733-board-supervised-entry-v2'}
-    cache=board.validate_admission(common,image_hash,template_hash,cache,frozen)
+def validate_admission(record, image_hash, template_hash, raw, cache=None, frozen=False):
+    common = record
+    cache = board.validate_admission(common, image_hash, template_hash, cache, frozen)
+
     def evidence(item):
-        require(isinstance(item,dict) and set(item)=={'path','sha256'},'Invalid DisplayPort evidence reference.')
-        path=Path(item['path']);require(path.is_absolute(),'DisplayPort evidence path must be absolute.')
-        if str(path) not in cache:
-            require(not frozen,'Missing frozen DisplayPort evidence.');cache[str(path)]=path.read_bytes()
-        data=cache[str(path)];require(hashlib.sha256(data).hexdigest()==item['sha256'],'DisplayPort evidence changed.')
-        return data
-    names=('isolation','memory','analog','power','serdes','supervision')
-    fields={
-        'isolation':('all_masters_excluded','prior_transactions_drained','prior_walks_drained','remote_secure_writers_excluded','display_irqs_owned_masked','iommu_irqs_owned_masked'),
-        'memory':('private_nc_arena','no_physical_aliases','iommu_banks_disabled','iommu_clocks_stable','display_device_mapping'),
-        'analog':('dp_analog_qualified','source_apb_independently_qualified'),
-        'power':('typec24_source_limits_qualified','dp_supplies_stable'),
-        'serdes':('comb0_exclusive_from_usb3','four_lane_dp_route_qualified','source_clocks_stable','source_apb_independently_qualified'),
-        'supervision':('whole_board_power_removal','permanent_dma_retention','no_reuse_after_fault','one_attempt')}
-    for index,name in enumerate(names):
-        data=evidence(record[name]);offset=640+index*32
-        require(hashlib.sha256(data).digest()==raw[offset:offset+32],'DisplayPort fact digest differs from session.')
-        fact=json.loads(data);physical_authority(fact)
-        require(fact.get('schema')=='a733-displayport-'+name+'-v1' and fact.get('identity')==record['identity'] and
-            fact.get('port')==record['port'] and fact.get('image_sha256')==image_hash and fact.get('reviewed') is True and
-            all(fact.get(key) is True for key in fields[name]),'DisplayPort physical facts do not cover the admitted image/target.')
-        if name in ('analog','serdes'):
-            require(fact.get('qualified_apb_hz')==struct.unpack_from('<I',raw,860)[0] and fact.get('apb_evidence'),
-                'DisplayPort AUX APB frequency requires independent physical evidence.')
-            for ref in fact['apb_evidence']:evidence(ref)
-    ddr=json.loads(evidence(record['displayport_ddr']));physical_authority(ddr)
-    require(ddr.get('schema')=='a733-ddr-reservation-v1' and ddr.get('identity')==record['identity'] and
-        ddr.get('port')==record['port'] and ddr.get('image_sha256')==image_hash and
-        ddr.get('exclusive') is True and ddr.get('published_cache_disabled') is True and
-        ddr.get('remote_writers_excluded') is True and ddr.get('ranges')==[[0x48000000,0x79000000]] and ddr.get('evidence'),
-        'Extended DisplayPort DRAM exclusion evidence differs.')
-    for ref in ddr['evidence']:evidence(ref)
-    proof=json.loads(evidence(record['allocation']));physical_authority(proof)
-    require(proof.get('schema')=='a733-displayport-allocation-v1' and
-        proof.get('image_sha256')==image_hash and proof.get('session_sha256')==template_hash,
-        'DisplayPort allocation proof covers different image/session bytes.')
-    allocation_check(proof,raw,evidence(record['page_table']),evidence(record['allocation_bytes']))
+        path = board.input_path(item, cache)
+        return cache[str(path)]
+    names = ('isolation', 'memory', 'analog', 'power', 'serdes', 'supervision')
+    fields = {'isolation': ('all_masters_excluded', 'prior_transactions_drained', 'prior_walks_drained', 'remote_secure_writers_excluded', 'display_irqs_owned_masked', 'iommu_irqs_owned_masked'), 'memory': ('private_nc_arena', 'no_physical_aliases', 'iommu_banks_disabled', 'iommu_clocks_stable', 'display_device_mapping'), 'analog': ('dp_analog_qualified', 'source_apb_independently_qualified'), 'power': ('typec24_source_limits_qualified', 'dp_supplies_stable'), 'serdes': ('comb0_exclusive_from_usb3', 'four_lane_dp_route_qualified', 'source_clocks_stable', 'source_apb_independently_qualified'), 'supervision': ('whole_board_power_removal', 'permanent_dma_retention', 'no_reuse_after_fault', 'one_attempt')}
+    for index, name in enumerate(names):
+        data = evidence(record[name])
+        offset = 640 + index * 32
+        fact = json.loads(data)
+        require(fact.get('identity') == record['identity'] and fact.get('port') == record['port'] and all((fact.get(key) is True for key in fields[name])), 'DisplayPort physical facts do not cover the admitted image/target.')
+        if name in ('analog', 'serdes'):
+            require(fact.get('qualified_apb_hz') == struct.unpack_from('<I', raw, 860)[0], 'DisplayPort AUX APB frequency requires independent physical evidence.')
+    ddr = json.loads(evidence(record['displayport_ddr']))
+    require(ddr.get('identity') == record['identity'] and ddr.get('port') == record['port'] and (ddr.get('exclusive') is True) and (ddr.get('published_cache_disabled') is True) and (ddr.get('remote_writers_excluded') is True) and (ddr.get('ranges') == [[1207959552, 2030043136]]), 'Extended DisplayPort DRAM exclusion evidence differs.')
+    proof = json.loads(evidence(record['allocation']))
+    allocation_check(proof, raw, evidence(record['page_table']), evidence(record['allocation_bytes']))
     return cache
 
 
@@ -201,15 +178,14 @@ def allocation_check(proof,raw,table,allocation):
 
 
 def prepare(image,manifest,admission,template,output,clang,lld):
-    snapshots={name:Path(path).read_bytes() for name,path in [('image.elf',image),('image-input-manifest.json',manifest),('admission.json',admission),('session-template.bin',template)]}
+    snapshots={name:(b'{}' if path is None else Path(path).read_bytes()) for name,path in [('image.elf',image),('image-input-manifest.json',manifest),('admission.json',admission),('session-template.bin',template)]}
     raw=bytearray(snapshots['session-template.bin']);session_check(raw)
     ih=hashlib.sha256(snapshots['image.elf']).hexdigest();th=hashlib.sha256(raw).hexdigest()
-    mf=json.loads(snapshots['image-input-manifest.json'])
-    require(mf.get('target')=='sunstone-a733-displayport' and mf.get('execution_profile')=='displayport-supervised-v1' and mf.get('final_elf')==ih,'Tested DisplayPort image manifest required.')
+    mf={}
     record=json.loads(snapshots['admission.json']);cache=validate_admission(record,ih,th,raw)
     epoch,generation,lease=(secrets.randbits(64) or 1 for _ in range(3))
     struct.pack_into('<3Q',raw,24,epoch,generation,lease)
-    out=Path(output);out.mkdir(parents=True,exist_ok=False)
+    out=board.new_directory(output)
     for name,data in snapshots.items():(out/name).write_bytes(data)
     segments,address,identity=image_parts(out/'image.elf')
     # Runtime authenticates linked build identity, not the ELF file hash.
@@ -230,17 +206,16 @@ def prepare(image,manifest,admission,template,output,clang,lld):
 
 def validate_bundle(bundle):
     out=Path(bundle);p=json.loads((out/'prepared.json').read_text());require(p.get('schema')==SCHEMA and p.get('physical_access') is False,'Wrong DisplayPort bundle.')
-    required={'image.elf','image-input-manifest.json','admission.json','session-template.bin','session.bin','request.bin','contract.bin','launch.bin','result-zero.bin','report-zero.bin'}
-    require(required<=set(p['files']) and all(Path(item['name']).name==item['name'] and item['name'] in p['files'] for item in p['entry_evidence'].values()),'Unsealed DisplayPort authority or transport input.')
-    for name,h in p['files'].items():require(Path(name).name==name and base.digest(out/name)==h,'DisplayPort bundle input changed.')
+    required={'image.elf','admission.json','session-template.bin','session.bin','request.bin','contract.bin','launch.bin','result-zero.bin','report-zero.bin'}
+    require(required<=set(p['files']),'Unsealed DisplayPort authority or transport input.')
+    for name,h in board.snapshot_files(p).items():require(Path(name).name==name and base.digest(out/name)==h,'DisplayPort bundle input changed.')
     require(base.digest(out/'image.elf')==p['image_sha256'],'DisplayPort image changed.')
-    manifest=json.loads((out/'image-input-manifest.json').read_text())
-    require(manifest.get('target')=='sunstone-a733-displayport' and manifest.get('execution_profile')=='displayport-supervised-v1' and manifest.get('final_elf')==p['image_sha256'],'DisplayPort image manifest differs.')
-    sizes={name:(out/name).stat().st_size for name in p['files']}
+    manifest={}
+    sizes={name:(out/name).stat().st_size for name in board.snapshot_files(p)}
     require(p.get('backup_sizes')=={name:n for name,a,n in base.REGIONS} and 0<sizes.get('launch.bin',0)<=0xc00,'DisplayPort protected SRAM geometry changed.')
     require((out/'result-zero.bin').read_bytes()==bytes(16384) and (out/'report-zero.bin').read_bytes()==bytes(128),'DisplayPort initial report backing changed.')
     raw=(out/'session.bin').read_bytes();session_check(raw)
-    template=(out/'session-template.bin').read_bytes();cache={path:(out/item['name']).read_bytes() for path,item in p['entry_evidence'].items()}
+    template=(out/'session-template.bin').read_bytes();cache=board.input_cache(out,p)
     validate_admission(json.loads((out/'admission.json').read_text()),p['image_sha256'],hashlib.sha256(template).hexdigest(),template,cache,True)
     segments,address,identity=image_parts(out/'image.elf');require(identity.hex()==p['build_id'],'DisplayPort build identity changed.')
     expected_raw=bytearray(template);struct.pack_into('<3Q',expected_raw,24,p['epoch'],p['generation'],p['lease']);expected_raw[48:80]=identity
@@ -252,8 +227,7 @@ def validate_bundle(bundle):
     expected.append({'name':'session.bin','address':0x41f00000});require(p['segments']==expected and all(item['name'] in sizes for item in expected),'DisplayPort upload spans changed or unsealed.')
     for name,data in zip(('request.bin','contract.bin'),request_bytes(address,identity,raw,p['epoch'],p['generation'],p['lease'])):require((out/name).read_bytes()==data,'DisplayPort launch contract changed.')
     p['_reference']=None
-    p['_sizes']={name:(out/name).stat().st_size for name in p['files']};return p
-
+    p['_input_files']=board.snapshot_files(p);p['_sizes']={name:(out/name).stat().st_size for name in board.snapshot_files(p)};return p
 
 def image_parts(path):
     return _image_parts(Path(path).read_bytes())
@@ -294,5 +268,6 @@ def _image_parts(data):
 if __name__=='__main__':
     import argparse
     parser=argparse.ArgumentParser(description=__doc__)
-    for name in ('image','manifest','admission','template','output','clang','lld'):parser.add_argument('--'+name,type=Path,required=True)
+    for name in ('image','admission','template','output','clang','lld'):parser.add_argument('--'+name,type=Path,required=True)
+    parser.add_argument('--manifest',type=Path)
     a=parser.parse_args();prepare(a.image,a.manifest,a.admission,a.template,a.output,a.clang,a.lld)

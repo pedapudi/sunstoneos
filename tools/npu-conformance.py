@@ -3,7 +3,7 @@
 
   run OUT      On the host: verify every pinned identity, stage the inputs in
                OUT/work, run one container from the pinned compiler image and
-               write OUT/report.json. OUT must not exist.
+               write a report. An existing OUT keeps its earlier results in place.
   worker WORK  Inside that container: build one simulator runner per model,
                run every vector as successive jobs on one prepared graph, at
                most RUNNER_LANES runner processes at a time, run the
@@ -21,6 +21,7 @@ newer syntax. Functions that decide the result use only the standard library,
 which lets checks/npu-conformance.py exercise them on the host.
 """
 import argparse
+import importlib.util
 import concurrent.futures
 import hashlib
 import json
@@ -65,6 +66,9 @@ FORMATS = {2: ('B', 0, 255, 'VSI_NN_TYPE_UINT8', 'u8'),
            3: ('b', -128, 127, 'VSI_NN_TYPE_INT8', 'i8'),
            5: ('h', -32768, 32767, 'VSI_NN_TYPE_INT16', 'i16')}
 
+
+_evidence_spec=importlib.util.spec_from_file_location('conformance_host_evidence',Path(__file__).with_name('host_evidence.py'))
+_evidence=importlib.util.module_from_spec(_evidence_spec);_evidence_spec.loader.exec_module(_evidence)
 
 def sha256(data):
     return hashlib.sha256(data).hexdigest()
@@ -392,7 +396,7 @@ def stage(work, root=ROOT, cache=CACHE):
 
 def run(args):
     out = args.output.resolve()
-    out.mkdir(parents=True, exist_ok=False)
+    out=_evidence.unique_directory(out)
     # Only the host user can enter OUT, so the world-writable work directory
     # and the files the container creates in it are closed to other users.
     out.chmod(0o700)

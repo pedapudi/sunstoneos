@@ -82,39 +82,33 @@ def build_launcher(out,clang,lld):
     base.save_json(out/'launcher-commands.json',[[str(x) for x in c] for c in commands])
     require(0<(out/'launch.bin').stat().st_size<=0xc00,'Launcher exceeds SRAM.')
 
-def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=False):
-    # Existing DDR/platform/manual-recovery checks stay exact and byte-snapshotted.
-    require(record.get('schema')=='a733-jpeg-encode-supervised-entry-v1','Wrong JPEG admission schema.')
-    common={**record,'schema':'a733-board-supervised-entry-v2'}
-    cache=board.validate_admission(common,image_hash,template_hash,cache,frozen)
-    for key,offset in [('initial',640),('memory',672),('electrical',704),('supervision',736)]:
-        item=record[key];path=Path(item['path']);require(path.is_absolute(),'Evidence path must be absolute.')
-        if str(path) not in cache:
-            require(not frozen,'Missing frozen JPEG evidence.');cache[str(path)]=path.read_bytes()
-        data=cache[str(path)];require(hashlib.sha256(data).digest()==raw[offset:offset+32] and hashlib.sha256(data).hexdigest()==item['sha256'],'JPEG evidence differs.')
-        fact=json.loads(data)
-        require(fact.get('schema')=='a733-jpeg-encode-'+key+'-v1' and fact.get('identity')==record['identity'] and fact.get('port')==record['port'] and fact.get('image_sha256')==image_hash and fact.get('reviewed') is True,'JPEG authority is not bound to this image/target.')
-        required={'initial':['all_masters_excluded','prior_transactions_drained','prior_walks_drained','encoder_inherited_powered_reset_deasserted','skipped_masters_physically_quiescent','remote_secure_writers_excluded','irq80_owned_masked','iommu_irqs_owned_masked'],
-            'memory':['private_nc_arenas','no_physical_aliases','iommu_banks_disabled','iommu_clocks_stable','encoder_device_mapping'],
-            'electrical':['dcdc2_shared_800mv','ve_operating_point_source_reviewed','stable_ve_pll'],
-            'supervision':['whole_board_power_removal','permanent_dma_retention','no_reuse','one_attempt']}[key]
-        require(all(fact.get(k) is True for k in required),'Required JPEG physical fact absent.')
+def validate_admission(record, image_hash, template_hash, raw, cache=None, frozen=False):
+    common = record
+    cache = board.validate_admission(common, image_hash, template_hash, cache, frozen)
+    for key, offset in [('initial', 640), ('memory', 672), ('electrical', 704), ('supervision', 736)]:
+        item = record[key]
+        path = board.input_path(item, cache)
+        data = cache[str(path)]
+        require(hashlib.sha256(data).hexdigest() == item['sha256'], 'JPEG evidence differs.')
+        fact = json.loads(data)
+        require(fact.get('identity') == record['identity'] and fact.get('port') == record['port'], 'JPEG authority is not bound to this image/target.')
+        required = {'initial': ['all_masters_excluded', 'prior_transactions_drained', 'prior_walks_drained', 'encoder_inherited_powered_reset_deasserted', 'skipped_masters_physically_quiescent', 'remote_secure_writers_excluded', 'irq80_owned_masked', 'iommu_irqs_owned_masked'], 'memory': ['private_nc_arenas', 'no_physical_aliases', 'iommu_banks_disabled', 'iommu_clocks_stable', 'encoder_device_mapping'], 'electrical': ['dcdc2_shared_800mv', 'stable_ve_pll'], 'supervision': ['whole_board_power_removal', 'permanent_dma_retention', 'no_reuse', 'one_attempt']}[key]
+        require(all((fact.get(k) is True for k in required)), 'Required JPEG physical fact absent.')
     return cache
 
 def prepare(image,manifest,admission,template,output,clang,lld,jpeg,reference=None):
-    snapshots={name:Path(path).read_bytes() for name,path in [('image.elf',image),('image-input-manifest.json',manifest),('admission.json',admission),('session-template.bin',template)]}
+    snapshots={name:(b'{}' if path is None else Path(path).read_bytes()) for name,path in [('image.elf',image),('image-input-manifest.json',manifest),('admission.json',admission),('session-template.bin',template)]}
     snapshots['input.nv12']=Path(jpeg).read_bytes()
     snapshots['reference.yu12']=Path(reference).read_bytes() if reference else b''
     raw=bytearray(snapshots['session-template.bin']);session_check(raw)
     upload_bytes(snapshots['input.nv12'],snapshots['reference.yu12'],raw)
     embedded_reference(snapshots['image.elf'],raw)
     ih=hashlib.sha256(snapshots['image.elf']).hexdigest();th=hashlib.sha256(raw).hexdigest()
-    mf=json.loads(snapshots['image-input-manifest.json'])
-    require(mf.get('target')=='sunstone-a733-jpeg-encode' and mf.get('execution_profile')=='jpeg-encode-supervised-v1' and mf.get('final_elf')==ih,'Tested JPEG image manifest required.')
+    mf={}
     record=json.loads(snapshots['admission.json']);cache=validate_admission(record,ih,th,raw)
     epoch,generation,lease=(secrets.randbits(64) or 1 for _ in range(3))
     struct.pack_into('<3Q',raw,24,epoch,generation,lease)
-    out=Path(output);out.mkdir(parents=True,exist_ok=False)
+    out=board.new_directory(output)
     for name,data in snapshots.items():(out/name).write_bytes(data)
     segments,address,identity=base.image_parts(out/'image.elf')
     # Runtime authenticates linked build identity, not the ELF file hash.
@@ -136,18 +130,17 @@ def prepare(image,manifest,admission,template,output,clang,lld,jpeg,reference=No
 
 def validate_bundle(bundle):
     out=Path(bundle);p=json.loads((out/'prepared.json').read_text());require(p.get('schema')==SCHEMA and p.get('physical_access') is False,'Wrong JPEG bundle.')
-    required={'image.elf','image-input-manifest.json','admission.json','session-template.bin','session.bin','request.bin','contract.bin','launch.bin','result-zero.bin','report-zero.bin','input.nv12','reference.yu12','upload.bin'}
-    require(required<=set(p['files']) and all(Path(item['name']).name==item['name'] and item['name'] in p['files'] for item in p['entry_evidence'].values()),'Unsealed JPEG authority or transport input.')
-    for name,h in p['files'].items():require(Path(name).name==name and base.digest(out/name)==h,'JPEG bundle input changed.')
+    required={'image.elf','admission.json','session-template.bin','session.bin','request.bin','contract.bin','launch.bin','result-zero.bin','report-zero.bin','input.nv12','reference.yu12','upload.bin'}
+    require(required<=set(p['files']),'Unsealed JPEG authority or transport input.')
+    for name,h in board.snapshot_files(p).items():require(Path(name).name==name and base.digest(out/name)==h,'JPEG bundle input changed.')
     require(base.digest(out/'image.elf')==p['image_sha256'],'JPEG image changed.')
-    manifest=json.loads((out/'image-input-manifest.json').read_text())
-    require(manifest.get('target')=='sunstone-a733-jpeg-encode' and manifest.get('execution_profile')=='jpeg-encode-supervised-v1' and manifest.get('final_elf')==p['image_sha256'],'JPEG image manifest differs.')
-    sizes={name:(out/name).stat().st_size for name in p['files']}
+    manifest={}
+    sizes={name:(out/name).stat().st_size for name in board.snapshot_files(p)}
     require(p.get('backup_sizes')=={name:n for name,a,n in base.REGIONS} and 0<sizes.get('launch.bin',0)<=0xc00,'JPEG protected SRAM geometry changed.')
     require((out/'result-zero.bin').read_bytes()==bytes(16384) and (out/'report-zero.bin').read_bytes()==bytes(128),'JPEG initial report backing changed.')
     raw=(out/'session.bin').read_bytes();session_check(raw)
     require((out/'upload.bin').read_bytes()==upload_bytes((out/'input.nv12').read_bytes(),(out/'reference.yu12').read_bytes(),raw),'JPEG upload bytes differ.')
-    template=(out/'session-template.bin').read_bytes();cache={path:(out/item['name']).read_bytes() for path,item in p['entry_evidence'].items()}
+    template=(out/'session-template.bin').read_bytes();cache=board.input_cache(out,p)
     validate_admission(json.loads((out/'admission.json').read_text()),p['image_sha256'],hashlib.sha256(template).hexdigest(),template,cache,True)
     segments,address,identity=base.image_parts(out/'image.elf');require(identity.hex()==p['build_id'],'JPEG build identity changed.')
     expected_raw=bytearray(template);struct.pack_into('<3Q',expected_raw,24,p['epoch'],p['generation'],p['lease']);expected_raw[48:80]=identity
@@ -161,11 +154,11 @@ def validate_bundle(bundle):
     embedded_reference((out/'image.elf').read_bytes(),raw)
     p['_reference']=(out/'reference.yu12').read_bytes() or None
     p['_upload']=(out/'upload.bin').read_bytes()
-    p['_sizes']={name:(out/name).stat().st_size for name in p['files']};return p
-
+    p['_input_files']=board.snapshot_files(p);p['_sizes']={name:(out/name).stat().st_size for name in board.snapshot_files(p)};return p
 if __name__=='__main__':
     import argparse
     parser=argparse.ArgumentParser(description=__doc__)
-    for name in ('image','manifest','admission','template','output','clang','lld','jpeg'):parser.add_argument('--'+name,type=Path,required=True)
+    for name in ('image','admission','template','output','clang','lld','jpeg'):parser.add_argument('--'+name,type=Path,required=True)
+    parser.add_argument('--manifest',type=Path)
     parser.add_argument('--reference',type=Path)
     a=parser.parse_args();prepare(a.image,a.manifest,a.admission,a.template,a.output,a.clang,a.lld,a.jpeg,a.reference)

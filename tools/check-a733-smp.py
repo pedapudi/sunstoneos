@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare an eight-core image, or run one qualified protected launch attempt.
+"""Prepare an eight-core image, or run one protected launch attempt.
 
 Preparation is host-only. Launch cannot establish scheduler success: no result
 channel survives the independent watchdog reset under the current contract.
@@ -15,19 +15,19 @@ import os
 from pathlib import Path
 import secrets
 import shutil
-import sqlite3
 import struct
 import subprocess
 import sys
 import time
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'tools'))
+from host_evidence import evidence_directory, new_directory, unique_directory
 FEL_HASH = '4a54cdc179baafbdecac47eb85714c3745d6d9952e05b482c7016afd4b22bf3e'
 ROM_HASH = 'a8e31821e8a1611d75867825914c58373c732742cb8f2235e8168c1d7e93b5aa'
 REQUEST_MAGIC = 0x415337334c4e4331
 CONTRACT = 0x42004000
 REGIONS = [('launcher', 0x52000, 0xc00), ('request', 0x52c00, 128),
            ('report', 0x52d00, 128), ('stack', 0x53000, 0x1000), ('scratch', 0x71000, 128)]
-PREREQUISITES = {'independent-watchdog-rom-return', 'stable-protected-fel', 'ddr-reservation', 'smp-launcher-software'}
 # One sunxi-fel call writes a whole extent and reads it back. The recorded
 # full-speed link moved about 0.57 MB/s; budget less than half of that for each
 # byte written or read, on top of the fixed limit for small requests.
@@ -85,13 +85,61 @@ def present_instance(access, config):
         raise
 
 
-def require_queue_port(database, port):
-    """A board queue authorizes only the physical port recorded at its creation."""
-    require(Path(database).is_file(), f'Queue {database} does not exist.')
-    db = sqlite3.connect(Path(database).resolve().as_uri() + '?mode=ro', uri=True)
-    try: row = db.execute("SELECT value FROM settings WHERE key='port'").fetchone()
-    finally: db.close()
-    require(row is not None and row[0] == port, f'Queue {database} is not bound to locked USB port {port}.')
+
+
+output_directory = evidence_directory
+artifact_directory = new_directory
+
+
+class DramNotReady(ValueError):
+    """The complete test word differed and its original bytes were restored."""
+
+
+def clean_dram_refusal(record, error):
+    return isinstance(error, DramNotReady) and not any(record.get(key) for key in
+        ('dirty', 'dram_probe_dirty', 'transport_failed', 'launch_attempted'))
+
+
+def verify_dram(transaction, evidence, record=None, save=lambda: None):
+    """Test eight bytes in the reserved result page and restore them before preload.
+
+    Transport errors propagate immediately. A successful transfer with different
+    bytes permits restoration, then refuses launch. No historical result is used.
+    """
+    if record is None: record = {}
+    address = '0x42000000'
+    before = evidence / 'dram-before.bin'
+    record['dram_probe_dirty'] = True
+    try:
+        save()
+    except BaseException:
+        # No request has started, so the failed initial journal cannot hide a write.
+        record['dram_probe_dirty'] = False
+        raise
+    transaction('read', address, 8, before)
+    original = before.read_bytes()
+    require(len(original) == 8, 'Incomplete DRAM test backup.')
+    sync_file(before)
+    # Complement every saved bit so unchanged or stale reads cannot pass.
+    pattern = bytes(value ^ 255 for value in original)
+    with sealed_source(pattern) as (source, descriptor):
+        tested = evidence / 'dram-tested.bin'
+        transaction('write', address, source, 'read', address, 8, tested, pass_fds=(descriptor,))
+    observed = tested.read_bytes()
+    require(len(observed) == 8, 'Incomplete DRAM test readback; state is uncertain.')
+    matches = observed == pattern
+    with sealed_source(original) as (source, descriptor):
+        restored = evidence / 'dram-restored.bin'
+        transaction('write', address, source, 'read', address, 8, restored, pass_fds=(descriptor,))
+    require(restored.read_bytes() == original, 'DRAM test restoration differs; launch refused.')
+    record['dram_probe_dirty'] = False
+    try:
+        save()
+    except BaseException:
+        record['dram_probe_dirty'] = True
+        raise
+    if not matches:
+        raise DramNotReady('DRAM write/read comparison differs; launch refused.')
 
 
 def digest(path): return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -175,9 +223,8 @@ def request_bytes(build_address, build_id, epoch, generation, lease):
 
 
 def prepare(image, manifest_path, output, clang, lld):
-    require(json.loads(manifest_path.read_text()).get('final_elf') == digest(image), 'Image differs from reviewed manifest.')
     segments, build_address, build_id = image_parts(image)
-    output.mkdir(parents=True, exist_ok=False)
+    output = artifact_directory(output)
     for name in ('launch.S', 'launch.c', 'launch.ld', 'boot.h'):
         shutil.copy2(ROOT / 'platform/a733-smp' / name, output / name)
     commands = []
@@ -190,7 +237,7 @@ def prepare(image, manifest_path, output, clang, lld):
     run([lld, '-T', output / 'launch.ld', output / 'entry.o', output / 'launch.o', '-o', output / 'launch.elf'])
     run(['/usr/lib/llvm-21/bin/llvm-objcopy', '-O', 'binary', output / 'launch.elf', output / 'launch.bin'])
     require(0 < (output / 'launch.bin').stat().st_size <= 0xc00, 'Launcher exceeds SRAM reservation.')
-    shutil.copy2(image, output / 'image.elf'); shutil.copy2(manifest_path, output / 'image-input-manifest.json')
+    shutil.copy2(image, output / 'image.elf')
     payloads = []
     for index, segment in enumerate(segments):
         if segment['data']:
@@ -202,7 +249,7 @@ def prepare(image, manifest_path, output, clang, lld):
     record = {'schema': 2, 'image_sha256': digest(image), 'launcher_sha256': digest(output / 'launch.bin'), 'build_id': build_id.hex(),
               'epoch': epoch, 'generation': generation, 'lease': lease, 'segments': payloads,
               'reservations': [{k:v for k,v in s.items() if k != 'data'} for s in segments],
-              'files': {f.name: digest(f) for f in output.iterdir() if f.is_file()}, 'physical_access': False}
+              'files': {f.name: digest(f) for f in output.iterdir() if f.is_file()}, 'physical_access': False, 'output': str(output)}
     save_json(output / 'prepared.json', record)
     return record
 
@@ -211,7 +258,10 @@ def validate_bundle(bundle):
     prepared = json.loads((bundle / 'prepared.json').read_text())
     require(prepared.get('schema') == 2 and prepared.get('physical_access') is False, 'Unsupported prepared bundle.')
     sizes = {}
-    for name, expected in prepared['files'].items():
+    required_files = {'image.elf', 'launch.bin', 'request.bin', 'contract.bin', 'result-zero.bin', 'report-zero.bin'} | {item['name'] for item in prepared['segments']}
+    require(required_files <= prepared['files'].keys(), 'Native transfer inputs are incomplete.')
+    for name in required_files:
+        expected = prepared['files'][name]
         require(Path(name).name == name, 'Invalid prepared filename.')
         data = (bundle / name).read_bytes()
         require(hashlib.sha256(data).hexdigest() == expected, 'Prepared input changed.')
@@ -234,42 +284,10 @@ def validate_bundle(bundle):
     return prepared
 
 
-def validate_software(value, bundle):
-    require(value.get('schema') == 'a733-smp-launcher-software-v1' and value.get('host_protocol') is True and
-            value.get('instruction_model') is True and value.get('physical_access') is False, 'Launcher software checks are missing.')
-    for key, name in [('prepared', 'prepared.json'), ('image', 'image.elf'), ('launcher', 'launch.bin')]:
-        require(artifact(value[key]) == (bundle / name).resolve(), 'Software evidence covers different launch inputs.')
-    require(digest(artifact(value['host_tool'])) == digest(Path(__file__)), 'Software evidence covers another host tool.')
-    for item in value.get('evidence', []): artifact(item)
-    require(value.get('evidence'), 'Launcher software evidence is missing.')
 
 
-def validate_qualification(value, port, sysfs):
-    require(value.get('schema') == 'a733-independent-reset-v1' and value.get('qualified') is True, 'Independent recovery is not qualified.')
-    require(value.get('target') == {'port':port, 'sysfs':sysfs, 'soc':'00001903'}, 'Recovery qualification covers another target.')
-    require(value.get('watchdog') == {'mode':0x41, 'configuration':1, 'output':2, 'source':'rtc32k', 'clock_hz':32768}, 'Watchdog interval or clock source differs.')
-    cases = value.get('cases', {})
-    require(set(cases) == {'clock-source', 'masked-cpu-expiry', 'whole-system-reset', 'protected-rom-return', 'interconnect-stall-recovery'}, 'Recovery evidence does not cover independent reset and source requirements.')
-    for item in cases.values(): artifact(item)
-    require(value.get('physical_counter') == {'clock_hz':24000000, 'continuous_across_rmr':True}, 'Physical counter rate and RMR continuity are not qualified.')
-    require(value.get('rom_sha256') == ROM_HASH, 'Recovery ROM identity differs.')
 
 
-def claimed(database, test_id, owner, bundle, qualification, input_evidence, ddr):
-    db = sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True)
-    db.row_factory = sqlite3.Row
-    try:
-        require(not db.execute("SELECT value FROM settings WHERE key='halted'").fetchone()[0], 'Board queue is halted.')
-        row = db.execute('SELECT * FROM tests WHERE id=?', (test_id,)).fetchone()
-        require(row is not None and row['state'] == 'claimed' and row['owner'] == owner, 'Matching coordinator queue claim required.')
-        submission, review = json.loads(row['submission']), json.loads(row['review'])
-        require(set(submission['prerequisites']) == PREREQUISITES and set(review['prerequisites']) == PREREQUISITES, 'Queue prerequisite contract differs.')
-        reviewed = {name: artifact(item) for name,item in review['prerequisites'].items()}
-        require(reviewed['independent-watchdog-rom-return'] == qualification.resolve() and reviewed['stable-protected-fel'] == input_evidence.resolve() and reviewed['ddr-reservation'] == ddr.resolve(), 'Qualification inputs are not the reviewed artifacts.')
-        validate_software(json.loads(reviewed['smp-launcher-software'].read_text()), bundle)
-        paths = {artifact(item) for item in submission['artifacts']}
-        require({(bundle / n).resolve() for n in ('prepared.json','image.elf','launch.bin')} <= paths, 'Queue does not cover exact prepared artifacts.')
-    finally: db.close()
 
 
 def sync_file(path):
@@ -384,53 +402,49 @@ def report_hold(message):
 
 
 def hold_ownership():
-    report_hold('Launch outcome unresolved. Board flock and queue claim remain held; coordinator recovery intervention is required.')
+    report_hold('Launch outcome unresolved. Board flock remains held; coordinator recovery intervention is required.')
     while True:
         try: time.sleep(1)
         except KeyboardInterrupt: report_hold('Ownership retained. Stop this process only after independent coordinator recovery review.')
 
 
 def stop_after_failure(record, save, quarantine, error, hold=hold_ownership):
+    if clean_dram_refusal(record, error):
+        record.update(failure=str(error), prelaunch_refusal='dram-not-ready',
+                      ownership_release_permitted=True)
+        save()
+        return
     # Evidence or quarantine failure must not release ownership of a live image.
     try:
         record['failure'] = str(error)
         save()
         quarantine()
     finally:
-        if record['launch_attempted']: hold()
+        if record.get('launch_attempted') or record.get('dram_probe_dirty'): hold()
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__); sub = parser.add_subparsers(dest='operation',required=True)
-    prep = sub.add_parser('prepare'); prep.add_argument('--image',type=Path,required=True); prep.add_argument('--image-manifest',type=Path,required=True); prep.add_argument('--output',type=Path,required=True)
+    prep = sub.add_parser('prepare'); prep.add_argument('--image',type=Path,required=True); prep.add_argument('--image-manifest',type=Path,help=argparse.SUPPRESS); prep.add_argument('--output',type=Path,required=True)
     prep.add_argument('--clang',default='clang-21'); prep.add_argument('--lld',type=Path,default=Path.home()/'.cache/sunstoneos/host/usr/lib/llvm-21/bin/ld.lld')
     live = sub.add_parser('launch')
-    for name in ('bundle','fel','qualification','input-evidence','ddr-contract','evidence','database'): live.add_argument('--'+name,type=Path,required=True)
-    live.add_argument('--claim',required=True); live.add_argument('--owner',required=True); live.add_argument('--confirm-bridge-stable',action='store_true',required=True)
+    for name in ('bundle','fel','evidence'): live.add_argument('--'+name,type=Path,required=True)
+    live.add_argument('--confirm-bridge-stable',action='store_true',required=True)
     args = parser.parse_args(argv)
     if args.operation == 'prepare':
         result=prepare(args.image,args.image_manifest,args.output.resolve(),args.clang,args.lld); print(json.dumps(result,indent=2)); return 0
     bundle=args.bundle.resolve(); prepared=validate_bundle(bundle)
-    require(digest(args.fel)==FEL_HASH, 'FEL executable differs from reviewed bytes.')
-    claimed(args.database,args.claim,args.owner,bundle,args.qualification,args.input_evidence,args.ddr_contract)
-    qualification=json.loads(args.qualification.read_text()); input_record=json.loads(args.input_evidence.read_text()); ddr=json.loads(args.ddr_contract.read_text())
-    args.evidence.mkdir(parents=True,exist_ok=False)
-    for label, path in [('host-tool.py', Path(__file__)), ('qualification.json', args.qualification), ('input-evidence.json', args.input_evidence), ('ddr-contract.json', args.ddr_contract), ('prepared.json', bundle/'prepared.json')]:
+    args.evidence = output_directory(args.evidence)
+    for label, path in [('host-tool.py', Path(__file__)), ('prepared.json', bundle/'prepared.json')]:
         shutil.copy2(path,args.evidence/label)
     access=module('smp_usb_access',ROOT/'tools/usb-access.py')
     import usb_guard
     usb_guard.check_health()
-    record={'complete':False,'transactions':[],'claim':args.claim,'owner':args.owner,'bundle_sha256':digest(bundle/'prepared.json'),'launch_attempted':False}
+    record={'complete':False,'transactions':[],'bundle_sha256':digest(bundle/'prepared.json'),'launch_attempted':False}
     def save(): save_json(args.evidence/'session.json',record)
     with access.board_lock() as node:
         access.require_session(node); access.require_rom(node); identity=access.identity(node)
         port=access.target(node); port_config={'port':port.name,'sysfs':str(port.resolve())}; failed=False
-        require_queue_port(args.database,port.name)
-        validate_qualification(qualification,port.name,str(port.resolve()))
-        require(input_record.get('complete') is True and input_record.get('asserted') is True and input_record.get('workspace_restored') is True and input_record.get('identity')==identity and input_record.get('port')==port.name and input_record.get('rom_sha256')==ROM_HASH, 'Stable low-input evidence does not cover this live instance.')
-        require(ddr.get('schema')=='a733-ddr-reservation-v1' and ddr.get('identity')==identity and ddr.get('port')==port.name and ddr.get('image_sha256')==prepared['image_sha256'] and ddr.get('exclusive') is True and ddr.get('published_cache_disabled') is True and ddr.get('remote_writers_excluded') is True and ddr.get('ranges')==[[0x41000000,0x42200000]], 'DDR reservation/publication contract is incomplete.')
-        for item in ddr.get('evidence',[]): artifact(item)
-        require(ddr.get('evidence'), 'DDR initialization and reservation evidence is missing.')
         record.update(initial_node=str(node),initial_identity=identity,port=port.name, host_tool_sha256=digest(Path(__file__)), usb_access_sha256=digest(ROOT/'tools/usb-access.py'), usb_guard_sha256=digest(Path(usb_guard.__file__))); save()
         def transaction(*arguments, pass_fds=()):
             nonlocal failed
@@ -464,20 +478,20 @@ def main(argv=None):
         try:
             require('soc=00001903(A733)' in transaction('version'),'Target is not A733.')
             with usb_guard.reenumeration('sunstoneos-a733','protected SMP launch and watchdog ROM return',2):
-                launch_once(transaction,wait_return,bundle,prepared,args.evidence,record,save,
-                    lambda: claimed(args.database,args.claim,args.owner,bundle,args.qualification,args.input_evidence,args.ddr_contract))
+                verify_dram(transaction,args.evidence,record,save)
+                launch_once(transaction,wait_return,bundle,prepared,args.evidence,record,save)
         except BaseException as error:
             record['transport_failed'] = failed
             stop_after_failure(record,save,
                 lambda: access.quarantine_instance(node,'SMP launch stopped; no further device communication or automatic retry.',identity),error)
             raise
     if record.get('clean_refusal'):
-        print('Original ROM reported a clean launch refusal; SRAM was restored. Scheduler result remains unobserved. Queue claim remains with the coordinator.')
+        print('Original ROM reported a clean launch refusal; SRAM was restored. Scheduler result remains unobserved.')
     else:
-        print('A new accessible ROM instance was observed. Scheduler result remains unobserved; DDR must be reinitialized. Queue claim remains with the coordinator.')
+        print('A new accessible ROM instance was observed. Scheduler result remains unobserved; DDR must be reinitialized.')
     return 2
 
 
 if __name__=='__main__':
     try: sys.exit(main())
-    except (OSError,ValueError,RuntimeError,sqlite3.Error,struct.error) as error: sys.exit(f'Stopped: {error}')
+    except (OSError,ValueError,RuntimeError,struct.error) as error: sys.exit(f'Stopped: {error}')

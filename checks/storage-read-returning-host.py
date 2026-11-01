@@ -1,43 +1,9 @@
 #!/usr/bin/env python3
-"""The host tool of the returning SD0 read image: signing, input and decoding.
+"""Check returning SD0 input, clock observations and strict result decoding.
 
-usage: storage-read-returning-host.py --read-record SESSION_JSON --output NEW_DIRECTORY
-
-SESSION_JSON is a session record that tools/board-bundles-next-read.py wrote
-on a board, such as board-session-20261025-24/port-3-3/clock-audit-b; the
-fabric-read fixtures are copies of it with their node, identity and words
-replaced, so their schema and keys are the read tool's own.
-
-Runs tools/storage-read-returning.py on model DDR and survey records, an
-approval request and approvals written here, and logs built from the input's
-plan, and requires:
-
-- sign: refuses a survey that failed, ran on another port, or ran on another
-  node or ROM identity than the DDR start, and an approval already signed;
-- input: refuses an unsigned approval, an approval signed for another
-  lifetime, an approval older than the DDR record, an approval for the other
-  bundle and an approval with one requested field not true; accepts the signed
-  approval and writes a 2192-byte input whose header and plan decode back;
-- decode: accepts a complete log and computes the throughput summary;
-  refuses a read line whose sector differs from the plan, a missing read count
-  and a card line for another profile; reports a window stop as incomplete,
-  and decodes a stopped run with its reason, stage and core protocol;
-- apps/storage-read-returning/controlled.json: the kernel runner's parser
-  accepts it, and a stopped log matches only the sd-stopped outcome;
-- fabric: the tool's masks and parent rates equal those of
-  drivers/storage/a733_mmc_platform.c, its read schema equals the schema
-  the read tool's main() writes and the real record's, and its MBUS rule
-  uses the mask, ROM value and boot0 value of include/a733_el3_mbus.h, which
-  a733_el3_mbus_restore() compares with: a word whose fields hold the ROM's
-  value gets boot0's fields and keeps its other bits, and a word with any
-  other field value, such as DFS enabled, stays; port 3-3's pre-launch words
-  0x03000002, 0xc3000000 and 0x84000000 give 0x03000002, 0x83000000 and,
-  after the monitor's restore, 0x81000000 at 200, 600 and 600 MHz, and a word
-  of 0x81000000 stays; the input command takes the words from a read record
-  on the DDR start's node and identity and refuses a read from another node,
-  a failed read and a configuration that carries its own fabric words.
-
-No board, USB or queue access.
+The baseline uses direct configuration and no approval or launch records.
+Clock rates, input geometry, card identity and data CRC failures remain covered.
+Optional native logs extend decoding coverage without physical access.
 """
 import argparse
 import binascii
@@ -49,6 +15,7 @@ import re
 from pathlib import Path
 import struct
 import time
+if not __debug__: raise SystemExit("checks require assertions")
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('sd_returning_tool', ROOT / 'tools/storage-read-returning.py')
@@ -105,33 +72,8 @@ def log_for(raw, outcome='complete', reads=None, profile=2, first=None):
 
 def main(out, real):
     out.mkdir(parents=True, exist_ok=False)
-    request = out / 'approval-request.json'; request.write_text(json.dumps(REQUEST))
     results = {}
-    ddr, survey = lifetime(out, 'a')
-    other_ddr, other_survey = lifetime(out, 'other', node='/dev/bus/usb/003/060', identity=(7, 9, 9, 0, 0))
-    bad_port = lifetime(out, 'port', port='3-1')[1]
-    failed = lifetime(out, 'failed', passed=False)[1]
-    a = approval(out / 'approval-A.json', 'A', {'initial': {'authorize_one_cmd0_initialization': True}})
-    results['sign_refusals'] = [
-        refused(lambda: tool.sign(a, ddr, failed, 'MODEL'), 'survey did not pass'),
-        refused(lambda: tool.sign(a, ddr, bad_port, 'MODEL'), 'another port'),
-        refused(lambda: tool.sign(a, ddr, other_survey, 'MODEL'), 'another node or ROM identity')]
     plan = tool.dma_plan()
-    input_refusals = [refused(lambda: tool.approved(a, request, ddr, survey, 'A'), 'not signed for this lifetime')]
-    tool.sign(a, other_ddr, other_survey, 'MODEL')
-    input_refusals.append(refused(lambda: tool.approved(a, request, ddr, survey, 'A'), 'not signed for this lifetime'))
-    a = approval(out / 'approval-A2.json', 'A', {'initial': {'authorize_one_cmd0_initialization': True}})
-    tool.sign(a, ddr, survey, 'MODEL')
-    results['sign_refusals'].append(refused(lambda: tool.sign(a, ddr, survey, 'MODEL'), 'already signed'))
-    tool.approved(a, request, ddr, survey, 'A')
-    value = json.loads(a.read_text()); value['signature']['signed_at'] = '2026-01-01T00:00:00+00:00'
-    old = out / 'approval-A3.json'; old.write_text(json.dumps(value))
-    input_refusals.append(refused(lambda: tool.approved(old, request, ddr, survey, 'A'), 'older than'))
-    input_refusals.append(refused(lambda: tool.approved(a, request, ddr, survey, 'B'), 'another bundle'))
-    false = approval(out / 'approval-A4.json', 'A', {'initial': {'authorize_one_cmd0_initialization': False}})
-    tool.sign(false, ddr, survey, 'MODEL')
-    input_refusals.append(refused(lambda: tool.approved(false, request, ddr, survey, 'A'), 'not approved'))
-    results['input_refusals'] = input_refusals
     raw = tool.input_bytes(2, 0x55, CONFIG, plan, ids=(3, 5, 7))
     assert len(raw) == 2192 and struct.unpack_from('<4I', raw, 56)[:3] == (2, 0x00300000, 240)
     given = tool.parse_input(raw)
@@ -188,17 +130,21 @@ def main(out, real):
     assert tool.restored([1, 2, 0x94000000])[2] == 0x94000000  # DFS enable (bit 28) set: not the ROM's fields
     assert tool.restored([1, 2, 0x84000000]) == [1, 2, 0x81000000] and tool.restored([1, 2, 0x81000000])[2] == 0x81000000
     good = read_record('fabric-read')
-    assert tool.fabric_read(good, ddr) == (([0x03000002, 0x83000000, 0x81000000], [200000000, 600000000, 600000000]),
+    assert tool.fabric_read(good) == (([0x03000002, 0x83000000, 0x81000000], [200000000, 600000000, 600000000]),
                                            [0x03000002, 0xc3000000, 0x84000000])
-    fabric_refusals = [refused(lambda: tool.fabric_read(read_record('fabric-other', node='/dev/bus/usb/003/060'), ddr),
-                               'another node'),
-                       refused(lambda: tool.fabric_read(read_record('fabric-failed', complete=False), ddr), 'did not pass')]
+    fabric_refusals = [refused(lambda: tool.fabric_read(read_record('fabric-failed', complete=False)), 'did not pass')]
     board = {k: v for k, v in CONFIG.items() if not k.startswith('fabric')}
     (out / 'board.json').write_text(json.dumps(board)); (out / 'fabric-config.json').write_text(json.dumps(CONFIG))
-    common = ['input', '--approval', str(a), '--request', str(request), '--ddr', str(ddr), '--survey', str(survey),
-              '--fabric-read', str(good), '--profile', '2']
-    fabric_refusals.append(refused(lambda: tool.main(common + ['--config', str(out / 'fabric-config.json'),
-                                                               '--output', str(out / 'refused.bin')]), 'this lifetime'))
+    common = ['input', '--fabric-read', str(good), '--profile', '2']
+    # Configuration alone is sufficient; an observation can supply fresh fabric words.
+    assert tool.main(['input', '--config', str(out / 'fabric-config.json'),
+                      '--output', str(out / 'direct-input.bin')]) == 0
+    assert tool.parse_input((out / 'direct-input.bin').read_bytes())['plan'] == plan
+    assert not any((out / name).exists() for name in ('approval.json', 'ddr', 'survey'))
+    bad_config = dict(CONFIG, fabric_hz=[1, 2, 3])
+    (out / 'bad-config.json').write_text(json.dumps(bad_config))
+    fabric_refusals.append(refused(lambda: tool.main(['input', '--config', str(out / 'bad-config.json'),
+        '--output', str(out / 'bad-input.bin')]), 'words and rates differ'))
     assert tool.main(common + ['--config', str(out / 'board.json'), '--output', str(out / 'cli-input.bin')]) == 0
     made = json.loads((out / 'cli-input.json').read_text())
     assert made['fabric'] == ['0x03000002', '0x83000000', '0x81000000'] and made['fabric_hz'] == [200000000, 600000000, 600000000]
@@ -213,11 +159,12 @@ def main(out, real):
     stopped = log_for(raw, 'stopped', reads=0)
     found = [t for o in outcomes for t in o['log_contains'] if t in stopped]
     assert [o['name'] for o in outcomes if runner.controlled_match(o, terminal, runner.fault_lines(stopped),
-            [t for t in o['log_contains'] if t in stopped])] == ['sd-stopped'], found
+            [t for t in o['log_contains'] if t in stopped])] == [], found
+    assert {o['name'] for o in outcomes} == {'sd-input', 'sd-providers', 'sd-return-admission'}
     results['controlled_outcomes'] = [o['name'] for o in outcomes]
     (out / 'result.json').write_text(json.dumps({'passed': True, 'physical_access': False, 'results': results,
         'scope': 'tools/storage-read-returning.py on model records and logs; no runner, image or board.'}, indent=1) + '\n')
-    print('PASS returning SD0 host tool: signing, input and decoding')
+    print('PASS returning SD0 host tool: direct input, clock validation and decoding')
 
 
 def dma_checks(out, native):
@@ -285,20 +232,12 @@ def first_read_checks(out, real, native, reference_path):
               '--survey', str(survey), '--fabric-read', str(read), '--config', str(board), '--profile', '2']
     raw_path = out / 'first-read.bin'
     produce = common + ['--plan', 'first-read', '--output', str(raw_path)]
-    errors.append(refused(lambda: tool.main(produce), 'not signed for this lifetime'))
-    assert not raw_path.exists()
-    tool.sign(a, ddr, survey, 'MODEL')
-    other_ddr, other_survey = lifetime(out, 'other', node='/dev/bus/usb/003/060', identity=(7, 9, 9, 0, 0))
-    wrong_lifetime = produce.copy(); wrong_lifetime[wrong_lifetime.index('--ddr') + 1] = str(other_ddr)
-    wrong_lifetime[wrong_lifetime.index('--survey') + 1] = str(other_survey)
-    errors.append(refused(lambda: tool.main(wrong_lifetime), 'not signed for this lifetime'))
     wrong_profile = produce.copy(); wrong_profile[wrong_profile.index('--profile') + 1] = '3'
     errors.append(refused(lambda: tool.main(wrong_profile), 'first-read requires profile 2'))
-    for bad in (dict(read_record, complete=False), dict(read_record, identity=[0] * 5),
-                dict(read_record, words={})):
+    for bad in (dict(read_record, complete=False), dict(read_record, words={})):
         (read / 'session.json').write_text(json.dumps(bad))
         errors.append(refused(lambda: tool.main(produce),
-            'did not pass' if not bad['complete'] else 'another node' if bad['identity'] != d['node_identity'] else 'lacks a fabric word'))
+            'did not pass' if not bad['complete'] else 'lacks a fabric word'))
     (read / 'session.json').write_text(json.dumps(read_record))
     assert tool.main(produce) == 0
     raw = raw_path.read_bytes(); given = tool.parse_input(raw)
@@ -307,9 +246,6 @@ def first_read_checks(out, real, native, reference_path):
     assert struct.unpack_from('<3I', raw, 72) == (0x03000002, 0x83000000, 0x81000000)
     metadata = json.loads(raw_path.with_suffix('.json').read_text())
     assert metadata['input_sha256'] == tool.digest(raw_path)
-    assert metadata['ddr_session_sha256'] == tool.digest(ddr / 'session.json')
-    assert metadata['survey_session_sha256'] == tool.digest(survey / 'session.json')
-    assert metadata['fabric_read_sha256'] == tool.digest(read / 'session.json')
     for offset, fmt, replacement in ((24, '<Q', 0), (32, '<Q', 2), (40, '<Q', 0),
                                       (64, '<I', 0), (148, '<I', 257)):
         malformed = bytearray(raw); struct.pack_into(fmt, malformed, offset, replacement)
@@ -387,5 +323,5 @@ if __name__ == '__main__':
         first_read_checks(args.output,json.loads(args.read_record.read_text()),args.first_read_native,args.reference)
     elif args.dma_native: dma_checks(args.output,args.dma_native)
     else:
-        if args.read_record is None: parser.error('--read-record is required without --dma-native')
-        main(args.output, json.loads(args.read_record.read_text()))
+        real = json.loads(args.read_record.read_text()) if args.read_record else dict(schema=tool.READ_SCHEMA, scratch_restored=True)
+        main(args.output, real)

@@ -8,6 +8,9 @@ facts remain unchanged; the new sessions do not inherit old runtime results.
 import argparse,copy,hashlib,importlib.util,json,shutil,struct,types
 from contextlib import ExitStack
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+from host_evidence import unique_directory
 from unittest.mock import patch
 ROOT=Path(__file__).resolve().parents[1]
 def module(name,path):
@@ -17,7 +20,7 @@ def encoded(value):return (json.dumps(value,sort_keys=True,indent=2)+'\n').encod
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     for name in ('uart','i2s','hdmi','output'):p.add_argument('--'+name,type=Path,required=True)
-    a=p.parse_args();a.output.mkdir(parents=True,exist_ok=False)
+    a=p.parse_args();a.output=unique_directory(a.output)
     # Read and seal the accepted bundle closure before loading host policy.
     originals={};bundles={}
     for kind in ('uart','i2s','hdmi'):
@@ -40,8 +43,8 @@ def main():
     note=save('MODEL-NOT-PHYSICAL.json',encoded(dict(modeled=True,physical_authority=False,scope=__doc__)))
     def modeled_require(original,kind,fact):
         def require(condition,message):
-            if message=='DMA security requires reviewed physical authority.':
-                assert condition is False and fact.get('reviewed') is True and fact.get('modeled') is True and fact.get('physical_authority') is False
+            if message=='DMA security requires physical access facts.' and not condition:
+                assert condition is False and fact.get('modeled') is True and fact.get('physical_authority') is False
                 overrides.append(kind);return
             original(condition,message)
         return require
@@ -54,6 +57,13 @@ def main():
         inputs[kind]=dict(bundle=str(folder.resolve()),image_sha256=sha(image),prior_session_sha256=sha(raw))
         cache={path:frozen[item['name']] for path,item in m.get('entry_evidence',{}).items()}
         cache[note['path']]=Path(note['path']).read_bytes()
+        if kind=='i2s':
+            # Declare the inherited model conditions directly, without copying
+            # historical reference paths into the current input.
+            facts=json.loads(cache[admission['recovery']['path']])
+            facts['conditions']={key:True for key in facts['conditions']}
+            data=encoded(facts);reference=save('i2s-direct-conditions.json',data)
+            admission['recovery']=reference;cache[reference['path']]=data
         if kind=='uart':
             host.session_check(raw);ids=(101,103,107)
             _,handoff,controller,evidence=struct.unpack_from('<4Q',raw,1872)
@@ -82,7 +92,7 @@ def main():
             data=encoded(fact);ref=save(kind+'-'+case+'-security.json',data)
             current['dma_nonsecure_access']=ref;support[ref['path']]=data
             if missing_support:support.pop(note['path'])
-            if case=='missing-primary':current.pop('dma_nonsecure_access')
+            if case in ('missing-primary','direct-facts-no-primary-reference'):current.pop('dma_nonsecure_access')
             admission_raw=encoded(current);trial=bytearray(raw)
             if kind=='i2s':
                 offset=layout['fields']['evidence']['offset'];trial[offset:offset+32]=hashlib.sha256(admission_raw).digest()
@@ -110,12 +120,13 @@ def main():
             'wrong-config':lambda f:f.update(configuration_sha256='0'*64),
             'wrong-session':lambda f:f.update(generation=f['generation']+1),
             'missing-post-reset':lambda f:f.pop('valid_after_reset_release'),
-            'missing-frozen-support':None}
-        if kind=='hdmi':mutations['duplicate-support']=lambda f:f.update(evidence=[note,note])
+            'controller-access':lambda f:f.update(controller_access_nonsecure_el1=False),
+            'without-paperwork':lambda f: ([f.pop(key) for key in ('schema','reviewed')],f.update(evidence=[]))}
+        if kind=='hdmi':mutations['direct-facts-no-primary-reference']=mutations.pop('missing-primary')
         if kind=='uart':mutations.update({'boolean-runtime-id':lambda f:f.update(epoch=True),'wrong-template':lambda f:f.update(session_template_sha256='0'*64)})
-        errors={'duplicate-support':'Duplicate HDMI audio','missing-primary':'nonsecure authority is missing','modeled-production':'reviewed physical authority',
+        errors={'duplicate-support':'Duplicate HDMI audio','missing-primary':'nonsecure authority is missing','modeled-production':'physical access facts',
             'wrong-channel-mask':'omits selected','wrong-config':'digest binding differs','wrong-session':'binding differs: generation',
-            'missing-post-reset':'access/lifetime','missing-frozen-support':'Missing frozen','boolean-runtime-id':'binding differs: epoch','wrong-template':'digest binding differs'}
+            'missing-post-reset':'access/lifetime','controller-access':'access/lifetime','missing-frozen-support':'Missing frozen','boolean-runtime-id':'binding differs: epoch','wrong-template':'digest binding differs'}
         nominal=None
         for case,mutate in mutations.items():
             fact=copy.deepcopy(security)
@@ -124,7 +135,8 @@ def main():
             except ValueError as error:
                 assert case!='nominal-model' and errors[case] in str(error),(kind,case,str(error))
             else:
-                assert case=='nominal-model',(kind,case);nominal=result
+                assert case in ('nominal-model','without-paperwork','direct-facts-no-primary-reference'),(kind,case)
+                if case=='nominal-model':nominal=result
             cases.append(kind+':'+case)
         if kind=='uart':
             # The same full record validates before IDs are adopted and then

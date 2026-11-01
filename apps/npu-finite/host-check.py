@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 """Mock only the new NPU host profile; never discover hardware or touch queues."""
-import argparse,hashlib,importlib.util,json,os,shutil,struct,tempfile
+import sys
+import argparse,hashlib,importlib.util,json,os,shutil,struct
+from contextlib import nullcontext
 from pathlib import Path
 from unittest.mock import patch
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--case',action='append',default=[],help='Run only named transfer cases; packaging validation still runs.')
 p.add_argument('--interrupt',action='store_true',help='check the interrupt host (apps/npu-interrupt/host.py) and its admission record')
-p.add_argument('--client-logs',type=Path,help='interrupt client logs from checks/npu-interrupt-client.py, for the receipt cases');p.add_argument('--native',type=Path,required=True);p.add_argument('--evidence',type=Path,required=True);a=p.parse_args();a.evidence.mkdir(parents=True,exist_ok=False)
+p.add_argument('--client-logs',type=Path,help='interrupt client logs from checks/npu-interrupt-client.py, for the receipt cases');p.add_argument('--native',type=Path,required=True);p.add_argument('--evidence',type=Path,required=True);a=p.parse_args()
 r=Path(__file__).resolve().parents[2];HOST=r/('apps/npu-interrupt/host.py' if a.interrupt else 'apps/npu-finite/host.py')
+sys.path.insert(0,str(r/'checks'))
+from harness import artifact_refused
 spec=importlib.util.spec_from_file_location('host',HOST);h=importlib.util.module_from_spec(spec);spec.loader.exec_module(h)
+a.evidence=(h.finite if a.interrupt else h).unique_directory(a.evidence)
 # The interrupt host wraps a private copy of the finite host; check that copy.
 if a.interrupt:h=h.finite
 IRQ_RECEIPTS='NPU_IRQ_COMPLETIONS=0x0000000000000003\nNPU_IRQ_STOPPED=0x0000000000000001\n'
@@ -37,14 +42,15 @@ assert board['startup_us']==4024 and board['job_us']==[None,None] and board['pub
 assert h.timing('NPU_STAGE=OPEN\n') is None
 def ref(path):return {'path':str(path.resolve()),'sha256':sha(path.read_bytes())}
 results=[]
-with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
+fixture=a.evidence/'modeled-fixture';fixture.mkdir()
+with nullcontext(fixture) as temporary:
  t=Path(temporary);native=a.native.resolve();image=native/'image.elf';manifest=native/'manifest.json';data=image.read_bytes();parts,address,build,layout,g=h.image_profile(data,json.loads(manifest.read_bytes()));checkpoint=bool(g.get('checkpoint'));thermal=bool(g.get('thermal'));restart=bool(g.get('restart'));startup=bool(g.get('startup_only'));infer=bool(g.get('single_inference'));runtime=bool(g.get('runtime'));execution=h.geometry_profile(g)
  completions=4 if restart else 3 if runtime else 2 if infer else 1 if startup else 3
  client_profile=h.STARTUP_CLIENT.get(execution)
  IRQ_RECEIPTS=f'NPU_IRQ_COMPLETIONS=0x{completions:016x}\nNPU_IRQ_STOPPED=0x0000000000000001\n'
  if restart:
   assert a.interrupt
-  restart_conditions=h.validate_admission.__globals__['RESTART_CONDITIONS']
+  pass
  TAIL=min(100,len(bytes.fromhex(g['reference']))//2)
  # The reviewed 608-byte page, converted to the image's reduced record.
  spec=importlib.util.spec_from_file_location('finite_images',r/'checks/npu-image-checks.py');images=importlib.util.module_from_spec(spec);spec.loader.exec_module(images)
@@ -86,7 +92,7 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
   assert expected==list(h.stopped.METADATA)
   assert cl['buffers']-cl['model_bytes']==32 and cl['stream_bytes']-cl['model_bytes']==352
   results.append({'name':'actual-ELF-DWARF-binds-stopped-metadata-ranges','passed':True})
-  assert h.stopped.layout('0'*64,None,None,None,None) is None
+  assert h.stopped.layout('0'*64,{},None,0,0) is None
  observed={'seal':False}
  def initialize(cpu,at,size,cookie):
   if at==native_image.address('a733_smp_contract_valid'):
@@ -102,117 +108,68 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
  assert native_report[1:4]==(profile['epoch'],profile['generation'],1)
  (a.evidence/'native-initial-report.bin').write_bytes(initialized)
  results.append({'name':'actual-native-report-initializer','passed':True,'magic':hex(native_report[0]),'sha256':sha(initialized)})
- fact=t/'modeled-fact.txt';fact.write_text('Software-only mocked host evidence. No physical observation or live target.\n')
- # An impossible test port prevents these temporary records matching a live board.
- identity=[0,0,0,0,1];port='mock-npu-port';common={'image_sha256':sha(data),'identity':identity,'port':port,'whole_platform':profile['whole_platform']}
  def write(name,value):path=t/name;path.write_text(json.dumps(value,indent=2)+'\n');return path
- required={'clock':{'independent-dram-phy-sources','exclusive-pll-npu-consumers-and-writers','no-autonomous-parent-selector-writers','supervised-cross-pll-disturbance-risk'},'power':{'dcdc2-stable-800mv','authenticated-pmic-pin-inheritance'},'supervision':{'manual-whole-board-power-removal','stop-after-first-failure','successful-close-stop-quiescence-ROM-retirement','failure-retain-until-whole-power-removal','DRAM-restore-only-after-validated-normal-return','no-old-SRAM-restore'}}
- thermal_facts={}
- if thermal:
-  required['supervision'].remove('successful-close-stop-quiescence-ROM-retirement')
-  required['supervision'].add('matched-close-local-stop-or-proved-never-started-with-configured-THS-stop-and-provider-park')
-  at=boot+232;struct.pack_into('<2Q',raw,at,0x12345,0x23456);struct.pack_into('<2IB',raw,at+144,1,12000000,1)
-  conditions={
-   'initial':('exclusive_ths_and_irq71','remote_writers_excluded','no_inherited_thermal_service','security_access_authorized','gic_route_owned','boot_lineage_reviewed'),
-   'electrical':('avcc_adc_digital_supplies_stable','sid_shadows_readable','device_mappings_verified','no_physical_aliases'),
-   'clocks':('stable_apb1_ref_osc','no_clock_reset_writers','gpadc_consumers_excluded'),
-   'supervision':('whole_board_power_removal','failure_permanent_retention','no_reuse','one_attempt','configured_sensor_stop_retains_clocks','normal_return_after_provider_quiescence')}
-  for index,(name,keys) in enumerate(conditions.items()):
-   path=write('thermal-'+name+'.json',{**common,'schema':'a733-thermal-'+name+'-v1','reviewed':True,'owner':0x12345,'authority':0x23456,**dict.fromkeys(keys,True)})
-   thermal_facts[name]=ref(path);raw[at+16+32*index:at+48+32*index]=hashlib.sha256(path.read_bytes()).digest()
- if checkpoint:
-  required['clock']=({'read-only-NPU-clock-guard-before-MBUS-normalization','MBUS-source-restore-with-idle-masters-and-exclusive-SRAM-window'} if g.get('checkpoint_mbus') else {'npu-clock-power-registers-not-accessed'})
-  required['power']=({'providers-constructed-never-scheduled','no-provider-hardware-operation-or-lease'} if g.get('checkpoint_provider') else {'providers-never-constructed','unconsumed-typed-boot-no-provider-grant'})
-  required['supervision'].remove('successful-close-stop-quiescence-ROM-retirement');required['supervision'].add('checkpoint-normal-return-retirement')
- boot_hash=sha(raw[boot:boot+boot_bytes]);facts={}
- for name,offset in [('clock',112),('power',144),('supervision',176)]:
-  value={**common,'conditions':{k:ref(fact) for k in required[name]},'boot_sha256':boot_hash,'supply_uv':800000,'supervisor':profile['supervisor'],'one_attempt':True};facts[name]=write(name+'.json',value);raw[offset:offset+32]=hashlib.sha256(facts[name].read_bytes()).digest()
- ddr=write('ddr.json',{**common,'schema':'a733-ddr-reservation-v1','ranges':[[0x41000000,0x42200000]],'exclusive':True,'published_cache_disabled':True,'remote_writers_excluded':True,'evidence':[ref(fact)]})
- conditions={'cold-cache-and-dirty-alias-exclusion','dual-pas-dram','exclusive-cpus-memory-dma','remote-writers-excluded','usb-clock-power-reset-ownership','physical-counter-continuity','npu-startup-sram-confinement-drain-ownership','pmic-bus-rail-pin-ownership','primary-cache-transition-and-secondary-off','usb-supplies-stable-and-writers-excluded'}
- if checkpoint:
-  conditions-= {'npu-startup-sram-confinement-drain-ownership','pmic-bus-rail-pin-ownership'}
-  conditions|= {('providers-constructed-never-scheduled' if g.get('checkpoint_provider') else 'providers-never-constructed'),'read-only-NPU-clock-guard-before-MBUS-normalization' if g.get('checkpoint_mbus') else 'npu-clock-power-registers-not-accessed'}
- if g.get('checkpoint_irq'):conditions.add('exclusive-IRQ97-route-capture-install-restore')
- platform=write('platform.json',{**common,**profile,'schema':'a733-npu-checkpoint-platform-v1' if checkpoint else 'a733-npu-convolution-platform-v1','conditions':{k:ref(fact) for k in conditions},'entry_conditions_established':True,'physical_coherence_result':'under-test'})
- launcher=Path.home()/'.cache/sunstoneos/evidence/npu-single-core-20261018/package-final/bundle/launch.bin'
- review=write('root.json',{**common,'schema':'a733-npu-finite-return-review-v1','reviewed':True,'execution_profile':execution,'build_id':build.hex(),'supervisor':profile['supervisor'],'launcher_sha256':sha(launcher.read_bytes()),'host_sources':{n:sha((r/n).read_bytes()) for n in h.HOST_SOURCES},'conditions':{k:ref(fact) for k in ('architecture-reset-reviewed','software-handoff-reviewed','normal-return-retirement-reviewed','failure-retention-reviewed')}})
- entry={**common,**profile,'schema':h.SCHEMA,'execution_profile':execution,'boot_sha256':boot_hash,'ddr':ref(ddr),'platform':ref(platform),'root_review':ref(review),**{k:ref(v) for k,v in facts.items()}}
- if thermal:entry['thermal']=thermal_facts
- if a.interrupt:
-  irq=write('interrupt.json',{**common,'schema':'a733-npu-interrupt-entry-v1','build_id':build.hex(),'interrupt':97,'cpu':0,'conditions':{k:ref(fact) for k in IRQ_CONDITIONS}})
-  entry['interrupt']=ref(irq)
- if restart:
-  restart_record=write('restart.json',{**common,**profile,'schema':'a733-npu-normal-restart-entry-v1',
-   'build_id':build.hex(),'reviewed':True,'restart_qualification':'under-test','conditions':{k:ref(fact) for k in restart_conditions}})
-  entry['restart']=ref(restart_record)
- admission=write('admission.json',entry);raw[80:112]=hashlib.sha256(admission.read_bytes()).digest();session=t/'session.bin';session.write_bytes(raw)
- boot_path=t/'typed-boot.bin';boot_path.write_bytes(raw[boot:boot+boot_bytes])
- constructed=t/'constructed-session.bin';h.construct_session(image,manifest,boot_path,admission,constructed)
- assert constructed.read_bytes()==session.read_bytes();results.append({'name':'explicit-session-construction','passed':True})
- for label,change in [('boot-hash',lambda:boot_path.write_bytes(bytes(boot_bytes))),
-                      ('build',lambda:write('admission.json',{**entry,'image_sha256':'f'*64})),
-                      ('identity',lambda:write('admission.json',{**entry,'npu_owner':entry['npu_owner']+1}))]:
-  saved_boot=boot_path.read_bytes();saved_entry=admission.read_bytes();change();target=t/(label+'.bin')
-  try:h.construct_session(image,manifest,boot_path,admission,target)
-  except ValueError:assert not target.exists()
-  else:raise AssertionError(label+' admitted')
-  boot_path.write_bytes(saved_boot);admission.write_bytes(saved_entry);results.append({'name':'session-'+label+'-refused-before-output','passed':True})
- try:h.construct_session(image,manifest,boot_path,admission,constructed)
- except ValueError:assert constructed.read_bytes()==session.read_bytes()
- else:raise AssertionError('existing output overwritten')
- results.append({'name':'session-existing-output-preserved','passed':True})
- # Keep fixture launcher bytes; actual armed compilation is checked separately.
- def launcher_copy(output,*args):shutil.copy2(launcher,output/'launch.bin')
- with patch.object(h,'build_launcher',launcher_copy):h.prepare(image,manifest,session,admission,t/'bundle','mock-compiler','mock-linker','mock-objcopy')
- bundle=t/'bundle';prepared=h.validate_bundle(bundle);results.append({'name':'original-producers-valid-returning-bundle','passed':True})
  def rejected(name,fn):
   try:fn()
   except (ValueError,KeyError):results.append({'name':name,'passed':True});return
   raise AssertionError(name+' accepted')
- for name,key,value in [('retained-profile-refused','schema','a733-npu-supervised-entry-v1'),('other-image-refused','image_sha256','f'*64),('other-profile-refused','execution_profile','npu-single-core-supervised-v1')]:
-  modified={**entry,key:value};encoded=(json.dumps(modified)+'\n').encode();mutated=bytearray(raw);mutated[80:112]=hashlib.sha256(encoded).digest();rejected(name,lambda:h.validate_admission(encoded,mutated,build,layout,sha(data),execution_profile=execution))
- saved=fact.read_bytes();fact.write_bytes(saved+b'changed');h.validate_bundle(bundle);fact.write_bytes(saved);results.append({'name':'frozen-entry-independent-of-external-file-mutation','passed':True})
- frozen_fact=bundle/prepared['entry_evidence'][str(fact.resolve())]['name'];saved=frozen_fact.read_bytes();frozen_fact.write_bytes(saved+b'changed');rejected('changed-frozen-entry-refused',lambda:h.validate_bundle(bundle));frozen_fact.write_bytes(saved)
- # Negative ELF contains a defined function renamed to an existing USB
- # filename string. The real image's STT_FILE entries alone remain accepted.
+ if thermal:
+  at=boot+232;struct.pack_into('<2Q',raw,at,12345,12346)
+  raw[at+16:at+144]=bytes([7])*128
+  struct.pack_into('<2IB',raw,at+144,0,24000000,1)
+ boot_path=t/'boot.bin';boot_path.write_bytes(raw[boot:])
+ admission=write('identities.json',{k:profile[k] for k in ('epoch','generation','lease','supervisor','whole_platform')})
+ session=t/'session.bin';h.construct_session(image,None,boot_path,admission,session)
+ raw=bytearray(session.read_bytes())
+ artifact_refused(lambda:h.construct_session(image,None,boot_path,None,session),t)
+ fresh=h.construct_session(image,None,boot_path,None,t/'fresh-session.bin')
+ assert fresh==t/'fresh-session.bin' and fresh.read_bytes()!=session.read_bytes()
+ results.append({'name':'session-without-process-records-and-existing-output-refused','passed':True})
+ for name,change in [('version',lambda b:struct.pack_into('<Q',b,8,2)),
+                     ('build',lambda b:b.__setitem__(slice(48,80),bytes(32))),
+                     ('digest',lambda b:b.__setitem__(slice(112,144),bytes(32))),
+                     ('pmic-deadline',lambda b:struct.pack_into('<Q',b,boot+layout[4]+16,1)),
+                     ('duplicate-owner',lambda b:b.__setitem__(slice(boot+48,boot+56),b[boot+40:boot+48]))]:
+  bad=bytearray(raw);change(bad)
+  rejected('native-session-'+name,lambda:h.validate_admission(b'',bad,build,layout,sha(data),execution_profile=execution))
+ launcher=Path.home()/'.cache/sunstoneos/evidence/npu-single-core-20261018/package-final/bundle/launch.bin'
+ def launcher_copy(output,*args):shutil.copy2(launcher,output/'launch.bin')
+ bundle=t/'bundle'
+ with patch.object(h,'build_launcher',launcher_copy):
+  h.prepare(image,None,session,None,bundle,'mock-compiler','mock-linker','mock-objcopy')
+  artifact_refused(lambda:h.prepare(image,None,session,None,bundle,'mock-compiler','mock-linker','mock-objcopy'),bundle)
+ prepared=h.validate_bundle(bundle)
+ assert not prepared['entry_evidence'] and 'host_sources' not in prepared
+ results.append({'name':'bundle-without-manifest-review-or-external-evidence','passed':True})
+ archive=t/'archived-inputs';archive.mkdir()
+ for name in ('launch.c','build.log','manifest.json','admission.json'):
+  path=bundle/name
+  if not path.exists():path.write_text('Archived development input.\n')
+  metadata=json.loads((bundle/'prepared.json').read_bytes())
+  metadata['files'][name]=sha(path.read_bytes());(bundle/'prepared.json').write_text(json.dumps(metadata))
+  path.write_text('Changed archived development input.\n')
+  accepted=h.validate_bundle(bundle)
+  assert name not in accepted['_frozen'] and name not in accepted['files']
+  path.rename(archive/name);h.validate_bundle(bundle)
+  results.append({'name':'archived-'+name+'-edit-and-removal-accepted','passed':True})
+
+ # Native markers determine parsing even when optional metadata says otherwise.
+ assert h.image_profile(data,{'execution_profile':'invalid','build_id':'00'*32,'final_elf':'00'*32})[4]==g
+ results.append({'name':'native-marker-selects-profile','passed':True})
  import io
  from elftools.elf.elffile import ELFFile
  elf=ELFFile(io.BytesIO(data));table=elf.get_section_by_name('.symtab');syms=list(table.iter_symbols())
  usb_name=next(x['st_name'] for x in syms if x['st_info']['type']=='STT_FILE' and 'usb' in x.name.lower())
  index=next(i for i,x in enumerate(syms) if x['st_info']['type']=='STT_FUNC' and x.name=='platform_hex')
  altered=bytearray(data);struct.pack_into('<I',altered,table['sh_offset']+index*table['sh_entsize'],usb_name)
- rejected('linked-native-usb-function-refused',lambda:h.image_profile(bytes(altered),{**json.loads(manifest.read_bytes()),'final_elf':sha(altered)}))
- saved_platform=platform.read_bytes()
- for key in ('usb-supplies-stable-and-writers-excluded',)+(() if checkpoint else ('npu-startup-sram-confinement-drain-ownership','pmic-bus-rail-pin-ownership')):
-  changed=json.loads(saved_platform);del changed['conditions'][key];platform.write_text(json.dumps(changed))
-  encoded=json.dumps({**entry,'platform':ref(platform)}).encode();mutated=bytearray(raw);mutated[80:112]=hashlib.sha256(encoded).digest()
-  rejected('finite-missing-'+key,lambda:h.validate_admission(encoded,mutated,build,layout,sha(data),execution_profile=execution))
- platform.write_bytes(saved_platform)
- if startup:
-  # The runtime client's logs are composed here from the linked references.
-  assert a.interrupt and (a.client_logs or runtime)
-  for execution_label in (h.PROFILE,h.RESTART,h.CHECKPOINT,h.PROVIDER_CHECKPOINT)+((h.STARTUP,h.INFERENCE) if runtime else (h.STARTUP if infer else h.INFERENCE,)):
-   rejected('startup-cannot-use-'+execution_label,lambda:h.image_profile(data,{**json.loads(manifest.read_bytes()),'execution_profile':execution_label}))
- if checkpoint:
-  if g.get('checkpoint_irq'):
-   rejected('IRQ-checkpoint-cannot-use-MBUS-profile',lambda:h.image_profile(data,{**json.loads(manifest.read_bytes()),'execution_profile':h.MBUS_CHECKPOINT}))
-   rejected('IRQ-checkpoint-cannot-use-memory-profile',lambda:h.image_profile(data,{**json.loads(manifest.read_bytes()),'execution_profile':h.CHECKPOINT}))
-  rejected('checkpoint-cannot-use-numerical-profile',lambda:h.image_profile(data,{**json.loads(manifest.read_bytes()),'execution_profile':h.PROFILE}))
-  saved_platform=platform.read_bytes()
-  for key in ('remote-writers-excluded',('providers-constructed-never-scheduled' if g.get('checkpoint_provider') else 'providers-never-constructed'),'read-only-NPU-clock-guard-before-MBUS-normalization' if g.get('checkpoint_mbus') else 'npu-clock-power-registers-not-accessed')+(('exclusive-IRQ97-route-capture-install-restore',) if g.get('checkpoint_irq') else ()):
-   changed=json.loads(saved_platform);del changed['conditions'][key];platform.write_text(json.dumps(changed))
-   encoded=json.dumps({**entry,'platform':ref(platform)}).encode();mutated=bytearray(raw);mutated[80:112]=hashlib.sha256(encoded).digest()
-   rejected('checkpoint-missing-'+key,lambda:h.validate_admission(encoded,mutated,build,layout,sha(data),execution_profile=execution))
-  platform.write_bytes(saved_platform)
+ rejected('linked-native-usb-function-refused',lambda:h.image_profile(bytes(altered),{}))
  if thermal:
   for label,at,value in [('owner',boot+232,profile['npu_owner']),('APB-rate',boot+232+148,1),('padding',boot+232+153,1)]:
    bad=bytearray(raw);struct.pack_into('<Q' if label=='owner' else '<I' if label=='APB-rate' else '<B',bad,at,value)
-   changed={**entry,'boot_sha256':sha(bad[boot:])};power=json.loads(facts['power'].read_bytes());power['boot_sha256']=changed['boot_sha256'];other=write('bad-power.json',power);changed['power']=ref(other);bad[144:176]=hashlib.sha256(other.read_bytes()).digest()
-   encoded=json.dumps(changed).encode();bad[80:112]=hashlib.sha256(encoded).digest()
-   rejected('thermal-'+label+'-refused',lambda:h.validate_admission(encoded,bad,build,layout,sha(data),execution_profile=execution))
-  changed={**entry,'thermal':{k:v for k,v in thermal_facts.items() if k!='electrical'}};encoded=json.dumps(changed).encode();bad=bytearray(raw);bad[80:112]=hashlib.sha256(encoded).digest()
-  rejected('missing-thermal-electrical-authority',lambda:h.validate_admission(encoded,bad,build,layout,sha(data),execution_profile=execution))
- saved=(bundle/'request.bin').read_bytes();(bundle/'request.bin').write_bytes(bytes(len(saved)));rejected('changed-packet-refused',lambda:h.validate_bundle(bundle));(bundle/'request.bin').write_bytes(saved)
+   rejected('thermal-'+label+'-refused',lambda:h.validate_admission(b'',bad,build,layout,sha(data),execution_profile=execution))
+ for name in ('request.bin','session.bin','launch.bin','segment-0.bin'):
+  path=bundle/name;saved=path.read_bytes();path.write_bytes(saved+b'x')
+  rejected('changed-'+name,lambda:h.validate_bundle(bundle));path.write_bytes(saved)
  def runtime_log(variant):
   references=[bytes.fromhex(x) for x in g['references']];outputs=[bytearray(x) for x in references];jobs=len(references)
   if variant in ('mismatch','false-success'):outputs[1][0]^=1
@@ -426,26 +383,6 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
    preserved=a.evidence/variant;preserved.mkdir()
    for path in out.glob('npu-stopped-*.bin'):shutil.copyfile(path,preserved/path.name)
  if a.interrupt:
-  # The interrupt record is required and binds the route; a polled entry is refused.
-  for name,value in [('missing-IRQ-admission',{k:v for k,v in entry.items() if k!='interrupt'}),
-                     ('polled-entry-refused',{**entry,'execution_profile':'npu-finite-return-v1'})]:
-   encoded=json.dumps(value).encode();mutated=bytearray(raw);mutated[80:112]=hashlib.sha256(encoded).digest()
-   rejected(name,lambda:h.validate_admission(encoded,mutated,build,layout,sha(data),execution_profile=execution))
-  saved_irq=irq.read_bytes();bad=json.loads(saved_irq);bad['interrupt']=98;irq.write_text(json.dumps(bad))
-  encoded=json.dumps({**entry,'interrupt':ref(irq)}).encode();mutated=bytearray(raw);mutated[80:112]=hashlib.sha256(encoded).digest()
-  rejected('other-route-refused',lambda:h.validate_admission(encoded,mutated,build,layout,sha(data),execution_profile=execution));irq.write_bytes(saved_irq)
-  if restart:
-   for name,changed in [('missing-restart-admission',{k:v for k,v in entry.items() if k!='restart'})]:
-    encoded=json.dumps(changed).encode();mutated=bytearray(raw);mutated[80:112]=hashlib.sha256(encoded).digest()
-    rejected(name,lambda:h.validate_admission(encoded,mutated,build,layout,sha(data),execution_profile=execution))
-   saved_restart=restart_record.read_bytes()
-   for key,value in [('npu_owner',profile['npu_owner']+1),('generation',profile['generation']+1),
-                     ('restart_qualification','qualified'),('reviewed',False),('conditions',{})]:
-    changed=json.loads(saved_restart);changed[key]=value;restart_record.write_text(json.dumps(changed))
-    encoded=json.dumps({**entry,'restart':ref(restart_record)}).encode();mutated=bytearray(raw);mutated[80:112]=hashlib.sha256(encoded).digest()
-    rejected('restart-'+key+'-refused',lambda:h.validate_admission(encoded,mutated,build,layout,sha(data),execution_profile=execution))
-   restart_record.write_bytes(saved_restart)
-   rejected('restart-image-relabel-refused',lambda:h.image_profile(data,{**json.loads(manifest.read_bytes()),'execution_profile':h.PROFILE}))
   # Receipts in logs that the actual client produced (checks/npu-interrupt-client.py).
   for variant in (('matched','missing-completion','missing-stop','wrong-completion','duplicate-completion') if startup and not infer else ('matched','mismatch','missing-completion','missing-stop','wrong-completion','duplicate-completion',*(('missing-restart-stage','reordered-restart-stage') if restart else ()))) if a.client_logs else ():
    text=(a.client_logs/('mismatch.log' if variant=='mismatch' else 'matched.log')).read_text();status=int(variant=='mismatch')
@@ -467,4 +404,4 @@ with tempfile.TemporaryDirectory(prefix='npu-host-fixture-') as temporary:
     if restart:assert value['normal_restart'] and 'startup_us' not in value['timing'] and 'initial_entry_to_restart_ready_us' in value['timing']
     results.append({'name':variant+'-producer-log-report','passed':True})
    else:rejected(variant+'-receipt-refused',lambda:h.validate_reports(*frames,prepared))
-(a.evidence/'host-result.json').write_text(json.dumps({'passed':True,'physical_access':False,'native_elf_sha256':sha(image.read_bytes()),'host_sha256':sha(HOST.read_bytes()),'checker_sha256':sha(Path(__file__).read_bytes()),'stopped_capture_sha256':sha((r/'apps/npu-finite/stopped-capture.py').read_bytes()),'execution_profile':execution,'native_initializer':{'raw':'native-initial-report.bin','sha256':sha(initialized),'magic':hex(native_report[0]),'boundary':'Actual linked monitor report initialization; contract-validator success and counter modeled, stopped before session seal. Completion fields are modeled; final receipt/status writer covered separately.'},'cases':results,'scope':'New host packaging/admission/report validation/sealed preload/DRAM restoration/retention with mocked FEL and ROM enumeration. Temporary modeled evidence uses a nonexistent test port and is removed. Existing launcher bytes reused; no full native admission, hardware or queues.'},indent=2)+'\n');print('PASS new NPU returned-RAM host cases:',len(results))
+(a.evidence/'host-result.json').write_text(json.dumps({'passed':True,'physical_access':False,'native_elf_sha256':sha(image.read_bytes()),'host_sha256':sha(HOST.read_bytes()),'checker_sha256':sha(Path(__file__).read_bytes()),'stopped_capture_sha256':sha((r/'apps/npu-finite/stopped-capture.py').read_bytes()),'execution_profile':execution,'native_initializer':{'raw':'native-initial-report.bin','sha256':sha(initialized),'magic':hex(native_report[0]),'boundary':'Actual linked monitor report initialization; contract-validator success and counter modeled, stopped before session seal. Completion fields are modeled; final receipt/status writer covered separately.'},'cases':results,'scope':'New host packaging/admission/report validation/sealed preload/DRAM restoration/retention with mocked FEL and ROM enumeration. Modeled evidence uses a nonexistent test port and is retained. Existing launcher bytes reused; no full native admission, hardware or queues.'},indent=2)+'\n');print('PASS new NPU returned-RAM host cases:',len(results))

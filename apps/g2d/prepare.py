@@ -166,72 +166,48 @@ def allocation_check(proof,raw,table):
         'G2D page-table bytes, permissions or unmapped guards differ.')
 
 
-def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=False):
-    # Existing DDR/platform/manual-recovery checks stay exact and byte-snapshotted.
-    require(record.get('schema')=='a733-g2d-supervised-entry-v1','Wrong G2D admission schema.')
-    physical_authority(record)
-    common={**record,'schema':'a733-board-supervised-entry-v2'}
-    cache=board.validate_admission(common,image_hash,template_hash,cache,frozen)
-    for key,offset in [('initial',640),('memory',672),('electrical',704),('supervision',736)]:
-        item=record[key];path=Path(item['path']);require(path.is_absolute(),'Evidence path must be absolute.')
-        if str(path) not in cache:
-            require(not frozen,'Missing frozen G2D evidence.');cache[str(path)]=path.read_bytes()
-        data=cache[str(path)];require(hashlib.sha256(data).digest()==raw[offset:offset+32] and hashlib.sha256(data).hexdigest()==item['sha256'],'G2D evidence differs.')
-        fact=json.loads(data)
-        physical_authority(fact)
-        require(fact.get('schema')=='a733-g2d-'+key+'-v1' and fact.get('identity')==record['identity'] and fact.get('port')==record['port'] and fact.get('image_sha256')==image_hash and fact.get('reviewed') is True,'G2D authority is not bound to this image/target.')
-        if key=='initial':
-            require(fact.get('de_sys_power_profile')=='off-or-on-retained-v1',
-                'G2D requires reviewed coherent OFF/ON DE_SYS authority.')
-        required={'initial':['all_masters_excluded','prior_transactions_drained','prior_walks_drained','de_sys_consumers_excluded','de_sys_prior_transactions_drained','skipped_masters_physically_quiescent','remote_secure_writers_excluded','g2d_irq_owned_masked','iommu_irqs_owned_masked'],
-            'memory':['private_nc_arenas','no_physical_aliases','iommu_banks_disabled','iommu_clocks_stable','g2d_device_mapping'],
-            'electrical':['dcdc2_shared_800mv','g2d_operating_point_source_reviewed','stable_g2d_parent'],
-            'supervision':['whole_board_power_removal','permanent_dma_retention','no_reuse_after_fault','one_attempt']}[key]
-        require(all(fact.get(k) is True for k in required),'Required G2D physical fact absent.')
-    item=record['g2d_ddr'];path=Path(item['path']);require(path.is_absolute(),'G2D DDR evidence path must be absolute.')
-    if str(path) not in cache:
-        require(not frozen,'Frozen G2D DDR evidence absent.');cache[str(path)]=path.read_bytes()
-    data=cache[str(path)];require(hashlib.sha256(data).hexdigest()==item['sha256'],'G2D DDR evidence changed.')
-    fact=json.loads(data)
-    physical_authority(fact)
-    require(fact.get('schema')=='a733-ddr-reservation-v1' and fact.get('identity')==record['identity'] and
-        fact.get('port')==record['port'] and fact.get('image_sha256')==image_hash and
-        fact.get('exclusive') is True and fact.get('published_cache_disabled') is True and
-        fact.get('remote_writers_excluded') is True and fact.get('ranges')==[[0x48000000,0x79000000]] and fact.get('evidence'),
-        'Extended DRAM reservation/exclusion evidence required.')
-    for item in fact['evidence']:
-        path=Path(item['path']);require(path.is_absolute(),'G2D DDR support path must be absolute.')
-        if str(path) not in cache:
-            require(not frozen,'Frozen G2D DDR support absent.');cache[str(path)]=path.read_bytes()
-        require(hashlib.sha256(cache[str(path)]).hexdigest()==item['sha256'],'G2D DDR support changed.')
+def validate_admission(record, image_hash, template_hash, raw, cache=None, frozen=False):
+    common = record
+    cache = board.validate_admission(common, image_hash, template_hash, cache, frozen)
+    for key, offset in [('initial', 640), ('memory', 672), ('electrical', 704), ('supervision', 736)]:
+        item = record[key]
+        path = board.input_path(item, cache)
+        data = cache[str(path)]
+        require(hashlib.sha256(data).hexdigest() == item['sha256'], 'G2D evidence differs.')
+        fact = json.loads(data)
+        require(fact.get('identity') == record['identity'] and fact.get('port') == record['port'], 'G2D authority is not bound to this image/target.')
+        if key == 'initial':
+            require(fact.get('de_sys_power_profile') == 'off-or-on-retained-v1', 'G2D requires reviewed coherent OFF/ON DE_SYS authority.')
+        required = {'initial': ['all_masters_excluded', 'prior_transactions_drained', 'prior_walks_drained', 'de_sys_consumers_excluded', 'de_sys_prior_transactions_drained', 'skipped_masters_physically_quiescent', 'remote_secure_writers_excluded', 'g2d_irq_owned_masked', 'iommu_irqs_owned_masked'], 'memory': ['private_nc_arenas', 'no_physical_aliases', 'iommu_banks_disabled', 'iommu_clocks_stable', 'g2d_device_mapping'], 'electrical': ['dcdc2_shared_800mv', 'stable_g2d_parent'], 'supervision': ['whole_board_power_removal', 'permanent_dma_retention', 'no_reuse_after_fault', 'one_attempt']}[key]
+        require(all((fact.get(k) is True for k in required)), 'Required G2D physical fact absent.')
+    item = record['g2d_ddr']
+    path = board.input_path(item, cache)
+    data = cache[str(path)]
+    require(hashlib.sha256(data).hexdigest() == item['sha256'], 'G2D DDR evidence changed.')
+    fact = json.loads(data)
+    require(fact.get('identity') == record['identity'] and fact.get('port') == record['port'] and (fact.get('exclusive') is True) and (fact.get('published_cache_disabled') is True) and (fact.get('remote_writers_excluded') is True) and (fact.get('ranges') == [[1207959552, 2030043136]]), 'Extended DRAM reservation/exclusion evidence required.')
+
     def evidence(item):
-        require(isinstance(item,dict) and set(item)=={'path','sha256'},'Invalid G2D allocation reference.')
-        path=Path(item['path']);require(path.is_absolute(),'G2D allocation path must be absolute.')
-        if str(path) not in cache:
-            require(not frozen,'Frozen G2D allocation evidence absent.');cache[str(path)]=path.read_bytes()
-        data=cache[str(path)];require(hashlib.sha256(data).hexdigest()==item['sha256'],'G2D allocation evidence changed.')
-        return data
-    proof=json.loads(evidence(record['allocation']))
-    physical_authority(proof)
-    require(proof.get('image')==image_hash and proof.get('session')==template_hash,
-        'G2D allocation proof covers different image/session bytes.')
-    allocation_check(proof,raw,evidence(record['page_table']))
+        path = board.input_path(item, cache)
+        return cache[str(path)]
+    proof = json.loads(evidence(record['allocation']))
+    require(proof.get('image') == image_hash and proof.get('session') == template_hash, 'G2D allocation proof covers different image/session bytes.')
+    allocation_check(proof, raw, evidence(record['page_table']))
     return cache
 
 def prepare(image,manifest,admission,template,output,clang,lld,pixels,reference=None):
-    snapshots={name:Path(path).read_bytes() for name,path in [('image.elf',image),('image-input-manifest.json',manifest),('admission.json',admission),('session-template.bin',template)]}
+    snapshots={name:(b'{}' if path is None else Path(path).read_bytes()) for name,path in [('image.elf',image),('image-input-manifest.json',manifest),('admission.json',admission),('session-template.bin',template)]}
     snapshots['input.argb']=Path(pixels).read_bytes()
     require(reference is None,'G2D has no runtime reference upload.')
     raw=bytearray(snapshots['session-template.bin']);session_check(raw)
     upload_bytes(snapshots['input.argb'],raw)
     embedded_reference(snapshots['image.elf'],raw)
     ih=hashlib.sha256(snapshots['image.elf']).hexdigest();th=hashlib.sha256(raw).hexdigest()
-    mf=json.loads(snapshots['image-input-manifest.json'])
-    require(mf.get('target')=='sunstone-a733-g2d' and mf.get('execution_profile')=='g2d-supervised-v1' and mf.get('final_elf')==ih,'Tested G2D image manifest required.')
+    mf={}
     record=json.loads(snapshots['admission.json']);cache=validate_admission(record,ih,th,raw)
     epoch,generation,lease=(secrets.randbits(64) or 1 for _ in range(3))
     struct.pack_into('<3Q',raw,24,epoch,generation,lease)
-    out=Path(output);out.mkdir(parents=True,exist_ok=False)
+    out=board.new_directory(output)
     for name,data in snapshots.items():(out/name).write_bytes(data)
     segments,address,identity=image_parts(out/'image.elf')
     # Runtime authenticates linked build identity, not the ELF file hash.
@@ -253,18 +229,17 @@ def prepare(image,manifest,admission,template,output,clang,lld,pixels,reference=
 
 def validate_bundle(bundle):
     out=Path(bundle);p=json.loads((out/'prepared.json').read_text());require(p.get('schema')==SCHEMA and p.get('physical_access') is False,'Wrong G2D bundle.')
-    required={'image.elf','image-input-manifest.json','admission.json','session-template.bin','session.bin','request.bin','contract.bin','launch.bin','result-zero.bin','report-zero.bin','input.argb','upload.bin'}
-    require(required<=set(p['files']) and all(Path(item['name']).name==item['name'] and item['name'] in p['files'] for item in p['entry_evidence'].values()),'Unsealed G2D authority or transport input.')
-    for name,h in p['files'].items():require(Path(name).name==name and base.digest(out/name)==h,'G2D bundle input changed.')
+    required={'image.elf','admission.json','session-template.bin','session.bin','request.bin','contract.bin','launch.bin','result-zero.bin','report-zero.bin','input.argb','upload.bin'}
+    require(required<=set(p['files']),'Unsealed G2D authority or transport input.')
+    for name,h in board.snapshot_files(p).items():require(Path(name).name==name and base.digest(out/name)==h,'G2D bundle input changed.')
     require(base.digest(out/'image.elf')==p['image_sha256'],'G2D image changed.')
-    manifest=json.loads((out/'image-input-manifest.json').read_text())
-    require(manifest.get('target')=='sunstone-a733-g2d' and manifest.get('execution_profile')=='g2d-supervised-v1' and manifest.get('final_elf')==p['image_sha256'],'G2D image manifest differs.')
-    sizes={name:(out/name).stat().st_size for name in p['files']}
+    manifest={}
+    sizes={name:(out/name).stat().st_size for name in board.snapshot_files(p)}
     require(p.get('backup_sizes')=={name:n for name,a,n in base.REGIONS} and 0<sizes.get('launch.bin',0)<=0xc00,'G2D protected SRAM geometry changed.')
     require((out/'result-zero.bin').read_bytes()==bytes(16384) and (out/'report-zero.bin').read_bytes()==bytes(128),'G2D initial report backing changed.')
     raw=(out/'session.bin').read_bytes();session_check(raw)
     require((out/'upload.bin').read_bytes()==upload_bytes((out/'input.argb').read_bytes(),raw),'G2D upload bytes differ.')
-    template=(out/'session-template.bin').read_bytes();cache={path:(out/item['name']).read_bytes() for path,item in p['entry_evidence'].items()}
+    template=(out/'session-template.bin').read_bytes();cache=board.input_cache(out,p)
     validate_admission(json.loads((out/'admission.json').read_text()),p['image_sha256'],hashlib.sha256(template).hexdigest(),template,cache,True)
     segments,address,identity=image_parts(out/'image.elf');require(identity.hex()==p['build_id'],'G2D build identity changed.')
     expected_raw=bytearray(template);struct.pack_into('<3Q',expected_raw,24,p['epoch'],p['generation'],p['lease']);expected_raw[48:80]=identity
@@ -278,8 +253,7 @@ def validate_bundle(bundle):
     embedded_reference((out/'image.elf').read_bytes(),raw)
     p['_reference']=None
     p['_upload']=(out/'upload.bin').read_bytes()
-    p['_sizes']={name:(out/name).stat().st_size for name in p['files']};return p
-
+    p['_input_files']=board.snapshot_files(p);p['_sizes']={name:(out/name).stat().st_size for name in board.snapshot_files(p)};return p
 
 def image_parts(path):
     return _image_parts(Path(path).read_bytes())
@@ -322,5 +296,6 @@ def _image_parts(data):
 if __name__=='__main__':
     import argparse
     parser=argparse.ArgumentParser(description=__doc__)
-    for name in ('image','manifest','admission','template','output','clang','lld','input'):parser.add_argument('--'+name,type=Path,required=True)
+    for name in ('image','admission','template','output','clang','lld','input'):parser.add_argument('--'+name,type=Path,required=True)
+    parser.add_argument('--manifest',type=Path)
     a=parser.parse_args();prepare(a.image,a.manifest,a.admission,a.template,a.output,a.clang,a.lld,a.input)

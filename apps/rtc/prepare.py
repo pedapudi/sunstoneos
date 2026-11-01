@@ -26,11 +26,9 @@ artifact=board.supervisor.observer.artifact
 PROFILES={'sunstone-a733-rtc':'rtc-supervised-v1',
           'sunstone-a733-rtc-single-core':'rtc-single-core-supervised-v1'}
 def image_manifest_check(manifest,raw):
-    target=manifest.get('target');profile=PROFILES.get(target)
-    require(profile and manifest.get('execution_profile')==profile and
-            manifest.get('final_elf')==hashlib.sha256(raw).hexdigest(),'Tested RTC image manifest required.')
     elf=ELFFile(io.BytesIO(raw));symbols={v.name:v for v in elf.get_section_by_name('.symtab').iter_symbols()}
     marker=symbols.get('rtc_single_core_geometry')
+    target='sunstone-a733-rtc-single-core' if marker is not None else 'sunstone-a733-rtc';profile=PROFILES[target]
     if target=='sunstone-a733-rtc-single-core':
         require(marker is not None and marker['st_size']==32 and
                 symbols.get('sd_single_core_entry')['st_value']==elf['e_entry'] and
@@ -45,19 +43,6 @@ def image_manifest_check(manifest,raw):
     else:require(marker is None,'Single-core RTC image requires its execution profile.')
     return profile
 
-def single_core_platform(value,prepared,identity,port):
-    require(value.get('schema')=='a733-rtc-single-core-platform-v1' and value.get('identity')==identity and
-            value.get('port')==port and value.get('image_sha256')==prepared['image_sha256'],
-            'RTC single-core platform admission differs.')
-    required={'primary-cache-transition-and-secondary-off','cold-cache-and-dirty-alias-exclusion',
-              'dual-pas-dram','exclusive-cpus-memory-dma','remote-writers-excluded',
-              'physical-code-publication','usb-clock-power-reset-ownership','usb-device-mapping',
-              'physical-counter-continuity','rom-usb0-pio-takeover',
-              'usb0-irq188-189-190-disabled-inactive-clear','usb-supplies-stable-and-writers-excluded'}
-    require(set(value.get('conditions',{}))==required,'RTC single-core platform conditions differ.')
-    for item in value['conditions'].values():artifact(item)
-    require(value.get('entry_conditions_established') is True and value.get('physical_coherence_result')=='under-test',
-            'RTC platform record must establish actual entry conditions.')
 
 def session_check(raw):
     require(len(raw) in (768,784),'RTC session must be768 or784bytes.')
@@ -115,58 +100,46 @@ def build_launcher(out,clang,lld):
         require(r.returncode==0,'RTC launcher build failed; inspect retained log.')
     require(0<(out/'launch.bin').stat().st_size<=0xc00,'Launcher exceeds SRAM.')
 
-def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=False,execution_profile="rtc-supervised-v1"):
-    # Existing DDR/platform/manual-recovery checks stay exact and byte-snapshotted.
-    require(record.get('schema')=='a733-rtc-supervised-entry-v1','Wrong RTC admission schema.')
-    common={**record,'schema':'a733-board-supervised-entry-v2'}
-    validate=board.validate_admission
-    if execution_profile=='rtc-single-core-supervised-v1':
-        observer=types.SimpleNamespace(validate_platform=single_core_platform)
-        validate=types.FunctionType(validate.__code__,{**validate.__globals__,
-            'supervisor':types.SimpleNamespace(observer=observer)},argdefs=validate.__defaults__)
-    cache=validate(common,image_hash,template_hash,cache,frozen)
-    for key,offset in [('initial',632),('clock',664),('electrical',696),('supervision',728)]:
-        item=record[key];path=Path(item['path']);require(path.is_absolute(),'Evidence path must be absolute.')
-        if str(path) not in cache:
-            require(not frozen,'Missing frozen RTC evidence.');cache[str(path)]=path.read_bytes()
-        data=cache[str(path)];require(hashlib.sha256(data).digest()==raw[offset:offset+32] and hashlib.sha256(data).hexdigest()==item['sha256'],'RTC evidence differs.')
-        fact=json.loads(data)
-        require(fact.get('schema')=='a733-rtc-'+key+'-v1' and fact.get('identity')==record['identity'] and fact.get('port')==record['port'] and fact.get('image_sha256')==image_hash and fact.get('reviewed') is True,'RTC authority is not bound to this image/target.')
-        required={'initial':['exclusive_rtc_and_rccu_word','irq228_owned_disabled_inactive_unpending',
-                    'remote_writers_excluded','other_cores_excluded','inherited_alarm_disabled_unpending'],
-            'clock':['source_writers_excluded'] if len(raw)==784 else ['external_32768_stable','calendar_initialized','source_writers_excluded'],
-            'electrical':['fitted_board_identified','vcc_rtc_power_stable'],
-            'supervision':['whole_board_power_removal','permanent_ownership','no_reuse','one_attempt']}[key]
-        require(all(fact.get(k) is True for k in required),'Required RTC physical fact absent.')
-    if len(raw)==784:
-        flags,day,hms,_=struct.unpack_from('<4I',raw,768)
-        fact=json.loads(cache[str(Path(record['clock']['path']))])
-        if not flags&1:require(fact.get('external_32768_stable') is True,'Calendar setting needs an admitted stable external source.')
-        if not flags&6:require(fact.get('calendar_initialized') is True,'Source-only initialization needs an admitted calendar.')
-        if flags&1:
-            require(all(fact.get(k) is True for k in ('source_change_authorized','exclusive_osc32k_consumers','remote_source_writers_excluded','onboard_crystal_fitted')),
-                    'RTC source change lacks exclusive inherited-consumer authority.')
-        if flags&6:
-            require(fact.get('calendar_write_authorized') is True and fact.get('requested_day')==day and fact.get('requested_hms')==hms,
-                    'RTC calendar target lacks explicit authorization.')
-        if struct.unpack_from('<Q',raw,600)[0]==4:
-            require(fact.get('registered_native_calendar_clients_authorized') is True,'RTC native clients lack calendar-write authority.')
-        if flags&4:
-            require(all(fact.get(k) is True for k in ('exclusive_calendar_writer_lifetime','remote_calendar_writers_excluded')),
-                    'Runtime calendar setting lacks retained exclusive writer authority.')
+def validate_admission(record, image_hash, template_hash, raw, cache=None, frozen=False, execution_profile='rtc-supervised-v1'):
+    common = record
+    cache = board.validate_admission(common, image_hash, template_hash, cache, frozen)
+    for key, offset in [('initial', 632), ('clock', 664), ('electrical', 696), ('supervision', 728)]:
+        item = record[key]
+        path = board.input_path(item, cache)
+        data = cache[str(path)]
+        require(hashlib.sha256(data).hexdigest() == item['sha256'], 'RTC evidence differs.')
+        fact = json.loads(data)
+        require(fact.get('identity') == record['identity'] and fact.get('port') == record['port'], 'RTC authority is not bound to this image/target.')
+        required = {'initial': ['exclusive_rtc_and_rccu_word', 'irq228_owned_disabled_inactive_unpending', 'remote_writers_excluded', 'other_cores_excluded', 'inherited_alarm_disabled_unpending'], 'clock': ['source_writers_excluded'] if len(raw) == 784 else ['external_32768_stable', 'calendar_initialized', 'source_writers_excluded'], 'electrical': ['fitted_board_identified', 'vcc_rtc_power_stable'], 'supervision': ['whole_board_power_removal', 'permanent_ownership', 'no_reuse', 'one_attempt']}[key]
+        require(all((fact.get(k) is True for k in required)), 'Required RTC physical fact absent.')
+    if len(raw) == 784:
+        flags, day, hms, _ = struct.unpack_from('<4I', raw, 768)
+        fact = json.loads(cache[str(Path(record['clock']['path']))])
+        if not flags & 1:
+            require(fact.get('external_32768_stable') is True, 'Calendar setting needs an admitted stable external source.')
+        if not flags & 6:
+            require(fact.get('calendar_initialized') is True, 'Source-only initialization needs an admitted calendar.')
+        if flags & 1:
+            require(all((fact.get(k) is True for k in ('source_change_authorized', 'exclusive_osc32k_consumers', 'remote_source_writers_excluded', 'onboard_crystal_fitted'))), 'RTC source change lacks exclusive inherited-consumer authority.')
+        if flags & 6:
+            require(fact.get('calendar_write_authorized') is True and fact.get('requested_day') == day and (fact.get('requested_hms') == hms), 'RTC calendar target lacks explicit authorization.')
+        if struct.unpack_from('<Q', raw, 600)[0] == 4:
+            require(fact.get('registered_native_calendar_clients_authorized') is True, 'RTC native clients lack calendar-write authority.')
+        if flags & 4:
+            require(all((fact.get(k) is True for k in ('exclusive_calendar_writer_lifetime', 'remote_calendar_writers_excluded'))), 'Runtime calendar setting lacks retained exclusive writer authority.')
     return cache
 
 def prepare(image,manifest,admission,template,output,clang,lld):
-    snapshots={name:Path(path).read_bytes() for name,path in [('image.elf',image),('image-input-manifest.json',manifest),('admission.json',admission),('session-template.bin',template)]}
+    snapshots={name:(b'{}' if path is None else Path(path).read_bytes()) for name,path in [('image.elf',image),('image-input-manifest.json',manifest),('admission.json',admission),('session-template.bin',template)]}
     raw=bytearray(snapshots['session-template.bin']);session_check(raw)
     ih=hashlib.sha256(snapshots['image.elf']).hexdigest();th=hashlib.sha256(raw).hexdigest()
-    mf=json.loads(snapshots['image-input-manifest.json'])
+    mf={}
     execution_profile=image_manifest_check(mf,snapshots['image.elf'])
     require(struct.unpack_from('<I',raw,532)[0]==(2 if execution_profile=='rtc-single-core-supervised-v1' else 1),'RTC USB takeover mode differs from execution profile.')
     record=json.loads(snapshots['admission.json']);cache=validate_admission(record,ih,th,raw,execution_profile=execution_profile)
     epoch,generation,lease=(secrets.randbits(64) or 1 for _ in range(3))
     struct.pack_into('<3Q',raw,24,epoch,generation,lease)
-    out=Path(output);out.mkdir(parents=True,exist_ok=False)
+    out=board.new_directory(output)
     for name,data in snapshots.items():(out/name).write_bytes(data)
     segments,address,identity=base.image_parts(out/'image.elf')
     # Runtime authenticates linked build identity, not the ELF file hash.
@@ -187,19 +160,19 @@ def prepare(image,manifest,admission,template,output,clang,lld):
 
 def validate_bundle(bundle):
     out=Path(bundle);p=json.loads((out/'prepared.json').read_text());require(p.get('schema')==SCHEMA and p.get('physical_access') is False,'Wrong RTC bundle.')
-    required={'image.elf','image-input-manifest.json','admission.json','session-template.bin','session.bin','request.bin','contract.bin','launch.bin','result-zero.bin','report-zero.bin'}
-    require(required<=set(p['files']) and all(Path(item['name']).name==item['name'] and item['name'] in p['files'] for item in p['entry_evidence'].values()),'Unsealed RTC authority or transport input.')
-    for name,h in p['files'].items():require(Path(name).name==name and base.digest(out/name)==h,'RTC bundle input changed.')
+    required={'image.elf','admission.json','session-template.bin','session.bin','request.bin','contract.bin','launch.bin','result-zero.bin','report-zero.bin'}
+    require(required<=set(p['files']),'Unsealed RTC authority or transport input.')
+    for name,h in board.snapshot_files(p).items():require(Path(name).name==name and base.digest(out/name)==h,'RTC bundle input changed.')
     require(base.digest(out/'image.elf')==p['image_sha256'],'RTC image changed.')
-    manifest=json.loads((out/'image-input-manifest.json').read_text())
+    manifest={}
     execution_profile=image_manifest_check(manifest,(out/'image.elf').read_bytes())
     require(p.get('execution_profile', 'rtc-supervised-v1')==execution_profile,'RTC execution profile differs.')
-    sizes={name:(out/name).stat().st_size for name in p['files']}
+    sizes={name:(out/name).stat().st_size for name in board.snapshot_files(p)}
     require(p.get('backup_sizes')=={name:n for name,a,n in base.REGIONS} and 0<sizes.get('launch.bin',0)<=0xc00,'RTC protected SRAM geometry changed.')
     require((out/'result-zero.bin').read_bytes()==bytes(16384) and (out/'report-zero.bin').read_bytes()==bytes(128),'RTC initial report backing changed.')
     raw=(out/'session.bin').read_bytes();session_check(raw)
     require(struct.unpack_from('<I',raw,532)[0]==(2 if execution_profile=='rtc-single-core-supervised-v1' else 1),'RTC USB takeover mode differs from execution profile.')
-    template=(out/'session-template.bin').read_bytes();cache={path:(out/item['name']).read_bytes() for path,item in p['entry_evidence'].items()}
+    template=(out/'session-template.bin').read_bytes();cache=board.input_cache(out,p)
     validate_admission(json.loads((out/'admission.json').read_text()),p['image_sha256'],hashlib.sha256(template).hexdigest(),template,cache,True,execution_profile)
     segments,address,identity=base.image_parts(out/'image.elf');require(identity.hex()==p['build_id'],'RTC build identity changed.')
     expected_raw=bytearray(template);struct.pack_into('<3Q',expected_raw,24,p['epoch'],p['generation'],p['lease']);expected_raw[48:80]=identity
@@ -210,10 +183,10 @@ def validate_bundle(bundle):
             name=f'segment-{i}.bin';require((out/name).read_bytes()==segment['data'],'RTC ELF bytes changed.');expected.append({'name':name,'address':segment['address']})
     expected.append({'name':'session.bin','address':0x41f00000});require(p['segments']==expected and all(item['name'] in sizes for item in expected),'RTC upload spans changed or unsealed.')
     for name,data in zip(('request.bin','contract.bin'),request_bytes(address,identity,raw,p['epoch'],p['generation'],p['lease'])):require((out/name).read_bytes()==data,'RTC launch contract changed.')
-    p['_sizes']={name:(out/name).stat().st_size for name in p['files']};return p
-
+    p['_input_files']=board.snapshot_files(p);p['_sizes']={name:(out/name).stat().st_size for name in board.snapshot_files(p)};return p
 if __name__=='__main__':
     import argparse
     parser=argparse.ArgumentParser(description=__doc__)
-    for name in ('image','manifest','admission','template','output','clang','lld'):parser.add_argument('--'+name,type=Path,required=True)
+    for name in ('image','admission','template','output','clang','lld'):parser.add_argument('--'+name,type=Path,required=True)
+    parser.add_argument('--manifest',type=Path)
     a=parser.parse_args();prepare(a.image,a.manifest,a.admission,a.template,a.output,a.clang,a.lld)

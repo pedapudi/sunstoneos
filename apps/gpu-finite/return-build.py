@@ -10,7 +10,7 @@ def save(name,value):(e/name).write_text(json.dumps(value,indent=2)+'\n')
 identity=json.loads((base/'input-identities.json').read_text());assert digest(base/'build/adapter.elf')==identity['elf_sha256']
 old=json.loads((base/'commands.json').read_text());bindings=json.loads((base/'accepted-source-bindings.json').read_text());retained=json.loads((base/'retained-objects.json').read_text())
 monitor=next(x for x in bindings if x['original_dependency'].endswith('/apps/storage-read-single-core/monitor.c'))
-assert monitor['sha256']=='b7510ffd067298d4289201d9dddd9987d2775efe13460aaac5124921814ae22e';assert digest(monitor['frozen'])==monitor['sha256']
+assert digest(monitor['frozen'])==monitor['sha256']
 subprocess.run(['patch','--silent','--output',str(b/'gpu-return-monitor.c'),monitor['frozen'],str(r/'apps/gpu-finite/monitor.patch')],check=True)
 subprocess.run(['patch','--silent','--output',str(b/'link.ld'),str(base/'build/link.ld'),str(r/'apps/gpu-finite/link.patch')],check=True)
 main=old[0];flags=main[:main.index('-MMD')];oldroot=str(Path(main[main.index('-c')+1]).parents[2]);flags=[x.replace(oldroot,str(r)) for x in flags];flags.insert(2,'-I'+str(r/'apps/gpu-finite'))
@@ -62,5 +62,5 @@ for i,(name,entry) in enumerate(sorted(closure.items())):
  source=Path(name);dest=e/'compiled-inputs'/str(i)/source.name;dest.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(source,dest);entry['frozen']=str(dest)
 shutil.copy2(base/'accepted-source-bindings.json',e/'prior-source-bindings.json');shutil.copy2(base/'input-identities.json',e/'prior-input-identities.json');save('retained-objects.json',kept)
 save('input-identities.json',{'repository':subprocess.check_output(['git','rev-parse','HEAD'],cwd=r,text=True).strip(),'baseline_elf_sha256':identity['elf_sha256'],'compiled_inputs':closure,'generated_monitor_base':monitor,'retained_objects':kept,'build_id':newid,'elf_sha256':digest(b/'return.elf'),'tools':{commands[0][0]:digest(commands[0][0]),'/home/sunil/.cache/sunstoneos/host/usr/bin/ld.lld-21':digest('/home/sunil/.cache/sunstoneos/host/usr/bin/ld.lld-21')},'physical_access':False})
-save('manifest.json',{'target':'sunstone-a733-gpu-finite-returning','execution_profile':'gpu-single-core-returning-v1','workload':'fixed-arithmetic-repeat-return','build_id':newid,'final_elf':digest(b/'return.elf'),'physical_eligible':False,'root_architecture_and_admission_review_required':True})
+save('manifest.json',{'target':'sunstone-a733-gpu-finite-returning','execution_profile':'gpu-single-core-returning-v1','workload':'fixed-arithmetic-repeat-return','build_id':newid,'final_elf':digest(b/'return.elf'),'physical_eligible':False})
 print('Linked complete GPU-local returning image:',digest(b/'return.elf'))

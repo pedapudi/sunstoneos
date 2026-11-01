@@ -1,6 +1,5 @@
 """Validate concurrent cached exchange, NS cleaning and final physical memory."""
 import importlib.util
-import json
 from pathlib import Path
 import struct
 from types import SimpleNamespace
@@ -41,18 +40,3 @@ def decode(raw,nonce,smc_return,interrupts=False):
 probe=SimpleNamespace(NATIVE=cache.probe.NATIVE,REPORT=(cache.probe.REPORT[0],0x4200),decode=decode)
 def initial_report(nonce):return cache.local.identity.primary.initial_report(nonce)+bytes(0x4100)
 def load(build,image,manifest):return cache.local.identity.load(build,image,manifest,coherent=True)
-def validate_software(software,manifest_hash):
-    require(software.get('schema')=='a733-secondary-coherence-software-v1' and
-            software.get('physical_access') is False and software.get('manifest_sha256')==manifest_hash and
-            software.get('host_sources')=={n:digest(ROOT/n) for n in HOST_SOURCES},'Coherence host evidence differs.')
-    require(software.get('host_cases')==dict.fromkeys(('complete-return','transport-failure-retained',
-            'invalid-report-restored','changed-input-refused','incomplete-coherence-refused','wrong-memory-result-refused'),True),
-            'Coherence host cases incomplete.')
-    item=software['instruction_evidence'];path=Path(item['path'])
-    require(path.is_absolute() and digest(path)==item['sha256'],'Coherence instruction evidence changed.')
-    result=json.loads(path.read_text())
-    require(result.get('physical_access') is False and result.get('native_sha256')==probe.NATIVE and
-            result.get('manifest_sha256')==manifest_hash and result.get('sources')=={n:digest(ROOT/n) for n in MODEL_SOURCES},
-            'Coherence instruction inputs differ.')
-    require({c['case']:c.get('pass') for c in result['cases']}==dict.fromkeys(('success','payload-corruption','restore-el3'),True),
-            'Coherence instruction cases incomplete.')

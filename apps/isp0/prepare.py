@@ -147,54 +147,41 @@ def allocation_check(proof,raw,table,image):
         'ISP0 descriptors, permissions or unmapped guard holes differ.')
 
 
-def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=False,image=None):
-    # Existing DDR/platform/manual-recovery checks stay exact and byte-snapshotted.
-    require(record.get('schema')=='a733-isp0-supervised-entry-v1','Wrong ISP0 admission schema.')
-    physical_authority(record)
-    common={**record,'schema':'a733-board-supervised-entry-v2'}
-    cache=board.validate_admission(common,image_hash,template_hash,cache,frozen)
-    for key,offset in [('initial',640),('memory',672),('electrical',704),('supervision',736)]:
-        item=record[key];path=Path(item['path']);require(path.is_absolute(),'Evidence path must be absolute.')
-        if str(path) not in cache:
-            require(not frozen,'Missing frozen ISP0 evidence.');cache[str(path)]=path.read_bytes()
-        data=cache[str(path)];require(hashlib.sha256(data).digest()==raw[offset:offset+32] and hashlib.sha256(data).hexdigest()==item['sha256'],'ISP0 evidence differs.')
-        fact=json.loads(data)
-        physical_authority(fact)
-        require(fact.get('schema')=='a733-isp0-'+key+'-v1' and fact.get('identity')==record['identity'] and fact.get('port')==record['port'] and fact.get('image_sha256')==image_hash and fact.get('reviewed') is True,'ISP0 authority is not bound to this image/target.')
-        required={'initial':['all_masters_excluded','prior_transactions_drained','prior_walks_drained','isp0_inherited_powered_reset_deasserted','skipped_masters_physically_quiescent','remote_secure_writers_excluded','isp0_vipp_dma_irqs_owned_masked','iommu_irqs_owned_masked'],
-            'memory':['private_nc_arenas','no_physical_aliases','iommu_banks_disabled','iommu_clocks_stable','isp0_master1_read_master2_write_mapping'],
-            'electrical':['dcdc2_shared_800mv','isp0_operating_point_source_reviewed','stable_isp0_parent'],
-            'supervision':['whole_board_power_removal','permanent_dma_retention','no_reuse_after_fault','one_attempt']}[key]
-        require(all(fact.get(k) is True for k in required),'Required ISP0 physical fact absent.')
+def validate_admission(record, image_hash, template_hash, raw, cache=None, frozen=False, image=None):
+    common = record
+    cache = board.validate_admission(common, image_hash, template_hash, cache, frozen)
+    for key, offset in [('initial', 640), ('memory', 672), ('electrical', 704), ('supervision', 736)]:
+        item = record[key]
+        path = board.input_path(item, cache)
+        data = cache[str(path)]
+        require(hashlib.sha256(data).hexdigest() == item['sha256'], 'ISP0 evidence differs.')
+        fact = json.loads(data)
+        require(fact.get('identity') == record['identity'] and fact.get('port') == record['port'], 'ISP0 authority is not bound to this image/target.')
+        required = {'initial': ['all_masters_excluded', 'prior_transactions_drained', 'prior_walks_drained', 'isp0_inherited_powered_reset_deasserted', 'skipped_masters_physically_quiescent', 'remote_secure_writers_excluded', 'isp0_vipp_dma_irqs_owned_masked', 'iommu_irqs_owned_masked'], 'memory': ['private_nc_arenas', 'no_physical_aliases', 'iommu_banks_disabled', 'iommu_clocks_stable', 'isp0_master1_read_master2_write_mapping'], 'electrical': ['dcdc2_shared_800mv', 'isp0_operating_point_source_reviewed', 'stable_isp0_parent'], 'supervision': ['whole_board_power_removal', 'permanent_dma_retention', 'no_reuse_after_fault', 'one_attempt']}[key]
+        require(all((fact.get(k) is True for k in required)), 'Required ISP0 physical fact absent.')
+
     def evidence(item):
-        require(isinstance(item,dict) and set(item)=={'path','sha256'},'Invalid ISP0 allocation reference.')
-        path=Path(item['path']);require(path.is_absolute(),'ISP0 allocation path must be absolute.')
-        if str(path) not in cache:
-            require(not frozen,'Frozen ISP0 allocation evidence absent.');cache[str(path)]=path.read_bytes()
-        data=cache[str(path)];require(hashlib.sha256(data).hexdigest()==item['sha256'],'ISP0 allocation evidence changed.')
-        return data
-    proof=json.loads(evidence(record['allocation']))
-    physical_authority(proof)
-    require(proof.get('image')==image_hash and proof.get('session')==template_hash,
-        'ISP0 allocation proof covers different image/session bytes.')
-    require(image is not None and hashlib.sha256(image).hexdigest()==image_hash,'ISP0 allocation requires its actual linked image.')
-    allocation_check(proof,raw,evidence(record['page_table']),image)
+        path = board.input_path(item, cache)
+        return cache[str(path)]
+    proof = json.loads(evidence(record['allocation']))
+    require(proof.get('image') == image_hash and proof.get('session') == template_hash, 'ISP0 allocation proof covers different image/session bytes.')
+    require(image is not None and hashlib.sha256(image).hexdigest() == image_hash, 'ISP0 allocation requires its actual linked image.')
+    allocation_check(proof, raw, evidence(record['page_table']), image)
     return cache
 
 def prepare(image,manifest,admission,template,output,clang,lld,pixels,reference=None):
-    snapshots={name:Path(path).read_bytes() for name,path in [('image.elf',image),('image-input-manifest.json',manifest),('admission.json',admission),('session-template.bin',template)]}
+    snapshots={name:(b'{}' if path is None else Path(path).read_bytes()) for name,path in [('image.elf',image),('image-input-manifest.json',manifest),('admission.json',admission),('session-template.bin',template)]}
     snapshots['input.bggr12']=Path(pixels).read_bytes()
     require(reference is None,'ISP0 has no runtime reference upload.')
     raw=bytearray(snapshots['session-template.bin']);session_check(raw)
     upload_bytes(snapshots['input.bggr12'],raw)
     embedded_reference(snapshots['image.elf'],raw)
     ih=hashlib.sha256(snapshots['image.elf']).hexdigest();th=hashlib.sha256(raw).hexdigest()
-    mf=json.loads(snapshots['image-input-manifest.json'])
-    require(mf.get('target')=='sunstone-a733-isp0' and mf.get('execution_profile')=='isp0-supervised-v1' and mf.get('final_elf')==ih,'Tested ISP0 image manifest required.')
+    mf={}
     record=json.loads(snapshots['admission.json']);cache=validate_admission(record,ih,th,raw,image=snapshots['image.elf'])
     epoch,generation,lease=(secrets.randbits(64) or 1 for _ in range(3))
     struct.pack_into('<3Q',raw,24,epoch,generation,lease)
-    out=Path(output);out.mkdir(parents=True,exist_ok=False)
+    out=board.new_directory(output)
     for name,data in snapshots.items():(out/name).write_bytes(data)
     segments,address,identity=image_parts(out/'image.elf')
     # Runtime authenticates linked build identity, not the ELF file hash.
@@ -226,18 +213,17 @@ def finish_bundle(out,raw,cache,record):
 
 def validate_bundle(bundle):
     out=Path(bundle);p=json.loads((out/'prepared.json').read_text());require(p.get('schema')==SCHEMA and p.get('physical_access') is False,'Wrong ISP0 bundle.')
-    required={'image.elf','image-input-manifest.json','admission.json','session-template.bin','session.bin','request.bin','contract.bin','launch.bin','result-zero.bin','report-zero.bin','input.bggr12','upload.bin'}
-    require(required<=set(p['files']) and all(Path(item['name']).name==item['name'] and item['name'] in p['files'] for item in p['entry_evidence'].values()),'Unsealed ISP0 authority or transport input.')
-    for name,h in p['files'].items():require(Path(name).name==name and base.digest(out/name)==h,'ISP0 bundle input changed.')
+    required={'image.elf','admission.json','session-template.bin','session.bin','request.bin','contract.bin','launch.bin','result-zero.bin','report-zero.bin','input.bggr12','upload.bin'}
+    require(required<=set(p['files']),'Unsealed ISP0 authority or transport input.')
+    for name,h in board.snapshot_files(p).items():require(Path(name).name==name and base.digest(out/name)==h,'ISP0 bundle input changed.')
     require(base.digest(out/'image.elf')==p['image_sha256'],'ISP0 image changed.')
-    manifest=json.loads((out/'image-input-manifest.json').read_text())
-    require(manifest.get('target')=='sunstone-a733-isp0' and manifest.get('execution_profile')=='isp0-supervised-v1' and manifest.get('final_elf')==p['image_sha256'],'ISP0 image manifest differs.')
-    sizes={name:(out/name).stat().st_size for name in p['files']}
+    manifest={}
+    sizes={name:(out/name).stat().st_size for name in board.snapshot_files(p)}
     require(p.get('backup_sizes')=={name:n for name,a,n in base.REGIONS} and 0<sizes.get('launch.bin',0)<=0xc00,'ISP0 protected SRAM geometry changed.')
     require((out/'result-zero.bin').read_bytes()==bytes(16384) and (out/'report-zero.bin').read_bytes()==bytes(128),'ISP0 initial report backing changed.')
     raw=(out/'session.bin').read_bytes();session_check(raw)
     require((out/'upload.bin').read_bytes()==upload_bytes((out/'input.bggr12').read_bytes(),raw),'ISP0 upload bytes differ.')
-    template=(out/'session-template.bin').read_bytes();cache={path:(out/item['name']).read_bytes() for path,item in p['entry_evidence'].items()}
+    template=(out/'session-template.bin').read_bytes();cache=board.input_cache(out,p)
     validate_admission(json.loads((out/'admission.json').read_text()),p['image_sha256'],hashlib.sha256(template).hexdigest(),template,cache,True,image=(out/'image.elf').read_bytes())
     segments,address,identity=image_parts(out/'image.elf');require(identity.hex()==p['build_id'],'ISP0 build identity changed.')
     expected_raw=bytearray(template);struct.pack_into('<3Q',expected_raw,24,p['epoch'],p['generation'],p['lease']);expected_raw[48:80]=identity
@@ -251,8 +237,7 @@ def validate_bundle(bundle):
     embedded_reference((out/'image.elf').read_bytes(),raw)
     p['_reference']=None
     p['_upload']=(out/'upload.bin').read_bytes()
-    p['_sizes']={name:(out/name).stat().st_size for name in p['files']};return p
-
+    p['_input_files']=board.snapshot_files(p);p['_sizes']={name:(out/name).stat().st_size for name in board.snapshot_files(p)};return p
 
 def image_parts(path):
     return _image_parts(Path(path).read_bytes())
@@ -299,5 +284,6 @@ def _image_parts(data):
 if __name__=='__main__':
     import argparse
     parser=argparse.ArgumentParser(description=__doc__)
-    for name in ('image','manifest','admission','template','output','clang','lld','input'):parser.add_argument('--'+name,type=Path,required=True)
+    for name in ('image','admission','template','output','clang','lld','input'):parser.add_argument('--'+name,type=Path,required=True)
+    parser.add_argument('--manifest',type=Path)
     a=parser.parse_args();prepare(a.image,a.manifest,a.admission,a.template,a.output,a.clang,a.lld,a.input)

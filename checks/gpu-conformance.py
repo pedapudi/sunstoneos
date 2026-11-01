@@ -135,8 +135,21 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--output', type=Path, required=True, help='new directory for results')
     p.add_argument('--build', type=Path, default=gc.BUILD)
+    p.add_argument('--compare-only', action='store_true', help='check repeated comparison output without the reference build')
     a = p.parse_args()
-    a.output.mkdir(parents=True, exist_ok=False)
+    a.output=gc._evidence.unique_directory(a.output)
+    if a.compare_only:
+        result=compare_output_directory(a.output)
+        (a.output/'result.json').write_text(json.dumps(result,indent=1)+'\n')
+        print('PASS GPU comparison preserves prior reports and numerical validation')
+        return
+    inputs_dir=a.output/'repeated-inputs'
+    launch=next(v for v in gc.launches() if v.kind=='compute')
+    gc.write_inputs(launch,inputs_dir)
+    original=(inputs_dir/'inputs.json').read_bytes()
+    gc.write_inputs(launch,inputs_dir)
+    assert (inputs_dir/'inputs.json').read_bytes()==original
+    assert len(list(inputs_dir.glob('*/inputs.json')))==1
     started = time.monotonic()
     result = {'build': gc.build(a.build)}
     result['build_repeat'] = gc.build(a.build)
@@ -301,14 +314,7 @@ def main():
     # frames and the confirmed profile 3 frames render; the other cases stop
     # before the reference.
     result['capture_comparison'] = capture_comparisons(a.output, a.build, images)
-    clear = a.output / 'clear-capture'
-    clear.mkdir()
-    (clear / 'clear.rgba').write_bytes(struct.pack('<I', gc.CLEAR) * 4096)
-    (clear / 'capture.json').write_text(json.dumps({'frames': [{'file': 'clear.rgba'}]}))
-    assert gc.compare_capture('fixed-clear', clear, a.output / 'clear-comparison')['passed']
-    (clear / 'clear.rgba').write_bytes(struct.pack('<I', gc.CLEAR) * 4095 + struct.pack('<I', gc.POISON))
-    assert not gc.compare_capture('fixed-clear', clear, a.output / 'clear-mutated')['passed']
-    shutil.rmtree(clear)
+    result['clear_comparison']=compare_output_directory(a.output)
 
     # Coverage: every documented feature row has a comparison.
     covered = gc.coverage(closed, board, [l.kernel for l in launch_list if l.kernel], stencil)
@@ -342,6 +348,30 @@ def synthesized_capture(directory, launch, images):
         frames.append({'input_sha256': gc.input_sha256(frame), 'state': frame.state, 'sequence': k + 1,
                        'generation': 1, 'result': 1, 'file': f'frame-{k}.rgba'})
     return frames
+
+
+def compare_output_directory(output):
+    """Repeated comparisons keep earlier reports and validate each capture."""
+    capture=output/'clear-capture';capture.mkdir()
+    pixels=capture/'clear.rgba'
+    pixels.write_bytes(struct.pack('<I',gc.CLEAR)*4096)
+    (capture/'capture.json').write_text(json.dumps({'frames':[{'file':'clear.rgba'}]}))
+    destination=output/'clear-comparison'
+    first=gc.compare_capture('fixed-clear',capture,destination)
+    assert first['passed']
+    original=(destination/'comparison.json').read_bytes()
+    repeated=gc.compare_capture('fixed-clear',capture,destination)
+    assert repeated==first and (destination/'comparison.json').read_bytes()==original
+    reports=list(destination.glob('*/comparison.json'))
+    assert len(reports)==1 and json.loads(reports[0].read_text())==first
+    pixels.write_bytes(struct.pack('<I',gc.CLEAR)*4095+struct.pack('<I',gc.POISON))
+    changed=gc.compare_capture('fixed-clear',capture,destination)
+    assert not changed['passed'] and changed['failed']==1
+    assert (destination/'comparison.json').read_bytes()==original
+    reports=list(destination.glob('*/comparison.json'))
+    assert len(reports)==2 and any(json.loads(path.read_text())==changed for path in reports)
+    return {'passed':True,'prior_report_preserved':True,'same_capture_same_result':True,
+            'changed_capture_refused':True,'reports':3,'physical_access':False}
 
 
 def capture_comparisons(output, build, images):

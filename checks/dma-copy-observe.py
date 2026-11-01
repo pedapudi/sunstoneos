@@ -238,11 +238,77 @@ def execute(image,out,launcher_bundle,reuse_preparation=False):
         'limits':'No physical boot/coherence/IRQ/USB/DMA or watchdog qualification; no scheduler or prior DMA protocol replay.'}
 
 
+def direct_host(out):
+    from contextlib import nullcontext
+    from unittest.mock import patch
+    import copy,sys,types
+    from harness import refused
+    host=module('dma_direct_host',ROOT/'apps/dma-copy/observe.py')
+    out=host.board.unique_directory(out)
+    prepared=dict(epoch=11,generation=13,lease=17,controller=0x04601000,
+        channels=3,dma_evidence=19,dma_handoff=23,image_sha256='ab'*32,
+        refusal_only=False,files={})
+    security={k:prepared['channels' if k=='service_channels' else k] for k in host.security_authority.NUMBERS}
+    security.update(identity='current-target',port='model-port',image_sha256=prepared['image_sha256'],
+        physical_authority=True,modeled=False,nonsecure_channels=3,
+        **dict.fromkeys(host.security_authority.FACTS,True))
+    conditions=dict.fromkeys(('source-backed-cpu-dsu-transition','cold-cache-and-dirty-alias-exclusion',
+        'dual-pas-dram','exclusive-cpus-memory-dma','remote-writers-excluded',
+        'usb-clock-power-reset-ownership','usb-device-mapping','physical-counter-continuity',
+        'dma-startup-drain-ownership'),True)
+    inputs=dict(identity='current-target',port='model-port',conditions=conditions,dma_nonsecure_access=security)
+    host.validate_platform(copy.deepcopy(inputs),prepared,'current-target','model-port')
+    bad=copy.deepcopy(inputs);bad['conditions']['dma-startup-drain-ownership']=False
+    refused(lambda:host.validate_platform(bad,prepared,'current-target','model-port'),'Required DMA ownership, drain or mapping condition absent')
+    bad=copy.deepcopy(inputs);bad['dma_nonsecure_access']['nonsecure_channels']=1
+    refused(lambda:host.validate_platform(bad,prepared,'current-target','model-port'),'DMA security evidence omits selected nonsecure channels')
+    for fail in (False,True):
+        case=out/('transport-failure' if fail else 'nominal');case.mkdir()
+        bundle=case/'bundle';bundle.mkdir();(bundle/'prepared.json').write_bytes(b'input snapshot')
+        archived=bundle/'launch.c';archived.write_bytes(b'archived source')
+        values=copy.deepcopy(prepared);values['files']['launch.c']=host.digest(archived)
+        archived.write_bytes(b'changed nonuploaded archived source')
+        input_path=case/'inputs.json';input_path.write_text(json.dumps(inputs))
+        evidence=case/'evidence';evidence.mkdir();(evidence/'previous').write_bytes(b'preserved')
+        port=case/'model-port';port.mkdir();node=Path('/software-usb/1/2');events=[];transactions=[]
+        access=types.SimpleNamespace(board_lock=lambda:nullcontext(node),
+            require_session=lambda n:events.append('session'),require_rom=lambda n:events.append('rom'),
+            identity=lambda n:'current-target',target=lambda n:port,
+            quarantine_instance=lambda *a:events.append('quarantine'))
+        guard=types.SimpleNamespace(__file__=Path(host.__file__),check_health=lambda:events.append('guard'),
+            reenumeration=lambda *a:nullcontext())
+        def run(command,**kw):
+            transactions.append(command)
+            return types.SimpleNamespace(returncode=1 if fail else 0,stdout='soc=00001903(A733)',stderr='')
+        def launch(transaction,observe,bundle,prepared,evidence,record,save,ready):
+            ready();events.append('launch');record.update(complete=True,dma_result='observed-success');save()
+        args=['launch','--bundle',str(bundle),'--fel',str(case/'unreviewed-fel'),
+              '--inputs',str(input_path),'--evidence',str(evidence)]
+        with patch.object(host,'validate_bundle',lambda unused:values),patch.object(host,'module',lambda *a:access),\
+             patch.dict(sys.modules,{'usb_guard':guard}),patch.object(host.subprocess,'run',run),\
+             patch.object(host,'launch_once',launch),patch.object(host.base,'stop_after_failure',lambda record,save,quarantine,error:quarantine()):
+            if fail:refused(lambda:host.main(args),'FEL request failed')
+            else:assert host.main(args)==0
+        assert len(transactions)==1 and transactions[0][-1]=='version'
+        assert ('launch' in events)==(not fail) and ('quarantine' in events)==fail
+        assert events[0]=='guard' and events.count('session')==1 and 'rom' in events
+        assert (evidence/'previous').read_bytes()==b'preserved'
+        assert len(list(evidence.glob('*/session.json')))==1
+    save(out/'direct-host-results.json',dict(status='PASS',physical_access=False,
+        cases=['direct-dma-facts','prior-drain-refusal','channel-mask-refusal',
+               'main-without-queue-or-probe-or-reviewed-fel','preserved-prior-evidence','first-transport-failure-stops']))
+    print('PASS: direct DMA inputs, queue-free main and first-failure stop')
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    for name in ('freertos','tinyusb','lld','launcher-bundle','evidence'):
-        parser.add_argument('--'+name,type=Path,required=True)
-    args=parser.parse_args();out=args.evidence.resolve();out.mkdir(parents=True,exist_ok=False)
+    for name in ('freertos','tinyusb','lld','launcher-bundle'):
+        parser.add_argument('--'+name,type=Path)
+    parser.add_argument('--evidence',type=Path,required=True)
+    parser.add_argument('--inputs-only',action='store_true')
+    args=parser.parse_args()
+    if args.inputs_only:return direct_host(args.evidence)
+    if any(getattr(args,name) is None for name in ('freertos','tinyusb','lld','launcher_bundle')):parser.error('Native emulation requires all build inputs')
+    out=args.evidence.resolve();out.mkdir(parents=True,exist_ok=False)
     try:
         image=build(args,out)
         result=execute(image,out,args.launcher_bundle.resolve())

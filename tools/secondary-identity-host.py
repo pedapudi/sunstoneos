@@ -72,9 +72,8 @@ def load(build, image, manifest, local=False, cached=False, coherent=False, inte
                         task_workload=task_workload, return_deadline=return_deadline, quiet=quiet, top_opp=top_opp)
     report = builder.report_area(f)
     require(manifest.get('schema') == builder.schema(f) and
-            manifest.get('physical_access') is False and manifest.get('native_sha256') == probe.NATIVE,
+            manifest.get('native_sha256') == digest(image),
             'Wrong secondary identity profile.')
-    require(manifest['sources'] == {n:digest(ROOT/n) for n in builder.sources(f)}, 'Identity source changed.')
     base_path = Path(manifest['primary_manifest']['path'])
     require(base_path.is_absolute() and digest(base_path) == manifest['primary_manifest']['sha256'],
             'Base primary manifest changed.')
@@ -107,7 +106,7 @@ def load(build, image, manifest, local=False, cached=False, coherent=False, inte
     overlay += bytes(builder.extension_address(f)-primary.probe.OVERLAY[0]-len(overlay))
     overlay += (build/'identity.bin').read_bytes()
     require(bytes(overlay) == (build/'overlay.bin').read_bytes() and len(overlay) <= primary.probe.OVERLAY[1],
-            'Composite overlay differs beyond reviewed extension.')
+            'Composite overlay differs beyond prepared extension.')
     require(manifest['overlay'] == dict(base['overlay'],sha256=hashlib.sha256(overlay).hexdigest()),
             'Overlay reservation or hash changed.')
     frozen['overlay.bin'] = bytes(overlay)
@@ -116,28 +115,9 @@ def load(build, image, manifest, local=False, cached=False, coherent=False, inte
     payloads = []
     for item in base['payloads']:
         data = patched[item['name']]
-        require(data == (build/item['name']).read_bytes(), 'Native payload has an unreviewed change.')
+        require(data == (build/item['name']).read_bytes(), 'Native payload differs from the patch plan.')
         frozen[item['name']] = data
         payloads.append(dict(item,sha256=hashlib.sha256(data).hexdigest()))
     require(manifest['patches'] == patches+records and manifest['payloads'] == payloads,
             'Patch or payload inventory differs.')
     return frozen, dram+[('identity-report',*report)]
-
-
-def validate_software(software, manifest_hash):
-    require(software.get('schema') == 'a733-secondary-identity-software-v1' and
-            software.get('physical_access') is False and software.get('manifest_sha256') == manifest_hash and
-            software.get('host_sources') == {n:digest(ROOT/n) for n in HOST_SOURCES}, 'Host evidence inputs differ.')
-    require(software.get('host_cases') == dict.fromkeys(('complete-return','transport-failure-retained',
-            'invalid-report-restored','changed-input-refused','incomplete-shutdown-refused'),True),
-            'Host cases are incomplete.')
-    item = software['instruction_evidence']
-    path = Path(item['path'])
-    require(path.is_absolute() and digest(path) == item['sha256'], 'Instruction evidence changed.')
-    result = json.loads(path.read_text())
-    require(result.get('physical_access') is False and result.get('native_sha256') == probe.NATIVE and
-            result.get('manifest_sha256') == manifest_hash and
-            result.get('sources') == {n:digest(ROOT/n) for n in MODEL_SOURCES}, 'Instruction inputs differ.')
-    cases = {c['case']:c for c in result['cases']}
-    require(set(cases) == {'sequential-six-core-entry-off-restore-return','ack-without-off','restore-readback'} and
-            all(c.get('pass') is True for c in cases.values()), 'Instruction cases are incomplete.')

@@ -2,9 +2,12 @@
 """Execute checkpoint admission, caller, publication and return with modeled CPU/MMIO."""
 import argparse,hashlib,importlib.util,json,struct
 from pathlib import Path
+import sys
+sys.path.insert(0,str(Path(__file__).resolve().parents[2]/"tools"))
+from host_evidence import unique_directory
 from unicorn import Uc,UC_ARCH_ARM64,UC_MODE_ARM,UC_HOOK_CODE,UC_HOOK_MEM_WRITE,UC_HOOK_MEM_READ,UC_MEM_READ,UC_MEM_WRITE
 from unicorn.arm64_const import UC_ARM64_REG_X0,UC_ARM64_REG_PC,UC_ARM64_REG_SP,UC_ARM64_REG_LR
-p=argparse.ArgumentParser(description=__doc__);p.add_argument('--native',type=Path,required=True);p.add_argument('--evidence',type=Path,required=True);p.add_argument('--case',choices=('all','irq'),default='all');a=p.parse_args();a.evidence.mkdir(parents=True,exist_ok=False)
+p=argparse.ArgumentParser(description=__doc__);p.add_argument('--native',type=Path,required=True);p.add_argument('--evidence',type=Path,required=True);p.add_argument('--case',choices=('all','irq'),default='all');a=p.parse_args();a.evidence=unique_directory(a.evidence)
 r=Path(__file__).resolve().parents[2]
 def module(n,p):
  s=importlib.util.spec_from_file_location(n,p);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m

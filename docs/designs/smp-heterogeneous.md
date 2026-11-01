@@ -164,7 +164,7 @@ admission, and 2 and 3 without, matching `cmake/a733-os.cmake` and
 keeps every mask inside `(1 << configNUMBER_OF_CORES) - 1`.
 
 The header lands in the same change as its first consumer: in `apps/os`,
-`_Static_assert(OS_RECOGNITION_CORE == A733_SMP_RECOGNITION_CORE)`, with
+`_Static_assert(OS_RECOGNITION_CORE == A733_SMP_APPLICATION_CORE)`, with
 `cmake/a733-os.cmake` passing `A733_A76_ADMITTED` to the compiler. The CMake
 role mapping stays the single table, and the assertion stops the header from
 drifting from it. Until the `apps/os` owner takes that edit, the header is not

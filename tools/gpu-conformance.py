@@ -76,6 +76,9 @@ REFERENCE_WEIGHT_ERROR = Q(1, 512) + Q(1, 2048)
 BOARD_LERP_ROUNDING = Q(1, 2)
 
 
+_evidence_spec=importlib.util.spec_from_file_location('conformance_host_evidence',Path(__file__).with_name('host_evidence.py'))
+_evidence=importlib.util.module_from_spec(_evidence_spec);_evidence_spec.loader.exec_module(_evidence)
+
 def module(name, path):
     spec = importlib.util.spec_from_file_location(name, path)
     m = importlib.util.module_from_spec(spec)
@@ -1581,7 +1584,7 @@ def write_inputs(launch, out):
     """Canonical device inputs for the coordinator's capture functions, written
     only for a launch that passes every plan check, timing included."""
     plan([launch])
-    out.mkdir(parents=True, exist_ok=False)
+    out=_evidence.unique_directory(out)
     record = {'launch': launch.name, 'image': launch.image, 'envelope': launch.envelope}
     if launch.kind == 'compute':
         record['inputs'] = []
@@ -1599,6 +1602,7 @@ def write_inputs(launch, out):
             record['frames'].append({'name': frame.name, 'file': f'frame-{k}.input', 'state': device['state'],
                                      'shape': device.get('shape'), 'input_sha256': input_sha256(frame)})
     (out / 'inputs.json').write_text(json.dumps(record, indent=1) + '\n')
+    return out
 
 
 def check_record(launch, frames):
@@ -1662,10 +1666,8 @@ def compare_capture(name, capture_dir, out, build=BUILD, confirmation=None):
     capture is read. A profile 4 launch counts only when its confirmation
     pixels match their exact values. Any other launch with a linear-filtered
     or blended frame needs, as confirmation, the comparison.json of a profile
-    4 launch that passed against the current plan. out is created only to
-    write comparison.json."""
-    if out.exists():
-        raise FileExistsError(f'{out} exists')
+    4 launch that passed against the current plan. An existing output keeps
+    its report; the new comparison is written in a unique child directory."""
     launch = find_launch(name)
     if launch is not None:
         plan([launch])
@@ -1725,7 +1727,7 @@ def compare_capture(name, capture_dir, out, build=BUILD, confirmation=None):
             report['frames'].append({'frame': frame.name, 'status': status, **v})
         report['passed'] = not unconfirmed and all(f['status'] == 'pass' for f in report['frames'])
         report.setdefault('status', 'passed' if report['passed'] else 'failed')
-    out.mkdir(parents=True)
+    out=_evidence.unique_directory(out)
     (out / 'comparison.json').write_text(json.dumps(report, indent=1) + '\n')
     return report
 
@@ -1769,7 +1771,7 @@ def main():
             raise SystemExit('the fixed clear has no input')
         try:
             if a.command == 'inputs':
-                write_inputs(launch, a.output)
+                print(write_inputs(launch, a.output))
             else:
                 report = compare_capture(a.launch, a.capture, a.output, a.build, a.confirmation)
                 print(json.dumps({'launch': report['launch'], 'passed': report['passed'],

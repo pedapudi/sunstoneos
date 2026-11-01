@@ -12,12 +12,12 @@ def run(image,manifest,fixture,native,out,clang,lld):
     prep=host.preparation;body=image.read_bytes();record=json.loads(manifest.read_text())
     prep.image_manifest_check(record,body)
     refused=[]
-    for name,changes in [('old-profile',{'execution_profile':'storage-read-supervised-v2'}),
-                          ('old-target',{'target':'sunstone-a733-storage-read','execution_profile':'storage-read-supervised-v2'}),
-                          ('wrong-image',{'final_elf':'00'*32})]:
-        try:prep.image_manifest_check({**record,**changes},body)
-        except ValueError:refused.append(name)
-        else:raise AssertionError(name)
+    # Build-provenance fields cannot override the linked startup.
+    prep.image_manifest_check({'target':'unused','final_elf':'00'*32},body)
+    damaged=bytearray(body);struct.pack_into('<Q',damaged,24,0)
+    try:prep.image_manifest_check({},damaged)
+    except ValueError:refused.append('wrong-native-entry')
+    else:raise AssertionError('Invalid native startup accepted')
     template=(fixture/'session-template.bin').read_bytes()
     assert int.from_bytes(template[532:536],'little')==2
     # Generic board packaging retains its native mode1 contract: the board's own
@@ -32,44 +32,38 @@ def run(image,manifest,fixture,native,out,clang,lld):
     else:raise AssertionError('Generic board accepted ROM mode')
     assert not (out/'generic-board-bundle').exists()
     admission=json.loads((fixture/'admission.json').read_text())
-    # Snapshot the same authority producer, changing one concrete authorization.
-    cache=prep.validate_admission(admission,hashlib.sha256(body).hexdigest(),hashlib.sha256(template).hexdigest(),template)
-    platform=json.loads(cache[admission['platform']['path']])
-    ref=platform['conditions']['usb-clock-power-reset-ownership']
-    fact=json.loads(cache[ref['path']]);fact['authorize_one_disconnect_and_device_reset']=False
-    import copy
-    changed=copy.deepcopy(admission);modified=dict(cache)
-    data=json.dumps(fact,sort_keys=True).encode();modified[ref['path']]=data
-    platform['conditions']['usb-clock-power-reset-ownership']['sha256']=hashlib.sha256(data).hexdigest()
-    data=json.dumps(platform,sort_keys=True).encode();modified[admission['platform']['path']]=data
-    changed['platform']['sha256']=hashlib.sha256(data).hexdigest()
-    try:prep.validate_admission(changed,hashlib.sha256(body).hexdigest(),hashlib.sha256(template).hexdigest(),template,modified,True)
-    except ValueError:refused.append('rom-takeover-without-authorization')
-    else:raise AssertionError('Missing ROM takeover authorization accepted')
+    direct={k:admission[k] for k in ('identity','port','reservation')}
+    target=out/'direct-target.json';target.write_text(json.dumps(direct))
+    prep.validate_admission(direct,'unused','unused',template)
     bundle=out/'MODEL-NOT-PHYSICAL-bundle'
-    prep.prepare(image,manifest,fixture/'admission.json',fixture/'session-template.bin',bundle,clang,lld)
+    prep.prepare(image,None,target,fixture/'session-template.bin',bundle,clang,lld)
     frozen=host.freeze_bundle(bundle)
     assert frozen['_frozen']['image.elf']==body
-    actual=json.loads(frozen['_frozen']['image-input-manifest.json'])
-    assert actual['target']=='sunstone-a733-storage-read-single-core'
-    assert actual['execution_profile']=='storage-read-single-core-supervised-v2'
+    assert 'image-input-manifest.json' not in frozen['_frozen'] and not frozen['entry_evidence']
     # Preserve actual native serializer outputs and native completion counts;
     # only rebind the package's freshly randomized epoch/generation.
     raw=frozen['_frozen']['session.bin'];frames=[]
-    for name in ('idle-frame.bin','pending-frame.bin','native-frame.bin','pending-last-frame.bin','last-frame.bin'):
+    names=('host-idle-frame.bin','host-frame.bin') if (native/'host-frame.bin').exists() else (
+        'idle-frame.bin','pending-frame.bin','native-frame.bin','pending-last-frame.bin','last-frame.bin')
+    for name in names:
         frame=bytearray((native/name).read_bytes())
         struct.pack_into('<2Q',frame,16,*struct.unpack_from('<2Q',raw,24));frames.append(bytes(frame))
-    packets=[b'\0',host.decoder.read_request(19,2,1),b'\0',host.decoder.read_request(33554424,8,2),b'\0']
+    if len(frames)==2:
+        value=host.decoder.decode(frames[-1],raw);ranges=((value['first_sector'],value['blocks']),)
+        packets=[b'\0',host.decoder.read_request(*ranges[0],1,struct.unpack_from('<I',raw,860)[0])]
+    else:
+        ranges=((19,2),(33554424,8))
+        packets=[b'\0',host.decoder.read_request(19,2,1),b'\0',host.decoder.read_request(33554424,8,2),b'\0']
     capture=out/'capture';capture.mkdir();calls=[];observed={}
     def exchange(packet,timeout):
         index=len(calls);assert packet==packets[index];calls.append(packet);return frames[index]
-    result=host.capture(exchange,raw,capture,observed,lambda:None,time.monotonic()+10,ranges=((19,2),(33554424,8)))
-    assert result['status']==1 and len(calls)==5 and observed['storage_read_application_reads']==2
+    result=host.capture(exchange,raw,capture,observed,lambda:None,time.monotonic()+10,ranges=ranges)
+    assert result['status']==1 and len(calls)==len(frames) and observed['storage_read_application_reads']==2
     (out/'result.json').write_text(json.dumps(dict(passed=True,physical_access=False,
       image_sha256=hashlib.sha256(body).hexdigest(),refused=refused,
       prepared_sha256=frozen['_prepared_sha256'],launcher_sha256=frozen['files']['launch.bin'],
-      actual_native_frames=5,host_ranges=2,native_completed_reads=2,
-      scope='Actual single-core manifest identity, full original authority/session preparation, launcher compilation, bundle validation and host freeze. Modeled authority never authorizes physical use; native read/USB completion behavior is covered separately.'),indent=2)+'\n')
+      actual_native_frames=len(frames),host_ranges=len(ranges),native_completed_reads=2,
+      scope='Actual single-core ELF startup, direct target/session preparation, launcher compilation and bundle validation. Modeled authority never authorizes physical use; native read/USB completion behavior is covered separately.'),indent=2)+'\n')
     print('PASS single-core storage producer and host package')
 if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__)

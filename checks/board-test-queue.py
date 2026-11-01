@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Check board-test scheduling with concurrent host processes and no USB access."""
 import hashlib
-import importlib.util
 import json
 from pathlib import Path
 import sqlite3
@@ -10,17 +9,6 @@ import sys
 import tempfile
 
 TOOL = Path(__file__).resolve().parents[1] / 'tools/board-test-queue.py'
-BASE = Path(__file__).resolve().parents[1] / 'tools/check-a733-smp.py'
-
-
-def port_refused(base, db, port):
-    try:
-        base.require_queue_port(db, port)
-    except ValueError:
-        return True
-    return False
-
-
 def main():
     with tempfile.TemporaryDirectory(prefix='sunstoneos-queue-') as directory:
         root = Path(directory)
@@ -45,11 +33,6 @@ def main():
         assert token.read_bytes() == original
         assert token.stat().st_mode & 0o777 == 0o600
         assert run(base + ['list'])['port'] == '3-3'
-        # Supervised runners compare the queue's port with the locked board port.
-        spec = importlib.util.spec_from_file_location('queue_check_base', BASE)
-        smp = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(smp)
-        assert port_refused(smp, db, '3-1') and not port_refused(smp, db, '3-3')
         run(admin + ['bind-port', '--port', '3-1'], False)
         # A queue created before binding records its port once, by the coordinator.
         legacy, legacy_token = root / 'legacy.sqlite3', root / 'legacy-coordinator'
@@ -58,11 +41,11 @@ def main():
         run(legacy_admin + ['init', '--port', '3-1'])
         with sqlite3.connect(legacy) as connection:
             connection.execute("DELETE FROM settings WHERE key='port'")
-        assert port_refused(smp, legacy, '3-1')
         run([sys.executable, str(TOOL), '--database', str(legacy), 'bind-port', '--port', '3-1'], False)
         run(legacy_admin + ['bind-port', '--port', '3-1'])
         run(legacy_admin + ['bind-port', '--port', '3-3'], False)
-        assert not port_refused(smp, legacy, '3-1') and port_refused(smp, legacy, '3-3')
+        listed = run([sys.executable, str(TOOL), '--database', str(legacy), 'list'])
+        assert listed['port'] == '3-1'
         binary = root / 'image.bin'
         binary.write_bytes(b'bounded fake test artifact')
         proof = root / 'proof.json'
@@ -84,20 +67,25 @@ def main():
         second = run(base + ['submit', str(spec_path)])['id']
         spec['prerequisites'] = ['host-check']
         spec_path.write_text(json.dumps(spec))
-        run(base + ['submit', str(spec_path)], False)
+        minimal = run(base + ['submit', str(spec_path)])['id']
+        # Queue records need no recovery paperwork or fixed submission schema.
+        spec_path.write_text(json.dumps({'component': 'Unreviewed diagnostic', 'notes': 'Optional bookkeeping'}))
+        unreviewed = run(base + ['submit', str(spec_path)])['id']
+        run(admin + ['claim', unreviewed, '--owner', 'coordinator'])
+        run(admin + ['finish', unreviewed, '--result', 'passed', '--evidence', str(proof),
+                     '--note', 'No review record required', '--confirm-stopped'])
+        assert run(base + ['show', unreviewed])['review'] is None
         run(base + ['claim', first, '--owner', 'worker'], False)
-        run(admin + ['claim', first, '--owner', 'coordinator'], False)
         review = root / 'review.json'
         review.write_text(json.dumps({'host-check': record(proof)}))
-        run(admin + ['review', first, str(review), '--note', 'Fixture'], False)
+        run(admin + ['review', first, str(review), '--note', 'Partial notes are allowed'])
         review.write_text(json.dumps({name: record(proof) for name in
                                       ('host-check', 'independent-watchdog-rom-return')}))
         for test_id in (first, second):
             run(admin + ['review', test_id, str(review), '--note', 'Host fixture only'])
-        # Content mutation invalidates readiness without changing the immutable record.
+        # Saved artifact hashes are evidence metadata, not queue claim authority.
         binary.write_bytes(b'changed')
-        run(admin + ['claim', first, '--owner', 'coordinator'], False)
-        binary.write_bytes(b'bounded fake test artifact')
+        proof.write_text('changed review evidence')
         # Two independent coordinator invocations contend for the one active slot.
         processes = [subprocess.Popen(admin + ['claim', test_id, '--owner', test_id],
                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -137,7 +125,7 @@ def main():
         for test_id in (first, second, retry):
             saved = run(base + ['show', test_id])
             assert saved['events'] and saved['submission']['sources'][0]['revision'] == 'a' * 40
-        print('PASS: port binding, submission identities, authorization, prerequisite review, artifact changes,')
+        print('PASS: port binding, submission identities, queue edit authorization, optional review and changed artifacts,')
         print('concurrent claims, retained ownership, failure halt, recovery review, terminal history.')
 
 

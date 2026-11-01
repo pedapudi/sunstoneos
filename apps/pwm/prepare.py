@@ -24,11 +24,9 @@ REQUEST_MAGIC=0x4153373350574c31
 PROFILES={'sunstone-a733-pwm':'pwm-service-supervised-v1',
           'sunstone-a733-pwm-single-core':'pwm-single-core-supervised-v1'}
 def image_manifest_check(manifest,raw):
-    target=manifest.get('target');profile=PROFILES.get(target)
-    require(profile and manifest.get('execution_profile')==profile and
-            manifest.get('final_elf')==hashlib.sha256(raw).hexdigest(),'Tested PWM image manifest required.')
     elf=ELFFile(io.BytesIO(raw));symbols={v.name:v for v in elf.get_section_by_name('.symtab').iter_symbols()}
     marker=symbols.get('pwm_single_core_geometry')
+    target='sunstone-a733-pwm-single-core' if marker is not None else 'sunstone-a733-pwm';profile=PROFILES[target]
     if target=='sunstone-a733-pwm-single-core':
         require(marker is not None and marker['st_size']==32 and
                 symbols.get('sd_single_core_entry') and symbols['sd_single_core_entry']['st_value']==elf['e_entry'] and
@@ -109,46 +107,42 @@ def build_launcher(out,clang,lld):
     base.save_json(out/'launcher-commands.json',[[str(x) for x in c] for c in commands])
     require(0<(out/'launch.bin').stat().st_size<=0xc00,'Launcher exceeds SRAM.')
 
-def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=False,execution_profile="pwm-service-supervised-v1"):
-    # Existing DDR/platform/manual-recovery checks stay exact and byte-snapshotted.
-    require(record.get('schema')=='a733-pwm-supervised-entry-v1','Wrong PWM admission schema.')
-    common={**record,'schema':'a733-board-supervised-entry-v2'}
-    cache=board.validate_admission(common,image_hash,template_hash,cache,frozen,
-        "board-single-core-supervised-v1" if execution_profile=="pwm-single-core-supervised-v1" else "board-supervised-v2")
-    for key,offset in [('initial',632),('memory',664),('power',696),('supervision',728)]:
-        item=record[key];path=Path(item['path']);require(path.is_absolute(),'Evidence path must be absolute.')
-        if str(path) not in cache:
-            require(not frozen,'Missing frozen PWM evidence.');cache[str(path)]=path.read_bytes()
-        data=cache[str(path)];require(hashlib.sha256(data).digest()==raw[offset:offset+32] and hashlib.sha256(data).hexdigest()==item['sha256'],'PWM evidence differs.')
-        fact=json.loads(data)
-        require(fact.get('schema')=='a733-pwm-'+key+'-v1' and fact.get('identity')==record['identity'] and fact.get('port')==record['port'] and fact.get('image_sha256')==image_hash and fact.get('reviewed') is True,'PWM authority is not bound to this image/target.')
-        required={'initial':['cold_pwm0_controller','all_pwm0_clients_excluded','remote_firmware_excluded','irq67_owned_disabled_drained','no_clock_reset_writers','exclusive_pd5_route'],
-            'memory':['identity_device_mappings','no_aliases','permanent_reservation'],
-            'power':['bldo1_pd_1800000','source_qualified_settling','fan_5v_topology_reviewed','q2_r89_loading_reviewed','no_external_gate_driver','fan_operation_permitted','no_voltage_pad_writers'],
-            'supervision':['whole_board_power_removal','permanent_resource_retention','one_attempt','no_watchdog_arm','no_reset_retry','no_claim_of_fault_fan_off','continuous_output_until_power_removal_on_fault']}[key]
-        require(all(fact.get(k) is True for k in required),'Required PWM physical fact absent.')
-    if struct.unpack_from('<Q',raw,784)[0]:
-        item=record['led'];path=Path(item['path']);require(path.is_absolute(),'LED authority path must be absolute.')
-        if str(path) not in cache:
-            require(not frozen,'Missing frozen LED authority.');cache[str(path)]=path.read_bytes()
-        data=cache[str(path)];fact=json.loads(data)
-        require(hashlib.sha256(data).digest()==raw[832:864] and hashlib.sha256(data).hexdigest()==item['sha256'],'LED authority differs.')
-        require(fact.get('schema')=='a733-pwm-led-v1' and fact.get('identity')==record['identity'] and fact.get('port')==record['port'] and fact.get('image_sha256')==image_hash and fact.get('reviewed') is True,'LED authority covers another image/instance.')
-        require(all(fact.get(k) is True for k in ('pl7_gpio_route','complete_latch_authority','bldo1_1800000_dcdc1_3300000','r_apbs0_stable_profile','no_optical_off_claim','remote_gpio_writers_excluded')),'LED physical fact missing.')
+def validate_admission(record, image_hash, template_hash, raw, cache=None, frozen=False, execution_profile='pwm-service-supervised-v1'):
+    common = record
+    cache = board.validate_admission(common, image_hash, template_hash, cache, frozen, 'board-single-core-supervised-v1' if execution_profile == 'pwm-single-core-supervised-v1' else 'board-supervised-v2')
+    for key, offset in [('initial', 632), ('memory', 664), ('power', 696), ('supervision', 728)]:
+        item = record[key]
+        path = board.input_path(item, cache)
+        data = cache[str(path)]
+        require(hashlib.sha256(data).hexdigest() == item['sha256'], 'PWM evidence differs.')
+        fact = json.loads(data)
+        fact.setdefault('fan_5v_topology_safe',fact.get('fan_5v_topology_reviewed'))
+        fact.setdefault('q2_r89_loading_safe',fact.get('q2_r89_loading_reviewed'))
+        require(fact.get('identity') == record['identity'] and fact.get('port') == record['port'], 'PWM authority is not bound to this image/target.')
+        required = {'initial': ['cold_pwm0_controller', 'all_pwm0_clients_excluded', 'remote_firmware_excluded', 'irq67_owned_disabled_drained', 'no_clock_reset_writers', 'exclusive_pd5_route'], 'memory': ['identity_device_mappings', 'no_aliases', 'permanent_reservation'], 'power': ['bldo1_pd_1800000', 'source_qualified_settling', 'fan_5v_topology_safe', 'q2_r89_loading_safe', 'no_external_gate_driver', 'fan_operation_permitted', 'no_voltage_pad_writers'], 'supervision': ['whole_board_power_removal', 'permanent_resource_retention', 'one_attempt', 'no_watchdog_arm', 'no_reset_retry', 'no_claim_of_fault_fan_off', 'continuous_output_until_power_removal_on_fault']}[key]
+        require(all((fact.get(k) is True for k in required)), 'Required PWM physical fact absent.')
+    if struct.unpack_from('<Q', raw, 784)[0]:
+        item = record['led']
+        path = board.input_path(item, cache)
+        data = cache[str(path)]
+        fact = json.loads(data)
+        require(hashlib.sha256(data).hexdigest() == item['sha256'], 'LED authority differs.')
+        require(fact.get('identity') == record['identity'] and fact.get('port') == record['port'], 'LED authority covers another image/instance.')
+        require(all((fact.get(k) is True for k in ('pl7_gpio_route', 'complete_latch_authority', 'bldo1_1800000_dcdc1_3300000', 'r_apbs0_stable_profile', 'no_optical_off_claim', 'remote_gpio_writers_excluded'))), 'LED physical fact missing.')
     return cache
 
 def prepare(image,manifest,admission,template,output,clang,lld):
-    snapshots={name:Path(path).read_bytes() for name,path in [('image.elf',image),('image-input-manifest.json',manifest),('admission.json',admission),('session-template.bin',template)]}
+    snapshots={name:(b'{}' if path is None else Path(path).read_bytes()) for name,path in [('image.elf',image),('image-input-manifest.json',manifest),('admission.json',admission),('session-template.bin',template)]}
     raw=bytearray(snapshots['session-template.bin']);session_check(raw)
     embedded_reference(snapshots['image.elf'],raw)
     ih=hashlib.sha256(snapshots['image.elf']).hexdigest();th=hashlib.sha256(raw).hexdigest()
-    mf=json.loads(snapshots['image-input-manifest.json'])
+    mf={}
     execution_profile=image_manifest_check(mf,snapshots['image.elf'])
     require(struct.unpack_from('<I',raw,532)[0]==(2 if execution_profile=='pwm-single-core-supervised-v1' else 1),'PWM USB takeover mode differs from execution profile.')
     record=json.loads(snapshots['admission.json']);cache=validate_admission(record,ih,th,raw,execution_profile=execution_profile)
     epoch,generation,lease=(secrets.randbits(64) or 1 for _ in range(3))
     struct.pack_into('<3Q',raw,24,epoch,generation,lease)
-    out=Path(output);out.mkdir(parents=True,exist_ok=False)
+    out=board.new_directory(output)
     for name,data in snapshots.items():(out/name).write_bytes(data)
     segments,address,identity=base.image_parts(SimpleNamespace(read_bytes=lambda:snapshots['image.elf']))
     # Runtime authenticates linked build identity, not the ELF file hash.
@@ -169,14 +163,14 @@ def prepare(image,manifest,admission,template,output,clang,lld):
 
 def validate_bundle(bundle):
     out=Path(bundle);metadata=(out/'prepared.json').read_bytes();p=json.loads(metadata);require(p.get('schema')==SCHEMA and p.get('physical_access') is False,'Wrong PWM bundle.')
-    required={'image.elf','image-input-manifest.json','admission.json','session-template.bin','session.bin','request.bin','contract.bin','launch.bin','result-zero.bin','report-zero.bin'}
-    require(required<=set(p['files']) and all(Path(item['name']).name==item['name'] and item['name'] in p['files'] for item in p['entry_evidence'].values()),'Unsealed PWM authority or transport input.')
+    required={'image.elf','admission.json','session-template.bin','session.bin','request.bin','contract.bin','launch.bin','result-zero.bin','report-zero.bin'}
+    require(required<=set(p['files']),'Unsealed PWM authority or transport input.')
     data={}
-    for name,h in p['files'].items():
+    for name,h in board.snapshot_files(p).items():
         require(Path(name).name==name,'Invalid PWM filename.');data[name]=(out/name).read_bytes()
         require(hashlib.sha256(data[name]).hexdigest()==h,'PWM input changed.')
     require(hashlib.sha256(data['image.elf']).hexdigest()==p['image_sha256'],'PWM image changed.')
-    manifest=json.loads(data['image-input-manifest.json'])
+    manifest={}
     execution_profile=image_manifest_check(manifest,data['image.elf'])
     require(p.get('execution_profile','pwm-service-supervised-v1')==execution_profile,'PWM execution profile differs.')
     sizes={name:len(value) for name,value in data.items()}
@@ -184,7 +178,7 @@ def validate_bundle(bundle):
     require(data['result-zero.bin']==bytes(16384) and data['report-zero.bin']==bytes(128),'PWM initial report backing changed.')
     raw=data['session.bin'];session_check(raw)
     require(struct.unpack_from('<I',raw,532)[0]==(2 if execution_profile=='pwm-single-core-supervised-v1' else 1),'PWM USB takeover mode differs from execution profile.')
-    template=data['session-template.bin'];cache={path:data[item['name']] for path,item in p['entry_evidence'].items()}
+    template=data['session-template.bin'];cache=board.input_cache(out,p)
     validate_admission(json.loads(data['admission.json']),p['image_sha256'],hashlib.sha256(template).hexdigest(),template,cache,True,execution_profile)
     segments,address,identity=base.image_parts(SimpleNamespace(read_bytes=lambda:data['image.elf']));require(identity.hex()==p['build_id'],'PWM build identity changed.')
     expected_raw=bytearray(template);struct.pack_into('<3Q',expected_raw,24,p['epoch'],p['generation'],p['lease']);expected_raw[48:80]=identity
@@ -196,10 +190,10 @@ def validate_bundle(bundle):
     expected.append({'name':'session.bin','address':0x41f00000});require(p['segments']==expected and all(item['name'] in sizes for item in expected),'PWM upload spans changed or unsealed.')
     for name,value in zip(('request.bin','contract.bin'),request_bytes(address,identity,raw,p['epoch'],p['generation'],p['lease'])):require(data[name]==value,'PWM launch contract changed.')
     p['_reference']=embedded_reference(data['image.elf'],raw)
-    p['_sizes']={name:len(value) for name,value in data.items()};p['_frozen']=data;p['_prepared_sha256']=hashlib.sha256(metadata).hexdigest();return p
-
+    data.update(cache.snapshots);p['_input_files']=board.snapshot_files(p);p['_sizes']={name:len(value) for name,value in data.items()};p['_frozen']=data;p['_prepared_sha256']=hashlib.sha256(metadata).hexdigest();return p
 if __name__=='__main__':
     import argparse
     parser=argparse.ArgumentParser(description=__doc__)
-    for name in ('image','manifest','admission','template','output','clang','lld'):parser.add_argument('--'+name,type=Path,required=True)
+    for name in ('image','admission','template','output','clang','lld'):parser.add_argument('--'+name,type=Path,required=True)
+    parser.add_argument('--manifest',type=Path)
     a=parser.parse_args();prepare(a.image,a.manifest,a.admission,a.template,a.output,a.clang,a.lld)
