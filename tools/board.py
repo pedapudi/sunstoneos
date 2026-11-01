@@ -659,6 +659,7 @@ def run_image(args, backend=Live):
         else:
             info = images.inspect(frozen, args.kind, descriptor,args.host_tree)
             images.policy(info, args)
+            images.dma_admission(args, info)
             application_inputs(args, info, evidence)
             require(getattr(args, 'expect_result', None) is None or getattr(args, 'decoder', None) is not None,
                     '--expect-result requires a result decoder.')
@@ -774,6 +775,7 @@ def check_image(args):
     evidence = evidence_directory(args.evidence)
     application_inputs(args, info, evidence)
     live = json.loads(args.state.read_text()) if args.state else {}
+    images.dma_admission(args, info, live if live.get('identity') is not None else None)
     require(info.get('native_probe') or live.get('words'),
             'Offline application preparation requires --state with captured words.')
     plan = images.prepare(args, info, live, evidence/'bundle')
@@ -1005,6 +1007,8 @@ class Queue:
                 else:
                     (destination/'board').mkdir()
                     shutil.copy2(template/'board/session-template.bin',destination/'board/session-template.bin')
+                if (template/'dma-authority.json').is_file():
+                    shutil.copy2(template/'dma-authority.json', destination/'dma-authority.json')
             options['template'] = str(directory/'template')
         exp = expectation(args.expect)
         if exp:
