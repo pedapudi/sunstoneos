@@ -45,7 +45,7 @@
                              xTaskScheduled = pdTRUE;
                          }
                      }
-@@ -4981,9 +5003,68 @@
+@@ -4981,9 +5003,79 @@
              {
                  BaseType_t xCoreID;
  
@@ -87,7 +87,18 @@
 +                        const List_t * const pxList = &( pxReadyTasksLists[ uxPriority ] );
 +                        UBaseType_t uxMask = 0U;
 +
-+                        if( listCURRENT_LIST_LENGTH( pxList ) > 1U )
++                        const UBaseType_t uxLength = listCURRENT_LIST_LENGTH( pxList );
++
++                        /* Bound work under the global ISR lock independently
++                         * of the number of statically allocated tasks. Two
++                         * entries per core cover a running task and a waiter.
++                         * Longer lists retain upstream time slicing on every
++                         * core of this priority, including unseen affinities. */
++                        if( uxLength > 2U * ( UBaseType_t ) configNUMBER_OF_CORES )
++                        {
++                            uxMask = ~( UBaseType_t ) 0U;
++                        }
++                        else if( uxLength > 1U )
 +                        {
 +                            const ListItem_t * pxItem;
 +
@@ -115,7 +126,7 @@
                      {
                          xYieldPendings[ xCoreID ] = pdTRUE;
                      }
-@@ -6665,11 +6746,19 @@
+@@ -6665,11 +6757,19 @@
  
              traceENTER_xTaskGetCurrentTaskHandle();
  
