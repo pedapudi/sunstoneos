@@ -23,22 +23,34 @@ The image reports CPU-L/B at 1794/2002 MHz and 1000/1050 mV, with three
 completed domain transitions. The printed DSU rate of 494 MHz is the admission
 snapshot from `apps/os/cpu.c:mhz`; it does not measure the active DSU clock.
 
-## Paced physical acceptance needs a completed capture
+## Paced recognition passes; thermal capture remains incomplete
 
-Queue entry `1793556850281227875-c450351e` fails before launch on port 3-1.
-The first FEL `version` transaction times out during USB bulk send after
-10.022193 seconds. The runner records `host-error` at `identity`, with
-`launch_attempted=false` and `quarantined=true`. The originating check is
-`tools/board.py:Live.sanity`, through `tx('version')`; its transaction log
-records exit code 2 and no output. No reset, DRAM setup, image upload or native
-execution occurs. There is no application transcript, CRC or pacing timing.
+Queue entry `1793558023604334567-7e722543` on 3-1 returns normally with seven
+secondary CPUs OFF and exact segmented reference parity. It processes all
+57,440 samples and consumes one segment spanning `[19520, 57440)`. Feature CRC
+is `efcd0911`, probability CRC is `c78d3801`, and formatting produces
+`There was silence` followed by flush `.`. Recognition takes `92684`
+microseconds; replay takes `3683197`, maximum lateness is `445`, and latency
+from speech end is `93166` microseconds. Loading takes `92091` microseconds.
 
-Port 3-1 is paused. Coordinator recovery and resumption are required before a
-new control; all five repeat trials remain unsubmitted. The image's numerical
-and pacing behavior is untested on this OS revision. An image change cannot
-resolve the observed prelaunch transport failure. The runner supplies one
-native launch per submission; the planned trials check fresh sessions rather
-than five replays within one native session.
+The runner outcome is `result-mismatch` at capture. Its thermal window has
+36 fresh rows, no overflow and successful recognition, but three adjacent
+row gaps are 125002, 125003 and 125002 microseconds. These exceed the
+unchanged 125000-microsecond completeness bound. The originating check is
+`apps/os/thermal-report.py:classify`; `tools/board_images.py:capture` marks
+that receipt invalid. The application completion text matches its expectation.
+CPU retirement and rail cleanup succeed; the instance is not quarantined.
+
+The relative 100 ms report and 25 ms sensor deadlines in `apps/os/thermal.c`
+can defer a row after small completion-time jitter. A shared-owner proposal
+uses absolute phases and skips missed slots without fabricating readings.
+It passes patch applicability and independent source review; it is not applied
+or qualified. Native jitter-path coverage and ownership authorization remain
+required. No application workaround or capture-limit change is proposed.
+
+The five paced repeats remain unsubmitted. A new control must first pass the
+complete capture check. Each trial uses a fresh native session; these trials
+do not qualify five replays within one retained application session.
 
 ## Host validation passes
 
@@ -53,7 +65,7 @@ three returning-watchdog cases, the selected integration gate and check index
 pass on the updated OS. Independent review finds no blocking rebase or build-patch defect.
 Firmware and host sources equal the requested engine revision.
 
-Fresh images, submission metadata and the transport-failure decode are in
+Fresh images, submission metadata, parity and fault-origin records are in
 `~/.cache/sunstoneos/build/app-acceptance-1031/queue-1101/`; its
 `shared-patches/` directory holds integration patches. Recorded and existing
 host parity evidence remain in the sibling `on-split/` directory. Sustained replay, live input,
