@@ -143,6 +143,8 @@ changed branches. A commit, rebase or handoff does not invalidate test evidence.
   `tools/a733-crumbs.py`). Run development images with `tools/dev-run.py`.
   The [board runner and run queue](docs/board-runner.md) provide fresh-FEL
   preparation, bounded recovery and frozen submissions through `tools/board.py`.
+  Native diagnostics use the [probe contract](docs/board-probe-contract.md);
+  `board.py check` validates their marker, inputs and result layout without USB.
 - Start with identity queries and RAM-only execution. Write paths may be
   implemented and host-checked at any time; images refuse writes unless their
   session grants them. Physical writes follow section 4 of

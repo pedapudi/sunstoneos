@@ -59,6 +59,10 @@ def inspect(image, kind, descriptor=None, host_tree=None):
     descriptor = descriptor or {}
     if descriptor:
         require(descriptor.get('image_sha256') == sha(image), 'Image descriptor hash differs.')
+    if kind=='probe' and 'sunstone_probe_marker' in names:
+        native = load('native_probe_contract', ROOT/'tools/board_probe.py').inspect(image)
+        return {'symbols':names,'watchdog':native['watchdog'],'generic':False,'entry_guard':False,
+                'descriptor':descriptor,'native_probe':native}
     marker = host.watchdog_marker(image) if names else descriptor.get('watchdog')
     require(marker is not None, 'Image does not admit the host-armed watchdog; rebuild with RTC breadcrumbs.')
     require(set(marker) == {'mode', 'session_seconds'} and all(type(v) is int for v in marker.values()) and
@@ -81,6 +85,7 @@ def inspect(image, kind, descriptor=None, host_tree=None):
         if kind=='npu':
             require('os_npu_client_model' in names, 'NPU kind requires the linked OS NPU service.')
     else:
+        require(descriptor.get('purpose')=='watchdog-reset-diagnostic','Raw probes admit only the intentional watchdog-reset diagnostic; use the native ELF contract.')
         require(descriptor.get('schema') == 'sunstone-board-probe-v1', 'Probe requires a hash-bound .board.json descriptor.')
         require(descriptor.get('entry') == 0x41000000 and descriptor.get('report_address') == 0x42000000,
                 'Probe entry/report reservations differ.')
@@ -153,6 +158,8 @@ def launcher(out, size, mode, seconds=60):
 
 
 def prepare(args, info, live, out):
+    if info.get('native_probe'):
+        return load('prepare_native_probe', ROOT/'tools/board_probe.py').prepare(args.image,info['native_probe'],args.input,out)
     dev = load('runner_dev', ROOT / 'tools/dev-run.py')
     base = load('runner_base', ROOT / 'tools/check-a733-smp.py')
     records = load('runner_records', ROOT / 'apps/os/host.py')
@@ -246,6 +253,12 @@ def write(path, data):
 
 def capture(owner, plan, args):
     out = owner.evidence
+    if plan['format']=='native-probe':
+        probe=load('capture_native_probe',ROOT/'tools/board_probe.py')
+        decoded=probe.receipt(owner.read(probe.RECEIPT,128,out/'probe-receipt.bin'),plan)
+        payload=owner.read(plan['marker']['payload_address'],decoded['payload_bytes'],out/'probe-payload.bin') if decoded['payload_bytes'] else b''
+        require(probe.fnv(payload)==decoded['payload_hash'],'Probe payload checksum differs.')
+        return {'valid':decoded['status']==0,'payload':payload,'report':decoded}
     if plan['format'] == 'probe':
         data = owner.read(0x42000000, 16384, out/'return-report.bin')
         values = struct.unpack_from('<16Q', data)

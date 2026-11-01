@@ -356,7 +356,7 @@ def artifacts(out):
     subprocess.run([str(board.CACHE/'host/usr/bin/ld.lld-21'),'-Ttext=0x41000000','--oformat=binary',
                     str(root/'watchdog-probe.o'),'-o',str(root/'watchdog-probe.bin')],check=True)
     image=root/'watchdog-probe.bin'
-    board.save(Path(str(image)+'.board.json'),{'schema':'sunstone-board-probe-v1','image_sha256':images.sha(image),
+    board.save(Path(str(image)+'.board.json'),{'schema':'sunstone-board-probe-v1','purpose':'watchdog-reset-diagnostic','image_sha256':images.sha(image),
         'entry':0x41000000,'report_address':0x42000000,'storage_write':False,'operating_points':[],
         'watchdog':{'mode':0x41,'session_seconds':1}})
     from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM

@@ -146,9 +146,12 @@ normalization point is 800 mV. Image descriptors and CPU session grants outside
 that set require `--approved-by coordinator`. The flag does not bypass native
 speed-bin, clock, voltage or session checks.
 
-A raw probe requires `IMAGE.board.json`, schema `sunstone-board-probe-v1`, bound
+Native probes follow [the probe contract](board-probe-contract.md) and use
+`board.py check` for host-only admission. A raw watchdog-reset diagnostic
+requires `IMAGE.board.json`, schema `sunstone-board-probe-v1`, bound
 to the image SHA-256. It names entry `0x41000000`, report `0x42000000`, watchdog
-mode and session duration, storage-write intent and any operating points.
+mode and session duration, `purpose: watchdog-reset-diagnostic`, storage-write
+intent and any operating points.
 Declarations describe a reviewed probe; they do not establish electrical facts.
 
 Storage-write intent requires coordinator approval. This runner does not create
@@ -178,7 +181,7 @@ The following artifacts are already built in the local cache:
 
 ```sh
 hello="$HOME/.cache/sunstoneos/build/board-runner-1031/merged-hello/sunstone-a733-os-hello.elf"
-checks="$HOME/.cache/sunstoneos/build/board-runner-1031/merged-checks"
+checks="$HOME/.cache/sunstoneos/build/board-runner-1031/probe-final"
 gpu="$HOME/.cache/sunstoneos/build/gpu-bisect-1031/crumbs/ladder-wdt4/2-firmware/sunstone-a733-os.elf"
 $board run "$hello" --port 3-1 --kind cpu-return \
   --expect "$checks/qualification/hello-expected.bin"

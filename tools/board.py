@@ -425,7 +425,7 @@ class Live:
         return {'identity': self.identity, 'port': self.args.port, 'words': {hex(a):v for a,v in zip(dev.WORDS,values)}}
 
     def prepare(self, info):
-        return images.prepare(self.args, info, self.live_state(), self.evidence/'bundle')
+        return images.prepare(self.args, info, {} if self.args.kind=='probe' else self.live_state(), self.evidence/'bundle')
 
     def launch(self, plan):
         for address, source in plan['uploads']:
@@ -893,6 +893,14 @@ def main(argv=None):
     run = commands.add_parser('run')
     run_options(run)
     run.add_argument('--evidence',type=Path)
+    check = commands.add_parser('check')
+    check.add_argument('image',type=Path)
+    check.add_argument('--kind',choices=('probe',),default='probe')
+    check.add_argument('--input',type=Path,action='append',default=[])
+    check.add_argument('--evidence',type=Path,required=True)
+    check.add_argument('--approved-by',choices=('coordinator',))
+    check.add_argument('--storage-write',action='store_true')
+    check.add_argument('--descriptor',type=Path)
     submit = commands.add_parser('submit')
     run_options(submit,True)
     submit.add_argument('--worker',required=True)
@@ -906,6 +914,18 @@ def main(argv=None):
     resume = commands.add_parser('resume')
     resume.add_argument('port',choices=PORTS)
     args = parser.parse_args(argv)
+    if args.command=='check':
+        descriptor=args.descriptor or Path(str(args.image)+'.board.json')
+        info=images.inspect(args.image,args.kind,json.loads(descriptor.read_text()) if descriptor.exists() else None)
+        images.policy(info,args)
+        require(info.get('native_probe'),'Offline probe preparation requires the embedded native probe contract.')
+        plan=images.prepare(args,info,{},args.evidence)
+        report={'admitted':True,'physical_access':False,'image_sha256':images.sha(args.image),
+                'watchdog':plan['watchdog'],'epoch':plan['epoch'],'generation':plan['generation'],'lease':plan['lease'],
+                'marker':plan['marker'],'uploads':[{'address':a,'file':str(p),'sha256':images.sha(p)} for a,p in plan['uploads']]}
+        save(args.evidence/'admission.json',report)
+        print(json.dumps(report,indent=2))
+        return 0
     if args.command=='run':
         if args.process_record:
             save(args.process_record,process_identity(os.getpid()))
