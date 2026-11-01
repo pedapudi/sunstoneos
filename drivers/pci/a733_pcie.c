@@ -421,7 +421,8 @@ enum a733_pcie_result a733_pcie_poll(struct a733_pcie *p)
             if(r==1){p->perst_since=p->last_now;++p->phase;}break;
         }
         case RC:ok=root_setup(p);if(ok)++p->phase;break;
-        case RESET_WAIT:if(p->last_now-p->perst_since>=100000)++p->phase;break;
+        /* The counter is floored to microseconds; equality can be early. */
+        case RESET_WAIT:if(p->last_now-p->perst_since>100000)++p->phase;break;
         case TRAIN:ok=update(p,APP+0xc00,0x41,0x41);if(ok)++p->phase;break;
         case LINK:
             if(!rd(p,APP+0xe0c,&p->last_value))ok=0;
@@ -432,7 +433,7 @@ enum a733_pcie_result a733_pcie_poll(struct a733_pcie *p)
             break;
         case IDENTIFY:
             /* No configuration request until 100 ms after PERST release. */
-            if(p->last_now-p->perst_since<100000)break;
+            if(p->last_now-p->perst_since<=100000)break;
             if(!rd(p,ATU+4,&p->last_value))ok=0;
             else if(p->last_value&BIT(31)) {
                 int r=link(p)?ready(p):-1;ok=r>=0;

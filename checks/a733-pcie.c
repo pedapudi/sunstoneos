@@ -23,6 +23,7 @@ static struct register_latency atu_effects[2],phy_effect,link_effect;
 #define atu_effect atu_effects[0]
 static uint64_t atu_on_us,atu_off_us;
 static unsigned atu_reads,atu_stall_off,atu1_stall_off,atu1_off_acks;
+static uint64_t gpio_cost_ns,gpio_returned_ns;
 static void deferred(struct pmic_model *m)
 {
     uint32_t *w;
@@ -79,7 +80,11 @@ static int pcie_pin_write(void *v,uintptr_t a,uint32_t value)
             assert(phy_done&&reset_rise-phy_done>=100000);
         }
     }
-    return pmic_model_pin_write(v,a,value);
+    int r=pmic_model_pin_write(v,a,value);
+    if(gpio_cost_ns&&a==0x02000214&&(value&(1u<<22))) {
+        pmic_model_cost(m,gpio_cost_ns);gpio_returned_ns=m->now*1000+m->frac_ns;
+    }
+    return r;
 }
 static int pcie_pin_enter(void *v,uint64_t deadline)
 {
@@ -166,6 +171,7 @@ static void setup(void)
     model.now_step=1;
     atu_effects[0]=atu_effects[1]=phy_effect=link_effect=(struct register_latency){0};
     atu_on_us=atu_off_us=250;atu_reads=atu_stall_off=atu1_stall_off=atu1_off_acks=0;
+    gpio_cost_ns=gpio_returned_ns=0;
     model.pmic[0x20]=0x40;model.pmic[0x2a]=13;
     *pmic_model_word(&model,0x02002000)=0xf8636300;
     *pmic_model_word(&model,0x020020a0)=0xfe106300;
@@ -346,6 +352,29 @@ static void atu_latency(void)
     assert(port.atu_failure==3&&port.atu_address==0x06300004&&!port.atu_expected&&port.atu_started==start);
     printf("ATU frozen clock: %u acknowledgment reads, retained without address writes\n",atu_reads-reads);
 }
+static void hold_boundaries(void)
+{
+    setup();while(port.phase!=11)assert(step()!=A733_PCIE_RETAINED); /* RESET_WAIT */
+    model.now_step=0;model.frac_ns=23;model.now=port.perst_since+100000;
+    assert(a733_pcie_poll(&port)==A733_PCIE_PENDING&&port.phase==11&&!reset_rise);
+    ++model.now;assert(a733_pcie_poll(&port)==A733_PCIE_PENDING&&port.phase==12);
+    gpio_cost_ns=250023;
+    assert(a733_pcie_poll(&port)==A733_PCIE_PENDING&&port.phase==13);
+    assert(gpio_returned_ns&&port.perst_since==gpio_returned_ns/1000);
+    const uint64_t origin=port.perst_since;
+    model.now_step=1;
+    while(port.phase!=15)assert(step()!=A733_PCIE_RETAINED); /* IDENTIFY */
+    model.now_step=0;model.now=origin+100000;
+    assert(a733_pcie_poll(&port)==A733_PCIE_PENDING&&port.phase==15);
+    assert(model.now*1000-gpio_returned_ns<UINT64_C(100000000));
+    ++model.now;assert(a733_pcie_poll(&port)==A733_PCIE_READY&&port.phase==16);
+    assert(model.now*1000-gpio_returned_ns>=UINT64_C(100000000));
+    setup();while(port.phase!=11)assert(step()!=A733_PCIE_RETAINED);
+    port.config.deadline=port.perst_since+100000;model.now=port.config.deadline;model.now_step=0;
+    unsigned before=trace_count;
+    assert(a733_pcie_poll(&port)==A733_PCIE_RETAINED&&trace_count==before&&!reset_rise);
+    puts("PCIe minimum holds: fractional origin, costly GPIO completion, exact100ms pending and original deadline retained");
+}
 int main(int argc,char **argv)
 {
     setup();assert(complete()==A733_PCIE_READY);
@@ -388,6 +417,7 @@ int main(int argc,char **argv)
     setup();late_fault=1;retained();assert(!late_fault);
     speeds();
     atu_latency();
+    hold_boundaries();
     puts("PASS: actual provider/rail/PCK/pin/clock composition, PCIe PHY/link/readiness/config, Gen2 directed speed change and retained failures");
     return 0;
 }
