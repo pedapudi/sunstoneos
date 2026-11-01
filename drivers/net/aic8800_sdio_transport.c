@@ -629,7 +629,7 @@ static int consume_receive(struct aic8800_sdio_transport *t,const void *owner)
 {
     if (!t || !t->initialized || t->entered || t->receive_owner!=owner || !t->held || t->state == AIC8800_TRANSPORT_FAULT) return 0;
     uint64_t now;
-    if(owner){t->entered=1;if(!observe(t,&now)){t->entered=0;return 0;}}
+    t->entered=1;if(!observe(t,&now)){t->entered=0;return 0;}
     if (t->data) aic8800_data_consumed(t->data, t, t->unrelated.record);
     if (t->wifi) aic8800_wifi_consumed(t->wifi, t, t->unrelated.record);
     /* A remaining A-MSDU subframe keeps the same record held. */
@@ -637,7 +637,7 @@ static int consume_receive(struct aic8800_sdio_transport *t,const void *owner)
         t->cursor += t->unrelated.consumed; t->held = 0;
     }
     advanced(t);
-    if(owner){int ok=observe(t,&now);t->entered=0;return ok;}return 1;
+    int ok=observe(t,&now);t->entered=0;return ok;
 }
 
 void aic8800_transport_poll(struct aic8800_sdio_transport *t){poll_receive(t,NULL);}
