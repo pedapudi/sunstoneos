@@ -254,15 +254,18 @@ static int stop_read(void *context, uint32_t off, uint32_t width, uint64_t *out)
     int reset=off==0x100 && width==8 && s->unacknowledged && b->recovering &&
         b->service->phase==PVR_GPU_SERVICE_RECOVERING;
     if (reset && (!b->recovery_write || s->index>=s->count ||
-        s->steps[s->index].value!=UINT64_C(0xffeffffffffffc3d) ||
-        s->steps[s->index].mask!=UINT64_MAX)) return fail(b,A733_GPU_BACKEND_ACCESS);
+        s->steps[s->index].value || s->steps[s->index].mask ||
+        s->steps[s->index].kind!=0)) return fail(b,A733_GPU_BACKEND_ACCESS);
     if ((!read_allowed(off, width, 1) && !reset) || !output(b, out, sizeof(*out)) || s->phase != PVR_GPU_STOP_REGISTERS ||
         s->index >= s->count || s->steps[s->index].offset != off || s->steps[s->index].width != width)
         return fail(b, A733_GPU_BACKEND_ACCESS);
     if (!before(b, s->deadline)) return 0;
     uint64_t value;
     if (!raw_read(b, off, width, &value) || !before(b, s->deadline)) return 0;
-    if (reset && value==s->steps[s->index].value) {
+    /* A completed read fences the exact reset write, as RGXResetSequence
+     * does. Its returned bits are not a completion status. The deadline
+     * check above must succeed before isolation can use this proof. */
+    if (reset) {
         b->recovery_reset=1;
         sunstone_crumb(SUNSTONE_CRUMB_GPU_RECOVERY_RESET,b->service->config.compute_queue->timeline_serial);
     }

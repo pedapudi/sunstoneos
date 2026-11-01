@@ -34,7 +34,13 @@ struct a733_dma_startup {
     struct a733_clock_leases *registry;
     struct a733_platform_locks *locks;
     TaskHandle_t task;
-    unsigned initialized, failed, register_held, supervised;
+    unsigned initialized, failed, register_held, supervised, retired;
+    uint64_t retire_deadline,retire_now;
+    unsigned retire_fault; /* 1 counter, 2 deadline, 3 token, 4 platform. */
+    uintptr_t retire_read_address;
+    uint32_t retire_read_value;
+    int retire_read_result;
+    enum a733_clock_result retire_token_result;
 };
 /* Private EL1 storage, initialized before the scheduler. Copy the authenticated
  * boot record. Registry and shared locks must already use exactly
@@ -56,6 +62,10 @@ int a733_dma_startup_bind_task(struct a733_dma_startup *,TaskHandle_t);
  * Preserve all admitted tokens on failure. No automatic release or retry. */
 enum a733_dma_platform_result a733_dma_startup_poll(struct a733_dma_startup *);
 int a733_dma_startup_ready(const struct a733_dma_startup *);
+/* Original bootstrap task only, after service retirement; adopt-only and
+ * read-only. deadline_us is fixed on the first call and never extended. */
+enum a733_dma_platform_result a733_dma_startup_retire_adopted(
+    struct a733_dma_startup *,uint64_t deadline_us);
 /* dma_service_activation.prepared callback. Exact controller/channel match,
  * designated bootstrap task, copied handoff, live token and healthy common
  * clock/registry/lock state are mandatory. Registry contention remains pending.

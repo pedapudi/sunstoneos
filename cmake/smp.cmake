@@ -10,8 +10,13 @@ apply_build_patch("${smp_build}/portASM.S" "${smp_port}/portASM.S"
   "${CMAKE_CURRENT_SOURCE_DIR}/patches/freertos-smp-asm.patch")
 apply_build_patch("${smp_build}/portmacro.h" "${smp_port}/portmacro.h"
   "${CMAKE_CURRENT_SOURCE_DIR}/patches/freertos-smp-macro.patch")
+# Exercise the scheduler used by the cached native SMP image, including
+# affinity-aware time slicing and publication of the selected task register.
+apply_build_patch("${smp_build}/tasks.c" "${FREERTOS_DIR}/tasks.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/patches/freertos-smp-tasks.patch")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
   "${smp_port}/port.c" "${smp_port}/portASM.S" "${smp_port}/portmacro.h"
+  "${FREERTOS_DIR}/tasks.c" patches/freertos-smp-tasks.patch
   patches/freertos-smp-c.patch patches/freertos-smp-asm.patch patches/freertos-smp-macro.patch)
 foreach(target IN ITEMS smp-kernel-model smp-context-model)
   if(target STREQUAL "smp-context-model")
@@ -22,7 +27,7 @@ foreach(target IN ITEMS smp-kernel-model smp-context-model)
   add_executable(${target} EXCLUDE_FROM_ALL
     platform/qemu-smp/start.S platform/qemu-smp/platform.c runtime/memory.c
     ${smp_check}
-    "${FREERTOS_DIR}/tasks.c" "${FREERTOS_DIR}/queue.c" "${FREERTOS_DIR}/list.c"
+    "${smp_build}/tasks.c" "${FREERTOS_DIR}/queue.c" "${FREERTOS_DIR}/list.c"
     "${smp_build}/port.c" "${smp_build}/portASM.S")
   target_include_directories(${target} PRIVATE platform/qemu-smp include runtime/include
     "${FREERTOS_DIR}/include" "${smp_build}")
@@ -39,7 +44,7 @@ endforeach()
 add_executable(smp8-soak-model EXCLUDE_FROM_ALL
   platform/qemu-smp/start.S platform/qemu-smp/platform.c runtime/memory.c
   checks/smp8-soak.c checks/fp-context.S
-  "${FREERTOS_DIR}/tasks.c" "${FREERTOS_DIR}/queue.c" "${FREERTOS_DIR}/list.c"
+  "${smp_build}/tasks.c" "${FREERTOS_DIR}/queue.c" "${FREERTOS_DIR}/list.c"
   "${smp_build}/port.c" "${smp_build}/portASM.S")
 target_include_directories(smp8-soak-model PRIVATE platform/qemu-smp include runtime/include
   "${FREERTOS_DIR}/include" "${smp_build}")

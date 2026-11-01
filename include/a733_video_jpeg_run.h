@@ -102,4 +102,9 @@ int a733_video_jpeg_next(struct a733_video_jpeg_run *,const struct a733_video_jp
  * never releases memory or resets hardware. Initialized state must not be edited.
  */
 int a733_video_jpeg_poll(struct a733_video_jpeg_run *);
+/* Advance ready programming steps in the caller's context. At most budget
+ * polls, stopping on completion, failure or the first unchanged state/index.
+ * A hardware wait is sampled once; this function does not wait or sleep.
+ * Use the same serialized caller and retained ownership as poll. */
+int a733_video_jpeg_advance(struct a733_video_jpeg_run *, unsigned budget);
 #endif

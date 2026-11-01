@@ -2,6 +2,8 @@
 #include "queue_add-app.h"
 #include "gpu_queue.h"
 #include "program.h"
+#include "FreeRTOS.h"
+#include "task.h"
 
 #define ELEMENTS 65u
 #define WAIT_TICKS 500u
@@ -53,7 +55,17 @@ void queue_add_main(const struct ss_grant *grant)
         }
         job.sequence = sequence;
         ss_progress();
-        if (gpu_queue_submit(context, &job) != GPU_QUEUE_OK) ss_fail(4);
+        const TickType_t began = xTaskGetTickCount();
+        int submitted;
+        /* Startup thermal admission may park a healthy device until the first
+         * complete sensor set. PARKED owns no job; yield before retrying it. */
+        while ((submitted = gpu_queue_submit(context, &job)) == GPU_QUEUE_PARKED) {
+            if (ss_live() < 0 || xTaskGetTickCount() - began >= WAIT_TICKS) break;
+            ss_progress();
+            vTaskDelay(1);
+        }
+        /* Preserve the job and public refusal result in the retained fault. */
+        if (submitted != GPU_QUEUE_OK) ss_fail(0x400u | (sequence << 4) | (unsigned)submitted);
         struct gpu_queue_record record;
         if (gpu_queue_wait(context, &record, WAIT_TICKS) != GPU_QUEUE_OK ||
             record.result != GPU_QUEUE_OK || record.sequence != job.sequence)

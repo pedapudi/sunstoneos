@@ -73,7 +73,10 @@ int board_host_irq_after(void)
 }
 void board_host_irq_wait(void)
 {
-    if(irq.draining&&++irq.burst<32)return;
+    /* Bound ready software work just like event draining. Hardware completion
+     * and idle waits still need their existing bounded wake until this owner
+     * has a precise timer and notifications for its other providers. */
+    if((irq.draining||(board.host.core_started&&a733_xhci_work_pending(&board.host.core)))&&++irq.burst<32)return;
     irq.burst=0;(void)ulTaskNotifyTake(pdTRUE,1);
 }
 void board_host_irq_stop(void)
