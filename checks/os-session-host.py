@@ -90,7 +90,14 @@ def main():
     cpu_wire = host.session_bytes(prefix, {host.THERMAL: cpu_thermal, host.CPU_GRANT: cpu_grant},
                                   manifest, info['sha256'], 0, host.BIND_SID, [data])
     cpu_bound = slots.os_session_generation(cpu_wire, 38)
-    assert host.session_decode(cpu_bound)['extents'][host.CPU_GRANT] == cpu_grant
+    expected_grant = bytearray(cpu_grant)
+    struct.pack_into('<Q', expected_grant, 40, 38)
+    assert host.session_decode(cpu_bound)['extents'][host.CPU_GRANT] == expected_grant
+    no_cluster = struct.pack('<6Q4I32s', host.SERVICE_MAGIC[host.CPU_GRANT], 1, 96, 0x99, 0, 0,
+                             0, 0, 0, 0, bytes(32))
+    no_cluster_wire = host.session_bytes(prefix, {host.THERMAL: cpu_thermal, host.CPU_GRANT: no_cluster},
+                                         manifest, info['sha256'], 0, host.BIND_SID, [data])
+    assert host.session_decode(slots.os_session_generation(no_cluster_wire, 39))['extents'][host.CPU_GRANT] == no_cluster
     decoded = host.session_decode(wire, manifest, info['sha256'])
     assert decoded['extents'][host.THERMAL] == services[host.THERMAL]
     facts, uploads = host.input_facts(manifest, [data])
@@ -126,7 +133,8 @@ def main():
              'framed-result', 'framed-result-not-ready', 'truncated-result-frame', 'typed-session-producer',
              'manifest-upload', 'headset-without-I2S-extent', 'actual-bundle-producer',
              'actual-empty-input-bundle-and-result', 'changed-frozen-input',
-             'actual-slot-generation-binder', 'assigned-slot-refused', 'slot-binder-preserves-CPU-service']
+             'actual-slot-generation-binder', 'assigned-slot-refused',
+             'slot-binder-CPU-generation', 'slot-binder-no-cluster-preserved']
     image_raw = image.read_bytes()
     elf = host.image_manifest(image)['elf']
     table = elf.get_section_by_name('.symtab')

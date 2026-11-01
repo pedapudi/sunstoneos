@@ -279,7 +279,7 @@ def container_writes(manifest_path):
 
 
 def os_session_generation(raw, generation, *, legacy=False):
-    """Bind a cold typed session to its slot; service extents remain unchanged."""
+    """Bind a cold session and its requested CPU grant to the selected slot."""
     if type(generation) is not int or not 0 < generation <= MASK64:
         raise ValueError('Slot generation must be a nonzero unsigned 64-bit integer')
     if not legacy:
@@ -295,6 +295,8 @@ def os_session_generation(raw, generation, *, legacy=False):
             raise ValueError('Expected an unassigned typed CPU grant')
         result = bytearray(raw)
         struct.pack_into('<Q', result, 32, generation)
+        if grant is not None and struct.unpack_from('<I', grant, 48)[0]:
+            struct.pack_into('<Q', result, decoded['offsets'][host.CPU_GRANT] + 40, generation)
         return bytes(result)
     # Historical launch profiles explicitly select their fixed layout.
     if (len(raw) not in (808, 904, 1080, 1176) or struct.unpack_from('<3Q', raw) !=
