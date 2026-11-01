@@ -180,7 +180,7 @@ def prepare(image,manifest,session,admission,output,clang,lld,objcopy,models=())
     model_blobs=[Path(p).read_bytes() for p in models]
     require(len(model_blobs)==(2 if 'capture_samples' in profile else 0),'Transcription requires exactly the pinned base and overlay')
     for blob,(size,identity_hash) in zip(model_blobs,MODELS):require(len(blob)==size and sha(blob)==identity_hash,'I2S model source identity differs')
-    cache=validate_admission(admission_raw,raw,layout,identity,pcm,sha(image_raw));output=board.unique_directory(output)
+    cache=validate_admission(admission_raw,raw,layout,identity,pcm,sha(image_raw));output=board.new_directory(output)
     build_launcher(output,len(raw),clang,lld,objcopy)
     data={'image.elf':image_raw,'image-input-manifest.json':manifest_raw,'session.bin':raw,'admission.json':admission_raw};uploads=[]
     for i,p in enumerate(parts):

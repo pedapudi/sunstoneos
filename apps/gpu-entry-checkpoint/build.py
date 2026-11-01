@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import sys
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]/"tools"))
-from host_evidence import unique_directory
+from host_evidence import new_directory, unique_directory
 
 ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
@@ -19,7 +19,7 @@ parser.add_argument('--baseline', type=Path, default=Path.home() / '.cache/sunst
 parser.add_argument('--output', type=Path, required=True)
 args = parser.parse_args()
 base = args.baseline.resolve(); out = args.output.resolve()
-out = unique_directory(out)
+out = new_directory(out)
 build = out / 'build'; objects = build / 'objects'; objects.mkdir(parents=True)
 overlay = out / 'inputs'; overlay.mkdir()
 

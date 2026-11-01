@@ -2,7 +2,7 @@
 """Check CPU workload preparation against a preserved bundle and survey.
 
 The current tool prepares a writable native session from read-only preserved
-inputs without review, continuity, queue or survey records. Cases preserve an
+inputs without review, continuity, queue or survey records. Cases refuse an
 existing output directory, prepare either listed port and reject changed native
 payload bytes and invalid native session values. No device access occurs.
 """
@@ -58,13 +58,17 @@ def main():
     require(str(ROOT / 'tools/run-native-startup-probe.py') in command, 'Command uses frozen host sources')
     require(all(word not in command for word in ('--claim', '--owner', '--database', '--software')), 'Command requires process records')
     require(str(prepare / 'run') in command, 'Run output is outside the prepared session')
-    original = (prepare / 'prepared/request.bin').read_bytes()
+    original = {p.relative_to(prepare): p.read_bytes() if p.is_file() else None for p in prepare.rglob('*')}
     result = bind(bundle, prepare)
+    require(result.returncode != 0 and 'FileExistsError' in result.stderr, result.stdout + result.stderr)
+    require({p.relative_to(prepare): p.read_bytes() if p.is_file() else None for p in prepare.rglob('*')} == original,
+            'Refused preparation changed existing output')
+    fresh = out / 'fresh-native-session'
+    result = bind(bundle, fresh)
     require(result.returncode == 0, result.stdout + result.stderr)
-    require((prepare / 'prepared/request.bin').read_bytes() == original, 'Prior prepared session was overwritten')
-    children = list(prepare.glob('*/prepared/request.bin'))
-    require(len(children) == 1 and children[0].read_bytes() != original, 'A unique session contract was not generated')
-    cases = ['no-release-records', 'arbitrary-output-path', 'preserved-output-reuse', 'fresh-native-session']
+    require((fresh / 'prepared/request.bin').read_bytes() != (prepare / 'prepared/request.bin').read_bytes(),
+            'Fresh session contract was not generated')
+    cases = ['no-release-records', 'arbitrary-output-path', 'existing-output-refused-without-changes', 'fresh-native-session']
 
     # Old notes may be kept without becoming launch prerequisites.
     result = bind(bundle, out / 'metadata-only', extra=('--survey', str(out / 'missing-survey.json'),

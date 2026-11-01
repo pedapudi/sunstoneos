@@ -190,7 +190,7 @@ def build_launcher(output,clang,lld,objcopy,*,contract_magic=CONTRACT_MAGIC,
     require(0<(output/'launch.bin').stat().st_size<=0xc00,'Launcher exceeds SRAM reservation.')
 
 
-output_directory=module('accelerator_host_evidence',ROOT/'tools/host_evidence.py').unique_directory
+output_directory=module('accelerator_host_evidence',ROOT/'tools/host_evidence.py').new_directory
 
 def prepare(image,manifest,session,admission,output,clang,lld,objcopy):
     image_raw=Path(image).read_bytes();manifest_raw=Path(manifest).read_bytes() if manifest else b'{}';raw=Path(session).read_bytes();admission_raw=Path(admission).read_bytes() if admission else b'{}'

@@ -5,11 +5,11 @@ import importlib.util
 from pathlib import Path
 _output_spec=importlib.util.spec_from_file_location('device_evidence_directory',Path(__file__).resolve().parents[2]/'tools/host_evidence.py')
 _output_module=importlib.util.module_from_spec(_output_spec);_output_spec.loader.exec_module(_output_module)
-unique_directory=_output_module.unique_directory
+new_directory=_output_module.new_directory
 ROOT=Path(__file__).resolve().parents[2]
 def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
 def freeze(build,out):
- out=unique_directory(out);image=build/'sunstone-a733-pwm.elf';assert image.is_file()
+ out=new_directory(out);image=build/'sunstone-a733-pwm.elf';assert image.is_file()
  inputs=set();objects=[];commands=[]
  for c in json.loads((build/'compile_commands.json').read_text()):
   args=shlex.split(c['command']);obj=Path(c['directory'])/args[args.index('-o')+1]

@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Check native GPU packaging and damaged input refusals without process records."""
+import sys
 import argparse,copy,hashlib,importlib.util,json,struct
 from pathlib import Path
 if not __debug__:raise SystemExit('GPU preparation checks require assertions enabled.')
 ROOT=Path(__file__).resolve().parents[2]
+sys.path.insert(0,str(ROOT/'checks'))
+from harness import artifact_refused
 spec=importlib.util.spec_from_file_location('finite_prepare_check',ROOT/'apps/gpu-finite/prepare.py')
 prep=importlib.util.module_from_spec(spec);spec.loader.exec_module(prep)
 def marker_cases(current,historical,e):
@@ -95,10 +98,9 @@ for name in ('launch.c','build.log','manifest.json','session-template.bin'):
  path.rename(archive/name);prep.validate_bundle(bundle)
  results['archived-'+name+'-edit-and-removal-accepted']=True
 
-# Reusing an output root preserves the first bundle and creates a child.
-second=prep.prepare(image,None,None,template,bundle,clang,lld)
-assert Path(second['output']).parent==bundle and (bundle/'prepared.json').is_file()
-results['existing-output-preserved']=True
+# Artifact destinations refuse reuse before modifying the original bundle.
+artifact_refused(lambda:prep.prepare(image,None,None,template,bundle,clang,lld),bundle)
+results['existing-output-refused-without-changes']=True
 for name in ('session.bin','contract.bin','launch.bin','segment-0.bin'):
  path=bundle/name;original=path.read_bytes();path.write_bytes(original+b'x')
  refused('changed-'+name,lambda:prep.validate_bundle(bundle));path.write_bytes(original)

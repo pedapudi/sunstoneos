@@ -235,7 +235,7 @@ def build_launcher(output,clang,lld):
         require(result.returncode==0,'GPU launcher build failed; inspect build.log.')
     require(0<(output/'launch.bin').stat().st_size<=0xc00,'GPU launcher exceeds reserved SRAM.')
 
-output_directory=module('accelerator_host_evidence',ROOT/'tools/host_evidence.py').unique_directory
+output_directory=module('accelerator_host_evidence',ROOT/'tools/host_evidence.py').new_directory
 
 def prepare(image,manifest,admission,session_template,output,clang,lld):
     output=Path(output);image_data=Path(image).read_bytes();manifest_data=json.dumps(native_manifest(image_data)).encode()

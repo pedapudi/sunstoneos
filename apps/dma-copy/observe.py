@@ -65,7 +65,7 @@ def prepare(image, manifest_path, output, launcher_bundle, refusal=False):
             profile['dma_handoff']==profile['usb_dma_handoff'] and profile['dma_evidence'] and profile['dma_handoff'],
             'USB/DMA image records refuse admission; only --refusal preparation is available.')
     segments,address,build_id=image_parts(image)
-    output=board.unique_directory(output)
+    output=board.new_directory(output)
     shutil.copy2(image,output/'image.elf')
     (output/'image-input-manifest.json').write_bytes(manifest_path.read_bytes() if manifest_path is not None else b'{}')
     for name in ('launch.bin','launch.S','launch.c','launch.ld','boot.h'):

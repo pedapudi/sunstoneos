@@ -272,7 +272,7 @@ def prepare(args):
     require(all(report[0]+report[1]<=a or a+n<=report[0] for _,a,n in reservations),
             'Identity report overlaps an existing allocation.')
     require(len(frozen['overlay.bin'])<=extension-primary.probe.OVERLAY[0], 'Base overlay exceeds extension boundary.')
-    args.output = _output.unique_directory(args.output)
+    args.output = _output.new_directory(args.output)
     link=args.output/'identity.ld'
     vectors=' . = 0x41020800; .irq_vectors : { KEEP(*(.irq_vectors)) }\n ASSERT(. == 0x41021000, "Vector table extent differs")\n' if interrupts else ''
     if top_opp:

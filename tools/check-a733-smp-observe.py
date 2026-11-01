@@ -36,7 +36,7 @@ def request_bytes(build_address, build_id, epoch, generation, lease):
 def prepare(image, manifest_path, output, clang, lld):
     require('#ifndef A733_SMP_CONTRACT_MAGIC' in (ROOT/'platform/a733-smp-cached/boot.h').read_text(), 'Guarded observer contract header missing.')
     segments, build_address, build_id = image_parts(image)
-    output = base.output_directory(output)
+    output = base.artifact_directory(output)
     for name in ('launch.S', 'launch.c', 'launch.ld'):
         shutil.copy2(ROOT / 'platform/a733-smp-observe' / name, output / name)
     shutil.copy2(ROOT/'platform/a733-smp-cached/boot.h',output/'boot.h')

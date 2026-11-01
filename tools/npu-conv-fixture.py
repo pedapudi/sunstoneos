@@ -8,7 +8,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
-from host_evidence import unique_directory
+from host_evidence import new_directory, unique_directory
 
 import numpy as np
 import onnx
@@ -56,7 +56,7 @@ def main():
     model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 11)])
     model.ir_version = 7
     onnx.checker.check_model(model)
-    args.output = unique_directory(args.output)
+    args.output = new_directory(args.output)
     onnx.save(model, str(args.output / "conv3x3.onnx"))
     arrays = dict(input=input_tensor, weights=weights, bias=bias, expected=expected,
                   accumulator=accumulator, input_nhwc=input_tensor.transpose(0, 2, 3, 1))

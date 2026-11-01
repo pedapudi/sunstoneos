@@ -7,7 +7,7 @@ ROOT=Path(__file__).resolve().parents[2]
 def module(name,path):
  s=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 def produce(image,out,dma_bytes=0):
- out=module('uart_fixture_evidence',ROOT/'tools/host_evidence.py').unique_directory(out);prep=module('uart_fixture_prepare',ROOT/'apps/uart/prepare.py');ih=hashlib.sha256(image.read_bytes()).hexdigest();parts,entry,identity=prep.base.image_parts(image)
+ out=module('uart_fixture_evidence',ROOT/'tools/host_evidence.py').new_directory(out);prep=module('uart_fixture_prepare',ROOT/'apps/uart/prepare.py');ih=hashlib.sha256(image.read_bytes()).hexdigest();parts,entry,identity=prep.base.image_parts(image)
  baseline=Path.home()/'.cache/sunstoneos/evidence/board-supervised-20261017/batch1/session-fixture.bin'
  raw=bytearray(baseline.read_bytes());assert len(raw)==592;raw[48:80]=identity;raw.extend(bytes(240));struct.pack_into('<6Q',raw,592,0x4153373355414131,1,832,23,91,5000000)
  # Same enabled fabric profile as accepted shared-provider fixtures.

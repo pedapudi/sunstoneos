@@ -191,7 +191,9 @@ def input_path(item, cache):
     return path
 
 
-unique_directory = module('board_host_evidence', ROOT/'tools/host_evidence.py').unique_directory
+_directories = module('board_host_evidence', ROOT/'tools/host_evidence.py')
+unique_directory = _directories.unique_directory
+new_directory = _directories.new_directory
 
 
 def snapshot_files(prepared):
@@ -306,7 +308,7 @@ def prepare(image,manifest_path,admission_path,session_template,output,clang,lld
 
     epoch,generation,lease=(secrets.randbits(64) or 1 for _ in range(3))
     struct.pack_into('<3Q',raw,24,epoch,generation,lease)
-    output=unique_directory(output);build_launcher(output,clang,lld)
+    output=new_directory(output);build_launcher(output,clang,lld)
     for data,name in [(image_data,'image.elf'),(manifest_data,'image-input-manifest.json'),(admission_data,'admission.json'),(template_data,'session-template.bin')]:(output/name).write_bytes(data)
     segments,address,identity=base.image_parts(output/'image.elf')
     raw[48:80]=identity

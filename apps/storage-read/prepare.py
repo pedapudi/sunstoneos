@@ -155,7 +155,7 @@ def prepare(image,manifest,admission,template,output,clang,lld):
     epoch,generation,lease=(secrets.randbits(64) or 1 for _ in range(3))
     struct.pack_into('<3Q',raw,24,epoch,generation,lease)
     helper=module('storage_output_directory',ROOT/'tools/host_evidence.py')
-    out=helper.unique_directory(output)
+    out=helper.new_directory(output)
     for name,data in snapshots.items():(out/name).write_bytes(data)
     segments,address,identity=base.image_parts(SimpleNamespace(read_bytes=lambda:snapshots['image.elf']))
     # Runtime authenticates linked build identity, not the ELF file hash.

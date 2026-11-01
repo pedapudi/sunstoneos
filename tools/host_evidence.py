@@ -1,7 +1,14 @@
-"""Create a run directory without replacing evidence from an earlier run."""
+"""Create strict artifact destinations and distinct evidence directories."""
 from datetime import datetime, timezone
 from pathlib import Path
 import tempfile
+
+
+def new_directory(requested):
+    """Create the exact artifact path, refusing any existing file or directory."""
+    requested = Path(requested)
+    requested.mkdir(parents=True)
+    return requested
 
 
 def unique_directory(requested):

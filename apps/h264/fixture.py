@@ -12,6 +12,7 @@ from pathlib import Path
 _output_spec=importlib.util.spec_from_file_location('device_evidence_directory',Path(__file__).resolve().parents[2]/'tools/host_evidence.py')
 _output_module=importlib.util.module_from_spec(_output_spec);_output_spec.loader.exec_module(_output_module)
 unique_directory=_output_module.unique_directory
+new_directory=_output_module.new_directory
 import subprocess
 
 
@@ -73,7 +74,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('output', type=Path)
     p.add_argument('--ffmpeg', required=True, type=Path)
-    a = p.parse_args(); a.output=unique_directory(a.output)
+    a = p.parse_args(); a.output=new_directory(a.output)
     stream, slice_nal, pixels, header_bits = construct()
     for name, data in [('input.h264', stream), ('slice.bin', slice_nal), ('expected.yuv', pixels)]:
         (a.output/name).write_bytes(data)

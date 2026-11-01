@@ -8,7 +8,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
-from host_evidence import unique_directory
+from host_evidence import new_directory, unique_directory
 import subprocess
 
 
@@ -27,7 +27,7 @@ def main():
     if selected is None: raise ValueError('Model is absent from reviewed catalogue')
     raw = a.input.read_bytes()
     if len(raw) != selected['input']['bytes']: raise ValueError('Input shape differs')
-    if not a.check_saved: a.output = unique_directory(a.output)
+    if not a.check_saved: a.output = new_directory(a.output)
     text = a.output/'input.qnt.tensor'
     encoded = ''.join(str(v)+'\n' for v in raw).encode()
     if a.check_saved:

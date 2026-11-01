@@ -17,7 +17,7 @@ import sys
 import types
 from unittest.mock import patch
 
-from harness import refused
+from harness import artifact_refused, refused
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,38 +43,23 @@ except ImportError:
     onnx.save = lambda model, path: Path(path).write_bytes(b'Modeled ONNX serialization\n')
     onnx.__version__ = 'modeled writer; actual ONNX validation unrun'
 
-# Test directory selection through each complete production generator. Neither
-# run may overwrite a file from the existing parent or its previous child.
+# Execute each generator at a fresh path and require an existing path to fail.
 generators = ('npu-conv-fixture.py', 'npu-dual-fixture.py',
               'npu-relative-shift-fixture.py', 'npu-two-stage-fixture.py')
 for name in generators:
-    requested = out / name.removesuffix('.py')
-    requested.mkdir()
-    (requested / 'earlier.txt').write_text('Preserve the previous fixture.\n')
-    generated = []
-    original = None
-    for attempt in range(2):
-        before = set(requested.iterdir())
+    directory = out / name.removesuffix('.py')
+    def generate():
         capture = io.StringIO()
-        with patch.dict(sys.modules, {'onnx': onnx}), patch.object(sys, 'argv', [name, str(requested)]), redirect_stdout(capture):
+        with patch.dict(sys.modules, {'onnx': onnx}), patch.object(sys, 'argv', [name, str(directory)]), redirect_stdout(capture):
             runpy.run_path(str(ROOT / 'tools' / name), run_name='__main__')
-        (out / (name + f'-{attempt}.log')).write_text(capture.getvalue())
-        created = set(requested.iterdir()) - before
-        assert len(created) == 1 and next(iter(created)).is_dir(), created
-        directory = created.pop()
-        assert f'Output: {directory}' in capture.getvalue()
-        files = {p.name: p.read_bytes() for p in directory.iterdir() if p.is_file()}
-        assert any(n.endswith('.onnx') for n in files) and any(n.endswith('.npy') for n in files)
-        for path in directory.glob('*.npy'):
-            assert np.isfinite(np.load(path, allow_pickle=False)).all()
-        if original is None:
-            original = files
-        else:
-            assert files == original
-            assert {p.name: p.read_bytes() for p in generated[0].iterdir() if p.is_file()} == original
-        generated.append(directory)
-    assert generated[0] != generated[1]
-    assert (requested / 'earlier.txt').read_text() == 'Preserve the previous fixture.\n'
+        return capture.getvalue()
+    text = generate()
+    (out / (name + '.log')).write_text(text)
+    assert f'Output: {directory}' in text
+    assert list(directory.glob('*.onnx')) and list(directory.glob('*.npy'))
+    for path in directory.glob('*.npy'):
+        assert np.isfinite(np.load(path, allow_pickle=False)).all()
+    artifact_refused(generate, directory)
 
 spec = importlib.util.spec_from_file_location('npu_conv_input', ROOT / 'tools/npu-conv-input.py')
 sdk = importlib.util.module_from_spec(spec)
@@ -108,19 +93,17 @@ def invoke(directory, saved=False):
     with patch.object(sys, 'argv', argv), patch.object(sdk.subprocess, 'run', simulate), redirect_stdout(capture):
         sdk.main()
     return capture.getvalue()
-for attempt in range(2):
-    before = set(requested.iterdir())
-    invoke(requested)
-    created = set(requested.iterdir()) - before
-    assert len(created) == 1
-    run = created.pop()
-    assert run.is_dir() and (run / 'input-check.json').is_file()
-assert len(calls) == 2
+refused(lambda: invoke(requested), str(requested), FileExistsError)
+assert list(requested.iterdir()) == [requested / 'earlier.txt'] and not calls
+run = fixture / 'fresh-run'
+invoke(run)
+assert (run / 'input-check.json').is_file() and len(calls) == 1
+artifact_refused(lambda: invoke(run), run)
 baseline = {p.relative_to(run): p.read_bytes() for p in run.iterdir() if p.is_file()}
 for attempt in range(2):
     text = invoke(run, saved=True)
     assert 'Report:' in text
-assert len(calls) == 2
+assert len(calls) == 1
 reports = list((run / 'input-checks').rglob('input-check.json'))
 assert len(reports) == 2 and all(json.loads(p.read_text())['reexecuted'] is False for p in reports)
 assert {p: (run / p).read_bytes() for p in baseline} == baseline
@@ -133,9 +116,9 @@ refused(lambda: invoke(run, saved=True), 'SDK output binding or extent differs')
 (run / 'output0_2_2_1_1.dat').write_bytes(bytes(4))
 (run / 'input.qnt.tensor').write_text('0\n')
 refused(lambda: invoke(run, saved=True), 'Saved quantized input differs')
-assert len(calls) == 2
+assert len(calls) == 1
 (out / 'result.json').write_text(json.dumps(dict(passed=True, real_onnx=real_onnx,
     generators=list(generators), sdk_execution='modeled', saved_checks_reexecute=False,
     original_evidence_preserved=True), indent=2) + '\n')
-print('PASS: four generator paths preserve output and SDK saved checks preserve reports and reject changed data.')
+print('PASS: four generator paths refuse existing output and SDK saved checks preserve reports and reject changed data.')
 print('ONNX validation: ' + ('executed' if real_onnx else 'unrun; graph writer modeled'))

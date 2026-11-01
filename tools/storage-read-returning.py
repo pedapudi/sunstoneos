@@ -413,6 +413,9 @@ def main(argv=None):
                 'restored return requires --profile 2 --plan first-read')
         require(args.return_policy != CHAIN_RETURN or (args.profile == 2 and args.plan == 'chain-read'),
                 'chain return requires --profile 2 --plan chain-read')
+        if (args.output.exists() or args.output.is_symlink() or
+                args.output.with_suffix('.json').exists() or args.output.with_suffix('.json').is_symlink()):
+            raise FileExistsError(f'Artifact output already exists: {args.output}')
         config = json.loads(args.config.read_text())
         if args.fabric_read:
             (config['fabric'], config['fabric_hz']), registers = fabric_read(args.fabric_read)
@@ -422,13 +425,10 @@ def main(argv=None):
             require(words == config['fabric'] and rates == config['fabric_hz'],
                     'fabric words and rates differ')
         args.output.parent.mkdir(parents=True, exist_ok=True)
-        if args.output.exists() or args.output.with_suffix('.json').exists():
-            import secrets as output_secrets
-            args.output = args.output.with_name(args.output.stem + '-' + output_secrets.token_hex(4) + args.output.suffix)
         raw = input_bytes(args.profile, secrets.randbits(63) | 1, config,
                           FIRST_READ_PLAN if args.plan == 'first-read' else
                           CHAIN_READ_PLAN if args.plan == 'chain-read' else dma_plan())
-        args.output.write_bytes(raw)
+        with args.output.open('xb') as stream: stream.write(raw)
         args.output.with_suffix('.json').write_text(json.dumps({
             'input_sha256': hashlib.sha256(raw).hexdigest(), 'profile': args.profile,
             'return_policy': args.return_policy, 'config_sha256': digest(args.config),

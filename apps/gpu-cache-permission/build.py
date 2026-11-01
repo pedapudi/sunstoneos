@@ -10,7 +10,7 @@ sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'tools'))
 from returning_build import digest, copy_closure
-from host_evidence import unique_directory
+from host_evidence import new_directory, unique_directory
 
 def replace_once(text, old, new):
     if text.count(old) != 1:
@@ -22,7 +22,7 @@ def main():
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--baseline', type=Path, default=Path.home() / '.cache/sunstoneos/evidence/sol-gpu-exact-sum-prep-20261028/bundle')
     a = p.parse_args(); out = a.output.resolve(); base = a.baseline.resolve()
-    out=unique_directory(out)
+    out=new_directory(out)
     record = json.loads((base / 'build.json').read_text())
     assert digest(base / 'image.elf') == record['image_sha256']
     oldroot = str(Path(record['compile'][0][record['compile'][0].index('-c') + 1]).parents[2])

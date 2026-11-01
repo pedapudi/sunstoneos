@@ -6,7 +6,7 @@ ROOT=Path(__file__).resolve().parents[2]
 def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
 def freeze(build,out,target="sunstone-a733-storage-read",profile="storage-read-supervised-v2",identity_dir="storage-read-application",host_target="a733-board-usb2-host",extra_inputs=()):
  spec=importlib.util.spec_from_file_location('storage_manifest_output',ROOT/'tools/host_evidence.py')
- helper=importlib.util.module_from_spec(spec);spec.loader.exec_module(helper);out=helper.unique_directory(out)
+ helper=importlib.util.module_from_spec(spec);spec.loader.exec_module(helper);out=helper.new_directory(out)
  image=build/(target+'.elf');assert image.is_file()
  inputs=set();objects=[];commands=[]
  for c in json.loads((build/'compile_commands.json').read_text()):

@@ -108,7 +108,7 @@ def prepare(image, manifest, admission, template, profile, payloads, output, cla
     require(payloads == record.get('payloads') and all(hashlib.sha256(data).hexdigest() == item['sha256'] for item, data in zip(payloads, snapshots)), 'Firmware differs from reviewed admission.')
     epoch, generation, lease = (secrets.randbits(64) or 1 for _ in range(3))
     session = bytearray(template_data);struct.pack_into('<3Q', session, 24, epoch, generation, lease);session[48:80] = bytes.fromhex(image_hash)
-    output=board.unique_directory(output)
+    output=board.new_directory(output)
     build_launcher(output, clang, lld)
     for name, data in [('image.elf', image_data), ('image-manifest.json', manifest_data), ('admission.json', admission_data),
                        ('session-template.bin', template_data), ('session.bin', session), ('profile.bin', profile_data)]:

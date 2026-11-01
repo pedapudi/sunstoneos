@@ -10,8 +10,8 @@ Host tools use direct image, session, target and hardware-condition checks.
 Queue claims, review records and archived sources do not authorize the changed
 runners. DRAM readiness uses a reversible memory comparison; CPU launchers
 inspect the live caller stack before uploading their reservations. Uncertain
-restoration retains board ownership. Existing output directories receive unique
-children. [The tool audit](tool-gates.md) lists each condition and the remaining
+restoration retains board ownership. Artifact output paths must be unused;
+evidence directories can receive unique children. [The tool audit](tool-gates.md) lists each condition and the remaining
 changes in files assigned to other agents.
 
 All three baseline images build. Recorded mimus recognition matches its reference

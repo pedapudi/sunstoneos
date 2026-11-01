@@ -13,6 +13,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+from harness import artifact_refused
 import shutil
 import sqlite3
 import struct
@@ -55,6 +56,7 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     for name in ('image','session','evidence','clang','lld','objcopy'):parser.add_argument('--'+name,type=Path,required=True)
     parser.add_argument('--manifest',type=Path)
+    parser.add_argument('--case',action='append',help='Run a named case; exact-package always supplies its bundle')
     parser.add_argument('--binding-only',action='store_true');parser.add_argument('--bundle',type=Path)
     a=parser.parse_args();e=a.evidence.resolve();e.mkdir(parents=True,exist_ok=True)
     host=load('npu_focused_host',ROOT/'tools/check-a733-npu-supervised.py');prep=host.preparation;shared=host.supervisor
@@ -74,6 +76,7 @@ def main():
         for i,p in enumerate(source_paths+[a.image,a.session]):shutil.copy2(p,snapshot/(str(i)+'-'+p.name))
     def save():shared.save_json(state_path,state)
     def case(name,operation):
+        if a.case and name!='exact-package' and name not in a.case:return
         if state['cases'].get(name,{}).get('result')=='pass':return
         attempt=1
         while (e/(name+'-'+str(attempt))).exists():attempt+=1
@@ -115,10 +118,8 @@ def main():
     def repeated_output(directory):
         sentinel=bundle/'prior-evidence.txt';sentinel.write_bytes(b'preserved')
         session,_=admission_fixture(prep,image,a.session.read_bytes(),layout,build,directory)
-        second=prep.prepare(a.image,None,session,None,bundle,a.clang,a.lld,a.objcopy)
-        assert sentinel.read_bytes()==b'preserved' and second['image_sha256']==prepared['image_sha256']
-        assert len(list(bundle.glob('*/prepared.json')))==1
-    case('existing-output-preserved',repeated_output)
+        artifact_refused(lambda:prep.prepare(a.image,None,session,None,bundle,a.clang,a.lld,a.objcopy),bundle)
+    case('existing-output-refused-without-changes',repeated_output)
     def archive_changes(directory):
         for path in bundle.iterdir():
             if path.is_file() and path.name not in prepared['files'] and path.name!='prepared.json':

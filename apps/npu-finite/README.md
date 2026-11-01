@@ -49,7 +49,7 @@ requires `--image`, `--session`, `--output`, `--clang`, `--lld` and `--objcopy`.
 Both accept optional `--manifest` metadata and `--admission` identity configuration.
 Native ELF markers select the profile. The session's build identity, owner
 separation, zero uploaded PMIC deadline and thermal configuration are checked
-directly. Existing output paths receive unique timestamped children.
+directly. Bundle output paths must be unused; preparation refuses an existing path.
 
 `validate --bundle PATH` checks copied ELF load bytes, session, launch packets,
 geometry and bundle hashes without board access. The hashes protect the
@@ -71,7 +71,7 @@ The monitor report, platform log and receipt must agree on completion status, ep
 The [entry procedure](ENTRY.md) describes explicit session construction, the
 forced-ROM instruction check and the missing physical authority. The host
 constructs session bytes from a supplied typed boot payload, validates them before
-writing and preserves existing output files in a unique directory.
+writing and refuses an existing output file.
 The return/profile/client fixtures select only their consumed DWARF layouts,
 so unrelated private structure names cannot block those checks.
 

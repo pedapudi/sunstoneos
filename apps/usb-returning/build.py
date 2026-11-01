@@ -15,7 +15,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'tools'))
 from returning_build import (CENTRAL_PLATFORM, PROVIDER_UNITS, ROOT, digest,
     object_closure, require_unchanged_headers, platform_arguments, platform_from, save)
-from host_evidence import unique_directory
+from host_evidence import new_directory, unique_directory
 
 TINYUSB_UNITS = ('portable/sunxi/dcd_sunxi_musb.c', 'tusb.c', 'common/tusb_fifo.c',
                  'device/usbd.c', 'class/vendor/vendor_device.c')
@@ -51,7 +51,7 @@ def main(argv=None):
     evidence = args.evidence.resolve()
     if evidence == ROOT or ROOT in evidence.parents:
         parser.error('evidence must be outside the repository')
-    evidence = unique_directory(evidence)
+    evidence = new_directory(evidence)
     central = args.platform_build is not None
     platform = platform_from(args, evidence)
     monitor = monitor_input(platform, args.base_monitor) if args.base_monitor else None

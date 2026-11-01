@@ -6,10 +6,12 @@ Import this module before a check makes any pass/fail decision. Checks rely on
 Python assert statements, so importing it under `python3 -O` or PYTHONOPTIMIZE
 stops the check instead of letting removed assertions record a pass.
 """
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import stat
 import struct
 import subprocess
 import traceback
@@ -47,6 +49,26 @@ def refused(action, reason, kind=ValueError):
         assert reason in message, f'refused for another reason: {message!r}; expected {reason!r}'
         return message
     raise AssertionError(f'accepted; expected a refusal containing {reason!r}')
+
+
+def artifact_refused(action, directory):
+    """Require destination refusal while preserving every entry and file digest."""
+    def snapshot():
+        entries = {}
+        for path in directory.rglob('*'):
+            mode = stat.S_IFMT(path.lstat().st_mode)
+            if mode == stat.S_IFLNK:
+                content = os.readlink(path)
+            elif mode == stat.S_IFREG:
+                with path.open('rb') as stream:
+                    content = hashlib.file_digest(stream, 'sha256').hexdigest()
+            else:
+                content = None
+            entries[path.relative_to(directory)] = (mode, content)
+        return entries
+    before = snapshot()
+    refused(action, str(directory), FileExistsError)
+    assert snapshot() == before, 'Refused artifact creation changed its destination'
 
 
 class Image:

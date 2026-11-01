@@ -77,7 +77,7 @@ def prepare(a):
                 'Native allocation exceeds the diagnostic backup plan.')
     require(all(address+size<=OVERLAY[0] or OVERLAY[0]+OVERLAY[1]<=address
                 for name,address,size in DRAM if name!='overlay'),'Overlay overlaps a native reservation.')
-    a.build=returning.output_directory(a.build)
+    a.build=returning.artifact_directory(a.build)
     profile=execution_profile(a.stop_before_power,a.stop_after_cpu_interface,a.stop_before_wake,a.stop_after_wake,a.el3_cache,a.el1_cache)
     commands=[['patch','--silent','--output',a.build/'continue-core.c',ROOT/'platform/a733/cpu_continue.c',
         ROOT/'platform/a733-smp-cached/continuation-core.patch'],

@@ -25,7 +25,7 @@ def main():
     parser.add_argument("--lld", default="/home/sunil/.cache/sunstoneos/host/usr/bin/ld.lld-21")
     parser.add_argument("--objcopy", default="/usr/lib/llvm-21/bin/llvm-objcopy")
     args = parser.parse_args()
-    args.output = _output.unique_directory(args.output)
+    args.output = _output.new_directory(args.output)
     obj, elf, binary = (args.output / name for name in ("cold-entry.o", "cold-entry.elf", "monitor.bin"))
     commands = [
         [args.clang, "--target=aarch64-none-elf", "-g", "-ffreestanding",

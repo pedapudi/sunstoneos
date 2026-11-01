@@ -70,7 +70,7 @@ class ProtectedDirectory:
             require(not self.path.is_symlink(),'Artifact output directory must not be a symlink.')
             spec = importlib.util.spec_from_file_location('storage_update_output', Path(__file__).with_name('host_evidence.py'))
             helper = importlib.util.module_from_spec(spec); spec.loader.exec_module(helper)
-            self.path = helper.unique_directory(self.path)
+            self.path = helper.new_directory(self.path)
             self.path.chmod(0o700)
             parent = os.open(self.path.parent, os.O_DIRECTORY | os.O_RDONLY)
             try:

@@ -22,7 +22,7 @@ import struct
 import subprocess
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
-from host_evidence import unique_directory
+from host_evidence import new_directory, unique_directory
 
 ROOT = Path(__file__).resolve().parents[2]
 K = 0xa5c35a3c00000000
@@ -322,7 +322,7 @@ def image_layout(elf):
 
 
 def prepare(args):
-    args.output = unique_directory(args.output)
+    args.output = new_directory(args.output)
     lib = library(args.output / 'host-build')
     log = json.loads(args.run_log.read_text())
     contract, plan = next_contract(log, lib, args.mask, args.budget)

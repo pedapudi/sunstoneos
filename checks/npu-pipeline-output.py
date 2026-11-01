@@ -26,13 +26,13 @@ bin_dir.mkdir()
 from pathlib import Path
 assert Path(sys.argv[1]).name == os.environ['SUNSTONE_TEST_GENERATOR']
 root = Path(sys.argv[2])
-generated = root / 'generated fixture'
+generated = root
 generated.mkdir()
 (generated / 'generation.json').write_text(json.dumps(sys.argv[1:]))
 print('Generation completed.')
 print('Output: ' + str(generated))
 if os.environ.get('SUNSTONE_TEST_MULTIPLE_OUTPUTS'):
-    print('Output: ' + str(root))
+    print('Output: ' + str(root.parent))
 ''')
 (bin_dir / 'timeout').write_text(f'#!{sys.executable}\n' + '''import json, os, sys
 from pathlib import Path
@@ -58,20 +58,26 @@ for name, pipeline, arguments, generator, generated_arguments in cases:
     env = dict(os.environ, PATH=str(bin_dir) + os.pathsep + os.environ['PATH'],
                SUNSTONE_TEST_GENERATOR=generator, SUNSTONE_TEST_COMPILER_BOUNDARY=str(boundary))
     command = ['bash', str(ROOT / 'tools' / pipeline), str(requested), *arguments]
+    refused_boundary = out / (name + '-must-not-compile-existing.json')
+    refusal_env = dict(env, SUNSTONE_TEST_COMPILER_BOUNDARY=str(refused_boundary))
+    refused_result = subprocess.run(command, capture_output=True, text=True, env=refusal_env)
+    assert refused_result.returncode != 0 and 'FileExistsError' in refused_result.stderr
+    assert list(requested.iterdir()) == [sentinel] and sentinel.read_bytes() == b'Earlier fixture and compiler inputs'
+    assert not refused_boundary.exists()
+    generated = out / (name + ' fresh output')
+    command[2] = str(generated)
     result = subprocess.run(command, capture_output=True, text=True, env=env)
     (out / (name + '.log')).write_text(result.stdout + result.stderr)
     assert result.returncode == 73, result.stdout + result.stderr
     observed = json.loads(boundary.read_text())
-    generated = requested / 'generated fixture'
     assert observed['directory'] == str(generated)
     invocation = json.loads((generated / 'generation.json').read_text())
-    assert invocation[1:] == [str(requested), *generated_arguments]
+    assert invocation[1:] == [str(generated), *generated_arguments]
     assert observed['command'][2:4] == ['/root/acuity-toolkit-whl-6.30.22/bin/pegasus.py', 'import']
     assert sentinel.read_bytes() == b'Earlier fixture and compiler inputs'
     assert not (requested / 'import.log').exists()
     # Ambiguous output must stop before a compiler can use the stale parent.
     multiple = out / (name + ' ambiguous output')
-    multiple.mkdir()
     refused_boundary = out / (name + '-must-not-compile.json')
     env.update(SUNSTONE_TEST_MULTIPLE_OUTPUTS='1', SUNSTONE_TEST_COMPILER_BOUNDARY=str(refused_boundary))
     result = subprocess.run(['bash', str(ROOT / 'tools' / pipeline), str(multiple), *arguments],
@@ -80,4 +86,4 @@ for name, pipeline, arguments, generator, generated_arguments in cases:
     assert not refused_boundary.exists()
 (out / 'result.json').write_text(json.dumps(dict(passed=True, cases=[c[0] for c in cases],
     compiler_execution='modeled boundary; not executed'), indent=2) + '\n')
-print('PASS: five pipeline selections compile from the generated child and refuse ambiguous output.')
+print('PASS: five pipeline selections compile from the exact generated destination and refuse ambiguous output.')

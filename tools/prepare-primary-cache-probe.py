@@ -207,7 +207,7 @@ def prepare(args):
     literal = offset+4*displacement
     require(struct.unpack_from('<Q', frozen['overlay.bin'], literal)[0] == REPORT[0],
             'Displaced instruction loads another report.')
-    args.output = _output.unique_directory(args.output)
+    args.output = _output.new_directory(args.output)
     link = args.output/'cache.ld'
     link.write_text('ENTRY(primary_cache_probe)\nSECTIONS {\n . = 0x41020800;\n'
         ' .text : { *(.text .text.*) *(.rodata .rodata.*) }\n'

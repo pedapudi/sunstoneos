@@ -16,7 +16,7 @@ from pathlib import Path
 import secrets
 import shlex
 import shutil
-from host_evidence import unique_directory
+from host_evidence import new_directory, unique_directory
 
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = Path.home() / '.cache/sunstoneos'
@@ -67,7 +67,7 @@ def main(argv=None):
     template = bundle / 'template/prepared'
     supervised.validate_bundle(template)
     host.load(bundle / 'build', template / 'image.elf', manifest)
-    output = unique_directory(args.output.resolve())
+    output = new_directory(args.output.resolve())
     prepared_dir = output / 'prepared'
     # Copy bytes rather than source modes: preserved inputs can be read-only.
     prepared_dir.mkdir()

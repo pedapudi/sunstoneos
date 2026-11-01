@@ -33,15 +33,18 @@ def main():
         out=stream.unique_directory(a.output)
         clip=out/'input.h264';clip.write_bytes(fixture.construct()[0])
         reused=out/'reused';reused.mkdir();(reused/'previous').write_bytes(b'previous input evidence')
-        manifest=stream.prepare_inputs(clip,reused)
-        children=[p for p in reused.iterdir() if p.is_dir()]
-        assert len(children)==1 and (reused/'previous').read_bytes()==b'previous input evidence'
-        assert stream.validate_inputs(children[0],manifest)
-        frame=children[0]/'frame-000.h264';frame.write_bytes(frame.read_bytes()+b'changed')
-        refused(lambda:stream.validate_inputs(children[0],manifest))
+        try:stream.prepare_inputs(clip,reused)
+        except FileExistsError as error:assert str(reused) in str(error)
+        else:raise AssertionError('Existing generated-input destination accepted')
+        assert list(reused.iterdir())==[reused/'previous']
+        assert (reused/'previous').read_bytes()==b'previous input evidence'
+        fresh=out/'generated-inputs';manifest=stream.prepare_inputs(clip,fresh)
+        assert stream.validate_inputs(fresh,manifest)
+        frame=fresh/'frame-000.h264';frame.write_bytes(frame.read_bytes()+b'changed')
+        refused(lambda:stream.validate_inputs(fresh,manifest))
         (out/'direct-input-results.json').write_text(json.dumps(dict(status='PASS',physical_access=False,
-            cases=['existing-output-preserved','new-inputs-validate','changed-frame-refused']),indent=2)+'\n')
-        print('PASS: H264 input generation preserves earlier evidence and binds actual frame bytes')
+            cases=['existing-output-refused-without-changes','new-inputs-validate','changed-frame-refused']),indent=2)+'\n')
+        print('PASS: H264 input generation refuses existing destinations and binds actual frame bytes')
         return
     if any(getattr(a,name) is None for name in ('image','inputs','native','launcher')):p.error('Capture checks require image, inputs, native and launcher')
     a.output.mkdir(exist_ok=False)

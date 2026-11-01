@@ -2,6 +2,7 @@
 """Profile-specific admission and host capture of actual native DMA records."""
 import argparse,copy,hashlib,importlib.util,io,json,struct,time
 from pathlib import Path
+from harness import artifact_refused
 from elftools.elf.elffile import ELFFile
 if not __debug__:raise SystemExit('checks require assertions')
 ROOT=Path(__file__).resolve().parents[1]
@@ -108,14 +109,10 @@ def run(image,fixture,native,out,emmc,emmc_evidence):
  rejected(lambda:prep.validate_bundle(bundle));session_path.write_bytes(saved_session)
  cases['process_files_ignored_transport_integrity_retained']=dict(passed=True)
 
- # Existing output directories retain their earlier evidence in place.
- original_metadata=(bundle/'prepared.json').read_bytes()
- again=prep.prepare(image,None,admission_path,fixture/'session-template.bin',bundle,
-                    Path('/usr/lib/llvm-21/bin/clang'),Path('/home/sunil/.cache/sunstoneos/host/usr/lib/llvm-21/bin/ld.lld'))
- assert (bundle/'prepared.json').read_bytes()==original_metadata
- assert len(list(bundle.glob('*/prepared.json')))==1
- assert Path(again['_bundle_directory']).parent==bundle
- cases['existing_output_preserved']=dict(passed=True)
+ # Existing artifact destinations refuse before changing any file or entry.
+ artifact_refused(lambda:prep.prepare(image,None,admission_path,fixture/'session-template.bin',bundle,
+                    Path('/usr/lib/llvm-21/bin/clang'),Path('/home/sunil/.cache/sunstoneos/host/usr/lib/llvm-21/bin/ld.lld')),bundle)
+ cases['existing_output_refused_without_changes']=dict(passed=True)
  # Shared helpers must not raise the eMMC API or actual linked geometry limit.
  emmc_observe=module('emmc_dma_compat',ROOT/'apps/emmc-read/observe.py')
  assert emmc_observe.MAXIMUM==4096
