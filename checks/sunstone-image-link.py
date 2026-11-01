@@ -119,7 +119,7 @@ def check(image, manifest=None, application=None):
         application = application_manifest(elf)['name'] if sections and sections[0][5] else 'none'
     names_defined = {symbol['name'] for symbol in defined}
     features = {'audio': 'os_audio_stream_open', 'radio': 'os_radio_start', 'headset': 'os_headset_start',
-                'npu': 'os_npu_start', 'gpu_linear': 'a733_gpu_mimus_start',
+                'npu': 'os_npu_start', 'gpu_queue': 'os_gpu_queue_start',
                 'cpu_clock': 'os_cpu_clock_step', 'perf_modes': 'os_perf_boot_mode'}
     result = {'interrupts': routes, 'applications': starts, 'application': application,
               **{name: symbol in names_defined for name, symbol in features.items()},
@@ -155,7 +155,7 @@ def check(image, manifest=None, application=None):
     return result
 
 
-def application_symbols(elf, objects, libraries, runtime_libraries, nm, legacy_gpu=False):
+def application_symbols(elf, objects, libraries, runtime_libraries, nm):
     """Applications may use their closure, public calls, FreeRTOS and C/C++."""
     def symbols(paths, defined):
         if not paths:
@@ -170,18 +170,16 @@ def application_symbols(elf, objects, libraries, runtime_libraries, nm, legacy_g
     external = symbols(objects + libraries, False) - own
     allowed = symbols(runtime_libraries, True)
     linked = {symbol['name'] for symbol in elf.symbols if symbol['shndx'] != 0}
-    header = (Path(__file__).resolve().parents[1] / 'include/sunstone_app.h').read_text()
-    public_calls = set(re.findall(r'\b(ss_[a-z0-9_]+)\s*\([^;{}]*\)\s*;', header))
+    kit = Path(__file__).resolve().parents[1] / 'include'
+    header = (kit / 'sunstone_app.h').read_text() + (kit / 'gpu_queue.h').read_text()
+    public_calls = set(re.findall(r'\b((?:ss_|gpu_queue_)[a-z0-9_]+)\s*\([^;{}]*\)\s*;', header))
     allowed |= linked & public_calls
     allowed |= {name for name in linked if re.match(r'^(?:[xv]|ux|ul|uc|pv|pc)[A-Z]', name)}
     # FreeRTOS configASSERT is a board-supplied kernel callback.
     allowed.update(('vApplicationAssert', 'platform_panic'))
-    if legacy_gpu:
-        allowed |= {name for name in linked if name.startswith(('os_dispatch_', 'a733_gpu_mimus_', 'pvr_'))}
     forbidden = sorted(external - allowed)
     assert not forbidden, 'application references private OS symbols: ' + ', '.join(forbidden)
-    return {'objects': len(objects), 'libraries': len(libraries), 'external_symbols': len(external),
-            'legacy_mimus_gpu': legacy_gpu}
+    return {'objects': len(objects), 'libraries': len(libraries), 'external_symbols': len(external)}
 
 
 def main():
@@ -196,7 +194,6 @@ def main():
     parser.add_argument('--application-library', type=Path, action='append', default=[])
     parser.add_argument('--runtime-library', type=Path, action='append', default=[])
     parser.add_argument('--nm', default='nm')
-    parser.add_argument('--legacy-mimus-gpu', action='store_true')
     args = parser.parse_args()
     try:
         result = check(args.image, args.manifest, args.application)
@@ -204,7 +201,7 @@ def main():
         if args.application != 'none':
             result['symbol_boundary'] = application_symbols(Elf(args.image.read_bytes()),
                 args.application_objects, args.application_library, args.runtime_library,
-                args.nm, args.legacy_mimus_gpu)
+                args.nm)
     except (AssertionError, ValueError) as error:
         print('FAIL OS image link:', error, file=sys.stderr)
         return 1

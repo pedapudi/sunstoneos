@@ -33,7 +33,7 @@ int board_identity_prepare(uint64_t deadline)
     for(unsigned i=0;m&&i<m->region_count;++i)
         if(m->regions[i].kind==SS_REGION_INPUT&&
            a733_cpu_coherence_publish(m->regions[i].address,m->regions[i].bytes,deadline)!=1)return 0;
-#ifdef SUNSTONE_A733_OS_GPU_LINEAR
+#ifdef SUNSTONE_A733_OS_GPU
     /* The GPU's 64 KiB tag area, before a733_cached_prepare maps the output
      * region read-only at EL1 too: here EL3 runs with translation off, so
      * every access is a Device access and only aligned 64-bit volatile stores
@@ -43,10 +43,17 @@ int board_identity_prepare(uint64_t deadline)
      * earlier tag: the loader runs with caches off, nothing in the image
      * writes the area, and each job's completion cleans and invalidates its
      * tags before the recognizer reads them. */
-    volatile uint64_t *tags=(volatile uint64_t *)(uintptr_t)OS_DISPATCH_OUTPUT;
+    /* The existing output profile clears its tag prefix before read-only
+     * CPU mapping. Other GPU consumers receive no implicit buffer clear. */
+    for(unsigned r=0;m&&r<m->region_count;++r){
+        const struct ss_region *region=&m->regions[r];
+        if(region->address!=UINT64_C(0x46c00000)||region->bytes<65536u||
+           !(region->access&SS_ACCESS_GPU_WRITE)||(region->access&SS_ACCESS_WRITE))continue;
+        volatile uint64_t *tags=(volatile uint64_t *)(uintptr_t)region->address;
 #pragma clang loop unroll(disable)
-    for(unsigned i=0;i<OS_DISPATCH_TAG_BYTES/8;++i)tags[i]=0;
-    if(a733_cpu_coherence_publish(OS_DISPATCH_OUTPUT,OS_DISPATCH_TAG_BYTES,deadline)!=1)return 0;
+        for(unsigned i=0;i<65536u/8;++i)tags[i]=0;
+        if(a733_cpu_coherence_publish(region->address,65536u,deadline)!=1)return 0;
+    }
 #endif
 #if defined(SUNSTONE_A733_OS_RADIO) || defined(SUNSTONE_A733_OS_HEADSET)
 #ifdef SUNSTONE_A733_OS_HEADSET

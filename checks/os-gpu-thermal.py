@@ -15,7 +15,7 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--build', type=Path, required=True, help='Accepted OS build with compile_commands.json')
 parser.add_argument('--output', type=Path, required=True)
 parser.add_argument('--lld', type=Path, default=LLD)
-parser.add_argument('--cases', type=int, nargs='+', choices=range(31), default=list(range(14)))
+parser.add_argument('--cases', type=int, nargs='+', choices=range(16), default=list(range(16)))
 args = parser.parse_args()
 out = args.output.resolve(); out.mkdir(parents=True, exist_ok=False)
 steps = Steps(out, 'commands.json')
@@ -23,10 +23,13 @@ unit = next(v for v in json.loads((args.build / 'compile_commands.json').read_te
             if v['file'].endswith('/apps/os/thermal.c'))
 original = shlex.split(unit['command']); old_root = str(Path(unit['file']).parents[2])
 flags = [v.replace(old_root, str(ROOT)) for v in original[:original.index('-o')]]
-flags += ['-DSUNSTONE_A733_OS_GPU_LINEAR=1', '-DSUNSTONE_A733_FAULT_PAGE=1', '-DOS_RECOGNITION_CORE=2']
+flags += ['-DSUNSTONE_A733_OS_GPU=1', '-DSUNSTONE_A733_FAULT_PAGE=1']
+flags=[('-I'+str(ROOT/'apps/board')) if v.startswith('-I') and not Path(v[2:]).is_dir()
+       and Path(v[2:]).parent.name=='apps' and Path(v[2:]).name.endswith('-board') else v for v in flags]
 for flag in flags:
     if flag.startswith('-I'): assert Path(flag[2:]).is_dir(), flag
 (out / 'compile-inputs.json').write_text(json.dumps(dict(unit=unit, flags=flags), indent=2) + '\n')
+flags=[v for v in flags if not v.startswith('-DSUNSTONE_A733_OS_GPU_LINEAR=')]
 objects = []
 for i, source in enumerate(('checks/os-gpu-thermal.c', 'runtime/memory.c', 'runtime/memmove.c')):
     obj = out / f'unit-{i}.o'; objects.append(obj)
@@ -36,13 +39,10 @@ steps.command('link', [args.lld, '-Ttext=0x41000000', '--entry=os_gpu_thermal_ch
                        *objects, '-o', elf])
 image = Image(elf); identity = hashlib.sha256(elf.read_bytes()).hexdigest()
 cases = ['repeated-park-reopen', 'throttle-during-reopen', 'critical-during-reopen',
-         'close-observation-deadline', 'wrong-client', 'expired-lifetime', 'stale-open-record',
+         'close-observation-deadline', 'wrong-client', 'expired-lifetime', 'stale-open-epoch',
          'terminal-retire', 'retire-close-busy', 'retire-deadline', 'retire-critical',
          'retire-wrong-client', 'retire-pending-ticket', 'retire-stale-stopped-epoch',
-         'job-timely', 'job-no-record', 'job-deadline-equality', 'job-late-record',
-         'job-revoked', 'job-counter-backwards', 'job-counter-stalled', 'job-already-pending',
-         'open-no-reply', 'open-not-queued', 'open-late-reply', 'open-no-ready-record', 'job-both-clocks-stalled',
-         'close-shared-status-budget', 'open-shared-reply-ready-budget', 'job-invalid-record', 'caller-ownership']
+         'close-shared-status-budget', 'owed-job-prevents-thermal-close']
 results = {}
 for mode, name in enumerate(cases):
     if mode not in args.cases: continue

@@ -1,0 +1,9 @@
+#ifndef SUNSTONE_OS_GPU_RUNTIME_H
+#define SUNSTONE_OS_GPU_RUNTIME_H
+#include "a733_gpu_platform_native.h"
+#define OS_GPU_PRIORITY 4u
+#define OS_GPU_OPEN_US UINT64_C(1000000)
+#define OS_GPU_MAX_JOB_US UINT64_C(1000000)
+#define OS_GPU_REPLY_US (2 * OS_GPU_MAX_JOB_US)
+#define OS_GPU_WAIT_TICKS 10u
+#endif

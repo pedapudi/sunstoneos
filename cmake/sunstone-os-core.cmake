@@ -6,7 +6,7 @@ option(SUNSTONE_A733_OS_RADIO "Integrated OS with the board's radio station" OFF
 option(SUNSTONE_A733_OS_HEADSET "OS Bluetooth headset capture service" OFF)
 option(SUNSTONE_A733_OS_MSBC "Integrated OS headset with wideband mSBC speech" OFF)
 option(SUNSTONE_A733_OS_NPU "Integrated OS with a task-bound NPU catalogue service" OFF)
-option(SUNSTONE_A733_OS_GPU_LINEAR "Integrated OS with mimus linear layers on the GPU" OFF)
+option(SUNSTONE_A733_OS_GPU "OS GPU compute queue" OFF)
 option(SUNSTONE_A733_OS_CPU_RETURN "Application result with success-only ROM return" OFF)
 option(SUNSTONE_A733_OS_CORE "Build the OS core without an application" OFF)
 option(SUNSTONE_A733_OS_HELLO "Build the hello-compute OS image" OFF)
@@ -19,10 +19,6 @@ if(NOT SUNSTONE_BOARD_SUPERVISED OR NOT TARGET sunstone-a733-board)
 endif()
 if(NOT NEWLIB_ROOT OR NOT NEWLIB_SMP_ROOT)
   message(FATAL_ERROR "The OS kit requires the pinned SMP C and C++ runtime")
-endif()
-option(SUNSTONE_A733_OS_LEGACY_MIMUS_GPU "Use the application-specific GPU backend pending the generic queue" OFF)
-if(SUNSTONE_A733_OS_GPU_LINEAR AND NOT SUNSTONE_A733_OS_LEGACY_MIMUS_GPU)
-  message(FATAL_ERROR "GPU recognition currently requires SUNSTONE_A733_OS_LEGACY_MIMUS_GPU=ON")
 endif()
 if(SUNSTONE_A733_OS_HEADSET AND SUNSTONE_A733_OS_AUDIO)
   message(FATAL_ERROR "An image selects one capture source: I2S or the headset")
@@ -58,7 +54,7 @@ endif()
 if(SUNSTONE_A733_OS_NPU)
   # CPU grants compose with recorded resident/supervised GPU/NPU, or performance modes.
   if(SUNSTONE_A733_OS_AUDIO OR SUNSTONE_A733_OS_RADIO OR
-     SUNSTONE_A733_OS_HEADSET OR (SUNSTONE_A733_OS_CPU_CLOCK AND NOT SUNSTONE_A733_OS_PERF AND NOT SUNSTONE_A733_OS_RESIDENT AND NOT SUNSTONE_A733_OS_GPU_LINEAR))
+     SUNSTONE_A733_OS_HEADSET OR (SUNSTONE_A733_OS_CPU_CLOCK AND NOT SUNSTONE_A733_OS_PERF AND NOT SUNSTONE_A733_OS_RESIDENT AND NOT SUNSTONE_A733_OS_GPU))
     message(FATAL_ERROR "The NPU OS profile requires recorded recognition and a supported GPU/CPU composition")
   endif()
   set(SUNSTONE_OS_NPU_CATALOGUE "" CACHE FILEPATH "Authenticated NPU artifacts map for apps/os/npu-models.json")
@@ -67,17 +63,12 @@ if(SUNSTONE_A733_OS_NPU)
     message(FATAL_ERROR "OS NPU requires SUNSTONE_OS_NPU_CATALOGUE")
   endif()
 endif()
-if(SUNSTONE_A733_OS_GPU_LINEAR)
+if(SUNSTONE_A733_OS_GPU)
   # GPU replies retain bounded failure handling for the recorded two- and
   # eight-worker compositions.
   if(NOT SUNSTONE_A733_OS_RESIDENT AND
      (SUNSTONE_A733_OS_AUDIO OR SUNSTONE_A733_OS_RADIO OR SUNSTONE_A733_OS_HEADSET))
     message(FATAL_ERROR "Supervised GPU linear requires recorded recognition without capture/radio/headset")
-  endif()
-  # This branch maps 0x46C00000-0x47000000 read-only itself (below); a value
-  # given on the command line could only disagree with it.
-  if(DEFINED A733_GPU_OUTPUT_EL0_READ_ONLY)
-    message(FATAL_ERROR "The GPU linear build sets A733_GPU_OUTPUT_EL0_READ_ONLY itself; do not supply it")
   endif()
   set(SUNSTONE_GPU_FIRMWARE "" CACHE FILEPATH "Pinned A733 GPU firmware")
   if(NOT SUNSTONE_GPU_FIRMWARE)
@@ -236,23 +227,23 @@ if(SUNSTONE_A733_OS_PERF)
   list(APPEND os_added apps/os/perf.c drivers/power/a733_perf_mode.c)
   list(APPEND os_external_inputs "${os_root}/include/a733_perf_mode.h" "${os_root}/include/a733_clock_reference.h")
 endif()
-if(SUNSTONE_A733_OS_GPU_LINEAR)
+if(SUNSTONE_A733_OS_GPU)
   if(A733_A76_ADMITTED)
     set(os_recognition_core 6)
   else()
     set(os_recognition_core 2)
   endif()
-  # The GPU runtime: the service, its mimus session and the A733 platform,
+  # The GPU runtime: the service, compute queue and the A733 platform,
   # backend and firmware memory, as the accelerator image composes them. The
   # service's compute, render and free-list objects come with it.
   list(APPEND os_added apps/os/gpu.c
-    platform/a733/gpu_reserved.c platform/a733/gpu_mimus.c platform/a733/gpu_compute_reserved.c
+    platform/a733/gpu_reserved.c platform/a733/gpu_queue.c platform/a733/gpu_compute_reserved.c
     platform/a733/gpu_graphics_memory.c platform/a733/gpu_memory.c platform/a733/gpu_vm_memory.c
     platform/a733/gpu_backend.c drivers/gpu/a733_gpu_power.c drivers/gpu/a733_gpu_platform.c
     drivers/gpu/a733_gpu_platform_native.c drivers/gpu/pvr_compute_mode.c drivers/gpu/pvr_compute_service.c
     drivers/gpu/pvr_compute_package.c drivers/gpu/pvr_compute_job.c drivers/gpu/pvr_compute_programs.c
-    drivers/gpu/pvr_compute_context.c drivers/gpu/pvr_compute_mimus.c drivers/gpu/pvr_compute_mimus_usc.c
-    drivers/gpu/pvr_mimus_service.c drivers/gpu/pvr_cccb.c drivers/gpu/pvr_gpu_vm.c
+    drivers/gpu/pvr_compute_context.c drivers/gpu/gpu_queue.c
+    drivers/gpu/pvr_compute_queue.c drivers/gpu/pvr_cccb.c drivers/gpu/pvr_gpu_vm.c
     drivers/gpu/pvr_render_target.c drivers/gpu/pvr_render_programs.c drivers/gpu/pvr_render_draw.c
     drivers/gpu/pvr_render_texture.c drivers/gpu/pvr_render_context.c drivers/gpu/pvr_render_job.c
     drivers/gpu/pvr_render_service.c drivers/gpu/pvr_gpu_service.c drivers/gpu/pvr_firmware.c
@@ -333,15 +324,12 @@ target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_BOARD_APPLICAT
 if(SUNSTONE_A733_OS_NPU)
   target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_NPU=1)
 endif()
-if(SUNSTONE_A733_OS_GPU_LINEAR)
-  target_include_directories(sunstone-a733-os-core BEFORE PRIVATE "${MIMUS_SUNSTONE_ROOT}/apps/os")
+if(SUNSTONE_A733_OS_GPU)
   if(SUNSTONE_A733_OS_CPU_RETURN)
     target_compile_definitions(sunstone-a733-os-core PRIVATE INCLUDE_eTaskGetState=1)
   endif()
-  # A733_GPU_OUTPUT_EL0_READ_ONLY makes platform/a733-smp-cached/memory.c map
-  # 0x46C00000-0x47000000 read-only at EL0 and EL1.
-  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_GPU_LINEAR=1 SUNSTONE_A733_OS_LEGACY_MIMUS_GPU=1
-    OS_RECOGNITION_CORE=${os_recognition_core} A733_GPU_OUTPUT_EL0_READ_ONLY=1)
+  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_GPU_LINEAR=1)
+  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_GPU=1)
   set_source_files_properties("${os_root}/drivers/gpu/a733_gpu_platform_native.c" TARGET_DIRECTORY sunstone-a733-os-core
     PROPERTIES COMPILE_OPTIONS "-iquote${os_root}/platform/a733")
 endif()
