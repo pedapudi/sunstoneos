@@ -8,7 +8,7 @@
  #include "../board/application.h"
  #include "application.h"
  #include "a733_cpu_clock.h"
-@@ -84,6 +85,13 @@
+@@ -84,6 +85,43 @@
      atomic_uint ready;
  } owner;
  enum { START, INSPECT, REQUEST, FOLLOW };
@@ -19,10 +19,40 @@
 + * Captured after normal ROM return, before restoring image RAM. */
 +uint32_t os_cpu_return_rail_uv[2];
 +int os_cpu_return_clock_done(void){return atomic_load_explicit(&return_done,memory_order_acquire);}
++/* Capture before retention changes shared-manager fault flags. ESR aux:
++ * state[3:0], domain[5:4], origin[7:6], phase[9:8], cursor[11:10],
++ * prior stored result (c->result)[14:12]. FAR: provider status[7:0]
++ * (0xff local check), target MHz[18:8], flags[31:19]; see NORMAL-RETURN.md. */
++void a733_cpu_clock_retained_note(const struct a733_cpu_clock *c,
++    unsigned line,const void *here,uint32_t status)
++{
++    if(c!=&owner.driver)return;
++    uint32_t aux=(c->state&15u)|(c->cluster&3u)<<4|(c->thermal&3u)<<6|
++        (owner.phase&3u)<<8|(owner.cluster&3u)<<10|(c->result&7u)<<12;
++    unsigned authority=a733_power_authority_load(&providers.shared.rails.authority);
++    uint32_t value=(status&0xffu)|(c->target_mhz&0x7ffu)<<8|
++        (uint32_t)!!c->inspect_only<<19|(uint32_t)!!os_cpu_return_requested()<<20|
++        (uint32_t)!!atomic_load_explicit(&providers.shared.counter.failed,memory_order_acquire)<<21|
++        (uint32_t)!!atomic_load_explicit(&providers.shared.clocks.failed,memory_order_acquire)<<22|
++        (uint32_t)!!(authority&A733_POWER_LEDGER_FAULT)<<23|
++        (uint32_t)!!(authority&A733_POWER_PROVIDER_FAULT)<<24|
++        (uint32_t)!!c->clock.id<<25|(uint32_t)!!c->rail.id<<26|(uint32_t)!!c->request.id<<27|
++        (uint32_t)(c->last_now>=c->deadline)<<28|(uint32_t)(c->last_now>=c->timer)<<29|
++        (uint32_t)!!a733_cpu_clock_parked(c)<<30|(uint32_t)!!c->critical<<31;
++    sunstone_crumb_fail(SUNSTONE_CRUMB_FAIL_CPU_RETAINED<<12|(line&0xfffu)|aux<<16,value,here);
++}
++void a733_cpu_clock_pll_mismatch_note(const struct a733_cpu_clock *c,
++    unsigned line,const void *here,uint32_t pll)
++{
++    if(c!=&owner.driver)return;
++    uint32_t aux=(c->n&255u)|(c->cluster&3u)<<8|(c->state&15u)<<10|
++        (uint32_t)!!os_cpu_return_requested()<<14;
++    sunstone_crumb_fail(SUNSTONE_CRUMB_FAIL_CPU_PLL<<12|(line&0xfffu)|aux<<16,pll,here);
++}
  static int clock_now(void *v,uint64_t *out)
  {return v==&owner&&a733_counter_clock_now(&providers.shared.counter,out);}
  static int clock_read(void *v,uintptr_t a,uint32_t *out){return v==&owner&&read_word(NULL,a,out);}
-@@ -123,7 +131,7 @@
+@@ -123,7 +161,7 @@
  {
      struct a733_cpu_clock *c=&owner.driver;
      const struct os_session *s=os_session_admitted();
@@ -31,7 +61,7 @@
          struct a733_cpu_clock_config config;
          if(!s||!a733_cpu_clock_grant_load(&s->cpu_clock,s->board.epoch,s->board.generation,&config)||
             !a733_cpu_clock_init(c,&config,&clock_ops,&owner,&providers.shared.clocks,&providers.shared.rails,
-@@ -132,7 +140,36 @@
+@@ -132,7 +170,36 @@
          if(a733_cpu_clock_inspect(c,A733_CPU_LITTLE,later(REQUEST_US))!=A733_CPU_CLOCK_PENDING)return REFUSED(0);
          return 1;
      }
@@ -69,7 +99,7 @@
  #ifdef SUNSTONE_A733_OS_PERF
      /* The performance-mode service replaces the one-request-per-cluster
       * start: its boot switch moves the CPU domains to the boot mode, and it
-@@ -162,6 +199,15 @@
+@@ -162,6 +229,15 @@
  #endif
      }
      if(owner.phase==REQUEST){
@@ -85,7 +115,7 @@
          /* One request per granted domain once its sensor has a reading (CPUL
           * is physical channel 3, CPUB channel 0), in the default path's order
           * (docs/designs/cpu-top-opp.md): CPU-B, CPU-L, then the DSU at the
-@@ -182,12 +228,14 @@
+@@ -182,12 +258,14 @@
                  target=c->report.binned ? a733_cpu_clock_dsu_top(c->report.bin,c->applied_mhz[A733_CPU_LITTLE],big) : 0;
                  if(!target)continue;
              }

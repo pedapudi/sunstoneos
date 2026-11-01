@@ -104,6 +104,14 @@ options. Host dependency configuration remains in `~/.cache/sunstoneos/bin/cfg.s
 `--build-root` selects a separate directory for new builds and gate evidence.
 The gate builds and checks software only; board runs remain separately queued.
 
+A warm-build RTC workflow comparison uses the same driver source and cache.
+The previous seven generic core checks plus one OS build take 12.714 seconds;
+one selected RTC ownership check plus the same baseline takes 9.586 seconds.
+Four RTC checks still require cached inputs. The coverage differs, so this
+measures workflow latency rather than equal-coverage acceleration. Raw commands,
+results and timings are under
+`~/.cache/sunstoneos/build/check-selection-1031/code/paired-final-timing.json`.
+
 ## Match coverage to the change
 
 | Change | Initial verification | Broaden when |

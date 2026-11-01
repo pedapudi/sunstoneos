@@ -12,7 +12,9 @@ per core across six Cortex-A55 and two Cortex-A76 cores. It demonstrates
 background scheduling, inter-core interrupts, per-core timer delivery, seven
 independently observed secondary OFF states and restoration of saved RAM and
 control registers. One eight-worker CPU-only mimus input matches its 90-frame
-reference at the bin-4 top operating points.
+reference at the bin-4 top operating points. A corrected reliability workload
+completes 4096 rounds in 4096 ticks on all eight pinned CPUs, with independently
+matching payload digests, seven secondaries off and WDT0 disarmed.
 
 Evidence paths are relative to `~/.cache/sunstoneos/evidence/`:
 
@@ -28,8 +30,19 @@ Evidence paths are relative to `~/.cache/sunstoneos/evidence/`:
 - `dev-runs-1031/3-1-cpu-return-211702/run/session.json` records the corrected
   hello-compute return with seven secondaries off.
 
-The reliability workload is blocked at CPU-clock retention. Its first launch
-records RETAINED at `return-cpu.c:159` in `cpu-reliability-1031/start-1/`.
+The corrected reliability result is queue entry `1793513595977482947-679bf1ea`
+under `~/.cache/sunstoneos/board-queue/entries/`. It binds the 224-byte returned
+result to image SHA-256
+`ad25bc86d87130038dfafddae2a63250c694e2db7f375d4d01371967d978c4cf`
+and native fix `f2131e76`. This is one successful run; three-start repeatability
+and full restoration qualification remain open.
+
+The retained failed launch records RETAINED at `return-cpu.c:159` in
+`cpu-reliability-1031/start-1/`. The later diagnostic identifies CPU-B N=77
+readback after UPDATE clears while requesting N=39. Native adapters now complete
+PLL writes, and the driver waits boot0's 20 microseconds between N and UPDATE.
+The two preceding queue diagnostic entries retain the first setter and raw PLL
+word. [The clock record](../cpu-clock.md) states the correction's scope.
 The first hello input finishes while the owner is REQUEST; the return check
 requires FOLLOW and refuses at
 `dev-runs-1031/3-1-cpu-return-204119/run/watchdog-report.json`.
