@@ -41,10 +41,9 @@ version writes registers or validates a translation during the copy.
 
 The existing finite controller, descriptor, cyclic encoder and memory-policy
 checks pass with sanitizers. The DMA service and twelve selected cyclic-audio
-cases pass in FreeRTOS under cached QEMU. Those legacy fixtures require explicit
-zero initialization of the newer audio-route field. Validation used build-local
-copies with that initializer correction; the audio owner receives the patch.
-Production audio files were not changed.
+cases pass in FreeRTOS under cached QEMU. The service and audio fixtures explicitly
+initialize the audio-route field to zero for I2S0. The integrated fixtures
+preserve the route used by the earlier build-local validation.
 
 Raw logs, exact commands, the baseline failure and before/after callback counts
 are under `~/.cache/sunstoneos/build/memory-dma-1031/checks/`. Independent design

@@ -155,15 +155,14 @@ padding, test model and shared host-parser patch.
 | Check | Result and scope |
 | --- | --- |
 | `checks/crypto-staging.py` | Passed sanitized orchestration, CPU erasure and unchanged session metadata; see `staging-ownership-check/`. |
-| `checks/crypto-digests.py` | Passed 210 stream cases and 27 application cases, with reserved-selector and retained-error checks; see `digests-check/`. Uses the isolated, patched host producer. |
+| `checks/crypto-digests.py` | Passed 210 stream cases and 27 application cases, with reserved-selector and retained-error checks; see `digests-check/`. The host producer supports the extended digest selectors. |
 | `checks/crypto-modes-native.py` | Passed linked MD5/SM3 upload and publication checks in `digests-native/`, and complete CPU-erasure/producer-ownership checks in `staging-native/`. CE completion is modeled. |
 | `checks/crypto-upload-erasure.py` | Passed linked producer refusal, post-copy expiry and successful publication; see the upload directories above. |
 | OS-only, hello-compute and external mimus | All three baseline targets build with Clang 21 through the cached configuration wrapper. Independent OS builds use empty `MIMUS_DIR`; mimus uses its pinned external checkout. |
 | Native crypto | `crypto/sunstone-a733-crypto-single-core.elf` builds with empty `MIMUS_DIR`. The built-in diagnostic remains SHA-256/AES; runtime hash requests select MD5/SM3. This is compilation and emulation evidence only. |
 
-The stream supplies separate patches for the shared host request producer,
-public-header descriptions and current hardware/handoff/reference records.
-Apply the host-producer patch before preparing MD5/SM3 requests. The records
-patch links this inventory and preserves every open physical requirement.
+The host request producer and public headers support MD5/SM3 selectors and
+digest lengths. The hardware matrix, handoff and reference index link this
+inventory and retain the open physical requirements.
 The image archive's README gives its SHA-256, expected diagnostic bytes,
 failure stages and the reason no coordinator launch command is currently valid.

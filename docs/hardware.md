@@ -1200,9 +1200,9 @@ to the stated scope:
   continuous output active until full power removal. Physical waveform, fan-off
   current and visible LED behavior remain unqualified. Cycle mode now plans the
   smallest exact prescaler for any period up to 10 ms, in either polarity, with
-  constant levels at zero and full-period duty. The fan application accepts
-  a duty of 600 ticks, which is full speed, but the supervised host tool still
-  refuses that value.
+  constant levels at zero and full-period duty. The fan application and supervised host tool accept
+  600 ticks for full duty. Parser checks preserve the 0/601 refusal before
+  bundle or device access.
   Host and instruction-model checks pass. S_PWM needs a clock-registry scope
   before an owner can reserve it. Other channels, capture, input counting and
   other operating modes remain required.
