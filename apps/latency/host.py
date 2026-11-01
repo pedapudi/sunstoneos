@@ -1,11 +1,11 @@
 """Decode the native CPU latency report without accessing a device."""
 import struct
 
-RESULT_BYTES = 74112
+RESULT_BYTES = 63872
 PHASES = ('initialization', 'idle', 'busy')
 SITE_KINDS = ('irq_masked', 'task_lock_hold')
 SITE_METRICS = ('irq_masked', 'lock1_hold')
-SITE_SLOTS = 8
+SITE_SLOTS = 3
 QUANTILES = 'nearest-rank logarithmic histogram upper endpoints; sixteen bins per power of two; exact maximum'
 MAGIC = 0x53534C4154454E31
 METRICS = ('timer_irq', 'irq_masked', 'lock0_wait', 'lock0_hold', 'lock1_wait',

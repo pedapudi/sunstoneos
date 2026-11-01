@@ -12,7 +12,7 @@ BUDGET_US = (50, 25, 25, 25, 25, 25, 100, 250, 250, 1000, 1000)
 
 def expectation(dma=False):
     # workload.h pins the aggregate, phase and acquisition offsets.
-    words = [0] * (74112 // 4)
+    words = [0] * (63872 // 4)
 
     def u64(offset, low, high=0):
         words[offset // 4:offset // 4 + 2] = [low, high]
@@ -77,7 +77,7 @@ def expectation(dma=False):
             words[(base + 16) // 4] = 6 if index < 64 else 7
             words[(base + 20) // 4] = 1 if index < 64 else 2
     # Attribution durations, timestamps and both instruction addresses vary by run.
-    for offset in range(57728, 74112, 8):
+    for offset in range(57728, 63872, 8):
         u64(offset, RANGE, RANGE)
     return {'schema': 'sunstone-board-expect-u32-v1', 'words': words}
 

@@ -48,7 +48,7 @@ def main():
         return record['wakes'] + (core * 192 + index) * sizes['latency_wake_sample']
 
     def site_base(phase, core, kind, slot):
-        return record['sites'] + (((phase * 8 + core) * 2 + kind) * 8 + slot) * sizes['ss_latency_site']
+        return record['sites'] + (((phase * 8 + core) * 2 + kind) * 3 + slot) * sizes['ss_latency_site']
 
     put(0, 'latency_result', magic=0x53534c4154454e31, frequency=24000000, elapsed_ticks=200)
     struct.pack_into('<I', payload, record['core_mask'], 255)
@@ -100,9 +100,9 @@ def main():
                         maximum=phase_max, start=begin + 100, site=site)
         for p in range(4):
             for kind in range(2):
-                durations = list(range(8 if kind == 0 else 4, 0, -1))
+                durations = [8, 7, 6] if kind == 0 else [4, 3]
                 if p == 3:
-                    durations = [20 if kind == 0 else 16] + durations[:7]
+                    durations = [20 if kind == 0 else 16] + durations[:2]
                 for slot, duration in enumerate(durations):
                     start = bounds[p][0] + 100 + slot * 20 if p < 3 else 995 if kind == 0 else 1050
                     put(site_base(p, c, kind, slot), 'ss_latency_site', ticks=duration,
@@ -110,9 +110,9 @@ def main():
     expected = runpy.run_path(str(ROOT / 'apps/latency/expect.py'))['expectation'](args.dma)['words']
     decoded = decode(payload, args.dma)
     assert len(decoded['cores']) == 8
-    assert decoded['cores'][7]['sites']['busy']['irq_masked'][7] == {
-        'ticks': 1, 'start': 5340, 'enter_site': 0x14100011c, 'exit_site': 0x14100021c}
-    assert len(decoded['cores'][0]['sites']['idle']['task_lock_hold']) == 4
+    assert decoded['cores'][7]['sites']['busy']['irq_masked'][2] == {
+        'ticks': 6, 'start': 5240, 'enter_site': 0x14100011c, 'exit_site': 0x14100021c}
+    assert len(decoded['cores'][0]['sites']['idle']['task_lock_hold']) == 2
     assert decoded['cores'][0]['sites']['aggregate']['irq_masked'][0]['start'] == 995
     # Aggregate intervals retain timestamps outside the named phase windows.
     wide = bytearray(payload)
@@ -150,7 +150,7 @@ def main():
     corrupt(site + layouts['ss_latency_site']['exit_site'], 0, 'lacks enter or exit site')
     corrupt(site + layouts['ss_latency_site']['start'], 4999, 'attribution interval crosses a phase boundary')
     corrupt(site_base(1, 0, 0, 1), 9, 'attribution slots are not packed in descending order')
-    corrupt(site_base(1, 0, 1, 4) + layouts['ss_latency_site']['start'], 1, 'inactive attribution slot has context')
+    corrupt(site_base(1, 0, 1, 2) + layouts['ss_latency_site']['start'], 1, 'inactive attribution slot has context')
     broken = bytearray(payload)
     start = site_base(1, 0, 0, 0)
     broken[start:start + sizes['ss_latency_site']] = bytes(sizes['ss_latency_site'])

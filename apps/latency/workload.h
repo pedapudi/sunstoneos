@@ -39,7 +39,7 @@ _Static_assert(offsetof(struct latency_result, core) == 320 &&
     offsetof(struct latency_result, acquisitions) == 20224 &&
     offsetof(struct latency_result, wakes) == 20848 &&
     offsetof(struct latency_result, sites) == 57728 &&
-    sizeof(struct latency_result) == 74112, "latency binary report layout");
+    sizeof(struct latency_result) == 63872, "latency binary report layout");
 
 /* Prepare before scheduling. Run from a controller allowed on one core; all
  * workload tasks use fixed affinity and independently allocated static stacks. */
