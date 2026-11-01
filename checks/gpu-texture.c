@@ -136,7 +136,8 @@ static void invalid_drafts(void)
     vTaskSuspend(service.worker);
     struct pvr_gpu_service_message message={.request={PVR_GPU_SERVICE_STATUS,0},.ticket=1};
     unsigned filled=0;while(xQueueSend(service.requests,&message,0)==pdTRUE)++filled;
-    configASSERT(filled==PVR_GPU_SERVICE_CLIENTS && !pvr_gpu_service_texture(&service,1,&q,NULL,1000000,0,&ticket));
+    /* The request queue also reserves wakes for the interrupt and compute queue. */
+    configASSERT(filled==PVR_GPU_SERVICE_REQUESTS && !pvr_gpu_service_texture(&service,1,&q,NULL,1000000,0,&ticket));
     configASSERT(!atomic_load(&graphics.submission.texture_state) && !service.clients[0].pending);
     for(unsigned i=0;i<filled;++i)configASSERT(xQueueReceive(service.requests,&message,0)==pdTRUE);
     vTaskResume(service.worker);
