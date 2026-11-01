@@ -57,6 +57,10 @@ int npu_runtime_queue_power_start(struct npu_runtime_queue *, const struct npu_r
  * admission changes no job, command or fence. The power owner notifies readiness
  * once; callers block instead of retrying. wait_ready takes its own lock. */
 int npu_runtime_queue_admit(struct npu_runtime_queue *);
+/* After pending admission and raw unlock, wake the owner in ordinary task
+ * context. This call needs no privileged system-register access and is safe
+ * for the EL0 doorbell wrapper after its supervisor call has returned. */
+void npu_runtime_queue_power_kick(struct npu_runtime_queue *);
 int npu_runtime_queue_wait_ready(struct npu_runtime_queue *);
 BaseType_t npu_runtime_queue_task_privileged(TaskFunction_t, void *);
 /* Device lock for submit/register/release and fence inspection. It masks

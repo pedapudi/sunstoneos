@@ -6,7 +6,14 @@
 static void power_owner(void *);
 static struct npu_runtime_queue *creating_power;
 BaseType_t npu_runtime_queue_task_privileged(TaskFunction_t entry, void *argument)
-{ return creating_power && argument == creating_power && entry == power_owner ? pdTRUE : pdFALSE; }
+{
+#if configNUMBER_OF_CORES > 1
+    return creating_power && argument == creating_power && entry == power_owner ? pdTRUE : pdFALSE;
+#else
+    (void)entry; (void)argument;
+    return pdFALSE; /* The single-core SRE port already starts every task at EL1. */
+#endif
+}
 
 uint64_t npu_runtime_queue_lock(void)
 {
@@ -122,9 +129,10 @@ static void irq(void *cookie, BaseType_t *woken)
         atomic_store_explicit(&q->queue.failed, 1, memory_order_release);
         atomic_store_explicit(&q->runtime->failed, 1, memory_order_release);
         atomic_fetch_or_explicit(&q->runtime->service.irq_pending, 2u, memory_order_release);
+        if (q->progress_from_isr) q->progress_from_isr(q->progress_cookie, woken);
+        q->woken = NULL;
         vTaskNotifyGiveFromISR(q->task, woken);
         if (q->power_task) vTaskNotifyGiveFromISR(q->power_task, woken);
-        q->woken = NULL;
         return;
     }
     npu_queue_irq(&q->queue);
@@ -136,6 +144,7 @@ static void irq(void *cookie, BaseType_t *woken)
         atomic_fetch_or_explicit(&q->runtime->service.irq_pending, 2u, memory_order_release);
     }
     if (q->progress_from_isr) q->progress_from_isr(q->progress_cookie, woken);
+    unsigned power_hint = 0;
     if (q->power.initialized && !q->queue.head &&
         atomic_load_explicit(&q->queue.completed, memory_order_acquire) == q->queue.submitted &&
         !atomic_load_explicit(&q->queue.failed, memory_order_acquire) &&
@@ -145,12 +154,13 @@ static void irq(void *cookie, BaseType_t *woken)
          * Ordinary job completions neither wake nor rearm the power owner. */
         if (q->power_completion_hint) {
             q->power_completion_hint = 0;
-            vTaskNotifyGiveFromISR(q->power_task, woken);
+            power_hint = 1;
         }
     }
 #ifdef SUNSTONE_NPU_QUEUE_TIMING
     q->irq_cpu_ticks += ticks() - since;
 #endif
+    if (power_hint) vTaskNotifyGiveFromISR(q->power_task, woken);
 }
 int npu_runtime_queue_claim(struct npu_runtime_queue *q, struct npu_runtime *rt)
 {
@@ -272,12 +282,12 @@ int npu_runtime_queue_admit(struct npu_runtime_queue *q)
     if (!q->power_resume) {
         q->power_resume = 1; q->power_requested_at = ticks();
         ++q->power_stats.resume_requests;
-        /* FromISR publication preserves the caller's raw DAIF mask. The
-         * native caller blocks after unlocking; an ISR propagates its wake. */
-        BaseType_t ignored = pdFALSE;
-        vTaskNotifyGiveFromISR(q->power_task, q->woken ? q->woken : &ignored);
     }
     return 0;
+}
+void npu_runtime_queue_power_kick(struct npu_runtime_queue *q)
+{
+    if (q && q->power_task && q->power_resume) xTaskNotifyGive(q->power_task);
 }
 int npu_runtime_queue_wait_ready(struct npu_runtime_queue *q)
 {
@@ -287,6 +297,7 @@ int npu_runtime_queue_wait_ready(struct npu_runtime_queue *q)
         const int ready = npu_runtime_queue_admit(q);
         npu_runtime_queue_unlock(saved);
         if (ready) return ready;
+        npu_runtime_queue_power_kick(q);
         (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     }
 }
@@ -350,7 +361,7 @@ static void power_owner(void *argument)
         if (q->power.phase == NPU_IDLE_RETAINED) { power_failed(q); notify_ready = 1; }
         npu_runtime_queue_unlock(saved);
         if (notify_ready) {
-            if (!q->power_stop && q->power.phase == NPU_IDLE_ON && q->power_config.ready)
+            if (!q->power_stop && q->power_config.ready)
                 q->power_config.ready(q->power_config.context);
             xTaskNotifyGive(q->task);
         }

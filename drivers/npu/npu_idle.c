@@ -139,5 +139,5 @@ int npu_idle_resume(struct npu_idle *p)
     p->counters.resume_ticks += elapsed;
     if (elapsed > p->counters.resume_max_ticks) p->counters.resume_max_ticks = elapsed;
     ++p->counters.resumes; p->phase = NPU_IDLE_ON;
-    npu_idle_completed(p, now); return 1;
+    npu_idle_completed(p, now); return p->phase == NPU_IDLE_ON ? 1 : -1;
 }

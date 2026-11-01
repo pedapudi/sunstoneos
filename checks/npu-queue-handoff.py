@@ -21,7 +21,8 @@ from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_PC, UC_ARM64_REG_L
 from harness import Image, environment, refused, skip_crumbs
 
 ROOT = Path(__file__).resolve().parents[1]
-UNITS = ('drivers/npu/npu_runtime_queue.c', 'drivers/npu/npu_service.c', 'drivers/npu/npu_queue.c')
+UNITS = ('drivers/npu/npu_runtime_queue.c', 'drivers/npu/npu_service.c',
+         'drivers/npu/npu_queue.c', 'drivers/npu/npu_idle.c')
 TYPES = {'npu_runtime_queue', 'npu_runtime', 'npu_runtime_slot', 'npu_queue', 'npu_queue_ops',
          'npu_queue_command', 'npu_queue_job', 'npu_queue_fence', 'npu_service',
          'npu_service_direct', 'npu_service_runtime_state', 'npu_service_runtime',
@@ -508,7 +509,7 @@ def cases(image, disassembly, only=None):
 
 
 def build_images(build, output, variants):
-    """Reuse the accepted graph; replace only the two compiled source units."""
+    """Reuse the accepted graph and rebuild the queue's compiled closure."""
     cmake = (build / 'CMakeCache.txt').read_text()
     source = Path(re.search(r'^CMAKE_HOME_DIRECTORY:INTERNAL=(.*)$', cmake, re.M)[1])
     flags_path = build / 'CMakeFiles/sunstone-a733-os-npu.dir/flags.make'
@@ -602,14 +603,18 @@ def build_images(build, output, variants):
                 if path.is_file():
                     inputs[str(path)] = sha(path)
             replacements[unit + '.obj'] = obj
-        link = []
+        link, used = [], set()
         for token in base_link:
             substitute = next((obj for unit, obj in replacements.items() if token.endswith('/' + unit)), None)
             if substitute:
+                used.add(substitute)
                 token = str(substitute)
             elif token.startswith('-Wl,-Map,'):
                 token = '-Wl,-Map,' + str(directory / 'fixture.map')
             link.append(token)
+        # A reused build can predate a new portable dependency. Include each
+        # newly compiled unit even when no previous object occupies its place.
+        link += [str(obj) for obj in replacements.values() if obj not in used]
         assert '-o' in link
         link[link.index('-o') + 1] = str(directory / 'fixture.elf')
         link += ['-Wl,--undefined=' + name for name in ('npu_runtime_queue_claim', 'npu_runtime_queue_return',
