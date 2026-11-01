@@ -47,11 +47,12 @@ quiescence. The mimus shader/readout checks preserve exhaustive sum comparison.
 These modeled results add no physical queue qualification. The OS uses the
 [application kit](../designs/app-abi.md) and does not depend on mimus.
 
-The texture fairness fixture `checks/gpu-texture-frame.c` references the removed
-`PVR_GPU_SERVICE_BURST_STEPS` scheduler limit. The GPU lifecycle maintainer owns
-its repair: exercise the service's actual 200 microsecond timed bursts and
-1 millisecond CPU scheduling interval, including the submitting-caller exemption.
-The fixture's compile failure leaves that fairness check unresolved.
+The texture frame fixture measures native render-service work for three scenes,
+with two frames each. It checks input bytes, output guards, cache operations
+and bounded progress. Actual worker pacing belongs to the FreeRTOS service
+checks; synthetic step-count waits are excluded from the texture measurements.
+The focused evidence is in
+`~/.cache/sunstoneos/build/check-selection-1031/followup-3/texture/frame.json`.
 
 GPU capture supports image-bound GPU/thermal receipts and bounded binary
 expectations. The shared daemon needs the reviewed capture changes from

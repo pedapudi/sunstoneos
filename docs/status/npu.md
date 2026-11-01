@@ -53,10 +53,11 @@ cover correctness, hardware safety and recovery; review/build evidence is in
 These finite images use the established 852 MHz/800 mV point and do not write
 PMIC rails.
 
-The host output check `checks/npu-source-output.py` cannot import NumPy in the
-mandated shared virtual environment. The shared host-environment coordinator
-owns pinning and installing a compatible host NumPy, then running that check.
-The compiler image's separate NumPy pin does not satisfy this host dependency.
+The host output check `checks/npu-source-output.py` passes in the mandated
+virtual environment, including its NumPy calculations and saved-SDK output
+handling. SDK execution is modeled; this check adds no physical inference
+qualification. Its log is
+`~/.cache/sunstoneos/build/check-selection-1031/followup-3/gate-links-full/indexed-npu-source-output.log`.
 
 Normal stop/restart preserves registered providers and service objects in
 software checks. Repeated start/stop, same-instance restart, domain power-off,
