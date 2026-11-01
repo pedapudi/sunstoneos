@@ -28,7 +28,7 @@ MAGIC = b"AS73DTRN"
 VERSION, HEADER_SIZE, SECTOR = 1, 128, 512
 PLAN_KIND = "a733-training-record-plan"
 BOOT0_SHA256 = "829ea8e3b65d71a02f2d0e094bc073de3a10869f948f62db49dbf023d07fabe3"
-RESTORE_SET_SHA256 = "3464c8421cdeb23af51c831b38cab729c7a2ced9ecee3a746a08a57531da1cb4"
+RESTORE_SET_SHA256 = "7c8ae56d522515bc50acce99793436dfaed75805a33b6b87aa7c8e4681d40868"
 CAPTURE_LAYOUT_SHA256 = "c7a012ca80a27eb6c666d4db0f9e5e10dbfefa23b1ba30ff08eac3206f594b2d"
 PARAMETERS = 0x831f8
 RECORD_LIMIT = 0x6000
@@ -37,14 +37,14 @@ RECORD_LIMIT = 0x6000
 def restore_set(path):
     data = Path(path).read_bytes()
     if hashlib.sha256(data).hexdigest() != RESTORE_SET_SHA256:
-        raise ValueError("Restore set differs from the reviewed ten-lifetime analysis (restore-set-v4.json)")
+        raise ValueError("Restore set differs from the reviewed ten-lifetime analysis (restore-set-v5.json)")
     return json.loads(data)
 
 
 def profile(analysis):
     """Ordered PHY addresses and masks; parameters use a separate full-width run."""
     entries = analysis["kind_diff"]["registers"]
-    assert len(entries) == 941
+    assert len(entries) == 899
     assert {k for k in entries if k.startswith("param[")} == {f"param[{i}]" for i in range(32, 52)}
     return [(int(k, 16), v["mask"]) for k, v in sorted(entries.items()) if k.startswith("0x")]
 
