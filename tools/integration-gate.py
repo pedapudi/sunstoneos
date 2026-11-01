@@ -10,6 +10,9 @@ ignore. The gate fails if that state cannot be read completely, or if it
 changes before the gate holds the lock or by the end of the last step.
 Use checks/check-index.py --changed PATH... to help choose focused checks; its
 textual coverage is advisory. Component checks outside this gate run directly.
+The full gate conditions hook fixtures on --affected or --changed scope. Its
+default combines HEAD^..HEAD (all tracked files at a root commit) with staged,
+unstaged and nonignored untracked changes in the checkout.
 """
 import argparse
 import fcntl
@@ -140,8 +143,6 @@ def main(argv=None):
     parser.add_argument('--trials', type=int, default=1, help='predeclared soak8 trials, not failure retries (default: 1)')
     parser.add_argument('--allow-dirty', action='store_true', help='compatibility option; local changes are always recorded')
     args = parser.parse_args(argv)
-    if args.full and (args.affected or args.changed):
-        parser.error('--full cannot be combined with --affected or --changed')
     if not args.full and not (args.target or args.variant or args.check or args.affected or args.changed):
         parser.error('select --target, --variant or --check; --full is only for justified broad validation')
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', args.label):
@@ -156,7 +157,7 @@ def main(argv=None):
         parser.error('source must be a SunstoneOS checkout')
     targets = list(dict.fromkeys(args.target))
     variants = list(VARIANTS) if args.full else list(dict.fromkeys(args.variant))
-    indexed, pending, affected_plan = [], [], None
+    indexed, pending, affected_plan, hook_scope = [], [], None, None
     if args.full or args.affected or args.changed:
         try:
             spec = importlib.util.spec_from_file_location('affected', source / 'checks/affected.py')
@@ -168,6 +169,27 @@ def main(argv=None):
                            for name, entry in sorted(index.items()) if entry['pure_host']]
                 pending = [{'check': name, 'needs': selector.needs(entry)}
                            for name, entry in sorted(index.items()) if not entry['pure_host'] and not entry['library']]
+                scope_range, scope_paths = args.affected, args.changed
+                basis = 'explicit range or paths'
+                dirty_paths = []
+                if not (scope_range or scope_paths):
+                    commit = subprocess.check_output(['git', 'cat-file', '-p', 'HEAD'], cwd=source)
+                    if any(line.startswith(b'parent ') for line in commit.split(b'\n\n', 1)[0].splitlines()):
+                        scope_range, basis = 'HEAD^..HEAD', 'latest first-parent change'
+                    else:
+                        tracked = subprocess.check_output(['git', 'ls-tree', '-r', '--name-only', '-z', 'HEAD'], cwd=source)
+                        scope_paths = [os.fsdecode(path) for path in tracked.split(b'\0') if path]
+                        basis = 'all tracked files at the root commit'
+                    tracked_changes = subprocess.check_output(['git', 'diff', '--name-only', '--no-renames', '-z', 'HEAD'], cwd=source)
+                    untracked = subprocess.check_output(['git', 'ls-files', '--others', '--exclude-standard', '-z'], cwd=source)
+                    dirty_paths = sorted({os.fsdecode(path) for path in (tracked_changes + untracked).split(b'\0') if path})
+                scope = selector.plan(scope_range, scope_paths, index=index)
+                selected = any(check['check'] == 'pre-push-hook.py' for check in scope['checks'])
+                if dirty_paths:
+                    local = selector.plan(changed=dirty_paths, index=index)
+                    selected |= any(check['check'] == 'pre-push-hook.py' for check in local['checks'])
+                indexed = [check for check in indexed if check['check'] != 'pre-push-hook.py' or selected]
+                hook_scope = {'basis': basis, 'selected': selected, 'plan': scope, 'dirty_paths': dirty_paths}
             else:
                 affected_plan = selector.plan(args.affected, args.changed)
                 indexed = [check for check in affected_plan['checks'] if check['status'] == 'runnable']
@@ -249,6 +271,9 @@ def main(argv=None):
     note('selection: ' + shlex.join(sys.argv[1:] if argv is None else argv))
     if affected_plan is not None:
         (output / 'affected.json').write_text(json.dumps(affected_plan, indent=2) + '\n')
+    if hook_scope is not None:
+        (output / 'hook-scope.json').write_text(json.dumps(hook_scope, indent=2) + '\n')
+        note('hook fixture: ' + ('selected' if hook_scope['selected'] else 'skipped') + '; ' + hook_scope['basis'])
     note(f'indexed checks: {len(indexed)} runnable, {len(pending)} pending')
     for check in pending:
         note('PENDING checks/' + check['check'] + ': ' + ', '.join(check['needs']))

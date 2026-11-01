@@ -58,8 +58,8 @@ def needs(entry):
             ([entry['input_reason']] if entry.get('input_reason') else [])) or ['additional inputs']
 
 
-def plan(value=None, changed=None):
-    index = indexer.generate()
+def plan(value=None, changed=None, index=None):
+    index = index if index is not None else indexer.generate()
     selected = set()
     revisions = None
     if value:
