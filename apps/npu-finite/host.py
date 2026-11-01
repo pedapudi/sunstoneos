@@ -63,6 +63,8 @@ def build_launcher(output,clang,lld,objcopy,*,watchdog_mode=0xb1):
 
 def startup_client(prepared):
  client=STARTUP_CLIENT.get(prepared.get('execution_profile'))
+ if prepared.get('execution_profile')==LATENCY and prepared.get('geometry',{}).get('latency',{}).get('idle'):
+  return (STARTUP_CLIENT[LATENCY][0],STARTUP_CLIENT[LATENCY][1],IDLE_JOBS,IDLE_JOBS+1)
  if prepared.get('execution_profile')==LATENCY and prepared.get('geometry',{}).get('latency',{}).get('dependent_chain'):
   count=prepared['geometry']['latency'].get('chain_repeats',1)
   require(type(count) is int and 1<=count<=1000,'Dependent chain repetition geometry differs.')
@@ -83,24 +85,42 @@ def sustained_extension(startup_marker,names,read):
   require('npu_finite_reference_2' not in names,'Sustained plan requires exactly two networks.')
  return sustained
 
+IDLE_JOBS=1301;IDLE_PROFILE=(0x4e505549444c3031,1);IDLE_GAPS=(9000,11000,100000);IDLE_CYCLES=100
+IDLE_THRESHOLD_US=10000;IDLE_RESUME_US=100
+
+def idle_extension(startup_marker,names,read):
+ """The immutable idle benchmark marker; it selects the same 1301-job startup record as a 100-repeat chain, so the symbol decides."""
+ idle='npu_idle_return_profile' in names
+ if not idle:return None
+ words=struct.unpack('<9Q',read('npu_idle_return_profile'))
+ require(startup_marker[2:]==(IDLE_JOBS,IDLE_JOBS+1) and words[:2]==IDLE_PROFILE and words[2] in (0,1) and
+  words[3:]==(IDLE_CYCLES,*IDLE_GAPS,IDLE_THRESHOLD_US,IDLE_RESUME_US) and 'npu_dependent_return_profile' not in names and
+  all(n in names for n in ('npu_runtime_queue_power_start','npu_idle_gate','npu_idle_resume','sunstone_deadline_wait_until',
+   'sunstone_deadline_irq','npu_finite_deadline_setup')),
+  'Idle benchmark marker, power owner or shared timer composition differs.')
+ return {'enabled':bool(words[2]),'cycles':IDLE_CYCLES,'gaps_us':list(IDLE_GAPS),'threshold_us':IDLE_THRESHOLD_US,'resume_budget_us':IDLE_RESUME_US}
+
 def latency_extension(startup_marker,names,read):
+ idle=idle_extension(startup_marker,names,read)
  latency=(startup_marker[:2]==(STARTUP_CLIENT[LATENCY][0],1) and startup_marker[3]==startup_marker[2]+1 and
-  (startup_marker[2] in (1001,1002) or 1004<=startup_marker[2]<=4001 and (startup_marker[2]-1001)%3==0))
+  (startup_marker[2] in (1001,1002) or idle is not None and startup_marker[2]==IDLE_JOBS or
+   idle is None and 1004<=startup_marker[2]<=4001 and (startup_marker[2]-1001)%3==0))
  require(('npu_latency_return_profile' in names)==latency,'Latency extension/startup marker differs.')
  if not latency:return None
  raw=read('npu_latency_return_profile')
  require(len(raw)==64,'Latency immutable extension length differs.')
  words=struct.unpack('<8Q',raw)
  repeats=words[5]
- dependent=startup_marker[2]>=1004
+ dependent=startup_marker[2]>=1004 and idle is None
  chain_repeats=(startup_marker[2]-1001)//3 if dependent else 1
  require(('npu_dependent_return_profile' in names)==dependent,'Dependent chain extension/startup marker differs.')
  if dependent:require(read('npu_dependent_return_profile')==struct.pack('<8Q',0x4e50554445503031,1 if chain_repeats==1 else 2,0,0,1,0,2,chain_repeats),'Dependent chain immutable extension differs.')
  require(words[0]==0x4e50554c41545031 and words[1] in (1,2) and words[2] in (0,1) and words[3:5]==(1000,1) and
   words[6:]==(4,24000000) and (repeats==0 or words[2]==1 and 2<=repeats<=64) and
-  (startup_marker[2]==1002)==bool(repeats) and (not dependent or words[1]==2 and words[2]==1 and not repeats),
+  (startup_marker[2]==1002)==bool(repeats) and (not dependent or words[1]==2 and words[2]==1 and not repeats) and
+  (idle is None or words[1:3]==(2,1) and not repeats),
   'Latency immutable extension differs.')
- return {'mode':'queue' if words[2] else 'legacy','measured_jobs':1000,'warmup_jobs':1,'model':0,'sequence_repeats':repeats,**({'doorbell_timing':True} if words[1]==2 else {}),**({'dependent_chain':True,**({'chain_repeats':chain_repeats} if chain_repeats!=1 else {})} if dependent else {})}
+ return {'mode':'queue' if words[2] else 'legacy','measured_jobs':1000,'warmup_jobs':1,'model':0,'sequence_repeats':repeats,**({'doorbell_timing':True} if words[1]==2 else {}),**({'idle':idle} if idle else {}),**({'dependent_chain':True,**({'chain_repeats':chain_repeats} if chain_repeats!=1 else {})} if dependent else {})}
 
 
 def image_profile(data,manifest):
@@ -506,6 +526,86 @@ def inference_report(text,status,deadline,g):
   'jobs':1,'status':status,'diagnostic_deadline':deadline,'output':bytes(output).hex(),
   'output_pattern':{k:v for k,v in output_pattern(b'',bytes(output)).items() if k!='first_unwritten'},'log':text}
 
+def _idle_pattern():
+ words=lambda name,n:r'(?P<'+name+r'>(?:0x[0-9a-f]{16}\n){'+str(n)+r'})'
+ text=r'NPU_IDLE=\n'+words('idle_totals',15)
+ for group in range(3):
+  text+=(r'NPU_IDLE_GROUP=\n'+words(f'idle_{group}',24)+
+   r'NPU_IDLE_DURATION_LE32=\n(?P<idle_%d_duration>(?:[0-9a-f]{128}\n){6}[0-9a-f]{32}\n)'%group+
+   r'NPU_IDLE_ADMISSION_LE16=\n(?P<idle_%d_admission>(?:[0-9a-f]{128}\n){3}[0-9a-f]{16}\n)'%group+
+   r'NPU_IDLE_SAMPLES_SHA256=\n(?P<idle_%d_samples>[0-9a-f]{64})\n'%group+
+   r'NPU_IDLE_OUTPUT_SHA256=\n(?P<idle_%d_output>[0-9a-f]{64})\n'%group)
+ return text
+IDLE_PATTERN=_idle_pattern()
+
+def percentile(ordered,rank):return ordered[(len(ordered)*rank+99)//100-1]
+
+def idle_report(match,g,frequency,warm_end,deadline,enabled):
+ """Decode and cross-check the matched idle intervals; return policy evidence.
+
+ Each group runs 100 cold jobs after an idle gap. A gap below the ten
+ millisecond threshold must never gate. With gating enabled, longer gaps must
+ gate and resume every cycle within the resume budget; the control policy
+ must perform no register write. Task counters charge the owner separately.
+ """
+ totals=[int(v,16) for v in match['idle_totals'].split()]
+ (policy,warm_owner_ticks,warm_owner_elapsed,warm_wakes,zero0,zero1,zero2,gates,resumes,writes,gated,resume_max,
+  owner_elapsed,owner_wakes,irq_ticks)=totals
+ require(policy==int(enabled) and (zero0,zero1,zero2)==(0,0,0) and
+  warm_wakes<=owner_wakes and warm_owner_elapsed<=owner_elapsed,'Idle policy or warm owner counters differ.')
+ reference=bytes.fromhex(g['references'][0]);expected_output=hashlib.sha256(hashlib.sha256(reference).digest()*IDLE_CYCLES).hexdigest()
+ groups=[];previous=warm_end;sums=dict.fromkeys(('gates','resumes','writes','gated','owner_elapsed'),0);matched=True;sentinel=(1<<64)-1
+ budget=IDLE_RESUME_US*frequency//1000000
+ for index,gap in enumerate(IDLE_GAPS):
+  (got_gap,cycles,checked,bad,start,end,gate_count,resume_count,write_count,gated_ticks,requests,driver_max,owner_ticks,
+   group_owner_elapsed,client_ticks,worker_ticks,group_irq,idle_min,idle_max,idle_sum,first_cycle,first_offset,first_byte,
+   pending)=(int(v,16) for v in match[f'idle_{index}'].split())
+  durations=list(struct.unpack('<100I',bytes.fromhex(match[f'idle_{index}_duration'].replace('\n',''))))
+  admission=list(struct.unpack('<100H',bytes.fromhex(match[f'idle_{index}_admission'].replace('\n',''))))
+  samples=hashlib.sha256(bytes.fromhex(match[f'idle_{index}_duration'].replace('\n',''))+
+   bytes.fromhex(match[f'idle_{index}_admission'].replace('\n',''))).hexdigest()
+  require(got_gap==gap and cycles==checked==IDLE_CYCLES and bad<=cycles and previous<=start<end<deadline and
+   samples==match[f'idle_{index}_samples'],'Idle group identity, order or sample digest differs.')
+  require(all(0<t<=frequency for t in durations) and all(t<=65535 for t in admission) and
+   gap*frequency//1000000*cycles<=idle_sum and idle_min*cycles<=idle_sum<=idle_max*cycles and
+   idle_min>=gap*frequency//1000000 and idle_sum<=end-start and
+   client_ticks+worker_ticks+owner_ticks<=end-start and group_irq<=end-start and group_owner_elapsed<=end-start,
+   'Idle gap, duration or task counters differ.')
+  if gap<IDLE_THRESHOLD_US:require(idle_max<IDLE_THRESHOLD_US*frequency//1000000,'Idle gap below the threshold reached it.')
+  expect_gate=enabled and gap>IDLE_THRESHOLD_US
+  if expect_gate:
+   require(gate_count==resume_count==requests==pending==cycles and write_count==6*cycles and
+    0<gated_ticks<=idle_sum-cycles*IDLE_THRESHOLD_US*frequency//1000000 and 0<driver_max<=IDLE_RESUME_US and
+    max(admission)<=IDLE_RESUME_US,'Idle gating or resume bound differs.')
+  else:
+   require((gate_count,resume_count,write_count,gated_ticks,requests,driver_max,pending)==(0,)*7,
+    'Idle interval gated or wrote registers outside the enabled policy.')
+  digest_ok=match[f'idle_{index}_output']==expected_output
+  require(digest_ok==(bad==0),'Idle output status disagrees with its digest.')
+  if bad:require(first_cycle<cycles and first_offset<len(reference) and first_byte<256 and first_byte!=reference[first_offset],'Idle first mismatch detail differs.')
+  else:require((first_cycle,first_offset,first_byte)==(sentinel,)*3,'Unexpected idle mismatch detail.')
+  ordered=sorted(durations);fast=sorted(admission)
+  for name,value in (('gates',gate_count),('resumes',resume_count),('writes',write_count),('gated',gated_ticks),('owner_elapsed',group_owner_elapsed)):sums[name]+=value
+  matched=matched and digest_ok;previous=end
+  groups.append({'gap_us':gap,'cycles':cycles,'gates':gate_count,'resumes':resume_count,'register_writes':write_count,
+   'gated_ticks':gated_ticks,'resume_requests':requests,'pending_admissions':pending,'idle_ticks':{'min':idle_min,'max':idle_max,'sum':idle_sum},
+   'driver_resume_us_max':driver_max,'admission_us':{'p50':percentile(fast,50),'p99':percentile(fast,99),'max':fast[-1]},
+   'cold_job_ticks':{'p50':percentile(ordered,50),'p99':percentile(ordered,99),'max':ordered[-1],'sum':sum(durations)},
+   'cold_job_us':{k:v*1000000/frequency for k,v in (('p50',percentile(ordered,50)),('p99',percentile(ordered,99)),('max',ordered[-1]))},
+   'owner_runtime_ticks':owner_ticks,'owner_elapsed_ticks':group_owner_elapsed,'client_ticks':client_ticks,'worker_ticks':worker_ticks,
+   'irq_driver_elapsed_ticks':group_irq,'start_ticks':start,'end_ticks':end,'functional_success':digest_ok,
+   'output_digest':match[f'idle_{index}_output'],'sample_digest':samples,
+   'first_mismatch':None if not bad else {'cycle':first_cycle,'offset':first_offset,'byte':first_byte}})
+ require((gates,resumes,writes,gated,owner_elapsed)==(sums['gates'],sums['resumes'],sums['writes'],sums['gated'],owner_elapsed) and
+  owner_elapsed>=warm_owner_elapsed+sums['owner_elapsed'] and resume_max<=budget and
+  (resume_max>0)==(sums['resumes']>0),'Idle totals disagree with the groups.')
+ return {'policy':'gate' if enabled else 'control','threshold_us':IDLE_THRESHOLD_US,'resume_budget_us':IDLE_RESUME_US,
+  'warm':{'owner_runtime_ticks':warm_owner_ticks,'owner_elapsed_ticks':warm_owner_elapsed,'owner_wakes':warm_wakes},
+  'totals':{'gates':gates,'resumes':resumes,'register_writes':writes,'gated_ticks':gated,'resume_max_ticks':resume_max,
+   'owner_elapsed_ticks':owner_elapsed,'owner_wakes':owner_wakes,'irq_driver_elapsed_ticks':irq_ticks},
+  'groups':groups,'functional_success':matched,
+  'scope':'Cold jobs follow 9, 11 and 100 ms gaps. Each cold interval covers input preparation through record release, including power admission and resume; it is reported separately from the warm window. Owner runtime is the scheduler counter of the power task; owner elapsed is its own measured wake time.'}
+
 def latency_report(text,status,deadline,g):
  """Check every measured latency and the digest of every checked output.
 
@@ -519,9 +619,12 @@ def latency_report(text,status,deadline,g):
  dependent=geometry.get('dependent_chain',False) if geometry else False
  chain_repeats=geometry.get('chain_repeats',1) if geometry else 1
  require(type(chain_repeats) is int and 1<=chain_repeats<=1000 and (dependent or chain_repeats==1),'Dependent chain repetition geometry differs.')
- extra_jobs=3*dependent*chain_repeats+bool(repeats)
+ idle=geometry.get('idle') if geometry else None
+ require(idle is None or idle in ({'enabled':enabled,'cycles':IDLE_CYCLES,'gaps_us':list(IDLE_GAPS),'threshold_us':IDLE_THRESHOLD_US,'resume_budget_us':IDLE_RESUME_US} for enabled in (False,True)),
+  'Idle benchmark geometry differs.')
+ extra_jobs=3*dependent*chain_repeats+bool(repeats)+300*bool(idle)
  require(g.get('runtime') and len(g['references'])==2 and geometry and
-  geometry=={'mode':geometry['mode'],'measured_jobs':1000,'warmup_jobs':1,'model':0,'sequence_repeats':repeats,**({'doorbell_timing':True} if doorbell_timing else {}),**({'dependent_chain':True,**({'chain_repeats':chain_repeats} if chain_repeats!=1 else {})} if dependent else {})} and
+  geometry=={'mode':geometry['mode'],'measured_jobs':1000,'warmup_jobs':1,'model':0,'sequence_repeats':repeats,**({'doorbell_timing':True} if doorbell_timing else {}),**({'idle':idle} if idle else {}),**({'dependent_chain':True,**({'chain_repeats':chain_repeats} if chain_repeats!=1 else {})} if dependent else {})} and
   geometry['mode'] in ('legacy','queue') and (not dependent or doorbell_timing and geometry['mode']=='queue' and not repeats) and (repeats==0 or geometry['mode']=='queue' and 2<=repeats<=64),'Latency network geometry differs.')
  head=('NPU_STAGE=WAIT_STARTUP\nNPU_STAGE=WARMUP\nNPU_STAGE=LATENCY\nNPU_STAGE=CLOSE\n'
   f'NPU_STAGE=WAIT_LOCAL_STOP\nNPU_IRQ_COMPLETIONS=0x{1002+extra_jobs:016x}\n'
@@ -529,6 +632,7 @@ def latency_report(text,status,deadline,g):
  pattern=(re.escape(head)+r'((?:0x[0-9a-f]{16}\n){23})(?:NPU_SUBMIT_TO_DOORBELL=\n(?P<doorbell_values>(?:0x[0-9a-f]{16}\n){5}))?NPU_DURATION_LE32=\n'
   r'(?P<duration_raw>(?:[0-9a-f]{128}\n){62}[0-9a-f]{64}\n)NPU_DURATION_SHA256=\n(?P<duration_digest>[0-9a-f]{64})\n'
   r'NPU_OUTPUT_SHA256=\n(?P<output_digest>[0-9a-f]{64})\n'
+  +(IDLE_PATTERN if idle else '')
   +(r'(?:NPU_DEPENDENT_BOUNDARY=\n(?P<boundary>(?:0x[0-9a-f]{16}\n){6})'+
    ('NPU_DEPENDENT_CHAIN=\n' if chain_repeats==1 else 'NPU_DEPENDENT_REPEATED_CHAIN=\n')+
    r'(?P<dependent_0>(?:0x[0-9a-f]{16}\n){'+str(12 if chain_repeats==1 else 21)+r'})(?P<dependent_digest_0>[0-9a-f]{64})\n'+
@@ -587,6 +691,13 @@ def latency_report(text,status,deadline,g):
    'first_mismatch':None if not seq_bad else {'offset':seq_offset,'byte':seq_byte},'irq_driver_elapsed_ticks':seq_irq,
    'window':'one input preparation, submit, interrupt wait, output acquisition and release; stream construction and output checking excluded'}
   matched=matched and seq_match
+ idle_result=None
+ require(bool(match['idle_totals'])==bool(idle),'Idle report/marker differs.')
+ if idle:
+  idle_result=idle_report(match,g,frequency,end,deadline,idle['enabled'])
+  idle_result['warm']['charged_cpu_ticks']=client_cpu+worker_cpu+idle_result['warm']['owner_runtime_ticks']
+  idle_result['warm']['charged_cpu_scope']='client, runtime worker and power-owner scheduler runtime in the 1000-job window'
+  matched=matched and idle_result['functional_success']
  chain=[]
  require(bool(match['dependent_0'])==dependent,'Dependent chain report/marker differs.')
  if dependent:
@@ -643,7 +754,7 @@ def latency_report(text,status,deadline,g):
   'controlled_negative':not matched,'jobs':total,'measured_jobs':jobs,'warmup_jobs':warmups,
   'outputs_checked':checked,'mismatches':bad,'status':status,'diagnostic_deadline':deadline,
   'first_mismatch':None if not bad else {'job':first_bad,'offset':offset,'byte':value},
-  'output_digest':digest,'duration_digest':match['duration_digest'],'repeated_sequence':sequence,'dependent_chain':chain,
+  'output_digest':digest,'duration_digest':match['duration_digest'],**({'idle':idle_result} if idle_result else {}),'repeated_sequence':sequence,'dependent_chain':chain,
   'timing':{'frequency_hz':frequency,'start_ticks':start,'end_ticks':end,'duration_ticks':end-start,
    'duration_seconds':(end-start)/frequency,'jobs_per_second':jobs*frequency/(end-start),
    'latency_ticks':{'p50':p50,'p99':p99,'max':maximum},

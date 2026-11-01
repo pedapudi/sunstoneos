@@ -246,7 +246,7 @@ if a.runtime:
   if a.sequence or a.dependent_chain:runtime_objects.append(compile_like('/drivers/npu/npu_service.c',root/'drivers/npu/a733_npu_sequence.c','npu-sequence'))
  if a.idle:
   for source in ('runtime/deadline.c','runtime/deadline-a733.c','apps/npu-finite/deadline.c'):
-   runtime_objects.append(compile_like('/drivers/npu/npu_service.c',root/source,Path(source).stem+'-idle'))
+   runtime_objects.append(compile_like('/drivers/npu/npu_service.c',root/source,source.replace('/','-').removesuffix('.c')+'-idle'))
  if a.sdk:runtime_objects.append(compile_like('/drivers/npu/npu_service.c',root/'runtime/npu_app.c','npu-app'))
  runtime_objects.append(compile_like('/drivers/npu/npu_service.c',generated/'npu_admitted_models.c','npu_admitted_models'))
  runtime_identity={'runtime_sources':{str(x.relative_to(root)):sha(x) for x in sorted([root/'apps/npu-convolution/native-runtime.c',root/'apps/npu-convolution/native-runtime.h',
