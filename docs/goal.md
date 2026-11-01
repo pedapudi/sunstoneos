@@ -32,7 +32,7 @@ Use implementation workers for device paths and a separate focused reviewer for 
 
 Start with supervised RAM-only execution and reviewed return procedures. Stop device communication after the first transport failure; preserve evidence and require explicit recovery before reuse.
 
-Do not make watchdog expiry or USB power automation prerequisites for unrelated work. Keep the failed UFS probe disabled until its failure and recovery are resolved.
+Watchdog-reset tests are allowed and in use through the host-armed watchdog and retained RTC breadcrumbs described in [the watchdog mechanism](watchdog.md). A watchdog return is a failed run; DRAM initialization through the documented restore or full training, and independent PMIC rail checks, are required before reuse. Do not make USB power automation a prerequisite for unrelated work. Keep the failed UFS probe disabled until its failure and recovery are resolved.
 
 Write paths may be implemented and host-checked at any time. Each image refuses writes unless its session grants them. Physical writes depend on the target:
 

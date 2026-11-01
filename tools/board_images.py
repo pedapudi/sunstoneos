@@ -11,6 +11,10 @@ from elftools.elf.elffile import ELFFile
 
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = Path.home() / '.cache/sunstoneos'
+CONTROL = CACHE/'evidence/wdt-breadcrumbs-1031/control/offline-proof/prepared'
+GPU_TREE = Path.home()/'git/sunstoneos-worktrees/gpu-bisect-1031-crumbs'
+GPU_TEMPLATE = CACHE/'evidence/sol-gpu-completion-1031/prepared'
+CLANG, LLD = Path('/usr/bin/clang-21'), CACHE/'host/usr/bin/ld.lld-21'
 
 
 def load(name, path):
@@ -72,7 +76,7 @@ def inspect(image, kind, descriptor=None, host_tree=None):
             geometry = cpu.geometry(Path(image))
         else:
             dev = load('inspect_dev', ROOT/'tools/dev-run.py')
-            legacy = load('inspect_legacy', (host_tree or dev.GPU_TREE)/'apps/os/cpu-return-host.py')
+            legacy = load('inspect_legacy', (host_tree or GPU_TREE)/'apps/os/cpu-return-host.py')
             geometry = legacy.geometry(Path(image))
         if kind=='npu':
             require('os_npu_client_model' in names, 'NPU kind requires the linked OS NPU service.')
@@ -160,11 +164,11 @@ def prepare(args, info, live, out):
         return {'epoch': 1, 'generation': 1, 'launch': ['reset64', '0x41000000'],
                 'uploads': [(0x41000000, Path(args.image)), (0x42000000, write(out/'blank.bin', bytes(16384)))],
                 'watchdog': info['watchdog'], 'format': 'probe'}
-    template = args.template or (dev.GPU_TEMPLATE if args.kind == 'gpu-return' else dev.CONTROL)
+    template = args.template or (GPU_TEMPLATE if args.kind == 'gpu-return' else CONTROL)
     if not info['generic']:
-        tree = args.host_tree or dev.GPU_TREE
+        tree = args.host_tree or GPU_TREE
         host = load('runner_legacy_host', tree / 'apps/os/cpu-return-host.py')
-        meta = dev.prepare(host, args.image, template, out, live)
+        meta = prepare_legacy(host, args.image, template, out, live)
         require(not meta['state_findings'], '; '.join(meta['state_findings']))
         raw = (out / 'board/session.bin').read_bytes()
         policy(info, args, raw)
@@ -199,15 +203,7 @@ def prepare(args, info, live, out):
         if struct.unpack_from('<I', grant, 48)[0]:
             struct.pack_into('<2Q', grant, 32, epoch, generation)
         services[records.CPU_GRANT] = grant
-    class Bin:
-        pass
-    # Reuse the current driver-derived bin map instead of duplicating it.
-    text = (ROOT/'drivers/clock/a733_cpu_clock.c').read_text()
-    import re
-    codes = [int(v, 16) for v in re.search(r'codes\[\]=\{([^}]*)\}', text)[1].split(',')]
-    Bin.bin_column = staticmethod(lambda word: codes.index((word>>16&255) or (word>>8&255))+1
-                                 if ((word>>16&255) or (word>>8&255)) in codes else None)
-    findings, derived = dev.state_check(live['words'], Bin)
+    findings, derived = dev.state_check(live['words'])
     require(not findings, '; '.join(findings))
     thermal = bytearray(services[records.THERMAL])
     struct.pack_into('<2I', thermal, 168, derived['apb1'], derived['apb1_hz'])
@@ -279,41 +275,75 @@ def capture(owner, plan, args):
     return {'valid': True, 'payload': result['payload'], 'report': decoded}
 
 
+
+
+def symbol(elf, name):
+    """A defined symbol by exact name, including C++ internal-linkage names."""
+    found = [s for s in elf.symbols if s['shndx'] != 0 and (s['name'] == name or s['name'].endswith(
+        str(len(name)) + name))]
+    return found[0] if len(found) == 1 else None
+
+
+def prepare_legacy(host, image, template, output, live):
+    """Board bundle from the ELF, a template bundle's session template and assets."""
+    o = host.os_image
+    data = Path(image).read_bytes()
+    elf = o.os_link.Elf(data)
+    require(symbol(elf, 'os_cpu_return_output') is not None, 'Image is not a CPU-return image.')
+    watchdog = o.watchdog_marker(elf)
+    require(watchdog is not None, 'Image carries no host-armed watchdog marker; a hang would strand the board.')
+    raw = bytearray((Path(template) / 'board/session-template.bin').read_bytes())
+    # Fresh identities: no record of an earlier run (DRAM result, report)
+    # can match this session. The grant record names the same session.
+    epoch, generation, lease = (secrets.randbits(62) | 1 for _ in range(3))
+    struct.pack_into('<3Q', raw, 24, epoch, generation, lease)
+    grant = o.grant_fields(raw)
+    if grant and grant['clusters']:
+        struct.pack_into('<2Q', raw, len(raw) - o.GRANT_BYTES + 32, epoch, generation)
+    findings, derived = load('legacy_state', ROOT/'tools/dev-run.py').state_check(live['words'])
+    if derived['apb1_hz']:
+        struct.pack_into('<2I', raw, 760, derived['apb1'], derived['apb1_hz'])
+    if derived['configure_adc_clock'] is not None:
+        raw[768] = derived['configure_adc_clock']
+    o.session_check(raw, False)
+    output.mkdir(parents=True)
+    board = output / 'board'
+    board.mkdir()
+    (board / 'image.elf').write_bytes(data)
+    segments, address, identity = o.base.image_parts(board / 'image.elf')
+    raw[48:80] = identity
+    o.build_launcher(board, len(raw), str(CLANG), str(LLD), watchdog['mode'])
+    uploads = []
+    for index, segment in enumerate(segments):
+        if segment['data']:
+            (board / f'segment-{index}.bin').write_bytes(segment['data'])
+            uploads.append({'name': f'segment-{index}.bin', 'address': segment['address']})
+    (board / 'session.bin').write_bytes(raw)
+    uploads.append({'name': 'session.bin', 'address': o.SESSION_ADDRESS})
+    for name, value in zip(('request.bin', 'contract.bin'), o.request_bytes(address, identity, raw)):
+        (board / name).write_bytes(value)
+    (board / 'result-zero.bin').write_bytes(bytes(16384))
+    (board / 'report-zero.bin').write_bytes(bytes(128))
+    shutil.copytree(Path(template) / 'assets', output / 'assets')
+    assets = o.host.validate_assets(output / 'assets')['assets']
+    linked = symbol(elf, 'mimus_asset_sha256')
+    if linked is not None:
+        require(elf.read(linked['value'], 96) == b''.join(bytes.fromhex(a['sha256']) for a in assets),
+                'Recognition inputs differ from the hashes linked into the image.')
+    names = ['launch.bin', 'session.bin', 'request.bin', 'contract.bin', 'result-zero.bin', 'report-zero.bin',
+             'image.elf'] + [u['name'] for u in uploads if u['name'].startswith('segment-')]
+    meta = {'schema': 'sunstoneos-dev-bundle-v1', 'image_sha256': hashlib.sha256(data).hexdigest(),
+            'build_id': identity.hex(), 'epoch': epoch, 'generation': generation, 'lease': lease,
+            'workload': struct.unpack_from('<I', raw, 400)[0], 'segments': uploads,
+            'files': {n: sha(board / n) for n in names}, 'template': str(Path(template).resolve()),
+            'derived_session': derived, 'state_findings': findings, 'watchdog': watchdog}
+    (output/'dev-bundle.json').write_text(json.dumps(meta,indent=2)+'\n')
+    return meta
+
+
 def rail_result(values, log):
-    """Pinned helper's status, PMIC readback and boot-clock proof."""
-    import re
-    complete = ('COMPLETE board bundle 33: DCDC5 restored to 800 mV with DCDC3 '
-                'already at 800 mV and all boot clock words')
-    def row(label):
-        rows = re.findall(r'^'+label+r' (.+)$',log,re.M)
-        require(len(rows)==1, 'Rail helper inspection absent or ambiguous: '+label)
-        return {k:int(v,0) for k,v in (x.split('=') for x in rows[0].split())}
-    supply = row('SUPPLY')
-    already = (values[:3] == (0x534b4552,5,1) and
-               log.splitlines().count('REFUSED board bundle 33: CPU supplies') == 1 and
-               supply['dcdc3_uv'] == supply['dcdc5_uv'] == 800000 and
-               supply['bin'] == 4 and supply['dcxo_hz'] == 26000000 and
-               not re.search(r'^(?:FAIL|STOPPED|VOLT)\b',log,re.M))
-    require(already or (values[:3] == (0x534b4552, 5, 0) and log.splitlines().count(complete) == 1 and
-            not re.search(r'^(?:FAIL|REFUSED|STOPPED)\b',log,re.M)), 'Rail helper refused or did not complete normally.')
-    if already:
-        # The pinned helper refuses its write before any transition when both
-        # rails are already at the requested point. Inspect its earlier clocks.
-        for name,pll,mux,mhz in [('CPU-L',0xf8802600,0x03010000,494),('CPU-B',0xf8802700,0x03000000,1014),
-                                ('DSU',0xf8802600,0x03010105,494)]:
-            f = row(name+' before')
-            require(f['pll']==pll and f['mux']==mux and f['mhz']==mhz and
-                    not(f['pat0']&(3<<29) or f['pat1']>>31 or f['lfm']>>31), 'Rail helper boot clocks differ.')
-        return {'dcdc3_uv':800000,'dcdc5_uv':800000,'boot_clock_domains':3,'already_normalized':True}
-    require(supply['dcdc3_uv']==800000 and supply['dcdc5_uv']==1000000 and supply['bin']==4 and
-            supply['dcxo_hz']==26000000, 'Rail helper entry supplies/bin/reference differ.')
-    volt = row('VOLT')
-    require(set(volt)=={'dcdc5_selector','dcdc5_uv'} and volt['dcdc5_uv']==800000 and
-            volt['dcdc5_selector']&127==30, 'Rail helper voltage readback differs.')
-    for name,pll,mux,mhz in [('CPU-L',0xf8802600,0x03010000,494),('CPU-B',0xf8802700,0x03000000,1014),
-                            ('DSU',0xf8802600,0x03010105,494)]:
-        for phase in ('before','after'):
-            f = row(name+' '+phase)
-            require(f['pll']==pll and f['mux']==mux and f['mhz']==mhz and
-                    not(f['pat0']&(3<<29) or f['pat1']>>31 or f['lfm']>>31), 'Rail helper boot clocks differ.')
-    return {'dcdc3_uv':800000,'dcdc5_uv':800000,'boot_clock_domains':3}
+    dev = load("board_rail_result", ROOT/"tools/dev-run.py")
+    result = dev.helper_report({"complete": True, "transport_failed": False, "mode": "kernel",
+        "result": dict(zip(("magic","stage","status"), values[:3]))}, log)
+    require(result["complete"], "Rail helper refused or did not complete normally: "+result.get("reason", ""))
+    return dict(result, boot_clock_domains=3, already_normalized=not result["written"])

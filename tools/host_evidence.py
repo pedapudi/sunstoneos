@@ -22,3 +22,10 @@ def unique_directory(requested):
             raise
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ-")
     return Path(tempfile.mkdtemp(prefix=stamp, dir=requested))
+
+
+def evidence_directory(requested):
+    """Create evidence and report its exact path before the runner starts."""
+    path = unique_directory(requested)
+    print(f'Evidence: {path}', flush=True)
+    return path

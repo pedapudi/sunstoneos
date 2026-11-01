@@ -32,7 +32,7 @@ def convolution(values, weights, bias):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('output', type=Path, help='fixture directory; existing directories receive a unique child')
+    parser.add_argument('output', type=Path, help='fixture directory; destination must not exist')
     out = parser.parse_args().output
     out = new_directory(out)
     # Dyadic values keep every accumulator and every float result exact.

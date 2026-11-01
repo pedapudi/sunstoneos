@@ -136,7 +136,7 @@ The parent table admits these sources:
 
 The image therefore accepts MBUS at 400 MHz (`0x84000000`), the value that
 every return to the boot ROM writes
-([rank 7 diagnosis](rank-7-diagnosis.md#mbus-ran-at-400-mhz-in-both-lifetimes)),
+([rank 7 diagnosis](rank-7-diagnosis.md#mbus-at-the-failing-instruction-is-unobserved)),
 as well as the 600 MHz that boot0 programs.
 `apps/usb-returning/check.py` already runs its linked cases with MBUS at
 400 MHz.

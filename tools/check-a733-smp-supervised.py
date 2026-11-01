@@ -213,7 +213,7 @@ def device_software_sources(sources):
 
 
 
-def launch_once(transaction,observe,bundle,prepared,evidence,record,save,ready,*,result_key="scheduler_result"):
+def launch_once(transaction,observe,bundle,prepared,evidence,record,save,ready,*,result_key="scheduler_result",power_removal_reason=None):
     require(not record.get('launch_attempted'), 'One supervised attempt only.')
     base.preload(transaction,bundle,prepared,evidence)
     require(int(transaction('readl','0x02050014').strip(),16)&1==0, 'Watchdog enabled before launch.')
@@ -221,6 +221,9 @@ def launch_once(transaction,observe,bundle,prepared,evidence,record,save,ready,*
     record.update(execution_intent={'entry':0x52000,'epoch':prepared['epoch'],'generation':prepared['generation'],
                   'native_elapsed_limit_ticks':24000,'recovery':'manual-usb-reconnect'},
                   backup_sha256=prepared['_backup_hashes'].copy(),launch_attempted=True)
+    if power_removal_reason:
+        record.update(power_removal_required=True,power_removal_reason=power_removal_reason)
+        record['execution_intent']['recovery']='whole-board-power-removal'
     save();started=time.monotonic();transaction('exe','0x52000');observe(started)
     record['launch_protocol_complete']=True
     record['complete']=record.get(result_key)=='observed-success'
@@ -244,6 +247,9 @@ def finish_after_observation(record,save,quarantine,hold=base.hold_ownership):
         require(record.get('refusal_probe_attempted') and record.get('sram_restored') and
                 record.get('rom_usable') and not record.get('transport_failed'),
                 'Clean refusal requires a verified report and actual SRAM restoration.')
+        if record.get('power_removal_required'):
+            # A nonce-bound pre-entry refusal proves no SD voltage switch ran.
+            record['power_removal_required']=False
         record['ownership_release_permitted']=True;save()
         return
     retain_after_capture(record,save,quarantine,hold)
@@ -267,14 +273,21 @@ def retain_after_capture(record,save,quarantine,hold=base.hold_ownership):
 
 def run_session(args,bundle,prepared,ready,validate_entry,capture_device,*,
                 product,serial,bcd_device,capture_seconds,result_key,source_files=(),
-                description='Supervised native application; manual reconnection after capture'):
+                description='Supervised native application; manual reconnection after capture',
+                power_removal_reason=None, capture_limit_seconds=None):
     """Shared protected transport for the observer and native board application.
 
     Callers validate their image geometry and native session inputs.
     The capture callback consumes only the newly enumerated native instance.
     Every uncertain post-entry outcome retains the physical lock.
     """
-    capture_limit={'application_result':179,'accelerator_result':19,'gpu_display_result':19,'hdmi_audio_result':19,'g2d_result':19,'displayport_result':19,'deinterlace_result':19,'isp0_result':19}.get(result_key,59)
+    capture_limit={'accelerator_result':19,'gpu_display_result':19,'hdmi_audio_result':19,'g2d_result':19,'displayport_result':19,'deinterlace_result':19,'isp0_result':19}.get(result_key,59)
+    if result_key in ('application_result', 'application_board_result'):
+        require(type(capture_limit_seconds) in (int, float) and
+                0 < capture_limit_seconds <= 179, 'Unsupported supervised capture bounds.')
+        capture_limit = capture_limit_seconds
+    else:
+        require(capture_limit_seconds is None, 'Unsupported supervised capture bounds.')
     require(0<capture_seconds<=capture_limit and result_key in ('scheduler_result','board_result','npu_result','gpu_result','gpu_transport_result','gpu_display_result','hdmi_audio_result','g2d_result','displayport_result','deinterlace_result','isp0_result','accelerator_result','i2s_result','jpeg_result','jpeg_encode_result','h264_encode_result','hevc_result','h264_result','dsi_result','bluetooth_result','camera_result','application_result','application_board_result','crypto_result','thermal_result','rtc_result','pcie_result','storage_read_result','spi_result','uart_result','pwm_result','adc_result','monitor_result'),
             'Unsupported supervised capture bounds.')
     ready()
@@ -354,7 +367,8 @@ def run_session(args,bundle,prepared,ready,validate_entry,capture_device,*,
             require('soc=00001903(A733)' in transaction('version'),'Target is not A733.')
             with usb_guard.reenumeration('sunstoneos-a733',description,1):
                 base.verify_dram(transaction,args.evidence,record,save)
-                launch_once(transaction,observe,bundle,prepared,args.evidence,record,save,ready,result_key=result_key)
+                launch_once(transaction,observe,bundle,prepared,args.evidence,record,save,ready,result_key=result_key,
+                    power_removal_reason=power_removal_reason)
                 finish_after_observation(record,save,lambda:access.quarantine_instance(node,
                     'Supervised result captured; manual reconnection and coordinator recovery review required.',identity))
         except BaseException as error:

@@ -4,6 +4,8 @@ import argparse
 import importlib.util
 import json
 from pathlib import Path
+import sys
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import harness
@@ -62,9 +64,33 @@ def main():
                     patch.object(host.subprocess, 'run', side_effect=AssertionError('Compiler reached after stale output.')):
                 host.prepare(*arguments)
         refuses(name, prepare)
+    memory = module('artifact_memory', 'apps/memtest/check.py')
+    refuses('memory-test', lambda destination: memory.prepare(SimpleNamespace(output=destination)))
+    fixture = module('artifact_h264_fixture', 'apps/h264/fixture.py')
+    stream = module('artifact_h264_stream', 'apps/h264/stream.py')
+    high = module('artifact_h264_high', 'apps/h264/high.py')
+    clip = args.output / 'input.h264'
+    clip.write_bytes(fixture.construct()[0])
+    refuses('h264-stream', lambda destination: stream.prepare_inputs(clip, destination))
+    refuses('h264-high', lambda destination: high.prepare_inputs(clip, destination, None, None))
+    def fixture_prepare(destination):
+        with patch.object(sys, 'argv', ['fixture.py', str(destination), '--ffmpeg', 'unused-ffmpeg']):
+            fixture.main()
+    refuses('h264-fixture', fixture_prepare)
+    returning = module('artifact_storage_read_input', 'tools/storage-read-returning.py')
+    returning_input = args.output / 'returning-input.bin'
+    returning_input.write_bytes(b'version-one-input')
+    try:
+        returning.main(['input', '--config', str(args.output / 'unused-config.json'),
+                        '--output', str(returning_input)])
+    except FileExistsError:
+        assert returning_input.read_bytes() == b'version-one-input'
+        cases['returning-input'] = {'passed': True}
+    else:
+        raise AssertionError('Returning read input reused an existing artifact filename.')
     (args.output / 'results.json').write_text(json.dumps(cases, indent=2) + '\n')
     assert all(row['passed'] for row in cases.values()), cases
-    print('PASS: six artifact producers refuse stale outputs and preserve version one without children.')
+    print('PASS: eleven artifact producers refuse stale outputs and preserve version one without redirection.')
 
 
 if __name__ == '__main__':

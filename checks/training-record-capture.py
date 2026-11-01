@@ -29,6 +29,7 @@ results=[]
 for directory in references:
     source=json.loads((directory/'session.json').read_text())
     record=t.build(t.from_capture(directory,a.restore_set,a.boot0,1))
+    assert t.build(t.from_capture(directory,a.restore_set,a.boot0,1,recapture=True))==record
     parsed=t.parse(record)
     assert len(record)<=t.RECORD_LIMIT
     assert parsed['chip_id']==list(struct.unpack('<4I',(directory/'stage1-identity.bin').read_bytes()[:16]))
@@ -42,12 +43,14 @@ ref=references[0];session=json.loads((ref/'session.json').read_text())
 real_read=Path.read_bytes;real_text=Path.read_text
 cases={'sid':'Capture SID differs','stage-table':'Capture stage tables differ',
        'training-kind':'Capture training kind',
-       'boot0':'boot0 differs','restore-set':'Restore set differs','incomplete':'Capture is incomplete'}
+       'boot0':'boot0 differs','restore-set':'Restore set differs','incomplete':'Capture is incomplete',
+       'lifetime':'not one lifetime'}
 for case,message in cases.items():
     def read(path,*args,**kwargs):
         data=bytearray(real_read(path,*args,**kwargs))
         if ((case=='sid' and path==ref/'stage1-identity.bin') or
-            (case=='boot0' and path==a.boot0) or (case=='restore-set' and path==a.restore_set)):
+            (case=='boot0' and path==a.boot0) or (case=='restore-set' and path==a.restore_set) or
+            (case=='lifetime' and path==ref/'mailbox.bin')):
             data[0]^=1
         return bytes(data)
     def read_text(path,*args,**kwargs):
@@ -61,9 +64,10 @@ for case,message in cases.items():
             data=json.loads(text);data['manifest']['variant']='init-only';return json.dumps(data)
         return text
     with patch.object(Path,'read_bytes',read),patch.object(Path,'read_text',read_text):
-        try:t.from_capture(ref,a.restore_set,a.boot0,1)
-        except ValueError as error:assert message in str(error),(case,str(error))
-        else:raise AssertionError('accepted '+case)
+        for recapture in (False, True):
+            try:t.from_capture(ref,a.restore_set,a.boot0,1,recapture=recapture)
+            except ValueError as error:assert message in str(error),(case,str(error))
+            else:raise AssertionError('accepted '+case)
     results.append({'case':case,'pass':True})
 # A capture may be moved and need not be listed in the historical analysis.
 relocated = a.output / 'relocated-capture'
@@ -78,11 +82,17 @@ entry = next(e for e in stage['entries'] if e['address'] <= address < e['address
 path = relocated / session['stages'][3]['output']
 data = bytearray(path.read_bytes()); data[entry['offset']+address-entry['address']] ^= 1; path.write_bytes(data)
 assert t.from_capture(relocated, a.restore_set, a.boot0, 1) != relocated_spec
+assert t.from_capture(relocated, a.restore_set, a.boot0, 2, recapture=True)['generation'] == 2
 # New capture runs record live training state without a previous session path.
 state = json.loads((relocated / 'session.json').read_text())
 state.update(ddr_evidence=None, ddr_variant='pstate0', ddr_result={'dram_mib': 12288, 'board_result': 0})
 (relocated / 'session.json').write_text(json.dumps(state))
 t.from_capture(relocated, a.restore_set, a.boot0, 1)
+mailbox = relocated / 'mailbox.bin'
+changed = bytearray(mailbox.read_bytes()); changed[0] ^= 1; mailbox.write_bytes(changed)
+try:t.from_capture(relocated, a.restore_set, a.boot0, 1)
+except ValueError as error:assert 'live DDR mailbox differs' in str(error)
+else:raise AssertionError('accepted a current capture with a mismatched live mailbox')
 results.append({'case': 'fresh-live-capture', 'pass': True})
 (a.output/'results.json').write_text(json.dumps({'physical_access':False,'cases':results},indent=2)+'\n')
-print('PASS capture builder: both board records preserve full parameters; six identity/data refusals, relocated and fresh live captures.')
+print('PASS capture builder: both board records preserve full parameters; seven identity/data refusals in both modes; relocated and fresh live captures with mailbox binding.')

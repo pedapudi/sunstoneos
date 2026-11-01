@@ -1,8 +1,12 @@
 {
   "repository": "https://github.com/pedapudi/mimus.git",
-  "revision": "764e48339f6c0d7f23b0d98540d2ea0f0f18bd39",
+  "revision": "c0872ac122e156d8c5c0c64e3a09beeee8c5c21f",
   "base_revision": "18c7c81968f56c8c985af0ec26448184cf6a17ec",
-  "local_worktree": "/home/sunil/git/mimus-worktrees/os-refs-1031",
-  "branch": "port/sunstoneos-os-refs",
-  "application_directory": "sunstoneos"
+  "local_worktree": "/home/sunil/git/mimus-worktrees/small-fixes-1031",
+  "branch": "port/sunstoneos-split",
+  "application_directory": "sunstoneos",
+  "dashboard": {
+    "title": "Local speech recognition",
+    "document": "docs/mimus.md"
+  }
 }

@@ -31,7 +31,7 @@ def convolution(a, weights, bias):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('output', type=Path, help='fixture directory; existing directories receive a unique child')
+    parser.add_argument('output', type=Path, help='fixture directory; destination must not exist')
     out = parser.parse_args().output
     out = new_directory(out)
     x = ((np.arange(64,dtype=np.int32)*7)%33-16).reshape(1,1,8,8)

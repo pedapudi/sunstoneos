@@ -7,6 +7,7 @@ from pathlib import Path
 _output_spec=importlib.util.spec_from_file_location('device_evidence_directory',Path(__file__).resolve().parents[2]/'tools/host_evidence.py')
 _output_module=importlib.util.module_from_spec(_output_spec);_output_spec.loader.exec_module(_output_module)
 unique_directory=_output_module.unique_directory
+new_directory=_output_module.new_directory
 import struct
 import time
 ROOT=Path(__file__).resolve().parents[2]

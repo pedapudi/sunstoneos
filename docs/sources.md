@@ -182,7 +182,7 @@ incoming-headset path and outstanding physical qualification.
 
 The JPEG diagnostic uses FFmpeg 8.0.1 (`7:8.0.1-3ubuntu2`) as an open-source
 host decoder reference. It is not linked into SunstoneOS. The
-[numerical reference record](jpeg-application.md#exact-nonconstant-diagnostic)
+[numerical reference record](jpeg-application.md#offline-evidence-does-not-qualify-physical-operation)
 identifies the selected decoder, input/output hashes, executable and shared
 libraries. The native driver uses its own source implementation.
 

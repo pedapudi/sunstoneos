@@ -75,14 +75,13 @@ SRAM scratch, and uses the measured four-second WDT0 sequence to obtain a fresh
 FEL instance. It waits for the new instance's udev permissions. DRAM setup reuses
 `tools/run-ddr.py` under the same lock. A matching SID selects a cached training
 record; missing or rejected restoration falls back to full training. The default
-record directory is `~/.cache/sunstoneos/evidence/dram-restore-v5-1031/records`;
+record directory is `~/.cache/sunstoneos/ddr-records`;
 `--training-dir`, `--ddr-restore` and `--ddr-build` override those inputs.
 
 Images with the CPU entry guard run the SHA-256-pinned rail helper first. It
-normalizes DCDC5 to 800 mV after checking DCDC3, the speed bin and boot clocks.
-Its unchanged-supply refusal is accepted only when its readbacks establish both
-rails already at 800 mV and the required boot clocks. Other helper refusals stop
-the run. A reset alone does not establish PMIC rail values.
+normalizes both CPU rails to 800 mV after checking the speed bin and boot
+clocks. It accepts either rail already at 800 mV, writes raised DCDC3 before
+DCDC5, and verifies each changed rail. Helper refusals stop the run. A reset alone does not establish PMIC rail values.
 
 The pinned helper returns without disarming WDT0 or writing breadcrumbs. For
 this helper, the runner verifies the raw 26 MHz oscillator and selects its
@@ -178,8 +177,8 @@ cases. Supplying the control ELF also checks real CPU and cached GPU preparation
 The following artifacts are already built in the local cache:
 
 ```sh
-hello="$HOME/.cache/sunstoneos/build/board-runner-1031/hello-v2/sunstone-a733-os-hello.elf"
-checks="$HOME/.cache/sunstoneos/build/board-runner-1031/checks-final"
+hello="$HOME/.cache/sunstoneos/build/board-runner-1031/merged-hello/sunstone-a733-os-hello.elf"
+checks="$HOME/.cache/sunstoneos/build/board-runner-1031/merged-checks"
 gpu="$HOME/.cache/sunstoneos/build/gpu-bisect-1031/crumbs/ladder-wdt4/2-firmware/sunstone-a733-os.elf"
 $board run "$hello" --port 3-1 --kind cpu-return \
   --expect "$checks/qualification/hello-expected.bin"

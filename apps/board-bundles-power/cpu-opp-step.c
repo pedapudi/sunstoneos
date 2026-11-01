@@ -18,8 +18,10 @@
  *   32  step 6, read-back after the workload: temperatures, rails and the
  *       boot clock words, which the workload's own CPU-B lowering and the
  *       ROM return leave; no write;
- *   33  after a successful workload return: require all boot clock words,
- *       then restore DCDC3 and DCDC5 to 800 mV with their clocks held.
+ *   33  require all boot clock words, then lower DCDC3 and then DCDC5 to
+ *       800 mV with their clocks held. Either rail may enter at any voltage
+ *       from 800 mV to the bin's top point on that rail; a rail already at
+ *       800 mV gets no write.
  *
  * Set step6-set-5 ran 30 to 32 as bundles 25 to 27, before the GPU and
  * clock-audit rows took those numbers.
@@ -35,9 +37,10 @@
  * domains read-only (DCDC5 and DCDC3 snapshots; PLL, mux, pattern and LFM
  * words). It admits the step only at the NORMAL thermal level with every
  * sensor below OPP_LIMIT_MC, on bin vf0400, with DCDC3 and DCDC5 at the
- * plan's entry voltages (800 mV unless it names others), CPU-B at 1014 MHz, CPU-L and the DSU on decodable PLL rates and every
- * pattern and LFM enable clear; otherwise it returns with a REFUSED line
- * before any write. Each clock change goes through the driver in 200 us
+ * plan's entry voltages (800 mV unless it names others; bundle 33 accepts a
+ * range), CPU-B at 1014 MHz, CPU-L and the DSU on decodable PLL rates and
+ * every pattern and LFM enable clear; otherwise it returns with a REFUSED
+ * line before any write. The rails are checked after the clock words. Each clock change goes through the driver in 200 us
  * bursts and is followed by a check of the rail voltage it planned. A sensor
  * set follows each change that raises a rate or a voltage; a sensor at or
  * above OPP_LIMIT_MC, or a level other than NORMAL, stops the step: what it
@@ -136,8 +139,12 @@ __attribute__((used,retain)) const uint64_t os_cpu_return_rail_profile[4]={
 static const struct plan plan = {"DCDC5 restored to 800 mV with DCDC3 already at 800 mV and all boot clock words",
     0, {0, 0}, 1, {{OP_VOLT, A733_CPU_LITTLE, 0, 800}}, {1000, 800}};
 #else
+/* Either rail enters at 800 mV up to the bin's top point on that rail: a
+ * top-point image that fails before restoring them leaves DCDC5 1000 mV and
+ * DCDC3 1050 mV, and a successful one leaves DCDC3 at 800 mV. */
+#define ENTRY_RANGE 1
 static const struct plan plan = {"DCDC3 and DCDC5 restored to 800 mV at boot clock words",
-    0, {0, 0}, 2, {{OP_VOLT, A733_CPU_BIG, 0, 800}, {OP_VOLT, A733_CPU_LITTLE, 0, 800}}, {1000, 1050}};
+    0, {0, 0}, 2, {{OP_VOLT, A733_CPU_BIG, 0, 800}, {OP_VOLT, A733_CPU_LITTLE, 0, 800}}, {0, 0}};
 #endif
 #else
 #error OPP_BUNDLE names no step
@@ -225,9 +232,11 @@ static int cpu_write(void *unused, uintptr_t a, uint32_t value)
 }
 
 static int hottest_mc;
+static void rail_state(void);
 
 static _Noreturn void fail(const char *what)
 {
+    rail_state();
     struct bb_line l;
     bb_line_start(&l, "STEP");
     bb_line_dec(&l, "state", cpu.state);
@@ -416,7 +425,30 @@ static void clock_change(enum a733_cpu_domain d, uint32_t mhz, uint32_t mv)
 
 #include "cpu-rail-change.h"
 
-static void rail_change(enum a733_cpu_domain domain, uint32_t mv)
+/* The rail change in progress at a failure: the rail, the helper's stage
+ * (cpu-rail-change.h, 2 for the write request) and the provider's last
+ * transfer. byte_index counts the request's finished byte transfers; the
+ * selector write is transfer 6 and its reread transfer 7. selector is the
+ * byte the provider last read, written the byte it last sent and readback
+ * its reread. */
+static void rail_state(void)
+{
+    if (cpu_rail_state.stage == CPU_RAIL_IDLE)
+        return;
+    struct bb_line l;
+    bb_line_start(&l, "RAIL");
+    bb_line_dec(&l, "rail", cpu_rail_state.rail);
+    bb_line_dec(&l, "stage", cpu_rail_state.stage);
+    bb_line_dec(&l, "byte_index", bb_power.pmic.byte_index);
+    bb_line_hex(&l, "selector", bb_power.pmic.values[4]);
+    bb_line_hex(&l, "written", bb_power.pmic.values[6]);
+    bb_line_hex(&l, "readback", bb_power.pmic.values[7]);
+    bb_line_end(&l);
+    bb_power_print(&l);
+}
+
+/* Kept out of line so checks/os-cpu-return-rails.py can stop on each call. */
+__attribute__((noinline)) static void rail_change(enum a733_cpu_domain domain, uint32_t mv)
 {
     const unsigned r = supply(domain);
     struct a733_pmic_snapshot snapshot;
@@ -540,10 +572,6 @@ static void client(void *unused)
     /* Admission: the approval record's board state. */
     if (!entry.binned || entry.bin != STEP_BIN)
         refuse("speed bin");
-    for (unsigned r = 0; r < 2; ++r)
-        rail_mv[r] = plan.entry_mv[r] ? plan.entry_mv[r] : BOOT_MV;
-    if (cpu.rail_uv[1] != rail_mv[1] * 1000u || cpu.rail_uv[0] != rail_mv[0] * 1000u)
-        refuse("CPU supplies");
     if (!entry.domain[A733_CPU_BIG].decoded || entry.domain[A733_CPU_BIG].hz != BASE_MHZ * 1000000ull)
         refuse("CPU-B rate");
     for (unsigned d = 0; d < A733_CPU_DOMAINS; ++d) {
@@ -573,6 +601,26 @@ static void client(void *unused)
     for (unsigned i = 0; i < plan.count; ++i)
         if (plan.ops[i].kind != OP_RATE && plan.ops[i].mv > limits[supply((enum a733_cpu_domain)plan.ops[i].domain)])
             refuse("voltage above the bin's top point");
+#ifdef ENTRY_RANGE
+    /* The rail helper bounds each lowering by these same top points. */
+    if (limits[0] != CPU_RAIL_TOP_DCDC5_MV || limits[1] != CPU_RAIL_TOP_DCDC3_MV)
+        refuse("bin top points differ from the rail helper's");
+#endif
+    /* The rails last, so a clock refusal is reported first. */
+    for (unsigned r = 0; r < 2; ++r) {
+#ifdef ENTRY_RANGE
+        /* Any decoded voltage from 800 mV to the rail's top point; the
+         * selector steps are 10 mV in this range. */
+        const uint32_t uv = cpu.rail_uv[r];
+        if (uv < BOOT_MV * 1000u || uv > limits[r] * 1000u || uv % 10000u)
+            refuse("CPU supplies");
+        rail_mv[r] = uv / 1000u;
+#else
+        rail_mv[r] = plan.entry_mv[r] ? plan.entry_mv[r] : BOOT_MV;
+        if (cpu.rail_uv[r] != rail_mv[r] * 1000u)
+            refuse("CPU supplies");
+#endif
+    }
 
     for (unsigned i = 0; i < plan.count; ++i) {
         const struct op *o = &plan.ops[i];
@@ -582,6 +630,9 @@ static void client(void *unused)
             continue;
         }
         const uint32_t was = o->kind == OP_CLOCK ? now_mhz[o->domain] : rail_mv[supply((enum a733_cpu_domain)o->domain)];
+        /* A rail already at its target gets no write and no VOLT line. */
+        if (o->kind == OP_VOLT && o->mv == was)
+            continue;
         if (o->kind == OP_CLOCK)
             clock_change((enum a733_cpu_domain)o->domain, o->mhz, o->mv);
         else

@@ -249,7 +249,7 @@ The resulting ELF requires a separate immutable launch session and physical
 recovery evidence before board execution. Building it does not authorize storage writes.
 
 
-The [native mimus image](mimus-smp.md#native-eight-core-application-image) uses the
+The [native mimus image](mimus-smp.md#native-eight-core-recognition-and-supervised-capture) uses the
 same central build with the SMP C++ runtime and recorded or paced recognition.
 Its target is `sunstone-a733-mimus-native`.
 

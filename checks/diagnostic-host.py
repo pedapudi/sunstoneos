@@ -76,7 +76,8 @@ def exercise(name, fault=None):
                     address, size, path = args[:3]; del args[:3]
                     data = read(int(address, 0), int(size))
                     if fault == 'upload' and str(path).endswith('uploaded.bin'): data = b'bad'
-                    if fault == 'dram' and str(path).endswith('dram-tested.bin'): data = b'bad'
+                    if fault == 'dram' and str(path).endswith('dram-tested.bin'): data = bytes(value ^ 1 for value in data)
+                    if fault == 'dram-short' and str(path).endswith('dram-tested.bin'): data = b'bad'
                     if fault == 'dram-restore' and str(path).endswith('dram-restored.bin'): data = b'bad'
                     Path(path).write_bytes(data)
                 elif op == 'write':
@@ -181,6 +182,9 @@ def exercise(name, fault=None):
             if fault in ('dram-transport','dram-restore','dram-interrupt'):
                 assert record['dram_probe_dirty'] and state['held']
                 assert len(state['calls']) == 5
+            elif fault == 'dram-short':
+                assert record['dram_probe_dirty'] and state['held']
+                assert len(state['calls']) == 4
             elif name == 'usb-diagnostic.py': assert not state['held']
         CASES.append(dict(tool=name, fault=fault, requests=len(state['calls'])))
 
@@ -191,5 +195,5 @@ for name in ('check-watchdog-configuration.py', 'check-fel-input.py', 'usb-diagn
     if name != 'check-fel-input.py': exercise(name, 'upload')
     if name == 'check-watchdog-configuration.py': exercise(name, 'oversized')
     if name == 'usb-diagnostic.py':
-        for fault in ('dram','dram-restore','dram-transport','dram-interrupt'): exercise(name, fault)
+        for fault in ('dram','dram-short','dram-restore','dram-transport','dram-interrupt'): exercise(name, fault)
 print(json.dumps(dict(passed=True, cases=CASES, physical_access=False), indent=2))

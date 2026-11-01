@@ -5,6 +5,7 @@ from pathlib import Path
 _output_spec=importlib.util.spec_from_file_location('device_evidence_directory',Path(__file__).resolve().parents[2]/'tools/host_evidence.py')
 _output_module=importlib.util.module_from_spec(_output_spec);_output_spec.loader.exec_module(_output_module)
 unique_directory=_output_module.unique_directory
+new_directory=_output_module.new_directory
 M,F,Q,A=0x4d363248,0x46363248,0x51363248,0x41363248
 
 def require(ok,message):

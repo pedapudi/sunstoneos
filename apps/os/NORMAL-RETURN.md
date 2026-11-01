@@ -87,13 +87,36 @@ stop job to each inference worker, receives seven explicit acknowledgments and
 copies its transcript. Each acknowledged worker suspends without another job.
 The recognizer then publishes one completion and suspends.
 
-The thermal owner keeps its existing safety policy while completing CPU-B's
-request for 1014 MHz. It suppresses automatic restoration to higher clocks during
-close. The driver can lower DCDC3 to its recorded voltage floor after lowering
-frequency. DCDC5 continues supplying CPU-L and the DSU until ROM lowers their
-clocks. At least four grant changes cover three initial requests and one close
-request. Thermal transitions can consume the remaining grant; exhaustion retains
-the session rather than claiming successful cleanup.
+An application may finish before the CPU clock owner has raised every domain;
+it need not wait for `ss_clock_ready()`. Once the return is requested, the
+owner starts no further inspection or raise. A transition already in flight,
+an inspection or a raise, finishes first. If CPU-B is then above boot0's
+1014 MHz, the owner requests 1014 MHz for it, and the driver lowers DCDC3 to its
+recorded voltage floor after lowering the frequency. If CPU-B was never raised,
+the owner writes nothing and consumes no grant change. CPU-L and the DSU keep
+their points, and DCDC5 keeps supplying them, until the ROM return resets their
+clocks. The thermal owner keeps its safety policy throughout and suppresses
+automatic restoration to higher clocks. At least four grant changes cover
+three initial requests and one close request. Thermal transitions can consume
+the remaining grant; exhaustion, or a lowering that is refused or expires,
+retains the session with its first-failure record. Before close, the owner
+reads CPU-B back at 1014 MHz on its PLL and requires no held clock lease, rail
+lease or PMIC request. `checks/os-cpu-return-entry-owner.py` runs the linked
+owner with a return requested during inspection, before the first request,
+with a request in flight and after every raise.
+
+An expired raise can leave DCDC3 at 1050 mV without changing CPU-B's 1014 MHz
+clock. Thermal lowering also preserves the higher voltage. These states return
+normally. Before publishing clock completion, the owner records its last
+confirmed DCDC5 and DCDC3 PMIC readbacks in `os_cpu_return_rail_uv`. The host
+copies this eight-byte report before restoring image RAM, saves `cpu-rails.bin`
+and its hash, and includes both values in `result.cpu_rails`. Zero is decoded
+as unread; a return before the first inspection issues no PMIC transaction.
+`tools/dev-run.py` reports these readings and runs its general rail helper
+after normal return. That helper accepts either rail from 800 mV to its vendor
+top voltage at the boot clock words and restores both to 800 mV. The separate
+fixed-DCDC3 helper used by the recorded recognition continuation has a narrower
+entry contract.
 
 After clock completion and lease release, the thermal owner masks its SPI,
 waits for distributor write propagation and stops the converter and local

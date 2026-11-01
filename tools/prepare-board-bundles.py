@@ -1101,14 +1101,19 @@ ROWS = [
     opp_row('cpu-rails-boot-return', 33, 'Restore both CPU rails to 800 mV after a successful workload return',
             'DCDC3 and DCDC5 restored to 800 mV at boot clock words',
             'VOLT dcdc3_selector=0x9e dcdc3_uv=800000 and VOLT dcdc5_selector=0x9e dcdc5_uv=800000',
-            'After the completed workload and bundle 32, require all three boot PLL and mux words before any '
-            'selector write. Restore DCDC3 with CPU-B held exclusively, then DCDC5 with CPU-L and the DSU held '
-            'exclusively. Recheck the supplied clocks immediately before each write and keep ownership through '
-            'the provider readback, at least 1 ms of settling and a final snapshot. The final inspections '
-            'require both rails at 800 mV and all boot clock words. A deadline or fatal workload failure is '
-            'not an input to this bundle; this successful-set cleanup does not make such failures recoverable.',
-            ('cpu-after-workload-read',), entry=('DCDC5 at 1,000 mV and DCDC3 at 1,050 mV, CPU-B at 1,014 MHz',
-                                               'dcdc5_uv=1000000 dcdc3_uv=1050000')),
+            'After the completed workload and bundle 32, or after a top-point image that failed before restoring '
+            'its rails and a cold DRAM start, require all three boot PLL and mux words, pattern and LFM clear and '
+            'every sensor NORMAL before the rail check and any selector write. Either rail may enter at any '
+            'voltage from 800 mV to the bin\'s top point on that rail (DCDC3 1,050 mV, DCDC5 1,000 mV in '
+            'vf0400); any other reading is REFUSED without a write. Lower DCDC3 with CPU-B held exclusively at '
+            '1,014 MHz, then DCDC5 with CPU-L and the DSU held exclusively at 494 MHz; a rail already at 800 mV '
+            'gets no write and no VOLT line. Recheck the supplied clocks immediately before each write and keep '
+            'ownership through the provider readback, at least 1 ms of settling and a final snapshot. The final '
+            'inspections require both rails at 800 mV and all boot clock words. A raised CPU-B rate fails the '
+            'boot-word check; an image that left secondary cores running is not an input.',
+            ('cpu-after-workload-read',), entry=('DCDC5 from 800 to 1,000 mV and DCDC3 from 800 to 1,050 mV, '
+                                               'CPU-B at 1,014 MHz', 'dcdc5_uv=1000000 dcdc3_uv=1050000 at '
+                                               'the top-point entry')),
     dict(gpu_row('gpu-exact-sum', 34, 'Two GPU integer matrix products with exact sums, followed by cleanup and OFF',
             'fw-mimus', 'COMPLETE GPU exact sums: 2 jobs, tags and sums match, context cleaned up, firmware stopped, OFF and '
             'provider parked',

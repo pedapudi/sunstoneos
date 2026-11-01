@@ -19,6 +19,8 @@ An image manifest linked into the executable defines consumed application region
 
 Runtime file inventories cover bytes uploaded to the device or parsed as direct safety inputs. Ancillary source copies, logs and unused manifest/template archives can change or disappear without denying launch. Object/header records remain necessary when a builder reuses compiled objects whose native layouts depend on those headers.
 
+SMP, device, storage, observer, supervised and returning launchers print the actual evidence directory before acquiring the board. Reusing an evidence parent creates a timestamped child; the printed path identifies that run. Grant and slot-plan destinations remain strict artifact paths.
+
 Consumed artifacts require the exact requested destination to be unused. Grants, plans, build outputs, generated inputs and launch bundles refuse an existing path; they never redirect into children that a later command might overlook. Evidence directories use unique timestamped children and preserve earlier results.
 
 No standalone predicate requiring the final command line to equal an approved command was found at the base revision. The related path gates compared artifact inventories, queue prerequisites or separately reviewed inputs. No removed-process host C gate was found; the C candidates below validate native calls, files, geometry or results.
@@ -29,7 +31,11 @@ Physical operations require the selected port’s `board_lock`, USB guard, curre
 
 Native session/build bindings, memory and DMA ownership, cache publication, shared clock/power coordination, supported clock/voltage limits, native thermal bounds and copied-result integrity remain required. Returning development runs require the host-armed watchdog and RTC breadcrumbs. Existing failure-stop and restoration handlers remain; process cleanup cannot establish physical recovery.
 
+A complete DRAM comparison mismatch with verified restoration and a durable journal refuses launch without quarantining the ROM instance. DDR initialization may follow that refusal. Incomplete reads, transport loss, failed restoration and failed restoration journaling retain quarantine and ownership.
+
 Storage writes retain the backup-first boot update with slot fallback, backed-up microSD data-partition confinement and the user-designated scratch-NVMe restriction. Removing review or queue records does not expand any write grant or target extent.
+
+SD profile 3 requires `--allow-sd-1v8` when preparing inputs and launching them. Before execution, the runner durably records `power_removal_required` and retains ownership after success or failure, including a forced ROM return. The card can remain at 1.8 V until whole-board power removal. A verified supervised refusal before native entry clears that requirement; profile 2 keeps its normal return behavior.
 
 ## Original grouped inventory
 
@@ -252,13 +258,13 @@ This table contains 14 original grouped rows.
 | [apps/emmc-read/prepare.py:47](../apps/emmc-read/prepare.py) | `replaced` | `L47: Missing cold eMMC ownership authority.` | Remove queue/review/claim authority and preserve backup-first writes, target geometry, write grants, actual candidate bytes and readback. |
 | [apps/storage-read-returning/build.py:64](../apps/storage-read-returning/build.py) | `replaced` | `Existing output path refuses the operation instead of creating an unused child; original guards at 64.` | Remove queue/review/claim authority and preserve backup-first writes, target geometry, write grants, actual candidate bytes and readback. |
 | [apps/storage-read/manifest.py:8](../apps/storage-read/manifest.py) | `replaced` | `Existing output path refuses the operation instead of creating an unused child; original guards at 8.` | Remove queue/review/claim authority and preserve backup-first writes, target geometry, write grants, actual candidate bytes and readback. |
-| [apps/storage-read/prepare.py:95](../apps/storage-read/prepare.py) | `replaced` | `Existing output path refuses the operation instead of creating an unused child; original guards at 228. Additional original condition: L95: Tested STORAGE_READ image manifest required.; L155: CMD0 initialization must not claim unestablished cold state.; L171: Missing frozen STORAGE_READ evidence.; L174: STORAGE_READ authority is not bound to this image/target.; L178: Reviewed ROM JTAG handoff and excluded debug clients required.; L193: Reviewed ROM USB0 takeover is not bound to this image/target.; L250: Unsealed STORAGE_READ authority or transport input.; L272: STORAGE_READ upload spans changed or unsealed.` | Remove queue/review/claim authority and preserve backup-first writes, target geometry, write grants, actual candidate bytes and readback. |
-| [tools/boot-slots.py:264](../tools/boot-slots.py) | `kept-safety` | `L264: .manifest.json; L495: --container` | Keep container and allocation geometry, exclusive plan-file creation and strict creation of the requested plan directory. Existing plans remain untouched; no timestamped child can hide a replacement. |
+| [apps/storage-read/prepare.py:95](../apps/storage-read/prepare.py) | `replaced` | `Existing output path refuses the operation instead of creating an unused child; original guards at 228. Additional original condition: L95: Tested STORAGE_READ image manifest required.; L155: CMD0 initialization must not claim unestablished cold state.; L171: Missing frozen STORAGE_READ evidence.; L174: STORAGE_READ authority is not bound to this image/target.; L178: Reviewed ROM JTAG handoff and excluded debug clients required.; L193: Reviewed ROM USB0 takeover is not bound to this image/target.; L250: Unsealed STORAGE_READ authority or transport input.; L272: STORAGE_READ upload spans changed or unsealed.` | Require explicit `--allow-sd-1v8` for SD profile 3 preparation and launch. Record the power-removal requirement before execution and retain ownership until whole-board power removal, even after ROM return. Preserve native geometry, write grants, uploaded bytes and readback. |
+| [tools/boot-slots.py:264](../tools/boot-slots.py) | `kept-safety` | `L264: .manifest.json; L495: --container` | Keep container and allocation geometry, exclusive plan-file creation and strict creation of the requested plan directory. Existing plans remain untouched; no timestamped child can hide a replacement. Reported launch evidence is separate from the consumed plan path. |
 | [tools/check-a733-storage-launch.py:56](../tools/check-a733-storage-launch.py) | `replaced` | `Existing output path refuses the operation instead of creating an unused child; original guards at 152, 357. Additional original condition: L56: Protected grant and storage manifest differ.; L59: Prepared writer extent differs.; L65: Backup identity differs from the grant.; L120: Matching maintenance runtime manifest required.; L179: Protected storage artifacts changed.; L233: Board queue is halted.; L235: Matching coordinator claim required.; L237: Queue prerequisites differ.; L239: Unreviewed admission input.; L249: Queue lacks exact prepared artifacts.; L342: --claim; L352: Unreviewed FEL executable.; L379: Reviewed evidence changed.` | Remove queue/review/claim authority and preserve backup-first writes, target geometry, write grants, actual candidate bytes and readback. |
 | [tools/check-a733-storage-read-supervised.py:197](../tools/check-a733-storage-read-supervised.py) | `replaced` | `L197: --claim; L198: --supervised-manual-reconnect; L207: Throughput timing needs the high-speed or UHS-I profile.` | Remove queue/review/claim authority and preserve backup-first writes, target geometry, write grants, actual candidate bytes and readback. |
 | [tools/prepare-microsd-boot.py:161](../tools/prepare-microsd-boot.py) | `kept-safety` | `L257: --restore-variant Additional original condition: publish refuses existing output filenames and uses O_EXCL/O_NOFOLLOW for new files.` | Keep arbitrary unused filename prefixes, O_EXCL/O_NOFOLLOW, ordinary-file and concurrent-writer checks. The optional --restore-variant supplies actual restore-helper format; paired firmware integrity and card extents remain required. |
 | [tools/storage-read-returning.py:284](../tools/storage-read-returning.py) | `replaced` | `Existing output path refuses the operation instead of creating an unused child; original guards at 623. Additional original condition: L284: approval needs its bundle, reviewer, reviewed_at and a signer; L304: restored return requires the exact reviewed bundle-A recovery request; L316: approval names another bundle or no reviewer` | Remove queue/review/claim authority and preserve backup-first writes, target geometry, write grants, actual candidate bytes and readback. |
-| [tools/storage-update.py:70](../tools/storage-update.py) | `replaced` | `Existing output path refuses the operation instead of creating an unused child; original guards at 70. Additional original condition: L110: Sealed file identity changed.; L120: Protected artifact must be a private sealed regular file.; L407: Host client names another prepared session.; L428: Sealed candidate changed.; L436: Final readback hash differs.` | Keep exclusive creation of the requested grant or backup directory. Refuse an existing artifact path before preparing another version; preserve sealed candidate integrity, complete backups and exact readback. |
+| [tools/storage-update.py:70](../tools/storage-update.py) | `replaced` | `Existing output path refuses the operation instead of creating an unused child; original guards at 70. Additional original condition: L110: Sealed file identity changed.; L120: Protected artifact must be a private sealed regular file.; L407: Host client names another prepared session.; L428: Sealed candidate changed.; L436: Final readback hash differs.` | Keep exclusive creation of the requested grant or backup directory. Refuse an existing artifact path before preparing another version; preserve sealed candidate integrity, complete backups and exact readback. The live storage launcher reports its separately chosen evidence directory. |
 | [tools/storage-update.py:119](../tools/storage-update.py) | `kept-safety` | `Candidate artifacts must be private mode-0400 regular files with one hard link; write chunks are hash-chained and read back against the actual candidate.` | Retain actual ABI/input/result geometry, byte integrity, resource ownership or bounded operation. The original wording does not establish a process gate. |
 
 ### OS session helpers
@@ -463,7 +469,7 @@ The analyser’s current required `ddr_evidence` lookup at `tools/analyse-ddr-ca
 
 ## Software evidence and physical limits
 
-The final 33 host-integration invocations passed. They exercise supported paths without removed records and preserve refusals for wrong target/session, malformed geometry, unsafe ownership, out-of-range inputs and changed transfer/result bytes. Source-generation checks preserve old output and follow the selected child through their wrappers.
+The final 33 host-integration invocations passed. They exercise supported paths without removed records and preserve refusals for wrong target/session, malformed geometry, unsafe ownership, out-of-range inputs and changed transfer/result bytes. Source-generation checks refuse an existing artifact output and preserve its contents.
 
 Host results are recorded in `~/.cache/sunstoneos/build/tool-gates-1031/final-host/results.json`. Check-index validation, three baseline builds and the pre-push fixture passed. The returning USB host check now creates an unused report directory for both absent and reused outputs ([host-check.py:22](../apps/usb-returning/host-check.py)); its 26 cases passed. This fixture correction adds no launch authority and is excluded from the gate count.
 
@@ -473,4 +479,38 @@ The GPU provider image builds; its linked host check remains blocked by an incom
 
 Standalone historical kernel/EL1 tools do not supply a complete host watchdog wrapper. Returning SD also requires the coordinator’s host-armed watchdog wrapper. The protected development runner’s NoHold failure-lock behavior needs its owner correction. No physical test was requested or performed to establish these paths.
 
-No board command is needed for this host-only cleanup. Both boards remain unavailable pending recovery. The coordinator chooses any later physical test after recovery from the documented device state. This audit establishes no new physical qualification.
+No board command is needed for this host-only cleanup. The coordinator establishes live board state and chooses any later physical test from the documented device state. This audit establishes no new physical qualification.
+
+
+## Current integration and protected owners
+
+These rows describe integration behavior and remaining protected-owner work.
+They overlap the original inventory and do not change its counts. Locations
+use current line numbers. The recommendations preserve live target checks,
+watchdog recovery, storage preservation and comparisons of transferred bytes.
+
+| Location | Action | Condition and recommended change |
+| --- | --- | --- |
+| [tools/dev-run.py:352](../tools/dev-run.py) | `kept-safety` | The development bundle carries the serialized format the validator consumes. The command prepares that bundle in the same run with fresh session identities. Keep format, field and native session-geometry checks. |
+| [tools/dev-run.py:355](../tools/dev-run.py) | `kept-safety` | Files and inputs must match the bundle prepared in the same command. There is no external bundle input. Keep these mutation guards, immutable transfer sources, image/session consistency and uploaded-byte comparisons. |
+| [tools/dev-run.py:523](../tools/dev-run.py) | `kept-another-listed-agent` | The rail helper must match a fixed reviewed binary hash. Replace that admission with explicit helper compatibility checks. Keep boot-clock checks, voltage limits and verified readbacks for each changed rail. |
+| [tools/run-ddr.py:156](../tools/run-ddr.py) | `kept-safety` | The selected build must support CPU clock restoration, and restore builds must perform final clocked PHY readback. These are hardware compatibility requirements. Preserve the corresponding behavior checks, SID match, SRAM bounds, watchdog fallback and same-run upload comparisons. |
+| [tools/training-record.py:77](../tools/training-record.py) | `replaced` | A current capture binds its embedded DDR result to its own live mailbox. An older capture binds its mailbox, device and instance identity to the DDR run it references. Both CLI modes accept relocated captures and current trained values; neither requires equality with historical register values. |
+| [tools/check-a733-smp-supervised.py:276](../tools/check-a733-smp-supervised.py) | `kept-safety` | Application capture limits come explicitly from the caller and remain bounded by 179 seconds. The shared runner also preserves the SD 1.8 V power-removal requirement. |
+
+The protected CPU rail follow-up decoder at
+[apps/os/cpu-return-followup.py:26](../apps/os/cpu-return-followup.py)
+still describes the earlier DCDC5-only helper. Its owner should accept the
+current helper's per-rail normalization results and retain boot-clock,
+voltage-limit and successful readback checks. The host checks that cover the
+integrated returning transport must accept a host-side error after a confirmed
+normal return without quarantining the instance; FEL request failures still
+quarantine it.
+
+
+The development runner uses the kernel-runner export at
+[apps/cpu-runtime-qualification/host.py:217](../apps/cpu-runtime-qualification/host.py)
+for controlled CPU rail-helper outcomes. Keep that export for this consumer.
+It supplies executable behavior and does not restore a review, claim or
+continuity precondition. The development-runner host case exercises the
+helper's normal, controlled and failed outcomes through that export.

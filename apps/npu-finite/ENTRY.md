@@ -34,8 +34,7 @@ ELF and serializes the supplied typed boot bytes with fresh nonzero session
 identities. It validates the wire record before writing. Optional `--admission`
 configuration can supply epoch, generation, lease, supervisor and whole-platform
 identities. Optional `--manifest` metadata does not select the native profile.
-An existing output file is preserved; the producer writes to a unique timestamped
-child of its parent and prints the actual path.
+The producer refuses an existing output file and prints the exact session path.
 
 The compiled session layout is read from the image. For the current producer,
 the session has 456 bytes and the typed boot payload has 232 bytes. Within

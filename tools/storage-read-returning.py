@@ -396,6 +396,8 @@ def main(argv=None):
     for name in ('approval', 'request', 'ddr', 'survey'):
         i.add_argument('--' + name, type=Path, help=argparse.SUPPRESS)
     i.add_argument('--profile', type=int, choices=(2, 3), default=2)
+    i.add_argument('--allow-sd-1v8', action='store_true',
+                   help='Allow profile 3; launch also needs this flag and retains ownership until whole-board power removal.')
     i.add_argument('--plan', choices=('measurement', 'first-read', 'chain-read'), default='measurement',
                    help='measurement: 240 reads; first-read: 4 KiB; chain-read: 64 KiB; finite plans require profile 2')
     i.add_argument('--return-policy', choices=RETURN_POLICIES, default=POWER_REMOVAL)
@@ -407,12 +409,17 @@ def main(argv=None):
                    help='require exact finite-plan normal return and reference before successor admission')
     args = parser.parse_args(argv)
     if args.operation == 'input':
+        require(args.profile != 3 or args.allow_sd_1v8,
+                'SD profile 3 requires --allow-sd-1v8 and whole-board power removal after execution.')
         require(args.plan != 'first-read' or args.profile == 2, 'first-read requires profile 2')
         require(args.plan != 'chain-read' or args.profile == 2, 'chain-read requires profile 2')
         require(args.return_policy != RESTORED_RETURN or (args.profile == 2 and args.plan == 'first-read'),
                 'restored return requires --profile 2 --plan first-read')
         require(args.return_policy != CHAIN_RETURN or (args.profile == 2 and args.plan == 'chain-read'),
                 'chain return requires --profile 2 --plan chain-read')
+        if (args.output.exists() or args.output.is_symlink() or
+                args.output.with_suffix('.json').exists() or args.output.with_suffix('.json').is_symlink()):
+            raise FileExistsError(f'Artifact output already exists: {args.output}')
         config = json.loads(args.config.read_text())
         if args.fabric_read:
             (config['fabric'], config['fabric_hz']), registers = fabric_read(args.fabric_read)
@@ -422,13 +429,10 @@ def main(argv=None):
             require(words == config['fabric'] and rates == config['fabric_hz'],
                     'fabric words and rates differ')
         args.output.parent.mkdir(parents=True, exist_ok=True)
-        if args.output.exists() or args.output.with_suffix('.json').exists():
-            import secrets as output_secrets
-            args.output = args.output.with_name(args.output.stem + '-' + output_secrets.token_hex(4) + args.output.suffix)
         raw = input_bytes(args.profile, secrets.randbits(63) | 1, config,
                           FIRST_READ_PLAN if args.plan == 'first-read' else
                           CHAIN_READ_PLAN if args.plan == 'chain-read' else dma_plan())
-        args.output.write_bytes(raw)
+        with args.output.open('xb') as stream: stream.write(raw)
         args.output.with_suffix('.json').write_text(json.dumps({
             'input_sha256': hashlib.sha256(raw).hexdigest(), 'profile': args.profile,
             'return_policy': args.return_policy, 'config_sha256': digest(args.config),

@@ -45,7 +45,8 @@ def main():
     def unused(*args, **kwargs):
         raise AssertionError('Review records must not be read')
     def check(wire=raw, target=record, decoded=grant, selected=profile):
-        clock.validate({}, b'', target, image_hash, wire, selected, decoded, unused, host.require, unused)
+        clock.validate({}, b'', target, image_hash, wire, selected, decoded, unused, host.require, unused,
+                       input_reservation='fixture_input')
     cases = []
     metadata = review.validate(record, unused, image_hash, 'ef' * 32, host.require)
     assert metadata['port'] == record['port'] and metadata['image_sha256'] == image_hash

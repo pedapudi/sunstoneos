@@ -489,10 +489,10 @@ def rail_cases(out):
             clocks.append(f'{name} {phase} pll={pll:#x} mux={mux:#x} mhz={mhz} pat0=0 pat1=0 lfm=0')
     common='\n'.join(clocks)+'\n'
     supply='SUPPLY dcdc5_uv=1000000 dcdc3_uv=800000 bin=4 dcxo_hz=26000000\n'
-    log=common+supply+'VOLT dcdc5_selector=30 dcdc5_uv=800000\nCOMPLETE board bundle 33: DCDC5 restored to 800 mV with DCDC3 already at 800 mV and all boot clock words\n'
+    log=common+supply+'VOLT dcdc5_selector=30 dcdc5_uv=800000\n'+board.dev.RAIL_COMPLETE+'\n'
     assert images.rail_result((0x534b4552,5,0),log)['dcdc5_uv']==800000
-    already=common+supply.replace('dcdc5_uv=1000000','dcdc5_uv=800000')+'REFUSED board bundle 33: CPU supplies\n'
-    assert images.rail_result((0x534b4552,5,1),already)['already_normalized']
+    already=common+supply.replace('dcdc5_uv=1000000','dcdc5_uv=800000')+board.dev.RAIL_COMPLETE+'\n'
+    assert images.rail_result((0x534b4552,5,0),already)['already_normalized']
     try:images.rail_result((0x534b4552,5,1),already.replace('dcdc3_uv=800000','dcdc3_uv=1000000'))
     except ValueError as error:assert 'refused' in str(error)
     else:raise AssertionError('unsafe rail helper refusal accepted')

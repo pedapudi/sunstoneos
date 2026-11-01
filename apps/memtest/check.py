@@ -22,7 +22,7 @@ import struct
 import subprocess
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
-from host_evidence import unique_directory
+from host_evidence import new_directory, unique_directory
 
 ROOT = Path(__file__).resolve().parents[2]
 K = 0xa5c35a3c00000000

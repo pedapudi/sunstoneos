@@ -23,12 +23,13 @@ and branch; it is metadata rather than an OS source dependency.
 
 The existing host configuration supplies Clang 21, cached lld, FreeRTOS,
 TinyUSB, the radio stacks and newlib. Build directories stay outside source.
-For the two assigned checkouts:
+Run from the SunstoneOS repository root. The optional source record pins
+mimus `port/sunstoneos-split` at `c2dcb5a9` in the checkout below:
 
 ```sh
-os=/home/sunil/git/sunstoneos-worktrees/mimus-split-1031
-mimus=/home/sunil/git/mimus-worktrees/sunstoneos-split-1031
-build=$HOME/.cache/sunstoneos/build/mimus-split-1031
+os="$PWD"
+mimus="$HOME/git/mimus-worktrees/os-refs-1031"
+build="$HOME/.cache/sunstoneos/build/docs-current-1031"
 cfg=$HOME/.cache/sunstoneos/bin/cfg.sh
 
 "$cfg" "$os" "$build/os" -DMIMUS_DIR= -DSUNSTONE_A733_OS=ON -DSUNSTONE_APPLICATION=
@@ -39,7 +40,19 @@ cmake --build "$build/hello" --target sunstone-a733-os-hello -j12
 
 "$cfg" "$os" "$build/mimus" -DMIMUS_DIR="$mimus" -DSUNSTONE_A733_OS=ON -DSUNSTONE_APPLICATION=mimus
 cmake --build "$build/mimus" --target sunstone-a733-os -j12
+
+"$cfg" "$os" "$build/control-hello" -DMIMUS_DIR= -DSUNSTONE_A733_OS=ON -DSUNSTONE_APPLICATION=hello-compute \
+  -DSUNSTONE_A733_OS_CPU_RETURN=ON -DA733_A76_ADMITTED=ON -DSUNSTONE_A733_OS_CPU_CLOCK=ON
+cmake --build "$build/control-hello" --target sunstone-a733-os-hello -j12
 ```
+
+The last image selects hello-compute with the CPU-return lifetime.
+`tools/dev-run.py cpu-return --image "$build/control-hello/sunstone-a733-os-hello.elf"`
+prepares it through the generic application interface and normalizes CPU rails
+by default. Its fixed default image path still names the cached control build.
+The 2026-10-31 board attempt finished the application while the CPU clock owner
+was in REQUEST; the merged return path requires FOLLOW and stopped.
+[The handoff](handoff.md#board-state-and-recovery) records the failure and open fix.
 
 `sunstone-a733-os-core` is an object library built from the board composition
 and OS sources. It does not copy the mimus board target. Application sources
@@ -57,6 +70,16 @@ profile sets `SUNSTONE_A733_OS_RESIDENT=ON`; its watchdog owner renews the
 lifetime from service progress. `SUNSTONE_A733_OS_CPU_RETURN=ON` selects the
 success-only returning profile and its existing retirement requirements.
 Faults retain resources unless their owning path proves retirement.
+
+`tools/dev-run.py cpu-return` runs one CPU-return image on one board under
+the host-armed watchdog. It builds the typed session from the image's
+manifest, uploads the INPUT contents given with `--input`, and decodes the
+result with the application's decoder module: `apps/<name>/host.py` for an
+application in this tree, or the module given with `--decoder`. For
+hello-compute, a run passes when the returned checksum equals the Adler-32 of
+the input. `--check-only` prepares the bundle and compares the board's
+read-only clock, GPADC and SID state with the image's entry checks without a
+launch.
 
 ## Admission, startup and memory
 
@@ -147,8 +170,9 @@ SunstoneOS. Recognition, application protocol, placement and model checks
 live under mimus's `sunstoneos/checks/` and `sunstoneos/apps/`.
 [Validation policy](validation.md) selects checks by changed behavior.
 The integration gate builds OS variants with an empty `MIMUS_DIR`; it adds
-external mimus checks only with `--mimus-dir` or the `MIMUS_DIR` environment
-variable. `--build-root` keeps a task's new builds and logs together.
+external application checks with `--application CHECKOUT` or the
+`SUNSTONE_EXTERNAL_APPLICATIONS` environment variable. The optional
+`MIMUS_DIR` compatibility selector names the mimus example checkout. `--build-root` keeps a task's new builds and logs together.
 
 ## Not yet integrated
 

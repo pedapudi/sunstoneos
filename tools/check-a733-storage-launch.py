@@ -281,7 +281,7 @@ def main(argv=None):
     with store_api.ProtectedDirectory(args.storage) as store:
         p,grant=validate_bundle(bundle,store)
         config=json.loads((bundle/'configuration.json').read_text())
-        args.evidence=base.module('storage_launch_live_output',ROOT/'tools/host_evidence.py').unique_directory(args.evidence)
+        args.evidence=base.module('storage_launch_live_output',ROOT/'tools/host_evidence.py').evidence_directory(args.evidence)
         for name,path in [('host.py',Path(__file__)),('base-host.py',Path(base.__file__)),
                           ('storage-host.py',Path(store_api.__file__)),('prepared.json',bundle/'prepared.json')]:
             shutil.copy2(path,args.evidence/name);base.sync_file(args.evidence/name)

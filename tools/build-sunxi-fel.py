@@ -29,7 +29,7 @@ def digest(path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--output", type=Path, required=True,
-                        help="directory for the source tree and record; existing directories receive a unique child")
+                        help="directory for the source tree and record; destination must not exist")
     parser.add_argument("--cache", type=Path, default=Path.home() / ".cache/sunstoneos/sources")
     parser.add_argument("--cc", default="gcc")
     parser.add_argument("make_vars", nargs="*", metavar="NAME=VALUE", help="extra make variables")

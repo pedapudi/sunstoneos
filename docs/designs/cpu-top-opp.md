@@ -743,12 +743,21 @@ driver completions; it does not qualify physical clocks or rails.
   Until power cycles return, a CPU set must continue an existing lifetime
   and return on every reachable outcome with the clocks and rails at boot
   values. Step 6's sets left DCDC3 at 1050 mV and DCDC5 at 1000 mV for the
-  power removal. The successful-set rail-return helper now lowers both
-  rails after checking the boot clock words, including DCDC5 with CPU-L
-  and the DSU held (`36fee1b7`, `checks/cpu-rails-return.c`). Its software
-  checks pass. Physical rail restoration and restoration on fatal or
-  deadline outcomes remain unqualified, so this helper does not yet make
-  every reachable outcome safe for a continuing lifetime.
+  power removal. The rail-return helper, board bundle 33, lowers both
+  rails after checking the boot clock words: DCDC3 with CPU-B held, then
+  DCDC5 with CPU-L and the DSU held. Either rail may enter at any voltage
+  from 800 mV to the bin's top point on that rail, so the helper also
+  restores the rails a failed top-point image leaves while the three CPU
+  domains read their boot PLL and mux words; a rail already at 800 mV gets
+  no write (`checks/cpu-rails-return.c`, `checks/os-cpu-return-rails.py`).
+  For an image that links the CPU-return entry guard, `tools/dev-run.py`
+  runs it by default before the launch and after a normal return. After any
+  other outcome DRAM can be uninitialized, and the helper launch uses DRAM
+  over FEL, so cold DDR comes first and the next launch lowers the rails.
+  On board 3-3 one helper run lowered DCDC5 from 1000 mV and
+  DCDC3 from 1050 mV, each reading back 800 mV
+  (`~/.cache/sunstoneos/evidence/dev-runs-1031/3-3-rail-helper-201322/`).
+  Restoration after a fatal or deadline outcome has no board run yet.
 - **CPU-B after a ROM return.** The ROM resets CPU-L and the DSU but not
   CPU-B. Every image that raises CPU-B lowers it to 1014 MHz before a
   successful return; a failed return can leave it raised, with DCDC3 at

@@ -6,8 +6,15 @@ set(SUNSTONE_EXTERNAL_APPLICATIONS "" CACHE STRING "External application checkou
 # The metadata directory defines the alias; no application is required by default.
 file(GLOB application_records "${SUNSTONE_SOURCE_ROOT}/apps/*/source.json")
 foreach(record IN LISTS application_records)
+  file(READ "${record}" application_record)
+  string(JSON application_directory ERROR_VARIABLE application_error
+    GET "${application_record}" application_directory)
+  if(NOT application_error STREQUAL "NOTFOUND")
+    continue()
+  endif()
   get_filename_component(record_directory "${record}" DIRECTORY)
   get_filename_component(application_name "${record_directory}" NAME)
+  string(REPLACE "-" "_" application_name "${application_name}")
   string(TOUPPER "${application_name}_DIR" compatibility_variable)
   if(${compatibility_variable})
     list(APPEND SUNSTONE_EXTERNAL_APPLICATIONS "${${compatibility_variable}}")

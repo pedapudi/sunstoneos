@@ -494,7 +494,7 @@ def references(args):
     paths = set()
     trees = {ROOT}
     if args.host_tree or args.kind=='gpu-return':
-        trees.add(args.host_tree or dev.GPU_TREE)
+        trees.add(args.host_tree or images.GPU_TREE)
     for tree in trees:
         for directory in ('tools','checks','apps/os','apps/board','apps/cpu-runtime-qualification'):
             paths.update((tree/directory).glob('*.py'))
@@ -677,7 +677,7 @@ class Queue:
             target = directory/'image.board.json'
             target.write_bytes(descriptor.read_bytes())
             options['descriptor'] = str(target)
-        template = args.template or (dev.GPU_TEMPLATE if args.kind=='gpu-return' else dev.CONTROL)
+        template = args.template or (images.GPU_TEMPLATE if args.kind=='gpu-return' else images.CONTROL)
         if args.kind!='probe':
             if args.kind=='gpu-return':
                 shutil.copytree(template, directory/'template')
@@ -880,7 +880,7 @@ def run_options(parser, submit=False):
     parser.add_argument('--rail-helper', type=Path, default=dev.RAIL_HELPER)
     parser.add_argument('--ddr-build', type=Path, default=CACHE/'build/a733-ddr')
     parser.add_argument('--ddr-restore', type=Path, default=CACHE/'build/a733-ddr-restore')
-    parser.add_argument('--training-dir', type=Path, default=CACHE/'evidence/dram-restore-v5-1031/records')
+    parser.add_argument('--training-dir', type=Path, default=CACHE/'ddr-records')
     parser.add_argument('--expect-spec',type=Path,help=argparse.SUPPRESS)
     parser.add_argument('--reference-inventory',type=Path,help=argparse.SUPPRESS)
     parser.add_argument('--process-record',type=Path,help=argparse.SUPPRESS)

@@ -357,7 +357,11 @@ def run(a):
             caller=caller_survey.caller_interval(caller_state)
             record['caller_interval']=caller;journal()
             dirty=True;journal()
-            base.verify_dram(transaction,a.evidence)
+            try:
+                base.verify_dram(transaction,a.evidence,record,journal)
+            except base.DramNotReady:
+                dirty=False
+                raise
             dirty=False
             backups={}
             for name,address,size in (*dram,*base.REGIONS,('caller-evidence',*caller)):

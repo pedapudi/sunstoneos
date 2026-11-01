@@ -137,7 +137,7 @@ def build_tables(memory="dram"):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True,
-                        help="reader, tables and manifest; an existing directory receives a unique child")
+                        help="reader, tables and manifest; destination must not exist")
     parser.add_argument("--memory", choices=("dram", "sram"), default="dram",
                         help="where the tables and results live; sram for untrained DRAM")
     args = parser.parse_args()

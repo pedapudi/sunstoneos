@@ -167,8 +167,8 @@ def source_files():
         ('usb-access.py',ROOT/'tools/usb-access.py')]
 
 
-def freeze_bundle(bundle):
-    prepared=preparation.validate_bundle(bundle)
+def freeze_bundle(bundle,*,allow_sd_1v8=False):
+    prepared=preparation.validate_bundle(bundle,allow_sd_1v8=allow_sd_1v8)
     prepared['_source_hashes']={name:digest(path) for name,path in software_sources().items()}
     return prepared
 
@@ -186,16 +186,18 @@ def main(argv=None):
         help='Retain resources until whole-board power removal; cable reconnect does not release SD0 read resources.')
     parser.add_argument('--read',action='append',metavar='FIRST:BLOCKS',help='One to four validated ranges; default 0:1 and 1:1.')
     parser.add_argument('--throughput',metavar='FIRST:SPAN',help='Read-only throughput plan over [FIRST, FIRST+SPAN); needs record version 4.')
+    parser.add_argument('--allow-sd-1v8',action='store_true',
+        help='Allow SD profile 3; retain ownership until whole-board power removal after execution.')
     args=parser.parse_args(argv)
     require(not (args.read and args.throughput),'Choose --read or --throughput.')
     maximum=4
     if args.throughput:
         first,span=map(int,args.throughput.split(':'));ranges=throughput_plan(first,span);maximum=len(ranges)
-        require(struct.unpack_from('<I',freeze_bundle(args.bundle.resolve())['_frozen']['session.bin'],860)[0] in (2,3),
+        require(struct.unpack_from('<I',freeze_bundle(args.bundle.resolve(),allow_sd_1v8=args.allow_sd_1v8)['_frozen']['session.bin'],860)[0] in (2,3),
                 'Throughput timing needs the high-speed or UHS-I profile.')
     else:ranges=[tuple(map(int,x.split(':'))) for x in args.read] if args.read else [(0,1),(1,1)]
     require(1<=len(ranges)<=maximum and all(len(x)==2 for x in ranges),'Invalid bounded read plan.')
-    bundle=args.bundle.resolve();prepared=freeze_bundle(bundle);frozen=prepared['_frozen']
+    bundle=args.bundle.resolve();prepared=freeze_bundle(bundle,allow_sd_1v8=args.allow_sd_1v8);frozen=prepared['_frozen']
     admission=json.loads(frozen['admission.json']);session=frozen['session.bin'];template=frozen['session-template.bin']
     profile=struct.unpack_from('<I',session,860)[0] if preparation.SESSION_MAGIC==0x4153373352444131 else 0
     for i,(first,blocks) in enumerate(ranges):decoder.read_request(first,blocks,i+1,profile)
@@ -207,6 +209,7 @@ def main(argv=None):
         lambda:None,validate_entry,
         lambda device,same,deadline,record,save:capture_device(device,same,deadline,session,args.evidence,record,save,ranges,maximum),
         product=PRODUCT,serial=SERIAL,bcd_device=0x0100,capture_seconds=59,result_key='storage_read_result',
+        power_removal_reason='SD profile 3 may leave the card at 1.8 V' if profile==3 else None,
         source_files=source_files(),description='Supervised native SD0 read; retain every resource until whole-board power removal')
 
 if __name__=='__main__':

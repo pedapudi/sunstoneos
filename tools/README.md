@@ -19,11 +19,13 @@ board work after the host's xHCI controller has died. Board tools import it from
 this directory, and bundles that run a frozen host runner carry a copy. The file
 provides the shared board re-enumeration budget and controller-health checks.
 Board tools import it from this directory. Every consumer uses the
-`/tmp/board-usb-churn.json` state under `/tmp/board-usb-churn.lock`.
+`/tmp/mimus-usb-churn.json` state under `/tmp/mimus-usb-churn.lock`.
+These historical paths keep the budget shared with existing consumers.
 `SUNSTONE_USB_SPACING_S`, `SUNSTONE_USB_BOARD_CAP` and
 `SUNSTONE_USB_BOARD_WINDOW_S` select the shared budget; `SUNSTONE_USB_HEALTH`
-selects the existing warning override. Update all consumers together while no
-board operation is active, so the common state and settings stay consistent.
+selects the existing warning override. Each setting falls back to the matching
+`MIMUS_USB_*` name when its `SUNSTONE_USB_*` name is unset. The shared paths
+and fallbacks keep existing worktrees in the same safety budget.
 
 ## Access across board resets
 
