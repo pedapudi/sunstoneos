@@ -201,7 +201,8 @@ void dma_service_irq_notify_from_isr(struct dma_service *, int mask_ok, BaseType
 int dma_service_send(struct dma_service *, const struct dma_service_request *, TickType_t wait, uint64_t *ticket);
 int dma_service_collect(struct dma_service *, uint64_t ticket, struct dma_service_reply *, TickType_t wait);
 /* Copy only a collected CAPTURED_COPY staging lease for this task/job/ticket.
- * No pointer is queued; CPU destination must not alias service or DMA storage. */
+ * No pointer is queued; CPU destination must not alias service or DMA storage.
+ * bytes is the job's period size, at most A733_I2S_PERIOD_CAPACITY. */
 int dma_service_copy_period(struct dma_service *,unsigned,uint64_t,void *,size_t);
 /* Only init's private worker receives EL1t through the startup port hook. */
 BaseType_t dma_service_task_privileged(TaskFunction_t, void *);

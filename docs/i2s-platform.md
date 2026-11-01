@@ -6,8 +6,13 @@ retained ownership after partial failure. Host checks cover resource conflicts,
 register ordering and deadline handling. Physical clock timing, reset behavior,
 DMA capture and microphone audio remain unqualified.
 
-The binding accepts 16 kHz normal I2S with two 32-bit wire slots, a 24.576 MHz
-module clock and optional 12.288 MHz MCLK. The [capture core](i2s.md) supports
+The binding accepts normal I2S with two 32-bit wire slots, a 24.576 MHz
+module clock and optional 12.288 MHz MCLK, at every rate whose bit clock
+divides the module clock exactly: 8, 12, 16, 24, 32, 48, 64, 96 and 192 kHz.
+These are the vendor driver's 24.576 MHz rate family. The vendor serves the
+44.1 kHz family from 22.5792 MHz, which the sigma-delta-modulated AUDIO0 PLL
+produces; the parent owns only AUDIO1 with modulation disabled, so the binding
+refuses those plans. The [capture core](i2s.md) supports
 16-bit or 32-bit containers and mono or stereo capture within that wire format.
 Sensor alignment, sign, channel selection and startup requirements still need
 a microphone specification. The board has no built-in microphone.
@@ -48,7 +53,7 @@ A late or uncertain conversion retains both old and replacement token records.
 A stable token protects the shared multiplier even when another consumer uses
 DIV2. The binding preserves DIV2's divider field.
 
-## The clock chain produces 16 kHz without inherited rate assumptions
+## The clock chain produces 24.576 MHz without inherited rate assumptions
 
 The source-defined CCU base is `0x02002000`. The binding reads the oscillator
 selection at `0x07090160`: selection codes 0 and 3 represent the 24 MHz source.
@@ -60,8 +65,8 @@ so the reference remains 24 MHz. It never programs that shared reference.
 | AUDIO1 | CCU offset `0x0280`, multiplier bits 8–15, encoded as N − 1 | N = 128; 24 MHz × 128 = 3.072 GHz |
 | AUDIO1 DIV5 | Same word, bits 16–18, divisor encoded minus one | Divide by 5; 614.4 MHz |
 | I2S0 module | Offset `0x1200`, parent bits 24–26 and divisor bits 0–4 | Parent 2 selects DIV5; divide by 25; 24.576 MHz |
-| I2S0 bit clock | Capture core divider code 8 | Divide by 24; 1.024 MHz |
-| I2S0 frame clock | Two 32-bit slots | Divide bit clock by 64; 16 kHz |
+| I2S0 bit clock | Capture core divider, 64 × rate | At 16 kHz, code 8 divides by 24 for 1.024 MHz |
+| I2S0 frame clock | Two 32-bit slots | Divide bit clock by 64; for example 16 kHz |
 | Optional MCLK | Capture core divider code 2 | Divide module clock by 2; 12.288 MHz |
 
 The multiplier is within the source range 75–129 and the PLL range
@@ -202,7 +207,15 @@ cc -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
 /tmp/i2s-platform-check > /tmp/i2s-platform.log
 python3 checks/i2s-platform-reference.py \
   ~/.cache/sunstoneos/sources/i2s-platform /tmp/i2s-platform.log
+/tmp/i2s-platform-check --rates > /tmp/i2s-rates.log
+python3 checks/i2s-rates-reference.py ~/.cache/sunstoneos/sources/i2s \
+  ~/.cache/sunstoneos/sources/i2s-platform /tmp/i2s-rates.log
 ```
+
+The `--rates` case offers the binding every integer rate from 1 Hz to
+400 kHz that the planner accepts at the 24.576 MHz module clock, and a
+44.1 kHz plan at 22.5792 MHz. The reference checker requires the admitted
+rates to equal the vendor's 24.576 MHz family.
 
 ## Pinned sources define the initial profile
 

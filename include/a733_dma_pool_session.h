@@ -66,7 +66,8 @@ int a733_dma_pool_session_init(struct a733_dma_pool_session *,
 /* Fixed I2S0 consumer of the same native singleton and DMA worker. One selected
  * DMA channel, 2..8 period pages plus one descriptor page. The profile/cookie
  * must be protected image memory; direction admits only its exact FIFO route.
- * Period payloads are whole frames, at most4096 bytes, 8-access aligned.
+ * Period payloads are whole frames, at most A733_I2S_PERIOD_CAPACITY bytes,
+ * 8-access aligned; each period has its own page.
  * For duplex, pass two compatible profiles with duplex=1, RX first and TX
  * second, and select exactly two channels. Each direction has its own descriptor
  * page and period pages. stream_mappings is RX; duplex_mappings is TX.

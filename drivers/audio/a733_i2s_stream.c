@@ -90,7 +90,7 @@ int a733_i2s_stream_valid(const struct a733_i2s_stream_profile *p,const struct a
             fifo->request!=(p->route==A733_I2S_ROUTE_HDMI3?6u:3u) || fifo->width!=plan.dma_width || ram->width!=plan.dma_width ||
             fifo->burst!=8 || ram->burst!=8 || a733_dma_mappings_overlap(m,&t->descriptors) ||
             (p->cyclic && (g->bytes!=m->bytes || (p->direction==A733_I2S_RECEIVE &&
-             (t->count<4 || g->bytes!=4096 || m->bus>UINT32_MAX-m->bytes)))))return 0;
+             (t->count<4 || g->bytes>A733_I2S_PERIOD_CAPACITY || m->bus>UINT32_MAX-m->bytes)))))return 0;
         for(size_t k=0;k<i;++k)if(a733_dma_mappings_overlap(m,&t->mappings[k]))return 0;
     }
     return 1;
@@ -317,7 +317,7 @@ static enum a733_i2s_status cyclic_active(struct a733_i2s_stream *s)
         if(s->raw_next>UINT64_MAX-s->count || count>s->raw_next+s->count-2)return stop(s,A733_I2S_FAILED);
         if(s->snapshot_state==FREE && count>=s->raw_next+2) {
             uint64_t before=s->time;
-            int copied=a733_dma_cyclic_rx_copy(s->dma,s->channel,s->raw_next,s->snapshot,4096);
+            int copied=a733_dma_cyclic_rx_copy(s->dma,s->channel,s->raw_next,s->snapshot,s->catalogue->segments[0].bytes);
             if(copied<0)return stop(s,A733_I2S_FAILED);
             if(copied) {
                 uint32_t counter;if(!rd(s,RXCNT,&counter) || !cyclic_frames(s) || !now(s))return fault(s);
@@ -500,7 +500,7 @@ int a733_i2s_stream_get(struct a733_i2s_stream *s,struct a733_i2s_period *out)
 int a733_i2s_stream_copy(const struct a733_i2s_stream *s,uint64_t ticket,void *out,size_t bytes)
 {
     if(!s || s->self!=s || !out || !s->profile.cyclic || tx(s) ||
-       s->snapshot_state!=CLIENT || s->snapshot_result.ticket!=ticket || bytes!=4096)return 0;
+       s->snapshot_state!=CLIENT || s->snapshot_result.ticket!=ticket || bytes!=s->catalogue->segments[0].bytes)return 0;
     unsigned char *p=out;for(size_t i=0;i<bytes;++i)p[i]=s->snapshot[i];return 1;
 }
 int a733_i2s_stream_put(struct a733_i2s_stream *s,uint64_t ticket)

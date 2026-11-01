@@ -511,7 +511,7 @@ static struct dma_service_client *caller(struct dma_service *s,unsigned *slot)
 int dma_service_copy_period(struct dma_service *s,unsigned job,uint64_t ticket,void *out,size_t bytes)
 {
     unsigned slot;struct dma_service_client *client=caller(s,&slot);
-    if(!client || client->pending || job>=s->job_count || !out || bytes!=4096 ||
+    if(!client || client->pending || job>=s->job_count || !out || !bytes || bytes>A733_I2S_PERIOD_CAPACITY ||
        !(client->jobs&(UINT32_C(1)<<job)) || (uintptr_t)out>UINTPTR_MAX-bytes ||
        a733_extents_overlap_prechecked((uintptr_t)out,bytes,(uintptr_t)s,sizeof(*s)))return 0;
     struct dma_service_private_job *j=&s->jobs[job];

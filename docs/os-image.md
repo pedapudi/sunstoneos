@@ -514,9 +514,13 @@ behavior of this image has run on a board.
 
 ## Microphone recognition
 
-The `SUNSTONE_A733_OS_AUDIO` build adds receive from an I2S0 microphone on
-PB5 (BCLK), PB6 (LRCK) and PB8 (DIN) at 16 kHz, mono, 16-bit samples in 32-bit
-wire slots. [audio.c](../apps/os/audio.c) composes it as the
+The `SUNSTONE_A733_OS_AUDIO` build adds a capture stream from an I2S0
+microphone on PB5 (BCLK), PB6 (LRCK) and PB8 (DIN), with two 32-bit wire slots.
+The stream's client chooses the rate, the channel count and the sample size,
+the period size and the number of ring slots in a buffer that the client
+supplies ([audio-stream.h](../apps/os/audio-stream.h)). The recognizer's
+client captures 16 kHz mono 16-bit samples. [audio.c](../apps/os/audio.c)
+composes the stream as the
 [I2S image](i2s-application.md) does: the board's clock registry, pin manager,
 register mutex and counter serve a separate audio lease owner, an audio
 parent, the I2S0 receive binding and one DMA0 channel through the
@@ -532,7 +536,7 @@ The 184 bytes after the thermal facts carry the receive facts:
 | 808..831 | Magic `0x415337334f415531`, version 1, size 184 |
 | 832..863 | SHA-256 of the reviewed audio entry record |
 | 864..967 | DMA0 handoff: allowed clock configuration, controller, evidence, established facts, owned and service channels |
-| 968..975 | Audio parent cold flag; capture length, 16,000 to 80,000 samples |
+| 968..975 | Audio parent cold flag; the capture client's parameter, for the recognizer its capture length of 16,000 to 80,000 samples |
 | 976..984 | Inherited function, pull and drive of PB5, PB6 and PB8 |
 | 985..991 | Zero |
 
@@ -546,7 +550,9 @@ The admission applies the I2S image's DMA rules to these fields: one service
 channel on the controller at `0x04601000`, every channel owned, the board's
 fabric clocks, the board lease as handoff and evidence identity, and no
 deadline in the session. The DMA owner differs from every board owner and
-from the thermal owner.
+from the thermal owner. The admission passes the capture client's parameter
+to that client's own check, `os_audio_client_admit`, which
+[start.c](../apps/os/start.c) binds to the recognizer's limit of 1 to 5 s.
 
 Each recognition generation captures one utterance after its trigger: at
 startup for workload 0, after each keyboard Enter for workload 4. The
@@ -556,18 +562,42 @@ recorded WAV. The OS build applies [recognition.patch](../apps/os/recognition.pa
 to the mimus board recognizer for this; the models, the arena and the result
 frame are unchanged, and the captured PCM is not exported over USB0.
 
-The capture client follows the I2S transcription client. It opens the stream,
-submits it, copies each completed period into the WAV buffer and returns the
-period, and cancels once the capture length is complete, still holding the
-final period. It publishes the WAV only after the service reports CANCELED
-with its reservations held. The next generation's request releases that WAV:
-the client then returns the final period, reaps, closes and opens the stream
-again. A discontinuous or wrong period, a stream that stops by itself, a
-refused request or a failed board ends the session through `board_fail`. The
+The stream is opened once, by the audio start entry before the scheduler,
+because the DMA service copies its stream profile and period catalogue when
+it starts. The stream accepts every rate whose bit clock divides the
+24.576 MHz module clock exactly: 8, 12, 16, 24, 32, 48, 64, 96 and 192 kHz,
+the vendor driver's 24.576 MHz rate family. The 44.1 kHz family needs
+22.5792 MHz from the modulated AUDIO0 PLL, which the audio parent does not
+own, so the stream refuses it. A period holds whole frames, a multiple of
+eight DMA accesses, up to the 4,096-byte page that backs it, and lasts at
+least 8 ms. The stream task takes one DMA service request per 1 ms tick, and
+each period needs a GET and a PUT, each answered on the task's next pass, so
+a period costs up to 4 ms; shorter periods would overrun the four DMA periods
+of each run. With 4,096-byte periods, 192 kHz is available for mono 16-bit
+samples and 96 kHz for stereo 16-bit or mono 32-bit samples.
+
+The stream task follows the I2S transcription client. For each run it opens
+the stream and submits it. It copies each completed period once from its DMA
+page into the next free slot of the client's ring, records the period's first
+frame and counter-clock observations, and returns the period. A slot is free
+once the client has released the period that last used it. When no slot is
+free, the stream drops the period, and the next delivered period's first
+frame shows the gap. A stop cancels the stream and completes once the service
+reports CANCELED with its reservations held; the next run first reaps, closes
+and opens the stream again. A discontinuous or wrong period, a stream that
+stops by itself or a failed board ends the session through `board_fail`. The
 stream, its periods, the leases and the masked interrupt then stay held. In
 the supervised lifetime they stay held until whole-board power removal. In
-the resident lifetime the client stops reporting progress, renewal stops and
-the watchdog resets the board.
+the resident lifetime the stream task stops reporting progress, renewal stops
+and the watchdog resets the board.
+
+The recognizer's WAV adapter ([capture.c](../apps/mimus-board/capture.c))
+gives the stream a 40-slot ring of 4,096-byte periods that starts at the data
+region of its WAV buffer, enough for 5 s. For each generation it starts a run,
+reads periods in place until the capture length is complete, stops the run
+and writes the WAV header after the stream reports the DMA drained. The next
+generation's request releases that WAV. A period out of place or out of
+order fails every later request.
 
 ## Radio station
 
@@ -1023,15 +1053,31 @@ A second call, a Bluetooth profile of another size and a refused profile
 publish nothing more.
 
 [os-image-audio.py](../checks/os-image-audio.py) compiles `apps/os/audio.c`
-with the microphone build's own flags, against modeled DMA service replies,
-and runs it under unicorn. Two generations each capture 32,000 bytes over
-eight periods and publish the exact WAV header and copied bytes; the second
-returns the held final period, reaps, closes and reopens the stream first. A
-discontinuous period and a stream that stops by itself are refused with the
-stream held, and the recognizer's request rules are checked. A fifth case
-runs the client's task passes: in a resident build each pass reports progress
-except while a DMA request is unanswered or after a failure; a supervised
-build reports none. The build directory must export its compile commands
+and the recognizer's adapter with the microphone build's own flags, against
+modeled DMA service replies, and runs them under unicorn:
+
+- The adapter captures two generations of 1 s, of ten whole periods and of
+  5 s, with the exact WAV header and modeled period bytes; the second
+  generation first reaps, closes and reopens the stream.
+- With `--baseline REVISION`, the capture client of that revision runs
+  against the same model, and both generations of each length must produce
+  identical WAV bytes.
+- A discontinuous period and a stream that stops by itself are refused with
+  the stream held, and the recognizer's request rules are checked.
+- In a resident build each stream task pass reports progress except while a
+  DMA request is unanswered or after a failure; a supervised build reports
+  none.
+- The accepted rates must equal the 24.576 MHz family in the pinned vendor
+  I2S source, with none of its 22.5792 MHz family. Wrong channel counts,
+  sample sizes, period sizes, slot counts and buffers are refused, and so are
+  periods shorter than 8 ms.
+- 8, 16, 48, 96 and 192 kHz streams with periods of 512 to 4,096 bytes
+  deliver their periods in place, in order, with their timestamps and bytes,
+  over two runs.
+- A full ring drops periods and the next period shows the gap; release order
+  and the start and stop handshakes are checked.
+
+The build directory must export its compile commands
 (`CMAKE_EXPORT_COMPILE_COMMANDS=ON`).
 
 [os-image-dispatch.py](../checks/os-image-dispatch.py) checks the GPU linear

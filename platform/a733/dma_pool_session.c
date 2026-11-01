@@ -4,6 +4,7 @@
 #include "a733_i2s_platform.h"
 
 _Static_assert(A733_DMA_CHANNELS<=DMA_SERVICE_JOBS,"one job per selected channel");
+_Static_assert(A733_I2S_PERIOD_CAPACITY<=DEVICE_MEMORY_PAGE,"one page backs each stream period");
 
 static struct a733_dma_pool_session *instance;
 static struct device_memory_pool *owned_pool;
@@ -197,7 +198,7 @@ static int initialize(struct a733_dma_pool_session *s,const struct a733_dma_pool
         uint16_t channels=c->handoff->service_channels;
         if(!image(stream,sizeof(*stream),0) || !stream->stream.cookie ||
            !image(stream->stream.cookie,sizeof(struct a733_i2s_platform),1) ||
-           periods<2 || periods>A733_I2S_STREAM_PERIODS || !period_bytes || period_bytes>4096 ||
+           periods<2 || periods>A733_I2S_STREAM_PERIODS || !period_bytes || period_bytes>A733_I2S_PERIOD_CAPACITY ||
            !channels || (stream->duplex?
              (!image(stream,2*sizeof(*stream),0) || stream[0].stream.direction!=A733_I2S_RECEIVE ||
               !dma_service_i2s_stream_pair(&stream[0],&stream[1]) || __builtin_popcount(channels)!=2):

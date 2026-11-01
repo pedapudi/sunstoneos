@@ -46,8 +46,7 @@ int os_session_valid(const struct os_session *s)
        a->dma_evidence!=s->board.lease||d->deadline_us||a->dma_established!=OS_AUDIO_DMA_ESTABLISHED||
        a->dma_owned_channels!=0xffff||a->dma_service_channels!=1||a->dma_controller!=0x04601000||
        memcmp(d->fabric,s->board.fabric,sizeof(d->fabric))||memcmp(d->rate_hz,s->board.fabric_hz,sizeof(d->rate_hz))||
-       a->audio_cold>1||a->capture_samples<OS_AUDIO_MIN_SAMPLES||a->capture_samples>OS_AUDIO_MAX_SAMPLES||
-       present(a->reserved,7))
+       a->audio_cold>1||!os_audio_client_admit(a->capture_samples)||present(a->reserved,7))
         return 0;
     for(unsigned i=0;i<4;++i)if(owners[i]==d->owner)return 0;
 #endif

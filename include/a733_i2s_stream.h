@@ -3,6 +3,9 @@
 #include "a733_i2s.h"
 
 #define A733_I2S_STREAM_PERIODS 8u
+/* Largest period payload. A profile chooses its period size up to this
+ * compile-time capacity; one DMA page backs each period (dma_pool_session.c). */
+#define A733_I2S_PERIOD_CAPACITY 4096u
 #define A733_I2S0_TXFIFO (A733_I2S0_BASE + 0x20u)
 enum a733_i2s_route { A733_I2S_ROUTE_I2S0, A733_I2S_ROUTE_HDMI3 };
 enum a733_i2s_direction { A733_I2S_RECEIVE, A733_I2S_TRANSMIT };
@@ -72,7 +75,7 @@ struct a733_i2s_stream {
     unsigned input_ended, end_slot, end_frames;
     uint64_t fifo_deadline, bridge_until;
     unsigned bridge_polls, bridge_passes;
-    _Alignas(64) unsigned char snapshot[4096];
+    _Alignas(64) unsigned char snapshot[A733_I2S_PERIOD_CAPACITY];
 };
 enum a733_i2s_status a733_i2s_stream_open(struct a733_i2s_stream *,
     const struct a733_i2s_stream_profile *, const struct a733_dma_transfer *,
@@ -95,7 +98,8 @@ enum a733_i2s_status a733_i2s_stream_close(struct a733_i2s_stream *, uint64_t de
  * immutable payload. On a stopped stream PUT relinquishes without restarting.
  * Return: 1 success, 0 unavailable, -1 retained fault. */
 int a733_i2s_stream_get(struct a733_i2s_stream *, struct a733_i2s_period *);
-/* Read-only CPU staging lease after CAPTURED_COPY GET, never raw DMA memory. */
+/* Read-only CPU staging lease after CAPTURED_COPY GET, never raw DMA memory.
+ * bytes is the catalogue's period size. */
 int a733_i2s_stream_copy(const struct a733_i2s_stream *,uint64_t,void *,size_t);
 int a733_i2s_stream_put(struct a733_i2s_stream *, uint64_t ticket);
 /* Commit exactly the final finite TX lease. valid_frames is nonzero and at most

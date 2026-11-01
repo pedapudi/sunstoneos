@@ -269,8 +269,9 @@ static enum a733_i2s_resource_result local_acquire(void *cookie,
     struct a733_i2s_platform *s=cookie;
     if (!s || !s->initialized || s->failed) return RETAINED;
     if (s->stage != L_IDLE || !plan || !a733_audio_parent_ready(s->parent) ||
-        plan->format.module_hz != 24576000 || plan->format.rate_hz != 16000 ||
-        plan->format.slot_bits != 32 || (plan->format.mclk_hz && plan->format.mclk_hz != 12288000) ||
+        /* a733_i2s_plan proved an exact bit-clock divider of the module
+         * clock; the parent provides only AUDIO1 DIV5 / 25. */
+        plan->format.module_hz != 24576000 || plan->format.slot_bits != 32 || (plan->format.mclk_hz && plan->format.mclk_hz != 12288000) ||
         (plan->format.mclk_hz != 0) != !!(s->route_mask&BIT(4)) || plan->pb_mask!=s->route_mask) return BUSY;
     if (!time_ok(s->parent,deadline)) return BUSY;
     s->plan=*plan; s->deadline=deadline; s->stage=L_LEASE;

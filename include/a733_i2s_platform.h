@@ -82,8 +82,12 @@ struct a733_i2s_platform {
  * DMA0 clock/memory/channel service is a separate prerequisite. */
 int a733_i2s_platform_init(struct a733_i2s_platform *, struct a733_audio_parent *,
     struct a733_pins *, uint64_t owner, const struct a733_pin_request *, size_t);
-/* Pass binding as cookie to the capture core. It supports 16 kHz, two 32-bit
- * slots, 24.576 MHz module, optional 12.288 MHz MCLK. */
+/* Pass binding as cookie to the capture core. The parent provides one module
+ * clock, 24.576 MHz from AUDIO1 DIV5, so the binding admits every plan at that
+ * clock with two 32-bit slots: 8, 12, 16, 24, 32, 48, 64, 96 and 192 kHz, the
+ * vendor's 24.576 MHz rate family. The 44.1 kHz family needs 22.5792 MHz from
+ * the modulated AUDIO0 PLL, which the parent does not own. Optional MCLK is
+ * 12.288 MHz. */
 struct a733_i2s_operations a733_i2s_platform_operations(void);
 /* Stream-only binding to actual common audio leases. PB7 function 3 is DOUT0;
  * PB8 function 3 is DIN0. PB5/6 and optional PB4 remain shared clock pins.
