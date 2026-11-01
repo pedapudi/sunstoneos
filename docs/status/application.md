@@ -20,7 +20,23 @@ shared device services. The [layering audit](../layering-audit.md) lists defects
 
 The three baseline builds and recorded QEMU parity have evidence under
 `~/.cache/sunstoneos/build/tool-gates-land-1031/` and
-`~/.cache/sunstoneos/build/integrate-streams-1031/`. Supervised/resident builds
+`~/.cache/sunstoneos/build/integrate-streams-1031/`. Current OS-only,
+hello-compute and external-mimus baseline builds pass under
+`~/.cache/sunstoneos/build/check-selection-1031/final/`. The selected kernel,
+eight-core scheduling model, shared-helper, dashboard, PMIC and power-domain
+integration gate passes there.
+
+Full integration remains blocked by the missing I2S stream-profile `route`
+initializer at `checks/i2s-runtime-provider.c:107`. Combined host evidence covers
+83 runnable checks: 78 pass and five remain failing. The failures concern the
+SPI platform expectation, obsolete supervised-claim interface, GPU texture macro,
+missing NumPy and provider-clock fixture. The full attempt and failed-case logs
+are in `gate-final-full/` and `full-host/` under that build directory.
+The corrected toolchain-lookup case retains its resumed result in
+`safety-resumed.log`; the dashboard result is in `gate-final-core/`.
+H.264 capture and SAE checks require external inputs and remain pending.
+
+Supervised/resident builds
 compose thermal, radio, I2S or headset services. Optional CPU/GPU/NPU builds
 have host evidence under `concurrent-gpu-npu-1026/`,
 `resident-gpu-cold-1026/` and `resume-gpu-eight-workers-20261026/` relative to
