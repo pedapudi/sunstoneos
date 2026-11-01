@@ -82,10 +82,23 @@ also build. The check index verifies 805 checks, including 93 pure-host checks;
 693 checks requiring external inputs remain pending in the full gate.
 
 Raw evidence is under `~/.cache/sunstoneos/build/probe-shared-1101/`: reviews in
-`reviews/`, shared cases in `probe-check-5/` and `probe-check-wake/`, audio cases
-in `audio-focused/`, and the gate in `gates/gate-shared-probe-full/`.
+`reviews/`, retained-summary cases in `probe-breadcrumb-check/`, audio cases
+in `audio-breadcrumb-focused/`, and the gate in `gates/gate-shared-probe-full/`.
+The diagnostic summary update also passes the selected gate in
+`gates/gate-policy-breadcrumb/`. The final audio and memory-test image hashes are
+`3baaace90784c0bcd0c75929cbac03d4de1ca3c06b1338e7d745c1184b031227`
+and `61d3d9582ec9846510ac2537d35df6938c7e0c01e60aae388c4583fc5ca2f4bf`.
 The audio control and scan-only memory probe pass offline admission. Port 3-1
 is assigned for audio control, the memory probe and audio control without a
 replug. Returned RTC diagnostics must retain the inherited policies and the
-completed normalization mask. Physical proof remains pending. Camera reset and
-peripheral gate normalization remain with the camera stream.
+completed normalization mask.
+
+Physical proof is blocked at queue entry `1793563386046260728-43380c21`.
+Its saved result is `host-error` at launch: the runner's USB discovery reads
+sysfs `devnum` during re-enumeration and receives `OSError: [Errno 19] No such
+device`. Launch is attempted, but no breadcrumbs or normal-return receipt are
+captured. Entry success and inherited policy remain unknown. No retry, memory
+run, final audio run or seed image is submitted. The raw traceback and result
+are in that entry's `run/` directory; the local record is `proof/audio-first.json`.
+Runner observation/recovery needs coordinator handling before another launch.
+Camera reset and peripheral gate normalization remain with the camera stream.
