@@ -95,8 +95,9 @@
     },
     {
       "name": "uxTaskCallForEachTask",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "configASSERT(pxCallbackFunction);"
     },
     {
       "name": "uxTaskGetNumberOfTasks",
@@ -118,8 +119,9 @@
     },
     {
       "name": "uxTaskGetSystemState",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "configASSERT(pxTaskStatusArray);"
     },
     {
       "name": "uxTaskGetTaskNumber",
@@ -176,28 +178,33 @@
     },
     {
       "name": "vTaskEndScheduler",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "vPortEndScheduler(); /* This Arm port explicitly asserts: scheduler stop is unsupported. */"
     },
     {
       "name": "vTaskEnterCritical",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "if (!xSchedulerRunning) { portDISABLE_INTERRUPTS(); return; }"
     },
     {
       "name": "vTaskEnterCriticalFromISR",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "if (!xSchedulerRunning) return 0;"
     },
     {
       "name": "vTaskExitCritical",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "if (!xSchedulerRunning) return;"
     },
     {
       "name": "vTaskExitCriticalFromISR",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "if (!xSchedulerRunning) return;"
     },
     {
       "name": "vTaskGenericNotifyGiveFromISR",
@@ -207,8 +214,9 @@
     },
     {
       "name": "vTaskGetInfo",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "(void)eState; ssKernelInfo(xTask, pxTaskStatus, xGetFreeStackSpace != pdFALSE);"
     },
     {
       "name": "vTaskGetRunTimeStatistics",
@@ -280,8 +288,9 @@
     },
     {
       "name": "vTaskResetState",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "configASSERT(!xSchedulerRunning);"
     },
     {
       "name": "vTaskResume",
@@ -315,8 +324,9 @@
     },
     {
       "name": "vTaskStartScheduler",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "configASSERT(!xSchedulerRunning);"
     },
     {
       "name": "vTaskStepTick",
@@ -361,8 +371,9 @@
     },
     {
       "name": "xTaskCatchUpTicks",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "configASSERT(!ssKernelCPUs[ssKernelCPUId()].preempt);"
     },
     {
       "name": "xTaskCheckForTimeOut",
@@ -402,13 +413,15 @@
     },
     {
       "name": "xTaskCreateStatic",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "TaskHandle_t handle = NULL;"
     },
     {
       "name": "xTaskCreateStaticAffinitySet",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "TaskHandle_t handle = NULL;"
     },
     {
       "name": "xTaskDelayUntil",
@@ -454,13 +467,15 @@
     },
     {
       "name": "xTaskGetCurrentTaskHandle",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "return pxCurrentTCBs[ssKernelCPUId()];"
     },
     {
       "name": "xTaskGetCurrentTaskHandleForCore",
-      "state": "pending",
-      "validation": "none"
+      "state": "routed-private",
+      "validation": "aarch64-compile",
+      "definition_route": "if (xCoreID < 0 || xCoreID >= configNUMBER_OF_CORES) return NULL;"
     },
     {
       "name": "xTaskGetHandle",

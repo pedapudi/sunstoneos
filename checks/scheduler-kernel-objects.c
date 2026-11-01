@@ -116,3 +116,82 @@ static void fixture_inheritance(TaskHandle_t holder, TaskHandle_t donor)
     assert(uxTaskPriorityGet(holder) == 5);
     printf("linked FreeRTOS inheritance: deferred owner repair, nested mutex retention, timeout lowering, final disinherit\n");
 }
+
+static unsigned fixture_port_starts;
+BaseType_t xPortStartScheduler(void)
+{
+    ++fixture_port_starts;
+    assert(xSchedulerRunning);
+    for (unsigned cpu = 0; cpu < configNUMBER_OF_CORES; ++cpu) {
+        assert(pxCurrentTCBs[cpu] == xIdleTaskHandles[cpu]);
+        assert(ssKernelCPUs[cpu].run.current->context == xIdleTaskHandles[cpu]);
+    }
+    return pdFALSE;
+}
+static void fixture_diagnostic_visit(TaskHandle_t task, eTaskState state, void *opaque)
+{
+    unsigned *count = opaque;
+    TaskStatus_t status;
+    vTaskGetInfo(task, &status, pdTRUE, eInvalid);
+    assert(status.xHandle == task && status.eCurrentState == state);
+    assert(status.pcTaskName && status.pxStackBase && status.xTaskNumber);
+    ++*count;
+}
+static void fixture_diagnostics(void)
+{
+    fixture_cpu = 0;
+    TaskStatus_t status[SS_OWNER_SLOTS];
+    configRUN_TIME_COUNTER_TYPE total = 99;
+    UBaseType_t count = uxTaskGetNumberOfTasks();
+    assert(uxTaskGetSystemState(status, count - 1, &total) == 0);
+    assert(uxTaskGetSystemState(status, SS_OWNER_SLOTS, &total) == count);
+    assert(total == 0);
+    unsigned visits = 0;
+    assert(uxTaskCallForEachTask(fixture_diagnostic_visit, &visits, &total) == count);
+    assert(visits == count);
+    assert(!ssKernelCPUs[0].preempt && atomic_load(&ssKernelControl.gate_phase) == SS_GATE_OPEN);
+    assert(xTaskGetCurrentTaskHandle() == pxCurrentTCBs[0]);
+    assert(xTaskGetCurrentTaskHandleForCore(1) == pxCurrentTCBs[1]);
+    assert(!xTaskGetCurrentTaskHandleForCore(-1));
+    assert(!xTaskGetCurrentTaskHandleForCore(configNUMBER_OF_CORES));
+}
+static int fixture_startup(void)
+{
+    vTaskResetState();
+    vTaskStartScheduler();
+    assert(fixture_port_starts == 1 && uxTaskGetNumberOfTasks() == configNUMBER_OF_CORES + 1);
+    assert(xTimerGetTimerDaemonTaskHandle());
+    for (unsigned cpu = 0; cpu < configNUMBER_OF_CORES; ++cpu) enter(cpu);
+    assert(pxCurrentTCBs[0] == xTimerGetTimerDaemonTaskHandle());
+    fixture_diagnostics();
+    invariant();
+    printf("linked FreeRTOS startup: public scheduler start creates pinned idle owners and timer task; registry diagnostics\n");
+    return 0;
+}
+
+static void fixture_critical(void)
+{
+    fixture_cpu = 0;
+    unsigned locks = fixture_locks;
+    vTaskEnterCritical();
+    vTaskEnterCritical();
+    assert(ullCriticalNestings[0] == 2 && ssKernelCPUs[0].preempt == 1);
+    assert(atomic_load(&ssKernelControl.gate_phase) == SS_GATE_OPEN);
+    unsigned held_locks = fixture_locks;
+    enter(1); /* Public application exclusion does not stop another owner. */
+    assert(fixture_locks == held_locks);
+    fixture_cpu = 0;
+    vTaskExitCritical();
+    assert(ullCriticalNestings[0] == 1 && ssKernelCPUs[0].preempt == 1);
+    vTaskExitCritical();
+    assert(!ullCriticalNestings[0] && !ssKernelCPUs[0].preempt);
+    assert(fixture_locks == locks + 2);
+    UBaseType_t first = vTaskEnterCriticalFromISR();
+    UBaseType_t second = vTaskEnterCriticalFromISR();
+    assert(ullCriticalNestings[0] == 2 && ssKernelCPUs[0].preempt == 2);
+    vTaskExitCriticalFromISR(second);
+    vTaskExitCriticalFromISR(first);
+    assert(!ullCriticalNestings[0] && !ssKernelCPUs[0].preempt);
+    assert(fixture_locks == locks + 3);
+    printf("linked FreeRTOS critical APIs: nested task/ISR exclusion preserves port nesting and permits remote owner dispatch\n");
+}

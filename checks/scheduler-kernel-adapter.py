@@ -66,6 +66,16 @@ def main():
               '-I' + str(ROOT / 'kernel/scheduler'), '-I' + str(args.freertos / 'include')]
     run([*common, '--target=aarch64-none-elf', '-march=armv8.1-a+lse', '-ffreestanding',
          '-Werror', '-isystem', args.sysroot / 'include', '-c', patched, '-o', build / 'tasks-api.o'])
+    ast = json.loads(run([*common, '--target=aarch64-none-elf', '-march=armv8.1-a+lse',
+                          '-ffreestanding', '-isystem', args.sysroot / 'include',
+                          '-Xclang', '-ast-dump=json', '-fsyntax-only', patched]))
+    (build / 'tasks-api-ast.json').write_text(json.dumps(ast))
+    enabled = {node.get('name') for node in ast['inner'] if node['kind'] == 'FunctionDecl'
+               and any(child['kind'] == 'CompoundStmt' for child in node.get('inner', []))}
+    selection = [{**entry, 'selected': entry['name'] in enabled} for entry in inventory['apis']]
+    (build / 'api-selection.json').write_text(json.dumps(selection, indent=2) + '\n')
+    print('selected pending task APIs: ' + ', '.join(entry['name'] for entry in selection
+          if entry['selected'] and entry['state'] == 'pending'))
     disabled = [flag.replace('configSS_PARTITIONED_SCHEDULER=1',
                              'configSS_PARTITIONED_SCHEDULER=0') for flag in common]
     run([*disabled, '--target=aarch64-none-elf', '-march=armv8.1-a+lse', '-ffreestanding',
@@ -85,6 +95,7 @@ def main():
                ('owner.c', 'notification.c', 'deadline.c', 'freertos_registry.c', 'freertos_control.c')]]
     run([*common, '-fsanitize=address,undefined', '-Wl,--gc-sections', translation, *sources, '-o', binary])
     print(run([binary]), end='')
+    print(run([binary, 'startup']), end='')
     race = build / 'control-reuse'
     run([args.cc, '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-pthread',
          '-fsanitize=address,undefined', ROOT / 'kernel/scheduler/owner.c',

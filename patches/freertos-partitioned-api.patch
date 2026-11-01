@@ -12,7 +12,59 @@
  
  #if ( configNUMBER_OF_CORES > 1 )
      STATIC void prvCheckForRunStateChange( void )
-@@ -2143,6 +2148,10 @@
+@@ -1351,6 +1356,14 @@
+                                     StackType_t * const puxStackBuffer,
+                                     StaticTask_t * const pxTaskBuffer )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++TaskHandle_t handle = NULL;
++TCB_t *task = prvCreateStaticTask(pxTaskCode, pcName, uxStackDepth, pvParameters, uxPriority, puxStackBuffer, pxTaskBuffer, &handle);
++if (!task) return NULL;
++task->uxCoreAffinityMask = configTASK_DEFAULT_CORE_AFFINITY;
++return ssKernelAddTask(task) ? handle : NULL;
++#else
++
+         TaskHandle_t xReturn = NULL;
+         TCB_t * pxNewTCB;
+ 
+@@ -1377,7 +1390,9 @@
+         traceRETURN_xTaskCreateStatic( xReturn );
+ 
+         return xReturn;
+-    }
++    
++#endif
++}
+ /*-----------------------------------------------------------*/
+ 
+     #if ( ( configNUMBER_OF_CORES > 1 ) && ( configUSE_CORE_AFFINITY == 1 ) )
+@@ -1390,6 +1405,14 @@
+                                                    StaticTask_t * const pxTaskBuffer,
+                                                    UBaseType_t uxCoreAffinityMask )
+         {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++TaskHandle_t handle = NULL;
++TCB_t *task = prvCreateStaticTask(pxTaskCode, pcName, uxStackDepth, pvParameters, uxPriority, puxStackBuffer, pxTaskBuffer, &handle);
++if (!task) return NULL;
++task->uxCoreAffinityMask = uxCoreAffinityMask;
++return ssKernelAddTask(task) ? handle : NULL;
++#else
++
+             TaskHandle_t xReturn = NULL;
+             TCB_t * pxNewTCB;
+ 
+@@ -1412,7 +1435,9 @@
+             traceRETURN_xTaskCreateStaticAffinitySet( xReturn );
+ 
+             return xReturn;
+-        }
++        
++#endif
++}
+     #endif /* #if ( ( configNUMBER_OF_CORES > 1 ) && ( configUSE_CORE_AFFINITY == 1 ) ) */
+ 
+ #endif /* SUPPORT_STATIC_ALLOCATION */
+@@ -2143,6 +2168,10 @@
  
      STATIC void prvAddNewTaskToReadyList( TCB_t * pxNewTCB )
      {
@@ -23,7 +75,7 @@
          /* Ensure interrupts don't access the task lists while the lists are being
           * updated. */
          taskENTER_CRITICAL();
-@@ -2195,7 +2204,9 @@
+@@ -2195,7 +2224,9 @@
              }
          }
          taskEXIT_CRITICAL();
@@ -34,7 +86,7 @@
  
  #endif /* #if ( configNUMBER_OF_CORES == 1 ) */
  /*-----------------------------------------------------------*/
-@@ -2237,6 +2248,10 @@
+@@ -2237,6 +2268,10 @@
  
      void vTaskDelete( TaskHandle_t xTaskToDelete )
      {
@@ -45,7 +97,7 @@
          TCB_t * pxTCB;
          BaseType_t xDeleteTCBInIdleTask = pdFALSE;
          BaseType_t xTaskIsRunningOrYielding;
-@@ -2381,7 +2396,9 @@
+@@ -2381,7 +2416,9 @@
          #endif /* #if ( configNUMBER_OF_CORES == 1 ) */
  
          traceRETURN_vTaskDelete();
@@ -56,7 +108,7 @@
  
  #endif /* INCLUDE_vTaskDelete */
  /*-----------------------------------------------------------*/
-@@ -2391,6 +2408,15 @@
+@@ -2391,6 +2428,15 @@
      TickType_t xTaskPeriodicDelay( TickType_t * const pxPreviousWakeTime,
                                     const TickType_t xTimeIncrement )
      {
@@ -72,7 +124,7 @@
          TickType_t xIncrements, xTicksIncrements, xTicksToWait;
  
          traceENTER_xTaskPeriodicDelay( pxPreviousWakeTime, xTimeIncrement );
-@@ -2434,12 +2460,25 @@
+@@ -2434,12 +2480,25 @@
          traceRETURN_xTaskPeriodicDelay( xIncrements );
  
          return xIncrements;
@@ -99,7 +151,7 @@
          TickType_t xTimeToWake;
          BaseType_t xAlreadyYielded, xShouldDelay = pdFALSE;
  
-@@ -2522,7 +2561,9 @@
+@@ -2522,7 +2581,9 @@
          traceRETURN_xTaskDelayUntil( xShouldDelay );
  
          return xShouldDelay;
@@ -110,7 +162,7 @@
  
  #endif /* INCLUDE_xTaskDelayUntil */
  /*-----------------------------------------------------------*/
-@@ -2531,6 +2572,14 @@
+@@ -2531,6 +2592,14 @@
  
      void vTaskDelay( const TickType_t xTicksToDelay )
      {
@@ -125,7 +177,7 @@
          BaseType_t xAlreadyYielded = pdFALSE;
  
          traceENTER_vTaskDelay( xTicksToDelay );
-@@ -2572,7 +2621,9 @@
+@@ -2572,7 +2641,9 @@
          }
  
          traceRETURN_vTaskDelay();
@@ -136,7 +188,7 @@
  
  #endif /* INCLUDE_vTaskDelay */
  /*-----------------------------------------------------------*/
-@@ -2581,6 +2632,10 @@
+@@ -2581,6 +2652,10 @@
  
      eTaskState eTaskGetState( TaskHandle_t xTask )
      {
@@ -147,7 +199,7 @@
          eTaskState eReturn;
          List_t const * pxStateList;
          List_t const * pxEventList;
-@@ -2704,7 +2759,9 @@
+@@ -2704,7 +2779,9 @@
          traceRETURN_eTaskGetState( eReturn );
  
          return eReturn;
@@ -158,7 +210,7 @@
  
  #endif /* INCLUDE_eTaskGetState */
  /*-----------------------------------------------------------*/
-@@ -2713,6 +2770,10 @@
+@@ -2713,6 +2790,10 @@
  
      UBaseType_t uxTaskPriorityGet( const TaskHandle_t xTask )
      {
@@ -169,7 +221,7 @@
          TCB_t const * pxTCB;
          UBaseType_t uxReturn;
  
-@@ -2732,7 +2793,9 @@
+@@ -2732,7 +2813,9 @@
          traceRETURN_uxTaskPriorityGet( uxReturn );
  
          return uxReturn;
@@ -180,7 +232,7 @@
  
  #endif /* INCLUDE_uxTaskPriorityGet */
  /*-----------------------------------------------------------*/
-@@ -2741,6 +2804,10 @@
+@@ -2741,6 +2824,10 @@
  
      UBaseType_t uxTaskPriorityGetFromISR( const TaskHandle_t xTask )
      {
@@ -191,7 +243,7 @@
          TCB_t const * pxTCB;
          UBaseType_t uxReturn;
          UBaseType_t uxSavedInterruptStatus;
-@@ -2782,7 +2849,9 @@
+@@ -2782,7 +2869,9 @@
          traceRETURN_uxTaskPriorityGetFromISR( uxReturn );
  
          return uxReturn;
@@ -202,7 +254,7 @@
  
  #endif /* INCLUDE_uxTaskPriorityGet */
  /*-----------------------------------------------------------*/
-@@ -2791,6 +2860,10 @@
+@@ -2791,6 +2880,10 @@
  
      UBaseType_t uxTaskBasePriorityGet( const TaskHandle_t xTask )
      {
@@ -213,7 +265,7 @@
          TCB_t const * pxTCB;
          UBaseType_t uxReturn;
  
-@@ -2810,7 +2883,9 @@
+@@ -2810,7 +2903,9 @@
          traceRETURN_uxTaskBasePriorityGet( uxReturn );
  
          return uxReturn;
@@ -224,7 +276,7 @@
  
  #endif /* #if ( ( INCLUDE_uxTaskPriorityGet == 1 ) && ( configUSE_MUTEXES == 1 ) ) */
  /*-----------------------------------------------------------*/
-@@ -2819,6 +2894,10 @@
+@@ -2819,6 +2914,10 @@
  
      UBaseType_t uxTaskBasePriorityGetFromISR( const TaskHandle_t xTask )
      {
@@ -235,7 +287,7 @@
          TCB_t const * pxTCB;
          UBaseType_t uxReturn;
          UBaseType_t uxSavedInterruptStatus;
-@@ -2860,7 +2939,9 @@
+@@ -2860,7 +2959,9 @@
          traceRETURN_uxTaskBasePriorityGetFromISR( uxReturn );
  
          return uxReturn;
@@ -246,7 +298,7 @@
  
  #endif /* #if ( ( INCLUDE_uxTaskPriorityGet == 1 ) && ( configUSE_MUTEXES == 1 ) ) */
  /*-----------------------------------------------------------*/
-@@ -2870,6 +2951,11 @@
+@@ -2870,6 +2971,11 @@
      void vTaskPrioritySet( TaskHandle_t xTask,
                             UBaseType_t uxNewPriority )
      {
@@ -258,7 +310,7 @@
          TCB_t * pxTCB;
          UBaseType_t uxCurrentBasePriority, uxPriorityUsedOnEntry;
          BaseType_t xYieldRequired = pdFALSE;
-@@ -3075,7 +3161,9 @@
+@@ -3075,7 +3181,9 @@
          taskEXIT_CRITICAL();
  
          traceRETURN_vTaskPrioritySet();
@@ -269,7 +321,7 @@
  
  #endif /* INCLUDE_vTaskPrioritySet */
  /*-----------------------------------------------------------*/
-@@ -3084,6 +3172,12 @@
+@@ -3084,6 +3192,12 @@
      void vTaskCoreAffinitySet( const TaskHandle_t xTask,
                                 UBaseType_t uxCoreAffinityMask )
      {
@@ -282,7 +334,7 @@
          TCB_t * pxTCB;
          BaseType_t xCoreID;
  
-@@ -3133,13 +3227,26 @@
+@@ -3133,13 +3247,26 @@
          taskEXIT_CRITICAL();
  
          traceRETURN_vTaskCoreAffinitySet();
@@ -310,7 +362,7 @@
          const TCB_t * pxTCB;
          UBaseType_t uxCoreAffinityMask;
  
-@@ -3157,7 +3264,9 @@
+@@ -3157,7 +3284,9 @@
          traceRETURN_vTaskCoreAffinityGet( uxCoreAffinityMask );
  
          return uxCoreAffinityMask;
@@ -321,7 +373,7 @@
  #endif /* #if ( ( configNUMBER_OF_CORES > 1 ) && ( configUSE_CORE_AFFINITY == 1 ) ) */
  
  /*-----------------------------------------------------------*/
-@@ -3222,6 +3331,10 @@
+@@ -3222,6 +3351,10 @@
  
      void vTaskSuspend( TaskHandle_t xTaskToSuspend )
      {
@@ -332,7 +384,7 @@
          TCB_t * pxTCB;
  
          traceENTER_vTaskSuspend( xTaskToSuspend );
-@@ -3376,7 +3489,9 @@
+@@ -3376,7 +3509,9 @@
          #endif /* #if ( configNUMBER_OF_CORES == 1 ) */
  
          traceRETURN_vTaskSuspend();
@@ -343,7 +395,7 @@
  
  #endif /* INCLUDE_vTaskSuspend */
  /*-----------------------------------------------------------*/
-@@ -3455,6 +3570,11 @@
+@@ -3455,6 +3590,11 @@
  
      void vTaskResume( TaskHandle_t xTaskToResume )
      {
@@ -355,7 +407,7 @@
          TCB_t * const pxTCB = xTaskToResume;
  
          traceENTER_vTaskResume( xTaskToResume );
-@@ -3506,7 +3626,9 @@
+@@ -3506,7 +3646,9 @@
          }
  
          traceRETURN_vTaskResume();
@@ -366,7 +418,7 @@
  
  #endif /* INCLUDE_vTaskSuspend */
  
-@@ -3516,6 +3638,12 @@
+@@ -3516,6 +3658,12 @@
  
      BaseType_t xTaskResumeFromISR( TaskHandle_t xTaskToResume )
      {
@@ -379,7 +431,7 @@
          BaseType_t xYieldRequired = pdFALSE;
          TCB_t * const pxTCB = xTaskToResume;
          UBaseType_t uxSavedInterruptStatus;
-@@ -3606,7 +3734,9 @@
+@@ -3606,7 +3754,9 @@
          traceRETURN_xTaskResumeFromISR( xYieldRequired );
  
          return xYieldRequired;
@@ -390,17 +442,63 @@
  
  #endif /* ( ( INCLUDE_xTaskResumeFromISR == 1 ) && ( INCLUDE_vTaskSuspend == 1 ) ) */
  /*-----------------------------------------------------------*/
-@@ -3780,6 +3910,9 @@
-     #endif /* #if ( configUSE_CORE_AFFINITY == 1 ) && ( configNUMBER_OF_CORES > 1 ) */
+@@ -3767,6 +3917,30 @@
  
-     xReturn = prvCreateIdleTasks();
+ void vTaskStartScheduler( void )
+ {
 +#if ( configSS_PARTITIONED_SCHEDULER == 1 )
-+    if (xReturn == pdPASS) ssKernelBootstrap();
++configASSERT(!xSchedulerRunning);
++BaseType_t result = prvCreateIdleTasks();
++if (result != pdPASS) { configASSERT(result != errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY); return; }
++ssKernelBootstrap();
++#if ( configUSE_TIMERS == 1 )
++result = xTimerCreateTimerTask();
++if (result != pdPASS) { configASSERT(result != errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY); return; }
 +#endif
++#ifdef FREERTOS_TASKS_C_ADDITIONS_INIT
++freertos_tasks_c_additions_init();
++#endif
++portDISABLE_INTERRUPTS();
++#if ( configUSE_C_RUNTIME_TLS_SUPPORT == 1 )
++configSET_TLS_BLOCK(pxCurrentTCBs[ssKernelCPUId()]->xTLSBlock);
++#endif
++atomic_store_explicit(&ssKernelTime, configINITIAL_TICK_COUNT, memory_order_release);
++xSchedulerRunning = pdTRUE;
++portCONFIGURE_TIMER_FOR_RUN_TIME_STATS();
++traceTASK_SWITCHED_IN();
++traceSTARTING_SCHEDULER(xIdleTaskHandles);
++(void)xPortStartScheduler();
++#else
++
+     BaseType_t xReturn;
  
-     #if ( configUSE_TIMERS == 1 )
-     {
-@@ -3915,6 +4048,10 @@
+     traceENTER_vTaskStartScheduler();
+@@ -3867,11 +4041,17 @@
+     ( void ) uxTopUsedPriority;
+ 
+     traceRETURN_vTaskStartScheduler();
++
++#endif
+ }
+ /*-----------------------------------------------------------*/
+ 
+ void vTaskEndScheduler( void )
+ {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++vPortEndScheduler(); /* This Arm port explicitly asserts: scheduler stop is unsupported. */
++#else
++
+     traceENTER_vTaskEndScheduler();
+ 
+     #if ( INCLUDE_vTaskDelete == 1 )
+@@ -3910,11 +4090,17 @@
+     vPortEndScheduler();
+ 
+     traceRETURN_vTaskEndScheduler();
++
++#endif
+ }
+ /*----------------------------------------------------------*/
  
  void vTaskSuspendAll( void )
  {
@@ -411,7 +509,7 @@
      traceENTER_vTaskSuspendAll();
  
      #if ( configNUMBER_OF_CORES == 1 )
-@@ -4019,6 +4156,8 @@
+@@ -4019,6 +4205,8 @@
      #endif /* #if ( configNUMBER_OF_CORES == 1 ) */
  
      traceRETURN_vTaskSuspendAll();
@@ -420,7 +518,7 @@
  }
  
  /*----------------------------------------------------------*/
-@@ -4089,6 +4228,10 @@
+@@ -4089,6 +4277,10 @@
  
  BaseType_t xTaskResumeAll( void )
  {
@@ -431,7 +529,7 @@
      TCB_t * pxTCB = NULL;
      BaseType_t xAlreadyYielded = pdFALSE;
  
-@@ -4233,11 +4376,17 @@
+@@ -4233,11 +4425,17 @@
      traceRETURN_xTaskResumeAll( xAlreadyYielded );
  
      return xAlreadyYielded;
@@ -449,7 +547,7 @@
      TickType_t xTicks;
  
      traceENTER_xTaskGetTickCount();
-@@ -4252,11 +4401,17 @@
+@@ -4252,11 +4450,17 @@
      traceRETURN_xTaskGetTickCount( xTicks );
  
      return xTicks;
@@ -467,7 +565,7 @@
      TickType_t xReturn;
      UBaseType_t uxSavedInterruptStatus;
  
-@@ -4287,11 +4442,20 @@
+@@ -4287,11 +4491,20 @@
      traceRETURN_xTaskGetTickCountFromISR( xReturn );
  
      return xReturn;
@@ -488,7 +586,7 @@
      traceENTER_uxTaskGetNumberOfTasks();
  
      /* A critical section is not required because the variables are of type
-@@ -4299,11 +4463,32 @@
+@@ -4299,11 +4512,32 @@
      traceRETURN_uxTaskGetNumberOfTasks( uxCurrentNumberOfTasks );
  
      return uxCurrentNumberOfTasks;
@@ -521,7 +619,7 @@
      TCB_t * pxTCB;
  
      traceENTER_pcTaskGetName( xTaskToQuery );
-@@ -4316,6 +4501,8 @@
+@@ -4316,6 +4550,8 @@
      traceRETURN_pcTaskGetName( &( pxTCB->pcTaskName[ 0 ] ) );
  
      return &( pxTCB->pcTaskName[ 0 ] );
@@ -530,7 +628,7 @@
  }
  /*-----------------------------------------------------------*/
  
-@@ -4465,6 +4652,10 @@
+@@ -4465,6 +4701,10 @@
                                        StackType_t ** ppuxStackBuffer,
                                        StaticTask_t ** ppxTaskBuffer )
      {
@@ -541,7 +639,7 @@
          BaseType_t xReturn;
          TCB_t * pxTCB;
  
-@@ -4473,7 +4664,7 @@
+@@ -4473,7 +4713,7 @@
          configASSERT( ppuxStackBuffer != NULL );
          configASSERT( ppxTaskBuffer != NULL );
  
@@ -550,7 +648,7 @@
          configASSERT( pxTCB != NULL );
  
          #if ( tskSTATIC_AND_DYNAMIC_ALLOCATION_POSSIBLE == 1 )
-@@ -4508,8 +4699,57 @@
+@@ -4508,8 +4748,57 @@
  
          traceRETURN_xTaskGetStaticBuffers( xReturn );
  
@@ -609,7 +707,92 @@
  
  #endif /* configSUPPORT_STATIC_ALLOCATION */
  /*-----------------------------------------------------------*/
-@@ -4762,6 +5002,10 @@
+@@ -4593,6 +4882,16 @@
+                                        void * pvCallbackContext,
+                                        configRUN_TIME_COUNTER_TYPE * const pulTotalRunTime )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++configASSERT(pxCallbackFunction);
++if (!pxCallbackFunction) return 0;
++ssKernelSuspendAll();
++UBaseType_t count = ssKernelForEach(pxCallbackFunction, pvCallbackContext);
++prvGetTotalRunTime(pulTotalRunTime);
++(void)ssKernelResumeAll();
++return count;
++#else
++
+         UBaseType_t uxTask;
+ 
+         configASSERT( pxCallbackFunction != NULL );
+@@ -4610,12 +4909,27 @@
+         ( void ) xTaskResumeAll();
+ 
+         return uxTask;
+-    }
++    
++#endif
++}
+ 
+     UBaseType_t uxTaskGetSystemState( TaskStatus_t * const pxTaskStatusArray,
+                                       const UBaseType_t uxArraySize,
+                                       configRUN_TIME_COUNTER_TYPE * const pulTotalRunTime )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++configASSERT(pxTaskStatusArray);
++ssKernelSuspendAll();
++UBaseType_t count = 0;
++if (uxArraySize >= uxTaskGetNumberOfTasks()) {
++    TaskStatusArrayWriterContext_t context = { .pxTaskStatusArray = pxTaskStatusArray, .uxIndex = 0 };
++    count = ssKernelForEach(prvTaskStatusArrayWriter, &context);
++    prvGetTotalRunTime(pulTotalRunTime);
++}
++(void)ssKernelResumeAll();
++return count;
++#else
++
+         UBaseType_t uxTask = 0;
+ 
+         traceENTER_uxTaskGetSystemState( pxTaskStatusArray, uxArraySize, pulTotalRunTime );
+@@ -4641,7 +4955,9 @@
+         traceRETURN_uxTaskGetSystemState( uxTask );
+ 
+         return uxTask;
+-    }
++    
++#endif
++}
+ 
+ #endif /* configUSE_TRACE_FACILITY */
+ /*----------------------------------------------------------*/
+@@ -4732,6 +5048,18 @@
+ 
+ BaseType_t xTaskCatchUpTicks( TickType_t xTicksToCatchUp )
+ {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++configASSERT(!ssKernelCPUs[ssKernelCPUId()].preempt);
++UBaseType_t irq = portSET_INTERRUPT_MASK();
++atomic_fetch_add_explicit(&ssKernelTime, (uint64_t)xTicksToCatchUp, memory_order_acq_rel);
++for (unsigned cpu = 0; cpu < configNUMBER_OF_CORES; ++cpu) ssKernelForce(cpu);
++ssKernelService();
++bool result = ssKernelCPUs[ssKernelCPUId()].reschedule;
++portCLEAR_INTERRUPT_MASK(irq);
++if (result) portYIELD();
++return result ? pdTRUE : pdFALSE;
++#else
++
+     BaseType_t xYieldOccurred;
+ 
+     traceENTER_xTaskCatchUpTicks( xTicksToCatchUp );
+@@ -4755,6 +5083,8 @@
+     traceRETURN_xTaskCatchUpTicks( xYieldOccurred );
+ 
+     return xYieldOccurred;
++
++#endif
+ }
+ /*----------------------------------------------------------*/
+ 
+@@ -4762,6 +5092,10 @@
  
      BaseType_t xTaskAbortDelay( TaskHandle_t xTask )
      {
@@ -620,7 +803,7 @@
          TCB_t * pxTCB = xTask;
          BaseType_t xReturn;
  
-@@ -4849,13 +5093,19 @@
+@@ -4849,13 +5183,19 @@
          traceRETURN_xTaskAbortDelay( xReturn );
  
          return xReturn;
@@ -641,7 +824,7 @@
      TCB_t * pxTCB;
      TickType_t xItemValue;
      BaseType_t xSwitchRequired = pdFALSE;
-@@ -5171,6 +5421,8 @@
+@@ -5171,6 +5511,8 @@
      traceRETURN_xTaskIncrementTick( xSwitchRequired );
  
      return xSwitchRequired;
@@ -650,7 +833,7 @@
  }
  /*-----------------------------------------------------------*/
  
-@@ -5179,6 +5431,15 @@
+@@ -5179,6 +5521,15 @@
      void vTaskSetApplicationTaskTag( TaskHandle_t xTask,
                                       TaskHookFunction_t pxHookFunction )
      {
@@ -666,7 +849,7 @@
          TCB_t * xTCB;
  
          traceENTER_vTaskSetApplicationTaskTag( xTask, pxHookFunction );
-@@ -5203,7 +5464,9 @@
+@@ -5203,7 +5554,9 @@
          taskEXIT_CRITICAL();
  
          traceRETURN_vTaskSetApplicationTaskTag();
@@ -677,7 +860,7 @@
  
  #endif /* configUSE_APPLICATION_TASK_TAG */
  /*-----------------------------------------------------------*/
-@@ -5212,6 +5475,16 @@
+@@ -5212,6 +5565,16 @@
  
      TaskHookFunction_t xTaskGetApplicationTaskTag( TaskHandle_t xTask )
      {
@@ -694,7 +877,7 @@
          TCB_t * pxTCB;
          TaskHookFunction_t xReturn;
  
-@@ -5232,7 +5505,9 @@
+@@ -5232,7 +5595,9 @@
          traceRETURN_xTaskGetApplicationTaskTag( xReturn );
  
          return xReturn;
@@ -705,7 +888,7 @@
  
  #endif /* configUSE_APPLICATION_TASK_TAG */
  /*-----------------------------------------------------------*/
-@@ -5241,6 +5516,16 @@
+@@ -5241,6 +5606,16 @@
  
      TaskHookFunction_t xTaskGetApplicationTaskTagFromISR( TaskHandle_t xTask )
      {
@@ -722,7 +905,7 @@
          TCB_t * pxTCB;
          TaskHookFunction_t xReturn;
          UBaseType_t uxSavedInterruptStatus;
-@@ -5265,7 +5550,9 @@
+@@ -5265,7 +5640,9 @@
          traceRETURN_xTaskGetApplicationTaskTagFromISR( xReturn );
  
          return xReturn;
@@ -733,7 +916,7 @@
  
  #endif /* configUSE_APPLICATION_TASK_TAG */
  /*-----------------------------------------------------------*/
-@@ -5275,6 +5562,11 @@
+@@ -5275,6 +5652,11 @@
      BaseType_t xTaskCallApplicationTaskHook( TaskHandle_t xTask,
                                               void * pvParameter )
      {
@@ -745,7 +928,7 @@
          TCB_t * xTCB;
          BaseType_t xReturn;
  
-@@ -5302,7 +5594,9 @@
+@@ -5302,7 +5684,9 @@
          traceRETURN_xTaskCallApplicationTaskHook( xReturn );
  
          return xReturn;
@@ -756,7 +939,7 @@
  
  #endif /* configUSE_APPLICATION_TASK_TAG */
  /*-----------------------------------------------------------*/
-@@ -5395,6 +5689,10 @@
+@@ -5395,6 +5779,10 @@
  #else /* if ( configNUMBER_OF_CORES == 1 ) */
      void vTaskSwitchContext( BaseType_t xCoreID )
      {
@@ -767,7 +950,7 @@
          traceENTER_vTaskSwitchContext();
  
          /* Acquire both locks:
-@@ -5491,13 +5789,19 @@
+@@ -5491,13 +5879,19 @@
          portRELEASE_TASK_LOCK( xCoreID );
  
          traceRETURN_vTaskSwitchContext();
@@ -788,7 +971,7 @@
      traceENTER_vTaskPlaceOnEventList( pxEventList, xTicksToWait );
  
      configASSERT( pxEventList );
-@@ -5521,6 +5825,8 @@
+@@ -5521,6 +5915,8 @@
      prvAddCurrentTaskToDelayedList( xTicksToWait, pdTRUE );
  
      traceRETURN_vTaskPlaceOnEventList();
@@ -797,7 +980,7 @@
  }
  /*-----------------------------------------------------------*/
  
-@@ -5528,6 +5834,10 @@
+@@ -5528,6 +5924,10 @@
                                       const TickType_t xItemValue,
                                       const TickType_t xTicksToWait )
  {
@@ -808,7 +991,7 @@
      traceENTER_vTaskPlaceOnUnorderedEventList( pxEventList, xItemValue, xTicksToWait );
  
      configASSERT( pxEventList );
-@@ -5551,6 +5861,8 @@
+@@ -5551,6 +5951,8 @@
      prvAddCurrentTaskToDelayedList( xTicksToWait, pdTRUE );
  
      traceRETURN_vTaskPlaceOnUnorderedEventList();
@@ -817,7 +1000,7 @@
  }
  /*-----------------------------------------------------------*/
  
-@@ -5560,6 +5872,10 @@
+@@ -5560,6 +5962,10 @@
                                            TickType_t xTicksToWait,
                                            const BaseType_t xWaitIndefinitely )
      {
@@ -828,7 +1011,7 @@
          traceENTER_vTaskPlaceOnEventListRestricted( pxEventList, xTicksToWait, xWaitIndefinitely );
  
          configASSERT( pxEventList );
-@@ -5588,13 +5904,20 @@
+@@ -5588,13 +5994,20 @@
          prvAddCurrentTaskToDelayedList( xTicksToWait, xWaitIndefinitely );
  
          traceRETURN_vTaskPlaceOnEventListRestricted();
@@ -850,7 +1033,7 @@
      TCB_t * pxUnblockedTCB;
      BaseType_t xReturn;
  
-@@ -5683,12 +6006,18 @@
+@@ -5683,12 +6096,18 @@
  
      traceRETURN_xTaskRemoveFromEventList( xReturn );
      return xReturn;
@@ -869,7 +1052,7 @@
      TCB_t * pxUnblockedTCB;
  
      traceENTER_vTaskRemoveFromUnorderedEventList( pxEventListItem, xItemValue );
-@@ -5755,11 +6084,20 @@
+@@ -5755,11 +6174,20 @@
      #endif /* #if ( configNUMBER_OF_CORES == 1 ) */
  
      traceRETURN_vTaskRemoveFromUnorderedEventList();
@@ -890,7 +1073,7 @@
      traceENTER_vTaskSetTimeOutState( pxTimeOut );
  
      configASSERT( pxTimeOut );
-@@ -5771,11 +6109,20 @@
+@@ -5771,11 +6199,20 @@
      taskEXIT_CRITICAL();
  
      traceRETURN_vTaskSetTimeOutState();
@@ -911,7 +1094,7 @@
      traceENTER_vTaskInternalSetTimeOutState( pxTimeOut );
  
      /* For internal use only as it does not use a critical section. */
-@@ -5783,12 +6130,45 @@
+@@ -5783,12 +6220,45 @@
      pxTimeOut->xTimeOnEntering = xTickCount;
  
      traceRETURN_vTaskInternalSetTimeOutState();
@@ -957,7 +1140,7 @@
      BaseType_t xReturn;
  
      traceENTER_xTaskCheckForTimeOut( pxTimeOut, pxTicksToWait );
-@@ -5852,17 +6232,25 @@
+@@ -5852,17 +6322,25 @@
      traceRETURN_xTaskCheckForTimeOut( xReturn );
  
      return xReturn;
@@ -983,7 +1166,7 @@
  }
  /*-----------------------------------------------------------*/
  
-@@ -5870,6 +6258,16 @@
+@@ -5870,6 +6348,16 @@
  
      UBaseType_t uxTaskGetTaskNumber( TaskHandle_t xTask )
      {
@@ -1000,7 +1183,7 @@
          UBaseType_t uxReturn;
          TCB_t const * pxTCB;
  
-@@ -5888,7 +6286,9 @@
+@@ -5888,7 +6376,9 @@
          traceRETURN_uxTaskGetTaskNumber( uxReturn );
  
          return uxReturn;
@@ -1011,7 +1194,7 @@
  
  #endif /* configUSE_TRACE_FACILITY */
  /*-----------------------------------------------------------*/
-@@ -5898,6 +6298,15 @@
+@@ -5898,6 +6388,15 @@
      void vTaskSetTaskNumber( TaskHandle_t xTask,
                               const UBaseType_t uxHandle )
      {
@@ -1027,7 +1210,7 @@
          TCB_t * pxTCB;
  
          traceENTER_vTaskSetTaskNumber( xTask, uxHandle );
-@@ -5909,7 +6318,9 @@
+@@ -5909,7 +6408,9 @@
          }
  
          traceRETURN_vTaskSetTaskNumber();
@@ -1038,7 +1221,32 @@
  
  #endif /* configUSE_TRACE_FACILITY */
  /*-----------------------------------------------------------*/
-@@ -6197,6 +6608,16 @@
+@@ -5961,7 +6462,11 @@
+                  * the ready list at the idle priority contains one more task than the
+                  * number of idle tasks, which is equal to the configured numbers of cores
+                  * then a task other than the idle task is ready to execute. */
+-                if( listCURRENT_LIST_LENGTH( &( pxReadyTasksLists[ tskIDLE_PRIORITY ] ) ) > ( UBaseType_t ) configNUMBER_OF_CORES )
++                #if ( configSS_PARTITIONED_SCHEDULER == 1 )
++            if (ssKernelIdleShouldYield())
++#else
++            if( listCURRENT_LIST_LENGTH( &( pxReadyTasksLists[ tskIDLE_PRIORITY ] ) ) > ( UBaseType_t ) configNUMBER_OF_CORES )
++#endif
+                 {
+                     taskYIELD();
+                 }
+@@ -6051,7 +6556,11 @@
+              * the ready list at the idle priority contains one more task than the
+              * number of idle tasks, which is equal to the configured numbers of cores
+              * then a task other than the idle task is ready to execute. */
++            #if ( configSS_PARTITIONED_SCHEDULER == 1 )
++            if (ssKernelIdleShouldYield())
++#else
+             if( listCURRENT_LIST_LENGTH( &( pxReadyTasksLists[ tskIDLE_PRIORITY ] ) ) > ( UBaseType_t ) configNUMBER_OF_CORES )
++#endif
+             {
+                 taskYIELD();
+             }
+@@ -6197,6 +6706,16 @@
                                              BaseType_t xIndex,
                                              void * pvValue )
      {
@@ -1055,7 +1263,7 @@
          TCB_t * pxTCB;
  
          traceENTER_vTaskSetThreadLocalStoragePointer( xTaskToSet, xIndex, pvValue );
-@@ -6210,7 +6631,9 @@
+@@ -6210,7 +6729,9 @@
          }
  
          traceRETURN_vTaskSetThreadLocalStoragePointer();
@@ -1066,7 +1274,7 @@
  
  #endif /* configNUM_THREAD_LOCAL_STORAGE_POINTERS */
  /*-----------------------------------------------------------*/
-@@ -6220,6 +6643,17 @@
+@@ -6220,6 +6741,17 @@
      void * pvTaskGetThreadLocalStoragePointer( TaskHandle_t xTaskToQuery,
                                                 BaseType_t xIndex )
      {
@@ -1084,7 +1292,7 @@
          void * pvReturn = NULL;
          TCB_t * pxTCB;
  
-@@ -6241,7 +6675,9 @@
+@@ -6241,7 +6773,9 @@
          traceRETURN_pvTaskGetThreadLocalStoragePointer( pvReturn );
  
          return pvReturn;
@@ -1095,7 +1303,49 @@
  
  #endif /* configNUM_THREAD_LOCAL_STORAGE_POINTERS */
  /*-----------------------------------------------------------*/
-@@ -6590,6 +7026,10 @@
+@@ -6302,6 +6836,10 @@
+ 
+ STATIC void prvCheckTasksWaitingTermination( void )
+ {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++ssKernelService();
++#else
++
+     /** THIS FUNCTION IS CALLED FROM THE RTOS IDLE TASK **/
+ 
+     #if ( INCLUDE_vTaskDelete == 1 )
+@@ -6373,6 +6911,8 @@
+         }
+     }
+     #endif /* INCLUDE_vTaskDelete */
++
++#endif
+ }
+ /*-----------------------------------------------------------*/
+ 
+@@ -6383,6 +6923,10 @@
+                        BaseType_t xGetFreeStackSpace,
+                        eTaskState eState )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++(void)eState; ssKernelInfo(xTask, pxTaskStatus, xGetFreeStackSpace != pdFALSE);
++#else
++
+         TCB_t * pxTCB;
+ 
+         traceENTER_vTaskGetInfo( xTask, pxTaskStatus, xGetFreeStackSpace, eState );
+@@ -6519,7 +7063,9 @@
+         }
+ 
+         traceRETURN_vTaskGetInfo();
+-    }
++    
++#endif
++}
+ 
+ #endif /* configUSE_TRACE_FACILITY */
+ /*-----------------------------------------------------------*/
+@@ -6590,6 +7136,10 @@
   * applications that expect an 8-bit return type. */
      configSTACK_DEPTH_TYPE uxTaskGetStackHighWaterMark2( TaskHandle_t xTask )
      {
@@ -1106,7 +1356,7 @@
          TCB_t * pxTCB;
          uint8_t * pucEndOfStack;
          configSTACK_DEPTH_TYPE uxReturn;
-@@ -6603,6 +7043,40 @@
+@@ -6603,6 +7153,40 @@
           * backward compatibility for applications that expect an 8-bit return
           * type. */
  
@@ -1147,7 +1397,7 @@
          pxTCB = prvGetTCBFromHandle( xTask );
          configASSERT( pxTCB != NULL );
  
-@@ -6621,7 +7095,9 @@
+@@ -6621,7 +7205,9 @@
          traceRETURN_uxTaskGetStackHighWaterMark2( uxReturn );
  
          return uxReturn;
@@ -1158,7 +1408,7 @@
  
  #endif /* INCLUDE_uxTaskGetStackHighWaterMark2 */
  /*-----------------------------------------------------------*/
-@@ -6630,12 +7106,43 @@
+@@ -6630,12 +7216,43 @@
  
      UBaseType_t uxTaskGetStackHighWaterMark( TaskHandle_t xTask )
      {
@@ -1202,7 +1452,7 @@
          pxTCB = prvGetTCBFromHandle( xTask );
          configASSERT( pxTCB != NULL );
  
-@@ -6654,7 +7161,9 @@
+@@ -6654,7 +7271,9 @@
          traceRETURN_uxTaskGetStackHighWaterMark( uxReturn );
  
          return uxReturn;
@@ -1213,7 +1463,52 @@
  
  #endif /* INCLUDE_uxTaskGetStackHighWaterMark */
  /*-----------------------------------------------------------*/
-@@ -6808,6 +7317,11 @@
+@@ -6756,6 +7375,10 @@
+     #else /* #if ( configNUMBER_OF_CORES == 1 ) */
+         TaskHandle_t xTaskGetCurrentTaskHandle( void )
+         {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++return pxCurrentTCBs[ssKernelCPUId()];
++#else
++
+             TaskHandle_t xReturn;
+             UBaseType_t uxSavedInterruptStatus;
+ 
+@@ -6778,11 +7401,21 @@
+             traceRETURN_xTaskGetCurrentTaskHandle( xReturn );
+ 
+             return xReturn;
+-        }
++        
++#endif
++}
+     #endif /* #if ( configNUMBER_OF_CORES == 1 ) */
+ 
+     TaskHandle_t xTaskGetCurrentTaskHandleForCore( BaseType_t xCoreID )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++if (xCoreID < 0 || xCoreID >= configNUMBER_OF_CORES) return NULL;
++ssKernelSuspendAll();
++TaskHandle_t result = pxCurrentTCBs[xCoreID];
++(void)ssKernelResumeAll();
++return result;
++#else
++
+         TaskHandle_t xReturn = NULL;
+ 
+         traceENTER_xTaskGetCurrentTaskHandleForCore( xCoreID );
+@@ -6799,7 +7432,9 @@
+         traceRETURN_xTaskGetCurrentTaskHandleForCore( xReturn );
+ 
+         return xReturn;
+-    }
++    
++#endif
++}
+ 
+ #endif /* ( ( INCLUDE_xTaskGetCurrentTaskHandle == 1 ) || ( configUSE_RECURSIVE_MUTEXES == 1 ) ) */
+ /*-----------------------------------------------------------*/
+@@ -6808,6 +7443,11 @@
  
      BaseType_t xTaskGetSchedulerState( void )
      {
@@ -1225,7 +1520,7 @@
          BaseType_t xReturn;
  
          traceENTER_xTaskGetSchedulerState();
-@@ -6839,7 +7353,9 @@
+@@ -6839,7 +7479,9 @@
          traceRETURN_xTaskGetSchedulerState( xReturn );
  
          return xReturn;
@@ -1236,7 +1531,7 @@
  
  #endif /* ( ( INCLUDE_xTaskGetSchedulerState == 1 ) || ( configUSE_TIMERS == 1 ) ) */
  /*-----------------------------------------------------------*/
-@@ -6848,6 +7364,10 @@
+@@ -6848,6 +7490,10 @@
  
      BaseType_t xTaskPriorityInherit( TaskHandle_t const pxMutexHolder )
      {
@@ -1247,7 +1542,7 @@
          TCB_t * const pxMutexHolderTCB = pxMutexHolder;
          BaseType_t xReturn = pdFALSE;
  
-@@ -6942,7 +7462,9 @@
+@@ -6942,7 +7588,9 @@
          traceRETURN_xTaskPriorityInherit( xReturn );
  
          return xReturn;
@@ -1258,7 +1553,7 @@
  
  #endif /* configUSE_MUTEXES */
  /*-----------------------------------------------------------*/
-@@ -6951,6 +7473,10 @@
+@@ -6951,6 +7599,10 @@
  
      BaseType_t xTaskPriorityDisinherit( TaskHandle_t const pxMutexHolder )
      {
@@ -1269,7 +1564,7 @@
          TCB_t * const pxTCB = pxMutexHolder;
          BaseType_t xReturn = pdFALSE;
  
-@@ -7036,7 +7562,9 @@
+@@ -7036,7 +7688,9 @@
          traceRETURN_xTaskPriorityDisinherit( xReturn );
  
          return xReturn;
@@ -1280,7 +1575,7 @@
  
  #endif /* configUSE_MUTEXES */
  /*-----------------------------------------------------------*/
-@@ -7046,6 +7574,10 @@
+@@ -7046,6 +7700,10 @@
      void vTaskPriorityDisinheritAfterTimeout( TaskHandle_t const pxMutexHolder,
                                                UBaseType_t uxHighestPriorityWaitingTask )
      {
@@ -1291,7 +1586,7 @@
          TCB_t * const pxTCB = pxMutexHolder;
          UBaseType_t uxPriorityUsedOnEntry, uxPriorityToUse;
          const UBaseType_t uxOnlyOneMutexHeld = ( UBaseType_t ) 1;
-@@ -7156,7 +7688,9 @@
+@@ -7156,7 +7814,9 @@
          }
  
          traceRETURN_vTaskPriorityDisinheritAfterTimeout();
@@ -1302,7 +1597,7 @@
  
  #endif /* configUSE_MUTEXES */
  /*-----------------------------------------------------------*/
-@@ -7169,6 +7703,10 @@
+@@ -7169,6 +7829,10 @@
   */
      void vTaskYieldWithinAPI( void )
      {
@@ -1313,7 +1608,7 @@
          UBaseType_t ulState;
  
          traceENTER_vTaskYieldWithinAPI();
-@@ -7189,7 +7727,9 @@
+@@ -7189,7 +7853,9 @@
          portCLEAR_INTERRUPT_MASK( ulState );
  
          traceRETURN_vTaskYieldWithinAPI();
@@ -1324,7 +1619,110 @@
  #endif /* #if ( configNUMBER_OF_CORES > 1 ) */
  
  /*-----------------------------------------------------------*/
-@@ -7855,6 +8395,16 @@
+@@ -7232,6 +7898,13 @@
+ 
+     void vTaskEnterCritical( void )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++if (!xSchedulerRunning) { portDISABLE_INTERRUPTS(); return; }
++ssKernelObjectEnter();
++portINCREMENT_CRITICAL_NESTING_COUNT(ssKernelCPUId());
++if (portGET_CRITICAL_NESTING_COUNT(ssKernelCPUId()) == 1) portASSERT_IF_IN_ISR();
++#else
++
+         traceENTER_vTaskEnterCritical();
+ 
+         portDISABLE_INTERRUPTS();
+@@ -7275,7 +7948,9 @@
+         }
+ 
+         traceRETURN_vTaskEnterCritical();
+-    }
++    
++#endif
++}
+ 
+ #endif /* #if ( configNUMBER_OF_CORES > 1 ) */
+ 
+@@ -7285,6 +7960,14 @@
+ 
+     UBaseType_t vTaskEnterCriticalFromISR( void )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++if (!xSchedulerRunning) return 0;
++UBaseType_t irq = ssKernelObjectEnterFromISR();
++++ssKernelCPUs[ssKernelCPUId()].preempt;
++portINCREMENT_CRITICAL_NESTING_COUNT(ssKernelCPUId());
++return irq;
++#else
++
+         UBaseType_t uxSavedInterruptStatus = 0;
+         const BaseType_t xCoreID = ( BaseType_t ) portGET_CORE_ID();
+ 
+@@ -7309,7 +7992,9 @@
+         traceRETURN_vTaskEnterCriticalFromISR( uxSavedInterruptStatus );
+ 
+         return uxSavedInterruptStatus;
+-    }
++    
++#endif
++}
+ 
+ #endif /* #if ( configNUMBER_OF_CORES > 1 ) */
+ /*-----------------------------------------------------------*/
+@@ -7363,6 +8048,14 @@
+ 
+     void vTaskExitCritical( void )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++if (!xSchedulerRunning) return;
++configASSERT(portGET_CRITICAL_NESTING_COUNT(ssKernelCPUId()));
++portASSERT_IF_IN_ISR();
++portDECREMENT_CRITICAL_NESTING_COUNT(ssKernelCPUId());
++ssKernelObjectExit();
++#else
++
+         const BaseType_t xCoreID = ( BaseType_t ) portGET_CORE_ID();
+ 
+         traceENTER_vTaskExitCritical();
+@@ -7417,7 +8110,9 @@
+         }
+ 
+         traceRETURN_vTaskExitCritical();
+-    }
++    
++#endif
++}
+ 
+ #endif /* #if ( configNUMBER_OF_CORES > 1 ) */
+ /*-----------------------------------------------------------*/
+@@ -7426,6 +8121,14 @@
+ 
+     void vTaskExitCriticalFromISR( UBaseType_t uxSavedInterruptStatus )
+     {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++if (!xSchedulerRunning) return;
++configASSERT(portGET_CRITICAL_NESTING_COUNT(ssKernelCPUId()) && ssKernelCPUs[ssKernelCPUId()].preempt);
++portDECREMENT_CRITICAL_NESTING_COUNT(ssKernelCPUId());
++--ssKernelCPUs[ssKernelCPUId()].preempt;
++ssKernelObjectExitFromISR(uxSavedInterruptStatus);
++#else
++
+         BaseType_t xCoreID;
+ 
+         traceENTER_vTaskExitCriticalFromISR( uxSavedInterruptStatus );
+@@ -7463,7 +8166,9 @@
+         }
+ 
+         traceRETURN_vTaskExitCriticalFromISR();
+-    }
++    
++#endif
++}
+ 
+ #endif /* #if ( configNUMBER_OF_CORES > 1 ) */
+ /*-----------------------------------------------------------*/
+@@ -7855,6 +8560,16 @@
  
  TickType_t uxTaskResetEventItemValue( void )
  {
@@ -1341,7 +1739,7 @@
      TickType_t uxReturn;
  
      traceENTER_uxTaskResetEventItemValue();
-@@ -7868,6 +8418,8 @@
+@@ -7868,6 +8583,8 @@
      traceRETURN_uxTaskResetEventItemValue( uxReturn );
  
      return uxReturn;
@@ -1350,7 +1748,7 @@
  }
  /*-----------------------------------------------------------*/
  
-@@ -7875,6 +8427,10 @@
+@@ -7875,6 +8592,10 @@
  
      TaskHandle_t pvTaskIncrementMutexHeldCount( void )
      {
@@ -1361,7 +1759,7 @@
          TCB_t * pxTCB;
  
          traceENTER_pvTaskIncrementMutexHeldCount();
-@@ -7891,7 +8447,9 @@
+@@ -7891,7 +8612,9 @@
          traceRETURN_pvTaskIncrementMutexHeldCount( pxTCB );
  
          return pxTCB;
@@ -1372,7 +1770,7 @@
  
  #endif /* configUSE_MUTEXES */
  /*-----------------------------------------------------------*/
-@@ -7902,6 +8460,10 @@
+@@ -7902,6 +8625,10 @@
                                        BaseType_t xClearCountOnExit,
                                        TickType_t xTicksToWait )
      {
@@ -1383,7 +1781,7 @@
          uint32_t ulReturn;
          BaseType_t xAlreadyYielded, xShouldBlock = pdFALSE;
  
-@@ -7993,7 +8555,9 @@
+@@ -7993,7 +8720,9 @@
          traceRETURN_ulTaskGenericNotifyTake( ulReturn );
  
          return ulReturn;
@@ -1394,7 +1792,7 @@
  
  #endif /* configUSE_TASK_NOTIFICATIONS */
  /*-----------------------------------------------------------*/
-@@ -8006,6 +8570,13 @@
+@@ -8006,6 +8735,13 @@
                                         uint32_t * pulNotificationValue,
                                         TickType_t xTicksToWait )
      {
@@ -1408,7 +1806,7 @@
          BaseType_t xReturn, xAlreadyYielded, xShouldBlock = pdFALSE;
  
          traceENTER_xTaskGenericNotifyWait( uxIndexToWaitOn, ulBitsToClearOnEntry, ulBitsToClearOnExit, pulNotificationValue, xTicksToWait );
-@@ -8107,7 +8678,9 @@
+@@ -8107,7 +8843,9 @@
          traceRETURN_xTaskGenericNotifyWait( xReturn );
  
          return xReturn;
@@ -1419,7 +1817,7 @@
  
  #endif /* configUSE_TASK_NOTIFICATIONS */
  /*-----------------------------------------------------------*/
-@@ -8120,6 +8693,12 @@
+@@ -8120,6 +8858,12 @@
                                     eNotifyAction eAction,
                                     uint32_t * pulPreviousNotificationValue )
      {
@@ -1432,7 +1830,7 @@
          TCB_t * pxTCB;
          BaseType_t xReturn = pdPASS;
          uint8_t ucOriginalNotifyState;
-@@ -8227,7 +8806,9 @@
+@@ -8227,7 +8971,9 @@
          traceRETURN_xTaskGenericNotify( xReturn );
  
          return xReturn;
@@ -1443,7 +1841,7 @@
  
  #endif /* configUSE_TASK_NOTIFICATIONS */
  /*-----------------------------------------------------------*/
-@@ -8241,6 +8822,10 @@
+@@ -8241,6 +8987,10 @@
                                            uint32_t * pulPreviousNotificationValue,
                                            BaseType_t * pxHigherPriorityTaskWoken )
      {
@@ -1454,7 +1852,7 @@
          TCB_t * pxTCB;
          uint8_t ucOriginalNotifyState;
          BaseType_t xReturn = pdPASS;
-@@ -8409,7 +8994,9 @@
+@@ -8409,7 +9159,9 @@
          traceRETURN_xTaskGenericNotifyFromISR( xReturn );
  
          return xReturn;
@@ -1465,7 +1863,7 @@
  
  #endif /* configUSE_TASK_NOTIFICATIONS */
  /*-----------------------------------------------------------*/
-@@ -8420,6 +9007,10 @@
+@@ -8420,6 +9172,10 @@
                                          UBaseType_t uxIndexToNotify,
                                          BaseType_t * pxHigherPriorityTaskWoken )
      {
@@ -1476,7 +1874,7 @@
          TCB_t * pxTCB;
          uint8_t ucOriginalNotifyState;
          UBaseType_t uxSavedInterruptStatus;
-@@ -8541,7 +9132,9 @@
+@@ -8541,7 +9297,9 @@
          taskEXIT_CRITICAL_FROM_ISR( uxSavedInterruptStatus );
  
          traceRETURN_vTaskGenericNotifyGiveFromISR();
@@ -1487,7 +1885,7 @@
  
  #endif /* configUSE_TASK_NOTIFICATIONS */
  /*-----------------------------------------------------------*/
-@@ -8551,6 +9144,10 @@
+@@ -8551,6 +9309,10 @@
      BaseType_t xTaskGenericNotifyStateClear( TaskHandle_t xTask,
                                               UBaseType_t uxIndexToClear )
      {
@@ -1498,7 +1896,7 @@
          TCB_t * pxTCB;
          BaseType_t xReturn;
  
-@@ -8580,7 +9177,9 @@
+@@ -8580,7 +9342,9 @@
          traceRETURN_xTaskGenericNotifyStateClear( xReturn );
  
          return xReturn;
@@ -1509,7 +1907,7 @@
  
  #endif /* configUSE_TASK_NOTIFICATIONS */
  /*-----------------------------------------------------------*/
-@@ -8591,6 +9190,10 @@
+@@ -8591,6 +9355,10 @@
                                              UBaseType_t uxIndexToClear,
                                              uint32_t ulBitsToClear )
      {
@@ -1520,7 +1918,7 @@
          TCB_t * pxTCB;
          uint32_t ulReturn;
  
-@@ -8615,7 +9218,9 @@
+@@ -8615,7 +9383,9 @@
          traceRETURN_ulTaskGenericNotifyValueClear( ulReturn );
  
          return ulReturn;
@@ -1530,4 +1928,86 @@
 +}
  
  #endif /* configUSE_TASK_NOTIFICATIONS */
+ /*-----------------------------------------------------------*/
+@@ -9019,6 +9789,22 @@
+  */
+ void vTaskResetState( void )
+ {
++#if ( configSS_PARTITIONED_SCHEDULER == 1 )
++configASSERT(!xSchedulerRunning);
++if (ssKernelInitialized) {
++    for (unsigned slot = 0; slot < SS_OWNER_SLOTS; ++slot)
++        configASSERT(!atomic_load_explicit(&ssKernelRegistry.descriptor[slot].references, memory_order_acquire));
++}
++ssKernelInitialized = false;
++ssKernelIdleNext = 0;
++memset(ssKernelCPUs, 0, sizeof(ssKernelCPUs));
++memset(ssKernelTasks, 0, sizeof(ssKernelTasks));
++for (unsigned cpu = 0; cpu < configNUMBER_OF_CORES; ++cpu) {
++    atomic_store_explicit(&ssKernelLoad[cpu], 0, memory_order_relaxed);
++    pxCurrentTCBs[cpu] = NULL;
++    xIdleTaskHandles[cpu] = NULL;
++}
++
+     BaseType_t xCoreID;
+ 
+     /* Task control block. */
+@@ -9067,5 +9853,58 @@
+         }
+     }
+     #endif /* #if ( configGENERATE_RUN_TIME_STATS == 1 ) */
++
++#else
++
++    BaseType_t xCoreID;
++
++    /* Task control block. */
++    #if ( configNUMBER_OF_CORES == 1 )
++    {
++        pxCurrentTCB = NULL;
++    }
++    #endif /* #if ( configNUMBER_OF_CORES == 1 ) */
++
++    #if ( INCLUDE_vTaskDelete == 1 )
++    {
++        uxDeletedTasksWaitingCleanUp = ( UBaseType_t ) 0U;
++    }
++    #endif /* #if ( INCLUDE_vTaskDelete == 1 ) */
++
++    #if ( configUSE_POSIX_ERRNO == 1 )
++    {
++        FreeRTOS_errno = 0;
++    }
++    #endif /* #if ( configUSE_POSIX_ERRNO == 1 ) */
++
++    /* Other file private variables. */
++    uxCurrentNumberOfTasks = ( UBaseType_t ) 0U;
++    xTickCount = ( TickType_t ) configINITIAL_TICK_COUNT;
++    uxTopReadyPriority = tskIDLE_PRIORITY;
++    xSchedulerRunning = pdFALSE;
++    xPendedTicks = ( TickType_t ) 0U;
++
++    for( xCoreID = 0; xCoreID < configNUMBER_OF_CORES; xCoreID++ )
++    {
++        xYieldPendings[ xCoreID ] = pdFALSE;
++    }
++
++    xNumOfOverflows = ( BaseType_t ) 0;
++    uxTaskNumber = ( UBaseType_t ) 0U;
++    xNextTaskUnblockTime = ( TickType_t ) 0U;
++
++    uxSchedulerSuspended = ( UBaseType_t ) 0U;
++
++    #if ( configGENERATE_RUN_TIME_STATS == 1 )
++    {
++        for( xCoreID = 0; xCoreID < configNUMBER_OF_CORES; xCoreID++ )
++        {
++            ulTaskSwitchedInTime[ xCoreID ] = 0U;
++            ulTotalRunTime[ xCoreID ] = 0U;
++        }
++    }
++    #endif /* #if ( configGENERATE_RUN_TIME_STATS == 1 ) */
++
++#endif
+ }
  /*-----------------------------------------------------------*/

@@ -27,7 +27,7 @@ void vInterruptCore(uint32_t interrupt, uint8_t cpu)
         (void)ss_control_checkpoint(&ssKernelControl, cpu);
 }
 StackType_t *pxPortInitialiseStack(StackType_t *stack, TaskFunction_t entry, void *arg)
-{ (void)entry; (void)arg; return stack; }
+{ (void)entry; (void)arg; *stack = 0; return stack; }
 void vApplicationStackOverflowHook(TaskHandle_t task, char *name)
 { (void)task; (void)name; abort(); }
 static BaseType_t fixture_hook(void *arg) { return *(BaseType_t *)arg; }
@@ -62,8 +62,10 @@ static void invariant(void)
     }
 }
 #include "scheduler-kernel-objects.c"
-int main(void)
+int main(int argc, char **argv)
 {
+    (void)argv;
+    if (argc > 1) return fixture_startup();
     /* Real static creation enters the registry and least-loaded placement. */
     for (unsigned c = 0; c < configNUMBER_OF_CORES; ++c) {
         TaskHandle_t idle = create(c, 0);
@@ -192,6 +194,8 @@ int main(void)
     assert(listLIST_IS_EMPTY(&event) && pxCurrentTCBs[0] == task);
     fixture_objects();
     fixture_inheritance(task, second);
+    fixture_diagnostics();
+    fixture_critical();
     invariant();
     printf("linked FreeRTOS owner transitions: 10000 remote wakes, block-commit races, zero local scheduler locks, delay/event timeout\n");
     return 0;
