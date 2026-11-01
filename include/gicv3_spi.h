@@ -23,4 +23,8 @@ int gicv3_spi_mask(const struct gicv3_spi *);
  * Neither operation acknowledges, clears pending state, or sends EOI.
  */
 int gicv3_spi_rearm(const struct gicv3_spi *);
+/* Observe a prior disable: 0 while GICD_CTLR.RWP is set, 1 after RWP clears
+ * and ISENABLER confirms disabled, -1 for invalid binding/still enabled.
+ * The caller bounds deferred observations; this function issues no writes. */
+int gicv3_spi_masked(const struct gicv3_spi *);
 #endif

@@ -2,6 +2,10 @@
 # The image supplies admitted media/PLL/IOMMU producers and selected-panel hooks.
 function(sunstone_a733_dsi_native target)
  target_sources(${target} PRIVATE
+  "${SUNSTONE_SOURCE_ROOT}/drivers/board/orangepi_zero3w.c"
+  "${SUNSTONE_SOURCE_ROOT}/drivers/display/sunstone_edid.c"
+  "${SUNSTONE_SOURCE_ROOT}/drivers/display/sunstone_connector.c"
+  "${SUNSTONE_SOURCE_ROOT}/drivers/display/a733_display_modes.c"
   "${SUNSTONE_SOURCE_ROOT}/drivers/display/a733_display_native.c"
   "${SUNSTONE_SOURCE_ROOT}/platform/a733/display_native_io.c"
   "${SUNSTONE_SOURCE_ROOT}/drivers/display/a733_display_handoff.c"

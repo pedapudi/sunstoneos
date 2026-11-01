@@ -1,3 +1,4 @@
+#include "ov5640.h"
 /* Cheap mode/source/layout coverage; native execution uses representative sizes. */
 #include "a733_camera_profile.h"
 #include "a733_iommu.h"

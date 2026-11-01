@@ -29,6 +29,12 @@ produces new frames into the ring. GPU-to-HDMI capture converts two immutable
 frames and closes GPU before HDMI start. Samples and hashes do not prove every
 pixel or visible output.
 
+The native scanout binding validates immutable frame/table mappings once per
+prepare, request or replay. Host checks cover replay admission across phase
+changes and refusal of changed mappings/table words at the next operation.
+Per-access ownership checks remain. The [real-time audit](driver-realtime-audit.md)
+records tick-paced replay, G2D copy/guard work and unmeasured physical timing.
+
 HDMI framebuffer, DisplayPort and GPU display share DE1 handling and DE_SYS
 domain-1 preparation. DSI requires domains 0,1,2,3,8,9 ON at entry. VO0/VO1
 provider code is not called by DSI or deinterlace. Deinterlace setup still

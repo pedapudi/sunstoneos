@@ -26,11 +26,7 @@ static int jpeg_next(void)
 #define JPEG_POLL_BUDGET 1024u
 static int jpeg_advance(void)
 {
-    for(unsigned n=0;;){
-        enum a733_video_jpeg_state state=jpeg.run.state;unsigned index=jpeg.run.index;
-        int r=a733_video_jpeg_poll(&jpeg.run);
-        if(r||(jpeg.run.state==state&&jpeg.run.index==index)||++n==JPEG_POLL_BUDGET||!board_live(NULL))return r;
-    }
+    return a733_video_jpeg_advance(&jpeg.run,JPEG_POLL_BUDGET);
 }
 void jpeg_task(void *unused)
 {

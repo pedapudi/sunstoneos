@@ -48,7 +48,12 @@ struct a733_dma_platform {
     a733_clock_mask_t shared;
     uint32_t selected_mhz[3];
     unsigned initialized, stage, failed;
+    uint64_t retire_now;
+    unsigned retire_fault,retire_checking;
 };
+enum a733_dma_retire_check { A733_DMA_RETIRE_TIME=1,A733_DMA_RETIRE_ENTER,
+    A733_DMA_RETIRE_BASELINE,A733_DMA_RETIRE_CONTROLLER,
+    A733_DMA_RETIRE_BEFORE_LEAVE,A733_DMA_RETIRE_AFTER_LEAVE };
 /* Pure profile validation; output untouched on refusal. FABRIC stabilizes the
  * AHB/NSI/MBUS source/divisor/global-gate fields. DMA0 exclusively owns its bus
  * and MBUS leaf gates. Other critical gate bits must already be set and survive
@@ -60,4 +65,9 @@ int a733_dma_platform_init(struct a733_dma_platform *,
     const struct a733_dma_platform_config *, const struct a733_dma_platform_operations *, void *);
 enum a733_dma_platform_result a733_dma_platform_poll(struct a733_dma_platform *);
 int a733_dma_platform_ready(const struct a733_dma_platform *);
+/* Read-only retirement of an adopted controller. The caller first retires
+ * its DMA worker and masks the source IRQ. Recheck inherited clocks, routes,
+ * autogating and all channel-idle registers; retain the token on every path. */
+enum a733_dma_platform_result a733_dma_platform_verify_adopted(
+    struct a733_dma_platform *, uint64_t deadline_us);
 #endif

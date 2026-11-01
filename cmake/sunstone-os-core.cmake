@@ -1,9 +1,11 @@
 # OS implementation and device owners, independent of application sources.
+include("${CMAKE_CURRENT_LIST_DIR}/latency-instrumentation.cmake")
 option(SUNSTONE_A733_OS "Build the integrated OS image" OFF)
 option(SUNSTONE_A733_OS_RESIDENT "Integrated OS with the resident lifetime" OFF)
 option(SUNSTONE_A733_OS_USB_CLASSES "OS input, serial and camera host services" OFF)
 option(SUNSTONE_A733_OS_USB_JPEG "OS camera MJPEG hardware decoder" OFF)
 option(SUNSTONE_A733_OS_AUDIO "OS I2S capture service" OFF)
+option(SUNSTONE_A733_OS_DMA "Adopted DMA0 RAM-copy service with normal retirement" OFF)
 option(SUNSTONE_A733_OS_RADIO "Integrated OS with the board's radio station" OFF)
 option(SUNSTONE_A733_OS_HEADSET "OS Bluetooth headset capture service" OFF)
 option(SUNSTONE_A733_OS_MSBC "Integrated OS headset with wideband mSBC speech" OFF)
@@ -20,6 +22,9 @@ if(NOT SUNSTONE_A733_OS AND NOT SUNSTONE_A733_OS_CORE AND NOT SUNSTONE_A733_OS_H
   return()
 endif()
 include_guard(GLOBAL)
+if(SUNSTONE_A733_OS_DMA AND (SUNSTONE_A733_OS_AUDIO OR NOT SUNSTONE_A733_OS_CPU_RETURN))
+  message(FATAL_ERROR "Adopted RAM DMA currently requires the returning CPU profile without I2S")
+endif()
 if(SUNSTONE_A733_OS_GPU_RECOVERY_TEST AND
    (NOT SUNSTONE_A733_OS_GPU OR NOT SUNSTONE_A733_OS_CPU_RETURN OR
     NOT SUNSTONE_APPLICATION STREQUAL "gpu-lifecycle"))
@@ -182,6 +187,13 @@ if(SUNSTONE_A733_OS_RADIO)
     list(APPEND os_added apps/os/radio_profile.c)
   endif()
 endif()
+if(SUNSTONE_A733_OS_DMA)
+  list(APPEND os_added apps/os/dma.c platform/a733/dma_pool_session.c platform/a733/dma_startup.c
+    platform/a733/dma_native.c drivers/dma/dma_memory.c drivers/dma/a733_dma.c drivers/dma/a733_dma_controller.c
+    drivers/dma/a733_dma_platform.c drivers/dma/a733_dma_platform_native.c drivers/dma/dma_service.c
+    drivers/dma/dma_service_i2s.c drivers/dma/dma_service_i2s_stream.c drivers/audio/a733_i2s.c
+    drivers/audio/a733_i2s_stream.c drivers/audio/dma_service_i2s_irq.c)
+endif()
 if(SUNSTONE_A733_OS_AUDIO)
   # The I2S image's receive composition (cmake/a733-i2s-application.cmake).
   list(APPEND os_added apps/os/audio.c platform/a733/dma_pool_session.c platform/a733/dma_startup.c
@@ -325,6 +337,11 @@ if(SUNSTONE_A733_OS_USB_JPEG)
     drivers/video/a733_video_platform.c drivers/video/a733_video_unit.c drivers/iommu/a733_iommu.c)
 endif()
 list(TRANSFORM os_added PREPEND "${os_root}/")
+if(SUNSTONE_LATENCY)
+  list(APPEND os_sources "${os_root}/runtime/latency.c" "${os_root}/runtime/latency_irq.c")
+  list(APPEND os_external_inputs "${os_root}/include/sunstone_latency.h"
+    "${os_root}/cmake/latency-instrumentation.cmake")
+endif()
 list(APPEND os_sources "${os_boot_final}" ${os_added})
 list(REMOVE_DUPLICATES os_sources)
 # Device implementations are separate object libraries. Each selected owner
@@ -440,6 +457,17 @@ if(SUNSTONE_A733_OS_NPU)
 endif()
 set_property(TARGET sunstone-a733-os-core PROPERTY LINK_OPTIONS "${os_link}")
 target_link_options(sunstone-a733-os-core PRIVATE "-Wl,-Map,${os_build}/image.map")
+if(SUNSTONE_LATENCY)
+  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_LATENCY=1)
+  target_link_options(sunstone-a733-os-core PRIVATE -Wl,--wrap=vApplicationIRQHandler)
+  sunstone_enable_latency_port(sunstone-a733-os-core)
+  get_target_property(os_sources sunstone-a733-os-core SOURCES)
+  get_target_property(latency_port_inputs sunstone-a733-os-core SUNSTONE_LATENCY_PORT_INPUTS)
+  list(APPEND os_external_inputs ${latency_port_inputs})
+endif()
+if(SUNSTONE_A733_OS_DMA)
+  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_DMA=1)
+endif()
 # Publish the exact OS compile configuration to application and device objects.
 foreach(property COMPILE_OPTIONS INCLUDE_DIRECTORIES COMPILE_DEFINITIONS COMPILE_FEATURES)
   get_target_property(value sunstone-a733-os-core ${property})

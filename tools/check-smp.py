@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import os
 import re
 from pathlib import Path
 import shutil
@@ -30,12 +31,13 @@ emulator = shutil.which(args.qemu)
 if emulator is None:
     sys.exit(f"Emulator not found: {args.qemu}")
 command = [emulator, "-machine", "virt,gic-version=3,secure=off,virtualization=off",
-           "-cpu", args.cpu, "-smp", str(8 if args.case in ("soak8", "os-workers", "gpu-workers") else args.cores), "-m", "128M", "-nographic",
+           "-accel", "tcg,thread=multi", "-cpu", args.cpu, "-smp", str(8 if args.case in ("soak8", "os-workers", "gpu-workers") else args.cores), "-m", "128M", "-nographic",
            "-monitor", "none", "-semihosting-config", "enable=on,target=native",
            "-device", f"loader,file={args.image.resolve()},cpu-num=0"]
 identity = {"image_sha256": digest(args.image), "qemu_sha256": digest(emulator),
             "checker_sha256": digest(__file__), "command": command, "trials": args.trials,
-            "case": args.case, "cpu": args.cpu}
+            "case": args.case, "cpu": args.cpu,
+            "host_cpu_affinity": sorted(os.sched_getaffinity(0))}
 libraries = subprocess.run(["ldd", emulator], check=True, capture_output=True, text=True).stdout
 identity["libraries"] = {word: digest(word) for word in libraries.split()
                          if word.startswith("/") and Path(word).is_file()}

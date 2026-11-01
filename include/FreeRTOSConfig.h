@@ -22,6 +22,14 @@ _Noreturn void platform_panic(const char *file, unsigned line);
 #endif
 
 #define configUSE_PREEMPTION 1
+#if defined(SUNSTONE_LATENCY) && !defined(__ASSEMBLER__)
+#include "sunstone_latency.h"
+#define tracePOST_MOVED_TASK_TO_READY_STATE(task) ss_latency_task_ready(task)
+#define INCLUDE_xTaskGetIdleTaskHandle 1
+#ifndef INCLUDE_xTaskGetCurrentTaskHandle
+#define INCLUDE_xTaskGetCurrentTaskHandle 1
+#endif
+#endif
 #define configUSE_IDLE_HOOK 0
 #define configUSE_TICK_HOOK 0
 #define configUSE_TIME_SLICING 1

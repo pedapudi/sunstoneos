@@ -145,6 +145,18 @@ static void bootstrap(void *argument)
                 enum dma_service_result a=dma_service_activate(&s->service);
                 if(a==DMA_SERVICE_OK) {
                     atomic_store_explicit(&s->state,A733_DMA_POOL_READY,memory_order_release);
+                    (void)ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
+                    if(!atomic_load_explicit(&s->retire_requested,memory_order_acquire)||
+                       !dma_service_retired(&s->service)||s->periods||s->startup.handoff.allowed.cold)fail(s);
+                    if(!a733_counter_clock_now(s->startup.clock,&now)||now>UINT64_MAX-50000)fail(s);
+                    const uint64_t deadline=now+50000;
+                    for(;;){
+                        r=a733_dma_startup_retire_adopted(&s->startup,deadline);
+                        if(r==A733_DMA_PLATFORM_RETAINED)fail(s);
+                        if(r==A733_DMA_PLATFORM_READY)break;
+                        vTaskDelay(1);
+                    }
+                    atomic_store_explicit(&s->retired,1,memory_order_release);
                     vTaskSuspend(NULL);fail(s);
                 }
                 if(a!=DMA_SERVICE_BUSY) break;
@@ -156,6 +168,16 @@ static void bootstrap(void *argument)
         atomic_store_explicit(&s->state,A733_DMA_POOL_FAILED,memory_order_release);
     }
     vTaskSuspend(NULL);fail(s);
+}
+int a733_dma_pool_session_retire(struct a733_dma_pool_session *s)
+{
+    if(!s||s!=instance||s->periods||s->startup.handoff.allowed.cold||
+       atomic_load_explicit(&s->state,memory_order_acquire)!=A733_DMA_POOL_READY||
+       !dma_service_retired(&s->service))return -1;
+    if(atomic_load_explicit(&s->retired,memory_order_acquire))return 1;
+    if(!atomic_exchange_explicit(&s->retire_requested,1,memory_order_acq_rel))
+        xTaskNotifyGive(s->bootstrap);
+    return 0;
 }
 static int initialize(struct a733_dma_pool_session *s,const struct a733_dma_pool_config *c,
     const struct dma_service_i2s_stream_profile *stream,unsigned periods,unsigned period_bytes,unsigned supervised)

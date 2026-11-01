@@ -111,6 +111,9 @@ void os_cpu_return_supervise(void)
         return;
     }
     if(!atomic_load_explicit(&thermal_done,memory_order_acquire))return;
+#ifdef SUNSTONE_A733_OS_DMA
+    if(!os_dma_return_ready())return;
+#endif
     if(!atomic_exchange_explicit(&pmic_stop,1,memory_order_acq_rel))xTaskNotifyGive(board.handles[0]);
     if(!atomic_load_explicit(&pmic_done,memory_order_acquire))return;
     /* This profile's readiness task never calls USB startup. Constructors

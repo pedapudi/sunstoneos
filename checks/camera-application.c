@@ -21,7 +21,7 @@ static unsigned stream_stopping,stream_mode;
 int a733_camera_native_poll(struct a733_camera_native *n)
 {
  ++polled;
- if(stream_stopping){n->capture.sensor.state=stream_mode==1?OV5640_STREAMING:OV5640_READY;return -1;}
+ if(stream_stopping){n->capture.sensor.state=stream_mode==1?CAMERA_SENSOR_STREAMING:CAMERA_SENSOR_READY;return -1;}
  return 1;
 }
 int a733_camera_native_stream_copy(struct a733_camera_native *n,struct device_memory_lease l)

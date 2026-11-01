@@ -59,6 +59,7 @@ int ss_usb_camera_decode(uint64_t token,struct ss_usb_decoded_frame *view)
 #include "sunstone_usb_transport.h"
 #include "a733_usb_memory.h"
 #include "sunstone_usb_uvc.h"
+#include "sunstone_uvc_camera.h"
 int os_usb_serial_native_start(struct sunstone_usb_transport *);
 void os_usb_serial_native_release(uint64_t);
 int os_usb_serial_native_write(uint64_t,const void *,size_t);
@@ -87,6 +88,8 @@ static void camera_poll(void)
     }
     const struct sunstone_uvc_mode *mode=a733_usb2_camera_mode(&board.host);
     if(!mode){if(camera_connected)os_usb_service_disconnected(SS_DEVICE_USB_CAMERA);camera_connected=0;camera_started=0;return;}
+    struct sunstone_camera_mode generic_mode;
+    if(sunstone_uvc_camera_mode(mode,&generic_mode)!=1){board_fail(NULL);return;}
     if(!camera_connected){os_usb_service_connected(SS_DEVICE_USB_CAMERA);camera_connected=1;}
     for(unsigned slot=0;slot<SUNSTONE_UVC_FRAMES;++slot)if(!camera_lease[slot].frame){
         const struct sunstone_uvc_frame *frame=a733_usb2_camera_acquire(&board.host);if(!frame)return;
@@ -94,8 +97,8 @@ static void camera_poll(void)
         lease->frame=frame;lease->generation=frame->generation;lease->sequence=frame->sequence;lease->token=++camera_token;
         for(unsigned i=0;i<frame->slices;++i)lease->slice[i]=(struct ss_usb_frame_slice){frame->slice[i].data,frame->slice[i].bytes};
         struct ss_usb_camera_frame view={.token=lease->token,.sequence=frame->sequence,.slices=lease->slice,
-            .slice_count=frame->slices,.bytes=frame->bytes,.width=mode->width,.height=mode->height,
-            .format=mode->format==SUNSTONE_UVC_YUYV?SS_USB_FRAME_YUYV:SS_USB_FRAME_MJPEG};
+            .slice_count=frame->slices,.bytes=frame->bytes,.width=generic_mode.width,.height=generic_mode.height,
+            .format=generic_mode.format==SUNSTONE_CAMERA_YUYV?SS_USB_FRAME_YUYV:SS_USB_FRAME_MJPEG};
         if(os_usb_service_frame(&view)!=1){os_usb_camera_native_release(lease->token);return;}
     }
 }

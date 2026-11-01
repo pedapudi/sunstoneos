@@ -83,6 +83,22 @@ int os_session_valid(const struct os_session *s)
     if(n->pck_client==OS_GPU_CLIENT||n->owner==OS_GPU_FIRMWARE_OWNER||n->owner==OS_GPU_SESSION_OWNER)return 0;
 #endif
 #endif
+#ifdef SUNSTONE_A733_OS_DMA
+    const struct os_dma_session *dm=&s->dma;
+    const struct a733_dma_handoff *h=&dm->handoff;
+    const struct a733_dma_platform_config *d=&h->allowed;
+    if(dm->magic!=OS_DMA_SESSION_MAGIC||dm->version!=1||dm->bytes!=sizeof(*dm)||
+       !present(dm->evidence,32)||h->controller!=0x04601000||h->established!=A733_DMA_HANDOFF_REQUIRED||
+       h->evidence!=s->board.lease||h->owned_channels!=0xffff||h->service_channels!=1||
+       d->handoff!=s->board.lease||!d->owner||d->deadline_us||d->cold||d->route_change_mask||
+       d->expected_cpu!=d->desired_cpu||d->expected_mcu!=d->desired_mcu||!(d->desired_cpu&1)||
+       memcmp(d->fabric,s->board.fabric,sizeof(d->fabric))||
+       memcmp(d->rate_hz,s->board.fabric_hz,sizeof(d->rate_hz))||d->owner==s->thermal_owner)return 0;
+    for(unsigned i=0;i<4;++i)if(owners[i]==d->owner)return 0;
+#ifdef SUNSTONE_A733_OS_CPU_CLOCK
+    if(d->owner==cpu.owner)return 0;
+#endif
+#endif
     return 1;
 }
 int a733_smp_contract_valid(const struct a733_smp_contract *c,uint64_t now)
