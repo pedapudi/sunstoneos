@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/pedapudi/mimus.git",
-  "revision": "17f91fee19e662a29279c2641ec26ddd7ed3358f",
+  "revision": "2367987a700a342f253f05a69e68265585aa93f7",
   "base_revision": "18c7c81968f56c8c985af0ec26448184cf6a17ec",
   "local_worktree": "/home/sunil/git/mimus-worktrees/sunstoneos-split-1031",
   "branch": "port/sunstoneos-split",
