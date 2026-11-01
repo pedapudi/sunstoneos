@@ -21,7 +21,9 @@ from urllib.parse import parse_qs, quote, urlsplit
 DEFAULT_QUEUES = {'3-1': Path.home() / '.cache/sunstoneos/board-tests.sqlite3',
                   '3-3': Path.home() / '.cache/sunstoneos/board-tests-3-3.sqlite3'}
 PORT_PATTERN = r'[0-9]+-[0-9]+(?:\.[0-9]+)*'
-SOURCES = ('docs/hardware.md', 'docs/handoff.md', 'docs/mimus.md', 'docs/validation.md',
+# The featured external application is an example; its evidence stays in its document.
+APPLICATION_DOCUMENT = 'docs/mimus.md'  # External application example.
+SOURCES = ('docs/hardware.md', 'docs/handoff.md', APPLICATION_DOCUMENT, 'docs/validation.md',
            'docs/hardware-dependencies.md')
 ASSETS = {'/': ('index.html', 'text/html; charset=utf-8'),
           '/index.html': ('index.html', 'text/html; charset=utf-8'),
@@ -513,8 +515,8 @@ class Progress:
             if not texts['docs/hardware.md']:
                 parser['status'] = 'unavailable'
             status_counts = Counter(item['implementation'] for item in hardware)
-            mimus_parts = sections(texts['docs/mimus.md'])
-            mimus_summary = mimus_parts[0]['markdown'] if mimus_parts else ''
+            application_parts = sections(texts[APPLICATION_DOCUMENT])
+            application_summary = application_parts[0]['markdown'] if application_parts else ''
             validation = sections(texts['docs/validation.md'])
             performance = next((part['markdown'].split('\n\n')[0] for part in validation
                                 if part['title'] == 'Schedule performance work after functional hardware support'), '')
@@ -536,8 +538,8 @@ class Progress:
                 'performance_note': performance, 'hardware': hardware,
                 'dependencies': parse_dependencies(texts['docs/hardware-dependencies.md'], hardware),
                 'handoff': parse_handoff(texts['docs/handoff.md']),
-                'mimus': {'summary': mimus_summary, 'markdown': texts['docs/mimus.md'],
-                          'url': '/api/document?path=docs%2Fmimus.md', 'links': links(texts['docs/mimus.md'], 'docs/mimus.md')},
+                'application': {'document': APPLICATION_DOCUMENT, 'summary': application_summary, 'markdown': texts[APPLICATION_DOCUMENT],
+                          'url': '/api/document?path=' + quote(APPLICATION_DOCUMENT, safe=''), 'links': links(texts[APPLICATION_DOCUMENT], APPLICATION_DOCUMENT)},
                 'git': git_metadata(self.local_git, self.common_git), 'queue': combined_queue(queues),
                 'queues': [{'port': port, **value} for port, value in queues]}
             self._body = json.dumps(snapshot, ensure_ascii=False, separators=(',', ':')).encode()

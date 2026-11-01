@@ -165,7 +165,10 @@
       row.append(summary, body); blockers.append(row);
     }
     if (!blockers.children.length) blockers.append(el('p', 'secondary', 'No separate constraint summary is available. See current work for conditions and limits.'));
-    const mimus = $('mimus-summary'); mimus.replaceChildren(); markdown(mimus, data.mimus?.summary || 'Application evidence is unavailable.', 'docs/mimus.md');
+    document.querySelectorAll('[data-application-document]').forEach(button => {
+      button.dataset.document = data.application?.document || '';
+    });
+    const application = $('application-summary'); application.replaceChildren(); markdown(application, data.application?.summary || 'Application evidence is unavailable.', data.application?.document);
     const queue = data.queue || {};
     $('queue-state').textContent = !queue.available ? 'Unavailable' : queue.halted ? 'Paused' : `${list(queue.items).length} requests`;
     $('queue-state').className = 'pill' + (queue.halted ? ' warning' : '');
@@ -206,9 +209,9 @@
     $('count-qualified').textContent = typeof summary.qualified === 'number' ? summary.qualified : '—';
     $('count-qualified').title = typeof summary.qualified === 'number' ? 'Recorded qualified hardware areas' : 'Qualification status unknown';
     $('inventory-count').textContent = items.length; $('metrics').setAttribute('aria-busy', 'false');
-    const firstParagraph = String(data.mimus?.summary || '').split(/\n\s*\n/)[0];
+    const firstParagraph = String(data.application?.summary || '').split(/\n\s*\n/)[0];
     const sentences = plain(firstParagraph).match(/[^.!?]+[.!?]+(?:\s|$)|[^.!?]+$/g) || [];
-    $('featured-mimus').textContent = sentences.length ? sentences.slice(0, 2).join(' ').trim() : 'Application evidence is unavailable. Open the record for details.';
+    $('featured-application').textContent = sentences.length ? sentences.slice(0, 2).join(' ').trim() : 'Application evidence is unavailable. Open the record for details.';
     const areas = [...new Set(items.map((item) => item.area).filter(Boolean))].sort();
     syncFilter('area', areas.map((value) => [value, value]), 'All areas');
     const statuses = [...new Set(items.map((item) => item.status).filter(Boolean))];
