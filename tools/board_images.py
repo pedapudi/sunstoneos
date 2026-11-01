@@ -101,6 +101,12 @@ def inspect(image, kind, descriptor=None, host_tree=None, manifest=None):
     descriptor = descriptor or {}
     if descriptor:
         require(descriptor.get('image_sha256') == sha(image), 'Image descriptor hash differs.')
+    if 'usb_vbus_probe_profile' in names:
+        profile = symbol_bytes(image, 'usb_vbus_probe_profile')
+        require(profile in [struct.pack('<3Q', 0x3153554256535355, 1, mode) for mode in (0, 1, 10)],
+                'Unsupported PL8 VBUS diagnostic profile.')
+        require(kind == 'probe' and 'sunstone_probe_marker' in names,
+                'PL8 VBUS diagnostic requires the native probe contract.')
     if kind == 'usb-class':
         require('sunstone_probe_marker' in names,
                 'USB class images require the native probe contract and real device cleanup; retained OS images cannot return.')
@@ -225,6 +231,8 @@ def policy(info, args, session=None):
     """Approval adds authority; it never creates a storage grant or a backup."""
     d = info['descriptor']
     approved = args.approved_by == 'coordinator'
+    if 'usb_vbus_probe_profile' in info.get('symbols', {}):
+        require(approved and args.port == '3-1', 'PL8 VBUS probe requires coordinator approval on port 3-1.')
     if info.get('usb_class'):
         require(approved, 'USB class launch requires --approved-by coordinator after review of source and current-cutoff evidence.')
     storage = d.get('storage_write') or args.storage_write
