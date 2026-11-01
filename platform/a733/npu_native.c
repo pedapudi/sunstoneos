@@ -93,10 +93,11 @@ int a733_npu_native_init(struct a733_npu_native *n, uintptr_t register_cpu,
 
 /* The register page's read and write mappings are checked once, at
  * initialization; the EL1 tables do not change afterwards. Each access then
- * is a plain device access with readl/writel ordering, as the vendor driver
- * reads and writes registers (vip2/os/linux/vip_drv_os.c:383-430). The
- * controller's barrier callback issues DSB SY before the doorbell and before
- * output is read. */
+ * retains readl/writel ordering from vip2/os/linux/vip_drv_os.c:383-430.
+ * Writes also complete architecturally before returning to the controller's
+ * hold/timestamp steps. DSB does not establish internal NPU readiness or
+ * endpoint arrival through an early-acknowledging mapping. The controller
+ * retains its explicit device-status and full-idle checks. */
 static int register_access(struct a733_npu_native *n, unsigned offset)
 {
     return ready(n) && !(offset & 3) && offset < 4096 ? 1 : refuse(n);
@@ -114,6 +115,7 @@ static int write32(void *cookie, unsigned offset, uint32_t value)
     struct a733_npu_native *n = cookie;
     if (!register_access(n, offset)) return 0;
     a733_mmio_write32_dmb_oshst_before(n->registers + offset, value);
+    a733_mmio_dsb_sy();
     return 1;
 }
 static uint64_t microseconds(void *cookie)
