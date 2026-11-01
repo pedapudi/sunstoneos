@@ -41,7 +41,7 @@ struct a733_usb2_generic_endpoint {
     uint16_t packet;
 };
 struct a733_usb2_generic {
-    unsigned ready,endpoints;
+    unsigned ready,mounted,endpoints;
     uint32_t interfaces,alternates[32];
     uint8_t classes[32];
     uint16_t reports[32];

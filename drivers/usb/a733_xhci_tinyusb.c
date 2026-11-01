@@ -8,6 +8,7 @@ static struct a733_usb2_native *host;
 #if SUNSTONE_USB_HOST_GENERIC
 #include "sunstone_usb_hid.h"
 #include "sunstone_usb_uvc.h"
+#include "sunstone_usb_serial.h"
 #include "host/usbh_pvt.h"
 static struct sunstone_usb_hid generic_hid[CFG_TUH_DEVICE_MAX][CFG_TUH_HID];
 static sunstone_hid_emit input_emit;
@@ -76,6 +77,8 @@ static void mounted_update(void)
 {
     host->mounted=host->dual_leaf?(host->msc_mounted&&host->hid_mounted):
         (host->msc_mounted||host->hid_mounted||host->audio_mounted);
+    if(host->generic_host)for(unsigned i=0;i<A733_XHCI_DEVICES;++i)
+        host->mounted|=host->descriptors[i].generic.mounted;
 }
 /* Hub state bound to a device record, to a logical address, or to the record
  * that owns a parent slot. */
@@ -200,6 +203,7 @@ int a733_usb2_host_bind(struct a733_usb2_native *n)
     if(host||!n||n->self!=n||!n->core_started||!n->core.self||n->core.ops.current(n->core.context)!=1)return 0;
     host=n;uint64_t now;if(!clock_now(&now)||now>=n->platform.config.deadline){lost();return 0;}
     n->mount_deadline=n->platform.config.deadline;n->mount_budget=n->platform.config.deadline-now;
+    if(n->generic_host)n->transport.generation=n->core.generation;
     const tusb_rhport_init_t init={.role=TUSB_ROLE_HOST,.speed=n->core.require_ss?TUSB_SPEED_SUPER:TUSB_SPEED_HIGH};
     if(!tusb_init(0,&init)){lost();return 0;}return 1;
 }
@@ -693,6 +697,9 @@ void a733_usb2_host_notice(void *cookie,const struct a733_xhci_notice *event)
         uint64_t now,d=deadline();
         if(!d||!clock_now(&now)||host->core.ops.live(host->core.context,host->core.generation,d)!=1){lost();return;}
         if(event->endpoint&15){
+            struct a733_usb2_generic *g=generic_at(event->address);
+            if(g&&event->result)for(unsigned i=0;i<g->endpoints;++i)
+                if(g->endpoint[i].address==event->endpoint&&g->classes[g->endpoint[i].interface]==3){lost();return;}
             struct a733_usb2_hub *h=hub_at(event->address);
             if(h){
                 if(event->endpoint!=h->endpoint||!h->status_requested||h->status_deferred||
@@ -1116,6 +1123,15 @@ static struct transport_request transport_requests[32];
 static uintptr_t transport_ticket;
 static void transport_retire(void)
 {
+    /* CDC RX is submitted by its upstream class, outside transport_requests.
+     * Disable Slot (detach 3) proves drain even while application leases keep
+     * the record reserved; no missing callback is treated as DMA completion. */
+    for(unsigned address=1;address<=CFG_TUH_DEVICE_MAX;++address){
+        unsigned active=0;
+        for(unsigned j=0;j<A733_XHCI_DEVICES;++j){const struct a733_xhci_device *d=&host->core.devices[j];
+            if(d->address==address&&d->slot&&d->detach!=3)active=1;}
+        if(!active)os_usb_serial_native_quiesce((uint8_t)address);
+    }
     for(unsigned i=0;i<32;++i){
         struct transport_request *r=&transport_requests[i];if(!r->used)continue;
         unsigned live=0;
@@ -1189,7 +1205,7 @@ struct sunstone_usb_transport *a733_usb2_transport(struct a733_usb2_native *n){(
 
 void tuh_mount_cb(uint8_t address)
 {
-    if(owner()&&generic_at(address)){host->mounted=1;host->mount_deadline=0;}
+    if(owner()&&generic_at(address)){generic_at(address)->mounted=1;mounted_update();host->mount_deadline=0;}
 }
 void tuh_umount_cb(uint8_t address)
 {
@@ -1197,7 +1213,10 @@ void tuh_umount_cb(uint8_t address)
     camera_disconnect(address);
 #endif
     (void)address;
-    if(owner()&&host->generic_host){host->mounted=0;host->mount_deadline=0;}
+    if(owner()&&host->generic_host){
+        struct a733_usb2_generic *g=generic_at(address);if(g)g->mounted=0;
+        mounted_update();host->mount_deadline=0;
+    }
 }
 
 #if SUNSTONE_USB_HOST_GENERIC
@@ -1312,7 +1331,7 @@ static uint16_t camera_class_open(uint8_t rhport,uint8_t address,const tusb_desc
     unsigned at=0;
     while(at<bytes){const uint8_t *q=(const void *)((const uint8_t *)itf+at);unsigned length=q[0];
         if(length<2||length>bytes-at)break;
-        if(q[1]==4&&(length<9||q[5]!=14))break;
+        if((q[1]==4&&(length<9||q[5]!=14))||(q[1]==11&&at))break;
         at+=length;
     }
     return (uint16_t)at;
