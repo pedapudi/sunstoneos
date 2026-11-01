@@ -674,7 +674,7 @@ select {
   padding:22px;
   margin-bottom:20px;
 }
-.side-panel h3,.mimus-panel h3,.source-section h3 {
+.side-panel h3,.application-panel h3,.source-section h3 {
   font-size:16px;
   font-weight:550;
   margin-bottom:12px;
@@ -716,12 +716,12 @@ select {
 .blocker+.blocker {
   border-top:1px solid #d6dacd;
 }
-.mimus-panel {
+.application-panel {
   margin-top:25px;
   border-top:1px solid var(--line);
   padding-top:25px;
 }
-.mimus-panel .prose {
+.application-panel .prose {
   font-size:13px;
   color:var(--muted);
   line-height:1.8;

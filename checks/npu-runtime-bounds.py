@@ -188,14 +188,14 @@ def images():
     finite_models = json.loads((ROOT / 'apps/npu-finite/runtime-models.json').read_text())['npu_models']
     return [
         dict(name=check, slots=slots, deadline_us=deadline, usb0_core0=False, collect_us=collect * 1000,
-             models=['conv8', 'dual-u8', 'dual-i8', 'shufflenet-v2-published', 'mimus-linear-q']),
+             models=['conv8', 'dual-u8', 'dual-i8', 'shufflenet-v2-published', 'linear-i16-per-row']),
         dict(name='apps/npu-runtime-large (planned first consumer)', slots=1, deadline_us=large_cap,
              usb0_core0=True, collect_us=large_request, models=['shufflenet-v2-published']),
         # The board image: one slot that loads any catalogue model, the worker
         # on core 1 apart from USB0 and the power service on core 0.
         dict(name='apps/npu-board (board image)', slots=board_slots, deadline_us=board_deadline,
              usb0_core0=False, collect_us=board_collect,
-             models=['conv8', 'dual-u8', 'dual-i8', 'shufflenet-v2-published', 'mimus-linear-q']),
+             models=['conv8', 'dual-u8', 'dual-i8', 'shufflenet-v2-published', 'linear-i16-per-row']),
         dict(name='apps/npu-finite --runtime (returning image)', slots=1, deadline_us=finite_deadline,
              usb0_core0=False, collect_us=finite_collect, models=finite_models),
     ]

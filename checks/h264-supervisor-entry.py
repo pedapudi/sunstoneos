@@ -28,14 +28,14 @@ def main():
              and isinstance(node.func.value, ast.Name)
              and node.func.value.id == 'supervisor' and node.func.attr == 'run_session']
     assert len(calls) == 1
-    policy = {item.arg: ast.literal_eval(item.value) for item in calls[0].keywords
-              if item.arg in ('capture_seconds', 'result_key')}
     def identity_constant(node):
         if isinstance(node, ast.Name):
             return getattr(host, node.id)
         if isinstance(node, ast.Attribute):
             return getattr(identity_constant(node.value), node.attr)
         return ast.literal_eval(node)
+    policy = {item.arg: identity_constant(item.value) for item in calls[0].keywords
+              if item.arg in ('capture_seconds', 'capture_limit_seconds', 'result_key')}
     identity = {item.arg: identity_constant(item.value) for item in calls[0].keywords
                 if item.arg in ('product', 'serial', 'bcd_device')}
     reached = []
@@ -52,7 +52,7 @@ def main():
     cases = []
     for name, seconds, key, accepted in (
             ('actual', policy['capture_seconds'], policy['result_key'], True),
-            ('overlong', 180 if policy['result_key'] == 'mimus_result' else 60,
+            ('overlong', policy.get('capture_limit_seconds', 59) + 1,
              policy['result_key'], False),
             ('unknown', policy['capture_seconds'], 'unknown_result', False)):
         if args.case and name not in args.case:
@@ -61,7 +61,9 @@ def main():
         try:
             host.supervisor.run_session(settings, unused, {}, ready, forbidden, forbidden,
                 **identity,
-                capture_seconds=seconds, result_key=key)
+                capture_seconds=seconds, result_key=key,
+                **({'capture_limit_seconds': policy['capture_limit_seconds']}
+                   if 'capture_limit_seconds' in policy else {}))
         except ReadinessReached:
             assert accepted and reached == [True]
         except (ValueError, RuntimeError) as error:

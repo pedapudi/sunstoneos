@@ -28,10 +28,12 @@ The kit includes:
   checksum of an input region;
 - the external mimus manifest at `sunstoneos/apps/mimus-board/manifest.json`,
   which pins its addresses, sizes and digests;
-- `checks/sunstone-app-abi.py`: compiles both manifests for the host and for
-  `aarch64-none-elf`, compares the compiled section bytes with the tool's
-  packing, runs hello-compute on a host model of the calls, checks the mimus
-  draft against today's constants, and checks eleven refusals;
+- `checks/sunstone-app-abi.py`: compiles hello-compute and a synthetic manifest
+  for the host and for `aarch64-none-elf`, compares their sections with the
+  generator, runs hello-compute at input boundaries, and checks malformed
+  manifests. Repeatable `--manifest PATH` arguments add external manifests.
+  Application-specific input and runtime-bound assertions live in each
+  application repository;
 - the CPU-return launch path for any application: `apps/os/prepare.py` builds
   the SRAM launcher, launch request and contract, `apps/os/cpu-return-host.py`
   reads the return layout and performs one returning run, and
@@ -273,6 +275,138 @@ protection remains outside this implementation.
 The image link check also refuses an application object that references a
 symbol outside its own sources, the `ss_*` calls, FreeRTOS and the C and C++
 libraries.
+
+## External checkouts supply their build hooks and checks
+
+`SUNSTONE_EXTERNAL_APPLICATIONS` is a CMake list of external checkout paths.
+Each checkout supplies `sunstoneos/cmake/register.cmake`, which sets
+`SUNSTONE_APPLICATION_<name>_ROOT` to its port directory. The OS includes
+optional `cmake/engine.cmake` before its board targets and optional
+`cmake/targets.cmake` after them. When `SUNSTONE_APPLICATION` selects the
+registered name, the OS includes the port's `cmake/application.cmake` and
+links that application through `add_sunstone_image()`.
+
+An empty application selection builds only OS services. The in-tree
+hello-compute application uses the same application interface. Optional
+compatibility variables come from records in `apps/*/source.json` that contain
+`application_directory`. Provenance-only records define no selector. The
+selector is the uppercase directory name with hyphens replaced by underscores,
+followed by `_DIR`. For example, `MIMUS_DIR` selects the external mimus checkout. This is an
+external application example; the OS does not require that checkout.
+
+The integration gate accepts repeatable `--application PATH` arguments or the
+semicolon-separated `SUNSTONE_EXTERNAL_APPLICATIONS` environment variable.
+It also reads the optional compatibility variables. Each selected checkout
+supplies `sunstoneos/gate.json` with its name and checks:
+
+```json
+{
+  "name": "example",
+  "checks": {
+    "example-model": ["example-model", [
+      "{application}/sunstoneos/checks/model.py", "--image", "{build}/example-model.elf"
+    ]]
+  }
+}
+```
+
+Each check declares a build target and an argument list. The gate substitutes
+`{application}`, `{build}`, `{cache}`, `{qemu}` and `{evidence}`. Selected checks
+build their application's image and targets in a separate build directory;
+`--full` builds every selected application. Core builds clear all external
+selectors. Application names and check names must be unique, and the gate
+records and rechecks every selected checkout's Git state.
+
+## Device composition hooks preserve dependency and manifest identity
+
+A registered port may define the following CMake functions. The OS calls them
+while composing the existing I2S and Bluetooth diagnostic images. `kit_root`
+is the absolute SunstoneOS source directory; `build_directory` is the image's
+private generated-file directory. Every output name is a caller variable set
+with `PARENT_SCOPE`. Return an empty list when the application's feature is
+not selected.
+
+| Hook | Contract |
+| --- | --- |
+| `sunstone_external_i2s(target kit_root build_directory out_sources out_inputs out_identity)` | Called after the I2S target exists. Configure application libraries, includes and options on `target`. Return application source paths, all files that affect the application image, and a stable feature-selection string. The OS adds the sources and hashes the inputs and identity string. |
+| `sunstone_external_bluetooth_prepare(kit_root build_directory out_sources out_inputs out_manifest_arguments)` | Called before the Bluetooth target exists. Generate application headers under `build_directory`. Return sources, dependency paths including generated files, and arguments for the OS Bluetooth manifest generator. This phase must not modify a target. |
+| `sunstone_external_bluetooth_target(target kit_root build_directory)` | Called after the Bluetooth target exists. Configure application libraries, include paths, compile definitions and link options on that target. The prepare phase must already have returned every affected input. |
+
+These hooks receive their OS inputs through the arguments and the documented
+kit functions. They must not read or write the caller's `i2s_*` or
+`bluetooth_*` variables, or load an OS-side record for one named application.
+They use their own source records for application provenance.
+
+`cmake/application-kit.cmake` provides `sunstone_device_cxx(target)`, which
+adds the maintained SMP C++ runtime, headers, archives and reentrancy settings.
+`sunstone_device_cxx_inputs(out_inputs)` returns the runtime sources, archives
+and CMake files that must enter image identity. The OS includes these helpers
+before invoking a device hook. The configured dependency options
+`NEWLIB_ROOT`, `NEWLIB_SMP_ROOT`, `SUNSTONE_BT_SECURITY_DIR` and
+`SUNSTONE_BT_SBC_DIR` name pinned source or toolchain roots. The existing
+`SUNSTONE_BLUETOOTH_MSBC` option selects the wideband provider. An application
+may consume these options; runtime archive paths are resolved by the kit.
+
+## Application session hooks validate and publish bounded inputs
+
+A port that supplies a session header for the storage-derived launch path may
+define `SUNSTONE_APPLICATION_SESSION`. This enables the boot hook
+`sunstone_application_session_prepare(const uint8_t *session, uint64_t deadline)`.
+The hook may be a macro or a static inline function visible through that header.
+The OS calls it after publishing the immutable session page and before cached
+CPU startup. The deadline uses the architectural counter's tick units.
+
+The hook validates its application fields and completes publication of admitted
+application inputs before the deadline. It returns nonzero on success and zero
+on refusal or publication failure; zero stops boot with code `0x309`. It must
+not start device work or grant storage writes. Without the selector, boot runs
+only the common OS session path.
+
+An application-specific SRAM request additionally defines
+`A733_APPLICATION_REQUEST_MAGIC` and `sunstone_application_wire_valid(session)`.
+The launcher checks that request identity and validator before entry. The
+validator returns nonzero only for a supported, bounded immutable session;
+its failure uses the launcher's ordinary refusal path.
+
+## Application admission remains explicit through preparation and validation
+
+The Bluetooth preparation functions accept the keyword callback
+`application_admission(record, profile, manifest, image_hash, cache, frozen)`.
+The OS first validates the common session, profile, firmware spans, provider
+identities and evidence. The supported 832-byte application profile then
+requires this callback. The callback validates application-specific memory reservations,
+input extents and hashes, and raises on refusal; returning normally means
+success. It must not communicate with a device.
+
+The cache maps admitted absolute evidence paths to immutable bytes. When
+`frozen` is true, the callback must use only those cached bytes and refuse a
+missing input. When false, it may read a declared input, verify its digest and
+retain its bytes in the cache. Pass the same callback to `prepare()` and
+`validate_bundle()`; preparation forwards it when validating the completed
+bundle. The OS refuses an extended application profile without a callback.
+
+CPU-return clock validation similarly requires the explicit keyword
+`input_reservation` naming the application's reviewed DDR record. The generic
+validator supplies no application field name by default.
+
+## Application declarations supply capture limits and dashboard labels
+
+The optional `supervised_capture_seconds` object in a port's
+`sunstoneos/gate.json` maps application result keys to positive finite capture
+limits in seconds, up to the OS maximum of 179 seconds. The supervisor refuses
+a declaration above this maximum even when the requested capture is shorter.
+The application runner passes its declared limit through
+`capture_limit_seconds` to the shared supervisor. Both `application_result`
+and `application_board_result` require an explicit limit. Standard device
+result keys retain their OS bounds and reject an application limit override.
+The runner preserves the declaration with its evidence sources.
+
+An OS-side application source declaration may include a `dashboard` object
+with `title` and `document`. The title is a bounded display string; the document
+must be an allowlisted `docs/*.md` path in the OS repository. The dashboard
+reads both fields from the declaration and derives evidence from that document.
+It watches declaration and document changes and ignores provenance records
+without `application_directory`. No application status is stored in the UI.
 
 ## Migration of the mimus mechanisms
 

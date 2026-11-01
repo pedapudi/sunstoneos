@@ -39,7 +39,6 @@ DEVICES = {
     'isp0': ('a733-isp0-supervised-software-v1', FLAGS),
     'jpeg-encode': ('a733-jpeg-encode-supervised-software-v1', FLAGS),
     'jpeg': ('a733-jpeg-supervised-software-v1', FLAGS),
-    'mimus': ('a733-mimus-supervised-software-v1', FLAGS),
     'pwm': ('a733-pwm-supervised-software-v1',
             ('session_binding', 'waveform_irq_stop', 'reusable_commands', 'revocation_retention', 'host_capture')),
     'rtc': ('a733-rtc-supervised-software-v1', ('admission_cases', 'launcher_cases', 'host_capture')),

@@ -30,8 +30,14 @@ function(sunstone_path_maps output)
   get_filename_component(source_root "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/.." ABSOLUTE)
   get_filename_component(cache_root "${SUNSTONE_SOURCE_CACHE}/.." ABSOLUTE)
   set(maps)
-  foreach(pair "cache|${cache_root}" "sources|${SUNSTONE_SOURCE_CACHE}" "freertos|${FREERTOS_DIR}"
-      "tinyusb|${TINYUSB_DIR}" "tcp|${SUNSTONE_TCP_DIR}" "rsn|${SUNSTONE_RSN_DIR}" "mimus|${MIMUS_DIR}"
+  set(application_maps)
+  set(application_index 0)
+  foreach(checkout IN LISTS SUNSTONE_EXTERNAL_APPLICATIONS)
+    list(APPEND application_maps "application-${application_index}|${checkout}")
+    math(EXPR application_index "${application_index} + 1")
+  endforeach()
+  foreach(pair ${application_maps} "cache|${cache_root}" "sources|${SUNSTONE_SOURCE_CACHE}" "freertos|${FREERTOS_DIR}"
+      "tinyusb|${TINYUSB_DIR}" "tcp|${SUNSTONE_TCP_DIR}" "rsn|${SUNSTONE_RSN_DIR}"
       "newlib|${NEWLIB_ROOT}" "newlib-smp|${NEWLIB_SMP_ROOT}" "c-headers|${SUNSTONE_NETWORK_C_HEADERS}"
       "src|${source_root}" "build|${CMAKE_BINARY_DIR}")
     string(FIND "${pair}" "|" split)

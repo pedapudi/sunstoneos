@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Execute the frozen Bluetooth recognition serializer and TinyUSB device stack."""
+"""Shared native Bluetooth USB emulator for modeled controller and transport checks."""
 import argparse
 import hashlib
 import importlib.util
@@ -12,14 +12,13 @@ from pathlib import Path
 from elftools.elf.elffile import ELFFile
 from elftools.dwarf.dwarf_expr import DWARFExprParser
 from unicorn import Uc,UC_ARCH_ARM64,UC_MODE_ARM,UC_HOOK_CODE,UC_HOOK_MEM_READ
+from unicorn import arm64_const as arm64
 from unicorn.arm64_const import UC_ARM64_REG_X0,UC_ARM64_REG_SP,UC_ARM64_REG_LR,UC_ARM64_REG_PC
-ROOT=Path(__file__).resolve().parents[1]
-ORIGINAL=Path.home()/'.cache/sunstoneos/evidence/board-session-seal-mimus-20261018'
-ELF_HASH='7e01cd78e899a5a45fa9074fc8f188bd835c87a53615b444d7f69128b1fe6d0b'
+
+ELF_HASH = None
+CLOCK_HOOK = None
 def digest(p):return hashlib.sha256(p.read_bytes()).hexdigest()
-def save(p,value):p.write_text(json.dumps(value,indent=2)+'\n')
-def module(name,p):
-    spec=importlib.util.spec_from_file_location(name,p);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
+def save(p,value):p.write_text(json.dumps(value,indent=2)+"\n")
 
 def setup(out):
     image=out/'bluetooth.elf';assert digest(image)==ELF_HASH
@@ -64,19 +63,24 @@ def setup(out):
                     address=ops[0].args[0] if ops[0].op_name=='DW_OP_addr' else dw.get_addr(cu,ops[0].args[0])
                     variables[n]={'address':address,'unit':unit,'members':members(die.get_DIE_from_attribute('DW_AT_type')) if n in ('retained','voice') else {}}
         required=['board_usb0_task','board','bluetooth','providers','board_live','board_fail','vTaskDelay','a733_smp_counter',
-          '_ZN5mimus3asr8platform14MonotonicNanosEv','xTaskGetCurrentTaskHandle','a733_clock_token_status','a733_rail_status','a733_pmic_live',
+          'xTaskGetCurrentTaskHandle','a733_clock_token_status','a733_rail_status','a733_pmic_live',
           'a733_native_usb_step','a733_native_usb_health','a733_usb_platform_poll','bluetooth_recognition_copy',
           'tusb_rhport_init','tud_task_ext','vendord_init','vendord_open','vendord_xfer_cb',
           'tud_vendor_n_available','tud_vendor_n_read','tud_vendor_n_write','tud_vendor_n_write_flush',
           'dcd_event_handler','dcd_init','dcd_int_enable','dcd_int_disable','dcd_edpt_open','dcd_edpt_xfer',
           'dcd_edpt_close_all','dcd_edpt0_setup_begin','dcd_edpt_stall','dcd_sof_enable']
+        if CLOCK_HOOK:required.append(CLOCK_HOOK)
         for name in required:
             assert len(candidates[name])==1,(name,candidates[name]);symbols[name]=next(iter(candidates[name]))
         assert all(n in variables for n in ('identity_frame','identity_bytes','identity_sent','identity_transferred','retained','terminal','stopped'))
         if 'finished' in variables:
             for name in ('bluetooth_recognition_segment_copy','bluetooth_recognition_segment_ack','bluetooth_recognition_finished',
-                         'bluetooth_headset_segment_status','bluetooth_headset_segment_stop','xTaskGenericNotify'):
+                         'bluetooth_headset_segment_status','bluetooth_headset_segment_stop'):
                 assert len(candidates[name])==1,(name,candidates[name]);symbols[name]=next(iter(candidates[name]))
+        # Notification-free images have no scheduler give boundary to model.
+        if candidates.get('xTaskGenericNotify'):
+            assert len(candidates['xTaskGenericNotify']) == 1
+            symbols['xTaskGenericNotify'] = next(iter(candidates['xTaskGenericNotify']))
         fields={'board_application':['session','fatal','watchdog_state','live_until'],
           'bluetooth_application':['self','profile','shared','failed','recovery_state'],'a733_native_usb':['clocks','rails','pmic','usb','usb.token','usb.token.id','usb_rail','usb_rail.id','boot.usb.owner','usb.token.owner','usb.registry','usb.self','usb.initialized','usb.stage','usb.fault','usb_rail.owner','usb_power.owner','usb_power.provider','live','fail','context','usb_task','usb_step','usb_rail_index','pmic_ready','usb_prepared','clocks.failed','locks.retained'],
           'dcd_event_t':['rhport','event_id','setup_received','bus_reset.speed','xfer_complete.ep_addr','xfer_complete.result','xfer_complete.len']}
@@ -90,6 +94,14 @@ def setup(out):
 class Machine:
     def __init__(self,out,variant):
         self.out=out;self.variant=variant;self.report,self.segments=setup(out);self.s=self.report['symbols'];self.t=self.report['types'];self.variables=self.report['variables']
+        # Model architectural counter reads in linked code as well as calls
+        # through the board counter helper. No application clock symbol is needed.
+        self.counter_reads = {}
+        for base, data in self.segments:
+            for offset in range(0, len(data) - 3, 4):
+                word = int.from_bytes(data[offset:offset + 4], 'little')
+                if word & ~31 in (0xd53be020, 0xd53be040, 0xd53be000):
+                    self.counter_reads[base + offset] = (word & 31, word & ~31)
         self.cpu=Uc(UC_ARCH_ARM64,UC_MODE_ARM)
         for address,size in [(0x40000000,0x4000000),(0x50000000,0x1000000)]:self.cpu.mem_map(address,size)
         for address,data in self.segments:self.cpu.mem_write(address,data)
@@ -127,6 +139,12 @@ class Machine:
     def ret(self,value=0):self.cpu.reg_write(UC_ARM64_REG_X0,value);self.cpu.reg_write(UC_ARM64_REG_PC,self.cpu.reg_read(UC_ARM64_REG_LR))
     def hook(self,cpu,address,size,unused):
         args=lambda n:cpu.reg_read(UC_ARM64_REG_X0+n)
+        if address in self.counter_reads:
+            target, operation = self.counter_reads[address]
+            assert target < 31
+            cpu.reg_write(getattr(arm64, 'UC_ARM64_REG_X%d' % target), 24000000 if operation == 0xd53be000 else self.time * 24)
+            cpu.reg_write(UC_ARM64_REG_PC, address + 4)
+            return
         if address==self.write_return_address:
             self.write_returns.append(args(0));self.write_return_address=None
         if address==self.s['tud_vendor_n_write']:self.write_return_address=cpu.reg_read(UC_ARM64_REG_LR)
@@ -134,7 +152,7 @@ class Machine:
         if address==self.s['vTaskDelay']:
             self.time+=1000;self.pc=cpu.reg_read(UC_ARM64_REG_LR);self.paused=True;cpu.emu_stop();return
         if address==self.s['a733_smp_counter']:self.ret(self.time*24);return
-        if address==self.s['_ZN5mimus3asr8platform14MonotonicNanosEv']:self.ret(self.time*1000);return
+        if CLOCK_HOOK and address==self.s.get(CLOCK_HOOK):self.ret(self.time*1000);return
         if address==self.s['xTaskGetCurrentTaskHandle']:self.ret(self.task);return
         if address==self.s.get('xTaskGenericNotify'):
             # Scheduler boundary: one give on index 0 to the recognizer task.
@@ -221,104 +239,7 @@ class Machine:
             if len(b''.join(self.completed[first:]))==expected:
                 for _ in range(2):assert self.tick()
                 return b''.join(self.completed[first:])
-        raise AssertionError('Bounded transfer progress exhausted')
+        raise AssertionError(('Bounded transfer progress exhausted', expected, [len(v) for v in self.completed[first:]]))
     def observation(self):
         return {'variant':self.variant,'calls':self.log,'executed':dict(self.seen),'packet_lengths':list(map(len,self.completed)),
           'fatal':self.word(self.s['board']+self.t['board_application']['fatal']),'poison_injected':self.injected,'actual_vendor_write_returns':self.write_returns,'time_us_model':self.time}
-
-def run(out,step):
-    observe=module('bluetooth_frozen_observe',out/'frozen-source/apps/bluetooth/observe.py')
-    profile=(out/'profile.bin').read_bytes();text=(out/'transcript.bin').read_bytes()
-    count=min(1024,len(text));request=struct.pack('<BBHI',3,0,count,0)
-    for variant in ('fragment-repeat','cancel','provider-failure','deadline','copy-stop'):
-        if step(variant):continue
-        m=Machine(out,variant)
-        try:
-            m.enumerate()
-            if variant=='fragment-repeat':
-                m.request(request);pending=m.drain(208);(out/'pending-frame.bin').write_bytes(pending)
-                assert observe.decode_recognition(pending,m.session,profile,0,count)[0]['state']=='pending'
-                m.write(m.variables['terminal']['address'],1)
-                m.request(request);assert m.tick()
-                for _ in range(3):assert m.tick()
-                assert m.word(m.variables['identity_sent']['address'])==208+count
-                assert m.word(m.variables['identity_transferred']['address'])==0
-                before=m.seen['bluetooth_recognition_copy'];m.request(request)
-                for _ in range(3):assert m.tick()
-                assert m.seen['bluetooth_recognition_copy']==before
-                start=len(m.completed);frames=[]
-                for _ in range(50):
-                    if 0x81 in m.pending:m.complete(0x81)
-                    assert m.tick()
-                    wire=b''.join(m.completed[start:])
-                    if len(wire)==2*(208+count):frames=[wire[:208+count],wire[208+count:]];break
-                assert len(frames)==2 and frames[0]==frames[1]
-                for i,frame in enumerate(frames):
-                    (out/f'success-{i}.bin').write_bytes(frame)
-                    metadata,body=observe.decode_recognition(frame,m.session,profile,0,count)
-                    assert body==text[:count] and metadata['text_sha256']==hashlib.sha256(text).hexdigest()
-                # Copy all remaining chunks through the same actual USB path.
-                copied=frames[0][208:]
-                for offset in range(count,len(text),1024):
-                    n=min(1024,len(text)-offset)
-                    m.request(struct.pack('<BBHI',3,0,n,offset));frame=m.drain(208+n)
-                    metadata,body=observe.decode_recognition(frame,m.session,profile,offset,n);copied+=body
-                assert copied==text
-                (out/'copied-transcript.bin').write_bytes(copied)
-                assert all(m.seen[n] for n in ('bluetooth_recognition_copy','tud_task_ext','vendord_xfer_cb','tud_vendor_n_write'))
-            elif variant=='cancel':
-                m.complete(2,struct.pack('<BBHI',3,1,count,0));assert not m.tick()
-                assert not m.completed and 0x81 not in m.pending
-            elif variant=='copy-stop':
-                m.write(m.variables['terminal']['address'],1);m.poison=True;m.request(request)
-                frame=m.drain(208);(out/'stopped-frame.bin').write_bytes(frame)
-                assert m.injected and observe.decode_recognition(frame,m.session,profile,0,count)[0]['state']=='retained-failure'
-            else:
-                m.write(m.variables['terminal']['address'],1);m.request(request);assert m.tick() and 0x81 in m.pending
-                issued=sum(x['call']=='dcd_edpt_xfer' for x in m.log)
-                if variant=='provider-failure':m.write(m.usb+m.u['usb.fault'],1)
-                else:m.time=10000000
-                assert not m.tick()
-                assert sum(x['call']=='dcd_edpt_xfer' for x in m.log)==issued
-            save(out/(variant+'-result.json'),{'passed':True,**m.observation()});step(variant,True)
-        except BaseException:
-            import traceback
-            save(out/(variant+'-failed-observation.json'),m.observation());(out/(variant+'-failure.log')).write_text(traceback.format_exc());raise
-
-def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--output',type=Path,required=True);p.add_argument('--resume-setup',action='store_true')
-    mode=p.add_mutually_exclusive_group(required=True);mode.add_argument('--setup-only',action='store_true');mode.add_argument('--run-only',action='store_true')
-    a=p.parse_args();out=a.output.resolve()
-    if a.setup_only:
-        out.mkdir(parents=True,exist_ok=a.resume_setup)
-        assert digest(ORIGINAL/'build/sunstone-a733-bluetooth.elf')==ELF_HASH
-        dependencies=json.loads((ORIGINAL/'compiled-dependencies.json').read_text())
-        for path,h in dependencies.items():assert digest(Path(path))==h,path
-        for source,target in [('build/sunstone-a733-bluetooth.elf','bluetooth.elf'),('bt-session.bin','admitted-session.bin'),('bt-profile.bin','profile.bin'),('image.json','original-image-manifest.json'),('compiled-dependencies.json','original-compiled-dependencies.json')]:shutil.copy2(ORIGINAL/source,out/target)
-        previous=Path.home()/'.cache/sunstoneos/evidence/bluetooth-mimus-native-20261017/composition'
-        for source,target in [('success-transcription.log','transcript.bin'),('success-transcription.log.snapshot.bin','snapshot.bin')]:shutil.copy2(previous/source,out/target)
-        assert len((out/'snapshot.bin').read_bytes())==144
-        assert (out/'snapshot.bin').read_bytes()[112:]==hashlib.sha256((out/'transcript.bin').read_bytes()).digest()
-        assert int.from_bytes((out/'profile.bin').read_bytes()[720:724],'little')==int.from_bytes((out/'snapshot.bin').read_bytes()[36:40],'little')
-        for name in ('apps/bluetooth/observe.py','apps/bluetooth/usb0.c','apps/bluetooth/recognition.cc','apps/bluetooth/bluetooth.c','platform/a733/native_usb.c','drivers/usb/a733_usb_platform.c'):
-            dst=out/'frozen-source'/name;dst.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(ORIGINAL/'source'/name,dst)
-        shutil.copy2(Path(__file__),out/'check.py');setup(out)
-        save(out/'scope.json',{'physical_access':False,'image_rebuilt':False,'reuse':str(ORIGINAL),
-            'modeled':'DCD endpoint/event hardware, lower clock/rail/PMIC statuses, scheduler yields/time; adopted final recognition transcript/snapshot and ready USB/application state.',
-            'executed':'Actual recognition copy/live/output boundaries, Bluetooth serializer/USB task, USB PREPARED/health consumer and TinyUSB initialization/configuration/vendor FIFO/completion.'})
-        import unicorn,elftools
-        paths=[out/n for n in ('bluetooth.elf','transcript.bin','snapshot.bin','admitted-session.bin','profile.bin','original-image-manifest.json','original-compiled-dependencies.json','check.py','scope.json','preflight.json')]
-        paths += [x for x in (out/'frozen-source').rglob('*') if x.is_file()]
-        paths+=[Path(sys.executable)]+[x for package in (unicorn,elftools) for x in Path(package.__file__).parent.rglob('*') if x.is_file() and '__pycache__' not in x.parts]
-        save(out/'inputs.json',{str(x):digest(x) for x in dict.fromkeys(paths)})
-        print('Setup passed; frozen recognition image reused.');return
-    for path,h in json.loads((out/'inputs.json').read_text()).items():assert digest(Path(path))==h,path
-    steps_path=out/'steps.json';steps=json.loads(steps_path.read_text()) if steps_path.exists() else {}
-    def step(name,passed=False):
-        if passed:steps[name]={'passed':True};save(steps_path,steps);return
-        if steps.get(name,{}).get('passed'):return True
-        steps[name]={'state':'running'};save(steps_path,steps);return False
-    run(out,step)
-    save(out/'result.json',{'passed':True,'physical_access':False,'image_rebuilt':False,'elf_sha256':ELF_HASH,'cases':list(steps),'scope':'Native Bluetooth recognition copy/serializer/TinyUSB over modeled hardware and adopted prior recognition output.'})
-    print('PASS actual frozen Bluetooth recognition USB serialization')
-if __name__=='__main__':main()

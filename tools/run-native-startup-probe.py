@@ -360,7 +360,7 @@ def run(a):
         'execution_profile':profile,'native_sha256':native,
         'manifest_sha256':expected[a.build/'manifest.json'],'recovery_sha256':recovery_hash,'caller_interval':caller,'sram_after_warm_return':'Owned by new ROM; old bytes are evidence only.'}
     def journal():save(a.evidence/'session.json',record)
-    access=module('startup_access',ROOT/'tools/usb-access.py');sys.path.insert(0,str(Path.home()/'git/mimus/tools'));import usb_guard
+    access=module('startup_access',ROOT/'tools/usb-access.py');import usb_guard
     usb_guard.check_health()
     with access.board_lock() as node:
         access.require_session(node);access.require_rom(node);identity=access.identity(node);port=access.target(node);config={'port':port.name,'sysfs':str(port.resolve())};failed=False;dirty=False

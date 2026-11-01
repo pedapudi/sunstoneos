@@ -12,7 +12,7 @@
  * after admission, which must retain every session.
  *
  * Built with NPU_SESSION_RESERVED_CHECK, the check adds the published
- * ShuffleNet graph with its external working pool and one mimus encoder
+ * ShuffleNet graph with its external working pool and one quantized linear
  * linear layer with INT16 tensors and transpose steps, takes the parent from the
  * reservation constructor and a 48 MiB stand-in for the platform pool, and
  * requires a parent larger than the 4 MiB image-RAM window. Case 3 offers a
@@ -491,7 +491,7 @@ static void bootstrap_run(void *unused)
     configASSERT(npu_session_stop_poll(&sessions) == A733_NPU_PLATFORM_READY && stops == 1);
     report_counts();
 #if defined(NPU_SESSION_RESERVED_CHECK)
-    platform_puts("PASS NPU sessions: five models, including a mimus linear layer, in one pool reservation above the 4 MiB window, cleared working pool, round-robin jobs, close and stop\n");
+    platform_puts("PASS NPU sessions: five models, including a per-row quantized linear layer, in one pool reservation above the 4 MiB window, cleared working pool, round-robin jobs, close and stop\n");
 #else
     platform_puts(npu_case == 1 ?
         "PASS NPU sessions: three models, interrupt completion, copied multi-tensor outputs, close and stop\n" :

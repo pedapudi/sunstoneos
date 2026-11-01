@@ -171,7 +171,7 @@ Build the dedicated image with the existing configured dependency wrapper:
 
 ```sh
 ~/.cache/sunstoneos/bin/cfg.sh "$PWD" BUILD \
-  -DSUNSTONE_A733_OS=ON -DSUNSTONE_MIMUS_WORKERS=8 \
+  -DSUNSTONE_A733_OS=ON \
   -DA733_A76_ADMITTED=ON -DSUNSTONE_A733_OS_CPU_CLOCK=ON \
   -DSUNSTONE_A733_OS_CPU_RETURN=ON
 cmake --build BUILD --target sunstone-a733-os

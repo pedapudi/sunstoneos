@@ -2,8 +2,8 @@
 """Generate two Conv2D/ReLU stages with an exact integer reference.
 
 Run in the pinned compiler environment. This small diagnostic covers the
-stride-two padded convolution/activation sequence used by mimus subsampling;
-it is not a compiled mimus model or a native inference result.
+stride-two padded convolution/activation sequence for subsampling.
+It produces a synthetic graph and reference, without native execution.
 """
 import argparse
 import hashlib

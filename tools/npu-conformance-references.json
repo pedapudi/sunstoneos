@@ -104,7 +104,7 @@
    "repeat": "maximum",
    "reference": null
   },
-  "mimus-linear-q": {
+  "linear-i16-per-row": {
    "nbg": "build/audit-npu-runtime/compiler/work/mimus-encoder.layers.0.self_attn.linear_q/export_nbg_unify/network_binary.nb",
    "inputs": [
     "build/audit-npu-runtime/compiler/work/mimus-encoder.layers.0.self_attn.linear_q/x.i16"
@@ -112,36 +112,37 @@
    "one_vector_limit": 600,
    "per_vector_seconds": 0.1,
    "reference": {
-    "kind": "mimus-int32-bias",
+    "kind": "dense-int32-bias",
     "layer": "encoder.layers.0.self_attn.linear_q",
     "files": {
      "w.i8": {
       "path": "build/audit-npu-runtime/compiler/work/mimus-encoder.layers.0.self_attn.linear_q/w.i8",
-      "sha256": "c2650d74579d1d04b11b12a508353f8ee643f2c0838d1fa1f9b80e12e09272c7"
+      "sha256": "c2650d74579d1d04b11b12a508353f8ee643f2c0838d1fa1f9b80e12e09272c7",
+      "comment": "Application example: historical mimus layer cache path retained to preserve pinned bytes."
      },
      "ws.f32": {
       "path": "build/audit-npu-runtime/compiler/work/mimus-encoder.layers.0.self_attn.linear_q/ws.f32",
-      "sha256": "735b43aa148bcdcdee9788613019c07e4781cd6b7fea3f8f2deab9bf1652dde7"
+      "sha256": "735b43aa148bcdcdee9788613019c07e4781cd6b7fea3f8f2deab9bf1652dde7",
+      "comment": "Application example: historical mimus layer cache path retained to preserve pinned bytes."
      },
      "bias.f32": {
       "path": "build/audit-npu-runtime/compiler/work/mimus-encoder.layers.0.self_attn.linear_q/bias.f32",
-      "sha256": "c6d286bc859801f45508135ca10806b303f52085a93ed47a465a31f44f4ee789"
+      "sha256": "c6d286bc859801f45508135ca10806b303f52085a93ed47a465a31f44f4ee789",
+      "comment": "Application example: historical mimus layer cache path retained to preserve pinned bytes."
      },
      "meta.json": {
       "path": "build/audit-npu-runtime/compiler/work/mimus-encoder.layers.0.self_attn.linear_q/meta.json",
-      "sha256": "04c5f4ecf2e1e5d9b32fe5a73bc3bd10260249a742379207bee72732f3a7592b"
+      "sha256": "04c5f4ecf2e1e5d9b32fe5a73bc3bd10260249a742379207bee72732f3a7592b",
+      "comment": "Application example: historical mimus layer cache path retained to preserve pinned bytes."
      },
      "model.quantize": {
       "path": "build/audit-npu-runtime/compiler/work/mimus-encoder.layers.0.self_attn.linear_q/linear.quantize",
-      "sha256": "1bd79bf6119bf529063adcc866787e3bd5b43d8d444fe0a087c0ad3477282a81"
-     },
-     "npu-mimus-linear.py": {
-      "path": "tools/npu-mimus-linear.py",
-      "sha256": "6b1f2e87b82433cfe7618b7ff769bebee8b8f9516519094b6529d3d0361a0d24",
-      "repository": true
+      "sha256": "1bd79bf6119bf529063adcc866787e3bd5b43d8d444fe0a087c0ad3477282a81",
+      "comment": "Application example: historical mimus layer cache path retained to preserve pinned bytes."
      }
     }
-   }
+   },
+   "comment": "Application example: the pinned mimus linear layer retains its historical cache paths; the generic catalogue name does not rename cached files."
   }
  }
 }

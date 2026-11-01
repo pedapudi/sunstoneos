@@ -19,6 +19,38 @@ protocol behavior. They establish no new physical qualification. The
 legacy GPU session remains behind `SUNSTONE_A733_OS_LEGACY_MIMUS_GPU` until
 the generic compute queue is implemented. Board state below remains current.
 
+External checkouts register through `SUNSTONE_EXTERNAL_APPLICATIONS`; each
+port supplies its integration targets and commands in `sunstoneos/gate.json`.
+The application owns its speech capture recipes and manifest/admission checks.
+The fixed six-entry NPU catalogue names its application-derived linear fixture
+`linear-i16-per-row`; model bytes and hashes are unchanged.
+
+OS-only, hello-compute, external recognition, returning, I2S transcription and
+headset recognition images build. Cached QEMU recognition matches the host
+reference. Gate, ABI, NPU session/conformance, USB, fault-capture and returned
+thermal host checks pass. The I2S parent/adapter fixture still returns 13, and
+the Bluetooth host admission fixture lacks a valid USB reference mode.
+Dashboard parser cases pass; its HTTP case requires local socket access.
+Raw evidence is under `~/.cache/sunstoneos/build/os-refs-1031/`.
+
+Application preparation loads its clock-review and Bluetooth admission
+wrappers. The clock validator requires the reservation field explicitly.
+The shared OS USB emulator supports playback, repeated USB and mSBC checks.
+Recognition fixtures live in the application repository and import that model.
+These checks, the rebuilt session handoff and application admission checks pass
+on the host.
+
+USB guards retain the shared churn files and accept legacy settings as
+fallbacks. Source aliases require `application_directory`. Device hooks use
+explicit kit arguments and dependency outputs; application declarations supply
+capture limits and dashboard labels. The NPU loader accepts the historical
+linear fixture key with its existing file and digest checks; an OS NPU image
+builds against the unchanged cached map. Review evidence is under
+`~/.cache/sunstoneos/build/os-refs-1031/review/`.
+
+The launcher still retains its application asset-symbol lookup. Feature review
+and that launcher-owner change remain outstanding. No board run is requested.
+
 ## Paused after the 2026-10-31 tranche
 
 Physical bring-up is paused; resume board work only when the user asks. Both boards remain

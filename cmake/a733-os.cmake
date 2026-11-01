@@ -1,6 +1,6 @@
 # Select one application of the native OS core. An empty selection builds the
 # same OS services with no application task or application manifest.
-set(SUNSTONE_APPLICATION "" CACHE STRING "OS application: empty, hello-compute, or mimus")
+set(SUNSTONE_APPLICATION "" CACHE STRING "Registered OS application name; empty builds only OS services")
 include("${CMAKE_CURRENT_LIST_DIR}/sunstone-os-core.cmake")
 if(NOT TARGET sunstone-a733-os-core)
   return()
@@ -27,13 +27,11 @@ elseif(SUNSTONE_APPLICATION STREQUAL "hello-compute")
     MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/hello-compute/manifest.json")
   add_sunstone_image(sunstone-a733-os-hello LIFETIME ${os_lifetime}
     SERVICES ${os_services} APPLICATION hello-compute)
-elseif(SUNSTONE_APPLICATION STREQUAL "mimus")
-  if(NOT MIMUS_DIR)
-    message(FATAL_ERROR "The mimus application requires its external MIMUS_DIR")
-  endif()
-  include("${MIMUS_SUNSTONE_ROOT}/cmake/application.cmake")
-  add_sunstone_image(sunstone-a733-os LIFETIME ${os_lifetime}
-    SERVICES ${os_services} APPLICATION mimus)
 else()
-  message(FATAL_ERROR "Unknown SUNSTONE_APPLICATION: ${SUNSTONE_APPLICATION}")
+  if(NOT DEFINED SUNSTONE_APPLICATION_${SUNSTONE_APPLICATION}_ROOT)
+    message(FATAL_ERROR "Unknown SUNSTONE_APPLICATION: ${SUNSTONE_APPLICATION}")
+  endif()
+  include("${SUNSTONE_APPLICATION_${SUNSTONE_APPLICATION}_ROOT}/cmake/application.cmake")
+  add_sunstone_image(sunstone-a733-os LIFETIME ${os_lifetime}
+    SERVICES ${os_services} APPLICATION ${SUNSTONE_APPLICATION})
 endif()

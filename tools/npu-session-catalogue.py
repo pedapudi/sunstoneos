@@ -84,6 +84,15 @@ def add(args):
     CATALOGUE.write_text(json.dumps(catalogue, indent=1) + '\n')
 
 
+def artifact_files(paths, name):
+    """Resolve a catalogue name in an artifact map; callers verify every file."""
+    # Application example: existing maps use the historical mimus layer name.
+    # Prefer the current key when both exist so invalid new entries still fail.
+    if name == 'linear-i16-per-row' and name not in paths:
+        return paths['mimus-linear-q']
+    return paths[name]
+
+
 def application_models(lists):
     """Catalogue entries that the model lists name, in list order, each once."""
     catalogue = {m['name']: m for m in json.loads(CATALOGUE.read_text())['models']}

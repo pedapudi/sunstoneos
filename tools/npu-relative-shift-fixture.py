@@ -12,7 +12,7 @@ parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('output'
 p=parser.parse_args().output;p.mkdir(parents=True,exist_ok=False)
 heads,time=4,128
 x=((np.arange(heads*time*(2*time-1),dtype=np.int32)*37)%251-125).astype(np.float32).reshape(heads,time,2*time-1)/16+np.float32(2**-15)
-# Exact existing rel_shift + [:,:,:t] from mimus/train/conformer.py.
+# Pad, reshape, discard the first row, reshape back and crop to time steps.
 y=np.pad(x,((0,0),(0,0),(1,0))).reshape(heads,2*time,time)[:,1:].reshape(heads,time,2*time-1)[:,:,:time].copy()
 constants=dict(pads=np.array([0,0,1,0,0,0],np.int64),zero=np.array(0,np.float32),shape0=np.array([heads,2*time,time],np.int64),start0=np.array([1],np.int64),end0=np.array([2*time],np.int64),axis0=np.array([1],np.int64),shape1=np.array([heads,time,2*time-1],np.int64),start1=np.array([0],np.int64),end1=np.array([time],np.int64),axis1=np.array([2],np.int64))
 nodes=[h.make_node('Pad',['input','pads','zero'],['padded'],mode='constant'),h.make_node('Reshape',['padded','shape0'],['view0']),h.make_node('Slice',['view0','start0','end0','axis0'],['cropped']),h.make_node('Reshape',['cropped','shape1'],['view1']),h.make_node('Slice',['view1','start1','end1','axis1'],['output'])]

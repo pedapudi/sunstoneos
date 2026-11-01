@@ -21,7 +21,7 @@ from urllib.parse import parse_qs, quote, urlsplit
 DEFAULT_QUEUES = {'3-1': Path.home() / '.cache/sunstoneos/board-tests.sqlite3',
                   '3-3': Path.home() / '.cache/sunstoneos/board-tests-3-3.sqlite3'}
 PORT_PATTERN = r'[0-9]+-[0-9]+(?:\.[0-9]+)*'
-SOURCES = ('docs/hardware.md', 'docs/handoff.md', 'docs/mimus.md', 'docs/validation.md',
+SOURCES = ('docs/hardware.md', 'docs/handoff.md', 'docs/validation.md',
            'docs/hardware-dependencies.md')
 ASSETS = {'/': ('index.html', 'text/html; charset=utf-8'),
           '/index.html': ('index.html', 'text/html; charset=utf-8'),
@@ -168,6 +168,22 @@ def safe_read(root, relative, limit=MAX_DOCUMENT):
 
 def doc_path(path):
     return bool(re.fullmatch(r'docs/[A-Za-z0-9][A-Za-z0-9_.-]*\.md', path))
+
+
+def application_declaration(repository):
+    """Read optional display metadata from an external application declaration."""
+    for path in sorted((repository / 'apps').glob('*/source.json')):
+        try:
+            record = json.loads(safe_read(repository, str(path.relative_to(repository))))
+            if not isinstance(record, dict) or 'application_directory' not in record:
+                continue
+            display = record.get('dashboard', {})
+            title, document = display.get('title'), display.get('document')
+            if isinstance(title, str) and 0 < len(title) <= 200 and isinstance(document, str) and doc_path(document):
+                return {'title': title, 'document': document}
+        except (OSError, ValueError, TypeError, AttributeError):
+            continue
+    return {'title': 'External application', 'document': None}
 
 
 def links(text, source='docs/hardware.md'):
@@ -473,6 +489,11 @@ class Progress:
     def signature(self):
         self.local_git, self.common_git = git_paths(self.repository)
         paths = [self.repository / name for name in SOURCES]
+        paths.append(self.repository / 'apps')
+        paths.extend(sorted((self.repository / 'apps').glob('*/source.json')))
+        application = application_declaration(self.repository)
+        if application['document']:
+            paths.append(self.repository / application['document'])
         for queue in self.queues.values():
             paths.extend([queue, Path(str(queue) + '-wal'), Path(str(queue) + '-journal')])
         paths.extend([self.repository / '.git'])
@@ -495,7 +516,9 @@ class Progress:
             if signature == self._signature:
                 return self._body, self._etag
             texts, sources, warnings = {}, [], []
-            for name in SOURCES:
+            application = application_declaration(self.repository)
+            documents = (*SOURCES, *([application['document']] if application['document'] else []))
+            for name in documents:
                 try:
                     texts[name] = self.document(name).decode('utf-8')
                     available = True
@@ -513,8 +536,9 @@ class Progress:
             if not texts['docs/hardware.md']:
                 parser['status'] = 'unavailable'
             status_counts = Counter(item['implementation'] for item in hardware)
-            mimus_parts = sections(texts['docs/mimus.md'])
-            mimus_summary = mimus_parts[0]['markdown'] if mimus_parts else ''
+            application_text = texts.get(application['document'], '')
+            application_parts = sections(application_text)
+            application_summary = application_parts[0]['markdown'] if application_parts else ''
             validation = sections(texts['docs/validation.md'])
             performance = next((part['markdown'].split('\n\n')[0] for part in validation
                                 if part['title'] == 'Schedule performance work after functional hardware support'), '')
@@ -536,8 +560,9 @@ class Progress:
                 'performance_note': performance, 'hardware': hardware,
                 'dependencies': parse_dependencies(texts['docs/hardware-dependencies.md'], hardware),
                 'handoff': parse_handoff(texts['docs/handoff.md']),
-                'mimus': {'summary': mimus_summary, 'markdown': texts['docs/mimus.md'],
-                          'url': '/api/document?path=docs%2Fmimus.md', 'links': links(texts['docs/mimus.md'], 'docs/mimus.md')},
+                'application': {**application, 'summary': application_summary, 'markdown': application_text,
+                          'url': '/api/document?path=' + quote(application['document'], safe='') if application['document'] else None,
+                          'links': links(application_text, application['document']) if application['document'] else []},
                 'git': git_metadata(self.local_git, self.common_git), 'queue': combined_queue(queues),
                 'queues': [{'port': port, **value} for port, value in queues]}
             self._body = json.dumps(snapshot, ensure_ascii=False, separators=(',', ':')).encode()

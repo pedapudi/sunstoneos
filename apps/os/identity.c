@@ -1,5 +1,5 @@
-/* EL3 publication hook of the integrated OS image. It publishes the fixed
- * recognition inputs, as the mimus board image does. The radio build also
+/* EL3 publication hook of the integrated OS image. It publishes the linked
+ * application manifest's INPUT regions. The radio build also
  * reads the four chip-ID words and publishes the radio profile span, as the
  * board image does for its radio workloads. The headset build reads the
  * Bluetooth profile and the chip-ID words and publishes both, as the

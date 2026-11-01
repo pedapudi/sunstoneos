@@ -35,7 +35,7 @@ m.mem_map(0x60000000, 0x10000)
 time_us = 100000
 stop = 0x6000fff0
 counter = image.address('a733_smp_counter')
-generation = image.address('mimus_board_generation')
+generation = image.address('os_application_activity_generation')
 
 
 def hook(cpu, address, size, unused):

@@ -1,6 +1,6 @@
 /* One concrete application of the task-bound API. The full catalogue remains
  * selectable through LOAD; this default caller compares one linked vector.
- * It never substitutes for any mimus model or accelerator dispatch hook. */
+ * The client exercises generic model sessions and accelerator dispatch. */
 #include "os.h"
 #include "npu.h"
 #include "../board/application.h"

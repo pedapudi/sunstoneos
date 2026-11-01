@@ -210,7 +210,7 @@ first in its include path. It selects the dedicated hardware-FIFO path
 and a 4 KiB vendor transmit FIFO, instead of the board's 2 KiB FIFO. A READ response no larger than the FIFO enters the
 empty FIFO in one exchange, so TinyUSB sends a zero-length packet only after
 its last byte; `usb.c` refuses a READ whose response would exceed
-`CFG_TUD_VENDOR_TX_BUFSIZE`. The catalogue's largest output, mimus-linear-q's
+`CFG_TUD_VENDOR_TX_BUFSIZE`. The catalogue's largest output, linear-i16-per-row's
 2,816 bytes, gives a 2,880-byte response, which the board-client case reads.
 The 2 KiB increase is `.bss`; the image's memory is the 768 MiB pool and the
 kernel sections, which this does not approach.

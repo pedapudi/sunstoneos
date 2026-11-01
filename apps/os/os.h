@@ -1,6 +1,6 @@
 #ifndef SUNSTONE_OS_H
 #define SUNSTONE_OS_H
-/* Integrated OS image (docs/os-image.md): the mimus board composition plus a
+/* Integrated OS image (docs/os-image.md): the board composition plus a
  * continuous thermal service, optional I2S microphone receive, an optional
  * radio station, an optional Bluetooth headset, one fixed interrupt table and
  * one fixed start list. */
@@ -11,7 +11,7 @@
  * throttled or failed. It grants no clock or voltage change. */
 int os_thermal_throttled(void);
 #if defined(SUNSTONE_A733_OS_HEADSET) && defined(SUNSTONE_A733_OS_AUDIO)
-#error The recognizer takes one capture source: the I2S microphone or the headset
+#error An application takes one capture source: the I2S microphone or the headset
 #endif
 #if defined(SUNSTONE_A733_OS_MSBC) && !defined(SUNSTONE_A733_OS_HEADSET)
 #error Wideband speech is a headset option
@@ -225,7 +225,7 @@ int os_capture(unsigned g,const uint8_t **wav,size_t *bytes);
 #endif
 
 /* Resident services after the board's own (apps/board/application.h). The
- * mimus board application reports as the first of them; the microphone
+ * linked application reports as the first of them; the microphone
  * build adds its capture client, the radio build the board's radio owner
  * and network client, and the headset build the Bluetooth owner and the
  * headset capture client. */

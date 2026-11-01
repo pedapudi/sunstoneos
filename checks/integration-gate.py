@@ -25,7 +25,8 @@ class GateTests(unittest.TestCase):
         self.sandbox = Path(self.temp.name)
         self.calls = self.sandbox / 'calls.jsonl'
         self.env = dict(os.environ, GATE_TEST_CALLS=str(self.calls), PYTHONDONTWRITEBYTECODE='1')
-        self.env.pop('MIMUS_DIR', None)
+        self.env.pop('EXAMPLE_DIR', None)
+        self.env.pop('SUNSTONE_EXTERNAL_APPLICATIONS', None)
         # These tools only record arguments. No build, emulator or device is used.
         stub = '''#!/usr/bin/env python3
 import json, os, pathlib, sys
@@ -53,8 +54,11 @@ if os.environ.get('GATE_TEST_FAIL') in args:
         source = self.sandbox / name
         source.mkdir()
         (source / 'CMakeLists.txt').write_text('project(gate-test)\n')
+        record = source / 'apps/example/source.json'
+        record.parent.mkdir(parents=True)
+        record.write_text('{"application_directory": "sunstoneos"}\n')
         git = ['git', '-c', 'user.name=gate', '-c', 'user.email=gate@example.invalid']
-        for command in (['init', '-q'], ['add', 'CMakeLists.txt'], ['commit', '-q', '-m', 'Gate test']):
+        for command in (['init', '-q'], ['add', '.'], ['commit', '-q', '-m', 'Gate test']):
             subprocess.run(git + command, cwd=source, check=True, capture_output=True)
         return source
 
@@ -65,16 +69,19 @@ if os.environ.get('GATE_TEST_FAIL') in args:
     def tree(self, source):
         return source.name + '-' + hashlib.sha256(str(source.resolve()).encode()).hexdigest()[:10]
 
-    def enable_mimus(self):
-        self.mimus = self.checkout('mimus')
-        port = self.mimus / 'sunstoneos'
+    def enable_example(self):
+        self.example = self.checkout('example')
+        port = self.example / 'sunstoneos'
         port.mkdir()
-        (port / 'CMakeLists.txt').write_text('add_sunstone_application(mimus)\n')
-        subprocess.run(['git', 'add', '.'], cwd=self.mimus, check=True, capture_output=True)
+        (port / 'CMakeLists.txt').write_text('add_sunstone_application(example)\n')
+        (port / 'gate.json').write_text(json.dumps({'name': 'example', 'checks': {'example-smp': ['smp-example-model', [
+            '{application}/sunstoneos/tools/check-example-smp.py', '--image', '{build}/smp-example-model.elf',
+            '--qemu', '{qemu}', '--evidence', '{evidence}/example-smp']]}}))
+        subprocess.run(['git', 'add', '.'], cwd=self.example, check=True, capture_output=True)
         subprocess.run(['git', '-c', 'user.name=gate', '-c', 'user.email=gate@example.invalid',
-                        'commit', '-q', '-m', 'Add application'], cwd=self.mimus, check=True, capture_output=True)
-        self.env['MIMUS_DIR'] = str(self.mimus)
-        return self.mimus / 'sunstoneos/tools/check-mimus-smp.py'
+                        'commit', '-q', '-m', 'Add application'], cwd=self.example, check=True, capture_output=True)
+        self.env['EXAMPLE_DIR'] = str(self.example)
+        return self.example / 'sunstoneos/tools/check-example-smp.py'
 
     def records(self):
         return [json.loads(line) for line in self.calls.read_text().splitlines()] if self.calls.exists() else []
@@ -100,46 +107,94 @@ if os.environ.get('GATE_TEST_FAIL') in args:
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         calls = self.records()
         self.assertEqual([c[0] for c in calls], ['cfg.sh', 'cmake', 'python'])
-        # The OS-core build overrides the MIMUS_DIR that cfg.sh passes.
-        self.assertEqual(calls[0][-1], '-DMIMUS_DIR=')
+        # The OS-core build overrides the EXAMPLE_DIR that cfg.sh passes.
+        self.assertEqual(calls[0][-1], '-DEXAMPLE_DIR=')
         self.assertEqual(calls[1][calls[1].index('--target') + 1:], ['kernel-check', '-j', '12'])
         self.assertEqual(calls[2][1], 'tools/check-kernel.py')
 
     def test_application_check_uses_its_own_build(self):
-        checker = self.enable_mimus()
-        result = self.run_gate('--reason', 'Recognition scheduling', '--check', 'kernel', '--check', 'mimus-smp')
+        checker = self.enable_example()
+        result = self.run_gate('--reason', 'Application scheduling', '--check', 'kernel', '--check', 'example-smp')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         calls = self.records()
         self.assertEqual([c[0] for c in calls], ['cfg.sh', 'cmake', 'cfg.sh', 'cmake', 'python', 'python'])
         core = self.sandbox / 'build' / ('gate-central-' + self.tree(self.source))
-        mimus = self.sandbox / 'build' / ('gate-mimus-' + self.tree(self.source))
-        self.assertEqual(calls[0][1:], [str(self.source), str(core), '-DSUNSTONE_APPLICATION=', '-DMIMUS_DIR='])
+        example = self.sandbox / 'build' / ('gate-example-' + self.tree(self.source))
+        self.assertEqual(calls[0][1:], [str(self.source), str(core), '-DSUNSTONE_APPLICATION=', '-DSUNSTONE_EXTERNAL_APPLICATIONS=', '-DEXAMPLE_DIR='])
         self.assertEqual(calls[1][calls[1].index('--target') + 1:], ['kernel-check', '-j', '12'])
-        self.assertEqual(calls[2][1:], [str(self.source), str(mimus), '-DMIMUS_DIR=' + str(self.mimus),
-                                      '-DSUNSTONE_A733_OS=ON', '-DSUNSTONE_APPLICATION=mimus'])
+        self.assertEqual(calls[2][1:], [str(self.source), str(example), '-DSUNSTONE_EXTERNAL_APPLICATIONS=', '-DEXAMPLE_DIR=',
+                                      '-DSUNSTONE_EXTERNAL_APPLICATIONS=' + str(self.example),
+                                      '-DSUNSTONE_A733_OS=ON', '-DSUNSTONE_APPLICATION=example'])
         self.assertEqual(calls[3][calls[3].index('--target') + 1:],
-                         ['sunstone-a733-os', 'smp-mimus-model', '-j', '12'])
+                         ['sunstone-a733-os', 'smp-example-model', '-j', '12'])
         self.assertEqual(calls[4][1], 'tools/check-kernel.py')
-        self.assertEqual(calls[5][calls[5].index('--image') + 1], str(mimus / 'smp-mimus-model.elf'))
+        self.assertEqual(calls[5][calls[5].index('--image') + 1], str(example / 'smp-example-model.elf'))
         self.assertEqual(calls[5][1], str(checker))
 
-    def test_application_check_requires_external_checkout(self):
-        result = self.run_gate('--reason', 'Recognition scheduling', '--check', 'mimus-smp')
+    def test_provenance_record_is_not_an_application_alias(self):
+        record = self.source / 'apps/pcie-test/source.json'
+        record.parent.mkdir(parents=True)
+        record.write_text('{"repository": "https://example.invalid/reference"}\n')
+        subprocess.run(['git', 'add', '.'], cwd=self.source, check=True, capture_output=True)
+        subprocess.run(['git', '-c', 'user.name=gate', '-c', 'user.email=gate@example.invalid',
+                        'commit', '-q', '-m', 'Add provenance record'], cwd=self.source, check=True, capture_output=True)
+        self.env['PCIE_TEST_DIR'] = str(self.sandbox / 'not-an-application')
+        result = self.run_gate('--reason', 'Application alias admission', '--check', 'kernel')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(any('PCIE_TEST_DIR' in arg for call in self.records() for arg in call))
+
+    def test_multiple_external_applications_keep_separate_builds(self):
+        self.enable_example()
+        second = self.checkout('second')
+        port = second / 'sunstoneos'
+        port.mkdir()
+        record = json.loads((self.example / 'sunstoneos/gate.json').read_text())
+        record = json.loads(json.dumps(record).replace('example', 'second'))
+        (port / 'gate.json').write_text(json.dumps(record))
+        subprocess.run(['git', 'add', '.'], cwd=second, check=True, capture_output=True)
+        subprocess.run(['git', '-c', 'user.name=gate', '-c', 'user.email=gate@example.invalid',
+                        'commit', '-q', '-m', 'Add second application'], cwd=second, check=True, capture_output=True)
+        self.env.pop('EXAMPLE_DIR')
+        self.env['SUNSTONE_EXTERNAL_APPLICATIONS'] = str(self.example) + ';' + str(second)
+        result = self.run_gate('--reason', 'Separate external applications',
+                               '--check', 'example-smp', '--check', 'second-smp')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        calls = self.records()
+        configurations = [call for call in calls if call[0] == 'cfg.sh']
+        self.assertEqual(len(configurations), 2)
+        self.assertNotEqual(configurations[0][2], configurations[1][2])
+        for call, name, checkout in zip(configurations, ('example', 'second'), (self.example, second)):
+            self.assertIn('-DSUNSTONE_APPLICATION=' + name, call)
+            self.assertIn('-DSUNSTONE_EXTERNAL_APPLICATIONS=' + str(checkout), call)
+        scripts = [call[1] for call in calls if call[0] == 'python']
+        self.assertEqual(scripts, [str(self.example / 'sunstoneos/tools/check-example-smp.py'),
+                                  str(second / 'sunstoneos/tools/check-second-smp.py')])
+
+    def test_malformed_application_is_refused_before_any_step(self):
+        self.enable_example()
+        (self.example / 'sunstoneos/gate.json').write_text('{"name": "../outside"}')
+        result = self.run_gate('--reason', 'External manifest admission', '--check', 'kernel')
         self.assertEqual(result.returncode, 2)
-        self.assertIn('mimus checks require', result.stderr)
+        self.assertIn('application names', result.stderr)
+        self.assertEqual(self.records(), [])
+
+    def test_application_check_requires_external_checkout(self):
+        result = self.run_gate('--reason', 'Application scheduling', '--check', 'example-smp')
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('external checks require', result.stderr)
         self.assertEqual(self.records(), [])
 
     def test_os_variant_build_precedes_external_application(self):
-        self.enable_mimus()
+        self.enable_example()
         result = self.run_gate('--reason', 'OS and optional application composition',
-                               '--variant', 'sup', '--check', 'mimus-smp')
+                               '--variant', 'sup', '--check', 'example-smp')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         calls = self.records()
         configured = [call for call in calls if call[0] == 'cfg.sh']
         self.assertEqual(len(configured), 2)
-        self.assertIn('-DMIMUS_DIR=', configured[0])
+        self.assertIn('-DEXAMPLE_DIR=', configured[0])
         self.assertIn('-DSUNSTONE_APPLICATION=', configured[0])
-        self.assertIn('-DSUNSTONE_APPLICATION=mimus', configured[1])
+        self.assertIn('-DSUNSTONE_APPLICATION=example', configured[1])
 
     def test_selected_variant_only(self):
         result = self.run_gate('--reason', 'Resident audio wiring', '--variant', 'resaud')
@@ -148,7 +203,7 @@ if os.environ.get('GATE_TEST_FAIL') in args:
         self.assertEqual(len(calls), 2)
         self.assertIn('-DSUNSTONE_A733_OS_AUDIO=ON', calls[0])
         self.assertNotIn('-DSUNSTONE_A733_OS_RADIO=ON', calls[0])
-        self.assertIn('-DMIMUS_DIR=', calls[0])
+        self.assertIn('-DEXAMPLE_DIR=', calls[0])
         self.assertIn('-DSUNSTONE_APPLICATION=', calls[0])
         self.assertEqual(calls[0][2], str(self.sandbox / 'build' / ('gate-os-resaud-' + self.tree(self.source))))
 
@@ -294,14 +349,14 @@ exec "$REAL" "$@"
         self.assertFalse((self.sandbox / 'build/gate-case/status.txt').exists())
 
     def test_failure_is_not_retried_and_later_checks_do_not_run(self):
-        checker = str(self.enable_mimus())
+        checker = str(self.enable_example())
         self.env['GATE_TEST_FAIL'] = checker
-        result = self.run_gate('--reason', 'Recognition scheduling', '--check', 'mimus-smp', '--check', 'progress')
+        result = self.run_gate('--reason', 'Application scheduling', '--check', 'example-smp', '--check', 'progress')
         self.assertEqual(result.returncode, 1)
         runs = [c for c in self.records() if c[0] == 'python']
         self.assertEqual(len(runs), 1)
         self.assertEqual(runs[0][1], checker)
-        self.assertIn('host deadline exceeded', (self.sandbox / 'build/gate-case/check-mimus-smp.log').read_text())
+        self.assertIn('host deadline exceeded', (self.sandbox / 'build/gate-case/check-example-smp.log').read_text())
 
     def test_configure_failure_prevents_checks(self):
         self.env['GATE_TEST_FAIL'] = str(self.source)
@@ -317,7 +372,7 @@ exec "$REAL" "$@"
         self.assertEqual((self.sandbox / 'build/gate-case/summary.txt').read_bytes(), before)
 
     def test_explicit_full_suite_and_declared_trials(self):
-        self.enable_mimus()
+        self.enable_example()
         catalogue = self.sandbox / 'build/npu-board/session-artifacts.json'
         catalogue.parent.mkdir(parents=True, exist_ok=True)
         catalogue.write_text('{}\n')
@@ -328,33 +383,33 @@ exec "$REAL" "$@"
         self.assertIn('other-image', central)
         self.assertNotIn('clean', central)
         self.assertNotIn('ignored.o', central)
-        self.assertEqual(sum(c[0] == 'cfg.sh' for c in calls), 14)  # core, mimus and twelve OS variants
-        application = next(c for c in calls if c[0] == 'cmake' and 'smp-mimus-model' in c)
-        # The fake lists the same targets in both builds; mimus builds only its own.
+        self.assertEqual(sum(c[0] == 'cfg.sh' for c in calls), 14)  # core, example and twelve OS variants
+        application = next(c for c in calls if c[0] == 'cmake' and 'smp-example-model' in c)
+        # The fake lists the same targets in both builds; example builds only its own.
         self.assertEqual(application[application.index('--target') + 1:],
-                         ['sunstone-a733-os', 'smp-mimus-model', '-j', '12'])
+                         ['sunstone-a733-os', 'smp-example-model', '-j', '12'])
         runs = [c for c in calls if c[0] == 'python']
         self.assertEqual(len(runs), 8)
         soak = next(c for c in runs if 'tools/check-smp.py' in c)
         self.assertEqual(soak[soak.index('--trials') + 1], '2')
 
-    def test_full_without_mimus_builds_only_os(self):
+    def test_full_without_example_builds_only_os(self):
         catalogue = self.sandbox / 'build/npu-board/session-artifacts.json'
         catalogue.parent.mkdir(parents=True, exist_ok=True)
         catalogue.write_text('{}\n')
         result = self.run_gate('--reason', 'Independent OS milestone', '--full')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         calls = self.records()
-        self.assertFalse(any('smp-mimus-model' in call for call in calls))
+        self.assertFalse(any('smp-example-model' in call for call in calls))
         self.assertEqual(sum(c[0] == 'cfg.sh' for c in calls), 13)
-        self.assertTrue(all('-DMIMUS_DIR=' in c for c in calls if c[0] == 'cfg.sh'))
+        self.assertTrue(all('-DEXAMPLE_DIR=' in c for c in calls if c[0] == 'cfg.sh'))
 
     def test_external_change_during_steps_fails(self):
-        self.enable_mimus()
-        self.env['GATE_TEST_TOUCH'] = str(self.mimus / 'changed.cc')
-        result = self.run_gate('--reason', 'External application changed', '--check', 'mimus-smp')
+        self.enable_example()
+        self.env['GATE_TEST_TOUCH'] = str(self.example / 'changed.cc')
+        result = self.run_gate('--reason', 'External application changed', '--check', 'example-smp')
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn('FAIL external mimus changed', result.stdout)
+        self.assertIn('FAIL external example changed', result.stdout)
 
     def test_build_root_keeps_new_directories_together(self):
         directory = self.sandbox / 'task-builds'

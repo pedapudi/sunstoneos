@@ -32,6 +32,8 @@ import subprocess
 import sys
 import time
 
+# Historical names keep the budget and lock shared with existing worktrees.
+# Mimus is the external application that originally supplied this guard.
 STATE = "/tmp/mimus-usb-churn.json"
 STATE_LOCK = "/tmp/mimus-usb-churn.lock"
 SYSFS = "/sys"
@@ -64,11 +66,17 @@ def _log(message: str) -> None:
   print(message, file=sys.stderr, flush=True)
 
 
+def _setting(name: str, default=None):
+  """Prefer SUNSTONE_USB settings; accept the external application's old names."""
+  return os.environ.get("SUNSTONE_USB_" + name,
+                        os.environ.get("MIMUS_USB_" + name, default))
+
+
 def settings() -> tuple[float, int, float]:
   """(spacing s, per-board cap, window s) from the environment."""
-  return (float(os.environ.get("MIMUS_USB_SPACING_S", SPACING_S)),
-          int(os.environ.get("MIMUS_USB_BOARD_CAP", BOARD_CAP)),
-          float(os.environ.get("MIMUS_USB_BOARD_WINDOW_S", BOARD_WINDOW_S)))
+  return (float(_setting("SPACING_S", SPACING_S)),
+          int(_setting("BOARD_CAP", BOARD_CAP)),
+          float(_setting("BOARD_WINDOW_S", BOARD_WINDOW_S)))
 
 
 # --- Churn budget -----------------------------------------------------------
@@ -127,7 +135,7 @@ def wait_needed(events: list[dict], board: str, count: int, now: float,
   if ends and now - max(ends) < spacing:
     return spacing - (now - max(ends)), (
         f"{spacing:.0f} s between USB re-enumerations of any board "
-        "(MIMUS_USB_SPACING_S)")
+        "(SUNSTONE_USB_SPACING_S)")
   recent = sorted((e for e in events
                    if e["board"] == board and now - e["start"] < window),
                   key=lambda e: e["start"])
@@ -139,7 +147,7 @@ def wait_needed(events: list[dict], board: str, count: int, now: float,
       if excess <= 0:
         return e["start"] + window - now, (
             f"board {board} re-enumerated {used} times in the last "
-            f"{window / 60:.0f} min (cap {cap}, MIMUS_USB_BOARD_CAP)")
+            f"{window / 60:.0f} min (cap {cap}, SUNSTONE_USB_BOARD_CAP)")
   return 0.0, ""
 
 
@@ -226,7 +234,7 @@ def failed_controllers(log_text: str) -> dict[str, str]:
   return failed
 
 
-def recovery_steps(pci: str, line: str) -> str:
+def recovery_steps(pci: str, line: str, health_setting: str = "SUNSTONE_USB_HEALTH") -> str:
   return f"""usb_guard: USB host controller {pci} failed during this boot:
   {line}
 Every device on it (boards, and any keyboard, mouse or Bluetooth adapter it
@@ -237,7 +245,7 @@ refused. Recovery, by the owner:
        sleep 2; echo {pci} | sudo tee /sys/bus/pci/drivers/xhci_hcd/bind
      (tools/host/README.md describes an optional watchdog that does this).
   2. Check that the boards are back: ls -l /dev/serial/by-id/
-MIMUS_USB_HEALTH=warn proceeds anyway."""
+{health_setting}=warn proceeds anyway."""
 
 
 _health_checked = 0.0
@@ -256,10 +264,12 @@ def check_health(log=_log, read_log=None) -> None:
     return
   failed = failed_controllers(text)
   if failed:
-    message = "\n".join(recovery_steps(pci, line)
+    health_setting = "SUNSTONE_USB_HEALTH" if "SUNSTONE_USB_HEALTH" in os.environ else (
+        "MIMUS_USB_HEALTH" if "MIMUS_USB_HEALTH" in os.environ else "SUNSTONE_USB_HEALTH")
+    message = "\n".join(recovery_steps(pci, line, health_setting)
                         for pci, line in failed.items())
-    if os.environ.get("MIMUS_USB_HEALTH") == "warn":
-      log(message + "\nusb_guard: MIMUS_USB_HEALTH=warn: continuing")
+    if _setting("HEALTH") == "warn":
+      log(message + f"\nusb_guard: {health_setting}=warn: continuing")
     else:
       raise SystemExit(message)
   _health_checked = time.monotonic()
@@ -280,7 +290,7 @@ def tty_controller(port: str) -> str | None:
 
 
 def neighbours(controller: str) -> list[str]:
-  """Input devices (not mimus boards) and Bluetooth adapters on a USB host
+  """Input devices (not development boards) and Bluetooth adapters on a USB host
   controller."""
   found = []
   for entry in sorted(glob.glob(os.path.join(SYSFS, "class", "input", "input*"))):

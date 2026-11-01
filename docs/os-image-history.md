@@ -329,7 +329,7 @@ The focused checks use modeled devices and task scheduling:
 - [Thermal integration](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/checks/os-thermal-throttle.py) covers startup,
   throttle/recovery, exact freshness expiry, the 70 °C stop, terminal-row
   publication and fixed snapshot capacity across CPU, GPU and CPU-clock builds.
-- [Report capture](../checks/os-thermal-report.py) executes the linked native
+- [Report capture](https://github.com/pedapudi/mimus/blob/port/sunstoneos-os-refs/sunstoneos/checks/os-thermal-report.py) executes the linked native
   admission, thermal task, window hooks, report copy and USB exchange. It checks
   page bounds, immutable generations, malformed requests, the excluded profile,
   terminal failure and separate host artifacts.

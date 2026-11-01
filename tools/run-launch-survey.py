@@ -82,7 +82,7 @@ def run(args):
         'manifest_sha256':hashlib.sha256(metadata).hexdigest(),'software_sha256':software_hash,'one_attempt':True,'launch_attempted':False,'device_access_attempted':False,'recovery_sha256':recovery_hash}
     def journal():save(args.evidence/'session.json',record)
     access=module('launch_survey_access',ROOT/'tools/usb-access.py')
-    sys.path.insert(0,str(Path.home()/'git/mimus/tools'));import usb_guard
+    import usb_guard
     usb_guard.check_health()
     with access.board_lock() as node:
         access.require_rom(node);identity=access.identity(node);port=access.target(node).name

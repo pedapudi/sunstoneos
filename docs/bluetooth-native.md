@@ -468,7 +468,12 @@ It retains the authenticated session and profile before provider initialization.
 Earlier integration reconciled its 210 compiled repository inputs. The capture,
 conversion and recognition evidence remains applicable.
 
-The [native USB check](../checks/bluetooth-usb-native.py) executes that frozen
+The [shared USB emulator](../checks/bluetooth-usb-native.py) supplies task,
+endpoint and architectural counter models for playback, repeated capture and
+mSBC checks. The application check imports it and adds recognition-specific
+fixtures and clock hooks.
+
+The [application USB check](https://github.com/pedapudi/mimus/blob/port/sunstoneos-os-refs/sunstoneos/checks/bluetooth-usb-native.py) executes that frozen
 image's recognition copy, serializer, USB task and TinyUSB device stack without
 rebuilding it. Five cases pass: fragmented output with a queued repeated request,
 malformed-request refusal, provider failure, deadline expiry and recognition stop

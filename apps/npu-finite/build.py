@@ -116,7 +116,7 @@ if a.runtime:
  for m in listed:
   if sha(fixture['MODEL'])==m['model']['sha256']:paths={'model':fixture['MODEL'],'inputs':[fixture['INPUT']],'references':[fixture['REFERENCE']]}
   else:
-   item=artifacts[m['name']];paths={'model':Path(item['model']),'inputs':[Path(x) for x in item['inputs']],'references':[Path(x) for x in item['references']]}
+   item=catalogue_tool.artifact_files(artifacts,m['name']);paths={'model':Path(item['model']),'inputs':[Path(x) for x in item['inputs']],'references':[Path(x) for x in item['references']]}
   model=paths['model'].read_bytes()
   assert len(model)==m['model']['bytes'] and sha(paths['model'])==m['model']['sha256'],m['name']
   assert len(paths['inputs'])==len(m['inputs']) and len(paths['references'])==len(m['outputs']),m['name']

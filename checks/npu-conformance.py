@@ -46,7 +46,7 @@ jobs = {name: plan(name)[1] for name in CATALOGUE if name in REFERENCES}
 kinds = [j['kind'] for js in jobs.values() for j in js]
 assert kinds.count('base') == 24 and kinds.count('line') == 55 and kinds.count('repeat') == 5, kinds
 assert {n: sum(j['kind'] == 'line' for j in js) for n, js in jobs.items()} == {
-    'conv8': 3, 'dual-u8': 4, 'dual-i8': 4, 'mimus-linear-q': 44, 'shufflenet-v2-published': 0}
+    'conv8': 3, 'dual-u8': 4, 'dual-i8': 4, 'linear-i16-per-row': 44, 'shufflenet-v2-published': 0}
 # ShuffleNetV2's input zero point equals its minimum code, so that vector runs
 # once; it repeats the maximum vector, whose output is unsaturated.
 assert [j['label'] for j in jobs['shufflenet-v2-published']] == [
@@ -56,8 +56,8 @@ harness.refused(lambda: tool.plan_jobs(CATALOGUE['shufflenet-v2-published'],
                                        reference_input(CATALOGUE['shufflenet-v2-published']), False, 'minimum'),
                 'no minimum base vector to repeat')
 assert [j['label'] for j in jobs['conv8'][:5]] == ['reference', 'zero point', 'minimum', 'maximum', 'seeded']
-mimus = CATALOGUE['mimus-linear-q']
-assert jobs['mimus-linear-q'][2]['vector'] == (b'\x00\x80' * 1408,)    # INT16 minimum, little endian
+linear = CATALOGUE['linear-i16-per-row']
+assert jobs['linear-i16-per-row'][2]['vector'] == (b'\x00\x80' * 1408,)    # INT16 minimum, little endian
 assert jobs['dual-i8'][1]['vector'] == (b'\xff' * 192, b'\xff' * 36)  # INT8 zero point -1
 
 # Each input-line vector equals the previous job's vector except in its own line.
@@ -92,8 +92,8 @@ assert tool.difference(u8, expected, expected) == dict(differing=0, positions=[]
 shuffle = CATALOGUE['shufflenet-v2-published']
 assert tool.saturated(shuffle, (b'\x00\xff',)) and tool.saturated(shuffle, (b'\xff\xff',))
 assert not tool.saturated(shuffle, (b'\xfb\x05',))
-assert tool.saturated(mimus, (b'\xff\x7f\x00\x80' * 704,))
-assert not tool.saturated(mimus, (b'\xff\x7f\x00\x80' * 703 + b'\x00\x00\x00\x80',))
+assert tool.saturated(linear, (b'\xff\x7f\x00\x80' * 704,))
+assert not tool.saturated(linear, (b'\xff\x7f\x00\x80' * 703 + b'\x00\x00\x00\x80',))
 
 # Line coverage. An input line is covered only by its own line job, when that
 # job's output differs from the preceding job's; a base pair covers no input
@@ -110,11 +110,11 @@ assert coverage == dict(input_lines=3, output_lines=2, uncovered_input_lines=[(0
 
 # The int32-bias rule: exact sums, the bias rounded once to accumulator units
 # (half to even), one rounding of the result, then the clamp.
-assert tool.mimus_int32_bias([3, -2], 1, 2, [5, 7], 1, [0.5], [0.1875], 0.25, 0.25, 0, -8, 8) == [2]
-assert tool.mimus_int32_bias([3, -2], 1, 2, [5, 7], 1, [0.5], [0.3125], 0.25, 0.125, 0, -8, 8) == [3]
-assert tool.mimus_int32_bias([3, -2], 1, 2, [5, 7], 1, [0.5], [0.4375], 0.25, 0.125, 1, -8, 8) == [6]
-assert tool.mimus_int32_bias([300, 0], 1, 2, [100, 0], 1, [1.0], [0.0], 1.0, 1.0, 0, -8, 8) == [8]
-assert tool.mimus_int32_bias([1, 2, 3, 4], 2, 2, [1, 0, 0, 1, 1, 1], 3, [1.0] * 3, [0.0] * 3,
+assert tool.int32_bias([3, -2], 1, 2, [5, 7], 1, [0.5], [0.1875], 0.25, 0.25, 0, -8, 8) == [2]
+assert tool.int32_bias([3, -2], 1, 2, [5, 7], 1, [0.5], [0.3125], 0.25, 0.125, 0, -8, 8) == [3]
+assert tool.int32_bias([3, -2], 1, 2, [5, 7], 1, [0.5], [0.4375], 0.25, 0.125, 1, -8, 8) == [6]
+assert tool.int32_bias([300, 0], 1, 2, [100, 0], 1, [1.0], [0.0], 1.0, 1.0, 0, -8, 8) == [8]
+assert tool.int32_bias([1, 2, 3, 4], 2, 2, [1, 0, 0, 1, 1, 1], 3, [1.0] * 3, [0.0] * 3,
                              1.0, 1.0, 0, -99, 99) == [1, 2, 3, 3, 4, 7]
 
 # Per-model verdict.
@@ -180,7 +180,7 @@ assert tool.evaluate(model, js, None, references, catalogued)['failures'] == ['n
 text = tool.bindings(CATALOGUE['conv8'])
 assert '#define NPU_CONFORMANCE_INPUTS 1' in text and '#define NPU_CONFORMANCE_OUTPUTS 1' in text
 assert '{ 4, { 8, 8, 3, 1 }, VSI_NN_TYPE_UINT8, 0x1.0101020000000p-6f, 127, 192 },' in text, text
-assert '{ 2, { 176, 8, 0, 0 }, VSI_NN_TYPE_INT16,' in tool.bindings(mimus)
+assert '{ 2, { 176, 8, 0, 0 }, VSI_NN_TYPE_INT16,' in tool.bindings(linear)
 
 # Timeouts: the one-vector limit plus four per-vector times for each further job.
 assert tool.invocation_limit(dict(one_vector_limit=600, per_vector_seconds=8.5), 5) == 736
@@ -196,7 +196,7 @@ assert t == dict(prepare_seconds=0.005, first_job_seconds=4.0, steady_job_second
 # Runner lanes: the catalogue's longest invocation runs alone.
 lane_plan = dict(models={n: dict(per_vector_seconds=REFERENCES[n]['per_vector_seconds']) for n in jobs})
 assert tool.lanes(lane_plan, jobs) == [['shufflenet-v2-published'],
-                                       ['mimus-linear-q', 'dual-u8', 'dual-i8', 'conv8']], tool.lanes(lane_plan, jobs)
+                                       ['linear-i16-per-row', 'dual-u8', 'dual-i8', 'conv8']], tool.lanes(lane_plan, jobs)
 assert tool.lanes(dict(models=dict(a=dict(per_vector_seconds=1))), dict(a=[0])) == [['a']]
 
 # Staging refuses any changed or missing pinned identity.

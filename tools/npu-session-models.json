@@ -312,7 +312,7 @@
    "compiler": "published A733 SDK example (examples/vpm_run/operator/v3), not the pinned compiler"
   },
   {
-   "name": "mimus-linear-q",
+   "name": "linear-i16-per-row",
    "model": {
     "bytes": 34248,
     "sha256": "4872524cf2bd0681e9b17c8a8bcaa61615dc925e31313d6d1f0dba2fea4eacb0"
@@ -363,7 +363,8 @@
    "descriptor_patches": 11,
    "state_patches": 3,
    "command_body_bytes": 144,
-   "compiler": "tools/npu-mimus-linear.sh, mimus encoder.layers.0.self_attn.linear_q, int16 activations, mimus int8 codes and per-row scales"
+   "compiler": "Pinned compiler, int16 activations, int8 weights and per-row scales",
+   "comment": "Application example: extracted from the mimus encoder.layers.0.self_attn.linear_q layer using the historical tools/npu-mimus-linear.sh script. Model bytes and digests are pinned above."
   },
   {
    "name": "conv12",
