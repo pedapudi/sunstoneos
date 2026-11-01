@@ -76,7 +76,7 @@ def main():
  cases={
   'output':(['apps/hdmi/output.c'],['normal-stop','session-expiry','health-fault','stop-fault','wrong-task','time-regression']),
   'admission':(['apps/hdmi/admission.c','drivers/storage/storage_digest.c'],['immutable-session']),
-  'controller':(['drivers/display/a733_hdmi.c','drivers/display/a733_hdmi_phy.c','drivers/display/a733_tcon_tv.c'],
+  'controller':(['drivers/display/a733_hdmi.c','drivers/display/sunstone_edid.c','drivers/display/a733_hdmi_phy.c','drivers/display/a733_tcon_tv.c'],
    ['independent','supervised','ambiguous','missing','wrong-mode']),
   'native':([],['independent','supervised','ambiguous','missing','wrong-mode'])}
  images={}

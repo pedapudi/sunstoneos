@@ -53,7 +53,7 @@ def main():
  run('image-build',['cmake','--build',build,'--target','sunstone-a733-hdmi','-j4'])
  image=build/'sunstone-a733-hdmi.elf'
  units=[u for u in json.loads((build/'compile_commands.json').read_text()) if 'sunstone-a733-hdmi.dir/' in u['command']]
- selected=['platform/a733/hdmi_native.c','drivers/display/a733_hdmi.c','drivers/display/a733_hdmi_phy.c','drivers/display/a733_tcon_tv.c','drivers/clock/a733_clock_leases.c','drivers/power/a733_rail_leases.c','drivers/power/a733_pmic.c','drivers/pinctrl/a733_pins.c','drivers/pinctrl/a733_pin_tables.c','drivers/gpu/a733_gpu_resources.c','platform/a733/counter_clock.c','arch/aarch64/device_memory.c','platform/a733/shared_locks.c','runtime/memory.c']
+ selected=['platform/a733/hdmi_native.c','drivers/display/a733_hdmi.c','drivers/display/sunstone_edid.c','drivers/display/a733_hdmi_phy.c','drivers/display/a733_tcon_tv.c','drivers/clock/a733_clock_leases.c','drivers/power/a733_rail_leases.c','drivers/power/a733_pmic.c','drivers/pinctrl/a733_pins.c','drivers/pinctrl/a733_pin_tables.c','drivers/gpu/a733_gpu_resources.c','platform/a733/counter_clock.c','arch/aarch64/device_memory.c','platform/a733/shared_locks.c','runtime/memory.c']
  objects=[]
  for name in selected:
   unit=next(u for u in units if Path(u['file'])==ROOT/name);cmd=shlex.split(unit['command']);obj=Path(cmd[cmd.index('-o')+1]);objects.append(obj if obj.is_absolute() else Path(unit['directory'])/obj)

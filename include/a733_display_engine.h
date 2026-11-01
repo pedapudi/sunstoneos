@@ -1,6 +1,7 @@
 #ifndef SUNSTONE_A733_DISPLAY_ENGINE_H
 #define SUNSTONE_A733_DISPLAY_ENGINE_H
 #include "a733_tcon_lcd.h"
+#include "sunstone_display.h"
 #include <stdint.h>
 
 #define A733_DE_BASE UINT32_C(0x05000000)
@@ -19,6 +20,10 @@ struct a733_de_plan {
  * Native timing admission composes the existing LCD1/DSI1 planner. No clock
  * measurement, pin selection or framebuffer access occurs. Inputs/output
  * must be disjoint. Output is unchanged on rejection. */
+/* Generic scanout geometry; no output-controller or serializer dependency.
+ * Format is XRGB8888 (pixel_bytes=4) or RGB565 (pixel_bytes=2). */
+int a733_de_plan_mode(const struct sunstone_display_mode *,unsigned pixel_bytes,
+    const struct a733_de_surface *,struct a733_de_plan *);
 int a733_de_plan(const struct a733_tcon_lcd_timing *, const struct a733_de_surface *, struct a733_de_plan *);
 
 /* Additional closed profiles: UCH3 -> DE1 -> TV0 or TV1, 1280x720 RGB565.

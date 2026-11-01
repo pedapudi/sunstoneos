@@ -60,7 +60,8 @@ int sunstone_uvc_descriptors(struct sunstone_uvc_catalog *c, const void *data,
         unsigned count = p[25];
         if (count ? (l < 26 + 4 * count) : (l < 38))
           return -1;
-        struct sunstone_uvc_mode *m = &c->mode[c->modes++];
+        unsigned at = c->modes++;
+        struct sunstone_uvc_mode *m = &c->mode[at];
         *m = (struct sunstone_uvc_mode){fmt,          idx,         p[3],
                                         iface,        le16(p + 5), le16(p + 7),
                                         le32(p + 21), le32(p + 17)};
@@ -68,16 +69,25 @@ int sunstone_uvc_descriptors(struct sunstone_uvc_catalog *c, const void *data,
           return -1;
         if (count) {
           int found = 0;
-          for (unsigned i = 0; i < count; i++)
-            if (le32(p + 26 + 4 * i) == m->interval)
+          for (unsigned i = 0; i < count; i++) {
+            uint32_t interval = le32(p + 26 + 4 * i);
+            if (!interval)
+              return -1;
+            c->intervals[at].discrete[i] = interval;
+            if (interval == m->interval)
               found = 1;
+          }
+          c->intervals[at].count = count;
           if (!found)
             return -1;
         } else {
           uint32_t lo = le32(p + 26), hi = le32(p + 30), step = le32(p + 34);
-          if (!step || m->interval < lo || m->interval > hi ||
+          if (!lo || !step || m->interval < lo || m->interval > hi ||
               (m->interval - lo) % step)
             return -1;
+          c->intervals[at].minimum = lo;
+          c->intervals[at].maximum = hi;
+          c->intervals[at].step = step;
         }
       }
     }
@@ -216,7 +226,7 @@ static int payload_body(struct sunstone_uvc *s, uint64_t generation,
     return -4;
   }
   if (bytes) {
-    f->slice[f->slices++] = (struct sunstone_uvc_slice){data, bytes, lease};
+    f->slice[f->slices++] = (struct sunstone_camera_span){data, bytes, lease};
     f->bytes += bytes;
   } else
     s->ops.release(s->ops.context, lease);

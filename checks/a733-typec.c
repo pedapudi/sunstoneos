@@ -116,6 +116,9 @@ unsigned typec_native_check(void)
             typec_checkpoint(4);
             if(typec_fault_case==7){
                 unsigned accesses=typec_mmio_count;pmic.failed=1;
+                /* PMIC fault() publishes loss through the shared authority;
+                 * live() reads that publication without the PMIC mutex. */
+                a733_power_authority_set(&rails.authority,A733_POWER_PROVIDER_FAULT);
                 assert(a733_typec_poll(&port.provider)==-1&&port.setup_fault&&!port.pin.id);
                 assert(typec_mmio_count==accesses&&port.clock.id&&port.rail.id);return 0;
             }

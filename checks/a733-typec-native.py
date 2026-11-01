@@ -14,6 +14,8 @@ parser.add_argument('--block-only',action='store_true')
 parser.add_argument('--mode',choices=['all','build','execute'],default='all')
 parser.add_argument('--steady-max-reads',type=int,default=21,help='STATUS0 reads allowed in 100 ms of attached monitoring')
 parser.add_argument('--steady-old-loop',action='store_true',help='Model the earlier board loop that yielded after each monitoring step')
+parser.add_argument('--fault-cases',type=int,nargs='+',choices=range(1,9),default=list(range(1,9)),
+                    help='Fault continuations after nominal checkpoint setup; select failed or unexecuted cases')
 args=parser.parse_args();repo=args.repository.resolve();out=args.output.resolve()
 cache=Path.home()/'.cache/sunstoneos';source=cache/'sources'
 compiler=Path('/usr/lib/llvm-21/bin/clang').resolve()
@@ -41,7 +43,7 @@ if args.mode!='execute':
  (out/'assert.h').write_text('#pragma once\n_Noreturn void platform_panic(const char *,unsigned);\n#define assert(x) do {if(!(x))platform_panic(__FILE__,__LINE__);} while(0)\n')
  (out/'support.c').write_text('_Noreturn void platform_panic(const char *file,unsigned line){(void)file;(void)line;for(;;)__asm__ volatile("brk #0");}\n')
  (out/'link.ld').write_text('ENTRY(typec_native_check)\nSECTIONS { . = 0x40000000; .text : { *(.text*) } .rodata : { *(.rodata*) } .data : { *(.data*) } .bss : { *(.bss*) *(COMMON) } }\n')
- units=['checks/a733-typec.c','drivers/usb/a733_typec.c','drivers/usb/a733_typec_pd.c','platform/a733/typec_native.c','drivers/i2c/a733_twi.c',
+ units=['checks/a733-typec.c','drivers/usb/a733_typec.c','drivers/usb/a733_typec_pd.c','platform/a733/typec_native.c','drivers/board/orangepi_zero3w.c','drivers/i2c/a733_twi.c',
   'drivers/clock/a733_clock_leases.c','drivers/power/a733_rail_leases.c','drivers/power/a733_pmic.c','drivers/power/a733_pmic_native.c',
   'drivers/pinctrl/a733_pins.c','drivers/pinctrl/a733_pin_tables.c','drivers/pinctrl/a733_pins_native.c','drivers/gpu/a733_gpu_resources.c',
   'platform/a733/counter_clock.c','arch/aarch64/device_memory.c','platform/a733/shared_locks.c','runtime/memory.c']
@@ -264,6 +266,7 @@ assert all(which in checkpoints for which in (1,2,3,4))
 for fault,point,name in [(1,1,'attach-cc2-detach'),(2,2,'external-vbus-refusal'),(3,3,'retained-i2c-independent-power-off'),
  (4,3,'provider-stall-power-off'),(5,3,'invalid-host-token'),(6,3,'registry-busy-pending-shutdown'),(7,4,'pre-pin-authority-loss'),
  (8,3,'steady-monitor-100ms')]:
+ if fault not in args.fault_cases:continue
  mode=name;context,memory,hardware=checkpoints[point]
  for a,data in memory:u.mem_write(a,data)
  u.context_restore(context);state=copy.deepcopy(hardware);put(symbols['typec_fault_case'],fault)
@@ -275,5 +278,5 @@ for fault,point,name in [(1,1,'attach-cc2-detach'),(2,2,'external-vbus-refusal')
   (out/'steady-monitor.json').write_text(json.dumps(steady,indent=2)+'\n')
   assert 0<steady['status_reads']<=args.steady_max_reads
 assert all(hashlib.sha256(Path(p).read_bytes()).hexdigest()==v['sha256'] for p,v in inputs.items())
-(out/'completed.json').write_text(json.dumps({'result':'pass','nominal_runs':1,'checkpoint_continuations':8,'physical':False,
+(out/'completed.json').write_text(json.dumps({'result':'pass','nominal_runs':1,'checkpoint_continuations':len(set(args.fault_cases)),'fault_cases':args.fault_cases,'physical':False,
  'inputs':len(inputs),'instruction_allowance_upper_bound':instruction_allowance,'scope':'actual native providers; modeled MMIO, scheduler and electrical qualification'},indent=2)+'\n')
