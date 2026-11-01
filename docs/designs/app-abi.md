@@ -28,10 +28,12 @@ The kit includes:
   checksum of an input region;
 - the external mimus manifest at `sunstoneos/apps/mimus-board/manifest.json`,
   which pins its addresses, sizes and digests;
-- `checks/sunstone-app-abi.py`: compiles both manifests for the host and for
-  `aarch64-none-elf`, compares the compiled section bytes with the tool's
-  packing, runs hello-compute on a host model of the calls, checks the mimus
-  draft against today's constants, and checks eleven refusals.
+- `checks/sunstone-app-abi.py`: compiles hello-compute and a synthetic manifest
+  for the host and for `aarch64-none-elf`, compares their sections with the
+  generator, runs hello-compute at input boundaries, and checks malformed
+  manifests. Repeatable `--manifest PATH` arguments add external manifests.
+  Application-specific input and runtime-bound assertions live in each
+  application repository.
 
 The native OS image implements the calls and links applications through the
 kit. Mimus lives in its own repository; hello-compute remains in SunstoneOS.
@@ -266,6 +268,45 @@ protection remains outside this implementation.
 The image link check also refuses an application object that references a
 symbol outside its own sources, the `ss_*` calls, FreeRTOS and the C and C++
 libraries.
+
+## External checkouts supply their build hooks and checks
+
+`SUNSTONE_EXTERNAL_APPLICATIONS` is a CMake list of external checkout paths.
+Each checkout supplies `sunstoneos/cmake/register.cmake`, which sets
+`SUNSTONE_APPLICATION_<name>_ROOT` to its port directory. The OS includes
+optional `cmake/engine.cmake` before its board targets and optional
+`cmake/targets.cmake` after them. When `SUNSTONE_APPLICATION` selects the
+registered name, the OS includes the port's `cmake/application.cmake` and
+links that application through `add_sunstone_image()`.
+
+An empty application selection builds only OS services. The in-tree
+hello-compute application uses the same application interface. Optional
+compatibility variables come from the directory names of `apps/*/source.json`:
+for example, `MIMUS_DIR` selects the external mimus checkout. This is an
+external application example; the OS does not require that checkout.
+
+The integration gate accepts repeatable `--application PATH` arguments or the
+semicolon-separated `SUNSTONE_EXTERNAL_APPLICATIONS` environment variable.
+It also reads the optional compatibility variables. Each selected checkout
+supplies `sunstoneos/gate.json` with its name and checks:
+
+```json
+{
+  "name": "example",
+  "checks": {
+    "example-model": ["example-model", [
+      "{application}/sunstoneos/checks/model.py", "--image", "{build}/example-model.elf"
+    ]]
+  }
+}
+```
+
+Each check declares a build target and an argument list. The gate substitutes
+`{application}`, `{build}`, `{cache}`, `{qemu}` and `{evidence}`. Selected checks
+build their application's image and targets in a separate build directory;
+`--full` builds every selected application. Core builds clear all external
+selectors. Application names and check names must be unique, and the gate
+records and rechecks every selected checkout's Git state.
 
 ## Migration of the mimus mechanisms
 

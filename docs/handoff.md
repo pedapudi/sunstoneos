@@ -19,6 +19,27 @@ protocol behavior. They establish no new physical qualification. The
 legacy GPU session remains behind `SUNSTONE_A733_OS_LEGACY_MIMUS_GPU` until
 the generic compute queue is implemented. Board state below remains current.
 
+External checkouts register through `SUNSTONE_EXTERNAL_APPLICATIONS`; each
+port supplies its integration targets and commands in `sunstoneos/gate.json`.
+The application owns its speech capture recipes and manifest/admission checks.
+The fixed six-entry NPU catalogue names its application-derived linear fixture
+`linear-i16-per-row`; model bytes and hashes are unchanged.
+
+OS-only, hello-compute, external recognition, returning, I2S transcription and
+headset recognition images build. Cached QEMU recognition matches the host
+reference. Gate, ABI, NPU session/conformance, USB, fault-capture and returned
+thermal host checks pass. The I2S parent/adapter fixture still returns 13, and
+the Bluetooth host admission fixture lacks a valid USB reference mode.
+Dashboard parser cases pass; its HTTP case requires local socket access.
+Raw evidence is under `~/.cache/sunstoneos/build/os-refs-1031/`.
+
+Before preparing application images, the launcher owner must load the clock
+review and Bluetooth preparation wrappers from the application port's
+`apps/os/cpu-return-clock-review.py` and `apps/bluetooth/prepare.py`. The generic
+OS validators require application reservation names and callbacks explicitly.
+The launcher also retains its application asset-symbol lookup. Feature review
+and these launcher-owner changes remain outstanding. No board run is requested.
+
 ## Paused after the 2026-10-31 tranche
 
 Physical bring-up is paused; resume board work only when the user asks. Both boards remain
