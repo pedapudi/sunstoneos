@@ -65,18 +65,21 @@ manifests supply their revision, URL, hash and license.
 
 ## Native providers complete writes before dependent operations
 
-A Data Synchronization Barrier (`DSB SY`) completes preceding explicit memory
-accesses before execution continues. A volatile access or Data Memory Barrier
+A Data Synchronization Barrier (`DSB SY`) establishes architectural completion
+of preceding explicit memory accesses before execution continues. A volatile access or Data Memory Barrier
 (`DMB`) alone does not establish write completion. Completion of a CPU write
 also does not establish a device's internal transition, DMA drain or output
 visibility; those still require the status and ownership conditions below.
 
 The following paths reach actual native providers, including application-owned
 adapters. `both` means `DSB SY; access; DSB SY`; `after` means
-`access; DSB SY`, as implemented in `include/a733_mmio.h`. Every listed native
-write completes before its callback returns. A timer sample taken after that
-return can anchor an inter-write minimum. Host replacements of these providers
-need separate ordering tests.
+`access; DSB SY`, as implemented in `include/a733_mmio.h`. Each listed native
+callback reaches architectural write completion before it returns. Completion
+follows the admitted memory type: Device-nGnRE permits early acknowledgment
+before endpoint arrival. Models must represent any remaining propagation
+separately. A timer sample after the required device visibility point can
+anchor an inter-write minimum. Host replacements of these providers need
+separate ordering tests.
 
 | Completion-sensitive sites | Effective native provider and barrier | Pinned source order and delay |
 | --- | --- | --- |
@@ -170,7 +173,9 @@ Useful consumers for a model that queues writes until a barrier include the
 DISPLL N→20 µs→divider/UPDATE sequence, ISP0 load-address/READY→GEN→START and
 retained rearm, DE RCQ header/length→submit, codec flush/trigger→status, and G2D
 acknowledgment→reset→copy. The model should keep stale visible registers while
-writes are pending and start hardware latency only when a write becomes visible.
+writes are pending and start hardware latency only when the write reaches the
+modeled endpoint. Architectural write completion and endpoint arrival need
+separate events wherever early acknowledgment is permitted.
 For minimum holds, the next operation must remain refused until the full
 source interval after that visibility point. An omitted barrier must fail even
 when a later status read would otherwise return success. Linked instruction
