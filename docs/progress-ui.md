@@ -141,7 +141,7 @@ panels do not modify project state.
 Run the backend check with:
 
 ```sh
-python3 -B checks/progress.py
+python3 -B checks/progress.py --output /absolute/new/progress-checks
 ```
 
 The focused fixture checks inventory coverage, planned rows, host-versus-physical
@@ -150,8 +150,9 @@ It also checks scoped subsystem records, missing and malformed records, nested
 document access, relative links, cache invalidation, Git worktree metadata, unchanged queue bytes,
 secret omission, concurrent queue changes, document boundaries, symlink refusal,
 Host/Origin validation and HTTP conditional requests. Temporary SQLite files and a loopback HTTP server are
-confined to the fixture. Fixture directories move to the local trash after each
-check. No board access occurs.
+confined to fresh fixture directories beneath the required `--output` directory.
+The output directory must not exist. Every fixture remains there for inspection
+after the check. No board access occurs.
 
 Subsystem-record parser and headless browser checks pass under
 `~/.cache/sunstoneos/build/check-selection-1031/dashboard/`. The browser checks

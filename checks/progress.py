@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Focused parser, caching, read-only queue and HTTP boundary checks."""
+import argparse
 import hashlib
 import http.client
 import importlib.util
@@ -18,11 +19,12 @@ spec.loader.exec_module(progress)
 
 
 class Check(unittest.TestCase):
+    output_root = None
+
     def setUp(self):
-        build = Path.home() / '.cache/sunstoneos/build/check-selection-1031/dashboard'
-        build.mkdir(parents=True, exist_ok=True)
-        self.root = Path(tempfile.mkdtemp(prefix='progress-', dir=build))
-        self.addCleanup(self.retain_fixture)
+        if self.output_root is None:
+            raise RuntimeError('The fixture requires a new --output directory.')
+        self.root = Path(tempfile.mkdtemp(prefix='progress-', dir=self.output_root))
         (self.root / 'docs').mkdir()
         for name in progress.SOURCES:
             (self.root / name).write_bytes((ROOT / name).read_bytes())
@@ -32,11 +34,6 @@ class Check(unittest.TestCase):
             destination.write_bytes(source.read_bytes())
         self.queue = self.root / 'queue.sqlite3'
         self.view = progress.Progress(self.root, {'3-1': self.queue})
-
-    def retain_fixture(self):
-        trash = Path.home() / '.cache/sunstoneos/trash/check-selection-dashboard-1031'
-        trash.mkdir(parents=True, exist_ok=True)
-        self.root.rename(trash / self.root.name)
 
     def test_application_display_comes_from_a_declaration(self):
         first = json.loads(self.view.snapshot()[0])
@@ -491,4 +488,9 @@ class Check(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    unittest.main()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output', type=Path, required=True, help='new directory retaining all fixtures')
+    arguments = parser.parse_args()
+    arguments.output.mkdir(parents=True, exist_ok=False)
+    Check.output_root = arguments.output
+    unittest.main(argv=['progress'])
