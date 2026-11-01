@@ -16,6 +16,8 @@ struct device {
     uint64_t ticks, frequency, quantum, settle, low_at;
     uint32_t clock, shader, status, high_value;
     unsigned gated, pulse, health, calls, fail_at, failed, accesses;
+    unsigned failed_kind;
+    uint32_t failed_offset, failed_value;
     unsigned writes, reads, resume_reads, completed_pulses;
     unsigned stuck, bad_clock, bad_shader, bad_idle, slow;
     struct register_latency effect;
@@ -27,11 +29,13 @@ static void apply(struct device *d)
     d->clock=reg_latency_apply(&d->effect,d->ticks,d->clock);
     if (!d->effect.pending) d->gated=!!(d->clock&1u);
 }
-static int access_ok(struct device *d)
+static int access_ok(struct device *d,unsigned kind,uint32_t offset,uint32_t value)
 {
     assert(!d->failed);
     ++d->calls;
-    if(d->calls==d->fail_at){d->failed=1;return 0;}
+    if(d->calls==d->fail_at){
+        d->failed=1;d->failed_kind=kind;d->failed_offset=offset;d->failed_value=value;return 0;
+    }
     return 1;
 }
 static void trace(struct device *d,unsigned write,uint32_t offset,uint32_t value)
@@ -42,7 +46,7 @@ static void trace(struct device *d,unsigned write,uint32_t offset,uint32_t value
 static int read32(void *cookie,uint32_t offset,uint32_t *value)
 {
     struct device *d=cookie;
-    if(!access_ok(d))return 0;
+    if(!access_ok(d,NPU_IDLE_READ,offset,0))return 0;
     apply(d);
     /* The only source-backed suspended read is resume's clock control. */
     if(d->gated){assert(offset==0);++d->resume_reads;}
@@ -61,7 +65,7 @@ static int read32(void *cookie,uint32_t offset,uint32_t *value)
 static int write32(void *cookie,uint32_t offset,uint32_t value)
 {
     struct device *d=cookie;
-    if(!access_ok(d))return 0;
+    if(!access_ok(d,NPU_IDLE_WRITE,offset,value))return 0;
     apply(d);++d->writes;trace(d,1,offset,value);
     assert(!d->gated||offset==0);
     if(offset==0){
@@ -93,7 +97,7 @@ static uint64_t now(void *cookie)
 static int health(void *cookie)
 {
     struct device *d=cookie;
-    return access_ok(d)&&d->health;
+    return access_ok(d,NPU_IDLE_HEALTH,0,0)&&d->health;
 }
 static const struct npu_idle_ops ops={read32,write32,now,health};
 static void fresh(struct device *d,uint64_t frequency,unsigned enabled)
@@ -123,6 +127,10 @@ static void retained(struct device *d)
     const unsigned accesses=d->accesses,calls=d->calls;
     const struct npu_idle_failure failure=d->idle.failure;
     assert(failure.site);
+    if(d->failed){
+        assert(failure.site==d->failed_kind&&failure.offset==d->failed_offset);
+        assert(failure.value==d->failed_value);
+    }
     assert(npu_idle_gate(&d->idle)!=1&&npu_idle_resume(&d->idle)!=1);
     npu_idle_completed(&d->idle,d->ticks+1);
     npu_idle_retain(&d->idle,NPU_IDLE_OWNER,0xdead,0xbeef,0);
@@ -217,7 +225,9 @@ static void readback(void)
         if(at==0)d.bad_clock=1;
         if(at==1)d.bad_shader=1;
         if(at==2)d.bad_idle=1;
-        assert(npu_idle_resume(&d.idle)!=1);retained(&d);
+        assert(npu_idle_resume(&d.idle)!=1);
+        assert(d.idle.failure.site==(at==0?NPU_IDLE_GATE_VALUE:at==1?NPU_IDLE_SHADER_VALUE:NPU_IDLE_FULL_IDLE));
+        retained(&d);
     }
     for(unsigned at=0;at<5;++at){
         struct device d;fresh(&d,24000000,1);mature(&d);
