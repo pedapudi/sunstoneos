@@ -248,7 +248,7 @@ class NoHold:
         return getattr(self._base, name)
     @staticmethod
     def hold_ownership():
-        print('Run failed after launch; instance quarantined; lock released.', file=sys.stderr)
+        print('Run failed after launch; lock released; the run record states whether the instance was quarantined.', file=sys.stderr)
 
 
 def run_return(args, host, bundle, live, out, access=None, guard=None):

@@ -7,8 +7,9 @@ Preparation rebuilds the reviewed control bundle's launcher and segments from
 its image with fresh session identities. The state check derives the thermal
 clock mode and refuses states the image's guards refuse. A modeled FEL then
 drives the shared transport: a watchdog reset is decoded, a state change since
-capture stops the run before any write, and a failure after a normal return
-quarantines the instance without holding the process. No USB node, queue or
+capture stops the run before any write, and a host refusal of the report
+after a confirmed normal return fails the run without quarantining the
+instance or holding the process. No USB node, queue or
 FEL executable is opened.
 
 This tree's apps/os/cpu-return-host.py only decodes the OS result record. The
@@ -179,7 +180,10 @@ def transport_cases(host, out, live):
             assert not any('write' in c for c in state['calls']), 'no write before the state comparison'
         else:
             assert 'No successful CPU return report' in str(error), error
-            assert len(executed) == 1 and state['quarantined'] == 1, 'quarantined, process not held'
+            record = json.loads((root / 'run/session.json').read_text())
+            assert len(executed) == 1 and not state['quarantined'], 'not quarantined, process not held'
+            assert record['normal_return']['first_request_succeeded'] and not record['complete']
+            assert record['host_failed_after_normal_return'] and record['instance_quarantined'] is False
         rows.append({'name': 'transport-' + variant, 'passed': True, 'fel_requests': len(state['calls'])})
 
 
