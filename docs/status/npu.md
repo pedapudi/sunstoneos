@@ -235,6 +235,23 @@ CPU/GPU operation and safe fault recovery. See [startup](../npu-startup.md),
 and [conformance](../npu-conformance.md).
 
 
+## Board results for the CPU and NPU concurrency images
+
+Port 3-3, approved operating points, restored rails requested.
+
+| Queue entry | Image SHA-256 | Result |
+| --- | --- | --- |
+| `1793572859635159128-187e5901` | `7f18c978f34cd3105bfdeb85aa08ac83fd907d996a1827ae60233b16216060a8` | Control, watchdog reset, DRAM lost. Core 7 failed the load-hint check (stage `0x99`) before the clock grant finished, while the OS still held its startup throttle. |
+| `1793573593531771376-a5c808a4` | `a2e66e80dd5ced31dbfc24c6cb36887a3684984040963601142b2e6cc1e1d444` | Refused before launch: the USB instance did not prove FEL. Nothing ran. |
+| `1793576493129223154-47e61f61` | `c8b67e0dd9e4bec0f3dc1a0712ed42b5bdf538ec5af651b269cf63cc219de6ac` | CPU-only control, passed. Normal return, image-bound decoder accepted all eight matrix-product digests, zero NPU jobs, RAM restored, both CPU rails at 800 mV. Wall time 133.5 s. |
+| `1793576635217632637-5879361e` | `e574d622a9465cccece1a26222b9d2157a9aba5fc758a427bbd84ca6a5a579d3` | Concurrency image, watchdog reset, DRAM lost. Startup panic `board application startup` (`apps/board/main.c:399`, detail 11): one OS application start hook returned failure before the scheduler. No NPU job ran. |
+
+A failed application check now returns a 1728-byte failure record through the
+normal finish path, with the thermal status (cause bits, five temperatures in
+millidegrees Celsius, freshness deadline and counter, time since workload
+start). The concurrency image remains unqualified until the refused start hook
+is identified.
+
 ## Land the merged runner before the CPU and NPU controls
 
 The branch is `work/npu-wdt-1031`. Merge `03137448` includes `bringup`
