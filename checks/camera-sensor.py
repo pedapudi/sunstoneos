@@ -6,12 +6,13 @@ import json
 from pathlib import Path
 import re
 import subprocess
+from harness import CLANG, SANITIZE, environment
 
 root = Path(__file__).resolve().parents[1]
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--evidence', required=True, type=Path)
 p.add_argument('--source', type=Path, default=Path.home()/'.cache/sunstoneos/sources/camera-sensors-linux-v6.12/ov5647.c')
-p.add_argument('--cc', default='/usr/bin/clang-21')
+p.add_argument('--cc', default=str(CLANG))
 a = p.parse_args()
 a.evidence.mkdir(parents=True, exist_ok=True)
 sources = ['drivers/camera/camera_sensor.c', 'drivers/camera/sensor_registry.c',
@@ -25,7 +26,7 @@ assert entries(upstream) == entries(adapter)
 commands = []
 
 def run(command):
-    result = subprocess.run(list(map(str, command)), cwd=root, capture_output=True, text=True)
+    result = subprocess.run(list(map(str, command)), cwd=root, capture_output=True, text=True, env=environment())
     commands.append(dict(command=list(map(str, command)), returncode=result.returncode,
                          stdout=result.stdout, stderr=result.stderr))
     (a.evidence/'commands.json').write_text(json.dumps(commands, indent=2)+'\n')
@@ -33,7 +34,7 @@ def run(command):
     return result.stdout
 
 binary = a.evidence/'sensor-model'
-run([a.cc, '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-fsanitize=address,undefined',
+run([a.cc, '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror', *SANITIZE,
      '-Iinclude', 'checks/camera-sensor.c', *sources, '-o', binary])
 result = run([binary])
 for source in sources:

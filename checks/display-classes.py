@@ -5,13 +5,14 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
+from harness import CLANG, SANITIZE, environment
 
 CHECK_INPUTS = ['include/sunstone_display.h', 'include/a733_display_modes.h',
                 'drivers/display', 'checks/display-classes.c', 'docs/display-class-sources.json']
 p = argparse.ArgumentParser()
 p.add_argument('--evidence', type=Path, required=True)
 p.add_argument('--source-cache', type=Path, default=Path.home()/'.cache/sunstoneos/sources/display-class')
-p.add_argument('--cc', default='clang-21')
+p.add_argument('--cc', default=str(CLANG))
 a = p.parse_args()
 root = Path(__file__).resolve().parents[1]
 a.evidence.mkdir(parents=True, exist_ok=True)
@@ -26,7 +27,7 @@ sources = ['drivers/display/sunstone_edid.c', 'drivers/display/sunstone_connecto
            'drivers/display/a733_dsi_video.c', 'drivers/display/a733_dsi_phy.c']
 commands = []
 def run(command):
-    r = subprocess.run(command, cwd=root, capture_output=True, text=True)
+    r = subprocess.run(command, cwd=root, capture_output=True, text=True, env=environment())
     commands.append(dict(command=command, returncode=r.returncode, stdout=r.stdout, stderr=r.stderr))
     (a.evidence/'commands.json').write_text(json.dumps(commands, indent=2)+'\n')
     assert r.returncode == 0, commands[-1]
@@ -34,7 +35,7 @@ def run(command):
 binary = a.evidence/'check'
 run([a.cc, '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
      '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections',
-     '-fsanitize=address,undefined', '-fno-sanitize-recover=all', '-Iinclude',
+     *SANITIZE, '-Iinclude',
      'checks/display-classes.c', *sources, '-o', str(binary)])
 fixtures = [a.source_cache/name for name in manifest['edid_fixtures']]
 result = run([str(binary), *map(str, fixtures)])
