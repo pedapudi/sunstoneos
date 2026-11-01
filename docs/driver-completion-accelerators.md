@@ -67,7 +67,7 @@ Offsets in this table are relative to the named register bank.
 | Same | SLC_CTRL_MISC `+0x3800`, MIPS remaps `+0x810…+0x8c8`, SLC coherency `+0x38c0`; GARTEN release. | GPU host start source; `pvr_mips.c` constructs the remaps. No documented per-write busy flag. Publication and ordered register writes precede release; firmware readiness is the completion condition. |
 | `pvr_gpu_stop.c`, `pvr_gpu_stop_poll` | IRQ clear `+0x8b0`, thread associations `+0xb40/+0xb30`, optional unacknowledged SOFT_RESET `+0x100`. | DDK `RGXStop:992–1241`, `RGXAckIrqMIPS:420–462`. Stop polls SIDEKICK `+0x3c8`, SLC idle `+0x3898`, MMU/read status `+0x1358/+0x1350/+0x1320/+0x1338/+0x3870` before platform isolation. Bounded polls preserve ownership on failure. Unacknowledged reset has no separate read fence; subsequent platform isolation must remain ordered. |
 | `pvr_gpu_control.c`, `pvr_gpu_control_poll` | MIPS IRQ clear `+0x8b0`; later status `+0x8a8`. | GPU host MIPS interrupt source. Subsequent reads and queue service observe remaining work; an asserted event keeps service pending. |
-| `pvr_ccb.c`, `pvr_ccb_submit` | MTS_SCHEDULE `+0xb00` kick after queue publication. | GPU host CCB source and DDK `__MTSScheduleWrite`. The concrete kick adapter supplies register readback; command completion comes from a cleared-and-reused return slot or consumed cursor with command-specific acknowledgement. |
+| `pvr_ccb.c`, `pvr_ccb_submit` | MTS_SCHEDULE `+0xb00` kick after queue publication. | GPU host CCB source and DDK `__MTSScheduleWrite`. The vendor reads the kick register back. The native backend instead uses DSB before/after the store, then the CCB's device-complete barrier, under its required Device-nGnRnE mapping. Command completion still needs the return slot or command-specific acknowledgement. |
 | `pvr_gpu_flush.c`, `pvr_gpu_clock.c`, `pvr_gpu_stop.c` | Firmware MMU-cache, clock and idle/OFF commands, through CCB. | GPU host command interfaces. MMU flush correctly waits for command return rather than its initially zero sync word. Clock/stop clear the sync word before sending and wait for a new acknowledgement. These are firmware shared-memory completions rather than new MMIO mechanisms. |
 | `gicv3_spi.c`, `gicv3_spi_mask` | GICD_ICENABLER, then DSB. | GIC §12.9.1: RWP tracks disable propagation. The header explicitly defines success as an issued command. Callers retain a software mask; rearm checks RWP before enabling. The NPU mask callback separately checks RWP, enable and active state. This asynchronous API adds no claim that DSB completed propagation. ISENABLER is not tracked by RWP. |
 
@@ -105,6 +105,40 @@ The MMIO adapters `a733_gpu_resources_native.c`,
 `a733_dma_platform_native.c` and `a733_ce_native.c` forward these writes.
 Their barriers order transactions; controller status and timing checks supply
 completion.
+
+## Native providers preserve write order and inter-write holds
+
+DSB completes the preceding architectural transactions. Device status,
+minimum holds and DMA retirement remain separate requirements. The NPU
+adapter admits both Device-nGnRnE and Device-nGnRE mappings. Early
+acknowledgement under nGnRE can precede endpoint arrival, so DSB alone
+does not establish a physical reset pulse or internal readiness.
+
+The provider paths below were traced through the merged GPU queue and NPU
+code. A raw volatile store or DMB is not recorded as a completion barrier.
+
+| Sequence/site | Actual native/provider path | Completion barrier | Source order and required delay |
+| --- | --- | --- | --- |
+| GPU PLL_GPU0 factors, enables and output gate | `a733_gpu_power.c` → `a733_gpu_platform_native.c:update_reg/read_reg` | Store then DSB SY; reads have DSB on both sides. | CCU `ccu_gate.c:157–203`, `ccu_nm.c:250–345`; manual §4.1.4.1–2. Three LOCK samples have more than 3 µs spacing, followed by more than 20 µs before output opens. No CPU-specific multiplier-to-UPDATE hold is assigned to this different PLL. |
+| GPU module gate/source updates and CORE6 policy | Power/performance sequencers → the same `update_reg` | DSB follows each store before the next write, update/status poll or timestamp. | Manual §4.1.6.121 and selected BXM power callbacks. UPD clear and CORE6 status remain separate observations. TOP5 transitions belong to the shared power-domain owner. |
+| Shared GPU/NPU PCK and fabric gates | `a733_gpu_resources.c:gate` → `a733_gpu_resources_native.c:native_update` | Store then DSB before returning; `gate` then reads the retained field back. | CCU gate definitions and helpers; no additional inter-write hold is specified for these fields. Parent status and ownership are checked separately. |
+| GPU secure configuration, engine reset, MIPS remaps and stop registers | `pvr_gpu_start/stop/control.c` → `platform/a733/gpu_backend.c:raw_write` | Each 32-bit word has DSB before/after, including both words of a 64-bit logical register. | DDK `rgxstartstop.c:775–860,992–1241`. Its `DeassertMetaReset` requests 32 cycles/3 µs before and after release. Native start uses a rounded-clock-safe 3 µs hold on each side. Idle/status polls remain required at stop. |
+| GPU host CCB payload, cursor and kick | `pvr_ccb.c` → `gpu_backend.c:queue_write/barrier/kick` → `gpu_memory.c` | Payload and cursor stores are fenced; RELEASE and DEVICE_COMPLETE issue DSB; kick uses `raw_write`. | DDK `__MTSScheduleWrite` and native firmware CCB ABI. Payload publication precedes cursor publication, which precedes the kick. No additional fixed hold is specified. |
+| Client compute queue ring, timeline and device buffers | `pvr_compute_queue.c:ring_write/ring_barrier/maintain`, `pvr_cccb.c`, `platform/a733/gpu_queue.c` | Ring stores are volatile, then the actual CCCB PUBLISH/FORMAT step calls DSB before its KCCB command. Timeline initialization has DSB. Output cache maintenance calls `aarch64_device_cache`, with DSB before/after its DC operations. | Native CCCB ABI and GPU host submission protocol. KCCB consumption, job timeline completion and output acquisition remain distinct. Queue lease/control files add no independent MMIO sequence. |
+| GPU VM tables and firmware shared state | `gpu_vm_memory.c` and `gpu_memory.c` publication/sync callbacks | Cache publication and shared-state stores end with DSB; clock-correlation payload stores finish before the sequence word is published. | GPU host MMU/firmware structures. Firmware-started, power-sync and command acknowledgements establish the subsequent protocol state. |
+| GPU voltage settling | Platform/performance → PMIC result/reap provider | The validated timestamp follows completed result collection and reap. The PMIC's selector readback and bus retirement belong to that provider. | `sunxiSetVoltage` and `axp2101-regulator.c:383–408`; existing 1,200 µs hold remains strict at a rounded endpoint. No additional MMIO barrier substitutes for rail settling. |
+| NPU local CCU resets/gates, PLL_NPU and SRAM routing | `a733_npu_startup.c` → `a733_npu_platform_native.c` | Each accepted store ends with DSB; readbacks use DSB on both sides. | Manual §4.1.4.1–2 and VIPLite platform clock order. PLL lock spacing/settle, domain ON, route readback and the 2 ms post-open hold remain separate. |
+| NPU FSCALE, reset, isolation and cancellation | Controller → runtime/session/convolution wrappers → `platform/a733/npu_native.c:write32` | Pre-store DMB OSHST is retained; an accepted store now ends with DSB SY before return to the hold/timestamp step. Refused stores issue neither. | VIPLite `reset_vip:104–233`: 5/20/20/40/50 µs holds across two passes; initialization also drains reset-era events after 10 µs. `vipdrv_hw_cancel:1119–1200` holds assertion for 100 µs before release. This fixes architectural posting, with endpoint timing still subject to the mapping limitation above. |
+| NPU command address/trigger and output handoff | Controller `trigger/advance` → native adapter and memory callbacks | Address write completes before the explicit barrier and fetch trigger. Trigger store completes architecturally before return. Full idle precedes the existing completion barrier and cache acquire. | VIPLite submit/completion source. Event plus full idle, or cancel acknowledgement plus full idle, remains mandatory; DSB does not synthesize either condition. |
+| DMA0 local reset, gates and global configuration | `a733_dma_platform.c` → `a733_dma_platform_native.c` | Each admitted RMW has DSB before the read and after the store; readbacks use DSB on both sides. | DMA source initialization order and native reset contract. The reset baseline is held for more than 20 rounded µs before release; no other fixed inter-write hold is prescribed. |
+| DMA descriptors, enable, pause/stop and pending clear | Controller → `platform/a733/dma_native.c` | Register writes use DSB before/after; reads end in DSB. Descriptor cache publication and teardown have explicit barrier callbacks. | DMA submit and terminate source. Address/IRQ configuration precedes enable; disable plus channel BUSY clear precedes output acquisition. These conditions do not establish cyclic counter/data ordering. |
+| IOMMU install and global/micro TLB flush | IOMMU core → camera native, display framebuffer, or JPEG/H.264/HEVC/ISP/G2D/DI application adapters | Camera/display stores use DSB before/after. Codec and ISP/G2D/DI stores end with DSB. The final request therefore precedes the flush timestamp. | `sunxi_tlb_flush:516–540`: all requests, full 10 µs hold, then bank clear. Native rounded endpoint adds 1 µs. The owner retains inaccessible/skipped masters explicitly. |
+| CE descriptor/IRQ/load/status and cold CCU configuration | CE core/clock → `a733_ce_native.c` ordinary or clock writer | Explicit DSB before the allowed RMW and after the store. Native cache sync uses `aarch64_device_cache`. | CE v5 source task order and manual §19.1.7. Result status remains required. The effective cold path uses reset deassert; the separate reset helper's 10 µs pulse is not part of this sequence. |
+| Accelerator GIC masking/rearm | `gicv3_spi.c` and native IRQ adapters | Mask store ends in DSB; software masking persists. RWP is observed by the asynchronous rearm or NPU mask callback. | GIC §12.9.1/7. Architectural write completion does not establish distributor propagation; no inter-write time hold is substituted for RWP. |
+
+The confirmed native ordering omission was the NPU writer's absent post-store
+completion boundary. GPU, DMA, IOMMU and CE providers already supply the
+barriers shown above. This audit adds no undocumented vendor delay.
 
 ## Focused models expose the original completion gaps
 
@@ -156,6 +190,29 @@ The design panel approved the GPU shutdown change and NPU timing changes
 before implementation; the same reviewers approved their code and focused
 failure evidence. Physical timing and recovery remain unqualified.
 
+## Executed native ordering check
+
+`checks/npu-native-ordering.py` executes the linked QEMU model's actual
+native write, read and delay callbacks in Unicorn. Its shared posted-write
+model completes CPU transactions only at an executed DSB instruction. A
+separate deferred effect leaves readiness delayed or permanently pending.
+The six reset/FSCALE/cancel hold cases pass after a modeled architectural
+completion cost; refused and already-failed writes issue no store or barrier.
+
+Replacing only the post-store DSB opcode with a no-op leaves the store
+pending after the same delay. The positive completion predicate rejects
+that negative control. Each accepted store retains one pre-store DMB and
+adds one DSB, with unchanged MMIO counts, hold durations and failure bounds.
+The linked FreeRTOS QEMU model also passes with GICv3.
+
+Image, native source, fixture and shared-helper hashes are bound in
+`~/.cache/sunstoneos/build/model-fidelity-1031/ordering-followup/accelerators/native-ordering/inputs.json`;
+that directory's `results.json` contains the instruction counts and counter
+samples. This is a host instruction fixture, not a physical submission.
+The controller, client wrappers and firmware command layouts are unchanged;
+their earlier sequence evidence remains applicable. Physical endpoint arrival
+and minimum pulse qualification remain open where nGnRE is admitted.
+
 ## Executed checks and remaining qualification
 
 Focused GPU OFF, IOMMU flush, NPU cancellation, NPU settle and CE completion
@@ -200,8 +257,8 @@ ownership or adapters to the audited sequencers. Their reads and writes were
 checked for independent MMIO trigger/completion protocols. Memory publication
 through the CCB and NPU controller remains covered in the tables above.
 
-- **GPU:** `LICENSE.pvr`, `a733_gpu_clock_parent.c`, `pvr_cccb.c`, `pvr_compute_context.c`, `pvr_compute_job.c`, `pvr_compute_mimus.c`, `pvr_compute_mimus_usc.c`, `pvr_compute_mode.c`, `pvr_compute_package.c`, `pvr_compute_probe.inc`, `pvr_compute_programs.c`, `pvr_compute_service.c`, `pvr_compute_usc.inc`, `pvr_firmware.c`, `pvr_free_list.c`, `pvr_fw_state.c`, `pvr_gpu_events.c`, `pvr_gpu_service.c`, `pvr_gpu_vm.c`, `pvr_mimus_service.c`, `pvr_mips.c`, `pvr_render_context.c`, `pvr_render_draw.c`, `pvr_render_job.c`, `pvr_render_programs.c`, `pvr_render_service.c`, `pvr_render_target.c`, `pvr_render_texture.c`.
-- **NPU:** `a733_npu_memory.c`, `a733_npu_mmu.c`, `a733_npu_platform.c`, `a733_npu_runtime_interim.c`, `nbg_assembly.c`, `nbg_checksum.c`, `nbg_command.h`, `nbg_model.c`, `nbg_relocation.c`, `nbg_sh_nt.c`, `npu_job.c`, `npu_models.inc`, `npu_service.c`.
+- **GPU:** `LICENSE.pvr`, `a733_gpu_clock_parent.c`, `gpu_queue.c`, `pvr_cccb.c`, `pvr_compute_context.c`, `pvr_compute_job.c`, `pvr_compute_mode.c`, `pvr_compute_package.c`, `pvr_compute_probe.inc`, `pvr_compute_programs.c`, `pvr_compute_service.c`, `pvr_compute_usc.inc`, `pvr_firmware.c`, `pvr_free_list.c`, `pvr_fw_state.c`, `pvr_gpu_events.c`, `pvr_gpu_service.c`, `pvr_gpu_vm.c`, `pvr_mips.c`, `pvr_render_context.c`, `pvr_render_draw.c`, `pvr_render_job.c`, `pvr_render_programs.c`, `pvr_render_service.c`, `pvr_render_target.c`, `pvr_render_texture.c`.
+- **NPU:** `a733_npu_memory.c`, `a733_npu_mmu.c`, `a733_npu_platform.c`, `a733_npu_runtime_interim.c`, `catalogue.py`, `nbg_assembly.c`, `nbg_checksum.c`, `nbg_command.h`, `nbg_model.c`, `nbg_relocation.c`, `nbg_sh_nt.c`, `npu_job.c`, `npu_models.inc`, `npu_service.c`.
 - **DMA:** `a733_dma.c`, `dma_memory.c`, `dma_service.c`, `dma_service_i2s.c`, `dma_service_i2s_stream.c`.
 - **IOMMU:** every file has an entry in the tables.
 - **CRYPTO:** `a733_ce_cipher.c`, `a733_ce_entropy.c`, `a733_ce_hash.c`, `a733_ce_session.c`.
