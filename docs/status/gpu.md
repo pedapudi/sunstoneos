@@ -2,13 +2,97 @@
 
 **Status: implemented.**
 
+**Board-qualified scope:** Firmware lifecycle, finite queue workloads and one
+reference recognition input, including exact FP32 sums; four changed-input
+generic local-memory GEMMs pass on port 3-1. General GPU coverage remains
+unqualified.
+
+## Current arithmetic and local-memory qualification
+
+The 32-lane compute ABI supports up to 240 DWORDs of per-workgroup on-chip
+coefficient storage and uniform workgroup barriers. The source-admitted
+compiler refuses global backing, scratch and spills for this profile.
+[The design](../designs/gpu-compute-local-memory.md) defines the limits,
+resource encoding and provenance. This is a bounded capability, not support
+for barriers across hardware tasks or arbitrary workgroup sizes.
+
+The generic global-memory GEMM control and the matched local-memory GEMM both
+pass four changed-input jobs on port 3-1, every output, 32 guard words and
+normal GPU retirement. The local case uses 384 bytes per workgroup. The
+external recognizer's direct and tiled FP32 shaders each pass all 1,737,312
+exact CPU sum comparisons across 148 jobs, with reference CRCs and transcript.
+
+| Port 3-1 entry | Case | Result |
+| --- | --- | --- |
+| `1793565561444800193-61cd0ed0` | Direct FP32, exhaustive comparison | Returned; zero mismatches |
+| `1793565751525688109-fee8241b` | Direct FP32, comparison disabled | Returned; compute 497.222 ms, device 380.470 ms |
+| `1793566402339564949-f2aad6a6` | Generic GEMM control | Returned; four jobs, zero local bytes |
+| `1793566602125877874-e604614d` | Generic local GEMM | Returned; four jobs, 384 local bytes |
+| `1793567014678511403-498b089f` | Tiled FP32, exhaustive comparison | Returned; zero mismatches |
+| `1793567400575391633-770ecbf2` | Tiled FP32, comparison disabled | Returned; compute 501.761 ms, device 384.985 ms |
+
+These are single diagnostic timing samples. Neither FP32 variant improves on
+the integer shader's 216.716 ms device total and 327.476 ms uninstrumented
+recognition median. CPU-only remains 135.474 ms. Reduced logical load and
+conversion counts do not establish a speed gain. Current production code is
+Mimus `d30bca183`; the selected tiled shader is `692b3efcf`.
+
+Evidence is under `~/.cache/sunstoneos/build/gpu-fp32-local-1101/`:
+`runs.json`, `fp32-timed-summary.json`, `tiled-timed-summary.json`, full parsed
+job records, `qemu-tiled-parity/`, and `validation/`. Focused compiler,
+cooperative-shader, resource-encoding and PMU host checks pass. OS-only,
+hello-compute and external-Mimus image builds, the selected integration gate
+and the check index pass. QEMU executes a CPU sum model, not USC instructions.
+
+## Open work in priority order
+
+1. Calibrate GPU-master traffic counters before reporting measured bytes.
+   `SUNSTONE_GPU_NSI_PMU=ON` is implemented and host-checked, but has no board
+   result. Rebuild current sources with timing and the minimal probe enabled,
+   then compare all six raw phases for idle/minimal and production jobs.
+   Require stable clocks, a non-expired period, known-work increments and
+   restored counter ownership. [The diagnostic design](../designs/gpu-nsi-traffic.md)
+   explains the unresolved live/latch semantics. NSI counts describe traffic
+   after GPU caches, including command and firmware traffic, not DRAM pins.
+2. Measure a small explicit CPU/GPU split using 224-row CPU producers to match
+   the CPU control. Generate costs from `tiled-timed-jobs.json` and the measured
+   CPU PROFILE; use `MIMUS_GPU_PLACEMENT=explicit` for an honest comparison if
+   the optimizer selects no GPU work. Qualify the selected sums first, then
+   measure three comparison-disabled runs. No such experiment has run.
+3. Select the fastest qualified shader rather than promoting a regression.
+   Compare arithmetic and common-store instruction costs using the recorded
+   counts and traffic measurements. The shared byte-split screen is rejected:
+   its smallest program is 8,368 bytes against the 8,128-byte limit.
+
+## Built images, approvals and shared files
+
+All six submitted images above have results. Two unrun host compilation
+artifacts remain; neither is the next ready measurement image:
+
+- Generic GEMM compilation: `~/.cache/sunstoneos/build/gpu-fp32-local-1101/board-image-2/README-unrun.md`.
+- Earlier NSI diagnostic: `~/.cache/sunstoneos/build/gpu-fp32-local-1101/counters-overlap/native2/README-unrun.md`.
+
+No electrical or storage approval is requested. Further board work waits for
+the owner's resumption instruction. The owner lands `work/gpu-mimus-1031`;
+this branch is not pushed or merged into bringup.
+
+The fastpath worker owns submission behavior. Shared files changed here are
+`drivers/gpu/pvr_compute_queue.c` (descriptor admission, one resource snapshot
+and the resource-encoder call only), `drivers/gpu/pvr_compute_job.c`,
+`include/{gpu_queue,pvr_compute_job,pvr_compute_queue,pvr_compute_package}.h`,
+and `apps/gpu-program/compile.py`. Preserve the fastpath worker's submit/kick
+implementation when integrating these hunks. Optional NSI sampling also shares
+`platform/a733/gpu_backend.c`, `apps/os/gpu-timing.c`,
+`include/gpu_queue_timing.h` and `cmake/sunstone-os-core.cmake` with lifecycle
+and timing work. No submission path redesign belongs to this branch.
+
 Native firmware loading, power/interrupt ownership,
 compute, rendering and application bindings have software evidence. Finite
 queue execution, sharing, restart, injected-timeout recovery and one recorded
 recognition input have board evidence. General graphics and thermal recovery
 remain unqualified.
 
-**Board-qualified scope:** Standalone firmware start, health, stop and restart,
+**Earlier qualified scope:** Standalone firmware start, health, stop and restart,
 eight compute jobs and two production exact-sum shapes pass at 1008 MHz/960 mV.
 The shapes use K=512 and K=516, each with 33 rows and 17 channels. All 1,122
 sums, tags and guards match; context cleanup, firmware OFF, isolation, provider
