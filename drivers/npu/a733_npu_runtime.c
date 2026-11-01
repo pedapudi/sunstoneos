@@ -735,7 +735,8 @@ static int prepared(void *cookie, const struct a733_npu_ops *ops, void *backend,
 static int bind(struct npu_runtime *rt, struct a733_npu_startup *startup, const TaskHandle_t clients[],
                 UBaseType_t priority, UBaseType_t affinity, unsigned resident)
 {
-    if (!good(rt) || rt->bound || !startup || !startup->initialized || !startup->task || !clients ||
+    if (!good(rt) || rt->bound || (rt->tensor_links && !resident) ||
+        !startup || !startup->initialized || !startup->task || !clients ||
         private_overlap(rt, (uintptr_t)startup, sizeof(*startup)) ||
         xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED)
         return 0;
@@ -817,6 +818,7 @@ int npu_runtime_link_tensor(struct npu_runtime *rt, unsigned producer, unsigned 
     } while (!result);
     if (result < 0) return fault(rt); /* Partial assembly can never be submitted. */
     memcpy(s->targets, targets_copy, sizeof(targets_copy));
+    rt->tensor_links = 1;
     s->tensors[input].data = targets_copy[NBG_ALLOC_INPUT + input].cpu;
     s->layout = layout; s->stream_bytes = cursor.offset; s->end_mark = cursor.offset;
     fill_end(s->command.cpu + cursor.offset, s->command.bytes - cursor.offset);
@@ -881,7 +883,7 @@ int npu_runtime_send(struct npu_runtime *rt, unsigned slot, enum npu_service_ope
         if (!s->opened || model || timeout) return 0;
         break;
     case NPU_SERVICE_LOAD:
-        if (!s->opened || model >= rt->count || timeout) return 0;
+        if (!s->opened || rt->tensor_links || model >= rt->count || timeout) return 0;
         r.command = model;
         break;
     case NPU_SERVICE_SUBMIT:

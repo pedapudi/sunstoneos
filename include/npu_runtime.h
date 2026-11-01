@@ -123,7 +123,7 @@ struct npu_runtime {
     uint64_t doorbell_ticks;
     struct npu_runtime_counters counters;
     atomic_uint failed;
-    unsigned prepared, bound, resident;
+    unsigned prepared, bound, resident, tensor_links;
 };
 
 /* Size of the parent allocation for slots slots and these catalogue models,
