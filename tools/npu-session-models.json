@@ -423,6 +423,64 @@
    "state_patches": 1,
    "command_body_bytes": 80,
    "compiler": "tools/npu-conv-pipeline.sh 12 4, asymmetric_affine uint8"
+  },
+  {
+   "name": "conv12-consumer",
+   "model": {
+    "bytes": 1928,
+    "sha256": "a0c56f19dc698d4af4a59593f399f83429c0a01cb6761efbd0688b70ef27fac0"
+   },
+   "inputs": [
+    {
+     "dimensions": [
+      10,
+      10,
+      4,
+      1
+     ],
+     "logical_bytes": 400,
+     "name": "input/output[0]",
+     "buffer_type": 0,
+     "format": 2,
+     "quantization": 2,
+     "scale_bits": 1016995358,
+     "fixed_position": 0,
+     "zero_point": 122,
+     "reference": {
+      "bytes": 400,
+      "sha256": "a22da3d747cb4e689785aa2b0d79feef8a96957cfadc8d3a188a7f714cf8419f"
+     }
+    }
+   ],
+   "outputs": [
+    {
+     "dimensions": [
+      8,
+      8,
+      2,
+      1
+     ],
+     "logical_bytes": 128,
+     "name": "uid_1_out_0",
+     "buffer_type": 0,
+     "format": 2,
+     "quantization": 2,
+     "scale_bits": 999374201,
+     "fixed_position": 0,
+     "zero_point": 104,
+     "reference": {
+      "bytes": 128,
+      "sha256": "cd3a38b91bed91345bb87ee23e4f2d81ceda5d6828a958ab77f0c812ba96ac6a"
+     }
+    }
+   ],
+   "vip_sram_bytes": 101376,
+   "pool_bytes": 0,
+   "nn_operations": 1,
+   "descriptor_patches": 3,
+   "state_patches": 1,
+   "command_body_bytes": 80,
+   "compiler": "apps/npu-finite/dependent-fixture.py, dependent-pipeline.sh; pinned ACUITY asymmetric_affine uint8; input quantization copied from conv12 output"
   }
  ]
 }

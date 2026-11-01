@@ -6,14 +6,14 @@
 
 ## Source and validation
 
-The OS merges shared `802ffef9` in `3470254e`. Thermal capture preserves
+The OS includes shared `1a84017e` and the independent snapshot fixes. Thermal capture preserves
 absolute 25 ms sensor and 125 ms record phases, independent snapshots and a
 complete fresh first row before startup load is released. Version 2 reports
 retain their scheduled first slot and unchanged 2001-microsecond lateness budget.
 Critical startup and later stale samples remain observable.
 
 The [application source record](../../apps/mimus/source.json) selects mimus
-`10db8e721`, whose declared engine is `418ad38c8`. The application embeds the
+`647aeb636`, whose declared engine is `bcaf39ff5`. The application embeds the
 shared USB diagnostic service with its generic entry-point suppression flag.
 Writable constructor and GOT metadata remain in image RAM; the storage linker
 patch is reviewed against that combined layout. The OS core has no engine dependency.
@@ -41,10 +41,8 @@ The application performance report still describes the preceding engine.
 
 ## Landing work in priority order
 
-1. Update the mimus internal engine source record to `bcaf39ff5`, commit it,
-   then pin that application commit in `apps/mimus/source.json` here.
-   The current OS pin remains `10db8e721`, with engine `418ad38c8`.
-   Build and check the default application without an engine override.
+1. Confirm the updated source pins on the merged OS with the affected checks,
+   three baselines, full integration gate and one default-build board recording.
 2. Build a fresh native race image, run its short control, then the four
    predeclared 50-second sessions in `race-test-1101/sessions.json` through
    the queue on port 3-1. The integrated QEMU screen passes; physical stress

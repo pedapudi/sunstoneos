@@ -17,7 +17,7 @@ enum a733_power_row_state {
     A733_POWER_ROW_PENDING, /* the service has not answered the latest request */
     A733_POWER_ROW_ON,      /* admitted; the domain is ON */
     A733_POWER_ROW_OFF,     /* released; the claim and rail pin are dropped */
-    A733_POWER_ROW_REFUSED, /* refused before any register write; nothing retained */
+    A733_POWER_ROW_REFUSED, /* no transition; an existing ON claim stays retained */
     A733_POWER_ROW_FAILED   /* the domain failed; the row and its rail pin are retained */
 };
 
@@ -45,12 +45,13 @@ struct a733_power_domain_row {
 
 /* a733_power_domain_row_init() in a733_power_domains.h registers a row. */
 #define A733_POWER_ROW_GENERATION_MASK (UINT32_MAX >> 3)
-/* Store ON (1) or OFF (0) with release order and notify the service. Only
- * domains 4 and 5 accept OFF. Refused (0) while the previous request is unanswered.
+/* Store ON (1) or OFF (0) with release order and notify the service.
+ * Only domain 5 accepts OFF. Domain 4 stays ON for shared SRAM/ROM use.
+ * Refused (0) while the previous request is unanswered.
  * Run the consumer's own authorization immediately before the call. */
 static inline int a733_power_domain_request(struct a733_power_domain_row *r, unsigned on)
 {
-    if (!r || !r->domains || !r->notify || on > 1 || (!on && r->domain != 4 && r->domain != 5)) return 0;
+    if (!r || !r->domains || !r->notify || on > 1 || (!on && r->domain != 5)) return 0;
     const unsigned q = atomic_load_explicit(&r->request, memory_order_relaxed);
     const unsigned g = (q >> 1) & A733_POWER_ROW_GENERATION_MASK;
     if ((atomic_load_explicit(&r->state, memory_order_acquire) >> 3) != g) return 0;

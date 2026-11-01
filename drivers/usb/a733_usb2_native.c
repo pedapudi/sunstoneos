@@ -17,7 +17,43 @@ _Static_assert(A733_XHCI_MEMORY_BYTES==A733_USB_MEMORY_PARENT_BYTES&&
 #error "USB2 requires scheduler, current-task and mutex-owner APIs"
 #endif
 static int current(void *cookie)
-{struct a733_usb2_native *n=cookie;return n&&n->self==n&&n->initialized&&a733_task_context_owner_el1((TaskHandle_t)n->owner_task);}
+{
+    struct a733_usb2_native *n=cookie;
+    if(!n||n->self!=n||!n->initialized)return 0;
+    /* Entry admits EL1 task context once for the whole serialized operation.
+     * No interrupt handler calls the controller or its transport. */
+    if(n->shared_execution){TaskHandle_t task=xTaskGetCurrentTaskHandle();
+        return task&&atomic_load_explicit(&n->execution_task,memory_order_acquire)==task;}
+    return a733_task_context_owner_el1((TaskHandle_t)n->owner_task);
+}
+int a733_usb2_native_share(struct a733_usb2_native *n)
+{
+    if(!n||n->self!=n||!n->initialized||n->shared_execution||
+       !a733_task_context_owner_el1((TaskHandle_t)n->owner_task))return 0;
+    n->shared_execution=1;return 1;
+}
+int a733_usb2_native_enter(struct a733_usb2_native *n)
+{
+    TaskHandle_t task=xTaskGetCurrentTaskHandle();void *empty=NULL;
+    if(!n||n->self!=n||!n->initialized||!n->shared_execution||
+       (task!=n->owner_task&&task!=n->client_task)||
+       !a733_task_context_owner_el1(task))return -1;
+    return atomic_compare_exchange_strong_explicit(&n->execution_task,&empty,task,
+        memory_order_acquire,memory_order_relaxed)?1:0;
+}
+int a733_usb2_native_client(struct a733_usb2_native *n,void *task)
+{
+    if(!n||!n->shared_execution||!current(n)||xTaskGetCurrentTaskHandle()!=n->owner_task||
+       !task||task==n->owner_task||n->client_task||n->stack_started)return 0;
+    n->client_task=task;return 1;
+}
+void a733_usb2_native_leave(struct a733_usb2_native *n)
+{
+    configASSERT(n&&n->shared_execution&&current(n));
+    unsigned client=xTaskGetCurrentTaskHandle()!=n->owner_task;
+    atomic_store_explicit(&n->execution_task,NULL,memory_order_release);
+    if(client)xTaskNotifyGive((TaskHandle_t)n->owner_task);
+}
 static int now(void *cookie,uint64_t *value)
 {struct a733_usb2_native *n=cookie;return n->locks->now(n->locks->context,value);}
 static int admit(void *cookie,const struct a733_usb2_platform_config *c)
@@ -30,7 +66,7 @@ static void retain(void *cookie)
 {struct a733_usb2_native *n=cookie;configASSERT(a733_platform_lock_retain(n->locks,A733_PLATFORM_REGISTER_LOCK)==1);}
 static int held(struct a733_usb2_native *n)
 {return current(n)&&!(atomic_load_explicit(&n->locks->retained,memory_order_acquire)&1)&&
-    xSemaphoreGetMutexHolder(n->locks->mutex[A733_PLATFORM_REGISTER_LOCK])==(TaskHandle_t)n->owner_task;}
+    xSemaphoreGetMutexHolder(n->locks->mutex[A733_PLATFORM_REGISTER_LOCK])==xTaskGetCurrentTaskHandle();}
 static int read(void *cookie,uintptr_t a,uint32_t *v)
 {
     struct a733_usb2_native *n=cookie;if(!v||!held(n)||!(a733_usb2_platform_address(a,0)||(n->platform.config.superspeed&&(a733_usb3_mask32(a)||a==0x06c01900))))return 0;

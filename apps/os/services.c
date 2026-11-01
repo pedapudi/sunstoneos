@@ -1,28 +1,59 @@
-/* Resident service supervision. Each listed service records the counter time
- * of its latest bounded loop iteration; the supervising task renews the armed
- * watchdog only while every record is within its service's window, and makes
- * no renewal before every service has reported once. A failed
- * service parks or suspends without recording, so its window expires, renewal
- * stops and the watchdog resets the board within four seconds of the last
- * renewal. */
+/* Resident service supervision. Active owners report actual bounded progress.
+ * A registered blocked owner may instead supply a certificate for its next
+ * precise wait and an absolute operation budget within the admitted session.
+ * The supervisor accepts only that real wait and a bounded observation period
+ * after wake. A failed wait, expired budget or stale active record stops
+ * watchdog renewal. */
 #include "os.h"
 #include "application.h"
 #include <stdatomic.h>
+#include "sunstone_deadline.h"
 #ifdef SUNSTONE_A733_FAULT_PAGE
 #include "a733_fault.h"
 #endif
 uint64_t a733_smp_counter(void);
-/* Windows exceed each loop's expected pause: the board owners, including the
- * radio owner and network client, the Bluetooth owner and the headset client
- * iterate every tick and the thermal reader every 25 ms. The recognizer reports from its
- * wait loops and from the yield checkpoint that inference calls. The capture
- * client reports from each pass without an unanswered DMA request. The windows
- * are configuration; no board measurement of the longest pause exists. */
+/* Windows bound active work and the interval from a wake to its checked
+ * result. They are configuration, not board measurements of worst latency. */
 static atomic_uint_fast64_t seen[OS_SERVICES];
+static _Atomic(TaskHandle_t) blocked_owner[OS_SERVICES];
+/* Protected by the kernel critical section, including paired publication. */
+static struct { uint64_t deadline,sequence; } blocked[OS_SERVICES];
+int board_service_deadline_register(unsigned service)
+{
+    if(service>=OS_SERVICES||!sunstone_deadline_register())return 0;
+    TaskHandle_t self=xTaskGetCurrentTaskHandle(),empty=NULL;
+    return atomic_compare_exchange_strong_explicit(&blocked_owner[service],&empty,self,
+        memory_order_release,memory_order_relaxed)||empty==self;
+}
+int board_service_blocked_until(unsigned service,uint64_t deadline)
+{
+    if(service>=OS_SERVICES)return 0;
+    TaskHandle_t owner=atomic_load_explicit(&blocked_owner[service],memory_order_acquire);
+    const struct os_session *session=os_session_admitted();
+    if(!owner||owner!=xTaskGetCurrentTaskHandle()||!session||
+       deadline>session->board.deadline_us||deadline<=a733_smp_counter()/24)return 0;
+    taskENTER_CRITICAL();
+    struct sunstone_deadline_record r;
+    int ok=sunstone_deadline_owner_record(owner,&r)&&!r.failed&&!r.armed&&r.sequence<UINT64_MAX;
+    if(ok){blocked[service].deadline=deadline;blocked[service].sequence=r.sequence+1;}
+    taskEXIT_CRITICAL();return ok;
+}
 void board_service_progress(unsigned service)
 {
     /* Zero means never; the counter is nonzero once the image runs. */
-    if(service<OS_SERVICES)atomic_store_explicit(&seen[service],a733_smp_counter()/24|1,memory_order_release);
+    if(service<OS_SERVICES){
+        TaskHandle_t owner=atomic_load_explicit(&blocked_owner[service],memory_order_acquire);
+        if(owner){
+            /* An unrelated task cannot disguise a stalled admitted owner. */
+            if(owner!=xTaskGetCurrentTaskHandle())return;
+            taskENTER_CRITICAL();
+            blocked[service].deadline=blocked[service].sequence=0;
+            sunstone_deadline_owner_progress(owner);
+            atomic_store_explicit(&seen[service],a733_smp_counter()/24|1,memory_order_release);
+            taskEXIT_CRITICAL();return;
+        }
+        atomic_store_explicit(&seen[service],a733_smp_counter()/24|1,memory_order_release);
+    }
 }
 /* As os_services_healthy; *first is the first stale service, or else the
  * first silent one. */
@@ -50,6 +81,29 @@ static int services_state(uint64_t now,unsigned *first)
          * suspended terminal state needs no artificial heartbeat. */
         if(i==OS_SERVICE_NPU&&os_npu_complete())continue;
 #endif
+        TaskHandle_t owner=atomic_load_explicit(&blocked_owner[i],memory_order_acquire);
+        if(owner){
+            struct sunstone_deadline_record r;
+            taskENTER_CRITICAL();
+            uint64_t limit=blocked[i].deadline,sequence=blocked[i].sequence;
+            int recorded=sunstone_deadline_owner_record(owner,&r);
+            taskEXIT_CRITICAL();
+            if(!recorded||r.failed||(limit&&now>=limit)){*first=i;return 0;}
+            if(limit&&r.sequence==sequence&&r.deadline_us<=limit){
+                /* Alarm expiry can be a successful hold. Its certificate
+                 * survives wake until real progress, bounded by both the
+                 * operation budget and this service's observation window. */
+                uint64_t observation=r.woken_us&&r.woken_us<r.deadline_us?
+                    r.woken_us:r.deadline_us;
+                /* A lost or late alarm cannot extend the device deadline.
+                 * Early device notification starts the same window sooner. */
+                if(now>=observation&&now-observation>os_services[i].window_us){*first=i;return 0;}
+                if(r.woken_us){
+                    continue;
+                }
+                if(r.armed)continue;
+            }
+        }
         uint64_t t=atomic_load_explicit(&seen[i],memory_order_acquire);
         if(!t){if(!pending)*first=i;pending=1;continue;}
         /* A record newer than now comes from another core's later read. */

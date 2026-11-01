@@ -40,6 +40,12 @@ IDs 4 and 5 are absent and must not receive register accesses. The real-master
 mask is `0x0fcf`. Global IDs use six slots per bank, including the two absent
 slots. The device tree gives interrupt numbers SPI 170 and 171, version `0x16`,
 prefetch value `0x3007f`, and range-invalidation mode 1 for both caches.
+The effective vendor parser zero-initializes its platform data and never reads
+the prefetch property. Its setup therefore writes zero to both prefetch controls.
+The recorded ISP profile, which translates CSI master 1 and ISP master 2,
+uses that effective zero value. Other SunstoneOS profiles retain `0x3007f`.
+The source is `a733-iommu-v2-c` in [the source lock](../sources.lock.json),
+functions `__init_plat_data_from_ofnode()` and `sunxi_iommu_hw_init()`.
 The version value comes from source configuration, not a physical register read.
 
 The A733 manual, printed page 406, confirms the two banks, their master groups,

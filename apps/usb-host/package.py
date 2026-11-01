@@ -51,7 +51,7 @@ def main():
             symbols = {s.name for s in table.iter_symbols() if s['st_shndx'] != 'SHN_UNDEF'}
         required = {'os_usb_service_dispatch', 'a733_xhci_dma_acquire',
                     'sunstone_usb_hid_report', 'sunstone_uvc_payload_fragment',
-                    'ss_usb_serial_rx_complete', 'os_usb_memory_admitted'}
+                    'ss_usb_serial_rx_complete', 'a733_memory_uncached_prepare'}
         if profile == 'camera-jpeg':
             required |= {'ss_usb_jpeg_native_begin', 'a733_video_jpeg_poll', 'jpeg'}
         require(required <= symbols, 'Image omits selected class code: ' + ', '.join(sorted(required - symbols)))

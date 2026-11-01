@@ -109,6 +109,21 @@ static void local_boot(unsigned c,uint64_t epoch)
     if(!a733_cpu_continue_init(&s,&config))failed(c,3);
     while(a733_cpu_continue_poll(&s)==A733_CONTINUE_PENDING) {}
     if(s.state!=A733_CONTINUE_GIC_READY)failed(c,4);
+#ifdef SUNSTONE_TASK_DEADLINES
+    if(!c){
+        /* GIC-600/IHI0069: PPI27 is the level-sensitive virtual timer.
+         * Verify its implemented Group1NS assignment in the Secure view;
+         * Nonsecure IGROUPR reads cannot validate interrupt security. */
+        uintptr_t g=s.redistributor+0x10000;
+        const uint32_t ppi=UINT32_C(1)<<27,edge=UINT32_C(1)<<23;
+        sync_memory();
+        if(!(*(volatile uint32_t *)(g+0x80)&ppi) ||
+           (*(volatile uint32_t *)(g+0xd00)&ppi))failed(c,0x736);
+        *(volatile uint32_t *)(g+0xc04)&=~edge;
+        sync_memory();
+        if(*(volatile uint32_t *)(g+0xc04)&edge)failed(c,0x737);
+    }
+#endif
     a733_cached_records[c].redistributor=s.redistributor;
     sync_memory();a733_cached_records[c].state=2;sync_memory();
     uint64_t last=0;

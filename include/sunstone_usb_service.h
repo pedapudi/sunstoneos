@@ -1,8 +1,9 @@
 #ifndef SUNSTONE_USB_SERVICE_H
 #define SUNSTONE_USB_SERVICE_H
 #include "sunstone_app.h"
-/* Single OS owner and single application consumer. Owner callbacks execute
- * only from os_usb_service_dispatch(), never from application context. */
+/* Single OS owner and single application consumer. Optional enter/leave admit
+ * direct caller writes under the controller execution gate. Other callbacks
+ * execute from os_usb_service_dispatch(). */
 struct os_usb_service_ops {
     void (*wake)(void *context);
     void (*release)(void *context, unsigned device, uint64_t token);
@@ -10,6 +11,8 @@ struct os_usb_service_ops {
     int (*configure)(void *context, const struct ss_usb_serial_line *line);
     int (*configured)(void *context);
     void (*changed)(void *context);
+    int (*enter)(void *context);
+    void (*leave)(void *context);
 };
 void os_usb_service_init(const struct os_usb_service_ops *ops, void *context);
 void os_usb_service_connected(unsigned devices);

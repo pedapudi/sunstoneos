@@ -72,12 +72,15 @@ static void write_done(void *ctx,unsigned status,size_t bytes) {
  if(loan.deferred) os_usb_serial_native_release(loan.token);
 }
 int os_usb_serial_native_write(uint64_t seq,const void *data,size_t bytes) {
- if(!transport || tx.busy || !data || !bytes || bytes>SS_USB_SERIAL_BUFFER) return -1;
+ if(!transport || !data || !bytes || bytes>SS_USB_SERIAL_BUFFER) return -1;
+ if(tx.busy) return 0;
  for(unsigned n=0;n<SS_USB_SERIAL_PORTS;n++) if(ports[n].attached) {
   if(loan.token && loan.port==n && (uintptr_t)data>=(uintptr_t)loan.data &&
      (uintptr_t)data-(uintptr_t)loan.data<=loan.bytes && bytes<=loan.bytes-((uintptr_t)data-(uintptr_t)loan.data)) {
    tx.busy=true; tx.borrowed=true; tx.port=n; tx.sequence=seq;
-   if(transport->ops->submit(transport,ports[n].address,ports[n].out,(uint8_t *)(uintptr_t)data,bytes,write_done,NULL)!=1) { tx.busy=false; return -1; }
+   int result=transport->ops->submit_direct?transport->ops->submit_direct(transport,ports[n].address,ports[n].out,(uint8_t *)(uintptr_t)data,bytes,write_done,NULL):
+       transport->ops->submit(transport,ports[n].address,ports[n].out,(uint8_t *)(uintptr_t)data,bytes,write_done,NULL);
+   if(result!=1) { tx.busy=false; return result<0?-1:0; }
    return 1;
   }
   uint8_t *buffer; size_t capacity; uint64_t token;
@@ -86,8 +89,10 @@ int os_usb_serial_native_write(uint64_t seq,const void *data,size_t bytes) {
   /* Transport owns the NC page. TX staging is one bounded copy from caller memory. */
   memcpy(buffer,data,bytes);
   tx.busy=true; tx.borrowed=false; tx.port=n; tx.sequence=seq; tx.token=token;
-  if(transport->ops->submit(transport,ports[n].address,ports[n].out,buffer,bytes,write_done,NULL)!=1) {
-   tx.busy=false; transport->ops->release(transport,ports[n].address,ports[n].out,token); return -1;
+  int result=transport->ops->submit_direct?transport->ops->submit_direct(transport,ports[n].address,ports[n].out,buffer,bytes,write_done,NULL):
+      transport->ops->submit(transport,ports[n].address,ports[n].out,buffer,bytes,write_done,NULL);
+  if(result!=1) {
+   tx.busy=false; transport->ops->release(transport,ports[n].address,ports[n].out,token); return result<0?-1:0;
   }
   return 1;
  }

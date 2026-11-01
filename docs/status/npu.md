@@ -7,6 +7,7 @@ IRQ97 service, runtime clients and thermal policy have software evidence.
 Finite scheduled startup and inference have scoped physical results.
 Repeated lifecycle operation remains unqualified.
 
+
 **Board-qualified scope:** A finite interrupt diagnostic produces matching
 ShuffleNetV2 outputs at 852 MHz/800 mV. Startup takes 4.0 ms and inference takes
 2.91 ms doorbell-to-interrupt, about 3.3 ms end to end. Provider-free
@@ -15,7 +16,59 @@ before scheduler start return normally with saved RAM restored. These
 checkpoints perform no inference. The watchdog-admitting finite startup,
 one-inference and two-job/two-model runtime images also qualify on 3-3 at
 852 MHz/800 mV, with matching copied outputs, CLOSE, local stop and normal
-ROM return.
+ROM return. The resident command queue runs 1,000 matched jobs at 10.25 µs
+p50 and 26,925 jobs/s, and 1,000 fence-chained two-stage jobs, on 3-3.
+
+## Resident command submission
+
+**Implemented; matched small-model timing has physical evidence.** The generic
+queue accepts caller-owned records and ordered fences, submits from the caller,
+and notifies its waiting task directly from IRQ97. Commands and buffers remain
+resident. Dirty ranges receive cache maintenance outside the device lock.
+Acknowledged worker handoff and permanent queue retirement prevent stale triggers.
+The legacy mailbox wakes its owner on publication and reuses READY models.
+
+Port 3-3 control `1793563838443635411-92c1fdae` and resident comparison
+`1793564135238449408-5dbdd6ad` each check 1,000 measured model-0 outputs, with
+identical linked models and inputs at 852 MHz/800 mV. Both return normally.
+Helper versus resident p50/p99/maximum latency is 463.88/472.46/478.92 µs versus
+10.25/12.83/18.71 µs. Throughput is 2,029.97 versus 26,925.33 jobs/s.
+Scheduled client-plus-worker CPU time is 491.16 versus 34.19 µs/job, including
+output checks and digest. This excludes IRQ time charged to idle. Mean
+API-entry-to-completed-doorbell delay is 403.44 versus 0.943 µs.
+[The design](../designs/npu-fast-path.md) records hashes, timing scope and vendor references.
+
+Port 3-3 entry `1793565141195481474-2e135a8c` returns normally after 1,000
+two-record FIFO chains and 1,000 joined streams. Two distinct binaries share a
+400-byte output/input allocation and every intermediate and final output matches.
+FIFO and joined throughput is 45,987.32 and 48,166.66 logical stages/s, including
+output checks and digest. Scheduled task CPU cost is 19.87 and 18.70 µs/stage.
+Each chain has two stages; its mean interval excluding those checks is 13.94
+and 12.02 µs. Both forms perform zero interstage CPU copies. The joined stream
+emits one final event and no intermediate event. The complete image retires
+4,001 hardware jobs and 4,002 IRQs, with restored DRAM.
+
+The EL0 application-kit ring has resident handles, image-declared tensor edges,
+connected buffer leases and an SVC doorbell only on idle-to-active publication.
+IRQ refill handles each successor without a service task hop. Eight sanitizer
+cases and twelve native SVC/IRQ cases pass; physical EL0 execution remains
+unqualified. The selected integration gate passes the supervised, resident,
+resident-audio, normal NPU and two-model EL0-ring builds, kernel checks, check
+index and shared-helper checks.
+Host evidence under `~/.cache/sunstoneos/build/npu-fastpath-1101/` also covers
+10,000 ordered records, native handoff faults, tensor relocation, SDK events
+and diagnostic producer/parser/receipt agreement. The final selected gate is
+`final-gates/gate-npu-final/`, with both affected NPU builds refreshed in
+`final-gates/gate-npu-final-layout/`. Native SVC evidence is `svc-final-layout/`
+and diagnostic byte-equivalence evidence is `timing-layout-check/` under the
+same task build directory. Disabled timing counters occupy no production storage.
+
+Automatic internal-clock gating is a proposal only. PCK4, shared SRAM, DCDC2,
+PLL and top-point clock leases remain owned in that proposal. A transition run
+needs coordinator approval and an identified power meter. Current jobs keep the
+NPU powered at 852 MHz/800 mV. Exact per-job deadline interrupts remain open;
+the independent session watchdog bounds a lost IRQ. Repeated lifecycle and
+thermal/fault recovery also remain unqualified.
 
 Evidence paths are relative to `~/.cache/sunstoneos/evidence/`:
 
@@ -59,40 +112,89 @@ handling. SDK execution is modeled; this check adds no physical inference
 qualification. Its log is
 `~/.cache/sunstoneos/build/check-selection-1031/followup-3/gate-links-full/indexed-npu-source-output.log`.
 
-Normal stop/restart preserves registered providers and service objects in
-software checks. Repeated start/stop, same-instance restart, domain power-off,
-reset during an active job, confinement and thermal protection remain
-unqualified. The first physical restart nonreturn remains a failed observation.
-The queued runner prepares native finite sessions, validates interrupt receipts
-and restores saved RAM after retirement. Its adapter has host evidence; the
-shared daemon must include that adapter before these submissions.
+Bounded local stop/restart, model switching and finite-task SDK access return
+normally with matching outputs and restored DRAM on port 3-3. The queue evidence
+is under `~/.cache/sunstoneos/board-queue/entries/`:
+
+| Operation | Matching jobs / interrupt completions | Entry |
+| --- | --- | --- |
+| Current local stop/restart control | 2 / 4 | `1793558381244643310-6a29a71d` |
+| conv12, conv8, then conv12 | 3 / 4 | `1793558909256910454-ab3a76b4` |
+| Finite application SDK | 2 / 3 | `1793559233825594424-693cc430` |
+| Alternating conv12/conv8 batch | 200 / 201 | `1793559627833816772-2003f2e7` |
+
+These bounded workloads do not establish repeated-transition reliability.
+Active-job reset recovery, confinement, thermal protection and full OS EL0 SDK
+mappings remain unqualified. The queued runner validates native interrupt
+receipts and restores saved DRAM after verified retirement.
+
+The current local-restart control uses merged source `32f18fe5` and the runner
+at `6ebe687a`. Its ELF is
+`~/.cache/sunstoneos/build/npu-wdt-1031/control-1101/images/local-restart/image.elf`,
+SHA-256 `dd826f5ff75795b6beb2b96b352e28439574156fc39c222cd00e338d70e8eac3`.
+The returned report has status zero, matching outputs, stopped interrupt service,
+normal local restart, normal ROM return and verified DRAM restoration. It has
+no first failure or quarantine.
+
+The current model-switch image checks conv12, conv8 and conv12 outputs in one
+runtime lifetime. Entry `1793558909256910454-ab3a76b4` has status zero, four
+interrupt completions, normal return and verified DRAM restoration. Its ELF is
+`~/.cache/sunstoneos/build/npu-wdt-1031/qualification-1101/images/model-switch/image.elf`,
+SHA-256 `8ede7a8341fa28abe93f717d3d410b499333eca3e32aeafd83fa7bafe0c846d7`.
+
+The finite SDK client runs both models through `ss_npu_run` and closes through
+`ss_npu_close`. Entry `1793559233825594424-693cc430` has two matching outputs,
+three interrupt completions, status zero, normal return and restored DRAM.
+Its ELF is
+`~/.cache/sunstoneos/build/npu-wdt-1031/qualification-1101/images/sdk-access/image.elf`,
+SHA-256 `a0dd10679c00829a9a2f16357cdae57064ce6a063fdeac714f1273f235311c32`.
+This client uses an EL1 application task; OS EL0 SDK mappings remain unqualified.
+
+The sustained diagnostic checks every copied output across 200 consecutive
+jobs, 100 per model, in one runtime lifetime. Entry
+`1793559627833816772-2003f2e7` reports zero mismatches, 201 interrupt completions,
+normal return and restored DRAM. The batch takes 0.138715625 seconds:
+1,441.8 jobs/second including model loading, copies, comparisons and hashing.
+Maximum `npu_job_run` API latency is 2.100042 ms. This is a bounded batch;
+long-duration and thermal reliability remain unqualified.
+The ELF is
+`~/.cache/sunstoneos/build/npu-wdt-1031/qualification-1101/images/sustained/image.elf`,
+SHA-256 `f9cc623ab7debeb388d9e9ea0be05f64424623ea5e8ef03525afe43b3798478f`.
+Its frozen host parser verifies 200 jobs, every ordered output digest, timing
+windows, the measured maximum and the actual interrupt receipts. Host evidence
+covers 37 producer/parser, corruption, count, marker and timeout cases in
+`qualification-1101/sustained-host-7/` under the same build root.
+
+The next concurrency diagnostic requires additional approval for the existing
+eight-core CPU startup, vendor top CPU/DSU points and verified post-ROM rail
+normalization. The NPU-only authorization keeps PCK4 ON and DCDC2 untouched;
+it does not authorize those CPU power transitions. The written proposal and
+three-role design reviews are under `qualification-1101/` in the build root.
+The active-job cancellation design is prepared there; its physical run follows
+the concurrency stage.
 
 The runtime models up to eight catalogue clients and model switching. The board
 image has one slot and five catalogue models; direct FIFO USB and shader-graph
 loading remain incomplete. Configured eight NN cores and zero TP/TP-lite cores
 are target records, not a physical identity measurement.
 
-The next host-verified lifecycle images and frozen compatible decoder are under
-`~/.cache/sunstoneos/build/npu-wdt-1031/images/` and `next-host-593ce329/`.
-`images/next-images.json` binds their artifacts and host archive. The proposed
-queue order requires matching normal return before each subsequent run:
+**Physical NPU domain OFF is unsupported.** The selected vendor configuration
+keeps runtime domain power ON. DCDC2 is shared with SoC system and DRAM logic;
+ROM recovery uses shared SRAM that requires NPU power. The request API and
+power owner refuse physical OFF before changing hardware or ownership. The
+runner refuses the physical-OFF image even with its old frozen parser.
+The [power audit](../npu.md#the-supported-npu-power-boundary-preserves-shared-sram)
+records the failed run, register writes, schematic sources and recovery limits.
 
-1. Local restart: two matching jobs across local start/stop lifetimes and four
-   interrupt completions.
-2. Model switching: conv12, conv8 and conv12, with three jobs and four interrupts.
-3. Public SDK access: two models, three interrupts and owner-authorized quiescence.
-4. Domain OFF/restart: OFF policy/status 0/0 then ON 8/8 between matching jobs,
-   with four interrupts. Run this last.
-
-The SDK diagnostic uses finite-task privilege; it does not qualify OS EL0
-mappings. SDK owner/interleaving, transient-provider, report-capacity, failure
-retention and power-transition fault checks have evidence in `next-checks/`,
-`next-sdk-api/`, `next-abi/`, `next-frozen-preparation/`, `power/root/` and
-`next-baselines/` under that build root. Correctness, hardware-safety and recovery
-panels approve the frozen branch through `593ce329` against `a0b092b5`.
+Correctness, hardware-safety and recovery panels approve the conservative
+shared-power refusal; evidence is under
+`~/.cache/sunstoneos/build/npu-wdt-1031/power-fault/`. Host SDK ownership,
+interleaving, report-capacity and failure-retention evidence remains in
+`next-checks/`, `next-sdk-api/`, `next-abi/` and `next-frozen-preparation/`
+under the same build root.
 
 Remaining work includes repeated startup, broader graph/operator and numerical
-coverage, model switching under load, SDK access, mimus integration, concurrent
+coverage, model switching under load, OS EL0 SDK access, mimus integration, concurrent
 CPU/GPU operation and safe fault recovery. See [startup](../npu-startup.md),
 [service](../npu-service.md), [SRAM routing](../designs/npu-sram-route.md),
 [runtime breadth](../designs/npu-breadth.md), [board image](../designs/npu-board.md)

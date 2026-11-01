@@ -551,7 +551,7 @@ exec "$REAL" "$@"
         self.assertIn('other-image', central)
         self.assertNotIn('clean', central)
         self.assertNotIn('ignored.o', central)
-        self.assertEqual(sum(c[0] == 'cfg.sh' for c in calls), 14)  # core, example and twelve OS variants
+        self.assertEqual(sum(c[0] == 'cfg.sh' for c in calls), 15)  # core, example and thirteen OS variants
         application = next(c for c in calls if c[0] == 'cmake' and 'smp-example-model' in c)
         # The fake lists the same targets in both builds; example builds only its own.
         self.assertEqual(application[application.index('--target') + 1:],
@@ -571,7 +571,7 @@ exec "$REAL" "$@"
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         calls = self.records()
         self.assertFalse(any('smp-example-model' in call for call in calls))
-        self.assertEqual(sum(c[0] == 'cfg.sh' for c in calls), 13)
+        self.assertEqual(sum(c[0] == 'cfg.sh' for c in calls), 14)  # core and thirteen OS variants
         self.assertTrue(all('-DEXAMPLE_DIR=' in c for c in calls if c[0] == 'cfg.sh'))
 
     def test_external_change_during_steps_fails(self):

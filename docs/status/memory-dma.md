@@ -35,6 +35,21 @@ decode check; current images retain the 910 MiB extended or 126 MiB local map.
 The larger pool reserves 768 MiB cacheable and 16 MiB uncached memory.
 Physical range ownership and external-pool mapping remain unqualified.
 
+The USB-class OS profile reserves an 8 MiB Normal non-cacheable arena at
+`0x42200000..0x42a00000`, between the secure monitor and radio assets.
+The existing uncached allocator owns this linker reservation. USB takes the
+first 5 MiB lease; retained JPEG input, IOMMU tables and guarded output planes
+use separate leases in the remainder. Application regions, card staging and
+the private NPU pool remain outside the arena. The application receives only
+a read-only alias of USB payload pages at `0x7a040000..0x7a440000`.
+
+[The focused host check](../../checks/usb-memory.py) covers the production
+linker reservation, retained allocation capacity, native table construction,
+adjacent write-back mappings and every core's table checksum. It models
+registers and cache effects. Runner admission supplies physical ownership
+evidence; an optional session extent checks geometry only. Physical DMA and
+USB return remain unqualified.
+
 ## DMA
 
 **Board-qualified scope:** None.

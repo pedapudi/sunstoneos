@@ -243,8 +243,11 @@ observations must remain less than one second apart. The configured sample rate
 bounds plausible cumulative progress, allowing 128 FIFO frames. This detects
 counter jumps and rejects histories that could hide a wrap. Missing progress,
 FIFO errors, unexpected queue end, reuse and consumer backlog stop or retain the
-stream through the existing cancellation protocol. Stop samples final DMA
-progress before relinquishing resources. A rejected initial counter enters
+stream through the existing cancellation protocol. Cancellation preserves the
+last ACTIVE package observation as a lower bound. It waits for channel idle and
+bus completion without reading PKG_NUM after disable, because the board clears
+that transmission counter before retirement. Final unobserved packages are
+absent from the returned progress; it is not an exact stop position. A rejected initial counter enters
 RECOVERY and never contributes frames. Canceling before arm preserves a held
 `TX_FILL` lease and reports no stale progress.
 

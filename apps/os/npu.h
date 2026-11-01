@@ -2,7 +2,9 @@
 #define SUNSTONE_OS_NPU_H
 #include "npu_runtime.h"
 /* The linked catalogue: only the client's entry (apps/os/npu-catalogue.py). */
+#ifndef OS_NPU_MODELS
 #define OS_NPU_MODELS 1u
+#endif
 #define OS_NPU_CORE 1u
 #define OS_NPU_POOL_START UINT64_C(0x47400000)
 #define OS_NPU_POOL_BYTES UINT64_C(0x800000)
@@ -40,6 +42,17 @@ int os_npu_task_privileged(void (*)(void *),void *);
 struct a733_pin_handoff;
 int os_npu_pins(struct a733_pin_handoff *);
 int os_npu_start(void);
+#ifdef SUNSTONE_A733_OS_NPU_QUEUE
+struct npu_runtime *os_npu_queue_runtime(void);
+int os_npu_queue_begin(void);
+void os_npu_queue_end(void);
+int os_npu_queue_sdk_bind(void);
+int os_npu_queue_prepare_edges(struct npu_runtime *);
+int os_npu_queue_sdk_step(void);
+int os_npu_queue_sdk_closed(void);
+void os_npu_queue_sdk_fail(void);
+int ss_npu_queue_svc(void);
+#endif
 void os_npu_irq(void);
 int os_npu_irq_bind(struct npu_runtime *);
 /* Existing OS thermal owner only. Freshness is the minimum of all five

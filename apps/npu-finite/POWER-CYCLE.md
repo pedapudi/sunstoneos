@@ -1,117 +1,82 @@
-# NPU domain OFF and restart diagnostic
+# Physical NPU power-off is unsupported
 
-The startup sequencer implements a bounded domain-4 OFF/ON cycle after a
-successful controller close and local stop. Host models cover the provider,
-startup tables and ownership ledger. Physical domain-4 power cycling and
-inference after that cycle remain unqualified.
+The board keeps NPU power domain 4 and its DCDC2 supply ON. The startup
+sequencer refuses physical OFF and its paired restart with RETAINED. It
+preserves the counted row, rail pin, clock lease and PCK ownership.
+The terminal failure prevents subsequent restart of that provider.
 
-## Close, stop, power off, then reopen
+The V1.2 schematic connects VDD-NPU, VDD-SYS and VDD-DRAM to DCDC2. The board
+device tree marks DCDC2 always-on. SoC and DRAM consumers exist outside the
+software rail ledger, including when the NPU holds its sole software token.
+The A733 manual also prohibits NPU power-off while using shared SRAM.
+The selected vendor kernel configuration disables CONFIG_AW_PM_DOMAINS;
+its VIP2 runtime domain OFF/ON branch therefore does not execute.
+Source identities and the complete write inventory are in
+[the NPU record](../../docs/npu.md).
 
-The caller completes controller END, output copy and reap, idle checks and
-CLOSE before stopping the startup provider. CLOSE disables engine interrupts
-and translation with exact readback; the service then retires GIC interrupt
-97 and parks. The caller must prevent new service clients throughout restart.
+## Refuse before hardware or ownership changes
 
-`a733_npu_startup_stop()` closes software register admission, disables the
-module and bus gates, asserts core, AXI and AHB resets and routes shared SRAM
-back to the CPU. Only the bound bootstrap task can request the power cycle.
+`a733_npu_startup_power_off()` records the board policy and retained session
+observations before latching failure. It reads no PMIC or domain register,
+acquires no transport or register lock, and changes no request generation,
+counted row, pin or lease. `off_refusal` identifies shared supply and shared
+SRAM restrictions. Its supply-verified bit describes prior supply validation;
+absence means the observation is unavailable. `off_authority`,
+`off_rail_shared`, `off_rail_exclusive`, `off_request`, `off_counted` and
+`off_sram_routed` preserve the known inputs. The counted-row observation is
+unknown (`UINT32_MAX`) while its request is pending. None establishes exclusive
+physical ownership. The retained first-failure record stores the reason
+before a later lifecycle failure can replace it.
 
-Call `a733_npu_startup_power_off()` until it returns READY. It checks STOPPED,
-closed software admission and the complete stopped register state before
-queuing OFF on the existing counted row. The power service initializes and
-checks the vendor delay words before its first OFF command. It drops the
-row's rail pin only after timely completion. Domain 1 still refuses OFF.
+The public domain request rejects domain-4 OFF before generation changes.
+The service independently refuses a directly injected OFF request before
+MMIO or pin changes. Domain-5 transitions retain their existing behavior.
+The PMIC selector interface rejects every DCDC2 target, including for a sole
+exclusive software holder. It exposes no regulator-enable operation.
 
-A released row does not prove physical OFF: another counted row can keep the
-domain ON. The sequencer separately requires coherent policy and status zero,
-plus the existing AHB, MBUS and PPU clock checks. A competing live row or a
-closed master gate therefore causes terminal retention. Domain 4 receives no
-GPU gate exemption.
+The refusal budget is synchronous and bounded: zero PCK, CCU, SYSCTRL or
+PMIC writes and zero ownership changes. Diagnostic RTC breadcrumbs are the
+only hardware-write exception. No refusal attempts recovery or cleanup.
 
-After OFF READY, call `a733_npu_startup_power_restart()` until READY. It
-queues ON using the same row identity and a fresh request generation. The
-power service repins that row through its existing ledger. The sequencer
-requires coherent policy and status eight and the full gate checks, then
-reuses the ordinary stopped restart, adopted PLL qualification and local
-opening. It advances the remaining startup steps internally. The caller
-must reopen and configure the controller, republish translation tables and
-bootstrap, and require a fresh interrupt before submitting another job.
+## Local clock stop and restart remain supported
 
-Both APIs return PENDING during service waits or temporary provider
-contention. Shared-provider BUSY leaves the request unchanged. RETAINED is
-terminal; the caller stops feeding the watchdog and performs no retry.
-Failures preserve remaining clock, rail, PCK, row, buffer and register-lock
-ownership, including uncertainty after a failed unpin. A healthy second
-CLOSE and local stop can return normally with domain 4 still ON.
+After controller END, output copy, reap, idle checks and CLOSE, call
+`a733_npu_startup_stop()`. It closes software register admission, disables
+the module and bus gates, asserts AHB, AXI and core resets, and routes shared
+SRAM to the CPU. Domain 4, DCDC2 and the provider tokens remain owned.
 
-## Preserve the operating point and bound each transition
+`a733_npu_startup_restart()` reuses that stopped provider and its original
+deadline. It qualifies the adopted PLL, routes SRAM to the NPU, releases
+local resets and opens local gates. The caller must then reopen and configure
+the controller, republish translation tables, bootstrap and require a fresh
+interrupt before another job. Local restart after a physical-OFF refusal is
+forbidden because failure is terminal.
 
-The cycle changes PCK domain policy and its counted row pin only. DCDC2
-remains at the inherited 800 mV; the selected PLL_NPU rate and shared leases
-remain owned. It changes no PMIC selector, rail enable or PLL rate. The finite
-hardware proposal selects the vendor's 852 MHz operating point.
+Local stop/open table writes, PLL opening, SRAM routing, the power precheck,
+refusal and supported domain-4 ON delay/policy/status operations have named
+16-bit breadcrumbs. Each marker precedes its operation and grants no access.
+The local restart retains its 20 us PLL qualification, 2 ms local settle,
+1 s bootstrap/job deadlines and 20 s total session budget.
 
-The power owner requires each acknowledgement strictly before 10,000 us from
-the policy write and before its existing session deadline. A status read
-that crosses either bound fails. Startup also checks the original absolute
-session deadline before accepting either transition. Retained ownership has
-no expiry that could authorize another caller to use uncertain resources.
-The existing PLL qualification, 20 us settle and 2 ms local settle remain.
-The finite diagnostic retains its bootstrap and job budgets of 1 s each and
-its total session budget of 20 s.
+## Host checks and remaining physical gap
 
-The startup fields `power_off_request_us`, `power_off_ack_us`,
-`power_on_request_us` and `power_on_ack_us` use counter microseconds.
-Request timestamps precede service processing; acknowledgement timestamps
-follow the sequencer's physical policy/status and gate checks. Their
-difference measures request-to-observation latency, including scheduling.
-It does not measure the owner's policy-write-to-acknowledgement interval.
-The `power_off_policy`, `power_off_status`, `power_on_policy` and
-`power_on_status` fields record the coherent low nibbles accepted by those
-checks. Finite diagnostics record breadcrumbs for OFF request, OFF accepted,
-ON request, ON accepted and restart READY.
+`checks/npu-startup-host.c --power-cycle` verifies synchronous physical-OFF
+refusal with unavailable domain access, invalid status, ledger contention
+and unavailable supply validation. It checks zero MMIO/PMIC accesses and
+unchanged generations, counts, pins and tokens. Fabricating a legacy OFF
+stage cannot revive a refused startup. The separate `--restart` mode checks
+successful local restart and retained failure behavior.
 
-## Vendor ordering permits local stop before OFF
+`checks/power-domains-pck.c` checks both OFF refusal boundaries and retains
+the delayed-status model for supported NPU ON and GPU transitions. NPU ON
+coverage includes partial delay writes, readback errors and exact deadline
+boundaries. `checks/a733-pmic.c` rejects all DCDC2 target bytes before
+transport with shared and exclusive tokens. `crumb-check.py` checks marker
+identities and decoding.
 
-The pinned VIP2 source calls `pm_runtime_put()` before `npu_clk_uninit()` in
-`vip_drv_device_platform.c`, lines 433–436. The runtime header defines put
-with `RPM_ASYNC`, lines 460–462, so the call does not wait for domain OFF.
-Runtime work can complete the PCK transition after local clocks stop.
-
-The pinned Allwinner `pck600_domains.c` callback writes the policy nibble,
-executes DSB SY and polls status for at most 10,000 us, lines 104–124.
-It accesses no engine register or local clock. Its independent PPU clock
-must remain available. Delay initialization is at lines 126–142 and 269.
-These sources are pinned by revision and hash in
-[the source manifest](../../sources.lock.json) and audited in
-[the NPU reference record](../../docs/reference-backsolve-npu.md).
-
-The vendor clock initialization precedes synchronous domain resume on ON.
-SunstoneOS preserves its existing, physically observed startup order:
-confirm domain ON before local engine opening. That earlier evidence does
-not establish successful restart after domain loss.
-
-## Host coverage and physical evidence gap
-
-`checks/npu-startup-host.c --power-cycle` exercises repeated complete cycles,
-fresh row generations, a competing live row, late, stalled and invalid
-acknowledgements, stopped-state and software-window guards, lost ownership,
-partial reads, failed unpin, closed master gates and session expiry.
-It tests contention in all three shared providers before and during both
-requests and checks that policy writes occur with local clocks stopped.
-Clock, rail and PCK identities stay fixed; PLL and PMIC write counts stay
-unchanged across the cycle.
-
-`checks/power-domains-pck.c` covers domain-4 delay-word I/O and readback
-failures, exact transition deadline boundaries, clock failure and regression,
-plus successful OFF/ON. The existing GPU transition and delay checks remain
-applicable. The domain-4 OFF regression fails against the original provider
-and passes with the extended counted release.
-
-Clang 21 builds with AddressSanitizer and nonrecovering UndefinedBehaviorSanitizer
-pass the power-cycle, existing startup and provider modes. Source inspection
-and host models establish software behavior only. Physical acceptance still
-requires a frozen image and Git revision, retained breadcrumbs and counter
-measurements, coherent OFF then ON, controller bootstrap, a fresh interrupt
-and matching inference after restart. The coordinator runs that bounded
-RAM-only diagnostic under the host-armed watchdog without automatic retry.
+The failed physical run lost USB without a recovered native fault. It does
+not establish rail shutdown, watchdog expiry failure or an executed failure
+point. Physical NPU OFF remains unsupported. After coordinator recovery,
+an instrumented local stop/restart control can test two matching jobs and
+normal return with domain 4 ON and DCDC2 at 800 mV. That proposal requires
+its own admission and frozen-image review; host checks do not qualify it.

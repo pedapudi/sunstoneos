@@ -48,10 +48,9 @@ enum {
     SS_EXTENT_DMA = 7,             /* adopted DMA0 RAM-copy service facts */
     SS_EXTENT_INPUTS = 16           /* struct ss_input_fact per INPUT region, manifest order */
 };
-/* USB class profile's reserved NC pool and read-only application alias.
- * evidence identifies the reviewed reservation for this exact range under
- * the board prefix memory authority. Geometry alone is not physical ownership
- * evidence; the original boot-image reservation hash does not cover this pool. */
+/* Optional USB class NC-pool geometry and read-only application alias.
+ * The evidence field preserves the wire layout for host records; the image
+ * checks geometry only. The runner establishes physical launch authority. */
 struct ss_usb_memory_extent {
     uint64_t version, base, bytes, alias;
     uint8_t evidence[32];

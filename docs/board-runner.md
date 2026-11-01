@@ -6,7 +6,8 @@ Physical qualification remains the coordinator's responsibility. Workers submit
 images without opening a USB device.
 
 `tools/dev-run.py` is a compatibility wrapper around this runner. Its existing
-`cpu-return`, `gpu-return`, `npu` and `rail-helper` commands remain available.
+`cpu-return`, `gpu-return`, `npu` and `rail-helper` commands remain available;
+`usb-class` selects the native USB probe route described below.
 `--state` always selects offline preparation; force and skip-normalization
 options cannot bypass admission. Offline application checks use `board.py check
 IMAGE --kind cpu-return --state CAPTURE --evidence OUTPUT`; native probes keep
@@ -58,8 +59,9 @@ word and the input length, packed as `<IIQ`.
 
 `--template DIR` selects a typed-session bundle containing `session.bin` and
 `input-N.bin`, or a legacy bundle containing `board/session-template.bin` and
-`assets/`. Generic images copy service records and manifest inputs without
-application-specific asset handling. The default CPU template supplies the
+`assets/`. Generic images preserve typed service extents and regenerate manifest
+input facts. Preparation refreshes the JPEG extent's embedded board prefix with
+the outer session identity. The default CPU template supplies the
 cached board, thermal and CPU grant records. GPU ladder images use the cached
 GPU template and host source tree; `--host-tree DIR` selects another compatible
 legacy decoder. The OS's generic path has no mimus dependency.
@@ -85,7 +87,10 @@ readbacks, outputs, return report, decoded breadcrumbs and `result.json`.
 
 The runner verifies the A733 ROM instructions, protects the `readl` helper's
 SRAM scratch, and uses the measured four-second WDT0 sequence to obtain a fresh
-FEL instance. It waits for the new instance's udev permissions. DRAM setup reuses
+FEL instance. It waits for the new instance's udev permissions. While the board
+re-enumerates, a sysfs attribute read can fail with ENODEV or ENOENT; discovery
+treats both as an absent device and the wait continues until its deadline
+([`checks/usb-access-discover.py`](../checks/usb-access-discover.py)). DRAM setup reuses
 `tools/run-ddr.py` under the same lock. A matching SID selects a cached training
 record; missing or rejected restoration falls back to full training. The default
 record directory is `~/.cache/sunstoneos/ddr-records`;
@@ -179,6 +184,42 @@ both the returning watchdog contract and the linked OS NPU service, and use
 typed service sessions. Finite native NPU diagnostics use the preparation and
 retirement rules described below. Neither format's serialization establishes
 physical qualification.
+
+## USB class probes require finite device cleanup
+
+`--kind usb-class` uses the existing [native probe contract](board-probe-contract.md).
+The ELF must link `a733_usb2_native_poll`, the immutable probe marker and the
+strong device-quiescence and interrupt-restoration hooks. Preparation creates
+the standard probe session and uploads; capture validates the standard nonce,
+cleanup flags, retired CPU mask, disabled watchdog and payload checksum.
+The route needs no CPU session template or captured CPU clock state.
+
+Every USB class probe requires `--approved-by coordinator` after review of the
+source and current-cutoff evidence. Selecting `--kind probe` for the same linked
+USB image preserves that requirement. The approval field records coordinator
+authorization; it supplies no electrical evidence. VBUS approval remains pending.
+The development wrapper accepts the same kind, descriptor and approval fields.
+
+The input, serial, camera and camera-JPEG OS images remain inadmissible. Their
+supervised lifetime publishes application output while retaining controller
+resources. It lacks native USB host and USB0 drain, interrupt restoration and a
+finite normal return. Service-buffer release does not establish controller DMA
+completion. The CPU-return supervisor rejects USB startup, and the native probe
+requires all secondary CPUs to remain statically OFF. These lifetimes cannot be
+substituted for each other. A power-removal marker is refused before device
+access, including when coordinator approval is supplied.
+
+A finite accessory-free control must first implement a source-backed stop and
+restore sequence under the probe contract. Its source and selected image must
+establish whether VBUS is touched. No control image or OS class image is frozen
+while these prerequisites remain unresolved. A watchdog reset records failure
+and loses DRAM; it does not authorize reading retained application output.
+
+The generic session parser accepts an optional USB memory extent only with the
+fixed `0x42200000..0x42a00000` arena and `0x7a000000` application alias. Its digest
+does not establish RAM ownership. Backup geometry includes that arena only when
+the actual writable, non-executable `.uncached_pool` load allocation and strong
+linker bounds cover the exact range. Application result bounds remain unchanged.
 
 ## Qualify on port 3-1
 

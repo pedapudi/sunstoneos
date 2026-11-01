@@ -1,6 +1,23 @@
 #include "application.h"
 #include "host_irq.h"
 #include "gicv3_spi.h"
+#ifdef SUNSTONE_BOARD_HOST_DEADLINE
+#include "sunstone_deadline.h"
+static struct {uint64_t deadline;unsigned initialized,ready;} schedule;
+int board_host_irq_deadline_init(void)
+{
+#ifdef SUNSTONE_A733_OS
+    extern int board_service_deadline_register(unsigned);
+    if(!board_service_deadline_register(BOARD_SERVICE_USB2))return 0;
+#else
+    /* Other board images still use periodic health accounting. */
+    return 0;
+#endif
+    schedule.initialized=1;return 1;
+}
+void board_host_irq_schedule(uint64_t deadline,int ready)
+{schedule.deadline=deadline;schedule.ready=!!ready;}
+#endif
 /* The EL3 route installer establishes Group1NS, level-high, CPU0 and0xb0.
  * All task/ISR binding fields share the existing kernel critical section. */
 static const struct gicv3_spi source={0x03400000,187};
@@ -73,11 +90,37 @@ int board_host_irq_after(void)
 }
 void board_host_irq_wait(void)
 {
+#ifdef SUNSTONE_BOARD_HOST_DEADLINE
+    if(!schedule.initialized||!schedule.deadline){taskENTER_CRITICAL();irq.fault=1;taskEXIT_CRITICAL();return;}
+    uint64_t now=sunstone_deadline_now_us();
+    if(schedule.deadline<=now)return; /* Poll must classify expired hardware. */
+    if(!irq.deferred&&(irq.draining||schedule.ready)&&++irq.burst<32)return;
+    uint64_t until=schedule.deadline;
+    if(irq.deferred||irq.draining||schedule.ready){
+        /* GIC mask/active status has no separate completion IRQ. Retry it,
+         * or yield a saturated software batch, without tick rounding. Never
+         * move a hardware deadline later for this bounded retry. */
+        uint64_t retry=now>UINT64_MAX-50?UINT64_MAX:now+50;
+        if(retry<until)until=retry;
+    }
+    irq.burst=0;
+#ifdef SUNSTONE_A733_OS
+    extern int board_service_blocked_until(unsigned,uint64_t);
+    /* Holds and deferred enumeration expire normally. The certificate covers
+     * this wait within the immutable session budget, then bounds observation
+     * after wake; poll still enforces each earlier command/transfer timeout. */
+    if(!board_service_blocked_until(BOARD_SERVICE_USB2,board.host.platform.config.lifetime_deadline)){
+        taskENTER_CRITICAL();irq.fault=1;taskEXIT_CRITICAL();return;
+    }
+#endif
+    if(sunstone_deadline_wait_until(until)==SUNSTONE_DEADLINE_ERROR){taskENTER_CRITICAL();irq.fault=1;taskEXIT_CRITICAL();}
+#else
     /* Bound ready software work just like event draining. Hardware completion
      * and idle waits still need their existing bounded wake until this owner
      * has a precise timer and notifications for its other providers. */
     if((irq.draining||(board.host.core_started&&a733_xhci_work_pending(&board.host.core)))&&++irq.burst<32)return;
     irq.burst=0;(void)ulTaskNotifyTake(pdTRUE,1);
+#endif
 }
 void board_host_irq_stop(void)
 {

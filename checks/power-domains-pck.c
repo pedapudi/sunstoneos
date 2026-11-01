@@ -10,8 +10,8 @@
  * reads, and issues no PMIC transaction: supply verification makes 12 per
  * boot. A slow acknowledgement spins at least 50 us, then costs at most one
  * tick per retry and fails by 10 ms plus one tick, retaining the row, its rail
- * pin and the domain. Domain 5 powers off only with the GPU gate and reset
- * closed. The read-only check for the NPU writes nothing. Output: one JSON
+ * pin and the domain. Domain 5 powers off before GPU-local clock/reset
+ * shutdown. Domain 4 refuses OFF; its read-only check writes nothing. Output: one JSON
  * line of measurements, then PASS.
  *
  * With one argument, the check also runs the GPU controller through one
@@ -238,22 +238,20 @@ static void npu_transition_failures(void)
 {
     fault_domain=4;
     for(unsigned fault=1;fault<=6;++fault)for(unsigned index=0;index<(fault<=3 ? 5u : 1u);++index) {
-        setup();d.ack_us=0;d.ppu[4][0]|=8;d.ppu[4][2]|=8;
+        setup();d.ack_us=0;
         struct a733_rail_token token={0};struct a733_power_domain_row row={0};
         assert(a733_power_domain_row_init(&row,&d.owner,4,78,&token));
         domains_boot();token=domains_rail(78,A733_RAIL_DCDC2);
-        assert(a733_power_domain_request(&row,1));service_step();
-        assert(a733_power_domain_state(&row)==A733_POWER_ROW_ON && !d.owner.domain[1].delays_ready);
         delay_fault=fault;delay_index=fault<=3 ? index : 4;delay_hits=clock_fault_pending=0;
         d.owner.ops.read=delay_read;d.owner.ops.write=delay_write;m.provider.pmic_bus_ops.now=deadline_clock;
-        assert(a733_power_domain_request(&row,0));service_step();
+        assert(a733_power_domain_request(&row,1));service_step();
         assert(delay_hits==1 && a733_power_domain_state(&row)==A733_POWER_ROW_FAILED && row.counted);
-        assert((d.ppu[4][0]&15)==8 && (d.ppu[4][2]&15)==8);
+        assert((d.ppu[4][0]&15)==0 && (d.ppu[4][2]&15)==0);
         assert(a733_power_authority_load(&m.rails.authority)&A733_POWER_DOMAIN4_FAULT);
         assert(a733_rail_release(&m.rails,&token,m.now+1000)==A733_RAIL_BUSY);
         delay_fault=0;
     }
-    for(unsigned on=0;on<2;++on)for(unsigned mode=0;mode<7;++mode) {
+    for(unsigned on=1;on<2;++on)for(unsigned mode=0;mode<7;++mode) {
         setup();
         struct a733_rail_token token={0};struct a733_power_domain_row row={0};
         assert(a733_power_domain_row_init(&row,&d.owner,4,76,&token));
@@ -274,7 +272,7 @@ static void npu_transition_failures(void)
         assert(row.counted==(!mode ? on : 1));
     }
     fault_domain=5;
-    puts("PASS domain4: 18 partial delay I/O/readback/time failures and 14 exact transition deadline/clock cases");
+    puts("PASS domain4: 18 ON delay I/O/readback/time failures and seven exact ON deadline/clock cases");
 }
 static void delay_trace(unsigned from,unsigned initialized,unsigned on)
 {
@@ -649,9 +647,16 @@ int main(int argc,char **argv)
     assert(!writes_since(from) && a733_power_domain_check(&d.owner,2,NULL)==0);
     n2=domains_rail(72,A733_RAIL_DCDC2);assert(a733_power_domain_request(&npu,1));
     service_step();assert(a733_power_domain_state(&npu)==A733_POWER_ROW_ON && (d.ppu[4][0]&15)==8);
-    assert(a733_power_domain_request(&npu,0));
-    service_step();assert(a733_power_domain_state(&npu)==A733_POWER_ROW_OFF && !npu.counted);
-    assert((d.ppu[4][0]&15)==0 && (d.ppu[4][2]&15)==0);
+    const unsigned request=atomic_load(&npu.request),pins=m.rails.pins[n2.id&(A733_RAIL_CLIENTS-1)];
+    from=d.trace_n;const unsigned pmic_writes=m.writes;
+    assert(!a733_power_domain_request(&npu,0));
+    assert(atomic_load(&npu.request)==request && npu.counted && d.owner.domain[1].count==1);
+    assert(m.rails.pins[n2.id&(A733_RAIL_CLIENTS-1)]==pins && d.trace_n==from && m.writes==pmic_writes);
+    /* Inject a legacy/direct OFF request to test the independent owner defense. */
+    atomic_store(&npu.request,request+1);service_step();
+    assert(a733_power_domain_state(&npu)==A733_POWER_ROW_REFUSED && npu.counted && d.owner.domain[1].count==1);
+    assert(m.rails.pins[n2.id&(A733_RAIL_CLIENTS-1)]==pins && !writes_since(from) && m.writes==pmic_writes);
+    assert((d.ppu[4][0]&15)==8 && (d.ppu[4][2]&15)==8);
     assert(a733_power_domain_request(&npu,1));service_step();
     assert(a733_power_domain_state(&npu)==A733_POWER_ROW_ON && npu.counted);
     /* Registration closes once the service runs. */

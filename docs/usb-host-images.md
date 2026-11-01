@@ -1,11 +1,57 @@
-# USB class images await supervised board admission
+# USB host qualification images and attachment
+
+## Attach checklist after the empty-port runs
+
+- Keep TYPEC16 connected for board power and USB0/FEL recovery.
+- Use TYPEC24, the USB-C/DisplayPort connector, for a separately powered
+  high-speed USB2 hub with verified upstream backfeed protection. Its supply
+  must cover the hub, webcam and other peripherals together.
+- Attach a boot keyboard and mouse or combined receiver, a UVC MJPEG/YUYV
+  webcam, and a supported CDC-ACM, CP210x, CH340/341, FTDI or PL2303 adapter.
+- For serial, connect a voltage-compatible 1 Mbaud, 8N1 test source and
+  receiver with common ground. Do not connect an RS-232 voltage interface
+  directly to TTL pins. Press a key or move the mouse during the input run.
+- Keep TYPEC24 empty for the source-disabled control, one-second pulse and
+  ten-second hold on board port `3-1`. The coordinator approves these runs
+  using the vendor PL8/SY6280 protection. Each needs PL8 post-return readback
+  from the updated runner. Attach the hub only after all three return normally.
+
+The [USB status](status/usb.md) records the approval, reset-state limits and
+software cleanup requirements.
+
+## Empty-port images are ready for the updated runner
+
+The package is under
+`~/.cache/sunstoneos/build/usb-host-board-1101/qualification/vbus-images/`.
+Each directory contains `image.elf`, `decoder.py` and a short README with its
+submission command and expected result. All three images pass host admission
+and the native cutoff, fatal-cleanup and sequential-retirement models.
+These checks establish no physical VBUS result.
+
+| Directory | Test with TYPEC24 empty | ELF SHA-256 |
+| --- | --- | --- |
+| `control` | Source disabled, open CC, normal return | `f4f58d544a58b21c39298d2fb184b17536c1087e321f4790b7e336904d100ec7` |
+| `pulse-1s` | VBUSOK rise, source on for 0.980–1.000 s, VBUSOK fall, normal return | `390c84eed35f4fbc5027278a9d42f5fba37edff92305da6a36c8f6ebabfff3f0` |
+| `hold-10s` | VBUSOK rise, source on for 9.980–10.000 s, VBUSOK fall, normal return | `d067b62a130c75cca01d354c11da10b310bbbd823400033212244b5fb230575b` |
+
+The coordinator must integrate the runner PL8 checks before submission and use
+that runner for the queue daemon. The observed daemon uses `bringup` without
+those checks; no diagnostic entry is submitted to it. Run the control first,
+then submit each powered image only after the prior result passes. The
+submission commands use the full payload decoder and its failure predicates.
+They do not compare dynamic timing fields with a fixed success string.
+
+The four class packages below are archived host artifacts. Their returning
+controller and decoder lifetimes remain open; they are not admitted board
+entries. Rebuild them after the empty-port results pass and finite class
+cleanup is integrated. No physical host result is claimed.
 
 The native images implement OS-owned HID input, USB serial and UVC camera
 services. Application manifests grant each class separately. Host checks and
 native links pass; physical device operation and sustained traffic remain
 unqualified. The accepted objective remains incomplete.
 
-## Frozen images identify their devices and expected results
+## Archived images identify their devices and expected results
 
 The package is under
 `~/.cache/sunstoneos/build/integrate-streams-1031/usb/images/`. Each directory contains
@@ -39,14 +85,17 @@ class images.
 
 ## Builds select the actual native class paths
 
-Run from the SunstoneOS checkout. Each configuration uses a separate cache
-directory. The empty external application path keeps the OS independent of
-mimus.
+Run this recipe after the approved empty-port runs pass and finite class
+return is implemented. Each configuration uses a separate cache directory. The empty
+external application path keeps the OS independent of mimus.
 
 ```sh
 py="$HOME/.cache/sunstoneos/venv/bin/python3"
 cfg="$HOME/.cache/sunstoneos/bin/cfg.sh"
-build="$HOME/.cache/sunstoneos/build/integrate-streams-1031/usb/reproduction/native"
+scratch="$HOME/.cache/sunstoneos/build/usb-host-board-1101/qualification"
+build="$scratch/native"
+mkdir -p "$scratch/tmp"
+export TMPDIR="$scratch/tmp"
 
 for class in input serial camera; do
   "$cfg" "$PWD" "$build/$class" -DMIMUS_DIR= -DSUNSTONE_A733_OS=ON \
@@ -54,7 +103,7 @@ for class in input serial camera; do
     -DSUNSTONE_BOARD_USB2_IRQ=ON -DCMAKE_C_COMPILER=/usr/bin/clang-21 \
     -DCMAKE_ASM_COMPILER=/usr/bin/clang-21 -DCMAKE_CXX_COMPILER=/usr/bin/clang++-21 \
     -DPython3_EXECUTABLE="$py" -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-  cmake --build "$build/$class" --target "sunstone-a733-os-usb-$class" -j8
+  cmake --build "$build/$class" --target "sunstone-a733-os-usb-$class" -j2
 done
 
 "$cfg" "$PWD" "$build/camera-jpeg" -DMIMUS_DIR= -DSUNSTONE_A733_OS=ON \
@@ -63,10 +112,10 @@ done
   -DCMAKE_C_COMPILER=/usr/bin/clang-21 -DCMAKE_ASM_COMPILER=/usr/bin/clang-21 \
   -DCMAKE_CXX_COMPILER=/usr/bin/clang++-21 -DPython3_EXECUTABLE="$py" \
   -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-cmake --build "$build/camera-jpeg" --target sunstone-a733-os-usb-camera -j8
+cmake --build "$build/camera-jpeg" --target sunstone-a733-os-usb-camera -j2
 
 "$py" -B apps/usb-host/package.py --build-root "$build" \
-  --output "$HOME/.cache/sunstoneos/build/integrate-streams-1031/usb/reproduction/images"
+  --output "$scratch/images"
 ```
 
 The package tool refuses an existing destination and verifies the native link
@@ -124,27 +173,50 @@ changed during this integration.
 
 ## The coordinator must establish launch and physical authority
 
-The package READMEs give exact offline `apps/os/prepare.py` commands for each
-desired run. Preparation requires a sealed workload-zero board prefix, thermal
-extent type 1, and USB memory extent type 6. Input grants are `0x2` for keyboard,
+The archived package READMEs give offline `apps/os/prepare.py` commands for the
+older images. Their mandatory USB memory extent describes the old reservation.
+Current source uses the existing memory owner and accepts an optional extent
+type 6 only when its geometry matches the linked reservation. Preparation
+still uses a sealed board prefix and thermal extent type 1.
+Input grants are `0x2` for keyboard,
 `0x20` for mouse or `0x22` for both; serial uses `0x40`, camera `0x80`.
 The JPEG image also requires its version-4 extent type 5. These records must
 identify actual board authority; the package supplies none.
 
-The new exclusive RAM range is `0x47000000..0x48000000`. The earlier image-RAM
-DDR record does not cover it. The coordinator must establish its ownership,
-remote-writer exclusion and use before launching these images.
+The current linker reserves `0x42200000..0x42a00000` as an 8 MiB uncached arena.
+The existing allocator owns it; USB takes the first 5 MiB lease and retained
+JPEG allocations fit in the remainder. The old `0x47000000..0x48000000`
+reservation overlaps the private NPU pool at `0x47400000..0x47c00000`.
+The archived images must be rebuilt before current qualification. The runner
+must establish physical ownership, remote-writer exclusion and restoration
+for the new arena; linker and host checks establish no physical authority.
 TYPEC24 also needs its existing qualified source, PHY, clock and rail records.
 VBUS enable requires coordinator approval and an explicit admitted source
 session. These host checks grant neither.
 No Type-C source admission record is established by these host checks.
 
-These supervised images retain resources. The protected development
-runner currently accepts CPU-return images; it must refuse these images because
-their host drain and normal return are unqualified. A supervised USB-class
-launch/capture route in that shared runner remains an integration blocker.
-An executable board-launch command is therefore not supplied. Direct FEL
-commands would bypass that required ownership path.
+The protected runner supports `--kind usb-class` for finite native probes,
+using the shared watchdog contract and verified quiescence/normal-return
+receipt. Coordinator approval is mandatory. The four OS images retain
+resources and lack that returning lifetime, so the new route refuses them.
+It supplies no substitute for host halt, completed DMA writes or decoder
+retirement. An executable class launch command is therefore not supplied.
+
+No new physical queue entries or class image packages are submitted while
+these prerequisites are unresolved. The empty-port control must report no
+device and keep PL8 low. The separate empty-port pulse requires independent
+cutoff and coordinator approval described in
+[USB status](status/usb.md). A completely empty port does not satisfy normal
+Type-C attachment. A Rd/load fixture is needed for loaded qualification.
+After power approval and real finite cleanup, run the source-only pulse
+before the input, serial, raw camera and JPEG camera images.
+
+Raw class owners and application notification waits use the architectural
+timer and IRQ wakeups. The JPEG image preserves its existing waiter until
+decoder setup, IRQ81 and chunked readout have real wake/readiness hooks.
+UVC mode/frame spans share the CSI camera contract; complete native lifecycle
+and application-kit binding remain open. See the
+[real-time audit](status/driver-realtime-audit.md).
 
 For the requested physical runs, attach the named accessory to TYPEC24 while
 keeping TYPEC16 on the development host. Establish a 5 V source capable of the
