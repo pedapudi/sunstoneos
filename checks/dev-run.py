@@ -8,14 +8,18 @@ launcher admits the image's WDT0 mode, and the typed session follows the
 image's manifest, takes the reviewed board prefix, thermal record and CPU
 clock grant with fresh identities and the live thermal clock fields, and is
 admitted by the linked image's own contract check. The state check derives the
-thermal clock mode and refuses states the image's guards refuse; such a state,
-an image without the watchdog marker and the refused kinds stop before any
-launch. A modeled FEL then drives the shared transport through the runner's
-command line: a normal return whose Adler-32 matches passes, a wrong or
-malformed result fails after DRAM restoration, a result of another session or
-a bad return report quarantines the instance without holding the process, a
-watchdog reset is decoded, a state change since capture stops the run before
-any write, and an external decoder module decodes the result. No USB node,
+thermal clock mode and refuses states the image's guards refuse; such a state
+and the refused kinds stop before any launch, and an image without the
+watchdog marker or inputs that differ from the manifest stop before the board
+is read. A modeled FEL then drives the shared transport through the runner's
+command line. Its memory reads back what was written, and every other address
+reads a pattern of its own address. A normal return whose Adler-32 matches
+passes and runs the rail helper when asked; a wrong or malformed result fails;
+every returned run leaves all DRAM as it was before the run. A result of
+another session or a bad return report quarantines the instance without
+holding the process, a watchdog reset is decoded and skips the rail helper, a
+state change since capture stops the run before any write, and an external
+decoder module decodes the result and may report it failed. No USB node,
 queue or FEL executable is opened.
 """
 import argparse
@@ -49,10 +53,52 @@ crumbs = load('checked_dev_crumbs', ROOT / 'tools/a733-crumbs.py')
 hello = load('checked_hello_host', ROOT / 'apps/hello-compute/host.py')
 CAPTURE = dev.EVIDENCE / 'sol-resume-20261031/port-3-3/cpu-thermal-state/session.json'
 rows = []
+# Addresses the modeled application overwrites. hello-compute has no WORK or
+# OUTPUT region, and an application must not write its INPUT regions, so only
+# image RAM changes besides the host's uploads.
+DIRTIED = (0x41000000,)
 
 
 def passed(name, **extra):
     rows.append({'name': name, 'passed': True, **extra})
+
+
+class Memory:
+    """Board memory: written bytes read back, and an address never written
+    reads a pattern derived from its page number."""
+    PAGE = 4096
+
+    def __init__(self):
+        self.pages = {}
+
+    @classmethod
+    def pattern(cls, number):
+        return hashlib.sha256(number.to_bytes(8, 'little')).digest() * (cls.PAGE // 32)
+
+    def page(self, number):
+        return self.pages.setdefault(number, bytearray(self.pattern(number)))
+
+    def write(self, address, data):
+        while data:
+            number, offset = divmod(address, self.PAGE)
+            n = min(len(data), self.PAGE - offset)
+            self.page(number)[offset:offset + n] = data[:n]
+            address, data = address + n, data[n:]
+
+    def read(self, address, size):
+        out = bytearray()
+        while size:
+            number, offset = divmod(address, self.PAGE)
+            n = min(size, self.PAGE - offset)
+            page = self.pages.get(number)
+            out += (page if page is not None else self.pattern(number))[offset:offset + n]
+            address, size = address + n, size - n
+        return bytes(out)
+
+    def changed_dram(self):
+        """Start addresses of DRAM pages that differ from their pattern."""
+        return [n * self.PAGE for n, page in self.pages.items()
+                if n * self.PAGE >= 0x40000000 and page != self.pattern(n)]
 
 
 def captured_state():
@@ -183,8 +229,21 @@ def refusal_cases(out, live):
     assert name in data
     data = data.replace(name, b'\0Os_cpu_return_watchdog\0')   # rename the marker symbol
     (root / 'image.elf').write_bytes(data)
-    code, record = run_main(root, live, ['--image', str(root / 'image.elf')])
-    assert code == 1 and record['outcome'] == 'refused-before-launch' and 'watchdog marker' in record['summary']
+    (root / 'state.json').write_text(json.dumps(live))
+    (root / 'input.bin').write_bytes(hello.inputs()[0])
+    def unread(fel):
+        raise AssertionError('board read before an image refusal')
+    for argv, text in ((['--image', str(root / 'image.elf')], 'watchdog marker'),
+                       (['--input', str(root / 'input.bin')] * 2, 'Input count differs')):
+        evidence = root / 'evidence'
+        if evidence.exists():
+            shutil.move(str(evidence), str(root / ('evidence-' + text.split()[0])))
+        with patch.object(dev, 'capture', unread):
+            code = dev.main(['cpu-return', '--port', '3-3', '--evidence', str(evidence), '--fel', str(root / 'fel'),
+                             *argv])
+        record = json.loads((evidence / 'dev-run.json').read_text())
+        assert code == 1 and record['outcome'] == 'refused-before-launch' and text in record['summary'], record
+        assert not record['launched'] and not (evidence / 'state.json').exists()
     for kind, text in (('gpu-return', 'pre-split'), ('npu', 'npu is refused')):
         stream = io.StringIO()
         with contextlib.redirect_stderr(stream):
@@ -193,7 +252,7 @@ def refusal_cases(out, live):
             except SystemExit as stop:
                 assert stop.code == 2, (kind, stop.code)
         assert text in stream.getvalue(), (kind, stream.getvalue())
-    passed('refused-before-launch', cases=['state', 'image-without-watchdog', 'gpu-return', 'npu'])
+    passed('refused-before-launch', cases=['state', 'image-without-watchdog', 'input-count', 'gpu-return', 'npu'])
 
 
 def return_report(host, epoch):
@@ -221,7 +280,7 @@ def transport_case(host, launcher, root, live, variant, argv=(), payload=None):
     returning = host.cpu.returning
     old, new = Path('/dev/bus/usb/003/056'), Path('/dev/bus/usb/003/057')
     state = {'locked': False, 'guard': False, 'node': old, 'launched': False, 'quarantined': 0,
-             'calls': [], 'mode': 0, 'rtc': {}, 'memory': {}, 'writes_after_launch': 0}
+             'calls': [], 'mode': 0, 'rtc': {}, 'memory': Memory(), 'writes_after_launch': 0, 'rails': 0}
     words = {int(k, 16): v for k, v in live['words'].items()}
     geometry = host.geometry(dev.CONTROL_IMAGE)
     class Access:
@@ -266,15 +325,17 @@ def transport_case(host, launcher, root, live, variant, argv=(), payload=None):
                     value = state['rtc'].get(address - crumbs.RTC, 0)
                 out.append(hex(host.ROM_ENTRY.get(address, 0) if value is None else value))
             elif op == 'write':
-                data = Path(arguments[i + 2]).read_bytes(); state['memory'][int(arguments[i + 1], 0)] = data; i += 3
+                data = Path(arguments[i + 2]).read_bytes(); state['memory'].write(int(arguments[i + 1], 0), data); i += 3
                 state['writes_after_launch'] += state['launched']
             elif op == 'read':
                 address, size = int(arguments[i + 1], 0), int(arguments[i + 2])
-                data = state['memory'].get(address, b'')
-                Path(arguments[i + 3]).write_bytes(data if len(data) == size else bytes(size)); i += 4
+                Path(arguments[i + 3]).write_bytes(state['memory'].read(address, size)); i += 4
             elif op == 'exe':
                 assert state['guard'] and state['mode'] == 0xb1, 'exe inside the guard with WDT0 armed'
-                i += 2; state['launched'] = True; state['node'] = new; state['memory'].clear()
+                i += 2; state['launched'] = True; state['node'] = new
+                # The application overwrites part of its image RAM.
+                for region in DIRTIED:
+                    state['memory'].write(region, b'\xa5' * 65536)
                 meta = json.loads((root / 'evidence/bundle/dev-bundle.json').read_text())
                 epoch, generation = meta['epoch'], meta['generation']
                 state['rtc'][0x100] = 0x5c0d0000 | epoch & 0xffff
@@ -285,11 +346,11 @@ def transport_case(host, launcher, root, live, variant, argv=(), payload=None):
                 else:                    # normal ROM return: disarmed, RETURN_ROM 0
                     state['mode'] = 0; state['rtc'][0x104] = 0x0503 << 16
                     if variant != 'bad-report':
-                        state['memory'][geometry['report_address']] = return_report(host, epoch)
+                        state['memory'].write(geometry['report_address'], return_report(host, epoch))
                     if payload is not None:
                         record_epoch = epoch ^ (variant == 'foreign-result')
-                        state['memory'][geometry['output_address']] = result_record(
-                            host, record_epoch, generation, payload, geometry['output_bytes'] - host.host.RESULT.size)
+                        state['memory'].write(geometry['output_address'], result_record(
+                            host, record_epoch, generation, payload, geometry['output_bytes'] - host.host.RESULT.size))
             else:
                 raise AssertionError(op)
         return types.SimpleNamespace(returncode=0, stdout='\n'.join(out), stderr='')
@@ -299,10 +360,14 @@ def transport_case(host, launcher, root, live, variant, argv=(), payload=None):
     original = dev.run_return
     def modeled(args, host_module, bundle, live_state, out):
         return original(args, host_module, bundle, live_state, out, access=Access(), guard=Guard())
+    def rails(args, host_module, evidence):
+        state['rails'] += 1
+        return {'modeled': True}
     with patch.object(host.base, 'digest', side_effect=lambda p: host.base.FEL_HASH if Path(p) == fel else dev.digest(p)), \
             patch.object(returning.subprocess, 'run', process), patch.object(returning.os, 'access', return_value=True), \
             patch.object(returning.time, 'monotonic', lambda: next(clock)), patch.object(returning.time, 'sleep', lambda s: None), \
-            patch.object(dev, 'run_return', modeled), patch.object(dev, 'kit', lambda: (host, launcher)):
+            patch.object(dev, 'run_return', modeled), patch.object(dev, 'restore_rails', rails), \
+            patch.object(dev, 'kit', lambda: (host, launcher)):
         code, record = run_main(root, live, list(argv), launched=True)
     return state, code, record
 
@@ -314,12 +379,12 @@ def transport_cases(host, launcher, out, live):
     decoder.write_text('def decode(payload):\n    return {"first_word": int.from_bytes(payload[:4], "little")}\n')
     (out / 'input.bin').write_bytes(b'external application input')
     small = b'external application input'
-    cases = [('passed', good, (), 0, 'passed'),
+    cases = [('passed', good, ('--restore-rails',), 0, 'passed'),
              ('result-mismatch', struct.pack('<IIQ', zlib.adler32(data) ^ 1, 0, len(data)), (), 1, 'result-mismatch'),
              ('result-invalid', struct.pack('<IIQ', zlib.adler32(data), 7, len(data)), (), 1, 'result-invalid'),
              ('foreign-result', good, (), 1, 'failed'),
              ('bad-report', good, (), 1, 'failed'),
-             ('fired', None, (), 1, 'watchdog-reset'),
+             ('fired', None, ('--restore-rails',), 1, 'watchdog-reset'),
              ('state-changed', None, (), 1, 'failed'),
              ('external-decoder', struct.pack('<IIQ', zlib.adler32(small), 0, len(small)),
               ('--decoder', str(decoder), '--input', str(out / 'input.bin')), 0, 'returned')]
@@ -347,10 +412,14 @@ def transport_cases(host, launcher, out, live):
             # A returned run restores every backed-up DRAM range, whatever the result.
             assert session['complete'] and session['dram_restored'] and not state['quarantined']
             assert state['writes_after_launch'] == len(session['dram_backups'])
+            assert not state['memory'].changed_dram(), (variant, 'DRAM differs after restoration')
             assert session['watchdog']['mode_after_return'] == 0
             assert session['watchdog']['breadcrumbs']['last']['name'] == 'RETURN_ROM'
             assert (run / 'result.bin').read_bytes() == payload
+        # The rail helper runs only after a complete run, and only when asked.
+        assert state['rails'] == (variant == 'passed'), (variant, state['rails'])
         if variant == 'passed':
+            assert 'restored to 800 mV' in record['rails'] and record['rail_helper'] == {'modeled': True}
             assert record['decoded'] == {'adler32': zlib.adler32(data), 'bytes': len(data)}
             launch = next(i for i, c in enumerate(state['calls']) if 'exe' in c)
             uploads = [c for c in state['calls'][:launch] if c[:2] == ['write', hex(0x44000000)]]
@@ -367,7 +436,13 @@ def transport_cases(host, launcher, out, live):
     outcome, detail, _ = dev.judge(hello, good, [data], {'watchdog': {
         'mode_after_return': 0, 'breadcrumbs': {'last': {'name': 'RECOGNITION_START'}}}})
     assert outcome == 'failed' and 'return not normal' in detail
-    passed('judge-raw-result-and-abnormal-return')
+    # A decoder's failures() turns a decoded result into a failure.
+    reporting = types.SimpleNamespace(decode=lambda payload: {'lines': ['FAIL one']},
+                                      failures=lambda decoded: decoded['lines'])
+    outcome, detail, decoded = dev.judge(reporting, good, [data], {'watchdog': {
+        'mode_after_return': 0, 'breadcrumbs': {'last': {'name': 'RETURN_ROM'}}}})
+    assert outcome == 'result-failed' and 'FAIL one' in detail and decoded == {'lines': ['FAIL one']}
+    passed('judge-raw-result-failures-and-abnormal-return')
 
 
 def main():

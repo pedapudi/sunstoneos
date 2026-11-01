@@ -211,8 +211,11 @@ def kit():
             load('dev_os_launcher', ROOT / 'apps/os/prepare.py'))
 
 
-def prepare(host, launcher, image, records, inputs, output, live):
-    """Board bundle from a CPU-return image, a reviewed session's records and the inputs."""
+def image_check(host, image, inputs):
+    """(image bytes, watchdog marker, manifest, manifest facts) of a CPU-return image with these inputs.
+
+    Every refusal here depends only on the image and the inputs, so main()
+    makes it before reading the board."""
     os_host = host.host
     data = Path(image).read_bytes()
     watchdog = os_host.watchdog_marker(data)
@@ -226,6 +229,15 @@ def prepare(host, launcher, image, records, inputs, output, live):
     manifest = info['manifest']
     devices = manifest['devices_required']
     require(not devices & STORAGE, 'The CPU return admits only sessions without USB storage (workload 2).')
+    os_host.input_facts(manifest, [bytes(v) for v in inputs])
+    return data, watchdog, manifest, info
+
+
+def prepare(host, launcher, image, records, inputs, output, live):
+    """Board bundle from a CPU-return image, a reviewed session's records and the inputs."""
+    os_host = host.host
+    data, watchdog, manifest, info = image_check(host, image, inputs)
+    devices = manifest['devices_required']
     findings, derived = state_check(live['words'])
     prefix, thermal, grant = session_records(records, os_host)
     prefix, thermal, grant = bytearray(prefix), bytearray(thermal), bytearray(grant)
@@ -357,6 +369,10 @@ def judge(decoder, payload, inputs, session):
         decoded = decoder.decode(payload)
     except (ValueError, struct.error) as error:
         return 'result-invalid', f'decoder refused the result: {error}', None
+    if hasattr(decoder, 'failures'):
+        found = decoder.failures(decoded)
+        if found:
+            return 'result-failed', 'decoder reports ' + '; '.join(found), decoded
     if not hasattr(decoder, 'expected'):
         return 'returned', 'result ' + json.dumps(decoded, sort_keys=True), decoded
     expected = decoder.expected(inputs)
@@ -442,6 +458,16 @@ def main(argv=None):
         inputs = decoder.inputs() if decoder is not None and hasattr(decoder, 'inputs') else []
     evidence = args.evidence or EVIDENCE / 'dev-runs-1031' / f"{port or 'offline'}-{args.kind}-{time.strftime('%H%M%S')}"
     evidence.mkdir(parents=True, exist_ok=False)
+    try:
+        image_check(host, image, inputs)
+    except ValueError as error:
+        record = {'kind': args.kind, 'port': port, 'image': str(Path(image).resolve()), 'application': name,
+                  'launched': False, 'outcome': 'refused-before-launch',
+                  'summary': summary_of(args.kind, 'not launched', str(error))}
+        save(evidence / 'dev-run.json', record)
+        print(record['summary'])
+        print('evidence:', evidence / 'dev-run.json')
+        return 1
     live = json.loads(args.state.read_text()) if args.state else capture(args.fel)
     save(evidence / 'state.json', live)
     record = {'kind': args.kind, 'port': live['port'], 'identity': live['identity'], 'image': str(Path(image).resolve()),
@@ -449,7 +475,7 @@ def main(argv=None):
               'bundle': str(evidence / 'bundle'), 'launched': False}
     try:
         meta = prepare(host, launcher, image, args.records, inputs, evidence / 'bundle', live)
-    except ValueError as error:
+    except (ValueError, KeyError, OSError, subprocess.SubprocessError) as error:
         meta = None
         record.update(outcome='refused-before-launch', summary=summary_of(args.kind, 'not launched', str(error)))
     if meta:
