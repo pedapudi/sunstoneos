@@ -111,7 +111,7 @@ int npu_runtime_queue_claim(struct npu_runtime_queue *q, struct npu_runtime *rt)
         atomic_load_explicit(&rt->failed, memory_order_acquire) || !rt->service.irq_bound ||
         rt->service.runtime->hooks.idle_hint || xTaskGetSchedulerState() != taskSCHEDULER_RUNNING ||
         xTaskGetCurrentTaskHandle() != rt->slot[0].client || !rt->slot[0].opened ||
-        rt->slot[0].closed || rt->slot[0].pending || rt->service.direct ||
+        rt->slot[0].closed || rt->slot[0].pending || rt->service.direct || rt->service.direct_request ||
         rt->service.controller.state != A733_NPU_READY ||
         rt->service.running != NPU_SERVICE_CLIENTS || rt->service.has_deferred ||
         !a733_npu_startup_window_open(rt->startup) ||
@@ -136,14 +136,29 @@ int npu_runtime_queue_claim(struct npu_runtime_queue *q, struct npu_runtime *rt)
     if (atomic_load_explicit(&rt->service.irq_pending, memory_order_acquire)) {
         npu_runtime_queue_unlock(saved); return 0;
     }
-    rt->service.direct = &q->direct;
+    rt->service.direct_owner = q->task;
+    atomic_store_explicit(&rt->service.direct_ready, 0, memory_order_relaxed);
+    rt->service.direct_request = &q->direct;
+    npu_runtime_queue_unlock(saved);
+    xTaskNotifyGive(rt->service.worker);
+    unsigned ready;
+    while (!(ready = atomic_load_explicit(&rt->service.direct_ready, memory_order_acquire)))
+        (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    if (ready != 1) return 0;
+    const uint64_t armed_saved = npu_runtime_queue_lock();
+    if (rt->service.direct != &q->direct ||
+        atomic_load_explicit(&rt->failed, memory_order_acquire) ||
+        atomic_load_explicit(&q->queue.failed, memory_order_acquire) ||
+        atomic_load_explicit(&rt->service.irq_pending, memory_order_acquire)) {
+        npu_runtime_queue_unlock(armed_saved); return -1;
+    }
     const int armed = rt->service.irq_ops.rearm(rt->service.irq_cookie);
     if (armed == 1) { q->claimed = 1; rt->service.irq_masked = 0; }
     else {
         atomic_store_explicit(&q->queue.failed, 1, memory_order_release);
         atomic_store_explicit(&rt->failed, 1, memory_order_release);
     }
-    npu_runtime_queue_unlock(saved);
+    npu_runtime_queue_unlock(armed_saved);
     return armed == 1 ? 1 : -1;
 }
 int npu_runtime_queue_wait(struct npu_runtime_queue *q, struct npu_queue_fence fence)
@@ -158,18 +173,27 @@ int npu_runtime_queue_wait(struct npu_runtime_queue *q, struct npu_queue_fence f
 int npu_runtime_queue_return(struct npu_runtime_queue *q)
 {
     if (!owner(q) || !npu_queue_idle(&q->queue)) return -1;
-    const uint64_t count = atomic_load_explicit(&q->queue.completed, memory_order_acquire);
-    if (count > UINT32_MAX - npu_service_irq_completions(&q->runtime->service)) return -1;
     struct npu_service *s = &q->runtime->service;
-    const uint64_t saved = npu_runtime_queue_lock();
+    /* The provider may enter the RTOS critical section. In the single-core
+     * SRE port that can clear DAIF on exit, so invoke it before our raw lock.
+     * A late IRQ during masking is retained and caught by the locked recheck. */
     int result = s->irq_ops.mask(s->irq_cookie);
-    if (result == 1 && !atomic_load_explicit(&s->irq_pending, memory_order_acquire)) {
+    const uint64_t saved = npu_runtime_queue_lock();
+    const uint64_t count = atomic_load_explicit(&q->queue.completed, memory_order_acquire);
+    if (!npu_queue_idle(&q->queue) || atomic_load_explicit(&q->runtime->failed, memory_order_acquire) ||
+        atomic_load_explicit(&s->irq_pending, memory_order_acquire) ||
+        count > UINT32_MAX - npu_service_irq_completions(s)) result = -1;
+    if (result == 1) {
         s->irq_masked = 1;
-        atomic_fetch_add_explicit(&s->irq_completions,
-            (unsigned)atomic_load_explicit(&q->queue.completed, memory_order_relaxed), memory_order_release);
+        atomic_fetch_add_explicit(&s->irq_completions, (unsigned)count, memory_order_release);
         q->runtime->counters.jobs += q->queue.submitted;
-        s->direct = NULL; q->claimed = 0;
-    } else if (result < 0) atomic_store_explicit(&q->runtime->failed, 1, memory_order_release);
+        s->direct = NULL; s->direct_owner = NULL;
+        atomic_store_explicit(&s->direct_ready, 0, memory_order_release);
+        q->claimed = 0;
+    } else if (result < 0) {
+        atomic_store_explicit(&q->queue.failed, 1, memory_order_release);
+        atomic_store_explicit(&q->runtime->failed, 1, memory_order_release);
+    }
     npu_runtime_queue_unlock(saved);
     if (result == 1) xTaskNotifyGive(s->worker);
     return result;
