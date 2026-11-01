@@ -2,7 +2,6 @@
 if(NOT TARGET sunstone-a733-storage-maintenance)
  include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-storage-maintenance.cmake")
 endif()
-option(SUNSTONE_I2S_TRANSCRIBE "Transcribe finite native I2S capture with unchanged mimus" OFF)
 set(i2s_root "${SUNSTONE_SOURCE_ROOT}")
 set(i2s_build "${CMAKE_CURRENT_BINARY_DIR}/i2s-application")
 file(MAKE_DIRECTORY "${i2s_build}")
@@ -54,31 +53,8 @@ target_include_directories(sunstone-a733-i2s BEFORE PRIVATE "${i2s_root}/apps/i2
 # The DMA0 interrupt is the image's only table entry (apps/i2s/irq.c).
 target_compile_definitions(sunstone-a733-i2s PRIVATE SUNSTONE_SECURE_MONITOR=1 SUNSTONE_A733_SMP_DIAGNOSTIC=1
  SUNSTONE_A733_USB=1 SUNSTONE_A733_IRQ_TABLE=1 A733_SMP_CONTRACT_MAGIC=0x4153373341554331ULL A733_SMP_RESULT_MAGIC=0x4153373341555231ULL)
-if(SUNSTONE_I2S_TRANSCRIBE)
- if(NOT TARGET mimus_asr_smp OR NOT NEWLIB_ROOT OR NOT NEWLIB_SMP_ROOT)
-  message(FATAL_ERROR "I2S transcription requires root composition with pinned mimus and SMP newlib")
- endif()
- set(i2s_recognition_sources
-  "${MIMUS_SUNSTONE_ROOT}/apps/i2s/recognition.cc" "${MIMUS_SUNSTONE_ROOT}/apps/mimus/recorded.cc"
-  "${MIMUS_SUNSTONE_ROOT}/apps/mimus/platform.cc" "${i2s_root}/runtime/newlib.c"
-  "${i2s_root}/runtime/newlib_smp.c" "${i2s_root}/runtime/newlib_syscalls_smp.c"
-  "${i2s_root}/runtime/new_delete.cc" "${i2s_root}/runtime/cxx_terminate.cc"
-  "${MIMUS_DIR}/firmware/components/pipeline/src/formatter.cc")
- target_sources(sunstone-a733-i2s PRIVATE ${i2s_recognition_sources})
- list(APPEND i2s_sources ${i2s_recognition_sources})
- get_target_property(i2s_includes sunstone-a733-i2s INCLUDE_DIRECTORIES)
- list(REMOVE_ITEM i2s_includes "${i2s_root}/runtime/include")
- set_property(TARGET sunstone-a733-i2s PROPERTY INCLUDE_DIRECTORIES "${i2s_includes}")
- sunstone_smp_compile(sunstone-a733-i2s)
- target_include_directories(sunstone-a733-i2s PRIVATE "${MIMUS_SUNSTONE_ROOT}/apps/mimus"
-  "${MIMUS_DIR}/firmware/components/pipeline/include")
- target_compile_definitions(sunstone-a733-i2s PRIVATE SUNSTONE_I2S_TRANSCRIBE=1 "$<$<COMPILE_LANGUAGE:CXX>:SUNSTONE_MIMUS_NATIVE=1>")
- target_compile_options(sunstone-a733-i2s PRIVATE "$<$<COMPILE_LANGUAGE:C>:-include;stdint.h>")
- target_link_libraries(sunstone-a733-i2s PRIVATE mimus_asr_smp
-  "${newlib_sysroot}/lib/libstdc++.a" "${newlib_sysroot}/lib/libsupc++.a"
-  "${smp_libc}/lib/libm.a" "${smp_libc}/lib/libc.a"
-  "${NEWLIB_ROOT}/lib/gcc/aarch64-none-elf/14.3.1/libgcc.a")
- target_link_options(sunstone-a733-i2s PRIVATE -Wl,--wrap=_impure_ptr -Wl,--defsym=__runtime_heap_size=4194304)
+if(COMMAND sunstone_external_i2s)
+ sunstone_external_i2s()
 endif()
 set(i2s_link "${storage_build}/link.ld")
 file(GLOB i2s_headers "${i2s_root}/apps/i2s/*.h")
@@ -86,19 +62,11 @@ set(i2s_inputs ${i2s_sources} ${i2s_headers} ${storage_inputs}
  "${i2s_root}/apps/i2s/boot.patch" "${i2s_root}/platform/a733-smp-cached/irq_table.h"
  "${CMAKE_CURRENT_LIST_FILE}" "${i2s_root}/apps/i2s/CMakeLists.txt" "${i2s_root}/apps/i2s/recorded.py"
  "${i2s_root}/platform/a733-smp-supervised/boot.patch" "${SUNSTONE_I2S_RECORDED_WAV}")
-if(SUNSTONE_I2S_TRANSCRIBE)
- get_target_property(i2s_asr_sources mimus_asr_smp SOURCES)
- file(GLOB_RECURSE i2s_model_headers "${MIMUS_DIR}/firmware/components/asr/include/*.h"
-  "${MIMUS_DIR}/firmware/components/pipeline/include/*.h")
- list(APPEND i2s_inputs ${i2s_asr_sources} ${i2s_model_headers}
-  "${MIMUS_SUNSTONE_ROOT}/apps/mimus/recorded.h" "${MIMUS_SUNSTONE_ROOT}/apps/mimus/timing.h"
-  "${MIMUS_SUNSTONE_ROOT}/cmake/mimus.cmake" "${MIMUS_SUNSTONE_ROOT}/cmake/mimus-smp.cmake"
-  "${newlib_sysroot}/lib/libstdc++.a" "${newlib_sysroot}/lib/libsupc++.a"
-  "${smp_libc}/lib/libm.a" "${smp_libc}/lib/libc.a"
-  "${NEWLIB_ROOT}/lib/gcc/aarch64-none-elf/14.3.1/libgcc.a")
+if(COMMAND sunstone_external_i2s_inputs)
+ sunstone_external_i2s_inputs()
 endif()
 list(REMOVE_DUPLICATES i2s_inputs)
-set(i2s_identity "native-i2s-1;${SUNSTONE_I2S_TRANSCRIBE};${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};8;I2S0;16kHz;mono;S16;USB0-sink;supervised-retained")
+set(i2s_identity "native-i2s-1;${i2s_application_identity};${CMAKE_C_COMPILER_ID};${CMAKE_C_COMPILER_VERSION};8;I2S0;16kHz;mono;S16;USB0-sink;supervised-retained")
 foreach(input IN LISTS i2s_inputs)
  file(SHA256 "${input}" i2s_digest)
  string(APPEND i2s_identity "${i2s_digest}")
