@@ -54,7 +54,7 @@ cases += [('cold-'+name,0,name) for name in ('not-started','opened','ticket','ep
  'worker-running','power-token','pmic-request','rail','row-request','row-state','row-count','backend-deadline',
  'service-epoch','published-epoch','service-owner','component-owner','backend-clock','reply-pending',
  'queued-request','queued-reply','queued-record','context-generation','create-ticket','create-pending',
- 'unconsumed-record','refused-create-live-ticket','lost','service-error','backend-error','client-task','close-ticket')]
+ 'unconsumed-record','refused-create-live-ticket','lost','service-error','backend-error','client-task','close-ticket','crumb-pending')]
 if a.case:
  assert set(a.case)<={x[0] for x in cases}
  cases=[x for x in cases if x[0] in a.case]
@@ -161,8 +161,8 @@ for name,fail_step,mutation in cases:
   elif mutation=='backend-deadline':sf(backend,'a733_gpu_backend','deadline',1,8)
   elif mutation=='service-epoch':sf(service,'pvr_gpu_service','epoch',1,8)
   elif mutation=='reply-pending':sf(field(service,'pvr_gpu_service','clients'),'pvr_gpu_service_client','pending',1,8)
-  elif mutation in ('owed','context-generation','create-ticket','create-pending','unconsumed-record'):
-   member={'owed':'owed','context-generation':'generation','create-ticket':'create_ticket','create-pending':'create_pending','unconsumed-record':'client_owed'}[mutation]
+  elif mutation in ('owed','context-generation','create-ticket','create-pending','unconsumed-record','crumb-pending'):
+   member={'owed':'owed','context-generation':'generation','create-ticket':'create_ticket','create-pending':'create_pending','unconsumed-record':'client_owed','crumb-pending':'crumb_pending'}[mutation]
    sf(component,'pvr_compute_queue',member,1,8 if member=='create_ticket' else 4)
  result=call('os_gpu_retire') if fail_step==0 else call('os_gpu_queue_return_untouched')
  assert bool(result) is (mutation is None),(name,result,state)

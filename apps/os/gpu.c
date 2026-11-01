@@ -382,7 +382,7 @@ static int gpu_return_untouched_body(void)
        (cold ? (b->last_now!=s->last_now || s->owner!=PVR_GPU_SERVICE_CLIENTS || !s->irq_masked ||
                 s->clients[0].task!=os_gpu_client_task || !m->completions || m->epoch || m->error) : s->last_now) ||
        atomic_load(&s->published_epoch) || s->irq_fault || s->irq_wake_pending || s->irq_deferred ||
-       m->sequence || m->owed || m->generation || m->create_ticket ||
+       m->sequence || m->owed || m->crumb_pending || m->generation || m->create_ticket ||
        (!refused_create&&(creating||created)) || m->close_ticket || atomic_load(&m->client_owed) || atomic_load(&m->lost))return 0;
     if(m->owner) {
         if(m->owner!=&gpu.session || m->service!=s ||

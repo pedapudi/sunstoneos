@@ -7,6 +7,7 @@
 #include "a733_mmio.h"
 #include "a733_range.h"
 #include "aarch64_device_memory.h"
+#include "sunstone_crumb.h"
 #include <string.h>
 
 #define PAGE 4096u
@@ -48,6 +49,12 @@ static int fault(struct pvr_compute_queue *q,unsigned detail)
 static int post(struct pvr_compute_queue *q,uint32_t sequence,unsigned result,unsigned detail,uint32_t duration)
 {
     const struct gpu_queue_record r={sequence,(uint16_t)result,(uint16_t)detail,duration,0};
+    /* Finish the claimed job before a client can wake. Publication failure
+     * may retry with a fault record, but must not repeat this boundary. */
+    if (q->crumb_pending) {
+        q->crumb_pending=0;
+        sunstone_crumb(SUNSTONE_CRUMB_GPU_COMPLETE,sequence);
+    }
     /* A higher-priority client may run as soon as the queue wakes it. */
     q->owed=0;
     if (xQueueSend(q->completions,&r,0)!=pdTRUE) {
@@ -210,6 +217,8 @@ static int take(struct pvr_compute_queue *q)
     unsigned state=PVR_COMPUTE_QUEUE_SUBMITTED;
     if (!atomic_compare_exchange_strong(&q->slot_state,&state,PVR_COMPUTE_QUEUE_TAKEN)) return 0;
     q->job=q->slot; q->owed=1; q->not_after=0;
+    q->crumb_pending=1;
+    sunstone_crumb(SUNSTONE_CRUMB_GPU_SUBMIT,q->job.sequence);
     unsigned detail=admit(q,&q->job);
     uint64_t now;
     if (pvr_gpu_service_now(q->service,&now)!=1) return fault(q,GPU_QUEUE_SERVICE);
@@ -319,6 +328,8 @@ void pvr_compute_queue_abort(struct pvr_compute_queue *q)
     unsigned state=PVR_COMPUTE_QUEUE_SUBMITTED;
     if (atomic_compare_exchange_strong(&q->slot_state,&state,PVR_COMPUTE_QUEUE_TAKEN)) {
         q->job=q->slot; q->owed=1;
+        q->crumb_pending=1;
+        sunstone_crumb(SUNSTONE_CRUMB_GPU_SUBMIT,q->job.sequence);
     }
     if (q->owed) (void)post(q,q->job.sequence,GPU_QUEUE_FAULT,q->error?q->error:GPU_QUEUE_SERVICE,0);
 }

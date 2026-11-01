@@ -72,6 +72,8 @@ struct pvr_compute_queue {
     struct pvr_cccb client;
     struct gpu_queue_lease_info lease[GPU_QUEUE_LEASES];
     uint32_t lease_count, coefficients, phase, error, sequence, owed, held;
+    /* Worker-owned: one terminal breadcrumb before publishing a job record. */
+    unsigned crumb_pending;
     uint64_t job_us, deadline, kicked;
     atomic_uint_fast64_t not_after;
     unsigned char command[96], update[8];
