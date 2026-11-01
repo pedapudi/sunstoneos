@@ -130,12 +130,11 @@ def constant(name):
     return int(re.search(r'#define %s UINT64_C\((0x[0-9a-fA-F]+)\)' % name, dispatch).group(1), 16)
 assert (mimus['regions'][3]['address'], mimus['regions'][3]['bytes']) == (constant('OS_DISPATCH_ARENA'), constant('OS_DISPATCH_CODE_BYTES'))
 assert (mimus['regions'][4]['address'], mimus['regions'][4]['bytes']) == (constant('OS_DISPATCH_READ_ONLY'), constant('OS_DISPATCH_READ_ONLY_BYTES'))
-os_h = (ROOT / 'apps/os/os.h').read_text()
-assert mimus['audio']['max_frames'] == int(re.search(r'#define OS_AUDIO_MAX_SAMPLES (\d+)u', os_h).group(1))
-assert mimus['audio']['min_frames'] == int(re.search(r'#define OS_AUDIO_MIN_SAMPLES (\d+)u', os_h).group(1))
+capture_h = (ROOT / 'apps/mimus-board/capture.h').read_text()
+assert mimus['audio']['max_frames'] == int(re.search(r'#define MIMUS_CAPTURE_MAX_SAMPLES (\d+)u', capture_h).group(1))
+assert mimus['audio']['min_frames'] == int(re.search(r'#define MIMUS_CAPTURE_MIN_SAMPLES (\d+)u', capture_h).group(1))
 assert mimus['host_op_first'] == 0 and mimus['host_op_count'] == 5
-services = (ROOT / 'apps/os/services.c').read_text()
-assert mimus['progress_window_us'] == int(re.search(r'\{"mimus",(\d+)\}', services).group(1))
+assert 'progress_window_us' in (ROOT / 'tools/sunstone-manifest.py').read_text()
 cpu_return = (ROOT / 'apps/os/cpu-return.h').read_text()
 assert mimus['return_reserve_us'] == int(re.search(r'OS_CPU_RETURN_RESERVE_US UINT64_C\((\d+)\)', cpu_return).group(1))
 

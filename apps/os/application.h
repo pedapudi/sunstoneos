@@ -2,6 +2,7 @@
 #define SUNSTONE_OS_APPLICATION_H
 #include "sunstone_app.h"
 #include "sunstone_session.h"
+#include "FreeRTOS.h"
 #include "task.h"
 /* Immutable image binding. Only the generated image unit names an app. */
 struct ss_application {
@@ -26,6 +27,8 @@ extern const unsigned os_application_count;
 int os_application_task_privileged(void (*)(void *),void *);
 int os_application_pins(struct a733_pin_handoff *);
 int os_application_start(void);
+int os_application_prepare(void);
+int os_application_deadline(void);
 int os_application_finished(void);
 void os_application_usb_ready(void);
 void os_application_host_observed(int);

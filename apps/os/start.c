@@ -28,6 +28,7 @@ int board_application_pins(struct a733_pin_handoff *pins)
 }
 int board_application_start(void)
 {
+    if(!os_application_prepare())return 0;
     for(unsigned i=0;i<os_application_count;++i)if(os_applications[i].start()!=1)return 0;
     return 1;
 }

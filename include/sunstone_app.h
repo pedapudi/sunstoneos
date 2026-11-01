@@ -117,7 +117,7 @@ struct ss_grant {
     uint32_t worker_cores;          /* one bit per granted worker core */
     uint32_t region_count;
     struct ss_span regions[SS_REGIONS]; /* manifest order */
-    uint32_t capture_frames;        /* frames per ss_capture, from the audio extent; 0 without capture */
+    uint32_t capture_frames;        /* I2S: exact frames; headset: profile-derived maximum; 0 without capture */
     uint32_t reserved;
     uint64_t finish_by_us;          /* counter microseconds; 0 when resident */
 };
@@ -137,7 +137,14 @@ int ss_throttled(void);
 /* 1 once the CPU clock owner has finished the session grant's requests,
  * whatever their result, or when the image grants no CPU operating points. */
 int ss_clock_ready(void);
-/* Capture grant->capture_frames frames for sequence number `sequence` in the
+/* Mark the bounded application operation observed by thermal reports.
+ * Both calls publish atomic counters; success is 0 or 1. */
+void ss_activity_begin(void);
+void ss_activity_end(int success);
+/* Copy the admitted CPU operating-point description; 0 without a grant. */
+int ss_clock_info(char *line,size_t bytes);
+/* Capture grant->capture_frames frames (up to that bound for a headset
+ * segment, which may end early) for sequence number `sequence` in the
  * manifest's format from the granted capture device; a later sequence
  * releases earlier buffers. 1: *pcm and *bytes describe the samples, and the
  * SS_CAPTURE_HEADROOM bytes before *pcm are the caller's to overwrite (for

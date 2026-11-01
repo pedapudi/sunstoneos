@@ -8,6 +8,9 @@
 #include "a733_storage_digest.h"
 #include "boot.h"
 #include <string.h>
+#ifdef SUNSTONE_A733_OS_HEADSET
+#include "../bluetooth/bluetooth.h"
+#endif
 #ifdef SUNSTONE_A733_OS_CPU_RETURN
 #include "cpu-return.h"
 #endif
@@ -16,6 +19,7 @@ static atomic_uint prepared,finished,usb_ready;
 static atomic_uint_fast64_t observed_until;
 static struct a733_typec_token attachment;
 static TaskHandle_t main_task;
+static atomic_uint_fast64_t finish_by;
 const struct ss_grant *ss_grant(void)
 {return atomic_load_explicit(&prepared,memory_order_acquire)?&grant:NULL;}
 int os_application_finished(void)
@@ -37,6 +41,28 @@ int ss_clock_ready(void)
     return os_cpu_clock_ready();
 #else
     return 1;
+#endif
+}
+void ss_activity_begin(void)
+{
+#ifdef SUNSTONE_A733_OS_CPU_CLOCK
+    void os_thermal_record_begin(void);os_thermal_record_begin();
+#endif
+}
+void ss_activity_end(int success)
+{
+#ifdef SUNSTONE_A733_OS_CPU_CLOCK
+    void os_thermal_record_end(int);os_thermal_record_end(success);
+#else
+    (void)success;
+#endif
+}
+int ss_clock_info(char *line,size_t bytes)
+{
+#ifdef SUNSTONE_A733_OS_CPU_CLOCK
+    int os_cpu_clock_line(char *,size_t);return os_cpu_clock_line(line,bytes);
+#else
+    (void)line;(void)bytes;return 0;
 #endif
 }
 /* Only the USB2 owner accesses mutable attachment state. */
@@ -110,9 +136,17 @@ static void main_entry(void *unused)
         uint64_t limit=now+m->run_deadline_us;
         if(!grant.finish_by_us||limit<grant.finish_by_us)grant.finish_by_us=limit;
     }
+    atomic_store_explicit(&finish_by,grant.finish_by_us,memory_order_release);
     ss_application.main(&grant);ss_fail(0x755);
 }
 int os_application_start(void)
+{return !ss_application.manifest||atomic_load_explicit(&prepared,memory_order_acquire);}
+int os_application_deadline(void)
+{
+    uint64_t limit=atomic_load_explicit(&finish_by,memory_order_acquire);
+    return !limit||os_application_finished()||a733_smp_counter()/24<limit;
+}
+int os_application_prepare(void)
 {
     const struct os_session *s=os_session_admitted();const struct ss_manifest *m=ss_application.manifest;
     if(!s||atomic_load_explicit(&prepared,memory_order_acquire))return 0;
@@ -135,17 +169,26 @@ int os_application_start(void)
     if(grant.devices&SS_DEVICE_AUDIO_I2S)grant.capture_frames=s->audio.capture_samples;
 #endif
 #ifdef SUNSTONE_A733_OS_HEADSET
-    if(grant.devices&SS_DEVICE_AUDIO_HEADSET)grant.capture_frames=m->audio.max_frames;
+    if(grant.devices&SS_DEVICE_AUDIO_HEADSET){
+        const struct bluetooth_profile *p=os_headset_profile();
+        if(!p||p->headset.samples>UINT32_MAX/2)return 0;
+        grant.capture_frames=2*p->headset.samples;
+        if(grant.capture_frames>m->audio.max_frames)return 0;
+    }
 #endif
 #ifndef SUNSTONE_BOARD_RESIDENT
     if(s->board.deadline_us<=m->return_reserve_us)return 0;
     grant.finish_by_us=s->board.deadline_us-m->return_reserve_us;
 #endif
     atomic_store_explicit(&prepared,1,memory_order_release);
-    if(ss_application.init)ss_application.init();
     main_task=xTaskCreateStaticAffinitySet(main_entry,m->name,m->stack_bytes/sizeof(StackType_t),NULL,m->priority,
         ss_application.stack,ss_application.task,(UBaseType_t)1<<grant.main_core);
-    return main_task!=NULL;
+    if(!main_task)return 0;
+#ifdef SUNSTONE_A733_OS_GPU_LINEAR
+    os_recognizer=main_task;
+#endif
+    if(ss_application.init)ss_application.init();
+    return 1;
 }
 _Noreturn void ss_fail(uint32_t detail)
 {

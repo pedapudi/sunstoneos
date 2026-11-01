@@ -70,7 +70,7 @@ int ss_capture(uint32_t sequence,void **pcm,size_t *bytes)
         const uint8_t *wav;size_t n;int r=os_headset_capture(sequence,&wav,&n);
         if(r!=1)return r;if(n<44)return -1;
         const struct ss_audio_format *f=&ss_application.manifest->audio;
-        if(f->rate_hz!=16000||f->channels!=1||f->bits!=16||n-44!=(size_t)g->capture_frames*2)return -1;
+        if(f->rate_hz!=16000||f->channels!=1||f->bits!=16||!(n-44)||n%2||n-44>(size_t)g->capture_frames*2)return -1;
         *pcm=(void *)(wav+44);*bytes=n-44;return 1;
     }
 #endif

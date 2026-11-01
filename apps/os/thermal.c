@@ -6,6 +6,7 @@
  * images stop, resident images stop renewing the watchdog. Faults retain
  * the clock token, the register mutex and the masked interrupt. */
 #include "os.h"
+#include "application.h"
 #include "../board/application.h"
 #include "../board/session.h"
 #include "a733_thermal.h"
@@ -124,7 +125,7 @@ int os_thermal_report_copy(uint64_t expected,uint32_t offset,size_t bytes,
 #endif
 static uint64_t deadline(void){return board.session.deadline_us-10000;}
 static int live(void)
-{return board_live(NULL)&&!atomic_load_explicit(&providers.shared.clocks.failed,memory_order_acquire)&&
+{return board_live(NULL)&&os_application_deadline()&&!atomic_load_explicit(&providers.shared.clocks.failed,memory_order_acquire)&&
     !atomic_load_explicit(&thermal.failed,memory_order_acquire)&&a733_smp_counter()/24<deadline();}
 static int owner(void)
 {return thermal.handle&&xTaskGetCurrentTaskHandle()==thermal.handle&&live();}
