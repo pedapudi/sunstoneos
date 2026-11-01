@@ -51,7 +51,7 @@ if args.allow_untrained != (manifest.get("variant") == "init-only"):
 restore = manifest.get("variant") == "restore"
 if (args.record is not None) != restore or (args.fallback_build is not None) != restore:
     sys.exit("--record and --fallback-build go with, and only with, a restore variant build.")
-training_bytes = chip_id = fallback = None
+training_bytes = chip_id = fallback = profile_addresses = None
 if restore:
     training_bytes = args.record.read_bytes()
     if not 128 <= len(training_bytes) <= 0x6000:
@@ -62,7 +62,11 @@ if restore:
     training = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(training)
     try:
-        chip_id = training.parse(training_bytes)["chip_id"]
+        parsed = training.parse(training_bytes)
+        chip_id = parsed["chip_id"]
+        # PHY entries in helper order, after the parameter run.
+        profile_addresses = [run["base"] + 2 * n for run in parsed["runs"][1:]
+                             for n in range(len(run["values"]))]
     except (ValueError, struct.error) as error:
         sys.exit(f"Invalid training record: {error}")
 manifest = verified(args.build)
@@ -305,6 +309,16 @@ def restore_attempt():
             if not restored[0]:
                 # Words 25 and 26: 24 MHz counter at the start and end of restore_check.
                 record["restore_result"]["check_ms"] = round(((end - start) & 0xffffffff) / 24000, 3)
+            elif restored[0] == manifest["restore"]["errors"]["readback"]:
+                # Word 27 counts readback mismatches; words 28-31 hold the
+                # second to fifth as (profile index << 16) | value read.
+                count, *more = struct.unpack_from("<5I", mailbox, 108)
+                record["restore_result"]["mismatches"] = count
+                record["restore_result"]["later_mismatches"] = [
+                    {"address": f"{profile_addresses[word >> 16]:#010x}"
+                     if (word >> 16) < len(profile_addresses) else f"index {word >> 16}",
+                     "actual": f"{word & 0xffff:#06x}"}
+                    for word in more[:max(0, min(count, 5) - 1)]]
             save()
             settings = manifest["restore"]
             expected = (0, settings["phy_registers"], 1, settings["sample_read_bytes"])

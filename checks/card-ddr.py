@@ -151,12 +151,14 @@ for case in cases:
     if case in errors:
         assert r(cpu,0x8601c)==errors[case],(case,state)
         if case in ('read-error','readback'):assert not state['dram'] and not state['continuation']
+        # A readback mismatch does not stop the pass: every entry is written once, one mismatch counted.
+        if case=='readback':assert state['writes']==len(phy) and r(cpu,0x8606c)==1,(case,state)
     else:
         assert cpu.reg_read(UC_ARM_REG_PC)==0xf0000 and cpu.reg_read(UC_ARM_REG_SP)==0x8c000,(case,state)
         for i,reg in enumerate(regs):assert cpu.reg_read(reg)==0x12340000+i,(case,i)
         assert bytes(cpu.mem_read(0x60670,1))==b'\x05' and r(cpu,m['symbols']['read_active'])==0
         assert state['timing']==(1 if case in ('newest-B','tie-A','only-A','helper-A-crc','high-generation-A') else 4),(case,state)
-        if case in ('newest-B','tie-A','only-A','helper-A-crc','high-generation-A'):assert state['writes']==1016 and r(cpu,0x8604c)==(2 if case in ('newest-B','helper-A-crc') else 1)
+        if case in ('newest-B','tie-A','only-A','helper-A-crc','high-generation-A'):assert state['writes']==len(phy) and r(cpu,0x8604c)==(2 if case in ('newest-B','helper-A-crc') else 1)
         else:assert state['writes']==state['dram']==0
     results.append({'case':case,**state,'pass':True})
 

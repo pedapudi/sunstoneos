@@ -27,6 +27,7 @@ a=p.parse_args();a.evidence.mkdir(parents=True,exist_ok=False)
 if bool(a.restore_build)!=bool(a.restore_record):p.error('restore build and record must be supplied together')
 spec=importlib.util.spec_from_file_location('ddr_fixture_base',ROOT/'tools/check-a733-smp.py');base=importlib.util.module_from_spec(spec);spec.loader.exec_module(base)
 real_spec=importlib.util.spec_from_file_location;real_stop=base.stop_after_failure
+spec=real_spec('training_fixture',ROOT/'tools/training-record.py');training=importlib.util.module_from_spec(spec);spec.loader.exec_module(training)
 build=a.evidence/'build';build.mkdir();files={}
 for name,size in [('boot0-head.bin',12288),('boot0-body.bin',233472),('ddr-entry.bin',128),('cache-off.bin',40)]:
     data=bytes([size%251])*size;(build/name).write_bytes(data);files[name]={'size':size,'sha256':hashlib.sha256(data).hexdigest()}
@@ -56,6 +57,9 @@ if a.restore_build:
     (fallback_build/'manifest.json').write_text(json.dumps({'files':files,'boot0_sha256':restore_manifest['boot0_sha256']}))
     chip=list(struct.unpack_from('<4I',a.restore_record.read_bytes(),32))
     sample=restore_manifest['restore']['sample_read_bytes']
+    phy_count=restore_manifest['restore']['phy_registers']
+    parsed=training.parse(a.restore_record.read_bytes())
+    profile=[run['base']+2*n for run in parsed['runs'][1:] for n in range(len(run['values']))]
 OLD,NEW=Path('/fixture-usb/003/072'),Path('/fixture-usb/003/073')
 IDENTITY={OLD:[1,2,3,4,5],NEW:[1,2,3,4,6]}
 class Port:
@@ -105,9 +109,13 @@ for case in cases:
         error=RESTORE[case][0]
         assert error is not None,(case,'this case must not collect a restore result')
         data=struct.pack('<7I',0x53524444,5,12288 if error in (0,9) else 0,0,0,0,0)
-        writes=1016 if error in (0,9) else 1 if error==7 else 0
-        data+=struct.pack('<7I',error,writes,int(error in (0,7,9)),sample if not error else 4 if error==9 else 0,0,0,0)
-        return data+bytes(44)+struct.pack("<2I",0xfffffff0,(0xfffffff0+24000*31)&0xffffffff)+bytes(20)
+        writes=phy_count if error in (0,7,9) else 0
+        # A readback failure names its first mismatch in words 11-13 and
+        # counts two in word 27; word 28 holds the second, profile index 5.
+        first=(profile[0],0x1234,0) if error==7 else (0,0,0)
+        data+=struct.pack('<7I',error,writes,int(error in (0,7,9)),sample if not error else 4 if error==9 else 0,*first)
+        survey=struct.pack('<5I',2,5<<16|0x0042,0,0,0) if error==7 else bytes(20)
+        return data+bytes(44)+struct.pack("<2I",0xfffffff0,(0xfffffff0+24000*31)&0xffffffff)+survey
     def fake_fel(command,**kwargs):
         held();assert command[:2]==[str(fel),'-d'];node={'3:72':OLD,'3:73':NEW}[command[2]];arguments=command[3:]
         assert 'quarantine' not in str(events) and 'hold' not in events
@@ -220,6 +228,9 @@ for case in cases:
             assert not [e for e in fel_requests if e[0]==str(NEW) and ('0x87000' in e or '0x92000' in e)]
         if case in ('restore-header-crc','restore-readback','restore-memory'):
             assert record['restore_result']['error']==RESTORE[case][0]
+        if case=='restore-readback':
+            assert record['restore_result']['mismatches']==2 and record['restore_result']['failure_address']==profile[0]
+            assert record['restore_result']['later_mismatches']==[{'address':f'{profile[5]:#010x}','actual':'0x0042'}]
         if case in ('restore-header-crc','restore-readback','restore-memory','restore-fallback-fails','restore-ram-pages'):
             assert 'deliberate_reset' in record['watchdog'] and events.count('armed')==2
             # No host RAM page is written after a reported restore error.

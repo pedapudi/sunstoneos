@@ -24,7 +24,10 @@ training kind of their DDR run: four-p-state, pstate0 or init-only. With
 taken per board and united: the registers whose values in the trained kind
 all differ, on that board, from those in the baseline kind, with the
 differing bits as a mask and a flag for values fixed across every trained
-capture. Status is decided over all captures. Classes computed across
+capture. Status is decided over all captures; with --status-by-lane-offset
+a byte-lane offset that is status in one lane is left out in every lane,
+and --exclude-lane-offset leaves out an offset that board evidence shows
+does not hold a written value. Classes computed across
 kinds count a kind difference as a lifetime difference. The output is a
 new JSON file.
 """
@@ -54,6 +57,16 @@ def block_of(address):
     if 0x03006000 <= address < 0x03007000:
         return "sid"
     return "controller"
+
+
+DBYTE_FIRST, DBYTE_LAST = 0x0a920000, 0x0a927fff
+
+
+def lane_offset(key):
+    """Byte offset within a byte lane (lane stride 0x200, block stride 0x2000), or None."""
+    if not DBYTE_FIRST <= key <= DBYTE_LAST:
+        return None
+    return (key - DBYTE_FIRST) & 0x1ff
 
 
 def fail(message):
@@ -142,6 +155,12 @@ def main():
                              "message block, whose fixed fields are inputs set by the training-step value")
     parser.add_argument("--exclude-register", action="append", default=[],
                         help="leave one register out of the kind diff, e.g. 0x0a02002c or param[27]")
+    parser.add_argument("--exclude-lane-offset", action="append", default=[], type=lambda x: int(x, 0),
+                        help="leave a byte-lane register out of the kind diff in every lane, given as "
+                             "its byte offset within the lane, e.g. 0xe6")
+    parser.add_argument("--status-by-lane-offset", action="store_true",
+                        help="treat a byte-lane offset that is status in any lane as status in every "
+                             "lane, since the lanes share one register map")
     args = parser.parse_args()
     known_blocks = {"phy-" + block for _, _, block in PHY_BLOCKS} | {"sid", "controller", "parameter-block"}
     unknown = sorted((set(args.exclude_block) | set(args.drop_fixed_in)) - known_blocks)
@@ -188,6 +207,10 @@ def main():
         # every value of the baseline kind there. The result is the union over
         # the boards. Status, decided over every capture of every board, is
         # excluded; the mask holds the bits that differ in any pair.
+        status_lanes = sorted({lane_offset(key) for key, kind in classes.items()
+                               if kind == "status" and key >= 0 and lane_offset(key) is not None}
+                              if args.status_by_lane_offset else [])
+        skip_lanes = set(status_lanes) | set(args.exclude_lane_offset)
         registers = {}
         for board, group in sorted(boards.items()):
             trained = [c for c in group if c["training_kind"] == args.trained_kind]
@@ -196,7 +219,8 @@ def main():
                 fail(f"board {board} needs captures of both --trained-kind and --baseline-kind")
             for key, kind in classes.items():
                 if (kind == "status" or block_of(key) in args.exclude_block
-                        or name(key) in args.exclude_register):
+                        or name(key) in args.exclude_register
+                        or (key >= 0 and lane_offset(key) in skip_lanes)):
                     continue
                 a = {c["values"][key] for c in trained}
                 b = {c["values"][key] for c in baseline}
@@ -220,6 +244,8 @@ def main():
         kind_diff = {"trained_kind": args.trained_kind, "baseline_kind": args.baseline_kind,
                      "excluded_blocks": sorted(args.exclude_block),
                      "excluded_registers": sorted(args.exclude_register),
+                     "excluded_lane_offsets": [f"{x:#x}" for x in sorted(set(args.exclude_lane_offset))],
+                     "status_lane_offsets": [f"{x:#x}" for x in status_lanes],
                      "dropped_fixed": dropped_fixed,
                      "stages_dropped": [name_ for name_, _ in max((c["layout"] for c in captures), key=len)[common:]],
                      "count": len(registers),

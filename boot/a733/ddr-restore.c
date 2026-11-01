@@ -94,10 +94,15 @@ u32 restore_admit(void)
     return 0;
 }
 
+/* A mismatch does not stop the pass: every entry is written and read, so
+ * one board run names every register that does not hold its value. Words
+ * 11-13 keep the first mismatch, word 27 counts them and words 28-31 hold
+ * the next four as (profile index << 16) | value read. Any mismatch fails
+ * the restore, which then never resumes boot0. */
 static u32 restore_phy(u32 write)
 {
     const u8 *r = RECORD, *p = r+128;
-    u32 offset = 88, index = 0; /* Skip the admitted parameter run. */
+    u32 offset = 88, index = 0, mismatches = 0; /* Skip the admitted parameter run. */
     *MUX = 0;
     barrier();
     for (u32 run = 1; run < word(r+80); ++run) {
@@ -116,16 +121,16 @@ static u32 restore_phy(u32 write)
             }
             u16 actual = *reg;
             if ((actual ^ expected) & mask) {
-                MAIL[11] = address; MAIL[12] = expected; MAIL[13] = actual;
-                *MUX = 1; barrier();
-                return READBACK;
+                if (!mismatches) { MAIL[11] = address; MAIL[12] = expected; MAIL[13] = actual; }
+                else if (mismatches < 5) MAIL[27+mismatches] = index << 16 | actual;
+                MAIL[27] = ++mismatches;
             }
         }
         offset += (count*2+3)&~3u;
     }
     *MUX = 1;
     barrier();
-    return 0;
+    return mismatches ? READBACK : 0;
 }
 
 u32 restore_write(void)

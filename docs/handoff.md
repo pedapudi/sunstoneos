@@ -239,7 +239,7 @@ The following reviewed implementations are integrated with software evidence:
     normal return passed. Sustained throughput, broader extents and fault
     recovery remain unqualified. No card write or manual reconnect occurred.
 - **DRAM training restore:** captures from ten lifetimes fix a per-board
-  restore set of 1,036 registers (`restore-set-v3.json`). Initialization without training takes
+  restore set of 941 registers (`restore-set-v4.json`). Initialization without training takes
   36 ms, against 5.1 s to train all four P-states. The restore itself is
   implemented and independently reviewed for RAM-only execution. Seventeen
   native instruction cases, nineteen host cases, both board record producers
@@ -250,11 +250,16 @@ The following reviewed implementations are integrated with software evidence:
   Branch `work/dram-restore-1031` makes the FEL restore safe to try: the
   runner arms WDT0 around the restore, and a failed or hung restore resets the
   board to a new FEL instance and trains fully once (exit status 3). The quick
-  check now covers address lines 2–31 and sixteen windows below 4 GiB. Frozen
-  builds, both records and host results are in
-  `~/.cache/sunstoneos/evidence/dram-restore-1031/`; the commands are in the
+  check now covers address lines 2–31 and sixteen windows below 4 GiB.
+  The first board run (port 3-1, 2026-10-31, warm start after a WDT0 reset)
+  failed the PHY readback at byte-lane register `0x73` (`0x0a9200e6`), which
+  reads 0 whatever is written, and fell back to a full training that
+  passed. The set now leaves that register and the byte-lane status offsets
+  out in every lane, and a readback failure reports every mismatching
+  register in one run. Frozen builds, both records and host results are in
+  `~/.cache/sunstoneos/evidence/dram-restore-1031b/`; the commands are in the
   [first-test runbook](board-runbooks/dram-restore-test-1.md#commands-for-one-board).
-  No board run has used it.
+  No board run has used the revised build.
 
 ## Current integration
 

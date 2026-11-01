@@ -3,6 +3,9 @@
 
 boot0 setup/training/timing are modeled; MMIO is memory with explicit faults.
 This establishes instruction ordering, not PHY or physical RAM operation.
+Byte-lane register 0x73 (offset 0xe6 in each lane) reads 0 whatever is
+written, as port 3-1 showed on 2026-10-31. With --reproduce MAILBOX only the
+nominal case runs, and restore words 7-13 must equal that board mailbox's.
 """
 import argparse
 import hashlib
@@ -19,6 +22,7 @@ p.add_argument('build', type=Path)
 p.add_argument('--record', type=Path, required=True)
 p.add_argument('--other-record', type=Path, required=True)
 p.add_argument('--output', type=Path, required=True)
+p.add_argument('--reproduce', type=Path, help='board mailbox.bin whose restore words 7-13 the nominal case must reproduce')
 a = p.parse_args()
 a.output.mkdir(parents=True, exist_ok=False)
 spec = importlib.util.spec_from_file_location('training', ROOT/'tools/training-record.py')
@@ -30,7 +34,16 @@ manifest = json.loads((a.build/'manifest.json').read_text())
 assert manifest['variant'] == 'restore'
 phy = [(run['base']+2*i, value) for run in parsed['runs'][1:] for i,value in enumerate(run['values'])]
 masks = {m['address']:m['mask'] for m in parsed['masks']}
-assert len(phy) == 1016 and len(parsed['runs'][0]['values']) == 40
+PHY_COUNT = manifest['restore']['phy_registers']
+assert len(phy) == PHY_COUNT and len(parsed['runs'][0]['values']) == 40
+# Board observation, evidence/dev-runs-1031/3-1-ddr-restore: 0x0a9200e6 read
+# 0 after 6 was written. The lanes share one register map, so every lane's
+# copy is modelled the same way. Such registers are left out of the set.
+HARDWARE_OWNED = {0x0a920000 + 0x2000*block + 0x200*lane + 0xe6 for block in range(4) for lane in range(9)}
+if not a.reproduce:
+    assert not HARDWARE_OWNED & set(masks)
+# readback-survey: three profile entries that read a mismatching value.
+SURVEY = [phy[0][0], phy[100][0], phy[500][0]]
 results = []
 # Quick check layout (boot/a733/ddr-restore.c): 31 address-line words and
 # sixteen 4 KiB windows. Only these DRAM pages exist in the fixture.
@@ -47,8 +60,11 @@ def repair(data, payload=False):
 cases = {'nominal':0, 'wrong-board':4, 'header-crc':2, 'payload-crc':3, 'strap':6,
          'boot0':5, 'geometry':1, 'run-overflow':1, 'unauthorized-address':1,
          'unauthorized-mask':1, 'mode-register-section':1, 'parameter-high-half':0,
-         'readback':7, 'final-readback':7, 'memory':9, 'address-alias':9,
+         'readback':7, 'readback-survey':7, 'final-readback':7, 'memory':9, 'address-alias':9,
          'window-bit':9, 'size':8, 'missing-hook':10}
+if a.reproduce:
+    board = struct.unpack_from('<7I', a.reproduce.read_bytes(), 28)
+    cases = {'nominal': board[0]}
 for case, error in cases.items():
     record = bytearray(original)
     if case=='wrong-board': record = bytearray(other)
@@ -75,7 +91,7 @@ for case, error in cases.items():
     cpu.reg_write(UC_ARM_REG_CPSR,0x60000053);cpu.reg_write(UC_ARM_REG_SP,0xf3000);cpu.reg_write(UC_ARM_REG_LR,0xf0000)
     regs=(UC_ARM_REG_R4,UC_ARM_REG_R5,UC_ARM_REG_R6,UC_ARM_REG_R7,UC_ARM_REG_R8,UC_ARM_REG_R9,UC_ARM_REG_R10,UC_ARM_REG_R11)
     for i,reg in enumerate(regs):cpu.reg_write(reg,0x12340000+i)
-    state={'instructions':0,'init':0,'timing':0,'continuation':0,'injections':0,'dram_reads':0,'dram_writes':0,'phy_writes':[], 'faulted':False}
+    state={'instructions':0,'init':0,'timing':0,'continuation':0,'injections':0,'dram_reads':0,'dram_writes':0,'phy_writes':[], 'faulted':False, 'survey':set()}
     selected=(a.build/'boot0-head.bin').read_bytes()[0x574:0x5f4]
     wanted=list(struct.unpack('<32I',selected));wanted[30]&=~4;wanted[27]=(wanted[27]&~0x3fff0000)|0x10000;wanted[23]|=0x80000000
     def ret(uc,result=0):
@@ -114,6 +130,9 @@ for case, error in cases.items():
         elif 0x47000<=address<0x83000:
             assert address==0x56142,hex(address)
     def memory(uc,access,address,size,value,data):
+        if access==16 and address in HARDWARE_OWNED:uc.mem_write(address,b'\0\0')
+        if access==16 and case=='readback-survey' and address in SURVEY:
+            uc.mem_write(address,struct.pack('<H',dict(phy)[address]^masks[address]));state['survey'].add(address);state['faulted']=True
         if address>=0x40000000:
             assert not state['faulted'],('DRAM after fault',hex(address))
             if access==17:
@@ -141,7 +160,7 @@ for case, error in cases.items():
     try:
         cpu.emu_start(0x85000,0xf0000,count=4000000)
     except Exception:
-        (a.output/'failure.json').write_text(json.dumps({'case':case,'state':state,
+        (a.output/'failure.json').write_text(json.dumps({'case':case,'state':{k:v for k,v in state.items() if k!='survey'},
             'pc':cpu.reg_read(UC_ARM_REG_PC),'lr':cpu.reg_read(UC_ARM_REG_LR),
             'sp':cpu.reg_read(UC_ARM_REG_SP)},indent=2)+'\n')
         raise
@@ -153,20 +172,32 @@ for case, error in cases.items():
     mailbox=struct.unpack('<32I',cpu.mem_read(0x86000,128))
     assert mailbox[0:2]==(0x53524444,5)
     assert mailbox[7]==error,(case,mailbox[:14],state)
-    if case in ('nominal','parameter-high-half'):
+    if a.reproduce:
+        # The board restore stopped before boot0 resumed; so must this one.
+        assert mailbox[7:14]==board,(mailbox[7:14],board)
+        assert state['timing']==state['continuation']==0 and not state['dram_reads'] and not state['dram_writes']
+    elif case in ('nominal','parameter-high-half'):
         assert state['phy_writes']==[a for a,v in phy]
         for address,value in phy:
             actual=struct.unpack('<H',cpu.mem_read(address,2))[0]
             assert actual==((0x5a5a&~masks[address])|(value&masks[address]))
-        assert mailbox[8:11]==(1016,1,SAMPLE)
+        assert mailbox[8:11]==(PHY_COUNT,1,SAMPLE) and mailbox[27:32]==(0,)*5
         assert state['dram_reads']==state['dram_writes']==SAMPLE
         assert mailbox[25] or mailbox[26]
     elif error in (1,2,3,4,5,6):
         assert state['init']==0 and not state['phy_writes'] and not state['dram_reads'] and not state['dram_writes']
         assert bytes(cpu.mem_read(0x831f8,128))==selected
     elif case=='readback':
-        assert state['injections']==1 and len(state['phy_writes'])==1 and state['timing']==state['continuation']==0
-        assert not state['dram_reads'] and not state['dram_writes']
+        # A mismatch does not stop the pass; boot0 still never resumes.
+        assert state['injections']==1 and state['phy_writes']==[a for a,v in phy]
+        assert state['timing']==state['continuation']==0 and not state['dram_reads'] and not state['dram_writes']
+        assert mailbox[8:14]==(PHY_COUNT,1,0,phy[0][0],phy[0][1],phy[0][1]^masks[phy[0][0]])
+        assert mailbox[27:32]==(1,0,0,0,0)
+    elif case=='readback-survey':
+        assert state['survey']=={*SURVEY} and state['phy_writes']==[a for a,v in phy]
+        assert state['timing']==state['continuation']==0 and not state['dram_reads'] and not state['dram_writes']
+        assert mailbox[11:14]==(phy[0][0],phy[0][1],phy[0][1]^masks[phy[0][0]])
+        assert mailbox[27:32]==(3,100<<16|phy[100][1]^masks[phy[100][0]],500<<16|phy[500][1]^masks[phy[500][0]],0,0)
     elif case in ('size','final-readback','missing-hook'):assert not state['dram_reads'] and not state['dram_writes']
     elif case=='memory':
         assert state['injections']==1 and state['dram_reads']==4 and state['dram_writes']==31*4
@@ -183,6 +214,7 @@ for case, error in cases.items():
                     'phy_writes':len(state['phy_writes']),'dram_read_bytes':state['dram_reads'],
                     'dram_write_bytes':state['dram_writes'],'injections':state['injections'],'pass':True})
 (a.output/'results.json').write_text(json.dumps({'physical_access':False,'instruction_limit':4000000,
+    'reproduce':str(a.reproduce) if a.reproduce else None,'hardware_owned':sorted(HARDWARE_OWNED),
     'record_sha256':hashlib.sha256(original).hexdigest(),'other_record_sha256':hashlib.sha256(other).hexdigest(),
     'manifest':manifest,'cases':results},indent=2)+'\n')
 print('PASS restore wrapper:',len(results),'cases; actual BLX/abort; full-width parameters; bounded samples.')
