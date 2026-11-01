@@ -174,7 +174,7 @@ mimus handler (`apps/mimus-board/usb0.c:13-35,75-110`).
 ### 7. The NPU admits only networks listed inside the driver, through one built-in client
 
 - **Admission table in the driver:** the admission table, including
-  `mimus-linear-q`, is a source file in `drivers/npu`
+  `linear-i16-per-row`, is a source file in `drivers/npu`
   (`drivers/npu/npu_session_models.inc:19-22`). The table generator writes
   that file into the driver tree (`tools/npu-session-catalogue.py:23-24`).
 - **One OS-created client:** the OS NPU service has one slot and one client

@@ -54,7 +54,7 @@ the [session catalogue](../tools/npu-session-models.json):
 | 8×8 convolution (`conv8`) | UINT8 | Compiler quantized CPU inference | Imported model JSON and data, quantize file, input description |
 | Two convolutions (`dual-u8`) | UINT8 | Compiler quantized CPU inference | As above |
 | Same graph, INT8 (`dual-i8`) | INT8 | Compiler quantized CPU inference | As above |
-| mimus query projection (`mimus-linear-q`) | INT16 | Exact integer accumulator, bias as an int32 code, one rounding to INT16 | Weight codes and scales, bias, study metadata, quantize file, `tools/npu-mimus-linear.py` |
+| mimus query projection (`linear-i16-per-row`) | INT16 | Exact integer accumulator, bias as an int32 code, one rounding to INT16 | Weight codes and scales, bias, study metadata, quantize file, `tools/npu-mimus-linear.py` |
 | Published ShuffleNetV2 | UINT8 | None | None |
 
 The catalogue's 12×12 convolution (`conv12`) has no reference entry, so the
@@ -157,7 +157,7 @@ requires equality; no tolerance entry exists.
 | `conv8` | 9 | 5 | 0 | 5 | 3 of 3 / 2 of 2 | 2.6 ms | 0.8 ms / 1.0 ms | 2.0 s |
 | `dual-u8` | 10 | 5 | 0 | 5 | 4 of 4 / 3 of 3 | 1.0 ms | 0.4 ms / 0.5 ms | 2.8 s |
 | `dual-i8` | 10 | 5 | 0 | 5 | 4 of 4 / 3 of 3 | 2.9 ms | 0.7 ms / 1.1 ms | 2.0 s |
-| `mimus-linear-q` | 50 | 5 | 0 | 5 | 44 of 44 / 44 of 44 | 17 ms | 17 ms / 97 ms | 2.3 s |
+| `linear-i16-per-row` | 50 | 5 | 0 | 5 | 44 of 44 / 44 of 44 | 17 ms | 17 ms / 97 ms | 2.3 s |
 | ShuffleNetV2 | 5 | 4 | no reference | 1 | not planned | 9.4 s | 8.50 s / 8.56 s | 2.4 s |
 
 The runner's first `RunGraph` call also completes the graph's preparation, so
@@ -183,7 +183,7 @@ models, including ShuffleNetV2's format `0x1001e`.
 | Model | Hardware layers | Operation kinds |
 | --- | --- | --- |
 | `conv8`, `dual-u8`, `dual-i8` | ConvolutionReluPoolingLayer2 | Init, NN |
-| `mimus-linear-q` | ConvolutionReluPoolingLayer2, TensorTranspose | Init, NN, NT |
+| `linear-i16-per-row` | ConvolutionReluPoolingLayer2, TensorTranspose | Init, NN, NT |
 | ShuffleNetV2 | ConcatLayer, ConvolutionReluPoolingLayer2, TensorCopy, TensorTranspose | Init, NN |
 
 - **Simulator against reference.** ConvolutionReluPoolingLayer2 and

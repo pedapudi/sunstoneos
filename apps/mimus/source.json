@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/pedapudi/mimus.git",
-  "revision": "cece43de8143bb83c22a8ad7d329046de0068592",
+  "revision": "ce2a16122f6fa0fdeecf0fe929447be50f76fe6b",
   "base_revision": "18c7c81968f56c8c985af0ec26448184cf6a17ec",
   "local_worktree": "/home/sunil/git/mimus-worktrees/os-refs-1031",
   "branch": "port/sunstoneos-os-refs",

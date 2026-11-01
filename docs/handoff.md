@@ -33,12 +33,23 @@ the Bluetooth host admission fixture lacks a valid USB reference mode.
 Dashboard parser cases pass; its HTTP case requires local socket access.
 Raw evidence is under `~/.cache/sunstoneos/build/os-refs-1031/`.
 
-Before preparing application images, the launcher owner must load the clock
-review and Bluetooth preparation wrappers from the application port's
-`apps/os/cpu-return-clock-review.py` and `apps/bluetooth/prepare.py`. The generic
-OS validators require application reservation names and callbacks explicitly.
-The launcher also retains its application asset-symbol lookup. Feature review
-and these launcher-owner changes remain outstanding. No board run is requested.
+Application preparation loads its clock-review and Bluetooth admission
+wrappers. The clock validator requires the reservation field explicitly.
+The shared OS USB emulator supports playback, repeated USB and mSBC checks.
+Recognition fixtures live in the application repository and import that model.
+These checks, the rebuilt session handoff and application admission checks pass
+on the host.
+
+USB guards retain the shared churn files and accept legacy settings as
+fallbacks. Source aliases require `application_directory`. Device hooks use
+explicit kit arguments and dependency outputs; application declarations supply
+capture limits and dashboard labels. The NPU loader accepts the historical
+linear fixture key with its existing file and digest checks; an OS NPU image
+builds against the unchanged cached map. Review evidence is under
+`~/.cache/sunstoneos/build/os-refs-1031/review/`.
+
+The launcher still retains its application asset-symbol lookup. Feature review
+and that launcher-owner change remain outstanding. No board run is requested.
 
 ## Paused after the 2026-10-31 tranche
 

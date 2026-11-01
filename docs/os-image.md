@@ -147,8 +147,9 @@ SunstoneOS. Recognition, application protocol, placement and model checks
 live under mimus's `sunstoneos/checks/` and `sunstoneos/apps/`.
 [Validation policy](validation.md) selects checks by changed behavior.
 The integration gate builds OS variants with an empty `MIMUS_DIR`; it adds
-external mimus checks only with `--mimus-dir` or the `MIMUS_DIR` environment
-variable. `--build-root` keeps a task's new builds and logs together.
+external application checks with `--application CHECKOUT` or the
+`SUNSTONE_EXTERNAL_APPLICATIONS` environment variable. The optional
+`MIMUS_DIR` compatibility selector names the mimus example checkout. `--build-root` keeps a task's new builds and logs together.
 
 ## Not yet integrated
 
