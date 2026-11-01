@@ -373,8 +373,7 @@ def restore_dram(owner, backups, regions):
         path = Path(item['file'])
         require(path.stat().st_size == item['bytes'] and sha(path) == item['sha256'], 'Saved DRAM changed.')
     for item in backups:
-        require(sha(item['file']) == item['sha256'], 'Saved DRAM changed before restoration.')
-        owner.upload(item['address'], Path(item['file']))
+        owner.upload(item['address'], Path(item['file']), expected_sha256=item['sha256'])
 
 
 def write(path, data):

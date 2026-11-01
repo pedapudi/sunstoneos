@@ -2,6 +2,7 @@
 """Check generic return preservation and helper ordering without USB or an ELF build."""
 import argparse
 import contextlib
+import hashlib
 import io
 from pathlib import Path
 import struct
@@ -58,6 +59,7 @@ def main():
         def __init__(self, options, evidence, record, variant):
             super().__init__(options, evidence, record)
             self.variant, self.events, self.saved = variant, [], {}
+            self.restore_count=0
             self.memory = [(a,bytearray(bytes([i+17])*n)) for i,(a,n) in
                            enumerate(images.preservation_regions(make_plan()))]
             self.saved={a:bytes(data) for a,data in self.memory}
@@ -88,10 +90,13 @@ def main():
                 if a<=address and address+size<=a+len(data):
                     value=bytes(data[address-a:address-a+size]); path.write_bytes(value); return value
             raise AssertionError(('read outside fixture',hex(address),size))
-        def upload(self,address,source):
+        def upload(self,address,source,*,expected_sha256=None):
             self.events.append(('write-restore' if self.record.get('native_retirement_validated') else 'write-upload',address))
             data=Path(source).read_bytes()
-            if self.variant=='restore-readback' and self.record.get('native_retirement_validated'):
+            assert expected_sha256 is None or hashlib.sha256(data).hexdigest()==expected_sha256
+            if self.record.get('native_retirement_validated'):
+                self.restore_count+=1
+            if self.variant=='restore-readback' and self.restore_count==2:
                 raise board.Mismatch('restoration readback differs')
             for a,values in self.memory:
                 if a<=address and address+len(data)<=a+len(values):
@@ -165,6 +170,10 @@ def main():
         owner=owners[0]
         if not good:
             assert 'restore-rails' not in owner.events
+            if variant=='restore-readback':
+                assert any(bytes(data)==owner.saved[a] for a,data in owner.memory)
+                assert any(bytes(data)!=owner.saved[a] for a,data in owner.memory)
+                assert all(Path(item['file']).is_file() for item in owner.record['dram_backups'])
             assert not any(e[0]=='write-restore' for e in owner.events if isinstance(e,tuple)) or variant=='restore-readback',variant
         else:
             first_write=next(i for i,e in enumerate(owner.events) if isinstance(e,tuple) and e[0]=='write-upload')
@@ -201,9 +210,11 @@ def main():
             def elapsed_now(self):return self.clock
             def read(self,address,size,path):
                 data=self.memory[address];assert len(data)==size;path.write_bytes(data);return data
-            def upload(self,address,path):
+            def upload(self,address,path,*,expected_sha256=None):
                 self.events.append(address)
-                data=Path(path).read_bytes();self.memory[address]=data+self.memory[address][len(data):]
+                data=Path(path).read_bytes()
+                assert expected_sha256 is None or hashlib.sha256(data).hexdigest()==expected_sha256
+                self.memory[address]=data+self.memory[address][len(data):]
             def arm(self,*values,**kwargs):pass
             def wait(self,*values):self.clock=1
             def returned(self):return (0 if variant=='uncertain' else 0xb1),0,{}
@@ -258,6 +269,21 @@ def main():
         assert len(owner.events)==(4 if variant=='normal' else 2 if variant=='dcdc3-raised' else 0)
         if variant=='normal':assert owner.memory==owner.before
         print('PASS post helper '+variant)
+    evidence=args.out/'missing-post-helper'
+    parser=argparse.ArgumentParser();board.run_options(parser)
+    options=parser.parse_args([str(source),'--port','3-1','--restore-rails']);options.evidence=evidence
+    with patch.object(images,'inspect',return_value={'entry_guard':True,'descriptor':{}}),\
+         patch.object(images,'policy'),patch.object(board,'POST_RAIL_HELPER',args.out/'absent-helper'),\
+         contextlib.redirect_stdout(io.StringIO()):
+        result=board.run_image(options,lambda *v: (_ for _ in ()).throw(AssertionError('opened board before helper admission')))
+    assert result['outcome']=='refused-before-launch' and 'post-ROM rail helper is absent' in result['first_failure']['detail']
+    print('PASS missing post helper refuses before device access')
+    owner=board.Live(options,args.out,{})
+    with patch.object(owner,'tx',side_effect=AssertionError('uploaded a changed backup')):
+        try:owner.upload(0x41000000,source,expected_sha256='0'*64)
+        except ValueError as error:assert 'sealed restoration' in str(error)
+        else:raise AssertionError('changed saved source reached the transport')
+    print('PASS saved source hash checked before sealed upload')
     plan=make_plan();plan['preserve_regions'].pop()
     try:images.validate_uploads(plan)
     except ValueError:pass

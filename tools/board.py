@@ -194,8 +194,10 @@ class Live:
             os.fsync(stream.fileno())
         return data
 
-    def upload(self, address, source):
+    def upload(self, address, source, *, expected_sha256=None):
         data = Path(source).read_bytes()
+        require(expected_sha256 is None or hashlib.sha256(data).hexdigest() == expected_sha256,
+                'Saved DRAM changed before sealed restoration upload.')
         self.sequence += 1
         # A sealed source prevents a concurrent build changing upload bytes.
         base = images.load('board_sealed', ROOT/'tools/check-a733-smp.py')
@@ -698,6 +700,9 @@ def run_image(args, backend=Live):
         else:
             info = images.inspect(frozen, args.kind, descriptor,args.host_tree)
             images.policy(info, args)
+            if info['entry_guard'] and args.restore_rails:
+                require(POST_RAIL_HELPER.is_file() and images.sha(POST_RAIL_HELPER) == POST_RAIL_HELPER_SHA256,
+                        'Approved post-ROM rail helper is absent or changed; refused before device access.')
             application_inputs(args, info, evidence)
             require(getattr(args, 'expect_result', None) is None or getattr(args, 'decoder', None) is not None,
                     '--expect-result requires a result decoder.')
