@@ -65,7 +65,9 @@ static int plan(struct pvr_gpu_stop *s, struct pvr_gpu_control *c, const void *i
      * selects, so that the GPU and the firmware are halted before the OFF. */
     if (!acknowledged) {
         add(&result,WRITE,0x100,8,0,f[4]&1 ? UINT64_C(0xffeffffffffffc3d) : UINT64_C(0x00e7fffffffffc3d));
-        add(&result,POLL,0x100,8,UINT64_MAX,result.steps[result.count-1].value);
+        /* RGXResetSequence discards this read: completion fences the reset
+         * write through SOCIF. The full mask is not a readback condition. */
+        add(&result,POLL,0x100,8,0,0);
     }
     *s=result; return 1;
 }
