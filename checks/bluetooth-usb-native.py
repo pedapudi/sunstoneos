@@ -243,4 +243,3 @@ class Machine:
     def observation(self):
         return {'variant':self.variant,'calls':self.log,'executed':dict(self.seen),'packet_lengths':list(map(len,self.completed)),
           'fatal':self.word(self.s['board']+self.t['board_application']['fatal']),'poison_injected':self.injected,'actual_vendor_write_returns':self.write_returns,'time_us_model':self.time}
-
