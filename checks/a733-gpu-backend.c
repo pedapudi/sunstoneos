@@ -1,5 +1,6 @@
 #include "a733_gpu_backend.h"
 #include "a733_gpu_platform_native.h"
+#include "pvr_compute_queue.h"
 #include <string.h>
 #include "gpu-backend-traces.h"
 
@@ -23,6 +24,7 @@ static unsigned lifetime_calls;
 static int lifetime_live(void *context)
 { (void)context; ++lifetime_calls; return lifetime_result; }
 static uint64_t operation_deadline;
+static struct pvr_compute_queue recovery_queue;
 #define CHECK(x) do { if (!(x)) return __LINE__; } while (0)
 
 /* The real power provider has separate native integration evidence. These
@@ -153,6 +155,85 @@ static int enabled(void)
     for (unsigned i = 0; i < 5 && !result; ++i) result = config.power.poll(&backend);
     CHECK(result == 1 && backend.identity == PVR_FW_A733_BVNC);
     identity_confirmed = 1; return 0;
+}
+static uint64_t admitted_recovery_limit(void *ctx)
+{ return ctx==&provider_calls ? operation_deadline : 0; }
+static int recovery_setup(void)
+{
+    CHECK(!setup());
+    external.isolate=NULL;external.recovery_limit=admitted_recovery_limit;
+    config.compute_queue=&recovery_queue;
+    CHECK(!bind());CHECK(!enabled());
+    memory.phase=A733_GPU_MEMORY_PUBLISHED;
+    service.phase=PVR_GPU_SERVICE_READY;
+    CHECK(config.irq.mask(&backend));service.irq_masked=1;
+    uint64_t limit=0;
+    CHECK(config.recovery_begin && config.recovery_begin(&backend,&limit) &&
+        limit==operation_deadline && backend.recovering && !backend.recovery_write && !backend.recovery_reset);
+    service.phase=PVR_GPU_SERVICE_RECOVERING;
+    service.queue.phase=PVR_CCB_FAILED;service.control.phase=PVR_GPU_CONTROL_FAILED;
+    service.stop.phase=PVR_GPU_STOP_REGISTERS;service.stop.deadline=operation_deadline;
+    service.stop.unacknowledged=1;service.stop.count=1;
+    service.stop.steps[0]=(struct pvr_gpu_stop_step){1,0x100,8,0,UINT64_C(0xffeffffffffffc3d)};
+    return 0;
+}
+unsigned backend_recovery_check(void)
+{
+    const uint64_t mask=UINT64_C(0xffeffffffffffc3d);
+    for (unsigned scenario=0;scenario<11;++scenario) {
+        CHECK(!recovery_setup());
+        unsigned before=mmio_count;
+        expected_access=2;expected_offset=0x100;expected_width=8;expected_value=mask;
+        if (scenario==1) { CHECK(!config.stop.write(&backend,0x100,8,mask^1)); CHECK(mmio_count==before);continue; }
+        if (scenario==2) { service.stop.steps[0].offset=0xb40;CHECK(!config.stop.write(&backend,0x100,8,mask));CHECK(mmio_count==before);continue; }
+        if (scenario==3) { service.phase=PVR_GPU_SERVICE_READY;CHECK(!config.stop.write(&backend,0x100,8,mask));CHECK(mmio_count==before);continue; }
+        if (scenario==4) {
+            uint64_t value=0;CHECK(!config.stop.read(&backend,0x100,8,&value));CHECK(mmio_count==before);continue;
+        }
+        if (scenario==9) {
+            power.last_now=operation_deadline+1;
+            CHECK(!config.stop.write(&backend,0x100,8,mask) && mmio_count==before && power.token);continue;
+        }
+        if (scenario==10) {
+            backend.external.live=lifetime_live;lifetime_result=0;
+            CHECK(!config.stop.write(&backend,0x100,8,mask) && mmio_count==before && power.token);
+            lifetime_result=1;continue;
+        }
+        CHECK(config.stop.write(&backend,0x100,8,mask) && mmio_count==before+2 && backend.recovery_write);
+        if (scenario==5) {
+            observe=0;*(volatile uint64_t *)(uintptr_t)(A733_GPU_REGISTERS+0x100)=mask^1;observe=1;
+        }
+        expected_access=1;service.stop.steps[0].kind=0;service.stop.steps[0].mask=UINT64_MAX;
+        uint64_t value=0;
+        CHECK(config.stop.read(&backend,0x100,8,&value) && mmio_count==before+4);
+        CHECK(value==(scenario==5 ? mask^1 : mask));
+        expected_access=0;
+        service.stop.phase=PVR_GPU_STOP_ISOLATE;service.stop.index=service.stop.count;
+        if (scenario==5) {
+            CHECK(!backend.recovery_reset && !config.stop.isolate(&backend) && !provider_calls && power.token);continue;
+        }
+        CHECK(backend.recovery_reset);
+        off_mode=scenario==6 ? 1 : scenario==7 ? 2 : scenario==8 ? 3 : 0;
+        int begin=config.stop.isolate(&backend);
+        if (scenario==6) {CHECK(!begin && power.token && memory.phase==A733_GPU_MEMORY_PUBLISHED);continue;}
+        CHECK(begin);service.stop.isolation_started=1;
+        int result=config.stop.isolate_poll(&backend);
+        if (scenario==7) {CHECK(result<0 && power.token && memory.phase==A733_GPU_MEMORY_PUBLISHED);continue;}
+        CHECK(result==0);
+        result=config.stop.isolate_poll(&backend);
+        if (scenario==8) {CHECK(result<0 && memory.phase==A733_GPU_MEMORY_PUBLISHED);continue;}
+        CHECK(result==1 && memory.phase==A733_GPU_MEMORY_OFFLINE && backend.phase==A733_GPU_BACKEND_ISOLATED && !power.token);
+        service.stop.phase=PVR_GPU_STOP_STOPPED;service.stop.isolation_observed=1;
+        CHECK(a733_gpu_backend_stopped(&backend,&service));
+        before=mmio_count;
+        backend.recovery_write=0;CHECK(!a733_gpu_backend_stopped(&backend,&service));backend.recovery_write=1;
+        backend.recovery_reset=0;CHECK(!a733_gpu_backend_stopped(&backend,&service));backend.recovery_reset=1;
+        service.phase=PVR_GPU_SERVICE_READY;CHECK(!a733_gpu_backend_stopped(&backend,&service));service.phase=PVR_GPU_SERVICE_RECOVERING;
+        service.irq_masked=0;CHECK(!a733_gpu_backend_stopped(&backend,&service));service.irq_masked=1;
+        service.queue.phase=PVR_CCB_ACTIVE;CHECK(!a733_gpu_backend_stopped(&backend,&service));service.queue.phase=PVR_CCB_FAILED;
+        CHECK(a733_gpu_backend_stopped(&backend,&service) && mmio_count==before);
+    }
+    return 0;
 }
 static int accesses(const struct trace *trace, unsigned count, int stopping)
 {

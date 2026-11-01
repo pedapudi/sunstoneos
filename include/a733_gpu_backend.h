@@ -32,6 +32,9 @@ struct a733_gpu_backend_external {
     /* Optional nonblocking, IRQ-safe current lifetime admission. Exactly 1
      * permits normal access; any other result permanently faults and retains. */
     int (*live)(void *);
+    /* Current absolute session end, including the owner's return reserve.
+     * Zero disables automatic timeout/reset recovery. */
+    uint64_t (*recovery_limit)(void *);
 };
 enum a733_gpu_backend_phase { A733_GPU_BACKEND_NEW, A733_GPU_BACKEND_BOUND,
     A733_GPU_BACKEND_POWERING, A733_GPU_BACKEND_IDENTIFY, A733_GPU_BACKEND_ACTIVE,
@@ -57,6 +60,7 @@ struct a733_gpu_backend {
     /* Read-backs of the last secure configuration; the non-secure CPU
      * reads SMC0 as 0 (board run of apps/gpu-power-id fw-start). */
     uint32_t secure_smc0, secure_drm;
+    unsigned recovering, recovery_write, recovery_reset;
 };
 /* Zero storage. Bind before service initialization, at EL1 with MMU/cache on.
  * memory is initialized and OFFLINE; power is initialized and NEW. Config must

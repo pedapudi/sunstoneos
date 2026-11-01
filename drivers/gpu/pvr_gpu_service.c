@@ -25,6 +25,7 @@
 #pragma weak pvr_compute_queue_release
 #pragma weak pvr_compute_queue_reopen
 #pragma weak pvr_compute_queue_wake
+#pragma weak pvr_compute_queue_recovered
 static struct pvr_gpu_service *instance;
 static unsigned creating_worker;
 static void worker(void *);
@@ -239,7 +240,11 @@ static int service_event(void *ctx, const unsigned char command[PVR_CCB_COMMAND_
     struct pvr_gpu_service *s = instance;
     if (!s || ctx != s->config.context || s->phase == PVR_GPU_SERVICE_FAILED) return 0;
     if (s->config.compute && !pvr_compute_service_event(s->config.compute, command)) return 0;
-    if (s->config.compute_queue && !pvr_compute_queue_event(s->config.compute_queue, command)) return 0;
+    if (s->config.compute_queue) {
+        int handled=pvr_compute_queue_event(s->config.compute_queue,command);
+        if (!handled) return 0;
+        if (handled==2) return 1;
+    }
     uint32_t kind = (uint32_t)command[0] | (uint32_t)command[1] << 8 |
                     (uint32_t)command[2] << 16 | (uint32_t)command[3] << 24;
     if (kind == (PVR_CCB_MAGIC | 107u))
@@ -433,6 +438,44 @@ static int begin_stop(struct pvr_gpu_service *s)
         fail(s, PVR_GPU_SERVICE_STOP); return 0;
     }
     s->phase = PVR_GPU_SERVICE_STOPPING; return 1;
+}
+static int begin_recovery(struct pvr_gpu_service *s)
+{
+    struct pvr_compute_queue *q=s->config.compute_queue;
+    uint64_t now,limit,stop_end,ready_end;
+    if (!q || !s->config.recovery_begin || s->phase!=PVR_GPU_SERVICE_READY ||
+        atomic_load(&q->lost) || atomic_load(&q->recovering) ||
+        (q->error!=GPU_QUEUE_HANG && q->error!=GPU_QUEUE_RESET) ||
+        !sample(s,&now) || !a733_deadline_after(now,PVR_GPU_SERVICE_RECOVERY_STOP_US,&stop_end) ||
+        !a733_deadline_after(now,PVR_GPU_SERVICE_RECOVERY_READY_US,&ready_end) ||
+        s->epoch==UINT64_MAX) return 0;
+#ifdef SUNSTONE_A733_OS_PERF
+    if (s->performance.ticket || (s->config.performance_begin &&
+        s->performance.clock.phase!=PVR_GPU_CLOCK_READY &&
+        s->performance.clock.phase!=PVR_GPU_CLOCK_NEW)) return 0;
+#endif
+#ifdef SUNSTONE_A733_OS_GPU_RECOVERY_TEST
+    if (q->active_client==0 && q->timeline_serial==1 &&
+        (atomic_load(&q->peer.slot_state)!=PVR_COMPUTE_QUEUE_SUBMITTED ||
+         !atomic_load(&q->peer.client_owed))) return 0;
+#endif
+    atomic_store(&q->recovering,1);
+    if (!interrupt_mask(s) || s->config.recovery_begin(s->config.context,&limit)!=1 ||
+        limit<=now) return 0;
+    s->recovery_detected=now;
+    s->recovery_stop_deadline=stop_end<limit ? stop_end : limit;
+    s->recovery_ready_deadline=ready_end<limit ? ready_end : limit;
+    s->deadline=s->recovery_stop_deadline; s->recovery_stage=1;
+    (void)pvr_gpu_control_abort(&s->control);
+    (void)pvr_ccb_abort(&s->queue);
+    if (q->client.phase!=PVR_CCCB_NEW) (void)pvr_cccb_abort(&q->client);
+    s->phase=PVR_GPU_SERVICE_RECOVERING;
+    struct pvr_gpu_stop_ops ops=s->config.stop;
+    ops.now=service_clock;
+    if (!pvr_gpu_stop_init_unacknowledged(&s->stop,&s->control,s->config.firmware,
+            s->config.firmware_bytes,&ops,s->config.context,s->deadline)) return 0;
+    sunstone_crumb(SUNSTONE_CRUMB_GPU_RECOVERY_STOP,q->timeline_serial);
+    return 1;
 }
 /* A compute job or render the worker polls, from its admission until it
  * completes or fails. These phases set the wait bound. */
@@ -630,6 +673,13 @@ static void advance(struct pvr_gpu_service *s)
 #endif
         r=pvr_gpu_control_poll(&s->control,4);
         if (r != PVR_GPU_CONTROL_OK && r != PVR_GPU_CONTROL_AGAIN) {
+            struct pvr_compute_queue *q=s->config.compute_queue;
+            uint64_t now;
+            if (s->phase==PVR_GPU_SERVICE_READY && q && q->phase==PVR_COMPUTE_QUEUE_IN_FLIGHT && q->kicked &&
+                sample(s,&now) && (now>=q->deadline || now>=q->client.deadline)) {
+                q->error=GPU_QUEUE_HANG;
+                if (begin_recovery(s)) return;
+            }
             fail(s, PVR_GPU_SERVICE_CONTROL); return;
         }
         if (s->phase == PVR_GPU_SERVICE_CHECKING && !opening_clock(s)) return;
@@ -650,8 +700,22 @@ static void advance(struct pvr_gpu_service *s)
             fail(s, PVR_GPU_SERVICE_GRAPHICS); return;
         }
         if (s->config.compute_queue && s->phase == PVR_GPU_SERVICE_READY &&
-            pvr_compute_queue_poll(s->config.compute_queue) < 0) {
-            fail(s, PVR_GPU_SERVICE_COMPUTATION); return;
+            s->config.compute_queue->reset_pending) {
+            if (!begin_recovery(s)) fail(s,PVR_GPU_SERVICE_COMPUTATION);
+            return;
+        }
+        if (s->config.compute_queue && s->phase == PVR_GPU_SERVICE_READY) {
+            struct pvr_compute_queue *q=s->config.compute_queue;
+            if (pvr_compute_queue_poll(q)<0) {
+                if (!begin_recovery(s)) fail(s,PVR_GPU_SERVICE_COMPUTATION);
+                return;
+            }
+            if (s->recovery_stage==2 && q->phase==PVR_COMPUTE_QUEUE_READY) {
+                if (!opening_clock(s)) return;
+                s->recovery_stage=0; ++s->recovery_count; q->error=0;
+                atomic_store(&q->recovering,0);
+                sunstone_crumb(SUNSTONE_CRUMB_GPU_RECOVERY_READY,q->timeline_serial);
+            }
         }
 #ifdef SUNSTONE_A733_OS_PERF
         if(s->phase==PVR_GPU_SERVICE_READY) {
@@ -662,6 +726,33 @@ static void advance(struct pvr_gpu_service *s)
         }
 #endif
         break;
+    }
+    case PVR_GPU_SERVICE_RECOVERING: {
+        uint64_t now;
+        if (s->recovery_stage!=1 || !sample(s,&now) || now>=s->recovery_stop_deadline) {
+            fail(s,PVR_GPU_SERVICE_STOP); return;
+        }
+        enum pvr_gpu_stop_result r=pvr_gpu_stop_poll(&s->stop);
+        if (r==PVR_GPU_STOP_AGAIN) return;
+        if (r!=PVR_GPU_STOP_OK || pvr_compute_queue_recovered(s->config.compute_queue)!=1) {
+            fail(s,PVR_GPU_SERVICE_STOP); return;
+        }
+        s->deadline=s->recovery_ready_deadline;
+        if (pvr_compute_queue_reopen(s->config.compute_queue)!=1) {
+            fail(s,PVR_GPU_SERVICE_PREPARATION); return;
+        }
+        ++s->epoch;
+        atomic_store_explicit(&s->published_epoch,s->epoch,memory_order_release);
+        s->recovery_stage=2;
+#ifdef SUNSTONE_A733_OS_PERF
+        if(s->config.performance_begin) {
+            s->performance.clock=(struct pvr_gpu_clock){0};
+            atomic_store_explicit(&s->performance.published,PVR_GPU_PERF_OWNER,memory_order_release);
+        }
+#endif
+        sunstone_crumb(SUNSTONE_CRUMB_GPU_RECOVERY_RESTART,s->config.compute_queue->timeline_serial);
+        (void)prepare(s);
+        return;
     }
     case PVR_GPU_SERVICE_COMPUTE_CLEANUP: {
         enum pvr_gpu_control_result control=pvr_gpu_control_poll(&s->control,4);
