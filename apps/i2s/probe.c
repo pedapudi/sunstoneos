@@ -36,6 +36,7 @@ static StackType_t client_stack[4096];
 static TaskHandle_t client;
 static uint64_t work_deadline;
 static unsigned ready,closed,worker_stopped,irq_count;
+static struct { uintptr_t address;uint32_t value,kind; } parent_io;
 static void check(int,unsigned,uint64_t);
 static void bus_empty(void)
 {
@@ -61,15 +62,32 @@ static void leave(void *unused)
 {(void)unused;a733_platform_lock_leave(&locks,A733_PLATFORM_REGISTER_LOCK);}
 static int read_reg(void *unused,uintptr_t address,uint32_t *value)
 {
-    (void)unused;
-    if(address>=0x02000000&&address<0x02000200){*value=*(volatile uint32_t *)address;return 1;}
-    return a733_audio_native_read(NULL,address,value);
+    (void)unused;int ok;
+    if(address>=0x02000000&&address<0x02000200){*value=*(volatile uint32_t *)address;ok=1;}
+    else ok=a733_audio_native_read(NULL,address,value);
+    parent_io.address=address;parent_io.value=ok?*value:0;parent_io.kind=ok?1:3;return ok;
 }
 static int write_reg(void *unused,uintptr_t address,uint32_t value)
 {
-    (void)unused;
-    if(address>=0x02000000&&address<0x02000200){*(volatile uint32_t *)address=value;__asm__ volatile("dsb sy":::"memory");return 1;}
-    return a733_audio_native_write(NULL,address,value);
+    (void)unused;int ok;
+    if(address>=0x02000000&&address<0x02000200){*(volatile uint32_t *)address=value;__asm__ volatile("dsb sy":::"memory");ok=1;}
+    else ok=a733_audio_native_write(NULL,address,value);
+    parent_io.address=address;parent_io.value=value;parent_io.kind=ok?2:4;return ok;
+}
+__attribute__((noinline,noreturn)) static void parent_fault(void)
+{
+    /* Record the first failing poll's stage and last register operand before
+     * another poll can reduce it to the parent's already-failed refusal.
+     * A0..A7 retain the last successful callback input; a timing or lease
+     * failure may occur without MMIO. B0..B7 are read refusal, C0..C7 write refusal. */
+    uint64_t site=(parent_io.kind==3?0xb0:parent_io.kind==4?0xc0:0xa0)+parent.stage;
+    register uint64_t op __asm__("x0")=0x735;
+    register uint64_t code __asm__("x1")=site;
+    register uint64_t value __asm__("x2")=parent_io.value;
+    register uint64_t caller __asm__("x3")=(uintptr_t)__builtin_return_address(0);
+    register uint64_t address __asm__("x4")=parent_io.address;
+    __asm__ volatile("smc #0":"+r"(op):"r"(code),"r"(value),"r"(caller),"r"(address):"memory");
+    for(;;)__asm__ volatile("wfe");
 }
 static _Noreturn void memory_fault(void *unused){(void)unused;fail(0x51,0);}
 static struct dma_service_reply request(enum dma_service_operation op,unsigned job,uint64_t timeout,uint64_t period)
@@ -252,7 +270,7 @@ static void task(void *unused)
     unsigned stage=0;
     while(!a733_audio_parent_ready(&parent)){
         enum a733_i2s_resource_result p=a733_audio_parent_poll(&parent);
-        check(p==A733_I2S_RESOURCE_PENDING||p==A733_I2S_RESOURCE_BUSY||p==A733_I2S_RESOURCE_READY,0x6d,p);
+        if(p!=A733_I2S_RESOURCE_PENDING&&p!=A733_I2S_RESOURCE_BUSY&&p!=A733_I2S_RESOURCE_READY)parent_fault();
         if(parent.stage!=stage){stage=parent.stage;sunstone_probe_progress();}vTaskDelay(1);
     }
     ready=1;check(dma_service_activate(&service)==DMA_SERVICE_OK,0x6e,0);

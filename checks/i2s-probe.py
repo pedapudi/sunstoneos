@@ -189,6 +189,22 @@ def entry_cases(elf,out,steps):
         del m;gc.collect()
     return rows
 
+def parent_origin_case(elf,steps):
+    name='parent-fault-retains-callback-register-input'
+    if steps.case(name):return name
+    spec=importlib.util.spec_from_file_location('i2s_parent_shared',ROOT/'checks/board-probe.py')
+    shared=importlib.util.module_from_spec(spec);spec.loader.exec_module(shared)
+    # Exercise callback capture and the real fatal SMC argument path. The
+    # failed parent predicate itself is deliberately outside this small case.
+    m=shared.Model(elf,{'uploads':[]});m.map(C,0x2000);m.sys['currentel']=4
+    address=C+0x280;value=0x40147f00;m.write(address,value,4)
+    assert m.call('read_reg',0,address,m.address('copied'),count=10000,
+                  address=m.e.address('read_reg',unit='apps/i2s/probe.c'))==1
+    m.write(m.address('parent')+m.e.layouts['a733_audio_parent']['stage'],2,4)
+    m.call('parent_fault',count=10000)
+    assert m.smc[:3]==[0x735,0xa2,value] and m.smc[4]==address,m.smc
+    steps.case(name,{'passed':True});return name
+
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--build',type=Path,required=True);p.add_argument('--out',type=Path,required=True)
     p.add_argument('--resume',action='store_true');p.add_argument('--native-only',action='store_true')
@@ -212,6 +228,7 @@ def main():
         text=run(label,cmd);assert 'PASS I2S' in text,text;rows[label]=True
     rows.update({name:True for name in native_cases(a.build/'sunstone-a733-i2s-probe.elf',steps)})
     rows.update({name:True for name in entry_cases(a.build/'sunstone-a733-i2s-probe.elf',a.out,steps)})
+    rows[parent_origin_case(a.build/'sunstone-a733-i2s-probe.elf',steps)]=True
     (a.out/'result.json').write_text(json.dumps({'passed':True,'physical_access':False,'cases':rows,
         'image_sha256':hashlib.sha256((a.build/'sunstone-a733-i2s-probe.elf').read_bytes()).hexdigest(),
         'modeled_boundaries':['common monitor setup and interrupt restore','MMIO propagation and counters','DMA/FIFO sample effects'],
