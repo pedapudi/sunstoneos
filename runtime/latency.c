@@ -140,7 +140,7 @@ static struct local_state local[8];
 struct site_table {
     struct ss_latency_site sample[SS_LAT_SITE_SLOTS];
     unsigned minimum;
-};
+} __attribute__((aligned(64)));
 static struct site_table sites[SS_LAT_PHASES + 1][8][SS_LAT_SITE_KINDS];
 
 static void site_insert(struct site_table *table, struct ss_latency_site sample)
