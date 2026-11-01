@@ -105,7 +105,27 @@ change scaling at `vip_drv_pm.c:445–448,461–464`. Resume must complete the
 vendor's 1 µs settle and top-point verification within a 100 µs deadline.
 The first resumed job may add at most 100 µs to p99 and maximum latency.
 The design requires simplicity, performance and correctness approval before
-implementation.
+implementation. The direct queue owner performs transitions while it holds the
+acknowledged worker handoff. A one-shot timer only notifies that owner, carrying
+an idle generation so stale timer delivery cannot gate new work. The timer
+requires an interrupt deadline facility; tick polling cannot provide it.
+
+The transition states are RUNNING, IDLE_ON, SUSPENDING, SUSPENDED, RESUMING and
+RETAINED. Admission accepts jobs only in RUNNING or IDLE_ON. Before its first
+suspend write, the owner rechecks queue emptiness, full-idle proof and absent
+pending events under the device lock. Arrival before that write cancels the
+idle request. Arrival afterward receives backpressure until resume completes.
+
+Suspend preserves unrelated fields at register `+0x000`, sets bit 0 and pulses
+bit 9 high then low. Resume clears bit 0, pulses bit 9 high then low, waits the
+vendor's minimum 1 µs, and pulses bit 0 at `+0x10c` high then low.
+Every dependent write completes with DSB. Both transitions wait the vendor's
+settle interval before readback; register fields, full scale, full idle and
+absent events must agree before readiness is published. A partial failure or
+expired 100 µs bound enters RETAINED without releasing resources or retrying.
+A suspended queue must resume successfully before the existing CLOSE path.
+Successful transitions alone do not qualify watchdog recovery during NPU SRAM
+ownership.
 
 A proposed 3-3 transition run alternates 100 busy/idle cycles using the vendor
 suspend/resume sequence at `vip_drv_pm.c:157–209`. It retains domain power and
@@ -115,7 +135,7 @@ numerical mismatch, no retained fault, normal retirement and restored DRAM.
 Compare 9, 11 and 100 ms idle gaps. Continuously queued throughput must remain
 at least 98% of control; p99, maximum and CPU/job must stay within 105%, 110%
 and 105% of control respectively. Reject unexplained regressions within those
-limits too. Idle savings must exceed 95% meter uncertainty, and total cycle
+limits too. Idle savings must exceed the meter's uncertainty at 95% confidence, and total cycle
 energy must not increase beyond measurement uncertainty. Record the break-even
 idle duration, including transition energy. This power-state run needs
 coordinator approval before submission.
