@@ -241,7 +241,9 @@ class Check(unittest.TestCase):
         self.assertIn('bound to USB port 3-1, not 3-3', notes['3-3'])
         unbound = self.root / 'unbound.sqlite3'
         self.create_queue(unbound)
-        self.assertIn('records no USB port', progress.queue_summary(unbound, '3-1')['note'])
+        note = progress.queue_summary(unbound, '3-1')['note']
+        self.assertIn('records no USB port', note)
+        self.assertNotIn('runners refuse', note)
         missing = json.loads(progress.Progress(self.root, {'3-3': self.root / 'absent'}).snapshot()[0])
         self.assertFalse(missing['queue']['available'])
         self.assertFalse((self.root / 'absent').exists())

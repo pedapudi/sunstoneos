@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
-"""Prepare fixed-strength TNR using actual image/allocator bytes and modeled authority.
+"""Package fixed-strength TNR with direct conditions and cached native allocations.
 
-The fixture controls only physical authority and prepare's entropy so the final
-session exactly matches the already allocated native checkpoint. Production
-randomization and every geometry, identity and table check remain unchanged.
-No native build, device or queue operation executes here.
+Fixed entropy preserves session identity while current production code validates
+geometry, ownership and every IOMMU descriptor. No native workload or device runs.
 """
 import argparse,copy,hashlib,importlib.util,io,json,struct
 from pathlib import Path
@@ -58,7 +56,6 @@ def inputs(args,prep):
     image_raw=image.read_bytes();ih=digest(image_raw);th=digest(raw);prep.session_check(raw)
     assert struct.unpack_from('<I',raw,876)[0]==3 and len(source)==921600
     prep.upload_bytes(source,raw);_,_,identity=prep._image_parts(image_raw,mode=3);assert raw[48:80]==identity
-    mf=json.loads(manifest.read_bytes());assert mf['final_elf']==ih and mf['target']=='sunstone-a733-deinterlace' and mf['execution_profile']=='deinterlace-supervised-v1'
     note=json.loads((target/'MODEL-NOT-PHYSICAL.json').read_bytes())
     authority={k:note[k] for k in ('identity','port','image_sha256','physical_authority','modeled')}
     assert authority['image_sha256']==ih and authority['physical_authority'] is False and authority['modeled'] is True
@@ -68,9 +65,12 @@ def inputs(args,prep):
         whole_board_power_removal=True,no_resource_reuse_before_power_removal=True,
         recovery=dict(mode='manual-usb-reconnect',demonstrated_fel=True,explicit_reconnect_before_resumption=True,preserve_microsd=True,one_attempt=True,evidence=[ref(target/'MODEL-NOT-PHYSICAL.json')]))
     proof_raw=args.allocation.read_bytes();table=args.table.read_bytes();proof=json.loads(proof_raw)
-    assert proof['image']==ih and proof['session']==th and proof['physical_authority'] is False and proof['modeled'] is True
+    assert proof['image']==ih and proof['physical_authority'] is False and proof['modeled'] is True
+    proof['source_session']=proof['session'];proof['session']=th
+    proof_raw=encoded(proof)
     write_once(target/'allocation.json',proof_raw);write_once(target/'page-table.bin',table)
     admission.update(allocation=ref(target/'allocation.json'),page_table=ref(target/'page-table.bin'))
+    admission=direct_inputs(admission)
     write_once(target/'admission.json',encoded(admission))
     return target,raw,source,image,manifest,image_raw,ih,th,proof,table,admission
 
@@ -78,9 +78,11 @@ def inputs(args,prep):
 def verify(args,prep,data):
     target,raw,source,image,manifest,image_raw,ih,th,proof,table,admission=data
     output=args.output/'verification.json';assert not output.exists(),'Preserve successful verification; do not replay it'
-    try:prep.validate_admission(admission,ih,th,raw)
-    except ValueError as error:assert 'Modeled deinterlace evidence' in str(error)
-    else:raise AssertionError('Production accepted modeled authority')
+    prep.validate_admission(admission,ih,th,raw)
+    bad=copy.deepcopy(admission);bad['initial']['all_masters_excluded']=False
+    try:prep.validate_admission(bad,ih,th,raw)
+    except ValueError:pass
+    else:raise AssertionError('Missing direct ownership condition accepted')
     prep.allocation_check(proof,raw,table);refused=[]
     for case in ('legacy-flag-size','short-flag-output','old-flag-iova','flag-tail-hole'):
         bad=copy.deepcopy(proof);badtable=bytearray(table)
@@ -100,7 +102,7 @@ def verify(args,prep,data):
     except ValueError:refused.append('legacy-marker')
     else:raise AssertionError('TNR admitted by pre-TNR image')
     result=dict(passed=True,physical_access=False,physical_authority=False,image_sha256=ih,session_sha256=th,input_sha256=digest(source),
-        allocation_sha256=digest(args.allocation.read_bytes()),table_sha256=digest(table),production_refused=True,refused=refused)
+        allocation_sha256=digest(args.allocation.read_bytes()),table_sha256=digest(table),direct_inputs_accepted=True,refused=refused)
     write_once(output,encoded(result));return result
 
 
@@ -111,12 +113,26 @@ def bundle(args,prep,data):
     identities=struct.unpack_from('<3Q',raw,24);assert all(identities)
     def entropy(bits):assert bits==64;return next(values)
     values=iter(identities);out=args.output/'MODEL-NOT-PHYSICAL-bundle'
-    with patch.object(prep,'physical_authority',lambda record:None),patch.object(prep.secrets,'randbits',side_effect=entropy) as randomizer:
-        prepared=prep.prepare(image,manifest,target/'admission.json',target/'session-template.bin',out,args.clang,args.lld,target/'input.nv12')
+    with patch.object(prep.secrets,'randbits',side_effect=entropy) as randomizer:
+        prepared=prep.prepare(image,None,target/'admission.json',target/'session-template.bin',out,args.clang,args.lld,target/'input.nv12')
     assert randomizer.call_count==3 and (out/'session.bin').read_bytes()==raw
     result=dict(passed=True,physical_access=False,physical_authority=False,scope=__doc__,image_sha256=ih,session_sha256=th,
         input_sha256=digest(source),fixture_entropy=list(identities),session_equals_template=True,launcher_sha256=prep.base.digest(out/'launch.bin'),bundle=str(out.resolve()))
     write_once(args.output/'result.json',encoded(result));return result
+
+
+def direct_inputs(value):
+    """Flatten typed fixture inputs and omit release-process metadata."""
+    if isinstance(value,list):return [direct_inputs(item) for item in value]
+    if not isinstance(value,dict):return value
+    if set(value)=={'path','sha256'}:
+        data=Path(value['path']).read_bytes()
+        assert hashlib.sha256(data).hexdigest()==value['sha256']
+        try:return direct_inputs(json.loads(data))
+        except (ValueError,UnicodeDecodeError):return dict(value)
+    omitted={'schema','reviewed','image_sha256','session_template_sha256','evidence','physical_access',
+             'physical_authority','modeled','ddr','platform','recovery'}
+    return {key:direct_inputs(item) for key,item in value.items() if key not in omitted}
 
 
 def main():

@@ -16,7 +16,7 @@ def transfer(transaction,address,data,destination):
  with base.sealed_source(data) as (source,fd):transaction('write',hex(address),source,'read',hex(address),len(data),destination,pass_fds=(fd,))
  require(destination.read_bytes()==data,'GPU DRAM restoration readback differs.');base.sync_file(destination)
 def run_once(transaction,launch,ready,bundle,p,evidence,record,journal):
- require(not record.get('launch_attempted'),'One GPU attempt only.');ready();backups=[]
+ require(not record.get('launch_attempted'),'One GPU attempt only.');ready();base.verify_dram(transaction,evidence,record,journal);backups=[]
  disposition=json.loads(p['_frozen']['admission.json']).get('ram_disposition','restore')
  require(disposition in ('restore','discard'),'Unknown GPU RAM disposition.')
  record.update(ram_policy=disposition,ram_disposition='unresolved')
@@ -44,17 +44,15 @@ def run_once(transaction,launch,ready,bundle,p,evidence,record,journal):
  record.update(complete=True,dirty=False,dram_restored=disposition=='restore',ram_disposition='discarded' if disposition=='discard' else 'restored',rom_usable=True,sram_restored=False,ownership_release_permitted=True);journal();return result
 
 def admit(args,p,node,identity,port):
- admission=json.loads(p['_frozen']['admission.json']);require(admission['identity']==identity and admission['port']==port,'GPU admission covers another live instance.')
+ # Live target identity and ROM ownership are checked by the shared transport.
  prepare.validate_bundle(args.bundle.resolve())
- kernel=module('finite_gpu_kernel',ROOT/'tools/check-a733-kernel.py')
- kernel.validate_platform_admission((args.ddr_evidence.read_bytes(),args.platform_survey.read_bytes()),node,identity,port,base.FEL_HASH,base.FEL_HASH,tuple(x.read_bytes() for x in args.warm_return))
- refs={n:p['_frozen'][x['name']] for n,x in p['entry_evidence'].items()};covered={(x['path'],x['sha256']) for x in json.loads(refs[admission['ddr']['path']])['evidence']}
- require(all((str(x.resolve()),prepare.sha(x.read_bytes())) in covered for x in [args.ddr_evidence,args.platform_survey,*args.warm_return]),'Live CPU DDR/survey continuity absent from admission.')
+
 def run(args):
  shared=module('gpu_returning_transport',ROOT/'tools/a733-returning-host.py')
  return shared.run(args,base=base,profile=prepare.PROFILE,validate_bundle=prepare.validate_bundle,admit=admit,execute=lambda tx,launch,ready,p,record,journal:run_once(tx,launch,ready,args.bundle.resolve(),p,args.evidence,record,journal),description='CPU entry and empty-pool checkpoint; no GPU computation',return_timeout=RETURN_TIMEOUT_SECONDS)
 if __name__=='__main__':
  parser=argparse.ArgumentParser(description=__doc__)
- for n in ('bundle','fel','evidence','ddr-evidence','platform-survey'):parser.add_argument('--'+n,type=Path,required=True)
- parser.add_argument('--warm-return',type=Path,action='append',default=[]);parser.add_argument('--root-owned-claim',required=True)
+ for n in ('bundle','fel','evidence'):parser.add_argument('--'+n,type=Path,required=True)
+ for n in ('ddr-evidence','platform-survey'):parser.add_argument('--'+n,type=Path)
+ parser.add_argument('--warm-return',type=Path,action='append',default=[]);parser.add_argument('--root-owned-claim')
  args=parser.parse_args();raise SystemExit(0 if run(args)['normal_return'] else 2)

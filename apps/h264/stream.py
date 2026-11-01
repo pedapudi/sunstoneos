@@ -4,6 +4,10 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+_output_spec=importlib.util.spec_from_file_location('device_evidence_directory',Path(__file__).resolve().parents[2]/'tools/host_evidence.py')
+_output_module=importlib.util.module_from_spec(_output_spec);_output_spec.loader.exec_module(_output_module)
+unique_directory=_output_module.unique_directory
+new_directory=_output_module.new_directory
 import struct
 import time
 ROOT=Path(__file__).resolve().parents[2]
@@ -76,7 +80,7 @@ def prepare_inputs(clip,output,reference=None,version=2):
     limits=profile(version);frame_bytes=limits['frame_bytes']
     frames=split_clip(Path(clip).read_bytes());pixels=Path(reference).read_bytes() if reference else None
     require(pixels is None or len(pixels)==len(frames)*frame_bytes,'VGA oracle length differs.')
-    out=Path(output);out.mkdir(exist_ok=False);manifest=bytearray()
+    out=new_directory(output);manifest=bytearray()
     for i,(number,data) in enumerate(frames):
         require(len(data)<=limits['input_limit'],'VGA access unit exceeds bound.');(out/f'frame-{i:03}.h264').write_bytes(data)
         oracle=pixels[i*frame_bytes:(i+1)*frame_bytes] if pixels else b''

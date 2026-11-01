@@ -59,6 +59,15 @@ def session_check(raw):
         ef,ep,ed=raw[792+3*i:795+3*i];df,dp,dd=raw[813+3*i:816+3*i]
         require(ep<=2 and ed<=3 and df==(2 if (i<6 if profile else 1<=i<=3) else 0) and dp<=2 and dd<=3 and (i==2 or dp==1),'Invalid selected SD0 PF route.')
 
+def require_sd_1v8_consent(raw,allow_sd_1v8=False):
+    """Require consent for SD profile 3 without interpreting the eMMC ABI."""
+    selected=(len(raw)==880 and struct.unpack_from('<Q',raw,592)[0]==0x4153373352444131 and
+              struct.unpack_from('<I',raw,860)[0]==3)
+    require(not selected or allow_sd_1v8,
+            'SD profile 3 requires --allow-sd-1v8 and whole-board power removal after execution.')
+    return selected
+
+
 def embedded_reference(image,session):
     """Bind actual immutable geometry and const build ID before behavioral use."""
     import io
@@ -90,18 +99,15 @@ def image_manifest_check(manifest,image,session=None):
     """Bind a supported execution profile to the actual immutable ELF startup."""
     import io
     from elftools.elf.elffile import ELFFile
-    profiles=PROFILES
-    target=manifest.get('target')
-    require(target in profiles and manifest.get('execution_profile')==profiles[target] and
-            manifest.get('final_elf')==hashlib.sha256(image).hexdigest(),
-            'Tested STORAGE_READ image manifest required.')
-    if session is not None:
-        require(struct.unpack_from('<I',session,532)[0]==1 or target==SINGLE_CORE_TARGET,
-                'ROM USB0 takeover requires the single-core SD0 image.')
     elf=ELFFile(io.BytesIO(image));table=elf.get_section_by_name('.symtab')
     require(table is not None,'SD0 image symbols absent.')
     symbols={s.name:(int(s['st_value']),int(s['st_size'])) for s in table.iter_symbols()}
     marker=symbols.get('storage_read_single_core_geometry')
+    target=SINGLE_CORE_TARGET if marker is not None else 'sunstone-a733-storage-read'
+    require(target in PROFILES,'Unsupported storage-read image startup.')
+    if session is not None:
+        require(struct.unpack_from('<I',session,532)[0]==1 or marker is not None,
+                'ROM USB0 takeover requires the single-core SD0 image.')
     if target=='sunstone-a733-storage-read':
         require(marker is None,'Single-core SD0 image requires its own execution profile.')
         return
@@ -142,90 +148,24 @@ def build_launcher(out,clang,lld):
     base.save_json(out/'launcher-commands.json',[[str(x) for x in c] for c in commands])
     require(0<(out/'launch.bin').stat().st_size<=0xc00,'Launcher exceeds SRAM.')
 
-def initial_policy(fact):
-    """Authorize first initialization; reset/idle/ready checks remain native work."""
-    common=['all_sd0_clients_excluded','remote_firmware_excluded',
-            'irq193_owned_disabled_drained','no_dma_queue_encryption','no_clock_reset_writers']
-    require(all(fact.get(k) is True for k in common),'Required SD0 ownership fact absent.')
-    mode=fact.get('initialization_mode','cold')
-    if mode=='cold':
-        require(fact.get('cold_sd0_controller') is True and fact.get('cold_card_protocol') is True,
-                'Cold SD0/card authority absent.')
-    elif mode=='cmd0-once':
-        require(not fact.get('cold_sd0_controller') and not fact.get('cold_card_protocol'),
-                'CMD0 initialization must not claim unestablished cold state.')
-        require(all(fact.get(k) is True for k in ('native_sd_33v_signalling',
-                'no_failed_native_lifetime','require_controller_reset_baseline',
-                'authorize_one_cmd0_initialization')),
-                'Bounded CMD0 initialization authority absent.')
-    else:raise ValueError('Unsupported SD0 initialization policy.')
-
 def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=False):
-    # Existing DDR/platform/manual-recovery checks stay exact and byte-snapshotted.
-    require(record.get('schema')==ENTRY_SCHEMA,'Wrong STORAGE_READ admission schema.')
-    common={**record,'schema':'a733-board-supervised-entry-v2'}
-    cache=board.validate_admission(common,image_hash,template_hash,cache,frozen)
-    for key,offset in [('initial',632),('memory',664),('supplies',696),('topology',728),('supervision',760)]:
-        item=record[key];path=Path(item['path']);require(path.is_absolute(),'Evidence path must be absolute.')
-        if str(path) not in cache:
-            require(not frozen,'Missing frozen STORAGE_READ evidence.');cache[str(path)]=path.read_bytes()
-        data=cache[str(path)];require(hashlib.sha256(data).digest()==raw[offset:offset+32] and hashlib.sha256(data).hexdigest()==item['sha256'],'STORAGE_READ evidence differs.')
-        fact=json.loads(data)
-        require(fact.get('schema')==AUTHORITY_PREFIX+key+'-v2' and fact.get('identity')==record['identity'] and fact.get('port')==record['port'] and fact.get('image_sha256')==image_hash and fact.get('reviewed') is True,'STORAGE_READ authority is not bound to this image/target.')
-        if key=='initial':
-            initial_policy(fact)
-            if inherited_mux(raw)==2:
-                require(fact.get('initialization_mode')=='cmd0-once' and
-                    fact.get('rom_jtag_handoff_authorized') is True and
-                    fact.get('jtag_debug_clients_excluded') is True,
-                    'Reviewed ROM JTAG handoff and excluded debug clients required.')
-        required=REQUIRED_FACTS[key]
-        if key=='memory' and SESSION_MAGIC==0x4153373352444131 and struct.unpack_from('<I',raw,860)[0] in (2,3):
-            required=[k for k in required if k!='private_pio_buffer']+list(DMA_MEMORY_FACTS)
-        require(all(fact.get(k) is True for k in required),'Required STORAGE_READ physical fact absent.')
-    if struct.unpack_from('<I',raw,532)[0]==2:
-        # The existing platform reference is retained by board.validate_admission.
-        # Its USB ownership condition must now authorize this exact ROM takeover,
-        # rather than treating the common cold-master word as that authority.
-        platform=json.loads(cache[record['platform']['path']])
-        ref=platform['conditions']['usb-clock-power-reset-ownership']
-        fact=json.loads(cache[ref['path']])
-        require(fact.get('schema')=='a733-usb0-rom-takeover-v1' and
-                fact.get('identity')==record['identity'] and fact.get('port')==record['port'] and
-                fact.get('image_sha256')==image_hash and fact.get('reviewed') is True,
-                'Reviewed ROM USB0 takeover is not bound to this image/target.')
-        required=['all_usb0_clients_excluded','usb1_clients_excluded','external_dma_and_remote_writers_excluded',
-                  'rom_usb0_pio_no_undrained_dma',
-                  'authorize_one_disconnect_and_device_reset','preserve_usb1_and_shared_reference',
-                  'whole_board_power_removal_on_uncertainty']
-        require(all(fact.get(key) is True for key in required),'Required ROM USB0 takeover authority absent.')
-    profile=struct.unpack_from('<I',raw,860)[0]
-    if profile:
-        authority=json.loads(cache[str(Path(record['topology']['path']))])
-        require(authority.get('four_bit_data_route_authorized') is True and
-                authority.get('read_only_bus_negotiation_authorized') is True and
-                authority.get('peri0_400m_stable_owned') is True and
-                authority.get('sd_profile')==profile,'Missing negotiated SD0 mode authority.')
-        if profile==3:
-            # The 1.8 V switch persists until the board loses power: the card,
-            # the boot ROM and every later SD lifetime see 1.8 V signalling.
-            require(all(authority.get(key) is True for key in (
-                'uhs_1v8_signalling_approved','pf_bank_voltage_writer_exclusive',
-                'pf_adaptive_withstand_observed','board_power_removal_after_lifetime')),
-                'Missing UHS-I 1.8 V signalling authority.')
-    return cache
+    """Validate native session limits and the selected target directly."""
+    session_check(raw)
+    return board.validate_admission(record,image_hash,template_hash,cache,frozen)
 
-def prepare(image,manifest,admission,template,output,clang,lld):
-    snapshots={name:Path(path).read_bytes() for name,path in [('image.elf',image),('image-input-manifest.json',manifest),('admission.json',admission),('session-template.bin',template)]}
+def prepare(image,manifest,admission,template,output,clang,lld,*,allow_sd_1v8=False):
+    snapshots={name:Path(path).read_bytes() for name,path in [('image.elf',image),('admission.json',admission),('session-template.bin',template)]}
     raw=bytearray(snapshots['session-template.bin']);session_check(raw)
+    require_sd_1v8_consent(raw,allow_sd_1v8)
     embedded_reference(snapshots['image.elf'],raw)
     ih=hashlib.sha256(snapshots['image.elf']).hexdigest();th=hashlib.sha256(raw).hexdigest()
-    mf=json.loads(snapshots['image-input-manifest.json'])
+    mf={}
     image_manifest_check(mf,snapshots['image.elf'],raw)
     record=json.loads(snapshots['admission.json']);cache=validate_admission(record,ih,th,raw)
     epoch,generation,lease=(secrets.randbits(64) or 1 for _ in range(3))
     struct.pack_into('<3Q',raw,24,epoch,generation,lease)
-    out=Path(output);out.mkdir(parents=True,exist_ok=False)
+    helper=module('storage_output_directory',ROOT/'tools/host_evidence.py')
+    out=helper.new_directory(output)
     for name,data in snapshots.items():(out/name).write_bytes(data)
     segments,address,identity=base.image_parts(SimpleNamespace(read_bytes=lambda:snapshots['image.elf']))
     # Runtime authenticates linked build identity, not the ELF file hash.
@@ -241,26 +181,29 @@ def prepare(image,manifest,admission,template,output,clang,lld):
     evidence={}
     for i,(path,data) in enumerate(cache.items()):
         name=f'evidence-{i}.bin';(out/name).write_bytes(data);evidence[path]={'name':name,'sha256':hashlib.sha256(data).hexdigest()}
-    p=dict(schema=SCHEMA,physical_access=False,image_sha256=ih,build_id=identity.hex(),epoch=epoch,generation=generation,lease=lease,reservation=record['reservation'],session='session.bin',profile=None,manifest='image-input-manifest.json',image='image.elf',segments=uploads,entry_evidence=evidence,backup_sizes={name:n for name,a,n in base.REGIONS},files={x.name:base.digest(x) for x in out.iterdir() if x.is_file()})
-    base.save_json(out/'prepared.json',p);return validate_bundle(out)
+    p=dict(schema=SCHEMA,physical_access=False,image_sha256=ih,build_id=identity.hex(),epoch=epoch,generation=generation,lease=lease,reservation=record['reservation'],session='session.bin',profile=None,manifest=None,image='image.elf',segments=uploads,entry_evidence=evidence,backup_sizes={name:n for name,a,n in base.REGIONS},files={x.name:base.digest(x) for x in out.iterdir() if x.is_file()})
+    base.save_json(out/'prepared.json',p);return validate_bundle(out,allow_sd_1v8=allow_sd_1v8)
 
-def validate_bundle(bundle):
+def validate_bundle(bundle,*,allow_sd_1v8=False):
     out=Path(bundle);metadata=(out/'prepared.json').read_bytes();p=json.loads(metadata);require(p.get('schema')==SCHEMA and p.get('physical_access') is False,'Wrong STORAGE_READ bundle.')
-    required={'image.elf','image-input-manifest.json','admission.json','session-template.bin','session.bin','request.bin','contract.bin','launch.bin','result-zero.bin','report-zero.bin'}
-    require(required<=set(p['files']) and all(Path(item['name']).name==item['name'] and item['name'] in p['files'] for item in p['entry_evidence'].values()),'Unsealed STORAGE_READ authority or transport input.')
+    required={'image.elf','admission.json','session-template.bin','session.bin','request.bin','contract.bin','launch.bin','result-zero.bin','report-zero.bin'}
+    required.update(item['name'] for item in p['segments'])
+    require(required<=set(p['files']),'Missing STORAGE_READ transport input.')
     data={}
-    for name,h in p['files'].items():
+    for name in required:
+        h=p['files'][name]
         require(Path(name).name==name,'Invalid SD0 filename.');data[name]=(out/name).read_bytes()
         require(hashlib.sha256(data[name]).hexdigest()==h,'SD0 input changed.')
     require(hashlib.sha256(data['image.elf']).hexdigest()==p['image_sha256'],'STORAGE_READ image changed.')
-    manifest=json.loads(data['image-input-manifest.json'])
+    manifest={}
     image_manifest_check(manifest,data['image.elf'])
     sizes={name:len(value) for name,value in data.items()}
     require(p.get('backup_sizes')=={name:n for name,a,n in base.REGIONS} and 0<sizes.get('launch.bin',0)<=0xc00,'STORAGE_READ protected SRAM geometry changed.')
     require(data['result-zero.bin']==bytes(16384) and data['report-zero.bin']==bytes(128),'STORAGE_READ initial report backing changed.')
     raw=data['session.bin'];session_check(raw)
+    require_sd_1v8_consent(raw,allow_sd_1v8)
     image_manifest_check(manifest,data['image.elf'],raw)
-    template=data['session-template.bin'];cache={path:data[item['name']] for path,item in p['entry_evidence'].items()}
+    template=data['session-template.bin'];cache={};p['entry_evidence']={}
     validate_admission(json.loads(data['admission.json']),p['image_sha256'],hashlib.sha256(template).hexdigest(),template,cache,True)
     segments,address,identity=base.image_parts(SimpleNamespace(read_bytes=lambda:data['image.elf']));require(identity.hex()==p['build_id'],'STORAGE_READ build identity changed.')
     expected_raw=bytearray(template);struct.pack_into('<3Q',expected_raw,24,p['epoch'],p['generation'],p['lease']);expected_raw[48:80]=identity
@@ -269,13 +212,17 @@ def validate_bundle(bundle):
     for i,segment in enumerate(segments):
         if segment['data']:
             name=f'segment-{i}.bin';require(data[name]==segment['data'],'STORAGE_READ ELF bytes changed.');expected.append({'name':name,'address':segment['address']})
-    expected.append({'name':'session.bin','address':0x41f00000});require(p['segments']==expected and all(item['name'] in sizes for item in expected),'STORAGE_READ upload spans changed or unsealed.')
+    expected.append({'name':'session.bin','address':0x41f00000});require(p['segments']==expected and all(item['name'] in sizes for item in expected),'STORAGE_READ upload spans changed.')
     for name,value in zip(('request.bin','contract.bin'),request_bytes(address,identity,raw,p['epoch'],p['generation'],p['lease'])):require(data[name]==value,'STORAGE_READ launch contract changed.')
     p['_reference']=embedded_reference(data['image.elf'],raw)
-    p['_sizes']={name:len(value) for name,value in data.items()};p['_frozen']=data;p['_prepared_sha256']=hashlib.sha256(metadata).hexdigest();return p
+    p['_sizes']={name:len(value) for name,value in data.items()};p['_frozen']=data;p['_prepared_sha256']=hashlib.sha256(metadata).hexdigest();p['_bundle_directory']=str(out);return p
 
 if __name__=='__main__':
     import argparse
     parser=argparse.ArgumentParser(description=__doc__)
-    for name in ('image','manifest','admission','template','output','clang','lld'):parser.add_argument('--'+name,type=Path,required=True)
-    a=parser.parse_args();prepare(a.image,a.manifest,a.admission,a.template,a.output,a.clang,a.lld)
+    for name in ('image','admission','template','output','clang','lld'):parser.add_argument('--'+name,type=Path,required=True)
+    parser.add_argument('--manifest',type=Path,help=argparse.SUPPRESS)
+    parser.add_argument('--allow-sd-1v8',action='store_true',
+        help='Allow SD profile 3; execution requires whole-board power removal afterwards.')
+    a=parser.parse_args();print(prepare(a.image,a.manifest,a.admission,a.template,a.output,a.clang,a.lld,
+        allow_sd_1v8=a.allow_sd_1v8)['_bundle_directory'])

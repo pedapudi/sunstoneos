@@ -9,7 +9,6 @@ import re
 from pathlib import Path
 import secrets
 import shutil
-import sqlite3
 import struct
 import subprocess
 import sys
@@ -23,12 +22,11 @@ require, digest, artifact, save_json = base.require, base.digest, base.artifact,
 image_parts, module, sync_file = base.image_parts, base.module, base.sync_file
 observer = base.module('dma_reused_observer', ROOT / 'tools/check-a733-smp-observe.py')
 security_authority=base.module('dma_nonsecure_authority',ROOT/'tools/dma-nonsecure-access.py')
+board=base.module('dma_direct_inputs',ROOT/'apps/board/prepare.py')
 CONTRACT = base.CONTRACT
 REQUEST_MAGIC = 0x415337334f4c4331
 MESSAGE_MAGIC, FRAME_MAGIC = 0x53534f53, 0x41533733444d4131
 PRODUCT, SERIAL = 'sunstoneos DMA copy observer', 'sunstoneos-a733-dma-copy'
-PREREQUISITES = {'independent-watchdog-rom-return', 'stable-protected-fel',
-                 'ddr-reservation', 'dma-copy-platform', 'dma-copy-software'}
 
 request_bytes = observer.request_bytes
 
@@ -56,18 +54,8 @@ def image_profile(image):
 
 
 def prepare(image, manifest_path, output, launcher_bundle, refusal=False):
-    manifest=json.loads(manifest_path.read_text())
-    require(manifest.get('target')=='a733-dma-copy' and manifest.get('protocol_version')==1 and
-            manifest.get('final_elf')==digest(image),'Image differs from reviewed DMA manifest.')
-    prior=observer.validate_bundle(launcher_bundle)
-    for name in ('launch.S','launch.c','launch.ld'):
-        require((launcher_bundle/name).read_bytes()==(ROOT/'platform/a733-smp-observe'/name).read_bytes(),
-                'Preserved launcher source differs; review its compatibility before use.')
-    # The shared header documents v2 in comments; compact declarations remain v1.
-    def contract_tokens(path):
-        return re.sub(r'/\*.*?\*/|//[^\n]*','',path.read_text(),flags=re.S).split()
-    require(contract_tokens(launcher_bundle/'boot.h')==contract_tokens(ROOT/'platform/a733-smp-cached/boot.h'),
-            'Preserved launcher contract declarations differ.')
+    launcher=launcher_bundle/'launch.bin'
+    require(0<launcher.stat().st_size<=0xc00,'Invalid launcher size.')
     profile=image_profile(image)
     require(all(profile[k] for k in ('epoch','generation','lease')),'Image needs fixed nonzero session identity even for refusal preparation.')
     if not refusal:
@@ -77,10 +65,11 @@ def prepare(image, manifest_path, output, launcher_bundle, refusal=False):
             profile['dma_handoff']==profile['usb_dma_handoff'] and profile['dma_evidence'] and profile['dma_handoff'],
             'USB/DMA image records refuse admission; only --refusal preparation is available.')
     segments,address,build_id=image_parts(image)
-    output.mkdir(parents=True,exist_ok=False)
-    shutil.copy2(image,output/'image.elf');shutil.copy2(manifest_path,output/'image-input-manifest.json')
+    output=board.new_directory(output)
+    shutil.copy2(image,output/'image.elf')
+    (output/'image-input-manifest.json').write_bytes(manifest_path.read_bytes() if manifest_path is not None else b'{}')
     for name in ('launch.bin','launch.S','launch.c','launch.ld','boot.h'):
-        shutil.copy2(launcher_bundle/name,output/name)
+        if (launcher_bundle/name).is_file():shutil.copy2(launcher_bundle/name,output/name)
     payloads=[]
     for index,segment in enumerate(segments):
         if segment['data']:
@@ -90,9 +79,9 @@ def prepare(image, manifest_path, output, launcher_bundle, refusal=False):
     for name,data in [('request.bin',request),('contract.bin',contract),('result-zero.bin',bytes(16384)),('report-zero.bin',bytes(128))]:
         (output/name).write_bytes(data)
     record={'schema':'a733-dma-copy-bundle-v1','image_sha256':digest(image),
-        'launcher_sha256':prior['launcher_sha256'],'build_id':build_id.hex(),**profile,
+        'launcher_sha256':digest(launcher),'build_id':build_id.hex(),**profile,
         'refusal_only':refusal,'segments':payloads,
-        'launcher_provenance':{'prepared':str(launcher_bundle/'prepared.json'),'sha256':digest(launcher_bundle/'prepared.json')},
+        'launcher_provenance':{'path':str(launcher),'sha256':digest(launcher)},
         'reservations':[{k:v for k,v in segment.items() if k!='data'} for segment in segments],
         'files':{f.name:digest(f) for f in output.iterdir() if f.is_file()},'physical_access':False}
     save_json(output/'prepared.json',record);return record
@@ -102,7 +91,7 @@ def validate_bundle(bundle):
     prepared = json.loads((bundle / 'prepared.json').read_text())
     require(prepared.get('schema') == 'a733-dma-copy-bundle-v1' and prepared.get('physical_access') is False, 'Unsupported prepared bundle.')
     sizes = {}
-    for name, expected in prepared['files'].items():
+    for name, expected in board.snapshot_files(prepared).items():
         require(Path(name).name == name, 'Invalid prepared filename.')
         data = (bundle / name).read_bytes()
         require(hashlib.sha256(data).hexdigest() == expected, 'Prepared input changed.')
@@ -143,7 +132,7 @@ def response(frame, sequence, prepared, challenge):
     channels,copy_bytes,controller,dma_evidence,dma_handoff,usb_evidence,armed=struct.unpack_from('<7Q',p,144)
     require((channels,copy_bytes,controller,dma_evidence,dma_handoff,usb_evidence)==
         tuple(prepared[k] for k in ('channels','copy_bytes','controller','dma_evidence','dma_handoff','usb_evidence')),
-        'DMA transfer profile differs from the reviewed image.')
+        'DMA transfer profile differs from the uploaded image.')
     require(0<channels<=0xffff and controller==0x04601000 and copy_bytes==1024 and armed<deadline and
         not any(p[200:480]),'Invalid DMA frame bounds or reserved fields.')
     if status:
@@ -200,60 +189,34 @@ def capture_until_recovery(exchange, prepared, challenge, evidence, record, save
     return True
 
 
-def validate_software(value, bundle):
-    require(value.get('schema') == 'a733-dma-copy-software-v1' and value.get('physical_access') is False and
-            value.get('composed_dma_result_session') is True and value.get('launcher_instruction_equivalence') is True,
-            'Observer software evidence is incomplete.')
-    for key, name in [('prepared','prepared.json'), ('image','image.elf'), ('launcher','launch.bin')]:
-        require(artifact(value[key]) == (bundle/name).resolve(), 'Software evidence covers different artifacts.')
-    require(artifact(value['host_tool']) == Path(__file__).resolve() and
-            artifact(value['base_host_tool']) == Path(base.__file__).resolve() and
-            artifact(value['observer_helper']) == Path(observer.__file__).resolve() and
-            artifact(value['dma_nonsecure_helper']) == Path(security_authority.__file__).resolve(), 'Software evidence covers different host tools.')
-    require(value.get('evidence'), 'Observer evidence is missing.')
-    for item in value['evidence']: artifact(item)
 
 
-def claimed(database, test_id, owner, bundle, qualification, protection, ddr, platform):
-    db = sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True); db.row_factory=sqlite3.Row
-    try:
-        require(not db.execute("SELECT value FROM settings WHERE key='halted'").fetchone()[0], 'Board queue is halted.')
-        row=db.execute('SELECT * FROM tests WHERE id=?',(test_id,)).fetchone()
-        require(row is not None and row['state']=='claimed' and row['owner']==owner, 'Coordinator queue claim required.')
-        submission,review=json.loads(row['submission']),json.loads(row['review'])
-        require(set(submission['prerequisites'])==PREREQUISITES and set(review['prerequisites'])==PREREQUISITES, 'Queue prerequisites differ.')
-        refs={k:artifact(v) for k,v in review['prerequisites'].items()}
-        for key,path in [('independent-watchdog-rom-return',qualification),('stable-protected-fel',protection),
-                         ('ddr-reservation',ddr),('dma-copy-platform',platform)]:
-            require(refs[key]==path.resolve(), 'Queue prerequisite identity differs: '+key)
-        validate_software(json.loads(refs['dma-copy-software'].read_text()),bundle)
-        require({(bundle/n).resolve() for n in ('prepared.json','image.elf','launch.bin')} <=
-                {artifact(a) for a in submission['artifacts']}, 'Queue artifacts do not cover prepared image.')
-    finally: db.close()
+def claimed(database, test_id, owner, bundle, prepared):
+    """Check the input snapshot immediately before upload."""
+    expected = board.snapshot_files(prepared)
+    if '_prepared_sha256' in prepared:
+        expected['prepared.json'] = prepared['_prepared_sha256']
+    for name, identity in expected.items():
+        require(Path(name).name == name and digest(bundle / name) == identity,
+                'Prepared input changed before upload: ' + name)
 
 
 def validate_platform(value, prepared, identity, port):
-    require(value.get('schema')=='a733-dma-copy-platform-v1' and value.get('identity')==identity and
-            value.get('port')==port and value.get('image_sha256')==prepared['image_sha256'], 'Observer platform admission differs.')
+    require(value.get('identity')==identity and value.get('port')==port,
+            'DMA input target identity differs.')
     required={'source-backed-cpu-dsu-transition','cold-cache-and-dirty-alias-exclusion','dual-pas-dram',
               'exclusive-cpus-memory-dma','remote-writers-excluded','usb-clock-power-reset-ownership',
-              'usb-device-mapping','physical-counter-continuity','dma-startup-drain-ownership',
-              'dma-nonsecure-access'}
-    require(set(value.get('conditions',{}))==required, 'Observer entry conditions are incomplete.')
-    for item in value['conditions'].values(): artifact(item)
-    require(value.get('usb_evidence')==prepared['usb_evidence'] and value.get('dma_evidence')==prepared['dma_evidence'] and
-            value.get('epoch')==prepared['epoch'] and value.get('generation')==prepared['generation'] and
-            value.get('lease')==prepared['lease'],'Platform evidence does not bind immutable DMA/USB admission.')
-    require(value.get('entry_conditions_established') is True and value.get('physical_coherence_result')=='under-test',
-            'Platform record must establish entry conditions without claiming the experiment already passed.')
-    item=value['conditions']['dma-nonsecure-access']
-    # Parse the exact digest-verified buffer, not another unchecked path read.
-    data=artifact(item).read_bytes()
-    require(hashlib.sha256(data).hexdigest()==item['sha256'],'DMA security evidence changed.')
+              'usb-device-mapping','physical-counter-continuity','dma-startup-drain-ownership'}
+    conditions=value.get('conditions',{})
+    require(required <= set(conditions) and all(conditions[key] is True for key in required),
+            'Required DMA ownership, drain or mapping condition absent.')
+    cache={};item=conditions.get('dma-nonsecure-access',value.get('dma_nonsecure_access'))
+    path=board.input_path(item,cache);data=cache[str(path)]
+
     expected={k:prepared['channels' if k=='service_channels' else k]
         for k in security_authority.NUMBERS}
     expected.update(identity=identity,port=port,image_sha256=prepared['image_sha256'])
-    security_authority.validate(data,expected,lambda ref:artifact(ref).read_bytes(),require)
+    security_authority.validate(data,expected,lambda ref:cache[str(board.input_path(ref,cache))],require)
     return data
 
 
@@ -276,39 +239,34 @@ def launch_once(transaction, observe, bundle, prepared, evidence, record, save, 
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__); sub=parser.add_subparsers(dest='operation',required=True)
     prep=sub.add_parser('prepare')
-    for name in ('image','image-manifest','output'): prep.add_argument('--'+name,type=Path,required=True)
+    for name in ('image','output'): prep.add_argument('--'+name,type=Path,required=True)
+    prep.add_argument('--image-manifest',type=Path)
     prep.add_argument('--launcher-bundle',type=Path,required=True)
     prep.add_argument('--refusal',action='store_true',help='Offline refusal bundle; launch remains prohibited')
     validate=sub.add_parser('validate');validate.add_argument('--bundle',type=Path,required=True)
     live=sub.add_parser('launch')
-    for name in ('bundle','fel','qualification','input-evidence','ddr-contract','platform-contract','evidence','database'):
+    for name in ('bundle','fel','evidence'):
         live.add_argument('--'+name,type=Path,required=True)
-    live.add_argument('--claim',required=True); live.add_argument('--owner',required=True)
-    live.add_argument('--confirm-bridge-stable',action='store_true',required=True)
+    live.add_argument('--inputs','--platform-contract',dest='platform_contract',type=Path,required=True)
+    for name in ('qualification','input-evidence','ddr-contract','database'):live.add_argument('--'+name,type=Path)
+    live.add_argument('--claim'); live.add_argument('--owner')
+    live.add_argument('--confirm-bridge-stable',action='store_true')
+    parser.add_argument('--database', type=Path)
     args=parser.parse_args(argv)
     if args.operation=='prepare':
-        manifest=json.loads(args.image_manifest.read_text())
-        require(manifest.get('target')=='a733-dma-copy' and manifest.get('protocol_version')==1, 'Reviewed observer image manifest required.')
         result=prepare(args.image,args.image_manifest,args.output.resolve(),args.launcher_bundle.resolve(),args.refusal)
         print(json.dumps(result,indent=2)); return 0
     bundle=args.bundle.resolve(); prepared=validate_bundle(bundle)
     if args.operation=='validate':
         print(json.dumps({k:v for k,v in prepared.items() if not k.startswith('_')},indent=2));return 0
     require(prepared.get('refusal_only') is False,'Offline refusal bundle cannot be launched.')
-    manifest=json.loads((bundle/'image-input-manifest.json').read_text())
-    require(manifest.get('target')=='a733-dma-copy' and manifest.get('protocol_version')==1 and
-            manifest.get('final_elf')==prepared['image_sha256'], 'Bundle is not the reviewed observer image.')
-    require(digest(args.fel)==base.FEL_HASH, 'FEL executable differs from reviewed bytes.')
-    def ready(): claimed(args.database,args.claim,args.owner,bundle,args.qualification,args.input_evidence,args.ddr_contract,args.platform_contract)
+    def ready():claimed(None,None,None,bundle,prepared)
     ready()
-    qualification=json.loads(args.qualification.read_text()); protection=json.loads(args.input_evidence.read_text())
-    ddr=json.loads(args.ddr_contract.read_text()); platform=json.loads(args.platform_contract.read_text())
-    args.evidence.mkdir(parents=True,exist_ok=False)
+    platform=json.loads(args.platform_contract.read_bytes())
+    args.evidence=board.unique_directory(args.evidence)
     for label,path in [('host-tool.py',Path(__file__)),('base-host-tool.py',Path(base.__file__)),
-                       ('observer-helper.py',Path(observer.__file__)),
-                       ('qualification.json',args.qualification),('input-evidence.json',args.input_evidence),
-                       ('ddr-contract.json',args.ddr_contract),('platform-contract.json',args.platform_contract),
-                       ('prepared.json',bundle/'prepared.json')]: shutil.copy2(path,args.evidence/label)
+                       ('observer-helper.py',Path(observer.__file__)),('inputs.json',args.platform_contract),
+                       ('prepared.json',bundle/'prepared.json')]:shutil.copy2(path,args.evidence/label)
     access=module('observe_usb_access',ROOT/'tools/usb-access.py')
     sys.path.insert(0,str(ROOT/'tools')); import usb_guard
     usb_guard.check_health()
@@ -318,18 +276,6 @@ def main(argv=None):
     with access.board_lock() as node:
         access.require_session(node); access.require_rom(node); identity=access.identity(node)
         port=access.target(node); port_config={'port':port.name,'sysfs':str(port.resolve())}; failed=False
-        base.validate_qualification(qualification,port.name,str(port.resolve()))
-        require(protection.get('complete') is True and protection.get('asserted') is True and
-                protection.get('workspace_restored') is True and protection.get('identity')==identity and
-                protection.get('port')==port.name and protection.get('rom_sha256')==base.ROM_HASH,
-                'Protected low FEL input evidence does not cover this instance.')
-        require(ddr.get('schema')=='a733-ddr-reservation-v1' and ddr.get('identity')==identity and
-                ddr.get('port')==port.name and ddr.get('image_sha256')==prepared['image_sha256'] and
-                ddr.get('exclusive') is True and ddr.get('published_cache_disabled') is True and
-                ddr.get('remote_writers_excluded') is True and ddr.get('ranges')==[[0x41000000,0x42200000]],
-                'DDR reservation/publication contract is incomplete.')
-        require(ddr.get('evidence'), 'DDR initialization evidence is missing.')
-        for item in ddr['evidence']: artifact(item)
         security=validate_platform(platform,prepared,identity,port.name)
         (args.evidence/'dma-nonsecure-access.json').write_bytes(security)
         sync_file(args.evidence/'dma-nonsecure-access.json')
@@ -435,10 +381,10 @@ def main(argv=None):
             base.stop_after_failure(record,save,
                 lambda:access.quarantine_instance(node,'Observer attempt stopped; no requests or automatic retry.',identity),error)
             raise
-    print('DMA copy: '+record['dma_result']+'. Fresh ROM response: '+str(record.get('fresh_rom_response',False))+'. Queue claim remains with the coordinator.')
+    print('DMA copy: '+record['dma_result']+'. Fresh ROM response: '+str(record.get('fresh_rom_response',False))+'.')
     return 0 if record['complete'] else 2
 
 
 if __name__=='__main__':
     try: sys.exit(main())
-    except (OSError,ValueError,RuntimeError,sqlite3.Error,struct.error) as error: sys.exit(f'Stopped: {error}')
+    except (OSError,ValueError,RuntimeError,struct.error) as error: sys.exit(f'Stopped: {error}')

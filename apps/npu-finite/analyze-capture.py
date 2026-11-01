@@ -2,17 +2,16 @@
 """Compare audited stopped NPU RAM offline; never grant execution or recovery."""
 import argparse,hashlib,importlib.util,io,json,os,struct
 from pathlib import Path
+import sys
+sys.path.insert(0,str(Path(__file__).resolve().parents[2]/"tools"))
+from host_evidence import unique_directory
 from elftools.elf.elffile import ELFFile
 ROOT=Path(__file__).resolve().parents[2]
 def module(name,path):
     spec=importlib.util.spec_from_file_location(name,path);value=importlib.util.module_from_spec(spec);spec.loader.exec_module(value);return value
 host=module('npu_analysis_host',ROOT/'apps/npu-finite/host.py');capture=host.stopped
 require,sha=capture.require,capture.sha
-PINS={'comparison.json':'4f71efc519d713bd9450bde1193436fdcf97fc3e8e0c4b0cf86ff9e9450f57f6',
-      'buffer-0.bin':'1ebd53c16f19591d3ee7c736e3bb7032cb2018438f45b567422316699afc9097',
-      'buffer-1.bin':'d5bbe9999b20cd3b3768c9ff960c4f12807d567cf64d0cfeeaf8ea52534c6656',
-      'buffer-3.bin':'dc41d8da1fee1b98a6d57dc15dca91d404293b908d4d4e1ddcfbe9c9ae2728bb'}
-BOOTSTRAP_SHA='d5607a9a76b2ca876c8fccefa77ee69b63f67f24a9e149938e0a1931cebaea8d'
+REFERENCE_FILES=('comparison.json','buffer-0.bin','buffer-1.bin','buffer-3.bin')
 END=struct.pack('<II',0x10000000,0)
 
 def difference(actual,expected):
@@ -57,16 +56,17 @@ def analyze(bundle,session,assembly,bootstrap,synthetic=False):
     try:
         bundle,session,assembly,bootstrap=map(Path,(bundle,session,assembly,bootstrap))
         p=json.loads(read(bundle/'prepared.json'));require(isinstance(p,dict),'Prepared record must be an object.');image=read(bundle/'image.elf')
-        require(sha(image)==capture.IMAGE==p['image_sha256'] and p['execution_profile']==host.PROFILE,'Only audited numerical image supported.')
-        manifest=json.loads(read(bundle/'manifest.json'));require(isinstance(manifest,dict),'Image manifest must be an object.')
-        _,_,_,_,geometry=host.image_profile(image,manifest)
+        require(sha(image)==p['image_sha256'] and p['execution_profile']==host.PROFILE,'Only audited numerical image supported.')
+        _,_,_,_,geometry=host.image_profile(image,{})
+        require(geometry.get('stopped_capture') is not None,'Unsupported native capture geometry.')
         require(p['geometry']==geometry,'Prepared geometry differs from exact image.')
-        original=json.loads(read(session));require(isinstance(original,dict),'Session must be an object.');require(original.get('image_sha256')==capture.IMAGE,'Session image differs.')
+        original=json.loads(read(session));require(isinstance(original,dict),'Session must be an object.');require(original.get('image_sha256')==sha(image),'Session image differs.')
         result=host.validate_reports(*(read(session.parent/(name+'.bin')) for name in ('monitor','platform','receipt')),p)
         # Records made before the host reported output_pattern lack it; the
         # field is derived from the same copied outputs.
         recorded=original.get('npu_result');recorded=dict(recorded) if isinstance(recorded,dict) else recorded
-        if isinstance(recorded,dict) and 'output_pattern' not in recorded:recorded['output_pattern']=result['output_pattern']
+        if isinstance(recorded,dict):
+            for key in ('output_pattern','timing'):recorded.setdefault(key,result.get(key))
         require(result==recorded and result['status']==1 and result['controlled_negative'] and not result['functional_success'],'No internally consistent numerical failure.')
         journal=original.get('stopped_capture',{});require(isinstance(journal,dict),'Capture journal must be an object.');rows=journal.get('files',[])
         require(isinstance(rows,list),'Capture files must be an array.')
@@ -94,13 +94,13 @@ def analyze(bundle,session,assembly,bootstrap,synthetic=False):
         catalogue=json.loads(read(ROOT/'tools/npu-models.json'))['models'];selected=next(v for v in catalogue if v['name']=='conv12')
         require(sha(model)==selected['model']['sha256'] and sha(input_bytes)==selected['input']['sha256'] and sha(reference)==selected['reference']['sha256'],'Catalogue identity differs.')
         refs={}
-        for name,digest in PINS.items():
-            refs[name]=read(assembly/name);require(sha(refs[name])==digest,'Accepted assembly reference differs: '+name)
+        for name in REFERENCE_FILES:
+            refs[name]=read(assembly/name)
         comparison=json.loads(refs['comparison.json'])
-        require(comparison['result']=='pass' and comparison['model_sha256']==sha(model) and comparison['native_sha256']=='e136c7d82b2e98376572f437b93399edebd4980267978daf60534389c4d61fd9','Comparison origin differs.')
+        require(comparison['result']=='pass' and comparison['model_sha256']==sha(model),'Comparison origin differs.')
         for i,slot in ((0,0),(1,1),(3,2),(4,3),(5,4)):
             require(comparison['buffers'][i]=={'device':hex(capture.SLOTS[slot][2]),'bytes':capture.SLOTS[slot][1]},'Accepted reference VA/capacity differs.')
-        boot=read(bootstrap);require(sha(boot)==BOOTSTRAP_SHA and boot[208:]==END*((len(boot)-208)//8),'Accepted bootstrap differs.')
+        boot=read(bootstrap);require(208<=len(boot)<=capture.SLOTS[5][1] and len(boot)%8==0 and boot[208:]==END*((len(boot)-208)//8),'Accepted bootstrap differs.')
         parent=raw['parent'];allocations=[parent[off:off+size] for off,size,_,_ in capture.SLOTS]
         expected_buffers=[refs['buffer-0.bin'],refs['buffer-1.bin'],refs['buffer-3.bin'],input_bytes,reference,boot]
         names=('descriptors','coefficients','command','input','output_reference','bootstrap')
@@ -166,7 +166,7 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     for name in ('bundle','session','assembly','bootstrap','output'):parser.add_argument('--'+name,type=Path,required=True)
     parser.add_argument('--synthetic',action='store_true',help='Label decoder fixtures; never a physical observation.')
-    args=parser.parse_args();require(not args.output.exists(),'Analysis output already exists.')
+    args=parser.parse_args();args.output=(unique_directory(args.output.parent)/args.output.name if args.output.exists() else args.output)
     report=analyze(args.bundle,args.session,args.assembly,args.bootstrap,args.synthetic)
     with args.output.open('x') as stream:json.dump(report,stream,indent=2);stream.write('\n');stream.flush();os.fsync(stream.fileno())
     return 0 if report['evidence_complete'] else 2

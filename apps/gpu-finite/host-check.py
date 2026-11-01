@@ -88,7 +88,7 @@ def main():
   def hexdigest(self):return f'{len(self.data)}:{self.data.tag}' if isinstance(self.data,Data) else hashlib.sha256(self.data).hexdigest()
  @contextlib.contextmanager
  def sealed(data):yield data,17
- variants=['normal','backup-short','backup-transport','preload-failure','rom-entry-mismatch','watchdog','exe-failure','no-new-rom','wrong-rom','short-report','bad-report','changed-CPU-backup','changed-GPU-backup','restore-transport','restore-readback','second-attempt','middle-backup-failure','middle-restore-failure']
+ variants=['normal','dram-not-ready','backup-short','backup-transport','preload-failure','rom-entry-mismatch','watchdog','exe-failure','no-new-rom','wrong-rom','short-report','bad-report','changed-CPU-backup','changed-GPU-backup','restore-transport','restore-readback','second-attempt','middle-backup-failure','middle-restore-failure']
  variants=[('restore',v) for v in variants]
  if args.disposition_only:variants=[('restore','normal')]+[('discard',v) for v in ('normal','preload-failure','exe-failure','no-new-rom','bad-report','second-attempt')]
  if args.rom_entry_only:variants=[('discard',v) for v in ('normal','rom-entry-mismatch','rom-entry-short','rom-entry-nonhex','watchdog')]
@@ -99,10 +99,15 @@ def main():
    preloaded.append(True)
    if variant=='preload-failure':raise ValueError('modeled preload fault')
    prepared['_backup_hashes']={'SRAM':'modeled-frozen-SRAM'}
-  host.base=types.SimpleNamespace(sync_file=lambda p:None,digest=digest,preload=preload,sealed_source=sealed)
+  def verify_dram(tx,evidence,record,journal):
+   assert not commands and not preloaded
+   if variant=='dram-not-ready':raise ValueError('modeled unresponsive DRAM')
+  host.base=types.SimpleNamespace(verify_dram=verify_dram,sync_file=lambda p:None,digest=digest,preload=preload,sealed_source=sealed)
   host.hashlib=types.SimpleNamespace(sha256=Hash)
   def wait():
    nonlocal returned
+   record['launch_attempted']=True
+   tx('exe','0x52000')
    if variant=='no-new-rom':raise ValueError('modeled missing ROM')
    returned=True
   def tx(*v,pass_fds=()):

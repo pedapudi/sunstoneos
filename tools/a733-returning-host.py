@@ -7,15 +7,28 @@ def module(name,path):
  spec=importlib.util.spec_from_file_location(name,path);value=importlib.util.module_from_spec(spec);spec.loader.exec_module(value);return value
 crumbs=module('returning_crumbs',ROOT/'tools/a733-crumbs.py')
 
+_directories=module('returning_evidence',ROOT/'tools/host_evidence.py')
+output_directory=_directories.evidence_directory
+artifact_directory=_directories.new_directory
+
 class WatchdogReset(RuntimeError):
  """The armed WDT0 reset the board to a new ROM instance; DRAM is lost, the run failed."""
 
 def retain_failure(base,record,save,quarantine,error,hold=None):
  hold=base.hold_ownership if hold is None else hold
- if record.get('dirty') or record.get('transport_failed') or record.get('launch_attempted'):
-  try:base.stop_after_failure(record,save,quarantine,error,hold=hold)
+ if getattr(base,'clean_dram_refusal',lambda r,e:False)(record,error):
+  base.stop_after_failure(record,save,quarantine,error,hold=hold)
+  return
+ retained=False
+ def hold_once():
+  nonlocal retained
+  if not retained:
+   retained=True
+   hold()
+ if record.get('dirty') or record.get('dram_probe_dirty') or record.get('transport_failed') or record.get('launch_attempted'):
+  try:base.stop_after_failure(record,save,quarantine,error,hold=hold_once)
   finally:
-   if not record.get('launch_attempted'):hold()
+   if not record.get('launch_attempted'):hold_once()
 
 def run(args,*,base,profile,validate_bundle,admit,execute,description,access=None,guard=None,return_timeout=30,watchdog=None):
  """Call admit(args,p,node,identity,port) before launch and execute(tx,launch,ready,p,record,save).
@@ -31,22 +44,30 @@ def run(args,*,base,profile,validate_bundle,admit,execute,description,access=Non
  session's RETURN_ROM breadcrumb and mode 0; anything else is an unresolved
  transition and is retained.
 
+ That classification, made by the first request on the returned instance, is
+ a confirmed normal return and is recorded as record['normal_return']. After
+ it, an exception that no FEL request raised is a host failure: the run fails
+ with its evidence, claim and hold as for any other failure, but the instance
+ is not quarantined. A failed FEL request, before or after the return, and any
+ exception before the confirmation still quarantine the instance. Without a
+ watchdog there is no confirmation, so every failure quarantines.
+
  execute owns protected upload, reports and RAM restoration; launch() alone
  executes the fixed SRAM launcher and waits for the new permitted ROM instance.
  Every transport error
- is terminal. No callback creates queue authority; the caller owns the claim.
+ is terminal. The per-port lock protects the complete transaction.
  Optional access/guard are dependency injection for offline transport fixtures.
  """
  require=base.require
  require(type(return_timeout) in (int,float) and math.isfinite(return_timeout) and return_timeout>0,
          'Return window must be a finite positive number of seconds.')
  bundle=args.bundle.resolve();p=validate_bundle(bundle)
- require(base.digest(args.fel)==base.FEL_HASH,'FEL executable differs from reviewed bytes.')
+ require(args.fel.is_file(),'FEL executable is missing.')
  access=module('returning_access',ROOT/'tools/usb-access.py') if access is None else access
  if guard is None:
   sys.path.insert(0,str(ROOT/'tools'));import usb_guard
   guard=usb_guard
- guard.check_health();args.evidence.mkdir(parents=True,exist_ok=False)
+ guard.check_health();args.evidence=output_directory(args.evidence)
  if watchdog is not None:
   require(set(watchdog)=={'mode','session_seconds'} and all(type(v) is int for v in watchdog.values()) and
           watchdog['mode']&0xff0f==1 and watchdog['mode']>>4 in crumbs.INTERVALS and
@@ -54,25 +75,39 @@ def run(args,*,base,profile,validate_bundle,admit,execute,description,access=Non
   # Restarts stop at a failure or the session deadline, so the reset comes at
   # most one interval later; a longer wait only delays the failure report.
   return_timeout=watchdog['session_seconds']+crumbs.interval(watchdog['mode'])+10
- record={'mode':'kernel','execution_profile':profile,'complete':False,'launch_attempted':False,'dirty':False,'transport_failed':False,'root_owned_claim':args.root_owned_claim,'transactions':[],'return_timeout_seconds':return_timeout,'tool_sha256':base.FEL_HASH,'image_sha256':p['image_sha256']}
+ record={'mode':'kernel','execution_profile':profile,'complete':False,'launch_attempted':False,'dirty':False,'transport_failed':False,'transactions':[],'return_timeout_seconds':return_timeout,'tool_sha256':base.digest(args.fel),'image_sha256':p['image_sha256']}
  def journal():base.save_json(args.evidence/'session.json',record)
  with access.board_lock() as node:
   access.require_session(node);access.require_rom(node);identity=access.identity(node);port=access.target(node);config={'port':port.name,'sysfs':str(port.resolve())};failed=False
   record.update(initial_node=str(node),initial_identity=identity,port=port.name);journal()
-  launch_called=False;transition_active=False;transition_retained=False;recovered=None
+  launch_called=False;caller_survey_executed=False;transition_active=False;transition_retained=False;recovered=None
+  request_raised=False
+  def quarantine(reason):
+   access.quarantine_instance(node,reason,identity);record['instance_quarantined']=reason;journal()
   def ready():
    require(not failed,'No admission after transport failure.');validate_bundle(bundle)
    if not record['launch_attempted']:admit(args,p,node,identity,port.name)
   def transaction(*arguments,pass_fds=()):
-   nonlocal failed
+   # Any exception from a FEL request, its checks or its refusal, keeps the
+   # quarantine even after a confirmed normal return.
+   nonlocal request_raised
+   try:return request(*arguments,pass_fds=pass_fds)
+   except BaseException:
+    request_raised=True;record['fel_request_raised']=True;raise
+  def request(*arguments,pass_fds=()):
+   nonlocal failed,caller_survey_executed
    require(not failed,'A transport failure forbids all further requests.')
-   require(not any(op in arguments for op in ('exe','reset64')) or transition_active,'Native execution requires the guarded launch callback.')
+   caller_survey=arguments==('exe','0x85000') and not launch_called and not record['launch_attempted']
+   require(not any(op in arguments for op in ('exe','reset64')) or transition_active or caller_survey,'Native execution requires the guarded launch callback.')
+   if caller_survey:
+    require(not caller_survey_executed,'One returning caller survey only.')
+    caller_survey_executed=True
    entry={'arguments':[str(x) for x in arguments]};record['transactions'].append(entry);journal()
    try:
     require(access.identity(node)==identity and access.target(node).name==port.name,'USB instance or physical port changed before FEL request.');access.require_rom(node)
     result=subprocess.run([str(args.fel),'-d',f'{int(node.parent.name)}:{int(node.name)}',*map(str,arguments)],capture_output=True,text=True,timeout=120 if 'read' in arguments or 'write' in arguments else 15,pass_fds=pass_fds)
     entry.update(exit_code=result.returncode,stdout=result.stdout,stderr=result.stderr);require(result.returncode==0,'FEL request failed.')
-   except (OSError,ValueError,subprocess.TimeoutExpired) as error:
+   except BaseException as error:
     failed=True;entry['failure']=str(error);record['transport_failed']=True;journal();raise
    journal();return result.stdout
   def wait_return():
@@ -107,6 +142,11 @@ def run(args,*,base,profile,validate_bundle,admit,execute,description,access=Non
     last=decoded.get('last',{})
     require(decoded['session'] and last.get('stage')==crumbs.RETURN_ROM and last.get('value')==0,
             'Returned with WDT0 disarmed but without this session\'s RETURN_ROM breadcrumb.')
+    record['normal_return']={'returned_node':str(node),'returned_identity':identity,'port':port.name,
+                             'wdt0_disarmed':True,'mode_after_return':before,'mode_after_disarm':after,
+                             'return_rom':{'session':True,'stage':last['stage'],'value':last['value']},
+                             'first_request':list(crumbs.return_arguments()),'first_request_succeeded':True}
+    journal()
     return None
    # Mode 0x01: the image's EL3 stop shortened WDT0 to 0.5 s before parking.
    report={'watchdog_fired':True,'interval_seconds':state['interval_seconds'],
@@ -136,7 +176,7 @@ def run(args,*,base,profile,validate_bundle,admit,execute,description,access=Non
      # Keep an unresolved transition inside the guard while ownership is held.
      # A pre-launch refusal above instead retains only this port outside it.
      transition_retained=True;record['transport_failed']=failed
-     retain_failure(base,record,journal,lambda:access.quarantine_instance(node,'Returning transition unresolved; no requests or retry; root recovery required.',identity),error)
+     retain_failure(base,record,journal,lambda:quarantine('Returning transition unresolved; no requests or retry; root recovery required.'),error)
      raise
     finally:transition_active=False
    if recovered is not None:
@@ -153,6 +193,13 @@ def run(args,*,base,profile,validate_bundle,admit,execute,description,access=Non
    result=execute(transaction,launch,ready,p,record,journal)
   except BaseException as error:
    record['transport_failed']=failed
-   if not transition_retained and recovered is None:retain_failure(base,record,journal,lambda:access.quarantine_instance(node,'Returning attempt stopped; no requests or retry; root recovery required.',identity),error)
+   if transition_retained or recovered is not None:raise
+   if record.get('normal_return') and not request_raised:
+    # The board returned normally and answered; only the host failed.
+    record.update(host_failed_after_normal_return=True,instance_quarantined=False);journal()
+    try:print(f'HOST FAILED AFTER NORMAL RETURN: {type(error).__name__}: {error}; the board instance remains usable',file=sys.stderr,flush=True)
+    except (OSError,ValueError):pass
+    retain_failure(base,record,journal,lambda:None,error)
+   else:retain_failure(base,record,journal,lambda:quarantine('Returning attempt stopped; no requests or retry; root recovery required.'),error)
    raise
  return result

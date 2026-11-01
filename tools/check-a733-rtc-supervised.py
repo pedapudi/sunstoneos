@@ -5,7 +5,6 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
-import sqlite3
 import struct
 import sys
 import time
@@ -16,7 +15,6 @@ supervisor=module('rtc_capture_supervisor',ROOT/'tools/check-a733-smp-supervised
 preparation=module('rtc_capture_preparation',ROOT/'apps/rtc/prepare.py')
 decoder=module('rtc_capture_decoder',ROOT/'apps/rtc/observe.py')
 require,digest=supervisor.require,supervisor.digest
-PREREQUISITES={'supervised-ram-recovery','rtc-supervised-software'}
 PRODUCT='sunstoneos native RTC'
 SERIAL='sunstoneos-a733-rtc'
 
@@ -72,7 +70,7 @@ def freeze_bundle(bundle):
     require({k:v for k,v in prepared.items() if not k.startswith('_')}==json.loads(metadata),
         'Prepared RTC metadata changed during validation.')
     frozen={}
-    for name,identity in prepared['files'].items():
+    for name,identity in preparation.board.snapshot_files(prepared).items():
         require(Path(name).name==name,'Invalid RTC bundle filename.')
         data=(bundle/name).read_bytes();require(hashlib.sha256(data).hexdigest()==identity,'RTC input changed before use: '+name)
         frozen[name]=data
@@ -83,34 +81,35 @@ def freeze_bundle(bundle):
     return prepared
 
 
-def reference_bytes(value):
-    return supervisor.reviewed_reference(value,'RTC')
 
 
 def software_sources():
     return supervisor.device_software_sources(source_files())
 
 
-def validate_software(value,prepared):
-    supervisor.validate_device_software(value,prepared,'a733-rtc-supervised-software-v1',('admission_cases','launcher_cases','host_capture'),
-        'RTC',reference_bytes)
 
 
-def claimed(database,test_id,owner,bundle,prepared):
-    supervisor.device_claim(database,test_id,owner,bundle,prepared,'RTC','rtc-supervised-software',PREREQUISITES,
-        reference_bytes,validate_software)
+def claimed(database, test_id, owner, bundle, prepared):
+    """Check the input snapshot immediately before upload."""
+    expected = preparation.board.snapshot_files(prepared)
+    if '_prepared_sha256' in prepared:
+        expected['prepared.json'] = prepared['_prepared_sha256']
+    for name, identity in expected.items():
+        require(Path(name).name == name and digest(bundle / name) == identity,
+                'Prepared input changed before upload: ' + name)
 
 
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
-    for name in ('bundle','fel','evidence','database'):parser.add_argument('--'+name,type=Path,required=True)
+    for name in ('bundle','fel','evidence'):parser.add_argument('--'+name,type=Path,required=True)
     parser.add_argument('--cancel',action='store_true',help='Request cancellation instead of waiting for the owned alarm.')
-    parser.add_argument('--claim',required=True);parser.add_argument('--owner',required=True)
-    parser.add_argument('--supervised-manual-reconnect',action='store_true',required=True,
+    parser.add_argument('--claim');parser.add_argument('--owner')
+    parser.add_argument('--supervised-manual-reconnect',action='store_true',
         help='Use the reviewed whole-board power-removal plan; cable reconnect does not release RTC resources.')
+    parser.add_argument('--database', type=Path)
     args=parser.parse_args(argv);bundle=args.bundle.resolve();prepared=freeze_bundle(bundle);frozen=prepared['_frozen']
     admission=json.loads(frozen['admission.json']);session=frozen['session.bin'];template=frozen['session-template.bin']
-    evidence={path:frozen[item['name']] for path,item in prepared['entry_evidence'].items()}
+    evidence={path:frozen[item['name']] for path,item in prepared['entry_evidence'].items() if item['name'] in frozen}
     def validate_entry(identity,port):
         preparation.validate_admission(admission,prepared['image_sha256'],hashlib.sha256(template).hexdigest(),template,evidence,True,prepared.get("execution_profile","rtc-supervised-v1"))
         require(admission['identity']==identity and admission['port']==port,'RTC entry covers another instance.')
@@ -122,4 +121,4 @@ def main(argv=None):
 
 if __name__=='__main__':
     try:sys.exit(main())
-    except (OSError,ValueError,RuntimeError,sqlite3.Error,struct.error) as error:sys.exit(f'Stopped: {error}')
+    except (OSError,ValueError,RuntimeError,struct.error) as error:sys.exit(f'Stopped: {error}')

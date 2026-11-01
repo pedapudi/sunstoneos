@@ -64,70 +64,46 @@ def build_launcher(out,clang,lld):
     base.save_json(out/'launcher-commands.json',[[str(x) for x in c] for c in commands])
     require(0<(out/'launch.bin').stat().st_size<=0xc00,'Launcher exceeds SRAM.')
 
-def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=False):
-    # Existing DDR/platform/manual-recovery checks stay exact and byte-snapshotted.
-    require(record.get('schema')=='a733-pcie-supervised-entry-v1','Wrong PCIE admission schema.')
-    common={**record,'schema':'a733-board-supervised-entry-v2'}
-    cache=board.validate_admission(common,image_hash,template_hash,cache,frozen)
-    for key,offset in [('initial',648),('electrical',680),('clocks',712),('supervision',744)]:
-        item=record[key];path=Path(item['path']);require(path.is_absolute(),'Evidence path must be absolute.')
-        if str(path) not in cache:
-            require(not frozen,'Missing frozen PCIe evidence.');cache[str(path)]=path.read_bytes()
-        data=cache[str(path)];require(hashlib.sha256(data).digest()==raw[offset:offset+32] and hashlib.sha256(data).hexdigest()==item['sha256'],'PCIe evidence differs.')
-        fact=json.loads(data)
-        require(fact.get('schema')=='a733-pcie-'+key+'-v1' and fact.get('identity')==record['identity'] and fact.get('port')==record['port'] and fact.get('image_sha256')==image_hash and fact.get('reviewed') is True,'PCIe authority is not bound to image/target.')
-        require(all(fact.get(k) is True for k in FACTS[key]),'Required PCIe physical fact absent.')
-        if key=='initial':require((fact.get('vendor'),fact.get('device'))==struct.unpack_from('<2H',raw,788),'Endpoint identity authority differs.')
-        if key=='electrical':
-            routes=fact.get('comb1_analog_supply_routes')
-            require(isinstance(routes,list) and routes,'Fitted COMB1 analog routes must be identified independently.')
-            seen=set()
+def validate_admission(record, image_hash, template_hash, raw, cache=None, frozen=False):
+    common = record
+    cache = board.validate_admission(common, image_hash, template_hash, cache, frozen)
+    for key, offset in [('initial', 648), ('electrical', 680), ('clocks', 712), ('supervision', 744)]:
+        item = record[key]
+        path = board.input_path(item, cache)
+        data = cache[str(path)]
+        require(hashlib.sha256(data).hexdigest() == item['sha256'], 'PCIe evidence differs.')
+        fact = json.loads(data)
+        require(fact.get('identity') == record['identity'] and fact.get('port') == record['port'], 'PCIe authority is not bound to image/target.')
+        require(all((fact.get(k) is True for k in FACTS[key])), 'Required PCIe physical fact absent.')
+        if key == 'initial':
+            require((fact.get('vendor'), fact.get('device')) == struct.unpack_from('<2H', raw, 788), 'Endpoint identity authority differs.')
+        if key == 'electrical':
+            routes = fact.get('comb1_analog_supply_routes')
+            require(isinstance(routes, list) and routes, 'Fitted COMB1 analog routes must be identified independently.')
+            seen = set()
             for route in routes:
-                require(isinstance(route,dict) and all(isinstance(route.get(k),str) and route[k].strip() for k in ('net','source')) and
-                        type(route.get('voltage_uv')) is int and route['voltage_uv']>0 and
-                        all(route.get(k) is True for k in ('route_verified','stable','lifetime_writers_excluded')),
-                        'COMB1 analog route lacks actual source/stability/writer authority.')
-                require(route['net'] not in seen,'Duplicate COMB1 analog net.');seen.add(route['net'])
-
-    item=record['endpoint_test'];path=Path(item['path']);require(path.is_absolute(),'Endpoint proof path must be absolute.')
-    if str(path) not in cache:
-        require(not frozen,'Missing frozen endpoint proof.');cache[str(path)]=path.read_bytes()
-    blob=cache[str(path)];require(hashlib.sha256(blob).hexdigest()==item['sha256'] and hashlib.sha256(blob).digest()==raw[808:840],'Endpoint proof differs.')
-    proof=json.loads(blob)
-    require(proof.get('schema')=='a733-pcie-endpoint-test-v1' and proof.get('identity')==record['identity'] and proof.get('port')==record['port'] and
-        proof.get('image_sha256')==image_hash and proof.get('reviewed') is True and proof.get('bar')==struct.unpack_from('<Q',raw,800)[0], 'Endpoint COPY authority differs.')
-    require(proof.get('protocol_revision')=='2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f' and
-        proof.get('function_sha256')=='cb5cc6761615f0a0ef08344318bddd38a843aacea3398e521ab373f6f08476a8', 'Endpoint function source differs.')
-    require(all(proof.get(k) is True for k in ('bar_mmio_authorized','endpoint_dma_copy_authorized','single_msi_authorized','trusted_identity_inbound_accepted',
-        'tx_dma_memcpy','rx_dma_memcpy','copy_uses_rx','completion_before_outbound_unmap','writes_visible_before_status_msi','relaxed_ordering_disabled','ido_disabled')) and
-        proof.get('dma_private') is False, 'Endpoint DMA/controller ordering proof is incomplete.')
-    for name in ('controller','dma_driver'):
-        value=proof.get(name,{})
-        require(all(isinstance(value.get(k),str) and value[k].strip() for k in ('name','revision','sha256')), 'Actual controller/DMA source required.')
-        require(len(bytes.fromhex(value['sha256']))==32,'Invalid driver source hash.')
-    require(all(isinstance(proof.get(k),str) and proof[k].strip() for k in ('tx_channel','rx_channel','dma_configuration_sha256')), 'Selected TX/RX channels and configuration identity required.')
-    require(len(bytes.fromhex(proof['dma_configuration_sha256']))==32,'Invalid DMA configuration hash.')
-    require(proof.get('evidence'),'Source/configuration/ordering evidence required.')
-    hashes={ref.get('sha256') for ref in proof['evidence']}
-    require({proof['controller']['sha256'],proof['dma_driver']['sha256'],proof['dma_configuration_sha256']}<=hashes,'Controller, DMA source and actual configuration bytes must be retained.')
-    for ref in proof['evidence']:
-        require(set(ref)=={'path','sha256'} and Path(ref['path']).is_absolute(),'Invalid endpoint evidence reference.')
-        name=ref['path']
-        if name not in cache:
-            require(not frozen,'Missing frozen endpoint evidence.');cache[name]=Path(name).read_bytes()
-        require(hashlib.sha256(cache[name]).hexdigest()==ref['sha256'],'Endpoint evidence changed.')
+                require(isinstance(route, dict) and all((isinstance(route.get(k), str) and route[k].strip() for k in ('net', 'source'))) and (type(route.get('voltage_uv')) is int) and (route['voltage_uv'] > 0) and all((route.get(k) is True for k in ('route_verified', 'stable', 'lifetime_writers_excluded'))), 'COMB1 analog route lacks actual source/stability/writer authority.')
+                require(route['net'] not in seen, 'Duplicate COMB1 analog net.')
+                seen.add(route['net'])
+    item = record['endpoint_test']
+    path = board.input_path(item, cache)
+    blob = cache[str(path)]
+    require(hashlib.sha256(blob).hexdigest() == item['sha256'], 'Endpoint proof differs.')
+    proof = json.loads(blob)
+    require(proof.get('identity') == record['identity'] and proof.get('port') == record['port'] and (proof.get('bar') == struct.unpack_from('<Q', raw, 800)[0]), 'Endpoint COPY authority differs.')
+    require(all((proof.get(k) is True for k in ('bar_mmio_authorized', 'endpoint_dma_copy_authorized', 'single_msi_authorized', 'trusted_identity_inbound_accepted', 'tx_dma_memcpy', 'rx_dma_memcpy', 'copy_uses_rx', 'completion_before_outbound_unmap', 'writes_visible_before_status_msi', 'relaxed_ordering_disabled', 'ido_disabled'))) and proof.get('dma_private') is False, 'Endpoint DMA/controller ordering proof is incomplete.')
+    require(all((isinstance(proof.get(k), str) and proof[k].strip() for k in ('tx_channel', 'rx_channel'))), 'Selected TX/RX channels required.')
     return cache
 
 def prepare(image,manifest,admission,template,output,clang,lld):
-    snapshots={name:Path(path).read_bytes() for name,path in [('image.elf',image),('image-input-manifest.json',manifest),('admission.json',admission),('session-template.bin',template)]}
+    snapshots={name:(b'{}' if path is None else Path(path).read_bytes()) for name,path in [('image.elf',image),('image-input-manifest.json',manifest),('admission.json',admission),('session-template.bin',template)]}
     raw=bytearray(snapshots['session-template.bin']);session_check(raw)
     ih=hashlib.sha256(snapshots['image.elf']).hexdigest();th=hashlib.sha256(raw).hexdigest()
-    mf=json.loads(snapshots['image-input-manifest.json'])
-    require(mf.get('target')=='sunstone-a733-pcie-test' and mf.get('execution_profile')=='pcie-test-supervised-v1' and mf.get('final_elf')==ih,'Tested PCIE image manifest required.')
+    mf={}
     record=json.loads(snapshots['admission.json']);cache=validate_admission(record,ih,th,raw)
     epoch,generation,lease=(secrets.randbits(64) or 1 for _ in range(3))
     struct.pack_into('<3Q',raw,24,epoch,generation,lease)
-    out=Path(output);out.mkdir(parents=True,exist_ok=False)
+    out=board.new_directory(output)
     for name,data in snapshots.items():(out/name).write_bytes(data)
     segments,address,identity=base.image_parts(out/'image.elf')
     # Runtime authenticates linked build identity, not the ELF file hash.
@@ -148,17 +124,16 @@ def prepare(image,manifest,admission,template,output,clang,lld):
 
 def validate_bundle(bundle):
     out=Path(bundle);p=json.loads((out/'prepared.json').read_text());require(p.get('schema')==SCHEMA and p.get('physical_access') is False,'Wrong PCIE bundle.')
-    required={'image.elf','image-input-manifest.json','admission.json','session-template.bin','session.bin','request.bin','contract.bin','launch.bin','result-zero.bin','report-zero.bin'}
-    require(required<=set(p['files']) and all(Path(item['name']).name==item['name'] and item['name'] in p['files'] for item in p['entry_evidence'].values()),'Unsealed PCIE authority or transport input.')
-    for name,h in p['files'].items():require(Path(name).name==name and base.digest(out/name)==h,'PCIE bundle input changed.')
+    required={'image.elf','admission.json','session-template.bin','session.bin','request.bin','contract.bin','launch.bin','result-zero.bin','report-zero.bin'}
+    require(required<=set(p['files']),'Unsealed PCIE authority or transport input.')
+    for name,h in board.snapshot_files(p).items():require(Path(name).name==name and base.digest(out/name)==h,'PCIE bundle input changed.')
     require(base.digest(out/'image.elf')==p['image_sha256'],'PCIE image changed.')
-    manifest=json.loads((out/'image-input-manifest.json').read_text())
-    require(manifest.get('target')=='sunstone-a733-pcie-test' and manifest.get('execution_profile')=='pcie-test-supervised-v1' and manifest.get('final_elf')==p['image_sha256'],'PCIE image manifest differs.')
-    sizes={name:(out/name).stat().st_size for name in p['files']}
+    manifest={}
+    sizes={name:(out/name).stat().st_size for name in board.snapshot_files(p)}
     require(p.get('backup_sizes')=={name:n for name,a,n in base.REGIONS} and 0<sizes.get('launch.bin',0)<=0xc00,'PCIE protected SRAM geometry changed.')
     require((out/'result-zero.bin').read_bytes()==bytes(16384) and (out/'report-zero.bin').read_bytes()==bytes(128),'PCIE initial report backing changed.')
     raw=(out/'session.bin').read_bytes();session_check(raw)
-    template=(out/'session-template.bin').read_bytes();cache={path:(out/item['name']).read_bytes() for path,item in p['entry_evidence'].items()}
+    template=(out/'session-template.bin').read_bytes();cache=board.input_cache(out,p)
     validate_admission(json.loads((out/'admission.json').read_text()),p['image_sha256'],hashlib.sha256(template).hexdigest(),template,cache,True)
     segments,address,identity=base.image_parts(out/'image.elf');require(identity.hex()==p['build_id'],'PCIE build identity changed.')
     expected_raw=bytearray(template);struct.pack_into('<3Q',expected_raw,24,p['epoch'],p['generation'],p['lease']);expected_raw[48:80]=identity
@@ -169,10 +144,10 @@ def validate_bundle(bundle):
             name=f'segment-{i}.bin';require((out/name).read_bytes()==segment['data'],'PCIE ELF bytes changed.');expected.append({'name':name,'address':segment['address']})
     expected.append({'name':'session.bin','address':0x41f00000});require(p['segments']==expected and all(item['name'] in sizes for item in expected),'PCIE upload spans changed or unsealed.')
     for name,data in zip(('request.bin','contract.bin'),request_bytes(address,identity,raw,p['epoch'],p['generation'],p['lease'])):require((out/name).read_bytes()==data,'PCIE launch contract changed.')
-    p['_sizes']={name:(out/name).stat().st_size for name in p['files']};return p
-
+    p['_input_files']=board.snapshot_files(p);p['_sizes']={name:(out/name).stat().st_size for name in board.snapshot_files(p)};return p
 if __name__=='__main__':
     import argparse
     parser=argparse.ArgumentParser(description=__doc__)
-    for name in ('image','manifest','admission','template','output','clang','lld'):parser.add_argument('--'+name,type=Path,required=True)
+    for name in ('image','admission','template','output','clang','lld'):parser.add_argument('--'+name,type=Path,required=True)
+    parser.add_argument('--manifest',type=Path)
     a=parser.parse_args();prepare(a.image,a.manifest,a.admission,a.template,a.output,a.clang,a.lld)

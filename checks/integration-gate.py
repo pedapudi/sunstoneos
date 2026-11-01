@@ -93,9 +93,10 @@ if os.environ.get('GATE_TEST_FAIL') in args:
         self.assertEqual(self.records(), [])
         self.assertFalse((self.sandbox / 'build/gate-case').exists())
 
-    def test_full_requires_reason(self):
-        self.assertEqual(self.run_gate('--full').returncode, 2)
-        self.assertEqual(self.records(), [])
+    def test_reason_is_optional_metadata(self):
+        result = self.run_gate('--check', 'progress')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(len(self.records()), 1)
 
     def test_source_check_needs_no_build_and_deduplicates(self):
         result = self.run_gate('--reason', 'PMIC source ownership', '--check', 'pmic-tree', '--check', 'pmic-tree')
@@ -234,14 +235,10 @@ if os.environ.get('GATE_TEST_FAIL') in args:
         self.assertEqual(configured, [str(self.sandbox / 'build' / ('gate-central-' + self.tree(s))) for s in (self.source, other)])
         self.assertNotIn('first', configured[0])
 
-    def test_dirty_source_is_refused_unless_allowed(self):
+    def test_dirty_source_is_recorded_without_permission_flag(self):
         (self.source / 'CMakeLists.txt').write_text('project(changed)\n')
         (self.source / 'new.c').write_text('')
-        refused = self.run_gate('--reason', 'Dashboard edit', '--check', 'progress')
-        self.assertEqual(refused.returncode, 2)
-        self.assertIn('uncommitted changes', refused.stderr)
-        self.assertEqual(self.records(), [])
-        allowed = self.run_gate('--reason', 'Dashboard edit', '--check', 'progress', '--allow-dirty', label='dirty')
+        allowed = self.run_gate('--reason', 'Dashboard edit', '--check', 'progress', label='dirty')
         self.assertEqual(allowed.returncode, 0, allowed.stdout + allowed.stderr)
         diff = subprocess.run(['git', 'diff', '--binary', 'HEAD'], cwd=self.source, capture_output=True, check=True).stdout
         summary = (self.sandbox / 'build/gate-dirty/summary.txt').read_text()
@@ -367,8 +364,11 @@ exec "$REAL" "$@"
         args = ('--reason', 'Dashboard edit', '--check', 'progress')
         self.assertEqual(self.run_gate(*args).returncode, 0)
         before = (self.sandbox / 'build/gate-case/summary.txt').read_bytes()
-        self.assertEqual(self.run_gate(*args).returncode, 2)
-        self.assertEqual(len(self.records()), 1)
+        self.assertEqual(self.run_gate(*args).returncode, 0)
+        self.assertEqual(len(self.records()), 2)
+        children = list((self.sandbox / 'build/gate-case').glob('*/summary.txt'))
+        self.assertEqual(len(children), 1)
+        self.assertIn('PASS selected integration checks', children[0].read_text())
         self.assertEqual((self.sandbox / 'build/gate-case/summary.txt').read_bytes(), before)
 
     def test_explicit_full_suite_and_declared_trials(self):

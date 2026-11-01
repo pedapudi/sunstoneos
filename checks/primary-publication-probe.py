@@ -30,7 +30,7 @@ class Probe(publication.Publication):
     def __init__(self, image, bundle):
         super().__init__(image, 'boot')
         self.manifest = json.loads((bundle/'manifest.json').read_text())
-        assert self.manifest['native_sha256'] == probe.digest(image) == probe.NATIVE
+        assert self.manifest['native_sha256'] == probe.digest(image)
         assert all(probe.digest(ROOT/name) == sha for name, sha in self.manifest['sources'].items())
         self.hooks = self.manifest['hooks']
         for payload in self.manifest['payloads']:

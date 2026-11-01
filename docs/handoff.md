@@ -6,6 +6,25 @@ local applications and performance qualification. No subsystem has complete
 qualification. The [hardware matrix](hardware.md) holds the full inventory;
 [October history](handoff-history-20261031.md) preserves the previous handoff.
 
+## Host tool admission
+
+Host tools use direct image, session, target and hardware-condition checks.
+Queue claims, review records and archived sources do not authorize the changed
+runners. DRAM readiness uses a reversible memory comparison; CPU launchers
+inspect the live caller stack before uploading their reservations. Uncertain
+restoration retains board ownership. Artifact output paths must be unused;
+evidence directories can receive unique children. [The tool audit](tool-gates.md) lists each condition and the remaining
+changes in files assigned to other agents.
+
+All three baseline images build with Clang 21 and cached lld. Recorded mimus
+recognition in cached QEMU matches its reference. The integration gate passes
+with and without the external mimus checkout. Returning-watchdog, development
+runner, DDR retention, capture conversion, CPU clock and capture-bound host
+checks pass, along with the check index and pre-push fixture. Integration
+evidence is under `~/.cache/sunstoneos/build/tool-gates-land-1031/`.
+No board was accessed for this integration. The audit names protected-owner
+changes and earlier unverified component checks.
+
 ## Board state and recovery
 
 This page describes the combined application kit and recorded board results
@@ -34,7 +53,8 @@ cards. Neither board has populated eMMC or UFS; keep the failed UFS probe disabl
   finished while the CPU clock owner was in REQUEST. The return path requires
   FOLLOW and refused the return. Evidence:
   `dev-runs-1031/3-1-cpu-return-204119/run/watchdog-report.json`; code:
-  `apps/os/cpu.c` and `apps/os/cpu-return/cpu.patch`. The fix remains unmerged.
+  `apps/os/cpu.c` and `apps/os/cpu-return/cpu.patch`. The merged return path
+  handles this owner phase; the correction has no subsequent board result.
 - **GPU firmware diagnostic — native return verified.** The reference startup
   fixes at `fed5813f` started and stopped firmware with zero jobs and the
   reference transcript on 3-1. Evidence:
@@ -48,7 +68,8 @@ cards. Neither board has populated eMMC or UFS; keep the failed UFS probe disabl
   `RETURN_ROM` and mode 0. Evidence:
   `dev-runs-1031/3-3-cpu-return-201331/run/session.json`.
   A normal return does not establish completed host RAM restoration.
-  The quarantine-scope fix remains unmerged.
+  The merged transport keeps a confirmed normally returned instance usable
+  after a host-side failure. That behavior is covered without a board.
 
 Both recent 3-1 failures returned through WDT0. Treat DRAM as uninitialized
 after that reset and run the DDR tool before the next image uses it.
@@ -131,7 +152,7 @@ cmake --build "$build/os" --target sunstone-a733-os -j12
 "$cfg" "$os" "$build/hello" -DMIMUS_DIR= -DSUNSTONE_A733_OS=ON -DSUNSTONE_APPLICATION=hello-compute
 cmake --build "$build/hello" --target sunstone-a733-os-hello -j12
 
-mimus="$HOME/git/mimus-worktrees/os-refs-1031"
+mimus="$HOME/git/mimus-worktrees/small-fixes-1031"
 "$cfg" "$os" "$build/mimus" -DMIMUS_DIR="$mimus" -DSUNSTONE_A733_OS=ON -DSUNSTONE_APPLICATION=mimus
 cmake --build "$build/mimus" --target sunstone-a733-os -j12
 ```
@@ -189,9 +210,9 @@ normal return with boot clocks. After watchdog reset it waits until DRAM is
 initialized and the next launch normalizes rails. `--no-normalize-rails` and
 `--no-restore-rails` explicitly disable the respective default.
 
-This command does not yet demonstrate a passing hello-compute control: the
-REQUEST/FOLLOW refusal above remains in the merged code. Current `gpu-return`
-is refused because the existing ladder uses the pre-split application layout;
+This command does not yet demonstrate a passing hello-compute control.
+The merged REQUEST/FOLLOW correction is host-verified; a new board result
+remains outstanding. Current `gpu-return` is refused because the existing ladder uses the pre-split application layout;
 its runner is `tools/dev-run.py` at `6a714bcf`. NPU development preparation
 also remains unimplemented. `--check-only` reads the board unless `--state FILE`
 supplies a capture; neither mode writes rails.
@@ -205,9 +226,8 @@ reuse. No board run is requested for this documentation change.
 
 ## Open problems and files
 
-- **Early CPU return:** `apps/os/cpu-return/cpu.patch` refuses completion
-  before the clock owner reaches FOLLOW. The hello-compute failure above
-  exercises this condition; `apps/os/cpu.c` defines the owner phases.
+- **Early CPU return:** the host-verified return path handles completion before
+  the clock owner reaches FOLLOW. Physical confirmation remains outstanding.
 - **GPU queue qualification:** startup uses the executed-command health count,
   vendor secure writes, initial timer correlation and MMU-cache completion before
   READY. Shared mutable mappings bypass the GPU system cache. Physical queue
@@ -223,9 +243,6 @@ reuse. No board run is requested for this documentation change.
 
 ## Open branches
 
-- `work/tool-gates-1031`: simplify host tools and gate device access; under review, unmerged.
-- `work/quarantine-scope-1031`: preserve a normally returned instance after a host-side error; fix prepared, unmerged.
-- `work/early-return-1031`: permit application completion before CPU clock setup finishes; fix prepared, unmerged.
 - `work/gpu-integrate-1031`: combines the reference startup fixes and generic
   compute queue on the current application kit. Host checks and independent
   review pass; four frozen image packages await coordinator-run qualification.

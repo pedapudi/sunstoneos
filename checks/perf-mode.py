@@ -190,6 +190,8 @@ def host_tool_check(out):
     cases.append('request encoding and block names')
     manifest = {'passed': True, 'target': 'sunstone-a733-os', 'perf_modes': True, 'perf_operation': 8, 'perf_boot_mode': 'high'}
     assert tool.manifest_check(manifest) == 'high'
+    assert tool.manifest_check({k: v for k, v in manifest.items() if k not in ('passed', 'target')}) == 'high'
+    assert tool.manifest_check({**manifest, 'passed': False}) == 'high'
     refused(lambda: tool.manifest_check({**manifest, 'perf_modes': False}), 'no performance-mode service')
     refused(lambda: tool.manifest_check({'passed': True, 'target': 'sunstone-a733-os'}), 'no performance-mode service')
     refused(lambda: tool.manifest_check({**manifest, 'perf_operation': 7}), 'no performance-mode service')

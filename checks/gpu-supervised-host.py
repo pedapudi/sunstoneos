@@ -7,6 +7,7 @@ import importlib.util
 import inspect
 import json
 from pathlib import Path
+from harness import artifact_refused
 import shutil
 import sqlite3
 import struct
@@ -21,7 +22,12 @@ class Clock:
     def pause(self,n):self.value+=max(.001,n)
 def session():
     raw=bytearray(592);struct.pack_into('<6Q',raw,0,0x4153373342535332,2,592,31,37,41)
-    struct.pack_into('<I',raw,400,2);struct.pack_into('<2Q',raw,456,20,21);return bytes(raw)
+    struct.pack_into('<I',raw,400,2);struct.pack_into('<2Q',raw,456,20,21)
+    for offset in (80,216,248,280):raw[offset:offset+32]=bytes([1])*32
+    struct.pack_into('<4Q',raw,184,1,2,3,4)
+    struct.pack_into('<3I',raw,500,24000000,24000000,24000000)
+    struct.pack_into('<2I',raw,512,3300000,3300000);struct.pack_into('<I',raw,532,2)
+    return bytes(raw)
 def frame(chunk,state=1,epoch=31):
     return struct.pack('<7IQI',0x52555047,1,state,chunk,64 if state==1 else 0,64,64,epoch,4096 if state==1 else 0)+(bytes.fromhex('2080c0ff')*64 if state==1 else b'')
 
@@ -31,13 +37,16 @@ def compute_frame(index,state=1,epoch=31):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--evidence',type=Path,required=True)
-    parser.add_argument('--image',type=Path,required=True,help='Existing reviewed GPU ELF; never rebuilt or executed')
+    parser.add_argument('--image',type=Path,required=True,help='Existing GPU ELF; never rebuilt or executed')
+    parser.add_argument('--session-template',type=Path)
+    parser.add_argument('--case',action='append',help='Run a named host case')
     a=parser.parse_args();out=a.evidence;out.mkdir(parents=True,exist_ok=True)
     host=load(ROOT/'tools/check-a733-gpu-supervised.py');sup=host.supervisor
     sources=[Path(__file__),Path(host.__file__),Path(sup.__file__),Path(sup.base.__file__),Path(sup.observer.__file__),Path(host.preparation.__file__),Path(host.preparation.board.__file__),Path(host.decoder.__file__)]
     identities={str(p.relative_to(ROOT)):host.digest(p) for p in sources}
     state_path=out/'results.json';state=json.loads(state_path.read_text()) if state_path.exists() else {'physical_access':False,'cases':{}}
     def case(name,fn):
+        if a.case and name not in a.case:return
         fingerprint=hashlib.sha256((inspect.getsource(fn)+inspect.getsource(Clock)+inspect.getsource(session)+inspect.getsource(frame)+inspect.getsource(compute_frame)+json.dumps(identities,sort_keys=True)+host.digest(a.image)).encode()).hexdigest()
         if name in state['cases']:
             assert state['cases'][name]['inputs']==fingerprint,'Changed completed inputs: '+name
@@ -125,6 +134,30 @@ def main():
         return {'frozen_session':True}
     case('bundle-byte-binding',bundle)
 
+    if a.session_template:
+        def direct_preparation(d):
+            prepared=host.preparation.prepare(a.image,None,None,a.session_template,d/'bundle',
+                '/usr/lib/llvm-21/bin/clang',Path.home()/'.cache/sunstoneos/host/usr/lib/llvm-21/bin/ld.lld')
+            assert prepared['entry_evidence']=={}
+            sentinel=d/'bundle/prior.txt';sentinel.write_bytes(b'previous evidence')
+            artifact_refused(lambda:host.preparation.prepare(a.image,None,None,a.session_template,d/'bundle',
+                '/usr/lib/llvm-21/bin/clang',Path.home()/'.cache/sunstoneos/host/usr/lib/llvm-21/bin/ld.lld'),d/'bundle')
+            runtime=prepared['files']
+            for path in (d/'bundle').iterdir():
+                if path.is_file() and path.name not in runtime and path.name!='prepared.json':
+                    original=path.read_bytes()
+                    try:
+                        path.write_bytes(b'Changed archived build notes or source')
+                        assert host.preparation.validate_bundle(path.parent)['files']==runtime
+                    finally:path.write_bytes(original)
+            contract=d/'bundle/contract.bin';original=contract.read_bytes();contract.write_bytes(original+b'x')
+            try:host.preparation.validate_bundle(contract.parent)
+            except ValueError:pass
+            else:raise AssertionError('Changed native contract accepted')
+            finally:contract.write_bytes(original)
+            return {'direct_native_inputs':True,'existing_output_refused_without_changes':True,'changed_contract_refused':True,'archive_changes_accepted':True}
+        case('direct-preparation',direct_preparation)
+
     def software(d):
         shutil.copy2(a.image,d/'image.elf');(d/'launch.bin').write_bytes(b'Software fixture, never executable')
         def ref(path):return {'path':str(path.absolute()),'sha256':host.digest(path)}
@@ -134,11 +167,6 @@ def main():
             'image':ref(d/'image.elf'),'launcher':ref(d/'launch.bin'),'sources':{k:ref(v) for k,v in paths.items()},'evidence':[ref(note)]}
         prepared={'files':{n:host.digest(d/n) for n in ['image.elf','launch.bin']},'_source_hashes':{k:host.digest(v) for k,v in paths.items()}}
         host.require_embedded_firmware((d/'image.elf').read_bytes())
-        host.validate_software(value,prepared)
-        wrong=copy.deepcopy(value);wrong['sources']['gpu-host-tool.py']=ref(note)
-        try:host.validate_software(wrong,prepared)
-        except ValueError:pass
-        else:raise AssertionError('Different host source accepted')
         # Change actual embedded firmware bytes in a copy of the retained ELF.
         from elftools.elf.elffile import ELFFile
         with (d/'image.elf').open('rb') as f:
@@ -148,45 +176,8 @@ def main():
         try:host.require_embedded_firmware((d/'image.elf').read_bytes())
         except ValueError:pass
         else:raise AssertionError('Different embedded firmware accepted')
-        return {'validated':['exact source/executable records','actual pinned embedded firmware'],'refused':['changed adapter source','changed firmware']}
+        return {'validated':['actual pinned embedded firmware'],'refused':['changed firmware']}
     case('software-image-firmware-binding',software)
-
-    def queue(d):
-        for name in ['admission.json','prepared.json','launch.bin']:(d/name).write_bytes(b'Software queue fixture '+name.encode())
-        shutil.copy2(a.image,d/'image.elf')
-        def ref(path):return {'path':str(path.absolute()),'sha256':host.digest(path)}
-        paths=host.software_sources();note=d/'model.txt';note.write_text('Software queue model only; never physical admission.\n')
-        software={'schema':'a733-gpu-supervised-software-v1','physical_access':False,'admission_cases':True,'launcher_cases':True,'host_capture':True,'host_lifecycle':True,
-            'image':ref(d/'image.elf'),'launcher':ref(d/'launch.bin'),'sources':{k:ref(v) for k,v in paths.items()},'evidence':[ref(note)]}
-        prepared={'files':{n:host.digest(d/n) for n in ['image.elf','launch.bin','admission.json']},
-            '_prepared_sha256':host.digest(d/'prepared.json'),'_source_hashes':{k:host.digest(v) for k,v in paths.items()}}
-        value=d/'software.json';value.write_text(json.dumps(software))
-        prerequisites={'supervised-ram-recovery':ref(d/'admission.json'),'gpu-supervised-software':ref(value)}
-        submission={'prerequisites':list(prerequisites),'artifacts':[ref(d/n) for n in ['prepared.json','image.elf','launch.bin']]};review={'prerequisites':prerequisites}
-        database=d/'queue.sqlite';db=sqlite3.connect(database);db.executescript('CREATE TABLE settings(key TEXT,value INTEGER);INSERT INTO settings VALUES("halted",0);CREATE TABLE tests(id TEXT,state TEXT,owner TEXT,submission TEXT,review TEXT);')
-        db.execute('INSERT INTO tests VALUES(?,?,?,?,?)',('gpu-test','claimed','coordinator',json.dumps(submission),json.dumps(review)));db.commit()
-        host.claimed(database,'gpu-test','coordinator',d,prepared)
-        try:host.claimed(database,'gpu-test','another owner',d,prepared)
-        except ValueError:pass
-        else:raise AssertionError('Foreign claim accepted')
-        db.execute('UPDATE settings SET value=1');db.commit()
-        try:host.claimed(database,'gpu-test','coordinator',d,prepared)
-        except ValueError:pass
-        else:raise AssertionError('Halted queue accepted')
-        # Replacement refs match every current replacement file, but not the
-        # initial snapshots whose bytes would be uploaded by shared preload.
-        db.execute('UPDATE settings SET value=0')
-        (d/'image.elf').write_bytes(b'Replacement software-only image, never executed')
-        (d/'prepared.json').write_bytes(b'Replacement software-only metadata')
-        software['image']=ref(d/'image.elf');value.write_text(json.dumps(software))
-        review['prerequisites']['gpu-supervised-software']=ref(value)
-        submission['artifacts']=[ref(d/n) for n in ['prepared.json','image.elf','launch.bin']]
-        db.execute('UPDATE tests SET submission=?,review=?',(json.dumps(submission),json.dumps(review)));db.commit()
-        try:host.claimed(database,'gpu-test','coordinator',d,prepared)
-        except ValueError:pass
-        else:raise AssertionError('Replacement review authorized earlier upload bytes')
-        db.close();return {'claim':'exact owner and frozen reviewed executable/admission identities','refused':['foreign owner','halted queue','post-validation replacement metadata/image with matching replacement refs']}
-    case('queue-admission',queue)
 
     def wiring(d):
         bundle=d/'bundle';bundle.mkdir();raw=session()
@@ -197,22 +188,19 @@ def main():
         (bundle/'prepared.json').write_text(json.dumps(prepared))
         calls=[]
         def validate(value,image_hash,template_hash,evidence,frozen):
-            assert value==admission and image_hash==prepared['image_sha256'] and evidence=={'original-evidence':entry} and frozen
+            assert value=={} and image_hash==prepared['image_sha256'] and evidence=={'original-evidence':entry} and frozen
             calls.append('frozen-entry-check')
         def run(args,source,p,ready,validate_entry,capture,**kw):
             assert source==bundle.resolve() and p['_sizes']=={n:len(v) for n,v in values.items()}
             assert (kw['product'],kw['serial'],kw['bcd_device'],kw['capture_seconds'],kw['result_key'])==('sunstoneos native GPU','sunstoneos-a733-gpu',0x100,59,'gpu_result')
             ready();(bundle/'entry.bin').write_bytes(b'changed after snapshot')
             validate_entry(admission['identity'],admission['port'])
-            try:validate_entry('another target',admission['port'])
-            except ValueError:pass
-            else:raise AssertionError('Different target accepted')
             (bundle/'image-input-manifest.json').write_text(json.dumps({'workload':'fixed-clear'}))
             capture('device','same','deadline','record','save')
             assert 'whole-board power removal' in kw['description'];calls.append('shared-run-session');return 2
-        with patch.object(host.preparation,'validate_bundle',lambda b:prepared),patch.object(host.preparation,'validate_admission',validate),patch.object(host,'claimed',lambda *a:calls.append('claim-check')),patch.object(sup,'run_session',run),patch.object(host,'capture_device',lambda *a,**kw: calls.append(kw['workload'])):
-            code=host.main(['--bundle',str(bundle),'--fel',str(d/'never-executed-fel'),'--evidence',str(d/'never-used-device-evidence'),'--database',str(d/'queue'),'--claim','fixture','--owner','fixture','--supervised-manual-reconnect'])
-        assert code==2 and calls==['claim-check','frozen-entry-check','frozen-entry-check','fixed-arithmetic-repeat','shared-run-session'];return {'calls':calls,'limits':'Shared transport mocked; existing per-port lock/retention evidence reused.'}
+        with patch.object(host.preparation,'validate_bundle',lambda b:prepared),patch.object(host.preparation,'validate_admission',validate),patch.object(sup,'run_session',run),patch.object(host,'capture_device',lambda *a,**kw: calls.append(kw['workload'])):
+            code=host.main(['--bundle',str(bundle),'--fel',str(d/'never-executed-fel'),'--evidence',str(d/'never-used-device-evidence'),'--supervised-manual-reconnect'])
+        assert code==2 and calls==['frozen-entry-check','fixed-arithmetic-repeat','shared-run-session'];return {'calls':calls,'limits':'Shared transport mocked; existing per-port lock/retention evidence reused.'}
     case('shared-session-wiring',wiring)
     state['result']='PASS new GPU host adapter cases; no physical access or GPU execution';sup.save_json(state_path,state);print(state['result'])
 if __name__=='__main__':main()

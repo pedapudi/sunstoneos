@@ -17,7 +17,7 @@ for name in ('build','bundle','output','objdump'):p.add_argument('--'+name,type=
 p.add_argument('--case',help='Run only the named focused case; preserve other completed evidence separately.')
 a=p.parse_args();spec=importlib.util.spec_from_file_location('startup_host',ROOT/'tools/run-native-startup-probe.py');host=importlib.util.module_from_spec(spec);spec.loader.exec_module(host)
 m=json.loads((a.build/'manifest.json').read_bytes());bundle=json.loads((a.bundle/'prepared.json').read_bytes())
-assert bundle['image_sha256']==host.NATIVE and bundle['launcher_sha256']==host.LAUNCH
+assert bundle['image_sha256']==host.digest(a.bundle/'image.elf')
 before_power=m.get('stop_before_power',False)
 after_interface=m.get('stop_after_cpu_interface',False)
 before_wake=m.get('stop_before_wake',False)

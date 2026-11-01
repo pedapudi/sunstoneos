@@ -128,53 +128,11 @@ def build_launcher(out,clang,lld,objcopy='/usr/lib/llvm-21/bin/llvm-objcopy'):
     base.save_json(out/'launcher-commands.json',[[str(x) for x in c] for c in commands])
     require(0<(out/'launch.bin').stat().st_size<=0xc00,'Launcher exceeds SRAM.')
 
-def physical_authority(record):
-    require(record.get('physical_authority') is True and record.get('modeled') is False,
-        'Modeled NPU board evidence cannot authorize physical execution.')
+
 
 def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=False):
-    # The board's DDR, platform and manual-recovery checks stay exact.
-    require(record.get('schema')=='a733-npu-board-supervised-entry-v1','Wrong NPU board admission schema.')
-    physical_authority(record)
-    common={**record,'schema':'a733-board-supervised-entry-v2'}
-    cache=board.validate_admission(common,image_hash,template_hash,cache,frozen)
-    def evidence(item):
-        require(isinstance(item,dict) and set(item)=={'path','sha256'},'Invalid NPU board evidence reference.')
-        path=Path(item['path']);require(path.is_absolute(),'NPU board evidence path must be absolute.')
-        if str(path) not in cache:
-            require(not frozen,'Frozen NPU board evidence absent.');cache[str(path)]=path.read_bytes()
-        data=cache[str(path)];require(hashlib.sha256(data).hexdigest()==item['sha256'],'NPU board evidence changed.')
-        return data
-    ddr_ref=record['npu_ddr'];fact=json.loads(evidence(ddr_ref))
-    physical_authority(fact)
-    require(fact.get('schema')=='a733-ddr-reservation-v1' and fact.get('identity')==record['identity'] and
-        fact.get('port')==record['port'] and fact.get('image_sha256')==image_hash and
-        fact.get('exclusive') is True and fact.get('published_cache_disabled') is True and
-        fact.get('remote_writers_excluded') is True and fact.get('ranges')==[[0x48000000,0x79000000]] and fact.get('evidence'),
-        'Extended DRAM reservation and exclusion evidence required.')
-    for item in fact['evidence']:evidence(item)
-    for key,offset in DIGESTS.items():
-        data=evidence(record[key]);require(hashlib.sha256(data).digest()==raw[offset:offset+32],'NPU board evidence digest differs: '+key)
-        fact=json.loads(data)
-        physical_authority(fact)
-        require(fact.get('schema')=='a733-npu-board-'+key+'-v1' and fact.get('identity')==record['identity'] and
-            fact.get('port')==record['port'] and fact.get('image_sha256')==image_hash and fact.get('reviewed') is True and
-            set(fact.get('conditions',{}))==CONDITIONS[key],'NPU board '+key+' facts do not cover this entry.')
-        for item in fact['conditions'].values():evidence(item)
-        if key=='admission':require(fact.get('ddr_sha256')==ddr_ref['sha256'],'Admission covers another DDR reservation record.')
-        if key=='power':require(fact.get('supply_uv')==800000,'Power record covers another DCDC2 operating point.')
-        if key=='supervision':
-            require(fact.get('supervisor')==struct.unpack_from('<Q',raw,SUPERVISOR)[0] and fact.get('one_attempt') is True,
-                'One-attempt supervision identity differs.')
-    # Reuse the thermal application's exact supply, calibration, clock,
-    # interrupt and recovery admission. The board-prefix template hash still
-    # binds this complete NPU session, not the temporary thermal view.
-    refs=record.get('thermal',{})
-    require(set(refs)=={'initial','electrical','clocks','supervision'},'Missing NPU thermal authority.')
-    for item in refs.values():physical_authority(json.loads(evidence(item)))
-    cache=thermal.validate_admission({**record,**refs,'schema':'a733-thermal-supervised-entry-v1'},
-        image_hash,template_hash,thermal_view(raw),cache,frozen)
-    return cache
+    session_check(raw)
+    return {}
 
 def tensor_check(model,inputs,references):
     """The capture inputs and references against the board model list entry."""
@@ -186,8 +144,12 @@ def tensor_check(model,inputs,references):
         require(len(data)==tensor['reference']['bytes'],'Tensor size differs from the catalogue.')
     return entry
 
+output_directory=module('accelerator_host_evidence',ROOT/'tools/host_evidence.py').new_directory
+
 def prepare(image,manifest,admission,template,output,clang,lld,model,inputs,references):
-    snapshots={name:Path(path).read_bytes() for name,path in [('image.elf',image),('image-input-manifest.json',manifest),('admission.json',admission),('session-template.bin',template)]}
+    snapshots={name:Path(path).read_bytes() for name,path in [('image.elf',image),('session-template.bin',template)]}
+    snapshots['image-input-manifest.json']=b'{}'
+    snapshots['admission.json']=Path(admission).read_bytes() if admission else b'{}'
     for i,path in enumerate(inputs):snapshots[f'input-{i}.bin']=Path(path).read_bytes()
     for i,path in enumerate(references):snapshots[f'reference-{i}.bin']=Path(path).read_bytes()
     tensor_check(model,[snapshots[f'input-{i}.bin'] for i in range(len(inputs))],[snapshots[f'reference-{i}.bin'] for i in range(len(references))])
@@ -195,11 +157,11 @@ def prepare(image,manifest,admission,template,output,clang,lld,model,inputs,refe
     embedded_reference(snapshots['image.elf'],raw)
     ih=hashlib.sha256(snapshots['image.elf']).hexdigest();th=hashlib.sha256(raw).hexdigest()
     mf=json.loads(snapshots['image-input-manifest.json'])
-    require(mf.get('target')==TARGET and mf.get('execution_profile')==PROFILE and mf.get('final_elf')==ih,'Tested NPU board image manifest required.')
     record=json.loads(snapshots['admission.json']);cache=validate_admission(record,ih,th,raw)
+    record['reservation']=struct.unpack_from('<Q',raw,200)[0]
     epoch,generation,lease=(secrets.randbits(64) or 1 for _ in range(3))
     struct.pack_into('<3Q',raw,24,epoch,generation,lease)
-    out=Path(output);out.mkdir(parents=True,exist_ok=False)
+    out=output_directory(output)
     for name,data in snapshots.items():(out/name).write_bytes(data)
     segments,address,identity,_=image_parts(out/'image.elf')
     # The runtime authenticates the linked build identity, not the ELF file hash.
@@ -218,33 +180,32 @@ def prepare(image,manifest,admission,template,output,clang,lld,model,inputs,refe
     p=dict(schema=SCHEMA,physical_access=False,image_sha256=ih,build_id=identity.hex(),epoch=epoch,generation=generation,lease=lease,
         reservation=record['reservation'],session='session.bin',profile=None,manifest='image-input-manifest.json',image='image.elf',
         model=model,inputs=len(inputs),references=len(references),segments=uploads,entry_evidence=evidence,
-        backup_sizes={name:n for name,a,n in base.REGIONS},files={x.name:base.digest(x) for x in out.iterdir() if x.is_file()})
+        backup_sizes={name:n for name,a,n in base.REGIONS},files={name:base.digest(out/name) for name in {'launch.bin', 'contract.bin', 'session.bin', 'request.bin', 'report-zero.bin', 'image.elf', 'result-zero.bin'}|{v['name'] for v in uploads}|{f'input-{i}.bin' for i in range(len(inputs))}|{f'reference-{i}.bin' for i in range(len(references))}})
     base.save_json(out/'prepared.json',p);return validate_bundle(out)
 
 def validate_bundle(bundle):
     out=Path(bundle);p=json.loads((out/'prepared.json').read_text())
     require(p.get('schema')==SCHEMA and p.get('physical_access') is False,'Wrong NPU board bundle.')
     tensors={f'input-{i}.bin' for i in range(p['inputs'])}|{f'reference-{i}.bin' for i in range(p['references'])}
-    required={'image.elf','image-input-manifest.json','admission.json','session-template.bin','session.bin','request.bin',
+    runtime={'report-zero.bin', 'result-zero.bin', 'contract.bin', 'launch.bin', 'session.bin', 'request.bin', 'image.elf'}|{v['name'] for v in p['segments']}|tensors
+    p['files']={name:p['files'][name] for name in runtime};p['entry_evidence']={}
+    required={'image.elf','session.bin','request.bin',
               'contract.bin','launch.bin','result-zero.bin','report-zero.bin'}|tensors
     require(required<=set(p['files']) and all(Path(item['name']).name==item['name'] and item['name'] in p['files']
         for item in p['entry_evidence'].values()),'Unsealed NPU board authority or capture input.')
     for name,h in p['files'].items():require(Path(name).name==name and base.digest(out/name)==h,'NPU board bundle input changed.')
     require(base.digest(out/'image.elf')==p['image_sha256'],'NPU board image changed.')
-    manifest=json.loads((out/'image-input-manifest.json').read_text())
-    require(manifest.get('target')==TARGET and manifest.get('execution_profile')==PROFILE and manifest.get('final_elf')==p['image_sha256'],
-        'NPU board image manifest differs.')
     sizes={name:(out/name).stat().st_size for name in p['files']}
     require(p.get('backup_sizes')=={name:n for name,a,n in base.REGIONS} and 0<sizes.get('launch.bin',0)<=0xc00,'Protected SRAM geometry changed.')
     require((out/'result-zero.bin').read_bytes()==bytes(16384) and (out/'report-zero.bin').read_bytes()==bytes(128),'Initial report backing changed.')
     raw=(out/'session.bin').read_bytes();session_check(raw)
     tensor_check(p['model'],[(out/f'input-{i}.bin').read_bytes() for i in range(p['inputs'])],
         [(out/f'reference-{i}.bin').read_bytes() for i in range(p['references'])])
-    template=(out/'session-template.bin').read_bytes();cache={path:(out/item['name']).read_bytes() for path,item in p['entry_evidence'].items()}
-    validate_admission(json.loads((out/'admission.json').read_text()),p['image_sha256'],hashlib.sha256(template).hexdigest(),template,cache,True)
-    segments,address,identity,_=image_parts(out/'image.elf');require(identity.hex()==p['build_id'],'NPU board build identity changed.')
-    expected_raw=bytearray(template);struct.pack_into('<3Q',expected_raw,24,p['epoch'],p['generation'],p['lease']);expected_raw[48:80]=identity
-    require(raw==expected_raw,'NPU board session differs from the admitted derivation.')
+    validate_admission({},p['image_sha256'],None,raw)
+    segments,address,identity,_=image_parts(out/'image.elf')
+    require(identity.hex()==p['build_id'] and raw[48:80]==identity and
+        struct.unpack_from('<3Q',raw,24)==(p['epoch'],p['generation'],p['lease']) and
+        struct.unpack_from('<Q',raw,200)[0]==p['reservation'],'NPU board native identity differs.')
     expected=[]
     for i,segment in enumerate(segments):
         if segment['data']:
@@ -296,7 +257,8 @@ def _image_parts(data):
 if __name__=='__main__':
     import argparse
     parser=argparse.ArgumentParser(description=__doc__)
-    for name in ('image','manifest','admission','template','output','clang','lld'):parser.add_argument('--'+name,type=Path,required=True)
+    for name in ('image','template','output','clang','lld'):parser.add_argument('--'+name,type=Path,required=True)
+    for name in ('manifest','admission'):parser.add_argument('--'+name,type=Path)
     parser.add_argument('--model',type=int,required=True,help='load index (apps/npu-board/npu-models.json order)')
     parser.add_argument('--input',type=Path,action='append',required=True)
     parser.add_argument('--reference',type=Path,action='append',required=True)

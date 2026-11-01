@@ -1,6 +1,5 @@
 """Validate all-core production startup, written pages and restored ROM return."""
 import importlib.util
-import json
 from pathlib import Path
 import struct
 from types import SimpleNamespace
@@ -79,18 +78,3 @@ def initial_report(nonce): return cache.local.identity.primary.initial_report(no
 
 
 def load(build, image, manifest): return cache.local.identity.load(build, image, manifest, pre_scheduler=True)
-
-
-def validate_software(software, manifest_hash):
-    require(software.get('schema') == 'a733-all-core-pre-scheduler-software-v1' and
-            software.get('physical_access') is False and software.get('manifest_sha256') == manifest_hash and
-            software.get('host_sources') == {n: digest(ROOT/n) for n in HOST_SOURCES} and
-            software.get('host_cases') == dict.fromkeys(CASES, True), 'Pre-scheduler host evidence differs.')
-    item = software['instruction_evidence']; path = Path(item['path'])
-    require(path.is_absolute() and digest(path) == item['sha256'], 'Instruction evidence changed.')
-    result = json.loads(path.read_text())
-    require(result.get('physical_access') is False and result.get('native_sha256') == probe.NATIVE and
-            result.get('manifest_sha256') == manifest_hash and
-            result.get('sources') == {n: digest(ROOT/n) for n in MODEL_SOURCES}, 'Instruction inputs differ.')
-    require({c['case']: c.get('pass') for c in result['cases']} ==
-            dict.fromkeys(('success', 'counter-corruption', 'restore-el3'), True), 'Instruction cases incomplete.')

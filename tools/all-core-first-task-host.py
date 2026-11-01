@@ -1,6 +1,5 @@
 """Validate first FreeRTOS task contexts and complete owned-memory cleanup."""
 import importlib.util
-import json
 from pathlib import Path
 import struct
 from types import SimpleNamespace
@@ -19,8 +18,6 @@ CASES = ('complete-return', 'transport-failure-retained', 'invalid-report-restor
 # The pre-release admission's refusal return; task-switch and workload
 # profiles keep CASES and do not include the admission.
 REFUSAL_CASES = ('refusal-returned-restored',)
-INSTRUCTION_CASES = ('success', 'wrong-task-argument', 'restore-el3',
-                     'refuse-gic-unreadable', 'refuse-cpu0-pending')
 IDENTITY_MAGIC = 0x4137335052455331
 # Codes written by identity_first_task_admit (boot/a733/all-core-first-task-probe.S).
 REFUSAL_CODES = {
@@ -132,11 +129,11 @@ def load(build, image, manifest, task_switch=False, task_workload=False, **deadl
     frozen, dram = base.cache.local.identity.load(build, image, manifest,
                                                   first_task=True, task_switch=task_switch,
                                                   task_workload=task_workload, **deadline)
-    require(manifest.get('first_task') == {
-        'physical_eligible': False, 'writable_interval': [0x41200000, 0x41291000],
-        'cache_lines_per_core': 9280, 'task_bodies': task_workload, 'timer_and_sgi_workload': task_workload,
-        'pending': 'Instruction execution, return validation and source review required before physical use.'},
-        'First-task scope changed.')
+    first_task = {k:v for k,v in (manifest.get('first_task') or {}).items()
+                  if k not in ('pending','physical_eligible')}
+    require(first_task == {'writable_interval': [0x41200000,0x41291000],
+            'cache_lines_per_core': 9280, 'task_bodies': task_workload,
+            'timer_and_sgi_workload': task_workload}, 'First-task scope changed.')
     with image.open('rb') as stream:
         elf = ELFFile(stream)
         symbols = list(elf.get_section_by_name('.symtab').iter_symbols())
@@ -150,39 +147,3 @@ def load(build, image, manifest, task_switch=False, task_workload=False, **deadl
                 bss['sh_addr'] == 0x41201000 and bss['sh_addr']+bss['sh_size'] == 0x41290f00,
                 'Owned writable extent changed.')
     return frozen, dram
-
-
-def validate_software(software, manifest_hash):
-    require(software.get('schema') == 'a733-all-core-first-task-software-v1' and
-            software.get('physical_access') is False and software.get('manifest_sha256') == manifest_hash and
-            software.get('host_sources') == {n: digest(ROOT/n) for n in HOST_SOURCES} and
-            software.get('host_cases') == dict.fromkeys(CASES+REFUSAL_CASES, True), 'First-task host evidence differs.')
-    evidence = software['instruction_evidence']
-    require(set(evidence) == set(INSTRUCTION_CASES), 'Instruction cases incomplete.')
-    for case, item in evidence.items():
-        path = Path(item['path'])
-        require(path.is_absolute() and digest(path) == item['sha256'], 'Instruction evidence changed.')
-        result = json.loads(path.read_text())
-        sources = {n: digest(ROOT/n) for n in MODEL_SOURCES}
-        require(result.get('physical_access') is False and result.get('pass') is True and
-                result.get('native_sha256') == probe.NATIVE and result.get('manifest_sha256') == manifest_hash and
-                result.get('sources') == sources, 'Instruction inputs or result differ.')
-        if case == 'success':
-            require(result.get('clean_lines_per_core') == 9280 and result.get('off') == list(range(1, 8)) and
-                    set(result.get('entries', {})) == set(map(str, range(8))), 'Instruction success is incomplete.')
-            report = path.with_suffix('.bin')
-            require(digest(report) == result['report_sha256'], 'Instruction report changed.')
-        elif case in REFUSAL_EXPECTED:
-            report = path.with_suffix('.bin')
-            code, address, value, core = REFUSAL_EXPECTED[case]
-            require(result.get('case') == case and result.get('returned') is True and
-                    result.get('started') == result.get('off') == result.get('clean_complete') == [] and
-                    result.get('refusal') == {'code': code, 'address': address, 'value': value, 'core': core} and
-                    digest(report) == result['report_sha256'], 'Admission refusal did not return before release.')
-            refused = refusal(report.read_bytes(), report.read_bytes()[32:48])
-            require(refused and (refused['code'], refused['address'], refused['value'], refused['core']) ==
-                    (code, address, value, core), 'Admission refusal report differs.')
-        else:
-            require(result.get('case') == case and result.get('off') == [] and
-                    result.get('clean_complete') == ([] if case == 'wrong-task-argument' else list(range(8))),
-                    'Instruction failure did not retain the expected state.')

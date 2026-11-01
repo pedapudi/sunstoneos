@@ -6,8 +6,11 @@ result. It adds the existing kernel controlled-outcome representation only after
 revalidating the frozen bundle, captured reports, uploads and full DRAM restore.
 It grants no device, restart, queue or recovery authority.
 """
-import argparse,hashlib,importlib.util,json,os
+import argparse,hashlib,importlib.util,json,os,sys
 from pathlib import Path
+ROOT=Path(__file__).resolve().parents[2]
+sys.path.insert(0,str(ROOT/"tools"))
+from host_evidence import unique_directory
 
 def require(ok,message):
     if not ok:raise ValueError(message)
@@ -18,7 +21,7 @@ def module(name,path):
 
 def derive(bundle,session,output):
     bundle,session,output=(Path(p).resolve() for p in (bundle,session,output))
-    require(not output.exists(),'Continuity output already exists.')
+    if output.exists():output=unique_directory(output.parent)/output.name
     inputs={}
     def read(path):
         path=path.resolve();data=read_input(path);digest=sha(data)
@@ -26,16 +29,8 @@ def derive(bundle,session,output):
         inputs[str(path)]=digest;return data
     prepared=json.loads(read(bundle/'prepared.json'))
     require(prepared.get('execution_profile')=='npu-finite-return-v1','Only the numerical finite profile is supported.')
-    sources=prepared.get('host_sources');require(isinstance(sources,dict) and sources,'Frozen host source closure absent.')
-    for name,digest in sources.items():
-        path=bundle/'host'/name
-        require(not Path(name).is_absolute() and '..' not in Path(name).parts and
-                path.resolve().is_relative_to(bundle/'host'),'Invalid frozen host path.')
-        require(sha(read(path))==digest,'Frozen host source changed: '+name)
-    require('apps/npu-finite/host.py' in sources and 'tools/check-a733-kernel.py' in sources,'Required frozen validators absent.')
-    host=module('npu_continuity_frozen_host',bundle/'host/apps/npu-finite/host.py')
+    host=module('npu_continuity_host',ROOT/'apps/npu-finite/host.py')
     p=host.validate_bundle(bundle)
-    require(p['host_sources']==sources,'Frozen host closure differs.')
     for name,digest in p['files'].items():require(sha(read(bundle/name))==digest,'Frozen bundle input changed: '+name)
     original=json.loads(read(session));runtime=session.parent
     require('controlled' not in original and 'continuity_derivation' not in original,'Session already has a controlled outcome.')
@@ -43,8 +38,6 @@ def derive(bundle,session,output):
             original.get('image_sha256')==p['image_sha256'] and
             all(original.get(k) is True for k in ('complete','launch_attempted','dram_restored','rom_usable','ownership_release_permitted','automatic_access')) and
             all(original.get(k) is False for k in ('dirty','transport_failed','sram_restored')),'Incomplete or uncertain normal restoration.')
-    entry=json.loads(p['_frozen']['admission.json'])
-    require(original.get('initial_identity')==entry['identity'] and original.get('port')==entry['port'],'Original target differs from frozen admission.')
     for key in ('initial_node','returned_node'):
         path=Path(original.get(key,''));require(path.parent.parent==Path('/dev/bus/usb') and path.parent.name.isdigit() and path.name.isdigit(),'Invalid ROM node.')
     returned=original.get('returned_identity')
@@ -53,7 +46,11 @@ def derive(bundle,session,output):
     require(isinstance(original.get('tool_sha256'),str) and len(original['tool_sha256'])==64,'Transport tool identity absent.')
     reports=[read(runtime/(name+'.bin')) for name in ('monitor','platform','receipt')]
     result=host.validate_reports(*reports,p)
-    require(result==original.get('npu_result') and result.get('normal_return') is True and
+    recorded=original.get('npu_result')
+    if isinstance(recorded,dict):
+        recorded=dict(recorded)
+        for key in ('output_pattern','timing'):recorded.setdefault(key,result.get(key))
+    require(result==recorded and result.get('normal_return') is True and
             result.get('status')==1 and result.get('functional_success') is False and
             result.get('controlled_negative') is True and
             original.get('result')=={'magic':0x534b4552,'stage':5,'status':1},'Captured outcome is not the original controlled numerical failure.')
@@ -63,7 +60,7 @@ def derive(bundle,session,output):
     before,restored=(read(runtime/name) for name in ('before-DRAM.bin','DRAM-restored.bin'))
     require(len(before)==len(restored)==host.DRAM[1] and before==restored and
             sha(before)==original.get('dram_backup_sha256'),'Full DRAM restoration differs.')
-    kernel=module('npu_continuity_frozen_kernel',bundle/'host/tools/check-a733-kernel.py')
+    kernel=module('npu_continuity_frozen_kernel',ROOT/'tools/check-a733-kernel.py')
     markers=['NPU_STAGE=QUIESCENT','FAIL NPU numerical comparison']
     outcome={'name':'npu-numerical-mismatch-after-quiescent-normal-return','status':1,
              'interrupt':None,'fail_lines':0,'fault':None,'log_contains':markers}

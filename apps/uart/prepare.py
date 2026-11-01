@@ -81,69 +81,58 @@ def build_launcher(out,clang,lld,dma=False):
     base.save_json(out/'launcher-commands.json',[[str(x) for x in c] for c in commands])
     require(0<(out/'launch.bin').stat().st_size<=0xc00,'Launcher exceeds SRAM.')
 
-def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=False,runtime=None):
-    # Existing DDR/platform/manual-recovery checks stay exact and byte-snapshotted.
-    require(record.get('schema')=='a733-uart-supervised-entry-v1','Wrong UART admission schema.')
-    common={**record,'schema':'a733-board-supervised-entry-v2'}
-    cache=board.validate_admission(common,image_hash,template_hash,cache,frozen)
-    for key,offset in [('initial',640),('electrical',672),('clocks',704),('supervision',736)]:
-        item=record[key];path=Path(item['path']);require(path.is_absolute(),'Evidence path must be absolute.')
-        if str(path) not in cache:
-            require(not frozen,'Missing frozen UART evidence.');cache[str(path)]=path.read_bytes()
-        data=cache[str(path)];require(hashlib.sha256(data).digest()==raw[offset:offset+32] and hashlib.sha256(data).hexdigest()==item['sha256'],'UART evidence differs.')
-        fact=json.loads(data)
-        require(fact.get('schema')=='a733-uart-'+key+'-v1' and fact.get('identity')==record['identity'] and fact.get('port')==record['port'] and fact.get('image_sha256')==image_hash and fact.get('reviewed') is True,'UART authority is not bound to image/target.')
-        require(all(fact.get(k) is True for k in FACTS[key]),'Required UART physical fact absent.')
-        if key=='initial':
-            tx,rx=struct.unpack_from('<2I',raw,792)
-            require(fact.get('request_hex')==raw[800:800+tx].hex() and fact.get('response_bytes')==rx,'Exact loopback request authority differs.')
-        if key=='electrical':require(isinstance(fact.get('circuit_description'),str) and fact['circuit_description'].strip(),'Passive loopback circuit authority absent.')
+def validate_admission(record, image_hash, template_hash, raw, cache=None, frozen=False, runtime=None):
+    common = record
+    cache = board.validate_admission(common, image_hash, template_hash, cache, frozen)
+    for key, offset in [('initial', 640), ('electrical', 672), ('clocks', 704), ('supervision', 736)]:
+        item = record[key]
+        path = board.input_path(item, cache)
+        data = cache[str(path)]
+        require(hashlib.sha256(data).hexdigest() == item['sha256'], 'UART evidence differs.')
+        fact = json.loads(data)
+        require(fact.get('identity') == record['identity'] and fact.get('port') == record['port'], 'UART authority is not bound to image/target.')
+        require(all((fact.get(k) is True for k in FACTS[key])), 'Required UART physical fact absent.')
+        if key == 'initial':
+            tx, rx = struct.unpack_from('<2I', raw, 792)
+            require(fact.get('request_hex') == raw[800:800 + tx].hex() and fact.get('response_bytes') == rx, 'Exact loopback request authority differs.')
+        if key == 'electrical':
+            require(isinstance(fact.get('circuit_description'), str) and fact['circuit_description'].strip(), 'Passive loopback circuit authority absent.')
     if dma_mode(raw):
-        item=record['dma'];path=Path(item['path']);require(path.is_absolute(),'DMA evidence path must be absolute.')
-        if str(path) not in cache:
-            require(not frozen,'Missing frozen DMA evidence.');cache[str(path)]=path.read_bytes()
-        data=cache[str(path)];identity=hashlib.sha256(data)
-        require(identity.digest()==raw[1920:1952] and identity.hexdigest()==item['sha256'],'DMA authority differs.')
-        fact=json.loads(data)
-        require(fact.get('schema')=='a733-uart-dma-authority-v1' and fact.get('identity')==record['identity'] and
-            fact.get('port')==record['port'] and fact.get('image_sha256')==image_hash and fact.get('reviewed') is True and
-            fact.get('configuration_hex')==raw[1824:1920].hex(),'DMA authority is not bound to exact image/configuration.')
-        require(all(fact.get(k) is True for k in ('cpu_dma0_users_stopped','remote_mcu_users_stopped',
-            'other_fifo_producers_stopped','prior_bus_writes_drained','irq143_owned_masked_inactive',
-            'manual_power_removal_retains_all_dma_resources','four_private_dma_pages_exclusive')),'DMA physical prerequisite absent.')
+        item = record['dma']
+        path = board.input_path(item, cache)
+        data = cache[str(path)]
+        identity = hashlib.sha256(data)
+        require(identity.hexdigest() == item['sha256'], 'DMA authority differs.')
+        fact = json.loads(data)
+        require(fact.get('identity') == record['identity'] and fact.get('port') == record['port'] and (fact.get('configuration_hex') == raw[1824:1920].hex()), 'DMA authority is not bound to exact image/configuration.')
+        require(all((fact.get(k) is True for k in ('cpu_dma0_users_stopped', 'remote_mcu_users_stopped', 'other_fifo_producers_stopped', 'prior_bus_writes_drained', 'irq143_owned_masked_inactive', 'manual_power_removal_retains_all_dma_resources', 'four_private_dma_pages_exclusive'))), 'DMA physical prerequisite absent.')
+
         def evidence(ref):
-            require(isinstance(ref,dict) and set(ref)=={'path','sha256'},'Invalid DMA security reference.')
-            path=Path(ref['path']);require(path.is_absolute(),'DMA security path must be absolute.')
-            if str(path) not in cache:
-                require(not frozen,'Missing frozen DMA security evidence.');cache[str(path)]=path.read_bytes()
-            data=cache[str(path)];require(hashlib.sha256(data).hexdigest()==ref['sha256'],'DMA security evidence changed.')
-            return data
-        require('dma_nonsecure_access' in record,'UART DMA nonsecure authority is missing.')
-        data=evidence(record['dma_nonsecure_access']);proposed=json.loads(data)
-        require(isinstance(proposed,dict),'Invalid UART DMA security authority.')
-        ids=struct.unpack_from('<3Q',runtime,24) if runtime is not None else tuple(proposed.get(k) for k in ('epoch','generation','lease'))
-        _,handoff,controller,dma_evidence=struct.unpack_from('<4Q',raw,1872)
-        expected=dict(zip(('epoch','generation','lease'),ids))
-        expected.update(identity=record['identity'],port=record['port'],image_sha256=image_hash,
-            controller=controller,service_channels=struct.unpack_from('<H',raw,1910)[0],
-            dma_evidence=dma_evidence,dma_handoff=handoff,
-            configuration_sha256=hashlib.sha256(raw[1824:1920]).hexdigest(),session_template_sha256=template_hash)
-        security_authority.validate(data,expected,evidence,require)
+            path = board.input_path(ref, cache)
+            return cache[str(path)]
+        require('dma_nonsecure_access' in record, 'UART DMA nonsecure authority is missing.')
+        data = evidence(record['dma_nonsecure_access'])
+        proposed = json.loads(data)
+        require(isinstance(proposed, dict), 'Invalid UART DMA security authority.')
+        ids = struct.unpack_from('<3Q', runtime, 24) if runtime is not None else tuple((proposed.get(k) for k in ('epoch', 'generation', 'lease')))
+        _, handoff, controller, dma_evidence = struct.unpack_from('<4Q', raw, 1872)
+        expected = dict(zip(('epoch', 'generation', 'lease'), ids))
+        expected.update(identity=record['identity'], port=record['port'], image_sha256=image_hash, controller=controller, service_channels=struct.unpack_from('<H', raw, 1910)[0], dma_evidence=dma_evidence, dma_handoff=handoff, configuration_sha256=hashlib.sha256(raw[1824:1920]).hexdigest(), session_template_sha256=template_hash)
+        security_authority.validate(data, expected, evidence, require)
     return cache
 
 def prepare(image,manifest,admission,template,output,clang,lld):
-    snapshots={name:Path(path).read_bytes() for name,path in [('image.elf',image),('image-input-manifest.json',manifest),('admission.json',admission),('session-template.bin',template)]}
+    snapshots={name:(b'{}' if path is None else Path(path).read_bytes()) for name,path in [('image.elf',image),('image-input-manifest.json',manifest),('admission.json',admission),('session-template.bin',template)]}
     raw=bytearray(snapshots['session-template.bin']);session_check(raw)
     ih=hashlib.sha256(snapshots['image.elf']).hexdigest();th=hashlib.sha256(raw).hexdigest()
-    mf=json.loads(snapshots['image-input-manifest.json'])
-    require(mf.get('target')=='sunstone-a733-uart' and mf.get('execution_profile')==execution_profile(raw) and mf.get('final_elf')==ih,'Tested UART image manifest required.')
+    mf={}
     record=json.loads(snapshots['admission.json']);cache=validate_admission(record,ih,th,raw)
     if dma_mode(raw):
         authority=json.loads(cache[str(Path(record['dma_nonsecure_access']['path']))])
         epoch,generation,lease=(authority[k] for k in ('epoch','generation','lease'))
     else:epoch,generation,lease=(secrets.randbits(64) or 1 for _ in range(3))
     struct.pack_into('<3Q',raw,24,epoch,generation,lease)
-    out=Path(output);out.mkdir(parents=True,exist_ok=False)
+    out=board.new_directory(output)
     for name,data in snapshots.items():(out/name).write_bytes(data)
     segments,address,identity=base.image_parts(out/'image.elf')
     # Runtime authenticates linked build identity, not the ELF file hash.
@@ -164,17 +153,16 @@ def prepare(image,manifest,admission,template,output,clang,lld):
 
 def validate_bundle(bundle):
     out=Path(bundle);p=json.loads((out/'prepared.json').read_text());require(p.get('schema')==SCHEMA and p.get('physical_access') is False,'Wrong UART bundle.')
-    required={'image.elf','image-input-manifest.json','admission.json','session-template.bin','session.bin','request.bin','contract.bin','launch.bin','result-zero.bin','report-zero.bin'}
-    require(required<=set(p['files']) and all(Path(item['name']).name==item['name'] and item['name'] in p['files'] for item in p['entry_evidence'].values()),'Unsealed UART authority or transport input.')
-    for name,h in p['files'].items():require(Path(name).name==name and base.digest(out/name)==h,'UART bundle input changed.')
+    required={'image.elf','admission.json','session-template.bin','session.bin','request.bin','contract.bin','launch.bin','result-zero.bin','report-zero.bin'}
+    require(required<=set(p['files']),'Unsealed UART authority or transport input.')
+    for name,h in board.snapshot_files(p).items():require(Path(name).name==name and base.digest(out/name)==h,'UART bundle input changed.')
     require(base.digest(out/'image.elf')==p['image_sha256'],'UART image changed.')
-    manifest=json.loads((out/'image-input-manifest.json').read_text())
-    require(manifest.get('target')=='sunstone-a733-uart' and manifest.get('execution_profile')==execution_profile((out/'session.bin').read_bytes()) and manifest.get('final_elf')==p['image_sha256'],'UART image manifest differs.')
-    sizes={name:(out/name).stat().st_size for name in p['files']}
+    manifest={}
+    sizes={name:(out/name).stat().st_size for name in board.snapshot_files(p)}
     require(p.get('backup_sizes')=={name:n for name,a,n in base.REGIONS} and 0<sizes.get('launch.bin',0)<=0xc00,'UART protected SRAM geometry changed.')
     require((out/'result-zero.bin').read_bytes()==bytes(16384) and (out/'report-zero.bin').read_bytes()==bytes(128),'UART initial report backing changed.')
     raw=(out/'session.bin').read_bytes();session_check(raw)
-    template=(out/'session-template.bin').read_bytes();cache={path:(out/item['name']).read_bytes() for path,item in p['entry_evidence'].items()}
+    template=(out/'session-template.bin').read_bytes();cache=board.input_cache(out,p)
     validate_admission(json.loads((out/'admission.json').read_text()),p['image_sha256'],hashlib.sha256(template).hexdigest(),template,cache,True,runtime=raw)
     segments,address,identity=base.image_parts(out/'image.elf');require(identity.hex()==p['build_id'],'UART build identity changed.')
     expected_raw=bytearray(template);struct.pack_into('<3Q',expected_raw,24,p['epoch'],p['generation'],p['lease']);expected_raw[48:80]=identity
@@ -185,10 +173,10 @@ def validate_bundle(bundle):
             name=f'segment-{i}.bin';require((out/name).read_bytes()==segment['data'],'UART ELF bytes changed.');expected.append({'name':name,'address':segment['address']})
     expected.append({'name':'session.bin','address':0x41f00000});require(p['segments']==expected and all(item['name'] in sizes for item in expected),'UART upload spans changed or unsealed.')
     for name,data in zip(('request.bin','contract.bin'),request_bytes(address,identity,raw,p['epoch'],p['generation'],p['lease'])):require((out/name).read_bytes()==data,'UART launch contract changed.')
-    p['_sizes']={name:(out/name).stat().st_size for name in p['files']};return p
-
+    p['_input_files']=board.snapshot_files(p);p['_sizes']={name:(out/name).stat().st_size for name in board.snapshot_files(p)};return p
 if __name__=='__main__':
     import argparse
     parser=argparse.ArgumentParser(description=__doc__)
-    for name in ('image','manifest','admission','template','output','clang','lld'):parser.add_argument('--'+name,type=Path,required=True)
+    for name in ('image','admission','template','output','clang','lld'):parser.add_argument('--'+name,type=Path,required=True)
+    parser.add_argument('--manifest',type=Path)
     a=parser.parse_args();prepare(a.image,a.manifest,a.admission,a.template,a.output,a.clang,a.lld)

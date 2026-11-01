@@ -31,8 +31,7 @@ class Retained(Exception):
 def run_case(args, case, software, report_transform=None, final=None, quarantine_fails=False):
     directory = args.output/case
     directory.mkdir()
-    survey = json.loads(args.survey.read_text())
-    initial_identity = survey['identity']
+    initial_identity = [7, 103, 12345, 0, 0]
     old = directory/'003'/'103'
     new = directory/'003'/'104'
     old.parent.mkdir()
@@ -52,7 +51,10 @@ def run_case(args, case, software, report_transform=None, final=None, quarantine
         assert 0x41000000 <= address and address+size <= 0x42200000
         return dram, address-0x41000000
 
+    real_run = host.subprocess.run
     def fake_run(command, **unused):
+        if str(command[0]) != str(args.fel):
+            return real_run(command, **unused)
         words = list(map(str, command[3:]))
         state['commands'].append(words.copy())
         result = SimpleNamespace(returncode=0, stdout='', stderr='')
@@ -61,6 +63,13 @@ def run_case(args, case, software, report_transform=None, final=None, quarantine
         elif words[0] == 'readl':
             assert words == ['readl', '0x20', 'readl', '0x24', 'readl', '0x28', 'readl', '0x3c', 'readl', '0x40']
             result.stdout = 'eb00008f e3a00911 e3a0193d e3a0605c ea00004d'
+        elif words == ['exe', '0x85000']:
+            values=[0]*32;values[:4]=[0x3153564c,1,128,1]
+            sp={'caller-zero':0,'caller-low':0x40038,'caller-high':0x100004,
+                'caller-misaligned':0x80001,'caller-code-overlap':0x52020,
+                'caller-report-overlap':0x52d20,'caller-stack-overlap':0x53020}.get(case,0x80000)
+            values[4:16]=[19,0,0,0x80000000,24000000,0,1,0,2,0,sp,0x90000]
+            sram[0x86000:0x86078]=struct.pack('<30I',*values[:30])
         elif words[0] == 'exe':
             assert words == ['exe', '0x52000']
             nonce = bytes(dram[primary.probe.REPORT[0]-0x41000000+32:primary.probe.REPORT[0]-0x41000000+48])
@@ -125,10 +134,9 @@ def run_case(args, case, software, report_transform=None, final=None, quarantine
         quarantine_instance=quarantine)
     guard = SimpleNamespace(check_health=lambda: None, reenumeration=reenumeration)
     original_module, stop = host.module, host.base.stop_after_failure
-    a = SimpleNamespace(build=args.build, bundle=args.bundle, software=software, survey=args.survey,
+    a = SimpleNamespace(build=args.build, bundle=args.bundle, software=directory/'absent-software.json', survey=directory/'absent-survey.json',
         database=directory/'MODEL-unused.sqlite3', fel=args.fel, evidence=directory/'runtime', claim='MODEL', owner='MODEL')
     with patch.object(host, 'module', lambda n, p: access if p.name == 'usb-access.py' else original_module(n, p)), \
-         patch.object(host, 'claimed', lambda a, e: ({'identity': initial_identity, 'port': '3-1'}, 'MODEL')), \
          patch.object(host.subprocess, 'run', fake_run), patch.dict(sys.modules, {'usb_guard': guard}), \
          patch.object(host.time, 'monotonic', monotonic), patch.object(host.time, 'sleep', lambda n: None), \
          patch.object(host.base, 'hold_ownership', held), \
@@ -144,7 +152,11 @@ def run_case(args, case, software, report_transform=None, final=None, quarantine
         # A caller-specific outcome, such as a deadline return that restores nothing.
         final(state, record, bytes(dram), originals)
         return True
-    if case in ('complete-return', 'invalid-report-restored'):
+    if case.startswith('caller-'):
+        assert not state['returned'] and not state['quarantined'] and not state['retained']
+        assert not record['launch_attempted'] and bytes(dram)==originals
+        assert not any(c[:2]==['exe','0x52000'] for c in state['commands'])
+    elif case in ('complete-return', 'invalid-report-restored'):
         assert bytes(dram) == originals and sram[0x52000:0x52008] == b'NEW-ROM!'
         assert record['dram_restored'] and record['rom_usable']
         assert record['complete'] == (case == 'complete-return')
@@ -160,17 +172,20 @@ def run_case(args, case, software, report_transform=None, final=None, quarantine
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ('build', 'bundle', 'model', 'survey', 'fel', 'output'):
+    for name in ('build', 'bundle', 'fel', 'output'):
         parser.add_argument('--'+name, type=Path, required=True)
+    parser.add_argument('--survey', type=Path, help=argparse.SUPPRESS)
     parser.add_argument('--case', action='append', help='Run only named affected cases; preserve accepted cases.')
+    parser.add_argument('--model',type=Path,help=argparse.SUPPRESS)
     args = parser.parse_args()
-    args.output.mkdir(parents=True, exist_ok=bool(args.case))
+    args.output = host.returning.output_directory(args.output) if not args.case else args.output
+    args.output.mkdir(parents=True, exist_ok=True)
     names = ('complete-return', 'transport-failure-retained', 'missing-return-retained',
-             'invalid-report-restored', 'changed-input-refused')
+             'invalid-report-restored', 'changed-input-refused', 'caller-zero','caller-low','caller-high',
+             'caller-misaligned','caller-code-overlap','caller-report-overlap','caller-stack-overlap')
     proof = {'schema': 'a733-primary-publication-software-v1', 'physical_access': False,
         'manifest_sha256': primary.digest(args.build/'manifest.json'),
         'host_sources': {n: primary.digest(ROOT/n) for n in primary.HOST_SOURCES},
-        'instruction_evidence': {'path': str(args.model.resolve()), 'sha256': primary.digest(args.model)},
         'host_cases': dict.fromkeys(names, True)}
     fixture = args.output/'MODEL-never-deploy.json'
     fixture.write_text(json.dumps(proof, indent=2)+'\n')

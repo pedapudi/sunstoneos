@@ -344,6 +344,7 @@ def profile_cases(host,e):
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--evidence',type=Path,required=True);parser.add_argument('--freertos',type=Path,required=True);parser.add_argument('--tinyusb',type=Path,required=True)
+    parser.add_argument('--host-only',action='store_true',help='Check changed host/launcher paths with a preserved image')
     parser.add_argument('--build-only',action='store_true');parser.add_argument('--reuse-image',type=Path);parser.add_argument('--reuse-manifest',type=Path)
     a=parser.parse_args();e=a.evidence.resolve();e.mkdir(parents=True,exist_ok=False)
     shutil.copy2(__file__,e/'executed-check.py')
@@ -352,16 +353,28 @@ def main():
     if a.build_only:print(image);return
     host=module('maintenance_launch',ROOT/'tools/check-a733-storage-launch.py')
     store,grant=fixture_store(host,e);store.close()
-    p=host.prepare(image,manifest,e/'fixture-configuration.json',e/'storage',e/'bundle','clang-21',Path.home()/'.cache/sunstoneos/host/usr/lib/llvm-21/bin/ld.lld')
+    p=host.prepare(image,None,e/'fixture-configuration.json',e/'storage',e/'bundle','clang-21',Path.home()/'.cache/sunstoneos/host/usr/lib/llvm-21/bin/ld.lld')
     with host.store_api.ProtectedDirectory(e/'storage') as store:
         p,grant=host.validate_bundle(e/'bundle',store)
+        archived=e/'bundle/launch.c';saved_source=archived.read_bytes()
+        archived.write_bytes(b'optional archived source changed')
+        host.validate_bundle(e/'bundle',store);archived.write_bytes(saved_source)
+        transport=e/'bundle/session.bin';saved_session=transport.read_bytes()
+        transport.write_bytes(bytes([saved_session[0]^1])+saved_session[1:])
+        try:host.validate_bundle(e/'bundle',store)
+        except ValueError as error:assert 'Prepared artifact changed' in str(error)
+        else:raise AssertionError('Changed uploaded session accepted')
+        transport.write_bytes(saved_session)
         observed=launch_cases(e/'bundle',e)
-        native_cases(image,observed,e)
+        if not a.host_only:native_cases(image,observed,e)
         host_case(host,e/'bundle',p,store,grant,e)
-        try:host.validate_session({},p,grant,{}, {},'fixture','fixture');assert False
-        except ValueError:pass
+        config=json.loads((e/'fixture-configuration.json').read_text())
+        host.validate_session({},p,grant,config,[1,2,3,4,5],'fixture','fixture')
+        for changed in (dict(config,minimum_reload_us=0),dict(config,reset_by_us=1)):
+            try:host.validate_session({},p,grant,changed,[1,2,3,4,5],'fixture','fixture');assert False
+            except ValueError:pass
         profile_cases(host,e)
     (e/'results.json').write_text(json.dumps(dict(physical_access=False,image_sha256=sha(image),launcher_sha256=sha(e/'bundle/launch.bin'),
-        native_image=True,host_instruction_composition=True,limits='No physical recovery, coherence, storage, USB or board qualification; unchanged scheduler/driver workloads reused.'),indent=2)+'\n')
+        native_image=True,host_instruction_composition=True,native_cases_executed=not a.host_only,limits='No physical recovery, coherence, storage, USB or board qualification; unchanged scheduler/driver workloads reused.'),indent=2)+'\n')
     print('PASS: connected image, launcher/session/fatal-hook instructions and protected host composition')
 if __name__=='__main__':main()

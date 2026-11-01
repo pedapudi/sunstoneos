@@ -8,8 +8,11 @@ import importlib.util
 import json
 from pathlib import Path
 import tempfile
+import sys
+import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'tools'))
 spec = importlib.util.spec_from_file_location('audit_snapshot', ROOT / 'tools/evidence-snapshot.py')
 snapshot = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(snapshot)
@@ -75,6 +78,20 @@ def main():
         link.write_text(original)
         (source / 'inner.cc').unlink()
         refuses(build, 'Missing dependency')
+    with tempfile.TemporaryDirectory(prefix='snapshot-reuse-') as directory:
+        root = Path(directory)
+        artifact = write(root / 'artifact.bin', 'preserve these bytes')
+        output = root / 'snapshot'
+        command = [sys.executable, '-B', str(ROOT / 'tools/evidence-snapshot.py'),
+                   '--source', 'tools/evidence-snapshot.py', '--artifact', str(artifact),
+                   '--output', str(output)]
+        first = subprocess.run(command, capture_output=True, text=True, check=True)
+        preserved = (output / 'manifest.json').read_bytes()
+        second = subprocess.run(command, capture_output=True, text=True, check=True)
+        assert (output / 'manifest.json').read_bytes() == preserved
+        child = Path(second.stdout.strip())
+        assert child.parent.parent == output and child.is_file()
+        assert first.stdout.strip() == str(output / 'manifest.json')
     print('PASS: in-tree archive members, external archives, linker script and link records are covered; '
           'unknown link tokens and missing records refuse.')
 

@@ -1,9 +1,9 @@
 #!/bin/bash
 # Run inside the pinned compiler image with the repository mounted read-only.
-# The destination must be new and writable. This script performs no device I/O.
+# Existing destinations receive a unique child. This script performs no device I/O.
 set -euo pipefail
 if [ "$#" -ne 1 ] && [ "$#" -ne 3 ] && ! { [ "$#" -eq 2 ] && [ "$2" = --two-stage ]; }; then
-    echo "Usage: $0 NEW_OUTPUT_DIRECTORY [WIDTH OUTPUT_CHANNELS | --two-stage]" >&2
+    echo "Usage: $0 OUTPUT_DIRECTORY [WIDTH OUTPUT_CHANNELS | --two-stage]" >&2
     exit 2
 fi
 fixture_source=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -12,11 +12,18 @@ fixture_compiler=/root/acuity-toolkit-whl-6.30.22/bin/pegasus.py
 fixture_sdk=/root/Vivante_IDE/VivanteIDE5.11.0/cmdtools
 
 if [ "$#" -eq 2 ]; then
-    python3 "$fixture_source/tools/npu-two-stage-fixture.py" "$fixture_output"
+    fixture_generator=("$fixture_source/tools/npu-two-stage-fixture.py" "$fixture_output")
 elif [ "$#" -eq 3 ]; then
-    python3 "$fixture_source/tools/npu-conv-fixture.py" "$fixture_output" --width "$2" --channels "$3"
+    fixture_generator=("$fixture_source/tools/npu-conv-fixture.py" "$fixture_output" --width "$2" --channels "$3")
 else
-    python3 "$fixture_source/tools/npu-conv-fixture.py" "$fixture_output"
+    fixture_generator=("$fixture_source/tools/npu-conv-fixture.py" "$fixture_output")
+fi
+fixture_report=$(python3 "${fixture_generator[@]}")
+printf '%s\n' "$fixture_report"
+fixture_output=$(printf '%s\n' "$fixture_report" | sed -n 's/^Output: //p')
+if [ -z "$fixture_output" ] || [[ "$fixture_output" == *$'\n'* ]] || [ ! -d "$fixture_output" ]; then
+    echo "The generator did not report one output directory." >&2
+    exit 1
 fi
 cd -- "$fixture_output"
 timeout 120 python3 "$fixture_compiler" import onnx --model conv3x3.onnx \

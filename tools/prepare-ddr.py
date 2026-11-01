@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+from host_evidence import new_directory, unique_directory
 import shutil
 import struct
 import subprocess
@@ -26,9 +27,7 @@ if args.survey and args.variant != "restore":
     sys.exit("--survey applies only to --variant restore.")
 if (args.restore_set is not None) != (args.variant == "restore"):
     sys.exit("--restore-set goes with, and only with, --variant restore.")
-if args.variant and args.output == CACHE / "build/a733-ddr":
-    sys.exit("A variant needs its own --output directory.")
-args.output.mkdir(parents=True, exist_ok=True)
+args.output = new_directory(args.output)
 blob_path = Path(subprocess.check_output(
     ["python3", str(ROOT / "tools/fetch-sources.py"), "board-boot0"], text=True).strip())
 blob = bytearray(blob_path.read_bytes())

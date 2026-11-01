@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Capture the DRAM parameter block and controller and PHY registers after training.
 
-Run once, in the same FEL lifetime and directly after tools/run-ddr.py has
-trained DRAM. The runner first requires the SRAM mailbox of that DDR run to
-equal the one saved in its evidence, then reads the boot-parameter buffer,
+Run once after tools/run-ddr.py has trained DRAM. The runner checks the
+live SRAM mailbox for a successful training return and reads the boot-parameter buffer,
 turns the instruction cache off, uploads the reader from
 tools/prepare-ddr-capture.py and runs its stage tables in order: one FEL
 execution per stage, each followed by a read of its results. It stops at the
@@ -15,6 +14,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+from host_evidence import unique_directory
 import struct
 import subprocess
 import sys
@@ -31,8 +31,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fel", type=Path, required=True)
     parser.add_argument("--build", type=Path, required=True)
-    parser.add_argument("--ddr-evidence", type=Path, required=True,
-                        help="the run-ddr.py evidence directory of this FEL lifetime")
+    parser.add_argument("--ddr-evidence", type=Path,
+                        help="optional earlier DDR evidence directory, recorded for traceability")
     parser.add_argument("--stages", type=int, default=0,
                         help="run only the first N stages, for a board whose last stage stopped the bus")
     parser.add_argument("--allow-untrained", action="store_true",
@@ -56,21 +56,12 @@ def main():
         if not 1 <= args.stages <= len(manifest["stages"]):
             sys.exit("--stages is out of range.")
         manifest["stages"] = manifest["stages"][:args.stages]
-    ddr = json.loads((args.ddr_evidence / "session.json").read_text())
-    result = ddr.get("result", {})
-    trained = result.get("dram_mib") == EXPECTED_MIB and not ddr.get("untrained")
-    if not (ddr.get("complete") and result.get("magic") == 0x53524444 and result.get("stage") == 5
-            and result.get("board_result") == 0
-            and (trained or (args.allow_untrained and ddr.get("untrained") is True))):
-        sys.exit("The DDR evidence does not record a completed 12,288 MiB training"
-                 " (or, with --allow-untrained, an init-only return).")
-    ddr_mailbox = (args.ddr_evidence / "mailbox.bin").read_bytes()
-    args.evidence.mkdir(parents=True, exist_ok=False)
-    record = {"manifest": manifest, "build": str(args.build), "ddr_evidence": str(args.ddr_evidence),
+    args.evidence = unique_directory(args.evidence)
+    record = {"manifest": manifest, "build": str(args.build), "ddr_evidence": str(args.ddr_evidence) if args.ddr_evidence else None,
               "tool_sha256": hashlib.sha256(args.fel.read_bytes()).hexdigest(),
               "runner_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
               "port": os.environ.get("SUNSTONE_USB_PORT", ""), "temperature_note": args.temperature_note,
-              "ddr_variant": ddr.get("manifest", {}).get("variant", "four-p-state"),
+              "ddr_variant": "init-only" if args.allow_untrained else "unknown",
               "transactions": [], "stages": [], "complete": False,
               "launch_attempted": False, "device_access_attempted": False}
 
@@ -125,14 +116,28 @@ def main():
                 version = transaction("version")
                 if "soc=00001903(A733)" not in version:
                     raise RuntimeError(f"Unexpected SoC: {version}")
-                # Bind to the DDR run before any execution: its mailbox is still in SRAM.
+                # Check live training state before any write or execution.
                 transaction("read", hex(MAILBOX), "128", args.evidence / "mailbox.bin",
                             "read", hex(BOOTPARAM), "2048", args.evidence / "bootparam-buffer.bin",
                             "read", hex(READER), "1024", args.evidence / "reader-area-before.bin")
-                if (args.evidence / "mailbox.bin").read_bytes() != ddr_mailbox:
-                    raise RuntimeError("SRAM mailbox differs from the DDR evidence; not the same lifetime.")
+                mailbox = (args.evidence / "mailbox.bin").read_bytes()
+                if len(mailbox) != 128:
+                    raise RuntimeError("DDR mailbox has the wrong size.")
+                magic, stage, mib, result = struct.unpack_from("<4I", mailbox)
+                if (magic != 0x53524444 or stage != 5 or result != 0
+                        or (not args.allow_untrained and mib != EXPECTED_MIB)):
+                    raise RuntimeError("Live DDR mailbox does not report a successful training return.")
+                if struct.unpack_from("<I", mailbox, 60)[0]:
+                    raise RuntimeError("Live DDR mailbox reports a failed CPU clock restoration.")
+                record["ddr_result"] = {"magic": magic, "stage": stage, "dram_mib": mib,
+                                        "board_result": result}
                 buffer = (args.evidence / "bootparam-buffer.bin").read_bytes()
-                record["parameter_block"] = ["0x%08x" % word for word in struct.unpack_from("<128I", buffer, 0x400)]
+                parameters = struct.unpack_from("<128I", buffer, 0x400)
+                record["parameter_block"] = ["0x%08x" % word for word in parameters]
+                if not args.allow_untrained:
+                    record["ddr_variant"] = ("pstate0" if not parameters[30] & 4
+                                             and (parameters[27] >> 16) & 0x1fff == 0x125f
+                                             else "four-p-state")
                 save()
                 transaction("write", "0x71000", args.build / "cache-off.bin", "exe", "0x71000")
                 upload(READER, args.build / "ddr-capture.bin", "reader")

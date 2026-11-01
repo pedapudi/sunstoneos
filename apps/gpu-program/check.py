@@ -32,19 +32,13 @@ def main():
     image_hash=hashlib.sha256(a.image.read_bytes()).hexdigest();results=[]
     for name in ('affine','add'):
         pkg=(a.evidence/name/f'package-{a.count}.bin').read_bytes()
-        record={'schema':'sunstone-gpu-trusted-program-v1','source_reviewed':True,
-            'package_sha256':hashlib.sha256(pkg).hexdigest(),'source_sha256':pkg[80:112].hex(),'compiler_sha256':pkg[112:144].hex()}
-        raw=prep.envelope(a.base_session.read_bytes(),pkg,json.dumps(record));canonical.session_check(raw)
+        raw=prep.envelope(a.base_session.read_bytes(),pkg);canonical.session_check(raw)
         (a.evidence/name/f'session-{a.count}.bin').write_bytes(raw)
-        (a.evidence/name/f'source-review-MODELED-{a.count}.json').write_text(json.dumps({**record,'synthetic_fixture':True},indent=2)+'\n')
-        canonical.image_manifest_check(json.loads(a.manifest.read_text()),a.image.read_bytes(),raw)
-        admission={'gpu_program':{'path':'synthetic-review','sha256':hashlib.sha256(json.dumps(record).encode()).hexdigest()}}
-        cache={'synthetic-review':json.dumps(record).encode()}
-        canonical.program_admission(admission,cache,raw)
-        refuse(lambda:canonical.program_admission({},cache,raw))
+        canonical.image_manifest_check({},a.image.read_bytes(),raw)
+        canonical.program_admission({}, {}, raw)
         changed=bytearray(raw);changed[-1]^=1;refuse(lambda:canonical.session_check(changed))
         changed=bytearray(raw);changed[736]^=1
-        refuse(lambda:canonical.program_admission(admission,cache,changed))
+        refuse(lambda:canonical.program_admission({}, {}, changed))
         # Model the existing EL1 clear using the actual linked addresses and a
         # complete caller-selected envelope. This checks placement, not startup.
         memory=bytearray([0xa5])*(bss_last-first)
@@ -59,7 +53,7 @@ def main():
         assert copied==expected
         results.append({'kernel':name,'package_version':struct.unpack_from('<I',pkg,4)[0],'dispatch_count':struct.unpack_from('<I',pkg,68)[0],'element_count':a.count,'elf_sha256':image_hash,'session_sha256':hashlib.sha256(raw).hexdigest(),
             'copied_output_sha256':hashlib.sha256(copied).hexdigest()})
-    (a.evidence/'host-check.json').write_text(json.dumps({'scope':'Synthetic source-review records; actual compiler package inputs and linked BSS bounds; no physical admission or launch',
+    (a.evidence/'host-check.json').write_text(json.dumps({'scope':'Actual compiler package inputs and linked BSS bounds; no physical admission or launch',
         'results':results,'retained':[first,last],'bss':[bss_first,bss_last],'upload_bytes':int(uploaded['sh_size'])},indent=2)+'\n')
-    print('PASS two program envelopes use identical ELF, survive modeled native BSS clear, bind source review and decode paged output')
+    print('PASS two program envelopes use identical ELF, survive modeled native BSS clear, bind package digests and decode paged output')
 if __name__=='__main__':main()

@@ -5,12 +5,36 @@ from unicorn import UC_HOOK_MEM_READ
 from unicorn.arm64_const import *
 import argparse
 parser=argparse.ArgumentParser(description="Actual Crypto single-core admission and startup; hardware responses remain modeled.")
-for name in ('image','session','output'):parser.add_argument('--'+name,type=Path,required=True)
-args=parser.parse_args();r=Path(__file__).resolve().parents[1];out=args.output;out.mkdir(parents=True,exist_ok=False)
+for name in ('image','output'):parser.add_argument('--'+name,type=Path,required=True)
+parser.add_argument('--session',type=Path)
+parser.add_argument('--profile-only',action='store_true',help='Check changed native profile packaging without replaying startup.')
+args=parser.parse_args()
+if not args.profile_only and args.session is None:parser.error('Startup checks require --session')
+r=Path(__file__).resolve().parents[1];out=args.output;out.mkdir(parents=True,exist_ok=False)
 def mod(n,p):
  s=importlib.util.spec_from_file_location(n,p);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 TCR=mod('a733_tcr',Path(__file__).resolve().parents[1]/'tools/a733_tcr.py').SINGLE_CORE
 shared=mod('shared',r/'checks/storage-read-single-core.py');native=mod('im',r/'checks/storage-read-native.py');prep=mod('prep',r/'apps/crypto/prepare.py')
+
+def profile_cases():
+ # The native ELF selects its profile; an external manifest is optional metadata.
+ image_raw=args.image.read_bytes()
+ assert prep.image_manifest_check({},image_raw)=='crypto-single-core-supervised-v1'
+ assert prep.image_manifest_check({'target':'stale-target','execution_profile':'stale-profile','final_elf':'0'*64},image_raw)=='crypto-single-core-supervised-v1'
+ # Keep the actual immutable native geometry rejection.
+ import io
+ elf=prep.ELFFile(io.BytesIO(image_raw))
+ symbol=next(v for v in elf.get_section_by_name('.symtab').iter_symbols() if v.name=='crypto_single_core_geometry')
+ section=elf.get_section(symbol['st_shndx']);offset=section['sh_offset']+symbol['st_value']-section['sh_addr']
+ bad=bytearray(image_raw);bad[offset]^=1
+ try:prep.image_manifest_check({},bytes(bad))
+ except ValueError:pass
+ else:raise AssertionError('Corrupt native geometry accepted')
+
+if args.profile_only:
+ profile_cases()
+ (out/'result.json').write_text(json.dumps({'physical_access':False,'cases':{'native-profile-without-review-records':True,'corrupt-native-geometry-refused':True},'limits':'ELF profile and immutable geometry checks only; no native startup replay.'},indent=2)+'\n')
+ print('Native profile and geometry checks passed.');raise SystemExit(0)
 providers=mod('crypto_nominal_providers',r/'checks/a733-provider-fixture.py')
 raw=bytearray(args.session.read_bytes());providers.validate_nominal_providers(raw,usb_reference_mode=2)
 image=args.image;e=native.Image(image);e.path=image;e.ops={}
@@ -79,12 +103,6 @@ passed('actual-owner-client-provider-construction-restores-daif')
 for variant in ('tampered-session','tampered-contract','secondary-active','secondary-control','secondary-mode','watchdog-active','publication-failure'):
  q=Machine(variant);q.call('sd_single_core_monitor_init');assert q.parked,variant
  passed('refuses-'+variant)
-manifest=json.loads((image.parent/'crypto-single-core/manifest.json').read_text())
-assert prep.image_manifest_check(manifest,image.read_bytes())=='crypto-single-core-supervised-v1'
-for key,value in [('target','sunstone-a733-crypto'),('execution_profile','crypto-supervised-v1')]:
- changed={**manifest,key:value}
- try:prep.image_manifest_check(changed,image.read_bytes())
- except ValueError:pass
- else:raise AssertionError(key)
-passed('elf-manifest-profile-binding')
+profile_cases()
+passed('native-profile-without-review-records-and-corrupt-geometry-refusal')
 (out/'result.json').write_text(json.dumps({'physical_access':False,'cases':results,'limits':'System registers, counter and GIC modeled. Native CE binding/ownership constructors execute; no CE operation, arithmetic or entropy replay.'},indent=2)+'\n')

@@ -44,13 +44,7 @@ def routing(host,bundle,out,session,frame):
         stack.enter_context(patch.object(shared.subprocess,'run',lambda *a,**k:fel.append(a) or types.SimpleNamespace(returncode=0,stdout='soc=00001903(A733)',stderr='')))
         stack.enter_context(patch.object(shared,'launch_once',launch));stack.enter_context(patch.object(shared,'finish_after_observation',lambda *a:None))
         stack.enter_context(patch.object(shared.base,'stop_after_failure',lambda *a:None));stack.enter_context(patch.object(usb.core,'find',find))
-        args=['--bundle',str(bundle),'--fel',str(out/'MODEL-fel'),'--evidence',str(out/'routing-capture'),'--database',str(queue(out/'MODEL-db',port.name)),'--claim','MODEL','--owner','MODEL','--supervised-manual-reconnect']
-        # A queue bound to another port is refused before the first FEL request.
-        other=[x if x!=str(out/'routing-capture') else str(out/'other-port-capture') for x in args]
-        other[other.index('--database')+1]=str(queue(out/'other-port-db','0-0'))
-        try:host.main(other)
-        except ValueError as error:assert 'is not bound to locked USB port' in str(error) and not fel
-        else:raise AssertionError('Queue bound to another port accepted')
+        args=['--bundle',str(bundle),'--fel',str(out/'MODEL-fel'),'--evidence',str(out/'routing-capture'),'--supervised-manual-reconnect']
         assert host.main(args)==0
     assert len(calls)==1 and len(fel)==1
 

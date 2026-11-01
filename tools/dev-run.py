@@ -205,6 +205,13 @@ def state_check(words):
 
 def rails_note(record):
     if record.get('complete'):
+        rails = record.get('result', {}).get('cpu_rails')
+        if rails is not None:
+            readings = ', '.join(f'{name.upper()} {rails[name + "_uv"]} uV'
+                                 if rails[name + '_uv'] is not None else f'{name.upper()} unread'
+                                 for name in ('dcdc3', 'dcdc5'))
+            return (f'CPU clock close: {readings} (last confirmed PMIC readbacks). '
+                    'The rail helper restores both rails to 800 mV before reuse.')
         return ('A normal return can leave DCDC5 up to 1000 mV and DCDC3 up to 1050 mV. The next CPU-return '
                 'entry guard refuses until the rail helper lowers both to 800 mV.')
     return ('Unknown after a failed run: a reset restores boot PLLs but not PMIC rails. If the run raised '
@@ -377,7 +384,7 @@ class NoHold:
         return getattr(self._base, name)
     @staticmethod
     def hold_ownership():
-        print('Run failed after launch; instance quarantined; lock released.', file=sys.stderr)
+        print('Run failed after launch; lock released; the run record states whether the instance was quarantined.', file=sys.stderr)
 
 
 def run_return(args, host, bundle, live, out, access=None, guard=None):

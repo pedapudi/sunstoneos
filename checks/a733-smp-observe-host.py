@@ -89,11 +89,9 @@ for name in ('tools/check-a733-smp-observe.py','tools/check-a733-smp.py','checks
 for name in ('result.h','result.c','boot.h'):
     path=(a.observer_source.parent/'a733-smp-cached/boot.h') if name=='boot.h' else a.observer_source/name;target=a.evidence/'observer'/name;target.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(path,target)
     inputs[str(path)]={'sha256':host.digest(path),'snapshot':str(target)}
-# Reviewed launcher instructions are reused; only request/contract identities differ.
-assert (root/'platform/a733-smp/launch.S').read_bytes()==(root/'platform/a733-smp-observe/launch.S').read_bytes()
-assert (root/'platform/a733-smp/launch.ld').read_bytes()==(root/'platform/a733-smp-observe/launch.ld').read_bytes()
-new=(root/'platform/a733-smp-observe/launch.c').read_text();new=new[new.index('#include'):]
-assert new.replace('0x415337334f4c4331','0x415337334c4e4331')==(root/'platform/a733-smp/launch.c').read_text()
+# This check compiles the observer's current entry and result encoder. The
+# older SMP entry has an additional SCR security check; its source identity
+# does not authorize the observer's current bytes.
 commands=[]
 def run(command,name):
     command=list(map(str,command));commands.append(command)
@@ -197,5 +195,5 @@ assert exe==1 and record['complete'] and events.index(('exe',))<events.index(('f
 assert record['durable_result']['path']=='observer-02.bin'
 result={'result':'PASS: one composed preload/launch, actual C pending→complete frames, strict session/criteria validation, durable capture, separate recovery, fail-stop exchange',
         'inputs':inputs,'commands':commands,'artifacts':{str(p.relative_to(a.evidence)):host.digest(p) for p in a.evidence.rglob('*') if p.is_file()},
-        'limits':'Host fake plus native compilation and source-equivalent launcher. No USB, board, cache/coherence or watchdog qualification.'}
+        'limits':'Host fake plus native compilation and compiled observer launcher. No USB, board, cache/coherence or watchdog qualification.'}
 (a.evidence/'results.json').write_text(json.dumps(result,indent=2)+'\n');print(result['result'])

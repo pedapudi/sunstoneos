@@ -8,7 +8,6 @@ import importlib.util
 import json
 from pathlib import Path
 import shutil
-import sqlite3
 import struct
 import subprocess
 import sys
@@ -21,12 +20,49 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--focus-refusal', action='store_true')
     parser.add_argument('--focus-freeze', action='store_true')
+    parser.add_argument('--focus-archive', action='store_true',help='Check archival files cannot admit or block native input validation.')
     args = parser.parse_args()
     source = Path(__file__).resolve().parents[1] / 'tools/check-a733-smp.py'
     spec = importlib.util.spec_from_file_location('smp_host',source)
     host = importlib.util.module_from_spec(spec); spec.loader.exec_module(host)
+    if args.focus_archive:
+        schema=json.loads((args.bundle/'prepared.json').read_text())['schema']
+        filename={2:'check-a733-smp.py','a733-smp-observe-bundle-v1':'check-a733-smp-observe.py',
+                  'a733-smp-supervised-bundle-v1':'check-a733-smp-supervised.py',
+                  'a733-device-launch-bundle-v2':'check-a733-device-launch.py'}[schema]
+        source=source.parent/filename
+        spec=importlib.util.spec_from_file_location('native_archive_host',source)
+        host=importlib.util.module_from_spec(spec);spec.loader.exec_module(host)
     prepared = host.validate_bundle(args.bundle)
     cases = []
+    if args.focus_archive:
+        with tempfile.TemporaryDirectory() as scratch:
+            root=Path(scratch);bundle=root/'bundle';shutil.copytree(args.bundle,bundle)
+            native={'image.elf','launch.bin','request.bin','contract.bin','result-zero.bin','report-zero.bin'} | {item['name'] for item in prepared['segments']}
+            metadata=json.loads((bundle/'prepared.json').read_text())
+            manifest=bundle/'image-input-manifest.json';manifest.write_bytes(b'optional historical review metadata')
+            metadata['files'][manifest.name]=hashlib.sha256(manifest.read_bytes()).hexdigest()
+            metadata['base_host_sha256']='0'*64
+            (bundle/'prepared.json').write_text(json.dumps(metadata))
+            archived=set(metadata['files'])-native
+            assert archived,'Bundle has no archival source/log fixture'
+            for name in archived:
+                (bundle/name).write_bytes(b'changed archival source or log; never uploaded')
+            host.validate_bundle(bundle)
+            cases.append({'case':'changed archival files with unchanged historical hashes','result':'accepted'})
+            saved=root/'archival-inputs';saved.mkdir()
+            for name in archived:(bundle/name).rename(saved/name)
+            host.validate_bundle(bundle)
+            cases.append({'case':'archival files absent from executable bundle','result':'accepted'})
+            segment=bundle/prepared['segments'][0]['name'];content=bytearray(segment.read_bytes());content[0]^=1;segment.write_bytes(content)
+            try:host.validate_bundle(bundle)
+            except ValueError:cases.append({'case':'changed runtime segment bytes','result':'refused'})
+            else:raise AssertionError('Runtime bytes accepted after archival removal')
+        result={'physical_access':False,'schema':schema,'cases':cases,'archival_files':sorted(archived),
+                'native_files':sorted(native),'host_tool_sha256':host.digest(source),
+                'limits':'Host file validation only; no device operation or native workload.'}
+        args.output.write_text(json.dumps(result,indent=2)+'\n')
+        print(f'{len(cases)} native/archive separation cases passed.');return
 
     if args.focus_freeze:
         def inspect_seal(path, descriptors, expected):
@@ -102,12 +138,12 @@ def main():
         except (ValueError, OSError, KeyError): cases.append({'case':name,'result':'refused'})
         else: raise AssertionError('Accepted '+name)
 
-    def protocol(name, *, fail=None, corrupt=False, active=False, high=False, queue_lost=False, return_failure=False, mutated=False, clean_refusal=False):
+    def protocol(name, *, fail=None, corrupt=False, active=False, high=False, ready_lost=False, return_failure=False, mutated=False, clean_refusal=False):
         with tempfile.TemporaryDirectory() as scratch:
             evidence = Path(scratch); calls = []; memory = {}; record = {'launch_attempted':False}; executed = []; returned = []
             def save(): (evidence/'record.json').write_text(json.dumps(record))
             def ready():
-                if queue_lost: raise ValueError('Queue claim changed')
+                if ready_lost: raise ValueError('Live precondition changed')
             def transaction(*arguments, pass_fds=()):
                 calls.append(tuple(str(x) for x in arguments))
                 if len(calls) == fail: raise OSError('injected transport failure')
@@ -141,12 +177,12 @@ def main():
             error = None
             try: host.launch_once(transaction,wait_return,args.bundle,prepared,evidence,record,save,ready)
             except (OSError,ValueError) as caught: error = str(caught)
-            expected_error = any((fail,corrupt,active,high,queue_lost,return_failure,mutated))
+            expected_error = any((fail,corrupt,active,high,ready_lost,return_failure,mutated))
             assert bool(error) == bool(expected_error), (name,error)
             if fail: assert len(calls) == fail
             if not expected_error:
                 assert len(executed)==1 and returned and not record['complete'] and record['scheduler_result']=='unobserved'
-            if corrupt or active or high or queue_lost or mutated: assert not executed and not record['launch_attempted']
+            if corrupt or active or high or ready_lost or mutated: assert not executed and not record['launch_attempted']
             if clean_refusal: assert record['clean_refusal'] and record['complete'] is False
             if return_failure: assert executed and record['launch_attempted'] and not record.get('launch_protocol_complete')
             cases.append({'case':name,'result':'refused' if error else 'protocol-complete-scheduler-unobserved','requests':len(calls)})
@@ -169,10 +205,10 @@ def main():
         cases.append({'case':phase+' failure still retains live ownership','result':'held'})
 
     if not args.focus_refusal:
-        count = protocol('complete preloading and one execution')
+        count = protocol('complete preloading and one execution without process records')
         for index in range(1,count+1): protocol(f'transport failure at request {index}',fail=index)
         protocol('corrupt upload',corrupt=True); protocol('watchdog active',active=True)
-        protocol('physical input high',high=True); protocol('queue claim changed before execution',queue_lost=True)
+        protocol('physical input high',high=True); protocol('live precondition changed before execution',ready_lost=True)
         protocol('ROM observation timeout retains execution intent',return_failure=True)
         with tempfile.TemporaryDirectory() as scratch:
             root = Path(scratch); bundle = root/'bundle'; shutil.copytree(args.bundle,bundle)
@@ -186,37 +222,6 @@ def main():
             (bundle/'contract.bin').write_bytes(content); metadata['files']['contract.bin']=host.digest(bundle/'contract.bin')
             (bundle/'prepared.json').write_text(json.dumps(metadata))
             refused('published contract despite recomputed file hash',lambda: host.validate_bundle(bundle))
-            proof=root/'proof'; proof.write_text('synthetic host fixture; never recovery qualification')
-            artifact={'path':str(proof),'sha256':host.digest(proof)}
-            qualification={'schema':'a733-independent-reset-v1','qualified':True,'target':{'port':'fake','sysfs':'/fake','soc':'00001903'},
-                           'watchdog':{'mode':0x41,'configuration':1,'output':2,'source':'rtc32k','clock_hz':32768},
-                           'physical_counter':{'clock_hz':24000000,'continuous_across_rmr':True},'rom_sha256':host.ROM_HASH,
-                           'cases':{name:artifact for name in ['clock-source','masked-cpu-expiry','whole-system-reset','protected-rom-return','interconnect-stall-recovery']}}
-            host.validate_qualification(qualification,'fake','/fake')
-            for label,key,value in [('unqualified watchdog','qualified',False),('counter continuity absent','physical_counter',{}),('missing independent cases','cases',{}),('wrong ROM','rom_sha256','0'*64)]:
-                trial=dict(qualification); trial[key]=value
-                refused(label,lambda:host.validate_qualification(trial,'fake','/fake'))
-            refused('wrong physical port',lambda:host.validate_qualification(qualification,'other','/fake'))
-            software={'schema':'a733-smp-launcher-software-v1','host_protocol':True,'instruction_model':True,'physical_access':False,
-                      'host_tool':{'path':str(source),'sha256':host.digest(source)},'evidence':[artifact]}
-            for key,name in [('prepared','prepared.json'),('image','image.elf'),('launcher','launch.bin')]:
-                path=(args.bundle/name).resolve(); software[key]={'path':str(path),'sha256':host.digest(path)}
-            host.validate_software(software,args.bundle)
-            wrong=dict(software); wrong['launcher']=artifact
-            refused('software evidence for another launcher',lambda:host.validate_software(wrong,args.bundle))
-            paths={}
-            for name,value in [('qualification',qualification),('input',{}),('ddr',{}),('software',software)]:
-                path=root/(name+'.json'); path.write_text(json.dumps(value)); paths[name]=path
-            prerequisites=dict(zip(['independent-watchdog-rom-return','stable-protected-fel','ddr-reservation','smp-launcher-software'],[{'path':str(paths[x]),'sha256':host.digest(paths[x])} for x in ['qualification','input','ddr','software']]))
-            submission={'prerequisites':list(host.PREREQUISITES),'artifacts':[software[key] for key in ['prepared','image','launcher']]}
-            dbpath=root/'queue.db'; db=sqlite3.connect(dbpath)
-            db.executescript('CREATE TABLE settings(key TEXT,value TEXT); CREATE TABLE tests(id TEXT,state TEXT,owner TEXT,submission TEXT,review TEXT);')
-            db.execute('INSERT INTO settings VALUES(?,?)',('halted',''))
-            db.execute('INSERT INTO tests VALUES(?,?,?,?,?)',('test','claimed','coordinator',json.dumps(submission),json.dumps({'prerequisites':prerequisites}))); db.commit()
-            def claim(): host.claimed(dbpath,'test','coordinator',args.bundle,paths['qualification'],paths['input'],paths['ddr'])
-            claim(); cases.append({'case':'exact software and independent prerequisites accepted','result':'host fixture only'})
-            db.execute("UPDATE tests SET owner='other'"); db.commit(); refused('foreign queue ownership',claim)
-            db.execute("UPDATE tests SET owner='coordinator'"); db.execute("UPDATE settings SET value='halted'"); db.commit(); refused('halted queue',claim); db.close()
     protocol('clean refusal is never scheduler success',clean_refusal=True)
     with tempfile.TemporaryDirectory() as scratch:
         copy = Path(scratch)/'bundle'; shutil.copytree(args.bundle,copy)

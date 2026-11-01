@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Capture one supervised camera session under an existing coordinator claim."""
+"""Capture one supervised camera session with direct target and session validation."""
 import argparse
 import hashlib
 import importlib.util
 import json
 from pathlib import Path
-import sqlite3
 import struct
 import sys
 import time
@@ -24,7 +23,6 @@ supervisor = module('camera_capture_supervisor', ROOT / 'tools/check-a733-smp-su
 preparation = module('camera_capture_preparation', ROOT / 'apps/camera/prepare.py')
 decoder = module('camera_capture_decoder', ROOT / 'apps/camera/observe.py')
 require, digest, artifact = supervisor.require, supervisor.digest, supervisor.artifact
-PREREQUISITES = {'supervised-ram-recovery', 'camera-supervised-software'}
 
 
 def bundle_bytes(bundle, prepared, name):
@@ -100,31 +98,32 @@ def source_files():
             ('camera-decoder.py',Path(decoder.__file__))]
 
 
-def reference_bytes(value):
-    return supervisor.reviewed_reference(value,'camera')
 
 
 def software_sources():
     return supervisor.device_software_sources(source_files())
 
 
-def validate_software(value,prepared):
-    supervisor.validate_device_software(value,prepared,'a733-camera-supervised-software-v1',('admission_cases','launcher_cases','host_capture','host_lifecycle'),
-        'camera',reference_bytes)
 
 
-def claimed(database,test_id,owner,bundle,prepared):
-    supervisor.device_claim(database,test_id,owner,bundle,prepared,'camera','camera-supervised-software',PREREQUISITES,
-        reference_bytes,validate_software)
+def claimed(database, test_id, owner, bundle, prepared):
+    """Check the input snapshot immediately before upload."""
+    expected = preparation.board.snapshot_files(prepared)
+    if '_prepared_sha256' in prepared:
+        expected['prepared.json'] = prepared['_prepared_sha256']
+    for name, identity in expected.items():
+        require(Path(name).name == name and digest(bundle / name) == identity,
+                'Prepared input changed before upload: ' + name)
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ('bundle', 'fel', 'evidence', 'database'):
+    for name in ('bundle', 'fel', 'evidence'):
         parser.add_argument('--' + name, type=Path, required=True)
-    parser.add_argument('--claim', required=True)
-    parser.add_argument('--owner', required=True)
-    parser.add_argument('--supervised-manual-reconnect', action='store_true', required=True)
+    parser.add_argument('--claim')
+    parser.add_argument('--owner')
+    parser.add_argument('--supervised-manual-reconnect', action='store_true')
+    parser.add_argument('--database', type=Path)
     args = parser.parse_args(argv)
     bundle = args.bundle.resolve()
     prepared=preparation.validate_bundle(bundle)
@@ -132,7 +131,7 @@ def main(argv=None):
     prepared['_source_hashes']={name:digest(path) for name,path in software_sources().items()}
     data=prepared['_frozen'];session=data['session.bin']
     _,_,identity,layout=preparation.image_data(data['image.elf'])
-    cache={path:data[item['name']] for path,item in prepared['entry_evidence'].items()}
+    cache={path:data[item['name']] for path,item in prepared['entry_evidence'].items() if item['name'] in data}
     admission=json.loads(data['admission.json'])
     def validate_entry(target,port):
         preparation.validate_admission(data['admission.json'],session,layout,identity,prepared['image_sha256'],cache,True)
@@ -151,5 +150,5 @@ def main(argv=None):
 if __name__ == '__main__':
     try:
         sys.exit(main())
-    except (OSError, ValueError, RuntimeError, sqlite3.Error, struct.error) as error:
+    except (OSError, ValueError, RuntimeError, struct.error) as error:
         sys.exit(f'Stopped: {error}')

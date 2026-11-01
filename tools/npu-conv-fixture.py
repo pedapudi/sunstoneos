@@ -8,6 +8,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+from host_evidence import new_directory, unique_directory
 
 import numpy as np
 import onnx
@@ -16,7 +17,7 @@ from onnx import TensorProto, helper, numpy_helper
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("output", type=Path, help="new directory for the fixture")
+    parser.add_argument("output", type=Path, help="fixture directory; existing directories receive a unique child")
     parser.add_argument('--width', type=int, default=8, choices=(8,10,12))
     parser.add_argument('--channels', type=int, default=2, choices=(2,4))
     args = parser.parse_args()
@@ -55,7 +56,7 @@ def main():
     model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 11)])
     model.ir_version = 7
     onnx.checker.check_model(model)
-    args.output.mkdir(parents=True, exist_ok=False)
+    args.output = new_directory(args.output)
     onnx.save(model, str(args.output / "conv3x3.onnx"))
     arrays = dict(input=input_tensor, weights=weights, bias=bias, expected=expected,
                   accumulator=accumulator, input_nhwc=input_tensor.transpose(0, 2, 3, 1))
@@ -78,6 +79,7 @@ def main():
         numpy_version=np.__version__, onnx_version=onnx.__version__, files=files,
     )
     (args.output / "fixture.json").write_text(json.dumps(report, indent=2) + "\n")
+    print(f"Output: {args.output}")
     print(f"Generated 3x3 convolution: {3*w*w} input values, {c*27} weights, {c*n*n} reference outputs")
 
 

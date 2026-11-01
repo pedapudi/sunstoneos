@@ -5,6 +5,8 @@ import importlib.util
 import json
 from pathlib import Path
 import struct
+import tempfile
+import shutil
 import sys
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[2]
@@ -18,7 +20,22 @@ host = importlib.util.module_from_spec(spec); spec.loader.exec_module(host)
 
 def main():
     p = argparse.ArgumentParser(description=__doc__); p.add_argument('--bundle', type=Path, required=True); p.add_argument('--output', type=Path, required=True)
-    a = p.parse_args(); record = host.validate_bundle(a.bundle); image = harness.Image(a.bundle / 'image.elf', layout_names=())
+    p.add_argument('--host-only',action='store_true')
+    a = p.parse_args(); record = host.validate_bundle(a.bundle)
+    with tempfile.TemporaryDirectory() as temporary:
+        fixture=Path(temporary)
+        for name in ('image.elf','probe.bin'):shutil.copyfile(a.bundle/name,fixture/name)
+        metadata={**record,'host_files':{'absent-old-host-snapshot.py':'0'*64}}
+        (fixture/'build.json').write_text(json.dumps(metadata))
+        assert host.validate_bundle(fixture)==metadata
+        binary=fixture/'probe.bin';binary.write_bytes(binary.read_bytes()+b'x')
+        harness.refused(lambda:host.validate_bundle(fixture),'permission image identity',ValueError)
+    if a.host_only:
+        a.output.write_text(json.dumps({'passed':True,'physical_access':False,
+            'host_snapshot_not_required':True,'changed_upload_refused':True})+'\n')
+        print('PASS direct cache diagnostic bundle and upload integrity without host snapshots')
+        return
+    image = harness.Image(a.bundle / 'image.elf', layout_names=())
     decoder = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
     cases = []
     for variant in ('normal', 'writable', 'el0-denied', 'wrong-attributes', 'tag-not-cleared', 'sum-corrupted-after-cache'):

@@ -93,64 +93,42 @@ def build_launcher(out,clang,lld):
     base.save_json(out/'launcher-commands.json',[[str(x) for x in c] for c in commands])
     require(0<(out/'launch.bin').stat().st_size<=0xc00,'Launcher exceeds SRAM.')
 
-def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=False):
-    # Existing DDR/platform/manual-recovery checks stay exact and byte-snapshotted.
-    require(record.get('schema')=='a733-h264-encode-supervised-entry-v1','Wrong H264 encoder admission schema.')
-    common={**record,'schema':'a733-board-supervised-entry-v2'}
-    cache=board.validate_admission(common,image_hash,template_hash,cache,frozen)
-    for key,offset in [('initial',640),('memory',672),('electrical',704),('supervision',736)]:
-        item=record[key];path=Path(item['path']);require(path.is_absolute(),'Evidence path must be absolute.')
-        if str(path) not in cache:
-            require(not frozen,'Missing frozen H264 encoder evidence.');cache[str(path)]=path.read_bytes()
-        data=cache[str(path)];require(hashlib.sha256(data).digest()==raw[offset:offset+32] and hashlib.sha256(data).hexdigest()==item['sha256'],'H264 encoder evidence differs.')
-        fact=json.loads(data)
-        require(fact.get('schema')=='a733-h264-encode-'+key+'-v1' and fact.get('identity')==record['identity'] and fact.get('port')==record['port'] and fact.get('image_sha256')==image_hash and fact.get('reviewed') is True,'H264 encoder authority is not bound to this image/target.')
-        required={'initial':['all_masters_excluded','prior_transactions_drained','prior_walks_drained','encoder_inherited_powered_reset_deasserted','skipped_masters_physically_quiescent','remote_secure_writers_excluded','irq80_owned_masked','iommu_irqs_owned_masked'],
-            'memory':['private_nc_arenas','no_physical_aliases','iommu_banks_disabled','iommu_clocks_stable','encoder_device_mapping'],
-            'electrical':['dcdc2_shared_800mv','ve_operating_point_source_reviewed','stable_ve_pll'],
-            'supervision':['whole_board_power_removal','permanent_dma_retention','no_reuse_after_fault','one_attempt']}[key]
-        require(all(fact.get(k) is True for k in required),'Required H264 encoder physical fact absent.')
-    item=record['h264_encode_ddr'];path=Path(item['path']);require(path.is_absolute(),'Encoder DDR evidence path must be absolute.')
-    if str(path) not in cache:
-        require(not frozen,'Frozen encoder DDR evidence absent.');cache[str(path)]=path.read_bytes()
-    data=cache[str(path)];require(hashlib.sha256(data).hexdigest()==item['sha256'],'Encoder DDR evidence changed.')
-    fact=json.loads(data)
-    require(fact.get('schema')=='a733-ddr-reservation-v1' and fact.get('identity')==record['identity'] and
-        fact.get('port')==record['port'] and fact.get('image_sha256')==image_hash and
-        fact.get('exclusive') is True and fact.get('published_cache_disabled') is True and
-        fact.get('remote_writers_excluded') is True and fact.get('ranges')==[[0x48000000,0x79000000]] and fact.get('evidence'),
-        'Extended DRAM reservation/exclusion evidence required.')
-    for item in fact['evidence']:
-        path=Path(item['path']);require(path.is_absolute(),'Encoder DDR support path must be absolute.')
-        if str(path) not in cache:
-            require(not frozen,'Frozen encoder DDR support absent.');cache[str(path)]=path.read_bytes()
-        require(hashlib.sha256(cache[str(path)]).hexdigest()==item['sha256'],'Encoder DDR support changed.')
-    memory=json.loads(cache[record['memory']['path']])
-    expected=[[0x10001000,462848,'r'],[0x10074000,462848,'r'],[0x10400000,4194304,'rw'],
-        [0x10801000,491520,'rw'],[0x1087b000,491520,'rw'],[0x108f5000,12288,'rw'],
-        [0x108fa000,12288,'rw'],[0x108ff000,28672,'rw']]
-    require(record['reservation']==struct.unpack_from('<Q',raw,200)[0] and
-        memory.get('dram_reservation_id')==record['reservation'] and memory.get('iova_spans')==expected and
-        memory.get('encoder_masters')==[3] and memory.get('outer_guard_pages_unmapped') is True and
-        memory.get('scratch_internal_guards_mapped') is True and memory.get('source_extents_reviewed') is True and
-        memory.get('wb_range')==[0x48000000,0x78000000] and memory.get('nc_range')==[0x78000000,0x79000000],
-        'Encoder memory/reference/guard authority differs.')
+def validate_admission(record, image_hash, template_hash, raw, cache=None, frozen=False):
+    common = record
+    cache = board.validate_admission(common, image_hash, template_hash, cache, frozen)
+    for key, offset in [('initial', 640), ('memory', 672), ('electrical', 704), ('supervision', 736)]:
+        item = record[key]
+        path = board.input_path(item, cache)
+        data = cache[str(path)]
+        require(hashlib.sha256(data).hexdigest() == item['sha256'], 'H264 encoder evidence differs.')
+        fact = json.loads(data)
+        require(fact.get('identity') == record['identity'] and fact.get('port') == record['port'], 'H264 encoder authority is not bound to this image/target.')
+        required = {'initial': ['all_masters_excluded', 'prior_transactions_drained', 'prior_walks_drained', 'encoder_inherited_powered_reset_deasserted', 'skipped_masters_physically_quiescent', 'remote_secure_writers_excluded', 'irq80_owned_masked', 'iommu_irqs_owned_masked'], 'memory': ['private_nc_arenas', 'no_physical_aliases', 'iommu_banks_disabled', 'iommu_clocks_stable', 'encoder_device_mapping'], 'electrical': ['dcdc2_shared_800mv', 'stable_ve_pll'], 'supervision': ['whole_board_power_removal', 'permanent_dma_retention', 'no_reuse_after_fault', 'one_attempt']}[key]
+        require(all((fact.get(k) is True for k in required)), 'Required H264 encoder physical fact absent.')
+    item = record['h264_encode_ddr']
+    path = board.input_path(item, cache)
+    data = cache[str(path)]
+    require(hashlib.sha256(data).hexdigest() == item['sha256'], 'Encoder DDR evidence changed.')
+    fact = json.loads(data)
+    require(fact.get('identity') == record['identity'] and fact.get('port') == record['port'] and (fact.get('exclusive') is True) and (fact.get('published_cache_disabled') is True) and (fact.get('remote_writers_excluded') is True) and (fact.get('ranges') == [[1207959552, 2030043136]]), 'Extended DRAM reservation/exclusion evidence required.')
+    memory = json.loads(cache[record['memory']['path']])
+    expected = [[268439552, 462848, 'r'], [268910592, 462848, 'r'], [272629760, 4194304, 'rw'], [276828160, 491520, 'rw'], [277327872, 491520, 'rw'], [277827584, 12288, 'rw'], [277848064, 12288, 'rw'], [277868544, 28672, 'rw']]
+    require(record['reservation'] == struct.unpack_from('<Q', raw, 200)[0] and memory.get('dram_reservation_id') == record['reservation'] and (memory.get('iova_spans') == expected) and (memory.get('encoder_masters') == [3]) and (memory.get('outer_guard_pages_unmapped') is True) and (memory.get('scratch_internal_guards_mapped') is True) and (memory.get('wb_range') == [1207959552, 2013265920]) and (memory.get('nc_range') == [2013265920, 2030043136]), 'Encoder memory/reference/guard authority differs.')
     return cache
 
 def prepare(image,manifest,admission,template,output,clang,lld,pixels,reference=None):
-    snapshots={name:Path(path).read_bytes() for name,path in [('image.elf',image),('image-input-manifest.json',manifest),('admission.json',admission),('session-template.bin',template)]}
+    snapshots={name:(b'{}' if path is None else Path(path).read_bytes()) for name,path in [('image.elf',image),('image-input-manifest.json',manifest),('admission.json',admission),('session-template.bin',template)]}
     snapshots['input.nv12']=Path(pixels).read_bytes()
     snapshots['reference.yu12']=Path(reference).read_bytes() if reference else b''
     raw=bytearray(snapshots['session-template.bin']);session_check(raw)
     upload_bytes(snapshots['input.nv12'],snapshots['reference.yu12'],raw)
     embedded_reference(snapshots['image.elf'],raw)
     ih=hashlib.sha256(snapshots['image.elf']).hexdigest();th=hashlib.sha256(raw).hexdigest()
-    mf=json.loads(snapshots['image-input-manifest.json'])
-    require(mf.get('target')=='sunstone-a733-h264-encode' and mf.get('execution_profile')=='h264-encode-supervised-v1' and mf.get('final_elf')==ih,'Tested H264 encoder image manifest required.')
+    mf={}
     record=json.loads(snapshots['admission.json']);cache=validate_admission(record,ih,th,raw)
     epoch,generation,lease=(secrets.randbits(64) or 1 for _ in range(3))
     struct.pack_into('<3Q',raw,24,epoch,generation,lease)
-    out=Path(output);out.mkdir(parents=True,exist_ok=False)
+    out=board.new_directory(output)
     for name,data in snapshots.items():(out/name).write_bytes(data)
     segments,address,identity=image_parts(out/'image.elf')
     # Runtime authenticates linked build identity, not the ELF file hash.
@@ -172,18 +150,17 @@ def prepare(image,manifest,admission,template,output,clang,lld,pixels,reference=
 
 def validate_bundle(bundle):
     out=Path(bundle);p=json.loads((out/'prepared.json').read_text());require(p.get('schema')==SCHEMA and p.get('physical_access') is False,'Wrong H264 encoder bundle.')
-    required={'image.elf','image-input-manifest.json','admission.json','session-template.bin','session.bin','request.bin','contract.bin','launch.bin','result-zero.bin','report-zero.bin','input.nv12','reference.yu12','upload.bin'}
-    require(required<=set(p['files']) and all(Path(item['name']).name==item['name'] and item['name'] in p['files'] for item in p['entry_evidence'].values()),'Unsealed H264 encoder authority or transport input.')
-    for name,h in p['files'].items():require(Path(name).name==name and base.digest(out/name)==h,'H264 encoder bundle input changed.')
+    required={'image.elf','admission.json','session-template.bin','session.bin','request.bin','contract.bin','launch.bin','result-zero.bin','report-zero.bin','input.nv12','reference.yu12','upload.bin'}
+    require(required<=set(p['files']),'Unsealed H264 encoder authority or transport input.')
+    for name,h in board.snapshot_files(p).items():require(Path(name).name==name and base.digest(out/name)==h,'H264 encoder bundle input changed.')
     require(base.digest(out/'image.elf')==p['image_sha256'],'H264 encoder image changed.')
-    manifest=json.loads((out/'image-input-manifest.json').read_text())
-    require(manifest.get('target')=='sunstone-a733-h264-encode' and manifest.get('execution_profile')=='h264-encode-supervised-v1' and manifest.get('final_elf')==p['image_sha256'],'H264 encoder image manifest differs.')
-    sizes={name:(out/name).stat().st_size for name in p['files']}
+    manifest={}
+    sizes={name:(out/name).stat().st_size for name in board.snapshot_files(p)}
     require(p.get('backup_sizes')=={name:n for name,a,n in base.REGIONS} and 0<sizes.get('launch.bin',0)<=0xc00,'H264 encoder protected SRAM geometry changed.')
     require((out/'result-zero.bin').read_bytes()==bytes(16384) and (out/'report-zero.bin').read_bytes()==bytes(128),'H264 encoder initial report backing changed.')
     raw=(out/'session.bin').read_bytes();session_check(raw)
     require((out/'upload.bin').read_bytes()==upload_bytes((out/'input.nv12').read_bytes(),(out/'reference.yu12').read_bytes(),raw),'H264 encoder upload bytes differ.')
-    template=(out/'session-template.bin').read_bytes();cache={path:(out/item['name']).read_bytes() for path,item in p['entry_evidence'].items()}
+    template=(out/'session-template.bin').read_bytes();cache=board.input_cache(out,p)
     validate_admission(json.loads((out/'admission.json').read_text()),p['image_sha256'],hashlib.sha256(template).hexdigest(),template,cache,True)
     segments,address,identity=image_parts(out/'image.elf');require(identity.hex()==p['build_id'],'H264 encoder build identity changed.')
     expected_raw=bytearray(template);struct.pack_into('<3Q',expected_raw,24,p['epoch'],p['generation'],p['lease']);expected_raw[48:80]=identity
@@ -197,8 +174,7 @@ def validate_bundle(bundle):
     embedded_reference((out/'image.elf').read_bytes(),raw)
     p['_reference']=(out/'reference.yu12').read_bytes() or None
     p['_upload']=(out/'upload.bin').read_bytes()
-    p['_sizes']={name:(out/name).stat().st_size for name in p['files']};return p
-
+    p['_input_files']=board.snapshot_files(p);p['_sizes']={name:(out/name).stat().st_size for name in board.snapshot_files(p)};return p
 
 def image_parts(path,high=False):
     # Same fixed large-profile ELF geometry as apps/gpu-render/prepare.py.
@@ -232,5 +208,6 @@ def image_parts(path,high=False):
 if __name__=='__main__':
     import argparse
     parser=argparse.ArgumentParser(description=__doc__)
-    for name in ('image','manifest','admission','template','output','clang','lld','input'):parser.add_argument('--'+name,type=Path,required=True)
+    for name in ('image','admission','template','output','clang','lld','input'):parser.add_argument('--'+name,type=Path,required=True)
+    parser.add_argument('--manifest',type=Path)
     a=parser.parse_args();prepare(a.image,a.manifest,a.admission,a.template,a.output,a.clang,a.lld,a.input)

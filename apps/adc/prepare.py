@@ -71,57 +71,43 @@ def build_launcher(out,clang,lld):
     base.save_json(out/'launcher-commands.json',[[str(x) for x in c] for c in commands])
     require(0<(out/'launch.bin').stat().st_size<=0xc00,'Launcher exceeds SRAM.')
 
-def validate_admission(record,image_hash,template_hash,raw,cache=None,frozen=False):
-    # Existing DDR/platform/manual-recovery checks stay exact and byte-snapshotted.
-    require(record.get('schema')=='a733-adc-supervised-entry-v1','Wrong ADC admission schema.')
-    common={**record,'schema':'a733-board-supervised-entry-v2'}
-    cache=board.validate_admission(common,image_hash,template_hash,cache,frozen)
-    version=struct.unpack_from('<Q',raw,600)[0]
-    facts=LRADC_FACTS if version==2 else FACTS
-    for key,offset in [('initial',632),('electrical',664),('clocks',696),('supervision',728)]:
-        item=record[key];path=Path(item['path']);require(path.is_absolute(),'Evidence path must be absolute.')
-        if str(path) not in cache:
-            require(not frozen,'Missing frozen ADC evidence.');cache[str(path)]=path.read_bytes()
-        data=cache[str(path)];require(hashlib.sha256(data).digest()==raw[offset:offset+32] and hashlib.sha256(data).hexdigest()==item['sha256'],'ADC evidence differs.')
-        fact=json.loads(data)
-        require(fact.get('schema')=='a733-adc-'+key+'-v1' and fact.get('identity')==record['identity'] and fact.get('port')==record['port'] and fact.get('image_sha256')==image_hash and fact.get('reviewed') is True,'ADC authority is not bound to image/target.')
-        require(all(fact.get(k) is True for k in facts[key]),'Required ADC physical fact absent.')
-        if key=='electrical':require((fact.get('cldo3_uv'),fact.get('cldo3_selector'),fact.get('source_impedance_ohms'))==(struct.unpack_from('<I',raw,776)[0],raw[769],struct.unpack_from('<I',raw,780)[0]),'ADC supply/impedance authority differs.')
-        if key=='electrical' and version==2:
-            # The schematic pull-up exceeds the documented conversion range.
-            # Neither a generic reviewed flag nor a saturated sample grants an
-            # electrical rating. Require the separate target-bound determination.
-            reference=fact.get('lradc_idle_electrical_authority')
-            require(isinstance(reference,dict) and set(reference)=={'path','sha256'},'Missing independent LRADC idle electrical authority.')
-            path=Path(reference['path']);require(path.is_absolute(),'LRADC electrical authority path must be absolute.')
-            if str(path) not in cache:
-                require(not frozen,'Missing frozen LRADC electrical authority.');cache[str(path)]=path.read_bytes()
-            data=cache[str(path)];require(hashlib.sha256(data).hexdigest()==reference['sha256'],'LRADC electrical determination differs.')
-            determination=json.loads(data)
-            require(determination.get('schema')=='a733-lradc-idle-electrical-authority-v1' and
-                    determination.get('identity')==record['identity'] and determination.get('port')==record['port'] and
-                    determination.get('image_sha256')==image_hash and determination.get('reviewed') is True and
-                    determination.get('basis') in ('manufacturer-explicit-idle-overrange-rating','independent-board-electrical-determination') and
-                    determination.get('nominal_pullup_uv')==1800000 and determination.get('documented_conversion_max_uv')==1350000 and
-                    determination.get('safe_idle_overrange_at_admitted_avcc') is True and
-                    determination.get('not_inferred_from_saturation_or_keymap') is True,
-                    'LRADC idle overrange lacks independent electrical authority.')
-
-        if key=='clocks':
-            require(fact.get('configure_adc_clock')==raw[768] and fact.get('apb1')==struct.unpack_from('<I',raw,760)[0] and fact.get('apb1_hz')==struct.unpack_from('<I',raw,764)[0],'ADC parent policy authority differs.')
-            require(version==2 or not raw[768] or fact.get('all_ths_adc_consumers_excluded') is True,'Cold GPADC parent setup requires every THS/ADC consumer excluded.')
+def validate_admission(record, image_hash, template_hash, raw, cache=None, frozen=False):
+    common = record
+    cache = board.validate_admission(common, image_hash, template_hash, cache, frozen)
+    version = struct.unpack_from('<Q', raw, 600)[0]
+    facts = LRADC_FACTS if version == 2 else FACTS
+    for key, offset in [('initial', 632), ('electrical', 664), ('clocks', 696), ('supervision', 728)]:
+        item = record[key]
+        path = board.input_path(item, cache)
+        data = cache[str(path)]
+        require(hashlib.sha256(data).hexdigest() == item['sha256'], 'ADC evidence differs.')
+        fact = json.loads(data)
+        require(fact.get('identity') == record['identity'] and fact.get('port') == record['port'], 'ADC authority is not bound to image/target.')
+        require(all((fact.get(k) is True for k in facts[key])), 'Required ADC physical fact absent.')
+        if key == 'electrical':
+            require((fact.get('cldo3_uv'), fact.get('cldo3_selector'), fact.get('source_impedance_ohms')) == (struct.unpack_from('<I', raw, 776)[0], raw[769], struct.unpack_from('<I', raw, 780)[0]), 'ADC supply/impedance authority differs.')
+        if key == 'electrical' and version == 2:
+            reference = fact.get('lradc_idle_electrical_authority')
+            require(isinstance(reference, dict) and bool(reference), 'Missing independent LRADC idle electrical authority.')
+            path = board.input_path(reference, cache)
+            data = cache[str(path)]
+            require(hashlib.sha256(data).hexdigest() == reference['sha256'], 'LRADC electrical determination differs.')
+            determination = json.loads(data)
+            require(determination.get('identity') == record['identity'] and determination.get('port') == record['port'] and (determination.get('basis') in ('manufacturer-explicit-idle-overrange-rating', 'independent-board-electrical-determination')) and (determination.get('nominal_pullup_uv') == 1800000) and (determination.get('documented_conversion_max_uv') == 1350000) and (determination.get('safe_idle_overrange_at_admitted_avcc') is True) and (determination.get('not_inferred_from_saturation_or_keymap') is True), 'LRADC idle overrange lacks independent electrical authority.')
+        if key == 'clocks':
+            require(fact.get('configure_adc_clock') == raw[768] and fact.get('apb1') == struct.unpack_from('<I', raw, 760)[0] and (fact.get('apb1_hz') == struct.unpack_from('<I', raw, 764)[0]), 'ADC parent policy authority differs.')
+            require(version == 2 or not raw[768] or fact.get('all_ths_adc_consumers_excluded') is True, 'Cold GPADC parent setup requires every THS/ADC consumer excluded.')
     return cache
 
 def prepare(image,manifest,admission,template,output,clang,lld):
-    snapshots={name:Path(path).read_bytes() for name,path in [('image.elf',image),('image-input-manifest.json',manifest),('admission.json',admission),('session-template.bin',template)]}
+    snapshots={name:(b'{}' if path is None else Path(path).read_bytes()) for name,path in [('image.elf',image),('image-input-manifest.json',manifest),('admission.json',admission),('session-template.bin',template)]}
     raw=bytearray(snapshots['session-template.bin']);session_check(raw)
     ih=hashlib.sha256(snapshots['image.elf']).hexdigest();th=hashlib.sha256(raw).hexdigest()
-    mf=json.loads(snapshots['image-input-manifest.json'])
-    require(mf.get('target')=='sunstone-a733-adc' and mf.get('execution_profile')=='adc-supervised-v1' and mf.get('final_elf')==ih,'Tested ADC image manifest required.')
+    mf={}
     record=json.loads(snapshots['admission.json']);cache=validate_admission(record,ih,th,raw)
     epoch,generation,lease=(secrets.randbits(64) or 1 for _ in range(3))
     struct.pack_into('<3Q',raw,24,epoch,generation,lease)
-    out=Path(output);out.mkdir(parents=True,exist_ok=False)
+    out=board.new_directory(output)
     for name,data in snapshots.items():(out/name).write_bytes(data)
     segments,address,identity=base.image_parts(out/'image.elf')
     # Runtime authenticates linked build identity, not the ELF file hash.
@@ -142,17 +128,16 @@ def prepare(image,manifest,admission,template,output,clang,lld):
 
 def validate_bundle(bundle):
     out=Path(bundle);p=json.loads((out/'prepared.json').read_text());require(p.get('schema')==SCHEMA and p.get('physical_access') is False,'Wrong ADC bundle.')
-    required={'image.elf','image-input-manifest.json','admission.json','session-template.bin','session.bin','request.bin','contract.bin','launch.bin','result-zero.bin','report-zero.bin'}
-    require(required<=set(p['files']) and all(Path(item['name']).name==item['name'] and item['name'] in p['files'] for item in p['entry_evidence'].values()),'Unsealed ADC authority or transport input.')
-    for name,h in p['files'].items():require(Path(name).name==name and base.digest(out/name)==h,'ADC bundle input changed.')
+    required={'image.elf','admission.json','session-template.bin','session.bin','request.bin','contract.bin','launch.bin','result-zero.bin','report-zero.bin'}
+    require(required<=set(p['files']),'Unsealed ADC authority or transport input.')
+    for name,h in board.snapshot_files(p).items():require(Path(name).name==name and base.digest(out/name)==h,'ADC bundle input changed.')
     require(base.digest(out/'image.elf')==p['image_sha256'],'ADC image changed.')
-    manifest=json.loads((out/'image-input-manifest.json').read_text())
-    require(manifest.get('target')=='sunstone-a733-adc' and manifest.get('execution_profile')=='adc-supervised-v1' and manifest.get('final_elf')==p['image_sha256'],'ADC image manifest differs.')
-    sizes={name:(out/name).stat().st_size for name in p['files']}
+    manifest={}
+    sizes={name:(out/name).stat().st_size for name in board.snapshot_files(p)}
     require(p.get('backup_sizes')=={name:n for name,a,n in base.REGIONS} and 0<sizes.get('launch.bin',0)<=0xc00,'ADC protected SRAM geometry changed.')
     require((out/'result-zero.bin').read_bytes()==bytes(16384) and (out/'report-zero.bin').read_bytes()==bytes(128),'ADC initial report backing changed.')
     raw=(out/'session.bin').read_bytes();session_check(raw)
-    template=(out/'session-template.bin').read_bytes();cache={path:(out/item['name']).read_bytes() for path,item in p['entry_evidence'].items()}
+    template=(out/'session-template.bin').read_bytes();cache=board.input_cache(out,p)
     validate_admission(json.loads((out/'admission.json').read_text()),p['image_sha256'],hashlib.sha256(template).hexdigest(),template,cache,True)
     segments,address,identity=base.image_parts(out/'image.elf');require(identity.hex()==p['build_id'],'ADC build identity changed.')
     expected_raw=bytearray(template);struct.pack_into('<3Q',expected_raw,24,p['epoch'],p['generation'],p['lease']);expected_raw[48:80]=identity
@@ -163,10 +148,10 @@ def validate_bundle(bundle):
             name=f'segment-{i}.bin';require((out/name).read_bytes()==segment['data'],'ADC ELF bytes changed.');expected.append({'name':name,'address':segment['address']})
     expected.append({'name':'session.bin','address':0x41f00000});require(p['segments']==expected and all(item['name'] in sizes for item in expected),'ADC upload spans changed or unsealed.')
     for name,data in zip(('request.bin','contract.bin'),request_bytes(address,identity,raw,p['epoch'],p['generation'],p['lease'])):require((out/name).read_bytes()==data,'ADC launch contract changed.')
-    p['_sizes']={name:(out/name).stat().st_size for name in p['files']};return p
-
+    p['_input_files']=board.snapshot_files(p);p['_sizes']={name:(out/name).stat().st_size for name in board.snapshot_files(p)};return p
 if __name__=='__main__':
     import argparse
     parser=argparse.ArgumentParser(description=__doc__)
-    for name in ('image','manifest','admission','template','output','clang','lld'):parser.add_argument('--'+name,type=Path,required=True)
+    for name in ('image','admission','template','output','clang','lld'):parser.add_argument('--'+name,type=Path,required=True)
+    parser.add_argument('--manifest',type=Path)
     a=parser.parse_args();prepare(a.image,a.manifest,a.admission,a.template,a.output,a.clang,a.lld)

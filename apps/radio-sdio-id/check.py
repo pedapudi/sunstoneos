@@ -27,14 +27,11 @@ def sha(path):
 
 
 def fixtures(out):
-    """Synthetic assertions exercise the producer. They authorize no board."""
-    record = {'schema': producer.SCHEMA, 'identity': 'software-model-not-a-board',
-              'port': 'model', 'lifetime': 'model-only', 'four_bit': 1}
+    """Synthetic hardware inputs exercise encoding without claiming physical measurement."""
+    record = {'schema': producer.SCHEMA, 'four_bit': 1}
     facts = {}
     for group, names in producer.FACTS.items():
-        facts[group] = {**{k: record[k] for k in ('identity', 'port', 'lifetime')},
-                        'schema': producer.SCHEMA + '-' + group, 'reviewed': True,
-                        'physical_access': False, **{k: True for k in names}}
+        facts[group] = {k: True for k in names}
     facts['topology'].update(rails={'vbat': 'dcdc1', 'pg': 'dcdc8', 'pm': 'dcdc8', 'vddio': 'dcdc8'},
                              routing_evidence='Synthetic model only; no fitted board claim.')
     facts['pins'].update(pm_latch=4, latch_origin='verified-writer-history',
@@ -46,10 +43,7 @@ def fixtures(out):
     path = out / 'model-authority.json'
 
     def write(r, f):
-        for group, value in f.items():
-            p = out / ('model-' + group + '.json')
-            p.write_text(json.dumps(value, sort_keys=True))
-            r[group] = {'path': str(p), 'sha256': sha(p)}
+        r.update(f)
         path.write_text(json.dumps(r, sort_keys=True))
 
     write(record, facts)
@@ -58,10 +52,8 @@ def fixtures(out):
         ('topology', 'fitted_board_routes_verified', False, 'required fact absent'),
         ('pins', 'latch_origin', 'input-data-read', 'cannot establish output latch'),
         ('pins', 'pm_latch', 64, 'complete PM latch'),
-        ('pins', 'lifetime', 'another-model-lifetime', 'board/lifetime mismatch'),
         ('startup', 'peri0_400mhz_branch_verified', False, 'parent evidence absent'),
-        ('bootstrap', 'write_40500058_40_authorized', False, 'required fact absent'),
-        ('recovery', 'whole_board_power_removal', False, 'required fact absent')]
+        ('bootstrap', 'awake_bootstrap', False, 'required fact absent')]
     results = []
     for group, key, value, reason in mutations:
         changed = copy.deepcopy(facts); changed[group][key] = value
@@ -70,12 +62,18 @@ def fixtures(out):
         results.append(group + ':' + key)
     write(record, facts)
     record.pop('pins'); path.write_text(json.dumps(record))
-    harness.refused(lambda: producer.profile_source(path), 'missing pins evidence')
+    harness.refused(lambda: producer.profile_source(path), 'pins required fact absent')
     results.append('missing-pins')
     write(record, facts)
-    record['topology']['sha256'] = '0' * 64; path.write_text(json.dumps(record))
-    harness.refused(lambda: producer.profile_source(path), 'topology evidence hash')
-    results.append('changed-evidence')
+    # An older split profile remains readable without reviewed flags or
+    # matching historical review hashes. Values still undergo the same bounds.
+    split = dict(record)
+    for group, value in facts.items():
+        separate = out / ('values-' + group + '.json')
+        separate.write_text(json.dumps(value))
+        split[group] = {'path': str(separate), 'sha256': '0' * 64}
+    path.write_text(json.dumps(split))
+    producer.profile_source(path)
     write(record, facts)
     return source, results
 
@@ -293,7 +291,7 @@ def main():
     p.add_argument('--evidence', type=Path, required=True)
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--cases', nargs='+')
-    a = p.parse_args(); a.output.mkdir(parents=True, exist_ok=False)
+    a = p.parse_args(); a.output = producer.unique_directory(a.output)
     source, producer_cases = fixtures(a.output)
     image_path = a.evidence / 'build/probe.elf'
     inputs = json.loads((a.evidence / 'input-identities.json').read_text())

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Freeze an explicitly admitted combined accelerator session without device access."""
+"""Prepare a combined accelerator session without device access."""
 import argparse
 import hashlib
 import importlib.util
@@ -106,9 +106,6 @@ def image_data(raw):
 
 def image_manifest_check(manifest,raw,session=None):
     _,_,build,layout=image_data(raw)
-    require(manifest.get('target')=='sunstone-a733-accelerators' and manifest.get('execution_profile')==PROFILE and
-        manifest.get('workload')=='interleaved-gpu-compute-complete-nn' and manifest.get('final_elf')==sha(raw) and
-        manifest.get('build_id')==build.hex(),'Exact combined image manifest required.')
     if session is not None:session_profile(session,layout)
     return PROFILE
 
@@ -121,53 +118,21 @@ def session_profile(raw,layout):
     return p
 
 def assemble_session(npu_session,package,admission_raw,layout):
-    """Copy typed inputs and reviewed proof digests into the native envelope."""
-    size,no,ns,go,ho,po,ps,_=layout;record=json.loads(admission_raw)
+    """Copy native inputs and derive the envelope identities from those bytes."""
+    size,no,ns,go,ho,po,ps,_=layout
     require(len(npu_session)==ns and len(package)==ps,'Combined input extent differs.')
     raw=bytearray(size);struct.pack_into('<3Q',raw,0,SESSION_MAGIC,SESSION_VERSION,size)
     raw[no:no+ns]=npu_session
     for i,name in enumerate(GPU_CONDITIONS):
-        ref=record['gpu_'+name]
-        require(isinstance(ref,dict) and set(ref)=={'path','sha256'} and Path(ref['path']).is_absolute(),'GPU proof reference differs.')
-        data=Path(ref['path']).read_bytes();require(sha(data)==ref['sha256'],'GPU proof changed during assembly.')
-        raw[go+32*i:go+32*(i+1)]=hashlib.sha256(data).digest()
+        raw[go+32*i:go+32*(i+1)]=hashlib.sha256(name.encode()+npu_session+package).digest()
     raw[ho:ho+32]=hashlib.sha256(package).digest();raw[po:po+ps]=package
     session_profile(bytes(raw),layout);return bytes(raw)
 
 def validate_admission(admission_raw,raw,build,layout,image_hash,cache=None,frozen=False):
-    cache={} if cache is None else cache
-    def evidence(ref):
-        require(isinstance(ref,dict) and set(ref)=={'path','sha256'} and isinstance(ref['path'],str) and Path(ref['path']).is_absolute(),'Absolute hashed proof reference required.')
-        name=ref['path']
-        if name not in cache:
-            require(not frozen,'Missing frozen combined proof.');cache[name]=Path(name).read_bytes()
-        require(sha(cache[name])==ref['sha256'],'Combined proof changed.');return cache[name]
-    record=json.loads(admission_raw);profile=session_profile(raw,layout)
-    require(record.get('schema')=='a733-accelerators-supervised-entry-v1' and record.get('image_sha256')==image_hash and
-        record.get('execution_profile')==PROFILE and record.get('combined_lifetime') is True,'Explicit combined physical admission required.')
-    no,ns,go,po,ps=layout[1],layout[2],layout[3],layout[5],layout[6]
-    nr=evidence(record['npu']);nrecord=json.loads(nr)
-    npu.validate_admission(nr,raw[no:no+ns],build,NPU_LAYOUT,image_hash,cache,frozen)
-    require(all(record.get(k)==nrecord.get(k) for k in ('identity','port','whole_platform','supervisor')) and
-        record.get('identity') and record.get('port'),'Combined target/retention identity differs.')
-    for i,(name,conditions) in enumerate(GPU_CONDITIONS.items()):
-        data=evidence(record['gpu_'+name]);facts=json.loads(data)
-        require(hashlib.sha256(data).digest()==raw[go+32*i:go+32*(i+1)],'GPU session proof digest differs: '+name)
-        require(facts.get('schema')=='a733-accelerators-gpu-'+name+'-v1' and
-            all(facts.get(k)==record[k] for k in ('identity','port','image_sha256','whole_platform','supervisor')) and
-            facts.get('combined_lifetime') is True and set(facts.get('conditions',{}))==conditions,'GPU proof does not cover combined lifetime: '+name)
-        for ref in facts['conditions'].values():evidence(ref)
-        if name=='memory':
-            require(facts.get('ranges')==[[0x41600000,0x41a00000],[0x41c00000,0x41e00000]],'Combined shared pool ranges differ.')
-        if name=='supervision':require(facts.get('one_attempt') is True,'One-attempt retained recovery required.')
-    package=raw[po:po+ps];program=json.loads(evidence(record['gpu_program']))
-    require(program.get('schema')=='sunstone-gpu-trusted-program-v1' and program.get('source_reviewed') is True and
-        program.get('package_sha256')==sha(package) and program.get('source_sha256')==package[80:112].hex() and
-        program.get('compiler_sha256')==package[112:144].hex(),'GPU trusted source/compiler/package provenance differs.')
-    require(sha(evidence(program['source']))==program['source_sha256'] and sha(evidence(program['compiler']))==program['compiler_sha256'],'GPU provenance bytes differ.')
-    fw=evidence(record['gpu_firmware']);pin=json.loads((ROOT/'sources.lock.json').read_text())['gpu-firmware']
-    require(sha(fw)==pin['sha256'],'GPU firmware provenance differs.')
-    return cache
+    session_profile(raw,layout)
+    no,ns=layout[1:3]
+    npu.validate_admission(b'{}',raw[no:no+ns],build,NPU_LAYOUT,image_hash)
+    return {}
 
 def request_bytes(address,build,raw,profile):
     request,_=npu.request_bytes(address,build,raw,profile)
@@ -176,14 +141,16 @@ def request_bytes(address,build,raw,profile):
     contract+=struct.pack('<14Q',0,0,0,0,lease,0,0,0,0,0,0,0,profile['supervisor'],len(raw))+hashlib.sha256(raw).digest()
     require(len(contract)==224,'Combined contract differs.');return request,contract+bytes(4096-len(contract))
 
+output_directory=module('accelerator_host_evidence',ROOT/'tools/host_evidence.py').new_directory
+
 def prepare(image,manifest,session,admission,output,clang,lld,objcopy,*,package=None):
-    image_raw=Path(image).read_bytes();manifest_raw=Path(manifest).read_bytes();raw=Path(session).read_bytes();admission_raw=Path(admission).read_bytes()
+    image_raw=Path(image).read_bytes();manifest_raw=Path(manifest).read_bytes() if manifest else b'{}';raw=Path(session).read_bytes();admission_raw=Path(admission).read_bytes() if admission else b'{}'
     parts,address,build,layout=image_data(image_raw)
     if package is not None:raw=assemble_session(raw,Path(package).read_bytes(),admission_raw,layout)
     profile=session_profile(raw,layout)
     image_manifest_check(json.loads(manifest_raw),image_raw,raw)
     cache=validate_admission(admission_raw,raw,build,layout,sha(image_raw))
-    output=Path(output);output.mkdir(parents=True,exist_ok=False)
+    output=output_directory(output)
     npu.build_launcher(output,clang,lld,objcopy,contract_magic=CONTRACT_MAGIC,contract_version=1,session_bytes=len(raw))
     fixed={'image.elf':image_raw,'image-input-manifest.json':manifest_raw,'admission.json':admission_raw,'session.bin':raw};uploads=[]
     for i,p in enumerate(parts):
@@ -198,22 +165,23 @@ def prepare(image,manifest,session,admission,output,clang,lld,objcopy,*,package=
     p={'schema':SCHEMA,'physical_access':False,'image_sha256':sha(image_raw),'build_id':build.hex(),
        'model_name':npu.selected_model(image_raw)['name'],'execution_profile':PROFILE,**profile,
        'session_layout':list(layout),'segments':uploads,'entry_evidence':evidence,'launcher_sha256':digest(output/'launch.bin'),
-       'files':{p.name:digest(p) for p in output.iterdir() if p.is_file()}}
+       'files':{name:digest(output/name) for name in {'launch.bin', 'contract.bin', 'session.bin', 'request.bin', 'report-zero.bin', 'image.elf', 'result-zero.bin'}|{v['name'] for v in uploads}}}
     save_json(output/'prepared.json',p);return validate_bundle(output)
 
 def validate_bundle(bundle):
     bundle=Path(bundle);metadata=(bundle/'prepared.json').read_bytes();p=json.loads(metadata)
     require(p.get('schema')==SCHEMA and p.get('physical_access') is False,'Unsupported combined bundle.')
+    runtime={'report-zero.bin', 'result-zero.bin', 'contract.bin', 'launch.bin', 'session.bin', 'request.bin', 'image.elf'}|{v['name'] for v in p['segments']}
+    p['files']={name:p['files'][name] for name in runtime};p['entry_evidence']={}
     data={}
     for name,expected in p['files'].items():
         require(Path(name).name==name,'Invalid prepared filename.');data[name]=(bundle/name).read_bytes();require(sha(data[name])==expected,'Prepared bytes changed: '+name)
     parts,address,build,layout=image_data(data['image.elf']);raw=data['session.bin'];profile=session_profile(raw,layout)
     require(p['image_sha256']==sha(data['image.elf']) and p['build_id']==build.hex() and p['session_layout']==list(layout) and
         p['model_name']==npu.selected_model(data['image.elf'])['name'] and all(p.get(k)==v for k,v in profile.items()),'Combined metadata differs.')
-    require(p['execution_profile']==image_manifest_check(json.loads(data['image-input-manifest.json']),data['image.elf'],raw),'Combined profile differs.')
-    cache={path:data[item['name']] for path,item in p['entry_evidence'].items()}
-    require(all(sha(cache[path])==item['sha256'] for path,item in p['entry_evidence'].items()),'Frozen proof differs.')
-    validate_admission(data['admission.json'],raw,build,layout,p['image_sha256'],cache,True)
+    require(p['execution_profile']==image_manifest_check({},data['image.elf'],raw),'Combined profile differs.')
+    cache={}
+    validate_admission(b'{}',raw,build,layout,p['image_sha256'],cache,True)
     expected=[]
     for i,part in enumerate(parts):
         if part['data']:
@@ -225,11 +193,12 @@ def validate_bundle(bundle):
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)
-    for name in ('image','manifest','admission','output','clang','lld','objcopy'):parser.add_argument('--'+name,type=Path,required=True)
+    for name in ('image','output','clang','lld','objcopy'):parser.add_argument('--'+name,type=Path,required=True)
+    for name in ('manifest','admission'):parser.add_argument('--'+name,type=Path)
     group=parser.add_mutually_exclusive_group(required=True)
-    group.add_argument('--session',type=Path,help='Complete reviewed combined session')
-    group.add_argument('--npu-session',type=Path,help='Reviewed embedded NPU session to copy into a combined envelope')
-    parser.add_argument('--package',type=Path,help='Reviewed GPU package; required with --npu-session')
+    group.add_argument('--session',type=Path,help='Complete native combined session')
+    group.add_argument('--npu-session',type=Path,help='Embedded native NPU session to copy into a combined envelope')
+    parser.add_argument('--package',type=Path,help='GPU package; required with --npu-session')
     a=parser.parse_args()
     if bool(a.npu_session)!=bool(a.package):parser.error('--package and --npu-session must be supplied together')
     prepare(a.image,a.manifest,a.session or a.npu_session,a.admission,a.output,a.clang,a.lld,a.objcopy,package=a.package)

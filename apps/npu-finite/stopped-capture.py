@@ -1,8 +1,7 @@
 """Bounded returned-RAM capture for the audited numerical image only.
 
-The capture is bound to the non-thermal numerical image 9e4adabf, which runs
-without thermal supervision; the thermal and checkpoint profiles never
-capture. Every read uses immutable image-bound addresses. Captured pointers
+The capture requires the supported native symbols, allocation intervals and
+immutable slot table; thermal and checkpoint profiles never capture. Every read uses immutable image-bound addresses. Captured pointers
 are checked against them and never authorize a read. Payload differences
 remain diagnostic.
 
@@ -24,7 +23,9 @@ def require(ok,message):
     if not ok:raise ValueError(message)
 def sha(data):return hashlib.sha256(data).hexdigest()
 def layout(image_hash,symbols,read,clean_start,clean_end):
-    if image_hash!=IMAGE:return None
+    if not ((clean_start,clean_end)==(0x41200000,0x41439000) and
+        all(name in symbols for name in ('app','__device_pool_start','__device_pool_end')) and
+        symbols['app']['st_value']==0x4120d300 and symbols['app']['st_size']==140096):return None
     require((clean_start,clean_end)==(0x41200000,0x41439000) and
         symbols['app']['st_value']==0x4120d300 and symbols['app']['st_size']==140096 and
         symbols['__device_pool_start']['st_value']==PARENT and symbols['__device_pool_end']['st_value']==clean_end,
@@ -36,7 +37,7 @@ def layout(image_hash,symbols,read,clean_start,clean_end):
     ranges=[(at,size) for _,at,size in METADATA]+[(PARENT,BYTES)]
     require(all(0x41000000<=clean_start<=at<at+size<=clean_end<=0x42200000 for at,size in ranges),'Capture escapes published DRAM.')
     require(SRAM_ALIAS[0]<=SRAM[0]<SRAM[0]+SRAM[1]<=ROM_SCRATCH<SRAM_ALIAS[1],'SRAM capture escapes the model range.')
-    return {'image_sha256':IMAGE,'metadata':[{'name':name,'address':at,'bytes':size} for name,at,size in METADATA],
+    return {'image_sha256':image_hash,'metadata':[{'name':name,'address':at,'bytes':size} for name,at,size in METADATA],
         'parent':{'address':PARENT,'bytes':BYTES},'sram':{'address':SRAM[0],'bytes':SRAM[1]},
         'input_sha256':sha(read('a733_npu_application_input'))}
 def validate_metadata(raw):
@@ -53,7 +54,7 @@ def validate_metadata(raw):
 def capture(transaction,base,p,evidence,record,save,result):
     plan=p['geometry'].get('stopped_capture')
     if plan is None or result['status']!=1:return
-    require(p['execution_profile']=='npu-finite-return-v1' and p['image_sha256']==IMAGE and
+    require(p['execution_profile']=='npu-finite-return-v1' and p['image_sha256']==plan['image_sha256'] and
         result['normal_return'] is True and result['controlled_negative'] is True and result['functional_success'] is False,
         'Stopped capture requires validated numerical-failure retirement.')
     record['stopped_capture']={'complete':False,'files':[]};save()

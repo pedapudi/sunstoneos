@@ -25,9 +25,35 @@ def frame(session,status=1):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--bundle',type=Path,required=True,help='Existing offline packaging-model bundle; never deployed')
+    parser.add_argument('--bundle',type=Path,help='Existing offline packaging-model bundle; never deployed')
+    parser.add_argument('--inputs-only',action='store_true')
     parser.add_argument('--evidence',type=Path,required=True);args=parser.parse_args();e=args.evidence.resolve();e.mkdir(parents=True,exist_ok=True)
     host=load(ROOT/'tools/check-a733-jpeg-supervised.py');shared=host.supervisor
+    if args.inputs_only:
+        excluded=('gpu','npu','accelerators','storage','smp')
+        tools=[p for p in (ROOT/'tools').glob('check-a733-*-supervised.py')
+               if not p.name.startswith(tuple('check-a733-'+name for name in excluded))]
+        apps=[ROOT/'apps'/name/'capture.py' for name in
+              ('uart','pcie','dsi-scanout','monitor','thermal','pcie-test','adc','pcie-nvme','spi')]
+        apps.extend(ROOT/'apps'/name/'observe.py' for name in ('deinterlace','dma-copy'))
+        names=[]
+        for source in tools+apps:
+            wrapper=load(source);directory=e/source.parent.name/source.stem;directory.mkdir(parents=True)
+            path=directory/'payload.bin';path.write_bytes(b'upload bytes')
+            archived=directory/'launch.c';archived.write_bytes(b'archived source')
+            prepared={'segments':[{'name':'payload.bin','address':0x41000000}],'files':{'payload.bin':wrapper.digest(path),'launch.c':wrapper.digest(archived)}}
+            archived.write_bytes(b'changed archived source')
+            wrapper.claimed(None,None,None,directory,prepared)
+            path.write_bytes(b'changed upload bytes')
+            try:wrapper.claimed(None,None,None,directory,prepared)
+            except ValueError as error:assert 'Prepared input changed before upload' in str(error)
+            else:raise AssertionError('Changed input accepted: '+str(source))
+            names.append(str(source.relative_to(ROOT)))
+        shared.save_json(e/'input-results.json',{'status':'PASS','physical_access':False,
+            'without_queue_database':names,'changed_input_refusals':len(names)})
+        print('PASS: '+str(len(names))+' device wrappers accept inputs without queue records and reject changed uploads')
+        return
+    parser.error('--bundle is required unless --inputs-only is selected') if args.bundle is None else None
     # Native packaging geometry uses placeholder hashes; derive only this host
     # fixture's diagnostic identities, preserving the original software evidence.
     source_bundle=args.bundle.resolve();model=e/'host-model'
@@ -162,35 +188,15 @@ def main():
     def binding(directory):
         bundle=directory/'bundle';shutil.copytree(args.bundle,bundle,ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
         prepared=fixture_freeze(bundle)
-        def ref(p):return {'path':str(p.resolve()),'sha256':host.digest(p)}
-        proof=directory/'fixture.txt';proof.write_text('Software fixture only; establishes no physical facts.\n')
-        software={'schema':'a733-jpeg-supervised-software-v1','physical_access':False,
-            **dict.fromkeys(('admission_cases','launcher_cases','host_capture','host_lifecycle'),True),
-            'image':ref(bundle/'image.elf'),'launcher':ref(bundle/'launch.bin'),
-            'sources':{name:ref(path) for name,path in host.software_sources().items()},'evidence':[ref(proof)]}
-        software_path=directory/'software.json';shared.save_json(software_path,software)
-        refs={'supervised-ram-recovery':ref(bundle/'admission.json'),'jpeg-supervised-software':ref(software_path)}
-        submission={'prerequisites':list(refs),'artifacts':[ref(bundle/n) for n in ('prepared.json','image.elf','launch.bin')]}
-        dbpath=directory/'queue.db';db=sqlite3.connect(dbpath)
-        db.execute('CREATE TABLE settings(key TEXT,value TEXT)');db.execute('INSERT INTO settings VALUES(?,?)',('halted',''))
-        db.execute('CREATE TABLE tests(id TEXT,state TEXT,owner TEXT,submission TEXT,review TEXT)')
-        db.execute('INSERT INTO tests VALUES(?,?,?,?,?)',('fixture','claimed','owner',json.dumps(submission),json.dumps({'prerequisites':refs})));db.commit()
-        host.claimed(dbpath,'fixture','owner',bundle,prepared);refused(lambda:host.claimed(dbpath,'fixture','wrong',bundle,prepared))
+        host.claimed(None,None,None,bundle,prepared)
         for name in ('prepared.json','admission.json','image.elf','launch.bin'):
             path=bundle/name;raw=path.read_bytes()
             try:
-                path.write_bytes(raw+b'rebound')
-                altered=copy.deepcopy(software)
-                if name in ('image.elf','launch.bin'):altered['image' if name=='image.elf' else 'launcher']=ref(path)
-                shared.save_json(software_path,altered);refs['supervised-ram-recovery']=ref(bundle/'admission.json');refs['jpeg-supervised-software']=ref(software_path)
-                submission['artifacts']=[ref(bundle/n) for n in ('prepared.json','image.elf','launch.bin')]
-                db.execute('UPDATE tests SET submission=?,review=?',(json.dumps(submission),json.dumps({'prerequisites':refs})));db.commit()
-                refused(lambda:host.claimed(dbpath,'fixture','owner',bundle,prepared))
+                path.write_bytes(raw+b'changed')
+                refused(lambda:host.claimed(None,None,None,bundle,prepared))
             finally:path.write_bytes(raw)
-        altered=copy.deepcopy(software);name=next(iter(altered['sources']));altered['sources'][name]=ref(proof)
-        refused(lambda:host.validate_software(altered,prepared));db.close()
-        return {'positive':True,'wrong_owner':True,'rebound_files':4,'mutated_source':True}
-    case('queue-frozen-binding',binding)
+        return {'without_queue_records':True,'changed_inputs_rejected':4}
+    case('input-snapshot-binding',binding)
     def frozen(directory):
         bundle=directory/'bundle';shutil.copytree(args.bundle,bundle,ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
         prepared=fixture_freeze(bundle);snapshot=copy.deepcopy(prepared['_frozen'])
@@ -208,7 +214,7 @@ def main():
             assert options['capture_seconds']==59 and options['result_key']=='jpeg_result'
             assert prepared['_frozen']['session.bin']==session;calls.append(options['result_key']);return 0
         argv=['--bundle',str(args.bundle),'--fel',str(directory/'never-executed'),'--evidence',str(directory/'unused'),
-            '--database',str(directory/'never-opened'),'--claim','fixture','--owner','fixture','--supervised-manual-reconnect']
+            ]
         with patch.object(shared,'run_session',runner),patch.object(host.preparation,'validate_admission',lambda *a,**kw:{}):assert host.main(argv)==0
         assert calls==['jpeg_result'];return {'shared_transport':'Reused prior cases; only new callback routing checked.'}
     case('main-route',routing)

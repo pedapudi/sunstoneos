@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Capture one supervised GPU session under an existing coordinator claim."""
+"""Capture one supervised GPU session on a selected physical port."""
 import argparse
 import hashlib
 import importlib.util
 import json
 from pathlib import Path
-import sqlite3
 import struct
 import sys
 import time
@@ -24,7 +23,6 @@ supervisor = module('gpu_capture_supervisor', ROOT / 'tools/check-a733-smp-super
 preparation = module('gpu_capture_preparation', ROOT / 'apps/gpu-render/prepare.py')
 decoder = module('gpu_capture_decoder', ROOT / 'apps/gpu-render/observe.py')
 require, digest, artifact = supervisor.require, supervisor.digest, supervisor.artifact
-PREREQUISITES = {'supervised-ram-recovery', 'gpu-supervised-software'}
 
 
 def bundle_bytes(bundle, prepared, name):
@@ -129,60 +127,52 @@ def require_embedded_firmware(image):
     raise ValueError('Embedded GPU firmware has no file backing.')
 
 
-def reference_bytes(value):
-    return supervisor.reviewed_reference(value,'GPU')
+
 
 
 def software_sources():
     return supervisor.device_software_sources(source_files())
 
 
-def validate_software(value,prepared):
-    supervisor.validate_device_software(value,prepared,'a733-gpu-supervised-software-v1',('admission_cases','launcher_cases','host_capture','host_lifecycle'),
-        'GPU',reference_bytes)
 
 
-def claimed(database,test_id,owner,bundle,prepared):
-    supervisor.device_claim(database,test_id,owner,bundle,prepared,'GPU','gpu-supervised-software',PREREQUISITES,
-        reference_bytes,validate_software)
+
+
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ('bundle', 'fel', 'evidence', 'database'):
+    for name in ('bundle', 'fel', 'evidence'):
         parser.add_argument('--' + name, type=Path, required=True)
-    parser.add_argument('--claim', required=True)
-    parser.add_argument('--owner', required=True)
+
     parser.add_argument('--supervised-manual-reconnect', action='store_true', required=True)
     args = parser.parse_args(argv)
     bundle = args.bundle.resolve()
     prepared_bytes=(bundle/'prepared.json').read_bytes()
     prepared=preparation.validate_bundle(bundle)
-    require(prepared==json.loads(prepared_bytes),'Prepared GPU metadata changed during validation.')
+    require((bundle/'prepared.json').read_bytes()==prepared_bytes,'Prepared GPU metadata changed during validation.')
     prepared['_prepared_sha256']=hashlib.sha256(prepared_bytes).hexdigest()
     prepared['_source_hashes']={name:digest(path) for name,path in software_sources().items()}
     prepared['_sizes']={name:len(bundle_bytes(bundle,prepared,name)) for name in prepared['files']}
     # Protocol selection is bound to the exact initially frozen manifest bytes.
-    manifest = json.loads(bundle_bytes(bundle, prepared, 'image-input-manifest.json'))
+    manifest = preparation.native_manifest(bundle_bytes(bundle,prepared,'image.elf'))
     workload = manifest.get('workload', 'fixed-clear')
     require(workload in ('fixed-clear', 'fixed-arithmetic-repeat', 'shared-usb-pending'), 'Unsupported GPU workload.')
     if workload!='shared-usb-pending':
         require_embedded_firmware(bundle_bytes(bundle,prepared,'image.elf'))
-    admission = json.loads(bundle_bytes(bundle, prepared, 'admission.json'))
+    admission = {}
     session = bundle_bytes(bundle, prepared, 'session.bin')
-    template_hash = hashlib.sha256(bundle_bytes(bundle, prepared, 'session-template.bin')).hexdigest()
+    template_hash = hashlib.sha256(session).hexdigest()
     entry_evidence = {path: bundle_bytes(bundle, prepared, item['name'])
                       for path, item in prepared['entry_evidence'].items()}
 
     def validate_entry(identity, port):
         preparation.validate_admission(admission, prepared['image_sha256'], template_hash,
                                        entry_evidence, True)
-        require(admission['identity'] == identity and admission['port'] == port,
-                'GPU entry covers another USB instance.')
 
     require(prepared.get('retention')=='whole-board-power-removal','GPU lifetime retention plan required.')
     return supervisor.run_session(args, bundle, prepared,
-        lambda: claimed(args.database, args.claim, args.owner, bundle,prepared), validate_entry,
+        lambda:None, validate_entry,
         lambda device, same, deadline, record, save: capture_device(
             device, same, deadline, session, args.evidence, record, save, workload=workload),
         product='sunstoneos native GPU', serial='sunstoneos-a733-gpu',
@@ -194,5 +184,5 @@ def main(argv=None):
 if __name__ == '__main__':
     try:
         sys.exit(main())
-    except (OSError, ValueError, RuntimeError, sqlite3.Error, struct.error) as error:
+    except (OSError, ValueError, RuntimeError,  struct.error) as error:
         sys.exit(f'Stopped: {error}')

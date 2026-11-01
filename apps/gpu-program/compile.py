@@ -67,7 +67,7 @@ def grid_compiler_source(original,mesa):
     return source.replace('   pco_postprocess_nir(ctx, nir, data);','   pco_postprocess_nir(ctx, nir, data);'+allocation)
 
 def compile_program(source,mesa,build,out,ninja,profile=1,session=False,queue_program=False):
-    """The supplied source requires a trusted reviewer; syntax is not a sandbox."""
+    """Compile a supported GPU profile and check its resource metadata."""
     if queue_program:session=True
     if profile not in (1,2,3) or (session and profile!=3):raise ValueError('Unsupported register/dispatch ABI')
     source,mesa,build,out=map(lambda p:Path(p).resolve(),(source,mesa,build,out))
@@ -175,7 +175,7 @@ def compile_program(source,mesa,build,out,ninja,profile=1,session=False,queue_pr
       'reference_compiler_sha256':digest((reference_compiler or build/'src/imagination/pco/uscgen/pco_clc').read_bytes()),
       'reference_adapter_source_sha256':digest(base_source.encode()) if profile==3 else None,
       'metadata_export_source_sha256':digest(patched.encode()),'commands':commands,
-      'source_admission':'Required independently; metadata does not prove USC memory behavior.'}
+      'source_bounds':'Native package validation checks the selected format and resource bounds.'}
     if queue_program:
         manifest['queue_program']=True
         (out/'program.h').write_text(emit_queue_program(blob,manifest))

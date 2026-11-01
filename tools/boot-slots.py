@@ -203,8 +203,12 @@ def check_allocation(allocation, card_sectors, sector0):
 
 
 def new_directory(path):
-    path = Path(path)
-    os.mkdir(path, 0o700)
+    if Path(path).is_symlink():raise ValueError('Output directory must not be a symlink')
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('boot_slots_output', Path(__file__).with_name('host_evidence.py'))
+    helper = importlib.util.module_from_spec(spec); spec.loader.exec_module(helper)
+    path = helper.new_directory(path)
+    os.chmod(path, 0o700)
     return path
 
 
@@ -394,7 +398,8 @@ def plan(args):
         write_new(output / record['file'], data)
     result = {'schema': 1, 'kind': PLAN_KIND, 'card_sectors': card_sectors,
               'allocation_sha256': sha(allocation_raw), 'slot': slot, 'generation': generation,
-              'entry': args.entry, 'extents': extents, 'before': public(current), 'writes': records}
+              'entry': args.entry, 'extents': extents, 'before': public(current), 'writes': records,
+              'output_directory': str(output)}
     write_new(output / 'plan.json', (json.dumps(result, indent=2) + '\n').encode())
     return result
 
@@ -457,6 +462,7 @@ def rollback(args):
     write_new(output / (name + '.bin'), bytes(SECTOR))
     result = {'schema': 1, 'kind': PLAN_KIND, 'card_sectors': card_sectors,
               'slot': other, 'generation': result['generation'], 'before': public(current),
+              'output_directory': str(output),
               'writes': [{'name': name, 'file': name + '.bin', 'first_sector': HEADER_SECTORS[active],
                           'sectors': 1, 'sha256': sha(bytes(SECTOR)),
                           'previous_sha256': sha(previous), 'unchanged': False}]}
