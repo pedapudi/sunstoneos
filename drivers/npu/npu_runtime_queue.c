@@ -111,9 +111,6 @@ static void irq(void *cookie, BaseType_t *woken)
     q->woken = woken;
     npu_queue_irq(&q->queue);
     q->woken = NULL;
-#ifdef SUNSTONE_NPU_QUEUE_TIMING
-    q->irq_cpu_ticks += ticks() - since;
-#endif
     if (atomic_load_explicit(&q->queue.failed, memory_order_acquire)) {
         /* The first IRQ's status/deadline inputs remain in the queue adapter;
          * no controller operation or release follows this retained failure. */
@@ -121,6 +118,9 @@ static void irq(void *cookie, BaseType_t *woken)
         atomic_fetch_or_explicit(&q->runtime->service.irq_pending, 2u, memory_order_release);
     }
     if (q->progress_from_isr) q->progress_from_isr(q->progress_cookie, woken);
+#ifdef SUNSTONE_NPU_QUEUE_TIMING
+    q->irq_cpu_ticks += ticks() - since;
+#endif
 }
 int npu_runtime_queue_claim(struct npu_runtime_queue *q, struct npu_runtime *rt)
 {
