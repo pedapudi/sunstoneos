@@ -2,7 +2,7 @@
  * Policy 0 runs the power owner with register writes disabled (the control),
  * policy 1 gates the clocks after 10 ms of idle time, and policy 2 creates no
  * owner at all (the baseline). After the legacy 1000-job loop, five windows
- * of 8000 back-to-back jobs give repeated throughput, latency and CPU
+ * of 12000 back-to-back jobs give repeated throughput, latency and CPU
  * samples; then 100 cold jobs follow each idle gap. */
 #include "a733_npu_idle.h"
 #include "task.h"
@@ -14,7 +14,7 @@
 #endif
 #define IDLE_CYCLES 100u
 #define WINDOWS 5u
-#define WINDOW_JOBS 8000u
+#define WINDOW_JOBS 12000u
 #define HISTOGRAM 4096u
 __attribute__((used,retain)) const uint64_t npu_idle_return_profile[11]={
     UINT64_C(0x4e505549444c3032),2,SUNSTONE_NPU_IDLE_GATE,IDLE_CYCLES,9000,11000,100000,10000,100,WINDOWS,WINDOW_JOBS};

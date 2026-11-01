@@ -384,11 +384,14 @@ longer than the measured break-even duration.
 
 Three images share every source and differ only in policy: a baseline that
 creates no power owner, the control (owner without register writes) and the
-gating image, all at 852 MHz and 800 mV. Each runs five windows of 8,000
-back-to-back jobs (about 300 ms, about 30 owner wakes each) and then 100 cold
+gating image, all at 852 MHz and 800 mV. Each runs five windows of 12,000
+back-to-back jobs (about 450 ms, about 45 owner wakes each) and then 100 cold
 jobs after each of 9, 11 and 100 ms idle gaps; the 9 ms case must never gate.
-Comparisons use the median over the five windows, and the minimum and maximum
-are reported. The control must stay within the limits below of the baseline, so
+Comparisons use the median over the five windows of a boot and then the median
+over boots, and the spread across boots is reported. A busy window never lets
+the gating image gate, so gating against the control in the windows measures
+noise only; the gating cost is judged by the cold groups (every resume within
+100 µs, no gating during 9 ms gaps). The control must stay within the limits below of the baseline, so
 the owner's own cost is measured against the existing resident queue result;
 the gating run must stay within them of the control. Record each transition and
 completion, request-to-ready resume delay, first-job delay, p50/p99/maximum job

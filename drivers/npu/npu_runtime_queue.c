@@ -1,8 +1,19 @@
 #include "npu_runtime_queue.h"
 #include "a733_mmio.h"
+#include "a733_npu_idle.h"
 #include "sunstone_crumb.h"
 #include "sunstone_deadline.h"
 
+/* This file is the A733 resident-queue driver, so the submission interface of
+ * the VIPLite 2 command processor (vip_drv_hardware.c:882-893) is fixed here:
+ * the command fetch address, the fetch trigger and its value, and the
+ * read-to-acknowledge event word. Only the idle and clock-gate protocol is
+ * part-specific data (struct npu_idle_part); the status word and the full-idle
+ * value come from the same descriptor. */
+#define NPU_REG_COMMAND_ADDRESS UINT32_C(0x654)
+#define NPU_REG_COMMAND_FETCH UINT32_C(0x3a4)
+#define NPU_COMMAND_FETCH_TRIGGER UINT32_C(0x1ffff)
+#define NPU_REG_EVENTS UINT32_C(0x010)
 static void power_owner(void *);
 static struct npu_runtime_queue *creating_power;
 BaseType_t npu_runtime_queue_task_privileged(TaskFunction_t entry, void *argument)
@@ -74,9 +85,9 @@ static int start(void *cookie, const struct a733_npu_command *c, uint64_t timeou
     /* VIPLite vip_drv_hardware.c:882-893: address, full barrier, fetch word.
      * Mapping, power and command validation belong to claim/registration. */
     if (!window(q)) return 0;
-    a733_mmio_write32_dsb_sy_after(base + 0x654, c->device);
+    a733_mmio_write32_dsb_sy_after(base + NPU_REG_COMMAND_ADDRESS, c->device);
     if (!window(q)) return 0;
-    a733_mmio_write32_dsb_sy_after(base + 0x3a4, 0x1ffff);
+    a733_mmio_write32_dsb_sy_after(base + NPU_REG_COMMAND_FETCH, NPU_COMMAND_FETCH_TRIGGER);
 #ifdef SUNSTONE_NPU_QUEUE_TIMING
     q->runtime->doorbell_ticks = ticks();
 #endif
@@ -90,9 +101,9 @@ static int complete(void *cookie)
      * Completion requires event zero AND full idle before CPU acquisition.
      * A premature event is retained; no tick poll treats it as completion. */
     if (!window(q)) return 0;
-    const uint32_t events = *(volatile uint32_t *)(base + 0x10);
+    const uint32_t events = *(volatile uint32_t *)(base + NPU_REG_EVENTS);
     if (!window(q)) return 0;
-    const uint32_t idle = *(volatile uint32_t *)(base + 4);
+    const uint32_t idle = *(volatile uint32_t *)(base + a733_npu_idle_part.status);
     __asm__ volatile("dsb sy" ::: "memory");
     q->last_events = events; q->last_idle = idle; q->observed = ticks();
     if (events != 1) {
@@ -100,7 +111,7 @@ static int complete(void *cookie)
                             events, SUNSTONE_CRUMB_HERE());
         return 0;
     }
-    if (idle != UINT32_C(0x7fffffff)) {
+    if (idle != a733_npu_idle_part.full_idle) {
         sunstone_crumb_fail(SUNSTONE_CRUMB_FAIL_SITE(NPU) | SUNSTONE_CRUMB_NPU_REGISTER | (1u << 16),
                             idle, SUNSTONE_CRUMB_HERE());
         return 0;

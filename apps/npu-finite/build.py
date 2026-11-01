@@ -34,7 +34,7 @@ p.add_argument('--runtime',action='store_true',help='the NPU runtime client: one
 p.add_argument('--model-switch',action='store_true',help='three runtime jobs: first model, second model, then first model again')
 p.add_argument('--sustained',action='store_true',help='200 back-to-back runtime jobs alternating the two models; one final CLOSE')
 p.add_argument('--latency',choices=('legacy','queue'),help='one checked warmup, then 1000 checked model-0 jobs through the helper or resident queue')
-p.add_argument('--idle',choices=('none','off','gate'),help='queue latency only: no power owner (baseline), the matched power-owner control, or 10 ms clock gating; each runs five 8000-job windows and 100 jobs after each 9/11/100 ms idle gap')
+p.add_argument('--idle',choices=('none','off','gate'),help='queue latency only: no power owner (baseline), the matched power-owner control, or 10 ms clock gating; each runs five 12000-job windows and 100 jobs after each 9/11/100 ms idle gap')
 p.add_argument('--dependent-chain',action='store_true',help='queue latency only: append two queued models and their fused stream with an aliased output/input tensor')
 p.add_argument('--chain-repeats',type=int,default=1,help='dependent chain: repeat each resident path 1..1000 times, checking both outputs after each final fence')
 p.add_argument('--sequence',type=int,default=0,help='queue latency only: append one resident sequence repeating the same command 2..64 times')
@@ -290,7 +290,7 @@ if a.runtime:identity.update(profile='npu-runtime-return-v1',**runtime_identity)
 if a.model_switch:identity.update(profile='npu-model-switch-return-v1')
 if a.sdk:identity.update(profile='npu-sdk-return-v1')
 if a.sustained:identity.update(sustained={'jobs':200,'models':2,'order':'job-index-modulo-model-count'})
-if a.latency:identity.update(profile='npu-latency-return-v1',latency={'mode':a.latency,'measured_jobs':1000,'warmup_jobs':1,'model':0,'sequence_repeats':a.sequence,'doorbell_timing':True,**({'idle':{'policy':{'none':'baseline','off':'control','gate':'gate'}[a.idle],'cycles':100,'gaps_us':[9000,11000,100000],'threshold_us':10000,'resume_budget_us':100,'windows':5,'window_jobs':8000}} if a.idle else {}),**({'dependent_chain':True,**({'chain_repeats':a.chain_repeats} if a.chain_repeats!=1 else {})} if a.dependent_chain else {})})
+if a.latency:identity.update(profile='npu-latency-return-v1',latency={'mode':a.latency,'measured_jobs':1000,'warmup_jobs':1,'model':0,'sequence_repeats':a.sequence,'doorbell_timing':True,**({'idle':{'policy':{'none':'baseline','off':'control','gate':'gate'}[a.idle],'cycles':100,'gaps_us':[9000,11000,100000],'threshold_us':10000,'resume_budget_us':100,'windows':5,'window_jobs':12000}} if a.idle else {}),**({'dependent_chain':True,**({'chain_repeats':a.chain_repeats} if a.chain_repeats!=1 else {})} if a.dependent_chain else {})})
 if a.power_cycle:identity.update(profile='npu-power-cycle-return-v1')
 if a.thermal:
  identity['profile']='npu-finite-thermal-return-v1'

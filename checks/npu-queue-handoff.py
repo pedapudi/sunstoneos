@@ -93,6 +93,7 @@ class Machine:
         self.deadline_log, self.deadline_result, self.deadline_pending = [], None, False
         self.isr_notices, self.created = [], []
         self.power_handle = self.BASE + 0xb3000
+        self.masked_entry = {}
         self.q, self.rt, self.startup, self.runtime = self.BASE + 0x1000, self.BASE + 0x10000, self.BASE + 0x90000, self.BASE + 0xa0000
         self.task, self.worker = self.BASE + 0xb0000, self.BASE + 0xb1000
         self.s = self.field(self.rt, 'npu_runtime', 'service')
@@ -203,6 +204,8 @@ class Machine:
             self.pause_notify = False
             self.stop('before-worker-notify')
             return
+        if address in self.masked_entry:
+            assert self.daif & 0x80, self.masked_entry[address]
         instruction = self.sys.get(address)
         if instruction:
             op, operands = instruction
@@ -446,8 +449,8 @@ class Owner:
     def enum(self, name):
         return self.image.enums[name]
 
-    def writes(self):
-        return [row for row in self.m.detail if row[1] == 'w']
+    def writes(self, context=None):
+        return [row for row in self.m.detail if row[1] == 'w' and (context is None or row[0] == context)]
 
     def wake(self, result):
         self.m.deadline_result = result
@@ -762,6 +765,28 @@ def owner_cases(image, disassembly, only, record):
             [row[2] for row in m.detail if row[0] == 'caller' and row[1] == 'w'] == [0x654, 0x3a4], 'resumed submission did not ring the doorbell'
         record(label, m)
 
+    label = 'owner-cannot-gate-between-admission-and-submission'
+    if wanted(label):
+        o = Owner(image, disassembly).start()
+        m = o.m
+        command = o.command()
+        job, out = m.BASE + 0xd1000, m.BASE + 0xd3000
+        # The idle alarm has expired and the owner is about to run, but the producer is inside its lock span.
+        m.clock = max(m.clock, m.deadline_log[-1] * 24)
+        m.masked_entry[image.address('npu_queue_submit')] = 'submission ran with interrupts unmasked, so the owner could gate before it'
+        assert m.run('caller', 'npu_runtime_queue_submit', m.q, job, command, 0, 0, 100, out) == ('returned', 1), \
+            'submission to an idle ungated device did not succeed'
+        assert o.phase() == ON and not o.writes('power'), 'the owner ran inside the producer lock span'
+        assert [row[2] for row in m.detail if row[0] == 'caller' and row[1] == 'w'] == [0x654, 0x3a4], 'job did not start on the ungated device'
+        # The owner then runs with the expired alarm and finds an active job.
+        assert o.wake(1)[0] == 'deadline-wait', 'owner did not rearm over an active job'
+        assert o.phase() == ON and not o.writes('power') and o.counter('gates') == 0, 'owner gated with a job in flight'
+        o.complete()
+        assert m.getfield(m.queue, 'npu_queue', 'completed', 8) == 1 and m.getfield(m.queue, 'npu_queue', 'failed') == 0, \
+            'the job did not complete after the owner ran'
+        assert not m.getfield(m.rt, 'npu_runtime', 'failed')
+        record(label, m)
+
     for strict in (0, 1):
         label = 'resume-over-budget-' + ('strict' if strict else 'counted')
         if wanted(label):
@@ -1057,6 +1082,10 @@ def build_images(build, output, variants):
                                 'if (q->power.initialized && !q->queue.head) {'):
                         assert text.count(old) == 1
                         text = text.replace(old, 'if (0) {')
+                if variant == 'without-single-lock-span':
+                    old = '    if (result == 1) {\n        result = npu_queue_submit('
+                    assert text.count(old) == 1
+                    text = text.replace(old, '    if (result == 1) {\n        npu_runtime_queue_unlock(saved);\n        result = npu_queue_submit(')
                 if variant == 'without-resume-irq-attribution':
                     old = 'q->power_resume_irq = after != 1;'
                     assert text.count(old) == 1
@@ -1119,7 +1148,7 @@ def main():
     parser.add_argument('--mutation', action='append', choices=('without-handshake', 'without-return-recheck',
                         'without-owner-capture', 'without-window-guards', 'without-owner-activity-guard',
                         'without-quiet-check', 'without-gated-irq-guard', 'without-stop-resume',
-                        'without-resume-irq-attribution'),
+                        'without-resume-irq-attribution', 'without-single-lock-span'),
                         help='Run only these regression mutations')
     args = parser.parse_args()
     output = args.output.resolve()
@@ -1130,7 +1159,8 @@ def main():
                                                                      'without-owner-capture', 'without-window-guards',
                                                                      'without-owner-activity-guard', 'without-quiet-check',
                                                                      'without-gated-irq-guard', 'without-stop-resume',
-                                                                     'without-resume-irq-attribution']
+                                                                     'without-resume-irq-attribution',
+                                                                     'without-single-lock-span']
     variants = ['actual', *mutation_names]
     images, inputs = build_images(args.build_dir.resolve(), output, variants)
     image = layouts(images['actual'][0])
@@ -1148,7 +1178,8 @@ def main():
                 'without-quiet-check': 'a busy interrupt controller was fatal',
                 'without-gated-irq-guard': 'interrupt while suspended was not retained',
                 'without-stop-resume': 'close left clocks suspended',
-                'without-resume-irq-attribution': 'resume did not observe the pending interrupt'}
+                'without-resume-irq-attribution': 'resume did not observe the pending interrupt',
+                'without-single-lock-span': 'submission ran with interrupts unmasked'}
     for variant in mutation_names:
         reason = expected[variant]
         elf, disassembly = images[variant]
@@ -1160,7 +1191,8 @@ def main():
                   'without-quiet-check': 'quiet-controller-not-now-retries',
                   'without-gated-irq-guard': 'irq-while-suspended-is-retained',
                   'without-stop-resume': 'suspended-close-resumes-before-return',
-                  'without-resume-irq-attribution': 'interrupt-after-resume-is-attributed'}[variant]
+                  'without-resume-irq-attribution': 'interrupt-after-resume-is-attributed',
+                  'without-single-lock-span': 'owner-cannot-gate-between-admission-and-submission'}[variant]
         message = refused(lambda: cases(layouts(elf), disassembly, target), reason, AssertionError)
         mutations.append({'variant': variant, 'caught': message})
     inputs[str(Path(__file__).resolve())] = sha(__file__)

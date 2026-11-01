@@ -86,7 +86,7 @@ def sustained_extension(startup_marker,names,read):
  return sustained
 
 IDLE_PROFILE=(0x4e505549444c3032,2);IDLE_GAPS=(9000,11000,100000);IDLE_CYCLES=100
-IDLE_THRESHOLD_US=10000;IDLE_RESUME_US=100;IDLE_WINDOWS=5;IDLE_WINDOW_JOBS=8000
+IDLE_THRESHOLD_US=10000;IDLE_RESUME_US=100;IDLE_WINDOWS=5;IDLE_WINDOW_JOBS=12000
 IDLE_JOBS=1+1000+IDLE_WINDOWS*IDLE_WINDOW_JOBS+len(IDLE_GAPS)*IDLE_CYCLES
 IDLE_POLICIES=('control','gate','baseline')
 IDLE_HISTOGRAM=4096
@@ -546,7 +546,7 @@ IDLE_PATTERN=_idle_pattern()
 def idle_report(match,g,frequency,warm_end,deadline,idle):
  """Decode and cross-check the repeated windows and the cold-job intervals.
 
- Each window runs 8000 back-to-back jobs and reports exact quantiles from a
+ Each window runs 12000 back-to-back jobs and reports exact quantiles from a
  one-tick histogram. Each group runs 100 cold jobs after an idle gap. A gap
  below the ten millisecond threshold must never gate. Only the gating policy
  may write registers, and its resumes must stay within the budget. The
@@ -631,7 +631,7 @@ def idle_report(match,g,frequency,warm_end,deadline,idle):
    'resume_over_budget':over_budget,'owner_elapsed_ticks':owner_elapsed,'owner_wakes':owner_wakes,
    'irq_driver_elapsed_ticks':irq_ticks,'quiet_retries':quiet_retries},
   'windows':windows,'groups':groups,'functional_success':matched,
-  'scope':'Each window is 8000 back-to-back jobs with exact one-tick quantiles. Charged CPU time is client, runtime worker and power-owner scheduler runtime; non-idle time is the window length minus the idle task runtime. Cold jobs follow 9, 11 and 100 ms gaps and cover input preparation through record release, including power admission and resume.'}
+  'scope':'Each window is 12000 back-to-back jobs with exact one-tick quantiles. Charged CPU time is client, runtime worker and power-owner scheduler runtime; non-idle time is the window length minus the idle task runtime. Cold jobs follow 9, 11 and 100 ms gaps and cover input preparation through record release, including power admission and resume.'}
 
 def latency_report(text,status,deadline,g):
  """Check every measured latency and the digest of every checked output.

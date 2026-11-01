@@ -40,7 +40,7 @@ below; their board evidence does not qualify the new idle policy.
    suspended and after resume, admit-and-submit in one lock span and over-budget
    resumes, with five relink-based regression mutations. Three benchmark images
    (`build.py --latency queue --idle none|off|gate`: baseline without an owner,
-   control, gating) each run five windows of 8,000 jobs and 100 cold jobs after
+   control, gating) each run five windows of 12,000 jobs and 100 cold jobs after
    each of 9, 11 and 100 ms gaps. Their report decoder and the three-way limit
    comparison (`apps/npu-finite/idle-compare.py`) are checked by
    `checks/npu-idle-report.py` with synthetic reports; the producer itself runs

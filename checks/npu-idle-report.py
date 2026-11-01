@@ -27,8 +27,8 @@ FREQUENCY = 24000000
 GAPS = (9000, 11000, 100000)
 CYCLES = 100
 WINDOWS = 5
-WINDOW_JOBS = 8000
-JOBS = 41301
+WINDOW_JOBS = 12000
+JOBS = 61301
 DEADLINE = 3000000000
 REFERENCES = [bytes(range(64)), bytes(range(64, 128))]
 POLICIES = ('control', 'gate', 'baseline')
@@ -204,30 +204,45 @@ def main():
     assert baseline['idle']['totals']['owner_wakes'] == 0 and len(gating['idle']['windows']) == WINDOWS
     cases.append('decodes the baseline, control and gating policies')
 
-    result = compare.compare(baseline, control, gating)
-    assert result['passed'] and len(result['criteria']) == 13, result
+    one = lambda r: [r]
+    result = compare.compare(one(baseline), one(control), one(gating))
+    assert result['passed'] and result['cold_passed'] and len(result['criteria']) == 15, result
     (args.output / 'comparison.md').write_text(compare.table(result) + '\n')
     cases.append('comparison passes within the limits')
 
+    noise = ' (noise: no gate in busy windows)'
+
     def failed(c, g, b=baseline):
-        return {r['criterion'] for r in compare.compare(b, c, g)['criteria'] if not r['passed']}
-    assert failed(control, decode(host, scenario('gate', throughput=1.03))) == {'gating vs control: throughput'}
-    assert failed(control, decode(host, scenario('gate', cpu=1.5))) == {'gating vs control: charged CPU time per job'}
-    assert failed(control, decode(host, scenario('gate', latency=1.12))) == {'gating vs control: p99 latency', 'gating vs control: maximum latency'}
+        return {r['criterion'] for r in compare.compare(one(b), one(c), one(g))['criteria'] if not r['passed']}
+    assert failed(control, decode(host, scenario('gate', throughput=1.03))) == {'gating vs control: throughput' + noise}
+    assert failed(control, decode(host, scenario('gate', cpu=1.5))) == {'gating vs control: charged CPU time per job' + noise}
+    assert failed(control, decode(host, scenario('gate', latency=1.12))) == \
+        {'gating vs control: p99 latency' + noise, 'gating vs control: maximum latency' + noise}
     assert failed(decode(host, scenario('control', throughput=1.03)), gating) >= {'control vs baseline: throughput'}
     assert failed(decode(host, scenario('control', cpu=1.5)), gating) >= {'control vs baseline: charged CPU time per job'}
     wrong = copy.deepcopy(gating)
     wrong['idle']['groups'][0]['gates'] = 1
     assert 'Gating during the 9 ms gap' in failed(control, wrong)
+    slow = copy.deepcopy(gating)
+    slow['idle']['groups'][1]['driver_resume_us_max'] = 101
+    assert failed(control, slow) == {'Resume from suspended clocks'}
     few = copy.deepcopy(control)
     for w in few['idle']['windows']:
         w['owner_wakes'] = 3
-    refused(lambda: compare.compare(baseline, few, gating), 'at least 20 are required', SystemExit)
+    refused(lambda: compare.compare(one(baseline), one(few), one(gating)), 'at least 20 are required', SystemExit)
     cases.append('comparison refuses each limit violation and an unsampled owner')
-    # One slow window does not move the medians; the spread is reported.
-    jittery = decode(host, scenario('gate', jitter=20000))
-    assert compare.compare(baseline, control, jittery)['passed']
-    assert compare.medians(jittery)['spread']['jobs_per_second'][0] < compare.medians(control)['spread']['jobs_per_second'][0]
+    # Across boots: one drifting boot does not move the medians; a drifting majority does.
+    slow_boot = decode(host, scenario('gate', throughput=1.2))
+    three = compare.compare([baseline] * 3, [control] * 3, [gating, gating, slow_boot])
+    assert three['passed'] and three['medians']['gating']['boots'] == 3
+    assert three['medians']['gating']['spread']['jobs_per_second'][0] < three['medians']['gating']['jobs_per_second']
+    drift = compare.compare([baseline] * 3, [control] * 3, [gating, slow_boot, slow_boot])
+    assert not drift['passed'] and drift['cold_passed']
+    assert all('NPU ISR time per job' in ' '.join(r['criterion'] for r in result['criteria']) for _ in (0,))
+    cases.append('comparison pools boots by median and keeps the cold verdict separate')
+    jittery = decode(host, scenario('gate', jitter=30000))
+    assert compare.compare(one(baseline), one(control), one(jittery))['passed']
+    assert compare.medians([jittery])['spread']['jobs_per_second'][0] < compare.medians([control])['spread']['jobs_per_second'][0]
 
     for label, policy, mutate, reason in MUTATIONS:
         s = scenario(policy)

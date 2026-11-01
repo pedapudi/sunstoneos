@@ -31,7 +31,7 @@ and 800 mV. Gating is opt-in. A queue that does not call
 | Performance 8 | A busy queue arms the owner's alarm one idle delay ahead. The completion interrupt wakes no task and reuses the completion timestamp for the idle time. |
 | Performance 9 | A third image (`--idle none`) creates no power owner. The control must stay within the limits of this baseline. |
 | Performance 10 | Each window and group reports the idle-task runtime. Non-idle time is the length minus that runtime, beside the charged CPU time. Interrupt time that lands during the idle task is charged to the idle task by the scheduler counter, so neither figure includes it. |
-| Performance 11 | Each image runs five windows of 8,000 jobs (about 300 ms and 30 owner wakes each). The comparison uses medians and reports the spread. One image per variant is used instead of interleaving, because the gating policy does not act during a continuously busy window. |
+| Performance 11 | Each image runs five windows of 12,000 jobs (about 450 ms and 45 owner wakes each). The comparison uses medians and reports the spread. One image per variant is used instead of interleaving, because the gating policy does not act during a continuously busy window. |
 
 Recommended items done: the completion hook passes `q->observed`; the placeholder
 zeros are removed from the report; the priority query and its kernel
@@ -108,8 +108,8 @@ Directories are under `~/.cache/sunstoneos/build/npu-fastpath-1101/review-eviden
 
 The baseline, control and gating images are built from
 `apps/npu-finite/build.py --latency queue --idle none|off|gate`. Each runs 1
-warmup job, 1,000 legacy jobs, five windows of 8,000 jobs and 100 cold jobs after
-each of 9, 11 and 100 ms idle gaps (41,301 jobs). The baseline runs first, then the
+warmup job, 1,000 legacy jobs, five windows of 12,000 jobs and 100 cold jobs after
+each of 9, 11 and 100 ms idle gaps (61,301 jobs). The baseline runs first, then the
 control, and the gating image runs only if both return normally with matching
 outputs. `apps/npu-finite/idle-compare.py` applies the limits and prints the
 tables. The first runs after the boards are replugged confirm the startup fix and
