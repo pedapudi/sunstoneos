@@ -6,11 +6,15 @@
 #include "a733_rtc_initialize.h"
 #include "a733_range.h"
 #include <stddef.h>
-struct initialization {const struct a733_rtc_ops *ops;void *context;uint64_t deadline,last,start;struct a733_rtc_initialization *out;
+struct initialization {const struct a733_rtc_ops *ops;void *context;uint64_t deadline,last,start;unsigned stalled;struct a733_rtc_initialization *out;
  int (*pause)(void *,uint64_t);int (*cancelled)(void *);uint32_t cancel_seen;};
 static int now(struct initialization *c,uint64_t *n)
 {
+ uint64_t previous=c->last;
  if(c->ops->now_us(c->context,n)!=1||!a733_deadline_admit(*n,&c->last,c->deadline))return 0;
+ /* Equal floor-microsecond samples are valid; a stopped provider must not
+  * leave these synchronous loops running indefinitely. */
+ c->stalled=*n==previous?c->stalled+1:0;if(c->stalled>=4096)return 0;
  if(c->cancelled&&c->cancelled(c->context)){
   c->cancel_seen=1;if(!c->out->writes)return 0;
  }
@@ -37,7 +41,7 @@ static int wait_clear(struct initialization *c,uint32_t mask)
 {
  uint64_t n;if(!now(c,&n))return 0;uint64_t end=c->deadline-n>1000000?n+1000000:c->deadline;
  do {uint32_t v;if(!read32(c,0,&v))return 0;
-  if(!(v&mask))return delay(c,2000);
+  if(!(v&mask))return delay(c,2001);
   if(c->pause&&c->pause(c->context,n+1000)!=1)return 0;
   if(!now(c,&n))return 0;
  }while(n<end);
