@@ -32,6 +32,7 @@ static StackType_t wake_stack[LATENCY_CORES][1024], load_stack[LATENCY_CORES][10
 static TaskHandle_t wake_task[LATENCY_CORES], load_task[LATENCY_CORES];
 static atomic_uint phase, ready_mask, stop_load;
 static TickType_t began;
+static struct latency_result *report;
 
 __attribute__((weak)) void latency_workload_progress(void) {}
 #if defined(SUNSTONE_LATENCY_DMA)
@@ -104,7 +105,13 @@ static void wake_worker(void *argument)
         }
         configASSERT(atomic_load_explicit(&wake[c].pending, memory_order_acquire));
         if (wake[c].metric < SS_LAT_METRICS) {
-            ss_latency_record(c, wake[c].metric, wake[c].released, (uintptr_t)wake_worker);
+            const uint64_t running = ss_latency_now();
+            unsigned index = atomic_load_explicit(&wake[c].completed, memory_order_relaxed);
+            configASSERT(index < LATENCY_IDLE_SAMPLES + LATENCY_BUSY_SAMPLES);
+            report->wakes[c][index] = (struct latency_wake_sample){
+                wake[c].released, running, wake[c].metric,
+                wake[c].metric == SS_LAT_SCHED_IDLE ? LATENCY_WAKE_IDLE : LATENCY_WAKE_BUSY};
+            ss_latency_record_at(c, wake[c].metric, wake[c].released, running, (uintptr_t)wake_worker);
             atomic_fetch_add_explicit(&wake[c].completed, 1, memory_order_release);
         }
         atomic_store_explicit(&wake[c].pending, 0, memory_order_release);
@@ -175,20 +182,25 @@ void latency_workload_init(void)
 }
 void latency_workload_run(struct latency_result *out)
 {
+    report = out;
     began = xTaskGetTickCount();
     while (atomic_load_explicit(&ready_mask, memory_order_acquire) != 0xff) wait_tick();
     for (unsigned c = 0; c < LATENCY_CORES; ++c)
         while (!atomic_load_explicit(&load[c].ready, memory_order_acquire)) wait_tick();
+    ss_latency_phase_set(SS_LAT_IDLE);
     atomic_store_explicit(&phase, IDLE, memory_order_release);
     wait_samples(LATENCY_IDLE_SAMPLES);
     atomic_store_explicit(&phase, QUIET, memory_order_release);
+    ss_latency_phase_set(SS_LAT_PHASE_NONE);
     for (unsigned c = 0; c < LATENCY_CORES; ++c) xTaskNotifyGive(load_task[c]);
     /* Require a full sweep on every core before taking loaded samples. */
     for (unsigned c = 0; c < LATENCY_CORES; ++c)
         while (!atomic_load_explicit(&load[c].sweeps, memory_order_acquire)) wait_tick();
     latency_dma_model_start();
+    ss_latency_phase_set(SS_LAT_BUSY);
     atomic_store_explicit(&phase, BUSY, memory_order_release);
     wait_samples(LATENCY_IDLE_SAMPLES + LATENCY_BUSY_SAMPLES);
+    ss_latency_phase_set(SS_LAT_PHASE_NONE);
     /* Measurement is complete. Stop background traffic before draining the
      * modeled DMA client; completion IRQs remain enabled throughout cleanup. */
     atomic_store_explicit(&stop_load, 1, memory_order_release);
@@ -203,6 +215,14 @@ void latency_workload_run(struct latency_result *out)
     /* Every core has disabled its recorder, including future idle and timer
      * hooks. No mutable metric is read while a writer can still change it. */
     ss_latency_snapshot(out->core);
+    ss_latency_phase_snapshot(out->phases);
+    for (unsigned c = 0; c < LATENCY_CORES; ++c)
+        ss_latency_lock_counts(c, out->acquisitions[c]);
+    for (unsigned p = 0; p < SS_LAT_PHASES; ++p)
+        for (unsigned c = 0; c < LATENCY_CORES; ++c)
+            ss_latency_phase_lock_counts(p, c, out->phase_acquisitions[p][c]);
+    ss_latency_phase_bounds(out->phase_bounds);
+    for (unsigned c = 0; c < LATENCY_CORES; ++c) out->wake_site[c] = (uintptr_t)wake_worker;
     for (unsigned c = 0; c < LATENCY_CORES; ++c) {
         uint64_t sweeps = atomic_load_explicit(&load[c].sweeps, memory_order_acquire);
         configASSERT(sweeps >= 2);
