@@ -45,7 +45,7 @@ catalogue holds:
 | Two convolutions (`dual-u8`) | UINT8, 192 and 36 bytes | UINT8, 72 and 32 bytes | 2 | 2,912 |
 | Same graph, INT8 per-channel (`dual-i8`) | INT8, 192 and 36 bytes | INT8, 72 and 32 bytes | 2 | 2,912 |
 | Published ShuffleNetV2 | one UINT8, 150,528 bytes | one UINT8, 2 bytes | 125 | 964,224 |
-| mimus encoder query projection (`mimus-linear-q`) | INT16 8×176, 2,816 bytes | INT16 8×176, 2,816 bytes | 3 | 34,248 |
+| mimus encoder query projection (`linear-i16-per-row`) | INT16 8×176, 2,816 bytes | INT16 8×176, 2,816 bytes | 3 | 34,248 |
 | 12×12 convolution (`conv12`) | one UINT8, 432 bytes | one UINT8, 400 bytes | 1 | 2,056 |
 
 The two-convolution graphs come from [npu-dual-pipeline.sh](../tools/npu-dual-pipeline.sh)

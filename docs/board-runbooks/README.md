@@ -162,7 +162,7 @@ removed.
 
 Without the patch, ranks 6 and 9 have two options:
 
-- **Fresh DDR initialization** with `tools/run-ddr.py` before rank 6, and
+- **Fresh DDR initialization** with `tools/run-ddr.py --full-training` before rank 6, and
   again before rank 9. The DDR session then starts a new chain whose only
   link is the thermal run's kernel-mode return, or none for rank 9. Each
   repeat retrains a board whose DDR is already trained, which has not been

@@ -101,7 +101,7 @@ for case in cases:
     state={'time':100,'operation':None,'ticket':0,'suspended':0,'hook_removed':0,'requests':[],'exit':None}
     names=('board_live','a733_smp_counter','xTaskGetTickCount','xTaskGetCurrentTaskHandle',
            'a733_gpu_backend_stopped','pvr_gpu_service_send_epoch','pvr_gpu_service_collect',
-           'uxQueueMessagesWaiting','vTaskDelay','vTaskSuspend','board_fail','platform_exit',
+           'uxQueueMessagesWaiting','vTaskDelay','vTaskSuspend','board_fail','board_fail_note','platform_exit',
            '_ZN5mimus3asr15SetExactSumHookEPKNS0_12ExactSumHookE')
     hooks={image.address(name):name for name in names}
     def ret(value=0):u.reg_write(UC_ARM64_REG_X0,value);u.reg_write(UC_ARM64_REG_PC,u.reg_read(UC_ARM64_REG_LR))
@@ -110,7 +110,7 @@ for case in cases:
         if name is None:return
         args=[uc.reg_read(UC_ARM64_REG_X0+i) for i in range(5)]
         if name=='platform_exit':state['exit']=args[0];uc.emu_stop()
-        elif name=='board_fail':ret()
+        elif name in ('board_fail','board_fail_note'):ret()
         elif name=='board_live':ret(1)
         elif name=='a733_smp_counter':ret(state['time']*24)
         elif name=='xTaskGetTickCount':ret(state['time']//1000)

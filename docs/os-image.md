@@ -39,7 +39,14 @@ cmake --build "$build/hello" --target sunstone-a733-os-hello -j12
 
 "$cfg" "$os" "$build/mimus" -DMIMUS_DIR="$mimus" -DSUNSTONE_A733_OS=ON -DSUNSTONE_APPLICATION=mimus
 cmake --build "$build/mimus" --target sunstone-a733-os -j12
+
+"$cfg" "$os" "$build/control-hello" -DMIMUS_DIR= -DSUNSTONE_A733_OS=ON -DSUNSTONE_APPLICATION=hello-compute \
+  -DSUNSTONE_A733_OS_CPU_RETURN=ON -DA733_A76_ADMITTED=ON -DSUNSTONE_A733_OS_CPU_CLOCK=ON
+cmake --build "$build/control-hello" --target sunstone-a733-os-hello -j12
 ```
+
+The last image is hello-compute with the CPU-return lifetime, the default
+image of `tools/dev-run.py`.
 
 `sunstone-a733-os-core` is an object library built from the board composition
 and OS sources. It does not copy the mimus board target. Application sources
@@ -57,6 +64,16 @@ profile sets `SUNSTONE_A733_OS_RESIDENT=ON`; its watchdog owner renews the
 lifetime from service progress. `SUNSTONE_A733_OS_CPU_RETURN=ON` selects the
 success-only returning profile and its existing retirement requirements.
 Faults retain resources unless their owning path proves retirement.
+
+`tools/dev-run.py cpu-return` runs one CPU-return image on one board under
+the host-armed watchdog. It builds the typed session from the image's
+manifest, uploads the INPUT contents given with `--input`, and decodes the
+result with the application's decoder module: `apps/<name>/host.py` for an
+application in this tree, or the module given with `--decoder`. For
+hello-compute, a run passes when the returned checksum equals the Adler-32 of
+the input. `--check-only` prepares the bundle and compares the board's
+read-only clock, GPADC and SID state with the image's entry checks without a
+launch.
 
 ## Admission, startup and memory
 
@@ -147,8 +164,9 @@ SunstoneOS. Recognition, application protocol, placement and model checks
 live under mimus's `sunstoneos/checks/` and `sunstoneos/apps/`.
 [Validation policy](validation.md) selects checks by changed behavior.
 The integration gate builds OS variants with an empty `MIMUS_DIR`; it adds
-external mimus checks only with `--mimus-dir` or the `MIMUS_DIR` environment
-variable. `--build-root` keeps a task's new builds and logs together.
+external application checks with `--application CHECKOUT` or the
+`SUNSTONE_EXTERNAL_APPLICATIONS` environment variable. The optional
+`MIMUS_DIR` compatibility selector names the mimus example checkout. `--build-root` keeps a task's new builds and logs together.
 
 ## Not yet integrated
 

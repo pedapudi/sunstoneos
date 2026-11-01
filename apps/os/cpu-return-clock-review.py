@@ -60,7 +60,7 @@ def compatibility(a, historical, record, profile, evidence, require):
         evidence(item)
 
 
-def validate(a, data, record, image_hash, raw, profile, grant, evidence, require, Elf, *, input_reservation="input_ddr"):
+def validate(a, data, record, image_hash, raw, profile, grant, evidence, require, Elf, *, input_reservation):
     require(a.get('schema') in UNDER_TEST_SCHEMAS and a.get('execution_profile') == 'os-cpu-return-v1' and
             a.get('status') == 'under-test' and a.get('reviewed') is True and 'passed' not in a and
             a.get('identity') == record['identity'] and a.get('port') == record['port'] and

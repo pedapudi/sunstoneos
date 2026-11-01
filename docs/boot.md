@@ -140,6 +140,11 @@ The host loader requires the patched recovery tool:
 python3 tools/run-ddr.py --fel ~/.cache/sunstoneos/build/sunxi-a733/sunxi-fel
 ```
 
+Without `--build` the loader restores the board's recorded training,
+chosen by its SID, and trains fully when it has no record or the restore
+fails; `--full-training` trains fully with the plain build. The
+[records runbook](board-runbooks/dram-restore-records.md) gives the
+setup, the exit statuses and the record capture.
 Run the loader only when DDR initialization is needed. It records SRAM backups,
 checks complete uploads before execution, and stops at the first failure.
 The separate wrapper check uses Unicorn 2.1.4:

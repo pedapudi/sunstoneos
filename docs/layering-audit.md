@@ -174,7 +174,7 @@ mimus handler (`apps/mimus-board/usb0.c:13-35,75-110`).
 ### 7. The NPU admits only networks listed inside the driver, through one built-in client
 
 - **Admission table in the driver:** the admission table, including
-  `mimus-linear-q`, is a source file in `drivers/npu`
+  `linear-i16-per-row`, is a source file in `drivers/npu`
   (`drivers/npu/npu_session_models.inc:19-22`). The table generator writes
   that file into the driver tree (`tools/npu-session-catalogue.py:23-24`).
 - **One OS-created client:** the OS NPU service has one slot and one client
@@ -261,6 +261,11 @@ is routed to the recognition core (`apps/os/irq.c:28`).
   and run steps, and one shared helper module. The gate builds the OS
   without applications, then runs each application's own checks.
 - **Severity:** awkward. **Effort:** large.
+- **Status:** implemented for CPU-return images. `tools/dev-run.py` builds
+  the typed session, uploads and backups from the image's manifest and runs
+  hello-compute or an external application such as mimus through
+  `apps/os/prepare.py` and `apps/os/cpu-return-host.py`. GPU-return and NPU
+  images still have per-application runners.
 
 ### 13. Application headers and tools sit in OS directories
 

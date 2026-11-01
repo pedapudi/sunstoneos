@@ -571,7 +571,9 @@ def opp_step_outcomes(bundle):
                                    ('rate-not-on-pll', 'CPU rate not on its PLL'),
                                    ('pattern-or-lfm', 'pattern or LFM enabled'),
                                    ('voltage-above-bin', "voltage above the bin's top point")) +
-                                  ((('boot-clock-words', 'boot clock words'),) if bundle in (31, 32, 33) else ())]
+                                  ((('boot-clock-words', 'boot clock words'),) if bundle in (31, 32, 33) else ()) +
+                                  ((('bin-top-points', "bin top points differ from the rail helper's"),)
+                                   if bundle == 33 else ())]
     return refusals + [dict(name='step-stopped-thermal-limit', status=1, interrupt=None, fail_lines=0, fault=None,
                             log_contains=[f'BEGIN board bundle {bundle}:',
                                           f'STOPPED board bundle {bundle}: thermal limit'])]

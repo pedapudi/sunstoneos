@@ -12,6 +12,7 @@
 #undef a733_cpu_clock_request
 struct board_application board;
 struct board_provider providers;
+void board_fail_note(uint32_t site,uint32_t value,const void *caller){(void)site;(void)value;(void)caller;}
 static struct os_session session;
 static struct a733_thermal_policy thermal_policy;
 static uint64_t time_us=100;

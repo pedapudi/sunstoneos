@@ -63,6 +63,7 @@ struct a733_thermal {
     uint64_t deadline,last_now;
     uint32_t sequence;
     unsigned initialized,stage,fault,held;
+    unsigned fault_site; /* first fault: stage << 16 | driver source line */
 };
 /* Pure A733-specific packed eFuse decoding. Missing/erased sensor words or an
  * unrepresentable correction fail without changing output; no guessed trim.

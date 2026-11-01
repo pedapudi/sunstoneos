@@ -21,14 +21,20 @@ python3 tools/integration-gate.py "$PWD" pmic-ownership \
 
 Add `--target TARGET` for each affected OS-core central build, `--variant NAME`
 for an affected OS configuration, and `--check NAME` for each needed regression
-check. The kernel, eight-core soak and mimus checks automatically build their
-required images. The OS-core central build is configured with an empty
-`MIMUS_DIR`, so its targets and checks never read a mimus checkout. Each
-application in the gate's `APPLICATIONS` table, at present only mimus, has its
-own central build and checks. Every OS variant builds with no application. External mimus checks require
-`--mimus-dir` or the `MIMUS_DIR` environment variable. A source-only check configures no build. Duplicate selections
-run once. `--help` lists the supported variants and checks; other component
-checks continue to run directly with their required inputs.
+check. The kernel and eight-core soak checks automatically build their required
+images. Selected external application checks build their declared targets.
+OS-core builds and every OS variant clear external application selectors.
+Each application checkout supplies its name, target and command list in
+`sunstoneos/gate.json`; its builds and checks use a separate directory.
+Select checkouts with repeatable `--application CHECKOUT` arguments or the
+semicolon-separated `SUNSTONE_EXTERNAL_APPLICATIONS` environment variable.
+A source declaration with `application_directory` may also provide a
+compatibility selector, such as `MIMUS_DIR` for the mimus example.
+
+A source-only check configures no build. Duplicate selections run once.
+`--help` lists the supported OS variants; external check names come from the
+selected declarations. Other component checks run directly with their
+required inputs.
 
 Use `checks/check-index.py --changed PATH...` to help find component coverage.
 Its textual search cannot prove that an empty selection is sufficient. The

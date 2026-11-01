@@ -368,6 +368,7 @@ def retain_after_capture(record,save,quarantine,hold=base.hold_ownership):
 
 def run_session(args,bundle,prepared,ready,validate_entry,capture_device,*,
                 product,serial,bcd_device,capture_seconds,result_key,source_files=(),
+                capture_limit_seconds=None,
                 description='Supervised native application; manual reconnection after capture'):
     """Shared protected transport for the observer and native board application.
 
@@ -375,7 +376,13 @@ def run_session(args,bundle,prepared,ready,validate_entry,capture_device,*,
     The capture callback consumes only the newly enumerated native instance.
     Every uncertain post-entry outcome retains the physical lock and queue claim.
     """
-    capture_limit={'application_result':179,'accelerator_result':19,'gpu_display_result':19,'hdmi_audio_result':19,'g2d_result':19,'displayport_result':19,'deinterlace_result':19,'isp0_result':19}.get(result_key,59)
+    capture_limit={'accelerator_result':19,'gpu_display_result':19,'hdmi_audio_result':19,'g2d_result':19,'displayport_result':19,'deinterlace_result':19,'isp0_result':19}.get(result_key,59)
+    if result_key in ('application_result', 'application_board_result'):
+        require(type(capture_limit_seconds) in (int, float) and
+                0 < capture_limit_seconds <= 179, 'Unsupported supervised capture bounds.')
+        capture_limit = capture_limit_seconds
+    else:
+        require(capture_limit_seconds is None, 'Unsupported supervised capture bounds.')
     require(0<capture_seconds<=capture_limit and result_key in ('scheduler_result','board_result','npu_result','gpu_result','gpu_transport_result','gpu_display_result','hdmi_audio_result','g2d_result','displayport_result','deinterlace_result','isp0_result','accelerator_result','i2s_result','jpeg_result','jpeg_encode_result','h264_encode_result','hevc_result','h264_result','dsi_result','bluetooth_result','camera_result','application_result','application_board_result','crypto_result','thermal_result','rtc_result','pcie_result','storage_read_result','spi_result','uart_result','pwm_result','adc_result','monitor_result'),
             'Unsupported supervised capture bounds.')
     require(digest(args.fel)==base.FEL_HASH, 'FEL executable differs from reviewed bytes.')
