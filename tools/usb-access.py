@@ -73,8 +73,13 @@ def discover(port=None):
                 bus = int((device / "busnum").read_text())
                 number = int((device / "devnum").read_text())
                 matches.append(DEV_USB / f"{bus:03}/{number:03}")
-        except FileNotFoundError:
-            continue
+        except OSError as error:
+            # A board that re-enumerates can disappear between these reads:
+            # ENOENT for a removed directory, ENODEV for an attribute of a
+            # device being torn down. Both mean "not present yet"; callers poll.
+            if error.errno in (errno.ENOENT, errno.ENODEV):
+                continue
+            raise
     if len(matches) != 1:
         raise ValueError(f"Expected one FEL device{' on port ' + port if port else '; select --port when multiple boards are attached'}; found {len(matches)}.")
     return matches[0]
