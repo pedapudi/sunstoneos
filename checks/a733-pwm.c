@@ -90,6 +90,11 @@ static void readiness(void)
    m.period.stuck=1;m.power.now=m.pwm.config.deadline_us;
    assert(a733_pwm_poll(&m.pwm,0)==A733_PWM_RETAINED&&m.pwm.clock_retained&&m.pwm.rail_retained);
    assert(m.writes==n&&!m.ppr_writes&&!m.pwm.pin.id&&!m.pwm.report.started);
+   uint32_t observed=(initial?0:m.pwm.plan.pcr)|(1u<<11);
+   assert(m.pwm.report.phase==10&&m.pwm.report.error==1&&m.pwm.report.pcr==observed);
+   assert(m.pwm.configure_step==(initial?1u:2u)&&m.pwm.last_now==900000&&m.pwm.config.deadline_us==900000);
+   assert(m.pwm.plan.pcr==0x0f9f0300&&m.pwm.plan.ppr==0x0257012c);
+   assert(a733_pwm_poll(&m.pwm,0)==A733_PWM_RETAINED&&m.writes==n&&m.pwm.report.pcr==observed&&m.pwm.report.error==1);
   }else{
    m.power.now+=50000;armed();assert(m.control_writes==1&&m.ppr_writes==1);
   }
@@ -98,6 +103,10 @@ static void readiness(void)
  while(m.pwm.configure_step!=2)assert(step_pwm(0)!=A733_PWM_RETAINED);
  *pmic_model_word(&m.power,A733_PWM_BASE+0x240)|=1u<<12;
  assert(a733_pwm_poll(&m.pwm,0)==A733_PWM_RETAINED&&!m.ppr_writes&&!m.pwm.pin.id);
+ uint32_t observed=m.pwm.plan.pcr|(1u<<12)|(1u<<11);
+ assert(m.pwm.report.phase==10&&m.pwm.report.error==11&&m.pwm.report.pcr==observed&&m.pwm.configure_step==2);
+ uint64_t last=m.pwm.last_now;unsigned n=m.writes;
+ assert(a733_pwm_poll(&m.pwm,0)==A733_PWM_RETAINED&&m.writes==n&&m.pwm.report.pcr==observed&&m.pwm.report.error==11&&m.pwm.last_now==last);
 }
 int main(void)
 {

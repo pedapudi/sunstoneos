@@ -108,6 +108,9 @@ static int profile(struct a733_pwm *p)
 }
 static int zero(struct a733_pwm *p,uintptr_t a)
 {uint32_t v;return rd(p,a,&v)&&v==0;}
+/* Keep the last confirmed control observation when readiness later expires. */
+static int configure_pcr(struct a733_pwm *p,uint32_t *v)
+{if(!rd(p,PCR,v))return 0;p->report.pcr=*v;return 1;}
 int a733_pwm_init(struct a733_pwm *p,const struct a733_pwm_config *c,const struct a733_pwm_ops *o,void *cookie,
  struct a733_clock_leases *clocks,struct a733_pins *pins,struct a733_rail_leases *rails,struct a733_pmic *pmic)
 {
@@ -185,21 +188,21 @@ static enum a733_pwm_result hardware(struct a733_pwm *p,unsigned notice)
   if(!p->configure_step){
   if(!zero(p,PIER)||!zero(p,PISR)||!zero(p,PWM+0x10)||!zero(p,PWM+0x14)||!zero(p,PER)||!zero(p,PCGR)||
   !zero(p,PWM+0xc0)||!zero(p,PWM+0x68)||!zero(p,PWM+0x90)||!zero(p,PWM+0x94)||!zero(p,PWM+0x98)||!zero(p,PWM+0x9c)||
-  !zero(p,PWM+0x28)||!rd(p,PCR,&v)||(v&~BIT(11)))return fail(p,11);
+  !zero(p,PWM+0x28)||!configure_pcr(p,&v)||(v&~BIT(11)))return fail(p,11);
    p->configure_step=1;return A733_PWM_PENDING;
   }
   if(p->configure_step==1){
-  if(!rd(p,PCR,&v)||(v&~BIT(11)))return fail(p,11);
+  if(!configure_pcr(p,&v)||(v&~BIT(11)))return fail(p,11);
   if(v&BIT(11))return A733_PWM_PENDING;
   /* PERIOD_RDY is read-only and can change while the control write crosses
    * the peripheral clock domain. Check the owned controls independently. */
-  if(!wr(p,PCR,p->plan.pcr)||!rd(p,PCR,&v)||(v&~BIT(11))!=p->plan.pcr||
+  if(!wr(p,PCR,p->plan.pcr)||!configure_pcr(p,&v)||(v&~BIT(11))!=p->plan.pcr||
      !exact(p,PCGR,BIT(5)))return fail(p,11);
    p->configure_step=2;return A733_PWM_PENDING;
   }
   /* Manual18.7.8.25: a busy period register is not writable. Keep the
    * completed baseline/control steps and wait under the startup deadline. */
-  if(!rd(p,PCR,&v)||(v&~BIT(11))!=p->plan.pcr)return fail(p,11);
+  if(!configure_pcr(p,&v)||(v&~BIT(11))!=p->plan.pcr)return fail(p,11);
   if(v&BIT(11))return A733_PWM_PENDING;
   if(!exact(p,PPR,p->plan.ppr)||!exact(p,PWM+0x248,0))return fail(p,11);
   break;

@@ -165,6 +165,21 @@ also pass. The AArch64 PWM core compiles with the repository runtime headers.
 The FreeRTOS I2S normal stream, simultaneous duplex and stuck-flush cases pass
 in QEMU. These checks establish software behavior with modeled peripherals.
 
+Removing the controller-reset wait from a temporary SPI source copy fails
+the fixture's assertion against writes while reset is pending. Removing the
+FIFO-reset wait fails the assertion that polling must preserve pending state.
+The committed driver remains unchanged for these mutation checks. Raw sources,
+executable hashes and failure logs are in `wait-removal/` below the evidence
+directory named below.
+
+PWM configuration records each confirmed PCR observation in the existing
+`report.pcr` field. A readiness timeout retains configuration phase10,
+deadline error1, the last
+observed PCR and the unchanged plan/deadline. Initial busy records `0x800`;
+busy after control programming records the planned PCR with bit11 set.
+Unexpected control bits retain error11 and the originating observation.
+Focused assertions verify that later retained calls preserve these fields.
+
 One execution of the same four focused host closures measured the following
 wall times, including process and sanitizer startup. The corrected fixtures
 include the additional completion cases; these times are check costs, with no
