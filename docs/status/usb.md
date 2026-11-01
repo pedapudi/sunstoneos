@@ -227,6 +227,76 @@ cover pre-admission recovery, normal and watchdog returns, neighboring bits,
 transport failure and preservation of the first failure. Physical runs establish
 rise/fall and actual reset behavior; host models do not qualify these effects.
 
+## Approved diagnostic implementation and checks
+
+The runner records PL8 mux, data and pull before admission and after native,
+watchdog and setup-helper returns. It latches an output-high observation before
+recovery, clears only the data bit and verifies neighboring fields. A cleanup
+failure preserves the original watchdog or transport failure and prohibits
+DRAM result reads. Three reviewers approve the runner and diagnostic code.
+
+The finite diagnostic uses 500 µs guard deadlines, 50 µs pending-I2C retries and
+vendor-derived S_TWI1 rates up to 400 kHz. It retains the first shutdown request
+across guard and owner tasks, so later acknowledgment cannot extend 650 ms.
+Normal return follows observed comparator fall, real TWI STOP/idle completion,
+local gate/reset and pin restoration, parked guard and timer retirement. Fatal
+cleanup clears PL8 at EL3 after recording the first fault. Each powered test
+reserves 2 ms before its nominal duration and reports the actual on interval.
+The [image guide](../usb-host-images.md) records the three final hashes.
+
+Evidence under `~/.cache/sunstoneos/build/usb-host-board-1101/` includes
+`runner2/review-fixed-power-check/` and `runner2/review-fixed-board-runner/`
+for 26 power cases and 54 runner cases; discovery checks also pass.
+`probe-abort/check-v6/` executes the actual shared fatal and deadline paths.
+`qualification/native-check/` covers delayed comparator/GPIO completion,
+real guard expiry, lost wakes, FUSB thermal/VCONN flags, full payload decoding,
+and sequential control/pulse/hold resource restoration. Normal empty FIFO
+status is modeled independently of the fault bits.
+`qualification/admission-0/`, `admission-1/` and `admission-10/` admit the
+actual native images without device access. The repaired disconnect fixture
+uses retained per-instance quarantine records and passes under
+`qualification/disconnect/`; no production USB-access behavior changes.
+
+The three OS baselines, selected integration gate and check index pass in
+`integration/gate-usb-vbus-final/`. The final native control build peaks at
+about 107 MiB RSS; the integration process peaks at about 140 MiB. The host
+retains 114 GiB available. No containers or board commands run.
+
+Physical control, one-second and ten-second results remain pending. The live
+queue daemon runs from `bringup`, which does not yet contain the new PL8
+checks. No powered entry is submitted through that older runner. The
+coordinator must integrate the reviewed changes and execute the commands in
+the three package READMEs. TYPEC24 remains empty through those runs.
+
+The class merge preserves the shared camera interfaces and this stream's
+modes, spans and deadlines. Files changed relative to the merged device-class
+implementation are `apps/os/client.c`, `drivers/usb/host/uvc-camera.c`,
+`include/sunstone_uvc_camera.h`, `checks/device-classes-usb.c` and
+`checks/device-classes-usb.py`. Their focused merged-tree check passes.
+
+## Follow-up real-time work after the empty-port runs
+
+Reviewed commit `13897638` adds normal xHCI close and host-DMA drain with an
+aggregate five-second close limit and a 16 ms halt limit. It completes endpoint
+stops, slot disables and port resets, excludes enabled Debug Capability, and
+preserves borrowed buffers. HCHalted completes pending pipelined transactions
+under xHCI 1.2 section 5.4.1; no additional undefined AXI acknowledgment is
+required. The change awaits integration with the native memory owner and
+synchronized INTID 187 shutdown. It does not gate PHY or clocks.
+
+Reviewed commit `3d33b607` prepares decoder INTID 81 notification and precise
+JPEG readiness/deadlines. Its owner-waiter integration follows the empty-port
+runs. Decoder output and repeated-frame lifetime remain unqualified. EL0 direct
+serial TX needs a privileged task-stack transition and one-shot provider
+admission; an IRQ-masked SVC cannot call the current native lock path safely.
+No unsafe privilege bypass is implemented.
+
+PHY gating must follow completed halt/drain and preserve shared parents and
+USB0. The effective vendor route is `snps,dwc3` with `sunxi-plat-phy`: it removes
+xHCI before PHY exit and clock/reset shutdown. An unrelated legacy xHCI driver
+does not define this A733 route. Idle transitions and the four class image
+rebuilds remain subsequent work; no physical performance result is claimed.
+
 ## PL8 reset state and return admission
 
 The A733 V1.00 manual, sections 18.14.5.2 and 18.14.7.2–.3/.6, documents

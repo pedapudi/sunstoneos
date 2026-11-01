@@ -1,6 +1,6 @@
-# USB class images await supervised board admission
+# USB host qualification images and attachment
 
-## Attach checklist after coordinator power approval
+## Attach checklist after the empty-port runs
 
 - Keep TYPEC16 connected for board power and USB0/FEL recovery.
 - Use TYPEC24, the USB-C/DisplayPort connector, for a separately powered
@@ -11,16 +11,40 @@
 - For serial, connect a voltage-compatible 1 Mbaud, 8N1 test source and
   receiver with common ground. Do not connect an RS-232 voltage interface
   directly to TTL pins. Press a key or move the mouse during the input run.
-- Begin with the source-disabled control and approved empty-port pulse test.
-  The coordinator must approve the independent cutoff and source envelope
-  in [USB status](status/usb.md) before enabling VBUS. A completely empty
-  connector remains source-disabled in normal attachment mode. The separate
-  diagnostic pulse publishes no attachment token.
+- Keep TYPEC24 empty for the source-disabled control, one-second pulse and
+  ten-second hold on board port `3-1`. The coordinator approves these runs
+  using the vendor PL8/SY6280 protection. Each needs PL8 post-return readback
+  from the updated runner. Attach the hub only after all three return normally.
 
-No new class package is frozen while power approval and actual controller
-drain/normal return remain unresolved. The existing packages below are
-host-tested artifacts and are not admitted board entries. Build checks do
-not authorize physical launch.
+The [USB status](status/usb.md) records the approval, reset-state limits and
+software cleanup requirements.
+
+## Empty-port images are ready for the updated runner
+
+The package is under
+`~/.cache/sunstoneos/build/usb-host-board-1101/qualification/vbus-images/`.
+Each directory contains `image.elf`, `decoder.py` and a short README with its
+submission command and expected result. All three images pass host admission
+and the native cutoff, fatal-cleanup and sequential-retirement models.
+These checks establish no physical VBUS result.
+
+| Directory | Test with TYPEC24 empty | ELF SHA-256 |
+| --- | --- | --- |
+| `control` | Source disabled, open CC, normal return | `f4f58d544a58b21c39298d2fb184b17536c1087e321f4790b7e336904d100ec7` |
+| `pulse-1s` | VBUSOK rise, source on for 0.980–1.000 s, VBUSOK fall, normal return | `390c84eed35f4fbc5027278a9d42f5fba37edff92305da6a36c8f6ebabfff3f0` |
+| `hold-10s` | VBUSOK rise, source on for 9.980–10.000 s, VBUSOK fall, normal return | `d067b62a130c75cca01d354c11da10b310bbbd823400033212244b5fb230575b` |
+
+The coordinator must integrate the runner PL8 checks before submission and use
+that runner for the queue daemon. The observed daemon uses `bringup` without
+those checks; no diagnostic entry is submitted to it. Run the control first,
+then submit each powered image only after the prior result passes. The
+submission commands use the full payload decoder and its failure predicates.
+They do not compare dynamic timing fields with a fixed success string.
+
+The four class packages below are archived host artifacts. Their returning
+controller and decoder lifetimes remain open; they are not admitted board
+entries. Rebuild them after the empty-port results pass and finite class
+cleanup is integrated. No physical host result is claimed.
 
 The native images implement OS-owned HID input, USB serial and UVC camera
 services. Application manifests grant each class separately. Host checks and
@@ -61,8 +85,8 @@ class images.
 
 ## Builds select the actual native class paths
 
-Run this recipe after source/cutoff approval and finite class return are
-implemented. Each configuration uses a separate cache directory. The empty
+Run this recipe after the approved empty-port runs pass and finite class
+return is implemented. Each configuration uses a separate cache directory. The empty
 external application path keeps the OS independent of mimus.
 
 ```sh

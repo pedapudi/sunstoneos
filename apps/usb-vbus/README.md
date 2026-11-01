@@ -46,6 +46,9 @@ Build with the cached configuration helper and private CMake hook:
 
 ```sh
 ~/.cache/sunstoneos/bin/cfg.sh "$PWD" "$VBUS_BUILD" \
+  -DMIMUS_DIR= -DCMAKE_C_COMPILER=/usr/bin/clang-21 \
+  -DCMAKE_ASM_COMPILER=/usr/bin/clang-21 -DCMAKE_CXX_COMPILER=/usr/bin/clang++-21 \
+  -DPython3_EXECUTABLE="$HOME/.cache/sunstoneos/venv/bin/python3" \
   -DCMAKE_PROJECT_sunstoneos_INCLUDE="$PWD/apps/usb-vbus/probe.cmake"
 cmake --build "$VBUS_BUILD" -j2 --target sunstone-a733-usb-vbus-0 \
   sunstone-a733-usb-vbus-1 sunstone-a733-usb-vbus-10

@@ -1,6 +1,9 @@
 # Driver completion, CPU cost and idle wakeups
 
-**Status: host-tested fixes; physical timing is unmeasured.**
+**Status: implemented.**
+
+**Board-qualified scope:** Physical driver timing and idle power are unmeasured.
+Host models cover the selected ready-step, notification and deadline changes.
 
 This audit is for developers familiar with C, FreeRTOS and DMA ownership.
 It covers the I/O paths under `drivers/`, `platform/`, `runtime/` and `apps/os/`.
@@ -29,6 +32,25 @@ remain in the linked subsystem status files.
 | 8 | Display validation: `drivers/display/a733_display_native.c:10`, `drivers/display/a733_display_native.c:176`; replay caller `apps/dsi-scanout/native.c:270` | Each full 720p double-buffer walk reads 8192 uncached table words and checks 1810 CPU pages, requiring 3620 AT translations. Replay repeats that walk across a phase change. Its caller also advances ready DE steps once per tick. | **Duplicate walks fixed.** Validate once per prepare/request/replay; keep live allocation/IOMMU metadata checks per access and revalidate corruption on the next operation. Model prepare/start/stop walks fall from 13 to 3. Direct replay admission performs one walk. Tick-paced replay and per-MMIO checks remain open. |
 | 9 | G2D readout: `apps/g2d/native.c:220`, `apps/g2d/native.c:233`, `apps/g2d/memory.c:22` | Output copies 32 KiB per tick. Two 24 KiB guard scans per chunk add at least 48 KiB of uncached reads; a 720p XRGB frame needs 113 copy wakes and at least 5.30 MiB of guard reads. | **Open.** Use task-end IRQ notification, retain the vendor mixer-reset order, and verify immutable guards once at each ownership boundary. Bound and batch copied ranges; preserve IOMMU-fault and tail checks. The driver already emits an eight-header RCQ batch. |
 | 10 | Small crypto operations: `drivers/crypto/a733_ce_native.c:97`, `drivers/crypto/a733_ce_native.c:120` | A 16-byte AES task maintains 7872 bytes of maximum-sized cache ranges, 492 times its payload; 32-byte random generation maintains 2560 bytes. Counts exclude stores and copies. | **Open.** Carry authenticated dirty/input/output lengths into native synchronization, preserving key/output scrubbing and cache-line isolation. Use CE completion IRQ notification and resident descriptors; qualify private memory and entropy independently. |
+
+## USB qualification follow-ups preserve the physical-test order
+
+The [USB status](usb.md) records coordinator approval and reviewed empty-port
+control, one-second and ten-second diagnostics. The updated runner checks PL8
+on every return. These images await coordinator execution through that runner;
+they do not start xHCI, PHY or DMA.
+
+Reviewed close/drain commit `13897638` consumes endpoint and command completions,
+finishes port resets, excludes enabled Debug Capability and observes HCHalted
+within 16 ms. The normative xHCI halt condition covers pending pipelined
+transactions; an unspecified additional fabric acknowledgment is unnecessary.
+Borrowed pages stay retained. Native memory reclamation and IRQ synchronization
+remain to integrate after the empty-port runs.
+
+Reviewed JPEG commit `3d33b607` supplies decoder INTID 81 wakeups and precise
+readiness/deadlines. It awaits owner-waiter integration. EL0 serial submission
+still needs a safe privileged continuation and nonblocking provider admission.
+PHY idle gating and physical timing/power measurements remain open.
 
 ## Remaining driver families and shared services
 
