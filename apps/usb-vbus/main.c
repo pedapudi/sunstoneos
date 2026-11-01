@@ -17,6 +17,7 @@ __attribute__((used,retain)) const uint64_t usb_vbus_probe_profile[]={UINT64_C(0
 struct report {
     uint64_t magic,mode,failure,state,rose,fell,rise_us,fall_us,max_gap,cc_samples;
     uint64_t guard_gap,guard_fault,on_us,pl8_cfg,pl8_dat,twi_state,twi_status,rate_hz,divider,bus_retired;
+    uint64_t inherited_apbs1,inherited_bgr,inherited_xo,inherited_ctrl,inherited_status,inherited_lines;
 };
 #define OUT ((volatile struct report *)(uintptr_t)0x42000100)
 SUNSTONE_PROBE_IMAGE(0x42000100,sizeof(struct report),0,0,20);
@@ -38,6 +39,8 @@ static uint32_t divider,rate,idle_status,saved_mux,saved_drive,saved_pull;
 static unsigned bus_retired;
 static uint8_t saved_timer_priority;
 static unsigned timer_retired;
+static uint32_t apbs_bits,inherited_apbs1,inherited_bgr,inherited_xo;
+static uint32_t inherited_ctrl=UINT32_MAX,inherited_status=UINT32_MAX,inherited_lines=UINT32_MAX;
 static uint32_t rd(uintptr_t a){uint32_t v=*(volatile uint32_t *)a;__asm__ volatile("dsb sy":::"memory");return v;}
 static void wr(uintptr_t a,uint32_t v){*(volatile uint32_t *)a=v;__asm__ volatile("dsb sy":::"memory");}
 /* Fault entry runs at EL3 with translation disabled. No EL1 state is read:
@@ -55,7 +58,7 @@ static uint64_t now(void *unused){(void)unused;return counter()/24;}
 static int pin_owned(void)
 {
     return (rd(PIO+4)&0x00ff00ff)==0x00330001 &&
-        (rd(BGR)&0x20002)==0x20002 && (rd(0x07010010)&0x0700001f)==0;
+        (rd(BGR)&0x20002)==0x20002 && (rd(0x07010010)&0x0700001f)==apbs_bits;
 }
 static int output(void *unused,unsigned on)
 {
@@ -102,6 +105,21 @@ static int io(void *unused,unsigned reg,unsigned reading,uint8_t *value)
 }
 static int update(uintptr_t a,uint32_t mask,uint32_t v)
 {uint32_t desired=(rd(a)&~mask)|(v&mask);wr(a,desired);return rd(a)==desired;}
+/* Setup waits use the precise timer; the independent GPIO guard keeps running. */
+static int setup_wait(uint64_t deadline,uint64_t delay)
+{
+    uint64_t t=now(NULL);if(t>=deadline||delay>deadline-t)return 0;
+    atomic_store(&heartbeat,t);
+    uint64_t wake=t+delay;
+    return sunstone_deadline_wait_until(wake)>=0;
+}
+static int idle_controller(void)
+{
+    return !(rd(TWI+0xc)&0xb0) && rd(TWI+0x10)==0xf8 &&
+        (rd(TWI+0x20)&0x35)==0x30 && !(rd(TWI+0x200)&0x80000003) &&
+        !(rd(TWI+0x210)&3) && !(rd(TWI+0x214)&0xffff0000) &&
+        !(rd(TWI+0x218)&0x01000100) && !(rd(TWI+0x21c)&0x007f007f);
+}
 __attribute__((noinline)) static int prepare(void)
 {
     const struct sunstone_board_description *board=sunstone_board_orangepi_zero3w();
@@ -111,26 +129,40 @@ __attribute__((noinline)) static int prepare(void)
        port->vbus_bank!=A733_PIN_L||port->irq_bank!=A733_PIN_L||
        port->scl_bank!=A733_PIN_L||port->sda_bank!=A733_PIN_L||
        !port->vbus_active_high||port->typec_address!=0x22||port->controller!=2)return 0;
+    inherited_apbs1=rd(0x07010010);inherited_bgr=rd(BGR);inherited_xo=rd(0x07090160);
+    apbs_bits=inherited_apbs1&0x0700001f;
+    unsigned source=apbs_bits>>24;
+    if((inherited_xo&0x10000002)!=0x10000002 || (source!=0&&source!=4))return 0;
+    if(source==4&&!a733_clock_ref24_valid(inherited_xo,rd(0x02002000)))return 0;
+    /* APBS1 also clocks the live PMIC bus. Preserve its selected parent and
+     * divider; the vendor routes S_TWI1 through this shared clock. Program
+     * the local CCR from that actual rate, without retuning shared ancestry. */
+    unsigned hz=(source==4?24000000:a733_clock_dcxo_hz(inherited_xo))/((apbs_bits&31)+1);
+    uint64_t deadline=now(NULL)+20000;
+    if((inherited_bgr&0x20002)==0x20002){
+        inherited_ctrl=rd(TWI+0xc);inherited_status=rd(TWI+0x10);inherited_lines=rd(TWI+0x20);
+        /* Do not reset an active transfer or autonomous DMA writer. Give an
+         * inherited operation a bounded chance to reach actual bus-free. */
+        while(!idle_controller())if(!setup_wait(deadline,50))return 0;
+    }
     saved_mux=rd(PIO+4);saved_drive=rd(PIO+0x18);saved_pull=rd(PIO+0x24);
-    uint32_t pins[]={8,9,12,13};
-    for(unsigned i=0;i<4;++i){unsigned f=(rd(PIO+4)>>(4*(pins[i]-8)))&15;
-        if(f!=0&&f!=15&&!(i==0&&f==1&&!(rd(PIO+0x10)&0x100)))return 0;}
-    /* Data low precedes mux-to-output; unrelated bank-L fields are retained. */
     wr(PIO+0x10,rd(PIO+0x10)&~0x100u);
-    if(!update(PIO+0x18,0x00ff00ff,0)||!update(PIO+0x24,0x0f0f0000,0)||
+    if(!update(PIO+4,0x00ff00ff,0x00ff00ff)||
+       !update(PIO+0x18,0x00ff00ff,0)||!update(PIO+0x24,0x0f0f0000,0)||
        !update(PIO+4,0x00ff00ff,0x00330001))return 0;
-    uint32_t xo=rd(0x07090160);
-    if((rd(0x07010010)&0x0700001f)||(xo&0x10000002)!=0x10000002||(rd(BGR)&0x20002))return 0;
-    unsigned hz=a733_clock_dcxo_hz(xo),best=0;
-    /* Vendor DTS requests400kHz. Select the fastest representable rate at or
-     * below that clock, rather than the common standard-mode100kHz helper. */
+    /* Vendor sunxi_r_i2c_bus_setting: reset assert/deassert, gate off for
+     * 1ms, then gate on. Add1us for microsecond-clock truncation.
+     * These are synchronous CCU bits; preserve S_TWI0. */
+    if(!update(BGR,0x20000,0)||!update(BGR,0x20000,0x20000)||!update(BGR,2,0)||
+       !setup_wait(deadline,1001)||!update(BGR,2,2))return 0;
+    wr(TWI+0x1c,0);wr(TWI+0x18,1);
+    /* Manual18.11.10.7: SOFT_RST self-clears only when reset completes. */
+    while(rd(TWI+0x18)&1)if(!setup_wait(deadline,50))return 0;
+    while(!idle_controller())if(!setup_wait(deadline,50))return 0;
+    unsigned best=0;
     for(unsigned n=0;n<8;++n)for(unsigned m=0;m<16;++m){unsigned d=(1u<<n)*(m+1)*10;
         if((uint64_t)hz<=UINT64_C(400000)*d&&(!best||d<best)){best=d;divider=(m<<3)|n;}}
     if(!best)return 0;rate=hz/best;
-    if(!update(BGR,0x20000,0x20000)||!update(BGR,2,2))return 0;
-    if((rd(TWI+0xc)&0xfc)||rd(TWI+0x10)!=0xf8||(rd(TWI+0x200)&0x80000003)||
-       (rd(TWI+0x210)&3)||(rd(TWI+0x214)&0xffff0000)||(rd(TWI+0x218)&0x01000100)||
-       (rd(TWI+0x21c)&0x007f007f)||(rd(TWI+0x18)&1)||(rd(TWI+0x20)&0x35)!=0x30)return 0;
     if(!update(TWI+0x14,255,divider)||!update(TWI+0x1c,3,0)||!update(TWI+0xc,0xfd,0x40))return 0;
     static const struct a733_twi_ops ops={bus_now,authenticate,enter,leave,retain,read_bus,write_bus,current};
     prepared=1;return a733_twi_init_controller(&bus,&ops,&prepared,divider,A733_TWI_R1,1);
@@ -239,7 +271,8 @@ static void client(void *unused)
         diagnostic.rose,diagnostic.fell,diagnostic.rise_us,diagnostic.fall_us,diagnostic.max_gap,
         diagnostic.cc_samples,guard_max_gap,atomic_load(&guard_fault),
         enable_attempt_us?off_confirm_us-enable_attempt_us:0,rd(PIO+4),rd(PIO+0x10),
-        bus.state,idle_status,rate,divider,bus_retired};
+        bus.state,idle_status,rate,divider,bus_retired,inherited_apbs1,inherited_bgr,
+        inherited_xo,inherited_ctrl,inherited_status,inherited_lines};
     sunstone_probe_complete(diagnostic.failure!=0||guard_max_gap>2000,sizeof(*OUT));
 }
 void vApplicationStackOverflowHook(TaskHandle_t task,char *name){(void)task;(void)name;sunstone_probe_fail(0xa4,0);}

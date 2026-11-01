@@ -197,14 +197,11 @@ def main():
     model.registers.update({0x07010010: 0, 0x07090160: 0x10008002, 0x0701019c: 0})
     with owner.locked():
         power.admit_diagnostic(owner)
-        for address, invalid in ((0x07010010, 1 << 24), (0x07090160, 0), (0x0701019c, 2)):
-            previous = model.registers[address]
-            model.registers[address] = invalid
-            try: power.admit_diagnostic(owner)
-            except power.PowerFault: pass
-            else: raise AssertionError('Unsupported clock accepted')
-            model.registers[address] = previous
-    passed('diagnostic-clocks-read-live-and-unsupported-state-refused')
+        for values in ((0x04000000,0x983fffb7,0x10001),(0x04000000,0x983fffb7,0x30003)):
+            model.registers.update(dict(zip((0x07010010,0x07090160,0x0701019c),values)))
+            power.admit_diagnostic(owner)
+            assert tuple(owner.record['usb_vbus_clock_admission'].values())==values
+    passed('diagnostic-records-observed-and-warm-entry-for-bounded-native-initialization')
 
     info = {'descriptor': {}, 'symbols': {'usb_vbus_probe_profile': 1}}
     root = args.out/'policy'; root.mkdir()

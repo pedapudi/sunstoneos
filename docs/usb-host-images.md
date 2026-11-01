@@ -21,25 +21,18 @@ software cleanup requirements.
 
 ## Empty-port images are ready for the updated runner
 
-The package is under
-`~/.cache/sunstoneos/build/usb-host-board-1101/qualification/vbus-images/`.
-Each directory contains `image.elf`, `decoder.py` and a short README with its
-submission command and expected result. All three images pass host admission
-and the native cutoff, fatal-cleanup and sequential-retirement models.
-These checks establish no physical VBUS result.
+The rebuilt package is under
+`~/.cache/sunstoneos/build/usb-host-board-1101/inherited4/images/`.
+Its `control`, `pulse-1s` and `hold-10s` directories each contain an image,
+matching 208-byte report decoder and README with SHA-256 and exact submission.
+These images pass host admission and inherited-state initialization models.
+They await runner commit `1d9eb576` in the daemon's `bringup` checkout.
 
-| Directory | Test with TYPEC24 empty | ELF SHA-256 |
-| --- | --- | --- |
-| `control` | Source disabled, open CC, normal return | `f4f58d544a58b21c39298d2fb184b17536c1087e321f4790b7e336904d100ec7` |
-| `pulse-1s` | VBUSOK rise, source on for 0.980–1.000 s, VBUSOK fall, normal return | `390c84eed35f4fbc5027278a9d42f5fba37edff92305da6a36c8f6ebabfff3f0` |
-| `hold-10s` | VBUSOK rise, source on for 9.980–10.000 s, VBUSOK fall, normal return | `d067b62a130c75cca01d354c11da10b310bbbd823400033212244b5fb230575b` |
-
-The coordinator must integrate the runner PL8 checks before submission and use
-that runner for the queue daemon. The observed daemon uses `bringup` without
-those checks; no diagnostic entry is submitted to it. Run the control first,
-then submit each powered image only after the prior result passes. The
-submission commands use the full payload decoder and its failure predicates.
-They do not compare dynamic timing fields with a fixed success string.
+Run control, pulse and hold sequentially on `3-1` using `--expect SSBVRPT1`,
+the matching decoder and `--approved-by coordinator`. Continue only after each
+prior result passes, and stop at the first failure. TYPEC24 stays empty through
+these runs. The earlier control image was refused before launch in entry
+`1793567391558674480-ec1dbf2c`; the rebuilt images have no physical result yet.
 
 The four class packages below are archived host artifacts. Their returning
 controller and decoder lifetimes remain open; they are not admitted board
