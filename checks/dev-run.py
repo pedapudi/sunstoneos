@@ -44,7 +44,7 @@ def captured_state():
 
 def preparation_cases(host, out):
     live = captured_state()
-    meta = dev.prepare(host, dev.CONTROL / 'board/image.elf', dev.CONTROL, out / 'bundle', live)
+    meta = dev.prepare(host, dev.CONTROL_IMAGE, dev.CONTROL, out / 'bundle', live)
     reviewed, built = dev.CONTROL / 'board', out / 'bundle/board'
     for name in ['launch.bin'] + [n for n in meta['files'] if n.startswith('segment-')]:
         assert (reviewed / name).read_bytes() == (built / name).read_bytes(), name
@@ -63,6 +63,9 @@ def preparation_cases(host, out):
     assert derived['configure_adc_clock'] is None and 'GPADC24M' in findings[0]
     findings, _ = state({0x8872000: 0xf8805300})
     assert len(findings) == 1 and 'CPU-B' in findings[0]
+    # After a cold DRAM start boot0's board setup leaves CPU-L and the DSU here.
+    findings, _ = state({0x8871000: 0xf8802700, 0x887101c: 0x03000000, 0x8873000: 0xf8801e00, 0x887301c: 0x03000105})
+    assert len(findings) == 2 and findings[0].startswith('CPU-L') and findings[1].startswith('DSU'), findings
     findings, _ = state({0x300624c: 0x00000195})
     assert len(findings) == 1 and 'speed bin 4' in findings[0]
     rows.append({'name': 'state-check-derives-and-refuses', 'passed': True})
@@ -126,11 +129,12 @@ def transport_case(host, root, live, variant):
                 i += 2; state['launched'] = True; state['node'] = new; state['memory'].clear()
                 epoch = json.loads((root / 'bundle/dev-bundle.json').read_text())['epoch']
                 state['rtc'][0x100] = 0x5c0d0000 | epoch & 0xffff
-                if variant == 'fired':   # fail(0x736): EL3 stop, park, watchdog reset
+                if variant == 'fired':   # fail(0x736): EL3 stop shortens WDT0 to 0.5 s and parks
+                    state['mode'] = 0x01
                     state['rtc'].update({0x104: 0x0111 << 16 | 0x6736, 0x10c: 0x4abfea6, 0x110: 0xfa010836,
                                          0x114: 0x736, 0x118: 0x4101a1c4, 0x11c: 0xfff4f7ff})
-                else:                    # normal ROM return with a zero report
-                    state['mode'] = 0xb0; state['rtc'][0x104] = 0x0503 << 16 | 0xb0
+                else:                    # normal ROM return (disarmed, RETURN_ROM 0) with a zero report
+                    state['mode'] = 0; state['rtc'][0x104] = 0x0503 << 16
             else:
                 raise AssertionError(op)
         return types.SimpleNamespace(returncode=0, stdout='\n'.join(out), stderr='')
@@ -163,7 +167,7 @@ def transport_cases(host, out, live):
         if variant == 'fired':
             report = json.loads((root / 'run/watchdog-report.json').read_text())
             assert type(error).__name__ == 'WatchdogReset' and len(executed) == 1 and not state['quarantined']
-            assert report['breadcrumbs']['fault']['detail'] == '0x736', report
+            assert report['breadcrumbs']['fault']['detail'] == '0x736' and report['stop_shortened'], report
         elif variant == 'state-changed':
             assert 'Board state changed' in str(error) and not executed and not state['quarantined']
             assert not any('write' in c for c in state['calls']), 'no write before the state comparison'

@@ -40,9 +40,10 @@ CACHE = Path.home() / '.cache/sunstoneos'
 EVIDENCE = CACHE / 'evidence'
 FEL = CACHE / 'build/sunxi-a733/sunxi-fel'
 CLANG, LLD = Path('/usr/bin/clang-21'), CACHE / 'host/usr/bin/ld.lld-21'
+CONTROL_IMAGE = EVIDENCE / 'wdt-breadcrumbs-1031/control/package/native/image.elf'
 CONTROL = EVIDENCE / 'wdt-breadcrumbs-1031/control/offline-proof/prepared'
 GPU_TREE = Path.home() / 'git/sunstoneos-worktrees/gpu-bisect-1031-crumbs'
-GPU_LADDER = CACHE / 'build/gpu-bisect-1031/crumbs/ladder'
+GPU_LADDER = CACHE / 'build/gpu-bisect-1031/crumbs/ladder-wdt2'
 GPU_TEMPLATE = EVIDENCE / 'sol-gpu-completion-1031/prepared'
 RAIL_HELPER = EVIDENCE / 'wdt-breadcrumbs-1031/control/offline-proof/rails-800/probe.bin'
 RAIL_HELPER_SHA256 = 'f48a6be72b336c8990a124fd608bba5fddb5c8617ec62eac5642b2d50fb27c75'
@@ -164,8 +165,8 @@ def prepare(host, image, template, output, live):
     data = Path(image).read_bytes()
     elf = o.os_link.Elf(data)
     require(symbol(elf, 'os_cpu_return_output') is not None, 'Image is not a CPU-return image.')
-    mode = o.watchdog_marker(elf)
-    require(mode is not None, 'Image carries no host-armed watchdog marker; a hang would strand the board.')
+    watchdog = o.watchdog_marker(elf)
+    require(watchdog is not None, 'Image carries no host-armed watchdog marker; a hang would strand the board.')
     raw = bytearray((Path(template) / 'board/session-template.bin').read_bytes())
     # Fresh identities: no record of an earlier run (DRAM result, report)
     # can match this session. The grant record names the same session.
@@ -186,7 +187,7 @@ def prepare(host, image, template, output, live):
     (board / 'image.elf').write_bytes(data)
     segments, address, identity = o.base.image_parts(board / 'image.elf')
     raw[48:80] = identity
-    o.build_launcher(board, len(raw), str(CLANG), str(LLD), mode)
+    o.build_launcher(board, len(raw), str(CLANG), str(LLD), watchdog['mode'])
     uploads = []
     for index, segment in enumerate(segments):
         if segment['data']:
@@ -210,7 +211,7 @@ def prepare(host, image, template, output, live):
             'build_id': identity.hex(), 'epoch': epoch, 'generation': generation, 'lease': lease,
             'workload': struct.unpack_from('<I', raw, 400)[0], 'segments': uploads,
             'files': {n: digest(board / n) for n in names}, 'template': str(Path(template).resolve()),
-            'derived_session': derived, 'state_findings': findings, 'watchdog_mode': mode}
+            'derived_session': derived, 'state_findings': findings, 'watchdog': watchdog}
     save(output / 'dev-bundle.json', meta)
     return meta
 
@@ -301,6 +302,7 @@ def main(argv=None):
     parser.add_argument('kind', choices=('cpu-return', 'gpu-return', 'npu'))
     parser.add_argument('--image', type=Path, help='Image ELF (default: the control image or ladder stage)')
     parser.add_argument('--stage', type=int, help='gpu-return: ladder stage number (1-9)')
+    parser.add_argument('--ladder', type=Path, default=GPU_LADDER, help='gpu-return: ladder directory')
     parser.add_argument('--template', type=Path, help='Bundle supplying session-template.bin and assets/')
     parser.add_argument('--host-tree', type=Path, help='Source tree whose host modules run the image')
     parser.add_argument('--port', help='Physical USB port, for example 3-1 (else SUNSTONE_USB_PORT)')
@@ -323,12 +325,13 @@ def main(argv=None):
         tree = args.host_tree or GPU_TREE
         if args.image is None:
             require(args.stage, 'gpu-return requires --image or --stage.')
-            [stage] = sorted(GPU_LADDER.glob(f'{args.stage}-*'))
-            args.image = stage / 'sunstone-a733-os.elf'
+            stages = sorted(args.ladder.glob(f'{args.stage}-*/sunstone-a733-os.elf'))
+            require(len(stages) == 1, f'No single ladder stage {args.stage} image in {args.ladder}.')
+            args.image = stages[0]
         template = args.template or GPU_TEMPLATE
     else:
         tree = args.host_tree or ROOT
-        args.image = args.image or CONTROL / 'board/image.elf'
+        args.image = args.image or CONTROL_IMAGE
         template = args.template or CONTROL
     evidence = args.evidence or EVIDENCE / 'dev-runs-1031' / f"{port or 'offline'}-{args.kind}-{time.strftime('%H%M%S')}"
     evidence.mkdir(parents=True, exist_ok=False)
@@ -348,7 +351,7 @@ def main(argv=None):
     elif args.check_only:
         validator(host)(evidence / 'bundle')
         record.update(outcome='checked', summary=summary_of(args.kind, 'prepared and checked',
-            f"image {meta['image_sha256'][:12]}, WDT0 mode {meta['watchdog_mode']:#x}, "
+            f"image {meta['image_sha256'][:12]}, WDT0 mode {meta['watchdog']['mode']:#x}, session {meta['watchdog']['session_seconds']} s, "
             f"GPADC {'adopt' if meta['derived_session']['configure_adc_clock'] == 0 else 'configure'}"))
     else:
         out = evidence / 'run'
@@ -357,8 +360,12 @@ def main(argv=None):
             result = run_return(args, host, evidence / 'bundle', live, out)
             record.update(outcome='returned', result=result)
             gpu = result.get('gpu')
-            record['summary'] = summary_of(args.kind, 'returned', 'secondaries off %d%s; transcript %s' % (
-                result['secondaries_off'], f', GPU report {gpu}' if gpu else '', out / 'transcript.txt'))
+            transcript = out / 'transcript.txt'
+            require(transcript.is_file(), 'Normal return wrote no transcript.')
+            lines = [x for x in transcript.read_text().splitlines() if x.startswith(('TEXT ', 'PASS ', 'FAIL '))]
+            record.update(transcript=str(transcript), transcript_result=lines)
+            record['summary'] = summary_of(args.kind, 'returned', 'secondaries off %d%s; %s; transcript %s' % (
+                result['secondaries_off'], f', GPU report {gpu}' if gpu else '', ' | '.join(lines), transcript))
         except Exception as error:
             report = out / 'watchdog-report.json'
             if report.exists():
