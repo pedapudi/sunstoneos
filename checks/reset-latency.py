@@ -25,7 +25,8 @@ FLAGS = ['-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-fsanitize=add
 
 def build_and_run(services, output, name, fault_page, step, compiler):
     binary = output / name
-    flags = FLAGS + [f'-DSERVICES_SOURCE="{services}"', '-I' + str(ROOT / 'include'),
+    flags = FLAGS + ['-I' + str(ROOT / 'checks/usb-diagnostic-protocol/include'),
+                     f'-DSERVICES_SOURCE="{services}"', '-I' + str(ROOT / 'include'),
                      '-I' + str(ROOT / 'platform/a733-smp-cached'), '-I' + str(ROOT / 'apps/os'),
                      '-I' + str(ROOT / 'apps/board')]
     if fault_page:
