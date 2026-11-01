@@ -9001,6 +9001,7 @@
    "inputs"
   ],
   "docs": [
+   "docs/designs/gpu-compute-queue.md",
    "docs/designs/gpu-recognition-measurements.md",
    "docs/designs/gpu-recognition.md",
    "docs/gpu-mimus-service.md",
