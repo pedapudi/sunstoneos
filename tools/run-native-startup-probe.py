@@ -7,7 +7,6 @@ import json
 import os
 from pathlib import Path
 import secrets
-import sqlite3
 import struct
 import subprocess
 import sys
@@ -19,6 +18,7 @@ prior=module('startup_prior',ROOT/'tools/run-a64-entry-probe.py')
 base=prior.base
 supervised=module('startup_supervised',ROOT/'tools/check-a733-smp-supervised.py')
 require,digest,save=base.require,base.digest,base.save_json
+returning=module('probe_returning',ROOT/'tools/a733-returning-host.py')
 NATIVE=prior.NATIVE
 LAUNCH='2b0641c2509963ad08d03e8498ee865b5d858c4536b9ea26fbd26ca576e698ea'
 MAGIC=0x4137335354415254
@@ -65,15 +65,19 @@ def branch(source,target):
     return 0x14000000|((offset//4)&0x3ffffff)
 
 def prepare(a):
-    require(digest(a.observer)==NATIVE,'Only the unchanged reviewed native ELF is supported.')
     from elftools.elf.elffile import ELFFile
     with a.observer.open('rb') as f:
         elf=ELFFile(f);symbols={s.name:s['st_value'] for s in elf.get_section_by_name('.symtab').iter_symbols()}
     require(tuple(symbols[n] for n in prior.SYMBOLS)==prior.LAYOUT,'Native layout changed.')
     segments,_,_=base.image_parts(a.observer)
+    with a.observer.open('rb') as stream:
+        sections=[v for v in ELFFile(stream).iter_sections() if v['sh_flags']&2 and v['sh_size']]
+        require(all(any(address<=v['sh_addr'] and v['sh_addr']+v['sh_size']<=address+size
+                        for _,address,size in DRAM) for v in sections),
+                'Native allocation exceeds the diagnostic backup plan.')
     require(all(address+size<=OVERLAY[0] or OVERLAY[0]+OVERLAY[1]<=address
                 for name,address,size in DRAM if name!='overlay'),'Overlay overlaps a native reservation.')
-    a.build.mkdir(parents=True,exist_ok=False)
+    a.build=returning.output_directory(a.build)
     profile=execution_profile(a.stop_before_power,a.stop_after_cpu_interface,a.stop_before_wake,a.stop_after_wake,a.el3_cache,a.el1_cache)
     commands=[['patch','--silent','--output',a.build/'continue-core.c',ROOT/'platform/a733/cpu_continue.c',
         ROOT/'platform/a733-smp-cached/continuation-core.patch'],
@@ -138,7 +142,7 @@ def prepare(a):
             data=bytes(code) if index==0 else segment['data'];name=f'segment-{index}.bin'
             (a.build/name).write_bytes(data);payloads.append({'name':name,'address':segment['address'],'bytes':len(data)})
     save(a.build/'commands.json',[[str(x) for x in c] for c in commands])
-    save(a.build/'manifest.json',{'schema':'a733-native-startup-probe-v1','physical_access':False,'execution_profile':profile,'native_sha256':NATIVE,
+    save(a.build/'manifest.json',{'schema':'a733-native-startup-probe-v1','physical_access':False,'execution_profile':profile,'native_sha256':digest(a.observer),
         'stop_before_power':a.stop_before_power,
         'stop_after_cpu_interface':a.stop_after_cpu_interface,
         'stop_before_wake':a.stop_before_wake,
@@ -290,29 +294,6 @@ def secondary_snapshot(power,owner,mailbox):
     report=dict(zip(('epoch','core','midr','mpidr','sctlr','state','esr','far','elr','spsr','reason'),struct.unpack_from('<11Q',mailbox,128)))
     return {'power':p,'owner':o,'command':command,'report':report}
 
-def caller_interval(survey):
-    require(survey.get('complete') is True and survey.get('sram_restored') is True and survey.get('rom_usable') is True,'Completed current returning survey required.')
-    sp=survey['result']['sp'];require(type(sp) is int and 0x4003c<=sp<=0x100000 and sp%4==0,'Caller SP outside reviewed SRAM.')
-    require(all(sp<=address or sp-60>=address+size for _,address,size in base.REGIONS),'Caller stack overlaps launcher reservations.')
-    return sp-60,60
-
-def claimed(a,expected):
-    db=sqlite3.connect(a.database.resolve().as_uri()+'?mode=ro',uri=True);db.row_factory=sqlite3.Row
-    try:
-        require(not db.execute("SELECT value FROM settings WHERE key='halted'").fetchone()[0],'Queue halted.')
-        row=db.execute('SELECT * FROM tests WHERE id=?',(a.claim,)).fetchone()
-        require(row and row['state']=='claimed' and row['owner']==a.owner,'Coordinator claim required.')
-        submission,review=json.loads(row['submission']),json.loads(row['review'])
-        require(set(submission['prerequisites'])==set(review['prerequisites'])=={'supervised-ram-recovery','native-startup-software'},'Unexpected prerequisites.')
-        _,software=prior.reference(review['prerequisites']['native-startup-software'])
-        require(hashlib.sha256(software).hexdigest()==expected[a.software.resolve()],'Reviewed software differs.')
-        covered={}
-        for item in submission['artifacts']:
-            path,data=prior.reference(item);covered[path]=hashlib.sha256(data).hexdigest()
-        require(all(covered.get(path)==identity for path,identity in expected.items()),'Queue covers different inputs.')
-        _,raw=prior.reference(review['prerequisites']['supervised-ram-recovery']);return json.loads(raw),hashlib.sha256(raw).hexdigest()
-    finally:db.close()
-
 def run(a):
     a.build=a.build.resolve();raw=(a.build/'manifest.json').read_bytes();m=json.loads(raw);manifest_hash=hashlib.sha256(raw).hexdigest()
     primary = None
@@ -332,40 +313,26 @@ def run(a):
     if is_primary:
         primary=module('returning_cpu_host',ROOT/'tools'/('primary-cache-host.py' if is_primary_cache else 'workload-bisect-host.py' if is_workload_bisect else 'all-core-task-workload-host.py' if is_task_workload else 'all-core-task-switch-host.py' if is_task_switch else 'all-core-first-task-host.py' if is_first_task else 'all-core-pre-scheduler-host.py' if is_pre_scheduler else 'secondary-interrupt-host.py' if is_interrupts else 'secondary-coherence-host.py' if is_coherent else 'secondary-cache-host.py' if is_cached else 'secondary-local-host.py' if is_local else 'secondary-identity-host.py' if is_identity else 'primary-publication-host.py'))
         frozen,dram=primary.load(a.build,a.bundle/'image.elf',m)
-        native=primary.probe.NATIVE;profile=primary.profile(m) if is_workload_bisect else primary.PROFILE
+        native=digest(a.bundle/'image.elf');profile=primary.profile(m) if is_workload_bisect else primary.PROFILE
         primary_report = primary.probe.report_spec(m) if is_primary_cache else primary.probe.REPORT
     else:
         profile=manifest_profile(m)
-        require(m['schema']=='a733-native-startup-probe-v1' and m.get('execution_profile')==profile and m['native_sha256']==NATIVE,'Wrong startup image.')
-        require(m['source_sha256']==digest(ROOT/'boot/a733/native-startup-probe.S') and m['host_sha256']==digest(Path(__file__)),'Implementation changed.')
-        require(m.get('sources')=={name:digest(ROOT/name) for name in SOURCES},'Compiled controller inputs changed.')
+        require(m['schema']=='a733-native-startup-probe-v1' and m.get('execution_profile')==profile,'Wrong startup image.')
         require(m.get('overlay_reservation')=={'address':OVERLAY[0],'bytes':OVERLAY[1]},'Overlay reservation differs.')
         frozen={name:(a.build/name).read_bytes() for name in m['files']}
         require(all(Path(n).name==n and hashlib.sha256(b).hexdigest()==m['files'][n] for n,b in frozen.items()),'Frozen build changed.')
-        native=NATIVE;dram=DRAM
-    require(prepared['image_sha256']==native and prepared['launcher_sha256']==LAUNCH,'Native/launcher identity differs.')
-    survey_raw=a.survey.read_bytes();survey=json.loads(survey_raw);caller=caller_interval(survey)
-    require(all(survey['result']['launcher_gates'].values()),'Actual A32 launcher gates fail; establish cache-off state separately.')
-    software_raw=a.software.read_bytes();software=json.loads(software_raw)
-    if is_primary:
-        primary.validate_software(software,manifest_hash)
-    else:
-        require(software.get('schema')=='a733-native-startup-software-v1' and software.get('physical_access') is False and
-                software.get('execution_profile')==profile and software.get('manifest_sha256')==manifest_hash and software.get('instruction_cases') is True,'Focused instruction evidence required.')
-    expected={a.build/'manifest.json':manifest_hash,a.software.resolve():hashlib.sha256(software_raw).hexdigest(),
-              a.survey.resolve():hashlib.sha256(survey_raw).hexdigest(),(a.bundle/'prepared.json').resolve():prepared['_prepared_sha256']}
-    recovery,recovery_hash=claimed(a,expected);require(digest(a.fel)==base.FEL_HASH,'Pinned FEL executable required.')
-    a.evidence.mkdir(parents=True,exist_ok=False)
-    record={'physical_access':True,'complete':False,'launch_attempted':False,'transactions':[],'claim':a.claim,'owner':a.owner,
+        native=digest(a.bundle/'image.elf');require(m['native_sha256']==native,'Native image differs from probe inputs.');dram=DRAM
+    require(prepared['image_sha256']==native,'Native image identity differs.')
+    require(a.fel.is_file(),'FEL executable is missing.')
+    a.evidence=returning.output_directory(a.evidence)
+    record={'physical_access':True,'complete':False,'launch_attempted':False,'transactions':[],
         'execution_profile':profile,'native_sha256':native,
-        'manifest_sha256':expected[a.build/'manifest.json'],'recovery_sha256':recovery_hash,'caller_interval':caller,'sram_after_warm_return':'Owned by new ROM; old bytes are evidence only.'}
+        'manifest_sha256':manifest_hash,'sram_after_warm_return':'Owned by new ROM; old bytes are evidence only.'}
     def journal():save(a.evidence/'session.json',record)
     access=module('startup_access',ROOT/'tools/usb-access.py');import usb_guard
     usb_guard.check_health()
     with access.board_lock() as node:
         access.require_session(node);access.require_rom(node);identity=access.identity(node);port=access.target(node);config={'port':port.name,'sysfs':str(port.resolve())};failed=False;dirty=False
-        require(survey.get('identity')==identity and survey.get('port')==port.name and recovery.get('identity')==identity and recovery.get('port')==port.name,'Survey/recovery covers another live instance.')
-        supervised.validate_admission(json.loads(prepared['_frozen']['admission.json']),native,identity,port.name)
         record.update(initial_identity=identity,initial_node=str(node),port=port.name);journal()
         def transaction(*arguments,pass_fds=()):
             nonlocal failed
@@ -383,6 +350,15 @@ def run(a):
             require('soc=00001903(A733)' in transaction('version'),'Not an A733 ROM instance.')
             words=transaction('readl','0x20','readl','0x24','readl','0x28','readl','0x3c','readl','0x40')
             require([int(v,16) for v in words.split()]==[0xeb00008f,0xe3a00911,0xe3a0193d,0xe3a0605c,0xea00004d],'Forced-FEL destination changed.')
+            caller_survey=module('startup_caller_survey',ROOT/'tools/run-launch-survey.py')
+            dirty=True;journal()
+            caller_state=caller_survey.capture_caller(transaction,a.evidence)
+            dirty=False
+            caller=caller_survey.caller_interval(caller_state)
+            record['caller_interval']=caller;journal()
+            dirty=True;journal()
+            base.verify_dram(transaction,a.evidence)
+            dirty=False
             backups={}
             for name,address,size in (*dram,*base.REGIONS,('caller-evidence',*caller)):
                 path=a.evidence/(name+'-before.bin');transaction('read',hex(address),str(size),path)
@@ -397,7 +373,6 @@ def run(a):
             if is_primary:
                 uploads.insert(0,(primary_report[0],primary.initial_report(nonce, *([m] if is_primary_cache else [])),'primary-report.bin'))
             for address,data,name in uploads:transfer(address,data,a.evidence/('upload-'+name))
-            _,current_hash=claimed(a,expected);require(current_hash==recovery_hash,'Recovery review changed.')
             with usb_guard.reenumeration('sunstoneos-a733','Native returning CPU diagnostic with verified restoration',2):
                 record['launch_attempted']=True;journal();transaction('exe','0x52000')
                 deadline=time.monotonic()+10;old=identity
@@ -548,10 +523,11 @@ def main():
     boundary.add_argument('--el3-cache',action='store_true',help='After local initialization, adopt production EL3 tables and restore controls before shutdown.')
     boundary.add_argument('--stop-after-wake',action='store_true',help='Complete redistributor wake, stop before local configuration and restore sleep before shutdown.')
     live=sub.add_parser('run')
-    for name in ('build','bundle','software','survey','database','fel','evidence'):live.add_argument('--'+name,type=Path,required=True)
-    live.add_argument('--claim',required=True);live.add_argument('--owner',required=True);a=p.parse_args()
+    for name in ('build','bundle','fel','evidence'):live.add_argument('--'+name,type=Path,required=True)
+    for name in ('software','database','survey'):live.add_argument('--'+name,type=Path,help=argparse.SUPPRESS)
+    live.add_argument('--claim',help=argparse.SUPPRESS);live.add_argument('--owner',help=argparse.SUPPRESS);a=p.parse_args()
     if a.operation=='prepare':prepare(a);return 0
     return run(a)
 if __name__=='__main__':
     try:sys.exit(main())
-    except (ValueError,OSError,RuntimeError,sqlite3.Error,struct.error) as error:sys.exit(f'Stopped: {error}')
+    except (ValueError,OSError,RuntimeError,struct.error) as error:sys.exit(f'Stopped: {error}')

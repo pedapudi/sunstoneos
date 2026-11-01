@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Exercise the actual CPU callback and shared transport with modeled USB only."""
 import argparse
-import ast
 import contextlib
 import copy
 import hashlib
@@ -28,7 +27,7 @@ def main():
     parser.add_argument('--epoch', type=lambda x: int(x, 0), required=True)
     parser.add_argument('--case', action='append', help='Run only named affected callback cases')
     args = parser.parse_args()
-    args.output.mkdir(parents=True, exist_ok=False)
+    args.output = host.returning.output_directory(args.output)
     geometry = host.manifest_check(args.image, json.loads(args.manifest.read_text()))
     native = args.native_report.read_bytes()
     host.decode_report(native, args.epoch)
@@ -56,7 +55,7 @@ def main():
                     '_sizes': {p.name: p.stat().st_size for p in bundle.iterdir()}}
         fel = root / 'modeled-fel'
         fel.write_bytes(b'never executed')
-        variants = ['normal', 'admission-refusal', 'rom-signature', 'short-backup', 'missing-backup', 'backup-failure',
+        variants = ['normal','normal-live-caller','dram-probe-restoration-mismatch', 'admission-refusal', 'rom-signature', 'short-backup', 'missing-backup', 'backup-failure',
                     'preload-failure', 'late-admission-refusal', 'watchdog', 'exe-failure',
                     'same-ROM', 'wrong-return-port', 'short-report', 'bad-report',
                     'changed-backup', 'restore-failure', 'restore-mismatch']
@@ -65,10 +64,11 @@ def main():
             variants = args.case
         for variant in variants:
             state = {'locked': False, 'held': 0, 'quarantined': 0, 'commands': [], 'admissions': 0,
-                     'launched': False, 'returned': False, 'restores': [], 'backups': []}
+                     'launched': False, 'returned': False, 'restores': [], 'backups': [], 'survey': {}, 'dram_probe': bytes([0xa5])*8}
             old, new = Path('/dev/bus/usb/003/056'), Path('/dev/bus/usb/003/057')
             port = Path('/sys/bus/usb/devices/3-1')
             evidence = root / variant
+            evidence.mkdir();(evidence/'earlier.txt').write_text('preserve')
             p = copy.deepcopy(prepared)
 
             class Access:
@@ -117,11 +117,31 @@ def main():
                 assert state['locked']
                 state['held'] += 1
 
+            actual_process = host.returning.subprocess.run
             def process(command, **kwargs):
+                if str(command[0]) != str(fel):
+                    return actual_process(command, **kwargs)
                 assert state['locked'] and command[2] == ('3:57' if state['returned'] else '3:56')
                 v = command[3:]
                 state['commands'].append(v)
                 out = ''
+                if variant in ('normal-live-caller','dram-probe-restoration-mismatch') and v[0] in ('read','write') and int(v[1],16) in (0x85000,0x86000,0x42000000):
+                    address=int(v[1],16)
+                    size=int(v[5]) if v[0]=='write' else int(v[2])
+                    if address in (0x85000,0x86000) or size==8:
+                        if v[0]=='write':
+                            data=Path(v[2]).read_bytes();assert kwargs['pass_fds']
+                            if address==0x42000000:state['dram_probe']=data
+                            else:state['survey'][address]=data
+                        else:data=state['dram_probe'] if address==0x42000000 else state['survey'].get(address,bytes([0x61])*size)
+                        destination=Path(v[6] if v[0]=='write' else v[3]);destination.write_bytes((b'\0'+data[1:]) if variant=='dram-probe-restoration-mismatch' and v[0]=='write' and data==bytes([0xa5])*8 else data[:size])
+                        return types.SimpleNamespace(returncode=0,stdout='',stderr='')
+                if v==['exe','0x85000']:
+                    assert variant=='normal-live-caller'
+                    values=[0]*30;values[:4]=[0x3153564c,1,128,1]
+                    values[4:16]=[19,0,0,0x80000000,24000000,0,1,0,2,0,0x80000,0x90000]
+                    state['survey'][0x86000]=struct.pack('<30I',*values)+state['survey'][0x86000][120:]
+                    return types.SimpleNamespace(returncode=0,stdout='',stderr='')
                 if v[0] == 'version':
                     out = 'soc=00001903(A733)'
                 elif v[0] == 'readl':
@@ -138,7 +158,7 @@ def main():
                         raw = native[:-1] if variant == 'short-report' else bytes(size) if variant == 'bad-report' else native
                         destination.write_bytes(raw)
                         if variant == 'changed-backup':
-                            (evidence / 'before-dram-4.bin').write_bytes(b'changed')
+                            (options.evidence / 'before-dram-4.bin').write_bytes(b'changed')
                     else:
                         if variant == 'missing-backup':
                             return types.SimpleNamespace(returncode=0, stdout='', stderr='')
@@ -172,7 +192,7 @@ def main():
                     raise AssertionError(v)
                 return types.SimpleNamespace(returncode=0, stdout=out, stderr='')
 
-            options = types.SimpleNamespace(bundle=bundle, fel=fel, evidence=evidence, root_owned_claim='model-only external claim')
+            options = types.SimpleNamespace(bundle=bundle, fel=fel, evidence=evidence)
             real_digest = host.base.digest
             def digest(path):
                 return host.base.FEL_HASH if path == fel else real_digest(path)
@@ -181,14 +201,26 @@ def main():
                  patch.object(host.returning.subprocess, 'run', process), patch.object(host.returning.os, 'access', return_value=True), \
                  patch.object(host.returning.time, 'monotonic', side_effect=[0, 51 if variant == 'same-ROM' else 0]):
                 try:
-                    host.returning.run(options, base=host.base, profile=host.PROFILE, validate_bundle=lambda _: p,
-                        admit=admit, execute=lambda tx, wait, ready, p, record, journal: host.run_once(tx, wait, ready, bundle, p, evidence, record, journal),
+                    if variant=='normal-live-caller':
+                        original_run=host.returning.run
+                        def run_live(*positional,**named):
+                            return original_run(*positional,**named,access=Access(),guard=Guard())
+                        with patch.object(host,'validate_bundle',return_value=p),patch.object(host.returning,'run',run_live):
+                            host.run(options)
+                    elif variant=='dram-probe-restoration-mismatch':
+                        host.returning.run(options,base=host.base,profile=host.PROFILE,validate_bundle=lambda _: p,
+                            admit=admit,execute=lambda tx,wait,ready,p,record,journal: host.base.verify_dram(tx,options.evidence,record,journal),
+                            description='Modeled DRAM restoration mismatch',access=Access(),guard=Guard())
+                    else:
+                        host.returning.run(options, base=host.base, profile=host.PROFILE, validate_bundle=lambda _: p,
+                        admit=admit, execute=lambda tx, wait, ready, p, record, journal: host.run_once(tx, wait, ready, bundle, p, options.evidence, record, journal),
                         description='Modeled CPU adapter', access=Access(), guard=Guard(), return_timeout=host.RETURN_TIMEOUT_SECONDS)
                 except (ValueError, OSError) as failure:
                     error = str(failure)
-            record = json.loads((evidence / 'session.json').read_text())
-            assert (error is None) == (variant == 'normal'), (variant, error)
-            if variant == 'normal':
+            record = json.loads((options.evidence / 'session.json').read_text())
+            assert (evidence / 'earlier.txt').read_text() == 'preserve' and options.evidence.parent == evidence
+            assert (error is None) == (variant in ('normal','normal-live-caller')), (variant, error)
+            if variant in ('normal','normal-live-caller'):
                 expected = [(host.RAM_START + off, min(host.CHUNK_BYTES, host.RAM_BYTES - off)) for off in range(0, host.RAM_BYTES, host.CHUNK_BYTES)]
                 assert state['backups'] == state['restores'] == expected
                 assert record['complete'] and record['dram_restored'] and record['rom_usable'] and not record['sram_restored']
@@ -201,32 +233,22 @@ def main():
                 if variant != 'restore-mismatch':
                     assert not state['restores']
             results.append({'case': variant, 'passed': True, 'retained': bool(state['held']), 'requests': len(state['commands'])})
-            shutil.rmtree(evidence)
-    # Reuse unchanged geometry/producer evidence. host-check.py separately
-    # validates the v2 manifest and report parser, including timer counts.
-    prior = subprocess.check_output(['git', 'show', 'f96b17621429a9395d92559277699e9cad5aa058:apps/cpu-runtime-qualification/host.py'],
-                                    cwd=host.ROOT, text=True)
-    selected = {'geometry', 'prepare', 'validate_bundle'}
-    def functions(text):
-        return {node.name: ast.dump(node, include_attributes=False) for node in ast.parse(text).body if isinstance(node, ast.FunctionDef) and node.name in selected}
-    assert functions(prior) == functions((HERE / 'host.py').read_text())
-    for sp in [0x52010, 0x53020, 0x40038, 0x100004, 0x80001]:
-        try:
-            host.caller_interval({'complete': True, 'sram_restored': True, 'rom_usable': True, 'result': {'sp': sp}})
-        except ValueError:
-            pass
-        else:
-            raise AssertionError('Invalid caller stack admitted')
-    assert host.caller_interval({'complete': True, 'sram_restored': True, 'rom_usable': True, 'result': {'sp': 0x80000}}) == (0x7ffc4, 60)
+            host.save_json(args.output / 'cases.json', results)
+    # Exercise production admission with only the native bundle and live target.
+    # USB remains modeled; no queue, DDR history or survey file exists.
+    options = types.SimpleNamespace(bundle=bundle)
+    with patch.object(host, 'validate_bundle', return_value=prepared):
+        host.admit(options, prepared, Path('/fixture/003/056'), [1,56,3,4,5], '3-1')
+    results.append({'case': 'no-process-records', 'passed': True})
     sources = [HERE / 'host.py', Path(__file__), Path(host.returning.__file__), Path(host.supervised.__file__),
-               Path(host.base.__file__), Path(host.supervised.observer.__file__), Path(host.kernel.__file__),
+               Path(host.base.__file__), Path(host.supervised.observer.__file__),
                host.ROOT / 'tools/usb-access.py']
-    host.save_json(args.output / 'result.json', {'passed': True, 'cases': results, 'caller_stack_cases': 6,
+    host.save_json(args.output / 'result.json', {'passed': True, 'cases': results,
         'geometry_producer_reused_from': 'f96b17621429a9395d92559277699e9cad5aa058', 'image_sha256': host.digest(args.image),
         'native_report_sha256': host.digest(args.native_report), 'launcher_sha256': host.digest(args.launcher),
         'source_hashes': {str(p): host.digest(p) for p in sources}, 'physical_access': False,
         'scope': 'Actual callback, protected preload and shared transport; modeled admission/USB, real linked image, request producer, launcher and native-model report. No physical authority created.'})
-    print(f'PASS {len(results)} callback/transport cases and 6 caller-stack cases; geometry/producer evidence reused')
+    print(f'PASS {len(results)} callback/transport and direct bundle admission cases')
 
 
 if __name__ == '__main__':

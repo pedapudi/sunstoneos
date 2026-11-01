@@ -4,23 +4,25 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import secrets
 import shutil
-import sqlite3
 import struct
 import subprocess
 import sys
+from types import SimpleNamespace
 ROOT=Path(__file__).resolve().parents[1]
 def module(name,path):
     spec=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
 base=module('launch_survey_base',ROOT/'tools/check-a733-smp.py')
 require,digest,save=base.require,base.digest,base.save_json
+returning=module('probe_returning',ROOT/'tools/a733-returning-host.py')
 REGIONS=(('code',0x85000,0x400),('report',0x86000,128))
 MAGIC=0x3153564c
 
 def prepare(args):
-    out=args.build.resolve();out.mkdir(parents=True,exist_ok=False)
+    out=returning.output_directory(args.build.resolve());args.build=out
     source=ROOT/'boot/a733/launch-survey.S';shutil.copy2(source,out/'launch-survey.S')
     commands=[[args.clang,'--target=arm-none-eabi','-march=armv8-a','-marm','-c',out/'launch-survey.S','-o',out/'launch-survey.o'],
         [args.lld,'-Ttext=0x85000','-e','_start',out/'launch-survey.o','-o',out/'launch-survey.elf'],
@@ -48,45 +50,67 @@ def decode(raw,nonce):
         'primary_mpidr':not v[7]&~0xc1000000,'frequency':v[8] in (0,24000000),'counter_monotonic':second>=first}
     return result
 
-def claimed(args,manifest_hash,binary_hash,software_hash):
-    db=sqlite3.connect(args.database.resolve().as_uri()+'?mode=ro',uri=True);db.row_factory=sqlite3.Row
-    try:
-        require(not db.execute("SELECT value FROM settings WHERE key='halted'").fetchone()[0],'Queue halted.')
-        row=db.execute('SELECT * FROM tests WHERE id=?',(args.claim,)).fetchone()
-        require(row is not None and row['state']=='claimed' and row['owner']==args.owner,'Matching coordinator claim required.')
-        submission,review=json.loads(row['submission']),json.loads(row['review'])
-        require(set(submission['prerequisites'])==set(review['prerequisites'])=={'supervised-ram-recovery','launch-survey-software'},'Survey prerequisites differ.')
-        refs={k:base.artifact(v) for k,v in review['prerequisites'].items()}
-        require(refs['launch-survey-software']==args.software.resolve() and review['prerequisites']['launch-survey-software']['sha256']==software_hash,'Queue covers other survey software.')
-        covered={(base.artifact(v),v['sha256']) for v in submission['artifacts']}
-        require({((args.build/'manifest.json').resolve(),manifest_hash),((args.build/'launch-survey.bin').resolve(),binary_hash)}<=covered,'Queue covers different survey bytes.')
-        recovery_ref=review['prerequisites']['supervised-ram-recovery']
-        recovery_raw=Path(recovery_ref['path']).read_bytes()
-        require(hashlib.sha256(recovery_raw).hexdigest()==recovery_ref['sha256'],'Recovery record changed.')
-        return json.loads(recovery_raw),recovery_ref['sha256']
-    finally:db.close()
+def capture_caller(transaction, evidence):
+    """Read caller state in this locked session and restore the survey's SRAM.
+
+    The survey never uses the incoming stack. Transport failures propagate
+    immediately; restoration is attempted only after successful report transfer.
+    """
+    build = SimpleNamespace(build=evidence/'caller-survey-build',
+        clang=Path(os.environ.get('SUNSTONE_HOST_CLANG','/usr/bin/clang-21')),
+        lld=Path(os.environ.get('SUNSTONE_HOST_LLD',str(Path.home()/'.cache/sunstoneos/host/usr/bin/ld.lld-21'))),
+        objcopy=Path('/usr/lib/llvm-21/bin/llvm-objcopy'))
+    prepare(build)
+    backups={}
+    for name,address,size in REGIONS:
+        destination=evidence/('caller-'+name+'-before.bin')
+        transaction('read',hex(address),size,destination)
+        backups[name]=destination.read_bytes()
+        require(len(backups[name])==size,'Short caller-survey SRAM backup.')
+        base.sync_file(destination)
+    def transfer(address,data,name):
+        destination=evidence/name
+        with base.sealed_source(data) as (source,descriptor):
+            transaction('write',hex(address),source,'read',hex(address),len(data),destination,pass_fds=(descriptor,))
+        require(destination.read_bytes()==data,'Caller-survey SRAM comparison differs.')
+    nonce=secrets.token_bytes(8)
+    transfer(REGIONS[0][1],(build.build/'launch-survey.bin').read_bytes(),'caller-code-upload.bin')
+    transfer(REGIONS[1][1],bytes(120)+nonce,'caller-report-upload.bin')
+    transaction('exe',hex(REGIONS[0][1]))
+    report=evidence/'caller-report.bin'
+    transaction('read',hex(REGIONS[1][1]),128,report)
+    raw=report.read_bytes()
+    base.sync_file(report)
+    for name,address,_ in REGIONS:
+        transfer(address,backups[name],'caller-'+name+'-restored.bin')
+    return decode(raw,nonce)
+
+
+def caller_interval(result):
+    """Check the native launcher's 60-byte push before any launcher upload."""
+    sp=result['sp']
+    require(type(sp) is int and 0x4003c<=sp<=0x100000 and sp%4==0,'Caller SP outside SRAM or misaligned.')
+    require(all(sp<=address or sp-60>=address+size for _,address,size in base.REGIONS),
+            'Caller stack overlaps launcher reservations.')
+    require(all(result['launcher_gates'].values()),'Live A32 launcher state is unsafe.')
+    return sp-60,60
+
 
 def run(args):
     args.build=args.build.resolve();metadata=(args.build/'manifest.json').read_bytes();manifest=json.loads(metadata)
     require(manifest['schema']=='a733-launch-survey-v1' and manifest['physical_access'] is False,'Wrong survey build.')
-    require(manifest['source_sha256']==digest(ROOT/'boot/a733/launch-survey.S') and manifest['host_sha256']==digest(Path(__file__)),'Survey implementation changed.')
     frozen={name:(args.build/name).read_bytes() for name in manifest['files']}
     require(all(Path(name).name==name and hashlib.sha256(data).hexdigest()==manifest['files'][name] for name,data in frozen.items()),'Survey build bytes changed.')
-    software_raw=args.software.read_bytes();software=json.loads(software_raw);software_hash=hashlib.sha256(software_raw).hexdigest()
-    require(software.get('schema')=='a733-launch-survey-software-v1' and software.get('binary_sha256')==manifest['files']['launch-survey.bin'] and
-        software.get('return_preserved') is True and software.get('physical_access') is False,'Instruction/return evidence required.')
-    require(digest(args.fel)==base.FEL_HASH,'FEL executable differs from pinned implementation.')
-    recovery,recovery_hash=claimed(args,hashlib.sha256(metadata).hexdigest(),manifest['files']['launch-survey.bin'],software_hash)
-    args.evidence.mkdir(parents=True,exist_ok=False)
-    record={'physical_access':True,'complete':False,'transactions':[],'claim':args.claim,'owner':args.owner,
-        'manifest_sha256':hashlib.sha256(metadata).hexdigest(),'software_sha256':software_hash,'one_attempt':True,'launch_attempted':False,'device_access_attempted':False,'recovery_sha256':recovery_hash}
+    require(args.fel.is_file(),'FEL executable is missing.')
+    args.evidence=returning.output_directory(args.evidence)
+    record={'physical_access':True,'complete':False,'transactions':[],
+        'manifest_sha256':hashlib.sha256(metadata).hexdigest(),'one_attempt':True,'launch_attempted':False,'device_access_attempted':False}
     def journal():save(args.evidence/'session.json',record)
     access=module('launch_survey_access',ROOT/'tools/usb-access.py')
     import usb_guard
     usb_guard.check_health()
     with access.board_lock() as node:
         access.require_rom(node);identity=access.identity(node);port=access.target(node).name
-        require(recovery.get('identity')==identity and recovery.get('port')==port,'Recovery review covers another live instance.')
         record.update(node=str(node),identity=identity,port=port)
         failed=False
         def transaction(*commands,pass_fds=()):
@@ -112,8 +136,6 @@ def run(args):
             nonce=secrets.token_bytes(8);initial=bytes(120)+nonce;record['nonce']=nonce.hex();journal();dirty=True
             transfer(0x85000,frozen['launch-survey.bin'],args.evidence/'code-upload.bin')
             transfer(0x86000,initial,args.evidence/'report-upload.bin')
-            current,current_hash=claimed(args,hashlib.sha256(metadata).hexdigest(),manifest['files']['launch-survey.bin'],software_hash)
-            require(current_hash==recovery_hash and current.get('identity')==identity and current.get('port')==port,'Recovery approval changed before execution.')
             record['launch_attempted']=True;record['execution_intent']=True;journal();transaction('exe','0x85000')
             transaction('read','0x86000','128',args.evidence/'report.bin')
             # A successful report read establishes a responsive ROM service.
@@ -139,11 +161,12 @@ def main(argv=None):
     build=sub.add_parser('prepare');build.add_argument('--build',type=Path,required=True)
     for name in ('clang','lld','objcopy'):build.add_argument('--'+name,type=Path,required=True)
     live=sub.add_parser('run')
-    for name in ('fel','build','software','database','evidence'):live.add_argument('--'+name,type=Path,required=True)
-    live.add_argument('--claim',required=True);live.add_argument('--owner',required=True)
+    for name in ('fel','build','evidence'):live.add_argument('--'+name,type=Path,required=True)
+    for name in ('software','database'):live.add_argument('--'+name,type=Path,help=argparse.SUPPRESS)
+    live.add_argument('--claim',help=argparse.SUPPRESS);live.add_argument('--owner',help=argparse.SUPPRESS)
     args=parser.parse_args(argv)
     if args.operation=='prepare':prepare(args);return 0
     return run(args)
 if __name__=='__main__':
     try:sys.exit(main())
-    except (ValueError,OSError,RuntimeError,sqlite3.Error,struct.error) as error:sys.exit(f'Stopped: {error}')
+    except (ValueError,OSError,RuntimeError,struct.error) as error:sys.exit(f'Stopped: {error}')

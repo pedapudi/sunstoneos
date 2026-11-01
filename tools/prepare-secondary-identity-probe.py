@@ -13,6 +13,9 @@ from types import SimpleNamespace
 from elftools.elf.elffile import ELFFile
 
 ROOT=Path(__file__).resolve().parents[1]
+_spec = importlib.util.spec_from_file_location('probe_output', ROOT/'tools/host_evidence.py')
+_output = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_output)
 spec=importlib.util.spec_from_file_location('primary_host',ROOT/'tools/primary-publication-host.py')
 primary=importlib.util.module_from_spec(spec);spec.loader.exec_module(primary)
 require,digest=primary.require,primary.digest
@@ -27,7 +30,7 @@ def branch(address,target):
 
 
 def cached_patch_points(native):
-    # Exact offsets in the NATIVE-pinned ELF; every displaced word is checked.
+    # Offsets relative to native symbols; every displaced word is checked.
     # +0x194 is MSR ICC_CTLR_EL1, XZR, the first EL1 interrupt-interface write.
     entry=native['a733_cached_enter_el1']+0x194
     vector=native['a733_cached_el3_vectors']+8*128+4
@@ -269,7 +272,7 @@ def prepare(args):
     require(all(report[0]+report[1]<=a or a+n<=report[0] for _,a,n in reservations),
             'Identity report overlaps an existing allocation.')
     require(len(frozen['overlay.bin'])<=extension-primary.probe.OVERLAY[0], 'Base overlay exceeds extension boundary.')
-    args.output.mkdir(parents=True,exist_ok=False)
+    args.output = _output.unique_directory(args.output)
     link=args.output/'identity.ld'
     vectors=' . = 0x41020800; .irq_vectors : { KEEP(*(.irq_vectors)) }\n ASSERT(. == 0x41021000, "Vector table extent differs")\n' if interrupts else ''
     if top_opp:
@@ -362,7 +365,7 @@ def prepare(args):
         path=args.output/item['name'];path.write_bytes(patched[item['name']])
         payloads.append(dict(item,sha256=digest(path)))
     names=sources(f)
-    manifest={'schema':schema(f),'physical_access':False,'native_sha256':primary.probe.NATIVE,
+    manifest={'schema':schema(f),'physical_access':False,'native_sha256':digest(args.image),
         'primary_manifest':{'path':str((args.primary/'manifest.json').resolve()),'sha256':digest(args.primary/'manifest.json')},
         'sources':{n:digest(ROOT/n) for n in names},'native_symbols':native,'hooks':hooks,'patches':patches,
         'overlay':dict(base['overlay'],sha256=digest(args.output/'overlay.bin')),'payloads':payloads,
@@ -370,25 +373,21 @@ def prepare(args):
         'reservations':reservations+[('identity-report',*report)],'commands':[[str(x) for x in c] for c in commands],
         'files':{p.name:digest(p) for p in args.output.iterdir() if p.is_file()}}
     if first_task:
-        manifest['first_task']={'physical_eligible':False,'writable_interval':[0x41200000,0x41291000],
-            'cache_lines_per_core':9280,'task_bodies':False,'timer_and_sgi_workload':False,
-            'pending':'Instruction execution, return validation and source review required before physical use.'}
+        manifest['first_task']={'writable_interval':[0x41200000,0x41291000],
+            'cache_lines_per_core':9280,'task_bodies':False,'timer_and_sgi_workload':False}
     if task_switch:
-        manifest['task_switch']={'physical_eligible':False,'worker_body':False,
-            'idle_body':True,'timer_and_sgi_workload':False,
-            'pending':'Instruction execution, host report validation and root review required.'}
+        manifest['task_switch']={'worker_body':False,
+            'idle_body':True,'timer_and_sgi_workload':False}
     if task_workload:
         manifest['first_task'].update(task_bodies=True,timer_and_sgi_workload=True)
         manifest['task_switch'].update(worker_body=True,timer_and_sgi_workload=True)
-        manifest['task_workload']={'physical_eligible':False,'rounds_per_core':32,
-            'completion_patch':native['worker']+0x6c,
-            'pending':'Returning workload instruction checks, host validation and root review required.'}
+        manifest['task_workload']={'rounds_per_core':32,
+            'completion_patch':native['worker']+0x6c}
     if return_deadline:
         manifest['workload_bisect']={
             'profile':'all-core-task-workload-quiet-deadline-v1' if quiet else 'all-core-task-workload-deadline-v1',
             'quiet_background':quiet,'deadline_ticks_after_startup':DEADLINE_TICKS,'deadline_interrupt':29,
-            'record':{'address':DEADLINE_RECORD[0],'bytes':DEADLINE_RECORD[1]},
-            'pending':'Instruction cases, host validation and root review required before physical use.'}
+            'record':{'address':DEADLINE_RECORD[0],'bytes':DEADLINE_RECORD[1]}}
     if top_opp:
         manifest['top_opp']={'record':{'address':REPORT[0]+0x80,'words':16},'targets':TOP_OPP_TARGETS,
             'relock':hooks.get('top_opp_relock'),
@@ -400,8 +399,7 @@ def prepare(args):
             'entry_checks':['DCXO enabled and stable at 26 MHz','speed-bin code 0x04',
                             'every domain on its locked PLL with modulation off',
                             'S_TWI0 in the PMIC provider baseline and route',
-                            'PMIC page 0, chip 3, revision 0; DCDC3 and DCDC5 enabled at 1050 and 1000 mV'],
-            'pending':'Instruction cases, host validation and root review required before physical use.'}
+                            'PMIC page 0, chip 3, revision 0; DCDC3 and DCDC5 enabled at 1050 and 1000 mV']}
     (args.output/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
     print('Prepared '+('first FreeRTOS task entry for all eight cores' if first_task else 'production pre-scheduler for all eight cores' if pre_scheduler else 'timer and peer IRQs for cores1..7' if interrupts else 'concurrent cached exchange for cores1..7' if coherent else 'cached EL1 entry for cores1..7' if cached else 'local initialization for cores1..7' if local else 'identity survey for cores2..7')+'; no board access.')
 

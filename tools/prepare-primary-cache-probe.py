@@ -10,6 +10,9 @@ import subprocess
 from elftools.elf.elffile import ELFFile
 
 ROOT = Path(__file__).resolve().parents[1]
+_spec = importlib.util.spec_from_file_location('probe_output', ROOT/'tools/host_evidence.py')
+_output = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_output)
 spec = importlib.util.spec_from_file_location('primary_host', ROOT/'tools/primary-publication-host.py')
 primary = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(primary)
@@ -204,7 +207,7 @@ def prepare(args):
     literal = offset+4*displacement
     require(struct.unpack_from('<Q', frozen['overlay.bin'], literal)[0] == REPORT[0],
             'Displaced instruction loads another report.')
-    args.output.mkdir(parents=True, exist_ok=False)
+    args.output = _output.unique_directory(args.output)
     link = args.output/'cache.ld'
     link.write_text('ENTRY(primary_cache_probe)\nSECTIONS {\n . = 0x41020800;\n'
         ' .text : { *(.text .text.*) *(.rodata .rodata.*) }\n'
@@ -253,7 +256,7 @@ def prepare(args):
     for name, data in payload_data.items():
         (args.output/name).write_bytes(data)
     manifest = {'schema': 'a733-primary-cache-probe-v1', 'physical_access': False,
-        'native_sha256': NATIVE, 'el1': el1, 'interrupts': interrupts, 'context': context, 'native_patches': patches, 'primary_manifest': {'path': str(parent_path.resolve()),
+        'native_sha256': digest(args.image), 'el1': el1, 'interrupts': interrupts, 'context': context, 'native_patches': patches, 'primary_manifest': {'path': str(parent_path.resolve()),
         'sha256': digest(parent_path)}, 'sources': {name: digest(ROOT/name) for name in sources(el1, interrupts, context)},
         'native_symbols': aliases, 'hooks': hooks, 'parent_hooks': parent['hooks'],
         'patch': {'address': address, 'original': original, 'replacement': replacement},

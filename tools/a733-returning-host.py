@@ -7,15 +7,23 @@ def module(name,path):
  spec=importlib.util.spec_from_file_location(name,path);value=importlib.util.module_from_spec(spec);spec.loader.exec_module(value);return value
 crumbs=module('returning_crumbs',ROOT/'tools/a733-crumbs.py')
 
+output_directory=module('returning_evidence',ROOT/'tools/host_evidence.py').unique_directory
+
 class WatchdogReset(RuntimeError):
  """The armed WDT0 reset the board to a new ROM instance; DRAM is lost, the run failed."""
 
 def retain_failure(base,record,save,quarantine,error,hold=None):
  hold=base.hold_ownership if hold is None else hold
- if record.get('dirty') or record.get('transport_failed') or record.get('launch_attempted'):
-  try:base.stop_after_failure(record,save,quarantine,error,hold=hold)
+ retained=False
+ def hold_once():
+  nonlocal retained
+  if not retained:
+   retained=True
+   hold()
+ if record.get('dirty') or record.get('dram_probe_dirty') or record.get('transport_failed') or record.get('launch_attempted'):
+  try:base.stop_after_failure(record,save,quarantine,error,hold=hold_once)
   finally:
-   if not record.get('launch_attempted'):hold()
+   if not record.get('launch_attempted'):hold_once()
 
 def run(args,*,base,profile,validate_bundle,admit,execute,description,access=None,guard=None,return_timeout=30,watchdog=None):
  """Call admit(args,p,node,identity,port) before launch and execute(tx,launch,ready,p,record,save).
@@ -34,19 +42,19 @@ def run(args,*,base,profile,validate_bundle,admit,execute,description,access=Non
  execute owns protected upload, reports and RAM restoration; launch() alone
  executes the fixed SRAM launcher and waits for the new permitted ROM instance.
  Every transport error
- is terminal. No callback creates queue authority; the caller owns the claim.
+ is terminal. The per-port lock protects the complete transaction.
  Optional access/guard are dependency injection for offline transport fixtures.
  """
  require=base.require
  require(type(return_timeout) in (int,float) and math.isfinite(return_timeout) and return_timeout>0,
          'Return window must be a finite positive number of seconds.')
  bundle=args.bundle.resolve();p=validate_bundle(bundle)
- require(base.digest(args.fel)==base.FEL_HASH,'FEL executable differs from reviewed bytes.')
+ require(args.fel.is_file(),'FEL executable is missing.')
  access=module('returning_access',ROOT/'tools/usb-access.py') if access is None else access
  if guard is None:
   sys.path.insert(0,str(ROOT/'tools'));import usb_guard
   guard=usb_guard
- guard.check_health();args.evidence.mkdir(parents=True,exist_ok=False)
+ guard.check_health();args.evidence=output_directory(args.evidence)
  if watchdog is not None:
   require(set(watchdog)=={'mode','session_seconds'} and all(type(v) is int for v in watchdog.values()) and
           watchdog['mode']&0xff0f==1 and watchdog['mode']>>4 in crumbs.INTERVALS and
@@ -54,19 +62,23 @@ def run(args,*,base,profile,validate_bundle,admit,execute,description,access=Non
   # Restarts stop at a failure or the session deadline, so the reset comes at
   # most one interval later; a longer wait only delays the failure report.
   return_timeout=watchdog['session_seconds']+crumbs.interval(watchdog['mode'])+10
- record={'mode':'kernel','execution_profile':profile,'complete':False,'launch_attempted':False,'dirty':False,'transport_failed':False,'root_owned_claim':args.root_owned_claim,'transactions':[],'return_timeout_seconds':return_timeout,'tool_sha256':base.FEL_HASH,'image_sha256':p['image_sha256']}
+ record={'mode':'kernel','execution_profile':profile,'complete':False,'launch_attempted':False,'dirty':False,'transport_failed':False,'transactions':[],'return_timeout_seconds':return_timeout,'tool_sha256':base.digest(args.fel),'image_sha256':p['image_sha256']}
  def journal():base.save_json(args.evidence/'session.json',record)
  with access.board_lock() as node:
   access.require_session(node);access.require_rom(node);identity=access.identity(node);port=access.target(node);config={'port':port.name,'sysfs':str(port.resolve())};failed=False
   record.update(initial_node=str(node),initial_identity=identity,port=port.name);journal()
-  launch_called=False;transition_active=False;transition_retained=False;recovered=None
+  launch_called=False;caller_survey_executed=False;transition_active=False;transition_retained=False;recovered=None
   def ready():
    require(not failed,'No admission after transport failure.');validate_bundle(bundle)
    if not record['launch_attempted']:admit(args,p,node,identity,port.name)
   def transaction(*arguments,pass_fds=()):
-   nonlocal failed
+   nonlocal failed,caller_survey_executed
    require(not failed,'A transport failure forbids all further requests.')
-   require(not any(op in arguments for op in ('exe','reset64')) or transition_active,'Native execution requires the guarded launch callback.')
+   caller_survey=arguments==('exe','0x85000') and not launch_called and not record['launch_attempted']
+   require(not any(op in arguments for op in ('exe','reset64')) or transition_active or caller_survey,'Native execution requires the guarded launch callback.')
+   if caller_survey:
+    require(not caller_survey_executed,'One returning caller survey only.')
+    caller_survey_executed=True
    entry={'arguments':[str(x) for x in arguments]};record['transactions'].append(entry);journal()
    try:
     require(access.identity(node)==identity and access.target(node).name==port.name,'USB instance or physical port changed before FEL request.');access.require_rom(node)

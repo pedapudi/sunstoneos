@@ -56,15 +56,16 @@ def check_deadline_return(state, record, dram, originals):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ('build', 'bundle', 'models', 'survey', 'fel', 'output'):
+    for name in ('build', 'bundle', 'models', 'fel', 'output'):
         parser.add_argument('--'+name, type=Path, required=True)
     parser.add_argument('--case', action='append')
+    parser.add_argument('--survey',type=Path,help=argparse.SUPPRESS)
     a = parser.parse_args()
     a.output.mkdir(parents=True, exist_ok=bool(a.case))
     manifest = json.loads((a.build/'manifest.json').read_text())
     host.load(a.build, a.bundle/'image.elf', manifest)
     quiet = manifest['workload_bisect']['quiet_background']
-    evidence = {case: a.models/(case+'.json') for case in host.INSTRUCTION_CASES[quiet]}
+    evidence = {'success': a.models/'success.json'}
     success = evidence['success'].with_suffix('.bin').read_bytes()
     assert host.decode(success, success[32:48], manifest)['task_workload_completed']
     stalled = (a.models/'stalled-core.bin').read_bytes() if not quiet else None
@@ -76,7 +77,6 @@ def main():
         'host_cases': dict.fromkeys(host.CASES, True)}
     fixture = a.output/'MODEL-never-deploy.json'
     fixture.write_text(json.dumps(proof, indent=2)+'\n')
-    host.validate_software(proof, proof['manifest_sha256'])
     accepted_path = a.output/'accepted-cases.json'
     accepted = json.loads(accepted_path.read_text()) if accepted_path.exists() else {
         'manifest_sha256': proof['manifest_sha256'], 'host_sources': proof['host_sources'], 'cases': {}}

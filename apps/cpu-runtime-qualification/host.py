@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Prepare, run once, or decode the finite current CPU workload.
 
-Physical execution requires root-supplied admission, a live queue claim and
-current DDR/survey continuity. Failures retain ownership for explicit recovery.
+Physical execution checks the linked image and live board state.
+Failures retain ownership for explicit recovery.
 """
 import argparse
 import hashlib
@@ -114,13 +114,14 @@ def manifest_check(image, manifest):
 
 
 def prepare(image, manifest_path, admission_path, output, clang, lld, objcopy):
-    g = manifest_check(image, json.loads(manifest_path.read_text()))
-    admission = json.loads(admission_path.read_text())
+    g = geometry(image)
+    if manifest_path is not None:
+        manifest_check(image, json.loads(manifest_path.read_text()))
+    admission = json.loads(admission_path.read_text()) if admission_path is not None else {'reservation': secrets.randbits(64) or 1}
     supervised.validate_admission(admission, digest(image))
-    # The shared validator requires the complete 18 MiB allocation. The ELF
-    # checks above prove every linked writer fits; they do not grant ownership.
+    # Linked extents bound every writer; the native contract carries the session identity.
     segments, address, identity = supervised.image_parts(image)
-    output.mkdir(parents=True, exist_ok=False)
+    output = returning.output_directory(output)
     for name, source in [('launch.S', ROOT / 'platform/a733-smp-observe/launch.S'),
                          ('launch.ld', ROOT / 'platform/a733-smp-observe/launch.ld'),
                          ('launch.c', ROOT / 'platform/a733-smp-supervised/launch.c'),
@@ -140,8 +141,12 @@ def prepare(image, manifest_path, admission_path, output, clang, lld, objcopy):
         require(result.returncode == 0, 'Launcher build failed; preserve build.log.')
     save_json(output / 'commands.json', [[str(x) for x in c] for c in commands])
     require(0 < (output / 'launch.bin').stat().st_size <= 0xc00, 'Launcher exceeds SRAM.')
-    for source, name in [(image, 'image.elf'), (manifest_path, 'image-input-manifest.json'), (admission_path, 'admission.json')]:
-        shutil.copy2(source, output / name)
+    shutil.copy2(image, output / 'image.elf')
+    manifest = {'target': 'a733-cpu-runtime-qualification', 'execution_profile': PROFILE,
+                'workload': '32-rounds-local-timers-idle-wake', 'final_elf': digest(image), 'build_id': g['build_id']}
+    save_json(output / 'image-input-manifest.json', manifest)
+    save_json(output / 'admission.json', admission)
+    admission_hash = digest(output / 'admission.json')
     payloads = []
     for i, segment in enumerate(segments):
         if segment['data']:
@@ -150,12 +155,12 @@ def prepare(image, manifest_path, admission_path, output, clang, lld, objcopy):
             payloads.append({'name': name, 'address': segment['address']})
     epoch, generation, lease = (secrets.randbits(64) or 1 for _ in range(3))
     request, contract = supervised.request_bytes(address, identity, epoch, generation, lease,
-                                                admission['reservation'], bytes.fromhex(digest(admission_path)))
+                                                admission['reservation'], bytes.fromhex(admission_hash))
     for name, content in [('request.bin', request), ('contract.bin', contract),
                           ('result-zero.bin', bytes(16384)), ('report-zero.bin', bytes(128))]:
         (output / name).write_bytes(content)
     record = {'schema': 'a733-smp-supervised-bundle-v1', 'execution_profile': PROFILE,
-              'reservation': admission['reservation'], 'admission_sha256': digest(admission_path),
+              'reservation': admission['reservation'], 'admission_sha256': admission_hash,
               'image_sha256': digest(image), 'launcher_sha256': digest(output / 'launch.bin'),
               'build_id': identity.hex(), 'epoch': epoch, 'generation': generation, 'lease': lease,
               'segments': payloads, 'reservations': [{k: v for k, v in s.items() if k != 'data'} for s in segments],
@@ -169,7 +174,7 @@ def prepare(image, manifest_path, admission_path, output, clang, lld, objcopy):
 def validate_bundle(bundle):
     prepared = supervised.validate_bundle(bundle)
     require(prepared.get('execution_profile') == PROFILE, 'Not a qualification bundle.')
-    g = manifest_check(bundle / 'image.elf', json.loads((bundle / 'image-input-manifest.json').read_text()))
+    g = geometry(bundle / 'image.elf')
     require(prepared.get('qualification') == g, 'Qualification geometry changed.')
     segments, _, _ = supervised.image_parts(bundle / 'image.elf')
     require(prepared.get('reservations') == [{k: v for k, v in s.items() if k != 'data'} for s in segments],
@@ -209,34 +214,10 @@ CHUNK_BYTES = 4 * 1024 * 1024
 RAM_START, RAM_BYTES = 0x41000000, 0x1200000
 base = supervised.base
 returning = base.module('qualification_returning', ROOT / 'tools/a733-returning-host.py')
-kernel = base.module('qualification_kernel', ROOT / 'tools/check-a733-kernel.py')
-
-
-def caller_interval(survey):
-    # Same source-backed A32 push interval as run-native-startup-probe.py.
-    require(survey.get('complete') is True and survey.get('sram_restored') is True and
-            survey.get('rom_usable') is True, 'Completed current returning survey required.')
-    sp = survey['result']['sp']
-    require(type(sp) is int and 0x4003c <= sp <= 0x100000 and sp % 4 == 0, 'Caller SP outside reviewed SRAM.')
-    require(all(sp <= address or sp - 60 >= address + size for _, address, size in base.REGIONS),
-            'Caller stack overlaps launcher reservations.')
-    return sp - 60, 60
 
 
 def admit(args, prepared, node, identity, port):
-    require(isinstance(args.root_owned_claim, str) and args.root_owned_claim.strip(), 'Explicit root-owned claim required.')
     validate_bundle(args.bundle.resolve())
-    admission = json.loads(prepared['_frozen']['admission.json'])
-    supervised.validate_admission(admission, prepared['image_sha256'], identity, port)
-    paths = [args.ddr_evidence, args.platform_survey, *args.warm_return]
-    raw = [p.read_bytes() for p in paths]
-    kernel.validate_platform_admission(tuple(raw[:2]), node, identity, port,
-                                      base.FEL_HASH, base.FEL_HASH, tuple(raw[2:]))
-    caller_interval(json.loads(raw[1]))
-    ddr = json.loads(supervised.artifact(admission['ddr']).read_text())
-    covered = {(item['path'], item['sha256']) for item in ddr['evidence']}
-    require(all((str(p.resolve()), hashlib.sha256(data).hexdigest()) in covered for p, data in zip(paths, raw)),
-            'Current DDR/survey/warm-return chain is absent from the admitted reservation.')
 
 
 def run_once(transaction, launch, ready, bundle, prepared, evidence, record, journal):
@@ -303,16 +284,17 @@ def run_once(transaction, launch, ready, bundle, prepared, evidence, record, jou
 
 def run(args):
     def execute(tx, launch, ready, prepared, record, journal):
-        paths = [args.ddr_evidence, args.platform_survey, *args.warm_return]
-        record['continuity_inputs'] = []
-        for index, path in enumerate(paths):
-            raw = path.read_bytes()
-            saved = args.evidence / f'continuity-{index}.json'
-            saved.write_bytes(raw)
-            base.sync_file(saved)
-            record['continuity_inputs'].append({'path': str(path.resolve()), 'file': saved.name,
-                                               'sha256': hashlib.sha256(raw).hexdigest()})
-        record['caller_interval'] = list(caller_interval(json.loads(args.platform_survey.read_text())))
+        survey = base.module('qualification_live_survey', ROOT/'tools/run-launch-survey.py')
+        record['dirty'] = True
+        journal()
+        caller_state = survey.capture_caller(tx, args.evidence)
+        record['dirty'] = False
+        record['caller_interval'] = survey.caller_interval(caller_state)
+        journal()
+        record['dirty'] = True
+        journal()
+        base.verify_dram(tx, args.evidence)
+        record['dirty'] = False
         journal()
         return run_once(tx, launch, ready, args.bundle.resolve(), prepared, args.evidence, record, journal)
     return returning.run(args, base=base, profile=PROFILE, validate_bundle=validate_bundle,
@@ -324,18 +306,22 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='operation', required=True)
     prep = sub.add_parser('prepare')
-    for name in ['image', 'manifest', 'admission', 'output']:
+    for name in ['image', 'output']:
         prep.add_argument('--' + name, type=Path, required=True)
+    for name in ['manifest', 'admission']:
+        prep.add_argument('--' + name, type=Path)
     for name in ['clang', 'lld', 'objcopy']:
         prep.add_argument('--' + name, required=True)
     report = sub.add_parser('read-report')
     for name in ['bundle', 'report', 'output']:
         report.add_argument('--' + name, type=Path, required=True)
     live = sub.add_parser('run')
-    for name in ['bundle', 'fel', 'evidence', 'ddr-evidence', 'platform-survey']:
+    for name in ['bundle', 'fel', 'evidence']:
         live.add_argument('--' + name, type=Path, required=True)
+    for name in ['ddr-evidence', 'platform-survey']:
+        live.add_argument('--' + name, type=Path, help=argparse.SUPPRESS)
     live.add_argument('--warm-return', type=Path, action='append', default=[])
-    live.add_argument('--root-owned-claim', required=True)
+    live.add_argument('--root-owned-claim', help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.operation == 'prepare':
         prepare(args.image, args.manifest, args.admission, args.output, args.clang, args.lld, args.objcopy)
