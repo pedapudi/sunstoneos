@@ -107,12 +107,20 @@ struct pvr_mimus_service *a733_gpu_mimus_prepare(struct a733_gpu_mimus *s, struc
     for (unsigned i = 0; i < PVR_MIMUS_MODELS; ++i)
         s->maps[count++] = (struct pvr_gpu_mapping){models_gpu[i], l->models[i], PVR_MIMUS_MODEL_BYTES, large,
                                                     PVR_GPU_VM_READ_ONLY};
+    /* The CPU rewrites the arena and the job page before each job and reads
+     * the output after it, so the GPU reaches them past its system-level
+     * cache (the page-table bypass of pvr_mmu.c:2601), as the qualified
+     * probe maps its output (apps/gpu-power-id/fw-job.inc). CPU cache
+     * maintenance does not reach that cache. The models and programs are
+     * written once, before the firmware starts. */
     s->maps[count++] = (struct pvr_gpu_mapping){PVR_MIMUS_ARENA_GPU, l->arena, PVR_MIMUS_ARENA_BYTES, large,
-                                                PVR_GPU_VM_READ_ONLY};
-    s->maps[count++] = (struct pvr_gpu_mapping){PVR_MIMUS_OUTPUT_GPU, l->output, PVR_MIMUS_OUTPUT_BYTES, large, 0};
+                                                PVR_GPU_VM_READ_ONLY | PVR_GPU_VM_SLC_BYPASS};
+    s->maps[count++] = (struct pvr_gpu_mapping){PVR_MIMUS_OUTPUT_GPU, l->output, PVR_MIMUS_OUTPUT_BYTES, large,
+                                                PVR_GPU_VM_SLC_BYPASS};
     for (unsigned i = 0; i < 3; ++i)
         s->maps[count++] = (struct pvr_gpu_mapping){(i ? PROGRAM_GPU + (i - 1) * PAGE : JOB_GPU),
-            s->payload_extent.physical + i * PAGE, PAGE, 12, PVR_GPU_VM_READ_ONLY};
+            s->payload_extent.physical + i * PAGE, PAGE, 12,
+            PVR_GPU_VM_READ_ONLY | (i ? 0u : PVR_GPU_VM_SLC_BYPASS)};
     size_t off = 3 * PAGE;
     for (unsigned i = 0; i < PVR_PROGRAM_REGIONS; ++i) {
         size_t n = pvr_compute_program_bytes[i];
