@@ -70,6 +70,7 @@
  * without it put phase << 24 | cluster << 16 | status & 0xffff in the value.
  * GUARD (aux bit 14): the value is the entry guard's full refusal word,
  * detail << 12 | line of apps/os/cpu-return-entry.c. */
+#define SUNSTONE_CRUMB_FAIL_CPU_PLL 0x9u /* Mismatched PLL word; expected N/state/domain in aux. */
 #define SUNSTONE_CRUMB_FAIL_CPU_RETAINED 0x8u /* First CPU driver fault; layout in cpu-return/cpu.patch. */
 #define SUNSTONE_CRUMB_CPU_AUX 0x20000000u
 #define SUNSTONE_CRUMB_CPU_GUARD 0x40000000u

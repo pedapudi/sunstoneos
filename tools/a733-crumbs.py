@@ -127,6 +127,11 @@ def board_failure(words, defines, elf):
                 # another revision can number its lines differently.
                 record['dcdc5_mv'], record['dcdc3_mv'] = 10 * (value >> 22 & 0x3ff), 10 * (value >> 12 & 0x3ff)
                 record['rail_line_source'] = 'apps/os/cpu-return-entry.c of the decoding tree'
+    if record['group'] == 'cpu_pll':
+        aux=record['aux']
+        record.update(expected_n=aux&255, domain=aux>>8&3, driver_state=aux>>10&15,
+                      closing=bool(aux>>14&1), pll=hex(value), observed_n=value>>8&255,
+                      update=bool(value>>26&1), locked=bool(value>>28&1))
     if record['group'] == 'cpu_retained':
         aux = record['aux']
         state, domain, origin = aux & 15, aux >> 4 & 3, aux >> 6 & 3

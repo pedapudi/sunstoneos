@@ -8,7 +8,7 @@
  #include "../board/application.h"
  #include "application.h"
  #include "a733_cpu_clock.h"
-@@ -84,6 +85,35 @@
+@@ -84,6 +85,43 @@
      atomic_uint ready;
  } owner;
  enum { START, INSPECT, REQUEST, FOLLOW };
@@ -41,10 +41,18 @@
 +        (uint32_t)!!a733_cpu_clock_parked(c)<<30|(uint32_t)!!c->critical<<31;
 +    sunstone_crumb_fail(SUNSTONE_CRUMB_FAIL_CPU_RETAINED<<12|(line&0xfffu)|aux<<16,value,here);
 +}
++void a733_cpu_clock_pll_mismatch_note(const struct a733_cpu_clock *c,
++    unsigned line,const void *here,uint32_t pll)
++{
++    if(c!=&owner.driver)return;
++    uint32_t aux=(c->n&255u)|(c->cluster&3u)<<8|(c->state&15u)<<10|
++        (uint32_t)!!os_cpu_return_requested()<<14;
++    sunstone_crumb_fail(SUNSTONE_CRUMB_FAIL_CPU_PLL<<12|(line&0xfffu)|aux<<16,pll,here);
++}
  static int clock_now(void *v,uint64_t *out)
  {return v==&owner&&a733_counter_clock_now(&providers.shared.counter,out);}
  static int clock_read(void *v,uintptr_t a,uint32_t *out){return v==&owner&&read_word(NULL,a,out);}
-@@ -123,7 +153,7 @@
+@@ -123,7 +161,7 @@
  {
      struct a733_cpu_clock *c=&owner.driver;
      const struct os_session *s=os_session_admitted();
@@ -53,7 +61,7 @@
          struct a733_cpu_clock_config config;
          if(!s||!a733_cpu_clock_grant_load(&s->cpu_clock,s->board.epoch,s->board.generation,&config)||
             !a733_cpu_clock_init(c,&config,&clock_ops,&owner,&providers.shared.clocks,&providers.shared.rails,
-@@ -132,7 +162,36 @@
+@@ -132,7 +170,36 @@
          if(a733_cpu_clock_inspect(c,A733_CPU_LITTLE,later(REQUEST_US))!=A733_CPU_CLOCK_PENDING)return REFUSED(0);
          return 1;
      }
@@ -91,7 +99,7 @@
  #ifdef SUNSTONE_A733_OS_PERF
      /* The performance-mode service replaces the one-request-per-cluster
       * start: its boot switch moves the CPU domains to the boot mode, and it
-@@ -162,6 +221,15 @@
+@@ -162,6 +229,15 @@
  #endif
      }
      if(owner.phase==REQUEST){
@@ -107,7 +115,7 @@
          /* One request per granted domain once its sensor has a reading (CPUL
           * is physical channel 3, CPUB channel 0), in the default path's order
           * (docs/designs/cpu-top-opp.md): CPU-B, CPU-L, then the DSU at the
-@@ -182,12 +250,14 @@
+@@ -182,12 +258,14 @@
                  target=c->report.binned ? a733_cpu_clock_dsu_top(c->report.bin,c->applied_mhz[A733_CPU_LITTLE],big) : 0;
                  if(!target)continue;
              }

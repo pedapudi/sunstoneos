@@ -305,6 +305,9 @@ static enum a733_rail rail_of(unsigned cluster){return cluster==A733_CPU_BIG ? A
 __attribute__((weak)) void a733_cpu_clock_retained_note(const struct a733_cpu_clock *c,
     unsigned line,const void *here,uint32_t status)
 {(void)c;(void)line;(void)here;(void)status;}
+__attribute__((weak)) void a733_cpu_clock_pll_mismatch_note(const struct a733_cpu_clock *c,
+    unsigned line,const void *here,uint32_t pll)
+{(void)c;(void)line;(void)here;(void)pll;}
 static enum a733_cpu_clock_status fault_at(struct a733_cpu_clock *c,
     unsigned line,const void *here,uint32_t status)
 {
@@ -663,7 +666,10 @@ enum a733_cpu_clock_status a733_cpu_clock_poll(struct a733_cpu_clock *c)
          * UPDATE clears (manual 5.1.4.2; vendor ccu_nkmp_set_rate). */
         if(c->state==S_UPDATE && (pll&UPDATE))
             return c->last_now<c->timer ? A733_CPU_CLOCK_PENDING : fault(c);
-        if(((pll>>8)&255)!=c->n)return fault(c);
+        if(((pll>>8)&255)!=c->n){
+            a733_cpu_clock_pll_mismatch_note(c,__LINE__,SUNSTONE_CRUMB_HERE(),pll);
+            return fault(c);
+        }
         if(c->state==S_LOCK && !(pll&LOCK)) {
             (void)a733_pll_lock_count(&c->lock,c->last_now,0);
             return c->last_now<c->timer ? A733_CPU_CLOCK_PENDING : fault(c);

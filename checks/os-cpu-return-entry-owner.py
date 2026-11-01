@@ -208,6 +208,10 @@ def retained_diagnostics(image,layout,members):
   assert m.call(0,'a733_cpu_clock_poll',(m.c,))==RETAINED,name
   words={k:m.u32(0x07090000+off) for k,off in cpu_crumbs.WORDS.items()}
   failure=cpu_crumbs.board_failure(words,defines,image.path)
+  if state==9:
+   assert failure['group']=='cpu_pll' and failure['expected_n']==0 and failure['observed_n']==69,(name,failure)
+   assert failure['domain']==domain and failure['driver_state']==state and failure['closing']==bool(closing),(name,failure)
+   rows.append({'name':name,'passed':True,'failure':failure});continue
   assert failure['group']=='cpu_retained',(name,failure)
   assert (failure['driver_state'],failure['domain'],failure['origin'])==(state,domain,origin),(name,failure)
   assert (failure['phase'],failure['request_cursor'],failure['target_mhz'])==(3,3,1014),(name,failure)
