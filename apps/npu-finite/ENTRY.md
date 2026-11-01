@@ -29,11 +29,13 @@ that check; it establishes no physical entry or numerical result.
 Use the [prerequisite capture specification](CAPTURE.md) to obtain current
 clock, power and pin observations and the separate PMIC supply evidence.
 
-Use the exact image and manifest together. The `session` operation takes an
-already reviewed admission record and the complete typed boot bytes. It
-serializes their identities and hashes, validates the result with the existing
-admission predicate, and refuses an existing output file. It supplies no
-ownership, clock, electrical or recovery defaults.
+The `session` operation reads the native layout and build identity from the
+ELF and serializes the supplied typed boot bytes with fresh nonzero session
+identities. It validates the wire record before writing. Optional `--admission`
+configuration can supply epoch, generation, lease, supervisor and whole-platform
+identities. Optional `--manifest` metadata does not select the native profile.
+An existing output file is preserved; the producer writes to a unique timestamped
+child of its parent and prints the actual path.
 
 The compiled session layout is read from the image. For the current producer,
 the session has 456 bytes and the typed boot payload has 232 bytes. Within
@@ -45,21 +47,19 @@ uploaded PMIC deadline. Supply the actual inherited PL0/PL1 settings and
 explicit pin authority. A software fixture is not a physical boot payload.
 
 ```sh
-python apps/npu-finite/host.py session --image IMAGE --manifest MANIFEST \
-  --boot TYPED_BOOT --admission ADMISSION --output SESSION
-python apps/npu-finite/host.py prepare --image IMAGE --manifest MANIFEST \
-  --session SESSION --admission ADMISSION --output BUNDLE \
+~/.cache/sunstoneos/venv/bin/python -B apps/npu-finite/host.py session \
+  --image IMAGE --boot TYPED_BOOT --output SESSION
+~/.cache/sunstoneos/venv/bin/python -B apps/npu-finite/host.py prepare \
+  --image IMAGE --session SESSION --output BUNDLE \
   --clang CLANG --lld LLD --objcopy OBJCOPY
-python apps/npu-finite/host.py validate --bundle BUNDLE
+~/.cache/sunstoneos/venv/bin/python -B apps/npu-finite/host.py validate --bundle BUNDLE
 ```
 
-The admission must bind the current target and continuity, the complete DDR
-reservation, secondary CPUs OFF, cache and mapping authority, independent
-DRAM clocks, NPU SRAM exclusion and drain ownership, PMIC pin ownership and
-stable DCDC2 at 800 mV. The separate returning-lifetime review binds the exact
-image, launcher and host sources. It authorizes retirement only after verified
-CLOSE, local stop, provider quiescence and ROM return. The power domain's
-coherent ON observation does not supply any of those authorities.
+Physical execution requires exclusive DDR and shared-resource ownership,
+secondary CPUs OFF, correct cache mappings, independent DRAM clocks, NPU SRAM
+exclusion and supported PMIC pin and 800 mV DCDC2 state. Native guards enforce
+their configuration and hardware conditions. Packaging validates supplied bytes;
+it does not establish those physical conditions.
 
 ## Verify the actual forced-ROM entry
 
@@ -72,31 +72,30 @@ After protected preload has saved SRAM scratch, the host reads five pinned ROM
 instructions in one `readl` batch. Addresses `0x20`, `0x24`, `0x28`, `0x3c`
 and `0x40` must contain `0xeb00008f`, `0xe3a00911`, `0xe3a0193d`,
 `0xe3a0605c` and `0xea00004d`. Any mismatch refuses execution. The same
-instance, port, disabled watchdog and admission checks still apply. `readl`
+instance, port, disabled watchdog and native session checks still apply. `readl`
 uses 48 bytes of scratch at `0x71000`; raw FEL reads of ROM are not a substitute.
 The source-backed ROM capture is preserved in
 `~/.cache/sunstoneos/evidence/gpu-rom-entry-20261024/snapshot/manifest.json`.
 
-## Freeze before the coordinator claims the board
+## Execute through the protected returning transport
 
-Preserve every `HOST_SOURCES` entry, all runtime imports and the external USB
-guard with the image, manifest, actual launcher and complete native compiler
-input closure. Build and import the frozen producer offline. Supply current
-DDR and survey evidence plus every accepted warm return in the continuity
-chain. The run command uses the existing root-owned claim and never creates
-or closes queue records:
+The coordinator selects the physical port explicitly and uses the current host
+adapter with the prepared transfer bytes:
 
 ```sh
-python BUNDLE/host/apps/npu-finite/host.py run --bundle BUNDLE --fel FEL \
-  --evidence RESULT --ddr-evidence DDR --platform-survey SURVEY \
-  --warm-return ACCEPTED_RETURN --root-owned-claim CLAIM
+SUNSTONE_USB_PORT=3-3 ~/.cache/sunstoneos/venv/bin/python -B \
+  apps/npu-finite/host.py run --bundle BUNDLE --fel FEL --evidence RESULT
 ```
 
-Stop at the first transport failure. A deadline does not permit another
-request, memory restoration or claim release. After normal return, old SRAM
-belongs to ROM and is never restored. Another NPU start still requires the
-startup contract, including a disabled PLL; successful return does not itself
-satisfy that contract.
+The shared runner holds the port lock, validates the live ROM instance and uses
+the USB transition guard. Before snapshots or uploads, it tests and restores one
+reserved DRAM word. An uncertain probe restoration retains ownership. Existing
+result directories receive unique timestamped children.
+
+Stop at the first transport failure. A deadline does not permit another request,
+memory restoration or lock release. After normal return, old SRAM belongs to ROM
+and is never restored. Another NPU start still requires the startup contract,
+including a disabled PLL; successful return does not itself satisfy that contract.
 
 ## Return before constructing providers
 
@@ -128,19 +127,13 @@ published identities and MBUS record must match the secure monitor's admitted
 state. The monitor accepts this pre-scheduler caller only in EL1h. It uses the
 existing bounded cache publication, GIC restoration and forced ROM return.
 The checkpoint omits the numerical image's SRAM-routing restoration entirely:
-it never changed that routing, and admission requires fresh ROM lineage plus
-exclusion of other routing writers.
+it never changed that routing, and other routing writers must remain excluded.
 
-The same `host.py session`, `prepare`, `validate` and `run` operations consume
-the diagnostic manifest. The session and receipt sizes stay 456 and 88 bytes.
-The existing `a733-npu-checkpoint-platform-v1` schema requires
-`providers-never-constructed` and
-`read-only-NPU-clock-guard-before-MBUS-normalization`. Its clock record also
-requires `MBUS-source-restore-with-idle-masters-and-exclusive-SRAM-window`.
-Power admission requires `providers-never-constructed` and
-`unconsumed-typed-boot-no-provider-grant`. Typed boot fields retain their syntax
-and grant no provider operation. Current CPU, cache, DDR, secondary-OFF, ROM
-transport and remote-writer exclusion evidence remain necessary.
+The same `host.py session`, `prepare`, `validate` and `run` operations support
+the diagnostic. Native immutable markers select its parser and layout. The
+session and receipt sizes stay 456 and 88 bytes. Typed boot fields retain their
+syntax and grant no provider operation. The CPU, cache, DDR, secondary-OFF, ROM
+transport and remote-writer conditions still apply.
 
 The diagnostic performs no NPU-engine, PLL factor/gate, PCK policy or SRAM-routing
 write. Its existing MBUS helper reads NPU/GPU clock state and conditionally reads
@@ -197,8 +190,8 @@ route snapshot, with five owned-field writes during installation and five
 during restoration. It adds no task, allocation, DMA buffer or output copy.
 Existing startup and return deadlines bound the register polling. It uses the
 same 456-byte session, 88-byte receipt, ENTRY_MEMORY_READY and MBUS log.
-Host admission additionally requires `exclusive-IRQ97-route-capture-install-restore`;
-the old MBUS and memory profiles cannot label this image.
+The host selects this profile from its immutable IRQ checkpoint marker and
+checks its linked route implementation directly.
 
 The focused native check uses `checkpoint-check.py --case irq` and executes
 actual session validation, shared entry, pool preparation, checkpoint publication,
@@ -237,11 +230,11 @@ restoration. Disabled-converter readback proves the configured stop only; analog
 conversion drain and release of inherited clocks remain unproved.
 
 The version-3 session is 616 bytes, with a 392-byte boot payload. Its consumed
-160-byte thermal suffix supplies a distinct owner, authority, four evidence
-hashes, APB1 selection/rate and the GPADC configuration choice. Exact image layout
+160-byte thermal suffix supplies a distinct owner, authority, four native digest
+fields, APB1 selection/rate and the GPADC configuration choice. Exact image layout
 and immutable profile markers reject cross-profile, truncated and extra records.
-The thermal owner must differ from all four existing provider owners. Physical
-records retain the existing THS electrical, clock, SID and exclusion requirements.
+The thermal owner must differ from all four existing provider owners. THS
+operation still requires correct electrical, clock, SID and exclusion conditions.
 Supervision covers matched CLOSE/local stop or proved NEVER_STARTED, followed by
 configured THS stop and provider parking. It grants no clock release.
 
@@ -283,24 +276,24 @@ authority remains required, as do all numerical NPU and PMIC operating condition
 ## A numerical failure can preserve ROM continuity
 
 `continuity.py --bundle BUNDLE --session SESSION --output NEW_RECORD` is an
-offline producer for a completed numerical failure. It reuses the bundle's
-frozen host validator, checks captured monitor, platform and receipt bytes,
+offline producer for a completed numerical failure. It uses the current host
+validator, checks captured monitor, platform and receipt bytes,
 verifies upload readbacks and compares the full 18 MiB DRAM backup with its
 restoration. Only status 1 with a validated normal return and unchanged failed
 numerical result can produce the existing kernel controlled-outcome record.
 
 The new record references the original session and all consumed inputs by hash.
 It preserves `functional_success=false`, never edits the original session and
-refuses an existing output path. This establishes ROM continuity for later
-admission; it does not authorize an NPU restart, close a queue claim or grant
-peripheral ownership. PLL, domain and rail retention still apply.
+preserves an existing output path in a unique directory. It records the
+validated return and restoration for inspection. Later runs use live checks
+instead of requiring this derived record. PLL, domain and rail retention still apply.
 
 ## Preserve stopped buffers before restoring a numerical failure
 
-The host captures returned RAM for a validated status-1 numerical failure from
-image `9e4adabf7c8fb19c2cfc2fb4260971cc32a3b6e5ee0fa09bcad0d4b4208c0e95`. The
-capture is bound to that non-thermal numerical image, which runs without
-thermal supervision; the thermal and checkpoint profiles never capture.
+The host captures returned RAM for a validated status-1 numerical failure when
+the ELF symbols, allocation intervals and immutable slot table match the supported
+capture layout. A compatible build can have a different image hash. Thermal and
+checkpoint profiles never capture.
 Three fixed metadata reads total 440 bytes. They validate the six buffer slots,
 stream lengths, parent extent and translation-table allocation against the
 audited ELF layout. Only then does the host read the 1,085,440-byte parent
@@ -319,12 +312,12 @@ hash before the next read. Metadata differences, short reads, transport failures
 or persistence failures retain the session without restoration. Payload and
 returned-output differences remain diagnostic evidence. The host restores DRAM
 and publishes the controlled outcome only after capture completes; the numerical
-result remains failed. Successful numerical runs, other images, checkpoints and
-thermal profiles perform no additional reads.
+result remains failed. Successful numerical runs, unsupported native layouts, checkpoints and thermal
+profiles perform no additional reads.
 
 This adds five ROM reads totaling 1,187,256 bytes and no native instructions.
-The helper is part of the frozen host source closure. A future attempt requires
-a newly reviewed host bundle and operating admission in a permitted lifetime.
+The helper checks the native layout and bounded physical ranges directly. A
+future attempt still requires recovered hardware and exclusive resource ownership.
 The earlier physical capture has already been restored and is unchanged. The
 focused modeled evidence is in `npu-stopped-capture-20261024`; numerical
 correctness and physical buffer contents remain unresolved.
@@ -336,14 +329,15 @@ reports, and the four DRAM stopped-capture files, and journal-checks the SRAM
 file when the capture includes it. It validates their internal report
 consistency and journal hashes, then compares the fixed allocation contents.
 The command takes `--bundle`, `--session`, `--assembly`, `--bootstrap` and an
-exclusive `--output` JSON path. It performs no device operations and grants no
+`--output` JSON path. An existing file is preserved in a unique directory. It performs no device operations and grants no
 execution, restart, continuity or recovery authority.
 
 Use the accepted `npu-models-20261018/conv12/assembly-comparison` directory for
 `--assembly` and `npu-convolution-20261016/fixtures/expected-bootstrap.bin` for
-`--bootstrap`. Their hashes are pinned by the helper. The accepted assembly
-comparison already uses this image's device addresses, so no compiler or
-assembler rerun is needed. Tensor formats and affine quantization parameters
+`--bootstrap`. The helper checks the supplied reference geometry, model identity and bootstrap
+structure, then compares their bytes with the captured allocations. The assembly
+comparison uses this layout's device addresses, so no compiler or assembler rerun
+is needed. Tensor formats and affine quantization parameters
 come from the immutable model and its existing catalogue entry. They describe
 the model; they do not establish the cause of channel saturation.
 
@@ -477,9 +471,9 @@ covers the entire routing interval. There is no inference tensor SRAM workload.
 
 Status: staged for later physical validation. Both boards are unavailable after
 separate retained attempts. The staged package contains no current target
-identity, admission or provider grant. It requires coordinator-established
-recovery, fresh DDR/continuity and clock, PMIC, rail, SRAM and IRQ ownership before
-production preparation or execution. No reconnect or board operation was
+identity or provider grant. Execution requires recovered hardware and exclusive
+clock, PMIC, rail, SRAM and IRQ ownership, with live ROM and DRAM checks before
+launch. No reconnect or board operation was
 performed for this implementation.
 
 Evidence is under `~/.cache/sunstoneos/evidence/sol-npu-startup-1031/`.

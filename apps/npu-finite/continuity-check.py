@@ -2,10 +2,13 @@
 """Check actual captured continuity and refuse incomplete, corrupt or restored-differently inputs."""
 import argparse,hashlib,importlib.util,json,tempfile
 from pathlib import Path
+import sys
+sys.path.insert(0,str(Path(__file__).resolve().parents[2]/"tools"))
+from host_evidence import unique_directory
 from unittest.mock import patch
 p=argparse.ArgumentParser(description=__doc__)
 for name in ('bundle','session','output'):p.add_argument('--'+name,type=Path,required=True)
-a=p.parse_args();a.output.mkdir(parents=True,exist_ok=False)
+a=p.parse_args();a.output=unique_directory(a.output)
 spec=importlib.util.spec_from_file_location('npu_continuity',Path(__file__).with_name('continuity.py'));c=importlib.util.module_from_spec(spec);spec.loader.exec_module(c)
 def sha(path):return hashlib.sha256(path.read_bytes()).hexdigest()
 original=a.session.read_bytes();before=sha(a.session);cases=[]

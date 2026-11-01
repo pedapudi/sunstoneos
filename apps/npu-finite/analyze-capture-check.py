@@ -2,10 +2,13 @@
 """Synthetic stopped-RAM decoder cases. No hardware, assembler or native replay."""
 import argparse,hashlib,importlib.util,io,json,shutil,struct,tempfile
 from pathlib import Path
+import sys
+sys.path.insert(0,str(Path(__file__).resolve().parents[2]/"tools"))
+from host_evidence import unique_directory
 from elftools.elf.elffile import ELFFile
 ROOT=Path(__file__).resolve().parents[2]
 spec=importlib.util.spec_from_file_location('analysis',ROOT/'apps/npu-finite/analyze-capture.py');a=importlib.util.module_from_spec(spec);spec.loader.exec_module(a)
-p=argparse.ArgumentParser(description=__doc__);p.add_argument('--evidence',type=Path,required=True);p.add_argument('--case',action='append',default=[]);args=p.parse_args();args.evidence.mkdir(parents=True,exist_ok=False)
+p=argparse.ArgumentParser(description=__doc__);p.add_argument('--evidence',type=Path,required=True);p.add_argument('--case',action='append',default=[]);args=p.parse_args();args.evidence=unique_directory(args.evidence)
 cache=Path.home()/'.cache/sunstoneos/evidence'
 source_bundle=cache/'npu-finite-admission-20261024/pll-preserved/root-review-DRAFT/bundle'
 original_session=cache/'processor-completion-20261024/port-3-1/npu-numerical/runtime/session.json'
@@ -23,6 +26,12 @@ with tempfile.TemporaryDirectory(prefix='npu-synthetic-analysis-') as tmp:
     elf=ELFFile(io.BytesIO(image));symbols={s.name:s for s in elf.get_section_by_name('.symtab').iter_symbols()}
     def symbol(name):
         s=symbols[name];section=elf.get_section(s['st_shndx']);offset=s['st_value']-section['sh_addr'];return section.data()[offset:offset+s['st_size']]
+    build_symbol=symbols['a733_smp_build_id'];section=elf.get_section(build_symbol['st_shndx'])
+    offset=int(section['sh_offset'])+int(build_symbol['st_value'])-int(section['sh_addr'])
+    changed=bytearray(image);changed[offset]^=1
+    alternate=a.host.image_profile(bytes(changed),{})[4]['stopped_capture']
+    assert alternate['image_sha256']==a.sha(changed) and alternate['parent']==prepared['geometry']['stopped_capture']['parent']
+    results.append({'case':'compatible-native-layout-with-new-image-hash','passed':True})
     parent=bytearray(a.capture.BYTES)
     buffers=[(assembly/'buffer-0.bin').read_bytes(),(assembly/'buffer-1.bin').read_bytes(),(assembly/'buffer-3.bin').read_bytes(),symbol('a733_npu_application_input'),bytes.fromhex(original['npu_result']['second_output']),(bootstrap).read_bytes()]
     for slot,data in zip(a.capture.SLOTS,buffers):parent[slot[0]:slot[0]+len(data)]=data
