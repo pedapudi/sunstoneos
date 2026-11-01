@@ -462,6 +462,10 @@ static int runtime_progress(struct npu_service *s, int timed_out)
 static void runtime_worker(struct npu_service *s)
 {
     for (int timed_out = 0;;) {
+        if (s->direct) {
+            (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+            continue;
+        }
         if (atomic_load_explicit(&s->activation_state, memory_order_acquire) != SERVICE_ACTIVE) {
             (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
             continue;

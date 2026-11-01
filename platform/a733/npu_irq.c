@@ -150,6 +150,19 @@ uint64_t npu_application_irq_ticks(void)
 #endif
 void NPU_IRQ_HANDLER(void)
 {
+    /* A claimed resident queue owns the destructive event read. Leave the
+     * level SPI enabled: the queue acknowledges the device before EOI and
+     * directly notifies its waiting client. Errors mask this same source. */
+    if(binding.service && binding.service->direct) {
+        BaseType_t woken=pdFALSE;
+        binding.service->direct->irq(binding.service->direct->context,&woken);
+        if(atomic_load_explicit(&binding.service->irq_pending,memory_order_acquire)) {
+            if(!gicv3_spi_mask(&source))binding.fault=1;
+            binding.masked=1;
+        }
+        portYIELD_FROM_ISR(woken);
+        return;
+    }
 #ifndef NPU_IRQ_EXTERNAL_BIND
     uint64_t now;__asm__ volatile("isb\n mrs %0, cntpct_el0" : "=r"(now) :: "memory");
     __atomic_store_n(&delivered_ticks,now,__ATOMIC_RELEASE);

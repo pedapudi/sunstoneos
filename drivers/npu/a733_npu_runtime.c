@@ -381,7 +381,8 @@ static void load_end(struct npu_runtime *rt, struct npu_runtime_slot *s, int loa
         set_state(s, NPU_RUNTIME_EMPTY);
     }
     rt->loading = NPU_RUNTIME_SLOTS;
-    npu_service_release(&rt->service, index, loaded ? NPU_SERVICE_OK : NPU_SERVICE_INVALID, A733_NPU_READY);
+    if (rt->bound)
+        npu_service_release(&rt->service, index, loaded ? NPU_SERVICE_OK : NPU_SERVICE_INVALID, A733_NPU_READY);
 }
 /* A failed native adapter treats any further time read as fatal; a retained
  * runtime records no more step times. */
@@ -687,7 +688,9 @@ static void finished(void *cookie, unsigned client, int faulted)
 static void closed(void *cookie, unsigned client)
 {
     struct npu_runtime *rt = cookie;
-    if (client < rt->slots) set_state(&rt->slot[client], NPU_RUNTIME_CLOSED);
+    if (rt->resident && !client) {
+        for (unsigned i = 0; i < rt->slots; ++i) set_state(&rt->slot[i], NPU_RUNTIME_CLOSED);
+    } else if (client < rt->slots) set_state(&rt->slot[client], NPU_RUNTIME_CLOSED);
 }
 
 static int metadata(const struct npu_runtime *rt, const struct a733_npu_ops *ops, void *cookie,
@@ -722,8 +725,8 @@ static int prepared(void *cookie, const struct a733_npu_ops *ops, void *backend,
     if (result < 0) fault(rt);
     return result;
 }
-int npu_runtime_bind(struct npu_runtime *rt, struct a733_npu_startup *startup, const TaskHandle_t clients[],
-                     UBaseType_t priority, UBaseType_t affinity)
+static int bind(struct npu_runtime *rt, struct a733_npu_startup *startup, const TaskHandle_t clients[],
+                UBaseType_t priority, UBaseType_t affinity, unsigned resident)
 {
     if (!good(rt) || rt->bound || !startup || !startup->initialized || !startup->task || !clients ||
         private_overlap(rt, (uintptr_t)startup, sizeof(*startup)) ||
@@ -731,7 +734,7 @@ int npu_runtime_bind(struct npu_runtime *rt, struct a733_npu_startup *startup, c
         return 0;
     for (unsigned i = 0; i < rt->slots; ++i) {
         if (!clients[i] || clients[i] == startup->task) return 0;
-        for (unsigned j = 0; j < i; ++j) if (clients[j] == clients[i]) return 0;
+        for (unsigned j = 0; !resident && j < i; ++j) if (clients[j] == clients[i]) return 0;
     }
     rt->startup = startup;
     const struct npu_service_activation activation = {startup->task, prepared, rt};
@@ -742,10 +745,38 @@ int npu_runtime_bind(struct npu_runtime *rt, struct a733_npu_startup *startup, c
         return fault(rt);
     for (unsigned i = 0; i < rt->slots; ++i) {
         rt->slot[i].client = clients[i];
-        if (!npu_service_bind(&rt->service, i, clients[i], UINT32_C(1) << (i + 1))) return fault(rt);
+        if ((!resident || !i) &&
+            !npu_service_bind(&rt->service, i, clients[i], resident ?
+                (UINT32_C(1) << (rt->slots + 1)) - 2 : UINT32_C(1) << (i + 1))) return fault(rt);
     }
-    rt->bound = 1;
+    rt->resident = resident; rt->bound = 1;
     return 1;
+}
+int npu_runtime_bind(struct npu_runtime *rt, struct a733_npu_startup *startup, const TaskHandle_t clients[],
+                     UBaseType_t priority, UBaseType_t affinity)
+{ return bind(rt, startup, clients, priority, affinity, 0); }
+int npu_runtime_bind_resident(struct npu_runtime *rt, struct a733_npu_startup *startup, TaskHandle_t task,
+                              UBaseType_t priority, UBaseType_t affinity)
+{
+    if (!rt || !rt->slots || rt->slots > NPU_RUNTIME_SLOTS) return 0;
+    TaskHandle_t clients[NPU_RUNTIME_SLOTS];
+    for (unsigned i = 0; i < rt->slots; ++i) clients[i] = task;
+    return bind(rt, startup, clients, priority, affinity, 1);
+}
+int npu_runtime_preload(struct npu_runtime *rt, unsigned slot, unsigned model)
+{
+    if (!good(rt) || rt->bound || slot >= rt->slots || model >= rt->count ||
+        state(&rt->slot[slot]) != NPU_RUNTIME_EMPTY ||
+        xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED) return 0;
+    struct npu_runtime_slot *s = &rt->slot[slot];
+    s->model = model; set_state(s, NPU_RUNTIME_LOADING);
+    while (state(s) == NPU_RUNTIME_LOADING && good(rt)) (void)load_work(rt);
+    if (state(s) != NPU_RUNTIME_READY || !good(rt)) return 0;
+    /* Workspace and padding initialize once, before any device can use them. */
+    memset((void *)s->read.cpu, 0, s->read.bytes);
+    memset((void *)s->write.cpu, 0, s->write.bytes);
+    return maintain(rt, AARCH64_CACHE_CLEAN_INVALIDATE, s->read.cpu, s->read.bytes) &&
+        maintain(rt, AARCH64_CACHE_CLEAN_INVALIDATE, s->write.cpu, s->write.bytes);
 }
 int npu_runtime_bind_irq(struct npu_runtime *rt, const struct npu_service_irq_ops *ops, void *cookie,
                          UBaseType_t route, unsigned idle_hint)
@@ -791,7 +822,7 @@ int npu_runtime_send(struct npu_runtime *rt, unsigned slot, enum npu_service_ope
                      uint64_t timeout, TickType_t wait, uint64_t *ticket)
 {
     struct npu_runtime_slot *s = client(rt, slot);
-    if (!s || s->closed || s->pending || !ticket || wait == portMAX_DELAY ||
+    if (!s || (rt->resident && slot) || rt->service.direct || s->closed || s->pending || !ticket || wait == portMAX_DELAY ||
         private_overlap(rt, (uintptr_t)ticket, sizeof(*ticket))) return 0;
     struct npu_service_request r = {op, 0, 0};
     switch (op) {
@@ -840,7 +871,7 @@ int npu_runtime_tensor(const struct npu_runtime *rt, unsigned slot, enum nbg_sec
         !out || xTaskGetSchedulerState() != taskSCHEDULER_RUNNING ||
         xTaskGetCurrentTaskHandle() != rt->slot[slot].client) return 0;
     const struct npu_runtime_slot *s = &rt->slot[slot];
-    if (s->pending || state(s) != NPU_RUNTIME_READY ||
+    if (rt->service.direct || s->pending || state(s) != NPU_RUNTIME_READY ||
         index >= (section == NBG_INPUT ? s->layout.inputs : s->layout.outputs) ||
         private_overlap(rt, (uintptr_t)out, sizeof(*out))) return 0;
     *out = s->tensors[(section == NBG_INPUT ? 0 : s->layout.inputs) + index];

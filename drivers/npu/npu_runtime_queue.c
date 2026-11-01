@@ -1,0 +1,151 @@
+#include "npu_runtime_queue.h"
+#include "a733_mmio.h"
+
+uint64_t npu_runtime_queue_lock(void)
+{
+    uint64_t saved;
+    __asm__ volatile("mrs %0, daif\n msr daifset, #2" : "=r"(saved) :: "memory");
+    return saved;
+}
+void npu_runtime_queue_unlock(uint64_t saved)
+{ __asm__ volatile("msr daif, %0" :: "r"(saved) : "memory"); }
+static uint64_t ticks(void)
+{
+    uint64_t value;
+    __asm__ volatile("isb\n mrs %0,cntpct_el0" : "=r"(value) :: "memory");
+    return value;
+}
+static int owner(struct npu_runtime_queue *q)
+{
+    uint64_t el;
+    __asm__ volatile("mrs %0,CurrentEL" : "=r"(el));
+    return el == 4 && q && q->claimed && xTaskGetCurrentTaskHandle() == q->task;
+}
+static int validate(void *cookie, const struct a733_npu_command *c)
+{
+    struct npu_runtime_queue *q = cookie;
+    struct npu_runtime *rt = q->runtime;
+    /* Slow registration checks the exact pinned command reservation, its
+     * address-bearing bytes and its complete mapped fetch tail once. */
+    for (unsigned i = 0; i < rt->slots; ++i) {
+        const struct a733_npu_command *own = &rt->commands[i + 1];
+        if (c->device == own->device && c->readable_bytes == own->readable_bytes && c->token == own->token)
+            return atomic_load_explicit(&rt->slot[i].state, memory_order_acquire) == NPU_RUNTIME_READY &&
+                npu_runtime_stream_intact(rt, &rt->slot[i]);
+    }
+    return 0;
+}
+static int start(void *cookie, const struct a733_npu_command *c, uint64_t timeout)
+{
+    struct npu_runtime_queue *q = cookie;
+    if (timeout > UINT64_MAX / q->frequency) return 0;
+    q->timeout_ticks = timeout * q->frequency / 1000000;
+    if (!q->timeout_ticks) return 0;
+    q->started = ticks();
+    const uintptr_t base = q->runtime->native.registers;
+    /* VIPLite vip_drv_hardware.c:882-893: address, full barrier, fetch word.
+     * Mapping, power and command validation belong to claim/registration. */
+    a733_mmio_write32_dsb_sy_after(base + 0x654, c->device);
+    a733_mmio_write32_dsb_sy_after(base + 0x3a4, 0x1ffff);
+    return 1;
+}
+static int complete(void *cookie)
+{
+    struct npu_runtime_queue *q = cookie;
+    const uintptr_t base = q->runtime->native.registers;
+    /* +0x010 is read-to-acknowledge. Read it once, as the vendor ISR does.
+     * Completion requires event zero AND full idle before CPU acquisition.
+     * A premature event is retained; no tick poll treats it as completion. */
+    const uint32_t events = *(volatile uint32_t *)(base + 0x10);
+    const uint32_t idle = *(volatile uint32_t *)(base + 4);
+    __asm__ volatile("dsb sy" ::: "memory");
+    q->last_events = events; q->last_idle = idle; q->observed = ticks();
+    return events == 1 && idle == UINT32_C(0x7fffffff) && q->observed - q->started < q->timeout_ticks;
+}
+static void notify(void *cookie)
+{
+    struct npu_runtime_queue *q = cookie;
+    vTaskNotifyGiveFromISR(q->task, q->woken);
+}
+static void irq(void *cookie, BaseType_t *woken)
+{
+    struct npu_runtime_queue *q = cookie;
+    q->woken = woken;
+    npu_queue_irq(&q->queue);
+    q->woken = NULL;
+    if (atomic_load_explicit(&q->queue.failed, memory_order_acquire)) {
+        /* The first IRQ's status/deadline inputs remain in the queue adapter;
+         * no controller operation or release follows this retained failure. */
+        atomic_store_explicit(&q->runtime->failed, 1, memory_order_release);
+        atomic_fetch_or_explicit(&q->runtime->service.irq_pending, 2u, memory_order_release);
+    }
+}
+int npu_runtime_queue_claim(struct npu_runtime_queue *q, struct npu_runtime *rt)
+{
+    if (!q || q->claimed || !rt || !rt->bound || !rt->service.runtime ||
+        atomic_load_explicit(&rt->failed, memory_order_acquire) || !rt->service.irq_bound ||
+        rt->service.runtime->hooks.idle_hint || xTaskGetSchedulerState() != taskSCHEDULER_RUNNING ||
+        xTaskGetCurrentTaskHandle() != rt->slot[0].client || !rt->slot[0].opened ||
+        rt->slot[0].closed || rt->slot[0].pending || rt->service.direct ||
+        rt->service.controller.state != A733_NPU_READY ||
+        rt->service.running != NPU_SERVICE_CLIENTS || rt->service.has_deferred ||
+        !a733_npu_startup_window_open(rt->startup) ||
+        !npu_runtime_tables_intact(rt)) return 0;
+    uint64_t el;
+    __asm__ volatile("mrs %0,CurrentEL" : "=r"(el));
+    uint64_t mpidr;
+    __asm__ volatile("mrs %0,mpidr_el1" : "=r"(mpidr));
+    unsigned core = (unsigned)(mpidr >> 8) & 0xff;
+    if (el != 4 || (mpidr & UINT64_C(0xff00ff00ff)) || core >= 32 ||
+        rt->service.affinity != (UINT32_C(1) << core)) return 0;
+    for (unsigned i = 0; i < rt->slots; ++i)
+        if (rt->slot[i].pending || atomic_load_explicit(&rt->slot[i].state, memory_order_acquire) != NPU_RUNTIME_READY)
+            return 0;
+    q->runtime = rt; q->task = xTaskGetCurrentTaskHandle();
+    __asm__ volatile("mrs %0,cntfrq_el0" : "=r"(q->frequency));
+    if (!q->frequency || q->frequency > 1000000000) return 0;
+    const struct npu_queue_ops ops = {validate, start, complete, notify};
+    if (!npu_queue_init(&q->queue, &ops, q)) return 0;
+    q->direct = (struct npu_service_direct){irq, q};
+    const uint64_t saved = npu_runtime_queue_lock();
+    if (atomic_load_explicit(&rt->service.irq_pending, memory_order_acquire)) {
+        npu_runtime_queue_unlock(saved); return 0;
+    }
+    rt->service.direct = &q->direct;
+    const int armed = rt->service.irq_ops.rearm(rt->service.irq_cookie);
+    if (armed == 1) { q->claimed = 1; rt->service.irq_masked = 0; }
+    else {
+        atomic_store_explicit(&q->queue.failed, 1, memory_order_release);
+        atomic_store_explicit(&rt->failed, 1, memory_order_release);
+    }
+    npu_runtime_queue_unlock(saved);
+    return armed == 1 ? 1 : -1;
+}
+int npu_runtime_queue_wait(struct npu_runtime_queue *q, struct npu_queue_fence fence)
+{
+    if (!owner(q)) return -1;
+    for (;;) {
+        int result = npu_queue_fence_status(&q->queue, fence);
+        if (result) return result;
+        (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    }
+}
+int npu_runtime_queue_return(struct npu_runtime_queue *q)
+{
+    if (!owner(q) || !npu_queue_idle(&q->queue)) return -1;
+    const uint64_t count = atomic_load_explicit(&q->queue.completed, memory_order_acquire);
+    if (count > UINT32_MAX - npu_service_irq_completions(&q->runtime->service)) return -1;
+    struct npu_service *s = &q->runtime->service;
+    const uint64_t saved = npu_runtime_queue_lock();
+    int result = s->irq_ops.mask(s->irq_cookie);
+    if (result == 1 && !atomic_load_explicit(&s->irq_pending, memory_order_acquire)) {
+        s->irq_masked = 1;
+        atomic_fetch_add_explicit(&s->irq_completions,
+            (unsigned)atomic_load_explicit(&q->queue.completed, memory_order_relaxed), memory_order_release);
+        q->runtime->counters.jobs += q->queue.submitted;
+        s->direct = NULL; q->claimed = 0;
+    } else if (result < 0) atomic_store_explicit(&q->runtime->failed, 1, memory_order_release);
+    npu_runtime_queue_unlock(saved);
+    if (result == 1) xTaskNotifyGive(s->worker);
+    return result;
+}
