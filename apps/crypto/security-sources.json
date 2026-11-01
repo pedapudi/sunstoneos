@@ -1,0 +1,97 @@
+{
+  "schema": "a733-security-references-v1",
+  "execution": "Native hash/controller adaptations run on the FreeRTOS CPU; descriptor model and independent OpenSSL answers run on the host. The cached Linux driver is a reference only.",
+  "pins": {
+    "ce-v5-registers": {
+      "url": "https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/ce/v5/sunxi_ce_reg.h",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "5e3f45f7e7b5ebc935f8c6cf0b755971942a6f6f7b765f52741070d294a119fe",
+      "archive": "rng/v5/sunxi_ce_reg.h",
+      "license": "GPL-2.0; source reference and adapted driver definitions, Linux is not a runtime dependency"
+    },
+    "ce-v5-mmio": {
+      "url": "https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/ce/v5/sunxi_ce_reg.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "1f0b2debba141551fb9260dea52d009f199153cbb8689c01f4d2f19cef343b72",
+      "archive": "rng/v5/sunxi_ce_reg.c",
+      "license": "GPL-2.0; source reference and adapted driver definitions, Linux is not a runtime dependency"
+    },
+    "ce-v5-requests": {
+      "url": "https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/ce/v5/sunxi_ce_proc.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "51a935895f57f9efd99d614fa25d41d2a3436a2f74d4e4697587e1a82f7c8e4c",
+      "archive": "rng/v5/sunxi_ce_proc.c",
+      "license": "GPL-2.0; source reference and adapted driver definitions, Linux is not a runtime dependency"
+    },
+    "ce-common": {
+      "url": "https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/ce/sunxi_ce_proc_comm.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "892149a199ade387231cc17667eff5fe85b1f6e21ab1410972be9fc15c686753",
+      "archive": "rng/sunxi_ce_proc_comm.c",
+      "license": "GPL-2.0; source reference and adapted driver definitions, Linux is not a runtime dependency"
+    },
+    "ce-linux-registration": {
+      "url": "https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/ce/sunxi_ce.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "c4807b2ff8daa748263a774406f05f500f7a6dbeeb51ffef7326940130eb8928",
+      "archive": "rng/sunxi_ce.c",
+      "license": "GPL-2.0; source reference and adapted driver definitions, Linux is not a runtime dependency"
+    },
+    "ce-build-selection": {
+      "url": "https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/ce/sunxi_ce_cdev.h",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "20c5532574deeb370a84c272be3a9e8126748d9c08b172457fa265f6b08d2026",
+      "archive": "rng/sunxi_ce_cdev.h",
+      "license": "GPL-2.0; source reference and adapted driver definitions, Linux is not a runtime dependency"
+    },
+    "ce-makefile": {
+      "url": "https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/ce/Makefile",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "8b34032729f196f159813188bc63795b8004380a31890b2e228c66339cf1e5d5",
+      "archive": "rng/Makefile",
+      "license": "GPL-2.0; source reference and adapted driver definitions, Linux is not a runtime dependency"
+    },
+    "ce-configuration": {
+      "url": "https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/ce/Kconfig",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "95e221519e8c7b9ee43c3637a19b562f5120e9dc1c80f9220eb1c156754d5615",
+      "archive": "rng/Kconfig",
+      "license": "GPL-2.0; source reference and adapted driver definitions, Linux is not a runtime dependency"
+    },
+    "separate-trng": {
+      "url": "https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/ce/sunxi_trng/sunxi_trng.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "1c2cb76157e630f4a4b20a37207bda095d0706b802c672b06ba42d4746944938",
+      "archive": "rng/sunxi_trng/sunxi_trng.c",
+      "license": "GPL-2.0; source reference and adapted driver definitions, Linux is not a runtime dependency"
+    },
+    "a733-user-manual-1.00": {
+      "revision": "d0dc4d615be00b76e3a0818d0818eff8f69ffa15",
+      "url": "https://gitlab.com/api/v4/projects/71118510/repository/files/A733%2FHardware%E7%A1%AC%E4%BB%B6%E7%B1%BB%E6%96%87%E6%A1%A3%2F%E8%8A%AF%E7%89%87%E6%89%8B%E5%86%8C%2FA733_User%20Manual_V1.00.pdf/raw?ref=d0dc4d615be00b76e3a0818d0818eff8f69ffa15",
+      "archive": "camera-research/A733_User_Manual_V1.00.pdf",
+      "sha256": "cdd77e5779d3c69d41b5f237f3db3db51c67fdf0f3aca9a2eedc77d9420f248d",
+      "license": "Published vendor reference; redistribution license unspecified; cached bytes are not committed"
+    },
+    "a733-datasheet": {
+      "revision": "0.93",
+      "url": "https://dl.radxa.com/cubie/a7a/docs/hw/datasheet/A733_Datasheet_V0.93.pdf",
+      "archive": "A733_Datasheet_V0.93.pdf",
+      "sha256": "ebbdf6a9a46ea1fcdc5eac48a584f70a5ea240cd5cc54a3f80f6d6e00adf25ce",
+      "license": "Published vendor reference; redistribution license unspecified; cached bytes are not committed"
+    },
+    "board-gpu-power-sun60iw2p1-dtsi": {
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/arch/arm64/boot/dts/allwinner/sun60iw2p1.dtsi",
+      "archive": "gpu-power/arch/arm64/boot/dts/allwinner/sun60iw2p1.dtsi",
+      "sha256": "1c7313f655bdc4d018201664adcb1fa1d100280388b8975e193ebbfc6ad4ddfa",
+      "license": "GPL-2.0; device-tree reference only, not a runtime dependency"
+    },
+    "ce-secure-key-adapter": {
+      "url": "https://github.com/orangepi-xunlong/linux-orangepi/blob/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/ce/smc_process/sunxi_ce_smc_process.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "83a524350c85cf6c8a099bec39652ac5e38d486b87d14a7bde27f2a92cea6333",
+      "archive": "rng/smc_process/sunxi_ce_smc_process.c",
+      "license": "GPL-2.0-or-later; trusted-firmware adapter reference, not a runtime dependency"
+    }
+  }
+}

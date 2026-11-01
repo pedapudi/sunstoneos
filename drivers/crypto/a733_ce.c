@@ -3,6 +3,7 @@
 /* Register/descriptor definitions adapted from the A733 CE v5 source. */
 #include "a733_clock_reference.h"
 #include "a733_ce.h"
+#include "a733_ce_digest_methods.h"
 #include <stddef.h>
 #define CCU UINT32_C(0x02002000)
 #define NS UINT32_C(0x04603000)
@@ -255,7 +256,7 @@ static enum a733_ce_result request(struct a733_ce *p,uint64_t deadline,unsigned 
     unsigned capability=operation==0?A733_CE_CAP_TRNG:(operation==1?A733_CE_CAP_HASH:A733_CE_CAP_AES);
     if (!(a733_ce_capabilities(p->config.profile)&capability)) return A733_CE_INVALID;
     if (operation && (!input || !bytes || !distinct(p,input,bytes))) return A733_CE_INVALID;
-    unsigned block=a733_ce_hash_block(method),state_bytes=a733_ce_hash_state(method);
+    unsigned block=a733_ce_digest_block(method),state_bytes=a733_ce_digest_state(method);
     if (operation==1 && (!block || continuation>1 || bytes>2048 || bytes%block || total%(block*8) ||
         total<(uint64_t)bytes*8 || (!continuation && total!=(uint64_t)bytes*8) ||
         (continuation && (total==(uint64_t)bytes*8 || !state || !distinct(p,state,state_bytes)))))
