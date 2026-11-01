@@ -920,9 +920,10 @@ Implementation and remaining physical work:
 | Record format, paired selection and standby plans | Implemented and host-checked; physical card stage not started |
 | Record builder from a capture | Implemented; both actual board references and identity refusals checked |
 | Restore wrapper variant | Implemented; instruction and host-runner cases checked |
-| FEL fallback through one WDT0 reset, address-line and window quick check | Implemented; 19 instruction and 28 runner cases checked; never run on a board |
+| FEL fallback through one WDT0 reset, address-line and window quick check | Implemented and host-checked; the fallback ran on port 3-1 and the quick check passed on both boards (2026-10-31) |
 | March C- runs on the restored and P-state-0-only paths | Image implemented and host-modeled, never run on a board |
-| First restore test, [runbook](../board-runbooks/dram-restore-test-1.md) | SRAM artifacts built; physical prerequisites remain |
+| First restore test, [runbook](../board-runbooks/dram-restore-test-1.md) | Passed on both boards on 2026-10-31 (FEL path) |
+| Restore by SID as the development default, [records runbook](../board-runbooks/dram-restore-records.md) | Implemented and host-checked; not yet run on a board |
 
 **Facts the next steps rest on**, all measured on both boards on
 2026-10-25 except where marked:

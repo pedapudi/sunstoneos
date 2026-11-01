@@ -1,11 +1,10 @@
 # First DRAM training-restore test (FEL path)
 
-Status: **built and host-checked; the 899-entry restore wrote and held
-every PHY entry on port 3-1 and boot0's simple test passed on the restored
-state, but the helper's readback after `init_DRAM` read the PHY data memory
-with its clock stopped and failed, so the run fell back to full training
-(below). The helper now runs that clock for the readback; it has not run on
-a board.** The record builder,
+Status: **passed on both boards on 2026-10-31** with the helper that runs
+the PHY microcontroller clock for its readback after `init_DRAM` (below).
+`tools/run-ddr.py` now restores by default
+([records runbook](dram-restore-records.md)). March C- on a restored boot
+and the qualification below remain. The record builder,
 SRAM restore helper and runner are implemented. The runner falls back
 through one WDT0 reset and one full training, so a failed restore costs
 about 11 s instead of the board's lifetime. The March C- step still requires
@@ -204,6 +203,19 @@ is supporting evidence only.
   return into boot0, the post-`init_DRAM` readback and the quick check;
   whether boot0's later steps then leave working memory is what the run
   tests.
+
+## The clocked readback restored DRAM on both boards
+
+Builds from `dram-final-readback-1031/` (commit `30e575a0`), 2026-10-31.
+
+| Run | Result |
+| --- | --- |
+| Port 3-1, survey build, after a WDT0 reset (`dev-runs-1031/3-1-ddr-final-survey`) | Error 0, 879 writes, one hook call, 262,392 checked bytes, quick check 36.374 ms, both RAM pages match, exit 0. Survey: 398 held, 393 already at value, 88 stored later, no mismatch; after `init_DRAM` the readback found `MicroContMuxSel` 1 and `UcclkHclkEnables` 0. |
+| Port 3-3, restore build (`dev-runs-1031/3-3-ddr-final-restore`) | Error 0, 879 writes, quick check 34.028 ms, both RAM pages match, exit 0; about 2.0 s for the runner command against about 6.6 s for a plain full-training run on 3-3 (`3-3-ddr-clock-plain-2`). |
+
+Both logs show `Training result is = 7` 36 ms after `DRAM BOOT DRIVE INFO`,
+the 12,288 MiB size line 6–7 ms later with `dram_tpr13 = 10061`, and
+`DRAM simple test OK.`; CPU clocks ended at the entry point (word 15 = 0).
 
 ## The v5 run held every write; the readback after init_DRAM read the data memory with its clock stopped
 

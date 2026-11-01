@@ -233,7 +233,8 @@ All runs use port 3-3 and the FEL DDR path first. Each needs a fresh
 lifetime after a power removal, except where a run continues one.
 
 1. **Capture after normal training.** Cold DDR with the unchanged
-   `tools/run-ddr.py`, then `tools/run-ddr-capture.py` in the same lifetime
+   `tools/run-ddr.py --full-training` (without `--build` the runner now
+   restores), then `tools/run-ddr-capture.py` in the same lifetime
    ([runbook](../board-runbooks/dram-training-capture.md)). It writes no
    storage and changes no training input; its only register writes are
    `MicroContMuxSel` and `UcclkHclkEnables`, each restored. boot0 itself
