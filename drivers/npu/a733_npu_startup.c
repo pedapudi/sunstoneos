@@ -1,6 +1,7 @@
 #include "a733_npu_startup.h"
 #include "a733_clock_reference.h"
 #include "a733_pll_lock.h"
+#include "a733_gpu_spin.h"
 #include "a733_npu_platform_native.h"
 #include "a733_range.h"
 
@@ -487,7 +488,7 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
            !check(s,CCU+0x1920,0x10001,0x10001) || !check(s,CCU+0x19a0,BIT(16),BIT(16)) ||
            !apply(s,pll_open,STEPS(pll_open)) || !route_to_npu(s) ||
            !apply(s,local_open,STEPS(local_open)) || !now(s,&t) ||
-           !a733_deadline_after(t,SETTLE_US,&s->wait_until))return fault(s);
+           !a733_deadline_after(t,SETTLE_US+1,&s->wait_until))return fault(s);
         if(!leave(s))return fault(s);
         s->stage=A733_NPU_STARTUP_SETTLE;
         return PENDING;
@@ -500,8 +501,13 @@ enum a733_npu_platform_result a733_npu_startup_step(struct a733_npu_startup *s)
         if(t<s->wait_until) {
             const uint64_t left=s->wait_until-t;
             if(left>TICK_US)return PENDING;
-            const uint64_t until=s->ops.spin_us(s->cookie)+left;
-            while(s->ops.spin_us(s->cookie)<until){}
+            uint64_t raw=s->ops.spin_us(s->cookie),until;
+            if(!a733_deadline_after(raw,left,&until))return fault(s);
+            struct a733_gpu_spin spin={0};
+            while(raw<until) {
+                if(!a733_gpu_spin_advancing(&spin,raw))return PENDING;
+                raw=s->ops.spin_us(s->cookie);
+            }
             if(!now(s,&t))return fault(s);
             if(t<s->wait_until)return PENDING;
         }

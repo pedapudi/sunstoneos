@@ -129,7 +129,9 @@ static void delay(void *cookie, unsigned us)
     if (us > 1000) fatal(n);
     uint64_t start = microseconds(n);
     for (unsigned samples = 0; samples < 1048576; ++samples) {
-        if (microseconds(n) - start >= us) return;
+        /* Whole microseconds round down. Passing the endpoint guarantees
+         * the full requested interval from any fractional starting phase. */
+        if (microseconds(n) - start > us) return;
         __asm__ volatile("yield" ::: "memory");
     }
     fatal(n);
