@@ -1,8 +1,7 @@
 /* CPU cluster record of the integrated OS image with the Cortex-A76 cores
  * admitted (docs/designs/cpu-a76-dvfs.md). Before the scheduler, the thermal
  * start reads the clock configuration once and refuses a CPU-B cluster that
- * is not on its PLL at boot0's 1014 MHz. The recognizer prints the
- * record before and after each recognition (apps/mimus/recorded.cc).
+ * is not on its PLL at boot0's 1014 MHz. Applications read the clock record through ss_clock_info().
  *
  * With SUNSTONE_A733_OS_CPU_CLOCK the thermal task also owns the CPU clock
  * driver. It inspects both clusters read-only, then requests each cluster
