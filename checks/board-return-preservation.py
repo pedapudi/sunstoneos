@@ -100,7 +100,7 @@ def main():
             if phase=='restore-rails':
                 assert self.record['dram_restored'] and self.record['native_retirement_validated']
                 assert all(bytes(data)==self.saved[a] for a,data in self.memory)
-                if self.variant=='npu-sdk':
+                if self.variant in ('npu-sdk','decoder-bound'):
                     board.Live.rails(self,phase)
                     assert self.record['rail_runs'][phase]['dram_restored']
                     assert all(bytes(data)==self.saved[a] for a,data in self.memory)
@@ -176,28 +176,39 @@ def main():
 
     source=args.out/'model.bin';source.write_bytes(b'MODEL ONLY')
     variants=['normal','output-malformed','thermal-malformed','retirement-invalid','backup-corrupt',
-              'range-omitted','restore-readback','watchdog','late-fault']
+              'range-omitted','restore-readback','watchdog','late-fault','decoder-bound']
     if has_npu:variants.extend(('npu-sdk','npu-late-fault','npu-mismatch','npu-refused','npu-telemetry-malformed'))
     for variant in variants:
         evidence=args.out/variant
         parser=argparse.ArgumentParser();board.run_options(parser)
         options=parser.parse_args([str(source),'--port','3-1','--restore-rails'])
         options.evidence=evidence
+        if variant=='decoder-bound':
+            options.decoder=args.out/'bound-decoder.py'
+            options.decoder.write_text('BINDING = '+repr({'image_sha256':images.sha(source),'private_mode':99})+
+                '\ndef decode(payload):\n    assert payload == b"complete" and BINDING["private_mode"] == 99\n    return {"bytes": len(payload)}\n')
+            options.expect_result={'bytes':8}
         owners=[]
         def backend(*values):
             owner=Owner(*values,variant);owners.append(owner);return owner
         thermal=types.SimpleNamespace(captures=lambda g:[],decode=lambda *v: {'classification':'complete'})
         if variant=='thermal-malformed':thermal.decode=lambda *v:(_ for _ in ()).throw(ValueError('bad optional thermal'))
         info={'entry_guard':True,'descriptor':{},'generic':True}
+        real_load=images.load
+        def selected_load(name,path):
+            if name=='runner_application_manifest':
+                return types.SimpleNamespace(image_manifest=lambda image: {'manifest':{'name':'model','output_limit':8}})
+            return real_load(name,path)
         with patch.object(images,'inspect',return_value=info),patch.object(images,'policy'),\
-             patch.object(board,'application_inputs'),patch.object(records,'thermal_capture',thermal),\
+             (contextlib.nullcontext() if variant=='decoder-bound' else patch.object(board,'application_inputs')),\
+             patch.object(images,'load',side_effect=selected_load),patch.object(records,'thermal_capture',thermal),\
              patch.object(records.host,'image_manifest',return_value={'manifest':{'output_limit':8}}),\
              contextlib.redirect_stdout(io.StringIO()):
             result=board.run_image(options,backend)
-        good=variant in ('normal','output-malformed','thermal-malformed','npu-mismatch','npu-refused','npu-telemetry-malformed','npu-sdk')
+        good=variant in ('normal','output-malformed','thermal-malformed','npu-mismatch','npu-refused','npu-telemetry-malformed','npu-sdk','decoder-bound')
         assert result.get('dram_restored',False)==good,(variant,result)
         assert bool(result.get('rails_restored'))==good,(variant,result)
-        assert result['outcome']==('returned' if variant in ('normal','npu-sdk') else
+        assert result['outcome']==('returned' if variant in ('normal','npu-sdk','decoder-bound') else
                                   'watchdog-reset' if variant=='watchdog' else
                                   'host-error' if variant=='late-fault' else 'result-mismatch'),(variant,result)
         assert result['quarantined']==(not good),(variant,result)
@@ -215,6 +226,9 @@ def main():
             assert all(bytes(data)==owner.saved[a] for a,data in owner.memory)
             assert (evidence/'output-record.bin').exists() and (evidence/'return-report.bin').exists()
             if has_npu:assert (evidence/'npu-stop.bin').stat().st_size==104
+            if variant=='decoder-bound':
+                assert result['decoded']=={'bytes':8}
+                assert result['rail_runs']['restore-rails']['image_sha256']==board.POST_RAIL_HELPER_SHA256
             if variant=='npu-sdk':
                 assert (evidence/'npu-stop.bin').read_bytes()==sdk_stop
                 assert result['return_report']['npu_capture_status']=='decoded'
@@ -319,6 +333,19 @@ def main():
         result=board.run_image(options,lambda *v: (_ for _ in ()).throw(AssertionError('opened board before helper admission')))
     assert result['outcome']=='refused-before-launch' and 'post-ROM rail helper is absent' in result['first_failure']['detail']
     print('PASS missing post helper refuses before device access')
+    for label,binding in [('wrong-image',{'image_sha256':'0'*64}),('not-dict',[]),('missing-hash',{})]:
+        decoder=args.out/(label+'-decoder.py')
+        decoder.write_text('BINDING = '+repr(binding)+'\ndef decode(payload):\n    return {}\n')
+        evidence=args.out/('decoder-'+label)
+        parser=argparse.ArgumentParser();board.run_options(parser)
+        options=parser.parse_args([str(source),'--port','3-1','--decoder',str(decoder)]);options.evidence=evidence
+        with patch.object(images,'inspect',return_value={'entry_guard':False,'descriptor':{},'generic':True}),\
+             patch.object(images,'policy'),patch.object(images,'load',side_effect=selected_load),\
+             contextlib.redirect_stdout(io.StringIO()):
+            result=board.run_image(options,lambda *v: (_ for _ in ()).throw(AssertionError('opened board for wrong decoder binding')))
+        assert result['outcome']=='refused-before-launch' and 'decoder BINDING' in result['first_failure']['detail'],result
+        assert not result['launch_attempted']
+        print('PASS decoder binding '+label+' refuses before device access')
     owner=board.Live(options,args.out,{})
     with patch.object(owner,'tx',side_effect=AssertionError('uploaded a changed backup')):
         try:owner.upload(0x41000000,source,expected_sha256='0'*64)

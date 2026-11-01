@@ -860,6 +860,10 @@ def application_inputs(args, info, evidence):
         args.decoder = target
         decoder = load_decoder(args)
         require(callable(getattr(decoder, 'decode', None)), 'Decoder requires decode(payload).')
+        if hasattr(decoder, 'BINDING'):
+            binding = decoder.BINDING
+            require(isinstance(binding, dict) and binding.get('image_sha256') == images.sha(args.image),
+                    'Frozen decoder BINDING must name the selected image SHA-256.')
     values = [p.read_bytes() for p in args.input]
     if not values and getattr(args, 'decode_application', False) and decoder and hasattr(decoder, 'inputs'):
         values = decoder.inputs()
