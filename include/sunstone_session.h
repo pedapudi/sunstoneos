@@ -17,7 +17,8 @@
  * this header, then `extents` typed extents, each padded to 8 bytes. The
  * stage-2 loader checks `bytes` and the prefix identity, stamps the prefix
  * epoch and binds the SHA-256 of the first `bytes` bytes into the contract;
- * it reads no extent. */
+ * it bounds every extent and requires zero persisted board and CPU-grant
+ * epochs before watchdog arming. OS admission validates service policy. */
 #define SS_SESSION_PREFIX_BYTES 592u
 #define SS_SESSION_MAX_BYTES 4096u
 #define SS_SESSION_MAGIC UINT64_C(0x324e4f4953534553) /* "SESSION2" */

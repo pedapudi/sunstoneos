@@ -136,6 +136,18 @@ and missing fitted-PMIC, wiring and voltage evidence. The
 [thermal and management proposal](designs/thermal-management-qualification.md)
 records processor lifecycle dependencies and E902 resource conflicts.
 
+Stage 2 rejects stale board/CPU-grant epochs and malformed typed records
+before watchdog arming. OS admission stamps its private grant copy. Under
+`~/.cache/sunstoneos/build/sd-boot-1031/`, 36 sanitizer/linked session cases,
+40 generic host-record cases, 19 slot-tool cases and connected backup, write,
+readback and restoration checks pass. The three baseline builds pass. The
+monitor occupies 32,368 bytes and leaves 400 bytes before its fixed report.
+The [stage-2 record](../boot/a733/stage2/README.md) describes the checks.
+SDR104 and sustained reads need physical tests. Physical writes, installation,
+autonomous recognition and reset recovery remain unqualified. Installation
+requires real card extents, a verified full backup, write approval and a
+qualified runner.
+
 ## Merged application and failure-record interfaces
 
 Mimus lives in its own repository under `sunstoneos/`.

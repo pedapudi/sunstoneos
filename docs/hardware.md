@@ -360,10 +360,15 @@ to the stated scope:
   newest valid slot. The resident recorded bundle includes the actual monitor,
   OS, session, both models and recording through the existing backup-first
   storage plans. Eight inference workers and CPU operating-point grants are
-  supported; entry binds the board identity and derives fresh session/grant
-  epochs. Twenty-four producer cases and twenty linked entry/admission cases
-  pass under `resume-card-os-1026/`. With cold CPU ownership and the crypto-engine
-  predecessor contract, the monitor occupies 32,456 of 32,768 bytes.
+  supported; entry binds the board identity and stamps the board epoch. OS
+  admission stamps its private CPU-grant copy. The stage-2 cold-session check
+  rejects stale persisted epochs and malformed typed records before watchdog
+  arming; 36 sanitizer/linked cases pass under
+  `~/.cache/sunstoneos/build/sd-boot-1031/session-check-4/`. These checks start
+  after SD loading and do not qualify physical boot. The monitor occupies
+  32,368 bytes, leaving 400 bytes before its fixed report.
+  Twenty-four earlier producer cases and twenty linked entry/admission cases
+  pass under `resume-card-os-1026/` for their recorded image identities.
   [Cold SD admission](boot-slots.md#cold-sd-admission-starts-from-boot0s-controller-state)
   checks inherited controller and pin state. Loading then uses the existing
   3.3 V, 50 MHz, four-bit DMA path, with bounded transfers and guarded tails.
