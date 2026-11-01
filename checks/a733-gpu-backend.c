@@ -171,7 +171,8 @@ static int accesses(const struct trace *trace, unsigned count, int stopping)
         unsigned previous = mmio_count; uint64_t value = 0;
         int success = t->write ? (stopping ? config.stop.write : config.start.write)(&backend, t->offset, t->width, t->value) :
                                 (stopping ? config.stop.read : config.start.read)(&backend, t->offset, t->width, &value);
-        CHECK(success && mmio_count == previous + 1);
+        /* A 64-bit register is two 32-bit transactions. */
+        CHECK(success && mmio_count == previous + (t->width == 8 ? 2 : 1));
     }
     expected_access = 0; return 0;
 }
@@ -223,6 +224,13 @@ unsigned backend_check(void)
     CHECK(!accesses(start_trace_0, sizeof(start_trace_0) / sizeof(*start_trace_0), 0));
     CHECK(!accesses(start_trace_1, sizeof(start_trace_1) / sizeof(*start_trace_1), 0));
     CHECK(config.start.publish(&backend) && memory.phase == A733_GPU_MEMORY_PUBLISHED);
+    /* The model's secure pages are plain memory, so both writes read back. */
+    CHECK(backend.secure_smc0 == 2 && !backend.secure_drm);
+    /* The first timer correlation: record 1 at the core rate, then sequence 1. */
+    const volatile uint64_t *record = (const volatile uint64_t *)((uintptr_t)region(PVR_FW_UTILIZATION) + 40);
+    CHECK(*(const volatile uint32_t *)((uintptr_t)region(PVR_FW_UTILIZATION) + 10240) == 1 &&
+          record[0] && record[1] == record[0] && record[4] == A733_GPU_CORE_HZ &&
+          record[3] == (UINT64_C(256000000) << 20) / (A733_GPU_CORE_HZ / 1000));
     *(unsigned char *)((uintptr_t)region(PVR_FW_SYSTEM_INIT) + 352) = 1;
     uint32_t value = 0;
     CHECK(config.start.started(&backend, &value) && value == 1);
@@ -239,6 +247,10 @@ unsigned backend_check(void)
     CHECK(config.control.read32(&backend, 0x8a8, &value));
     CHECK(config.control.write32(&backend, 0x8b0, 1));
     const unsigned char command[88] = {7}; CHECK(config.control.event(&backend, command));
+    /* The health check's executed count reaches only the controller's fields. */
+    *(volatile uint32_t *)((uintptr_t)region(PVR_FW_OS_DATA) + 568) = 5;
+    CHECK(config.executed && config.executed(&backend, &service.control.executed_after) &&
+          service.control.executed_after == 5);
     CHECK(config.stop.sync_write(&backend, 0));
     *(uint32_t *)region(PVR_FW_POWER_SYNC) = 1;
     service.stop.phase=PVR_GPU_STOP_WAIT_OFF;
@@ -255,7 +267,9 @@ unsigned backend_check(void)
     CHECK(!setup()); observe = 0;
     *(volatile uint64_t *)(uintptr_t)(A733_GPU_REGISTERS + 0x20) = 0x243800;
     *(volatile uint32_t *)(uintptr_t)(A733_GPU_REGISTERS + 0x18) = 0x68b7;
-    observe = 1; CHECK(!bind()); CHECK(!enabled()); CHECK(mmio_count == 5);
+    /* Identity 0x20 as two halves, then 0x20 and 0x18, the system word and
+     * the capabilities as two halves: seven 32-bit transactions. */
+    observe = 1; CHECK(!bind()); CHECK(!enabled()); CHECK(mmio_count == 7);
 
     CHECK(!setup()); observe = 0;
     *(volatile uint64_t *)(uintptr_t)(A733_GPU_REGISTERS + 0x20) = PVR_FW_A733_BVNC + 1;
@@ -351,5 +365,55 @@ unsigned backend_event_check(void)
         CHECK(atomic_load(&backend.error) == A733_GPU_BACKEND_ACCESS && !mmio_count);
         for (unsigned i = 0; i < PVR_CCB_COMMAND_BYTES; ++i) CHECK(service.queue.last_event[i] == 0);
     }
+    return 0;
+}
+
+/* Use the controller's real callback destinations. A stack-only callback
+ * check misses the full record copied into the service-owned controller. */
+unsigned backend_compat_check(void)
+{
+    CHECK(!setup()); CHECK(!bind());
+    CHECK(pvr_ccb_init(&service.queue, &config.queue, &backend, 1) == PVR_CCB_OK);
+    CHECK(!enabled()); CHECK(config.start.publish(&backend));
+    unsigned char expected[64] = {0};
+    const uint32_t version = 3;
+    const uint64_t bvnc = PVR_FW_A733_BVNC;
+    memcpy(expected, &version, 4); memcpy(expected + 16, &version, 4);
+    memcpy(expected + 8, &bvnc, 8); memcpy(expected + 24, &bvnc, 8);
+    expected[56] = 1;
+    memcpy((unsigned char *)region(PVR_FW_OS_INIT) + 40, expected, sizeof(expected));
+    service.phase = PVR_GPU_SERVICE_CHECKING;
+    service.start.phase = PVR_GPU_START_BOOTED;
+    CHECK(pvr_gpu_control_init(&service.control, &service.start, &service.queue,
+                              &config.control, &backend, operation_deadline));
+    CHECK(pvr_gpu_control_poll(&service.control, 4) == PVR_GPU_CONTROL_AGAIN);
+    CHECK(service.control.phase == PVR_GPU_CONTROL_SUBMIT_HEALTH &&
+          !memcmp(service.control.compatibility, expected, sizeof(expected)) &&
+          !atomic_load(&backend.error));
+    /* The exception permits only the exact complete record during COMPAT.
+     * Neither a shifted/truncated record nor unrelated service state may
+     * become writable through this callback. */
+    for (unsigned mode = 0; mode < 5; ++mode) {
+        CHECK(!setup()); CHECK(!bind());
+        CHECK(pvr_ccb_init(&service.queue, &config.queue, &backend, 1) == PVR_CCB_OK);
+        CHECK(!enabled()); CHECK(config.start.publish(&backend));
+        service.phase = PVR_GPU_SERVICE_CHECKING;
+        service.start.phase = PVR_GPU_START_BOOTED;
+        CHECK(pvr_gpu_control_init(&service.control, &service.start, &service.queue,
+                                  &config.control, &backend, operation_deadline));
+        if (mode == 4) service.control.phase = PVR_GPU_CONTROL_READY;
+        void *out = mode == 3 ? (void *)&service.phase : service.control.compatibility + (mode == 0);
+        unsigned off = mode == 1 ? 1 : 0;
+        size_t bytes = mode == 2 ? 63 : mode == 3 ? sizeof(service.phase) : 64;
+        CHECK(!config.control.compat(&backend, off, out, bytes));
+        CHECK(atomic_load(&backend.error) == A733_GPU_BACKEND_ACCESS);
+    }
+    return 0;
+}
+
+unsigned backend_progress_check(void)
+{
+    CHECK(!setup()); CHECK(!bind()); CHECK(!enabled());
+    CHECK(config.start.publish(&backend));
     return 0;
 }

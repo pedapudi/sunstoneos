@@ -1,4 +1,5 @@
 #include "pvr_gpu_service.h"
+#include "pvr_gpu_crumb.h"
 #include "a733_range.h"
 #include "pvr_compute_service.h"
 #include "pvr_mimus_service.h"
@@ -169,8 +170,17 @@ static int performance_reply(struct pvr_gpu_service *s, enum a733_perf_status st
     return xQueueSend(s->clients[client].replies,&reply,0)==pdTRUE;
 }
 #endif
-static void fail(struct pvr_gpu_service *s, enum pvr_gpu_service_error error)
+/* Every failure site records itself: the first failure of the service, its
+ * controller or its backend fills the breadcrumb record (pvr_gpu_crumb.h,
+ * unit SERVICE), and the EL1 vector keeps the first. */
+#define fail(s, error) fail_at((s), (error), __LINE__, PVR_GPU_CRUMB_HERE())
+static void fail_at(struct pvr_gpu_service *s, enum pvr_gpu_service_error error,
+                    unsigned line, const void *here)
 {
+    if (s->phase != PVR_GPU_SERVICE_FAILED)
+        pvr_gpu_crumb_fail(PVR_GPU_CRUMB_SERVICE, error, line,
+            ((uint32_t)s->phase & 0xffu) << 24 | (pvr_gpu_control_steps(&s->control) & 0xffu) << 16 |
+            (s->start.index & 0xffffu), here);
 #ifdef SUNSTONE_A733_OS_PERF
     if(s->config.performance_begin)
         atomic_store_explicit(&s->performance.published,PVR_GPU_PERF_OWNER|PVR_GPU_PERF_FAILED,memory_order_release);
@@ -282,6 +292,24 @@ static int opening_clock(struct pvr_gpu_service *s)
     uint64_t now;
     if (!sample(s, &now) || now >= s->deadline) { fail(s, PVR_GPU_SERVICE_CLOCK); return 0; }
     return 1;
+}
+static int flush_publish(void *ctx)
+{
+    /* The session's tables were published before the firmware started. */
+    struct pvr_gpu_service *s = instance;
+    if (!s || ctx != s->config.context) return 0;
+    __asm__ volatile("dsb sy" ::: "memory");
+    return 1;
+}
+/* The MMU-cache command before READY: -1 fault, 0 pending, 1 complete. */
+static int flush_step(struct pvr_gpu_service *s)
+{
+    static const struct pvr_gpu_flush_ops ops = {service_clock, flush_publish};
+    if (s->flush.phase == PVR_GPU_FLUSH_NEW &&
+        !pvr_gpu_flush_init(&s->flush, &s->control, &ops, s->config.context, PVR_GPU_FLUSH_CATALOGUE, s->deadline))
+        return -1;
+    enum pvr_gpu_flush_result r = pvr_gpu_flush_poll(&s->flush);
+    return r == PVR_GPU_FLUSH_OK ? 1 : r == PVR_GPU_FLUSH_AGAIN ? 0 : -1;
 }
 static int start_firmware(struct pvr_gpu_service *s)
 {
@@ -579,23 +607,39 @@ static void advance(struct pvr_gpu_service *s)
             struct pvr_gpu_control_ops ops = s->config.control;
             ops.now = service_clock; ops.event = service_event;
             if (!pvr_gpu_control_init(&s->control, &s->start, &s->queue,
-                    &ops, s->config.context, s->deadline)) {
+                    &ops, s->config.context, s->deadline) ||
+                (s->config.executed && !pvr_gpu_control_count_executed(&s->control, s->config.executed))) {
                 fail(s, PVR_GPU_SERVICE_CONTROL); return;
             }
+            s->flush = (struct pvr_gpu_flush){0};
             s->phase = PVR_GPU_SERVICE_CHECKING;
+            sunstone_crumb(PVR_GPU_CRUMB_STARTED, s->start.count);
         } else if (r != PVR_GPU_START_AGAIN) { fail(s, PVR_GPU_SERVICE_START); return; }
         break;
     }
     case PVR_GPU_SERVICE_CHECKING:
     case PVR_GPU_SERVICE_READY: {
+        /* Control stops enforcing its opening deadline at controller READY.
+         * OPEN still owns this deadline until the service's MMU flush ends,
+         * including polls that keep returning AGAIN for pending events. */
+        if (s->phase == PVR_GPU_SERVICE_CHECKING && !opening_clock(s)) return;
         enum pvr_gpu_control_result r;
 #ifdef SUNSTONE_A733_OS_PERF
         if(performance_controlling(s))r=PVR_GPU_CONTROL_OK;
         else
 #endif
         r=pvr_gpu_control_poll(&s->control,4);
-        if (r == PVR_GPU_CONTROL_OK) { s->phase = PVR_GPU_SERVICE_READY; rearm = 1; }
-        else if (r != PVR_GPU_CONTROL_AGAIN) { fail(s, PVR_GPU_SERVICE_CONTROL); return; }
+        if (r != PVR_GPU_CONTROL_OK && r != PVR_GPU_CONTROL_AGAIN) {
+            fail(s, PVR_GPU_SERVICE_CONTROL); return;
+        }
+        if (s->phase == PVR_GPU_SERVICE_CHECKING && !opening_clock(s)) return;
+        if (r == PVR_GPU_CONTROL_OK && s->phase == PVR_GPU_SERVICE_CHECKING && s->config.flush_mmu) {
+            const int flushed = flush_step(s);
+            if (flushed < 0) { fail(s, PVR_GPU_SERVICE_CONTROL); return; }
+            if (!opening_clock(s)) return;
+            if (flushed) { s->phase = PVR_GPU_SERVICE_READY; rearm = 1; }
+        }
+        else if (r == PVR_GPU_CONTROL_OK) { s->phase = PVR_GPU_SERVICE_READY; rearm = 1; }
         if (s->config.free_lists.count) {
             if (free_list_progress(s, 0) == PVR_FREE_LIST_FAULT) return;
         }

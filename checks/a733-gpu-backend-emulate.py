@@ -13,10 +13,16 @@ mode.add_argument('--clock-only', action='store_true')
 mode.add_argument('--event-only', action='store_true')
 mode.add_argument('--lifetime-only', action='store_true')
 mode.add_argument('--firmware-clock-only', action='store_true')
+mode.add_argument('--compat-only', action='store_true')
+mode.add_argument('--progress-only', action='store_true')
 a = p.parse_args()
 u = Uc(UC_ARCH_ARM64, UC_MODE_ARM)
+# The GPU window, the GIC, and the GPU-wrapper and SMC0 pages of the secure
+# configuration.
+SECURE = {0x0a0000b0: 'smc0', 0x01880014: 'drm_ctrl'}
 for address, size in [(0x40000000, 0x400000), (0x00200000, 0x1000),
-                      (0x01800000, 0x10000), (0x03400000, 0x10000)]:
+                      (0x01800000, 0x10000), (0x03400000, 0x10000),
+                      (0x01880000, 0x1000), (0x0a000000, 0x1000)]:
     u.mem_map(address, size)
 with a.elf.open('rb') as f:
     elf = ELFFile(f)
@@ -26,6 +32,7 @@ with a.elf.open('rb') as f:
     symbols = {s.name: s['st_value'] for s in elf.get_section_by_name('.symtab').iter_symbols()}
 u.cpr_write(3, 3, 14, 0, 0, 24000000)
 clock = [100]
+progress = []
 def word(name):
     return int.from_bytes(u.mem_read(symbols[name], 4), 'little')
 def instruction(uc, address, size, context):
@@ -47,6 +54,11 @@ def instruction(uc, address, size, context):
         uc.reg_write(UC_ARM64_REG_PC, uc.reg_read(UC_ARM64_REG_LR))
         return
     opcode = int.from_bytes(uc.mem_read(address, 4), 'little')
+    if opcode in (0xd40b81a1, 0xd40b81c1):  # Progress / first-failure SVC
+        if opcode == 0xd40b81a1:
+            progress.append((uc.reg_read(UC_ARM64_REG_X0), uc.reg_read(UC_ARM64_REG_X0 + 1)))
+        uc.reg_write(UC_ARM64_REG_PC, address + 4)
+        return
     masked, register = opcode & 0xffffffe0, opcode & 31
     value = None
     if masked == 0xd53be020:  # CNTPCT_EL0
@@ -60,7 +72,8 @@ def instruction(uc, address, size, context):
         value = 0x04040000
     elif masked in (0xd5087800, 0xd5087820):  # AT S1E1R/W
         virtual = uc.reg_read(UC_ARM64_REG_X0 + register)
-        device = 0x01800000 <= virtual < 0x01810000 or 0x03400000 <= virtual < 0x03410000
+        device = (0x01800000 <= virtual < 0x01810000 or 0x03400000 <= virtual < 0x03410000 or
+                  0x01880000 <= virtual < 0x01881000 or 0x0a000000 <= virtual < 0x0a001000)
         attributes = 0 if device else 0x44 if symbols['resource_arena'] <= virtual < symbols['resource_arena'] + 64*4096 else 0xff
         mode = word('mapping_mode')
         physical = virtual
@@ -77,7 +90,15 @@ def instruction(uc, address, size, context):
         assert register < 29
         uc.reg_write(UC_ARM64_REG_X0 + register, value)
         uc.reg_write(UC_ARM64_REG_PC, address + 4)
+secure = []
+half = [0]
 def access(uc, operation, address, size, value, context):
+    if address in SECURE:
+        writing = operation == UC_MEM_WRITE
+        assert size == 4 and word('power_enabled') and word('identity_confirmed'), \
+            f'secure configuration access {address:#x} before identity admission'
+        secure.append((SECURE[address], value if writing else None))
+        return
     if not word('observe'):
         return
     if 0x01800000 <= address < 0x01810000:
@@ -90,18 +111,36 @@ def access(uc, operation, address, size, value, context):
         expected = word('expected_access')
         if expected:
             assert expected == (2 if writing else 1)
-            assert address - 0x01800000 == word('expected_offset')
-            assert size == word('expected_width'), 'wrong device transaction width'
+            assert size == 4, 'every device transaction is 32 bits wide'
+            wanted = int.from_bytes(uc.mem_read(symbols['expected_value'], 8), 'little')
+            offset = word('expected_offset')
+            if word('expected_width') == 8:
+                # Two halves: the high word read first, the low word written first.
+                second = half[0]; half[0] ^= 1
+                upper = second if writing else 1 - second
+                offset += 4 * upper
+                wanted = (wanted >> (32 * upper)) & 0xffffffff
+            else:
+                assert word('expected_width') == 4
+            assert address - 0x01800000 == offset, f'access {address:#x}, expected offset {offset:#x}'
             if writing:
-                wanted = int.from_bytes(uc.mem_read(symbols['expected_value'], 8), 'little')
-                assert value & ((1 << (size*8)) - 1) == wanted
+                assert value & 0xffffffff == wanted
         count = word('mmio_count') + 1
         uc.mem_write(symbols['mmio_count'], count.to_bytes(4, 'little'))
 u.hook_add(UC_HOOK_CODE, instruction)
 u.hook_add(UC_HOOK_MEM_READ | UC_HOOK_MEM_WRITE, access)
 u.reg_write(UC_ARM64_REG_SP, 0x40400000 - 16)
 u.reg_write(UC_ARM64_REG_LR, 0x403ff000)
-u.emu_start(symbols['backend_firmware_clock_check' if a.firmware_clock_only else 'backend_lifetime_check' if a.lifetime_only else 'backend_clock_check' if a.clock_only else 'backend_event_check' if a.event_only else 'backend_check'], 0x403ff000, timeout=20000000, count=5000000)
+u.emu_start(symbols['backend_progress_check' if a.progress_only else 'backend_compat_check' if a.compat_only else 'backend_firmware_clock_check' if a.firmware_clock_only else 'backend_lifetime_check' if a.lifetime_only else 'backend_clock_check' if a.clock_only else 'backend_event_check' if a.event_only else 'backend_check'], 0x403ff000, timeout=20000000, count=5000000)
 assert u.reg_read(UC_ARM64_REG_PC) == 0x403ff000, 'execution budget exhausted'
 assert u.reg_read(UC_ARM64_REG_X0) == 0, f"backend check failed at line {u.reg_read(UC_ARM64_REG_X0)}"
-print('PASS native GPU backend: refused bind preserves config; successful bind serializes both firmware clocks at the top point' if a.firmware_clock_only else 'PASS native GPU backend: expired lifetime permanently refuses later access' if a.lifetime_only else 'PASS native GPU backend: actual firmware event receive and restricted queue-owned destination' if a.event_only else 'PASS native GPU backend: private platform/controller clock regression refusal' if a.clock_only else 'PASS native GPU backend: identity, MMIO trace widths, memory/GIC composition, mapping refusal and retained isolation failures')
+# Every start publication makes the vendor secure configuration in its order,
+# each word read back: 2 to SMC0, then 0 to drm_ctrl.
+SEQUENCE = [('smc0', 2), ('smc0', None), ('drm_ctrl', 0), ('drm_ctrl', None)]
+publishes = not (a.clock_only or a.lifetime_only or a.firmware_clock_only)
+assert bool(secure) == publishes, f'secure configuration required={publishes}, accesses={secure}'
+assert secure == SEQUENCE * (len(secure) // 4), f'secure configuration accesses {secure}'
+if a.progress_only:
+    assert [stage for stage, value in progress] == [0x0469, 0x046a, 0x046b, 0x046c, 0x0468, 0x0467], \
+        f'power, identity, publication, timer-read, timer and secure progress: {progress}'
+print('PASS native GPU backend: power, identity, publication and first timer read breadcrumbs' if a.progress_only else 'PASS native GPU backend: real controller compatibility copy and restricted service-owned destination' if a.compat_only else 'PASS native GPU backend: refused bind preserves config; successful bind serializes both firmware clocks at the top point' if a.firmware_clock_only else 'PASS native GPU backend: expired lifetime permanently refuses later access' if a.lifetime_only else 'PASS native GPU backend: actual firmware event receive and restricted queue-owned destination' if a.event_only else 'PASS native GPU backend: private platform/controller clock regression refusal' if a.clock_only else 'PASS native GPU backend: identity, MMIO trace widths, memory/GIC composition, mapping refusal and retained isolation failures')

@@ -209,7 +209,7 @@ $PY checks/gpu-mimus-time-model.py --calls OUT/layers/calls.txt \
 
 - **GPU runtime:** provided by the GPU service's mimus component
   ([gpu-mimus-service.md](gpu-mimus-service.md)): the GPU mappings above with
-  2 MiB pages for the large ranges, the compute context, the client ring, the
+  256 KiB pages for the large ranges, the compute context, the client ring, the
   worker on the recognition core, the completion record with `max_job_us`
   from the kick, and SPI 63. Per job it submits the 96-byte command that
   `pvr_mimus_session_command` wrote into a zeroed buffer and a timeline

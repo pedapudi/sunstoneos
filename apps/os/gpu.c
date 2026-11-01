@@ -488,7 +488,7 @@ int a733_gpu_mimus_return(uint64_t completed)
 }
 static int gpu_return_body(uint64_t completed)
 {
-    if(!completed || xTaskGetCurrentTaskHandle()!=os_recognizer || !gpu.started ||
+    if((!completed && !OS_GPU_RETURN_WITHOUT_JOBS) || xTaskGetCurrentTaskHandle()!=os_recognizer || !gpu.started ||
        gpu.failed || gpu.job_pending || !gpu.epoch || os_gpu_return_started() ||
        a733_smp_counter()>=os_cpu_return_cutoff())return 0;
     atomic_store_explicit(&return_state,1,memory_order_release);
@@ -512,8 +512,8 @@ static int gpu_return_body(uint64_t completed)
      * can collect the final reply. No other owner can resume it. */
     vTaskSuspend(gpu.service.worker);
     gpu.retired=1;gpu.accepted_ticket=0;
-    const uint64_t report[8]={UINT64_C(0x3152475033333741),1,sizeof(report),
-        board.session.epoch,board.session.generation,completed,63,A733_GPU_SUPPLY_UV};
+    const uint64_t report[8]={UINT64_C(0x3152475033333741),OS_GPU_RETURN_VERSION,sizeof(report),
+        board.session.epoch,board.session.generation,completed,63,OS_GPU_RETURN_VALUE};
     memcpy(os_gpu_return_report,report,sizeof(report));
     atomic_store_explicit(&return_state,2,memory_order_release);
     return 1;
@@ -651,3 +651,39 @@ int os_gpu_linear_start(void)
     return 1;
 #endif
 }
+
+#if defined(SUNSTONE_A733_OS_CPU_RETURN) && defined(SUNSTONE_A733_OS_GPU_BISECT)
+__attribute__((used,retain)) const uint32_t os_gpu_bisect_configuration[3]={
+    1,OS_GPU_BISECT_STAGE,OS_GPU_BISECT_LIMIT};
+/* Stage 1: the constructor ran, but OPEN was never sent, so the GPU stayed
+ * unpowered and the worker waits on its empty request queue with no
+ * timeout. Suspend it and write a version 3 report with no conditions. */
+static int return_cold(void)
+{
+    const struct pvr_gpu_service *s=&gpu.service;
+    if(xTaskGetCurrentTaskHandle()!=os_recognizer || !gpu.started || gpu.failed ||
+       gpu.opened || gpu.parked || gpu.retired || gpu.epoch || gpu.accepted_ticket || gpu.job_pending ||
+       os_gpu_return_started() || a733_smp_counter()>=os_cpu_return_cutoff() ||
+       !s->worker || s->phase!=PVR_GPU_SERVICE_COLD || s->epoch || atomic_load(&s->published_epoch) ||
+       s->irq_wake_pending || uxQueueMessagesWaiting(s->requests) || s->clients[0].pending ||
+       gpu.power.phase!=A733_GPU_PLATFORM_NEW || gpu.power.token)return 0;
+    vTaskSuspend(s->worker);
+    gpu.retired=1;
+    const uint64_t report[8]={UINT64_C(0x3152475033333741),OS_GPU_RETURN_VERSION,sizeof(report),
+        board.session.epoch,board.session.generation,0,0,OS_GPU_RETURN_VALUE};
+    memcpy(os_gpu_return_report,report,sizeof(report));
+    atomic_store_explicit(&return_state,3,memory_order_release);
+    return 1;
+}
+int a733_gpu_mimus_return_bisect(uint64_t completed)
+{
+    if(OS_GPU_BISECT_STAGE!=1)return a733_gpu_mimus_return(completed);
+    /* A refused constructor would also have refused OPEN; record that, so
+     * the untouched proof and its version 2 report apply unchanged. */
+    if(!gpu.started && gpu.constructor_refusal && !completed && !os_dispatch_record.opened) {
+        os_dispatch_record.open_failed=1;
+        return a733_gpu_mimus_return_untouched();
+    }
+    return !completed && return_cold();
+}
+#endif
