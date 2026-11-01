@@ -10,7 +10,8 @@ can latch a fault during a valid transition.
    completion signal, then verify the resulting state. Use a deadline. Name the
    condition beside the wait: UPDATE clears, LOCK asserts, BUSY clears, READY
    asserts, or a specified minimum settle interval expires. A posted-write
-   barrier establishes ordering; a device completion signal establishes progress.
+   barrier completes the CPU-side transaction; a device completion signal
+   establishes device progress.
    Start a minimum hold after its triggering write. A clock rounded down to
    whole microseconds needs an extra unit before it can prove that hold elapsed.
 2. **Model the permitted delay.** Keep old readback fields visible until the
@@ -31,6 +32,15 @@ can latch a fault during a valid transition.
 5. **Establish a control first.** Run the same image and input with the new
    subsystem disabled before diagnosing inside it. Compare the first divergent
    checkpoint. A failing control leaves startup or shared resources unresolved.
+
+6. **Keep the vendor's write ordering.** Complete device writes with DSB before
+   the next dependent write or poll. Preserve every vendor inter-write delay.
+   CPU boot0 waits 20 µs between writing PLL N and requesting UPDATE; removing
+   that interval can leave the old N after UPDATE clears. Start the interval
+   after the completed write, and account for timer quantization. DSB completes
+   the architectural transaction; an interconnect may acknowledge Device-nGnRE
+   writes early, so DSB does not replace device status or settle requirements.
+   Model posted writes separately from device application and readiness.
 
 Select checks under [the validation policy](validation.md). Keep hardware
 safety checks when consolidating fixtures. Submit eligible physical tests
