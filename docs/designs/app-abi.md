@@ -181,7 +181,7 @@ service; the NPU client, which runs at EL1, stays one.
 
 | Call | Behaviour | Current equivalent |
 | --- | --- | --- |
-| `ss_grant()` | Immutable record of the grant: devices, main core, worker cores, region spans (actual INPUT lengths), capture length and the finish-by time. | `mimus_asset_*`, `board.session.workload`, `A733_SMP_RECOGNITION_CORE` |
+| `ss_grant()` | Immutable record of the grant: devices, main core, worker cores, region spans (actual INPUT lengths), capture length and the finish-by time. | `mimus_asset_*`, `board.session.workload`, `A733_SMP_APPLICATION_CORE` |
 | `ss_live()` | 1 when the session is live and the granted devices are ready, 0 while they are starting, -1 once the session has ended. | `mimus_board_live`, `mimus_board_session_live` |
 | `ss_progress()` | One atomic store into the application's supervision record. | `mimus_board_progress` |
 | `ss_throttled()` | Thermal load hint. | `os_thermal_throttled` |
