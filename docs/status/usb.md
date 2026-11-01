@@ -13,9 +13,11 @@ exchange, quiesces USB and returns responsively in the frozen records
 `board-session-20261023/port-3-3/r9-v4-usb/` under
 `~/.cache/sunstoneos/evidence/`.
 The [device](../usb.md) and [platform](../usb-platform.md) records bind inputs.
-On port `3-1`, entry `1793567391558674480-ec1dbf2c` records PL8 disabled and
-low after runner reset/FEL and DDR preparation. It refuses before diagnostic
-launch; powered TYPEC24 operation remains unqualified.
+On port `3-1`, with TYPEC24 physically empty, the source-disabled control, a
+one-second VBUS pulse and a ten-second VBUS hold return normally (entries
+`1793570915607590841-5a219698`, `1793571535501560347-d0b1985c` and
+`1793571557988499335-8426c3ed`). VBUS rises within 6.8 ms and falls within
+2.0 ms. Loaded-port operation and attached peripherals remain unqualified.
 
 Cold USB0 clock/reset/PHY preparation is host-checked but keeps the device
 disconnected. Physical cold start, fabric/security ownership and wider
@@ -41,28 +43,35 @@ matching decoder is required. Three rebuilt images and their commands are under
 
 | README relative to that directory | ELF SHA-256 | Physical outcome |
 | --- | --- | --- |
-| `control/README.md` | `28ee313dea47b1af39ecc05f76a6439611780427950eb9243299a1383a6c1274` | Not submitted |
-| `pulse-1s/README.md` | `9a241f3c7a3ef007315bf4b7a8c684a56ba2b27940a4537ad71c54c6d4a2697e` | Not submitted |
-| `hold-10s/README.md` | `68a7b3702bfbfc78d8972203a7a747b6a722513e149186b06abefeb00d28b9d6` | Not submitted |
+| `control/README.md` | `28ee313dea47b1af39ecc05f76a6439611780427950eb9243299a1383a6c1274` | Returned, entry `1793570915607590841-5a219698` |
+| `pulse-1s/README.md` | `9a241f3c7a3ef007315bf4b7a8c684a56ba2b27940a4537ad71c54c6d4a2697e` | Returned, entry `1793571535501560347-d0b1985c` |
+| `hold-10s/README.md` | `68a7b3702bfbfc78d8972203a7a747b6a722513e149186b06abefeb00d28b9d6` | Returned, entry `1793571557988499335-8426c3ed` |
 
-The queue daemon executes its runner from `bringup`. That checkout remains at
-`1a84017e`, without runner correction `1d9eb576`. The coordinator must land that
-commit before these submissions; otherwise control repeats the known refusal.
-The native correction is `302dedc5`. Approval for the empty-port tests on `3-1`
-is already granted; no additional VBUS approval is pending. No new entry is
-submitted while the old runner admission remains active.
+All three ran on port `3-1` from `bringup` `08d154cc`, which contains runner
+correction `1d9eb576` and native correction `302dedc5`. TYPEC16 supplied board
+power and TYPEC24 was physically empty. Each run matched `SSBVRPT1`, reported no
+decoder, guard or cleanup failure, retired S_TWI1 at 400 kHz with idle status
+`0xf8`, and left PL8 configured as an output driven low.
 
-Next steps are bounded and sequential:
+| Run | VBUS on time | Rise to VBUS-OK | Fall to VBUS-OK clear | CC samples | Largest guard service gap |
+| --- | --- | --- | --- | --- | --- |
+| Control | none | none | 1.541 ms | 2 | 527 µs |
+| One-second pulse | 996.957 ms | 6.795 ms | 1.964 ms | 133 | 531 µs |
+| Ten-second hold | 9.996957 s | 6.795 ms | 1.585 ms | 1319 | 532 µs |
 
-1. Land `1d9eb576` in the queue runner checkout, then submit the rebuilt control
-   on `3-1` with `--expect SSBVRPT1`, its decoder and
-   `--approved-by coordinator`. TYPEC24 stays empty; TYPEC16 supplies power.
-2. Only after control passes, submit pulse and then hold with the same options.
-   Stop at the first failure. The READMEs supply exact commands and expectations.
-3. If all three pass, rebuild input, serial, camera and camera-JPEG images.
-   Then attach a separately powered USB2 hub with upstream backfeed protection,
-   keyboard, mouse, UVC webcam and supported serial adapter. Serial needs a
-   voltage-compatible 1 Mbaud 8N1 test source/receiver and common ground.
+Rise and fall stay within the 275 ms and 650 ms limits, and the guard service
+gap stays within its 2 ms revocation limit. The results qualify empty-port
+source enable and shutdown only. They do not qualify a loaded port, overload
+behavior or any attached device.
+
+Next steps:
+
+1. Rebuild the input, serial, camera and camera-JPEG images on `bringup`.
+2. Attach a separately powered USB2 hub with upstream backfeed protection,
+   keyboard, mouse, UVC webcam and supported serial adapter to TYPEC24. Serial
+   needs a voltage-compatible 1 Mbaud 8N1 test source/receiver and common
+   ground.
+3. Run each class image on `3-1` through the queue.
 
 Host evidence is under `inherited4/` in this task's build directory.
 `runner-check/` accepts the observed and warm-controller snapshots;
