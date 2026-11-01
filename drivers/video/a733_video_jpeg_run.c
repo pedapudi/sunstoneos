@@ -197,3 +197,15 @@ int a733_video_jpeg_poll(struct a733_video_jpeg_run *r)
     if ((result != 0 && result != 1) || !time_ok(r)) return fault(r);
     return (r->state == A733_VIDEO_JPEG_DONE || r->state == A733_VIDEO_JPEG_COPIED) ? 1 : 0;
 }
+
+int a733_video_jpeg_advance(struct a733_video_jpeg_run *r, unsigned budget)
+{
+    if (!r || !budget) return -1;
+    for (unsigned n=0; n<budget; ++n) {
+        enum a733_video_jpeg_state state=r->state;
+        unsigned index=r->index;
+        int result=a733_video_jpeg_poll(r);
+        if (result || (r->state==state && r->index==index)) return result;
+    }
+    return 0;
+}

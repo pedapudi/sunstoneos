@@ -182,7 +182,7 @@ SunstoneOS emits, and the source that defines each, are:
 | 115 | `KCCB_CMD_HEALTH_CHECK` | [pvr_gpu_control.c](../../drivers/gpu/pvr_gpu_control.c) |
 | 117 | `KCCB_CMD_COMBINED_GEOM_FRAG_KICK` | [pvr_cccb.c](../../drivers/gpu/pvr_cccb.c) |
 | 201, 203, 204, 205 (task bit `0x8000`) | client `GEOM`, `FRAG`, `FRAG_PR`, `CDM` | [pvr_render_service.c](../../drivers/gpu/pvr_render_service.c), [pvr_compute_job.c](../../drivers/gpu/pvr_compute_job.c) |
-| 213 | client `UPDATE` | [pvr_mimus_service.c](../../drivers/gpu/pvr_mimus_service.c) |
+| 213 | client `UPDATE` | [pvr_compute_queue.c](../../drivers/gpu/pvr_compute_queue.c) |
 
 The firmware-to-host events that SunstoneOS decodes, 101 to 108 plus the
 restart and page-fault notifications 109 and 112, are defined in

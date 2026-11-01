@@ -12,13 +12,16 @@ struct os_thermal_reading {
     uint32_t age_us[5],sequence;
     uint8_t seen,stale,level,sensor;
 };
+/* Version 2 adds the first selected slot's scheduled time. Actual row times
+ * follow 125 ms slots; host completeness bounds lateness, not adjacent gaps. */
 struct os_thermal_report {
     uint32_t magic,version,bytes,rows;
     uint64_t epoch,generation,recognition_generation,begin_us,end_us;
     uint32_t overflow,cpu_critical_millicelsius,row_bytes,recognition_ok;
+    uint64_t scheduled_first_us;
 };
 _Static_assert(sizeof(struct os_thermal_reading)==56,"thermal row geometry");
-_Static_assert(sizeof(struct os_thermal_report)==72,"thermal report geometry");
+_Static_assert(sizeof(struct os_thermal_report)==80,"thermal report geometry");
 /* First recognition only. Its header/range and rows remain immutable until
  * power removal. A zero expected generation selects that first window; later
  * requests bind its recognition generation. Pending returns 0; invalid -1. */

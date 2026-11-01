@@ -59,11 +59,11 @@ Decoded metrics, source locations and first-over-budget inputs are under
 - `ulTaskGenericNotifyTake` in generated `tasks.c:7953` opens the 62.750 µs
   workload mask sample. Its interval includes kernel lock contention. Reduce
   that contention while retaining the notification and scheduler invariants.
-- [The deliberate late-tick test](../../platform/a733-smp-cached/perf_session.c:173)
+- [The deliberate late-tick test](../../platform/a733-smp-cached/perf_session.c#L173)
   masks interrupts for 5,500 µs by construction. Keep it outside timing
   qualification and retain it as a separate catch-up test.
-- [The NPU mailbox publisher](../../runtime/npu_app.c:43) does not notify its
-  owner. [The owner loop](../../apps/os/npu-client.c:93) polls every tick;
+- [The NPU mailbox publisher](../../runtime/npu_app.c#L43) does not notify its
+  owner. [The owner loop](../../apps/os/npu-client.c#L93) polls every tick;
   dispatch can approach 1 ms plus scheduling. Opening and stopping use the
   25 ms waits. Event-driven dispatch belongs to the NPU owner.
 
@@ -105,7 +105,7 @@ separate details. Seven modeled startup cases pass. The original control entry
 its failure address matches the startup model's premature thermal refusal.
 
 The multithreaded soak uses the same task patch as the native SMP image.
-[Its CMake selection](../../cmake/smp.cmake:15) includes affinity-aware time slicing.
+[Its CMake selection](../../cmake/smp.cmake#L15) includes affinity-aware time slicing.
 Upstream affinity-blind time slicing requests redundant cross-core yields;
 with four host CPUs, the ready mover starves while a ring task repeats the
 run-state/yield-lock loop. A controlled application of only the existing

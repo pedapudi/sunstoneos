@@ -793,6 +793,31 @@ int a733_xhci_init(struct a733_xhci *x,const struct a733_xhci_ops *ops,void *con
     allocation->state=DEVICE_MEMORY_DEVICE;
     if(!checked(x))return 0;return 1;
 }
+int a733_xhci_work_pending(const struct a733_xhci *x)
+{
+    if(!owner(x)||x->failed)return 0;
+    switch(x->phase){
+    case P_CAP:case P_EXT:case P_RESET:case P_MEMORY:case P_DCBAA:
+    case P_COMMAND:case P_ERST_SIZE:case P_ERST_BASE:case P_ERDP:
+    case P_IMAN:case P_CONFIG:case P_RUN:case P_POWER:return 1;
+    case P_ACTIVE:
+        if(x->command_kind||x->detaching)return 0;
+        for(unsigned j=0;j<A733_XHCI_DEVICES;++j){
+            const struct a733_xhci_device *d=&x->devices[j];
+            if(d->detach)continue;
+            if(d->port_ready==1||d->port_ready==2)return 1;
+            if(d->port_ready!=3||d->recovering)continue;
+            if(d->evaluate_pending)return 1;
+            for(unsigned i=0;i<A733_XHCI_ENDPOINTS;++i){
+                const struct a733_xhci_endpoint *e=&d->endpoints[i];
+                if(i&&e->opened&&!e->configured&&(!d->hub||d->hub_ports))return 1;
+                if(e->pending==1&&e->configured)return 1;
+            }
+        }
+        return 0;
+    default:return 0;
+    }
+}
 enum a733_xhci_result a733_xhci_poll(struct a733_xhci *x)
 {
     if(!owner(x))return A733_XHCI_INVALID;if(x->failed)return A733_XHCI_RETAINED;

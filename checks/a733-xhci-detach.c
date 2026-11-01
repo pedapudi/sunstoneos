@@ -13,7 +13,11 @@
 static _Alignas(4096) uint8_t dma[A733_XHCI_MEMORY_BYTES];
 static struct device_memory_pool pool;
 static struct device_memory_lease lease;
+#ifndef SUNSTONE_XHCI_FIXTURE_CORE
 static struct a733_xhci x;
+#else
+#define x SUNSTONE_XHCI_FIXTURE_CORE
+#endif
 static uint32_t reg[0x8000/4],portsc;
 static uint64_t now=1000,last_command,last_transfer[A733_XHCI_DEVICES][A733_XHCI_ENDPOINTS];
 static unsigned lost,events,event_cycle=1,slots,addresses,doorbells,hold,pattern,model_speed=3,irq_model;
