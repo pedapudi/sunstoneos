@@ -6,20 +6,20 @@ identity and a monotonically increasing submission number. Its completion
 permits CPU acquisition of the corresponding device output. Network decoding,
 model partitioning and tensor interpretation belong to the loader and application.
 
-## Existing jobs cross two tasks and repeat preparation
+## Copy-based jobs repeat preparation
 
-The application SDK publishes one request in `runtime/npu_app.c`.
-The privileged owner in `apps/os/npu-client.c` dispatches that request, calls
-LOAD, copies inputs, submits through the runtime service, and copies outputs.
-The application dispatch wait is 1 ms in the accepted base; the 25 ms waits
-cover startup and local stop. Both waits can wake early on a notification.
+The copy SDK publishes one request in `runtime/npu_app.c`. The privileged owner
+in `apps/os/npu-client.c` wakes on that event, loads a model when its resident
+identity changes, copies inputs, submits through the runtime service, and copies
+outputs. Its job path crosses the owner and runtime worker. Repeated READY
+models skip LOAD; startup and local-stop waits remain slow paths.
 
-The runtime service performs input cleaning, output clean/invalidate, workspace
-zeroing, command/table checks and a read-only checksum after each job.
-A slot retains one assembled network and its mappings, but switching its model
-repeats loading and assembly. The public SDK wrapper also requests LOAD for
-repeated use of the same model. The job path therefore includes task dispatch,
-copies and checks proportional to the resource sizes.
+The matched control below calls `npu_job_run` directly, so it measures the
+helper-to-worker path without the SDK owner's extra dispatch. The runtime
+service cleans inputs, cleans/invalidates outputs, zeros workspace, checks
+command/table integrity and checksums read-only data for each job. A slot
+retains its assembled network and mappings until its model changes. These
+per-job copies and checks scale with the resource sizes.
 
 The matched board comparison keeps both linked model binaries, model-0 inputs,
 852 MHz and 800 mV identical. Each image checks one warmup and 1,000 measured
@@ -92,8 +92,9 @@ fences and a bounded single-producer submission ring. Enable
 `SUNSTONE_A733_OS_NPU_QUEUE=ON` with `SUNSTONE_A733_OS_NPU=ON`.
 `SUNSTONE_OS_NPU_QUEUE_MODELS` lists the image catalogue indices to authenticate
 and preload before scheduling; its first entry is `SUNSTONE_OS_NPU_CLIENT_MODEL`.
-The current image admits eight resident handles and up to 64 outstanding receipts,
-within an 8 MiB reservation. Capacity exhaustion returns backpressure.
+The API supports up to eight resident handles and 64 outstanding receipts.
+The selected models must fit the fixed 8 MiB reservation; otherwise preparation
+is refused. Receipt capacity exhaustion returns backpressure.
 The lower-level caller-backed command queue has no job-count limit.
 
 The image places the producer on core 1, the interrupt route core. Applications
