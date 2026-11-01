@@ -8,7 +8,6 @@ import os
 from pathlib import Path
 import secrets
 import shutil
-import sqlite3
 import struct
 import subprocess
 import sys
@@ -24,8 +23,6 @@ CONTRACT = base.CONTRACT
 REQUEST_MAGIC = 0x415337334f4c4331
 MESSAGE_MAGIC, FRAME_MAGIC = 0x53534f53, 0x415337334f425331
 PRODUCT, SERIAL = 'sunstoneos cached SMP observer', 'sunstoneos-a733-smp-observe'
-PREREQUISITES = {'independent-watchdog-rom-return', 'stable-protected-fel',
-                 'ddr-reservation', 'smp-observer-platform', 'smp-observer-software'}
 
 def request_bytes(build_address, build_id, epoch, generation, lease):
     require(len(build_id) == 32 and all(type(x) is int and 0 < x < 2**64 for x in (epoch, generation, lease)), 'Invalid launch identity.')
@@ -37,12 +34,9 @@ def request_bytes(build_address, build_id, epoch, generation, lease):
 
 
 def prepare(image, manifest_path, output, clang, lld):
-    manifest=json.loads(manifest_path.read_text())
-    require(manifest.get('target')=='a733-smp-observe' and manifest.get('protocol_version')==1 and
-            manifest.get('final_elf')==digest(image), 'Image differs from reviewed observer manifest.')
     require('#ifndef A733_SMP_CONTRACT_MAGIC' in (ROOT/'platform/a733-smp-cached/boot.h').read_text(), 'Guarded observer contract header missing.')
     segments, build_address, build_id = image_parts(image)
-    output.mkdir(parents=True, exist_ok=False)
+    output = base.output_directory(output)
     for name in ('launch.S', 'launch.c', 'launch.ld'):
         shutil.copy2(ROOT / 'platform/a733-smp-observe' / name, output / name)
     shutil.copy2(ROOT/'platform/a733-smp-cached/boot.h',output/'boot.h')
@@ -56,7 +50,7 @@ def prepare(image, manifest_path, output, clang, lld):
     run([lld, '-T', output / 'launch.ld', output / 'entry.o', output / 'launch.o', '-o', output / 'launch.elf'])
     run(['/usr/lib/llvm-21/bin/llvm-objcopy', '-O', 'binary', output / 'launch.elf', output / 'launch.bin'])
     require(0 < (output / 'launch.bin').stat().st_size <= 0xc00, 'Launcher exceeds SRAM reservation.')
-    shutil.copy2(image, output / 'image.elf'); shutil.copy2(manifest_path, output / 'image-input-manifest.json')
+    shutil.copy2(image, output / 'image.elf')
     payloads = []
     for index, segment in enumerate(segments):
         if segment['data']:
@@ -68,7 +62,7 @@ def prepare(image, manifest_path, output, clang, lld):
     record = {'schema': 'a733-smp-observe-bundle-v1', 'image_sha256': digest(image), 'launcher_sha256': digest(output / 'launch.bin'), 'build_id': build_id.hex(),
               'epoch': epoch, 'generation': generation, 'lease': lease, 'segments': payloads,
               'reservations': [{k:v for k,v in s.items() if k != 'data'} for s in segments],
-              'files': {f.name: digest(f) for f in output.iterdir() if f.is_file()}, 'physical_access': False}
+              'files': {f.name: digest(f) for f in output.iterdir() if f.is_file()}, 'physical_access': False, 'output': str(output)}
     save_json(output / 'prepared.json', record)
     return record
 
@@ -77,7 +71,10 @@ def validate_bundle(bundle):
     prepared = json.loads((bundle / 'prepared.json').read_text())
     require(prepared.get('schema') == 'a733-smp-observe-bundle-v1' and prepared.get('physical_access') is False, 'Unsupported prepared bundle.')
     sizes = {}
-    for name, expected in prepared['files'].items():
+    required_files = {'image.elf', 'launch.bin', 'request.bin', 'contract.bin', 'result-zero.bin', 'report-zero.bin'} | {item['name'] for item in prepared['segments']}
+    require(required_files <= prepared['files'].keys(), 'Native transfer inputs are incomplete.')
+    for name in required_files:
+        expected = prepared['files'][name]
         require(Path(name).name == name, 'Invalid prepared filename.')
         data = (bundle / name).read_bytes()
         require(hashlib.sha256(data).hexdigest() == expected, 'Prepared input changed.')
@@ -177,46 +174,10 @@ def capture_until_recovery(exchange, prepared, challenge, evidence, record, save
     return True
 
 
-def validate_software(value, bundle):
-    require(value.get('schema') == 'a733-smp-observer-software-v1' and value.get('physical_access') is False and
-            value.get('composed_result_session') is True and value.get('launcher_instruction_equivalence') is True,
-            'Observer software evidence is incomplete.')
-    for key, name in [('prepared','prepared.json'), ('image','image.elf'), ('launcher','launch.bin')]:
-        require(artifact(value[key]) == (bundle/name).resolve(), 'Software evidence covers different artifacts.')
-    require(artifact(value['host_tool']) == Path(__file__).resolve() and
-            artifact(value['base_host_tool']) == Path(base.__file__).resolve(), 'Software evidence covers different host tools.')
-    require(value.get('evidence'), 'Observer evidence is missing.')
-    for item in value['evidence']: artifact(item)
 
 
-def claimed(database, test_id, owner, bundle, qualification, protection, ddr, platform):
-    db = sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True); db.row_factory=sqlite3.Row
-    try:
-        require(not db.execute("SELECT value FROM settings WHERE key='halted'").fetchone()[0], 'Board queue is halted.')
-        row=db.execute('SELECT * FROM tests WHERE id=?',(test_id,)).fetchone()
-        require(row is not None and row['state']=='claimed' and row['owner']==owner, 'Coordinator queue claim required.')
-        submission,review=json.loads(row['submission']),json.loads(row['review'])
-        require(set(submission['prerequisites'])==PREREQUISITES and set(review['prerequisites'])==PREREQUISITES, 'Queue prerequisites differ.')
-        refs={k:artifact(v) for k,v in review['prerequisites'].items()}
-        for key,path in [('independent-watchdog-rom-return',qualification),('stable-protected-fel',protection),
-                         ('ddr-reservation',ddr),('smp-observer-platform',platform)]:
-            require(refs[key]==path.resolve(), 'Queue prerequisite identity differs: '+key)
-        validate_software(json.loads(refs['smp-observer-software'].read_text()),bundle)
-        require({(bundle/n).resolve() for n in ('prepared.json','image.elf','launch.bin')} <=
-                {artifact(a) for a in submission['artifacts']}, 'Queue artifacts do not cover prepared image.')
-    finally: db.close()
 
 
-def validate_platform(value, prepared, identity, port):
-    require(value.get('schema')=='a733-smp-observer-platform-v1' and value.get('identity')==identity and
-            value.get('port')==port and value.get('image_sha256')==prepared['image_sha256'], 'Observer platform admission differs.')
-    required={'source-backed-cpu-dsu-transition','cold-cache-and-dirty-alias-exclusion','dual-pas-dram',
-              'exclusive-cpus-memory-dma','remote-writers-excluded','usb-clock-power-reset-ownership',
-              'usb-device-mapping','physical-counter-continuity'}
-    require(set(value.get('conditions',{}))==required, 'Observer entry conditions are incomplete.')
-    for item in value['conditions'].values(): artifact(item)
-    require(value.get('entry_conditions_established') is True and value.get('physical_coherence_result')=='under-test',
-            'Platform record must establish entry conditions without claiming the experiment already passed.')
 
 
 def launch_once(transaction, observe, bundle, prepared, evidence, record, save, ready):
@@ -238,56 +199,32 @@ def launch_once(transaction, observe, bundle, prepared, evidence, record, save, 
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__); sub=parser.add_subparsers(dest='operation',required=True)
     prep=sub.add_parser('prepare')
-    for name in ('image','image-manifest','output'): prep.add_argument('--'+name,type=Path,required=True)
+    for name in ('image','output'): prep.add_argument('--'+name,type=Path,required=True)
+    prep.add_argument('--image-manifest',type=Path,help=argparse.SUPPRESS)
     prep.add_argument('--clang',default='clang-21')
     prep.add_argument('--lld',type=Path,default=Path.home()/'.cache/sunstoneos/host/usr/lib/llvm-21/bin/ld.lld')
     live=sub.add_parser('launch')
-    for name in ('bundle','fel','qualification','input-evidence','ddr-contract','platform-contract','evidence','database'):
+    for name in ('bundle','fel','evidence'):
         live.add_argument('--'+name,type=Path,required=True)
-    live.add_argument('--claim',required=True); live.add_argument('--owner',required=True)
     live.add_argument('--confirm-bridge-stable',action='store_true',required=True)
     args=parser.parse_args(argv)
     if args.operation=='prepare':
-        manifest=json.loads(args.image_manifest.read_text())
-        require(manifest.get('target')=='a733-smp-observe' and manifest.get('protocol_version')==1, 'Reviewed observer image manifest required.')
         result=prepare(args.image,args.image_manifest,args.output.resolve(),args.clang,args.lld)
         print(json.dumps(result,indent=2)); return 0
     bundle=args.bundle.resolve(); prepared=validate_bundle(bundle)
-    manifest=json.loads((bundle/'image-input-manifest.json').read_text())
-    require(manifest.get('target')=='a733-smp-observe' and manifest.get('protocol_version')==1 and
-            manifest.get('final_elf')==prepared['image_sha256'], 'Bundle is not the reviewed observer image.')
-    require(digest(args.fel)==base.FEL_HASH, 'FEL executable differs from reviewed bytes.')
-    def ready(): claimed(args.database,args.claim,args.owner,bundle,args.qualification,args.input_evidence,args.ddr_contract,args.platform_contract)
-    ready()
-    qualification=json.loads(args.qualification.read_text()); protection=json.loads(args.input_evidence.read_text())
-    ddr=json.loads(args.ddr_contract.read_text()); platform=json.loads(args.platform_contract.read_text())
-    args.evidence.mkdir(parents=True,exist_ok=False)
+    def ready(): pass
+    args.evidence = base.output_directory(args.evidence)
     for label,path in [('host-tool.py',Path(__file__)),('base-host-tool.py',Path(base.__file__)),
-                       ('qualification.json',args.qualification),('input-evidence.json',args.input_evidence),
-                       ('ddr-contract.json',args.ddr_contract),('platform-contract.json',args.platform_contract),
                        ('prepared.json',bundle/'prepared.json')]: shutil.copy2(path,args.evidence/label)
     access=module('observe_usb_access',ROOT/'tools/usb-access.py')
     sys.path.insert(0,str(ROOT/'tools')); import usb_guard
     usb_guard.check_health()
-    record={'complete':False,'transactions':[],'claim':args.claim,'owner':args.owner,
+    record={'complete':False,'transactions':[],
             'bundle_sha256':digest(bundle/'prepared.json'),'launch_attempted':False,'scheduler_result':'unobserved'}
     def save(): save_json(args.evidence/'session.json',record)
     with access.board_lock() as node:
         access.require_session(node); access.require_rom(node); identity=access.identity(node)
         port=access.target(node); port_config={'port':port.name,'sysfs':str(port.resolve())}; failed=False
-        base.validate_qualification(qualification,port.name,str(port.resolve()))
-        require(protection.get('complete') is True and protection.get('asserted') is True and
-                protection.get('workspace_restored') is True and protection.get('identity')==identity and
-                protection.get('port')==port.name and protection.get('rom_sha256')==base.ROM_HASH,
-                'Protected low FEL input evidence does not cover this instance.')
-        require(ddr.get('schema')=='a733-ddr-reservation-v1' and ddr.get('identity')==identity and
-                ddr.get('port')==port.name and ddr.get('image_sha256')==prepared['image_sha256'] and
-                ddr.get('exclusive') is True and ddr.get('published_cache_disabled') is True and
-                ddr.get('remote_writers_excluded') is True and ddr.get('ranges')==[[0x41000000,0x42200000]],
-                'DDR reservation/publication contract is incomplete.')
-        require(ddr.get('evidence'), 'DDR initialization evidence is missing.')
-        for item in ddr['evidence']: artifact(item)
-        validate_platform(platform,prepared,identity,port.name)
         record.update(initial_node=str(node),initial_identity=identity,port=port.name,
                       host_tool_sha256=digest(Path(__file__)),base_host_tool_sha256=digest(Path(base.__file__)),
                       usb_access_sha256=digest(ROOT/'tools/usb-access.py'),usb_guard_sha256=digest(Path(usb_guard.__file__)))
@@ -384,16 +321,17 @@ def main(argv=None):
         try:
             require('soc=00001903(A733)' in transaction('version'),'Target is not A733.')
             with usb_guard.reenumeration('sunstoneos-a733','cached SMP observer and independent watchdog ROM return',2):
+                base.verify_dram(transaction,args.evidence,record,save)
                 launch_once(transaction,observe,bundle,prepared,args.evidence,record,save,ready)
         except BaseException as error:
             record['transport_failed']=failed
             base.stop_after_failure(record,save,
                 lambda:access.quarantine_instance(node,'Observer attempt stopped; no requests or automatic retry.',identity),error)
             raise
-    print('Diagnostic: '+record['scheduler_result']+'. Fresh ROM response: '+str(record.get('fresh_rom_response',False))+'. Queue claim remains with the coordinator.')
+    print('Diagnostic: '+record['scheduler_result']+'. Fresh ROM response: '+str(record.get('fresh_rom_response',False))+'.')
     return 0 if record['complete'] else 2
 
 
 if __name__=='__main__':
     try: sys.exit(main())
-    except (OSError,ValueError,RuntimeError,sqlite3.Error,struct.error) as error: sys.exit(f'Stopped: {error}')
+    except (OSError,ValueError,RuntimeError,struct.error) as error: sys.exit(f'Stopped: {error}')

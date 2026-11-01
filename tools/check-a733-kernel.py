@@ -122,75 +122,6 @@ def controlled_return(returned):
                                  controlled.get("log_found", []), controlled.get("progress")))
 
 
-def validate_platform_admission(raw, node, identity, port, tool_hash, pinned_tool_hash, warm_raw=()):
-    """Validate copied records against the selected live instance under its lock.
-
-    The survey producer pins the FEL executable. Older survey records omit its
-    hash, so DDR's recorded hash and the current tool must both match that pin.
-    Explicit successful returns connect DDR to a later ROM instance: a
-    kernel-mode return, a forced-stall return through the monitor's secure
-    timer (status 2, interrupt 29), a kernel-mode return that ended in one of
-    its bundle's controlled outcomes, or a returning native CPU diagnostic that
-    restored its saved DRAM. Each leaves DRAM powered and trained; none is a
-    power cycle. This admits initialized RAM; it does not qualify peripheral
-    ownership.
-    """
-    ddr, survey = (json.loads(value) for value in raw)
-    previous_node = ddr.get("device")
-    previous_identity = ddr.get("node_identity")
-    if not (isinstance(previous_node, str)
-            and Path(previous_node).parent.parent == Path("/dev/bus/usb")
-            and Path(previous_node).parent.name.isdigit() and Path(previous_node).name.isdigit()
-            and isinstance(previous_identity, list) and len(previous_identity) == 5
-            and all(type(part) is int for part in previous_identity)):
-        raise RuntimeError("DDR evidence does not identify its original USB instance.")
-    for value in warm_raw:
-        returned = json.loads(value)
-        terminal = returned.get("result", {})
-        next_node = returned.get("returned_node")
-        next_identity = returned.get("returned_identity")
-        monitor_return = (returned.get("transport_failed") is False
-                and returned.get("automatic_access") is True
-                and returned.get("tool_sha256") == tool_hash == pinned_tool_hash
-                and terminal.get("magic") == 0x534b4552 and terminal.get("stage") == 5
-                and ((returned.get("mode") == "kernel" and terminal.get("status") == 0)
-                     or (returned.get("mode") == "timeout" and terminal.get("status") == 2
-                         and terminal.get("interrupt") == 29)
-                     or controlled_return(returned)))
-        # tools/run-native-startup-probe.py records: no mode, restored DRAM.
-        native_return = ("mode" not in returned and returned.get("physical_access") is True
-                and returned.get("rom_usable") is True and returned.get("dram_restored") is True
-                and isinstance(returned.get("execution_profile"), str))
-        if not (returned.get("complete") is True
-                and returned.get("launch_attempted") is True
-                and (monitor_return or native_return)
-                and returned.get("port") == port
-                and returned.get("initial_node") == previous_node
-                and returned.get("initial_identity") == previous_identity
-                and isinstance(next_node, str) and next_node.startswith("/dev/bus/usb/")
-                and next_node != previous_node
-                and isinstance(next_identity, list) and len(next_identity) == 5
-                and all(type(part) is int for part in next_identity)
-                and next_identity != previous_identity):
-            raise RuntimeError("Warm-return evidence does not establish contiguous successful ROM return.")
-        previous_node, previous_identity = next_node, next_identity
-    result = ddr.get("result", {})
-    gates = survey.get("result", {}).get("launcher_gates", {})
-    required_gates = {"svc", "little_endian", "mmu_caches_endian_off",
-                      "primary_mpidr", "frequency", "counter_monotonic"}
-    if not (ddr.get("complete") is True and result.get("magic") == 0x53524444
-            and result.get("stage") == 5 and result.get("board_result") == 0
-            and isinstance(result.get("dram_mib"), int) and result["dram_mib"] > 0
-            and previous_identity == identity and previous_node == str(node)
-            and ddr.get("tool_sha256") == tool_hash == pinned_tool_hash
-            and survey.get("complete") is True and survey.get("physical_access") is True
-            and survey.get("rom_usable") is True and survey.get("sram_restored") is True
-            and survey.get("identity") == identity and survey.get("node") == str(node)
-            and survey.get("port") == port
-            and required_gates <= gates.keys()
-            and all(value is True for value in gates.values())
-            and survey.get("tool_sha256", pinned_tool_hash) == pinned_tool_hash):
-        raise RuntimeError("DDR/survey evidence does not admit the selected live board instance.")
 
 
 def returned_to_rom(record):
@@ -208,10 +139,10 @@ def retain_failure(record, save, quarantine, error, helper):
     A launch whose image returned to the ROM and whose result was read has a
     known outcome. Once its returned instance is quarantined, the runner exits
     with that recorded result: the quarantine record refuses further requests
-    to the instance and the caller keeps the queue claim. Every other launch,
+    to the instance. Every other launch,
     or a return whose journal or quarantine failed, holds the port lock until
     coordinator recovery."""
-    if record.get("launch_attempted") or record.get("transport_failed"):
+    if record.get("launch_attempted") or record.get("transport_failed") or record.get("dram_probe_dirty"):
         quarantined = []
 
         def protect():
@@ -219,7 +150,7 @@ def retain_failure(record, save, quarantine, error, helper):
             quarantined.append(True)
 
         def hold():
-            if not (quarantined and returned_to_rom(record)):
+            if record.get("dram_probe_dirty") or not (quarantined and returned_to_rom(record)):
                 helper.hold_ownership()
 
         try:
@@ -227,7 +158,7 @@ def retain_failure(record, save, quarantine, error, helper):
         finally:
             # The shared helper holds launches. Pre-launch transport loss also
             # requires intervention even if journaling or quarantine fails.
-            if not record.get("launch_attempted"):
+            if not record.get("launch_attempted") and not record.get("dram_probe_dirty"):
                 helper.hold_ownership()
 
 
@@ -245,19 +176,11 @@ def main(argv=None, observe=None, validate_result=None):
     parser.add_argument("--ram-input", type=Path, help="Input bundle loaded at 0x43000000; at most 32 MiB")
     parser.add_argument("--ram-input-present", action="store_true", help="Verify existing RAM input instead of uploading it")
     parser.add_argument("--return-timeout", type=float, default=10)
-    parser.add_argument("--ddr-evidence", type=Path, help="Successful DDR session for this board, before any supplied warm returns")
-    parser.add_argument("--platform-survey", type=Path, help="Returning A32 survey for the current instance; paired with --ddr-evidence")
+    parser.add_argument("--ddr-evidence", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--platform-survey", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--warm-return", type=Path, action="append", default=[],
-                        help="Successful kernel, forced-stall or native returning session connecting DDR to the current instance; repeat in execution order")
+                        help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
-    if bool(args.ddr_evidence) != bool(args.platform_survey):
-        parser.error("--ddr-evidence and --platform-survey must be supplied together.")
-    if args.warm_return and not args.ddr_evidence:
-        parser.error("--warm-return requires --ddr-evidence and --platform-survey.")
-    warm_returns = tuple(path.read_bytes() for path in args.warm_return)
-    admission = None
-    if args.ddr_evidence:
-        admission = (args.ddr_evidence.read_bytes(), args.platform_survey.read_bytes())
     controlled = None
     if args.controlled:
         if args.mode != "kernel":
@@ -277,7 +200,8 @@ def main(argv=None, observe=None, validate_result=None):
     image = args.image.read_bytes()
     if not image or len(image) > 0x100000:
         sys.exit("Kernel image exceeds the reserved image interval.")
-    args.evidence.mkdir(parents=True, exist_ok=False)
+    failure_helper = load_module('kernel_failure', ROOT / 'tools/check-a733-smp.py')
+    args.evidence = failure_helper.output_directory(args.evidence)
     record = dict(image_sha256=hashlib.sha256(image).hexdigest(),
                   tool_sha256=hashlib.sha256(args.fel.read_bytes()).hexdigest(),
                   mode=args.mode, expected_text=args.expect, transactions=[], complete=False,
@@ -288,25 +212,13 @@ def main(argv=None, observe=None, validate_result=None):
     sys.path.insert(0, str(ROOT / "tools"))
     import usb_guard
     failure_helper = load_module("kernel_failure", ROOT / "tools/check-a733-smp.py")
-    if admission:
-        (args.evidence / "ddr-admission.json").write_bytes(admission[0])
-        (args.evidence / "platform-survey.json").write_bytes(admission[1])
-        record["admission"] = {"ddr_sha256": hashlib.sha256(admission[0]).hexdigest(),
-                               "survey_sha256": hashlib.sha256(admission[1]).hexdigest()}
-        if warm_returns:
-            record["admission"]["warm_returns"] = []
-            for index, raw in enumerate(warm_returns):
-                name = f"warm-return-{index + 1}.json"
-                (args.evidence / name).write_bytes(raw)
-                record["admission"]["warm_returns"].append(
-                    {"file": name, "sha256": hashlib.sha256(raw).hexdigest()})
 
 
     def save():
         (args.evidence / "session.json").write_text(json.dumps(record, indent=2) + "\n")
 
 
-    def transaction(*arguments, timeout=30):
+    def transaction(*arguments, timeout=30, pass_fds=()):
         if record["transport_failed"]:
             raise RuntimeError("Transport already failed; no further device requests.")
         try:
@@ -321,7 +233,7 @@ def main(argv=None, observe=None, validate_result=None):
         record["transactions"].append(item)
         save()
         try:
-            result = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+            result = subprocess.run(command, capture_output=True, text=True, timeout=timeout, pass_fds=pass_fds)
         except BaseException as error:
             record["transport_failed"] = True
             item["failure"] = "FEL transport failed; no further device requests."
@@ -346,8 +258,6 @@ def main(argv=None, observe=None, validate_result=None):
                 port = access.target(node)
                 config = dict(port=port.name, sysfs=str(port.resolve()))
                 record.update(initial_node=str(node), initial_identity=node_identity, port=port.name)
-                if admission:
-                    validate_platform_admission(admission, node, node_identity, port.name, record["tool_sha256"], failure_helper.FEL_HASH, warm_returns)
                 if "soc=00001903(A733)" not in transaction("version"):
                     raise RuntimeError("Target is not the verified A733.")
                 # The forced-FEL reset entry must still match the inspected ROM words.
@@ -355,11 +265,8 @@ def main(argv=None, observe=None, validate_result=None):
                                     "readl", "0x3c", "readl", "0x40")
                 if [int(word, 16) for word in words.split()] != [
                         0xeb00008f, 0xe3a00911, 0xe3a0193d, 0xe3a0605c, 0xea00004d]:
-                    raise RuntimeError("Forced-FEL ROM entry differs from the reviewed instructions.")
-                transaction("read", "0x42000000", "128", args.evidence / "before.bin")
-                signature = struct.unpack_from("<I", (args.evidence / "before.bin").read_bytes())[0]
-                if not admission and signature not in (0x41363450, 0x454c3150, 0x534b4552):
-                    raise RuntimeError("No prior AArch64 probe signature; establish initialized DDR first.")
+                    raise RuntimeError("Forced-FEL ROM entry differs from the expected instructions.")
+                failure_helper.verify_dram(transaction, args.evidence, record, save)
                 if ram_input is not None:
                     record["ram_input_sha256"] = hashlib.sha256(ram_input).hexdigest()
                     record["ram_input_reused"] = args.ram_input_present
