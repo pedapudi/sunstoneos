@@ -91,7 +91,7 @@ int board_host_irq_after(void)
 void board_host_irq_wait(void)
 {
 #ifdef SUNSTONE_BOARD_HOST_DEADLINE
-    if(!schedule.initialized||!schedule.deadline){irq.fault=1;return;}
+    if(!schedule.initialized||!schedule.deadline){taskENTER_CRITICAL();irq.fault=1;taskEXIT_CRITICAL();return;}
     uint64_t now=sunstone_deadline_now_us();
     if(schedule.deadline<=now)return; /* Poll must classify expired hardware. */
     if((irq.draining||schedule.ready)&&++irq.burst<32)return;
@@ -109,10 +109,10 @@ void board_host_irq_wait(void)
      * this wait within the immutable session budget, then bounds observation
      * after wake; poll still enforces each earlier command/transfer timeout. */
     if(!board_service_blocked_until(BOARD_SERVICE_USB2,board.host.platform.config.lifetime_deadline)){
-        irq.fault=1;return;
+        taskENTER_CRITICAL();irq.fault=1;taskEXIT_CRITICAL();return;
     }
 #endif
-    if(sunstone_deadline_wait_until(until)==SUNSTONE_DEADLINE_ERROR)irq.fault=1;
+    if(sunstone_deadline_wait_until(until)==SUNSTONE_DEADLINE_ERROR){taskENTER_CRITICAL();irq.fault=1;taskEXIT_CRITICAL();}
 #else
     /* Bound ready software work just like event draining. Hardware completion
      * and idle waits still need their existing bounded wake until this owner

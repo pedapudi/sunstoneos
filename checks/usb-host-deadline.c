@@ -86,5 +86,6 @@ int main(void)
     progress();board_host_irq_schedule(counter_us+7777,0);board_host_irq();
     start=counter_us;board_host_irq_wait();assert(counter_us==start); /* Arrival before arm is retained. */
     progress();board_host_irq_schedule(counter_us,0);before=waits;board_host_irq_wait();assert(waits==before);
+    board_host_irq_schedule(0,0);board_host_irq_wait();assert(irq.fault&&!critical);
     assert(!critical&&!tick_waits);puts("PASS actual precise waiter/runtime: 73us IRQ, 347us expiry, bounded batch, hard deadline, pending-before-arm");
 }
