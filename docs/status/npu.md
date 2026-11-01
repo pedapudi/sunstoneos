@@ -8,6 +8,17 @@ Finite scheduled startup and inference have scoped physical results.
 Repeated lifecycle operation remains unqualified.
 
 
+**Board-qualified scope:** A finite interrupt diagnostic produces matching
+ShuffleNetV2 outputs at 852 MHz/800 mV. Startup takes 4.0 ms and inference takes
+2.91 ms doorbell-to-interrupt, about 3.3 ms end to end. Provider-free
+entry, disabled-IRQ installation/restoration and real provider/task construction
+before scheduler start return normally with saved RAM restored. These
+checkpoints perform no inference. The watchdog-admitting finite startup,
+one-inference and two-job/two-model runtime images also qualify on 3-3 at
+852 MHz/800 mV, with matching copied outputs, CLOSE, local stop and normal
+ROM return. The resident command queue runs 1,000 matched jobs at 10.25 µs
+p50 and 26,925 jobs/s, and 1,000 fence-chained two-stage jobs, on 3-3.
+
 ## Resident command submission
 
 **Implemented; matched small-model timing has physical evidence.** The generic
@@ -58,16 +69,6 @@ needs coordinator approval and an identified power meter. Current jobs keep the
 NPU powered at 852 MHz/800 mV. Exact per-job deadline interrupts remain open;
 the independent session watchdog bounds a lost IRQ. Repeated lifecycle and
 thermal/fault recovery also remain unqualified.
-
-**Board-qualified scope:** A finite interrupt diagnostic produces matching
-ShuffleNetV2 outputs at 852 MHz/800 mV. Startup takes 4.0 ms and inference takes
-2.91 ms doorbell-to-interrupt, about 3.3 ms end to end. Provider-free
-entry, disabled-IRQ installation/restoration and real provider/task construction
-before scheduler start return normally with saved RAM restored. These
-checkpoints perform no inference. The watchdog-admitting finite startup,
-one-inference and two-job/two-model runtime images also qualify on 3-3 at
-852 MHz/800 mV, with matching copied outputs, CLOSE, local stop and normal
-ROM return.
 
 Evidence paths are relative to `~/.cache/sunstoneos/evidence/`:
 
