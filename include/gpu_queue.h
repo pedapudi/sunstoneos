@@ -3,8 +3,6 @@
 /* The GPU compute queue: the application interface of the OS GPU compute
  * service (docs/designs/gpu-compute-queue.md).
  *
- * Status: prototype. Nothing implements these declarations yet.
- *
  * An application creates one context with one program and up to four
  * leases of its own manifest regions, submits one job at a time and waits
  * for that job's completion record. A job binds leased ranges in place, gives
@@ -19,8 +17,16 @@
  * checks and application code share these definitions. */
 #include <stddef.h>
 #include <stdint.h>
+#ifdef __cplusplus
+#define GPU_QUEUE_STATIC_ASSERT static_assert
+extern "C" {
+#else
+#define GPU_QUEUE_STATIC_ASSERT _Static_assert
+#endif
 
 #define GPU_QUEUE_CONTEXTS 1u
+#define GPU_QUEUE_DEPTH 1u
+#define GPU_QUEUE_PROGRAMS 1u
 #define GPU_QUEUE_LEASES 4u
 #define GPU_QUEUE_BINDINGS 4u
 #define GPU_QUEUE_ARGUMENT_BYTES 64u
@@ -96,7 +102,7 @@ struct gpu_queue_lease_info {
     uint32_t reserved;
 };
 
-/* Creation copies the program, maps the leases with 2 MiB GPU pages, builds
+/* Creation copies the program, maps the leases with 256 KiB GPU pages, builds
  * the GPU address space once and opens the device. The map never changes
  * afterwards. job_us bounds each job from its kick to its timeline update;
  * a job that exceeds it faults the service. */
@@ -119,7 +125,7 @@ struct gpu_queue_binding {
     uint32_t address;
     uint32_t sync_offset, sync_bytes;
 };
-_Static_assert(sizeof(struct gpu_queue_binding) == 16, "binding record");
+GPU_QUEUE_STATIC_ASSERT(sizeof(struct gpu_queue_binding) == 16, "binding record");
 
 /* One job. sequence rises strictly through the boot, across device close and
  * reopen; the worker writes it to the context's timeline after the work and
@@ -141,7 +147,7 @@ struct gpu_queue_job {
     struct gpu_queue_binding binding[GPU_QUEUE_BINDINGS];
     unsigned char arguments[GPU_QUEUE_ARGUMENT_BYTES];
 };
-_Static_assert(sizeof(struct gpu_queue_job) == 160, "job record");
+GPU_QUEUE_STATIC_ASSERT(sizeof(struct gpu_queue_job) == 160, "job record");
 
 /* kick_to_done_us is the worker's clock from the kick to the observed
  * timeline update. */
@@ -150,7 +156,7 @@ struct gpu_queue_record {
     uint16_t result, detail;   /* enum gpu_queue_result, enum gpu_queue_detail */
     uint32_t kick_to_done_us, reserved;
 };
-_Static_assert(sizeof(struct gpu_queue_record) == 16, "completion record");
+GPU_QUEUE_STATIC_ASSERT(sizeof(struct gpu_queue_record) == 16, "completion record");
 
 /* Once per boot. Waits at most wait_ticks for the device to open and the
  * context to become ready; info receives one entry per lease. */
@@ -169,4 +175,7 @@ int gpu_queue_wait(struct gpu_queue_context, struct gpu_queue_record *, uint32_t
  * Every page and lease stays retained, as with today's GPU service; the
  * context cannot be created again in this boot. */
 int gpu_queue_close(struct gpu_queue_context, uint32_t wait_ticks);
+#ifdef __cplusplus
+}
+#endif
 #endif

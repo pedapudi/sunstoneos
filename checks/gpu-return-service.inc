@@ -9,14 +9,14 @@ static int final_park(void *ctx,uint64_t deadline)
                  __wrap_a733_gpu_backend_stopped(NULL,&service));
     if(park_calls++)configASSERT(deadline==park_deadline);
     park_deadline=deadline;
-    return mimus_service_case==33 ? -1 : park_calls==2;
+    return gpu_queue_case==33 ? -1 : park_calls==2;
 }
 static void return_client(void)
 {
     configASSERT(bench_job(0));closed();
-    if(mimus_service_case==32){
+    if(gpu_queue_case==32){
         configASSERT(reopen_reply(service.epoch).result==PVR_GPU_SERVICE_OK);
-        struct pvr_mimus_record record=receive();configASSERT(record.result==PVR_MIMUS_OK && !record.sequence);
+        configASSERT(compute->phase==PVR_COMPUTE_QUEUE_READY);
         configASSERT(bench_job(1));closed();
     }
     struct pvr_gpu_service_request request={PVR_GPU_SERVICE_PARK,1000000};
@@ -25,7 +25,7 @@ static void return_client(void)
     while(!pvr_gpu_service_collect(&service,ticket,&reply,1)){}
     configASSERT(reply.result==PVR_GPU_SERVICE_OK);
     while(service.phase==PVR_GPU_SERVICE_PARKING)vTaskDelay(1);
-    if(mimus_service_case==33){
+    if(gpu_queue_case==33){
         configASSERT(service.phase==PVR_GPU_SERVICE_FAILED && service.error==PVR_GPU_SERVICE_STOP && park_calls==1);
     }else{
         configASSERT(service.phase==PVR_GPU_SERVICE_PARKED && park_calls==2 &&
@@ -38,9 +38,9 @@ static void return_client(void)
             configASSERT(reply.result!=PVR_GPU_SERVICE_OK && park_calls==2);
         }
         configASSERT(!service.clients[0].pending && !uxQueueMessagesWaiting(service.requests) &&
-                     !uxQueueMessagesWaiting(mimus->completions));
+                     !uxQueueMessagesWaiting(compute->completions));
     }
     vTaskSuspend(service.worker);
-    platform_puts("PASS mimus service case ");platform_hex(mimus_service_case);
+    platform_puts("PASS GPU queue case ");platform_hex(gpu_queue_case);
     platform_puts("; final PARK after acknowledged GPU OFF, thermal reopen and retained callback fault\n");platform_exit(0);
 }

@@ -1,4 +1,4 @@
-/* Selected additions to the actual FreeRTOS Mimus service fixture. No model
+/* Selected additions to the actual FreeRTOS GPU queue service fixture. No model
  * inference: one admitted synthetic job checks slot reuse after RELEASE. */
 static StaticTask_t perf_task;
 static StackType_t perf_stack[4096];
@@ -16,7 +16,7 @@ static int perf_kick(void *ctx,unsigned next,unsigned slot,unsigned char *cmd)
         configASSERT(word(resource(PVR_FW_UTILIZATION)+10240,4)==1);
     } else {
         configASSERT(word(cmd+8,4)==2 && (request==1 || request==2) && !word(resource(PVR_FW_POWER_SYNC),4));
-        if(!((mimus_service_case==27 && request==1) || (mimus_service_case==28 && request==2)))
+        if(!((gpu_queue_case==27 && request==1) || (gpu_queue_case==28 && request==2)))
             put(resource(PVR_FW_POWER_SYNC),4,1);
         put(resource(PVR_FW_SYSTEM_DATA)+8,4,request==1?2:3);
     }
@@ -50,21 +50,21 @@ static uint32_t perf_current(void *ctx){callback(ctx);return perf_rate;}
 static enum a733_perf_status perf_request(enum a733_perf_action action,unsigned value)
 {
     uint64_t started=now_us();
-    uint64_t ticket,end=started+(mimus_service_case==29 && action==A733_PERF_HOLD?10000:50000);
+    uint64_t ticket,end=started+(gpu_queue_case==29 && action==A733_PERF_HOLD?10000:50000);
     if(action==A733_PERF_HOLD)perf_limit=end+150000;
     if(!perf_limit)perf_limit=end;
     configASSERT(pvr_gpu_service_performance(&service,action,value,end,perf_limit,&ticket));
     struct pvr_gpu_service_reply reply;
     while(!pvr_gpu_service_collect(&service,ticket,&reply,1)) {
         configASSERT(now_us()<end+20000);
-        if((mimus_service_case==26 || mimus_service_case==30) && action==A733_PERF_HOLD && atomic_load(&hold_completion) && end-now_us()<40000) {
-            configASSERT(!perf_commands && mimus->phase==PVR_MIMUS_SERVICE_IN_FLIGHT);
+        if((gpu_queue_case==26 || gpu_queue_case==30) && action==A733_PERF_HOLD && atomic_load(&hold_completion) && end-now_us()<40000) {
+            configASSERT(!perf_commands && compute->phase==PVR_COMPUTE_QUEUE_IN_FLIGHT);
             configASSERT(service.performance.ticket==ticket && service.performance.stage==1);
             atomic_store(&hold_completion,0);
         }
     }
     perf_elapsed[action]=now_us()-started;
-    if(mimus_service_case==30) {
+    if(gpu_queue_case==30) {
         configASSERT(reply.result==PVR_GPU_SERVICE_FAULT && reply.phase==PVR_GPU_SERVICE_FAILED &&
             reply.error==PVR_GPU_SERVICE_CONTROL && service.error==PVR_GPU_SERVICE_CONTROL);
         configASSERT(!service.performance.ticket && !service.performance.stage && !perf_commands);
@@ -76,8 +76,8 @@ static void performance_owner(void *arg)
 {
     (void)arg;while(!atomic_load(&perf_go))vTaskDelay(1);
     enum a733_perf_status held=perf_request(A733_PERF_HOLD,0);
-    if(mimus_service_case==27 || mimus_service_case==30)configASSERT(held==A733_PERF_FAILED);
-    else if(mimus_service_case==29) {
+    if(gpu_queue_case==27 || gpu_queue_case==30)configASSERT(held==A733_PERF_FAILED);
+    else if(gpu_queue_case==29) {
         configASSERT(held==A733_PERF_EXPIRED && !perf_commands && perf_request(A733_PERF_RELEASE,0)==A733_PERF_DONE);
     } else {
         configASSERT(held==A733_PERF_DONE);atomic_store(&perf_held,1);
@@ -85,37 +85,41 @@ static void performance_owner(void *arg)
         configASSERT(perf_request(A733_PERF_RATE,600)==A733_PERF_DONE);
         configASSERT(perf_request(A733_PERF_VOLTAGE,800)==A733_PERF_DONE);
         atomic_store(&perf_held,0);
-        configASSERT(perf_request(A733_PERF_RELEASE,0)==(mimus_service_case==28?A733_PERF_FAILED:A733_PERF_DONE));
-        if(mimus_service_case!=28)configASSERT(perf_request(A733_PERF_READ,0)==A733_PERF_DONE);
+        configASSERT(perf_request(A733_PERF_RELEASE,0)==(gpu_queue_case==28?A733_PERF_FAILED:A733_PERF_DONE));
+        if(gpu_queue_case!=28)configASSERT(perf_request(A733_PERF_READ,0)==A733_PERF_DONE);
     }
     atomic_store(&perf_done,1);vTaskSuspend(NULL);
 }
 static void performance_client(void)
 {
-    const struct pvr_mimus_request job={0,fixture_jobs[0].ordinal,fixture_jobs[0].rows,2*fixture_jobs[0].k};
+    const struct gpu_queue_job job=make_job(0);
     configASSERT(pvr_gpu_service_performance_state(&service)==(PVR_GPU_PERF_OWNER|PVR_GPU_PERF_READY));
-    if(mimus_service_case==29)atomic_store(&mimus->slot_state,PVR_MIMUS_SLOT_RESERVED);
-    if(mimus_service_case==26 || mimus_service_case==30) {
+    if(gpu_queue_case==29)atomic_store(&compute->slot_state,PVR_COMPUTE_QUEUE_RESERVED);
+    if(gpu_queue_case==26 || gpu_queue_case==30) {
         atomic_store(&hold_completion,1);
-        configASSERT(pvr_mimus_service_submit(mimus,&job)==1);
-        while(mimus->phase!=PVR_MIMUS_SERVICE_IN_FLIGHT)vTaskDelay(1);
+        configASSERT(submit(&job)==1);
+        while(compute->phase!=PVR_COMPUTE_QUEUE_IN_FLIGHT)vTaskDelay(1);
     }
     atomic_store(&perf_go,1);
-    if(mimus_service_case==26 || mimus_service_case==30) {
-        struct pvr_mimus_record record=receive();
-        if(mimus_service_case==30)configASSERT(record.result==PVR_MIMUS_LOST && record.sequence==1);
-        else configASSERT(record.result==PVR_MIMUS_OK && record.sequence==1 && sums_equal(0,1));
+    if(gpu_queue_case==26 || gpu_queue_case==30) {
+        struct gpu_queue_record record=receive();
+        if(gpu_queue_case==30)configASSERT(record.result==GPU_QUEUE_FAULT && record.sequence==1);
+        else configASSERT(record.result==GPU_QUEUE_OK && record.sequence==1 && sums_equal(0,1));
         completed=1;
     }
+    unsigned held_job_sent=0;
     while(!atomic_load(&perf_done)) {
         if(atomic_load(&perf_held)) {
-            configASSERT(pvr_mimus_service_submit(mimus,&job)==PVR_MIMUS_SUBMIT_HELD);
+            const struct gpu_queue_job held_job=make_job(gpu_queue_case==26?1:0);
+            if(!held_job_sent){configASSERT(submit(&held_job)==1);held_job_sent=1;}
+            else configASSERT(gpu_queue_submit(context,&held_job)==GPU_QUEUE_BUSY);
+            configASSERT(atomic_load(&compute->slot_state)==PVR_COMPUTE_QUEUE_SUBMITTED);
             configASSERT(close_reply().result==PVR_GPU_SERVICE_BUSY);
             atomic_store(&perf_observed,1);
         }
         vTaskDelay(1);
     }
-    if(mimus_service_case==27 || mimus_service_case==28 || mimus_service_case==30) {
+    if(gpu_queue_case==27 || gpu_queue_case==28 || gpu_queue_case==30) {
         configASSERT(!service.performance.ticket && !service.performance.stage);
         struct pvr_gpu_service_reply extra;
         configASSERT(xQueueReceive(service.clients[1].replies,&extra,0)==pdFALSE);
@@ -124,15 +128,21 @@ static void performance_client(void)
         configASSERT(state!=DEVICE_MEMORY_FREE);
         configASSERT(device_memory_describe((void *)session.table_lease.pool,session.table_lease,&extent,&state));
         configASSERT(state!=DEVICE_MEMORY_FREE && service.firmware_fixture_owner==0 && !isolated);
-        configASSERT(service.phase==PVR_GPU_SERVICE_FAILED && atomic_load(&mimus->slot_state)!=PVR_MIMUS_SLOT_IDLE);
+        configASSERT(service.phase==PVR_GPU_SERVICE_FAILED && atomic_load(&compute->lost));
+        configASSERT(atomic_load(&compute->slot_state)==(gpu_queue_case==27?PVR_COMPUTE_QUEUE_IDLE:PVR_COMPUTE_QUEUE_TAKEN));
+        configASSERT(gpu_queue_submit(context,&job)==GPU_QUEUE_FAULT);
         configASSERT(pvr_gpu_service_performance_state(&service)==(PVR_GPU_PERF_OWNER|PVR_GPU_PERF_FAILED));
         configASSERT(close_reply().result==PVR_GPU_SERVICE_FAULT);
     } else {
-        if(mimus_service_case==29)atomic_store(&mimus->slot_state,PVR_MIMUS_SLOT_IDLE);
-        configASSERT(bench_job(mimus_service_case==26?1:0));closed();
+        if(gpu_queue_case==29)atomic_store(&compute->slot_state,PVR_COMPUTE_QUEUE_IDLE);
+        if(held_job_sent){struct gpu_queue_record record=receive();
+            configASSERT(record.result==GPU_QUEUE_OK && record.sequence==(gpu_queue_case==26?2u:1u));
+            completed=record.sequence;
+        }else configASSERT(bench_job(gpu_queue_case==26?1:0));
+        closed();
         configASSERT(pvr_gpu_service_performance_state(&service)==PVR_GPU_PERF_OWNER);
         configASSERT(reopen_reply(service.epoch).result==PVR_GPU_SERVICE_OK);
-        struct pvr_mimus_record record=receive();configASSERT(record.result==PVR_MIMUS_OK && record.sequence==0 && mimus->sequence==(mimus_service_case==26?2u:1u));
+        configASSERT(compute->phase==PVR_COMPUTE_QUEUE_READY && compute->sequence==(gpu_queue_case==26?2u:1u));
         configASSERT(pvr_gpu_service_performance_state(&service)==(PVR_GPU_PERF_OWNER|PVR_GPU_PERF_READY));
     }
     vTaskSuspend(service.worker);
@@ -143,6 +153,6 @@ static void performance_client(void)
     metric("performance-hold-us",perf_elapsed[A733_PERF_HOLD]);metric("performance-rate-us",perf_elapsed[A733_PERF_RATE]);
     metric("performance-voltage-us",perf_elapsed[A733_PERF_VOLTAGE]);metric("performance-release-us",perf_elapsed[A733_PERF_RELEASE]);
     metric("performance-read-us",perf_elapsed[A733_PERF_READ]);
-    platform_puts("PASS mimus service case ");platform_hex(mimus_service_case);
+    platform_puts("PASS GPU queue case ");platform_hex(gpu_queue_case);
     platform_puts("; GPU performance mailbox, slot ownership, native memory publication and retained lifecycle\n");platform_exit(0);
 }

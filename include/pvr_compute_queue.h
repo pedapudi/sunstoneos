@@ -3,8 +3,6 @@
 /* The GPU compute queue inside the GPU service worker
  * (drivers/gpu/pvr_gpu_service.c, docs/designs/gpu-compute-queue.md).
  *
- * Status: prototype. Nothing implements these declarations yet.
- *
  * The worker calls the functions below directly, at each place where it
  * calls the mimus session today. They run in the worker task at EL1, one at
  * a time, each bounded and without a tick wait. Their signatures are those a
@@ -15,7 +13,11 @@
 #include "gpu_queue.h"
 #include "pvr_cccb.h"
 #include "pvr_mips.h"
+#include "a733_gpu_vm_memory.h"
+#include "FreeRTOS.h"
+#include "queue.h"
 
+struct a733_gpu_queue;
 struct pvr_gpu_service;
 struct pvr_gpu_service_config;
 
@@ -45,13 +47,36 @@ struct pvr_gpu_service_config;
 enum pvr_compute_queue_slot { PVR_COMPUTE_QUEUE_CLOSED, PVR_COMPUTE_QUEUE_IDLE,
     PVR_COMPUTE_QUEUE_RESERVED, PVR_COMPUTE_QUEUE_SUBMITTED, PVR_COMPUTE_QUEUE_TAKEN };
 
+enum pvr_compute_queue_phase { PVR_COMPUTE_QUEUE_NEW, PVR_COMPUTE_QUEUE_BOUND,
+    PVR_COMPUTE_QUEUE_CREATED, PVR_COMPUTE_QUEUE_PUBLISHING, PVR_COMPUTE_QUEUE_TABLES,
+    PVR_COMPUTE_QUEUE_PUBLISHED, PVR_COMPUTE_QUEUE_FORMAT, PVR_COMPUTE_QUEUE_READY,
+    PVR_COMPUTE_QUEUE_IN_FLIGHT, PVR_COMPUTE_QUEUE_FAILED };
+
 struct pvr_compute_queue {
+    struct a733_gpu_queue *owner;
+    struct pvr_mips_buffer firmware[PVR_COMPUTE_QUEUE_OBJECTS], publish[10];
+    uint32_t firmware_address[PVR_COMPUTE_QUEUE_OBJECTS];
+    uint32_t previous_sequence;
+    uint32_t publish_index, publish_page, generation;
+    atomic_uint final_close;
+    atomic_uint client_owed;
+    unsigned char *job_cpu;
+    uint64_t epoch, resume, task_word;
+    struct gpu_queue_context_config create_config;
+    struct gpu_queue_program create_program;
+    uint64_t create_ticket, close_ticket;
+    atomic_uint create_pending, create_done;
+    uint32_t close_pending;
+    QueueHandle_t completions;
+    StaticQueue_t completion_state;
+    uint8_t completion_storage[sizeof(struct gpu_queue_record)];
     struct pvr_gpu_service *service;
     struct pvr_mips_object objects[PVR_COMPUTE_QUEUE_OBJECTS];
     struct pvr_cccb client;
     struct gpu_queue_lease_info lease[GPU_QUEUE_LEASES];
     uint32_t lease_count, coefficients, phase, error, sequence, owed, held;
-    uint64_t job_us, deadline, kicked, not_after;
+    uint64_t job_us, deadline, kicked;
+    atomic_uint_fast64_t not_after;
     unsigned char command[96], update[8];
     uint64_t binding0;            /* last PDS binding-0 address */
     uint32_t groups[3];           /* last PDS group counts */
@@ -109,4 +134,10 @@ int pvr_compute_queue_reopen(struct pvr_compute_queue *);
  * job. The request queue holds one message per client, one interrupt wake
  * and this one wake, so the send cannot find it full. */
 int pvr_compute_queue_wake(struct pvr_compute_queue *);
+/* Bind the singleton application interface before the scheduler starts. */
+int pvr_compute_queue_client_bind(struct pvr_compute_queue *);
+/* Runtime hook: 1 live, 0 thermally parked, -1 failed. */
+int pvr_compute_queue_runtime_sync(void);
+void pvr_compute_queue_runtime_opened(uint64_t epoch);
+void pvr_compute_queue_runtime_closed(void);
 #endif
