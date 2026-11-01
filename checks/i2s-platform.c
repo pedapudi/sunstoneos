@@ -372,6 +372,16 @@ static void minimum_intervals(void)
 int main(int argc, char **argv)
 {
     if (argc == 2) {
+        if(strcmp(argv[1],"--observed-audio1") == 0){
+            setup(1);saved_div2=1u<<20;ccu[0x280/4]=UINT32_C(0x41147f00);
+            ccu[0x28c/4]=UINT32_C(0x30000000);lock_delay=50;ready_parent();
+            assert(publish_count==1&&(ccu[0x280/4]&B(24))&&stale_lock_reads);
+            for(unsigned i=0;i<pll_count;++i)assert(pll_trace[i]&B(24));
+            assert(ccu[0x28c/4]==UINT32_C(0x30000000));
+            setup(0);ccu[0x280/4]|=B(24);ready_parent();assert(!pll_count);
+            puts("PASS observed AUDIO1 reserved bit survives cold preparation and warm adoption");
+            return 0;
+        }
         if(strcmp(argv[1],"--reset-ldo") == 0){
             setup(1);saved_div2=1u<<20;ccu[0x280/4]=UINT32_C(0x40147f00);lock_delay=50;ready_parent();
             assert(publish_count==1&&(ccu[0x280/4]&B(30))&&gate_status_reads&&stale_lock_reads&&now>=lock_after+20);

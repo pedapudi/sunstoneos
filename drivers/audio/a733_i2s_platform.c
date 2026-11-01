@@ -86,8 +86,11 @@ static int gate_status(struct a733_audio_parent *p, unsigned *enabled)
 static int baseline(struct a733_audio_parent *p)
 {
     uint32_t x, y;
+    /* Manual 4.1.6.51: AUDIO1 bits 26:23 are reserved. Unlike AUDIO0,
+     * bit 24 is not a modulation enable; preserve it without interpreting it.
+     * The vendor AUDIO1 definition uses PAT0 bit 31 and PAT1 bit 27. */
     if (!reference(p) || !rd(p, p->deadline, AUDIO, &p->audio_value) ||
-        (p->audio_value & BIT(24)) || !rd(p, p->deadline, CCU+0x288, &x) || (x & BIT(31)) ||
+        !rd(p, p->deadline, CCU+0x288, &x) || (x & BIT(31)) ||
         !rd(p, p->deadline, CCU+0x28c, &y) || (y & BIT(27)) ||
         !gate_control(p)) return 0;
     if (!p->cold) {

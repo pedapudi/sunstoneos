@@ -219,6 +219,7 @@ def main():
       run('platform-build',[CLANG,'-std=c11','-g','-O1','-Wall','-Wextra','-Werror',*SANITIZE,'-I'+str(ROOT/'include'),
                           *[ROOT/v for v in sources],'-o',a.out/'platform'])
       run('reset-ldo',[a.out/'platform','--reset-ldo']);run('platform-baseline',[a.out/'platform'])
+      run('observed-audio1',[a.out/'platform','--observed-audio1'])
       rows['reset-default-LDO-and-parent-baseline']=True
     for label,target,case in ([] if a.native_only else [('held-busy-drain','i2s-retire-model',19),('held-overrun','i2s-retire-model',20),('file-EOF','i2s-file-retire-model',None)]):
         cmd=[CACHE/'host/usr/bin/qemu-system-aarch64','-machine','virt,gic-version=3,secure=off,virtualization=off',
