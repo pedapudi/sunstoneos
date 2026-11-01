@@ -46,8 +46,12 @@ The original strict held-state predicates and short-circuit read order remain.
 
 No write targets CPU0 at `0x07052000`, the cluster page at `0x07051000`, a power
 domain, a rail, a clock or a reset. The `PROBE_POLICY` RTC breadcrumb records
-`core << 12 | inherited_policy` before each core's normalization. A fault
-retains its raw rejected register and address independently.
+`core << 12 | inherited_policy` before each core's normalization. Later progress
+overwrites that stage, so the diagnostic words retain a separate summary.
+With FAULT clear, ELR marker `0x50505531` identifies ESR as the inherited
+dynamic-OFF core mask and FAR as the completed static-OFF core mask. Bits 1–7
+identify the secondary cores; other inherited policies are zero. A real first
+fault replaces these words with its raw inputs before publishing FAULT.
 
 One 100 ms absolute counter deadline, capped by the session deadline, bounds
 acquisition. A 65,536-sample limit also bounds a stopped counter. These limits
@@ -87,6 +91,7 @@ verify protected placement, relocation closure, stack bounds and beacons.
 Three independent reviewers inspect design and code; linked memory-test and
 audio images receive separate inspections. The full integration gate and the
 check index cover software integration. Acquisition latency remains unmeasured
-on hardware. The physical proof requires audio, camera control and audio on one
-port without a replug, with common entry passing each time. A later camera
-reset refusal stops that sequence and remains with the camera owner.
+on hardware. The physical proof requires audio control, a scan-only memory
+probe and audio control on port 3-1 without a replug. Each run must pass common
+entry and retain the inherited policies it normalizes. Camera reset and gate
+normalization remain with the camera owner.

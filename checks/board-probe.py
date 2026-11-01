@@ -22,6 +22,8 @@ from unicorn import UC_HOOK_MEM_WRITE,UC_HOOK_MEM_READ
 from unicorn.arm64_const import UC_ARM64_REG_X0,UC_ARM64_REG_PC,UC_ARM64_REG_PSTATE,UC_ARM64_REG_FP,UC_ARM64_REG_LR
 spec=importlib.util.spec_from_file_location('probe_machine',ROOT/'checks/memtest-machine.py')
 machine=importlib.util.module_from_spec(spec);spec.loader.exec_module(machine)
+spec=importlib.util.spec_from_file_location('probe_crumbs',ROOT/'tools/a733-crumbs.py')
+crumbs=importlib.util.module_from_spec(spec);spec.loader.exec_module(crumbs)
 machine.REGISTERS.update({(3,6,1,0,0):'sctlr_el3',(3,0,0,0,5):'mpidr_el1',
  (3,6,5,2,0):'esr_el3',(3,6,4,0,1):'elr_el3',(3,6,6,0,0):'far_el3',(3,6,12,0,2):'rmr_el3'})
 ROWS=[]
@@ -127,6 +129,11 @@ def ownership_cases(args,plan):
    m.write(probe.SESSION+128,0);m.write(probe.SESSION+136,0);m.write(probe.SESSION+144,0x5944414552505353)
    m.call('sunstone_probe_return',0,count=300000)
    assert m.events[-2:]==['disarm','rom'] and all(m.read(0x07052000+c*4096,4)==0 for c in range(1,8))
+   inherited=sum(1<<c for c in cores)
+   rtc=m.rtc();assert (rtc['esr'],rtc['elr'],rtc['far'])==(inherited,0x50505531,0xfe),rtc
+   decoded=crumbs.decode(rtc,plan['epoch'])['probe_policy']
+   assert decoded['inherited_dynamic_mask']==inherited and decoded['normalized_mask']==0xfe
+   assert decoded['inherited_policy']=={str(c):0x100 if c in cores else 0 for c in range(1,8)}
   else:
    assert m.rtc()['fault']>>24==0xfa and not m.disarm_seen,m.rtc()
    if label=='bad-last-identity':assert not writes
@@ -172,6 +179,7 @@ def native_cases(args,plan):
   if variant in ('normal','dynamic-off','wake-enabled'):
    assert m.rtc()['fault']==0 and m.read(m.address('sunstone_probe_deadline'))>m.now,m.rtc()
    assert all(m.read(0x07052000+c*4096,4)==0 and m.read(0x07050200+c*4,4)&3==2 for c in range(1,8))
+   rtc=m.rtc();assert (rtc['esr'],rtc['elr'],rtc['far'])==(2 if variant=='dynamic-off' else 0,0x50505531,0xfe),rtc
   else:assert m.rtc()['fault']>>24==0xfa
   passed('entry-'+variant);del m;gc.collect()
  for variant in ('normal','irq-failure','late-secondary','late-deadline','stuck-disarm'):

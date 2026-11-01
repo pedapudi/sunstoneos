@@ -65,6 +65,7 @@ static void entry_bound(struct entry_window *w,uintptr_t address)
 __attribute__((weak)) uint64_t sunstone_probe_acquire_secondaries(void)
 {
     struct { uint32_t policy,control,mode; } inherited[7];
+    uint32_t dynamic=0;
     struct entry_window w={.last=counter()};
     w.deadline=w.last+COUNTER_HZ/10;
     if(w.deadline>sunstone_probe_deadline)w.deadline=sunstone_probe_deadline;
@@ -79,6 +80,7 @@ __attribute__((weak)) uint64_t sunstone_probe_acquire_secondaries(void)
         uint32_t policy=mmio_read(p);
         if(policy&~0x100u)sunstone_probe_fault(0x23,policy,(uintptr_t)SUNSTONE_CRUMB_HERE(),p);
         inherited[c-1].policy=policy;
+        if(policy)dynamic|=1u<<c;
         entry_word(p+4,UINT32_MAX,0,4);
         entry_word(p+8,UINT32_MAX,policy,5);
         uintptr_t control=0x07050200u+c*4;
@@ -88,6 +90,17 @@ __attribute__((weak)) uint64_t sunstone_probe_acquire_secondaries(void)
         v=mmio_read(control+0x20);
         if(v&1)sunstone_probe_fault(0x27,v,(uintptr_t)SUNSTONE_CRUMB_HERE(),control+0x20);
         inherited[c-1].mode=v;
+    }
+    /* LAST is overwritten by subsequent progress. Keep the full inherited
+     * profile in the diagnostic words until a real first fault replaces it. */
+    volatile uint32_t *rtc=(void *)(uintptr_t)SUNSTONE_CRUMB_RTC;
+    unsigned record=(rtc[SUNSTONE_CRUMB_FAULT/4]>>24)!=SUNSTONE_CRUMB_FAULT_MAGIC;
+    if(record){
+        rtc[SUNSTONE_CRUMB_ESR/4]=dynamic;
+        rtc[SUNSTONE_CRUMB_FAR/4]=0;
+        __asm__ volatile("dsb sy":::"memory");
+        rtc[SUNSTONE_CRUMB_ELR/4]=SUNSTONE_CRUMB_PROBE_POLICY_MAGIC;
+        __asm__ volatile("dsb sy":::"memory");
     }
     for(unsigned c=1;c<8;++c){
         uintptr_t p=0x07052000u+(uintptr_t)c*0x1000,control=0x07050200u+c*4;
@@ -116,6 +129,10 @@ __attribute__((weak)) uint64_t sunstone_probe_acquire_secondaries(void)
             __asm__ volatile("dsb sy":::"memory");
         }
         entry_word(control,UINT32_MAX,inherited[c-1].control|2,6);
+        if(record){
+            rtc[SUNSTONE_CRUMB_FAR/4]|=1u<<c;
+            __asm__ volatile("dsb sy":::"memory");
+        }
     }
     return SUNSTONE_PROBE_READY;
 }

@@ -57,6 +57,10 @@
 #define SUNSTONE_CRUMB_FAR 0x11cu
 #define SUNSTONE_CRUMB_TAG_MAGIC 0x5c0du
 #define SUNSTONE_CRUMB_FAULT_MAGIC 0xfau
+/* With FAULT clear, ELR carries this marker, ESR the inherited dynamic-OFF
+ * core mask and FAR the completed static-OFF core mask. A real first fault
+ * replaces all three diagnostic words before publishing FAULT. */
+#define SUNSTONE_CRUMB_PROBE_POLICY_MAGIC 0x50505531u
 #define SUNSTONE_CRUMB_SVC 0x5c0d
 #define SUNSTONE_CRUMB_FAIL_SVC 0x5c0e
 #define SUNSTONE_CRUMB_FAIL_LEVEL 0xbu

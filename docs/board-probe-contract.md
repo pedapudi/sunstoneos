@@ -71,7 +71,12 @@ the owner waits for PWSR dynamic-disable acknowledgment and actual OFF before
 verifying PWPR. It then sets only that core's GIC wake-disable bit. One 100 ms
 deadline, capped by the session deadline, and a 65,536-sample limit bound the
 entire acquisition. The inherited policy and core appear in the `PROBE_POLICY`
-RTC breadcrumb before mutation.
+RTC breadcrumb before mutation. With FAULT clear, ELR marker `0x50505531`
+identifies a retained summary: ESR bits 1–7 identify inherited dynamic-OFF
+policies, and FAR bits 1–7 identify completed static-OFF acquisitions. The other
+inherited policies are zero. Later progress preserves this summary; a real first
+fault replaces all three words before publishing FAULT. The decoder reports
+the summary as `probe_policy`.
 
 The existing strict held-state checks retain their predicates and read order.
 Entry refusal sites `0x10..0x12` retain the sampled CPU word. PPU sites

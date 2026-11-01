@@ -84,8 +84,8 @@ also build. The check index verifies 805 checks, including 93 pure-host checks;
 Raw evidence is under `~/.cache/sunstoneos/build/probe-shared-1101/`: reviews in
 `reviews/`, shared cases in `probe-check-5/` and `probe-check-wake/`, audio cases
 in `audio-focused/`, and the gate in `gates/gate-shared-probe-full/`.
-The audio control passes offline admission. No board entry is submitted for this
-integration because the brief assigns no port. The required physical sequence
-is audio control, camera ISP control and audio control on one assigned port
-without a replug. Stop at a later camera reset refusal; that reset owner and
+The audio control and scan-only memory probe pass offline admission. Port 3-1
+is assigned for audio control, the memory probe and audio control without a
+replug. Returned RTC diagnostics must retain the inherited policies and the
+completed normalization mask. Physical proof remains pending. Camera reset and
 peripheral gate normalization remain with the camera stream.
