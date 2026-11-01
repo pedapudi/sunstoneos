@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Embed the client's authenticated NPU model and its input and reference vectors.
 
-The client's model is entry --model of the OS application's model list
-(apps/os/npu-models.json). Only that entry is linked; the other entries have
-no caller. os_npu_catalogue_digest is the SHA-256 of the linked model's
-SHA-256 digest, the value the session extension binds.
+The default links entry --model from apps/os/npu-models.json. --models adds
+prepared resident entries in the given order, with the client model first.
+os_npu_catalogue_digest hashes the concatenated model digests in that order;
+the session extension binds this value.
 """
 import argparse
 import hashlib
@@ -25,7 +25,7 @@ def models():
     """The OS application's catalogue entries, in model-list order."""
     return catalogue_tool().application_models([MODELS])
 
-def generate(artifacts, output, model=0):
+def generate(artifacts, output, model=0, queue_models=None):
     catalogue = models()
     paths = json.loads(Path(artifacts).read_text())
     if not 0 <= model < len(catalogue):
@@ -41,9 +41,17 @@ def generate(artifacts, output, model=0):
         return data
     selected = catalogue[model]
     files = catalogue_tool().artifact_files(paths, selected['name'])
-    data = blob('model_0', files['model'], selected['model'])
-    rows.append('{model_0,sizeof(model_0)}')
-    digests += hashlib.sha256(data).digest()
+    indices = [model] if queue_models is None else queue_models
+    if not indices or indices[0] != model or len(indices) > 8 or len(set(indices)) != len(indices):
+        raise ValueError('Queue entries must be distinct, begin with the client model and fit eight slots')
+    for slot, index in enumerate(indices):
+        if not 0 <= index < len(catalogue):
+            raise ValueError('Unsupported queue model selection')
+        entry = catalogue[index]
+        entry_files = catalogue_tool().artifact_files(paths, entry['name'])
+        data = blob(f'model_{slot}', entry_files['model'], entry['model'])
+        rows.append(f'{{model_{slot},sizeof(model_{slot})}}')
+        digests += hashlib.sha256(data).digest()
     text += 'const struct npu_runtime_model os_npu_models[OS_NPU_MODELS]={' + ','.join(rows) + '};\n'
     text += 'const uint8_t os_npu_catalogue_digest[32]={' + ','.join(map(str, hashlib.sha256(digests).digest())) + '};\n'
     for section, field in [('inputs', 'inputs'), ('references', 'outputs')]:
@@ -63,5 +71,6 @@ if __name__ == '__main__':
     p.add_argument('--artifacts', required=True)
     p.add_argument('--output', required=True)
     p.add_argument('--model', type=int, default=0)
+    p.add_argument('--models', help='Comma-separated prepared resident entries, client model first')
     a = p.parse_args()
-    generate(a.artifacts, a.output, a.model)
+    generate(a.artifacts, a.output, a.model, None if a.models is None else [int(i) for i in a.models.split(',')])

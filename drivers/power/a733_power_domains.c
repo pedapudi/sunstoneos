@@ -9,6 +9,7 @@
 #include "a733_power_domains.h"
 #include "a733_range.h"
 #include "a733_gpu_opp.h"
+#include "sunstone_crumb.h"
 
 #define BIT(n) (UINT32_C(1)<<(n))
 #define CCU UINT32_C(0x02002000)
@@ -71,8 +72,8 @@ static int level(const struct a733_power_domains *d,const struct profile *f)
  * TOP5 was OFF (board-session-20261025-7, s11-gpo-run), and the vendor
  * never reads it or the MBUS gate. Domain 5 therefore requires them only while it is ON; an ON from
  * OFF reads the PPU clock alone, and the GPU controller requires the gates
- * after TOP5 ON. Domains 1 and 4 have not been switched off on a board and
- * keep the full domain-level reads. */
+ * after TOP5 ON. Domains 1 and 4 keep the full domain-level reads;
+ * their physical OFF requests are unsupported. */
 static int level_before(const struct a733_power_domains *d,const struct profile *f)
 {return f->id==5 ? bits(d,R_CCU+0x1ac,1,1) : level(d,f);}
 /* Policy (+0x0) and status (+0x8) bits 3:0 must agree at OFF (0) or ON (8). */
@@ -118,6 +119,7 @@ static int status(struct a733_power_domains *d,struct a733_power_domain *m,uint6
 {
     if(now>=m->deadline)return -1;
     uint32_t v;const unsigned target=m->state==A733_POWER_DOMAIN_ON_WAIT ? 8 : 0;
+    if(m->id==4)sunstone_crumb(SUNSTONE_CRUMB_NPU_PPU_STATUS,target);
     if(!rd(d,A733_POWER_PCK_DOMAIN(m->id)+8,&v))return -1;
     if((v&15)==target)return 1;
     if((v&15)!=(8-target))return -1;
@@ -166,12 +168,14 @@ static void command(struct a733_power_domains *d,struct a733_power_domain *m,uin
         static const uint32_t masks[]={UINT32_MAX,UINT32_MAX,UINT32_MAX,UINT32_MAX,0xffff};
         for(unsigned i=0;i<5;++i) {
             uint32_t v;
+            if(m->id==4)sunstone_crumb(SUNSTONE_CRUMB_NPU_PPU_DELAY_WRITE,i);
             if(!wr(d,base+offsets[i],values[i]) || !rd(d,base+offsets[i],&v) || (v&masks[i])!=values[i]){fail_domain(d,m);return;}
         }
         m->delays_ready=1;
         if(!clock(d,&now)){fail_service(d);fail_domain(d,m);return;}
         if(now>=d->config.deadline){fail_domain(d,m);return;}
     }
+    if(m->id==4)sunstone_crumb(SUNSTONE_CRUMB_NPU_PPU_POLICY,on);
     if(!wr(d,base,(policy&~UINT32_C(15))|(on ? 8 : 0)) || !clock(d,&now) ||
        !a733_deadline_after(now,A733_POWER_PCK_BOUND_US,&m->deadline)){fail_domain(d,m);return;}
     if(m->deadline>d->config.deadline)m->deadline=d->config.deadline;
@@ -220,12 +224,12 @@ static int admit(struct a733_power_domains *d,struct a733_power_domain_row *r,un
     else if(m->state==A733_POWER_DOMAIN_OFF)command(d,m,policy,1);
     return m->state==A733_POWER_DOMAIN_ON_WAIT;
 }
-/* Domain 4 or 5 release: power-off at count zero, after the domain-level reads;
+/* Only domain 5 release: power-off at count zero, after the domain-level reads;
  * the pin is dropped once the domain is OFF. */
 static int release(struct a733_power_domains *d,struct a733_power_domain_row *r,unsigned g)
 {
     struct a733_power_domain *m=&d->domain[slot(r->domain)];const struct profile *f=&profiles[slot(r->domain)];
-    if(r->domain!=4 && r->domain!=5){publish(r,g,A733_POWER_ROW_REFUSED);return 0;}
+    if(r->domain!=5){publish(r,g,A733_POWER_ROW_REFUSED);return 0;}
     if(!r->counted){publish(r,g,A733_POWER_ROW_OFF);return 0;}
     if(m->state==A733_POWER_DOMAIN_FAILED){publish(r,g,A733_POWER_ROW_FAILED);return 0;}
     if(m->state==A733_POWER_DOMAIN_ON_WAIT || m->state==A733_POWER_DOMAIN_OFF_WAIT)return 1;

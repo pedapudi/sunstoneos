@@ -264,6 +264,11 @@ int os_application_prepare(void)
 #else
     grant.main_core=2;
 #endif
+#ifdef SUNSTONE_A733_OS_NPU_QUEUE
+    /* The current queue route is core 1, a Cortex-A55. */
+    if(m->cluster==SS_CLUSTER_A76)return 0;
+    grant.main_core=1;
+#endif
     unsigned workers=m->workers;
     unsigned pair=grant.main_core+1;
     if(workers){grant.worker_cores=1u<<pair;--workers;}

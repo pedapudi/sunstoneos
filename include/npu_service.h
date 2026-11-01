@@ -105,7 +105,16 @@ struct npu_service_runtime_state {
     void (*loop)(struct npu_service *);
     unsigned failed, idle_hints;
 };
+struct npu_service_direct {
+    void (*irq)(void *, BaseType_t *);
+    void *context;
+};
 struct npu_service {
+    /* Same routed core, installed/removed with local IRQs masked. A direct
+     * client owns job MMIO; the worker parks until it returns the idle NPU. */
+    const struct npu_service_direct *direct, *direct_request;
+    TaskHandle_t direct_owner;
+    atomic_uint direct_ready; /* 1 safe handoff acknowledged, 2 refused. */
     struct a733_npu_controller controller;
     struct a733_npu_ops ops;
     void *cookie;
