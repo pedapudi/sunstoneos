@@ -130,5 +130,7 @@ assert u.reg_read(UC_ARM64_REG_X0) == 0, f"backend check failed at line {u.reg_r
 # Every start publication makes the vendor secure configuration in its order,
 # each word read back: 2 to SMC0, then 0 to drm_ctrl.
 SEQUENCE = [('smc0', 2), ('smc0', None), ('drm_ctrl', 0), ('drm_ctrl', None)]
+publishes = not (a.clock_only or a.lifetime_only or a.firmware_clock_only)
+assert bool(secure) == publishes, f'secure configuration required={publishes}, accesses={secure}'
 assert secure == SEQUENCE * (len(secure) // 4), f'secure configuration accesses {secure}'
 print('PASS native GPU backend: real controller compatibility copy and restricted service-owned destination' if a.compat_only else 'PASS native GPU backend: refused bind preserves config; successful bind serializes both firmware clocks at the top point' if a.firmware_clock_only else 'PASS native GPU backend: expired lifetime permanently refuses later access' if a.lifetime_only else 'PASS native GPU backend: actual firmware event receive and restricted queue-owned destination' if a.event_only else 'PASS native GPU backend: private platform/controller clock regression refusal' if a.clock_only else 'PASS native GPU backend: identity, MMIO trace widths, memory/GIC composition, mapping refusal and retained isolation failures')
