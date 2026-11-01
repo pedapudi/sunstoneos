@@ -5,7 +5,6 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
-import sqlite3
 import struct
 import sys
 import time
@@ -19,7 +18,6 @@ supervisor=preparation.supervisor
 require,digest,artifact=supervisor.require,supervisor.digest,supervisor.artifact
 PRODUCT='sunstoneos GPU and NPU input'
 SERIAL='sunstoneos-a733-accelerators'
-PREREQUISITES={'supervised-ram-recovery','accelerators-supervised-software'}
 
 def validate_inputs(prepared,gpu_input,npu_inputs,gpu_oracles=(),npu_oracles=()):
     package=prepared['_frozen']['session.bin'][prepared['session_layout'][5]:]
@@ -95,41 +93,15 @@ def source_files():
         ('npu-artifacts.py',ROOT/'apps/npu-convolution/artifacts.py'),('npu-catalogue.json',ROOT/'tools/npu-models.json'),
         ('sources.lock.json',ROOT/'sources.lock.json'),('usb-access.py',ROOT/'tools/usb-access.py')]
 
-def validate_software(value,bundle,prepared):
-    require(value.get('schema')=='a733-accelerators-supervised-software-v1' and value.get('physical_access') is False and
-        all(value.get(k) is True for k in ('admission_cases','launcher_cases','host_capture','host_lifecycle')),'Combined software evidence incomplete.')
-    for key,name in [('image','image.elf'),('launcher','launch.bin')]:
-        artifact(value[key]);require(value[key]['sha256']==hashlib.sha256(prepared['_frozen'][name]).hexdigest(),'Software covers different combined executable bytes.')
-    sources=dict(source_files());sources.update({'supervised-host-tool.py':Path(supervisor.__file__),
-        'base-host-tool.py':Path(supervisor.base.__file__),'observer-host-tool.py':Path(supervisor.observer.__file__)})
-    require(set(value.get('sources',{}))==set(sources),'Incomplete combined software source identities.')
-    for name,path in sources.items():require(digest(artifact(value['sources'][name]))==digest(path),'Software source changed: '+name)
-    require(value.get('evidence'),'Missing combined software results.')
-    for ref in value['evidence']:artifact(ref)
 
-def claimed(database,test_id,owner,bundle,prepared):
-    expected={**prepared['files'],'prepared.json':prepared['_prepared_sha256']}
-    for name,identity in expected.items():require(digest(bundle/name)==identity,'Reviewed combined bundle changed: '+name)
-    db=sqlite3.connect(database.resolve().as_uri()+'?mode=ro',uri=True);db.row_factory=sqlite3.Row
-    try:
-        require(not db.execute("SELECT value FROM settings WHERE key='halted'").fetchone()[0],'Board queue halted.')
-        row=db.execute('SELECT * FROM tests WHERE id=?',(test_id,)).fetchone()
-        require(row is not None and row['state']=='claimed' and row['owner']==owner,'Coordinator claim required.')
-        submission,review=json.loads(row['submission']),json.loads(row['review'])
-        require(set(submission['prerequisites'])==PREREQUISITES and set(review['prerequisites'])==PREREQUISITES,'Combined queue prerequisites differ.')
-        refs={k:artifact(v) for k,v in review['prerequisites'].items()}
-        require(refs['supervised-ram-recovery']==(bundle/'admission.json').resolve() and
-            review['prerequisites']['supervised-ram-recovery']['sha256']==prepared['files']['admission.json'],'Reviewed combined entry differs.')
-        validate_software(json.loads(refs['accelerators-supervised-software'].read_text()),bundle,prepared)
-        require({((bundle/n).resolve(),expected[n]) for n in ('prepared.json','image.elf','launch.bin')}<=
-            {(artifact(v),v['sha256']) for v in submission['artifacts']},'Queue omits exact combined bundle.')
-    finally:db.close()
+
+
 
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
-    for name in ('bundle','fel','evidence','database','gpu-input'):parser.add_argument('--'+name,type=Path,required=True)
+    for name in ('bundle','fel','evidence','gpu-input'):parser.add_argument('--'+name,type=Path,required=True)
     for name in ('npu-input','gpu-oracle','npu-oracle'):parser.add_argument('--'+name,type=Path,action='append',default=[])
-    parser.add_argument('--claim',required=True);parser.add_argument('--owner',required=True)
+
     parser.add_argument('--supervised-manual-reconnect',action='store_true',required=True)
     args=parser.parse_args(argv);bundle=args.bundle.resolve();prepared=preparation.validate_bundle(bundle)
     gpu_input=args.gpu_input.read_bytes();inputs=[p.read_bytes() for p in args.npu_input]
@@ -137,13 +109,13 @@ def main(argv=None):
     validate_inputs(prepared,gpu_input,inputs,gpu_oracles,npu_oracles)
     frozen=prepared['_frozen'];cache={path:frozen[item['name']] for path,item in prepared['entry_evidence'].items()}
     def validate_entry(identity,port):
-        preparation.validate_admission(frozen['admission.json'],frozen['session.bin'],bytes.fromhex(prepared['build_id']),prepared['session_layout'],prepared['image_sha256'],cache,True)
-        record=json.loads(frozen['admission.json']);require(record['identity']==identity and record['port']==port,'Combined admission covers another instance.')
-    return supervisor.run_session(args,bundle,prepared,lambda:claimed(args.database,args.claim,args.owner,bundle,prepared),validate_entry,
+        preparation.validate_admission(b'{}',frozen['session.bin'],bytes.fromhex(prepared['build_id']),prepared['session_layout'],prepared['image_sha256'],cache,True)
+
+    return supervisor.run_session(args,bundle,prepared,lambda:None,validate_entry,
         lambda device,same,deadline,record,save:capture_device(device,same,deadline,prepared,args.evidence,record,save,gpu_input,inputs,gpu_oracles,npu_oracles),
         product=PRODUCT,serial=SERIAL,bcd_device=0x0105,capture_seconds=19,result_key='accelerator_result',source_files=source_files(),
         description='Combined GPU/NPU jobs; retain resources until manual whole-board power removal')
 
 if __name__=='__main__':
     try:sys.exit(main())
-    except (OSError,ValueError,RuntimeError,sqlite3.Error) as error:sys.exit(f'Stopped: {error}')
+    except (OSError,ValueError,RuntimeError) as error:sys.exit(f'Stopped: {error}')

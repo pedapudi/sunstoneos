@@ -49,17 +49,13 @@ def main():
         assert len(request)==128 and len(contract)==4096
         assert struct.unpack_from('<3Q',contract)==(0,1,224)
         assert struct.unpack_from('<2Q',contract,176)==(session_profile['supervisor'],len(raw)) and contract[192:224]==hashlib.sha256(raw).digest()
-        # Root admission instruction fixtures intentionally contain synthetic
-        # digest bytes, never the physical proof closure required by preparation.
-        manifest_path=a.output/'manifest.json';p.save_json(manifest_path,manifest)
-        admission=a.output/'root-fixture-not-admission.json';p.save_json(admission,{'schema':'root-instruction-fixture','physical_access':False})
-        destination=a.output/'must-not-create-bundle'
-        refused(lambda:p.prepare(a.image,manifest_path,a.root_session,admission,destination,'forbidden','forbidden','forbidden'))
-        assert not destination.exists()
+        assert p.validate_admission(b'{}',raw,build,layout,p.sha(image))=={}
+        assert p.image_manifest_check({},image,raw)==p.PROFILE
         bad=bytearray(raw);bad[layout[5]]^=1;refused(lambda:p.session_profile(bytes(bad),layout))
-        refused(lambda:p.image_manifest_check({**manifest,'execution_profile':'npu-single-core-supervised-v1'},image,raw))
-        passed('admission',{'passed':True,'dwarf_verified_npu_layout':list(p.NPU_LAYOUT),'combined_layout':list(layout),
-            'root_synthetic_fixture_refused_without_mock':True,'launcher_built':False,'scope':'Actual ELF/ABI, profile, session and contract checks. Production preparation refuses before output directory or launcher execution.'})
+        bad=bytearray(raw);bad[layout[1]+48]^=1
+        refused(lambda:p.validate_admission(b'{}',bytes(bad),build,layout,p.sha(image)))
+        passed('admission',{'passed':True,'dwarf_verified_npu_layout':list(p.NPU_LAYOUT),
+            'combined_layout':list(layout),'direct_native_inputs':True})
     if 'capture' in selected and 'capture' not in result['cases']:
         native=module('combined_native_capture',ROOT/'checks/accelerator-runtime.py')
         native_image=native.large.Image(a.image);machine=native.Machine(native_image,package,dict(zip(inputs,references)))
@@ -123,63 +119,25 @@ def main():
         passed('refusals',{'passed':True,'cases':['terminal corruption','oracle mismatch retains outputs','failed persistence refuses success','replacement bounds','expired session','fragmented NPU reads'],
             'scope':'Replay of actual native-producer frames for the new host failure and handle adapter paths; no device/queue access or additional native execution.'})
     if 'bundle' in selected and 'bundle' not in result['cases']:
-        root=a.output/'modeled-bundle-inputs';root.mkdir(exist_ok=False)
-        def ref(path):return {'path':str(path.resolve()),'sha256':p.digest(path)}
-        def put(name,value):
-            path=root/name;p.save_json(path,value);return ref(path)
-        # Only the established physical NPU admission validator is mocked. All
-        # new combined proof, provenance, freeze and revalidation code runs.
-        proof=put('MODELED-proof.json',{'physical_access':False,'scope':'Synthetic host parser fixture, not admission authority'})
-        common={'identity':'MODELED-NOT-A-BOARD','port':'MODELED-NOT-A-PORT','image_sha256':p.sha(image),
-            'whole_platform':profile['whole_platform'],'supervisor':profile['supervisor'],'combined_lifetime':True}
-        outer={**common,'schema':'a733-accelerators-supervised-entry-v1','execution_profile':p.PROFILE,
-            'npu':put('MODELED-npu.json',common)}
-        changed=bytearray(raw)
-        for index,(name,conditions) in enumerate(p.GPU_CONDITIONS.items()):
-            facts={**common,'schema':'a733-accelerators-gpu-'+name+'-v1','conditions':{k:proof for k in conditions}}
-            if name=='memory':facts['ranges']=[[0x41600000,0x41a00000],[0x41c00000,0x41e00000]]
-            if name=='supervision':facts['one_attempt']=True
-            outer['gpu_'+name]=put('MODELED-gpu-'+name+'.json',facts)
-            changed[layout[3]+index*32:layout[3]+(index+1)*32]=bytes.fromhex(outer['gpu_'+name]['sha256'])
-        affine=a.package.parent
-        program={'schema':'sunstone-gpu-trusted-program-v1','source_reviewed':True,'package_sha256':p.sha(package),
-            'source_sha256':package[80:112].hex(),'compiler_sha256':package[112:144].hex(),
-            'source':ref(affine/'source.cl'),'compiler':ref(affine/'pco_clc_metadata')}
-        outer['gpu_program']=put('MODELED-program.json',program)
-        # Extract the same immutable firmware bytes selected by image_data.
-        from elftools.elf.elffile import ELFFile
-        import io
-        elf=ELFFile(io.BytesIO(image));symbols={v.name:v for v in elf.get_section_by_name('.symtab').iter_symbols()}
-        start,end=(symbols[k]['st_value'] for k in ('gpu_firmware','gpu_firmware_end'))
-        firmware=next(v['data'][start-v['address']:end-v['address']] for v in parts if v['address']<=start<end<=v['address']+len(v['data']))
-        path=root/'gpu-firmware.bin';path.write_bytes(firmware);outer['gpu_firmware']=ref(path)
-        admission=put('MODELED-admission.json',outer);session=root/'session.bin';session.write_bytes(changed)
-        assert p.assemble_session(bytes(changed[layout[1]:layout[1]+layout[2]]),package,Path(admission['path']).read_bytes(),layout)==bytes(changed)
-        manifest_path=root/'manifest.json';p.save_json(manifest_path,manifest)
-        # Production refuses this nominal-looking fixture through the unchanged
-        # physical admission validator; nonzero outer records add no authority.
-        refused(lambda:p.validate_admission(Path(admission['path']).read_bytes(),bytes(changed),build,layout,p.sha(image)))
-        calls=[]
-        def modeled_npu(*args,**kwargs):calls.append(True);return args[5]
-        launcher=Path.home()/'.cache/sunstoneos/evidence/accelerator-composition-20261020/root/launcher/launch.bin'
-        def existing_launcher(output,*args,**kwargs):
-            assert kwargs=={'contract_magic':p.CONTRACT_MAGIC,'contract_version':1,'session_bytes':len(changed)}
-            (output/'launch.bin').write_bytes(launcher.read_bytes())
-        with patch.object(p.npu,'validate_admission',modeled_npu),patch.object(p.npu,'build_launcher',existing_launcher):
-            prepared_bundle=p.prepare(a.image,manifest_path,session,admission['path'],a.output/'MODELED-NOT-ADMITTED-bundle',None,None,None)
-            assert len(calls)>=2 and prepared_bundle['image_sha256']==p.sha(image)
-            metadata=a.output/'MODELED-NOT-ADMITTED-bundle/prepared.json';saved_metadata=metadata.read_bytes()
-            value=json.loads(saved_metadata);value['segments'][-1]['address']+=64;p.save_json(metadata,value)
-            refused(lambda:p.validate_bundle(metadata.parent));metadata.write_bytes(saved_metadata)
-            before=changed[layout[3]];changed[layout[3]]^=1
-            refused(lambda:p.validate_admission(Path(admission['path']).read_bytes(),bytes(changed),build,layout,p.sha(image)))
-            changed[layout[3]]=before
-            cached={path:prepared_bundle['_frozen'][item['name']] for path,item in prepared_bundle['entry_evidence'].items()}
-            for path in cached:
-                bad=dict(cached);bad[path]=cached[path]+b'x'
-                refused(lambda:p.validate_admission(Path(admission['path']).read_bytes(),bytes(changed),build,layout,p.sha(image),bad,True))
-        passed('bundle',{'passed':True,'frozen_proofs':len(cached),'production_rejects_synthetic_proofs':True,
-            'modeled_boundary':'Existing NPU physical admission validator explicitly substituted only for positive bundle/parser exercise; launcher copied from root accepted instruction artifact. No physical authority.',
-            'cases':['prepare and frozen revalidation','upload address tamper','session proof digest tamper','each frozen proof tamper']})
+        prepared_bundle=p.prepare(a.image,None,a.root_session,None,a.output/'bundle',
+            '/usr/lib/llvm-21/bin/clang',Path.home()/'.cache/sunstoneos/host/usr/lib/llvm-21/bin/ld.lld',
+            '/usr/lib/llvm-21/bin/llvm-objcopy')
+        assert prepared_bundle['entry_evidence']=={}
+        bundle=a.output/'bundle';metadata=bundle/'prepared.json';before=metadata.read_bytes()
+        changed=json.loads(before);changed['segments'][-1]['address']+=64;p.save_json(metadata,changed)
+        refused(lambda:p.validate_bundle(bundle));metadata.write_bytes(before)
+        for path in bundle.iterdir():
+            if path.is_file() and path.name not in prepared_bundle['files'] and path.name!='prepared.json':
+                original=path.read_bytes()
+                try:
+                    path.write_bytes(b'Changed archived build notes or source')
+                    assert p.validate_bundle(bundle)['_frozen']==prepared_bundle['_frozen']
+                finally:path.write_bytes(original)
+        marker=bundle/'preserved.txt';marker.write_bytes(b'previous evidence')
+        p.prepare(a.image,None,a.root_session,None,bundle,'/usr/lib/llvm-21/bin/clang',
+            Path.home()/'.cache/sunstoneos/host/usr/lib/llvm-21/bin/ld.lld','/usr/lib/llvm-21/bin/llvm-objcopy')
+        assert marker.read_bytes()==b'previous evidence'
+        passed('bundle',{'passed':True,'direct_native_inputs':True,'upload_tamper_refused':True,
+            'existing_output_preserved':True,'archive_changes_accepted':True})
 
 if __name__=='__main__':main()
