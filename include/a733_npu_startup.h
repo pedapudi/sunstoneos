@@ -53,6 +53,12 @@ enum { A733_NPU_STARTUP_TOKENS, A733_NPU_STARTUP_SUPPLY, A733_NPU_STARTUP_PASS,
     A733_NPU_STARTUP_SETTLE, A733_NPU_STARTUP_FINAL, A733_NPU_STARTUP_READY,
     A733_NPU_STARTUP_STOPPED, A733_NPU_STARTUP_POWER_OFF_WAIT,
     A733_NPU_STARTUP_POWER_OFF, A733_NPU_STARTUP_POWER_ON_WAIT };
+/* Board policy always prohibits physical domain-4 OFF. These bits explain
+ * the retained first refusal; VERIFIED is a prior supply observation, not a
+ * fresh electrical measurement or proof of exclusive physical ownership. */
+#define A733_NPU_OFF_SHARED_SUPPLY (1u << 0)
+#define A733_NPU_OFF_SHARED_SRAM (1u << 1)
+#define A733_NPU_OFF_SUPPLY_VERIFIED (1u << 2)
 struct a733_npu_startup {
     struct a733_npu_startup_config config;
     struct a733_npu_startup_providers providers;
@@ -84,9 +90,8 @@ struct a733_npu_startup {
     /* Counter microseconds of the first step and of READY. Written by the
      * bootstrap task; readable by a client once the service is active. */
     uint64_t entry_us, ready_us;
-    /* Bootstrap-only transition telemetry, counter microseconds. Request times
-     * precede the service command; acknowledgement times follow physical checks.
-     * Policy and status contain their coherent low nibbles. */
+    /* Reserved legacy physical-transition telemetry. Unsupported OFF/restart
+     * leaves these fields unchanged; refusal observations are appended below. */
     uint64_t power_off_request_us, power_off_ack_us, power_on_request_us, power_on_ack_us;
     unsigned power_request, power_off_policy, power_off_status, power_on_policy, power_on_status;
     /* 1 from the readback that shows the shared SRAM routed to the NPU until
@@ -96,6 +101,11 @@ struct a733_npu_startup {
      * register window may be accessed. Written by the bootstrap task with
      * release order; read by the service worker before each access. */
     atomic_uint window_open;
+    /* First physical-OFF refusal, sampled only from retained session state.
+     * No PMIC or domain access is needed to enforce the board policy.
+     * off_counted is UINT32_MAX if the service request was still pending. */
+    unsigned off_refusal, off_authority, off_request, off_counted, off_sram_routed;
+    uint64_t off_rail_shared, off_rail_exclusive;
 };
 /* EL1, before the scheduler starts and before the power service first runs:
  * copies the configuration and providers and registers the domain-4 row. */
@@ -138,12 +148,11 @@ int a733_npu_startup_prepared(struct a733_npu_startup *);
  * registered row, tokens, SRAM grant and deadline; no acquire, OFF or reset
  * recovery. Reuses the adopted PLL/local-open stages. Failure is terminal. */
 enum a733_npu_platform_result a733_npu_startup_restart(struct a733_npu_startup *);
-/* Bound bootstrap, after controller CLOSE and local STOPPED: call power_off
- * until READY, then power_restart until READY. PENDING waits for the existing
- * power service; RETAINED is terminal and preserves all remaining ownership.
- * OFF READY requires physical coherent OFF and full domain gate checks; a
- * released row alone is insufficient. Restart uses the same row with a fresh
- * generation and reuses the ordinary adopted-PLL restart. No rail or PLL writes. */
+/* Physical domain-4 OFF and its paired restart are unsupported on this
+ * board: shared SRAM/ROM requires domain 4 ON, and DCDC2 also supplies SoC
+ * and DRAM. Both refuse with RETAINED, preserve ownership and latch failure.
+ * The first refusal records retained observations without MMIO/PMIC access.
+ * Use stop/restart for the supported local clock and reset operation. */
 enum a733_npu_platform_result a733_npu_startup_power_off(struct a733_npu_startup *);
 enum a733_npu_platform_result a733_npu_startup_power_restart(struct a733_npu_startup *);
 /* Bound bootstrap only: close software register admission after a failed

@@ -35,6 +35,11 @@ def main():
         ('FIRST_CLOSE', 'STOPPED', 'RESTART_READY', 'REOPEN'))})
     expected.update({0x0648 + i: 'NPU_POWER_' + name for i, name in enumerate(
         ('OFF_REQUEST', 'OFF_ACK', 'ON_REQUEST', 'ON_ACK'))})
+    expected.update({0x064c + i: 'NPU_' + name for i, name in enumerate(
+        ('LOCAL_STOP_WRITE', 'LOCAL_OPEN_WRITE', 'PLL_OPEN_WRITE', 'SRAM_TO_CPU',
+         'SRAM_TO_NPU', 'POWER_PRECHECK', 'POWER_REFUSED', 'PPU_DELAY_WRITE',
+         'PPU_POLICY', 'PPU_STATUS'))})
+    assert len(set(stages.values())) == len(stages)
     for number, name in expected.items():
         assert stages.get(number) == name, (hex(number), stages.get(number), name)
     epoch = 0x1234
