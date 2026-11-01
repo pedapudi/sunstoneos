@@ -201,3 +201,24 @@ processor operating points. Its expected outcome is `watchdog-reset`, with
 `quarantined=false`. Its CLI exit code is 1 because a watchdog reset is a failed
 image run. It tests recovery without repeating a failed workload. Stop after
 any unexpected transport failure or no-return and preserve the result path.
+
+Finite NPU diagnostics use `--kind npu`. Supply a `--template` directory with
+`session.bin`, the reviewed 456-byte native NPU session template. The matching
+`manifest.json` may be in that directory or beside the ELF. Submission copies
+both files into the queue entry and hashes the finite NPU host dependencies.
+`--host-tree` selects the finite NPU source tree when it differs from the runner.
+The runner checks the image, manifest and template before opening the board.
+
+The finite adapter initializes DDR through the shared queue path, captures the
+NPU system-register set and rebinds the native session through the existing NPU
+preparation helper. It does not run the CPU rail helper. Before uploads it saves
+the complete 18 MiB NPU DRAM reservation. Immediately before watchdog arming it
+checks the reviewed ROM instructions and native NPU entry state again.
+
+After normal return, the interrupt-profile parser validates the monitor,
+platform log and cleanup receipt before restoring the saved DRAM. Numerical
+mismatch still permits restoration after validated retirement and remains a
+failed result. An invalid receipt or incomplete restoration quarantines the
+instance. The new ROM retains ownership of SRAM; the adapter never restores
+old SRAM over it. Watchdog recovery follows the shared runner path and does
+not restore potentially invalid DRAM. These host paths do not qualify hardware.

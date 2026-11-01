@@ -119,6 +119,9 @@ class Live:
             except NoReturn as error:
                 self.quarantine(str(error))
                 raise
+            finally:
+                if self.record.get('npu_dirty') and not self.record.get('dram_restored'):
+                    self.quarantine('NPU RAM ownership remains unresolved.')
 
     def adopt(self, node):
         self.access.require_session(node)
@@ -420,16 +423,29 @@ class Live:
         self.journal()
 
     def live_state(self):
-        values = [int(v,16) for v in self.tx(*[x for a in dev.WORDS for x in ('readl', hex(a))]).split()]
-        require(len(values) == len(dev.WORDS), 'Live state word count differs.')
-        return {'identity': self.identity, 'port': self.args.port, 'words': {hex(a):v for a,v in zip(dev.WORDS,values)}}
+        words = images.load('npu_live_words', (self.args.host_tree or ROOT)/'apps/npu-finite/development.py').WORDS if self.args.kind == 'npu' else dev.WORDS
+        values = [int(v,16) for v in self.tx(*[x for a in words for x in ('readl', hex(a))]).split()]
+        require(len(values) == len(words), 'Live state word count differs.')
+        return {'identity': self.identity, 'port': self.args.port, 'words': {hex(a):v for a,v in zip(words,values)}}
 
     def prepare(self, info):
         return images.prepare(self.args, info, {} if self.args.kind=='probe' else self.live_state(), self.evidence/'bundle')
 
     def launch(self, plan):
+        if plan.get('format') == 'npu':
+            plan['finite'].require_entry_state(self.tx)
+            backup = self.evidence/'npu-DRAM-before.bin'
+            self.read(*plan['finite'].DRAM, backup)
+            self.record['dram_restored'] = False
+            self.record['npu_dirty'] = True
+            plan.update(dram_backup=backup, dram_backup_sha256=images.sha(backup))
+            self.record['dram_backup_sha256'] = plan['dram_backup_sha256']
+            self.journal()
         for address, source in plan['uploads']:
             self.upload(address, source)
+        if plan.get('format') == 'npu':
+            self.sanity()
+            plan['finite'].require_entry_state(self.tx)
         self.record['launch_attempted'] = True
         self.journal()
         self.arm(plan['watchdog']['mode'])
@@ -453,8 +469,12 @@ class Live:
     def capture(self, plan):
         try:
             return images.capture(self, plan, self.args)
-        except ValueError as error:
-            raise Mismatch(str(error)) from error
+        except BaseException as error:
+            if plan.get('format') == 'npu' and not self.record.get('dram_restored'):
+                self.quarantine('NPU retirement or DRAM restoration unverified: '+str(error))
+            if isinstance(error, ValueError):
+                raise Mismatch(str(error)) from error
+            raise
 
 
 def expectation(value):
@@ -502,6 +522,10 @@ def references(args):
             paths.update(p for p in (tree/directory).glob('*') if p.is_file())
         paths.add(tree/'drivers/clock/a733_cpu_clock.c')
         paths.add(tree/'apps/board/launch.c')
+        if args.kind == 'npu':
+            finite = images.load('reference_npu_irq', tree/'apps/npu-interrupt/host.py').finite
+            paths.update(tree/name for name in finite.HOST_SOURCES)
+            paths.update(tree/name for name in ('apps/npu-finite/development.py','tools/vendor-mbus.py'))
     paths.update((args.fel,args.rail_helper))
     for directory in (args.ddr_build,args.ddr_restore):
         manifest = directory/'manifest.json'
@@ -548,6 +572,13 @@ def run_image(args, backend=Live):
         descriptor = json.loads(descriptor_path.read_text()) if descriptor_path.exists() else None
         if descriptor:
             save(evidence/'image.board.json', descriptor)
+        if args.kind == 'npu':
+            manifest = (args.template/'manifest.json') if args.template else args.image.parent/'manifest.json'
+            if not manifest.exists():
+                manifest = args.image.parent/'manifest.json'
+            shutil.copy2(manifest, evidence/'manifest.json')
+            finite = images.load('preflight_npu_irq',(args.host_tree or ROOT)/'apps/npu-interrupt/host.py').finite
+            finite.original.session_profile((args.template/'session.bin').read_bytes(), (456,224,232,72,96,128))
         args.image = frozen
         if args.reference_inventory:
             verify_references(json.loads(args.reference_inventory.read_text()))
@@ -679,7 +710,14 @@ class Queue:
             options['descriptor'] = str(target)
         template = args.template or (images.GPU_TEMPLATE if args.kind=='gpu-return' else images.CONTROL)
         if args.kind!='probe':
-            if args.kind=='gpu-return':
+            if args.kind == 'npu':
+                require(args.template is not None, 'NPU requires a template directory with session.bin.')
+                destination = directory/'template'
+                destination.mkdir()
+                shutil.copy2(template/'session.bin', destination/'session.bin')
+                manifest = template/'manifest.json'
+                shutil.copy2(manifest if manifest.exists() else source.parent/'manifest.json', destination/'manifest.json')
+            elif args.kind=='gpu-return':
                 shutil.copytree(template, directory/'template')
             else:
                 # Generic sessions need service facts and manifest inputs,
@@ -874,7 +912,7 @@ def run_options(parser, submit=False):
     parser.add_argument('--storage-write', action='store_true')
     parser.add_argument('--descriptor', type=Path, help='Hash-bound image metadata; defaults to IMAGE.board.json.')
     parser.add_argument('--template', type=Path, help='Typed-session bundle, or legacy bundle with board/ and assets/.')
-    parser.add_argument('--host-tree', type=Path, help='Legacy GPU image source tree; generic images use this OS tree.')
+    parser.add_argument('--host-tree', type=Path, help='Legacy GPU or finite NPU host source tree; generic images use this OS tree.')
     parser.add_argument('--input', action='append', type=Path, default=[])
     parser.add_argument('--fel', type=Path, default=dev.FEL)
     parser.add_argument('--rail-helper', type=Path, default=dev.RAIL_HELPER)

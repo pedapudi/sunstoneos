@@ -533,10 +533,107 @@ def rail_cases(out):
         passed('pinned-rail-helper-'+variant)
 
 
+def finite_npu_cases(out, image_root, state, fixture):
+    live = json.loads(state.read_bytes())
+    template = out/'npu-template'
+    template.mkdir()
+    (template/'session.bin').write_bytes((image_root/'session-template.bin').read_bytes())
+    for name in ('local-restart','model-switch','sdk-access','power-cycle'):
+        root = out/('npu-'+name)
+        root.mkdir()
+        image = root/'image.elf'
+        image.write_bytes((image_root/name/'image.elf').read_bytes())
+        (root/'manifest.json').write_bytes((image_root/name/'manifest.json').read_bytes())
+        args = arguments(root,'--kind','npu','--template',str(template))
+        args.image = image
+        info = images.inspect(image,'npu')
+        assert info['finite_npu'] and not info['entry_guard']
+        plan = images.prepare(args,info,live,root/'bundle')
+        assert plan['format']=='npu' and plan['watchdog']=={'mode':0xb1,'session_seconds':20}
+        assert all(source.is_file() for _,source in plan['uploads'])
+        if name == 'model-switch':
+            plan.update(json.loads((fixture/'identities.json').read_bytes()))
+            backup = root/'backup.bin'
+            backup.write_bytes(bytes(plan['finite'].DRAM[1]))
+            plan.update(dram_backup=backup,dram_backup_sha256=images.sha(backup))
+            class Owner:
+                evidence=root
+                record={}
+                restored=[]
+                def read(self,address,size,path):
+                    key={0x42000000:'monitor',plan['geometry']['log']:'platform',plan['geometry']['receipt']:'receipt'}[address]
+                    raw=(fixture/'nominal'/(key+'.bin')).read_bytes()
+                    assert len(raw)==size
+                    path.write_bytes(raw)
+                    return raw
+                def upload(self,address,path):
+                    assert address==0x41000000 and path.stat().st_size==0x1200000
+                    self.restored.append(address)
+                def journal(self):pass
+            owner=Owner()
+            captured=images.capture(owner,plan,args)
+            assert captured['valid'] and owner.restored==[0x41000000] and owner.record['dram_restored']
+            owner.restored.clear()
+            original=owner.read
+            def corrupt(address,size,path):
+                raw=original(address,size,path)
+                return bytes([raw[0]^1])+raw[1:] if address==plan['geometry']['receipt'] else raw
+            owner.read=corrupt
+            try:images.capture(owner,plan,args)
+            except ValueError:pass
+            else:raise AssertionError('Malformed finite retirement accepted')
+            assert not owner.restored
+            model=Model('normal')
+            live_owner=board.Live(args,root,{},access=model,process=model.process,now=model.now,sleep=model.sleep)
+            live_owner.read=corrupt
+            with live_owner.locked():
+                try:live_owner.capture(plan)
+                except board.Mismatch:pass
+                else:raise AssertionError('Malformed report accepted by live capture')
+            assert live_owner.quarantined and not live_owner.record.get('dram_restored')
+        if name == 'local-restart':
+            calls=[]
+            model=Model('normal')
+            owner=board.Live(args,root,{},access=model,process=model.process,now=model.now,sleep=model.sleep)
+            finite=plan['finite']
+            original_check=finite.require_entry_state
+            finite.require_entry_state=lambda tx:calls.append('entry')
+            owner.read=lambda address,size,path:(path.write_bytes(bytes(size)),calls.append(('backup',address,size)))[0]
+            owner.upload=lambda address,path:calls.append(('upload',address))
+            owner.sanity=lambda:calls.append('rom')
+            owner.arm=lambda mode:None
+            def stop(*args):raise RuntimeError('stop before launch')
+            owner.tx=stop
+            try:
+                try:owner.launch(plan)
+                except RuntimeError:pass
+            finally:finite.require_entry_state=original_check
+            assert calls[0]=='entry' and calls[1]==('backup',0x41000000,0x1200000)
+            assert calls[-2:]==['rom','entry'] and owner.record['npu_dirty']
+            assert plan['dram_backup'].stat().st_size==0x1200000
+            try:
+                with owner.locked():raise ValueError('modeled dirty preload refusal')
+            except ValueError:pass
+            assert owner.quarantined
+            queued=arguments(root,'--kind','npu','--template',str(template),submit=True)
+            queued.image=image
+            job=board.Queue(root/'queue').submit(queued)
+            frozen=Path(job['directory'])/'template'
+            assert (frozen/'manifest.json').read_bytes()==(image.parent/'manifest.json').read_bytes()
+            assert (frozen/'session.bin').read_bytes()==(template/'session.bin').read_bytes()
+            refs=json.loads((Path(job['directory'])/'references.json').read_bytes())
+            assert str(ROOT/'apps/npu-finite/development.py') in refs
+            assert str(ROOT/'apps/npu-interrupt/host.py') in refs
+        passed('finite-npu-frozen-preparation-'+name)
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--out',type=Path,required=True)
     parser.add_argument('--hello',type=Path)
+    parser.add_argument('--npu-images',type=Path)
+    parser.add_argument('--npu-state',type=Path)
+    parser.add_argument('--npu-fixture',type=Path)
     parser.add_argument('--only',default='transport,queue,policy,daemon,artifacts,reports,ddr,rails,offline',help='Comma-separated groups to resume.')
     args=parser.parse_args()
     args.out.mkdir(parents=True,exist_ok=False)
@@ -552,6 +649,7 @@ def main():
     if 'ddr' in groups:owned_ddr_cases(args.out)
     if 'rails' in groups:rail_cases(args.out)
     if args.hello and 'offline' in groups:offline(args.out,args.hello)
+    if 'npu' in groups:finite_npu_cases(args.out,args.npu_images,args.npu_state,args.npu_fixture)
     board.save(args.out/'results.json',rows)
     print(f'{len(rows)} checks passed; no device access')
 

@@ -63,6 +63,14 @@ def inspect(image, kind, descriptor=None, host_tree=None):
         native = load('native_probe_contract', ROOT/'tools/board_probe.py').inspect(image)
         return {'symbols':names,'watchdog':native['watchdog'],'generic':False,'entry_guard':False,
                 'descriptor':descriptor,'native_probe':native}
+    if kind == 'npu' and 'ss_result_record' not in names:
+        tree = host_tree or ROOT
+        dev = load('inspect_npu_dev', tree/'tools/dev-run.py')
+        finite = load('inspect_npu_irq', tree/'apps/npu-interrupt/host.py').finite
+        manifest = json.loads((Path(image).parent/'manifest.json').read_bytes())
+        facts = dev.npu_check(image, host, finite, manifest)
+        return dict(facts, symbols=names, generic=False, entry_guard=False,
+                    descriptor=descriptor, finite_npu=True)
     marker = host.watchdog_marker(image) if names else descriptor.get('watchdog')
     require(marker is not None, 'Image does not admit the host-armed watchdog; rebuild with RTC breadcrumbs.')
     require(set(marker) == {'mode', 'session_seconds'} and all(type(v) is int for v in marker.values()) and
@@ -158,6 +166,19 @@ def launcher(out, size, mode, seconds=60):
 
 
 def prepare(args, info, live, out):
+    if info.get('finite_npu'):
+        tree = args.host_tree or ROOT
+        finite = load('prepare_npu_irq', tree/'apps/npu-interrupt/host.py').finite
+        helper = load('prepare_npu_development', tree/'apps/npu-finite/development.py')
+        template = Path(args.template)
+        meta = helper.prepare(finite, Path(args.image), Path(args.image).parent/'manifest.json',
+                              template/'session.bin', live, out, str(CLANG), str(LLD),
+                              '/usr/lib/llvm-21/bin/llvm-objcopy')
+        helper.validator(finite, finite.watchdog_marker)(out)
+        uploads = [(part['address'], out/part['name']) for part in meta['segments']]
+        uploads += [(0x42000000,out/'result-zero.bin'),(0x42004000,out/'contract.bin'),
+                    (0x52c00,out/'request.bin'),(0x52d00,out/'report-zero.bin'),(0x52000,out/'launch.bin')]
+        return dict(meta, uploads=uploads, launch=['exe','0x52000'], format='npu', finite=finite)
     if info.get('native_probe'):
         return load('prepare_native_probe', ROOT/'tools/board_probe.py').prepare(args.image,info['native_probe'],args.input,out)
     dev = load('runner_dev', ROOT / 'tools/dev-run.py')
@@ -253,6 +274,19 @@ def write(path, data):
 
 def capture(owner, plan, args):
     out = owner.evidence
+    if plan['format'] == 'npu':
+        finite = plan['finite']
+        reports = [owner.read(address, size, out/(name+'.bin')) for name,address,size in
+                   [('monitor',0x42000000,128),('platform',plan['geometry']['log'],16384),
+                    ('receipt',plan['geometry']['receipt'],88)]]
+        decoded = finite.validate_reports(*reports,plan)
+        # Validated retirement permits restoration even after numerical mismatch.
+        backup = plan['dram_backup']
+        require(sha(backup) == plan['dram_backup_sha256'], 'Saved NPU DRAM changed.')
+        owner.upload(finite.DRAM[0], backup)
+        owner.record['dram_restored'] = True
+        owner.journal()
+        return {'valid': decoded['status'] == 0, 'payload': decoded['log'].encode(), 'report': decoded}
     if plan['format']=='native-probe':
         probe=load('capture_native_probe',ROOT/'tools/board_probe.py')
         decoded=probe.receipt(owner.read(probe.RECEIPT,128,out/'probe-receipt.bin'),plan)
