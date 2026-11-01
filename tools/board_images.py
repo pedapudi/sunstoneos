@@ -109,8 +109,13 @@ def finite_npu_info(image, host, finite, manifest):
             'NPU requires the exact host-armed watchdog marker (mode 0xb1, 20 seconds).')
     parts, address, build, layout, geometry = finite.image_profile(Path(image).read_bytes(), manifest)
     profile = finite.geometry_profile(geometry)
-    require(profile in (finite.STARTUP, finite.INFERENCE, finite.RUNTIME, finite.RESTART,
-                        finite.SWITCH, finite.SDK, finite.POWER), 'Unsupported finite NPU profile.')
+    profiles = [finite.STARTUP, finite.INFERENCE, finite.RUNTIME, finite.RESTART,
+                finite.SWITCH, finite.SDK, finite.POWER]
+    # Older frozen decoders have no cancellation extension. The new decoder
+    # validates its immutable command marker and controller-only recovery path.
+    if getattr(finite, 'ACTIVE_CANCEL', None) == 'npu-active-cancel-return-v1':
+        profiles.append(finite.ACTIVE_CANCEL)
+    require(profile in profiles, 'Unsupported finite NPU profile.')
     require(layout[:3] == (456, 224, 232), 'NPU development session layout differs.')
     return {'watchdog': watchdog, 'geometry': geometry, 'session_layout': list(layout),
             'execution_profile': profile, 'image_sha256': sha(image), 'build_id': build.hex()}
