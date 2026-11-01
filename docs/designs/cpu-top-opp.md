@@ -751,9 +751,10 @@ driver completions; it does not qualify physical clocks or rails.
   domains read their boot PLL and mux words; a rail already at 800 mV gets
   no write (`checks/cpu-rails-return.c`, `checks/os-cpu-return-rails.py`).
   For an image that links the CPU-return entry guard, `tools/dev-run.py`
-  runs it by default before the launch and after the run: after a normal
-  return, or after any other outcome whose read-only capture shows the boot
-  clock words. On board 3-3 one helper run lowered DCDC5 from 1000 mV and
+  runs it by default before the launch and after a normal return. After any
+  other outcome DRAM can be uninitialized, and the helper launch uses DRAM
+  over FEL, so cold DDR comes first and the next launch lowers the rails.
+  On board 3-3 one helper run lowered DCDC5 from 1000 mV and
   DCDC3 from 1050 mV, each reading back 800 mV
   (`~/.cache/sunstoneos/evidence/dev-runs-1031/3-3-rail-helper-201322/`).
   Restoration after a fatal or deadline outcome has no board run yet.

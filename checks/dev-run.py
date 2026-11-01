@@ -21,15 +21,14 @@ instance without holding the process, a watchdog reset is decoded, a state
 change since capture stops the run before any write, and an external decoder
 module decodes the result and may report it failed.
 
-The rail helper runs after every normal return and after a watchdog reset
-whose later capture shows the boot clock words, and not after a quarantine,
-a capture off the boot words or --no-restore-rails. Its report accepts only a
-normal return with one 800 mV VOLT readback per rail above 800 mV at entry,
-DCDC3 first; its REFUSED and STOPPED returns are controlled outcomes of the
-actual kernel runner. Before a launch the helper runs by default for an image
-that links the CPU-return entry guard, ahead of the capture, and a helper run
-that does not complete stops before the capture. No USB node, queue or FEL
-executable is opened.
+The rail helper runs after every normal return, and not after a watchdog
+reset, a quarantine, any other failure or --no-restore-rails. Its report
+accepts only a normal return with one 800 mV VOLT readback per rail above
+800 mV at entry, DCDC3 first; its REFUSED and STOPPED returns are
+controlled outcomes of the actual kernel runner. Before a launch the helper
+runs by default for an image that links the CPU-return entry guard, ahead of
+the capture, and a helper run that does not complete stops before the
+capture. No USB node, queue or FEL executable is opened.
 """
 import argparse
 import contextlib
@@ -375,13 +374,7 @@ def transport_case(host, launcher, root, live, variant, argv=(), payload=None):
         return {'modeled': True, 'complete': True, 'supply': ['SUPPLY modeled'], 'volt': [], 'rail_state': [],
                 'outcome': [dev.RAIL_COMPLETE]}
     def after(fel):
-        """The read-only capture after a run that did not return normally."""
-        if variant in ('foreign-result', 'bad-report'):
-            raise ValueError('USB instance requires recovery after a failed transport.')   # usb-access require_rom
-        words = dict(live['words'])
-        if variant == 'state-changed':
-            words[hex(0x8872000)] = 0xf8805300   # CPU-B off its boot PLL word
-        return dict(live, words=words)
+        raise AssertionError('board read after the run')
     with patch.object(host.base, 'digest', side_effect=lambda p: host.base.FEL_HASH if Path(p) == fel else dev.digest(p)), \
             patch.object(returning.subprocess, 'run', process), patch.object(returning.os, 'access', return_value=True), \
             patch.object(returning.time, 'monotonic', lambda: next(clock)), patch.object(returning.time, 'sleep', lambda s: None), \
@@ -437,22 +430,21 @@ def transport_cases(host, launcher, out, live):
             assert session['watchdog']['mode_after_return'] == 0
             assert session['watchdog']['breadcrumbs']['last']['name'] == 'RETURN_ROM'
             assert (run / 'result.bin').read_bytes() == payload
-        # The rail helper runs after a normal return and after a reset that leaves the boot clock
-        # words; a quarantined instance, other clock words and --no-restore-rails skip it.
-        # Normalization before the launch never runs with --state.
-        restored = variant in ('passed', 'result-invalid', 'external-decoder', 'fired')
+        # The rail helper runs after a normal return only: a watchdog reset leaves DRAM
+        # uninitialized, and --no-restore-rails skips it. Normalization before the launch
+        # never runs with --state.
+        restored = variant in ('passed', 'result-invalid', 'external-decoder')
         assert state['rails'] == restored, (variant, state['rails'], record.get('rail_helper_reason'))
         assert record['normalize_rails'].startswith('not run: --state'), record['normalize_rails']
         assert 'rails: ' in record['summary']
         if restored:
             assert record['rail_helper']['modeled'] and 'at 800 mV after the rail helper' in record['rails']
-            assert record['rail_helper_reason'] == ('CPU clocks at their boot words after the run'
-                                                    if variant == 'fired' else 'normal return'), record
+            assert record['rail_helper_reason'] == 'normal return', record
         else:
             assert record['rail_helper'] is None if variant != 'result-mismatch' else 'rail_helper' not in record
-            reason = {'result-mismatch': 'not run: --no-restore-rails', 'foreign-result': 'requires recovery',
-                      'bad-report': 'requires recovery', 'state-changed': 'CPU-B not at the boot'}[variant]
-            assert reason in record['rail_helper_reason'], (variant, record['rail_helper_reason'])
+            reason = 'not run: --no-restore-rails' if variant == 'result-mismatch' else \
+                'not run: run cold DDR first; the next launch lowers the rails'
+            assert record['rail_helper_reason'] == reason, (variant, record['rail_helper_reason'])
         if variant == 'passed':
             # The development bundle has no return-review.json, and the normal return passes
             # without it: the host neither reads nor writes one.
@@ -572,11 +564,11 @@ def controlled_cases(host, out):
 
 
 def normalize_cases(host, out):
-    """The default for an image that links the entry guard: the helper, then the capture and launch, then
-    the helper again when the clocks read their boot words; a failed helper stops before the capture."""
+    """The default for an image that links the entry guard: the helper, then the capture and launch; after
+    a failed run no second helper run; a failed helper stops before the capture."""
     assert dev.guard_requires_800(host, dev.CONTROL_IMAGE), 'the control image links the CPU-return entry guard'
     for name, argv, complete, expected in (
-            ('default', [], True, ['helper', 'capture', 'launch', 'capture', 'helper']),
+            ('default', [], True, ['helper', 'capture', 'launch']),
             ('helper-refused', [], False, ['helper']),
             ('skipped', ['--no-normalize-rails', '--no-restore-rails'], True, ['capture', 'launch'])):
         calls = []
@@ -603,8 +595,8 @@ def normalize_cases(host, out):
         assert record['normalize_rails']['supply'] == ['SUPPLY dcdc5_uv=1000000 dcdc3_uv=1050000'], record
         if complete:
             assert record['outcome'] == 'failed' and record['launched'], record
-            assert record['rail_helper_reason'] == 'CPU clocks at their boot words after the run', record
-            assert 'Rail helper did not complete' not in record['rails'], record
+            assert record['rail_helper_reason'] == 'not run: run cold DDR first; the next launch lowers the rails'
+            assert 'run cold DDR first' in record['summary'], record
         else:
             assert record['outcome'] == 'refused-before-launch' and not record['launched'], record
             assert 'modeled refusal' in record['summary'] and not (evidence / 'state.json').exists()

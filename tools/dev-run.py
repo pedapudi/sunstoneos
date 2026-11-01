@@ -22,11 +22,12 @@ still raised, which a WDT0 reset does not undo. For an image that links the
 guard, the runner therefore runs the rail helper by default before the launch
 (--no-normalize-rails skips it) and after the run (--no-restore-rails skips
 it). A helper run before the launch that does not complete stops the run
-before the state capture. After the run the helper runs on a normal return,
-and on any other outcome when a read-only capture shows the CPU-L, CPU-B and
-DSU PLL and mux words at their boot values. dev-run.json records the helper's
-SUPPLY (entry rails), VOLT (each written rail's readback), RAIL (a failed
-rail change) and outcome lines.
+before the state capture. After the run the helper runs only on a normal
+return. Any other outcome can leave DRAM uninitialized, as a WDT0 reset does,
+and the helper launch reads and writes DRAM over FEL; cold DDR comes first,
+and the next launch's helper run lowers the rails. dev-run.json records the
+helper's SUPPLY (entry rails), VOLT (each written rail's readback), RAIL (a
+failed rail change) and outcome lines.
 
 A CPU-return image is recognised by its watchdog marker and its result record
 (apps/os/host.py). Preparation builds the typed session from the image's
@@ -520,21 +521,13 @@ def helper_lines(report):
 def restore_rails(args, host, evidence, run_record):
     """(helper report or None, why) for the rail helper after a launched run.
 
-    It runs after a normal return, and after any other outcome when a
-    read-only capture shows every CPU domain at its boot PLL and mux words.
-    The capture refuses a quarantined instance, so the helper never runs on
-    one."""
-    if run_record.get('complete'):
-        return run_rail_helper(args, host, evidence / 'rail-helper'), 'normal return'
-    try:
-        after = capture(args.fel)
-    except Exception as error:
-        return None, f'not run: the state read after the run failed: {error}'
-    save(evidence / 'state-after.json', after)
-    off = boot_clocks(after['words'])
-    if off:
-        return None, 'not run: ' + ', '.join(off) + ' not at the boot PLL and mux words after the run'
-    return run_rail_helper(args, host, evidence / 'rail-helper'), 'CPU clocks at their boot words after the run'
+    It runs only after a normal return, which restored every DRAM range the
+    run used. After any other outcome DRAM can be uninitialized (a WDT0 reset
+    leaves it so, tools/a733-returning-host.py), and the helper launch reads
+    and writes DRAM over FEL, which can stall."""
+    if not run_record.get('complete'):
+        return None, 'not run: run cold DDR first; the next launch lowers the rails'
+    return run_rail_helper(args, host, evidence / 'rail-helper'), 'normal return'
 def npu_check(image, host):
     """Bringup's NPU launcher and monitor refuse an enabled WDT0 (launch.c ADMIT,
     monitor.c finish(1)); armed, the launcher parks and the watchdog resets the
@@ -571,8 +564,8 @@ def main(argv=None):
                         help='Run the rail helper before the launch (default: when the image links the CPU-return '
                         'entry guard, which requires both rails at 800 mV)')
     parser.add_argument('--restore-rails', action=argparse.BooleanOptionalAction,
-                        help='Run the rail helper after the run, on a normal return or when the CPU clocks read '
-                        'their boot words (default: when the image links the CPU-return entry guard)')
+                        help='Run the rail helper after a normal return (default: when the image links the '
+                        'CPU-return entry guard)')
     parser.add_argument('--rail-helper', type=Path, default=RAIL_HELPER)
     parser.add_argument('--fel', type=Path, default=FEL)
     args = parser.parse_args(argv)
