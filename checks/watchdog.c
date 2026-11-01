@@ -4,13 +4,13 @@
 #include <stdio.h>
 #include <string.h>
 
-#define SUNSTONE_A733_BOOT_H
+#define SUNSTONE_A733_MMIO_H
 static uint32_t registers[7], rtc_flag;
 static uintptr_t ignore_write;
 static unsigned writes, reads;
 static int enabled;
 
-static uint32_t mmio_read(uintptr_t address)
+static uint32_t a733_mmio_read32_dsb_sy_both(uintptr_t address)
 {
     ++reads;
     if (address == 0x07090108) return rtc_flag;
@@ -18,7 +18,7 @@ static uint32_t mmio_read(uintptr_t address)
     return registers[(address - 0x02050000) / 4];
 }
 
-static void mmio_write(uintptr_t address, uint32_t value)
+static void a733_mmio_write32_dsb_sy_both(uintptr_t address, uint32_t value)
 {
     ++writes;
     if (address == ignore_write) return;

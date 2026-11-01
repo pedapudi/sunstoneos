@@ -6,6 +6,7 @@
 #define PMIC_MODEL_NO_MAIN 1
 #include "a733-pmic.c"
 #include "a733_cpu_clock.h"
+#include "register_latency.h"
 #define PLL(d) (UINT32_C(0x08871000)+UINT32_C(0x1000)*(d))
 #define SEL(d) (PLL(d)+0x1c)
 #define LOCKED UINT32_C(0xf8000000)
@@ -15,13 +16,14 @@
 struct event { uint64_t at; unsigned pmic; uint32_t address, value; };
 struct cpu_model {
     unsigned bin, stuck_update, stuck_lock, ignore_pmic, reads, writes, count, read_ns, frac_ns;
-    uint32_t staged_n[3]; /* N reads stay at the old value until UPDATE completes. */
+    uint64_t update_us, lock_us; /* Defaults: UPDATE 10 us, LOCK 20 us. */
+    struct register_latency update[3], lock[3];
+    uint32_t staged_n[3]; /* N reads stay old until UPDATE completes. */
     unsigned old_n_reads, wrong_update, fail_update_read;
     unsigned stage_us, fail_stage_time, stop_stage_time;
     uint64_t stage_at[3];
     uint32_t captured_n[3];
     unsigned lock_delay_before_us, lock_delay_after_us, fail_post_read, fail_next_time;
-    uint64_t update_at[3], lock_at[3], lock_us; /* lock_us 0: lock 20 us after the update. */
     uint64_t park_ns[3]; /* Time of each domain's latest park write, in nanoseconds. */
     /* Lock reads while parked: consecutive set reads counted at least 3 us
      * apart, the time of the last counted one and of the third. glitch makes
@@ -99,11 +101,11 @@ static int cpu_now(void *v,uint64_t *out)
 static void advance(unsigned d)
 {
     uint32_t *pll=word(PLL(d));
-    if((*pll&(1u<<26)) && !cm.stuck_update && pm.now>=cm.update_at[d]){
-        uint32_t n=cm.captured_n[d]^(cm.wrong_update ? 1u<<8 : 0);
-        *pll=(*pll&~((1u<<26)|(255u<<8)))|n;
-    }
-    if(!(*pll&(1u<<28)) && !(*pll&(1u<<26)) && !cm.stuck_lock && pm.now>=cm.lock_at[d])*pll|=1u<<28;
+    cm.update[d].stuck=cm.stuck_update;
+    cm.lock[d].stuck=cm.stuck_lock || cm.stuck_update;
+    cm.update[d].value=cm.captured_n[d]^(cm.wrong_update ? 1u<<8 : 0);
+    *pll=reg_latency_apply(&cm.update[d],pm.now,*pll);
+    if(!cm.update[d].pending)*pll=reg_latency_apply(&cm.lock[d],pm.now,*pll);
 }
 static int cpu_read(void *v,uintptr_t a,uint32_t *out)
 {
@@ -142,19 +144,23 @@ static int cpu_write(void *v,uintptr_t a,uint32_t value)
              * at least boot0's 20 us after the park. */
             assert(((*word(SEL(d))>>24)&7)==0);
             assert(model_ns()>=cm.park_ns[d]+20000u);
-            /* N is staged, not immediately visible (manual 5.1.4.2). */
-            uint32_t visible=*word(a)&((255u<<8)|(1u<<28));
+            /* N is staged, not immediately visible (manual 5.1.4.2).
+             * UPDATE captures the old N if boot0's staging interval is missing. */
+            uint32_t nmask=UINT32_C(255)<<8,visible=*word(a)&(nmask|(1u<<28));
             if(!(value&(1u<<26))){
-                cm.staged_n[d]=value&(255u<<8);cm.stage_at[d]=model_ns();
+                cm.staged_n[d]=value&nmask;cm.stage_at[d]=model_ns();
                 if(cm.fail_stage_time)cm.fail_next_time=1;
                 if(cm.stop_stage_time)cm.read_ns=0;
             }
-            *word(a)=(value&~((255u<<8)|(1u<<28)))|visible;
+            *word(a)=(value&~(nmask|(1u<<28)))|visible;
             if(value&(1u<<26)){
                 cm.captured_n[d]=model_ns()>=cm.stage_at[d]+(uint64_t)cm.stage_us*1000u ?
-                    cm.staged_n[d] : visible&(255u<<8);
+                    cm.staged_n[d] : visible&nmask;
                 *word(a)&=~(1u<<28);cm.lock_run[d]=0;
-                cm.update_at[d]=pm.now+10;cm.lock_at[d]=pm.now+(cm.lock_us ? cm.lock_us : 20);
+                reg_latency_schedule(&cm.update[d],pm.now,cm.update_us ? cm.update_us : 10,
+                    nmask|(1u<<26),cm.captured_n[d]);
+                reg_latency_schedule(&cm.lock[d],pm.now,cm.lock_us ? cm.lock_us : 20,
+                    1u<<28,1u<<28);
             }
         }
         if(a==SEL(d)) {

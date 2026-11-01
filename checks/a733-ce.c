@@ -1,4 +1,5 @@
 #include "a733_ce.h"
+#include "register_latency.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -17,6 +18,9 @@ struct model {
     unsigned reads,writes,syncs,starts,enters,leaves,retained,held,published,acquired,scrubs;
     unsigned inject_write,inject_read,sync_failure,authorize_pending,lock_busy;
     unsigned finish_late,rollback,health_late,retain_busy;
+    unsigned delayed_completion,completion_stuck;
+    struct register_latency task_done;
+    uint8_t device_output[32];
 };
 static uint32_t *reg(struct model *m,uintptr_t a)
 {
@@ -51,6 +55,11 @@ static int read_reg(void *v,uintptr_t a,uint32_t *out)
 {
     struct model *m=v;assert(m->held);++m->reads;
     if (m->inject_read==m->reads) return -1;
+    if(a==NS+12 && m->delayed_completion && m->task_done.pending) {
+        *reg(m,a)=reg_latency_apply(&m->task_done,m->now,*reg(m,a));
+        if(!m->task_done.pending)
+            for(unsigned i=0;i<32;++i)m->device_output[i]=(uint8_t)(17+i);
+    }
     *out=*reg(m,a);return 1;
 }
 static uint64_t le(const uint8_t *p,unsigned n)
@@ -73,6 +82,10 @@ static int write_reg(void *v,uintptr_t a,uint32_t value)
         assert(le(d+36,4)==0 && le(d+40,4)==32);
         for (unsigned i=44;i<256;++i) assert(d[i]==0);
         ++m->starts;
+        if(m->delayed_completion) {
+            reg_latency_schedule(&m->task_done,m->now,20,0x30,0x10);
+            m->task_done.stuck=m->completion_stuck;
+        }
     } else *reg(m,a)=value;
     /* An uncertain write may already have changed hardware. */
     return m->inject_write==m->writes ? -1:1;
@@ -92,7 +105,10 @@ static int sync_memory(void *v,struct a733_ce_memory *mem,enum a733_ce_sync op)
         assert(m->starts==1 && (*reg(m,NS+12)&0x30)==0x10);
         m->acquired=1;
         /* Deterministic bytes are a DMA model fixture, never entropy. */
-        for (unsigned i=0;i<32;++i) mem->output[i]=(uint8_t)(17+i);
+        if(m->delayed_completion) {
+            assert(!m->task_done.pending && m->now-m->task_done.start>=20);
+            memcpy(mem->output,m->device_output,32);
+        } else for (unsigned i=0;i<32;++i) mem->output[i]=(uint8_t)(17+i);
     }
     return m->sync_failure==m->syncs ? -1:1;
 }
@@ -136,8 +152,29 @@ static void terminal(struct model *m,uint8_t *out)
     assert(reads==m->reads && writes==m->writes && syncs==m->syncs && enters==m->enters);
     unchanged(out);
 }
-int main(void)
+static void completion_cases(void)
 {
+    struct model m;uint8_t out[32];memset(out,0xa5,sizeof(out));
+    setup(&m,0);m.delayed_completion=1;submit(&m,out);
+    m.now+=19;
+    assert(a733_ce_poll(&m.controller,out)==A733_CE_PENDING && !m.acquired);
+    unchanged(out);m.now++;
+    assert(a733_ce_poll(&m.controller,out)==A733_CE_RANDOM && !m.task_done.pending);
+    for(unsigned i=0;i<32;++i)assert(out[i]==17+i);
+
+    memset(out,0xa5,sizeof(out));setup(&m,0);m.delayed_completion=m.completion_stuck=1;
+    submit(&m,out);m.now+=20;
+    assert(a733_ce_poll(&m.controller,out)==A733_CE_PENDING && !m.acquired);
+    m.now=m.config.deadline_us;
+    assert(a733_ce_poll(&m.controller,out)==A733_CE_RETAINED && m.task_done.pending && !m.acquired);
+    terminal(&m,out);
+    puts("PASS CE: delayed success owns output until completion; stuck status expires with output and resources retained");
+}
+
+int main(int argc,char **argv)
+{
+    if(argc==2 && !strcmp(argv[1],"--completion-only")){completion_cases();return 0;}
+    assert(argc==1);
     struct model m;uint8_t out[32];memset(out,0xa5,sizeof(out));
     for (unsigned high=0;high<2;++high) {
         /* IV and input bytes are fixtures the TRNG task neither uses nor clears. */

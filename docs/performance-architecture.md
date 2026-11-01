@@ -112,8 +112,14 @@ hundreds of cycles each. Device-nGnRnE accesses to one peripheral already reach 
 Under the no-early-acknowledgement attribute the write response comes from the
 peripheral itself, so a `DSB` after a write waits for a full bus round trip.
 
-**Lighter design.** Use plain accessors inside a sequence to one peripheral.
-Place one barrier where ordering crosses memory types:
+**Lighter design.** Use plain accessors only where the next operation does not
+require completion of the preceding access. Complete a write with DSB before
+its dependent write or completion poll, and before starting a required delay.
+For example, the PMIC DATA store completes before CNTR starts the bus event;
+CNTR completes before the driver measures wire time or polls its flag.
+Device-nGnRnE ordering alone does not replace these explicit completion
+boundaries. Keep every vendor inter-write delay at its original boundary.
+Place barriers where ordering crosses memory types:
 
 - `DMB OSHST` before a doorbell or start write that publishes descriptors or
   data the CPU wrote to normal memory (the Linux `writel` ordering);
@@ -122,11 +128,15 @@ Place one barrier where ordering crosses memory types:
 - `DSB SY` only for completion: before `WFI`, before a timed delay that assumes
   a reset or clock write reached the device, after cache or TLB maintenance,
   and after a device interrupt-clear write where one spurious re-entry of a
-  level-triggered interrupt is not acceptable.
+  level-triggered interrupt is not acceptable. Dependent register accesses
+  that require the earlier write to complete also use DSB.
 
-The weaker forms do not exist in `a733_mmio.h` yet. Adding them, and moving a
-driver onto them, needs the board qualification that
+The DMB forms in `a733_mmio.h` supply memory ordering. Moving a driver onto
+them needs the board qualification that
 [docs/shared-helpers.md](shared-helpers.md) requires for any barrier change.
+Neither a DMB nor a volatile access proves completion of a posted write or a
+device-internal transition. UPDATE, LOCK, BUSY and READY still need the
+specified status or settle-time proof after the architectural boundary.
 New drivers state their barrier placement per sequence in the design so that
 the migration is mechanical once qualified.
 

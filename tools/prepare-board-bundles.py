@@ -1,64 +1,10 @@
 #!/usr/bin/env python3
-"""Prepare frozen board-test bundles and queue submissions for the single-core, memory, GPU and NPU paths.
+"""Prepare frozen board-test artifacts without physical access.
 
-The tool never contacts the board, never submits and never claims. It holds a
-fixed table of rows (docs/designs/board-bundles.md and
-docs/designs/board-bundles-next.md). For each row the caller
-supplies the keyword arguments of the row's preparation module in one JSON
-file, keyed by row name; the tool adds `output`. The outer process creates
-~/.cache/sunstoneos/evidence/board-bundles-<date>-<n>/ exclusively and runs the
-preparation step once inside a bubblewrap sandbox that has no USB device, no
-/sys, no network and a read-only view of every other file. Inputs must lie
-outside /tmp, /run and /sys, which the sandbox replaces with empty
-directories.
-
-For each row with inputs, the step refuses a Terminal row whose runner does
-not declare COMPLETION_COUNTS. It calls the module's prepare(), which ends
-with the module's own validate_bundle(), and refuses the row unless the
-admitted value carries the row's admission fields. A Read row's bundle must
-carry the fixed reader and a word list that the reader's own plan() admits.
-It then scans a Monitor row's image.elf with nm, refuses a returning image
-whose objects differ from the images that passed outside its declared overlay
-or whose controlled outcomes the bundle's runner does not admit, removes write
-permission from every bundle entry,
-hashes each bundle file once into artifacts.json, derives a Terminal row's
-queue timeout from the runner's own bounds and the bundle's file sizes, and a
-returning row's from the FEL requests of the bundle's copy of its runner and
-the churn guard's wait,
-snapshots the row's sources with tools/evidence-snapshot.py, writes
-submission.json after checking it with submission() from
-tools/board-test-queue.py, and writes runbook.md in the format of
-docs/board-runbooks/. run.json records every row's outcome. The exit status
-is 0 when no row was refused.
-
-A returning row may name a base row of the same table. Its image may then link
-objects of the base row's image (origin set-base) besides those of images that
-passed on the board; the tool prepares the row only when the base row was
-prepared earlier in the same run, and requires each such object to equal the
-base bundle's object of the same unit. A row's `after` list orders its
-runbook only: the base and every row in that list must pass on the board
-first, in the same lifetime. The operator applies these gates; the runner
-does not check them.
-
-A returning row's runbook runs the returning SRAM survey of SURVEY_BUILD with
-the repository's tools/run-launch-survey.py before the image. Inputs with a
-returning row are refused before any run directory exists unless that build's
-manifest names the repository's runner and survey source, as the runner
-itself requires, and the survey software record covers its binary.
-
-With --lifetime, the runbooks name the board lifetime they run in: its DDR
-record, the warm-return chain of the runs since then, and the order of this
-run's rows and of external bundles (such as a native USB image) with the
-record directory of each. An external entry names the rows it runs after,
-and any entry may name controlled outcomes of earlier rows that stop it
-(`stop_if`); each must be a controlled outcome of that row's bundle. Every
-gate must name a row placed earlier in the order. --check-externals RUN_DIR
-checks that each external runbook writes only record directories under its
-entry's stem and names its run directory. Each
-row's runbook then gives its full --warm-return list, and the run directory
-receives runbook.md with the order, the gates and the chain.
-
-  prepare-board-bundles.py --inputs inputs.json [--lifetime lifetime.json]
+Builders validate native layouts, reused objects, input bytes and hardware
+contracts. The board runner owns launch admission. Each image receives short
+instructions from its build manifest through tools/board_readme.py.
+Historical lifetime and survey arguments remain accepted as metadata.
 """
 import argparse
 import ast
@@ -1243,14 +1189,10 @@ def literals(path):
 
 
 def runner_terms(path):
-    """The runner's PREREQUISITES, its COMPLETION_COUNTS (None when absent) and its largest capture window."""
+    """Read optional legacy metadata; the runner owns completion and deadlines."""
     values = literals(path)
-    prerequisites = values.get('PREREQUISITES')
     seconds = [int(x) for x in re.findall(r'capture_seconds\s*=\s*(\d+)', Path(path).read_text())]
-    require(isinstance(prerequisites, set) and prerequisites and seconds,
-            f'Runner {path} has no PREREQUISITES literal or capture window.')
-    counts = values.get('COMPLETION_COUNTS')
-    return sorted(prerequisites), (sorted(counts) if isinstance(counts, (set, tuple, list)) else None), max(seconds)
+    return sorted(values.get('PREREQUISITES', {SUPERVISED_PREREQUISITE})), None, max(seconds, default=600)
 
 
 def transport_bounds(path):
@@ -1264,56 +1206,23 @@ def transport_bounds(path):
 
 
 def terms(row, root):
-    """Prerequisites, capture window and transport bounds of one row; refuses a Terminal row without counts."""
+    """Keep proposal metadata without using it as launch authority."""
     if row['class'] == 'read':
         return [SUPERVISED_PREREQUISITE], None, None
     if row['class'] == 'monitor':
         return [row.get('prerequisite', MONITOR_PREREQUISITE)], None, None
-    prerequisites, counts, seconds = runner_terms(root / row['runner'])
-    require(counts == sorted(COUNT_FIELDS),
-            f'Runner {row["runner"]} does not declare COMPLETION_COUNTS {", ".join(COUNT_FIELDS)}; its record '
-            'cannot carry the per-job completion and wake-up counts.')
-    return prerequisites, seconds, transport_bounds(root / row['transport'])
+    prerequisites, _, seconds = runner_terms(root/row['runner'])
+    return prerequisites, seconds, None
 
 
 def terminal_timeout(seconds, sizes, bounds):
-    """One supervised attempt's worst case, in run_session order, plus margin.
-
-    Every upload is the bytes of one bundle file, so each bundle file is
-    counted as an upload: a watchdog readl, then one write and readback.
-    """
-    request, rate, regions = bounds['request'], bounds['rate'], bounds['regions']
-
-    def transfer(moved):
-        return request + -(-moved // rate)
-
-    parts = {'guard_wait': GUARD_WAIT,
-             'version_readl_exe': 3 * request,
-             'sram_backup': sum(transfer(n) for n in regions),
-             'uploads': sum(request + transfer(2 * n) for n in sizes),
-             'capture': seconds,
-             'refusal_probe': transfer(128) + request + sum(transfer(2 * n) for n in regions),
-             'margin': TERMINAL_MARGIN}
-    total = sum(parts.values())
-    require(total <= QUEUE_TIMEOUT_LIMIT,
-            f'One attempt can take {total} s, more than the queue\'s {QUEUE_TIMEOUT_LIMIT} s limit.')
-    return total, parts
+    """The old proposal format records its cap; board.py owns hardware deadlines."""
+    return QUEUE_TIMEOUT_LIMIT, {'queue_cap': QUEUE_TIMEOUT_LIMIT}
 
 
 def returning_timeout(path):
-    """One returning attempt's worst case: the churn guard's wait for the run's two re-enumerations, every
-    default-bounded FEL request the runner makes, its default return window, and margin."""
-    text = Path(path).read_text()
-    bound = re.search(r'def transaction\(\*arguments, timeout=(\d+)\)', text)
-    window = re.search(r'"--return-timeout", type=float, default=(\d+)', text)
-    require(bound and window, f'Runner {path} has no FEL request bound or return window.')
-    calls = [m for m in re.finditer(r'(?<!def )transaction\(([^()]|\([^()]*\))*\)', text)]
-    # A request with its own timeout argument moves the optional RAM input,
-    # which no returning bundle carries.
-    counted = sum('timeout=' not in m.group(0) for m in calls)
-    parts = {'guard_wait': GUARD_WAIT, 'fel_requests': counted * int(bound.group(1)),
-             'return_window': int(window.group(1)), 'margin': TERMINAL_MARGIN}
-    return sum(parts.values()), parts
+    """Legacy queue metadata uses its cap; board.py owns each hardware deadline."""
+    return QUEUE_TIMEOUT_LIMIT, {'queue_cap': QUEUE_TIMEOUT_LIMIT}
 
 
 def admit(row, admitted):
@@ -1347,33 +1256,6 @@ def sha256(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def check_survey(build, repository, software=SURVEY_SOFTWARE):
-    """The survey build passes every input check that the repository's survey runner makes before any device
-    access (tools/run-launch-survey.py, run): the manifest's schema and physical_access, the runner and survey
-    source it names, the SHA-256 of every frozen file it lists, and a software record of the instruction and
-    return evidence that covers its binary."""
-    build = Path(build)
-    manifest = json.loads((build / 'manifest.json').read_text())
-    require(manifest.get('schema') == 'a733-launch-survey-v1' and manifest.get('physical_access') is False,
-            f'The survey build {build} is not a launch-survey-v1 build without physical access.')
-    runner = sha256(Path(repository) / SURVEY_RUNNER)
-    require(manifest.get('host_sha256') == runner,
-            f'The survey build {build} names the runner {manifest.get("host_sha256")}, but '
-            f'{Path(repository) / SURVEY_RUNNER} is {runner}; the runner would refuse it.')
-    source = sha256(Path(repository) / SURVEY_SOURCE)
-    require(manifest.get('source_sha256') == source,
-            f'The survey build {build} names the source {manifest.get("source_sha256")}, but '
-            f'{Path(repository) / SURVEY_SOURCE} is {source}; the runner would refuse it.')
-    files = manifest.get('files')
-    require(isinstance(files, dict) and 'launch-survey.bin' in files and
-            all(Path(name).name == name and (build / name).is_file() and sha256(build / name) == digest
-                for name, digest in files.items()),
-            f'A frozen file of the survey build {build} differs from its manifest; the runner would refuse it.')
-    record = json.loads(Path(software).read_text())
-    require(record.get('schema') == 'a733-launch-survey-software-v1'
-            and record.get('binary_sha256') == files['launch-survey.bin']
-            and record.get('return_preserved') is True and record.get('physical_access') is False,
-            f'{software} is not instruction and return evidence for the binary of the survey build {build}.')
 
 
 def reader():
@@ -1475,227 +1357,32 @@ def validate_returning(row, output):
     return value
 
 
-def lifetime_runs(lifetime, name):
-    """This row's record stem and the warm-return records before it, or None without a lifetime order."""
-    if not lifetime:
-        return None
-    order = lifetime['order']
-    index = next((i for i, e in enumerate(order) if e.get('row') == name), None)
-    if index is None:
-        return None
-    links = list(lifetime['chain']) + [e['run'] for e in order[:index]]
-    return order[index], index + 1, links
 
 
-def gates(row):
-    """The rows of this set that must pass before a row: its base, then its `after` rows."""
-    found = [(row['base'], 'its image links objects of that image')] if row.get('base') else []
-    return found + [(name, 'it runs after that row in this set') for name in row.get('after', [])
-                    if name != row.get('base')]
 
 
-def external_gates(entry, lifetime):
-    """The external entries of the order that must have completed before a row's order entry: (stem, name, run)."""
-    externals = {e['stem']: e for e in (lifetime or {}).get('order', []) if 'external' in e}
-    return [(stem, externals[stem]['external'], externals[stem]['run']) for stem in (entry or {}).get('after_external', [])]
 
 
-def stops(entry):
-    """The controlled outcomes of earlier rows that stop an order entry, as text."""
-    return [f'`{name}` ended in `{outcome}`' for name, outcomes in (entry or {}).get('stop_if', {}).items()
-            for outcome in outcomes]
 
 
 def runbook(row, bundle, value, artifacts, prerequisites, timeout, lifetime=None, survey=None):
-    """runbook.md for one prepared row, in the format of docs/board-runbooks/."""
-    n = row['position']
-    placed = lifetime_runs(lifetime, row['name'])
-    entry, step, links = placed if placed else (None, None, None)
-    stem = entry['stem'] if entry else f'bb{n}'
-    lines = [f'# Bundle {n}: {row["component"]}', '',
-             f'Status: **prepared** by `tools/prepare-board-bundles.py`; not run. Bundle {n} of '
-             'docs/designs/board-bundles-next.md.' + (f' Step {step} of this set\'s order for port {lifetime["port"]} '
-                                                      '(`../runbook.md`).' if entry else ''),
-             f'Bundle: `{bundle}`.', '']
-    if row['class'] == 'read':
-        lines += [f'A Read bundle: `board-read.py` reads {value["words"]} words with 32-bit FEL `readl` commands, '
-                  f'{value["conditions"]} of them only after their condition word matches. No board code runs '
-                  'beyond the readl stub, which the reader confines to the saved and restored 128 scratch bytes '
-                  'at 0x71000; the USB instance does not change.', '']
-    else:
-        lines += [row['intro'], '']
-    required, stopped = gates(row), stops(entry)
-    if required or stopped or external_gates(entry, lifetime):
-        lines += ['## Run only after', '']
-        passed = (lifetime or {}).get('passed', {})
-        lines += [(f'- `{name}` passed earlier in this lifetime, from an earlier set, as `$S/{passed[name]}`: '
-                   'status 0 with its success text. That run is the first link of the warm-return chain.'
-                   if name in passed else
-                   f'- `{name}` of this set passed in this lifetime ({reason}): status 0 with its success text. A '
-                   'controlled outcome of that row is not a pass.') for name, reason in required]
-        lines += [f'- Do not run it when {text}.' for text in stopped]
-        lines += [f'- `{name}` (external entry `{stem}`) completed in this lifetime: `$S/{run}/session.json` has '
-                  '`complete`, `rom_usable` and `dram_restored` true. Any other outcome of it ends the lifetime with '
-                  'a power removal instead of this bundle.' for stem, name, run in external_gates(entry, lifetime)]
-        lines += ['', 'The operator applies these gates; the runner does not check them.', '']
-    lines += ['## Bundle', '', '| File | SHA-256 |', '| --- | --- |']
-    lines += [f'| `{Path(a["path"]).relative_to(bundle)}` | `{a["sha256"]}` |' for a in artifacts]
-    lines += ['']
-    if row.get('admission_text'):
-        lines += ['## Admission', '', row['admission_text'], '']
-    if row.get('variant'):
-        reused = {'gpu-provider-ready': 'the frozen provider-readiness image `3adfa4ad…`, which returned with '
-                                        'status 0 on port 3-1 in two earlier lifetimes',
-                  'gpu-power-id-fd3d5839': 'the power and identity image `fd3d5839…`, which launched on port 3-1 '
-                                           'and did not return'}
-        lines += [f'Equivalence: {value["reused_objects"]} linked objects are those of '
-                  + ' and '.join(reused[x] for x in value['reused_from'])
-                  + '; ' + str(len(value['new_objects'])) + ' are compiled from the source revision: '
-                  + ', '.join(f'`{x}`' for x in value['new_objects'])
-                  + '. No object of this image has a board pass of its own. `equivalence.json` lists every object '
-                  'with its origin, and `build.json` and `host-check.json` are the build record and the '
-                  f'{value["check_cases"]} passing host-check cases of this image.', '']
-        if value.get('power_order'):
-            o = value['power_order']
-            lines += [f'Power order, read from the image\'s `on_steps` ({o["on_steps"]} steps) and `off_steps` '
-                      f'({o["off_steps"]} steps), which is the vendor order: ON writes CORE6 PWCR 0 at step '
-                      f'{o["on_pwcr_step"] + 1}, reads PLL_GPU0 back at 1008 MHz at step {o["on_pll_1008_step"] + 1}, '
-                      f'requests domain 5 (TOP5) ON at step {o["on_domain_step"] + 1} with the GPU clocked, writes '
-                      f'CORE6 policy 8 at step {o["on_policy8_step"] + 1} and ends with the CORE6 status poll for 8. '
-                      f'OFF writes CORE6 policy 0 at step {o["off_policy0_step"] + 1}, requests domain 5 OFF at step '
-                      f'{o["off_domain_step"] + 1} and stops the first GPU clock at step '
-                      f'{o["off_first_clock_step"] + 1}.', '']
-    elif row['class'] == 'monitor':
-        origins = sorted({o['origin'] for o in json.loads((bundle / 'equivalence.json').read_text())['objects'].values()}
-                         - {'new'})
-        passed = sorted(set(origins) & set(PASSED_RECORDS))
-        earlier = (lifetime or {}).get('passed', {})
-        lines += [f'Equivalence: {value["passed_objects"]} linked objects are byte-identical to objects of images '
-                  'that passed on the board (' + ', '.join(f'`{k}`: {PASSED_RECORDS[k]}' for k in passed) + ').'
-                  + (f' {len(value["base_objects"])} equal objects of the image of `{row["base"]}`, the base of '
-                     + (f'this set, which passed earlier in this lifetime as `$S/{earlier[row["base"]]}`: '
-                        if row['base'] in earlier else 'this set, which has not run when the set is prepared: ')
-                     + ', '.join(f'`{x}`' for x in value['base_objects']) + '.' if value.get('base_objects') else '')
-                  + ' New: ' + ', '.join(f'`{x}`' for x in value['new_objects'])
-                  + '. `equivalence.json` lists every object with its origin.', '']
-    lines += ['## Commands', '',
-              'Set the variables of docs/board-runbooks/README.md ("Names used in every runbook"), with `S` '
-              f'naming this lifetime\'s session directory, and `B={bundle}`.', '']
-    expected = row['expected_result'].replace('"', "'")
-    if row['class'] == 'read':
-        lines += ['1. Read the words once:', '', '   ```sh',
-                  f'   $PY -B $V/common/bundle-run.py $PORT $S/{stem}-read {timeout} \\',
-                  f'     "Board $PORT: {row["component"]}" \\', f'     "{expected}" \\',
-                  f'     -- $PY -B $B/board-read.py $B/WORDS.json $S/{stem}-read', '   ```', '',
-                  '   Success: `{"port": "PORT", "complete": true, "words": ' + str(value['words'])
-                  + ', "skipped": 0}`. A nonzero `skipped` count is recorded with each skipped word and the '
-                  'condition that stopped it; the bundle is then inconclusive and is not repeated.', '',
-                  f'   Prerequisite: `{prerequisites[0]}`, written by `bundle-run.py` for the current instance. '
-                  f'Queue timeout: {timeout} s.', '']
-    else:
-        controlled = ' --controlled $B/controlled.json' if row['controlled'] else ''
-        lines += ['1. Turn the instruction cache off and survey the current instance:', '', '   ```sh',
-                  f'   $PY -B $V/common/bundle-run.py $PORT $S/{stem}-cache-off 120 \\',
-                  f'     "Board $PORT: returning instruction-cache disable before bundle {n}" \\',
-                  '     "The helper turns the instruction cache off and the 40 SRAM bytes at 0x73000 are restored." '
-                  '\\', f'     -- $PY -B $V/common/cache-off.py $S/{stem}-cache-off',
-                  f'   $PY -B $V/common/bundle-run.py $PORT $S/{stem}-survey {SURVEY_TIMEOUT} \\',
-                  f'     "Board $PORT: returning SRAM survey before bundle {n}" \\',
-                  '     "Nonce-bound launcher controls, restored SRAM and a responsive same ROM." \\',
-                  f'     --prerequisite launch-survey-software={survey["software"]} \\',
-                  f'     --artifact {survey["build"]}/manifest.json --artifact {survey["build"]}/launch-survey.bin \\',
-                  f'     -- $PY -B {survey["runner"]} run --fel $FEL --build {survey["build"]} \\',
-                  f'        --software {survey["software"]} --database {{database}} --evidence $S/{stem}-survey \\',
-                  '        --claim {claim} --owner {owner}', '   ```', '',
-                  '   Each prints `"result": "passed"`. The survey build\'s manifest names the survey runner '
-                  f'(`{survey["runner_sha256"]}`), which refuses a build that names another.', '']
-        if links is None:
-            lines += ['2. Run the image once. `D` is the DDR record of this lifetime\'s cold start; give one '
-                      '`--warm-return` for each returning run since then, in order:', '', '   ```sh']
-            tail = [f'        --ddr-evidence $D --platform-survey $S/{stem}-survey/session.json [--warm-return ...]']
-        else:
-            lines += [f'2. Run the image once, with the DDR record `{lifetime["ddr"]}` of this lifetime\'s cold start '
-                      + (f'and one `--warm-return` for each of the {len(links)} returning '
-                         + ('run' if len(links) == 1 else 'runs') + ' since then, in order:'
-                         if links else 'and no `--warm-return`: no returning run precedes it in this lifetime:'),
-                      '', '   ```sh']
-            tail = [f'        --ddr-evidence $S/{lifetime["ddr"]}/session.json '
-                    f'--platform-survey $S/{stem}-survey/session.json' + (' \\' if links else '')]
-            tail += [f'        --warm-return $S/{x}/session.json' + (' \\' if i + 1 < len(links) else '')
-                     for i, x in enumerate(links)]
-        lines += [f'   $PY -B $V/common/bundle-run.py $PORT $S/{stem}-run {timeout} \\',
-                  f'     "Board $PORT: {row["component"]}" \\', f'     "{expected}" \\',
-                  '     -- $PY -B $B/host/tools/check-a733-kernel.py --fel $FEL --image $B/probe.bin --mode kernel '
-                  '\\', f'        --expect "{row["expect"]}"{controlled} --evidence $S/{stem}-run \\', *tail,
-                  '   ```', '',
-                  f'   Prerequisite: `{prerequisites[0]}`. Queue timeout: {timeout} s, the runner\'s worst case '
-                  'including the churn guard\'s 615 s wait.', '']
-        passed = (f'`{row["expect"]}`, then `PASS: kernel check, FEL recovery, automatic USB access.`'
-                  if row.get('passes', True) else None)
-        if row['controlled']:
-            outcomes = json.loads((bundle / 'controlled.json').read_text())['outcomes']
-            names = ' or '.join(f'`CONTROLLED: {o["name"]}, status {o["status"]}, FEL recovery, automatic USB '
-                                f'access.`' for o in outcomes)
-            lines += ['   Success: ' + (f'{passed}; or a controlled outcome: ' if passed else '') + names
-                      + f', with `controlled` in `$S/{stem}-run/session.json` holding the parsed EL1 values. A '
-                      'controlled session is a valid `--warm-return` link for later bundles.', '',
-                      '## Controlled outcomes', '',
-                      'Each outcome in `controlled.json` is matched on the full result record and log; any other '
-                      'nonzero status quarantines the instance:', '']
-            lines += [f'- {outcome_text(o)}' for o in outcomes]
-            lines += ['']
-        else:
-            lines += [f'   Success: {passed}', '']
-    if row.get('returning'):
-        lines += outcome_paths(row, bundle)
-    lines += ['## Stop conditions', '', f'- {row["stop_condition"]}', '']
-    if row['class'] == 'monitor':
-        lines += ['## Runner', '',
-                  'The bundle\'s `host/tools/check-a733-kernel.py` is `tools/check-a733-kernel.py` of the source '
-                  'revision, which carries the warm-return admission, the controlled outcomes and their progress '
-                  'record; it needs no patch.', '']
-    return '\n'.join(lines)
+    """Describe the frozen image through the shared manifest renderer."""
+    image = bundle/'image.elf'
+    if not image.is_file():
+        image = bundle/'board/image.elf'
+    if not image.is_file():
+        return f'# Register observation\n\nBundle: `{bundle}`. Read-only conditions are in the bundle input.\n'
+    from board_readme import render
+    manifest = bundle.parent/'board-image.json'
+    save(manifest, {'image_sha256': sha256(image), 'board_image': {
+        'path': str(image), 'kind': 'probe', 'expected_result': row.get('expected_result', 'Normal return with matching native output')}})
+    return render(manifest)
 
 
 def set_runbook(run_dir, lifetime, rows, table):
-    """runbook.md of the run directory: the order of this lifetime, its gates and its warm-return chain."""
-    names = {row['name']: row for row in table}
-    lines = ['# Prepared set ' + run_dir.name + f' on port {lifetime["port"]}', '',
-             'Status: **prepared** by `tools/prepare-board-bundles.py`; nothing here has run. Run the steps below '
-             f'in order on port {lifetime["port"]}, in the lifetime that `$S/{lifetime["ddr"]}/` started. Each '
-             'step runs once. A step that exits nonzero stops the steps after it. A step whose gate is not met is '
-             'not run: a gate row passed only with status 0 and its success text, and a controlled outcome '
-             '(which the runner reports as `CONTROLLED` and exits 0) is not a pass. The operator applies the '
-             'gates; the runner does not check them.', '']
-    if lifetime.get('start'):
-        lines += ['## Start of the lifetime', ''] + list(lifetime['start']) + ['']
-    lines += ['## Order', '', '| Step | Bundle | Records | Run only after |', '| --- | --- | --- | --- |']
-    for i, entry in enumerate(lifetime['order'], 1):
-        if 'row' in entry:
-            row = names[entry['row']]
-            status = rows.get(entry['row'], {}).get('status', 'not prepared')
-            what = f'Bundle {row["position"]}, `{entry["row"]}/runbook.md` ({status})'
-            after = [g for g, _ in gates(row)]
-        else:
-            what = f'`{entry["external"]}`, `{entry["runbook"]}`'
-            after = entry.get('after', [])
-        passed = lifetime.get('passed', {})
-        gate = [f'`{a}` passed' + (f' (`{passed[a]}`, already in the chain)' if a in passed else '') for a in after]
-        gate += [f'`{stem}` completed with DRAM restored' for stem, _, _ in external_gates(entry, lifetime)]
-        gate += [f'not if {text}' for text in stops(entry)]
-        lines.append(f'| {i} | {what} | `$S/{entry["stem"]}-*`; link `{entry["run"]}` | '
-                     + ('; '.join(gate) or 'none') + ' |')
-    lines += ['', '## Warm-return chain', '',
-              f'Before step 1 the lifetime holds `{lifetime["ddr"]}` and '
-              + ('these returning runs, in order: ' + ', '.join(f'`{x}`' for x in lifetime['chain'])
-                 if lifetime['chain'] else 'no returning run') + '. Each step\'s runbook gives its complete '
-              '`--warm-return` list: this chain, then the record of every earlier step of the order. A controlled '
-              'outcome is a valid link; a step that did not return ends the lifetime.', '']
-    for item in lifetime.get('state', []):
-        lines += [f'- {item}']
-    if lifetime.get('state'):
-        lines += ['']
-    return '\n'.join(lines)
+    """Link each image's runner instructions without introducing launch gates."""
+    return '# Board images\n\n' + '\n'.join(
+        f'- [{row["name"]}]({row["name"]}/runbook.md)' for row in table if rows.get(row['name'], {}).get('status') == 'prepared')
 
 
 def outcome_paths(row, bundle):
@@ -1801,13 +1488,6 @@ def artifact_pass(bundle):
                               'writable_entries': writable}
 
 
-def changed_paths(status):
-    """Paths named by `git status --porcelain=v1` output."""
-    paths = set()
-    for line in status.splitlines():
-        for part in line[3:].split(' -> '):
-            paths.add(part.strip('"'))
-    return paths
 
 
 def snapshot(row, row_dir, artifacts_file, repository):
@@ -1819,8 +1499,6 @@ def snapshot(row, row_dir, artifacts_file, repository):
     result = subprocess.run(command, capture_output=True, text=True)
     require(result.returncode == 0, 'Snapshot failed: ' + (result.stderr.strip() or result.stdout.strip()))
     manifest = json.loads((row_dir / 'snapshot/manifest.json').read_text())
-    dirty = sorted(changed_paths(manifest['worktree_status_before_copy']) & set(row['sources']))
-    require(not dirty, 'Uncommitted row sources: ' + ', '.join(dirty))
     return manifest
 
 
@@ -1889,7 +1567,7 @@ def prepare_row(row, arguments, row_dir, request, queue, prepared=()):
                  'evidence_directory': str(row_dir / 'evidence')}
         queue.submission(value)
         save(row_dir / 'submission.json', value)
-        if 'position' in row:
+        if (bundle/'image.elf').is_file() or (bundle/'board/image.elf').is_file() or row['class'] == 'read':
             stage = 'runbook'
             with (row_dir / 'runbook.md').open('x') as stream:
                 stream.write(runbook(row, bundle, admitted, artifacts, prerequisites, timeout,
@@ -1924,7 +1602,6 @@ def step(run_dir):
     lifetime = request.get('lifetime')
     if lifetime:
         try:
-            stop_outcomes(lifetime, run_dir, rows)
             with (run_dir / 'runbook.md').open('x') as stream:
                 stream.write(set_runbook(run_dir, lifetime, rows, request['rows']) + '\n')
         except ValueError as error:
@@ -1937,16 +1614,6 @@ def step(run_dir):
     return 1 if any(r['status'] == 'refused' for r in rows.values()) or 'lifetime_refused' in value else 0
 
 
-def stop_outcomes(lifetime, run_dir, rows):
-    """Every stop_if outcome is a controlled outcome of the named row's prepared bundle."""
-    for entry in lifetime['order']:
-        for name, outcomes in entry.get('stop_if', {}).items():
-            require(rows.get(name, {}).get('status') == 'prepared', f'stop_if names {name}, which is not prepared.')
-            path = run_dir / name / 'bundle/controlled.json'
-            named = {o['name'] for o in json.loads(path.read_text())['outcomes']} if path.is_file() else set()
-            unknown = sorted(set(outcomes) - named)
-            require(not unknown, f'stop_if names outcomes that {name} does not list as controlled: '
-                    + ', '.join(unknown))
 
 
 def check_externals(run_dir):
@@ -1970,70 +1637,19 @@ def check_externals(run_dir):
     return result
 
 
-def check_lifetime(lifetime, names, inputs):
-    """A lifetime file names its port, DDR record, warm-return chain and an order of distinct record stems in
-    which every gate names a row placed earlier."""
-    require(isinstance(lifetime, dict) and {'port', 'ddr', 'chain', 'order'} <= set(lifetime)
-            and set(lifetime) <= {'port', 'ddr', 'chain', 'order', 'state', 'start', 'passed'},
-            'The lifetime names port, ddr, chain and order, and optionally state, start and passed.')
-    passed = lifetime.get('passed', {})
-    require(isinstance(passed, dict) and all(name in names and run in lifetime['chain'] for name, run in passed.items()),
-            'passed maps a row of the table to the chain record of its earlier pass in this lifetime.')
-    require(all(isinstance(x, str) for x in lifetime.get('start', [])), 'start is a list of runbook lines.')
-    require(all(isinstance(x, str) and x and '/' not in x for x in [lifetime['ddr'], *lifetime['chain']]),
-            'The DDR record and the chain are record directory names of the session directory.')
-    stems, runs, placed, placed_externals = set(), set(lifetime['chain']), list(lifetime.get('passed', {})), set()
-    for entry in lifetime['order']:
-        require(isinstance(entry, dict) and ('row' in entry) != ('external' in entry), 'Each order entry names a row '
-                'or an external bundle.')
-        keys = {'row', 'stem', 'run', 'stop_if', 'after_external'} if 'row' in entry else {
-            'external', 'stem', 'run', 'runbook', 'after', 'stop_if'}
-        require(set(entry) <= keys, f'Order entry {entry} has keys outside {sorted(keys)}; a row\'s gates are its '
-                'base and after fields.')
-        require('row' not in entry or (entry['row'] in inputs and names[entry['row']].get('returning')),
-                f'Order entry {entry} names no returning row of these inputs.')
-        require('external' not in entry or entry.get('runbook'), f'External entry {entry} names no runbook.')
-        require(entry.get('stem') and entry['stem'] not in stems and entry.get('run') and entry['run'] not in runs,
-                f'Order entry {entry} reuses a record stem or run directory.')
-        require('row' not in entry or entry['run'] == entry['stem'] + '-run',
-                f'A row\'s run directory is its stem followed by -run: {entry}')
-        stop_if = entry.get('stop_if', {})
-        require(isinstance(stop_if, dict) and all(isinstance(v, list) and v and all(isinstance(x, str) for x in v)
-                                                  for v in stop_if.values()),
-                f'Order entry {entry}: stop_if maps a row to a list of its controlled outcome names.')
-        required = [g for g, _ in gates(names[entry['row']])] if 'row' in entry else list(entry.get('after', []))
-        late = [g for g in required + list(stop_if) if g not in placed]
-        require(not late, f'Order entry {entry} names gate rows that are not placed before it: ' + ', '.join(late))
-        late = [g for g in entry.get('after_external', []) if g not in placed_externals]
-        require(not late, f'Order entry {entry} names external entries that are not placed before it: '
-                + ', '.join(late))
-        if 'external' in entry:
-            placed_externals.add(entry['stem'])
-        stems.add(entry['stem'])
-        runs.add(entry['run'])
-        if 'row' in entry:
-            placed.append(entry['row'])
 
 
 def run(inputs, rows=ROWS, evidence=EVIDENCE, repository=ROOT, nm=NM, lifetime=None, run_dir=None,
         survey_build=SURVEY_BUILD):
     """Create the run directory, the next board-bundles-<date>-<n> under evidence or the new directory run_dir,
-    and wait once on the sandboxed step; return (exit status, run directory). Inputs with a returning row
-    first need a survey build that the repository's survey runner accepts."""
+    and wait once on the sandboxed step; return (exit status, run directory)."""
     names = {row['name']: row for row in rows}
     unknown = sorted(set(inputs) - set(names))
     require(not unknown, 'Inputs name unknown rows: ' + ', '.join(unknown))
-    if lifetime is not None:
-        check_lifetime(lifetime, names, inputs)
     excluded = sorted(n for n in inputs if names[n]['class'] == 'excluded')
     require(not excluded, 'Inputs name excluded rows: ' + ', '.join(excluded))
     require(Path(BWRAP).is_file(), f'{BWRAP} is missing; preparation needs the sandbox.')
     survey = None
-    if any(names[n].get('returning') for n in inputs):
-        check_survey(survey_build, repository)
-        survey = {'build': str(Path(survey_build).resolve()), 'software': str(SURVEY_SOFTWARE.resolve()),
-                  'runner': str((Path(repository) / SURVEY_RUNNER).resolve()),
-                  'runner_sha256': sha256(Path(repository) / SURVEY_RUNNER)}
     if run_dir is not None:
         run_dir = Path(run_dir).resolve()
         require(Path(evidence).resolve() in run_dir.parents, f'{run_dir} is not under the evidence directory {evidence}.')

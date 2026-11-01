@@ -324,15 +324,15 @@ release and healthy CLOSE in QEMU.
 
 ## CPU work per frame
 
-`checks/gpu-texture-frame.py` builds the worker and texture sources with the C
+`checks/gpu-texture-frame.py` builds the render service and texture sources with the C
 flags of the A733 SMP images, including `-mgeneral-regs-only`, and runs two
 frames per scene under Unicorn. The client rings, clock, ownership checks and
-GPU result are stubs. The counts cover the worker's requests and polls from
-BEGIN through COMPLETE, and then the READ or PRESENT requests. The harness also
-applies the worker loop's burst rule from `pvr_gpu_service.c`: after a request
-or a GPU wait, the worker runs at most 16 consecutive steps that make progress
-and then waits one tick on its queue. A tick wait counts only when CPU work
-alone exhausts a burst; the two waits for the GPU per frame are separate.
+GPU result are stubs. The counts cover render-service requests and polls from
+BEGIN through COMPLETE, and then the READ or PRESENT requests. This fixture
+does not execute the worker scheduler. The FreeRTOS worker checks in
+`checks/pvr-gpu-service.c` and `checks/pvr-compute-service.c` cover actual pacing.
+The historical tick-wait counts below use a synthetic sixteen-step burst rule;
+they do not measure the current worker's timed bursts.
 
 The 1080p scene is profile 4 with a 1920 × 1080 texture, 65,535 indices and
 16 batches. The 720p scene is profile 2 with a 1280 × 720 texture and one quad,

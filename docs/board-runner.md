@@ -5,6 +5,14 @@ capture. The host implementation has fake-board and offline-image checks.
 Physical qualification remains the coordinator's responsibility. Workers submit
 images without opening a USB device.
 
+`tools/dev-run.py` is a compatibility wrapper around this runner. Its existing
+`cpu-return`, `gpu-return`, `npu` and `rail-helper` commands remain available.
+`--state` always selects offline preparation; force and skip-normalization
+options cannot bypass admission. Offline application checks use `board.py check
+IMAGE --kind cpu-return --state CAPTURE --evidence OUTPUT`; native probes keep
+the default `probe` kind. The [admission inventory](launch-admission.md) lists
+retired transports, retained hardware checks and manifest-generated READMEs.
+
 Use `~/.cache/sunstoneos/venv/bin/python3 -B tools/board.py` in this checkout.
 The examples abbreviate that command as `$board`:
 
@@ -140,6 +148,8 @@ There is no smaller per-run count limit.
 uses `$board resume 3-1`. Resume archives the pause file. It does not clear a
 failed USB instance or repeat an image. Daemon restart collects an existing
 child result after that process stops; it never replays an interrupted image.
+Resume changes only the selected port's pause. Only the daemon collects orphan
+results; recovery skips a live runner even after it has written its result.
 An interrupted spawn with no recorded child identity remains paused for
 coordinator inspection. Shutdown waits for existing children.
 
@@ -226,3 +236,10 @@ failed result. An invalid receipt or incomplete restoration quarantines the
 instance. The new ROM retains ownership of SRAM; the adapter never restores
 old SRAM over it. Watchdog recovery follows the shared runner path and does
 not restore potentially invalid DRAM. These host paths do not qualify hardware.
+
+The development wrapper accepts a finite NPU session file through `--records`
+and an exact build record through `--manifest`. Both inputs reach the same
+runner preparation as `--template`; `--state` selects offline checking.
+`--expect-result` compares the decoded JSON result for application decoders.
+Malformed or incomplete thermal captures fail result validation while retaining
+the native return, application, GPU and thermal bytes.

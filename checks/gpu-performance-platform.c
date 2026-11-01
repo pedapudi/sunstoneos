@@ -6,6 +6,48 @@
 #undef main
 static unsigned rail_writes, mux_writes, bad_parent, stuck_mux;
 static uint64_t written_at;
+#ifdef SUNSTONE_GPU_SETTLE_LATENCY
+static unsigned latency_armed,latency_results,latency_reaps,latency_expire;
+static uint64_t latency_id,collection_done_ns,written_ns;
+enum a733_pmic_status __real_a733_pmic_result(struct a733_pmic *,
+    const struct a733_pmic_request *,struct a733_pmic_snapshot *);
+enum a733_pmic_status __real_a733_pmic_reap(struct a733_pmic *,const struct a733_pmic_request *);
+enum a733_pmic_status __wrap_a733_pmic_result(struct a733_pmic *p,
+    const struct a733_pmic_request *q,struct a733_pmic_snapshot *out)
+{
+    unsigned write=0;
+    for(unsigned i=0;i<A733_PMIC_REQUESTS;++i)
+        if(p->slots[i].request.id==q->id)write=p->slots[i].write;
+    if(latency_armed && q==&gpu.supply_request && write) {
+        latency_armed=0;latency_id=q->id;++latency_results;
+        /* The provider finishes while this caller is preempted after its
+         * entry timestamp. Keep the real request, bus and selector sequence. */
+        pmic_model_cost(&m,600900);
+        enum a733_pmic_status r=A733_PMIC_PENDING;
+        for(unsigned i=0;i<200 && r!=A733_PMIC_COMPLETE;++i) {
+            service_step();m.now+=TICK_US;
+            r=__real_a733_pmic_result(p,q,out);
+            assert(r==A733_PMIC_COMPLETE || r==A733_PMIC_PENDING || r==A733_PMIC_BUSY);
+        }
+        assert(r==A733_PMIC_COMPLETE);
+        pmic_model_cost(&m,700900);
+        return r;
+    }
+    return __real_a733_pmic_result(p,q,out);
+}
+enum a733_pmic_status __wrap_a733_pmic_reap(struct a733_pmic *p,
+    const struct a733_pmic_request *q)
+{
+    unsigned charged=q==&gpu.supply_request && q->id==latency_id;
+    if(charged){++latency_reaps;pmic_model_cost(&m,350700);}
+    enum a733_pmic_status r=__real_a733_pmic_reap(p,q);
+    if(charged && r==A733_PMIC_COMPLETE) {
+        latency_id=0;collection_done_ns=m.now*1000+m.frac_ns;
+        if(latency_expire)m.now=gpu.perf.deadline;
+    }
+    return r;
+}
+#endif
 static int perf_read(void *v,uintptr_t a,uint32_t *out)
 {
     switch(a) {
@@ -20,6 +62,9 @@ static void rail_written(void *v,uint8_t reg,uint8_t value)
 {
     (void)v;if(reg!=0x15)return;
     ++rail_writes;written_at=m.now;
+#ifdef SUNSTONE_GPU_SETTLE_LATENCY
+    written_ns=m.now*1000+m.frac_ns;
+#endif
     assert((value&127)==30 || (value&127)==46);
     if((value&127)==30)assert((d.ccu_b20&0x8700000f)==0x82000000);
 }
@@ -65,8 +110,42 @@ static int change(enum a733_perf_action action,uint32_t value)
     assert(a733_gpu_platform_performance_begin(&gpu,action,value,m.now+50000));
     return step(performance_poll,&gpu);
 }
-int main(void)
+#ifdef SUNSTONE_GPU_SETTLE_LATENCY
+static void arm_latency(unsigned expire)
 {
+    latency_armed=1;latency_results=latency_reaps=0;latency_expire=expire;
+    latency_id=collection_done_ns=0;
+}
+static int settle_cases(void)
+{
+    arm_latency(0);setup(0,1);
+    assert(latency_results==1 && latency_reaps==1 && collection_done_ns>written_ns);
+    assert((gpu.supply_settled+1)*1000>=collection_done_ns+1200000);
+    assert(m.now*1000+m.frac_ns>=written_ns+1200000);
+
+    setup(1,1);arm_latency(0);
+    assert(change(A733_PERF_VOLTAGE,960)==1);
+    assert(latency_results==1 && latency_reaps==1 && collection_done_ns>written_ns);
+    assert((gpu.perf.settled+1)*1000>=collection_done_ns+1200000);
+    assert(m.now*1000+m.frac_ns>=written_ns+1200000);
+
+    setup(1,1);arm_latency(1);
+    const uint64_t old_settled=gpu.perf.settled;
+    assert(a733_gpu_platform_performance_begin(&gpu,A733_PERF_VOLTAGE,960,m.now+50000));
+    unsigned mux=mux_writes;
+    assert(step(performance_poll,&gpu)==-1);
+    assert(latency_results==1 && latency_reaps==1 && gpu.pmic.rail.id && gpu.token &&
+        gpu.perf.settled==old_settled && gpu.perf.current_uv==800000 && mux_writes==mux);
+    puts("PASS GPU supply settle: costly result/reap precede both 1200 us anchors; original deadline blocks dependent operations and retains resources");
+    return 0;
+}
+#endif
+int main(int argc,char **argv)
+{
+#ifdef SUNSTONE_GPU_SETTLE_LATENCY
+    if(argc==2 && !strcmp(argv[1],"--settle-only"))return settle_cases();
+#endif
+    assert(argc==1);(void)argv;
     unsigned cases=0;
     for(unsigned first=0;first<2;++first) {
         setup(0,first);const uint64_t rail=gpu.pmic.rail.id,parent=gpu.perf.parent.id;

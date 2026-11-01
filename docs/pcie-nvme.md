@@ -259,4 +259,6 @@ and USB transport are modeled.
 - Physical qualification with a real NVMe device on the FPC connector: link,
   identify, read, shutdown, port stop and DMA visibility.
 - Physical MSI-X delivery, pending propagation and queue/data visibility.
-- Reads of more than one block, and Gen2 link training for this image.
+- Reads of more than one block and physical Gen3 training, negotiated fallback
+  and link-fault recovery. Native applications request the vendor Gen3 default;
+  host checks cover negotiated Gen1–Gen3.

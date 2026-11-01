@@ -258,8 +258,8 @@ int main(void){struct sunxi_edp_hw_desc hw={0};struct edp_tx_core c={0};
     image = controller.base.Image(args.image, layout_names=('a733_dp','a733_dp_ops','a733_dp_config','a733_dp_result'))
 
     class Model(controller.Model):
-        def __init__(self, image):
-            super().__init__(image)
+        def __init__(self, image, phy_delays=(6000,35,40)):
+            super().__init__(image,phy_delays)
             self.aux_writes = []
             self.pattern_order = []
 
@@ -290,7 +290,7 @@ int main(void){struct sunxi_edp_hw_desc hw={0};struct edp_tx_core c={0};
 
     counts = []
     for polarity in (1,2):
-        model=Model(image)
+        model=Model(image,phy_delays=(0,0,0))
         model.put(model.cfg+image.layouts['a733_dp_config']['polarity'], polarity, 4)
         assert model.call('a733_dp_init', model.obj, model.cfg)==1
         model.events.clear()
@@ -359,7 +359,7 @@ int main(void){struct sunxi_edp_hw_desc hw={0};struct edp_tx_core c={0};
     preparer['link_rate_authority']({'qualified_link_rate_mbps':5400})
     authority_cases=admission_cases(preparer,hashlib.sha256(args.image.read_bytes()).hexdigest())
 
-    inputs=[Path(__file__), ROOT/'checks/displayport-controller.py',ROOT/'checks/harness.py',
+    inputs=[Path(__file__), ROOT/'checks/displayport-controller.py',ROOT/'checks/harness.py',ROOT/'checks/register_latency.py',
             ROOT/'drivers/display/a733_dp.c',ROOT/'drivers/display/a733_dp_cadence.c',
             ROOT/'drivers/display/a733_dp_internal.h',ROOT/'apps/displayport/admission.c',
             args.image,args.previous_image,args.preparer]

@@ -9,6 +9,9 @@ from harness import Image, skip_crumbs
 from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE
 from unicorn.arm64_const import UC_ARM64_REG_X0, UC_ARM64_REG_SP, UC_ARM64_REG_LR, UC_ARM64_REG_PC
 
+# Linked image sources whose paths are not named by the boundary model.
+CHECK_INPUTS = ('drivers/gpu/gpu_queue.c',)
+
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--image', type=Path, required=True)
 p.add_argument('--profile', choices=('os', 'finite'), required=True)

@@ -12,7 +12,7 @@ static uint8_t output[4096];
 static int epf_read(void *v,uintptr_t a,unsigned width,uint32_t *out)
 {
  assert(a733_pcie_native_address(a,width,0)||a733_pcie_epf_native_address(&port,a,width,0));
- if(a>=0x22000000&&a<=0x2200002c){assert(width==4);*out=*pmic_model_word(v,a);return 1;}
+ if(a>=0x22000000&&a<=0x2200002c){assert(width==4&&!atu_effects[1].pending&&(*pmic_model_word(v,0x06300204)&(1u<<31)));*out=*pmic_model_word(v,a);return 1;}
  return pcie_read(v,a,width,out);
 }
 static int epf_write(void *v,uintptr_t a,unsigned width,uint32_t value)
@@ -23,6 +23,7 @@ static int epf_write(void *v,uintptr_t a,unsigned width,uint32_t value)
  if(wide_bar&&a==0x20000014&&value==UINT32_MAX){*pmic_model_word(v,a)=UINT32_MAX;return 1;}
  if(a==0x06000830){assert(value==1);*pmic_model_word(v,a)&=~value;return 1;}
  if(a==0x22000004){assert(irq_armed&&!submitted&&value==32);++submitted;}
+ if(a>=0x06300200&&a<=0x06300218)return atu_model_write(v,a,value);
  if(a733_pcie_native_address(a,width,1))return pcie_write(v,a,width,value);
  uint32_t *word=pmic_model_word(v,a&~(uintptr_t)3),mask=width==4?UINT32_MAX:65535u<<((a&3)*8);
  *word=(*word&~mask)|(value<<((a&3)*8));return 1;
@@ -91,6 +92,7 @@ int main(int argc,char **argv)
  assert(argc==2);assert(mmap((void *)0x41c00000,2*1024*1024,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED_NOREPLACE,-1,0)!=MAP_FAILED);
  const char *mode=argv[1];
  if(!strncmp(mode,"gen2",4))link_speed=negotiated=2; /* Modeled directed change to 5 GT/s. */
+ if(!strncmp(mode,"gen3",4)){link_speed=3;negotiated=!strcmp(mode,"gen3-fallback")?1:3;}
  begin(!strcmp(mode,"wide")||!strcmp(mode,"high-half"),!strcmp(mode,"high-half")?1:0);
  oversize_bar=!strcmp(mode,"oversize");
  if(!strcmp(mode,"fixture")){
@@ -112,10 +114,11 @@ int main(int argc,char **argv)
    else if(!strcmp(mode,"guard-error")){*(uint8_t *)client.memory[1].cpu^=1;refused();}
    else if(!strcmp(mode,"source-error")){*(uint8_t *)(client.memory[0].cpu+4103)^=1;refused();}
    else if(!strcmp(mode,"link-loss")){*pmic_model_word(&model,0x06400e0c)=0;refused();}
-   else if(!strcmp(mode,"gen2-retrain")){*pmic_model_word(&model,0x06000080)=0x00110000;refused();}
+   else if(!strcmp(mode,"gen2-retrain")||!strcmp(mode,"gen3-retrain")){*pmic_model_word(&model,0x06000080)=0x00110000;refused();}
    else {
-    assert(!strcmp(mode,"nominal")||!strcmp(mode,"wide")||!strcmp(mode,"gen2"));assert(advance()==A733_PCIE_READY);
-    assert(port.endpoint.link_status==(!strcmp(mode,"gen2")?0x12:0x11));
+    assert(!strcmp(mode,"nominal")||!strcmp(mode,"wide")||!strcmp(mode,"gen2")||
+        !strcmp(mode,"gen3")||!strcmp(mode,"gen3-fallback"));assert(advance()==A733_PCIE_READY);
+    assert(port.endpoint.link_status==(0x10|negotiated));
     assert(a733_pcie_epf_copy(&client,(void *)&port)==A733_PCIE_INVALID);
     assert(a733_pcie_epf_copy(&client,(void *)&model.clocks)==A733_PCIE_INVALID);
     assert(a733_pcie_epf_copy(&client,output)==A733_PCIE_READY&&client.published);

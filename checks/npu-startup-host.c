@@ -72,6 +72,8 @@ static struct {
     uintptr_t fabric_order[3];
     uintptr_t last_write;
     unsigned register_busy,expire_at_write; /* Stopped-retune fault injection only. */
+    unsigned stop_at_settle,spin_stalled,spin_reads;
+    uint64_t local_open_ns;
 } r;
 static uint32_t *word(uintptr_t a)
 {assert(a>=CCU && a<CCU+0x2000 && !(a&3));return &r.ccu[(a-CCU)/4];}
@@ -133,11 +135,13 @@ static int reg_write(void *v,uintptr_t a,uint32_t value)
     }
     if(a==CCU+0x1920)++r.gate_writes;
     if(a==CCU+0xb04 && !r.first_b04_at)r.first_b04_at=r.writes;
+    if(a==CCU+0xb00 && (value&0x80000000))r.local_open_ns=m.now*1000+m.frac_ns;
     *word(a)=value;return 1;
 }
 static int now_us(void *v,uint64_t *out){assert(v==&r);++r.clock_reads;return pmic_model_now(&m,out);}
 /* Raw counter for the LOCK spacing: one modeled microsecond per read. */
-static uint64_t spin_us(void *v){assert(v==&r);return ++m.now;}
+static uint64_t spin_us(void *v)
+{assert(v==&r);++r.spin_reads;return r.spin_stalled ? m.now : ++m.now;}
 static int enter(void *v,uint64_t deadline)
 {assert(v==&r && !r.held && m.now<deadline);++r.enters;if(r.register_busy)return 0;r.held=1;return 1;}
 static void leave(void *v){assert(v==&r && r.held);r.held=0;}
@@ -231,6 +235,7 @@ static struct run boot(unsigned limit,unsigned service,uint64_t service_from_us)
             r.woken=0;
             const unsigned stage=s.stage,clock_reads=r.clock_reads;
             x.result=step();++x.calls;
+            if(r.stop_at_settle && s.stage==A733_NPU_STARTUP_SETTLE)break;
             /* The register window opens only at READY. */
             assert((atomic_load(&s.window_open)==1)==(x.result==A733_NPU_PLATFORM_READY));
             if(s.stage!=stage || x.result==A733_NPU_PLATFORM_READY)++x.advancing;
@@ -741,10 +746,32 @@ static int cold_fabric(void)
     }
     puts("PASS cold NPU fabric: five acquisitions/restarts and six retained update/readback/deadline failures; neighboring GPU gates preserved");return 0;
 }
+static int completion_cases(void)
+{
+    setup();r.stop_at_settle=1;
+    struct run b=boot(200,1,0);
+    assert(b.result==A733_NPU_PLATFORM_PENDING && s.stage==A733_NPU_STARTUP_SETTLE);
+    assert(s.wait_until*1000-r.local_open_ns>=2000000);
+    m.now=s.wait_until-1;m.frac_ns=500;m.now_ns=1;r.spin_stalled=1;
+    unsigned reads=r.spin_reads;
+    assert(step()==A733_NPU_PLATFORM_PENDING && s.stage==A733_NPU_STARTUP_SETTLE);
+    assert(r.spin_reads-reads<=A733_GPU_SPIN_STALLED_READS+2 && !atomic_load(&s.window_open));
+    m.now=s.config.deadline_us;
+    assert(step()==A733_NPU_PLATFORM_RETAINED && tokens_held() && !atomic_load(&s.window_open));
+
+    setup();r.stop_at_settle=1;b=boot(200,1,0);
+    assert(b.result==A733_NPU_PLATFORM_PENDING && s.stage==A733_NPU_STARTUP_SETTLE);
+    m.now=s.wait_until-1;m.frac_ns=500;m.now_ns=1;
+    assert(step()==A733_NPU_PLATFORM_READY && m.now*1000+m.frac_ns-r.local_open_ns>=2000000);
+    puts("PASS NPU settle: fractional clock preserves 2 ms; stalled raw tail returns pending and original deadline retains resources");
+    return 0;
+}
+
 int main(int argc,char **argv)
 
 {
     (void)unused_boot;
+    if(argc==2 && !strcmp(argv[1],"--completion-only"))return completion_cases();
     if(argc==2 && !strcmp(argv[1],"--cold-fabric"))return cold_fabric();
     if(argc==2 && !strcmp(argv[1],"--resident-retune"))return resident_retune(0);
     if(argc==2 && !strcmp(argv[1],"--resident-retune-wait"))return resident_retune(12);

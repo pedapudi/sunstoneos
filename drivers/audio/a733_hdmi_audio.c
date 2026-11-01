@@ -4,6 +4,7 @@
  * Copyright (C) 2016 Allwinner.
  * Licensed under GNU General Public License version 2, as is, without warranty. */
 #include "a733_hdmi_audio.h"
+#include "a733_range.h"
 int a733_hdmi_audio_edid(const uint8_t *e,size_t n)
 {
     if(!e||n<128||n>512||n%128||n!=(size_t)(e[126]+1)*128)return 0;
@@ -54,7 +55,8 @@ int a733_hdmi_audio_prepare(struct a733_hdmi_audio *a)
         uint32_t old;
         if(a733_hdmi_read(io,A733_HDMI_BASE+0x3100,1,&old)!=1||
            a733_hdmi_write(io,A733_HDMI_BASE+0x3100,1,old|0x80)!=1)return fail(a);
-        a->until=io->now+5;a->stage=1;return 0;
+        if(!a733_deadline_after(io->now,6,&a->until)||a->until>=io->deadline)return fail(a);
+        a->stage=1;return 0;
     }
     if(a->stage==1){
         if(io->now<a->until)return 0;
@@ -82,7 +84,8 @@ int a733_hdmi_audio_prepare(struct a733_hdmi_audio *a)
      * waits 5 ms before sampler/packet programming. */
     if(a->stage==2&&a->index==4){
         if(field(a,0x3205,0xff,0)!=1)return fail(a);
-        a->until=io->now+5000;a->stage=3;return 0;
+        if(!a733_deadline_after(io->now,5001,&a->until)||a->until>=io->deadline)return fail(a);
+        a->stage=3;return 0;
     }
     if(a->index<sizeof(settings)/sizeof(settings[0])){
         const unsigned i=a->index;

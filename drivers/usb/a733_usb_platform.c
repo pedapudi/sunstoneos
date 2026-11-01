@@ -123,9 +123,11 @@ static int softconn_clear(struct a733_usb_platform *p,unsigned *clear)
 static int wait_start(struct a733_usb_platform *p,uint64_t delay)
 {
     if(!timely(p))return 0;
-    if(delay>=p->config.deadline_us-p->last_now){
+    /* The sampled counter is floored. One additional microsecond protects
+     * the minimum hold from that quantization, without moving the deadline. */
+    if(delay>=p->config.deadline_us-p->last_now-1){
         record(p,A733_USB_FAILURE_WAIT,0,0,(uint32_t)delay,0,0,0);return 0;}
-    p->wait_until=p->last_now+delay;return 1;
+    p->wait_until=p->last_now+delay+1;return 1;
 }
 static int peri_rate(struct a733_usb_platform *p,uint32_t v,unsigned mhz)
 {

@@ -150,7 +150,7 @@ int aic8800_transport_load_firmware(struct aic8800_sdio_transport *t,
         deadline <= t->card->host->last_now) return 0;
     for (unsigned i = 0; i < AIC8800_FIRMWARE_BLOBS; ++i)
         if (!independent(t, f->config.blobs[i].data, f->config.blobs[i].bytes)) return 0;
-    uint64_t delay = t->config.ticks_per_ms / 2 + t->config.ticks_per_ms % 2;
+    uint64_t delay = t->config.ticks_per_ms / 2 + t->config.ticks_per_ms % 2 + 1;
     if (!aic8800_firmware_claim(f, &t->identity, t, t->card->host->last_now, deadline, delay)) return 0;
     t->firmware = f; t->deadline = deadline; t->wait_until = 0;
     t->phase = FIRMWARE_STEP; t->state = AIC8800_TRANSPORT_FIRMWARE; return 1;
@@ -417,6 +417,13 @@ static void delay(struct aic8800_sdio_transport *t, uint64_t now, uint64_t ticks
 {
     if (!a733_deadline_after(now, ticks, &t->wait_until)) fail(t, AIC8800_TRANSPORT_TIMEOUT);
 }
+static void settle(struct aic8800_sdio_transport *t,uint64_t now)
+{
+    /* One caller-clock tick covers a floor-rounded origin. Native owners use
+     * microseconds; coarse providers retain this conservative extra tick. */
+    if(t->config.ticks_per_ms==UINT64_MAX){fail(t,AIC8800_TRANSPORT_TIMEOUT);return;}
+    delay(t,now,t->config.ticks_per_ms+1);
+}
 static void rx_size(struct aic8800_sdio_transport *t, size_t bytes)
 {
     t->rx_bytes = bytes; t->cursor = 0;
@@ -444,10 +451,10 @@ static void completed(struct aic8800_sdio_transport *t, uint64_t now)
         break;
     case PAD_F2:
         if (t->config.pad == AIC8800_PAD_WRITE_80) ++t->phase;
-        else { t->phase = SETTLE; delay(t, now, t->config.ticks_per_ms); }
+        else { t->phase = SETTLE; settle(t, now); }
         break;
-    case PAD_F1: t->phase = SETTLE; delay(t, now, t->config.ticks_per_ms); break;
-    case RESTORE_PAD: t->phase = RESTORE_SETTLE; delay(t, now, t->config.ticks_per_ms); break;
+    case PAD_F1: t->phase = SETTLE; settle(t, now); break;
+    case RESTORE_PAD: t->phase = RESTORE_SETTLE; settle(t, now); break;
     case IRQ_READ: t->prior_irq = value; ++t->phase; break;
     case FUNCTION_IRQ_READ: t->prior_function_irq = value; ++t->phase; break;
     case FUNCTION_IRQ_WRITE: t->state = AIC8800_TRANSPORT_READY; break;

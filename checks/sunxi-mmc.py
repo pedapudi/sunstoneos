@@ -103,7 +103,7 @@ reference = (mmc[:mmc.index('#include')] + sd[:sd.index('#include')] + shim + ar
 (a.evidence / 'mmc-reference.h').write_text(reference)
 common = [a.cc, '-std=gnu11', '-Wall', '-Wextra', '-Werror', '-Iinclude']
 host = a.evidence / 'mmc-model'
-run(common + ['-O1', '-g', '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
+run(common + ['-O1', '-g', '-fsanitize=address,undefined', '-fno-sanitize-recover=all', '-fno-omit-frame-pointer',
               '-I' + str(a.evidence), 'drivers/storage/sunxi_mmc.c', 'checks/sunxi-mmc.c', '-o', str(host)])
 output = run([str(host)] + (['--auto-stop-argument'] if a.auto_stop_argument_only else []))
 print(output, end='')
@@ -115,7 +115,7 @@ undefined = run(['/usr/lib/llvm-21/bin/llvm-nm', '--undefined-only', str(obj)])
 # Aggregate zero/copy operations may lower to runtime memory helpers. There are
 # no OS, allocation or Linux dependencies.
 assert all(line.split()[-1] in {'memset', 'memcpy'} for line in undefined.splitlines()), undefined
-for relative in ['include/sunxi_mmc.h', 'drivers/storage/sunxi_mmc.c', 'checks/sunxi-mmc.c', 'checks/sunxi-mmc.py']:
+for relative in ['include/sunxi_mmc.h', 'drivers/storage/sunxi_mmc.c', 'checks/sunxi-mmc.c', 'checks/sunxi-mmc.py', 'checks/register_latency.h']:
     inputs[relative] = hashlib.sha256((root / relative).read_bytes()).hexdigest()
 (a.evidence / 'inputs.json').write_text(json.dumps(inputs, indent=2) + '\n')
 print('PASS: native AArch64 compile; evidence retained at', a.evidence)

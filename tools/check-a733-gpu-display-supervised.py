@@ -62,7 +62,7 @@ def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     for name in ('bundle','fel','evidence'):parser.add_argument('--'+name,type=Path,required=True)
 
-    parser.add_argument('--supervised-manual-reconnect',action='store_true',required=True)
+    parser.add_argument('--supervised-manual-reconnect',action='store_true')
     args=parser.parse_args(argv);bundle=args.bundle.resolve();prepared=preparation.validate_bundle(bundle)
     frozen=prepared['_frozen'];cache={path:frozen[ref['name']] for path,ref in prepared['entry_evidence'].items()}
     def validate_entry(identity,port):

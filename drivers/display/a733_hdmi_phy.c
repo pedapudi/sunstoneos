@@ -149,14 +149,14 @@ static int phy_transaction(struct a733_hdmi_phy *p){
         if(!a733_deadline_after(b->now,5000,&p->operation_deadline))return a733_hdmi_fail(b);
         if(a733_hdmi_write(b,A733_HDMI_BASE+0x3026,1,q==4?0x10:1)!=1)return -1;
         if(b->now>=p->operation_deadline)return a733_hdmi_fail(b);
-        if(!a733_deadline_after(b->now,10,&p->until))return a733_hdmi_fail(b);
+        if(!a733_deadline_after(b->now,11,&p->until))return a733_hdmi_fail(b);
     }else if(q==5 || q==9){
         if(b->now>=p->operation_deadline)return a733_hdmi_fail(b);
         if(b->now<p->until)return 0;
         if(a733_hdmi_read(b,A733_HDMI_BASE+0x108,1,&x)!=1)return -1;
         if(b->now>=p->operation_deadline || (x&1))return a733_hdmi_fail(b);
-        if(!(x&2)){p->until=p->operation_deadline-b->now<10?
-            p->operation_deadline:b->now+10;return 0;}
+        if(!(x&2)){p->until=p->operation_deadline-b->now<11?
+            p->operation_deadline:b->now+11;return 0;}
     }else if(q==6 || q==10){
         if(a733_hdmi_write(b,A733_HDMI_BASE+0x108,1,2)!=1)return -1;
     }else if(q==11){
@@ -193,7 +193,7 @@ int a733_hdmi_phy_poll(struct a733_hdmi_phy *p){
         if(b->now>=p->operation_deadline)return a733_hdmi_fail(b);
         if(!(x&1)){p->locks=0;return 0;}
         if(++p->locks<2)return 0;
-        if(!a733_deadline_after(b->now,20,&p->until))return a733_hdmi_fail(b);
+        if(!a733_deadline_after(b->now,21,&p->until))return a733_hdmi_fail(b);
         p->stage=5;return 0;
     case 5:
         if(b->now<p->until)return 0;
@@ -201,7 +201,7 @@ int a733_hdmi_phy_poll(struct a733_hdmi_phy *p){
         p->stage=6;return 0;
     case 6:
         if(field(b,A733_HDMI_BASE+0x3000,1,0x20,0)!=1)return -1;
-        if(!a733_deadline_after(b->now,5,&p->until))return a733_hdmi_fail(b);
+        if(!a733_deadline_after(b->now,6,&p->until))return a733_hdmi_fail(b);
         p->stage=7;return 0;
     case 7:
         if(b->now<p->until)return 0;
@@ -229,7 +229,7 @@ int a733_hdmi_phy_poll(struct a733_hdmi_phy *p){
     case 14:
         if(field(b,A733_HDMI_BASE+0x3000,1,8,8)!=1)return -1;
         if(!a733_deadline_after(b->now,2500,&p->operation_deadline))return a733_hdmi_fail(b);
-        p->until=b->now+5;
+        p->until=b->now+6;
         p->locks=0;p->index=0;p->stage=15;return 0;
     case 15:
         /* The source samples lock every 5us for 2.5ms. A tick-paced owner may
@@ -239,12 +239,12 @@ int a733_hdmi_phy_poll(struct a733_hdmi_phy *p){
         if(b->now>=p->operation_deadline&&p->index>=4&&!p->locks)return a733_hdmi_fail(b);
         if(b->now<p->until)return 0;
         if(a733_hdmi_read(b,A733_HDMI_BASE+0x3004,1,&x)!=1)return -1;
-        if(b->now>UINT64_MAX-5)return a733_hdmi_fail(b);
+        if(b->now>UINT64_MAX-6)return a733_hdmi_fail(b);
         ++p->index;
         if(!(x&1)){p->locks=0;
             if(b->now>=p->operation_deadline&&p->index>=4)return a733_hdmi_fail(b);
-            p->until=b->now+5;return 0;}
-        if(++p->locks<2){p->until=b->now+5;return 0;}
+            p->until=b->now+6;return 0;}
+        if(++p->locks<2){p->until=b->now+6;return 0;}
         if(a733_hdmi_tick(b)!=1)return -1;
         p->ready=1;return 1;
     default:return a733_hdmi_fail(b);

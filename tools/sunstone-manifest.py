@@ -113,7 +113,7 @@ def load(path):
             name + ': host operations overlap the OS reports 0x05..0x08')
     require(count or not first, name + ': an empty host range starts at 0')
     audio = raw.get('audio')
-    if (required | optional) & CAPTURE:
+    if audio is not None or (required | optional) & CAPTURE:
         require(audio is not None, name + ': a capture device needs an audio format')
         m['audio'] = {'rate_hz': integer(audio['rate_hz'], name + ' rate_hz', 8000, 192000),
                       'channels': integer(audio['channels'], name + ' channels', 1, 2),
@@ -123,7 +123,6 @@ def load(path):
         require(m['audio']['bits'] in (16, 24, 32), name + ': bits is 16, 24 or 32')
         require(m['audio']['min_frames'] <= m['audio']['max_frames'], name + ': min_frames exceeds max_frames')
     else:
-        require(audio is None, name + ': an audio format needs a capture device')
         m['audio'] = {'rate_hz': 0, 'channels': 0, 'bits': 0, 'min_frames': 0, 'max_frames': 0}
     regions, names = [], []
     require(len(raw.get('regions', [])) <= REGIONS, name + ': at most %d regions' % REGIONS)
@@ -316,7 +315,7 @@ def c_tables(m):
              'const struct ss_application ss_application = {&%s_manifest,%s_init,%s_main,app_stack,&app_task};' % (c,c,c),
              '__attribute__((used,retain,aligned(8))) uint8_t ss_result_record[%d];' % (56+m['output_limit']),
              'const size_t ss_result_capacity = %du;' % m['output_limit'],
-             '__attribute__((aligned(4))) uint8_t ss_capture_buffer[%d];' % (64 + max(8192, -(-(m['audio']['max_frames']*m['audio']['channels']*(m['audio']['bits']//8))//4096)*4096) if (m['devices_required']|m['devices_optional'])&4 else 64),
+             '__attribute__((aligned(4))) uint8_t ss_capture_buffer[%d];' % (64 + max(8192, -(-(m['audio']['max_frames']*m['audio']['channels']*(m['audio']['bits']//8))//4096)*4096) if m['audio']['max_frames'] else 64),
              'const size_t ss_capture_capacity = sizeof(ss_capture_buffer)-SS_CAPTURE_HEADROOM;',
              '__attribute__((used,retain)) const struct os_application os_applications[] = {',
              '    {"thermal",os_thermal_task_privileged,os_thermal_pins,os_thermal_start},',
