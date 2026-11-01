@@ -62,10 +62,10 @@ def geometry(image):
     result['output_address'] = output['value']
     result['output_bytes'] = OUTPUT_BYTES
     result['thermal'] = thermal_capture.geometry(image)
-    mode = os_image.watchdog_marker(elf)
-    if mode is not None:
+    watchdog = os_image.watchdog_marker(elf)
+    if watchdog is not None:
         # Host-armed WDT0 and RTC breadcrumbs (include/sunstone_crumb.h).
-        result['watchdog'] = {'mode': mode}
+        result['watchdog'] = watchdog
     config=os_image.os_link.gpu_configuration(elf)
     if config:
         require('return' in config, 'GPU return capability absent.')

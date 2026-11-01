@@ -1,12 +1,21 @@
 --- input
 +++ output
-@@ -287,6 +287,45 @@
- #endif
-     clear_bhb
-     block_walks
+@@ -355,6 +355,7 @@
+ 1:  dsb sy
+     str x2, [x1, #16]
+     dsb sy
++    cbz x20, a733_qualification_success_dispatch
+     // All fatal paths converge here without using an EL1 stack or RAM.
+     // Ordinary NS WB memory is safe only after every EL3 context adopted it.
+     mrs x3, sctlr_el3
+@@ -399,6 +400,46 @@
+     add x5, x5, #128
+     subs x6, x6, #1
+     b.ne .Lstorage_adopted
 +    // Breadcrumb fault words (include/sunstone_crumb.h): the first fault or
-+    // exit after entry, in RTC words that survive a watchdog reset. The
-+    // success SMC (x0 = 0) records nothing. Uses x2-x7 only, no memory.
++    // exit after entry, in RTC words that survive a watchdog reset. Only after
++    // the checks above proved this core's EL3 identity map; the success SMC
++    // left earlier. x20 is 4 for an exception, as in the report. Uses x2-x7.
 +    mrs x3, esr_el3
 +    lsr x4, x3, #26
 +    cmp x4, #0x17
@@ -43,25 +52,17 @@
 +    str w6, [x2, #0x110]
 +    dsb sy
 +.Lcrumb_fault_done:
-     mrs x0, mpidr_el1
-     mov x1, #0xc1000000
-     orr x1, x1, #0x700
-@@ -355,6 +394,7 @@
- 1:  dsb sy
-     str x2, [x1, #16]
-     dsb sy
-+    cbz x20, a733_qualification_success_dispatch
-     // All fatal paths converge here without using an EL1 stack or RAM.
-     // Ordinary NS WB memory is safe only after every EL3 context adopted it.
-     mrs x3, sctlr_el3
-@@ -497,10 +537,37 @@
+     // Use this core's reserved Secure Device stack regardless of the fault's SP.
+     adrp x3, a733_cpu_entry_stacks
+     add x3, x3, :lo12:a733_cpu_entry_stacks
+@@ -497,10 +538,37 @@
      stp x0, x1, [sp, #-16]!
      mrs x0, esr_el1
      and x0, x0, #0xffff
 +    mov x1, #0x735
 +    cmp x0, x1
 +    b.eq .Lqualification
-+    mov x1, #0x736
++    mov x1, #0x5c0d
 +    cmp x0, x1
 +    b.eq .Lcrumb
      cmp x0, #119

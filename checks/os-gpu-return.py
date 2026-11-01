@@ -73,6 +73,7 @@ for case in cases:
     for address,data in image.parts:
         if data:u.mem_write(address,data)
     skip_crumbs(u,image)
+    u.mem_map(0x02050000,0x1000)  # WDT0: the live supervisor restarts the host-armed watchdog.
     def put(address,value,n=4):u.mem_write(address,int(value).to_bytes(n,'little'))
     def get(address,n=4):return int.from_bytes(u.mem_read(address,n),'little')
     def field(base,typ,name):return base+image.layouts[typ][name]
@@ -147,6 +148,7 @@ for case in cases:
         if case!='recognition-cutoff':put(image.address('return_state','/apps/os/gpu.c'),1)
         invoke('os_cpu_return_supervise')
         assert state['exit']==(None if case=='finalizing-window' else 0x73c)
+        if 'os_cpu_return_watchdog' in image.symbols:assert get(0x0205000c)==0x14af
         assert not invoke('os_gpu_return_ready') and not state['requests'] and not state['suspended']
         rows.append({'name':case,'passed':True,'terminal_detail':state['exit']})
         continue

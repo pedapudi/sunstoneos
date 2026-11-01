@@ -485,18 +485,19 @@ WATCHDOG_MARKER = 0x31544457534f5243
 
 
 def watchdog_marker(elf):
-    """The WDT0 mode a returning image admits at entry, or None (apps/os/cpu-return.c).
+    """{'mode', 'session_seconds'} of a returning image's watchdog, or None (apps/os/cpu-return.c).
 
-    The host arms that mode before launch; the image disarms it on its only
-    normal return and records breadcrumbs in RTC words (include/sunstone_crumb.h)."""
+    The host arms that WDT0 mode before launch. The image restarts it while its
+    session is live, disarms it on its only normal return and records
+    breadcrumbs in RTC words (include/sunstone_crumb.h)."""
     found = [s for s in elf.symbols if s['name'] == 'os_cpu_return_watchdog' and s['shndx'] != 0]
     if not found:
         return None
-    require(len(found) == 1 and found[0]['size'] == 32, 'Watchdog marker geometry differs.')
-    magic, version, mode, rtc = struct.unpack('<4Q', elf.read(found[0]['value'], 32))
-    require((magic, version, rtc) == (WATCHDOG_MARKER, 1, 0x07090000) and mode & 0xff0f == 1 and
-            1 <= mode >> 4 <= 11, 'Watchdog marker differs.')
-    return mode
+    require(len(found) == 1 and found[0]['size'] == 40, 'Watchdog marker geometry differs.')
+    magic, version, mode, rtc, seconds = struct.unpack('<5Q', elf.read(found[0]['value'], 40))
+    require((magic, version, rtc) == (WATCHDOG_MARKER, 2, 0x07090000) and mode & 0xff0f == 1 and
+            1 <= mode >> 4 <= 11 and 1 <= seconds <= 600, 'Watchdog marker differs.')
+    return {'mode': mode, 'session_seconds': seconds}
 
 
 def build_launcher(out, session_bytes, clang, lld, watchdog_mode=None):
@@ -713,8 +714,8 @@ def prepare(image, link_check, admission, template, assets, output, clang, lld, 
         (out / name).write_bytes(data)
     segments, address, identity = base.image_parts(out / 'image.elf')
     raw[48:80] = identity
-    build_launcher(out, len(raw), clang, lld,
-                   watchdog_marker(os_link.Elf(snapshots['image.elf'])) if cpu_return else None)
+    watchdog = watchdog_marker(os_link.Elf(snapshots['image.elf'])) if cpu_return else None
+    build_launcher(out, len(raw), clang, lld, watchdog and watchdog['mode'])
     uploads = []
     for index, segment in enumerate(segments):
         if segment['data']:

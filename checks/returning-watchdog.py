@@ -34,6 +34,7 @@ def load(name, path):
 
 
 crumbs = load('checked_crumbs', 'tools/a733-crumbs.py')
+harness = load('checked_harness', 'checks/harness.py')
 transport = load('checked_returning', 'tools/a733-returning-host.py')
 base = load('checked_returning_base', 'tools/check-a733-smp.py')
 rows = []
@@ -59,6 +60,8 @@ def header_cases():
     assert 0x108 not in crumbs.WORDS.values(), 'the FEL flag word is never a breadcrumb'
     assert len(set(stages)) == len(stages) and all(0 < s < 0x10000 for s in stages)
     assert defines['WATCHDOG_MODE'] == 0xb1 and crumbs.interval(0xb1) == 16 and crumbs.interval(0x41) == 4
+    assert stages[crumbs.RETURN_ROM] == 'RETURN_ROM' and defines['SVC'] == 0x5c0d
+    assert harness.CRUMB_SVC == 0xd4000001 | defines['SVC'] << 5
     arm = crumbs.arm_arguments(0xb1)
     assert '0x7090108' not in arm and arm[:-12] == sum((['writel', hex(crumbs.RTC + o), '0x0']
                                                         for o in crumbs.WORDS.values()), [])
@@ -131,8 +134,13 @@ def transport_case(variant, root):
                 rtc[0x100] = 0x5c0d0000 | EPOCH & 0xffff if variant != 'fired-before-entry' else 0
                 if variant in ('fired', 'disarm-ignored'):
                     rtc[0x104] = 0x0410 << 16 | 37; rtc[0x10c] = 6 << 29 | 77
+                elif variant == 'disarmed-without-rom':
+                    state['mode'] = 0; rtc[0x104] = 0x0421 << 16
+                elif variant == 'rom-from-other-session':
+                    state['mode'] = 0; rtc[0x104] = 0x0503 << 16; rtc[0x100] ^= 1
                 elif variant != 'fired-before-entry':
-                    state['mode'] = 0xb0; rtc[0x104] = 0x0503 << 16 | 0xb0
+                    # The image's disarm write clears the mode before RETURN_ROM.
+                    state['mode'] = 0; rtc[0x104] = 0x0503 << 16
             elif op == 'read':
                 Path(arguments[i + 3]).write_bytes(bytes(int(arguments[i + 2]))); i += 4
             else:
@@ -152,9 +160,7 @@ def transport_case(variant, root):
     args = types.SimpleNamespace(bundle=root, fel=fel, evidence=root / 'evidence', root_owned_claim='MODEL ONLY')
     options = {'return_timeout': 90}
     if variant != 'no-watchdog':
-        options['watchdog'] = {'mode': 0x41 if variant == 'short-window' else 0xb1}
-    if variant == 'short-window':
-        options['return_timeout'] = 12
+        options['watchdog'] = {'mode': 0xb1, 'session_seconds': 0 if variant == 'invalid-session' else 60}
     clock = itertools.count(0, 0.5)
     with patch.object(base, 'digest', return_value=base.FEL_HASH), patch.object(base, 'hold_ownership', hold), \
             patch.object(transport.subprocess, 'run', process), patch.object(transport.os, 'access', return_value=True), \
@@ -171,15 +177,15 @@ def transport_case(variant, root):
 
 def transport_cases():
     with tempfile.TemporaryDirectory(prefix='returning-watchdog-') as temporary:
-        for variant in ('normal', 'fired', 'fired-before-entry', 'no-watchdog', 'short-window', 'arm-readback',
-                        'disarm-ignored'):
+        for variant in ('normal', 'fired', 'fired-before-entry', 'no-watchdog', 'invalid-session', 'arm-readback',
+                        'disarm-ignored', 'disarmed-without-rom', 'rom-from-other-session'):
             root = Path(temporary) / variant; root.mkdir()
             state, record, result, error, evidence = transport_case(variant, root)
             if variant == 'normal':
-                assert record['return_timeout_seconds'] == 26, 'armed: the interval plus 10 s'
+                assert record['return_timeout_seconds'] == 86, 'armed: session, interval and 10 s'
                 assert result == 'normal' and error is None and not state['held'] and not state['quarantined']
                 w = record['watchdog']
-                assert w['armed'] and w['disarmed'] and not w['fired'] and w['mode_after_return'] == 0xb0
+                assert w['armed'] and w['disarmed'] and not w['fired'] and w['mode_after_return'] == 0
                 assert w['breadcrumbs']['last']['name'] == 'RETURN_ROM'
                 # The first request on the returned instance is the classification.
                 assert state['after_return'][0] == crumbs.return_arguments()
@@ -199,10 +205,11 @@ def transport_cases():
             elif variant == 'no-watchdog':
                 assert record['return_timeout_seconds'] == 90
                 assert result == 'normal' and not any('writel' in c for c in state['calls'])
-            elif variant == 'short-window':
-                assert 'Watchdog mode or return window differs' in str(error) and not state['calls']
+            elif variant == 'invalid-session':
+                assert 'Watchdog mode or session length differs' in str(error) and not state['calls']
             else:
-                text = {'arm-readback': 'readback after arming', 'disarm-ignored': 'did not disarm'}[variant]
+                text = {'arm-readback': 'readback after arming', 'disarm-ignored': 'did not disarm',
+                        'disarmed-without-rom': 'without this session', 'rom-from-other-session': 'without this session'}[variant]
                 assert text in str(error) and state['held'] == 1 and state['quarantined'] == 1, (variant, error, state)
             passed('transport-' + variant, fel_requests=len(state['calls']))
 
@@ -221,7 +228,8 @@ def launcher_case(out, clang, lld):
 
 def native_cases(image_path, baseline):
     prepare = load('checked_os_prepare_marker', 'apps/os/prepare.py')
-    assert prepare.watchdog_marker(prepare.os_link.Elf(Path(image_path).read_bytes())) == 0xb1
+    marker = prepare.watchdog_marker(prepare.os_link.Elf(Path(image_path).read_bytes()))
+    assert marker == {'mode': 0xb1, 'session_seconds': 60}, marker
     if baseline:
         assert prepare.watchdog_marker(prepare.os_link.Elf(Path(baseline).read_bytes())) is None
     passed('image-watchdog-marker')
@@ -234,8 +242,19 @@ def native_cases(image_path, baseline):
         assert m.stop == 'return' and rtc(m, 0x104) == 0x0221 << 16 and rtc(m, 0x10c) >> 29 == core
     assert rtc(m, 0x110) == 0, 'a breadcrumb SVC is not a fault'
     passed('el1-svc-breadcrumb-and-eret')
+    def el3_ready(m):
+        # The fault record stores only after the EL3 identity-map checks pass:
+        # the cached SCTLR/TCR/MAIR/TTBR state and every core's adopted record.
+        l1 = m.s['a733_cached_el3_l1']
+        for c in range(8):
+            m.reg[c].update(scr_el3=0x531, sctlr_el3=0x1005, tcr_el3=0x80823019, mair_el3=0x44ff00, ttbr0_el3=l1)
+            record = m.s['a733_cached_records'] + c * 128
+            m.uc.mem_write(record, prior.struct.pack('<3Q', prior.EPOCH, c, 3))
+            m.put64(record + 64, 0x1005)
+            m.put64(record + 72, l1)
     m = model()
     m.core = 3
+    el3_ready(m)
     for name, value in (('esr_el1', 0x96000045), ('elr_el1', 0x41012340), ('far_el1', 0x13579bdf)):
         m.reg[3][m.key(name)] = value
     m.call(3, 'a733_cached_cold_fault')
@@ -247,6 +266,11 @@ def native_cases(image_path, baseline):
     assert rtc(m, 0x110) == fault and rtc(m, 0x114) == 0x96000045, 'the first fault is kept'
     passed('el3-first-fault-record', stop=m.stop)
     m = model()
+    m.reg[3][m.key('esr_el1')] = 0x96000045
+    m.call(3, 'a733_cached_cold_fault')
+    assert m.stop == 'park' and rtc(m, 0x110) == 0, 'no RTC store before the EL3 map checks pass'
+    passed('el3-fault-record-waits-for-map-checks')
+    m = model()
     m.call(0, 'a733_cached_smc', (0, 0))
     assert rtc(m, 0x110) == 0, 'the success SMC records no fault'
     passed('success-smc-records-nothing')
@@ -256,8 +280,20 @@ def native_cases(image_path, baseline):
     assert m.stop == 'rom'
     writes = [(a, v) for _, a, size, v in m.writes if a == 0x02050014]
     assert writes == [(0x02050014, 0x16aa0000)], writes
-    assert rtc(m, 0x104) >> 16 == 0x0503
+    assert rtc(m, 0x104) == 0x0503 << 16
     passed('rom-return-disarms-before-rmr')
+    # A disarm that does not take: record the mode read back and park.
+    m = model()
+    m.put32(0x02050014, 0xb1)
+    rom = m.s['a733_qualification_rom']
+    def still_enabled(uc, address, size, unused):
+        if int.from_bytes(uc.mem_read(address, 4), 'little') == 0xb9401401:  # ldr w1, [x0, #0x14]
+            m.put32(0x02050014, 0xb1)
+    m.uc.hook_add(prior.UC_HOOK_CODE, still_enabled, begin=rom, end=rom + 0x40)
+    m.call(0, 'a733_qualification_rom')
+    assert m.stop == 'park' and rtc(m, 0x104) == 0x0503 << 16 | 0xb1
+    assert not any(a == 0x08001004 for _, a, _, v in m.writes), 'no RVBAR write before parking'
+    passed('rom-return-parks-while-enabled')
 
 
 def main():

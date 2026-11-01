@@ -38,7 +38,7 @@
      dsb sy
      add x2, x23, #688
      add x2, x2, x20, lsl #10
-@@ -369,9 +382,32 @@
+@@ -369,9 +382,34 @@
      dsb sy
      str x1, [x2, #40]
      dsb sy
@@ -68,6 +68,8 @@
 +    orr w2, w2, w1
 +    str w2, [x0, #0x104]
 +    dsb sy
++    // Still enabled: do not return; WDT0 resets the board one interval later.
++    tbnz w1, #0, qualification_park
      mov x0, #0x08000000
      add x0, x0, #0x1000
      mov w1, #0x20

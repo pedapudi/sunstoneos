@@ -9,11 +9,17 @@
  * these words from the new FEL instance (tools/a733-crumbs.py).
  *
  * sunstone_crumb(stage, value) records a stage from EL0 or EL1, in a task or
- * an interrupt handler: it issues SVC #0x736, which the returning image's EL1
+ * an interrupt handler: it issues SVC #0x5c0d, which the returning image's EL1
  * vector stores without using RAM (apps/os/cpu-return/vectors.patch). EL3 code
  * uses sunstone_crumb_el3(). Every store is one 32-bit word, so a crumb from
  * another core can replace LAST but cannot tear it. Images without
  * SUNSTONE_CRUMBS compile all calls to nothing.
+ *
+ * While the session is live, the CPU0 supervisor restarts WDT0 every 20 ms
+ * (sunstone_watchdog_restart). A failure stops the restarts, so WDT0 resets
+ * the board one interval after the failure or after the session deadline.
+ * The only normal return disarms WDT0, records RETURN_ROM with the mode read
+ * back, and parks instead of returning if the enable bit is still set.
  *
  * Words (RTC base 0x07090000):
  *   0x100 TAG   0x5c0d << 16 | low 16 bits of the session epoch
@@ -39,9 +45,10 @@
 #define SUNSTONE_CRUMB_FAR 0x11cu
 #define SUNSTONE_CRUMB_TAG_MAGIC 0x5c0du
 #define SUNSTONE_CRUMB_FAULT_MAGIC 0xfau
-#define SUNSTONE_CRUMB_SVC 0x736
+#define SUNSTONE_CRUMB_SVC 0x5c0d
 /* WDT0 mode the host arms before launch: 16 s interval (index 11), enabled. */
 #define SUNSTONE_CRUMB_WATCHDOG_MODE 0xb1u
+#define SUNSTONE_CRUMB_WDT_RESTART 0x0205000cu
 
 /* Stage identifiers: the high byte names the phase group. Other branches add
  * stages inside their own group (0x04 GPU, 0x06 NPU) and keep these values. */
@@ -82,7 +89,7 @@ enum {
 #ifdef SUNSTONE_CRUMBS
 static inline void sunstone_crumb(uint32_t stage, uint32_t value)
 {
-    __asm__ volatile("mov x0, %0\n mov x1, %1\n svc #0x736"
+    __asm__ volatile("mov x0, %0\n mov x1, %1\n svc #0x5c0d"
         :: "r"((uint64_t)stage), "r"((uint64_t)value) : "x0", "x1", "memory");
 }
 /* EL3 only: MMU off, or the cached monitor's Device identity map of 0-1 GiB. */
@@ -93,6 +100,12 @@ static inline void sunstone_crumb_el3(uint32_t stage, uint32_t value)
     volatile uint32_t *rtc = (volatile uint32_t *)(uintptr_t)SUNSTONE_CRUMB_RTC;
     rtc[SUNSTONE_CRUMB_LAST / 4] = stage << 16 | (value & 0xffff);
     rtc[SUNSTONE_CRUMB_TIME / 4] = (uint32_t)((mpidr >> 8) & 7) << 29 | (uint32_t)((now >> 10) & 0x1fffffff);
+    __asm__ volatile("dsb sy" ::: "memory");
+}
+/* EL1 or EL3 only (the Device map of 0-1 GiB is privileged): restart WDT0. */
+static inline void sunstone_watchdog_restart(void)
+{
+    *(volatile uint32_t *)(uintptr_t)SUNSTONE_CRUMB_WDT_RESTART = 0x14afu;
     __asm__ volatile("dsb sy" ::: "memory");
 }
 /* Boot core at EL3 entry: tag this session and clear the other words. */
@@ -109,5 +122,6 @@ static inline void sunstone_crumb_el3_start(uint64_t epoch)
 static inline void sunstone_crumb(uint32_t stage, uint32_t value) { (void)stage; (void)value; }
 static inline void sunstone_crumb_el3(uint32_t stage, uint32_t value) { (void)stage; (void)value; }
 static inline void sunstone_crumb_el3_start(uint64_t epoch) { (void)epoch; }
+static inline void sunstone_watchdog_restart(void) {}
 #endif
 #endif

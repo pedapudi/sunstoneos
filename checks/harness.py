@@ -183,8 +183,8 @@ def system_register_access(word):
     return word & 0xffd00000 == 0xd5100000 or word & 0xffd80000 == 0xd5080000
 
 
-# SVC #0x736: the EL1 breadcrumb call of returning images (include/sunstone_crumb.h).
-CRUMB_SVC = 0xd400e6c1
+# SVC #0x5c0d: the EL1 breadcrumb call of returning images (include/sunstone_crumb.h).
+CRUMB_SVC = 0xd40b81a1
 
 
 def skip_crumbs(uc, image, crumbs=None):

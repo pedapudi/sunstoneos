@@ -14,6 +14,7 @@ RTC = 0x07090000
 WORDS = {'tag': 0x100, 'last': 0x104, 'time': 0x10c, 'fault': 0x110, 'esr': 0x114, 'elr': 0x118, 'far': 0x11c}
 WDT_MODE, WDT_CONFIG, WDT_OUTPUT, WDT_RESTART = 0x02050014, 0x02050010, 0x02050018, 0x0205000c
 KEY = 0x16aa0000
+RETURN_ROM = 0x0503  # SUNSTONE_CRUMB_RETURN_ROM: value is the WDT0 mode after the disarm
 # Watchdog interval for mode bits 7:4 (drivers/watchdog/a733_watchdog.c).
 INTERVALS = {0: 0.5, 1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 8, 8: 10, 9: 12, 10: 14, 11: 16}
 

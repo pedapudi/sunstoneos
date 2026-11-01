@@ -8,10 +8,11 @@
 #include "platform.h"
 #include "sunstone_crumb.h"
 #include <string.h>
-/* The host arms WDT0 in this mode before launch and reads the breadcrumbs at
- * this address after a watchdog reset (apps/os/cpu-return-host.py). */
-__attribute__((used,retain)) const uint64_t os_cpu_return_watchdog[4]={
-    UINT64_C(0x31544457534f5243),1,SUNSTONE_CRUMB_WATCHDOG_MODE,SUNSTONE_CRUMB_RTC
+/* The host arms WDT0 in this mode before launch, waits for the session
+ * length plus one interval, and reads the breadcrumbs at this address after a
+ * watchdog reset (apps/os/cpu-return-host.py). */
+__attribute__((used,retain)) const uint64_t os_cpu_return_watchdog[5]={
+    UINT64_C(0x31544457534f5243),2,SUNSTONE_CRUMB_WATCHDOG_MODE,SUNSTONE_CRUMB_RTC,A733_BOARD_SUPERVISED_SECONDS
 };
 struct os_cpu_return_output {
     uint64_t magic,version,bytes,epoch,generation,text_bytes;
@@ -93,6 +94,9 @@ void os_cpu_return_pmic(void)
 void os_cpu_return_supervise(void)
 {
     bounded();
+    /* Live and before the deadline: restart WDT0. fail() never returns, and a
+     * stalled supervisor stops the restarts, so WDT0 resets one interval later. */
+    sunstone_watchdog_restart();
     if(!os_cpu_return_requested()){
         uint64_t cutoff=os_cpu_return_cutoff();
 #ifdef SUNSTONE_A733_OS_GPU_LINEAR

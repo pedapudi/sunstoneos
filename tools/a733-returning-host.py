@@ -20,14 +20,16 @@ def retain_failure(base,record,save,quarantine,error,hold=None):
 def run(args,*,base,profile,validate_bundle,admit,execute,description,access=None,guard=None,return_timeout=30,watchdog=None):
  """Call admit(args,p,node,identity,port) before launch and execute(tx,launch,ready,p,record,save).
 
- With watchdog={'mode':m} (the image's admitted WDT0 mode), launch() clears the
- RTC breadcrumb words and arms WDT0 just before exe, inside the churn guard. On
- the returned instance it reads the mode, disarms and reads the breadcrumbs in
- one request. The return window becomes the interval plus 10 s. A set
- enable bit means the watchdog reset the board: the report is written, the
- run fails with WatchdogReset, and the fresh ROM instance is neither
- quarantined nor held. Images disarm before their normal
- return, so a clear enable bit continues the normal capture.
+ With watchdog={'mode':m,'session_seconds':s} (the image's marker), launch()
+ clears the RTC breadcrumb words and arms WDT0 just before exe, inside the
+ churn guard. The image restarts WDT0 while its session is live, so the return
+ window becomes the session plus one interval plus 10 s. On the returned
+ instance one request reads the mode, disarms and reads the breadcrumbs. A set
+ enable bit means the watchdog reset the board: the report is written, the run
+ fails with WatchdogReset, and the fresh ROM instance is neither quarantined
+ nor held. The capture continues only for a clear enable bit with this
+ session's RETURN_ROM breadcrumb and mode 0; anything else is an unresolved
+ transition and is retained.
 
  execute owns protected upload, reports and RAM restoration; launch() alone
  executes the fixed SRAM launcher and waits for the new permitted ROM instance.
@@ -46,12 +48,12 @@ def run(args,*,base,profile,validate_bundle,admit,execute,description,access=Non
   guard=usb_guard
  guard.check_health();args.evidence.mkdir(parents=True,exist_ok=False)
  if watchdog is not None:
-  require(set(watchdog)=={'mode'} and type(watchdog['mode']) is int and watchdog['mode']&0xff0f==1 and
-          watchdog['mode']>>4 in crumbs.INTERVALS and return_timeout>crumbs.interval(watchdog['mode'])+10,
-          'Watchdog mode or return window differs.')
-  # The image disarms before its normal return, so a hang resets the board
-  # after the interval; waiting longer than the reset needs only delays failure.
-  return_timeout=crumbs.interval(watchdog['mode'])+10
+  require(set(watchdog)=={'mode','session_seconds'} and all(type(v) is int for v in watchdog.values()) and
+          watchdog['mode']&0xff0f==1 and watchdog['mode']>>4 in crumbs.INTERVALS and
+          1<=watchdog['session_seconds']<=600,'Watchdog mode or session length differs.')
+  # Restarts stop at a failure or the session deadline, so the reset comes at
+  # most one interval later; a longer wait only delays the failure report.
+  return_timeout=watchdog['session_seconds']+crumbs.interval(watchdog['mode'])+10
  record={'mode':'kernel','execution_profile':profile,'complete':False,'launch_attempted':False,'dirty':False,'transport_failed':False,'root_owned_claim':args.root_owned_claim,'transactions':[],'return_timeout_seconds':return_timeout,'tool_sha256':base.FEL_HASH,'image_sha256':p['image_sha256']}
  def journal():base.save_json(args.evidence/'session.json',record)
  with access.board_lock() as node:
@@ -100,7 +102,11 @@ def run(args,*,base,profile,validate_bundle,admit,execute,description,access=Non
    state.update(mode_after_return=before,mode_after_disarm=after,disarmed=not after&1,
                 fired=bool(before&1),breadcrumbs=decoded);journal()
    require(not after&1,'WDT0 did not disarm on the returned instance.')
-   if not before&1:return None
+   if not before&1:
+    last=decoded.get('last',{})
+    require(decoded['session'] and last.get('stage')==crumbs.RETURN_ROM and last.get('value')==0,
+            'Returned with WDT0 disarmed but without this session\'s RETURN_ROM breadcrumb.')
+    return None
    report={'watchdog_fired':True,'interval_seconds':state['interval_seconds'],
            'returned_after_seconds':state['returned_after_seconds'],'breadcrumbs':decoded,
            'dram':'lost: DDR is uninitialized after the reset; run cold DDR before any DRAM access',
