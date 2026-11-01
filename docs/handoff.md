@@ -6,6 +6,13 @@ history.
 
 ## Host tool admission
 
+The [board runner](board-runner.md) implements fresh-FEL preparation, returning
+CPU/GPU/probe capture and a frozen run queue. Fake FEL checks, real offline
+hello/GPU preparation and independent review pass; physical qualification is
+pending. Evidence is under `~/.cache/sunstoneos/build/board-runner-1031/`.
+Current NPU images reject the armed watchdog and remain unsupported by this
+runner. The guide gives the coordinator's port 3-1 qualification commands.
+
 Host tools use direct image, session, target and hardware-condition checks.
 Queue claims, review records and archived sources do not authorize the changed
 runners. DRAM readiness uses a reversible memory comparison; CPU launchers

@@ -9,6 +9,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import struct
 
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location('return_host_records', ROOT / 'apps/os/host.py')
@@ -45,6 +46,25 @@ def capture_result(tx, image, epoch, generation, output):
 
 def backup_regions(image, uploads):
     return host.backup_regions(image, uploads)
+
+
+def decode_return_report(raw, epoch):
+    """Validate normal all-core retirement without application workload claims."""
+    cpu = host.module('return_report_layout', ROOT / 'apps/cpu-runtime-qualification/host.py')
+    require(len(raw) == cpu.REPORT_BYTES, 'Incomplete CPU return report.')
+    magic, version, size, actual, deadline, state, error, core = struct.unpack_from('<8Q', raw)
+    require((magic, version, size, actual, state, error, core) ==
+            (cpu.MAGIC, 3, cpu.REPORT_BYTES, epoch, 4, 0, 0) and deadline,
+            'No successful CPU return report of this session.')
+    for i in range(8):
+        offset = cpu.CPU_OFFSET + i * cpu.CPU_BYTES
+        seen, captured, cleaned, restored, request, ack, error = struct.unpack_from('<7Q', raw, offset)
+        drained = struct.unpack_from('<Q', raw, offset + 104)[0]
+        off = struct.unpack_from('<Q', raw, offset + 768)[0]
+        require((seen, captured, drained, cleaned, restored) == (epoch,) * 5 and not error and
+                (request, ack, off) == ((epoch,) * 3 if i else (0, 0, 0)),
+                f'CPU {i} normal shutdown incomplete.')
+    return {'epoch': epoch, 'state': state, 'secondaries_off': 7}
 
 
 def main():

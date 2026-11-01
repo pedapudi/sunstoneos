@@ -33,7 +33,10 @@ parser.add_argument("--allow-untrained", action="store_true",
 parser.add_argument("--record", type=Path, help="training record for the restore variant")
 parser.add_argument("--fallback-build", type=Path,
                     help="plain full-training build that a failed restore falls back to")
-args = parser.parse_args()
+# An owning runner can reuse this sequence under its already-held port lock.
+# Standalone invocation retains the existing transport and failure policy.
+owner = globals().get('BOARD_RUNNER')
+args = parser.parse_args(owner.ddr_arguments if owner is not None else None)
 
 
 def verified(build):
@@ -119,9 +122,13 @@ base = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(base)
 sys.path.insert(0, str(ROOT / "tools"))
 import usb_guard
+if owner is not None:
+    access, base, usb_guard = owner.ddr_access, owner.ddr_base, owner.ddr_guard
 
 
 def transaction(*commands, timeout=30):
+    if owner is not None:
+        return owner.ddr_transaction(device, identity, record, save, commands, timeout)
     if access.identity(device) != identity:
         raise RuntimeError("Device node changed; stopped.")
     command = [str(args.fel), "-d", f"{int(device.parent.name)}:{int(device.name)}", *map(str, commands)]

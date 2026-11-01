@@ -141,6 +141,8 @@ changed branches. A commit, rebase or handoff does not invalidate test evidence.
   and record progress in RTC breadcrumbs that survive its reset
   ([include/sunstone_crumb.h](include/sunstone_crumb.h), decoded by
   `tools/a733-crumbs.py`). Run development images with `tools/dev-run.py`.
+  The [board runner and run queue](docs/board-runner.md) provide fresh-FEL
+  preparation, bounded recovery and frozen submissions through `tools/board.py`.
 - Start with identity queries and RAM-only execution. Write paths may be
   implemented and host-checked at any time; images refuse writes unless their
   session grants them. Physical writes follow section 4 of
