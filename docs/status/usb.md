@@ -32,12 +32,23 @@ optional MJPEG consumption uses the hardware JPEG decoder. Hot-plug inside an
 admitted adapter/hub connection is implemented; removing TYPEC24 requires a
 new source session.
 
-The IRQ owner batches ready xHCI programming and submission steps within a
-32-pass bound. Delayed/stuck register and completion models verify that ready
-steps take no tick sleep. Hardware and idle waits still use a tick timeout;
-physical timing and idle current remain unmeasured. The
+Steady HID, serial and UVC completion uses IRQ notifications and the shared
+architectural timer. Raw owner and application notification waits avoid tick
+rounding; application retirement still has a legacy tick loop. Ready
+work has a 32-pass bound. Noninterruptible startup and delayed GIC status use
+bounded 50 µs retries without extending device deadlines. Lost or late timer
+delivery expires the supervisor's observation window. Storage and keyboard
+mailboxes notify both their owner and consumer at publication boundaries.
+Physical timing and idle current remain unmeasured. The
 [real-time audit](driver-realtime-audit.md) records the remaining service,
 batching, copy and power gaps.
+
+The JPEG variant retains its existing owner cadence: setup, decoder task-end
+and chunked readout have no connected IRQ81/readiness wake path. Serial
+submission supports an admitted EL1 caller directly, but applications run at
+EL0 and still use the owner mailbox. A bounded privileged submission interface
+and more than one outstanding TX per endpoint remain open. Controller/PHY
+idle gating needs a proven halt and completed DMA writes; it is not enabled.
 
 The corrected class package and composed sanitizer/traffic checks are under
 `~/.cache/sunstoneos/build/integrate-streams-1031/usb/`, including `images/`.
@@ -47,9 +58,19 @@ state publication have focused corrections. Public C270 traffic contains
 negotiation without completed image payloads; FT2232H FPGA/FIFO captures do not
 establish serial baud timing.
 
-Launch is blocked on reviewed VBUS/source/PHY/rail authority, exclusive
-`0x47000000..0x48000000` RAM ownership and a supervised class route in the
-protected runner. Images retain resources and refuse CPU-return lifetime.
+The linker and existing uncached allocator own `0x42200000..0x42a00000`
+for USB classes. The first 5 MiB lease holds the controller; retained JPEG
+allocations fit in the remaining 3 MiB. This replaces the conflicting
+`0x47000000..0x48000000` range and leaves the NPU pool at
+`0x47400000..0x47c00000` disjoint. Physical RAM ownership and remote-writer
+exclusion still belong to runner admission. An optional session extent checks
+geometry without treating a digest as authority.
+
+The protected runner accepts finite `usb-class` probes through the existing
+watchdog marker, real quiescence hook and normal-return receipt. It requires
+coordinator approval for USB source/cutoff authority, including alternate
+probe launch kinds. The four OS images retain resources and still lack real
+host drain and a returning lifetime; the probe route does not admit them.
 VBUS enable requires coordinator approval and an admitted source session.
 Gen1 needs at least 900 mA plus image-bound COMB0/topology authority; no physical
 bundle exists. Earlier queue entries need corrected hashes or revalidation.
@@ -60,6 +81,38 @@ flow control and overruns, repeated attachment and recovery. Wider classes,
 isochronous OUT, higher SuperSpeed modes, PD/VCONN, role swaps and applicable
 alternate modes remain open. See [host USB](../usb2-host.md),
 [Type-C](../typec.md) and [host image evidence](../usb-host-images.md).
+
+## Shared camera contract and software evidence
+
+UVC binds from class/subclass and descriptor data; serial vendor bridges use
+the existing VID/PID tables. No camera product ID selects the driver. UVC
+shares modes and retained frame spans with CSI through
+[`sunstone_camera.h`](../../include/sunstone_camera.h). The native USB consumer
+uses its mode/view conversion helpers without copying frame payloads. The
+generic adapter checks deadlines and retains leases on expired operations.
+Native exact-mode selection, shared application-kit lifecycle binding and
+verified stream stop remain incomplete; the compatibility USB camera API
+continues to serve current applications.
+
+Evidence is under `~/.cache/sunstoneos/build/usb-host-board-1101/`:
+`memory/check-final/` covers actual allocator/linker/table/session behavior;
+`memory/usb-npu-result.json` checks the selected combined CMake/ELF layout.
+`final-runner/` and `final-runner-arena/` cover admission, typed extents and
+the exact uncached-arena exception. `final-generic/` and
+`final-shared-camera/` cover retained class traffic with read-only aliases.
+`final-deadline-health/`, `final-precise-production/` and
+`final-mailbox-publication/` cover deadline loss, IRQ wake and mailbox
+publication. Independent reviews cover memory, runner, camera and completion
+changes. Registers, timer delivery and cache effects are modeled; these
+records establish no physical host qualification.
+
+The raw and JPEG OS baseline links pass with their respective precise and
+legacy owner selections. The supervised, resident and resident-audio baselines,
+selected integration gate and check index pass under
+`integration/gate-usb-board-final-runtime/`. The largest recorded build/check
+child uses about 143 MiB; the shared host retains over 113 GiB available.
+No containers or board operations run. These baseline builds are software
+checks; no new qualification image package is frozen.
 
 ## TYPEC24 power wiring and fault limits
 
@@ -170,14 +223,33 @@ The vendor selects 400 kHz for S_TWI1. The current native provider caps it at
 timing and the board's measured rise time. Preserve vendor write ordering,
 STOP completion and deadlines. Do not retune the shared APBS1/OSC parent.
 
-The first empty-port run lasts at most five seconds and confirms PL8 low,
-no attachment token and no VBUS rise. A physically empty TYPEC24 has no Rd
-termination, so the existing provider cannot enable it. The subsequent enable
-test requires a reviewed Rd sink fixture with no data traffic and a bounded
-load. It retains the normal attachment checks and runs for at most five
-seconds: verify off, attach, enable, observe the measured load, revoke and
-verify off. A disabled-source control run precedes the first enable attempt.
-Missing measurement or sink equipment blocks the enable test.
+The first control run lasts at most five seconds and confirms PL8 low,
+no attachment token and no VBUS rise on an empty TYPEC24. A physically empty
+connector has no Rd termination, so the normal provider cannot enable it.
+
+The requested empty-port enable/disable test needs a separate diagnostic
+pulse, authorized only through the runner after the power gate. It never
+publishes an attachment token or starts xHCI/PHY/DMA. After confirming PL8
+low, it enables the owned switch for at most 1,000 ms from the first enable
+effect, including the vendor's 1,000 µs ramp interval, and then disables it.
+The complete image/session budget is five seconds. Arm independent protection
+before issuing enable, or trigger it from the physical PL8/VBUS rising edge.
+It must cut the output by 1.350 seconds after that edge and establish VBUS
+below 800 mV by two seconds, including CPU/interconnect failure or reset.
+Reserve the full 650 ms discharge bound after cutoff; software acknowledgment
+cannot start or extend these independent limits. The protection must discharge
+the output even if the CPU leaves PL8 high. Permit no repeated pulse or
+automatic rearm. Record no attached data device, PL8 high/low acknowledgments
+and externally measured VBUS rise/discharge separately. Normal return requires
+confirmed source-off and interrupt restoration. No pulse image is implemented
+or frozen before cutoff and coordinator approval.
+
+Loaded-source qualification uses a reviewed Rd sink/load fixture and retains
+normal attachment checks. It runs for at most five seconds: verify off,
+attach, enable, observe the measured load, revoke and verify off. The
+source-disabled control precedes either enable test. Missing protection or
+measurement equipment blocks both enable tests; the Rd fixture is required
+only for normal attachment/load qualification.
 
 Cleanup first closes host admission and requests provider revocation. Keep
 the Type-C and GPIO tasks running until PL8 low is acknowledged. Continue
