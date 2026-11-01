@@ -29,7 +29,7 @@ def decode(raw, epoch, generation, require, allow_untouched=False):
         require(allow_untouched and (magic, size, actual, gen, jobs, flags) ==
                 (MAGIC, BYTES, epoch, generation, 0, 0) and 0 <= uv <= 14,
                 'GPU untouched return is incomplete or not admitted by this image.')
-        # Reason zero records successful construction without an accepted OPEN.
+        # Reason zero covers skipped or successful construction without OPEN.
         if uv == 0:
             return {'jobs': 0, 'gpu_untouched': True, 'device_never_opened': True,
                     'qualification_passed': False}

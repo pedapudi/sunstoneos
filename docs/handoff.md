@@ -23,8 +23,10 @@ The mimus application owns its kernel and tensor jobs in its external checkout.
 
 Review corrections cover zero-job and COLD returns, SLC bypass on shared
 mappings, isolation of rounded leases, immutable application program bounds
-and application-registered startup initialization. Host service, arithmetic,
-mapping, thermal and returning-image fixtures pass.
+and application-registered startup initialization. A returning image also
+accepts an admitted application that skipped GPU construction, after proving
+that its GPU state is entirely zero and emitting an untouched receipt.
+Host service, arithmetic, mapping, thermal and returning-image fixtures pass.
 Evidence and requested physical runs are recorded in the
 [queue design](designs/gpu-compute-queue.md). Physical queue qualification and
 independent feature review remain open. No board state changed. The separate

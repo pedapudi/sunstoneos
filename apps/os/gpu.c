@@ -334,8 +334,8 @@ static int zero_bytes(const void *address,size_t bytes)
     for(size_t i=0;i<bytes;++i)if(p[i])return 0;
     return 1;
 }
-/* A cold service has accepted no OPEN, whether construction succeeded or
- * was refused. Allocated RAM stays owned until the host restores its backup. */
+/* An unconstructed or cold service has accepted no OPEN. Allocated RAM stays
+ * owned until the host restores its backup. */
 static int gpu_return_untouched_body(void);
 int os_gpu_queue_return_untouched(void)
 {
@@ -350,8 +350,11 @@ static int gpu_return_untouched_body(void)
     const struct a733_gpu_backend *b=&gpu.backend;
     const struct pvr_gpu_service *s=&gpu.service;
     const struct pvr_compute_queue *m=&gpu.session.component;
-    const int cold=!gpu.constructor_refusal;
-    if(xTaskGetCurrentTaskHandle()!=os_gpu_client_task || gpu.constructor_refusal>14 ||
+    const int unconstructed=zero_bytes(&gpu,sizeof(gpu));
+    const int cold=!unconstructed&&!gpu.constructor_refusal;
+    const TaskHandle_t client=unconstructed?(TaskHandle_t)ss_application.task:os_gpu_client_task;
+    if(!client || xTaskGetCurrentTaskHandle()!=client ||
+       (unconstructed&&(os_gpu_client_task||!ss_grant())) || gpu.constructor_refusal>14 ||
        (cold ? (!gpu.started || gpu.component!=m || !p->initialized || !b->initialized ||
                 !s->initialized || !s->worker) : (gpu.started || gpu.component)) ||
        gpu.opened || gpu.parked || gpu.failed || gpu.retired || gpu.epoch || gpu.accepted_ticket ||

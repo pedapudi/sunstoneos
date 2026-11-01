@@ -22,10 +22,19 @@ The manifest and runtime independently refuse lease tails that intersect
 another region, including an unleased one. The correction evidence is under
 `review-fixes/` in the cache directory below.
 
-The host queue model passes 33 service cases and an external 204-job replay
+Returning images also produce an untouched receipt when GPU construction was
+skipped. This path requires an admitted application, its current task, entirely
+zero GPU state and an unexpired return deadline. It covers applications without
+a GPU grant and applications that never use their grant. The ordinary finish
+and CPU-return paths still require the receipt. Native regression cases run
+both paths in hello-compute and mimus images; evidence is under
+`review-followup/` in the same cache directory.
+
+The host queue model passes 38 service cases and an external 204-job replay
 with 5,870,398 checked sums. Native instruction models pass 16 thermal cases,
-10 public-client cases, 17 returning-image cases, 32 constructor-refusal cases
-and output-permission checks on two applications. The VM check covers four
+10 public-client cases, 18 returning-image cases, and 71 constructor-refusal
+and cold-return cases. Output-permission checks cover two applications.
+The VM check covers four
 admitted page sizes and 36 refusals. It compares tables with the pinned driver.
 The ring trace records 23 aligned stores per job, plus five stores when a
 padding record wraps the ring. No buffer data is copied.
