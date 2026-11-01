@@ -34,26 +34,59 @@ static void overlap_kick(void)
 #endif
 /* First fault remains available in copied image RAM and never gets replaced. */
 struct { atomic_uint claimed;uint64_t stage,core,cell,job,observed_word,expected_word;float observed,expected; } cpu_npu_first_fault;
+/* The record that replaces the receipt after a failed check. The claim winner
+ * fills it and then publishes failed; the main task alone finishes. */
+static struct cpu_npu_failure failure;
+static atomic_uint failed;
+#ifdef SUNSTONE_A733_OS_NPU
+static int npu_started;
+#endif
 
-static _Noreturn void fault(unsigned stage,unsigned core,unsigned job,uint64_t observed,uint64_t expected)
+static _Noreturn void failure_finish(void);
+static _Noreturn void raise_fault(unsigned stage,unsigned core,unsigned job,unsigned cell,
+    uint64_t observed,uint64_t expected,float seen,float wanted)
 {
     unsigned clear=0;
     if(atomic_compare_exchange_strong(&cpu_npu_first_fault.claimed,&clear,1)){
-        cpu_npu_first_fault.stage=stage;cpu_npu_first_fault.core=core;
+        cpu_npu_first_fault.stage=stage;cpu_npu_first_fault.core=core;cpu_npu_first_fault.cell=cell;
         cpu_npu_first_fault.job=job;cpu_npu_first_fault.observed_word=observed;
-        cpu_npu_first_fault.expected_word=expected;
-        ss_fail_value((stage<<4)|core|(job<<16),(uint32_t)observed);
+        cpu_npu_first_fault.expected_word=expected;cpu_npu_first_fault.observed=seen;
+        cpu_npu_first_fault.expected=wanted;
+        struct ss_thermal_status t;ss_thermal_status(&t);
+        uint64_t now=ss_counter_ticks();
+        failure.magic=CPU_NPU_FAIL_MAGIC;failure.version=1;failure.bytes=sizeof(failure);
+        failure.stage=stage;failure.core=core;failure.job=job;failure.cell=cell;
+        failure.observed=observed;failure.expected=expected;failure.now_ticks=now;
+        failure.start_ticks=receipt.start;failure.workload_ticks=receipt.start?now-receipt.start:0;
+        failure.mode=receipt.mode;failure.completed=receipt.completed;
+        for(unsigned c=0;c<8;++c)failure.chunks[c]=atomic_load_explicit(&chunks[c].value,memory_order_acquire);
+        failure.thermal_cause=t.cause;failure.thermal_level=t.level;failure.thermal_seen=t.seen;
+        failure.thermal_passive=t.passive;failure.thermal_stale=t.stale;failure.thermal_sequence=t.sequence;
+        failure.thermal_now_us=t.now_us;failure.thermal_deadline_us=t.deadline_us;failure.thermal_start_us=t.start_us;
+        for(unsigned i=0;i<5;++i)failure.millicelsius[i]=t.millicelsius[i];
+        atomic_store_explicit(&failed,1,memory_order_release);
     }
-    /* Only the claim winner records the fault, even if it was preempted. */
+    /* The main task returns the record. A worker stops all arithmetic, counts
+     * itself stopped and parks, so main can return with every core quiet. */
+    if(portGET_CORE_ID()==6)failure_finish();
+    atomic_store_explicit(&stop_epoch,1,memory_order_release);
+    atomic_store_explicit(&ack[core&7],1,memory_order_release);
     for(;;)vTaskSuspend(NULL);
 }
+static _Noreturn void fault(unsigned stage,unsigned core,unsigned job,uint64_t observed,uint64_t expected)
+{raise_fault(stage,core,job,0,observed,expected,0,0);}
 static void require(int condition,unsigned stage,unsigned core)
 {if(!condition)fault(stage,core,0,0,1);}
 static void live(unsigned core)
 {
     int state=ss_live();if(state<0)fault(0x81,core,0,(uint32_t)state,1);
-    int throttled=ss_throttled();if(throttled)fault(0x99,core,0,(uint32_t)throttled,0);
+    /* Startup throttling holds until the thermal owner has seen all five
+     * channels, so the load hint binds only after the workload starts. */
+    if(atomic_load_explicit(&start_epoch,memory_order_acquire)){
+        int throttled=ss_throttled();if(throttled)fault(0x99,core,0,(uint32_t)throttled,0);
+    }
     unsigned actual=portGET_CORE_ID();if(actual!=core)fault(0x9a,core,0,actual,core);
+    if(actual==6&&atomic_load_explicit(&failed,memory_order_acquire))failure_finish();
     ss_progress();
 }
 static void unit(unsigned core)
@@ -63,15 +96,7 @@ static void unit(unsigned core)
     uint64_t first=ss_counter_ticks();
     if(!cpu_npu_gemm(&matrix[core],core,&r->digest,&cell,&observed,&expected)){
         uint32_t got,want;memcpy(&got,&observed,sizeof(got));memcpy(&want,&expected,sizeof(want));
-        unsigned clear=0;
-        if(atomic_compare_exchange_strong(&cpu_npu_first_fault.claimed,&clear,1)){
-            cpu_npu_first_fault.stage=0x82;cpu_npu_first_fault.core=core;
-            cpu_npu_first_fault.cell=cell;cpu_npu_first_fault.observed=observed;
-            cpu_npu_first_fault.expected=expected;cpu_npu_first_fault.observed_word=got;
-            cpu_npu_first_fault.expected_word=want;
-            ss_fail_value(0x820|core|(cell<<16),got);
-        }
-        for(;;)vTaskSuspend(NULL);
+        raise_fault(0x82,core,0,cell,got,want,observed,expected);
     }
     if(!r->chunks)r->first=first;
     r->last=ss_counter_ticks();++r->chunks;
@@ -153,6 +178,34 @@ static void vectors(void)
 }
 
 #endif
+/* Main task only. Quiesce every core, close the NPU client if one ran, and
+ * return the failure record through the normal finish path, so the board
+ * returns with its RAM and rails restored. A check that cannot quiesce within
+ * the session falls back to the recorded failure and the watchdog. */
+static _Noreturn void failure_finish(void)
+{
+    while(!atomic_load_explicit(&failed,memory_order_acquire))vTaskDelay(1);
+    const struct ss_grant *g=ss_grant();
+    uint32_t detail=(uint32_t)((failure.stage<<4)|failure.core|(failure.job<<16)),value=(uint32_t)failure.observed;
+    uint64_t limit=g&&g->finish_by_us>500000?g->finish_by_us-500000:0;
+    atomic_store_explicit(&stop_epoch,1,memory_order_release);
+    atomic_store_explicit(&ack[6],1,memory_order_release);
+    for(unsigned c=0;c<8;++c)
+        while(atomic_load_explicit(&ack[c],memory_order_acquire)!=1){
+            if(ss_live()<0||ss_counter_ticks()/24>=limit)ss_fail_value(detail,value);
+            ss_progress();vTaskDelay(1);
+        }
+    failure.ack_mask=255;
+#ifdef SUNSTONE_A733_OS_NPU
+    while(npu_started){
+        if(ss_live()<0||ss_counter_ticks()/24>=limit)ss_fail_value(detail,value);
+        int closed=ss_npu_close();if(closed<0)ss_fail_value(detail,value);
+        if(closed==1){failure.sdk_closed=1;break;}
+        ss_progress();vTaskDelay(1);
+    }
+#endif
+    ss_finish(&failure,sizeof(failure));
+}
 void cpu_npu_load_init(void)
 {
     const struct ss_grant *g=ss_grant();
@@ -167,7 +220,15 @@ void cpu_npu_load_init(void)
 }
 void cpu_npu_load_main(const struct ss_grant *grant)
 {
-    while(!ss_clock_ready()){live(6);vTaskDelay(1);}
+    /* Wait for the clock owner and a complete, fresh thermal set. The load
+     * hint is not checked before the workload starts; a wait that does not
+     * end is a recorded failure with the thermal status. */
+    uint64_t wait_begin=ss_counter_ticks();
+    while(!ss_clock_ready()||ss_throttled()){
+        live(6);
+        if(ss_counter_ticks()-wait_begin>240000000)fault(0x9b,6,0,(uint32_t)ss_clock_ready(),1);
+        vTaskDelay(1);
+    }
     require(at_top(),0x87,6);receipt.initial_top=1;
 #ifdef SUNSTONE_A733_OS_NPU
     vectors();receipt.mode=1;receipt.target=CPU_NPU_JOBS;
@@ -183,6 +244,7 @@ void cpu_npu_load_main(const struct ss_grant *grant)
         uint64_t admit=ss_counter_ticks();
         if(admit>=work_cutoff||work_cutoff-admit<52800000)fault(0x89,6,job,work_cutoff>admit?work_cutoff-admit:0,52800000);
         memset(output,0xa5,sizeof(output));
+        npu_started=1;
         for(;;){
             uint64_t now=ss_counter_ticks();if(now>=work_cutoff)fault(0x8e,6,job,now,work_cutoff);live(6);
             int ran=ss_npu_run(selected,cpu_npu_input,input_bytes,output,output_bytes,100000);

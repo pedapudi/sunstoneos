@@ -175,6 +175,18 @@ void ss_progress(void);
 uint64_t ss_counter_ticks(void);
 /* Load hint: 1 while the thermal policy is throttling or has failed. */
 int ss_throttled(void);
+/* Why ss_throttled reports a load hint, for failure records. cause bit 0:
+ * the published level is not NORMAL; bit 1: the publication is stale (the
+ * counter in microseconds is past deadline_us); bit 2: fewer than five
+ * channels have been seen. passive and stale are the policy channel masks.
+ * Temperatures are millidegrees Celsius in channel order CPUB, DDR, NPU, CPUL,
+ * GPU. A diagnostic snapshot: fields are read without stopping the owner. */
+struct ss_thermal_status {
+    uint32_t cause, level, seen, passive, stale, sequence;
+    uint64_t now_us, deadline_us, start_us;
+    int32_t millicelsius[5], reserved;
+};
+void ss_thermal_status(struct ss_thermal_status *status);
 /* 1 once the CPU clock owner has finished the session grant's requests,
  * whatever their result, or when the image grants no CPU operating points. */
 int ss_clock_ready(void);

@@ -8,6 +8,27 @@ import struct
 MAGIC = 0x315550434e555043
 BYTES = 1728
 MASK = (1 << 64) - 1
+FAIL_MAGIC = 0x314c494146555043
+CAUSES = ((1, 'published level is not NORMAL'), (2, 'publication is stale'),
+          (4, 'fewer than five channels seen'))
+
+
+def decode_failure(raw):
+    """Decode the record that a failed check returns in place of the receipt."""
+    require(len(raw) == BYTES, 'Failure record must contain exactly 1728 bytes.')
+    w = struct.unpack('<216Q', raw)
+    require(w[:3] == (FAIL_MAGIC, 1, BYTES), 'Failure record header differs.')
+    names = ('stage core job observed expected cell now_ticks start_ticks workload_ticks mode completed '
+             'ack_mask sdk_closed').split()
+    result = dict(zip(names, w[3:16]))
+    result['chunks'] = list(w[16:24])
+    thermal = dict(zip('cause level seen passive stale sequence now_us deadline_us start_us'.split(), w[24:33]))
+    thermal['millicelsius'] = [x - (1 << 64) if x >> 63 else x for x in w[33:38]]
+    thermal['causes'] = [text for bit, text in CAUSES if thermal['cause'] & bit]
+    thermal['freshness_margin_us'] = thermal['deadline_us'] - thermal['now_us']
+    result['thermal'] = thermal
+    result['workload_us'] = result['workload_ticks'] / 24
+    return result
 
 
 def require(condition, message):
@@ -32,6 +53,8 @@ def unit_sums():
 
 def decode(raw, *, mode, model_index=None, reference=None):
     require(len(raw) == BYTES, 'Receipt must contain exactly 1728 bytes.')
+    if struct.unpack_from('<Q', raw)[0] == FAIL_MAGIC:
+        raise ValueError('Check failed: ' + json.dumps(decode_failure(raw), sort_keys=True))
     words = struct.unpack('<216Q', raw)
     (magic, version, size, actual_mode, cores, edge, target, completed, start, stop,
      epoch, acks, closed, overlap, first_top, last_top) = words[:16]

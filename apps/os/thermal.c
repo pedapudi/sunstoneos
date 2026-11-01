@@ -41,6 +41,18 @@ int os_thermal_throttled(void)
     uint64_t state=atomic_load_explicit(&load_state,memory_order_acquire);
     return (state&3)!=A733_THERMAL_NORMAL||a733_smp_counter()/24>(state>>2);
 }
+void ss_thermal_status(struct ss_thermal_status *out)
+{
+    uint64_t state=atomic_load_explicit(&load_state,memory_order_acquire);
+    uint64_t now=a733_smp_counter()/24;
+    unsigned seen=a733_thermal_policy_seen(&thermal.policy);
+    memset(out,0,sizeof(*out));
+    out->level=(uint32_t)(state&3);out->now_us=now;out->deadline_us=state>>2;
+    out->cause=(out->level!=A733_THERMAL_NORMAL?1u:0)|(now>out->deadline_us?2u:0)|(seen!=31?4u:0);
+    out->seen=seen;out->passive=thermal.policy.passive;out->stale=thermal.policy.stale;
+    out->sequence=thermal.policy.sequence;out->start_us=thermal.policy.start_us;
+    for(unsigned i=0;i<5;++i)out->millicelsius[i]=thermal.policy.millicelsius[i];
+}
 static uint64_t fresh_until(void)
 {
     uint64_t until=thermal.policy.start_us;
