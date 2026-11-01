@@ -7,7 +7,7 @@
 pvr_gpu_call:
     stp x29, x30, [sp, #-16]!
     mov x29, sp
-    svc #120
+    svc #124
 .global pvr_gpu_call_enter_site
 .hidden pvr_gpu_call_enter_site
 pvr_gpu_call_enter_site:
@@ -16,12 +16,12 @@ pvr_gpu_call_enter_site:
 .hidden pvr_gpu_call_kernel
 pvr_gpu_call_kernel:
     bl pvr_gpu_call_dispatch
-    svc #121
+    svc #125
 .global pvr_gpu_call_exit_site
 .hidden pvr_gpu_call_exit_site
 pvr_gpu_call_exit_site:
     /* A refused exit must never return through caller-controlled LR at EL1. */
-    brk #121
+    brk #125
 .global pvr_gpu_call_user_resume
 .hidden pvr_gpu_call_user_resume
 pvr_gpu_call_user_resume:

@@ -10,9 +10,9 @@
 +.weak pvr_gpu_call_kernel
 +.weak pvr_gpu_call_exit_site
 +.weak pvr_gpu_call_user_resume
-+CMP X2, #120
++CMP X2, #124
 +B.EQ .Lgpu_call_enter
-+CMP X2, #121
++CMP X2, #125
 +B.NE .Lgpu_call_next
 +AND X3, X5, #15
 +CMP X3, #4

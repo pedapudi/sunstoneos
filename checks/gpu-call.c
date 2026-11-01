@@ -22,13 +22,13 @@ static unsigned caller_mode(void)
 static int raw_enter(void)
 {
     register int result __asm__("x0") = 0;
-    __asm__ volatile("svc #120" : "+r"(result) :: "memory");
+    __asm__ volatile("svc #124" : "+r"(result) :: "memory");
     return result;
 }
 static int raw_exit(void)
 {
     register int result __asm__("x0") = 0;
-    __asm__ volatile("svc #121" : "+r"(result) :: "memory");
+    __asm__ volatile("svc #125" : "+r"(result) :: "memory");
     return result;
 }
 static __attribute__((unused)) uint64_t counter(void)
