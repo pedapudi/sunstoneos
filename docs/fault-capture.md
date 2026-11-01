@@ -161,7 +161,7 @@ caller's `retain()` and returns it. An empty fragment, more than 1,160 bytes,
 a changed USB identity, an expired deadline or a transport error stops the
 exchange, which is never retried. The module opens no device and has no
 command line. The supervised OS launcher
-[check-a733-os-supervised.py](../tools/check-a733-os-supervised.py) calls it
+[check-a733-os-supervised.py](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/tools/check-a733-os-supervised.py) calls it
 with `--fault-report`, once before the result capture, and saves
 `fault-report.bin` and its `decode_report()` result `fault-report.json` in the
 evidence directory. The launcher refuses the flag before any device access

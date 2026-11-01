@@ -10,12 +10,14 @@ the manifest declares. Applications reach the OS through a small set of
 [layering refactoring](../layering-audit.md); mimus, the speech recognizer,
 becomes the first application of an OS core that no longer contains it.
 
-An image holds one application. A second application per image would add an
+An image holds zero or one application. A second application per image would add an
 application index to the INPUTS extent and the result record, and the
 manifest generator would place and check the regions and host operations of
 all the image's manifests together.
 
-**Status.** Design, with a host-checked prototype:
+**Status.** Implemented for one statically linked application or no application.
+The source and historical migration plan below define the reviewed interface.
+The kit includes:
 
 - `include/sunstone_app.h`: the manifest layout and the application calls;
 - `include/sunstone_session.h`: the session, host frame and result layouts;
@@ -24,14 +26,23 @@ all the image's manifests together.
   section again;
 - `apps/hello-compute/`: a second application that returns the Adler-32
   checksum of an input region;
-- `apps/mimus-board/manifest.json`: a draft mimus manifest that pins the
-  addresses, sizes and digests of the current build;
+- the external mimus manifest at `sunstoneos/apps/mimus-board/manifest.json`,
+  which pins its addresses, sizes and digests;
 - `checks/sunstone-app-abi.py`: compiles both manifests for the host and for
   `aarch64-none-elf`, compares the compiled section bytes with the tool's
   packing, runs hello-compute on a host model of the calls, checks the mimus
-  draft against today's constants, and checks eleven refusals.
+  draft against today's constants, and checks eleven refusals;
+- the CPU-return launch path for any application: `apps/os/prepare.py` builds
+  the SRAM launcher, launch request and contract, `apps/os/cpu-return-host.py`
+  reads the return layout and performs one returning run, and
+  `tools/dev-run.py` prepares the typed session from the image's manifest and
+  runs the image. Its default image is hello-compute built with the CPU-return
+  lifetime; mimus runs through the same path with its own inputs and its
+  result decoder.
 
-No OS image implements the calls or links an application through them yet.
+The native OS image implements the calls and links applications through the
+kit. Mimus lives in its own repository; hello-compute remains in SunstoneOS.
+The generic GPU compute queue remains separate, unimplemented work.
 
 ## The manifest declares what an application needs
 
@@ -47,9 +58,9 @@ compiled; the section is the authority for a linked image.
 | --- | --- |
 | `name` | 1–15 characters `[a-z0-9-]`. The application provides `<name>_main(const struct ss_grant *)` and optionally `<name>_init(void)`, with `-` written as `_`; the generated header declares both. |
 | `devices_required`, `devices_optional` | Device bitmaps: USB storage, USB keyboard, I2S capture, headset capture, GPU. The session grants every required device and any subset of the optional ones, with at most one capture device. USB0, the host channel, and thermal supervision are always present. The radio station and the NPU client are OS services that the image selects. |
-| `cluster`, `workers` | Preferred cluster of the main task and the number of worker tasks. The main task gets the first core of the cluster's pair: core 6 for the A76 pair, or core 2 for the A55 pair when the A76 cores are not admitted. The first worker gets the second core of that pair, and further workers the remaining cores in ascending order. This is today's mimus placement rule. |
+| `cluster`, `workers` | Preferred cluster of the main task and the number of worker tasks. The main task gets the first core of the cluster's pair: core 6 for the A76 pair, or core 2 for the A55 pair when the A76 cores are not admitted. The first worker gets the second core of that pair, and further workers the remaining cores in ascending order. The rule preserves the existing recognition placement. |
 | `priority`, `stack_bytes`, `heap_bytes` | FreeRTOS priority and stack of the main task, which runs at EL0, and the bytes the application adds to the image's C and C++ heap. |
-| `regions[8]` | Physical ranges with kind, access and digest. INPUT regions are uploaded by the host and read-only; `bytes` is the maximum content length, or the exact length when the manifest pins a SHA-256. WORK regions are private working memory; OUTPUT regions are written by the application and read by the host after the run. Access bits are CPU read, CPU write, GPU read and GPU write; a WORK region with GPU write and without CPU write is a GPU output region that the CPU only reads. Unpinned regions are placed on 2 MiB boundaries in the application window `0x44000000`–`0x47000000`. |
+| `regions[8]` | Physical ranges with kind, access and digest. INPUT regions are uploaded by the host and must not be written by the trusted application; `bytes` is the maximum content length, or the exact length when the manifest pins a SHA-256. WORK regions are private working memory; OUTPUT regions are written by the application and read by the host after the run. Access bits are CPU read, CPU write, GPU read and GPU write; a WORK region with GPU write and without CPU write is a GPU output region that the CPU only reads. Unpinned regions are placed on 2 MiB boundaries in the application window `0x44000000`–`0x47000000`. |
 | `audio` | Rate, channels, sample bits, and the minimum and maximum frames of one capture, when a capture device is listed. |
 | `run_deadline_us` | Longest time from the start of `<name>_main` to `ss_finish`. Zero means the session deadline less the return reserve bounds the run. |
 | `return_reserve_us` | Time between the latest permitted `ss_finish` and the session deadline, which the return path uses. |
@@ -162,7 +173,8 @@ would add an exception entry and exit and would isolate nothing while EL0 can
 write kernel data. Applications are trusted code, and the calls check no
 ownership.
 
-The application's main task runs at EL0. Work that needs EL1 belongs to an OS
+The application's main task runs at EL0. Public activity, clock-information
+and heap-peak calls preserve existing application telemetry. Work that needs EL1 belongs to an OS
 service; the NPU client, which runs at EL1, stays one.
 
 | Call | Behaviour | Current equivalent |
@@ -172,7 +184,7 @@ service; the NPU client, which runs at EL1, stays one.
 | `ss_progress()` | One atomic store into the application's supervision record. | `mimus_board_progress` |
 | `ss_throttled()` | Thermal load hint. | `os_thermal_throttled` |
 | `ss_clock_ready()` | 1 once the CPU clock owner has finished the grant's requests, or when the image grants no CPU operating points. | `os_cpu_clock_ready` |
-| `ss_capture(sequence, &pcm, &bytes)` | `capture_frames` frames of PCM in the manifest format from the granted capture device. The 64 bytes before the samples belong to the caller, so mimus writes its WAV header in place without a copy. | `os_capture` returning a WAV |
+| `ss_capture(sequence, &pcm, &bytes)` | PCM in the manifest format, with `capture_frames` exact for I2S and an upper bound for headset segments from the granted capture device. The 64 bytes before the samples belong to the caller, so mimus writes its WAV header in place without a copy. | `os_capture` returning a WAV |
 | `ss_host_recv(&request, wait_us)`, `ss_host_send(&reply)` | A mailbox for one 16-byte request in the application's range, and its reply of up to 1,024 bytes plus a 16-byte application tag. The USB0 owner wakes the waiting task with a task notification. It passes the next request only after the USB transfer of the previous reply completed, so a request also confirms delivery of the previous reply. The OS sends nothing for an application request until the application replies. | `mimus_board_copy` and the mimus USB0 exchange |
 | `ss_storage_read(sector, data)`, `ss_key_report(&report)` | One 512-byte read from the USB storage leaf, and the next boot-keyboard report, both served by the OS USB2 owner. | the generated `mimus-client.c`, a patched copy of `apps/board/client.c` |
 | `ss_finish(result, bytes)` | Copies the result into the OS result record and ends the application. A returning lifetime then returns to the host; the resident lifetime keeps the record readable over the host channel. | `os_cpu_return_begin(transcript, used)` |
@@ -195,7 +207,8 @@ point where mimus waits today. Returning from `<name>_main` is a failure.
 **Result record.** `struct ss_result` holds magic, version, record size,
 epoch, generation, status and payload length, followed by the payload. The
 image reserves one record of 56 bytes plus `output_limit` in the symbol
-`ss_result_record`. The application has a host-side decoder for its payload.
+`ss_result_record`. OS operation `0x80` reads that record. The application
+has a host-side decoder for its payload.
 
 **Host channel.** The OS owns the USB0 exchange and keeps today's 64-byte
 frame header, including its magic `0x424d494d` and the storage-state word at
@@ -251,6 +264,11 @@ The generator writes, from the manifest and an OS-owned device table:
   regions.
 - **Image settings:** the service compile definitions that
   `SUNSTONE_A733_OS_AUDIO` and similar options set today, and the heap size.
+
+CPU access flags are declarations for trusted applications. General INPUT
+regions retain writable hardware mappings; only the legacy GPU output profile
+currently enforces its separate read-only CPU mapping. Per-region CPU
+protection remains outside this implementation.
 
 The image link check also refuses an application object that references a
 symbol outside its own sources, the `ss_*` calls, FreeRTOS and the C and C++

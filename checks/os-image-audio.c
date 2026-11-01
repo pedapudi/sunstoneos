@@ -1,15 +1,24 @@
-/* The integrated OS image's capture stream (apps/os/audio.c) and the
- * recognizer's WAV adapter (apps/mimus-board/capture.c, linked beside this
- * unit) against a modeled DMA service, audio parent and board. The stream's
- * own state machine, request protocol, ring delivery and resident progress
- * reports run unchanged; the runner (checks/os-image-audio.py) executes each
- * mode under unicorn. */
+/* Native OS capture and stream state machines against modeled DMA replies,
+ * audio-parent readiness and session admission. Provider construction remains
+ * at the existing fixture boundary; capture receives the real stream API. */
 #include "../apps/os/audio.c"
-#include "../apps/mimus-board/capture.h"
+#include "../apps/os/application.h"
 #include "os-image-audio-model.h"
-/* WAV output of the first two generations, for the runner's comparison with
- * the capture client of the baseline revision. */
-uint8_t os_check_wav[2][44+2*MIMUS_CAPTURE_MAX_SAMPLES];
+enum { CAPTURE_MAX_FRAMES=80000, CAPTURE_BYTES=2*CAPTURE_MAX_FRAMES };
+uint8_t os_check_pcm[2][CAPTURE_BYTES];
+_Alignas(4) uint8_t ss_capture_buffer[SS_CAPTURE_HEADROOM+40*OS_AUDIO_PERIOD_CAPACITY];
+const size_t ss_capture_capacity=sizeof(ss_capture_buffer)-SS_CAPTURE_HEADROOM;
+static const struct ss_manifest manifest={.audio={16000,1,16,16000,CAPTURE_MAX_FRAMES}};
+const struct ss_application ss_application={.manifest=&manifest};
+static struct os_session session;
+static const struct ss_grant grant={.devices=SS_DEVICE_AUDIO_I2S};
+const struct ss_grant *ss_grant(void){return &grant;}
+int ss_live(void){return board_up&&!board_failed?1:-1;}
+const struct os_session *os_session_admitted(void){return &session;}
+/* The provider, pin and DMA-pool constructors are outside this model, as in
+ * the earlier stream fixture. Preserve the actual client's validation and
+ * stream state machine while supplying their configured provider boundary. */
+int __wrap_os_audio_stream_open(const struct os_audio_stream_config *c){return configure(c);}
 /* Mode 5: candidate rates and whether the stream accepts each one for
  * 16-bit mono capture with 4,096-byte periods; the runner compares them with
  * the vendor's table. */
@@ -30,25 +39,23 @@ static struct os_audio_stream_config config(uint32_t rate,unsigned channels,unsi
     uint32_t period_bytes,uint32_t periods)
 {return (struct os_audio_stream_config){{rate,(uint8_t)channels,(uint8_t)bits,{0}},period_bytes,periods,ring_buffer};}
 static unsigned count(char op){unsigned n=0;for(unsigned i=0;i<logged;++i)n+=log[i]==op;return n;}
-static uint32_t get32(const uint8_t *p){return p[0]|p[1]<<8|p[2]<<16|(uint32_t)p[3]<<24;}
 /* Stream task steps and adapter requests in turn, until generation g is
  * captured: 1, or -1 once the adapter refuses. */
-static int capture_run(unsigned g,const uint8_t **wav,size_t *bytes)
+static int capture_run(unsigned g,void **pcm,size_t *bytes)
 {
     for(unsigned n=0;n<2000;++n){
-        int r=mimus_capture(g,wav,bytes);if(r)return r;
+        int r=ss_capture(g,pcm,bytes);if(r)return r;
         if(step()<0){fail();}
     }
     return 0;
 }
-static void check_wav(unsigned g,unsigned samples,const uint8_t *wav,size_t bytes)
+static void check_pcm(unsigned g,unsigned frames,const void *data,size_t bytes)
 {
-    check(bytes==44+2*samples,30);
-    check(!memcmp(wav,"RIFF",4)&&get32(wav+4)==36+2*samples&&!memcmp(wav+8,"WAVEfmt ",8)&&
-        get32(wav+16)==16&&get32(wav+20)==0x10001&&get32(wav+24)==16000&&get32(wav+28)==32000&&
-        get32(wav+32)==0x100002&&!memcmp(wav+36,"data",4)&&get32(wav+40)==2*samples,31);
-    for(unsigned i=0;i<2*samples;++i)check(wav[44+i]==sample(g,i/4096,i%4096),32);
-    memcpy(os_check_wav[g-1],wav,bytes);
+    const uint8_t *pcm=data;
+    check(bytes==2*frames&&pcm==ss_capture_buffer+SS_CAPTURE_HEADROOM&&audio.client.buffer==pcm,30);
+    for(unsigned i=0;i<SS_CAPTURE_HEADROOM;++i)check(ss_capture_buffer[i]==0xa5,31);
+    for(unsigned i=0;i<2*frames;++i)check(pcm[i]==sample(g,i/4096,i%4096),32);
+    memcpy(os_check_pcm[g-1],pcm,bytes);
 }
 /* One run of a stream configuration through the generic interface: read and
  * release 2 * periods periods, check their place, order, timestamps and
@@ -80,7 +87,7 @@ static void delivery(struct os_audio_stream_config c,unsigned frame)
 void os_check_run(unsigned selected,unsigned samples)
 {
     mode=selected;reset();
-    const uint8_t *wav;size_t bytes;
+    void *pcm;size_t bytes;
     if(mode==5){
         /* Rates: exactly those whose bit clock divides 24.576 MHz. */
         for(unsigned i=0;i<sizeof(os_check_rates)/sizeof(os_check_rates[0]);++i){
@@ -146,14 +153,15 @@ void os_check_run(unsigned selected,unsigned samples)
         check(os_audio_stream_stop()==1&&logged==before,136);
         os_check_result=1;return;
     }
-    const struct os_audio_stream_config *c=mimus_capture_configure(samples);
-    check(c&&configure(c)&&!mimus_capture_configure(samples),20);
+    session.audio.capture_samples=samples;
+    memset(ss_capture_buffer,0xa5,SS_CAPTURE_HEADROOM);
+    check(os_capture_start()&&!os_capture_start(),20);
     if(mode==4){
         /* Each task pass without an unanswered request reports progress; a
          * pass waiting for the worker or after a failure reports none. */
         for(unsigned n=0;n<10;++n)pass();
         check(audio.stage==IDLE&&reports==REPORTS(10),70);
-        check(!mimus_capture(1,&wav,&bytes),71);
+        check(!ss_capture(1,&pcm,&bytes),71);
         pass();check(audio.stage==OPEN&&!audio.pending&&reports==REPORTS(11),72);
         silent=1;pass();pass();
         check(audio.stage==OPEN&&audio.pending&&reports==REPORTS(11),73);
@@ -164,31 +172,33 @@ void os_check_run(unsigned selected,unsigned samples)
         os_check_result=1;return;
     }
     if(mode==3){
-        check(mimus_capture(0,&wav,&bytes)<0&&mimus_capture(1,NULL,&bytes)<0,40);
-        check(!mimus_capture(2,&wav,&bytes)&&mimus_capture(1,&wav,&bytes)<0,41);
-        board_up=0;check(mimus_capture(2,&wav,&bytes)<0,42);
+        check(os_audio_client_admit(16000)&&os_audio_client_admit(CAPTURE_MAX_FRAMES)&&
+            !os_audio_client_admit(15999)&&!os_audio_client_admit(CAPTURE_MAX_FRAMES+1),43);
+        check(ss_capture(0,&pcm,&bytes)<0&&ss_capture(1,NULL,&bytes)<0,40);
+        check(!ss_capture(2,&pcm,&bytes)&&ss_capture(1,&pcm,&bytes)<0,41);
+        board_up=0;check(ss_capture(2,&pcm,&bytes)<0,42);
         os_check_result=1;return;
     }
     /* The parent becomes ready on the third poll; nothing is requested yet. */
     for(unsigned n=0;n<10;++n)check(step()==0,50);
     check(atomic_load(&audio.ready)&&audio.stage==IDLE&&!logged,51);
-    int r=capture_run(1,&wav,&bytes);
+    int r=capture_run(1,&pcm,&bytes);
     if(mode){
         /* A discontinuous period or a stream that stopped by itself refuses
          * the capture with the stream and its leases held. */
-        check(r<0&&board_failed&&!reaps&&!closes&&mimus_capture(1,&wav,&bytes)<0,60+mode);
+        check(r<0&&board_failed&&!reaps&&!closes&&ss_capture(1,&pcm,&bytes)<0,60+mode);
         os_check_result=1;return;
     }
     unsigned periods=(2*samples+4095)/4096;
     check(r==1&&produced>=periods&&count('G')==produced&&count('P')==produced&&count('C')==1,53);
     check(!memcmp(log,"OSM",3)&&!memcmp(log+logged-2,"CS",2)&&!reaps,54);
-    check_wav(1,samples,wav,bytes);
+    check_pcm(1,samples,pcm,bytes);
     /* The next generation reaps, closes and opens again before it captures;
      * the first generation's request is then refused. */
     unsigned first=logged;
-    check(!mimus_capture(2,&wav,&bytes)&&capture_run(2,&wav,&bytes)==1&&reaps==1&&closes==1,55);
+    check(!ss_capture(2,&pcm,&bytes)&&capture_run(2,&pcm,&bytes)==1&&reaps==1&&closes==1,55);
     check(!memcmp(log+first,"RLSOSM",6)&&!memcmp(log+logged-2,"CS",2),56);
-    check_wav(2,samples,wav,bytes);
-    check(mimus_capture(1,&wav,&bytes)<0&&!board_failed,57);
+    check_pcm(2,samples,pcm,bytes);
+    check(ss_capture(1,&pcm,&bytes)<0&&!board_failed,57);
     os_check_result=1;
 }

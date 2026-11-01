@@ -1,7 +1,7 @@
 /* Modeled DMA service replies, audio parent and board for the stream task of
  * apps/os/audio.c. checks/os-image-audio.c uses it with the current capture
- * stream; checks/os-image-audio-baseline.c uses it with the capture client of
- * an earlier revision, so both see the same period bytes. Include it after
+ * stream and generic PCM capture. checks/os-image-audio-baseline.c uses an
+ * earlier capture client, so both see the same period bytes. Include it after
  * audio.c, which defines PERIODS and the audio object. */
 struct board_application board;
 struct board_provider providers;

@@ -25,8 +25,8 @@ check. The kernel, eight-core soak and mimus checks automatically build their
 required images. The OS-core central build is configured with an empty
 `MIMUS_DIR`, so its targets and checks never read a mimus checkout. Each
 application in the gate's `APPLICATIONS` table, at present only mimus, has its
-own central build and checks. Every OS variant still links mimus until the OS
-core builds without an application. A source-only check configures no build. Duplicate selections
+own central build and checks. Every OS variant builds with no application. External mimus checks require
+`--mimus-dir` or the `MIMUS_DIR` environment variable. A source-only check configures no build. Duplicate selections
 run once. `--help` lists the supported variants and checks; other component
 checks continue to run directly with their required inputs.
 
@@ -35,8 +35,8 @@ Its textual search cannot prove that an empty selection is sufficient. The
 owner chooses coverage from the changed behavior and shared dependencies;
 the gate does not infer it from filenames or launch every matching check.
 
-`--full` explicitly requests all central targets, the nine OS variants of
-[the integrated OS image](handoff.md#integrated-os-image), its supervised NPU
+`--full` explicitly requests all central targets, all configured OS variants of
+[the OS image](os-image.md), including the supervised NPU
 profile (variant `npu`) and all gate checks. The `npu` variant builds with the
 catalogue map `~/.cache/sunstoneos/build/npu-board/session-artifacts.json`;
 the OS build verifies every file it names against
@@ -74,6 +74,7 @@ reason for that sample count. It does not retry failures.
 The host's existing `~/.cache/sunstoneos/bin/integration-gate.sh SOURCE LABEL`
 command delegates to this repository tool and accepts the same selection
 options. Host dependency configuration remains in `~/.cache/sunstoneos/bin/cfg.sh`.
+`--build-root` selects a separate directory for new builds and gate evidence.
 The gate builds and checks software only; board runs remain separately queued.
 
 ## Match coverage to the change

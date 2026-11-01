@@ -1,9 +1,8 @@
-# Dedicated staged returning profile, with optional GPU recognition. All adaptation is private to this target.
+# Fixed returning hardware profile. All adaptation is private to this target.
 if(SUNSTONE_A733_OS_RESIDENT OR SUNSTONE_A733_OS_AUDIO OR SUNSTONE_A733_OS_RADIO OR
    SUNSTONE_A733_OS_HEADSET OR SUNSTONE_A733_OS_NPU OR
-   SUNSTONE_A733_OS_PERF OR NOT A733_A76_ADMITTED OR NOT SUNSTONE_A733_OS_CPU_CLOCK OR
-   NOT SUNSTONE_MIMUS_WORKERS STREQUAL "8")
-  message(FATAL_ERROR "CPU return requires supervised staged eight-worker A76 CPU-clock recognition with optional GPU only")
+   SUNSTONE_A733_OS_PERF OR NOT A733_A76_ADMITTED OR NOT SUNSTONE_A733_OS_CPU_CLOCK)
+  message(FATAL_ERROR "CPU return requires the supervised A76 CPU-clock profile with optional GPU")
 endif()
 set(os_return "${os_root}/apps/os/cpu-return")
 set(os_qualification "${os_root}/apps/cpu-runtime-qualification")
@@ -13,13 +12,11 @@ foreach(pair "runtime.c|runtime|${os_qualification}/runtime.c"
              "continue.c|continue|${os_root}/platform/a733-smp-cached/continue.c"
              "continue.S|vectors|${storage_build}/continue.S"
              "main.c|main|${os_root}/apps/board/main.c"
-             "usb0.c|usb0|${os_root}/apps/mimus-board/usb0.c"
              "cpu.c|cpu|${os_root}/apps/os/cpu.c"
              "thermal.c|thermal|${os_root}/apps/os/thermal.c"
              "start.c|start|${os_root}/apps/os/start.c"
              "admission.c|admission|${os_root}/apps/os/admission.c"
-             "boot.c|boot|${os_build}/boot.c"
-             "recognition.cc|recognition|${os_recognition}")
+             "boot.c|boot|${os_build}/boot.c")
   string(REPLACE "|" ";" parts "${pair}")
   list(GET parts 0 unit)
   list(GET parts 1 patch_name)

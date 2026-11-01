@@ -5,6 +5,8 @@
  * radio station, an optional Bluetooth headset, one fixed interrupt table and
  * one fixed start list. */
 #include "a733_board_application.h"
+#include "sunstone_app.h"
+#include "sunstone_session.h"
 /* EL0-safe load hint. True before thermal policy initialization and while
  * throttled or failed. It grants no clock or voltage change. */
 int os_thermal_throttled(void);
@@ -200,8 +202,7 @@ void os_headset_task(void *);
 int os_headset_task_privileged(void (*)(void *),void *);
 int os_headset_pins(struct a733_pin_handoff *);
 int os_headset_start(void);
-/* EL0-safe, with the contract of mimus_capture (apps/mimus-board/capture.h):
- * the 16 kHz WAV of the
+/* Internal EL0-safe headset buffer interface: the 16 kHz WAV of the
  * headset segment recorded for generation g, which the headset button starts
  * (and, in workload 4, the request itself). */
 int os_headset_capture(unsigned g,const uint8_t **wav,size_t *bytes);
@@ -228,7 +229,7 @@ int os_capture(unsigned g,const uint8_t **wav,size_t *bytes);
  * build adds its capture client, the radio build the board's radio owner
  * and network client, and the headset build the Bluetooth owner and the
  * headset capture client. */
-enum { OS_SERVICE_MIMUS=5, OS_SERVICE_THERMAL,
+enum { OS_SERVICE_APPLICATION=5, OS_SERVICE_THERMAL,
 #ifdef SUNSTONE_A733_OS_NPU
     OS_SERVICE_NPU,
 #endif
@@ -244,6 +245,12 @@ enum { OS_SERVICE_MIMUS=5, OS_SERVICE_THERMAL,
     OS_SERVICES };
 struct os_service { const char *name; uint32_t window_us; };
 extern const struct os_service os_services[OS_SERVICES];
+void board_service_progress(unsigned);
+int os_application_finished(void);
+int os_session_decode(const void *,size_t,struct os_session *);
+const void *os_session_extent(const void *,uint32_t,size_t *);
+uint32_t os_session_devices(void);
+const struct ss_input_fact *os_session_inputs(unsigned *);
 /* Interval between watchdog renewals while every service is in its window. */
 #define OS_RENEW_US 1000000u
 /* 1 when every service reported progress no more than its window before

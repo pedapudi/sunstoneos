@@ -12,7 +12,7 @@ _Static_assert(A733_SMP_CONTRACT_MAGIC==A733_OS_CONTRACT_MAGIC,"supervised OS co
 #endif
 /* Offline card preparation reads these compiled constants, so a manifest
  * cannot relabel a supervised image or another session layout as resident. */
-__attribute__((used,retain)) const uint64_t os_contract_profile[2]={A733_SMP_CONTRACT_MAGIC,sizeof(struct os_session)};
+__attribute__((used,retain)) const uint64_t os_contract_profile[2]={A733_SMP_CONTRACT_MAGIC,0};
 int os_session_valid(const struct os_session *s)
 {
     if(!s||!a733_board_session_valid(&s->board,0)||!os_workload_valid(s->board.workload)||
@@ -87,10 +87,11 @@ int os_session_valid(const struct os_session *s)
 }
 int a733_smp_contract_valid(const struct a733_smp_contract *c,uint64_t now)
 {
-    const struct os_session *s=(const void *)A733_BOARD_SESSION_ADDRESS;
+    const void *raw=(const void *)A733_BOARD_SESSION_ADDRESS;
+    struct os_session decoded;const struct os_session *s=&decoded;
     if(!c||c->magic!=A733_SMP_CONTRACT_MAGIC||c->reserved[0]!=A733_BOARD_SESSION_ADDRESS||
-       c->reserved[1]!=sizeof(*s)||!os_session_valid(s))return 0;
-    uint8_t hash[32];storage_digest_bytes(s,sizeof(*s),hash);
+       !os_session_decode(raw,c->reserved[1],&decoded))return 0;
+    uint8_t hash[32];storage_digest_bytes(raw,c->reserved[1],hash);
     if(memcmp(hash,&c->reserved[2],32))return 0;
     /* The board check binds every remaining field against the board prefix. */
     struct a733_smp_contract base=*c;base.magic=A733_BOARD_CONTRACT_MAGIC;base.reserved[1]=sizeof(s->board);

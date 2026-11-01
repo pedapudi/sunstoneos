@@ -21,8 +21,7 @@ def fetch(device, same, deadline, retain, now=time.monotonic, *, op=FAULT_OP, si
           name='fault report'):
     """Send one operation op request and return the raw size-byte report as a read-only view.
 
-    A short copy of device_exchange() in apps/mimus-board/host.py: same() runs
-    before every transfer, and each transfer's timeout is the time left before
+    The identity callback same() runs before every transfer, and each transfer's timeout is the time left before
     the deadline, capped at 500 ms and at least 1 ms. The fragments are appended
     to one buffer, and retain() and the caller receive the same read-only view
     of it, so each report byte is copied once on the host. retain(raw) must save

@@ -63,7 +63,7 @@ not link these files and still take `memcpy`, `memmove` and `memset` from
 `libc.a`: the C++ runtime check and its emulator model from
 [cxx-runtime.cmake](../cmake/cxx-runtime.cmake), and the RAM-monitor mimus
 images `a733-mimus` and `a733-mimus-usb` and their emulator models from
-[mimus.cmake](../cmake/mimus.cmake). The hazard check below fails on them.
+[mimus.cmake](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/cmake/mimus.cmake). The hazard check below fails on them.
 
 Boot C at EL3 calls `memset` and `memcpy` for structure initialization while
 translation is off. Every data access is then a Device-nGnRnE access, where an

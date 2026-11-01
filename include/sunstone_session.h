@@ -2,9 +2,16 @@
 #define SUNSTONE_SESSION_H
 /* SunstoneOS session, host frame and result layouts for the OS, the stage-2
  * loader and host tools (docs/designs/app-abi.md). Applications do not read
- * these records; they use include/sunstone_app.h. Status: prototype. */
+ * these records; they use include/sunstone_app.h. */
 #include <stddef.h>
 #include <stdint.h>
+#ifndef SS_STATIC_ASSERT
+#ifdef __cplusplus
+#define SS_STATIC_ASSERT static_assert
+#else
+#define SS_STATIC_ASSERT _Static_assert
+#endif
+#endif
 
 /* The session page: the 592-byte board prefix (struct a733_board_session),
  * this header, then `extents` typed extents, each padded to 8 bytes. The
@@ -43,9 +50,9 @@ struct ss_input_fact {
     uint64_t bytes;
     uint8_t sha256[32];
 };
-_Static_assert(sizeof(struct ss_session_header) == 64 && offsetof(struct ss_session_header, devices) == 24 &&
+SS_STATIC_ASSERT(sizeof(struct ss_session_header) == 64 && offsetof(struct ss_session_header, devices) == 24 &&
     offsetof(struct ss_session_header, manifests_sha256) == 32, "ss_session_header layout");
-_Static_assert(sizeof(struct ss_extent) == 8 && sizeof(struct ss_input_fact) == 40, "ss_extent layout");
+SS_STATIC_ASSERT(sizeof(struct ss_extent) == 8 && sizeof(struct ss_input_fact) == 40, "ss_extent layout");
 
 /* Host channel frame header: today's 64-byte USB0 response header. */
 #define SS_FRAME_MAGIC UINT32_C(0x424d494d)
@@ -54,12 +61,14 @@ _Static_assert(sizeof(struct ss_extent) == 8 && sizeof(struct ss_input_fact) == 
 #define SS_HOST_OS_REPORT_FIRST 0x05u
 #define SS_HOST_OS_REPORT_LAST 0x08u
 #define SS_HOST_OS_FIRST 0x80u
+/* Paged read of the complete ss_result record, including its header. */
+#define SS_HOST_RESULT_OP 0x80u
 struct ss_host_frame {
     uint32_t magic, version, state, bytes, total, offset, storage, op;
     uint64_t epoch, generation;
     uint8_t tag[16];
 };
-_Static_assert(sizeof(struct ss_host_frame) == 64 && offsetof(struct ss_host_frame, epoch) == 32 &&
+SS_STATIC_ASSERT(sizeof(struct ss_host_frame) == 64 && offsetof(struct ss_host_frame, epoch) == 32 &&
     offsetof(struct ss_host_frame, tag) == 48, "ss_host_frame layout");
 
 /* OS-owned result record that ss_finish writes; the payload follows. */
@@ -70,6 +79,6 @@ struct ss_result {
     uint64_t magic, version, bytes;  /* bytes: header plus payload capacity */
     uint64_t epoch, generation, status, payload_bytes;
 };
-_Static_assert(sizeof(struct ss_result) == 56 && offsetof(struct ss_result, status) == 40 &&
+SS_STATIC_ASSERT(sizeof(struct ss_result) == 56 && offsetof(struct ss_result, status) == 40 &&
     offsetof(struct ss_result, payload_bytes) == 48, "ss_result layout");
 #endif

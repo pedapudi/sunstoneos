@@ -1,6 +1,7 @@
 /* One finite staged CPU recognition. Service callbacks run on their existing
  * owners. Only the final per-core terminal stops the scheduler context. */
 #include "cpu-return.h"
+#include "application.h"
 #include "os.h"
 #include "../board/application.h"
 #include "cpu-return-runtime.h"
@@ -14,11 +15,6 @@
 __attribute__((used,retain)) const uint64_t os_cpu_return_watchdog[5]={
     UINT64_C(0x31544457534f5243),2,SUNSTONE_CRUMB_WATCHDOG_MODE,SUNSTONE_CRUMB_RTC,A733_BOARD_SUPERVISED_SECONDS
 };
-struct os_cpu_return_output {
-    uint64_t magic,version,bytes,epoch,generation,text_bytes;
-    uint8_t text[16384];
-};
-__attribute__((used,retain)) struct os_cpu_return_output os_cpu_return_output;
 static atomic_uint closing,thermal_done,pmic_stop,pmic_done,ready;
 static StaticTask_t terminal_state[8];
 static StackType_t terminal_stack[8][1024];
@@ -71,15 +67,13 @@ int os_cpu_return_start(void)
  * collected every job and every worker's explicit terminal acknowledgment. */
 void os_cpu_return_begin(const uint8_t *text,size_t bytes)
 {
-    if(!text||!bytes||bytes>sizeof(os_cpu_return_output.text)||os_cpu_return_requested()||
+    if((!text&&bytes)||bytes>ss_result_capacity||os_cpu_return_requested()||
        a733_smp_counter()>=completion_cutoff())fail(0x738);
 #ifdef SUNSTONE_A733_OS_GPU_LINEAR
     if(!os_gpu_return_ready())fail(0x740);
 #endif
-    os_cpu_return_output.magic=UINT64_C(0x3152434f33333741);
-    os_cpu_return_output.version=1;os_cpu_return_output.bytes=sizeof(os_cpu_return_output);
-    os_cpu_return_output.epoch=board.session.epoch;os_cpu_return_output.generation=board.session.generation;
-    os_cpu_return_output.text_bytes=bytes;memcpy(os_cpu_return_output.text,text,bytes);
+    const struct ss_result *result=(const void *)ss_result_record;
+    if(result->magic!=SS_RESULT_MAGIC||result->status!=SS_RESULT_FINISHED||result->payload_bytes!=bytes)fail(0x738);
     sunstone_crumb(SUNSTONE_CRUMB_OUTPUT,(uint32_t)bytes);
     atomic_store_explicit(&closing,1,memory_order_release);
 }

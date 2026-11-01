@@ -54,19 +54,15 @@ CORE_CHECKS = (*DEPENDENCIES, 'shared-helpers', 'progress', 'check-index', 'pmic
                'power-domains-tree')
 # Applications, each with its own central build and checks. A check names its
 # central target and its command; {build}, {cache}, {qemu} and {evidence} are
-# replaced. os_options select the application in an OS variant: every variant
-# still needs one, until the OS core builds alone (docs/layering-audit.md,
-# refactoring step 2). An application build keeps the MIMUS_DIR from cfg.sh.
+# replaced. Application sources and checks belong to the external checkout.
 APPLICATIONS = {
     'mimus': {
-        'os_options': ['-DSUNSTONE_MIMUS_BOARD_APPLICATION=ON'],
         'checks': {'mimus-smp': ('smp-mimus-model', [
-            'tools/check-mimus-smp.py', '--image', '{build}/smp-mimus-model.elf',
+            '{mimus}/sunstoneos/tools/check-mimus-smp.py', '--image', '{build}/smp-mimus-model.elf',
             '--bundle', '{cache}/inputs/mimus-bench/inputs.bin', '--reference', '{cache}/evidence/mimus-host.json',
             '--qemu', '{qemu}', '--evidence', '{evidence}/mimus-smp'])},
     },
 }
-OS_APPLICATION = 'mimus'
 APPLICATION_CHECKS = {check: name for name, application in APPLICATIONS.items() for check in application['checks']}
 CHECKS = (*CORE_CHECKS, *APPLICATION_CHECKS)
 
@@ -118,6 +114,9 @@ def main(argv=None):
     parser.add_argument('--check', choices=CHECKS, action='append', default=[])
     parser.add_argument('--full', action='store_true', help='explicit broad integration milestone: all core and application central targets, every OS variant and all listed checks')
     parser.add_argument('--cache', type=Path, default=Path(os.environ.get('SUNSTONE_CACHE', Path.home() / '.cache/sunstoneos')))
+    parser.add_argument('--build-root', type=Path, help='build and gate evidence directory; defaults to CACHE/build')
+    parser.add_argument('--mimus-dir', type=Path, default=os.environ.get('MIMUS_DIR'),
+                        help='optional external mimus checkout; defaults to MIMUS_DIR')
     parser.add_argument('--trials', type=int, default=1, help='predeclared soak8 trials, not failure retries (default: 1)')
     parser.add_argument('--allow-dirty', action='store_true', help='build a tree with uncommitted changes; the status and diff hash are recorded')
     args = parser.parse_args(argv)
@@ -139,7 +138,12 @@ def main(argv=None):
     variants = list(VARIANTS) if args.full else list(dict.fromkeys(args.variant))
     if any('npu' in v for v in variants) and not (cache / NPU_CATALOGUE).is_file():
         parser.error('the npu variant needs the NPU catalogue map ' + str(cache / NPU_CATALOGUE))
-    checks = list(CHECKS) if args.full else list(dict.fromkeys(args.check))
+    mimus = args.mimus_dir.resolve() if args.mimus_dir else None
+    if mimus and not (mimus / 'sunstoneos/CMakeLists.txt').is_file():
+        parser.error('mimus must provide sunstoneos/CMakeLists.txt')
+    checks = list(CHECKS if mimus else CORE_CHECKS) if args.full else list(dict.fromkeys(args.check))
+    if not mimus and any(check in APPLICATION_CHECKS for check in checks):
+        parser.error('mimus checks require --mimus-dir or MIMUS_DIR')
     for check in checks:
         if check in DEPENDENCIES and DEPENDENCIES[check] not in targets:
             targets.append(DEPENDENCIES[check])
@@ -160,18 +164,20 @@ def main(argv=None):
     state = tree_state(source)
     if state[1] and not args.allow_dirty:
         parser.error('source has uncommitted changes; commit them or pass --allow-dirty to record them')
-    output = cache / 'build' / ('gate-' + args.label)
+    build_root = args.build_root.resolve() if args.build_root else cache / 'build'
+    output = build_root / ('gate-' + args.label)
     try:
         output.mkdir(parents=True, exist_ok=False)
     except FileExistsError:
         parser.error(f'evidence already exists: {output}; reuse its results or choose a new label for affected work')
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1')
+    env['SUNSTONEOS_DIR'] = str(source)
     env['PATH'] = str(cache / 'host/usr/lib/llvm-21/bin') + os.pathsep + env.get('PATH', '')
     # One build tree per resolved checkout: the name keeps it recognizable and
     # the path hash separates checkouts that share a name.
     tree = re.sub(r'[^A-Za-z0-9_.-]', '_', source.name) + '-' + hashlib.sha256(str(source).encode()).hexdigest()[:10]
-    cfg, build = cache / 'bin/cfg.sh', cache / 'build' / ('gate-central-' + tree)
-    application_builds = {name: cache / 'build' / ('gate-' + name + '-' + tree) for name in APPLICATIONS}
+    cfg, build = cache / 'bin/cfg.sh', build_root / ('gate-central-' + tree)
+    application_builds = {name: build_root / ('gate-' + name + '-' + tree) for name in APPLICATIONS}
     python = cache / 'venv/bin/python'
     qemu = cache / 'host/usr/bin/qemu-system-aarch64'
     evidence = output / 'evidence'
@@ -208,6 +214,17 @@ def main(argv=None):
                        str(len(changes.splitlines())) + ' changed paths'))
     if changes:
         (output / 'status.txt').write_text(changes)
+    mimus_state = tree_state(mimus) if mimus else None
+    if mimus:
+        if None in mimus_state or (mimus_state[1] and not args.allow_dirty):
+            note('FAIL external mimus state is unreadable or dirty; pass --allow-dirty to record local changes')
+            return 1
+        note('mimus-source: ' + str(mimus))
+        note('mimus-revision: ' + mimus_state[0])
+        note('mimus-diff-sha256: ' + mimus_state[2])
+        note('mimus-untracked-sha256: %s (%d files)' % mimus_state[3])
+        if mimus_state[1]:
+            (output / 'mimus-status.txt').write_text(mimus_state[1])
     if any('npu' in v for v in variants):
         note('npu-catalogue-sha256: ' + hashlib.sha256((cache / NPU_CATALOGUE).read_bytes()).hexdigest())
 
@@ -217,8 +234,11 @@ def main(argv=None):
             note('FAIL the source revision, status, diff or untracked files changed or could not be read '
                  + when + '; rerun with a new label')
             return False
+        if mimus and tree_state(mimus) != mimus_state:
+            note('FAIL external mimus changed or could not be read ' + when)
+            return False
         return True
-    lock_path = cache / 'build' / ('gate-' + tree + '.lock')
+    lock_path = build_root / ('gate-' + tree + '.lock')
     lock = lock_path.open('a')
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -243,7 +263,7 @@ def main(argv=None):
     core_targets = []
     if targets or args.full:
         # The empty MIMUS_DIR overrides the one cfg.sh passes.
-        if not run('central-configure', [cfg, source, build, '-DMIMUS_DIR=']):
+        if not run('central-configure', [cfg, source, build, '-DSUNSTONE_APPLICATION=', '-DMIMUS_DIR=']):
             return 1
         if args.full:
             core_targets = discover('central', build)
@@ -253,9 +273,19 @@ def main(argv=None):
         # One invocation lets CMake reuse shared dependencies across selected targets.
         if not run('central-build', ['cmake', '--build', build, '--target', *targets, '-j', '12']):
             return 1
-    for name in APPLICATIONS if args.full else applications:
+    for variant in variants:
+        directory = build_root / ('gate-os-' + variant + '-' + tree)
+        options = [value.replace('{cache}', str(cache)) for value in VARIANTS[variant]]
+        if not run('os-' + variant + '-configure', [cfg, source, directory,
+                   '-DMIMUS_DIR=', '-DSUNSTONE_APPLICATION=', '-DSUNSTONE_A733_OS=ON', *options]):
+            return 1
+        if not run('os-' + variant + '-build', ['cmake', '--build', directory, '--target', 'sunstone-a733-os', '-j', '12']):
+            return 1
+    for name in (APPLICATIONS if args.full and mimus else applications):
         directory, selected = application_builds[name], applications.get(name, [])
-        if not run(name + '-configure', [cfg, source, directory]):
+        selected = list(dict.fromkeys(['sunstone-a733-os', *selected]))
+        if not run(name + '-configure', [cfg, source, directory, '-DMIMUS_DIR=' + str(mimus),
+                   '-DSUNSTONE_A733_OS=ON', '-DSUNSTONE_APPLICATION=mimus']):
             return 1
         if args.full:
             discovered = discover(name, directory)
@@ -264,14 +294,6 @@ def main(argv=None):
             # The application build repeats the core targets; build only its own.
             selected = list(dict.fromkeys(selected + [t for t in discovered if t not in core_targets]))
         if selected and not run(name + '-build', ['cmake', '--build', directory, '--target', *selected, '-j', '12']):
-            return 1
-    for variant in variants:
-        directory = cache / 'build' / ('gate-os-' + variant + '-' + tree)
-        options = [value.replace('{cache}', str(cache)) for value in VARIANTS[variant]]
-        if not run('os-' + variant + '-configure', [cfg, source, directory,
-                   *APPLICATIONS[OS_APPLICATION]['os_options'], '-DSUNSTONE_A733_OS=ON', *options]):
-            return 1
-        if not run('os-' + variant + '-build', ['cmake', '--build', directory, '--target', 'sunstone-a733-os', '-j', '12']):
             return 1
     commands = {
         'kernel': ['tools/check-kernel.py', build / 'kernel-check.elf', '--qemu', qemu, '--evidence', evidence / 'kernel'],
@@ -283,7 +305,8 @@ def main(argv=None):
         'power-domains-tree': ['checks/power-domains-tree.py'],
     }
     for check, name in APPLICATION_CHECKS.items():
-        places = {'build': application_builds[name], 'cache': cache, 'qemu': qemu, 'evidence': evidence}
+        places = {'build': application_builds[name], 'cache': cache, 'qemu': qemu, 'evidence': evidence,
+                  'mimus': mimus}
         commands[check] = [value.format(**places) for value in APPLICATIONS[name]['checks'][check][1]]
     for check in checks:
         if not run('check-' + check, [python, *commands[check]]):

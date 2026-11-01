@@ -9,6 +9,9 @@ the reset report and keeps the fresh ROM instance unquarantined. With --image,
 the linked return image runs in the instruction model: an EL1 breadcrumb SVC,
 the EL3 first-fault record and the disarm on the normal ROM return. No USB
 node, queue or FEL executable is opened.
+
+With --clang and --lld, the OS-request launcher of apps/os/prepare.py is built
+with and without a WDT0 mode.
 """
 import argparse
 import contextlib
@@ -250,11 +253,11 @@ def launcher_case(out, clang, lld):
 
 
 def native_cases(image_path, baseline):
-    prepare = load('checked_os_prepare_marker', 'apps/os/prepare.py')
-    marker = prepare.watchdog_marker(prepare.os_link.Elf(Path(image_path).read_bytes()))
+    host = load('checked_os_host_marker', 'apps/os/host.py')
+    marker = host.watchdog_marker(image_path)
     assert marker == {'mode': 0xb1, 'session_seconds': 60}, marker
     if baseline:
-        assert prepare.watchdog_marker(prepare.os_link.Elf(Path(baseline).read_bytes())) is None
+        assert host.watchdog_marker(baseline) is None
     passed('image-watchdog-marker')
     prior = load('checked_cpu_model', 'checks/cpu-runtime-qualification.py')
     model = lambda: prior.Model(prior.fault.Image(Path(image_path)))
@@ -353,7 +356,7 @@ def board_failure_cases(image_path, prior, model, rtc):
     from elftools.elf.elffile import ELFFile
     with open(image_path, 'rb') as f:
         symbols = {x.name: x['st_value'] for x in ELFFile(f).get_section_by_name('.symtab').iter_symbols()
-                   if x.name in ('fail_recorded', 'bounded')}
+                   if x.name in ('fail_recorded', 'bounded', 'ss_fail')}
     m = model()
     m.call(2, 'board_fail', (0x1234,))
     site = rtc(m, 0x114)
@@ -375,11 +378,25 @@ def board_failure_cases(image_path, prior, model, rtc):
     assert m.stop == 'return' and rtc(m, 0x110) == 0xfa0b0000 | 1 << 20 | 5 << 8, hex(rtc(m, 0x110))
     assert (rtc(m, 0x114), rtc(m, 0x118), rtc(m, 0x11c)) == (0x5123, 0x41001234, 9)
     passed('board-fail-record-el1')
+    # An application's ss_fail(detail): the decoder names the group, the
+    # detail and the symbolized caller from the image.
     m = model()
-    m.call(4, 'mimus_board_fail')
+    m.call(4, 'ss_fail', (0x123,))
     site = rtc(m, 0x114)
-    assert m.stop == 'return' and site >> 31 and site >> 12 & 15 == 4 and rtc(m, 0x118) == sentinel, hex(site)
-    passed('recognizer-failure-site')
+    # ss_fail does not return: after the record, its task suspends and the core parks.
+    assert m.stop == 'park' and site == 1 << 31 | 4 << 12 | 0x123 and rtc(m, 0x118) == sentinel, (m.stop, hex(site))
+    words = {name: rtc(m, offset) for name, offset in crumbs.WORDS.items()}
+    words['tag'] = 0x5c0d0000 | EPOCH & 0xffff
+    # The model's caller is a sentinel; a return address inside the image
+    # shows the symbolization.
+    words['elr'] = symbols['ss_fail'] + 4
+    decoded = crumbs.decode(words, EPOCH, image_path)
+    f = decoded['board_failure']
+    assert (f['group'], f['site_kind'], f['site'], f['value'], f['core'], f['exception_level']) == (
+        'application', 'detail', 0x123, '0x123', 4, 'EL0'), f
+    assert f['caller_source'].startswith('ss_fail') and 'apps/os/application.c' in f['caller_source'], f
+    assert 'first board failure on core 4 at EL0: application detail 0x123' in decoded['summary'], decoded['summary']
+    passed('application-failure-site', summary=decoded['summary'])
     m = model()
     m.put32(crumbs.RTC + 0x110, 0xfa010000 | 3 << 20 | 8 << 8 | 4)
     m.call(2, 'board_fail', (0,))
@@ -404,6 +421,8 @@ def main():
     parser.add_argument('--clang', type=Path)
     parser.add_argument('--lld', type=Path)
     args = parser.parse_args()
+    if bool(args.clang) != bool(args.lld):
+        parser.error('the launcher case needs --clang and --lld together')
     args.out.mkdir(parents=True, exist_ok=False)
     header_cases()
     transport_cases()

@@ -6,6 +6,7 @@ such as a working copy of a card backup; it never writes a card.
 """
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -277,8 +278,27 @@ def container_writes(manifest_path):
     return writes
 
 
-def os_session_generation(raw, generation):
-    """Bind only the recorded-card template's generation; epochs stay zero."""
+def os_session_generation(raw, generation, *, legacy=False):
+    """Bind a cold session and its requested CPU grant to the selected slot."""
+    if type(generation) is not int or not 0 < generation <= MASK64:
+        raise ValueError('Slot generation must be a nonzero unsigned 64-bit integer')
+    if not legacy:
+        spec = importlib.util.spec_from_file_location('boot_slot_session', Path(__file__).resolve().parents[1] / 'apps/os/host.py')
+        host = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(host)
+        decoded = host.session_decode(raw)
+        if (struct.unpack_from('<3Q', raw) != (0x4153373342535332, 2, host.PREFIX_BYTES) or
+                struct.unpack_from('<2Q', raw, 24) != (0, 0)):
+            raise ValueError('Expected an unassigned zero-epoch typed OS template')
+        grant = decoded['extents'].get(host.CPU_GRANT)
+        if grant is not None and struct.unpack_from('<2Q', grant, 32) != (0, 0):
+            raise ValueError('Expected an unassigned typed CPU grant')
+        result = bytearray(raw)
+        struct.pack_into('<Q', result, 32, generation)
+        if grant is not None and struct.unpack_from('<I', grant, 48)[0]:
+            struct.pack_into('<Q', result, decoded['offsets'][host.CPU_GRANT] + 40, generation)
+        return bytes(result)
+    # Historical launch profiles explicitly select their fixed layout.
     if (len(raw) not in (808, 904, 1080, 1176) or struct.unpack_from('<3Q', raw) !=
             (0x4153373342535332, 2, 592) or struct.unpack_from('<2Q', raw, 24) != (0, 0) or
             struct.unpack_from('<I', raw, 400)[0] != 2 or
@@ -321,7 +341,8 @@ def plan(args):
                     raise ValueError('Valid slot %s header has an extent in the slot %s region'
                                      % (name, slot))
         session_path = getattr(args, 'os_session', None)
-        bound_session = os_session_generation(Path(session_path).read_bytes(), generation) if session_path else None
+        bound_session = os_session_generation(Path(session_path).read_bytes(), generation,
+                                              legacy=getattr(args, 'legacy_os_session', False)) if session_path else None
         loads = [(parse_load(args.image), IMAGE)]
         if session_path:
             loads.append(((Path(session_path), 0x41f00000), ASSET))
@@ -469,7 +490,8 @@ def main(argv=None):
     p.add_argument('--image', required=True, metavar='PATH@LOAD')
     p.add_argument('--entry', required=True, type=address)
     p.add_argument('--asset', action='append', default=[], metavar='PATH@LOAD')
-    p.add_argument('--os-session', help='Unassigned zero-epoch recorded OS session; bind its generation as a session asset')
+    p.add_argument('--os-session', help='Unassigned zero-epoch typed OS session; bind its slot generation')
+    p.add_argument('--legacy-os-session', action='store_true', help='Use the historical fixed recorded OS session layout')
     p.add_argument('--container', help='prepare-microsd-boot.py manifest to install after the slot')
     p.add_argument('--output', required=True, help='New plan directory')
     p = sub.add_parser('apply', help='Apply a plan to an ordinary card image file')

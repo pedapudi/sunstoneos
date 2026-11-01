@@ -22,23 +22,45 @@
      add x25, x25, #63
      and x25, x25, #-64
      mov x2, #0x42000000
-@@ -248,6 +252,15 @@
+@@ -229,6 +233,16 @@
+     // Linker RAM is mapped by 2MiB blocks. Require the NS bit, WB index1,
+     // inner-shareable field and access flag before cleaning each block.
+     address x26, a733_cached_el3_l2
++    // The manifest is immutable CODE. x27 walks regions after image RAM.
++    address x27, __start_sunstone_manifest
++    address x28, __stop_sunstone_manifest
++    cmp x27, x28
++    b.eq .Lno_regions
++    ldrb w28, [x27, #86]
++    add x27, x27, #104
++    b .Lclean
++.Lno_regions:
++    mov x28, #0
+ .Lclean:
+     check_time
+     mov x2, #0x40000000
+@@ -248,6 +262,20 @@
      add x24, x24, #64
      cmp x24, x25
      b.lo .Lclean
-+    // The recognizer's private arena is also writable WB Normal memory.
-+    // Reuse the same block-identity and attribute checks for all 16 MiB.
-+    mov x2, #0x42000000
-+    cmp x24, x2
-+    b.hi .Lclean_finished
-+    mov x24, #0x46000000
-+    mov x25, #0x47000000
++.Lnext_region:
++    cbz x28, .Lclean_finished
++    sub x28, x28, #1
++    ldr w2, [x27, #16]
++    ldp x24, x25, [x27]
++    add x27, x27, #56
++    cmp w2, #2
++    b.eq .Lregion
++    cmp w2, #3
++    b.ne .Lnext_region
++.Lregion:
++    add x25, x24, x25
 +    b .Lclean
 +.Lclean_finished:
      dsb sy
      add x2, x23, #688
      add x2, x2, x20, lsl #10
-@@ -369,9 +382,40 @@
+@@ -369,9 +397,40 @@
      dsb sy
      str x1, [x2, #40]
      dsb sy

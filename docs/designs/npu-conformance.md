@@ -71,7 +71,7 @@ the SHA-256 of every file the reference reads:
   for bit on all three fixtures. The harness feeds it the dequantized codes
   and requires its dumped quantized input to equal the vector.
 - **mimus.** The harness imports the int32-bias rule from
-  [npu-mimus-linear.py](../../tools/npu-mimus-linear.py), under which every one
+  [npu-mimus-linear.py](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/tools/npu-mimus-linear.py), under which every one
   of the 1,408 simulator codes matched. That rule is written inline in the
   script's `compare` step today; the owner is asked to move it into a function
   with unchanged behaviour. No separate reproduction of the study runs. If the

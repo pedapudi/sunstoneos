@@ -274,7 +274,7 @@ before the scheduler starts.
 No buffer is added. Slots and records keep their static placement in Normal
 write-back, inner-shareable memory; the UART path is programmed I/O, so DMA
 ownership and cache maintenance do not change. `retained.pcm` in
-[recognition.cc](../../apps/bluetooth/recognition.cc), `headset.pcm` in
+[recognition.cc](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/apps/bluetooth/recognition.cc), `headset.pcm` in
 [apps/os/headset.c](../../apps/os/headset.c) (48,000 bytes each) and the
 consumers' 1 KiB stack chunks are removed. New state: the request word, the
 published-sample total, the released-byte count, the end of the last decoded
@@ -450,7 +450,7 @@ and the OS headset image.
   adds polls after the button press. Reading them when the owner enters idle
   is a change for the owner of [bt_sco.c](../../drivers/bluetooth/bt_sco.c).
 - The OS recognizer's capture wait in
-  [recognition.patch](../../apps/os/recognition.patch) still wakes every tick.
+  [recognition.patch](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/apps/os/recognition.patch) still wakes every tick.
   A 250 ms notification wait needs `apps/mimus-board` to expose the
   recognizer's task handle.
 - libsbc is built with `-mgeneral-regs-only`, so mSBC decoding costs about

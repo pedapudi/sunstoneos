@@ -33,11 +33,11 @@ at unit scale leaves each row's scale to the CPU read-out.
 
 ## The layers are built from the mimus codes and scales
 
-[npu-mimus-linear.py](../tools/npu-mimus-linear.py) reads a mimus model file
+[npu-mimus-linear.py](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/tools/npu-mimus-linear.py) reads a mimus model file
 directly, using the layout documented in mimus `train/model_format.py`, and
 checks every tensor CRC. It generates eight test rows from a fixed seed,
 quantizes them with the mimus rule and computes the mimus result.
-[npu-mimus-linear.sh](../tools/npu-mimus-linear.sh) runs inside the pinned
+[npu-mimus-linear.sh](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/tools/npu-mimus-linear.sh) runs inside the pinned
 compiler image: it imports the generated ONNX graph, replaces every entry of
 the compiler's quantize file with mimus values, exports the network binary
 graph (NBG), runs it in the SDK simulator on the exact codes and compares the
@@ -62,11 +62,11 @@ result. Three forms exist:
   scale and no bias, so its outputs are the sums clamped to INT16. It is the
   base graph for the descriptor probe below.
 
-[npu-mimus-kernel.cc](../checks/npu-mimus-kernel.cc) compiles the unmodified
+[npu-mimus-kernel.cc](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/checks/npu-mimus-kernel.cc) compiles the unmodified
 mimus portable kernel on the host and runs it on the same codes, weights,
 scales and bias; for every study its float32 output is bit-identical to the
 study's reference. For a digit study it also splits the codes with
-[npu-mimus-digits.cc](../checks/npu-mimus-digits.cc), requires the digits to
+[npu-mimus-digits.cc](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/checks/npu-mimus-digits.cc), requires the digits to
 equal the simulator's input files, recombines the simulator's partials and
 counts read-out floats that differ from `MimusGemmS16FC`.
 
@@ -102,7 +102,7 @@ generation error: 64768", exit status 253 inside a wait status, after the
 SDK's graph verification returns −3. The descriptor probe tested whether a
 compiled graph can be changed to a 32-bit output afterwards.
 
-[npu-mimus-probe.py](../tools/npu-mimus-probe.py) compares compiled query
+[npu-mimus-probe.py](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/tools/npu-mimus-probe.py) compares compiled query
 projections whose outputs differ only in type (INT16, INT8 and UINT8 at one
 step) or only in step. In the 192-byte fully connected record:
 
@@ -165,7 +165,7 @@ K = 704, needs 22 chunks and is refused by the tool; layers with K of 704 or
 more stay on the CPU.
 
 The digit split and recombination in
-[npu-mimus-digits.cc](../checks/npu-mimus-digits.cc) use int32 lanes: any
+[npu-mimus-digits.cc](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/checks/npu-mimus-digits.cc) use int32 lanes: any
 INT16 partial has |P| ≤ 32,768, so eight chunks give
 |S| ≤ 8 · 32,768 · 4,369 < 2^31. Compiled with the backend's AArch64 flags,
 the split executes 12,230 instructions and the recombination with read-out
@@ -174,7 +174,7 @@ compiled functions reproduce the simulator inputs and the reference bytes.
 
 ## On today's runtime the exact layer is estimated to cost more CPU than the A76 kernel
 
-[npu-mimus-cost.c](../checks/npu-mimus-cost.c) assembles each graph with the
+[npu-mimus-cost.c](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/checks/npu-mimus-cost.c) assembles each graph with the
 native assembler at the session placement and derives one job's CPU events
 from the code paths of the [session runtime](npu-session.md): the SUBMIT copy,
 the per-job integrity checks in publication (`model_intact`, `live_mappings`,
@@ -198,7 +198,7 @@ query projection, the live stream's chunk of eight encoder frames.
 | Client instructions for digit split / recombination | none | 12,230 / 41,341 |
 | NPU cycles, compiler estimate | 11,193 | 51,104 |
 
-[npu-mimus-cost.py](../tools/npu-mimus-cost.py) charges these events with
+[npu-mimus-cost.py](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/tools/npu-mimus-cost.py) charges these events with
 estimates chosen at the expensive end: one cycle per instruction of the exact
 path, 25 cycles per hashed byte, 4 and 12 instructions per checked command
 and page-table word, 100 cycles per translation, 20 cycles per cache line
@@ -280,7 +280,7 @@ designs and do not change the result here.
 
 Because the exact layer does not pay off on today's runtime, the INT16 layer
 is recorded as a separate variant; the shipped model and CPU kernel stay
-unchanged. [npu-mimus-accuracy.py](../tools/npu-mimus-accuracy.py) reuses the
+unchanged. [npu-mimus-accuracy.py](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/tools/npu-mimus-accuracy.py) reuses the
 model, training-set calibration, decoding and scoring of mimus
 `train/static_scales.py` and replaces the arithmetic of every 16-bit site with
 int8 weights by the INT16 layer's:

@@ -10,6 +10,11 @@ SECTIONS {
         KEEP(*(.text.a733_smp_boot)) *(.text*)
     } > CODE
     .rodata : { *(.rodata*) } > CODE
+    sunstone_manifest : ALIGN(8) {
+        __start_sunstone_manifest = .;
+        KEEP(*(sunstone_manifest))
+        __stop_sunstone_manifest = .;
+    } > CODE
     /* C++ constructors; empty in a C image. */
     .init_array : {
         __init_array_start = .;

@@ -103,7 +103,7 @@ def board_failure(words, defines, elf):
               'site': site & 0xfff, 'aux': site >> 16 & 0x7fff, 'caller': hex(caller), 'value': hex(value),
               'caller_kind': 'return address' if site >> 31 else 'statement',
               'exception_level': 'EL0' if slot == 0 else 'EL1' if slot in (4, 5) else f'SPSR.M {slot:#x}'}
-    record['site_kind'] = 'detail' if record['group'] == 'cpu_return' else 'source line'
+    record['site_kind'] = 'detail' if record['group'] in ('cpu_return', 'application') else 'source line'
     if record['group'] == 'cpu_return' and record['site'] == BOUNDED:
         record['deadline_seconds'] = record['aux']
         record['refusal'] = [text for bit, text in LIVE_REFUSAL if value >> bit & 1]

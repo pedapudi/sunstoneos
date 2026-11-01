@@ -297,14 +297,6 @@ def summary():
     assert events == ['save', 'quarantine', 'hold'], events
 
 
-def generations():
-    caller = module('audit_transport_mimus_board', ROOT / 'tools/check-a733-mimus-board-supervised.py')
-    for count in range(1, caller.MAX_GENERATIONS + 1):
-        caller.generation_count(count, 4)
-    for count, workload in [(caller.MAX_GENERATIONS + 1, 4), (32, 4), (2, 0)]:
-        refused(lambda: caller.generation_count(count, workload))
-
-
 def main():
     with tempfile.TemporaryDirectory(prefix='audit-host-tools-transport-') as directory:
         directory = Path(directory)
@@ -316,10 +308,9 @@ def main():
         observe(directory, 'unbound')
         lock(directory)
         summary()
-        generations()
     print('PASS: size-aware FEL timeouts through preload and before any transfer, disconnect-race absence, '
           'queue port binding before any FEL request, named lock contention, summary before hold with a closed '
-          'console and lifetime-bounded generations; no device access.')
+          'console; no device access.')
 
 
 if __name__ == '__main__':

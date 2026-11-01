@@ -518,7 +518,7 @@ from registers as 26 MHz × 38 ÷ 2; no independent frequency measurement exists
   by contract and has no profiles for DCDC5 or DCDC3. The board device tree
   feeds cores 0 to 5 and the DSU from DCDC5, and cores 6 and 7 from DCDC3. The
   rails already exist as rail-ledger identities.
-- The clock report in [recorded.cc](../../apps/mimus/recorded.cc) is compiled
+- The clock report in [recorded.cc](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/apps/mimus/recorded.cc) is compiled
   out of native images. It decodes the post-divider P as `1 << P`, while Linux
   uses `P + 1`; the two agree only for P of 0 or 1.
 - `configCPU_CLOCK_HZ` claims 1 GHz but nothing uses it.
@@ -919,8 +919,8 @@ names its clock.
 **No warm path across requests (`mimus-perf-5`).** The recorded path, the USB
 service and the keyboard-repeat board loop reload the model on every request.
 So do the Bluetooth and I2S callers in
-[bluetooth/recognition.cc](../../apps/bluetooth/recognition.cc) and
-[i2s/recognition.cc](../../apps/i2s/recognition.cc). Each reload re-checks the
+[bluetooth/recognition.cc](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/apps/bluetooth/recognition.cc) and
+[i2s/recognition.cc](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/apps/i2s/recognition.cc). Each reload re-checks the
 model CRCs, recreates the recognizer and rebuilds the arena at a hard-coded
 address. On the recorded path, `compute_us` covers only `Recognize` and leaves
 out formatting. The goal requires warm PCM-to-formatted time with loading

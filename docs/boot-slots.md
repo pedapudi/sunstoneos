@@ -426,7 +426,7 @@ asset. Fifteen cases cover:
 The entry cases check the four arming writes, every contract field, the
 stamped session epoch and digest and the branch to the entry, then pass the
 contract and session to the OS image's resident admission
-([os-image-model.c](../checks/os-image-model.c)), which must accept them. The
+([os-image-model.c](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/checks/os-image-model.c)), which must accept them. The
 check compiles that model a second time for the resident microphone build and
 uses it for the 992-byte session.
 The refusal cases check that no contract is published. The mode readback

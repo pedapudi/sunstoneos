@@ -152,8 +152,8 @@ in [continue.c:96](../../platform/a733-smp-cached/continue.c#L96) zeroes a
 136-byte struct. The diagnostic, storage and board images link
 [runtime/memory.c](../../runtime/memory.c), a byte loop that is safe on
 Device memory. The newlib images remove it and `runtime/memmove.c`
-([a733-mimus-native.cmake:18](../../cmake/a733-mimus-native.cmake#L18),
-[a733-mimus-board.cmake:20](../../cmake/a733-mimus-board.cmake#L20),
+([a733-mimus-native.cmake:18](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/cmake/a733-mimus-native.cmake#L18),
+[a733-mimus-board.cmake:20](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/cmake/a733-mimus-board.cmake#L20),
 [a733-i2s-application.cmake:60](../../cmake/a733-i2s-application.cmake#L60),
 [a733-bluetooth.cmake:128](../../cmake/a733-bluetooth.cmake#L128)), so the
 calls resolve to newlib's AArch64 assembly `memset`. That routine uses SIMD
@@ -1128,14 +1128,14 @@ library.
 ending in `.o` or `.obj`
 ([evidence-snapshot.py:41](../../tools/evidence-snapshot.py#L41)), although
 its docstring promises every linked object. Archives such as `mimus_asr_smp`
-([cmake/mimus-smp.cmake:12](../../cmake/mimus-smp.cmake#L12)), libc,
+([cmake/mimus-smp.cmake:12](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/cmake/mimus-smp.cmake#L12)), libc,
 libstdc++ and libgcc, and the `-T` linker script, are dropped silently, so the
 "incomplete coverage" guard never sees them.
 
 **Failure scenario.** A change to a mimus recognizer source changes the
 recognition ELF, but the frozen dependency manifest written by
 [checks/i2s-application.py](../../checks/i2s-application.py) or
-[checks/board-session-seal-recognition.py](../../checks/board-session-seal-recognition.py)
+[checks/board-session-seal-recognition.py](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/checks/board-session-seal-recognition.py)
 does not change. Reviewers cannot tell which recognizer sources the evidence
 covers.
 
@@ -1721,9 +1721,9 @@ absent.
 recognitions fit in the 60 s native session.
 
 **Root cause.** `MAX_GENERATIONS = 32`
-([check-a733-mimus-board-supervised.py:31](../../tools/check-a733-mimus-board-supervised.py#L31));
+([check-a733-mimus-board-supervised.py:31](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/tools/check-a733-mimus-board-supervised.py#L31));
 the 59 s capture window follows the native session lifetime documented in
-[apps/mimus-board/README.md](../../apps/mimus-board/README.md). An incomplete
+[apps/mimus-board/README.md](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/apps/mimus-board/README.md). An incomplete
 count fails and keeps earlier results, as documented.
 
 **Fix.** Lower `MAX_GENERATIONS`, or state in the README and CLI help how many

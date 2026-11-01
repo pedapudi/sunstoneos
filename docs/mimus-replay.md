@@ -127,7 +127,7 @@ Raw evidence, commands, fixture provenance, source hashes, and image hashes are
 under `~/.cache/sunstoneos/evidence/mimus-paced-20261016/`. The final emulator
 record is `model.json`; `parity.json` records its reference comparison.
 The optional-punctuation adapter check
-([mimus-paced-optional.py](../checks/mimus-paced-optional.py)) uses the pinned
+([mimus-paced-optional.py](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/checks/mimus-paced-optional.py)) uses the pinned
 engine's types, model loader and formatter with deterministic recognition
 results. It covers absent and conflicting scores, scored and unscored words,
 empty text, short and long pauses, final flush, and malformed alignment.

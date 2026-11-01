@@ -64,7 +64,7 @@
 #define SUNSTONE_CRUMB_FAIL_BOARD 0x1u      /* board_fail(context) or a board site; value: context or site detail */
 #define SUNSTONE_CRUMB_FAIL_THERMAL 0x2u    /* thermal owner cancel/fault; value: driver fault_site (0 if none) */
 #define SUNSTONE_CRUMB_FAIL_CPU_RETURN 0x3u /* cpu-return fail(detail); low 12 bits: detail */
-#define SUNSTONE_CRUMB_FAIL_RECOGNIZER 0x4u /* mimus_board_fail */
+#define SUNSTONE_CRUMB_FAIL_APPLICATION 0x4u /* ss_fail(detail); low 12 bits: detail, value: detail */
 #define SUNSTONE_CRUMB_FAIL_CPU_CLOCK 0x5u  /* CPU clock owner refusal; value: phase << 24 | cluster << 16 | status */
 #define SUNSTONE_CRUMB_FAIL_PMIC 0x6u       /* PMIC power service; value: authority word */
 #define SUNSTONE_CRUMB_FAIL_RETURN 0x80000000u /* site flag: caller is a return address */

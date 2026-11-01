@@ -1,37 +1,20 @@
 #!/usr/bin/env python3
-"""Run the integrated OS image's capture stream and the recognizer's WAV
-adapter against a modeled DMA service.
+"""Run native OS PCM capture and stream checks against a modeled DMA service.
 
-checks/os-image-audio.c includes apps/os/audio.c unchanged, links
-apps/mimus-board/capture.c and drivers/audio/a733_i2s.c beside it, and models
-the DMA service replies, the audio parent and the board
-(checks/os-image-audio-model.h). This runner compiles it with the exact flags
-of apps/os/audio.c from a configured audio OS build (configure it with
-CMAKE_EXPORT_COMPILE_COMMANDS=ON) and runs each mode under unicorn:
+The fixture includes apps/os/audio.c unchanged and links apps/os/capture.c
+and the I2S format planner. DMA replies, audio-parent readiness and admitted
+session facts are modeled. Provider construction is replaced at the existing
+stream-fixture boundary. The runner uses the flags of apps/os/audio.c from
+a configured build with CMAKE_EXPORT_COMPILE_COMMANDS=ON.
 
-- 0: the adapter captures two generations of each length (1 s, ten whole
-  periods and 5 s); each WAV has the exact header and the modeled period
-  bytes, and the second generation first reaps, closes and reopens the stream;
-- 1: a discontinuous period refuses the capture with the stream held;
-- 2: a stream that stops by itself refuses the capture with the stream held;
-- 3: the recognizer's request rules (no generation 0, no earlier generation,
-  nothing once the board has failed);
-- 4: each task pass reports resident progress unless a DMA request is still
-  unanswered or the capture has failed; a supervised build reports nothing;
-- 5: the formats, period sizes and buffers that the stream accepts, and the
-  periods shorter than 8 ms that it refuses; the
-  accepted rates must equal the vendor's 24.576 MHz rate family read from
-  the pinned vendor I2S source, and no rate of its 22.5792 MHz family;
-- 6: 8, 16, 48, 96 and 192 kHz streams with 512 to 4,096-byte periods
-  deliver their periods in place, in order, with their timestamps and bytes;
-- 7: a full ring drops periods and shows the gap; release order and the
-  start and stop handshakes.
+The cases cover two capture generations at three lengths, exact PCM bytes,
+returned buffer identity and untouched 64-byte caller headroom; discontinuous
+or stopped DMA; request refusals; resident progress; accepted formats and the
+vendor rate families; direct stream delivery and timestamps; and full-ring
+and start/stop handshakes. No device or audio hardware is opened.
 
-With --baseline REVISION, checks/os-image-audio-baseline.c runs that
-revision's capture client (its apps/os/audio.c and apps/os/os.h) against the
-same model, and the WAV bytes of both generations of each length must be
-identical. No device, DMA or audio hardware is modeled beyond the service
-replies.
+With --baseline REVISION, the historical capture fixture runs that revision's
+capture client. Its WAV payload must equal the current PCM for each generation.
 """
 import argparse
 import hashlib
@@ -45,10 +28,12 @@ from unicorn import Uc, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_INTR
 from unicorn.arm64_const import UC_ARM64_REG_SP, UC_ARM64_REG_X0, UC_ARM64_REG_X1
 
 ROOT = Path(__file__).resolve().parents[1]
-CASES = ['two-generations-wav-and-stream-reuse', 'discontinuous-period-refused',
+CASES = ['two-generations-pcm-headroom-and-stream-reuse', 'discontinuous-period-refused',
          'self-stopped-stream-refused', 'request-rules', 'progress-reports',
          'formats-periods-and-buffers', 'rates-and-period-sizes', 'full-ring-and-handshakes']
 LENGTHS = [16000, 20480, 80000]
+if not __debug__:
+    raise RuntimeError('checks require assertions')
 
 
 def vendor_families(i2s, platform):
@@ -96,7 +81,7 @@ def main():
     parser.add_argument('--lld', type=Path, default=Path.home() / '.cache/sunstoneos/host/usr/lib/llvm-21/bin/ld.lld')
     parser.add_argument('--vendor', type=Path, default=Path.home() / '.cache/sunstoneos/sources/i2s')
     parser.add_argument('--vendor-platform', type=Path, default=Path.home() / '.cache/sunstoneos/sources/i2s-platform')
-    parser.add_argument('--baseline', help='revision whose capture client must produce the same WAV bytes')
+    parser.add_argument('--baseline', help='revision whose historical capture payload must produce the same PCM bytes')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     out = args.output.resolve()
@@ -105,23 +90,26 @@ def main():
     commands = json.loads((args.build / 'compile_commands.json').read_text())
     unit = next(u for u in commands if u['file'].endswith('/apps/os/audio.c'))
     flags = shlex.split(unit['command'])
+    compiled_root = str(Path(unit['file']).resolve().parents[2])
+    flags = [flag.replace(compiled_root, str(ROOT)) for flag in flags]
     flags = flags[:flags.index('-o')]
     assert '-DSUNSTONE_A733_OS_AUDIO=1' in flags, 'an audio OS build is required'
     link = [str(ROOT / 'runtime/memory.c'), str(ROOT / 'runtime/memmove.c'), '-nostdlib', '--ld-path=' + str(args.lld),
-            '-Wl,-Ttext=0x41000000', '-Wl,-e,os_check_run', '-Wl,--gc-sections']
-    command = flags + [str(ROOT / 'checks/os-image-audio.c'), str(ROOT / 'apps/mimus-board/capture.c'),
+            '-Wl,-Ttext=0x41000000', '-Wl,-e,os_check_run', '-Wl,--gc-sections',
+            '-Wl,--wrap=os_audio_stream_open']
+    command = flags + [str(ROOT / 'checks/os-image-audio.c'), str(ROOT / 'apps/os/capture.c'),
                        str(ROOT / 'drivers/audio/a733_i2s.c')] + link
     segments, symbols = image(command, out, 'os-image-audio')
-    results, wavs = {}, {}
+    results, pcms = {}, {}
     for mode, case in enumerate(CASES):
         lengths = LENGTHS if mode == 0 else [16000]
         for samples in lengths:
-            read = ['os_check_wav'] if mode == 0 else ['os_check_accepted', 'os_check_rates'] if mode == 5 else []
+            read = ['os_check_pcm'] if mode == 0 else ['os_check_accepted', 'os_check_rates'] if mode == 5 else []
             result, memory = run(segments, symbols, mode, samples, read)
             results[case if mode else '%s-%d' % (case, samples)] = result
             assert result == 1, (case, samples, result)
             if mode == 0:
-                wavs[samples] = memory['os_check_wav']
+                pcms[samples] = memory['os_check_pcm']
             if mode == 5:
                 rates = [int.from_bytes(memory['os_check_rates'][i:i + 4], 'little')
                          for i in range(0, len(memory['os_check_rates']), 4)]
@@ -135,8 +123,8 @@ def main():
               'lifetime': 'resident' if '-DSUNSTONE_BOARD_RESIDENT=1' in flags else 'supervised',
               'vendor_rate_families': {str(k): v for k, v in families.items()},
               'sources_sha256': {p: hashlib.sha256((ROOT / p).read_bytes()).hexdigest() for p in
-                                 ('apps/os/audio.c', 'apps/os/audio-stream.h', 'apps/mimus-board/capture.c',
-                                  'apps/mimus-board/capture.h', 'checks/os-image-audio.c',
+                                 ('apps/os/audio.c', 'apps/os/audio-stream.h', 'apps/os/capture.c',
+                                  'apps/os/application.h', 'include/sunstone_app.h', 'checks/os-image-audio.c',
                                   'checks/os-image-audio-model.h')}}
     if args.baseline:
         base = out / 'baseline' / 'apps' / 'os'
@@ -150,18 +138,18 @@ def main():
         for samples in LENGTHS:
             result, memory = run(segments, symbols, 0, samples, ['os_check_wav'])
             assert result == 1, ('baseline', samples, result)
-            size = 44 + 2 * samples
-            new, old = wavs[samples], memory['os_check_wav']
+            size = 2 * samples
+            new, old = pcms[samples], memory['os_check_wav']
             half_new, half_old = len(new) // 2, len(old) // 2
             for g in range(2):
-                a, b = new[g * half_new:g * half_new + size], old[g * half_old:g * half_old + size]
-                assert a == b, ('WAV differs from the baseline', samples, g + 1)
+                a, b = new[g * half_new:g * half_new + size], old[g * half_old + 44:g * half_old + 44 + size]
+                assert a == b, ('PCM differs from the baseline', samples, g + 1)
                 identical['%d-generation-%d' % (samples, g + 1)] = hashlib.sha256(a).hexdigest()
         record['baseline'] = {'revision': subprocess.run(['git', '-C', str(ROOT), 'rev-parse', args.baseline],
                                                          check=True, capture_output=True, text=True).stdout.strip(),
-                              'identical_wav_sha256': identical, 'command': command}
+                              'identical_pcm_sha256': identical, 'command': command}
     (out / 'result.json').write_text(json.dumps(record, indent=2) + '\n')
-    print('PASS OS audio stream: ' + ', '.join(CASES) + (', baseline WAV identical' if args.baseline else ''))
+    print('PASS OS audio stream: ' + ', '.join(CASES) + (', baseline PCM identical' if args.baseline else ''))
 
 
 if __name__ == '__main__':

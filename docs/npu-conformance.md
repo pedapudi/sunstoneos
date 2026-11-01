@@ -67,7 +67,7 @@ harness does not compare it.
   in the pinned quantize and input-description files must equal the
   catalogue's.
 - **mimus rule.** The harness applies the int32-bias rule of
-  [npu-mimus-linear.py](../tools/npu-mimus-linear.py). It forms the exact
+  [npu-mimus-linear.py](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/tools/npu-mimus-linear.py). It forms the exact
   integer sum over the INT16 input codes and int8 weight codes and adds the
   bias as an int32 code in units of the input scale times the row's weight
   scale. One rounding, half to even, gives the INT16 output. The rule sums raw

@@ -1,15 +1,11 @@
 #!/usr/bin/env python3
-"""Check the prototype application interface (docs/designs/app-abi.md) on the host.
+"""Check the application ABI without an external application checkout.
 
-1. The manifest tool emits hello-compute and the draft mimus manifest, each
-   as the one application of its image.
-2. The interface headers and both generated manifests compile for the host
-   and for aarch64-none-elf; the section bytes from both compilers equal the
-   bytes the tool packs, and the tool's decoder reproduces the manifests.
-3. hello-compute runs against the host model of the OS calls and returns the
-   Adler-32 of each test input in the OS result record.
-4. The draft mimus manifest pins today's addresses, sizes and digests.
-5. The tool refuses eleven manifests that break the documented rules.
+Compile hello-compute and a synthetic manifest covering all region slots,
+device bits and access bits for the host and AArch64. Compare each 552-byte
+section with the generator's packing, run hello-compute at input boundaries,
+and check malformed-manifest refusals. --mimus-dir additionally checks the
+external application's manifest and its declared inputs and capture bounds.
 """
 import argparse
 import hashlib
@@ -26,6 +22,7 @@ import zlib
 ROOT = Path(__file__).resolve().parents[1]
 p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 p.add_argument('--build', type=Path, required=True, help='empty or absent scratch directory')
+p.add_argument('--mimus-dir', type=Path, help='optional mimus checkout containing sunstoneos/')
 p.add_argument('--cc', default='cc')
 p.add_argument('--clang', default='clang')
 p.add_argument('--objcopy', default=shutil.which('llvm-objcopy') or '/usr/lib/llvm-21/bin/llvm-objcopy')
@@ -38,7 +35,34 @@ tool = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(tool)
 TOOL = [sys.executable, '-I', str(ROOT / 'tools/sunstone-manifest.py')]
 HELLO = ROOT / 'apps/hello-compute/manifest.json'
-MIMUS = ROOT / 'apps/mimus-board/manifest.json'
+# This fixture belongs to the ABI check and contains no application inputs.
+RICH = {
+    'name': 'abi-fixture',
+    'devices': {'required': ['usb-storage'],
+                'optional': ['usb-keyboard', 'audio-i2s', 'audio-headset', 'gpu']},
+    'cpu': {'cluster': 'a76', 'workers': 7, 'priority': 7,
+            'stack_bytes': 65536, 'heap_bytes': 1048576},
+    'regions': [
+        {'name': 'pinned_content', 'kind': 'input', 'access': ['read', 'gpu-read'],
+         'bytes': 17, 'sha256': hashlib.sha256(b'ABI fixture input').hexdigest()},
+        {'name': 'fixed_input', 'kind': 'input', 'access': ['read'], 'address': '0x44800000',
+         'bytes': 8192, 'sha256': hashlib.sha256(bytes(8192)).hexdigest()},
+        {'name': 'scratch', 'kind': 'work', 'access': ['read', 'write'], 'bytes': 4096},
+        {'name': 'result', 'kind': 'output', 'access': ['read', 'write', 'gpu-read', 'gpu-write'], 'bytes': 4096},
+        {'name': 'gpu_output', 'kind': 'work', 'access': ['read', 'gpu-write'],
+         'address': '0x46c00000', 'bytes': 4096},
+        {'name': 'gpu_input', 'kind': 'work', 'access': ['read', 'gpu-read'], 'bytes': 4096},
+        {'name': 'variable_input', 'kind': 'input', 'access': ['read'], 'bytes': 31},
+        {'name': 'fixed_scratch', 'kind': 'work', 'access': ['read', 'write'],
+         'address': '0x46e00000', 'bytes': 8192},
+    ],
+    'audio': {'rate_hz': 32000, 'channels': 2, 'bits': 32, 'min_frames': 32, 'max_frames': 1024},
+    'deadlines': {'run_us': 1234567, 'return_reserve_us': 7654321, 'progress_window_us': 2345678},
+    'output_limit': 64512,
+    'host_ops': {'first': 0x11, 'count': 3},
+}
+RICH_PATH = a.build / 'generic-manifest.json'
+RICH_PATH.write_text(json.dumps(RICH, indent=2) + '\n')
 
 
 def run(*argv, **kw):
@@ -47,12 +71,23 @@ def run(*argv, **kw):
 
 # 1. Emit each application as its own image.
 generated = {}
-for name, path in [('hello_compute', HELLO), ('mimus', MIMUS)]:
+applications = [('hello_compute', HELLO), ('abi_fixture', RICH_PATH)]
+if a.mimus_dir:
+    mimus_root = a.mimus_dir.resolve() / 'sunstoneos'
+    applications.append(('mimus', mimus_root / 'apps/mimus-board/manifest.json'))
+for name, path in applications:
     out = a.build / ('generated-' + name)
     run(*TOOL, 'emit', '--manifest', path, '--output', out)
     generated[name] = out
 hello = json.loads((generated['hello_compute'] / 'manifest.json').read_text())[0]
-mimus_manifest = json.loads((generated['mimus'] / 'manifest.json').read_text())
+rich = json.loads((generated['abi_fixture'] / 'manifest.json').read_text())[0]
+assert (rich['devices_required'], rich['devices_optional'], rich['cluster'], rich['workers'], rich['priority']) == (1, 30, 1, 7, 7)
+assert len(rich['regions']) == 8 and rich['regions'][3]['access'] == 15
+assert rich['regions'][0]['address'] == 0x44000000 and rich['regions'][2]['address'] == 0x44200000
+assert rich['regions'][6]['sha256'] == '0' * 64
+assert rich['audio'] == RICH['audio']
+assert (rich['run_deadline_us'], rich['return_reserve_us'], rich['progress_window_us']) == (1234567, 7654321, 2345678)
+assert (rich['host_op_first'], rich['host_op_count'], rich['output_limit']) == (0x11, 3, 64512)
 assert hello['regions'][0]['address'] == 0x44000000, hex(hello['regions'][0]['address'])
 
 # 2. Compile for both targets and compare the section bytes. The generated
@@ -117,27 +152,26 @@ source = a.build / 'input-oversize.bin'
 source.write_bytes(stream(limit + 1))
 assert subprocess.run([str(model), str(source), str(a.build / 'result-oversize.bin')]).returncode == 5
 
-# 4. The mimus draft pins the values that the current build fixes.
-mimus = mimus_manifest[0]
-models = json.loads((ROOT / 'apps/bluetooth/recognition-models.json').read_text())['models']
-wav = json.loads((ROOT / 'apps/mimus-board/inputs.json').read_text())['recorded_wav']
-configure = (ROOT / 'apps/mimus-board/configure.py').read_text()
-addresses = [int(x, 16) for x in re.search(r'mimus_asset_address\[3\]=\{([^}]*)\}', configure).group(1).split(',')]
-for region, expected, address in zip(mimus['regions'][:3], models + [wav], addresses):
-    assert (region['address'], region['bytes'], region['sha256']) == (address, expected['bytes'], expected['sha256'])
-dispatch = (ROOT / 'apps/os/dispatch.h').read_text()
-def constant(name):
-    return int(re.search(r'#define %s UINT64_C\((0x[0-9a-fA-F]+)\)' % name, dispatch).group(1), 16)
-assert (mimus['regions'][3]['address'], mimus['regions'][3]['bytes']) == (constant('OS_DISPATCH_ARENA'), constant('OS_DISPATCH_CODE_BYTES'))
-assert (mimus['regions'][4]['address'], mimus['regions'][4]['bytes']) == (constant('OS_DISPATCH_READ_ONLY'), constant('OS_DISPATCH_READ_ONLY_BYTES'))
-os_h = (ROOT / 'apps/os/os.h').read_text()
-assert mimus['audio']['max_frames'] == int(re.search(r'#define OS_AUDIO_MAX_SAMPLES (\d+)u', os_h).group(1))
-assert mimus['audio']['min_frames'] == int(re.search(r'#define OS_AUDIO_MIN_SAMPLES (\d+)u', os_h).group(1))
-assert mimus['host_op_first'] == 0 and mimus['host_op_count'] == 5
-services = (ROOT / 'apps/os/services.c').read_text()
-assert mimus['progress_window_us'] == int(re.search(r'\{"mimus",(\d+)\}', services).group(1))
-cpu_return = (ROOT / 'apps/os/cpu-return.h').read_text()
-assert mimus['return_reserve_us'] == int(re.search(r'OS_CPU_RETURN_RESERVE_US UINT64_C\((\d+)\)', cpu_return).group(1))
+if a.mimus_dir:
+    # The optional external application pins its own source records.
+    mimus = json.loads((generated['mimus'] / 'manifest.json').read_text())[0]
+    models = json.loads((mimus_root / 'apps/bluetooth/recognition-models.json').read_text())['models']
+    wav = json.loads((mimus_root / 'apps/mimus-board/inputs.json').read_text())['recorded_wav']
+    configure = (mimus_root / 'apps/mimus-board/configure.py').read_text()
+    addresses = [int(x, 16) for x in re.search(r'mimus_asset_address\[3\]=\{([^}]*)\}', configure).group(1).split(',')]
+    for region, expected, address in zip(mimus['regions'][:3], models + [wav], addresses):
+        assert (region['address'], region['bytes'], region['sha256']) == (address, expected['bytes'], expected['sha256'])
+    dispatch = (mimus_root / 'apps/os/dispatch.h').read_text()
+    def constant(name):
+        return int(re.search(r'#define %s UINT64_C\((0x[0-9a-fA-F]+)\)' % name, dispatch).group(1), 16)
+    assert (mimus['regions'][3]['address'], mimus['regions'][3]['bytes']) == (constant('OS_DISPATCH_ARENA'), constant('OS_DISPATCH_CODE_BYTES'))
+    assert (mimus['regions'][4]['address'], mimus['regions'][4]['bytes']) == (constant('OS_DISPATCH_READ_ONLY'), constant('OS_DISPATCH_READ_ONLY_BYTES'))
+    capture_h = (mimus_root / 'apps/mimus-board/capture.h').read_text()
+    assert mimus['audio']['max_frames'] == int(re.search(r'#define MIMUS_CAPTURE_MAX_SAMPLES (\d+)u', capture_h).group(1))
+    assert mimus['audio']['min_frames'] == int(re.search(r'#define MIMUS_CAPTURE_MIN_SAMPLES (\d+)u', capture_h).group(1))
+    assert mimus['host_op_first'] == 0 and mimus['host_op_count'] == 5
+    cpu_return = (ROOT / 'apps/os/cpu-return.h').read_text()
+    assert mimus['return_reserve_us'] == int(re.search(r'OS_CPU_RETURN_RESERVE_US UINT64_C\((\d+)\)', cpu_return).group(1))
 
 # 5. Refusals.
 def refused(change, message):
@@ -167,6 +201,9 @@ refused(lambda v: v.update(devices={'required': ['radio']}), "unknown device 'ra
 refused(lambda v: v['cpu'].update(privilege='el1'), 'unknown cpu keys')
 refused(lambda v: v['regions'].append({'name': 'scratch', 'kind': 'work', 'access': ['read', 'write'], 'bytes': 100}),
         'capacity is a multiple of 4 KiB')
-print(json.dumps({'passed': True, 'manifest_bytes': tool.MANIFEST_BYTES,
-                  'hello_sha256': hashlib.sha256((generated['hello_compute'] / 'manifest.bin').read_bytes()).hexdigest(),
-                  'mimus_sha256': hashlib.sha256((generated['mimus'] / 'manifest.bin').read_bytes()).hexdigest()}))
+result = {'passed': True, 'manifest_bytes': tool.MANIFEST_BYTES,
+          'hello_sha256': hashlib.sha256((generated['hello_compute'] / 'manifest.bin').read_bytes()).hexdigest(),
+          'generic_sha256': hashlib.sha256((generated['abi_fixture'] / 'manifest.bin').read_bytes()).hexdigest()}
+if a.mimus_dir:
+    result['mimus_sha256'] = hashlib.sha256((generated['mimus'] / 'manifest.bin').read_bytes()).hexdigest()
+print(json.dumps(result))

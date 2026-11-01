@@ -1,7 +1,6 @@
 #ifndef SUNSTONE_APP_H
 #define SUNSTONE_APP_H
-/* SunstoneOS application interface (docs/designs/app-abi.md). Status:
- * prototype; no OS image implements these calls yet.
+/* SunstoneOS application interface (docs/designs/app-abi.md).
  *
  * An application is code linked into the OS image together with one
  * manifest. The manifest is little-endian data in the section
@@ -12,7 +11,12 @@
 #include <stddef.h>
 #include <stdint.h>
 #ifdef __cplusplus
+#define SS_STATIC_ASSERT static_assert
+#define SS_NORETURN [[noreturn]]
 extern "C" {
+#else
+#define SS_STATIC_ASSERT _Static_assert
+#define SS_NORETURN _Noreturn
 #endif
 
 #define SS_MANIFEST_MAGIC UINT64_C(0x5453464e4d505041) /* "APPMNFST" */
@@ -45,6 +49,9 @@ enum {
 /* One physical range; virtual address equals physical address. The build
  * assigns the address when manifest.json omits it. INPUT: bytes is the
  * maximum content length, and the exact length when sha256 is nonzero.
+ * CPU access is a trusted application contract. Current mappings keep INPUT
+ * regions writable; the existing GPU output profile enforces CPU read-only
+ * access. INPUT authentication does not protect against later application writes.
  * WORK and OUTPUT: bytes is the capacity. sha256 is zero except for an INPUT
  * whose content the manifest pins; otherwise the session supplies it. */
 struct ss_region {
@@ -89,11 +96,11 @@ struct ss_manifest {
     struct ss_region regions[SS_REGIONS];
 };
 
-_Static_assert(sizeof(struct ss_region) == 56 && offsetof(struct ss_region, kind) == 16 &&
+SS_STATIC_ASSERT(sizeof(struct ss_region) == 56 && offsetof(struct ss_region, kind) == 16 &&
     offsetof(struct ss_region, sha256) == 24, "ss_region layout");
-_Static_assert(sizeof(struct ss_audio_format) == 16 && offsetof(struct ss_audio_format, min_frames) == 8 &&
+SS_STATIC_ASSERT(sizeof(struct ss_audio_format) == 16 && offsetof(struct ss_audio_format, min_frames) == 8 &&
     offsetof(struct ss_audio_format, max_frames) == 12, "ss_audio_format layout");
-_Static_assert(offsetof(struct ss_manifest, name) == 16 && offsetof(struct ss_manifest, devices_required) == 32 &&
+SS_STATIC_ASSERT(offsetof(struct ss_manifest, name) == 16 && offsetof(struct ss_manifest, devices_required) == 32 &&
     offsetof(struct ss_manifest, cluster) == 40 && offsetof(struct ss_manifest, stack_bytes) == 44 &&
     offsetof(struct ss_manifest, heap_bytes) == 48 && offsetof(struct ss_manifest, run_deadline_us) == 56 &&
     offsetof(struct ss_manifest, return_reserve_us) == 64 && offsetof(struct ss_manifest, progress_window_us) == 72 &&
@@ -113,7 +120,7 @@ struct ss_grant {
     uint32_t worker_cores;          /* one bit per granted worker core */
     uint32_t region_count;
     struct ss_span regions[SS_REGIONS]; /* manifest order */
-    uint32_t capture_frames;        /* frames per ss_capture, from the audio extent; 0 without capture */
+    uint32_t capture_frames;        /* I2S: exact frames; headset: profile-derived maximum; 0 without capture */
     uint32_t reserved;
     uint64_t finish_by_us;          /* counter microseconds; 0 when resident */
 };
@@ -133,7 +140,16 @@ int ss_throttled(void);
 /* 1 once the CPU clock owner has finished the session grant's requests,
  * whatever their result, or when the image grants no CPU operating points. */
 int ss_clock_ready(void);
-/* Capture grant->capture_frames frames for sequence number `sequence` in the
+/* Mark the bounded application operation observed by thermal reports.
+ * Both calls publish atomic counters; success is 0 or 1. */
+void ss_activity_begin(void);
+void ss_activity_end(int success);
+/* Copy the admitted CPU operating-point description; 0 without a grant. */
+int ss_clock_info(char *line,size_t bytes);
+/* High-water byte count of the image C/C++ heap. */
+size_t ss_heap_peak(void);
+/* Capture grant->capture_frames frames (up to that bound for a headset
+ * segment, which may end early) for sequence number `sequence` in the
  * manifest's format from the granted capture device; a later sequence
  * releases earlier buffers. 1: *pcm and *bytes describe the samples, and the
  * SS_CAPTURE_HEADROOM bytes before *pcm are the caller's to overwrite (for
@@ -151,7 +167,7 @@ struct ss_host_request {
     uint32_t offset;
     uint64_t argument;
 };
-_Static_assert(sizeof(struct ss_host_request) == 16 && offsetof(struct ss_host_request, offset) == 4 &&
+SS_STATIC_ASSERT(sizeof(struct ss_host_request) == 16 && offsetof(struct ss_host_request, offset) == 4 &&
     offsetof(struct ss_host_request, argument) == 8, "ss_host_request is the 16-byte wire request");
 #define SS_HOST_PAYLOAD_BYTES 1024u
 struct ss_host_reply {
@@ -182,9 +198,9 @@ int ss_key_report(struct ss_key_report *report);
  * returning lifetime the OS then returns to the host; in the resident
  * lifetime the record stays readable over the host channel. Refused
  * results (too large, after finish_by_us) end the session as ss_fail does. */
-_Noreturn void ss_finish(const void *result, size_t bytes);
+SS_NORETURN void ss_finish(const void *result, size_t bytes);
 /* End the session with an application-defined detail word. */
-_Noreturn void ss_fail(uint32_t detail);
+SS_NORETURN void ss_fail(uint32_t detail);
 
 /* Provided by the application, named after the manifest name with '-'
  * replaced by '_'; tools/sunstone-manifest.py generates their prototypes in
