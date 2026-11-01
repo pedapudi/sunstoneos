@@ -95,7 +95,9 @@ static int baseline(struct a733_audio_parent *p)
         return (p->audio_value & (CONTROLS|BIT(28)|RATE_MASK)) ==
             (CONTROLS|BIT(28)|RATE_VALUE) && gate_status(p,&enabled) && enabled;
     }
-    if (p->audio_value & CONTROLS) return 0;
+    /* AUDIO1 reset leaves its LDO enabled (manual 4.1.6.51, 0x40147f00).
+     * An idle LDO does not make the disabled PLL an active shared parent. */
+    if (p->audio_value & (CONTROLS&~BIT(30))) return 0;
     static const unsigned consumers[] = {0x1200,0x1210,0x1220,0x1224,0x1230,0x1240,0x1280,0x12c0};
     for (unsigned i=0; i<sizeof(consumers)/sizeof(*consumers); ++i)
         if (!rd(p, p->deadline, CCU+consumers[i], &x) || (x & BIT(31))) return 0;

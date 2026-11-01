@@ -9,6 +9,9 @@
 #undef dma_read
 #undef dma_write
 #define cyclic_case (*(volatile unsigned *)UINT64_C(0x47fff000))
+#ifdef I2S_RETIRE_CHECK
+#include "../apps/i2s/retire.h"
+#endif
 /* Pages: RX and TX descriptors, eight RX slots, four TX slots. */
 static _Alignas(4096) unsigned char cyclic_pool[14*4096];
 static unsigned char cyclic_device[2][8][4096],copied[4096];
@@ -189,6 +192,25 @@ static void cyclic_client(void *unused)
         configASSERT(request(DMA_SERVICE_REAP,0,0,0).result==DMA_SERVICE_OK);close_stream(0);
     }else{
         start_pair();
+#ifdef I2S_RETIRE_CHECK
+        if(cyclic_case==19||cyclic_case==20){
+            inject(1,2,0);struct a733_i2s_period p=cyclic_period(0);
+            configASSERT(dma_service_copy_period(&service,0,p.ticket,copied,4096));
+            if(cyclic_case==20){inject(1,4,0);wait_phase(0,DMA_SERVICE_RESULT);}
+            else set(&drain_enabled,0);
+            struct i2s_retirement retirement={.service=&service,.held={p.ticket,0},.jobs=2};
+            int result=0;
+            for(unsigned i=0;i<32&&!result;++i){result=i2s_retirement_step(&retirement);vTaskDelay(1);}
+            if(cyclic_case==19){configASSERT(!result&&bindings[0].pin_lease.id&&service.channels[0].holds_buffers);
+                set(&drain_enabled,1);}
+            for(unsigned i=0;i<100&&!result;++i){result=i2s_retirement_step(&retirement);vTaskDelay(1);}
+            configASSERT(result==1&&!retirement.held[0]&&!bindings[0].pin_lease.id);
+            for(unsigned j=0;j<2;++j)configASSERT(service.channels[j].phase==DMA_SERVICE_CLOSED&&
+                !service.channels[j].holds_buffers&&!service.controller.channels[j].claimed);
+            configASSERT(!dma_service_copy_period(&service,0,p.ticket,copied,4096));
+            platform_puts("PASS I2S retirement exact held lease, busy drain/overrun, reap and both closes\n");platform_exit(0);
+        }
+#endif
         if(cyclic_case==10){
             struct dma_service_reply r=request(DMA_SERVICE_STATUS,0,0,0);
             configASSERT(r.phase==DMA_SERVICE_RECOVERY && r.holds_buffers && !r.stream_frames);
