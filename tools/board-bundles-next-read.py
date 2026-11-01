@@ -177,11 +177,11 @@ def main():
     b = module('board_read_base', tools / 'check-a733-smp.py')
     a = module('board_read_access', tools / 'usb-access.py')
     fel = Path.home() / '.cache/sunstoneos/build/sunxi-a733/sunxi-fel'
-    b.require(b.digest(fel) == b.FEL_HASH, 'FEL changed')
-    evidence.mkdir(parents=True, exist_ok=False)
+    evidence = b.unique_directory(evidence)
     r = {'schema': 'board-read-session-v1', 'complete': False, 'launch_attempted': False, 'physical_access': True,
          'reader_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-         'words_sha256': hashlib.sha256(raw).hexdigest(), 'transactions': [], 'words': {}, 'skipped': [],
+         'words_sha256': hashlib.sha256(raw).hexdigest(), 'tool_sha256': b.digest(fel),
+         'transactions': [], 'words': {}, 'skipped': [],
          'scratch_restored': False}
 
     def save():

@@ -119,6 +119,7 @@ tool = module('board_bundles_tool', ROOT / 'tools/prepare-board-bundles.py')
 # A frozen survey build whose manifest names the runner from before 575565f8.
 STALE_SURVEY = tool.EVIDENCE / 'launch-survey-20261017/build'
 reader = module('board_bundles_reader_check', ROOT / tool.READER)
+evidence_paths = module('board_read_evidence_paths', ROOT / 'tools/host_evidence.py')
 queue = module('board_bundles_queue', ROOT / 'tools/board-test-queue.py')
 transport = module('board_bundles_transport', ROOT / tool.SUPERVISED_TRANSPORT)
 SCHEMAS = {'monitor.py': 'fixture-monitor-v1', 'nested.py': 'fixture-nested-v1', 'many.py': 'fixture-many-v1'}
@@ -317,7 +318,7 @@ class FakeFel:
         return subprocess.CompletedProcess(command, 0, '\n'.join(out) + '\n', '')
 
 
-def run_reader(work, name, words, values, restore=True):
+def run_reader(work, name, words, values, restore=True, reuse_output=False):
     """reader.main() with its device modules and FEL process modeled; returns the session, commands and quarantine."""
     from contextlib import contextmanager, redirect_stdout
     import io
@@ -343,7 +344,8 @@ def run_reader(work, name, words, values, restore=True):
         if not condition:
             raise RuntimeError(message)
 
-    base = SimpleNamespace(require=require, digest=lambda path: 'pinned', FEL_HASH='pinned',
+    base = SimpleNamespace(require=require, digest=lambda path: 'current-tool',
+                           unique_directory=evidence_paths.unique_directory,
                            save_json=lambda path, value: Path(path).write_text(json.dumps(value)),
                            sync_file=lambda path: None, sealed_source=sealed_source,
                            stop_after_failure=stop_after_failure, hold_ownership=lambda: held.append(True))
@@ -354,6 +356,9 @@ def run_reader(work, name, words, values, restore=True):
     words_path = work / f'{name}-WORDS.json'
     words_path.write_text(json.dumps({'schema': 'board-read-words-v1', 'purpose': 'fixture', 'words': words}))
     evidence = work / f'{name}-evidence'
+    if reuse_output:
+        evidence.mkdir()
+        (evidence / 'earlier.json').write_text('preserve earlier evidence\n')
     modules = {'board_read_base': base, 'board_read_access': access}
     error = None
     with patch.object(reader, 'module', lambda n, path: modules[n]), patch.object(reader.subprocess, 'run', fel.run), \
@@ -364,6 +369,11 @@ def run_reader(work, name, words, values, restore=True):
         except RuntimeError as e:
             error = str(e)
     assert set(fel.ops) <= {'read', 'readl', 'write'}, fel.ops
+    if reuse_output:
+        assert (evidence / 'earlier.json').read_text() == 'preserve earlier evidence\n'
+        sessions = list(evidence.glob('*/session.json'))
+        assert len(sessions) == 1 and not (evidence / 'session.json').exists()
+        evidence = sessions[0].parent
     return json.loads((evidence / 'session.json').read_text()), fel.commands, quarantined, error
 
 
@@ -378,6 +388,9 @@ def check_reader(work):
     session, commands, quarantined, error = run_reader(work, 'open', words, values)
     assert error is None and session['complete'] and session['scratch_restored'] and not quarantined, session
     assert session['words'] == {hex(a): v for a, v in values.items()} and session['skipped'] == []
+    reused, _, refused, failure = run_reader(work, 'reused', words, values, reuse_output=True)
+    assert failure is None and reused['complete'] and not refused
+    assert reused['tool_sha256'] == 'current-tool'
     # Each FEL command records its wall-clock start and end.
     assert all(isinstance(t.get('start'), float) and t['start'] <= t.get('end', -1.0)
                for t in session['transactions']), session['transactions']
@@ -582,12 +595,17 @@ def sandbox_start(work):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--reader-only', action='store_true', help='check the modeled FEL reader only')
     args = parser.parse_args()
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
     WORK.mkdir(parents=True, exist_ok=True)
     work = WORK / ('check-' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f'))
     work.mkdir()
+    if args.reader_only:
+        (out / 'reader.json').write_text(json.dumps(check_reader(work), indent=2) + '\n')
+        print('PASS: board reader preserves evidence and checks live register gates and scratch restoration.')
+        return
     result = {'table': check_table(), 'survey': check_survey(work), 'reader': check_reader(work)}
 
     elves = work / 'elf'
