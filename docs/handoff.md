@@ -23,7 +23,7 @@ in their subsystem file; host evidence establishes no physical qualification.
 - [CPU](status/cpu.md): implemented; bounded eight-core workloads pass, while repeatability, sustained load and thermal/fault recovery remain open.
 - [Memory/DMA](status/memory-dma.md): implemented; DRAM restoration passes on both boards, while full-map memory and device DMA qualification remain open.
 - [Power/thermal](status/power-thermal.md): implemented; finite observations and rail normalization pass, while transitions and protection remain unqualified.
-- [GPU](status/gpu.md): implemented; standalone exact sums pass, while current service integration, recognition and recovery remain open.
+- [GPU](status/gpu.md): implemented; standalone exact sums pass, while the current queue, recognition and recovery remain unqualified.
 - [NPU](status/npu.md): implemented; finite startup, inference and two-model runtime qualify, while repeated lifecycle, SDK access and domain restart remain open.
 - [USB](status/usb.md): implemented; returning USB0 exchange passes, while host source authority and peripheral qualification remain blocked.
 - [Storage](status/storage.md): implemented; scoped PIO/DMA reads pass, while SDR104, writes and autonomous card boot remain unqualified.

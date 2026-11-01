@@ -48,6 +48,15 @@ Three host checks have assigned blockers:
 
 H.264 capture and SAE checks require external inputs and remain pending.
 
+The full integration gate on `58317dce` completes the central build, all twelve
+OS variants, seven core checks and thirteen indexed checks before stopping at
+the supervised-claims audit's missing `PREREQUISITES` API. Its elapsed time is
+113.49 seconds. The check index verifies 783 entries, including 87 pure-host
+checks. Hook fixtures are skipped because their inputs are unchanged.
+Logs, hook selection and cleanup-preservation configuration are under
+`~/.cache/sunstoneos/build/check-selection-1031/followup-e124/`; the full gate
+record is `gate-e124-full/`. This result leaves full integration blocked.
+
 Supervised/resident builds
 compose thermal, radio, I2S or headset services. Optional CPU/GPU/NPU builds
 have host evidence under `concurrent-gpu-npu-1026/`,
