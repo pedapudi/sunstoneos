@@ -43,7 +43,9 @@ int a733_pmic_decode(enum a733_rail rail,uint8_t enable,uint8_t selector,struct 
     if(rail==A733_RAIL_DCDC1 || rail==A733_RAIL_DC1SW2) {if(code<=28)mv=1000+100*code;}
     else if(rail==A733_RAIL_BLDO1 || rail==A733_RAIL_BLDO2 || rail==A733_RAIL_BLDO5 || rail==A733_RAIL_CLDO1 || rail==A733_RAIL_CLDO2 || rail==A733_RAIL_CLDO3 || rail==A733_RAIL_CLDO5) {if(code<=29)mv=500+100*code;}
     else if(rail==A733_RAIL_ELDO6) {if(code<=40)mv=500+25*code;}
-    else if(code<=((rail==A733_RAIL_DCDC8 || rail==A733_RAIL_DCDC9) ? 101u : 87u))
+    /* The pinned Linux and bootloader DCDC8/9 tables disagree above 87.
+     * Preserve their raw bytes without authorizing either voltage mapping. */
+    else if(code<=87u)
         mv=code<=70 ? 500+10*code : 1200+20*(code-70);
     *out=(struct a733_pmic_snapshot){.rail=rail,.enable=enable,.selector=selector,
         .enabled=!!(enable&BIT(p.bit)),.decoded=!!mv,.programmed_uv=mv*1000};return 1;
