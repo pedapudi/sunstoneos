@@ -215,12 +215,23 @@ static int window_valid(const struct a733_pcie *p,unsigned region,uint32_t type,
  * the register owner spinning forever. The read cap is a secondary bound. */
 static int atu_ack(struct a733_pcie *p,uintptr_t at,uint32_t expected,uint64_t start)
 {
+    p->atu_address=at+4;p->atu_expected=expected;p->atu_started=start;p->atu_failure=0;
     for(unsigned n=0;n<(1u<<20);++n) {
         uint32_t value;
-        if(!rd(p,at+4,&value)||p->last_now-start>=20000)return 0;
+        if(!timely(p)) {
+            p->atu_failure=p->last_now>=p->deadline||p->last_now>=p->config.lifetime_deadline?2:1;return 0;
+        }
+        if(p->ops.read(p->cookie,at+4,4,&value)!=1){p->atu_failure=1;return 0;}
+        /* Keep a successful bus observation even when its trailing deadline
+         * check refuses it. It is diagnostic, never an accepted completion. */
+        p->last_value=value;
+        if(!timely(p)) {
+            p->atu_failure=p->last_now>=p->deadline||p->last_now>=p->config.lifetime_deadline?2:1;return 0;
+        }
+        if(p->last_now-start>=20000){p->atu_failure=2;return 0;}
         if((value&BIT(31))==expected)return 1;
     }
-    return 0;
+    p->atu_failure=3;return 0;
 }
 int a733_pcie_atu_disable(struct a733_pcie *p,unsigned region)
 {
@@ -236,9 +247,11 @@ int a733_pcie_atu_program(struct a733_pcie *p,unsigned region,uint32_t type,
     const uint64_t start=p->last_now;
     uintptr_t at=A733_PCIE_ATU_OUTBOUND(region);
     p->windows[region]=(struct a733_pcie_window){type,cpu,pci,bytes};
-    return wr(p,at+4,0)&&atu_ack(p,at,0,start)&&wr(p,at+8,cpu)&&wr(p,at+12,0)&&
-        wr(p,at+16,cpu+bytes-1)&&wr(p,at+20,pci)&&wr(p,at+24,0)&&wr(p,at,type)&&
-        p->last_now-start<20000&&wr(p,at+4,BIT(31))&&atu_ack(p,at,BIT(31),start);
+    if(!wr(p,at+4,0)||!atu_ack(p,at,0,start)||!wr(p,at+8,cpu)||!wr(p,at+12,0)||
+        !wr(p,at+16,cpu+bytes-1)||!wr(p,at+20,pci)||!wr(p,at+24,0)||!wr(p,at,type))return 0;
+    p->atu_expected=BIT(31);
+    if(p->last_now-start>=20000){p->atu_failure=2;return 0;}
+    return wr(p,at+4,BIT(31))&&atu_ack(p,at,BIT(31),start);
 }
 int a733_pcie_atu_write_allowed(const struct a733_pcie *p,uintptr_t a,uint32_t v)
 {

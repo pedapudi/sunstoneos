@@ -521,6 +521,7 @@ int main(int argc,char **argv)
         atu1_stall_off=1;assert(a733_pcie_nvme_shutdown(&nvme));
         assert(until(nvme_poll,&nvme,A733_PCIE_STOPPED)==A733_PCIE_RETAINED&&!port.client_stopped);
         assert(atu_effects[1].pending&&!atu1_off_acks&&(*w(0x06300204)&(1u<<31)));
+        assert(port.atu_failure&&port.atu_address==0x06300204&&!port.atu_expected);
         assert((*w(0x06000004)&0xffff)==0x106&&(*w(0x06400c00)&1));retained_memory();
     }
     else if(!strncmp(mode,"stop-",5))port_case(mode);

@@ -81,6 +81,10 @@ struct a733_pcie {
     unsigned phase,phy_index,supply_index,held,failed,clock_retained,rail_retained;
     unsigned speed_change; /* Directed speed change requested above Gen1. */
     unsigned client_stopped; /* The claimed function client finished its orderly stop. */
+    uintptr_t atu_address;
+    uint64_t atu_started;
+    uint32_t atu_expected;
+    unsigned atu_failure; /* 0 none, 1 access/clock failure, 2 time bound, 3 read cap. */
     uint8_t root_cap;
     /* Region 0: core CFG0 window. Region 1: the claimed client's MEM window. */
     struct a733_pcie_window windows[2];

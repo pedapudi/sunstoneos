@@ -319,6 +319,8 @@ static void atu_latency(void)
     start=model.now;reads=atu_reads;
     assert(a733_pcie_config_read(&port,0,0,start+500000,&value)==A733_PCIE_RETAINED);
     assert(model.now-start>=20000&&model.now-start<20100&&port.failed&&reg_retained&&atu_effect.pending);
+    assert(port.atu_failure==2&&port.atu_address==0x06300004&&port.atu_expected==(1u<<31)&&
+        port.atu_started>=start&&port.atu_started-start<100&&!(port.last_value&(1u<<31)));
     printf("ATU combined timeout: %llu us, %u acknowledgment reads\n",(unsigned long long)(model.now-start),atu_reads-reads);
     /* An acknowledgment beyond the local bound never permits CFG access. */
     setup();assert(complete()==A733_PCIE_READY);atu_on_us=20001;
@@ -330,6 +332,7 @@ static void atu_latency(void)
     start=model.now;before=trace_count;
     assert(a733_pcie_config_read(&port,0,0,start+1000,&value)==A733_PCIE_RETAINED);
     assert(model.now-start>=1000&&model.now-start<1100&&trace_count==before+1);
+    assert(port.atu_failure==2&&port.atu_address==0x06300004&&!port.atu_expected&&(port.last_value&(1u<<31)));
     /* A stuck disable cannot be followed by address programming. */
     setup();assert(complete()==A733_PCIE_READY);atu_stall_off=1;
     start=model.now;before=trace_count;
@@ -340,6 +343,7 @@ static void atu_latency(void)
     start=model.now;reads=atu_reads;before=trace_count;
     assert(a733_pcie_config_read(&port,0,0,start+500000,&value)==A733_PCIE_RETAINED);
     assert(model.now==start&&atu_reads-reads==(1u<<20)&&trace_count==before+1&&reg_retained);
+    assert(port.atu_failure==3&&port.atu_address==0x06300004&&!port.atu_expected&&port.atu_started==start);
     printf("ATU frozen clock: %u acknowledgment reads, retained without address writes\n",atu_reads-reads);
 }
 int main(int argc,char **argv)
