@@ -40,8 +40,9 @@ static int window(struct npu_runtime_queue *q)
 {
     unsigned failed = atomic_load_explicit(&q->runtime->failed, memory_order_acquire);
     unsigned open = a733_npu_startup_window_open(q->runtime->startup);
-    if (!failed && open) return 1;
-    sunstone_crumb_fail(SUNSTONE_CRUMB_FAIL_SITE(NPU), failed | open << 1, SUNSTONE_CRUMB_HERE());
+    unsigned owns = q->claimed && q->runtime->service.direct == &q->direct;
+    if (!failed && open && owns) return 1;
+    sunstone_crumb_fail(SUNSTONE_CRUMB_FAIL_SITE(NPU), failed | open << 1 | owns << 2, SUNSTONE_CRUMB_HERE());
     return 0;
 }
 static int start(void *cookie, const struct a733_npu_command *c, uint64_t timeout)
@@ -199,6 +200,7 @@ int npu_runtime_queue_return(struct npu_runtime_queue *q)
         atomic_load_explicit(&s->irq_pending, memory_order_acquire) ||
         count > UINT32_MAX - npu_service_irq_completions(s) ||
         q->queue.submitted > UINT64_MAX - q->runtime->counters.jobs) result = -1;
+    if (result == 1 && !npu_queue_retire(&q->queue)) result = -1;
     if (result == 1) {
         s->irq_masked = 1;
         atomic_fetch_add_explicit(&s->irq_completions, (unsigned)count, memory_order_release);

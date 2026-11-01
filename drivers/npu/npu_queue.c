@@ -20,7 +20,7 @@ int npu_queue_init(struct npu_queue *q, const struct npu_queue_ops *ops, void *c
 int npu_queue_register(struct npu_queue *q, struct npu_queue_command *c,
                        const struct a733_npu_command *hardware)
 {
-    if (!healthy(q) || !c || c->owner || !hardware || q->submitted ||
+    if (!healthy(q) || q->retired || !c || c->owner || !hardware || q->submitted ||
         !q->ops.validate(q->context, hardware) || !healthy(q)) return 0;
     c->hardware = *hardware; c->owner = q;
     return 1;
@@ -29,7 +29,7 @@ int npu_queue_submit(struct npu_queue *q, struct npu_queue_job *job,
                      struct npu_queue_command *command, struct npu_queue_fence after,
                      uint64_t timeout, struct npu_queue_fence *out)
 {
-    if (!q || !q->initialized) return 0;
+    if (!q || !q->initialized || q->retired) return 0;
     if (!healthy(q)) return -1;
     if (!job || job->held || !command || command->owner != q || !out ||
         !timeout || timeout > INT64_MAX || q->submitted == UINT64_MAX ||
@@ -80,3 +80,9 @@ int npu_queue_release(struct npu_queue *q, struct npu_queue_job *job)
 }
 int npu_queue_idle(const struct npu_queue *q)
 { return healthy(q) && !q->head && !q->held; }
+int npu_queue_retire(struct npu_queue *q)
+{
+    if (!npu_queue_idle(q) || q->retired) return 0;
+    q->retired = 1;
+    return 1;
+}

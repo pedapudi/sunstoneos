@@ -88,6 +88,12 @@ static void scenario(unsigned failure)
     assert(out.value == N + 1); /* Released fence identity remains stable. */
     done(&q, &h); assert(npu_queue_release(&q, &jobs[0]));
     assert(npu_queue_idle(&q));
+    assert(npu_queue_retire(&q));
+    assert(!npu_queue_retire(&q));
+    assert(npu_queue_fence_status(&q, out) == 1);
+    out = (struct npu_queue_fence){&foreign, 123};
+    assert(!npu_queue_submit(&q, &jobs[0], &c, previous, 1000, &out));
+    assert(out.queue == &foreign && out.value == 123 && !jobs[0].held);
     /* A stray IRQ is a fault, and cannot be attributed to a later job. */
     npu_queue_irq(&q); assert(atomic_load(&q.failed));
 }

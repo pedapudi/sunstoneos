@@ -46,6 +46,7 @@ struct npu_queue {
     size_t held;
     unsigned initialized, failure_site;
     uint64_t failure_fence; /* First start/IRQ failure, retained with all resources. */
+    unsigned retired;
 };
 /* Caller owns the records; keep queue, commands, jobs and backing resources
  * pinned until release. Zero each object before its first use. Job records
@@ -76,4 +77,7 @@ int npu_queue_fence_status(const struct npu_queue *, struct npu_queue_fence);
  * release changes no hardware and permits reuse of this job record. */
 int npu_queue_release(struct npu_queue *, struct npu_queue_job *);
 int npu_queue_idle(const struct npu_queue *);
+/* Permanently close admission after successful drain and release. Completed
+ * fences stay queryable; this queue object cannot be reinitialized. */
+int npu_queue_retire(struct npu_queue *);
 #endif
