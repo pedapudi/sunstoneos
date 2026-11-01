@@ -70,6 +70,8 @@
  * without it put phase << 24 | cluster << 16 | status & 0xffff in the value.
  * GUARD (aux bit 14): the value is the entry guard's full refusal word,
  * detail << 12 | line of apps/os/cpu-return-entry.c. */
+#define SUNSTONE_CRUMB_FAIL_CPU_PLL 0x9u /* Mismatched PLL word; expected N/state/domain in aux. */
+#define SUNSTONE_CRUMB_FAIL_CPU_RETAINED 0x8u /* First CPU driver fault; layout in cpu-return/cpu.patch. */
 #define SUNSTONE_CRUMB_CPU_AUX 0x20000000u
 #define SUNSTONE_CRUMB_CPU_GUARD 0x40000000u
 #define SUNSTONE_CRUMB_FAIL_PMIC 0x6u       /* PMIC power service; value: authority word */
@@ -130,6 +132,9 @@ enum {
     SUNSTONE_CRUMB_GPU_RECOVERY_RESTART = 0x0452, /* value: failed firmware serial */
     SUNSTONE_CRUMB_GPU_RECOVERY_READY = 0x0453, /* value: failed firmware serial */
     SUNSTONE_CRUMB_RETURN_POWER_DOWN = 0x0502, /* value: core */
+    SUNSTONE_CRUMB_PROBE_BEGIN = 0x0801,
+    SUNSTONE_CRUMB_PROBE_PROGRESS = 0x0802,
+    SUNSTONE_CRUMB_PROBE_CLEAN = 0x0803,
     SUNSTONE_CRUMB_RETURN_ROM = 0x0503,     /* value: WDT0 mode after disarm */
 };
 
