@@ -1,0 +1,18 @@
+{
+  "component": "OV5647 sensor adapter and VGA RAW10 table",
+  "upstream": "https://github.com/torvalds/linux",
+  "revision": "v6.12",
+  "url": "https://raw.githubusercontent.com/torvalds/linux/v6.12/drivers/media/i2c/ov5647.c",
+  "sha256": "c99a6c3b9c60b7c1655c690cc5acc4a13e20a222fe840386efc99545c45c1873",
+  "license": "GPL-2.0-only",
+  "execution": "Native FreeRTOS sensor driver; Linux is a source reference only.",
+  "adaptation": "VGA RAW10 table, ID, power delay and CSI stream sequences; bounded retained-fault callbacks replace Linux OS interfaces. No physical qualification.",
+  "controller_bounds": {
+    "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/bsp/drivers/vin/vin-vipp/sunxi_scaler.c",
+    "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+    "sha256": "17bebbdd8f8e290a9533f0270d218cedbb718021b80337298ab555863eb0e13d",
+    "section": "MAX_OUT_WIDTH and MAX_OUT_HEIGHT",
+    "license": "GPL-2.0-only",
+    "execution": "Development reference for VIPP geometry limits"
+  }
+}

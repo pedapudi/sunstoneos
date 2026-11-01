@@ -3,6 +3,9 @@
 #include "i2s-stream.c"
 #undef kernel_main
 #include "../apps/i2s/application.h"
+#ifdef I2S_FILE_RETIRE_CHECK
+#include "../apps/i2s/retire.h"
+#endif
 #ifndef I2S_FILE_CHECK
 #define I2S_FILE_CHECK 0
 #endif
@@ -87,6 +90,13 @@ static void pcm_client(void *unused)
    if(I2S_FILE_CHECK){configASSERT(service.streams[0].status==A733_I2S_INPUT_ENDED&&(ir[0]&5)==5&&fifo_emptied&&(ir[12/4]&0x40));
     configASSERT(request(DMA_SERVICE_REAP,0,0,0).result==DMA_SERVICE_BUSY&&request(DMA_SERVICE_CLOSE,0,100000,0).result==DMA_SERVICE_BUSY);}
    configASSERT(bindings[0].pin_lease.id && service.channels[0].holds_buffers);
+#ifdef I2S_FILE_RETIRE_CHECK
+   struct i2s_retirement retirement={.service=&service,.jobs=1};int retired=0;
+   for(unsigned i=0;i<100&&!retired;++i){retired=i2s_retirement_step(&retirement);vTaskDelay(1);}
+   configASSERT(retired==1&&!bindings[0].pin_lease.id&&service.channels[0].phase==DMA_SERVICE_CLOSED&&
+       !service.channels[0].holds_buffers);
+   platform_puts("PASS I2S file retirement cancels serializer-owned EOF before reap and close\n");platform_exit(0);
+#endif
    platform_puts(I2S_FILE_CHECK?"PASS file PCM actual providers two full periods and one frame, exact memory/FIFO accounting and retained EOF\n":"PASS runtime caller PCM actual providers, distinct periods, exact completed refill and retained cancellation\n");platform_exit(0);}
   vTaskDelay(1);
  }

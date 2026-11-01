@@ -7,6 +7,7 @@ import pathlib
 import re
 import shutil
 import subprocess
+from harness import SANITIZE, environment
 
 p = argparse.ArgumentParser()
 p.add_argument('--evidence', type=pathlib.Path, required=True)
@@ -14,14 +15,14 @@ p.add_argument('--cc', default='clang-21')
 a = p.parse_args()
 root = pathlib.Path(__file__).resolve().parents[1]
 a.evidence.mkdir(parents=True, exist_ok=False)
-compiled = ['drivers/display/a733_display_native.c', 'drivers/iommu/a733_iommu.c', 'runtime/device_memory_pool.c', 'drivers/display/a733_display_handoff.c', 'drivers/display/a733_display_pll.c',
+compiled = ['drivers/display/a733_display_modes.c', 'drivers/display/sunstone_connector.c', 'drivers/display/sunstone_edid.c', 'drivers/display/a733_display_native.c', 'drivers/iommu/a733_iommu.c', 'runtime/device_memory_pool.c', 'drivers/display/a733_display_handoff.c', 'drivers/display/a733_display_pll.c',
             'drivers/clock/a733_media_clock.c', 'drivers/clock/a733_clock_leases.c',
             'drivers/gpu/a733_gpu_resources.c', 'drivers/display/display_scanout.c',
             'drivers/display/a733_dsi.c', 'drivers/display/a733_dsi_phy.c',
             'drivers/display/a733_dsi_video.c', 'drivers/display/a733_tcon_lcd.c',
             'drivers/display/a733_display_engine.c']
 inputs = set(compiled + ['checks/display-native.c', 'checks/display-native.py', 'cmake/a733-dsi-native.cmake',
-                         'runtime/include/string.h'])
+                         'runtime/include/string.h', 'checks/harness.py'])
 pending = list(inputs)
 while pending:
     name = pending.pop()
@@ -47,7 +48,7 @@ commands = []
 
 
 def run(command):
-    result = subprocess.run([str(x) for x in command], cwd=root, capture_output=True, text=True)
+    result = subprocess.run([str(x) for x in command], cwd=root, env=environment(), capture_output=True, text=True)
     commands.append(dict(command=[str(x) for x in command], returncode=result.returncode,
                          stdout=result.stdout, stderr=result.stderr))
     (a.evidence/'commands.json').write_text(json.dumps(commands, indent=2)+'\n')
@@ -58,7 +59,7 @@ def run(command):
 binary = a.evidence/'check'
 run([compiler, '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
      # The reused scanout fixtures predate the optional rcq_submit provider field.
-     '-Wno-unused-function', '-Wno-missing-field-initializers', '-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-Iinclude',
+     '-Wno-unused-function', '-Wno-missing-field-initializers', *SANITIZE, '-Iinclude',
      'checks/display-native.c', *compiled, '-o', binary])
 result = run([binary])
 for name in ['drivers/display/a733_display_native.c']:

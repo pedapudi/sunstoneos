@@ -92,6 +92,20 @@ int os_audio_client_admit(uint32_t capture_samples);
 #else
 #define OS_SESSION_BYTES OS_SESSION_BASE_BYTES
 #endif
+#ifdef SUNSTONE_A733_OS_DMA
+#include "a733_dma_startup.h"
+#define OS_DMA_SESSION_MAGIC UINT64_C(0x41533733444d4131)
+#define OS_DMA_SESSION_BYTES 160u
+struct os_dma_session {
+    uint64_t magic, version, bytes;
+    uint8_t evidence[32];
+    struct a733_dma_handoff handoff;
+};
+_Static_assert(sizeof(struct os_dma_session)==OS_DMA_SESSION_BYTES,"DMA service record");
+#define OS_SESSION_TOTAL_BYTES (OS_SESSION_BYTES+OS_DMA_SESSION_BYTES)
+#else
+#define OS_SESSION_TOTAL_BYTES OS_SESSION_BYTES
+#endif
 /* Immutable little-endian session: the board session (workload 0 or 4)
  * followed by the thermal owner's facts. The evidence hashes identify
  * externally reviewed records; they do not establish those facts. */
@@ -116,8 +130,11 @@ struct os_session {
     /* The CPU clock driver's grant record (include/a733_cpu_clock.h). */
     struct a733_cpu_clock_grant_record cpu_clock;
 #endif
+#ifdef SUNSTONE_A733_OS_DMA
+    struct os_dma_session dma;
+#endif
 };
-_Static_assert(sizeof(struct os_session)==OS_SESSION_BYTES&&
+_Static_assert(sizeof(struct os_session)==OS_SESSION_TOTAL_BYTES&&
     offsetof(struct os_session,cpu_critical_millicelsius)==804,"OS session geometry");
 #define OS_SESSION_VERSION 1u
 int os_session_valid(const struct os_session *);
@@ -153,6 +170,13 @@ struct a733_thermal_policy;
 int os_cpu_clock_step(const struct a733_thermal_policy *);
 /* EL0-safe: 1 once the grant's requests have finished, whatever their result. */
 int os_cpu_clock_ready(void);
+#endif
+#ifdef SUNSTONE_A733_OS_DMA
+int os_dma_task_privileged(void (*)(void *),void *);
+int os_dma_pins(struct a733_pin_handoff *);
+int os_dma_start(void);
+void os_dma_irq(void);
+int os_dma_return_ready(void);
 #endif
 #ifdef SUNSTONE_A733_OS_AUDIO
 /* The capture stream (audio-stream.h); its start entry is

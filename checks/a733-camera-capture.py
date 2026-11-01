@@ -14,7 +14,7 @@ a = p.parse_args()
 a.evidence.mkdir(parents=True, exist_ok=True)
 root = Path(__file__).resolve().parents[1]
 commands = []
-sources = ['drivers/camera/ov5640.c', 'drivers/camera/a733_camera_platform.c',
+sources = ['drivers/camera/camera_sensor.c','drivers/camera/sensor_registry.c', 'drivers/camera/ov5640_sensor.c', 'drivers/camera/ov5647_sensor.c', 'drivers/camera/ov5640.c', 'drivers/camera/a733_camera_platform.c',
            'drivers/camera/a733_csi_receiver.c', 'drivers/camera/a733_camera_route.c',
            'drivers/camera/a733_camera_dma.c', 'drivers/iommu/a733_iommu.c',
            'drivers/camera/a733_camera_capture.c']

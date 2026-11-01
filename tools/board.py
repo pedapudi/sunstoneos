@@ -100,6 +100,7 @@ class Live:
         self.journal_error = None
         self.recovery_deadline = None
         self.recovering = False
+        self.dma_binding = None
 
     def journal(self):
         try:
@@ -475,7 +476,10 @@ class Live:
         return {'identity': self.identity, 'port': self.args.port, 'words': {hex(a):v for a,v in zip(words,values)}}
 
     def prepare(self, info):
-        return images.prepare(self.args, info, {} if self.args.kind=='probe' else self.live_state(info.get('finite_npu',False)), self.evidence/'bundle')
+        if info.get('dma'):
+            require(self.dma_binding is not None, 'DMA runner has no original-instance admission.')
+        live = {} if self.args.kind=='probe' else self.live_state(info.get('finite_npu',False))
+        return images.prepare(self.args, info, live, self.evidence/'bundle', dma_binding=self.dma_binding)
 
     def launch(self, plan):
         if plan.get('format') == 'generic':
@@ -692,6 +696,7 @@ def run_image(args, backend=Live):
         if args.reference_inventory:
             verify_references(json.loads(args.reference_inventory.read_text()))
         helper_only = args.kind == 'rail-helper'
+        dma_binding = None
         if helper_only:
             require(result['image_sha256'] == state.RAIL_HELPER_SHA256,
                     'Rail helper binary differs from the pinned one.')
@@ -703,6 +708,7 @@ def run_image(args, backend=Live):
             if info['entry_guard'] and args.restore_rails:
                 require(POST_RAIL_HELPER.is_file() and images.sha(POST_RAIL_HELPER) == POST_RAIL_HELPER_SHA256,
                         'Approved post-ROM rail helper is absent or changed; refused before device access.')
+            dma_binding = images.dma_admission(args, info)
             application_inputs(args, info, evidence)
             require(getattr(args, 'expect_result', None) is None or getattr(args, 'decoder', None) is not None,
                     '--expect-result requires a result decoder.')
@@ -713,6 +719,8 @@ def run_image(args, backend=Live):
         with owner.locked():
             try:
                 timed('identity', owner.sanity)
+                if dma_binding is not None:
+                    owner.dma_binding = timed('dma-identity', lambda: images.bind_dma_identity(dma_binding, args, owner.identity))
                 timed('reset', owner.reset)
                 timed('dram', owner.dram)
                 if helper_only or info['entry_guard'] or args.kind == 'npu':
@@ -821,9 +829,10 @@ def check_image(args):
     evidence = evidence_directory(args.evidence)
     application_inputs(args, info, evidence)
     live = json.loads(args.state.read_text()) if args.state else {}
+    dma_binding = images.dma_admission(args, info, live if live.get('identity') is not None else None)
     require(info.get('native_probe') or live.get('words'),
             'Offline application preparation requires --state with captured words.')
-    plan = images.prepare(args, info, live, evidence/'bundle')
+    plan = images.prepare(args, info, live, evidence/'bundle', dma_binding=dma_binding)
     report = {'admitted': True, 'physical_access': False, 'image_sha256': images.sha(args.image),
               'watchdog': plan['watchdog'],
               'uploads': [{'address': a, 'file': str(p), 'sha256': images.sha(p)} for a, p in plan['uploads']]}
@@ -1052,6 +1061,8 @@ class Queue:
                 else:
                     (destination/'board').mkdir()
                     shutil.copy2(template/'board/session-template.bin',destination/'board/session-template.bin')
+                if (template/'dma-authority.json').is_file():
+                    shutil.copy2(template/'dma-authority.json', destination/'dma-authority.json')
             options['template'] = str(directory/'template')
         exp = expectation(args.expect)
         if exp:

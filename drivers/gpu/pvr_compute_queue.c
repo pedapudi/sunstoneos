@@ -1,5 +1,6 @@
 /* Single-context compute submission inside the privileged GPU worker. */
 #include "pvr_compute_queue.h"
+#include "pvr_gpu_crumb.h"
 #include "pvr_gpu_service.h"
 #include "a733_gpu_queue.h"
 #include "a733_gpu_backend.h"
@@ -9,6 +10,7 @@
 #include "a733_range.h"
 #include "aarch64_device_memory.h"
 #include "sunstone_crumb.h"
+#include "sunstone_latency.h"
 #include <string.h>
 
 #define PAGE 4096u
@@ -86,6 +88,7 @@ static int post(struct pvr_compute_queue *q,uint32_t sequence,unsigned result,un
     }
     /* A higher-priority client may run as soon as the queue wakes it. */
     q->owed=0;
+    SS_LATENCY_GPU_POST(q->active_client);
     if (xQueueSend(v.completions,&r,0)!=pdTRUE) {
         q->owed=1; return fault(q,GPU_QUEUE_SERVICE);
     }
@@ -315,6 +318,7 @@ static int take(struct pvr_compute_queue *q)
         {PVR_CCB_MAGIC|PVR_CCCB_TASK|205u,96,1,1,q->command}, {PVR_CCB_MAGIC|213u,8,0,0,q->update}};
     q->previous_sequence=atomic_load(v.sequence); atomic_store(v.sequence,q->job.sequence);
     q->sequence=q->job.sequence; q->kicked=0; q->phase=PVR_COMPUTE_QUEUE_IN_FLIGHT;
+    SS_LATENCY_GPU_ARM();
     if (!pvr_cccb_begin(&q->client,commands,2,NULL,0,q->deadline)) return fault(q,GPU_QUEUE_SERVICE);
     return drive_to_kick(q);
 }
@@ -401,15 +405,36 @@ void pvr_compute_queue_abort(struct pvr_compute_queue *q)
 }
 int pvr_compute_queue_recovered(struct pvr_compute_queue *q)
 {
-    if (!q || !atomic_load(&q->recovering) || atomic_load(&q->lost) ||
-        q->service->phase!=PVR_GPU_SERVICE_RECOVERING ||
-        !a733_gpu_backend_stopped(q->service->config.context,q->service)) return 0;
+    if (!q) return 0;
+    if (!atomic_load(&q->recovering) || atomic_load(&q->lost) ||
+        q->service->phase!=PVR_GPU_SERVICE_RECOVERING) {
+        pvr_gpu_crumb_fail(PVR_GPU_CRUMB_RECOVERY,1,__LINE__,
+            (uint32_t)q->service->phase << 16 | !!atomic_load(&q->lost) << 1 |
+            !!atomic_load(&q->recovering),PVR_GPU_CRUMB_HERE());
+        return 0;
+    }
+    if (!a733_gpu_backend_stopped(q->service->config.context,q->service)) {
+        pvr_gpu_crumb_fail(PVR_GPU_CRUMB_RECOVERY,2,__LINE__,
+            (uint32_t)q->service->stop.phase << 16 | q->service->stop.isolation_observed,
+            PVR_GPU_CRUMB_HERE());
+        return 0;
+    }
     if (q->owed) {
         struct pvr_compute_queue_client_view v;
-        if (!pvr_compute_queue_client_view(q,q->active_client,&v) ||
-            atomic_load(v.slot_state)!=PVR_COMPUTE_QUEUE_TAKEN) return 0;
+        if (!pvr_compute_queue_client_view(q,q->active_client,&v)) {
+            pvr_gpu_crumb_fail(PVR_GPU_CRUMB_RECOVERY,3,__LINE__,q->active_client,PVR_GPU_CRUMB_HERE());
+            return 0;
+        }
+        if (atomic_load(v.slot_state)!=PVR_COMPUTE_QUEUE_TAKEN) {
+            pvr_gpu_crumb_fail(PVR_GPU_CRUMB_RECOVERY,4,__LINE__,
+                atomic_load(v.slot_state),PVR_GPU_CRUMB_HERE());
+            return 0;
+        }
         atomic_store(v.slot_state,PVR_COMPUTE_QUEUE_CLOSED);
-        if (post(q,q->job.sequence,GPU_QUEUE_FAULT,q->error,0)!=1) return 0;
+        if (post(q,q->job.sequence,GPU_QUEUE_FAULT,q->error,0)!=1) {
+            pvr_gpu_crumb_fail(PVR_GPU_CRUMB_RECOVERY,5,__LINE__,q->job.sequence,PVR_GPU_CRUMB_HERE());
+            return 0;
+        }
     }
     q->reset_pending=0; q->held=0; q->phase=PVR_COMPUTE_QUEUE_READY;
     return 1;

@@ -26,6 +26,26 @@ static uint32_t targets[2];
 static uint64_t protected_count, protected_words[16];
 static uint64_t busy_progress[CORES] __attribute__((aligned(64)));
 static uint32_t visited[2];
+static uint32_t ack_target[2], ack_core[2], ack_total[2], mover_phase[2], mover_core[2];
+static void field(const char *name, uint32_t value) {
+    platform_puts(name); platform_hex(value);
+}
+// Preserve the first failed take before later rounds can change its inputs.
+static void notify_failure(unsigned round, unsigned acknowledged, uint32_t count) {
+    taskENTER_CRITICAL();
+    platform_puts("FAIL soak notification");
+    field(" round=", round); field(" received=", count); field(" acknowledged=", acknowledged);
+    for (unsigned id = 0; id < 2; ++id) {
+        field(" mover=", id);
+        field(" target=", __atomic_load_n(&targets[id], __ATOMIC_ACQUIRE));
+        field(" ack_target=", __atomic_load_n(&ack_target[id], __ATOMIC_ACQUIRE));
+        field(" ack_core=", __atomic_load_n(&ack_core[id], __ATOMIC_RELAXED));
+        field(" ack_total=", __atomic_load_n(&ack_total[id], __ATOMIC_RELAXED));
+        field(" phase=", __atomic_load_n(&mover_phase[id], __ATOMIC_RELAXED));
+        field(" core=", __atomic_load_n(&mover_core[id], __ATOMIC_RELAXED));
+    }
+    platform_puts("\n"); platform_exit(1);
+}
 extern uint64_t check_fp_context(uint64_t pattern);
 
 static void protected_update(void) {
@@ -78,13 +98,21 @@ static void mover_task(void *argument) {
     uint32_t acknowledged = UINT32_MAX;
     for (;;) {
         const unsigned core = portGET_CORE_ID();
+        __atomic_store_n(&mover_core[id], core, __ATOMIC_RELAXED);
+        __atomic_store_n(&mover_phase[id], 1, __ATOMIC_RELAXED);
         __atomic_or_fetch(&visited[id], 1U << core, __ATOMIC_RELAXED);
         const uint32_t target = __atomic_load_n(&targets[id], __ATOMIC_ACQUIRE);
         if (core == target % CORES && target != acknowledged) {
             acknowledged = target;
+            __atomic_store_n(&ack_core[id], portGET_CORE_ID(), __ATOMIC_RELAXED);
+            __atomic_add_fetch(&ack_total[id], 1, __ATOMIC_RELAXED);
+            __atomic_store_n(&ack_target[id], target, __ATOMIC_RELEASE);
             xTaskNotifyGive(controller);
         }
+        // Phase 2 can block for a tick; phase 3 can block on the mutex.
+        __atomic_store_n(&mover_phase[id], 2, __ATOMIC_RELAXED);
         configASSERT(check_fp_context(0x0123456789abcdefUL ^ ((uint64_t)id << 60) ^ core));
+        __atomic_store_n(&mover_phase[id], 3, __ATOMIC_RELAXED);
         protected_update();
     }
 }
@@ -101,7 +129,7 @@ static void control(void *unused) {
         // Each mover acknowledges once; both may arrive before the first take.
         for (unsigned acknowledged = 0; acknowledged < 2;) {
             const uint32_t count = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000));
-            configASSERT(count >= 1 && acknowledged + count <= 2);
+            if (count < 1 || acknowledged + count > 2) notify_failure(round, acknowledged, count);
             acknowledged += count;
         }
     }

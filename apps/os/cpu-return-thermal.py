@@ -60,7 +60,7 @@ def geometry(image):
     w, r = objects['window'], objects['readings']
     require(set(w['members']) == {'header', 'first', 'collecting', 'ready'} and
             set(r['members']) == {'rows', 'count', 'overflow', 'next'}, 'Thermal producer fields differ.')
-    require(w['members']['header'] == 0 and w['members']['first'] == report.HEADER_BYTES and
+    require(w['members']['header'] == 0 and w['members']['first'] in (report.LEGACY_HEADER_BYTES, report.HEADER_BYTES) and
             r['members']['rows'] == 0 and r['members']['count'] == report.MAX_ROWS * report.ROW_BYTES and
             all(0 <= w['members'][k] <= w['bytes'] - 4 for k in ('first', 'collecting', 'ready')) and
             all(0 <= r['members'][k] <= r['bytes'] - 4 for k in ('count', 'overflow')),
@@ -86,10 +86,11 @@ def decode(layout, copied, epoch, generation):
     require(word(w, 'window', 'ready') == 1 and word(w, 'window', 'collecting') == 1,
             'Thermal window was not published.')
     first, count = word(w, 'window', 'first'), word(r, 'readings', 'count')
-    h = report.header(w[:report.HEADER_BYTES], epoch, generation)
+    header_bytes = layout['window']['members']['first']
+    h = report.header(w[:header_bytes], epoch, generation)
     require(first <= count <= report.MAX_ROWS and h['rows'] <= count - first and
             word(r, 'readings', 'overflow') in (0, 1), 'Thermal snapshot bounds differ.')
-    raw = w[:report.HEADER_BYTES] + r[first * report.ROW_BYTES:(first + h['rows']) * report.ROW_BYTES]
+    raw = w[:header_bytes] + r[first * report.ROW_BYTES:(first + h['rows']) * report.ROW_BYTES]
     decoded = report.decode(raw, epoch, generation)
     decoded['classification'] = report.classify(decoded)
     return decoded

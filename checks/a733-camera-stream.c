@@ -1,3 +1,4 @@
+#include "ov5640.h"
 /* SPDX-License-Identifier: GPL-2.0-only */
 /* Continuous capture composition model. The native coordinator, sensor,
  * analog, IOMMU, route, receiver and DMA controllers run against modeled
@@ -127,7 +128,7 @@ static int global_acquire(void *p,const struct a733_camera_capture_config *c,uin
 }
 static int handoff(void *p,uint64_t t,enum a733_capture_handoff h,const struct a733_camera_capture *s,uint64_t d){
     struct model *m=p;assert(t==101 && m->now<d && s==m->capture);
-    assert(s->route.state==A733_ROUTE_ARMED && s->sensor.state==OV5640_READY);
+    assert(s->route.state==A733_ROUTE_ARMED && s->sensor.state==CAMERA_SENSOR_READY);
     if(h==A733_CAPTURE_LOCAL){assert(s->dma.state==A733_CAM_DMA_ARMED);m->local=1;return 1;}
     /* Video capture mode precedes packets; the DMA ring starts with the sensor. */
     assert(m->local && s->receiver.state==A733_CSI_ARMED && !s->receiver.image_mode);
@@ -167,19 +168,19 @@ static int mmu_publish(void *p,uint64_t t,const void *x,size_t n,uint64_t d){
     struct model *m=p;assert(t==202 && x==table && n==sizeof(table) && m->now<d);return 1;
 }
 static int sensor_acquire(void *p,uint64_t d,uint64_t *t){struct model *m=p;assert(m->now<d);*t=203;return 1;}
-static int sensor_line(void *p,uint64_t t,enum ov5640_line l,int a,uint64_t d){
+static int sensor_line(void *p,uint64_t t,enum camera_sensor_line l,int a,uint64_t d){
     struct model *m=p;(void)l;assert(t==203 && !a && m->now<d);return 1;
 }
 static int sensor_read(void *p,uint64_t t,uint8_t a,uint16_t r,uint8_t *v,uint64_t d){
     struct model *m=p;++m->sensor_ops;assert(t==203 && a==0x3c && m->now<d);*v=m->sensor[r];
-    if(m->start_fault==4 && m->capture->sensor.state==OV5640_STARTING){
+    if(m->start_fault==4 && m->capture->sensor.state==CAMERA_SENSOR_STARTING){
         ++m->injections;*v^=1;
     }
     return 1;
 }
 static int sensor_write(void *p,uint64_t t,uint8_t a,uint16_t r,uint8_t v,uint64_t d){
     struct model *m=p;++m->sensor_ops;assert(t==203 && a==0x3c && m->now<d);m->sensor[r]=v;
-    if(m->capture->sensor.state==OV5640_STARTING){
+    if(m->capture->sensor.state==CAMERA_SENSOR_STARTING){
         if(r==0x300e){
             m->now+=m->interface_delay;
             if(m->start_fault==2){++m->injections;return -1;}
@@ -296,11 +297,15 @@ static int setup_with(const struct ov5640_mode *mode,unsigned port,unsigned slot
     model.plane_bytes=(unsigned)mode->width*mode->height;
     model.period=(uint64_t)mode->htotal*mode->vtotal*1000000u/mode->pixel_hz;
     model.active=mode->vtotal?model.period*mode->height/mode->vtotal:0;
+    struct camera_sensor_bus bus={.port=(uint8_t)port,.parser=(uint8_t)port,.lanes=2,
+        .i2c_address=0x3c,.xclk_hz=24000000,.reset={0,0,0,1},
+        .power_hold_us=5000,.reset_hold_us=1000,.bus_hold_us=20000};
     struct a733_camera_capture_config c={
         .ops={now,global_acquire,handoff,packet_quiet},.context=&model,
         .memory={{parameters,0x48000000,0x50000000,4096},image[0],image[1]},
         .table_words=table,.table_physical=0x4f000000,.frame_id=19,
         .receiver={(uint8_t)port,(uint8_t)port,42,(uint8_t)(port?7:2),324000000},.mode=*mode,
+        .sensor_bus=&bus,.sensor_drivers=camera_sensor_drivers,.sensor_driver_count=camera_sensor_driver_count,
         .slots=(uint8_t)slots,.slot_bytes=slot_bytes,.color_bars=1,
         .sensor={.acquire=sensor_acquire,.line=sensor_line,.read=sensor_read,.write=sensor_write,.receiver=sensor_receiver,.release=sensor_release},
         .analog={.admit=analog_admit,.read=analog_read,.write=analog_write},
@@ -394,7 +399,7 @@ static void start_failures(void){
             /* Reach the poll that will enable frames without changing native
              * state. Its first two clocks belong to the coordinator and
              * sensor; the third opens the DMA status interval. */
-            while(capture.sensor.state!=OV5640_STARTING || capture.sensor.index!=1)
+            while(capture.sensor.state!=CAMERA_SENSOR_STARTING || capture.sensor.index!=1)
                 assert(poll()>=0);
             if(kind==6)model.now=capture.deadline;
             else{model.clock_target=model.clocks+3;model.clock_fault=kind-6;}

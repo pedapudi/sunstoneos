@@ -1,0 +1,102 @@
+{
+  "schema": "sunstone-source-adaptation-v1",
+  "cache_argument": "checks/display-classes.py --source-cache DIRECTORY",
+  "sources": [
+    {
+      "file": "panel-simple.c",
+      "url": "https://raw.githubusercontent.com/torvalds/linux/v6.12/drivers/gpu/drm/panel/panel-simple.c",
+      "revision": "v6.12",
+      "sha256": "98f0e2b0aa0095c70999f81d270499508b5ecd29921df00edc7f62bacfce42d8",
+      "license": "MIT",
+      "use": "LG panel timing, lane/format and simple power sequence reference",
+      "execution": "host source reference; descriptions/parser execute on FreeRTOS CPU"
+    },
+    {
+      "file": "panel-innolux-p079zca.c",
+      "url": "https://raw.githubusercontent.com/torvalds/linux/v6.12/drivers/gpu/drm/panel/panel-innolux-p079zca.c",
+      "revision": "v6.12",
+      "sha256": "de8659bd1b0232839175e037159d44d6976d2d88beefcce7ee15521976df2cca",
+      "license": "GPL-2.0-or-later",
+      "use": "Innolux panel timing and initialization/power sequence reference",
+      "execution": "host source reference; descriptions/parser execute on FreeRTOS CPU"
+    },
+    {
+      "file": "drm_displayid.h",
+      "url": "https://raw.githubusercontent.com/torvalds/linux/v6.12/drivers/gpu/drm/drm_displayid_internal.h",
+      "revision": "v6.12",
+      "sha256": "71db4be6b00cc63a7cae3363329f0d2a8399986ced8c9314b5c8a0357d0a4509",
+      "license": "MIT",
+      "use": "DisplayID detailed timing wire layout reference",
+      "execution": "host source reference; descriptions/parser execute on FreeRTOS CPU"
+    },
+    {
+      "file": "dell-p2415q-dp",
+      "url": "https://raw.githubusercontent.com/gjasny/v4l-utils/95ad25f6a77a0a6650f5f657ac2c5046efcd04a0/utils/edid-decode/data/dell-p2415q-dp",
+      "revision": "95ad25f6a77a0a6650f5f657ac2c5046efcd04a0",
+      "sha256": "6133218bd8f06545c9f85856c54616245d6fc5571262de43ad38b28421825db4",
+      "license": "MIT (edid-decode LICENSE; EDID device facts retained in cache)",
+      "use": "public captured EDID host parser fixture",
+      "execution": "host tests only"
+    },
+    {
+      "file": "dell-p2415q-hdmi2.0",
+      "url": "https://raw.githubusercontent.com/gjasny/v4l-utils/95ad25f6a77a0a6650f5f657ac2c5046efcd04a0/utils/edid-decode/data/dell-p2415q-hdmi2.0",
+      "revision": "95ad25f6a77a0a6650f5f657ac2c5046efcd04a0",
+      "sha256": "453a163d9a660ba34c8f723c5bad87b3404c73278140dc4db7945eacfe8d1535",
+      "license": "MIT (edid-decode LICENSE; EDID device facts retained in cache)",
+      "use": "public captured EDID host parser fixture",
+      "execution": "host tests only"
+    },
+    {
+      "file": "acer-xv273k-dp1",
+      "url": "https://raw.githubusercontent.com/gjasny/v4l-utils/95ad25f6a77a0a6650f5f657ac2c5046efcd04a0/utils/edid-decode/data/acer-xv273k-dp1",
+      "revision": "95ad25f6a77a0a6650f5f657ac2c5046efcd04a0",
+      "sha256": "3f3c426a1145db776c0e37c26fdf99917cbd839dba5f685ec417766f9e8a72ef",
+      "license": "MIT (edid-decode LICENSE; EDID device facts retained in cache)",
+      "use": "public captured EDID host parser fixture",
+      "execution": "host tests only"
+    },
+    {
+      "file": "apple-xdr-6k",
+      "url": "https://raw.githubusercontent.com/gjasny/v4l-utils/95ad25f6a77a0a6650f5f657ac2c5046efcd04a0/utils/edid-decode/data/apple-xdr-6k",
+      "revision": "95ad25f6a77a0a6650f5f657ac2c5046efcd04a0",
+      "sha256": "40fa560f86381683a8f1f59c43d51bf28506941a09bb8e20afaeb10246412810",
+      "license": "MIT (edid-decode LICENSE; EDID device facts retained in cache)",
+      "use": "public captured EDID host parser fixture",
+      "execution": "host tests only"
+    },
+    {
+      "file": "LICENSE",
+      "url": "https://raw.githubusercontent.com/gjasny/v4l-utils/95ad25f6a77a0a6650f5f657ac2c5046efcd04a0/utils/edid-decode/LICENSE",
+      "revision": "95ad25f6a77a0a6650f5f657ac2c5046efcd04a0",
+      "sha256": "b7ffd10a74300aeedee96388da0954f717668bd39d3b00c8b46d3cf6f770f409",
+      "license": "MIT (edid-decode LICENSE; EDID device facts retained in cache)",
+      "use": "fixture collection license",
+      "execution": "host tests only"
+    },
+    {
+      "file": "parse-displayid-block.cpp",
+      "url": "https://raw.githubusercontent.com/gjasny/v4l-utils/95ad25f6a77a0a6650f5f657ac2c5046efcd04a0/utils/edid-decode/parse-displayid-block.cpp",
+      "revision": "95ad25f6a77a0a6650f5f657ac2c5046efcd04a0",
+      "sha256": "ffd93405cda81af2b61a67dd653cedbc104ece5669e4ee790297ca62ab2a9584",
+      "license": "MIT",
+      "use": "DisplayID I/VII interlace flag and padding interpretation reference",
+      "execution": "host source reference"
+    },
+    {
+      "file": "drm_edid.c",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/gpu/drm/drm_edid.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "ea6f982b723a634383472ada84072554f16acdf1d77af57192ce6604d8be941f",
+      "license": "MIT",
+      "use": "CTA exact timing table and EDID/DisplayID detailed timing interpretation",
+      "execution": "host source reference; adapted parser runs on FreeRTOS CPU"
+    }
+  ],
+  "edid_fixtures": [
+    "dell-p2415q-dp",
+    "dell-p2415q-hdmi2.0",
+    "acer-xv273k-dp1",
+    "apple-xdr-6k"
+  ]
+}

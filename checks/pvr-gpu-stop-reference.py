@@ -158,7 +158,9 @@ def main():
     reset=upstream[-1]; assert reset['offset']==0x100 and reset['kind']==1 and reset['width']==8
     hard=json.loads((e/'trace-2.json').read_text())
     first=json.loads((e/'trace-0.json').read_text())['plan']
-    assert hard['plan']==first+[reset],(hard['plan'][-1],reset)
+    fence=dict(kind=0,offset=0x100,width=8,mask=0,value=0)
+    assert hard['plan']==first+[reset,fence],(hard['plan'][-2:],reset)
+    assert hard['accesses'][-1]['write']==0 and hard['accesses'][-1]['offset']==0x100
     results.append(dict(unacknowledged=True,reset_value=reset['value'],native_operations=len(hard['plan'])))
     (e/'comparison.json').write_text(json.dumps(dict(result='pass',sources=hashes,compiler_command=command,
         variants=results,command_comparison='Original functions assign defined fields; unused reference bytes zeroed in capture shim.',

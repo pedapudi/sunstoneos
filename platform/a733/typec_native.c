@@ -7,12 +7,12 @@
 #include "a733_mmio.h"
 #include "a733_range.h"
 #include "a733_task_context.h"
+#include "sunstone_board.h"
 #include "task.h"
 #include <stddef.h>
 #define BASE UINT32_C(0x07084000)
 #define BGR UINT32_C(0x0701019c)
 #define APBS1 UINT32_C(0x07010010)
-#define RAILS (A733_RAIL_BIT(A733_RAIL_DCDC1)|A733_RAIL_BIT(A733_RAIL_DC1SW2))
 #define SHARED (A733_CLOCK_APBS1|A733_CLOCK_REF|A733_CLOCK_OSC)
 static struct a733_typec_native *instance;
 static int same(const void *a,const void *b,size_t bytes)
@@ -110,13 +110,13 @@ static int update(struct a733_typec_native *n,uintptr_t a,uint32_t mask,uint32_t
  a733_mmio_write32_dsb_sy_both(a,v);return observed(n,a,UINT32_MAX,v);}
 static int snapshot(struct a733_typec_native *n,unsigned i)
 {
-    enum a733_rail rail=i?A733_RAIL_DC1SW2:A733_RAIL_DCDC1;
+    enum a733_rail rail=(enum a733_rail)n->wiring->supplies[i];
     if(!n->requests[i].id){enum a733_pmic_status r=a733_pmic_submit(n->config.pmic,n->clock.owner,&n->rail,rail,n->deadline,&n->requests[i]);return r==A733_PMIC_BUSY||r==A733_PMIC_PENDING?0:-1;}
     enum a733_pmic_status r=a733_pmic_result(n->config.pmic,&n->requests[i],&n->supplies[i]);
     if(r==A733_PMIC_BUSY||r==A733_PMIC_PENDING)return 0;
     struct a733_pmic_snapshot *s=&n->supplies[i];
     return r==A733_PMIC_COMPLETE&&s->rail==rail&&!s->page_before&&!s->page_after&&
-        s->chip==3&&!s->revision&&s->decoded==1&&s->enabled==1&&s->programmed_uv==3300000?1:-1;
+        s->chip==3&&!s->revision&&s->decoded==1&&s->enabled==1&&s->programmed_uv==n->wiring->supply_uv?1:-1;
 }
 static int prepare(void *p,uint64_t d)
 {
@@ -126,7 +126,8 @@ static int prepare(void *p,uint64_t d)
     switch(n->stage){
     case 0:{enum a733_clock_result x=a733_clock_acquire(n->config.clocks,n->config.electrical.owner,SHARED,A733_CLOCK_S_TWI1,d,&n->clock);
         if(x==A733_CLOCK_BUSY)return 0;if(x!=A733_CLOCK_OK)goto fault;++n->stage;break;}
-    case 1:{enum a733_rail_result x=a733_rail_acquire(n->config.rails,n->config.electrical.owner,RAILS,0,d,&n->rail);
+    case 1:{enum a733_rail_result x=a733_rail_acquire(n->config.rails,n->config.electrical.owner,
+        A733_RAIL_BIT(n->wiring->supplies[0])|A733_RAIL_BIT(n->wiring->supplies[1]),0,d,&n->rail);
         if(x==A733_RAIL_BUSY)return 0;if(x!=A733_RAIL_PENDING)goto fault;++n->stage;break;}
     case 2:{enum a733_rail_result x=a733_rail_poll(n->config.rails,&n->rail);
         if(x==A733_RAIL_BUSY||x==A733_RAIL_PENDING)return 0;if(x!=A733_RAIL_READY)goto fault;++n->stage;break;}
@@ -166,7 +167,8 @@ static int prepare(void *p,uint64_t d)
            !observed(n,BASE+0x20,0x35,0x30)||!update(n,BASE+0x14,255,n->divider)||
            !update(n,BASE+0x1c,3,0)||!update(n,BASE+0xc,0xfd,0x40))goto fault;
         a733_platform_lock_leave(n->config.locks,A733_PLATFORM_REGISTER_LOCK);n->held=0;
-        if(!before(n)||!a733_twi_init_controller(&n->bus,&n->bus_ops,n,n->divider,A733_TWI_R1,1))goto fault;
+        if(!before(n)||!a733_twi_init_controller(&n->bus,&n->bus_ops,n,n->divider,
+           (enum a733_twi_controller)n->wiring->typec_i2c_controller,1))goto fault;
         ++n->stage;break;
     case 9:r=live(n);if(r<0||!before(n))goto fault;return r;
     default:goto fault;
@@ -197,8 +199,9 @@ static int irq(void *p,unsigned *level,uint64_t d)
 {
     struct a733_typec_native *n=p;uint32_t value;
     if(!current(n)||n->held||live(n)!=1||!level)return -1;
-    enum a733_pins_result r=a733_pins_read_inputs_banked(n->config.pins,&n->pin,A733_PIN_L,1u<<9,&value,d);
-    if(r==A733_PINS_BUSY)return 0;if(r!=A733_PINS_OK)return -1;*level=!!(value&(1u<<9));return 1;
+    enum a733_pins_result r=a733_pins_read_inputs_banked(n->config.pins,&n->pin,
+        n->wiring->irq_bank,1u<<n->wiring->irq_pin,&value,d);
+    if(r==A733_PINS_BUSY)return 0;if(r!=A733_PINS_OK)return -1;*level=!!(value&(1u<<n->wiring->irq_pin));return 1;
 }
 int a733_typec_native_init(struct a733_typec_native *n,const struct a733_typec_native_config *c)
 {
@@ -216,11 +219,21 @@ int a733_typec_native_init(struct a733_typec_native *n,const struct a733_typec_n
     /* Cold GPIO input/disabled admission only; an inherited output could already
      * be sourcing a partner and must be handled by a separate recovery path. */
     for(unsigned i=0;i<4;i++)if(c->expected[i].function!=0&&c->expected[i].function!=15)return 0;
-    n->self=n;n->config=*c;n->sealed=*c;
-    const unsigned pins[]={8,9,12,13};
+    const struct sunstone_board_description *board=sunstone_board_orangepi_zero3w();
+    if(!board || board->usb_port_count!=1)return 0;
+    const struct sunstone_usb_port *w=&board->usb_ports[0];
+    /* This adapter implements the FUSB302 on S_TWI1. Another controller
+     * requires its own register provider, while GPIO routing remains data. */
+    if(w->controller!=2 || w->typec_i2c_controller!=A733_TWI_R1 || w->typec_address!=0x22 ||
+       w->vbus_active_high!=1 || w->vbus_pin>31 || w->irq_pin>31 ||
+       w->scl_pin>31 || w->sda_pin>31 || w->supplies[0]>=A733_RAIL_COUNT ||
+       w->supplies[1]>=A733_RAIL_COUNT || !w->supply_uv)return 0;
+    n->self=n;n->config=*c;n->sealed=*c;n->wiring=w;
+    const unsigned pins[]={w->vbus_pin,w->irq_pin,w->scl_pin,w->sda_pin};
+    const unsigned banks[]={w->vbus_bank,w->irq_bank,w->scl_bank,w->sda_bank};
     for(unsigned i=0;i<4;i++)n->pin_requests[i]=(struct a733_pin_request_banked){
-        .bank=A733_PIN_L,.pin=pins[i],.expected=c->expected[i],
-        .desired={i==0?1u:i==1?0u:3u,0,0},.output_value=0};
+        .bank=banks[i],.pin=pins[i],.expected=c->expected[i],
+        .desired={i==0?1u:i==1?0u:w->i2c_function,0,0},.output_value=0};
     n->bus_ops=(struct a733_twi_ops){now,bus_auth,bus_enter,bus_leave,bus_retain,bus_read,bus_write,bus_current};
     atomic_init(&n->gpio_ready,0);atomic_init(&n->command,0);atomic_init(&n->result,0);
     atomic_init(&n->output_state,0);atomic_init(&n->command_deadline,0);
@@ -263,8 +276,9 @@ int a733_typec_native_power_poll(struct a733_typec_native *n)
     }
     if(output==2&&!stop){
         uint32_t level=0;
-        enum a733_pins_result x=a733_pins_read_inputs_banked(n->config.pins,&n->pin,A733_PIN_L,1u<<9,&level,d);
-        if(x!=A733_PINS_OK||!(level&(1u<<9)))stop=1;
+        enum a733_pins_result x=a733_pins_read_inputs_banked(n->config.pins,&n->pin,
+            n->wiring->irq_bank,1u<<n->wiring->irq_pin,&level,d);
+        if(x!=A733_PINS_OK||!(level&(1u<<n->wiring->irq_pin)))stop=1;
         if(x!=A733_PINS_OK&&x!=A733_PINS_BUSY){(void)power_stop(n,t);n->power_fault=1;return -1;}
     }
     if(stop&&!power_stop(n,t))return -1;
@@ -276,7 +290,8 @@ int a733_typec_native_power_poll(struct a733_typec_native *n)
         if(desired==2&&t>=atomic_load_explicit(&n->command_deadline,memory_order_acquire)){
             if(!power_stop(n,t))return -1;desired=1;stop=1;
         }
-        enum a733_pins_result r=a733_pins_write_outputs(n->config.pins,&n->pin,A733_PIN_L,1u<<8,desired==2?1u<<8:0,d);
+        enum a733_pins_result r=a733_pins_write_outputs(n->config.pins,&n->pin,n->wiring->vbus_bank,
+            1u<<n->wiring->vbus_pin,desired==2?1u<<n->wiring->vbus_pin:0,d);
         if(r!=A733_PINS_OK){
             (void)power_stop(n,t);
             if(r!=A733_PINS_BUSY){n->power_fault=1;atomic_store_explicit(&n->result,2,memory_order_release);}

@@ -21,14 +21,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--build-only',action='store_true')
-    parser.add_argument('--cases',default='0,2,3,4,5')
+    parser.add_argument('--cases',default='0,2,3,4,5,6,7',help='Cases 6/7 reject a wrong final WB/NC block attribute')
     parser.add_argument('--resume', action='store_true', help='Resume a failed build before any mode ran')
     for name in ('freertos', 'tinyusb', 'firmware', 'qemu', 'lld'):
         parser.add_argument('--' + name, type=Path, required=True)
     args = parser.parse_args()
-    modes=[int(x) for x in args.cases.split(',')];assert modes and all(x in (0,1,2,3,4,5) for x in modes)
+    modes=[int(x) for x in args.cases.split(',')];assert modes and all(x in range(8) for x in modes)
     out = args.output.resolve()
-    if args.resume and (not out.is_dir() or any(k in json.loads((out/'results.json').read_text()) for k in ('0','1','2','3'))):
+    if args.resume and (not out.is_dir() or any(str(k) in json.loads((out/'results.json').read_text()) for k in range(8))):
         raise RuntimeError('resume requires a failed build without executed modes')
     out.mkdir(parents=True, exist_ok=args.resume)
     project, build, fixtures = out / 'project', out / 'build', out / 'fixtures'
@@ -50,9 +50,15 @@ def main():
     write(linker,text)
     platform = project / 'platform.c'
     platform_text = (ROOT / 'platform/qemu-smp/platform.c').read_text()
+    platform_text = platform_text.replace('#include "platform.h"',
+        '#include "platform.h"\n#include "a733_device_memory_layout.h"\nextern volatile unsigned gpu_render_case;')
     platform_text = platform_text.replace('uint64_t mair = 0xff00', 'uint64_t mair = 0x44ff00')
     platform_text=platform_text.replace('i < 64;','i < 512;')
-    platform_text=platform_text.replace('    // Code is read-only', '    for(unsigned i=448;i<456;++i)level2[i]=(level2[i]&~28UL)|(2UL<<2);\n    // Code is read-only')
+    platform_text=platform_text.replace('    // Code is read-only', '''    for(unsigned i=448;i<456;++i)level2[i]=(level2[i]&~28UL)|(2UL<<2);
+    // Negative cases alter one final block before either core enables MMU.
+    if(gpu_render_case==6)level2[(A733_DEVICE_WB_END-0x40000000)/A733_DEVICE_MEMORY_BLOCK-1]^=3UL<<2;
+    if(gpu_render_case==7)level2[(A733_DEVICE_NC_END-0x40000000)/A733_DEVICE_MEMORY_BLOCK-1]^=3UL<<2;
+    // Code is read-only''')
     write(platform, platform_text)
     write(project / 'CMakeLists.txt', f'''cmake_minimum_required(VERSION 3.24)
 project(gpu_render_check LANGUAGES C ASM)

@@ -40,7 +40,7 @@ CASES = {1: 'grid replay, exact sums', 2: 'grid replay, pattern sums', 3: 'grid 
          39: 'ten public close/open cycles', 40: 'two caller slots and independent sequences',
          41: 'timeout reset resumes queued peer', 42: 'decoded reset resumes queued peer',
          43: 'queued peer kick deadline survives reset', 44: 'idle refusal retains both callers',
-         45: 'reset readback mismatch retains both callers', 46: 'failed isolation retains both callers',
+         45: 'failed reset read retains both callers', 46: 'failed isolation retains both callers',
          47: 'failed restart retains queued peer', 48: 'failed restart health retains queued peer',
          49: 'session limit clips recovery deadlines',
          50: 'maximum job duration recovers an unconsumed kernel kick',
@@ -230,6 +230,7 @@ def main():
     parser.add_argument('--fixture', type=Path, help='External generic tensor/job JSON; default is an eight-job synthetic grid')
     parser.add_argument('--cases', nargs='*', type=int, choices=sorted(CASES), default=list(range(1, 25)))
     parser.add_argument('--trace', nargs='*', type=int, default=[], help='cases to run instrumented')
+    parser.add_argument('--latency', action='store_true', help='Enable latency hooks and check client receipt samples')
     for name in ('freertos', 'tinyusb', 'firmware', 'qemu', 'lld'):
         parser.add_argument('--' + name, type=Path, required=True)
     args = parser.parse_args()
@@ -269,6 +270,8 @@ def main():
         'platform/a733/gpu_queue.c', 'drivers/gpu/pvr_compute_queue.c', 'drivers/gpu/gpu_queue.c', 'drivers/gpu/gicv3_spi.c'))
     if performance:
         extra += ' \"%s\"' % (ROOT / 'drivers/gpu/pvr_gpu_clock.c')
+    if args.latency:
+        extra += ' "' + str(ROOT / 'runtime/latency.c') + '"'
     (project / 'CMakeLists.txt').write_text(f'''cmake_minimum_required(VERSION 3.24)
 project(gpu_queue_check LANGUAGES C ASM)
 add_subdirectory("{ROOT}" sunstone)
@@ -279,6 +282,7 @@ list(REMOVE_DUPLICATES sources)
 set_property(TARGET gpu-service-model PROPERTY SOURCES "${{sources}}")
 target_include_directories(gpu-service-model PRIVATE "{fixtures}" "{ROOT}/checks")
 target_compile_definitions(gpu-service-model PRIVATE SUNSTONE_GPU_NATIVE_MEMORY=1 {"SUNSTONE_A733_OS_PERF=1" if performance else "SUNSTONE_A733_OS_CPU_RETURN=1" if returning else "SUNSTONE_A733_OS_GPU_RECOVERY_TEST=1" if recovery else ""})
+{'target_compile_definitions(gpu-service-model PRIVATE SUNSTONE_LATENCY=1)' if args.latency else ''}
 get_target_property(options gpu-service-model LINK_OPTIONS)
 list(FILTER options EXCLUDE REGEX "-Wl,-T,")
 list(APPEND options "-Wl,-T,{linker}" -Wl,--defsym=__device_pool_size=2097152

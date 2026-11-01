@@ -4,6 +4,7 @@
 #include "pvr_compute_service.h"
 #include "pvr_compute_queue.h"
 #include "a733_gpu_graphics_memory.h"
+#include "sunstone_latency.h"
 #ifdef SUNSTONE_GPU_LIFECYCLE
 #include "a733_gpu_disposal.h"
 #endif
@@ -147,6 +148,7 @@ static int interrupt_rearm(struct pvr_gpu_service *s)
 int pvr_gpu_service_interrupt(struct pvr_gpu_service *s, BaseType_t *woken)
 {
     if (!s || s != instance || !s->initialized || !s->config.irq.mask || !woken) return 0;
+    SS_LATENCY_EVENT_BEGIN(SS_LAT_GPU);
     UBaseType_t saved = taskENTER_CRITICAL_FROM_ISR();
     if (!s->irq_masked && !s->irq_fault) {
         s->irq_masked = 1;

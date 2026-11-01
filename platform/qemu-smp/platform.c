@@ -119,9 +119,11 @@ void platform_init(void) {
     uint64_t end = counter() + frequency();
     while (__atomic_load_n(&cpu_online, __ATOMIC_ACQUIRE) != configNUMBER_OF_CORES - 1)
         configASSERT(counter() < end);
-    // Fixtures that link the local A733 pools prepare them here, as the
-    // native platform does, before the scheduler starts.
+    // Local-layout images prepare their pools here. Extended-layout fixtures
+    // prepare them explicitly after their profile admission, as native boot does.
+#if !defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY)
     configASSERT(a733_memory_local_prepare());
+#endif
 }
 void platform_secondary(void) {
     local_init();

@@ -39,7 +39,7 @@ def main():
  selected=['apps/hdmi/framebuffer.c','apps/hdmi/output.c','platform/a733/hdmi_native.c',
   'drivers/display/a733_display_framebuffer.c','drivers/power/a733_power_domains.c','drivers/power/a733_power_domains_native.c',
   'drivers/display/a733_display_engine.c','drivers/display/a733_tcon_lcd.c','drivers/display/a733_dsi_video.c','drivers/display/a733_dsi_phy.c',
-  'drivers/display/a733_hdmi.c','drivers/display/a733_hdmi_phy.c','drivers/display/a733_tcon_tv.c',
+  'drivers/display/a733_hdmi.c','drivers/display/sunstone_edid.c','drivers/display/a733_hdmi_phy.c','drivers/display/a733_tcon_tv.c',
   'drivers/clock/a733_clock_leases.c','drivers/clock/a733_media_clock.c','drivers/clock/a733_media_clock_native.c',
   'drivers/iommu/a733_iommu.c','drivers/power/a733_rail_leases.c','drivers/power/a733_pmic.c','drivers/power/a733_pmic_native.c',
   'drivers/pinctrl/a733_pins.c','drivers/pinctrl/a733_pin_tables.c','drivers/pinctrl/a733_pins_native.c',

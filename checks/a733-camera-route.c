@@ -55,7 +55,7 @@ static const struct a733_route_ops ops={now,admit,publish,rd,wr,stop,drain,relea
 /* Further sizes and byte orders after the VGA images. */
 static const struct a733_camera_format formats[]={
     {320,240,A733_CAMERA_UYVY},{1280,720,A733_CAMERA_YUYV},
-    {2592,1944,A733_CAMERA_UYVY},{176,144,A733_CAMERA_YUYV}
+    {4224,4224,A733_CAMERA_UYVY},{2592,1944,A733_CAMERA_UYVY},{176,144,A733_CAMERA_YUYV}
 };
 #define FORMATS (sizeof(formats)/sizeof(formats[0]))
 static void setup_format(struct a733_camera_route *s,struct model *m,unsigned parser,
@@ -138,7 +138,7 @@ int main(int argc,char **argv){
     for(unsigned i=0;i<FORMATS;i++)for(unsigned port=0;port<2;port++)receiver_format(f,port,1,&formats[i]);
     /* Invalid sizes and orders are refused before any callback. */
     static const struct a733_camera_format bad[]={
-        {0,480,0},{648,480,0},{2608,480,0},{640,481,0},{640,1946,0},{640,480,2}
+        {0,480,0},{648,480,0},{4240,480,0},{640,481,0},{640,4226,0},{640,480,2}
     };
     for(unsigned i=0;i<sizeof(bad)/sizeof(bad[0]);i++){
         struct a733_camera_route r={0};struct a733_csi_receiver v={0};

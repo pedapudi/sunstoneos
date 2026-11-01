@@ -4,7 +4,9 @@ This application requires the GPU and adds two vectors of 65 unsigned 32-bit
 words through the SunstoneOS application interface. The default build submits
 one job. Defining `QUEUE_ADD_JOBS` selects one to eight serial jobs on one
 context and program. Each job finishes and passes verification before the next
-submission. The input values exercise unsigned wraparound, and the third
+submission. A parked submission waits up to 500 scheduler ticks, yielding one
+tick between attempts while the session remains live. Other submission results
+stop the application. The input values exercise unsigned wraparound, and the third
 workgroup uses one of its 32 lanes.
 
 Every job rotates the input vectors by one element. The application verifies
@@ -35,6 +37,11 @@ Reproduce the descriptor with `apps/gpu-program/compile.py compile --profile 3
 Mesa source and build directories, the Ninja executable and an output directory.
 The output's `program.h` must match this application's descriptor.
 
+A submission failure records `0x400 | (sequence << 4) | result` in the retained
+application fault. The low four bits identify the public queue result; the next
+four bits identify the job. This distinguishes a parked device from a malformed
+job, a busy slot or a lost service.
+
 The result is 48 bytes of little-endian words:
 
 | Byte offset | Field | Successful eight-job result |
@@ -60,10 +67,12 @@ result-capture integration, then the coordinator's `tools/dev-run.py` path.
 This application adds no launcher or physical launch authority.
 
 `checks/queue-add.py --build DIR` compiles the default and eight-job variants
-for the host and AArch64, then runs 28 checks. Its sanitizer fixtures check the
+for the host and AArch64, then runs 54 checks. Its sanitizer fixtures check the
 lease, argument and dispatch records, model copied output and inject refusals,
 timeout, corruption, stale output and completion faults. Later-job injections
 check the exact number of submissions, waits and closes before failure.
+Parked cases cover readiness after three ticks, a persistent park, session
+revocation, refusal after parking and a deadline across tick-counter wrap.
 Compile-time refusals cover job counts zero and nine. `checks/gpu-queue-program.py --build DIR`
 checks descriptor reproduction, malformed metadata and code bounds. These host
 checks establish application behavior and descriptor format. Physical shader

@@ -1,4 +1,6 @@
 #include "dsi.h"
+#include "sunstone_board.h"
+#include "a733_display_modes.h"
 #include "a733_media_clock_native.h"
 #include "a733_memory_uncached.h"
 #include "a733_storage_digest.h"
@@ -9,6 +11,41 @@
  * within this when each poll takes tens of microseconds. */
 #define DSI_PLL_YIELD_US 5000u
 struct dsi_application dsi;
+/* Private immutable descriptions bind the authenticated accessory selection to
+ * the board route. The board record itself has no fitted/default panel. */
+static struct sunstone_display_port selected_port;
+static struct sunstone_panel selected_panel;
+static struct sunstone_display_mode selected_mode;
+static struct sunstone_panel_step selected_steps[DSI_STEPS];
+static int bind_selected_panel(void)
+{
+ const struct sunstone_board_description *b=sunstone_board_orangepi_zero3w();
+ const struct sunstone_display_port *port=0;
+ for(size_t i=0;i<b->display_port_count;++i)
+  if(b->display_ports[i].connector==SUNSTONE_DISPLAY_DSI&&b->display_ports[i].controller==1)port=&b->display_ports[i];
+ if(!port)return 0;
+ const uint32_t *v=dsi.session.values;
+ selected_mode=(struct sunstone_display_mode){v[0],v[3],v[4],v[7],v[5],v[6],v[10],v[8],v[9],0};
+ size_t prepare=0;
+ for(unsigned i=0;i<v[DSI_STEP_COUNT];++i){
+  const struct dsi_step *in=&dsi.session.steps[i];struct sunstone_panel_step *out=&selected_steps[i];
+  if(!in->phase)++prepare;
+  if(in->kind==DSI_STEP_DELAY){out->kind=SUNSTONE_PANEL_DELAY_US;out->value=in->value;}
+  else if(in->kind==DSI_STEP_GPIO){
+   static const char *const resources[]={0,"enable","reset","backlight"};
+   out->kind=SUNSTONE_PANEL_GPIO;out->resource=resources[in->role];out->value=in->value;
+  }else{out->kind=SUNSTONE_PANEL_PACKET;out->value=in->type;out->payload=dsi.session.payload+in->offset;out->bytes=in->bytes;}
+ }
+ selected_panel=(struct sunstone_panel){.compatible="session,dsi-panel",.id=dsi.session.panel_id,
+  .modes=&selected_mode,.mode_count=1,.lanes=v[DSI_LANES],
+  .flags=(v[DSI_MODE]==A733_DSI_BURST?SUNSTONE_PANEL_BURST:SUNSTONE_PANEL_SYNC_PULSE)|SUNSTONE_PANEL_LP_COMMANDS,
+  .format=v[DSI_FORMAT]==A733_DSI_RGB888?SUNSTONE_PANEL_RGB888:SUNSTONE_PANEL_RGB666_LOOSE,
+  .prepare=selected_steps,.prepare_count=prepare,.backlight="backlight",
+  .enable=selected_steps+prepare,.enable_count=v[DSI_STEP_COUNT]-prepare};
+ selected_port=*port;selected_port.panel=&selected_panel;
+ struct a733_dsi_video_timing timing;
+ return a733_dsi_panel_timing(&selected_port,&selected_mode,v[DSI_HS],v[DSI_LS],&timing)==SUNSTONE_MODE_OK;
+}
 int dsi_live(void)
 {return dsi.admitted&&board_live(NULL)&&!atomic_load_explicit(&dsi.failed,memory_order_acquire)&&
  !atomic_load_explicit(&providers.shared.clocks.failed,memory_order_acquire)&&
@@ -84,7 +121,7 @@ static int publish(void *v,uint64_t token,const void *p,size_t n,uint64_t deadli
 static int scanout_auth(void *v,const struct a733_display_native_config *c,uint64_t deadline)
 {return v==&dsi&&c==&dsi.native.config&&deadline==dsi.deadline&&authority()&&
  c->media==&dsi.media&&c->pll==&dsi.pll&&c->iommu==&dsi.iommu&&c->pool==dsi.pool&&
- c->request.owner==dsi.session.owner&&c->request.panel_id==dsi.session.panel_id&&c->request.frame.mapped_bytes==dsi_bank_bytes(&dsi.session)?1:-1;}
+ c->port==&selected_port&&c->request.owner==dsi.session.owner&&c->request.panel_id==dsi.session.panel_id&&c->request.frame.mapped_bytes==dsi_bank_bytes(&dsi.session)?1:-1;}
 static int command_auth(void *v,unsigned controller,unsigned lanes,uint64_t lease)
 {return v==&dsi&&controller==1&&lanes==4&&lease==dsi.native.binding.resources.id&&authority()&&
  dsi.native.binding.scanout.phase==DISPLAY_PREPARE_PANEL&&dsi.native.binding.scanout.phy.state==A733_DSI_PHY_READY;}
@@ -201,6 +238,7 @@ static int step(void)
  const uint32_t *v=dsi.session.values;
  switch(dsi.stage){
  case 0:{
+ if(!selected_port.name&&!bind_selected_panel())return -1;
  if(dsi.session.version==2){
   if(!dsi.pool){if(!reserve_bank())return -1;
    dsi.input.bank=dsi.frame_extent.cpu;dsi.input.bytes=dsi_frame_bytes(&dsi.session);dsi.input.deadline=dsi.deadline;
@@ -226,7 +264,7 @@ static int step(void)
  case 5:{int r=a733_iommu_poll(&dsi.iommu);if(!r)return 0;if(r!=1)return -1;
  struct display_request request;if(!dsi_request(&dsi.session,&request,0x10000000,dsi.frame_extent.cpu))return -1;
  struct a733_display_native_config c={.media=&dsi.media,.pll=&dsi.pll,.iommu=&dsi.iommu,.pool=dsi.pool,.frame=dsi.frame,.tables=dsi.tables,
- .replay_frame_bytes=dsi.session.version==2?dsi_frame_bytes(&dsi.session):0,.request=request,.locks=&providers.shared.locks,.task=dsi.handle,.context=&dsi,.recovery_generation=dsi.session.recovery_generation,.now_us=now,.authorize=scanout_auth,.panel=panel};
+ .port=&selected_port,.replay_frame_bytes=dsi.session.version==2?dsi_frame_bytes(&dsi.session):0,.request=request,.locks=&providers.shared.locks,.task=dsi.handle,.context=&dsi,.recovery_generation=dsi.session.recovery_generation,.now_us=now,.authorize=scanout_auth,.panel=panel};
  if(!a733_display_native_init(&dsi.native,&c)||!a733_display_native_prepare(&dsi.native,dsi.deadline))return -1;++dsi.stage;return 0;}
  case 6:{enum display_scanout_state r=a733_display_native_poll(&dsi.native);if(r==DISPLAY_SCANOUT_PENDING)return 0;if(r!=DISPLAY_SCANOUT_READY||!a733_display_native_request(&dsi.native,DISPLAY_SCANOUT_START,dsi.deadline))return -1;++dsi.stage;return 0;}
  case 7:{enum display_scanout_state r=a733_display_native_poll(&dsi.native);if(r==DISPLAY_SCANOUT_PENDING)return 0;if(r!=DISPLAY_SCANOUT_ACTIVE)return -1;++dsi.stage;return 0;}
