@@ -263,17 +263,20 @@ static enum dma_service_result retire(struct dma_service *s,const struct dma_ser
      * Registered senders hold a reservation across their queue publication. */
     s->retirement_client=m->client;s->retirement_ticket=m->ticket;
     atomic_store_explicit(&s->activation_state,SERVICE_RETIRING,memory_order_release);
+    result=DMA_SERVICE_OK;
+done:
+    taskEXIT_CRITICAL();
+    if(result!=DMA_SERVICE_OK)return result;
+    /* The closed admission and synchronized ISR prevent further rearming.
+     * Device completion waits must not hold the scheduler's global locks. */
     if(s->retirement_mask(s->retirement_cookie)==1){
         s->irq_armed=0;
         atomic_store_explicit(&s->irq_pending,0,memory_order_release);
-        result=DMA_SERVICE_OK;
     }else{
         s->irq_retained=1;
         atomic_store_explicit(&s->activation_state,SERVICE_RETAINED,memory_order_release);
         result=DMA_SERVICE_FAULT;
     }
-done:
-    taskEXIT_CRITICAL();
     return result;
 }
 static enum dma_service_result execute(struct dma_service *s,const struct dma_service_message *m,

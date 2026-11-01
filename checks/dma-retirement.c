@@ -9,6 +9,10 @@ static uint64_t other_ticket;
 static int retirement_mask(void *cookie)
 {
     configASSERT(cookie==&mask_calls);privileged();
+    uint64_t pmr;__asm__ volatile("mrs %0,ICC_PMR_EL1":"=r"(pmr));
+    configASSERT(pmr>portMAX_API_PRIORITY_MASK);
+    /* Model delayed disable completion without retaining scheduler locks. */
+    vTaskDelay(2);
     __atomic_fetch_add(&mask_calls,1,__ATOMIC_RELEASE);
     /* A late handler must not republish a notification during retirement. */
     BaseType_t woken=pdFALSE;

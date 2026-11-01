@@ -184,8 +184,9 @@ int dma_service_bind(struct dma_service *, unsigned slot, TaskHandle_t, uint32_t
  * the service to tick polling; channel state and buffers are unaffected. */
 int dma_service_bind_irq(struct dma_service *, const struct dma_service_irq *);
 /* Optional trusted boot setup, after IRQ binding and before scheduling. mask
- * runs once on accepted RETIRE, on the worker inside its critical section. It
- * must mask and verify the SPI within a bounded deadline; exactly 1 succeeds.
+ * runs once on accepted RETIRE, on the worker after admission closes and the
+ * IRQ notifier is synchronized. No kernel critical section is held while it
+ * masks and verifies the SPI within a bounded deadline; exactly 1 succeeds.
  * RETIRE requires every channel CLOSED, all results collected, and no queued
  * work or other pending client. Refusal leaves the running service unchanged.
  * A failed mask retains the stopped service and never acknowledges retirement.
