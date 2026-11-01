@@ -36,9 +36,14 @@ prints its JSON path. `--no-wait` prints the future result path immediately.
 `--port 3-1` or `--port 3-3` fixes the target. `any` selects the first eligible
 board, respecting submission order among entries eligible for that board.
 
-An existing `--expect` file requires an exact byte match. Other expectation text
-requires a substring in the UTF-8 output. The queue freezes this distinction at
-submission. `--input FILE` supplies each manifest input in order. Without an
+An existing `--expect` file requires an exact byte match, unless it declares
+`schema: sunstone-board-expect-u32-v1`. That JSON format has a `words` array
+covering the entire little-endian 32-bit payload. Each entry is either an exact
+unsigned word or an inclusive `{"min": 0, "max": 199999}` range for a measured
+hardware duration. Missing words, extra bytes and malformed ranges are refused.
+The runner validates both original files and frozen queue specifications before
+device access. Other expectation text requires a substring in the UTF-8 output.
+The queue freezes the expectation at submission. `--input FILE` supplies each manifest input in order. Without an
 input argument, hello-compute receives `SunstoneOS board control` followed by a
 newline. Its result is the little-endian Adler-32 checksum, a zero reserved
 word and the input length, packed as `<IIQ`.

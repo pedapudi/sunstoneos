@@ -462,8 +462,58 @@ def expectation(value):
         return None
     path = Path(value)
     if path.is_file():
-        return {'mode': 'bytes', 'hex': path.read_bytes().hex()}
+        raw = path.read_bytes()
+        try:
+            spec = json.loads(raw)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            spec = None
+        if isinstance(spec, dict) and isinstance(spec.get('schema'), str) and spec['schema'].startswith('sunstone-board-expect-'):
+            require(set(spec) == {'schema', 'words'} and spec['schema'] == 'sunstone-board-expect-u32-v1',
+                    'Unknown binary expectation schema.')
+            return validate_expectation({'mode': 'u32le', 'words': spec['words']})
+        return {'mode': 'bytes', 'hex': raw.hex()}
     return {'mode': 'text', 'text': value}
+
+
+def validate_expectation(expected):
+    """Validate a file-derived or frozen queue expectation before device access."""
+    require(isinstance(expected, dict), 'Invalid frozen expectation.')
+    mode = expected.get('mode')
+    if mode == 'bytes':
+        require(set(expected) == {'mode', 'hex'} and isinstance(expected['hex'], str),
+                'Invalid exact-byte expectation.')
+        bytes.fromhex(expected['hex'])
+    elif mode == 'text':
+        require(set(expected) == {'mode', 'text'} and isinstance(expected['text'], str),
+                'Invalid text expectation.')
+    else:
+        require(mode == 'u32le' and set(expected) == {'mode', 'words'},
+                'Unknown frozen expectation mode.')
+        words = expected['words']
+        require(isinstance(words, list) and 1 <= len(words) <= 16384,
+                'Binary expectation must name every 32-bit word.')
+        for word in words:
+            require(type(word) is int and 0 <= word <= 0xffffffff or
+                    isinstance(word, dict) and set(word) == {'min', 'max'} and
+                    all(type(word[k]) is int for k in ('min', 'max')) and
+                    0 <= word['min'] <= word['max'] <= 0xffffffff,
+                    'Invalid fixed word or inclusive range in binary expectation.')
+    return expected
+
+
+def matches_expectation(expected, payload):
+    """Compare every binary field while allowing declared hardware timings."""
+    if expected['mode'] == 'bytes':
+        return payload == bytes.fromhex(expected['hex'])
+    if expected['mode'] == 'text':
+        return expected['text'] in payload.decode(errors='replace')
+    require(expected['mode'] == 'u32le', 'Unknown frozen expectation mode.')
+    words = expected['words']
+    if len(payload) != 4 * len(words):
+        return False
+    actual = struct.unpack('<' + 'I' * len(words), payload)
+    return all(got == want if type(want) is int else want['min'] <= got <= want['max']
+               for got, want in zip(actual, words))
 
 
 def port_idle(port):
@@ -553,7 +603,7 @@ def run_image(args, backend=Live):
             verify_references(json.loads(args.reference_inventory.read_text()))
         info = images.inspect(frozen, args.kind, descriptor,args.host_tree)
         images.policy(info, args)
-        expected = json.loads(args.expect_spec.read_text()) if args.expect_spec else expectation(args.expect)
+        expected = validate_expectation(json.loads(args.expect_spec.read_text())) if args.expect_spec else expectation(args.expect)
         if expected is not None:
             save(evidence/'expect.json', expected)
         owner = backend(args, evidence, result)
@@ -575,7 +625,7 @@ def run_image(args, backend=Live):
                     result['output_sha256'] = hashlib.sha256(payload).hexdigest()
                     matched = captured['valid']
                     if expected:
-                        matched &= payload == bytes.fromhex(expected['hex']) if expected['mode'] == 'bytes' else expected['text'] in payload.decode(errors='replace')
+                        matched &= matches_expectation(expected, payload)
                     if not matched:
                         raise Mismatch('Returned result differs from expectation.')
                 else:
@@ -869,7 +919,7 @@ def run_options(parser, submit=False):
     parser.add_argument('image', type=Path)
     parser.add_argument('--port', choices=('any',*PORTS) if submit else PORTS, required=True)
     parser.add_argument('--kind', choices=('cpu-return','gpu-return','npu','probe'), default='cpu-return', required=submit)
-    parser.add_argument('--expect', required=submit, help='Existing file: exact bytes; otherwise UTF-8 substring.')
+    parser.add_argument('--expect', required=submit, help='File: exact bytes or sunstone-board-expect-u32-v1 JSON; otherwise UTF-8 substring.')
     parser.add_argument('--approved-by', choices=('coordinator',))
     parser.add_argument('--storage-write', action='store_true')
     parser.add_argument('--descriptor', type=Path, help='Hash-bound image metadata; defaults to IMAGE.board.json.')
