@@ -60,7 +60,7 @@ def compatibility(a, historical, record, profile, evidence, require):
         evidence(item)
 
 
-def validate(a, data, record, image_hash, raw, profile, grant, evidence, require, Elf):
+def validate(a, data, record, image_hash, raw, profile, grant, evidence, require, Elf, *, input_reservation="input_ddr"):
     require(a.get('schema') in UNDER_TEST_SCHEMAS and a.get('execution_profile') == 'os-cpu-return-v1' and
             a.get('status') == 'under-test' and a.get('reviewed') is True and 'passed' not in a and
             a.get('identity') == record['identity'] and a.get('port') == record['port'] and
@@ -81,7 +81,7 @@ def validate(a, data, record, image_hash, raw, profile, grant, evidence, require
     final_review = json.loads(evidence(record.get('normal_return_review')))
     require(final_review.get('cpu_clock_approval') == record.get('cpu_clock_approval') and
             final_review.get('session_template_sha256') == hashlib.sha256(raw).hexdigest() and
-            a.get('entry_continuity') == {k: record[k] for k in ('ddr', 'platform', 'mimus_ddr')},
+            a.get('entry_continuity') == {k: record[k] for k in ('ddr', 'platform', input_reservation)},
             'CPU return final review or entry continuity differs.')
     expected = {'version': 1, 'workers': 8, 'owner_core': 6, 'core_mask': 255,
                 'owner_priority': 3, 'a55_priority': 2, 'a76_priority': 3}

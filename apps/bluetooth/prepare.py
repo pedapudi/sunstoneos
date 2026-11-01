@@ -51,7 +51,7 @@ def profile_check(data, session, *, workloads=(2,), model_pin=None):
     return spans
 
 
-def bluetooth_admission(record, profile, session, manifest, image_hash, cache, frozen=False):
+def bluetooth_admission(record, profile, session, manifest, image_hash, cache, frozen=False, *, application_admission=None):
     require(manifest.get('target') == 'sunstone-a733-bluetooth' and manifest.get('execution_profile') == 'bluetooth-supervised-v1' and manifest.get('final_elf') == image_hash, 'Actual tested Bluetooth image manifest required.')
     require(record.get('radio_ddr') is not None, 'Complete retained profile/firmware DDR reservation required.')
     board.session_check(session)
@@ -84,28 +84,8 @@ def bluetooth_admission(record, profile, session, manifest, image_hash, cache, f
         require(hashlib.sha256(cache[item['path']]).hexdigest()==item['sha256'] and
                 bytes.fromhex(item['sha256'])==profile[672:704],'Scheduling authority evidence differs.')
     if len(profile)==832:
-        def evidence(item):
-            require(isinstance(item,dict) and set(item)=={'path','sha256'} and Path(item['path']).is_absolute(),'Invalid recognition evidence reference.')
-            if item['path'] not in cache:
-                require(not frozen,'Recognition input missing from frozen bundle.')
-                cache[item['path']]=Path(item['path']).read_bytes()
-            data=cache[item['path']]
-            require(hashlib.sha256(data).hexdigest()==item['sha256'],'Recognition evidence/model changed.')
-            return data
-        ddr=json.loads(evidence(record.get('bluetooth_mimus_ddr')))
-        require(ddr.get('schema')=='a733-ddr-reservation-v1' and ddr.get('identity')==record.get('identity') and
-                ddr.get('port')==record.get('port') and ddr.get('image_sha256')==image_hash and
-                all(ddr.get(k) is True for k in ('exclusive','published_cache_disabled','remote_writers_excluded')) and
-                ddr.get('ranges')==[[0x44000000,0x45000000],[0x46000000,0x47000000]] and ddr.get('evidence'),
-                'Exclusive model and recognition arena DDR reservation required.')
-        for ref in ddr['evidence']:evidence(ref)
-        models=record.get('bluetooth_models')
-        require(isinstance(models,list) and len(models)==2,'Exactly two unchanged Mimus assets required.')
-        for index,(item,pin) in enumerate(zip(models,model_pin['models'])):
-            require(set(item)=={'path','sha256','address'} and item['address']==0x44000000+index*0x800000 and
-                    item['sha256']==pin['sha256'],'Model address or unchanged weight identity differs.')
-            data=evidence({k:item[k] for k in ('path','sha256')})
-            require(len(data)==pin['bytes'],'Model extent differs from admitted profile.')
+        require(application_admission is not None, 'Application profile admission callback required.')
+        application_admission(record, profile, manifest, image_hash, cache, frozen)
     return spans
 
 
@@ -139,14 +119,14 @@ def build_launcher(output, clang, lld, execute=None):
     require(0 < (output / 'launch.bin').stat().st_size <= 0xc00, 'SRAM launcher extent differs.')
 
 
-def prepare(image, manifest, admission, template, profile, payloads, output, clang, lld):
+def prepare(image, manifest, admission, template, profile, payloads, output, clang, lld, *, application_admission=None):
     image, manifest, admission, template, profile, output = map(Path, (image, manifest, admission, template, profile, output))
     image_data, manifest_data, admission_data, template_data, profile_data = [p.read_bytes() for p in (image, manifest, admission, template, profile)]
     image_hash = hashlib.sha256(image_data).hexdigest()
     proof = json.loads(manifest_data)
     record = json.loads(admission_data)
     cache = board.validate_admission(record, image_hash, hashlib.sha256(template_data).hexdigest())
-    spans = bluetooth_admission(record, profile_data, template_data, proof, image_hash, cache)
+    spans = bluetooth_admission(record, profile_data, template_data, proof, image_hash, cache, application_admission=application_admission)
     snapshots = [Path(item['path']).read_bytes() for item in payloads]
     require([(int(item['address']), len(data)) for item, data in zip(payloads, snapshots)] == spans, 'Exactly four profile firmware spans are required.')
     require(payloads == record.get('payloads') and all(hashlib.sha256(data).hexdigest() == item['sha256'] for item, data in zip(payloads, snapshots)), 'Firmware differs from reviewed admission.')
@@ -179,10 +159,10 @@ def prepare(image, manifest, admission, template, profile, payloads, output, cla
               'launcher_sha256': digest(output / 'launch.bin'), 'backup_sizes': {n: s for n, a, s in board.base.REGIONS},
               'files': {p.name: digest(p) for p in output.iterdir() if p.is_file()}}
     (output / 'prepared.json').write_text(json.dumps(result, indent=2) + '\n')
-    return validate_bundle(output)
+    return validate_bundle(output, application_admission=application_admission)
 
 
-def validate_bundle(bundle):
+def validate_bundle(bundle, *, application_admission=None):
     bundle = Path(bundle);metadata = (bundle / 'prepared.json').read_bytes();p = json.loads(metadata)
     require(p.get('schema') == SCHEMA and p.get('physical_access') is False, 'Unsupported Bluetooth bundle.')
     for name, expected in p['files'].items():
@@ -196,7 +176,7 @@ def validate_bundle(bundle):
     admitted = json.loads((bundle / 'admission.json').read_text())
     board.validate_admission(admitted, p['image_sha256'], digest(bundle / 'session-template.bin'), cache, True)
     spans = bluetooth_admission(admitted, (bundle / 'profile.bin').read_bytes(), raw,
-        json.loads((bundle / 'image-manifest.json').read_text()), p['image_sha256'], cache, True)
+        json.loads((bundle / 'image-manifest.json').read_text()), p['image_sha256'], cache, True, application_admission=application_admission)
     segments, address, identity = board.base.image_parts(bundle / 'image.elf')
     require(identity.hex() == p['build_id'], 'Build identity differs.')
     for name, data in zip(('request.bin', 'contract.bin'), board.request_bytes(address, identity, p['epoch'], p['generation'], p['lease'], raw)):

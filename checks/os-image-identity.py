@@ -6,7 +6,7 @@ exception level, cache state, session validation, cache publication, the
 headset profile rules and the four SID words are modeled; shared CPU startup
 does not run. The build's link check names its options:
 
-- every build publishes the three recognition inputs, and a second call
+- every build publishes its manifest INPUT regions, and a second call
   publishes nothing;
 - supervised recorded audio admits workloads 0, 2 and 4; microphone and
   resident builds admit 0 and 4;
@@ -46,13 +46,23 @@ def main():
     image = args.build / 'sunstone-a733-os.elf'
     config = json.loads((args.build / 'os-image/link-check.json').read_text())
     radio, headset = config.get('radio', False), config.get('headset', False)
-    text = (args.build / 'mimus-board-application/assets.h').read_text()
-    addresses = [int(v, 0) for v in re.search(r'mimus_asset_address\[3\]=\{([^}]*)\}', text).group(1).split(',')]
-    sizes = [int(v, 0) for v in re.search(r'mimus_asset_bytes\[3\]=\{([^}]*)\}', text).group(1).split(',')]
-    assets = [(a, n, DEADLINE) for a, n in zip(addresses, sizes)]
     with image.open('rb') as source:
         elf = ELFFile(source)
         segments = [(s['p_vaddr'], s.data()) for s in elf.iter_segments() if s['p_type'] == 'PT_LOAD']
+        # Application inputs are declared by the linked manifest, including
+        # images with no application section.
+        section = elf.get_section_by_name('sunstone_manifest')
+        assets = []
+        if section is not None:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location('manifest', Path(__file__).resolve().parents[1] / 'tools/sunstone-manifest.py')
+            manifest_tool = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(manifest_tool)
+            manifests = manifest_tool.unpack(section.data())
+            for manifest in manifests:
+                assets.extend((region['address'], region['bytes'], DEADLINE)
+                              for region in manifest['regions'] if region['kind'] == 1)
+
         symbols = {}
         for s in elf.get_section_by_name('.symtab').iter_symbols():
             if s['st_value'] and s['st_info']['type'] == 'STT_FUNC':

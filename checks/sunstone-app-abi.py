@@ -4,8 +4,8 @@
 Compile hello-compute and a synthetic manifest covering all region slots,
 device bits and access bits for the host and AArch64. Compare each 552-byte
 section with the generator's packing, run hello-compute at input boundaries,
-and check malformed-manifest refusals. --mimus-dir additionally checks the
-external application's manifest and its declared inputs and capture bounds.
+and check malformed-manifest refusals. Repeat --manifest to include external
+application manifests in the same compiler-layout checks.
 """
 import argparse
 import hashlib
@@ -22,7 +22,7 @@ import zlib
 ROOT = Path(__file__).resolve().parents[1]
 p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 p.add_argument('--build', type=Path, required=True, help='empty or absent scratch directory')
-p.add_argument('--mimus-dir', type=Path, help='optional mimus checkout containing sunstoneos/')
+p.add_argument('--manifest', type=Path, action='append', default=[], help='additional application manifest (repeatable)')
 p.add_argument('--cc', default='cc')
 p.add_argument('--clang', default='clang')
 p.add_argument('--objcopy', default=shutil.which('llvm-objcopy') or '/usr/lib/llvm-21/bin/llvm-objcopy')
@@ -72,9 +72,10 @@ def run(*argv, **kw):
 # 1. Emit each application as its own image.
 generated = {}
 applications = [('hello_compute', HELLO), ('abi_fixture', RICH_PATH)]
-if a.mimus_dir:
-    mimus_root = a.mimus_dir.resolve() / 'sunstoneos'
-    applications.append(('mimus', mimus_root / 'apps/mimus-board/manifest.json'))
+for path in a.manifest:
+    name = json.loads(path.read_text())['name'].replace('-', '_')
+    assert name not in {n for n, _ in applications}, 'duplicate application name: ' + name
+    applications.append((name, path))
 for name, path in applications:
     out = a.build / ('generated-' + name)
     run(*TOOL, 'emit', '--manifest', path, '--output', out)
@@ -152,27 +153,6 @@ source = a.build / 'input-oversize.bin'
 source.write_bytes(stream(limit + 1))
 assert subprocess.run([str(model), str(source), str(a.build / 'result-oversize.bin')]).returncode == 5
 
-if a.mimus_dir:
-    # The optional external application pins its own source records.
-    mimus = json.loads((generated['mimus'] / 'manifest.json').read_text())[0]
-    models = json.loads((mimus_root / 'apps/bluetooth/recognition-models.json').read_text())['models']
-    wav = json.loads((mimus_root / 'apps/mimus-board/inputs.json').read_text())['recorded_wav']
-    configure = (mimus_root / 'apps/mimus-board/configure.py').read_text()
-    addresses = [int(x, 16) for x in re.search(r'mimus_asset_address\[3\]=\{([^}]*)\}', configure).group(1).split(',')]
-    for region, expected, address in zip(mimus['regions'][:3], models + [wav], addresses):
-        assert (region['address'], region['bytes'], region['sha256']) == (address, expected['bytes'], expected['sha256'])
-    dispatch = (mimus_root / 'apps/os/dispatch.h').read_text()
-    def constant(name):
-        return int(re.search(r'#define %s UINT64_C\((0x[0-9a-fA-F]+)\)' % name, dispatch).group(1), 16)
-    assert (mimus['regions'][3]['address'], mimus['regions'][3]['bytes']) == (constant('OS_DISPATCH_ARENA'), constant('OS_DISPATCH_CODE_BYTES'))
-    assert (mimus['regions'][4]['address'], mimus['regions'][4]['bytes']) == (constant('OS_DISPATCH_READ_ONLY'), constant('OS_DISPATCH_READ_ONLY_BYTES'))
-    capture_h = (mimus_root / 'apps/mimus-board/capture.h').read_text()
-    assert mimus['audio']['max_frames'] == int(re.search(r'#define MIMUS_CAPTURE_MAX_SAMPLES (\d+)u', capture_h).group(1))
-    assert mimus['audio']['min_frames'] == int(re.search(r'#define MIMUS_CAPTURE_MIN_SAMPLES (\d+)u', capture_h).group(1))
-    assert mimus['host_op_first'] == 0 and mimus['host_op_count'] == 5
-    cpu_return = (ROOT / 'apps/os/cpu-return.h').read_text()
-    assert mimus['return_reserve_us'] == int(re.search(r'OS_CPU_RETURN_RESERVE_US UINT64_C\((\d+)\)', cpu_return).group(1))
-
 # 5. Refusals.
 def refused(change, message):
     value = json.loads(HELLO.read_text())
@@ -204,6 +184,6 @@ refused(lambda v: v['regions'].append({'name': 'scratch', 'kind': 'work', 'acces
 result = {'passed': True, 'manifest_bytes': tool.MANIFEST_BYTES,
           'hello_sha256': hashlib.sha256((generated['hello_compute'] / 'manifest.bin').read_bytes()).hexdigest(),
           'generic_sha256': hashlib.sha256((generated['abi_fixture'] / 'manifest.bin').read_bytes()).hexdigest()}
-if a.mimus_dir:
-    result['mimus_sha256'] = hashlib.sha256((generated['mimus'] / 'manifest.bin').read_bytes()).hexdigest()
+result['external_sha256'] = {name: hashlib.sha256((generated[name] / 'manifest.bin').read_bytes()).hexdigest()
+                             for name, _ in applications[2:]}
 print(json.dumps(result))

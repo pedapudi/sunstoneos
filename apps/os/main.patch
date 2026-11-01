@@ -3,7 +3,7 @@
 @@ -1,4 +1,7 @@
 -#include "application.h"
 +/* Generated in the build directory, where "application.h" would name the
-+ * mimus board header. */
++ * generated application header. */
 +#include "../board/application.h"
 +#include "os.h"
  #ifdef SUNSTONE_BOARD_USB2_IRQ

@@ -4,8 +4,8 @@
 #define REQUEST ((volatile const uint64_t *)0x54000)
 #define REPORT ((volatile uint64_t *)0x54100)
 #define CONTRACT ((volatile struct a733_smp_contract *)A733_SMP_CONTRACT_ADDRESS)
-#ifdef A733_MIMUS_REQUEST_MAGIC
-#define REQUEST_MAGIC A733_MIMUS_REQUEST_MAGIC
+#ifdef A733_APPLICATION_REQUEST_MAGIC
+#define REQUEST_MAGIC A733_APPLICATION_REQUEST_MAGIC
 #else
 #define REQUEST_MAGIC UINT64_C(0x4153373353544c31)
 #endif
@@ -59,8 +59,8 @@ int a733_smp_launch_prepare(void)
         a733_storage_wire64(SESSION+24)==epoch && a733_storage_wire64(SESSION+32)==generation &&
         a733_storage_wire64(SESSION+40)==lease && !a733_storage_wire64(SESSION+640) &&
         !a733_storage_wire64(SESSION+648) && a733_storage_wire_bounds(SESSION,ticks()),3);
-#ifdef A733_MIMUS_REQUEST_MAGIC
-    ADMIT(a733_mimus_wire_valid(SESSION),3);
+#ifdef A733_APPLICATION_REQUEST_MAGIC
+    ADMIT(sunstone_application_wire_valid(SESSION),3);
     unsigned image_bits=0,recovery_bits=0;
     for(unsigned i=0;i<32;++i) {
         image_bits|=SESSION[48+i];recovery_bits|=SESSION[80+i];
