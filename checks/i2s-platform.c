@@ -285,10 +285,39 @@ static void audio_gate_cases(void)
     }
     puts("AUDIO1 gate admission: manual/software bits, effective status, cold propagation and retained failures passed; no gate writes");
 }
+/* Every integer rate that the planner accepts at the parent's 24.576 MHz
+ * module clock with two 32-bit slots, offered to the binding from a fresh
+ * parent: each acquires and releases the unchanged module divider. A plan
+ * for the 44.1 kHz family's 22.5792 MHz module clock is refused without
+ * effects. checks/i2s-rates-reference.py compares the log with the vendor's
+ * rate table. */
+static void rate_cases(void)
+{
+    printf("{\"module_hz\":24576000,\"slot_bits\":32,\"rates\":[");
+    unsigned accepted=0;
+    for (uint32_t rate=1; rate<=400000; ++rate) {
+        const struct a733_i2s_format f={24576000,rate,0,32,32,1,0};
+        struct a733_i2s_plan p;
+        if (!a733_i2s_plan(&f,&p)) continue;
+        setup(0); ready_parent(); plan=p; ready_local();
+        enum a733_i2s_resource_result r=iops.release(&binding,900);
+        while (r == PENDING) r=iops.release(&binding,900);
+        assert(r == READY && !binding.local.id && !binding.pin_lease.id);
+        printf("%s%u",accepted++ ? "," : "",rate);
+    }
+    const struct a733_i2s_format f={22579200,44100,0,32,32,1,0};
+    struct a733_i2s_plan p;
+    assert(a733_i2s_plan(&f,&p));
+    setup(0); ready_parent();
+    unsigned before=reads+writes;
+    assert(iops.acquire(&binding,&p,900) == BUSY && reads+writes == before && !binding.local.id);
+    puts("],\"refused_module_hz\":[22579200]}");
+}
 int main(int argc, char **argv)
 {
     if (argc == 2) {
         if (strcmp(argv[1],"--audio-gates") == 0) audio_gate_cases();
+        else if (strcmp(argv[1],"--rates") == 0) rate_cases();
         else if (strcmp(argv[1],"--monotonic-core") == 0) monotonic_core_case();
         else { assert(strcmp(argv[1],"--clock-faults") == 0); clock_failure_cases(); }
         return 0;

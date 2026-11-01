@@ -198,7 +198,7 @@ because the copy window described below is empty with fewer than four.
 Capture keeps every raw period reserved for DMA. Each period occupies
 separate cache lines. Initial publication cleans and invalidates them; later CPU
 access only reads them. The worker copies a completed period into a private
-4,096-byte staging buffer. It invalidates the raw range and issues a barrier
+staging buffer of `A733_I2S_PERIOD_CAPACITY` (4,096) bytes. It invalidates the raw range and issues a barrier
 before copying, using the existing native INVALIDATE operation without cleaning
 DMA-written data. A second barrier after the copy completes its memory loads
 before the postcheck reads the package-count, destination and remaining-byte
