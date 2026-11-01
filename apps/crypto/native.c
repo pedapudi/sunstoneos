@@ -108,9 +108,11 @@ int crypto_input_live(void)
 int crypto_accept(const void *input,size_t bytes)
 {
  if(!crypto_input_live())return 0;
- if(!crypto_request_copy(&crypto.run.request,&crypto.session,input,bytes))return 0;
+ if(!crypto_request_copy(&crypto.run.request,&crypto.session,input,bytes)){
+  crypto_run_clear_request(&crypto.run);return 0;
+ }
  crypto.run.runtime=1;memcpy(crypto.run.oracle,crypto.session.reference,32);
- if(!crypto_input_live()){crypto_request_clear(&crypto.run.request);return 0;}
+ if(!crypto_input_live()){crypto_run_clear_request(&crypto.run);return 0;}
  atomic_store_explicit(&crypto.input_ready,1,memory_order_release);return 1;
 }
 int crypto_output_ready(void)
