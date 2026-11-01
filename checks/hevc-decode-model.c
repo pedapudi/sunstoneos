@@ -148,6 +148,15 @@ static void storage_cases(struct hevc_storage *s,const uint8_t *clip,size_t n,co
 }
 static void json_words(FILE *f,const char *name,const uint32_t *words,unsigned count)
 {fprintf(f,"\"%s\":[",name);for(unsigned i=0;i<count;++i)fprintf(f,"%s%u",i?",":"",words[i]);fprintf(f,"]");}
+/* A second begin must preserve the live or retained controller byte for byte,
+ * including the interval before acquire has returned an ownership token. */
+static void begin_again(struct a733_hevc_run *run,struct a733_hevc_platform *platform,
+ const struct a733_hevc_job *job)
+{
+ struct a733_hevc_run before;memcpy(&before,run,sizeof(before));
+ assert(!a733_hevc_begin(run,a733_video_platform_hevc_ops(),platform,job,DEADLINE));
+ assert(!memcmp(run,&before,sizeof(before)));
+}
 int main(int argc,char **argv)
 {
     assert(argc==4);size_t n;uint8_t *clip=load(argv[1],&n);
@@ -177,15 +186,18 @@ int main(int argc,char **argv)
         struct a733_hevc_platform_ops ops={now,admit_hevc,memory_hevc,copied_hevc,enter,leave,read_hevc,write_hevc};
         struct a733_hevc_platform platform;memset(&platform,0,sizeof(platform));
         assert(a733_hevc_platform_init(&platform,&c,&ops,&m));
-        struct a733_hevc_run run;
+        struct a733_hevc_run run={0};
         struct a733_hevc_job bad=storage.job;bad.buffers[HEVC_MV1].iova=bad.buffers[HEVC_MV0].iova+4096;
         assert(!a733_hevc_begin(&run,a733_video_platform_hevc_ops(),&platform,&bad,DEADLINE));
         bad=storage.job;bad.plan.pictures[1].poc=0;
         assert(!a733_hevc_begin(&run,a733_video_platform_hevc_ops(),&platform,&bad,DEADLINE));
         assert(a733_hevc_begin(&run,a733_video_platform_hevc_ops(),&platform,&storage.job,DEADLINE));
+        assert(run.state==HEVC_ACQUIRE&&!run.token&&run.deadline==DEADLINE);
+        begin_again(&run,&platform,&storage.job);
         assert(!a733_hevc_next(&run));
         int result=0;
         for(unsigned poll=0;poll<8000&&result>=0;++poll){
+            begin_again(&run,&platform,&storage.job);
             result=a733_hevc_poll(&run);
             if(result==1&&!m.picture){
                 /* The copied IDR waits for its ACK: polling programs nothing. */
@@ -221,6 +233,7 @@ int main(int argc,char **argv)
         }
         assert(a733_clock_token_status(&clocks,&c.clock)==A733_CLOCK_OK);
         assert(a733_gpu_resources_status(&power,2,&c.pck)==A733_GPU_RESOURCE_OK);
+        begin_again(&run,&platform,&storage.job);
         printf("PASS controller: %s\n",names[variant]);
     }
     free(clip);return 0;

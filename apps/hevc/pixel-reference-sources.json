@@ -1,0 +1,30 @@
+{
+  "schema": "a733-hevc-pixel-reference-sources-v1",
+  "component": "FFmpeg CPU reference decoder and stream probe",
+  "use": "Offline comparison of captured native NV12 pictures with an independent software HEVC decode. The host check also uses libx265 to generate a small wrong-geometry refusal fixture.",
+  "execution_location": "Development host only; no FFmpeg or x265 code is linked into SunstoneOS.",
+  "source_available": true,
+  "source_url": "https://launchpad.net/ubuntu/+source/ffmpeg/7:8.0.1-3ubuntu2",
+  "upstream_url": "https://ffmpeg.org/releases/ffmpeg-8.0.1.tar.xz",
+  "revision": "Ubuntu source package ffmpeg 7:8.0.1-3ubuntu2; upstream release n8.0.1",
+  "license": "The installed FFmpeg tools report GNU GPL version 2 or later. Preserve their distribution notices. The host-only libx265 encoder is GPL-2.0-or-later.",
+  "executables": {
+    "ffmpeg": {
+      "path": "/usr/bin/ffmpeg",
+      "sha256": "bdf6aabffdba7411edff8d36c389d695257fcdf823d196020176e117612862f6"
+    },
+    "ffprobe": {
+      "path": "/usr/bin/ffprobe",
+      "sha256": "a6dac1e9e8631e04075d06854cc4069308aec279bb04683b4a0bca5e4f54b2fe"
+    }
+  },
+  "host_fixture_encoder": {
+    "source_url": "https://bitbucket.org/multicoreware/x265_git/",
+    "revision": "x265 4.1; installed package libx265-215 4.1-4",
+    "path": "/usr/lib/x86_64-linux-gnu/libx265.so.215",
+    "sha256": "3fa0e6c8eaf249f6d418822ff128d42ba3e99a538173501c3f0a77a5a914889b",
+    "license": "GPL-2.0-or-later",
+    "use": "Host refusal-fixture generation only. Its output is never presented as native codec output."
+  },
+  "selection": "Each comparison records the actual selected executable hashes and version output. This record describes the default host tools used by the component checks. Alternative builds need their own source and license record."
+}
