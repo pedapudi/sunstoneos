@@ -205,6 +205,44 @@ def parent_origin_case(elf,steps):
     assert m.smc[:3]==[0x735,0xa2,value] and m.smc[4]==address,m.smc
     steps.case(name,{'passed':True});return name
 
+def stream_origin_case(elf,steps):
+    name='DMA-route-fault-retains-original-caller-and-register'
+    if steps.case(name):return name
+    spec=importlib.util.spec_from_file_location('i2s_dma_shared',ROOT/'checks/board-probe.py')
+    shared=importlib.util.module_from_spec(spec);spec.loader.exec_module(shared)
+    m=shared.Model(elf,{'uploads':[]});m.map(D,0x2000);m.sys['currentel']=4
+    controller=m.address('service')+m.e.layouts['dma_service']['controller']
+    layout=m.e.layouts['a733_dma_controller'];ch=controller+layout['channels']
+    cl=m.e.layouts['a733_dma_channel'];nl=m.e.layouts['a733_dma_native']
+    native=m.address('native');m.write(native+nl['initialized'],1,4);m.write(native+nl['registers'],D)
+    # Existing native mapping/cache callbacks remain intact. Only the actual
+    # read/write wrappers are replaced, as setup() does for the board image.
+    ops=m.address('a733_dma_native_operations');ol=m.e.layouts['a733_dma_operations']
+    for member,offset in ol.items():
+        m.write(controller+layout['operations']+offset,m.read(ops+offset))
+    m.write(controller+layout['operations']+ol['read'],m.address('dma_read'))
+    m.write(controller+layout['operations']+ol['write'],m.address('dma_write'))
+    m.write(controller+layout['cookie'],native);m.write(controller+layout['base'],D)
+    m.write(controller+layout['authorized_channels'],1,2);m.write(controller+layout['initialized'],1,4)
+    m.write(ch+cl['claimed'],1,4);m.write(ch+cl['status'],1,4)
+    m.write(D+0x34,1,4);m.write(D+0x38,1,4) # Conflicting MCU routing causes real recovery.
+    m.call('a733_dma_poll',controller,0,count=10000)
+    assert m.smc[:3]==[0x735,0xd0,1] and m.smc[4]==D+0x38,m.smc
+    # The retained caller resolves inside a733_dma_poll, before any later
+    # service STATUS refusal can replace it with the retirement caller.
+    assert m.address('a733_dma_poll')<m.smc[3]<m.address('a733_dma_event_wait'),m.smc
+    routed_fault=list(m.smc)
+    # The manual does not promise preservation of PKG_NUM after disable.
+    # Model a reset only after the channel is idle, with earlier progress24.
+    # Present code must expose that exact rejected transition, not FAULT4.
+    m.write(D+0x38,0,4);m.write(ch+cl['status'],2,4);m.write(ch+cl['cyclic'],2,4)
+    m.write(ch+cl['package_last'],24,4);m.write(ch+cl['packages'],24)
+    m.write(ch+cl['timeout'],24000000);m.write(ch+cl['observed'],m.now)
+    m.call('a733_dma_poll',controller,0,count=10000)
+    assert m.smc[:3]==[0x735,0xd4,0] and m.smc[4]==24,m.smc
+    assert m.address('a733_dma_poll')<m.smc[3]<m.address('a733_dma_event_wait'),m.smc
+    steps.case(name,{'passed':True,'routing_smc':routed_fault,'counter_reset_smc':m.smc});return name
+
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--build',type=Path,required=True);p.add_argument('--out',type=Path,required=True)
     p.add_argument('--resume',action='store_true');p.add_argument('--native-only',action='store_true')
@@ -230,6 +268,7 @@ def main():
     rows.update({name:True for name in native_cases(a.build/'sunstone-a733-i2s-probe.elf',steps)})
     rows.update({name:True for name in entry_cases(a.build/'sunstone-a733-i2s-probe.elf',a.out,steps)})
     rows[parent_origin_case(a.build/'sunstone-a733-i2s-probe.elf',steps)]=True
+    rows[stream_origin_case(a.build/'sunstone-a733-i2s-probe.elf',steps)]=True
     (a.out/'result.json').write_text(json.dumps({'passed':True,'physical_access':False,'cases':rows,
         'image_sha256':hashlib.sha256((a.build/'sunstone-a733-i2s-probe.elf').read_bytes()).hexdigest(),
         'modeled_boundaries':['common monitor setup and interrupt restore','MMIO propagation and counters','DMA/FIFO sample effects'],

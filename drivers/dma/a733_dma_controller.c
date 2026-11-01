@@ -167,8 +167,14 @@ static int quiet(struct a733_dma_controller *c, unsigned channel)
            !read_channel(c, channel, PENDING) && !read_channel(c, channel, MODE) &&
            !read_channel(c, channel, DESCRIPTOR_HIGH);
 }
-static enum a733_dma_control_status recovery(struct a733_dma_channel *channel)
-{ return channel->status = A733_DMA_RECOVERY; }
+/* Optional diagnostic observes the original check, before later refusals. */
+__attribute__((weak)) void a733_dma_fault_observed(const struct a733_dma_channel *channel,uintptr_t caller)
+{(void)channel;(void)caller;}
+__attribute__((noinline,not_tail_called)) static enum a733_dma_control_status recovery(struct a733_dma_channel *channel)
+{
+    a733_dma_fault_observed(channel,(uintptr_t)__builtin_return_address(0));
+    return channel->status = A733_DMA_RECOVERY;
+}
 
 enum a733_dma_control_status a733_dma_controller_init(
     struct a733_dma_controller *c, const struct a733_dma_operations *ops,

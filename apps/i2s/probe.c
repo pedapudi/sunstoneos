@@ -37,6 +37,40 @@ static TaskHandle_t client;
 static uint64_t work_deadline;
 static unsigned ready,closed,worker_stopped,irq_count;
 static struct { uintptr_t address;uint32_t value,kind; } parent_io;
+static struct { uintptr_t address;uint32_t value; } dma_io;
+static _Noreturn void traced_fault(uint64_t site,uint64_t value,uintptr_t caller,uintptr_t address)
+{
+    register uint64_t op __asm__("x0")=0x735;
+    register uint64_t code __asm__("x1")=site;
+    register uint64_t operand __asm__("x2")=value;
+    register uint64_t origin __asm__("x3")=caller;
+    register uint64_t context __asm__("x4")=address;
+    __asm__ volatile("smc #0":"+r"(op):"r"(code),"r"(operand),"r"(origin),"r"(context):"memory");
+    for(;;)__asm__ volatile("wfe");
+}
+void a733_dma_fault_observed(const struct a733_dma_channel *ch,uintptr_t caller)
+{
+    unsigned channel=(unsigned)(ch-service.controller.channels);
+    /* D4/5 retain both operands of a suspect package-counter transition.
+     * Other checks retain the last callback's address and value as D0/1. */
+    if(dma_io.address==DMA+0x130+channel*0x40)
+        traced_fault(0xd4+channel,dma_io.value,caller,ch->package_last);
+    traced_fault(0xd0+channel,dma_io.value,caller,dma_io.address);
+}
+void a733_i2s_fault_observed(const struct a733_i2s_stream *s,uintptr_t caller)
+{
+    traced_fault(0xe0+s->channel,parent_io.value,caller,parent_io.address);
+}
+static uint32_t dma_read(void *cookie,uintptr_t address)
+{
+    uint32_t value=a733_dma_native_operations.read(cookie,address);
+    dma_io.address=address;dma_io.value=value;return value;
+}
+static void dma_write(void *cookie,uintptr_t address,uint32_t value)
+{
+    a733_dma_native_operations.write(cookie,address,value);
+    dma_io.address=address;dma_io.value=value;
+}
 static void check(int,unsigned,uint64_t);
 static void bus_empty(void)
 {
@@ -50,7 +84,7 @@ static _Noreturn void fail(unsigned site,uint64_t detail)
 {
     OUT->fault=site;OUT->detail=detail;
     /* The retained ESR/detail and caller identify the check and its input. */
-    sunstone_probe_fail(site,detail);
+    traced_fault(site,(uint32_t)detail,(uintptr_t)__builtin_return_address(0),detail>>32);
 }
 static void check(int ok,unsigned site,uint64_t detail){if(!ok)fail(site,detail);}
 static uint32_t pattern(unsigned frame){return UINT32_C(0x5a000000)|(frame%I2S_PROBE_SAMPLES);}
@@ -81,13 +115,7 @@ __attribute__((noinline,noreturn)) static void parent_fault(void)
      * A0..A7 retain the last successful callback input; a timing or lease
      * failure may occur without MMIO. B0..B7 are read refusal, C0..C7 write refusal. */
     uint64_t site=(parent_io.kind==3?0xb0:parent_io.kind==4?0xc0:0xa0)+parent.stage;
-    register uint64_t op __asm__("x0")=0x735;
-    register uint64_t code __asm__("x1")=site;
-    register uint64_t value __asm__("x2")=parent_io.value;
-    register uint64_t caller __asm__("x3")=(uintptr_t)__builtin_return_address(0);
-    register uint64_t address __asm__("x4")=parent_io.address;
-    __asm__ volatile("smc #0":"+r"(op):"r"(code),"r"(value),"r"(caller),"r"(address):"memory");
-    for(;;)__asm__ volatile("wfe");
+    traced_fault(site,parent_io.value,(uintptr_t)__builtin_return_address(0),parent_io.address);
 }
 static _Noreturn void memory_fault(void *unused){(void)unused;fail(0x51,0);}
 static struct dma_service_reply request(enum dma_service_operation op,unsigned job,uint64_t timeout,uint64_t period)
@@ -175,7 +203,8 @@ static void setup(void)
         {(uintptr_t)&locks,(uintptr_t)&locks,sizeof(locks)},
         {(uintptr_t)&pins,(uintptr_t)&pins,sizeof(pins)}};
     const struct dma_service_activation activation={client,prepared,NULL};
-    check(dma_service_init_deferred(&service,&a733_dma_native_operations,&native,DMA,3,COUNTER_HZ/10,
+    struct a733_dma_operations dma_ops=a733_dma_native_operations;dma_ops.read=dma_read;dma_ops.write=dma_write;
+    check(dma_service_init_deferred(&service,&dma_ops,&native,DMA,3,COUNTER_HZ/10,
         jobs,2,protected,7,5,1,&activation),0x5e,0);
     irq=(struct dma_service_i2s_irq){&service,{0x03400000,143},1};
     const struct dma_service_irq interrupt={rearm,&irq,1,COUNTER_HZ/configTICK_RATE_HZ};
@@ -216,7 +245,8 @@ static void retire(uint64_t held)
     struct i2s_retirement retirement={.service=&service,.held={held,0},.jobs=2};
     int r;
     while(!(r=i2s_retirement_step(&retirement))){check(counter()<work_deadline,0x63,retirement.stage);vTaskDelay(1);}
-    check(r==1,0x64,((uint64_t)retirement.reply.phase<<32)|retirement.reply.result);
+    check(r==1,0x64,((uint32_t)retirement.job<<24)|(retirement.stage<<16)|
+        ((uint32_t)retirement.reply.phase<<8)|retirement.reply.result);
     for(unsigned j=0;j<2;++j)check(service.channels[j].phase==DMA_SERVICE_CLOSED&&
         !service.channels[j].holds_buffers&&!service.controller.channels[j].claimed,0x65,j);
     bus_empty();closed=1;++OUT->closed;sunstone_probe_progress();
@@ -240,8 +270,7 @@ static int run_round(unsigned overrun)
         for(unsigned i=0;i<I2S_PROBE_FRAMES;++i){uint32_t value=copied[i];
             if(!matched){if((value&0xfffff800u)!=0x5a000000u)continue;first=value;matched=1;}
             else if(value!=pattern((unsigned)last+1)){
-                OUT->fault=0x6a;OUT->detail=((uint64_t)pattern((unsigned)last+1)<<32)|value;
-                retire(p.ticket);return 0;
+                fail(0x6a,((uint64_t)pattern((unsigned)last+1)<<32)|value);
             }
             last=value;OUT->first=first;OUT->last=last;++OUT->frames;
         }
