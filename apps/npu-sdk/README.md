@@ -73,3 +73,14 @@ No device is opened and no board image is linked.
 `metadata-check.c` compiles with `runtime/npu_app.c` and `-Iinclude`. Run it with
 each argument from `0` through `10` to check malformed metadata refusal before
 binding. Its backend aborts if a refused case reaches a device operation.
+
+`checks/os-npu-sdk-contract.py --native-flags <OS flags.make> --output
+<new cache directory>` runs the actual OS failure predicates and SDK report
+producer with modeled runtime replies and task waits. It checks retained
+request identities, watch deadlines, earlier failure preservation, complete
+output copies and both report modes through the actual decoder. SDK mode uses
+pattern zero and classifies completed copies as `completed`; the application
+supplies numerical evidence. The built-in reference checker uses its poison
+pattern and classifies reference matches as `matched`. Reserved pattern values
+and SDK reports carrying built-in numerical fields are refused. Scratch copies
+without the complete-copy checks must fail the same output assertions.

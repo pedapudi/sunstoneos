@@ -22,7 +22,7 @@ static uint8_t tensor_input[4],tensor_output[8];
 static struct os_session session;
 static jmp_buf suspended;
 _Noreturn void __assert_func(const char *file,int line,const char *function,const char *condition)
-{(void)file;(void)line;(void)function;(void)condition;abort();}
+{(void)file;(void)line;(void)function;puts(condition);fflush(NULL);abort();}
 const struct os_session *os_session(void){return &session;}
 int os_npu_open(void){return 1;}
 int os_npu_load(unsigned model){assert(!model);after_submit=0;return 1;}

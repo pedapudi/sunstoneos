@@ -4,6 +4,7 @@
 #include <assert.h>
 #include <setjmp.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 struct board_application board;
 struct board_provider providers;
@@ -60,6 +61,8 @@ enum a733_npu_platform_result npu_runtime_stop_poll(struct npu_runtime *r)
 {assert(r==&npu.runtime);return A733_NPU_PLATFORM_RETAINED;}
 uint32_t a733_npu_startup_wait_ticks(struct a733_npu_startup *s)
 {(void)s;abort();}
+static void emit_record(void)
+{printf("%u %u %u %u\n",first_site,first_value,(uint32_t)os_npu_first_failure.ticket,os_npu_first_failure.operation);}
 int main(int argc,char **argv)
 {
     assert(argc==2);mode=(unsigned)strtoul(argv[1],NULL,10);
@@ -79,7 +82,7 @@ int main(int argc,char **argv)
         unsigned op=mode==13?NPU_SERVICE_CLOSE:NPU_SERVICE_OPEN;
         assert(os_npu_first_failure.operation==op);
         assert(os_npu_first_failure.observed==(mode==12?NPU_SERVICE_DENIED:A733_NPU_PLATFORM_RETAINED));
-        assert(!send_calls&&!collect_calls);return 0;
+        assert(!send_calls&&!collect_calls);emit_record();return 0;
     }
     const int result=call(NPU_SERVICE_LOAD,2,0);
     if(mode==0||mode==8) {
@@ -88,7 +91,7 @@ int main(int argc,char **argv)
             (void)FAIL_REQUEST(NPU_SERVICE_LOAD,2,sent_ticket,NULL,1,99);
             assert(first_site==0xa234&&first_value==0xfedcba98&&first_caller==(const void *)(uintptr_t)0x40012340);
         }
-        return 0;
+        emit_record();return 0;
     }
     assert(result==-1&&board_failures==1&&atomic_load(&npu.failed));
     const struct os_npu_failure *f=&os_npu_first_failure;
@@ -114,4 +117,5 @@ int main(int argc,char **argv)
     uint32_t saved=first_site;uint64_t observed=f->observed;
     (void)FAIL_REQUEST(NPU_SERVICE_CLOSE,7,4,NULL,0,123);
     assert(first_site==saved&&f->observed==observed&&f->operation==NPU_SERVICE_LOAD);
+    emit_record();
 }
