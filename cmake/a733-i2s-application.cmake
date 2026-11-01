@@ -78,19 +78,13 @@ if(SUNSTONE_I2S_TRANSCRIBE)
   "${newlib_sysroot}/lib/libstdc++.a" "${newlib_sysroot}/lib/libsupc++.a"
   "${smp_libc}/lib/libm.a" "${smp_libc}/lib/libc.a"
   "${NEWLIB_ROOT}/lib/gcc/aarch64-none-elf/14.3.1/libgcc.a")
- apply_build_patch("${i2s_build}/link-base.ld" "${i2s_root}/platform/a733-smp-cached/link.ld"
-  "${i2s_root}/apps/mimus/link.patch")
- apply_build_patch("${i2s_build}/link.ld" "${i2s_build}/link-base.ld"
-  "${i2s_root}/platform/a733-storage-maintenance/link.patch")
- set(i2s_link "${i2s_build}/link.ld")
  target_link_options(sunstone-a733-i2s PRIVATE -Wl,--wrap=_impure_ptr -Wl,--defsym=__runtime_heap_size=4194304)
-else()
- set(i2s_link "${storage_build}/link.ld")
 endif()
+set(i2s_link "${storage_build}/link.ld")
 file(GLOB i2s_headers "${i2s_root}/apps/i2s/*.h")
 set(i2s_inputs ${i2s_sources} ${i2s_headers} ${storage_inputs}
  "${i2s_root}/apps/i2s/boot.patch" "${i2s_root}/platform/a733-smp-cached/irq_table.h"
- "${CMAKE_CURRENT_LIST_FILE}" "${i2s_root}/apps/mimus/link.patch" "${i2s_root}/apps/i2s/CMakeLists.txt" "${i2s_root}/apps/i2s/recorded.py"
+ "${CMAKE_CURRENT_LIST_FILE}" "${i2s_root}/apps/i2s/CMakeLists.txt" "${i2s_root}/apps/i2s/recorded.py"
  "${i2s_root}/platform/a733-smp-supervised/boot.patch" "${SUNSTONE_I2S_RECORDED_WAV}")
 if(SUNSTONE_I2S_TRANSCRIBE)
  get_target_property(i2s_asr_sources mimus_asr_smp SOURCES)

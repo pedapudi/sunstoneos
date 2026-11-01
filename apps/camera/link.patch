@@ -8,10 +8,10 @@
  }
  SECTIONS {
      .text : {
-@@ -35,34 +36,16 @@
-         . = ALIGN(16); __bss_end = .;
+@@ -48,34 +49,16 @@
+         . += DEFINED(__runtime_heap_size) ? __runtime_heap_size : 0;
+         __heap_end = .;
      } > RAM
-     __heap_end = __bss_end;
 -    /* An absent pool preserves the previous image extent and section layout. */
      .device_pool (NOLOAD) : {
 -        . = DEFINED(__device_pool_size) && __device_pool_size ? ALIGN(4096) : .;

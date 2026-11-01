@@ -10,6 +10,12 @@ SECTIONS {
         KEEP(*(.text.a733_smp_boot)) *(.text*)
     } > CODE
     .rodata : { *(.rodata*) } > CODE
+    /* C++ constructors; empty in a C image. */
+    .init_array : {
+        __init_array_start = .;
+        KEEP(*(SORT_BY_INIT_PRIORITY(.init_array.*))) KEEP(*(.init_array))
+        __init_array_end = .;
+    } > CODE
     .data : { *(.data*) } > RAM
     .result 0x42000000 (NOLOAD) : {
         __a733_smp_result = .; . += 0x4000; __a733_smp_result_end = .;
@@ -34,7 +40,14 @@ SECTIONS {
         __bss_start = .; *(.bss*) *(COMMON)
         . = ALIGN(16); __bss_end = .;
     } > RAM
-    __heap_end = __bss_end;
+    /* The newlib heap (runtime/newlib.c). A C++ application sets its size
+     * with --defsym=__runtime_heap_size; without that symbol the heap is
+     * empty and ends at __bss_end. */
+    .heap (NOLOAD) : ALIGN(DEFINED(__runtime_heap_size) ? 64 : 1) {
+        __heap_start = .;
+        . += DEFINED(__runtime_heap_size) ? __runtime_heap_size : 0;
+        __heap_end = .;
+    } > RAM
     /* An absent pool preserves the previous image extent and section layout. */
     .device_pool (NOLOAD) : {
         . = DEFINED(__device_pool_size) && __device_pool_size ? ALIGN(4096) : .;

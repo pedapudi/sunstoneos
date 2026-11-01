@@ -27,9 +27,7 @@ if(SUNSTONE_MIMUS_SUPERVISED)
  list(APPEND mimus_native_sources "${mimus_native_build}/boot.c")
 endif()
 list(APPEND mimus_native_sources "${SUNSTONE_SOURCE_ROOT}/apps/mimus/admission.c")
-apply_build_patch("${mimus_native_build}/link-base.ld" "${SUNSTONE_SOURCE_ROOT}/platform/a733-smp-cached/link.ld"
-  "${SUNSTONE_SOURCE_ROOT}/apps/mimus/link.patch")
-apply_build_patch("${mimus_native_build}/link.ld" "${mimus_native_build}/link-base.ld"
+apply_build_patch("${mimus_native_build}/link.ld" "${SUNSTONE_SOURCE_ROOT}/platform/a733-smp-cached/link.ld"
   "${SUNSTONE_SOURCE_ROOT}/platform/a733-storage-maintenance/link.patch")
 list(APPEND mimus_native_sources
   "${SUNSTONE_SOURCE_ROOT}/apps/mimus/native.c" "${SUNSTONE_SOURCE_ROOT}/apps/mimus/main.cc" "${SUNSTONE_SOURCE_ROOT}/apps/mimus/recorded.cc"
