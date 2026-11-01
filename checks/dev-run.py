@@ -256,7 +256,7 @@ def refusal_cases(out, live):
         record = json.loads((evidence / 'dev-run.json').read_text())
         assert code == 1 and record['outcome'] == 'refused-before-launch' and text in record['summary'], record
         assert not record['launched'] and not (evidence / 'state.json').exists()
-    for kind, text in (('gpu-return', 'pre-split'), ('npu', 'npu is refused')):
+    for kind, text in (('gpu-return', 'GPU-capable'), ('npu', 'npu is refused')):
         stream = io.StringIO()
         with contextlib.redirect_stderr(stream):
             try:
@@ -265,6 +265,30 @@ def refusal_cases(out, live):
                 assert stop.code == 2, (kind, stop.code)
         assert text in stream.getvalue(), (kind, stream.getvalue())
     passed('refused-before-launch', cases=['state', 'image-without-watchdog', 'input-count', 'gpu-return', 'npu'])
+
+
+def gpu_preparation_cases(host, launcher, out, live, images):
+    """Actual CLI preflight for each frozen GPU image, without board access."""
+    for index, image in enumerate(images):
+        case = out / ('gpu-preflight-%d' % index)
+        case.mkdir()
+        state = case / 'state.json'
+        state.write_text(json.dumps(live))
+        inputs = sorted((image.parent / 'template').glob('input-*.bin'))
+        argv = ['gpu-return', '--image', str(image), '--state', str(state),
+                '--check-only', '--evidence', str(case / 'evidence')]
+        for value in inputs:
+            argv.extend(['--input', str(value)])
+        with patch.object(dev, 'capture', side_effect=AssertionError('offline preflight read board')):
+            code = dev.main(argv)
+        record = json.loads((case / 'evidence/dev-run.json').read_text())
+        assert code == 0 and record['outcome'] == 'checked' and not record['launched'], record
+        meta = json.loads((case / 'evidence/bundle/dev-bundle.json').read_text())
+        assert meta['devices'] & 16 and len(meta['inputs']) == len(inputs)
+        board = case / 'evidence/bundle/board'
+        assert native_admits(launcher, image, (board / 'session.bin').read_bytes(),
+                             (board / 'contract.bin').read_bytes()) == 1
+        passed('gpu-preflight-' + image.parent.name, image_sha256=dev.digest(image))
 
 
 def return_report(host, epoch):
@@ -676,18 +700,21 @@ def normalize_cases(host, out):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--out', type=Path, required=True)
+    parser.add_argument('--gpu-image', type=Path, action='append', default=[])
     args = parser.parse_args()
     out = args.out
     assert dev.CONTROL_IMAGE.is_file(), f'Build the control image first: {dev.CONTROL_IMAGE}'
     host, launcher = dev.kit()
     out.mkdir(parents=True, exist_ok=False)
-    with tempfile.TemporaryDirectory(prefix='dev-run-', dir=out) as temporary:
-        live = preparation_cases(host, launcher, Path(temporary))
-        refusal_cases(Path(temporary), live)
-        transport_cases(host, launcher, Path(temporary), live)
-        helper_cases()
-        controlled_cases(host, Path(temporary))
-        normalize_cases(host, Path(temporary))
+    temporary = out / 'cases'
+    temporary.mkdir()
+    live = preparation_cases(host, launcher, temporary)
+    refusal_cases(temporary, live)
+    gpu_preparation_cases(host, launcher, temporary, live, args.gpu_image)
+    transport_cases(host, launcher, temporary, live)
+    helper_cases()
+    controlled_cases(host, temporary)
+    normalize_cases(host, temporary)
     result = {'passed': True, 'physical_access': False, 'control_image_sha256': dev.digest(dev.CONTROL_IMAGE),
               'cases': rows}
     (out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
