@@ -7,6 +7,7 @@ import secrets
 import shutil
 import struct
 import subprocess
+from typing import NamedTuple
 from elftools.elf.elffile import ELFFile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,6 +20,15 @@ DMA_EXTENT, DMA_MAGIC = 7, 0x41533733444d4131
 DMA_FACTS = ('dma_bus_enabled', 'dma_reset_deasserted', 'dma_mbus_enabled',
              'dma_exclusive_writers', 'cpu_quiet', 'mcu_quiet', 'producers_quiet',
              'prior_bus_drained', 'irq_masked', 'watchdog_recovery')
+
+
+class DmaAdmission(NamedTuple):
+    session: bytes
+    authority: bytes
+    identity: tuple
+    port: str
+    image_sha256: str
+    identity_verified: bool
 
 
 def load(name, path):
@@ -147,8 +157,8 @@ def session_template(args):
 def dma_admission(args, info, live=None):
     """Authenticate the original DMA record before reseeding any session identity.
 
-    Offline admission binds supplied facts; only preparation compares their USB
-    instance identity with the locked runner's live identity.
+    Offline admission binds supplied facts. The runner verifies their original
+    USB instance under its lock before resetting, then preserves these bytes.
     """
     if not info.get('generic'):
         return None
@@ -190,7 +200,15 @@ def dma_admission(args, info, live=None):
     require(all(authority.get(name) is True for name in DMA_FACTS) and
             type(authority.get('dma_autogate')) is int and authority['dma_autogate'] == 4,
             'DMA inherited gates, drain, exclusion or recovery facts are incomplete.')
-    return data
+    return DmaAdmission(raw, data, tuple(identity), args.port, expected['image_sha256'], live is not None)
+
+
+def bind_dma_identity(admission, args, identity):
+    """Bind frozen facts to the original instance under the runner's port lock."""
+    require(isinstance(admission, DmaAdmission) and admission.port == args.port and
+            admission.image_sha256 == sha(args.image) and tuple(identity) == admission.identity,
+            'DMA authority does not cover the original locked USB instance.')
+    return admission._replace(identity_verified=True)
 
 
 def policy(info, args, session=None):
@@ -256,7 +274,7 @@ def launcher(out, size, mode, seconds=60):
     require(0 < (out / 'launch.bin').stat().st_size <= 0xc00, 'Launcher exceeds SRAM reservation.')
 
 
-def prepare(args, info, live, out):
+def prepare(args, info, live, out, *, dma_binding=None):
     if info.get('finite_npu'):
         tree = args.host_tree or ROOT
         finite = load('prepare_npu_irq', tree/'apps/npu-interrupt/host.py').finite
@@ -302,8 +320,13 @@ def prepare(args, info, live, out):
     # The reviewed legacy control template also supplies board/thermal/CPU facts
     # for the OS-only hello-compute control; no application asset is copied.
     template, session_path = session_template(args)
-    dma_authority = dma_admission(args, info, live)
-    raw = session_path.read_bytes()
+    admission = dma_binding if dma_binding is not None else dma_admission(args, info, live)
+    if admission is not None:
+        require(isinstance(admission, DmaAdmission) and admission.identity_verified and info.get('dma') and
+                admission.port == args.port and admission.image_sha256 == sha(args.image),
+                'DMA preparation requires frozen authority bound to the original USB instance.')
+    dma_authority = admission.authority if admission is not None else None
+    raw = admission.session if admission is not None else session_path.read_bytes()
     image_info = records.image_manifest(args.image)
     if struct.unpack_from('<Q', raw, 592)[0] == records.SESSION_MAGIC:
         old = records.session_decode(raw)

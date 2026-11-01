@@ -5,14 +5,16 @@ The positive authority is synthetic and uses an impossible all-zero USB
 instance. Its physical flags exercise the parser and establish no authority.
 """
 import argparse
+import contextlib
 import copy
 import hashlib
+import io
 import json
 from pathlib import Path
 import struct
 import sys
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.dont_write_bytecode = True
@@ -149,6 +151,107 @@ def main():
     assert 'dma-authority.json' in result['first_failure']['detail']
     backend.assert_not_called()
     rows.append(dict(name='run-entry-refuses-before-usb-owner-construction', passed=True))
+    install()
+    static_admission = images.dma_admission(launch, info)
+    rejected('unverified-snapshot-cannot-prepare', lambda: images.prepare(
+        launch, info, {'words': words, 'identity': authority['identity']},
+        args.output/'unverified', dma_binding=static_admission))
+
+    class ReturningModel(board.Live):
+        """Use the real run entry and prepare while modeling only board effects."""
+        initial_identity = authority['identity']
+
+        def __init__(self, *values):
+            super().__init__(*values, access=object())
+            self.identity = list(self.initial_identity)
+            self.reset_calls = 0
+            self.lock_held = False
+
+        @contextlib.contextmanager
+        def locked(self):
+            self.lock_held = True
+            try:
+                yield self
+            finally:
+                self.lock_held = False
+
+        def sanity(self):
+            assert self.lock_held
+
+        def reset(self):
+            assert self.lock_held and self.dma_binding.identity_verified
+            self.reset_calls += 1
+            self.identity = [5, 4, 3, 2, 1]
+            # Direct-run source files can change after admission. Preparation
+            # must consume the authenticated snapshot, including its authority.
+            (template/'session.bin').write_bytes(b'UNAUTHENTICATED REPLACEMENT')
+            (template/'dma-authority.json').write_bytes(b'{}\n')
+
+        def dram(self):
+            assert self.reset_calls == 1
+
+        def rails(self):
+            pass
+
+        def live_state(self, finite_npu=False):
+            return dict(identity=self.identity, port=self.args.port, words=words)
+
+        def launch(self, plan):
+            assert self.lock_held and self.reset_calls == 1
+            assert self.identity != list(self.dma_binding.identity)
+            session = (self.evidence/'bundle/session.bin').read_bytes()
+            decoded = host.session_decode(session)
+            assert decoded['extents'][images.DMA_EXTENT][56:112] == service[56:112]
+            assert (self.evidence/'bundle/dma-authority.json').read_bytes() == self.dma_binding.authority
+            return 'returned'
+
+        def capture(self, plan):
+            return dict(valid=True, payload=b'fixture', report=dict(synthetic=True))
+
+    owners = []
+
+    def model_backend(*values):
+        owner = ReturningModel(*values)
+        owners.append(owner)
+        return owner
+
+    run_args = copy.copy(queued)
+    run_args.image, run_args.template = args.image, template
+    run_args.evidence = args.output/'original-instance-run'
+    result = board.run_image(run_args, backend=model_backend)
+    assert result['outcome'] == 'returned', result['first_failure']
+    assert owners[-1].reset_calls == 1
+    rows.append(dict(name='original-instance-binding-survives-reset-and-source-replacement', passed=True))
+    install()
+    ReturningModel.initial_identity = [1, 2, 3, 4, 5]
+    run_args = copy.copy(queued)
+    run_args.image, run_args.template = args.image, template
+    run_args.evidence = args.output/'wrong-original-instance-run'
+    result = board.run_image(run_args, backend=model_backend)
+    assert result['outcome'] == 'refused-before-launch'
+    assert result['first_failure']['site'] == 'dma-identity'
+    assert owners[-1].reset_calls == 0
+    rows.append(dict(name='wrong-original-instance-refuses-before-reset', passed=True))
+    install()
+    offline_args = copy.copy(queued)
+    offline_args.image, offline_args.template = args.image, template
+    offline_args.evidence = args.output/'offline-snapshot'
+    offline_args.state = args.output/'synthetic-state.json'
+    offline_args.state.write_text(json.dumps(dict(identity=authority['identity'], words=words)))
+    admission_function = images.dma_admission
+
+    def replace_after_admission(*values):
+        admission = admission_function(*values)
+        (template/'session.bin').write_bytes(b'UNAUTHENTICATED OFFLINE REPLACEMENT')
+        (template/'dma-authority.json').write_bytes(b'{}\n')
+        return admission
+
+    with patch.object(images, 'dma_admission', side_effect=replace_after_admission) as validate:
+        with contextlib.redirect_stdout(io.StringIO()):
+            assert board.check_image(offline_args) == 0
+        assert validate.call_count == 1
+    rows.append(dict(name='offline-check-consumes-one-authenticated-snapshot', passed=True))
+    install()
     report = dict(passed=True, physical_access=False, physical_authority=False, synthetic_authority=True,
                   native_execution=False, image_sha256=images.sha(args.image), cases=rows)
     (args.output/'result.json').write_text(json.dumps(report, indent=2)+'\n')
