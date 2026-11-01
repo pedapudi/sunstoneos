@@ -117,17 +117,23 @@ checks cover the measurement formats, explicit high-word records and legacy
 stages in `qualification-1101/sustained-fault-validation.json`. These host cases
 do not qualify physical fault recovery.
 
-The next concurrency diagnostic requires additional approval for the existing
-eight-core CPU startup, vendor top CPU/DSU points and verified post-ROM rail
-normalization. The NPU-only authorization keeps PCK4 ON and DCDC2 untouched;
-it does not authorize those CPU power transitions. The written proposal and
-correctness, safety and recovery reviews are under `qualification-1101/` in the build root.
-The active-job cancellation design is prepared there; its physical run follows
-the concurrency stage.
+The eight-core concurrency diagnostic has coordinator approval for the existing
+CPU startup, normal shutdown and vendor top CPU/DSU points. Its post-ROM rail
+helper requires verified normal return and restored RAM. The NPU stays at
+852 MHz/800 mV, with PCK4 ON and DCDC2 untouched. Implementation review and
+host checks precede the CPU-only control and combined physical run, in that
+order. The approved proposal and panel records are under `qualification-1101/`
+in the build root. Active-job cancellation follows the concurrency stage.
 
-The runtime models up to eight catalogue clients and model switching. The board
-image has one slot and five catalogue models; direct FIFO USB and shader-graph
-loading remain incomplete. Configured eight NN cores and zero TP/TP-lite cores
+The SDK discovers model names, tensor counts and byte sizes from its image's
+immutable catalogue. A caller resolves a name to a local index; the SDK assumes
+neither a specific model list nor a fixed number of models. The data-driven
+generator supports a selected model or every entry in a supplied list. Host
+cases cover one, two and three reordered models, check metadata against decoded
+model tensors and refuse invalid indices or tensor sizes before device access.
+The runtime admits up to sixteen models and eight catalogue clients; the
+default OS profile has one client slot and links its selected model. Direct
+FIFO USB and shader-graph loading remain incomplete. Configured eight NN cores and zero TP/TP-lite cores
 are target records, not a physical identity measurement.
 
 **Physical NPU domain OFF is unsupported.** The selected vendor configuration
