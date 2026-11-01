@@ -16,6 +16,9 @@ import subprocess
 
 from harness import CACHE, environment
 
+CHECK_INPUTS = ['patches/freertos-smp-c.patch', 'patches/freertos-smp-macro.patch',
+                'checks/smp-kernel.c', 'checks/smp-context.c', 'checks/smp8-soak.c']
+
 MASK = 0xFFFF
 
 
