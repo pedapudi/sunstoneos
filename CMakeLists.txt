@@ -314,4 +314,5 @@ if(SUNSTONE_A733_STAGE2)
  include("${SUNSTONE_SOURCE_ROOT}/cmake/a733-standalone-boot.cmake")
 endif()
 
+include(cmake/latency-recorder.cmake)
 include(cmake/a733-os.cmake)

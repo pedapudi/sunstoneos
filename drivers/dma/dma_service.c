@@ -1,4 +1,5 @@
 #include "dma_service_i2s.h"
+#include "sunstone_latency.h"
 #include <string.h>
 
 static struct dma_service *instance;
@@ -321,9 +322,12 @@ static void worker(void *argument)
             continue;
         }
         unsigned pending=s->irq_bound ? atomic_exchange_explicit(&s->irq_pending,0,memory_order_acq_rel) : 0;
+        SS_LATENCY_EVENT_CLAIM(latency_irq, SS_LAT_DMA);
         unsigned active=0,event_driven_only=1;
         for (unsigned i=0;i<A733_DMA_CHANNELS;++i)
             if (poll_channel(s,i)) { active=1; if (s->irq_bound && !event_driven(s,i)) event_driven_only=0; }
+        /* All channels have observed the completion and maintained buffers. */
+        SS_LATENCY_EVENT_FINISH(latency_irq, SS_LAT_DMA);
         struct dma_service_message message;
         if (!s->irq_bound) {
             if (xQueueReceive(s->requests,&message,active ? 1 : portMAX_DELAY) != pdTRUE) continue;
@@ -496,6 +500,7 @@ int dma_service_bind_irq(struct dma_service *s,const struct dma_service_irq *irq
 void dma_service_irq_notify_from_isr(struct dma_service *s,int mask_ok,BaseType_t *woken)
 {
     configASSERT(s && s == instance && s->initialized && s->irq_bound && woken);
+    SS_LATENCY_EVENT_BEGIN(SS_LAT_DMA);
     atomic_fetch_or_explicit(&s->irq_pending,IRQ_EVENT|(mask_ok == 1 ? 0 : IRQ_FAILED),memory_order_release);
     vTaskNotifyGiveFromISR(s->worker,woken);
 }

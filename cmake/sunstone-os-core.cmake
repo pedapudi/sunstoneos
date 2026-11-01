@@ -1,4 +1,5 @@
 # OS implementation and device owners, independent of application sources.
+include("${CMAKE_CURRENT_LIST_DIR}/latency-instrumentation.cmake")
 option(SUNSTONE_A733_OS "Build the integrated OS image" OFF)
 option(SUNSTONE_A733_OS_RESIDENT "Integrated OS with the resident lifetime" OFF)
 option(SUNSTONE_A733_OS_USB_CLASSES "OS input, serial and camera host services" OFF)
@@ -324,6 +325,11 @@ if(SUNSTONE_A733_OS_USB_JPEG)
     drivers/video/a733_video_platform.c drivers/video/a733_video_unit.c drivers/iommu/a733_iommu.c)
 endif()
 list(TRANSFORM os_added PREPEND "${os_root}/")
+if(SUNSTONE_LATENCY)
+  list(APPEND os_sources "${os_root}/runtime/latency.c" "${os_root}/runtime/latency_irq.c")
+  list(APPEND os_external_inputs "${os_root}/include/sunstone_latency.h"
+    "${os_root}/cmake/latency-instrumentation.cmake")
+endif()
 list(APPEND os_sources "${os_boot_final}" ${os_added})
 list(REMOVE_DUPLICATES os_sources)
 # Device implementations are separate object libraries. Each selected owner
@@ -439,6 +445,10 @@ if(SUNSTONE_A733_OS_NPU)
 endif()
 set_property(TARGET sunstone-a733-os-core PROPERTY LINK_OPTIONS "${os_link}")
 target_link_options(sunstone-a733-os-core PRIVATE "-Wl,-Map,${os_build}/image.map")
+if(SUNSTONE_LATENCY)
+  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_LATENCY=1)
+  target_link_options(sunstone-a733-os-core PRIVATE -Wl,--wrap=vApplicationIRQHandler)
+endif()
 # Publish the exact OS compile configuration to application and device objects.
 foreach(property COMPILE_OPTIONS INCLUDE_DIRECTORIES COMPILE_DEFINITIONS COMPILE_FEATURES)
   get_target_property(value sunstone-a733-os-core ${property})
