@@ -190,7 +190,7 @@ Unless stated below, implementation is **planned**. Partial results apply only
 to the stated scope:
 
 - PCIe: **implemented** [native root-port preparation](pcie.md) with shared
-  clock, rail, pin and PMIC ownership, COMB1 PHY initialization, x1 Gen1 link
+  clock, rail, pin and PMIC ownership, COMB1 PHY initialization, x1 Gen3 link
   observation and read-only configuration access to one direct endpoint.
   Source comparison, composed host checks and native compilation pass. The
   [supervised application](pcie-application.md) connects the existing providers
@@ -221,8 +221,11 @@ to the stated scope:
   validates and records each request; the native write filter admits an iATU
   write only when it repeats that record. A configuration field selects a 2.5, 5
   or 8 GT/s target, and above 2.5 GT/s the port follows the board kernel's
-  directed speed change after training. Host-model checks pass; both
-  applications still select 2.5 GT/s, and no board test ran. A general
+  directed speed change after training. All three native applications request
+  the vendor Gen3 default and accept negotiated x1 Gen1–Gen3. Normalized REF
+  admission supports the boards' 26 MHz DCXO using the unchanged vendor
+  internal-100-MHz PHY sequence. Sanitizer, linked-image and QEMU checks pass
+  under `~/.cache/sunstoneos/build/pcie-1031/`; no endpoint is attached. A general
   [endpoint function client](pcie.md) is **implemented**. It scans the direct
   endpoint's functions 0–7 and refuses bridges, assigns memory BARs below
   4 GiB inside the aperture, delivers polling, INTx or MSI-X interrupts, moves
@@ -231,7 +234,7 @@ to the stated scope:
   asserting PERST. Twenty-four host-model cases pass, and both units compile
   for AArch64. The supervised board image
   [`sunstone-a733-pcie-nvme`](pcie-nvme.md) links both. One task brings the
-  port up at 2.5 GT/s, reads one admitted 4096-byte block with polled
+  port up with a Gen3 target, reads one admitted 4096-byte block with polled
   completion, shuts the controller down, stops the port with PERST held and
   reports the copied block through USB0. Any failure retains the port's leases
   and the queue and data pages. Linked-image and host checks pass against a
@@ -240,8 +243,10 @@ to the stated scope:
   authority. Ten linked native cases, thirteen route/dispatch cases, twenty
   host checks and default polling validation pass under `sol-nvme-msix-1028/`.
   Faults retain pages and port leases. No endpoint, NVMe device, interrupt or power transition has
-  run on hardware; the endpoint test driver keeps its own BAR and MSI setup. Bridges and switches, ASPM, embedded root DMA, Gen2
-  selection by the applications and physical Gen2/Gen3 links remain required.
+  run on hardware; the endpoint test driver keeps its own BAR and MSI setup.
+  Bridges and switches, ASPM, embedded root DMA and physical Gen3/fallback
+  qualification remain required. The frozen images are host-only: the shared
+  probe contract still needs complete PCIe/USB retirement and return restoration.
 - HDMI: **implemented** [controller, PHY and TV0 diagnostic output](hdmi.md)
   for 720p60 and 1080p60. Composed host checks, primary-source comparisons and
   native compilation pass. The [native startup binding](hdmi-native.md) now
@@ -1460,8 +1465,18 @@ to the stated scope:
   a finite period's queue wakes the DMA worker at once; an emulator check
   passes. The [integrated OS image](os-image.md) captures recognition input
   through the same receive path in its microphone build.
-  Physical continuity, playback, wire drain, cache visibility, Bluetooth PCM
-  routing and broader audio functions remain unqualified or required work.
+  The OS capture adapter also accepts guarded cyclic staging without exposing
+  raw DMA pages. Its host checks cover copied bytes, failure retention and
+  reopening. Actual FreeRTOS/provider cases keep a busy canceled writer in
+  DRAINING, keep a held copy readable through overrun and refuse stale tickets
+  after both duplex directions close and reopen. Generic recorded/paced PCM
+  uses the same capture output/headroom through the application kit with no
+  granted device or mimus dependency; sanitizer, AArch64 and full native image
+  checks pass. Evidence: `~/.cache/sunstoneos/build/audio-1031/frozen/README.md`.
+  These are software results. Physical continuity, playback, wire drain, cache
+  visibility, Bluetooth PCM routing and broader audio functions remain
+  unqualified or required work. No audio image is admitted to the new returning
+  probe runner until its retained resources and monitor lifetime are converted.
 - G2D: **implemented** one retained fill, source-copy, source-over-solid, exact 2× enlargement, general scaling or
   image-over-image operation per session through the [native application](g2d.md), with copy and scaling
   converting between the eight 32-bit RGB channel orders. Caller geometry is bounded
@@ -2462,23 +2477,21 @@ to the stated scope:
   through USB, then retains hardware because packet and transaction drain remain
   unproved. Live sensor frames do not reach ISP0: raw receiver input,
   parser-to-ISP0 routing and live ISP0 operation remain required.
-  A separate [recorded-image ISP0 application](camera-isp0.md) now accepts one
-  640×480 BGGR12 frame and produces an immutable copied NV16 frame through
-  TOP's DDR reader, ISP600, VIPP0 and camera DMA0. It needs no sensor. Pinned
-  GPL ISP600 defaults/setters run natively; no opaque tuning or runtime blob is
-  required. Guarded mappings retain both IOMMU masters 1 and 2, every parameter
-  extent, input/output buffers and provider leases through completion or ACK.
-  Final image `32eb5b93…` has one nominal EL1h bounded-call result, seven classified
-  failures and five serializer cases. Device effects and output pixels are modeled;
-  the fixtures establish neither numerical processing nor full task scheduling.
-  Old invalid negative runs are excluded. The [host workflow](isp0-preparation.md)
-  passes fifteen stream cases, geometry/input/proof and six allocation refusals,
-  plus readiness; seven root boot guards and three SRAM cases remain separate.
-  Evidence is under `isp0-native-20261020/`. The only current compiled/declared
-  source difference adds an independent CE clock writer without changing existing
-  functions. No full TinyUSB/DCD, physical, numerical, sensor or scheduler
-  qualification is established. Independent pixel comparison, wider processing,
-  scaling, 3A tuning, interrupt completion and physical recovery remain required.
+  The [recorded ISP0 application](camera-isp0.md) has **host-tested** replay of
+  one immutable 640×480 BGGR12 input through TOP, ISP600, VIPP0 and camera DMA0.
+  Each NV16 copy remains immutable through USB completion and sequence-bound
+  acknowledgment. Fresh status and fault checks precede retained buffer reuse;
+  memory, both IOMMU masters and provider leases remain owned. IRQ completion
+  uses DMA0, VIPP0 load and ISP0 SAVE with the original session deadline.
+  Sanitizer, linked-image and FreeRTOS QEMU checks pass, including a second
+  capture after USB acknowledgment and staggered IRQ events. An identified
+  host FFmpeg build supplies independent CPU comparison files; its algorithm
+  is not established as equivalent to ISP600. Evidence and frozen host-only
+  ELFs are under `~/.cache/sunstoneos/build/camera-isp-1031/`. The retained ISP
+  ELF fails the new probe runner's watchdog admission. Source-backed global
+  drain and probe conversion are required before a board run. Physical pixels,
+  interrupts, repeated operation, sensor input, wider processing and tuning
+  remain unqualified. No board was accessed for this work.
 
 - NPU: **tested** for interrupt completion and matching ShuffleNetV2 outputs
   in the returning diagnostics described above. The resident runtime and OS

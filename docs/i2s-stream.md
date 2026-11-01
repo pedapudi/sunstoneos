@@ -369,3 +369,58 @@ lossless wire drain. The DMAengine STOP/synchronize operations end DMA ownership
 not serializer activity. The cached source hashes and sections are retained in
 the file-playback evidence. Complete physical file playback remains unqualified;
 cyclic RX's undocumented device-ordering gap also remains open.
+
+## OS capture can consume guarded cyclic periods
+
+The OS capture service in `apps/os/audio.c` accepts `cyclic=1` in its private
+`os_audio_stream_config`. It uses the same fixed four-period DMA ring as the
+native audio application. A completed `CAPTURED_COPY` grants the driver's private
+staging buffer; `dma_service_copy_period` copies it into the client ring before
+the exact ticket is returned. The OS never reads cyclic DMA pages directly.
+A full client ring drops the completed copy and still returns its ticket.
+The next delivered frame offset exposes that gap.
+
+Finite mode remains the default. Selecting cyclic mode does not establish the
+physical completion/reuse ordering described above. Existing OS session tools
+have no cyclic-mode admission record, so no cyclic OS board launch is queued.
+The native audio launcher's existing ordering condition remains required.
+
+The OS checks period kind, ticket order, frame continuity, arithmetic overflow
+and observation-time order before publication. A copy refusal retains the held
+period and ends the session. Stop waits for the service's canceled result with
+buffers held. A subsequent start reaps, closes and reopens through the existing
+service before accepting another capture generation.
+
+Host checks in `checks/os-image-audio.py` exercise finite and cyclic delivery,
+copy refusal and reversed timestamps. Raw DMA pages contain deliberately
+incorrect bytes in the cyclic fixture, so successful PCM comparison establishes
+that delivery used staging. The real FreeRTOS/provider cases 17 and 18 in
+`checks/i2s-cyclic.py` cover a busy writer during cancellation, held-copy
+retention, overrun, both direction closes and stale tickets after reopening.
+Registers, DMA effects and cache visibility are modeled.
+
+## Compare the native lifecycle with the pinned vendor implementation
+
+The inputs below are the source-available Linux reference at revision
+`2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f`, pinned in `sources.lock.json`.
+They run only as host comparison inputs. SunstoneOS executes its native driver
+and FreeRTOS service; Linux and ALSA are not runtime dependencies. The vendor
+controller and PCM sources retain their GPL-2.0 notices in the cache and in the
+reference check's extracted compilation unit.
+
+| Step | Effective vendor source | Native operation and additional checks |
+| --- | --- | --- |
+| Clock selection | `snd_sun60iw2_i2s.c:snd_i2s_clk_rate`, lines 202–230, selects AUDIO1 DIV5 for the 24.576 MHz family. | The platform leases the existing AUDIO1 parent and exact 24.576 MHz output. The 16 kHz wire uses two 32-bit slots and the vendor divider. No clock or voltage policy changes here. |
+| Format and route | `snd_sunxi_i2s.c`, format helpers around lines 920–1204 and DMA parameters at 2531–2542, define channel maps, FIFO addresses and burst eight. | The planner and stream use those formats and DMA0 request 3. The reference check compares 135 supported plans and 1,602 refused ratios under halting sanitizers. |
+| Preparation | `sunxi_i2s_dai_prepare`, lines 1492–1514, flushes the chosen FIFO and clears its sample counter. | START waits for the self-clearing flush bit under a finite deadline before arming DMA. It clears only the selected direction's FIFO errors. |
+| Continuous transfer | `pcm_dmaengine.c:dmaengine_pcm_prepare_and_submit`, lines 148–174, submits a cyclic buffer; `sunxi-dma.c`, lines 1087–1198, links the final descriptor back to the first. | The native cyclic catalogue is immutable. TX keeps its sources immutable; RX copies only inside the guarded window. Coalesced interrupts use the extended package count. |
+| Start and shared directions | `sunxi_i2s_dai_tx_route` and `sunxi_i2s_dai_rx_route`, lines 1516–1557, enable direction and request bits. | DMA is armed before demand. TX is enabled after FIFO priming. Every direction update preserves its peer's CTL and ICTL bits. |
+| Cancellation and retirement | Vendor route helpers disable DRQ/direction. `sun6i_dma_terminate_all`, lines 1268–1310, pauses, disables and resumes the DMA channel. `pcm_dmaengine.c`, lines 351–383, synchronizes callbacks before closing. | The native path disables demand before pause/disable/resume and waits for both enable and bus-busy to clear. A held staging ticket blocks reap. A software timeout retains allocations, clocks and pins. |
+| Reopen | ALSA rebuilds stream state and submits a fresh transfer on the next open/start. | The service preserves its ticket generation across clean close. Both duplex directions must relinquish the common binding before either reopens. Old copy and PUT tickets are refused. |
+| Final output | Vendor TX stop repeatedly flushes FIFO, then delays 250 microseconds before disabling TX. This truncating stop does not establish a natural serializer drain. | Runtime file EOF reports memory consumption and observed FIFO empty, retaining serializer, clock and pin ownership. Explicit cancellation may truncate output. Wire completion remains unqualified. |
+
+The reference file hashes are `d3446ec1e11a3fd69d53161f5612a0155e43391ee14569f1fecf942d7daec3a3`
+for the controller, `0dc8d0c0912fced3dac450ffd98f5694bf0146e7608c922e6a562e6e7ed795d5`
+for the A733 clock adapter, `017b8aca7246ffdf786f9e20a38f3e9c2b62f1f6115cfc6e23d20052ba999620`
+for the PCM helper, and `d60e6598835ddf16b1f2374f746abd82da507dfefeb16edade9a0f7021b3d3bb`
+for DMA. The manual's destination-write/counter ordering gap remains unresolved.

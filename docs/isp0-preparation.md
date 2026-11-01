@@ -1,7 +1,7 @@
-# Prepare and capture one recorded Bayer frame with ISP0
+# Prepare and capture recorded Bayer frames with ISP0
 
-The ISP0 application processes one recorded 640×480 BGGR12 frame and retains a
-CPU-owned copy of its NV16 output. Preparation validates the actual linked ELF, allocator extents and complete IOMMU
+The ISP0 application processes one immutable recorded 640×480 BGGR12 frame and
+retains a CPU-owned copy of each requested NV16 output. Preparation validates the actual linked ELF, allocator extents and complete IOMMU
 page table. The retained SRAM launcher is built from those prepared inputs. Physical operation
 and numerical pixel correctness remain unqualified. No camera is required for
 this recorded-input path.
@@ -13,9 +13,9 @@ input; those bytes belong to the allocation and are outside the input digest.
 
 Output contains 614,400 bytes. Its first 307,200 bytes are the Y plane; its next
 307,200 bytes are interleaved U and V. Both planes have a 640-byte stride.
-The host authenticates the copied output digest and extent. An independent ISP
-pixel oracle is unavailable, so a successful capture does not establish numerical
-correctness.
+The host authenticates the copied output digest and extent. An independent CPU reference is available through `checks/isp0-pixel-reference.py`.
+Its Bayer interpolation and color conversion are not established as equivalent
+to ISP600, so a successful capture does not establish numerical correctness.
 
 ## Seal the input
 
@@ -135,3 +135,17 @@ allocation and table artifacts bind the accepted cold-reference session.
 The exact resumed link and objcopy commands are preserved beside the bundle in
 `host-prepared/launcher-resume-commands.json`. They consumed the original compiled
 objects and produced the retained launcher without recompilation.
+
+## Replay the immutable input after consumer acknowledgment
+
+The capture API's optional `frames` argument requests one through sixteen
+captures under the original absolute deadline. Each output is durable before
+command 2 acknowledges it and requests the next capture. Subsequent results use
+version 2 with their sequence at byte 148. Command 3 acknowledges the final
+replay output; a single capture retains the legacy command-1 behavior.
+
+`capture_device(..., frames=N)` saves replay frames as `output-0001.nv16` and
+subsequent numbered files. It validates each sequence and preserves earlier
+outputs when a later transfer or durability check fails. The supervisor's
+existing caller defaults to one capture. See [the replay contract](camera-isp0.md)
+for native completion, IRQ handling, reference limits and probe conversion.

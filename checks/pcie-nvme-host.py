@@ -31,7 +31,7 @@ def main():
  path=record['nvme']['path'];original=json.loads(Path(path).read_text())
  for name,key,value,message in [('read-authority','namespace_read_authorized',False,'NVMe controller or read authority is incomplete.'),
    ('cold-controller','controller_disabled_at_handoff',None,'NVMe controller or read authority is incomplete.'),
-   ('other-lba','lba',9,'NVMe read authority differs.'),('other-schema','schema','a733-pcie-endpoint-test-v1','NVMe read authority differs.'),
+   ('other-lba','lba',9,'NVMe read authority differs.'),('other-function','function',1,'NVMe read authority differs.'),
    ('anonymous-controller','controller',dict(model='',serial='x',firmware='y'),'Actual NVMe controller identity required.')]:
   proof={**original,key:value}
   if value is None:proof.pop(key)

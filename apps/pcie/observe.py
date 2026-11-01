@@ -17,7 +17,7 @@ def decode(frame,session):
     payload=frame[128:]
     if count!=64 or len(payload)!=64 or frame[64:96]!=hashlib.sha256(payload).digest():raise ValueError('PCIe output hash/extent differs')
     observed,reads,function=struct.unpack_from('<Q2I',payload);vendor,device,command,link,revision,header,pcie,msi,reserved=struct.unpack_from('<4HI4B',payload,16)
-    if not observed or reads!=4 or function or (vendor,device)!=struct.unpack_from('<2H',session,788) or command&4 or link&0x3ff!=0x11 or header&127 or reserved:raise ValueError('PCIe identity/link/command differs')
+    if not observed or reads!=4 or function or (vendor,device)!=struct.unpack_from('<2H',session,788) or command&4 or (link&0x3f0)!=0x10 or not 1<=link&15<=3 or header&127 or reserved:raise ValueError('PCIe identity/link/command differs')
     if not 0x40<=pcie<=0xe4 or pcie&3 or msi and (not 0x40<=msi<=0xe8 or msi&3):raise ValueError('PCIe capability pointers differ')
     pairs=[struct.unpack_from('<2I',payload,32+8*i) for i in range(4)]
     if [a for a,v in pairs]!=[0,4,8,12]:raise ValueError('PCIe copied offset selection differs')

@@ -50,7 +50,8 @@ int pcie_step(void)
   ready=outcome(a733_pcie_identity(&pcie.port,&pcie.endpoint));if(ready<=0)return ready;
   if(pcie.endpoint.vendor!=pcie.session.vendor||pcie.endpoint.device!=pcie.session.device||
   (pcie.endpoint.command&4)||(pcie.endpoint.header_type&127)||!pcie.endpoint.pcie_cap||
-  (pcie.endpoint.link_status&0x3ff)!=0x11)return fail();
+  (pcie.endpoint.link_status&0x3f0)!=0x10||!(pcie.endpoint.link_status&15)||
+  (pcie.endpoint.link_status&15)>pcie.config.link_speed)return fail();
   pcie.stage=2;return 0;
  case 2:
   r=a733_pcie_config_read(&pcie.port,0,offsets[pcie.index],pcie.config.lifetime_deadline,&value);
@@ -86,7 +87,8 @@ int pcie_step(void)
  }
  case 5:
   ready=outcome(a733_pcie_config_read(&pcie.port,0,pcie.pcie_cap+0x10,pcie.config.lifetime_deadline,&value));if(ready<=0)return ready;
-  if(((value>>16)&0x3ff)!=0x11)return fail();pcie.endpoint.link_status=(uint16_t)(value>>16);pcie.stage=6;return 0;
+  if(((value>>16)&0x3ff)!=(pcie.endpoint.link_status&0x3ffu))return fail();
+  pcie.endpoint.link_status=(uint16_t)(value>>16);pcie.stage=6;return 0;
  case 6:
   ready=outcome(a733_pcie_poll(&pcie.port));if(ready<=0)return ready;pcie.stage=7;return pcie_publish();
  default:return fail();

@@ -12,7 +12,7 @@ def main():
  prep.validate_admission(record,ih,hashlib.sha256(raw).hexdigest(),raw)
  results={'nominal_full_proof':True}
  path=record['endpoint_test']['path'];original=json.loads(Path(path).read_text())
- for name,key,value,message in [('ordering','completion_before_outbound_unmap',False,'Endpoint DMA/controller ordering proof is incomplete.'),('private-dma','dma_private',True,'Endpoint DMA/controller ordering proof is incomplete.'),('wrong-rx','rx_dma_memcpy',False,'Endpoint DMA/controller ordering proof is incomplete.'),('configuration','dma_configuration_sha256','00'*32,'Controller, DMA source and actual configuration bytes must be retained.')]:
+ for name,key,value,message in [('ordering','completion_before_outbound_unmap',False,'Endpoint DMA/controller ordering proof is incomplete.'),('private-dma','dma_private',True,'Endpoint DMA/controller ordering proof is incomplete.'),('wrong-rx','rx_dma_memcpy',False,'Endpoint DMA/controller ordering proof is incomplete.'),('missing-tx-channel','tx_channel','','Selected TX/RX channels required.')]:
   proof={**original,key:value};blob=json.dumps(proof,sort_keys=True).encode();identity=hashlib.sha256(blob).hexdigest();changed=bytearray(raw);changed[808:840]=bytes.fromhex(identity)
   admission={**record,'endpoint_test':{'path':path,'sha256':identity},'session_template_sha256':hashlib.sha256(changed).hexdigest()}
   try:prep.validate_admission(admission,ih,admission['session_template_sha256'],changed,{path:blob})

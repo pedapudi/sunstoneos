@@ -626,3 +626,43 @@ The alias maps the shared USB payload pages for the image. A trusted application
 may process only its own completed leases. Grants control service admission;
 they do not provide per-class confidentiality against an application that guesses
 another payload address.
+
+## Recorded PCM can use the capture interface without a device
+
+An application can declare an audio format and an authenticated INPUT region
+without requesting a capture device. The image reserves capture storage from the
+manifest's maximum frame count. `ss_capture_replay_open(region, offset, frames,
+paced)` selects raw PCM in that region. The offset can skip a container header;
+the service does not parse containers or convert samples.
+
+The source format is the manifest's sample rate, channel count and signed
+little-endian sample width. Replay accepts one or two channels and 16-, 24- or
+32-bit containers. The region length after the offset must contain whole frames.
+The requested window must fit the source, capture storage and manifest frame
+bounds. A granted I2S or headset device excludes replay. Opening replay changes
+no device ownership and is allowed once per image lifetime.
+
+One application task then calls `ss_capture` with consecutive sequences starting
+at 1. Success returns one copied window in the ordinary capture buffer, with
+64 writable bytes before the PCM. Input bytes remain unchanged. Repeating a
+completed sequence returns the same output. Requesting the next sequence
+releases the earlier output; stale sequences are refused even while pacing is
+still pending. EOF returns -1 without changing the output arguments. A shorter
+final window succeeds only when it meets the manifest's minimum frame count.
+
+With `paced=1`, the first request starts a recording clock. A window becomes
+available after its cumulative frame duration, rounded up to the architectural
+counter tick. Later windows follow that same clock, so a late consumer catches
+up without adding drift. Calls return 0 while waiting; applications can use
+`ss_progress` and `ss_usb_wait` between polls. A counter regression retains a
+failed replay. With `paced=0`, copied windows are available immediately.
+
+`checks/os-audio-replay.py` compiles the production capture implementation without
+I2S or headset support, then checks it under AddressSanitizer,
+UndefinedBehaviorSanitizer and AArch64 instruction emulation. The link fixture
+in `checks/os-audio-replay-image.cmake` builds a generic application against the
+OS with an empty `MIMUS_DIR`. After the application-kit patch is applied, its
+manifest can have empty device lists. `checks/os-audio-replay-linked.py` executes
+that application's actual linked instructions and verifies 320 frames, 20 ms
+of paced waits and an independent Adler-32 checksum. Grant publication, liveness,
+clock, waits, progress and finish are modeled; startup and scheduling do not run.

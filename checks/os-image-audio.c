@@ -37,7 +37,7 @@ static void reset(void)
 }
 static struct os_audio_stream_config config(uint32_t rate,unsigned channels,unsigned bits,
     uint32_t period_bytes,uint32_t periods)
-{return (struct os_audio_stream_config){{rate,(uint8_t)channels,(uint8_t)bits,{0}},period_bytes,periods,ring_buffer};}
+{return (struct os_audio_stream_config){{rate,(uint8_t)channels,(uint8_t)bits,{0}},period_bytes,periods,ring_buffer,0};}
 static unsigned count(char op){unsigned n=0;for(unsigned i=0;i<logged;++i)n+=log[i]==op;return n;}
 /* Stream task steps and adapter requests in turn, until generation g is
  * captured: 1, or -1 once the adapter refuses. */
@@ -123,6 +123,15 @@ void os_check_run(unsigned selected,unsigned samples)
         delivery(config(48000,2,16,2048,3),4);
         delivery(config(96000,1,32,4096,6),4);
         delivery(config(192000,1,16,4096,8),2);
+        os_check_result=1;return;
+    }
+    if(mode==8||mode==9||mode==10){
+        struct os_audio_stream_config c=config(16000,1,16,4096,4);c.cyclic=1;
+        if(mode==8){delivery(c,2);os_check_result=1;return;}
+        check(configure(&c)&&os_audio_stream_start()==1,140);
+        int r=0;for(unsigned i=0;i<20&&r==0;++i)r=step();
+        check(r<0&&held_ticket&&!puts_done&&!reaps&&!closes,141);
+        fail();struct os_audio_period p;check(os_audio_stream_read(&p)<0,142);
         os_check_result=1;return;
     }
     if(mode==7){
