@@ -60,6 +60,10 @@ def notification(actions, sticky=True, register_first=True, observe_gate=True):
             latch = True
         return (value, 'RECEIVED', latch, count)
 
+    def observe(word):
+        # The same read determines readiness for gated and ungated consumers.
+        return bool(word[2] or word[1] == 'RECEIVED')
+
     def successors(s):
         def out(name, **kw):
             return name, replace(s, **kw)
@@ -112,10 +116,9 @@ def notification(actions, sticky=True, register_first=True, observe_gate=True):
         if s.owner == 1:
             yield out('owner gets FIFO ticket', owner=2, queue=s.queue+(2,))
         if s.owner == 2 and s.holder == -1 and s.queue and s.queue[0] == 2:
-            value, state, latch, count = s.word
+            completed = observe(s.word)
             yield out('owner stable consume or timeout winner', owner=3, holder=2,
-                      ready=int(latch or state == 'RECEIVED'),
-                      bad=s.won and not (latch or state == 'RECEIVED'))
+                      ready=int(completed), bad=s.bad or (s.won and not completed))
         if s.owner == 3:
             yield out('owner releases gate', owner=4, holder=-1, queue=s.queue[1:],
                       word=s.word[:3]+(s.word[3]-1,), detached=False)
@@ -133,9 +136,12 @@ def notification(actions, sticky=True, register_first=True, observe_gate=True):
         if s.owner == 8:
             yield out('next wait opens gate before physical switch', owner=0, holder=-1,
                       queue=s.queue[1:], word=s.word[:3]+(s.word[3]-1,))
-        if not observe_gate and s.holder in (0,1):
-            yield out('illegal transient observer', bad=True)
-    return Notify(), successors, lambda s: not s.bad and s.ready <= 1
+        if not observe_gate and s.owner == 0 and s.detached:
+            completed = observe(s.word)
+            yield out(f'owner ungated payload read {s.word[:3]}', owner=4,
+                      ready=int(completed), detached=False,
+                      bad=s.bad or (s.won and not completed))
+    return Notify(), successors, lambda s: not s.bad
 
 
 @dataclass(frozen=True)

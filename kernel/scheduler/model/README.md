@@ -64,6 +64,11 @@ cases have no depth cutoff. Negative cases stop at the first invariant violation
   generations reset the completion history. Stable observation must preserve
   an established completion despite intervening clears. Negative cases remove
   the sticky latch, registration during payload mutation or observer exclusion.
+  The observer negative reads the actual payload and applies the same completion
+  check as gated consumption. A read between payload clear and set can miss an
+  established completion; a stable post-set read with its latch set succeeds.
+  This case checks completion preservation; duplicate insertion is checked by
+  the separate block case.
 - The block case separates gated wait entry, PREPARING, physical switch,
   notification completion, delayed hint and timeout. Two producers race one
   timeout. The winner cannot change after notification, and current-wait ready
