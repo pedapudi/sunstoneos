@@ -40,6 +40,7 @@ struct a733_dma_pool_session {
     enum a733_i2s_direction direction;
     unsigned count, copy_bytes, admitted;
     atomic_uint state;
+    atomic_uint retire_requested, retired;
     TaskHandle_t bootstrap;
     StaticTask_t bootstrap_state;
     StackType_t bootstrap_stack[A733_DMA_POOL_BOOT_STACK];
@@ -81,4 +82,8 @@ int a733_dma_pool_session_stream_supervised_init(struct a733_dma_pool_session *,
 /* Use with the private FreeRTOS port's task-privilege hook. Only the exact
  * bootstrap creation and existing service worker creation receive EL1t. */
 BaseType_t a733_dma_pool_task_privileged(TaskFunction_t, void *);
+/* After normal CLOSE and dma_service_retired: wake the original bootstrap
+ * to verify the adopted platform, then wait for its last-access acknowledgment.
+ * No pool, clock token or descriptor allocation is released. */
+int a733_dma_pool_session_retire(struct a733_dma_pool_session *);
 #endif

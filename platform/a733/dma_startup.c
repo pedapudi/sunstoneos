@@ -45,7 +45,8 @@ static int enter(void *cookie,uint64_t deadline)
 {
     struct a733_dma_startup *b=cookie;
     if(!task_owner(b) || b->register_held || !b->token.id ||
-        !same_token(&b->token,&b->platform.token) || deadline!=b->handoff.allowed.deadline_us) return -1;
+        !same_token(&b->token,&b->platform.token) ||
+        deadline!=(b->retire_deadline?b->retire_deadline:b->handoff.allowed.deadline_us)) return -1;
     if(!a733_platform_lock_enter(b->locks,A733_PLATFORM_REGISTER_LOCK,deadline)) return 0;
     b->register_held=1;return 1;
 }
@@ -63,7 +64,12 @@ static int now(void *cookie,uint64_t *out)
 static int read_reg(void *cookie,uintptr_t address,uint32_t *out)
 {
     struct a733_dma_startup *b=cookie;
-    return task_owner(b) && b->register_held && a733_dma_platform_native_read(0,address,out);
+    int result=task_owner(b) && b->register_held && a733_dma_platform_native_read(0,address,out);
+    if(b->retire_deadline&&!b->retire_fault){
+        b->retire_read_address=address;b->retire_read_result=result;
+        b->retire_read_value=result==1?*out:0;
+    }
+    return result;
 }
 static int write_reg(void *cookie,uintptr_t address,uint32_t value)
 {
@@ -115,7 +121,29 @@ enum a733_dma_platform_result a733_dma_startup_poll(struct a733_dma_startup *b)
     return r;
 }
 int a733_dma_startup_ready(const struct a733_dma_startup *b)
-{return b && b->initialized && !b->failed && a733_dma_platform_ready(&b->platform);}
+{return b && b->initialized && !b->failed && !b->retired && a733_dma_platform_ready(&b->platform);}
+enum a733_dma_platform_result a733_dma_startup_retire_adopted(
+    struct a733_dma_startup *b,uint64_t deadline)
+{
+    if(!task_owner(b)||!deadline||b->handoff.allowed.cold||
+       (b->retire_deadline&&b->retire_deadline!=deadline))return A733_DMA_PLATFORM_RETAINED;
+    if(b->retired)return A733_DMA_PLATFORM_READY;
+    b->retire_deadline=deadline;
+    if(!a733_counter_clock_now(b->clock,&b->retire_now)){
+        b->retire_fault=1;b->failed=1;return A733_DMA_PLATFORM_RETAINED;
+    }
+    if(b->retire_now>=deadline){
+        b->retire_fault=2;b->failed=1;return A733_DMA_PLATFORM_RETAINED;
+    }
+    enum a733_clock_result token=a733_clock_token_status(b->registry,&b->token);
+    b->retire_token_result=token;
+    if(token==A733_CLOCK_BUSY)return A733_DMA_PLATFORM_BUSY;
+    if(token!=A733_CLOCK_OK){b->retire_fault=3;b->failed=1;return A733_DMA_PLATFORM_RETAINED;}
+    enum a733_dma_platform_result r=a733_dma_platform_verify_adopted(&b->platform,deadline);
+    if(r==A733_DMA_PLATFORM_RETAINED){b->retire_fault=4;b->failed=1;}
+    if(r==A733_DMA_PLATFORM_READY)b->retired=1;
+    return r;
+}
 
 int a733_dma_startup_prepared(void *cookie,uintptr_t controller,uint16_t channels)
 {

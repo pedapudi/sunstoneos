@@ -1,0 +1,128 @@
+--- port.c
++++ port.c
+@@ -40,6 +40,9 @@
+ /* Scheduler includes. */
+ #include "FreeRTOS.h"
+ #include "task.h"
++#ifdef SUNSTONE_LATENCY
++#include "sunstone_latency.h"
++#endif
+ 
+ /* MPU includes. */
+ #include "mpu_wrappers.h"
+@@ -1416,6 +1419,9 @@
+ 
+ void vPortClearInterruptMask( UBaseType_t uxNewMaskValue )
+ {
++#ifdef SUNSTONE_LATENCY
++    if( uxNewMaskValue > portMAX_API_PRIORITY_MASK ) ss_latency_mask_close( portGET_CORE_ID() );
++#endif
+     #if ( configNUMBER_OF_CORES > 1 )
+         /* An EL1 task writes the mask in line; DAIF keeps the caller's value,
+          * as the supervisor call returns the caller's SPSR. */
+@@ -1447,6 +1453,9 @@
+ 
+ void vPortClearInterruptMaskFromISR( UBaseType_t uxNewMaskValue )
+ {
++#ifdef SUNSTONE_LATENCY
++    if( uxNewMaskValue > portMAX_API_PRIORITY_MASK ) ss_latency_mask_close( portGET_CORE_ID() );
++#endif
+     __asm volatile (
+         "MSR DAIFSET, #2        \n"
+         "DSB SY                 \n"
+@@ -1466,6 +1475,9 @@
+ UBaseType_t uxPortSetInterruptMask( void )
+ {
+     UBaseType_t ullPMRValue;
++#ifdef SUNSTONE_LATENCY
++    const uint64_t latency_start = ss_latency_now();
++#endif
+ 
+     #if ( configNUMBER_OF_CORES > 1 )
+         if( ( ullPortGetTaskRegister() >> portTASK_REGISTER_EL1_BIT ) & 1U )
+@@ -1483,6 +1495,11 @@
+                                  ::"r" ( ( uint64_t ) portMAX_API_PRIORITY_MASK ) : "memory" );
+             }
+ 
++
++#ifdef SUNSTONE_LATENCY
++            if( ullPMRValue > portMAX_API_PRIORITY_MASK )
++                ss_latency_mask_open( portGET_CORE_ID(), latency_start, ( uintptr_t ) __builtin_return_address( 0 ) );
++#endif
+             return ullPMRValue;
+         }
+     #endif
+@@ -1496,6 +1513,11 @@
+         : "x0", "memory"
+     );
+ 
++
++#ifdef SUNSTONE_LATENCY
++    if( ullPMRValue > portMAX_API_PRIORITY_MASK )
++        ss_latency_mask_open( portGET_CORE_ID(), latency_start, ( uintptr_t ) __builtin_return_address( 0 ) );
++#endif
+     return ullPMRValue;
+ }
+ 
+@@ -1503,6 +1525,9 @@
+ UBaseType_t uxPortSetInterruptMaskFromISR( void )
+ {
+     UBaseType_t ullPMRValue;
++#ifdef SUNSTONE_LATENCY
++    const uint64_t latency_start = ss_latency_now();
++#endif
+ 
+     __asm volatile ( "MRS %0, ICC_PMR_EL1" : "=r" ( ullPMRValue ) );
+ 
+@@ -1520,6 +1545,11 @@
+                          ::"r" ( ( uint64_t ) configMAX_API_CALL_INTERRUPT_PRIORITY << portPRIORITY_SHIFT ) : "memory" );
+     }
+ 
++
++#ifdef SUNSTONE_LATENCY
++    if( ullPMRValue > portMAX_API_PRIORITY_MASK )
++        ss_latency_mask_open( portGET_CORE_ID(), latency_start, ( uintptr_t ) __builtin_return_address( 0 ) );
++#endif
+     return ullPMRValue;
+ }
+ 
+@@ -1724,6 +1754,9 @@
+         configASSERT( eLockNum < eLockCount );
+ 
+         uint32_t ulLockBit = 1u << eLockNum;
++#ifdef SUNSTONE_LATENCY
++        const uint64_t latency_start = ss_latency_now();
++#endif
+ 
+         /* Lock acquire */
+         if( uxAcquire )
+@@ -1740,6 +1773,9 @@
+                 {
+                     configASSERT( prvGet64( &( xPortLocks[ eLockNum ].ullRecursionCount ) ) != 255u );
+                     prvSet64( &( xPortLocks[ eLockNum ].ullRecursionCount ), ( prvGet64( &( xPortLocks[ eLockNum ].ullRecursionCount ) ) + 1 ) );
++#ifdef SUNSTONE_LATENCY
++                    ss_latency_lock_acquired( ucCoreID, eLockNum, latency_start, ( uintptr_t ) __builtin_return_address( 0 ) );
++#endif
+                     return;
+                 }
+ 
+@@ -1769,6 +1805,9 @@
+             /* Assert the lock count is 0 when the spinlock is free and is acquired. */
+             configASSERT( prvGet64( &( xPortLocks[ eLockNum ].ullRecursionCount ) ) == 0 );
+ 
++#ifdef SUNSTONE_LATENCY
++            ss_latency_lock_acquired( ucCoreID, eLockNum, latency_start, ( uintptr_t ) __builtin_return_address( 0 ) );
++#endif
+             /* Set lock count as 1. */
+             prvSet64( &( xPortLocks[ eLockNum ].ullRecursionCount ), 1 );
+             /* Record that this core owns the lock. */
+@@ -1781,6 +1820,9 @@
+             configASSERT( ( prvGet64( &( xPortCoreStates[ ucCoreID ].ullOwnedLocks ) ) & ulLockBit ) != 0 );
+             configASSERT( prvGet64( &( xPortLocks[ eLockNum ].ullRecursionCount ) ) != 0 );
+ 
++#ifdef SUNSTONE_LATENCY
++            ss_latency_lock_releasing( ucCoreID, eLockNum );
++#endif
+             /* Reduce the recursion count by 1. */
+             prvSet64( &( xPortLocks[ eLockNum ].ullRecursionCount ), ( prvGet64( &( xPortLocks[ eLockNum ].ullRecursionCount ) ) - 1 ) );
+ 

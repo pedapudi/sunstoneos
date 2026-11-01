@@ -45,6 +45,7 @@ struct ss_extent {
  * with the prefix epoch stamped in when the grant names clusters. */
 enum {
     SS_EXTENT_THERMAL = 1, SS_EXTENT_AUDIO = 2, SS_EXTENT_NPU = 3, SS_EXTENT_CPU_GRANT = 4, SS_EXTENT_JPEG = 5, SS_EXTENT_USB_MEMORY = 6,
+    SS_EXTENT_DMA = 7,             /* adopted DMA0 RAM-copy service facts */
     SS_EXTENT_INPUTS = 16           /* struct ss_input_fact per INPUT region, manifest order */
 };
 /* USB class profile's reserved NC pool and read-only application alias.
