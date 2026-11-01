@@ -26,9 +26,14 @@ static unsigned char *guards[22];
 static StaticTask_t tasks[3];
 static StackType_t stacks[3][4096];
 static uint32_t stage, peer_done, publish_waiting, publish_release, fault_mode;
-static uint32_t calls, published, enabled, isolated, handled, cores;
+static uint32_t calls, published, enabled, isolated, handled, cores, mmu_flushes;
 static unsigned char registers[0xa108];
 static unsigned running, stopping, first_publish = 1;
+/* Cases 7/8 hold the counter at the OPEN boundary after the controller is
+ * ready, while the MMU flush is still pending. Case 9 crosses it in the
+ * flush completion callback. All preceding setup uses the normal clock. */
+static uint64_t forced_now;
+static unsigned deadline_crossed;
 
 static uint32_t get(const uint32_t *p) { return __atomic_load_n(p, __ATOMIC_ACQUIRE); }
 static void set(uint32_t *p, uint32_t v) { __atomic_store_n(p, v, __ATOMIC_RELEASE); }
@@ -80,6 +85,15 @@ static int now(void *ctx, uint64_t *out)
     callback(ctx); uint64_t counter, frequency;
     __asm__ volatile("mrs %0, cntpct_el0\n mrs %1, cntfrq_el0" : "=r"(counter), "=r"(frequency));
     *out = (counter / frequency) * 1000000 + (counter % frequency) * 1000000 / frequency;
+    if ((gpu_service_case == 7 || gpu_service_case == 8) &&
+        service.phase == PVR_GPU_SERVICE_CHECKING && service.control.phase == PVR_GPU_CONTROL_READY &&
+        service.flush.phase == PVR_GPU_FLUSH_SUBMIT && !forced_now) {
+        /* Let the preceding flush publication finish before the clock jumps;
+         * the next service step begins at this injected boundary. */
+        forced_now = service.deadline - (gpu_service_case == 8);
+        return 1;
+    }
+    if (forced_now) *out = forced_now;
     return 1;
 }
 static int read_reg(void *ctx, uint32_t off, uint32_t width, uint64_t *out)
@@ -126,7 +140,8 @@ static int power_update(void *ctx, enum a733_gpu_power_bank bank, uint32_t off, 
 {
     uint32_t old;
     if (!power_read(ctx, bank, off, &old)) return 0;
-    callback(ctx); configASSERT((unsigned)bank < 2 && !(off & 3) && off < 0x6000);
+    callback(ctx); configASSERT((unsigned)bank < 3 && !(off & 3) && off < 0x6000);
+    configASSERT(bank != A733_GPU_CORE || off == 0 || off == 0x20);
     power_registers[bank][off/4] = (old & ~clear) | value;
     if (bank == A733_GPU_CCU && off == 0xb20) power_registers[bank][off/4] &= ~(1u << 27);
     return 1;
@@ -229,24 +244,68 @@ static int barrier(void *ctx, enum pvr_ccb_barrier kind)
     (void)kind; __asm__ volatile("dsb sy" ::: "memory"); return 1;
 #endif
 }
+static void fixture_executed(void)
+{
+    uint32_t *count = (uint32_t *)(resource(PVR_FW_OS_DATA) + 568);
+    __asm__ volatile("dsb sy" ::: "memory");
+    set(count, get(count) + 1);
+}
+static int executed(void *ctx, uint32_t *out)
+{
+    callback(ctx);
+    if (gpu_service_case == 9 && service.flush.phase == PVR_GPU_FLUSH_WAIT && service.flush.consumed) {
+        forced_now = service.deadline;
+        deadline_crossed = 1;
+    }
+#ifdef SUNSTONE_GPU_NATIVE_MEMORY
+    return a733_gpu_memory_executed(&memory, out);
+#else
+    *out = get((uint32_t *)(resource(PVR_FW_OS_DATA) + 568)); return 1;
+#endif
+}
 static int kick(void *ctx, uint32_t off, uint32_t value)
 {
     callback(ctx); configASSERT(running && off == 0xb00 && !value);
     unsigned next = (unsigned)word(resource(0), 4), slot = (next - 1) & 127;
     unsigned char *command = resource(1) + slot * 88;
     uint32_t type = (uint32_t)word(command, 4);
-    configASSERT(type == PVR_CCB_HEALTH || type == (PVR_CCB_MAGIC | 107));
-    if (type != PVR_CCB_HEALTH) {
+    configASSERT(type == PVR_CCB_HEALTH || type == (PVR_CCB_MAGIC | 107) || type == (PVR_CCB_MAGIC | 102));
+    if (type == (PVR_CCB_MAGIC | 102)) {
+        /* The MMU-cache command once, after the health check and before
+         * READY: catalogue level, the MMU sync object, update value 0. */
+        configASSERT(service.phase == PVR_GPU_SERVICE_CHECKING && service.control.phase == PVR_GPU_CONTROL_READY);
+        configASSERT(word(command + 8, 4) == 0x0400001f &&
+                     word(command + 12, 4) == pvr_fw_state_layout(PVR_FW_MMU_SYNC)->address && !word(command + 16, 4));
+        __atomic_fetch_add(&mmu_flushes, 1, __ATOMIC_RELEASE);
+    } else if (type != PVR_CCB_HEALTH) {
         configASSERT(!word(resource(PVR_FW_POWER_SYNC), 4));
         if (get(&fault_mode) != 2) put(resource(PVR_FW_POWER_SYNC), 4, 1);
         if (word(command + 8, 4) == 1) stopping = 1;
     }
-    put(resource(0) + 128, 4, next); put(resource(2) + slot * 4, 4, 1); return 1;
+    /* With the executed count bound, the fixture models the open A733
+     * firmware: the health and MMU-cache commands get no return word
+     * (board-session-20261025-18, apps/gpu-power-id/fw-job.inc). Fixtures
+     * that bind no count model a firmware that writes it. The executed count
+     * (OS data +568) passes every consumed command. */
+    put(resource(0) + 128, 4, next);
+    if (!config.executed || (type != PVR_CCB_HEALTH && type != (PVR_CCB_MAGIC | 102)))
+        put(resource(2) + slot * 4, 4, 1);
+    fixture_executed();
+    return 1;
 }
 static int irq_read(void *ctx, uint32_t off, uint32_t *out)
 {
     callback(ctx); configASSERT(off == 0x8a8);
     if (get(&fault_mode) == 3) return 0;
+    if ((gpu_service_case == 7 || gpu_service_case == 8) &&
+        service.control.phase == PVR_GPU_CONTROL_READY && service.flush.phase == PVR_GPU_FLUSH_SUBMIT) {
+        /* A pending IRQ can keep control_poll returning AGAIN forever after
+         * its own opening deadline no longer applies (case 7). In case 8,
+         * time crosses the boundary inside a successful controller poll. */
+        if (gpu_service_case == 8) { forced_now = service.deadline; deadline_crossed = 1; }
+        *out = gpu_service_case == 7;
+        return 1;
+    }
 #ifdef SUNSTONE_GPU_NATIVE_MEMORY
     if (get(&fault_mode) == 4) {
         /* Publish one firmware event, then deliberately violate pinned writable
@@ -390,6 +449,26 @@ static void peer(void *arg)
 static void owner(void *arg)
 {
     (void)arg;
+    if (gpu_service_case >= 7 && gpu_service_case <= 9) {
+        configASSERT(request(PVR_GPU_SERVICE_OPEN, 1000000).result == PVR_GPU_SERVICE_OK);
+        vTaskDelay(80); /* The worker must enforce OPEN without a new request. */
+        struct pvr_gpu_service_reply response = request(PVR_GPU_SERVICE_STATUS, 0);
+        metric("deadline_phase", response.phase); metric("deadline_error", response.error);
+        configASSERT(response.phase == PVR_GPU_SERVICE_FAILED && response.result == PVR_GPU_SERVICE_FAULT);
+        configASSERT(response.owns_session && get(&enabled) && !get(&isolated));
+        configASSERT(response.error == (gpu_service_case == 9 ? PVR_GPU_SERVICE_CONTROL : PVR_GPU_SERVICE_CLOCK));
+        configASSERT(gpu_service_case == 7 || deadline_crossed);
+        configASSERT(get(&mmu_flushes) == (gpu_service_case == 9));
+        configASSERT(service.flush.phase != PVR_GPU_FLUSH_COMPLETE || gpu_service_case == 9);
+        unsigned count = get(&calls);
+        configASSERT(request(PVR_GPU_SERVICE_OPEN, 100000).result == PVR_GPU_SERVICE_FAULT);
+        configASSERT(request(PVR_GPU_SERVICE_CLOSE, 100000).result == PVR_GPU_SERVICE_FAULT);
+        vTaskDelay(5); configASSERT(get(&calls) == count);
+        for (unsigned i=0;i<22;++i) for (unsigned j=0;j<4096;++j) configASSERT(guards[i][j] == 0xa5);
+        platform_puts("PASS GPU service: case "); platform_hex(gpu_service_case);
+        platform_puts("; opening deadline bounds controller READY and MMU completion; retained ownership\n");
+        platform_exit(0);
+    }
 #ifdef SUNSTONE_GPU_ASYNC_POWER
     if (gpu_service_case == 5 || gpu_service_case == 6) {
         struct pvr_gpu_service_reply response = request(PVR_GPU_SERVICE_OPEN, 50000);
@@ -440,6 +519,8 @@ static void owner(void *arg)
     configASSERT(request(PVR_GPU_SERVICE_OPEN, 1000000).result == PVR_GPU_SERVICE_OK);
     set(&stage, 1); wait_flag(&peer_done, 1);
     configASSERT(wait_phase(PVR_GPU_SERVICE_READY).owns_session);
+    configASSERT(get(&mmu_flushes) == 1 && service.flush.phase == PVR_GPU_FLUSH_COMPLETE &&
+                 service.flush.executed_after != service.flush.executed_before);
     if (gpu_service_case == 1) {
         /* Firmware model publishes one known event. Worker polls without a
          * request; release/acquire on the cursor makes payload publication safe. */
@@ -549,6 +630,7 @@ void kernel_main(void)
     config.queue = (struct pvr_ccb_ops){read_mem, write_mem, barrier, kick};
     config.start = (struct pvr_gpu_start_ops){now, read_reg, write_reg, started, publish};
     config.control = (struct pvr_gpu_control_ops){now, irq_read, irq_write, compat, event};
+    config.executed = executed; config.flush_mmu = 1;
     config.stop = (struct pvr_gpu_stop_ops){now, read_reg, write_reg, sync_write, sync_read, isolate,NULL};
     config.enable = enable; config.context = &config;
 #ifdef SUNSTONE_GPU_ASYNC_POWER

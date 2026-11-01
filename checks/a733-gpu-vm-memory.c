@@ -82,6 +82,16 @@ static void worker(void *unused)
     maps[0].physical = CONTEXT_CPU & ~UINT64_C(4095);
     configASSERT(a733_gpu_vm_memory_build(&memory, maps, 2) == A733_GPU_VM_MEMORY_INVALID);
     maps[0].physical = pa;
+    /* Erratum BRN 71317: 2 MiB and 1 MiB pages are refused before any table
+     * write; 256 KiB pages stay admitted by the planner. */
+    static const uint32_t refused_shifts[2] = {21, 20};
+    for (unsigned i = 0; i < 2; ++i) {
+        struct pvr_gpu_mapping large[1] = {{0x40000000, 0x45000000, UINT64_C(1) << refused_shifts[i],
+                                            refused_shifts[i], PVR_GPU_VM_READ_ONLY}};
+        struct pvr_gpu_vm_requirements r;
+        configASSERT(pvr_gpu_vm_require(large, 1, &r) && r.table_bytes == tables.bytes);
+        configASSERT(a733_gpu_vm_memory_build(&memory, large, 1) == A733_GPU_VM_MEMORY_INVALID);
+    }
     configASSERT(!memcmp(snapshot, (void *)TABLE_CPU, sizeof(snapshot)));
     configASSERT(word((void *)CONTEXT_CPU, 8) == UINT64_C(0xa5a5a5a5a5a5a5a5));
     configASSERT(memory.phase == A733_GPU_VM_MEMORY_OFFLINE);
@@ -125,7 +135,7 @@ static void worker(void *unused)
     memory.tables.cpu = saved;
     configASSERT(memory.cursor == 1);
     guards();
-    platform_puts("PASS GPU workload memory: native mappings, bounded publication/reclaim, retained mapping fault\n");
+    platform_puts("PASS GPU workload memory: native mappings, 1 and 2 MiB pages refused, bounded publication/reclaim, retained mapping fault\n");
     platform_exit(0);
 }
 void kernel_main(void)

@@ -1,0 +1,17 @@
+{
+  "purpose": "Independent CPU Bayer-to-NV16 comparison; no ISP600 algorithm equivalence is asserted",
+  "execution": "Host CPU only; optional validation tool, absent from FreeRTOS images",
+  "tool": {
+    "name": "FFmpeg",
+    "version": "8.0.1-3ubuntu2",
+    "path": "/usr/bin/ffmpeg",
+    "sha256": "bdf6aabffdba7411edff8d36c389d695257fcdf823d196020176e117612862f6",
+    "license": "GPL-2.0-or-later for this installed build; linked library identities are recorded per invocation",
+    "source_available": true,
+    "source_repository": "https://git.ffmpeg.org/ffmpeg.git",
+    "source_revision": "n8.0.1",
+    "source_url": "https://ffmpeg.org/releases/ffmpeg-8.0.1.tar.xz",
+    "package_source_url": "https://archive.ubuntu.com/ubuntu/pool/universe/f/ffmpeg/",
+    "package_revision": "7:8.0.1-3ubuntu2"
+  }
+}

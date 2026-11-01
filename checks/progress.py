@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Focused parser, caching, read-only queue and HTTP boundary checks."""
+import argparse
 import hashlib
 import http.client
 import importlib.util
@@ -18,13 +19,19 @@ spec.loader.exec_module(progress)
 
 
 class Check(unittest.TestCase):
+    output_root = None
+
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        if self.output_root is None:
+            raise RuntimeError('The fixture requires a new --output directory.')
+        self.root = Path(tempfile.mkdtemp(prefix='progress-', dir=self.output_root))
         (self.root / 'docs').mkdir()
         for name in progress.SOURCES:
             (self.root / name).write_bytes((ROOT / name).read_bytes())
+        for source in (ROOT / 'docs/status').glob('*.md'):
+            destination = self.root / 'docs/status' / source.name
+            destination.parent.mkdir(exist_ok=True)
+            destination.write_bytes(source.read_bytes())
         self.queue = self.root / 'queue.sqlite3'
         self.view = progress.Progress(self.root, {'3-1': self.queue})
 
@@ -56,7 +63,10 @@ class Check(unittest.TestCase):
         self.assertIsNone(json.loads(self.view.snapshot()[0])['application']['document'])
 
     def test_inventory_and_evidence(self):
-        rows, parser = progress.parse_hardware((ROOT / 'docs/hardware.md').read_text())
+        source = (ROOT / 'docs/hardware.md').read_text()
+        documents = {str(path.relative_to(ROOT)): path.read_text()
+                     for path in (ROOT / 'docs/status').glob('*.md')}
+        rows, parser = progress.parse_hardware(source, documents)
         inventory_text = (ROOT / 'docs/hardware.md').read_text().split('| Hardware |', 1)[1].split('\n\n', 1)[0]
         inventory = [line for line in inventory_text.splitlines()
                      if line.startswith('| ') and not line.startswith(('| Hardware', '| ---'))]
@@ -68,29 +78,26 @@ class Check(unittest.TestCase):
         self.assertIn('board', by_name['CPU cores']['evidence'])
         self.assertTrue(all(row['qualification'] == 'unqualified' for row in rows))
         self.assertTrue(by_name['GPU']['details'][0]['markdown'])
-        # Each physical anchor still matches its own live bullet, including DDR and RTC.
         self.assertFalse([w for w in parser['warnings'] if 'Physical-result anchor' in w], parser['warnings'])
-        self.assertIn('ddr', progress.PHYSICAL_SCOPES)
-        self.assertIn('rtc and watchdog', progress.PHYSICAL_SCOPES)
         for name in ('DDR and CPU memory management', 'RTC and watchdog', 'GPU', 'NPU'):
             self.assertIn('board', by_name[name]['evidence'])
         missing_declaration = (ROOT / 'docs/hardware.md').read_text().replace(
             '**No row is fully qualified across its required functions.**', '')
-        unknown, declaration_state = progress.parse_hardware(missing_declaration)
+        unknown, declaration_state = progress.parse_hardware(missing_declaration, documents)
         self.assertTrue(all(row['qualification'] == 'not_recorded' for row in unknown))
         self.assertIn('The matrix-wide qualification declaration changed; qualification is not inferred.',
                       declaration_state['warnings'])
-        for device in ('gpu', 'npu'):
+        for device in (() if progress.state_documents(source) else ('gpu', 'npu')):
             reworded_device = (ROOT / 'docs/hardware.md').read_text().replace(
                 progress.PHYSICAL_SCOPES[device], '**implemented** with physical work pending')
             changed_rows, changed_state = progress.parse_hardware(reworded_device)
             self.assertNotIn('board', next(row for row in changed_rows if row['name'] == device.upper())['evidence'])
             self.assertIn('Physical-result anchor no longer matches its update: ' + device,
                           changed_state['warnings'])
-        reworded = (ROOT / 'docs/hardware.md').read_text().replace(
-            'coherent RTC reads in inherited normal RC mode', 'RTC reads in RC mode')
-        _, changed = progress.parse_hardware(reworded)
-        self.assertIn('Physical-result anchor no longer matches its update: rtc and watchdog', changed['warnings'])
+        if not progress.state_documents(source):
+            reworded = source.replace('coherent RTC reads in inherited normal RC mode', 'RTC reads in RC mode')
+            _, changed = progress.parse_hardware(reworded)
+            self.assertIn('Physical-result anchor no longer matches its update: rtc and watchdog', changed['warnings'])
         sample = '''Every row below has **no qualification evidence**.
 - DMA: **implemented**. Host checks remain pending. No host evidence is available.
 - CPU: **tested** in a host execution model. Physical work remains untested.
@@ -105,6 +112,147 @@ class Check(unittest.TestCase):
         self.assertNotIn('board', parsed[1]['evidence'])
         self.assertIn('host', parsed[1]['evidence'])
         self.assertEqual(parsed[2]['implementation'], 'planned')
+
+    def split_inventory(self):
+        inventory = ('**No row is fully qualified across its required functions.**\n\n'
+                     '- CPU: **tested** for instruction execution on the boot A55.\n\n'
+                     '| Hardware | Required functions | Dependencies |\n'
+                     '| --- | --- | --- |\n'
+                     '| CPU cores | Tasks | Clocks; [State](status/cpu.md) |\n'
+                     '| DMA and device address translation | Transfers | [State](status/memory-dma.md) |\n')
+        cpu = ('# CPU state\n\n**Status: implemented.**\n\n'
+               '**Board-qualified scope:** One boot CPU instruction test.\n\n'
+               'Host model checks pass. See [memory](memory-dma.md) and [details](../checksum.md).\n')
+        dma = ('# Memory and DMA state\n\n**Status: blocked.**\n\n'
+               '**Board-qualified scope:** None.\n\n'
+               'Host checks pass. A physical transfer is modeled in QEMU and matches the reference.\n')
+        directory = self.root / 'docs/status'
+        directory.mkdir(exist_ok=True)
+        (self.root / 'docs/hardware.md').write_text(inventory)
+        (directory / 'cpu.md').write_text(cpu)
+        (directory / 'memory-dma.md').write_text(dma)
+        (self.root / 'docs/checksum.md').write_text('# Details\n')
+        return inventory, cpu, dma
+
+    def test_split_status_records_and_relative_links(self):
+        self.split_inventory()
+        data = json.loads(self.view.snapshot()[0])
+        self.assertEqual(data['parser']['status'], 'ok', data['parser']['warnings'])
+        cpu, dma = data['hardware']
+        self.assertEqual(cpu['status_document'], 'docs/status/cpu.md')
+        self.assertIn('board', cpu['evidence'])
+        self.assertEqual(cpu['board_qualified_scope'], 'One boot CPU instruction test.')
+        self.assertEqual(cpu['details'][0]['source'], 'docs/status/cpu.md')
+        self.assertEqual({link['path'] for link in cpu['links']},
+                         {'docs/status/cpu.md', 'docs/status/memory-dma.md', 'docs/checksum.md'})
+        self.assertEqual(dma['implementation'], 'blocked')
+        self.assertNotIn('board', dma['evidence'])
+        self.assertIn('host', dma['evidence'])
+        self.assertIn('emulator', dma['evidence'])
+        self.assertEqual(data['summary']['qualified'], 0)
+        self.assertTrue(all(row['qualification'] == 'unqualified' for row in data['hardware']))
+        self.assertEqual(self.view.document('docs/status/cpu.md').decode(), cpu['details'][0]['markdown'])
+        for path in ('docs/status/../hardware.md', 'docs/status/deeper/cpu.md', 'docs/other/cpu.md'):
+            with self.assertRaises(ValueError):
+                self.view.document(path)
+
+    def test_split_status_cache_and_failures(self):
+        _, cpu, _ = self.split_inventory()
+        before, tag = self.view.snapshot()
+        self.assertEqual(self.view.snapshot(), (before, tag))
+        path = self.root / 'docs/status/cpu.md'
+        failures = ('', '# CPU state\n\n**Status: implemented.**\n',
+                    cpu.replace('One boot CPU instruction test.', '   '),
+                    cpu.replace('One boot CPU instruction test.', 'None for the current image.'),
+                    cpu.replace('One boot CPU instruction test.', 'No physical qualification.'),
+                    cpu.replace('**Status: implemented.**', '**Status: qualified.**'),
+                    cpu + '\n**Status: blocked.**\n',
+                    cpu + '\n**Board-qualified scope:** Another result.\n')
+        for malformed in failures:
+            path.write_text(malformed)
+            changed, changed_tag = self.view.snapshot()
+            self.assertNotEqual(changed_tag, tag)
+            data = json.loads(changed)
+            row = data['hardware'][0]
+            self.assertEqual(data['parser']['status'], 'unsupported')
+            self.assertEqual(row['implementation'], 'unknown')
+            self.assertEqual(row['evidence'], [])
+            self.assertIn('missing or malformed for CPU cores', ' '.join(data['parser']['warnings']))
+            self.assertNotIn('boot A55', row['summary'])
+        path.rename(self.root / 'retired-cpu.md')
+        absent = json.loads(self.view.snapshot()[0])
+        self.assertFalse(next(source for source in absent['sources']
+                              if source['path'] == 'docs/status/cpu.md')['available'])
+        path.write_text(cpu.replace('One boot CPU instruction test.', 'None.'))
+        restored = json.loads(self.view.snapshot()[0])
+        self.assertEqual(restored['parser']['status'], 'ok')
+        self.assertNotIn('board', restored['hardware'][0]['evidence'])
+        # Unlinked state documents, including the application record, are inputs too.
+        application = self.root / 'docs/status/application.md'
+        application.write_text('# Application state\n')
+        added, added_tag = self.view.snapshot()
+        self.assertNotEqual(added_tag, tag)
+        self.assertIn('docs/status/application.md', [source['path'] for source in json.loads(added)['sources']])
+        application.write_text('# Application state\n\nChanged.\n')
+        self.assertNotEqual(self.view.snapshot()[1], added_tag)
+        application.rename(self.root / 'retired-application.md')
+        self.assertNotIn('docs/status/application.md',
+                         [source['path'] for source in json.loads(self.view.snapshot()[0])['sources']])
+
+    def test_split_status_section_scopes(self):
+        inventory, cpu, _ = self.split_inventory()
+        memory = ('# Memory and DMA state\n\n**Status: implemented.**\n\n'
+                  '**Board-qualified scope:** DDR initialization on both boards.\n\n'
+                  '## DMA\n\n**Board-qualified scope:** None.\n\nHost checks pass.\n\n'
+                  '## DDR\n\n**Board-qualified scope:** DDR restored on one board.\n')
+        inventory += '| DDR and CPU memory management | Memory | [State](status/memory-dma.md) |\n'
+        inventory = inventory.replace('[State](status/memory-dma.md) |\n',
+                                      '[State](status/memory-dma.md#dma) |\n', 1)
+        path = self.root / 'docs/hardware.md'
+        path.write_text(inventory)
+        (self.root / 'docs/status/memory-dma.md').write_text(memory)
+        rows = json.loads(self.view.snapshot()[0])['hardware']
+        self.assertNotIn('board', rows[1]['evidence'])
+        self.assertIn('board', rows[2]['evidence'])
+        self.assertEqual(rows[1]['board_qualified_scope'], 'None.')
+        self.assertNotIn('DDR restored', rows[1]['details'][0]['markdown'])
+        path.write_text(inventory.replace('#dma', '#missing'))
+        missing = json.loads(self.view.snapshot()[0])
+        self.assertEqual(missing['hardware'][1]['implementation'], 'unknown')
+        self.assertEqual(missing['hardware'][1]['evidence'], [])
+        path.write_text(inventory.replace('[State](status/cpu.md)', 'Missing state link'))
+        self.assertEqual(json.loads(self.view.snapshot()[0])['hardware'][0]['implementation'], 'unknown')
+
+    def test_split_status_http_document(self):
+        self.split_inventory()
+        server = progress.ThreadingHTTPServer(('127.0.0.1', 0), progress.handler(self.view))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            connection = http.client.HTTPConnection('127.0.0.1', server.server_port, timeout=2)
+            connection.request('GET', '/api/source?path=docs%2Fstatus%2Fcpu.md')
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            record = json.loads(response.read())
+            self.assertEqual(record['path'], 'docs/status/cpu.md')
+            self.assertIn('[details](../checksum.md)', record['content'])
+            connection.close()
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_split_status_symlink_directory_invalidates_cache(self):
+        self.split_inventory()
+        self.view.snapshot()
+        directory = self.root / 'docs/status'
+        directory.rename(self.root / 'retained-status')
+        directory.symlink_to(self.root / 'retained-status', target_is_directory=True)
+        data = json.loads(self.view.snapshot()[0])
+        self.assertEqual(data['parser']['status'], 'unsupported')
+        self.assertTrue(all(row['implementation'] == 'unknown' for row in data['hardware']))
+        with self.assertRaises(OSError):
+            self.view.document('docs/status/cpu.md')
 
     def test_dependency_coverage_and_scoped_edges(self):
         data = json.loads(self.view.snapshot()[0])
@@ -162,7 +310,8 @@ class Check(unittest.TestCase):
         self.assertEqual(self.view.snapshot(), (one, tag))
         self.assertEqual(self.view.rebuilds, 1)
         data = json.loads(one)
-        self.assertGreater(len(data['handoff']['next_actions']), 0)
+        self.assertEqual(data['handoff']['next_actions'],
+                         progress.parse_handoff((self.root / 'docs/handoff.md').read_text())['next_actions'])
         sample = progress.parse_handoff('## Continuation and evidence reuse\n\nProse.\n\n'
                                         '1. First\n   continued.\n2. Second.\n\nTrailing paragraph.\n')
         self.assertEqual([item['text'] for item in sample['next_actions']], ['First\n   continued.', 'Second.'])
@@ -218,7 +367,7 @@ class Check(unittest.TestCase):
         wal = Path(str(self.queue) + '-wal')
         wal.write_bytes(b'pending')
         self.assertFalse(progress.queue_summary(self.queue)['available'])
-        wal.unlink()
+        wal.rename(self.root / 'retired-wal')
         original = progress.file_signature
         calls = 0
         def race(path):
@@ -339,4 +488,9 @@ class Check(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    unittest.main()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output', type=Path, required=True, help='new directory retaining all fixtures')
+    arguments = parser.parse_args()
+    arguments.output.mkdir(parents=True, exist_ok=False)
+    Check.output_root = arguments.output
+    unittest.main(argv=['progress'])

@@ -10,12 +10,15 @@ the manifest declares. Applications reach the OS through a small set of
 [layering refactoring](../layering-audit.md); mimus, the speech recognizer,
 becomes the first application of an OS core that no longer contains it.
 
-An image holds zero or one application. A second application per image would add an
-application index to the INPUTS extent and the result record, and the
-manifest generator would place and check the regions and host operations of
-all the image's manifests together.
+An image holds zero or one primary application. A primary GPU application may
+also admit one trusted GPU application through an immutable `ss_gpu_share`
+descriptor. The peer has its own manifest, task and GPU-only grant. Both
+applications explicitly share one program and exactly the same region records.
+The primary manifest remains the session, input and result authority. General
+composition with separate input, result or host-operation records is unsupported.
 
-**Status.** Implemented for one statically linked application or no application.
+**Status.** Implemented for one primary application, with an optional fixed GPU
+peer, or no application.
 The source and historical migration plan below define the reviewed interface.
 The kit includes:
 
@@ -44,7 +47,31 @@ The kit includes:
 
 The native OS image implements the calls and links applications through the
 kit. Mimus lives in its own repository; hello-compute remains in SunstoneOS.
-The generic GPU compute queue remains separate, unimplemented work.
+The [generic GPU compute queue](gpu-compute-queue.md) admits application programs
+and region leases and serializes work from the primary and its optional peer.
+
+## Two trusted GPU applications share one admitted memory map
+
+`ss_gpu_share` names the primary manifest, peer manifest, peer entry, shared
+program descriptor and the mask of shared GPU regions. Admission runs before
+scheduling. It checks every region record against the primary, requires an
+existing GPU grant and consumes one granted worker core for the peer. The peer
+cannot add devices, regions, inputs, heap, workers or host operations. Its stack
+is bounded by the OS's fixed 16 KiB storage.
+
+The peer calls `gpu_queue_context_join` after the primary creates the context.
+Each task receives its own client handle, submission slot and completion queue.
+Only the primary creates the context or controls device-wide close, open and
+recovery waits. A task cannot use the other task's handle. Each application must
+keep its job's buffers stable until its own terminal record arrives. Concurrent
+mutable ranges must be disjoint or synchronized by the applications.
+
+Returning from the peer entry drains its owed record before marking it finished.
+The primary's `ss_finish` waits for peer completion within the admitted absolute
+deadline, quiesces GPU work and then publishes the result. Resident completion
+also quiesces the GPU before suspending. Failed isolation retains memory and
+prevents successful completion. This composition supplies no isolation between
+trusted applications sharing the GPU address space.
 
 ## The manifest declares what an application needs
 
@@ -599,3 +626,43 @@ The alias maps the shared USB payload pages for the image. A trusted application
 may process only its own completed leases. Grants control service admission;
 they do not provide per-class confidentiality against an application that guesses
 another payload address.
+
+## Recorded PCM can use the capture interface without a device
+
+An application can declare an audio format and an authenticated INPUT region
+without requesting a capture device. The image reserves capture storage from the
+manifest's maximum frame count. `ss_capture_replay_open(region, offset, frames,
+paced)` selects raw PCM in that region. The offset can skip a container header;
+the service does not parse containers or convert samples.
+
+The source format is the manifest's sample rate, channel count and signed
+little-endian sample width. Replay accepts one or two channels and 16-, 24- or
+32-bit containers. The region length after the offset must contain whole frames.
+The requested window must fit the source, capture storage and manifest frame
+bounds. A granted I2S or headset device excludes replay. Opening replay changes
+no device ownership and is allowed once per image lifetime.
+
+One application task then calls `ss_capture` with consecutive sequences starting
+at 1. Success returns one copied window in the ordinary capture buffer, with
+64 writable bytes before the PCM. Input bytes remain unchanged. Repeating a
+completed sequence returns the same output. Requesting the next sequence
+releases the earlier output; stale sequences are refused even while pacing is
+still pending. EOF returns -1 without changing the output arguments. A shorter
+final window succeeds only when it meets the manifest's minimum frame count.
+
+With `paced=1`, the first request starts a recording clock. A window becomes
+available after its cumulative frame duration, rounded up to the architectural
+counter tick. Later windows follow that same clock, so a late consumer catches
+up without adding drift. Calls return 0 while waiting; applications can use
+`ss_progress` and `ss_usb_wait` between polls. A counter regression retains a
+failed replay. With `paced=0`, copied windows are available immediately.
+
+`checks/os-audio-replay.py` compiles the production capture implementation without
+I2S or headset support, then checks it under AddressSanitizer,
+UndefinedBehaviorSanitizer and AArch64 instruction emulation. The link fixture
+in `checks/os-audio-replay-image.cmake` builds a generic application against the
+OS with an empty `MIMUS_DIR`. After the application-kit patch is applied, its
+manifest can have empty device lists. `checks/os-audio-replay-linked.py` executes
+that application's actual linked instructions and verifies 320 frames, 20 ms
+of paced waits and an independent Adler-32 checksum. Grant publication, liveness,
+clock, waits, progress and finish are modeled; startup and scheduling do not run.

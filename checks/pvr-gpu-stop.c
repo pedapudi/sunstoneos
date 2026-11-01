@@ -14,7 +14,8 @@ static struct {
     int isolation_result;
     unsigned isolation_polls, isolation_pending;
     int poll_result;
-    struct event events[32];
+    struct event events[256];
+    uint64_t reset;
 } m;
 static struct pvr_ccb q;
 static struct pvr_gpu_control c;
@@ -63,7 +64,7 @@ static int compat(void *ctx,uint32_t off,void *out,size_t n)
 static const struct pvr_gpu_control_ops cops={now,irq_read,irq_write,compat,NULL};
 static void event(unsigned write,uint32_t off,uint32_t width,uint64_t v)
 {
-    assert(m.events_count<32 && (s.unacknowledged ? c.phase==PVR_GPU_CONTROL_FAILED && q.phase==PVR_CCB_FAILED :
+    assert(m.events_count<256 && (s.unacknowledged ? c.phase==PVR_GPU_CONTROL_FAILED && q.phase==PVR_CCB_FAILED :
                                  c.phase==PVR_GPU_CONTROL_RETIRED && q.phase==PVR_CCB_RETIRED));
     m.events[m.events_count++]=(struct event){write,off,width,v};
 }
@@ -71,7 +72,7 @@ static int read_reg(void *ctx,uint32_t off,uint32_t width,uint64_t *v)
 {
     assert(ctx==&m); if(!operation())return 0;
     ++m.register_reads;
-    *v=off==0x3c8?0x7f:off==0x3898?0xff:off==0x8a8?m.irq:0;
+    *v=off==0x3c8?0x7f:off==0x3898?0xff:off==0x8a8?m.irq:off==0x100?m.reset:0;
     if(m.hold_register==off) { *v=off==0x3c8||off==0x3898?0:1; return 1; }
     event(0,off,width,*v);
     return 1;
@@ -79,6 +80,7 @@ static int read_reg(void *ctx,uint32_t off,uint32_t width,uint64_t *v)
 static int write_reg(void *ctx,uint32_t off,uint32_t width,uint64_t v)
 {
     assert(ctx==&m); if(!operation())return 0; event(1,off,width,v);
+    if(off==0x100) { assert(width==8); m.reset=v; }
     /* The interrupt clear follows a pending status read, with its event bit. */
     if(off==0x8b0) { assert(m.irq&1 && v==1 && !m.irq_cleared); m.irq_cleared=1; }
     return 1;
@@ -267,17 +269,27 @@ int main(int argc,char **argv)
     unsigned sent=m.sent; m.events_count=0;
     assert(pvr_gpu_stop_init_unacknowledged(&s,&c,image,image_bytes,&ops,&m,m.now+10000));
     /* The vendor plan, then upstream's final soft reset of every unit. */
-    assert(s.phase==PVR_GPU_STOP_REGISTERS && s.unacknowledged && !s.index && s.count==15);
+    assert(s.phase==PVR_GPU_STOP_REGISTERS && s.unacknowledged && !s.index && s.count==16);
     assert(s.steps[14].kind==1 && /* WRITE */ s.steps[14].offset==0x100 && s.steps[14].width==8 &&
            s.steps[14].value==UINT64_C(0xffeffffffffffc3d));
     assert(run()==PVR_GPU_STOP_OK && m.isolation==1 && m.sent==sent && m.irq_cleared && m.events_count==s.count);
     assert(m.events[14].write && m.events[14].offset==0x100 && m.events[14].value==s.steps[14].value);
+    assert(!m.events[15].write && m.events[15].offset==0x100 &&
+           m.events[15].width==8 && m.events[15].value==m.events[14].value);
     assert(c.phase==PVR_GPU_CONTROL_FAILED && q.phase==PVR_CCB_FAILED);
     save(argv[2],2);
     /* From NEW, after an external control failure. */
     prepare(image); memset(&s,0,sizeof(s)); assert(pvr_gpu_control_abort(&c)==PVR_GPU_CONTROL_FAULT);
     assert(pvr_gpu_stop_init_unacknowledged(&s,&c,image,image_bytes,&ops,&m,m.now+10000));
     assert(run()==PVR_GPU_STOP_OK && m.isolation==1 && !m.sent);
+    /* A reset write with a mismatching readback cannot authorize OFF. */
+    prepare(image); memset(&s,0,sizeof(s)); assert(pvr_gpu_control_abort(&c)==PVR_GPU_CONTROL_FAULT);
+    assert(pvr_gpu_stop_init_unacknowledged(&s,&c,image,image_bytes,&ops,&m,m.now+10000));
+    while(s.index!=15) assert(pvr_gpu_stop_poll(&s)==PVR_GPU_STOP_AGAIN);
+    assert(m.reset && !m.isolation); m.reset^=1;
+    assert(pvr_gpu_stop_poll(&s)==PVR_GPU_STOP_AGAIN && s.index==15 && !m.isolation);
+    m.now=s.deadline;
+    assert(run()==PVR_GPU_STOP_FAULT && !m.isolation && s.error==PVR_GPU_STOP_TIMEOUT); ++faults;
     /* Not after a register step: the stop failed on a held idle poll. */
     prepare(image); m.hold_register=held[0];
     while(s.phase!=PVR_GPU_STOP_REGISTERS || s.steps[s.index].offset!=held[0])

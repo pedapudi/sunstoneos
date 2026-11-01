@@ -110,6 +110,7 @@ int a733_gpu_platform_performance_poll(struct a733_gpu_platform *p)
         if(r==A733_PMIC_BUSY)return 0;
         if(r!=A733_PMIC_COMPLETE)return fault(p);
         p->supply_request=(struct a733_pmic_request){0};
+        if(timely(p,deadline)<0)return -1;
         if(!a733_deadline_after(p->perf.last_now,A733_GPU_SUPPLY_SETTLE_US,&p->perf.settled) ||
             p->perf.settled>=deadline)return fault(p);
         p->perf.stage=SETTLE;return 0;

@@ -85,7 +85,7 @@ ref = a.evidence / 'reference.c'
 ref.write_text(reference)
 binary = a.evidence / 'check'
 inputs = ['include/a733_display_pll.h', 'drivers/display/a733_display_pll.c',
-          'checks/a733-display-pll.c', 'checks/a733-display-pll.py',
+          'checks/a733-display-pll.c', 'checks/a733-display-pll.py', 'checks/register_latency.h',
           'include/a733_dsi_phy.h', 'drivers/display/a733_dsi_phy.c',
           'include/a733_clock_leases.h', 'drivers/clock/a733_clock_leases.c',
           'runtime/include/string.h']

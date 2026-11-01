@@ -1090,7 +1090,7 @@ The build directory must export its compile commands
 build's placement table, dispatcher, mapping rules, pool pages, arena
 assertion, supervision of GPU waits and configuration gate on the host
 ([recognition dispatch](recognition-dispatch.md#host-checks));
-[pvr-mimus-service.py](../checks/pvr-mimus-service.py) and
+`checks/pvr-mimus-service.py` (removed from the OS in `468c2b75`) and
 [gpu-recognition-engine.py](https://github.com/pedapudi/mimus/blob/port/sunstoneos-split/sunstoneos/checks/gpu-recognition-engine.py) check its GPU
 session and hook ([gpu-mimus-service.md](gpu-mimus-service.md)).
 

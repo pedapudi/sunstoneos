@@ -59,7 +59,7 @@ struct a733_pwm {
  uint64_t last_now;
  uint32_t initial_bgr;
  unsigned initialized,fault,held,clock_retained,rail_retained;
- unsigned service_step,service_run,service_ticks,rail_index,led_level;
+ unsigned service_step,service_run,service_ticks,rail_index,led_level,configure_step;
  uint64_t service_deadline,service_completed;
 };
 /* Zero once. Actual managers/adapters/config storage must be disjoint and live

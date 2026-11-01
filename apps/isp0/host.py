@@ -16,22 +16,26 @@ HEADER=192
 MAXIMUM=614400
 
 
-def decode(raw,session):
+def decode(raw,session,*,sequence=1):
+    require(isinstance(sequence,int) and not isinstance(sequence,bool) and 1<=sequence<=0xffffffff,
+        'ISP0 capture sequence is outside the native range.')
     preparation.session_check(session)
     require(len(raw)>=HEADER,'Short ISP0 response.')
     magic,version,status,count,epoch,generation=struct.unpack_from('<4I2Q',raw)
-    require((magic,version)==(0x30495053,1) and status in (0,1,2,3),'ISP0 response header differs.')
+    require(magic==0x30495053 and version==(1 if sequence==1 else 2) and status in (0,1,2,3),'ISP0 response header differs.')
     require((epoch,generation)==struct.unpack_from('<2Q',session,24) and
         raw[32:64]==session[768:800] and raw[64:96]==hashlib.sha256(session).digest(),
         'ISP0 session, build, lease or input identity differs.')
     geometry=struct.unpack_from('<8I',raw,128)
-    require(geometry==struct.unpack_from('<8I',session,848),'ISP0 sealed geometry differs.')
+    expected=list(struct.unpack_from('<8I',session,848))
+    if version==2 and status in (1,2,3):expected[5]=sequence
+    require(geometry==tuple(expected),'ISP0 sealed geometry or capture sequence differs.')
     complete,isp,vipp,dma,top,scanned,guards,copied=struct.unpack_from('<8I',raw,160)
     require(count==(MAXIMUM if status==1 else 0) and len(raw)==HEADER+count,'ISP0 copied extent differs.')
     result=dict(status=status,bytes=count,width=640,height=480,stride=640,
         format='NV16-Y-then-interleaved-UV',complete=complete,isp_status=isp,vipp_status=vipp,
         dma_status=dma,top_pattern_control=top,scanned_masters=scanned,guards=guards,
-        copied_bytes=copied,physical_qualified=False,numerical_qualified=False)
+        copied_bytes=copied,sequence=sequence,physical_qualified=False,numerical_qualified=False)
     if status in (1,3):
         completion_check(complete,isp,vipp,dma,top,scanned,guards,copied)
         require(any(raw[96:128]),'ISP0 completed output has no digest.')
@@ -51,21 +55,26 @@ def completion_check(complete,isp,vipp,dma,top,scanned,guards,copied):
     require(top&1 and not top&(0x10|0xff0000),'ISP0 TOP generator, START or cycle state differs.')
 
 
-def ack(frame,session):
-    require(decode(frame,session)['status']==1,'Cannot acknowledge absent ISP0 output.')
-    return b'\1'+session[32:40]+frame[96:128]
+def ack(frame,session,*,sequence=1,next_frame=False):
+    require(decode(frame,session,sequence=sequence)['status']==1,'Cannot acknowledge absent ISP0 output.')
+    if sequence==1 and not next_frame:return b'\1'+session[32:40]+frame[96:128]
+    return bytes([2 if next_frame else 3])+session[32:40]+struct.pack('<Q',sequence)+frame[96:128]
 
 
 def receipt_check(raw,session,copied_header):
-    result=decode(raw,session)
+    require(len(copied_header)==HEADER,'ISP0 copied header extent differs.')
+    sequence=1 if struct.unpack_from('<I',copied_header,4)[0]==1 else struct.unpack_from('<I',copied_header,148)[0]
+    result=decode(raw,session,sequence=sequence)
     require(result['status']==3 and raw[16:HEADER]==copied_header[16:HEADER],
         'ISP0 ACK receipt changed copied identity or proofs.')
     return result
 
 
 def capture(exchange,session,evidence,record,save,deadline,*,upload,send_upload,send_ack,
-            now=time.monotonic,pause=time.sleep):
+            frames=1,now=time.monotonic,pause=time.sleep):
     preparation.session_check(session)
+    require(isinstance(frames,int) and not isinstance(frames,bool) and 1<=frames<=16,
+        'ISP0 replay count must be between one and sixteen.')
     require(upload==preparation.upload_bytes(upload[32:],session),'ISP0 upload bytes differ.')
     epoch,generation,lease=struct.unpack_from('<3Q',session,24)
     record.update(isp0_result='unobserved',isp0_retention='whole-board-power-removal',
@@ -73,31 +82,40 @@ def capture(exchange,session,evidence,record,save,deadline,*,upload,send_upload,
             session_sha256=hashlib.sha256(session).hexdigest(),input_sha256=session[768:800].hex()),
         physical_qualified=False,numerical_qualified=False)
     save()
+    capture_sequence=1
+    outputs=[]
     try:
         require(now()<deadline,'ISP0 deadline before upload.')
         send_upload(upload)
         require(now()<deadline,'ISP0 upload exceeded deadline.')
-        for sequence in range(1,801):
+        for query in range(1,801):
             require(now()<deadline,'ISP0 capture deadline expired.')
             frame=exchange(b'\0',min(500,max(1,int((deadline-now())*1000))))
-            path=evidence/f'isp0-{sequence:04}.bin';supervisor.durable_frame(path,frame)
+            path=evidence/f'isp0-{query:04}.bin';supervisor.durable_frame(path,frame)
             entry=dict(path=path.name,sha256=hashlib.sha256(frame).hexdigest())
             record.setdefault('isp0_frames',[]).append(entry);save()
-            result=decode(frame,session);entry.update(result)
+            result=decode(frame,session,sequence=capture_sequence);entry.update(result)
             require(now()<deadline,'ISP0 response arrived after deadline.')
             if result['status']==0:
                 pause(min(.025,max(0,deadline-now())));continue
             if result['status']==2:
                 record['isp0_result']='observed-failure';record['durable_result']=entry.copy();save();return result
             require(result['status']==1,'Unexpected already-acknowledged ISP0 output.')
-            output=evidence/'output.nv16';supervisor.durable_frame(output,frame[HEADER:])
+            if outputs:outputs[-1]['ack_observed']=True
+            output=evidence/('output.nv16' if frames==1 else f'output-{capture_sequence:04}.nv16')
+            supervisor.durable_frame(output,frame[HEADER:])
             copied=dict(path=output.name,bytes=result['bytes'],sha256=result['sha256'],ack_sent=False,
-                numerical_qualified=False,wire_header_hex=frame[:HEADER].hex())
-            record['isp0_output']=copied;save()
+                sequence=capture_sequence,numerical_qualified=False,wire_header_hex=frame[:HEADER].hex())
+            outputs.append(copied);record['isp0_outputs']=outputs;record['isp0_output']=copied;save()
             copied['ack_write_intent']=True;save()
             require(now()<deadline,'ISP0 copied output or ACK journal exceeded deadline.')
-            send_ack(ack(frame,session));copied['ack_sent']=True;save()
+            more=capture_sequence<frames
+            send_ack(ack(frame,session,sequence=capture_sequence,next_frame=more))
+            copied['ack_sent']=True;save()
             require(now()<deadline,'ISP0 ACK publication exceeded deadline.')
+            if more:
+                capture_sequence+=1
+                continue
             receipt=exchange(b'\0',min(500,max(1,int((deadline-now())*1000))))
             terminal=receipt_check(receipt,session,frame[:HEADER])
             copied['ack_observed']=True
@@ -108,12 +126,11 @@ def capture(exchange,session,evidence,record,save,deadline,*,upload,send_upload,
             receipt_entry.update(terminal)
             record['isp0_ack_receipt']['path']=path.name
             require(now()<deadline,'ISP0 ACK receipt exceeded deadline.')
-            copied['ack_observed']=True
             record['isp0_result']='observed-success';record['durable_result']=receipt_entry.copy()
             try:save()
             except BaseException:
                 record['isp0_result']='unobserved';record.pop('durable_result',None);raise
-            result.update(ack_observed=True)
+            result.update(ack_observed=True,frames=frames)
             return result
         raise supervisor.CaptureWindowExpired('ISP0 exhausted its bounded pending-query budget.')
     except BaseException as error:
@@ -122,9 +139,8 @@ def capture(exchange,session,evidence,record,save,deadline,*,upload,send_upload,
         save()
         raise
 
-
 def capture_device(device,same,deadline,session,evidence,record,save,*,upload,
-                   now=time.monotonic,pause=time.sleep):
+                   frames=1,now=time.monotonic,pause=time.sleep):
     same();require(now()<deadline,'ISP0 descriptor deadline expired.')
     endpoints=[ep for ep in device.get_active_configuration()[(0,0)] if ep.bEndpointAddress==0x81]
     require(len(endpoints)==1 and endpoints[0].bmAttributes&3==2 and
@@ -181,7 +197,7 @@ def capture_device(device,same,deadline,session,evidence,record,save,*,upload,
             frame.extend(fragment)
             if expected is None and len(frame)>=HEADER:
                 magic,version,status,count=struct.unpack_from('<4I',frame)
-                require((magic,version)==(0x30495053,1) and status in (0,1,2,3) and
+                require(magic==0x30495053 and version in (1,2) and status in (0,1,2,3) and
                     (0<count<=MAXIMUM if status==1 else count==0),'Invalid ISP0 response extent.')
                 expected=HEADER+count
             require(expected is None or len(frame)<=expected,'ISP0 stream exceeds declared extent.')
@@ -200,4 +216,4 @@ def capture_device(device,same,deadline,session,evidence,record,save,*,upload,
         save()
         return bytes(frame)
     return capture(exchange,session,evidence,record,save,deadline,upload=upload,
-        send_upload=lambda data:send(data,'upload'),send_ack=lambda data:send(data,'ack'),now=now,pause=pause)
+        send_upload=lambda data:send(data,'upload'),send_ack=lambda data:send(data,'ack'),frames=frames,now=now,pause=pause)

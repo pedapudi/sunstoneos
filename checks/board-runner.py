@@ -114,6 +114,8 @@ class Model:
         assert self.lock and command[1]=='-d'
         assert command[2]==f'3:{self.number}'
         args = command[3:]
+        if self.variant == 'fel-after-return' and self.launched and args == ['readl', '0x20']:
+            return types.SimpleNamespace(returncode=1, stdout='', stderr='injected post-return transport failure')
         self.calls.append(args)
         out = []
         i = 0
@@ -153,15 +155,23 @@ class Model:
                 self.registers[board.crumbs.RTC+0x100]=0x5c0d0001
                 self.registers[board.crumbs.RTC+0x104]=(0x0410 if self.variant=='watchdog' else board.crumbs.RETURN_ROM)<<16
                 if self.variant not in ('watchdog','stuck-disarm'):self.registers[board.crumbs.WDT_MODE]=0
+                if self.variant == 'watchdog-before-entry':
+                    self.registers[board.crumbs.RTC+0x100] = 0
+                    self.registers[board.crumbs.WDT_MODE] = 0xb1
+                elif self.variant == 'missing-return':
+                    self.registers[board.crumbs.RTC+0x104] = 0
+                elif self.variant == 'wrong-return-session':
+                    self.registers[board.crumbs.RTC+0x100] ^= 1
                 i+=2
             else:
                 raise AssertionError(op)
         return types.SimpleNamespace(returncode=0,stdout='\n'.join(out),stderr='')
 
 
-def lifecycle(root,variant):
+def lifecycle(root,variant,restore=False):
     root.mkdir()
     args=arguments(root)
+    args.restore_rails=restore
     if variant=='mismatch':args.expect='a different output'
     model=Model(variant)
     owners=[]
@@ -171,12 +181,23 @@ def lifecycle(root,variant):
             owners.append(self)
         def dram(self):
             if variant=='dram-failure':raise board.DramFailure('training rejected')
-        def rails(self):
+        rail_phases = None
+        def rails(self, phase='rails'):
+            if self.rail_phases is None:self.rail_phases=[]
+            self.rail_phases.append(phase)
+            if variant == 'restore-failure' and phase == 'restore-rails':
+                raise ValueError('Rail helper refused post-return supplies')
             if variant=='rail-refusal':raise ValueError('Rail helper refused CPU supplies')
+        def live_state(self):
+            words={hex(0x8871000+0x1000*d+o):v for d in range(3)
+                   for o,v in ((0,board.state.BOOT_PLL[d]),(0x1c,board.state.BOOT_MUX[d]))}
+            if variant=='restore-clock':words['0x8871000']=0
+            return {'words':words}
         def prepare(self,info):
             return {'epoch':1,'generation':2,'watchdog':{'mode':0xb1,'session_seconds':1},
                     'uploads':[(0x41000000,args.image)],'launch':['exe','0x52000']}
         def capture(self,plan):
+            if variant=='fel-after-return':self.tx('readl','0x20')
             if variant=='host-error':raise TypeError('injected decoder bug after normal return')
             if variant=='invalid-report':
                 with patch.object(images,'capture',side_effect=ValueError('Application result belongs to another session')):
@@ -184,6 +205,15 @@ def lifecycle(root,variant):
             if variant=='journal-error':
                 self.journal_error=OSError('journal full after return')
             return {'valid':True,'payload':b'complete','report':{'state':4}}
+    if variant in ('decoder-failure', 'decoder-invalid'):
+        args.decoder=root/'application-decoder.py'
+        args.decoder.write_text('def decode(payload):\n    return {"failed": True}\ndef failures(decoded):\n    return ["native job failed"]\n' if variant=='decoder-failure' else
+                                'def decode(payload):\n    raise ValueError("malformed payload")\n')
+    if variant in ('decoder-expected', 'decoder-wrong-expected'):
+        args.decoder=root/'application-decoder.py'
+        args.decoder.write_text('def decode(payload):\n    return {"bytes": len(payload)}\n'
+                                'def expected(inputs):\n    raise AssertionError("Explicit expectation must override inference")\n')
+        args.expect_result={'bytes':8 if variant=='decoder-expected' else 9}
     info={'entry_guard':True,'descriptor':{},'watchdog':{'mode':0xb1,'session_seconds':1}}
     with patch.object(images,'inspect',return_value=info),patch.object(images,'policy'), \
          patch.object(board.os,'access',return_value=True),contextlib.redirect_stdout(io.StringIO()), \
@@ -216,6 +246,22 @@ def transport_cases(out):
             # One fresh-instance wait, never an automatic second reset.
             assert sum('0x16aa0041' in c for c in model.calls)==1
         passed(variant)
+    for variant,expected in (
+            ('watchdog-before-entry','watchdog-reset'),('missing-return','host-error'),
+            ('wrong-return-session','host-error'),('fel-after-return','host-error'),
+            ('decoder-failure','result-mismatch'),('decoder-invalid','result-mismatch'),
+            ('restore-failure','host-error'),('restore-clock','host-error'),
+            ('normal','returned'),('watchdog','watchdog-reset'),('mismatch','result-mismatch')):
+        result,model,owner=lifecycle(out/('restore-'+variant),variant,restore=True)
+        assert result['outcome']==expected,(variant,result)
+        assert bool(model.quarantined)==(variant in ('fel-after-return','missing-return','wrong-return-session')),(variant,model.quarantined)
+        assert bool(result.get('rails_restored'))==(variant=='normal')
+        assert owner.rail_phases==(['rails','restore-rails'] if variant in ('normal','restore-failure') else ['rails'])
+        if variant=='watchdog-before-entry':
+            assert result['dram_lost'] and not result['breadcrumbs']['session']
+        if variant in ('missing-return','wrong-return-session','watchdog-before-entry'):
+            assert not any(c[0]=='read' and int(c[1],0)>=0x41000000 for c in model.calls[model.calls.index(['exe','0x52000'])+1:])
+        passed('restore-and-classification-'+variant)
     root=out/'journal-armed';root.mkdir()
     args=arguments(root);model=Model('normal');record={}
     owner=board.Live(args,root,record,access=model,process=model.process,now=model.now,sleep=model.sleep)
@@ -236,6 +282,17 @@ def transport_cases(out):
     else:raise AssertionError('transport error accepted')
     assert model.quarantined and len(model.calls)==0
     passed('transport-error-quarantines-unknown-instance')
+
+
+def decoded_expectation_cases(out):
+    for variant in ('decoder-expected', 'decoder-wrong-expected'):
+        result, model, owner=lifecycle(out/variant, variant, restore=True)
+        good=variant=='decoder-expected'
+        assert result['outcome']==('returned' if good else 'result-mismatch'),result
+        assert bool(result.get('rails_restored'))==good
+        assert owner.rail_phases==(['rails','restore-rails'] if good else ['rails'])
+        assert result['normal_return'] and not model.quarantined
+        passed(variant)
 
 
 def queue_cases(out):
@@ -295,6 +352,34 @@ def queue_cases(out):
     passed('generous-hourly-backstop')
 
 
+def queue_integrity_cases(out):
+    """A queue claim checks frozen bytes and consumed host helpers before launch."""
+    for target in ('image', 'host-helper'):
+        for mutation in ('unchanged', 'changed', 'missing'):
+            root=out/f'integrity-{target}-{mutation}';root.mkdir()
+            args=arguments(root,submit=True)
+            args.fel=root/'model-fel';args.fel.write_bytes(b'MODEL ONLY - never execute')
+            queue=board.Queue(root/'state')
+            job=queue.submit(args)
+            path=Path(job['image']) if target=='image' else args.fel
+            if mutation=='changed':
+                path.write_bytes(b'changed after submission')
+            elif mutation=='missing':
+                path.rename(root/'saved-input')
+            claimed=queue.claim('3-1')
+            if mutation=='unchanged':
+                assert claimed and claimed['id']==job['id']
+                continue
+            assert claimed is None
+            result=json.loads(Path(job['result_path']).read_text())
+            assert result['outcome']=='refused-before-launch' and not result['launch_attempted']
+            assert result['first_failure']['site']=='queue'
+            reason='Queued input bytes changed' if target=='image' else 'Queued host code or helper inputs changed'
+            assert result['first_failure']['detail'].startswith(reason)
+            assert not queue.status()['boards']['3-1']['running']
+        passed('queued-'+target+'-integrity-before-launch')
+
+
 def policy_cases(out):
     root=out/'policy';root.mkdir();args=arguments(root)
     info={'generic':False,'descriptor':{}}
@@ -320,9 +405,23 @@ def daemon_cases(out):
     board.save(run/'result.json',{'outcome':'returned','first_failure':None})
     lease=Path(job['directory'])/'runner-process.json'
     identity=board.process_identity(os.getpid());board.save(lease,identity)
+    with q.locked() as state:
+        q.pause(state,'3-3','Fixture pause on the other board.')
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert board.main(['--queue',str(q.root),'resume','3-3']) == 0
+    boards=q.status()['boards']
+    assert boards['3-1']['pause'] is None and len(boards['3-1']['running']) == 1
+    assert boards['3-3']['pause'] is None
+    passed('cli-resume-other-port-does-not-collect-or-pause-live-run')
     q.recover()
-    assert q.status()['boards']['3-1']['running'], 'A live child keeps its claim even after writing a result.'
-    with patch.object(board,'process_alive',return_value=False):q.recover()
+    boards=q.status()['boards']
+    assert boards['3-1']['running'], 'A live child keeps its claim even after writing a result.'
+    assert boards['3-1']['pause'] is None, 'Daemon recovery skips live children without pausing them.'
+    with patch.object(board,'process_alive',return_value=False):
+        with contextlib.redirect_stdout(io.StringIO()):
+            assert board.main(['--queue',str(q.root),'resume','3-3']) == 0
+        assert q.status()['boards']['3-1']['running'], 'Only the daemon collects stopped orphans.'
+        q.recover()
     assert not q.status()['boards']['3-1']['running']
     assert json.loads(Path(job['result_path']).read_text())['outcome']=='returned'
     passed('daemon-recovery-waits-for-child-and-collects-run-result')
@@ -374,7 +473,7 @@ def artifacts(out):
 
 
 def offline(out,hello):
-    source=json.loads((board.dev.EVIDENCE/'sol-resume-20261031/port-3-3/cpu-thermal-state/session.json').read_text())
+    source=json.loads((board.state.EVIDENCE/'sol-resume-20261031/port-3-3/cpu-thermal-state/session.json').read_text())
     words={}
     for t in source['transactions']:
         c=t['command'];addresses=[int(c[i+1],16) for i,x in enumerate(c) if x=='readl']
@@ -393,6 +492,116 @@ def offline(out,hello):
     plan=images.prepare(args,images.inspect(args.image,args.kind),{'words':words},root/'gpu')
     assert plan['format']=='legacy' and plan['watchdog']==images.inspect(args.image,args.kind)['watchdog'] and 'gpu' in plan['geometry']
     passed('real-gpu-ladder-session-and-armed-launcher')
+
+
+
+def copied_return_report(epoch):
+    # Mirror the native return report fields: header, per-core retirement,
+    # device-drained epoch and secondary power-off acknowledgment.
+    raw=bytearray(8880)
+    struct.pack_into('<8Q',raw,0,0x3154525133333741,3,len(raw),epoch,1000,4,0,0)
+    for core in range(8):
+        offset=688+core*1024
+        struct.pack_into('<7Q',raw,offset,epoch,epoch,epoch,epoch,epoch if core else 0,epoch if core else 0,0)
+        struct.pack_into('<Q',raw,offset+104,epoch)
+        struct.pack_into('<Q',raw,offset+768,epoch if core else 0)
+    return bytes(raw)
+
+
+def gpu_capture_cases(out, gpu_images):
+    """Run the real generic capture after fake FEL return with exact ELF layouts."""
+    require_images = bool(gpu_images)
+    assert require_images, 'gpu-capture requires --gpu-image for each real ELF under test'
+    for index,image in enumerate(gpu_images):
+        info=images.inspect(image,'gpu-return')
+        geo=info['report_geometry'];gpu=geo['gpu_receipt']
+        assert info['generic'] and 'thermal' in geo
+        diagnostic=gpu.get('bisect')
+        host=images.load('capture_fixture_host',ROOT/'apps/os/host.py')
+        limit=host.image_manifest(image)['manifest']['output_limit']
+        variants=['normal','foreign-output','foreign-gpu','foreign-thermal','thermal-unknown','thermal-incomplete','short-gpu']
+        if diagnostic:
+            variants+=['wrong-diagnostic','normal-for-diagnostic']
+        else:
+            variants+=['zero-jobs','diagnostic-for-normal']
+        for variant in variants:
+            root=out/f'gpu-{index}-{variant}';root.mkdir()
+            args=arguments(root);args.image=image;args.kind='gpu-return';args.expect=None
+            epoch,generation=1,2
+            output=bytearray(56+limit);payload=b'complete'
+            struct.pack_into('<7Q',output,0,0x31544c5553455241,1,len(output),epoch,generation,1,len(payload))
+            output[56:56+len(payload)]=payload
+            if variant=='foreign-output':struct.pack_into('<Q',output,24,epoch+1)
+            version=3 if diagnostic else 1
+            jobs=0 if diagnostic else 7
+            flags=0 if diagnostic and diagnostic['stage']==1 else 63
+            final=(diagnostic['stage']<<32)|diagnostic['limit'] if diagnostic else 960000
+            if variant=='wrong-diagnostic':final^=1
+            if variant=='normal-for-diagnostic':version,final=1,960000
+            if variant=='diagnostic-for-normal':version,final=3,2<<32
+            if variant=='zero-jobs':jobs=0
+            receipt=struct.pack('<8Q',0x3152475033333741,version,64,
+                                epoch+1 if variant=='foreign-gpu' else epoch,generation,jobs,flags,final)
+            thermal=geo['thermal'];w=bytearray(thermal['window']['bytes']);r=bytearray(thermal['readings']['bytes'])
+            # Native thermal.c publishes a 72-byte header plus existing rows.
+            struct.pack_into('<4I5Q4I',w,0,0x5448524d,1,128,1,
+                             epoch+1 if variant=='foreign-thermal' else epoch,generation,1,100,200,0,100000,56,1)
+            for field,value in [('first',0),('collecting',1),('ready',1)]:
+                struct.pack_into('<I',w,thermal['window']['members'][field],value)
+            struct.pack_into('<Q5i6I4B',r,0,100,*([50000]*5),*([0]*5),1,31,0,0,0)
+            struct.pack_into('<I',r,thermal['readings']['members']['count'],1)
+            if variant=='thermal-unknown':struct.pack_into('<I',w,thermal['window']['members']['ready'],0)
+            if variant=='thermal-incomplete':struct.pack_into('<Q',r,0,101)
+            objects=[(geo['report_address'],copied_return_report(epoch)),(geo['output_address'],output),
+                     (gpu['address'],receipt),(thermal['window']['address'],w),(thermal['readings']['address'],r)]
+            model=Model('normal')
+            for address,data in objects:model.memory.update({address+n:b for n,b in enumerate(data)})
+            class Backend(board.Live):
+                def __init__(self,*values):
+                    super().__init__(*values,access=model,process=model.process,now=model.now,sleep=model.sleep)
+                def dram(self):pass
+                def rails(self):pass
+                def prepare(self,info):
+                    return {'epoch':epoch,'generation':generation,'watchdog':{'mode':0xb1,'session_seconds':1},
+                            'uploads':[],'launch':['exe','0x52000'],'format':'generic','geometry':geo}
+                def read(self,address,size,path):
+                    data=super().read(address,size,path)
+                    if variant=='short-gpu' and address==gpu['address']:
+                        data=data[:-1];path.write_bytes(data)
+                    return data
+            with patch.object(board.os,'access',return_value=True),contextlib.redirect_stdout(io.StringIO()):
+                result=board.run_image(args,Backend)
+            invalid=variant != 'normal'
+            assert result['outcome']==('result-mismatch' if invalid else 'returned'),(variant,result)
+            report=result['return_report']
+            assert report['secondaries_off']==7 and not report['qualification_passed']
+            assert result['normal_return'] and not model.lock and not model.quarantined
+            assert (root/'run/return-report.bin').read_bytes()==copied_return_report(epoch)
+            assert (root/'run/output-record.bin').read_bytes()==output
+            assert (root/'run/gpu-report.bin').exists() and (root/'run/thermal-window.bin').read_bytes()==w
+            assert (root/'run/thermal-readings.bin').read_bytes()==r
+            if variant=='foreign-output':
+                assert report['output_capture_status']=='malformed' and report['gpu_capture_status']=='decoded'
+                assert (root/'run/output.bin').read_bytes()==b''
+            else:assert (root/'run/output.bin').read_bytes()==payload
+            if variant in ('foreign-thermal','thermal-unknown'):
+                assert report['thermal_capture_status']=='malformed' and 'thermal_error' in report
+            elif variant=='thermal-incomplete':
+                assert report['thermal_capture_status']=='decoded' and report['thermal']['classification']=='incomplete'
+                assert 'thermal_error' in report
+            else:
+                assert report['thermal']['classification']=='complete'
+                assert not report['thermal']['qualification_passed']
+            if variant=='normal':
+                assert report['gpu_capture_status']=='decoded' and not report['gpu']['qualification_passed']
+                if diagnostic:assert report['gpu']['jobs']==0 and not report['gpu']['completed_gpu_work']
+                else:assert report['gpu']['jobs']==7 and report['gpu']['completed_gpu_work']
+            passed(f'generic-gpu-{index}-{variant}-preserves-native-return-and-raw-captures')
+        inventory=board.references(args)
+        for path in ('tools/board_images.py','apps/os/cpu-return-host.py','apps/os/gpu-return.py',
+                     'apps/os/cpu-return-thermal.py','apps/os/thermal-report.py','apps/os/host.py'):
+            assert inventory[str((ROOT/path).resolve())]==images.sha(ROOT/path)
+        passed(f'generic-gpu-{index}-freezes-all-capture-decoder-inputs')
 
 
 def report_cases(out,hello):
@@ -431,12 +640,44 @@ def report_cases(out,hello):
         args=arguments(root);args.image=root/'malformed.elf';args.image.write_bytes(data)
         with contextlib.redirect_stdout(io.StringIO()):
             result=board.run_image(args,lambda *a:(_ for _ in ()).throw(AssertionError('preflight opened transport')))
-        assert result['outcome']=='refused-before-launch' and 'Report/cleanup stacks' in result['first_failure']['detail']
+        assert result['outcome']=='refused-before-launch' and 'CPU return Secure Device allocations differ' in result['first_failure']['detail']
         passed('malformed-report-mmio-address-refused-before-transport')
         try:images.inspect(hello,'npu')
         except ValueError as error:assert 'NPU kind requires the linked OS NPU service' in str(error)
         else:raise AssertionError('CPU image relabeled as NPU accepted')
         passed('npu-kind-refuses-image-without-native-npu-service')
+        try:images.inspect(hello,'gpu-return')
+        except ValueError as error:assert 'GPU kind requires the linked GPU return receipt' in str(error)
+        else:raise AssertionError('CPU image relabeled as GPU accepted')
+        passed('gpu-kind-refuses-image-without-linked-gpu-receipt')
+        geo=images.inspect(hello,'cpu-return')['report_geometry']
+        assert 'gpu_receipt' not in geo and 'thermal' not in geo
+        limit=host.host.image_manifest(hello)['manifest']['output_limit']
+        for foreign in (False,True):
+            control=root/('cpu-foreign-output' if foreign else 'cpu-normal-output');control.mkdir()
+            args=arguments(control);args.image=hello;args.kind='cpu-return';args.expect=None
+            model=Model('normal')
+            output=struct.pack('<7Q',0x31544c5553455241,1,56+limit,2 if foreign else 1,2,1,8)+b'complete'+bytes(limit-8)
+            for address,data in [(geo['report_address'],copied_return_report(1)),(geo['output_address'],output)]:
+                model.memory.update({address+n:b for n,b in enumerate(data)})
+            class Backend(board.Live):
+                def __init__(self,*values):
+                    super().__init__(*values,access=model,process=model.process,now=model.now,sleep=model.sleep)
+                def dram(self):pass
+                def rails(self):pass
+                def prepare(self,info):
+                    return {'epoch':1,'generation':2,'watchdog':{'mode':0xb1,'session_seconds':1},
+                            'uploads':[],'launch':['exe','0x52000'],'format':'generic','geometry':geo}
+            with patch.object(board.os,'access',return_value=True),contextlib.redirect_stdout(io.StringIO()):
+                result=board.run_image(args,Backend)
+            assert result['outcome']==('result-mismatch' if foreign else 'returned'),result
+            report=result['return_report']
+            assert report['secondaries_off']==7 and report['thermal_capture_status']=='absent'
+            assert report['output_capture_status']==('malformed' if foreign else 'decoded')
+            assert result['normal_return'] and not model.lock and not model.quarantined
+            assert (control/'run/output-record.bin').read_bytes()==output
+            assert (control/'run/output.bin').read_bytes()==(b'' if foreign else b'complete')
+            passed('generic-cpu-capture-'+('foreign' if foreign else 'normal'))
 
 
 def owned_ddr_cases(out):
@@ -489,9 +730,9 @@ def rail_cases(out):
             clocks.append(f'{name} {phase} pll={pll:#x} mux={mux:#x} mhz={mhz} pat0=0 pat1=0 lfm=0')
     common='\n'.join(clocks)+'\n'
     supply='SUPPLY dcdc5_uv=1000000 dcdc3_uv=800000 bin=4 dcxo_hz=26000000\n'
-    log=common+supply+'VOLT dcdc5_selector=30 dcdc5_uv=800000\n'+board.dev.RAIL_COMPLETE+'\n'
+    log=common+supply+'VOLT dcdc5_selector=30 dcdc5_uv=800000\n'+board.state.RAIL_COMPLETE+'\n'
     assert images.rail_result((0x534b4552,5,0),log)['dcdc5_uv']==800000
-    already=common+supply.replace('dcdc5_uv=1000000','dcdc5_uv=800000')+board.dev.RAIL_COMPLETE+'\n'
+    already=common+supply.replace('dcdc5_uv=1000000','dcdc5_uv=800000')+board.state.RAIL_COMPLETE+'\n'
     assert images.rail_result((0x534b4552,5,0),already)['already_normalized']
     try:images.rail_result((0x534b4552,5,1),already.replace('dcdc3_uv=800000','dcdc3_uv=1000000'))
     except ValueError as error:assert 'refused' in str(error)
@@ -523,12 +764,12 @@ def rail_cases(out):
         model.registers[0x07090160]=0x10008002
         owner=board.Live(args,root,{},access=model,process=model.process,now=model.now,sleep=model.sleep,
                          elapsed_now=lambda:model.clock+model.suspended)
-        with patch.object(board.dev,'RAIL_HELPER_SHA256',images.sha(args.rail_helper)),patch.object(board.os,'access',return_value=True),owner.locked():
+        with patch.object(board.state,'RAIL_HELPER_SHA256',images.sha(args.rail_helper)),patch.object(board.os,'access',return_value=True),owner.locked():
             try:owner.rails()
             except ValueError as error:assert expired and 'watchdog' in str(error)
             else:assert not expired
         assert not owner.armed and not model.quarantined
-        if expired:assert not (root/'rail-result.bin').exists(),'Never read DRAM after possible WDT expiry.'
+        if expired:assert not (root/'rails/rail-result.bin').exists(),'Never read DRAM after possible WDT expiry.'
         else:assert owner.record['rails']['dcdc5_uv']==800000
         passed('pinned-rail-helper-'+variant)
 
@@ -544,7 +785,7 @@ def generic_npu_case(out, hello):
     with patch.object(images,'symbols',generic_symbols):
         info=images.inspect(hello,'npu')
         assert info['generic'] and not info.get('finite_npu')
-        source=json.loads((board.dev.EVIDENCE/'sol-resume-20261031/port-3-3/cpu-thermal-state/session.json').read_text())
+        source=json.loads((board.state.EVIDENCE/'sol-resume-20261031/port-3-3/cpu-thermal-state/session.json').read_text())
         words={}
         for transaction in source['transactions']:
             command=transaction['command']
@@ -568,7 +809,7 @@ def generic_npu_case(out, hello):
         return ' '.join('0' for _ in read_words)
     owner.tx=tx
     owner.live_state(False)
-    assert tuple(read_words)==board.dev.WORDS
+    assert tuple(read_words)==board.state.WORDS
     origin={'group':'npu','site':123,'caller':'0x41200100','value':'0x8'}
     decoded={'board_failure':origin,'last':{'name':'NPU_RETAINED'},'summary':'native failure'}
     with patch.object(board.crumbs,'decode',return_value=decoded):
@@ -578,12 +819,14 @@ def generic_npu_case(out, hello):
     passed('generic-npu-keeps-typed-session-preflight-and-live-register-set')
 
 
-def finite_npu_cases(out, image_root, state, fixture, host_tree=None):
+def finite_npu_cases(out, image_root, state, fixture, host_tree=None, cases=()):
     live = json.loads(state.read_bytes())
     template = out/'npu-template'
     template.mkdir()
     (template/'session.bin').write_bytes((image_root/'session-template.bin').read_bytes())
     for name in ('local-restart','model-switch','sdk-access','power-cycle'):
+        if cases and name not in cases:
+            continue
         root = out/('npu-'+name)
         root.mkdir()
         image = root/'image.elf'
@@ -597,10 +840,9 @@ def finite_npu_cases(out, image_root, state, fixture, host_tree=None):
             # be constructed, including when --host-tree selects that parser.
             def no_backend(*values,**keywords):raise AssertionError('board backend created')
             assert host_tree is not None, 'Supply --npu-host-tree with the prior POWER-capable parser'
-            frozen_dev=images.load('power_capable_dev',host_tree/'tools/dev-run.py')
             frozen_finite=images.load('power_capable_irq',host_tree/'apps/npu-interrupt/host.py').finite
             records=images.load('power_capable_records',ROOT/'apps/os/host.py')
-            old_facts=frozen_dev.npu_check(image,records,frozen_finite,
+            old_facts=images.finite_npu_info(image,records,frozen_finite,
                 json.loads((root/'manifest.json').read_bytes()))
             assert old_facts['execution_profile']==frozen_finite.POWER
             for number,tree in enumerate((None,host_tree)):
@@ -704,27 +946,35 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--out',type=Path,required=True)
     parser.add_argument('--hello',type=Path)
+    parser.add_argument('--gpu-image',type=Path,action='append',help='Real generic GPU ELF for gpu-capture group; repeat for diagnostic and ordinary images.')
     parser.add_argument('--npu-images',type=Path)
     parser.add_argument('--npu-state',type=Path)
     parser.add_argument('--npu-fixture',type=Path)
     parser.add_argument('--npu-host-tree',type=Path,help='Frozen host tree whose NPU parser still admits POWER')
-    parser.add_argument('--only',default='transport,queue,policy,daemon,artifacts,reports,ddr,rails,offline',help='Comma-separated groups to resume.')
+    parser.add_argument('--npu-case',action='append',default=[],
+                        choices=('local-restart','model-switch','sdk-access','power-cycle'),
+                        help='Run only selected finite NPU cases; repeat to resume unfinished cases.')
+    parser.add_argument('--only',default='transport,decoded-expectation,queue,queue-integrity,policy,daemon,artifacts,reports,ddr,rails,offline',help='Comma-separated groups to resume.')
     args=parser.parse_args()
     args.out.mkdir(parents=True,exist_ok=False)
     groups=args.only.split(',')
     if 'transport' in groups:transport_cases(args.out)
+    if 'decoded-expectation' in groups:decoded_expectation_cases(args.out)
     if 'queue' in groups:
         with patch.object(board,'port_idle',return_value=True):queue_cases(args.out)
+    if 'queue-integrity' in groups:
+        with patch.object(board,'port_idle',return_value=True):queue_integrity_cases(args.out)
     if 'policy' in groups:policy_cases(args.out)
     if 'daemon' in groups:
         with patch.object(board,'port_idle',return_value=True):daemon_cases(args.out)
     if 'artifacts' in groups:artifacts(args.out)
     if 'reports' in groups:report_cases(args.out,args.hello)
+    if 'gpu-capture' in groups:gpu_capture_cases(args.out,args.gpu_image)
     if 'ddr' in groups:owned_ddr_cases(args.out)
     if 'rails' in groups:rail_cases(args.out)
     if args.hello and 'offline' in groups:offline(args.out,args.hello)
     if 'generic-npu' in groups:generic_npu_case(args.out,args.hello)
-    if 'npu' in groups:finite_npu_cases(args.out,args.npu_images,args.npu_state,args.npu_fixture,args.npu_host_tree)
+    if 'npu' in groups:finite_npu_cases(args.out,args.npu_images,args.npu_state,args.npu_fixture,args.npu_host_tree,args.npu_case)
     board.save(args.out/'results.json',rows)
     print(f'{len(rows)} checks passed; no device access')
 

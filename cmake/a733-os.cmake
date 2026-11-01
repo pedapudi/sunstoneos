@@ -27,6 +27,37 @@ elseif(SUNSTONE_APPLICATION STREQUAL "hello-compute")
     MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/hello-compute/manifest.json")
   add_sunstone_image(sunstone-a733-os-hello LIFETIME ${os_lifetime}
     SERVICES ${os_services} APPLICATION hello-compute)
+elseif(SUNSTONE_APPLICATION STREQUAL "queue-add")
+  add_sunstone_application(queue-add
+    SOURCES "${SUNSTONE_SOURCE_ROOT}/apps/queue-add/main.c"
+    MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/queue-add/manifest.json"
+    INCLUDE_DIRECTORIES "${SUNSTONE_SOURCE_ROOT}/apps/queue-add")
+  add_sunstone_image(sunstone-a733-os-queue-add LIFETIME ${os_lifetime}
+    SERVICES ${os_services} APPLICATION queue-add)
+elseif(SUNSTONE_APPLICATION STREQUAL "gpu-lifecycle")
+  if(NOT SUNSTONE_A733_OS_GPU)
+    message(FATAL_ERROR "GPU lifecycle requires SUNSTONE_A733_OS_GPU=ON")
+  endif()
+  option(SUNSTONE_GPU_LIFECYCLE_PEER "Link the fixed sharing peer into the lifecycle image" ON)
+  if(NOT SUNSTONE_GPU_LIFECYCLE_PEER)
+    message(FATAL_ERROR "GPU lifecycle qualification requires the fixed sharing peer")
+  endif()
+  set(os_lifecycle_sources "${SUNSTONE_SOURCE_ROOT}/apps/gpu-lifecycle/main.c")
+  if(SUNSTONE_GPU_LIFECYCLE_PEER)
+    list(APPEND os_lifecycle_sources
+      "${SUNSTONE_SOURCE_ROOT}/apps/gpu-queue-peer/main.c"
+      "${SUNSTONE_SOURCE_ROOT}/apps/gpu-queue-peer/manifest.c")
+  endif()
+  add_sunstone_application(gpu-lifecycle
+    SOURCES ${os_lifecycle_sources}
+    MANIFEST "${SUNSTONE_SOURCE_ROOT}/apps/gpu-lifecycle/manifest.json"
+    INCLUDE_DIRECTORIES "${SUNSTONE_SOURCE_ROOT}/apps/gpu-lifecycle"
+      "${SUNSTONE_SOURCE_ROOT}/apps/gpu-queue-peer")
+  target_compile_definitions(gpu-lifecycle PRIVATE
+    GPU_LIFECYCLE_PEER=$<BOOL:${SUNSTONE_GPU_LIFECYCLE_PEER}>
+    GPU_LIFECYCLE_RECOVERY=$<BOOL:${SUNSTONE_A733_OS_GPU_RECOVERY_TEST}>)
+  add_sunstone_image(sunstone-a733-os-gpu-lifecycle LIFETIME ${os_lifetime}
+    SERVICES ${os_services} APPLICATION gpu-lifecycle)
 elseif(SUNSTONE_APPLICATION MATCHES "^usb-(input|serial|camera)$")
   if(NOT SUNSTONE_A733_OS_USB_CLASSES)
     message(FATAL_ERROR "USB demos require SUNSTONE_A733_OS_USB_CLASSES=ON")

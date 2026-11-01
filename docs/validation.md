@@ -1,5 +1,9 @@
 # Select checks by changed behavior
 
+Driver and fixture authors follow [completion and timing validation](driver-validation.md):
+wait for documented completion before verification, preserve vendor barriers and
+inter-write delays, and model delayed completion with stale readback.
+
 Before a test batch, state the changed behavior, credible failure risk, and
 smallest check that resolves that risk. Run focused checks during iteration.
 Broaden testing when a shared dependency changes, a failure reveals wider impact,
@@ -36,23 +40,49 @@ A source-only check configures no build. Duplicate selections run once.
 selected declarations. Other component checks run directly with their
 required inputs.
 
-Use `checks/check-index.py --changed PATH...` to help find component coverage.
-Its textual search cannot prove that an empty selection is sufficient. The
-owner chooses coverage from the changed behavior and shared dependencies;
-the gate does not infer it from filenames or launch every matching check.
+Use the affected-check selector for a worker's Git range:
+
+```sh
+~/.cache/sunstoneos/venv/bin/python3 -B checks/affected.py bringup..HEAD
+~/.cache/sunstoneos/venv/bin/python3 -B tools/integration-gate.py "$PWD" affected \
+  --affected bringup..HEAD --build-root "$HOME/.cache/sunstoneos/build/my-task" \
+  --reason 'Run the checks whose inputs changed and one OS baseline'
+```
+
+The selector compares both range endpoints and the checkout's generated check
+index. It includes removed dependencies and both sides of renames. Every plan
+includes one supervised OS baseline with external applications cleared.
+`--changed PATH...` selects paths directly for uncommitted iteration.
+The gate runs selected pure-host checks once. It records checks requiring images,
+cached evidence, USB or other arguments as PENDING and exits 2 when these remain.
+Supply those inputs to the component checks before claiming complete coverage.
+
+Selection uses declared and inferred repository inputs. Textual inference misses
+paths assembled dynamically; an empty selection cannot establish complete
+coverage. Add a literal `CHECK_INPUTS = ['drivers/example', 'include/example.h']`
+to a check when inference misses its inputs. Review the changed behavior and
+shared dependencies before accepting the resulting plan.
 
 `--full` explicitly requests all central targets, all configured OS variants of
 [the OS image](os-image.md), including the supervised NPU
-profile (variant `npu`) and all gate checks. The `npu` variant builds with the
+profile (variant `npu`), all gate checks and every indexed pure-host check once.
+The hook fixture remains conditional. Use `--full --affected BASE..HEAD` or
+`--full --changed PATH...` to name its input scope; ordinary full checks still
+run. Without an explicit scope, the gate uses the latest first-parent commit
+change plus staged, unstaged and nonignored untracked paths. A root commit uses
+all its tracked paths. `hook-scope.json` records the inputs and decision.
+The gate lists checks needing external inputs without claiming they ran. The `npu`
+variant builds with the
 catalogue map `~/.cache/sunstoneos/build/npu-board/session-artifacts.json`;
 the OS build verifies every file it names against
 `tools/npu-session-models.json`, the gate refuses the variant before any
 build when the map is missing, and the summary records its SHA-256.
 The optional GPU linear, mSBC, Cortex-A76 and CPU clock options are not
 variants of the gate; build them directly with `cfg.sh` when a change
-affects them. Reserve it for a shared change or milestone whose missing
-integration evidence justifies that scope, and state why in `--reason`.
-An integration commit alone does not justify it.
+affects them. Run the full set once for integration acceptance. Worker iteration uses affected
+checks plus one baseline build. Run all three baseline images, the integration
+gate and the check index once before the final integration report; reuse their
+results while relevant inputs remain unchanged.
 
 Each invocation uses a new label under `~/.cache/sunstoneos/build/gate-LABEL`.
 It records the selection, reason, revision, commands and logs, and stops at the
@@ -82,6 +112,14 @@ command delegates to this repository tool and accepts the same selection
 options. Host dependency configuration remains in `~/.cache/sunstoneos/bin/cfg.sh`.
 `--build-root` selects a separate directory for new builds and gate evidence.
 The gate builds and checks software only; board runs remain separately queued.
+
+A warm-build RTC workflow comparison uses the same driver source and cache.
+The previous seven generic core checks plus one OS build take 12.714 seconds;
+one selected RTC ownership check plus the same baseline takes 9.586 seconds.
+Four RTC checks still require cached inputs. The coverage differs, so this
+measures workflow latency rather than equal-coverage acceleration. Raw commands,
+results and timings are under
+`~/.cache/sunstoneos/build/check-selection-1031/code/paired-final-timing.json`.
 
 ## Match coverage to the change
 
@@ -193,7 +231,7 @@ the supervision deadline and the mutation cases.
 ## Find the checks that cover a change
 
 [checks/check-index.py](../checks/check-index.py) builds an index of every
-Python check under `checks/` except the two policy modules. It reads the
+Python check under `checks/` except the policy and selector modules. It reads the
 checks and documents in the checkout on every call, so the index always matches
 the checkout and is never committed; `checks/index.json` is ignored by Git.
 Each entry records:
@@ -204,7 +242,9 @@ Each entry records:
 - the areas of `~/.cache/sunstoneos` that it names, such as `sources` or
   `evidence`;
 - whether it can reach USB devices, and whether it is a helper module that other
-  checks load.
+  checks load;
+- its repository file and directory inputs, including literal `CHECK_INPUTS`
+  declarations, inferred source paths, included headers and transitive fixtures.
 
 A check is *pure-host* when it can run with no input other than a new output
 directory: no USB access, no cached evidence or build output, and no other
@@ -212,8 +252,8 @@ required argument. Pinned sources and host toolchains under the cache are
 allowed. Most checks are not pure-host, because they need an image, a bundle or
 earlier evidence; the index names those inputs.
 
-Generating the index takes about four seconds. The tool prints the index or
-selects checks for changed paths:
+The tool regenerates the index before selection. It prints the index or selects
+checks for changed paths:
 
 ```sh
 python3 checks/check-index.py --json      # print the index
@@ -277,8 +317,26 @@ Git stores the setting in the shared repository configuration
 (`git rev-parse --git-common-dir`). The relative path resolves against the
 root of the worktree that pushes, so a worktree runs the hook from its own
 checkout, and a worktree whose branch predates the hook runs no hook.
+The hook uses the affected-input selector to run its fixtures only when an
+outgoing commit changes the hook, its fixture or a file in the fixture's
+complete declared input inventory. The index uses that same inventory for this
+process check; native checks retain inferred and declared endpoint dependencies. Driver and documentation pushes still receive the complete secret scan;
+they do not repeat hook fixtures or build images. The input comparison includes
+intermediate commits, so reverting a hook change does not skip fixture coverage.
+
 [checks/pre-push-hook.py](../checks/pre-push-hook.py) pushes each blocked
-class and each passing case from a temporary clone and asserts the result.
+class and each passing case from retained fixture clones and asserts the result.
+Run it explicitly only when its inputs change:
+
+```sh
+~/.cache/sunstoneos/venv/bin/python3 -B checks/pre-push-hook.py \
+  --output "$HOME/.cache/sunstoneos/build/my-task/hook-check"
+```
+
+The gate's fixture likewise requires `checks/integration-gate.py --output DIR`.
+Each output directory must be new; fixture repositories remain available for
+failure diagnosis. The hook places its fixture runs under `SUNSTONE_CHECK_OUTPUT`
+or the default local `build/pre-push-hook` directory.
 
 ## Reuse valid evidence
 

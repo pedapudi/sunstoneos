@@ -16,9 +16,9 @@ static _Noreturn void stop(void){board_fail(NULL);for(;;)vTaskDelay(1);}
  * directly from the private immutable copy, with bounded TinyUSB FIFO writes.
  * ACK is accepted only after actual transfer completion and binds generation
  * plus copied digest. It never releases device or CPU buffers. */
-static uint8_t response[ISP0_RESULT_HEADER],ack[40];
+static uint8_t response[ISP0_RESULT_HEADER],ack[48];
 static size_t response_bytes,sent,transferred,ack_used;
-static unsigned delivered,acked,acking,terminal_zlp;
+static unsigned delivered,acked,acking,terminal_zlp,replay;
 static void queue_response(void);
 static int output_live(void)
 {return board_live(NULL)&&atomic_load_explicit(&isp0.result,memory_order_acquire)==1;}
@@ -79,22 +79,35 @@ static void exchange(void)
     if(response_bytes){queue_response();eligible();tud_vendor_flush();eligible();return;}
     if(!tud_vendor_available())return;
     uint8_t incoming[512];size_t n=1;
-    if(acking){n=sizeof(ack)-ack_used;if(n>tud_vendor_available())n=tud_vendor_available();
-      if(tud_vendor_read(ack+ack_used,n)!=n)stop();ack_used+=n;if(ack_used!=sizeof(ack))return;
-      if(!output_live()||le64(ack)!=isp0.session.board.generation||memcmp(ack+8,isp0.digest,32))stop();
-      if(!output_live())stop();acked=1;acking=0;return;}
+    if(acking){size_t total=acking==1?40:48;n=total-ack_used;if(n>tud_vendor_available())n=tud_vendor_available();
+      if(tud_vendor_read(ack+ack_used,n)!=n)stop();ack_used+=n;if(ack_used!=total)return;
+      if(!output_live()||le64(ack)!=isp0.session.board.generation||
+         (acking!=1&&le64(ack+8)!=isp0.sequence)||memcmp(ack+(acking==1?8:16),isp0.digest,32))stop();
+      if(!output_live())stop();
+      if(acking==2){
+       if(isp0.sequence==UINT32_MAX)stop();
+       replay=1;delivered=acked=0;acking=0;ack_used=0;
+       /* No response remains in TinyUSB. Transfer the private copy only after
+        * the final data/ZLP callback and sequence-bound acknowledgment. */
+       atomic_store_explicit(&isp0.result,3,memory_order_release);return;
+      }
+      acked=1;acking=0;return;}
     if(isp0.supplied.header_used&&!isp0_input_ready(&isp0.supplied)){
       n=isp0_input_remaining(&isp0.supplied);if(!n)stop();if(n>512)n=512;
       if(n>tud_vendor_available())n=tud_vendor_available();
     }
     if(tud_vendor_read(incoming,n)!=n)stop();
-    if(n!=1||incoming[0]>1||(isp0.supplied.header_used&&!isp0_input_ready(&isp0.supplied))){
+    if(n!=1||incoming[0]>3||(isp0.supplied.header_used&&!isp0_input_ready(&isp0.supplied))){
       if(!board_live(NULL)||isp0_input_feed(&isp0.supplied,&isp0.session,upload_now,NULL,
          board.session.deadline_us-10000,incoming,n)<0||!board_live(NULL))stop();return;
     }
     unsigned result=atomic_load_explicit(&isp0.result,memory_order_acquire);
-    if(incoming[0]==1){if(result!=1||!output_live()||!delivered||acked)stop();acking=1;return;}
-    memset(response,0,sizeof(response));put32(response,0x30495053);put32(response+4,1);
+    if(incoming[0]>=1&&incoming[0]<=3){
+      if(result!=1||!output_live()||!delivered||acked||(incoming[0]==1&&replay))stop();
+      acking=incoming[0];ack_used=0;return;
+    }
+    if(result==3)result=0;
+    memset(response,0,sizeof(response));put32(response,0x30495053);put32(response+4,replay?2:1);
     put32(response+8,acked?3:result);put32(response+12,result==1&&!acked?(uint32_t)isp0.bytes:0);
     put32(response+16,(uint32_t)board.session.epoch);put32(response+20,(uint32_t)(board.session.epoch>>32));
     put32(response+24,(uint32_t)board.session.generation);put32(response+28,(uint32_t)(board.session.generation>>32));
@@ -104,6 +117,7 @@ static void exchange(void)
     const uint32_t geometry[]={isp0.session.width,isp0.session.height,isp0.session.input_stride,
       isp0.session.output_stride,isp0.session.format,isp0.session.reserved[0],isp0.session.reserved[1],isp0.session.reserved[2]};
     for(unsigned i=0;i<8;++i)put32(response+128+4*i,geometry[i]);
+    if(replay&&result)put32(response+148,isp0.sequence);
     if(result){put32(response+160,isp0.complete);put32(response+164,isp0.engine.isp_status);
       put32(response+168,isp0.engine.vipp_status);put32(response+172,isp0.dma.events);
       put32(response+176,isp0.engine.pattern_status);put32(response+180,isp0.iommu.fault.scanned_masters);

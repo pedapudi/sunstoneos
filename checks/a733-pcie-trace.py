@@ -7,6 +7,7 @@ current tree. Only the Gen1 trace driver also builds against --baseline-rev.
 import argparse
 import hashlib
 import json
+import harness
 from pathlib import Path
 import re
 import shutil
@@ -22,14 +23,15 @@ UNITS = ["drivers/pci/a733_pcie.c", "drivers/pci/a733_pcie_phy.c", "drivers/pci/
          "runtime/device_memory_pool.c"]
 EPF_MODES = ["nominal", "wide", "other-bar", "high-half", "oversize", "deadline", "missing-msi",
              "status-error", "extra-msi", "data-error", "guard-error", "source-error", "link-loss",
-             "gen2", "gen2-retrain"]
+             "gen2", "gen2-retrain", "gen3", "gen3-fallback", "gen3-retrain"]
 TRACE_MODES = ["core", "nominal", "wide"]
 # The function layer and NVMe driver postdate the trace baseline.
 NVME_UNITS = UNITS + ["drivers/pci/a733_pcie_function.c", "drivers/pci/a733_pcie_nvme.c"]
 NVME_MODES = ["poll", "msix", "intx", "gen2", "forged", "inherited", "fatal", "identify-error",
               "timeout", "extra-vector", "extra-intx", "shutdown-stuck", "suspend", "suspend-keep",
               "multifunction", "bridge", "warm-sibling", "large-bar", "assigned-bar", "table-outside",
-              "class", "stop-config", "stop-test", "stop-link-stuck"]
+              "class", "stop-config", "stop-test", "stop-link-stuck", "atu1-stuck-stop",
+              "gen3", "gen3-poll", "gen3-intx", "gen3-fallback"]
 # These place the NVMe pool at 4 GiB, inside AddressSanitizer's shadow gap on
 # x86-64, so they run in a build with only the undefined-behavior sanitizer.
 NVME_BOUNDARY_MODES = ["pool-at-4g", "pool-across-4g"]

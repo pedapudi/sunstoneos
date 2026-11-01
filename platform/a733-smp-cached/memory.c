@@ -2,6 +2,9 @@
 #include "a733_cpu_coherence.h"
 #include "a733_cpu_start.h"
 #include "a733_device_memory_layout.h"
+#ifdef SUNSTONE_A733_OS_GPU
+#include "../../apps/os/application.h"
+#endif
 #if defined(SUNSTONE_USB_HOST_GENERIC) && SUNSTONE_USB_HOST_GENERIC
 #include "a733_usb_memory.h"
 #if defined(SUNSTONE_A733_EXTENDED_DEVICE_MEMORY) || defined(SUNSTONE_CAMERA_EXTERNAL_POOL)
@@ -129,6 +132,20 @@ int a733_cached_memory_prepare(void)
     a733_cached_el1_l2[54] |= (UINT64_C(3) << 6) | BIT(53) | BIT(54);
     a733_cached_el1_l2[55] |= (UINT64_C(3) << 6) | BIT(53) | BIT(54);
 #endif
+#endif
+#ifdef SUNSTONE_A733_OS_GPU
+    /* A GPU-written region has no writable CPU alias. Its rounded lease
+     * occupies whole 2 MiB CPU blocks, even when GPU pages are smaller. */
+    const struct ss_manifest *manifest = ss_application.manifest;
+    for (unsigned r = 0; manifest && r < manifest->region_count; ++r) {
+        const struct ss_region *region = &manifest->regions[r];
+        if (!(region->access & SS_ACCESS_GPU_WRITE) || (region->access & SS_ACCESS_WRITE)) continue;
+        uint64_t first = region->address & ~UINT64_C(0x1fffff);
+        uint64_t end = (region->address + region->bytes + UINT64_C(0x1fffff)) & ~UINT64_C(0x1fffff);
+        for (uint64_t address = first; address < end; address += UINT64_C(0x200000))
+            a733_cached_el1_l2[(address - UINT64_C(0x40000000)) >> 21] |=
+                (UINT64_C(3) << 6) | BIT(53) | BIT(54);
+    }
 #endif
     for (unsigned i = 0; i < 512; ++i) {
         uintptr_t a = 0x42000000 + (uintptr_t)i * 4096;

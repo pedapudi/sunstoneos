@@ -5,6 +5,7 @@
  * Authors: Zheng ZeQun <zequnzheng@allwinnertech.com>
  * See isp0-sources.json for source identity and RAM/MMIO boundaries. */
 #include "a733_isp0.h"
+#include "isp0-replay.h"
 #include "a733_camera_common.h"
 #include "isp600_default.h"
 #include <string.h>
@@ -106,8 +107,8 @@ int a733_isp0_poll(struct a733_isp0 *s)
 }
 int a733_isp0_trigger(struct a733_isp0 *s)
 {
- uint32_t v;if(!s||!s->armed||s->started||s->fault||read32(s,TOP+4,&v)!=1)return -1;
- if(v&0x00ff0011)return fail(s);
+ uint32_t v;if(!s||!s->armed||s->started||s->phase||s->fault||read32(s,TOP+4,&v)!=1)return -1;
+ if(v&0x00ff0010)return fail(s);
  /* Source generation_en writes cycle0, GEN1 then START1. START auto-clears. */
  if(write32(s,TOP+4,(v&~0x00ff0011u)|1)!=1||
     write32(s,TOP+4,(v&~0x00ff0011u)|0x11)!=1)return -1;
@@ -120,4 +121,36 @@ int a733_isp0_complete(struct a733_isp0 *s)
  if((i&~0x1fu)||(v&~0x100u)||(p&0x00ff0000)||!(p&1))return fail(s);
  if((i&0xc)!=0xc||v!=0x100||(p&0x10))return 0;
  s->isp_status=i;s->vipp_status=v;s->pattern_status=p;return 1;
+}
+int a733_isp0_rearm(struct a733_isp0 *s)
+{
+ uint32_t v;
+ if(!s||!s->initialized||s->fault||!s->started)return -1;
+ if(!s->phase){
+  if(!s->armed||a733_isp0_complete(s)!=1)return fail(s);
+  s->armed=0;s->phase=1;return 0;
+ }
+ /* ISP600's PARA_LOAD handler refreshes update flags/load address and READY
+  * before restarting TOP. VIPP reloads its unchanged unity parameters so each
+  * capture has fresh load completion. No address or parameter RAM changes. */
+ const struct step again[]={
+  {ISP+0x2c,UINT32_MAX,s->isp_status,1},
+  {VIPP+0x30,UINT32_MAX,s->vipp_status,1},
+  {ISP+0x24,UINT32_MAX,A733_ISP0_LOAD_IOVA>>2,0},
+  {ISP+0x20,0x601fe703,0x60008203,0},
+  {VIPP+0x40,0x15,5,3}
+ };
+ const struct step *p=&again[s->phase-1];
+ if(read32(s,TOP+4,&v)!=1)return -1;
+ if((v&0x00ff0011)!=1)return fail(s);
+ if(read32(s,p->address,&v)!=1)return -1;
+ /* Do not erase an error that arrived after the completion observation. */
+ if(p->kind==1&&v!=p->value)return fail(s);
+ uint32_t value=p->kind==1?p->value:(v&~p->mask)|p->value;
+ if(write32(s,p->address,value)!=1||read32(s,p->address,&v)!=1)return -1;
+ uint32_t mask=p->kind==3?A733_VIPP_READY_VERIFY:p->address==ISP+0x20?p->mask&~2u:p->mask;
+ if(p->kind==1?v!=0:(v&mask)!=(value&mask))return fail(s);
+ if(++s->phase<=sizeof(again)/sizeof(*again))return 0;
+ s->phase=0;s->armed=1;s->started=0;
+ s->isp_status=s->vipp_status=s->pattern_status=0;return 1;
 }

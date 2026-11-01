@@ -53,7 +53,34 @@ def symbol_bytes(image, name):
     raise ValueError('Symbol has no file bytes: ' + name)
 
 
-def inspect(image, kind, descriptor=None, host_tree=None):
+def finite_npu_files(args):
+    """Resolve the native session and exact build manifest consumed by admission."""
+    template = Path(args.template) if args.template else None
+    session = getattr(args, 'records', None) or (template/'session.bin' if template else None)
+    require(session is not None, 'NPU requires --records or a template directory with session.bin.')
+    manifest = getattr(args, 'manifest', None)
+    if manifest is None:
+        manifest = template/'manifest.json' if template else Path(args.image).parent/'manifest.json'
+        if not manifest.is_file():
+            manifest = Path(args.image).parent/'manifest.json'
+    return Path(manifest), Path(session)
+
+
+def finite_npu_info(image, host, finite, manifest):
+    """Admit native NPU geometry against its exact watchdog and session contract."""
+    watchdog = host.watchdog_marker(image)
+    require(watchdog == {'mode': 0xb1, 'session_seconds': 20},
+            'NPU requires the exact host-armed watchdog marker (mode 0xb1, 20 seconds).')
+    parts, address, build, layout, geometry = finite.image_profile(Path(image).read_bytes(), manifest)
+    profile = finite.geometry_profile(geometry)
+    require(profile in (finite.STARTUP, finite.INFERENCE, finite.RUNTIME, finite.RESTART,
+                        finite.SWITCH, finite.SDK, finite.POWER), 'Unsupported finite NPU profile.')
+    require(layout[:3] == (456, 224, 232), 'NPU development session layout differs.')
+    return {'watchdog': watchdog, 'geometry': geometry, 'session_layout': list(layout),
+            'execution_profile': profile, 'image_sha256': sha(image), 'build_id': build.hex()}
+
+
+def inspect(image, kind, descriptor=None, host_tree=None, manifest=None):
     host = load('board_records', ROOT / 'apps/os/host.py')
     names = symbols(image) if Path(image).read_bytes()[:4] == b'\x7fELF' else {}
     descriptor = descriptor or {}
@@ -65,12 +92,11 @@ def inspect(image, kind, descriptor=None, host_tree=None):
                 'descriptor':descriptor,'native_probe':native}
     if kind == 'npu' and 'ss_result_record' not in names:
         tree = host_tree or ROOT
-        dev = load('inspect_npu_dev', tree/'tools/dev-run.py')
         finite = load('inspect_npu_irq', tree/'apps/npu-interrupt/host.py').finite
-        manifest = json.loads((Path(image).parent/'manifest.json').read_bytes())
-        facts = dev.npu_check(image, host, finite, manifest)
-        # Frozen host trees retain their geometry parser, but current runner
-        # admission independently excludes the unsupported physical OFF path.
+        if manifest is None:
+            manifest = json.loads((Path(image).parent/'manifest.json').read_bytes())
+        facts = finite_npu_info(image, host, finite, manifest)
+        # Current admission excludes physical OFF even with a frozen geometry parser.
         require(facts.get('execution_profile') != finite.POWER,
                 'Unsupported physical NPU OFF profile; use local stop/restart.')
         return dict(facts, symbols=names, generic=False, entry_guard=False,
@@ -88,10 +114,11 @@ def inspect(image, kind, descriptor=None, host_tree=None):
         base.image_parts(Path(image))
         if generic:
             host.result_geometry(image)
-            cpu = load('inspect_cpu_geometry', ROOT/'apps/cpu-runtime-qualification/host.py')
-            geometry = cpu.geometry(Path(image))
+            returning = load('inspect_return_geometry', ROOT/'apps/os/cpu-return-host.py')
+            geometry = returning.geometry(Path(image))
+            if kind == 'gpu-return':
+                require('gpu_receipt' in geometry, 'GPU kind requires the linked GPU return receipt.')
         else:
-            dev = load('inspect_dev', ROOT/'tools/dev-run.py')
             legacy = load('inspect_legacy', (host_tree or GPU_TREE)/'apps/os/cpu-return-host.py')
             geometry = legacy.geometry(Path(image))
         if kind=='npu':
@@ -174,10 +201,11 @@ def prepare(args, info, live, out):
         tree = args.host_tree or ROOT
         finite = load('prepare_npu_irq', tree/'apps/npu-interrupt/host.py').finite
         helper = load('prepare_npu_development', tree/'apps/npu-finite/development.py')
-        template = Path(args.template)
-        meta = helper.prepare(finite, Path(args.image), Path(args.image).parent/'manifest.json',
-                              template/'session.bin', live, out, str(CLANG), str(LLD),
-                              '/usr/lib/llvm-21/bin/llvm-objcopy')
+        require(not args.input and not getattr(args, 'decoder', None),
+                'Finite NPU images use linked inputs and their native result decoder.')
+        manifest, session = finite_npu_files(args)
+        meta = helper.prepare(finite, Path(args.image), manifest, session, live, out,
+                              str(CLANG), str(LLD), str(args.objcopy))
         helper.validator(finite, finite.watchdog_marker)(out)
         uploads = [(part['address'], out/part['name']) for part in meta['segments']]
         uploads += [(0x42000000,out/'result-zero.bin'),(0x42004000,out/'contract.bin'),
@@ -185,7 +213,7 @@ def prepare(args, info, live, out):
         return dict(meta, uploads=uploads, launch=['exe','0x52000'], format='npu', finite=finite)
     if info.get('native_probe'):
         return load('prepare_native_probe', ROOT/'tools/board_probe.py').prepare(args.image,info['native_probe'],args.input,out)
-    dev = load('runner_dev', ROOT / 'tools/dev-run.py')
+    dev = load('runner_dev', ROOT / 'tools/board_state.py')
     base = load('runner_base', ROOT / 'tools/check-a733-smp.py')
     records = load('runner_records', ROOT / 'apps/os/host.py')
     if args.kind == 'probe':
@@ -215,6 +243,7 @@ def prepare(args, info, live, out):
     # for the OS-only hello-compute control; no application asset is copied.
     template = Path(template)
     session_path = template / 'session.bin' if (template/'session.bin').exists() else template/'board/session-template.bin'
+    session_path = getattr(args, 'records', None) or session_path
     raw = session_path.read_bytes()
     image_info = records.image_manifest(args.image)
     if struct.unpack_from('<Q', raw, 592)[0] == records.SESSION_MAGIC:
@@ -284,6 +313,8 @@ def capture(owner, plan, args):
                    [('monitor',0x42000000,128),('platform',plan['geometry']['log'],16384),
                     ('receipt',plan['geometry']['receipt'],88)]]
         decoded = finite.validate_reports(*reports,plan)
+        if plan['geometry'].get('stopped_capture'):
+            finite.stopped.capture(owner.tx, finite.base, plan, out, owner.record, owner.journal, decoded)
         # Validated retirement permits restoration even after numerical mismatch.
         backup = plan['dram_backup']
         require(sha(backup) == plan['dram_backup_sha256'], 'Saved NPU DRAM changed.')
@@ -317,13 +348,59 @@ def capture(owner, plan, args):
                 allow_untouched=geo['gpu'].get('untouched_report_version') == 2)
         return {'valid': True, 'payload': payload, 'report': decoded}
     records = load('runner_result_host', ROOT/'apps/os/cpu-return-host.py')
-    result = records.capture_result(owner.tx, args.image, plan['epoch'], plan['generation'], out/'output-record.bin')
-    # Copy the secure return report too; the opaque payload alone is not proof
-    # of all-core retirement. Its ABI is shared by generic and legacy images.
-    addr, size = plan['geometry']['report_address'],plan['geometry']['report_bytes']
-    report = owner.read(addr, size, out/'return-report.bin')
-    decoded = records.decode_return_report(report, plan['epoch'])
-    return {'valid': True, 'payload': result['payload'], 'report': decoded}
+    geo = plan['geometry']
+    reads = [('return-report', geo['report_address'], geo['report_bytes']),
+             ('output-record', geo['output_address'], geo['output_bytes'])]
+    if 'gpu_receipt' in geo:
+        gpu = geo['gpu_receipt']
+        reads.append(('gpu-report', gpu['address'], gpu['bytes']))
+    if 'thermal' in geo:
+        reads.extend(records.thermal_capture.captures(geo['thermal']))
+    # Preserve every returned object before decoding any of them. A malformed
+    # application result must not hide the native retirement or GPU receipt.
+    copied = {name: owner.read(address, size, out/(name + '.bin'))
+              for name, address, size in reads}
+    decoded = records.decode_return_report(copied['return-report'], plan['epoch'])
+    valid, payload = True, b''
+    decoded['output_capture_sha256'] = hashlib.sha256(copied['output-record']).hexdigest()
+    try:
+        info = records.host.image_manifest(args.image)
+        payload = records.host.decode_result(copied['output-record'], plan['epoch'], plan['generation'],
+                                              info['manifest']['output_limit'])
+        decoded['output_capture_status'] = 'decoded'
+    except (ValueError, KeyError, struct.error) as error:
+        valid = False
+        decoded.update(output_capture_status='malformed', output_error=str(error))
+    if 'gpu_receipt' in geo:
+        decoded['gpu_capture_sha256'] = hashlib.sha256(copied['gpu-report']).hexdigest()
+        try:
+            decoded['gpu'] = records.gpu_capture.decode_captured(copied['gpu-report'], geo['gpu_receipt'],
+                                                                 plan['epoch'], plan['generation'])
+            require(args.kind != 'gpu-return' or decoded['gpu'].get('gpu_bisect') or
+                    decoded['gpu'].get('completed_gpu_work'),
+                    'GPU kind requires completed GPU work or an image-bound diagnostic receipt.')
+            decoded['gpu_capture_status'] = 'decoded'
+        except (ValueError, KeyError, struct.error) as error:
+            valid = False
+            decoded.update(gpu_capture_status='malformed', gpu_error=str(error))
+    if 'thermal' in geo:
+        decoded['thermal_capture_sha256'] = {name: hashlib.sha256(copied[name]).hexdigest()
+                                             for name, _, _ in records.thermal_capture.captures(geo['thermal'])}
+        try:
+            decoded['thermal'] = records.thermal_capture.decode(geo['thermal'], copied,
+                                                                plan['epoch'], plan['generation'])
+            decoded['thermal']['qualification_passed'] = False
+            decoded['thermal_capture_status'] = 'decoded'
+            if decoded['thermal'].get('classification') != 'complete':
+                valid = False
+                decoded['thermal_error'] = 'Thermal window is '+str(decoded['thermal'].get('classification'))
+        except (ValueError, KeyError, struct.error) as error:
+            valid = False
+            decoded.update(thermal_capture_status='malformed', thermal_error=str(error))
+    else:
+        decoded['thermal_capture_status'] = 'absent'
+    decoded['qualification_passed'] = False
+    return {'valid': valid, 'payload': payload, 'report': decoded}
 
 
 
@@ -351,7 +428,7 @@ def prepare_legacy(host, image, template, output, live):
     grant = o.grant_fields(raw)
     if grant and grant['clusters']:
         struct.pack_into('<2Q', raw, len(raw) - o.GRANT_BYTES + 32, epoch, generation)
-    findings, derived = load('legacy_state', ROOT/'tools/dev-run.py').state_check(live['words'])
+    findings, derived = load('legacy_state', ROOT/'tools/board_state.py').state_check(live['words'])
     if derived['apb1_hz']:
         struct.pack_into('<2I', raw, 760, derived['apb1'], derived['apb1_hz'])
     if derived['configure_adc_clock'] is not None:
@@ -393,7 +470,7 @@ def prepare_legacy(host, image, template, output, live):
 
 
 def rail_result(values, log):
-    dev = load("board_rail_result", ROOT/"tools/dev-run.py")
+    dev = load("board_rail_result", ROOT/"tools/board_state.py")
     result = dev.helper_report({"complete": True, "transport_failed": False, "mode": "kernel",
         "result": dict(zip(("magic","stage","status"), values[:3]))}, log)
     require(result["complete"], "Rail helper refused or did not complete normally: "+result.get("reason", ""))
