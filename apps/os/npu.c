@@ -37,6 +37,9 @@ static int fail(void)
 }
 static void sdk_notify(void *unused)
 {(void)unused;if(npu.client)xTaskNotifyGive(npu.client);}
+#ifdef SUNSTONE_A733_OS_NPU_QUEUE
+void os_npu_queue_notify(void){sdk_notify(NULL);}
+#endif
 static void fatal(void *v){(void)v;(void)fail();}
 static int live(void)
 {return npu.started&&board_live(NULL)&&!atomic_load_explicit(&npu.failed,memory_order_acquire);}
@@ -186,6 +189,13 @@ int os_npu_tensor(enum nbg_section_id section,unsigned index,struct npu_runtime_
     if(!caller()||!npu.opened)return 0;
     return npu_runtime_tensor(&npu.runtime,0,section,index,tensor);
 }
+#ifdef SUNSTONE_A733_OS_NPU_QUEUE
+struct npu_runtime *os_npu_queue_runtime(void)
+{return caller()&&npu.opened?&npu.runtime:NULL;}
+int os_npu_queue_begin(void)
+{return caller()&&npu.opened&&claim();}
+void os_npu_queue_end(void){complete();}
+#endif
 int os_npu_submit(uint64_t timeout)
 {
     const struct os_session *s=os_session();
@@ -260,6 +270,9 @@ int os_npu_start(void)
 {
     extern int os_npu_sdk_bind(void);
     if(!ss_npu_service_bind_event(sdk_notify,NULL)||!os_npu_sdk_bind())return 0;
+#ifdef SUNSTONE_A733_OS_NPU_QUEUE
+    if(!os_npu_queue_sdk_bind())return 0;
+#endif
     const struct os_session *s=os_session_admitted();
     if(!s||npu.attempted||board.session.deadline_us<=10000)return 0;
     npu.attempted=1;
@@ -268,13 +281,25 @@ int os_npu_start(void)
     uintptr_t start=(uintptr_t)__os_npu_pool_start,end=(uintptr_t)__os_npu_pool_end;
     /* The reservation fits any one catalogue entry; the runtime takes the
      * linked entry's exact requirement from its start. */
-    const size_t need=npu_runtime_requirements(os_npu_models,OS_NPU_MODELS,1);
+    const size_t need=npu_runtime_requirements(os_npu_models,OS_NPU_MODELS,
+#ifdef SUNSTONE_A733_OS_NPU_QUEUE
+        OS_NPU_MODELS
+#else
+        1
+#endif
+    );
     if(start!=OS_NPU_POOL_START||end-start!=OS_NPU_POOL_BYTES||!need||need>OS_NPU_POOL_BYTES||
        !a733_mapping_check_stride(aarch64_device_translate,start,start,end-start,0x200000,&wb)||
        !device_memory_pool_init_typed(&npu.pool,start,start,end-start,DEVICE_MEMORY_CLASS_DMA32,DEVICE_MEMORY_WRITE_BACK)||
        !device_memory_acquire(&npu.pool,g->owner,need,&npu.lease,&npu.extent)||
        npu.extent.cpu!=start||npu.extent.physical!=start||npu.extent.bytes!=need)return 0;
-    struct npu_runtime_config config={.count=OS_NPU_MODELS,.slots=1,.cpu=npu.extent.cpu,
+    struct npu_runtime_config config={.count=OS_NPU_MODELS,.slots=
+#ifdef SUNSTONE_A733_OS_NPU_QUEUE
+        OS_NPU_MODELS,
+#else
+        1,
+#endif
+        .cpu=npu.extent.cpu,
         .physical=npu.extent.physical,.bytes=npu.extent.bytes,.register_cpu=0x03600000,
         .register_physical=0x03600000,.fatal=fatal};
     memcpy(config.models,os_npu_models,sizeof(os_npu_models));
@@ -300,10 +325,21 @@ int os_npu_start(void)
     npu.bootstrap=xTaskCreateStaticAffinitySet(bootstrap,"os-npu-boot",STACK,NULL,4,npu.stacks[0],&npu.tasks[0],2);
     npu.client=xTaskCreateStaticAffinitySet(os_npu_client_task,"os-npu-app",STACK,NULL,3,npu.stacks[1],&npu.tasks[1],2);
     creating=0;
+#ifdef SUNSTONE_A733_OS_NPU_QUEUE
+    for(unsigned i=0;i<OS_NPU_MODELS;++i)
+        if(!npu_runtime_preload(&npu.runtime,i,i))return 0;
+#endif
+#ifndef SUNSTONE_A733_OS_NPU_QUEUE
     TaskHandle_t clients[]={npu.client};
+#endif
     uint64_t now;
     if(!npu.bootstrap||!npu.client||!a733_npu_startup_bind_task(&npu.startup,npu.bootstrap)||
-       !npu_runtime_bind(&npu.runtime,&npu.startup,clients,4,2)||!os_npu_irq_bind(&npu.runtime)||
+#ifdef SUNSTONE_A733_OS_NPU_QUEUE
+       !npu_runtime_bind_resident(&npu.runtime,&npu.startup,npu.client,4,2)||
+#else
+       !npu_runtime_bind(&npu.runtime,&npu.startup,clients,4,2)||
+#endif
+       !os_npu_irq_bind(&npu.runtime)||
        npu.end>(UINT64_MAX>>3)-5000000||!clock_now(&now)||now>=npu.end)return 0;
     npu.initial_deadline=now+1000000;
     atomic_init(&npu.gate,npu.initial_deadline<<3);npu.started=1;return 1;

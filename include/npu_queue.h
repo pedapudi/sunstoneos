@@ -49,7 +49,8 @@ struct npu_queue {
     unsigned retired;
 };
 /* Caller owns the records; keep queue, commands, jobs and backing resources
- * pinned until release. Zero each object before its first use. Job records
+ * pinned until release. DMA allocations remain independently pinned until their
+ * last device user completes and the CPU acquires them. Zero each object before its first use. Job records
  * may be reused only after release, command records after queue retirement.
  * There is no driver-imposed job count. Caller storage bounds admission. */
 int npu_queue_init(struct npu_queue *, const struct npu_queue_ops *, void *);
@@ -73,8 +74,10 @@ void npu_queue_irq(struct npu_queue *);
  * 0 pending, 1 event/full-idle complete, -1 invalid/retained. A timeout or
  * failure never proves drain and never releases resources. */
 int npu_queue_fence_status(const struct npu_queue *, struct npu_queue_fence);
-/* After successful fence_status AND output acquire/cache invalidation.
- * release changes no hardware and permits reuse of this job record. */
+/* After successful fence_status. Release changes no hardware and permits
+ * reuse of this job record only. It never transfers DMA buffer ownership.
+ * When CPU acquisition is deferred across repeated uses, retain the separate
+ * buffer lease until the last use completes and cache acquisition finishes. */
 int npu_queue_release(struct npu_queue *, struct npu_queue_job *);
 int npu_queue_idle(const struct npu_queue *);
 /* Permanently close admission after successful drain and release. Completed

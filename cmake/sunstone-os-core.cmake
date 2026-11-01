@@ -10,6 +10,11 @@ option(SUNSTONE_A733_OS_RADIO "Integrated OS with the board's radio station" OFF
 option(SUNSTONE_A733_OS_HEADSET "OS Bluetooth headset capture service" OFF)
 option(SUNSTONE_A733_OS_MSBC "Integrated OS headset with wideband mSBC speech" OFF)
 option(SUNSTONE_A733_OS_NPU "Integrated OS with a task-bound NPU catalogue service" OFF)
+option(SUNSTONE_A733_OS_NPU_QUEUE "EL0 resident NPU submission ring on the routed core" OFF)
+set(SUNSTONE_OS_NPU_QUEUE_MODELS "" CACHE STRING "Comma-separated resident model indices, client model first")
+if(SUNSTONE_A733_OS_NPU_QUEUE AND NOT SUNSTONE_A733_OS_NPU)
+  message(FATAL_ERROR "The NPU queue requires SUNSTONE_A733_OS_NPU=ON")
+endif()
 option(SUNSTONE_A733_OS_GPU "OS GPU compute queue" OFF)
 option(SUNSTONE_A733_OS_GPU_RECOVERY_TEST
   "Withhold one completion until the ordinary job deadline in a qualification image" OFF)
@@ -204,9 +209,16 @@ if(SUNSTONE_A733_OS_AUDIO)
     drivers/audio/a733_audio_leases.c drivers/audio/dma_service_i2s_irq.c)
 endif()
 if(SUNSTONE_A733_OS_NPU)
+  set(os_npu_model_args)
+  set(os_npu_model_count 1)
+  if(SUNSTONE_A733_OS_NPU_QUEUE AND SUNSTONE_OS_NPU_QUEUE_MODELS)
+    set(os_npu_model_args --models "${SUNSTONE_OS_NPU_QUEUE_MODELS}")
+    string(REPLACE "," ";" os_npu_model_list "${SUNSTONE_OS_NPU_QUEUE_MODELS}")
+    list(LENGTH os_npu_model_list os_npu_model_count)
+  endif()
   execute_process(COMMAND "${Python3_EXECUTABLE}" "${os_root}/apps/os/npu-catalogue.py"
     --artifacts "${SUNSTONE_OS_NPU_CATALOGUE}" --model "${SUNSTONE_OS_NPU_CLIENT_MODEL}"
-    --output "${os_build}/npu-models.c" COMMAND_ERROR_IS_FATAL ANY)
+    ${os_npu_model_args} --output "${os_build}/npu-models.c" COMMAND_ERROR_IS_FATAL ANY)
   execute_process(COMMAND "${Python3_EXECUTABLE}" "${os_root}/tools/npu-session-catalogue.py" generate
     --application "${os_root}/apps/os/npu-models.json" --output "${os_build}/npu_admitted_models.c"
     COMMAND_ERROR_IS_FATAL ANY)
@@ -410,7 +422,11 @@ target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_BOARD_APPLICAT
   "$<$<BOOL:${SUNSTONE_A733_OS_RADIO}>:SUNSTONE_A733_OS_RADIO=1>"
   "$<$<BOOL:${SUNSTONE_A733_OS_HEADSET}>:SUNSTONE_A733_OS_HEADSET=1>")
 if(SUNSTONE_A733_OS_NPU)
-  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_NPU=1)
+  target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_NPU=1 OS_NPU_MODELS=${os_npu_model_count})
+  if(SUNSTONE_A733_OS_NPU_QUEUE)
+    target_compile_definitions(sunstone-a733-os-core PRIVATE SUNSTONE_A733_OS_NPU_QUEUE=1)
+    target_sources(sunstone-a733-os-core PRIVATE "${os_root}/runtime/npu_app_queue.c" "${os_root}/apps/os/npu-queue.c")
+  endif()
 endif()
 if(SUNSTONE_A733_OS_GPU)
   if(SUNSTONE_A733_OS_CPU_RETURN)

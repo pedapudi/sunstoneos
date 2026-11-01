@@ -133,11 +133,14 @@ int npu_application_irq_bind(struct npu_service *service)
 #include "npu_runtime.h"
 /* Before the scheduler, on the boot core. The idle-register hint stays until
  * the board shows one INTID 97 per job. */
+#ifndef NPU_IRQ_IDLE_HINT
+#define NPU_IRQ_IDLE_HINT 1
+#endif
 int NPU_IRQ_EXTERNAL_BIND(struct npu_runtime *rt)
 {
     if(!rt || !bind_ready())return 0;
     binding.masked=1;
-    if(!npu_runtime_bind_irq(rt,&ops,&binding,UINT32_C(1)<<NPU_IRQ_CORE,1))return 0;
+    if(!npu_runtime_bind_irq(rt,&ops,&binding,UINT32_C(1)<<NPU_IRQ_CORE,NPU_IRQ_IDLE_HINT))return 0;
     binding.service=&rt->service;return 1;
 }
 #endif
