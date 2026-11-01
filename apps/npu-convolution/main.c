@@ -129,12 +129,14 @@ static void client(void *unused)
         a733_observe_digest(a733_npu_application_result.output,a733_npu_application_reference_bytes,
             a733_npu_application_result.first_digest);
 #ifdef SUNSTONE_NPU_RESTART
+        sunstone_crumb(SUNSTONE_CRUMB_NPU_FIRST_CLOSE,1);
         platform_puts("NPU_STAGE=FIRST_CLOSE\n");
         reply=request(c,NPU_SERVICE_CLOSE,NULL,0,0);
         while(atomic_load_explicit(&c->closed,memory_order_acquire)) {
             if(!live() || atomic_load_explicit(&c->failed,memory_order_acquire))retained(23);
             vTaskDelay(1);
         }
+        sunstone_crumb(SUNSTONE_CRUMB_NPU_REOPEN,2);
         platform_puts("NPU_STAGE=RESTART_OPEN\n");
         reply=request(c,NPU_SERVICE_OPEN,NULL,0,1000000);
         if(reply.state==A733_NPU_BOOTING)reply=request(c,NPU_SERVICE_WAIT,NULL,0,0);

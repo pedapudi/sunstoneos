@@ -40,6 +40,12 @@ for variant in ('matched','mismatch','missing-IRQ-completion','missing-IRQ-stop'
     reply=image.layouts['npu_service_reply']
     def code(cpu,at,size,cookie):
         word=int.from_bytes(u.mem_read(at,4),'little')
+        if word & 0xffe0001f == 0xd4000001:
+            svc_number=(word>>5)&0xffff
+            assert svc_number in (0x5c0d,0x5c0e)
+            if svc_number==0x5c0d:
+                state.setdefault('breadcrumbs',[]).append((u.reg_read(UC_ARM64_REG_X0),u.reg_read(UC_ARM64_REG_X0+1)))
+            u.reg_write(UC_ARM64_REG_PC,at+4);return
         if word&0xffffffe0==0xd53be020:
             u.reg_write(UC_ARM64_REG_X0+(word&31),state['ticks']);state['ticks']+=24
             u.reg_write(UC_ARM64_REG_PC,at+4);return
@@ -102,13 +108,15 @@ for variant in ('matched','mismatch','missing-IRQ-completion','missing-IRQ-stop'
             assert state['closed'] and state['stop_queries']>=3 and state['quiesced'] and state['critical']
             state['exit']=args[0];u.emu_stop()
     u.hook_add(UC_HOOK_CODE,code);u.reg_write(UC_ARM64_REG_SP,0x43ffe000);u.reg_write(UC_ARM64_REG_LR,0x43fff000)
-    u.emu_start(image.address('client',unit='/apps/npu-convolution/main.c'),0,count=3000000)
+    # Returning builds compile the client from their generated finite-main.c.
+    u.emu_start(image.address('client'),0,count=3000000)
     if variant in ('matched','mismatch'):assert state['exit']==(variant=='mismatch') and not state['retained'],state
     else:assert state['retained'] and state['exit'] is None and not state['critical'],state
     assert state['submits']==2 and state['copied']==2 and state['reaps']==2,state
     assert state['operations']==[1,2,6,4]+([5,1] if a.restart else [])+[2,6,4]+([] if variant=='missing-IRQ-completion' else [5]),state
     if a.restart:
         assert state['log'].count('NPU_STAGE=FIRST_CLOSE\n')==1 and state['log'].count('NPU_STAGE=RESTART_OPEN\n')==1
+        assert [(s,v) for s,v in state.get('breadcrumbs',[]) if 0x0644<=s<=0x0647]==[(0x0644,1),(0x0647,2)]
         if variant=='matched':assert 'PASS NPU two matched jobs across normal local restart and parked providers\n' in state['log']
     if variant!='missing-IRQ-completion':
         timing=host.timing(state['log'])

@@ -595,8 +595,8 @@ def npu_check(image, host, finite=None, manifest=None):
     require(manifest is not None, 'npu requires its exact build manifest.')
     parts, address, build, layout, geometry = finite.image_profile(Path(image).read_bytes(), manifest)
     profile = finite.geometry_profile(geometry)
-    require(profile in (finite.STARTUP, finite.INFERENCE, finite.RUNTIME),
-            'npu development supports startup, single-inference and runtime images only.')
+    require(profile in (finite.STARTUP, finite.INFERENCE, finite.RUNTIME, finite.RESTART),
+            'npu development requires a supported finite NPU profile.')
     require(layout[:3] == (456, 224, 232), 'NPU development session layout differs.')
     return {'watchdog': watchdog, 'geometry': geometry, 'session_layout': list(layout),
             'execution_profile': profile, 'image_sha256': digest(image), 'build_id': build.hex()}

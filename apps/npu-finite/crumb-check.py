@@ -31,6 +31,8 @@ def main():
     expected[0x06ff] = 'NPU_RETAINED'
     expected.update({0x0600 + i: 'NPU_HELPER_' + name for i, name in HELPER.items()})
     expected.update({0x0630 + i: 'NPU_PASS_' + name for i, name in enumerate(PASS)})
+    expected.update({0x0644 + i: 'NPU_' + name for i, name in enumerate(
+        ('FIRST_CLOSE', 'STOPPED', 'RESTART_READY', 'REOPEN'))})
     for number, name in expected.items():
         assert stages.get(number) == name, (hex(number), stages.get(number), name)
     epoch = 0x1234

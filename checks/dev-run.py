@@ -683,7 +683,7 @@ def npu_cases(out):
                                                {'startup_only': True}),
         geometry_profile=lambda geometry: 'npu-startup-return-v1',
         STARTUP='npu-startup-return-v1', INFERENCE='npu-single-inference-return-v1',
-        RUNTIME='npu-runtime-return-v1')
+        RUNTIME='npu-runtime-return-v1', RESTART='npu-finite-restart-return-v1')
     image = out / 'npu-image.elf'
     image.write_bytes(b'modeled immutable NPU image')
     manifest = {'execution_profile': finite.STARTUP}
@@ -701,6 +701,9 @@ def npu_cases(out):
             else:
                 raise AssertionError('NPU accepted another watchdog contract')
     passed('npu-image-geometry-and-exact-watchdog')
+    with patch.object(finite, 'geometry_profile', lambda geometry: finite.RESTART):
+        assert dev.npu_check(image, reader, finite, manifest)['execution_profile'] == finite.RESTART
+    passed('npu-development-admits-local-restart')
     # Capture never opens hardware here. An attempted failed transfer must
     # quarantine its saved instance; clean admission refusals must not.
     for variant in ('nominal', 'nonzero', 'timeout', 'bad-hex', 'short', 'admission'):

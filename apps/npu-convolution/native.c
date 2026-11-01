@@ -397,7 +397,10 @@ static void bootstrap(void *argument)
                         if(restart_pending) {
                             enum a733_npu_platform_result result=npu_convolution_restart_poll(&app.reserved.convolution);
                             if(!NPU_APPLICATION_CHECK(result!=A733_NPU_PLATFORM_RETAINED,app.startup.stage))break;
-                            if(result==A733_NPU_PLATFORM_READY){restarted=1;restart_pending=0;}
+                            if(result==A733_NPU_PLATFORM_READY){
+                                sunstone_crumb(SUNSTONE_CRUMB_NPU_RESTART_READY,2);
+                                restarted=1;restart_pending=0;
+                            }
                             vTaskDelay(1);continue;
                         }
 #endif
@@ -405,6 +408,7 @@ static void bootstrap(void *argument)
                         if(!NPU_APPLICATION_CHECK(stopped!=A733_NPU_PLATFORM_RETAINED,app.startup.stage))break;
                         if(stopped==A733_NPU_PLATFORM_READY) {
 #ifdef SUNSTONE_NPU_RESTART
+                            sunstone_crumb(SUNSTONE_CRUMB_NPU_STOPPED,restarted+1);
                             if(!restarted){restart_pending=1;continue;}
 #endif
                             atomic_store_explicit(&app.stopped,1,memory_order_release);
