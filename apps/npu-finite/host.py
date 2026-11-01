@@ -13,8 +13,11 @@ require,sha=base.require,original.sha
 RESTART='npu-interrupt-restart-return-v1'
 STARTUP='npu-startup-return-v1'
 INFERENCE='npu-single-inference-return-v1'
+# The NPU runtime client (build.py --runtime): one job of each linked network through npu_job_run.
+RUNTIME='npu-runtime-return-v1'
 # The startup client's receipt magic, monitor detail, inference jobs and interrupt completions.
-STARTUP_CLIENT={STARTUP:(0x4e50555354415231,0x4e505553,0,1),INFERENCE:(0x4e5055494e463031,0x4e505549,1,2)}
+STARTUP_CLIENT={STARTUP:(0x4e50555354415231,0x4e505553,0,1),INFERENCE:(0x4e5055494e463031,0x4e505549,1,2),
+ RUNTIME:(0x4e50555254523031,0x4e505552,2,3)}
 MBUS_CHECKPOINT='npu-entry-mbus-checkpoint-v1'
 IRQ_CHECKPOINT='npu-entry-irq-checkpoint-v1'
 PROVIDER_CHECKPOINT='npu-entry-provider-checkpoint-v1'
@@ -61,10 +64,12 @@ def image_profile(data,manifest):
   else:
    require('npu_entry_checkpoint_provider_profile' not in symbols and all(n not in symbols for n in ('a733_npu_application_init','npu_convolution_startup_poll','npu_service_activate','vTaskStartScheduler')),'Checkpoint contains a provider or scheduler constructor.')
  else:require('npu_entry_checkpoint_profile' not in symbols,'Checkpoint image cannot use numerical profile.')
+ runtime=manifest['execution_profile']==RUNTIME
  if startup:
+  engine=('npu_runtime_client','npu_job_run','npu_runtime_stop_poll') if runtime else ('npu_startup_client','npu_convolution_stop_poll')
   require(read('npu_startup_return_profile')==struct.pack('<4Q',startup[0],1,startup[2],startup[3]) and
-   all(n in symbols for n in ('npu_startup_return_ready','npu_startup_client','npu_service_activate','npu_convolution_stop_poll','vTaskStartScheduler')) and
-   'client' not in symbols,'Startup-only implementation differs.')
+   all(n in symbols for n in ('npu_startup_return_ready','npu_service_activate','vTaskStartScheduler')+engine) and
+   'client' not in symbols and (not runtime or 'npu_convolution_startup_poll' not in symbols),'Startup-only implementation differs.')
  else:require('npu_startup_return_profile' not in symbols,'Startup-only image requires its distinct profile.')
  restart=manifest['execution_profile']==RESTART
  if restart:
@@ -72,8 +77,14 @@ def image_profile(data,manifest):
    all(n in symbols and symbols[n]['st_value'] for n in ('npu_convolution_restart_poll','npu_service_restart_prepare','npu_service_restart_resume','npu_application_irq_restart')),
    'Missing exact returning restart implementation.')
  else:require('npu_restart_return_profile' not in symbols,'Restart image requires its distinct profile.')
+ # The runtime image compares each network's copied output with its linked
+ # reference; network 0 is the image's selected immutable model.
+ references=[read(f'npu_finite_reference_{n}').hex() for n in range(startup[2])] if runtime else []
+ if not runtime:require('npu_finite_reference_0' not in symbols,'Only the runtime image links network references.')
  geometry={'clean_start':lo,'clean_end':hi,'receipt':receipt,'log':log,'reference':read('a733_npu_application_reference').hex()}
+ require(not runtime or references[0]==geometry['reference'],'Runtime network 0 is not the selected model.')
  if startup:geometry['startup_only']=True
+ if runtime:geometry.update(runtime=True,references=references)
  if manifest['execution_profile']==INFERENCE:geometry['single_inference']=True
  if restart:geometry['restart']=True
  if thermal:
@@ -98,7 +109,7 @@ def image_profile(data,manifest):
  if capture is not None:geometry['stopped_capture']=capture
  return parts,address,build,layout,geometry
 
-def geometry_profile(g):return INFERENCE if g.get('single_inference') else STARTUP if g.get('startup_only') else PROVIDER_CHECKPOINT if g.get('checkpoint_provider') else IRQ_CHECKPOINT if g.get('checkpoint_irq') else MBUS_CHECKPOINT if g.get('checkpoint_mbus') else RESTART if g.get('restart') else CHECKPOINT if g.get('checkpoint') else THERMAL if g.get('thermal') else PROFILE
+def geometry_profile(g):return RUNTIME if g.get('runtime') else INFERENCE if g.get('single_inference') else STARTUP if g.get('startup_only') else PROVIDER_CHECKPOINT if g.get('checkpoint_provider') else IRQ_CHECKPOINT if g.get('checkpoint_irq') else MBUS_CHECKPOINT if g.get('checkpoint_mbus') else RESTART if g.get('restart') else CHECKPOINT if g.get('checkpoint') else THERMAL if g.get('thermal') else PROFILE
 
 def validate_admission(admission_raw,raw,build,layout,image_hash,cache=None,*,execution_profile=PROFILE):
  """Preserve original NPU facts; require a distinct reviewed returning lifetime.
@@ -326,6 +337,7 @@ def validate_reports(monitor,platform,receipt,p):
   else:require(text==prefix,'Checkpoint log or status differs.')
   require(status==0,'Checkpoint log or status differs.')
   return {'normal_return':True,'checkpoint':('PROVIDERS_CONSTRUCTED' if p.get('execution_profile')==PROVIDER_CHECKPOINT else 'ENTRY_MEMORY_READY'),'functional_success':False,'controlled_negative':False,'jobs':0,'status':0,'diagnostic_deadline':deadline,'log':text,**mbus}
+ if g.get('runtime'):return runtime_report(text,status,deadline,g)
  if startup and startup[2]:return inference_report(text,status,deadline,g)
  if startup:
   expected=('NPU_STAGE=WAIT_STARTUP\nNPU_STAGE=OPEN\nNPU_STAGE=BOOTSTRAP_READY\nNPU_STAGE=CLOSE\nNPU_STAGE=WAIT_LOCAL_STOP\n'
@@ -379,6 +391,26 @@ def inference_report(text,status,deadline,g):
   'jobs':1,'status':status,'diagnostic_deadline':deadline,'output':bytes(output).hex(),
   'output_pattern':{k:v for k,v in output_pattern(b'',bytes(output)).items() if k!='first_unwritten'},'log':text}
 
+def runtime_report(text,status,deadline,g):
+ """The runtime client's log: startup, one job of each network through
+ npu_job_run, CLOSE, then each copied output in network order. Status 0
+ requires every output to equal its network's reference; status 1 is a normal
+ return with at least one differing output, reported and not refused."""
+ references=[bytes.fromhex(x) for x in g['references']];jobs=len(references)
+ head=('NPU_STAGE=WAIT_STARTUP\n'+''.join(f'NPU_STAGE=JOB network=0x{n:016x}\n' for n in range(jobs))+
+  'NPU_STAGE=CLOSE\nNPU_STAGE=WAIT_LOCAL_STOP\n'
+  f'NPU_IRQ_COMPLETIONS=0x{1+jobs:016x}\nNPU_IRQ_STOPPED=0x0000000000000001\nNPU_STAGE=QUIESCENT\n')
+ body=''.join(re.escape(f'NPU_OUTPUT network=0x{n:016x}\n')+r'((?:0x[0-9a-f]{16}\n)+)' for n in range(jobs))
+ match=re.fullmatch(re.escape(head)+body+r'NPU_INFERENCE=(MATCH|MISMATCH); inference_jobs='+str(jobs)+r'\n',text)
+ require(match is not None,'Runtime stage, job, IRQ or output log differs.')
+ outputs=[bytes(int(x,16) for x in match[n+1].splitlines()) if all(int(x,16)<256 for x in match[n+1].splitlines()) else None for n in range(jobs)]
+ require(all(o is not None for o in outputs),'Invalid copied output byte.')
+ require([len(o) for o in outputs]==[len(r) for r in references],'Copied output extent differs.')
+ matches=[o==r for o,r in zip(outputs,references)];matched=all(matches)
+ require(matched==(status==0) and (match[jobs+1]=='MATCH')==matched,'Inference status disagrees with copied outputs.')
+ return {'normal_return':True,'runtime':True,'functional_success':matched,'controlled_negative':not matched,
+  'jobs':jobs,'status':status,'diagnostic_deadline':deadline,'outputs':[o.hex() for o in outputs],'network_matches':matches,'log':text}
+
 def transfer(transaction,address,data,destination):
  with base.sealed_source(data) as (source,fd):transaction('write',hex(address),source,'read',hex(address),len(data),destination,pass_fds=(fd,))
  require(destination.read_bytes()==data,'Restoration readback differs.');base.sync_file(destination)
@@ -408,7 +440,7 @@ def run_once(transaction,launch,ready,bundle,p,evidence,record,save):
   # Publish continuity only after the complete saved DRAM has been restored.
   # The nonzero result and failed functional result remain unchanged.
   kernel=module('finite_npu_controlled',ROOT/'tools/check-a733-kernel.py')
-  terminal='NPU_INFERENCE=MISMATCH; inference_jobs=1' if result.get('single_inference') else 'FAIL NPU numerical comparison' if result['status']==1 else 'REFUSED NPU thermal admission; configured sensor disabled and providers parked'
+  terminal=f"NPU_INFERENCE=MISMATCH; inference_jobs={result['jobs']}" if result.get('runtime') else 'NPU_INFERENCE=MISMATCH; inference_jobs=1' if result.get('single_inference') else 'FAIL NPU numerical comparison' if result['status']==1 else 'REFUSED NPU thermal admission; configured sensor disabled and providers parked'
   markers=['NPU_STAGE=QUIESCENT',terminal]
   controlled={'outcome':{'name':'npu-numerical-mismatch-after-quiescence' if result['status']==1 else 'npu-thermal-refusal-after-quiescence',
    'status':result['status'],'interrupt':None,'fail_lines':0,'fault':None,'log_contains':markers},

@@ -41,6 +41,20 @@ SECTIONS {
         . += 32768; __exception_stack_top = .;
     } > RAM
     __heap_end = .;
+    /* The NPU runtime image (build.py --runtime) defines the size of the
+     * runtime's parent allocation: whole 2 MiB blocks of image RAM after the
+     * stacks, inside the returned clean range. Other profiles leave it empty
+     * and keep their layout. */
+    .npu_runtime_parent (NOLOAD) : {
+        . = DEFINED(__npu_runtime_parent_bytes) ? ALIGN(0x200000) : .;
+        __npu_runtime_parent_start = .;
+        . += DEFINED(__npu_runtime_parent_bytes) ? __npu_runtime_parent_bytes : 0;
+        __npu_runtime_parent_end = .;
+    } > RAM
+    ASSERT(!DEFINED(__npu_runtime_parent_bytes) ||
+           (!DEFINED(__device_pool_size) && !DEFINED(__npu_large_graph) &&
+            __npu_runtime_parent_bytes % 0x200000 == 0 && __npu_runtime_parent_end <= 0x41e00000),
+           "NPU runtime parent overlaps a device pool or the uploaded session")
     /* An absent pool preserves the previous image extent and section layout.
      * The large NPU graph (build.py --shufflenet) takes the fixed 4 MiB pool
      * of include/a733_device_memory_layout.h; the returned clean range then

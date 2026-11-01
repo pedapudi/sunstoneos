@@ -1,9 +1,16 @@
 #ifndef SUNSTONE_NPU_STARTUP_RETURN_H
 #define SUNSTONE_NPU_STARTUP_RETURN_H
 #include <stdint.h>
-/* The startup client has two profiles: bootstrap only, or bootstrap followed
- * by one inference job. Each has its own receipt magic and monitor detail. */
-#ifdef SUNSTONE_NPU_SINGLE_INFERENCE
+/* The startup client has three profiles: bootstrap only; bootstrap followed
+ * by one inference job; and the NPU runtime client (runtime-client.c), which
+ * runs one job of each of two catalogue networks through npu_job_run. Each
+ * has its own receipt magic and monitor detail. */
+#ifdef SUNSTONE_NPU_RUNTIME_RETURN
+#define NPU_STARTUP_RECEIPT_MAGIC UINT64_C(0x4e50555254523031)
+#define NPU_STARTUP_READY UINT64_C(0x4e505552)
+#define NPU_STARTUP_JOBS 2u
+#define NPU_STARTUP_MAX_STATUS 1u /* 1: a copied output differs from its reference. */
+#elif defined(SUNSTONE_NPU_SINGLE_INFERENCE)
 #define NPU_STARTUP_RECEIPT_MAGIC UINT64_C(0x4e5055494e463031)
 #define NPU_STARTUP_READY UINT64_C(0x4e505549)
 #define NPU_STARTUP_JOBS 1u

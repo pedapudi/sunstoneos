@@ -536,3 +536,51 @@ nothing until a progress-record implementation defines it; a retained client
 failure also records its reason. Use the same preparation and capture as
 startup-only, with this profile in the manifest. Status: software-checked and
 staged; no board run.
+
+### Return after one job of each of two networks on the NPU runtime
+
+`build.py --runtime --evidence DIRECTORY` produces `npu-runtime-return-v1`.
+The image replaces the fixed-model convolution object with the NPU runtime of
+`drivers/npu/a733_npu_runtime.c`, which loads any admitted model into a slot
+at run time. `apps/npu-convolution/native-runtime.c` keeps the providers, the
+PMIC task, the startup and stop sequence and the quiescence proof of the
+single-model image, and prepares one runtime slot in a 6 MiB parent region at
+`0x41400000..0x41a00000`. The region holds the runtime's read-only,
+read-window and write-window groups of 2 MiB each; `apps/npu-finite/link.ld`
+places it after the stacks, inside the cleaned interval, and the image has no
+device pool.
+
+The client, `apps/npu-finite/runtime-client.c`, runs one job of each network
+in `apps/npu-finite/runtime-models.json` through the generic job helper
+`npu_job_run` (`include/npu_job.h`). The helper sends OPEN on the first call
+and LOAD whenever the slot holds a different model; it copies the input,
+submits and copies the output. The list names `conv12`, the baseline fixture
+of the single-inference profile and the image's selected immutable model,
+then `conv8`. The build checks every model, input and reference file against
+its catalogue entry, generates the network table and the image's admitted
+table from the same list, and keeps a linked copy of each reference
+(`npu_finite_reference_0`, `npu_finite_reference_1`). Status 0 means both
+copied outputs match their references (400 and 72 bytes); status 1 is a
+normal return with a differing output, and the host reports both outputs.
+
+The final gate requires three interrupt completions (bootstrap and two jobs),
+two runtime jobs, a CLOSED slot with no request outstanding and the same local
+stop and provider parking as startup-only. The ordered log is:
+
+```text
+NPU_STAGE=WAIT_STARTUP, JOB network=0x…00, JOB network=0x…01, CLOSE,
+WAIT_LOCAL_STOP; NPU_IRQ_COMPLETIONS=0x…03; NPU_IRQ_STOPPED=0x…01;
+NPU_STAGE=QUIESCENT; NPU_OUTPUT network=0x…00 and network=0x…01 (one byte
+per line each); NPU_INFERENCE=MATCH or MISMATCH; inference_jobs=2
+```
+
+The runtime keeps the idle-register completion hint (`idle_hint` 1 in
+`apps/npu-interrupt/irq.c`), as the board and OS images do, so a job also
+completes when INTID 97 is late. While a job runs the NPU routes SRAM
+`0x44000..0xf3fff` to itself. The image keeps no state there; a progress-record
+implementation of `sunstone_crumb`, which the helper calls between SUBMIT and
+its reply, must not write that range either. Use the
+same preparation and capture as single-inference, with this profile in the
+manifest. Status: software-checked by `host-check.py --interrupt` and
+`checks/npu-runtime-bounds.py`; the startup, quiescence and SRAM-route
+emulator checks of the single-model profiles do not cover it; no board run.
