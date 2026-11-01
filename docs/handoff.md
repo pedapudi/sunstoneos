@@ -308,8 +308,15 @@ The following reviewed implementations are integrated with software evidence:
   readback and restores it, and reports a failure there as error 15. Builds
   are in `~/.cache/sunstoneos/evidence/dram-final-readback-1031/`, with the
   commands and expected output in the
-  [runbook](board-runbooks/dram-restore-test-1.md#the-v5-run-held-every-write-the-readback-after-init_dram-read-the-data-memory-with-its-clock-stopped);
-  no board run has used them.
+  [runbook](board-runbooks/dram-restore-test-1.md#the-v5-run-held-every-write-the-readback-after-init_dram-read-the-data-memory-with-its-clock-stopped).
+  Those builds restored DRAM on both boards on 2026-10-31 (quick check
+  34–36 ms; about 2.0 s for the runner command on 3-3 against about 6.6 s
+  for a plain full training). `tools/run-ddr.py` without `--build` now restores by
+  the board's SID from `~/.cache/sunstoneos/ddr-records` and trains fully,
+  saying why, when it cannot; `--full-training` skips the restore. Setup,
+  record capture, recapture and the restore's limits are in the
+  [records runbook](board-runbooks/dram-restore-records.md); the default
+  has not run on a board.
 
 ## Current integration
 

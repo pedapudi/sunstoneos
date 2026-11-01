@@ -2,10 +2,14 @@
 """Run the production DDR script with fake FEL and a real private file lock.
 
 Restore cases model WDT0, the SID, two USB instances of one port and the
-watchdog reset between them. No case opens a device.
+watchdog reset between them. The auto- cases run without --build: the
+runner picks the record by the SID from a records directory and trains
+fully, saying why, when it has no record, no valid record, no restore
+build or no reconnect access. No case opens a device.
 """
 import argparse
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stdout
+import io
 import fcntl
 import hashlib
 import importlib.abc
@@ -68,12 +72,36 @@ RESTORE={'restore-nominal':(0,0,False),'restore-clock-not-rom':(0,3,True),'resto
 SURVEY_CASES={'restore-survey':(7,3,True),'restore-survey-final-readback':(15,3,True),
               'restore-survey-missing':(7,3,True),'restore-survey-clear-mismatch':(None,1,False)}
 if a.survey_build:RESTORE.update(SURVEY_CASES)
+# Without --build: the mailbox error of the restore, the exit status, and the
+# reason or message the run must report. None for the error: no restore launch.
+AUTO={'auto-restored':(0,0,'PASS: DRAM restored'),'auto-readback':(7,3,'report it, do not recapture'),
+      'auto-memory':(9,3,'recapture its record'),
+      'auto-fallback-other-boot0':(None,1,'plain full-training wrapper for the same boot0'),
+      'auto-fallback-payload':(None,1,'Payload mismatch'),
+      'full-training-fallback-flag':(None,1,'--full-training runs the plain build alone'),
+      'auto-no-record':(None,3,'no training record for this board'),
+      'auto-invalid-record':(None,3,'is invalid'),
+      'auto-no-session':(None,3,'reconnect access is not installed'),
+      'auto-no-restore-build':(None,3,'no restore build at'),
+      'auto-explicit-record':(None,1,'--record and --allow-untrained need --build'),
+      'auto-old-fallback':(None,1,'predates the CPU clock return; rebuild it with tools/prepare-ddr.py'),
+      'auto-plain-restore-build':(None,1,'is not a restore build'),
+      'auto-other-chip-record':(None,3,'holds another chip ID'),
+      'full-training':(None,0,'PASS: DDR reports 4096 MiB'),
+      'full-training-restore-build':(None,1,'--full-training needs the plain full-training build')}
 if a.restore_build:
-    cases+=list(RESTORE)
+    cases+=list(RESTORE)+list(AUTO)
     restore_manifest=json.loads((a.restore_build/'manifest.json').read_text())
     fallback_build=a.evidence/'build-fallback';fallback_build.mkdir()
     for name in files:(fallback_build/name).write_bytes((build/name).read_bytes())
     (fallback_build/'manifest.json').write_text(json.dumps({'files':files,'boot0_sha256':restore_manifest['boot0_sha256'],'clock_point_word':15}))
+    # Fallback builds for another boot0 and with a payload that differs from its manifest.
+    other_fallback=a.evidence/'build-fallback-other-boot0';other_fallback.mkdir()
+    for name in files:(other_fallback/name).write_bytes((build/name).read_bytes())
+    (other_fallback/'manifest.json').write_text(json.dumps({'files':files,'boot0_sha256':'0'*64,'clock_point_word':15}))
+    bad_fallback=a.evidence/'build-fallback-payload';bad_fallback.mkdir()
+    for name in files:(bad_fallback/name).write_bytes((build/name).read_bytes()[:-1]+b'\xee')
+    (bad_fallback/'manifest.json').write_text(json.dumps({'files':files,'boot0_sha256':restore_manifest['boot0_sha256'],'clock_point_word':15}))
     old_fallback=a.evidence/'build-fallback-old';old_fallback.mkdir()
     for name in files:(old_fallback/name).write_bytes((build/name).read_bytes())
     (old_fallback/'manifest.json').write_text(json.dumps({'files':files,'boot0_sha256':restore_manifest['boot0_sha256']}))
@@ -135,7 +163,7 @@ for case in cases:
         if case=='pre-device-refusal':raise ValueError('Modeled pre-device refusal')
     def require_session(n):
         events.append(('session',str(n)))
-        if case=='restore-no-session':raise ValueError('Reconnect access is not installed.')
+        if case in ('restore-no-session','auto-no-session'):raise ValueError('Reconnect access is not installed.')
     def quarantine(n,reason,observed):
         held();events.append(('quarantine',str(n)))
         if case=='quarantine-failure':raise OSError('Modeled quarantine failure')
@@ -160,7 +188,7 @@ for case in cases:
             # The plain full-training wrapper; the fallback fails in one case.
             failed=case=='restore-fallback-fails' and node==NEW
             return struct.pack('<7I',0x53524444,5,0 if case=='init-only' or failed else 4096,7 if failed else 0,0,0,0)+bytes(100)
-        error=RESTORE[case][0]
+        error=(AUTO[case] if case in AUTO else RESTORE[case])[0]
         assert error is not None,(case,'this case must not collect a restore result')
         # init_DRAM returned before the quick check and the final readback.
         data=struct.pack('<7I',0x53524444,5,12288 if error in (0,9,15) else 0,0,0,0,0)
@@ -250,16 +278,34 @@ for case in cases:
     if restore_case and case!='restore-record-missing':argv+=['--record',str(a.restore_record)]
     if restore_case and case!='restore-fallback-missing':
         argv+=['--fallback-build',str(old_fallback if case=='restore-fallback-before-clock-return' else fallback_build)]
-    status=0
-    with patch.object(sys,'argv',argv),patch.object(importlib.util,'spec_from_file_location',selected_spec),patch.object(base,'stop_after_failure',stop),patch.object(base,'hold_ownership',hold),patch.object(subprocess,'run',fake_fel),patch.object(Path,'write_text',write),patch.dict(sys.modules,{'usb_guard':guard}),patch.object(time,'monotonic',lambda:clock[0]),patch.object(time,'sleep',sleep),patch.object(os,'access',lambda path,mode:True):
+    if case in AUTO:
+        # The records directory holds this board's record, a truncated one, or nothing.
+        records=out/'records';records.mkdir()
+        name='chip-'+'-'.join(f'{w:08x}' for w in chip)+'.bin';data=a.restore_record.read_bytes()
+        if case not in ('auto-no-record',):(records/name).write_bytes(data[:200] if case=='auto-invalid-record' else (a.restore_record.parent/'record-3-1.bin').read_bytes() if case=='auto-other-chip-record' else data)
+        argv=[str(ROOT/'tools/run-ddr.py'),'--fel',str(fel),'--evidence',str(out/'runtime')]
+        if case.startswith('auto-'):
+            chosen={'auto-old-fallback':old_fallback,'auto-fallback-other-boot0':other_fallback,
+                    'auto-fallback-payload':bad_fallback}.get(case,fallback_build)
+            argv+=['--records',str(records),'--fallback-build',str(chosen),
+                   '--restore-build',str(a.evidence/'missing-restore-build' if case=='auto-no-restore-build' else build if case=='auto-plain-restore-build' else a.restore_build)]
+        if case=='auto-explicit-record':argv+=['--record',str(a.restore_record)]
+        if case.startswith('full-training'):argv+=['--full-training','--build',str(a.restore_build if case=='full-training-restore-build' else build)]
+        if case=='full-training-fallback-flag':argv+=['--fallback-build',str(fallback_build)]
+    status=0;printed=io.StringIO()
+    with redirect_stdout(printed),patch.object(sys,'argv',argv),patch.object(importlib.util,'spec_from_file_location',selected_spec),patch.object(base,'stop_after_failure',stop),patch.object(base,'hold_ownership',hold),patch.object(subprocess,'run',fake_fel),patch.object(Path,'write_text',write),patch.dict(sys.modules,{'usb_guard':guard}),patch.object(time,'monotonic',lambda:clock[0]),patch.object(time,'sleep',sleep),patch.object(os,'access',lambda path,mode:True):
         try:runpy.run_path(str(ROOT/'tools/run-ddr.py'),run_name='__main__')
         except SystemExit as failure:status=failure.code
         except OSError as failure:status=str(failure)
-    expected=RESTORE[case][1] if restore_case else 0 if case in ('nominal','init-only') else 'failure'
+    expected=AUTO[case][1] if case in AUTO else RESTORE[case][1] if restore_case else 0 if case in ('nominal','init-only') else 'failure'
     if expected=='failure' or expected==1:assert status not in (0,3,None),(case,status)
-    else:assert status==expected,(case,status)
+    else:assert status==expected,(case,status,printed.getvalue()[-400:])
+    if case in AUTO:
+        assert AUTO[case][2] in printed.getvalue()+str(status),(case,printed.getvalue()[-400:],status)
     device_free=('pre-device-refusal','init-only-flag-missing','restore-record-missing','restore-fallback-missing','restore-no-session',
-                 'build-before-clock-return','restore-fallback-before-clock-return','restore-before-final-readback')
+                 'build-before-clock-return','restore-fallback-before-clock-return','restore-before-final-readback',
+                 'auto-explicit-record','auto-old-fallback','full-training-restore-build','auto-plain-restore-build',
+                 'auto-fallback-other-boot0','auto-fallback-payload','full-training-fallback-flag')
     retained=status not in (0,3) and case not in device_free
     assert events.count('hold')==int(retained),(case,events)
     quarantines=[e for e in events if isinstance(e,tuple) and e[0]=='quarantine']
@@ -293,6 +339,10 @@ for case in cases:
             assert record['watchdog']['mode_after_reset']==0x41 and record['watchdog']['mode_after_reset_disarm']==0
             assert record['fallback']['result']['dram_mib']==4096 and (out/'runtime/fallback/ram-41000000-read.bin').exists()
             assert not [e for e in fel_requests if e[0]==str(NEW) and ('0x87000' in e or '0x92000' in e)]
+            # The fallback directory holds a complete DDR session for the new instance.
+            after=json.loads((out/'runtime/fallback/session.json').read_text())
+            assert after['complete'] and after['device']==record['returned_device'] and after['node_identity']==record['returned_identity']
+            assert after['result']['dram_mib']==4096 and after['result']['magic']==0x53524444 and after['tool_sha256']==record['tool_sha256']
         if case in ('restore-header-crc','restore-readback','restore-final-readback','restore-memory'):
             assert record['restore_result']['error']==RESTORE[case][0]
         if case in ('restore-readback','restore-final-readback','restore-survey','restore-survey-final-readback'):
@@ -347,6 +397,33 @@ for case in cases:
         assert 'did not start' in record['restore_result']['survey']['error'] and not (out/'runtime/survey.json').exists()
     if case=='restore-survey-clear-mismatch':
         assert 'survey-clear-upload.bin' in record['failure'],(case,record.get('failure'))
+    if case in AUTO and case not in device_free:
+        record=json.loads((out/'runtime/session.json').read_text())
+        launches=[e for e in fel_requests if e[1:3]==['exe','0x85000']]
+        restore_writes=[e for e in fel_requests if 'write' in e and ('0x87000' in e or '0x92000' in e)]
+        assert record['complete'] and record['mode']==('full-training' if case=='full-training' else 'restore-by-sid'),record.get('mode')
+        if AUTO[case][0] is None:
+            # No restore byte, no WDT0 arming, no reset: one plain training on this instance.
+            assert not restore_writes and 'armed' not in events and events.count('reset')==0,(case,events)
+            assert [e[0] for e in launches]==[str(OLD)] and (out/'runtime/ram-41000000-read.bin').exists()
+            assert board['memory'][OLD][0x85000]==(build if case=='full-training' else fallback_build).joinpath('ddr-entry.bin').read_bytes(),(case,'wrong wrapper launched')
+            assert board['memory'][OLD][0x4a000]==(build if case=='full-training' else fallback_build).joinpath('boot0-body.bin').read_bytes(),(case,'wrong boot0 body')
+            if case!='full-training':
+                assert record['outcome']=='full-training-without-restore' and AUTO[case][2] in record['restore_skipped']
+                assert 'NO RESTORE' in printed.getvalue() and 'DRAM is trained, not restored' in printed.getvalue()
+        else:
+            assert record['training_record_sha256']==hashlib.sha256(a.restore_record.read_bytes()).hexdigest()
+            assert record['record_path'].endswith('chip-'+'-'.join(f'{w:08x}' for w in chip)+'.bin')
+            assert record['outcome']==('restored' if case=='auto-restored' else 'fallback-full-training')
+            assert events.count('reset')==int(case!='auto-restored') and restore_writes
+            if case!='auto-restored':
+                after=json.loads((out/'runtime/fallback/session.json').read_text())
+                assert after['complete'] and after['device']==record['returned_device']!=record['device'],after.get('device')
+                assert after['manifest'].get('variant') is None and after['result']['dram_mib']==4096
+            next_dir=out/'runtime'/('fallback' if case!='auto-restored' else '')
+            assert f'DDR evidence for the next image: {str(next_dir).rstrip("/")}' in printed.getvalue(),printed.getvalue()[-300:]
+        if case in AUTO and AUTO[case][0] is None and case!='full-training':
+            assert f"DDR evidence for the next image: {out/'runtime'}" in printed.getvalue()
     if case=='restore-clock-not-rom':
         assert 'not at the entry point' in record['watchdog']['deliberate_reset'] and record['fallback']['cpu_clocks']['cpu_l_pll']=='0xf8802600'
     with lock.open('a') as released:fcntl.flock(released,fcntl.LOCK_EX|fcntl.LOCK_NB)

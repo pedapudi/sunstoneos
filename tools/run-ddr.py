@@ -1,14 +1,29 @@
 #!/usr/bin/env python3
 """Load the reviewed A733 DDR wrapper, return to FEL, and check two RAM pages.
 
+Without --build the runner restores the board's recorded training
+(docs/board-runbooks/dram-restore-records.md). It reads the board's SID chip
+ID and uploads the record --records/chip-<four SID words>.bin with the
+restore build --restore-build; --fallback-build (default: the plain
+full-training build) trains fully when the restore cannot run or fails.
+--full-training runs only the plain build. --build selects one build
+explicitly: a plain, capture-variant or restore build, the last with an
+explicit --record and --fallback-build.
+
 A restore build (tools/prepare-ddr.py --variant restore) runs under WDT0. The
 runner compares the board's SID with the record before any launch, arms WDT0
 in its four-second mode immediately before the wrapper and disarms it in the
 same FEL request once the wrapper returns. A restore that reports an error,
 fails the RAM pages or does not return ends in one WDT0 reset to a new FEL
 instance and one full training with --fallback-build; a SID mismatch trains
-fully without a reset. Exit status 0: DRAM ready through the requested build.
-Exit status 3: DRAM ready through the fallback full training.
+fully without a reset. Without --build, a missing, unreadable or invalid
+record, a record holding another chip ID, a missing restore build or missing
+reconnect access also trains fully, without a launch of the restore.
+Exit status 0: DRAM ready through the requested build (the restore, without
+--build). Exit status 3: DRAM ready through a full training that ran in place
+of the restore; the runner prints why. After a fallback through WDT0, the
+trained instance's DDR evidence for later runners is EVIDENCE/fallback; the
+runner prints the directory to pass on in every case.
 """
 import argparse
 import hashlib
@@ -25,7 +40,16 @@ ROOT = Path(__file__).resolve().parents[1]
 CACHE = Path.home() / ".cache/sunstoneos"
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--fel", type=Path, required=True)
-parser.add_argument("--build", type=Path, default=CACHE / "build/a733-ddr")
+PLAIN_BUILD, RESTORE_BUILD = CACHE / "build/a733-ddr", CACHE / "build/a733-ddr-restore"
+RECORDS = CACHE / "ddr-records"
+parser.add_argument("--build", type=Path,
+                    help="run this build only (plain, capture variant, or restore with --record)")
+parser.add_argument("--full-training", action="store_true",
+                    help=f"train fully with the plain build (--build, default {PLAIN_BUILD}) and skip the restore")
+parser.add_argument("--records", type=Path, default=RECORDS,
+                    help="directory of per-board records named chip-<four SID words>.bin")
+parser.add_argument("--restore-build", type=Path, default=RESTORE_BUILD,
+                    help="restore build used without --build")
 parser.add_argument("--evidence", type=Path,
                     default=CACHE / "evidence" / time.strftime("ddr-%Y%m%d-%H%M%S"))
 parser.add_argument("--allow-untrained", action="store_true",
@@ -34,10 +58,29 @@ parser.add_argument("--record", type=Path, help="training record for the restore
 parser.add_argument("--fallback-build", type=Path,
                     help="plain full-training build that a failed restore falls back to")
 args = parser.parse_args()
+# Without --build: restore by the board's SID, falling back to full training.
+auto = args.build is None and not args.full_training
+if args.full_training and (args.record or args.fallback_build or args.allow_untrained):
+    sys.exit("--full-training runs the plain build alone; it takes no --record, "
+             "--fallback-build or --allow-untrained.")
+if auto and (args.record or args.allow_untrained):
+    sys.exit("--record and --allow-untrained need --build; without it the record comes from "
+             "--records by the board's chip ID.")
+if not auto and (args.records != RECORDS or args.restore_build != RESTORE_BUILD):
+    sys.exit("--records and --restore-build apply only without --build and --full-training.")
+if args.build is None:
+    args.build = args.restore_build if auto else PLAIN_BUILD
+
+
+def read_manifest(build):
+    try:
+        return json.loads((build / "manifest.json").read_text())
+    except (OSError, ValueError) as error:
+        sys.exit(f"No usable DDR build at {build} ({error}); build it with tools/prepare-ddr.py.")
 
 
 def verified(build):
-    manifest = json.loads((build / "manifest.json").read_text())
+    manifest = read_manifest(build)
     for name, expected in manifest["files"].items():
         content = (build / name).read_bytes()
         if len(content) != expected["size"] or hashlib.sha256(content).hexdigest() != expected["sha256"]:
@@ -45,30 +88,59 @@ def verified(build):
     return manifest
 
 
-manifest = json.loads((args.build / "manifest.json").read_text())
+spec = importlib.util.spec_from_file_location("training_record", ROOT / "tools/training-record.py")
+training = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(training)
+
+
+def load_record(data):
+    """Chip ID and the PHY entries in helper order; raises ValueError."""
+    if not 128 <= len(data) <= 0x6000:
+        raise ValueError("Training record exceeds its SRAM reservation or lacks a header.")
+    if len(data) != 128 + struct.unpack_from("<I", data, 16)[0]:
+        raise ValueError("Training record length differs from its header.")
+    try:
+        parsed = training.parse(data)
+    except struct.error as error:
+        raise ValueError(str(error)) from error
+    # PHY entries in helper order, after the parameter run.
+    return (parsed["chip_id"],
+            [run["base"] + 2 * n for run in parsed["runs"][1:] for n in range(len(run["values"]))],
+            [value for run in parsed["runs"][1:] for value in run["values"]])
+
+
+def record_name(chip):
+    return "chip-" + "-".join(f"{word:08x}" for word in chip) + ".bin"
+
+
+# Why a run without --build trains fully in place of the restore, once known.
+skip_reason = None
+if auto and not (args.build / "manifest.json").exists():
+    skip_reason = f"no restore build at {args.build}"
+    args.build = args.fallback_build or PLAIN_BUILD
+if auto:
+    args.fallback_build = args.fallback_build or PLAIN_BUILD
+manifest = read_manifest(args.build)
+if args.full_training and manifest.get("variant") is not None:
+    sys.exit("--full-training needs the plain full-training build.")
+restore = manifest.get("variant") == "restore"
+if auto and not restore and skip_reason is None:
+    sys.exit(f"--restore-build {args.build} is not a restore build.")
 if args.allow_untrained != (manifest.get("variant") == "init-only"):
     sys.exit("--allow-untrained goes with, and only with, an init-only variant build.")
-restore = manifest.get("variant") == "restore"
-if (args.record is not None) != restore or (args.fallback_build is not None) != restore:
+if not auto and ((args.record is not None) != restore or (args.fallback_build is not None) != restore):
     sys.exit("--record and --fallback-build go with, and only with, a restore variant build.")
 training_bytes = chip_id = fallback = profile_addresses = None
-if restore:
-    training_bytes = args.record.read_bytes()
-    if not 128 <= len(training_bytes) <= 0x6000:
-        sys.exit("Training record exceeds its SRAM reservation or lacks a header.")
-    if len(training_bytes) != 128 + struct.unpack_from("<I", training_bytes, 16)[0]:
-        sys.exit("Training record length differs from its header.")
-    spec = importlib.util.spec_from_file_location("training_record", ROOT / "tools/training-record.py")
-    training = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(training)
+if auto and skip_reason:
+    fallback = verified(args.fallback_build)
+    if fallback.get("variant") is not None or fallback.get("clock_point_word") != 15:
+        sys.exit(f"--fallback-build {args.fallback_build} must be the plain full-training wrapper with the CPU "
+                 "clock return; build it with tools/prepare-ddr.py.")
+if restore and not auto:
     try:
-        parsed = training.parse(training_bytes)
-        chip_id = parsed["chip_id"]
-        # PHY entries in helper order, after the parameter run.
-        profile_addresses = [run["base"] + 2 * n for run in parsed["runs"][1:]
-                             for n in range(len(run["values"]))]
-        profile_values = [value for run in parsed["runs"][1:] for value in run["values"]]
-    except (ValueError, struct.error) as error:
+        training_bytes = args.record.read_bytes()
+        chip_id, profile_addresses, profile_values = load_record(training_bytes)
+    except ValueError as error:
         sys.exit(f"Invalid training record: {error}")
 manifest = verified(args.build)
 # Diagnostic restore build: the helper's write survey (tools/ddr-survey.py).
@@ -94,17 +166,25 @@ if restore:
     if fallback.get("variant") is not None or fallback.get("boot0_sha256") != manifest.get("boot0_sha256"):
         sys.exit("--fallback-build must be the plain full-training wrapper for the same boot0.")
     if fallback.get("clock_point_word") != 15:
-        sys.exit("--fallback-build predates the CPU clock return; rebuild it.")
+        sys.exit(f"--fallback-build {args.fallback_build} predates the CPU clock return; rebuild it with tools/prepare-ddr.py.")
 args.evidence.mkdir(parents=True, exist_ok=False)
 record = {"manifest": manifest, "tool_sha256": hashlib.sha256(args.fel.read_bytes()).hexdigest(),
           "runner_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
           "transactions": [], "complete": False, "launch_attempted": False,
-          "device_access_attempted": False}
-if restore:
-    record.update(training_record_sha256=hashlib.sha256(training_bytes).hexdigest(),
-                  fallback_manifest=fallback)
-    (args.evidence / "training-record.bin").write_bytes(training_bytes)
-    (args.evidence / "training-record-upload.bin").write_bytes(training_bytes + bytes(0x6000-len(training_bytes)))
+          "device_access_attempted": False,
+          "mode": "restore-by-sid" if auto else "full-training" if args.full_training else "build"}
+if auto:
+    record["records"] = str(args.records)
+
+
+def keep_record(data):
+    record.update(training_record_sha256=hashlib.sha256(data).hexdigest(), fallback_manifest=fallback)
+    (args.evidence / "training-record.bin").write_bytes(data)
+    (args.evidence / "training-record-upload.bin").write_bytes(data + bytes(0x6000-len(data)))
+
+
+if restore and not auto:
+    keep_record(training_bytes)
 
 # WDT0 at 0x02050000 in the order measured on both boards on 2026-10-31
 # (evidence/wdt-fel-return-20261031): reset output, system reset, mode 0x41
@@ -370,6 +450,32 @@ def read_survey(evidence):
     return summary
 
 
+def select_record():
+    """Without --build: read the SID and load the board's record. Returns the
+    reason the restore cannot run, or None with the record loaded."""
+    global training_bytes, chip_id, profile_addresses, profile_values
+    board = words(transaction(*[part for n in range(4) for part in ("readl", hex(0x03006200 + 4*n))]))
+    record["board_chip_id"] = board
+    path = args.records / record_name(board)
+    record["record_path"] = str(path)
+    save()
+    if not path.is_file():
+        return f"no training record for this board ({path} does not exist)"
+    try:
+        data = path.read_bytes()
+        chip, addresses, values = load_record(data)
+    except OSError as error:
+        return f"training record {path} is unreadable: {error}"
+    except ValueError as error:
+        return f"training record {path} is invalid: {error}"
+    if chip != board:
+        return f"training record {path} holds another chip ID"
+    training_bytes, chip_id, profile_addresses, profile_values = data, chip, addresses, values
+    keep_record(data)
+    save()
+    return None
+
+
 def restore_attempt():
     """Return None when DRAM is restored, otherwise the reason for the fallback."""
     board = words(transaction(*[part for n in range(4) for part in ("readl", hex(0x03006200 + 4*n))]))
@@ -443,7 +549,14 @@ try:
     usb_guard.check_health()
     with access.board_lock() as device:
         access.require_rom(device)
-        if restore:
+        if restore and auto:
+            # The fallback re-enumerates through WDT0, which needs reconnect
+            # access; without it, train fully in place of the restore.
+            try:
+                access.require_session(device)
+            except (ValueError, OSError) as error:
+                skip_reason = f"reconnect access is not installed for this port ({error})"
+        elif restore:
             # The fallback re-enumerates through WDT0; require reconnect access first.
             access.require_session(device)
         identity = access.identity(device)
@@ -455,14 +568,32 @@ try:
             version = transaction("version")
             if "soc=00001903(A733)" not in version:
                 raise RuntimeError(f"Unexpected SoC: {version}")
-            if restore:
+            if auto and skip_reason is None:
+                skip_reason = select_record()
+            if auto and skip_reason:
+                # Nothing was launched: one full training on this instance.
+                print(f"NO RESTORE: {skip_reason}. Training fully once.", flush=True)
+                # The evidence names the build that trained; the restore build is kept apart.
+                record.update(restore_skipped=skip_reason, restore_manifest=record["manifest"] if restore else None,
+                              manifest=fallback)
+                save()
+                full_training(args.fallback_build, fallback, args.evidence, record)
+                record.update(complete=True, outcome="full-training-without-restore")
+                save()
+                exit_status = 3
+                print(f"FULL TRAINING PASS: {record['result']['dram_mib']} MiB; both 4 KiB pages match; "
+                      f"DRAM is trained, not restored. Evidence: {args.evidence}")
+                print(f"DDR evidence for the next image: {args.evidence}")
+            elif restore:
                 reason = restore_attempt()
                 if reason is None:
                     record.update(complete=True, outcome="restored")
                     save()
                     print(f"PASS: DRAM restored; quick check {record['restore_result']['check_ms']} ms; "
                           f"both 4 KiB pages match. Evidence: {args.evidence}")
+                    print(f"DDR evidence for the next image: {args.evidence}")
                 else:
+                    restore_error = record.get("restore_result", {}).get("error")
                     print(f"RESTORE FAILED: {reason}. Training fully once.", flush=True)
                     record["fallback"] = {"reason": reason}
                     save()
@@ -471,9 +602,29 @@ try:
                     full_training(args.fallback_build, fallback, evidence, record["fallback"])
                     record.update(complete=True, outcome="fallback-full-training")
                     save()
+                    next_evidence = args.evidence
+                    if "returned_device" in record:
+                        # The trained instance is the one after the WDT0 reset. Later
+                        # runners read a DDR session's top-level instance and result,
+                        # so the fallback directory gets a complete session of its own.
+                        session = {key: record[key] for key in ("tool_sha256", "runner_sha256", "mode")}
+                        session.update(record["fallback"], manifest=fallback, device=record["returned_device"],
+                                       node_identity=record["returned_identity"], complete=True,
+                                       launch_attempted=True, device_access_attempted=True,
+                                       outcome="fallback-full-training", restore_session=str(args.evidence))
+                        (evidence / "session.json").write_text(json.dumps(session, indent=2) + "\n")
+                        next_evidence = evidence
                     exit_status = 3
                     print(f"FALLBACK PASS: full training reports {record['fallback']['result']['dram_mib']} MiB; "
-                          f"both 4 KiB pages match. Evidence: {args.evidence}")
+                          f"both 4 KiB pages match; DRAM is trained, not restored. Evidence: {args.evidence}")
+                    if restore_error in (manifest["restore"]["errors"]["readback"],
+                                         manifest["restore"]["errors"]["final_readback"]):
+                        print("A PHY register did not hold its restored value; report it, do not "
+                              "recapture (docs/board-runbooks/dram-restore-records.md).")
+                    elif auto:
+                        print("If restores of this board keep failing, recapture its record: "
+                              "docs/board-runbooks/dram-restore-records.md.")
+                    print(f"DDR evidence for the next image: {next_evidence}")
             else:
                 upload(args.build, manifest, args.evidence, False)
                 print("Executing the DDR wrapper once.", flush=True)

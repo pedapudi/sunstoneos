@@ -95,7 +95,7 @@ from the record names and the image of start 3.
 | Step | Record | Action | Pass |
 | ---: | --- | --- | --- |
 | 0 | — | The user removes and restores the board's power; open a new session directory `S` for port 3-3 | The A733 ROM answers on a new FEL instance |
-| 1 | `ts-ddr` | Cold DDR start (`tools/run-ddr.py`, as `s7-ddr`) | 12,288 MiB, stage 5 |
+| 1 | `ts-ddr` | Cold DDR start (`tools/run-ddr.py --full-training`, as `s7-ddr`) | 12,288 MiB, stage 5 |
 | 2 | `ts-read-0` | Bundle 9 with the cold predictions | Every checked word matches: PLL_NPU disabled, `0x03000008` bit 1 set |
 | 3 | `ts-irq97`, `ts-cache-off-1`, `ts-survey-1`, `ts-dcdc2-1`, `ts-cache-off-2`, `ts-survey-2` | IRQ97 capture, cache-off and survey, DCDC2 snapshot, cache-off and survey | As in the routing run; DCDC2 enabled at 800 mV |
 | 4 | — | Root finalization of package 1, warm-return chain up to `ts-dcdc2-1` | `session`, `prepare` and `validate` succeed |
