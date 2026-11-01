@@ -165,6 +165,9 @@
       row.append(summary, body); blockers.append(row);
     }
     if (!blockers.children.length) blockers.append(el('p', 'secondary', 'No separate constraint summary is available. See current work for conditions and limits.'));
+    document.querySelectorAll('[data-application-title]').forEach(node => {
+      node.textContent = data.application?.title || 'External application';
+    });
     document.querySelectorAll('[data-application-document]').forEach(button => {
       button.dataset.document = data.application?.document || '';
     });
