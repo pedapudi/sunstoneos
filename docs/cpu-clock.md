@@ -233,7 +233,8 @@ step and waits at most 20 µs:
    must cover both PLL waits and a 10 ms margin for the owner polls that
    follow lock, 90 ms in total; otherwise the transition ends EXPIRED here,
    before any PLL or mux write. Then park the mux on the DCXO and wait 20 µs,
-   write N, set the update bit, wait up to 10 ms for it to clear and up to
+   complete the N write, wait 20 µs, set the update bit, wait up to 10 ms
+   for it to clear and up to
    70 ms (the pinned driver's limits) for three lock reads at least 3 µs
    apart, wait 20 µs, write P, select the PLL again and wait 20 µs. The lock
    rule is the vendor CCU helper's with `CONFIG_AW_STANDARD_CCU=y`, which the
@@ -577,3 +578,11 @@ for the observed old-N word and covers failed and stopped time sources after
 N. The pre-fix model fails the successful-close case. The corrected case
 keeps DCDC3 high until final lock and mux qualification; failed settles issue
 no UPDATE. This model does not measure silicon staging latency.
+
+The completed-write plus N-stage interval image returned on board 3-3 in
+queue entry `1793513595977482947-679bf1ea`. All eight reliability workers
+completed 4096 rounds, the independent host decoder matched all digests,
+seven secondaries retired and WDT0 was disarmed. Its SHA-256 is
+`ad25bc86d87130038dfafddae2a63250c694e2db7f375d4d01371967d978c4cf`.
+This run establishes the combined correction for that workload; it does not
+separate barrier completion from N-stage timing or qualify thermal coverage.

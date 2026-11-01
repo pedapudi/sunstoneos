@@ -372,15 +372,25 @@ domain in 4–5, transition origin in 6–7, owner phase in 8–9, request curso
 the preceding stored result, not completion of the active transition.
 
 The value contains provider status in bits 0–7 (`0xff` for a local check),
-target MHz in 8–18, and flags in 19–31: inspection, closing, counter failure,
+and target MHz in 8–18. Bits 19–31 contain flags. In order, these are
+inspection, closing, counter failure,
 clock-manager failure, rail-ledger failure, PMIC failure, clock lease, rail
 lease, PMIC request, expired request deadline, expired state timer, parked
 consumer and critical thermal state. The observer performs no device writes
 except the existing breadcrumb SVC and starts no voltage or clock operation.
 
 The corrected PLL-update image completed one GPU job and returned on both
-boards. The eight-core reliability image still refused with FOLLOW/cursor 3
+boards. The earlier eight-core reliability image refused with FOLLOW/cursor 3
 and RETAINED on board 3-3. Its frozen disassembly contains both the UPDATE
 wait and the pre-read/post-read LOCK timing checks. Evidence is under
 `~/.cache/sunstoneos/evidence/cpu-clock-close-1031/`. The setter diagnostic
 distinguishes that remaining failure from the corrected PLL fault.
+
+A raw mismatch record uses group `cpu_pll`: the value is the unmodified PLL
+control word; auxiliary bits 0–7 hold expected N, 8–9 domain, 10–13 driver
+state and 14 closing. It precedes the generic retained record and survives
+subsequent owner refusals. The reliability failure read N=77 with UPDATE clear
+when N=39 was requested. Completing PLL writes and restoring boot0's 20 us
+N-to-UPDATE interval produced a normal eight-core reliability return on 3-3;
+[the CPU clock record](../../docs/cpu-clock.md) gives the frozen image and
+queue evidence.

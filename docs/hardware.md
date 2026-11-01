@@ -20,13 +20,15 @@ inventory that follows also records earlier implementations and their remaining
 gaps. A passing diagnostic does not qualify every application using that device.
 
 The [bounded CPU reliability application](../apps/cpu-runtime-qualification/RELIABILITY.md)
-has host evidence for repeated scheduling, saved `d8` context and payload
-publication across all eight cores. Its `02-reliability` image ran on 3-3
-and failed with the CPU clock driver in RETAINED at `return-cpu.c:159`;
-evidence is under `~/.cache/sunstoneos/evidence/cpu-reliability-1031/start-1/`.
-Another worker owns the defect. Startup repeatability, full restoration and
-the longer-recording application remain unqualified, as do recurring per-core
-IRQs, idle/wake and thermal transitions.
+passed one run on 3-3 with all eight pinned cores completing 4096 rounds,
+independently matching payload digests, seven secondaries off and WDT0
+disarmed. Queue entry `1793513595977482947-679bf1ea` under
+`~/.cache/sunstoneos/board-queue/entries/` binds its image and result. The matching native fix is `f2131e76`.
+The CPU clock driver now completes N writes and waits boot0's
+20 us before UPDATE. The earlier RETAINED failure had read old N=77 after
+UPDATE cleared while requesting N=39. Startup repeatability, full restoration
+and the longer-recording application remain unqualified, as do recurring
+per-core IRQs, idle/wake and thermal transitions.
 
 ## Current physical results
 
