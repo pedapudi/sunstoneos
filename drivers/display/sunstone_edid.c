@@ -3,6 +3,7 @@
  * Copyright (c) 2006 Luc Verhaegen (quirks list)
  * Copyright (c) 2007-2008 Intel Corporation
  * Copyright (c) 2010 Red Hat, Inc.
+ * Required MIT notice is retained in docs/display-panel-MIT.txt.
  * No Linux runtime interfaces are used. */
 #include "sunstone_display.h"
 #include "a733_range.h"

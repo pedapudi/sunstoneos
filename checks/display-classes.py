@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path
 import subprocess
 from harness import CLANG, SANITIZE, environment
@@ -20,6 +21,19 @@ manifest = json.loads((root/'docs/display-class-sources.json').read_text())
 for source in manifest['sources']:
     data = (a.source_cache/source['file']).read_bytes()
     assert hashlib.sha256(data).hexdigest() == source['sha256'], source['file']
+# Compare every implemented CTA timing against an independently pinned table.
+reference = (a.source_cache/'drm_edid.c').read_text()
+parser = (root/'drivers/display/sunstone_edid.c').read_text()
+for vic, fields, flags in re.findall(r'\{(\d+),\{([0-9,]+),(PP|0)\}\}', parser):
+    match = re.search(r'/\* '+vic+r' -.*?DRM_MODE\([^,]+, DRM_MODE_TYPE_DRIVER,\s*(.*?)\)', reference, re.S)
+    assert match, vic
+    numbers = [int(x) for x in re.findall(r'\b\d+\b', match.group(1))]
+    assert len(numbers) == 11, (vic, numbers)
+    n = numbers
+    expected = [n[0]*1000,n[1],n[6],n[2]-n[1],n[3]-n[2],n[4]-n[3],n[7]-n[6],n[8]-n[7],n[9]-n[8]]
+    assert list(map(int,fields.split(','))) == expected, (vic, expected)
+    assert ('DRM_MODE_FLAG_PHSYNC' in match.group(1)) == (flags == 'PP'), vic
+    assert ('DRM_MODE_FLAG_PVSYNC' in match.group(1)) == (flags == 'PP'), vic
 sources = ['drivers/display/sunstone_edid.c', 'drivers/display/sunstone_connector.c',
            'drivers/display/sunstone_panels.c', 'drivers/display/a733_display_modes.c',
            'drivers/display/a733_hdmi.c', 'drivers/display/a733_hdmi_phy.c', 'drivers/display/a733_dp.c',

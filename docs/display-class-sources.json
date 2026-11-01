@@ -82,6 +82,15 @@
       "license": "MIT",
       "use": "DisplayID I/VII interlace flag and padding interpretation reference",
       "execution": "host source reference"
+    },
+    {
+      "file": "drm_edid.c",
+      "url": "https://raw.githubusercontent.com/orangepi-xunlong/linux-orangepi/2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f/drivers/gpu/drm/drm_edid.c",
+      "revision": "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f",
+      "sha256": "ea6f982b723a634383472ada84072554f16acdf1d77af57192ce6604d8be941f",
+      "license": "MIT",
+      "use": "CTA exact timing table and EDID/DisplayID detailed timing interpretation",
+      "execution": "host source reference; adapted parser runs on FreeRTOS CPU"
     }
   ],
   "edid_fixtures": [
