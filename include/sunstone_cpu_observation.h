@@ -1,8 +1,9 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 #ifndef SUNSTONE_CPU_OBSERVATION_H
 #define SUNSTONE_CPU_OBSERVATION_H
 #include <stdint.h>
-#define SS_CPU_OBSERVATION_CORES 8u
-#define SS_CPU_OBSERVATION_CACHES 6u
+#include "sunstone_cpu_topology.h"
+#define SS_CPU_OBSERVATION_CACHES 14u
 /* Flags describe captured data, independently of launch admission. */
 enum { SS_CPU_OBS_IDENTITY=1, SS_CPU_OBS_ATOMIC_KNOWN=2,
        SS_CPU_OBS_LSE=4, SS_CPU_OBS_CACHE_FORMAT=8 };

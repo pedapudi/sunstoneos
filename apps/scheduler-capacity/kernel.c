@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 #include "result.h"
 static void input(uint32_t *p)
 {for(unsigned i=0;i<CAPACITY_WORDS;++i)p[i]=UINT32_C(0x12345678)^(i*UINT32_C(0x9e3779b9));}

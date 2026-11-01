@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """Build word expectations from an explicitly pinned identity configuration.
 
 The baseline must be a previously decoded result from the same target and bin.
@@ -23,7 +24,7 @@ def expectation(baseline):
     for core in range(8):
         for kernel in range(2):
             for rep in range(host.REPS):
-                offset = 32 + core * host.CORE_BYTES + 824 + (kernel * host.REPS + rep) * 16
+                offset = 32 + core * host.CORE_BYTES + 1144 + (kernel * host.REPS + rep) * 16
                 words[offset // 4] = {'min': 1, 'max': decoded['counter_hz']}
                 words[offset // 4 + 1] = 0
     return {'schema': 'sunstone-board-expect-u32-v1', 'words': words}
@@ -50,12 +51,12 @@ def discovery_expectation():
             words[offset // 4:(offset + 16) // 4] = [raw] * 4
             level, kind = ((1, 2), (1, 1), (2, 4), (3, 4))[index]
             words[(offset + 16) // 4:(offset + 40) // 4] = [level, kind, 64, raw, raw, 0]
-        words[(base + 304) // 4:(base + 312) // 4] = [core, 15]
+        words[(base + 624) // 4:(base + 632) // 4] = [core, 15]
         # Clock text is retained for host decoding, including its variable telemetry.
-        words[(base + 312) // 4:(base + 824) // 4] = [raw] * 128
+        words[(base + 632) // 4:(base + 1144) // 4] = [raw] * 128
         for kernel in range(2):
             for rep in range(host.REPS):
-                offset = base + 824 + (kernel * host.REPS + rep) * 16
+                offset = base + 1144 + (kernel * host.REPS + rep) * 16
                 words[offset // 4] = {'min': 1, 'max': 24000000}
                 u64(offset + 8, digest)
     return {'schema': 'sunstone-board-expect-u32-v1', 'words': words}

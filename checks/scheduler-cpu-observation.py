@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """Compile and run the register-selector model without hardware access."""
 import argparse
 from pathlib import Path

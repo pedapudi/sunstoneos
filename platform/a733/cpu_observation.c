@@ -1,13 +1,14 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 #include "sunstone_cpu_observation.h"
 #include <stdatomic.h>
 #include <stddef.h>
 
-static struct ss_cpu_observation snapshots[SS_CPU_OBSERVATION_CORES];
-static atomic_uint valid[SS_CPU_OBSERVATION_CORES];
+static struct ss_cpu_observation snapshots[SS_CPU_MAX];
+static atomic_uint valid[SS_CPU_MAX];
 int ss_cpu_observation_capture(unsigned core,const struct ss_cpu_observation_ops *ops,
                                void *cookie,struct ss_cpu_observation *out)
 {
-    if(core>=SS_CPU_OBSERVATION_CORES||!ops||!ops->read||!ops->select||!ops->isb||!out)return 0;
+    if(core>=SS_CPU_MAX||!ops||!ops->read||!ops->select||!ops->isb||!out)return 0;
     struct ss_cpu_observation r={0};r.core=core;
     r.mpidr=ops->read(cookie,SS_CPU_REG_MPIDR);r.midr=ops->read(cookie,SS_CPU_REG_MIDR);
     r.isar0=ops->read(cookie,SS_CPU_REG_ISAR0);r.mmfr2=ops->read(cookie,SS_CPU_REG_MMFR2);
@@ -17,7 +18,7 @@ int ss_cpu_observation_capture(unsigned core,const struct ss_cpu_observation_ops
     if(r.atomic==2||r.atomic==3)r.flags|=SS_CPU_OBS_LSE;
     if(r.ccidx<=1)r.flags|=SS_CPU_OBS_CACHE_FORMAT;
     uint64_t saved=ops->read(cookie,SS_CPU_REG_CSSELR);
-    for(unsigned level=0;level<3;++level){
+    for(unsigned level=0;level<7;++level){
         unsigned type=(r.clidr>>(level*3))&7;
         if(type==0)break;
         /* CLIDR: 1 instruction, 2 data, 3 separate, 4 unified. */
@@ -64,7 +65,7 @@ void ss_cpu_observe_boot(unsigned core)
 {
 #ifdef __aarch64__
     static const struct ss_cpu_observation_ops ops={native_read,native_select,native_isb};
-    if(core<SS_CPU_OBSERVATION_CORES&&ss_cpu_observation_capture(core,&ops,NULL,&snapshots[core]))
+    if(core<SS_CPU_MAX&&ss_cpu_observation_capture(core,&ops,NULL,&snapshots[core]))
         atomic_store_explicit(&valid[core],1,memory_order_release);
 #else
     (void)core;
@@ -72,6 +73,6 @@ void ss_cpu_observe_boot(unsigned core)
 }
 int ss_cpu_observation_copy(unsigned core,struct ss_cpu_observation *out)
 {
-    if(core>=SS_CPU_OBSERVATION_CORES||!out||!atomic_load_explicit(&valid[core],memory_order_acquire))return 0;
+    if(core>=SS_CPU_MAX||!out||!atomic_load_explicit(&valid[core],memory_order_acquire))return 0;
     *out=snapshots[core];return 1;
 }

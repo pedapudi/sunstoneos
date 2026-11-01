@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /* Host-only producer exercises the native result layout and arithmetic.
  * Its durations and register values are synthetic and prove no board result. */
 #include "result.h"
@@ -11,7 +12,7 @@ int main(void)
     if(integer!=neon)return 1;
     r.magic=CAPACITY_MAGIC;r.counter_hz=24000000;
     r.words=CAPACITY_WORDS;r.rounds=CAPACITY_ROUNDS;r.warm=CAPACITY_WARM;r.reps=CAPACITY_REPS;
-    for(unsigned core=0;core<8;++core){
+    for(unsigned core=0;core<CAPACITY_CORES;++core){
         struct capacity_core *c=&r.core[core];c->observed_core=core;c->readiness=15;
         struct ss_cpu_observation *o=&c->observation;
         o->core=core;o->mpidr=UINT64_C(0x80000000)|(core<<8);

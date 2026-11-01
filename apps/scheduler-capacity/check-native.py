@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """Execute both compiled AArch64 kernels in an instruction model."""
 import argparse
 from pathlib import Path

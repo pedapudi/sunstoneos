@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """Decode measured per-core work without assigning scheduler capacities."""
 import json
 import re
@@ -6,8 +7,8 @@ import statistics
 from pathlib import Path
 
 MAGIC = 0x5353434150413031
-OBS_BYTES = 304
-CORE_BYTES = 1048
+OBS_BYTES = 624
+CORE_BYTES = 1368
 RESULT_BYTES = 32 + 8 * CORE_BYTES
 WORDS, ROUNDS, WARM, REPS = 4096, 64, 3, 7
 
@@ -45,7 +46,7 @@ def decode(payload):
         if flags != 15 or atomic not in (2, 3) or atomic != (isar0 >> 20) & 15 or ccidx not in (0, 1) or ccidx != (mmfr2 >> 20) & 15 or count != 4 or reserved:
             raise ValueError(f'CPU {core} feature observation is incomplete or unknown')
         caches = []
-        for index in range(6):
+        for index in range(14):
             raw, size, level, kind, line, ways, sets, padding = struct.unpack_from('<2Q6I', payload, base + 64 + index * 40)
             if index >= count:
                 if any((raw, size, level, kind, line, ways, sets, padding)):
@@ -67,7 +68,7 @@ def decode(payload):
             calibration_errors.append(f'CPU {core} clock readiness or thermal admission changed')
         clocks = []
         clock_lines = []
-        for offset in (312, 568):
+        for offset in (632, 888):
             raw = payload[base + offset:base + offset + 256]
             line = raw.split(b'\0', 1)[0].decode('ascii')
             clock_lines.append(line)
@@ -90,7 +91,7 @@ def decode(payload):
                 calibration_errors.append(f'CPU {core} clock epoch changed during sequential work')
         samples = {}
         for kernel, name in enumerate(('integer', 'neon')):
-            values = [struct.unpack_from('<2Q', payload, base + 824 + (kernel * REPS + rep) * 16) for rep in range(REPS)]
+            values = [struct.unpack_from('<2Q', payload, base + 1144 + (kernel * REPS + rep) * 16) for rep in range(REPS)]
             if any(ticks <= 0 or ticks > hz or digest != reference for ticks, digest in values):
                 raise ValueError(f'CPU {core} {name} work or duration differs')
             samples[name] = [dict(ticks=ticks, digest=digest) for ticks, digest in values]
