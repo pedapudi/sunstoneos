@@ -135,7 +135,8 @@ int a733_gpu_queue_create(struct a733_gpu_queue *s, const struct gpu_queue_conte
         q->lease[i] = (struct gpu_queue_lease_info){region->address, bytes, a, 0};
         /* BRN 71317 forbids data pages larger than 256 KiB on this BVNC. */
         s->maps[count++] = (struct pvr_gpu_mapping){region->address, region->address, bytes, 18,
-            (a & SS_ACCESS_GPU_WRITE) ? 0 : PVR_GPU_VM_READ_ONLY};
+            ((a & SS_ACCESS_GPU_WRITE) ? 0 : PVR_GPU_VM_READ_ONLY) |
+            ((a & (SS_ACCESS_WRITE | SS_ACCESS_GPU_WRITE)) ? PVR_GPU_VM_SLC_BYPASS : 0)};
     }
     q->lease_count = c->lease_count;
     struct pvr_compute_program_config *p = &s->programs;
@@ -150,7 +151,8 @@ int a733_gpu_queue_create(struct a733_gpu_queue *s, const struct gpu_queue_conte
     p->excluded[6]=(struct pvr_compute_program_span){payload+PAGE,2*PAGE,PROGRAM_GPU};
     for (unsigned i=0; i<3; ++i)
         s->maps[count++]=(struct pvr_gpu_mapping){i ? PROGRAM_GPU+(i-1)*PAGE : JOB_GPU,
-            s->payload_extent.physical+i*PAGE,PAGE,12,PVR_GPU_VM_READ_ONLY};
+            s->payload_extent.physical+i*PAGE,PAGE,12,
+            PVR_GPU_VM_READ_ONLY | (i ? 0 : PVR_GPU_VM_SLC_BYPASS)};
     size_t off=3*PAGE;
     for (unsigned i=0; i<PVR_PROGRAM_REGIONS; ++i) {
         size_t n=pvr_compute_program_bytes[i];
@@ -159,7 +161,7 @@ int a733_gpu_queue_create(struct a733_gpu_queue *s, const struct gpu_queue_conte
         p->buffers[i]=(struct pvr_compute_program_span){q->publish[i].storage.cpu,n,program_address(i)};
         for (unsigned k=0; k<q->publish[i].page_count; ++k)
             s->maps[count++]=(struct pvr_gpu_mapping){program_address(i)+k*PAGE,q->publish[i].pages[k],PAGE,12,
-                i<PVR_PROGRAM_SHARED_A ? PVR_GPU_VM_READ_ONLY : 0};
+                i<PVR_PROGRAM_SHARED_A ? PVR_GPU_VM_READ_ONLY : PVR_GPU_VM_SLC_BYPASS};
         off+=rounded(n);
     }
     if (off!=s->payload_extent.bytes) return 0;

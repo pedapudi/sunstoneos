@@ -449,6 +449,41 @@ static void closed(void)
 #ifdef SUNSTONE_A733_OS_PERF
 #include "gpu-performance-service.inc"
 #endif
+/* CPU maintenance does not evict GPU SLC lines. Shared mutable mappings
+ * bypass SLC; immutable model and program mappings may remain cached. */
+static void shared_mapping_flags(void)
+{
+    unsigned leases=0,job=0,programs=0,state=0;
+    for(unsigned i=0;i<A733_GPU_QUEUE_MAPS && session.maps[i].bytes;++i){
+        const struct pvr_gpu_mapping *m=&session.maps[i];
+        if(m->address<(UINT64_C(1)<<36)){
+            unsigned found=0;
+            for(unsigned j=0;j<compute->lease_count;++j)if(m->address==compute->lease[j].address){
+                unsigned access=compute->lease[j].access;
+                uint32_t expected=(access&SS_ACCESS_GPU_WRITE?0:PVR_GPU_VM_READ_ONLY) |
+                    (access&(SS_ACCESS_WRITE|SS_ACCESS_GPU_WRITE)?PVR_GPU_VM_SLC_BYPASS:0);
+                configASSERT(m->flags==expected);++found;++leases;
+            }
+            configASSERT(found==1);
+        }else if(m->address==A733_GPU_QUEUE_JOB_GPU){
+            configASSERT(m->flags==(PVR_GPU_VM_READ_ONLY|PVR_GPU_VM_SLC_BYPASS));++job;
+        }else if(m->address>=A733_GPU_QUEUE_PROGRAM_GPU && m->address<A733_GPU_QUEUE_PROGRAM_GPU+8192){
+            configASSERT(m->flags==PVR_GPU_VM_READ_ONLY);++programs;
+        }else{
+            unsigned found=0;
+            for(unsigned j=0;j<PVR_PROGRAM_REGIONS;++j){
+                uint64_t first=session.programs.buffers[j].gpu;
+                if(m->address>=first && m->address-first<compute->publish[j].page_count*4096u){
+                    configASSERT(m->flags==(j<PVR_PROGRAM_SHARED_A?PVR_GPU_VM_READ_ONLY:PVR_GPU_VM_SLC_BYPASS));
+                    ++found;if(j<PVR_PROGRAM_SHARED_A)++programs;else ++state;
+                }
+            }
+            configASSERT(found==1);
+        }
+    }
+    configASSERT(leases==compute->lease_count && job==1 && programs && state);
+    metric("shared-mapping-leases",leases);metric("shared-mapping-state-pages",state);
+}
 static void client(void *unused)
 {
     (void)unused;
@@ -476,6 +511,7 @@ static void client(void *unused)
     struct pvr_gpu_service_reply reply;
     configASSERT(compute->phase==PVR_COMPUTE_QUEUE_READY && service.phase==PVR_GPU_SERVICE_READY &&
         session.vm.phase==A733_GPU_VM_MEMORY_PUBLISHED);
+    shared_mapping_flags();
     metric("open-cache-lines", cache_lines - lines0);
     metric("open-translations", translations - translations0);
     unsigned wb, nc; pool_pages(&wb, &nc);
